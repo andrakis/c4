@@ -337,6 +337,8 @@ int main(int argc, char **argv)
   int fd, bt, ty, poolsz, *idmain;
   int *pc, *sp, *bp, a, cycle; // vm registers
   int i, *t; // temps
+  int *mm_sym, *mm_e, *mm_sp;
+  char *mm_data, *mm_p;
 
   --argc; ++argv;
   if (argc > 0 && **argv == '-' && (*argv)[1] == 's') { src = 1; --argc; ++argv; }
@@ -366,6 +368,9 @@ int main(int argc, char **argv)
   if ((i = read(fd, p, poolsz-1)) <= 0) { printf("read() returned %d\n", i); return -1; }
   p[i] = 0;
   close(fd);
+
+  // remember for deallocation
+  mm_p = p;
 
   // parse declarations
   line = 1;
@@ -524,7 +529,17 @@ int main(int argc, char **argv)
     else if (i == FREE) free((void *)*sp);
     else if (i == MSET) a = (int)memset((char *)sp[2], sp[1], *sp);
     else if (i == MCMP) a = memcmp((char *)sp[2], (char *)sp[1], *sp);
-    else if (i == EXIT) { printf("exit(%d) cycle = %d\n", *sp, cycle); return *sp; }
+    else if (i == EXIT) {
+        printf("exit(%d) cycle = %d\n", *sp, cycle);
+        a = *sp;
+        // Cleanup
+        free(mm_sym);
+        free(mm_e);
+        free(mm_sp);
+        free(mm_data);
+        free(mm_p);
+        return a;
+    }
     else { printf("unknown instruction = %d! cycle = %d\n", i, cycle); return -1; }
   }
 }

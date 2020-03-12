@@ -9,7 +9,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <memory.h>
+#ifdef __GNUC__
 #include <unistd.h>
+#else
+#define __INTPTR_TYPE__ long long
+#endif
 #include <fcntl.h>
 
 // Please define this for your architecture if required.

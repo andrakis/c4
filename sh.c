@@ -129,8 +129,13 @@ void bluepill () {
 	c4_argc = 3;
 	c4_argv = malloc(sizeof(char*) * c4_argc);
 	c4_argv[0] = "c4";
-	c4_argv[1] = "c4.c";
-	c4_argv[2] = "sh.c";
+	if(c4_depth() == 0) {
+		c4_argc = 2;
+		c4_argv[1] = "sh.c";
+	} else {
+		c4_argv[1] = "c4.c";
+		c4_argv[2] = "sh.c";
+	}
 	printf("Diving deeper into the simulation...\n");
 	c4_main(c4_argc, c4_argv);
 	free(c4_argv);

@@ -137,23 +137,26 @@ void bluepill () {
 }
 
 void act_on_user_input() {
+    char *input;
+
+    input = user_input;
 	// Skip leading spaces
-	while(*user_input == ' ') user_input++;
-	if(*user_input == 0) {
+	while(*input == ' ') input++;
+	if(*input == 0) {
 		// do nothing
 		return;
-	} else if(streq(user_input, "help")) {
+	} else if(streq(input, "help")) {
 		printf("Commands:\n");
 		printf("        help             Show this help\n");
 		printf("        exit             Exit the shell\n");
 		printf("        blue             Take the blue pill and dive deeper\n");
 		printf("        [anything else]  Run given file through c4\n");
-	} else if(streq(user_input, "blue")) {
+	} else if(streq(input, "blue")) {
 		bluepill();
-	} else if(streq(user_input, "exit")) {
+	} else if(streq(input, "exit")) {
 		shell_mode = SH_EXIT;
 	} else {
-		open_c4(user_input);
+		open_c4(input);
 	}
 }
 

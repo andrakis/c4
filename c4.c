@@ -11,7 +11,9 @@
 #include <memory.h>
 #include <unistd.h>
 #include <fcntl.h>
-#define int long long
+
+// Please define this for your architecture if required.
+#define int __INTPTR_TYPE__
 
 char *p, *lp, // current position in source code
      *data;   // data/bss pointer

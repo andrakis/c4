@@ -47,7 +47,7 @@ enum {
 // opcodes
 enum { LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,
        OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,
-       OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,DPTH,C4MA,EXIT };
+       OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,C4MA,EXIT };
 
 // types
 enum { CHAR, INT, PTR };
@@ -55,22 +55,36 @@ enum { CHAR, INT, PTR };
 // identifier offsets (since we can't create an ident struct)
 enum { Tk, Hash, Name, Class, Type, Val, HClass, HType, HVal, Idsz };
 
+// code points
+enum {
+    CP_P,    // pointer to line
+    CP_PLen, // length of line
+    CP_E,    // pointer to emitted code
+    CP_ELen, // length of emitted code
+    CP_Line, // line number
+    CP_Sz    // length of code point struct
+};
+int *cp;     // code points structure
+int  cp_idx; // code pointer index
+
 void next()
 {
   char *pp;
+  int  *c;
 
   while (tk = *p) {
     ++p;
     if (tk == '\n') {
       if (src) {
-        printf("%d: %.*s", line, p - lp, lp);
+        // record a code point
+        c = cp + (cp_idx++ * CP_Sz);
+        c[CP_P] = (int)lp;
+        c[CP_PLen] = p - lp;
+        c[CP_E] = (int)le;
+        c[CP_ELen] = e - le;
+        c[CP_Line] = line;
         lp = p;
-        while (le < e) {
-          printf("%8.4s", &"LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,"
-                           "OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,"
-                           "OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,DPTH,C4MA,EXIT,"[*++le * 5]);
-          if (*le <= ADJ) printf(" %d\n", *++le); else printf("\n");
-        }
+        le = e;
       }
       ++line;
     }
@@ -340,13 +354,78 @@ void stmt()
   }
 }
 
+int *mm_sym, *mm_e, *mm_sp, *mm_cp;
+char *mm_data, *mm_p;
+int poolsz;
+char c4_isprint (char c) { return c >= 0x20 && c <= 0x7e; }
+void dump_codepoints () {
+  int *_le, *_e, *c, i, *o;
+  char *d;
+  char *code_fmt;
+  int   padding, li;
+
+  code_fmt = malloc(15);
+  i = 0; while(i < 14) {
+    code_fmt[i] = ";; %01d: %.*s"[i];
+    ++i;
+  }
+  // Alter code_fmt such that the padding is enough to fit lines
+  padding = 1; li = line; while(li > 10) { padding++; li = li / 10; }
+  if (padding > 9) padding = 9;
+  code_fmt[5] = padding + '0';
+
+  c = cp;
+  i = 0;
+  while(i < cp_idx) {
+      c = cp + (i++ * CP_Sz);
+      _le = (int*)c[CP_E];
+      _e  = _le + c[CP_ELen];
+      printf(code_fmt, c[CP_Line], c[CP_PLen], (char*)c[CP_P]);
+      while (_le < _e) {
+        printf("%8.4s", &"LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,"
+                         "OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,"
+                         "OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,C4MA,EXIT,"[*++_le * 5]);
+        if (*_le <= ADJ) {
+            o = ++_le;
+            printf(" ");
+            if (*o >= (int)mm_e && *o <= (int)(mm_e + poolsz)) {
+              // code pointer doesn't need to be updated: it's architecture dependant.
+              printf("[code + %d]", (*o - (int)mm_e));
+            } else if (*o >= (int)mm_data && *o <= (int)(mm_data + poolsz)) {
+              printf("[data + %d]", *o - (int)mm_data);
+            } else {
+              printf("%d", *o);
+            }
+            printf("\n");
+        } else printf("\n");
+      }
+  }
+  // dump data too
+  d = mm_data;
+  i = 0;
+  printf("\nDATA ");
+  while(d < data) {
+    if(*d == '\\') {
+      printf("\\5c");
+      ++d;
+    } else if(c4_isprint(*d))
+      printf("%c", *d++);
+    else {
+      printf("\\%02x", *d++);
+      i = i + 2;
+    }
+    if (++i > 72) { printf("\nDATA "); i = 0; }
+  }
+  printf("\n");
+
+  free(code_fmt);
+}
+
 int main(int argc, char **argv)
 {
-  int fd, bt, ty, poolsz, *idmain;
+  int fd, bt, ty, *idmain;
   int *pc, *sp, *bp, a, cycle; // vm registers
   int i, *t; // temps
-  int *mm_sym, *mm_e, *mm_sp;
-  char *mm_data, *mm_p;
 
   --argc; ++argv;
   src = 0; debug = 0;
@@ -361,19 +440,22 @@ int main(int argc, char **argv)
   if (!(le = e = malloc(poolsz))) { printf("could not malloc(%d) text area\n", poolsz); return -1; }
   if (!(data = malloc(poolsz))) { printf("could not malloc(%d) data area\n", poolsz); return -1; }
   if (!(sp = malloc(poolsz))) { printf("could not malloc(%d) stack area\n", poolsz); return -1; }
+  if (!(cp = malloc(poolsz))) { printf("could not malloc(%d) code point area\n", poolsz); return -1; }
 
   // remember for deallocation
   mm_sym = sym;
   mm_e = e;
   mm_data = data;
   mm_sp = sp;
+  mm_cp = cp;
 
   memset(sym,  0, poolsz);
   memset(e,    0, poolsz);
   memset(data, 0, poolsz);
+  memset(cp,   0, poolsz);
 
   p = "char else enum if int return sizeof while "
-      "open read close printf malloc free memset memcmp c4_depth c4_main exit void main";
+      "open read close printf malloc free memset memcmp c4_main exit void main";
   i = Char; while (i <= While) { next(); id[Tk] = i++; } // add keywords to symbol table
   i = OPEN; while (i <= EXIT) { next(); id[Class] = Sys; id[Type] = INT; id[Val] = i++; } // add library to symbol table
   next(); id[Tk] = Char; // handle void type
@@ -483,7 +565,24 @@ int main(int argc, char **argv)
   }
 
   if (!(pc = (int *)idmain[Val])) { printf("main() not defined\n"); return -1; }
-  if (src) return 0;
+  if (src) {
+    // preamble
+    printf(";; generated by c4.c from %s\n", *argv);
+    // sizeof(char) and sizeof(int) are written directly to emitted code.
+    // a better approach would be to duplicate the c parsing/emitting code and fix this properly.
+    printf(".TARGET %dbit ;; recompilation required for other targets (32, 64)\n", sizeof(int) * 8);
+    // must calculate entry in bytes
+    printf(".ENTRY [code + %d]\n", (pc - mm_e) * sizeof(int));
+    printf("\n");
+    dump_codepoints();
+    free(mm_sym);
+    free(mm_e);
+    free(mm_sp);
+    free(mm_data);
+    free(mm_p);
+    free(mm_cp);
+    return 0;
+  }
 
   // setup stack
   bp = sp = (int *)((int)sp + poolsz);
@@ -501,7 +600,7 @@ int main(int argc, char **argv)
       printf("%d> %.4s", cycle,
         &"LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,"
          "OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,"
-         "OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,DPTH,C4MA,EXIT,"[i * 5]);
+         "OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,C4MA,EXIT,"[i * 5]);
       if (i <= ADJ) printf(" %d\n", *pc); else printf("\n");
     }
     if      (i == LEA) a = (int)(bp + *pc++);                             // load local address
@@ -544,11 +643,9 @@ int main(int argc, char **argv)
     else if (i == FREE) free((void *)*sp);
     else if (i == MSET) a = (int)memset((char *)sp[2], sp[1], *sp);
     else if (i == MCMP) a = memcmp((char *)sp[2], (char *)sp[1], *sp);
-#define c4_depth() 0
-    else if (i == DPTH) a = c4_depth() + 1;
     else if (i == C4MA) { a = main(sp[1], (char**)*sp); }
     else if (i == EXIT) {
-        printf("exit(%d) cycle = %d\n", *sp, cycle);
+        if(debug) printf("exit(%d) cycle = %d\n", *sp, cycle);
         a = *sp;
         // Cleanup
         free(mm_sym);
@@ -556,6 +653,7 @@ int main(int argc, char **argv)
         free(mm_sp);
         free(mm_data);
         free(mm_p);
+        free(mm_cp);
         return a;
     }
     else { printf("unknown instruction = %d! cycle = %d\n", i, cycle); return -1; }

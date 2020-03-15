@@ -12,8 +12,12 @@
 #ifdef __GNUC__
 #include <unistd.h>
 #else
+#if _WIN64
 #define __INTPTR_TYPE__ long long
-#endif
+#elif _WIN32
+#define __INTPTR_TYPE__ int
+#endif // if _WIN64
+#endif // ifdef __GNUC__
 #include <fcntl.h>
 
 // Please define this for your architecture if required.

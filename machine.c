@@ -18,7 +18,7 @@
 #define __INTPTR_TYPE__ int
 #endif // if _WIN64
 #endif // ifdef __GNUC__
-#define int __INTPTR_TYPE__ 
+#define int __INTPTR_TYPE__
 
 enum { LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,
        OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,
@@ -84,7 +84,7 @@ int mach_strlen (char *s) {
 	return l;
 }
 
-int mach_isprint (char c) { return c >= 0x20 && c <= 0x7e; }
+int mach_isprint (char c) { return c >= 0x21 && c <= 0x7e; }
 
 int mach_strcmp (char *s1, char *s2) {
 	while(*s1++ == *s2++) ;
@@ -112,7 +112,7 @@ void mach_strncpy (char *dest, char *source, int length) {
 	*dest = 0;
 }
 
-int mach_atoi (char *str, int radix) {
+char *mach_atoi_move (char *str, int radix, int *dest) {
 	int v, sign;
 
 	v = 0;
@@ -121,8 +121,46 @@ int mach_atoi (char *str, int radix) {
 		sign = -1;
 		++str;
 	}
-	while(*str >= '0' && *str <= '9') v = v * 10 + ('0' - *str++);
-	return v * sign;
+	while (
+		(*str >= 'A' && *str <= 'Z') ||
+		(*str >= 'a' && *str <= 'z') ||
+		(*str >= '0' && *str <= '9')) {
+		//v = v * 10 + ('0' - *str++);
+		v = v * radix + ((*str > '9') ? (*str & ~0x20) - 'A' + 10 : (*str - '0'));
+		++str;
+	}
+	*dest = v * sign;
+	return str;
+}
+
+char *mach_atoin_move(char *str, int radix, int *dest, int len) {
+	int v, sign;
+
+	v = 0;
+	sign = 1;
+	if(*str == '-') {
+		sign = -1;
+		++str;
+	}
+	while (len-- && ((*str >= 'A' && *str <= 'z') || (*str >= '0' && *str <= '9'))) {
+		//v = v * 10 + ('0' - *str++);
+		v = v * radix + ((*str > '9') ? (*str & ~0x20) - 'A' + 10 : (*str - '0'));
+		++str;
+	}
+	*dest = v * sign;
+	return str;
+}
+
+int mach_atoi (char *str, int radix) {
+	int dest;
+	mach_atoi_move(str, radix, &dest);
+	return dest;
+}
+
+int mach_atoin (char *str, int radix, int length) {
+	int dest;
+	mach_atoin_move(str, radix, &dest, length);
+	return dest;
 }
 
 int *label_new (char *name, int offset) {
@@ -170,20 +208,31 @@ int *label_find_strn (char *str, int len) {
 	return 0;
 }
 
-int setup (int argc, char **argv) {
+int argc;
+char **argv;
+int setup () {
 	char *symbol, *ptr;
 	int   op, tmp;
 
 	poolsz = 256 * 1024; // arbritrary size
-	init = "init.asm";
+	init = "asm/init.asm";
 	flags = FLG_NONE;
 	label_idx = 0;
 	label_max = 512;
+	proc_max = 32;
 
 	// Read arguments
 	--argc; ++argv;
 	if (argc > 0 && **argv == '-' && (*argv)[1] == 'd') { flags = flags | FLG_DEBUG; --argc; ++argv; }
+	if (argc > 0 && **argv == '-' && (*argv)[1] == 'p') { proc_max = mach_atoi(*argv + 3, 10); --argc; ++argv; }
 	if (argc >= 1) { init = *argv; --argc; ++argv; }
+
+	if (!(processes = malloc(tmp = sizeof(int) * P__SZ * proc_max))) {
+		printf("Failed allocate %ld bytes for process storage\n", tmp);
+		return 5;
+	}
+
+	memset(processes, 0, tmp);
 
 	tmp = sizeof(int) * LBL__SZ * label_max;
 	if (!(label_base = malloc(tmp))) {
@@ -275,8 +324,8 @@ int run_procs() {
 	int pid, debug, cycle_max, pid_cycle, procs_run;
 
 	pid = 0;
-	debug = flags & FLG_DEBUG;
-	cycle_max = 1;
+	debug = 1;// flags & FLG_DEBUG;
+	cycle_max = 100;
 	process = processes;
 	procs_run = 0;
 
@@ -291,8 +340,8 @@ int run_procs() {
 			while (pid_cycle++ < cycle_max) {
 				i = *pc++; ++cycle;
 				if (debug) {
-					printf("%d> %.4s", cycle, opcodes[i * 5]);
-					if (i <= ADJ) printf(" %d\n", *pc); else printf("\n");
+					printf("%d> %.4s", cycle, &opcodes[i * 5]);
+					if (i <= ADJ) printf(" %lld\n", *pc); else printf("\n");
 				}
 				if (i == LEA) a = (int)(bp + *pc++);                                  // load local address
 				else if (i == IMM) a = *pc++;                                         // load global address or immediate
@@ -354,6 +403,7 @@ int run_procs() {
 int *process_next () {
 	int *proc, i;
 
+	i = 0;
 	while(i < proc_max) {
 		proc = processes + (i * P__SZ);
 		if(!proc[P_INUSE])
@@ -366,7 +416,6 @@ int *process_next () {
 // Find next token
 char *next (char *c) {
 	char prev, quot;
-	int in_quote;
 
 	prev = 0;
 	quot = 0;
@@ -387,36 +436,43 @@ char *next_whitespace (char *c) {
 }
 
 char *asm_read_expression (char *expr, int *dest, int *proc) {
-	int   base, offset, result;
+	int    offset, result;
+	int   *base_code, result_code;
+	char  *base_data, offset_data;
 	char  operator;
 	char *name, *name_end;
 	int   name_len;
 
 	if(*expr++ == '[') {
 		if((name_end = next_whitespace(expr))) {
+			name = expr;
 			if((expr = next(name_end))) {
-				--name_end;
 				name_len = name_end - name;
-				operator = *expr;
+				operator = *expr++;
 				if((expr = next(expr))) {
-					offset = mach_atoi(expr, 10);
-					if(!mach_strncmp("code", name, name_len))
-						base = proc[P_E];
-					else if(!mach_strncmp("data", name, name_len))
-						base = proc[P_Data];
-					else {
-						printf("Don't know what base this is: '%.*s'\n", name, name_len);
+					expr = mach_atoi_move(expr, 10, &offset);
+					if (operator != '+' && operator != '-') {
+						printf("[expression:] expected operator to be + or -\n");
 						return 0;
 					}
-					if     (operator == '+') result = base + offset;
-					else if(operator == '-') result = base - offset;
-					else {
-						printf("Don't know what this operator is: '%c'\n", operator);
+					while (*expr++ != ']'); // skip to end of directive
+					if (!mach_strncmp("code", name, name_len)) {
+						base_code = (int*)proc[P_MM_E];
+						offset /= sizeof(int);
+						result = (int)(operator == '+' ?
+							(base_code + offset) :
+							(base_code - offset));
+					} else if (!mach_strncmp("data", name, name_len)) {
+						base_data = (char*)proc[P_MM_DATA];
+						result = (int)(operator == '+' ?
+							(base_data + offset) :
+							(base_data - offset));
+					} else {
+						printf("Don't know what base this is: '%.*s'\n", name_len, name);
 						return 0;
 					}
 					*dest = result;
 					return expr;
-
 				}
 			}
 		}
@@ -426,12 +482,12 @@ char *asm_read_expression (char *expr, int *dest, int *proc) {
 }
 
 char *asm_pass_scan_directive (char *directive, int len, char *start, int *proc) {
-	int tmp;
+	int tmp, *label;
 	char *n;
 
 	start = next(start);
 	if(!mach_strncmp(directive, "TARGET", len)) {
-		tmp = mach_atoi(start, 10);
+		tmp = mach_atoin(start, 10, 2);
 		printf("TARGET %dbit\n", tmp);
 		if(tmp / 8 != sizeof(int)) {
 			printf("This assembly file is for another architecture. Recompile for your system.\n");
@@ -446,15 +502,27 @@ char *asm_pass_scan_directive (char *directive, int len, char *start, int *proc)
 			}
 		} else {
 			// Lookup label
-			// TODO
+			if(!(n = next_whitespace(start))) {
+				printf("Expected a label\n");
+				return 0;
+			}
+			--n;
+			if(!(label = label_find_strn(start, n - start))) {
+				printf("Label not found: '%.*s'\n", n - start, start);
+				return 0;
+			}
+			tmp = label[LBL_OFFSET];
 		}
 		proc[P_PC] = tmp;
 		return n;
+	} else {
+		printf("Unexpected directive\n");
+		return 0;
 	}
 }
 
 char *asm_pass_label_directive (char *directive, int len, int location, int *proc) {
-	char *name, *c;
+	char *name;
 	int  *result;
 
 	if(!(name = malloc(len * sizeof(char)))) {
@@ -478,14 +546,19 @@ char *asm_pass_label_directive (char *directive, int len, int location, int *pro
 //  2) Find any labels and set position
 int line, column;
 int asm_pass_scan (int *proc, char *content) {
-	char *c, *t, prev;
-	int   e;
+	char *c, *t, *data;
+	int   e, tmp, v;
 
 	c = next(content);
 	e = 0;
+	data = (char*)proc[P_Data];
 
 	while(*c) {
-		if(*c == '.') {
+		while (*c == '\n' || *c == '\r' || *c == ' ' || *c == 8) ++c;
+		if (*c == ';') {
+			// comment (to end of line)
+			while (*c++ != '\n') ;
+		} else if(*c == '.') {
 			// .DIRECTIVE [some value] (skip for now)
 			while(*c++ != '\n') ;
 		} else if(*c == '"') {
@@ -493,9 +566,17 @@ int asm_pass_scan (int *proc, char *content) {
 			while(*c++ != '\n') ;
 			// Counts as 1
 			++e;
-		} else if(*c == '\'') {
+		} else if (*c == '\'') {
 			// Skip small quotes
-			while(*++c != '\'');
+			while (*++c != '\'');
+			++e;
+		} else if (*c == '-' || (*c >= '0') && *c <= '9') {
+			// A number
+			c = mach_atoi_move(c, 10, &tmp);
+			++e;
+		} else if (*c == '[') {
+			// Expansion, skip for now
+			while (*c++ != ']') ;
 			++e;
 		} else {
 			// scan end of word for label (:)
@@ -509,15 +590,25 @@ int asm_pass_scan (int *proc, char *content) {
 				if(!memcmp("DATA", c, 4)) {
 					c = c + 5;
 					// DATA contains direct text or \00 escape codes.
-					// TODO
+					while(*c && *c != '\n') {
+						if(*c == '\\') {
+							++c;
+							c = mach_atoin_move(c, 16, &v, 2);
+							*data++ = v;
+						} else {
+							*data++ = *c++;
+						}
+					}
 				} else {
-					// normal emittion of code
+					// Any standard token
+					c = t;
 					++e;
-					c = t + 1;
 				}
 			}
 		}
 	}
+
+	proc[P_Data] = (int)data;
 
 	return 1;
 }
@@ -535,9 +626,15 @@ int asm_pass_emit (int *proc, char *content) {
 	c = next(content);
 	e = (int*)proc[P_E];
 	data = (char*)proc[P_Data];
+	++e; // empty item seems to be emitted
 
 	while(*c) {
-		if(*c == '.') {
+		while (*c == '\n' || *c == '\r' || *c == ' ' || *c == 8) ++c;
+		if (*c == ';') {
+			// comment (to end of line)
+			while (*c++ != '\n');
+		}  else if (*c == '.') {
+			++c;
 			// .DIRECTIVE [some value]
 			t = next_whitespace(c);
 			if(!(c = asm_pass_scan_directive(c, t - c, t + 1, proc)))
@@ -558,16 +655,18 @@ int asm_pass_emit (int *proc, char *content) {
 			printf("STUB: character emit not present\n");
 			while(*++c != '\'');
 			++e;
-		} else {
+		} else if (*c == '-' || (*c >= '0') && *c <= '9') {
+			// A number
+			c = mach_atoi_move(c, 10, &tmp);
+			*e++ = tmp;
+		} else if (*c == '[') {
 			// [expr...]
-			if (*c == '[') {
-				++c;
-				if(!(c = asm_read_expression(c, &tmp, proc)))
-					return 0;
-				*e++ = tmp;
-			}
+			if(!(c = asm_read_expression(c, &tmp, proc)))
+				return 0;
+			*e++ = tmp;
+		} else {
 			// scan end of word for label (:)
-			else if(!(t = next_whitespace(c)))
+			if(!(t = next_whitespace(c)))
 				return 0;
 			if(*(t - 1) == ':') {
 				if(!(c = asm_pass_label_directive(c, t - c, (int)e, proc)))
@@ -581,7 +680,7 @@ int asm_pass_emit (int *proc, char *content) {
 					// normal emittion of code
 					// lookup value
 					if(!(l = label_find_strn(c, t - c))) {
-						printf("Unknown label: %.*s\n", c, t - c);
+						printf("Unknown label: %.*s\n", t - c, c);
 						return 0;
 					}
 					*e++ = l[LBL_OFFSET];
@@ -591,11 +690,14 @@ int asm_pass_emit (int *proc, char *content) {
 		}
 	}
 
+	proc[P_E] = (int)e;
+	proc[P_Data] = (int)data;
+
 	return 1;
 }
 
 int *compile_proc (char *content) {
-	int failure, pid, *proc, label_pos;
+	int failure, *proc, label_pos, *label, *sp, *t;
 
 	if(!(proc = process_next())) return 0;
 
@@ -606,18 +708,35 @@ int *compile_proc (char *content) {
 	else if(!(proc[P_MM_E] = (int)malloc(poolsz))) { failure = 1; }
 	else if(!(proc[P_MM_DATA] = (int)malloc(poolsz))) { failure = 1; }
 
-	label_pos = label_idx; // remember for restoring afterwards
-	if(!asm_pass_scan(proc, content)) {
-		if(!asm_pass_emit(proc, content)) {
+	if (!failure) {
+		proc[P_SP] = proc[P_BP] = (int)(int *)(proc[P_MM_SP] + poolsz);
+		proc[P_E] = proc[P_MM_E];
+		proc[P_Data] = proc[P_MM_DATA];
+		memset((int*)proc[P_MM_SP], 0, poolsz);
+		memset((int*)proc[P_MM_E], 0, poolsz);
+		memset((char*)proc[P_MM_DATA], 0, poolsz);
+
+		label_pos = label_idx; // remember for restoring afterwards
+		if (asm_pass_scan(proc, content)) {
+			if (asm_pass_emit(proc, content)) {
+				// setup stack
+				sp = (int*)proc[P_SP];
+				*--sp = EXIT; // call exit if main returns
+				*--sp = PSH; t = sp;
+				*--sp = argc;
+				*--sp = (int)argv;
+				*--sp = (int)t;
+				proc[P_SP] = sp;
+			} else {
+				printf("failed to emit assembly\n");
+				failure = 1;
+			}
 		} else {
-			printf("failed to emit assembly\n");
+			printf("failed to scan assembly file\n");
 			failure = 1;
 		}
-	} else {
-		printf("failed to scan assembly file\n");
-		failure = 1;
+		label_idx = label_pos; // restore label position (erasing any created labels)
 	}
-	label_idx = label_pos; // restore label position (erasing any created labels)
 
 	if(failure) {
 		if(proc[P_MM_SP])   free((int*)proc[P_MM_SP]);
@@ -639,6 +758,7 @@ int *start_asm (char *file) {
 
 	if ((bytes = read(fd, buf, poolsz - 1)) <= 0) { close(fd); free(buf); return 0; }
 	close(fd);
+	buf[bytes] = 0;
 
 	result = compile_proc(buf);
 	free(buf);
@@ -649,10 +769,12 @@ int *start_proc (char *file) {
 	return start_asm(file);
 }
 
-int main(int argc, char **argv) {
+int main(int _argc, char **_argv) {
 	int tmp;
 
-	if ((tmp = setup(argc, argv))) {
+	argc = _argc;
+	argv = _argv;
+	if ((tmp = setup())) {
 		printf("setup() failed: code %ld\n", tmp);
 		return tmp;
 	}

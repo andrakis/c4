@@ -131,6 +131,12 @@ void next()
       while (*p != 0 && *p != tk) {
         if ((ival = *p++) == '\\') {
           if ((ival = *p++) == 'n') ival = '\n';
+          else if (ival == 'r') ival = '\r';
+          else if (ival == 't') ival = '\t';
+          else if (ival == 'f') ival = '\f';
+          else if (ival == 'v') ival = '\v';
+          else if (ival == '\'') ival = '\'';
+          else if (ival == '\\') ival = '\\';
         }
         if (tk == '"') *data++ = ival;
       }

@@ -318,87 +318,6 @@ void process_unknown_op(int op, int *process) {
 	process_exit(255, process);
 }
 
-int run_procs() {
-	int cycle, *pc, *sp, *bp, *process, i, a, *t;
-	int pid, debug, cycle_max, pid_cycle, procs_run;
-
-	pid = 0;
-	debug = flags & FLG_DEBUG;
-	cycle_max = 100;
-	process = processes;
-	procs_run = 0;
-
-	while (pid < proc_max) {
-		if (process[P_INUSE]) {
-			pid_cycle = 0;
-			pc = (int*)process[P_PC];
-			sp = (int*)process[P_SP];
-			bp = (int*)process[P_BP];
-			cycle = process[P_CYCLE];
-			a = process[P_A];
-			while (pid_cycle++ < cycle_max) {
-				i = *pc++; ++cycle;
-				if (debug) {
-					printf("%d> %.4s", cycle, &opcodes[i * 5]);
-					if (i <= ADJ) printf(" %lld\n", *pc); else printf("\n");
-				}
-				if (i == LEA) a = (int)(bp + *pc++);                                  // load local address
-				else if (i == IMM) a = *pc++;                                         // load global address or immediate
-				else if (i == JMP) pc = (int *)*pc;                                   // jump
-				else if (i == JSR) { *--sp = (int)(pc + 1); pc = (int *)*pc; }        // jump to subroutine
-				else if (i == BZ)  pc = a ? pc + 1 : (int *)*pc;                      // branch if zero
-				else if (i == BNZ) pc = a ? (int *)*pc : pc + 1;                      // branch if not zero
-				else if (i == ENT) { *--sp = (int)bp; bp = sp; sp = sp - *pc++; }     // enter subroutine
-				else if (i == ADJ) sp = sp + *pc++;                                   // stack adjust
-				else if (i == LEV) { sp = bp; bp = (int *)*sp++; pc = (int *)*sp++; } // leave subroutine
-				else if (i == LI)  a = *(int *)a;                                     // load int
-				else if (i == LC)  a = *(char *)a;                                    // load char
-				else if (i == SI)  *(int *)*sp++ = a;                                 // store int
-				else if (i == SC)  a = *(char *)*sp++ = a;                            // store char
-				else if (i == PSH) *--sp = a;                                         // push
-				else if (i == OR)  a = *sp++ | a;
-				else if (i == XOR) a = *sp++ ^  a;
-				else if (i == AND) a = *sp++ &  a;
-				else if (i == EQ)  a = *sp++ == a;
-				else if (i == NE)  a = *sp++ != a;
-				else if (i == LT)  a = *sp++ < a;
-				else if (i == GT)  a = *sp++ > a;
-				else if (i == LE)  a = *sp++ <= a;
-				else if (i == GE)  a = *sp++ >= a;
-				else if (i == SHL) a = *sp++ << a;
-				else if (i == SHR) a = *sp++ >> a;
-				else if (i == ADD) a = *sp++ + a;
-				else if (i == SUB) a = *sp++ - a;
-				else if (i == MUL) a = *sp++ *  a;
-				else if (i == DIV) a = *sp++ / a;
-				else if (i == MOD) a = *sp++ %  a;
-				else if (i == OPEN) a = open((char *)sp[1], *sp);
-				else if (i == READ) a = read(sp[2], (char *)sp[1], *sp);
-				else if (i == CLOS) a = close(*sp);
-				else if (i == PRTF) { t = sp + pc[1]; a = printf((char *)t[-1], t[-2], t[-3], t[-4], t[-5], t[-6]); }
-				else if (i == MALC) a = (int)malloc(*sp);
-				else if (i == FREE) free((void *)*sp);
-				else if (i == MSET) a = (int)memset((char *)sp[2], sp[1], *sp);
-				else if (i == MCMP) a = memcmp((char *)sp[2], (char *)sp[1], *sp);
-				else if (i == EXIT) { process_exit(*sp, process); pid_cycle = cycle_max; } // force stop process
-				else { process_unknown_op(i, process); pid_cycle = cycle_max; } // force stop process
-			}
-			// Save process state
-			process[P_PC] = (int)pc;
-			process[P_SP] = (int)sp;
-			process[P_BP] = (int)bp;
-			process[P_CYCLE] = cycle;
-			process[P_A] = a;
-			procs_run++;
-		}
-		// Advance
-		process = process + P__SZ;
-		++pid;
-	}
-
-	return procs_run;
-}
-
 int *process_next () {
 	int *proc, i;
 
@@ -779,6 +698,87 @@ int *start_asm (char *file) {
 
 int *start_proc (char *file) {
 	return start_asm(file);
+}
+
+int run_procs() {
+	int cycle, *pc, *sp, *bp, *process, i, a, *t;
+	int pid, debug, cycle_max, pid_cycle, procs_run;
+
+	pid = 0;
+	debug = flags & FLG_DEBUG;
+	cycle_max = 100;
+	process = processes;
+	procs_run = 0;
+
+	while (pid < proc_max) {
+		if (process[P_INUSE]) {
+			pid_cycle = 0;
+			pc = (int*)process[P_PC];
+			sp = (int*)process[P_SP];
+			bp = (int*)process[P_BP];
+			cycle = process[P_CYCLE];
+			a = process[P_A];
+			while (pid_cycle++ < cycle_max) {
+				i = *pc++; ++cycle;
+				if (debug) {
+					printf("%d> %.4s", cycle, &opcodes[i * 5]);
+					if (i <= ADJ) printf(" %lld\n", *pc); else printf("\n");
+				}
+				if (i == LEA) a = (int)(bp + *pc++);                                  // load local address
+				else if (i == IMM) a = *pc++;                                         // load global address or immediate
+				else if (i == JMP) pc = (int *)*pc;                                   // jump
+				else if (i == JSR) { *--sp = (int)(pc + 1); pc = (int *)*pc; }        // jump to subroutine
+				else if (i == BZ)  pc = a ? pc + 1 : (int *)*pc;                      // branch if zero
+				else if (i == BNZ) pc = a ? (int *)*pc : pc + 1;                      // branch if not zero
+				else if (i == ENT) { *--sp = (int)bp; bp = sp; sp = sp - *pc++; }     // enter subroutine
+				else if (i == ADJ) sp = sp + *pc++;                                   // stack adjust
+				else if (i == LEV) { sp = bp; bp = (int *)*sp++; pc = (int *)*sp++; } // leave subroutine
+				else if (i == LI)  a = *(int *)a;                                     // load int
+				else if (i == LC)  a = *(char *)a;                                    // load char
+				else if (i == SI)  *(int *)*sp++ = a;                                 // store int
+				else if (i == SC)  a = *(char *)*sp++ = a;                            // store char
+				else if (i == PSH) *--sp = a;                                         // push
+				else if (i == OR)  a = *sp++ | a;
+				else if (i == XOR) a = *sp++ ^  a;
+				else if (i == AND) a = *sp++ &  a;
+				else if (i == EQ)  a = *sp++ == a;
+				else if (i == NE)  a = *sp++ != a;
+				else if (i == LT)  a = *sp++ < a;
+				else if (i == GT)  a = *sp++ > a;
+				else if (i == LE)  a = *sp++ <= a;
+				else if (i == GE)  a = *sp++ >= a;
+				else if (i == SHL) a = *sp++ << a;
+				else if (i == SHR) a = *sp++ >> a;
+				else if (i == ADD) a = *sp++ + a;
+				else if (i == SUB) a = *sp++ - a;
+				else if (i == MUL) a = *sp++ *  a;
+				else if (i == DIV) a = *sp++ / a;
+				else if (i == MOD) a = *sp++ %  a;
+				else if (i == OPEN) a = open((char *)sp[1], *sp);
+				else if (i == READ) a = read(sp[2], (char *)sp[1], *sp);
+				else if (i == CLOS) a = close(*sp);
+				else if (i == PRTF) { t = sp + pc[1]; a = printf((char *)t[-1], t[-2], t[-3], t[-4], t[-5], t[-6]); }
+				else if (i == MALC) a = (int)malloc(*sp);
+				else if (i == FREE) free((void *)*sp);
+				else if (i == MSET) a = (int)memset((char *)sp[2], sp[1], *sp);
+				else if (i == MCMP) a = memcmp((char *)sp[2], (char *)sp[1], *sp);
+				else if (i == EXIT) { process_exit(*sp, process); pid_cycle = cycle_max; } // force stop process
+				else { process_unknown_op(i, process); pid_cycle = cycle_max; } // force stop process
+			}
+			// Save process state
+			process[P_PC] = (int)pc;
+			process[P_SP] = (int)sp;
+			process[P_BP] = (int)bp;
+			process[P_CYCLE] = cycle;
+			process[P_A] = a;
+			procs_run++;
+		}
+		// Advance
+		process = process + P__SZ;
+		++pid;
+	}
+
+	return procs_run;
 }
 
 int main(int _argc, char **_argv) {

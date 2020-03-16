@@ -125,7 +125,6 @@ char *mach_atoi_move (char *str, int radix, int *dest) {
 		(*str >= 'A' && *str <= 'Z') ||
 		(*str >= 'a' && *str <= 'z') ||
 		(*str >= '0' && *str <= '9')) {
-		//v = v * 10 + ('0' - *str++);
 		v = v * radix + ((*str > '9') ? (*str & ~0x20) - 'A' + 10 : (*str - '0'));
 		++str;
 	}
@@ -142,8 +141,10 @@ char *mach_atoin_move(char *str, int radix, int *dest, int len) {
 		sign = -1;
 		++str;
 	}
-	while (len-- && ((*str >= 'A' && *str <= 'z') || (*str >= '0' && *str <= '9'))) {
-		//v = v * 10 + ('0' - *str++);
+	while (len-- && (
+		(*str >= 'A' && *str <= 'Z') ||
+		(*str >= 'a' && *str <= 'z') ||
+		(*str >= '0' && *str <= '9'))) {
 		v = v * radix + ((*str > '9') ? (*str & ~0x20) - 'A' + 10 : (*str - '0'));
 		++str;
 	}
@@ -458,7 +459,7 @@ char *asm_read_expression (char *expr, int *dest, int *proc) {
 					while (*expr++ != ']'); // skip to end of directive
 					if (!mach_strncmp("code", name, name_len)) {
 						base_code = (int*)proc[P_MM_E];
-						offset /= sizeof(int);
+						offset = offset / sizeof(int);
 						result = (int)(operator == '+' ?
 							(base_code + offset) :
 							(base_code - offset));

@@ -58,12 +58,12 @@ enum {
 	P_INUSE,
 	P_EXIT,
 	// Allocation information
-	P_MM_SYM,
 	P_MM_E,
 	P_MM_SP,
 	P_MM_DATA,
 	P_MM_P,
 	// Compilation information
+	P_RegSize,       // Size of register
 	P_E,             // Emitted code pointer
 	P_Data,          // Emitted data pointer
 	// Registers
@@ -262,7 +262,7 @@ int setup () {
 		symbol[3] = ptr[3];
 		if (ptr[3] == ' ') symbol[3] = 0;
 		if (ptr[2] == ' ') symbol[2] = 0;
-		if (flags & FLG_DEBUG)
+		if (0) // (flags & FLG_DEBUG)
 			printf("Opcode %s = %ld\n", symbol, op);
 		if(!label_new(symbol, op)) {
 			printf("Failed to create symbols!\n");
@@ -305,7 +305,6 @@ void process_exit(int code, int *process) {
 	// TODO: emit to listeners
 	printf("exit(%d) cycle = %d\n", code, process[P_CYCLE]);
 	// Cleanup
-	free((int*)process[P_MM_SYM]);
 	free((int*)process[P_MM_E]);
 	free((int*)process[P_MM_SP]);
 	free((char*)process[P_MM_DATA]);
@@ -325,7 +324,7 @@ int run_procs() {
 	int pid, debug, cycle_max, pid_cycle, procs_run;
 
 	pid = 0;
-	debug = 1;// flags & FLG_DEBUG;
+	debug = flags & FLG_DEBUG;
 	cycle_max = 100;
 	process = processes;
 	procs_run = 0;
@@ -438,8 +437,8 @@ char *next_whitespace (char *c) {
 
 char *asm_read_expression (char *expr, int *dest, int *proc) {
 	int    offset, result;
-	int   *base_code, result_code;
-	char  *base_data, offset_data;
+	int   *base_code;
+	char  *base_data;
 	char  operator;
 	char *name, *name_end;
 	int   name_len;
@@ -457,9 +456,15 @@ char *asm_read_expression (char *expr, int *dest, int *proc) {
 						return 0;
 					}
 					while (*expr++ != ']'); // skip to end of directive
+					// In the next section we calculate offset and result based on data type.
+					// Code offsets require native word offsets, whilst data offsets
+					// require character offsets.
 					if (!mach_strncmp("code", name, name_len)) {
 						base_code = (int*)proc[P_MM_E];
-						offset = offset / sizeof(int);
+						// Convert offset based on register size. This has the side effect
+						// of allowing code compiled for 64bit targets to run in 32bit mode,
+						// and vice versa.
+						offset = offset / proc[P_RegSize];
 						result = (int)(operator == '+' ?
 							(base_code + offset) :
 							(base_code - offset));
@@ -489,11 +494,9 @@ char *asm_pass_scan_directive (char *directive, int len, char *start, int *proc)
 	start = next(start);
 	if(!mach_strncmp(directive, "TARGET", len)) {
 		tmp = mach_atoin(start, 10, 2);
-		printf("TARGET %dbit\n", tmp);
-		if(tmp / 8 != sizeof(int)) {
-			printf("This assembly file is for another architecture. Recompile for your system.\n");
-			return 0;
-		}
+		if (flags & FLG_DEBUG) { printf("TARGET %dbit", tmp); printf(" (native %dbit)\n", sizeof(int) * 8); }
+		// Save register size (for later adjustment in asm_read_expression())
+		proc[P_RegSize] = tmp / 8;
 		return next_whitespace(start);
 	} else if(!mach_strncmp(directive, "ENTRY", len)) {
 		if(*start == '[') {
@@ -698,7 +701,7 @@ int asm_pass_emit (int *proc, char *content) {
 }
 
 int *compile_proc (char *content) {
-	int failure, *proc, label_pos, *label, *sp, *t;
+	int failure, *proc, label_pos, *sp, *t;
 
 	if(!(proc = process_next())) return 0;
 
@@ -727,7 +730,7 @@ int *compile_proc (char *content) {
 				*--sp = argc;
 				*--sp = (int)argv;
 				*--sp = (int)t;
-				proc[P_SP] = sp;
+				proc[P_SP] = (int)sp;
 			} else {
 				printf("failed to emit assembly\n");
 				failure = 1;
@@ -755,9 +758,18 @@ int *start_asm (char *file) {
 	int  fd, bytes, *result;
 
 	if (!(buf = malloc(poolsz))) return 0;
-	if ( (fd = open(file, 0)) < 0) { free(buf); return 0; }
+	if ( (fd = open(file, 0)) < 0) {
+		free(buf);
+		printf("Unable to open file for reading: '%s'\n", file);
+		return 0;
+	}
 
-	if ((bytes = read(fd, buf, poolsz - 1)) <= 0) { close(fd); free(buf); return 0; }
+	if ((bytes = read(fd, buf, poolsz - 1)) <= 0) {
+		close(fd);
+		free(buf);
+		printf("Failed to read '%s': %ld\n", file, bytes);
+		return 0;
+	}
 	close(fd);
 	buf[bytes] = 0;
 

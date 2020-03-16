@@ -61,7 +61,6 @@ enum {
 	P_MM_E,
 	P_MM_SP,
 	P_MM_DATA,
-	P_MM_P,
 	// Compilation information
 	P_RegSize,       // Size of register
 	P_E,             // Emitted code pointer
@@ -287,6 +286,7 @@ void free_labels() {
 void cleanup() {
 	free_labels();
 	free(label_base);
+	free(processes);
 }
 
 char *readline() {
@@ -308,7 +308,6 @@ void process_exit(int code, int *process) {
 	free((int*)process[P_MM_E]);
 	free((int*)process[P_MM_SP]);
 	free((char*)process[P_MM_DATA]);
-	free((char*)process[P_MM_P]);
 	process[P_EXIT] = code;
 	process[P_INUSE] = 0;
 }

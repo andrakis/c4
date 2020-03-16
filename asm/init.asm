@@ -39,11 +39,59 @@
     PSH 
     PRTF
     ADJ  2
-;; 10:   return 0;
+;; 10:   i = 0;
+    LEA  -1
+    PSH 
+    IMM  0
+    SI  
+;; 11:   while(i < argc) {
+    LEA  -1
+    LI  
+    PSH 
+    LEA  3
+    LI  
+    LT  
+    BZ   [code + 800]
+;; 12:     printf("Argument %ld: ", i);
+    IMM  [data + 40]
+    PSH 
+    LEA  -1
+    LI  
+    PSH 
+    PRTF
+    ADJ  2
+;; 13:     printf("'%s'\n", argv[i++]);
+    IMM  [data + 56]
+    PSH 
+    LEA  2
+    LI  
+    PSH 
+    LEA  -1
+    PSH 
+    LI  
+    PSH 
+    IMM  1
+    ADD 
+    SI  
+    PSH 
+    IMM  1
+    SUB 
+    PSH 
+    IMM  8
+    MUL 
+    ADD 
+    LI  
+    PSH 
+    PRTF
+    ADJ  2
+;; 14:   }
+;; 15:   return 0;
+    JMP  [code + 384]
     IMM  0
     LEV 
-;; 11: }
+;; 16: }
     LEV 
-;; 12: 
+;; 17: 
 
-DATA Argument count: %ld\0a\00\00\00\002 + 2: %ld\0a\00\00\00\00\00
+DATA Argument count: %ld\0a\00\00\00\002 + 2: %ld\0a\00\00\00\00\00Argument %l
+DATA d: \00\00'%s'\0a\00\00\00

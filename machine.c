@@ -75,6 +75,7 @@ enum {
 };
 int *processes;      // Pointer to processes struct
 int  proc_max;       // Maximum number of concurrent processes
+int  proc_last_id;   // Last process id
 
 int mach_strlen (char *s) {
 	int l;
@@ -220,6 +221,7 @@ int setup () {
 	label_idx = 0;
 	label_max = 512;
 	proc_max = 32;
+	proc_last_id = 0;
 
 	// Read arguments
 	--argc; ++argv;
@@ -631,6 +633,7 @@ int *compile_proc (char *content) {
 	else if(!(proc[P_MM_DATA] = (int)malloc(poolsz))) { failure = 1; }
 
 	if (!failure) {
+		proc[P_ProcID] = proc_last_id++;
 		proc[P_SP] = proc[P_BP] = (int)(int *)(proc[P_MM_SP] + poolsz);
 		proc[P_E] = proc[P_MM_E];
 		proc[P_Data] = proc[P_MM_DATA];
@@ -700,9 +703,11 @@ int *start_proc (char *file) {
 	return start_asm(file);
 }
 
+enum { ERR_NONE, ERR_EXIT, ERR_UNKNOWN_OPCODE };
 int run_procs() {
 	int cycle, *pc, *sp, *bp, *process, i, a, *t;
 	int pid, debug, cycle_max, pid_cycle, procs_run;
+	int p_err;
 
 	pid = 0;
 	debug = flags & FLG_DEBUG;
@@ -718,6 +723,7 @@ int run_procs() {
 			bp = (int*)process[P_BP];
 			cycle = process[P_CYCLE];
 			a = process[P_A];
+			p_err  = ERR_NONE;
 			while (pid_cycle++ < cycle_max) {
 				i = *pc++; ++cycle;
 				if (debug) {
@@ -762,8 +768,8 @@ int run_procs() {
 				else if (i == FREE) free((void *)*sp);
 				else if (i == MSET) a = (int)memset((char *)sp[2], sp[1], *sp);
 				else if (i == MCMP) a = memcmp((char *)sp[2], (char *)sp[1], *sp);
-				else if (i == EXIT) { process_exit(*sp, process); pid_cycle = cycle_max; } // force stop process
-				else { process_unknown_op(i, process); pid_cycle = cycle_max; } // force stop process
+				else if (i == EXIT) { p_err = ERR_EXIT; pid_cycle = cycle_max; } // force stop process
+				else { pid_cycle = cycle_max; } // force stop process
 			}
 			// Save process state
 			process[P_PC] = (int)pc;
@@ -772,6 +778,8 @@ int run_procs() {
 			process[P_CYCLE] = cycle;
 			process[P_A] = a;
 			procs_run++;
+			if(p_err == ERR_EXIT) process_exit(*sp, process);
+			else if(p_err == ERR_UNKNOWN_OPCODE) process_unknown_op(i, process);
 		}
 		// Advance
 		process = process + P__SZ;

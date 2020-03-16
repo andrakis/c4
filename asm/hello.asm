@@ -18,4 +18,4 @@
 ;; 7: }
     LEV 
 
-DATA hello, world\\foo\0a\00\00\00\00\00\00\00
+DATA hello, world\0a\00\00\00\00\00\00\00

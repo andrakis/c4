@@ -226,7 +226,7 @@ int setup () {
 	--argc; ++argv;
 	if (argc > 0 && **argv == '-' && (*argv)[1] == 'd') { flags = flags | FLG_DEBUG; --argc; ++argv; }
 	if (argc > 0 && **argv == '-' && (*argv)[1] == 'p') { proc_max = mach_atoi(*argv + 3, 10); --argc; ++argv; }
-	if (argc >= 1) { init = *argv; --argc; ++argv; }
+	if (argc >= 1) { init = *argv; }
 
 	if (!(processes = malloc(tmp = sizeof(int) * P__SZ * proc_max))) {
 		printf("Failed allocate %ld bytes for process storage\n", tmp);

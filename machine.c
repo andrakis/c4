@@ -21,7 +21,7 @@
 #define int __INTPTR_TYPE__
 
 char *version;
-void setup_version () { version = "C4Machine 1.00"; }
+void setup_version () { version = "C4Machine 0.20"; }
 
 enum { LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,
        OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,

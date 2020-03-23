@@ -129,13 +129,8 @@ void bluepill () {
 	c4_argc = 3;
 	c4_argv = malloc(sizeof(char*) * c4_argc);
 	c4_argv[0] = "c4";
-	if(c4_depth() == 0) {
-		c4_argc = 2;
-		c4_argv[1] = "sh.c";
-	} else {
-		c4_argv[1] = "c4.c";
-		c4_argv[2] = "sh.c";
-	}
+	c4_argv[1] = "c4.c";
+	c4_argv[2] = "sh.c";
 	printf("Diving deeper into the simulation...\n");
 	c4_main(c4_argc, c4_argv);
 	free(c4_argv);
@@ -174,7 +169,7 @@ int main (int argc, char **argv) {
 	version = "0.2";
 	shell_mode = SH_LOOP;
 	user_prompt = "c4sh>\n"; // Newline required to flush buffer
-	printf("C4SH v %s depth %ld\nType help for command list\n", version, c4_depth());
+	printf("C4SH v %s\nType help for command list\n", version);
 	while(shell_mode != SH_EXIT) {
 		if(shell_mode == SH_LOOP) {
 			printf(user_prompt);

@@ -54,6 +54,7 @@ enum {
 };
 int *label_base, label_idx, label_max;
 int  label_magic;
+int  rewrite_label_idx;
 
 enum {
 	LT_OPCODE,
@@ -252,9 +253,10 @@ int setup () {
 	init = "asm/init.asm";
 	flags = FLG_NONE;
 	label_idx = 0;
-	label_max = 512;
+	label_max = 1000;
 	proc_max = 32;
 	proc_last_id = 0;
+	rewrite_label_idx = 0;
 
 	// Read arguments
 	--argc; ++argv;
@@ -442,9 +444,8 @@ char *asm_read_expression (char *expr, int *dest, int *proc) {
 	return 0;
 }
 
-int rewrite_label_idx;
 char *asm_scan_lbloffset(char *str, int *proc) {
-	int n, *label, i, idx, rem, j, m;
+	int n, *label, i, idx, rem, j, m, tmp;
 	char *end, *name, *c, ch;
 	char *z;
 
@@ -453,11 +454,19 @@ char *asm_scan_lbloffset(char *str, int *proc) {
 		return 0;
 	}
 
-	if (!(name = malloc(n = sizeof(char) * (end - str) + 1))) {
-		printf("Failed to allocate %ld bytes\n", n);
+	if (!(name = malloc(tmp = sizeof(char) * (end - str) + 1))) {
+		printf("Failed to allocate %ld bytes\tmp", tmp);
 		return 0;
 	}
-	memset(name, 0, n);
+
+	// Find existing label
+	if ((label = label_find_offset(n, LT_LABEL))) {
+		// Already exists, return
+		free(name);
+		return end;
+	}
+
+	memset(name, 0, tmp);
 	// Set name
 	i = 0;
 	while (i++ < 5) name[i - 1] = "label"[i - 1];
@@ -510,10 +519,9 @@ char *asm_pass_scan_directive (char *directive, int len, char *start, int *proc)
 				printf("Failed to parse [directive + expression]\n");
 				return 0;
 			}
-			// revert: creating line label for "entry"
-			//if(!(label_new("entry", tmp, LT_LABEL))) {
-			//	printf(";; Warning: failed to create label\n");
-			//}
+			if(!(label_new("entry", tmp, LT_LABEL))) {
+				printf(";; Warning: failed to create label\n");
+			}
 		} else {
 			// Lookup label
 			if(!(n = next_whitespace(start))) {
@@ -558,6 +566,7 @@ char *asm_pass_label_directive (char *directive, int len, int location, int *pro
 // Scan pass:
 //  1) Keep track of code position for labels
 //  2) Find any labels and set position
+//  3) Emit data to proc[P_DATA]
 int line, column;
 int asm_pass_scan (int *proc, char *content) {
 	char *c, *t, *data;
@@ -596,8 +605,7 @@ int asm_pass_scan (int *proc, char *content) {
 			++e;
 		} else if (*c == '[') {
 			// Expansion: skip for now
-			//REVERT: c = asm_scan_lbloffset(c, proc);
-			while(*++c != ']') ;
+			c = asm_scan_lbloffset(c, proc);
 			++e;
 		} else {
 			// scan end of word for label (:)
@@ -637,8 +645,6 @@ int asm_pass_scan (int *proc, char *content) {
 // Emit pass:
 //  1) Find any .DIRECTIVE entries and set appropriate flags
 //  2) Emit opcodes to proc[P_E]
-//  3) Emit data to proc[P_DATA]
-//  4) Emit labels when found
 int asm_pass_emit (int *proc, char *content) {
 	char *c, *t, prev;
 	int  *e, *l, tmp;
@@ -722,21 +728,31 @@ int asm_pass_emit (int *proc, char *content) {
 
 void dump_proc (int *proc) {
 	int *e, *o, i, *x;
-	int *mm_e;
+	int *mm_e, *label;
 	char *mm_data, *d, *data, *op;
+
+	printf(".TARGET %dbit\n", sizeof(int) * 8);
+	printf(".ENTRY entry\n");
 
 	x = mm_e = (int*)proc[P_MM_E];
 	e = (int*)proc[P_E];
 	mm_data = (char*)proc[P_MM_DATA];
 	while(x < e - 1) {
 		i = *++x;
+		if((label = label_find_offset((int)x, LT_LABEL))) {
+			printf("%s: ;; [code + %d]\n", (char*)label[LBL_NAME], x - mm_e);
+		}
 		op = &opcodes[i * 5];
 		printf("%8.4s", op);
 		if (*x <= ADJ) {
 			o = ++x;
 			printf(" ");
-			if (*o >= (int)mm_e && *o <= (int)(mm_e + (poolsz/sizeof(int)))) {
-				printf("[code + %d]", (*o - (int)mm_e));
+			if (*o >= (int)mm_e && *o <= (int)(mm_e + (poolsz / sizeof(int)))) {
+				if((label = label_find_offset(*o, LT_LABEL))) {
+					printf("%s", (char*)label[LBL_NAME]);
+				} else {
+					printf("[code + %d]", (*o - (int)mm_e) / sizeof(int));
+				}
 			} else if (*o >= (int)mm_data && *o <= (int)(mm_data + poolsz)) {
 				printf("[data + %d]", *o - (int)mm_data);
 			} else {
@@ -810,9 +826,9 @@ int *compile_proc (char *content) {
 			printf("failed to scan assembly file\n");
 			failure = 1;
 		}
+		// restore label position (erasing any created labels)
 		while (label_idx > label_pos)
 			label_free(label_find_idx(label_idx--));
-		label_idx = label_pos; // restore label position (erasing any created labels)
 	}
 
 	if(failure) {

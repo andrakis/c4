@@ -21,7 +21,7 @@
 #define int __INTPTR_TYPE__
 
 char *version;
-void setup_version () { version = "C4Machine 0.20"; }
+void setup_version () { version = "C4Machine 0.21"; }
 
 enum { LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,
        OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,
@@ -294,6 +294,7 @@ int setup () {
 		return 1;
 	}
 	memset(comment_base, 0, tmp);
+
 	setup_version();
 	setup_opcodes();
 	label_magic = 0xBEEF;
@@ -392,11 +393,6 @@ int *process_next () {
 
 // Find next token
 char *next (char *c) {
-	char prev, quot;
-
-	prev = 0;
-	quot = 0;
-
 	// skip unprintables
 	while(*c && !mach_isprint(*c)) ++c;
 	return c;
@@ -462,8 +458,7 @@ char *asm_read_expression (char *expr, int *dest, int *proc) {
 
 char *asm_scan_lbloffset(char *str, int *proc) {
 	int n, *label, i, idx, rem, j, m, tmp;
-	char *end, *name, *c, ch;
-	char *z;
+	char *end, *name, ch;
 
 	if (!(end = asm_read_expression(str, &n, proc))) {
 		printf("Failed to read expression\n");
@@ -494,12 +489,12 @@ char *asm_scan_lbloffset(char *str, int *proc) {
 	else {
 		while (idx > 0) {
 			rem = idx % 10;
-			name[i++] = '0' + rem;
+			name[i++] = '0' + (char)rem;
 			idx = idx / 10;
 		}
 	}
-
-	j = 5; --i; m = i;
+	// reverse resulting string (numbers only)
+	j = 5; m = --i;
 	while(j < i) {
 		ch = name[j];
 		name[j] = name[m];
@@ -683,7 +678,7 @@ int asm_pass_scan (int *proc, char *content) {
 						if(*c == '\\') {
 							++c;
 							c = mach_atoin_move(c, 16, &v, 2);
-							*data++ = v;
+							*data++ = (char)v;
 						} else {
 							*data++ = *c++;
 						}

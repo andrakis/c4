@@ -546,7 +546,7 @@ int main(int argc, char **argv)
         if (*_le <= ADJ) {
           o = ++_le;
           printf(" ");
-          if (*o >= (int)mm_e && *o <= (int)(mm_e + poolsz)) {
+          if (*o >= (int)mm_e && *o <= (int)(mm_e + (poolsz / sizeof(int)))) {
             printf("[code + %d]", (*o - (int)mm_e));
           } else if (*o >= (int)mm_data && *o <= (int)(mm_data + poolsz)) {
             printf("[data + %d]", *o - (int)mm_data);

@@ -56,10 +56,20 @@ int *label_base, label_idx, label_max;
 int  label_magic;
 int  rewrite_label_idx;
 
+// Label type
 enum {
 	LT_OPCODE,
 	LT_LABEL,
 };
+
+// struct comment {
+enum {
+	CO_LOCATION,       // (int)   Emitted code location
+	CO_STR,            // (char*) Location in code buffer
+	CO_LEN,            // (int)   Length of comment
+	CO__SZ             // Size of comment struct
+};
+int *comment_base, comment_idx, comment_max;
 
 int poolsz;
 // struct process {
@@ -254,6 +264,8 @@ int setup () {
 	flags = FLG_NONE;
 	label_idx = 0;
 	label_max = 1000;
+	comment_idx = 0;
+	comment_max = 10000;
 	proc_max = 32;
 	proc_last_id = 0;
 	rewrite_label_idx = 0;
@@ -269,16 +281,19 @@ int setup () {
 		printf("Failed allocate %ld bytes for process storage\n", tmp);
 		return 5;
 	}
-
 	memset(processes, 0, tmp);
 
-	tmp = sizeof(int) * LBL__SZ * label_max;
-	if (!(label_base = malloc(tmp))) {
+	if (!(label_base = malloc(tmp = sizeof(int) * LBL__SZ * label_max))) {
 		printf("Failed to allocate %ld bytes for %ld labels\n", tmp, label_max);
 		return 1;
 	}
 	memset(label_base, 0, tmp);
 
+	if (!(comment_base = malloc(tmp = sizeof(int) * CO__SZ * comment_max))) {
+		printf("Failed to allocate %ld bytes for %ld comments\n", tmp, comment_max);
+		return 1;
+	}
+	memset(comment_base, 0, tmp);
 	setup_version();
 	setup_opcodes();
 	label_magic = 0xBEEF;
@@ -329,6 +344,7 @@ void free_labels() {
 void cleanup() {
 	free_labels();
 	free(label_base);
+	free(comment_base);
 	free(processes);
 }
 
@@ -502,6 +518,20 @@ char *asm_scan_lbloffset(char *str, int *proc) {
 	return end;
 }
 
+void dump_labels(int type) {
+	int *label, lbl_idx;
+
+	label = label_base;
+	lbl_idx = 0;
+	while (lbl_idx < label_max) {
+		if (label_valid(label) && label[LBL_TYPE] == type) {
+			printf(" Label '%s' = %d\n", (char*)label[LBL_NAME], label[LBL_OFFSET]);
+		}
+		label = label + LBL__SZ;
+		++lbl_idx;
+	}
+}
+
 char *asm_pass_scan_directive (char *directive, int len, char *start, int *proc) {
 	int tmp, *label;
 	char *n;
@@ -528,9 +558,9 @@ char *asm_pass_scan_directive (char *directive, int len, char *start, int *proc)
 				printf("Expected a label\n");
 				return 0;
 			}
-			--n;
 			if(!(label = label_find_strn(start, n - start))) {
 				printf("Label not found: '%.*s'\n", n - start, start);
+				dump_labels(LT_LABEL);
 				return 0;
 			}
 			tmp = label[LBL_OFFSET];
@@ -560,7 +590,32 @@ char *asm_pass_label_directive (char *directive, int len, int location, int *pro
 		printf("Failed to create label '%s'\n", name);
 		return 0;
 	}
+
+	//printf("Label created: '%s' = %d\n", result[LBL_NAME], result[LBL_OFFSET]);
 	return directive + len + 1;
+}
+
+char *scan_comment(char *str, int *proc, int e) {
+	int *comment;
+	char *end;
+
+	end = str;
+	while (*end++ != '\n');
+
+	if (comment_idx >= comment_max) {
+		printf("Warning: out of comment space\n");
+		return end;
+	}
+	// Save position of comment
+	comment = comment_base + (comment_idx++ * CO__SZ);
+	comment[CO_LOCATION] = (int)((int*)proc[P_MM_E] + e);
+	comment[CO_STR] = (int)str;
+	comment[CO_LEN] = (end - str) - 1;
+
+	//printf("New comment: idx %d, location %d, length %d\n",
+	//	comment_idx - 1, comment[CO_LOCATION], comment[CO_LEN]);
+
+	return end;
 }
 
 // Scan pass:
@@ -570,22 +625,22 @@ char *asm_pass_label_directive (char *directive, int len, int location, int *pro
 int line, column;
 int asm_pass_scan (int *proc, char *content) {
 	char *c, *t, *data;
-	int   e, tmp, v;
+	int   e, tmp, v, fixup;
 
 	c = next(content);
 	e = 0;
 	data = (char*)proc[P_Data];
 
+	//printf(";; code emittion at: %d\n", proc[P_MM_E]);
+
 	while(*c) {
 		while (*c == '\n' || *c == '\r' || *c == ' ' || *c == 8) ++c;
 		if (*c == ';') {
 			// comment (to end of line)
-			while (*c++ != '\n') ;
+			c = scan_comment(c, proc, e);
 		} else if(*c == '.') {
 			// .DIRECTIVE [some value]
-			t = next_whitespace(c);
-			if(!(c = asm_pass_scan_directive(c, t - c, t + 1, proc)))
-				return 0;
+			while (*c++ != '\n');
 		} else if(*c == '"') {
 			printf("String parsing not implemented\n");
 			return 0;
@@ -605,14 +660,19 @@ int asm_pass_scan (int *proc, char *content) {
 			++e;
 		} else if (*c == '[') {
 			// Expansion: skip for now
-			c = asm_scan_lbloffset(c, proc);
+			//c = asm_scan_lbloffset(c, proc);
+			while (*c++ != ']');
 			++e;
 		} else {
 			// scan end of word for label (:)
 			if(!(t = next_whitespace(c)))
 				return 0;
 			if(*(t - 1) == ':') {
-				if(!(c = asm_pass_label_directive(c, t - c, e, proc)))
+				// Fixup: code entry is at +1
+				fixup = 0;
+				if (e == 0)
+					fixup = 1;
+				if(!(c = asm_pass_label_directive(c, t - c, (int)((int*)proc[P_MM_E] + e + fixup), proc)))
 					return 0;
 			} else {
 				// is it a DATA segment?
@@ -690,6 +750,7 @@ int asm_pass_emit (int *proc, char *content) {
 			*e++ = tmp;
 		} else if (*c == '[') {
 			// [expr...]
+			asm_scan_lbloffset(c, proc);
 			if(!(c = asm_read_expression(c, &tmp, proc)))
 				return 0;
 			*e++ = tmp;
@@ -726,6 +787,20 @@ int asm_pass_emit (int *proc, char *content) {
 	return 1;
 }
 
+int comment_last_idx;
+void dump_comments (int *x, int *proc) {
+	int *comment, cidx;
+	// Brute force find all comments matching x
+	cidx = comment_last_idx;
+	while (cidx <= comment_idx) {
+		comment = comment_base + (cidx++ * CO__SZ);
+		if (comment[CO_LOCATION] == (int)x) {
+			printf("%.*s\n", comment[CO_LEN], (char*)comment[CO_STR]);
+			comment_last_idx = cidx - 1;
+		} //else printf("Location mismatch: %ld != %ld\n", x, comment[CO_LOCATION]);
+	}
+}
+
 void dump_proc (int *proc) {
 	int *e, *o, i, *x;
 	int *mm_e, *label;
@@ -734,11 +809,17 @@ void dump_proc (int *proc) {
 	printf(".TARGET %dbit\n", sizeof(int) * 8);
 	printf(".ENTRY entry\n");
 
+	comment_last_idx = 0;
+
 	x = mm_e = (int*)proc[P_MM_E];
 	e = (int*)proc[P_E];
 	mm_data = (char*)proc[P_MM_DATA];
+	dump_comments(x, proc);
 	while(x < e - 1) {
 		i = *++x;
+		dump_comments(x, proc);
+		if (i <= ADJ) { dump_comments(x + 1, proc); }
+		//dump_comments(x, proc);
 		if((label = label_find_offset((int)x, LT_LABEL))) {
 			printf("%s: ;; [code + %d]\n", (char*)label[LBL_NAME], x - mm_e);
 		}

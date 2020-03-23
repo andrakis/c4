@@ -14,11 +14,11 @@ Try the following:
 
     ./c4 sh.c                # Run the C4 shell
 
-    ./c4 c4_src/machine.c      # Run the c4 machine, runs asm/init.asm
+    ./c4 machine.c             # Run the c4 machine, runs asm/init.asm
     ./c4 -s c4.c > asm/c4.asm  # (Optional) regenerate c4.c assembly
     # Run c4.asm inside c4 machine
-    ./c4 c4_src/machine.c asm/c4.asm hello.c
-    
-    gcc -o machine c4_src/machine.c   # Compile machine
+    ./c4 machine.c asm/c4.asm hello.c
+
+    gcc -o machine machine.c          # Compile machine
     ./machine asm/c4.asm hello.c      # Run c4
     ./machine asm/c4.asm sh.c         # Run C4 shell

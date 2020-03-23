@@ -20,6 +20,9 @@
 #endif // ifdef __GNUC__
 #define int __INTPTR_TYPE__
 
+char *version;
+void setup_version () { version = "C4Machine 1.00"; }
+
 enum { LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,
        OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,
        OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,EXIT };
@@ -36,8 +39,9 @@ void setup_opcodes () {
 char *init;
 int flags;
 enum {
-	FLG_NONE =  0x0,
-	FLG_DEBUG = 0x1,
+	FLG_NONE     = 0x0,
+	FLG_DEBUG    = 0x1,
+	FLG_SOURCE   = 0x4
 };
 
 // struct label {
@@ -45,10 +49,16 @@ enum {
 	LBL_MAGIC,         // (int)   Magic value
 	LBL_NAME,          // (char*) Label name
 	LBL_OFFSET,        // (int)   Label offset
+	LBL_TYPE,          // (int)   Label type (see LT_)
 	LBL__SZ            // Size of label struct
 };
 int *label_base, label_idx, label_max;
 int  label_magic;
+
+enum {
+	LT_OPCODE,
+	LT_LABEL,
+};
 
 int poolsz;
 // struct process {
@@ -164,7 +174,11 @@ int mach_atoin (char *str, int radix, int length) {
 	return dest;
 }
 
-int *label_new (char *name, int offset) {
+int  label_calcmagic(int *label) {
+	return label_magic ^ ((label[LBL_OFFSET - 1]) * (label[LBL_TYPE] + 1));
+}
+
+int *label_new (char *name, int offset, int type) {
 	int *label;
 
 	if (label_idx >= label_max) {
@@ -178,12 +192,13 @@ int *label_new (char *name, int offset) {
 	}
 	mach_strcpy((char*)label[LBL_NAME], name);
 	label[LBL_OFFSET] = offset;
-	label[LBL_MAGIC] = label_magic ^ (offset-1);
+	label[LBL_TYPE] = type;
+	label[LBL_MAGIC] = label_calcmagic(label);
 	return label;
 }
 
 int label_valid (int *label) {
-	return label[LBL_MAGIC] == (label_magic ^ (label[LBL_OFFSET] - 1));
+	return label[LBL_MAGIC] == label_calcmagic(label);
 }
 
 void label_free (int *label) {
@@ -209,6 +224,24 @@ int *label_find_strn (char *str, int len) {
 	return 0;
 }
 
+int *label_find_offset (int offset, int type) {
+	int *label, *end;
+
+	label = label_base;
+	end = label_base + (LBL__SZ * label_max);
+	while(label < end) {
+		if(label_valid(label)) {
+			if(label[LBL_TYPE] == type && label[LBL_OFFSET] == offset)
+				return label;
+		}
+		label = label + LBL__SZ;
+	}
+
+	return 0;
+}
+
+int *label_find_idx(int idx) { return label_base + (LBL__SZ * idx); }
+
 int argc;
 char **argv;
 int setup () {
@@ -226,7 +259,8 @@ int setup () {
 	// Read arguments
 	--argc; ++argv;
 	if (argc > 0 && **argv == '-' && (*argv)[1] == 'd') { flags = flags | FLG_DEBUG; --argc; ++argv; }
-	if (argc > 0 && **argv == '-' && (*argv)[1] == 'p') { proc_max = mach_atoi(*argv + 3, 10); --argc; ++argv; }
+	if (argc > 0 && **argv == '-' && (*argv)[1] == 'p') { proc_max = mach_atoi(*++argv, 10); argc = argc - 2; ++argv; }
+	if (argc > 0 && **argv == '-' && (*argv)[1] == 's') { flags = flags | FLG_SOURCE; --argc; ++argv; }
 	if (argc >= 1) { init = *argv; }
 
 	if (!(processes = malloc(tmp = sizeof(int) * P__SZ * proc_max))) {
@@ -243,8 +277,11 @@ int setup () {
 	}
 	memset(label_base, 0, tmp);
 
+	setup_version();
 	setup_opcodes();
 	label_magic = 0xBEEF;
+	if(sizeof(int) == 8)
+		label_magic = 0xDEADBEEF;
 
 	// Setup symbols
 	if (!(symbol = malloc(sizeof(char) * 5))) {
@@ -265,7 +302,7 @@ int setup () {
 		if (ptr[2] == ' ') symbol[2] = 0;
 		if (0) // (flags & FLG_DEBUG)
 			printf("Opcode %s = %ld\n", symbol, op);
-		if(!label_new(symbol, op)) {
+		if(!label_new(symbol, op, LT_OPCODE)) {
 			printf("Failed to create symbols!\n");
 			return 3;
 		}
@@ -274,6 +311,8 @@ int setup () {
 	}
 
 	free(symbol);
+	if (!(flags & FLG_SOURCE))
+		printf("%s\n", version);
 	return 0;
 }
 
@@ -340,10 +379,6 @@ char *next (char *c) {
 	prev = 0;
 	quot = 0;
 
-	if(*c == ';' && prev != '\'') {
-		// comment, read until end of line
-		while(*c != '\n') ++c;
-	}
 	// skip unprintables
 	while(*c && !mach_isprint(*c)) ++c;
 	return c;
@@ -407,23 +442,78 @@ char *asm_read_expression (char *expr, int *dest, int *proc) {
 	return 0;
 }
 
+int rewrite_label_idx;
+char *asm_scan_lbloffset(char *str, int *proc) {
+	int n, *label, i, idx, rem, j, m;
+	char *end, *name, *c, ch;
+	char *z;
+
+	if (!(end = asm_read_expression(str, &n, proc))) {
+		printf("Failed to read expression\n");
+		return 0;
+	}
+
+	if (!(name = malloc(n = sizeof(char) * (end - str) + 1))) {
+		printf("Failed to allocate %ld bytes\n", n);
+		return 0;
+	}
+	memset(name, 0, n);
+	// Set name
+	i = 0;
+	while (i++ < 5) name[i - 1] = "label"[i - 1];
+	--i;
+	idx = rewrite_label_idx++;
+	// inline itoa
+	if (idx == 0)
+		name[i++] = '0';
+	else {
+		while (idx > 0) {
+			rem = idx % 10;
+			name[i++] = '0' + rem;
+			idx = idx / 10;
+		}
+	}
+
+	j = 5; --i; m = i;
+	while(j < i) {
+		ch = name[j];
+		name[j] = name[m];
+		name[m] = ch;
+		--m; ++j;
+	}
+	//printf("Name generated: '%s'\n", name);
+	if (!(label = label_new(name, n, LT_LABEL))) {
+		free(name);
+		printf("Failed to create label '%s'\n", name);
+		return 0;
+	}
+
+	free(name);
+
+	return end;
+}
+
 char *asm_pass_scan_directive (char *directive, int len, char *start, int *proc) {
 	int tmp, *label;
 	char *n;
 
 	start = next(start);
-	if(!mach_strncmp(directive, "TARGET", len)) {
+	if(!mach_strncmp(directive, ".TARGET", len)) {
 		tmp = mach_atoin(start, 10, 2);
-		if (flags & FLG_DEBUG) { printf("TARGET %dbit", tmp); printf(" (native %dbit)\n", sizeof(int) * 8); }
+		if (flags & FLG_DEBUG) { printf(".TARGET %dbit", tmp); printf(" ;; (native %dbit)\n", sizeof(int) * 8); }
 		// Save register size (for later adjustment in asm_read_expression())
 		proc[P_RegSize] = tmp / 8;
 		return next_whitespace(start);
-	} else if(!mach_strncmp(directive, "ENTRY", len)) {
+	} else if(!mach_strncmp(directive, ".ENTRY", len)) {
 		if(*start == '[') {
 			if(!(n = asm_read_expression(start, &tmp, proc))) {
 				printf("Failed to parse [directive + expression]\n");
 				return 0;
 			}
+			// revert: creating line label for "entry"
+			//if(!(label_new("entry", tmp, LT_LABEL))) {
+			//	printf(";; Warning: failed to create label\n");
+			//}
 		} else {
 			// Lookup label
 			if(!(n = next_whitespace(start))) {
@@ -456,7 +546,7 @@ char *asm_pass_label_directive (char *directive, int len, int location, int *pro
 	// copy name over
 	mach_strncpy(name, directive, len);
 
-	result = label_new(name, location);
+	result = label_new(name, location, LT_LABEL);
 	free(name);
 	if(!result) {
 		printf("Failed to create label '%s'\n", name);
@@ -483,14 +573,20 @@ int asm_pass_scan (int *proc, char *content) {
 			// comment (to end of line)
 			while (*c++ != '\n') ;
 		} else if(*c == '.') {
-			// .DIRECTIVE [some value] (skip for now)
-			while(*c++ != '\n') ;
+			// .DIRECTIVE [some value]
+			t = next_whitespace(c);
+			if(!(c = asm_pass_scan_directive(c, t - c, t + 1, proc)))
+				return 0;
 		} else if(*c == '"') {
+			printf("String parsing not implemented\n");
+			return 0;
 			// Skip strings
 			while(*c++ != '\n') ;
 			// Counts as 1
 			++e;
 		} else if (*c == '\'') {
+			printf("String parsing not implemented\n");
+			return 0;
 			// Skip small quotes
 			while (*++c != '\'');
 			++e;
@@ -499,8 +595,9 @@ int asm_pass_scan (int *proc, char *content) {
 			c = mach_atoi_move(c, 10, &tmp);
 			++e;
 		} else if (*c == '[') {
-			// Expansion, skip for now
-			while (*c++ != ']') ;
+			// Expansion: skip for now
+			//REVERT: c = asm_scan_lbloffset(c, proc);
+			while(*++c != ']') ;
 			++e;
 		} else {
 			// scan end of word for label (:)
@@ -558,12 +655,13 @@ int asm_pass_emit (int *proc, char *content) {
 			// comment (to end of line)
 			while (*c++ != '\n');
 		}  else if (*c == '.') {
-			++c;
 			// .DIRECTIVE [some value]
 			t = next_whitespace(c);
 			if(!(c = asm_pass_scan_directive(c, t - c, t + 1, proc)))
 				return 0;
 		} else if(*c == '"') {
+			printf("String parsing not implemented\n");
+			return 0;
 			// emit current data location
 			*e++ = (int)data;
 			// Emit strings to Data
@@ -577,6 +675,7 @@ int asm_pass_emit (int *proc, char *content) {
 		} else if(*c == '\'') {
 			// emit a character
 			printf("STUB: character emit not present\n");
+			return 0;
 			while(*++c != '\'');
 			++e;
 		} else if (*c == '-' || (*c >= '0') && *c <= '9') {
@@ -607,6 +706,7 @@ int asm_pass_emit (int *proc, char *content) {
 						printf("Unknown label: %.*s\n", t - c, c);
 						return 0;
 					}
+					//printf("  -- Lookup '%.*s' => '%s'\n", t - c, c, (char*)l[LBL_NAME]);
 					*e++ = l[LBL_OFFSET];
 					c = t + 1;
 				}
@@ -618,6 +718,51 @@ int asm_pass_emit (int *proc, char *content) {
 	proc[P_Data] = (int)data;
 
 	return 1;
+}
+
+void dump_proc (int *proc) {
+	int *e, *o, i, *x;
+	int *mm_e;
+	char *mm_data, *d, *data, *op;
+
+	x = mm_e = (int*)proc[P_MM_E];
+	e = (int*)proc[P_E];
+	mm_data = (char*)proc[P_MM_DATA];
+	while(x < e - 1) {
+		i = *++x;
+		op = &opcodes[i * 5];
+		printf("%8.4s", op);
+		if (*x <= ADJ) {
+			o = ++x;
+			printf(" ");
+			if (*o >= (int)mm_e && *o <= (int)(mm_e + (poolsz/sizeof(int)))) {
+				printf("[code + %d]", (*o - (int)mm_e));
+			} else if (*o >= (int)mm_data && *o <= (int)(mm_data + poolsz)) {
+				printf("[data + %d]", *o - (int)mm_data);
+			} else {
+				printf("%d", *o);
+			}
+			printf("\n");
+		} else printf("\n");
+	}
+
+	d = (char*)proc[P_MM_DATA];
+	data = (char*)proc[P_Data];
+	i = 0;
+	printf("\nDATA ");
+	while(d < data) {
+		if(*d == '\\') {
+			printf("\\5c");
+			++d;
+		} else if(*d >= 0x20 && *d <= 0x7e)
+			printf("%c", *d++);
+		else {
+			printf("\\%02x", *d++);
+			i = i + 2;
+		}
+		if (++i > 72) { printf("\nDATA "); i = 0; }
+	}
+	printf("\n");
 }
 
 int *compile_proc (char *content) {
@@ -644,14 +789,19 @@ int *compile_proc (char *content) {
 		label_pos = label_idx; // remember for restoring afterwards
 		if (asm_pass_scan(proc, content)) {
 			if (asm_pass_emit(proc, content)) {
-				// setup stack
-				sp = (int*)proc[P_SP];
-				*--sp = EXIT; // call exit if main returns
-				*--sp = PSH; t = sp;
-				*--sp = argc;
-				*--sp = (int)argv;
-				*--sp = (int)t;
-				proc[P_SP] = (int)sp;
+				if (flags & FLG_SOURCE) {
+					dump_proc(proc);
+					failure = 1;
+				} else {
+					// setup stack
+					sp = (int*)proc[P_SP];
+					*--sp = EXIT; // call exit if main returns
+					*--sp = PSH; t = sp;
+					*--sp = argc;
+					*--sp = (int)argv;
+					*--sp = (int)t;
+					proc[P_SP] = (int)sp;
+				}
 			} else {
 				printf("failed to emit assembly\n");
 				failure = 1;
@@ -660,6 +810,8 @@ int *compile_proc (char *content) {
 			printf("failed to scan assembly file\n");
 			failure = 1;
 		}
+		while (label_idx > label_pos)
+			label_free(label_find_idx(label_idx--));
 		label_idx = label_pos; // restore label position (erasing any created labels)
 	}
 
@@ -711,7 +863,7 @@ int run_procs() {
 
 	pid = 0;
 	debug = flags & FLG_DEBUG;
-	cycle_max = 100;
+	cycle_max = 1000;
 	process = processes;
 	procs_run = 0;
 
@@ -763,7 +915,9 @@ int run_procs() {
 				else if (i == OPEN) a = open((char *)sp[1], *sp);
 				else if (i == READ) a = read(sp[2], (char *)sp[1], *sp);
 				else if (i == CLOS) a = close(*sp);
-				else if (i == PRTF) { t = sp + pc[1]; a = printf((char *)t[-1], t[-2], t[-3], t[-4], t[-5], t[-6]); }
+				else if (i == PRTF) {
+					t = sp + pc[1]; a = printf((char *)t[-1], t[-2], t[-3], t[-4], t[-5], t[-6]);
+				}
 				else if (i == MALC) a = (int)malloc(*sp);
 				else if (i == FREE) free((void *)*sp);
 				else if (i == MSET) a = (int)memset((char *)sp[2], sp[1], *sp);
@@ -799,7 +953,10 @@ int main(int _argc, char **_argv) {
 		return tmp;
 	}
 
-	start_proc(init);
+	if(!start_proc(init)) {
+		cleanup();
+		return 0;
+	}
 
 	// main loop
 	while (run_procs());

@@ -214,7 +214,7 @@ int *label_find_strn (char *str, int len) {
 	label = label_base;
 	end = label_base + (LBL__SZ * label_max);
 	while(label < end) {
-		if(label_valid(label)) {
+		if(label_valid(label) && mach_strlen((char*)label[LBL_NAME]) == len) {
 			if(!mach_strncmp((char*)label[LBL_NAME], str, len))
 				return label;
 		}

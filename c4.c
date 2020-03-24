@@ -123,7 +123,7 @@ void next()
         while (*p && *p != '\n') ++p;
       } else if (*p == '*') {   // C style comments
         ++p;
-        while (*p && *p != '*' && *(p + 1) != '/') ++p;
+        while (*p && !(*p == '*' && *(p + 1) == '/')) ++p;
         if (*p) ++p;
         if (*p) ++p;
       }

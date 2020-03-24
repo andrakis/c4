@@ -118,9 +118,14 @@ void next()
       return;
     }
     else if (tk == '/') {
-      if (*p == '/') {
+      if (*p == '/') {          // C++ style comments
         ++p;
-        while (*p != 0 && *p != '\n') ++p;
+        while (*p && *p != '\n') ++p;
+      } else if (*p == '*') {   // C style comments
+        ++p;
+        while (*p && *p != '*' && *(p + 1) != '/') ++p;
+        if (*p) ++p;
+        if (*p) ++p;
       }
       else {
         tk = Div;
@@ -131,13 +136,12 @@ void next()
       pp = data;
       while (*p != 0 && *p != tk) {
         if ((ival = *p++) == '\\') {
-          if ((ival = *p++) == 'n') ival = '\n';
-          else if (ival == 'r') ival = '\r';
-          else if (ival == 't') ival = '\t';
-          else if (ival == 'f') ival = '\f';
-          else if (ival == 'v') ival = '\v';
-          else if (ival == '\'') ival = '\'';
-          else if (ival == '\\') ival = '\\';
+          // escape codes
+          if ((ival = *p++) == 'n') ival = 10;
+          else if (ival == 'r') ival = 13;
+          else if (ival == 't') ival = 9;
+          else if (ival == 'f') ival = 12;
+          else if (ival == 'v') ival = 11;
         }
         if (tk == '"') *data++ = ival;
       }

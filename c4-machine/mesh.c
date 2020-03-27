@@ -1,9 +1,24 @@
-// C4SH - The C4 SHell
+// mesh - The C4 MachinE SHell
 //
-// Written in Strict-C4 compliance.
+// Written for the c4 machine, designed to be compiled by cc.c
 //
+#include <stdio.h>
+#include <stdlib.h>
+#include <memory.h>
 
-#include "c4.h"
+#ifdef __GNUC__
+#include <unistd.h>
+#else
+#if _WIN64
+#define __INTPTR_TYPE__ long long
+#elif _WIN32
+#define __INTPTR_TYPE__ int
+#endif // if _WIN64
+#endif // ifdef __GNUC__
+#include <fcntl.h>
+#define int __INTPTR_TYPE__
+
+#include "machine.h" // for gcc/etc compatibility
 
 // Streams
 enum { STDIN, STDOUT, STDERR };
@@ -33,11 +48,11 @@ char *env_find (char *name) {
 	while(loc < env_max) {
 		if(*loc == *name) {
 			namecheck = name;
-			while (*namecheck == *loc) { namecheck++; loc++; }
-			if (*namecheck == 0 && *loc == '=') return loc + 1;
+			while(*namecheck++ == *loc++) ;
+			if (*namecheck == *loc && *(loc + 1) == '=') return loc + 2;
 		}
 		// find next item
-		while (*loc++);
+		while(loc < env_max && *loc) ++loc;
 	}
 
 	// not found
@@ -80,7 +95,7 @@ void *sh_memmove (void *source, void *dest, int length) {
 		while (i > 0) { id[i - 1] = is[i - 1]; --i; }
 	} else {
 		cs = source; cd = dest;
-		while (i > 0) { cd[i - 1] = cs[i - 1]; --i; }
+		while (i > 0) { cd[i - 1] = cs[i - 1]; ++i; }
 	}
 
 	return dest;
@@ -98,7 +113,6 @@ void *env_set (char *name, char *value) {
 		// copy name over
 		while(*name) *target++ = *name++;
 		*target++ = '=';
-		env_max = target + value_len + 1;
 	} else {
 		target_len = sh_strlen(target);
 		if (value_len < target_len) {
@@ -144,13 +158,11 @@ int streq (char *a, char *b) {
 	}
 }
 
-#if 0
 // For direct compilation
 #define main c4_main
 #include "c4.c"
 #undef main
 #undef c4_main
-#endif
 
 char **c4_argv;
 int    c4_argc;
@@ -158,18 +170,16 @@ void open_c4 (char *name) {
 	int args;
 	char *c, *start, **tmp;
 
+	// first, count args
+	args = 128;
+
 	//printf("open_c4('%s')\n", name);
 
-	args = 128;
 	c4_argv = malloc(sizeof(char*) * args);
-	// set arguments
 	c4_argv[0] = "c4";
 	c4_argv[1] = name;
 	args = 2;
 	c = name; while(*c && *c != ' ') ++c;
-	// argument parsing:
-	//  - spaces replaced with nul
-	//  - upon encountering a space, store string and advance args
 	if(*c == ' ') {
 		*c = 0; ++c;
 		while(*c == ' ') ++c;
@@ -197,7 +207,7 @@ void open_c4 (char *name) {
 		}
 	}
 
-	//TODO c4_main(c4_argc, c4_argv);
+	c4_main(c4_argc, c4_argv);
 	free(c4_argv);
 }
 
@@ -233,7 +243,7 @@ void bluepill () {
 	c4_argv[1] = "c4.c";
 	c4_argv[2] = "sh.c";
 	printf("Diving deeper into the simulation...\n");
-	//TODO c4_main(c4_argc, c4_argv);
+	c4_main(c4_argc, c4_argv);
 	free(c4_argv);
 }
 
@@ -245,7 +255,7 @@ void dump_set () {
 		if(*e) {
 			len = sh_strlen(e);
 			printf(" %.*s\n", len, e);
-			e = e + len + 1;
+			e = e + len;
 		} else ++e;
 	}
 }
@@ -303,8 +313,6 @@ int main (int argc, char **argv) {
 	memset(environment, 0, ENV_SZ);
 	env_max = environment;
 	env_set("PATH", "c4-machine/bin:c4-machine");
-	env_set("PATH", "c4-machine/bin");
-	env_set("C4", "1");
 
 	version = "0.2";
 	shell_mode = SH_LOOP;

@@ -4,21 +4,7 @@
 // Instead of compiling and running C, compiles and runs
 // assembly.
 
-#include <memory.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <fcntl.h>
-
-#ifdef __GNUC__
-#include <unistd.h>
-#else
-#if _WIN64
-#define __INTPTR_TYPE__ long long
-#elif _WIN32
-#define __INTPTR_TYPE__ int
-#endif // if _WIN64
-#endif // ifdef __GNUC__
-#define int __INTPTR_TYPE__
+#include "c4.h"
 
 char *version;
 void setup_version () { version = "C4Machine 0.21"; }

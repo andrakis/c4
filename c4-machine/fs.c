@@ -328,7 +328,7 @@ int write_image_fs (int fd, int *fs) {
 	write32(fd, fs[FS_IUSED]);
 	write32(fd, fs[FS_IROOT]);
 	i = 1;
-	while (i < fs[FS_ICOUNT]) write_image_inode(fd, fs, i++);
+	while (i <= fs[FS_IUSED]) write_image_inode(fd, fs, i++);
 	return 0;
 }
 

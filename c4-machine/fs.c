@@ -266,7 +266,7 @@ int write32 (int fd, int value) { return fs_write(fd, &value, 4); }
 int writex  (int fd, void *buf, int length) { return fs_write(fd, buf, length); }
 
 void dump_fs (int *fs) {
-	printf(" FS [Type 0x%X] [Ver %d]    [ISize %d]      [ICount %d]  [IUsed %d]",
+	printf(" FS [Type 0x%X] [Ver %d]    [ISize %d] [ICount %d] [IUsed %d]",
 	       fs[FS_TYPE], fs[FS_VERSION], fs[FS_ISIZE] << 8, fs[FS_ICOUNT], fs[FS_IUSED]);
 	printf(" [IRoot %d]", fs[FS_IROOT]);
 	printf(" [Capacity %dk]\n", ((fs[FS_ISIZE] << 8) * fs[FS_ICOUNT]) / 1024);
@@ -285,7 +285,7 @@ void dump_inode (int *inode) {
 		printf(" file");
 	if (inode[IN_TYPE] & FT_DIRECTORY)
 		printf(" dir ");
-	printf("] [Permissions %c%c%c]",
+	printf("]  [Permissions %c%c%c]",
 		(inode[IN_PERM] & FP_READ) ? 'R' : '-',
 		(inode[IN_PERM] & FP_WRITE) ? 'W' : '-',
 		(inode[IN_PERM] & FP_EXECUTABLE) ? 'X' : '-');

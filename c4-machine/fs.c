@@ -306,7 +306,7 @@ int *fsnode_new (int type, int version, int isize, int icount, int iused, int ir
 	node[FS_IROOT] = iroot;
 
 	// allocate inodes
-	sz = (IN__SZ * sizeof(int)) * icount * (isize << 8);
+	sz = ((IN__SZ * sizeof(int)) + (isize << 8)) * icount;
 	if (!(inodes = malloc(sz))) {
 		free(node);
 		return 0;
@@ -317,7 +317,7 @@ int *fsnode_new (int type, int version, int isize, int icount, int iused, int ir
 }
 
 int *fsnode_inode (int inode, int *fsnode) {
-	return (int*)((char*)fsnode[FS_DATA] + ((inode - 1) * (IN__SZ * sizeof(int)) * (fsnode[FS_ISIZE] << 8)));
+	return (int*)((char*)fsnode[FS_DATA] + (((IN__SZ * sizeof(int)) + (fsnode[FS_ISIZE] << 8)) * (inode - 1)));
 }
 int *fsnode_iroot (int *fsnode) { return fsnode_inode(fsnode[FS_IROOT], fsnode); }
 

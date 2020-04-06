@@ -123,7 +123,10 @@ void next()
         while (*p && *p != '\n') ++p;
       } else if (*p == '*') {   // C style comments
         ++p;
-        while (*p && !(*p == '*' && *(p + 1) == '/')) ++p;
+        while (*p && !(*p == '*' && *(p + 1) == '/')) {
+          if (*p == '\n') ++line;
+          ++p;
+        }
         if (*p) ++p;
         if (*p) ++p;
       }
@@ -542,7 +545,23 @@ int main(int argc, char **argv)
       c = cp + (i++ * CP_Sz);
       _le = (int*)c[CP_E];
       _e  = _le + c[CP_ELen];
-      printf(code_fmt, c[CP_Line], c[CP_PLen], (char*)c[CP_P]);
+      if (*((char*)(c[CP_P] + 1)) == '*') {
+        // multiline comment
+        printf(";;      ");
+        p = (char*)c[CP_P];
+        padding = 0; // line offset
+        while(p < ((char*)c[CP_P] + c[CP_PLen])) {
+            if(*p == '\n') {
+              printf("\n;;      ");
+            } else if (*p == 10) { }
+            else printf("%c", *p);
+            ++p;
+        }
+        printf("\n");
+      } else {
+        // single line comment
+        printf(code_fmt, c[CP_Line], c[CP_PLen], (char*)c[CP_P]);
+      }
       while (_le < _e) {
         printf("%8.4s", &"LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,"
                          "OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,"

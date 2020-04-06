@@ -315,8 +315,6 @@ int setup () {
 	}
 
 	free(symbol);
-	if (!(flags & FLG_SOURCE))
-		printf("%s\n", version);
 	return 0;
 }
 
@@ -635,13 +633,12 @@ int asm_pass_scan (int *proc, char *content) {
 			// Skip small quotes
 			while (*++c != '\'');
 			++e;
-		} else if (*c == '-' || (*c >= '0') && *c <= '9') {
+		} else if (*c == '-' || (*c >= '0' && *c <= '9')) {
 			// A number
 			c = mach_atoi_move(c, 10, &tmp);
 			++e;
 		} else if (*c == '[') {
 			// Expansion: skip for now
-			//c = asm_scan_lbloffset(c, proc);
 			while (*c++ != ']');
 			++e;
 		} else {

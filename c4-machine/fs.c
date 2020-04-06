@@ -289,7 +289,8 @@ void dump_inode (int *inode) {
 		(inode[IN_PERM] & FP_READ) ? 'R' : '-',
 		(inode[IN_PERM] & FP_WRITE) ? 'W' : '-',
 		(inode[IN_PERM] & FP_EXECUTABLE) ? 'X' : '-');
-	printf(" [Length %d]\n", inode[IN_LENGTH]);
+	printf(" [Used %d]", inode[IN_LENGTH]);
+	printf(" [Total %d]\n", inode[IN_LENGTHTOTAL]);
 	printf("  -- Content: 0x%X\n%.*s\n  -- End\n", inode_data(inode), inode[IN_LENGTH], inode_data(inode));
 }
 
@@ -400,6 +401,7 @@ int inode_writeall (int fd, int *inode, int inode_sz, int *fs) {
 	}
 	// cancel out next inode id
 	inode2[IN_NEXT] = 0;
+	printf("Length total: %ld\n", inode[IN_LENGTHTOTAL]);
 	return inode[IN_LENGTHTOTAL];
 }
 
@@ -448,7 +450,7 @@ int add_specified_files(int count, char **files, int *fs) {
 	}
 
 	// set directory length
-	root[IN_LENGTH] = rootdata - inode_data(root);
+	root[IN_LENGTH] = root[IN_LENGTHTOTAL] = rootdata - inode_data(root);
 
 	printf("Root node data: %s\n", inode_data(root));
 
@@ -464,6 +466,7 @@ int write_image_inode(int fd, int *fs, int node) {
 	write8 (fd, inode[IN_TYPE]);
 	write8 (fd, inode[IN_PERM]);
 	write32(fd, inode[IN_LENGTH]);
+	write32(fd, inode[IN_LENGTHTOTAL]);
 	writex (fd, inode_data(inode), (fs[FS_ISIZE] << 8) - SZ_INODE_HDR);
 	return 0;
 }
@@ -539,6 +542,7 @@ int *read_image_fs (int fd) {
 		inode[IN_TYPE] = read8(fd);
 		inode[IN_PERM] = read8(fd);
 		inode[IN_LENGTH] = read32(fd);
+		inode[IN_LENGTHTOTAL] = read32(fd);
 		if(1)
 			fs_read(fd, inode_data(inode), idatasz);
 		else

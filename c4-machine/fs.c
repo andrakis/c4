@@ -38,8 +38,8 @@
    0x8     c  Type (0 = nul, 1 = file, 2 = directory, 4 = deleted)
    0x9     c  Permissions (1 = read, 2 = write, 4 = executable)
    0x10    i  Used length
+   0x14    i  Total length
    0x14..     Content (max size: inodesize<<8 - 14)
-
 
  Directories are simply structured files, each line of the format:
    filename inode_id\n
@@ -70,7 +70,7 @@ enum { FS_REAL = 1024 }; // Real file ids are less than this
 enum {
 	DEF_FSTYPE = 204, // 0xCC
 	DEF_FSVERSION = 0,
-	DEF_ISIZE = 1, // shifted left 8
+	DEF_ISIZE = 4, // shifted left 8
 	DEF_ICOUNT = 1024
 };
 
@@ -98,6 +98,7 @@ enum {
 	IN_TYPE,
 	IN_PERM,
 	IN_LENGTH,
+	IN_LENGTHTOTAL,
 	IN__SZ
 };
 
@@ -119,11 +120,61 @@ enum { FT_NUL, FT_FILE, FT_DIRECTORY, FT_DELETED = 4 };
 // file permissions
 enum { FP_NUL, FP_READ, FP_WRITE, FP_EXECUTABLE = 4 };
 
+// options
+enum {
+	OPT_CREATE,
+	OPT_READ,
+	OPT_ARCHIVE,
+	OPT_FILES,
+	OPT_FILESCOUNT,
+	OPT_BUFFSIZE,
+	OPT__SZ
+};
+int *options;
+
 char *g_image;
 
 int fs_strlen (char *s) { char *t; t = s; while (*t++) ; return t - s; }
 int fs_strncmp (char *s1, char *s2, int n) { return memcmp(s1, s2, n); }
 int fs_strcmp (char *s1, char *s2) { while(*s1 && (*s1 == *s2)) { ++s1; ++s2; } return *s1 == *s2; }
+
+int fs_itoa (int value, char *sp, int radix) {
+	char *tmp, *tp;
+	int i, v, sign, len;
+
+	if (!(tp = tmp = malloc(16))) {
+		printf("itoa: failed to create temporary space\n");
+		return 0;
+	}
+
+	sign = (radix == 10 && value < 0);
+	if (sign)
+		v = -value;
+	else
+		v = value;
+	
+	while (v || tp == tmp) {
+		i = v % radix;
+		v = v / radix;
+		if (i < 10)
+			*tp++ = i + '0';
+		else
+			*tp++ = i + 'a' - 10;
+	}
+
+	len = tp - tmp;
+	if (sign) {
+		*sp++ = '-';
+		len++;
+	}
+
+	// reverse copy
+	while (tp > tmp) *sp++ = *--tp;
+
+	free(tmp);
+
+	return len;
+}
 
 void *fs_memcpy (void *source, void *dest, int length) {
 	int   i;
@@ -214,57 +265,15 @@ int write8(int fd, int value) { char b; b = (char)(value & 0xFF); return fs_writ
 int write32 (int fd, int value) { return fs_write(fd, &value, 4); }
 int writex  (int fd, void *buf, int length) { return fs_write(fd, buf, length); }
 
-int *fsnode_new (int type, int version, int isize, int icount, int iused, int iroot) {
-	int sz, *node, *inodes;
-
-	// allocate fsnode
-	if (!(node = malloc(sizeof(int) * FS__SZ))) return 0;
-	node[FS_TYPE] = type;
-	node[FS_VERSION] = version;
-	node[FS_ISIZE] = isize;
-	node[FS_ICOUNT] = icount;
-	node[FS_IUSED] = iused;
-	node[FS_IROOT] = iroot;
-
-	// allocate inodes
-	sz = icount * (isize << 8);
-	if (!(inodes = malloc(sz))) {
-		free(node);
-		return 0;
-	}
-	memset(inodes, 0, sz);
-	node[FS_DATA] = (int)inodes;
-	return node;
-}
-
-int *fsnode_inode (int inode, int *fsnode) {
-	return (int*)((char*)fsnode[FS_DATA] + ((inode - 1) * (fsnode[FS_ISIZE] << 8)));
-}
-
-int *fsnode_iroot (int *fsnode) { return fsnode_inode(fsnode[FS_IROOT], fsnode); }
-char *inode_data (int *inode) { return (char*)inode + (sizeof(int) * IN__SZ); }
-
-int inode_write_str (int inode, char *data, int type, int permissions, int *fsnode) {
-	int *node, length;
-	if (inode > fsnode[FS_ICOUNT])
-		return 0;
-	length = fs_strlen(data);
-	node = fsnode_inode(inode, fsnode);
-	node[IN_ID] = inode;
-	node[IN_NEXT] = 0;
-	node[IN_TYPE] = type;
-	node[IN_PERM] = permissions;
-	node[IN_LENGTH] = length;
-	fs_memcpy(data, inode_data(node), length);
-	return length;
-}
-
 void dump_fs (int *fs) {
 	printf(" FS [Type 0x%X] [Ver %d]    [ISize %d]      [ICount %d]  [IUsed %d]",
 	       fs[FS_TYPE], fs[FS_VERSION], fs[FS_ISIZE] << 8, fs[FS_ICOUNT], fs[FS_IUSED]);
 	printf(" [IRoot %d]", fs[FS_IROOT]);
 	printf(" [Capacity %dk]\n", ((fs[FS_ISIZE] << 8) * fs[FS_ICOUNT]) / 1024);
 }
+
+
+char *inode_data (int *inode) { return (char*)inode + (sizeof(int) * IN__SZ); }
 
 void dump_inode (int *inode) {
 	printf(" File  [Id 0x%X] [Next 0x%X] [Type", inode[IN_ID], inode[IN_NEXT]);
@@ -284,24 +293,166 @@ void dump_inode (int *inode) {
 	printf("  -- Content: 0x%X\n%.*s\n  -- End\n", inode_data(inode), inode[IN_LENGTH], inode_data(inode));
 }
 
+int *fsnode_new (int type, int version, int isize, int icount, int iused, int iroot) {
+	int sz, *node, *inodes;
+
+	// allocate fsnode
+	if (!(node = malloc(sizeof(int) * FS__SZ))) return 0;
+	node[FS_TYPE] = type;
+	node[FS_VERSION] = version;
+	node[FS_ISIZE] = isize;
+	node[FS_ICOUNT] = icount;
+	node[FS_IUSED] = iused;
+	node[FS_IROOT] = iroot;
+
+	// allocate inodes
+	sz = (IN__SZ * sizeof(int)) * icount * (isize << 8);
+	if (!(inodes = malloc(sz))) {
+		free(node);
+		return 0;
+	}
+	memset(inodes, 0, sz);
+	node[FS_DATA] = (int)inodes;
+	return node;
+}
+
+int *fsnode_inode (int inode, int *fsnode) {
+	return (int*)((char*)fsnode[FS_DATA] + ((inode - 1) * (IN__SZ * sizeof(int)) * (fsnode[FS_ISIZE] << 8)));
+}
+int *fsnode_iroot (int *fsnode) { return fsnode_inode(fsnode[FS_IROOT], fsnode); }
+
+int *fsnode_find_free (int *fsnode) {
+	int inode_id, *inode;
+
+	inode_id = 1;
+	while (inode_id < fsnode[FS_ICOUNT]) {
+		inode = fsnode_inode(inode_id, fsnode);
+		if (inode[IN_TYPE] == 0 || inode[IN_TYPE] & FT_DELETED) {
+			inode[IN_ID] = inode_id;
+			return inode;
+		}
+		++inode_id;
+	}
+
+	return 0; // no free inode
+}
+
+
+int inode_write_str (int inode, char *data, int type, int permissions, int *fsnode) {
+	int *node, length;
+	if (inode > fsnode[FS_ICOUNT])
+		return 0;
+	length = fs_strlen(data);
+	node = fsnode_inode(inode, fsnode);
+	node[IN_ID] = inode;
+	node[IN_NEXT] = 0;
+	node[IN_TYPE] = type;
+	node[IN_PERM] = permissions;
+	node[IN_LENGTH] = length;
+	node[IN_LENGTHTOTAL] = length;
+	fs_memcpy(data, inode_data(node), length);
+	return length;
+}
+
 int *create_image (int type, int version, int isize, int icount, int iroot) {
 	int *fs, *root, file, iused;
 
-	iused = 2;
-
-	if (!(fs = fsnode_new(type, version, isize, icount, iused, iroot)))
+	if (!(fs = fsnode_new(type, version, isize, icount, 0, iroot)))
 		return 0;
+	dump_fs(fs);
 
+	return fs;
+}
+
+void add_test_files(int *fs) {
+	int *root, iroot, file;
+
+	fs[FS_IROOT] = iroot = 1;
 	root = fsnode_iroot(fs);
 	inode_write_str(iroot, ". 1\n.. 1\nREADME 2\n", FT_DIRECTORY, FP_READ | FP_EXECUTABLE, fs);
 	file = iroot + 1;
 	inode_write_str(file, "Hello, world!\n", FT_FILE, FP_READ, fs);
+	fs[FS_IUSED] = 2;
 
-	dump_fs(fs);
 	dump_inode(root);
 	dump_inode(fsnode_inode(file, fs));
+}
 
-	return fs;
+int inode_writeall (int fd, int *inode, int inode_sz, int *fs) {
+	int *inode2, *inode3, bytes;
+	// reset length
+	inode[IN_LENGTH] = inode[IN_LENGTHTOTAL] = 0;
+	inode3 = inode;
+	while ((bytes = read(fd, inode_data(inode3), inode_sz)) > 0) {
+		inode2 = inode3;
+		printf("wrote %ld bytes to inode %ld\n", bytes, inode2[IN_ID]);
+		inode2[IN_TYPE] = FT_FILE;
+		fs[FS_IUSED] = fs[FS_IUSED] + 1;
+		// local length
+		inode2[IN_LENGTH] = bytes;
+		// total length
+		inode[IN_LENGTHTOTAL] = inode[IN_LENGTHTOTAL] + bytes;
+		if (!(inode3 = fsnode_find_free(fs))) {
+			printf("No more inodes\n");
+			return 0;
+		}
+		inode2[IN_NEXT] = inode3[IN_ID];
+	}
+	// cancel out next inode id
+	inode2[IN_NEXT] = 0;
+	return inode[IN_LENGTHTOTAL];
+}
+
+int add_specified_files(int count, char **files, int *fs) {
+	char *file, *buf, *rootdata;
+	int   fd, sz, bytes, tmp;
+	int  *inode, *root, rootlen, result;
+
+	// use inode size for buffer size
+	sz = fs[FS_ISIZE] << 8;
+
+	// ensure root node is setup
+	root = fsnode_iroot(fs);
+	root[IN_TYPE] = FT_DIRECTORY;
+	root[IN_PERM] = FP_READ | FP_EXECUTABLE;
+	rootdata = inode_data(root);
+	rootlen = 0;
+
+	while(count > 0) {
+		file = *files;
+		printf("Adding file: '%s'\n", file);
+		if ((fd = open(file, 0)) < 0) {
+			printf("Unable to open '%s'\n", file);
+			return 0;
+		}
+		if (!(inode = fsnode_find_free(fs))) {
+			printf("No free inodes!\n");
+			return 0;
+		}
+		printf("Got free inode: %ld\n", inode[IN_ID]);
+		result = inode_writeall(fd, inode, sz, fs);
+		inode[IN_LENGTHTOTAL] = result;
+		inode[IN_PERM] = FP_READ;
+		close(fd);
+		if (!result) {
+			printf("Error writing all inodes for file '%s'\n", file);
+			return 0;
+		}
+		// write out directory entry
+		while(*file) *rootdata++ = *file++;
+		*rootdata++ = ' ';
+		// write inode
+		rootdata = rootdata + fs_itoa(inode[IN_ID], rootdata, 10);
+		*rootdata++ = '\n';
+		--count; ++files;
+	}
+
+	// set directory length
+	root[IN_LENGTH] = rootdata - inode_data(root);
+
+	printf("Root node data: %s\n", inode_data(root));
+
+	return 1; // success
 }
 
 int write_image_inode(int fd, int *fs, int node) {
@@ -421,25 +572,17 @@ int *read_image (char *file) {
 }
 
 void free_image (int *fs) {
-	//free((char*)fs[FS_DATA]);
-	//free(fs);
+	free((char*)fs[FS_DATA]);
+	free(fs);
 }
 
 int *g_image_fs;
-enum { // options
-	OPT_CREATE,
-	OPT_READ,
-	OPT_ARCHIVE,
-	OPT_FILES,
-	OPT__SZ
-};
 
 enum { // read_options modes
 	M_ACTION,  // action, one of: c (create) or r (read)
 	M_ARCHIVE, // archive specification
 	M_FILES    // files to read/add
 };
-int *options;
 
 int read_options (int argc, char **argv) {
 	int mode;
@@ -455,7 +598,9 @@ int read_options (int argc, char **argv) {
 			options[OPT_ARCHIVE] = (int)*argv;
 			mode = M_FILES;
 		} else if (mode == M_FILES) {
-			printf("Warn: filespec not implemented for argument '%s'\n", argv);
+			options[OPT_FILES] = (int)argv;
+			options[OPT_FILESCOUNT] = argc;
+			return 1;
 		}
 		--argc; ++argv;
 	}
@@ -476,6 +621,7 @@ int main (int argc, char **argv) {
 		return 1;
 	}
 	memset(options, 0, sizeof(int) * OPT__SZ);
+	// Set default options
 	options[OPT_ARCHIVE] = (int)g_image;
 	if (!read_options(argc, argv)) {
 		printf("Options parsing failed!\n");
@@ -488,9 +634,16 @@ int main (int argc, char **argv) {
 
 	if (options[OPT_CREATE]) {
 		g_image_fs = create_image(create_fstype, create_fsversion, create_isize, create_icount, 1);
+		if (options[OPT_FILESCOUNT] == 0)
+			add_test_files(g_image_fs);
+		else
+			if (!add_specified_files(options[OPT_FILESCOUNT], (char**)options[OPT_FILES], g_image_fs)) {
+				printf("Failed to add specified files\n");
+				return 1;
+			}
 		write_image((char*)options[OPT_ARCHIVE], g_image_fs);
+		free_image(g_image_fs);
 	}
-	free_image(g_image_fs);
 	if (options[OPT_READ]) {
 		if (!(g_image_fs = read_image((char*)options[OPT_ARCHIVE]))) {
 			printf("Unable to read image: %s\n", (char*)options[OPT_ARCHIVE]);
@@ -501,5 +654,7 @@ int main (int argc, char **argv) {
 		dump_inode(fsnode_inode(2, g_image_fs));
 		free_image(g_image_fs);
 	}
+
+	free(options);
 	return 0;
 }

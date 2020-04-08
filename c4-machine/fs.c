@@ -19,6 +19,9 @@
   - file have very limited attributes: type, permissions.
   - inodes may be marked as deleted, potentially allowing later data recovery.
   - inodes have a header followed by a data segment of (isize << 8)
+  - the magic value allows detection of mismatched endianess, if the value is
+    incorrect the bytes are flipped and attempted again. If they now match,
+    the code continues flipping bytes for the duration of the read.
 
  Filesystem layout:
            c   1 byte char
@@ -40,7 +43,7 @@
    0x9     c  Permissions (1 = read, 2 = write, 4 = executable)
    0x10    i  Used length
    0x14    i  Total length
-   0x14..     Content (size: inodesize<<8)
+   0x18..     Content (size: inodesize<<8)
 
  Directories are simply structured files, each line of the format:
    filename inode_id\n
@@ -66,7 +69,6 @@ int errno;
 
 int g_flipbits;
 
-int test;
 enum { FS_REAL = 1024 }; // Real file ids are less than this
 enum {
 	DEF_FSTYPE = 204, // 0xCC
@@ -357,6 +359,7 @@ int *fsnode_find_free (int *fsnode) {
 	while (inode_id < fsnode[FS_ICOUNT]) {
 		inode = fsnode_inode(inode_id, fsnode);
 		if (inode[IN_TYPE] == 0 || inode[IN_TYPE] & FT_DELETED) {
+			// Ensure inode id is set
 			inode[IN_ID] = inode_id;
 			return inode;
 		}
@@ -371,6 +374,8 @@ void dump_inode_complete (int *inode, int *fs) {
 	mode = 0;
 	while(inode) {
 		dump_inode(inode, mode);
+		//printf("next: %ld\n", inode[IN_NEXT]);
+		//dump_fs(fs);
 		inode = inode[IN_NEXT] ? fsnode_inode(inode[IN_NEXT], fs) : 0;
 		mode = 1;
 	}
@@ -391,6 +396,55 @@ int inode_write_str (int inode, char *data, int type, int permissions, int *fsno
 	node[IN_LENGTHTOTAL] = length;
 	fs_memcpy(data, inode_data(node), length);
 	return length;
+}
+
+char *inode_append (char ch, int *inode, int *fs) {
+	char *data;
+	int  *nnode, *onode;
+	onode = inode;
+	while(inode[IN_NEXT] != 0) {
+		inode = fsnode_inode(inode[IN_NEXT], fs);
+	}
+	if(inode[IN_LENGTH] == fs[FS_ISIZE] << 8) {
+		// extend inode
+		if (!(nnode = fsnode_find_free(fs))) {
+			printf("No free inode to extend to!\n");
+			exit(2);
+		}
+		printf("inode %ld extended into inode %ld\n", inode[IN_ID], nnode[IN_ID]);
+		inode[IN_NEXT] = nnode[IN_ID];
+		nnode[IN_TYPE] = inode[IN_TYPE];
+		nnode[IN_PERM] = inode[IN_PERM];
+		inode = nnode;
+	}
+	data = inode_data(inode) + inode[IN_LENGTH];
+	*data = ch;
+	inode[IN_LENGTH]++;
+	onode[IN_LENGTHTOTAL]++;
+	if (inode != onode)
+		inode[IN_LENGTHTOTAL]++;
+	return data + 1;
+}
+
+char *inode_append_itoa (int x, int radix, int *inode, int *fs) {
+	char *buf, *c, *last;
+	int   length;
+
+	// TODO: make buffer larger?
+	if (!(buf = malloc(16))) {
+		printf("Error allocated 16 bytes for buffer!\n");
+		exit(-1);
+	}
+	memset(buf, 0, 16);
+
+	length = fs_itoa(x, buf, radix);
+	c = buf;
+	last = inode_data(inode);
+	while(length--) {
+		last = inode_append(*c++, inode, fs);
+	}
+	free(buf);
+	return last;
 }
 
 int *create_image (int type, int version, int isize, int icount, int iroot) {
@@ -424,7 +478,7 @@ int inode_writeall (int fd, int *inode, int inode_sz, int *fs) {
 	inode3 = inode;
 	while ((bytes = read(fd, inode_data(inode3), inode_sz)) > 0) {
 		inode2 = inode3;
-		printf("wrote %ld bytes to inode %ld\n", bytes, inode2[IN_ID]);
+		//printf("wrote %ld bytes to inode %ld\n", bytes, inode2[IN_ID]);
 		inode2[IN_TYPE] = FT_FILE;
 		inode2[IN_PERM] = FP_READ;
 		fs[FS_IUSED] = fs[FS_IUSED] + 1;
@@ -444,20 +498,27 @@ int inode_writeall (int fd, int *inode, int inode_sz, int *fs) {
 	return inode[IN_LENGTHTOTAL];
 }
 
-int add_specified_files(int count, char **files, int *fs) {
-	char *file, *buf, *rootdata;
+void setup_directory (int *inode, int *fs) {
+	char *data;
+	inode[IN_TYPE] = FT_DIRECTORY;
+	inode[IN_PERM] = FP_READ | FP_EXECUTABLE;
+	data = inode_data(inode);
+	// write default entries
+	*data++ = '.'; *data++ = ' '; data = data + fs_itoa(inode[IN_ID], data, 10); *data++ = '\n';
+	*data++ = '.'; *data++ = '.'; *data++ = ' '; data = data + fs_itoa(inode[IN_ID], data, 10); *data++ = '\n';
+	inode[IN_LENGTH] = inode[IN_LENGTHTOTAL] = data - inode_data(inode);
+}
+
+int add_specified_files (int count, char **files, int *dnode, int *fs) {
+	char *file, *buf, *rootdata, *x;
 	int   fd, sz, bytes, tmp;
-	int  *inode, *root, rootlen, result;
+	int  *inode, *dest, result;
 
 	// use inode size for buffer size
 	sz = fs[FS_ISIZE] << 8;
 
-	// ensure root node is setup
-	root = fsnode_iroot(fs);
-	root[IN_TYPE] = FT_DIRECTORY;
-	root[IN_PERM] = FP_READ | FP_EXECUTABLE;
-	rootdata = inode_data(root);
-	rootlen = 0;
+	// destination directory
+	dest = dnode;
 
 	while(count > 0) {
 		file = *files;
@@ -479,19 +540,18 @@ int add_specified_files(int count, char **files, int *fs) {
 			printf("Error writing all inodes for file '%s'\n", file);
 			return 0;
 		}
+		// TODO: update dest to directory specified in file
 		// write out directory entry
-		while(*file) *rootdata++ = *file++;
-		*rootdata++ = ' ';
-		// write inode
-		rootdata = rootdata + fs_itoa(inode[IN_ID], rootdata, 10);
-		*rootdata++ = '\n';
+		while(*file) inode_append(*file++, dest, fs);
+		// write inode id
+		inode_append(' ', dest, fs);
+		inode_append_itoa(inode[IN_ID], 10, dest, fs);
+		inode_append('\n', dest, fs);
 		--count; ++files;
 	}
 
-	// set directory length
-	root[IN_LENGTH] = root[IN_LENGTHTOTAL] = rootdata - inode_data(root);
-
-	printf("Root node data: %s\n", inode_data(root));
+	//printf("Dest node data: %s\n", inode_data(dest));
+	dump_inode_complete(dest, fs);
 
 	return 1; // success
 }
@@ -622,20 +682,41 @@ enum { // read_options modes
 	M_ICOUNT   // Specifying icount
 };
 
+char *invocation;
+void dump_usage () {
+	printf("%s [options] <action> [archive] [--] [files...]\n", invocation);
+	printf("\n");
+	printf("<action> is required, and one of:\n");
+	printf("  c                          Create archive\n");
+	printf("  r                          Read archive\n");
+	printf("[archive] (default: fs.img)  Archive to use\n");
+	printf("[files...]                   File specification\n");
+	printf("[options] are:\n");
+	printf("  -isize n                   Set inode size (in bytes)\n");
+	printf("                             Minimum: 256, trimmed to nearest 256 bytes\n");
+	printf("  -icount n                  Set inode count\n");
+}
+
 int read_options (int argc, char **argv) {
 	int mode, modeold;
 	mode = M_ACTION;
-	--argc; ++argv; // skip invocation name
+	invocation = *argv++; --argc;
 	while(argc) {
-		if (**argv == '-') {
-			if (!fs_strcmp("isize", *argv + 1)) {
+		if (mode != M_FILES && **argv == '-') {
+			if (*(*argv + 1) == '-' && *(*argv + 2) == 0) {
+				mode = M_FILES;
+			} else if (!fs_strcmp("isize", *argv + 1)) {
 				modeold = mode;
 				mode = M_ISIZE;
 			} else if (!fs_strcmp("icount", *argv + 1)) {
 				modeold = mode;
 				mode = M_ICOUNT;
+			} else if (!fs_strcmp("help", *argv + 1) || !fs_strcmp("-help", *argv + 1)) {
+				dump_usage();
+				exit(0);
 			} else {
 				printf("Unknown option: '%s'\n", *argv);
+				dump_usage();
 				return 0;
 			}
 		} else if (mode == M_ISIZE || mode == M_ICOUNT) {
@@ -668,6 +749,8 @@ int read_options (int argc, char **argv) {
 }
 
 int main (int argc, char **argv) {
+	int *iroot;
+
 	g_flipbits = 0;
 	g_image = "fs.img";
 	if (!(options = malloc(sizeof(int) * OPT__SZ))) {
@@ -687,16 +770,20 @@ int main (int argc, char **argv) {
 	}
 	if (!options[OPT_CREATE] && !options[OPT_READ]) {
 		printf("No action specific. Try specifying c (for create) or r (for read)\n");
+		dump_usage();
 		return 1;
 	}
 
 	if (options[OPT_CREATE]) {
 		g_image_fs = create_image(options[OPT_FSTYPE], options[OPT_FSVERSION],
 		                          options[OPT_ISIZE],  options[OPT_ICOUNT], 1);
+		iroot = fsnode_iroot(g_image_fs);
+		iroot[IN_ID] = 1;
+		setup_directory(iroot, g_image_fs);
 		if (options[OPT_FILESCOUNT] == 0)
 			add_test_files(g_image_fs);
 		else
-			if (!add_specified_files(options[OPT_FILESCOUNT], (char**)options[OPT_FILES], g_image_fs)) {
+			if (!add_specified_files(options[OPT_FILESCOUNT], (char**)options[OPT_FILES], iroot, g_image_fs)) {
 				printf("Failed to add specified files\n");
 				return 1;
 			}
@@ -709,7 +796,7 @@ int main (int argc, char **argv) {
 			return 1;
 		}
 		dump_fs(g_image_fs);
-		dump_inode_complete(fsnode_inode(g_image_fs[FS_IROOT], g_image_fs), 0);
+		dump_inode_complete(fsnode_inode(g_image_fs[FS_IROOT], g_image_fs), g_image_fs);
 		dump_inode_complete(fsnode_inode(2, g_image_fs), g_image_fs);
 		free_image(g_image_fs);
 	}

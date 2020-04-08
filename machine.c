@@ -519,6 +519,10 @@ char *asm_pass_scan_directive (char *directive, int len, char *start, int *proc)
 	if(!mach_strncmp(directive, ".TARGET", len)) {
 		tmp = mach_atoin(start, 10, 2);
 		if (flags & FLG_DEBUG) { printf(".TARGET %dbit", tmp); printf(" ;; (native %dbit)\n", sizeof(int) * 8); }
+		if (sizeof(int) * 8 != tmp) {
+			printf("Architecture mismatch! Please resource with c4 -s file\n");
+			return 0;
+		}
 		// Save register size (for later adjustment in asm_read_expression())
 		proc[P_RegSize] = tmp / 8;
 		return next_whitespace(start);

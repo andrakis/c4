@@ -1,0 +1,3 @@
+[submodule "3rdparty/sectorlisp"]
+	path = 3rdparty/sectorlisp
+	url = https://github.com/jart/sectorlisp.git

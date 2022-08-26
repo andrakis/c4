@@ -8,6 +8,8 @@
 // Functions of the same name will silently overwrite any previous
 // definition.
 
+// TODO: implement stacktrace via lookup to id structure
+
 // char, int, and pointer types
 // if, while, return, and expression statements
 // ability to obtain and call function pointers
@@ -50,7 +52,7 @@ enum {
 // opcodes
 enum { LEA ,IMM ,JMP ,JSR ,JSRI,JSRS,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,
        OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,
-       OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,EXIT };
+       OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,STRC,EXIT };
 
 // types
 enum { CHAR, INT, PTR };
@@ -71,7 +73,7 @@ void next()
         while (le < e) {
           printf("%8.4s", &"LEA ,IMM ,JMP ,JSR ,JSRI,JSRS,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,"
                            "OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,"
-                           "OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,EXIT"[*++le * 5]);
+                           "OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,STRC,EXIT"[*++le * 5]);
           if (*le <= ADJ) printf(" %d\n", *++le); else printf("\n");
         }
       }
@@ -370,7 +372,7 @@ int main(int argc, char **argv)
   memset(data, 0, poolsz);
 
   p = "char else enum if int return sizeof while "
-      "open read close printf malloc free memset memcmp exit void main";
+      "open read close printf malloc free memset memcmp stacktrace exit void main";
   i = Char; while (i <= While) { next(); id[Tk] = i++; } // add keywords to symbol table
   i = OPEN; while (i <= EXIT) { next(); id[Class] = Sys; id[Type] = INT; id[Val] = i++; } // add library to symbol table
   next(); id[Tk] = Char; // handle void type
@@ -492,6 +494,7 @@ int main(int argc, char **argv)
   free(_p);
 
   if (!(pc = (int *)idmain[Val])) { printf("main() not defined\n"); return -1; }
+  // TODO: print out ids
   if (src) return 0;
 
   // setup stack
@@ -512,7 +515,7 @@ int main(int argc, char **argv)
       printf("%d> %.4s", cycle,
         &"LEA ,IMM ,JMP ,JSR ,JSRI,JSRS,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,"
          "OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,"
-         "OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,EXIT,"[i * 5]);
+         "OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,STRC,EXIT,"[i * 5]);
       if (i <= ADJ) printf(" %d\n", *pc); else printf("\n");
     }
     if      (i == LEA) a = (int)(bp + *pc++);                             // load local address
@@ -557,6 +560,8 @@ int main(int argc, char **argv)
     else if (i == FREE) free((void *)*sp);
     else if (i == MSET) a = (int)memset((char *)sp[2], sp[1], *sp);
     else if (i == MCMP) a = memcmp((char *)sp[2], (char *)sp[1], *sp);
+    else if (i == STRC) {
+    }
     else if (i == EXIT) { printf("exit(%d) cycle = %d\n", *sp, cycle); status = *sp; run = 0; }
     else { printf("unknown instruction = %d! cycle = %d\n", i, cycle); status = -1; run = 0; }
   }

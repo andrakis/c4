@@ -1,7 +1,7 @@
 // Classes test for C4
 // Invocation: ./c4 c4_multiload.c classes.c classes_test.c
 //
-// Implements the below class class swapping.
+// Implements the below class with swapping.
 // class testclass {
 // 		public:
 // 		int X, Y;
@@ -97,9 +97,9 @@ int *testclass_impl_Mult (int *self) {
 	                     self[testclass_pub_Y] * self[testclass_pub_X]);
 }
 
-// A test function that uses recursion, creates multiple testclass's, and 
+// A test function that uses recursion, creates multiple testclass's, and
 // cleans them up responsibly using the classes.c garbage collector.
-// testclass *testclass:FactorialX () {
+// testclass *testclass::FactorialX () {
 //   if (X <= 1) return this;
 //   Y = 1;
 //   testclass *tmp1 = Sub();
@@ -136,6 +136,9 @@ int *testclass_impl_FactorialX (int *self) {
 	invoke2((int*)self[testclass_fun_swap], (int)self, (int)tmp3);
 	// collect
 	gc_collect(gc_local - gc_ptr);
+	// print a stacktrace (dummy out for non-C4)
+#define stacktrace()
+	stacktrace();
 	return self;
 }
 

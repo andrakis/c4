@@ -348,6 +348,101 @@ void stmt()
   }
 }
 
+void print_symbol(int *i) {
+  char *strc_a, *strc_b;
+  strc_a = strc_b = (char*)i[Name];
+  if (i[Tk] == Id && i[Class] == Fun) {
+      if (i[Type] == CHAR) strc_a = "char|void"; // void is represented as char
+      else if(i[Type] == INT) strc_a = "int";
+      else if(i[Type] == CHAR + PTR) strc_a = "char*";
+      else if(i[Type] == INT + PTR) strc_a = "int*";
+      else strc_a = "??";
+      printf("%s ", strc_a);
+      strc_a = (char*)i[Name];
+      // Find symbol name length
+      while ((*strc_b >= 'a' && *strc_b <= 'z') || (*strc_b >= 'A' && *strc_b <= 'Z') || (*strc_b >= '0' && *strc_b <= '9') || *strc_b == '_')
+          ++strc_b;
+      printf("%.*s() [%p]", strc_b - strc_a, strc_a, (int*)i[Val]);
+  } else {
+      // TODO: eventually get rid of all this
+      while ((*strc_b >= 'a' && *strc_b <= 'z') || (*strc_b >= 'A' && *strc_b <= 'Z') || (*strc_b >= '0' && *strc_b <= '9') || *strc_b == '_')
+          ++strc_b;
+      printf("%.*s type: ", strc_b - strc_a, strc_a);
+      if (i[Tk] == Id) strc_a = "Id";
+      else if (i[Tk] > Id && i[Tk] < Brak) strc_a = "builtin";
+      else strc_a = "??";
+      if (i[Tk] == Id) {
+          if (i[Class] == Num) strc_b = "Num";
+          else if (i[Class] == Fun)
+              strc_b = "Fun";
+          else if (i[Class] == Sys) strc_b = "Sys";
+          else if (i[Class] == Glo) strc_b = "Glo";
+          else if (i[Class] == Loc) strc_b = "Loc";
+          else
+              strc_b = "??";
+      } else strc_b = "";
+      printf("%s %s ", strc_a, strc_b);
+      if (i[Type]) {
+          if (i[Type] == CHAR) strc_a = "char";
+          else if(i[Type] == INT) strc_a = "int";
+          else if(i[Type] == CHAR + PTR) strc_a = "char*";
+          else if(i[Type] == INT + PTR) strc_a = "int*";
+          else strc_a = "??";
+          printf("%s ", strc_a);
+      }
+      if (i[Tk] == Id) {
+          if (i[Class] == Fun) printf("addr %p", (int*)i[Val]);
+          else if(i[Class] == Num) printf("%d", i[Val]);
+          else if(i[Class] == Loc) printf("loc %d", i[Val]);
+      }
+  }
+  printf("\n");
+}
+
+void stacktrace (int *pc_orig, int *idmain, int *bp, int *sp) {
+    int *pc, found, done, *idold, *t, range, depth;
+
+    pc = pc_orig;
+    idold = id;
+    found = 0;
+    done = 0;
+    t = 0;
+    depth = 0;
+    //printf("Find pc(%p)\n", pc);
+    while (!done) {
+        range = 1000;
+        while(!found && range--) {
+            id = idmain;
+            while(!found && id[Tk]) {
+                //printf("  -> id@%p[Tk] = %d (range %d)\n", id, id[Tk], range);
+                if (id[Tk] == Id && id[Class] == Fun) {
+                    if (pc == (int *)id[Val]) {
+                        // printf("Match? %p == %p\n", pc, (int*)id[Val]);
+                        t = id;
+                        found = 1;
+                    }
+                }
+                if (!found) id = id + Idsz;
+            }
+            if (!found) --pc;
+        }
+        if (!found) {
+            done = 1;
+        } else {
+            found = 0;
+            if (depth++) printf("%*s", depth - 1, " ");
+            print_symbol(t);
+            if (t == idmain)
+                done = found = 1;
+            // find stack return addresss
+            // simulate LEV
+            sp = bp;
+            bp = (int*)*sp++;
+            pc = (int*)*sp++;
+        }
+    }
+}
+
 int main(int argc, char **argv)
 {
   int fd, bt, ty, poolsz, *idmain;
@@ -356,12 +451,14 @@ int main(int argc, char **argv)
   char *_p, *_data;       // initial pointer locations
   int  *_sym, *_e, *_sp;  // initial pointer locations
 
+  poolsz = 256*1024; // arbitrary size
   --argc; ++argv;
   if (argc > 0 && **argv == '-' && (*argv)[1] == 's') { src = 1; --argc; ++argv; }
   if (argc > 0 && **argv == '-' && (*argv)[1] == 'd') { debug = 1; --argc; ++argv; }
-  if (argc < 1) { printf("usage: c4 [-s] [-d] file ...\n"); return -1; }
+  if (argc > 0 && **argv == '-' && (*argv)[1] == 'p') { i = 1; while((*argv)[i++]) poolsz = poolsz / 2; --argc; ++argv; }
+  if (argc > 0 && **argv == '-' && (*argv)[1] == 'P') { i = 1; while((*argv)[i++]) poolsz = poolsz * 2; --argc; ++argv; }
+  if (argc < 1) { printf("usage: c4_multiload [-s] [-d] [-p] [-P] file ...\n"); return -1; }
 
-  poolsz = 256*1024; // arbitrary size
   if (!(sym = _sym = malloc(poolsz))) { printf("could not malloc(%d) symbol area\n", poolsz); return -1; }
   if (!(le = e = _e = malloc(poolsz))) { printf("could not malloc(%d) text area\n", poolsz); return -1; }
   if (!(data = _data = malloc(poolsz))) { printf("could not malloc(%d) data area\n", poolsz); return -1; }
@@ -431,8 +528,11 @@ int main(int argc, char **argv)
       next();
       id[Type] = ty;
       if (tk == '(') { // function
-        id[Class] = Fun;
-        id[Val] = (int)(e + 1);
+        // don't overwrite builtins
+        if (id >= idmain) {
+            id[Class] = Fun;
+            id[Val] = (int)(e + 1);
+        }
         next(); i = 0;
         while (tk != ')') {
           ty = INT;
@@ -489,9 +589,6 @@ int main(int argc, char **argv)
     }
     next();
   }
-
-  // free source
-  free(_p);
 
   if (!(pc = (int *)idmain[Val])) { printf("main() not defined\n"); return -1; }
   // TODO: print out ids
@@ -560,13 +657,13 @@ int main(int argc, char **argv)
     else if (i == FREE) free((void *)*sp);
     else if (i == MSET) a = (int)memset((char *)sp[2], sp[1], *sp);
     else if (i == MCMP) a = memcmp((char *)sp[2], (char *)sp[1], *sp);
-    else if (i == STRC) {
-    }
+    else if (i == STRC) stacktrace(pc, idmain, bp, sp);
     else if (i == EXIT) { printf("exit(%d) cycle = %d\n", *sp, cycle); status = *sp; run = 0; }
     else { printf("unknown instruction = %d! cycle = %d\n", i, cycle); status = -1; run = 0; }
   }
 
   // free memory
+  free(_p);
   free(_sym);
   free(_e);
   free(_data);

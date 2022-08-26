@@ -61,6 +61,8 @@ void testclass_construct3 (int *self, int x, int y) {
 	printf("testclass_construct@%p(%d,%d)\n", self, x, y);
 	self[testclass_pub_X] = x;
 	self[testclass_pub_Y] = y;
+	// for fun, stacktrace
+	stacktrace();
 }
 
 // Destructor
@@ -137,8 +139,8 @@ int *testclass_impl_FactorialX (int *self) {
 	// collect
 	gc_collect(gc_local - gc_ptr);
 	// print a stacktrace (dummy out for non-C4)
-#define stacktrace()
-	stacktrace();
+	//printf(" >Stacktrace: ");
+	//stacktrace();
 	return self;
 }
 

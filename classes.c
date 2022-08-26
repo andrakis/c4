@@ -30,6 +30,10 @@
 
 #include "c4.h"
 
+// Dummy out stacktrace if not available
+void stacktrace () { }
+#define stacktrace()
+
 // VC++: ignore unknown pragmas
 #pragma warning(disable: 4068)
 // Disable formatting warnings

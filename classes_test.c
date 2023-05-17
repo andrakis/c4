@@ -62,7 +62,7 @@ void testclass_construct3 (int *self, int x, int y) {
 	self[testclass_pub_X] = x;
 	self[testclass_pub_Y] = y;
 	// for fun, stacktrace
-	stacktrace();
+	//stacktrace();
 }
 
 // Destructor
@@ -188,6 +188,12 @@ int main (int argc, char **argv) {
 	t1[testclass_pub_X] = 15;
 	invoke1((int*)t1[testclass_fun_FactorialX], (int)t1);
 	printf("t1: "); invoke1((int*)t1[testclass_fun_Print], (int)t1); printf("\n");
+
+	// Enable autocollect and create a bunch of objects
+	gc_enable_autocollect();
+	i = 10;
+	while(--i)
+		new_testclass(i, i * 10);
 
 	// Collect anything remaining on the stack
 	printf("Final cleanup\n");

@@ -76,6 +76,11 @@ enum { CHAR, INT, PTR };
 // identifier offsets (since we can't create an ident struct)
 enum { Tk, Hash, Name, Class, Type, Val, HClass, HType, HVal, Idsz };
 
+void dump_exit (int code) {
+  printf("%d: %.*s", line, p - lp, lp);
+  exit(code);
+}
+
 void next()
 {
   char *pp;
@@ -192,7 +197,7 @@ void expr(int lev)
       else if (d[Class] == Fun) { *++e = JSR; *++e = d[Val]; }
       else if (d[Class] == Glo) { *++e = JSRI; *++e = d[Val]; } // Jump subroutine indirect
       else if (d[Class] == Loc) { *++e = JSRS; *++e = loc - d[Val]; } // Jump subroutine on stack
-      else { printf("%d: bad function call (%d)\n", line, d[Class]); exit(-1); }
+      else { printf("%d: bad function call (%d)\n", line, d[Class]); dump_exit(-1); }
       if (t) { *++e = ADJ; *++e = t; }
       ty = d[Type];
     }
@@ -366,6 +371,10 @@ void stmt()
 
 void print_symbol(int *i) {
   char *strc_a, *strc_b, *misc, *type;
+  char *ptrstring;
+  int   t, ptrcount;
+
+  ptrstring = "****************";
 
   // Find symbol name length
   strc_a = strc_b = (char*)i[Name];
@@ -374,15 +383,18 @@ void print_symbol(int *i) {
 
   // Calculate type string
   if (i[Type] == CHAR) type = "char|void"; // void is represented as char
-  else if(i[Type] == INT) type = "int";
-  else if(i[Type] == CHAR + PTR) type = "char*";
-  else if(i[Type] == INT + PTR) type = "int*";
-  else type = "??";
+  else if(i[Type] & INT)  type = "int";
+  else type = "char";
+  t = i[Type];
+  ptrcount = 0;
+  while(t > PTR) { ptrcount++; t = t - PTR; }
+  ptrcount = ptrcount % 16; // Not more than ptrstring length
+  //printf("ptrcount:%lld type:%lld\n", ptrcount, i[Type]);
 
   // Print depending on type
   if (i[Tk] == Id && i[Class] == Fun) {
     // Function: print type name() [address]
-    printf("%s %.*s() [%p]", type, strc_b - strc_a, strc_a, (int*)i[Val]);
+    printf("%s%.*s %.*s() [%p]", type, ptrcount, ptrstring, strc_b - strc_a, strc_a, (int*)i[Val]);
   } else if(i[Tk] > Id && i[Tk] < Brak) {
     // Builtin: just print name
     printf("builtin: %.*s", strc_b - strc_a, strc_a);
@@ -393,51 +405,13 @@ void print_symbol(int *i) {
       printf("opcode: %.*s = %d", strc_b - strc_a, strc_a, i[Val]);
     } else if(i[Class] == Glo || i[Class] == Loc || i[Class] == 0) {
         // Variables (globals and those on the stack)
-        printf("%s %.*s @ %d (0x%X)", type, strc_b - strc_a, strc_a, i[Val], i[Val]);
+        printf("%s%.*s %.*s @ %d (0x%X)", type, ptrcount, ptrstring, strc_b - strc_a, strc_a, i[Val], i[Val]);
         if (i[Class] == 0) printf(" (temporary)");
     } else if(i[Class] == Num) {
       // Enum: print its value
       printf("enum %.*s = %d / 0x%X", strc_b - strc_a, strc_a, i[Val], i[Val]);
     } else printf("(unknown object: %.*s)", strc_b - strc_a, strc_a);
   } else printf("(unknown object: %.*s)", strc_b - strc_a, strc_a);
-
-  if (0) {
-    // TODO: eventually get rid of all this
-    while ((*strc_b >= 'a' && *strc_b <= 'z') || (*strc_b >= 'A' && *strc_b <= 'Z') || (*strc_b >= '0' && *strc_b <= '9') || *strc_b == '_')
-        ++strc_b;
-    printf("%.*s type: ", strc_b - strc_a, strc_a);
-    if (i[Tk] == Id) strc_a = "Id";
-    else if (i[Tk] > Id && i[Tk] < Brak) strc_a = "builtin";
-    else strc_a = "??";
-    if (i[Tk] == Id) {
-        if (i[Class] == Num) strc_b = "Num";
-        else if (i[Class] == Fun)
-            strc_b = "Fun";
-        else if (i[Class] == Sys) strc_b = "Sys";
-        else if (i[Class] == Glo) strc_b = "Glo";
-        else if (i[Class] == Loc) strc_b = "Loc";
-        else if (i[Class] == 0) strc_b = "Temporary";
-        else {
-            printf("(unknown class: %d)", i[Class]);
-            strc_b = "??";
-        }
-    } else strc_b = "";
-    printf("%s %s ", strc_a, strc_b);
-    if (i[Type]) {
-        if (i[Type] == CHAR) strc_a = "char";
-        else if(i[Type] == INT) strc_a = "int";
-        else if(i[Type] == CHAR + PTR) strc_a = "char*";
-        else if(i[Type] == INT + PTR) strc_a = "int*";
-        else strc_a = "??";
-        printf("%s ", strc_a);
-    }
-    if (i[Tk] == Id) {
-        if (i[Class] == Fun) printf("addr %p", (int*)i[Val]);
-        else if(i[Class] == Num) printf("%d", i[Val]);
-        else if(i[Class] == Loc) printf("loc %d", i[Val]);
-    }
-    printf("\n");
-  }
 }
 
 void print_stacktrace (int *pc_orig, int *idmain, int *bp, int *sp) {
@@ -493,21 +467,25 @@ void *c4_malloc (int size) {
   if (!(p = malloc(size + sizeof(int))))
     return p;
   *p++ = size;
-  printf("c4_malloc(%d) = real malloc(%d) = %p\n", size, size + sizeof(int), (void*)p);
-  stacktrace();
+  //printf("c4_malloc(%d) = real malloc(%d) = %p\n", size, size + sizeof(int), (void*)p);
+  //stacktrace();
   return (void*)p;
 }
 void c4_free (void *ptr) {
-  stacktrace();
-  free(ptr - sizeof(int));
+  int *p;
+  //stacktrace();
+  //free(ptr - sizeof(int));
+  p = (int *)ptr;
+  p--;
+  free(p);
 }
 // Implement C4 version of memcpy
 void *c4_memcpy(void *dst, void *src, int len) {
   int *di, *si, i, max;
   char *dc, *sc;
 
-  printf("c4_memcpy(%p, %p, %d)\n", dst, src, len);
-  stacktrace();
+  //printf("c4_memcpy(%p, %p, %d)\n", dst, src, len);
+  //stacktrace();
   i = 0;
   if ((int)dst % sizeof(int) == 0 &&
       (int)src % sizeof(int) == 0 &&
@@ -531,7 +509,7 @@ void *c4_realloc (void *ptr, int newsize) {
   int  *old_ptr;
   int   len;
 
-  printf("c4_realloc(%p, %d)\n", ptr, newsize);
+  //printf("c4_realloc(%p, %d)\n", ptr, newsize);
 
   // realloc(0, size) => malloc(size)
   if (ptr == 0)
@@ -544,7 +522,7 @@ void *c4_realloc (void *ptr, int newsize) {
   }
 
   old_ptr = (int*)ptr - 1;
-  printf("c4_realloc: old length: %d\n", *old_ptr);
+  //printf("c4_realloc: old length: %d\n", *old_ptr);
   // C4 only: if newsize < old size, return unchanged
   if (*old_ptr > newsize)
     return ptr;
@@ -573,8 +551,10 @@ int main(int argc, char **argv)
   int fd, bt, ty, poolsz, *idmain, printsyms;
   int *pc, *sp, *bp, a, cycle, run, status; // vm registers
   int i, *t, r; // temps
-  char *_p, *_data;       // initial pointer locations
-  int  *_sym, *_e, *_sp;  // initial pointer locations
+  char*_p, *_data;       // initial pointer locations
+  int *_sym, *_e, *_sp;  // initial pointer locations
+
+  //printf("(C4M) Argc: %lld\n", argc); i = 0; while(i < argc) { printf("(C4M) Argv[%lld] = %s\n", i, argv[i]); ++i; }
 
   poolsz = 256*1024; // arbitrary size
   printsyms = 0;
@@ -605,6 +585,8 @@ int main(int argc, char **argv)
 
   if (!(lp = p = _p = malloc(poolsz))) { printf("could not malloc(%d) source area\n", poolsz); return -1; }
 
+  //i = 0; printf("(C4M) Argc: %lld\n", argc); while(i < argc) { printf("(C4M) argv[%lld] = %s\n", i, *(argv + i)); ++i; }
+
   // Read all specified source files
   r = poolsz - 1;        // track memory remaining
   while (r > 0 && *argv && **argv != '-' && *(*argv + 1) != '-') {
@@ -616,7 +598,9 @@ int main(int argc, char **argv)
     r = r - i;
     close(fd);
     ++argv;
+    --argc;
   }
+  ++argc; --argv;
   if (r == 0) { printf("could not read all source files: exceeded %d (0x%X) bytes\n", poolsz, poolsz); return -1; }
   // Reset pointer to start of code
   p = _p;
@@ -753,172 +737,44 @@ int main(int argc, char **argv)
          "OPEN,READ,CLOS,PRTF,MALC,RALC,FREE,MSET,MCMP,MCPY,STRC,EXIT,"[i * 5]);
       if (i <= ADJ) printf(" %d\n", *pc); else printf("\n");
     }
-	// Control lines:
-	// 01     Action:
-	//        00 LOAD: Load Source -> Destination
-	//        01 ALU:  Perform ALU Operation
-	//        10 INT:  Perform interrupt (open, read, malloc, etc)
-	//        11 END:  End current microcode and fetch next instruction
-	// 2345   Mode: Depending on Action: 
-	//        00 LOAD:  Bits 2,3 indicate source, 4,5 destination
-	//                  00 REG, 01 MEM, 10 PTR REG, 11 PTR MEM
-	//        01 ALU:   0000 or , 0001 xor, 0010 and, 0011 eq , 0100 neq,
-	//                  0101 lt , 0110 gt , 0111 le , 1000 ge , 1001 shl,
-	//                  1010 shr, 1011 add, 1100 sub, 1101 mul, 1110 div, 1111 mod
-	//        10 INT:   4bit integer (max 15, currently 12 implemented)
-	// 678    Source register:
-	//                001 BP, 010 SP, 011 PC, 100 X, 101 Y, 111 Z
-	//  v (10, but represented as 0)
-	// 901    Destination register as above
-	// 23456  (ALU Only) Fixed number store, 5 bits wide (max 31)
-	//        (Could be used for something else)
-	//
-	// LEA: LOAD REG PC, X
-	//      LOAD REG X, Y
-	//      ALU +, X, 1, PC
-	//      LOAD MEM Y, X
-	//      LOAD REG X, A
-	//      END
-	// Again
-	// LEA: LOAD MEM PC POSTINC, REG X
-	//      END ALU +, REG X, REG BP, REG A
-    if      (i == LEA) a = (int)(bp + *pc++);                             // load local address
-	// IMM: LOAD REG PC, X
-	//      LOAD MEM X, A
-	//      END ALU +, X, 1, PC
-	// Again
-	// IMM: END LOAD MEM PC POSTINC, A
+	if      (i == LEA) a = (int)(bp + *pc++);                             // load local address
     else if (i == IMM) a = *pc++;                                         // load global address or immediate
-	// JMP: END LOAD MEM PC, REG PC
     else if (i == JMP) pc = (int *)*pc;                                   // jump
-	// JSR: LOAD REG SP, REG X           ; sp =
-	//      ALU -, REG X, LIT 1, REG SP  ;   --sp =
-	//      ALU +, PC, 1, Y              ;   (pc + 1)
-	//      LOAD REG Y, MEM SP           ; *--sp = (pc + 1);
-	//      END LOAD MEM PC, REG PC          ; pc = *pc;
-	// Again
-	// JSR: LOAD REG SP PREDEC, REG SP   ;   --sp
-	//      ALU +, REG PC, LIT 1, REG X  ;   (pc + 1)
-	//      LOAD MEM SP, REG X           ; *--sp = (pc + 1);
-	//      END LOAD MEM PC, REG PC          ; pc = *pc;
     else if (i == JSR) { *--sp = (int)(pc + 1); pc = (int *)*pc; }        // jump to subroutine
-	// JSRI: LOAD REG SP PREDEC, REG SP   ;   --sp
-	//       ALU +, REG PC, LIT 1, REG X  ;   (pc + 1)
-	//       LOAD MEM SP, REG X           ; *--sp = (pc + 1);
-	//       LOAD MEM PC, REG PC          ; pc = *pc;
-	//       END LOAD MEM PC, REG PC          ; pc = *pc;
     else if (i == JSRI) { *--sp = (int)(pc + 1); pc = (int *)*pc; pc = (int *)*pc;}  // jump to subroutine indirect
-	// JSRI: LOAD REG SP PREDEC, REG SP   ;   --sp
-	//       ALU +, REG PC, LIT 1, REG X  ;   (pc + 1)
-	//       LOAD MEM SP, REG X           ; *--sp = (pc + 1);
-	//       LOAD MEM PC POSTINC, REG X   ;   *pc++
-	//       ALU +, REG BP, REG X, REG X  ;   (bp + *pc++)
-	//       END LOAD MEM X, REG PC           ; pc = *(bp + *pc++);
-    else if (i == JSRS) { *--sp = (int)(pc + 1); pc = (int*)*(bp + *pc++); }  // jump to subroutine indirect on stack
-	// BZ:  ALU +, REG PC, LIT 1, REG X
-	//      LOAD MEM PC, Y
-	//      END ALU ?, REG A, REG X, REG Y, REG PC
+    //else if (i == JSRS) { *--sp = (int)(pc + 1); pc = (int*)*(bp + *pc++); }  // jump to subroutine indirect on stack
+    else if (i == JSRS) { *--sp = (int)(pc + 1); pc = (int*)*(bp + *pc); }  // jump to subroutine indirect on stack
     else if (i == BZ)  pc = a ? pc + 1 : (int *)*pc;                      // branch if zero
-	// BNZ: ALU +, REG PC, LIT 1, REG X
-	//      LOAD MEM PC, Y
-	//      END ALU ?, REG A, REG Y, REG X, REG PC
     else if (i == BNZ) pc = a ? (int *)*pc : pc + 1;                      // branch if not zero
-	// ENT: LOAD REG SP PREDEC, REG SP    ;   --sp
-	//      LOAD REG BP, MEM SP           ; *--sp = bp;
-	//      LOAD REG SP, REG BP           ; bp = sp;
-	//      LOAD MEM PC POSTINC, REG X    ;   *pc++
-	//      END ALU -, REG SP, REG X, REG SP  ; sp = sp - *pc++l
     else if (i == ENT) { *--sp = (int)bp; bp = sp; sp = sp - *pc++; }     // enter subroutine
-	// ADJ: LOAD MEM PC POSTINC, REG X    ;  *pc++
-	//      END ALU +, REG SP, REG X, REG SP  ; sp = sp + *pc++;
     else if (i == ADJ) sp = sp + *pc++;                                   // stack adjust
-	// LEV: LOAD REG SP, REG BP           ; sp = bp;
-	//      LOAD MEM SP POSTINC, REG BP   ; bp = *sp++;
-	//      END LOAD MEM SP POSTINC, REG PC   ; pc = *sp++;
     else if (i == LEV) { sp = bp; bp = (int *)*sp++; pc = (int *)*sp++; } // leave subroutine
-	// LI:  END LOAD MEM A, REG A             ; a = *a;
     else if (i == LI)  a = *(int *)a;                                     // load int
-	// LC:  END LOAD BYTE MEM A, REG A
     else if (i == LC)  a = *(char *)a;                                    // load char
-	// SI:  LOAD REG A, SP
-	//      END ALU +, REG SP, LIT 1, REG SP
     else if (i == SI)  *(int *)*sp++ = a;                                 // store int
-	// SC:  LOAD REG A, SP
-	//      END ALU +, REG SP, LIT 1, REG BYTE A
     else if (i == SC)  a = *(char *)*sp++ = a;                            // store char
-	// PSH: END LOAD REG SP PREDEC, REG A
     else if (i == PSH) *--sp = a;                                         // push
 
-	// OR: LOAD MEM SP, X
-	//     ALU |, X, A, Y
-	//     LOAD REG Y, REG A
-	//     ALU +, SP, 1, X
-	//     LOAD REG X, REG SP
-	//     END
-	// Again
-	//     LOAD MEM SP POSTINC, REG X
-	//     END ALU |, REG X, REG A, REG A
     else if (i == OR)  a = *sp++ |  a;
-	// XOR: LOAD MEM SP POSTINC, REG X
-	//      END ALU ^, REG X, REG A, REG A
     else if (i == XOR) a = *sp++ ^  a;
-	//      LOAD MEM SP POSTINC, REG X
-	//      END ALU &, REG X, REG A, REG A
     else if (i == AND) a = *sp++ &  a;
-	//      LOAD MEM SP POSTINC, REG X
-	//      END ALU =, REG X, REG A, REG A
     else if (i == EQ)  a = *sp++ == a;
-	//      LOAD MEM SP POSTINC, REG X
-	//      END ALU !=, REG X, REG A, REG A
     else if (i == NE)  a = *sp++ != a;
-	//      LOAD MEM SP POSTINC, REG X
-	//      END ALU <, REG X, REG A, REG A
     else if (i == LT)  a = *sp++ <  a;
-	//      LOAD MEM SP POSTINC, REG X
-	//      END ALU >, REG X, REG A, REG A
     else if (i == GT)  a = *sp++ >  a;
-	//      LOAD MEM SP POSTINC, REG X
-	//      END ALU <=, REG X, REG A, REG A
     else if (i == LE)  a = *sp++ <= a;
-	//      LOAD MEM SP POSTINC, REG X
-	//      END ALU >=, REG X, REG A, REG A
     else if (i == GE)  a = *sp++ >= a;
-	//      LOAD MEM SP POSTINC, REG X
-	//      END ALU <<, REG X, REG A, REG A
     else if (i == SHL) a = *sp++ << a;
-	//      LOAD MEM SP POSTINC, REG X
-	//      END ALU >>, REG X, REG A, REG A
     else if (i == SHR) a = *sp++ >> a;
-	//      LOAD MEM SP POSTINC, REG X
-	//      END ALU +, REG X, REG A, REG A
     else if (i == ADD) a = *sp++ +  a;
-	//      LOAD MEM SP POSTINC, REG X
-	//      END ALU -, REG X, REG A, REG A
     else if (i == SUB) a = *sp++ -  a;
-	//      LOAD MEM SP POSTINC, REG X
-	//      END ALU *, REG X, REG A, REG A
     else if (i == MUL) a = *sp++ *  a;
-	//      LOAD MEM SP POSTINC, REG X
-	//      END ALU /, REG X, REG A, REG A
     else if (i == DIV) a = *sp++ /  a;
-	//      LOAD MEM SP POSTINC, REG X
-	//      END ALU %, REG X, REG A, REG A
     else if (i == MOD) a = *sp++ %  a;
-
-	// OPEN: END INT intOpen, REG SP, LIT 2
     else if (i == OPEN) a = open((char *)sp[1], *sp);
     else if (i == READ) a = read(sp[2], (char *)sp[1], *sp);
     else if (i == CLOS) a = close(*sp);
-	// LOAD REG PC, X
-	// ALU +, X, 1, Y
-	// LOAD MEM Y, X
-	// ALU +, SP, X, Y
-	// INT printf, Y, 6, A
-	// END
     else if (i == PRTF) { t = sp + pc[1]; a = printf((char *)t[-1], t[-2], t[-3], t[-4], t[-5], t[-6]); }
-	// LOAD MEM SP, X
-	// INT malloc, X, 1, A
-	// END
     else if (i == MALC) a = (int)c4_malloc(*sp);
     else if (i == RALC) a = (int)c4_realloc((int*)sp[1], *sp);
     else if (i == FREE) c4_free((void *)*sp);
@@ -926,7 +782,10 @@ int main(int argc, char **argv)
     else if (i == MCMP) a = memcmp((char *)sp[2], (char *)sp[1], *sp);
     else if (i == MCPY) a = (int)c4_memcpy((void*)sp[2], (void*)sp[1], *sp);
     else if (i == STRC) print_stacktrace(pc, idmain, bp, sp);
-    else if (i == EXIT) { printf("exit(%d) cycle = %d\n", *sp, cycle); status = *sp; run = 0; }
+    else if (i == EXIT) {
+		//printf("exit(%d) cycle = %d\n", *sp, cycle);
+		status = *sp; run = 0;
+	}
     else { printf("unknown instruction = %d! cycle = %d\n", i, cycle); status = -1; run = 0; }
   }
 

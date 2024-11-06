@@ -1,7 +1,13 @@
 #include <stdio.h>
+#include <stdlib.h>
 
-int main()
+int main(int argc, char **argv)
 {
-  printf("hello, world\n");
+	int a;
+    a = argc;
+    a = (int)argv;
+  //printf("hello, world\n");
+  a = printf("yello\n");
+  //exit(0);
   return 0;
 }

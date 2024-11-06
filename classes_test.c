@@ -1,5 +1,5 @@
 // Classes test for C4
-// Invocation: ./c4 c4_multiload.c classes.c classes_test.c
+// Invocation: ./c4 c4m.c classes.c classes_test.c
 //
 // Implements the below class with swapping.
 // class testclass {
@@ -15,7 +15,7 @@
 // 		testclass *Sub() { return new testclass(X - Y, Y - X); }
 // 		testclass *Add() { return new testclass(X + Y, Y + X); }
 // 		testclass *Mult() { return new testclass(X * Y, Y * X); }
-//      testclass *testclass:FactorialX () {
+//      testclass *FactorialX () {
 //        if (X <= 1) return this;
 //        Y = 1;
 //        testclass *tmp1 = Sub();
@@ -39,15 +39,18 @@
 // class testclass {
 //   int X, Y;
 //   void Print(int*self);
-//   int *Sub(int*self); // returns new testclass with result
-//   int *Add(int*self); // as above
-//   testclass(int x, int y) ..
-//   ~testclass() { printf("~testclass(%d,%d)\n", X, Y); }
+//   testclass *Sub(int *self); // returns new testclass with result
+//   testclass *Add(int *self); // as above
+//   testclass *Mult(int *self); // as above
+//   testclass *FactorialX(int *self); 
+//   void swap (testclass *other);
+//   testclass(int x, int y) { X = x; Y = y; }
+//   ~testclass(int *self) { printf("~testclass@%p(%d,%d)\n", self, X, Y); }
 // }
 enum testclass {
 	testclass_pub_X, testclass_pub_Y,
 	testclass_fun_Print, testclass_fun_Sub, testclass_fun_Add, testclass_fun_Mult,
-	testclass_fun_FactorialX, testclass_fun_FactorialY,
+	testclass_fun_FactorialX,
 	testclass_fun_swap,
 	testclass__sz
 };
@@ -61,8 +64,6 @@ void testclass_construct3 (int *self, int x, int y) {
 	printf("testclass_construct@%p(%d,%d)\n", self, x, y);
 	self[testclass_pub_X] = x;
 	self[testclass_pub_Y] = y;
-	// for fun, stacktrace
-	//stacktrace();
 }
 
 // Destructor
@@ -139,8 +140,8 @@ int *testclass_impl_FactorialX (int *self) {
 	// collect
 	gc_collect(gc_local - gc_ptr);
 	// print a stacktrace (dummy out for non-C4)
-	//printf(" >Stacktrace: ");
-	//stacktrace();
+#define stacktrace()
+	stacktrace();
 	return self;
 }
 
@@ -188,12 +189,6 @@ int main (int argc, char **argv) {
 	t1[testclass_pub_X] = 15;
 	invoke1((int*)t1[testclass_fun_FactorialX], (int)t1);
 	printf("t1: "); invoke1((int*)t1[testclass_fun_Print], (int)t1); printf("\n");
-
-	// Enable autocollect and create a bunch of objects
-	gc_enable_autocollect();
-	i = 10;
-	while(--i)
-		new_testclass(i, i * 10);
 
 	// Collect anything remaining on the stack
 	printf("Final cleanup\n");

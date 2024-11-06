@@ -1,0 +1,172 @@
+C4LED - C4 Line Editor 0.2
+File: ps.c
+Context: -1 to +2
+
+Line: 1
+  1: // C4 library: ps.c
+     ‡
+  2: //           : process listing library
+  3: // Renders a (mostly) aligned process listing.
+
+ps.c command>
+select line
+Line: 1
+  1: // C4 library: ps.c
+    <                   >
+  2: //           : process listing library
+  3: // Renders a (mostly) aligned process listing.
+
+ps.c command>
+.s/ps.c$/ps.new.c/
+(1 occurrance replaced)
+Line: 1
+  1: // C4 library: ps.new.c
+    <                       >
+  2: //           : process listing library
+  3: // Renders a (mostly) aligned process listing.
+
+ps.c+ command>
+down
+Line: 2
+  1: // C4 library: ps.new.c
+  2: //           : process listing library
+     ‡
+  3: // Renders a (mostly) aligned process listing.
+  4: // See top.c for a program that uses this (eshell does too.)
+
+ps.c+ command>
+down
+Line: 3
+  2: //           : process listing library
+  3: // Renders a (mostly) aligned process listing.
+     ‡
+  4: // See top.c for a program that uses this (eshell does too.)
+  5: // Can also run by itself - prints a process list and quits.
+
+ps.c+ command>
+new
+  Buffer modified without saving first, really perform :new ? y/yes/n/no>
+y
+Line: 1
+  1:
+     ‡
+
+(unnamed) command>
+append
+(Enter "." on a line by itself to return to command mode)
+
+(unnamed) append>
+#include <stdioh>
+int main (void) {
+	print("Hellorld!\n");
+}
+
+.
+(4 lines added)
+Line: 4
+  3: 	print("Hellorld!\n");
+  4: }
+     ‡
+
+(unnamed) command>
+select line 3
+Line 3:
+  2: int main (void) {
+  3: 	print("Hellorld!\n");
+    <                         >
+  4: }
+
+(unnamed) command>
+.s/Hellorld/Hello world/
+1 occurance replaced
+Line 3:
+  2: int main (void) {
+  3: 	print("Hello world!\n");
+    <                         >
+  4: }
+
+(unnamed) command>
+gsub/void/int argc, char **argv/
+1 occurance replaced
+Line 3:
+  2: int main (void) {
+  3: 	print("Hello world!\n");
+    <                         >
+  4: }
+
+(unnamed) command>
+list
+  1: #include <stdioh>
+  2: int main (int argc, char **argv) {
+  3: 	print("Hello world!\n");
+    <                         >
+  4: }
+
+(unnamed) command>
+select l 1 c -2
+Line: 1
+  1: #include <stdioh>
+                   <  >
+  2: int main (int argc, char **argv) {
+  3: 	print("Hello world!\n");
+ 
+(unnamed) command>
+.replace .h>
+Line: 1
+  1: #include <stdio.h>
+                   <   >
+  2: int main (int argc, char **argv) {
+  3: 	print("Hello world!\n");
+
+(unnamed) command>
+list
+  1: #include <stdio.h>
+  2: int main (int argc, char **argv) {
+  3: 	print("Hello world!\n");
+    <                         >
+  4: }
+
+(unnamed) command>
+write "hello.c"
+(4L, 82C written to "hello.c")
+(Current file is now "hello.c")
+
+hello.c command>
+! c4cc -S hello.c
+1: #include <stdio.h>
+2: int main (int argc, char **argv) {
+3: bad function call (0)
+        print("Hello world!\n");/* <- here */
+        ^ here
+(Exit with status 255)
+
+hello.c command>
+gsub/print/printf
+1 occurance replaced
+
+hello.c+ command>
+write
+(4L, 83C written to "hello.c")
+
+hello.c command>
+! c4cc -S hello.c
+1: #include <stdio.h>
+2: int main (int argc, char **argv) {
+3:      printf("Hello world!\n");
+    ENT  0
+    IMM  -517799920
+    PSH
+    PRTF
+    ADJ  1
+4: }
+    LEV
+lc4r: C4R (loaded) @ 0x7fffce1f78c0 with header 0x7fffce1f7910
+lc4r: Signature C4R  Version 2  (64 bits):
+lc4r:  Entry = 0x1  Code = 10  Data = 16  Patch = 1  Symbols = 1  Cons = 0  Des  = 0
+lc4r:  0x7fffce1f7971
+(Exit with status 0)
+
+hello.c command>
+\q
+(File not modified)
+

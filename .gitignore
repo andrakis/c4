@@ -6,3 +6,11 @@ a.out
 tmp/
 *.c4r
 node_modules/
+c4
+c4.o
+c4cc
+c4cc.o
+c4m
+c4m.o
+u0.c4l
+

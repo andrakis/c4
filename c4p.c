@@ -1,29 +1,53 @@
-// c4.c - C in four functions
+// c4p.c - C4 Plus
+//
+// Usage:
+//  c4 c4p.c <first file.c> [file n.c, ...] [-- arguments...]
+// Example:
+//  c4 c4p.c classes.c classes2.c -- test arguments
+// All given .c files are read into one big string, in the order given.
+// Functions of the same name will silently overwrite any previous
+// definition.
+// Builtins can no longer be overridden, but can be dummied out so that
+// code still works on C4.
+
+// Additional functions:
+//   void stacktrace();   Print a stacktrace
+// - Adds JSRI: Jump to SubRoutine Indirect
+// - Adds JSRS: Jump to SubRoutine on Stack
+// - Adds &function to get function address. Can be called if stored in an int*.
+// - Adds stacktrace() builtin
+// - Adds realloc() builtin
+// - Adds memcpy() builtin
+// - Adds C4 versions of malloc(), realloc(), memcpy() (not used when compiled)
 
 // char, int, and pointer types
 // if, while, return, and expression statements
+// ability to obtain and call function pointers
 // just enough features to allow self-compilation and a bit more
 
-// Written by Robert Swierczek
+// Originally written by Robert Swierczek
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <memory.h>
+#include <unistd.h>
 #include <fcntl.h>
 
-#ifdef __GNUC__
-#include <unistd.h>
+#ifdef C4PLUS_READLINE
+#include "readline.h"
+#define  C4I_READLINE 1
 #else
-#if _WIN64
-#define __INTPTR_TYPE__ long long
-#elif _WIN32
-#define __INTPTR_TYPE__ int
-#endif // if _WIN64
-#endif // ifdef __GNUC__
+#define  C4I_READLINE 0
+#endif
+
+#define int long long
 #pragma GCC diagnostic ignored "-Wformat"
 
-// Please define this for your architecture if required.
-#define int __INTPTR_TYPE__
+// Allow testing stacktrace() by running in c4_plus
+#define stacktrace renamed_when_not_C4
+void stacktrace () { }
+#undef stacktrace
+#define stacktrace()
 
 char *p, *lp, // current position in source code
      *data;   // data/bss pointer
@@ -49,7 +73,7 @@ enum {
 // opcodes
 enum { LEA ,IMM ,JMP ,JSR ,JSRI,JSRS,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,
        OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,
-       OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,EXIT };
+       OPEN,READ,CLOS,PRTF,MALC,RALC,FREE,MSET,MCMP,MCPY,STRC,EXIT };
 
 // types
 enum { CHAR, INT, PTR };
@@ -70,7 +94,7 @@ void next()
         while (le < e) {
           printf("%8.4s", &"LEA ,IMM ,JMP ,JSR ,JSRI,JSRS,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,"
                            "OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,"
-                           "OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,EXIT"[*++le * 5]);
+                           "OPEN,READ,CLOS,PRTF,MALC,RALC,FREE,MSET,MCMP,MCPY,STRC,EXIT"[*++le * 5]);
           if (*le <= ADJ) printf(" %d\n", *++le); else printf("\n");
         }
       }
@@ -345,24 +369,204 @@ void stmt()
   }
 }
 
+void print_symbol(int *i) {
+  char *strc_a, *strc_b, *misc, *type;
+  char *ptrstring;
+  int   t, ptrcount;
+
+  ptrstring = "****************";
+
+  // Find symbol name length
+  strc_a = strc_b = (char*)i[Name];
+  while ((*strc_b >= 'a' && *strc_b <= 'z') || (*strc_b >= 'A' && *strc_b <= 'Z') || (*strc_b >= '0' && *strc_b <= '9') || *strc_b == '_')
+      ++strc_b;
+
+  // Calculate type string
+  if (i[Type] == CHAR) type = "char|void"; // void is represented as char
+  else if(i[Type] & INT)  type = "int";
+  else type = "char";
+  t = i[Type];
+  ptrcount = 0;
+  while(t > PTR) { ptrcount++; t = t - PTR; }
+  ptrcount = ptrcount % 16; // Not more than ptrstring length
+  //printf("ptrcount:%lld type:%lld\n", ptrcount, i[Type]);
+
+  // Print depending on type
+  if (i[Tk] == Id && i[Class] == Fun) {
+    // Function: print type name() [address]
+    printf("%s%.*s %.*s() [%p]", type, ptrcount, ptrstring, strc_b - strc_a, strc_a, (int*)i[Val]);
+  } else if(i[Tk] > Id && i[Tk] < Brak) {
+    // Builtin: just print name
+    printf("builtin: %.*s", strc_b - strc_a, strc_a);
+  } else if(i[Tk] == Id) {
+    // Named symbols
+    if (i[Class] == Sys) {
+      // Functions converted to opcodes
+      printf("opcode: %.*s = %d", strc_b - strc_a, strc_a, i[Val]);
+    } else if(i[Class] == Glo || i[Class] == Loc || i[Class] == 0) {
+        // Variables (globals and those on the stack)
+        printf("%s%.*s %.*s @ %d (0x%X)", type, ptrcount, ptrstring, strc_b - strc_a, strc_a, i[Val], i[Val]);
+        if (i[Class] == 0) printf(" (temporary)");
+    } else if(i[Class] == Num) {
+      // Enum: print its value
+      printf("enum %.*s = %d / 0x%X", strc_b - strc_a, strc_a, i[Val], i[Val]);
+    } else printf("(unknown object: %.*s)", strc_b - strc_a, strc_a);
+  } else printf("(unknown object: %.*s)", strc_b - strc_a, strc_a);
+}
+
+void print_stacktrace (int *pc_orig, int *idmain, int *bp, int *sp) {
+    int *pc, found, done, *idold, *t, range, depth;
+    //int comparisons; // debug info
+
+    pc = pc_orig + 1; // Gets decremented in main loop
+    idold = id;
+    done = 0;
+    t = 0;
+    depth = 0;
+
+    while (!done) {
+        found = 0;
+        //comparisons = 0;
+        while(!found) {
+            id = idmain;
+            --pc;
+            while(!found && id[Tk]) {
+                //++comparisons;
+                if (id[Tk] == Id && id[Class] == Fun && pc == (int *)id[Val]) {
+                    t = id;
+                    found = 1;
+                } else
+                    id = id + Idsz;
+            }
+        }
+        if (depth++) printf("%*s", depth - 1, " ");
+        print_symbol(t);
+        //printf(" (%d comparisons)", comparisons);
+        printf("\n");
+        // Finish when we encounter main
+        if (t == idmain)
+            done = found = 1;
+        // find stack return addresss: simulate LEV
+        sp = bp;
+        bp = (int*)*sp++;
+        pc = (int*)*sp++;
+    }
+}
+
+#define C4_ONLY 0
+#if C4_ONLY
+// Custom implementations for C4 (C library versions used when compiling c4_plus)
+//  - malloc
+//    This version reserves an additional word of space for writing the size of the allocated block.
+//    This is useful for a realloc implementation.
+//  - memcpy
+//  - realloc
+void *c4_malloc (int size) {
+  int *p;
+  if (!size) return 0;
+  if (!(p = malloc(size + sizeof(int))))
+    return p;
+  *p++ = size;
+  //printf("c4_malloc(%d) = real malloc(%d) = %p\n", size, size + sizeof(int), (void*)p);
+  //stacktrace();
+  return (void*)p;
+}
+void c4_free (void *ptr) {
+  int *p;
+  //stacktrace();
+  //free(ptr - sizeof(int));
+  p = (int *)ptr;
+  p--;
+  free(p);
+}
+// Implement C4 version of memcpy
+void *c4_memcpy(void *dst, void *src, int len) {
+  int *di, *si, i, max;
+  char *dc, *sc;
+
+  //printf("c4_memcpy(%p, %p, %d)\n", dst, src, len);
+  //stacktrace();
+  i = 0;
+  if ((int)dst % sizeof(int) == 0 &&
+      (int)src % sizeof(int) == 0 &&
+      len % sizeof(int) == 0) {
+    // Word copy
+    di = (int*)dst; si = (int*)src; i = 0;
+    max = len / sizeof(int);
+    while(i++ < max)
+      di[i] = si[i];
+  } else {
+    // Byte copy
+    dc = (char*)dst; sc = (char*)src;
+    while(i++ < len)
+      dc[i] = sc[i];
+  }
+  return dst;
+}
+// C4 version of realloc, respecting the various quirks for passing 0 in parameters.
+void *c4_realloc (void *ptr, int newsize) {
+  void *new_ptr;
+  int  *old_ptr;
+  int   len;
+
+  //printf("c4_realloc(%p, %d)\n", ptr, newsize);
+
+  // realloc(0, size) => malloc(size)
+  if (ptr == 0)
+    return c4_malloc(newsize);
+
+  // realloc(ptr, 0) => free(ptr)
+  if (newsize == 0) {
+    c4_free(ptr);
+    return 0;
+  }
+
+  old_ptr = (int*)ptr - 1;
+  //printf("c4_realloc: old length: %d\n", *old_ptr);
+  // C4 only: if newsize < old size, return unchanged
+  if (*old_ptr > newsize)
+    return ptr;
+
+  // If malloc fails, return old pointer and data unchanged
+  if (!(new_ptr = c4_malloc(newsize)))
+    return ptr;
+
+  // copy from original to new respecting newsize
+  len = *old_ptr;
+  if (len > newsize) len = newsize;
+  c4_memcpy(new_ptr, ptr, len);
+  c4_free(ptr);
+  return new_ptr;
+}
+#else
+// When compiled natively, calls real malloc and realloc
+#define c4_malloc(s)       malloc(s)
+#define c4_free(p)         free(p)
+#define c4_realloc(p,ns)   realloc(p, ns)
+#define c4_memcpy(d,s,n)   memcpy(d, s, n)
+#endif
+
 int main(int argc, char **argv)
 {
-  int fd, bt, ty, poolsz, *idmain;
+  int fd, bt, ty, poolsz, *idmain, printsyms;
   int *pc, *sp, *bp, a, cycle, run, status; // vm registers
-  int i, *t; // temps
-  char *_p, *_data;       // initial pointer locations
-  int  *_sym, *_e, *_sp;  // initial pointer locations
+  int i, *t, r; // temps
+  char*_p, *_data;       // initial pointer locations
+  int *_sym, *_e, *_sp;  // initial pointer locations
 
-  //i = 0; printf("(C4) Argc: %lld\n", argc); while(i < argc) { printf("(C4) argv[%lld] = %s\n", i, *(argv + i)); ++i; }
+  //printf("(C4M) Argc: %lld\n", argc); i = 0; while(i < argc) { printf("(C4M) Argv[%lld] = %s\n", i, argv[i]); ++i; }
 
+  poolsz = 256*1024; // arbitrary size
+  printsyms = 0;
   --argc; ++argv;
   if (argc > 0 && **argv == '-' && (*argv)[1] == 's') { src = 1; --argc; ++argv; }
   if (argc > 0 && **argv == '-' && (*argv)[1] == 'd') { debug = 1; --argc; ++argv; }
-  if (argc < 1) { printf("usage: c4 [-s] [-d] file ...\n"); return -1; }
+  if (argc > 0 && **argv == '-' && (*argv)[1] == 'S') { printsyms = 1; --argc; ++argv; }
+  // TODO: these options broken
+  if (argc > 0 && **argv == '-' && (*argv)[1] == 'p') { i = 1; while((*argv)[1 + i++]) poolsz = poolsz / 2; --argc; ++argv; }
+  if (argc > 0 && **argv == '-' && (*argv)[1] == 'P') { i = 1; while((*argv)[1 + i++]) poolsz = poolsz * 2; --argc; ++argv; }
+  if (argc < 1) { printf("usage: c4p [-s] [-d] [-p] [-P] file1 [files...] -- args ...\n"); return -1; }
 
-  if ((fd = open(*argv, 0)) < 0) { printf("could not open(%s)\n", *argv); return -1; }
-
-  poolsz = 256*1024; // arbitrary size
   if (!(sym = _sym = malloc(poolsz))) { printf("could not malloc(%d) symbol area\n", poolsz); return -1; }
   if (!(le = e = _e = malloc(poolsz))) { printf("could not malloc(%d) text area\n", poolsz); return -1; }
   if (!(data = _data = malloc(poolsz))) { printf("could not malloc(%d) data area\n", poolsz); return -1; }
@@ -373,16 +577,33 @@ int main(int argc, char **argv)
   memset(data, 0, poolsz);
 
   p = "char else enum if int return sizeof while "
-      "open read close printf malloc free memset memcmp exit void main";
+      "open read close printf malloc realloc free memset memcmp memcpy stacktrace exit void main";
   i = Char; while (i <= While) { next(); id[Tk] = i++; } // add keywords to symbol table
   i = OPEN; while (i <= EXIT) { next(); id[Class] = Sys; id[Type] = INT; id[Val] = i++; } // add library to symbol table
   next(); id[Tk] = Char; // handle void type
   next(); idmain = id; // keep track of main
 
   if (!(lp = p = _p = malloc(poolsz))) { printf("could not malloc(%d) source area\n", poolsz); return -1; }
-  if ((i = read(fd, p, poolsz-1)) <= 0) { printf("read() returned %d\n", i); return -1; }
-  p[i] = 0;
-  close(fd);
+
+  i = 0; printf("(C4M) Argc: %lld\n", argc); while(i < argc) { printf("(C4M) argv[%lld] = %s\n", i, *(argv + i)); ++i; }
+
+  // Read all specified source files
+  r = poolsz - 1;        // track memory remaining
+  while (r > 0 && *argv && **argv != '-' && *(*argv + 1) != '-') {
+    if ((fd = open(*argv, 0)) < 0) { printf("could not open(%s)\n", *argv); return -1; }
+    if ((i = read(fd, p, r)) <= 0) { printf("read() returned %d\n", i); return -1; }
+    p[i] = 0;
+    // Advance p to the nul we just wrote, new content will go here
+    p = p + i;
+    r = r - i;
+    close(fd);
+    ++argv;
+    --argc;
+  }
+  ++argc; --argv;
+  if (r == 0) { printf("could not read all source files: exceeded %d (0x%X) bytes\n", poolsz, poolsz); return -1; }
+  // Reset pointer to start of code
+  p = _p;
 
   // parse declarations
   line = 1;
@@ -416,12 +637,15 @@ int main(int argc, char **argv)
       ty = bt;
       while (tk == Mul) { next(); ty = ty + PTR; }
       if (tk != Id) { printf("%d: bad global declaration\n", line); return -1; }
-      if (id[Class]) { printf("%d: duplicate global definition\n", line); return -1; }
+      //if (id[Class]) { printf("%d: duplicate global definition\n", line); return -1; }
       next();
       id[Type] = ty;
       if (tk == '(') { // function
-        id[Class] = Fun;
-        id[Val] = (int)(e + 1);
+        // don't overwrite builtins
+        if (id >= idmain) {
+            id[Class] = Fun;
+            id[Val] = (int)(e + 1);
+        }
         next(); i = 0;
         while (tk != ')') {
           ty = INT;
@@ -479,10 +703,17 @@ int main(int argc, char **argv)
     next();
   }
 
-  // free source
-  free(_p);
-
   if (!(pc = (int *)idmain[Val])) { printf("main() not defined\n"); return -1; }
+  if (printsyms) {
+    id = sym;
+    a = 0;
+    while (id[Tk]) {
+        print_symbol(id); printf("\n");
+        id = id + Idsz;
+        a = a + 1;
+    }
+    printf("Symbol table: %d entries using %d (0x%X) bytes\n", a, a * Idsz * sizeof(int));
+  }
   if (src) return 0;
 
   // setup stack
@@ -503,10 +734,10 @@ int main(int argc, char **argv)
       printf("%d> %.4s", cycle,
         &"LEA ,IMM ,JMP ,JSR ,JSRI,JSRS,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,"
          "OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,"
-         "OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,EXIT,"[i * 5]);
+         "OPEN,READ,CLOS,PRTF,MALC,RALC,FREE,MSET,MCMP,MCPY,STRC,EXIT,"[i * 5]);
       if (i <= ADJ) printf(" %d\n", *pc); else printf("\n");
     }
-    if      (i == LEA) a = (int)(bp + *pc++);                             // load local address
+	if      (i == LEA) a = (int)(bp + *pc++);                             // load local address
     else if (i == IMM) a = *pc++;                                         // load global address or immediate
     else if (i == JMP) pc = (int *)*pc;                                   // jump
     else if (i == JSR) { *--sp = (int)(pc + 1); pc = (int *)*pc; }        // jump to subroutine
@@ -539,20 +770,23 @@ int main(int argc, char **argv)
     else if (i == MUL) a = *sp++ *  a;
     else if (i == DIV) a = *sp++ /  a;
     else if (i == MOD) a = *sp++ %  a;
-
     else if (i == OPEN) a = open((char *)sp[1], *sp);
     else if (i == READ) a = read(sp[2], (char *)sp[1], *sp);
     else if (i == CLOS) a = close(*sp);
     else if (i == PRTF) { t = sp + pc[1]; a = printf((char *)t[-1], t[-2], t[-3], t[-4], t[-5], t[-6]); }
-    else if (i == MALC) a = (int)malloc(*sp);
-    else if (i == FREE) free((void *)*sp);
+    else if (i == MALC) a = (int)c4_malloc(*sp);
+    else if (i == RALC) a = (int)c4_realloc((int*)sp[1], *sp);
+    else if (i == FREE) c4_free((void *)*sp);
     else if (i == MSET) a = (int)memset((char *)sp[2], sp[1], *sp);
     else if (i == MCMP) a = memcmp((char *)sp[2], (char *)sp[1], *sp);
+    else if (i == MCPY) a = (int)c4_memcpy((void*)sp[2], (void*)sp[1], *sp);
+    else if (i == STRC) print_stacktrace(pc, idmain, bp, sp);
     else if (i == EXIT) { printf("exit(%d) cycle = %d\n", *sp, cycle); status = *sp; run = 0; }
     else { printf("unknown instruction = %d! cycle = %d\n", i, cycle); status = -1; run = 0; }
   }
 
   // free memory
+  free(_p);
   free(_sym);
   free(_e);
   free(_data);
@@ -560,4 +794,5 @@ int main(int argc, char **argv)
 
   return status;
 }
+
 

@@ -1,0 +1,130 @@
+# C4KE VFS file listing
+#
+# Makes files available through c4ke.vfs
+#
+# - Definitions are like Makefile variables.
+# - Filesystem tree has the format:
+#
+#	directoryA/:
+#		exampleFile         # Colon not required when specifying a file
+#		fileA.example: file(fileA.example, fileA.realpath)
+#		fileA.example: $1   # Shorthand for file($1, $1)
+#		each($VARIABLE):    # For each word in $VARIABLE,
+#			$1: $1.c4r      # $1 is the current word each loop
+#                           # Maps "file" internally to "file.c4r" on host
+#			# Perform nested map over SECOND_VARIABLE
+#			each($SECOND_VARIABLE):
+#				$2.$1: $2.$1.c4r
+#	directoryB/:
+#		fileB.example: $1
+#		symlinkToDirectoryA/: ilink(/directoryA)
+#		symlinkToFileA/: ilink(/directoryA/fileA.example)
+#
+# o Directories should end with /:
+# o Entries are children of a directory if they are indented
+#
+# Indentation is important!
+# Each entry may be a single line (directive: value), or when placed on the
+# next line and indented by a tab or space, a block.
+# The indentation of the current directive is saved, and when a line with
+# lesser indentation is encountered, it is not considered part of the
+# previous block.
+# You may freely nest further indentation, and functions.
+# For example:
+# 	/: root
+# 		each(c4 c4m c4cc): file($1, $1.c4r)     # Single entry
+# 		each(c4 c4m c4cc):                      # Block entry
+#			$1: $1.c4r
+#			src_$1:
+#				$1.c: $1.c
+# 			extras_$1:
+# 				each(extra1 extra2): $1.$2      # eg: c4.extra, c4.extra2
+# 				each(extra3 extra4):
+# 					$1.$2: $1.$2
+#			test_$1:
+#				each(test_input test_suite.c):
+#					$1.$2: $1.$2
+#		foo: bar                                # Not part of the each() block
+#
+# The following variables are available:
+#   $0             The current filename, ex: 'c4.c: $0'
+#   $1             When in an each block, the current word
+#   $2,$3...       Each nested function call places its current value in these
+#
+# Functions:
+#
+##
+# file(vfsFilename[, hostFilename])
+# Map an entry to a file, optionally a different name on the host than in
+# the vfs.
+#    file.example: file(file.txt)
+#
+##
+# each(words...): <file pattern>       # Single entry
+# each(words...):                      # Block entry:
+# 	<entry pattern>: <file pattern>
+#   <entry pattern...>: ...
+# Map entries to files, using whitespace as a separator.
+# $1 is the current word in the list.
+#
+# each(c4 c4m c4cc):
+#	$1: $1.c4r          # c4: c4.c4r
+#   $1.c: $1.c          # c4.c: c4.c
+# $1: $1.c              # Not considered part of each block
+#
+##
+# root
+# Mark the root directory.
+#
+##
+# ilink(path)
+# Invisible link to another path. Does not appear as a symlink to users.
+#
+##
+
+#
+# Definitions
+#
+BIN_CORE  = c4 c4m c4cc                 # Core utilities
+BIN_BENCH = bench benchtop innerbench   # Benchmarking utilities
+BIN_C4R   = c4rdump c4rlink load-c4r    # C4R utilities
+BIN_UTIL  = type xxd top ls ps echo     # General utilities
+BIN_C4KE  = c4ke c4ke.vfs init          # C4KE and services
+BIN_SHELL = c4sh eshell                 # Shells
+BIN_TEST  = hello tests test-oisc \     # Tests
+            test-order test-ptrs test_args test_basic \
+			test_customop test_exit test_fread test_infiniteloop
+			test_malloc test_printf test_printloop classes_test \
+			factorial oisc4 multifun
+BIN_ALL   = $(BIN_CORE) $(BIN_BENCH) $(BIN_C4R) \
+            $(BIN_UTIL) $(BIN_C4KE) $(BIN_SHELL)
+
+#
+# Filesystem tree
+#
+/: root
+	each($BIN_ALL):
+		# Until eshell/c4sh updated to use PATH environment variable, make
+		# the files available in the root directory.
+		$1: ilink(/bin/$1)  # c4 -> /bin/c4.c4r, invisible symlink
+		bin/:
+			$1: $1.c4r # c4 -> c4.c4r, invisible symlink
+	home/:
+		user/:
+			each($BIN_TEST):
+				# The tests will live here
+				$1: $1.c4r
+				# As will their source files
+				$1.c: $1.c
+	usr/
+		src/
+			bin/
+				# Add the source files for the binaries
+				each($BIN_ALL): $1.c
+			include/:
+				# Add the headers
+				c4.h
+				c4ke.h
+				c4m.h
+				service.h
+				

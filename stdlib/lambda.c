@@ -11,7 +11,7 @@
 
 enum { _lambda_data, _lambda_words, _lambda_callback, C4Lambda_Invoke, _lambda__sz };
 
-int *lambda_fx_Invoke;
+static int *lambda_fx_Invoke;
 
 // Generic constructor
 void lambda_construct3 (int *self, int *callback, int *words, int length) {
@@ -61,7 +61,7 @@ int lambda_invoke5 (int *self) {
 }
 
 // Generic
-int *lambda_construct_ (int *callback, int *words, int length) {
+static int *lambda_construct_ (int *callback, int *words, int length) {
 	int *ptr, *inv;
 	ptr = object_construct3(_lambda__sz * sizeof(int), (int*)&lambda_construct3, (int*)&lambda_destruct, (int)callback, (int)words, length);
 	//ptr[C4Lambda_Invoke] = (int)lambda_fx_Invoke;
@@ -90,7 +90,7 @@ int *new_lambda3 (int *callback, int a, int b, int c) { return lambda_construct_
 int *new_lambda4 (int *callback, int a, int b, int c, int d) { return lambda_construct_(callback, &a, 4); }
 int *new_lambda5 (int *callback, int a, int b, int c, int d, int e) { return lambda_construct_(callback, &a, 5); }
 
-int lambda_impl_Invoke (int *self) {
+static int lambda_impl_Invoke (int *self) {
 	int words, *data;
 	if((words = self[_lambda_words]) == 0)
 		return invoke0((int*)self[_lambda_callback]);

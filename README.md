@@ -5,7 +5,7 @@ c4 was "An exercise in minimalism."
 
 C4KE is "an exploration in over-extending minimalism." It provides a multitasking kernel, shell, compiler, and utilities.
 
-C4KE runs under a modified `c4` interpreter called `c4m`, which itself can be run be an unmodified `c4` interpreter.
+C4KE runs under a modified `c4` interpreter called `c4m`, which itself can be run be in an unmodified `c4` interpreter.
 It does however run much faster under a natively compiled `c4m`.
 
 

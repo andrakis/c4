@@ -1,0 +1,8 @@
+*.swp
+*.swo
+Debug/
+_*.*
+a.out
+tmp/
+*.c4r
+node_modules/

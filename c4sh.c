@@ -335,7 +335,9 @@ int c4sh_builtin_register (char *name, char *short_desc, char *short_usage,
 	builtin[CMD_USAGE]       = (int) callback_usage;
 	builtin[CMD_RUN]         = (int) callback_run;
 
-	c4sh_builtin_sort();
+	// TODO: under C4, this corrupts the builtins table. No issue under C4m.
+	if (!(__c4_info() & C4I_C4))
+		c4sh_builtin_sort();
 	return CR_OK;
 }
 

@@ -7,10 +7,7 @@
 #define __STDIO_H 1
 
 #ifndef C4CC
-// Rename to prevent gcc warnings
-#define printf renamed_printf
-int printf(char* fmt, ...);
-#undef printf
+#include </usr/include/stdio.h>
 #endif
 
 #endif

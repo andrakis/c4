@@ -5,6 +5,10 @@
 #ifndef __SIGNAL_H
 #define __SIGNAL_H 1
 
+#ifndef C4CC
+#include </usr/include/signal.h>
+#else
+
 #define SIGHANDLER(name, signame) \
 	static void name (int signame, int __ignored1, int __ignored2, int __ignored3, int __ignored4)
 
@@ -77,6 +81,8 @@ static int signal (int sig, int *handler) {
 }
 #else
 #define signal __signal
+#endif
+
 #endif
 
 #endif

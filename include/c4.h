@@ -1,9 +1,9 @@
 #ifndef __C4_H
 #define __C4_H
 
-#ifndef __c4__
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <memory.h>
 #include <fcntl.h>
 
@@ -22,6 +22,7 @@
 
 // Support signal handlers
 #include <signal.h>
+#include <stdlib.h>
 static __INTPTR_TYPE__ *signal_handlers;
 static __INTPTR_TYPE__  pending_signal;
 void c4_sig_handler (int sig) {
@@ -68,7 +69,5 @@ static int __c4_sigint () { return SIGINT; }
 static int __c4_usleep (int useconds) {
 	return usleep(useconds);
 }
-
-#endif // ifndef __c4__
 
 #endif

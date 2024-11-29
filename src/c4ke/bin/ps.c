@@ -4,11 +4,9 @@
 // See top.c for a program that uses this (eshell does too.)
 // Can also run by itself - prints a process list and quits.
 //
-// Requires u0.c
-#include "c4.h"
-#include "c4m.h"
-
-#include "u0.c"
+#include <c4.h>
+#include <c4m.h>
+#include <u0.h>
 
 enum {
 	// STATE is first for faster lookup:

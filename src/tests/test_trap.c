@@ -1,5 +1,6 @@
-// C4 Test: trapping
+// OBSOLETE C4 Test: trapping
 // Install a trap handler and test it.
+// Was part of a test before traps were truly implemented.
 //
 // Invocation: ./c4 c4m.c test_trap.c
 // Runs under c4: no

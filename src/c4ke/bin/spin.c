@@ -2,7 +2,7 @@
 //
 // Run forever doing nothing.
 
-#include "u0.c"
+#include <u0.h>
 
 int cont;
 
@@ -18,9 +18,12 @@ int main (int argc, char **argv) {
 	c4ke_set_focus(pid());
 	signal(SIGINT, (int *)&sigint);
 	printf("spin: running forever, CTRL+C to abort\n");
+	if (argc > 1)
+		printf("spin: argument provided, initiating non-restful spinning\n");
 	// TODO: cont not getting updated?
 	while(cont) {
-		sleep(100);
+		if (argc <= 1)
+			sleep(100);
 		//printf("spin: cont == %d\n", cont);
 	}
 	return 0;

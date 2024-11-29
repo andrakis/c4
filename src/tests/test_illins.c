@@ -1,5 +1,6 @@
 /**
- * C4 Test: Illegal instruction handler
+ * OBSOLETE C4 Test: Illegal instruction handler
+ * Was part of a test for adding new instructions, but uses old c4m constructs.
  *
  * Will not compile on gcc or c4, must use c4cc.
  *   ./c4 c4m.c c4cc.c asm-c4r.c -- -c test_illins.c > test_illins.c4r

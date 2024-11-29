@@ -51,14 +51,13 @@ static void message_loop () {
 
 int main (int argc, char **argv) {
 	printf(
-		"bench     c4rlink       ls          test_basic         tests\n"
-		"benchtop  classes_test  multifun    test_customop      top\n"
-		"c4        echo          oisc4       test_exit          type\n"
-		"c4cc      eshell        ps          test_fread         xxd\n"
-		"c4ke      factorial     test-oisc   test_infiniteloop\n"
-		"c4ke.vfs  hello         test-order  test_malloc\n"
-		"c4m       innerbench    test-ptrs   test_printf\n"
-		"c4rdump   load-c4r      test_args   test_printloop\n"
+		"bench     c4rdump        hello       ps          test_customop      test_signal\n"
+		"benchtop  c4rlink        init        spin        test_exit          test_static\n"
+		"c4cc      c4sh           innerbench  test-order  test_fread         tests\n"
+		"c4ke      cat            kill        test-ptrs   test_infiniteloop  top\n"
+		"c4ke.vfs  echo           ls          test_args   test_malloc        type\n"
+		"c4le      factorial      mandel      test_basic  test_printf        xxd\n"
+		"c4m       fun_with_ptrs  multifun    test_crash  test_printloop\n"
 	);
 
 	return 0;

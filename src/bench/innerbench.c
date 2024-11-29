@@ -4,7 +4,7 @@
 // Specify -h for full commandline options.
 //
 
-#include "u0.c"
+#include "u0.h"
 
 enum { MAX_ARGV = 16 };
 enum {
@@ -269,7 +269,7 @@ int main (int argc, char **argv) {
 			//	psh("-v");
 			psh("c4ke");
 		} else if (mode & ONLY_DIRECT) {
-			psh("c4ke.c");
+			psh("src/c4ke/c4ke.c");
 			psh("--");
 		}
 		// Verbosity

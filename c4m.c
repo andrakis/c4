@@ -46,7 +46,9 @@
 //     The returnpc is the illegal instruction address + 1 word, but can be adjusted:
 //       - If your opcode takes arguments you can adjust the returnpc to skip them.
 // - void __c4_opcode (int opcode);Execute the given opcode, which can trap if
-//                                 using a custom opcode. No support for opcodes with arguments.
+//                                 using a custom opcode. Opcode number must be last:
+//        __c4_opcode(handler, sig, OP_USER_SIGNAL);
+//        Arguments should be pushed in reverse order.
 // - void __c4_jmp (int address);  Jump directly to a given function address.
 // - void __c4_adjust (int offset);Adjust the stack. Negative offset grows stack.
 // - int __opcode (char *name);    Request the integer value of an opcode.
@@ -1144,7 +1146,7 @@ int c4m_main(int argc, char **argv)
         if (i <= ADJ) {
             printf("%.4s does not support opcodes requiring arguments (%.4s given)\n",
                    &c4m_opcodes[OPCD * 5], &c4m_opcodes[i * 5]);
-			// Raise an OVP trap
+			// Raise an OPV trap
 			trap(TRAP_OPV, i, trap_handler, &sp, &bp, &pc, a);
 			// change opcode to a cycle count request (harmless)
 			i = C4CY;

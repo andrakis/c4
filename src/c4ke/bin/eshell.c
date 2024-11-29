@@ -29,10 +29,10 @@
 //    - Both quotes do the same thing, but you can "'nest quotes' for example".
 //    - Quotes cannot be \"escaped\".
 
-#include "c4.h"
-#include "c4m.h"
+#include <c4.h>
+#include <c4m.h>
 
-#include "u0.c"
+#include <u0.h>
 #define PS_NOMAIN 1
 #include "ps.c"
 

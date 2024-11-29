@@ -4,7 +4,7 @@
 // Builds with eshell to provide an emergency shell if the init process dies.
 //
 
-#include "u0.c"
+#include <u0.h>
 
 #define ESHELL_NOMAIN 1
 #include "eshell.c"

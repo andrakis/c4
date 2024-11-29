@@ -6,7 +6,14 @@
 #ifndef __STDRING_H
 #define __STDRING_H 1    // Use a value
 
-#ifdef C4CC
+#ifndef C4CC
+#include </usr/include/string.h>
+#undef strlen
+#define strlen c4_strlen
+#define memcpy c4_memcpy
+#define memmove c4_memmove
+#endif
+
 static int strlen (char *s) { int i; i = 0; while (*s++) ++i; return i; }
 static void *memcpy (void *source, void *dest, int length) {
 	int   i;
@@ -49,10 +56,8 @@ static void *memmove (void *source, void *dest, int length) {
 
 	return dest;
 }
-#else
 // Rename to prevent gcc warnings
 #define strlen renamed_strlen
 int strlen(char *);
-#endif
 
 #endif

@@ -12,11 +12,11 @@
 // a header file define the interface instead of requesting opcodes
 // from the kernel.
 
-#include "c4.h"
-#include "c4m.h"
-
 #ifndef __U0_C
 #define __U0_C
+
+#include "c4.h"
+#include "c4m.h"
 
 enum { U0_DEBUG = 0 };
 
@@ -301,8 +301,6 @@ void exit (int code) {
 /// checking doesn't complain.
 ///
 
-#include <string.h>
-
 #define strlen __c4_strlen
 static int strlen (char *s) { char *t; t = s; while(*t) ++t; return t - s; }
 #define strcmp __c4_strmcp
@@ -498,6 +496,12 @@ void halt () { __c4_opcode(OP_HALT); }
 int platform_is_c4_plain () {
 	return __c4_info() & C4I_C4;
 }
+
+///
+/// isXYZ functions
+///
+
+int isnum (char c) { return (c >= '0' && c <= '9'); }
 
 ///
 /// Initialization

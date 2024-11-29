@@ -19,7 +19,7 @@ or custom opcodes that can manually switch tasks (cooperative multitasking.)
 return addresses, can be modified inside these trap handlers. By swapping register values from one task with those from another,
 task switching is accomplished transparently to running tasks.
 
-C4KE uses a custom executable format, the "C4 Relocatable." This format contains symbols and runtime patch information.
+C4KE uses a custom executable format, the [C4 Relocatable](src/c4cc/asm-c4r.c). This format contains symbols and runtime patch information.
 
 
 Running

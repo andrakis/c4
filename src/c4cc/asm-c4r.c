@@ -1,8 +1,7 @@
 // C4 Relocatable assembler for C4 CC
 //
 // Compiles C4 to an object format that can be loaded for use in C4.
-// TODO: Outputs binary data, so redirect to a file or risk your terminal.
-// Outputs to 'a.c4r' or file of your choosing.
+// Outputs to 'a.c4r' or file of your choosing using the -o outfile option.
 //
 // Supports multiple files on the commandline, they are all concatenated together.
 //
@@ -15,24 +14,28 @@
 //   -o outfile     Output to outfile
 //   -S             Produce assembly listing
 //
-// TODO: direct output not up to date, use compiled version instead.
-//        (Broken) Invocation: ./c4 c4m.c c4cc.c asm-c4r.c -- hello.c > hello.c4r
-//                   or
-// Compile directly: gcc -g asm-c4r.c -o c4
+// Use natively: gcc -g src/c4cc/asm-c4r.c -o c4cc
 //
-//    ./c4r hello.c                     (produces a.c4r)
-//    ./c4r -o hello.c4r hello.c        (produces hello.c4r)
-//    ./c4r -o top.c4r u0.c ps.c top.c  (produces top.c4r)
-//    ./c4r -S u0.c ps.c top.c          (outputs assembly listing to screen)
-//                                      (also outputs a.c4r)
+//    ./c4cc src/tests/hello.c                                             (produces a.c4r)
+//    ./c4cc -o hello.c4r src/tests/hello.c                                (produces hello.c4r)
+//    ./c4cc -o top.c4r include/u0.h src/c4ke/bin/ps.c src/c4ke/bin/top.c  (produces top.c4r)
+//    ./c4cc -S include/u0.h src/c4ke/bin/ps.c src/c4ke/bin/top.c          (outputs assembly listing to screen)
+//                                                                         (outputs a.c4r since no -o given)
 //
-// C4R File Format:
+// Use inside C4KE or c4:
+//    Can only usefully use the -S flag. No file output or redirection currently supported.
+//    c4sh>
+//    c4cc -S src/tests/hello.c
+//    c4cc -S include/u0.h src/tests/mandel.c
+//    c4cc -S include/u0.h src/c4ke/bin/ps.c src/c4ke/bin/top.c
+//
+// C4R File Format: Version 2 (with proposals for V3 not implemented)
 // |---------------------------------------------------------------------------|
 // | Header:                                                                   |
 // | |-----------------------------------------------------------------------| |
 // | | Type | Name           | Purpose                                       | |
 // | |-----------------------------------------------------------------------| |
-// | | B*3  |  "C4R"         | Signature, 3 bytes                            | |
+// | | B*3  | "C4R"          | Signature, 3 bytes                            | |
 // | | B    | Version        | Currently 2                                   | |
 // | | B    | WordBits       | How large a word is                           | |
 // | | W    | Entry          | Position to begin code execution              | |
@@ -42,15 +45,7 @@
 // | | W    | SymbolsLen     | Length of symbols segment in entries          | |
 // | | W    | ConstructLen   | Length of construct segment in entries        | |
 // | | W    | DestructLen    | Length of deconstruct segment in entries      | |
-// | | W    | CodePageLen    | V2 only: code pages                           | |
-// | | W    | InstructionsLen| V2 only: length of instructions section       | |
-// | | B*N  | Instructions   | V2 only: instruction section                  | |
-// | | W    | SourceMapLen   | V2: source map to function address table      | |
 // | |-----------------------------------------------------------------------| |
-// |---------------------------------------------------------------------------|
-// | Instructions are included to ensure compiled file matches intended C4     |
-// | target. If the instructions don't match, the file would execute invalid   |
-// | code.                                                                     |
 // |---------------------------------------------------------------------------|
 // | Each segment is preceded by a symbol to indicate where in the file you    |
 // |  are when viewing. Use c4rdump for a more user-friendly way to view.      |
@@ -64,6 +59,8 @@
 // | | W  : Type       Type of patch segment, see LT_*                       | |
 // | | W  : Address    Address, before adjusting to loadaddr, to be patched  | |
 // | | W  : Value      Offset to add to patch address                        | |
+// | | Note: Type can be negative (see LT_*) or positive to refer to a symbol| |
+// | |       and resolved after linking.                                     | |
 // | |-----------------------------------------------------------------------| |
 // |---------------------------------------------------------------------------|
 // | Construct / Destruct segment format:                                      |
@@ -90,7 +87,21 @@
 // | |  W   | Length     | Useful only for functions currently               | |
 // | |-----------------------------------------------------------------------| |
 // |---------------------------------------------------------------------------|
-// | Source map format: M (V2 only)                                            |
+// |---------------------------------------------------------------------------|
+// | Unimplemented proposals: Version 3                                        |
+// | Version 3 would include a method to map instructions to source code, as   |
+// | well as a check to ensure the opcodes used at compile time match the ones |
+// | being used at runtime.                                                    |
+// | The following additional header content is proposed:                      |
+// | |-----------------------------------------------------------------------| |
+// | | Type | Name           | Purpose                                       | |
+// | |-----------------------------------------------------------------------| |
+// | | W    | CodePageLen    | V3 only: code pages                           | |
+// | | W    | InstructionsLen| V3 only: length of instructions section       | |
+// | | B*N  | Instructions   | V3 only: instruction section                  | |
+// | | W    | SourceMapLen   | V3: source map to function address table      | |
+// | |-----------------------------------------------------------------------| |
+// | Source map format: M (V3 only)                                            |
 // | |-----------------------------------------------------------------------| |
 // | | Type | Name       | Purpose                                           | |
 // | |-----------------------------------------------------------------------| |

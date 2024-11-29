@@ -107,3 +107,56 @@ Other experiments
 
 * [libjs/](libjs/) - A JavaScript port of C4. Incomplete, slow, and cannot run C4KE.
 
+* OISC4: One Instruction Set Computer for C4, an attempt to implement C4 using a single instruction. The [compiler](src/tests/oisc-c4.c) does most of the heavy lifting. The [interpreter](src/tests/oisc-min.c) is fairly simple.
+
+	* Only partially implemented. Most of the logic is there but subtle bugs prevent working code.
+
+	* The instruction is: `add source, incremental, destination`.
+
+		* `source` is a memory address to read from.
+
+		* `incremental` is a literal value to add to the value read from `source`.
+
+		* `destination` is the memory address to write the result to.
+
+	* Additionally, flags are set to indicate whether the final value written to `destination` was:
+
+		* `LT0`: less than `0`
+
+		* `EQ0`: equal to `0`
+
+		* `GT0`: greater than `0`
+
+		* Flags are either `0` to indicate `false`, or `3` (the size of an instruction in words) to indicate `true`
+
+	* Code can arbritrarily jump by storing results into `PC`, or add the value of one of the above flags followed by two jump instructions. The first would execute if the flag was false, and the second would if the flag was true:
+
+		```
+		EQ0, LABEL_1, PC                ; Jump using flag and address of LABEL_1
+		LABEL_1: ABS0, NOT_EQ0, PC      ; was false, jump to NOT_EQ0
+		         ABS0, WAS_EQ0, PC      ; was true, jump to WAS_EQ0
+		NOT_EQ0: ; do something
+		         ABS0, DONE, PC         ; unconditional jump
+		WAS_EQ0: ; do something else
+		DONE:
+		```
+	
+	* Instructions in memory are able to be altered, and combined with jumping allow for later instructions to be modified based on conditions. This is used heavily by the [compiler](src/tests/oisc-c4.c) to implement many C4 instructions.
+
+		* For example, to implement the `LOAD INT` C4 instruction (`LI`), the value of a memory location needs to be dereferenced. This is done by altering a future instruction to change the `source` to the value read from memory:
+
+			```
+			      ABS0, some_variable, LOC1   ; Read from a variable (a memory address really),
+			                                  ; which must use ABS0 to get the true memory address,
+			                                  ; and alter the source in the next instruction.
+			LOC1: PLACEHOLDER, 0, R0          ; Read from altered source and store into register R0.
+			```
+
+			* `PLACEHOLDER` is just a visual reference to know where something will be updated. It could also be a different part of the instruction.
+
+	* By using such logic, all of C4 is able to be implemented, though cheated a little by the use of `DEVICE`s.
+
+	* `DEVICE`s: theoratical hardware devices listening on specific memory addresses, and triggering some sort of behaviour when read or written.
+
+		* Currently all math and IO operations are implemented as `DEVICE`s.
+

@@ -89,7 +89,7 @@ Line 3:
 gsub/void/int argc, char **argv/
 1 occurance replaced
 Line 3:
-  2: int main (void) {
+  2: int main (int argc, char **argv) {
   3: 	print("Hello world!\n");
     <                         >
   4: }

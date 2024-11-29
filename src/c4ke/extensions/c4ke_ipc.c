@@ -23,7 +23,7 @@
 //   6. TASK2: Receives packet and adds it to buffer until packets received
 
 
-#include "c4ke_extension.h"
+#include <c4ke/extension.h>
 
 static int ipc_enabled, ipc_bits, ipc_mask, ipc_xfers_fullword, ipc_stop_bits;
 
@@ -300,6 +300,9 @@ static int test_task_2 (int argc, char **argv) {
 	return 0;
 }
 
+// Records our start position in the extended data segment of tasks
+static int ipc_extdata_start;
+
 static int ipc_init () {
 	int ws, xfers, i;
 
@@ -324,6 +327,11 @@ static int ipc_init () {
 		printf("c4ke: ipc module loaded, communication bits %d + %d stop bits, range %d - %d, %d xfers per machine word\n",
 		       ipc_bits, ipc_stop_bits, SIGRTMIN, SIGRTMAX, ipc_xfers_fullword);
 	ipc_enabled = 1;
+
+	// Our data offset in the ext data is the current value
+	ipc_extdata_start = kernel_task_extdata_size;
+	// Reserve enough space for our structure
+	kernel_task_extdata_size = kernel_task_extdata_size + sizeof(int *);
 	return KXERR_NONE;
 }
 

@@ -10,30 +10,43 @@
 //This code frequently casts to int to ensure we're not accidentally benefitting from GCC promotion from int 16 bits to int.
 //
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <math.h>
-#include <stdint.h>
-#include <string.h>
-
 // C4 compatibility
-#define int long long
-#pragma GCC diagnostic ignored "-Wformat"
-#ifdef C4KE
-#include "u0.c"
-#else
-#define __time() 0
-#endif
+#include <u0.h>
 
 // Removed for C4
 //int s(int i);
 //int toPrec(float f, int bitsPrecision);
 
-// C4 lacks a builtin strlen
-int our_strlen (char *s) { char *t; t = s; while (*t) ++t; return t - s; }
+// Default customizable values
+enum {
+  DEF_WIDTH  = 60,
+  DEF_HEIGHT = 40
+};
 
 // CHOOSE THE NUMBER OF BITS OF PRECISION - 6 is the most I found useful
-enum { bitsPrecision = 6 };
+// Fixed values for C4 as we can't use floating point.
+enum {
+  bitsPrecision = 6,
+  bits6_4       = 0x100,
+  bits6_3point5 = 0xe0,
+  bits6_2point5 = 0xa0,
+  bits6_2       = 0x80,
+  bits6_1       = 0x40
+};
+
+// Filled in during main, rendering glyphs
+char *chr;
+
+void show_help (char *argv0) {
+    printf("Johnlon's Mandelbrot for C4(KE)\n"
+           "usage: %s [WxH] [-m] [-c chars]\n", argv0);
+    printf("Where:\n"
+           "          WxH       Set rendering geometry to W columns by H lines\n"
+           "                    (Default: %dx%d)\n", DEF_WIDTH, DEF_HEIGHT);
+    printf("          -m        Mono mode, output without color\n"
+           "          -c chars  Set fractal rendering glyphs\n"
+           "                    (Default: \"%s\")\n", chr);
+}
 
 int main(int argc, char** argv)
 {
@@ -41,32 +54,90 @@ int main(int argc, char** argv)
   int maxIters, px, py, x0, y0, x, y, i, xSqr, ySqr;
   int notbreak, sum, xt;
   int startTime;
-  char *chr;
+  char **_argv, *arg;
+  int _argc;
+  int mono;
 
   log = 0;
+  mono = 0;
 
-  width = 60;
-  height = 40;
+  width  = DEF_WIDTH;
+  height = DEF_HEIGHT;
 
   // printf("PRECISION=%ld\n", bitsPrecision);
 
-  X1 = 0xe0; //toPrec(3.5,bitsPrecision);
-  X2 = 0xa0; //toPrec(2.5,bitsPrecision) ;
-  Y1 = 0x80; //toPrec(2,bitsPrecision);
-  Y2 = 0x40; //toPrec(1,bitsPrecision) ; // vert pos
-  LIMIT = 0x100; // toPrec(4,bitsPrecision);
+  X1 = bits6_3point5; //toPrec(3.5,bitsPrecision);
+  X2 = bits6_2point5; //toPrec(2.5,bitsPrecision) ;
+  Y1 = bits6_2; //toPrec(2,bitsPrecision);
+  Y2 = bits6_1; //toPrec(1,bitsPrecision) ; // vert pos
+  LIMIT = bits6_4; // toPrec(4,bitsPrecision);
 
   // fractal
   //chr = ".:-=X$#@ ";
   //chr = "12345678 ";
   //chr = "123456789ABCDE ";
-  //chr = ".,'~=+:;[/<&?oxOX#.";
-  chr = ".,'~=+:;[/<&?oxOX#.!@#$%^&*";
-  maxIters = our_strlen(chr);
+  chr = ".,'~=+:;[/<&?oxOX#.";
+  //chr = ".,'~=+:;[/<&?oxOX#.!@#$%^&*";
 
+  // Parse arguments
+  _argc = argc;
+  _argv = argv;
+  --_argc; ++_argv; // skip first arg
+  while (_argc) {
+      arg = *_argv;
+      // Flags
+      if (*arg == '-') {
+          ++arg;
+          if (!strcmp(arg, "-h") || !strcmp(arg, "-help")) {
+              show_help(argv[0]);
+              return 1;
+          }
+          // -m  Mono mode
+          else if (*arg == 'm') mono = 1;
+          // -c  Rendering glyphs
+          else if (*arg == 'c') {
+              // -cXYZ
+              if (*(arg + 1)) chr = arg + 1;
+              // -c XYZ
+              else {
+                  --_argc; ++_argv;
+                  if (!_argc) {
+                      printf("Option -c requires an argument\n\n");
+                      show_help(argv[0]);
+                      return 1;
+                  }
+                  chr = *_argv;
+              }
+          }
+      } else if (isnum(*arg)) {
+          width = *arg++ - '0';
+          height = 0;
+          while (*arg && isnum(*arg)) {
+              width = width * 10 + (*arg++ - '0');
+          }
+          if (*arg++ == 'x' && *arg) {
+              height = *arg++ - '0';
+              while (*arg && isnum(*arg)) {
+                  height = height * 10 + (*arg++ - '0');
+              }
+          }
+          if (width <= 0 || height <= 0) {
+              printf("Invalid size specification: '%dx%d'.\n", width, height);
+              return 1;
+          }
+          printf("Custom size: %dx%d\n", width, height);
+      } else {
+          printf("Unrecognised option: '%s'\n", *_argv);
+          show_help(argv[0]);
+          return 1;
+      }
+      --_argc; ++_argv;
+  }
+
+  maxIters = strlen(chr);
+  py = 0;
   startTime = __time();
 
-  py = 0;
   while (py < height) {
     px = 0;
     while (px < width) {
@@ -114,19 +185,19 @@ int main(int argc, char** argv)
 //   exit(1);
 // }
 
-      //printf("%c", chr[i]);
-      //print("\u001b[48;05;${cl}m  \u001b[0m")
       // C4 doesn't understand \033 and such
+      //print("\u001b[48;05;${cl}m  \u001b[0m")
       // printf("\033[48;05;%ldm%02ld\033[0m", i, i);
       // Restored outputting the character instead of the number
-      printf("%c[48;05;%ldm%c%c[0m", 0x1b, i, chr[i], 0x1b);
+      if (mono) printf("%c", chr[i]);
+      else printf("%c[48;05;%ldm%c%c[0m", 0x1b, i, chr[i], 0x1b);
 
       ++log;
-      px = px + 1;
+      ++px; // px = px + 1;
     }
 
     printf("\n");
-    py = py + 1;
+    ++py; // py = py + 1;
   }
 
   printf("Mandelbrot rendered in %ldms\n", __time() - startTime);

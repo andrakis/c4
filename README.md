@@ -43,7 +43,7 @@ Try `bench` or `innerbench` to test out how fast C4KE runs on your system.
 C4M?
 ----
 
-`c4m` is the `C4 Multiloader`, an extended version of [c4](c4.c) which apart from adding a few new opcodes, can also read multiple .c source files sequentially to output a single program.
+`c4m` is the `C4 Multiloader`, an extended version of [c4](https://github.com/rswier/c4) which apart from adding a few new opcodes, can also read multiple .c source files sequentially to output a single program.
 
 Changes over C4:
 
@@ -93,7 +93,9 @@ Interesting files
 
 * [c4.c](c4.c) - The original C4 interpreter, with only enough modifications to compile portably.
 
-* [u0.c](include/u0.h) - User runtime for C4KE programs, interfaces with C4KE via extended opcodes.
+* [u0.h](include/u0.h) - User runtime for C4KE programs, interfaces with C4KE via extended opcodes.
+
+* [mandel.c](src/tests/mandel.c) - A port of [Johnlon's Integer Mandelbrot](https://github.com/Johnlon/mandelbrot) to run on C4KE
 
 * [tests](src/tests/) - Various test programs
 

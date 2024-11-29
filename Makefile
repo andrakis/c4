@@ -6,6 +6,7 @@
 #   Uses c4cc to build the various .c4r files.
 #
 # Make targets:
+#   pkg           Produce a package of the source tree to PKG (default: package.tgz)
 #   run           Run C4KE under c4m (fastest)
 #   run-c4        Run C4KE under c4, running under c4m (slowest)
 #   run-alt       Alternate invocations for c4m, fixing a timing issue on some systems
@@ -28,6 +29,7 @@
 # u0 is the C4KE user runtime, and is provides an interface to C4KE as well as
 # a standard library.
 
+PKG       := package.tgz
 NATIVE_CC      := gcc
 NATIVE_CC_OPTS := -O2 -g -idirafter include -I .
 NATIVE_TARGETS := c4 c4m c4cc
@@ -133,6 +135,8 @@ test-massive-c4-alt: pre
 	$(C4) $(C4M) -a $(RUN_C4KE) innerbench -n $(TEST_MASSIVE_NUM)
 clean:
 	rm -rf $(C4) $(C4M) $(C4CC) $(C4RS) $(BIN) *.c4r
+pkg:
+	tar cjf $(PKG) c4ke.vfs.txt *.c src include Makefile
 
 # Marking the above rules as PHONY using singular .PHONY rule
 PHONY  = pre all clean
@@ -140,6 +144,7 @@ PHONY += run run-vg test test-massive
 PHONY += run-alt run-alt-vg test-alt test-massive-alt
 PHONY += run-c4 run-c4-vg test-c4 test-massive-c4
 PHONY += run-c4-alt run-c4-alt-vg
+PHONY += pkg
 .PHONY: $(PHONY)
 
 #
@@ -208,5 +213,3 @@ $(SRCS)/tests/%.c4r: $(SRCS)/tests/%.c $(C4KE_WATCH) $(C4CC)
 %.c4l: %.c $(C4KE_WATCH) $(C4CC)
 	$(C4CC) -o $@ $<
 
-pi:
-	tar cjf pi.tgz c4ke.vfs.txt *.c src include Makefile

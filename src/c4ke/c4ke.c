@@ -269,8 +269,9 @@ enum {
 	TASK_SIGPENDING,  // int, number of pending signals total
 	TASK_MBOX,        // int *, see MBOX_
 	TASK_MBOX_SZ,     // int,
-	TASK_MBOX_COUNT,  // int, 
+	TASK_MBOX_COUNT,  // int,
 	TASK_EXCLUSIVE,   // int,
+	TASK_EXTDATA,     // int *, task extension data
 	TASK__Sz          // task structure size
 };
 
@@ -563,6 +564,7 @@ static int *kernel_task_current;     // struct TASK*
 static int *kernel_task_idle;        // struct TASK*
 static int  kernel_task_id_counter;
 static int  kernel_max_slot;
+static int  kernel_task_extdata_size;// For TASK_EXTDATA member of TASK
 static int *kernel_task_focus; // Interactive focus, hacky
 static int  kernel_verbosity;
 static int  kernel_loadc4r_mode; // defaults to not loading symbols unless -g is given
@@ -1067,50 +1069,29 @@ static void kernel_clean_task (int *t) {
 	if ((p = (int *)t[TASK_NAME])) {
 		if (t != kernel_tasks)
 			free((char *)p);
-		t[TASK_NAME] = 0;
 	}
 	// printf("c4ke: freeing task stack at 0x%lx\n", t[TASK_BASE]);
-	if ((p = (int *)t[TASK_BASE])) {
-		free(p);
-		t[TASK_BASE] = 0;
-	}
-	if ((p = (int *)t[TASK_CODE])) {
-		free(p);
-		t[TASK_CODE] = 0;
-	}
-	if ((p = (int *)t[TASK_DATA])) {
-		free(p);
-		t[TASK_DATA] = 0;
-	}
-	if ((p = (int *)t[TASK_ARGV])) {
-		free((char **)p);
-		t[TASK_ARGV] = 0;
-	}
-	if ((p = (int *)t[TASK_ARGV_DATA])) {
-		free((char *)p);
-		t[TASK_ARGV_DATA] = 0;
-	}
-	if ((p = (int *)t[TASK_SIGHANDLERS])) {
-		free(p);
-		t[TASK_SIGHANDLERS] = 0;
-	}
-	if ((p = (int *)t[TASK_C4R])) {
-		c4r_free(p);
-		t[TASK_C4R] = 0;
-	}
+	if ((p = (int *)t[TASK_BASE])) free(p);
+	if ((p = (int *)t[TASK_CODE])) free(p);
+	if ((p = (int *)t[TASK_DATA])) free(p);
+	if ((p = (int *)t[TASK_ARGV])) free(p);
+	if ((p = (int *)t[TASK_ARGV_DATA])) free((char *)p);
+	if ((p = (int *)t[TASK_SIGHANDLERS])) free(p);
+	if ((p = (int *)t[TASK_C4R])) c4r_free(p);
+	if ((p = (int *)t[TASK_EXTDATA])) free(p);
 	// Mark as unused and clear other state.
-	// TODO: just memset the whole structure to 0?
+	memset(t, 0, sizeof(int) * TASK__Sz);
 	*t = STATE_UNLOADED;
-	t[TASK_ID] = t[TASK_PARENT] = t[TASK_REG_A]  = t[TASK_REG_BP] =
-	             t[TASK_REG_SP] = t[TASK_REG_PC] = t[TASK_ENTRY]  =
-	             t[TASK_PRIVS]  = t[TASK_CYCLES] = t[TASK_TIMEMS] =
-	             t[TASK_ENTRY]  = t[TASK_EXIT_CODE] = t[TASK_TRAPS] =
-	             t[TASK_NICE]   = t[TASK_NICE_BASE] = t[TASK_CYCLES] =
-	             t[TASK_TIMEMS] = t[TASK_SIGPENDING] =
-	             t[TASK_MBOX]   = t[TASK_MBOX_SZ] = t[TASK_MBOX_COUNT] =
-	             t[TASK_WAITSTATE] = t[TASK_WAITARG] = t[TASK_EXCLUSIVE] =
-				 t[TASK_NAMELEN] =
-	             0;
+	//t[TASK_ID] = t[TASK_PARENT] = t[TASK_REG_A]  = t[TASK_REG_BP] =
+	//             t[TASK_REG_SP] = t[TASK_REG_PC] = t[TASK_ENTRY]  =
+	//             t[TASK_PRIVS]  = t[TASK_CYCLES] = t[TASK_TIMEMS] =
+	//             t[TASK_ENTRY]  = t[TASK_EXIT_CODE] = t[TASK_TRAPS] =
+	//             t[TASK_NICE]   = t[TASK_NICE_BASE] = t[TASK_CYCLES] =
+	//             t[TASK_TIMEMS] = t[TASK_SIGPENDING] =
+	//             t[TASK_MBOX]   = t[TASK_MBOX_SZ] = t[TASK_MBOX_COUNT] =
+	//             t[TASK_WAITSTATE] = t[TASK_WAITARG] = t[TASK_EXCLUSIVE] =
+	//			 t[TASK_NAMELEN] =
+	//             0;
 }
 
 static void currenttask_update_name (char *newname) {
@@ -1543,6 +1524,12 @@ static int *start_task_builtin (int *entry, int argc, char **_argv, char *name, 
 		t[TASK_NAME] = (int)"(copy error)";
 	}
 	t[TASK_NAMELEN] = _strlen((char *)t[TASK_NAME]);
+	t[TASK_EXTDATA] = 0;
+	if (kernel_task_extdata_size) {
+		if (!(t[TASK_EXTDATA] = (int)malloc(kernel_task_extdata_size))) {
+			printf("c4ke: Warning: unable to allocate task extended data of %ld bytes\n", kernel_task_extdata_size);
+		}
+	}
 	--kernel_tasks_unloaded;
 	++kernel_tasks_loaded;
 	++kernel_tasks_running;
@@ -2075,6 +2062,8 @@ static int kext_initialize () {
 	kernel_ext_count = 0;
 	kernel_ext_errno = 0;
 	kernel_ext_initialized = 1;
+
+	kernel_task_extdata_size = 0;
 
 	return KXERR_NONE;
 }
@@ -2725,7 +2714,7 @@ static void kernel_finish_tasks () {
 			printf("c4ke: no tasks remaining to terminate\n");
 	} else {
 		kernel_finish_tasks_term();
-    }
+	}
 }
 
 
@@ -2866,6 +2855,18 @@ int main (int argc, char **argv) {
 	// Ensure SIGRTMAX is in range of SIGNAL_MAX
 	if (SIGNAL_MAX < SIGRTMAX)
 		printf("c4ke: WARN: SIGNAL_MAX(%d) < SIGRTMAX(%d)\n", SIGNAL_MAX, SIGRTMAX);
+	// Initialize extensions if not already done
+	// TODO: the return value is not checked
+	kext_initialize();
+	if (kernel_verbosity >= VERB_MED)
+		printf("c4ke: kext_initialize with %d extensions at 0x%lx\n", kernel_ext_count, kernel_extensions);
+	// Run the init functions of extensions
+	// TODO: return value not checked
+	if (kernel_ext_count) {
+		if (kernel_verbosity >= VERB_MED)
+			printf("c4ke: running kernel extensions init for %d extensions...\n", kernel_ext_count);
+		kext_run_all(KEXT_INIT);
+	}
 
 	///
 	// Stage 1: allocate kernel memory
@@ -2887,13 +2888,8 @@ int main (int argc, char **argv) {
 	}
 	memset(kernel_tasks, 0, t);
 	if (kernel_verbosity >= VERB_MED)
-		printf("c4ke: allocated %d (0x%x) bytes for kernel tasks @ 0x%x, %d tasks max, %d bytes per task\n",
-		       t, t, kernel_tasks, KERN_TASK_COUNT, TASK__Sz * sizeof(int));
-	// Initialize extensions if not already done
-	// TODO: the return value is not checked
-	kext_initialize();
-	if (kernel_verbosity >= VERB_MED)
-		printf("c4ke: kext_initialize with %d extensions at 0x%lx\n", kernel_ext_count, kernel_extensions);
+		printf("c4ke: allocated %d (0x%x) bytes for kernel tasks, %d tasks max, %d bytes each, %d bytes ext data\n",
+		       t, t, KERN_TASK_COUNT, TASK__Sz * sizeof(int), kernel_task_extdata_size);
 
 	///
 	// Stage 2: setup opcode handlers
@@ -2941,14 +2937,6 @@ int main (int argc, char **argv) {
 	install_custom_opcode(OP_DEBUG_KERNELSTATE, (int *)&op_debug_kernelstate);
 	install_custom_opcode(OP_KERN_REQUEST_EXCLUSIVE, (int *)&op_request_exclusive);
 	install_custom_opcode(OP_KERN_RELEASE_EXCLUSIVE, (int *)&op_release_exclusive);
-
-	// Run the init functions of extensions
-	// TODO: return value not checked
-	if (kernel_ext_count) {
-		if (kernel_verbosity >= VERB_MED)
-			printf("c4ke: running kernel extensions init for %d extensions...\n", kernel_ext_count);
-		kext_run_all(KEXT_INIT);
-	}
 
 	///
 	// Stage 3: setup tasks
@@ -3004,6 +2992,7 @@ int main (int argc, char **argv) {
 		kernel_task_current[TASK_NAME] = (int)"kernel";
 	}
 	kernel_task_current[TASK_NAMELEN] = _strlen((char *)kernel_task_current[TASK_NAME]);
+	kernel_task_current[TASK_EXTDATA] = 0;
 	++kernel_tasks_loaded;
 	++kernel_tasks_running;
 	if (kernel_verbosity >= VERB_MAX)

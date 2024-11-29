@@ -1163,20 +1163,33 @@ void c4cc_cleanup () {
 
 int c4cc_argc;
 char **c4cc_argv;
+enum { STDIN, STDOUT, STDERR };
 int c4cc_readargs (int argc, char **argv) {
   int poolsz;
   int r, i, fd;
+  int use_stdin;
 
   poolsz = 256 * 1024;
   --argc; ++argv;
   if (argc > 0 && **argv == '-' && (*argv)[1] == 's') { src = 1; --argc; ++argv; }
   if (argc > 0 && **argv == '-' && (*argv)[1] == 'd') { debug = 1; --argc; ++argv; }
-  if (argc < 1) { printf("usage: c4cc [-s] [-d] file ...\n"); return -1; }
+  if (argc < 1) { printf("usage: c4cc [-s] [-d] [-] file ...\n"); return -1; }
 
   //i = 0; printf("(C4CC) Argc: %lld\n", argc); while(i < argc) { printf("(C4CC) argv[%lld] = %s\n", i, *(argv + i)); ++i; }
 
   // Read all specified source files
   r = poolsz - 1;        // track memory remaining
+  use_stdin = **argv == '-' && *(argv + 1) == 0;
+
+  if (use_stdin) {
+		printf("c4cc: Reading from standard input...\n");
+	  if ((i = read(STDIN, p, r)) <= 0) {
+		  printf("c4cc: failed to read from standard input\n");
+		  return -1;
+	  }
+	  p[i] = 0;
+	  --argc; ++argv;
+  } else {
   while (r > 0 && argc >= 1 && **argv && **argv != '-' && *(*argv + 1) != '-') {
     //printf("open(%s) (argc=%lld)\n", *argv, argc);
     if ((fd = open(*argv, 0)) < 0) { printf("could not open(%s)\n", *argv); return -1; }
@@ -1187,6 +1200,7 @@ int c4cc_readargs (int argc, char **argv) {
     r = r - i;
     close(fd);
     --argc; ++argv;
+  }
   }
   // Reset pointer to start of code
   p = _p;

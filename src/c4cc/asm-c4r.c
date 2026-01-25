@@ -133,7 +133,8 @@ int include_symbols, include_static;
 
 int    asmc4r_argc, asmc4r_argv_needsfree;
 char **asmc4r_argv;
-int    asmc4r_opt_source;
+int    asmc4r_opt_source,  // -S    generate source
+       asmc4r_opt_pie;     // -pie  generate position independant code
 
 int asmc4r_parse_commandline (int *_argc, char ***_argv) {
 	int endopts, endopt;
@@ -163,6 +164,11 @@ int asmc4r_parse_commandline (int *_argc, char ***_argv) {
 					}
 					asmc4r_opt_outfile = *argv;
 					endopt = 1;
+				}
+				else if (*arg == 'p' && *(arg + 1) == 'i' && *(arg + 2) == 'e' && *(arg + 3) == 0) asmc4r_opt_pie = 1;
+				else {
+					printf("error: unrecognised option '%s'\n", *argv);
+					return -2;
 				}
 				++arg;
 			}
@@ -218,7 +224,7 @@ int writechecked (int fd, void *buf, int count) {
 #ifndef NO_LOADC4R_MAIN
 #define NO_LOADC4R_MAIN 1
 #endif
-#include "load-c4r.c"
+//#include "load-c4r.c"
 
 int  *asmc4r_e, *asmc4r_le, *asmc4r_e_start;
 
@@ -233,7 +239,8 @@ enum {
 
 enum {
 	LT_CODE = -1,     // Code patch
-	LT_DATA = -2      // Data patch
+	LT_DATA = -2,     // Data patch
+	LT_DROP = -3      // Drop this patch
 };
 
 int *asmc4r_labels, asmc4r_labels_count;
@@ -408,8 +415,11 @@ void asmc4r_InSource_Line (int line, int length, char *s) {
 void asmc4r_PrintAccumulated () {
 	if (asmc4r_opt_source) {
         while (asmc4r_le < asmc4r_e) {
-          printf("%8.4s", &c4cc_instructions[*++asmc4r_le * 5]);
-          if (*asmc4r_le <= ADJ) printf(" %d\n", *++asmc4r_le); else printf("\n");
+		  ++asmc4r_le;
+			printf("%8.4s", &c4cc_instructions[*asmc4r_le * 5]);
+		    if (*asmc4r_le <= ADJ || *asmc4r_le == JSRS || *asmc4r_le == JSRI) printf(" %ld\n", *++asmc4r_le); else printf("\n");
+          //printf("%8.4s", &c4cc_instructions[*++asmc4r_le * 5]);
+          //if (*asmc4r_le <= ADJ) printf(" %d\n", *++asmc4r_le); else printf("\n");
         }
 	}
 }
@@ -477,10 +487,10 @@ void asmc4r_dump_symbol_to_file (int fd, int *d, int id) {
 
 	// Find symbol name and length
 	strc_a = strc_b = (char *) d[Name];
-	while ((*strc_b >= 'a' && *strc_b <= 'z') ||
+	while (strc_b && ((*strc_b >= 'a' && *strc_b <= 'z') ||
 		   (*strc_b >= 'A' && *strc_b <= 'Z') ||
 		   (*strc_b >= '0' && *strc_b <= '9') ||
-		    *strc_b == '_') {
+		    *strc_b == '_')) {
 		++strc_b;
 	}
 
@@ -490,6 +500,7 @@ void asmc4r_dump_symbol_to_file (int fd, int *d, int id) {
 	writechecked(fd, &d[Class], sizeof(int));  // Class
 	writechecked(fd, &d[Attr], sizeof(int));   // Attributes
 	tmp = strc_b - strc_a; writechecked(fd, &tmp, 1); // NameLen
+	// TODO: symbols end up unaligned, need to write strings with padding.
 	writechecked(fd, strc_a, strc_b - strc_a); // Name
 	// TODO: check type, function, etc, output adjusted value
 	// Value
@@ -536,6 +547,12 @@ void dump_to_file (char *file) {
 	writechecked(fd, "C4R", 3);       // Signature
 	writechecked(fd, &version, 1);    // Version
 	writechecked(fd, &wordbits, 1);   // WordBits
+	// Padding
+	// var aligned = ((adj_ptr + (alignment - 1)) & ~(alignment - 1));
+	tmp = ((5 + 3)) & ~(3);
+	i = sizeof(int) - 1;
+	tmp = (5 + i) & ~i;
+	while (tmp--) writechecked(fd, "p", 1); // for padding
 	tmp = idmain[emit_Val];
 	if (tmp) {                        // Has a main()
 		tmp = (int *)tmp - asmc4r_e_start;
@@ -557,14 +574,14 @@ void dump_to_file (char *file) {
 	tmp = destructor_count; writechecked(fd, &tmp, sizeof(int));
 
 	// Code
-	writechecked(fd, "C", 1);
+	writechecked(fd, "C\0\0\0\0\0\0\0", sizeof(int));
 	writechecked(fd, asmc4r_e_start, sizeof(int) * (1 + asmc4r_e - asmc4r_e_start));
 	// printf("Wrote %d bytes of code\n", 1 + asmc4r_e - asmc4r_e_start);
 	// Data
-	writechecked(fd, "D", 1);
+	writechecked(fd, "D\0\0\0\0\0\0\0", sizeof(int));
 	writechecked(fd, data_s, data - data_s);
 	// Patches
-	writechecked(fd, "P", 1);
+	writechecked(fd, "P\0\0\0\0\0\0\0", sizeof(int));
 	i = 0; lbl = asmc4r_labels;
 	// printf("Writing %d patches at 0x%lX...", asmc4r_labels_count, writeoffset); fflush(stdout);
 	while (i < asmc4r_labels_count) {
@@ -581,7 +598,7 @@ void dump_to_file (char *file) {
 	// printf("wrote %d records\n", i);
 	// Constructors
 	// printf("Writing constructors at 0x%lX\n", writeoffset);
-	writechecked(fd, "c", 1);
+	writechecked(fd, "c\0\0\0\0\0\0\0", sizeof(int));
 	i = 0; d = idmain;
 	while (d[Tk]) {
 		if (d[Attr] & ATTR_CONSTRUCTOR) {
@@ -598,7 +615,7 @@ void dump_to_file (char *file) {
 	}
 	// Destructors
 	// printf("Writing destructors at 0x%lX\n", writeoffset);
-	writechecked(fd, "d", 1);
+	writechecked(fd, "d\0\0\0\0\0\0\0", sizeof(int));
 	i = 0; d = idmain;
 	while(d[Tk]) {
 		if (d[Attr] & ATTR_DESTRUCTOR) {
@@ -614,7 +631,7 @@ void dump_to_file (char *file) {
 	}
 	// Symbols
 	// printf("Writing %d symbols at 0x%lX...", symbol_count, writeoffset); fflush(stdout);
-	writechecked(fd, "S", 1);
+	writechecked(fd, "S\0\0\0\0\0\0\0", sizeof(int));
 	i = 0; d = idstart;
 	while (d[Tk]) {
 		if (d[Class]) {
@@ -770,6 +787,7 @@ int asmc4r_main (int argc, char **argv) {
 	// TODO: make a flag
 	include_static  = 1;
 	asmc4r_opt_source = 0;
+	asmc4r_opt_pie = 1;
 	//src = 0; // don't allow src output
 
 	if ((i = asmc4r_parse_commandline(&argc, &argv)))

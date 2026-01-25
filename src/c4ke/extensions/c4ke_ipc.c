@@ -212,7 +212,7 @@ static void receiver_sigio () {
 }
 
 // TODO: this signature is needed to get access to the ipc_setup_signal number, but it's ugly.
-static void receiver_sigrt (int sig, int a, int b, int c, int d) {
+static void receiver_sigrt (int sig, int mode, int a, int b, int c, int d) {
 	int word;
 	if (receiver_mode != RM_WAITWORD)
 		printf("ipc1: error, SIGRTMIN+%d encountered when mode (%d) != WAITWORD\n", receiver_mode);

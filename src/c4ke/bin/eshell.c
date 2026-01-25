@@ -65,6 +65,8 @@ static int   last_pid;
 static int   enable_ps_on_wait;
 static int   ps_interval;
 
+int eshell_in_init;
+
 static char *strcpycat (char *source, char *append) {
 	int length, slen, alen;
 	char *buffer, *s, *d;
@@ -552,10 +554,11 @@ void sig_start_failure () {
 }
 
 int eshell_main (int argc, char **argv) {
-	currenttask_update_name("eshell");
+	if (eshell_in_init) currenttask_update_name("init/eshell (builtin)");
+	else currenttask_update_name("eshell");
 
 	// Banner
-	version = "0.2";
+	version = "0.20";
 	printf("\nc4ke emergency shell v %s\nType help for command list\n", version);
 
 	// Initialization

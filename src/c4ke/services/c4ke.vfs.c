@@ -62,7 +62,7 @@ int main (int argc, char **argv) {
 	while(run) {
 		// wait for a message...
 		if ((msg = await_message(MSG_TIMEOUT))) {
-			printf("vfs%d: got message addr 0x%x\n", instance, msg);
+			// printf("vfs%d: got message addr 0x%x\n", instance, msg);
 		} else {
 			// printf("vfs%d: message timeout\n", instance);
 		}

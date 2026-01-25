@@ -1,39 +1,41 @@
 //
-// C4PRE Sample: string.h
-// Here would be string.
+// C4 Standard Library: string.h
 //
 
-#ifndef __STDRING_H
-#define __STDRING_H 1    // Use a value
+#ifndef __STDSTRING_H
+#define __STDSTRING_H 1
 
-#ifndef C4CC
-#include </usr/include/string.h>
+#ifndef __c4cc__
+#include_next <string.h>
+// Rename to prevent gcc warnings
+#define strlen renamed_strlen
+int strlen(char *);
 #undef strlen
 #define strlen c4_strlen
-#define memcpy c4_memcpy
-#define memmove c4_memmove
-#endif
+//#define memcpy c4_memcpy
+//#define memmove c4_memmove
+#else /* ifndef __c4cc__ */
 
 static int strlen (char *s) { int i; i = 0; while (*s++) ++i; return i; }
-static void *memcpy (void *source, void *dest, int length) {
-	int   i;
-	int  *is, *id;
-	char *cs, *cd;
-
-	i = 0;
-	if((int)dest   % sizeof(int) == 0 &&
-	   (int)source % sizeof(int) == 0 &&
-	   length % sizeof(int) == 0) {
-		is = source; id = dest;
-		length = length / sizeof(int);
-		while (i < length) { id[i] = is[i]; ++i; }
-	} else {
-		cs = source; cd = dest;
-		while (i < length) { cd[i] = cs[i]; ++i; }
-	}
-
-	return dest;
-}
+// static void *memcpy (void *source, void *dest, int length) {
+// 	int   i;
+// 	int  *is, *id;
+// 	char *cs, *cd;
+// 
+// 	i = 0;
+// 	if((int)dest   % sizeof(int) == 0 &&
+// 	   (int)source % sizeof(int) == 0 &&
+// 	   length % sizeof(int) == 0) {
+// 		is = source; id = dest;
+// 		length = length / sizeof(int);
+// 		while (i < length) { id[i] = is[i]; ++i; }
+// 	} else {
+// 		cs = source; cd = dest;
+// 		while (i < length) { cd[i] = cs[i]; ++i; }
+// 	}
+// 
+// 	return dest;
+// }
 static void *memmove (void *source, void *dest, int length) {
 	int   i;
 	int  *is, *id;
@@ -56,8 +58,6 @@ static void *memmove (void *source, void *dest, int length) {
 
 	return dest;
 }
-// Rename to prevent gcc warnings
-#define strlen renamed_strlen
-int strlen(char *);
 
-#endif
+#endif /* ifndef __c4cc__ */
+#endif /* ifndef __STDSTRING_H */

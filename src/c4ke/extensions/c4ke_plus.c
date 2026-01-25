@@ -1,7 +1,7 @@
 // C4KE Extension: Plus
 // Adds support for the advanced features c4plus supports.
 
-#include "c4ke_extension.h"
+#include <c4ke/extension.h>
 
 static int plus_enabled;
 

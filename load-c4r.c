@@ -461,12 +461,14 @@ int *c4r_load_opt_real (char *file, int options) {
 					++i;
 					target = target + C4R_PAT__Sz;
 
-					if (0 && c4r_verbose && __time() - p >= 1000) {
-						// Only print every 1s max
-                        percent = (i * 100) / loop_target;
-                        printf("lc4r: %d%% patched...\n", percent);
-                        p = __time();
-					}
+					// Whole section disabled (not too useful anyway)
+					//
+					// if (0 && c4r_verbose && __time() - p >= 1000) {
+					//	// Only print every 1s max
+                    //    percent = (i * 100) / loop_target;
+                    //    printf("lc4r: %d%% patched...\n", percent);
+                    //    p = __time();
+					// }
 
 				}
 				if (c4r_verbose)

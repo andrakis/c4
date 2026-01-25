@@ -9,21 +9,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <memory.h>
+#include <unistd.h>
 #include <fcntl.h>
 
-#ifdef __GNUC__
-#include <unistd.h>
-#else
-#if _WIN64
-#define __INTPTR_TYPE__ long long
-#elif _WIN32
-#define __INTPTR_TYPE__ int
-#endif // if _WIN64
-#endif // ifdef __GNUC__
-#pragma GCC diagnostic ignored "-Wformat"
+#ifndef INT_TYPE
+#define INT_TYPE long
+#endif
 
-// Please define this for your architecture if required.
-#define int __INTPTR_TYPE__
+#ifndef int
+#define int INT_TYPE
+#endif
 
 char *p, *lp, // current position in source code
      *data;   // data/bss pointer
@@ -47,7 +42,7 @@ enum {
 };
 
 // opcodes
-enum { LEA ,IMM ,JMP ,JSR ,JSRI,JSRS,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,
+enum { LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,
        OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,
        OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,EXIT };
 
@@ -68,9 +63,9 @@ void next()
         printf("%d: %.*s", line, p - lp, lp);
         lp = p;
         while (le < e) {
-          printf("%8.4s", &"LEA ,IMM ,JMP ,JSR ,JSRI,JSRS,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,"
+          printf("%8.4s", &"LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,"
                            "OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,"
-                           "OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,EXIT"[*++le * 5]);
+                           "OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,EXIT,"[*++le * 5]);
           if (*le <= ADJ) printf(" %d\n", *++le); else printf("\n");
         }
       }
@@ -171,9 +166,7 @@ void expr(int lev)
       next();
       if (d[Class] == Sys) *++e = d[Val];
       else if (d[Class] == Fun) { *++e = JSR; *++e = d[Val]; }
-      else if (d[Class] == Glo) { *++e = JSRI; *++e = d[Val]; } // Jump subroutine indirect
-      else if (d[Class] == Loc) { *++e = JSRS; *++e = loc - d[Val]; } // Jump subroutine on stack
-      else { printf("%d: bad function call (%d)\n", line, d[Class]); exit(-1); }
+      else { printf("%d: bad function call\n", line); exit(-1); }
       if (t) { *++e = ADJ; *++e = t; }
       ty = d[Type];
     }
@@ -181,7 +174,6 @@ void expr(int lev)
     else {
       if (d[Class] == Loc) { *++e = LEA; *++e = loc - d[Val]; }
       else if (d[Class] == Glo) { *++e = IMM; *++e = d[Val]; }
-      else if (d[Class] == Fun) { *++e = IMM; *++e = d[Val]; } // Function address
       else { printf("%d: undefined variable\n", line); exit(-1); }
       *++e = ((ty = d[Type]) == CHAR) ? LC : LI;
     }
@@ -341,19 +333,15 @@ void stmt()
   }
   else {
     expr(Assign);
-    if (tk == ';') next(); else { printf("%d: semicolon expected (tk: '%c')\n", line, tk); exit(-1); }
+    if (tk == ';') next(); else { printf("%d: semicolon expected\n", line); exit(-1); }
   }
 }
 
 int main(int argc, char **argv)
 {
   int fd, bt, ty, poolsz, *idmain;
-  int *pc, *sp, *bp, a, cycle, run, status; // vm registers
+  int *pc, *sp, *bp, a, cycle; // vm registers
   int i, *t; // temps
-  char *_p, *_data;       // initial pointer locations
-  int  *_sym, *_e, *_sp;  // initial pointer locations
-
-  //i = 0; printf("(C4) Argc: %lld\n", argc); while(i < argc) { printf("(C4) argv[%lld] = %s\n", i, *(argv + i)); ++i; }
 
   --argc; ++argv;
   if (argc > 0 && **argv == '-' && (*argv)[1] == 's') { src = 1; --argc; ++argv; }
@@ -363,10 +351,10 @@ int main(int argc, char **argv)
   if ((fd = open(*argv, 0)) < 0) { printf("could not open(%s)\n", *argv); return -1; }
 
   poolsz = 256*1024; // arbitrary size
-  if (!(sym = _sym = malloc(poolsz))) { printf("could not malloc(%d) symbol area\n", poolsz); return -1; }
-  if (!(le = e = _e = malloc(poolsz))) { printf("could not malloc(%d) text area\n", poolsz); return -1; }
-  if (!(data = _data = malloc(poolsz))) { printf("could not malloc(%d) data area\n", poolsz); return -1; }
-  if (!(sp = _sp = malloc(poolsz))) { printf("could not malloc(%d) stack area\n", poolsz); return -1; }
+  if (!(sym = malloc(poolsz))) { printf("could not malloc(%d) symbol area\n", poolsz); return -1; }
+  if (!(le = e = malloc(poolsz))) { printf("could not malloc(%d) text area\n", poolsz); return -1; }
+  if (!(data = malloc(poolsz))) { printf("could not malloc(%d) data area\n", poolsz); return -1; }
+  if (!(sp = malloc(poolsz))) { printf("could not malloc(%d) stack area\n", poolsz); return -1; }
 
   memset(sym,  0, poolsz);
   memset(e,    0, poolsz);
@@ -379,7 +367,7 @@ int main(int argc, char **argv)
   next(); id[Tk] = Char; // handle void type
   next(); idmain = id; // keep track of main
 
-  if (!(lp = p = _p = malloc(poolsz))) { printf("could not malloc(%d) source area\n", poolsz); return -1; }
+  if (!(lp = p = malloc(poolsz))) { printf("could not malloc(%d) source area\n", poolsz); return -1; }
   if ((i = read(fd, p, poolsz-1)) <= 0) { printf("read() returned %d\n", i); return -1; }
   p[i] = 0;
   close(fd);
@@ -479,9 +467,6 @@ int main(int argc, char **argv)
     next();
   }
 
-  // free source
-  free(_p);
-
   if (!(pc = (int *)idmain[Val])) { printf("main() not defined\n"); return -1; }
   if (src) return 0;
 
@@ -494,14 +479,12 @@ int main(int argc, char **argv)
   *--sp = (int)t;
 
   // run...
-  run = 1;
   cycle = 0;
-  status = 0;
-  while (run) {
+  while (1) {
     i = *pc++; ++cycle;
     if (debug) {
-      printf("%d> %.4s", cycle,
-        &"LEA ,IMM ,JMP ,JSR ,JSRI,JSRS,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,"
+      printf("PC=%p SP=%p BP=%p %d> %.4s", pc - 1, sp, bp, cycle,
+        &"LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,"
          "OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,"
          "OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,EXIT,"[i * 5]);
       if (i <= ADJ) printf(" %d\n", *pc); else printf("\n");
@@ -510,8 +493,6 @@ int main(int argc, char **argv)
     else if (i == IMM) a = *pc++;                                         // load global address or immediate
     else if (i == JMP) pc = (int *)*pc;                                   // jump
     else if (i == JSR) { *--sp = (int)(pc + 1); pc = (int *)*pc; }        // jump to subroutine
-    else if (i == JSRI) { *--sp = (int)(pc + 1); pc = (int *)*pc; pc = (int *)*pc;}  // jump to subroutine indirect
-    else if (i == JSRS) { *--sp = (int)(pc + 1); pc = (int*)*(bp + *pc++); }  // jump to subroutine indirect on stack
     else if (i == BZ)  pc = a ? pc + 1 : (int *)*pc;                      // branch if zero
     else if (i == BNZ) pc = a ? (int *)*pc : pc + 1;                      // branch if not zero
     else if (i == ENT) { *--sp = (int)bp; bp = sp; sp = sp - *pc++; }     // enter subroutine
@@ -548,16 +529,7 @@ int main(int argc, char **argv)
     else if (i == FREE) free((void *)*sp);
     else if (i == MSET) a = (int)memset((char *)sp[2], sp[1], *sp);
     else if (i == MCMP) a = memcmp((char *)sp[2], (char *)sp[1], *sp);
-    else if (i == EXIT) { printf("exit(%d) cycle = %d\n", *sp, cycle); status = *sp; run = 0; }
-    else { printf("unknown instruction = %d! cycle = %d\n", i, cycle); status = -1; run = 0; }
+    else if (i == EXIT) { printf("exit(%d) cycle = %d\n", *sp, cycle); return *sp; }
+    else { printf("unknown instruction = %d! cycle = %d\n", i, cycle); return -1; }
   }
-
-  // free memory
-  free(_sym);
-  free(_e);
-  free(_data);
-  free(_sp);
-
-  return status;
 }
-

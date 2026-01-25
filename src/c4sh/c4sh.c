@@ -33,9 +33,9 @@
 #include "c4.h"
 #include "c4m.h"
 
-#include "u0.c"
+#include "u0.h"
 #define PS_NOMAIN 1
-#include "ps.c"
+#include "c4ke/bin/ps.c"
 
 // Streams
 enum { STDIN, STDOUT, STDERR };
@@ -143,6 +143,7 @@ static int streq (char *a, char *b) {
 
 ///
 // Memcpy and memmove implementations
+// TODO: arguments are not in usual order!
 ///
 static void *sh_memcpy (void *source, void *dest, int length) {
 	int   i;
@@ -285,6 +286,7 @@ int c4sh_builtin_init () {
 	return CR_OK;
 }
 
+// This sort function is incorrectly implemented, but just about works
 void c4sh_builtin_sort () {
 	int a, b, bytes, maxA, maxB, *first, *second;
 	char *s1, *s2;
@@ -377,7 +379,7 @@ void builtin_usage (int *builtin, char *argv0) {
 ///
 // Shell functions
 ///
-static int read_user_input () {
+static int read_user_input_stream () {
 	// Copy previous user input
 	//printf("Saving previous user input: %d '%s'\n", user_input_len, user_input);
 	//memcpy(prev_input, user_input, BUFFER_SZ);
@@ -405,6 +407,102 @@ static int read_user_input () {
 		//       *(user_input + 1), *(user_input + 2));
 	}
 	return user_input_len != 0;
+}
+
+#ifdef O_RDONLY
+#undef O_RDONLY
+#endif
+#ifdef O_NONBLOCK
+#undef O_NONBLOCK
+#endif
+enum {
+	O_RDONLY = 0,
+	O_NONBLOCK = 0x800
+};
+enum {
+	RUIS_BUFFER_SZ = 100,  // Size of read buffer
+	RUIS_ENTRY_SZ = 30000, // Size of user input allowed
+};
+enum {
+	RUIS_AWAIT, // Awaiting input
+	RUIS_DONE,  // Done
+};
+enum {
+	KEY_RETURN = 10,
+	KEY_LINEFEED = 13
+};
+enum {
+	// 1, 2, 4, 16, 32, 64, 128, 256, 512, 1024
+	// 1  2  3   4   5   6    7    8    9    10
+	RUIS_SLEEP_INTERVAL_MAX = 500
+};
+static int read_user_input_stdin () {
+	int fd, bytes, b, bytes_total, state, pos, sleep_interval;
+	char *read_buf, *user_buf, *p, c;
+
+	c4ke_set_focus(pid());
+
+	if ((fd = open("/dev/stdin", O_RDONLY | O_NONBLOCK)) == -1) {
+		printf("read_user_input_stdin(): failed to open /dev/stdin\n");
+		return -1;
+	}
+
+	if (!(read_buf = malloc(RUIS_BUFFER_SZ))) {
+		close(fd);
+		printf("read_user_input_stdin(): failed to allocate read buffer\n");
+		return 0;
+	}
+	if (!(user_buf = malloc(RUIS_ENTRY_SZ))) {
+		close(fd);
+		free(read_buf);
+		printf("read_user_input_stdin(): failed to allocate input buffer\n");
+		return 0;
+	}
+
+	bytes_total = pos = 0;
+	sleep_interval = 1;
+	state = RUIS_AWAIT;
+
+	while (state != RUIS_DONE) {
+		// printf("   (reading)\n");
+		bytes = read(fd, read_buf, RUIS_BUFFER_SZ - 1);
+		// printf("   (done)\n");
+		if (bytes > 0) {
+			// process input
+			p = read_buf;
+			while (bytes && state != RUIS_DONE) {
+				if ((c = *p) == KEY_RETURN || c == KEY_LINEFEED)
+					state = RUIS_DONE;
+				else {
+					// printf("(key code for '%c': %ld)\n", c, c);
+					// putchar(c);
+					user_buf[pos++] = c;
+					// printf("  (user_buf: %s)\n", user_buf);
+				}
+				--bytes;
+				++p;
+			}
+			if (pos > bytes_total) bytes_total = pos;
+			sleep_interval = 1;
+		} else {
+			// No key available
+			if ((sleep_interval = sleep_interval * 2) > RUIS_SLEEP_INTERVAL_MAX)
+				sleep_interval = RUIS_SLEEP_INTERVAL_MAX;
+			// printf("  (sleep %ld)\n", sleep_interval * 2);
+			sleep(sleep_interval);
+		}
+	}
+
+	user_buf[bytes_total++] = 0; // trailing nul
+	sh_memcpy(user_buf, user_input, bytes_total);
+	//printf("Captured user input: %ld bytes '%.*s'\n", bytes_total, bytes_total, user_buf);
+	//printf("  (user_buf: %s)\n", user_buf);
+
+	close(fd);
+	free(user_buf);
+	free(read_buf);
+
+	return bytes_total;
 }
 
 enum { TAB = 9 };
@@ -619,10 +717,16 @@ void sig_start_failure () {
 	// ignore
 }
 
+enum { INPUT_STDIN, INPUT_STREAM };
+
 int main (int argc, char **argv) {
+	int input_source, bytes_read;
+
+	input_source = INPUT_STDIN;
+
 	// Print banner before initialization for slow computers
-	version = "0.1";
-	printf("\nC4SH - The C4 SHell v %s\nType help for command list\n", version);
+	version = "0.1a";
+	printf("\nC4SH - The C4 SHell v %s\nType help for command list, and \\q to quit\n", version);
 
 	// Initialization
 	currenttask_update_name("C4SH");
@@ -669,20 +773,30 @@ int main (int argc, char **argv) {
 	user_prompt = "c4sh>\n"; // Newline required to flush buffer
 	exit_code = 0;
 	c4ke_set_focus(pid());
+	input_source = INPUT_STDIN; // or INPUT_STREAM
+	// debugging: spawn top so we can see whats happening
+	// kern_user_exec("top");
 
 	// Shell loop
 	while(shell_mode != SH_EXIT) {
 		if(shell_mode == SH_LOOP) {
 			// Prompt for more input
 			printf(user_prompt);
-			if(read_user_input()) {
-				// Call schedule() first so that other task output displays
-				schedule();
-				act_on_user_input();
+			bytes_read = (input_source == INPUT_STDIN ?
+				read_user_input_stdin() : read_user_input_stream());
+			if (bytes_read == -1 && input_source == INPUT_STDIN) {
+				input_source = INPUT_STREAM;
+				bytes_read = 0; // try again
 			} else {
-				// CTRL+D or end of stream
-				printf("c4sh: Lost input stream\n");
-				shell_mode = SH_EXIT;
+				if(bytes_read) {
+					// Call schedule() first so that other task output displays
+					schedule();
+					act_on_user_input();
+				} else {
+					// CTRL+D or end of stream
+					printf("c4sh: Lost input stream\n");
+					shell_mode = SH_EXIT;
+				}
 			}
 		} else if(shell_mode == SH_PROC) {
 			// Allow spawned processes to run

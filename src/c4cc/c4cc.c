@@ -8,20 +8,26 @@
 // implementation needs to do is provide a few emit handler callback functions,
 // and update an emit handler table to point to these.
 //
-// New keywords:
+// Supported extra keywords:
 //   extern
 //   static
-//   __attribute__(constructor)
-//   __attribute__(destructor)
-// 
-// Example invocation:
-// Using c4m, the multiloader:
-//   ./c4 c4m.c c4cc.c asm-c4.c -- -s factorial.c
-//   ./c4 c4m.c c4cc.c asm-js.c -- factorial.c > factorial.js && node factorial.js
-// Using the compiled version: (run make)
-//   ./c4r factorial.c
-//   (Outputs to a.c4r)
+//   __attribute__((constructor))
+//   __attribute__((destructor))
 //
+// Example invocation:
+// Using the compiled version: (run make)
+//   ./c4cc src/tests/factorial.c              (Outputs to a.c4r)
+//   ./c4cc -o fac.c4r src/tests/factorial.c   (Outputs to fac.c4r)
+//   Using a preprocessor: (makes use of - argument to read from stdin)
+//   gcc -E -DC4CC=1 -Iinclude src/tests/vararg.h | ./c4cc -o vararg.c4r -
+//
+// 2026/01/05: Added 'for'
+// 2026/01/03: Added 'continue' for while loops
+// 2025/05/19: variadic functions now supported:
+//             int some_func (int count, ...) { ... }
+//             include/stdarg.h has been implemented to support this.
+// 2025/05/07: compound statements now supported:
+//             a = (some_update(), some_return_value);
 // 2024/08/02: finally printing out the statement causing the error, as well as
 //             where in the line the error is.
 //
@@ -46,8 +52,11 @@
 #include <memory.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <string.h>
 
 #include "c4.h"
+#define NO_LOADC4R_MAIN 1
+#include "load-c4r.c"
 
 int *idstart, *idmain;
 char *p, *lp, // current position in source code
@@ -55,6 +64,7 @@ char *p, *lp, // current position in source code
      *data_s; // data start
 char *c4cc_instructions; // Instructions as a char*
 int  *c4cc_emithandlers; // Instruction emit handlers (see EH_*)
+char *make_va_function;
 
 int *e, *le,  // current position in emitted code
     *id,      // currently parsed identifier
@@ -72,6 +82,8 @@ char *_p, *_data;       // initial pointer locations
 int  *_sym, *_e, *_sp;  // initial pointer locations
 int  *_oisc4_e;
 int   c4cc_initialized;
+
+int *curr_continue;        // Marks current begin of while loop
 
 // Original C4 doesn't recognise \t
 enum { TAB = 9 };
@@ -98,6 +110,11 @@ enum {
     // External, resolved by linker. Default for functions with no body.
     // Turned into code patches
     ATTR_EXTERN      = 0x10,
+    // Variadic function. Argument count is pushed onto the stack, and a
+    // call to __c4cc_make_va is issued (see include/stdarg.h), as well
+    // as some minor other instructions, such that extra arguments may be
+    // accessed in the usual stdarg way, via va_arg and such macros.
+    ATTR_VARIADIC    = 0x20,
 };
 
 // tokens and classes (operators last and in precedence order)
@@ -106,35 +123,85 @@ enum {
   Num = 128, Fun, Sys, Glo, Loc, Id,
   // Keywords and attributes
   Static, Extern, Attribute, Constructor, Destructor,
-  Char, Else, Enum, If, Int, Return, Sizeof, While,
+  Char, Else, Enum, If, Int, Return, Sizeof, For, Continue, While,
   // Operators
-  Assign, Cond, Lor, Lan, Or, Xor, And, Eq, Ne, Lt, Gt, Le, Ge, Shl, Shr, Add, Sub, Mul, Div, Mod, Inc, Dec, Brak
+  Assign, Cond, Lor, Lan, Or, Xor, And, Eq, Ne, Lt, Gt, Le, Ge, Shl, Shr, Add, Sub, Mul, Div, Mod, Inc, Dec, Brak,
 };
 
 char *c4cc_keywords;
 
 // opcodes
-enum { LEA ,IMM ,JMP ,JSR ,JSRI,JSRS,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,
-       JMPA,TLEV,
-       OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,
-       OPEN,READ,CLOS,PRTF,MALC,RALC,FREE,MSET,MCMP,MCPY,STRC,ITH ,_OPC,_BLT,_TRP,
-	   OPCD,_JMP,_ADJ,CSYS,C4CY,TIME,SIGH,SIGI,USLP,INFO,OPSL,
-	   EXIT };
+//enum { LEA ,IMM ,JMP ,JSR ,JSRI,JSRS,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,
+//       JMPA,TLEV,DBG ,
+//       OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,
+//       OPEN,READ,CLOS,PUTC,PUTS,PRTF,MALC,RALC,FREE,MSET,MCMP,MCPY,STRC,ITH ,_OPC,_BLT,
+//	   _TRP,OPCD,_JMP,_ADJ,C4CF,C4CY,TIME,SIGH,SIGI,USLP,INFO,OPSL,FLT ,
+//	   EXIT,
+//	 };
+//enum {
+//	// Opcodes
+//	LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,
+//	OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,
+//	// Syscalls
+//	OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,EXIT,
+//	// C4M Extended opcodes
+//	PUTC,PUTS,RALC,MCPY,STRC,
+//	ITH ,_OPC,_BLT,_TRP,OPCD,
+//	_JMP,_ADJ,C4CF,C4CY,TIME,
+//	SIGH,SIGI,USLP,INFO,OPSL,
+//	// C4 Invoke: call a section of code as if it were a C4 function
+//	C4IV,
+//	// Unsupported float instruction
+//	FLT ,
+//	// Instructions
+//	JSRI,JSRS,JMPA,TLEV,DBG ,
+//	// End of instructions
+//	INS_SIZE,
+//};
 void c4cc_init_instructions() {
 	c4cc_instructions = 
-	   "LEA ,IMM ,JMP ,JSR ,JSRI,JSRS,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,"
-       "JMPA,TLEV,"
-	   "OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,"
-	   "OPEN,READ,CLOS,PRTF,MALC,RALC,FREE,MSET,MCMP,MCPY,STRC,ITH ,_OPC,_BLT,_TRP,"
-	   "OPCD,_JMP,_ADJ,CSYS,C4CY,TIME,SIGH,SIGI,USLP,INFO,OPSL,"
-	   "EXIT,";
-	c4cc_keywords = "static extern __attribute__ constructor destructor "
-      "char else enum if int return sizeof while "
-      "open read close printf malloc realloc free memset memcmp memcpy stacktrace "
-      "install_trap_handler __opcode __builtin __c4_trap __c4_opcode "
-      "__c4_jmp __c4_adjust __c4_configure __c4_cycles __time __c4_signal __c4_sigint "
-	  "__c4_usleep __c4_info __c4_ops_list "
-	  "exit void main";
+//	   "LEA ,IMM ,JMP ,JSR ,JSRI,JSRS,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,"
+//       "JMPA,TLEV,DBG ,"
+//	   "OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,"
+//	   "OPEN,READ,CLOS,PUTC,PUTS,PRTF,MALC,RALC,FREE,MSET,MCMP,MCPY,STRC,ITH ,_OPC,_BLT,"
+//	   "_TRP,OPCD,_JMP,_ADJ,C4CF,C4CY,TIME,SIGH,SIGI,USLP,INFO,OPSL,FLT ,"
+//	   "EXIT,";
+	// Opcodes
+	"LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,"
+	"OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,"
+	// Syscalls
+	"OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,EXIT,"
+	// C4M Extended opcodes
+	"PUTC,PUTS,RALC,MCPY,STRC,"
+	"ITH ,_OPC,_BLT,_TRP,OPCD,"
+	"_JMP,_ADJ,C4CF,C4CY,TIME,"
+	"SIGH,SIGI,USLP,INFO,OPSL,"
+	// C4 Invoke: call a section of code as if it were a C4 function
+	"C4IV,"
+	// Unsupported float instruction
+	"FLT ,"
+	// Instructions
+	"JSRI,JSRS,JMPA,TLEV,DBG ,";
+	c4cc_keywords =
+		"static extern __attribute__ constructor destructor "     // Ignored by c4m
+		"char else enum if int return sizeof for continue while " // Keywords
+		"open read close printf malloc free memset memcmp exit "  // Syscalls
+		"putchar puts realloc memcpy stacktrace "                 // C4M extended opcodes...
+		"install_trap_handler __opcode __builtin __c4_trap __c4_opcode "
+		"__c4_jmp __c4_adjust __c4_configure __c4_cycles __time __c4_signal __c4_sigint "
+		"__c4_usleep __c4_info __c4_ops_list "
+		// C4 Invoke
+		"__c4_invoke "
+		// Future use: floating point support
+		"__c4_float "
+		"void main";                                             // void type and main entry
+//	"static extern __attribute__ constructor destructor "
+//      "char else enum if int return sizeof while "
+//      "open read close putchar puts printf malloc realloc free memset memcmp memcpy stacktrace "
+//      "install_trap_handler __opcode __builtin __c4_trap __c4_opcode "
+//      "__c4_jmp __c4_adjust __c4_configure __c4_cycles __time __c4_signal __c4_sigint "
+//	  "__c4_usleep __c4_info __c4_ops_list __c4_float "
+//	  "exit void main";
 }
 
 // emit handlers
@@ -153,8 +220,8 @@ enum { CHAR, INT, PTR };
 
 // identifier offsets (since we can't create an ident struct)
 enum { Tk, Hash, Name,
-       Class, Type, Val, emit_Val, Attr, emit_Length,
-       HClass, HType, HVal, Hemit_Val, HAttr, Hemit_Length,
+       Class, Type, Val, emit_Val, Attr, emit_Length, ArgCount,
+       HClass, HType, HVal, Hemit_Val, HAttr, Hemit_Length, HArgCount,
        Idsz = 16 // TODO: Some values don't work
 };
 
@@ -182,13 +249,23 @@ int symbol_id (int *d) {
 	return (d - idstart) / Idsz;
 }
 
+// Test if given character is a valid c variable name
+int iscvariable (char b) {
+  return (
+    (b >= 'a' && b <= 'z') ||
+    (b >= 'A' && b <= 'Z') ||
+    (b >= '0' && b <= '9') ||
+     b == '_');
+}
+
 /////
 // Emitters
 /////
 
 void C4CC_PrintAccC4 () {
   while (le < e) {
-    printf("%8.4s", &c4cc_instructions[*++le * 5]);
+    ++le;
+    printf("%8.4s", &c4cc_instructions[*le * 5]);
     if (*le <= ADJ) printf(" %llx\n", *++le); else printf("\n");
   }
 }
@@ -416,32 +493,46 @@ char* c4cc_itoa(int value, char* buffer, int base)
 	return c4cc_reverse(buffer, 0, i - 1);
 }
 
-// 
+// Cause the compiler to exit, printing out the (possibly partial) statement
+// that caused the error, with arrows (<-, ^) pointing to where the problem
+// was encountered.
 void die (int exit_code) {
 	char *c, *e;
 	int   l;
-	c = line_start;
-	printf("%.*s", statement_start - line_start, line_start);
-	// Print out the statement that caused the error
+	// also uses global char *p, current position in source code
+
 	c = statement_start;
 	l = statement_start - line_start;
+
+	// Print out the part not causing the issue (may be nothing)
+	printf("%.*s", statement_start - line_start, line_start);
+	// Print out the statement that caused the error
 	printf("%.*s", p - c, c);
-	// printf("(would print %d bytes", p - c);
+	// Point to the exact location parsing errored out at
 	printf("/* <- here */");
-	// Find end of line
+	// Print the remainder of the line
 	c = p;
-	while(*c && *c != '\n') {
-		++c;
-	}
-	// Print it
+	while(*c && *c != '\n') ++c;
 	printf("%.*s\n", c - p, p);
-	// Print spacer
+	// Print spacer to the approximate location of the error, sometimes
+	// this is inaccurate.
 	printf("%*s^ here\n", l, " ");
 	exit(exit_code);
 }
 
+int *symbolFind (char *name) {
+  int *d, l;
+  d = sym;
+  l = c4cc_strlen(name);
+  while (d[Tk]) {
+    if (d[Name] && !memcmp((char *)d[Name], name, l)) return d;
+    d = d + Idsz;
+  }
+  return 0;
+}
+
 /////
-// C4 compiler
+// C4 C Compiler
 /////
 void next()
 {
@@ -449,6 +540,7 @@ void next()
 
   while (tk = *p) {
     ++p;
+    if (tk == '.') return; // va_args support
     if (tk == '\n') {
       if (src) {
         emit_InSource_Line(line, p - lp, lp);
@@ -537,13 +629,15 @@ void next()
 
 void expr(int lev)
 {
-  int t, *d, *d1, *d2;
+  int t, *d, *d1, *d2, i, x;
+  char *b;
 
   if (!tk) { printf("%d: unexpected eof in expression\n", line); die(-1); }
   else if (tk == Num) {
     *++e = IMM; *++e = ival;
     emit_IMM(ival);
-    if (id[Attr] & id[ATTR_EXTERN]) { // load updated reference from data
+	// TODO: External symbols not implemented.
+    if (0 && id[Attr] & id[ATTR_EXTERN]) { // load updated reference from data
       *++e = PSH; emit_PSH();
       *++e = LI;  emit_LI(LI);
     }
@@ -578,14 +672,51 @@ void expr(int lev)
         emit_SYSCALL(d[Val], t);
       }
       // A C4 subroutine
-      else if (d[Class] == Fun) { *++e = JSR; *++e = d[Val]; emit_JSR(d); }
-      // A C4 subroutine stored in a global variable
+      else if (d[Class] == Fun) {
+        // find symbol name length
+        x = 0; b = (char *)d[Name]; while (iscvariable(*b)) { ++b; ++x; }
+        // Variadic function support
+        if (d[Attr] & ATTR_VARIADIC) {
+          // If ATTR_VARIADIC, before emitting JSR, call make_va
+#if 0
+          printf("(c4cc: calling '");
+          printf("%.*s", x, (char *)d[Name]);
+          printf("' that takes %d args with %d arguments)\n", d[ArgCount], t);
+#endif
+          // IMM extra_argcount
+          *++e = IMM; *++e = t + 1 - d[ArgCount]; emit_IMM(t + 1 - d[ArgCount]);
+          // PSH
+          *++e = PSH; emit_PSH();
+          // JSR __c4cc_make_va
+          d1 = symbolFind("__c4cc_make_va"); // TODO: move this elsewhere
+          if (!d1) { printf("vararg support requires a __c4cc_make_va function, include stdarg.h\n"); die(-1); }
+          *++e = JSR; *++e = d1[Val]; emit_JSR(d1);
+          // ADJ extra_argcount+2 to clean up arguments to __c4cc_make_va
+          *++e = ADJ; *++e = t + 2 - d[ArgCount]; emit_ADJ(t + 2 - d[ArgCount]);
+          // PSH the result of __c4cc_make_va
+          *++e = PSH; emit_PSH();
+          // t (used in ADJ below) should be the correct arg count
+          t = d[ArgCount];
+        } else if (t != d[ArgCount]) {
+          // Argument count mismatches result in arguments referring to the
+          // wrong parameters, and locals referring to incorrect offsets.
+          // TODO: Is it better to error here than cause strange runtime errors?
+		  // Changed to a warning.
+          printf("%d: WARNING argument count mismatch in call to '%.*s', ", line, x, (char *)d[Name]);
+          printf("expected %d arguments, %d given\n", d[ArgCount], t);
+        }
+        *++e = JSR; *++e = d[Val]; emit_JSR(d);
+      }
+      // A C4 subroutine stored in a global variable. Cannot be variadic, as
+      // the only type info we have is INT+PTR.
       else if (d[Class] == Glo) { *++e = JSRI; *++e = d[Val]; emit_JSRI((int *)d[Val]); } // Jump subroutine indirect
-      // A C4 subroutine stored in a stack variable
+      // A C4 subroutine stored in a stack variable. Cannot be variadic, as above.
       else if (d[Class] == Loc) { *++e = JSRS; *++e = loc - d[Val]; emit_JSRS(loc - d[Val]); } // Jump subroutine on stack
       else { printf("%d: bad function call (%d)\n", line, d[Class]); die(-1); }
       // Cleanup pushed arguments upon return
-      if (t) { *++e = ADJ; *++e = t; emit_ADJ(t); }
+      if (t) {
+        *++e = ADJ; *++e = t; emit_ADJ(t);
+      }
       ty = d[Type];
     } else if (d[Class] == Num) {
       *++e = IMM; *++e = d[Val]; ty = INT;
@@ -607,16 +738,20 @@ void expr(int lev)
   }
   else if (tk == '(') {
     next();
+    // Casting: (char) (int), with pointers
     if (tk == Int || tk == Char) {
       t = (tk == Int) ? INT : CHAR; next();
       while (tk == Mul) { next(); t = t + PTR; }
       if (tk == ')') next(); else { printf("%d: bad cast\n", line); die(-1); }
       expr(Inc);
       ty = t;
-    }
-    else {
+    } else {
+      // Normal C expression
       expr(Assign);
-      if (tk == ')') next(); else { printf("%d: close paren expected\n", line); die(-1); }
+      // Allow compound statements in brackets
+      while (tk == ',') { next(); expr(Assign); }
+      if (tk == ')') next();
+      else { printf("%d: close paren expected (1)\n", line); die(-1); }
     }
   }
   else if (tk == Mul) {
@@ -799,14 +934,17 @@ void stmt()
 {
   int *a, *b;
   int *oa, *ob, *oc;
+  int *last_continue;
 
   statement_start = p;
 
   if (tk == If) {
     next();
     if (tk == '(') next(); else { printf("%d: open paren expected\n", line); die(-1); }
+    a = e; // save begin
     expr(Assign);
-    if (tk == ')') next(); else { printf("%d: close paren expected\n", line); die(-1); }
+    if (tk == ')') next(); else { printf("%d: close paren expected (2)\n", line); die(-1); }
+    // TODO: if expression was if (1)
     *++e = BZ; b = ++e;
     ob = emit_BZPH();
     stmt();
@@ -821,13 +959,56 @@ void stmt()
     *b = (int)(e + 1);
     emit_UpdateAddress(ob, emit_CurrentAddress());
   }
+  else if (tk == Continue) {
+    next();
+    if (tk != ';') { printf("%d: semicolon expected after 'continue'\n", line); die(-1); }
+    *++e = JMP; *++e = (int)curr_continue;
+    emit_JMP(curr_continue);
+  }
+  else if (tk == For) {
+    // for( initializers; condition; each-loop )
+    //   [{ statement... } | statement];
+    // initializers
+    // a: condition
+    //    bz d     // TODO
+    //    jmp c    // TODO
+    // b: each-loop
+    //    jmp a
+    // c: statement
+    //    jmp b
+    // d: out of loop
+    if (tk == '(') next(); else { printf("%d: in 'for': open paren expected\n", line); die(-1); }
+    expr(Assign); // Possibly compound
+    a = e; // Save comparison start
+    oa = emit_CurrentAddress();
+    expr(Assign);
+    *++e = BZ; b = ++e; // Skip loop if test fails
+    ob = emit_BZPH();
+    if (tk == ';') next(); else { printf("%d: in 'for': semicolon expected after initializers\n", line); die(-1); }
+    // b: each-loop
+    last_continue = curr_continue;
+    curr_continue = ob + 1;
+    expr(Assign);
+    if (tk == ';') next(); else { printf("%d: in 'for': semicolon expected after condition\n", line); die(-1); }
+    *++e = JMP; *++e = (int)a; // return to a
+    emit_JMP(oa);
+    if (tk == ')') next(); else { printf("%d: in 'for': close paren expected\n", line); die(-1); }
+    stmt();
+    *++e = JMP; *++e = (int)b; // return to b (each-loop)
+    emit_JMP(ob);
+    *b = (int)(e + 1); // Update end of loop address
+    emit_UpdateAddress(ob, emit_CurrentAddress());
+    curr_continue = last_continue;
+  }
   else if (tk == While) {
     next();
     a = e + 1;
     oa = emit_CurrentAddress();
+    last_continue = curr_continue;
+    curr_continue = oa;
     if (tk == '(') next(); else { printf("%d: open paren expected\n", line); die(-1); }
     expr(Assign);
-    if (tk == ')') next(); else { printf("%d: close paren expected\n", line); die(-1); }
+    if (tk == ')') next(); else { printf("%d: close paren expected (3)\n", line); die(-1); }
     *++e = BZ; b = ++e;
     ob = emit_BZPH();
     stmt();
@@ -835,6 +1016,7 @@ void stmt()
     emit_JMP(oa);
     *b = (int)(e + 1);
     emit_UpdateAddress(ob, emit_CurrentAddress());
+    curr_continue = last_continue;
   }
   else if (tk == Return) {
     next();
@@ -858,11 +1040,13 @@ void stmt()
 }
 
 int parse () {
-  int bt, ty, i, attr, *fun;
+  int bt, ty, i, attr, *fun, v, s;
   // parse declarations
   line = 1;
   line_start = statement_start = p;
   next();
+  v = 0;
+  s = 1;
   while (tk) {
     statement_start = p;
     bt = INT; // basetype
@@ -913,45 +1097,87 @@ int parse () {
 		  next();
       }
 		  // printf("xxx, tk now == %d '%c', %.*s, Id == %d\n", tk, tk, 5, p - 5, Id);
-      if (tk != Id) {
-		  printf("%d: unknown post attribute, tk(%d) != %d or %d\n", line, tk, Constructor, Destructor);
+      if (tk == Assign) { // for global assignments
+          next();
+          if (tk == '{') { printf("%d: array initializer not supported yet\n", line); die(-1); }
+          v = ival;
+          //printf("initial value set to %d\n", v);
+      } else if (tk == Brak) { // [array sizes]
+	  	  // TODO: array address never seems to get loaded properly
+		  // printf("(c4cc: update1 type to %d\n)\n", ty);
+          ty = ty + PTR; // make it a pointer
+		  // printf("(c4cc: update2/assign type to %d\n)\n", ty);
+		  id[Type] = ty; // update it now as we lose ty before getting to the ty assignment below.
+          next();
+          if (tk == Num) s = ival;
+          else if (tk == Id) s = id[Val];
+          else { printf("%d: unknown array size specifier, tk = %d ('%c')\n", line, tk, tk); die(-1); }
+          // printf("array size received: %ld for id %ld\n", s, id);
+          next();
+          if (tk != ']') { printf("%d: expected array close ']', got %ld ('%c')\n", line, tk, tk); die(-1); }
+      } else if (tk != Id) {
+		  printf("%d: unknown post attribute, tk(%d, '%c') != %d or %d\n", line, tk, tk, Constructor, Destructor);
 		  printf("%d: bad global declaration\n", line); die(-1);
 	  }
 	  // TODO: re-enable?
       //if (id[Class]) { printf("%d: duplicate global definition\n", line); die(-1); }
       next();
       id[Type] = ty;
+	  // printf("(c4cc: assign type as %d)\n");
       id[Attr] = attr;
 	  // printf("xxx, attr set to %d\n", attr);
       if (tk == '(') { // function
         // keep track of function
 		// printf("xxx, function definition\n");
         fun = id;
-        id[Class] = Fun;
-        id[Val] = (int)(e + 1);
-        id[emit_Val] = (int)emit_FunctionAddress();
-		//id[emit_Length] = id[Hemit_Length] = 0;
-        //id[Attr] = ATTR_NONE;
+        fun[Class] = Fun;
+        fun[Val] = (int)(e + 1);
+        fun[emit_Val] = (int)emit_FunctionAddress();
+        fun[ArgCount] = 0;
+		//fun[emit_Length] = fun[Hemit_Length] = 0;
+        //fun[Attr] = ATTR_NONE;
         next(); i = 0;
         while (tk != ')') {
+          // printf("fun, tk now == '%c'\n", tk);
           ty = INT;
           if (tk == Static) { printf("%d: parameters cannot be marked static\n", line); die(-1); }
           if (tk == Int) next();
           else if (tk == Char) { next(); ty = CHAR; }
           while (tk == Mul) { next(); ty = ty + PTR; }
 		  // printf("xxx, tk now == %d '%c', %.*s, Id == %d\n", tk, tk, 5, p - 5, Id);
-          if (tk != Id) { printf("%d: bad parameter declaration, tk = %d ('%c')\n", line, tk, tk); die(-1); }
-          if (id[Class] == Loc) { printf("%d: duplicate parameter definition\n", line); die(-1); }
-          id[HClass] = id[Class]; id[Class] = Loc;
-          id[HType]  = id[Type];  id[Type] = ty;
-          id[HVal]   = id[Val];
-          id[Hemit_Val] = id[emit_Val]; id[emit_Val] = 0; // no effect
-		  //id[Hemit_Length] = id[emit_Length];
-          id[HAttr]  = id[Attr];
-          id[Val]    = i++;
+          if (tk == '.') { // variadic function
+            fun[Attr] = fun[Attr] | ATTR_VARIADIC;
+            next(); if (tk != '.') { printf("%d: expected more dots\n", line); die(-1); }
+            next(); if (tk != '.') { printf("%d: expected more dots\n", line); die(-1); }
+			// Insert a fake parameter here so that parameter offsets are correct.
+            // Do this by just pretending we encountered a parameter.
+            id = id + Idsz;
+            id[Name] = 0;
+            id[Hash] = 0;
+            id[HClass] = id[Class]; id[Class] = Loc;
+            id[HType]  = id[Type];  id[Type] = ty;
+            id[HVal]   = id[Val];
+            id[Hemit_Val] = id[emit_Val]; id[emit_Val] = 0; // no effect
+            //id[Hemit_Length] = id[emit_Length];
+            id[HAttr]  = id[Attr];
+            id[Val]    = i++;
+          } else {
+            if (tk != Id) { printf("%d: bad parameter declaration, tk = %d ('%c')\n", line, tk, tk); die(-1); }
+            if (id[Class] == Loc) { printf("%d: duplicate parameter definition\n", line); die(-1); }
+            id[HClass] = id[Class]; id[Class] = Loc;
+            id[HType]  = id[Type];  id[Type] = ty;
+            id[HVal]   = id[Val];
+            id[Hemit_Val] = id[emit_Val]; id[emit_Val] = 0; // no effect
+            //id[Hemit_Length] = id[emit_Length];
+            id[HAttr]  = id[Attr];
+            id[Val]    = i++;
+          }
           next();
           if (tk == ',') next();
+          // printf("(c4cc: tk now %c %ld)\n", tk, tk);
         }
+        fun[ArgCount] = i;
+        // printf("(c4cc: function declared with arg count: %d)\n", i);
         next();
         if (tk == ';') {
           // Mark as external, add a data word for it
@@ -971,6 +1197,7 @@ int parse () {
             while (tk != ';') {
               ty = bt;
               while (tk == Mul) { next(); ty = ty + PTR; }
+              if (tk == Assign) { printf("%d: cannot set initial value of local variable, only globals. Manually assign after variable block.\n", line); die(-1); }
               if (tk != Id) { printf("%d: bad local declaration\n", line); die(-1); }
               if (id[Class] == Loc) { printf("%d: duplicate local definition\n", line); die(-1); }
               id[HClass] = id[Class]; id[Class] = Loc;
@@ -1003,9 +1230,15 @@ int parse () {
           id = id + Idsz;
         }
       } else { // if (tk == '(')
+	    // TODO: this is part of the array section that does not work
+        // if (s > 1) printf("write global to data, length %ld, value %ld, loc: 0x%lx for id %ld\n", s, v, data, id);
         id[Class] = Glo;
         id[Val] = (int)data;
-        data = data + sizeof(int);
+        // Write value, if any
+        *((int *)data) = v;
+        data = data + sizeof(int) * s;    // Use array size if specified
+        v = 0;                            // Reset values
+        s = 1;
       }
       if (tk == ',') next();
     }
@@ -1015,7 +1248,7 @@ int parse () {
 int *c4cc_compile (char *code) {
   // keep track of main
   id = idmain = idstart;
-  parse(code);
+  parse();
   return (int *)idmain[Val];
 }
 
@@ -1032,7 +1265,7 @@ void print_symbol(int *i) {
 
   // Find symbol name length
   strc_a = strc_b = (char*)i[Name];
-  while ((*strc_b >= 'a' && *strc_b <= 'z') || (*strc_b >= 'A' && *strc_b <= 'Z') || (*strc_b >= '0' && *strc_b <= '9') || *strc_b == '_')
+  while (iscvariable(*strc_b))
       ++strc_b;
 
   // Calculate type string
@@ -1108,7 +1341,8 @@ void print_stacktrace (int *pc_orig, int *idmain, int *bp, int *sp) {
 }
 
 int c4cc_init () {
-  int i, poolsz;
+  int i, poolsz, len;
+  char *x;
 
   if(c4cc_initialized) return 0;
   //printf("c4cc_init, initialized=%lld\n", c4cc_initialized);
@@ -1138,10 +1372,16 @@ int c4cc_init () {
 
   p = c4cc_keywords;
   i = Static; while (i <= While) { next(); id[Tk] = i++; } // add keywords to symbol table
-  i = OPEN; while (i <= EXIT) { // add library to symbol table
+  i = OPEN; while (i <= FLT) { // add library to symbol table
     next(); id[Class] = Sys; id[Type] = INT; id[Val] = i++;
-    // printf("  builtin '%.4s' = %d\n", id[Name], id[Val]);
+	if (0) { // don't be so verbose
+		len = 0;
+		x = (char *)id[Name];
+		while (*x++ != ' ') ++len;
+		printf("  builtin '%.*s' = %d\n", len, id[Name], id[Val]);
+	}
   }
+
   next(); id[Tk] = Char; // handle void type
   next(); idstart = id;
 
@@ -1183,7 +1423,12 @@ int c4cc_readargs (int argc, char **argv) {
 
   if (use_stdin) {
 		printf("c4cc: Reading from standard input...\n");
-	  if ((i = read(STDIN, p, r)) <= 0) {
+	  while ((i = read(STDIN, p, r)) > 0) {
+	  //printf("Content:\n%s\n%ld bytes read from standard input\n", p, i);
+	    p = p + i;
+		r = r - i;
+      }
+	  if (i < 0) {
 		  printf("c4cc: failed to read from standard input\n");
 		  return -1;
 	  }
@@ -1229,6 +1474,8 @@ int c4cc_main(int argc, char **argv)
   int fd, poolsz;
   int i, *t, r;
   int *pc, *sp, *bp, a, status; // vm registers
+
+  curr_continue = 0;
 
   //i = 0;
   //while(i < argc) { printf("(C4CC) argv[%lld] = %s\n", i, *(argv + i)); ++i; }

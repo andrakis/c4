@@ -7,7 +7,7 @@
 #include <u0.h>
 
 #define ESHELL_NOMAIN 1
-#include "eshell.c"
+#include "src/c4ke/bin/eshell.c"
 
 enum { SERVICE_START_WAIT_TIME = 5000,
        SERVICE_START_SLEEP_TIME = 100 };
@@ -100,6 +100,7 @@ int main (int argc, char **argv) {
 	currenttask_update_name("init");
 
 	start_eshell = 0;
+	eshell_in_init = 1;
 
 	shell_argc = 1;
 	if (!(shell_argv = malloc(128))) { // TODO: better
@@ -118,7 +119,7 @@ int main (int argc, char **argv) {
 			printf("init: failed to spawn given init process: '%s'\n", *(argv + 1));
 			start_eshell = 1;
 		} else {
-			printf("init: custom init '%s' started as pid %d\n", *(argv + 1), pid);
+			printf("init: custom init '%s' starting as pid %d...\n", *(argv + 1), pid);
 		}
 	} else {
 		// Start the regular shell
@@ -127,10 +128,25 @@ int main (int argc, char **argv) {
 			printf("init: failed to spawn shell\n");
 			start_eshell = 1;
 		} else {
-			printf("init: shell '%s' started as pid %d\n", *shell_argv, pid);
+			printf("init: shell '%s' starting as pid %d...\n", *shell_argv, pid);
 		}
 	}
 
+	// Ignore main signals
+	// TODO: we could have handlers for these, but await_pid would return
+	//       if a trap handler ran, before it should.
+	//       This is a kernel bug that needs to be fixed.
+	//       The workaround is to either loop while the task is still running,
+	//       or remove the signal handlers so no handling traps run.
+	signal(SIGHUP,  0);
+	signal(SIGINT,  0);
+	signal(SIGQUIT, 0);
+	signal(SIGILL,  0);
+	signal(SIGTRAP, 0);
+	signal(SIGABRT, 0);
+
+	// Skip if no pid, else wait for task to finish.
+    // If the task fails to start, await_pid returns non-0.
 	if (!pid || (i = await_pid(pid))) {
 		start_eshell = 1;
 	}

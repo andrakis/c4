@@ -20,8 +20,11 @@ void c4r_dump_code (int *c4r) {
 	printf("Disassemble code from 0x%x - 0x%x (%d instructions)\n", le, e, (int)(e - le));
 	printf("Instructions @ 0x%x\n", c4cc_instructions);
 	while (le < e) {
-		printf("0x%x: %8.4s", x, &c4cc_instructions[*++le * 5]);
-		if (*le <= ADJ) { ++x; printf(" %d\n", *++le); } else printf("\n");
+		printf("0x%x: ", x);
+		++le;
+		printf("%8.4s", &c4cc_instructions[*le * 5]);
+		if (*le <= ADJ || *le == JSRS || *le == JSRI) printf(" %ld\n", *++le);
+		else printf("\n");
 		++x;
 	}
 }

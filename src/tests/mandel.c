@@ -27,11 +27,11 @@ enum {
 // Fixed values for C4 as we can't use floating point.
 enum {
   bitsPrecision = 6,
-  bits6_4       = 0x100,
-  bits6_3point5 = 0xe0,
-  bits6_2point5 = 0xa0,
-  bits6_2       = 0x80,
-  bits6_1       = 0x40
+  bits6_4       = 0x100, // toPrec(4,   bitsPrecision);
+  bits6_3point5 = 0xe0,  // toPrec(3.5, bitsPrecision);
+  bits6_2point5 = 0xa0,  // toPrec(2.5, bitsPrecision);
+  bits6_2       = 0x80,  // toPrec(2,   bitsPrecision);
+  bits6_1       = 0x40   // toPrec(1,   bitsPrecision);
 };
 
 // Filled in during main, rendering glyphs
@@ -48,29 +48,101 @@ void show_help (char *argv0) {
            "                    (Default: \"%s\")\n", chr);
 }
 
+int width, height, X1, X2, Y1, Y2, LIMIT;
+int maxIters;
+int notbreak, sum, xt;
+int mono;
+
+void mandelbrot_render_real () {
+  int px, py, x0, y0, x, y, i, xSqr, ySqr;
+  py = 0;
+  while (py < height) {
+    px = 0;
+    while (px < width) {
+      x0 = ((px*X1) / width) - X2;
+      y0 = ((py*Y1) / height) - Y2;
+
+      x = y = i = 0;
+      notbreak = 1;
+      while (notbreak && i < maxIters) {
+        xSqr = (x * x) >> bitsPrecision;
+        ySqr = (y * y) >> bitsPrecision;
+
+        // Breakout if sum is > the limit OR breakout also if sum is negative which indicates overflow of the addition has occurred
+        // The overflow check is only needed for precisions of over 6 bits because for 7 and above the sums come out overflowed and negative therefore we always run to maxIters and we see nothing.
+        // By including the overflow break out we can see the fractal again though with noise.
+        sum = (xSqr + ySqr);
+        if (sum > LIMIT) {
+          notbreak = 0;
+        } else {
+          xt = xSqr - ySqr + x0;
+
+// if (log == 26) {
+//   printf("\n");
+//   printf("i    %4x\n", i);
+//   printf("diff %4x\n", (xSqr - ySqr)&0xffff);
+//   printf("x %4x\n", x & 0xffff);
+//   printf("y %4x\n", y & 0xffff);
+//   printf("m %4x\n", (x*y) & 0xffff);
+//   printf("m6 %4x\n", (s(x*y)>>6) & 0xffff);
+//   printf("m1 %4x\n", (s(s(x*y)>>6) <<1) & 0xffff);
+// }
+
+          y = (((x * y) >> bitsPrecision) << 1) + y0;
+          x = xt;
+
+          ++i; //i = i + 1;
+        }
+      }
+      --i; //i = i - 1;
+
+// if (log == 26) {
+//   exit(1);
+// }
+
+      // C4 doesn't understand \033 and such
+      // Outputting the character instead of the escape sequence
+      if (mono) printf("%c", chr[i]);
+      else printf("%c[48;05;%ldm%c%c[0m", 0x1b, i, chr[i], 0x1b);
+
+//      ++log;
+      ++px; // px = px + 1;
+    }
+
+    printf("\n");
+    ++py; // py = py + 1;
+  }
+}
+void mandelbrot_render () {
+  mandelbrot_render_real();
+}
+void mandelbrot_render_pure () {
+  __c4_invoke((int *)&mandelbrot_render_real);
+}
+
 int main(int argc, char** argv)
 {
-  int log, width, height, X1, X2, Y1, Y2, LIMIT;
-  int maxIters, px, py, x0, y0, x, y, i, xSqr, ySqr;
-  int notbreak, sum, xt;
   int startTime;
   char **_argv, *arg;
-  int _argc;
-  int mono;
+  int _argc, *code;
 
-  log = 0;
   mono = 0;
 
   width  = DEF_WIDTH;
   height = DEF_HEIGHT;
 
+  // Patch mandelbrot_render
+  code = (int *)&mandelbrot_render;
+  *code++ = __opcode("JMP");
+  *code = (int)((__c4_info() & C4I_C4) ? &mandelbrot_render_pure : &mandelbrot_render_real);
+
   // printf("PRECISION=%ld\n", bitsPrecision);
 
-  X1 = bits6_3point5; //toPrec(3.5,bitsPrecision);
-  X2 = bits6_2point5; //toPrec(2.5,bitsPrecision) ;
-  Y1 = bits6_2; //toPrec(2,bitsPrecision);
-  Y2 = bits6_1; //toPrec(1,bitsPrecision) ; // vert pos
-  LIMIT = bits6_4; // toPrec(4,bitsPrecision);
+  X1 = bits6_3point5;
+  X2 = bits6_2point5;
+  Y1 = bits6_2;
+  Y2 = bits6_1; // vert pos
+  LIMIT = bits6_4;
 
   // fractal
   //chr = ".:-=X$#@ ";
@@ -135,71 +207,8 @@ int main(int argc, char** argv)
   }
 
   maxIters = strlen(chr);
-  py = 0;
   startTime = __time();
-
-  while (py < height) {
-    px = 0;
-    while (px < width) {
-      x0 = ((px*X1) / width) - X2;
-      y0 = ((py*Y1) / height) - Y2;
-
-      x = 0;
-      y = 0;
-      i = 0;
-
-      notbreak = 1;
-      while (notbreak && i < maxIters) {
-        xSqr = (x * x) >> bitsPrecision;
-        ySqr = (y * y) >> bitsPrecision;
-
-        // Breakout if sum is > the limit OR breakout also if sum is negative which indicates overflow of the addition has occurred
-        // The overflow check is only needed for precisions of over 6 bits because for 7 and above the sums come out overflowed and negative therefore we always run to maxIters and we see nothing.
-        // By including the overflow break out we can see the fractal again though with noise.
-        sum = (xSqr + ySqr);
-        if (sum > LIMIT) {
-          notbreak = 0;
-        } else {
-          xt = xSqr - ySqr + x0;
-
-// if (log == 26) {
-//   printf("\n");
-//   printf("i    %4x\n", i);
-//   printf("diff %4x\n", (xSqr - ySqr)&0xffff);
-//   printf("x %4x\n", x & 0xffff);
-//   printf("y %4x\n", y & 0xffff);
-//   printf("m %4x\n", (x*y) & 0xffff);
-//   printf("m6 %4x\n", (s(x*y)>>6) & 0xffff);
-//   printf("m1 %4x\n", (s(s(x*y)>>6) <<1) & 0xffff);
-// }
-
-          y = (((x * y) >> bitsPrecision) << 1) + y0;
-          x = xt;
-
-          ++i; //i = i + 1;
-        }
-      }
-      --i; //i = i - 1;
-
-// if (log == 26) {
-//   exit(1);
-// }
-
-      // C4 doesn't understand \033 and such
-      //print("\u001b[48;05;${cl}m  \u001b[0m")
-      // printf("\033[48;05;%ldm%02ld\033[0m", i, i);
-      // Restored outputting the character instead of the number
-      if (mono) printf("%c", chr[i]);
-      else printf("%c[48;05;%ldm%c%c[0m", 0x1b, i, chr[i], 0x1b);
-
-      ++log;
-      ++px; // px = px + 1;
-    }
-
-    printf("\n");
-    ++py; // py = py + 1;
-  }
-
+  mandelbrot_render();
   printf("Mandelbrot rendered in %ldms\n", __time() - startTime);
 
   return 0;

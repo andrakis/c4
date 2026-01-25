@@ -1,3 +1,6 @@
+#ifndef C4CC
+#ifndef __C4M_UTIL_C
+#define __C4M_UTIL_C 1
 // This line **must** come **before** including <time.h> in order to
 // bring in the POSIX functions such as `clock_gettime() from <time.h>`!
 #undef _POSIX_C_SOURCE
@@ -28,8 +31,18 @@
 //#define CLOCK_MODE      CLOCK_REALTIME
 #define CLOCK_MODE      CLOCK_MONOTONIC_RAW
 
+// On MSVC, clock_gettime doesn't exist, nor do the various monotonic / realtime options
+#ifndef CLOCK_MONOTONIC_RAW
+#define CLOCK_REALTIME 0
+#define CLOCK_MONOTONIC_RAW 0
+int clock_gettime(int unused, struct timespec* tv)
+{
+	return timespec_get(tv, TIME_UTC);
+}
+#endif
+
 /// Get a time stamp in milliseconds.
-uint64_t millis()
+static uint64_t millis()
 {
     struct timespec ts;
     clock_gettime(CLOCK_MODE, &ts);
@@ -38,7 +51,7 @@ uint64_t millis()
 }
 
 /// Get a time stamp in microseconds.
-uint64_t micros()
+static uint64_t micros()
 {
     struct timespec ts;
     clock_gettime(CLOCK_MODE, &ts);
@@ -47,7 +60,7 @@ uint64_t micros()
 }
 
 /// Get a time stamp in nanoseconds.
-uint64_t nanos()
+static uint64_t nanos()
 {
     struct timespec ts;
     clock_gettime(CLOCK_MODE, &ts);
@@ -55,7 +68,7 @@ uint64_t nanos()
     return ns;
 }
 
-int c4m_time () { return millis(); }
+static int c4m_time () { return millis(); }
 
 // NB: for all 3 timestamp functions above: gcc defines the type of the internal
 // `tv_sec` seconds value inside the `struct timespec`, which is used
@@ -72,3 +85,5 @@ int c4m_time () { return millis(); }
 // calculate how far back a timestamp of 0 would have occurred. Ex: convert
 // the timestamp to years and subtract that number of years from the present
 // year.
+#endif // ifndef __C4M_UTIL_C 
+#endif // ifndef C4CC

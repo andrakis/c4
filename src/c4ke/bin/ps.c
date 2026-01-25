@@ -12,6 +12,7 @@ enum {
 	// STATE is first for faster lookup:
 	// used *t instead of t[TASK_STATE], saves two multiplications
 	TASK_STATE,
+	TASK_WAITSTATE,
 	TASK_ID,
 	TASK_PARENT,
 	TASK_CMD,
@@ -24,6 +25,8 @@ enum {
 	TASK_TIMEMS,
 	TASK_CYCLES,
 	TASK_TRAPS,
+	TASK_STACK,
+	TASK_MEM_ALLOC,
 	TASK_LAST_TIMEMS,
 	TASK_LAST_CYCLES,
 	TASK_LAST_TRAPS,
@@ -90,7 +93,8 @@ static void print_int_readable (int n) {
 	}
 }
 
-void ps () {
+int time_refresh;
+void ps_real () {
 	int *t, i, l, c, x;
 	char *s;
 	char *ps_blank;
@@ -99,11 +103,9 @@ void ps () {
 	int task_count, total_usage_t, total_usage_c;
 	int cpu_usage_t, cpu_usage_c, cpu_usage_k, cpu_usage_i;
 	int cpu_total_c;
-	int time_refresh;
 	int tasks_loaded, tasks_running, tasks_waiting, tasks_zombie, tasks_free;
+	int mem_total;
 
-	time_refresh = __time();
-	kern_tasks_export_update(__ps_kti);
 	// TODO: why do we need a + 1 here?
 	//       without it we miss printing a process, but not sure why
 	tasks_loaded = task_count = __ps_kti[KTI_USED] + 1;
@@ -114,11 +116,13 @@ void ps () {
 	i = total_usage_t = total_usage_c = cpu_total_c =
 	  tasks_running = tasks_waiting = tasks_zombie = 0;
 	tasks_free = __ps_kti[KTI_COUNT] - tasks_loaded;
+	mem_total = 0;
 	while (++i < task_count) {
 		// Only count tasks that are present towards usage,
 		// and only copy data from them if they are present.
 		if ((*t = x = ti[KTE_TASK_STATE])) {
 			// TODO: reorganise these such that we can do ++*target = ++*source
+			t[TASK_WAITSTATE]   = ti[KTE_TASK_WAITSTATE];
 			t[TASK_ID]          = ti[KTE_TASK_ID];
 			t[TASK_PARENT]      = ti[KTE_TASK_PARENT];
 			t[TASK_CMD]         = ti[KTE_TASK_NAME];
@@ -132,6 +136,8 @@ void ps () {
 			t[TASK_CYCLES]      = ti[KTE_TASK_CYCLES];
 			t[TASK_LAST_TRAPS]  = t[TASK_TRAPS];
 			t[TASK_TRAPS]       = ti[KTE_TASK_TRAPS];
+			t[TASK_STACK]       = ti[KTE_TASK_STACK];
+			mem_total = mem_total + (t[TASK_MEM_ALLOC] = ti[KTE_TASK_ALLOC]);
 			t[TASK_DIFF_TIMEMS] = t[TASK_TIMEMS] - t[TASK_LAST_TIMEMS];
 			t[TASK_DIFF_CYCLES] = t[TASK_CYCLES] - t[TASK_LAST_CYCLES];
 			t[TASK_DIFF_TRAPS]  = t[TASK_TRAPS]  - t[TASK_LAST_TRAPS];
@@ -161,6 +167,7 @@ void ps () {
 	__ps_cols[COL_TIMETOTAL] = 4;
 	__ps_cols[COL_CYCLESTOTAL] = 4;
 	__ps_cols[COL_TRAPSINT] = 5;
+	__ps_cols[COL_TRAPSTOTAL] = 5;
 	col = __ps_cols + COL__Sz;
 	// These checks fix a very hard to diagnose floating point exception.
 	// C4 does not use floating point.
@@ -200,7 +207,7 @@ void ps () {
 			// printf("ps:   counted TIMEMS as %d (%d value)\n", col[COL_TIMEMS], t[TASK_TIMEMS]);
 			//col[COL_CYCLESINT]   = itoa_len(t[TASK_DIFF_CYCLES]);
 			//col[COL_CYCLESTOTAL] = itoa_len(t[TASK_CYCLES]);
-			col[COL_TRAPSINT]    = itoa_len(t[TASK_DIFF_TRAPS]);
+			// col[COL_TRAPSINT]    = itoa_len(t[TASK_DIFF_TRAPS]);
 			//col[COL_TRAPSTOTAL]  = itoa_len(t[TASK_TRAPS]);
 			// printf("ps:   counted CYCLES as %d (%d value)\n", col[COL_CYCLES], t[TASK_CYCLES]);
 			//col[COL_CYCLES_REL] = itoa_len((t[TASK_CYCLES] * 100) / rel_cycles);
@@ -220,8 +227,8 @@ void ps () {
 			//if (col[COL_TIMETOTAL] > __ps_cols[COL_TIMETOTAL]) __ps_cols[COL_TIMETOTAL] = col[COL_TIMETOTAL];
 			//if (col[COL_CYCLESINT] > __ps_cols[COL_CYCLESINT]) __ps_cols[COL_CYCLESINT] = col[COL_CYCLESINT];
 			//if (col[COL_CYCLESTOTAL] > __ps_cols[COL_CYCLESTOTAL]) __ps_cols[COL_CYCLESTOTAL] = col[COL_CYCLESTOTAL];
-			if (col[COL_TRAPSINT] > __ps_cols[COL_TRAPSINT]) __ps_cols[COL_TRAPSINT] = col[COL_TRAPSINT];
-			//if (col[COL_TRAPSTOTAL] > __ps_cols[COL_TRAPSTOTAL]) __ps_cols[COL_TRAPSTOTAL] = col[COL_TRAPSTOTAL];
+			// if (col[COL_TRAPSINT] > __ps_cols[COL_TRAPSINT]) __ps_cols[COL_TRAPSINT] = col[COL_TRAPSINT];
+			// if (col[COL_TRAPSTOTAL] > __ps_cols[COL_TRAPSTOTAL]) __ps_cols[COL_TRAPSTOTAL] = col[COL_TRAPSTOTAL];
 			// if (col[COL_CYCLES_REL] > __ps_cols[COL_CYCLES_REL]) __ps_cols[COL_CYCLES_REL] = col[COL_CYCLES_REL];
 			// if (col[COL_CYCLES_ALL] > __ps_cols[COL_CYCLES_ALL]) __ps_cols[COL_CYCLES_ALL] = col[COL_CYCLES_ALL];
 			// printf("ps:   finished\n");
@@ -267,8 +274,6 @@ void ps () {
 		return;
 	}
 
-	// Disable cycle interrupt so that printing is not interrupted
-	kern_request_exclusive();
 	// printf("ps: got __ps_kti @ 0x%x, count = %d\n", __ps_kti, __ps_kti[KTI_COUNT]);
 	// Print task counts
 	printf("\nTasks: %3d total, %d running, %d waiting, %d zombie, %d free\n",
@@ -305,11 +310,13 @@ void ps () {
 	printf(" PRIV  NI   T%%    C%%  ");
 	printf("time/INTER%*s", __ps_cols[COL_TIMEINT] - 3, " ");
 	printf("cycles/INTER%*s", __ps_cols[COL_CYCLESINT] - 6, " ");
-	printf("traps/INTER%*s", __ps_cols[COL_TRAPSINT] - 3, " ");
+	printf("traps/INTER%*s", 3, " ");
 	printf("time/TOTAL%*s", __ps_cols[COL_TIMETOTAL] - 4, " ");
 	printf("cycles/TOTAL%*s", __ps_cols[COL_CYCLESTOTAL] - 5, " ");
-	printf("traps/TOTAL%*s", __ps_cols[COL_TRAPSTOTAL] - 5, " ");
-	printf("\n");
+	printf("traps/TOTAL%*s", 2, " ");
+	printf("   STACK     MEM (");
+	print_int_readable(mem_total);
+	printf(" total )\n");
 	//printf("TIME (ms)%*s", __ps_cols[COL_TIMEMS], " ");
 	//printf("CYCLES%*s", __ps_cols[COL_CYCLES], " ");
 	//printf("CYCLES REL %%%*sCYCLES ALL %%\n", __ps_cols[COL_CYCLES_REL], " ");
@@ -330,27 +337,51 @@ void ps () {
 			printf("%*s%s %*s", __ps_cols[COL_PARENT], " ", (char *)t[TASK_CMD],
 			       2 + __ps_cols[COL_CMD] - col[COL_CMD], " ");
 			// State
-			kern_print_task_state(*t);
+			if (*t & STATE_WAITING && t[TASK_WAITSTATE] == WSTATE_SYSCALL)
+				printf("S");
+			else
+				kern_print_task_state(*t);
 			// TASK_PRIVS was TASK_PRIO
 			printf("      %c    %2d  %3d%%  %3d%% ", prio_table[t[TASK_PRIVS]], t[TASK_NICE],
 			       t[TASK_USAGE_T], t[TASK_USAGE_C]);
 			printf(" %d%*s", t[TASK_DIFF_TIMEMS], 6 + __ps_cols[COL_TIMEINT] - col[COL_TIMEINT], " ");
 			print_int_readable(t[TASK_DIFF_CYCLES]);
-			printf("      %d%*s", t[TASK_DIFF_TRAPS], 5 + __ps_cols[COL_TRAPSINT] - col[COL_TRAPSINT], " ");
-			printf("   %ld%*s  ", t[TASK_TIMEMS], 5 + __ps_cols[COL_TIMETOTAL] - col[COL_TIMETOTAL], " ");
+			printf("      ");
+			print_int_readable(t[TASK_DIFF_TRAPS]);
+			printf("   %ld%*s    ", t[TASK_TIMEMS], 5 + __ps_cols[COL_TIMETOTAL] - col[COL_TIMETOTAL], " ");
 			print_int_readable(t[TASK_CYCLES]);
-			printf("    %ld%*s\n", t[TASK_TRAPS], 5 + __ps_cols[COL_TRAPSTOTAL] - col[COL_TRAPSTOTAL], " ");
+			printf("  ");
+			print_int_readable(t[TASK_TRAPS]);
+			print_int_readable(t[TASK_STACK]);
+			printf("    ");
+			print_int_readable(t[TASK_MEM_ALLOC]);
+			printf("\n");
             ++ps_count_running;
 		}
 		t = t + TASK__Sz;
 		col = col + COL__Sz;
 	}
-	// printf("ps: columns printed\n");
+}
+
+void ps_do_real () {
+	ps_real();
+}
+
+void ps_do_real_pure () {
+	__c4_invoke((int *)&ps_real);
+}
+
+void ps () {
+	time_refresh = __time();
+	kern_tasks_export_update(__ps_kti);
+	// Disable cycle interrupt so that printing is not interrupted
+	kern_request_exclusive();
+	ps_do_real();
 	kern_release_exclusive();
 }
 
 int ps_init () {
-	int i;
+	int i, *code;
 
 	if (!(__ps_kti = kern_tasks_export())) {
         printf("ps: failed to export tasks\n");
@@ -393,6 +424,19 @@ int ps_init () {
 	//__ps_silent = 1;
 	//ps();
 	//__ps_silent = 0;
+
+	// Patch ps_do_real
+	if (1) {
+	code = (int *)&ps_do_real;
+	*code++ = __opcode("JMP");
+	if (1 && __c4_info() & C4I_C4) {
+		// Enable the pure function
+		*code = (int)&ps_do_real_pure;
+	} else {
+		// Use the normal function
+		*code = (int)&ps_real;
+	}
+	}
 
 	return 0;
 }

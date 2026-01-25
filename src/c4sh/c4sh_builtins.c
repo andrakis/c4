@@ -95,8 +95,7 @@ int  kdbg_run   (int argc, char **argv) {
 ///
 
 void kill_usage (char *argv0) {
-	printf("%s: %s [-s sigspec | -n signum | -sigspec] pid | jobspec ... or kill -l [sigspec]\n",
-	        argv0, argv0);
+	printf("kill: kill [-s sigspec | -n signum | -sigspec] pid | jobspec ... or kill -l [sigspec]\n");
 	printf(
 "     Send a signal to a job.\n"
 "\n"

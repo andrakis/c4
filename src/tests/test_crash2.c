@@ -1,6 +1,10 @@
-#include <stdio.h>
+// Test a crash
+// Like test_crash.c, but without needing u0.h
+//
+// Should help narrow down issues with stack trace output.
 
-#include "u0.h"
+enum { TRAP_SEGV = 4 };
+// #include "u0.h"
 
 int do_crash_for_real () {
 	__c4_trap(TRAP_SEGV, 0);

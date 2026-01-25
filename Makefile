@@ -30,19 +30,28 @@
 # a standard library.
 
 PKG       := package.tgz
-NATIVE_CC      := gcc
-NATIVE_CC_OPTS := -O2 -g -idirafter include -I .
+NATIVE_CC := gcc
+EXTRA_CC  :=
+NATIVE_CC_OPTS := -O2 -g -idirafter include -I . $(EXTRA_CC)
 NATIVE_TARGETS := c4 c4m c4cc
+# Preprocessor, will use our own at some point
+# We use our own include directories, and have some stdlib style headers.
+# We also define the following symbols, which TODO needd to be narrowed down to a single
+# definition instead of the 4 we have.
+PREPROC   := gcc -E -Iinclude -I. -DC4CC=1 -D__c4__=1 -D__C4CC__=1 -D__c4cc__=1 -C
 C4        := ./c4
 C4M       := ./c4m
 C4CC      := ./c4cc
+C4RDUMP   := ./c4rdump
+C4RLINK   := ./c4rlink
 SRCS      := src
 INCLUDE   := include
 C4CC_SRCS := $(SRCS)/c4cc/c4cc.c $(SRCS)/c4cc/asm-c4r.c
 # Version of C4CC compiled to .c4r format
-C4R_C4CC_SRCS := $(U0) $(SRCS)/c4cc/c4cc.c load-c4r.c $(SRCS)/c4cc/asm-c4r.c
+C4R_C4CC_SRCS := $(U0) load-c4r.c $(SRCS)/c4cc/c4cc.c $(SRCS)/c4cc/asm-c4r.c
 C4KE_SRCS := load-c4r.c $(SRCS)/c4ke/c4ke.c \
-             $(SRCS)/c4ke/extensions/c4ke_ipc.c $(SRCS)/c4ke/extensions/c4ke_plus.c
+             $(SRCS)/c4ke/extensions/c4ke_ipc.c $(SRCS)/c4ke/extensions/c4ke_plus.c \
+             $(SRCS)/c4ke/extensions/c4ke_pm.c
 C4KE_HDRS := $(INCLUDE)/c4.h $(INCLUDE)/c4m.h
 C4KE_C4R  := c4ke.c4r
 BIN_D     := $(SRCS)/c4ke/bin
@@ -71,8 +80,9 @@ TESTS_C4R := $(TESTS)/hello.c4r $(TESTS)/mandel.c4r $(TESTS)/factorial.c4r $(TES
 			 $(TESTS)/test_basic.c4r $(TESTS)/test_crash.c4r $(TESTS)/test_customop.c4r $(TESTS)/test_exit.c4r \
 			 $(TESTS)/test_fread.c4r $(TESTS)/test_infiniteloop.c4r \
 			 $(TESTS)/test_malloc.c4r $(TESTS)/test_printf.c4r $(TESTS)/test_printloop.c4r \
-			 $(TESTS)/test_signal.c4r $(TESTS)/test_static.c4r $(TESTS)/tests.c4r
-BIN       := $(C4R_C4CC) $(C4R_C4RDUMP) $(C4R_C4RLINK) $(C4R_TOP) \
+			 $(TESTS)/test_signal.c4r $(TESTS)/test_static.c4r $(TESTS)/tests.c4r \
+			 $(TESTS)/rps.c4r $(TESTS)/test_continue.c4r $(TESTS)/test_timekeeping.c4r
+BIN       := c4.c4r $(C4R_C4CC) $(C4R_C4RDUMP) $(C4R_C4RLINK) $(C4R_TOP) \
             $(C4M).c4r \
             $(C4KE_C4R) \
             $(INIT) \
@@ -89,18 +99,20 @@ TEST_MASSIVE_NUM := 20
 define compile_c
 	$(eval $@_source = $(1))
 	$(eval $@_out    = $(2))
-	$(NATIVE_CC) $(NATIVE_CC_OPTS) ${$@_source} -o ${$@_out}
+	@# TODO: Make -lm an optional component
+	$(NATIVE_CC) $(NATIVE_CC_OPTS) ${$@_source} -o ${$@_out} -lm
 endef
 
+# Default target
+all: pre
+
 # Prerequisites: the native C4 and related binaries, plus C4KE, and supporting binaries
-pre: $(C4) $(C4M) $(C4CC) $(C4RS) $(BIN_D) $(BENCHS)
+pre: $(C4) $(C4M) $(C4CC) $(C4RDUMP) $(C4RLINK) $(C4RS) $(BIN_D) $(BENCHS)
 	cp $(BIN_D)/*.c4r .
 	cp $(SRCS)/bench/*.c4r .
 	cp $(SRCS)/tests/*.c4r .
 
 # Standard targets
-all: pre
-
 run: pre
 	$(C4M) $(RUN_C4KE)
 run-vg: pre
@@ -133,40 +145,72 @@ test-massive-c4: pre
 	$(C4) $(C4M).c $(RUN_C4KE) innerbench -n $(TEST_MASSIVE_NUM)
 test-massive-c4-alt: pre
 	$(C4) $(C4M) -a $(RUN_C4KE) innerbench -n $(TEST_MASSIVE_NUM)
-clean:
-	rm -rf $(C4) $(C4M) $(C4CC) $(C4RS) $(BIN) *.c4r
+clean-c4rs:
+	rm -rf $(C4RS) $(BIN) *.c4r c4ke.pre.c
+clean: clean-c4rs
+	rm -rf $(C4) $(C4M) $(C4CC)
 pkg:
 	tar cjf $(PKG) c4ke.vfs.txt *.c src include Makefile
+# These rules are for personal testing
+CCOR1K      := /opt/or1k-linux-musl/bin/or1k-musl-linux-gcc
+CFLAGSOR1K  := -DOPENRISC -O2 -g -idirafter include -I .
+DEP_FLAGS    =
+OR1K_TGZ := c4-or1k-new.tgz
+DEST_TGZ := ~/git/jorconsole/jor1k-sysroot/fs/home/user/c4.tgz
+or1k: clean
+	# Cross-compile the various executables
+	$(CCOR1K) $(CFLAGS) $(CPPFLAGS) $(DEPFLAGS) $(CFLAGSOR1K) -c c4.c -o c4.o
+	$(CCOR1K) $(CFLAGS) $(CPPFLAGS) $(DEPFLAGS) $(CFLAGSOR1K) -c c4m.c -o c4m.o
+	$(CCOR1K) $(CFLAGS) $(CPPFLAGS) $(DEPFLAGS) $(CFLAGSOR1K) -c c4m_float.c -o c4m_float.o
+	$(CCOR1K) $(CFLAGS) $(CPPFLAGS) $(DEPFLAGS) $(CFLAGSOR1K) -c src/c4cc/asm-c4r.c -o c4cc.o
+	$(CCOR1K) $(CFLAGS) $(LDFLAGS) c4.o $(LDLIBS) -o c4
+	$(CCOR1K) $(CFLAGS) $(LDFLAGS) c4m.o $(LDLIBS) c4m_float.o -o c4m
+	$(CCOR1K) $(CFLAGS) $(LDFLAGS) c4cc.o $(LDLIBS) -o c4cc
+	tar cjf $(OR1K_TGZ) c4ke.vfs.txt $(C4) *.c $(C4M) $(C4CC) include src Makefile or1k.sh *.o
+	cp $(OR1K_TGZ) $(DEST_TGZ)
+# Old method of building prerequisites
+c4rs: pre
 
-# Marking the above rules as PHONY using singular .PHONY rule
-PHONY  = pre all clean
+# Marking the below rules as PHONY using singular .PHONY rule
+PHONY  = pre all clean-c4rs clean
 PHONY += run run-vg test test-massive
 PHONY += run-alt run-alt-vg test-alt test-massive-alt
 PHONY += run-c4 run-c4-vg test-c4 test-massive-c4
 PHONY += run-c4-alt run-c4-alt-vg
-PHONY += pkg
+PHONY += pkg c4rs or1k
+PHONY += pi
+# Don't bother with the dump or link utility for now
+# PHONY += $(C4RDUMP) $(C4RLINK)
 .PHONY: $(PHONY)
 
 #
-# Rules to build native versions of c4, c4m, and c4cc
+# Rules to build native versions of c4, c4m, c4cc, and tools
 #
 c4: c4.c
 	$(call compile_c,$<,$@)
 c4m: c4m.c
-	$(call compile_c,$<,$@)
+	gcc $(EXTRA_CC) -O2 -g -idirafter include -I . c4m.c c4m_float.c -o c4m -lm
 c4cc: $(C4CC_SRCS)
 	$(call compile_c,src/c4cc/asm-c4r.c,c4cc)
+$(C4RDUMP):
+#gcc $(EXTRA_CC) -O2 -g -Isrc/c4cc -I include -I . src/c4ke/bin/c4rdump.c -o $(C4RDUMP)
+	$(NATIVE_CC) $(NATIVE_CC_OPTS) -Isrc/c4cc src/c4ke/bin/c4rdump.c -o $(C4RDUMP)
+#$(C4RLINK):
+#	gcc $(EXTRA_CC) -O2 -g -Isrc/c4cc -I include -I . src/c4ke/bin/c4rlink.c -o $(C4RLINK)
 
 #
 # Rules to build C4R files
 #
 
-c4m.c4r: c4m.c include/c4m.h $(C4CC)
-	$(C4CC) -o c4m.c4r c4m.c
+c4.c4r: c4.c $(U0) $(C4CC)
+	$(C4CC) -o c4.c4r $(U0) c4.c
+c4m.c4r: c4m.c $(U0) include/c4m.h $(C4CC)
+	# $(C4CC) -o c4m.c4r $(U0) c4m.c
+	$(PREPROC) c4m.c | $(C4CC) -o c4m.c4r -
 
 # C4KE - The C4 Kernel Experiment, and supporting files
-$(C4KE_C4R): $(C4CC) $(C4KE_SRCS) $(C4KE_HDRS)
-	$(C4CC) -o $(C4KE_C4R) $(C4KE_SRCS)
+$(C4KE_C4R): $(C4CC)
+	$(PREPROC) src/c4ke/c4ke.c | $(C4CC) -o $(C4KE_C4R) -
 # The init process
 $(INIT): $(C4CC) $(INIT_SRCS)
 	$(C4CC) -o $(INIT) $(INIT_SRCS)
@@ -185,7 +229,7 @@ C4KE_WATCH := $(C4KE_SRCS) $(C4KE_HDRS)
 $(C4R_TOP): $(C4CC) $(U0) $(SRCS)/c4ke/bin/ps.c $(SRCS)/c4ke/bin/top.c $(C4KE_WATCH)
 	$(C4CC) -o $(C4R_TOP) $(U0) $(SRCS)/c4ke/bin/ps.c $(SRCS)/c4ke/bin/top.c
 # C4KE version of c4cc
-$(C4R_C4CC): $(C4CC) $(U0) $(SRCS)/c4cc/c4cc.c load-c4r.c $(SRCS)/c4cc/asm-c4r.c
+$(C4R_C4CC): $(C4CC) $(U0) load-c4r.c $(SRCS)/c4cc/c4cc.c $(SRCS)/c4cc/asm-c4r.c
 	$(C4CC) -o $(C4R_C4CC) $(C4R_C4CC_SRCS)
 # c4rdump, requires c4cc sources until proper headers implemented
 $(C4R_C4RDUMP): $(C4CC) $(U0) $(C4R_C4CC_SRCS) $(SRCS)/c4ke/bin/c4rdump.c
@@ -204,7 +248,7 @@ $(SRCS)/bench/%.c4r: $(SRCS)/bench/%.c $(C4KE_WATCH) $(C4CC)
 #
 # Exclusive rule: this test program doesn't link with u0
 src/tests/hello.c4r: $(C4CC) $(TESTS)/hello.c
-	$(C4CC) -o hello.c4r $(TESTS)/hello.c
+	$(C4CC) -o src/tests/hello.c4r $(TESTS)/hello.c
 # All tests should compile with the following invocation
 $(SRCS)/tests/%.c4r: $(SRCS)/tests/%.c $(C4KE_WATCH) $(C4CC)
 	$(C4CC) -o $@ $(U0) $<
@@ -213,3 +257,5 @@ $(SRCS)/tests/%.c4r: $(SRCS)/tests/%.c $(C4KE_WATCH) $(C4CC)
 %.c4l: %.c $(C4KE_WATCH) $(C4CC)
 	$(C4CC) -o $@ $<
 
+pi:
+	(cd .. && tar cjvf pi.tgz c4ke/*.c c4ke/include c4ke/src c4ke/Makefile c4ke/*.txt)

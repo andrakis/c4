@@ -9,7 +9,7 @@
 //  o These syscalls themselves can be overridden by client code.
 //
 //  o CONFIG.SYS:
-//    - FILES=nn                   No effect
+//    - FILES=nn                   
 //    - BUFFERS=nn                 No effect
 //    - DEVICE=file.c [arguments]  Load a device driver
 //    - SHELL=file.c [arguments]   Specify shell (default: cmd.c)
@@ -588,6 +588,9 @@ int compile_and_run(char *file, int argc, char **argv)
   while (i <= PUTC) { next(); id[Class] = Sys; id[Type] = INT; id[Val] = i++; }
   next(); id[Tk] = Char; // handle void type
   next(); idmain = id; // keep track of main
+  // Add extended keywords, if any, as syscalls
+  p = extkeywords;
+  i = 0; while (i < extkeywords_count) { next(); id[Class] = Ext; id[Type] = INT; id[Val] = i++; }
 
   if (!(lp = p = malloc(poolsz))) { printf("could not malloc(%d) source area\n", poolsz); return -1; }
   if ((i = read(fd, p, poolsz-1)) <= 0) { printf("read() returned %d\n", i); return -1; }

@@ -1,0 +1,3 @@
++ Got global initializer '=1' working.
++ Got global array '[N]' working.
+- Doesn't seem to affect c4ke for static data?

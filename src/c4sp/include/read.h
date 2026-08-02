@@ -69,6 +69,25 @@ void pr_int (int v) {
 	else pr_uint(v);
 }
 
+// Print a binary32 value. Rendered at 6 digits then trimmed of trailing
+// zeros (and a bare point), which reproduces how alisp's JS prints simple
+// values: 0.5 -> "0.5", 1.0 -> "1", 3.14 -> "3.14".
+char *pr_f32_buf;
+
+void pr_f32 (int bits) {
+	int n, dot, i;
+	if (!pr_f32_buf) pr_f32_buf = malloc(64);
+	n = f32_to_string(bits, pr_f32_buf, 6);
+	dot = 0;
+	i = 0;
+	while (i < n) if (pr_f32_buf[i++] == '.') dot = 1;
+	if (dot) {
+		while (n > 1 && pr_f32_buf[n - 1] == '0') --n;
+		if (n > 1 && pr_f32_buf[n - 1] == '.') --n;
+	}
+	pr_sn(pr_f32_buf, n);
+}
+
 // -- printer --
 
 void cell_write (int *x, int quote) {
@@ -77,7 +96,7 @@ void cell_write (int *x, int quote) {
 	t = x[CELL_TYPE];
 	if (t == T_ATOM) { pr_s(atom_name(x[CELL_A])); return; }
 	if (t == T_INT) { pr_int(x[CELL_A]); return; }
-	if (t == T_FLOAT) { pr_s("?float?"); return; } // arrives with M4
+	if (t == T_FLOAT) { pr_f32(x[CELL_A]); return; }
 	if (t == T_STRING) {
 		if (quote) pr_ch('"');
 		pr_sn((char *)x[CELL_A], x[CELL_B]);
@@ -160,7 +179,13 @@ int cell_equal (int *a, int *b) {
 		return cell_display_equal(a, b);
 	}
 	if (ta == T_INT || ta == T_FLOAT) {
-		if (tb == ta) return a[CELL_A] == b[CELL_A];
+		if (ta == T_INT && tb == T_INT) return a[CELL_A] == b[CELL_A];
+		if (tb == T_INT || tb == T_FLOAT)
+			// Mixed int/float, or float/float: alisp's one number type
+			// makes (= 1 1.0) true; f32_eq also gets -0.0 == 0.0 and
+			// NaN != NaN right, matching JS ===
+			return f32_eq(ta == T_INT ? f32_from_int(a[CELL_A]) : a[CELL_A],
+			              tb == T_INT ? f32_from_int(b[CELL_A]) : b[CELL_A]);
 		return cell_display_equal(a, b);
 	}
 	if (ta != tb) return 0;
@@ -200,8 +225,11 @@ void rd_skip () {
 }
 
 // Classify and convert a generic token: integer, float, or interned atom.
+// The integer path must win whenever the token has no point or exponent:
+// binary32 cannot represent every int exactly (design, open questions).
 int *rd_token_cell (char *s, int len) {
-	int i, neg, v, isint;
+	int i, neg, v, isint, bits;
+	char *end;
 	// Numbers start with a digit, or a minus followed by a digit
 	if (rd_isdigit(s[0]) || (len > 1 && s[0] == '-' && rd_isdigit(s[1]))) {
 		neg = (s[0] == '-');
@@ -213,10 +241,11 @@ int *rd_token_cell (char *s, int len) {
 			else v = v * 10 + (s[i++] - '0');
 		}
 		if (isint) return mk_int(neg ? -v : v);
-		// Not a plain integer: a float literal ("1.5", "2e3").
-		// Floats arrive with M4 (binary32 via c4_float.h).
-		c4sp_error("float literals are not supported yet");
-		return 0;
+		// A float literal ("1.5", "2e3"), binary32 via c4_float.h. The
+		// token is not nul-terminated, so the whole span must be consumed.
+		bits = f32_from_string(s, &end);
+		if (end == s + len) return mk_float(bits);
+		// "12abc" and friends: an atom, as good a choice as any
 	}
 	return mk_atom(atom_intern(s, len));
 }

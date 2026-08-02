@@ -166,7 +166,7 @@ c4sp.c4r: $(C4CC) $(C4SP_SRCS)
 #     there for the one deliberate divergence);
 #  3. the c4r build under c4m must agree with the native build.
 # seval gets a larger arena until the M2 collector lands.
-test-c4sp: c4sp c4sp.c4r c4m
+test-c4sp: c4sp c4sp.c4r c4m $(C4KE_C4R)
 	for f in src/c4sp/lisp/*.lisp; do \
 		./c4sp -p $$f > .c4sp_rt1 || exit 1; \
 		./c4sp -p .c4sp_rt1 > .c4sp_rt2 || exit 1; \
@@ -198,6 +198,11 @@ test-c4sp: c4sp c4sp.c4r c4m
 	./c4sp -R src/c4sp/lisp/seval.lisp | cmp - src/c4sp/tests/expected/seval.txt
 	./c4sp src/c4sp/lisp/deeprec.lisp | cmp - src/c4sp/tests/expected/deeprec.txt
 	./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/deeprec.lisp | cmp - src/c4sp/tests/expected/deeprec.txt
+	# M4: floats (binary32), the REPL, and c4sp as a C4KE process
+	./c4sp src/c4sp/lisp/floats.lisp | cmp - src/c4sp/tests/expected/floats.txt
+	./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/floats.lisp | cmp - src/c4sp/tests/expected/floats.txt
+	printf '(+ 1 2)\n(* 3.5 2)\n(define x 7)\n(+ x 0.5)\n' | ./c4sp -i | cmp - src/c4sp/tests/expected/repl.txt
+	./c4m load-c4r.c -- $(C4KE_C4R) c4sp.c4r src/c4sp/lisp/fac.lisp | grep -q "Factorial of 10 = 3628800"
 	@echo "test-c4sp: OK"
 
 # The heavyweight version: seval evaluating seval evaluating fac, under c4m

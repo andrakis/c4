@@ -1,0 +1,12 @@
+1.5
+-0.5
+10
+2.5
+0.5
+true
+true
+true true false true
+3.14 2000 -0.25 100
+number
+pi is roughly 3.140625
+nil

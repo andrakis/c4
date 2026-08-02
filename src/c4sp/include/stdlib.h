@@ -86,6 +86,45 @@ int *cell_typeof (int *x) {
 	return mk_atom(atom_intern(n, cs_strlen(n)));
 }
 
+// Numeric fold for + - * /. Integers stay integers until a float joins,
+// then everything promotes to binary32 -- alisp's single JS number type
+// means 1 + 0.5 is 1.5, and this reproduces that. Integer division stays
+// integer division: (/ 10 4) is 2 here and 2.5 in alisp, a documented
+// divergence; write (/ 10.0 4) for the float answer.
+int *builtin_numeric (int op, int *args) {
+	int *rest, *a, t, isf, v, w;
+	a = car(args);
+	t = cell_type(a);
+	if (t != T_INT && t != T_FLOAT) { c4sp_error("arithmetic on non-number"); return 0; }
+	isf = (t == T_FLOAT);
+	v = a[CELL_A];
+	rest = cdr(args);
+	while (rest) {
+		a = car(rest);
+		t = cell_type(a);
+		if (t != T_INT && t != T_FLOAT) { c4sp_error("arithmetic on non-number"); return 0; }
+		if (!isf && t == T_FLOAT) { v = f32_from_int(v); isf = 1; }
+		if (isf) {
+			w = (t == T_FLOAT) ? a[CELL_A] : f32_from_int(a[CELL_A]);
+			if (op == B_ADD) v = f32_add(v, w);
+			else if (op == B_SUB) v = f32_sub(v, w);
+			else if (op == B_MUL) v = f32_mul(v, w);
+			else v = f32_div(v, w);
+		} else {
+			w = a[CELL_A];
+			if (op == B_ADD) v = v + w;
+			else if (op == B_SUB) v = v - w;
+			else if (op == B_MUL) v = v * w;
+			else {
+				if (!w) { c4sp_error("division by zero"); return 0; }
+				v = v / w;
+			}
+		}
+		rest = cdr(rest);
+	}
+	return isf ? mk_float(v) : mk_int(v);
+}
+
 // (+ ...): behaviour follows the first argument -- numeric sum, string
 // concatenation (later arguments printed in display form), or list append.
 // An empty list is nil, so nil-first also appends.
@@ -94,15 +133,8 @@ int *builtin_add (int *args) {
 	first = car(args);
 	rest = cdr(args);
 	t = cell_type(first);
-	if (t == T_INT) {
-		v = first[CELL_A];
-		while (rest) {
-			if (cell_type(car(rest)) != T_INT) { c4sp_error("+ on mixed types"); return 0; }
-			v = v + car(rest)[CELL_A];
-			rest = cdr(rest);
-		}
-		return mk_int(v);
-	}
+	if (t == T_INT || t == T_FLOAT)
+		return builtin_numeric(B_ADD, args);
 	if (t == T_STRING) {
 		pr_reset();
 		cell_write(first, 0);
@@ -125,31 +157,25 @@ int *builtin_add (int *args) {
 	return 0;
 }
 
-// -, *, /: numeric folds
-int *builtin_arith (int op, int *args) {
-	int *rest, v, w;
-	if (cell_type(car(args)) != T_INT) { c4sp_error("arithmetic on non-number"); return 0; }
-	v = car(args)[CELL_A];
-	rest = cdr(args);
-	while (rest) {
-		if (cell_type(car(rest)) != T_INT) { c4sp_error("arithmetic on non-number"); return 0; }
-		w = car(rest)[CELL_A];
-		if (op == B_SUB) v = v - w;
-		else if (op == B_MUL) v = v * w;
-		else if (op == B_DIV) {
-			if (!w) { c4sp_error("division by zero"); return 0; }
-			v = v / w;
-		}
-		rest = cdr(rest);
-	}
-	return mk_int(v);
-}
-
-// <, <=, >, >=: compare the value words, as alisp compares .value
+// <, <=, >, >=: numeric comparison when a float is involved, otherwise
+// the raw value words, as alisp compares .value (atoms compare by id)
 int *builtin_cmp (int op, int *args) {
-	int a, b;
-	a = car(args) ? car(args)[CELL_A] : 0;
-	b = list_index(args, 1) ? list_index(args, 1)[CELL_A] : 0;
+	int *x, *y, a, b, tx, ty;
+	x = car(args);
+	y = list_index(args, 1);
+	tx = cell_type(x);
+	ty = cell_type(y);
+	if ((tx == T_FLOAT || ty == T_FLOAT) &&
+	    (tx == T_INT || tx == T_FLOAT) && (ty == T_INT || ty == T_FLOAT)) {
+		a = (tx == T_FLOAT) ? x[CELL_A] : f32_from_int(x[CELL_A]);
+		b = (ty == T_FLOAT) ? y[CELL_A] : f32_from_int(y[CELL_A]);
+		if (op == B_LT) return bool_cell(f32_lt(a, b));
+		if (op == B_LE) return bool_cell(f32_le(a, b));
+		if (op == B_GT) return bool_cell(f32_gt(a, b));
+		return bool_cell(f32_ge(a, b));
+	}
+	a = x ? x[CELL_A] : 0;
+	b = y ? y[CELL_A] : 0;
 	if (op == B_LT) return bool_cell(a < b);
 	if (op == B_LE) return bool_cell(a <= b);
 	if (op == B_GT) return bool_cell(a > b);
@@ -305,7 +331,7 @@ int *builtin_call (int id, int *args, int *env) {
 		return 0;
 	}
 	if (id == B_ADD) return builtin_add(args);
-	if (id == B_SUB || id == B_MUL || id == B_DIV) return builtin_arith(id, args);
+	if (id == B_SUB || id == B_MUL || id == B_DIV) return builtin_numeric(id, args);
 	if (id == B_EQ) return bool_cell(cell_equal(a0, a1));
 	if (id == B_NE) return bool_cell(!cell_equal(a0, a1));
 	if (id == B_LT || id == B_LE || id == B_GT || id == B_GE)

@@ -224,8 +224,10 @@ static int f32_mul (int a, int b) {
 	er = ea + eb - F32_BIAS;
 
 	// Two 24-bit significands give a product in [2^46, 2^48). Reduce it to the
-	// 27-bit working form, whose leading bit sits at 26.
-	if (mr >= (1 << 47)) {
+	// 27-bit working form, whose leading bit sits at 26. The 1 is cast
+	// because a native build widens the int TYPE to 64 bits but a bare
+	// literal stays C's 32-bit int, making 1 << 47 undefined.
+	if (mr >= ((int)1 << 47)) {
 		mr = f32_shr_sticky(mr, 21);
 		++er;
 	} else {

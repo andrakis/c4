@@ -243,6 +243,12 @@ test-c4sp-opt: c4sp c4sp.c4r c4m $(C4KE_C4R)
 	./c4m load-c4r.c -- .c4sp_opt_cc.c4r -S src/tests/multifun.c 2>&1 | sed -E 's/[0-9]{9,}/ADDR/g' > .c4sp_opt_b
 	cmp .c4sp_opt_a .c4sp_opt_b
 	rm -f .c4sp_opt.c4r .c4sp_opt_cc.c4r .c4sp_opt_a .c4sp_opt_b
+	# The tail pass: a million mutual zero-arg tail calls overflow the VM
+	# stack unoptimized; the frame-reuse rewrite runs them flat.
+	$(C4CC) -o .c4sp_tail.c4r src/tests/test_tailcall.c
+	./c4sp src/c4sp/lisp/c4opt-run.lisp .c4sp_tail.c4r .c4sp_tail_opt.c4r | grep -q " tail 2"
+	./c4m load-c4r.c -- .c4sp_tail_opt.c4r | grep -q "parity 0 counter 1000000"
+	rm -f .c4sp_tail.c4r .c4sp_tail_opt.c4r
 	@echo "test-c4sp-opt: OK"
 
 # Linking test: compile two modules separately, link both ways, run each,

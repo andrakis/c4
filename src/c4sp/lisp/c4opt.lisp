@@ -29,6 +29,7 @@
 (define opt:n-jmpnext 0)
 (define opt:n-thread 0)
 (define opt:n-dead 0)
+(define opt:n-tail 0)
 
 ;; ---- helpers ----
 
@@ -200,6 +201,127 @@
 		(next opt:thread/2 (tail Code) (cons I Acc) FT)))
 )))
 
+;; tail calls (design 9.4, "needs frame checking, do last"): a zero-arg
+;; call in tail position -- JSR f directly followed by LEV -- can reuse
+;; the caller's frame. The naive rewrite in the design table (ADJ n before
+;; the jump) would discard the callee's arguments, so only the zero-arg
+;; form is transformed, and precisely:
+;;
+;;     JSR f; LEV   ->   ADJ (m - k); JMP f+2
+;;
+;; where m is the enclosing function's ENT operand, k the callee's, and
+;; f+2 enters the callee just past its ENT. The ADJ moves sp from bp-m to
+;; bp-k; bp is untouched, so the callee's locals occupy our frame and its
+;; LEV pops OUR saved (bp, retpc) pair -- returning straight to our
+;; caller. Tail recursion becomes O(1) stack. When m = k the ADJ is 0 and
+;; the next round's adj0 pass deletes it.
+;;
+;; Guards: the callee label must be immediately followed by ENT (else it
+;; is not a function entry we understand), and variadic callees
+;; (ATTR_VARIADIC, 0x20, from the symbol table) are excluded -- their
+;; argument-slot reads would land in the caller's frame.
+;;
+;; "f+2" needs a label after the callee's ENT; fresh label ids are
+;; allocated past the current maximum.
+
+(define opt:tail (lambda (Code Syms) (begin
+	(define MaxL (c4r:max-label Code 0))
+	(define EM (string:alloc (* W (+ MaxL 2))))  ;; label -> ENT operand + 1
+	(define SM (string:alloc (* W (+ MaxL 2))))  ;; label -> skip label + 1
+	(define BAN (string:alloc (+ MaxL 2)))       ;; byte: 1 = variadic
+	(opt:tail-ban Syms BAN MaxL)
+	(opt:tail-entmap Code EM)
+	(opt:tail-mark Code EM SM BAN (+ MaxL 1))
+	(next opt:tail/2 Code (list) EM SM 0 0))))
+
+;; mark variadic function symbols' entry labels as untouchable
+(define opt:tail-ban (lambda (Syms BAN MaxL)
+	(if (empty? Syms) nil (begin
+		(define S (head Syms))
+		(if (opt:tail-ban? S MaxL) (string:byte! BAN (second (index S 5)) 1))
+		(next opt:tail-ban (tail Syms) BAN MaxL)))))
+(define opt:tail-ban? (lambda (S MaxL)
+	(if (= 129 (third S))
+		(if (= 'list (typeof (index S 5)))
+			(if (<= (second (index S 5)) MaxL)
+				(> (bit:and 32 (index S 3)) 0)
+				false)
+			false)
+		false)))
+
+;; label -> the operand of an ENT immediately following it
+(define opt:tail-entmap (lambda (Code EM)
+	(if (empty? Code) nil (begin
+		(if (opt:is-label (head Code))
+			(if (not (empty? (tail Code)))
+				(if (opt:plain (second Code) 'ENT)
+					(string:word! EM (* W (second (head Code)))
+						(+ 1 (second (second Code)))))))
+		(next opt:tail-entmap (tail Code) EM)))))
+
+;; is this instruction pair a transformable tail call to label F?
+(define opt:tail-site (lambda (I R EM SM BAN)
+	(if (not (opt:is I 'JSR)) nil
+	(if (empty? R) nil
+	(if (not (= 1 (length (head R)))) nil
+	(if (not (opt:is (head R) 'LEV)) nil
+	(opt:tail-site2 (opt:jump-target I) EM SM BAN)))))))
+(define opt:tail-site2 (lambda (F EM SM BAN)
+	(if (= nil F) nil
+	(if (= 0 (string:word EM (* W F))) nil
+	(if (= 1 (string:byte BAN F)) nil
+	F)))))
+
+;; give every tail-called function a fresh skip label id in SM
+(define opt:tail-mark (lambda (Code EM SM BAN NextId) (begin
+	(if (empty? Code) NextId (begin
+		(define F (opt:tail-site (head Code) (tail Code) EM SM BAN))
+		(if (= nil F) nil
+			(if (= 0 (string:word SM (* W F))) (begin
+				(string:word! SM (* W F) (+ 1 NextId))
+				(set! NextId (+ 1 NextId)))))
+		(next opt:tail-mark (tail Code) EM SM BAN NextId))))))
+
+;; does the walk transform here? Only sites whose callee got a skip label.
+(define opt:tail-go (lambda (I R SM)
+	(if (not (opt:is I 'JSR)) nil
+	(if (empty? R) nil
+	(if (not (= 1 (length (head R)))) nil
+	(if (not (opt:is (head R) 'LEV)) nil
+	(opt:tail-go2 (opt:jump-target I) SM)))))))
+(define opt:tail-go2 (lambda (F SM)
+	(if (= nil F) nil
+		(if (> (string:word SM (* W F)) 0) F nil))))
+
+;; the rewrite walk. CurM = enclosing ENT operand + 1 (0 = unknown);
+;; Pending = skip label id + 1 to insert after the next ENT.
+(define opt:tail/2 (lambda (Code Acc EM SM CurM Pending) (begin
+	(if (empty? Code) (reverse Acc) (begin
+		(define I (head Code))
+		(define F (opt:tail-go I (tail Code) SM))
+		(if (if (= nil F) false (> CurM 0))
+			;; transform: consume JSR and LEV, emit ADJ (m-k); JMP skip
+			(begin
+				(set! opt:n-tail (+ 1 opt:n-tail))
+				(next opt:tail/2 (tail (tail Code))
+					(cons (list 'JMP (list 'code (- (string:word SM (* W F)) 1)))
+						(cons (list 'ADJ (- (- CurM 1) (- (string:word EM (* W F)) 1)))
+							Acc))
+					EM SM CurM Pending))
+			(begin
+				(if (opt:is-label I)
+					(if (> (string:word SM (* W (second I))) 0)
+						(set! Pending (string:word SM (* W (second I))))))
+				(if (opt:plain I 'ENT)
+					(set! CurM (+ 1 (second I))))
+				(if (if (opt:plain I 'ENT) (> Pending 0) false)
+					;; emit ENT then the skip label
+					(next opt:tail/2 (tail Code)
+						(cons (list 'label (- Pending 1)) (cons I Acc))
+						EM SM CurM 0)
+					(next opt:tail/2 (tail Code) (cons I Acc) EM SM CurM Pending))))))
+)))
+
 ;; dead code: after an unconditional JMP or LEV, nothing can execute until
 ;; the next label. Raw (word W) items are kept as barriers.
 (define opt:dead (lambda (Code) (next opt:dead/2 Code (list) false)))
@@ -219,8 +341,9 @@
 
 ;; ---- the pipeline ----
 
-(define opt:passes (lambda (Code)
-	(opt:dead (opt:thread (opt:jmpnext (opt:adj0 (opt:shl (opt:fold Code))))))))
+(define opt:passes (lambda (Code Syms)
+	;; adj0 runs again after tail: a same-size tail transform emits ADJ 0
+	(opt:dead (opt:adj0 (opt:tail (opt:thread (opt:jmpnext (opt:adj0 (opt:shl (opt:fold Code))))) Syms)))))
 
 (define opt:count-instrs (lambda (Code) (next opt:count/2 Code 0)))
 (define opt:count/2 (lambda (Code N)
@@ -233,6 +356,7 @@
 (define c4opt:optimize (lambda (M) (begin
 	(set! opt:n-fold 0) (set! opt:n-shl 0) (set! opt:n-adj0 0)
 	(set! opt:n-jmpnext 0) (set! opt:n-thread 0) (set! opt:n-dead 0)
+	(set! opt:n-tail 0)
 	(define Code (index M 3))
 	(define Before (opt:count-instrs Code))
 	(define Rounds 0)
@@ -246,11 +370,12 @@
 		(begin
 			(print ";; c4opt:" Before "->" N "instructions in" Rounds "rounds")
 			(print ";;   fold" opt:n-fold " mul->shl" opt:n-shl " adj0" opt:n-adj0
-				" jmp-next" opt:n-jmpnext " threaded" opt:n-thread " dead" opt:n-dead)
+				" jmp-next" opt:n-jmpnext " threaded" opt:n-thread " dead" opt:n-dead
+				" tail" opt:n-tail)
 			(list (head M) (second M) (third M) Code (index M 4)
 				(index M 5) (index M 6) (index M 7)))
 		(begin
-			(set! Code (opt:passes Code))
+			(set! Code (opt:passes Code (index M 5)))
 			(next c4opt:optloop M Code Before (opt:count-instrs Code) N (+ Rounds 1)))))))
 
 )

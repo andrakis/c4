@@ -580,6 +580,28 @@ void dump_to_file (char *file) {
 	// Data
 	writechecked(fd, "D\0\0\0\0\0\0\0", sizeof(int));
 	writechecked(fd, data_s, data - data_s);
+	// Resolve symbol-typed patches whose symbol was defined later in this
+	// compilation (a JSR emitted while the target was only a prototype).
+	// The loader ignores symbol patches, so leaving them made standalone
+	// executables with forward declarations jump to garbage; only symbols
+	// still undefined at the end of the unit -- true externs, for
+	// c4rlink -- stay symbol-typed.
+	i = 0; lbl = asmc4r_labels;
+	while (i < asmc4r_labels_count) {
+		if (lbl[LBL_TYPE] >= 0) {
+			d = idstart + lbl[LBL_TYPE] * Idsz;
+			// ATTR_EXTERN is the discriminator: a definition clears it,
+			// and emit_Val alone cannot be trusted (prototypes carry a
+			// nonzero garbage value there).
+			if (d[Class] == Fun && d[emit_Val] && !(d[Attr] & ATTR_EXTERN)) {
+				lbl[LBL_TYPE]  = LT_CODE;
+				lbl[LBL_VALUE] = (int *)d[emit_Val] - asmc4r_e_start;
+			}
+		}
+		++i;
+		lbl = lbl + LBL__Sz;
+	}
+
 	// Patches
 	writechecked(fd, "P\0\0\0\0\0\0\0", sizeof(int));
 	i = 0; lbl = asmc4r_labels;

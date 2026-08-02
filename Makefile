@@ -183,7 +183,17 @@ test-c4sp: c4sp c4sp.c4r c4m
 	./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/seval.lisp | cmp - src/c4sp/tests/expected/seval.txt
 	./c4sp src/c4sp/lisp/gcloop.lisp | cmp - src/c4sp/tests/expected/gcloop.txt
 	./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/gcloop.lisp 20000 | cmp - src/c4sp/tests/expected/gcloop.txt
+	./c4sp src/c4sp/lisp/seval.lisp -s src/c4sp/lisp/fac.lisp | cmp - src/c4sp/tests/expected/seval-fac.txt
+	./c4sp src/c4sp/lisp/seval.lisp -s src/c4sp/lisp/macros.lisp | cmp - src/c4sp/tests/expected/seval-macros.txt
+	./c4sp src/c4sp/lisp/seval.lisp -s -t src/c4sp/lisp/seval.lisp -s src/c4sp/lisp/fac.lisp | cmp - src/c4sp/tests/expected/seval-seval-fac.txt
+	./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/seval.lisp -s src/c4sp/lisp/fac.lisp | cmp - src/c4sp/tests/expected/seval-fac.txt
 	@echo "test-c4sp: OK"
+
+# The heavyweight version: seval evaluating seval evaluating fac, under c4m
+# (about a minute of interpreted interpretation of an interpreter).
+test-c4sp-deep: c4sp.c4r c4m
+	./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/seval.lisp -s -t src/c4sp/lisp/seval.lisp -s src/c4sp/lisp/fac.lisp | cmp - src/c4sp/tests/expected/seval-seval-fac.txt
+	@echo "test-c4sp-deep: OK"
 
 # Linking test: compile two modules separately, link both ways, run each,
 # and exercise library mode (-r) with a relink of the written library.

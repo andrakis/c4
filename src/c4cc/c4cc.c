@@ -607,7 +607,15 @@ void next()
         if (tk == '"') { *data++ = ival; }
       }
       ++p;
-      if (tk == '"') { ival = (int)pp; } else tk = Num;
+      if (tk == '"') {
+        // An empty string literal must still occupy a data byte: the
+        // emitted IMM otherwise points at the current end of the data
+        // pool, and asm-c4r only creates relocation patches for
+        // addresses strictly below it, so "" in a .c4r held a garbage
+        // absolute address.
+        if (data == pp) *data++ = 0;
+        ival = (int)pp;
+      } else tk = Num;
       return;
     }
     else if (tk == '=') { if (*p == '=') { ++p; tk = Eq; } else tk = Assign; return; }

@@ -163,30 +163,6 @@ int *list_append (int *a, int *b) {
 	return head;
 }
 
-// Deep structural equality -- alisp's equal(). Numbers of differing
-// numeric types compare by printed form there; here int==int and
-// float==float bitwise, which the corpus never distinguishes.
-int cell_equal (int *a, int *b) {
-	int ta, tb;
-	if (a == b) return 1;
-	ta = cell_type(a); tb = cell_type(b);
-	if (ta != tb) return 0;
-	if (ta == T_INT || ta == T_FLOAT || ta == T_ATOM)
-		return a[CELL_A] == b[CELL_A];
-	if (ta == T_STRING)
-		return a[CELL_B] == b[CELL_B] &&
-		       !memcmp((char *)a[CELL_A], (char *)b[CELL_A], a[CELL_B]);
-	if (ta == T_CONS)
-		return cell_equal((int *)a[CELL_A], (int *)b[CELL_A]) &&
-		       cell_equal((int *)a[CELL_B], (int *)b[CELL_B]);
-	if (ta == T_LAMBDA || ta == T_MACRO || ta == T_FASTMACRO)
-		return cell_equal((int *)a[CELL_A], (int *)b[CELL_A]) &&
-		       cell_equal((int *)a[CELL_B], (int *)b[CELL_B]) &&
-		       a[CELL_C] == b[CELL_C];
-	// T_PROC/T_PROCENV/T_ENV: identity (a == b failed above)
-	return a[CELL_A] == b[CELL_A] && ta != T_ENV;
-}
-
 // -- environments --
 //
 // A frame is a T_ENV cell: A = bindings, B = parent, C = numeric id.

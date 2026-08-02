@@ -124,6 +124,58 @@ void cell_write (int *x, int quote) {
 	pr_s("?cell?");
 }
 
+// -- equality --
+//
+// alisp's equal() dispatches on the FIRST argument's type, and its string
+// and number cases fall back to comparing printed forms, so (= "-s" '-s)
+// is true while (= '-s "-s") takes the atom path and is false. seval.lisp
+// leans on exactly this when matching command line flags. Lives here
+// rather than cells.h because the fallback needs the printer.
+
+// Compare the display forms of two cells using the shared print buffer.
+// Each leaf comparison is self-contained, so recursive list comparison
+// interleaves safely with it.
+int cell_display_equal (int *a, int *b) {
+	int mark;
+	pr_reset();
+	cell_write(a, 0);
+	mark = pr_len;
+	cell_write(b, 0);
+	if (pr_len - mark != mark) return 0;
+	return !memcmp(pr_buf, pr_buf + mark, mark);
+}
+
+int cell_equal (int *a, int *b) {
+	int ta, tb;
+	if (a == b) return 1;
+	ta = cell_type(a); tb = cell_type(b);
+	// nil the value and nil the atom are the same thing (alisp's Nil IS
+	// the atom nil; unevaluated program text holds the atom form)
+	if (ta == T_NIL) return tb == T_ATOM && b[CELL_A] == A_NIL;
+	if (tb == T_NIL) return ta == T_ATOM && a[CELL_A] == A_NIL;
+	if (ta == T_STRING) {
+		if (tb == T_STRING)
+			return a[CELL_B] == b[CELL_B] &&
+			       !memcmp((char *)a[CELL_A], (char *)b[CELL_A], a[CELL_B]);
+		return cell_display_equal(a, b);
+	}
+	if (ta == T_INT || ta == T_FLOAT) {
+		if (tb == ta) return a[CELL_A] == b[CELL_A];
+		return cell_display_equal(a, b);
+	}
+	if (ta != tb) return 0;
+	if (ta == T_ATOM) return a[CELL_A] == b[CELL_A];
+	if (ta == T_CONS)
+		return cell_equal((int *)a[CELL_A], (int *)b[CELL_A]) &&
+		       cell_equal((int *)a[CELL_B], (int *)b[CELL_B]);
+	if (ta == T_LAMBDA || ta == T_MACRO || ta == T_FASTMACRO)
+		return cell_equal((int *)a[CELL_A], (int *)b[CELL_A]) &&
+		       cell_equal((int *)a[CELL_B], (int *)b[CELL_B]) &&
+		       a[CELL_C] == b[CELL_C];
+	// T_PROC/T_PROCENV/T_ENV: identity (a == b failed above)
+	return a[CELL_A] == b[CELL_A] && ta != T_ENV;
+}
+
 // -- reader --
 
 char *rd_src;

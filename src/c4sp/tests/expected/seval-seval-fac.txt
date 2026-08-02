@@ -1,0 +1,6 @@
+Loaded from src/c4sp/lisp/seval.lisp
+Loaded from src/c4sp/lisp/fac.lisp
+Factorial of 10 = 3628800
+Result: nil
+Result: nil
+nil

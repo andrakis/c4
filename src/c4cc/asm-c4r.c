@@ -234,7 +234,7 @@ enum {
 	LBL_INDEX,   // int, the code offset that needs to be patched
 	LBL_VALUE,   // int, the value it needs to be patched to
 	LBL__Sz,
-	LABELS_MAX = 8096
+	LABELS_MAX = 65536 // switch jump tables emit one label per entry
 };
 
 enum {
@@ -395,6 +395,19 @@ void asmc4r_handler_SYSCALL(int num, int argcount) {
 
 void asmc4r_handler_MATH(int operation) {
 	*++asmc4r_e = operation;
+}
+
+// Emit a placeholder word carrying an LT_CODE label, for switch jump
+// tables. The label's value is set later through UpdateAddress, exactly
+// like a branch placeholder; the loader gives the word its run-time
+// address. Note the patch address is the word itself, not an operand
+// slot -- readers of the patch table (c4sp's c4r.lisp) know these as
+// standalone code words.
+int *asmc4r_handler_TBLWORD () {
+	int *lbl;
+	*++asmc4r_e = 0;
+	lbl = asmc4r_newlabel(asmc4r_e - asmc4r_e_start, LT_CODE);
+	return lbl;
 }
 
 int *asmc4r_handler_FunctionAddress () { return asmc4r_e + 1; }
@@ -851,6 +864,7 @@ int asmc4r_main (int argc, char **argv) {
 	c4cc_emithandlers[EH_LEV] = (int)&asmc4r_handler_LEV;
 	c4cc_emithandlers[EH_SYSCALL] = (int)&asmc4r_handler_SYSCALL;
 	c4cc_emithandlers[EH_MATH] = (int)&asmc4r_handler_MATH;
+	c4cc_emithandlers[EH_TBLWORD] = (int)&asmc4r_handler_TBLWORD;
 	c4cc_emithandlers[EH_FUNCADDR] = (int)&asmc4r_handler_FunctionAddress;
 	c4cc_emithandlers[EH_CURRADDR] = (int)&asmc4r_handler_CurrentAddress;
 	c4cc_emithandlers[EH_UPDTADDR] = (int)&asmc4r_handler_UpdateAddress;

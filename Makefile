@@ -249,6 +249,14 @@ test-c4sp-opt: c4sp c4sp.c4r c4m $(C4KE_C4R)
 	./c4sp src/c4sp/lisp/c4opt-run.lisp .c4sp_tail.c4r .c4sp_tail_opt.c4r | grep -q " tail 2"
 	./c4m load-c4r.c -- .c4sp_tail_opt.c4r | grep -q "parity 0 counter 1000000"
 	rm -f .c4sp_tail.c4r .c4sp_tail_opt.c4r
+	# switch (c4cc jump tables): correct behaviour, byte-identical round
+	# trip of the table words (cword), and identical after optimization
+	$(C4CC) -o .c4sp_sw.c4r src/tests/test_switch.c
+	./c4m load-c4r.c -- .c4sp_sw.c4r | cmp - src/c4sp/tests/expected/test_switch.txt
+	./c4sp src/c4sp/lisp/c4r-roundtrip.lisp .c4sp_sw.c4r | grep -q "roundtrip identical"
+	./c4sp src/c4sp/lisp/c4opt-run.lisp .c4sp_sw.c4r .c4sp_sw_opt.c4r > /dev/null
+	./c4m load-c4r.c -- .c4sp_sw_opt.c4r | cmp - src/c4sp/tests/expected/test_switch.txt
+	rm -f .c4sp_sw.c4r .c4sp_sw_opt.c4r
 	@echo "test-c4sp-opt: OK"
 
 # Linking test: compile two modules separately, link both ways, run each,

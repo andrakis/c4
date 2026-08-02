@@ -1,0 +1,12 @@
+classify(0) = 100
+classify(1) = 200
+classify(2) = 200
+classify(3) = -1
+classify(4) = -1
+classify(5) = 500
+classify(6) = -1
+colour: 1 2 3 0
+negatives: 99 22 0 33 99
+nested: 11 12 10 20 0
+while break: 45
+loop switch: 303

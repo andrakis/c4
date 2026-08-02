@@ -84,6 +84,14 @@ int  *_oisc4_e;
 int   c4cc_initialized;
 
 int *curr_continue;        // Marks current begin of while loop
+// break support: a stack of unresolved jump placeholders. Each while/for/
+// switch records the depth on entry and resolves everything above it on
+// exit, so breaks bind to the innermost construct.
+int *brk_labels;           // backend labels from emit_JMPPH
+int *brk_eslots;           // matching operand slots in the legacy e stream
+int  brk_top;
+int  brk_depth;            // constructs a break may target; 0 = error
+enum { BRK_MAX = 256, SWITCH_MAX_CASES = 256, SWITCH_MAX_RANGE = 4096 };
 
 // Original C4 doesn't recognise \t
 enum { TAB = 9 };
@@ -124,6 +132,7 @@ enum {
   // Keywords and attributes
   Static, Extern, Attribute, Constructor, Destructor,
   Char, Else, Enum, If, Int, Return, Sizeof, For, Continue, While,
+  Switch, Case, Default, Break,
   // Operators
   Assign, Cond, Lor, Lan, Or, Xor, And, Eq, Ne, Lt, Gt, Le, Ge, Shl, Shr, Add, Sub, Mul, Div, Mod, Inc, Dec, Brak,
 };
@@ -185,6 +194,7 @@ void c4cc_init_instructions() {
 	c4cc_keywords =
 		"static extern __attribute__ constructor destructor "     // Ignored by c4m
 		"char else enum if int return sizeof for continue while " // Keywords
+		"switch case default break "                              // ... with a jumptable switch
 		"open read close printf malloc free memset memcmp exit "  // Syscalls
 		"putchar puts realloc memcpy stacktrace "                 // C4M extended opcodes...
 		"install_trap_handler __opcode __builtin __c4_trap __c4_opcode "
@@ -213,6 +223,7 @@ enum { EH_LEA, EH_IMM, EH_LI, EH_LC, EH_RWLI, EH_RWLC, EH_SI, EH_SC, EH_PSH,
        EH_SRC,
        EH_INSRC_LINE, EH_PRINTACC,
        EH_FUNCTIONSTART, EH_FUNCTIONEND,
+       EH_TBLWORD,
        EH__Sz };
 
 // types
@@ -362,6 +373,13 @@ void emit_LEV() {
 
 void emit_SYSCALL(int num, int argcount) {
   invoke2((int*)c4cc_emithandlers[EH_SYSCALL], num, argcount);
+}
+
+// Emit a placeholder word carrying a CODE relocation, for switch jump
+// tables; the target is set later with emit_UpdateAddress, exactly like a
+// branch placeholder. Returns the backend label.
+int *emit_TableWord () {
+  return (int*)invoke0((int*)c4cc_emithandlers[EH_TBLWORD]);
 }
 
 void emit_MATH(int operation) {
@@ -943,6 +961,10 @@ void stmt()
   int *a, *b;
   int *oa, *ob, *oc;
   int *last_continue;
+  // switch state (see the Switch branch below)
+  int *swv, *swa, *swea, *tlbl;
+  int  swn, swdef, swmin, swmax, swrange, i2, v2, neg2, brk_base;
+  int *b2, *b3, *b4, *bend, *bdef, *odef, *oend, *o2, *o3, *o4, *etbl, *otbl;
 
   statement_start = p;
 
@@ -973,6 +995,191 @@ void stmt()
     *++e = JMP; *++e = (int)curr_continue;
     emit_JMP(curr_continue);
   }
+  else if (tk == Break) {
+    next();
+    if (tk != ';') { printf("%d: semicolon expected after 'break'\n", line); die(-1); }
+    if (!brk_depth) { printf("%d: 'break' outside of loop or switch\n", line); die(-1); }
+    if (brk_top >= BRK_MAX) { printf("%d: too many pending breaks\n", line); die(-1); }
+    *++e = JMP; b = ++e;
+    brk_eslots[brk_top] = (int)b;
+    brk_labels[brk_top] = (int)emit_JMPPH();
+    ++brk_top;
+  }
+  else if (tk == Switch) {
+    // switch (expr) { case C: ... default: ... }, with C fallthrough and
+    // break, compiled to a jump table. The table lives inline in the code
+    // segment because the patch format can only relocate code words.
+    // Layout, in emission order:
+    //
+    //     <expr>                a = value
+    //     JMP dispatch
+    //   body:                   cases record addresses; break -> end
+    //     JMP end               (running off the end of the body)
+    //   dispatch:
+    //     JMP bounds            (the table sits in between)
+    //   table:                  range+1 placeholder words, CODE patched
+    //   bounds:
+    //     [PSH; IMM min; SUB]   a = idx = value - min    (when min != 0)
+    //     PSH; PSH; PSH         three idx copies on the stack
+    //     IMM range; GT; BNZ oob2
+    //     IMM 0;     LT; BNZ oob1
+    //     IMM 8; MUL            a = idx * wordsize, stack clean again
+    //     PSH; IMM table; ADD; LI; JMPA
+    //   oob2: ADJ 2; JMP default-or-end
+    //   oob1: ADJ 1; JMP default-or-end
+    //   end:
+    //
+    // JMPA is a c4m opcode: like function pointers (JSRI), switch needs
+    // c4m or better at runtime; plain c4 will trap on it.
+    next();
+    if (tk == '(') next(); else { printf("%d: in 'switch': open paren expected\n", line); die(-1); }
+    expr(Assign);
+    if (tk == ')') next(); else { printf("%d: in 'switch': close paren expected\n", line); die(-1); }
+    if (!(swv = malloc(SWITCH_MAX_CASES * sizeof(int))) ||
+        !(swa = malloc(SWITCH_MAX_CASES * sizeof(int)))) { printf("%d: switch: out of memory\n", line); die(-1); }
+    swn = 0; swdef = 0; odef = 0; bdef = 0;
+    *++e = JMP; b = ++e;
+    ob = emit_JMPPH();                      // entry -> dispatch
+    brk_base = brk_top; ++brk_depth;
+    if (tk == '{') next(); else { printf("%d: in 'switch': open brace expected\n", line); die(-1); }
+    while (tk != '}') {
+      if (tk == Case) {
+        next();
+        neg2 = 0;
+        if (tk == Sub) { next(); neg2 = 1; }
+        if (tk == Num) v2 = ival;
+        else if (tk == Id && id[Class] == Num) v2 = id[Val];
+        else { printf("%d: 'case' needs an integer constant\n", line); die(-1); }
+        if (neg2) v2 = -v2;
+        next();
+        if (tk == ':') next(); else { printf("%d: colon expected after 'case'\n", line); die(-1); }
+        i2 = 0;
+        while (i2 < swn) {
+          if (swv[i2] == v2) { printf("%d: duplicate case value %d\n", line, v2); die(-1); }
+          ++i2;
+        }
+        if (swn >= SWITCH_MAX_CASES) { printf("%d: too many cases\n", line); die(-1); }
+        swv[swn] = v2;
+        swa[swn] = (int)emit_CurrentAddress();
+        ++swn;
+      }
+      else if (tk == Default) {
+        next();
+        if (tk == ':') next(); else { printf("%d: colon expected after 'default'\n", line); die(-1); }
+        if (swdef) { printf("%d: duplicate 'default'\n", line); die(-1); }
+        swdef = 1;
+        odef = emit_CurrentAddress();
+        bdef = e + 1;
+      }
+      else stmt();
+    }
+    next();
+    // running off the end of the body goes to end
+    *++e = JMP; bend = ++e;
+    oend = emit_JMPPH();
+    // dispatch
+    *b = (int)(e + 1);
+    emit_UpdateAddress(ob, emit_CurrentAddress());
+    if (!swn) {
+      // no cases at all: default if present, else straight through
+      if (swdef) { *++e = JMP; *++e = (int)bdef; emit_JMP(odef); }
+    } else {
+      swmin = swmax = swv[0];
+      i2 = 1;
+      while (i2 < swn) {
+        if (swv[i2] < swmin) swmin = swv[i2];
+        if (swv[i2] > swmax) swmax = swv[i2];
+        ++i2;
+      }
+      swrange = swmax - swmin;
+      if (swrange >= SWITCH_MAX_RANGE) { printf("%d: switch range %d too sparse for a jump table\n", line, swrange); die(-1); }
+      if (!(tlbl = malloc((swrange + 1) * sizeof(int)))) { printf("%d: switch: out of memory\n", line); die(-1); }
+      // hop over the inline table
+      *++e = JMP; b2 = ++e;
+      o2 = emit_JMPPH();
+      etbl = e + 1;                       // e-stream table base
+      otbl = emit_CurrentAddress();       // backend table base
+      i2 = 0;
+      while (i2 <= swrange) { *++e = 0; tlbl[i2] = (int)emit_TableWord(); ++i2; }
+      *b2 = (int)(e + 1);
+      emit_UpdateAddress(o2, emit_CurrentAddress());
+      // bounds check, three copies of idx on the stack
+      if (swmin) {
+        *++e = PSH; *++e = IMM; *++e = swmin; *++e = SUB;
+        emit_PSH(); emit_IMM(swmin); emit_MATH(SUB);
+      }
+      *++e = PSH; emit_PSH();
+      *++e = PSH; emit_PSH();
+      *++e = PSH; emit_PSH();
+      *++e = IMM; *++e = swrange; emit_IMM(swrange);
+      *++e = GT; emit_MATH(GT);
+      *++e = BNZ; b3 = ++e; o3 = emit_BNZPH();
+      *++e = IMM; *++e = 0; emit_IMM(0);
+      *++e = LT; emit_MATH(LT);
+      *++e = BNZ; b4 = ++e; o4 = emit_BNZPH();
+      *++e = IMM; *++e = sizeof(int); emit_IMM(sizeof(int));
+      *++e = MUL; emit_MATH(MUL);
+      *++e = PSH; emit_PSH();
+      *++e = IMM; *++e = (int)etbl; emit_IMM((int)otbl);
+      *++e = ADD; emit_MATH(ADD);
+      *++e = LI; emit_LI(LI);
+      *++e = JMPA; emit_MATH(JMPA);
+      // out-of-range: drop the leftover idx copies, then default or end
+      *b3 = (int)(e + 1);
+      emit_UpdateAddress(o3, emit_CurrentAddress());
+      *++e = ADJ; *++e = 2; emit_ADJ(2);
+      if (swdef) { *++e = JMP; *++e = (int)bdef; emit_JMP(odef); }
+      else {
+        if (brk_top >= BRK_MAX) { printf("%d: too many pending breaks\n", line); die(-1); }
+        *++e = JMP; b = ++e;
+        brk_eslots[brk_top] = (int)b;
+        brk_labels[brk_top] = (int)emit_JMPPH();
+        ++brk_top;
+      }
+      *b4 = (int)(e + 1);
+      emit_UpdateAddress(o4, emit_CurrentAddress());
+      *++e = ADJ; *++e = 1; emit_ADJ(1);
+      if (swdef) { *++e = JMP; *++e = (int)bdef; emit_JMP(odef); }
+      else {
+        if (brk_top >= BRK_MAX) { printf("%d: too many pending breaks\n", line); die(-1); }
+        *++e = JMP; b = ++e;
+        brk_eslots[brk_top] = (int)b;
+        brk_labels[brk_top] = (int)emit_JMPPH();
+        ++brk_top;
+      }
+      // fill the table: cases where present, else default, else end
+      // (nothing else is emitted below, so end == the current address)
+      i2 = 0;
+      while (i2 <= swrange) {
+        neg2 = 0;
+        v2 = 0;
+        while (v2 < swn) {
+          if (swv[v2] == swmin + i2) {
+            emit_UpdateAddress((int *)tlbl[i2], (int *)swa[v2]);
+            neg2 = 1;
+            v2 = swn;
+          }
+          ++v2;
+        }
+        if (!neg2) {
+          if (swdef) emit_UpdateAddress((int *)tlbl[i2], odef);
+          else emit_UpdateAddress((int *)tlbl[i2], emit_CurrentAddress());
+        }
+        ++i2;
+      }
+      free(tlbl);
+    }
+    // end: resolve the fallthrough jump and every pending break
+    *bend = (int)(e + 1);
+    emit_UpdateAddress(oend, emit_CurrentAddress());
+    --brk_depth;
+    while (brk_top > brk_base) {
+      --brk_top;
+      emit_UpdateAddress((int *)brk_labels[brk_top], emit_CurrentAddress());
+      *(int *)brk_eslots[brk_top] = (int)(e + 1);
+    }
+    free(swv); free(swa);
+  }
   else if (tk == For) {
     // for( initializers; condition; each-loop )
     //   [{ statement... } | statement];
@@ -996,6 +1203,7 @@ void stmt()
     // b: each-loop
     last_continue = curr_continue;
     curr_continue = ob + 1;
+    brk_base = brk_top; ++brk_depth;
     expr(Assign);
     if (tk == ';') next(); else { printf("%d: in 'for': semicolon expected after condition\n", line); die(-1); }
     *++e = JMP; *++e = (int)a; // return to a
@@ -1007,6 +1215,12 @@ void stmt()
     *b = (int)(e + 1); // Update end of loop address
     emit_UpdateAddress(ob, emit_CurrentAddress());
     curr_continue = last_continue;
+    --brk_depth;
+    while (brk_top > brk_base) {
+      --brk_top;
+      emit_UpdateAddress((int *)brk_labels[brk_top], emit_CurrentAddress());
+      *(int *)brk_eslots[brk_top] = (int)(e + 1);
+    }
   }
   else if (tk == While) {
     next();
@@ -1014,6 +1228,7 @@ void stmt()
     oa = emit_CurrentAddress();
     last_continue = curr_continue;
     curr_continue = oa;
+    brk_base = brk_top; ++brk_depth;
     if (tk == '(') next(); else { printf("%d: open paren expected\n", line); die(-1); }
     expr(Assign);
     if (tk == ')') next(); else { printf("%d: close paren expected (3)\n", line); die(-1); }
@@ -1025,6 +1240,12 @@ void stmt()
     *b = (int)(e + 1);
     emit_UpdateAddress(ob, emit_CurrentAddress());
     curr_continue = last_continue;
+    --brk_depth;
+    while (brk_top > brk_base) {
+      --brk_top;
+      emit_UpdateAddress((int *)brk_labels[brk_top], emit_CurrentAddress());
+      *(int *)brk_eslots[brk_top] = (int)(e + 1);
+    }
   }
   else if (tk == Return) {
     next();
@@ -1379,7 +1600,7 @@ int c4cc_init () {
   data_s = data;
 
   p = c4cc_keywords;
-  i = Static; while (i <= While) { next(); id[Tk] = i++; } // add keywords to symbol table
+  i = Static; while (i <= Break) { next(); id[Tk] = i++; } // add keywords to symbol table
   i = OPEN; while (i <= FLT) { // add library to symbol table
     next(); id[Class] = Sys; id[Type] = INT; id[Val] = i++;
 	if (0) { // don't be so verbose
@@ -1394,6 +1615,14 @@ int c4cc_init () {
   next(); idstart = id;
 
   if (!(lp = p = _p = malloc(poolsz))) { printf("could not malloc(%d) source area\n", poolsz); return -1; }
+
+  if (!(brk_labels = malloc(BRK_MAX * sizeof(int))) ||
+      !(brk_eslots = malloc(BRK_MAX * sizeof(int)))) {
+    printf("could not malloc break stacks\n");
+    return -1;
+  }
+  brk_top = 0;
+  brk_depth = 0;
 
   c4cc_initialized = 1;
 

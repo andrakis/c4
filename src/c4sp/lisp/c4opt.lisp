@@ -328,15 +328,17 @@
 (define opt:dead/2 (lambda (Code Acc Dropping) (begin
 	(if (empty? Code) (reverse Acc) (begin
 		(define I (head Code))
-		;; labels and raw words end a dead region
+		;; labels, raw words and patched table words end a dead region
 		(if (opt:is-label I) (set! Dropping false))
 		(if (= 'word (head I)) (set! Dropping false))
+		(if (= 'cword (head I)) (set! Dropping false))
 		(if Dropping
 			(begin
 				(set! opt:n-dead (+ 1 opt:n-dead))
 				(next opt:dead/2 (tail Code) Acc true))
 			(next opt:dead/2 (tail Code) (cons I Acc)
-				(if (opt:is I 'JMP) true (opt:is I 'LEV))))))
+				(if (opt:is I 'JMP) true
+					(if (opt:is I 'LEV) true (opt:is I 'JMPA)))))))
 )))
 
 ;; ---- the pipeline ----

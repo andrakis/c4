@@ -264,6 +264,11 @@ void asmjs_handler_SYSCALL(int num, int argcount) {
 	asmjs_emit_c4_ins(num);
 }
 
+int *asmjs_handler_TBLWORD () {
+	printf("asm-js: switch jump tables are not implemented in this backend\n");
+	exit(-1);
+}
+
 void asmjs_handler_MATH(int operation) {
 	asmjs_emit_c4_ins(operation);
 }
@@ -448,6 +453,7 @@ int main (int argc, char **argv) {
 	c4cc_emithandlers[EH_LEV] = (int)&asmjs_handler_LEV;
 	c4cc_emithandlers[EH_SYSCALL] = (int)&asmjs_handler_SYSCALL;
 	c4cc_emithandlers[EH_MATH] = (int)&asmjs_handler_MATH;
+	c4cc_emithandlers[EH_TBLWORD] = (int)&asmjs_handler_TBLWORD;
 	c4cc_emithandlers[EH_FUNCADDR] = (int)&asmjs_handler_FunctionAddress;
 	c4cc_emithandlers[EH_CURRADDR] = (int)&asmjs_handler_CurrentAddress;
 	c4cc_emithandlers[EH_UPDTADDR] = (int)&asmjs_handler_UpdateAddress;

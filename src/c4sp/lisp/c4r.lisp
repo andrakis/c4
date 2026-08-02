@@ -192,11 +192,23 @@
 (define c4r:decode-code (lambda (F At Codelen Labels Patches Pos Acc) (begin
 	(if (>= Pos Codelen) Acc (begin
 		;; the patch list must stay in step with the walk
-		(if (if (empty? Patches) false (< (second (head Patches)) (+ Pos 1)))
+		(if (if (empty? Patches) false (< (second (head Patches)) Pos))
 			(error "c4r: patch list out of sync with instruction stream"))
 		(if (= 1 (string:byte Labels Pos))
 			(set! Acc (cons (list 'label Pos) Acc)))
 		(define Wv (string:word F (+ At (* Pos W))))
+		(if (if (empty? Patches) false (= Pos (second (head Patches))))
+			;; a patch aimed at this word itself, not an operand slot: a
+			;; standalone patched code word (a switch jump table entry)
+			(begin
+				(define P (head Patches))
+				(define T (head P))
+				(set! Acc (cons (list 'cword
+					(if (= -1 T) (list 'code (third P) Wv)
+						(if (= -2 T) (list 'data (third P) Wv)
+							(list 'extern T Wv (third P))))) Acc))
+				(next c4r:decode-code F At Codelen Labels (tail Patches) (+ Pos 1) Acc))
+			(begin
 		(define TakesOp
 			(if (< Wv 0) false
 				(if (>= Wv c4r:nops) false (c4r:has-operand Wv))))
@@ -229,7 +241,7 @@
 				(begin
 					(set! Acc (cons (list (c4r:opname Wv) Operand) Acc))
 					(next c4r:decode-code F At Codelen Labels Patches (+ Pos 2) Acc)))
-		))))
+		))))))
 )))
 
 ;; ---- writing ----
@@ -324,7 +336,9 @@
 			(string:word! LT (* W (second I)) Pos)
 			(if (= 'word H)
 				(set! Pos (+ Pos 1))
-				(set! Pos (+ Pos (length I))))) ;; (OP) 1 word, (OP operand) 2
+				(if (= 'cword H)
+					(set! Pos (+ Pos 1))
+					(set! Pos (+ Pos (length I)))))) ;; (OP) 1 word, (OP operand) 2
 		(next c4r:place (tail Code) LT Pos)))))
 
 (define c4r:is-ref (lambda (Op)
@@ -371,6 +385,22 @@
 		(if (= 'word H) (begin
 			(string:word! Out (+ At (* Pos W)) (second I))
 			(set! Pos (+ Pos 1)))
+		(if (= 'cword H) (begin
+			;; one word carrying its own patch
+			(define Op (second I))
+			(define T (head Op))
+			(string:word! Out PatchAt
+				(if (= 'code T) -1 (if (= 'data T) -2 (second Op))))
+			(string:word! Out (+ PatchAt W) Pos)
+			(string:word! Out (+ PatchAt (* 2 W))
+				(if (= 'code T) (c4r:label LT (second Op))
+					(if (= 'data T) (second Op)
+						(if (= 4 (length Op)) (index Op 3) 0))))
+			(set! PatchAt (+ PatchAt (* 3 W)))
+			(string:word! Out (+ At (* Pos W))
+				(if (>= (length Op) 3) (third Op)
+					(if (= 'code T) (c4r:label LT (second Op)) 0)))
+			(set! Pos (+ Pos 1)))
 		(begin
 			(string:word! Out (+ At (* Pos W)) (c4r:opnum H))
 			(if (= 2 (length I)) (begin
@@ -397,7 +427,7 @@
 				))
 				(set! Pos (+ Pos 2))
 			) (set! Pos (+ Pos 1)))
-		)))
+		))))
 		(next c4r:emit-code (tail Code) Out At PatchAt LT Pos)))))
 
 (define c4r:syms-size (lambda (Syms N)

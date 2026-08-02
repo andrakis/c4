@@ -221,6 +221,23 @@ test-c4sp-deep: c4sp.c4r c4m
 	./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/seval.lisp -s -t src/c4sp/lisp/seval.lisp -s src/c4sp/lisp/fac.lisp | cmp - src/c4sp/tests/expected/seval-seval-fac.txt
 	@echo "test-c4sp-deep: OK"
 
+# M6: the optimizer. Optimize factorial.c4r, run original and optimized
+# under C4KE, and require identical output (kernel chatter and the startup
+# stacktrace demo filtered out). Then optimize the compiler itself and
+# require an identical -S listing (modulo the absolute pool addresses the
+# listing prints, which differ between any two runs).
+test-c4sp-opt: c4sp c4sp.c4r c4m $(C4KE_C4R)
+	./c4sp -c 4000000 src/c4sp/lisp/c4opt-run.lisp factorial.c4r .c4sp_opt.c4r
+	./c4m load-c4r.c -- $(C4KE_C4R) factorial.c4r 2>&1 | grep -v "^c4ke\|^lc4r\|stacktrace\|Have a nice" > .c4sp_opt_a
+	./c4m load-c4r.c -- $(C4KE_C4R) .c4sp_opt.c4r 2>&1 | grep -v "^c4ke\|^lc4r\|stacktrace\|Have a nice" > .c4sp_opt_b
+	cmp .c4sp_opt_a .c4sp_opt_b
+	./c4sp -c 16000000 src/c4sp/lisp/c4opt-run.lisp $(C4R_C4CC) .c4sp_opt_cc.c4r
+	./c4m load-c4r.c -- $(C4R_C4CC) -S src/tests/multifun.c 2>&1 | sed -E 's/[0-9]{9,}/ADDR/g' > .c4sp_opt_a
+	./c4m load-c4r.c -- .c4sp_opt_cc.c4r -S src/tests/multifun.c 2>&1 | sed -E 's/[0-9]{9,}/ADDR/g' > .c4sp_opt_b
+	cmp .c4sp_opt_a .c4sp_opt_b
+	rm -f .c4sp_opt.c4r .c4sp_opt_cc.c4r .c4sp_opt_a .c4sp_opt_b
+	@echo "test-c4sp-opt: OK"
+
 # Linking test: compile two modules separately, link both ways, run each,
 # and exercise library mode (-r) with a relink of the written library.
 test-link: c4m $(C4CC) $(C4RLINK)

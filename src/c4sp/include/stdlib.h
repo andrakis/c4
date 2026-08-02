@@ -26,7 +26,7 @@ enum {
 	// asm-c4r wrote and what x86 tolerates unaligned.
 	B_STR_BYTE, B_STR_SETBYTE, B_STR_WORD, B_STR_SETWORD, B_STR_ALLOC,
 	B_FILE_WRITE, B_SYS_WORDSIZE,
-	B_BITAND, B_BITOR, B_BITSHL, B_BITSHR,
+	B_BITAND, B_BITOR, B_BITXOR, B_BITSHL, B_BITSHR,
 	B__COUNT
 };
 
@@ -539,6 +539,7 @@ int *builtin_call (int id, int *args, int *env) {
 	// equivalents, these are c4sp extensions for the .c4r tooling)
 	if (id == B_BITAND) return mk_int((a0 ? a0[CELL_A] : 0) & (a1 ? a1[CELL_A] : 0));
 	if (id == B_BITOR)  return mk_int((a0 ? a0[CELL_A] : 0) | (a1 ? a1[CELL_A] : 0));
+	if (id == B_BITXOR) return mk_int((a0 ? a0[CELL_A] : 0) ^ (a1 ? a1[CELL_A] : 0));
 	if (id == B_BITSHL) return mk_int((a0 ? a0[CELL_A] : 0) << (a1 ? a1[CELL_A] : 0));
 	if (id == B_BITSHR) return mk_int((a0 ? a0[CELL_A] : 0) >> (a1 ? a1[CELL_A] : 0));
 
@@ -614,6 +615,7 @@ void stdlib_init (int *env) {
 	stdlib_bind(env, "sys:wordsize", T_PROC, B_SYS_WORDSIZE);
 	stdlib_bind(env, "bit:and", T_PROC, B_BITAND);
 	stdlib_bind(env, "bit:or", T_PROC, B_BITOR);
+	stdlib_bind(env, "bit:xor", T_PROC, B_BITXOR);
 	stdlib_bind(env, "bit:shl", T_PROC, B_BITSHL);
 	stdlib_bind(env, "bit:shr", T_PROC, B_BITSHR);
 }

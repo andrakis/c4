@@ -894,6 +894,7 @@ int do_puts   (char *str) { return printf("%s", str); }
 
 int  tlev_instruction;
 
+
 // Cause a trap to occur and update stack and registers so that the given
 // handler is executed.
 // This is intended to be used by illegal opcode traps, irq handlers, and
@@ -1413,57 +1414,52 @@ int c4m_main(int argc, char **argv)
     else if (i == MOD) a = *sp++ %  a;
 	// SYSCALL functions
     else if (i == OPEN) {
-//		if (mode == MODE_UNPROTECTED)
+		if (mode == MODE_UNPROTECTED)
             a = open((char *)sp[1], *sp);
-//		else {
-//			trap(TRAP_PM_VIOLATION, OPEN, trap_handler, &sp, &bp, &pc, a, mode);
-//			// Disable cycle interrupt and set unprotected mode
-//			cycle_interrupt_interval = 0;
-//			mode = MODE_UNPROTECTED;
-//		}
+		else {
+			trap(TRAP_PM_VIOLATION, OPEN, trap_handler, &sp, &bp, &pc, a, mode);
+			cycle_interrupt_interval = 0;
+			mode = MODE_UNPROTECTED;
+		}
 	}
     else if (i == READ) {
-//		if (mode == MODE_UNPROTECTED)
+		if (mode == MODE_UNPROTECTED)
         a = read(sp[2], (char *)sp[1], *sp);
-//		else {
-//			trap(TRAP_PM_VIOLATION, READ, trap_handler, &sp, &bp, &pc, a, mode);
-//			// Disable cycle interrupt and set unprotected mode
-//			cycle_interrupt_interval = 0;
-//			mode = MODE_UNPROTECTED;
-//		}
+		else {
+			trap(TRAP_PM_VIOLATION, READ, trap_handler, &sp, &bp, &pc, a, mode);
+			cycle_interrupt_interval = 0;
+			mode = MODE_UNPROTECTED;
+		}
 	}
     else if (i == CLOS) {
-//		if (mode == MODE_UNPROTECTED)
+		if (mode == MODE_UNPROTECTED)
             a = close(*sp);
-//		else {
-//			trap(TRAP_PM_VIOLATION, CLOS, trap_handler, &sp, &bp, &pc, a, mode);
-//			// Disable cycle interrupt and set unprotected mode
-//			cycle_interrupt_interval = 0;
-//			mode = MODE_UNPROTECTED;
-//		}
+		else {
+			trap(TRAP_PM_VIOLATION, CLOS, trap_handler, &sp, &bp, &pc, a, mode);
+			cycle_interrupt_interval = 0;
+			mode = MODE_UNPROTECTED;
+		}
 	}
 	else if (i == PUTC) {
-//		if (mode == MODE_UNPROTECTED)
+		if (mode == MODE_UNPROTECTED)
             a = do_putchar(*((char *)sp));
-//		else {
-//			trap(TRAP_PM_VIOLATION, PUTC, trap_handler, &sp, &bp, &pc, a, mode);
-//			// Disable cycle interrupt and set unprotected mode
-//			cycle_interrupt_interval = 0;
-//			mode = MODE_UNPROTECTED;
-//		}
+		else {
+			trap(TRAP_PM_VIOLATION, PUTC, trap_handler, &sp, &bp, &pc, a, mode);
+			cycle_interrupt_interval = 0;
+			mode = MODE_UNPROTECTED;
+		}
 	}
 	else if (i == PUTS) {
-//		if (mode == MODE_UNPROTECTED)
+		if (mode == MODE_UNPROTECTED)
             a = do_puts((char *)*sp);
-//		else {
-//			trap(TRAP_PM_VIOLATION, PUTS, trap_handler, &sp, &bp, &pc, a, mode);
-//			// Disable cycle interrupt and set unprotected mode
-//			cycle_interrupt_interval = 0;
-//			mode = MODE_UNPROTECTED;
-//		}
+		else {
+			trap(TRAP_PM_VIOLATION, PUTS, trap_handler, &sp, &bp, &pc, a, mode);
+			cycle_interrupt_interval = 0;
+			mode = MODE_UNPROTECTED;
+		}
 	}
     else if (i == PRTF) {
-//		if (mode == MODE_UNPROTECTED) {
+		if (mode == MODE_UNPROTECTED) {
 			r = pc[1];
 			t = sp + r;
 			// Fix potential access violation by not pushing arguments not given
@@ -1476,33 +1472,30 @@ int c4m_main(int argc, char **argv)
 			//else if (r == 7) a = printf((char*)t[-1], t[-2], t[-3], t[-4], t[-5], t[-6], t[-7]);
 			if (r > 7) { printf("Too many arguments to printf!\n"); exit(-1); }
 			else a = printf((char*)t[-1], t[-2], t[-3], t[-4], t[-5], t[-6], t[-7]);
-//		} else {
-//			trap(TRAP_PM_VIOLATION, PRTF, trap_handler, &sp, &bp, &pc, a, mode);
-//			// Disable cycle interrupt and set unprotected mode
-//			cycle_interrupt_interval = 0;
-//			mode = MODE_UNPROTECTED;
-//		}
+		} else {
+			trap(TRAP_PM_VIOLATION, PRTF, trap_handler, &sp, &bp, &pc, a, mode);
+			cycle_interrupt_interval = 0;
+			mode = MODE_UNPROTECTED;
+		}
     }
     else if (i == MALC) {
-//		if (mode == MODE_UNPROTECTED)
+		if (mode == MODE_UNPROTECTED)
             a = (int)malloc(*sp);
-//		else {
-//			trap(TRAP_PM_VIOLATION, MALC, trap_handler, &sp, &bp, &pc, a, mode);
-//			// Disable cycle interrupt and set unprotected mode
-//			cycle_interrupt_interval = 0;
-//			mode = MODE_UNPROTECTED;
-//		}
+		else {
+			trap(TRAP_PM_VIOLATION, MALC, trap_handler, &sp, &bp, &pc, a, mode);
+			cycle_interrupt_interval = 0;
+			mode = MODE_UNPROTECTED;
+		}
 	}
     //else if (i == RALC) a = (int)c4_realloc((int*)sp[1], *sp);
     else if (i == FREE) {
-//		if (mode == MODE_UNPROTECTED)
+		if (mode == MODE_UNPROTECTED)
             free((void *)*sp);
-//		else {
-//			trap(TRAP_PM_VIOLATION, FREE, trap_handler, &sp, &bp, &pc, a, mode);
-//			// Disable cycle interrupt and set unprotected mode
-//			cycle_interrupt_interval = 0;
-//			mode = MODE_UNPROTECTED;
-//		}
+		else {
+			trap(TRAP_PM_VIOLATION, FREE, trap_handler, &sp, &bp, &pc, a, mode);
+			cycle_interrupt_interval = 0;
+			mode = MODE_UNPROTECTED;
+		}
 	}
     else if (i == MSET) a = (int)memset((char *)sp[2], sp[1], *sp);
     else if (i == MCMP) a = memcmp((char *)sp[2], (char *)sp[1], *sp);
@@ -1606,14 +1599,13 @@ int c4m_main(int argc, char **argv)
 	else if (i == SIGH) a = (int)__c4_signal(sp[1], (int *)sp[0]);
 	else if (i == INFO) {
 		// Trap this under protected mode
-//		if (mode == MODE_UNPROTECTED)
+		if (mode == MODE_UNPROTECTED)
             a = c4_info();
-//		else {
-//			trap(TRAP_PM_VIOLATION, INFO, trap_handler, &sp, &bp, &pc, a, mode);
-//			// Disable cycle interrupt and set unprotected mode
-//			cycle_interrupt_interval = 0;
-//			mode = MODE_UNPROTECTED;
-//		}
+		else {
+			trap(TRAP_PM_VIOLATION, INFO, trap_handler, &sp, &bp, &pc, a, mode);
+			cycle_interrupt_interval = 0;
+			mode = MODE_UNPROTECTED;
+		}
 	} else if (i == _TRP) {
       // __c4_trap(type, signal)
       // Trigger a trap

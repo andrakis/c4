@@ -1396,7 +1396,11 @@ static void kernel_clean_task (int *t) {
 	if ((p = (int *)t[TASK_ARGV])) free(p);
 	if ((p = (int *)t[TASK_ARGV_DATA])) free((char *)p);
 	if ((p = (int *)t[TASK_SIGHANDLERS])) free(p);
-	if ((p = (int *)t[TASK_C4R])) c4r_free(p);
+	// Only free a C4R the task actually owns. Builtin tasks (start_task_builtin)
+	// borrow the kernel's own C4R structure, which is owned by the loader that
+	// started the kernel -- freeing it here left loadc4r_run() with a dangling
+	// pointer and a double free at exit.
+	if ((p = (int *)t[TASK_C4R]) && p != kernel_c4r) c4r_free(p);
 	if ((p = (int *)t[TASK_EXTDATA])) free(p);
 	// Mark as unused and clear other state.
 	memset(t, 0, sizeof(int) * TASK__Sz);

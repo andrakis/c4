@@ -654,3 +654,84 @@ pre-emption: without c4m's cycle interrupt nothing can interrupt a task that
 never calls `schedule()`. And a task blocked in `read()` still blocks the whole
 world.
 
+---
+
+# Part 7 — Protected mode
+
+Protected mode gives user tasks a real kernel boundary: a `PRIV_USER` task that
+executes a syscall opcode traps into the kernel instead of calling libc directly,
+so C4KE can route IO and allocation through its own layer.
+
+## 7.1 How it is wired
+
+| Layer | Mechanism |
+|---|---|
+| `c4m.c` | `mode` register (`MODE_UNPROTECTED`/`MODE_PROTECTED`). Each syscall opcode is guarded; in protected mode it raises `TRAP_PM_VIOLATION` instead of executing, and drops back to unprotected so the handler can run. `mode` is saved/restored by `TLEV` like any other register. |
+| `c4ke.c` | Every task switch sets `mode` from `TASK_PRIVS` (`PRIV_KERNEL` → unprotected, `PRIV_USER` → protected). `trap_handler` forwards `TRAP_PM_VIOLATION` to `kernel_syscall_handler` via `__c4_jmp`. |
+| `c4ke_pm.c` | Provides that handler. Either services the syscall immediately (`TASK_EXCLUSIVE`), or records it in the task's ext-data, parks the task in `WSTATE_SYSCALL`, and switches to a `kernel/io` dispatcher thread that performs it later and writes the result into `TASK_REG_A`. |
+
+It is disabled at **three** independent points, all of which must be flipped:
+
+1. `include/c4ke/config.h` — `#define CONFIG_ENABLE_PM 0` compiles the whole
+   extension out. (Note `src/c4ke/include/config.h` is an identical stale copy;
+   the build uses the one under `include/`.)
+2. `c4ke_pm.c:pm_constructor` — `kernel_pm_support = 0; // TODO: was __c4_info() & C4I_PROT;`
+3. `c4m.c` — every `if (mode == MODE_UNPROTECTED)` guard around the syscall
+   opcodes is commented out, so `TRAP_PM_VIOLATION` can never fire.
+
+Re-enabling (1) and (2) alone does nothing, because (3) means the trap is never
+raised. Also note that `c4ke.c4r`'s make rule depends only on `$(C4CC)`, so
+edits to the kernel or its headers do **not** trigger a rebuild — `rm c4ke.c4r`
+first or you will keep running the old image.
+
+## 7.2 The crash, and the fix
+
+With all three enabled, `make test` died with `free(): invalid pointer`, and so
+did something as small as `./c4m load-c4r.c -- c4ke.c4r hello`.
+
+Tracing the VM showed the faulting `FREE` was executing inside `c4r_free()` in
+`load-c4r.c`, freeing `c4r[C4R_HEADER]` — a field holding garbage because the
+whole C4R structure had already been freed.
+
+Root cause, in `kernel_clean_task` (`c4ke.c:1399`):
+
+```c
+if ((p = (int *)t[TASK_C4R])) c4r_free(p);
+```
+
+`start_task_builtin` gives every builtin task `t[TASK_C4R] = kernel_c4r` — the
+kernel's *own* module, owned by the `loadc4r_run()` that started the kernel, not
+by the task. So cleaning any builtin task frees the kernel's C4R, and when
+`loadc4r_run()` later runs its own `c4r_free(module)` it double-frees.
+
+This bug predates protected mode, but nothing triggered it: the only other
+builtin task is `kernel/idle`, which is never cleaned. Protected mode adds
+`kernel/io`, which *does* exit (on SIGTERM at shutdown) and therefore *is*
+cleaned — taking the kernel's C4R with it.
+
+Fix — only free a C4R the task actually owns:
+
+```c
+if ((p = (int *)t[TASK_C4R]) && p != kernel_c4r) c4r_free(p);
+```
+
+With that one line, protected mode survives `make test` (8 consecutive runs),
+`make test-alt`, and `make test-massive` (20 concurrent processes), all with a
+clean shutdown. `test_args`, `reverse` and `puts` return the same non-zero codes
+with and without PM, and `test_signal` hangs either way — all pre-existing.
+
+## 7.3 Still open
+
+* **Cost.** The `kernel/io` dispatcher is a `schedule()` spin loop, so it burns a
+  scheduling slot continuously; in `make test` the kernel's share of cycles went
+  from ~72% to ~85%. Parking it on `await_message()` and waking it when a syscall
+  is queued is the obvious improvement — the `sleep`/`await` calls are already
+  there, commented out.
+* **Coverage gaps.** `pm_dispatch_run` implements OPEN, READ, CLOS, PUTC, PRTF,
+  MALC, FREE, INFO. `PUTS` is commented out, and `STRC` is looked up in
+  `pm_start` but never handled, so an unhandled opcode reaching the dispatcher
+  kills the task. The c4m guards for `STRC`, `EXIT` and `ITH` were therefore left
+  disabled; `C4CF` must stay unguarded because C4KE calls it from protected mode
+  by design.
+* **`pm_start` frees `argv` outside the `if` that allocates it**, so a failed
+  `malloc` would free an uninitialised pointer.

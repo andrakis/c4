@@ -349,7 +349,7 @@ static int __attribute__((constructor)) pm_constructor () {
 	kext_register("pm", (int *)&pm_init, (int *)&pm_start, (int *)&pm_shutdown);
 	// Detect protected mode here, C4KE's initialization relies on knowing if
 	// protected mode is available.
-	kernel_pm_support = 0; // TODO: was __c4_info() & C4I_PROT;
+	kernel_pm_support = __c4_info() & C4I_PROT;
 }
 
 #endif

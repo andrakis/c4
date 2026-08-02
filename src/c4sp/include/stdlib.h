@@ -27,6 +27,7 @@ enum {
 	B_STR_BYTE, B_STR_SETBYTE, B_STR_WORD, B_STR_SETWORD, B_STR_ALLOC,
 	B_FILE_WRITE, B_SYS_WORDSIZE,
 	B_BITAND, B_BITOR, B_BITXOR, B_BITSHL, B_BITSHR,
+	B_CALLCC,
 	B__COUNT
 };
 
@@ -88,6 +89,7 @@ int *cell_typeof (int *x) {
 	else if (t == T_PROC) n = "proc";
 	else if (t == T_PROCENV) n = "proc_env";
 	else if (t == T_ENV) n = "env";
+	else if (t == T_CONT) n = "continuation";
 	else n = "none";
 	return mk_atom(atom_intern(n, cs_strlen(n)));
 }
@@ -543,6 +545,14 @@ int *builtin_call (int id, int *args, int *env) {
 	if (id == B_BITSHL) return mk_int((a0 ? a0[CELL_A] : 0) << (a1 ? a1[CELL_A] : 0));
 	if (id == B_BITSHR) return mk_int((a0 ? a0[CELL_A] : 0) >> (a1 ? a1[CELL_A] : 0));
 
+	if (id == B_CALLCC) {
+		// Continuations are captured by the CEK machine, which intercepts
+		// this id at apply time; reaching the plain dispatcher means the
+		// recursive evaluator (or cell:proc) tried to call it.
+		c4sp_error("call/cc requires the CEK machine (not -R)");
+		return 0;
+	}
+
 	c4sp_error("unknown builtin");
 	return 0;
 }
@@ -618,4 +628,5 @@ void stdlib_init (int *env) {
 	stdlib_bind(env, "bit:xor", T_PROC, B_BITXOR);
 	stdlib_bind(env, "bit:shl", T_PROC, B_BITSHL);
 	stdlib_bind(env, "bit:shr", T_PROC, B_BITSHR);
+	stdlib_bind(env, "call/cc", T_PROC, B_CALLCC);
 }

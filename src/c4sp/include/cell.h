@@ -40,9 +40,12 @@ enum { CELL_TYPE, CELL_A, CELL_B, CELL_C, CELL__Sz };
 //   T_KSET      A = symbol atom, B = env
 //   T_KBEGIN    A = remaining body list, B = env
 //   T_KMACRO    A = caller env to re-evaluate the expansion in
+//   T_CONT      A = a captured kont chain (call/cc). Frames are immutable,
+//               so capturing is copying this one pointer, and a saved
+//               continuation stays valid however often it is invoked.
 enum {
 	T_NIL, T_ATOM, T_INT, T_FLOAT, T_STRING, T_CONS,
-	T_LAMBDA, T_MACRO, T_FASTMACRO, T_PROC, T_PROCENV, T_ENV,
+	T_LAMBDA, T_MACRO, T_FASTMACRO, T_PROC, T_PROCENV, T_ENV, T_CONT,
 	T_KARG, T_KARGN, T_KIF, T_KDEF, T_KSET, T_KBEGIN, T_KMACRO,
 	T__COUNT
 };

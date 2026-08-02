@@ -189,13 +189,20 @@ test-c4sp: c4sp c4sp.c4r c4m $(C4KE_C4R)
 	./c4sp src/c4sp/lisp/seval.lisp -s -t src/c4sp/lisp/seval.lisp -s src/c4sp/lisp/fac.lisp | cmp - src/c4sp/tests/expected/seval-seval-fac.txt
 	./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/seval.lisp -s src/c4sp/lisp/fac.lisp | cmp - src/c4sp/tests/expected/seval-fac.txt
 	# CEK vs the recursive reference evaluator (-R): identical output on
-	# every sample, and the depth test only the CEK machine survives under
-	# the C4 VM (the recursive evaluator needs a C4 stack frame per level).
+	# every sample except callcc.lisp, which the recursive evaluator
+	# rejects by design. The depth test only the CEK machine survives
+	# under the C4 VM (the recursive evaluator needs a stack frame per
+	# level).
 	for f in src/c4sp/lisp/*.lisp; do \
+		case $$f in */callcc.lisp) continue;; esac; \
 		./c4sp $$f > .c4sp_cek 2>&1; ./c4sp -R $$f > .c4sp_rec 2>&1; \
 		cmp .c4sp_cek .c4sp_rec || exit 1; \
 	done
 	rm -f .c4sp_cek .c4sp_rec
+	# call/cc: CEK only; -R must refuse it rather than misbehave
+	./c4sp src/c4sp/lisp/callcc.lisp | cmp - src/c4sp/tests/expected/callcc.txt
+	./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/callcc.lisp | cmp - src/c4sp/tests/expected/callcc.txt
+	./c4sp -R src/c4sp/lisp/callcc.lisp 2>&1 | grep -q "requires the CEK machine"
 	./c4sp -R src/c4sp/lisp/seval.lisp | cmp - src/c4sp/tests/expected/seval.txt
 	./c4sp src/c4sp/lisp/deeprec.lisp | cmp - src/c4sp/tests/expected/deeprec.txt
 	./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/deeprec.lisp | cmp - src/c4sp/tests/expected/deeprec.txt

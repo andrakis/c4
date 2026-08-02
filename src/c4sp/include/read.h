@@ -133,6 +133,7 @@ void cell_write (int *x, int quote) {
 		return;
 	}
 	if (t == T_PROC) { pr_s("#proc"); return; }
+	if (t == T_CONT) { pr_s("#continuation"); return; }
 	if (t == T_PROCENV) { pr_s("#procenv"); return; }
 	if (t == T_ENV) {
 		pr_s("(#env ");

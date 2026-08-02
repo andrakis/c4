@@ -93,7 +93,7 @@ void gc_drain () {
 	while (gc_wl_top) {
 		c = (int *)gc_worklist[--gc_wl_top];
 		t = c[CELL_TYPE];
-		if (t == T_CONS || t == T_ENV) {
+		if (t == T_CONS || t == T_ENV || t == T_CONT) {
 			gc_mark(c[CELL_A]);
 			gc_mark(c[CELL_B]);
 		} else if (t == T_LAMBDA || t == T_MACRO || t == T_FASTMACRO ||

@@ -217,6 +217,29 @@ int *eval_cek (int *x, int *env) {
 			proc = car(vals);
 			e = (int *)frame[CELL_C]; // the caller's environment
 
+			// call/cc: capture the continuation of this call -- the kont
+			// chain as it stands, frames popped -- and hand it to the
+			// function argument. The loop unwraps (call/cc call/cc) too.
+			pt = 1;
+			while (pt) {
+				pt = 0;
+				if (cell_type(proc) == T_PROC && proc[CELL_A] == B_CALLCC) {
+					nf = cell_new(T_CONT);
+					nf[CELL_A] = (int)kont;
+					proc = car(args);
+					args = cons(nf, 0);
+					pt = 1;
+				}
+			}
+			// Invoking a continuation abandons the current kont chain and
+			// resumes the captured one with the argument as its value
+			if (cell_type(proc) == T_CONT) {
+				kont = (int *)proc[CELL_A];
+				value = car(args);
+				mode = CEK_RETURN;
+				continue;
+			}
+
 			pt = cell_type(proc);
 			if (pt == T_LAMBDA) {
 				if (isnext) {

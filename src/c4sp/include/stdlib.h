@@ -315,6 +315,44 @@ char *file_find (char *name, int len) {
 	return file_path_buf;
 }
 
+// C4KE RAM filesystem access. Under C4KE, file:write stores into the
+// kernel RAM filesystem and file:read / file:exists / file:path consult
+// it before the host -- so a Lisp program can write a .c4r that the
+// kernel then executes, entirely in memory (the VM has no write
+// syscall). Detection: only probe OP_REQUEST_SYMBOL (fixed number 128)
+// when __c4_info reports an installed trap handler (C4I_TRAPH, 0x400) --
+// under bare c4m the probe would print trap noise, and no handler means
+// nobody can answer anyway. An answer above 128 means a C4KE kernel
+// resolved the name (128 is what a missed trap leaves in the
+// accumulator). The native build's c4m.h stubs make this all compile
+// to 0.
+int c4sp_vfs_checked, c4sp_op_vfs_put, c4sp_op_vfs_get;
+
+int c4sp_vfs_ok () {
+	if (!c4sp_vfs_checked) {
+		c4sp_vfs_checked = 1;
+		c4sp_op_vfs_put = c4sp_op_vfs_get = 0;
+		if (__c4_info() & 0x400) { // C4I_TRAPH: someone services opcodes
+			c4sp_op_vfs_put = __c4_opcode("OP_VFS_PUT", 128);
+			c4sp_op_vfs_get = __c4_opcode("OP_VFS_GET", 128);
+			if (c4sp_op_vfs_put <= 128) c4sp_op_vfs_put = 0;
+			if (c4sp_op_vfs_get <= 128) c4sp_op_vfs_get = 0;
+		}
+	}
+	return c4sp_op_vfs_put != 0;
+}
+
+// The RAM filesystem's copy of name, or 0. Kernel-owned buffer.
+char *c4sp_vfs_get (char *name, int *plen) {
+	if (!c4sp_vfs_ok()) return 0;
+	return (char *)__c4_opcode(plen, name, c4sp_op_vfs_get);
+}
+
+int c4sp_vfs_put (char *name, char *buf, int len) {
+	if (!c4sp_vfs_ok()) return -1;
+	return __c4_opcode(len, buf, name, c4sp_op_vfs_put);
+}
+
 // (load "file") support: parse the named file and hand the expression
 // back for the evaluator to run in the current environment -- a c4sp
 // extension (alisp has no include mechanism), used to pull c4r.lisp into
@@ -461,19 +499,25 @@ int *builtin_call (int id, int *args, int *env) {
 	if (id == B_STR_SUBSTR) return builtin_substr(args);
 	if (id == B_STR_REPEAT) return builtin_repeat(args);
 
-	// file:*, debug:parse
+	// file:*, debug:parse. Under C4KE the RAM filesystem is consulted
+	// first (exact names, no search prefixes), so images written there
+	// read straight back.
 	if (id == B_FILE_EXISTS) {
 		pr_reset(); cell_write(a0, 0);
-		return bool_cell(file_exists(file_find(pr_term(), pr_len)) != 0);
+		if (c4sp_vfs_get(pr_term(), &len)) return cell_true;
+		return bool_cell(file_exists(file_find(pr_buf, pr_len)) != 0);
 	}
 	if (id == B_FILE_PATH) {
 		pr_reset(); cell_write(a0, 0);
-		s = file_find(pr_term(), pr_len);
+		if (c4sp_vfs_get(pr_term(), &len)) return mk_string(pr_buf);
+		s = file_find(pr_buf, pr_len);
 		return mk_string(s);
 	}
 	if (id == B_FILE_READ) {
 		pr_reset(); cell_write(a0, 0);
-		s = file_find(pr_term(), pr_len);
+		if ((s = c4sp_vfs_get(pr_term(), &len)))
+			return mk_string_len(s, len);
+		s = file_find(pr_buf, pr_len);
 		if (!(s = rd_file(s, &len))) { c4sp_error("file:read: cannot open file"); return 0; }
 		x = mk_string_len(s, len);
 		free(s);
@@ -528,10 +572,13 @@ int *builtin_call (int id, int *args, int *env) {
 		close(n);
 		return bool_cell(len == a1[CELL_B]);
 #else
-		// The C4 VM has no write syscall (same limitation as c4cc/c4rlink
-		// under c4); everything else about M5/M6 works by comparing
-		// in-memory strings instead.
-		c4sp_error("file:write is not available under the C4 VM");
+		// The C4 VM has no write syscall, but under C4KE the kernel RAM
+		// filesystem takes the bytes -- and the kernel can execute an
+		// image stored there.
+		pr_reset(); cell_write(a0, 0);
+		if (c4sp_vfs_ok())
+			return bool_cell(!c4sp_vfs_put(pr_term(), (char *)a1[CELL_A], a1[CELL_B]));
+		c4sp_error("file:write needs C4KE (RAM filesystem) or a native build");
 		return 0;
 #endif
 	}

@@ -195,6 +195,7 @@ enum {
 	C4I_SIG  = 0x20, // Signals supported
 	C4I_FLT  = 0x40, // Floating point instruction support
 	C4I_PROT = 0x80, // Protected mode support
+	C4I_TRAPH = 0x400, // A custom trap handler is installed (safe to probe opcodes)
 };
 
 // Trap codes
@@ -1600,7 +1601,7 @@ int c4m_main(int argc, char **argv)
 	else if (i == INFO) {
 		// Trap this under protected mode
 		if (mode == MODE_UNPROTECTED)
-            a = c4_info();
+            a = c4_info() | (trap_handler ? C4I_TRAPH : 0);
 		else {
 			trap(TRAP_PM_VIOLATION, INFO, trap_handler, &sp, &bp, &pc, a, mode);
 			cycle_interrupt_interval = 0;

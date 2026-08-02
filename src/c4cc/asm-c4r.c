@@ -215,7 +215,38 @@ void free_c4r (int *c4r) { }
 #endif
 
 int writeoffset;
+
+// Memory-output mode: under C4KE the VM has no write syscall, so the
+// image is rendered into this growing buffer and then stored in the
+// kernel's RAM filesystem (see asmc4r_Source).
+char *asmc4r_membuf;
+int   asmc4r_memlen, asmc4r_memcap, asmc4r_use_mem;
+
+int asmc4r_memwrite (char *buf, int count) {
+	char *nb;
+	int i;
+	if (asmc4r_memlen + count > asmc4r_memcap) {
+		asmc4r_memcap = asmc4r_memcap * 2 + count + 65536;
+		if (!(nb = malloc(asmc4r_memcap))) {
+			printf("c4cc: out of memory writing image\n");
+			exit(-1);
+		}
+		i = 0;
+		while (i < asmc4r_memlen) { nb[i] = asmc4r_membuf[i]; ++i; }
+		if (asmc4r_membuf) free(asmc4r_membuf);
+		asmc4r_membuf = nb;
+	}
+	i = 0;
+	while (i < count) { asmc4r_membuf[asmc4r_memlen + i] = buf[i]; ++i; }
+	asmc4r_memlen = asmc4r_memlen + count;
+	return count;
+}
+
 int writechecked (int fd, void *buf, int count) {
+	if (asmc4r_use_mem) {
+		writeoffset = writeoffset + asmc4r_memwrite((char *)buf, count);
+		return 0;
+	}
 	writeoffset = writeoffset + write(fd, buf, count);
 }
 
@@ -536,9 +567,12 @@ void dump_to_file (char *file) {
 	//printf("Writing output to '%s'...", file);
 	fflush(stdout);
 
-	if ((fd = open(file, O_TRUNC | O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR)) < 0) {
-		printf("failed to open file\n");
-		return;
+	fd = -1;
+	if (!asmc4r_use_mem) {
+		if ((fd = open(file, O_TRUNC | O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR)) < 0) {
+			printf("failed to open file\n");
+			return;
+		}
 	}
 
 	version = C4R__Exported_Version;
@@ -588,7 +622,11 @@ void dump_to_file (char *file) {
 
 	// Code
 	writechecked(fd, "C\0\0\0\0\0\0\0", sizeof(int));
-	writechecked(fd, asmc4r_e_start, sizeof(int) * (1 + asmc4r_e - asmc4r_e_start));
+	// The inner parentheses matter when c4cc compiles itself: it types
+	// 1 + pointer as int, which un-scales the following subtraction and
+	// inflates the write to byte-count words. gcc computed it correctly,
+	// so this only ever broke the self-hosted compiler's output.
+	writechecked(fd, asmc4r_e_start, sizeof(int) * (1 + (asmc4r_e - asmc4r_e_start)));
 	// printf("Wrote %d bytes of code\n", 1 + asmc4r_e - asmc4r_e_start);
 	// Data
 	writechecked(fd, "D\0\0\0\0\0\0\0", sizeof(int));
@@ -681,7 +719,7 @@ void dump_to_file (char *file) {
 	// printf("wrote %d records\n", i);
 	
 	//printf("success\n");
-	close(fd);
+	if (fd >= 0) close(fd);
 }
 
 void read_from_file (char *file) {
@@ -715,6 +753,32 @@ void asmc4r_Source () {
 			read_from_file(asmc4r_opt_outfile);
 		return;
 	}
+
+#if !NATIVE
+	// Under C4KE: render the image into memory and store it in the
+	// kernel's RAM filesystem, from where the kernel can execute it.
+	// (The VM has no write syscall, so the host filesystem is out.)
+	// The opcode is resolved by name so this file needs nothing from u0.
+	// Probe only when a trap handler is installed (C4I_TRAPH), i.e. a
+	// kernel is servicing opcodes; an answer above 128 means it resolved
+	// the symbol (128 is what a missed trap leaves in the accumulator).
+	i = 0;
+	if (__c4_info() & C4I_TRAPH)
+		i = __c4_opcode("OP_VFS_PUT", 128); // 128 = OP_REQUEST_SYMBOL
+	if (i > 128) {
+		asmc4r_use_mem = 1;
+		asmc4r_memlen = 0;
+		dump_to_file(asmc4r_opt_outfile);
+		asmc4r_use_mem = 0;
+		if (__c4_opcode(asmc4r_memlen, asmc4r_membuf, asmc4r_opt_outfile, i))
+			printf("c4cc: unable to store '%s' in the RAM filesystem\n",
+			       asmc4r_opt_outfile);
+		else
+			printf("c4cc: wrote %d bytes to ramfs:%s\n",
+			       asmc4r_memlen, asmc4r_opt_outfile);
+		return;
+	}
+#endif
 
 	// TODO: this function is outdated, and does not produce a valid c4r file.
 	printf("c4cc: output in C4KE not supported\n");

@@ -88,6 +88,7 @@ enum {
 	C4I_SIG  = 0x20, // Signals supported
 	C4I_FLT  = 0x40, // Floating point instruction support
 	C4I_PROT = 0x80, // Protected mode support
+	C4I_TRAPH = 0x400, // A custom trap handler is installed (safe to probe opcodes)
 	C4I_C4KE = 0x200, // C4KE is running
 };
 
@@ -390,6 +391,48 @@ int await_pid (int pid) {
 #define await_message(timeout)   ((int *)__c4_opcode(timeout, OP_AWWAIT_MESSAGE))
 #define await_pid(pid)           __c4_opcode(pid, OP_AWAIT_PID)
 #endif /* if NO_INLINE */
+
+///
+// The kernel RAM filesystem (OP_VFS_*), lazily resolved so programs on a
+// kernel without it just get failures instead of startup noise.
+///
+static int __u0_vfs_resolved;
+static int OP_VFS_PUT, OP_VFS_GET, OP_VFS_UNLINK, OP_VFS_COUNT, OP_VFS_NAME;
+
+static int __u0_vfs_ok () {
+	if (!__u0_vfs_resolved) {
+		__u0_vfs_resolved = 1;
+		OP_VFS_PUT    = __c4_opcode("OP_VFS_PUT", OP_REQUEST_SYMBOL);
+		OP_VFS_GET    = __c4_opcode("OP_VFS_GET", OP_REQUEST_SYMBOL);
+		OP_VFS_UNLINK = __c4_opcode("OP_VFS_UNLINK", OP_REQUEST_SYMBOL);
+		OP_VFS_COUNT  = __c4_opcode("OP_VFS_COUNT", OP_REQUEST_SYMBOL);
+		OP_VFS_NAME   = __c4_opcode("OP_VFS_NAME", OP_REQUEST_SYMBOL);
+	}
+	return OP_VFS_PUT != 0;
+}
+
+// Store a copy of buf as name in the RAM filesystem. 0 = ok.
+static int vfs_put (char *name, char *buf, int len) {
+	if (!__u0_vfs_ok()) return -1;
+	return __c4_opcode(len, buf, name, OP_VFS_PUT);
+}
+// The kernel-owned contents of name, or 0; length through plen.
+static char *vfs_get (char *name, int *plen) {
+	if (!__u0_vfs_ok()) return 0;
+	return (char *)__c4_opcode(plen, name, OP_VFS_GET);
+}
+static int vfs_unlink (char *name) {
+	if (!__u0_vfs_ok()) return -1;
+	return __c4_opcode(name, OP_VFS_UNLINK);
+}
+static int vfs_count () {
+	if (!__u0_vfs_ok()) return 0;
+	return __c4_opcode(OP_VFS_COUNT);
+}
+static char *vfs_name (int i) {
+	if (!__u0_vfs_ok()) return 0;
+	return (char *)__c4_opcode(i, OP_VFS_NAME);
+}
 
 // Cache the pid and parent id, it presently cannot change
 static int  __u0_pid;

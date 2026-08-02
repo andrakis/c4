@@ -735,6 +735,25 @@ with and without PM, and `test_signal` hangs either way — all pre-existing.
   by design.
 * **`pm_start` frees `argv` outside the `if` that allocates it**, so a failed
   `malloc` would free an uninitialised pointer.
+## 4.6 The RAM filesystem
+
+The kernel owns a flat table of named byte buffers, reachable from user
+tasks through the `OP_VFS_PUT/GET/UNLINK/COUNT/NAME` opcodes (u0 wrappers:
+`vfs_put`, `vfs_get`, ...) and consulted by the program loader **before**
+the host filesystem. Because the VM has no write syscall, this is the only
+write path that exists under the VM -- and it closes the loop: c4cc running
+under C4KE renders its image into memory and stores it with `OP_VFS_PUT`,
+and the kernel executes it straight from the table (`load-c4r.c` gained a
+memory-source mode, `c4r_load_mem`). `make test-c4ke-ramfs` demonstrates
+the whole cycle: compile inside C4KE, run from RAM, plus the same loop with
+c4sp's Lisp optimizer producing the image.
+
+Detecting the kernel without u0: probe `OP_REQUEST_SYMBOL` (fixed number
+128), but only when `__c4_info()` reports `C4I_TRAPH` (0x400, "a trap
+handler is installed") -- under bare c4m the probe would just print trap
+noise, and the missed trap deterministically leaves 128 in the
+accumulator, so any answer above 128 is a real kernel resolution.
+
 ---
 
 # Part 8 — The printf family (redirection groundwork)

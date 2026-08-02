@@ -27,6 +27,7 @@ enum {
 	C4I_SIG  = 0x20, // Signals supported
 	C4I_FLT  = 0x40, // Floating point support
 	C4I_PROT = 0x80, // Protected mode support
+	C4I_TRAPH = 0x400, // A custom trap handler is installed (safe to probe opcodes)
 	C4I_C4KE = 0x200, // C4KE is running
 };
 
@@ -156,10 +157,30 @@ char *c4r_strcpy_alloc (char *source) {
 	return result;
 }
 
+// Memory-source support: when c4r_mem_src is set, c4r_src_read consumes
+// from it instead of the file descriptor. This is how C4KE loads programs
+// straight out of the kernel's RAM filesystem: c4r_load_mem() below sets
+// the cursor and the whole reader runs unchanged.
+char *c4r_mem_src;
+int   c4r_mem_len, c4r_mem_pos;
+
+int c4r_src_read (int fd, char *buffer, int len) {
+	int n;
+	if (!c4r_mem_src)
+		return read(fd, buffer, len);
+	n = c4r_mem_len - c4r_mem_pos;
+	if (n <= 0) return 0;
+	if (n > len) n = len;
+	len = 0;
+	while (len < n) { buffer[len] = c4r_mem_src[c4r_mem_pos + len]; ++len; }
+	c4r_mem_pos = c4r_mem_pos + n;
+	return n;
+}
+
 int c4r_readoffset;
 int c4r_checked_read (int fd, char *buffer, int len) {
 	int i;
-	if ((i = read(fd, buffer, len)) <= 0) {
+	if ((i = c4r_src_read(fd, buffer, len)) <= 0) {
 		if (c4r_debug) printf("lc4r: error, read() returned %d\n", i);
 	} else {
 		if (c4r_debug) printf("lc4r: successful read of %d bytes from file.0x%lx\n", len, c4r_readoffset);
@@ -309,7 +330,10 @@ int *c4r_load_opt_real (char *file, int options) {
 	code = data = patches = symbols = constructors = destructors = 0;
 
 	if (c4r_debug || c4r_verbose) printf("lc4r: loading '%s'...\n", file);
-	if ((fd = open(file, FILE_OPEN_MODE)) < 0) return 0;
+	fd = -1;
+	if (!c4r_mem_src) {
+		if ((fd = open(file, FILE_OPEN_MODE)) < 0) return 0;
+	}
 
 	//
 	// Read header
@@ -326,21 +350,21 @@ int *c4r_load_opt_real (char *file, int options) {
 			//
 			if (c4r_verbose) printf("lc4r: load header...\n");
 			header[C4R_HDR_SIGNATURE] = c4r__charword('C', '4', 'R', 0);
-			read(fd, buffer, 1); header[C4R_HDR_VERSION] = *buffer;
-			read(fd, buffer, 1); header[C4R_HDR_WORDBITS]= *buffer;
+			c4r_src_read(fd, buffer, 1); header[C4R_HDR_VERSION] = *buffer;
+			c4r_src_read(fd, buffer, 1); header[C4R_HDR_WORDBITS]= *buffer;
 			// Read padding
 			// x = sizeof(int) - 6; // 5 for what was just read
 			i = sizeof(int) - 1;
 			x = (5 + i) & ~i;
-			read(fd, buffer, x); // skip padding
+			c4r_src_read(fd, buffer, x); // skip padding
 			wordbytes = header[C4R_HDR_WORDBITS] / 8;
-			read(fd, buffer, wordbytes); header[C4R_HDR_ENTRY] = *(int *)buffer;
-			read(fd, buffer, wordbytes); header[C4R_HDR_CODELEN] = *(int *)buffer;
-			read(fd, buffer, wordbytes); header[C4R_HDR_DATALEN] = *(int *)buffer;
-			read(fd, buffer, wordbytes); header[C4R_HDR_PATCHLEN] = *(int *)buffer;
-			read(fd, buffer, wordbytes); header[C4R_HDR_SYMBOLSLEN] = *(int *)buffer;
-			read(fd, buffer, wordbytes); header[C4R_HDR_CONSTRUCTLEN] = *(int *)buffer;
-			read(fd, buffer, wordbytes); header[C4R_HDR_DESTRUCTLEN] = *(int *)buffer;
+			c4r_src_read(fd, buffer, wordbytes); header[C4R_HDR_ENTRY] = *(int *)buffer;
+			c4r_src_read(fd, buffer, wordbytes); header[C4R_HDR_CODELEN] = *(int *)buffer;
+			c4r_src_read(fd, buffer, wordbytes); header[C4R_HDR_DATALEN] = *(int *)buffer;
+			c4r_src_read(fd, buffer, wordbytes); header[C4R_HDR_PATCHLEN] = *(int *)buffer;
+			c4r_src_read(fd, buffer, wordbytes); header[C4R_HDR_SYMBOLSLEN] = *(int *)buffer;
+			c4r_src_read(fd, buffer, wordbytes); header[C4R_HDR_CONSTRUCTLEN] = *(int *)buffer;
+			c4r_src_read(fd, buffer, wordbytes); header[C4R_HDR_DESTRUCTLEN] = *(int *)buffer;
 			c4r[C4R_HEADER] = (int)header;
 
 			if (wordbytes != sizeof(int)) {
@@ -407,19 +431,19 @@ int *c4r_load_opt_real (char *file, int options) {
 
 				// Code
 				if (c4r_verbose) printf("lc4r: load code...\n");
-				read(fd, buffer, wordbytes); if (*(char *)buffer != 'C') { printf("lc4r: expected code segment, found 0x%x\n", *buffer); return c4r; }
-				read(fd, (char *)code, header[C4R_HDR_CODELEN] * wordbytes);
+				c4r_src_read(fd, buffer, wordbytes); if (*(char *)buffer != 'C') { printf("lc4r: expected code segment, found 0x%x\n", *buffer); return c4r; }
+				c4r_src_read(fd, (char *)code, header[C4R_HDR_CODELEN] * wordbytes);
 				if (c4r_debug) printf("lc4r: loaded code, now at position 0x%x\n", c4r_readoffset);
 				// target = code; i = 0; while (i++ <= header[C4R_HDR_CODELEN]) printf("  Code @ 0x%lx: %d\n", target, *target++);
 				c4r[C4R_CODE] = (int)code;
 				// Data
 				if (c4r_verbose) printf("lc4r: load data...\n");
-				read(fd, buffer, wordbytes); if (*(char *)buffer != 'D') { printf("lc4r: expected data segment, found '%c' 0x%x at file position 0x%lx %d\n", *buffer, *buffer, c4r_readoffset, c4r_readoffset); return c4r; }
-				read(fd, (char *)data, header[C4R_HDR_DATALEN]);
+				c4r_src_read(fd, buffer, wordbytes); if (*(char *)buffer != 'D') { printf("lc4r: expected data segment, found '%c' 0x%x at file position 0x%lx %d\n", *buffer, *buffer, c4r_readoffset, c4r_readoffset); return c4r; }
+				c4r_src_read(fd, (char *)data, header[C4R_HDR_DATALEN]);
 				//i = 0; x = header[C4R_HDR_DATALEN] / wordbytes; target = data;
 				//if (c4r_debug) printf("lc4r: data len %d = %d words\n", header[C4R_HDR_DATALEN], x);
 				//while (i++ < x) {
-				//	read(fd, buffer, wordbytes);
+				//	c4r_src_read(fd, buffer, wordbytes);
 				//	*target++ = *(int *)buffer;
 				//	*(int *)buffer = 0;
 				//}
@@ -431,13 +455,13 @@ int *c4r_load_opt_real (char *file, int options) {
 				// Patches
 				target = patches; i = 0; loop_target = header[C4R_HDR_PATCHLEN];
 				if (c4r_verbose) printf("lc4r: loading and apply %d patches...\n", loop_target);
-				read(fd, buffer, wordbytes); if (*(char *)buffer != 'P') { printf("lc4r: expected patch segment, found 0x%x, position 0x%x (%d)\n", *buffer, c4r_readoffset - 1, c4r_readoffset - 1); return c4r; }
+				c4r_src_read(fd, buffer, wordbytes); if (*(char *)buffer != 'P') { printf("lc4r: expected patch segment, found 0x%x, position 0x%x (%d)\n", *buffer, c4r_readoffset - 1, c4r_readoffset - 1); return c4r; }
 				percent = 0;
 				// p = __time();
 				while (i < loop_target) {
-					read(fd, buffer, wordbytes); target[C4R_PAT_TYPE]    = ptype = *(int *)buffer;
-					read(fd, buffer, wordbytes); target[C4R_PAT_ADDRESS] = paddr = *(int *)buffer;
-					read(fd, buffer, wordbytes); target[C4R_PAT_VALUE]   = pvalu = *(int *)buffer;
+					c4r_src_read(fd, buffer, wordbytes); target[C4R_PAT_TYPE]    = ptype = *(int *)buffer;
+					c4r_src_read(fd, buffer, wordbytes); target[C4R_PAT_ADDRESS] = paddr = *(int *)buffer;
+					c4r_src_read(fd, buffer, wordbytes); target[C4R_PAT_VALUE]   = pvalu = *(int *)buffer;
 
 					// Perform the patching now
 					// if (c4r_debug) printf("Patch %d ", i);
@@ -478,30 +502,30 @@ int *c4r_load_opt_real (char *file, int options) {
 
 				// Constructors
 				if (c4r_verbose) printf("lc4r: load constructors and destructors...\n");
-				read(fd, buffer, wordbytes);
+				c4r_src_read(fd, buffer, wordbytes);
 				if (*(char *)buffer != 'c') {
 					printf("lc4r: expected constructors segment, found 0x%x\n", *buffer);
 					return c4r;
 				}
 				target = constructors; i = 0; // Constructors
 				while (i++ < header[C4R_HDR_CONSTRUCTLEN]) {
-					// read(fd, buffer, wordbytes); target[C4R_CNDE_Priority] = *(int *)buffer;
-					read(fd, buffer, wordbytes); target[C4R_CNDE_Value]    = *(int *)buffer;
+					// c4r_src_read(fd, buffer, wordbytes); target[C4R_CNDE_Priority] = *(int *)buffer;
+					c4r_src_read(fd, buffer, wordbytes); target[C4R_CNDE_Value]    = *(int *)buffer;
 					// printf("cnde_value=%d\n", target[C4R_CNDE_Value]);
 					target = target + C4R_CNDE__Sz;
 				}
 				c4r[C4R_CONSTRUCTORS] = (int)constructors;
 				if (c4r_debug) printf("lc4r: loaded constructors, now at position 0x%x\n", c4r_readoffset);
 				// Destructors
-				read(fd, buffer, wordbytes);
+				c4r_src_read(fd, buffer, wordbytes);
 				if (*(char *)buffer != 'd') {
 					if (c4r_debug) printf("lc4r: expected destructors segment, found 0x%x (%c)\n", *buffer, *buffer);
 					return c4r;
 				}
 				target = destructors; i = 0;
 				while (i++ < header[C4R_HDR_DESTRUCTLEN]) {
-					// read(fd, buffer, wordbytes); target[C4R_CNDE_Priority] = *(int *)buffer;
-					read(fd, buffer, wordbytes); target[C4R_CNDE_Value]    = *(int *)buffer;
+					// c4r_src_read(fd, buffer, wordbytes); target[C4R_CNDE_Priority] = *(int *)buffer;
+					c4r_src_read(fd, buffer, wordbytes); target[C4R_CNDE_Value]    = *(int *)buffer;
 					target = target + C4R_CNDE__Sz;
 				}
 				c4r[C4R_DESTRUCTORS] = (int)destructors;
@@ -510,19 +534,19 @@ int *c4r_load_opt_real (char *file, int options) {
 				// Symbols
 				// TODO: symbols end up unaligned, need to write strings with padding.
 				if (options & C4ROPT_SYMBOLS) {
-					read(fd, buffer, wordbytes); if (*(char *)buffer != 'S') { printf("lc4r: expected symbols segment, found 0x%x\n", *buffer); return c4r; }
+					c4r_src_read(fd, buffer, wordbytes); if (*(char *)buffer != 'S') { printf("lc4r: expected symbols segment, found 0x%x\n", *buffer); return c4r; }
 					target = symbols; i = 0; loop_target = header[C4R_HDR_SYMBOLSLEN];
 					if (c4r_verbose) printf("lc4r: loading %d symbols...\n", loop_target);
 					while (i < loop_target) {
-						read(fd, buffer, wordbytes); target[C4R_SYMB_ID] = *(int *)buffer;
-						read(fd, buffer, wordbytes); target[C4R_SYMB_TYPE] = *(int *)buffer;
-						read(fd, buffer, wordbytes); target[C4R_SYMB_CLASS]= *(int *)buffer;
-						read(fd, buffer, wordbytes); target[C4R_SYMB_ATTRS] = *(int *)buffer;
-						read(fd, buffer, 1); target[C4R_SYMB_NAMELEN] = *buffer;
+						c4r_src_read(fd, buffer, wordbytes); target[C4R_SYMB_ID] = *(int *)buffer;
+						c4r_src_read(fd, buffer, wordbytes); target[C4R_SYMB_TYPE] = *(int *)buffer;
+						c4r_src_read(fd, buffer, wordbytes); target[C4R_SYMB_CLASS]= *(int *)buffer;
+						c4r_src_read(fd, buffer, wordbytes); target[C4R_SYMB_ATTRS] = *(int *)buffer;
+						c4r_src_read(fd, buffer, 1); target[C4R_SYMB_NAMELEN] = *buffer;
 						memset(buffer, 0, C4R_BUFFER_SIZE); // TODO: write nul terminator
-						read(fd, buffer, target[C4R_SYMB_NAMELEN]); target[C4R_SYMB_NAME] = (int)c4r_strcpy_alloc(buffer);
-						read(fd, buffer, wordbytes); target[C4R_SYMB_VALUE] = *(int *)buffer;
-						//read(fd, buffer, wordbytes); target[C4R_SYMB_LENGTH] = *(int *)buffer;
+						c4r_src_read(fd, buffer, target[C4R_SYMB_NAMELEN]); target[C4R_SYMB_NAME] = (int)c4r_strcpy_alloc(buffer);
+						c4r_src_read(fd, buffer, wordbytes); target[C4R_SYMB_VALUE] = *(int *)buffer;
+						//c4r_src_read(fd, buffer, wordbytes); target[C4R_SYMB_LENGTH] = *(int *)buffer;
 						if (c4r_debug) {
 							printf("Symbol %d @ 0x%lX:\n  Type: %d\n", i, c4r_readoffset, target[C4R_SYMB_TYPE]);
 							printf("  Class: %d", target[C4R_SYMB_CLASS]);
@@ -562,7 +586,7 @@ int *c4r_load_opt_real (char *file, int options) {
 	if (header) free(header);
 	if (c4r) free(c4r);
 	if (buffer) free(buffer);
-	if (fd) close(fd);
+	if (fd >= 0) close(fd);
 
 	if (c4r_verbose) printf("lc4r: load failure.\n");
 
@@ -585,6 +609,17 @@ int *c4r_load_opt (char *file, int options) {
 	if (1 && __c4_info() & C4I_C4)
 		return c4r_load_opt_pure(file, options);
 	return c4r_load_opt_real(file, options);
+}
+
+// Load a module from a memory buffer (name is recorded for stack traces).
+int *c4r_load_mem (char *name, char *buf, int len, int options) {
+	int *r;
+	c4r_mem_src = buf;
+	c4r_mem_len = len;
+	c4r_mem_pos = 0;
+	r = c4r_load_opt(name, options);
+	c4r_mem_src = 0;
+	return r;
 }
 
 int *c4r_load (char *file) {

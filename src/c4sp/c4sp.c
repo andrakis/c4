@@ -18,6 +18,7 @@
 //     -c ncells  set the cell arena size (default 65536)
 
 #include "c4.h"
+#include "c4m.h"
 #include "c4_float.h"
 
 #include "src/c4sp/include/cell.h"

@@ -82,7 +82,8 @@ TESTS_C4R := $(TESTS)/hello.c4r $(TESTS)/mandel.c4r $(TESTS)/factorial.c4r $(TES
 			 $(TESTS)/test_malloc.c4r $(TESTS)/test_printf.c4r $(TESTS)/test_printloop.c4r \
 			 $(TESTS)/test_signal.c4r $(TESTS)/test_static.c4r $(TESTS)/tests.c4r \
 			 $(TESTS)/rps.c4r $(TESTS)/test_continue.c4r $(TESTS)/test_timekeeping.c4r \
-			 $(TESTS)/test_float.c4r $(TESTS)/test_vprintf.c4r
+			 $(TESTS)/test_float.c4r $(TESTS)/test_vprintf.c4r \
+			 $(TESTS)/test_ramfs.c4r $(TESTS)/test_selfhost.c4r $(TESTS)/test_ramopt.c4r
 BIN       := c4.c4r $(C4R_C4CC) $(C4R_C4RDUMP) $(C4R_C4RLINK) $(C4R_TOP) \
             $(C4M).c4r \
             $(C4KE_C4R) \
@@ -258,6 +259,18 @@ test-c4sp-opt: c4sp c4sp.c4r c4m $(C4KE_C4R)
 	./c4m load-c4r.c -- .c4sp_sw_opt.c4r | cmp - src/c4sp/tests/expected/test_switch.txt
 	rm -f .c4sp_sw.c4r .c4sp_sw_opt.c4r
 	@echo "test-c4sp-opt: OK"
+
+# The C4KE RAM filesystem: opcode-level access, the self-hosting loop
+# (c4cc compiles a program inside C4KE, stores the image in the RAM
+# filesystem, the kernel executes it from memory), the same loop with
+# c4sp's Lisp optimizer producing the image, and c4sp reading back its
+# own RAM filesystem writes.
+test-c4ke-ramfs: pre c4sp.c4r
+	$(C4M) $(RUN_C4KE) test_ramfs | grep -q "ramfs: ok"
+	$(C4M) $(RUN_C4KE) test_selfhost | grep -q "yello"
+	$(C4M) $(RUN_C4KE) test_ramopt | grep -q "yello"
+	$(C4M) $(RUN_C4KE) c4sp.c4r src/c4sp/tests/ramfs.lisp | grep -q "ramfs roundtrip ok"
+	@echo "test-c4ke-ramfs: OK"
 
 # Linking test: compile two modules separately, link both ways, run each,
 # and exercise library mode (-r) with a relink of the written library.

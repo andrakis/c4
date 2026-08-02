@@ -450,6 +450,17 @@ enum {
 	// Debugging functions to disable/enable the cycle based interrupt
 	OP_KERN_REQUEST_EXCLUSIVE,
 	OP_KERN_RELEASE_EXCLUSIVE,
+	// The kernel RAM filesystem (see the ramfs section):
+	// int   vfs_put (char *name, char *buf, int len)  copies buf in; 0 = ok
+	// char *vfs_get (char *name, int *len)            kernel-owned buffer
+	// int   vfs_unlink (char *name)
+	// int   vfs_count ()
+	// char *vfs_name (int i)
+	OP_VFS_PUT,
+	OP_VFS_GET,
+	OP_VFS_UNLINK,
+	OP_VFS_COUNT,
+	OP_VFS_NAME,
 	OP_EXTENSIONS_START,       // Not used directly, kernel extensions will start from this
 	                           // number when registering opcodes.
 };
@@ -473,6 +484,11 @@ static int request_symbol (char *symbol) {
 	if (!memcmp(symbol, "OP_USER_PARENT", 14)) return OP_USER_PARENT;
 	if (!memcmp(symbol, "OP_AWAIT_MESSAGE", 16)) return OP_AWAIT_MESSAGE;
 	if (!memcmp(symbol, "OP_REQUEST_SYMBOL", 17)) return OP_REQUEST_SYMBOL;
+	if (!memcmp(symbol, "OP_VFS_PUT", 10)) return OP_VFS_PUT;
+	if (!memcmp(symbol, "OP_VFS_GET", 10)) return OP_VFS_GET;
+	if (!memcmp(symbol, "OP_VFS_UNLINK", 13)) return OP_VFS_UNLINK;
+	if (!memcmp(symbol, "OP_VFS_COUNT", 12)) return OP_VFS_COUNT;
+	if (!memcmp(symbol, "OP_VFS_NAME", 11)) return OP_VFS_NAME;
 	if (!memcmp(symbol, "OP_USER_START_C4R", 17)) return OP_USER_START_C4R;
 	if (!memcmp(symbol, "OP_KERN_TASKS_MAX", 17)) return OP_KERN_TASKS_MAX;
 	if (!memcmp(symbol, "OP_KERN_TASK_COUNT", 18)) return OP_KERN_TASK_COUNT;
@@ -1780,6 +1796,134 @@ static void op_await_pid(int trap, int ins, int mode, int a, int *bp, int *sp, i
 	}
 }
 
+///
+// The kernel RAM filesystem
+//
+// A flat table of named, kernel-owned byte buffers, reachable from user
+// tasks through the OP_VFS_* opcodes and consulted by the program loader
+// before the host filesystem -- so a compiler running under C4KE can
+// write an image here and the kernel can execute it, no host write
+// syscall required (the VM has none).
+///
+
+enum { RAMFS_MAX = 256 };
+
+static char **ramfs_names;   // entry names, kernel-owned copies
+static char **ramfs_bufs;    // file contents, kernel-owned copies
+static int   *ramfs_lens;
+static int    ramfs_nfiles;
+
+static int ramfs_strlen (char *s) {
+	int n;
+	n = 0;
+	while (s[n]) ++n;
+	return n;
+}
+
+// First use allocates; returns nonzero on failure
+static int ramfs_lazy_init () {
+	if (ramfs_names) return 0;
+	if (!(ramfs_names = malloc(RAMFS_MAX * sizeof(int))) ||
+	    !(ramfs_bufs  = malloc(RAMFS_MAX * sizeof(int))) ||
+	    !(ramfs_lens  = malloc(RAMFS_MAX * sizeof(int)))) {
+		printf("c4ke: ramfs allocation failure\n");
+		ramfs_names = 0;
+		return 1;
+	}
+	ramfs_nfiles = 0;
+	return 0;
+}
+
+static int ramfs_find (char *name) {
+	int i, la, lb;
+	if (!ramfs_names || !name) return -1;
+	la = ramfs_strlen(name);
+	i = 0;
+	while (i < ramfs_nfiles) {
+		lb = ramfs_strlen(ramfs_names[i]);
+		if (la == lb && !memcmp(name, ramfs_names[i], la)) return i;
+		++i;
+	}
+	return -1;
+}
+
+// Store a copy of buf under name, replacing any existing entry. 0 = ok.
+static int ramfs_put (char *name, char *buf, int len) {
+	int i, n;
+	char *nb, *nn;
+	if (ramfs_lazy_init()) return -1;
+	if (!name || len < 0) return -1;
+	if (!(nb = malloc(len + 1))) return -1;
+	memcpy(nb, buf, len);
+	nb[len] = 0;
+	if ((i = ramfs_find(name)) >= 0) {
+		free(ramfs_bufs[i]);
+		ramfs_bufs[i] = nb;
+		ramfs_lens[i] = len;
+		return 0;
+	}
+	if (ramfs_nfiles >= RAMFS_MAX) { free(nb); return -1; }
+	n = ramfs_strlen(name);
+	if (!(nn = malloc(n + 1))) { free(nb); return -1; }
+	memcpy(nn, name, n + 1);
+	ramfs_names[ramfs_nfiles] = nn;
+	ramfs_bufs[ramfs_nfiles] = nb;
+	ramfs_lens[ramfs_nfiles] = len;
+	++ramfs_nfiles;
+	return 0;
+}
+
+// The kernel-owned buffer, or 0. Length through plen when given.
+static char *ramfs_get (char *name, int *plen) {
+	int i;
+	if ((i = ramfs_find(name)) < 0) return 0;
+	if (plen) *plen = ramfs_lens[i];
+	return ramfs_bufs[i];
+}
+
+static int ramfs_unlink (char *name) {
+	int i;
+	if ((i = ramfs_find(name)) < 0) return -1;
+	free(ramfs_names[i]);
+	free(ramfs_bufs[i]);
+	--ramfs_nfiles;
+	while (i < ramfs_nfiles) {
+		ramfs_names[i] = ramfs_names[i + 1];
+		ramfs_bufs[i] = ramfs_bufs[i + 1];
+		ramfs_lens[i] = ramfs_lens[i + 1];
+		++i;
+	}
+	return 0;
+}
+
+static char *ramfs_name_at (int i) {
+	if (i < 0 || i >= ramfs_nfiles) return 0;
+	return ramfs_names[i];
+}
+
+// The OP_VFS_* handlers. Arguments are at sp[1..n] (pushed through
+// __c4_opcode with the first argument listed last); results in a.
+static void op_vfs_put (int trap, int ins, int mode, int a, int *bp, int *sp, int *returnpc) {
+	a = ramfs_put((char *)sp[1], (char *)sp[2], sp[3]);
+	trap_exit();
+}
+static void op_vfs_get (int trap, int ins, int mode, int a, int *bp, int *sp, int *returnpc) {
+	a = (int)ramfs_get((char *)sp[1], (int *)sp[2]);
+	trap_exit();
+}
+static void op_vfs_unlink (int trap, int ins, int mode, int a, int *bp, int *sp, int *returnpc) {
+	a = ramfs_unlink((char *)sp[1]);
+	trap_exit();
+}
+static void op_vfs_count (int trap, int ins, int mode, int a, int *bp, int *sp, int *returnpc) {
+	a = ramfs_nfiles;
+	trap_exit();
+}
+static void op_vfs_name (int trap, int ins, int mode, int a, int *bp, int *sp, int *returnpc) {
+	a = (int)ramfs_name_at(sp[1]);
+	trap_exit();
+}
+
 // int sleep (int ms)
 // always returns 0, unlike POSIX which may get interrupted sleep
 static void op_user_sleep (int trap, int ins, int mode, int a, int *bp, int *sp, int *returnpc) {
@@ -2276,6 +2420,8 @@ static int task_loadc4r (int argc, char **argv) {
 	int *module, *modules;
 	char *alt_file;
 	char argv_size, *name_ptr, *argv_data, *s;
+	char *ramfs_data;
+	int   ramfs_len;
 
 	file = argv[0];
 	p    = kernel_task_current[TASK_ID]; //pid();
@@ -2317,6 +2463,19 @@ static int task_loadc4r (int argc, char **argv) {
 	file = argv[0];
 	// TODO: this section runs in exclusive mode for speed
 	critical_path_start();
+	// The RAM filesystem shadows the host: an image written there (by a
+	// compiler running under C4KE, say) is what runs.
+	module = 0;
+	if ((ramfs_data = ramfs_get(file, &ramfs_len)))
+		module = c4r_load_mem(file, ramfs_data, ramfs_len, kernel_loadc4r_mode);
+	else {
+		alt_file = strcpycat(file, ".c4r");
+		if ((ramfs_data = ramfs_get(alt_file, &ramfs_len)))
+			module = c4r_load_mem(alt_file, ramfs_data, ramfs_len, kernel_loadc4r_mode);
+		free(alt_file);
+		alt_file = 0;
+	}
+	if (!module)
 	if (!(module = c4r_load_opt(file, kernel_loadc4r_mode))) {
 		// Attempt a version with .c4r appended
 		alt_file = strcpycat(file, ".c4r");
@@ -3362,6 +3521,11 @@ int main (int argc, char **argv) {
 	install_custom_opcode(OP_KERN_TASKS_EXPORT_FREE, (int *)&op_kern_tasks_export_free);
 	install_custom_opcode(OP_KERN_TASKS_RUNNING, (int *)&op_kern_tasks_running);
 	install_custom_opcode(OP_USER_START_C4R, (int *)&op_user_start_c4r);
+	install_custom_opcode(OP_VFS_PUT, (int *)&op_vfs_put);
+	install_custom_opcode(OP_VFS_GET, (int *)&op_vfs_get);
+	install_custom_opcode(OP_VFS_UNLINK, (int *)&op_vfs_unlink);
+	install_custom_opcode(OP_VFS_COUNT, (int *)&op_vfs_count);
+	install_custom_opcode(OP_VFS_NAME, (int *)&op_vfs_name);
 	install_custom_opcode(OP_USER_PID, (int *)&op_user_pid);
 	install_custom_opcode(OP_USER_PARENT, (int *)&op_user_parent);
 	install_custom_opcode(OP_USER_SIGNAL, (int *)&op_user_signal);

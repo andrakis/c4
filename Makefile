@@ -151,8 +151,11 @@ C4SP_SRCS := src/c4sp/c4sp.c src/c4sp/include/cell.h src/c4sp/include/gc.h \
              src/c4sp/include/cells.h src/c4sp/include/atoms.h \
              src/c4sp/include/read.h src/c4sp/include/stdlib.h \
              src/c4sp/include/eval.h
+# -O0 is load-bearing: the collector finds roots by scanning the stack, and
+# an optimizing gcc may keep the only reference to a cell in a register.
+# Under the C4 VM the scan is exact; this caveat is native-only.
 c4sp: $(C4SP_SRCS)
-	gcc $(EXTRA_CC) -O2 -g -Iinclude -I. -o c4sp src/c4sp/c4sp.c
+	gcc $(EXTRA_CC) -O0 -g -Iinclude -I. -o c4sp src/c4sp/c4sp.c
 c4sp.c4r: $(C4CC) $(C4SP_SRCS)
 	$(PREPROC) src/c4sp/c4sp.c | $(C4CC) -o c4sp.c4r -
 # c4sp test, three parts:
@@ -176,8 +179,10 @@ test-c4sp: c4sp c4sp.c4r c4m
 		./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/$$t.lisp | cmp - src/c4sp/tests/expected/$$t.txt || exit 1; \
 	done
 	./c4sp src/c4sp/lisp/fac.lisp 12 | cmp - src/c4sp/tests/expected/fac-12.txt
-	./c4sp -c 4000000 src/c4sp/lisp/seval.lisp | cmp - src/c4sp/tests/expected/seval.txt
-	./c4m load-c4r.c -- c4sp.c4r -c 4000000 src/c4sp/lisp/seval.lisp | cmp - src/c4sp/tests/expected/seval.txt
+	./c4sp src/c4sp/lisp/seval.lisp | cmp - src/c4sp/tests/expected/seval.txt
+	./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/seval.lisp | cmp - src/c4sp/tests/expected/seval.txt
+	./c4sp src/c4sp/lisp/gcloop.lisp | cmp - src/c4sp/tests/expected/gcloop.txt
+	./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/gcloop.lisp 20000 | cmp - src/c4sp/tests/expected/gcloop.txt
 	@echo "test-c4sp: OK"
 
 # Linking test: compile two modules separately, link both ways, run each,

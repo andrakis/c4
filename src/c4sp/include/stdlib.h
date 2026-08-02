@@ -441,8 +441,8 @@ void stdlib_bind (int *env, char *name, int type, int id) {
 
 // Populate the global environment.
 void stdlib_init (int *env) {
-	cell_true  = mk_atom(A_TRUE);
-	cell_false = mk_atom(A_FALSE);
+	cell_true  = gc_root_true  = mk_atom(A_TRUE);
+	cell_false = gc_root_false = mk_atom(A_FALSE);
 	env_define(env, A_NIL, 0);
 	env_define(env, A_TRUE, cell_true);
 	env_define(env, A_FALSE, cell_false);

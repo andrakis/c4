@@ -91,6 +91,7 @@ int main (int argc, char **argv) {
 	// Set up the global environment and evaluate. Remaining command line
 	// arguments are parsed as expressions into argv, as alisp does.
 	genv = mk_env(0);
+	gc_root_genv = genv;
 	stdlib_init(genv);
 	head = tail = 0;
 	while (argc > 0) {

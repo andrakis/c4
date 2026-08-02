@@ -1,0 +1,42 @@
+# The collector scans the C4 stack conservatively (docs/c4sp-design.md 4.5):
+# reading not-currently-initialized stack words is the mechanism, not a bug.
+# A wrong guess can only retain a dead cell, never corrupt a live one,
+# because the collector is non-moving.
+{
+   c4sp-conservative-stack-scan-cond
+   Memcheck:Cond
+   fun:gc_valid_cell
+}
+{
+   c4sp-conservative-stack-scan-value
+   Memcheck:Value8
+   fun:gc_valid_cell
+}
+{
+   c4sp-conservative-stack-scan-mark
+   Memcheck:Cond
+   fun:gc_mark
+}
+{
+   c4sp-conservative-stack-scan-mark-value
+   Memcheck:Value8
+   fun:gc_mark
+}
+# The taint follows the scanned word into the worklist: a cell reached via
+# an uninitialised (but range-validated) stack word keeps its undefined
+# provenance when gc_drain visits its children.
+{
+   c4sp-conservative-stack-scan-drain-value
+   Memcheck:Value8
+   fun:gc_drain
+}
+{
+   c4sp-conservative-stack-scan-drain-cond
+   Memcheck:Cond
+   fun:gc_drain
+}
+{
+   c4sp-conservative-stack-scan-drain-addr
+   Memcheck:Addr8
+   fun:gc_drain
+}

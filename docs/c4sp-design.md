@@ -461,31 +461,25 @@ reference rather than a code or data offset, and `asmc4r_handler_JSR` already
 emits one for `ATTR_EXTERN` targets. Cross-module references are therefore
 already representable in files c4cc produces today.
 
-`src/c4ke/bin/c4rlink.c` documents the whole merge algorithm in its header
-comment and gets partway there. Linking two modules today:
+**Done** (2026-08-02): `src/c4ke/bin/c4rlink.c` implements the full merge:
 
-```
-./c4rlink m1.c4r m2.c4r -o linked.c4r
-  : counts - code: 47  data: 16  patches:  2  cons: 0  des: 0  syms: 4
-  : entry at m1.c4r+1
-./c4rlink: allocating master structure...
-(null): link failure
-```
+* code and data segments concatenated, each module's base offsets remembered;
+* every `LT_CODE`/`LT_DATA` patch rebased by those offsets;
+* symbol tables merged by name (statics stay private per module) — an
+  `extern` symbol that another module defines resolves to the definition,
+  and patches referring to it turn from symbol-typed into `LT_CODE`;
+* constructor and destructor lists merged in module order;
+* symbol-typed patches still unresolved at the end are an error, unless
+  `-r` (library mode) keeps them for a later link — a written `.c4l`
+  relinks cleanly;
+* the merged image is serialized back out by a new `c4r_write()`, the
+  read/write pair M5 needs.
 
-It loads both modules, computes merged segment sizes, and picks the entry
-point, then fails allocating the master structure. The load-and-plan half
-works; the merge, rebase and symbol-resolution half is the part that is
-missing.
-
-Finishing it is:
-
-* concatenate code and data segments, remembering each module's base offsets;
-* rebase every `LT_CODE`/`LT_DATA` patch by those offsets;
-* merge symbol tables — an `extern` symbol that another module defines becomes
-  a normal symbol, and patches referring to it turn from symbol-typed into
-  `LT_CODE`/`LT_DATA`;
-* merge constructor and destructor lists, honouring priority;
-* error on any symbol-typed patch still unresolved, unless building a library.
+`make test-link` compiles `src/tests/test_link_a.c` / `test_link_b.c`
+separately, links them both ways plus via a `.c4l`, and runs each result —
+cross-module calls, data strings in a non-first module, and constructors /
+destructors in a non-first module all verified, under c4m and plain c4,
+valgrind-clean.
 
 Dynamic loading needs less: `load-c4r.c` already loads and relocates a module
 at an arbitrary address. What it lacks is resolving symbol-typed patches

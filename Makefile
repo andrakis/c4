@@ -146,6 +146,20 @@ test-massive-c4: pre
 	$(C4) $(C4M).c $(RUN_C4KE) innerbench -n $(TEST_MASSIVE_NUM)
 test-massive-c4-alt: pre
 	$(C4) $(C4M) -a $(RUN_C4KE) innerbench -n $(TEST_MASSIVE_NUM)
+# Linking test: compile two modules separately, link both ways, run each,
+# and exercise library mode (-r) with a relink of the written library.
+test-link: c4m $(C4CC) $(C4RLINK)
+	$(C4CC) -o tla.c4o src/tests/test_link_a.c
+	$(C4CC) -o tlb.c4o src/tests/test_link_b.c
+	$(C4RLINK) tla.c4o tlb.c4o -o test_link.c4r
+	$(C4M) load-c4r.c -- test_link.c4r
+	$(C4RLINK) tlb.c4o tla.c4o -o test_link2.c4r
+	$(C4M) load-c4r.c -- test_link2.c4r
+	$(C4RLINK) -r tla.c4o -o tla.c4l
+	$(C4RLINK) tla.c4l tlb.c4o -o test_link3.c4r
+	$(C4M) load-c4r.c -- test_link3.c4r
+	rm -f tla.c4o tlb.c4o tla.c4l test_link.c4r test_link2.c4r test_link3.c4r
+	@echo "test-link: OK"
 clean-c4rs:
 	rm -rf $(C4RS) $(BIN) *.c4r c4ke.pre.c
 clean: clean-c4rs
@@ -193,10 +207,10 @@ c4m: c4m.c
 	gcc $(EXTRA_CC) -O2 -g -idirafter include -I . c4m.c c4m_float.c -o c4m -lm
 c4cc: $(C4CC_SRCS)
 	$(call compile_c,src/c4cc/asm-c4r.c,c4cc)
-$(C4RDUMP):
+$(C4RDUMP): src/c4ke/bin/c4rdump.c load-c4r.c
 #gcc $(EXTRA_CC) -O2 -g -Isrc/c4cc -I include -I . src/c4ke/bin/c4rdump.c -o $(C4RDUMP)
 	$(NATIVE_CC) $(NATIVE_CC_OPTS) -Isrc/c4cc src/c4ke/bin/c4rdump.c -o $(C4RDUMP)
-$(C4RLINK):
+$(C4RLINK): src/c4ke/bin/c4rlink.c src/c4cc/asm-c4r.c src/c4cc/c4cc.c load-c4r.c
 	gcc $(EXTRA_CC) -O2 -g -Isrc/c4cc -I include -I . src/c4ke/bin/c4rlink.c -o $(C4RLINK)
 
 #
@@ -259,8 +273,7 @@ $(TESTS)/test_vprintf.c4r: $(C4CC) $(TESTS)/test_vprintf.c include/stdio.h $(U0)
 # All tests should compile with the following invocation
 $(SRCS)/tests/%.c4r: $(SRCS)/tests/%.c $(C4KE_WATCH) $(C4CC)
 	$(C4CC) -o $@ $(U0) $<
-# Build the u0 library for linking.
-# TODO: c4rlink doesn't support linking yet.
+# Build the u0 library for linking (see also: make test-link).
 %.c4l: %.c $(C4KE_WATCH) $(C4CC)
 	$(C4CC) -o $@ $<
 

@@ -91,6 +91,11 @@ int *eval_cek (int *x, int *env) {
 					x = car(p);
 					continue;
 				}
+				if (id == A_LOAD) {       // (load "file"): c4sp extension
+					x = c4sp_load(x);
+					if (c4sp_err) return 0;
+					continue;
+				}
 				if (id == A_NEXT) {       // (next f args*): K_ARGN flavour
 					p = cdr(x);
 					if (!p) { value = 0; mode = CEK_RETURN; continue; }

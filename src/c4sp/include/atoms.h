@@ -17,7 +17,7 @@ int    atom_cap;
 enum {
 	A_NIL, A_TRUE, A_FALSE,
 	A_QUOTE, A_IF, A_DEFINE, A_SET, A_LAMBDA, A_MACRO, A_FASTMACRO,
-	A_BEGIN, A_NEXT
+	A_BEGIN, A_NEXT, A_LOAD
 };
 
 // Intern a name (len bytes of s), returning its id.
@@ -82,5 +82,6 @@ int atoms_init () {
 	atom_intern("fastmacro", 9);
 	atom_intern("begin", 5);
 	atom_intern("next", 4);
+	atom_intern("load", 4);
 	return 0;
 }

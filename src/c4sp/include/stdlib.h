@@ -21,6 +21,12 @@ enum {
 	B_GC, B_GC_STATS,
 	B_STR_SPLIT, B_STR_JOIN, B_STR_SUBSTR, B_STR_REPEAT,
 	B_FILE_EXISTS, B_FILE_PATH, B_FILE_READ, B_DEBUG_PARSE,
+	// Byte-level plumbing for the .c4r reader/writer (M5). Strings are
+	// byte buffers here; word access is host byte order, matching what
+	// asm-c4r wrote and what x86 tolerates unaligned.
+	B_STR_BYTE, B_STR_SETBYTE, B_STR_WORD, B_STR_SETWORD, B_STR_ALLOC,
+	B_FILE_WRITE, B_SYS_WORDSIZE,
+	B_BITAND, B_BITOR, B_BITSHL, B_BITSHR,
 	B__COUNT
 };
 
@@ -307,6 +313,26 @@ char *file_find (char *name, int len) {
 	return file_path_buf;
 }
 
+// (load "file") support: parse the named file and hand the expression
+// back for the evaluator to run in the current environment -- a c4sp
+// extension (alisp has no include mechanism), used to pull c4r.lisp into
+// the optimizer programs. The name is taken unevaluated, string or atom.
+int *c4sp_load (int *form) {
+	char *path, *buf;
+	int len;
+	int *x;
+	pr_reset();
+	cell_write(list_index(form, 1), 0);
+	path = file_find(pr_term(), pr_len);
+	if (!(buf = rd_file(path, &len))) {
+		c4sp_error_name("load: cannot open", path);
+		return 0;
+	}
+	x = rd_read(buf, len);
+	free(buf);
+	return x;
+}
+
 // The builtin dispatcher. args is a cons list of evaluated arguments
 // (unevaluated for macros, but macros never reach here); env is the
 // caller's environment, used by the PROC_ENV builtins.
@@ -456,6 +482,66 @@ int *builtin_call (int id, int *args, int *env) {
 		return rd_read((char *)a0[CELL_A], a0[CELL_B]);
 	}
 
+	// Byte-level string access (M5)
+	if (id == B_STR_BYTE) {   // (string:byte s n) -> 0..255, or -1 out of range
+		if (cell_type(a0) != T_STRING || cell_type(a1) != T_INT) { c4sp_error("string:byte needs a string and an index"); return 0; }
+		n = a1[CELL_A];
+		if (n < 0 || n >= a0[CELL_B]) return mk_int(-1);
+		return mk_int(((char *)a0[CELL_A])[n] & 255);
+	}
+	if (id == B_STR_SETBYTE) { // (string:byte! s n v) -> s, mutated
+		if (cell_type(a0) != T_STRING || cell_type(a1) != T_INT || cell_type(a2) != T_INT) { c4sp_error("string:byte! needs a string, index, value"); return 0; }
+		n = a1[CELL_A];
+		if (n < 0 || n >= a0[CELL_B]) { c4sp_error("string:byte! out of range"); return 0; }
+		((char *)a0[CELL_A])[n] = a2[CELL_A];
+		return a0;
+	}
+	if (id == B_STR_WORD) {   // (string:word s n) -> the word at BYTE offset n
+		if (cell_type(a0) != T_STRING || cell_type(a1) != T_INT) { c4sp_error("string:word needs a string and an offset"); return 0; }
+		n = a1[CELL_A];
+		if (n < 0 || n + sizeof(int) > a0[CELL_B]) { c4sp_error("string:word out of range"); return 0; }
+		return mk_int(*(int *)((char *)a0[CELL_A] + n));
+	}
+	if (id == B_STR_SETWORD) { // (string:word! s n v) -> s, mutated
+		if (cell_type(a0) != T_STRING || cell_type(a1) != T_INT || cell_type(a2) != T_INT) { c4sp_error("string:word! needs a string, offset, value"); return 0; }
+		n = a1[CELL_A];
+		if (n < 0 || n + sizeof(int) > a0[CELL_B]) { c4sp_error("string:word! out of range"); return 0; }
+		*(int *)((char *)a0[CELL_A] + n) = a2[CELL_A];
+		return a0;
+	}
+	if (id == B_STR_ALLOC) {  // (string:alloc n) -> n nul bytes
+		if (cell_type(a0) != T_INT || a0[CELL_A] < 0) { c4sp_error("string:alloc needs a size"); return 0; }
+		n = a0[CELL_A];
+		if (!(s = malloc(n + 1))) { c4sp_error("string:alloc: out of memory"); return 0; }
+		memset(s, 0, n + 1);
+		return mk_string_own(s, n);
+	}
+	if (id == B_FILE_WRITE) { // (file:write path s) -> true/false
+		if (cell_type(a1) != T_STRING) { c4sp_error("file:write needs a string"); return 0; }
+#if NATIVE
+		pr_reset(); cell_write(a0, 0);
+		n = open(pr_term(), 577, 384); // O_WRONLY|O_CREAT|O_TRUNC, 0600
+		if (n < 0) return cell_false;
+		len = write(n, (char *)a1[CELL_A], a1[CELL_B]);
+		close(n);
+		return bool_cell(len == a1[CELL_B]);
+#else
+		// The C4 VM has no write syscall (same limitation as c4cc/c4rlink
+		// under c4); everything else about M5/M6 works by comparing
+		// in-memory strings instead.
+		c4sp_error("file:write is not available under the C4 VM");
+		return 0;
+#endif
+	}
+	if (id == B_SYS_WORDSIZE) return mk_int(sizeof(int));
+
+	// Bitwise (the C4 VM has AND/OR/SHL/SHR opcodes; alisp has no
+	// equivalents, these are c4sp extensions for the .c4r tooling)
+	if (id == B_BITAND) return mk_int((a0 ? a0[CELL_A] : 0) & (a1 ? a1[CELL_A] : 0));
+	if (id == B_BITOR)  return mk_int((a0 ? a0[CELL_A] : 0) | (a1 ? a1[CELL_A] : 0));
+	if (id == B_BITSHL) return mk_int((a0 ? a0[CELL_A] : 0) << (a1 ? a1[CELL_A] : 0));
+	if (id == B_BITSHR) return mk_int((a0 ? a0[CELL_A] : 0) >> (a1 ? a1[CELL_A] : 0));
+
 	c4sp_error("unknown builtin");
 	return 0;
 }
@@ -518,5 +604,16 @@ void stdlib_init (int *env) {
 	stdlib_bind(env, "file:exists", T_PROC, B_FILE_EXISTS);
 	stdlib_bind(env, "file:path", T_PROC, B_FILE_PATH);
 	stdlib_bind(env, "file:read", T_PROC, B_FILE_READ);
+	stdlib_bind(env, "file:write", T_PROC, B_FILE_WRITE);
 	stdlib_bind(env, "debug:parse", T_PROC, B_DEBUG_PARSE);
+	stdlib_bind(env, "string:byte", T_PROC, B_STR_BYTE);
+	stdlib_bind(env, "string:byte!", T_PROC, B_STR_SETBYTE);
+	stdlib_bind(env, "string:word", T_PROC, B_STR_WORD);
+	stdlib_bind(env, "string:word!", T_PROC, B_STR_SETWORD);
+	stdlib_bind(env, "string:alloc", T_PROC, B_STR_ALLOC);
+	stdlib_bind(env, "sys:wordsize", T_PROC, B_SYS_WORDSIZE);
+	stdlib_bind(env, "bit:and", T_PROC, B_BITAND);
+	stdlib_bind(env, "bit:or", T_PROC, B_BITOR);
+	stdlib_bind(env, "bit:shl", T_PROC, B_BITSHL);
+	stdlib_bind(env, "bit:shr", T_PROC, B_BITSHR);
 }

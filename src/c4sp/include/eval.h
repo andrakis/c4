@@ -64,6 +64,10 @@ int *eval (int *x, int *env) {
 				}
 				x = (int *)tail[CELL_A];
 				continue;
+			} else if (id == A_LOAD) {    // (load "file"): c4sp extension
+				x = c4sp_load(x);
+				if (c4sp_err) return 0;
+				continue;
 			} else if (id == A_NEXT) {    // (next fun args*): reuse this env
 				isnext = 1;
 				x = (int *)x[CELL_B];

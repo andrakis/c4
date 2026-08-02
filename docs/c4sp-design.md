@@ -51,7 +51,7 @@ Changed, with reasons:
 | `shared_ptr` lifetime | **mark & sweep GC** | See §4. Reference counting cannot work here. |
 | `double` floats | binary32 via `include/c4_float.h` | Already built, already tested, already runs under plain c4. |
 | C++ exceptions | error cell + an error flag checked by the eval loop | C4 has no exceptions or `setjmp`. |
-| `'x` not handled by the reader | `'x` reads as `(quote x)` | alisp's C++ tokeniser makes `'env:defined` an atom *named* `'env:defined`; the sample `macros.lisp` only works on the Node build. Worth fixing rather than reproducing. |
+| `'x` not handled by the reader | `'x` reads as `(quote x)` | alisp's C++ tokeniser made `'env:defined` an atom *named* `'env:defined`, so `macros.lisp` and `seval.lisp` only worked on the Node build. **Fixed upstream** in alisp `efdf948`; c4sp inherits the corrected behaviour. |
 
 ## 3. Cell representation
 
@@ -243,17 +243,108 @@ recurse in C4.
 
 **Recursion depth is the real constraint.** A C4KE task stack is 0xFFFF bytes
 = 8191 words; an eval frame is perhaps 12 words, so roughly 600 nested
-evaluations. `seval.lisp` evaluating itself will exceed that. Mitigations, in
-order of preference:
-
-1. Make argument evaluation iterative (build the evaluated list with an
-   explicit loop, not recursion) — removes most of the depth.
-2. Raise `TASK_STACK_SIZE` for the c4sp task specifically.
-3. If that is still not enough, an explicit continuation stack — a much bigger
-   change, and the point at which this becomes a different program.
+evaluations. That is fine for ordinary programs and not fine for `seval.lisp`
+evaluating itself. §6.1–6.3 work out what to do about it.
 
 Errors: no exceptions in C4, so a global error flag plus an error cell,
 checked at each loop iteration and propagated up. Ugly but explicit.
+
+### 6.1 Two ways to stop using the C4 stack
+
+Both amount to the same idea — move interpreter state out of C4 locals and
+into the heap — but they reify different things.
+
+**Elispidae's reified frames.** `PLint_stackless.cpp` gives each expression a
+`LithpFrame` holding the expression, its subexpression list and an iterator
+into it, the argument list and an iterator, the resolved arguments, and a
+`subframe` pointer. `execute()` performs one step and returns. Frames form a
+parent→child chain on the heap.
+
+Two things are worth noting before copying it:
+
+* Its purpose is **microthreading**, not depth relief. The `FrameWaitState`
+  enum (`Receive`, `Sleep`, `Run_Wait`) and `MicrothreadManager` are the point
+  — it exists so a computation can be paused, a message delivered, and the
+  computation resumed. Erlang-style concurrency.
+* It is not actually stackless in the native sense. `LithpFrame::execute`
+  calls `subframe->execute(impl)`, and `deepestFrame()` recurses too, so
+  native stack depth per step is still proportional to Lisp nesting depth. To
+  get depth relief you would keep a pointer to the deepest frame and step it
+  directly, following parent links back up — a small change, but a change.
+
+**Defunctionalized continuations (CEK).** State is three values: `control`
+(the expression being evaluated), `env`, and `kont` (what to do with the value
+once it exists). The evaluator is one loop alternating between two modes:
+
+```
+EVAL:   decompose control; either produce a value (-> RETURN),
+        or push a kont frame and descend into a subexpression
+RETURN: pop a kont frame, consume the value, and either
+        produce another value or descend again
+```
+
+Native stack depth is O(1) regardless of program nesting.
+
+### 6.2 Recommendation: continuations, represented as cons cells
+
+For c4sp specifically, continuations win, for reasons that are mostly about
+C4 rather than about Lisp:
+
+1. **The data structure already exists.** "The arguments still to evaluate" is
+   just the cdr of the argument list. Elispidae needs vectors and iterators
+   because alisp/Lithp lists are vectors; c4sp uses cons cells, so the
+   continuation *is* the list. Materially less code.
+
+2. **The GC gets it for free.** A kont frame is a cell, and the chain is a
+   list, so §4.7 is satisfied with no extra work. Elispidae's frames are
+   `new`-allocated C++ objects; the C4 equivalent would be malloc'd blocks
+   outside the arena, which is exactly the thing §4.7 forbids — they would
+   have to become cells anyway.
+
+3. **It makes the collector cheaper, not more expensive.** With a CEK loop the
+   C4 stack stays flat, so the conservative scan of §4.5 has almost nothing to
+   walk and the real roots reduce to `control`, `env`, `kont` and the globals.
+   The two hard problems solve each other: stack scanning stops being the
+   primary root-finding mechanism and becomes a safety net for builtins that
+   hold cells in locals.
+
+4. **Resumability comes free anyway.** The entire machine state is three
+   words. Saving them *is* saving the computation, which is cheaper than
+   Elispidae's frame objects and gives C4KE what it actually wants: the
+   interpreter can yield to the scheduler between steps, and Elispidae-style
+   microthreading later costs three words plus a kont chain per Lisp thread.
+
+5. **`call/cc` falls out.** If kont frames are immutable, capturing a
+   continuation is copying a pointer. alisp has no equivalent.
+
+The frame set is small. Each frame is one cell (`type` + three slots), chained
+by consing onto `kont`:
+
+| Frame | Slots | Pushed when |
+|---|---|---|
+| `K_ARG` | evaluated-so-far, remaining, env | evaluating a call's arguments |
+| `K_IF` | conseq, alt, env | evaluating an `if` test |
+| `K_DEFINE` | symbol, env | evaluating a `define` value |
+| `K_SET` | symbol, env | evaluating a `set!` value |
+| `K_BEGIN` | remaining, env | mid-`begin` |
+| `K_MACRO` | env | re-evaluating a macro expansion in the caller's env |
+
+Three slots is exactly enough for the widest of them. Tail positions push
+nothing, which is what makes tail calls and `next` free rather than special.
+
+### 6.3 Build it second, not first
+
+Do **not** write the CEK machine at M1. Write the ordinary recursive evaluator
+first, get the semantics right against the alisp samples, and only then
+convert — validating by diffing the two evaluators' output across the whole
+sample corpus.
+
+Converting an evaluator whose semantics are already pinned down is a
+mechanical, testable refactor. Designing the machine and the language
+semantics at the same time, with no oracle to check against, is where this
+kind of project usually dies. The recursive evaluator is ~150 lines and is
+worth writing purely as the reference implementation; the CEK version is
+perhaps 350–450 lines of flat, un-nested C4, which is a shape C4 handles well.
 
 ## 7. Builtins
 
@@ -300,43 +391,112 @@ concatenated if splitting becomes necessary.
 
 ## 9. The optimizer
 
-### 9.1 The missing piece: a symbolic assembly format
+### 9.1 The bridge already exists: the .c4r patch table
 
-Peephole optimization changes instruction *counts*, which invalidates every
-absolute address. c4cc currently emits absolute addresses and backpatches them,
-and `-S` produces a listing for humans, not for machines.
+An earlier draft of this document claimed c4cc emits bare absolute addresses,
+and that a new labelled listing format was the first work item. **That was
+wrong.** `asm-c4r.c` records a patch entry for every word in the code segment
+that holds an address:
 
-So the first real work item is a **labelled listing format** that c4cc can emit
-and `asm-c4r.c` can consume:
+| Emitted by | Patch |
+|---|---|
+| `asmc4r_handler_IMM` | `LT_DATA` if the immediate points into the data segment, `LT_CODE` if into code |
+| `asmc4r_handler_JMP` | `LT_CODE` |
+| `asmc4r_handler_JSR` | `LT_CODE`, or **the symbol id** when the target is `ATTR_EXTERN` |
+| `asmc4r_handler_BZPH` / `BNZPH` | `LT_CODE` placeholders, fixed up later by `asmc4r_handler_UpdateAddress`, which rewrites `LBL_VALUE` so forward branches end up correct |
+
+Each entry is `(type, address, value)` where **both address and value are
+offsets**, not absolute addresses — `load-c4r.c` relocates with
+
+```c
+if (ptype == C4R_PTYPE_CODE) *(code + paddr) = (int)(code + pvalu);
+else if (ptype == C4R_PTYPE_DATA) *(code + paddr) = (int)(((char *)data) + pvalu);
+```
+
+So a `.c4r` is already fully relocatable, and — the part that matters here —
+**every address word is identified together with its target**. Compiling
+
+```c
+int add(int a, int b) { return a + b; }
+int main() { int i; i = 0; while (i < 3) { printf("hi %d\n", add(i, 1)); i = i + 1; } return 0; }
+```
+
+gives exactly four patches, which is exactly the four addresses in the program:
 
 ```
-func add
-    ENT  2
-    LEA  3
-    LI
-    PSH
-    LEA  2
-    LI
-    ADD
-    LEV
-    LEV
-end
+patch type CODE address 0x1c value 0x3c    <- the BZ target
+patch type DATA address 0x1e value 0x0     <- the "hi %d\n" string
+patch type CODE address 0x28 value 0x1     <- JSR add
+patch type CODE address 0x3b value 0x14    <- the loop's backward JMP
 ```
 
-with `BZ`/`BNZ`/`JMP`/`JSR` referring to labels rather than addresses. This is
-useful on its own — it makes c4cc's output inspectable and diffable — and it is
-the only thing standing between c4sp and a working optimizer.
+No c4cc changes are needed. c4sp reads the `.c4r` directly.
 
 ### 9.2 Pipeline
 
 ```
-foo.c --c4cc--> foo.c4s --c4sp+optimizer.lisp--> foo.opt.c4s --asm-c4r--> foo.c4r
+foo.c --c4cc--> foo.c4r --c4sp + optimizer.lisp--> foo.opt.c4r
 ```
 
-c4sp reads `.c4s` into cons lists: `((ENT 2) (LEA 3) (LI) (PSH) ...)`, which is
-exactly the shape pattern matching wants.
+Reading, in c4sp:
 
-### 9.3 Optimizations worth having
+1. Decode the code segment. Opcodes `LEA IMM JMP JSR BZ BNZ ENT ADJ` take an
+   operand word; everything else does not, so the stream decodes unambiguously.
+2. Every patch target becomes a **label**. Collect them first, then decode.
+3. Emit cons lists: `((label L0) (ENT 2) (LEA 3) (LI) (PSH) (BZ L1) ...)`,
+   with data references as `(IMM (data 0))` and external calls as
+   `(JSR (extern "some_external_function"))`.
+
+Writing is the inverse: lay the instructions out, resolve labels to offsets,
+and regenerate the patch table. Because layout changes, *every* patch's address
+and value are recomputed — which is precisely what the label form gives you,
+and precisely why the label form is needed even though the file format is
+already relocatable.
+
+### 9.3 The linker this unlocks
+
+The same table is the basis for the static and dynamic linking you want, and
+the format already anticipates it: a **positive** patch type is a symbol
+reference rather than a code or data offset, and `asmc4r_handler_JSR` already
+emits one for `ATTR_EXTERN` targets. Cross-module references are therefore
+already representable in files c4cc produces today.
+
+`src/c4ke/bin/c4rlink.c` documents the whole merge algorithm in its header
+comment and gets partway there. Linking two modules today:
+
+```
+./c4rlink m1.c4r m2.c4r -o linked.c4r
+  : counts - code: 47  data: 16  patches:  2  cons: 0  des: 0  syms: 4
+  : entry at m1.c4r+1
+./c4rlink: allocating master structure...
+(null): link failure
+```
+
+It loads both modules, computes merged segment sizes, and picks the entry
+point, then fails allocating the master structure. The load-and-plan half
+works; the merge, rebase and symbol-resolution half is the part that is
+missing.
+
+Finishing it is:
+
+* concatenate code and data segments, remembering each module's base offsets;
+* rebase every `LT_CODE`/`LT_DATA` patch by those offsets;
+* merge symbol tables — an `extern` symbol that another module defines becomes
+  a normal symbol, and patches referring to it turn from symbol-typed into
+  `LT_CODE`/`LT_DATA`;
+* merge constructor and destructor lists, honouring priority;
+* error on any symbol-typed patch still unresolved, unless building a library.
+
+Dynamic loading needs less: `load-c4r.c` already loads and relocates a module
+at an arbitrary address. What it lacks is resolving symbol-typed patches
+against symbols the *host* already has, which is the same lookup step as
+above, done at load time instead of link time.
+
+Worth saying plainly: this is independent of c4sp and probably worth more.
+c4sp needs the read/write half of §9.2, which is the same code a linker needs,
+so doing the linker first would leave c4sp with less to write.
+
+### 9.4 Optimizations worth having
 
 Ordered roughly by payoff, based on what c4's codegen actually emits:
 
@@ -354,7 +514,7 @@ Ordered roughly by payoff, based on what c4's codegen actually emits:
 Constant folding and the `MUL`→`SHL` reduction alone should be measurable,
 because C4 emits `PSH; IMM sizeof(int); MUL; ADD` for *every* subscript.
 
-### 9.4 Verification
+### 9.5 Verification
 
 The optimizer must be provably safe before it is useful:
 
@@ -372,18 +532,21 @@ The optimizer must be provably safe before it is useful:
 | **M2** | Mark & sweep with conservative stack scan; `gc:stats` | A loop allocating millions of cells runs in a fixed arena |
 | **M3** | `macro`, `fastmacro`, `next`, tail calls | `macros.lisp`, then `seval.lisp` runs `fac.lisp` |
 | **M4** | Strings, floats, file IO, REPL, C4KE integration | `c4sp` runs as a C4KE process |
-| **M5** | `.c4s` symbolic listing: c4cc emits, asm-c4r consumes, round-trips | `foo.c -> .c4s -> .c4r` matches direct compilation |
+| **M5** | `.c4r` reader/writer in c4sp, using the patch table for labels | `foo.c4r -> lists -> foo.c4r` is byte-identical |
 | **M6** | Optimizer passes in Lisp | Test suite passes optimized; instruction counts drop |
 
 M0–M2 is the risky part and is mostly mechanical now that the GC question is
-settled. M5 is the one that unlocks the actual goal and could be done
-independently of the Lisp work.
+settled. **M3½ is the CEK conversion of §6.3**, done before `seval.lisp` is
+attempted. M5 needs no c4cc changes and shares its code with the linker, so
+it could be built first, independently of the Lisp work.
 
 ## 11. Open questions
 
-* **Does `seval.lisp` fit?** It is the best available stress test, but it is
-  also the deepest recursion. If M3 cannot run it even with an enlarged stack,
-  the explicit continuation stack from §6 moves from "maybe" to "required".
+* **How much does the CEK conversion cost in speed?** Every kont push is an
+  arena allocation where the recursive evaluator used a C4 stack frame. The
+  free-list allocator makes that cheap, but it is a real cost and the two
+  evaluators should be benchmarked against each other before the recursive
+  one is deleted — if it ever is; keeping it as an oracle has value.
 * **Arena sizing under C4KE.** 2 MB of cells inside a kernel whose tasks
   normally use 64 KB stacks is a large tenant. It may want to be a service
   rather than an ordinary task.

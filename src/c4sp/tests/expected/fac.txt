@@ -1,0 +1,2 @@
+Factorial of 10 = 3628800
+nil

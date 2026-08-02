@@ -146,6 +146,27 @@ test-massive-c4: pre
 	$(C4) $(C4M).c $(RUN_C4KE) innerbench -n $(TEST_MASSIVE_NUM)
 test-massive-c4-alt: pre
 	$(C4) $(C4M) -a $(RUN_C4KE) innerbench -n $(TEST_MASSIVE_NUM)
+# c4sp, the Lisp interpreter (docs/c4sp-design.md)
+C4SP_SRCS := src/c4sp/c4sp.c src/c4sp/include/cell.h src/c4sp/include/gc.h \
+             src/c4sp/include/cells.h src/c4sp/include/atoms.h \
+             src/c4sp/include/read.h
+c4sp: $(C4SP_SRCS)
+	gcc $(EXTRA_CC) -O2 -g -Iinclude -I. -o c4sp src/c4sp/c4sp.c
+c4sp.c4r: $(C4CC) $(C4SP_SRCS)
+	$(PREPROC) src/c4sp/c4sp.c | $(C4CC) -o c4sp.c4r -
+# c4sp test: the canonical written form of each sample must survive a
+# parse -> print -> parse -> print round trip, and the c4r build under c4m
+# must agree with the native build byte for byte.
+test-c4sp: c4sp c4sp.c4r c4m
+	for f in src/c4sp/lisp/*.lisp; do \
+		./c4sp -p $$f > .c4sp_rt1 || exit 1; \
+		./c4sp -p .c4sp_rt1 > .c4sp_rt2 || exit 1; \
+		cmp .c4sp_rt1 .c4sp_rt2 || exit 1; \
+		./c4m load-c4r.c -- c4sp.c4r -p $$f | cmp - .c4sp_rt1 || exit 1; \
+	done
+	rm -f .c4sp_rt1 .c4sp_rt2
+	@echo "test-c4sp: OK"
+
 # Linking test: compile two modules separately, link both ways, run each,
 # and exercise library mode (-r) with a relink of the written library.
 test-link: c4m $(C4CC) $(C4RLINK)

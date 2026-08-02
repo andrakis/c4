@@ -4,9 +4,15 @@ A design for a Lisp interpreter written in C4, modelled on
 [alisp](https://github.com/andrakis/alisp), whose eventual purpose is to host a
 **C4 optimizer written in Lisp** rather than in C4.
 
-Status: plan. Nothing is implemented except the garbage-collector spike in
-§4.6, which exists because the GC was the part of this that looked hardest and
-a plan resting on an unproven mechanism is not worth much.
+Status: **implemented** (2026-08-02). Every milestone in §10 is done,
+including the CEK conversion of §6.2 and the linker of §9.3. The
+interpreter lives in `src/c4sp/`, the Lisp library and optimizer in
+`src/c4sp/lisp/`, and `make test-c4sp` / `test-c4sp-opt` / `test-c4sp-deep`
+verify it all: the sample corpus byte-identical to the Node alisp build,
+`.c4r -> lists -> .c4r` byte-identical on ten images, and the optimizer
+shrinking c4cc.c4r by 8.9% while it still emits identical code. This
+document remains the design rationale; deviations found during
+implementation are noted in the milestone commit messages.
 
 ---
 
@@ -519,15 +525,18 @@ The optimizer must be provably safe before it is useful:
 
 ## 10. Milestones
 
+All done; each has a commit and a test target.
+
 | | Deliverable | Proves |
 |---|---|---|
-| **M0** | Cells, arena, reader, printer. No GC — allocate until full. | Parse/print round-trips `fac.lisp` |
-| **M1** | Evaluator: atoms, ints, `quote if define set! lambda begin`, proc builtins | `fac.lisp` produces 3628800 |
-| **M2** | Mark & sweep with conservative stack scan; `gc:stats` | A loop allocating millions of cells runs in a fixed arena |
-| **M3** | `macro`, `fastmacro`, `next`, tail calls | `macros.lisp`, then `seval.lisp` runs `fac.lisp` |
-| **M4** | Strings, floats, file IO, REPL, C4KE integration | `c4sp` runs as a C4KE process |
-| **M5** | `.c4r` reader/writer in c4sp, using the patch table for labels | `foo.c4r -> lists -> foo.c4r` is byte-identical |
-| **M6** | Optimizer passes in Lisp | Test suite passes optimized; instruction counts drop |
+| **M0** ✓ | Cells, arena, reader, printer. No GC — allocate until full. | Parse/print round-trips `fac.lisp` |
+| **M1** ✓ | Evaluator: atoms, ints, `quote if define set! lambda begin`, proc builtins | `fac.lisp` produces 3628800 |
+| **M2** ✓ | Mark & sweep with conservative stack scan; `gc:stats` | A loop allocating millions of cells runs in a fixed arena |
+| **M3** ✓ | `macro`, `fastmacro`, `next`, tail calls | `macros.lisp`, then `seval.lisp` runs `fac.lisp` |
+| **M3½** ✓ | CEK conversion (§6.2), diffed against the recursive evaluator | 4000-deep non-tail recursion under the C4 VM |
+| **M4** ✓ | Strings, floats, file IO, REPL, C4KE integration | `c4sp` runs as a C4KE process |
+| **M5** ✓ | `.c4r` reader/writer in c4sp, using the patch table for labels | `foo.c4r -> lists -> foo.c4r` is byte-identical |
+| **M6** ✓ | Optimizer passes in Lisp | Test suite passes optimized; instruction counts drop 3–9% |
 
 M0–M2 is the risky part and is mostly mechanical now that the GC question is
 settled. **M3½ is the CEK conversion of §6.3**, done before `seval.lisp` is

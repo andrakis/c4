@@ -735,3 +735,141 @@ with and without PM, and `test_signal` hangs either way — all pre-existing.
   by design.
 * **`pm_start` frees `argv` outside the `if` that allocates it**, so a failed
   `malloc` would free an uninitialised pointer.
+---
+
+# Part 8 — The printf family (redirection groundwork)
+
+C4 renders formatted output with the **PRTF opcode**, which writes straight to
+the host's stdout. Nothing in the program can see or divert those bytes, so
+redirection (`>`) and pipes (`|`) are impossible. Breaking that coupling means
+formatting into a buffer first — which is what `vsnprintf` is for.
+
+## 8.1 Why the old attempt failed
+
+Two independent reasons, both now fixed.
+
+**1. `size_t` silently became two parameters.** `src/c4lm/include/stddef.h`
+defined `size_t` as `INT_TYPE`, i.e. `long`. C4CC has no typedefs and no `long`
+keyword, and its parameter parser treats any unknown identifier as a parameter
+*name*:
+
+```c
+static int vsnprintf (char *str, size_t size, char *format, va_list args)
+// after cpp:      (char *str, long size, char *format, int *args)
+// c4cc sees:       str, long, size, format, args   -- FIVE parameters
+```
+
+Hence `WARNING argument count mismatch in call to 'vsnprintf', expected 5
+arguments, 4 given`, and — worse than the warning — `format` and `args` inside
+the function referred to the wrong stack slots, so it could never have worked.
+Under C4CC these types must expand to `int`.
+
+**2. The wrappers had never been compiled.** They sat behind
+`STDLIB_EXPERIMENTAL` / `EXPERIMENTAL_STDIO`, which nothing defined, so several
+straightforward errors went unnoticed: `vprintf` referenced an undeclared `ap`
+instead of `args`; `#define vprintf(f,ap)` expanded to `format` rather than its
+own parameter `f`; `vfprintf` passed uninitialised `dest`/`stream_avail` to
+`vsnprintf`; and `sprintf` carried a bogus `size` parameter.
+
+## 8.2 What is there now
+
+`src/c4lm/include/stdio.h` implements the family on a single formatting core:
+
+```
+vsnprintf  <- the only formatter; everything else calls it
+  vsprintf, snprintf, sprintf          produce a buffer
+  vfprintf <- measures, sizes a buffer, formats, then calls
+    __c4_stdio_write(stream, text, len)     <- the one place bytes leave
+      fprintf, vprintf, printf
+```
+
+`vsnprintf` supports `%d %i %u %x %X %o %c %s %p %%`, the flags `-` `0` `+`
+`' '` `#`, field widths, `.precision`, and `*` for either. Length modifiers
+(`l`, `ll`, `h`, `hh`, `z`, `t`, `j`) are parsed and ignored, since every C4
+value is one word. No floating point — C4 has no float type. It follows C99:
+at most `size-1` characters plus a nul, returning the length the result *would*
+have had, so `vsnprintf(0, 0, fmt, args)` measures.
+
+Two details worth knowing, both forced by C4 having **no unsigned type**:
+
+* `%x`/`%o` mask off the sign extension after each shift
+  (`v = (v >> 4) & (smask >> 3)`), so negative values print their true bit
+  pattern.
+* `%u` divides by 10 using a logical shift plus a remainder fix-up, and the
+  signed `%d` path never negates — so `INT_MIN` converts correctly.
+
+## 8.3 Redirection
+
+`__c4_stdio_write()` is the single choke point. It honours a capture buffer:
+
+```c
+cap = malloc(256);
+__c4_stdio_capture_start(cap, 256);
+fprintf(stdout, "redirected %s #%d", "output", 1);
+n = __c4_stdio_capture_stop();      // cap now holds the bytes
+```
+
+Capture is plain data rather than a callback on purpose: calling through a
+function pointer needs `JSRI`, which plain C4 does not have. An OS with real
+streams replaces the body of `__c4_stdio_write` and everything above it follows.
+
+`printf` itself is only replaced when `C4_PRINTF_OVERRIDE` is defined. That is
+opt-in because it changes every `printf` in the program — gaining redirectability
+and losing PRTF's speed and its 7-argument cap. The override works because C4CC
+lets a user function shadow a builtin, and `__c4_stdio_write` is *defined before*
+the shadowing declaration, so its own `printf("%s", text)` still binds to the
+builtin opcode instead of recursing.
+
+## 8.4 Testing
+
+`src/tests/test_vprintf.c`, 31 assertions (32 with the override). Expected
+values were cross-checked against glibc's `snprintf` so the tests are not merely
+agreeing with the implementation.
+
+```
+gcc -E -P -Isrc/c4lm/include -DC4CC=1 -D__c4__=1 -D__c4cc__=1 \
+    src/tests/test_vprintf.c | ./c4cc -o test_vprintf.c4r -
+./c4m load-c4r.c -- test_vprintf.c4r
+```
+
+Passes under `c4m` and under **plain `c4`** via c4lm's `boot.c`, with and
+without the override — confirming the generated code uses only original-C4
+opcodes. Clean under valgrind (no errors, no leaks).
+
+```
+gcc -E -P -Isrc/c4lm/include -I. -D__c4cc__=1 -DPURE_C4=1 \
+    src/c4lm/load-c4r.c > boot.c
+./c4 boot.c test_vprintf.c4r
+```
+
+## 8.5 Not done
+
+* **C4KE's copy is still a stub.** `include/stdio.h` has the same
+  `vsnprintf` placeholder plus its own bugs (`fclose` is missing a closing
+  brace) behind `STDLIB_EXPERIMENTAL`. The implementation here drops in, but
+  C4KE also wants `__c4ke_stream_dest`/`OP_STREAM_DEST` wired up, which is a
+  separate piece of work.
+* **Three copies of the c4lm headers** exist — `c4lm/include/`,
+  `c4lm/src/include/` and `src/c4lm/include/` — and are byte-identical. All
+  three were updated together; picking one and deleting the others would remove
+  a standing trap.
+* No `%f`, and `%n` is deliberately unimplemented.
+
+## 8.6 Building c4lm
+
+The README's command line is stale (`src/load-c4r.c` does not exist). What
+works:
+
+```sh
+# the loader, for plain C4. Note -P: 'gcc -E -C' keeps /* */ comments, which
+# C4's lexer cannot parse -- it only understands //. Without -P the very first
+# licence comment in stdc-predef.h fails with "7: bad global declaration".
+gcc -E -P -Isrc/c4lm/include -Isrc/c4lm -I. -D__c4cc__=1 -DPURE_C4=1 \
+    src/c4lm/load-c4r.c > boot.c
+
+# the kernel
+gcc -E -P -Isrc/c4lm/include -Isrc/c4lm -I. -DC4CC=1 -D__c4__=1 -D__c4cc__=1 \
+    src/c4lm/c4lm.c | ./c4cc -o c4lm.c4r -
+
+./c4 boot.c c4lm.c4r
+```

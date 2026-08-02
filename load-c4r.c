@@ -637,6 +637,10 @@ void c4r_free (int *c4r) {
 		if (c4r_debug) printf("lc4r: freeing header @ 0x%X\n", c4r[C4R_HEADER]);
 		free((int *)c4r[C4R_HEADER]); c4r[C4R_HEADER] = 0;
 	}
+	// Allocated by c4r_load() via c4r_strcpy_alloc(); nothing else owns it.
+	if (c4r[C4R_FILENAME]) {
+		free((char *)c4r[C4R_FILENAME]); c4r[C4R_FILENAME] = 0;
+	}
 	if (c4r_debug) printf("lc4r: freeing structure @ 0x%X\n", c4r);
 	free(c4r);
 }

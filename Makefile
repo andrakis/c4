@@ -81,7 +81,8 @@ TESTS_C4R := $(TESTS)/hello.c4r $(TESTS)/mandel.c4r $(TESTS)/factorial.c4r $(TES
 			 $(TESTS)/test_fread.c4r $(TESTS)/test_infiniteloop.c4r \
 			 $(TESTS)/test_malloc.c4r $(TESTS)/test_printf.c4r $(TESTS)/test_printloop.c4r \
 			 $(TESTS)/test_signal.c4r $(TESTS)/test_static.c4r $(TESTS)/tests.c4r \
-			 $(TESTS)/rps.c4r $(TESTS)/test_continue.c4r $(TESTS)/test_timekeeping.c4r
+			 $(TESTS)/rps.c4r $(TESTS)/test_continue.c4r $(TESTS)/test_timekeeping.c4r \
+			 $(TESTS)/test_float.c4r $(TESTS)/test_vprintf.c4r
 BIN       := c4.c4r $(C4R_C4CC) $(C4R_C4RDUMP) $(C4R_C4RLINK) $(C4R_TOP) \
             $(C4M).c4r \
             $(C4KE_C4R) \
@@ -249,6 +250,12 @@ $(SRCS)/bench/%.c4r: $(SRCS)/bench/%.c $(C4KE_WATCH) $(C4CC)
 # Exclusive rule: this test program doesn't link with u0
 src/tests/hello.c4r: $(C4CC) $(TESTS)/hello.c
 	$(C4CC) -o src/tests/hello.c4r $(TESTS)/hello.c
+# Exclusive rules: these tests include real headers, so they need the
+# preprocessor rather than being handed straight to c4cc (which skips # lines).
+$(TESTS)/test_float.c4r: $(C4CC) $(TESTS)/test_float.c $(TESTS)/float_cases.h include/c4_float.h $(U0)
+	$(PREPROC) -I$(TESTS) $(U0) $(TESTS)/test_float.c | $(C4CC) -o $@ -
+$(TESTS)/test_vprintf.c4r: $(C4CC) $(TESTS)/test_vprintf.c include/stdio.h $(U0)
+	$(PREPROC) $(U0) $(TESTS)/test_vprintf.c | $(C4CC) -o $@ -
 # All tests should compile with the following invocation
 $(SRCS)/tests/%.c4r: $(SRCS)/tests/%.c $(C4KE_WATCH) $(C4CC)
 	$(C4CC) -o $@ $(U0) $<

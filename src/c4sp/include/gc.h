@@ -96,7 +96,9 @@ void gc_drain () {
 		if (t == T_CONS || t == T_ENV) {
 			gc_mark(c[CELL_A]);
 			gc_mark(c[CELL_B]);
-		} else if (t == T_LAMBDA || t == T_MACRO || t == T_FASTMACRO) {
+		} else if (t == T_LAMBDA || t == T_MACRO || t == T_FASTMACRO ||
+		           (t >= T_KARG && t <= T_KMACRO)) {
+			// Closures and kont frames: every used slot is a cell or 0
 			gc_mark(c[CELL_A]);
 			gc_mark(c[CELL_B]);
 			gc_mark(c[CELL_C]);

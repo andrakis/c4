@@ -10,8 +10,10 @@
 //   run:     ./c4m load-c4r.c -- c4sp.c4r [-p] file.lisp [args...]
 //
 // Usage:
-//   c4sp [-p] [-c ncells] file.lisp [args...]
+//   c4sp [-p] [-R] [-c ncells] file.lisp [args...]
 //     -p         parse only: print the canonical written form
+//     -R         use the recursive reference evaluator instead of the CEK
+//                machine (kept as the oracle the machine is diffed against)
 //     -c ncells  set the cell arena size (default 65536)
 
 #include "c4.h"
@@ -23,13 +25,14 @@
 #include "src/c4sp/include/read.h"
 #include "src/c4sp/include/stdlib.h"
 #include "src/c4sp/include/eval.h"
+#include "src/c4sp/include/cek.h"
 
 void c4sp_usage () {
-	printf("usage: c4sp [-p] [-c ncells] file.lisp [args...]\n");
+	printf("usage: c4sp [-p] [-R] [-c ncells] file.lisp [args...]\n");
 }
 
 int main (int argc, char **argv) {
-	int   opt_parse, opt_cells, endopts;
+	int   opt_parse, opt_cells, opt_recursive, endopts;
 	char *file, *src;
 	int   srclen, i;
 	int  *x, *genv, *head, *tail, *e;
@@ -40,6 +43,7 @@ int main (int argc, char **argv) {
 	gc_stack_base = &stack_base_marker;
 
 	opt_parse = 0;
+	opt_recursive = 0;
 	opt_cells = 65536;
 	endopts = 0;
 	file = 0;
@@ -48,6 +52,7 @@ int main (int argc, char **argv) {
 	while (argc > 0 && !endopts) {
 		if (**argv == '-' && (*argv)[1]) {
 			if ((*argv)[1] == 'p') opt_parse = 1;
+			else if ((*argv)[1] == 'R') opt_recursive = 1;
 			else if ((*argv)[1] == 'c') {
 				--argc; ++argv;
 				if (!argc) { c4sp_usage(); return 1; }
@@ -106,7 +111,10 @@ int main (int argc, char **argv) {
 	}
 	env_define(genv, atom_intern("argv", 4), head);
 
-	x = eval(x, genv);
+	// The CEK machine is the evaluator; -R selects the recursive
+	// reference implementation it is diffed against.
+	if (opt_recursive) x = eval(x, genv);
+	else x = eval_cek(x, genv);
 	if (c4sp_err) {
 		printf("c4sp: error: %s\n", c4sp_err_msg);
 		return 2;

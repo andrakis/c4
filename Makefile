@@ -149,14 +149,20 @@ test-massive-c4-alt: pre
 # c4sp, the Lisp interpreter (docs/c4sp-design.md)
 C4SP_SRCS := src/c4sp/c4sp.c src/c4sp/include/cell.h src/c4sp/include/gc.h \
              src/c4sp/include/cells.h src/c4sp/include/atoms.h \
-             src/c4sp/include/read.h
+             src/c4sp/include/read.h src/c4sp/include/stdlib.h \
+             src/c4sp/include/eval.h
 c4sp: $(C4SP_SRCS)
 	gcc $(EXTRA_CC) -O2 -g -Iinclude -I. -o c4sp src/c4sp/c4sp.c
 c4sp.c4r: $(C4CC) $(C4SP_SRCS)
 	$(PREPROC) src/c4sp/c4sp.c | $(C4CC) -o c4sp.c4r -
-# c4sp test: the canonical written form of each sample must survive a
-# parse -> print -> parse -> print round trip, and the c4r build under c4m
-# must agree with the native build byte for byte.
+# c4sp test, three parts:
+#  1. the canonical written form of each sample must survive a
+#     parse -> print -> parse -> print round trip;
+#  2. evaluating each sample must match src/c4sp/tests/expected/, whose
+#     contents were verified against the Node alisp build (see the README
+#     there for the one deliberate divergence);
+#  3. the c4r build under c4m must agree with the native build.
+# seval gets a larger arena until the M2 collector lands.
 test-c4sp: c4sp c4sp.c4r c4m
 	for f in src/c4sp/lisp/*.lisp; do \
 		./c4sp -p $$f > .c4sp_rt1 || exit 1; \
@@ -165,6 +171,13 @@ test-c4sp: c4sp c4sp.c4r c4m
 		./c4m load-c4r.c -- c4sp.c4r -p $$f | cmp - .c4sp_rt1 || exit 1; \
 	done
 	rm -f .c4sp_rt1 .c4sp_rt2
+	for t in fac listadd macros quote set switch arguments; do \
+		./c4sp src/c4sp/lisp/$$t.lisp | cmp - src/c4sp/tests/expected/$$t.txt || exit 1; \
+		./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/$$t.lisp | cmp - src/c4sp/tests/expected/$$t.txt || exit 1; \
+	done
+	./c4sp src/c4sp/lisp/fac.lisp 12 | cmp - src/c4sp/tests/expected/fac-12.txt
+	./c4sp -c 4000000 src/c4sp/lisp/seval.lisp | cmp - src/c4sp/tests/expected/seval.txt
+	./c4m load-c4r.c -- c4sp.c4r -c 4000000 src/c4sp/lisp/seval.lisp | cmp - src/c4sp/tests/expected/seval.txt
 	@echo "test-c4sp: OK"
 
 # Linking test: compile two modules separately, link both ways, run each,

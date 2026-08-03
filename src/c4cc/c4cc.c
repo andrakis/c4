@@ -92,6 +92,21 @@ enum {
 	PT_DDATA = -4     // data-resident word -> data address
 };
 
+// Local initializer support: declarations are parsed before ENT is
+// emitted, so initializer stores are recorded here and emitted right
+// after it. Each record is LINIT__Sz ints: kind (0 = word store,
+// 1 = byte store), the symbol's slot value, the element index, and the
+// value for each emission stream (they differ for &function).
+enum { LINIT_KIND, LINIT_VAL, LINIT_IDX, LINIT_BVAL, LINIT_EVAL, LINIT__Sz,
+       LINIT_MAX = 4096, LTMP_MAX = 512 };
+int *linits;               // pending records
+int  linits_n;
+int *ltmp;                 // brace-list scratch, one initializer at a time
+
+// Set when the most recent primary expression was an array name (which
+// evaluates to an address, with no load to rewind): lets & accept it
+int last_array;
+
 int *curr_continue;        // Marks current begin of while loop
 // break support: a stack of unresolved jump placeholders. Each while/for/
 // switch records the depth on entry and resolves everything above it on
@@ -690,11 +705,18 @@ void expr(int lev)
   }
   else if (tk == Sizeof) {
     next(); if (tk == '(') next(); else { printf("%d: open paren expected in sizeof\n", line); die(-1); }
-    ty = INT; if (tk == Int) next(); else if (tk == Char) { next(); ty = CHAR; }
-    while (tk == Mul) { next(); ty = ty + PTR; }
+    if (tk == Id && (id[Attr] & ATTR_ARRAY)) {
+      // sizeof(array): total storage in bytes, recorded at declaration
+      *++e = IMM; *++e = id[emit_Length];
+      emit_IMM(id[emit_Length]);
+      next();
+    } else {
+      ty = INT; if (tk == Int) next(); else if (tk == Char) { next(); ty = CHAR; }
+      while (tk == Mul) { next(); ty = ty + PTR; }
+      *++e = IMM; *++e = (ty == CHAR) ? sizeof(char) : sizeof(int);
+      emit_IMM((ty == CHAR) ? emit_sizeof_char() : emit_sizeof_int());
+    }
     if (tk == ')') next(); else { printf("%d: close paren expected in sizeof\n", line); die(-1); }
-    *++e = IMM; *++e = (ty == CHAR) ? sizeof(char) : sizeof(int);
-    emit_IMM((ty == CHAR) ? emit_sizeof_char() : emit_sizeof_int());
     ty = INT;
   }
   else if (tk == Id) {
@@ -774,9 +796,11 @@ void expr(int lev)
       // else loads the value found there
       if (d[Attr] & ATTR_ARRAY) {
         ty = d[Type];
+        last_array = 1;
       } else {
         *++e = ((ty = d[Type]) == CHAR) ? LC : LI;
         emit_LI(*e);
+        last_array = 0;
       }
     }
   }
@@ -805,11 +829,16 @@ void expr(int lev)
     emit_LI(*e);
   }
   else if (tk == And) {
-    next(); expr(Inc);
+    next();
+    last_array = 0;
+    expr(Inc);
     if (*e == LC || *e == LI) {
       if (*e == LC) emit_rewind_lc();
       else emit_rewind_li();
       --e;
+    } else if (last_array) {
+      // &array: the name already evaluated to its address, so this is a
+      // no-op (as in C, where &a and a differ only in type)
     } else { printf("%d: bad address-of\n", line); die(-1); }
     ty = ty + PTR;
   }
@@ -1283,6 +1312,7 @@ void stmt()
 int parse () {
   int bt, ty, i, attr, *fun, v, s;
   int *dcl, elem, neg;
+  int pend, pcnt, pbval, peval;
   char *sstart;
   // parse declarations
   line = 1;
@@ -1355,6 +1385,7 @@ int parse () {
 		// printf("xxx, function definition\n");
         fun = dcl;
         fun[Class] = Fun;
+        linits_n = 0;
         fun[Val] = (int)(e + 1);
         fun[emit_Val] = (int)emit_FunctionAddress();
         fun[ArgCount] = 0;
@@ -1425,37 +1456,172 @@ int parse () {
               if (id[Class] == Loc) { printf("%d: duplicate local definition\n", line); die(-1); }
               dcl = id; // lexing an array size below clobbers 'id'
               next();
-              // Optional [size]: reserve s elements in the frame; char
-              // arrays pack bytes into whole words. The name evaluates to
-              // the address of the LOWEST slot so indexing ascends.
-              v = 0; // becomes ATTR_ARRAY
-              s = 1;
+              // Optional [size]: s elements. char arrays pack bytes into
+              // whole words; the name evaluates to the address of the
+              // LOWEST slot so indexing ascends.
+              v = 0;    // becomes ATTR_ARRAY
+              s = 1;    // element count; 0 = take it from the initializer
+              elem = ty;
+              pend = 0; // pending init: 1 braces, 2 char[] string, 3 word
+              pcnt = 0;
               if (tk == Brak) {
                 next();
                 if (tk == Num) { s = ival; next(); }
                 else if (tk == Id && id[Class] == Num) { s = id[Val]; next(); }
+                else if (tk == ']') s = 0;
                 else { printf("%d: bad array size\n", line); die(-1); }
                 if (tk != ']') { printf("%d: expected ']' after array size\n", line); die(-1); }
                 next();
-                if (s < 1) { printf("%d: bad array size\n", line); die(-1); }
                 v = ATTR_ARRAY;
-                if (ty == CHAR) s = (s + sizeof(int) - 1) / sizeof(int);
                 ty = ty + PTR;
               }
-              if (tk == Assign) { printf("%d: cannot set initial value of local variable, only globals. Manually assign after variable block.\n", line); die(-1); }
+              if (tk == Assign) {
+                // Local initializers become stores emitted after ENT, so
+                // they re-run on every entry to the function, as C
+                // requires. Constants only, like globals.
+                next();
+                if (tk == '{') {
+                  if (!v) { printf("%d: brace initializer requires an array\n", line); die(-1); }
+                  next();
+                  while (tk != '}') {
+                    neg = 0;
+                    if (tk == Sub) { next(); neg = 1; }
+                    if (tk == Num) pbval = ival;
+                    else if (tk == Id && id[Class] == Num) pbval = id[Val];
+                    else { printf("%d: array initializers must be integer constants\n", line); die(-1); }
+                    if (neg) pbval = -pbval;
+                    next();
+                    if (pcnt >= LTMP_MAX) { printf("%d: too many initializers\n", line); die(-1); }
+                    if (s) { if (pcnt >= s) { printf("%d: too many initializers\n", line); die(-1); } }
+                    ltmp[pcnt] = pbval;
+                    ++pcnt;
+                    if (tk == ',') next();
+                  }
+                  next();
+                  if (!s) s = pcnt;
+                  pend = 1;
+                } else if (tk == '"') {
+                  // The lexer has already copied the contents into the
+                  // data pool at [ival, data); for a char array that copy
+                  // is the template the stores read from
+                  sstart = (char *)ival;
+                  pcnt = data - sstart;
+                  if (v && elem == CHAR) {
+                    if (!s) s = pcnt + 1;
+                    if (s < pcnt + 1) { printf("%d: string does not fit the array\n", line); die(-1); }
+                    pend = 2;
+                  } else if (ty == CHAR + PTR) {
+                    pbval = (int)sstart;
+                    peval = (int)sstart;
+                    pend = 3;
+                    ++data; // reserve the zeroed byte after the copy as the nul
+                  } else { printf("%d: string initializer requires char* or char[]\n", line); die(-1); }
+                  next();
+                } else if (tk == And) {
+                  next();
+                  if (tk != Id || id[Class] != Fun || !id[emit_Val] || (id[Attr] & ATTR_EXTERN)) {
+                    printf("%d: & initializer requires an already-defined function\n", line); die(-1);
+                  }
+                  pbval = id[emit_Val];
+                  peval = id[Val];
+                  pend = 3;
+                  next();
+                } else {
+                  neg = 0;
+                  if (tk == Sub) { next(); neg = 1; }
+                  if (tk == Num) pbval = ival;
+                  else if (tk == Id && id[Class] == Num) pbval = id[Val];
+                  else { printf("%d: local initializers must be constants; assign in the statement block instead\n", line); die(-1); }
+                  if (neg) pbval = -pbval;
+                  if (v) { printf("%d: array initializer needs braces\n", line); die(-1); }
+                  peval = pbval;
+                  pend = 3;
+                  next();
+                }
+              }
+              if (!s) { printf("%d: array [] needs an initializer\n", line); die(-1); }
               dcl[HClass] = dcl[Class]; dcl[Class] = Loc;
               dcl[HType]  = dcl[Type];  dcl[Type] = ty;
               dcl[HVal]   = dcl[Val];
               dcl[Hemit_Val] = dcl[emit_Val]; dcl[emit_Val] = 0; // no effect
+              dcl[Hemit_Length] = dcl[emit_Length];
               dcl[HAttr] = dcl[Attr];
               dcl[Attr] = v;
-              i = i + s;
+              if (v) dcl[emit_Length] = (elem == CHAR) ? s : s * sizeof(int);
+              if (v && elem == CHAR) i = i + (s + sizeof(int) - 1) / sizeof(int);
+              else i = i + s;
               dcl[Val] = i;
+              // Queue the stores now the slot is known. Elements past the
+              // initializer zero-fill, as C requires (the frame is not
+              // otherwise cleared). neg reused as the element counter.
+              if (pend == 1) {
+                neg = 0;
+                while (neg < s) {
+                  if (linits_n >= LINIT_MAX) { printf("%d: too many initializers in one function\n", line); die(-1); }
+                  linits[linits_n * LINIT__Sz + LINIT_KIND] = (elem == CHAR) ? 1 : 0;
+                  linits[linits_n * LINIT__Sz + LINIT_VAL] = dcl[Val];
+                  linits[linits_n * LINIT__Sz + LINIT_IDX] = neg;
+                  linits[linits_n * LINIT__Sz + LINIT_BVAL] = (neg < pcnt) ? ltmp[neg] : 0;
+                  linits[linits_n * LINIT__Sz + LINIT_EVAL] = (neg < pcnt) ? ltmp[neg] : 0;
+                  ++linits_n;
+                  ++neg;
+                }
+              } else if (pend == 2) {
+                neg = 0;
+                while (neg < s) {
+                  if (linits_n >= LINIT_MAX) { printf("%d: too many initializers in one function\n", line); die(-1); }
+                  linits[linits_n * LINIT__Sz + LINIT_KIND] = 1;
+                  linits[linits_n * LINIT__Sz + LINIT_VAL] = dcl[Val];
+                  linits[linits_n * LINIT__Sz + LINIT_IDX] = neg;
+                  linits[linits_n * LINIT__Sz + LINIT_BVAL] = (neg < pcnt) ? sstart[neg] : 0;
+                  linits[linits_n * LINIT__Sz + LINIT_EVAL] = (neg < pcnt) ? sstart[neg] : 0;
+                  ++linits_n;
+                  ++neg;
+                }
+              } else if (pend == 3) {
+                if (linits_n >= LINIT_MAX) { printf("%d: too many initializers in one function\n", line); die(-1); }
+                linits[linits_n * LINIT__Sz + LINIT_KIND] = 0;
+                linits[linits_n * LINIT__Sz + LINIT_VAL] = dcl[Val];
+                linits[linits_n * LINIT__Sz + LINIT_IDX] = 0;
+                linits[linits_n * LINIT__Sz + LINIT_BVAL] = pbval;
+                linits[linits_n * LINIT__Sz + LINIT_EVAL] = peval;
+                ++linits_n;
+              }
               if (tk == ',') next();
             }
             next();
           }
           *++e = ENT; *++e = i - loc; emit_ENT(i - loc);
+          // Local initializer stores, re-run on every entry. Word stores
+          // use LEA's constant offset; byte stores add the index at run
+          // time since LEA only reaches word slots. IMM values of string
+          // and function addresses pick up their relocation patches
+          // automatically through emit_IMM.
+          s = 0;
+          while (s < linits_n) {
+            v = s * LINIT__Sz;
+            if (linits[v + LINIT_KIND]) {
+              *++e = LEA; *++e = loc - linits[v + LINIT_VAL];
+              emit_LEA(loc - linits[v + LINIT_VAL]);
+              *++e = PSH; emit_PSH();
+              *++e = IMM; *++e = linits[v + LINIT_IDX];
+              emit_IMM(linits[v + LINIT_IDX]);
+              *++e = ADD; emit_MATH(ADD);
+              *++e = PSH; emit_PSH();
+              *++e = IMM; *++e = linits[v + LINIT_EVAL];
+              emit_IMM(linits[v + LINIT_BVAL]);
+              *++e = SC; emit_SI(SC);
+            } else {
+              *++e = LEA; *++e = loc - linits[v + LINIT_VAL] + linits[v + LINIT_IDX];
+              emit_LEA(loc - linits[v + LINIT_VAL] + linits[v + LINIT_IDX]);
+              *++e = PSH; emit_PSH();
+              *++e = IMM; *++e = linits[v + LINIT_EVAL];
+              emit_IMM(linits[v + LINIT_BVAL]);
+              *++e = SI; emit_SI(SI);
+            }
+            ++s;
+          }
+          linits_n = 0;
           while (tk != '}') stmt();
           if (*e != LEV) { *++e = LEV; emit_LEV(); }
           emit_FunctionEnd(fun);
@@ -1468,7 +1634,7 @@ int parse () {
             id[Val] = id[HVal];
             id[emit_Val] = id[Hemit_Val];
             id[Attr] = id[HAttr];
-			// id[emit_Length] = id[Hemit_Length];
+            id[emit_Length] = id[Hemit_Length];
           }
           id = id + Idsz;
         }
@@ -1499,6 +1665,8 @@ int parse () {
           dcl[Val] = (int)data;
           if ((dcl[Attr] & ATTR_ARRAY) && elem == CHAR) data = data + s;
           else data = data + sizeof(int) * s;
+          if (dcl[Attr] & ATTR_ARRAY)
+            dcl[emit_Length] = (elem == CHAR) ? s : s * sizeof(int);
         } else {
           next(); // past '='; NOTE: a string literal is copied into the
                   // data pool by this very next() call
@@ -1527,6 +1695,7 @@ int parse () {
             if (!s) s = i;
             if (elem == CHAR) data = data + s;
             else data = data + sizeof(int) * s;
+            dcl[emit_Length] = (elem == CHAR) ? s : s * sizeof(int);
           }
           else if (tk == '"') {
             // The lexer has already copied the contents to [ival, data)
@@ -1538,11 +1707,15 @@ int parse () {
               if (!s) s = i;
               if (s < i) { printf("%d: string does not fit the array\n", line); die(-1); }
               data = sstart + s;
+              dcl[emit_Length] = s;
               next();
             } else if (ty == CHAR + PTR) {
               // char *name = "...": a pointer word in data, relocated at
-              // load time with a data-resident DATA patch
+              // load time with a data-resident DATA patch. The lexer does
+              // not terminate pool strings; reserve the zeroed byte after
+              // the copy as the nul before anything else claims it.
               next();
+              ++data;
               data = (char *)(((int)data + sizeof(int) - 1) & (0 - sizeof(int)));
               dcl[Val] = (int)data;
               *((int *)data) = (int)sstart; // dead compile-time value
@@ -1736,6 +1909,12 @@ int c4cc_init () {
   }
   brk_top = 0;
   brk_depth = 0;
+  if (!(linits = malloc(LINIT_MAX * LINIT__Sz * sizeof(int))) ||
+      !(ltmp = malloc(LTMP_MAX * sizeof(int)))) {
+    printf("could not malloc initializer buffers\n");
+    return -1;
+  }
+  linits_n = 0;
 
   c4cc_initialized = 1;
 

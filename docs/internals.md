@@ -212,6 +212,17 @@ time, c4rlink links, and initialized globals and arrays exist — see below.)
   evaluates to the address of its storage instead of loading from it; local
   arrays reserve frame slots with the name at the lowest address so
   indexing ascends, and local char arrays pack bytes into words.
+* **Local initializers**: constants, brace lists, `char t[6] = "ab"`,
+  `char *p = "..."`, `int *fp = &func`. They compile to stores emitted
+  right after `ENT`, so they re-run on every entry (C semantics: two
+  same-depth calls reuse stack memory, and the fresh values must win),
+  with zero-fill past the given elements. String templates live in the
+  data pool; pointer-valued `IMM`s pick up relocation patches through the
+  usual auto-detection.
+* **`&array`** is a no-op (the name already evaluates to its address) and
+  **`sizeof(array)`** returns total storage in bytes, kept in the symbol's
+  `emit_Length` (shadow-saved like the other fields, so a local array can
+  shadow a global one).
 * **switch/case/default with a jump table** in the data segment (each entry
   a DCODE patch) plus `break` (loops too). Needs c4m's `JMPA` at runtime.
   `src/tests/test_switch.c` and `test_globals.c` are compared against gcc

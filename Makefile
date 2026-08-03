@@ -124,30 +124,45 @@ run-alt: pre
 	$(C4M) -a $(RUN_C4KE)
 run-alt-vg: pre
 	valgrind $(C4M) -a $(RUN_C4KE)
+# Plain c4 runs the COMPILED c4m image via the c4l.c loader (c4's own
+# compiler has no switch, but its VM executes c4m's jumptables; see
+# c4l.c). This replaced interpreting c4m.c source when c4m's dispatch
+# became a switch.
 run-c4: pre
-	$(C4) $(C4M).c $(RUN_C4KE)
+	$(C4) c4l.c $(C4M).c4r $(RUN_C4KE)
 run-c4-vg: pre
-	valgrind $(C4) $(C4M).c $(RUN_C4KE)
+	valgrind $(C4) c4l.c $(C4M).c4r $(RUN_C4KE)
 run-c4-alt: pre
-	$(C4) $(C4M).c -a $(RUN_C4KE)
+	$(C4) c4l.c $(C4M).c4r -a $(RUN_C4KE)
 run-c4-alt-vg: pre
-	valgrind $(C4) $(C4M).c -a $(RUN_C4KE)
+	valgrind $(C4) c4l.c $(C4M).c4r -a $(RUN_C4KE)
 test: pre
 	$(C4M) $(RUN_C4KE) innerbench
 test-alt: pre
 	$(C4M) -a $(RUN_C4KE) innerbench
 test-c4: pre
-	$(C4) $(C4M).c $(RUN_C4KE) innerbench
+	$(C4) c4l.c $(C4M).c4r $(RUN_C4KE) innerbench
 test-c4-alt: pre
-	$(C4) $(C4M) -a $(RUN_C4KE) innerbench
+	$(C4) c4l.c $(C4M).c4r -a $(RUN_C4KE) innerbench
 test-massive: pre
 	$(C4M) $(RUN_C4KE) innerbench -n $(TEST_MASSIVE_NUM)
 test-massive-alt: pre
 	$(C4M) -a $(RUN_C4KE) innerbench -n $(TEST_MASSIVE_NUM)
 test-massive-c4: pre
-	$(C4) $(C4M).c $(RUN_C4KE) innerbench -n $(TEST_MASSIVE_NUM)
+	$(C4) c4l.c $(C4M).c4r $(RUN_C4KE) innerbench -n $(TEST_MASSIVE_NUM)
 test-massive-c4-alt: pre
-	$(C4) $(C4M) -a $(RUN_C4KE) innerbench -n $(TEST_MASSIVE_NUM)
+	$(C4) c4l.c $(C4M).c4r -a $(RUN_C4KE) innerbench -n $(TEST_MASSIVE_NUM)
+# c4l.c: plain c4 loading and running compiled images. The chains:
+# a plain image; a c4cc jumptable-switch image (needs the extended
+# opcode execution in c4.c); and the compiled c4m interpreting source.
+test-c4l: $(C4) $(C4CC) $(C4M).c4r $(TESTS)/hello.c4r
+	$(C4) c4l.c $(TESTS)/hello.c4r | grep -q yello
+	$(C4CC) -o .c4l_sw.c4r $(TESTS)/test_switch.c
+	$(C4) c4l.c .c4l_sw.c4r | grep -q "classify(5) = 500"
+	$(C4) c4l.c $(C4M).c4r $(TESTS)/hello.c | grep -q yello
+	rm -f .c4l_sw.c4r
+	@echo "test-c4l: OK"
+
 # c4sp, the Lisp interpreter (docs/c4sp-design.md)
 C4SP_SRCS := src/c4sp/c4sp.c src/c4sp/include/cell.h src/c4sp/include/gc.h \
              src/c4sp/include/cells.h src/c4sp/include/atoms.h \

@@ -687,6 +687,39 @@ pre-emption: without c4m's cycle interrupt nothing can interrupt a task that
 never calls `schedule()`. And a task blocked in `read()` still blocks the whole
 world.
 
+## 6.5 `c4l.c` — the loading system, productionized (2026-08-03)
+
+The invoke-stub trick above became [`c4l.c`](../c4l.c), a ~150-line
+loader in the strict c4 subset: `./c4 c4l.c program.c4r [args...]`
+reads a modern `.c4r` (all four patch types, including the
+data-resident `-3`/`-4`), runs constructors, enters `main` through the
+stub, and runs destructors. Three things made it possible:
+
+1. **`c4.c` executes (but never emits) the c4m extended opcodes.**
+   `JMPA JSRI JSRS _JMP _ADJ PUTC PUTS MCPY STRC TIME OPCD C4CY` plus
+   stubs for the trap/signal set. `INFO` returns 0 — no capabilities —
+   so well-written images (which probe `__c4_info()` before touching
+   anything exotic) keep to the paths plain c4 can run. `OPCD` leaves
+   its argument in the accumulator, the missed-probe convention. The
+   c4 *compiler* is untouched, so c4 still self-hosts.
+2. **`c4m.c`'s compiler gained `switch`/`case`/`default`/`break`**
+   (in-memory jumptable of absolute addresses, dispatched with JMPA —
+   c4cc's layout minus relocation), so c4m can still compile itself.
+3. **`c4m.c`'s dispatch loop became a `switch`.** Compiled by gcc it
+   is a native jumptable; compiled by c4cc/c4lc it is a `.c4r`
+   jumptable; interpreted by c4m it uses (2). Plain c4 cannot parse it
+   anymore — which is exactly what `c4l.c` is for, and why `run-c4`/
+   `test-c4` now run `./c4 c4l.c c4m.c4r ...` instead of interpreting
+   `c4m.c` source.
+
+Measured (through native c4m): the compiled c4m image interpreting a
+5M-iteration compute loop dropped from 74.4s (if-chain dispatch) to
+41.6s (c4cc jumptable) / 41.0s (c4lc -O jumptable) — **1.79x faster**
+nested interpretation, exactly reproducible. The native gcc build
+gains ~3% on the c4sp compiler workload. `make test-c4l` pins the
+plain-c4 chains: a plain image, a switch image, and the compiled c4m
+interpreting C source.
+
 ---
 
 # Part 7 — Protected mode

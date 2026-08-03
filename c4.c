@@ -44,7 +44,16 @@ enum {
 // opcodes
 enum { LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,
        OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,
-       OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,EXIT };
+       OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,EXIT,
+       // Extended (c4m-numbered) opcodes, EXECUTION only: the compiler
+       // never emits these, but images compiled by c4cc/c4lc and run
+       // through a loader (c4l.c) contain them. Most are stubs; INFO
+       // returning 0 keeps well-written images off the exotic paths.
+       PUTC,PUTS,RALC,MCPY,STRC,
+       ITH ,_OPC,_BLT,_TRP,OPCD,
+       _JMP,_ADJ,C4CF,C4CY,TIME,
+       SIGH,SIGI,USLP,INFO,OPSL,
+       C4IV,FLT ,JSRI,JSRS,JMPA };
 
 // types
 enum { CHAR, INT, PTR };
@@ -342,6 +351,7 @@ int main(int argc, char **argv)
   int fd, bt, ty, poolsz, *idmain;
   int *pc, *sp, *bp, a, cycle; // vm registers
   int i, *t; // temps
+  char *cs, *cd; int t2, ftime; // extended-opcode temps
 
   --argc; ++argv;
   if (argc > 0 && **argv == '-' && (*argv)[1] == 's') { src = 1; --argc; ++argv; }
@@ -480,6 +490,7 @@ int main(int argc, char **argv)
 
   // run...
   cycle = 0;
+  ftime = 0;
   while (1) {
     i = *pc++; ++cycle;
     if (debug) {
@@ -530,6 +541,31 @@ int main(int argc, char **argv)
     else if (i == MSET) a = (int)memset((char *)sp[2], sp[1], *sp);
     else if (i == MCMP) a = memcmp((char *)sp[2], (char *)sp[1], *sp);
     else if (i == EXIT) { printf("exit(%d) cycle = %d\n", *sp, cycle); return *sp; }
+
+    // Extended opcodes: executed but never emitted by this compiler.
+    // Enough of c4m's set that images built by c4cc/c4lc run here via
+    // c4l.c. INFO returns 0 (no capabilities), so images probe nothing
+    // exotic; OPCD leaves its argument in the accumulator, the
+    // missed-probe convention; TIME is a fake monotonic counter.
+    else if (i == JMPA) pc = (int *)a;
+    else if (i == JSRI) { *--sp = (int)(pc + 1); pc = (int *)*pc; pc = (int *)*pc; }
+    else if (i == JSRS) { *--sp = (int)(pc + 1); pc = (int *)*(bp + *pc); }
+    else if (i == _JMP) pc = (int *)*sp++;
+    else if (i == _ADJ) sp = sp + *sp;
+    else if (i == PUTC) a = printf("%c", (char)*sp);
+    else if (i == PUTS) a = printf("%s", (char *)*sp);
+    else if (i == MCPY) { cd = (char *)sp[2]; cs = (char *)sp[1]; a = sp[2]; t2 = *sp; while (t2 > 0) { *cd = *cs; ++cd; ++cs; --t2; } }
+    else if (i == STRC) a = printf("(c4: stacktrace unavailable)\n");
+    else if (i == TIME) a = (ftime = ftime + 1);
+    else if (i == OPCD) a = *sp;
+    else if (i == C4CY) a = cycle;
+    else if (i == ITH)  a = 0;
+    else if (i == SIGH) a = 0;
+    else if (i == SIGI) a = 0;
+    else if (i == USLP) a = 0;
+    else if (i == INFO) a = 0;
+    else if (i == C4CF) a = 0;
+    else if (i == OPSL) a = 0;
     else { printf("unknown instruction = %d! cycle = %d\n", i, cycle); return -1; }
   }
 }

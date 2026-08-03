@@ -177,8 +177,15 @@ enum {
   Num = 128, Fun, Sys, Glo, Loc, Id,
   Static, Extern, Attribute, Constructor, Destructor, // Ignored
   Char, Else, Enum, If, Int, Return, Sizeof, While,
+  Switch, Case, Default, Break,
   Assign, Cond, Lor, Lan, Or, Xor, And, Eq, Ne, Lt, Gt, Le, Ge, Shl, Shr, Add, Sub, Mul, Div, Mod, Inc, Dec, Brak
 };
+
+// switch/break state (see stmt): compiled to an in-memory jumptable
+// of absolute addresses, dispatched with JMPA
+enum { BRK_MAX = 256, SWITCH_MAX_CASES = 256, SWITCH_MAX_RANGE = 4096 };
+int *brk_slots;    // pending break JMP operand slots
+int  brk_top, brk_depth;
 
 // Configure codes, for use with C4CF/__c4_configure
 enum { CONF_CYCLE_INTERRUPT_INTERVAL, CONF_CYCLE_INTERRUPT_HANDLER, CONF_PRIVS };
@@ -284,6 +291,7 @@ void c4m_setup_builtins () {
 	c4m_builtins =
 		"static extern __attribute__ constructor destructor "    // Ignored by c4m
 		"char else enum if int return sizeof while "             // Keywords
+		"switch case default break "                             // ... with a jumptable switch
 		"open read close printf malloc free memset memcmp exit " // Syscalls
 		"putchar puts realloc memcpy stacktrace "                // C4M extended opcodes...
 		"install_trap_handler __opcode __builtin __c4_trap __c4_opcode "
@@ -599,6 +607,8 @@ void expr(int lev)
 void stmt()
 {
   int *a, *b, t;
+  int *swv, *swa, *tbl, *b3, *b4, *bend, *bdef;
+  int  swn, swdef, swmin, swmax, swrange, i2, v2, neg2, brk_base;
 
   if (tk == If) {
     next();
@@ -619,12 +629,121 @@ void stmt()
     a = e + 1;
     if (tk == '(') next(); else { printf("%d: open paren expected\n", line); exit(-1); }
     expr(Assign);
-	// TODO: if (tk == Num && ival) for while(1) ? 
+	// TODO: if (tk == Num && ival) for while(1) ?
     if (tk == ')') next(); else { printf("%d: close paren expected\n", line); exit(-1); }
     *++e = BZ; b = ++e;
+    brk_base = brk_top; ++brk_depth;
     stmt();
     *++e = JMP; *++e = (int)a;
     *b = (int)(e + 1);
+    --brk_depth;
+    while (brk_top > brk_base) { --brk_top; *(int *)brk_slots[brk_top] = (int)(e + 1); }
+  }
+  else if (tk == Break) {
+    next();
+    if (tk != ';') { printf("%d: semicolon expected after 'break'\n", line); exit(-1); }
+    if (!brk_depth) { printf("%d: 'break' outside of loop or switch\n", line); exit(-1); }
+    if (brk_top >= BRK_MAX) { printf("%d: too many pending breaks\n", line); exit(-1); }
+    *++e = JMP; b = ++e;
+    brk_slots[brk_top] = (int)b;
+    ++brk_top;
+  }
+  else if (tk == Switch) {
+    // switch (expr) { case C: ... default: ... }, with fallthrough and
+    // break, compiled to an in-memory jumptable of absolute addresses,
+    // dispatched via JMPA. Layout matches c4cc's (see c4cc.c), minus
+    // relocation: the table is plain malloc'd memory.
+    next();
+    if (tk == '(') next(); else { printf("%d: in 'switch': open paren expected\n", line); exit(-1); }
+    expr(Assign);
+    if (tk == ')') next(); else { printf("%d: in 'switch': close paren expected\n", line); exit(-1); }
+    if (!(swv = malloc(SWITCH_MAX_CASES * sizeof(int))) ||
+        !(swa = malloc(SWITCH_MAX_CASES * sizeof(int)))) { printf("%d: switch: out of memory\n", line); exit(-1); }
+    swn = 0; swdef = 0; bdef = 0;
+    *++e = JMP; b = ++e;                    // entry -> dispatch
+    brk_base = brk_top; ++brk_depth;
+    if (tk == '{') next(); else { printf("%d: in 'switch': open brace expected\n", line); exit(-1); }
+    while (tk != '}') {
+      if (tk == Case) {
+        next();
+        neg2 = 0;
+        if (tk == Sub) { next(); neg2 = 1; }
+        if (tk == Num) v2 = ival;
+        else if (tk == Id && id[Class] == Num) v2 = id[Val];
+        else { printf("%d: 'case' needs an integer constant\n", line); exit(-1); }
+        if (neg2) v2 = -v2;
+        next();
+        if (tk == ':') next(); else { printf("%d: colon expected after 'case'\n", line); exit(-1); }
+        i2 = 0;
+        while (i2 < swn) {
+          if (swv[i2] == v2) { printf("%d: duplicate case value %d\n", line, v2); exit(-1); }
+          ++i2;
+        }
+        if (swn >= SWITCH_MAX_CASES) { printf("%d: too many cases\n", line); exit(-1); }
+        swv[swn] = v2;
+        swa[swn] = (int)(e + 1);
+        ++swn;
+      }
+      else if (tk == Default) {
+        next();
+        if (tk == ':') next(); else { printf("%d: colon expected after 'default'\n", line); exit(-1); }
+        if (swdef) { printf("%d: duplicate 'default'\n", line); exit(-1); }
+        swdef = 1;
+        bdef = e + 1;
+      }
+      else stmt();
+    }
+    next();
+    *++e = JMP; bend = ++e;                 // running off the body -> end
+    *b = (int)(e + 1);                      // dispatch:
+    if (!swn) {
+      if (swdef) { *++e = JMP; *++e = (int)bdef; }
+    } else {
+      swmin = swmax = swv[0];
+      i2 = 1;
+      while (i2 < swn) {
+        if (swv[i2] < swmin) swmin = swv[i2];
+        if (swv[i2] > swmax) swmax = swv[i2];
+        ++i2;
+      }
+      swrange = swmax - swmin;
+      if (swrange >= SWITCH_MAX_RANGE) { printf("%d: switch range %d too sparse for a jump table\n", line, swrange); exit(-1); }
+      if (!(tbl = malloc((swrange + 1) * sizeof(int)))) { printf("%d: switch: out of memory\n", line); exit(-1); }
+      // bounds check, three copies of the index on the stack
+      if (swmin) { *++e = PSH; *++e = IMM; *++e = swmin; *++e = SUB; }
+      *++e = PSH; *++e = PSH; *++e = PSH;
+      *++e = IMM; *++e = swrange; *++e = GT; *++e = BNZ; b3 = ++e;
+      *++e = IMM; *++e = 0; *++e = LT; *++e = BNZ; b4 = ++e;
+      *++e = IMM; *++e = sizeof(int); *++e = MUL;
+      *++e = PSH; *++e = IMM; *++e = (int)tbl; *++e = ADD; *++e = LI; *++e = JMPA;
+      // out of range: drop the leftover index copies, then default or end
+      *b3 = (int)(e + 1);
+      *++e = ADJ; *++e = 2;
+      if (swdef) { *++e = JMP; *++e = (int)bdef; }
+      else { *++e = JMP; b = ++e; brk_slots[brk_top] = (int)b; ++brk_top; }
+      *b4 = (int)(e + 1);
+      *++e = ADJ; *++e = 1;
+      if (swdef) { *++e = JMP; *++e = (int)bdef; }
+      else { *++e = JMP; b = ++e; brk_slots[brk_top] = (int)b; ++brk_top; }
+      // fill the table: cases where present, else default, else end
+      // (nothing else is emitted below, so end == e + 1)
+      i2 = 0;
+      while (i2 <= swrange) {
+        neg2 = 0;
+        v2 = 0;
+        while (v2 < swn) {
+          if (swv[v2] == swmin + i2) { tbl[i2] = swa[v2]; neg2 = 1; v2 = swn; }
+          ++v2;
+        }
+        if (!neg2) tbl[i2] = swdef ? (int)bdef : (int)(e + 1);
+        ++i2;
+      }
+    }
+    // end: resolve the fallthrough jump and every pending break
+    *bend = (int)(e + 1);
+    --brk_depth;
+    while (brk_top > brk_base) { --brk_top; *(int *)brk_slots[brk_top] = (int)(e + 1); }
+    free(swv); free(swa);
   }
   else if (tk == Return) {
     next();
@@ -1093,6 +1212,8 @@ int c4m_main(int argc, char **argv)
   if (!(le = e = _e = malloc(poolsz))) { printf("could not malloc(%d) text area\n", poolsz); return -1; }
   if (!(data = _data = malloc(poolsz))) { printf("could not malloc(%d) data area\n", poolsz); return -1; }
   if (!(sp = _sp = malloc(poolsz))) { printf("could not malloc(%d) stack area\n", poolsz); return -1; }
+  if (!(brk_slots = malloc(BRK_MAX * sizeof(int)))) { printf("could not malloc break stack\n"); return -1; }
+  brk_top = 0; brk_depth = 0;
   // if (!(trap_stack = trap_sp = malloc(poolsz))) { printf("could not malloc(%d) trap stack area\n", poolsz); return -1; }
   if ((i = __c4_signal_init())) { printf("c4m: signal init failed with reason %d\n", i); return -1; }
 
@@ -1108,7 +1229,7 @@ int c4m_main(int argc, char **argv)
   c4m_setup_builtins();
 
   p = c4m_builtins;
-  i = Static; while (i <= While) { next(); id[Tk] = i++; } // add keywords to symbol table
+  i = Static; while (i <= Break) { next(); id[Tk] = i++; } // add keywords to symbol table
   i = OPEN; while (i <= FLT) {
 	next(); id[Class] = Sys; id[Type] = INT; id[Val] = i++;
 	if (verb) { // don't be so verbose
@@ -1361,26 +1482,41 @@ int c4m_main(int argc, char **argv)
       if (i <= ADJ || i == JSRI || i == JSRS) printf(" %d\n", *pc); else printf("\n");
     }
 
-    if      (i == LEA) a = (int)(bp + *pc++);                             // load local address
-    else if (i == IMM) a = *pc++;                                         // load global address or immediate
-    else if (i == JMP) pc = (int *)*pc;                                   // jump
-    else if (i == JMPA) pc = (int *)a;                                    // jump using accumulator
-    else if (i == _JMP) pc = (int *)*sp++;                                // jump using __c4_jmp
-    else if (i == JSR) { *--sp = (int)(pc + 1); pc = (int *)*pc; }        // jump to subroutine
-    else if (i == JSRI) { *--sp = (int)(pc + 1); pc = (int *)*pc; pc = (int *)*pc;}  // jump to subroutine indirect
-    else if (i == JSRS) { *--sp = (int)(pc + 1); pc = (int*)*(bp + *pc); }  // jump to subroutine indirect on stack
-    else if (i == BZ)  pc = a ? pc + 1 : (int *)*pc;                      // branch if zero
-    else if (i == BNZ) pc = a ? (int *)*pc : pc + 1;                      // branch if not zero
-    else if (i == ENT) { *--sp = (int)bp; bp = sp; sp = sp - *pc++; }     // enter subroutine
-    else if (i == ADJ)  sp = sp + *pc++;                                  // stack adjust
-    else if (i == _ADJ) sp = sp + *sp;                                    // stack adjust callable function
-    else if (i == LEV) {                                                  // leave subroutine
+    switch (i) {
+    case LEA: a = (int)(bp + *pc++); break;                              // load local address
+    break;
+    case IMM: a = *pc++;                                         // load global address or immediate
+    break;
+    case JMP: pc = (int *)*pc;                                   // jump
+    break;
+    case JMPA: pc = (int *)a;                                    // jump using accumulator
+    break;
+    case _JMP: pc = (int *)*sp++;                                // jump using __c4_jmp
+    break;
+    case JSR: { *--sp = (int)(pc + 1); pc = (int *)*pc; }        // jump to subroutine
+    break;
+    case JSRI: { *--sp = (int)(pc + 1); pc = (int *)*pc; pc = (int *)*pc;}  // jump to subroutine indirect
+    break;
+    case JSRS: { *--sp = (int)(pc + 1); pc = (int*)*(bp + *pc); }  // jump to subroutine indirect on stack
+    break;
+    case BZ:  pc = a ? pc + 1 : (int *)*pc;                      // branch if zero
+    break;
+    case BNZ: pc = a ? (int *)*pc : pc + 1;                      // branch if not zero
+    break;
+    case ENT: { *--sp = (int)bp; bp = sp; sp = sp - *pc++; }     // enter subroutine
+    break;
+    case ADJ:  sp = sp + *pc++;                                  // stack adjust
+    break;
+    case _ADJ: sp = sp + *sp;                                    // stack adjust callable function
+    break;
+    case LEV: {                                                  // leave subroutine
 		sp = bp; // printf("//LEV: sp = bp 0x%X\n", bp);
 		bp = (int *)*sp++; // printf("//LEV: bp = 0x%X loaded from 0x%X\n", bp, sp - 1);
 		pc = (int *)*sp++; // printf("//LEV: pc = 0x%X loaded from 0x%X\n", sp, sp - 1);
 	}
-    //else if (i == LI)  a = *(int *)a;                                     // load int
-    else if (i == LI)  {
+    //case LI:  a = *(int *)a;                                   // load int
+    break;
+    case LI:  {
 //#ifdef SEGFAULT_TRACING
 //		// Enable segfault tracing for certain problematic values to find out where
 //      // the issue is occurring.
@@ -1392,29 +1528,50 @@ int c4m_main(int argc, char **argv)
 //#endif
 			a = *(int *)a;                                     // load int
 	}
-    else if (i == LC)  a = *(char *)a;                                    // load char
-    else if (i == SI)  *(int *)*sp++ = a;                                 // store int
-    else if (i == SC)  a = *(char *)*sp++ = a;                            // store char
-    else if (i == PSH) *--sp = a;                                         // push
+    break;
+    case LC:  a = *(char *)a;                                    // load char
+    break;
+    case SI:  *(int *)*sp++ = a;                                 // store int
+    break;
+    case SC:  a = *(char *)*sp++ = a;                            // store char
+    break;
+    case PSH: *--sp = a;                                         // push
 
-    else if (i == OR)  a = *sp++ |  a;
-    else if (i == XOR) a = *sp++ ^  a;
-    else if (i == AND) a = *sp++ &  a;
-    else if (i == EQ)  a = *sp++ == a;
-    else if (i == NE)  a = *sp++ != a;
-    else if (i == LT)  a = *sp++ <  a;
-    else if (i == GT)  a = *sp++ >  a;
-    else if (i == LE)  a = *sp++ <= a;
-    else if (i == GE)  a = *sp++ >= a;
-    else if (i == SHL) a = *sp++ << a;
-    else if (i == SHR) a = *sp++ >> a;
-    else if (i == ADD) a = *sp++ +  a;
-    else if (i == SUB) a = *sp++ -  a;
-    else if (i == MUL) a = *sp++ *  a;
-    else if (i == DIV) a = *sp++ /  a;
-    else if (i == MOD) a = *sp++ %  a;
+    break;
+    case OR:  a = *sp++ |  a;
+    break;
+    case XOR: a = *sp++ ^  a;
+    break;
+    case AND: a = *sp++ &  a;
+    break;
+    case EQ:  a = *sp++ == a;
+    break;
+    case NE:  a = *sp++ != a;
+    break;
+    case LT:  a = *sp++ <  a;
+    break;
+    case GT:  a = *sp++ >  a;
+    break;
+    case LE:  a = *sp++ <= a;
+    break;
+    case GE:  a = *sp++ >= a;
+    break;
+    case SHL: a = *sp++ << a;
+    break;
+    case SHR: a = *sp++ >> a;
+    break;
+    case ADD: a = *sp++ +  a;
+    break;
+    case SUB: a = *sp++ -  a;
+    break;
+    case MUL: a = *sp++ *  a;
+    break;
+    case DIV: a = *sp++ /  a;
+    break;
+    case MOD: a = *sp++ %  a;
 	// SYSCALL functions
-    else if (i == OPEN) {
+    break;
+    case OPEN: {
 		if (mode == MODE_UNPROTECTED)
             a = open((char *)sp[1], *sp);
 		else {
@@ -1423,7 +1580,8 @@ int c4m_main(int argc, char **argv)
 			mode = MODE_UNPROTECTED;
 		}
 	}
-    else if (i == READ) {
+    break;
+    case READ: {
 		if (mode == MODE_UNPROTECTED)
         a = read(sp[2], (char *)sp[1], *sp);
 		else {
@@ -1432,7 +1590,8 @@ int c4m_main(int argc, char **argv)
 			mode = MODE_UNPROTECTED;
 		}
 	}
-    else if (i == CLOS) {
+    break;
+    case CLOS: {
 		if (mode == MODE_UNPROTECTED)
             a = close(*sp);
 		else {
@@ -1441,7 +1600,8 @@ int c4m_main(int argc, char **argv)
 			mode = MODE_UNPROTECTED;
 		}
 	}
-	else if (i == PUTC) {
+	break;
+    case PUTC: {
 		if (mode == MODE_UNPROTECTED)
             a = do_putchar(*((char *)sp));
 		else {
@@ -1450,7 +1610,8 @@ int c4m_main(int argc, char **argv)
 			mode = MODE_UNPROTECTED;
 		}
 	}
-	else if (i == PUTS) {
+	break;
+    case PUTS: {
 		if (mode == MODE_UNPROTECTED)
             a = do_puts((char *)*sp);
 		else {
@@ -1459,7 +1620,8 @@ int c4m_main(int argc, char **argv)
 			mode = MODE_UNPROTECTED;
 		}
 	}
-    else if (i == PRTF) {
+    break;
+    case PRTF: {
 		if (mode == MODE_UNPROTECTED) {
 			r = pc[1];
 			t = sp + r;
@@ -1479,7 +1641,8 @@ int c4m_main(int argc, char **argv)
 			mode = MODE_UNPROTECTED;
 		}
     }
-    else if (i == MALC) {
+    break;
+    case MALC: {
 		if (mode == MODE_UNPROTECTED)
             a = (int)malloc(*sp);
 		else {
@@ -1488,8 +1651,9 @@ int c4m_main(int argc, char **argv)
 			mode = MODE_UNPROTECTED;
 		}
 	}
-    //else if (i == RALC) a = (int)c4_realloc((int*)sp[1], *sp);
-    else if (i == FREE) {
+    //case RALC: a = (int)c4_realloc((int*)sp[1], *sp);
+    break;
+    case FREE: {
 		if (mode == MODE_UNPROTECTED)
             free((void *)*sp);
 		else {
@@ -1498,10 +1662,14 @@ int c4m_main(int argc, char **argv)
 			mode = MODE_UNPROTECTED;
 		}
 	}
-    else if (i == MSET) a = (int)memset((char *)sp[2], sp[1], *sp);
-    else if (i == MCMP) a = memcmp((char *)sp[2], (char *)sp[1], *sp);
-    else if (i == MCPY) a = (int)c4_memcpy((void*)sp[2], (void*)sp[1], *sp);
-    else if (i == STRC) {
+    break;
+    case MSET: a = (int)memset((char *)sp[2], sp[1], *sp);
+    break;
+    case MCMP: a = memcmp((char *)sp[2], (char *)sp[1], *sp);
+    break;
+    case MCPY: a = (int)c4_memcpy((void*)sp[2], (void*)sp[1], *sp);
+    break;
+    case STRC: {
 //		if (mode == MODE_UNPROTECTED) {
 			print_stacktrace(pc, idmain, idmax, bp, sp);
 //		} else {
@@ -1511,7 +1679,8 @@ int c4m_main(int argc, char **argv)
 //			mode = MODE_UNPROTECTED;
 //		}
 	}
-    else if (i == EXIT) {
+    break;
+    case EXIT: {
 //		if (mode == MODE_UNPROTECTED) {
 			//printf("exit(%d) cycle = %d\n", *sp, cycle);
 			status = *sp; run = 0;
@@ -1521,12 +1690,15 @@ int c4m_main(int argc, char **argv)
 //			cycle_interrupt_interval = 0;
 //			mode = MODE_UNPROTECTED;
 //		}
-    } else if (i == _OPC) { // return an opcode
+    } break;
+    case _OPC: { // return an opcode
       a = __opcode((char *)*sp);
       //printf("_OPCD: got %d (0x%X) from request %s\n", a, a, (char *)*sp);
-    } else if (i == OPSL) { // return all opcodes
+    } break;
+    case OPSL: { // return all opcodes
       a = (int)c4m_opcodes; // TODO: copy?
-    } else if (i == TLEV) { // trap leave
+    } break;
+    case TLEV: { // trap leave
         // Restore stack to TLEV parameters
         sp = bp;
         // sp will be overwritten below, so to be less convoluted use a temporary.
@@ -1550,11 +1722,16 @@ int c4m_main(int argc, char **argv)
 		mode = (int)*t++;    // printf("From 0x%X, loaded saved mode %d\n", t - 1, mode);
         //printf("Resume from pc 0x%X\n", pc);
 	}
-	else if (i == C4CY) a = cycle;
-	else if (i == SIGI) a = __c4_sigint();
-    else if (i == TIME) a = c4_time();
-	else if (i == USLP) a = c4_usleep(*sp);
-    else if (i == ITH) { // install trap handler
+	break;
+    case C4CY: a = cycle;
+	break;
+    case SIGI: a = __c4_sigint();
+    break;
+    case TIME: a = c4_time();
+	break;
+    case USLP: a = c4_usleep(*sp);
+    break;
+    case ITH: { // install trap handler
 //		if (mode == MODE_UNPROTECTED) {
 			if (!*sp) {
 				// Remove trap handler
@@ -1572,7 +1749,8 @@ int c4m_main(int argc, char **argv)
 //			cycle_interrupt_interval = 0;
 //			mode = MODE_UNPROTECTED;
 //		}
-	} else if (i == C4CF) { // Configure system: __c4_configure(CONF_*, value)
+	} break;
+    case C4CF: { // Configure system: __c4_configure(CONF_*, value)
 		// TODO: this should be priveleged, but C4KE is using it in mode 1 (protected)
 		//printf("(c4: C4CF %d in mode %d\n", sp[1], mode);
 		//if (mode == MODE_UNPROTECTED) {
@@ -1597,8 +1775,10 @@ int c4m_main(int argc, char **argv)
 		//	mode = MODE_UNPROTECTED;
 		//}
 	}
-	else if (i == SIGH) a = (int)__c4_signal(sp[1], (int *)sp[0]);
-	else if (i == INFO) {
+	break;
+    case SIGH: a = (int)__c4_signal(sp[1], (int *)sp[0]);
+	break;
+    case INFO: {
 		// Trap this under protected mode
 		if (mode == MODE_UNPROTECTED)
             a = c4_info() | (trap_handler ? C4I_TRAPH : 0);
@@ -1607,19 +1787,22 @@ int c4m_main(int argc, char **argv)
 			cycle_interrupt_interval = 0;
 			mode = MODE_UNPROTECTED;
 		}
-	} else if (i == _TRP) {
+	} break;
+    case _TRP: {
       // __c4_trap(type, signal)
       // Trigger a trap
       trap(sp[1], sp[0], trap_handler, &sp, &bp, &pc, a, mode);
 	  // Disable cycle interrupt and set unprotected mode
 //	  cycle_interrupt_interval = 0;
 //	  mode = MODE_UNPROTECTED;
-	} else if (i == DBG) {
+	} break;
+    case DBG: {
 		// DBG - signal the debugger
 		trap(TRAP_DEBUG, 0, trap_handler, &sp, &bp, &pc, a, mode);
 		// Disable cycle interrupt and set unprotected mode
 //		mode = MODE_UNPROTECTED;
-	} else if (i == C4IV) {
+	} break;
+    case C4IV: {
 		// C4 Invoke
 		// TODO: only allow in unprotected mode?
 		// Update stub function to JMP to given address in *sp
@@ -1634,19 +1817,22 @@ int c4m_main(int argc, char **argv)
 			a = 0;
 		}
 #endif
-	} else if (i == FLT) {
+	} break;
+    case FLT: {
 		if (has_float()) a = do_float(sp);
 		else {
 			// Maybe the running code can emulate this instruction
 			trap(TRAP_ILLOP, FLT, trap_handler, &sp, &bp, &pc, a, mode);
 		}
-    } else {
+    } break;
+    default: {
 //        if (trap_handler == 0) {
 //            printf("unknown instruction = %d! cycle = %d\n", i, cycle); status = -1; run = 0;
 //        } else {
 			// printf("c4m: illegal opcode %d, invoking trap handler 0x%X\n", i, trap_handler);
 			trap(TRAP_ILLOP, i, trap_handler, &sp, &bp, &pc, a, mode);
 //        }
+    }
     }
   }
 

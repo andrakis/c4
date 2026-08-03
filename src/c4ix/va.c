@@ -22,7 +22,12 @@ static int  va_m_n;
 
 // The compiler inserts a call to this at every variadic call site;
 // its result rides in the variadic fake slot that va_start reads.
+//
+// Runs under sched_lock: the working globals below are shared, and a
+// preemption between the assignments would let another task's
+// variadic call clobber them mid-flight.
 int *__c4cc_make_va(int count) {
+    sched_lock();
     va_m_n   = count;
     va_m_arg = &count + count;
     va_m_ptr = &va_stack[va_vptr];
@@ -34,12 +39,15 @@ int *__c4cc_make_va(int count) {
         va_stack[va_vptr] = *va_m_arg; ++va_vptr;
         --va_m_arg;
     }
+    sched_unlock();
     return va_m_ptr;
 }
 
 // va_end's release half, extern so every module pops the same counter.
 void __c4ix_va_adj(int n) {
+    sched_lock();
     va_vptr = va_vptr - n;
+    sched_unlock();
 }
 
 static void __attribute__((constructor)) va_ctor() {

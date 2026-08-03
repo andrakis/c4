@@ -1,8 +1,0 @@
-C4IX X0 booting
-c4ix: host c4 (degraded), info 0x0
-c4ix: protected mode unavailable, preemption cooperative only
-c4ix: task 0 'init' created
-init: c4ix init v0 on c4 (degraded)
-init: sum 1..10 = 55, tasks alive 1
-c4ix: task 0 'init' exited with status 0
-c4ix: shutdown complete, 0 tasks remain

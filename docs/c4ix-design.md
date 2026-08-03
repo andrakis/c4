@@ -103,13 +103,14 @@ loading or assigning a whole struct is an error.
 - **X0 — boot.** Kernel of 3+ objects linked by c4rlink, boots on c4m,
   prints via its own kprintf, runs one init task, clean shutdown.
   Also boots under `./c4 c4l.c` (degraded path proven early).
-- **X1 — tasks.** Tasks on the linked list X0 established (no fixed
-  table, no TASK_MAX), scheduler (preemptive on c4m via cycle
-  interrupt, cooperative fallback) context-switching along the
-  round-robin walk task_next() already provides, fork-less spawn from
-  .c4r images (loader in-kernel), wait/exit. Task allocation moves
-  from malloc-per-task to **SL4B**, a Linux-style slab allocator with
-  per-struct caches (tasks first; fds and vnodes join it in X3).
+- **X1 — tasks.** DONE, see §6. Tasks on the linked list X0
+  established (no fixed table, no TASK_MAX), scheduler (preemptive on
+  c4m via cycle interrupt, cooperative fallback) context-switching
+  along the round-robin walk task_next() already provides, fork-less
+  spawn from .c4r images (loader in-kernel), wait/exit. Task
+  allocation moves from malloc-per-task to **SL4B**, a Linux-style
+  slab allocator with per-struct caches (tasks first; fds and vnodes
+  join it in X3).
 - **X2 — syscalls.** Protected mode on, trap-based syscall layer:
   write/read/open/close/spawn/wait/exit/yield/sbrk. Userland libc4ix
   (printf over write) as a `.c4l` library.
@@ -153,8 +154,12 @@ loading or assigning a whole struct is an error.
       function as a dead-elimination root. Verified: c4lc objects
       link with c4cc objects in either direction; an L7 struct
       program built from separately compiled -O objects matches the
-      whole-program compile and gcc. Extern DATA stays unsupported —
-      a c4rlink limitation, functions only.)
+      whole-program compile and gcc. Extern DATA followed on
+      2026-08-03 (`7d784f6`): extern globals become class-Glo
+      ATTR_EXTERN symbols, c4rlink rebases Glo values by the data
+      offset and resolves their symbol patches to DATA patches;
+      pinned by test_link_e/f against gcc. The kernel uses it for
+      task_head.)
 - [x] X0 boot (2026-08-03: src/c4ix/ -- six modules (boot, con, va,
       host, task, init) each compiled `c4lc -O -c` and linked by
       c4rlink into c4ix.c4r; boots natively on c4m and degraded on
@@ -173,3 +178,27 @@ loading or assigning a whole struct is an error.
       area -- so consumers walk a copy (kprintf's ap/walk pair);
       (3) `va_list a, b` declares b as plain int -- one declarator
       per line.)
+- [x] X1 tasks (2026-08-03: nine modules -- sl4b, sched and loader
+      join X0's six. ONE switch mechanism, TWO backends behind the
+      same saved-state format: on c4m every switch runs in a trap
+      handler (soft trap = yield, cycle interrupt = preemption) that
+      rewrites its own parameters for TLEV; on plain c4 sched_yield
+      rewrites its own frame pair and returns through a double LEV
+      (test_coop_switch.c's proof, verified under c4lc plain/-O on
+      both hosts before building on it). Fresh tasks are forged
+      SV_FRAME states both backends resume; task_shim turns an
+      entry's return value into task_exit. SL4B slab caches allocate
+      task structs (stacks and images stay malloc: variable-size).
+      sched_lock/unlock = interval masking, nestable; kprintf lines
+      and the shared va area are lock-bracketed (a preempted
+      make_va's globals would otherwise be clobbered mid-flight).
+      task_spawn: in-kernel c4l.c-port loader, constructors at load,
+      destructors counted but not run (X1 debt), image freed on
+      reap. sched_stop() disarms the trap machinery before teardown
+      -- without it the cycle interrupt fires into the freed task
+      list after main returns. Pins: exact boot transcripts per host
+      (src/c4ix/tests/x1-*.txt); the cooperative ping/pong runs
+      under sched_lock so its interleaving is pure round-robin on
+      both hosts, and the preemption demo prints only booleans
+      (busy tasks that never yield each observed the other mid-run),
+      verified stable across preemption intervals 7777/10000/43210.)

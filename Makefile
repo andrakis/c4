@@ -321,7 +321,7 @@ c4m-lc.c4r: c4sp $(C4LC_LISP) c4m.c
 # preprocessed, compiled to a .c4o object with full optimization, and
 # the kernel image is linked by c4rlink.
 C4IX_SRC  := src/c4ix
-C4IX_MODS := boot con va host task init
+C4IX_MODS := boot con va host sl4b task sched loader init
 c4ix.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/c4ix.h $(patsubst %,$(C4IX_SRC)/%.c,$(C4IX_MODS))
 	for m in $(C4IX_MODS); do \
 		$(PREPROC) $(C4IX_SRC)/$$m.c > .c4ix_$$m.pp.c || exit 1; \
@@ -330,17 +330,23 @@ c4ix.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/c4ix.h $(patsubst %,$(C4IX_SR
 	$(C4RLINK) $(patsubst %,.c4ix_%.c4o,$(C4IX_MODS)) -o c4ix.c4r
 	rm -f .c4ix_*.pp.c .c4ix_*.c4o
 
-# X0 boot pins: the linked kernel boots natively on c4m and degraded
-# on plain c4 through the c4l loader; output is exact per host (the
-# host line differs by design).
-test-c4ix: c4 c4m c4ix.c4r
-	$(C4M) load-c4r.c -- c4ix.c4r | cmp - $(C4IX_SRC)/tests/x0-c4m.txt
-	$(C4) c4l.c c4ix.c4r | sed '/^exit([0-9-]*) cycle = /d' | cmp - $(C4IX_SRC)/tests/x0-c4.txt
+# the spawn-test userland program
+c4ix-hello.c4r: c4sp $(C4LC_LISP) $(C4IX_SRC)/user/hello.c
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O $(C4IX_SRC)/user/hello.c c4ix-hello.c4r > /dev/null
+
+# X1 boot pins: the linked kernel boots natively on c4m (preemptive)
+# and degraded on plain c4 through the c4l loader (cooperative);
+# output is exact per host (host line and preemption demo differ by
+# design). The kernel spawns c4ix-hello.c4r from the host filesystem
+# and reports its exit code.
+test-c4ix: c4 c4m c4ix.c4r c4ix-hello.c4r
+	$(C4M) load-c4r.c -- c4ix.c4r c4ix-hello.c4r | cmp - $(C4IX_SRC)/tests/x1-c4m.txt
+	$(C4) c4l.c c4ix.c4r c4ix-hello.c4r | sed '/^exit([0-9-]*) cycle = /d' | cmp - $(C4IX_SRC)/tests/x1-c4.txt
 	@echo "test-c4ix: OK"
-run-c4ix: c4m c4ix.c4r
-	$(C4M) load-c4r.c -- c4ix.c4r
-run-c4ix-c4: c4 c4ix.c4r
-	$(C4) c4l.c c4ix.c4r
+run-c4ix: c4m c4ix.c4r c4ix-hello.c4r
+	$(C4M) load-c4r.c -- c4ix.c4r c4ix-hello.c4r
+run-c4ix-c4: c4 c4ix.c4r c4ix-hello.c4r
+	$(C4) c4l.c c4ix.c4r c4ix-hello.c4r
 # L0: golden token dump of a sample covering every token kind and c4cc
 # lexer quirk, native and under c4m, plus a full lex of c4cc.c itself
 # (whose token list needs a bigger cell arena than the default).

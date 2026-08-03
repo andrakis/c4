@@ -51,11 +51,15 @@ static int kputnum(int v, int base) {
 // va_end must see ap exactly where va_start left it -- it re-reads
 // the count slot from there to pop the va area. So the format loop
 // walks a copy and ap itself never moves.
+//
+// The body runs under sched_lock: a line is atomic against
+// preemption, so no cycle interrupt can interleave two tasks' lines.
 int kprintf(char *fmt, ...) {
     va_list ap;    // one declarator per line: va_list is `int *`, so
     va_list walk;  // `va_list a, b` would make b a plain int
     int n, c;
 
+    sched_lock();
     va_start(ap, fmt);
     walk = ap;
     n = 0;
@@ -74,5 +78,6 @@ int kprintf(char *fmt, ...) {
         }
     }
     va_end(ap);
+    sched_unlock();
     return n;
 }

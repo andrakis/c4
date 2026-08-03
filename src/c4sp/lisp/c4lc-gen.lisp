@@ -54,9 +54,14 @@
 (define g:data nil)
 (define g:dlen 0)
 
+;; padding bytes must be written: the buffer is malloc'd, and garbage
+;; padding would make the emitted image nondeterministic
 (define g:dalign (lambda ()
 	(if (= 0 (bit:and g:dlen 7)) nil
-	(begin (set! g:dlen (+ g:dlen 1)) (next g:dalign)))))
+	(begin
+		(string:byte! g:data g:dlen 0)
+		(set! g:dlen (+ g:dlen 1))
+		(next g:dalign)))))
 
 ;; append one word; returns its byte offset
 (define g:dword (lambda (v)
@@ -86,8 +91,11 @@
 
 ;; ---- symbol table ----
 ;; entries: (NAME 'sys TYPE OPATOM) | (NAME 'fun TYPE LABEL ARGC VARIADIC)
-;;          (NAME 'glo TYPE BYTEOFF) | (NAME 'loc TYPE IDX)
-;; prepend order gives local-over-global shadowing for free
+;;          (NAME 'glo TYPE BYTEOFF ARR) | (NAME 'loc TYPE IDX ARR)
+;; ARR = total storage bytes for an array (the sizeof value), nil for
+;; scalars. An array name evaluates to its ADDRESS (no load), c4cc's
+;; ATTR_ARRAY semantics. Prepend order gives local-over-global
+;; shadowing for free.
 
 (define g:syms nil)
 (define g:loc 0)          ;; c4cc's loc: LEA offset base inside a function
@@ -103,11 +111,18 @@
 		(define s (g:lookup n g:syms))
 		(if s s (g:die (+ "undefined identifier: " n))))))
 
+;; c4cc's full library table: keyword order maps onto opcodes OPEN..FLT
 (define g:syscalls '(
 	("open" OPEN) ("read" READ) ("close" CLOS) ("printf" PRTF)
 	("malloc" MALC) ("free" FREE) ("memset" MSET) ("memcmp" MCMP)
 	("exit" EXIT) ("putchar" PUTC) ("puts" PUTS) ("realloc" RALC)
-	("memcpy" MCPY) ("stacktrace" STRC)))
+	("memcpy" MCPY) ("stacktrace" STRC)
+	("install_trap_handler" ITH) ("__opcode" _OPC) ("__builtin" _BLT)
+	("__c4_trap" _TRP) ("__c4_opcode" OPCD) ("__c4_jmp" _JMP)
+	("__c4_adjust" _ADJ) ("__c4_configure" C4CF) ("__c4_cycles" C4CY)
+	("__time" TIME) ("__c4_signal" SIGH) ("__c4_sigint" SIGI)
+	("__c4_usleep" USLP) ("__c4_info" INFO) ("__c4_ops_list" OPSL)
+	("__c4_invoke" C4IV) ("__c4_float" FLT)))
 (define g:sysinit (lambda (l)
 	(if (empty? l) nil
 	(begin
@@ -132,6 +147,11 @@
 ;; a word, everything else (char, int, char*) steps 1
 (define g:step (lambda (ty) (if (> ty g:PTR) g:WORD 1)))
 
+;; c4cc's last_array: set when the last address came from an array
+;; name (whose "address" IS its value: &arr is a no-op, assignment to
+;; it is an error)
+(define g:lastarray false)
+
 ;; address of an lvalue in the accumulator; g:ty = the VALUE's type
 (define g:addr (lambda (e)
 	(begin
@@ -141,11 +161,12 @@
 			(begin
 				(g:expr (g:second e))
 				(if (> g:ty g:INT) nil (g:die "bad dereference"))
-				(set! g:ty (- g:ty g:PTR)))
+				(set! g:ty (- g:ty g:PTR))
+				(set! g:lastarray false))
 		(if (= h 'index)
 			(begin
 				(g:indexaddr e)
-				nil)
+				(set! g:lastarray false))
 		(g:die (+ "bad lvalue: " (+ "" h)))))))))
 
 (define g:varaddr (lambda (n)
@@ -154,8 +175,15 @@
 		(define cl (g:second s))
 		(if (= cl 'loc) (g:emit (list 'LEA (- g:loc (index s 3))))
 		(if (= cl 'glo) (g:emit (list 'IMM (list 'data (index s 3))))
-		(g:die (+ "not a variable: " n))))
-		(set! g:ty (g:third s)))))
+		(if (= cl 'fun)
+			;; &fn: the function's address. Marked like an array so
+			;; assignment and ++/-- reject it as an lvalue.
+			(g:emit (list 'IMM (list 'code (index s 3))))
+		(g:die (+ "not a variable: " n)))))
+		(set! g:ty (g:third s))
+		(set! g:lastarray
+			(if (= cl 'fun) true
+				(if (= (index s 4) nil) false true))))))
 
 ;; base[idx] address; g:ty = element type
 (define g:indexaddr (lambda (e)
@@ -178,6 +206,7 @@
 (define g:preincdec (lambda (e op)
 	(begin
 		(g:addr (g:second e))
+		(if g:lastarray (g:die "bad lvalue in pre-increment") nil)
 		(define t g:ty)
 		(g:emit '(PSH))
 		(g:load! t)
@@ -255,9 +284,24 @@
 		(if (= cl 'sys) (g:emit (list (index s 3)))
 		(if (= cl 'fun)
 			(begin
-				(if (index s 5) (g:die (+ "variadic calls need L3: " n)) nil)
+				(if (index s 5)
+					;; variadic: bundle the extra args through
+					;; __c4cc_make_va, exactly as c4cc (the va pointer
+					;; becomes the final argument, filling the fake slot)
+					(begin
+						(define argc (index s 4))
+						(define mv (g:find "__c4cc_make_va"))
+						(if (= (g:second mv) 'fun) nil
+							(g:die "vararg support requires __c4cc_make_va, include stdarg.h"))
+						(g:emit (list 'IMM (+ (- t argc) 1)))
+						(g:emit '(PSH))
+						(g:emit (list 'JSR (list 'code (index mv 3))))
+						(g:emit (list 'ADJ (+ (- t argc) 2)))
+						(g:emit '(PSH))
+						(set! t argc))
 				(if (= t (index s 4)) nil
-					(g:die (+ "argument count mismatch in call to " n)))
+					(print ";; c4lc WARNING: argument count mismatch in call to"
+						n "- expected" (index s 4) "given" t)))
 				(g:emit (list 'JSR (list 'code (index s 3)))))
 		(if (= cl 'glo) (g:emit (list 'JSRI (list 'data (index s 3))))
 		(if (= cl 'loc) (g:emit (list 'JSRS (- g:loc (index s 3))))
@@ -293,6 +337,7 @@
 		(if (= h 'assign)
 			(begin
 				(g:addr (g:second e))
+				(if g:lastarray (g:die "bad lvalue in assignment") nil)
 				(define t g:ty)
 				(g:emit '(PSH))
 				(g:expr (g:third e))
@@ -341,7 +386,13 @@
 			(begin
 				(g:emit (list 'IMM (if (= (g:second e) g:CHAR) 1 g:WORD)))
 				(set! g:ty g:INT))
-		(if (= h 'sizeofa) (g:die "sizeof(array) needs L3")
+		(if (= h 'sizeofa)
+			(begin
+				(define sa (g:find (g:second e)))
+				(if (= (index sa 4) nil)
+					(g:die (+ "sizeof needs an array: " (g:second e))) nil)
+				(g:emit (list 'IMM (index sa 4)))
+				(set! g:ty g:INT))
 		(if (= h 'index)
 			(begin
 				(g:indexaddr e)
@@ -376,19 +427,29 @@
 		(if (= cl 'loc)
 			(begin
 				(g:emit (list 'LEA (- g:loc (index s 3))))
-				(set! g:ty (g:third s))
-				(g:load! g:ty))
+				(g:varload s))
 		(if (= cl 'glo)
 			(begin
 				(g:emit (list 'IMM (list 'data (index s 3))))
-				(set! g:ty (g:third s))
-				(g:load! g:ty))
+				(g:varload s))
 		(if (= cl 'fun)
 			(begin
 				;; function name as a value: its address
 				(g:emit (list 'IMM (list 'code (index s 3))))
-				(set! g:ty (g:third s)))
+				(set! g:ty (g:third s))
+				(set! g:lastarray false))
 		(g:die (+ "bad variable: " n))))))))
+
+;; after the address is in the accumulator: arrays stay an address,
+;; scalars load their value
+(define g:varload (lambda (s)
+	(begin
+		(set! g:ty (g:third s))
+		(if (= (index s 4) nil)
+			(begin
+				(set! g:lastarray false)
+				(g:load! g:ty))
+		(set! g:lastarray true)))))
 
 (define g:condexpr (lambda (e)
 	(begin
@@ -423,7 +484,7 @@
 			(if (= g:cont nil) (g:die "continue outside of loop")
 				(g:emit (list 'JMP (list 'code g:cont))))
 		(if (= h 'empty) nil
-		(if (= h 'switch) (g:die "switch needs L3")
+		(if (= h 'switch) (g:switchstmt s)
 		(g:die (+ "bad statement node: " (+ "" h))))))))))))))))
 (define g:stmts (lambda (l)
 	(if (empty? l) nil
@@ -488,6 +549,138 @@
 		(set! g:brk ob)
 		(set! g:cont oc))))
 
+;; ---- switch: c4cc's data-segment jumptable, with labels ----
+;;
+;;     <expr>                a = value
+;;     JMP dispatch
+;;   body:                   (case V) marks a label; break -> end
+;;     JMP end               (running off the end of the body)
+;;   dispatch:
+;;     [PSH; IMM min; SUB]   a = idx = value - min    (when min != 0)
+;;     PSH; PSH; PSH         three idx copies on the stack
+;;     IMM range; GT; BNZ oob2
+;;     IMM 0;     LT; BNZ oob1
+;;     IMM 8; MUL; PSH; IMM table; ADD; LI; JMPA
+;;   oob2: ADJ 2; JMP default-or-end
+;;   oob1: ADJ 1; JMP default-or-end
+;;   end:
+;;
+;; The table words are zero in the pool; each is a (dcode OFF LABEL)
+;; patch the loader resolves. JMPA needs c4m at runtime, as in c4cc.
+
+(define g:swcases nil)    ;; ((V LABEL) ...) of the innermost switch
+(define g:swdef nil)      ;; its default label, or nil
+(define g:SWRANGE 4096)
+
+(define g:swfind (lambda (v l)
+	(if (empty? l) false
+	(if (= (head (head l)) v) (head l)
+	(next g:swfind v (tail l))))))
+(define g:swmin (lambda (l m)
+	(if (empty? l) m
+	(next g:swmin (tail l) (if (< (head (head l)) m) (head (head l)) m)))))
+(define g:swmax (lambda (l m)
+	(if (empty? l) m
+	(next g:swmax (tail l) (if (> (head (head l)) m) (head (head l)) m)))))
+
+(define g:switchbody (lambda (items)
+	(if (empty? items) nil
+	(begin
+		(define it (head items))
+		(if (= (head it) 'case)
+			(begin
+				(define v (g:second it))
+				(if (g:swfind v g:swcases)
+					(g:die (+ "duplicate case value " v)) nil)
+				(define lc (g:newlabel))
+				(g:label! lc)
+				(set! g:swcases (g:cons (list v lc) g:swcases)))
+		(if (= (head it) 'default)
+			(begin
+				(if (= g:swdef nil) nil (g:die "duplicate default"))
+				(define ld (g:newlabel))
+				(g:label! ld)
+				(set! g:swdef ld))
+		(g:stmt it)))
+		(next g:switchbody (tail items))))))
+
+;; table words + their dcode patches; unmatched slots go to default/end
+(define g:swtable (lambda (cases def lend mn i range tbl)
+	(if (> i range) nil
+	(begin
+		(g:dword 0)
+		(define c (g:swfind (+ mn i) cases))
+		(define target (if c (g:second c) (if (= def nil) lend def)))
+		(set! g:dpatches (g:cons
+			(list 'dcode (+ tbl (* i g:WORD)) target) g:dpatches))
+		(next g:swtable cases def lend mn (+ i 1) range tbl)))))
+
+(define g:swdispatch (lambda (cases def lend)
+	(if (empty? cases)
+		;; no cases at all: default if present, else fall through to end
+		(if (= def nil) nil (g:emit (list 'JMP (list 'code def))))
+	(begin
+		(define mn (g:swmin cases (head (head cases))))
+		(define range (- (g:swmax cases (head (head cases))) mn))
+		(if (>= range g:SWRANGE)
+			(g:die (+ "switch range " range " too sparse for a jump table")) nil)
+		(g:dalign)
+		(define tbl g:dlen)
+		(g:swtable cases def lend mn 0 range tbl)
+		(define defloc (if (= def nil) lend def))
+		(define lo2 (g:newlabel))
+		(define lo1 (g:newlabel))
+		(if (= mn 0) nil
+			(begin
+				(g:emit '(PSH))
+				(g:emit (list 'IMM mn))
+				(g:emit '(SUB))))
+		(g:emit '(PSH))
+		(g:emit '(PSH))
+		(g:emit '(PSH))
+		(g:emit (list 'IMM range))
+		(g:emit '(GT))
+		(g:emit (list 'BNZ (list 'code lo2)))
+		(g:emit '(IMM 0))
+		(g:emit '(LT))
+		(g:emit (list 'BNZ (list 'code lo1)))
+		(g:emit (list 'IMM g:WORD))
+		(g:emit '(MUL))
+		(g:emit '(PSH))
+		(g:emit (list 'IMM (list 'data tbl)))
+		(g:emit '(ADD))
+		(g:emit '(LI))
+		(g:emit '(JMPA))
+		(g:label! lo2)
+		(g:emit '(ADJ 2))
+		(g:emit (list 'JMP (list 'code defloc)))
+		(g:label! lo1)
+		(g:emit '(ADJ 1))
+		(g:emit (list 'JMP (list 'code defloc)))))))
+
+(define g:switchstmt (lambda (s)
+	(begin
+		(g:expr (g:second s))
+		(define ld (g:newlabel))
+		(define lend (g:newlabel))
+		(define ob g:brk)
+		(define ocases g:swcases)
+		(define odef g:swdef)
+		(set! g:brk lend)
+		(set! g:swcases (list))
+		(set! g:swdef nil)
+		(g:emit (list 'JMP (list 'code ld)))
+		(g:switchbody (tail (tail s)))
+		(define cases (g:reverse g:swcases))
+		(define def g:swdef)
+		(set! g:brk ob)
+		(set! g:swcases ocases)
+		(set! g:swdef odef)
+		(g:emit (list 'JMP (list 'code lend)))
+		(g:label! ld)
+		(g:swdispatch cases def lend)
+		(g:label! lend))))
+
 ;; ---- declarations ----
 
 ;; pre-pass: register every defined function so forward calls resolve
@@ -498,19 +691,49 @@
 		(if (= (head d) 'func)
 			(set! g:syms (g:cons
 				(list (g:third d) 'fun (g:second d) (g:newlabel)
-					(length (index d 3)) (index d 4))
+					;; ArgCount includes the variadic fake slot, as c4cc
+					(+ (length (index d 3)) (if (index d 4) 1 0))
+					(index d 4))
 				g:syms))
 			nil)
 		(next g:prepass (tail decls))))))
 
-;; scalar global: one initialized word (c4cc gives char globals a whole
-;; word too); "str" and &fn initializers add data-resident patches
+;; write N zero bytes at the current data cursor
+(define g:dzero (lambda (nb)
+	(if (= nb 0) nil
+	(begin
+		(if (>= g:dlen g:DMAX) (g:die "data segment full") nil)
+		(string:byte! g:data g:dlen 0)
+		(set! g:dlen (+ g:dlen 1))
+		(next g:dzero (- nb 1))))))
+
+;; write brace-list values as words or bytes, zero-filling to s elements
+(define g:delems (lambda (vs s bytewise)
+	(if (= s 0) nil
+	(begin
+		(define v (if (empty? vs) 0 (head vs)))
+		(if bytewise
+			(begin
+				(string:byte! g:data g:dlen v)
+				(set! g:dlen (+ g:dlen 1)))
+			(g:dword v))
+		(next g:delems (if (empty? vs) vs (tail vs)) (- s 1) bytewise)))))
+
+;; global declaration: scalar word (c4cc gives char globals a whole
+;; word too) or array storage; "str" and &fn initializers add
+;; data-resident patches
 (define g:global (lambda (d)
 	(begin
 		(define ty (g:second d))
 		(define n (g:third d))
-		(if (= (index d 3) nil) nil (g:die (+ "arrays need L3: " n)))
+		(define size (index d 3))
 		(define init (index d 5))
+		(if (= size nil)
+			(g:globalscalar n ty init)
+		(g:globalarray n ty size init)))))
+
+(define g:globalscalar (lambda (n ty init)
+	(begin
 		(define at
 			(if (= init nil) (g:dword 0)
 			(if (= (head init) 'num) (g:dword (g:second init))
@@ -530,7 +753,38 @@
 						(list 'dcode slot (index f 3)) g:dpatches))
 					slot)
 			(g:die (+ "unsupported global initializer for " n)))))))
-		(set! g:syms (g:cons (list n 'glo ty at) g:syms)))))
+		(set! g:syms (g:cons (list n 'glo ty at nil) g:syms)))))
+
+;; array storage: char arrays are s bytes, everything else s words;
+;; uninitialized/short-initialized elements are zero
+(define g:globalarray (lambda (n ty s init)
+	(begin
+		(define elem (- ty g:PTR))
+		(define bytewise (= elem g:CHAR))
+		(g:dalign)
+		(define at g:dlen)
+		(define bytes (if bytewise s (* s g:WORD)))
+		(if (> (+ at bytes) g:DMAX) (g:die "data segment full") nil)
+		(if (= init nil) (g:dzero bytes)
+		(if (= (head init) 'braces)
+			(begin
+				(if (> (length (g:second init)) s)
+					(g:die (+ "too many initializers for " n)) nil)
+				(g:delems (g:second init) s bytewise))
+		(if (if (= (head init) 'str) bytewise false)
+			(begin
+				(if (< s (+ (length (g:second init)) 1))
+					(g:die (+ "string does not fit the array " n)) nil)
+				(g:dstrbytes (g:second init) 0)
+				(g:dzero (- s (length (g:second init)))))
+		(g:die (+ "unsupported array initializer for " n)))))
+		(set! g:syms (g:cons (list n 'glo ty at bytes) g:syms)))))
+(define g:dstrbytes (lambda (str i)
+	(if (>= i (length str)) nil
+	(begin
+		(string:byte! g:data g:dlen (string:byte str i))
+		(set! g:dlen (+ g:dlen 1))
+		(next g:dstrbytes str (+ i 1))))))
 
 ;; locals: params idx 0..argc-1, loc = argc+1, scalars idx loc+1...;
 ;; initializer stores re-run on every entry, emitted after ENT
@@ -538,39 +792,97 @@
 	(if (empty? ps) i
 	(begin
 		(set! g:syms (g:cons
-			(list (g:second (head ps)) 'loc (head (head ps)) i) g:syms))
+			(list (g:second (head ps)) 'loc (head (head ps)) i nil) g:syms))
 		(next g:params (tail ps) (+ i 1))))))
 
+;; local slots, c4cc's exact scheme: i += words consumed, the symbol's
+;; Val is i AFTER the add, so LEA (loc - Val) is the LOWEST slot and
+;; array indexing ascends. char arrays pack bytes into whole words.
 (define g:localdefs (lambda (ls i)
 	(if (empty? ls) i
 	(begin
 		(define d (head ls))   ;; (local TYPE NAME SIZE INIT)
-		(if (= (index d 3) nil) nil
-			(g:die (+ "local arrays need L3: " (g:third d))))
+		(define size (index d 3))
+		(define words
+			(if (= size nil) 1
+			(if (= (- (g:second d) g:PTR) g:CHAR)
+				(/ (+ size 7) 8)
+			size)))
+		(define bytes
+			(if (= size nil) nil
+			(if (= (- (g:second d) g:PTR) g:CHAR) size (* size g:WORD))))
 		(set! g:syms (g:cons
-			(list (g:third d) 'loc (g:second d) (+ i 1)) g:syms))
-		(next g:localdefs (tail ls) (+ i 1))))))
+			(list (g:third d) 'loc (g:second d) (+ i words) bytes) g:syms))
+		(next g:localdefs (tail ls) (+ i words))))))
 
-(define g:localinits (lambda (ls i)
+;; initializer stores, emitted after ENT so they re-run per entry.
+;; Word stores use LEA's constant offset; byte stores add the index at
+;; run time since LEA only reaches word slots. Elements past the
+;; initializer zero-fill, as C requires.
+(define g:linit/word (lambda (val idx v)
+	(begin
+		(g:emit (list 'LEA (+ (- g:loc val) idx)))
+		(g:emit '(PSH))
+		(if (= 'list (typeof v)) (g:emit v) (g:emit (list 'IMM v)))
+		(g:emit '(SI)))))
+(define g:linit/byte (lambda (val idx v)
+	(begin
+		(g:emit (list 'LEA (- g:loc val)))
+		(g:emit '(PSH))
+		(g:emit (list 'IMM idx))
+		(g:emit '(ADD))
+		(g:emit '(PSH))
+		(g:emit (list 'IMM v))
+		(g:emit '(SC)))))
+
+(define g:linit/elems (lambda (val vs s idx bytewise)
+	(if (>= idx s) nil
+	(begin
+		(define v (if (empty? vs) 0 (head vs)))
+		(if bytewise (g:linit/byte val idx v) (g:linit/word val idx v))
+		(next g:linit/elems val (if (empty? vs) vs (tail vs)) s (+ idx 1) bytewise)))))
+
+(define g:strbytes (lambda (str i acc)   ;; string -> list of byte values
+	(if (>= i (length str)) (g:reverse acc)
+	(next g:strbytes str (+ i 1) (g:cons (string:byte str i) acc)))))
+
+(define g:localinits (lambda (ls)
 	(if (empty? ls) nil
 	(begin
 		(define d (head ls))
 		(define init (index d 4))
+		(define size (index d 3))
 		(if (= init nil) nil
 		(begin
-			(g:emit (list 'LEA (- g:loc (+ i 1))))
-			(g:emit '(PSH))
-			(if (= (head init) 'num)
-				(g:emit (list 'IMM (g:second init)))
-			(if (= (head init) 'str)
-				(g:emit (list 'IMM (list 'data (g:dstr (g:second init)))))
-			(if (= (head init) 'fnaddr)
+			(define s (g:find (g:third d)))
+			(define val (index s 3))
+			(define bytewise
+				(if (= size nil) false
+					(= (- (g:second d) g:PTR) g:CHAR)))
+			(if (= size nil)
+				;; scalar: one word store (c4cc uses SI even for char)
+				(if (= (head init) 'num)
+					(g:linit/word val 0 (g:second init))
+				(if (= (head init) 'str)
+					(g:linit/word val 0
+						(list 'IMM (list 'data (g:dstr (g:second init)))))
+				(if (= (head init) 'fnaddr)
+					(g:linit/word val 0
+						(list 'IMM (list 'code (index (g:find (g:second init)) 3))))
+				(g:die "unsupported local initializer"))))
+			(if (= (head init) 'braces)
 				(begin
-					(define f (g:find (g:second init)))
-					(g:emit (list 'IMM (list 'code (index f 3)))))
-			(g:die "unsupported local initializer"))))
-			(g:emit '(SI))))
-		(next g:localinits (tail ls) (+ i 1))))))
+					(if (> (length (g:second init)) size)
+						(g:die (+ "too many initializers for " (g:third d))) nil)
+					(g:linit/elems val (g:second init) size 0 bytewise))
+			(if (if (= (head init) 'str) bytewise false)
+				(begin
+					(if (< size (+ (length (g:second init)) 1))
+						(g:die (+ "string does not fit the array " (g:third d))) nil)
+					(g:linit/elems val (g:strbytes (g:second init) 0 (list))
+						size 0 true))
+			(g:die (+ "unsupported array initializer for " (g:third d))))))))
+		(next g:localinits (tail ls))))))
 
 (define g:function (lambda (d)
 	(begin
@@ -581,12 +893,14 @@
 		(define body (index d 7))
 		(define s (g:lookup n g:syms))
 		(define oldsyms g:syms)
-		(define argc (g:params ps 0))
+		;; a variadic's ... occupies one unnamed slot (c4cc's fake
+		;; parameter), counted in argc so va_start's &LAST - 1 lands on it
+		(define argc (+ (g:params ps 0) (if (index d 4) 1 0)))
 		(set! g:loc (+ argc 1))
-		(define nloc (- (g:localdefs ls (+ argc 1)) argc))
+		(define fini (g:localdefs ls (+ argc 1)))
 		(g:label! (index s 3))
-		(g:emit (list 'ENT (- nloc 1)))
-		(g:localinits ls (+ argc 1))
+		(g:emit (list 'ENT (- fini g:loc)))
+		(g:localinits ls)
 		(g:stmts (tail body))
 		(if (= (head (head g:code)) 'LEV) nil (g:emit '(LEV)))
 		(set! g:syms oldsyms)
@@ -623,6 +937,9 @@
 		(set! g:des* (list))
 		(set! g:brk nil)
 		(set! g:cont nil)
+		(set! g:swcases nil)
+		(set! g:swdef nil)
+		(set! g:lastarray false)
 		(g:sysinit g:syscalls)
 		(g:prepass (tail ast))
 		(g:decls (tail ast))

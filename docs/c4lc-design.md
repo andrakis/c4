@@ -5,8 +5,9 @@ written in the c4sp Lisp dialect. It targets the same C4 subset and the
 same .c4r output format, but is built around an AST instead of c4cc's
 single-pass token-to-opcode emission.
 
-Status: L0 (lexer), L1 (parser) and L2 (minimal codegen) done. See §10
-for the roadmap.
+Status: L0 (lexer), L1 (parser), L2 (minimal codegen) and L3 (full
+subset) done — including the first bootstrap turn: c4lc compiles
+c4sp.c, and the result runs c4lc. See §10 for the roadmap.
 
 ## 1. Why
 
@@ -225,10 +226,23 @@ battery green and adds its own target.
   image round-trips through c4r.lisp byte-identically; and c4opt
   optimizes it (514→505 instructions) with identical behavior.
   Deferred to L3: arrays, switch, variadics, sizeof(array).
-- **L3 — full subset.** Pointers, arrays, strings, globals +
-  initializers, enums, switch, function pointers, variadics; entire
-  src/tests battery compiles under c4lc and behaves identically to
-  c4cc builds.
+- **L3 — full subset.** DONE. Arrays (ATTR_ARRAY addressing, global +
+  local initializers with zero-fill, char[] packing), sizeof(array),
+  &array, &fn in expressions, switch (data-segment jumptable of dcode
+  label patches, c4cc's exact dispatch + oob shims), variadics
+  (__c4cc_make_va, fake-slot argc), the full __c4_* builtin table.
+  Battery: every deterministic raw src/tests program both compilers
+  build behaves byte-identically (17 exact + 4 with runtime pointers
+  masked + 2 variadic via cpp); switch images roundtrip and survive
+  c4opt (the jumptable follows moved code); test_tailcall's million
+  mutual calls run flat after the tail pass; and the bootstrap smoke:
+  c4lc compiles preprocessed c4sp.c (275KB, 9s native), the resulting
+  interpreter runs fac.lisp and c4lc's own parser. Notable c4cc bug
+  found: a bare function name as a value emits a bogus LI (loading
+  from the code address) — &fn only works there because & rewinds it.
+  Excluded from the battery: vararg.c prints return-pc values (layout-
+  dependent by nature), oldtest_vararg crashes identically under both
+  compilers, genfloat/test_illins are not c4cc inputs.
 - **L4 — optimizer in-process.** `-O` flag; equivalence with the
   c4opt-run pipeline.
 - **L5 — bootstrap + C4KE.** c4lc compiles c4sp.c; the result runs

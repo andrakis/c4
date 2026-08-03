@@ -270,6 +270,15 @@ test-c4sp-opt: c4sp c4sp.c4r c4m $(C4KE_C4R)
 	@echo "test-c4sp-opt: OK"
 
 # c4lc, the C compiler written in c4sp Lisp (docs/c4lc-design.md).
+# The L3 differential battery: raw tests both compilers build, compared
+# byte-for-byte (MASKED = prints runtime addresses, pointers stripped
+# first; PP = variadic, preprocessed so stdarg.h is inlined).
+C4LC_DIFF := c4_jailbreak factorial hello multifun puts reverse \
+             test_basic test_continue test_coop_switch test_globals \
+             test_malloc test-order test-ptrs test_static test_switch \
+             tests c4lc_l2
+C4LC_DIFF_MASKED := global test_gcscan test-oisc test_printf
+C4LC_DIFF_PP := vararg2 test_vprintf
 # L0: golden token dump of a sample covering every token kind and c4cc
 # lexer quirk, native and under c4m, plus a full lex of c4cc.c itself
 # (whose token list needs a bigger cell arena than the default).
@@ -317,6 +326,46 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC)
 	./c4sp -c 2000000 src/c4sp/lisp/c4lc.lisp src/tests/c4lc_for.c .c4lc_f.c4r > /dev/null
 	./c4m load-c4r.c -- .c4lc_f.c4r | cmp - src/c4sp/tests/expected/c4lc-for.txt
 	rm -f .c4lc_a.c4r .c4lc_b.c4r .c4lc_bo.c4r .c4lc_f.c4r .c4lc_out_a
+	# L3: full subset. Every deterministic raw test c4cc compiles must
+	# behave byte-identically when compiled by c4lc; tests that print
+	# runtime addresses compare with pointers masked; the variadic
+	# tests go through the preprocessor (stdarg.h + __c4cc_make_va).
+	for t in $(C4LC_DIFF); do \
+		$(C4CC) -o .c4lc_a.c4r src/tests/$$t.c > /dev/null 2>&1 || exit 1; \
+		./c4m load-c4r.c -- .c4lc_a.c4r > .c4lc_out_a 2>&1; \
+		./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp src/tests/$$t.c .c4lc_b.c4r > /dev/null || exit 1; \
+		./c4m load-c4r.c -- .c4lc_b.c4r 2>&1 | cmp - .c4lc_out_a || exit 1; \
+	done
+	for t in $(C4LC_DIFF_MASKED); do \
+		$(C4CC) -o .c4lc_a.c4r src/tests/$$t.c > /dev/null 2>&1 || exit 1; \
+		./c4m load-c4r.c -- .c4lc_a.c4r 2>&1 | sed -E 's/0x[0-9a-f]+/ADDR/g' > .c4lc_out_a; \
+		./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp src/tests/$$t.c .c4lc_b.c4r > /dev/null || exit 1; \
+		./c4m load-c4r.c -- .c4lc_b.c4r 2>&1 | sed -E 's/0x[0-9a-f]+/ADDR/g' | cmp - .c4lc_out_a || exit 1; \
+	done
+	for t in $(C4LC_DIFF_PP); do \
+		$(PREPROC) src/tests/$$t.c > .c4lc_pp.c 2>/dev/null; \
+		$(C4CC) -o .c4lc_a.c4r .c4lc_pp.c > /dev/null 2>&1 || exit 1; \
+		./c4m load-c4r.c -- .c4lc_a.c4r > .c4lc_out_a 2>&1; \
+		./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp .c4lc_pp.c .c4lc_b.c4r > /dev/null || exit 1; \
+		./c4m load-c4r.c -- .c4lc_b.c4r 2>&1 | cmp - .c4lc_out_a || exit 1; \
+	done
+	# switch images must roundtrip and survive the optimizer (the
+	# jumptable's dcode label targets move with the code)
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp src/tests/test_switch.c .c4lc_b.c4r > /dev/null
+	./c4sp -c 2000000 src/c4sp/lisp/c4r-roundtrip.lisp .c4lc_b.c4r | grep -q "roundtrip identical"
+	./c4sp -c 2000000 src/c4sp/lisp/c4opt-run.lisp .c4lc_b.c4r .c4lc_bo.c4r > /dev/null
+	./c4m load-c4r.c -- .c4lc_bo.c4r | cmp - src/c4sp/tests/expected/test_switch.txt
+	# a million mutual tail calls survive after the c4opt tail pass
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp src/tests/test_tailcall.c .c4lc_b.c4r > /dev/null
+	./c4sp -c 4000000 src/c4sp/lisp/c4opt-run.lisp .c4lc_b.c4r .c4lc_bo.c4r | grep -q " tail 2"
+	./c4m load-c4r.c -- .c4lc_bo.c4r | grep -q "parity 0 counter 1000000"
+	# bootstrap: c4lc compiles the interpreter it runs on, and the
+	# result runs Lisp -- including c4lc's own parser
+	$(PREPROC) src/c4sp/c4sp.c > .c4lc_pp.c
+	./c4sp -c 16000000 src/c4sp/lisp/c4lc.lisp .c4lc_pp.c .c4lc_sp.c4r > /dev/null
+	./c4m load-c4r.c -- .c4lc_sp.c4r src/c4sp/lisp/fac.lisp | grep -q "Factorial of 10 = 3628800"
+	./c4m load-c4r.c -- .c4lc_sp.c4r src/c4sp/lisp/c4lc-ast.lisp -check src/tests/hello.c | grep -q "parse ok"
+	rm -f .c4lc_a.c4r .c4lc_b.c4r .c4lc_bo.c4r .c4lc_pp.c .c4lc_out_a .c4lc_sp.c4r
 	@echo "test-c4lc: OK"
 
 # The C4KE RAM filesystem: opcode-level access, the self-hosting loop

@@ -61,6 +61,11 @@
 // | | W  : Value      Offset to add to patch address                        | |
 // | | Note: Type can be negative (see LT_*) or positive to refer to a symbol| |
 // | |       and resolved after linking.                                     | |
+// | | Address is a word offset into CODE for types -1/-2 and symbols, and a | |
+// | | BYTE offset into DATA for types -3/-4 (data-resident words: pointer   | |
+// | | initializers of globals, switch jump tables). Code-resident patches   | |
+// | | are written first, in emission (= ascending address) order, then the  | |
+// | | data-resident ones.                                                   | |
 // | |-----------------------------------------------------------------------| |
 // |---------------------------------------------------------------------------|
 // | Construct / Destruct segment format:                                      |
@@ -269,9 +274,11 @@ enum {
 };
 
 enum {
-	LT_CODE = -1,     // Code patch
-	LT_DATA = -2,     // Data patch
-	LT_DROP = -3      // Drop this patch
+	LT_CODE  = -1,    // code-resident word -> code address
+	LT_DATA  = -2,    // code-resident word -> data address
+	LT_DCODE = -3,    // data-resident word -> code address
+	LT_DDATA = -4,    // data-resident word -> data address
+	LT_DROP  = -5     // Drop this patch (unused)
 };
 
 int *asmc4r_labels, asmc4r_labels_count;
@@ -428,17 +435,18 @@ void asmc4r_handler_MATH(int operation) {
 	*++asmc4r_e = operation;
 }
 
-// Emit a placeholder word carrying an LT_CODE label, for switch jump
-// tables. The label's value is set later through UpdateAddress, exactly
-// like a branch placeholder; the loader gives the word its run-time
-// address. Note the patch address is the word itself, not an operand
-// slot -- readers of the patch table (c4sp's c4r.lisp) know these as
-// standalone code words.
-int *asmc4r_handler_TBLWORD () {
+// Record a data-resident patch: the word at byte offset dataoff in the
+// data segment is relocated at load time to a code (LT_DCODE) or data
+// (LT_DDATA) target. Used for pointer initializers of globals and for
+// switch jump tables, which live in data where nothing executes them.
+void asmc4r_handler_DATAPATCH (int type, int dataoff, int value) {
 	int *lbl;
-	*++asmc4r_e = 0;
-	lbl = asmc4r_newlabel(asmc4r_e - asmc4r_e_start, LT_CODE);
-	return lbl;
+	lbl = asmc4r_newlabel(dataoff, type);
+	// DCODE values arrive as backend code addresses (only the backend
+	// knows where its code buffer starts); DDATA values are already
+	// byte offsets into the data pool.
+	if (type == LT_DCODE) value = (int)((int *)value - asmc4r_e_start);
+	lbl[LBL_VALUE] = value;
 }
 
 int *asmc4r_handler_FunctionAddress () { return asmc4r_e + 1; }
@@ -653,18 +661,26 @@ void dump_to_file (char *file) {
 		lbl = lbl + LBL__Sz;
 	}
 
-	// Patches
+	// Patches: code-resident first in emission order (readers walk them
+	// in step with the instruction stream), then data-resident.
 	writechecked(fd, "P\0\0\0\0\0\0\0", sizeof(int));
 	i = 0; lbl = asmc4r_labels;
-	// printf("Writing %d patches at 0x%lX...", asmc4r_labels_count, writeoffset); fflush(stdout);
 	while (i < asmc4r_labels_count) {
-		writechecked(fd, &lbl[LBL_TYPE], sizeof(int));
-		// printf("  patch %d type %d label index = 0x%lX  value = 0x%lX", i, lbl[LBL_TYPE], lbl[LBL_INDEX], lbl[LBL_VALUE]);
-		// printf(" (%d)\n", lbl[LBL_VALUE]);
-		writechecked(fd, &lbl[LBL_INDEX], sizeof(int));
-		//tmp = lbl[LBL_INDEX] * sizeof(int); writechecked(fd, &tmp, sizeof(int));
-		writechecked(fd, &lbl[LBL_VALUE], sizeof(int));
-		// tmp = lbl[LBL_VALUE] * sizeof(int); writechecked(fd, &tmp, sizeof(int));
+		if (lbl[LBL_TYPE] >= LT_DATA || lbl[LBL_TYPE] >= 0) {
+			writechecked(fd, &lbl[LBL_TYPE], sizeof(int));
+			writechecked(fd, &lbl[LBL_INDEX], sizeof(int));
+			writechecked(fd, &lbl[LBL_VALUE], sizeof(int));
+		}
+		++i;
+		lbl = lbl + LBL__Sz;
+	}
+	i = 0; lbl = asmc4r_labels;
+	while (i < asmc4r_labels_count) {
+		if (lbl[LBL_TYPE] == LT_DCODE || lbl[LBL_TYPE] == LT_DDATA) {
+			writechecked(fd, &lbl[LBL_TYPE], sizeof(int));
+			writechecked(fd, &lbl[LBL_INDEX], sizeof(int));
+			writechecked(fd, &lbl[LBL_VALUE], sizeof(int));
+		}
 		++i;
 		lbl = lbl + LBL__Sz;
 	}
@@ -928,7 +944,7 @@ int asmc4r_main (int argc, char **argv) {
 	c4cc_emithandlers[EH_LEV] = (int)&asmc4r_handler_LEV;
 	c4cc_emithandlers[EH_SYSCALL] = (int)&asmc4r_handler_SYSCALL;
 	c4cc_emithandlers[EH_MATH] = (int)&asmc4r_handler_MATH;
-	c4cc_emithandlers[EH_TBLWORD] = (int)&asmc4r_handler_TBLWORD;
+	c4cc_emithandlers[EH_DATAPATCH] = (int)&asmc4r_handler_DATAPATCH;
 	c4cc_emithandlers[EH_FUNCADDR] = (int)&asmc4r_handler_FunctionAddress;
 	c4cc_emithandlers[EH_CURRADDR] = (int)&asmc4r_handler_CurrentAddress;
 	c4cc_emithandlers[EH_UPDTADDR] = (int)&asmc4r_handler_UpdateAddress;

@@ -249,11 +249,23 @@ static int merge_c4rs (int *master, int *c4rs, int count) {
 		i = 0;
 		while (i < n) {
 			pid = srcPatch[C4R_PAT_TYPE];
-			dstPatch[C4R_PAT_ADDRESS] = offsetCode + srcPatch[C4R_PAT_ADDRESS];
+			// Code-resident patch addresses rebase by the code offset
+			// (words); data-resident ones (-3/-4) by the data offset
+			// (bytes)
+			if (pid == C4R_PTYPE_DCODE || pid == C4R_PTYPE_DDATA)
+				dstPatch[C4R_PAT_ADDRESS] = offsetData + srcPatch[C4R_PAT_ADDRESS];
+			else
+				dstPatch[C4R_PAT_ADDRESS] = offsetCode + srcPatch[C4R_PAT_ADDRESS];
 			if (pid == C4R_PTYPE_CODE) {
 				dstPatch[C4R_PAT_TYPE]  = pid;
 				dstPatch[C4R_PAT_VALUE] = offsetCode + srcPatch[C4R_PAT_VALUE];
 			} else if (pid == C4R_PTYPE_DATA) {
+				dstPatch[C4R_PAT_TYPE]  = pid;
+				dstPatch[C4R_PAT_VALUE] = offsetData + srcPatch[C4R_PAT_VALUE];
+			} else if (pid == C4R_PTYPE_DCODE) {
+				dstPatch[C4R_PAT_TYPE]  = pid;
+				dstPatch[C4R_PAT_VALUE] = offsetCode + srcPatch[C4R_PAT_VALUE];
+			} else if (pid == C4R_PTYPE_DDATA) {
 				dstPatch[C4R_PAT_TYPE]  = pid;
 				dstPatch[C4R_PAT_VALUE] = offsetData + srcPatch[C4R_PAT_VALUE];
 			} else {
@@ -276,6 +288,48 @@ static int merge_c4rs (int *master, int *c4rs, int count) {
 		++c4r_index;
 		cl = cl + CL__Sz;
 	}
+	return 0;
+}
+
+// Stable-partition the master patch table into the canonical order
+// asm-c4r writes: code-resident patches (types -1/-2/symbols) first,
+// data-resident (-3/-4) after, each keeping their relative order.
+static int canonicalize_patches (int *master) {
+	int *mhdr, *patch, *out, *dst;
+	int  i, n, t;
+	mhdr = (int *)master[C4R_HEADER];
+	n = mhdr[C4R_HDR_PATCHLEN];
+	if (!n) return 0;
+	if (!(out = malloc(sizeof(int) * C4R_PAT__Sz * n))) return 1;
+	dst = out;
+	patch = (int *)master[C4R_PATCHES];
+	i = 0;
+	while (i < n) {
+		t = patch[C4R_PAT_TYPE];
+		if (t >= C4R_PTYPE_DATA || t >= 0) {
+			dst[C4R_PAT_TYPE] = t;
+			dst[C4R_PAT_ADDRESS] = patch[C4R_PAT_ADDRESS];
+			dst[C4R_PAT_VALUE] = patch[C4R_PAT_VALUE];
+			dst = dst + C4R_PAT__Sz;
+		}
+		patch = patch + C4R_PAT__Sz;
+		++i;
+	}
+	patch = (int *)master[C4R_PATCHES];
+	i = 0;
+	while (i < n) {
+		t = patch[C4R_PAT_TYPE];
+		if (t == C4R_PTYPE_DCODE || t == C4R_PTYPE_DDATA) {
+			dst[C4R_PAT_TYPE] = t;
+			dst[C4R_PAT_ADDRESS] = patch[C4R_PAT_ADDRESS];
+			dst[C4R_PAT_VALUE] = patch[C4R_PAT_VALUE];
+			dst = dst + C4R_PAT__Sz;
+		}
+		patch = patch + C4R_PAT__Sz;
+		++i;
+	}
+	free((int *)master[C4R_PATCHES]);
+	master[C4R_PATCHES] = (int)out;
 	return 0;
 }
 
@@ -555,8 +609,9 @@ int main (int argc, char **argv) {
 		return 8;
 	}
 
-	// Merge, resolve, write
-	if (merge_c4rs(master, c4rs, c4r_pos)) {
+	// Merge, canonicalize patch order, resolve, write
+	if (merge_c4rs(master, c4rs, c4r_pos) ||
+	    canonicalize_patches(master)) {
 		printf("%s: link failure\n", spec);
 		failed = 1;
 	} else if ((unresolved = resolve_patches(master)) && !cl_libmode) {

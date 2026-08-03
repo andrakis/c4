@@ -194,6 +194,28 @@ declarators.
 
 There is **no forward declaration and no linker** — a function must be defined
 before use, and `JSR` targets are absolute addresses fixed at compile time.
+(c4cc has since gained all of these: forward declarations resolve at write
+time, c4rlink links, and initialized globals and arrays exist — see below.)
+
+### c4cc additions (2026-08-02)
+
+* **Initialized globals**: `int x = -5;`, `char c = 'A';`, enum constants,
+  `char *s = "text";`, `int *fp = &func;` (the function must already be
+  defined). Pointer initializers live in the data segment and are relocated
+  by the two data-resident patch types added for them: a patch's ADDRESS was
+  historically always a code-segment offset, so `.c4r` gained
+  `C4R_PTYPE_DCODE` (-3, data word → code address) and `C4R_PTYPE_DDATA`
+  (-4, data word → data address). Code-resident patches are written first,
+  data-resident after.
+* **Arrays**: `int a[10];` globally and locally, `char b[64];`,
+  `int a[3] = {1, -2, RED};`, `char t[] = "abc";`. An `ATTR_ARRAY` symbol
+  evaluates to the address of its storage instead of loading from it; local
+  arrays reserve frame slots with the name at the lowest address so
+  indexing ascends, and local char arrays pack bytes into words.
+* **switch/case/default with a jump table** in the data segment (each entry
+  a DCODE patch) plus `break` (loops too). Needs c4m's `JMPA` at runtime.
+  `src/tests/test_switch.c` and `test_globals.c` are compared against gcc
+  compiling the very same files.
 
 ---
 

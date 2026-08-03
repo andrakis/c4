@@ -375,7 +375,7 @@
 				" jmp-next" opt:n-jmpnext " threaded" opt:n-thread " dead" opt:n-dead
 				" tail" opt:n-tail)
 			(list (head M) (second M) (third M) Code (index M 4)
-				(index M 5) (index M 6) (index M 7)))
+				(index M 5) (index M 6) (index M 7) (index M 8)))
 		(begin
 			(set! Code (opt:passes Code (index M 5)))
 			(next c4opt:optloop M Code Before (opt:count-instrs Code) N (+ Rounds 1)))))))

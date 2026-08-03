@@ -1,0 +1,10 @@
+scalars: 5 -7 44 A
+msg: hello, globals
+arr sum: 33 (arr[2]=3 arr[4]=0)
+bytes: 1 2 -6 0
+text: abc (98)
+big: 0 4242 99
+larr: 0 25 81
+lbytes: abcdefghi
+fp: 42
+x now: 45

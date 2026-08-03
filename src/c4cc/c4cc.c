@@ -83,6 +83,15 @@ int  *_sym, *_e, *_sp;  // initial pointer locations
 int  *_oisc4_e;
 int   c4cc_initialized;
 
+// Patch label types shared with the backends (asm-c4r.c defines the same
+// values in its LT_* enum; c4cc.c is included first, so they live here)
+enum {
+	PT_CODE  = -1,    // code-resident word -> code address
+	PT_DATA  = -2,    // code-resident word -> data address
+	PT_DCODE = -3,    // data-resident word -> code address
+	PT_DDATA = -4     // data-resident word -> data address
+};
+
 int *curr_continue;        // Marks current begin of while loop
 // break support: a stack of unresolved jump placeholders. Each while/for/
 // switch records the depth on entry and resolves everything above it on
@@ -123,6 +132,9 @@ enum {
     // as some minor other instructions, such that extra arguments may be
     // accessed in the usual stdarg way, via va_arg and such macros.
     ATTR_VARIADIC    = 0x20,
+    // Symbol is an array: its name evaluates to the address of its
+    // storage rather than loading a value from it
+    ATTR_ARRAY       = 0x40,
 };
 
 // tokens and classes (operators last and in precedence order)
@@ -223,7 +235,7 @@ enum { EH_LEA, EH_IMM, EH_LI, EH_LC, EH_RWLI, EH_RWLC, EH_SI, EH_SC, EH_PSH,
        EH_SRC,
        EH_INSRC_LINE, EH_PRINTACC,
        EH_FUNCTIONSTART, EH_FUNCTIONEND,
-       EH_TBLWORD,
+       EH_DATAPATCH,
        EH__Sz };
 
 // types
@@ -375,11 +387,11 @@ void emit_SYSCALL(int num, int argcount) {
   invoke2((int*)c4cc_emithandlers[EH_SYSCALL], num, argcount);
 }
 
-// Emit a placeholder word carrying a CODE relocation, for switch jump
-// tables; the target is set later with emit_UpdateAddress, exactly like a
-// branch placeholder. Returns the backend label.
-int *emit_TableWord () {
-  return (int*)invoke0((int*)c4cc_emithandlers[EH_TBLWORD]);
+// Record a data-resident patch (LT_DCODE/LT_DDATA): the word at byte
+// offset dataoff in the data segment is relocated at load time. Used for
+// pointer initializers of globals and switch jump tables.
+void emit_DataPatch (int type, int dataoff, int value) {
+  invoke3((int*)c4cc_emithandlers[EH_DATAPATCH], type, dataoff, value);
 }
 
 void emit_MATH(int operation) {
@@ -758,8 +770,14 @@ void expr(int lev)
         *++e = IMM; *++e = d[Val];
         emit_IMM(d[emit_Val]);
       } else { printf("%d: undefined variable\n", line); die(-1); }
-      *++e = ((ty = d[Type]) == CHAR) ? LC : LI;
-      emit_LI(*e);
+      // An array name evaluates to the address of its storage; anything
+      // else loads the value found there
+      if (d[Attr] & ATTR_ARRAY) {
+        ty = d[Type];
+      } else {
+        *++e = ((ty = d[Type]) == CHAR) ? LC : LI;
+        emit_LI(*e);
+      }
     }
   }
   else if (tk == '(') {
@@ -964,7 +982,7 @@ void stmt()
   // switch state (see the Switch branch below)
   int *swv, *swa, *swea, *tlbl;
   int  swn, swdef, swmin, swmax, swrange, i2, v2, neg2, brk_base;
-  int *b2, *b3, *b4, *bend, *bdef, *odef, *oend, *o2, *o3, *o4, *etbl, *otbl;
+  int *b3, *b4, *bend, *bdef, *odef, *oend, *o3, *o4;
 
   statement_start = p;
 
@@ -1007,13 +1025,8 @@ void stmt()
   }
   else if (tk == Switch) {
     // switch (expr) { case C: ... default: ... }, with C fallthrough and
-    // break, compiled to a jump table. The table lives inline in the code
-    // segment because a patch's ADDRESS is always a code-segment offset:
-    // the loader applies every patch as *(code + paddr) = ..., so a word
-    // RESIDING in the data segment can never be relocated (patch VALUES
-    // may of course point into either segment -- every string literal is
-    // a DATA-typed patch). A table in the data segment would hold code
-    // addresses nothing could fix up.
+    // break, compiled to a jump table in the DATA segment: each entry is
+    // a data-resident CODE patch (LT_DCODE), relocated by the loader.
     // Layout, in emission order:
     //
     //     <expr>                a = value
@@ -1021,9 +1034,6 @@ void stmt()
     //   body:                   cases record addresses; break -> end
     //     JMP end               (running off the end of the body)
     //   dispatch:
-    //     JMP bounds            (the table sits in between)
-    //   table:                  range+1 placeholder words, CODE patched
-    //   bounds:
     //     [PSH; IMM min; SUB]   a = idx = value - min    (when min != 0)
     //     PSH; PSH; PSH         three idx copies on the stack
     //     IMM range; GT; BNZ oob2
@@ -1034,6 +1044,8 @@ void stmt()
     //   oob1: ADJ 1; JMP default-or-end
     //   end:
     //
+    // The table is filled after the shims, when every target (cases,
+    // default, end) is a known address -- no placeholders needed.
     // JMPA is a c4m opcode: like function pointers (JSRI), switch needs
     // c4m or better at runtime; plain c4 will trap on it.
     next();
@@ -1098,16 +1110,10 @@ void stmt()
       }
       swrange = swmax - swmin;
       if (swrange >= SWITCH_MAX_RANGE) { printf("%d: switch range %d too sparse for a jump table\n", line, swrange); die(-1); }
-      if (!(tlbl = malloc((swrange + 1) * sizeof(int)))) { printf("%d: switch: out of memory\n", line); die(-1); }
-      // hop over the inline table
-      *++e = JMP; b2 = ++e;
-      o2 = emit_JMPPH();
-      etbl = e + 1;                       // e-stream table base
-      otbl = emit_CurrentAddress();       // backend table base
-      i2 = 0;
-      while (i2 <= swrange) { *++e = 0; tlbl[i2] = (int)emit_TableWord(); ++i2; }
-      *b2 = (int)(e + 1);
-      emit_UpdateAddress(o2, emit_CurrentAddress());
+      // reserve the table in the data segment
+      data = (char *)(((int)data + sizeof(int) - 1) & (0 - sizeof(int)));
+      tlbl = (int *)data;
+      data = data + (swrange + 1) * sizeof(int);
       // bounds check, three copies of idx on the stack
       if (swmin) {
         *++e = PSH; *++e = IMM; *++e = swmin; *++e = SUB;
@@ -1125,7 +1131,7 @@ void stmt()
       *++e = IMM; *++e = sizeof(int); emit_IMM(sizeof(int));
       *++e = MUL; emit_MATH(MUL);
       *++e = PSH; emit_PSH();
-      *++e = IMM; *++e = (int)etbl; emit_IMM((int)otbl);
+      *++e = IMM; *++e = (int)tlbl; emit_IMM((int)tlbl); // auto DATA patch
       *++e = ADD; emit_MATH(ADD);
       *++e = LI; emit_LI(LI);
       *++e = JMPA; emit_MATH(JMPA);
@@ -1153,26 +1159,27 @@ void stmt()
         ++brk_top;
       }
       // fill the table: cases where present, else default, else end
-      // (nothing else is emitted below, so end == the current address)
+      // (nothing else is emitted below, so end == the current address).
+      // Each entry is a data-resident CODE patch; the pool word itself
+      // stays 0, the loader writes the run-time address.
       i2 = 0;
       while (i2 <= swrange) {
         neg2 = 0;
         v2 = 0;
         while (v2 < swn) {
           if (swv[v2] == swmin + i2) {
-            emit_UpdateAddress((int *)tlbl[i2], (int *)swa[v2]);
+            emit_DataPatch(PT_DCODE, (char *)(tlbl + i2) - data_s, swa[v2]);
             neg2 = 1;
             v2 = swn;
           }
           ++v2;
         }
         if (!neg2) {
-          if (swdef) emit_UpdateAddress((int *)tlbl[i2], odef);
-          else emit_UpdateAddress((int *)tlbl[i2], emit_CurrentAddress());
+          if (swdef) emit_DataPatch(PT_DCODE, (char *)(tlbl + i2) - data_s, (int)odef);
+          else emit_DataPatch(PT_DCODE, (char *)(tlbl + i2) - data_s, (int)emit_CurrentAddress());
         }
         ++i2;
       }
-      free(tlbl);
     }
     // end: resolve the fallthrough jump and every pending break
     *bend = (int)(e + 1);
@@ -1275,6 +1282,8 @@ void stmt()
 
 int parse () {
   int bt, ty, i, attr, *fun, v, s;
+  int *dcl, elem, neg;
+  char *sstart;
   // parse declarations
   line = 1;
   line_start = statement_start = p;
@@ -1330,40 +1339,21 @@ int parse () {
 		  tk = Id;
 		  next();
       }
-		  // printf("xxx, tk now == %d '%c', %.*s, Id == %d\n", tk, tk, 5, p - 5, Id);
-      if (tk == Assign) { // for global assignments
-          next();
-          if (tk == '{') { printf("%d: array initializer not supported yet\n", line); die(-1); }
-          v = ival;
-          //printf("initial value set to %d\n", v);
-      } else if (tk == Brak) { // [array sizes]
-	  	  // TODO: array address never seems to get loaded properly
-		  // printf("(c4cc: update1 type to %d\n)\n", ty);
-          ty = ty + PTR; // make it a pointer
-		  // printf("(c4cc: update2/assign type to %d\n)\n", ty);
-		  id[Type] = ty; // update it now as we lose ty before getting to the ty assignment below.
-          next();
-          if (tk == Num) s = ival;
-          else if (tk == Id) s = id[Val];
-          else { printf("%d: unknown array size specifier, tk = %d ('%c')\n", line, tk, tk); die(-1); }
-          // printf("array size received: %ld for id %ld\n", s, id);
-          next();
-          if (tk != ']') { printf("%d: expected array close ']', got %ld ('%c')\n", line, tk, tk); die(-1); }
-      } else if (tk != Id) {
-		  printf("%d: unknown post attribute, tk(%d, '%c') != %d or %d\n", line, tk, tk, Constructor, Destructor);
+      if (tk != Id) {
 		  printf("%d: bad global declaration\n", line); die(-1);
 	  }
 	  // TODO: re-enable?
       //if (id[Class]) { printf("%d: duplicate global definition\n", line); die(-1); }
+      // Remember the declarator: lexing array sizes or initializers below
+      // replaces the global 'id' with whatever identifier appears there.
+      dcl = id;
       next();
-      id[Type] = ty;
-	  // printf("(c4cc: assign type as %d)\n");
-      id[Attr] = attr;
-	  // printf("xxx, attr set to %d\n", attr);
+      dcl[Type] = ty;
+      dcl[Attr] = attr;
       if (tk == '(') { // function
         // keep track of function
 		// printf("xxx, function definition\n");
-        fun = id;
+        fun = dcl;
         fun[Class] = Fun;
         fun[Val] = (int)(e + 1);
         fun[emit_Val] = (int)emit_FunctionAddress();
@@ -1431,17 +1421,36 @@ int parse () {
             while (tk != ';') {
               ty = bt;
               while (tk == Mul) { next(); ty = ty + PTR; }
-              if (tk == Assign) { printf("%d: cannot set initial value of local variable, only globals. Manually assign after variable block.\n", line); die(-1); }
               if (tk != Id) { printf("%d: bad local declaration\n", line); die(-1); }
               if (id[Class] == Loc) { printf("%d: duplicate local definition\n", line); die(-1); }
-              id[HClass] = id[Class]; id[Class] = Loc;
-              id[HType]  = id[Type];  id[Type] = ty;
-              id[HVal]   = id[Val];
-              id[Hemit_Val] = id[emit_Val]; id[emit_Val] = 0; // no effect
-			  // id[Hemit_Length] = id[emit_Length];
-              id[HAttr] = id[Attr];
-              id[Val] = ++i;
+              dcl = id; // lexing an array size below clobbers 'id'
               next();
+              // Optional [size]: reserve s elements in the frame; char
+              // arrays pack bytes into whole words. The name evaluates to
+              // the address of the LOWEST slot so indexing ascends.
+              v = 0; // becomes ATTR_ARRAY
+              s = 1;
+              if (tk == Brak) {
+                next();
+                if (tk == Num) { s = ival; next(); }
+                else if (tk == Id && id[Class] == Num) { s = id[Val]; next(); }
+                else { printf("%d: bad array size\n", line); die(-1); }
+                if (tk != ']') { printf("%d: expected ']' after array size\n", line); die(-1); }
+                next();
+                if (s < 1) { printf("%d: bad array size\n", line); die(-1); }
+                v = ATTR_ARRAY;
+                if (ty == CHAR) s = (s + sizeof(int) - 1) / sizeof(int);
+                ty = ty + PTR;
+              }
+              if (tk == Assign) { printf("%d: cannot set initial value of local variable, only globals. Manually assign after variable block.\n", line); die(-1); }
+              dcl[HClass] = dcl[Class]; dcl[Class] = Loc;
+              dcl[HType]  = dcl[Type];  dcl[Type] = ty;
+              dcl[HVal]   = dcl[Val];
+              dcl[Hemit_Val] = dcl[emit_Val]; dcl[emit_Val] = 0; // no effect
+              dcl[HAttr] = dcl[Attr];
+              dcl[Attr] = v;
+              i = i + s;
+              dcl[Val] = i;
               if (tk == ',') next();
             }
             next();
@@ -1464,15 +1473,114 @@ int parse () {
           id = id + Idsz;
         }
       } else { // if (tk == '(')
-	    // TODO: this is part of the array section that does not work
-        // if (s > 1) printf("write global to data, length %ld, value %ld, loc: 0x%lx for id %ld\n", s, v, data, id);
-        id[Class] = Glo;
-        id[Val] = (int)data;
-        // Write value, if any
-        *((int *)data) = v;
-        data = data + sizeof(int) * s;    // Use array size if specified
-        v = 0;                            // Reset values
+        // Global variable, possibly an array, possibly initialized.
+        // elem is the element base type (before array promotion): char
+        // arrays store bytes, everything else words.
+        elem = ty;
         s = 1;
+        v = 0;
+        dcl[Class] = Glo;
+        if (tk == Brak) { // [size], or [] with the size taken from the initializer
+          next();
+          if (tk == Num) { s = ival; next(); }
+          else if (tk == Id && id[Class] == Num) { s = id[Val]; next(); }
+          else if (tk == ']') s = 0;
+          else { printf("%d: bad array size\n", line); die(-1); }
+          if (tk != ']') { printf("%d: expected ']' after array size\n", line); die(-1); }
+          next();
+          ty = ty + PTR;
+          dcl[Type] = ty;
+          dcl[Attr] = dcl[Attr] | ATTR_ARRAY;
+        }
+        if (tk != Assign) {
+          // Uninitialized: reserve zeroed storage
+          if (!s) { printf("%d: array [] needs an initializer\n", line); die(-1); }
+          data = (char *)(((int)data + sizeof(int) - 1) & (0 - sizeof(int)));
+          dcl[Val] = (int)data;
+          if ((dcl[Attr] & ATTR_ARRAY) && elem == CHAR) data = data + s;
+          else data = data + sizeof(int) * s;
+        } else {
+          next(); // past '='; NOTE: a string literal is copied into the
+                  // data pool by this very next() call
+          if (tk == '{') {
+            // Brace list of integer constants (arrays only)
+            if (!(dcl[Attr] & ATTR_ARRAY)) { printf("%d: brace initializer requires an array\n", line); die(-1); }
+            data = (char *)(((int)data + sizeof(int) - 1) & (0 - sizeof(int)));
+            dcl[Val] = (int)data;
+            next();
+            i = 0;
+            while (tk != '}') {
+              neg = 0;
+              if (tk == Sub) { next(); neg = 1; }
+              if (tk == Num) v = ival;
+              else if (tk == Id && id[Class] == Num) v = id[Val];
+              else { printf("%d: array initializers must be integer constants\n", line); die(-1); }
+              if (neg) v = -v;
+              next();
+              if (s && i >= s) { printf("%d: too many initializers\n", line); die(-1); }
+              if (elem == CHAR) *((char *)dcl[Val] + i) = v;
+              else *((int *)dcl[Val] + i) = v;
+              ++i;
+              if (tk == ',') next();
+            }
+            next();
+            if (!s) s = i;
+            if (elem == CHAR) data = data + s;
+            else data = data + sizeof(int) * s;
+          }
+          else if (tk == '"') {
+            // The lexer has already copied the contents to [ival, data)
+            sstart = (char *)ival;
+            if ((dcl[Attr] & ATTR_ARRAY) && elem == CHAR) {
+              // char name[] = "...": the copied bytes ARE the array
+              dcl[Val] = (int)sstart;
+              i = data - sstart + 1; // + nul (pool is zeroed)
+              if (!s) s = i;
+              if (s < i) { printf("%d: string does not fit the array\n", line); die(-1); }
+              data = sstart + s;
+              next();
+            } else if (ty == CHAR + PTR) {
+              // char *name = "...": a pointer word in data, relocated at
+              // load time with a data-resident DATA patch
+              next();
+              data = (char *)(((int)data + sizeof(int) - 1) & (0 - sizeof(int)));
+              dcl[Val] = (int)data;
+              *((int *)data) = (int)sstart; // dead compile-time value
+              emit_DataPatch(PT_DDATA, (char *)dcl[Val] - data_s, sstart - data_s);
+              data = data + sizeof(int);
+            } else { printf("%d: string initializer requires char* or char[]\n", line); die(-1); }
+          }
+          else if (tk == And) {
+            // int *name = &function: a code pointer in data, relocated
+            // with a data-resident CODE patch. The target must already be
+            // defined (its patch value is its code position).
+            next();
+            if (tk != Id || id[Class] != Fun || !id[emit_Val] || (id[Attr] & ATTR_EXTERN)) {
+              printf("%d: & initializer requires an already-defined function\n", line); die(-1);
+            }
+            data = (char *)(((int)data + sizeof(int) - 1) & (0 - sizeof(int)));
+            dcl[Val] = (int)data;
+            *((int *)data) = id[emit_Val]; // dead compile-time value
+            emit_DataPatch(PT_DCODE, (char *)dcl[Val] - data_s, id[emit_Val]);
+            data = data + sizeof(int);
+            next();
+          }
+          else {
+            // Scalar integer constant: number, char literal, enum, negative
+            neg = 0;
+            if (tk == Sub) { next(); neg = 1; }
+            if (tk == Num) v = ival;
+            else if (tk == Id && id[Class] == Num) v = id[Val];
+            else { printf("%d: initializer must be a constant\n", line); die(-1); }
+            if (neg) v = -v;
+            next();
+            if (dcl[Attr] & ATTR_ARRAY) { printf("%d: array initializer needs braces\n", line); die(-1); }
+            data = (char *)(((int)data + sizeof(int) - 1) & (0 - sizeof(int)));
+            dcl[Val] = (int)data;
+            *((int *)data) = v;
+            data = data + sizeof(int);
+          }
+        }
       }
       if (tk == ',') next();
     }

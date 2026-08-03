@@ -17,7 +17,7 @@
 ;; counter is needed and listings read like c4rdump output.
 ;;
 ;; A decoded module is a positional list:
-;;   (version wordbits entry code data syms cons des)
+;;   (version wordbits entry code data syms cons des dpatches)
 ;;     entry: -1 or (code N)
 ;;     code:  instruction list as above; (word W) holds a raw word that
 ;;            could not be an instruction (e.g. the dead zero word asm-c4r
@@ -26,6 +26,10 @@
 ;;     syms:  (id type class attrs name value), value (code N) for defined
 ;;            functions
 ;;     cons/des: lists of (code N)
+;;     dpatches: data-resident patches (type -3/-4): (dcode BYTEOFF LABEL)
+;;               relocates a data word to a code address, (ddata BYTEOFF
+;;               DATAOFF) to a data address. Written after the
+;;               code-resident patches, matching asm-c4r's canonical order.
 ;;
 ;; Uses the c4sp byte builtins: string:word, string:byte, string:alloc,
 ;; string:word!, string:byte!, bit:and. All offsets in BYTES unless noted.
@@ -99,7 +103,9 @@
 	(define SymsAt (+ DesAt (* Deslen W) W))
 
 	;; patches, in file (= address) order: (type address value)
-	(define Patches (reverse (c4r:read-patches F PatchAt Patchlen (list))))
+	(define AllPatches (reverse (c4r:read-patches F PatchAt Patchlen (list))))
+	(define Patches (c4r:code-patches AllPatches))
+	(define DPatches (c4r:data-patches AllPatches))
 	;; constructors/destructors: raw code offsets
 	(define Cons (reverse (c4r:read-words F ConsAt Conslen (list))))
 	(define Des (reverse (c4r:read-words F DesAt Deslen (list))))
@@ -109,7 +115,7 @@
 	;; every label target: a byte map over code offsets
 	(define Labels (string:alloc Codelen))
 	(if (not (= -1 Entry)) (string:byte! Labels Entry 1))
-	(c4r:mark-patch-labels Patches Labels)
+	(c4r:mark-patch-labels AllPatches Labels)
 	(c4r:mark-word-labels Cons Labels)
 	(c4r:mark-word-labels Des Labels)
 	(c4r:mark-sym-labels Syms Labels)
@@ -123,7 +129,8 @@
 		(string:substr F DataAt Datalen)
 		(c4r:label-syms Syms)
 		(c4r:label-offsets Cons)
-		(c4r:label-offsets Des))
+		(c4r:label-offsets Des)
+		DPatches)
 )))
 
 (define c4r:read-patches (lambda (F At N Acc)
@@ -132,6 +139,23 @@
 			(cons (list (string:word F At)
 			            (string:word F (+ At W))
 			            (string:word F (+ At (* 2 W)))) Acc)))))
+
+;; split the patch list: code-resident (-1, -2, symbols) drive the
+;; instruction walk; data-resident (-3, -4) ride along as module data
+(define c4r:code-patches (lambda (Ps)
+	(if (empty? Ps) (list)
+		(if (< (head (head Ps)) -2)
+			(c4r:code-patches (tail Ps))
+			(cons (head Ps) (c4r:code-patches (tail Ps)))))))
+(define c4r:data-patches (lambda (Ps)
+	(if (empty? Ps) (list)
+		(if (= -3 (head (head Ps)))
+			(cons (list 'dcode (second (head Ps)) (third (head Ps)))
+				(c4r:data-patches (tail Ps)))
+			(if (= -4 (head (head Ps)))
+				(cons (list 'ddata (second (head Ps)) (third (head Ps)))
+					(c4r:data-patches (tail Ps)))
+				(c4r:data-patches (tail Ps)))))))
 
 (define c4r:read-words (lambda (F At N Acc)
 	(if (= 0 N) Acc
@@ -153,6 +177,8 @@
 	(if (empty? Patches) nil (begin
 		(define P (head Patches))
 		(if (= -1 (head P)) (string:byte! Labels (third P) 1))
+		;; data-resident code patches (-3) target code as well
+		(if (= -3 (head P)) (string:byte! Labels (third P) 1))
 		(next c4r:mark-patch-labels (tail Patches) Labels)))))
 
 (define c4r:mark-word-labels (lambda (Offs Labels)
@@ -263,8 +289,9 @@
 	(define LT (string:alloc (* W (+ MaxLabel 2))))
 	(define Codelen (c4r:place Code LT 0))
 
-	;; patch count = reference operands
-	(define Patchlen (c4r:count-refs Code 0))
+	;; patch count = reference operands + data-resident patches
+	(define DPatches (index M 8))
+	(define Patchlen (+ (c4r:count-refs Code 0) (length DPatches)))
 	(define Datalen (length Data))
 	(define Conslen (length Cons))
 	(define Deslen (length Des))
@@ -310,6 +337,8 @@
 	(string:byte! Out (- SymsAt W) 83)  ;; S
 
 	(c4r:emit-code Code Out CodeAt PatchAt LT 0)
+	(c4r:emit-dpatches DPatches Out
+		(+ PatchAt (* (c4r:count-refs Code 0) (* 3 W))) LT)
 	(c4r:copy-string Data Out DataAt 0)
 	(c4r:emit-words (c4r:resolve-offsets Cons LT) Out ConsAt)
 	(c4r:emit-words (c4r:resolve-offsets Des LT) Out DesAt)
@@ -368,6 +397,17 @@
 	(if (empty? Refs) (list)
 		(cons (c4r:label LT (second (head Refs)))
 			(c4r:resolve-offsets (tail Refs) LT)))))
+
+;; data-resident patches, after the code-resident ones. dcode targets are
+;; labels so the optimizer can move code without breaking jump tables.
+(define c4r:emit-dpatches (lambda (DP Out At LT)
+	(if (empty? DP) Out (begin
+		(define P (head DP))
+		(string:word! Out At (if (= 'dcode (head P)) -3 -4))
+		(string:word! Out (+ At W) (second P))
+		(string:word! Out (+ At (* 2 W))
+			(if (= 'dcode (head P)) (c4r:label LT (third P)) (third P)))
+		(next c4r:emit-dpatches (tail DP) Out (+ At (* 3 W)) LT)))))
 
 (define c4r:emit-words (lambda (Words Out At)
 	(if (empty? Words) Out (begin

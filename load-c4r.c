@@ -65,9 +65,16 @@ enum {
 
 // Patch type. Apart from these, the patch type refers
 // to an id in the symbols table.
+// CODE/DATA patches land in the code segment (their address is a word
+// offset into it); DCODE/DDATA land in the data segment (their address
+// is a byte offset into it). The value side names the target segment.
+// The data-resident pair exists for initialized globals that hold
+// pointers, and for switch jump tables kept in data.
 enum {
-	C4R_PTYPE_CODE = -1,
-	C4R_PTYPE_DATA = -2
+	C4R_PTYPE_CODE  = -1,  // code word -> code address
+	C4R_PTYPE_DATA  = -2,  // code word -> data address
+	C4R_PTYPE_DCODE = -3,  // data word -> code address
+	C4R_PTYPE_DDATA = -4   // data word -> data address
 };
 
 // Patch Structure
@@ -200,6 +207,8 @@ void c4r_dump_patches (int *c4r) {
 		printf("  patch type ");
 		if (patch[C4R_PAT_TYPE] == C4R_PTYPE_CODE) printf("CODE");
 		else if(patch[C4R_PAT_TYPE] == C4R_PTYPE_DATA) printf("DATA");
+		else if(patch[C4R_PAT_TYPE] == C4R_PTYPE_DCODE) printf("DCODE");
+		else if(patch[C4R_PAT_TYPE] == C4R_PTYPE_DDATA) printf("DDATA");
 		else printf("symbols[%d]", patch[C4R_PAT_TYPE]);
 		printf(" address 0x%x value 0x%x\n", patch[C4R_PAT_ADDRESS], patch[C4R_PAT_VALUE]);
 		patch = patch + C4R_PAT__Sz;
@@ -477,6 +486,10 @@ int *c4r_load_opt_real (char *file, int options) {
 						 //      *(code + target[C4R_PAT_ADDRESS]),
 						//	    (code + target[C4R_PAT_VALUE]));
 						*(code + paddr) = (int)(((char *)data) + pvalu);
+					} else if(ptype == C4R_PTYPE_DCODE) {
+						*(int *)(((char *)data) + paddr) = (int)(code + pvalu);
+					} else if(ptype == C4R_PTYPE_DDATA) {
+						*(int *)(((char *)data) + paddr) = (int)(((char *)data) + pvalu);
 					} else {
 						//printf("lc4r: unexpected patch type %d (not %d or %d)\n", target[C4R_PAT_TYPE], C4R_PTYPE_CODE, C4R_PTYPE_DATA);
 						//return c4r;

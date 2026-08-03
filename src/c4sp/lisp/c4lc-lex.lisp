@@ -27,6 +27,15 @@
 
 (define lex:src "")     ;; source being scanned
 (define lex:len 0)
+;; Preprocessor mode (L9). Off by default, so a source that has
+;; already been through gcc -E lexes exactly as it always did: '#'
+;; lines are skipped whole. On, '#' becomes a token, a backslash at
+;; end of line splices the next line WITHOUT advancing the line
+;; counter (so a multi-line #define stays one logical line, which is
+;; how the preprocessor finds where a directive ends), and the header
+;; name in #include <...> comes back as one token instead of a dozen.
+(define lex:pp false)
+(define lex:want-header false)
 (define lex:val 0)      ;; mailbox: value from the number scanners
 (define lex:oplen 1)    ;; mailbox: bytes consumed by lex:op
 
@@ -78,6 +87,20 @@
 ;; ---- scanners: each returns the index after the consumed text ----
 
 ;; to end of line, leaving the newline for the main loop's counter
+(define lex:lparen? (lambda (i)
+	(if (>= i lex:len) false
+	(= (string:byte lex:src i) 40))))
+
+(define lex:eol? (lambda (i)
+	(if (>= i lex:len) false
+	(= (string:byte lex:src i) 10))))
+
+;; end of a <...> header name, at the '>'
+(define lex:hdrend (lambda (i)
+	(if (>= i lex:len) i
+	(if (= (string:byte lex:src i) 62) i
+	(next lex:hdrend (+ i 1))))))
+
 (define lex:skipline (lambda (i)
 	(if (>= i lex:len) i
 	(if (= (string:byte lex:src i) 10) i
@@ -210,16 +233,46 @@
 	(begin
 		(define c (string:byte lex:src i))
 		(define j (+ i 1))
-		(if (= c 10) (next lex:go j (+ line 1) acc)
+		(if (if (= c 92) (lex:eol? j) false)
+			;; backslash-newline: splice, same logical line
+			(next lex:go (+ j 1) line acc)
+		(if (= c 10)
+			(begin
+				(set! lex:want-header false)
+				(next lex:go j (+ line 1) acc))
 		(if (<= c 32) (next lex:go j line acc)
-		(if (= c 35) (next lex:go (lex:skipline j) line acc)
+		(if (= c 35)
+			(if lex:pp
+				(next lex:go j line (lex:cons (list 'Hash 0 line) acc))
+			(next lex:go (lex:skipline j) line acc))
+		(if (if lex:want-header (= c 60) false)
+			;; #include <name>: one token, not a stream of operators
+			(begin
+				(define e (lex:hdrend j))
+				(set! lex:want-header false)
+				(next lex:go (+ e 1) line (lex:cons
+					(list 'Str (string:substr lex:src j (- e j)) line) acc)))
 		(if (lex:identstart? c)
 			(begin
 				(define e (lex:identend j))
 				(define name (string:substr lex:src i (- e i)))
 				(define kw (lex:kwlook lex:keywords name))
+				;; arm the <...> header scan; cleared at end of line,
+				;; so it only bites on an actual #include line
+				(if lex:pp
+					(if (= name "include") (set! lex:want-header true) nil) nil)
+				;; In pp mode an identifier carries a fourth field: 1
+				;; when '(' TOUCHES it. That single bit is what
+				;; separates "#define ADD(a,b) ..." (function-like)
+				;; from "#define TWO (x + y)" (object-like whose body
+				;; happens to start with a paren) -- the standard
+				;; draws the line at the space, so the lexer must be
+				;; the one to notice it.
 				(next lex:go e line (lex:cons
-					(if kw (list kw 0 line) (list 'Id name line)) acc)))
+					(if kw (list kw 0 line)
+						(if lex:pp
+							(list 'Id name line (if (lex:lparen? e) 1 0))
+						(list 'Id name line))) acc)))
 		(if (lex:digit? c)
 			(begin
 				(define e (lex:number i c))
@@ -256,7 +309,7 @@
 			(if k
 				(next lex:go (+ i lex:oplen) line
 					(lex:cons (list k 0 line) acc))
-			(next lex:go j line acc)))))))))))))))  ;; unknown byte: skip, as c4cc
+			(next lex:go j line acc)))))))))))))))))  ;; unknown byte: skip, as c4cc
 
 ;; ---- entry points ----
 

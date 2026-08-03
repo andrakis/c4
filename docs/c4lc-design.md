@@ -294,21 +294,36 @@ battery green and adds its own target.
   stubs for prototype-only calls (c4cc compiles those into unresolved
   extern jumps; c4m.c's never-taken float branch needs exactly this).
   See §11 for measurements.
-- **L9 — preprocessor (future goal, not yet scheduled).** c4lc still
-  leans on the host's `gcc -E` (the Makefile's PREPROC) for
-  `#include` / `#define` / `#if` — the last host-toolchain
-  dependency in the pipeline. A native c4sp preprocessor removes it:
-  C4IX modules could then be compiled entirely in-OS (today
-  test_ramcc-style in-kernel compiles only work for sources that
-  need no cpp), and the L5 host-independence property would extend
-  to the whole build. Scope when it lands: quoted + `-I` includes
-  with include guards, object-like and function-like macros
-  (including the `va_arg(AP, TYPE)` shapes the stdarg contract
-  depends on), `#ifdef`/`#ifndef`/`#if` with the constant
-  expressions the c4 sources actually use, `#undef`, and `# line`
-  markers preserved for diagnostics. Oracle: `gcc -E` itself —
-  preprocess the full corpus both ways and require token-identical
-  streams, the same differential pattern as L0.
+- **L9 — preprocessor.** DONE (c4lc-pp.lisp, `-P` / `-I` / `-D`).
+  The last host-toolchain dependency is gone: c4lc preprocesses for
+  itself, and all of C4IX -- kernel, library and userland -- now
+  builds with no `gcc -E` anywhere.
+  It works on TOKENS, not text, which is the only way expansion is
+  correct. The lexer gained a pp mode (off by default, so sources
+  already through gcc -E lex exactly as before): `#` becomes a Hash
+  token, a backslash at end of line splices without advancing the
+  line counter, `<header>` comes back as one token, and an identifier
+  carries a fourth field saying whether `(` TOUCHED it. That last bit
+  is load-bearing -- it is the only thing separating
+  `#define ADD(a,b) ...` from `#define TWO (x+y)`, and the standard
+  draws the line exactly at that space.
+  Supported: `#include` (`"..."` and `<...>`, searched along -I),
+  `#define` object- and function-like, `#undef`, `#ifdef`, `#ifndef`,
+  `#if`/`#elif`/`#else`/`#endif` with a real constant-expression
+  evaluator (defined(), literals, macros, `!` `-` `*` `/` `+` `<`
+  `>` `<=` `>=` `==` `!=` `&&` `||`), and gcc's `# 123 "file"`
+  markers, skipped so already-preprocessed input still works.
+  Rejected rather than mis-expanded: stringize (`#param`) and paste
+  (`##`); nothing in this tree uses them.
+  A wrinkle worth recording: `#if` and `#else` lex as C KEYWORDS, not
+  identifiers, so the directive dispatcher maps them back -- without
+  that both silently do nothing and every `#endif` looks unbalanced.
+  Verified two ways in test-c4lc: src/tests/c4lc_pp.c exercises every
+  supported construct against committed gcc-verified output, and --
+  the property that actually matters -- preprocessing a real C4IX
+  module with c4lc instead of gcc -E produces a BYTE-IDENTICAL
+  object. That held for all eleven kernel modules, and the X5 boot
+  pins are unchanged with gcc gone from the build.
 
 ## 11. Measured results (2026-08-03)
 

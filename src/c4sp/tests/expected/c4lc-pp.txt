@@ -1,0 +1,4 @@
+guarded 2
+taken_if 5
+taken_elif 8
+nested 30

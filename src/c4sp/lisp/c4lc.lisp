@@ -18,6 +18,9 @@
 	(load "c4r.lisp")
 	(define Opt false)
 	(define Obj false)
+	(define Pp false)          ;; -P: preprocess internally (L9)
+	(define Paths nil)
+	(define PreDefs nil)
 	(define Args argv)
 	(define flags (lambda ()
 		(if (empty? Args) nil
@@ -25,13 +28,37 @@
 			(begin (set! Opt true) (set! Args (tail Args)) (next flags))
 		(if (= (+ "" (head Args)) "-c")
 			(begin (set! Obj true) (set! Args (tail Args)) (next flags))
-		nil)))))
+		;; -P runs c4lc's own preprocessor instead of expecting a
+		;; source that gcc -E has already been through. -I adds an
+		;; include directory, -D predefines a macro.
+		(if (= (+ "" (head Args)) "-P")
+			(begin (set! Pp true) (set! Args (tail Args)) (next flags))
+		(if (= (+ "" (head Args)) "-I")
+			(begin
+				(set! Pp true)
+				(set! Paths (+ Paths (list (+ "" (index Args 1)))))
+				(set! Args (tail (tail Args)))
+				(next flags))
+		(if (= (+ "" (head Args)) "-D")
+			(begin
+				(set! Pp true)
+				(set! PreDefs (+ PreDefs (list (+ "" (index Args 1)))))
+				(set! Args (tail (tail Args)))
+				(next flags))
+		nil))))))))
 	(flags)
 	(if (< (length Args) 2) (error "usage: c4lc.lisp [-O] [-c] in.c out"))
 	(define In (head Args))
 	(define OutName (index Args 1))
 	(set! gen:objmode Obj)
-	(define Ast (parse:program (lex:file In)))
+	(define Ast (parse:program
+		(if Pp
+			(begin
+				(load "c4lc-pp.lisp")
+				(set! pp:paths Paths)
+				(pp:predefines PreDefs)
+				(pp:file In))
+		(lex:file In))))
 	(if Opt
 		(begin
 			;; L6 tree passes first (fold, dead branches, dead

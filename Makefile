@@ -323,9 +323,10 @@ c4m-lc.c4r: c4sp $(C4LC_LISP) c4m.c
 C4IX_SRC  := src/c4ix
 C4IX_MODS := boot con va host sl4b task sched vfs sys loader init
 c4ix.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/c4ix.h $(patsubst %,$(C4IX_SRC)/%.c,$(C4IX_MODS))
+	@# No gcc here: c4lc preprocesses the modules itself (L9). Each
+	@# object is byte-identical to the gcc -E path, pinned by test-c4lc.
 	for m in $(C4IX_MODS); do \
-		$(PREPROC) $(C4IX_SRC)/$$m.c > .c4ix_$$m.pp.c || exit 1; \
-		./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O -c .c4ix_$$m.pp.c .c4ix_$$m.c4o > /dev/null || exit 1; \
+		./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC) $(C4IX_SRC)/$$m.c .c4ix_$$m.c4o > /dev/null || exit 1; \
 	done
 	$(C4RLINK) $(patsubst %,.c4ix_%.c4o,$(C4IX_MODS)) -o c4ix.c4r
 	rm -f .c4ix_*.pp.c .c4ix_*.c4o
@@ -338,15 +339,13 @@ c4ix-hello.c4r: c4sp $(C4LC_LISP) $(C4IX_SRC)/user/hello.c
 
 # libc4ix, the userland C library, as a c4rlink archive
 libc4ix.c4l: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/lib/libc4ix.c $(C4IX_SRC)/include/c4ix_user.h
-	$(PREPROC) -I$(C4IX_SRC)/include $(C4IX_SRC)/lib/libc4ix.c > .c4ix_lib.pp.c
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O -c .c4ix_lib.pp.c .c4ix_lib.c4o > /dev/null
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC)/include $(C4IX_SRC)/lib/libc4ix.c .c4ix_lib.c4o > /dev/null
 	$(C4RLINK) -r .c4ix_lib.c4o -o libc4ix.c4l
 	rm -f .c4ix_lib.pp.c .c4ix_lib.c4o
 
 # userland programs built against the library: all IO via syscalls
 c4ix-%.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libc4ix.c4l $(C4IX_SRC)/user/%.c
-	$(PREPROC) -I$(C4IX_SRC)/include $(C4IX_SRC)/user/$*.c > .c4ix_u.pp.c
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O -c .c4ix_u.pp.c .c4ix_u.c4o > /dev/null
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC)/include $(C4IX_SRC)/user/$*.c .c4ix_u.c4o > /dev/null
 	$(C4RLINK) .c4ix_u.c4o libc4ix.c4l -o $@
 	rm -f .c4ix_u.pp.c .c4ix_u.c4o
 
@@ -401,11 +400,14 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/c4lc-ast.lisp src/tests/c4lc_lex_sample.c | cmp - src/c4sp/tests/expected/c4lc-ast.txt
 	# L1: every c4cc-compilable test source parses. genfloat.c and
 	# test_illins.c are excluded because c4cc itself rejects them (c4lc
-	# fails at the same constructs); the vararg tests go through the
-	# preprocessor, exactly as c4cc receives them.
+	# fails at the same constructs); c4lc_pp.c is excluded because it
+	# is the L9 preprocessor test and is only meaningful with -P (this
+	# sweep deliberately runs without it); the vararg tests go through
+	# the preprocessor, exactly as c4cc receives them.
 	for f in src/tests/*.c; do \
 		case $$f in \
 		*/genfloat.c|*/test_illins.c) continue;; \
+		*/c4lc_pp.c) continue;; \
 		*/oldtest_vararg*.c|*/oldvararg3.c|*/test_vprintf.c|*/vararg*.c) \
 			$(PREPROC) $$f > .c4lc_pp.c 2>/dev/null; \
 			./c4sp -c 4000000 src/c4sp/lisp/c4lc-ast.lisp -check .c4lc_pp.c | grep -q "^parse ok" || exit 1;; \
@@ -531,6 +533,20 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp .c4lc_pp.c .c4lc_ol.c4r > /dev/null
 	./c4m load-c4r.c -- .c4lc_ol.c4r | cmp - src/c4sp/tests/expected/c4lc-extdata.txt
 	rm -f .c4lc_oa1.c4o .c4lc_ob1.c4o .c4lc_oa2.c4o .c4lc_ob2.c4o .c4lc_ol.c4r
+	# L9: c4lc's own preprocessor. First the feature battery against
+	# committed gcc-verified output (includes, object- and
+	# function-like macros, line continuation, nesting, #ifdef/#ifndef
+	# /#if/#elif/#else/#endif with constant expressions, #undef).
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -P $(TESTS)/c4lc_pp.c .c4lc_b.c4r > /dev/null
+	./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-pp.txt
+	# Then the property that matters: preprocessing a real module
+	# with c4lc instead of gcc -E must produce the SAME OBJECT, byte
+	# for byte. If that holds, gcc is no longer in the pipeline.
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix src/c4ix/vfs.c .c4lc_oa2.c4o > /dev/null
+	$(PREPROC) src/c4ix/vfs.c > .c4lc_pp.c
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O -c .c4lc_pp.c .c4lc_ob2.c4o > /dev/null
+	cmp .c4lc_oa2.c4o .c4lc_ob2.c4o
+	rm -f .c4lc_oa2.c4o .c4lc_ob2.c4o
 	# L5, the bootstrap battery: c4lc -O compiles the interpreter it
 	# runs on, and the result must run the Lisp samples (call/cc
 	# exercises the CEK machine), the byte-level c4r roundtrip, and

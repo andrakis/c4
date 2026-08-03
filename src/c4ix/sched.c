@@ -29,6 +29,7 @@ static int sched_on_c4m;
 static int sched_interval;   // preemption interval, 0 = cooperative only
 static int sched_lockdepth;
 static int sched_tramp;      // address of the trampoline's LEV
+static int sched_intrap;     // inside the trap handler: no re-entry
 
 int sched_switches;          // context switches since boot
 
@@ -42,8 +43,11 @@ struct task *sched_current() {
 
 // ---- preemption masking (c4m only; nestable) ----
 
+// Inside the trap handler the interrupt is already off and the
+// handler re-arms it on the way out, so the hardware half is skipped
+// there -- re-arming mid-handler would invite a nested interrupt.
 void sched_lock() {
-    if (sched_on_c4m) {
+    if (sched_on_c4m && !sched_intrap) {
         if (sched_lockdepth == 0 && sched_interval)
             __c4_configure(C4IX_CONF_INTERVAL, 0);
     }
@@ -52,34 +56,88 @@ void sched_lock() {
 
 void sched_unlock() {
     --sched_lockdepth;
-    if (sched_on_c4m) {
+    if (sched_on_c4m && !sched_intrap) {
         if (sched_lockdepth == 0 && sched_interval)
             __c4_configure(C4IX_CONF_INTERVAL, sched_interval);
     }
 }
 
+int sched_in_trap() {
+    return sched_intrap;
+}
+
 // ---- picking the next task ----
 
-// Round-robin from t: the next TS_READY task, or t itself.
+// A TS_WAITING task becomes runnable once the task it waits on is a
+// zombie. Completing the wait here delivers the exit code twice
+// over: into wait_result for a kernel caller blocked in task_wait,
+// and into sv_a for a user task parked mid-syscall -- the switch
+// restores sv_a into the accumulator, which is exactly where the
+// SYS_WAIT opcode's result belongs.
+static int sched_waitdone(struct task *n) {
+    struct task *w;
+    if (n->state != TS_WAITING) return 0;
+    if ((w = task_get(n->wait_for))) {
+        if (w->state != TS_ZOMBIE) return 0;
+        n->wait_result = w->exitcode;
+        task_release(w);
+    } else {
+        n->wait_result = -1;   // target vanished: nothing to reap
+    }
+    n->sv_a = n->wait_result;
+    n->state = TS_READY;
+    return 1;
+}
+
+// Round-robin from t: the next runnable task, or t itself.
 static struct task *sched_pick(struct task *t) {
     struct task *n;
     n = task_next(t);
     while (n != t) {
         if (n->state == TS_READY) return n;
+        if (sched_waitdone(n)) return n;
         n = task_next(n);
     }
+    sched_waitdone(t);   // t itself may be waiting on a finished task
     return t;
 }
 
 // ---- the c4m backend: switching inside a trap handler ----
 
-// Serves both the soft yield trap and the hard cycle interrupt.
-// Assigning to a/bp/sp/returnpc changes where TLEV resumes.
+// The kernel's single trap entry: yields, preemption, syscalls and
+// protected-mode violations all arrive here. Assigning to the
+// a/bp/sp/returnpc/mode parameters changes what TLEV resumes with --
+// that is both the context switch and the syscall return path.
+//
+// c4m enters a handler unprotected with the cycle interrupt off, so
+// the kernel always runs privileged; the mode assignment on the way
+// out is what puts a user task back behind the boundary.
 static void sched_trap(int trap, int param, int mode, int a, int bp, int sp, int returnpc) {
     struct task *t, *n;
 
     // no nested switches while kernel structures move
     __c4_configure(C4IX_CONF_INTERVAL, 0);
+
+    // Syscall gateway: an opcode c4m does not know. Non-syscall
+    // illegal opcodes are a fault, not a request.
+    // In-trap services must not re-enter the trap machinery: yield
+    // and exit become state changes that the switch below acts on.
+    sched_intrap = 1;
+    if (trap == C4IX_TRAP_ILLOP) {
+        if (param >= SYS_BASE && param < SYS_TOP) {
+            // OPCD leaves the syscall number at *sp with the
+            // arguments above it. Cast BEFORE the offset: sp is an
+            // int parameter, so "sp + 1" would step one byte.
+            a = sys_dispatch(param, (int *)sp + 1);
+        } else {
+            kprintf("c4ix: task %d hit illegal opcode %d\n",
+                sched_cur ? sched_cur->id : -1, param);
+            task_exit(-1);
+        }
+    } else if (trap == C4IX_TRAP_PM) {
+        sys_pmviolation(param, (int *)sp, (int *)returnpc, &a);
+    }
+    sched_intrap = 0;
 
     t = sched_cur;
     n = sched_pick(t);
@@ -100,7 +158,16 @@ static void sched_trap(int trap, int param, int mode, int a, int bp, int sp, int
         n->state = TS_RUNNING;
         sched_cur = n;
         ++sched_switches;
+    } else if (t->state == TS_ZOMBIE) {
+        // The task died and nothing else is runnable: with no context
+        // to resume, the kernel cannot return from this trap.
+        kputs("c4ix: panic: last task exited with nothing to switch to\n");
+        exit(-1);
     }
+
+    // A user task resumes behind the boundary; the kernel does not.
+    mode = (sched_cur->privs == PRIV_USER)
+        ? C4IX_MODE_PROTECTED : C4IX_MODE_UNPROTECTED;
 
     if (sched_interval && sched_lockdepth == 0)
         __c4_configure(C4IX_CONF_INTERVAL, sched_interval);
@@ -143,6 +210,9 @@ static void coop_switch(struct task *next) {
 void sched_yield() {
     struct task *n;
     if (!sched_cur) return;
+    // Already inside the trap handler: it switches on the way out,
+    // which IS the yield. Raising another trap here would nest.
+    if (sched_intrap) return;
     if (sched_on_c4m) {
         __c4_trap(C4IX_TRAP_SOFT_IRQ, 0);
         return;
@@ -172,15 +242,30 @@ static int task_shim(int entry, int argc, int argv) {
 void task_exit(int code) {
     sched_cur->exitcode = code;
     sched_cur->state = TS_ZOMBIE;
-    while (1) sched_yield();   // a zombie is never picked again
+    // From inside the trap handler, marking the zombie is enough:
+    // the switch on the way out picks someone else and never comes
+    // back. Outside, spin on yield -- a zombie is never picked again.
+    if (sched_intrap) return;
+    while (1) sched_yield();
 }
 
+// Block until t exits. No spinning: the caller parks in TS_WAITING
+// and sched_waitdone wakes it with the exit code once t is a zombie
+// (and has reaped t by then -- t must not be touched after waking).
 int task_wait(struct task *t) {
+    struct task *me;
     int code;
-    while (t->state != TS_ZOMBIE) sched_yield();
-    code = t->exitcode;
-    task_release(t);
-    return code;
+
+    if (t->state == TS_ZOMBIE) {
+        code = t->exitcode;
+        task_release(t);
+        return code;
+    }
+    me = sched_cur;
+    me->wait_for = t->id;
+    me->state = TS_WAITING;
+    while (me->state == TS_WAITING) sched_yield();
+    return me->wait_result;
 }
 
 // Build the stack + fake frame that makes a never-run task resumable

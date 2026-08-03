@@ -26,7 +26,49 @@ enum { HOST_C4 = 0, HOST_C4M = 1 };
 // c4m trap machinery numbers (c4m.c enums), used by sched.c on the
 // c4m host only.
 enum { C4IX_CONF_INTERVAL = 0, C4IX_CONF_HANDLER = 1 };
-enum { C4IX_TRAP_ILLOP = 0, C4IX_TRAP_HARD_IRQ = 1, C4IX_TRAP_SOFT_IRQ = 2 };
+enum {
+    C4IX_TRAP_ILLOP = 0,        // unknown opcode: the syscall gateway
+    C4IX_TRAP_HARD_IRQ = 1,     // cycle interrupt: preemption
+    C4IX_TRAP_SOFT_IRQ = 2,     // __c4_trap: cooperative yield
+    C4IX_TRAP_SIGNAL = 3,
+    C4IX_TRAP_SEGV = 4,
+    C4IX_TRAP_OPV = 5,
+    C4IX_TRAP_PM = 6            // syscall opcode executed in protected mode
+};
+// c4m mode register values, assigned into the trap handler's own
+// parameter to choose the mode a task resumes in.
+enum { C4IX_MODE_UNPROTECTED = 0, C4IX_MODE_PROTECTED = 1 };
+// the guarded host opcodes C4IX services on behalf of user tasks
+enum {
+    C4IX_OP_OPEN = 30, C4IX_OP_READ = 31, C4IX_OP_CLOS = 32,
+    C4IX_OP_PRTF = 33, C4IX_OP_MALC = 34, C4IX_OP_FREE = 35,
+    C4IX_OP_EXIT = 38, C4IX_OP_PUTC = 39, C4IX_OP_PUTS = 40
+};
+
+// ---- the syscall interface (sys.c) ----
+// Userland reaches these through libc4ix (src/c4ix/lib/libc4ix.c),
+// never directly: on c4m a stub executes custom opcode SYS_* which
+// c4m does not know, raising TRAP_ILLOP into the kernel; on plain c4,
+// where no trap machinery exists, the stub calls the kernel's
+// dispatcher through the systable the loader injected.
+enum {
+    SYS_BASE = 200,
+    SYS_WRITE = 200, SYS_READ = 201, SYS_OPEN = 202, SYS_CLOSE = 203,
+    SYS_EXIT = 204, SYS_YIELD = 205, SYS_SPAWN = 206, SYS_WAIT = 207,
+    SYS_SBRK = 208, SYS_GETPID = 209,
+    SYS_TOP = 210
+};
+// file descriptors. X2 keeps one global table; X3 makes it per-task
+// and adds vnodes, pipes and dup2.
+enum { FD_STDIN = 0, FD_STDOUT = 1, FD_STDERR = 2, FD_MAX = 32 };
+
+int  sys_dispatch(int num, int *args);   // args[0]=first, args[1]=second...
+int  sys_write(int fd, char *buf, int len);
+int  sys_read(int fd, char *buf, int len);
+int  sys_open(char *path, int flags);
+int  sys_close(int fd);
+void sys_pmviolation(int op, int *sp, int *returnpc, int *a);
+int  sys_console_fd(int fd);             // 1 if fd is a console stream
 
 int   host_detect();
 int   host_info();
@@ -86,7 +128,14 @@ void  sl4b_stats();
 // task_next() wraps from the tail back to the head: that round-robin
 // walk is the loop the scheduler context-switches along.
 enum { TASK_NAME_MAX = 16 };
-enum { TS_READY = 1, TS_RUNNING = 2, TS_ZOMBIE = 3 };
+enum { TS_READY = 1, TS_RUNNING = 2, TS_ZOMBIE = 3, TS_WAITING = 4 };
+// Privilege level. PRIV_USER tasks resume in c4m's protected mode:
+// host syscall opcodes trap to the kernel instead of executing, so
+// all their IO goes through sys.c whether they ask nicely (libc4ix
+// syscalls) or not (a raw printf gets emulated onto the fd layer).
+// Plain c4 has no protected mode; everything runs PRIV_KERNEL there
+// and the boundary is a convention rather than an enforcement.
+enum { PRIV_KERNEL = 0, PRIV_USER = 1 };
 // How a suspended task's context is saved (sched.c):
 //   SV_NONE   running, or the adopted boot context (nothing saved)
 //   SV_FRAME  a (frame, saved_bp, saved_pc) triple for the LEV path;
@@ -108,12 +157,17 @@ struct task {
     int  stack;                // malloc'd stack base, 0 for the boot task
     int  img_code;             // loaded .c4r segments to free on reap,
     int  img_data;             //   0 for kernel-code tasks
+    int  privs;                // PRIV_*
+    int  nsyscalls;            // syscalls serviced, for the X2 report
+    int  wait_for;             // TS_WAITING: the task id being waited on
+    int  wait_result;          // exit code delivered when the wait completes
     char name[TASK_NAME_MAX];
 };
 
 // The list head is shared extern data (c4lc L8 extern-data support:
 // references resolve through symbol patches at link time).
 extern struct task *task_head;
+extern int task_last_syscalls;   // syscalls made by the last reaped task
 
 struct task *task_create(char *name, int entry, int argc, int argv);
 struct task *task_adopt(char *name);
@@ -140,6 +194,7 @@ void         sched_lock();     // disable preemption (nestable)
 void         sched_unlock();
 struct task *sched_current();
 int          sched_forge(struct task *t, int entry, int argc, int argv);
+int          sched_in_trap();  // servicing a trap: no re-entry allowed
 void         task_exit(int code);
 int          task_wait(struct task *t);
 extern int   sched_switches;   // context switches since boot
@@ -155,6 +210,7 @@ struct c4r_image {
 
 int          c4r_load(char *path, struct c4r_image *img);
 struct task *task_spawn(char *path, int argc, int argv);
+struct task *task_spawn_priv(char *path, int argc, int argv, int privs);
 
 // ---- init (init.c) ----
 int init_main(int argc, int argv);

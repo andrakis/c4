@@ -75,7 +75,7 @@ static int busy_b(int argc, int argv) {
 int init_main(int argc, int argv) {
     struct task *a, *b;
     char **av;
-    int ra, rb;
+    int ra, rb, n;
 
     kprintf("init: c4ix init v1 on %s\n", host_name());
 
@@ -104,15 +104,24 @@ int init_main(int argc, int argv) {
         kprintf("init: no preemption on this host, skipping busy demo\n");
     }
 
-    // act 3: spawn a program from the host filesystem
+    // act 3: spawn programs from the host filesystem. Each runs as
+    // userland -- behind protected mode where the host provides it --
+    // so every one of their syscalls passes through sys.c, whether
+    // the program asks through libc4ix or just calls printf.
     if (argc > 1) {
         av = (char **)argv;
-        if ((a = task_spawn(av[1], argc - 1, (int)(av + 1)))) {
-            kprintf("init: spawned '%s' as task %d\n", a->name, a->id);
-            ra = task_wait(a);
-            kprintf("init: '%s' exited %d\n", av[1], ra);
-        } else {
-            kprintf("init: spawn of '%s' failed\n", av[1]);
+        n = 1;
+        while (n < argc) {
+            if ((a = task_spawn(av[n], argc - n, (int)(av + n)))) {
+                kprintf("init: spawned '%s' as task %d (%s)\n", a->name, a->id,
+                    a->privs == PRIV_USER ? "protected" : "unprotected");
+                ra = task_wait(a);
+                kprintf("init: '%s' exited %d after %d syscalls\n",
+                    av[n], ra, task_last_syscalls);
+            } else {
+                kprintf("init: spawn of '%s' failed\n", av[n]);
+            }
+            ++n;
         }
     }
 

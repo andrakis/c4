@@ -13,6 +13,7 @@
 #include "c4ix.h"
 
 struct task *task_head;
+int task_last_syscalls;      // syscalls made by the most recently reaped task
 static struct task *task_tail;
 static struct sl4b_cache *task_cache;
 static int ntasks;
@@ -91,6 +92,7 @@ void task_unlink(struct task *t) {
 // Unlink and free everything a task owns. Never called on the
 // running task: you cannot free the stack you stand on.
 void task_release(struct task *t) {
+    task_last_syscalls = t->nsyscalls;
     task_unlink(t);
     if (t->stack) free((int *)t->stack);
     if (t->img_code) free((int *)t->img_code);

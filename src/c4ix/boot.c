@@ -1,16 +1,16 @@
 //
-// C4IX X1: boot.
+// C4IX X2: boot.
 //
-// Nine .c4o objects (boot, con, va, host, sl4b, task, sched, loader,
-// init) compiled by c4lc -O -c and linked by c4rlink. Boots natively
-// under c4m with preemptive scheduling; degraded under plain c4
-// through the c4l loader with cooperative scheduling -- host_detect()
+// Ten .c4o objects (boot, con, va, host, sl4b, task, sched, sys,
+// loader, init) compiled by c4lc -O -c and linked by c4rlink. Boots
+// natively under c4m with preemptive scheduling and protected user
+// tasks; degraded under plain c4 through the c4l loader with
+// cooperative scheduling and no hardware boundary -- host_detect()
 // tells the two apart with one INFO opcode.
 //
-// X1 scope: the scheduler. Boot adopts itself as the idle task,
-// starts init, and runs the round-robin until every other task is
-// done. init demonstrates cooperative yields, preemption (c4m), and
-// spawning a .c4r image from the host filesystem.
+// X2 scope: the syscall layer. User tasks run behind protected mode,
+// so their IO reaches the kernel whether they ask through libc4ix or
+// just call printf and get trapped.
 //
 
 #include "c4ix.h"
@@ -21,11 +21,11 @@ int main(int argc, char **argv) {
     struct task *t;
     int info;
 
-    kprintf("C4IX X1 booting\n");
+    kprintf("C4IX X2 booting\n");
     info = host_detect();
     kprintf("c4ix: host %s, info 0x%x\n", host_name(), info);
     kprintf("c4ix: protected mode %s, preemption %s\n",
-        host_has(C4IX_I_PROT) ? "available" : "unavailable",
+        host_has(C4IX_I_PROT) ? "on for user tasks" : "unavailable",
         host_type() == HOST_C4M ? "on" : "unavailable (cooperative)");
 
     sched_init(host_type() == HOST_C4M ? PREEMPT_INTERVAL : 0);

@@ -111,9 +111,9 @@ loading or assigning a whole struct is an error.
   allocation moves from malloc-per-task to **SL4B**, a Linux-style
   slab allocator with per-struct caches (tasks first; fds and vnodes
   join it in X3).
-- **X2 — syscalls.** Protected mode on, trap-based syscall layer:
-  write/read/open/close/spawn/wait/exit/yield/sbrk. Userland libc4ix
-  (printf over write) as a `.c4l` library.
+- **X2 — syscalls.** DONE, see §6. Protected mode on, trap-based
+  syscall layer: write/read/open/close/spawn/wait/exit/yield/sbrk/
+  getpid. Userland libc4ix (printf over write) as a `.c4l` library.
 - **X3 — IO.** Per-task fd table, vnode layer: console, RAM files,
   pipes. `dup2`, and with it redirection.
 - **X4 — shell.** c4ix-sh: argv parsing, `>` `<` `|` `&`, builtin cd/
@@ -202,3 +202,33 @@ loading or assigning a whole struct is an error.
       both hosts, and the preemption demo prints only booleans
       (busy tasks that never yield each observed the other mid-run),
       verified stable across preemption intervals 7777/10000/43210.)
+- [x] X2 syscalls (2026-08-03: sys.c joins the kernel, libc4ix.c4l
+      and c4ix_user.h join userland. TWO DOORS, one dispatcher:
+      (a) the gateway -- userland executes custom opcode SYS_* (>=
+      200), unknown to c4m, so it raises TRAP_ILLOP into the same
+      handler that does context switches; (b) plain c4 has no traps
+      at all, so the loader injects &sys_dispatch into the image's
+      __c4ix_systable global (found by walking the .c4r symbol
+      section) and libc4ix calls it directly. libc4ix picks its door
+      once, in its constructor, by whether the slot was filled.
+      Spawned tasks are PRIV_USER and resume in c4m's protected mode
+      -- the handler assigns its own `mode` parameter, which TLEV
+      loads. So a program that never heard of C4IX and just calls
+      printf traps on PRTF and gets EMULATED onto sys_write: the
+      argument count comes from returnpc[1] (the compiler always
+      emits "PRTF; ADJ n"), which is how redirection reaches
+      unmodified binaries. c4m change: the EXIT guard, commented out
+      since the C4KE work, is enabled -- a protected task calling
+      exit() must not halt the VM. C4KE is unaffected (its PM is
+      compiled out) and `make test` confirms it.
+      Two performance bugs found and fixed by measurement, both
+      worth remembering: task_wait SPUN on sched_yield (now parks in
+      TS_WAITING and sched_waitdone delivers the exit code on wake),
+      and libc4ix's formatter wrote ONE CHARACTER PER SYSCALL --
+      through the trap gateway that is a kernel round trip per
+      letter. Buffered to one write per call, the uhello run went
+      from >30s to 0.107s.
+      Pins show the boundary working from both sides: on c4m the raw
+      printf program costs 2 syscalls (trapped and emulated) and the
+      libc4ix program 172; on plain c4 the same raw program costs 0
+      (no boundary to enforce) and libc4ix 9 via the direct door.)

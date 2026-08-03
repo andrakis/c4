@@ -1681,15 +1681,19 @@ int c4m_main(int argc, char **argv)
 	}
     break;
     case EXIT: {
-//		if (mode == MODE_UNPROTECTED) {
+		// Guarded like the other syscalls: a protected task calling
+		// exit() must not be able to halt the whole VM, so it traps
+		// and the kernel decides what "exit" means for that task.
+		// Unprotected code (including every kernel) is unaffected.
+		if (mode == MODE_UNPROTECTED) {
 			//printf("exit(%d) cycle = %d\n", *sp, cycle);
 			status = *sp; run = 0;
-//		} else {
-//			trap(TRAP_PM_VIOLATION, EXIT, trap_handler, &sp, &bp, &pc, a, mode);
-//			// Disable cycle interrupt and set unprotected mode
-//			cycle_interrupt_interval = 0;
-//			mode = MODE_UNPROTECTED;
-//		}
+		} else {
+			trap(TRAP_PM_VIOLATION, EXIT, trap_handler, &sp, &bp, &pc, a, mode);
+			// Disable cycle interrupt and set unprotected mode
+			cycle_interrupt_interval = 0;
+			mode = MODE_UNPROTECTED;
+		}
     } break;
     case _OPC: { // return an opcode
       a = __opcode((char *)*sp);

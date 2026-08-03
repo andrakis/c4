@@ -321,7 +321,7 @@ c4m-lc.c4r: c4sp $(C4LC_LISP) c4m.c
 # preprocessed, compiled to a .c4o object with full optimization, and
 # the kernel image is linked by c4rlink.
 C4IX_SRC  := src/c4ix
-C4IX_MODS := boot con va host sl4b task sched loader init
+C4IX_MODS := boot con va host sl4b task sched sys loader init
 c4ix.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/c4ix.h $(patsubst %,$(C4IX_SRC)/%.c,$(C4IX_MODS))
 	for m in $(C4IX_MODS); do \
 		$(PREPROC) $(C4IX_SRC)/$$m.c > .c4ix_$$m.pp.c || exit 1; \
@@ -330,23 +330,43 @@ c4ix.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/c4ix.h $(patsubst %,$(C4IX_SR
 	$(C4RLINK) $(patsubst %,.c4ix_%.c4o,$(C4IX_MODS)) -o c4ix.c4r
 	rm -f .c4ix_*.pp.c .c4ix_*.c4o
 
-# the spawn-test userland program
+# the spawn-test userland program: raw opcodes, no library. Under
+# protected mode its printf traps and the kernel emulates it onto the
+# fd layer -- redirection for programs that never heard of C4IX.
 c4ix-hello.c4r: c4sp $(C4LC_LISP) $(C4IX_SRC)/user/hello.c
 	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O $(C4IX_SRC)/user/hello.c c4ix-hello.c4r > /dev/null
 
-# X1 boot pins: the linked kernel boots natively on c4m (preemptive)
-# and degraded on plain c4 through the c4l loader (cooperative);
-# output is exact per host (host line and preemption demo differ by
-# design). The kernel spawns c4ix-hello.c4r from the host filesystem
-# and reports its exit code.
-test-c4ix: c4 c4m c4ix.c4r c4ix-hello.c4r
-	$(C4M) load-c4r.c -- c4ix.c4r c4ix-hello.c4r | cmp - $(C4IX_SRC)/tests/x1-c4m.txt
-	$(C4) c4l.c c4ix.c4r c4ix-hello.c4r | sed '/^exit([0-9-]*) cycle = /d' | cmp - $(C4IX_SRC)/tests/x1-c4.txt
+# libc4ix, the userland C library, as a c4rlink archive
+libc4ix.c4l: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/lib/libc4ix.c $(C4IX_SRC)/include/c4ix_user.h
+	$(PREPROC) -I$(C4IX_SRC)/include $(C4IX_SRC)/lib/libc4ix.c > .c4ix_lib.pp.c
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O -c .c4ix_lib.pp.c .c4ix_lib.c4o > /dev/null
+	$(C4RLINK) -r .c4ix_lib.c4o -o libc4ix.c4l
+	rm -f .c4ix_lib.pp.c .c4ix_lib.c4o
+
+# a userland program built against the library: all IO via syscalls
+c4ix-uhello.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libc4ix.c4l $(C4IX_SRC)/user/uhello.c
+	$(PREPROC) -I$(C4IX_SRC)/include $(C4IX_SRC)/user/uhello.c > .c4ix_uh.pp.c
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O -c .c4ix_uh.pp.c .c4ix_uh.c4o > /dev/null
+	$(C4RLINK) .c4ix_uh.c4o libc4ix.c4l -o c4ix-uhello.c4r
+	rm -f .c4ix_uh.pp.c .c4ix_uh.c4o
+
+# X2 boot pins: the linked kernel boots natively on c4m (preemptive,
+# user tasks behind protected mode) and degraded on plain c4 through
+# the c4l loader (cooperative, no hardware boundary). Output is exact
+# per host; the differences are by design and worth reading:
+# c4ix-hello.c4r calls printf directly, so on c4m it traps and the
+# kernel emulates it onto the fd layer (2 syscalls) while on plain c4
+# it reaches the host untouched (0 syscalls). c4ix-uhello.c4r goes
+# through libc4ix either way.
+C4IX_PROGS := c4ix-hello.c4r c4ix-uhello.c4r
+test-c4ix: c4 c4m c4ix.c4r $(C4IX_PROGS)
+	$(C4M) load-c4r.c -- c4ix.c4r $(C4IX_PROGS) | cmp - $(C4IX_SRC)/tests/x2-c4m.txt
+	$(C4) c4l.c c4ix.c4r $(C4IX_PROGS) | sed '/^exit([0-9-]*) cycle = /d' | cmp - $(C4IX_SRC)/tests/x2-c4.txt
 	@echo "test-c4ix: OK"
-run-c4ix: c4m c4ix.c4r c4ix-hello.c4r
-	$(C4M) load-c4r.c -- c4ix.c4r c4ix-hello.c4r
-run-c4ix-c4: c4 c4ix.c4r c4ix-hello.c4r
-	$(C4) c4l.c c4ix.c4r c4ix-hello.c4r
+run-c4ix: c4m c4ix.c4r $(C4IX_PROGS)
+	$(C4M) load-c4r.c -- c4ix.c4r $(C4IX_PROGS)
+run-c4ix-c4: c4 c4ix.c4r $(C4IX_PROGS)
+	$(C4) c4l.c c4ix.c4r $(C4IX_PROGS)
 # L0: golden token dump of a sample covering every token kind and c4cc
 # lexer quirk, native and under c4m, plus a full lex of c4cc.c itself
 # (whose token list needs a bigger cell arena than the default).

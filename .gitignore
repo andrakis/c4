@@ -13,6 +13,8 @@ c4cc.o
 c4m
 c4m.o
 u0.c4l
+libc4ix.c4l
+.cx_*
 
 c4rdump
 c4rlink

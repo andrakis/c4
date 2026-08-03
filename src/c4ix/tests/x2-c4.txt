@@ -1,0 +1,27 @@
+C4IX X2 booting
+c4ix: host c4 (degraded), info 0x0
+c4ix: protected mode unavailable, preemption unavailable (cooperative)
+c4ix: task 1 'init' created, scheduling
+init: c4ix init v1 on c4 (degraded)
+init: ping id 2, pong id 3, tasks 4
+ping 0
+pong 0
+ping 1
+pong 1
+ping 2
+pong 2
+init: ping exited 103, pong exited 203
+init: no preemption on this host, skipping busy demo
+init: spawned 'c4ix-hello.c4r' as task 4 (unprotected)
+hello: running as a c4ix task
+hello: argc 2 doubled six 6
+init: 'c4ix-hello.c4r' exited 42 after 0 syscalls
+init: spawned 'c4ix-uhello.c4r' as task 5 (unprotected)
+uhello: userland speaking, pid 5 argc 1
+uhello: raw write to fd 1
+uhello: fd 2 works too (wrote 26 bytes)
+uhello: still here after yielding
+uhello: exiting with 7
+init: 'c4ix-uhello.c4r' exited 7 after 9 syscalls
+sl4b: cache 'task' objsize 152 perslab 16 slabs 1 allocs 6 frees 6 live 0
+c4ix: shutdown complete, 0 tasks remain

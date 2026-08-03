@@ -801,6 +801,35 @@ with and without PM, and `test_signal` hangs either way — all pre-existing.
   by design.
 * **`pm_start` frees `argv` outside the `if` that allocates it**, so a failed
   `malloc` would free an uninitialised pointer.
+
+## 7.4 What C4IX does with the same hardware (2026-08-03)
+
+C4IX (docs/c4ix-design.md) turns protected mode on at X2, and the
+comparison is instructive because the VM support is identical — only
+the kernel design differs.
+
+* **The `EXIT` guard is now enabled** in `c4m.c`. It was commented out
+  along with `STRC` and `ITH`; C4IX needs it, because a protected task
+  calling `exit()` would otherwise halt the entire VM instead of
+  ending one task. C4KE is unaffected (`CONFIG_ENABLE_PM 0` means it
+  never runs protected) and `make test` confirms it.
+* **No dispatcher thread.** C4KE parks the syscall in the task's
+  ext-data and switches to a `kernel/io` thread that services it later
+  — the design that costs it a scheduling slot and ~13% of cycles
+  (§7.3). C4IX services the syscall inline in the trap handler and
+  assigns the result to the handler's own `a` parameter, which `TLEV`
+  loads. The handler is already the context-switch path, so a syscall
+  that needs to block just parks the task in `TS_WAITING` and lets the
+  switch at the end of the handler do its normal job.
+* **`PRTF` is emulated rather than refused.** The trapped `returnpc`
+  points at the `ADJ` that always follows `PRTF`, so `returnpc[1]` is
+  the pushed-argument count — enough to reconstruct the call and route
+  it through the kernel's own `write`. That is what lets an unmodified
+  binary's `printf` be redirected, which was the whole point of Part 8.
+* **Plain c4 gets a syscall layer too**, without any trap machinery:
+  the loader writes `&sys_dispatch` into a `__c4ix_systable` global it
+  finds in the image's symbol section, and the userland library calls
+  through it. Same dispatcher, same numbers, different door.
 ## 4.6 The RAM filesystem
 
 The kernel owns a flat table of named byte buffers, reachable from user

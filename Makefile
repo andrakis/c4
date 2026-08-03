@@ -321,7 +321,7 @@ c4m-lc.c4r: c4sp $(C4LC_LISP) c4m.c
 # preprocessed, compiled to a .c4o object with full optimization, and
 # the kernel image is linked by c4rlink.
 C4IX_SRC  := src/c4ix
-C4IX_MODS := boot con va host sl4b task sched sys loader init
+C4IX_MODS := boot con va host sl4b task sched vfs sys loader init
 c4ix.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/c4ix.h $(patsubst %,$(C4IX_SRC)/%.c,$(C4IX_MODS))
 	for m in $(C4IX_MODS); do \
 		$(PREPROC) $(C4IX_SRC)/$$m.c > .c4ix_$$m.pp.c || exit 1; \
@@ -343,25 +343,26 @@ libc4ix.c4l: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/lib/libc4ix.c $(C4IX_SRC)/
 	$(C4RLINK) -r .c4ix_lib.c4o -o libc4ix.c4l
 	rm -f .c4ix_lib.pp.c .c4ix_lib.c4o
 
-# a userland program built against the library: all IO via syscalls
-c4ix-uhello.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libc4ix.c4l $(C4IX_SRC)/user/uhello.c
-	$(PREPROC) -I$(C4IX_SRC)/include $(C4IX_SRC)/user/uhello.c > .c4ix_uh.pp.c
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O -c .c4ix_uh.pp.c .c4ix_uh.c4o > /dev/null
-	$(C4RLINK) .c4ix_uh.c4o libc4ix.c4l -o c4ix-uhello.c4r
-	rm -f .c4ix_uh.pp.c .c4ix_uh.c4o
+# userland programs built against the library: all IO via syscalls
+c4ix-%.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libc4ix.c4l $(C4IX_SRC)/user/%.c
+	$(PREPROC) -I$(C4IX_SRC)/include $(C4IX_SRC)/user/$*.c > .c4ix_u.pp.c
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O -c .c4ix_u.pp.c .c4ix_u.c4o > /dev/null
+	$(C4RLINK) .c4ix_u.c4o libc4ix.c4l -o $@
+	rm -f .c4ix_u.pp.c .c4ix_u.c4o
 
-# X2 boot pins: the linked kernel boots natively on c4m (preemptive,
+# X3 boot pins: the linked kernel boots natively on c4m (preemptive,
 # user tasks behind protected mode) and degraded on plain c4 through
 # the c4l loader (cooperative, no hardware boundary). Output is exact
 # per host; the differences are by design and worth reading:
 # c4ix-hello.c4r calls printf directly, so on c4m it traps and the
-# kernel emulates it onto the fd layer (2 syscalls) while on plain c4
-# it reaches the host untouched (0 syscalls). c4ix-uhello.c4r goes
-# through libc4ix either way.
-C4IX_PROGS := c4ix-hello.c4r c4ix-uhello.c4r
+# kernel emulates it onto the fd layer -- which is why redirecting it
+# into a RAM file captures 58 bytes there and 0 on plain c4, where a
+# raw printf has no boundary to cross. The pipeline (uecho | uwc)
+# works on both.
+C4IX_PROGS := c4ix-hello.c4r c4ix-uhello.c4r c4ix-uecho.c4r c4ix-uwc.c4r
 test-c4ix: c4 c4m c4ix.c4r $(C4IX_PROGS)
-	$(C4M) load-c4r.c -- c4ix.c4r $(C4IX_PROGS) | cmp - $(C4IX_SRC)/tests/x2-c4m.txt
-	$(C4) c4l.c c4ix.c4r $(C4IX_PROGS) | sed '/^exit([0-9-]*) cycle = /d' | cmp - $(C4IX_SRC)/tests/x2-c4.txt
+	$(C4M) load-c4r.c -- c4ix.c4r $(C4IX_PROGS) | cmp - $(C4IX_SRC)/tests/x3-c4m.txt
+	$(C4) c4l.c c4ix.c4r $(C4IX_PROGS) | sed '/^exit([0-9-]*) cycle = /d' | cmp - $(C4IX_SRC)/tests/x3-c4.txt
 	@echo "test-c4ix: OK"
 run-c4ix: c4m c4ix.c4r $(C4IX_PROGS)
 	$(C4M) load-c4r.c -- c4ix.c4r $(C4IX_PROGS)

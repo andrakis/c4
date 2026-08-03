@@ -48,6 +48,7 @@ static void task_append(struct task *t) {
 
 struct task *task_create(char *name, int entry, int argc, int argv) {
     struct task *t;
+    struct task *parent;
     if (!(t = task_alloc(name))) return 0;
     t->entry = entry;
     t->state = TS_READY;
@@ -55,6 +56,11 @@ struct task *task_create(char *name, int entry, int argc, int argv) {
         sl4b_free(task_cache, (char *)t);
         return 0;
     }
+    // Inherit the creator's descriptors, sharing the open file
+    // descriptions -- a redirected fd 1 stays redirected in the
+    // child, which is redirection without fork.
+    if ((parent = sched_current())) fd_clone(t, parent);
+    else fd_init_console(t);
     task_append(t);
     return t;
 }
@@ -66,6 +72,7 @@ struct task *task_adopt(char *name) {
     if (!(t = task_alloc(name))) return 0;
     t->state = TS_RUNNING;
     t->sv = SV_NONE;
+    fd_init_console(t);
     task_append(t);
     return t;
 }
@@ -89,15 +96,50 @@ void task_unlink(struct task *t) {
     sched_unlock();
 }
 
-// Unlink and free everything a task owns. Never called on the
-// running task: you cannot free the stack you stand on.
-void task_release(struct task *t) {
-    task_last_syscalls = t->nsyscalls;
-    task_unlink(t);
+static struct task *task_reaplist;   // released, waiting to be freed
+
+// Free what a task owns. Only ever called for a task nobody is
+// standing on -- see task_release.
+static void task_destroy(struct task *t) {
     if (t->stack) free((int *)t->stack);
     if (t->img_code) free((int *)t->img_code);
     if (t->img_data) free((char *)t->img_data);
     sl4b_free(task_cache, (char *)t);
+}
+
+// Detach a task and free it -- unless it is the one currently
+// running, which happens on the ordinary exit path: a task calls
+// exit(), the trap handler services it, and the handler's own frame
+// is ON THAT TASK'S STACK. Freeing it there means executing the rest
+// of the handler, and the context switch at its end, on returned
+// memory. So the corpse goes on a list and task_reap frees it once
+// the kernel is standing somewhere else. (C4KE learned the same
+// lesson: its idle task reaps zombies for exactly this reason.)
+void task_release(struct task *t) {
+    task_last_syscalls = t->nsyscalls;
+    fd_closeall(t);
+    task_unlink(t);
+    if (t == sched_current()) {
+        t->next = task_reaplist;
+        task_reaplist = t;
+        return;
+    }
+    task_destroy(t);
+}
+
+// Called from safe points -- the top of a trap, a cooperative
+// switch, the idle loop -- where the kernel is no longer running on
+// a dead task's stack.
+void task_reap() {
+    struct task *t, *keep;
+    keep = 0;
+    while (task_reaplist) {
+        t = task_reaplist;
+        task_reaplist = t->next;
+        if (t == sched_current()) { t->next = keep; keep = t; }
+        else task_destroy(t);
+    }
+    task_reaplist = keep;
 }
 
 struct task *task_get(int id) {

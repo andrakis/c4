@@ -23,9 +23,24 @@ static int  va_m_n;
 // The compiler inserts a call to this at every variadic call site;
 // its result rides in the variadic fake slot that va_start reads.
 //
-// Runs under sched_lock: the working globals below are shared, and a
-// preemption between the assignments would let another task's
-// variadic call clobber them mid-flight.
+// It takes sched_lock and does NOT release it: the matching release
+// is in __c4ix_va_adj, which va_end calls. The lock therefore spans
+// the whole variadic call, and it has to.
+//
+// The area is one shared LIFO, but a variadic call is not atomic:
+// the compiler emits "push args; call make_va; call the function",
+// and va_end runs inside the callee. Let preemption in anywhere
+// between and two tasks interleave push/pop on one stack. Pops go by
+// COUNT, not position, so a task popping its own arguments can
+// rewind the cursor BELOW another task's still-live arguments -- the
+// next push then overwrites them, and the victim reads a %s pointer
+// that is now an integer. That fault looks like a wild load in the
+// VM, nowhere near the kprintf that caused it.
+//
+// Holding the lock across the call makes every variadic call atomic
+// against preemption, which also gives kprintf its line atomicity.
+// The contract: a variadic callee MUST use va_start/va_end, or the
+// lock leaks. In this kernel kprintf is the only one.
 int *__c4cc_make_va(int count) {
     sched_lock();
     va_m_n   = count;
@@ -39,13 +54,12 @@ int *__c4cc_make_va(int count) {
         va_stack[va_vptr] = *va_m_arg; ++va_vptr;
         --va_m_arg;
     }
-    sched_unlock();
-    return va_m_ptr;
+    return va_m_ptr;   // lock stays held until __c4ix_va_adj
 }
 
-// va_end's release half, extern so every module pops the same counter.
+// va_end's release half, extern so every module pops the same
+// counter -- and the release of the lock __c4cc_make_va took.
 void __c4ix_va_adj(int n) {
-    sched_lock();
     va_vptr = va_vptr - n;
     sched_unlock();
 }

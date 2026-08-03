@@ -830,6 +830,33 @@ the kernel design differs.
   the loader writes `&sys_dispatch` into a `__c4ix_systable` global it
   finds in the image's symbol section, and the userland library calls
   through it. Same dispatcher, same numbers, different door.
+
+### A c4m fix this uncovered: `TRAP_ILLOP` must drop to unprotected
+
+Every trap site in `c4m.c` sets `mode = MODE_UNPROTECTED` before
+running the handler — except the `default:` case that raises
+`TRAP_ILLOP`. That is the one C4KE and C4IX both use for
+custom-opcode syscalls.
+
+It never mattered for C4KE, which compiles protected mode out
+(`CONFIG_ENABLE_PM 0`), so `mode` is already unprotected. C4IX runs
+user tasks protected for real, and the consequence is vicious: a
+syscall from a protected task enters the kernel's trap handler
+**still protected**, so the first `PUTC` or `MALC` inside the kernel
+raises a *second* trap on top of the first. The handler is not
+re-entrant — its scheduler state lives in globals — so the nested
+invocation corrupts the switch the outer one was performing. The
+symptoms are all downstream: interleaved kernel output, a kernel task
+apparently "running protected", tasks resuming with garbage program
+counters, and a sensitivity to timing so acute that adding one
+`printf` moves or hides the failure.
+
+`mode = MODE_UNPROTECTED` after the `trap()` call fixes it, and
+matches every other site. C4KE is unaffected — verified by `make
+test`. C4IX additionally keeps a re-entry guard in its handler
+(`if (sched_intrap) return;`), because neither the `TRAP_ILLOP` site
+nor `_TRP` disables the cycle interrupt, so a hard IRQ can still land
+in the window before the handler masks it.
 ## 4.6 The RAM filesystem
 
 The kernel owns a flat table of named byte buffers, reachable from user

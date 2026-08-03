@@ -72,6 +72,110 @@ static int busy_b(int argc, int argv) {
     return 0;
 }
 
+// ---- X3: the IO layer, doing a shell's job by hand ----
+
+// A RAM file is ordinary storage behind the same fd calls: open it,
+// write it, close it, open it again and read it back.
+static void io_ramfile() {
+    char buf[64];
+    int fd, n;
+
+    if ((fd = sys_open("/ram/note", C4IX_O_WRONLY + C4IX_O_CREAT)) < 0) {
+        kputs("init: cannot create /ram/note\n");
+        return;
+    }
+    sys_write(fd, "written to a ram file\n", 22);
+    sys_close(fd);
+
+    if ((fd = sys_open("/ram/note", C4IX_O_RDONLY)) < 0) {
+        kputs("init: cannot reopen /ram/note\n");
+        return;
+    }
+    n = sys_read(fd, buf, 64);
+    sys_close(fd);
+    kprintf("init: read %d bytes back: ", n);
+    sys_write(FD_STDOUT, buf, n);
+}
+
+// Redirection, exactly as a shell does it and with no fork in sight:
+// point our own fd 1 at a file, spawn, then put fd 1 back. The child
+// inherits the table, so its output lands in the file -- and the
+// child here is c4ix-hello.c4r, which calls printf directly and has
+// never heard of C4IX. Under protected mode that printf traps and
+// the kernel writes it wherever fd 1 now points.
+static void io_redirect(char *prog) {
+    struct task *t;
+    int fd, saved;
+
+    if ((fd = sys_open("/ram/out", C4IX_O_WRONLY + C4IX_O_CREAT + C4IX_O_TRUNC)) < 0) {
+        kputs("init: cannot create /ram/out\n");
+        return;
+    }
+    saved = sys_dup(FD_STDOUT);
+    sys_dup2(fd, FD_STDOUT);
+    t = task_spawn(prog, 1, 0);
+    sys_dup2(saved, FD_STDOUT);      // restore before anything prints
+    sys_close(saved);
+    sys_close(fd);
+    if (!t) { kprintf("init: spawn of '%s' failed\n", prog); return; }
+    task_wait(t);
+
+    kprintf("init: '%s' ran with fd 1 redirected; /ram/out holds %d bytes:\n",
+        prog, vfs_size("/ram/out"));
+    vfs_dump("/ram/out");
+    // Without protected mode a raw printf never reaches the kernel,
+    // so there is nothing to redirect. Saying so beats an empty file
+    // that looks like a bug.
+    if (vfs_size("/ram/out") == 0)
+        kputs("init: (empty: this host has no protected mode, so a raw printf bypasses fd 1)\n");
+}
+
+// A pipeline: writer's fd 1 and reader's fd 0 are the two ends of
+// one pipe. The reader blocks on the empty pipe until the writer
+// produces -- and its read syscall is restarted, not resumed.
+static void io_pipeline(char *wprog, char *rprog) {
+    struct task *w, *r;
+    int p[2], saved_out, saved_in;
+    char *wargv[4];
+
+    if (sys_pipe(p) < 0) { kputs("init: pipe failed\n"); return; }
+
+    wargv[0] = wprog;
+    wargv[1] = "piped";
+    wargv[2] = "through";
+    wargv[3] = 0;
+
+    saved_out = sys_dup(FD_STDOUT);
+    sys_dup2(p[1], FD_STDOUT);
+    w = task_spawn(wprog, 3, (int)wargv);
+    sys_dup2(saved_out, FD_STDOUT);
+    sys_close(saved_out);
+
+    // The write end must be gone from OUR table before the reader is
+    // spawned, or the reader inherits a copy of it and then waits
+    // forever for an end of file it is itself holding open. Every
+    // shell has this bug once.
+    sys_close(p[1]);
+
+    saved_in = sys_dup(FD_STDIN);
+    sys_dup2(p[0], FD_STDIN);
+    r = task_spawn(rprog, 1, 0);
+    sys_dup2(saved_in, FD_STDIN);
+    sys_close(saved_in);
+    sys_close(p[0]);
+
+    if (!w || !r) { kputs("init: pipeline spawn failed\n"); return; }
+    task_wait(w);
+    task_wait(r);
+}
+
+static void init_io(char **av, int argc) {
+    kputs("init: --- X3: files, redirection, pipes ---\n");
+    io_ramfile();
+    if (argc > 1) io_redirect(av[1]);
+    if (argc > 4) io_pipeline(av[3], av[4]);
+}
+
 int init_main(int argc, int argv) {
     struct task *a, *b;
     char **av;
@@ -108,10 +212,13 @@ int init_main(int argc, int argv) {
     // userland -- behind protected mode where the host provides it --
     // so every one of their syscalls passes through sys.c, whether
     // the program asks through libc4ix or just calls printf.
+    // Kernel argv: [1] a raw-printf program, [2] a libc4ix program,
+    // [3] and [4] the two halves of the X3 pipeline. The first two
+    // run standalone here; the rest are driven by init_io below.
     if (argc > 1) {
         av = (char **)argv;
         n = 1;
-        while (n < argc) {
+        while (n < argc && n < 3) {
             if ((a = task_spawn(av[n], argc - n, (int)(av + n)))) {
                 kprintf("init: spawned '%s' as task %d (%s)\n", a->name, a->id,
                     a->privs == PRIV_USER ? "protected" : "unprotected");
@@ -123,6 +230,7 @@ int init_main(int argc, int argv) {
             }
             ++n;
         }
+        init_io(av, argc);
     }
 
     return 0;

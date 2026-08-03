@@ -15,67 +15,107 @@
 //      sys_pmviolation emulates the opcode ON TOP OF the syscall
 //      layer. That is what makes redirection universal: a program
 //      that never heard of C4IX and just calls printf still has its
-//      output go through sys_write.
+//      output go through the fd its parent gave it.
 //
-// The fd layer is deliberately minimal at X2: 0/1/2 are the console,
-// higher descriptors are host files. Per-task tables, vnodes and
-// pipes are X3's job -- this is the interface they will implement.
+// Everything below fd-level goes through vfs.c. A syscall that must
+// block (reading an empty pipe) parks the task and asks the trap
+// handler to rewind the pc by one word, so the task re-executes the
+// syscall opcode when it wakes -- its arguments are untouched on its
+// own stack, so the call simply happens again.
 //
 
 #include "c4ix.h"
 
-static int fd_open[FD_MAX];      // 1 if a host file is open on this fd
-static int fd_host[FD_MAX];      // host descriptor behind it
+int sys_restart;    // set when the current syscall must be re-issued
 
-int sys_console_fd(int fd) {
-    if (fd == FD_STDOUT) return 1;
-    if (fd == FD_STDERR) return 1;
+// Park the running task on a vnode. In trap context the handler
+// rewinds the pc; in kernel context the caller spins on yield, which
+// costs one context switch rather than one syscall.
+static int sys_block(struct vnode *vn, int pos) {
+    struct task *t;
+    t = sched_current();
+    t->block_vn = vn;
+    t->block_pos = pos;
+    t->state = TS_BLOCKED;
+    if (sched_in_trap()) { sys_restart = 1; return 1; }
+    while (t->state == TS_BLOCKED) sched_yield();
     return 0;
 }
 
 int sys_write(int fd, char *buf, int len) {
-    int i;
-    if (sys_console_fd(fd)) {
-        i = 0;
-        while (i < len) { kputc(buf[i]); ++i; }
-        return len;
-    }
-    if (fd < 0 || fd >= FD_MAX) return -1;
-    if (!fd_open[fd]) return -1;
-    // The VM has no write() syscall, so host files stay read-only at
-    // X2; X3's RAM-FS vnodes are where writable files arrive.
-    return -1;
+    struct file *f;
+    if (!(f = fd_get(sched_current(), fd))) return -1;
+    return vfs_write(f, buf, len);
 }
 
 int sys_read(int fd, char *buf, int len) {
-    if (fd == FD_STDIN) return read(0, buf, len);
-    if (fd < 0 || fd >= FD_MAX) return -1;
-    if (!fd_open[fd]) return -1;
-    return read(fd_host[fd], buf, len);
+    struct file *f;
+    struct task *t;
+
+    t = sched_current();
+    if (!(f = fd_get(t, fd))) return -1;
+    while (!vfs_readable(f->vn, f->pos)) {
+        if (sys_block(f->vn, f->pos)) return 0;   // trap path: restarting
+        if (!(f = fd_get(t, fd))) return -1;      // table may have moved on
+    }
+    return vfs_read(f, buf, len);
 }
 
+// RAM files first, host files second -- the same precedence C4KE's
+// loader uses, and the reason a program can be handed a "file" that
+// only ever existed in memory.
 int sys_open(char *path, int flags) {
+    struct vnode *vn;
+    struct task *t;
     int h, fd;
-    if ((h = open(path, flags)) < 0) return -1;
-    fd = 3;
-    while (fd < FD_MAX) {
-        if (!fd_open[fd]) {
-            fd_open[fd] = 1;
-            fd_host[fd] = h;
-            return fd;
-        }
-        ++fd;
+
+    t = sched_current();
+    if ((vn = vfs_lookup(path))) {
+        if (flags & C4IX_O_TRUNC) { vn->size = 0; }
+        return fd_open_vnode(t, vn, flags);
     }
-    close(h);
-    return -1;
+    if (flags & C4IX_O_CREAT) {
+        if (!(vn = vfs_ramfile(path))) return -1;
+        return fd_open_vnode(t, vn, flags);
+    }
+    if ((h = open(path, flags & 3)) < 0) return -1;
+    if (!(vn = vn_hostfile(h))) { close(h); return -1; }
+    if ((fd = fd_open_vnode(t, vn, flags)) < 0) { close(h); return -1; }
+    return fd;
 }
 
 int sys_close(int fd) {
-    if (sys_console_fd(fd)) return 0;
-    if (fd < 0 || fd >= FD_MAX) return -1;
-    if (!fd_open[fd]) return -1;
-    close(fd_host[fd]);
-    fd_open[fd] = 0;
+    return fd_close(sched_current(), fd);
+}
+
+int sys_dup(int fd) {
+    struct task *t;
+    int n;
+    t = sched_current();
+    if (!fd_get(t, fd)) return -1;
+    n = 0;
+    while (n < FD_MAX) {
+        if (!fd_get(t, n)) return fd_dup2(t, fd, n);
+        ++n;
+    }
+    return -1;
+}
+
+int sys_dup2(int oldfd, int newfd) {
+    return fd_dup2(sched_current(), oldfd, newfd);
+}
+
+int sys_pipe(int *fds) {
+    struct vnode *vn;
+    struct task *t;
+    int r, w;
+
+    t = sched_current();
+    if (!(vn = vfs_pipe())) return -1;
+    if ((r = fd_open_vnode(t, vn, C4IX_O_RDONLY)) < 0) return -1;
+    if ((w = fd_open_vnode(t, vn, C4IX_O_WRONLY)) < 0) { fd_close(t, r); return -1; }
+    fds[0] = r;
+    fds[1] = w;
     return 0;
 }
 
@@ -92,6 +132,9 @@ int sys_dispatch(int num, int *args) {
     if (num == SYS_READ)   return sys_read(args[0], (char *)args[1], args[2]);
     if (num == SYS_OPEN)   return sys_open((char *)args[0], args[1]);
     if (num == SYS_CLOSE)  return sys_close(args[0]);
+    if (num == SYS_DUP)    return sys_dup(args[0]);
+    if (num == SYS_DUP2)   return sys_dup2(args[0], args[1]);
+    if (num == SYS_PIPE)   return sys_pipe((int *)args[0]);
     if (num == SYS_YIELD)  { sched_yield(); return 0; }
     if (num == SYS_GETPID) return t ? t->id : -1;
     if (num == SYS_SBRK)   return (int)malloc(args[0]);
@@ -131,51 +174,55 @@ int sys_dispatch(int num, int *args) {
 //
 // The supported conversions are kprintf's (%d %x %s %c %%); anything
 // else prints verbatim rather than silently dropping its argument.
+// Output is buffered into one write: through the fd layer this may
+// be a pipe or a RAM file, and byte-at-a-time would be absurd.
 static int sys_vprintf(int fd, char *fmt, int *argv, int argc) {
-    char buf[32];
+    char buf[512];
     char *digits, *s;
-    int n, c, i, v, base, neg, used;
+    int n, c, i, v, base, used, dstart;
 
     digits = "0123456789abcdef";
     n = 0;
     used = 0;
     while (*fmt) {
+        if (n > 480) { sys_write(fd, buf, n); n = 0; }
         c = *fmt; ++fmt;
-        if (c != '%') { n = n + sys_write(fd, fmt - 1, 1); }
-        else if (*fmt == 0) { n = n + sys_write(fd, "%", 1); }
+        if (c != '%') { buf[n] = c; ++n; }
+        else if (*fmt == 0) { buf[n] = '%'; ++n; }
         else {
             c = *fmt; ++fmt;
-            if (c == '%') { n = n + sys_write(fd, "%", 1); }
+            if (c == '%') { buf[n] = '%'; ++n; }
             else if (c == 'd' || c == 'x' || c == 'c' || c == 's') {
-                if (used >= argc) { n = n + sys_write(fd, "(missing)", 9); }
+                v = (used < argc) ? argv[used] : 0;
+                ++used;
+                if (c == 's') {
+                    s = (char *)v;
+                    if (!s) s = "(null)";
+                    while (*s) {
+                        buf[n] = *s; ++n; ++s;
+                        if (n > 480) { sys_write(fd, buf, n); n = 0; }
+                    }
+                } else if (c == 'c') { buf[n] = v; ++n; }
                 else {
-                    v = argv[used]; ++used;
-                    if (c == 's') {
-                        s = (char *)v;
-                        if (!s) s = "(null)";
-                        i = 0;
-                        while (s[i]) ++i;
-                        n = n + sys_write(fd, s, i);
-                    } else if (c == 'c') {
-                        buf[0] = v;
-                        n = n + sys_write(fd, buf, 1);
-                    } else {
-                        base = (c == 'x') ? 16 : 10;
-                        neg = 0;
-                        if (v < 0 && base == 10) { neg = 1; v = -v; }
-                        i = 0;
-                        if (v == 0) { buf[i] = '0'; ++i; }
-                        while (v) { buf[i] = digits[v - (v / base) * base]; ++i; v = v / base; }
-                        if (neg) { n = n + sys_write(fd, "-", 1); }
-                        while (i) { --i; n = n + sys_write(fd, buf + i, 1); }
+                    base = (c == 'x') ? 16 : 10;
+                    if (v < 0 && base == 10) { buf[n] = '-'; ++n; v = -v; }
+                    dstart = n;
+                    if (v == 0) { buf[n] = '0'; ++n; }
+                    while (v) {
+                        buf[n] = digits[v - (v / base) * base]; ++n;
+                        v = v / base;
+                    }
+                    // digits came out backwards: reverse in place
+                    i = n - 1;
+                    while (dstart < i) {
+                        c = buf[dstart]; buf[dstart] = buf[i]; buf[i] = c;
+                        ++dstart; --i;
                     }
                 }
-            } else {
-                n = n + sys_write(fd, "%", 1);
-                n = n + sys_write(fd, fmt - 1, 1);
-            }
+            } else { buf[n] = '%'; ++n; buf[n] = c; ++n; }
         }
     }
+    if (n) sys_write(fd, buf, n);
     return n;
 }
 

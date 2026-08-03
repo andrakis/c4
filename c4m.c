@@ -1835,6 +1835,14 @@ int c4m_main(int argc, char **argv)
 //        } else {
 			// printf("c4m: illegal opcode %d, invoking trap handler 0x%X\n", i, trap_handler);
 			trap(TRAP_ILLOP, i, trap_handler, &sp, &bp, &pc, a, mode);
+			// A trap handler must run privileged, as it does at every
+			// other trap site. Without this an illegal opcode raised BY
+			// A PROTECTED TASK -- which is how custom-opcode syscalls
+			// work -- runs the handler still protected, so the first
+			// syscall opcode inside the kernel raises a SECOND trap on
+			// top of the first. (C4KE is unaffected: it compiles its
+			// protected mode out, so mode is already unprotected.)
+			mode = MODE_UNPROTECTED;
 //        }
     }
     }

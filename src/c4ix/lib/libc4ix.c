@@ -42,7 +42,7 @@ static int __c4ix_syscall(int num, int a, int b, int c) {
 }
 
 int write(int fd, char *buf, int len) { return __c4ix_syscall(SYS_WRITE, fd, (int)buf, len); }
-int read(int fd, char *buf, int len)  { return __c4ix_syscall(SYS_READ, fd, (int)buf, len); }
+int uread(int fd, char *buf, int len) { return __c4ix_syscall(SYS_READ, fd, (int)buf, len); }
 int uopen(char *path, int flags)      { return __c4ix_syscall(SYS_OPEN, (int)path, flags, 0); }
 int uclose(int fd)                    { return __c4ix_syscall(SYS_CLOSE, fd, 0, 0); }
 int uexit(int code)                   { return __c4ix_syscall(SYS_EXIT, code, 0, 0); }
@@ -50,6 +50,10 @@ int uyield()                          { return __c4ix_syscall(SYS_YIELD, 0, 0, 0
 int uwait(int id)                     { return __c4ix_syscall(SYS_WAIT, id, 0, 0); }
 int getpid()                          { return __c4ix_syscall(SYS_GETPID, 0, 0, 0); }
 int *ualloc(int bytes)                { return (int *)__c4ix_syscall(SYS_SBRK, bytes, 0, 0); }
+
+int udup(int fd)                      { return __c4ix_syscall(SYS_DUP, fd, 0, 0); }
+int udup2(int oldfd, int newfd)       { return __c4ix_syscall(SYS_DUP2, oldfd, newfd, 0); }
+int upipe(int *fds)                   { return __c4ix_syscall(SYS_PIPE, (int)fds, 0, 0); }
 
 int spawn(char *path, int argc, char **argv) {
     return __c4ix_syscall(SYS_SPAWN, (int)path, argc, (int)argv);

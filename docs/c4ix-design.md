@@ -114,8 +114,8 @@ loading or assigning a whole struct is an error.
 - **X2 — syscalls.** DONE, see §6. Protected mode on, trap-based
   syscall layer: write/read/open/close/spawn/wait/exit/yield/sbrk/
   getpid. Userland libc4ix (printf over write) as a `.c4l` library.
-- **X3 — IO.** Per-task fd table, vnode layer: console, RAM files,
-  pipes. `dup2`, and with it redirection.
+- **X3 — IO.** DONE, see §6. Per-task fd table, vnode layer: console,
+  RAM files, pipes. `dup2`, and with it redirection.
 - **X4 — shell.** c4ix-sh: argv parsing, `>` `<` `|` `&`, builtin cd/
   jobs enough to demo `cat file | wc > out`.
 - **X5 — polish.** The C4KE test/bench suite ported; innerbench
@@ -232,3 +232,42 @@ loading or assigning a whole struct is an error.
       printf program costs 2 syscalls (trapped and emulated) and the
       libc4ix program 172; on plain c4 the same raw program costs 0
       (no boundary to enforce) and libc4ix 9 via the direct door.)
+- [x] X3 IO (2026-08-03: vfs.c joins the kernel -- the classic three
+      layers, because dup2 and pipes need exactly them. A VNODE is
+      the thing (console, RAM file, host file, pipe); an open FILE
+      description holds flags and position; an FD indexes a per-task
+      table. dup2 points two fds at ONE description (shared
+      position), while two opens get two. Spawning CLONES the table,
+      sharing descriptions -- which is redirection without fork: set
+      fd 1 up, spawn, put fd 1 back. vnode and file objects come
+      from SL4B caches, as X1 planned. RAM files are the only
+      writable storage (no write() opcode exists), and open()
+      consults them before the host, C4KE's rule.
+      Blocking reads use RESTARTABLE syscalls: a task reading an
+      empty pipe parks in TS_BLOCKED and the handler rewinds its pc
+      one word, so on wake it re-executes the syscall opcode with
+      its arguments untouched on its own stack. Kernel-context
+      callers spin on yield instead. Demonstrated by init doing a
+      shell's job by hand: a RAM file written and read back; the
+      UNMODIFIED raw-printf program run with fd 1 redirected into a
+      RAM file (58 bytes captured on c4m; 0 on plain c4, which the
+      pin states outright -- no protected mode means a raw printf
+      never reaches the kernel); and uecho | uwc through a real
+      pipe, which works on both hosts.
+      Four bugs worth remembering, all found by measurement:
+      (1) freeing an exiting task from inside the trap handler frees
+      THE STACK THE HANDLER IS RUNNING ON -- corpses now go on a
+      reap list drained at the next safe point (C4KE's idle-task
+      lesson, relearned);
+      (2) the shared va area was not preemption-safe: push happens
+      at the call site, pop in the callee, so an interleaved task
+      could rewind the cursor below live arguments. make_va now
+      holds sched_lock until va_end, making variadic calls atomic;
+      (3) a prototype CANNOT shadow a c4lc builtin -- uwc's read()
+      compiled to the READ opcode, which only worked on c4m because
+      protected mode trapped it. Hence libc4ix's u-prefixes;
+      (4) the root cause of a week of heisenbugs: c4m's TRAP_ILLOP
+      site did not force MODE_UNPROTECTED like every other trap
+      site, so a syscall from a protected task ran the handler still
+      protected and its first putchar raised a nested trap. Fixed in
+      c4m.c; C4KE is unaffected because its PM is compiled out.)

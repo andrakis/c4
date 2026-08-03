@@ -56,19 +56,85 @@ enum {
     SYS_WRITE = 200, SYS_READ = 201, SYS_OPEN = 202, SYS_CLOSE = 203,
     SYS_EXIT = 204, SYS_YIELD = 205, SYS_SPAWN = 206, SYS_WAIT = 207,
     SYS_SBRK = 208, SYS_GETPID = 209,
-    SYS_TOP = 210
+    SYS_DUP = 210, SYS_DUP2 = 211, SYS_PIPE = 212,
+    SYS_TOP = 213
 };
-// file descriptors. X2 keeps one global table; X3 makes it per-task
-// and adds vnodes, pipes and dup2.
-enum { FD_STDIN = 0, FD_STDOUT = 1, FD_STDERR = 2, FD_MAX = 32 };
+enum { FD_STDIN = 0, FD_STDOUT = 1, FD_STDERR = 2, FD_MAX = 16 };
 
 int  sys_dispatch(int num, int *args);   // args[0]=first, args[1]=second...
 int  sys_write(int fd, char *buf, int len);
 int  sys_read(int fd, char *buf, int len);
 int  sys_open(char *path, int flags);
 int  sys_close(int fd);
+int  sys_dup(int fd);
+int  sys_dup2(int oldfd, int newfd);
+int  sys_pipe(int *fds);                 // fds[0] read end, fds[1] write end
 void sys_pmviolation(int op, int *sp, int *returnpc, int *a);
-int  sys_console_fd(int fd);             // 1 if fd is a console stream
+
+// Set when a syscall could not complete because the calling task had
+// to block. The trap handler rewinds the saved pc by one word so the
+// task re-executes the syscall opcode when it wakes -- the arguments
+// are still on its stack, so the call simply happens again.
+extern int sys_restart;
+
+// ---- the VFS (vfs.c) ----
+//
+// The classic three layers, because they are what dup2 and pipes
+// need: a VNODE is the thing (console, RAM file, host file, pipe);
+// an open FILE description holds the flags and the seek position;
+// an FD is an index in a per-task table pointing at a description.
+// dup2 makes two fds share one description -- and therefore one
+// position -- while two separate opens of the same file get
+// independent positions. Spawned tasks inherit the table, which is
+// what makes redirection work: set fd 1 up, spawn, restore.
+enum { VN_CONSOLE = 1, VN_RAMFILE = 2, VN_HOSTFILE = 3, VN_PIPE = 4 };
+enum { VN_NAME_MAX = 24 };
+// open() flags. The low two bits match the host's O_RDONLY/WRONLY/
+// RDWR so they can be passed straight through for host files.
+enum {
+    C4IX_O_RDONLY = 0, C4IX_O_WRONLY = 1, C4IX_O_RDWR = 2,
+    C4IX_O_CREAT = 256, C4IX_O_TRUNC = 512
+};
+
+struct vnode {
+    int type;                  // VN_*
+    int refs;                  // open descriptions pointing here
+    char *data;                // RAMFILE/PIPE storage
+    int size;                  // bytes of data valid
+    int cap;                   // bytes allocated
+    int rpos;                  // PIPE: read cursor into data
+    int host;                  // HOSTFILE: the host descriptor
+    int writers;               // PIPE: descriptions still open for write
+    struct vnode *next;        // the ramfs chain
+    char name[VN_NAME_MAX];
+};
+
+struct file {
+    struct vnode *vn;
+    int flags;
+    int pos;                   // seek position (shared across dup2)
+    int refs;                  // fds pointing at this description
+};
+
+void         vfs_init();
+struct vnode *vfs_lookup(char *name);
+struct vnode *vfs_ramfile(char *name);   // find or create
+struct vnode *vfs_pipe();
+struct vnode *vn_hostfile(int host);
+int          vfs_read(struct file *f, char *buf, int len);
+int          vfs_write(struct file *f, char *buf, int len);
+int          vfs_readable(struct vnode *vn, int pos);  // 1 = read won't block
+void         vfs_dump(char *name);       // kernel-side: print a RAM file
+int          vfs_size(char *name);       // bytes stored, -1 if absent
+
+struct file *fd_get(struct task *t, int fd);
+int          fd_install(struct task *t, struct file *f);
+int          fd_open_vnode(struct task *t, struct vnode *vn, int flags);
+int          fd_close(struct task *t, int fd);
+int          fd_dup2(struct task *t, int oldfd, int newfd);
+void         fd_init_console(struct task *t);
+void         fd_clone(struct task *dst, struct task *src);
+void         fd_closeall(struct task *t);
 
 int   host_detect();
 int   host_info();
@@ -128,7 +194,13 @@ void  sl4b_stats();
 // task_next() wraps from the tail back to the head: that round-robin
 // walk is the loop the scheduler context-switches along.
 enum { TASK_NAME_MAX = 16 };
-enum { TS_READY = 1, TS_RUNNING = 2, TS_ZOMBIE = 3, TS_WAITING = 4 };
+// TS_WAITING = blocked on another task (wait); TS_BLOCKED = blocked
+// on a vnode (an empty pipe). Both are woken by the scheduler when
+// their condition clears.
+enum {
+    TS_READY = 1, TS_RUNNING = 2, TS_ZOMBIE = 3,
+    TS_WAITING = 4, TS_BLOCKED = 5
+};
 // Privilege level. PRIV_USER tasks resume in c4m's protected mode:
 // host syscall opcodes trap to the kernel instead of executing, so
 // all their IO goes through sys.c whether they ask nicely (libc4ix
@@ -161,6 +233,9 @@ struct task {
     int  nsyscalls;            // syscalls serviced, for the X2 report
     int  wait_for;             // TS_WAITING: the task id being waited on
     int  wait_result;          // exit code delivered when the wait completes
+    struct vnode *block_vn;    // TS_BLOCKED: the vnode being waited on
+    int  block_pos;            // position the blocked read wants data past
+    int  fds[FD_MAX];          // struct file *, 0 where the fd is closed
     char name[TASK_NAME_MAX];
 };
 
@@ -173,6 +248,7 @@ struct task *task_create(char *name, int entry, int argc, int argv);
 struct task *task_adopt(char *name);
 void         task_unlink(struct task *t);
 void         task_release(struct task *t);
+void         task_reap();      // free tasks released while they ran
 struct task *task_get(int id);
 struct task *task_first();
 struct task *task_next(struct task *t);

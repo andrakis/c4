@@ -74,8 +74,19 @@ int sched_in_trap() {
 // and into sv_a for a user task parked mid-syscall -- the switch
 // restores sv_a into the accumulator, which is exactly where the
 // SYS_WAIT opcode's result belongs.
+// A TS_BLOCKED task is parked on a vnode -- an empty pipe. It wakes
+// when the data it wanted arrives, or when the last writer closes
+// and the emptiness becomes end-of-file instead.
+static int sched_unblocked(struct task *n) {
+    if (n->state != TS_BLOCKED) return 0;
+    if (!vfs_readable(n->block_vn, n->block_pos)) return 0;
+    n->state = TS_READY;
+    return 1;
+}
+
 static int sched_waitdone(struct task *n) {
     struct task *w;
+    if (sched_unblocked(n)) return 1;
     if (n->state != TS_WAITING) return 0;
     if ((w = task_get(n->wait_for))) {
         if (w->state != TS_ZOMBIE) return 0;
@@ -115,8 +126,23 @@ static struct task *sched_pick(struct task *t) {
 static void sched_trap(int trap, int param, int mode, int a, int bp, int sp, int returnpc) {
     struct task *t, *n;
 
+    // Re-entry guard. c4m disables the cycle interrupt when IT takes
+    // a trap, but not when user code raises one (the syscall gateway
+    // and __c4_trap), so an interrupt can still land in the window
+    // between entering this handler and the line below. The handler
+    // keeps its state in globals and is not re-entrant, so a nested
+    // invocation returns immediately: TLEV then resumes the outer
+    // handler exactly where it was, and the interrupt stays disabled
+    // (c4m's own cycle path clears the interval) until the outer
+    // handler re-arms it on the way out.
+    if (sched_intrap) return;
+
     // no nested switches while kernel structures move
     __c4_configure(C4IX_CONF_INTERVAL, 0);
+
+    // Safe point: we are on the trapped task's stack, so any corpse
+    // left over from an earlier exit can finally be freed.
+    task_reap();
 
     // Syscall gateway: an opcode c4m does not know. Non-syscall
     // illegal opcodes are a fault, not a request.
@@ -137,7 +163,17 @@ static void sched_trap(int trap, int param, int mode, int a, int bp, int sp, int
     } else if (trap == C4IX_TRAP_PM) {
         sys_pmviolation(param, (int *)sp, (int *)returnpc, &a);
     }
-    sched_intrap = 0;
+
+    // The syscall could not finish because the task had to block.
+    // Rewind one word so it re-executes the syscall opcode when it
+    // wakes: the arguments are still on its own stack, untouched, so
+    // the call simply happens again. (Both doors trap one word past
+    // a single-word opcode, so the arithmetic is the same for the
+    // gateway and for an emulated host opcode.)
+    if (sys_restart) {
+        returnpc = returnpc - 8;
+        sys_restart = 0;
+    }
 
     t = sched_cur;
     n = sched_pick(t);
@@ -169,6 +205,13 @@ static void sched_trap(int trap, int param, int mode, int a, int bp, int sp, int
     mode = (sched_cur->privs == PRIV_USER)
         ? C4IX_MODE_PROTECTED : C4IX_MODE_UNPROTECTED;
 
+    // The flag stays set for the WHOLE handler, not just the service
+    // call: everything below it -- task_release, the slab allocator,
+    // any kprintf -- takes sched_lock, and an unlock outside the flag
+    // would re-arm the cycle interrupt while the handler is still
+    // mid-switch, letting a nested trap corrupt the switch it was
+    // performing.
+    sched_intrap = 0;
     if (sched_interval && sched_lockdepth == 0)
         __c4_configure(C4IX_CONF_INTERVAL, sched_interval);
 }
@@ -219,6 +262,7 @@ void sched_yield() {
     }
     n = sched_pick(sched_cur);
     if (n != sched_cur) coop_switch(n);
+    task_reap();   // safe point: whatever died, we are not on it now
 }
 
 // ---- task start and end ----

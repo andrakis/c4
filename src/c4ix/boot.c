@@ -28,6 +28,8 @@ int main(int argc, char **argv) {
         host_has(C4IX_I_PROT) ? "on for user tasks" : "unavailable",
         host_type() == HOST_C4M ? "on" : "unavailable (cooperative)");
 
+    // The VFS first: adopting the boot task opens its console fds.
+    vfs_init();
     sched_init(host_type() == HOST_C4M ? PREEMPT_INTERVAL : 0);
 
     if (!(t = task_create("init", (int)&init_main, argc, (int)argv))) {

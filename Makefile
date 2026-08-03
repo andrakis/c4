@@ -269,6 +269,16 @@ test-c4sp-opt: c4sp c4sp.c4r c4m $(C4KE_C4R)
 	rm -f .c4sp_sw.c4r .c4sp_sw_opt.c4r
 	@echo "test-c4sp-opt: OK"
 
+# c4lc, the C compiler written in c4sp Lisp (docs/c4lc-design.md).
+# L0: golden token dump of a sample covering every token kind and c4cc
+# lexer quirk, native and under c4m, plus a full lex of c4cc.c itself
+# (whose token list needs a bigger cell arena than the default).
+test-c4lc: c4sp c4sp.c4r c4m
+	./c4sp src/c4sp/lisp/c4lc-tokens.lisp src/tests/c4lc_lex_sample.c | cmp - src/c4sp/tests/expected/c4lc-tokens.txt
+	./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/c4lc-tokens.lisp src/tests/c4lc_lex_sample.c | cmp - src/c4sp/tests/expected/c4lc-tokens.txt
+	./c4sp -c 2000000 src/c4sp/lisp/c4lc-tokens.lisp -count src/c4cc/c4cc.c | grep -q "^tokens [0-9]"
+	@echo "test-c4lc: OK"
+
 # The C4KE RAM filesystem: opcode-level access, the self-hosting loop
 # (c4cc compiles a program inside C4KE, stores the image in the RAM
 # filesystem, the kernel executes it from memory), the same loop with

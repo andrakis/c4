@@ -1,0 +1,8 @@
+C4IX X0 booting
+c4ix: host c4m, info 0xf2
+c4ix: protected mode available, preemption possible
+c4ix: task 0 'init' created
+init: c4ix init v0 on c4m
+init: sum 1..10 = 55, tasks alive 1
+c4ix: task 0 'init' exited with status 0
+c4ix: shutdown complete, 0 tasks remain

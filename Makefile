@@ -316,6 +316,31 @@ c4m-lc.c4r: c4sp $(C4LC_LISP) c4m.c
 	$(PREPROC) c4m.c > .c4lc_klc.c
 	./c4sp -c 16000000 src/c4sp/lisp/c4lc.lisp -O .c4lc_klc.c c4m-lc.c4r
 	rm -f .c4lc_klc.c
+
+# C4IX (docs/c4ix-design.md): the c4lc-compiled OS. Each module is
+# preprocessed, compiled to a .c4o object with full optimization, and
+# the kernel image is linked by c4rlink.
+C4IX_SRC  := src/c4ix
+C4IX_MODS := boot con va host task init
+c4ix.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/c4ix.h $(patsubst %,$(C4IX_SRC)/%.c,$(C4IX_MODS))
+	for m in $(C4IX_MODS); do \
+		$(PREPROC) $(C4IX_SRC)/$$m.c > .c4ix_$$m.pp.c || exit 1; \
+		./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O -c .c4ix_$$m.pp.c .c4ix_$$m.c4o > /dev/null || exit 1; \
+	done
+	$(C4RLINK) $(patsubst %,.c4ix_%.c4o,$(C4IX_MODS)) -o c4ix.c4r
+	rm -f .c4ix_*.pp.c .c4ix_*.c4o
+
+# X0 boot pins: the linked kernel boots natively on c4m and degraded
+# on plain c4 through the c4l loader; output is exact per host (the
+# host line differs by design).
+test-c4ix: c4 c4m c4ix.c4r
+	$(C4M) load-c4r.c -- c4ix.c4r | cmp - $(C4IX_SRC)/tests/x0-c4m.txt
+	$(C4) c4l.c c4ix.c4r | sed '/^exit([0-9-]*) cycle = /d' | cmp - $(C4IX_SRC)/tests/x0-c4.txt
+	@echo "test-c4ix: OK"
+run-c4ix: c4m c4ix.c4r
+	$(C4M) load-c4r.c -- c4ix.c4r
+run-c4ix-c4: c4 c4ix.c4r
+	$(C4) c4l.c c4ix.c4r
 # L0: golden token dump of a sample covering every token kind and c4cc
 # lexer quirk, native and under c4m, plus a full lex of c4cc.c itself
 # (whose token list needs a bigger cell arena than the default).
@@ -531,6 +556,7 @@ PHONY += run run-vg test test-massive
 PHONY += run-alt run-alt-vg test-alt test-massive-alt
 PHONY += run-c4 run-c4-vg test-c4 test-massive-c4
 PHONY += run-c4-alt run-c4-alt-vg
+PHONY += test-c4ix run-c4ix run-c4ix-c4
 PHONY += pkg c4rs or1k
 PHONY += pi
 # Don't bother with the dump or link utility for now

@@ -103,9 +103,13 @@ loading or assigning a whole struct is an error.
 - **X0 — boot.** Kernel of 3+ objects linked by c4rlink, boots on c4m,
   prints via its own kprintf, runs one init task, clean shutdown.
   Also boots under `./c4 c4l.c` (degraded path proven early).
-- **X1 — tasks.** Struct-based task table, scheduler (preemptive on
-  c4m via cycle interrupt, cooperative fallback), fork-less spawn from
-  .c4r images (loader in-kernel), wait/exit.
+- **X1 — tasks.** Tasks on the linked list X0 established (no fixed
+  table, no TASK_MAX), scheduler (preemptive on c4m via cycle
+  interrupt, cooperative fallback) context-switching along the
+  round-robin walk task_next() already provides, fork-less spawn from
+  .c4r images (loader in-kernel), wait/exit. Task allocation moves
+  from malloc-per-task to **SL4B**, a Linux-style slab allocator with
+  per-struct caches (tasks first; fds and vnodes join it in X3).
 - **X2 — syscalls.** Protected mode on, trap-based syscall layer:
   write/read/open/close/spawn/wait/exit/yield/sbrk. Userland libc4ix
   (printf over write) as a `.c4l` library.
@@ -151,4 +155,21 @@ loading or assigning a whole struct is an error.
       program built from separately compiled -O objects matches the
       whole-program compile and gcc. Extern DATA stays unsupported —
       a c4rlink limitation, functions only.)
-- [ ] X0 boot
+- [x] X0 boot (2026-08-03: src/c4ix/ -- six modules (boot, con, va,
+      host, task, init) each compiled `c4lc -O -c` and linked by
+      c4rlink into c4ix.c4r; boots natively on c4m and degraded on
+      plain c4 via the c4l loader, pinned exactly by `make test-c4ix`
+      against src/c4ix/tests/. Host detection via one INFO opcode
+      (0 = plain c4). Console is kprintf over PUTC only. Tasks are a
+      malloc'd singly linked list -- no TASK_MAX -- with task_next()
+      wrapping tail->head, the walk X1's context switch slots into;
+      init runs as task 0 and task_shutdown() frees the list before
+      the shutdown banner. Varargs lessons, learned the hard way:
+      (1) the stock stdarg.h keeps its va area in per-unit statics
+      which never merge across objects, so C4IX owns ONE va area in
+      va.c behind extern functions (__c4cc_make_va resolves to it at
+      link time); (2) va_end must see the va_list exactly where
+      va_start left it -- it re-reads the count slot to pop the va
+      area -- so consumers walk a copy (kprintf's ap/walk pair);
+      (3) `va_list a, b` declares b as plain int -- one declarator
+      per line.)

@@ -355,10 +355,20 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC)
 	./c4sp -c 2000000 src/c4sp/lisp/c4r-roundtrip.lisp .c4lc_b.c4r | grep -q "roundtrip identical"
 	./c4sp -c 2000000 src/c4sp/lisp/c4opt-run.lisp .c4lc_b.c4r .c4lc_bo.c4r > /dev/null
 	./c4m load-c4r.c -- .c4lc_bo.c4r | cmp - src/c4sp/tests/expected/test_switch.txt
-	# a million mutual tail calls survive after the c4opt tail pass
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp src/tests/test_tailcall.c .c4lc_b.c4r > /dev/null
-	./c4sp -c 4000000 src/c4sp/lisp/c4opt-run.lisp .c4lc_b.c4r .c4lc_bo.c4r | grep -q " tail 2"
-	./c4m load-c4r.c -- .c4lc_bo.c4r | grep -q "parity 0 counter 1000000"
+	# L4: -O runs the c4opt passes in-process (no intermediate file).
+	# The optimized image differs from the two-step pipeline's only in
+	# patch-covered operand words -- dead values the loader overwrites
+	# -- so the bar is identical behavior; the tail pass lets a million
+	# mutual tail calls run flat with no separate optimizer step.
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O src/tests/c4lc_l2.c .c4lc_b.c4r | grep -q "fold"
+	$(C4CC) -o .c4lc_a.c4r src/tests/c4lc_l2.c
+	./c4m load-c4r.c -- .c4lc_a.c4r > .c4lc_out_a
+	./c4m load-c4r.c -- .c4lc_b.c4r | cmp - .c4lc_out_a
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O src/tests/test_switch.c .c4lc_b.c4r > /dev/null
+	./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/test_switch.txt
+	./c4sp -c 2000000 src/c4sp/lisp/c4r-roundtrip.lisp .c4lc_b.c4r | grep -q "roundtrip identical"
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O src/tests/test_tailcall.c .c4lc_b.c4r | grep -q " tail 2"
+	./c4m load-c4r.c -- .c4lc_b.c4r | grep -q "parity 0 counter 1000000"
 	# bootstrap: c4lc compiles the interpreter it runs on, and the
 	# result runs Lisp -- including c4lc's own parser
 	$(PREPROC) src/c4sp/c4sp.c > .c4lc_pp.c

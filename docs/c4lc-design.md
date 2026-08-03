@@ -5,13 +5,22 @@ written in the c4sp Lisp dialect. It targets the same C4 subset and the
 same .c4r output format, but is built around an AST instead of c4cc's
 single-pass token-to-opcode emission.
 
-Status: the entire roadmap, L0–L6, is done. c4lc compiles the full
+Status: the original roadmap, L0–L6, is done. c4lc compiles the full
 c4cc subset with identical behavior, optimizes at tree level and via
 the peephole passes in one process (-O), compiles the interpreter it
 runs on AND the C4KE kernel AND the c4m VM — all three drop-in
 replacements, all smaller and never slower than their c4cc twins
 (§11) — and compiles inside C4KE with the kernel executing the
 result from memory. See §10 for the milestones.
+
+Beyond that roadmap, c4lc is now the compiler for **C4IX**
+(docs/c4ix-design.md), which drives the post-c4cc language work: L7
+(DONE) adds structs, unions, typedef, `.`/`->` member access with
+struct-size pointer arithmetic, `do/while`, all ten compound
+assignment operators, and block-scoped declarations with full
+expression initializers — differentially tested against gcc, since
+c4cc cannot compile any of it (src/tests/c4lc_l7.c). L8 (objects and
+linking) is next.
 
 ## 1. Why
 

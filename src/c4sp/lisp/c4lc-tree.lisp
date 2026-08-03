@@ -74,10 +74,13 @@
 		(if (= h 'var) e
 		(if (= h 'sizeofa) e
 		(if (= h 'sizeof)
-			;; make it a literal so it can participate in folds
+			;; make it a literal so it can participate in folds --
+			;; except struct types (>= 1024), whose size only the
+			;; generator's layout knows
+			(if (>= (t:second e) 1024) e
 			(begin
 				(set! t:nfold (+ t:nfold 1))
-				(list 'num (if (= (t:second e) 0) 1 8)))
+				(list 'num (if (= (t:second e) 0) 1 8))))
 		(if (= h 'call)
 			(t:cons 'call (t:cons (t:second e) (t:fexprs (tail (tail e)) (list))))
 		(if (= h 'comma) (t:cons 'comma (t:fexprs (tail e) (list)))
@@ -93,13 +96,15 @@
 		(if (= h 'index)
 			(list 'index (t:fexpr (t:second e)) (t:fexpr (t:third e)))
 		(if (= h 'deref) (list 'deref (t:fexpr (t:second e)))
+		(if (= h 'member) (list 'member (t:fexpr (t:second e)) (t:third e))
+		(if (= h 'arrow) (list 'arrow (t:fexpr (t:second e)) (t:third e))
 		(if (= h 'addr) e
 		(if (= h 'preinc) e
 		(if (= h 'predec) e
 		(if (= h 'postinc) e
 		(if (= h 'postdec) e
 		(if (t:member? h t:binops) (t:fbinop e)
-		e))))))))))))))))))))))))))
+		e))))))))))))))))))))))))))))
 
 (define t:fbinop (lambda (e)
 	(begin
@@ -191,6 +196,10 @@
 		(if (= h 'expr) (list 'expr (t:fexpr (t:second s)))
 		(if (= h 'if) (t:fif s)
 		(if (= h 'while) (t:fwhile s)
+		(if (= h 'dowhile)
+			;; the body runs at least once, so only the parts fold
+			(list 'dowhile (t:fstmt (t:second s)) (t:fexpr (t:third s)))
+		(if (= h 'declstmt) (t:cons 'declstmt (t:fdecls (tail s) (list)))
 		(if (= h 'for) (t:ffor s)
 		(if (= h 'return)
 			(if (= (t:second s) nil) s
@@ -198,7 +207,19 @@
 		(if (= h 'switch)
 			(t:cons 'switch (t:cons (t:fexpr (t:second s))
 				(t:fswitch (tail (tail s)) (list))))
-		s))))))))))
+		s))))))))))))
+;; declaration initializer expressions fold too
+(define t:fdecls (lambda (ls acc)
+	(if (empty? ls) (t:reverse acc)
+	(begin
+		(define d (head ls))
+		(define init (index d 4))
+		(next t:fdecls (tail ls) (t:cons
+			(if (if (= init nil) false (= (head init) 'einit))
+				(list 'local (t:second d) (t:third d) (index d 3)
+					(list 'einit (t:fexpr (t:second init))))
+			d)
+			acc))))))
 (define t:fswitch (lambda (items acc)
 	(if (empty? items) (t:reverse acc)
 	(begin
@@ -291,7 +312,8 @@
 						(t:initrefs (tail (index d 6)) (list))))
 					acc)
 			acc))))))
-;; local initializers can reference functions (&fn)
+;; local initializers can reference functions (&fn, or any expression
+;; in an einit)
 (define t:initrefs (lambda (ls acc)
 	(if (empty? ls) acc
 	(begin
@@ -299,7 +321,8 @@
 		(next t:initrefs (tail ls)
 			(if (= init nil) acc
 			(if (= (head init) 'fnaddr) (t:cons (t:second init) acc)
-			acc)))))))
+			(if (= (head init) 'einit) (t:refs (t:second init) acc)
+			acc))))))))
 
 (define t:assoc (lambda (k l)
 	(if (empty? l) false

@@ -406,6 +406,15 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4KE_C4R) $(TESTS)/test_ramcc.c4r
 	./c4sp -c 2000000 src/c4sp/lisp/c4r-roundtrip.lisp .c4lc_b.c4r | grep -q "roundtrip identical"
 	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O src/tests/test_tailcall.c .c4lc_b.c4r | grep -q " tail 2"
 	./c4m load-c4r.c -- .c4lc_b.c4r | grep -q "parity 0 counter 1000000"
+	# L7: structs, unions, typedef, member access, do-while, compound
+	# assignment, block-scoped declarations with expression
+	# initializers. gcc generated the expected output; c4cc cannot
+	# compile any of this.
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp src/tests/c4lc_l7.c .c4lc_b.c4r > /dev/null
+	./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-l7.txt
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O src/tests/c4lc_l7.c .c4lc_b.c4r > /dev/null
+	./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-l7.txt
+	./c4sp -c 2000000 src/c4sp/lisp/c4r-roundtrip.lisp .c4lc_b.c4r | grep -q "roundtrip identical"
 	# L5, the bootstrap battery: c4lc -O compiles the interpreter it
 	# runs on, and the result must run the Lisp samples (call/cc
 	# exercises the CEK machine), the byte-level c4r roundtrip, and

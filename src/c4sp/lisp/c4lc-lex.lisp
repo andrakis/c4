@@ -66,6 +66,7 @@
 	("for" For) ("continue" Continue)
 	("static" Static) ("extern" Extern) ("__attribute__" Attribute)
 	("constructor" Constructor) ("destructor" Destructor)
+	("struct" Struct) ("union" Union) ("typedef" Typedef) ("do" Do)
 	("void" Char)))  ;; void IS char in c4, as in c4's own symbol seeding
 
 ;; keyword atom, or false
@@ -156,24 +157,37 @@
 			(next lex:strdecode (+ i 1) end buf (+ n 1))))))))
 
 ;; operator/punctuation at i (first byte c): kind atom or false;
-;; consumed length in the lex:oplen mailbox
+;; consumed length in the lex:oplen mailbox. Compound assignments and
+;; -> are L7 additions; c4cc's lexer never had them.
 (define lex:op (lambda (i c)
 	(begin
 		(define d (lex:peek (+ i 1)))
+		(define d2 (lex:peek (+ i 2)))
 		(set! lex:oplen 1)
 		(if (= c 61) (if (= d 61) (begin (set! lex:oplen 2) 'Eq) 'Assign)
-		(if (= c 43) (if (= d 43) (begin (set! lex:oplen 2) 'Inc) 'Add)
-		(if (= c 45) (if (= d 45) (begin (set! lex:oplen 2) 'Dec) 'Sub)
+		(if (= c 43) (if (= d 43) (begin (set! lex:oplen 2) 'Inc)
+		             (if (= d 61) (begin (set! lex:oplen 2) 'AddA) 'Add))
+		(if (= c 45) (if (= d 45) (begin (set! lex:oplen 2) 'Dec)
+		             (if (= d 62) (begin (set! lex:oplen 2) 'Arrow)
+		             (if (= d 61) (begin (set! lex:oplen 2) 'SubA) 'Sub)))
 		(if (= c 33) (if (= d 61) (begin (set! lex:oplen 2) 'Ne) 'Not)
 		(if (= c 60) (if (= d 61) (begin (set! lex:oplen 2) 'Le)
-		             (if (= d 60) (begin (set! lex:oplen 2) 'Shl) 'Lt))
+		             (if (= d 60)
+		                 (if (= d2 61) (begin (set! lex:oplen 3) 'ShlA)
+		                     (begin (set! lex:oplen 2) 'Shl))
+		             'Lt))
 		(if (= c 62) (if (= d 61) (begin (set! lex:oplen 2) 'Ge)
-		             (if (= d 62) (begin (set! lex:oplen 2) 'Shr) 'Gt))
-		(if (= c 124) (if (= d 124) (begin (set! lex:oplen 2) 'Lor) 'Or)
-		(if (= c 38) (if (= d 38) (begin (set! lex:oplen 2) 'Lan) 'And)
-		(if (= c 94) 'Xor
-		(if (= c 37) 'Mod
-		(if (= c 42) 'Mul
+		             (if (= d 62)
+		                 (if (= d2 61) (begin (set! lex:oplen 3) 'ShrA)
+		                     (begin (set! lex:oplen 2) 'Shr))
+		             'Gt))
+		(if (= c 124) (if (= d 124) (begin (set! lex:oplen 2) 'Lor)
+		              (if (= d 61) (begin (set! lex:oplen 2) 'OrA) 'Or))
+		(if (= c 38) (if (= d 38) (begin (set! lex:oplen 2) 'Lan)
+		             (if (= d 61) (begin (set! lex:oplen 2) 'AndA) 'And))
+		(if (= c 94) (if (= d 61) (begin (set! lex:oplen 2) 'XorA) 'Xor)
+		(if (= c 37) (if (= d 61) (begin (set! lex:oplen 2) 'ModA) 'Mod)
+		(if (= c 42) (if (= d 61) (begin (set! lex:oplen 2) 'MulA) 'Mul)
 		(if (= c 91) 'Brak
 		(if (= c 63) 'Cond
 		(if (= c 126) 'Tilde
@@ -218,7 +232,9 @@
 				(begin
 					(define r (lex:skipblock (+ j 1) line))
 					(next lex:go (head r) (index r 1) acc))
-			(next lex:go j line (lex:cons (list 'Div 0 line) acc))))
+			(if (= (lex:peek j) 61)
+				(next lex:go (+ j 1) line (lex:cons (list 'DivA 0 line) acc))
+			(next lex:go j line (lex:cons (list 'Div 0 line) acc)))))
 		(if (= c 34)
 			(begin
 				(define e (lex:strend j 34))

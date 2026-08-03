@@ -82,11 +82,93 @@
 (define p:INT 1)
 (define p:PTR 2)
 
-;; optional base type: Int -> 1, Char -> 0, neither -> default d
+;; struct types are encoded as 1024 + 64*id + 2*ptrlevel: 64 per
+;; struct leaves 31 pointer levels, and ty >= 1024 tests structness.
+;; The parser owns the registries; layout happens in gen.
+(define p:STRUCT0 1024)
+(define p:SSTEP 64)
+(define p:structs nil)     ;; (("Name" TYPEID) ...)
+(define p:nstructs 0)
+(define p:typedefs nil)    ;; (("Name" TYPE) ...)
+(define p:pending nil)     ;; structdef nodes awaiting emission
+
+;; type id for a struct name, registering a forward reference if new
+(define p:structid (lambda (n)
+	(begin
+		(define a (p:assoc n p:structs))
+		(if a (p:second a)
+		(begin
+			(define ty (+ p:STRUCT0 (* p:SSTEP p:nstructs)))
+			(set! p:nstructs (+ p:nstructs 1))
+			(set! p:structs (p:cons (list n ty) p:structs))
+			ty)))))
+
+;; struct S / union U [{ members }] -- returns the value type; a body
+;; queues a (structdef NAME ISUNION MEMBERS) node on p:pending
+(define p:structtype (lambda ()
+	(begin
+		(define isu (= (p:kind) 'Union))
+		(p:advance)
+		(define n
+			(if (= (p:kind) 'Id)
+				(begin (define v (p:value)) (p:advance) v)
+			(+ "@anon" p:nstructs)))
+		(define ty (p:structid n))
+		(if (= (p:kind) 'Lbrace)
+			(begin
+				(p:advance)
+				(set! p:pending (p:cons
+					(list 'structdef n ty isu (p:members (list)))
+					p:pending)))
+			nil)
+		ty)))
+(define p:members (lambda (acc)
+	(if (= (p:kind) 'Rbrace)
+		(begin (p:advance) (p:reverse acc))
+	(begin
+		(define bt (p:basetype nil))
+		(if (= bt nil) (p:die "bad struct member type") nil)
+		(next p:members/2 bt acc)))))
+(define p:members/2 (lambda (bt acc)
+	(begin
+		(define ty (p:stars bt))
+		(if (= (p:kind) 'Id) nil (p:die "bad struct member name"))
+		(define n (p:value))
+		(p:advance)
+		(define size (p:arraysize))
+		(define acc2 (p:cons
+			(list (if (= size nil) ty (+ ty p:PTR)) n size) acc))
+		(if (= (p:kind) 'Comma)
+			(begin (p:advance) (next p:members/2 bt acc2))
+		(begin
+			(p:expect 'Semi "semicolon after struct member")
+			(next p:members acc2))))))
+
+;; optional base type: Int, Char, struct/union, or a typedef name;
+;; neither -> default d (nil marks "no type seen" for callers that
+;; must know)
 (define p:basetype (lambda (d)
 	(if (= (p:kind) 'Int) (begin (p:advance) p:INT)
 	(if (= (p:kind) 'Char) (begin (p:advance) p:CHAR)
-	d))))
+	(if (= (p:kind) 'Struct) (p:structtype)
+	(if (= (p:kind) 'Union) (p:structtype)
+	(if (= (p:kind) 'Id)
+		(begin
+			(define a (p:assoc (p:value) p:typedefs))
+			(if a (begin (p:advance) (p:second a)) d))
+	d)))))))
+
+;; is the current token the start of a declaration?
+(define p:declstart? (lambda ()
+	(begin
+		(define k (p:kind))
+		(if (= k 'Int) true
+		(if (= k 'Char) true
+		(if (= k 'Struct) true
+		(if (= k 'Union) true
+		(if (= k 'Id)
+			(if (p:assoc (p:value) p:typedefs) true false)
+		false))))))))
 
 ;; consume Mul stars: ty -> ty + 2 each
 (define p:stars (lambda (ty)
@@ -116,7 +198,15 @@
 	(Assign 1) (Cond 2) (Lor 3) (Lan 4) (Or 5) (Xor 6) (And 7)
 	(Eq 8) (Ne 9) (Lt 10) (Gt 11) (Le 12) (Ge 13) (Shl 14) (Shr 15)
 	(Add 16) (Sub 17) (Mul 18) (Div 19) (Mod 20)
-	(Inc 21) (Dec 22) (Brak 23)))
+	(Inc 21) (Dec 22) (Brak 23) (Dot 24) (Arrow 24)
+	(AddA 1) (SubA 1) (MulA 1) (DivA 1) (ModA 1)
+	(AndA 1) (OrA 1) (XorA 1) (ShlA 1) (ShrA 1)))
+
+;; compound assignment: desugared to L = L op R (the lvalue is parsed
+;; once but EMITTED twice; a[i++] += x is out of contract)
+(define p:compound '(
+	(AddA add) (SubA sub) (MulA mul) (DivA div) (ModA mod)
+	(AndA band) (OrA bor) (XorA bxor) (ShlA shl) (ShrA shr)))
 (define p:level (lambda (k)
 	(begin
 		(define a (p:assoc/atom k p:levels))
@@ -156,13 +246,16 @@
 		(if (= (p:kind) 'Comma) (p:advance) nil)
 		(next p:args (p:cons a acc))))))
 
-;; sizeof(...): array identifier or type
+;; sizeof(...): type (including struct/union/typedef names) or an
+;; array identifier
 (define p:sizeof (lambda ()
 	(begin
 		(p:advance)
 		(p:expect 'Lparen "( after sizeof")
 		(define r
-			(if (= (p:kind) 'Id)
+			(if (if (= (p:kind) 'Id)
+					(= (p:assoc (p:value) p:typedefs) false)
+					false)
 				(begin
 					(define n (p:value))
 					(p:advance)
@@ -173,11 +266,13 @@
 		(p:expect 'Rparen ") after sizeof")
 		r)))
 
-;; parenthesized: cast, or (expr[, expr...])
+;; parenthesized: cast, or (expr[, expr...]). A cast begins with a
+;; type keyword or a typedef name -- the registries disambiguate
+;; (T)x from a parenthesized variable.
 (define p:parenexpr (lambda ()
 	(begin
 		(p:advance)
-		(if (if (= (p:kind) 'Int) true (= (p:kind) 'Char))
+		(if (p:declstart?)
 			(begin
 				(define ty (p:stars (p:basetype p:INT)))
 				(p:expect 'Rparen "closing paren of cast")
@@ -266,14 +361,37 @@
 				(define i (p:expr 1))
 				(p:expect 'Rbrak "close bracket")
 				(next p:climb (list 'index lhs i) lev))
-		(begin
-			(define b (p:assoc/atom k p:binops))
-			(if (= b false) (p:die "bad operator")
+		(if (= k 'Dot)
 			(begin
 				(p:advance)
-				(next p:climb
-					(list (p:second b) lhs (p:expr (index b 2)))
-					lev)))))))))))))
+				(if (= (p:kind) 'Id) nil (p:die "member name expected after ."))
+				(define mn (p:value))
+				(p:advance)
+				(next p:climb (list 'member lhs mn) lev))
+		(if (= k 'Arrow)
+			(begin
+				(p:advance)
+				(if (= (p:kind) 'Id) nil (p:die "member name expected after ->"))
+				(define an (p:value))
+				(p:advance)
+				(next p:climb (list 'arrow lhs an) lev))
+		(begin
+			(define ca (p:assoc/atom k p:compound))
+			(if ca
+				(begin
+					(p:advance)
+					(next p:climb
+						(list 'assign lhs
+							(list (p:second ca) lhs (p:expr 1)))
+						lev))
+			(begin
+				(define b (p:assoc/atom k p:binops))
+				(if (= b false) (p:die "bad operator")
+				(begin
+					(p:advance)
+					(next p:climb
+						(list (p:second b) lhs (p:expr (index b 2)))
+						lev)))))))))))))))))
 
 ;; ---- statements ----
 
@@ -291,10 +409,24 @@
 		(if (= k 'Return) (p:returnstmt)
 		(if (= k 'Lbrace) (p:block)
 		(if (= k 'Semi) (begin (p:advance) '(empty))
+		(if (= k 'Do) (p:dostmt)
+		(if (p:declstart?)
+			(p:cons 'declstmt (p:localline))
 		(begin
 			(define e (p:expr 1))
 			(p:expect 'Semi "semicolon")
-			(list 'expr e))))))))))))))
+			(list 'expr e))))))))))))))))
+
+(define p:dostmt (lambda ()
+	(begin
+		(p:advance)
+		(define s (p:stmt))
+		(p:expect 'While "while after do body")
+		(p:expect 'Lparen "open paren after do-while")
+		(define c (p:expr 1))
+		(p:expect 'Rparen "close paren after do-while condition")
+		(p:expect 'Semi "semicolon after do-while")
+		(list 'dowhile s c))))
 
 (define p:block (lambda ()
 	(begin
@@ -503,6 +635,8 @@
 		(begin
 			(if (= k 'Static) (p:die "parameters cannot be marked static") nil)
 			(define ty (p:stars (p:basetype p:INT)))
+			(if (p:svalue? ty)
+				(p:die "struct parameters must be pointers") nil)
 			(if (= (p:kind) 'Id) nil (p:die "bad parameter declaration"))
 			(define n (p:value))
 			(p:advance)
@@ -528,9 +662,15 @@
 		(define elem ty)
 		(define size (p:arraysize))
 		(define ty2 (if (= size nil) ty (+ ty p:PTR)))
+		;; scalars take a full (possibly non-constant) initializer
+		;; expression; arrays keep the constant forms
 		(define init
 			(if (= (p:kind) 'Assign)
-				(begin (p:advance) (p:init))
+				(begin
+					(p:advance)
+					(if (= size nil)
+						(list 'einit (p:expr 1))
+					(p:init)))
 			nil))
 		(define fsize (p:initsize size elem init "local"))
 		(set! p:locals (p:cons n p:locals))
@@ -538,12 +678,18 @@
 		(next p:localline/2 bt
 			(p:cons (list 'local ty2 n fsize init) acc))))))
 
-;; all locals at the top of a function body
+;; all locals at the top of a function body (declarations can also
+;; appear anywhere in a block; those become declstmt nodes)
 (define p:localdecls (lambda (acc)
-	(if (if (= (p:kind) 'Int) true
-	    (if (= (p:kind) 'Char) true (= (p:kind) 'Static)))
+	(if (if (p:declstart?) true (= (p:kind) 'Static))
 		(next p:localdecls (+ acc (p:localline)))
 	(p:cons 'locals acc))))
+
+;; struct VALUE type: ty >= 1024 with pointer level 0
+(define p:svalue? (lambda (ty)
+	(if (< ty p:STRUCT0) false
+	(= 0 (- (- ty p:STRUCT0)
+		(* p:SSTEP (/ (- ty p:STRUCT0) p:SSTEP)))))))
 
 ;; ---- top-level declarator list ----
 
@@ -614,6 +760,31 @@
 
 ;; ---- program ----
 
+;; queued structdef nodes enter the AST before the declaration that
+;; introduced them (acc is reversed at the end, so oldest first here)
+(define p:drain (lambda (acc)
+	(if (empty? p:pending) acc
+	(begin
+		(define l (p:reverse p:pending))
+		(set! p:pending (list))
+		(next p:drain/2 l acc)))))
+(define p:drain/2 (lambda (l acc)
+	(if (empty? l) acc
+	(next p:drain/2 (tail l) (p:cons (head l) acc)))))
+
+(define p:typedefdecl (lambda ()
+	(begin
+		(p:advance)
+		(define bt (p:basetype nil))
+		(if (= bt nil) (p:die "typedef needs a type") nil)
+		(define ty (p:stars bt))
+		(if (= (p:kind) 'Id) nil (p:die "typedef needs a name"))
+		(define n (p:value))
+		(p:advance)
+		(p:expect 'Semi "semicolon after typedef")
+		(set! p:typedefs (p:cons (list n ty) p:typedefs))
+		(list 'typedefd n ty))))
+
 (define p:top (lambda (acc)
 	(if (= (p:kind) 'Eof) (p:reverse acc)
 	(begin
@@ -627,15 +798,23 @@
 				(define ed (p:enumdecl))
 				;; any declarators after the enum share INT base type
 				(next p:top (p:declarators p:INT attr (p:cons ed acc))))
+		(if (= (p:kind) 'Typedef)
+			(begin
+				(define td (p:typedefdecl))
+				(next p:top (p:cons td (p:drain acc))))
 		(begin
 			(define bt (p:basetype p:INT))
-			(next p:top (p:declarators bt attr acc))))))))
+			(next p:top (p:declarators bt attr (p:drain acc))))))))))
 
 (define parse:program (lambda (tokens)
 	(begin
 		(set! p:toks tokens)
 		(set! p:enums (list))
 		(set! p:locals (list))
+		(set! p:structs (list))
+		(set! p:nstructs 0)
+		(set! p:typedefs (list))
+		(set! p:pending (list))
 		(p:cons 'program (p:top (list))))))
 
 )

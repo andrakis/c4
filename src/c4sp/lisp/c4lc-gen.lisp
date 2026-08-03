@@ -143,9 +143,87 @@
 (define g:store! (lambda (ty)
 	(g:emit (if (= ty g:CHAR) '(SC) '(SI)))))
 
-;; step size for ++/--/ptr arithmetic on type ty, as c4cc: > PTR steps
-;; a word, everything else (char, int, char*) steps 1
-(define g:step (lambda (ty) (if (> ty g:PTR) g:WORD 1)))
+;; ---- struct types (L7) ----
+;; encoding: 1024 + 64*id + 2*ptrlevel (see c4lc-parse.lisp)
+(define g:STRUCT0 1024)
+(define g:SSTEP 64)
+(define g:structs nil)   ;; (ID SIZE MEMBERS), MEMBERS=((NAME OFF TYPE BYTES)...)
+
+(define g:sid (lambda (ty) (/ (- ty g:STRUCT0) g:SSTEP)))
+(define g:sptrlevel (lambda (ty)
+	(- (- ty g:STRUCT0) (* g:SSTEP (g:sid ty)))))
+;; struct VALUE type (pointer level 0)?
+(define g:svalue? (lambda (ty)
+	(if (< ty g:STRUCT0) false (= 0 (g:sptrlevel ty)))))
+;; pointer of any flavour?
+(define g:isptr (lambda (ty)
+	(if (>= ty g:STRUCT0) (> (g:sptrlevel ty) 0) (>= ty g:PTR))))
+
+(define g:sfind (lambda (id l)
+	(if (empty? l) false
+	(if (= (head (head l)) id) (head l)
+	(next g:sfind id (tail l))))))
+(define g:sinfo (lambda (ty)
+	(begin
+		(define s (g:sfind (g:sid ty) g:structs))
+		(if s s (g:die "struct used before its definition")))))
+
+;; storage size in bytes of a value of type ty
+(define g:tysize (lambda (ty)
+	(if (= ty g:CHAR) 1
+	(if (< ty g:STRUCT0) g:WORD
+	(if (g:svalue? ty) (g:second (g:sinfo ty))
+	g:WORD)))))
+;; size of what a pointer of type ty points at
+(define g:elemsize (lambda (ty) (g:tysize (- ty g:PTR))))
+
+;; member lookup: (NAME OFF TYPE BYTES) in struct-value type ty
+(define g:member (lambda (ty n)
+	(begin
+		(if (g:svalue? ty) nil (g:die (+ "not a struct: ." n)))
+		(define m (g:lookup n (g:third (g:sinfo ty))))
+		(if m m (g:die (+ "no such member: " n))))))
+
+;; struct/union layout from a (structdef NAME TYPE ISUNION MEMBERS)
+;; node -- the parser bakes its assigned type id into the node, since
+;; ids are handed out on FIRST MENTION (possibly a forward pointer
+;; reference), not at definition. Every member starts word-aligned;
+;; char arrays pack (n+7)/8 words.
+(define g:structdef (lambda (d)
+	(begin
+		(define ty (g:third d))
+		(define isu (index d 3))
+		(define ms (g:slayout (index d 4) isu 0 0 (list)))
+		(set! g:structs (g:cons
+			(list (g:sid ty) (head ms) (g:reverse (g:second ms)))
+			g:structs)))))
+;; returns (SIZE REVMEMBERS)
+(define g:slayout (lambda (ms isu off mx acc)
+	(if (empty? ms)
+		(list (if isu mx off) acc)
+	(begin
+		(define m (head ms))           ;; (TYPE NAME ASIZE)
+		(define mty (head m))
+		(define asz (g:third m))
+		(define words
+			(if (= asz nil)
+				(/ (+ (g:tysize mty) 7) 8)
+			(if (= (- mty g:PTR) g:CHAR)
+				(/ (+ asz 7) 8)
+			(* asz (/ (+ (g:elemsize mty) 7) 8)))))
+		(define bytes
+			(if (= asz nil)
+				(if (g:svalue? mty) (g:tysize mty) nil)
+			(if (= (- mty g:PTR) g:CHAR) asz (* asz (g:elemsize mty)))))
+		(next g:slayout (tail ms) isu
+			(if isu off (+ off (* words 8)))
+			(if (> (* words 8) mx) (* words 8) mx)
+			(g:cons (list (g:second m) off mty bytes) acc))))))
+
+;; step size for ++/--/ptr arithmetic on type ty: pointers step their
+;; element size (struct pointers step the struct size -- real C
+;; semantics), scalars step 1, as c4cc
+(define g:step (lambda (ty) (if (g:isptr ty) (g:elemsize ty) 1)))
 
 ;; c4cc's last_array: set when the last address came from an array
 ;; name (whose "address" IS its value: &arr is a no-op, assignment to
@@ -160,14 +238,16 @@
 		(if (= h 'deref)
 			(begin
 				(g:expr (g:second e))
-				(if (> g:ty g:INT) nil (g:die "bad dereference"))
+				(if (g:isptr g:ty) nil (g:die "bad dereference"))
 				(set! g:ty (- g:ty g:PTR))
 				(set! g:lastarray false))
 		(if (= h 'index)
 			(begin
 				(g:indexaddr e)
 				(set! g:lastarray false))
-		(g:die (+ "bad lvalue: " (+ "" h)))))))))
+		(if (= h 'member) (g:memberaddr e false)
+		(if (= h 'arrow) (g:memberaddr e true)
+		(g:die (+ "bad lvalue: " (+ "" h)))))))))))
 
 (define g:varaddr (lambda (n)
 	(begin
@@ -185,22 +265,42 @@
 			(if (= cl 'fun) true
 				(if (= (index s 4) nil) false true))))))
 
-;; base[idx] address; g:ty = element type
+;; base[idx] address; g:ty = element type. Scaling is by the ELEMENT
+;; size: 1 for char*, the struct size for struct pointers, 8 otherwise.
 (define g:indexaddr (lambda (e)
 	(begin
 		(g:expr (g:second e))
 		(define t g:ty)
-		(if (< t g:PTR) (g:die "pointer type expected") nil)
+		(if (g:isptr t) nil (g:die "pointer type expected"))
 		(g:emit '(PSH))
 		(g:expr (g:third e))
-		(if (> t g:PTR)
+		(if (> (g:elemsize t) 1)
 			(begin
 				(g:emit '(PSH))
-				(g:emit (list 'IMM g:WORD))
+				(g:emit (list 'IMM (g:elemsize t)))
 				(g:emit '(MUL)))
 			nil)
 		(g:emit '(ADD))
 		(set! g:ty (- t g:PTR)))))
+
+;; s.n / p->n: address of the member in the accumulator, g:ty = the
+;; member's type. For . the operand is a struct VALUE expression
+;; (which evaluates to its address, like arrays); for -> a pointer.
+(define g:memberaddr (lambda (e viaptr)
+	(begin
+		(g:expr (g:second e))
+		(define st (if viaptr (- g:ty g:PTR) g:ty))
+		(define m (g:member st (g:third e)))
+		(if (> (g:second m) 0)
+			(begin
+				(g:emit '(PSH))
+				(g:emit (list 'IMM (g:second m)))
+				(g:emit '(ADD)))
+			nil)
+		(set! g:ty (g:third m))
+		;; array members (and struct-valued members) stay an address
+		(set! g:lastarray
+			(if (= (index m 3) nil) (g:svalue? (g:third m)) true)))))
 
 ;; ++x / --x (pre): address, load, adjust, store; value = new
 (define g:preincdec (lambda (e op)
@@ -231,31 +331,32 @@
 	(begin
 		(g:expr (g:second e))
 		(define t g:ty)
+		(define es (if (g:isptr t) (g:elemsize t) 1))
 		(g:emit '(PSH))
 		(g:expr (g:third e))
 		(if (= opname 'ADD)
 			(begin
-				(if (> t g:PTR)
+				(if (> es 1)
 					(begin
 						(g:emit '(PSH))
-						(g:emit (list 'IMM g:WORD))
+						(g:emit (list 'IMM es))
 						(g:emit '(MUL)))
 					nil)
 				(g:emit '(ADD))
 				(set! g:ty t))
 		(if (= opname 'SUB)
-			(if (if (> t g:PTR) (= t g:ty) false)
+			(if (if (if (g:isptr t) (> es 1) false) (= t g:ty) false)
 				(begin        ;; ptr - ptr: difference in elements
 					(g:emit '(SUB))
 					(g:emit '(PSH))
-					(g:emit (list 'IMM g:WORD))
+					(g:emit (list 'IMM es))
 					(g:emit '(DIV))
 					(set! g:ty g:INT))
 			(begin
-				(if (> t g:PTR)
+				(if (> es 1)
 					(begin
 						(g:emit '(PSH))
-						(g:emit (list 'IMM g:WORD))
+						(g:emit (list 'IMM es))
 						(g:emit '(MUL)))
 					nil)
 				(g:emit '(SUB))
@@ -346,9 +447,11 @@
 		(if (= h 'deref)
 			(begin
 				(g:expr (g:second e))
-				(if (> g:ty g:INT) nil (g:die "bad dereference"))
+				(if (g:isptr g:ty) nil (g:die "bad dereference"))
 				(set! g:ty (- g:ty g:PTR))
-				(g:load! g:ty))
+				(if (g:svalue? g:ty)
+					(set! g:lastarray true)   ;; *structptr is an address
+				(g:load! g:ty)))
 		(if (= h 'addr)
 			(begin
 				(g:addr (g:second e))
@@ -384,7 +487,7 @@
 				(set! g:ty (g:second e)))
 		(if (= h 'sizeof)
 			(begin
-				(g:emit (list 'IMM (if (= (g:second e) g:CHAR) 1 g:WORD)))
+				(g:emit (list 'IMM (g:tysize (g:second e))))
 				(set! g:ty g:INT))
 		(if (= h 'sizeofa)
 			(begin
@@ -396,7 +499,17 @@
 		(if (= h 'index)
 			(begin
 				(g:indexaddr e)
-				(g:load! g:ty))
+				(if (g:svalue? g:ty)
+					(set! g:lastarray true)   ;; struct element: address
+				(g:load! g:ty)))
+		(if (= h 'member)
+			(begin
+				(g:memberaddr e false)
+				(if g:lastarray nil (g:load! g:ty)))
+		(if (= h 'arrow)
+			(begin
+				(g:memberaddr e true)
+				(if g:lastarray nil (g:load! g:ty)))
 		(if (= h 'cond) (g:condexpr e)
 		(if (= h 'land)
 			(begin
@@ -418,7 +531,7 @@
 		(begin
 			(define b (g:assoc/atom h g:binops))
 			(if b (g:binary e (g:second b))
-			(g:die (+ "bad expression node: " (+ "" h))))))))))))))))))))))))))))))
+			(g:die (+ "bad expression node: " (+ "" h))))))))))))))))))))))))))))))))
 
 (define g:varexpr (lambda (n)
 	(begin
@@ -465,13 +578,44 @@
 
 ;; ---- statements ----
 
+;; frame words needed by declstmt nodes anywhere under a statement
+;; (ENT must reserve the whole frame up front)
+(define g:scanstmt (lambda (s)
+	(begin
+		(define h (head s))
+		(if (= h 'declstmt) (g:scandecls (tail s) 0)
+		(if (= h 'block) (g:scanlist (tail s) 0)
+		(if (= h 'if)
+			(+ (g:scanstmt (g:third s))
+				(if (= (index s 3) nil) 0 (g:scanstmt (index s 3))))
+		(if (= h 'while) (g:scanstmt (g:third s))
+		(if (= h 'dowhile) (g:scanstmt (g:second s))
+		(if (= h 'for) (g:scanstmt (index s 4))
+		(if (= h 'switch) (g:scanlist (tail (tail s)) 0)
+		0))))))))))
+(define g:scanlist (lambda (l n)
+	(if (empty? l) n
+	(next g:scanlist (tail l) (+ n (g:scanstmt (head l)))))))
+(define g:scandecls (lambda (ls n)
+	(if (empty? ls) n
+	(next g:scandecls (tail ls) (+ n (g:lwords (head ls)))))))
+
+(define g:lcur 0)   ;; frame slot cursor for block-scoped declarations
+
 (define g:stmt (lambda (s)
 	(begin
 		(define h (head s))
-		(if (= h 'block) (g:stmts (tail s))
+		(if (= h 'block)
+			(begin
+				;; block scope: declarations inside vanish at the brace
+				(define scope g:syms)
+				(g:stmts (tail s))
+				(set! g:syms scope))
 		(if (= h 'expr) (g:expr (g:second s))
 		(if (= h 'if) (g:ifstmt s)
 		(if (= h 'while) (g:whilestmt s)
+		(if (= h 'dowhile) (g:dowhilestmt s)
+		(if (= h 'declstmt) (g:declstmts (tail s))
 		(if (= h 'for) (g:forstmt s)
 		(if (= h 'return)
 			(begin
@@ -485,7 +629,7 @@
 				(g:emit (list 'JMP (list 'code g:cont))))
 		(if (= h 'empty) nil
 		(if (= h 'switch) (g:switchstmt s)
-		(g:die (+ "bad statement node: " (+ "" h))))))))))))))))
+		(g:die (+ "bad statement node: " (+ "" h))))))))))))))))))
 (define g:stmts (lambda (l)
 	(if (empty? l) nil
 	(begin
@@ -761,9 +905,23 @@
 		(define n (g:third d))
 		(define size (index d 3))
 		(define init (index d 5))
+		(if (if (= size nil) (g:svalue? ty) false)
+			(g:globalstruct n ty init)
 		(if (= size nil)
 			(g:globalscalar n ty init)
-		(g:globalarray n ty size init)))))
+		(g:globalarray n ty size init))))))
+
+;; struct-valued global: zeroed storage, name evaluates to its address
+(define g:globalstruct (lambda (n ty init)
+	(begin
+		(if (= init nil) nil
+			(g:die (+ "struct globals cannot be initialized: " n)))
+		(g:dalign)
+		(define at g:dlen)
+		(define bytes (g:tysize ty))
+		(if (> (+ at bytes) g:DMAX) (g:die "data segment full") nil)
+		(g:dzero bytes)
+		(set! g:syms (g:cons (list n 'glo ty at bytes) g:syms)))))
 
 (define g:globalscalar (lambda (n ty init)
 	(begin
@@ -796,11 +954,13 @@
 		(define bytewise (= elem g:CHAR))
 		(g:dalign)
 		(define at g:dlen)
-		(define bytes (if bytewise s (* s g:WORD)))
+		(define bytes (if bytewise s (* s (* 8 (/ (+ (g:tysize elem) 7) 8)))))
 		(if (> (+ at bytes) g:DMAX) (g:die "data segment full") nil)
 		(if (= init nil) (g:dzero bytes)
 		(if (= (head init) 'braces)
 			(begin
+				(if (g:svalue? elem)
+					(g:die (+ "struct arrays cannot be initialized: " n)) nil)
 				(if (> (length (g:second init)) s)
 					(g:die (+ "too many initializers for " n)) nil)
 				(g:delems (g:second init) s bytewise))
@@ -831,21 +991,33 @@
 ;; local slots, c4cc's exact scheme: i += words consumed, the symbol's
 ;; Val is i AFTER the add, so LEA (loc - Val) is the LOWEST slot and
 ;; array indexing ascends. char arrays pack bytes into whole words.
+;; frame words one declaration needs (struct-aware)
+(define g:lwords (lambda (d)
+	(begin
+		(define size (index d 3))
+		(define ty (g:second d))
+		(if (= size nil)
+			(if (g:svalue? ty) (/ (+ (g:tysize ty) 7) 8) 1)
+		(if (= (- ty g:PTR) g:CHAR)
+			(/ (+ size 7) 8)
+		(* size (/ (+ (g:elemsize ty) 7) 8)))))))
+;; its sizeof value in bytes, nil for plain scalars
+(define g:lbytes (lambda (d)
+	(begin
+		(define size (index d 3))
+		(define ty (g:second d))
+		(if (= size nil)
+			(if (g:svalue? ty) (g:tysize ty) nil)
+		(if (= (- ty g:PTR) g:CHAR) size (* size (g:elemsize ty)))))))
+
 (define g:localdefs (lambda (ls i)
 	(if (empty? ls) i
 	(begin
 		(define d (head ls))   ;; (local TYPE NAME SIZE INIT)
-		(define size (index d 3))
-		(define words
-			(if (= size nil) 1
-			(if (= (- (g:second d) g:PTR) g:CHAR)
-				(/ (+ size 7) 8)
-			size)))
-		(define bytes
-			(if (= size nil) nil
-			(if (= (- (g:second d) g:PTR) g:CHAR) size (* size g:WORD))))
+		(define words (g:lwords d))
 		(set! g:syms (g:cons
-			(list (g:third d) 'loc (g:second d) (+ i words) bytes) g:syms))
+			(list (g:third d) 'loc (g:second d) (+ i words) (g:lbytes d))
+			g:syms))
 		(next g:localdefs (tail ls) (+ i words))))))
 
 ;; initializer stores, emitted after ENT so they re-run per entry.
@@ -879,43 +1051,79 @@
 	(if (>= i (length str)) (g:reverse acc)
 	(next g:strbytes str (+ i 1) (g:cons (string:byte str i) acc)))))
 
+;; emit the initializer of local node d whose frame slot is val
+(define g:eminit (lambda (d val)
+	(begin
+		(define init (index d 4))
+		(define size (index d 3))
+		(define bytewise
+			(if (= size nil) false
+				(= (- (g:second d) g:PTR) g:CHAR)))
+		(if (= init nil) nil
+		(if (= size nil)
+			;; scalar: a full initializer expression, stored as a
+			;; word (c4cc used SI even for char scalars)
+			(if (= (head init) 'einit)
+				(begin
+					(if (g:svalue? (g:second d))
+						(g:die "cannot initialize a struct by value") nil)
+					(g:emit (list 'LEA (- g:loc val)))
+					(g:emit '(PSH))
+					(g:expr (g:second init))
+					(g:emit '(SI)))
+			(g:die "unsupported local initializer"))
+		(if (= (head init) 'braces)
+			(begin
+				(if (> (length (g:second init)) size)
+					(g:die (+ "too many initializers for " (g:third d))) nil)
+				(g:linit/elems val (g:second init) size 0 bytewise))
+		(if (if (= (head init) 'str) bytewise false)
+			(begin
+				(if (< size (+ (length (g:second init)) 1))
+					(g:die (+ "string does not fit the array " (g:third d))) nil)
+				(g:linit/elems val (g:strbytes (g:second init) 0 (list))
+					size 0 true))
+		(g:die (+ "unsupported array initializer for " (g:third d))))))))))
+
 (define g:localinits (lambda (ls)
 	(if (empty? ls) nil
 	(begin
 		(define d (head ls))
-		(define init (index d 4))
-		(define size (index d 3))
-		(if (= init nil) nil
-		(begin
-			(define s (g:find (g:third d)))
-			(define val (index s 3))
-			(define bytewise
-				(if (= size nil) false
-					(= (- (g:second d) g:PTR) g:CHAR)))
-			(if (= size nil)
-				;; scalar: one word store (c4cc uses SI even for char)
-				(if (= (head init) 'num)
-					(g:linit/word val 0 (g:second init))
-				(if (= (head init) 'str)
-					(g:linit/word val 0
-						(list 'IMM (list 'data (g:dstr (g:second init)))))
-				(if (= (head init) 'fnaddr)
-					(g:linit/word val 0
-						(list 'IMM (list 'code (index (g:find (g:second init)) 3))))
-				(g:die "unsupported local initializer"))))
-			(if (= (head init) 'braces)
-				(begin
-					(if (> (length (g:second init)) size)
-						(g:die (+ "too many initializers for " (g:third d))) nil)
-					(g:linit/elems val (g:second init) size 0 bytewise))
-			(if (if (= (head init) 'str) bytewise false)
-				(begin
-					(if (< size (+ (length (g:second init)) 1))
-						(g:die (+ "string does not fit the array " (g:third d))) nil)
-					(g:linit/elems val (g:strbytes (g:second init) 0 (list))
-						size 0 true))
-			(g:die (+ "unsupported array initializer for " (g:third d))))))))
+		(if (= (index d 4) nil) nil
+			(g:eminit d (index (g:find (g:third d)) 3)))
 		(next g:localinits (tail ls))))))
+
+;; block-position declarations: allocate from the frame cursor,
+;; register (block scope handles removal), run the initializer HERE --
+;; a block declaration initializes when reached, as C requires
+(define g:declstmts (lambda (ls)
+	(if (empty? ls) nil
+	(begin
+		(define d (head ls))
+		(set! g:lcur (+ g:lcur (g:lwords d)))
+		(set! g:syms (g:cons
+			(list (g:third d) 'loc (g:second d) g:lcur (g:lbytes d))
+			g:syms))
+		(g:eminit d g:lcur)
+		(next g:declstmts (tail ls))))))
+
+(define g:dowhilestmt (lambda (s)
+	(begin
+		(define lb (g:newlabel))
+		(define lc (g:newlabel))
+		(define lend (g:newlabel))
+		(define ob g:brk)
+		(define oc g:cont)
+		(set! g:brk lend)
+		(set! g:cont lc)
+		(g:label! lb)
+		(g:stmt (g:second s))
+		(g:label! lc)
+		(g:expr (g:third s))
+		(g:emit (list 'BNZ (list 'code lb)))
+		(g:label! lend)
+		(set! g:brk ob)
+		(set! g:cont oc))))
 
 (define g:function (lambda (d)
 	(begin
@@ -931,8 +1139,12 @@
 		(define argc (+ (g:params ps 0) (if (index d 4) 1 0)))
 		(set! g:loc (+ argc 1))
 		(define fini (g:localdefs ls (+ argc 1)))
+		;; block-scoped declarations deeper in the body still need
+		;; their frame words reserved by ENT; a pre-scan counts them
+		(define extra (g:scanstmt body))
+		(set! g:lcur fini)
 		(g:label! (index s 3))
-		(g:emit (list 'ENT (- fini g:loc)))
+		(g:emit (list 'ENT (+ (- fini g:loc) extra)))
 		(g:localinits ls)
 		(g:stmts (tail body))
 		(if (= (head (head g:code)) 'LEV) nil (g:emit '(LEV)))
@@ -947,9 +1159,11 @@
 		(define h (head d))
 		(if (= h 'enum) nil            ;; constants already substituted
 		(if (= h 'proto) nil           ;; pre-pass covers in-unit targets
+		(if (= h 'typedefd) nil        ;; parser-resolved
+		(if (= h 'structdef) (g:structdef d)
 		(if (= h 'global) (g:global d)
 		(if (= h 'func) (g:function d)
-		(g:die (+ "bad declaration node: " (+ "" h))))))))))
+		(g:die (+ "bad declaration node: " (+ "" h))))))))))))
 (define g:decls (lambda (l)
 	(if (empty? l) nil
 	(begin

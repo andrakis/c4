@@ -142,5 +142,13 @@ loading or assigning a whole struct is an error.
       feature set gcc-differential-identical, plain and -O, pinned by
       src/tests/c4lc_l7.c in test-c4lc; struct parameters remain
       pointer-only, whole-struct assignment intentionally rejected)
-- [ ] L8 objects + linking
+- [x] L8 objects + linking (2026-08-03: `c4lc -c` emits .c4o objects —
+      undefined prototypes become extern symbols with SYMBOL-typed
+      patches, main optional (entry -1), static/extern attrs carried
+      so c4rlink's merge rules apply; -O keeps every non-static
+      function as a dead-elimination root. Verified: c4lc objects
+      link with c4cc objects in either direction; an L7 struct
+      program built from separately compiled -O objects matches the
+      whole-program compile and gcc. Extern DATA stays unsupported —
+      a c4rlink limitation, functions only.)
 - [ ] X0 boot

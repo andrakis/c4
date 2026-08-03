@@ -330,7 +330,10 @@
 	(next t:assoc k (tail l))))))
 
 ;; roots: main, constructors/destructors, globals' &fn initializers,
-;; and __c4cc_make_va (reached implicitly from variadic call sites)
+;; and __c4cc_make_va (reached implicitly from variadic call sites).
+;; In object mode every non-static function is exported, so all of
+;; them are roots.
+(define tree:objmode false)
 (define t:roots (lambda (ds acc)
 	(if (empty? ds) acc
 	(begin
@@ -338,10 +341,12 @@
 		(define h (head d))
 		(next t:roots (tail ds)
 			(if (= h 'func)
+				(if (if tree:objmode (= 0 (bit:and (index d 5) 8)) false)
+					(t:cons (t:third d) acc)
 				(if (= (t:third d) "main") (t:cons "main" acc)
 				(if (= (t:third d) "__c4cc_make_va") (t:cons (t:third d) acc)
 				(if (> (bit:and (index d 5) 3) 0) (t:cons (t:third d) acc)
-				acc)))
+				acc))))
 			(if (= h 'global)
 				(if (= (index d 5) nil) acc
 				(if (= (head (index d 5)) 'fnaddr)

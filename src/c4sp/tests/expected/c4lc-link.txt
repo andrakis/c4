@@ -1,0 +1,2 @@
+d: constructor
+sum 150 len 5 head 50

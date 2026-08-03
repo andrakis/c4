@@ -19,8 +19,11 @@ Beyond that roadmap, c4lc is now the compiler for **C4IX**
 struct-size pointer arithmetic, `do/while`, all ten compound
 assignment operators, and block-scoped declarations with full
 expression initializers — differentially tested against gcc, since
-c4cc cannot compile any of it (src/tests/c4lc_l7.c). L8 (objects and
-linking) is next.
+c4cc cannot compile any of it (src/tests/c4lc_l7.c). L8 (DONE) adds
+object mode: `c4lc -c` emits .c4o units whose undefined prototypes
+are extern symbols with SYMBOL-typed patches, resolved by c4rlink —
+interoperable with c4cc objects in the same link. Next: X0, the
+first C4IX boot.
 
 ## 1. Why
 

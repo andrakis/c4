@@ -319,7 +319,7 @@ c4m-lc.c4r: c4sp $(C4LC_LISP) c4m.c
 # L0: golden token dump of a sample covering every token kind and c4cc
 # lexer quirk, native and under c4m, plus a full lex of c4cc.c itself
 # (whose token list needs a bigger cell arena than the default).
-test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4KE_C4R) $(TESTS)/test_ramcc.c4r
+test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.c4r
 	./c4sp src/c4sp/lisp/c4lc-tokens.lisp src/tests/c4lc_lex_sample.c | cmp - src/c4sp/tests/expected/c4lc-tokens.txt
 	./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/c4lc-tokens.lisp src/tests/c4lc_lex_sample.c | cmp - src/c4sp/tests/expected/c4lc-tokens.txt
 	./c4sp -c 2000000 src/c4sp/lisp/c4lc-tokens.lisp -count src/c4cc/c4cc.c | grep -q "^tokens [0-9]"
@@ -415,6 +415,31 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4KE_C4R) $(TESTS)/test_ramcc.c4r
 	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O src/tests/c4lc_l7.c .c4lc_b.c4r > /dev/null
 	./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-l7.txt
 	./c4sp -c 2000000 src/c4sp/lisp/c4r-roundtrip.lisp .c4lc_b.c4r | grep -q "roundtrip identical"
+	# L8: object mode. -c leaves undefined prototypes as SYMBOL-typed
+	# patches with extern symbol entries for c4rlink. c4lc objects link
+	# with c4cc objects in either direction; an L7 struct program built
+	# from separately compiled -O objects matches both the whole-program
+	# compile and committed gcc output.
+	$(C4CC) -o .c4lc_oa1.c4o $(TESTS)/test_link_a.c > /dev/null 2>&1
+	$(C4CC) -o .c4lc_ob1.c4o $(TESTS)/test_link_b.c > /dev/null 2>&1
+	$(C4RLINK) .c4lc_oa1.c4o .c4lc_ob1.c4o -o .c4lc_ol.c4r
+	./c4m load-c4r.c -- .c4lc_ol.c4r > .c4lc_out_a 2>&1
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -c $(TESTS)/test_link_a.c .c4lc_oa2.c4o > /dev/null
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -c $(TESTS)/test_link_b.c .c4lc_ob2.c4o > /dev/null
+	$(C4RLINK) .c4lc_oa2.c4o .c4lc_ob2.c4o -o .c4lc_ol.c4r
+	./c4m load-c4r.c -- .c4lc_ol.c4r 2>&1 | cmp - .c4lc_out_a
+	$(C4RLINK) .c4lc_oa1.c4o .c4lc_ob2.c4o -o .c4lc_ol.c4r
+	./c4m load-c4r.c -- .c4lc_ol.c4r 2>&1 | cmp - .c4lc_out_a
+	$(C4RLINK) .c4lc_oa2.c4o .c4lc_ob1.c4o -o .c4lc_ol.c4r
+	./c4m load-c4r.c -- .c4lc_ol.c4r 2>&1 | cmp - .c4lc_out_a
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O -c $(TESTS)/test_link_c.c .c4lc_oa2.c4o > /dev/null
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O -c $(TESTS)/test_link_d.c .c4lc_ob2.c4o > /dev/null
+	$(C4RLINK) .c4lc_oa2.c4o .c4lc_ob2.c4o -o .c4lc_ol.c4r
+	./c4m load-c4r.c -- .c4lc_ol.c4r | cmp - src/c4sp/tests/expected/c4lc-link.txt
+	cat $(TESTS)/test_link_d.c $(TESTS)/test_link_c.c > .c4lc_pp.c
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp .c4lc_pp.c .c4lc_ol.c4r > /dev/null
+	./c4m load-c4r.c -- .c4lc_ol.c4r | cmp - src/c4sp/tests/expected/c4lc-link.txt
+	rm -f .c4lc_oa1.c4o .c4lc_ob1.c4o .c4lc_oa2.c4o .c4lc_ob2.c4o .c4lc_ol.c4r
 	# L5, the bootstrap battery: c4lc -O compiles the interpreter it
 	# runs on, and the result must run the Lisp samples (call/cc
 	# exercises the CEK machine), the byte-level c4r roundtrip, and

@@ -255,15 +255,16 @@
 		(define cl (g:second s))
 		(if (= cl 'loc) (g:emit (list 'LEA (- g:loc (index s 3))))
 		(if (= cl 'glo) (g:emit (list 'IMM (list 'data (index s 3))))
-		(if (= cl 'fun)
+		(if (if (= cl 'fun) true (= cl 'ext))
 			;; &fn: the function's address. Marked like an array so
 			;; assignment and ++/-- reject it as an lvalue.
-			(g:emit (list 'IMM (list 'code (index s 3))))
+			(g:emit (list 'IMM (g:funref s)))
 		(g:die (+ "not a variable: " n)))))
 		(set! g:ty (g:third s))
 		(set! g:lastarray
 			(if (= cl 'fun) true
-				(if (= (index s 4) nil) false true))))))
+			(if (= cl 'ext) true
+				(if (= (index s 4) nil) false true)))))))
 
 ;; base[idx] address; g:ty = element type. Scaling is by the ELEMENT
 ;; size: 1 for char*, the struct size for struct pointers, 8 otherwise.
@@ -376,6 +377,13 @@
 
 ;; call: args left to right, each pushed; then Sys opcode / JSR / JSRI /
 ;; JSRS; then ADJ n
+;; the JSR target operand for a fun or ext entry: in-unit label, or an
+;; extern placeholder rewritten to a symbol reference at assembly
+(define g:funref (lambda (s)
+	(if (= (g:second s) 'ext)
+		(list 'extph (index s 3))
+	(list 'code (index s 3)))))
+
 (define g:call (lambda (e)
 	(begin
 		(define n (g:second e))
@@ -383,7 +391,7 @@
 		(define s (g:find n))
 		(define cl (g:second s))
 		(if (= cl 'sys) (g:emit (list (index s 3)))
-		(if (= cl 'fun)
+		(if (if (= cl 'fun) true (= cl 'ext))
 			(begin
 				(if (index s 5)
 					;; variadic: bundle the extra args through
@@ -392,18 +400,18 @@
 					(begin
 						(define argc (index s 4))
 						(define mv (g:find "__c4cc_make_va"))
-						(if (= (g:second mv) 'fun) nil
+						(if (if (= (g:second mv) 'fun) true (= (g:second mv) 'ext)) nil
 							(g:die "vararg support requires __c4cc_make_va, include stdarg.h"))
 						(g:emit (list 'IMM (+ (- t argc) 1)))
 						(g:emit '(PSH))
-						(g:emit (list 'JSR (list 'code (index mv 3))))
+						(g:emit (list 'JSR (g:funref mv)))
 						(g:emit (list 'ADJ (+ (- t argc) 2)))
 						(g:emit '(PSH))
 						(set! t argc))
 				(if (= t (index s 4)) nil
 					(print ";; c4lc WARNING: argument count mismatch in call to"
 						n "- expected" (index s 4) "given" t)))
-				(g:emit (list 'JSR (list 'code (index s 3)))))
+				(g:emit (list 'JSR (g:funref s))))
 		(if (= cl 'glo) (g:emit (list 'JSRI (list 'data (index s 3))))
 		(if (= cl 'loc) (g:emit (list 'JSRS (- g:loc (index s 3))))
 		(g:die (+ "bad function call: " n))))))
@@ -545,10 +553,10 @@
 			(begin
 				(g:emit (list 'IMM (list 'data (index s 3))))
 				(g:varload s))
-		(if (= cl 'fun)
+		(if (if (= cl 'fun) true (= cl 'ext))
 			(begin
 				;; function name as a value: its address
-				(g:emit (list 'IMM (list 'code (index s 3))))
+				(g:emit (list 'IMM (g:funref s)))
 				(set! g:ty (g:third s))
 				(set! g:lastarray false))
 		(g:die (+ "bad variable: " n))))))))
@@ -837,17 +845,24 @@
 				(list (g:third d) 'fun (g:second d) (g:newlabel)
 					;; ArgCount includes the variadic fake slot, as c4cc
 					(+ (length (index d 3)) (if (index d 4) 1 0))
-					(index d 4))
+					(index d 4)
+					(index d 5))   ;; declaration attrs (static etc.)
 				g:syms))
 			nil)
 		(next g:prepass (tail decls))))))
 
-;; second pre-pass: prototypes with no definition anywhere in the unit
-;; get a stub that exits with 255 if ever reached. c4cc "supports"
-;; these by emitting a call through an unresolved extern (which jumps
-;; to garbage); the stub is the deterministic version of the same
-;; contract: legal to declare and call-compile, fatal to execute.
+;; second pre-pass: prototypes with no definition anywhere in the
+;; unit. In OBJECT MODE (-c) they become extern symbols: calls carry
+;; SYMBOL-typed patches for c4rlink to resolve. In whole-program mode
+;; they get a stub that exits with 255 if ever reached -- c4cc
+;; "supports" these by emitting a call through an unresolved extern
+;; (which jumps to garbage); the stub is the deterministic version of
+;; the same contract: legal to declare and call-compile, fatal to
+;; execute.
+(define gen:objmode false)
 (define g:stubs nil)     ;; (LABEL ...) pending stub labels
+(define g:externs nil)   ;; (NAME TYPE VARIADIC) in first-seen order
+(define g:nexterns 0)
 (define g:protopass (lambda (decls)
 	(if (empty? decls) nil
 	(begin
@@ -855,14 +870,26 @@
 		(if (if (= (head d) 'proto)
 				(= (g:lookup (g:third d) g:syms) false)
 				false)
+			(if gen:objmode
+				(begin
+					(set! g:syms (g:cons
+						(list (g:third d) 'ext (g:second d) g:nexterns
+							(+ (length (index d 3)) (if (index d 4) 1 0))
+							(index d 4))
+						g:syms))
+					(set! g:externs (g:cons
+						(list (g:third d) (g:second d) (index d 4))
+						g:externs))
+					(set! g:nexterns (+ g:nexterns 1)))
 			(begin
 				(define l (g:newlabel))
 				(set! g:syms (g:cons
 					(list (g:third d) 'fun (g:second d) l
 						(+ (length (index d 3)) (if (index d 4) 1 0))
-						(index d 4))
+						(index d 4)
+						16)   ;; ATTR_EXTERN, as c4cc marks prototypes
 					g:syms))
-				(set! g:stubs (g:cons l g:stubs)))
+				(set! g:stubs (g:cons l g:stubs))))
 			nil)
 		(next g:protopass (tail decls))))))
 (define g:emitstubs (lambda (ls)
@@ -905,14 +932,15 @@
 		(define n (g:third d))
 		(define size (index d 3))
 		(define init (index d 5))
+		(define gattrs (index d 4))
 		(if (if (= size nil) (g:svalue? ty) false)
-			(g:globalstruct n ty init)
+			(g:globalstruct n ty init gattrs)
 		(if (= size nil)
-			(g:globalscalar n ty init)
-		(g:globalarray n ty size init))))))
+			(g:globalscalar n ty init gattrs)
+		(g:globalarray n ty size init gattrs))))))
 
 ;; struct-valued global: zeroed storage, name evaluates to its address
-(define g:globalstruct (lambda (n ty init)
+(define g:globalstruct (lambda (n ty init gattrs)
 	(begin
 		(if (= init nil) nil
 			(g:die (+ "struct globals cannot be initialized: " n)))
@@ -921,9 +949,9 @@
 		(define bytes (g:tysize ty))
 		(if (> (+ at bytes) g:DMAX) (g:die "data segment full") nil)
 		(g:dzero bytes)
-		(set! g:syms (g:cons (list n 'glo ty at bytes) g:syms)))))
+		(set! g:syms (g:cons (list n 'glo ty at bytes gattrs) g:syms)))))
 
-(define g:globalscalar (lambda (n ty init)
+(define g:globalscalar (lambda (n ty init gattrs)
 	(begin
 		(define at
 			(if (= init nil) (g:dword 0)
@@ -944,11 +972,11 @@
 						(list 'dcode slot (index f 3)) g:dpatches))
 					slot)
 			(g:die (+ "unsupported global initializer for " n)))))))
-		(set! g:syms (g:cons (list n 'glo ty at nil) g:syms)))))
+		(set! g:syms (g:cons (list n 'glo ty at nil gattrs) g:syms)))))
 
 ;; array storage: char arrays are s bytes, everything else s words;
 ;; uninitialized/short-initialized elements are zero
-(define g:globalarray (lambda (n ty s init)
+(define g:globalarray (lambda (n ty s init gattrs)
 	(begin
 		(define elem (- ty g:PTR))
 		(define bytewise (= elem g:CHAR))
@@ -971,7 +999,7 @@
 				(g:dstrbytes (g:second init) 0)
 				(g:dzero (- s (length (g:second init)))))
 		(g:die (+ "unsupported array initializer for " n)))))
-		(set! g:syms (g:cons (list n 'glo ty at bytes) g:syms)))))
+		(set! g:syms (g:cons (list n 'glo ty at bytes gattrs) g:syms)))))
 (define g:dstrbytes (lambda (str i)
 	(if (>= i (length str)) nil
 	(begin
@@ -1185,13 +1213,44 @@
 			(if (= cl 'fun) (+ id 1) (if (= cl 'glo) (+ id 1) id))
 			(if (= cl 'fun)
 				(g:cons (list id (g:third s) 129
-					(if (index s 5) 32 0)
+					(bit:or (if (= (index s 6) nil) 0 (index s 6))
+						(if (index s 5) 32 0))
 					(head s) (list 'code (index s 3))) acc)
 			(if (= cl 'glo)
 				(g:cons (list id (g:third s) 131
-					(if (= (index s 4) nil) 0 64)
+					(bit:or (if (= (index s 5) nil) 0 (index s 5))
+						(if (= (index s 4) nil) 0 64))
 					(head s) (index s 3)) acc)
 			acc)))))))
+
+;; extern symbols (object mode) go at the end of the section, ids
+;; continuing where the defined entries stopped; ATTR_EXTERN marks
+;; them undefined for c4rlink, value 0
+(define g:extsection (lambda (exts id acc)
+	(if (empty? exts) (g:reverse acc)
+	(begin
+		(define x (head exts))
+		(next g:extsection (tail exts) (+ id 1)
+			(g:cons (list id (g:second x) 129
+				(bit:or 16 (if (g:third x) 32 0))
+				(head x) 0) acc))))))
+
+;; rewrite (OP (extph K)) operands into (OP (extern BASE+K)) symbol
+;; references once the symbol ids are final
+(define g:remapext (lambda (code base acc)
+	(if (empty? code) (g:reverse acc)
+	(begin
+		(define i (head code))
+		(next g:remapext (tail code) base (g:cons
+			(if (= 2 (length i))
+				(if (if (= 'list (typeof (g:second i)))
+						(= 'extph (head (g:second i)))
+						false)
+					(list (head i)
+						(list 'extern (+ base (g:second (g:second i)))))
+				i)
+			i)
+			acc))))))
 
 ;; ---- module assembly ----
 
@@ -1211,17 +1270,28 @@
 		(set! g:swdef nil)
 		(set! g:lastarray false)
 		(set! g:stubs (list))
+		(set! g:externs (list))
+		(set! g:nexterns 0)
 		(g:sysinit g:syscalls)
 		(g:prepass (tail ast))
 		(g:protopass (tail ast))
 		(g:decls (tail ast))
 		(g:emitstubs (g:reverse g:stubs))
 		(define m (g:lookup "main" g:syms))
-		(if m nil (g:die "no main function"))
-		(list 2 64 (list 'code (index m 3))
-			(g:reverse g:code)
+		(if m nil
+			(if gen:objmode nil (g:die "no main function")))
+		(define syms (g:symsection (g:reverse g:syms) 0 (list)))
+		(define code (g:reverse g:code))
+		(if (> g:nexterns 0)
+			(begin
+				(define base (length syms))
+				(set! syms (+ syms (g:extsection (g:reverse g:externs) base (list))))
+				(set! code (g:remapext code base (list))))
+			nil)
+		(list 2 64 (if m (list 'code (index m 3)) -1)
+			code
 			(string:substr g:data 0 g:dlen)
-			(g:symsection (g:reverse g:syms) 0 (list))
+			syms
 			(g:reverse g:cons*)
 			(g:reverse g:des*)
 			(g:reverse g:dpatches)))))

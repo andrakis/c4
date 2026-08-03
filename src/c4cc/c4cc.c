@@ -1008,7 +1008,12 @@ void stmt()
   else if (tk == Switch) {
     // switch (expr) { case C: ... default: ... }, with C fallthrough and
     // break, compiled to a jump table. The table lives inline in the code
-    // segment because the patch format can only relocate code words.
+    // segment because a patch's ADDRESS is always a code-segment offset:
+    // the loader applies every patch as *(code + paddr) = ..., so a word
+    // RESIDING in the data segment can never be relocated (patch VALUES
+    // may of course point into either segment -- every string literal is
+    // a DATA-typed patch). A table in the data segment would hold code
+    // addresses nothing could fix up.
     // Layout, in emission order:
     //
     //     <expr>                a = value

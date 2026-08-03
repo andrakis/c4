@@ -1,0 +1,5 @@
+sum 45
+evens 20
+nested 65
+drained 0
+counted 5

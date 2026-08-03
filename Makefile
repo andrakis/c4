@@ -273,7 +273,7 @@ test-c4sp-opt: c4sp c4sp.c4r c4m $(C4KE_C4R)
 # L0: golden token dump of a sample covering every token kind and c4cc
 # lexer quirk, native and under c4m, plus a full lex of c4cc.c itself
 # (whose token list needs a bigger cell arena than the default).
-test-c4lc: c4sp c4sp.c4r c4m
+test-c4lc: c4sp c4sp.c4r c4m $(C4CC)
 	./c4sp src/c4sp/lisp/c4lc-tokens.lisp src/tests/c4lc_lex_sample.c | cmp - src/c4sp/tests/expected/c4lc-tokens.txt
 	./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/c4lc-tokens.lisp src/tests/c4lc_lex_sample.c | cmp - src/c4sp/tests/expected/c4lc-tokens.txt
 	./c4sp -c 2000000 src/c4sp/lisp/c4lc-tokens.lisp -count src/c4cc/c4cc.c | grep -q "^tokens [0-9]"
@@ -301,6 +301,22 @@ test-c4lc: c4sp c4sp.c4r c4m
 	$(PREPROC) src/c4sp/c4sp.c > .c4lc_pp.c
 	./c4sp -c 8000000 src/c4sp/lisp/c4lc-ast.lisp -check .c4lc_pp.c | grep -q "^parse ok"
 	rm -f .c4lc_cat.c .c4lc_pp.c
+	# L2: code generation. The L2 sample compiles under both c4cc and
+	# c4lc and the two binaries must behave identically under c4m.
+	# for/continue (which c4cc cannot compile: its For branch is dead
+	# code) check against committed gcc-generated output. c4lc output
+	# must also roundtrip through c4r.lisp byte-identically and stay
+	# correct after the c4opt passes.
+	$(C4CC) -o .c4lc_a.c4r src/tests/c4lc_l2.c
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp src/tests/c4lc_l2.c .c4lc_b.c4r > /dev/null
+	./c4m load-c4r.c -- .c4lc_a.c4r > .c4lc_out_a
+	./c4m load-c4r.c -- .c4lc_b.c4r | cmp - .c4lc_out_a
+	./c4sp -c 2000000 src/c4sp/lisp/c4r-roundtrip.lisp .c4lc_b.c4r | grep -q "roundtrip identical"
+	./c4sp -c 2000000 src/c4sp/lisp/c4opt-run.lisp .c4lc_b.c4r .c4lc_bo.c4r > /dev/null
+	./c4m load-c4r.c -- .c4lc_bo.c4r | cmp - .c4lc_out_a
+	./c4sp -c 2000000 src/c4sp/lisp/c4lc.lisp src/tests/c4lc_for.c .c4lc_f.c4r > /dev/null
+	./c4m load-c4r.c -- .c4lc_f.c4r | cmp - src/c4sp/tests/expected/c4lc-for.txt
+	rm -f .c4lc_a.c4r .c4lc_b.c4r .c4lc_bo.c4r .c4lc_f.c4r .c4lc_out_a
 	@echo "test-c4lc: OK"
 
 # The C4KE RAM filesystem: opcode-level access, the self-hosting loop

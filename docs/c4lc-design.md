@@ -5,7 +5,8 @@ written in the c4sp Lisp dialect. It targets the same C4 subset and the
 same .c4r output format, but is built around an AST instead of c4cc's
 single-pass token-to-opcode emission.
 
-Status: L0 (lexer) and L1 (parser) done. See §10 for the roadmap.
+Status: L0 (lexer), L1 (parser) and L2 (minimal codegen) done. See §10
+for the roadmap.
 
 ## 1. Why
 
@@ -213,9 +214,17 @@ battery green and adds its own target.
   self-compile unit of c4cc (u0.h + load-c4r.c + c4cc.c + asm-c4r.c,
   371 decls, 6.7s native), preprocessed c4sp.c (210 decls), c4.c,
   c4m.c and load-c4r.c.
-- **L2 — minimal codegen.** Enough for ints, arithmetic, control flow,
-  calls, printf: compile a hello/factorial test, run under c4m,
-  diff against c4cc-compiled behavior.
+- **L2 — minimal codegen.** DONE (c4lc-gen.lisp + c4lc.lisp driver).
+  Ints/chars/pointers, globals and locals with scalar initializers
+  (including "str" and &fn via dpatches), all control flow (`for`
+  works), direct + function-pointer calls (JSR/JSRI/JSRS), syscalls
+  as opcode+ADJ. A pre-pass gives every function a label, so forward
+  calls need none of c4cc's placeholder machinery. Verified four
+  ways: src/tests/c4lc_l2.c behaves identically to the c4cc build
+  under c4m; src/tests/c4lc_for.c matches committed gcc output; the
+  image round-trips through c4r.lisp byte-identically; and c4opt
+  optimizes it (514→505 instructions) with identical behavior.
+  Deferred to L3: arrays, switch, variadics, sizeof(array).
 - **L3 — full subset.** Pointers, arrays, strings, globals +
   initializers, enums, switch, function pointers, variadics; entire
   src/tests battery compiles under c4lc and behaves identically to

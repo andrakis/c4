@@ -5,7 +5,7 @@ written in the c4sp Lisp dialect. It targets the same C4 subset and the
 same .c4r output format, but is built around an AST instead of c4cc's
 single-pass token-to-opcode emission.
 
-Status: design + L0 (lexer). See §10 for the roadmap.
+Status: L0 (lexer) and L1 (parser) done. See §10 for the roadmap.
 
 ## 1. Why
 
@@ -99,7 +99,9 @@ All offsets in bytes unless noted, matching c4r.lisp.
   concatenation) is codegen's job, not the lexer's.
 
 Keyword kinds: `Char Else Enum If Int Return Sizeof While Switch Case
-Default Break`. Operator kinds, in c4cc precedence order: `Assign Cond
+Default Break For Continue Static Extern Attribute Constructor
+Destructor`; `void` lexes as `Char` (void IS char in c4, as in c4's own
+symbol seeding). Operator kinds, in c4cc precedence order: `Assign Cond
 Lor Lan Or Xor And Eq Ne Lt Gt Le Ge Shl Shr Add Sub Mul Div Mod Inc
 Dec Brak`. Punctuation kinds: `Not Tilde Semi Colon Comma Lparen Rparen
 Lbrace Rbrace Rbrak Dot` (c4cc returns these as raw chars; c4lc names
@@ -117,22 +119,37 @@ other escaped char is itself. `#` skips to end of line. `//` and
 - An empty char literal `''` is Num 0 (c4cc leaves stale ival).
 - A multi-char literal `'ab'` is the last char, as c4cc.
 
-## 6. AST (L1)
+## 6. AST (L1) — implemented
 
-S-expression nodes, tagged by head atom. Sketch (finalized in L1):
+S-expression nodes, tagged by head atom (authoritative comment in
+c4lc-parse.lisp):
 
-    (program (enum ...) (global ...) (func ...) ...)
-    (func "name" RETTYPE ((param TYPE "x") ...) VARIADIC?
-      (locals (local TYPE "y" SIZE INIT) ...)
-      (body STMT ...))
-    stmts:  (if E S S?) (while E S) (switch E (case N S...) ...
-            (default S...)) (break) (return E?) (block S...) (expr E)
-    exprs:  (num N) (str "s") (var "x") (call "f" E...) (deref E)
-            (addr E) (binop OP E E) (assign LHS E) (cond E E E)
-            (cast TYPE E) (sizeof TYPE|"x") (index E E) (preinc/postinc ...)
+    (program TOP...)
+    (enum (NAME VAL)...)
+    (global TYPE "name" SIZE ATTRS INIT)        SIZE nil=scalar, N=array
+    (proto TYPE "name" (PTYPE...) VARIADIC ATTRS)
+    (func TYPE "name" ((PTYPE "p")...) VARIADIC ATTRS
+          (locals (local TYPE "name" SIZE INIT)...) (block STMT...))
+    INIT:  nil | (num N) | (str S) | (fnaddr F) | (braces (N...))
+    stmts: (block S...) (if E S S|nil) (while E S) (for I C P S)
+           (switch E ITEM...) with (case N)/(default) label items
+           (break) (continue) (return E|nil) (expr E) (empty)
+    exprs: (num N) (str S) (var X) (call F A...) (deref E) (addr E)
+           (lognot E) (bitnot E) (neg E) (preinc/predec/postinc/postdec E)
+           (cast TYPE E) (sizeof TYPE) (sizeofa X) (comma E...)
+           (index E E) (assign L R) (cond C T F) (add..lor L R)
 
-Types are integers exactly as c4cc: CHAR=0, INT=1, PTR levels +2 each.
-The AST dump driver prints this form; parser golden tests diff it.
+Types are integers exactly as c4cc: CHAR=0, INT=1, PTR levels +2 each;
+ATTRS is c4cc's bitmask. Enum constants substitute as (num N) at use
+sites, shadowed by locals/params, as c4cc's symbol table does. The
+grammar mirrors c4cc's parse()/stmt()/expr() with two deliberate
+differences: `for` is parsed CORRECTLY (c4cc's For branch never
+consumes its token, so every `for` dies on "open paren expected" —
+dead code no compilable source can reach), and checks that need symbol
+classes (lvalues, duplicate cases, sizeof of a non-array identifier)
+are deferred to sema/codegen. A function definition's closing brace
+terminates its declarator line, and a prototype's ';' is left for the
+declarator loop — both exactly as c4cc's parse loop consumes them.
 
 ## 7. Codegen (L2–L3)
 
@@ -189,9 +206,13 @@ battery green and adds its own target.
 - **L0 — lexer.** c4lc-lex.lisp + c4lc-tokens.lisp; golden token dump
   of a sample exercising every kind and quirk; runs native and under
   c4m (`test-c4lc`).
-- **L1 — parser.** Full-subset recursive-descent to AST;
-  c4lc-ast.lisp dump driver; golden ASTs for the sample + parses all
-  of src/tests/*.c without error.
+- **L1 — parser.** DONE. Full-subset recursive-descent to AST;
+  c4lc-ast.lisp dump driver; golden AST for the sample (native + c4m);
+  parses every c4cc-compilable src/tests/*.c (the two files c4cc
+  rejects fail at the same constructs), the exact raw-concatenation
+  self-compile unit of c4cc (u0.h + load-c4r.c + c4cc.c + asm-c4r.c,
+  371 decls, 6.7s native), preprocessed c4sp.c (210 decls), c4.c,
+  c4m.c and load-c4r.c.
 - **L2 — minimal codegen.** Enough for ints, arithmetic, control flow,
   calls, printf: compile a hello/factorial test, run under c4m,
   diff against c4cc-compiled behavior.

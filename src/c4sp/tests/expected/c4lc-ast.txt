@@ -1,0 +1,21 @@
+(enum (RED 0) (GREEN 5) (BLUE 6))
+(global 1 global nil 0 nil)
+(global 2 msg nil 0 (str hello
+world))
+(global 2 empty nil 0 (str ))
+(global 2 quirks nil 0 (str tabhere
+cr
+(global 1 after_block nil 0 nil)
+(func 1 add ((1 a) (1 b)) false 0 (locals) (block (return (add (var a) (var b)))))
+(func 1 variadic ((1 n)) true 32 (locals) (block (return (var n))))
+(proto 1 proto (2 1) false 16)
+(global 1 hidden nil 8 nil)
+(global 1 elsewhere nil 16 nil)
+(global 3 fnptr nil 0 (fnaddr add))
+(global 3 table 3 64 (braces (0 -2 16)))
+(global 2 word 4 64 (str abc))
+(global 2 pad 8 64 nil)
+(func 0 setup nil false 1 (locals) (block (expr (assign (var global) (num 1)))))
+(func 1 loops ((1 n)) false 0 (locals (local 1 i nil nil) (local 1 sum nil nil) (local 3 acc 4 (braces (1 -1))) (local 2 tag 6 (str ok))) (block (expr (assign (var sum) (num 0))) (for (assign (var i) (num 0)) (lt (var i) (var n)) (preinc (var i)) (block (if (eq (var i) (num 2)) (continue) nil) (expr (assign (var sum) (add (add (var sum) (index (var acc) (mod (var i) (num 4)))) (index (var tag) (num 0))))))) (while (gt (var sum) (num 100)) (block (expr (postdec (var sum))) (break))) (return (var sum))))
+(func 1 main nil false 0 (locals (local 1 i nil nil) (local 1 x nil nil) (local 0 c nil nil)) (block (expr (assign (var i) (num 42))) (expr (assign (var i) (num 42))) (expr (assign (var i) (num 42))) (expr (assign (var i) (num 0))) (expr (assign (var c) (num 65))) (expr (assign (var c) (num 10))) (expr (assign (var c) (num 0))) (expr (assign (var c) (num 98))) (expr (assign (var x) (add (postinc (var i)) (predec (var i))))) (expr (assign (var x) (shr (shl (var i) (num 2)) (num 1)))) (expr (assign (var x) (bor (lt (var i) (num 1)) (bxor (gt (var i) (num 2)) (band (le (var i) (num 3)) (ge (var i) (num 4))))))) (expr (assign (var x) (lor (eq (var i) (num 1)) (land (ne (var i) (num 2)) (lognot (var i)))))) (expr (assign (var x) (sub (div (mul (mod (bitnot (var i)) (num 3)) (num 2)) (num 1)) (num -1)))) (expr (assign (var x) (cond (var i) (call add (num 1) (num 2)) (var global)))) (if (var x) (block (expr (assign (var x) (var x)))) (expr (assign (var x) (num 0)))) (while (gt (var x) (num 0)) (expr (postdec (var x)))) (switch (var x) (case 0) (break) (case 5) (break) (default) (break)) (return (add (sizeof 1) (sizeof 2)))))
+nil

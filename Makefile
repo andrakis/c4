@@ -277,6 +277,30 @@ test-c4lc: c4sp c4sp.c4r c4m
 	./c4sp src/c4sp/lisp/c4lc-tokens.lisp src/tests/c4lc_lex_sample.c | cmp - src/c4sp/tests/expected/c4lc-tokens.txt
 	./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/c4lc-tokens.lisp src/tests/c4lc_lex_sample.c | cmp - src/c4sp/tests/expected/c4lc-tokens.txt
 	./c4sp -c 2000000 src/c4sp/lisp/c4lc-tokens.lisp -count src/c4cc/c4cc.c | grep -q "^tokens [0-9]"
+	# L1: AST golden of the sample, native and under c4m
+	./c4sp src/c4sp/lisp/c4lc-ast.lisp src/tests/c4lc_lex_sample.c | cmp - src/c4sp/tests/expected/c4lc-ast.txt
+	./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/c4lc-ast.lisp src/tests/c4lc_lex_sample.c | cmp - src/c4sp/tests/expected/c4lc-ast.txt
+	# L1: every c4cc-compilable test source parses. genfloat.c and
+	# test_illins.c are excluded because c4cc itself rejects them (c4lc
+	# fails at the same constructs); the vararg tests go through the
+	# preprocessor, exactly as c4cc receives them.
+	for f in src/tests/*.c; do \
+		case $$f in \
+		*/genfloat.c|*/test_illins.c) continue;; \
+		*/oldtest_vararg*.c|*/oldvararg3.c|*/test_vprintf.c|*/vararg*.c) \
+			$(PREPROC) $$f > .c4lc_pp.c 2>/dev/null; \
+			./c4sp -c 4000000 src/c4sp/lisp/c4lc-ast.lisp -check .c4lc_pp.c | grep -q "^parse ok" || exit 1;; \
+		*) \
+			./c4sp -c 4000000 src/c4sp/lisp/c4lc-ast.lisp -check $$f | grep -q "^parse ok" || exit 1;; \
+		esac; \
+	done
+	# L1: the exact self-compile unit c4cc consumes (raw concatenation,
+	# no cpp -- c4cc skips '#' lines), and preprocessed c4sp.c
+	cat $(U0) load-c4r.c $(SRCS)/c4cc/c4cc.c $(SRCS)/c4cc/asm-c4r.c > .c4lc_cat.c
+	./c4sp -c 8000000 src/c4sp/lisp/c4lc-ast.lisp -check .c4lc_cat.c | grep -q "^parse ok"
+	$(PREPROC) src/c4sp/c4sp.c > .c4lc_pp.c
+	./c4sp -c 8000000 src/c4sp/lisp/c4lc-ast.lisp -check .c4lc_pp.c | grep -q "^parse ok"
+	rm -f .c4lc_cat.c .c4lc_pp.c
 	@echo "test-c4lc: OK"
 
 # The C4KE RAM filesystem: opcode-level access, the self-hosting loop

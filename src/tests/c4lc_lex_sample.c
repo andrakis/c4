@@ -17,6 +17,30 @@ int add(int a, int b) { return a + b; }
 
 int variadic(int n, ...) { return n; }
 
+int proto(char *s, int n);
+static int hidden;
+extern int elsewhere;
+int *fnptr = &add;
+int table[3] = { RED, -2, 0x10 };
+char word[] = "abc";
+char pad[8];
+
+void __attribute__((constructor)) setup () { global = 1; }
+
+int loops(int n)
+{
+  int i, sum;
+  int acc[4] = { 1, -1 };
+  char tag[6] = "ok";
+  sum = 0;
+  for (i = 0; i < n; ++i) {
+    if (i == 2) continue;
+    sum = sum + acc[i % 4] + tag[0];
+  }
+  while (sum > 100) { sum--; break; }
+  return sum;
+}
+
 int main()
 {
   int i, x;
@@ -39,7 +63,7 @@ int main()
   while (x > 0) x--;
   switch (x) {
   case 0: break;
-  case RED: break;
+  case GREEN: break;
   default: break;
   }
   return sizeof(int) + sizeof(char *);

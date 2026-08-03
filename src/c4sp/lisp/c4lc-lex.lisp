@@ -62,7 +62,11 @@
 (define lex:keywords '(
 	("char" Char) ("else" Else) ("enum" Enum) ("if" If) ("int" Int)
 	("return" Return) ("sizeof" Sizeof) ("while" While)
-	("switch" Switch) ("case" Case) ("default" Default) ("break" Break)))
+	("switch" Switch) ("case" Case) ("default" Default) ("break" Break)
+	("for" For) ("continue" Continue)
+	("static" Static) ("extern" Extern) ("__attribute__" Attribute)
+	("constructor" Constructor) ("destructor" Destructor)
+	("void" Char)))  ;; void IS char in c4, as in c4's own symbol seeding
 
 ;; keyword atom, or false
 (define lex:kwlook (lambda (kws name)

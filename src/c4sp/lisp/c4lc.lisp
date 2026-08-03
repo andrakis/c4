@@ -16,7 +16,15 @@
 	(if (< (length Args) 2) (error "usage: c4lc.lisp [-O] in.c out.c4r"))
 	(define In (head Args))
 	(define OutName (index Args 1))
-	(define M (gen:module (parse:program (lex:file In))))
+	(define Ast (parse:program (lex:file In)))
+	(if Opt
+		(begin
+			;; L6 tree passes first (fold, dead branches, dead
+			;; functions), then generate, then the peephole passes
+			(load "c4lc-tree.lisp")
+			(set! Ast (tree:optimize Ast)))
+		nil)
+	(define M (gen:module Ast))
 	(if Opt
 		(begin
 			(load "c4opt.lisp")

@@ -280,6 +280,27 @@ C4LC_DIFF := c4_jailbreak factorial hello multifun puts reverse \
              tests c4lc_l2
 C4LC_DIFF_MASKED := global test_gcscan test-oisc test_printf
 C4LC_DIFF_PP := vararg2 test_vprintf
+C4LC_LISP := src/c4sp/lisp/c4lc.lisp src/c4sp/lisp/c4lc-lex.lisp \
+             src/c4sp/lisp/c4lc-parse.lisp src/c4sp/lisp/c4lc-gen.lisp \
+             src/c4sp/lisp/c4lc-tree.lisp src/c4sp/lisp/c4r.lisp \
+             src/c4sp/lisp/c4opt.lisp
+
+# c4lc -O builds of the three big images (L6). Each is smaller and
+# never slower than its c4cc twin; see docs/c4lc-design.md 12 for
+# measurements. Not part of the default build -- swap them in by
+# copying over c4ke.c4r / c4sp.c4r / c4m.c4r.
+c4ke-lc.c4r: c4sp $(C4LC_LISP) $(SRCS)/c4ke/c4ke.c
+	$(PREPROC) $(SRCS)/c4ke/c4ke.c > .c4lc_klc.c
+	./c4sp -c 32000000 src/c4sp/lisp/c4lc.lisp -O .c4lc_klc.c c4ke-lc.c4r
+	rm -f .c4lc_klc.c
+c4sp-lc.c4r: c4sp $(C4LC_LISP) $(C4SP_SRCS)
+	$(PREPROC) src/c4sp/c4sp.c > .c4lc_klc.c
+	./c4sp -c 16000000 src/c4sp/lisp/c4lc.lisp -O .c4lc_klc.c c4sp-lc.c4r
+	rm -f .c4lc_klc.c
+c4m-lc.c4r: c4sp $(C4LC_LISP) c4m.c
+	$(PREPROC) c4m.c > .c4lc_klc.c
+	./c4sp -c 16000000 src/c4sp/lisp/c4lc.lisp -O .c4lc_klc.c c4m-lc.c4r
+	rm -f .c4lc_klc.c
 # L0: golden token dump of a sample covering every token kind and c4cc
 # lexer quirk, native and under c4m, plus a full lex of c4cc.c itself
 # (whose token list needs a bigger cell arena than the default).
@@ -361,7 +382,7 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4KE_C4R) $(TESTS)/test_ramcc.c4r
 	# patch-covered operand words -- dead values the loader overwrites
 	# -- so the bar is identical behavior; the tail pass lets a million
 	# mutual tail calls run flat with no separate optimizer step.
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O src/tests/c4lc_l2.c .c4lc_b.c4r | grep -q "fold"
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O src/tests/c4lc_l2.c .c4lc_b.c4r | grep -q "tree: folded"
 	$(C4CC) -o .c4lc_a.c4r src/tests/c4lc_l2.c
 	./c4m load-c4r.c -- .c4lc_a.c4r > .c4lc_out_a
 	./c4m load-c4r.c -- .c4lc_b.c4r | cmp - .c4lc_out_a
@@ -394,6 +415,12 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4KE_C4R) $(TESTS)/test_ramcc.c4r
 	# image from memory -- no write ever touches the host filesystem
 	cp $(TESTS)/test_ramcc.c4r .
 	$(C4M) $(RUN_C4KE) test_ramcc | grep -q "yello"
+	# L6, the kernel: c4lc -O compiles C4KE itself (tree passes, dead
+	# function elimination, and the symbol section the trap-time
+	# stacktrace needs); the result must boot cleanly and run a task
+	$(MAKE) c4ke-lc.c4r
+	./c4m load-c4r.c -- c4ke-lc.c4r test_basic 2>&1 | grep -q "clean shutdown"
+	./c4m load-c4r.c -- c4ke-lc.c4r test_basic 2>&1 | grep -q "^  5"
 	rm -f .c4lc_a.c4r .c4lc_b.c4r .c4lc_bo.c4r .c4lc_pp.c .c4lc_out_a .c4lc_sp.c4r .c4lc_ref.c4r
 	@echo "test-c4lc: OK"
 

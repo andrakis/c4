@@ -698,6 +698,39 @@
 			nil)
 		(next g:prepass (tail decls))))))
 
+;; second pre-pass: prototypes with no definition anywhere in the unit
+;; get a stub that exits with 255 if ever reached. c4cc "supports"
+;; these by emitting a call through an unresolved extern (which jumps
+;; to garbage); the stub is the deterministic version of the same
+;; contract: legal to declare and call-compile, fatal to execute.
+(define g:stubs nil)     ;; (LABEL ...) pending stub labels
+(define g:protopass (lambda (decls)
+	(if (empty? decls) nil
+	(begin
+		(define d (head decls))
+		(if (if (= (head d) 'proto)
+				(= (g:lookup (g:third d) g:syms) false)
+				false)
+			(begin
+				(define l (g:newlabel))
+				(set! g:syms (g:cons
+					(list (g:third d) 'fun (g:second d) l
+						(+ (length (index d 3)) (if (index d 4) 1 0))
+						(index d 4))
+					g:syms))
+				(set! g:stubs (g:cons l g:stubs)))
+			nil)
+		(next g:protopass (tail decls))))))
+(define g:emitstubs (lambda (ls)
+	(if (empty? ls) nil
+	(begin
+		(g:label! (head ls))
+		(g:emit '(ENT 0))
+		(g:emit '(IMM 255))
+		(g:emit '(PSH))
+		(g:emit '(EXIT))
+		(next g:emitstubs (tail ls))))))
+
 ;; write N zero bytes at the current data cursor
 (define g:dzero (lambda (nb)
 	(if (= nb 0) nil
@@ -923,6 +956,29 @@
 		(g:decl (head l))
 		(next g:decls (tail l))))))
 
+;; ---- symbol section ----
+;; c4cc numeric classes: Num=128 Fun=129 Sys=130 Glo=131 Loc=132.
+;; Functions carry their code label as the value (the encoder resolves
+;; it to the word offset); load-c4r's stacktrace walks exactly these.
+;; Globals' values are their data offsets. Attrs: variadic 0x20,
+;; array 0x40.
+(define g:symsection (lambda (entries id acc)
+	(if (empty? entries) (g:reverse acc)   ;; call with declaration order
+	(begin
+		(define s (head entries))
+		(define cl (g:second s))
+		(next g:symsection (tail entries)
+			(if (= cl 'fun) (+ id 1) (if (= cl 'glo) (+ id 1) id))
+			(if (= cl 'fun)
+				(g:cons (list id (g:third s) 129
+					(if (index s 5) 32 0)
+					(head s) (list 'code (index s 3))) acc)
+			(if (= cl 'glo)
+				(g:cons (list id (g:third s) 131
+					(if (= (index s 4) nil) 0 64)
+					(head s) (index s 3)) acc)
+			acc)))))))
+
 ;; ---- module assembly ----
 
 (define gen:module (lambda (ast)
@@ -940,15 +996,18 @@
 		(set! g:swcases nil)
 		(set! g:swdef nil)
 		(set! g:lastarray false)
+		(set! g:stubs (list))
 		(g:sysinit g:syscalls)
 		(g:prepass (tail ast))
+		(g:protopass (tail ast))
 		(g:decls (tail ast))
+		(g:emitstubs (g:reverse g:stubs))
 		(define m (g:lookup "main" g:syms))
 		(if m nil (g:die "no main function"))
 		(list 2 64 (list 'code (index m 3))
 			(g:reverse g:code)
 			(string:substr g:data 0 g:dlen)
-			(list)
+			(g:symsection (g:reverse g:syms) 0 (list))
 			(g:reverse g:cons*)
 			(g:reverse g:des*)
 			(g:reverse g:dpatches)))))

@@ -5,12 +5,13 @@ written in the c4sp Lisp dialect. It targets the same C4 subset and the
 same .c4r output format, but is built around an AST instead of c4cc's
 single-pass token-to-opcode emission.
 
-Status: L0–L5 all done. c4lc compiles the full c4cc subset with
-identical behavior, optimizes in-process (-O), compiles the
-interpreter it runs on (which then passes the sample battery and runs
-c4lc again, producing byte-identical output), and compiles inside
-C4KE with the kernel executing the result from memory. Only L6
-(tree-level optimizations) remains, as a stretch goal. See §10.
+Status: the entire roadmap, L0–L6, is done. c4lc compiles the full
+c4cc subset with identical behavior, optimizes at tree level and via
+the peephole passes in one process (-O), compiles the interpreter it
+runs on AND the C4KE kernel AND the c4m VM — all three drop-in
+replacements, all smaller and never slower than their c4cc twins
+(§11) — and compiles inside C4KE with the kernel executing the
+result from memory. See §10 for the milestones.
 
 ## 1. Why
 
@@ -50,7 +51,7 @@ tokens, full token-list construction):
 So native compiles of large files will take seconds; fully self-hosted
 compiles (c4lc on c4sp.c4r on c4m) will take minutes for c4cc-sized
 inputs and seconds for typical test programs. Acceptable; mitigations in
-§11.
+§12.
 
 Primitive inventory is sufficient: `string:byte`/`string:byte!`/
 `string:word!`/`string:alloc`/`string:substr` for scanning and building
@@ -265,10 +266,56 @@ battery green and adds its own target.
   test_ramcc starts c4sp+c4lc as a C4KE task, the image lands in the
   kernel RAM filesystem, and the kernel executes it from memory — no
   write ever touches the host filesystem.
-- **L6 (stretch) — tree optimizations.** Constant folding, dead
-  function elimination; measure against c4opt-only.
+- **L6 — tree optimizations.** DONE (c4lc-tree.lisp, applied by -O
+  before generation). T1: constant folding over expressions and
+  control flow — sizeof made literal, ?: / if / while / for with
+  constant conditions reduced, && and || collapsed with c4's exact
+  result-value semantics; folding whole subtrees before emission beats
+  the peephole's fold (c4lc_l2.c: 484 instructions vs 505 the two-pass
+  way). T2: dead function elimination — reachability closure from
+  main, constructors, destructors, taken addresses and global &fn
+  initializers, `__c4cc_make_va` always kept. L6 also forced two
+  fidelity additions: a real symbol section (Fun=129 entries carry
+  their code label as value — load-c4r's trap-time stacktrace walks
+  these, and a symbol-less kernel null-derefs in it), and exit-255
+  stubs for prototype-only calls (c4cc compiles those into unresolved
+  extern jumps; c4m.c's never-taken float branch needs exactly this).
+  See §11 for measurements.
 
-## 11. Risks and mitigations
+## 11. Measured results (2026-08-03)
+
+The three big images, compiled three ways. "c4opt" is the peephole
+pipeline over the c4cc image; "c4lc -O" is tree passes + generation +
+peephole in one process. Counts by c4r-roundtrip's decoder.
+
+| image | c4cc          | c4opt(c4cc)   | c4lc -O       | c4lc vs c4cc |
+|-------|---------------|---------------|---------------|--------------|
+| c4ke  | 23,260 / 339K | 20,710 / 312K | 18,495 / 276K | −20.5%       |
+| c4sp  | 19,695 / 280K | 18,719 / 270K | 16,125 / 235K | −18.1%       |
+| c4m   | 15,215 / 225K | 14,538 / 218K | 11,139 / 172K | −26.8%       |
+
+Runtime, all through native c4m:
+
+- **Kernel boot** (`c4ke.c4r test_basic`, cycles to "Kernel ready",
+  exactly reproducible run to run): c4cc 898.0k, c4opt 890.5k, c4lc
+  **801.9k (−10.7%)**. Wall-clock boot time is unchanged — C4KE's
+  boot is dominated by fixed measurement windows, so the win shows in
+  cycles, i.e. in work done, not in waiting.
+- **Compiler workload** (c4sp.c4r hosting c4lc-eq.lisp compiling
+  c4lc_l2.c, median of 3): c4cc build 10.5s, c4opt build 7.32s, c4lc
+  build **7.31s — 1.44x faster** than the c4cc build. Output stays
+  byte-identical on every variant.
+- **innerbench** (`make test`): scores carry ±5-10% run-to-run noise
+  from scheduling and interval sampling; medians move the right way
+  (total runtime 9.55s c4cc-everything → 8.6-9.4s optimized configs)
+  but individual runs overlap. The deterministic metrics above are
+  the honest comparison.
+- All three c4lc images are drop-in: the c4lc kernel passes
+  test-c4ke-ramfs (including compiling inside itself), the c4lc c4sp
+  passes the sample battery, and the c4lc c4m runs innerbench's
+  nested source-interpreted C4KE.
+
+## 12. Risks and mitigations
 
 - **Speed.** 70x interpretation penalty under c4m (§2). Mitigations:
   native c4sp for development; `c4opt`-optimize c4sp.c4r itself (the

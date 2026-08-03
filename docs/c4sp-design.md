@@ -58,6 +58,7 @@ Changed, with reasons:
 | `double` floats | binary32 via `include/c4_float.h` | Already built, already tested, already runs under plain c4. |
 | C++ exceptions | error cell + an error flag checked by the eval loop | C4 has no exceptions or `setjmp`. |
 | `'x` not handled by the reader | `'x` reads as `(quote x)` | alisp's C++ tokeniser made `'env:defined` an atom *named* `'env:defined`, so `macros.lisp` and `seval.lisp` only worked on the Node build. **Fixed upstream** in alisp `efdf948`; c4sp inherits the corrected behaviour. |
+| only `false` is false | **`false`, `nil`/`()` and integer `0` are falsy** (2026-08-03) | Lisp-style conditionals: `(if maybe-empty-list ...)` and lookup functions returning `nil`/`0` on miss branch naturally — this matters once real programs (c4lc, the C compiler in c4sp) live on list plumbing. Floats (`0.0` included) and `""` stay truthy, as in Common Lisp. `not` agrees with `if`. Divergence guarded by `truthy.lisp`; no alisp sample exercised it. |
 
 ## 3. Cell representation
 

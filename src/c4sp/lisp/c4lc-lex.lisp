@@ -8,8 +8,9 @@
 ;; (\t -> 8, \r -> 10). Deliberate divergences are listed in design
 ;; 5.1: block comments count their newlines, '' is Num 0.
 ;;
-;; DIALECT WARNING: only the atom false is falsy in c4sp -- 0, nil and
-;; () are all truthy. Every predicate here returns real booleans.
+;; Falsiness is Lisp-style (false, nil/() and integer 0); predicates
+;; here still return real booleans. Token VALUES can be a falsy 0 --
+;; always branch on the token KIND, never the value.
 
 (begin
 

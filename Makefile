@@ -176,7 +176,7 @@ test-c4sp: c4sp c4sp.c4r c4m $(C4KE_C4R)
 		./c4m load-c4r.c -- c4sp.c4r -p $$f | cmp - .c4sp_rt1 || exit 1; \
 	done
 	rm -f .c4sp_rt1 .c4sp_rt2
-	for t in fac listadd macros quote set switch arguments; do \
+	for t in fac listadd macros quote set switch arguments truthy; do \
 		./c4sp src/c4sp/lisp/$$t.lisp | cmp - src/c4sp/tests/expected/$$t.txt || exit 1; \
 		./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/$$t.lisp | cmp - src/c4sp/tests/expected/$$t.txt || exit 1; \
 	done

@@ -216,9 +216,10 @@ battery green and adds its own target.
   thousand cells; pass `-c`. The GC is conservative mark&sweep and
   already survives gcloop; watch `gc:stats` in stress tests.
 - **Dialect traps** (hard-won this session):
-  - Only the atom `false` is falsy. `0`, `nil`, `(list)`, `""` are all
-    TRUTHY. Predicates must return booleans, never 0/1. Branch on
-    list-emptiness with `empty?`, never the list itself.
+  - Falsiness is `false`, `nil`/`()` and integer `0` (Lisp-style, since
+    2026-08-03 — see c4sp-design §2). `0.0` and `""` are truthy. Note
+    that a `Num 0` token VALUE is falsy: branch on token kind, never on
+    a value that can legitimately be 0.
   - `next` is the only tail call; use it for self-loops. Non-tail
     helper calls are fine (CEK absorbs depth).
   - `=` compares strings by content, atoms by id — both cheap.

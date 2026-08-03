@@ -56,9 +56,16 @@ int *cell_true, *cell_false;
 
 int *bool_cell (int b) { return b ? cell_true : cell_false; }
 
-// Is x the atom false? The only falsy value in alisp: nil and 0 are true.
+// Lisp-style falsiness: false, nil/() and integer 0 are the falsy
+// values. A deliberate divergence from alisp, where only the atom false
+// is false. Floats are always truthy (0.0 included), as in Common Lisp.
 int cell_is_false (int *x) {
-	return cell_type(x) == T_ATOM && x[CELL_A] == A_FALSE;
+	int t;
+	t = cell_type(x);
+	if (t == T_NIL) return 1;
+	if (t == T_INT) return !x[CELL_A];
+	if (t == T_ATOM) return x[CELL_A] == A_FALSE || x[CELL_A] == A_NIL;
+	return 0;
 }
 
 // Resolve a symbol argument (atom or string) to an atom id.
@@ -402,7 +409,7 @@ int *builtin_call (int id, int *args, int *env) {
 	if (id == B_NE) return bool_cell(!cell_equal(a0, a1));
 	if (id == B_LT || id == B_LE || id == B_GT || id == B_GE)
 		return builtin_cmp(id, args);
-	if (id == B_NOT) return bool_cell(!cell_equal(a0, cell_true));
+	if (id == B_NOT) return bool_cell(cell_is_false(a0));
 	if (id == B_LENGTH) return mk_int(cell_size(a0));
 	if (id == B_LIST) return args;
 	if (id == B_INDEX) {

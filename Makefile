@@ -359,15 +359,18 @@ c4ix-%.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libc4ix.c4l $(C4IX_SRC)/user/%.c
 # into a RAM file captures 58 bytes there and 0 on plain c4, where a
 # raw printf has no boundary to cross. The pipeline (uecho | uwc)
 # works on both.
-C4IX_PROGS := c4ix-hello.c4r c4ix-uhello.c4r c4ix-uecho.c4r c4ix-uwc.c4r
+C4IX_PROGS := c4ix-hello.c4r c4ix-uhello.c4r c4ix-echo.c4r c4ix-wc.c4r \
+              c4ix-cat.c4r c4ix-sh.c4r
+C4IX_ARGS := c4ix-hello.c4r c4ix-uhello.c4r c4ix-echo.c4r c4ix-wc.c4r \
+             c4ix-sh.c4r $(C4IX_SRC)/user/demo.sh
 test-c4ix: c4 c4m c4ix.c4r $(C4IX_PROGS)
-	$(C4M) load-c4r.c -- c4ix.c4r $(C4IX_PROGS) | cmp - $(C4IX_SRC)/tests/x3-c4m.txt
-	$(C4) c4l.c c4ix.c4r $(C4IX_PROGS) | sed '/^exit([0-9-]*) cycle = /d' | cmp - $(C4IX_SRC)/tests/x3-c4.txt
+	$(C4M) load-c4r.c -- c4ix.c4r $(C4IX_ARGS) | cmp - $(C4IX_SRC)/tests/x4-c4m.txt
+	$(C4) c4l.c c4ix.c4r $(C4IX_ARGS) | sed '/^exit([0-9-]*) cycle = /d' | cmp - $(C4IX_SRC)/tests/x4-c4.txt
 	@echo "test-c4ix: OK"
 run-c4ix: c4m c4ix.c4r $(C4IX_PROGS)
-	$(C4M) load-c4r.c -- c4ix.c4r $(C4IX_PROGS)
+	$(C4M) load-c4r.c -- c4ix.c4r $(C4IX_ARGS)
 run-c4ix-c4: c4 c4ix.c4r $(C4IX_PROGS)
-	$(C4) c4l.c c4ix.c4r $(C4IX_PROGS)
+	$(C4) c4l.c c4ix.c4r $(C4IX_ARGS)
 # L0: golden token dump of a sample covering every token kind and c4cc
 # lexer quirk, native and under c4m, plus a full lex of c4cc.c itself
 # (whose token list needs a bigger cell arena than the default).

@@ -169,11 +169,33 @@ static void io_pipeline(char *wprog, char *rprog) {
     task_wait(r);
 }
 
+// X4: hand the whole job over to a shell. init stops being the thing
+// that wires up pipes and redirections by hand -- it just starts
+// c4ix-sh on a script, and the shell does all of it through
+// syscalls, from userland, behind protected mode.
+static void init_shell(char *shell, char *script) {
+    struct task *t;
+    char *sargv[3];
+
+    sargv[0] = shell;
+    sargv[1] = script;
+    sargv[2] = 0;
+
+    kprintf("init: --- X4: handing off to %s %s ---\n", shell, script);
+    if (!(t = task_spawn(shell, 2, (int)sargv))) {
+        kprintf("init: cannot start %s\n", shell);
+        return;
+    }
+    kprintf("init: shell exited %d after %d syscalls\n",
+        task_wait(t), task_last_syscalls);
+}
+
 static void init_io(char **av, int argc) {
     kputs("init: --- X3: files, redirection, pipes ---\n");
     io_ramfile();
     if (argc > 1) io_redirect(av[1]);
     if (argc > 4) io_pipeline(av[3], av[4]);
+    if (argc > 6) init_shell(av[5], av[6]);
 }
 
 int init_main(int argc, int argv) {

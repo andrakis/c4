@@ -18,6 +18,6 @@ int main(int argc, char **argv) {
             ++i;
         }
     }
-    uprintf("uwc: %d bytes %d lines\n", bytes, lines);
+    uprintf("%d bytes %d lines\n", bytes, lines);
     return 0;
 }

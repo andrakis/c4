@@ -94,11 +94,28 @@ int uputchar(int c) {
     return c;
 }
 
-static int ustrlen(char *s) {
+int ustrlen(char *s) {
     int n;
     n = 0;
     while (s[n]) ++n;
     return n;
+}
+
+int ustrcmp(char *a, char *b) {
+    int i;
+    i = 0;
+    while (a[i] && a[i] == b[i]) ++i;
+    return a[i] - b[i];
+}
+
+// Copy src into dst and return the byte after the terminator, so
+// callers can pack several strings into one buffer.
+char *ustrcpy(char *dst, char *src) {
+    int i;
+    i = 0;
+    while (src[i]) { dst[i] = src[i]; ++i; }
+    dst[i] = 0;
+    return dst + i + 1;
 }
 
 int uputs(char *s) {

@@ -14,10 +14,10 @@ init: ping exited 103, pong exited 203
 init: busy done 1 1, preempted 1 1
 init: spawned 'c4ix-hello.c4r' as task 6 (protected)
 hello: running as a c4ix task
-hello: argc 4 doubled six 6
+hello: argc 6 doubled six 6
 init: 'c4ix-hello.c4r' exited 42 after 2 syscalls
 init: spawned 'c4ix-uhello.c4r' as task 7 (protected)
-uhello: userland speaking, pid 7 argc 3
+uhello: userland speaking, pid 7 argc 5
 uhello: raw write to fd 1
 uhello: fd 2 works too (wrote 26 bytes)
 uhello: still here after yielding
@@ -28,8 +28,22 @@ init: read 22 bytes back: written to a ram file
 init: 'c4ix-hello.c4r' ran with fd 1 redirected; /ram/out holds 58 bytes:
 hello: running as a c4ix task
 hello: argc 1 doubled six 6
-uwc: 14 bytes 2 lines
-sl4b: cache 'task' objsize 296 perslab 16 slabs 1 allocs 11 frees 11 live 0
-sl4b: cache 'file' objsize 32 perslab 16 slabs 1 allocs 8 frees 8 live 0
-sl4b: cache 'vnode' objsize 96 perslab 8 slabs 1 allocs 4 frees 1 live 3
+14 bytes 1 lines
+init: --- X4: handing off to c4ix-sh.c4r src/c4ix/user/demo.sh ---
+hello from c4ix-sh
+one two three
+14 bytes 1 lines
+14 bytes 1 lines
+14 bytes 1 lines
+14 bytes 1 lines
+14 bytes 1 lines
+[1] started 26 echo
+[1] running 26 echo
+[1] echo done (0)
+backgrounded
+cd: this filesystem is flat -- no directories yet
+init: shell exited 3 after 189 syscalls
+sl4b: cache 'task' objsize 296 perslab 16 slabs 1 allocs 28 frees 28 live 0
+sl4b: cache 'file' objsize 32 perslab 16 slabs 1 allocs 30 frees 30 live 0
+sl4b: cache 'vnode' objsize 96 perslab 8 slabs 1 allocs 13 frees 7 live 6
 c4ix: shutdown complete, 0 tasks remain

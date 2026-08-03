@@ -116,8 +116,8 @@ loading or assigning a whole struct is an error.
   getpid. Userland libc4ix (printf over write) as a `.c4l` library.
 - **X3 — IO.** DONE, see §6. Per-task fd table, vnode layer: console,
   RAM files, pipes. `dup2`, and with it redirection.
-- **X4 — shell.** c4ix-sh: argv parsing, `>` `<` `|` `&`, builtin cd/
-  jobs enough to demo `cat file | wc > out`.
+- **X4 — shell.** DONE, see §6. c4ix-sh: argv parsing, `>` `<` `|`
+  `&`, builtins enough to demo `cat file | wc > out`.
 - **X5 — polish.** The C4KE test/bench suite ported; innerbench
   running under C4IX; boot-cycle and workload comparisons vs C4KE.
 
@@ -271,3 +271,28 @@ loading or assigning a whole struct is an error.
       site, so a syscall from a protected task ran the handler still
       protected and its first putchar raised a nested trap. Fixed in
       c4m.c; C4KE is unaffected because its PM is compiled out.)
+- [x] X4 shell (2026-08-03: src/c4ix/user/sh.c -- an ordinary
+      userland program, protected mode and all, built from nothing
+      but X2/X3 syscalls. Pipelines of any length, `<` and `>`
+      redirection, `&` background jobs with `jobs`/`wait`, builtins
+      exit/jobs/wait/cd/help, `#` comments, and operators that need
+      no surrounding spaces (`cat f|wc` parses). Commands resolve
+      bare names to c4ix-<name>.c4r; anything with a dot or slash is
+      a path. Joined by cat.c, and echo/wc renamed from the u-prefix
+      (that prefix belongs to libc4ix FUNCTION names, which must not
+      collide with c4lc builtins -- program names should read like
+      commands).
+      There is still no fork. A stage runs by pointing the SHELL's
+      own fd 0 and fd 1 at that stage's ends, spawning -- the child
+      inherits the table -- and then restoring. init's X3 code did
+      this by hand; X4 hands the job to userland, which is the point
+      of the milestone. Two details worth keeping: a background
+      command's argv must outlive the line that spawned it, since
+      children read argv out of the parent's memory, so every spawn
+      gets its own copy; and the shell's line reader buffers, because
+      through the trap gateway a per-character read is a kernel round
+      trip (the X2 lesson).
+      `cd` deliberately reports that the filesystem is flat rather
+      than pretending to succeed -- there are no directories yet.
+      Pinned by src/c4ix/user/demo.sh, whose output is now identical
+      on both hosts.)

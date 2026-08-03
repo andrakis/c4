@@ -57,6 +57,10 @@ int  upipe(int *fds);            // fds[0] read end, fds[1] write end
 int *ualloc(int bytes);
 int  getpid();
 
+int   ustrlen(char *s);
+int   ustrcmp(char *a, char *b);
+char *ustrcpy(char *dst, char *src);   // returns just past the terminator
+
 int  uputchar(int c);
 int  uputs(char *s);
 int  uprintf(char *fmt, ...);

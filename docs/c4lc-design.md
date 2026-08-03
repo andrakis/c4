@@ -5,9 +5,12 @@ written in the c4sp Lisp dialect. It targets the same C4 subset and the
 same .c4r output format, but is built around an AST instead of c4cc's
 single-pass token-to-opcode emission.
 
-Status: L0 (lexer), L1 (parser), L2 (minimal codegen) and L3 (full
-subset) done — including the first bootstrap turn: c4lc compiles
-c4sp.c, and the result runs c4lc. See §10 for the roadmap.
+Status: L0–L5 all done. c4lc compiles the full c4cc subset with
+identical behavior, optimizes in-process (-O), compiles the
+interpreter it runs on (which then passes the sample battery and runs
+c4lc again, producing byte-identical output), and compiles inside
+C4KE with the kernel executing the result from memory. Only L6
+(tree-level optimizations) remains, as a stretch goal. See §10.
 
 ## 1. Why
 
@@ -243,10 +246,25 @@ battery green and adds its own target.
   Excluded from the battery: vararg.c prints return-pc values (layout-
   dependent by nature), oldtest_vararg crashes identically under both
   compilers, genfloat/test_illins are not c4cc inputs.
-- **L4 — optimizer in-process.** `-O` flag; equivalence with the
-  c4opt-run pipeline.
-- **L5 — bootstrap + C4KE.** c4lc compiles c4sp.c; the result runs
-  c4lc; compile inside C4KE from/to RAM-FS.
+- **L4 — optimizer in-process.** DONE. `c4lc -O` feeds the fresh
+  module straight into `c4opt:optimize` before encoding. The result
+  differs from the two-step pipeline only in patch-covered operand
+  words (dead values the loader overwrites: in-process resolves them
+  fresh, the pipeline preserves stale pre-optimization RAWs), so the
+  acceptance bar is identical behavior — checked against the c4cc
+  build, the gcc-oracle switch output, roundtrip, and the tail-pass
+  million-call test.
+- **L5 — bootstrap + C4KE.** DONE, three parts. (1) Battery: c4lc -O
+  compiles preprocessed c4sp.c; the resulting interpreter passes the
+  sample tests (fac, truthy, call/cc on the CEK machine, switch),
+  byte-roundtrips hello.c4r, and runs c4lc's parser. (2) Host
+  independence: compiling c4lc_l2.c on three hosts — native c4sp,
+  c4sp.c4r under c4m, and the c4lc-built interpreter — produces
+  byte-identical images (c4lc-eq.lisp compiles and compares in
+  memory; the bare VM cannot write). (3) The compiler inside the OS:
+  test_ramcc starts c4sp+c4lc as a C4KE task, the image lands in the
+  kernel RAM filesystem, and the kernel executes it from memory — no
+  write ever touches the host filesystem.
 - **L6 (stretch) — tree optimizations.** Constant folding, dead
   function elimination; measure against c4opt-only.
 

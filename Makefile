@@ -83,7 +83,8 @@ TESTS_C4R := $(TESTS)/hello.c4r $(TESTS)/mandel.c4r $(TESTS)/factorial.c4r $(TES
 			 $(TESTS)/test_signal.c4r $(TESTS)/test_static.c4r $(TESTS)/tests.c4r \
 			 $(TESTS)/rps.c4r $(TESTS)/test_continue.c4r $(TESTS)/test_timekeeping.c4r \
 			 $(TESTS)/test_float.c4r $(TESTS)/test_vprintf.c4r \
-			 $(TESTS)/test_ramfs.c4r $(TESTS)/test_selfhost.c4r $(TESTS)/test_ramopt.c4r
+			 $(TESTS)/test_ramfs.c4r $(TESTS)/test_selfhost.c4r $(TESTS)/test_ramopt.c4r \
+			 $(TESTS)/test_ramcc.c4r
 BIN       := c4.c4r $(C4R_C4CC) $(C4R_C4RDUMP) $(C4R_C4RLINK) $(C4R_TOP) \
             $(C4M).c4r \
             $(C4KE_C4R) \
@@ -282,7 +283,7 @@ C4LC_DIFF_PP := vararg2 test_vprintf
 # L0: golden token dump of a sample covering every token kind and c4cc
 # lexer quirk, native and under c4m, plus a full lex of c4cc.c itself
 # (whose token list needs a bigger cell arena than the default).
-test-c4lc: c4sp c4sp.c4r c4m $(C4CC)
+test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4KE_C4R) $(TESTS)/test_ramcc.c4r
 	./c4sp src/c4sp/lisp/c4lc-tokens.lisp src/tests/c4lc_lex_sample.c | cmp - src/c4sp/tests/expected/c4lc-tokens.txt
 	./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/c4lc-tokens.lisp src/tests/c4lc_lex_sample.c | cmp - src/c4sp/tests/expected/c4lc-tokens.txt
 	./c4sp -c 2000000 src/c4sp/lisp/c4lc-tokens.lisp -count src/c4cc/c4cc.c | grep -q "^tokens [0-9]"
@@ -369,13 +370,31 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC)
 	./c4sp -c 2000000 src/c4sp/lisp/c4r-roundtrip.lisp .c4lc_b.c4r | grep -q "roundtrip identical"
 	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O src/tests/test_tailcall.c .c4lc_b.c4r | grep -q " tail 2"
 	./c4m load-c4r.c -- .c4lc_b.c4r | grep -q "parity 0 counter 1000000"
-	# bootstrap: c4lc compiles the interpreter it runs on, and the
-	# result runs Lisp -- including c4lc's own parser
+	# L5, the bootstrap battery: c4lc -O compiles the interpreter it
+	# runs on, and the result must run the Lisp samples (call/cc
+	# exercises the CEK machine), the byte-level c4r roundtrip, and
+	# c4lc's own parser.
 	$(PREPROC) src/c4sp/c4sp.c > .c4lc_pp.c
-	./c4sp -c 16000000 src/c4sp/lisp/c4lc.lisp .c4lc_pp.c .c4lc_sp.c4r > /dev/null
+	./c4sp -c 16000000 src/c4sp/lisp/c4lc.lisp -O .c4lc_pp.c .c4lc_sp.c4r > /dev/null
 	./c4m load-c4r.c -- .c4lc_sp.c4r src/c4sp/lisp/fac.lisp | grep -q "Factorial of 10 = 3628800"
+	./c4m load-c4r.c -- .c4lc_sp.c4r src/c4sp/lisp/truthy.lisp | cmp - src/c4sp/tests/expected/truthy.txt
+	./c4m load-c4r.c -- .c4lc_sp.c4r src/c4sp/lisp/callcc.lisp | cmp - src/c4sp/tests/expected/callcc.txt
+	./c4m load-c4r.c -- .c4lc_sp.c4r src/c4sp/lisp/switch.lisp | cmp - src/c4sp/tests/expected/switch.txt
+	./c4m load-c4r.c -- .c4lc_sp.c4r src/c4sp/lisp/c4r-roundtrip.lisp hello.c4r | grep -q "roundtrip identical"
 	./c4m load-c4r.c -- .c4lc_sp.c4r src/c4sp/lisp/c4lc-ast.lisp -check src/tests/hello.c | grep -q "parse ok"
-	rm -f .c4lc_a.c4r .c4lc_b.c4r .c4lc_bo.c4r .c4lc_pp.c .c4lc_out_a .c4lc_sp.c4r
+	# L5, host independence: the same compiler must produce the same
+	# bytes on three hosts -- native c4sp, c4sp.c4r under c4m, and the
+	# interpreter c4lc just compiled. Compiled and compared in memory
+	# (the bare VM cannot write files).
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp src/tests/c4lc_l2.c .c4lc_ref.c4r > /dev/null
+	./c4m load-c4r.c -- c4sp.c4r -c 4000000 src/c4sp/lisp/c4lc-eq.lisp src/tests/c4lc_l2.c .c4lc_ref.c4r | grep -q "identical"
+	./c4m load-c4r.c -- .c4lc_sp.c4r -c 4000000 src/c4sp/lisp/c4lc-eq.lisp src/tests/c4lc_l2.c .c4lc_ref.c4r | grep -q "identical"
+	# L5, the compiler inside the OS: c4lc compiles hello.c under C4KE
+	# into the kernel RAM filesystem and the kernel executes the fresh
+	# image from memory -- no write ever touches the host filesystem
+	cp $(TESTS)/test_ramcc.c4r .
+	$(C4M) $(RUN_C4KE) test_ramcc | grep -q "yello"
+	rm -f .c4lc_a.c4r .c4lc_b.c4r .c4lc_bo.c4r .c4lc_pp.c .c4lc_out_a .c4lc_sp.c4r .c4lc_ref.c4r
 	@echo "test-c4lc: OK"
 
 # The C4KE RAM filesystem: opcode-level access, the self-hosting loop

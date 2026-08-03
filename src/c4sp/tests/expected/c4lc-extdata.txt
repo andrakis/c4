@@ -1,0 +1,5 @@
+counter 5
+bump 16
+sum 100 totals2 99 tag E4
+origin 42 via 42
+hook 1

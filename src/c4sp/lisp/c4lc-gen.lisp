@@ -255,11 +255,12 @@
 		(define cl (g:second s))
 		(if (= cl 'loc) (g:emit (list 'LEA (- g:loc (index s 3))))
 		(if (= cl 'glo) (g:emit (list 'IMM (list 'data (index s 3))))
+		(if (= cl 'extg) (g:emit (list 'IMM (list 'extph (index s 3))))
 		(if (if (= cl 'fun) true (= cl 'ext))
 			;; &fn: the function's address. Marked like an array so
 			;; assignment and ++/-- reject it as an lvalue.
 			(g:emit (list 'IMM (g:funref s)))
-		(g:die (+ "not a variable: " n)))))
+		(g:die (+ "not a variable: " n))))))
 		(set! g:ty (g:third s))
 		(set! g:lastarray
 			(if (= cl 'fun) true
@@ -413,8 +414,9 @@
 						n "- expected" (index s 4) "given" t)))
 				(g:emit (list 'JSR (g:funref s))))
 		(if (= cl 'glo) (g:emit (list 'JSRI (list 'data (index s 3))))
+		(if (= cl 'extg) (g:emit (list 'JSRI (list 'extph (index s 3))))
 		(if (= cl 'loc) (g:emit (list 'JSRS (- g:loc (index s 3))))
-		(g:die (+ "bad function call: " n))))))
+		(g:die (+ "bad function call: " n)))))))
 		(if (> t 0) (g:emit (list 'ADJ t)) nil)
 		(set! g:ty (g:third s)))))
 (define g:pushargs (lambda (args t)
@@ -553,13 +555,17 @@
 			(begin
 				(g:emit (list 'IMM (list 'data (index s 3))))
 				(g:varload s))
+		(if (= cl 'extg)
+			(begin
+				(g:emit (list 'IMM (list 'extph (index s 3))))
+				(g:varload s))
 		(if (if (= cl 'fun) true (= cl 'ext))
 			(begin
 				;; function name as a value: its address
 				(g:emit (list 'IMM (g:funref s)))
 				(set! g:ty (g:third s))
 				(set! g:lastarray false))
-		(g:die (+ "bad variable: " n))))))))
+		(g:die (+ "bad variable: " n)))))))))
 
 ;; after the address is in the accumulator: arrays stay an address,
 ;; scalars load their value
@@ -878,7 +884,7 @@
 							(index d 4))
 						g:syms))
 					(set! g:externs (g:cons
-						(list (g:third d) (g:second d) (index d 4))
+						(list (g:third d) (g:second d) (index d 4) 129 nil)
 						g:externs))
 					(set! g:nexterns (+ g:nexterns 1)))
 			(begin
@@ -901,6 +907,56 @@
 		(g:emit '(PSH))
 		(g:emit '(EXIT))
 		(next g:emitstubs (tail ls))))))
+
+;; third pre-pass: struct layouts and global storage, in declaration
+;; order (so relative data layout is what the old in-walk allocation
+;; produced), before any function body is generated. That makes
+;; extern-then-define and define-after-use both work: by the time a
+;; body references a global, every definition in the unit is
+;; registered. Extern declarations with no in-unit definition are
+;; collected and become extern DATA symbols in object mode -- class
+;; Glo, ATTR_EXTERN, referenced through the same (extph K)
+;; placeholders as extern functions, resolved by c4rlink to DATA
+;; patches. Whole-program mode has nowhere to resolve them: fatal.
+(define g:datapass (lambda (decls pending)
+	(if (empty? decls) (g:extdata pending)
+	(begin
+		(define d (head decls))
+		(define isglobal (= (head d) 'global))
+		(define isext (if isglobal
+			(if (= 16 (bit:and (index d 4) 16)) (= (index d 5) nil) false)
+			false))
+		(if (= (head d) 'structdef) (g:structdef d)
+		(if isglobal (if isext nil (g:global d))
+		nil))
+		(next g:datapass (tail decls)
+			(if isext (+ pending (list d)) pending))))))
+
+;; register the leftover extern data declarations (skipping any name
+;; the unit defined after all); ARR bytes follow g:globalarray's
+;; sizing so indexing and sizeof agree with the defining unit
+(define g:extdata (lambda (ds)
+	(if (empty? ds) nil
+	(begin
+		(define d (head ds))
+		(define n (g:third d))
+		(if (g:lookup n g:syms) nil
+		(if gen:objmode
+			(begin
+				(define ty (g:second d))
+				(define size (index d 3))
+				(define arrbytes
+					(if (if (= size nil) (g:svalue? ty) false) (g:tysize ty)
+					(if (= size nil) nil
+					(if (= (- ty g:PTR) g:CHAR) size
+						(* size (* 8 (/ (+ (g:tysize (- ty g:PTR)) 7) 8)))))))
+				(set! g:syms (g:cons
+					(list n 'extg ty g:nexterns arrbytes) g:syms))
+				(set! g:externs (g:cons
+					(list n ty nil 131 arrbytes) g:externs))
+				(set! g:nexterns (+ g:nexterns 1)))
+			(g:die (+ "extern data has no definition (whole-program): " n))))
+		(next g:extdata (tail ds))))))
 
 ;; write N zero bytes at the current data cursor
 (define g:dzero (lambda (nb)
@@ -932,7 +988,12 @@
 		(define n (g:third d))
 		(define size (index d 3))
 		(define init (index d 5))
-		(define gattrs (index d 4))
+		;; "extern int x = 5" is a definition: storage is allocated
+		;; here, so strip ATTR_EXTERN -- to c4rlink that bit means
+		;; UNDEFINED and the symbol would never resolve
+		(define ga0 (index d 4))
+		(define gattrs
+			(if (= 16 (bit:and ga0 16)) (- ga0 16) ga0))
 		(if (if (= size nil) (g:svalue? ty) false)
 			(g:globalstruct n ty init gattrs)
 		(if (= size nil)
@@ -1188,8 +1249,8 @@
 		(if (= h 'enum) nil            ;; constants already substituted
 		(if (= h 'proto) nil           ;; pre-pass covers in-unit targets
 		(if (= h 'typedefd) nil        ;; parser-resolved
-		(if (= h 'structdef) (g:structdef d)
-		(if (= h 'global) (g:global d)
+		(if (= h 'structdef) nil       ;; g:datapass registered layouts
+		(if (= h 'global) nil          ;; g:datapass allocated storage
 		(if (= h 'func) (g:function d)
 		(g:die (+ "bad declaration node: " (+ "" h))))))))))))
 (define g:decls (lambda (l)
@@ -1225,14 +1286,16 @@
 
 ;; extern symbols (object mode) go at the end of the section, ids
 ;; continuing where the defined entries stopped; ATTR_EXTERN marks
-;; them undefined for c4rlink, value 0
+;; them undefined for c4rlink, value 0. Entries carry their class:
+;; 129 (Fun) from prototypes, 131 (Glo) from extern data
 (define g:extsection (lambda (exts id acc)
 	(if (empty? exts) (g:reverse acc)
 	(begin
 		(define x (head exts))
 		(next g:extsection (tail exts) (+ id 1)
-			(g:cons (list id (g:second x) 129
-				(bit:or 16 (if (g:third x) 32 0))
+			(g:cons (list id (g:second x) (index x 3)
+				(bit:or 16 (bit:or (if (g:third x) 32 0)
+					(if (= (index x 4) nil) 0 64)))
 				(head x) 0) acc))))))
 
 ;; rewrite (OP (extph K)) operands into (OP (extern BASE+K)) symbol
@@ -1275,6 +1338,7 @@
 		(g:sysinit g:syscalls)
 		(g:prepass (tail ast))
 		(g:protopass (tail ast))
+		(g:datapass (tail ast) (list))
 		(g:decls (tail ast))
 		(g:emitstubs (g:reverse g:stubs))
 		(define m (g:lookup "main" g:syms))

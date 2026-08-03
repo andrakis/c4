@@ -94,7 +94,7 @@ static int master_symfind (int *master, char *name, int len) {
 // id remap table. Returns 0 on success.
 static int import_symbols (int *master, int *cl) {
 	int *hdr, *mhdr, *sym, *msym, *remap, *c4r;
-	int  i, count, id, maxid, m, defined, mdefined, offsetCode;
+	int  i, count, id, maxid, m, defined, mdefined, offsetCode, offsetData;
 	char *name;
 
 	hdr  = (int *)cl[CL_HEADER];
@@ -102,6 +102,7 @@ static int import_symbols (int *master, int *cl) {
 	c4r  = (int *)cl[CL_STRUCT];
 	count = hdr[C4R_HDR_SYMBOLSLEN];
 	offsetCode = cl[CL_OFFSET_CODE];
+	offsetData = cl[CL_OFFSET_DATA];
 
 	// Size the remap table from the largest symbol id present.
 	maxid = -1;
@@ -144,10 +145,14 @@ static int import_symbols (int *master, int *cl) {
 			msym[C4R_SYMB_NAMELEN] = sym[C4R_SYMB_NAMELEN];
 			msym[C4R_SYMB_NAME]    = (int)c4r_strcpy_alloc(name);
 			msym[C4R_SYMB_VALUE]   = sym[C4R_SYMB_VALUE];
-			// A defined function's value is a code offset: rebase it.
+			// A defined function's value is a code offset and a defined
+			// global's value is a data byte offset: rebase them.
 			// Undefined externs carry garbage; zero the value for clarity.
 			if (sym[C4R_SYMB_CLASS] == C4R_SCLASS_Fun) {
 				if (defined) msym[C4R_SYMB_VALUE] = sym[C4R_SYMB_VALUE] + offsetCode;
+				else         msym[C4R_SYMB_VALUE] = 0;
+			} else if (sym[C4R_SYMB_CLASS] == C4R_SCLASS_Glo) {
+				if (defined) msym[C4R_SYMB_VALUE] = sym[C4R_SYMB_VALUE] + offsetData;
 				else         msym[C4R_SYMB_VALUE] = 0;
 			}
 			mhdr[C4R_HDR_SYMBOLSLEN] = m + 1;
@@ -162,6 +167,8 @@ static int import_symbols (int *master, int *cl) {
 				msym[C4R_SYMB_VALUE] = sym[C4R_SYMB_VALUE];
 				if (sym[C4R_SYMB_CLASS] == C4R_SCLASS_Fun)
 					msym[C4R_SYMB_VALUE] = sym[C4R_SYMB_VALUE] + offsetCode;
+				else if (sym[C4R_SYMB_CLASS] == C4R_SCLASS_Glo)
+					msym[C4R_SYMB_VALUE] = sym[C4R_SYMB_VALUE] + offsetData;
 				if (cl_verbose)
 					printf("c4rlink: '%.*s' resolved by '%s'\n",
 					       sym[C4R_SYMB_NAMELEN], name, (char *)cl[CL_FILE]);
@@ -351,8 +358,11 @@ static int resolve_patches (int *master) {
 				if (sym[C4R_SYMB_CLASS] == C4R_SCLASS_Fun) {
 					patch[C4R_PAT_TYPE]  = C4R_PTYPE_CODE;
 					patch[C4R_PAT_VALUE] = sym[C4R_SYMB_VALUE];
+				} else if (sym[C4R_SYMB_CLASS] == C4R_SCLASS_Glo) {
+					patch[C4R_PAT_TYPE]  = C4R_PTYPE_DATA;
+					patch[C4R_PAT_VALUE] = sym[C4R_SYMB_VALUE];
 				} else {
-					printf("c4rlink: symbol '%.*s' is not a function, cannot resolve\n",
+					printf("c4rlink: symbol '%.*s' is not a function or global, cannot resolve\n",
 					       sym[C4R_SYMB_NAMELEN], (char *)sym[C4R_SYMB_NAME]);
 					++unresolved;
 				}

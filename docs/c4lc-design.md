@@ -22,8 +22,9 @@ expression initializers — differentially tested against gcc, since
 c4cc cannot compile any of it (src/tests/c4lc_l7.c). L8 (DONE) adds
 object mode: `c4lc -c` emits .c4o units whose undefined prototypes
 are extern symbols with SYMBOL-typed patches, resolved by c4rlink —
-interoperable with c4cc objects in the same link. Next: X0, the
-first C4IX boot.
+interoperable with c4cc objects in the same link. X0 (the first
+C4IX boot) is DONE on this toolchain; the next compiler-side goal
+is L9, a native preprocessor (§10).
 
 ## 1. Why
 
@@ -293,6 +294,21 @@ battery green and adds its own target.
   stubs for prototype-only calls (c4cc compiles those into unresolved
   extern jumps; c4m.c's never-taken float branch needs exactly this).
   See §11 for measurements.
+- **L9 — preprocessor (future goal, not yet scheduled).** c4lc still
+  leans on the host's `gcc -E` (the Makefile's PREPROC) for
+  `#include` / `#define` / `#if` — the last host-toolchain
+  dependency in the pipeline. A native c4sp preprocessor removes it:
+  C4IX modules could then be compiled entirely in-OS (today
+  test_ramcc-style in-kernel compiles only work for sources that
+  need no cpp), and the L5 host-independence property would extend
+  to the whole build. Scope when it lands: quoted + `-I` includes
+  with include guards, object-like and function-like macros
+  (including the `va_arg(AP, TYPE)` shapes the stdarg contract
+  depends on), `#ifdef`/`#ifndef`/`#if` with the constant
+  expressions the c4 sources actually use, `#undef`, and `# line`
+  markers preserved for diagnostics. Oracle: `gcc -E` itself —
+  preprocess the full corpus both ways and require token-identical
+  streams, the same differential pattern as L0.
 
 ## 11. Measured results (2026-08-03)
 

@@ -464,6 +464,24 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	cat $(TESTS)/test_link_d.c $(TESTS)/test_link_c.c > .c4lc_pp.c
 	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp .c4lc_pp.c .c4lc_ol.c4r > /dev/null
 	./c4m load-c4r.c -- .c4lc_ol.c4r | cmp - src/c4sp/tests/expected/c4lc-link.txt
+	# L8, extern DATA: test_link_e.c defines shared globals (scalar,
+	# array, char array, struct, fn-address slot), test_link_f.c
+	# declares them extern; symbol patches resolve to DATA patches.
+	# Linked both orders, -O objects, and the whole-program concat
+	# (extern before definition) all match committed gcc output.
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -c $(TESTS)/test_link_e.c .c4lc_oa2.c4o > /dev/null
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -c $(TESTS)/test_link_f.c .c4lc_ob2.c4o > /dev/null
+	$(C4RLINK) .c4lc_oa2.c4o .c4lc_ob2.c4o -o .c4lc_ol.c4r
+	./c4m load-c4r.c -- .c4lc_ol.c4r | cmp - src/c4sp/tests/expected/c4lc-extdata.txt
+	$(C4RLINK) .c4lc_ob2.c4o .c4lc_oa2.c4o -o .c4lc_ol.c4r
+	./c4m load-c4r.c -- .c4lc_ol.c4r | cmp - src/c4sp/tests/expected/c4lc-extdata.txt
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O -c $(TESTS)/test_link_e.c .c4lc_oa2.c4o > /dev/null
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O -c $(TESTS)/test_link_f.c .c4lc_ob2.c4o > /dev/null
+	$(C4RLINK) .c4lc_oa2.c4o .c4lc_ob2.c4o -o .c4lc_ol.c4r
+	./c4m load-c4r.c -- .c4lc_ol.c4r | cmp - src/c4sp/tests/expected/c4lc-extdata.txt
+	cat $(TESTS)/test_link_f.c $(TESTS)/test_link_e.c > .c4lc_pp.c
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp .c4lc_pp.c .c4lc_ol.c4r > /dev/null
+	./c4m load-c4r.c -- .c4lc_ol.c4r | cmp - src/c4sp/tests/expected/c4lc-extdata.txt
 	rm -f .c4lc_oa1.c4o .c4lc_ob1.c4o .c4lc_oa2.c4o .c4lc_ob2.c4o .c4lc_ol.c4r
 	# L5, the bootstrap battery: c4lc -O compiles the interpreter it
 	# runs on, and the result must run the Lisp samples (call/cc

@@ -119,6 +119,29 @@ int sys_pipe(int *fds) {
     return 0;
 }
 
+// Snapshot of the index'th task, for a userland `ps`. Walking the
+// list from userland is not an option -- that is kernel memory --
+// so the kernel copies out a fixed-shape record instead.
+int sys_taskinfo(int index, int *out) {
+    struct task *t;
+    char *dst;
+    int i;
+
+    t = task_first();
+    i = 0;
+    while (t && i < index) { t = t->next; ++i; }
+    if (!t) return 0;
+
+    out[0] = t->id;
+    out[1] = t->state;
+    out[2] = t->privs;
+    out[3] = t->nsyscalls;
+    dst = (char *)(out + 4);
+    i = 0;
+    while (i < TASK_NAME_MAX) { dst[i] = t->name[i]; ++i; }
+    return 1;
+}
+
 // ---- the dispatcher ----
 //
 // args[0] is the first argument, args[1] the second, and so on.
@@ -135,6 +158,8 @@ int sys_dispatch(int num, int *args) {
     if (num == SYS_DUP)    return sys_dup(args[0]);
     if (num == SYS_DUP2)   return sys_dup2(args[0], args[1]);
     if (num == SYS_PIPE)   return sys_pipe((int *)args[0]);
+    if (num == SYS_CYCLES) return __c4_cycles();
+    if (num == SYS_TASKINFO) return sys_taskinfo(args[0], (int *)args[1]);
     if (num == SYS_YIELD)  { sched_yield(); return 0; }
     if (num == SYS_GETPID) return t ? t->id : -1;
     if (num == SYS_SBRK)   return (int)malloc(args[0]);

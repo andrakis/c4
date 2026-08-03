@@ -57,8 +57,12 @@ enum {
     SYS_EXIT = 204, SYS_YIELD = 205, SYS_SPAWN = 206, SYS_WAIT = 207,
     SYS_SBRK = 208, SYS_GETPID = 209,
     SYS_DUP = 210, SYS_DUP2 = 211, SYS_PIPE = 212,
-    SYS_TOP = 213
+    SYS_CYCLES = 213, SYS_TASKINFO = 214,
+    SYS_TOP = 215
 };
+// taskinfo fills: id, state, privs, nsyscalls, then the name packed
+// into the remaining words (TASK_NAME_MAX bytes).
+enum { TASKINFO_WORDS = 6 };
 enum { FD_STDIN = 0, FD_STDOUT = 1, FD_STDERR = 2, FD_MAX = 16 };
 
 int  sys_dispatch(int num, int *args);   // args[0]=first, args[1]=second...
@@ -69,6 +73,7 @@ int  sys_close(int fd);
 int  sys_dup(int fd);
 int  sys_dup2(int oldfd, int newfd);
 int  sys_pipe(int *fds);                 // fds[0] read end, fds[1] write end
+int  sys_taskinfo(int index, int *out);  // 1 if that slot exists
 void sys_pmviolation(int op, int *sp, int *returnpc, int *a);
 
 // Set when a syscall could not complete because the calling task had

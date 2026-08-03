@@ -54,6 +54,8 @@ int *ualloc(int bytes)                { return (int *)__c4ix_syscall(SYS_SBRK, b
 int udup(int fd)                      { return __c4ix_syscall(SYS_DUP, fd, 0, 0); }
 int udup2(int oldfd, int newfd)       { return __c4ix_syscall(SYS_DUP2, oldfd, newfd, 0); }
 int upipe(int *fds)                   { return __c4ix_syscall(SYS_PIPE, (int)fds, 0, 0); }
+int ucycles()                         { return __c4ix_syscall(SYS_CYCLES, 0, 0, 0); }
+int utaskinfo(int i, int *out)        { return __c4ix_syscall(SYS_TASKINFO, i, (int)out, 0); }
 
 int spawn(char *path, int argc, char **argv) {
     return __c4ix_syscall(SYS_SPAWN, (int)path, argc, (int)argv);

@@ -1,7 +1,7 @@
-C4IX X2 booting
+C4IX booting, 311615 cycles spent loading the kernel image
 c4ix: host c4m, info 0xf2
 c4ix: protected mode on for user tasks, preemption on
-c4ix: task 1 'init' created, scheduling
+c4ix: task 1 'init' created, scheduling after 324609 cycles
 init: c4ix init v1 on c4m
 init: ping id 2, pong id 3, tasks 4
 ping 0
@@ -29,21 +29,30 @@ init: 'c4ix-hello.c4r' ran with fd 1 redirected; /ram/out holds 58 bytes:
 hello: running as a c4ix task
 hello: argc 1 doubled six 6
 14 bytes 1 lines
-init: --- X4: handing off to c4ix-sh.c4r src/c4ix/user/demo.sh ---
-hello from c4ix-sh
-one two three
-14 bytes 1 lines
-14 bytes 1 lines
-14 bytes 1 lines
-14 bytes 1 lines
-14 bytes 1 lines
-[1] started 26 echo
-[1] running 26 echo
-[1] echo done (0)
-backgrounded
-cd: this filesystem is flat -- no directories yet
-init: shell exited 3 after 189 syscalls
-sl4b: cache 'task' objsize 296 perslab 16 slabs 1 allocs 28 frees 28 live 0
+init: --- X4: handing off to c4ix-sh.c4r src/c4ix/user/test.sh ---
+test: files
+alpha beta
+11 bytes 1 lines
+test: pipes
+11 bytes 1 lines
+11 bytes 1 lines
+test: redirection
+11 bytes 1 lines
+test: overwrite truncates
+x
+2 bytes 1 lines
+test: process table
+ID   STATE   PRIV SYSCALLS NAME
+0    ready   0    0        boot
+1    wait    0    0        init
+11   wait    1    232      c4ix-sh.c4r
+32   run     1    79       c4ix-ps.c4r
+test: exit status of a pipeline tail
+cat: cannot open /ram/nonexistent
+after a failure the shell keeps going
+test: done
+init: shell exited 0 after 269 syscalls
+sl4b: cache 'task' objsize 296 perslab 16 slabs 1 allocs 37 frees 37 live 0
 sl4b: cache 'file' objsize 32 perslab 16 slabs 1 allocs 30 frees 30 live 0
-sl4b: cache 'vnode' objsize 96 perslab 8 slabs 1 allocs 13 frees 7 live 6
+sl4b: cache 'vnode' objsize 96 perslab 8 slabs 1 allocs 12 frees 7 live 5
 c4ix: shutdown complete, 0 tasks remain

@@ -203,6 +203,18 @@ int init_main(int argc, int argv) {
     char **av;
     int ra, rb, n;
 
+    // Quiet boot: "-q PROG" skips the demonstrations and runs one
+    // program immediately. That is what makes a boot-cost
+    // measurement meaningful -- the demos below are worth several
+    // hundred thousand cycles and would swamp it.
+    av = (char **)argv;
+    if (argc > 2) {
+        if (av[1][0] == '-' && av[1][1] == 'q') {
+            if ((a = task_spawn(av[2], argc - 2, (int)(av + 2)))) task_wait(a);
+            return 0;
+        }
+    }
+
     kprintf("init: c4ix init v1 on %s\n", host_name());
 
     // act 1: cooperative round-robin, preemption masked for an exact

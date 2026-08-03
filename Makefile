@@ -84,7 +84,7 @@ TESTS_C4R := $(TESTS)/hello.c4r $(TESTS)/mandel.c4r $(TESTS)/factorial.c4r $(TES
 			 $(TESTS)/rps.c4r $(TESTS)/test_continue.c4r $(TESTS)/test_timekeeping.c4r \
 			 $(TESTS)/test_float.c4r $(TESTS)/test_vprintf.c4r \
 			 $(TESTS)/test_ramfs.c4r $(TESTS)/test_selfhost.c4r $(TESTS)/test_ramopt.c4r \
-			 $(TESTS)/test_ramcc.c4r
+			 $(TESTS)/test_ramcc.c4r $(TESTS)/cycles.c4r
 BIN       := c4.c4r $(C4R_C4CC) $(C4R_C4RDUMP) $(C4R_C4RLINK) $(C4R_TOP) \
             $(C4M).c4r \
             $(C4KE_C4R) \
@@ -360,13 +360,31 @@ c4ix-%.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libc4ix.c4l $(C4IX_SRC)/user/%.c
 # raw printf has no boundary to cross. The pipeline (uecho | uwc)
 # works on both.
 C4IX_PROGS := c4ix-hello.c4r c4ix-uhello.c4r c4ix-echo.c4r c4ix-wc.c4r \
-              c4ix-cat.c4r c4ix-sh.c4r
+              c4ix-cat.c4r c4ix-sh.c4r c4ix-ps.c4r c4ix-bench.c4r \
+              c4ix-cycles.c4r
 C4IX_ARGS := c4ix-hello.c4r c4ix-uhello.c4r c4ix-echo.c4r c4ix-wc.c4r \
-             c4ix-sh.c4r $(C4IX_SRC)/user/demo.sh
+             c4ix-sh.c4r $(C4IX_SRC)/user/test.sh
 test-c4ix: c4 c4m c4ix.c4r $(C4IX_PROGS)
-	$(C4M) load-c4r.c -- c4ix.c4r $(C4IX_ARGS) | cmp - $(C4IX_SRC)/tests/x4-c4m.txt
-	$(C4) c4l.c c4ix.c4r $(C4IX_ARGS) | sed '/^exit([0-9-]*) cycle = /d' | cmp - $(C4IX_SRC)/tests/x4-c4.txt
+	$(C4M) load-c4r.c -- c4ix.c4r $(C4IX_ARGS) | cmp - $(C4IX_SRC)/tests/x5-c4m.txt
+	$(C4) c4l.c c4ix.c4r $(C4IX_ARGS) | sed '/^exit([0-9-]*) cycle = /d' | cmp - $(C4IX_SRC)/tests/x5-c4.txt
 	@echo "test-c4ix: OK"
+# X5: the OS benchmark, and the one number that compares directly
+# with C4KE -- cycles from VM start to userland running, same VM and
+# same counter on both sides.
+bench-c4ix: c4m c4ix.c4r $(C4IX_PROGS)
+	@echo "--- C4IX ---"
+	$(C4M) load-c4r.c -- c4ix.c4r c4ix-hello.c4r c4ix-uhello.c4r \
+		c4ix-echo.c4r c4ix-wc.c4r c4ix-sh.c4r $(C4IX_SRC)/user/bench.sh \
+		2>&1 | grep -E "scheduling after|^bench:"
+	@echo "--- boot cost, C4IX (VM cycle counter) ---"
+	@$(C4M) load-c4r.c -- c4ix.c4r -q c4ix-cycles.c4r 2>&1 | grep -E "booting|scheduling after|^cycles:"
+	@echo "--- end to end: boot a kernel and run one trivial program ---"
+	@echo -n "c4ix wall: "
+	@/usr/bin/time -f "%e s" $(C4M) load-c4r.c -- c4ix.c4r -q c4ix-cycles.c4r 2>&1 | tail -1
+	@echo -n "c4ke wall: "
+	@/usr/bin/time -f "%e s" $(C4M) $(RUN_C4KE) -v 9 cycles 2>&1 | tail -1
+	@$(C4M) $(RUN_C4KE) cycles 2>&1 | grep -E "Kernel ready" || true
+
 run-c4ix: c4m c4ix.c4r $(C4IX_PROGS)
 	$(C4M) load-c4r.c -- c4ix.c4r $(C4IX_ARGS)
 run-c4ix-c4: c4 c4ix.c4r $(C4IX_PROGS)

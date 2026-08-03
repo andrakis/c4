@@ -21,7 +21,7 @@ int main(int argc, char **argv) {
     struct task *t;
     int info;
 
-    kprintf("C4IX X2 booting\n");
+    kprintf("C4IX booting, %d cycles spent loading the kernel image\n", __c4_cycles());
     info = host_detect();
     kprintf("c4ix: host %s, info 0x%x\n", host_name(), info);
     kprintf("c4ix: protected mode %s, preemption %s\n",
@@ -36,7 +36,12 @@ int main(int argc, char **argv) {
         kputs("c4ix: panic: cannot create init task\n");
         return 1;
     }
-    kprintf("c4ix: task %d '%s' created, scheduling\n", t->id, t->name);
+    // Cycles from VM start to the moment userland first runs. This
+    // is the boot cost, and it is the one number that can be
+    // compared with C4KE on equal terms: same VM, same counter, same
+    // meaning (see docs/c4ix-design.md 7).
+    kprintf("c4ix: task %d '%s' created, scheduling after %d cycles\n",
+        t->id, t->name, __c4_cycles());
 
     sched_run();
     sched_stop();

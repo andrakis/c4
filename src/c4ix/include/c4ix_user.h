@@ -15,8 +15,12 @@ enum {
     SYS_WRITE = 200, SYS_READ = 201, SYS_OPEN = 202, SYS_CLOSE = 203,
     SYS_EXIT = 204, SYS_YIELD = 205, SYS_SPAWN = 206, SYS_WAIT = 207,
     SYS_SBRK = 208, SYS_GETPID = 209,
-    SYS_DUP = 210, SYS_DUP2 = 211, SYS_PIPE = 212
+    SYS_DUP = 210, SYS_DUP2 = 211, SYS_PIPE = 212,
+    SYS_CYCLES = 213, SYS_TASKINFO = 214
 };
+// taskinfo record: id, state, privs, nsyscalls, then a 16-byte name
+enum { TASKINFO_WORDS = 6 };
+enum { TS_READY = 1, TS_RUNNING = 2, TS_ZOMBIE = 3, TS_WAITING = 4, TS_BLOCKED = 5 };
 enum { STDIN = 0, STDOUT = 1, STDERR = 2 };
 // open() flags; the low two bits match the host's.
 enum {
@@ -54,6 +58,8 @@ int  uwait(int id);
 int  udup(int fd);
 int  udup2(int oldfd, int newfd);
 int  upipe(int *fds);            // fds[0] read end, fds[1] write end
+int  ucycles();                  // VM cycles executed since boot
+int  utaskinfo(int index, int *out);   // 1 if that task slot exists
 int *ualloc(int bytes);
 int  getpid();
 

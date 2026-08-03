@@ -118,8 +118,8 @@ loading or assigning a whole struct is an error.
   RAM files, pipes. `dup2`, and with it redirection.
 - **X4 — shell.** DONE, see §6. c4ix-sh: argv parsing, `>` `<` `|`
   `&`, builtins enough to demo `cat file | wc > out`.
-- **X5 — polish.** The C4KE test/bench suite ported; innerbench
-  running under C4IX; boot-cycle and workload comparisons vs C4KE.
+- **X5 — polish.** DONE, see 6 and 7. Suite and benchmark ported;
+  boot-cycle and workload measurements against C4KE.
 
 ### 4.3 What gets reused
 
@@ -296,3 +296,62 @@ loading or assigning a whole struct is an error.
       than pretending to succeed -- there are no directories yet.
       Pinned by src/c4ix/user/demo.sh, whose output is now identical
       on both hosts.)
+- [x] X5 polish (2026-08-03: SYS_CYCLES and SYS_TASKINFO join the
+      syscall set, with ps.c reading the task table one fixed-shape
+      record at a time -- userland cannot walk kernel memory. bench.c
+      carries C4KE's own pi/factorial workload verbatim so the
+      compute numbers mean the same thing, plus microbenchmarks for
+      the things C4IX actually costs. test.sh is the suite: the C4KE
+      .c4r tests cannot run here (they are binaries for a different
+      OS, built against u0.h and its custom opcodes), so the COVERAGE
+      was re-expressed against C4IX's interfaces and is driven by the
+      shell -- every line also exercises spawn, wait, pipe and dup2.
+      KNOWN OPEN BUG, deliberately not papered over: a backgrounded,
+      redirected command can intermittently stall when it follows
+      about a dozen other commands. Adding any per-command output
+      makes it complete, which is a scheduling race, not a logic
+      error. Ruled out: descriptor exhaustion (saved fds stay at 4/5
+      all run), per-command fd leaks, four-stage pipelines, cat on a
+      missing file, truncate-and-rewrite, and background jobs in
+      isolation. It is kept in src/c4ix/user/stress.sh, OUTSIDE the
+      pinned suite, rather than pinned in whatever state passes.)
+
+## 7. Measured results (2026-08-03)
+
+All C4IX figures are VM cycles from the machine's own counter, taken
+in a single run, so they are exact and repeatable rather than
+wall-clock estimates.
+
+| C4IX boot | cycles |
+|---|---|
+| loading the kernel image (load-c4r.c, before any C4IX code) | 311,615 |
+| kernel init: main to handing off to init | 12,994 |
+| spawn + load + run the first user program | 18,859 |
+| **total, power-on to userland** | **343,468** |
+
+| C4IX operation | cycles |
+|---|---|
+| syscall (getpid through the trap gateway) | 1,237 |
+| yield (a full context switch) | 1,237 |
+| spawn + wait a trivial program | 15,005 |
+| pi100 (same code as C4KE's bench) | 165,896 |
+| pi300 | 592,056 |
+| factorial(10), recursive | 1,393 |
+
+**Against C4KE.** End to end -- boot a kernel and run one trivial
+program -- C4IX takes under 10ms of wall time where C4KE takes 0.31s.
+Most of that gap is not efficiency: C4KE spends ~200ms at boot
+deliberately measuring the host's instructions-per-second, which
+C4IX does not do. C4KE's own report is "Kernel ready in 201ms after
+897.7k cycles" (801.7k for the c4lc-compiled build), against C4IX's
+324.6k cycles to the same point -- 2.8x fewer, though 96% of C4IX's
+figure is the shared loader reading the image, so the kernel's own
+initialization is only ~13k cycles.
+
+One honest caveat on methodology: a probe task calling
+`__c4_cycles()` under C4KE returns a number (159k) that cannot be
+reconciled with either C4KE's own accounting or the wall clock, so
+that measurement is NOT used for the comparison above. C4KE appears
+to account cycles per task rather than exposing the raw counter.
+Cross-kernel claims here rest on wall time and each kernel's own
+boot report, both of which agree.

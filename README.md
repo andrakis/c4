@@ -107,9 +107,9 @@ Other experiments
 
 * [libjs/](libjs/) - A JavaScript port of C4. Incomplete, slow, and cannot run C4KE.
 
-* OISC4: One Instruction Set Computer for C4, an attempt to implement C4 using a single instruction. The [compiler](src/tests/oisc-c4.c) does most of the heavy lifting. The [interpreter](src/tests/oisc-min.c) is fairly simple.
+* OISC4: One Instruction Set Computer for C4 — C4 implemented using a single instruction. **Working**: [src/oisc4/oisc4.c](src/oisc4/oisc4.c) runs `.c4r` images (from `c4cc` or `c4lc`) by translating them onto the one-instruction machine, verified bit-identical against the `c4m` loader (`make test-oisc4`). The self-hosted `c4` compiler and the `c4sp` Lisp interpreter both run inside it, and a c4lc-compiled `oisc4-lc.c4r` runs nested under `c4m`, plain `c4`, or oisc4 itself. See [docs/oisc4-design.md](docs/oisc4-design.md).
 
-	* Only partially implemented. Most of the logic is there but subtle bugs prevent working code.
+	* The earlier partial attempt lives on in [src/tests/oisc-c4.c](src/tests/oisc-c4.c) (compiler) and [src/tests/oisc-min.c](src/tests/oisc-min.c) (interpreter); its post-mortem is in the design doc. The notes below describe the instruction model both share.
 
 	* The instruction is: `add source, incremental, destination`.
 

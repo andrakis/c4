@@ -317,6 +317,27 @@ c4m-lc.c4r: c4sp $(C4LC_LISP) c4m.c
 	./c4sp -c 16000000 src/c4sp/lisp/c4lc.lisp -O .c4lc_klc.c c4m-lc.c4r
 	rm -f .c4lc_klc.c
 
+# OISC4: the One Instruction Set Computer (docs/oisc4-design.md).
+# Runs .c4r images on a single-instruction VM; verified bit-identical
+# against the c4m loader by test-oisc4.
+OISC4 := src/oisc4/oisc4
+$(OISC4): src/oisc4/oisc4.c
+	$(NATIVE_CC) $(NATIVE_CC_OPTS) src/oisc4/oisc4.c -o $(OISC4)
+oisc4: $(OISC4)
+# OISC4 compiled by c4lc: runs nested under c4m, plain c4 (via c4l.c),
+# or oisc4 itself (OISC on OISC).
+oisc4-lc.c4r: c4sp $(C4LC_LISP) src/oisc4/oisc4.c
+	$(PREPROC) src/oisc4/oisc4.c > .c4lc_o4.c
+	./c4sp -c 16000000 src/c4sp/lisp/c4lc.lisp -O .c4lc_o4.c oisc4-lc.c4r
+	rm -f .c4lc_o4.c
+test-oisc4: $(OISC4) $(C4M) c4.c4r c4sp.c4r $(TESTS_C4R)
+	bash src/oisc4/test-oisc4.sh
+test-oisc4-nested: $(OISC4) $(C4) $(C4M) oisc4-lc.c4r $(TESTS)/hello.c4r
+	$(C4M) load-c4r.c -- oisc4-lc.c4r -m 32 $(TESTS)/hello.c4r | grep -q yello
+	$(C4) c4l.c oisc4-lc.c4r -m 32 $(TESTS)/hello.c4r | grep -q yello
+	$(OISC4) -m 192 oisc4-lc.c4r -m 32 $(TESTS)/hello.c4r | grep -q yello
+	@echo "test-oisc4-nested: OK"
+
 # C4IX (docs/c4ix-design.md): the c4lc-compiled OS. Each module is
 # preprocessed, compiled to a .c4o object with full optimization, and
 # the kernel image is linked by c4rlink.

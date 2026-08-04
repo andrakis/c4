@@ -263,6 +263,7 @@ struct task {
     int  block_pos;            // position the blocked read wants data past
     int  fds[FD_MAX];          // struct file *, 0 where the fd is closed
     struct vnode *cwd;         // working directory, inherited on spawn
+    int  lockdepth;            // preemption-mask depth, saved across switches
     char name[TASK_NAME_MAX];
 };
 

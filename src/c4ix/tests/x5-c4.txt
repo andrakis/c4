@@ -24,34 +24,27 @@ uhello: still here after yielding
 uhello: exiting with 7
 init: 'c4ix-uhello.c4r' exited 7 after 9 syscalls
 init: --- X3: files, redirection, pipes ---
-init: cannot create /ram/note
-init: cannot create /ram/out
+init: read 22 bytes back: written to a ram file
+hello: running as a c4ix task
+hello: argc 1 doubled six 6
+init: 'c4ix-hello.c4r' ran with fd 1 redirected; /ram/out holds 0 bytes:
+init: (empty: this host has no protected mode, so a raw printf bypasses fd 1)
 14 bytes 1 lines
 init: --- X4: handing off to c4ix-sh.c4r src/c4ix/user/test.sh ---
 test: files
-sh: cannot create /ram/t1
 alpha beta
-cat: cannot open /ram/t1
-sh: cannot open /ram/t1
-0 bytes 0 lines
+11 bytes 1 lines
 test: pipes
-cat: cannot open /ram/t1
-0 bytes 0 lines
-cat: cannot open /ram/t1
-0 bytes 0 lines
+11 bytes 1 lines
+11 bytes 1 lines
 test: redirection
-sh: cannot create /ram/t2
-cat: cannot open /ram/t1
-0 bytes 0 lines
-cat: cannot open /ram/t2
+11 bytes 1 lines
 test: overwrite truncates
-sh: cannot create /ram/t2
 x
-cat: cannot open /ram/t2
-sh: cannot open /ram/t2
-0 bytes 0 lines
+2 bytes 1 lines
 test: directories
 d/
+ram/
 sub/
 /d/sub
 nested
@@ -61,14 +54,14 @@ test: process table
 ID   STATE   PRIV SYSCALLS NAME
 0    ready   0    0        boot
 1    wait    0    0        init
-8    wait    0    309      c4ix-sh.c4r
-37   run     0    79       c4ix-ps.c4r
+9    wait    0    314      c4ix-sh.c4r
+38   run     0    79       c4ix-ps.c4r
 test: exit status of a pipeline tail
 cat: cannot open /ram/nonexistent
 after a failure the shell keeps going
 test: done
-init: shell exited 0 after 347 syscalls
-sl4b: cache 'task' objsize 304 perslab 16 slabs 1 allocs 42 frees 42 live 0
-sl4b: cache 'file' objsize 32 perslab 16 slabs 1 allocs 19 frees 19 live 0
-sl4b: cache 'vnode' objsize 112 perslab 8 slabs 1 allocs 12 frees 7 live 5
+init: shell exited 0 after 352 syscalls
+sl4b: cache 'task' objsize 312 perslab 16 slabs 1 allocs 43 frees 43 live 0
+sl4b: cache 'file' objsize 32 perslab 16 slabs 1 allocs 33 frees 33 live 0
+sl4b: cache 'vnode' objsize 112 perslab 8 slabs 2 allocs 17 frees 7 live 10
 c4ix: shutdown complete, 0 tasks remain

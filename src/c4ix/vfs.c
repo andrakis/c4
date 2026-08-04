@@ -74,6 +74,15 @@ void vfs_init() {
     rootdir->refs = 1;
     rootdir->parent = rootdir;        // ".." at the root is the root
     vfs_namecpy(rootdir->name, "/");
+
+    // /ram exists from boot. Before directories the RAM filesystem
+    // was a flat set of names and "/ram/out" was simply one of them;
+    // now that paths are resolved a component at a time, that name
+    // only works if /ram is a real directory. Intermediate
+    // directories are NOT created implicitly -- open() does not do
+    // that in any Unix -- so this one is made here rather than
+    // silently conjured on first use.
+    vfs_mkdir("/ram");
 }
 
 struct vnode *vfs_root() { return rootdir; }

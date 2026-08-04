@@ -327,16 +327,43 @@ loading or assigning a whole struct is an error.
       sees a kernel pointer). `cd` and `pwd` became real shell
       builtins -- they change the shell's own state -- while `ls` and
       `mkdir` are programs. cd's honest "this filesystem is flat"
-      message is retired.)
-- [x] Preemption races fixed (2026-08-04: the trap handler claimed
-      its re-entry guard AFTER masking the cycle interrupt rather
-      than before, so an interrupt landing in that window ran the
-      whole non-reentrant handler recursively -- the source of the
-      garbage program counters; and fd/vnode reference counts were
-      mutated by preemptible kernel tasks without masking, so a
-      preemption mid-update could free a live description. Both
-      fixed. A liveness stall under 5x preemption remains open and
-      is documented in src/c4ix/user/stress.sh.)
+      message is retired.
+      One consequence worth stating: intermediate directories are NOT
+      created implicitly, because open() does not do that in any
+      Unix. `/ram` therefore exists from boot -- before directories
+      it was simply one flat name among many, and paths like
+      `/ram/out` would otherwise have stopped resolving.)
+- [x] Preemption races fixed (2026-08-04, three of them):
+      (1) the trap handler claimed its re-entry guard AFTER masking
+      the cycle interrupt rather than before, so an interrupt landing
+      in that window ran the whole non-reentrant handler recursively
+      -- the source of the garbage program counters;
+      (2) fd and vnode reference counts were mutated by preemptible
+      kernel tasks without masking, so a preemption mid-update could
+      free a description another task still held;
+      (3) **the preemption mask was global rather than per-task**,
+      and this is the interesting one. c4m zeroes the cycle interval
+      whenever the interrupt fires and relies on the handler to
+      re-arm it. The handler re-armed only when the mask depth was
+      zero -- but the depth belonged to the MACHINE, so a task that
+      held the mask across a context switch handed the next task an
+      interrupt-masked machine. A compute-bound task landing in that
+      state never traps again: it simply runs, burning cycles, while
+      nothing else is scheduled and nothing can stop it. The depth
+      now travels with the task, saved and restored by both switch
+      backends, and the re-arm reflects whoever is about to run.
+      The same shape exists in C4KE, which is where this was first
+      observed: `critical_path_start/end` set the interval globally,
+      and `ih_cycle` restores an `old_ih_cycle_interval` captured in
+      the outgoing task's context. That is a plausible explanation
+      for its long-standing "rogue task" -- one process with a cycle
+      count thousands of times everyone else's, issuing no traps,
+      starving the rest.
+      Measured: the stress script went from 0/4 to 4/4 at five times
+      the shipped preemption rate. At twenty times and beyond it
+      still fails, but there the interrupt period is below the
+      handler's own cost (~1237 cycles), which is outside the design
+      envelope rather than the same bug.)
 ## 7. Measured results (2026-08-03)
 
 All C4IX figures are VM cycles from the machine's own counter, taken

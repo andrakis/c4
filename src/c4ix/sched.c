@@ -42,6 +42,17 @@ struct task *sched_current() {
 }
 
 // ---- preemption masking (c4m only; nestable) ----
+//
+// The depth belongs to the TASK, not to the machine. It has to: the
+// mask says "do not preempt me", and if it were global then a task
+// that held it across a context switch would hand the next task an
+// interrupt-masked machine. A compute-bound task landing in that
+// state never traps again -- it just runs, burning cycles, while
+// nothing else is scheduled and nothing can stop it. (C4KE shows the
+// same failure: a rogue benchmark with a cycle count thousands of
+// times everyone else's, issuing no traps.) So the switch saves the
+// outgoing depth and restores the incoming one, and the re-arm at
+// the end of the handler reflects whoever is about to run.
 
 // Inside the trap handler the interrupt is already off and the
 // handler re-arms it on the way out, so the hardware half is skipped
@@ -197,6 +208,9 @@ static void sched_trap(int trap, int param, int mode, int a, int bp, int sp, int
             sp = n->sv_sp + 16;
             returnpc = n->sv_pc;
         }
+        // the mask travels with the task, not with the machine
+        t->lockdepth = sched_lockdepth;
+        sched_lockdepth = n->lockdepth;
         n->state = TS_RUNNING;
         sched_cur = n;
         ++sched_switches;
@@ -249,6 +263,8 @@ static void coop_switch(struct task *next) {
     *bp = (int)f;
     *(bp + 1) = sched_tramp;
 
+    old->lockdepth = sched_lockdepth;
+    sched_lockdepth = next->lockdepth;
     next->state = TS_RUNNING;
     sched_cur = next;
     ++sched_switches;

@@ -297,7 +297,18 @@
 				(define ar (pp:args (tail rest) nil nil 0))
 				(define args (head ar))
 				(define after (head (tail ar)))
-				(list (pp:reline (pp:subst body params args nil) ln) after))))))))
+				;; Arguments are macro-expanded BEFORE substitution --
+				;; except as operands of # or ##, which see them raw.
+				;; That distinction is the whole reason XSTR(V) gives
+				;; the value of V while STR(V) gives "V".
+				(define eargs (pp:expandargs args nil))
+				(list (pp:reline (pp:subst body params args eargs nil) ln)
+					after))))))))
+
+(define pp:expandargs (lambda (args acc)
+	(if (empty? args) (pp:reverse acc)
+	(next pp:expandargs (tail args)
+		(pp:cons (pp:expandall (head args) nil) acc)))))
 
 ;; Collect comma-separated arguments up to the matching ')'.
 ;; Returns (ARGS REST); each arg is a token list.
@@ -313,16 +324,107 @@
 		(next pp:args (tail toks) (pp:cons t cur) acc
 			(if (= k 'Lparen) (+ d 1) (if (= k 'Rparen) (- d 1) d)))))))))
 
+;; ---- spelling tokens back into text ----
+;;
+;; Needed by stringize and paste, and by nothing else. Identifiers
+;; and numbers are what those operators are actually used on; the
+;; punctuation table covers the rest of what can plausibly appear
+;; inside a macro argument.
+(define pp:optext '(
+	(Lparen "(") (Rparen ")") (Lbrace "{") (Rbrace "}")
+	(Lbrak "[") (Rbrak "]") (Semi ";") (Comma ",") (Dot ".")
+	(Arrow "->") (Assign "=") (Eq "==") (Ne "!=") (Lt "<") (Gt ">")
+	(Le "<=") (Ge ">=") (Add "+") (Sub "-") (Mul "*") (Div "/")
+	(Mod "%") (And "&") (Or "|") (Xor "^") (Not "!") (Tilde "~")
+	(Land "&&") (Lor "||") (Shl "<<") (Shr ">>") (Inc "++")
+	(Dec "--") (Cond "?") (Colon ":")
+	(Int "int") (Char "char") (Void "void") (If "if") (Else "else")
+	(While "while") (For "for") (Return "return") (Sizeof "sizeof")
+	(Struct "struct") (Union "union") (Enum "enum") (Static "static")
+	(Extern "extern") (Typedef "typedef") (Break "break")
+	(Continue "continue") (Switch "switch") (Case "case")
+	(Default "default") (Do "do")))
+
+(define pp:oplook (lambda (k l)
+	(if (empty? l) false
+	(if (= (head (head l)) k) (head (tail (head l)))
+	(next pp:oplook k (tail l))))))
+
+(define pp:spell (lambda (t)
+	(begin
+		(define k (pp:kind t))
+		(if (= k 'Id) (pp:val t)
+		(if (= k 'Num) (+ "" (pp:val t))
+		(if (= k 'Str) (pp:val t)
+		(begin
+			(define o (pp:oplook k pp:optext))
+			(if o o "")))))))) 
+
+;; Spell a whole token list, space-separated where two words would
+;; otherwise run together. cpp's exact whitespace rules are subtler;
+;; this matches on the shapes that occur in practice.
+(define pp:spelllist (lambda (toks acc first)
+	(if (empty? toks) acc
+	(begin
+		(define txt (pp:spell (head toks)))
+		(next pp:spelllist (tail toks)
+			(if first txt (+ (+ acc " ") txt))
+			false)))))
+
+;; token ## token: splice the spellings and lex the result, which is
+;; how a paste can produce an identifier, a number, or an operator
+;; without the preprocessor having to know which.
+(define pp:paste (lambda (a b)
+	(begin
+		(define txt (+ (pp:spell a) (pp:spell b)))
+		(pp:dropeof (lex:string txt) nil))))
+
 ;; Replace parameters in BODY with the matching argument token lists.
-(define pp:subst (lambda (body params args acc)
+(define pp:subst (lambda (body params args eargs acc)
 	(if (empty? body) (pp:reverse acc)
 	(begin
 		(define t (head body))
-		(define a (if (= (pp:kind t) 'Id)
-			(pp:argfor (pp:val t) params args) false))
-		(if a (next pp:subst (tail body) params args
-				(pp:revonto a acc))
-		(next pp:subst (tail body) params args (pp:cons t acc)))))))
+		(define k (pp:kind t))
+		;; stringize: '#' before a parameter becomes a string literal
+		;; holding that argument's text
+		(if (if (= k 'Hash) (if (empty? (tail body)) false true) false)
+			(begin
+				(define nx (head (tail body)))
+				(define sa (if (= (pp:kind nx) 'Id)
+					(pp:argfor (pp:val nx) params args) false))
+				(if sa
+					(next pp:subst (tail (tail body)) params args eargs
+						(pp:cons (list 'Str (pp:spelllist sa "" true)
+							(pp:line t)) acc))
+				(next pp:subst (tail body) params args eargs (pp:cons t acc))))
+		;; paste: A ## B, with either side possibly a parameter
+		(if (if (empty? (tail body)) false
+				(= (pp:kind (head (tail body))) 'HashHash))
+			(begin
+				(define rhs (tail (tail body)))
+				(if (empty? rhs)
+					(next pp:subst (tail body) params args eargs (pp:cons t acc))
+				(begin
+					(define lt (pp:lastof (pp:one t params args) t))
+					(define rt (pp:firstof (pp:one (head rhs) params args)
+						(head rhs)))
+					(next pp:subst (tail rhs) params args eargs
+						(pp:revonto (pp:paste lt rt) acc)))))
+		(begin
+			;; ordinary parameter: the EXPANDED argument
+			(define a (if (= k 'Id) (pp:argfor (pp:val t) params eargs) false))
+			(if a (next pp:subst (tail body) params args eargs (pp:revonto a acc))
+			(next pp:subst (tail body) params args eargs (pp:cons t acc)))))))))) 
+
+;; the argument list for a parameter token, or false
+(define pp:one (lambda (t params args)
+	(if (= (pp:kind t) 'Id) (pp:argfor (pp:val t) params args) false)))
+(define pp:lastof (lambda (l dflt)
+	(if l (if (empty? l) dflt (pp:lastof/2 l)) dflt)))
+(define pp:lastof/2 (lambda (l)
+	(if (empty? (tail l)) (head l) (next pp:lastof/2 (tail l)))))
+(define pp:firstof (lambda (l dflt)
+	(if l (if (empty? l) dflt (head l)) dflt)))
 
 (define pp:argfor (lambda (n params args)
 	(if (empty? params) false

@@ -313,8 +313,13 @@ battery green and adds its own target.
   evaluator (defined(), literals, macros, `!` `-` `*` `/` `+` `<`
   `>` `<=` `>=` `==` `!=` `&&` `||`), and gcc's `# 123 "file"`
   markers, skipped so already-preprocessed input still works.
-  Rejected rather than mis-expanded: stringize (`#param`) and paste
-  (`##`); nothing in this tree uses them.
+  Stringize (`#param`) and paste (`##`) are supported too, including
+  the two-level idiom: an argument is macro-expanded before
+  substitution EXCEPT as an operand of `#` or `##`, which is exactly
+  why `STR(V)` yields `"V"` while `XSTR(V)` yields V's value. Paste
+  splices the two spellings and re-lexes the result, so it can
+  produce an identifier, a number or an operator without the
+  preprocessor knowing which in advance.
   A wrinkle worth recording: `#if` and `#else` lex as C KEYWORDS, not
   identifiers, so the directive dispatcher maps them back -- without
   that both silently do nothing and every `#endif` looks unbalanced.

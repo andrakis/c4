@@ -316,6 +316,27 @@ loading or assigning a whole struct is an error.
       isolation. It is kept in src/c4ix/user/stress.sh, OUTSIDE the
       pinned suite, rather than pinned in whatever state passes.)
 
+- [x] Directories (2026-08-04: the RAM filesystem became a tree. A
+      vnode can be VN_DIR with child/parent links, names are single
+      COMPONENTS rather than whole paths, and resolution walks one
+      component at a time from either the root or the task's working
+      directory -- which is what makes "." and ".." mean anything.
+      Each task carries a cwd, inherited on spawn, so a child
+      resolves relative paths where its parent stood. New syscalls:
+      chdir, mkdir, getcwd, readdir (index-based, so userland never
+      sees a kernel pointer). `cd` and `pwd` became real shell
+      builtins -- they change the shell's own state -- while `ls` and
+      `mkdir` are programs. cd's honest "this filesystem is flat"
+      message is retired.)
+- [x] Preemption races fixed (2026-08-04: the trap handler claimed
+      its re-entry guard AFTER masking the cycle interrupt rather
+      than before, so an interrupt landing in that window ran the
+      whole non-reentrant handler recursively -- the source of the
+      garbage program counters; and fd/vnode reference counts were
+      mutated by preemptible kernel tasks without masking, so a
+      preemption mid-update could free a live description. Both
+      fixed. A liveness stall under 5x preemption remains open and
+      is documented in src/c4ix/user/stress.sh.)
 ## 7. Measured results (2026-08-03)
 
 All C4IX figures are VM cycles from the machine's own counter, taken

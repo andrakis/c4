@@ -58,7 +58,8 @@ enum {
     SYS_SBRK = 208, SYS_GETPID = 209,
     SYS_DUP = 210, SYS_DUP2 = 211, SYS_PIPE = 212,
     SYS_CYCLES = 213, SYS_TASKINFO = 214,
-    SYS_TOP = 215
+    SYS_CHDIR = 215, SYS_MKDIR = 216, SYS_GETCWD = 217, SYS_READDIR = 218,
+    SYS_TOP = 219
 };
 // taskinfo fills: id, state, privs, nsyscalls, then the name packed
 // into the remaining words (TASK_NAME_MAX bytes).
@@ -74,6 +75,10 @@ int  sys_dup(int fd);
 int  sys_dup2(int oldfd, int newfd);
 int  sys_pipe(int *fds);                 // fds[0] read end, fds[1] write end
 int  sys_taskinfo(int index, int *out);  // 1 if that slot exists
+int  sys_chdir(char *path);
+int  sys_mkdir(char *path);
+int  sys_getcwd(char *buf, int len);
+int  sys_readdir(char *path, int index, char *name);  // <0 end, else isdir
 void sys_pmviolation(int op, int *sp, int *returnpc, int *a);
 
 // Set when a syscall could not complete because the calling task had
@@ -92,8 +97,11 @@ extern int sys_restart;
 // position -- while two separate opens of the same file get
 // independent positions. Spawned tasks inherit the table, which is
 // what makes redirection work: set fd 1 up, spawn, restore.
-enum { VN_CONSOLE = 1, VN_RAMFILE = 2, VN_HOSTFILE = 3, VN_PIPE = 4 };
-enum { VN_NAME_MAX = 24 };
+enum {
+    VN_CONSOLE = 1, VN_RAMFILE = 2, VN_HOSTFILE = 3, VN_PIPE = 4,
+    VN_DIR = 5
+};
+enum { VN_NAME_MAX = 24, PATH_MAX = 96 };
 // open() flags. The low two bits match the host's O_RDONLY/WRONLY/
 // RDWR so they can be passed straight through for host files.
 enum {
@@ -110,8 +118,10 @@ struct vnode {
     int rpos;                  // PIPE: read cursor into data
     int host;                  // HOSTFILE: the host descriptor
     int writers;               // PIPE: descriptions still open for write
-    struct vnode *next;        // the ramfs chain
-    char name[VN_NAME_MAX];
+    struct vnode *next;        // sibling in the parent directory
+    struct vnode *child;        // VN_DIR: first entry
+    struct vnode *parent;       // VN_DIR: enclosing directory
+    char name[VN_NAME_MAX];     // one component, not a path
 };
 
 struct file {
@@ -122,8 +132,19 @@ struct file {
 };
 
 void         vfs_init();
-struct vnode *vfs_lookup(char *name);
-struct vnode *vfs_ramfile(char *name);   // find or create
+// Names are resolved a component at a time from CWD (or from the
+// root when the path starts with '/'), which is what makes "." and
+// ".." mean anything and what a flat namespace could never support.
+struct vnode *vfs_lookup(char *path);
+struct vnode *vfs_ramfile(char *path);   // find or create the file
+struct vnode *vfs_mkdir(char *path);
+struct vnode *vfs_root();
+struct vnode *vfs_cwd();
+int          vfs_chdir(char *path);
+int          vfs_isdir(struct vnode *vn);
+// Directory listing, one entry at a time: index-based so userland
+// gets a stable interface without seeing kernel pointers.
+int          vfs_direntry(struct vnode *dir, int index, char *name, int *isdir);
 struct vnode *vfs_pipe();
 struct vnode *vn_hostfile(int host);
 int          vfs_read(struct file *f, char *buf, int len);
@@ -241,6 +262,7 @@ struct task {
     struct vnode *block_vn;    // TS_BLOCKED: the vnode being waited on
     int  block_pos;            // position the blocked read wants data past
     int  fds[FD_MAX];          // struct file *, 0 where the fd is closed
+    struct vnode *cwd;         // working directory, inherited on spawn
     char name[TASK_NAME_MAX];
 };
 

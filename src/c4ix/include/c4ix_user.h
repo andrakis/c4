@@ -16,7 +16,8 @@ enum {
     SYS_EXIT = 204, SYS_YIELD = 205, SYS_SPAWN = 206, SYS_WAIT = 207,
     SYS_SBRK = 208, SYS_GETPID = 209,
     SYS_DUP = 210, SYS_DUP2 = 211, SYS_PIPE = 212,
-    SYS_CYCLES = 213, SYS_TASKINFO = 214
+    SYS_CYCLES = 213, SYS_TASKINFO = 214,
+    SYS_CHDIR = 215, SYS_MKDIR = 216, SYS_GETCWD = 217, SYS_READDIR = 218
 };
 // taskinfo record: id, state, privs, nsyscalls, then a 16-byte name
 enum { TASKINFO_WORDS = 6 };
@@ -60,6 +61,10 @@ int  udup2(int oldfd, int newfd);
 int  upipe(int *fds);            // fds[0] read end, fds[1] write end
 int  ucycles();                  // VM cycles executed since boot
 int  utaskinfo(int index, int *out);   // 1 if that task slot exists
+int  uchdir(char *path);
+int  umkdir(char *path);
+int  ugetcwd(char *buf, int len);
+int  ureaddir(char *path, int index, char *name);  // 1 dir, 0 file, -1 end
 int *ualloc(int bytes);
 int  getpid();
 

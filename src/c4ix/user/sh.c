@@ -13,8 +13,9 @@
 // descriptors back. That is the whole trick, and it is why X3's
 // dup2-shares-a-description semantics had to be right.
 //
-//   ls              -- not a thing; the RAM filesystem is flat and
-//                      has no directory listing syscall yet (X5).
+//   cd / pwd / ls   -- the RAM filesystem has directories, so these
+//                      are real: cd and pwd are builtins (they change
+//                      the shell's own state), ls is a program.
 //   cmd < in > out  -- redirection
 //   a | b | c       -- pipelines of any length
 //   cmd &           -- background, reported by `jobs`, reaped by `wait`
@@ -223,14 +224,19 @@ static int sh_builtin(char **argv, int argc) {
     if (!ustrcmp(argv[0], "wait")) { sh_waitall(); return 1; }
     if (!ustrcmp(argv[0], "help")) {
         uprintf("c4ix-sh: cmd [args] [< in] [> out] [| cmd ...] [&]\n");
-        uprintf("builtins: exit jobs wait cd help\n");
+        uprintf("builtins: exit jobs wait cd pwd help\n");
         return 1;
     }
     if (!ustrcmp(argv[0], "cd")) {
-        // Honest answer rather than a fake success: the RAM
-        // filesystem is a flat set of names, so there is nothing to
-        // change into. Directories are a later milestone.
-        uprintf("cd: this filesystem is flat -- no directories yet\n");
+        char *dir;
+        dir = (argc > 1) ? argv[1] : "/";
+        if (uchdir(dir) < 0) uprintf("cd: no such directory: %s\n", dir);
+        return 1;
+    }
+    if (!ustrcmp(argv[0], "pwd")) {
+        char cwd[128];
+        if (ugetcwd(cwd, 128) > 0) uprintf("%s\n", cwd);
+        else uprintf("pwd: failed\n");
         return 1;
     }
     return 0;

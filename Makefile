@@ -360,7 +360,7 @@ c4ix-%.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libc4ix.c4l $(C4IX_SRC)/user/%.c
 # works on both.
 C4IX_PROGS := c4ix-hello.c4r c4ix-uhello.c4r c4ix-echo.c4r c4ix-wc.c4r \
               c4ix-cat.c4r c4ix-sh.c4r c4ix-ps.c4r c4ix-bench.c4r \
-              c4ix-cycles.c4r
+              c4ix-cycles.c4r c4ix-ls.c4r c4ix-mkdir.c4r
 C4IX_ARGS := c4ix-hello.c4r c4ix-uhello.c4r c4ix-echo.c4r c4ix-wc.c4r \
              c4ix-sh.c4r $(C4IX_SRC)/user/test.sh
 # Cycle counts are masked: they are a measurement, not behaviour, and

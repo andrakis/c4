@@ -2,3 +2,8 @@ guarded 2
 taken_if 5
 taken_elif 8
 nested 30
+str hello world
+xstr 7
+str-noexpand VERSION
+cat 4
+paste 11

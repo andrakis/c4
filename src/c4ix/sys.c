@@ -142,6 +142,53 @@ int sys_taskinfo(int index, int *out) {
     return 1;
 }
 
+int sys_chdir(char *path) { return vfs_chdir(path); }
+
+int sys_mkdir(char *path) {
+    if (!vfs_mkdir(path)) return -1;
+    return 0;
+}
+
+// Build the absolute path of the working directory by walking
+// parents to the root and then emitting the components in reverse.
+int sys_getcwd(char *buf, int len) {
+    struct vnode *chain[16];
+    struct vnode *vn;
+    int n, i, j, k;
+
+    vn = vfs_cwd();
+    n = 0;
+    while (vn != vfs_root() && n < 16) { chain[n] = vn; ++n; vn = vn->parent; }
+    if (!n) {
+        if (len < 2) return -1;
+        buf[0] = '/'; buf[1] = 0;
+        return 1;
+    }
+    k = 0;
+    i = n;
+    while (i) {
+        --i;
+        if (k < len - 1) { buf[k] = '/'; ++k; }
+        j = 0;
+        while (chain[i]->name[j]) {
+            if (k < len - 1) { buf[k] = chain[i]->name[j]; ++k; }
+            ++j;
+        }
+    }
+    buf[k] = 0;
+    return k;
+}
+
+// One directory entry per call: returns 1 for a directory, 0 for a
+// file, -1 past the end -- so userland never sees a kernel pointer.
+int sys_readdir(char *path, int index, char *name) {
+    struct vnode *dir;
+    int isdir;
+    if (!(dir = vfs_lookup(path))) return -1;
+    if (!vfs_direntry(dir, index, name, &isdir)) return -1;
+    return isdir;
+}
+
 // ---- the dispatcher ----
 //
 // args[0] is the first argument, args[1] the second, and so on.
@@ -160,6 +207,10 @@ int sys_dispatch(int num, int *args) {
     if (num == SYS_PIPE)   return sys_pipe((int *)args[0]);
     if (num == SYS_CYCLES) return __c4_cycles();
     if (num == SYS_TASKINFO) return sys_taskinfo(args[0], (int *)args[1]);
+    if (num == SYS_CHDIR)  return sys_chdir((char *)args[0]);
+    if (num == SYS_MKDIR)  return sys_mkdir((char *)args[0]);
+    if (num == SYS_GETCWD) return sys_getcwd((char *)args[0], args[1]);
+    if (num == SYS_READDIR) return sys_readdir((char *)args[0], args[1], (char *)args[2]);
     if (num == SYS_YIELD)  { sched_yield(); return 0; }
     if (num == SYS_GETPID) return t ? t->id : -1;
     if (num == SYS_SBRK)   return (int)malloc(args[0]);

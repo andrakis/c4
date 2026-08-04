@@ -56,6 +56,10 @@ int udup2(int oldfd, int newfd)       { return __c4ix_syscall(SYS_DUP2, oldfd, n
 int upipe(int *fds)                   { return __c4ix_syscall(SYS_PIPE, (int)fds, 0, 0); }
 int ucycles()                         { return __c4ix_syscall(SYS_CYCLES, 0, 0, 0); }
 int utaskinfo(int i, int *out)        { return __c4ix_syscall(SYS_TASKINFO, i, (int)out, 0); }
+int uchdir(char *path)                { return __c4ix_syscall(SYS_CHDIR, (int)path, 0, 0); }
+int umkdir(char *path)                { return __c4ix_syscall(SYS_MKDIR, (int)path, 0, 0); }
+int ugetcwd(char *buf, int len)       { return __c4ix_syscall(SYS_GETCWD, (int)buf, len, 0); }
+int ureaddir(char *path, int i, char *nm) { return __c4ix_syscall(SYS_READDIR, (int)path, i, (int)nm); }
 
 int spawn(char *path, int argc, char **argv) {
     return __c4ix_syscall(SYS_SPAWN, (int)path, argc, (int)argv);

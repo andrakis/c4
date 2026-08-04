@@ -34,13 +34,20 @@
 
 static struct sl4b_cache *vn_cache;
 static struct sl4b_cache *file_cache;
-static struct vnode *ramfs;        // the named RAM files
+static struct vnode *rootdir;      // "/" -- the RAM filesystem's root
 static struct vnode *console;      // the one console vnode
 
 static void vfs_namecpy(char *dst, char *src) {
     int i;
     i = 0;
     while (src[i] && i < VN_NAME_MAX - 1) { dst[i] = src[i]; ++i; }
+    dst[i] = 0;
+}
+
+static void vfs_namecpy2(char *dst, char *src, int len) {
+    int i;
+    i = 0;
+    while (i < len && i < VN_NAME_MAX - 1) { dst[i] = src[i]; ++i; }
     dst[i] = 0;
 }
 
@@ -61,6 +68,98 @@ void vfs_init() {
     console->type = VN_CONSOLE;
     console->refs = 1;
     vfs_namecpy(console->name, "console");
+
+    rootdir = (struct vnode *)sl4b_alloc(vn_cache);
+    rootdir->type = VN_DIR;
+    rootdir->refs = 1;
+    rootdir->parent = rootdir;        // ".." at the root is the root
+    vfs_namecpy(rootdir->name, "/");
+}
+
+struct vnode *vfs_root() { return rootdir; }
+
+int vfs_isdir(struct vnode *vn) {
+    if (!vn) return 0;
+    return vn->type == VN_DIR;
+}
+
+// The task's working directory, defaulting to the root for anything
+// that has not set one (the boot task, or a task created before the
+// VFS was up).
+struct vnode *vfs_cwd() {
+    struct task *t;
+    if (!(t = sched_current())) return rootdir;
+    if (!t->cwd) t->cwd = rootdir;
+    return t->cwd;
+}
+
+// ---- path resolution ----
+//
+// One component at a time, which is the whole point of having
+// directories: "." and ".." mean something, and a name is only ever
+// matched against the entries of one directory.
+
+static struct vnode *vfs_child(struct vnode *dir, char *name, int len) {
+    struct vnode *vn;
+    int i;
+    if (!vfs_isdir(dir)) return 0;
+    vn = dir->child;
+    while (vn) {
+        i = 0;
+        while (i < len) {
+            if (vn->name[i] != name[i]) { i = -1; break; }
+            ++i;
+        }
+        if (i == len) { if (!vn->name[len]) return vn; }
+        vn = vn->next;
+    }
+    return 0;
+}
+
+static struct vnode *vn_alloc(int type);
+
+// Walk PATH. When CREATE is set the final component is made as a
+// file (or as a directory when MKDIR is set); intermediate
+// components must already exist either way.
+static struct vnode *vfs_walk(char *path, int create, int mkdir) {
+    struct vnode *dir;
+    struct vnode *vn;
+    int i, start, len;
+
+    dir = (path[0] == '/') ? rootdir : vfs_cwd();
+    i = 0;
+    if (path[0] == '/') ++i;
+
+    while (path[i]) {
+        start = i;
+        while (path[i]) { if (path[i] == '/') break; ++i; }
+        len = i - start;
+        while (path[i] == '/') ++i;              // collapse separators
+
+        if (!len) continue;                       // trailing or doubled '/'
+        if (len == 1) { if (path[start] == '.') continue; }
+        if (len == 2) {
+            if (path[start] == '.') {
+                if (path[start + 1] == '.') { dir = dir->parent; continue; }
+            }
+        }
+
+        vn = vfs_child(dir, path + start, len);
+        if (!vn) {
+            // only the LAST component may be created
+            if (!create) return 0;
+            if (path[i]) return 0;
+            if (!(vn = vn_alloc(mkdir ? VN_DIR : VN_RAMFILE))) return 0;
+            vfs_namecpy2(vn->name, path + start, len);
+            vn->parent = dir;
+            vn->next = dir->child;
+            dir->child = vn;
+            return vn;
+        }
+        if (!path[i]) return vn;                  // last component
+        dir = vn;                                 // descend
+    }
+    return dir;                                   // "/" or "." etc.
 }
 
 static struct vnode *vn_alloc(int type) {
@@ -93,33 +192,66 @@ static void vn_release(struct vnode *vn) {
     --vn->refs;
     if (vn->refs > 0) return;
     if (vn->type == VN_HOSTFILE) { close(vn->host); }
-    // RAM files outlive their descriptors: they are the filesystem.
+    // RAM files and directories outlive their descriptors: they ARE
+    // the filesystem.
     if (vn->type == VN_RAMFILE) return;
+    if (vn->type == VN_DIR) return;
     if (vn->type == VN_CONSOLE) return;
     if (vn->data) free(vn->data);
     sl4b_free(vn_cache, (char *)vn);
 }
 
-struct vnode *vfs_lookup(char *name) {
+struct vnode *vfs_lookup(char *path) {
+    return vfs_walk(path, 0, 0);
+}
+
+struct vnode *vfs_ramfile(char *path) {
     struct vnode *vn;
-    vn = ramfs;
-    while (vn) {
-        if (vfs_nameeq(vn->name, name)) return vn;
-        vn = vn->next;
-    }
+    sched_lock();
+    vn = vfs_walk(path, 1, 0);
+    sched_unlock();
+    return vn;
+}
+
+struct vnode *vfs_mkdir(char *path) {
+    struct vnode *vn;
+    sched_lock();
+    if ((vn = vfs_walk(path, 0, 0))) { sched_unlock(); return 0; }  // exists
+    vn = vfs_walk(path, 1, 1);
+    sched_unlock();
+    return vn;
+}
+
+int vfs_chdir(char *path) {
+    struct vnode *vn;
+    struct task *t;
+    if (!(vn = vfs_lookup(path))) return -1;
+    if (!vfs_isdir(vn)) return -1;
+    if (!(t = sched_current())) return -1;
+    t->cwd = vn;
     return 0;
 }
 
-struct vnode *vfs_ramfile(char *name) {
+// Entry INDEX of DIR. Returns 1 if there was one, 0 past the end.
+int vfs_direntry(struct vnode *dir, int index, char *name, int *isdir) {
     struct vnode *vn;
+    int i;
+    if (!vfs_isdir(dir)) return 0;
     sched_lock();
-    if ((vn = vfs_lookup(name))) { sched_unlock(); return vn; }
-    if (!(vn = vn_alloc(VN_RAMFILE))) { sched_unlock(); return 0; }
-    vfs_namecpy(vn->name, name);
-    vn->next = ramfs;
-    ramfs = vn;
+    vn = dir->child;
+    i = 0;
+    while (vn) {
+        if (i == index) {
+            vfs_namecpy(name, vn->name);
+            *isdir = vfs_isdir(vn);
+            sched_unlock();
+            return 1;
+        }
+        ++i;
+        vn = vn->next;
+    }
     sched_unlock();
-    return vn;
+    return 0;
 }
 
 struct vnode *vfs_pipe() {
@@ -192,6 +324,7 @@ int vfs_write(struct file *f, char *buf, int len) {
         return len;
     }
     if (vn->type == VN_HOSTFILE) { sched_unlock(); return -1; }  // no write()
+    if (vn->type == VN_DIR) { sched_unlock(); return -1; }
 
     if (vn->type == VN_PIPE) {
         // Compact first: a drained pipe reuses its buffer instead of

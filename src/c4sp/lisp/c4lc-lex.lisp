@@ -87,6 +87,10 @@
 ;; ---- scanners: each returns the index after the consumed text ----
 
 ;; to end of line, leaving the newline for the main loop's counter
+(define lex:hash2? (lambda (i)
+	(if (>= i lex:len) false
+	(= (string:byte lex:src i) 35))))
+
 (define lex:lparen? (lambda (i)
 	(if (>= i lex:len) false
 	(= (string:byte lex:src i) 40))))
@@ -243,7 +247,12 @@
 		(if (<= c 32) (next lex:go j line acc)
 		(if (= c 35)
 			(if lex:pp
-				(next lex:go j line (lex:cons (list 'Hash 0 line) acc))
+				;; '##' is one token: the paste operator. A lone '#'
+				;; is either a directive introducer or stringize --
+				;; the preprocessor tells them apart by position.
+				(if (lex:hash2? j)
+					(next lex:go (+ j 1) line (lex:cons (list 'HashHash 0 line) acc))
+				(next lex:go j line (lex:cons (list 'Hash 0 line) acc)))
 			(next lex:go (lex:skipline j) line acc))
 		(if (if lex:want-header (= c 60) false)
 			;; #include <name>: one token, not a stream of operators

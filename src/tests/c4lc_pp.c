@@ -39,10 +39,27 @@ int undef_failed() { return 1 / 0; }
 
 int nested() { return LONG_MACRO(ADD(1, 2)); }
 
+// stringize and paste, including the two-level form: an argument is
+// macro-expanded before substitution EXCEPT as an operand of # or ##,
+// which is why STR(V) gives "V" while XSTR(V) gives V's value.
+#define STR(x) #x
+#define XSTR(x) STR(x)
+#define CAT(a, b) a ## b
+#define VERSION 7
+#define PREFIXED(n) c4lc_ ## n
+
+int CAT(fo, ur)() { return 4; }
+int PREFIXED(probe)() { return 11; }
+
 int main() {
     printf("guarded %d\n", guarded());
     printf("taken_if %d\n", taken_if());
     printf("taken_elif %d\n", taken_elif());
     printf("nested %d\n", nested());
+    printf("str %s\n", STR(hello world));
+    printf("xstr %s\n", XSTR(VERSION));
+    printf("str-noexpand %s\n", STR(VERSION));
+    printf("cat %d\n", CAT(fo, ur)());
+    printf("paste %d\n", c4lc_probe());
     return 0;
 }

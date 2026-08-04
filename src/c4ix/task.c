@@ -60,7 +60,10 @@ struct task *task_create(char *name, int entry, int argc, int argv) {
     // descriptions -- a redirected fd 1 stays redirected in the
     // child, which is redirection without fork.
     sched_lock();
-    if ((parent = sched_current())) fd_clone(t, parent);
+    if ((parent = sched_current())) {
+        fd_clone(t, parent);
+        t->cwd = parent->cwd;      // children start where the parent is
+    }
     else fd_init_console(t);
     task_append(t);
     sched_unlock();

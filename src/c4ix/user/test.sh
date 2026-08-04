@@ -28,6 +28,20 @@ echo x > /ram/t2
 cat /ram/t2
 wc < /ram/t2
 
+echo test: directories
+mkdir /d
+mkdir /d/sub
+echo nested > /d/sub/f
+ls /
+ls /d
+cd /d/sub
+pwd
+cat f
+cd ..
+pwd
+cd /
+cat /d/sub/f
+
 echo test: process table
 ps
 

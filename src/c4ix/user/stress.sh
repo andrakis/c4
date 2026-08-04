@@ -34,6 +34,20 @@
 # handler's own cost (~1237 cycles) -- a different regime, outside
 # the design envelope. That is why this file stays out of the pinned
 # suite: it exists to be run under abnormal pressure.
+#
+# 2026-08-04: a FAR simpler reproducer for what remains, found while
+# testing Ctrl-C. At the SHIPPED preemption rate:
+#
+#     make run-c4ix
+#     c4ix:/$ spin 1
+#
+# spin does its work, prints its tick, and then hangs instead of
+# exiting. The same program run standalone --
+# `./c4m load-c4r.c -- c4ix.c4r -q c4ix-spin.c4r 5` -- completes
+# every time. So the trigger is a compute-bound task spawned BY THE
+# SHELL, i.e. a user task whose parent is itself a user task waiting
+# on it, and the stall is at or just after the child's exit. Anyone
+# picking this up should start there rather than with this script.
 
 echo alpha beta > /ram/t1
 cat /ram/t1

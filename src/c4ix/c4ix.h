@@ -38,6 +38,8 @@ enum {
 // c4m mode register values, assigned into the trap handler's own
 // parameter to choose the mode a task resumes in.
 enum { C4IX_MODE_UNPROTECTED = 0, C4IX_MODE_PROTECTED = 1 };
+// exit status given to a task cancelled by Ctrl-C
+enum { C4IX_EXIT_INTERRUPTED = -2 };
 // the guarded host opcodes C4IX services on behalf of user tasks
 enum {
     C4IX_OP_OPEN = 30, C4IX_OP_READ = 31, C4IX_OP_CLOS = 32,

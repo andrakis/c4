@@ -180,6 +180,8 @@ static void sched_trap(int trap, int param, int mode, int a, int bp, int sp, int
         }
     } else if (trap == C4IX_TRAP_PM) {
         sys_pmviolation(param, (int *)sp, (int *)returnpc, &a);
+    } else if (trap == C4IX_TRAP_SIGNAL) {
+        sched_interrupt();
     }
 
     // The syscall could not finish because the task had to block.
@@ -241,6 +243,35 @@ static void sched_trap(int trap, int param, int mode, int a, int bp, int sp, int
     sched_intrap = 0;
     if (sched_interval && sched_lockdepth == 0)
         __c4_configure(C4IX_CONF_INTERVAL, sched_interval);
+}
+
+// Ctrl-C. c4m catches the host signal, records it, and raises
+// TRAP_SIGNAL at the next instruction boundary with whatever handler
+// was registered -- so it arrives here like any other trap.
+//
+// What should die is the program that is running, not the machine.
+// Kernel tasks are spared (killing init or boot ends everything),
+// and so is a task nobody is waiting on -- at an idle prompt the
+// running task is the boot idle loop, and there is nothing to
+// interrupt. The victim becomes a zombie with a distinguishable
+// status, so whoever waits on it learns it was interrupted.
+//
+// One honest limitation: while the shell sits at the prompt the VM
+// is inside the host's blocking read, so a signal is not seen until
+// a line arrives. Interrupting a RUNNING program, which is the case
+// that matters, works.
+static void sched_interrupt() {
+    struct task *t;
+
+    t = sched_cur;
+    if (!t) return;
+    if (t->privs != PRIV_USER) {
+        kputs("\nc4ix: interrupt (nothing running to cancel)\n");
+        return;
+    }
+    kprintf("\nc4ix: interrupt: cancelling task %d '%s'\n", t->id, t->name);
+    t->exitcode = C4IX_EXIT_INTERRUPTED;
+    t->state = TS_ZOMBIE;
 }
 
 // ---- the plain-c4 backend: the LEV trick ----
@@ -383,6 +414,8 @@ void sched_init(int interval) {
 
     if (sched_on_c4m) {
         install_trap_handler((int)&sched_trap);
+        // Ctrl-C arrives as a trap through the same handler.
+        __c4_signal(__c4_sigint(), (int)&sched_trap);
         if (interval) {
             sched_interval = interval;
             __c4_configure(C4IX_CONF_HANDLER, (int)&sched_trap);

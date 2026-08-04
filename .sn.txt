@@ -1,0 +1,6 @@
+C4IX booting, 354501 cycles spent loading the kernel image
+c4ix: host c4m, info 0xf2
+c4ix: protected mode on for user tasks, preemption on
+c4ix: task 1 'init' created, scheduling after 369022 cycles
+c4ix-sh -- 'help' for builtins, 'exit' or end-of-file to leave
+c4ix:/$ spin: 2 ticks, Ctrl-C to cancel

@@ -35,6 +35,7 @@ static char rdbuf[RDBUF];
 static int  rdlen;
 static int  rdpos;
 static int  script_fd;
+static int  interactive;   // reading fd 0 with no script: prompt
 
 // Returns the line length, or -1 at end of input.
 static int sh_getline(char *line, int max) {
@@ -325,21 +326,39 @@ static int sh_runline(char **w, int nw) {
     return st;
 }
 
+// With no script the shell reads fd 0, which is a person, so it
+// prints a prompt carrying the working directory. Without one an
+// interactive session just looks like a hung program.
+static void sh_prompt() {
+    char cwd[128];
+    if (!interactive) return;
+    if (ugetcwd(cwd, 128) > 0) uprintf("c4ix:%s$ ", cwd);
+    else uprintf("c4ix$ ");
+}
+
 int main(int argc, char **argv) {
     char line[LINE_MAX];
     char *words[WORD_MAX];
     int nw, len;
 
     script_fd = STDIN;
+    interactive = 1;
     if (argc > 1) {
+        interactive = 0;
         if ((script_fd = uopen(argv[1], O_RD)) < 0) {
             ufprintf(STDERR, "sh: cannot open %s\n", argv[1]);
             return 1;
         }
     }
+    if (interactive)
+        uprintf("c4ix-sh -- 'help' for builtins, 'exit' or end-of-file to leave\n");
 
     while (!sh_exiting) {
-        if ((len = sh_getline(line, LINE_MAX)) < 0) break;
+        sh_prompt();
+        if ((len = sh_getline(line, LINE_MAX)) < 0) {
+            if (interactive) uprintf("\n");
+            break;
+        }
         if (!len) continue;
         nw = sh_split(line, words, WORD_MAX);
         if (!nw) continue;

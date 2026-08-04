@@ -409,9 +409,18 @@ bench-c4ix: c4m c4ix.c4r $(C4IX_PROGS)
 	@/usr/bin/time -f "%e s" $(C4M) $(RUN_C4KE) -v 9 cycles 2>&1 | tail -1
 	@$(C4M) $(RUN_C4KE) cycles 2>&1 | grep -E "Kernel ready" || true
 
+# An interactive shell: quiet boot (no demonstrations), then c4ix-sh
+# with no script, so it reads fd 0 -- you. `help` lists builtins;
+# `exit` or Ctrl-D leaves, which shuts the kernel down.
 run-c4ix: c4m c4ix.c4r $(C4IX_PROGS)
-	$(C4M) load-c4r.c -- c4ix.c4r $(C4IX_ARGS)
+	$(C4M) load-c4r.c -- c4ix.c4r -q c4ix-sh.c4r
 run-c4ix-c4: c4 c4ix.c4r $(C4IX_PROGS)
+	$(C4) c4l.c c4ix.c4r -q c4ix-sh.c4r
+# The guided tour instead: every milestone's demonstration in order,
+# ending with the shell running the test script.
+demo-c4ix: c4m c4ix.c4r $(C4IX_PROGS)
+	$(C4M) load-c4r.c -- c4ix.c4r $(C4IX_ARGS)
+demo-c4ix-c4: c4 c4ix.c4r $(C4IX_PROGS)
 	$(C4) c4l.c c4ix.c4r $(C4IX_ARGS)
 # L0: golden token dump of a sample covering every token kind and c4cc
 # lexer quirk, native and under c4m, plus a full lex of c4cc.c itself
@@ -663,7 +672,7 @@ PHONY += run run-vg test test-massive
 PHONY += run-alt run-alt-vg test-alt test-massive-alt
 PHONY += run-c4 run-c4-vg test-c4 test-massive-c4
 PHONY += run-c4-alt run-c4-alt-vg
-PHONY += test-c4ix run-c4ix run-c4ix-c4
+PHONY += test-c4ix run-c4ix run-c4ix-c4 demo-c4ix demo-c4ix-c4 bench-c4ix
 PHONY += pkg c4rs or1k
 PHONY += pi
 # Don't bother with the dump or link utility for now

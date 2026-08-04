@@ -364,6 +364,21 @@ loading or assigning a whole struct is an error.
       still fails, but there the interrupt period is below the
       handler's own cost (~1237 cycles), which is outside the design
       envelope rather than the same bug.)
+## 6.1 Running it
+
+    make run-c4ix        an interactive shell on c4m
+    make run-c4ix-c4     the same under plain c4, cooperatively
+    make demo-c4ix       the guided tour: every milestone in order
+    make test-c4ix       the pinned suite, both hosts
+    make bench-c4ix      boot cost and the OS microbenchmarks
+
+`run-c4ix` boots quietly (`-q`, which skips init's demonstrations)
+and starts c4ix-sh with no script, so the shell reads fd 0 -- you. It
+prints a prompt carrying the working directory; `help` lists the
+builtins, and `exit` or end-of-file leaves, which shuts the kernel
+down. Anything in the tree named `c4ix-NAME.c4r` is a command: echo,
+cat, wc, ls, mkdir, ps, bench, hello.
+
 ## 7. Measured results (2026-08-03)
 
 All C4IX figures are VM cycles from the machine's own counter, taken

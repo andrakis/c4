@@ -124,42 +124,47 @@ run-alt: pre
 	$(C4M) -a $(RUN_C4KE)
 run-alt-vg: pre
 	valgrind $(C4M) -a $(RUN_C4KE)
-# Plain c4 runs the COMPILED c4m image via the c4l.c loader (c4's own
-# compiler has no switch, but its VM executes c4m's jumptables; see
-# c4l.c). This replaced interpreting c4m.c source when c4m's dispatch
-# became a switch.
+# Plain c4 runs c4m from SOURCE. c4.c is the base VM and stays
+# unmodified: it knows only the original opcode set, so it cannot run
+# a c4cc-compiled image directly -- and it does not need to, because
+# interpreting c4m.c gives the extended VM, and with it a real clock
+# (c4m's own c4m_time(), not something faked in the interpreter).
 run-c4: pre
-	$(C4) c4l.c $(C4M).c4r $(RUN_C4KE)
+	$(C4) $(C4M).c $(RUN_C4KE)
 run-c4-vg: pre
-	valgrind $(C4) c4l.c $(C4M).c4r $(RUN_C4KE)
+	valgrind $(C4) $(C4M).c $(RUN_C4KE)
 run-c4-alt: pre
-	$(C4) c4l.c $(C4M).c4r -a $(RUN_C4KE)
+	$(C4) $(C4M).c -a $(RUN_C4KE)
 run-c4-alt-vg: pre
-	valgrind $(C4) c4l.c $(C4M).c4r -a $(RUN_C4KE)
+	valgrind $(C4) $(C4M).c -a $(RUN_C4KE)
 test: pre
 	$(C4M) $(RUN_C4KE) innerbench
 test-alt: pre
 	$(C4M) -a $(RUN_C4KE) innerbench
 test-c4: pre
-	$(C4) c4l.c $(C4M).c4r $(RUN_C4KE) innerbench
+	$(C4) $(C4M).c $(RUN_C4KE) innerbench
 test-c4-alt: pre
-	$(C4) c4l.c $(C4M).c4r -a $(RUN_C4KE) innerbench
+	$(C4) $(C4M).c -a $(RUN_C4KE) innerbench
 test-massive: pre
 	$(C4M) $(RUN_C4KE) innerbench -n $(TEST_MASSIVE_NUM)
 test-massive-alt: pre
 	$(C4M) -a $(RUN_C4KE) innerbench -n $(TEST_MASSIVE_NUM)
 test-massive-c4: pre
-	$(C4) c4l.c $(C4M).c4r $(RUN_C4KE) innerbench -n $(TEST_MASSIVE_NUM)
+	$(C4) $(C4M).c $(RUN_C4KE) innerbench -n $(TEST_MASSIVE_NUM)
 test-massive-c4-alt: pre
-	$(C4) c4l.c $(C4M).c4r -a $(RUN_C4KE) innerbench -n $(TEST_MASSIVE_NUM)
-# c4l.c: plain c4 loading and running compiled images. The chains:
-# a plain image; a c4cc jumptable-switch image (needs the extended
-# opcode execution in c4.c); and the compiled c4m interpreting source.
-test-c4l: $(C4) $(C4CC) $(C4M).c4r $(TESTS)/hello.c4r
+	$(C4) $(C4M).c -a $(RUN_C4KE) innerbench -n $(TEST_MASSIVE_NUM)
+# c4l.c: a .c4r loader for PLAIN c4. c4.c is the unmodified base VM,
+# so this runs images that stay inside the original opcode set --
+# which is exactly the boundary worth pinning. An image using the
+# extended opcodes (here, c4cc's switch jumptables) must be refused
+# by plain c4 and must run under c4m through load-c4r.c. Both halves
+# are checked, because the interesting property is that the fallback
+# degrades cleanly rather than misbehaving.
+test-c4l: $(C4) $(C4M) $(C4CC) $(TESTS)/hello.c4r
 	$(C4) c4l.c $(TESTS)/hello.c4r | grep -q yello
 	$(C4CC) -o .c4l_sw.c4r $(TESTS)/test_switch.c
-	$(C4) c4l.c .c4l_sw.c4r | grep -q "classify(5) = 500"
-	$(C4) c4l.c $(C4M).c4r $(TESTS)/hello.c | grep -q yello
+	$(C4) c4l.c .c4l_sw.c4r 2>&1 | grep -q "unknown instruction"
+	$(C4M) load-c4r.c -- .c4l_sw.c4r | grep -q "classify(5) = 500"
 	rm -f .c4l_sw.c4r
 	@echo "test-c4l: OK"
 
@@ -391,7 +396,7 @@ C4IX_ARGS := c4ix-hello.c4r c4ix-uhello.c4r c4ix-echo.c4r c4ix-wc.c4r \
 C4IX_MASK := sed -E 's/[0-9]+ cycles/N cycles/g'
 test-c4ix: c4 c4m c4ix.c4r $(C4IX_PROGS)
 	$(C4M) load-c4r.c -- c4ix.c4r $(C4IX_ARGS) | $(C4IX_MASK) | cmp - $(C4IX_SRC)/tests/x5-c4m.txt
-	$(C4) c4l.c c4ix.c4r $(C4IX_ARGS) | sed '/^exit([0-9-]*) cycle = /d' | $(C4IX_MASK) | cmp - $(C4IX_SRC)/tests/x5-c4.txt
+	$(C4) $(C4M).c load-c4r.c -- c4ix.c4r $(C4IX_ARGS) | sed '/^exit([0-9-]*) cycle = /d' | $(C4IX_MASK) | cmp - $(C4IX_SRC)/tests/x5-c4.txt
 	@echo "test-c4ix: OK"
 # X5: the OS benchmark, and the one number that compares directly
 # with C4KE -- cycles from VM start to userland running, same VM and
@@ -415,14 +420,14 @@ bench-c4ix: c4m c4ix.c4r $(C4IX_PROGS)
 # `exit` or Ctrl-D leaves, which shuts the kernel down.
 run-c4ix: c4m c4ix.c4r $(C4IX_PROGS)
 	$(C4M) load-c4r.c -- c4ix.c4r -q c4ix-sh.c4r
-run-c4ix-c4: c4 c4ix.c4r $(C4IX_PROGS)
-	$(C4) c4l.c c4ix.c4r -q c4ix-sh.c4r
+run-c4ix-c4: c4 c4m c4ix.c4r $(C4IX_PROGS)
+	$(C4) $(C4M).c load-c4r.c -- c4ix.c4r -q c4ix-sh.c4r
 # The guided tour instead: every milestone's demonstration in order,
 # ending with the shell running the test script.
 demo-c4ix: c4m c4ix.c4r $(C4IX_PROGS)
 	$(C4M) load-c4r.c -- c4ix.c4r $(C4IX_ARGS)
-demo-c4ix-c4: c4 c4ix.c4r $(C4IX_PROGS)
-	$(C4) c4l.c c4ix.c4r $(C4IX_ARGS)
+demo-c4ix-c4: c4 c4m c4ix.c4r $(C4IX_PROGS)
+	$(C4) $(C4M).c load-c4r.c -- c4ix.c4r $(C4IX_ARGS)
 # L0: golden token dump of a sample covering every token kind and c4cc
 # lexer quirk, native and under c4m, plus a full lex of c4cc.c itself
 # (whose token list needs a bigger cell arena than the default).

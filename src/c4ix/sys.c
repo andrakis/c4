@@ -133,10 +133,17 @@ int sys_taskinfo(int index, int *out) {
     if (!t) return 0;
 
     out[0] = t->id;
-    out[1] = t->state;
-    out[2] = t->privs;
-    out[3] = t->nsyscalls;
-    dst = (char *)(out + 4);
+    out[1] = t->parent;
+    out[2] = t->state;
+    out[3] = t->privs;
+    out[4] = t->nsyscalls;
+    out[5] = t->ntraps;
+    // The running task's own total does not include the slice it is
+    // in the middle of, so add it -- otherwise ps always reports
+    // itself as having used nothing.
+    out[6] = t->cycles + ((t == sched_current())
+        ? (__c4_cycles() - t->cycles_in) : 0);
+    dst = (char *)(out + 7);
     i = 0;
     while (i < TASK_NAME_MAX) { dst[i] = t->name[i]; ++i; }
     return 1;

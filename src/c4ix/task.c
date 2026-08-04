@@ -63,6 +63,7 @@ struct task *task_create(char *name, int entry, int argc, int argv) {
     if ((parent = sched_current())) {
         fd_clone(t, parent);
         t->cwd = parent->cwd;      // children start where the parent is
+        t->parent = parent->id;
     }
     else fd_init_console(t);
     task_append(t);

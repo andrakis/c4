@@ -51,17 +51,18 @@ nested
 /d
 nested
 test: process table
-ID   STATE   PRIV SYSCALLS NAME
-0    ready   0    0        boot
-1    wait    0    0        init
-9    wait    0    314      c4ix-sh.c4r
-38   run     0    79       c4ix-ps.c4r
+  ID  PPID STATE   PRIV     NAME
+   0     0 ready   kernel   boot
+   1     0 wait    kernel   init
+   9     1 wait    kernel   c4ix-sh.c4r
+  38     9 run     kernel   c4ix-ps.c4r
+4 tasks
 test: exit status of a pipeline tail
 cat: cannot open /ram/nonexistent
 after a failure the shell keeps going
 test: done
 init: shell exited 0 after 352 syscalls
-sl4b: cache 'task' objsize 312 perslab 16 slabs 1 allocs 43 frees 43 live 0
+sl4b: cache 'task' objsize 344 perslab 16 slabs 1 allocs 43 frees 43 live 0
 sl4b: cache 'file' objsize 32 perslab 16 slabs 1 allocs 33 frees 33 live 0
 sl4b: cache 'vnode' objsize 112 perslab 8 slabs 2 allocs 17 frees 7 live 10
 c4ix: shutdown complete, 0 tasks remain

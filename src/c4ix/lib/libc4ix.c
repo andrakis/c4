@@ -93,6 +93,82 @@ void __c4ix_uva_adj(int n) {
 
 // ---- stdio over write() ----
 
+// ---- column output ----
+//
+// libc4ix's printf takes no width specifiers -- a deliberate limit --
+// so anything that wants columns pads explicitly. ps and top both do,
+// and both want it to look the same.
+// These build into the shared format buffer and flush once per
+// call. Writing a character at a time would be one kernel round trip
+// per character -- fine on a host, ruinous through a trap gateway.
+static void upad_emit(char *s, int len, int width, int right) {
+    char line[64];
+    int n, i;
+
+    n = 0;
+    if (right) { while (n + len < width) { line[n] = ' '; ++n; } }
+    i = 0;
+    while (i < len && n < 63) { line[n] = s[i]; ++n; ++i; }
+    if (!right) { while (n < width && n < 63) { line[n] = ' '; ++n; } }
+    write(STDOUT, line, n);
+}
+
+int upadstr(char *s, int width) {
+    int n;
+    n = ustrlen(s);
+    upad_emit(s, n, width, 0);
+    return (n > width) ? n : width;
+}
+
+// Right-aligned integer in WIDTH columns, followed by one space.
+// digits of V into BUF, most significant first; returns the length
+static int upad_digits(int v, char *buf) {
+    char tmp[24];
+    int n, i, neg;
+
+    neg = 0;
+    if (v < 0) { neg = 1; v = -v; }
+    n = 0;
+    if (v == 0) { tmp[0] = '0'; n = 1; }
+    while (v) { tmp[n] = '0' + v - (v / 10) * 10; ++n; v = v / 10; }
+    if (neg) { tmp[n] = '-'; ++n; }
+    i = 0;
+    while (n) { --n; buf[i] = tmp[n]; ++i; }
+    return i;
+}
+
+int upadnum(int v, int width) {
+    char buf[24];
+    int n;
+    n = upad_digits(v, buf);
+    buf[n] = ' ';
+    upad_emit(buf, n + 1, width + 1, 1);
+    return (n > width ? n : width) + 1;
+}
+
+// Cycle counts get large fast, so scale them the way C4KE's ps does.
+int upadcycles(int v, int width) {
+    char buf[32];
+    int whole, frac, n;
+
+    whole = v;
+    frac = -1;
+    if (v >= 1000000) { whole = v / 1000000; frac = (v / 1000) - whole * 1000; }
+    else if (v >= 1000) { whole = v / 1000; frac = v - whole * 1000; }
+
+    n = upad_digits(whole, buf);
+    if (frac >= 0) {
+        buf[n] = '.'; ++n;
+        buf[n] = '0' + frac / 100; ++n;
+        buf[n] = '0' + (frac / 10) - (frac / 100) * 10; ++n;
+        buf[n] = '0' + frac - (frac / 10) * 10; ++n;
+        buf[n] = (v >= 1000000) ? 'M' : 'k'; ++n;
+    }
+    buf[n] = ' '; ++n;
+    upad_emit(buf, n, width + 1, 1);
+    return (n > width) ? n : width;
+}
+
 int uputchar(int c) {
     char b[2];
     b[0] = c;

@@ -114,11 +114,17 @@ static int sh_split(char *line, char **words, int max) {
 
 // ---- command resolution ----
 //
-// A bare name becomes c4ix-<name>.c4r; anything containing a dot is
-// taken as a path. Programs live on the host filesystem, but the
-// kernel checks its RAM files first, so a generated program would be
-// found the same way.
-static char resolved[64];
+// A bare name is tried as c4ix-NAME.c4r first, then as written, then
+// with .c4r appended. The order matters in both directions: C4IX's
+// own programs win, because this tree also contains C4KE binaries
+// with the same names (ps.c4r, cat.c4r, echo.c4r) which are built
+// against a different kernel's ABI and die on an illegal opcode
+// here; and anything else -- innerbench.c4r, c4m.c4r, whatever c4cc
+// produced -- still runs by name. A name containing '/' or '.' is a
+// path and is used exactly as written. Programs live on the host
+// filesystem, but the kernel checks its RAM files first, so a
+// generated program is found the same way.
+static char resolved[80];
 
 // append src at dst, returning the position of the new terminator
 static char *sh_cat(char *dst, char *src) {
@@ -127,19 +133,33 @@ static char *sh_cat(char *dst, char *src) {
     return dst;
 }
 
-static char *sh_resolve(char *name) {
+// Build candidate FORM for NAME: 0 as written, 1 with .c4r, 2 with
+// the c4ix- prefix and .c4r. Returns 0 when there are no more.
+static char *sh_candidate(char *name, int form) {
     char *p;
-    int i;
+    int i, hasdot;
 
+    hasdot = 0;
     i = 0;
     while (name[i]) {
-        if (name[i] == '.' || name[i] == '/') return name;
+        if (name[i] == '.') hasdot = 1;
+        if (name[i] == '/') hasdot = 1;
         ++i;
     }
-    p = sh_cat(resolved, "c4ix-");
-    p = sh_cat(p, name);
-    sh_cat(p, ".c4r");
-    return resolved;
+    if (hasdot) return (form == 0) ? name : 0;   // a path stands for itself
+    if (form == 0) {
+        p = sh_cat(resolved, "c4ix-");
+        p = sh_cat(p, name);
+        sh_cat(p, ".c4r");
+        return resolved;
+    }
+    if (form == 1) return name;
+    if (form == 2) {
+        p = sh_cat(resolved, name);
+        sh_cat(p, ".c4r");
+        return resolved;
+    }
+    return 0;
 }
 
 static int sh_atoi(char *s) {
@@ -249,7 +269,8 @@ static int sh_runline(char **w, int nw) {
     char *argv[ARG_MAX];
     char **spawned;
     char *infile, *outfile;
-    int i, argc, background, hasnext, pid, fd, st;
+    char *cand;
+    int i, argc, background, hasnext, pid, fd, st, form;
     int prev_read, saved0, saved1;
     int p[2];
     int pids[ARG_MAX];
@@ -307,7 +328,13 @@ static int sh_runline(char **w, int nw) {
         }
 
         spawned = sh_dup_argv(argv, argc);
-        pid = spawn(sh_resolve(argv[0]), argc, spawned);
+        pid = -1;
+        form = 0;
+        while (form < 3 && pid < 0) {
+            cand = sh_candidate(argv[0], form);
+            if (cand) pid = spawn(cand, argc, spawned);
+            ++form;
+        }
 
         udup2(saved0, STDIN);  uclose(saved0);
         udup2(saved1, STDOUT); uclose(saved1);

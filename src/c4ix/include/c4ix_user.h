@@ -19,8 +19,9 @@ enum {
     SYS_CYCLES = 213, SYS_TASKINFO = 214,
     SYS_CHDIR = 215, SYS_MKDIR = 216, SYS_GETCWD = 217, SYS_READDIR = 218
 };
-// taskinfo record: id, state, privs, nsyscalls, then a 16-byte name
-enum { TASKINFO_WORDS = 6 };
+// taskinfo record, in order: id, parent, state, privs, nsyscalls,
+// ntraps, cycles, then a 16-byte name
+enum { TASKINFO_WORDS = 9 };
 enum { TS_READY = 1, TS_RUNNING = 2, TS_ZOMBIE = 3, TS_WAITING = 4, TS_BLOCKED = 5 };
 enum { STDIN = 0, STDOUT = 1, STDERR = 2 };
 // open() flags; the low two bits match the host's.
@@ -71,6 +72,10 @@ int  getpid();
 int   ustrlen(char *s);
 int   ustrcmp(char *a, char *b);
 char *ustrcpy(char *dst, char *src);   // returns just past the terminator
+
+int  upadstr(char *s, int width);
+int  upadnum(int v, int width);
+int  upadcycles(int v, int width);
 
 int  uputchar(int c);
 int  uputs(char *s);

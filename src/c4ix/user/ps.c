@@ -1,10 +1,8 @@
-// C4IX userland: ps. The task list lives in kernel memory, so this
-// asks the kernel for one fixed-shape record at a time rather than
-// walking anything itself.
+// C4IX userland: ps. The task table is kernel memory, so this asks
+// for one fixed-shape record at a time rather than walking anything.
 //
-// Columns are padded by hand: libc4ix's printf takes %d %x %s %c %%
-// and no width specifiers, which is a deliberate limit rather than
-// something to work around inside the library.
+// Columns are padded explicitly: libc4ix's printf takes no width
+// specifiers, which is a deliberate limit rather than an oversight.
 
 #include "c4ix_user.h"
 
@@ -17,38 +15,39 @@ static char *ps_state(int st) {
     return "?";
 }
 
-static void ps_pad(char *s, int width) {
-    int n;
-    n = ustrlen(s);
-    write(STDOUT, s, n);
-    while (n < width) { write(STDOUT, " ", 1); ++n; }
-}
-
-static void ps_padnum(int v, int width) {
-    char buf[16];
-    int i, n;
-
-    n = 0;
-    if (v == 0) { buf[0] = '0'; n = 1; }
-    while (v) { buf[n] = '0' + v - (v / 10) * 10; ++n; v = v / 10; }
-    i = n;
-    while (i) { --i; write(STDOUT, buf + i, 1); }
-    while (n < width) { write(STDOUT, " ", 1); ++n; }
-}
-
 int main(int argc, char **argv) {
     int info[TASKINFO_WORDS];
-    int i;
+    int i, total, stable;
 
-    uprintf("ID   STATE   PRIV SYSCALLS NAME\n");
+    // -s omits the counters. They are exact and useful, but they
+    // shift with every change to the kernel, so a test that pins
+    // ps output needs a column set that does not.
+    stable = 0;
+    if (argc > 1) { if (argv[1][0] == '-') { if (argv[1][1] == 's') stable = 1; } }
+
+    if (stable) uprintf("  ID  PPID STATE   PRIV     NAME\n");
+    else uprintf("  ID  PPID STATE   PRIV     SYSCALLS     TRAPS      CYCLES  NAME\n");
+    total = 0;
     i = 0;
     while (utaskinfo(i, info)) {
-        ps_padnum(info[0], 5);
-        ps_pad(ps_state(info[1]), 8);
-        ps_padnum(info[2], 5);
-        ps_padnum(info[3], 9);
-        uprintf("%s\n", (char *)(info + 4));
+        upadnum(info[0], 4);
+        upadnum(info[1], 5);
+        upadstr(ps_state(info[2]), 8);
+        upadstr(info[3] ? "user" : "kernel", 8);
+        if (!stable) {
+            upadnum(info[4], 8);
+            upadnum(info[5], 9);
+            upadcycles(info[6], 11);
+        }
+        uprintf(" %s\n", (char *)(info + 7));
+        total = total + info[6];
         ++i;
+    }
+    if (stable) uprintf("%d tasks\n", i);
+    else {
+        uprintf("%d tasks, ", i);
+        upadcycles(total, 0);
+        uprintf("cycles accounted\n");
     }
     return 0;
 }

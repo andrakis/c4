@@ -73,7 +73,9 @@ int c4r_load(char *path, struct c4r_image *img) {
 
     if (!(buf = (char *)malloc(C4R_BUF_MAX))) return 0;
     if ((fd = open(path, 0)) < 0) {
-        kprintf("c4ix: loader: cannot open %s\n", path);
+        // Silent: callers try several candidate names (the shell
+        // resolves "wc" against three), so a miss is routine and the
+        // caller is the one that knows when to complain.
         free(buf);
         return 0;
     }

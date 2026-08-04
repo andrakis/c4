@@ -159,6 +159,7 @@ static void sched_trap(int trap, int param, int mode, int a, int bp, int sp, int
     // state changes the switch below acts on, rather than re-entering
     // the trap machinery.
     sched_intrap = 1;
+    if (sched_cur) ++sched_cur->ntraps;
 
     // no nested switches while kernel structures move
     __c4_configure(C4IX_CONF_INTERVAL, 0);
@@ -208,6 +209,12 @@ static void sched_trap(int trap, int param, int mode, int a, int bp, int sp, int
             sp = n->sv_sp + 16;
             returnpc = n->sv_pc;
         }
+        // Charge the outgoing task for the slice it just ran, and
+        // start the incoming task's clock. This is the accounting ps
+        // and top report, and it is exact: the VM counter is the
+        // same one the scheduler runs on.
+        t->cycles = t->cycles + (__c4_cycles() - t->cycles_in);
+        n->cycles_in = __c4_cycles();
         // the mask travels with the task, not with the machine
         t->lockdepth = sched_lockdepth;
         sched_lockdepth = n->lockdepth;
@@ -263,6 +270,8 @@ static void coop_switch(struct task *next) {
     *bp = (int)f;
     *(bp + 1) = sched_tramp;
 
+    old->cycles = old->cycles + (__c4_cycles() - old->cycles_in);
+    next->cycles_in = __c4_cycles();
     old->lockdepth = sched_lockdepth;
     sched_lockdepth = next->lockdepth;
     next->state = TS_RUNNING;

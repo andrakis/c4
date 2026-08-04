@@ -43,7 +43,7 @@ cd /
 cat /d/sub/f
 
 echo test: process table
-ps
+ps -s
 
 echo test: exit status of a pipeline tail
 cat /ram/nonexistent

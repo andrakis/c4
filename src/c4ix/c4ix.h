@@ -61,9 +61,9 @@ enum {
     SYS_CHDIR = 215, SYS_MKDIR = 216, SYS_GETCWD = 217, SYS_READDIR = 218,
     SYS_TOP = 219
 };
-// taskinfo fills: id, state, privs, nsyscalls, then the name packed
-// into the remaining words (TASK_NAME_MAX bytes).
-enum { TASKINFO_WORDS = 6 };
+// taskinfo fills, in order: id, parent, state, privs, nsyscalls,
+// ntraps, cycles, then the name packed into the remaining words.
+enum { TASKINFO_WORDS = 9 };
 enum { FD_STDIN = 0, FD_STDOUT = 1, FD_STDERR = 2, FD_MAX = 16 };
 
 int  sys_dispatch(int num, int *args);   // args[0]=first, args[1]=second...
@@ -264,6 +264,10 @@ struct task {
     int  fds[FD_MAX];          // struct file *, 0 where the fd is closed
     struct vnode *cwd;         // working directory, inherited on spawn
     int  lockdepth;            // preemption-mask depth, saved across switches
+    int  parent;               // task id that spawned this one
+    int  cycles;               // VM cycles this task has been given
+    int  cycles_in;            // counter value when it last started running
+    int  ntraps;               // traps taken on its behalf
     char name[TASK_NAME_MAX];
 };
 

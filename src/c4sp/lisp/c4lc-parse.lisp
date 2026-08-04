@@ -177,18 +177,46 @@
 
 ;; ---- constants: [-] Num | enum id  (char literals are already Num) ----
 
-(define p:const (lambda (what)
+;; An integer constant expression: literals, enum names, and the
+;; arithmetic between them. Array sizes and enum values are the two
+;; places C requires one, and "int t[MAX * WORDS]" is ordinary enough
+;; that refusing it is a bug rather than a simplification.
+(define p:constatom (lambda (what)
 	(begin
 		(define neg (if (= (p:kind) 'Sub) (begin (p:advance) true) false))
 		(define v
 			(if (= (p:kind) 'Num) (begin (define n (p:value)) (p:advance) n)
+			(if (= (p:kind) 'Lparen)
+				(begin
+					(p:advance)
+					(define inner (p:const what))
+					(p:expect 'Rparen ") in constant expression")
+					inner)
 			(if (= (p:kind) 'Id)
 				(begin
 					(define ev (p:enumval))
 					(if (= ev false) (p:die (+ what " must be an integer constant"))
 						(begin (p:advance) ev)))
-			(p:die (+ what " must be an integer constant")))))
+			(p:die (+ what " must be an integer constant"))))))
 		(if neg (- 0 v) v))))
+
+(define p:constmul (lambda (what)
+	(next p:constmul/2 what (p:constatom what))))
+(define p:constmul/2 (lambda (what l)
+	(if (= (p:kind) 'Mul)
+		(begin (p:advance) (next p:constmul/2 what (* l (p:constatom what))))
+	(if (= (p:kind) 'Div)
+		(begin (p:advance) (next p:constmul/2 what (/ l (p:constatom what))))
+	l))))
+
+(define p:const (lambda (what)
+	(next p:const/2 what (p:constmul what))))
+(define p:const/2 (lambda (what l)
+	(if (= (p:kind) 'Add)
+		(begin (p:advance) (next p:const/2 what (+ l (p:constmul what))))
+	(if (= (p:kind) 'Sub)
+		(begin (p:advance) (next p:const/2 what (- l (p:constmul what))))
+	l))))
 
 ;; ---- expressions ----
 

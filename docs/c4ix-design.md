@@ -92,11 +92,20 @@ loading or assigning a whole struct is an error.
   is what makes redirection, pipes, and ttys possible.
 - **Everything is a struct.** Tasks, fds, vnodes, wait queues:
   ordinary c4lc structs.
-- **Degraded plain-c4 mode.** Plain c4 has no traps and no cycle
-  interrupt, so under `./c4 c4l.c c4ix.c4r`: cooperative scheduling
-  (explicit yield), no protected mode, direct IO. The kernel detects
-  the host via `__c4_info()` (0 under plain c4) and configures itself.
-  c4m first; c4 is a supported degradation, not the design center.
+- **C4IX targets c4m.** (Revised 2026-08-04.) It is not a plain-c4
+  program and does not try to be: its images use extended opcodes
+  (C4CY, PUTC) and indirect calls (JSRI/JSRS) that the base VM does
+  not have -- `./c4 c4l.c c4ix.c4r` dies on "unknown instruction 52".
+  The layer that degrades to plain c4 is **c4m itself**, which is a
+  c4 program: `./c4 c4m.c load-c4r.c -- c4ix.c4r` runs the whole
+  system under an unmodified interpreter, just slowly. C4LM is the
+  project written for plain c4 directly; every kernel above it
+  requires c4m.
+  The kernel still detects its host via `__c4_info()`, and the
+  cooperative/no-protected-mode paths still exist and still work --
+  but in the supported configuration they are not reached, because
+  c4m always reports itself. They are kept as the degradation story
+  rather than removed, and should be treated as untested.
 
 ### 4.2 Milestones
 

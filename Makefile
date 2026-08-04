@@ -394,10 +394,21 @@ C4IX_ARGS := c4ix-hello.c4r c4ix-uhello.c4r c4ix-echo.c4r c4ix-wc.c4r \
 # they move whenever the kernel's size changes. `make bench-c4ix`
 # reports them unmasked.
 C4IX_MASK := sed -E 's/[0-9]+ cycles/N cycles/g'
-test-c4ix: c4 c4m c4ix.c4r $(C4IX_PROGS)
+# C4IX targets c4m. It is not a plain-c4 program and does not try to
+# be: its images use the extended opcodes (C4CY, PUTC) and indirect
+# calls (JSRI/JSRS) that the base VM does not have. c4m is the layer
+# that degrades to plain c4 -- being itself a c4 program -- so
+# "C4IX under plain c4" means c4 -> c4m -> C4IX, which is what
+# test-c4ix-c4 below runs. In that chain C4IX sees a c4m host and
+# behaves identically, so it compares against the same pin.
+test-c4ix: c4m c4ix.c4r $(C4IX_PROGS)
 	$(C4M) load-c4r.c -- c4ix.c4r $(C4IX_ARGS) | $(C4IX_MASK) | cmp - $(C4IX_SRC)/tests/x5-c4m.txt
-	$(C4) $(C4M).c load-c4r.c -- c4ix.c4r $(C4IX_ARGS) | sed '/^exit([0-9-]*) cycle = /d' | $(C4IX_MASK) | cmp - $(C4IX_SRC)/tests/x5-c4.txt
 	@echo "test-c4ix: OK"
+# The same thing with c4m itself interpreted by plain c4. Correct but
+# very slow (nested interpretation), so it is not part of test-c4ix.
+test-c4ix-c4: c4 c4m c4ix.c4r $(C4IX_PROGS)
+	$(C4) $(C4M).c load-c4r.c -- c4ix.c4r $(C4IX_ARGS) | sed '/^exit([0-9-]*) cycle = /d' | $(C4IX_MASK) | cmp - $(C4IX_SRC)/tests/x5-c4m.txt
+	@echo "test-c4ix-c4: OK"
 # X5: the OS benchmark, and the one number that compares directly
 # with C4KE -- cycles from VM start to userland running, same VM and
 # same counter on both sides.
@@ -678,7 +689,7 @@ PHONY += run run-vg test test-massive
 PHONY += run-alt run-alt-vg test-alt test-massive-alt
 PHONY += run-c4 run-c4-vg test-c4 test-massive-c4
 PHONY += run-c4-alt run-c4-alt-vg
-PHONY += test-c4ix run-c4ix run-c4ix-c4 demo-c4ix demo-c4ix-c4 bench-c4ix
+PHONY += test-c4ix test-c4ix-c4 run-c4ix run-c4ix-c4 demo-c4ix demo-c4ix-c4 bench-c4ix
 PHONY += pkg c4rs or1k
 PHONY += pi
 # Don't bother with the dump or link utility for now

@@ -136,6 +136,18 @@ static void sched_trap(int trap, int param, int mode, int a, int bp, int sp, int
     // (c4m's own cycle path clears the interval) until the outer
     // handler re-arms it on the way out.
     if (sched_intrap) return;
+    // Claim the handler BEFORE anything else, including the mask
+    // below. Neither the syscall gateway nor __c4_trap disables the
+    // cycle interrupt on the way in, so an interrupt can land in the
+    // few instructions between entry and that __c4_configure -- and
+    // if the flag were still clear it would run this whole handler
+    // recursively, on top of the switch already in progress. Setting
+    // it first makes that window a no-op instead of corruption.
+    //
+    // In-trap services also read this flag: yield and exit become
+    // state changes the switch below acts on, rather than re-entering
+    // the trap machinery.
+    sched_intrap = 1;
 
     // no nested switches while kernel structures move
     __c4_configure(C4IX_CONF_INTERVAL, 0);
@@ -143,12 +155,6 @@ static void sched_trap(int trap, int param, int mode, int a, int bp, int sp, int
     // Safe point: we are on the trapped task's stack, so any corpse
     // left over from an earlier exit can finally be freed.
     task_reap();
-
-    // Syscall gateway: an opcode c4m does not know. Non-syscall
-    // illegal opcodes are a fault, not a request.
-    // In-trap services must not re-enter the trap machinery: yield
-    // and exit become state changes that the switch below acts on.
-    sched_intrap = 1;
     if (trap == C4IX_TRAP_ILLOP) {
         if (param >= SYS_BASE && param < SYS_TOP) {
             // OPCD leaves the syscall number at *sp with the

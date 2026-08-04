@@ -59,9 +59,11 @@ struct task *task_create(char *name, int entry, int argc, int argv) {
     // Inherit the creator's descriptors, sharing the open file
     // descriptions -- a redirected fd 1 stays redirected in the
     // child, which is redirection without fork.
+    sched_lock();
     if ((parent = sched_current())) fd_clone(t, parent);
     else fd_init_console(t);
     task_append(t);
+    sched_unlock();
     return t;
 }
 
@@ -116,15 +118,18 @@ static void task_destroy(struct task *t) {
 // the kernel is standing somewhere else. (C4KE learned the same
 // lesson: its idle task reaps zombies for exactly this reason.)
 void task_release(struct task *t) {
+    sched_lock();
     task_last_syscalls = t->nsyscalls;
     fd_closeall(t);
     task_unlink(t);
     if (t == sched_current()) {
         t->next = task_reaplist;
         task_reaplist = t;
+        sched_unlock();
         return;
     }
     task_destroy(t);
+    sched_unlock();
 }
 
 // Called from safe points -- the top of a trap, a cooperative
@@ -132,6 +137,7 @@ void task_release(struct task *t) {
 // a dead task's stack.
 void task_reap() {
     struct task *t, *keep;
+    sched_lock();
     keep = 0;
     while (task_reaplist) {
         t = task_reaplist;
@@ -140,6 +146,7 @@ void task_reap() {
         else task_destroy(t);
     }
     task_reaplist = keep;
+    sched_unlock();
 }
 
 struct task *task_get(int id) {

@@ -1,17 +1,28 @@
-# C4IX stress script -- NOT pinned by make test-c4ix.
+# C4IX stress script -- NOT pinned by make test-c4ix, because it is
+# the one deliberately run under abnormal scheduling pressure.
 #
-# This is test.sh plus a background job, and it currently exposes an
-# intermittent hang: run after roughly a dozen prior commands, the
-# shell can stall spawning a backgrounded, redirected command. Adding
-# any output to the shell's per-command path makes it complete, which
-# is the signature of a scheduling race rather than a logic error.
-# It is NOT root-caused, so it is kept out of the pinned suite rather
-# than pinned in whatever state happens to pass.
+# History, since it is the useful part. This script used to fail
+# intermittently at the shipped preemption interval. Making the
+# failure reproducible (by raising the preemption rate five-fold,
+# PREEMPT_INTERVAL 2000 instead of 10000) turned a heisenbug into
+# two ordinary bugs, both now fixed:
 #
-# What has been ruled out: descriptor exhaustion (saved fds stay at
-# 4/5 for the whole run), fd leaks per command, the four-stage
-# pipeline, cat on a missing file, truncate-and-rewrite, and the
-# background job itself in isolation -- each of those runs clean.
+#   1. The trap handler claimed its re-entry guard AFTER masking the
+#      cycle interrupt. Neither the syscall gateway nor __c4_trap
+#      masks on the way in, so an interrupt landing in those few
+#      instructions found the guard clear and ran the whole
+#      non-reentrant handler recursively, on top of the switch
+#      already in progress. Symptom: tasks resuming with a garbage
+#      program counter.
+#   2. Kernel tasks are preemptible while inside kernel code, but the
+#      fd and vnode reference counts were updated without masking, so
+#      a preemption between "--refs" and the test that followed could
+#      free a description another task still held.
+#
+# At the shipped interval this script now passes repeatedly. Under
+# 5x preemption a LIVENESS stall remains -- no corruption, no crash,
+# the system simply stops making progress -- and that one is not yet
+# root-caused, which is why this file stays out of the pinned suite.
 
 echo alpha beta > /ram/t1
 cat /ram/t1

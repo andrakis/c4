@@ -1,7 +1,7 @@
-C4IX booting, 161434 cycles spent loading the kernel image
+C4IX booting, N cycles spent loading the kernel image
 c4ix: host c4 (degraded), info 0x0
 c4ix: protected mode unavailable, preemption unavailable (cooperative)
-c4ix: task 1 'init' created, scheduling after 174768 cycles
+c4ix: task 1 'init' created, scheduling after N cycles
 init: c4ix init v1 on c4 (degraded)
 init: ping id 2, pong id 3, tasks 4
 ping 0

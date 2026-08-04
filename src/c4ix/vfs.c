@@ -21,6 +21,17 @@
 
 #include "c4ix.h"
 
+// A note on locking. Kernel TASKS (init, boot) run kernel code with
+// preemption enabled, while user tasks reach this file from inside
+// the trap handler, where interrupts are already off. So every entry
+// point below that mutates shared state -- reference counts above
+// all -- brackets itself with sched_lock. Without it a preemption
+// between "--refs" and the test that follows can free a description
+// another task still holds, and the corruption surfaces much later
+// as a task resuming with a garbage program counter. sched_lock is
+// nestable and skips the hardware entirely inside the handler, so
+// this is close to free on the syscall path.
+
 static struct sl4b_cache *vn_cache;
 static struct sl4b_cache *file_cache;
 static struct vnode *ramfs;        // the named RAM files
@@ -101,11 +112,13 @@ struct vnode *vfs_lookup(char *name) {
 
 struct vnode *vfs_ramfile(char *name) {
     struct vnode *vn;
-    if ((vn = vfs_lookup(name))) return vn;
-    if (!(vn = vn_alloc(VN_RAMFILE))) return 0;
+    sched_lock();
+    if ((vn = vfs_lookup(name))) { sched_unlock(); return vn; }
+    if (!(vn = vn_alloc(VN_RAMFILE))) { sched_unlock(); return 0; }
     vfs_namecpy(vn->name, name);
     vn->next = ramfs;
     ramfs = vn;
+    sched_unlock();
     return vn;
 }
 
@@ -138,28 +151,31 @@ int vfs_read(struct file *f, char *buf, int len) {
     struct vnode *vn;
     int n, i;
 
+    sched_lock();
     vn = f->vn;
-    if (vn->type == VN_CONSOLE) return read(0, buf, len);
-    if (vn->type == VN_HOSTFILE) return read(vn->host, buf, len);
+    if (vn->type == VN_CONSOLE) { sched_unlock(); return read(0, buf, len); }
+    if (vn->type == VN_HOSTFILE) { sched_unlock(); return read(vn->host, buf, len); }
 
     if (vn->type == VN_PIPE) {
         n = vn->size - vn->rpos;
-        if (n <= 0) return 0;                 // caller checked readable
+        if (n <= 0) { sched_unlock(); return 0; }   // caller checked readable
         if (n > len) n = len;
         i = 0;
         while (i < n) { buf[i] = vn->data[vn->rpos + i]; ++i; }
         vn->rpos = vn->rpos + n;
         if (vn->rpos == vn->size) { vn->rpos = 0; vn->size = 0; }
+        sched_unlock();
         return n;
     }
 
     // RAM file: read from the description's own position
     n = vn->size - f->pos;
-    if (n <= 0) return 0;
+    if (n <= 0) { sched_unlock(); return 0; }
     if (n > len) n = len;
     i = 0;
     while (i < n) { buf[i] = vn->data[f->pos + i]; ++i; }
     f->pos = f->pos + n;
+    sched_unlock();
     return n;
 }
 
@@ -167,33 +183,37 @@ int vfs_write(struct file *f, char *buf, int len) {
     struct vnode *vn;
     int i, end;
 
+    sched_lock();
     vn = f->vn;
     if (vn->type == VN_CONSOLE) {
         i = 0;
         while (i < len) { kputc(buf[i]); ++i; }
+        sched_unlock();
         return len;
     }
-    if (vn->type == VN_HOSTFILE) return -1;   // no write() in this VM
+    if (vn->type == VN_HOSTFILE) { sched_unlock(); return -1; }  // no write()
 
     if (vn->type == VN_PIPE) {
         // Compact first: a drained pipe reuses its buffer instead of
         // growing forever under a steady producer.
         if (vn->rpos && vn->rpos == vn->size) { vn->rpos = 0; vn->size = 0; }
-        if (!vn_grow(vn, vn->size + len)) return -1;
+        if (!vn_grow(vn, vn->size + len)) { sched_unlock(); return -1; }
         i = 0;
         while (i < len) { vn->data[vn->size + i] = buf[i]; ++i; }
         vn->size = vn->size + len;
+        sched_unlock();
         return len;
     }
 
     // RAM file: write at the description's position, extending as
     // needed (a gap left by seeking past the end stays zeroed).
     end = f->pos + len;
-    if (!vn_grow(vn, end)) return -1;
+    if (!vn_grow(vn, end)) { sched_unlock(); return -1; }
     i = 0;
     while (i < len) { vn->data[f->pos + i] = buf[i]; ++i; }
     f->pos = end;
     if (end > vn->size) vn->size = end;
+    sched_unlock();
     return len;
 }
 
@@ -219,6 +239,7 @@ void vfs_dump(char *name) {
 static struct file *file_alloc(struct vnode *vn, int flags) {
     struct file *f;
     if (!(f = (struct file *)sl4b_alloc(file_cache))) return 0;
+    sched_lock();
     f->vn = vn;
     f->flags = flags;
     f->pos = 0;
@@ -227,17 +248,20 @@ static struct file *file_alloc(struct vnode *vn, int flags) {
     if (vn->type == VN_PIPE) {
         if ((flags & 3) != C4IX_O_RDONLY) ++vn->writers;
     }
+    sched_unlock();
     return f;
 }
 
 static void file_unref(struct file *f) {
+    sched_lock();
     --f->refs;
-    if (f->refs > 0) return;
+    if (f->refs > 0) { sched_unlock(); return; }
     if (f->vn->type == VN_PIPE) {
         if ((f->flags & 3) != C4IX_O_RDONLY) --f->vn->writers;
     }
     vn_release(f->vn);
     sl4b_free(file_cache, (char *)f);
+    sched_unlock();
 }
 
 // ---- per-task descriptor tables ----
@@ -249,11 +273,13 @@ struct file *fd_get(struct task *t, int fd) {
 
 int fd_install(struct task *t, struct file *f) {
     int fd;
+    sched_lock();
     fd = 0;
     while (fd < FD_MAX) {
-        if (!t->fds[fd]) { t->fds[fd] = (int)f; return fd; }
+        if (!t->fds[fd]) { t->fds[fd] = (int)f; sched_unlock(); return fd; }
         ++fd;
     }
+    sched_unlock();
     return -1;
 }
 
@@ -267,21 +293,25 @@ int fd_open_vnode(struct task *t, struct vnode *vn, int flags) {
 
 int fd_close(struct task *t, int fd) {
     struct file *f;
-    if (!(f = fd_get(t, fd))) return -1;
+    sched_lock();
+    if (!(f = fd_get(t, fd))) { sched_unlock(); return -1; }
     t->fds[fd] = 0;
     file_unref(f);
+    sched_unlock();
     return 0;
 }
 
 // Point newfd at oldfd's description: same flags, same position.
 int fd_dup2(struct task *t, int oldfd, int newfd) {
     struct file *f;
-    if (!(f = fd_get(t, oldfd))) return -1;
-    if (newfd < 0 || newfd >= FD_MAX) return -1;
-    if (oldfd == newfd) return newfd;
+    sched_lock();
+    if (!(f = fd_get(t, oldfd))) { sched_unlock(); return -1; }
+    if (newfd < 0 || newfd >= FD_MAX) { sched_unlock(); return -1; }
+    if (oldfd == newfd) { sched_unlock(); return newfd; }
     if (t->fds[newfd]) fd_close(t, newfd);
     ++f->refs;
     t->fds[newfd] = (int)f;
+    sched_unlock();
     return newfd;
 }
 
@@ -296,6 +326,7 @@ void fd_init_console(struct task *t) {
 void fd_clone(struct task *dst, struct task *src) {
     struct file *f;
     int fd;
+    sched_lock();
     fd = 0;
     while (fd < FD_MAX) {
         if ((f = fd_get(src, fd))) {
@@ -304,13 +335,16 @@ void fd_clone(struct task *dst, struct task *src) {
         }
         ++fd;
     }
+    sched_unlock();
 }
 
 void fd_closeall(struct task *t) {
     int fd;
+    sched_lock();
     fd = 0;
     while (fd < FD_MAX) {
         if (t->fds[fd]) fd_close(t, fd);
         ++fd;
     }
+    sched_unlock();
 }

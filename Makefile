@@ -363,9 +363,13 @@ C4IX_PROGS := c4ix-hello.c4r c4ix-uhello.c4r c4ix-echo.c4r c4ix-wc.c4r \
               c4ix-cycles.c4r
 C4IX_ARGS := c4ix-hello.c4r c4ix-uhello.c4r c4ix-echo.c4r c4ix-wc.c4r \
              c4ix-sh.c4r $(C4IX_SRC)/user/test.sh
+# Cycle counts are masked: they are a measurement, not behaviour, and
+# they move whenever the kernel's size changes. `make bench-c4ix`
+# reports them unmasked.
+C4IX_MASK := sed -E 's/[0-9]+ cycles/N cycles/g'
 test-c4ix: c4 c4m c4ix.c4r $(C4IX_PROGS)
-	$(C4M) load-c4r.c -- c4ix.c4r $(C4IX_ARGS) | cmp - $(C4IX_SRC)/tests/x5-c4m.txt
-	$(C4) c4l.c c4ix.c4r $(C4IX_ARGS) | sed '/^exit([0-9-]*) cycle = /d' | cmp - $(C4IX_SRC)/tests/x5-c4.txt
+	$(C4M) load-c4r.c -- c4ix.c4r $(C4IX_ARGS) | $(C4IX_MASK) | cmp - $(C4IX_SRC)/tests/x5-c4m.txt
+	$(C4) c4l.c c4ix.c4r $(C4IX_ARGS) | sed '/^exit([0-9-]*) cycle = /d' | $(C4IX_MASK) | cmp - $(C4IX_SRC)/tests/x5-c4.txt
 	@echo "test-c4ix: OK"
 # X5: the OS benchmark, and the one number that compares directly
 # with C4KE -- cycles from VM start to userland running, same VM and

@@ -13,8 +13,24 @@
 // address, the stub jumps, the target's ENT builds a normal frame,
 // and its LEV returns to us. Function pointers on an unmodified VM.
 //
-// Requires the extended-opcode execution support in c4.c (JMPA and
-// friends) when the image uses them; plain images run as-is.
+// WHAT THIS CAN AND CANNOT RUN. c4 implements LEA..EXIT and nothing
+// else, so an image runs here only if its compiler emitted nothing
+// above EXIT. That excludes any image with an indirect call (JSRS), a
+// custom opcode (OPCD), putchar (PUTC), a cycle count (C4CY), or a
+// jumptable switch (JMPA) -- so most real programs, and every kernel.
+//
+// Such an image is not broken and neither is this loader: it wants a
+// machine with those instructions, which is c4m.
+//
+//   ./c4 c4m.c load-c4r.c -- program.c4r [args...]
+//
+// That is still plain c4 all the way down, c4m being itself a c4
+// program -- one interpreter deeper, and correspondingly slower,
+// which is exactly the cost this loader avoids for images that do not
+// need it. scan_extended below refuses up front and names the
+// instruction, instead of letting c4 die with a bare "unknown
+// instruction" some thousands of cycles later.
+//
 // Patch types: -1 code->code, -2 code->data, -3 data->code,
 // -4 data->data (byte-offset addresses); positive types are symbol
 // references for the linker and are ignored here, as in load-c4r.c.
@@ -22,11 +38,14 @@
 // Written in the strict c4 subset: no switch, no break, no function
 // addresses, locals at function top, single-word globals.
 
-enum { LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LEV };
+enum { LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,
+       OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,
+       OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,EXIT };
 enum { MAX_SEARCH = 512 };
 enum { BUF_MAX = 8388608 };  // 8MB image limit
 
 int *c4l_stub_slot;   // operand slot of the rewritten stub
+char *c4l_opnames;    // 5 bytes per opcode, as c4m lays them out
 
 // Return pc of our caller, found on the stack relative to a local
 int *caller_address (int dummy) {
@@ -60,6 +79,21 @@ int invoke2 (int *code, int a, int b) { *c4l_stub_slot = (int)code; return stub(
 
 int wordat (char *p) { return *(int *)p; }
 
+// Offset of the first instruction c4 cannot execute, or -1 if the
+// image is clean. Walking is exact rather than a search: every opcode
+// up to ADJ carries an operand word and the rest do not, and anything
+// above EXIT ends the walk, so the two-word forms above EXIT (JSRI,
+// JSRS) never need a case of their own.
+int scan_extended (int *code, int codelen) {
+  int i;
+  i = 0;
+  while (i < codelen) {
+    if (code[i] > EXIT) return i;
+    if (code[i] <= ADJ) i = i + 2; else i = i + 1;
+  }
+  return -1;
+}
+
 int main (int argc, char **argv) {
   char *buf, *p, *data;
   int fd, n, total, wordbytes;
@@ -72,6 +106,14 @@ int main (int argc, char **argv) {
 
   // arm the stub before anything else
   stub();
+
+  c4l_opnames =
+    "LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,"
+    "OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,"
+    "OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,EXIT,"
+    "PUTC,PUTS,RALC,MCPY,STRC,ITH ,_OPC,_BLT,_TRP,OPCD,"
+    "_JMP,_ADJ,C4CF,C4CY,TIME,SIGH,SIGI,USLP,INFO,OPSL,"
+    "C4IV,FLT ,JSRI,JSRS,JMPA,TLEV,DBG ,";
 
   if (!(buf = malloc(BUF_MAX))) { printf("c4l: out of memory\n"); return 1; }
   if ((fd = open(*argv, 0)) < 0) { printf("c4l: cannot open %s\n", *argv); return 1; }
@@ -121,6 +163,17 @@ int main (int argc, char **argv) {
     else if (ptype == -4) *(int *)(data + paddr) = (int)(data + pvalu);
     // positive types are symbol references: linker business, skipped
     ++i;
+  }
+
+  // Refuse an image this machine cannot execute, and say why. Done
+  // after patching so the report is about the code that would have
+  // run, and before any constructor, so nothing has happened yet.
+  if ((i = scan_extended(code, codelen)) >= 0) {
+    printf("c4l: %s needs %.4s (opcode %d) at code+%d, which plain c4 does not have.\n",
+           *argv, c4l_opnames + code[i] * 5, code[i], i);
+    printf("c4l: run it on a machine that does:\n");
+    printf("c4l:   ./c4 c4m.c load-c4r.c -- %s [args...]\n", *argv);
+    return 1;
   }
 
   // constructors and destructors (word offsets into code)

@@ -160,10 +160,16 @@ test-massive-c4-alt: pre
 # by plain c4 and must run under c4m through load-c4r.c. Both halves
 # are checked, because the interesting property is that the fallback
 # degrades cleanly rather than misbehaving.
+# c4l runs a .c4r under UNMODIFIED c4, which implements LEA..EXIT and
+# nothing else -- so an image qualifies only if its compiler emitted
+# nothing above EXIT. hello.c4r does; a jumptable switch does not, and
+# c4l says which instruction stopped it rather than letting c4 abort
+# with a bare "unknown instruction". Anything it refuses runs one
+# interpreter deeper, under c4m, which is the last line here.
 test-c4l: $(C4) $(C4M) $(C4CC) $(TESTS)/hello.c4r
 	$(C4) c4l.c $(TESTS)/hello.c4r | grep -q yello
 	$(C4CC) -o .c4l_sw.c4r $(TESTS)/test_switch.c
-	$(C4) c4l.c .c4l_sw.c4r 2>&1 | grep -q "unknown instruction"
+	$(C4) c4l.c .c4l_sw.c4r 2>&1 | grep -q "needs JMPA"
 	$(C4M) load-c4r.c -- .c4l_sw.c4r | grep -q "classify(5) = 500"
 	rm -f .c4l_sw.c4r
 	@echo "test-c4l: OK"

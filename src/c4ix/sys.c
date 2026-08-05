@@ -232,7 +232,12 @@ int sys_dispatch(int num, int *args) {
         return s->id;
     }
     if (num == SYS_WAIT) {
-        if (!(s = task_get(args[0]))) return -1;
+        // The target may have been swept by the idle reaper before the
+        // parent got round to waiting; its exit code outlives it.
+        if (!(s = task_get(args[0]))) {
+            if (task_ghost(args[0], &num)) return num;
+            return -1;
+        }
         if (!sched_in_trap()) return task_wait(s);
         // In trap context blocking is a state change, not a spin:
         // park the caller and let sched_pick complete the wait when

@@ -293,6 +293,100 @@ static void ck_export_free(int *kti) {
     free(kti);
 }
 
+// ---- spawning a C4KE program ----
+//
+// kern_user_start_c4r(argc, argv, name, privileges), so args[0]=argc,
+// args[1]=argv, args[2]=name, args[3]=privileges.
+
+// C4KE numbers privilege the other way round (see ck_privs_out), and
+// demotes a request it will not grant rather than refusing it.
+static int ck_privs_in(int p, struct task *caller) {
+    if (p == CK_PRIV_KERNEL && caller && caller->privs == PRIV_KERNEL)
+        return PRIV_KERNEL;
+    return PRIV_USER;
+}
+
+// C4IX does not copy argv -- one address space, and the shell keeps
+// its own copies alive. C4KE's callers assume the kernel copies, and
+// they are right to: benchtop rewrites its OWN argv array between
+// spawns, and innerbench frees its argv while the spawned tasks are
+// still running. So copy, and let the task own it.
+static int ck_argv_copy(struct task *t, int argc, char **argv) {
+    char **vec;
+    char *blob, *p;
+    int i, n, bytes;
+
+    t->argv_vec = 0;
+    t->argv_data = 0;
+    if (argc <= 0 || !argv) return 1;
+
+    bytes = 0;
+    i = 0;
+    while (i < argc) {
+        if (argv[i]) { n = 0; while (argv[i][n]) ++n; bytes = bytes + n + 1; }
+        else bytes = bytes + 1;
+        ++i;
+    }
+    if (!(vec = (char **)malloc((argc + 1) * 8))) return 0;
+    if (!(blob = (char *)malloc(bytes))) { free((int *)vec); return 0; }
+
+    p = blob;
+    i = 0;
+    while (i < argc) {
+        vec[i] = p;
+        if (argv[i]) { n = 0; while (argv[i][n]) { *p = argv[i][n]; ++p; ++n; } }
+        *p = 0; ++p;
+        ++i;
+    }
+    vec[argc] = 0;
+    t->argv_vec = (int)vec;
+    t->argv_data = (int)blob;
+    return 1;
+}
+
+// C4KE programs are named plainly -- innerbench spawns "bench",
+// benchtop spawns "top" -- so a bare name has to be found. NOT the
+// shell's order, which tries c4ix-NAME.c4r first: that would silently
+// hand back C4IX's own top for C4KE's, two different programs.
+static struct task *ck_spawn(char *name, int argc, int argv, int privs) {
+    char path[PATH_MAX];
+    struct task *t;
+    int n, i;
+
+    n = 0;
+    while (name[n] && n < PATH_MAX - 24) { path[n] = name[n]; ++n; }
+    path[n] = 0;
+    if ((t = task_spawn_priv(path, argc, argv, privs))) return t;
+
+    // NAME.c4r
+    i = n;
+    path[i] = '.'; path[i+1] = 'c'; path[i+2] = '4'; path[i+3] = 'r'; path[i+4] = 0;
+    if ((t = task_spawn_priv(path, argc, argv, privs))) return t;
+
+    return 0;
+}
+
+static int ck_start_c4r(struct task *caller, int *args) {
+    struct task *t;
+    char *name;
+    int privs;
+
+    if (!(name = (char *)args[2])) return 0;
+    privs = ck_privs_in(args[3], caller);
+    if (!(t = ck_spawn(name, args[0], args[1], privs))) {
+        kprintf("c4ix: c4ke: cannot start '%s'\n", name);
+        return 0;
+    }
+    // Replace the borrowed argv with the task's own copy, now that
+    // there is a task to own it. The forged frame already holds the
+    // caller's pointer, so patch it where the shim will read it.
+    if (args[0] > 0 && args[1]) {
+        if (ck_argv_copy(t, args[0], (char **)args[1]))
+            sched_forge_argv(t, t->argv_vec);
+    }
+    return t->id;
+}
+
 // ---- signals ----
 //
 // Per task, lazily: CK_SIG_MAX triples of {pending, blocked, handler},
@@ -523,9 +617,30 @@ int ck_dispatch(int num, int *args) {
     if (num == CK_USER_SIGNAL)         return ck_signal(t, args[0], args[1]);
     if (num == CK_USER_KILL)           return ck_kill(args[0], args[1]);
 
-    // ---- not yet implemented; each is a later stage ----
-    if (num == CK_AWAIT_PID)           return -1;  // stage 6
-    if (num == CK_USER_START_C4R)      return 0;   // stage 6
+    if (num == CK_USER_START_C4R)      return ck_start_c4r(t, args);
+
+    // Byte for byte the SYS_WAIT in-trap path: park and let the
+    // scheduler complete the wait, writing the exit code into sv_a --
+    // which is the accumulator this opcode returns in.
+    if (num == CK_AWAIT_PID) {
+        struct task *s;
+        int code;
+        if (!t) return -1;
+        if (!(s = task_get(args[0]))) {
+            // Swept by the idle reaper before we asked; its status
+            // outlived it.
+            if (task_ghost(args[0], &code)) return code;
+            return -1;
+        }
+        if (s->state == TS_ZOMBIE) {
+            code = s->exitcode;
+            task_release(s);
+            return code;
+        }
+        t->wait_for = s->id;
+        t->state = TS_WAITING;
+        return 0;
+    }
     if (num == CK_KERN_TASKS_EXPORT)   return ck_export();
     if (num == CK_KERN_TASKS_EXPORT_UPDATE) {
         if (args[0]) ck_export_fill((int *)args[0]);

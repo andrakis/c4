@@ -556,6 +556,19 @@ int sched_forge(struct task *t, int entry, int argc, int argv) {
     return 1;
 }
 
+// Point a not-yet-started task's argv somewhere else. The forged frame
+// holds whatever the spawner passed, which for a C4KE program is a
+// borrowed pointer the caller is about to reuse or free -- so the
+// compat layer copies it and then patches the copy in here. Only
+// valid while the task is still SV_FRAME; once it has run, argv is
+// wherever its own frame put it.
+void sched_forge_argv(struct task *t, int argv) {
+    int *x;
+    if (!t || t->sv != SV_FRAME) return;
+    x = (int *)t->sv_sp;
+    x[3] = argv;
+}
+
 // ---- lifecycle ----
 
 void sched_init(int interval) {
@@ -623,6 +636,11 @@ void sched_run() {
             t = t->next;
         }
         if (!live) break;
+        // Sweep zombies nobody is waiting on. This is the idle task,
+        // which is where C4KE reaps too, and it is the only thing that
+        // collects a child whose parent never waits -- innerbench
+        // spawns several benches and can only wait on one.
+        task_reap_orphans();
         // Everything alive is parked on something that has not
         // arrived -- console input, usually. Nothing can make progress
         // until the outside world does, and yielding in a tight loop

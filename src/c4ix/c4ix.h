@@ -308,6 +308,8 @@ struct task *task_adopt(char *name);
 void         task_unlink(struct task *t);
 void         task_release(struct task *t);
 void         task_reap();      // free tasks released while they ran
+int          task_reap_orphans();          // zombies nobody waits on
+int          task_ghost(int id, int *pcode);  // exit code of a reaped task
 struct task *task_get(int id);
 struct task *task_first();
 struct task *task_next(struct task *t);
@@ -396,6 +398,7 @@ void ck_signal_deliver(struct task *t, int *pa, int *pbp, int *psp,
 void         sched_init(int interval);
 void         sched_run();
 int          sched_sleep_due(int *pms);   // earliest sleeper deadline, 0 if none
+void         sched_forge_argv(struct task *t, int argv);  // pre-start argv patch
 void         sched_stop();
 void         sched_yield();
 void         sched_lock();     // disable preemption (nestable)

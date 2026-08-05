@@ -104,6 +104,43 @@ void task_unlink(struct task *t) {
 
 static struct task *task_reaplist;   // released, waiting to be freed
 
+// ---- reaping, and remembering what was reaped ----
+//
+// A zombie used to be released only by whoever waited on it, or by
+// the shutdown drain. Nothing else reaped, so a parent that never
+// waits leaves its children on the list for the whole run -- and one
+// exists: C4KE's innerbench spawns several benches, can only wait on
+// one (C4KE has no group wait), and polls the rest instead. Under
+// C4IX they simply accumulated.
+//
+// So the idle loop sweeps them, which is what C4KE's idle task does
+// and what task_release's own comment already pointed at. The race
+// that makes it delicate is a parent that waits AFTER its child has
+// been swept: task_get returns nothing and the wait yields -1 instead
+// of the exit code. This table closes it -- the last few exit statuses
+// outlive their tasks, so a late wait still gets the right answer.
+enum { TASK_GHOSTS = 32 };
+static int ghost_id[TASK_GHOSTS];
+static int ghost_code[TASK_GHOSTS];
+static int ghost_next;
+
+static void task_remember(struct task *t) {
+    ghost_id[ghost_next] = t->id;
+    ghost_code[ghost_next] = t->exitcode;
+    ghost_next = (ghost_next + 1) % TASK_GHOSTS;
+}
+
+// 1 if ID was a task we reaped, with its exit code out through PCODE.
+int task_ghost(int id, int *pcode) {
+    int i;
+    i = 0;
+    while (i < TASK_GHOSTS) {
+        if (ghost_id[i] == id) { *pcode = ghost_code[i]; return 1; }
+        ++i;
+    }
+    return 0;
+}
+
 // Free what a task owns. Only ever called for a task nobody is
 // standing on -- see task_release.
 static void task_destroy(struct task *t) {
@@ -127,6 +164,7 @@ static void task_destroy(struct task *t) {
 void task_release(struct task *t) {
     sched_lock();
     task_last_syscalls = t->nsyscalls;
+    task_remember(t);
     fd_closeall(t);
     task_unlink(t);
     if (t == sched_current()) {
@@ -154,6 +192,56 @@ void task_reap() {
     }
     task_reaplist = keep;
     sched_unlock();
+}
+
+// Release zombies nobody is waiting on. Called from the idle loop,
+// where the kernel is not standing on any task's stack. A task with a
+// waiter is left alone: that waiter is entitled to reap it and read
+// its exit code the ordinary way.
+//
+// Only children of USER tasks are swept, and that restriction is not
+// caution -- it is the difference between working and a double free.
+// Kernel code waits by POINTER (task_wait takes a struct task *), and
+// holds those pointers across waits: init creates ping and pong, then
+// waits on each in turn, so sweeping pong while it waits on ping
+// hands the second task_wait a dangling pointer into freed slab
+// memory. Userland only ever names a task by id, and an id that has
+// been reaped is answered from the ghost table above. So: if the
+// parent is userland, nobody is holding a pointer, and it is safe.
+static int task_parent_is_user(struct task *t) {
+    struct task *p;
+    if (!(p = task_get(t->parent))) return 0;
+    return p->privs == PRIV_USER;
+}
+
+int task_reap_orphans() {
+    struct task *t, *w;
+    int freed, waited;
+
+    freed = 0;
+    sched_lock();
+    t = task_head;
+    while (t) {
+        if (t->state == TS_ZOMBIE && t != sched_current()
+            && task_parent_is_user(t)) {
+            waited = 0;
+            w = task_head;
+            while (w) {
+                if (w->state == TS_WAITING && w->wait_for == t->id) { waited = 1; w = 0; }
+                else w = w->next;
+            }
+            if (!waited) {
+                w = t->next;
+                task_release(t);
+                ++freed;
+                t = w;
+                continue;
+            }
+        }
+        t = t->next;
+    }
+    sched_unlock();
+    return freed;
 }
 
 struct task *task_get(int id) {

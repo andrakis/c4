@@ -439,17 +439,50 @@ loading or assigning a whole struct is an error.
 ## 6.1 Running it
 
     make run-c4ix        an interactive shell on c4m
-    make run-c4ix-c4     the same under plain c4, cooperatively
+    make run-c4ix-c4     the same through plain c4 -> c4m
     make demo-c4ix       the guided tour: every milestone in order
-    make test-c4ix       the pinned suite, both hosts
+    make test-c4ix       the pinned suite
     make bench-c4ix      boot cost and the OS microbenchmarks
 
-`run-c4ix` boots quietly (`-q`, which skips init's demonstrations)
-and starts c4ix-sh with no script, so the shell reads fd 0 -- you. It
-prints a prompt carrying the working directory; `help` lists the
-builtins, and `exit` or end-of-file leaves, which shuts the kernel
-down. Anything in the tree named `c4ix-NAME.c4r` is a command: echo,
-cat, wc, ls, mkdir, ps, bench, hello.
+### The kernel's command line
+
+    c4ix.c4r [OPTION] [PROGRAM [ARGUMENT]...]
+
+      (no arguments)     boot to an interactive shell
+      PROGRAM [ARG]...   boot, run PROGRAM with ARGs, shut down
+      --demo IMAGE...    run the built-in demonstrations
+      -h, --help         print the usage and shut down
+      -q                 accepted and ignored
+
+`init_usage()` in init.c is the authority; keep this section in step
+with it. **No arguments boots to a shell**, because that is what
+anyone running this wants -- the demonstrations used to be what you
+got for asking for nothing, which had the common case behind the
+uncommon one.
+
+PROGRAM is an image path as the host filesystem sees it. The SHELL
+expands a bare name to `c4ix-NAME.c4r` or `NAME.c4r`; init does not,
+so name the image in full on the kernel's own command line.
+
+`--demo` takes six images and gives each a fixed role: (1) a program
+that calls printf directly, which is what proves redirection reaches
+a program that has never heard of C4IX, (2) one that uses libc4ix
+syscalls, (3) and (4) the writer and reader of a pipeline, (5) a
+shell and (6) a script for it to run. Fewer than six still runs the
+stages it has arguments for, so a short list puts one image into
+several roles -- which is a real trap: name a shell there and it will
+be spawned with its stdout redirected into a RAM file, prompt and
+all, and the terminal goes quiet while it waits to be typed at. Init
+announces that before it happens for exactly this reason.
+
+`-q` used to mean "skip the demonstrations". They are opt-in now, so
+it does nothing; it is still accepted so older command lines work.
+
+In the shell, anything in the tree named `c4ix-NAME.c4r` is a
+command: echo, cat, wc, ls, mkdir, ps, top, bench, spin, hello. The
+prompt carries the working directory, `help` lists the builtins, and
+`exit` or end-of-file leaves, which shuts the kernel down. Ctrl-C
+cancels the foreground job and does nothing at an idle prompt.
 
 ## 7. Measured results (2026-08-03)
 

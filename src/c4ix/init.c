@@ -1,7 +1,12 @@
 //
-// C4IX init: the first task, and X1's demonstration workload.
+// C4IX init: the first task, and the kernel's command line.
 //
-// Three acts:
+// With no arguments it boots to a shell, because that is what anyone
+// running this actually wants; `--demo` asks for the guided tour and
+// `--help` lists the rest. init_usage() is the authority on all of
+// it -- keep the two in step.
+//
+// The tour has three acts:
 //   1. Cooperative ping/pong -- two tasks yielding explicitly. Runs
 //      under sched_lock so the interleaving is pure round-robin on
 //      both hosts and the output pins exactly.
@@ -205,22 +210,56 @@ static void init_io(char **av, int argc) {
     if (argc > 6) init_shell(av[5], av[6]);
 }
 
-int init_main(int argc, int argv) {
-    struct task *a, *b;
-    char **av;
-    int ra, rb, n;
-
-    // Quiet boot: "-q PROG" skips the demonstrations and runs one
-    // program immediately. That is what makes a boot-cost
-    // measurement meaningful -- the demos below are worth several
-    // hundred thousand cycles and would swamp it.
-    av = (char **)argv;
-    if (argc > 2) {
-        if (av[1][0] == '-' && av[1][1] == 'q') {
-            if ((a = task_spawn(av[2], argc - 2, (int)(av + 2)))) task_wait(a);
-            return 0;
-        }
+// Exact match, because the options are words rather than clusters of
+// letters and a prefix match would quietly accept nonsense.
+static int init_is(char *s, char *opt) {
+    while (*s) {
+        if (*s != *opt) return 0;
+        ++s;
+        ++opt;
     }
+    return *opt == 0;
+}
+
+// The demonstrations used to be what you got for asking for nothing,
+// which had the common case behind the uncommon one -- and worse, the
+// demonstrations take their programs POSITIONALLY, so a short list
+// put whatever you named into every role in turn. Booting to a shell
+// now needs no arguments at all, and the tour is behind --demo.
+static void init_usage() {
+    kputs("c4ix -- a small Unix-like kernel for the C4 virtual machine\n");
+    kputs("\n");
+    kputs("usage: c4ix.c4r [OPTION] [PROGRAM [ARGUMENT]...]\n");
+    kputs("\n");
+    kputs("  (no arguments)     boot to an interactive shell\n");
+    kputs("  PROGRAM [ARG]...   boot, run PROGRAM with ARGs, shut down\n");
+    kputs("  --demo IMAGE...    run the built-in demonstrations, below\n");
+    kputs("  -h, --help         print this and shut down\n");
+    kputs("  -q                 accepted and ignored, so older command\n");
+    kputs("                     lines keep working\n");
+    kputs("\n");
+    kputs("PROGRAM is an image path as the host filesystem sees it. The\n");
+    kputs("SHELL expands a bare name to c4ix-NAME.c4r or NAME.c4r; init\n");
+    kputs("does not, so name the image in full here.\n");
+    kputs("\n");
+    kputs("--demo takes six images and uses each for a fixed role:\n");
+    kputs("  1  calls printf directly -- proves redirection reaches a\n");
+    kputs("     program that has never heard of C4IX\n");
+    kputs("  2  uses libc4ix syscalls\n");
+    kputs("  3  writer and 4 reader of a pipeline\n");
+    kputs("  5  a shell, and 6 a script for it to run\n");
+    kputs("Fewer than six still runs the stages it has arguments for,\n");
+    kputs("so a short list puts one image into several roles.\n");
+    kputs("\n");
+    kputs("  c4ix.c4r --demo c4ix-hello.c4r c4ix-uhello.c4r c4ix-echo.c4r \\\n");
+    kputs("           c4ix-wc.c4r c4ix-sh.c4r src/c4ix/user/test.sh\n");
+}
+
+// The guided tour. argc/av are shifted past --demo, so av[1] is the
+// first image and every stage below indexes exactly as documented.
+static int init_demo(int argc, char **av) {
+    struct task *a, *b;
+    int ra, rb, n;
 
     kprintf("init: c4ix init v1 on %s\n", host_name());
 
@@ -257,7 +296,6 @@ int init_main(int argc, int argv) {
     // [3] and [4] the two halves of the X3 pipeline. The first two
     // run standalone here; the rest are driven by init_io below.
     if (argc > 1) {
-        av = (char **)argv;
         n = 1;
         while (n < argc && n < 3) {
             if ((a = task_spawn(av[n], argc - n, (int)(av + n)))) {
@@ -274,5 +312,49 @@ int init_main(int argc, int argv) {
         init_io(av, argc);
     }
 
+    return 0;
+}
+
+int init_main(int argc, int argv) {
+    struct task *a;
+    char **av;
+    char *shargv[2];
+    int i;
+
+    av = (char **)argv;
+    i = 1;
+
+    if (i < argc) {
+        if (init_is(av[i], "-h") || init_is(av[i], "--help")) {
+            init_usage();
+            return 0;
+        }
+        // Shift past the flag so the stages index from av[1] exactly
+        // as the help text describes.
+        if (init_is(av[i], "--demo")) return init_demo(argc - i, av + i);
+        // -q used to mean "skip the demonstrations". They are opt-in
+        // now, so it means nothing -- but silently accepting it keeps
+        // older command lines and older habits working.
+        if (init_is(av[i], "-q")) ++i;
+    }
+
+    // Nothing left to run: the default, and the reason the default is
+    // worth having.
+    if (i >= argc) {
+        shargv[0] = "c4ix-sh.c4r";
+        shargv[1] = 0;
+        if (!(a = task_spawn(shargv[0], 1, (int)shargv))) {
+            kprintf("init: cannot start '%s'\n", shargv[0]);
+            return 1;
+        }
+        task_wait(a);
+        return 0;
+    }
+
+    if (!(a = task_spawn(av[i], argc - i, (int)(av + i)))) {
+        kprintf("init: spawn of '%s' failed\n", av[i]);
+        return 1;
+    }
+    task_wait(a);
     return 0;
 }

@@ -388,7 +388,11 @@ C4IX_PROGS := c4ix-hello.c4r c4ix-uhello.c4r c4ix-echo.c4r c4ix-wc.c4r \
               c4ix-cat.c4r c4ix-sh.c4r c4ix-ps.c4r c4ix-bench.c4r \
               c4ix-cycles.c4r c4ix-ls.c4r c4ix-mkdir.c4r c4ix-top.c4r \
               c4ix-spin.c4r
-C4IX_ARGS := c4ix-hello.c4r c4ix-uhello.c4r c4ix-echo.c4r c4ix-wc.c4r \
+# The demonstrations are opt-in (--demo) and take their six images
+# positionally; `c4ix.c4r --help` documents the roles. With no
+# arguments at all the kernel boots to a shell, which is what
+# run-c4ix relies on.
+C4IX_ARGS := --demo c4ix-hello.c4r c4ix-uhello.c4r c4ix-echo.c4r c4ix-wc.c4r \
              c4ix-sh.c4r $(C4IX_SRC)/user/test.sh
 # Cycle counts are masked: they are a measurement, not behaviour, and
 # they move whenever the kernel's size changes. `make bench-c4ix`
@@ -414,25 +418,26 @@ test-c4ix-c4: c4 c4m c4ix.c4r $(C4IX_PROGS)
 # same counter on both sides.
 bench-c4ix: c4m c4ix.c4r $(C4IX_PROGS)
 	@echo "--- C4IX ---"
-	$(C4M) load-c4r.c -- c4ix.c4r c4ix-hello.c4r c4ix-uhello.c4r \
+	$(C4M) load-c4r.c -- c4ix.c4r --demo c4ix-hello.c4r c4ix-uhello.c4r \
 		c4ix-echo.c4r c4ix-wc.c4r c4ix-sh.c4r $(C4IX_SRC)/user/bench.sh \
 		2>&1 | grep -E "scheduling after|^bench:"
 	@echo "--- boot cost, C4IX (VM cycle counter) ---"
-	@$(C4M) load-c4r.c -- c4ix.c4r -q c4ix-cycles.c4r 2>&1 | grep -E "booting|scheduling after|^cycles:"
+	@$(C4M) load-c4r.c -- c4ix.c4r c4ix-cycles.c4r 2>&1 | grep -E "booting|scheduling after|^cycles:"
 	@echo "--- end to end: boot a kernel and run one trivial program ---"
 	@echo -n "c4ix wall: "
-	@/usr/bin/time -f "%e s" $(C4M) load-c4r.c -- c4ix.c4r -q c4ix-cycles.c4r 2>&1 | tail -1
+	@/usr/bin/time -f "%e s" $(C4M) load-c4r.c -- c4ix.c4r c4ix-cycles.c4r 2>&1 | tail -1
 	@echo -n "c4ke wall: "
 	@/usr/bin/time -f "%e s" $(C4M) $(RUN_C4KE) -v 9 cycles 2>&1 | tail -1
 	@$(C4M) $(RUN_C4KE) cycles 2>&1 | grep -E "Kernel ready" || true
 
-# An interactive shell: quiet boot (no demonstrations), then c4ix-sh
-# with no script, so it reads fd 0 -- you. `help` lists builtins;
-# `exit` or Ctrl-D leaves, which shuts the kernel down.
+# An interactive shell, which is what the kernel does when given
+# nothing to do: c4ix-sh with no script, so it reads fd 0 -- you.
+# `help` lists builtins; `exit` or Ctrl-D leaves, which shuts the
+# kernel down. `c4ix.c4r --help` lists the other modes.
 run-c4ix: c4m c4ix.c4r $(C4IX_PROGS)
-	$(C4M) load-c4r.c -- c4ix.c4r -q c4ix-sh.c4r
+	$(C4M) load-c4r.c -- c4ix.c4r
 run-c4ix-c4: c4 c4m c4ix.c4r $(C4IX_PROGS)
-	$(C4) $(C4M).c load-c4r.c -- c4ix.c4r -q c4ix-sh.c4r
+	$(C4) $(C4M).c load-c4r.c -- c4ix.c4r
 # The guided tour instead: every milestone's demonstration in order,
 # ending with the shell running the test script.
 demo-c4ix: c4m c4ix.c4r $(C4IX_PROGS)

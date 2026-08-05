@@ -212,11 +212,28 @@ int ck_dispatch(int num, int *args) {
         return 0;
     }
 
+    // Sleep is a STATE CHANGE, not a spin: park on the clock and let
+    // the scheduling decision at the end of sched_trap pick someone
+    // else. No sys_restart -- unlike a blocking read, a sleep
+    // COMPLETES when it wakes, so the opcode must not re-execute.
+    // The 0 returned here is saved into sv_a and is what the task
+    // sees when it resumes.
+    //
+    // __time() is called directly and deliberately not cached: c4m
+    // picks the right clock for its host (a plain system call when
+    // native, the /proc/uptime reader only under plain c4) and
+    // degrades cleanly through any nesting depth.
+    if (num == CK_USER_SLEEP || num == CK_AWAIT_MESSAGE) {
+        if (!t) return 0;
+        if (args[0] <= 0) return 0;
+        t->ck_wake = __time() + args[0];
+        t->state = TS_SLEEPING;
+        return 0;
+    }
+
     // ---- not yet implemented; each is a later stage ----
     if (num == CK_USER_SIGNAL)         return 0;   // stage 5
     if (num == CK_USER_KILL)           return -1;  // stage 5
-    if (num == CK_USER_SLEEP)          return 0;   // stage 2
-    if (num == CK_AWAIT_MESSAGE)       return 0;   // stage 2
     if (num == CK_AWAIT_PID)           return -1;  // stage 6
     if (num == CK_USER_START_C4R)      return 0;   // stage 6
     if (num == CK_KERN_TASKS_EXPORT)   return 0;   // stage 4

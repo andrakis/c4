@@ -233,11 +233,11 @@ void  sl4b_stats();
 // walk is the loop the scheduler context-switches along.
 enum { TASK_NAME_MAX = 16 };
 // TS_WAITING = blocked on another task (wait); TS_BLOCKED = blocked
-// on a vnode (an empty pipe). Both are woken by the scheduler when
-// their condition clears.
+// on a vnode (an empty pipe); TS_SLEEPING = blocked on the clock.
+// All three are woken by the scheduler when their condition clears.
 enum {
     TS_READY = 1, TS_RUNNING = 2, TS_ZOMBIE = 3,
-    TS_WAITING = 4, TS_BLOCKED = 5
+    TS_WAITING = 4, TS_BLOCKED = 5, TS_SLEEPING = 6
 };
 // Privilege level. PRIV_USER tasks resume in c4m's protected mode:
 // host syscall opcodes trap to the kernel instead of executing, so
@@ -354,6 +354,7 @@ void ck_task_free(struct task *t);   // release compat state on reap
 // LEV -- see src/tests/test_coop_switch.c for the proof of concept.
 void         sched_init(int interval);
 void         sched_run();
+int          sched_sleep_due(int *pms);   // earliest sleeper deadline, 0 if none
 void         sched_stop();
 void         sched_yield();
 void         sched_lock();     // disable preemption (nestable)

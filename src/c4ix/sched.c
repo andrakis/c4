@@ -92,11 +92,35 @@ int sched_in_trap() {
 // A TS_BLOCKED task is parked on a vnode -- an empty pipe. It wakes
 // when the data it wanted arrives, or when the last writer closes
 // and the emptiness becomes end-of-file instead.
+// A TS_SLEEPING task is parked on the clock. Subtract rather than
+// compare the raw values -- the habit that survives a wrap.
 static int sched_unblocked(struct task *n) {
+    if (n->state == TS_SLEEPING) {
+        if (__time() - n->ck_wake < 0) return 0;
+        n->state = TS_READY;
+        return 1;
+    }
     if (n->state != TS_BLOCKED) return 0;
     if (!vfs_readable(n->block_vn, n->block_pos)) return 0;
     n->state = TS_READY;
     return 1;
+}
+
+// The earliest deadline among sleeping tasks, or 0 if none. The idle
+// loop uses it to cap its nap so a short sleep is not served late.
+int sched_sleep_due(int *pms) {
+    struct task *t;
+    int found;
+
+    found = 0;
+    t = task_head;
+    while (t) {
+        if (t->state == TS_SLEEPING) {
+            if (!found || t->ck_wake - *pms < 0) { *pms = t->ck_wake; found = 1; }
+        }
+        t = t->next;
+    }
+    return found;
 }
 
 static int sched_waitdone(struct task *n) {
@@ -536,7 +560,7 @@ void sched_stop() {
 // nobody waited for.
 void sched_run() {
     struct task *t;
-    int live, ready, nap;
+    int live, ready, nap, due, budget;
 
     nap = 0;
     live = 1;
@@ -547,7 +571,8 @@ void sched_run() {
         while (t) {
             if (t != sched_cur && t->state != TS_ZOMBIE) {
                 live = 1;
-                if (t->state != TS_BLOCKED && t->state != TS_WAITING) ready = 1;
+                if (t->state != TS_BLOCKED && t->state != TS_WAITING
+                    && t->state != TS_SLEEPING) ready = 1;
             }
             t = t->next;
         }
@@ -564,6 +589,14 @@ void sched_run() {
         else {
             nap = nap ? nap * 2 : IDLE_NAP_MIN;
             if (nap > IDLE_NAP_MAX) nap = IDLE_NAP_MAX;
+            // A sleeping task has a deadline, so the backoff must not
+            // overshoot it: a 1ms sleep should not wait out a 20ms
+            // nap. Milliseconds in, microseconds out.
+            if (sched_sleep_due(&due)) {
+                budget = (due - __time()) * 1000;
+                if (budget < 0) budget = 0;
+                if (budget < nap) nap = budget;
+            }
             __c4_usleep(nap);
             // The cycle counter stood still while we slept, so the
             // console's own rate limit has no way to know that real

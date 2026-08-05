@@ -369,10 +369,37 @@ loading or assigning a whole struct is an error.
       count thousands of times everyone else's, issuing no traps,
       starving the rest.
       Measured: the stress script went from 0/4 to 4/4 at five times
-      the shipped preemption rate. At twenty times and beyond it
-      still fails, but there the interrupt period is below the
-      handler's own cost (~1237 cycles), which is outside the design
-      envelope rather than the same bug.)
+      the shipped preemption rate.
+- [x] Preemption race four, and the end of the stall (2026-08-05):
+      **a trap handler cannot re-arm the interrupt from inside
+      itself.** It does not own the registers -- TLEV installs them,
+      several instructions after the handler's last statement. So
+      between `sched_cur = n` and that TLEV the scheduler said one
+      task was running while the machine still ran another, and an
+      interrupt landing in the gap saved the outgoing registers into
+      the incoming task and restored the incoming task's stale ones.
+      The contexts swapped; one then built a trap frame over the
+      frame the other was parked on, and the machine spun forever on
+      a TLEV whose frame returned to itself. Caught under gdb as a
+      self-referential frame at `tlev_instruction`, then reproduced
+      exactly with a trap/TLEV ring buffer in a scratch VM.
+      The fix is in the VM, because the window cannot be closed from
+      the kernel: c4m's new `CONF_TRAP_RESTORES_INTERVAL` makes the
+      interrupt mask part of the trapped context, saved at trap entry
+      into frame slot bp+9 and restored by TLEV. C4IX opts in and
+      declares an eighth leading parameter on `sched_trap`, so it
+      sets preemption for the INCOMING task by writing that slot; the
+      machine stays masked until the switch is complete. c4m also
+      refuses to interrupt a TLEV instruction at all, which covers
+      kernels that have not opted in. Either alone fixes it; both are
+      in. Handlers with the usual seven parameters -- C4KE's -- are
+      untouched, because C4 numbers parameters down from the top of
+      the frame.
+      Measured: 4/4 at twenty times the shipped preemption rate, so
+      the earlier reading of that failure as "below the handler's own
+      cost, outside the design envelope" was wrong; it was this bug.
+      The `spin 1`-from-the-shell hang and the `ps -s` hang are both
+      this, and both pass now.)
 ## 6.1 Running it
 
     make run-c4ix        an interactive shell on c4m

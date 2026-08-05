@@ -113,6 +113,24 @@ static void upad_emit(char *s, int len, int width, int right) {
     write(STDOUT, line, n);
 }
 
+// A column HEADING for a right-aligned numeric column: the label
+// right-aligned in WIDTH, then the same trailing space upadnum and
+// upadcycles emit. Headings built with this cannot drift out of step
+// with their data, because both are given the same width.
+int upadhdr(char *s, int width) {
+    char line[64];
+    int n, len, i;
+
+    len = ustrlen(s);
+    n = 0;
+    while (n + len < width && n < 63) { line[n] = ' '; ++n; }
+    i = 0;
+    while (i < len && n < 63) { line[n] = s[i]; ++n; ++i; }
+    if (n < 63) { line[n] = ' '; ++n; }
+    write(STDOUT, line, n);
+    return n;
+}
+
 int upadstr(char *s, int width) {
     int n;
     n = ustrlen(s);

@@ -354,13 +354,18 @@ static int sh_runline(char **w, int nw) {
 }
 
 // With no script the shell reads fd 0, which is a person, so it
-// prints a prompt carrying the working directory. Without one an
-// interactive session just looks like a hung program.
+// prints a prompt carrying the working directory.
+//
+// The prompt ends with a NEWLINE rather than sitting on the input
+// line. There is no flush in this system -- the only thing that
+// reliably pushes output out is the newline itself -- so a trailing
+// "$ " would still be sitting in a buffer while the shell waited for
+// a key, and the session would look hung. c4sh does the same.
 static void sh_prompt() {
     char cwd[128];
     if (!interactive) return;
-    if (ugetcwd(cwd, 128) > 0) uprintf("c4ix:%s$ ", cwd);
-    else uprintf("c4ix$ ");
+    if (ugetcwd(cwd, 128) > 0) uprintf("c4ix:%s$\n", cwd);
+    else uprintf("c4ix$\n");
 }
 
 int main(int argc, char **argv) {

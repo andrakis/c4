@@ -25,8 +25,18 @@ int main(int argc, char **argv) {
     stable = 0;
     if (argc > 1) { if (argv[1][0] == '-') { if (argv[1][1] == 's') stable = 1; } }
 
-    if (stable) uprintf("  ID  PPID STATE   PRIV     NAME\n");
-    else uprintf("  ID  PPID STATE   PRIV     SYSCALLS     TRAPS      CYCLES  NAME\n");
+    // Headings go through the same widths as the values below, so
+    // the two cannot drift apart.
+    upadhdr("ID", 4);
+    upadhdr("PPID", 5);
+    upadstr("STATE", 8);
+    upadstr("PRIV", 8);
+    if (!stable) {
+        upadhdr("SYSCALLS", 8);
+        upadhdr("TRAPS", 9);
+        upadhdr("CYCLES", 11);
+    }
+    uprintf(" NAME\n");
     total = 0;
     i = 0;
     while (utaskinfo(i, info)) {

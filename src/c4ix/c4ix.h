@@ -25,7 +25,10 @@ enum { HOST_C4 = 0, HOST_C4M = 1 };
 
 // c4m trap machinery numbers (c4m.c enums), used by sched.c on the
 // c4m host only.
-enum { C4IX_CONF_INTERVAL = 0, C4IX_CONF_HANDLER = 1 };
+enum { C4IX_CONF_INTERVAL = 0, C4IX_CONF_HANDLER = 1,
+       // c4m's CONF_TRAP_RESTORES_INTERVAL: TLEV restores the interrupt
+       // interval from the trap frame, so the mask survives the switch.
+       C4IX_CONF_TRAP_RESTORES_INTERVAL = 3 };
 enum {
     C4IX_TRAP_ILLOP = 0,        // unknown opcode: the syscall gateway
     C4IX_TRAP_HARD_IRQ = 1,     // cycle interrupt: preemption

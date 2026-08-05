@@ -134,7 +134,20 @@ static struct task *sched_pick(struct task *t) {
 // c4m enters a handler unprotected with the cycle interrupt off, so
 // the kernel always runs privileged; the mode assignment on the way
 // out is what puts a user task back behind the boundary.
-static void sched_trap(int trap, int param, int mode, int a, int bp, int sp, int returnpc) {
+//
+// The leading `interval` parameter is the frame slot c4m saves the
+// cycle interrupt interval into, and it is a register like the rest:
+// assigning to it says what the interrupt state should be for the
+// context this trap returns to. That is the only safe way to re-arm
+// preemption. Doing it with __c4_configure before returning arms the
+// machine while the switch is still only half done -- sched_cur has
+// moved but the registers have not, because they do not change until
+// TLEV runs -- and an interrupt in that window saves the outgoing
+// task's registers into the incoming task and restores the incoming
+// task's stale ones. The two contexts trade places, one then rebuilds
+// a trap frame over the frame the other is parked on, and the machine
+// ends up spinning on a TLEV that returns to itself forever.
+static void sched_trap(int interval, int trap, int param, int mode, int a, int bp, int sp, int returnpc) {
     struct task *t, *n;
 
     // Re-entry guard. c4m disables the cycle interrupt when IT takes
@@ -234,6 +247,15 @@ static void sched_trap(int trap, int param, int mode, int a, int bp, int sp, int
     mode = (sched_cur->privs == PRIV_USER)
         ? C4IX_MODE_PROTECTED : C4IX_MODE_UNPROTECTED;
 
+    // Preemption for whoever is about to run. sched_lockdepth was
+    // swapped above, so it already belongs to the incoming task: a
+    // task that trapped while holding the mask gets it back, and one
+    // that did not gets a running clock. Writing the frame slot rather
+    // than the machine leaves the interrupt off until TLEV has finished
+    // installing the context -- there is no half-switched window for it
+    // to land in.
+    interval = (sched_interval && sched_lockdepth == 0) ? sched_interval : 0;
+
     // The flag stays set for the WHOLE handler, not just the service
     // call: everything below it -- task_release, the slab allocator,
     // any kprintf -- takes sched_lock, and an unlock outside the flag
@@ -241,8 +263,6 @@ static void sched_trap(int trap, int param, int mode, int a, int bp, int sp, int
     // mid-switch, letting a nested trap corrupt the switch it was
     // performing.
     sched_intrap = 0;
-    if (sched_interval && sched_lockdepth == 0)
-        __c4_configure(C4IX_CONF_INTERVAL, sched_interval);
 }
 
 // Ctrl-C. c4m catches the host signal, records it, and raises
@@ -413,6 +433,11 @@ void sched_init(int interval) {
     sched_cur = boot_task;
 
     if (sched_on_c4m) {
+        // Ask c4m to treat the interrupt mask as part of the trapped
+        // context, restored by TLEV. That is what lets sched_trap set
+        // preemption for the incoming task through its `interval`
+        // parameter instead of arming the machine mid-switch.
+        __c4_configure(C4IX_CONF_TRAP_RESTORES_INTERVAL, 1);
         install_trap_handler((int)&sched_trap);
         // Ctrl-C arrives as a trap through the same handler.
         __c4_signal(__c4_sigint(), (int)&sched_trap);

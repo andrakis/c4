@@ -82,6 +82,15 @@
 //       CONF_CYCLE_INTERRUPT_HANDLER   The function address of the handler.
 //       The cycle handler signature is:
 //       void handler(int type, int ins, int mode, int a, int *bp, int *sp, int *returnpc) {}
+//       CONF_TRAP_RESTORES_INTERVAL    1 = TLEV restores the interval that was
+//                                      in effect when the trap was taken, so
+//                                      the interrupt stays masked across the
+//                                      whole handler including its return. A
+//                                      handler that opts in and wants to choose
+//                                      the interval for the context it is about
+//                                      to resume declares an eighth parameter
+//                                      ahead of the other seven:
+//       void handler(int interval, int type, int ins, int mode, int a, int *bp, int *sp, int *returnpc) {}
 //
 // - void stacktrace();            Print a stacktrace
 // - void install_trap_handler(void (*handler)(int trap, int ins, int mode, int a, int *bp, int *sp, int *returnpc));
@@ -188,7 +197,10 @@ int *brk_slots;    // pending break JMP operand slots
 int  brk_top, brk_depth;
 
 // Configure codes, for use with C4CF/__c4_configure
-enum { CONF_CYCLE_INTERRUPT_INTERVAL, CONF_CYCLE_INTERRUPT_HANDLER, CONF_PRIVS };
+enum { CONF_CYCLE_INTERRUPT_INTERVAL, CONF_CYCLE_INTERRUPT_HANDLER, CONF_PRIVS,
+       // 1 = TLEV restores the cycle interrupt interval saved at trap
+       //     entry, instead of leaving whatever the handler last set.
+       CONF_TRAP_RESTORES_INTERVAL };
 enum { PRIV_KERNEL, PRIV_USER };
 
 // C4INFO state
@@ -1014,6 +1026,16 @@ int do_puts   (char *str) { return printf("%s", str); }
 
 int  tlev_instruction;
 
+// When set, TLEV restores the cycle interrupt interval that was in
+// effect when the trap was taken (see the bp+9 slot below), the way a
+// real machine's interrupt return restores the interrupt flag.
+//
+// It is off by default because it changes what a handler's own
+// __c4_configure(CONF_CYCLE_INTERRUPT_INTERVAL, x) means: with this
+// on, the frame decides, not the last write before returning. C4KE
+// re-arms from inside its handler and predates all of this, so it
+// keeps the old behaviour untouched; C4IX opts in.
+int  trap_restores_interval;
 
 // Cause a trap to occur and update stack and registers so that the given
 // handler is executed.
@@ -1027,16 +1049,24 @@ int  tlev_instruction;
 // to a TLEV instruction for proper trap exit.
 // The stack is further adjusted by inspecting the ENT x instruction,
 // and adding that to sp. This allows local variables to work.
-// Stack will be presented as such (offsets in words):
-//   sp+0 = trap bp      Usually an sp and return pc are on the stack.
-//   sp+1 = ptr to TLEV  Argument references (LEA) still expect these here.
-//   sp+2 = trap
-//   sp+3 = instruction
-//   sp+4 = saved mode
-//   sp+5 = saved accumulator
-//   sp+6 = saved sp
-//   sp+7 = saved bp
-//   sp+8 = return pc / instruction address
+// The frame is presented as such (offsets in words from the handler's bp):
+//   bp+0 = trap bp      Usually an sp and return pc are on the stack.
+//   bp+1 = ptr to TLEV  Argument references (LEA) still expect these here.
+//   bp+2 = return pc / instruction address
+//   bp+3 = saved sp
+//   bp+4 = saved bp
+//   bp+5 = saved accumulator
+//   bp+6 = saved mode
+//   bp+7 = instruction
+//   bp+8 = trap
+//   bp+9 = saved cycle interrupt interval
+// A C4 handler's parameters are numbered from the top of the frame
+// down, so a handler declared with the usual seven parameters reads
+// bp+8..bp+2 as (trap, instruction, mode, a, bp, sp, returnpc). The
+// interval at bp+9 is pushed FIRST for exactly that reason: it is
+// invisible to those handlers, and a handler that wants it declares
+// an eighth parameter ahead of the other seven. That is what makes
+// this slot free to add without disturbing C4KE.
 // After inspecting the trap handler's ENT x instruction, the stack is
 // further adjusted to account for it.
 void trap (int type, int parameter, int *handler, int **_sp, int **_bp, int **_pc, int a, int mode) {
@@ -1070,6 +1100,16 @@ void trap (int type, int parameter, int *handler, int **_sp, int **_bp, int **_p
 
 	// Offset so that stack doesn't get overwritten
 	sp = sp - TRAP_OFFSET;
+
+	// The interrupt state belongs to the interrupted context, so it is
+	// saved with it. Pushed first, so it lands at bp+9, past the seven
+	// parameters an existing handler can see.
+	*--sp = cycle_interrupt_interval;
+	// Handlers run with the cycle interrupt off. Every caller of trap()
+	// already did this on the way back; doing it here as well means the
+	// mask covers the handler's own epilogue and its TLEV, which is the
+	// window a handler cannot close from the inside.
+	cycle_interrupt_interval = 0;
 
 	// Push instruction and trap number
 	*--sp = type;             // printf("*sp(0x%X) = trap type %d\n", sp, *sp);
@@ -1183,6 +1223,10 @@ int c4m_main(int argc, char **argv)
   time_altmode = 0;
   // Used to protect traps from just returning instead of using TLEV.
   tlev_instruction = TLEV;
+  // Off by default: kernels written before this existed re-arm the
+  // cycle interrupt from inside their handler, and turning this on
+  // would overrule them.
+  trap_restores_interval = 0;
   // Start in unprotected mode with pm available
   mode = MODE_UNPROTECTED;
   pm_avail = 1;
@@ -1434,7 +1478,13 @@ int c4m_main(int argc, char **argv)
 
 	// Allow a cycle interrupt. Since cycle is incremented above, this will
 	// not interrupt the first cycle.
-	if (cycle_interrupt_interval && !(cycle % cycle_interrupt_interval)) {
+	// TLEV is a trap return: it restores five registers from a frame in
+	// one step, and there is no way to express "half returned". Landing
+	// an interrupt on it hands the handler a context that belongs to
+	// neither the outgoing nor the incoming side. Kernels that opt into
+	// trap_restores_interval never reach this instruction with the
+	// interrupt armed; for the others, stepping over it costs one tick.
+	if (cycle_interrupt_interval && !(cycle % cycle_interrupt_interval) && *pc != TLEV) {
 		//printf("!trap_hard_irq %d using handler 0x%X\n", cycle_interrupt_interval, cycle_interrupt_handler);
 		trap(TRAP_HARD_IRQ, HIRQ_CYCLE, cycle_interrupt_handler, &sp, &bp, &pc, a, mode);
 		// Disable cycle interrupt and set unprotected mode
@@ -1674,6 +1724,10 @@ int c4m_main(int argc, char **argv)
         a  = (int  )*t++;    // printf("From 0x%X, loaded saved a %d\n", t - 1, a);
 		mode = (int)*t++;    // printf("From 0x%X, loaded saved mode %d\n", t - 1, mode);
         //printf("Resume from pc 0x%X\n", pc);
+        // The interrupt state is part of the context too. t has walked
+        // past the instruction and trap number, so it now addresses the
+        // interval saved at bp+9.
+        if (trap_restores_interval) cycle_interrupt_interval = *(t + 2);
 	}
 	else if (i == C4CY) a = cycle;
 	else if (i == SIGI) a = __c4_sigint();
@@ -1712,6 +1766,9 @@ int c4m_main(int argc, char **argv)
 				a = (int)cycle_interrupt_handler;
 				cycle_interrupt_handler = (int *)sp[0];
 				// printf("(c4m: cycle handler set to 0x%lx\n", sp[0]);
+			} else if(sp[1] == CONF_TRAP_RESTORES_INTERVAL) {
+				a = trap_restores_interval;
+				trap_restores_interval = sp[0];
 			} else {
 				printf("c4m: C4CF issue\n");
 				return -100;

@@ -74,6 +74,7 @@ int   ustrcmp(char *a, char *b);
 char *ustrcpy(char *dst, char *src);   // returns just past the terminator
 
 int  upadstr(char *s, int width);
+int  upadhdr(char *s, int width);   // heading for a right-aligned column
 int  upadnum(int v, int width);
 int  upadcycles(int v, int width);
 

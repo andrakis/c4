@@ -92,7 +92,14 @@ int main(int argc, char **argv) {
         uprintf("\ntop: %d tasks, ", n);
         upadcycles(busy, 0);
         uprintf("cycles this interval\n");
-        uprintf("  ID  PPID STATE   PRIV      CPU%%    INTERVAL       TOTAL  NAME\n");
+        upadhdr("ID", 4);
+        upadhdr("PPID", 5);
+        upadstr("STATE", 8);
+        upadstr("PRIV", 8);
+        upadhdr("CPU%", 7);
+        upadhdr("INTERVAL", 11);
+        upadhdr("TOTAL", 11);
+        uprintf(" NAME\n");
 
         i = 0;
         while (i < n) {

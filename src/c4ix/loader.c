@@ -16,6 +16,11 @@
 
 enum { C4R_BUF_MAX = 4194304 };   // 4MB image limit
 
+// Set while a caller is TRYING candidate paths and a miss is expected
+// -- a bare C4KE program name may match a real file that is not an
+// image at all. Complaints about those are noise, not diagnosis.
+int loader_quiet;
+
 static int loader_word(char *p) {
     return *(int *)p;
 }
@@ -82,11 +87,14 @@ int c4r_load(char *path, struct c4r_image *img) {
     total = 0;
     while ((n = read(fd, buf + total, 65536)) > 0) total = total + n;
     close(fd);
-    if (total < 13) { kprintf("c4ix: loader: %s is not a .c4r\n", path); free(buf); return 0; }
+    if (total < 13) {
+        if (!loader_quiet) kprintf("c4ix: loader: %s is not a .c4r\n", path);
+        free(buf); return 0;
+    }
 
     p = buf;
     if (!(p[0] == 'C' && p[1] == '4' && p[2] == 'R')) {
-        kprintf("c4ix: loader: bad signature in %s\n", path);
+        if (!loader_quiet) kprintf("c4ix: loader: bad signature in %s\n", path);
         free(buf);
         return 0;
     }

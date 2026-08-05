@@ -377,6 +377,8 @@ enum { CK_SIGINT = 2, CK_SIGKILL = 9, CK_SIGUSR1 = 10, CK_SIGTERM = 15 };
 // PRIV_KERNEL = 0, PRIV_USER = 1. Convert at the boundary.
 enum { CK_PRIV_NONE = 0, CK_PRIV_USER = 1, CK_PRIV_KERNEL = 2 };
 
+extern int loader_quiet;   // suppress "not an image" while probing paths
+
 int  ck_dispatch(int num, int *args);
 void ck_task_free(struct task *t);   // release compat state on reap
 int  ck_kill(int pid, int sig);      // queue a signal, or apply the default

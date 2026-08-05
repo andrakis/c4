@@ -356,9 +356,15 @@ static struct task *ck_spawn(char *name, int argc, int argv, int privs) {
     n = 0;
     while (name[n] && n < PATH_MAX - 24) { path[n] = name[n]; ++n; }
     path[n] = 0;
-    if ((t = task_spawn_priv(path, argc, argv, privs))) return t;
+    // Try the name as given, then with .c4r, exactly as C4KE does.
+    // The bare name may well name a real file that is not an image --
+    // "c4m" is the host binary sitting in the repo root -- so a failed
+    // signature check here is ordinary, not an error worth reporting.
+    loader_quiet = 1;
+    t = task_spawn_priv(path, argc, argv, privs);
+    loader_quiet = 0;
+    if (t) return t;
 
-    // NAME.c4r
     i = n;
     path[i] = '.'; path[i+1] = 'c'; path[i+2] = '4'; path[i+3] = 'r'; path[i+4] = 0;
     if ((t = task_spawn_priv(path, argc, argv, privs))) return t;
@@ -368,22 +374,28 @@ static struct task *ck_spawn(char *name, int argc, int argv, int privs) {
 
 static int ck_start_c4r(struct task *caller, int *args) {
     struct task *t;
-    char *name;
+    char **argv;
+    char *label;
     int privs;
 
-    if (!(name = (char *)args[2])) return 0;
+    // The IMAGE comes from argv[0], not from the `name` argument --
+    // C4KE's task_loadc4r does `file = argv[0]` and treats name as a
+    // label. innerbench relies on exactly that: it passes the title
+    // "inner-kernel" with argv[0] = "c4m".
+    argv = (char **)args[1];
+    if (args[0] < 1 || !argv || !argv[0]) return 0;
     privs = ck_privs_in(args[3], caller);
-    if (!(t = ck_spawn(name, args[0], args[1], privs))) {
-        kprintf("c4ix: c4ke: cannot start '%s'\n", name);
+    if (!(t = ck_spawn(argv[0], args[0], args[1], privs))) {
+        kprintf("c4ix: c4ke: cannot start '%s'\n", argv[0]);
         return 0;
     }
+    // C4KE renames the task to the whole command line; the label the
+    // caller chose is shorter and says more in TASK_NAME_MAX columns.
+    if ((label = (char *)args[2])) ck_namecpy(t, label);
     // Replace the borrowed argv with the task's own copy, now that
     // there is a task to own it. The forged frame already holds the
     // caller's pointer, so patch it where the shim will read it.
-    if (args[0] > 0 && args[1]) {
-        if (ck_argv_copy(t, args[0], (char **)args[1]))
-            sched_forge_argv(t, t->argv_vec);
-    }
+    if (ck_argv_copy(t, args[0], argv)) sched_forge_argv(t, t->argv_vec);
     return t->id;
 }
 

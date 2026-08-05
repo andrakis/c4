@@ -67,7 +67,8 @@ enum {
     SYS_DUP = 210, SYS_DUP2 = 211, SYS_PIPE = 212,
     SYS_CYCLES = 213, SYS_TASKINFO = 214,
     SYS_CHDIR = 215, SYS_MKDIR = 216, SYS_GETCWD = 217, SYS_READDIR = 218,
-    SYS_TOP = 219
+    SYS_KILL = 219,
+    SYS_TOP = 220
 };
 // taskinfo fills, in order: id, parent, state, privs, nsyscalls,
 // ntraps, cycles, then the name packed into the remaining words.
@@ -376,6 +377,14 @@ enum { CK_PRIV_NONE = 0, CK_PRIV_USER = 1, CK_PRIV_KERNEL = 2 };
 
 int  ck_dispatch(int num, int *args);
 void ck_task_free(struct task *t);   // release compat state on reap
+int  ck_kill(int pid, int sig);      // queue a signal, or apply the default
+int  ck_has_handler(struct task *t, int sig);
+// Deliver one pending signal to the task about to resume, by building
+// it a trap frame by hand. MODE and INTERVAL are the context it would
+// otherwise have resumed with; they go into the frame so the handler's
+// return restores them.
+void ck_signal_deliver(struct task *t, int *pa, int *pbp, int *psp,
+                       int *ppc, int mode, int interval);
 
 // ---- scheduler (sched.c) ----
 // One switch mechanism, two backends. On c4m every switch runs in a

@@ -218,6 +218,11 @@ int sys_dispatch(int num, int *args) {
     if (num == SYS_MKDIR)  return sys_mkdir((char *)args[0]);
     if (num == SYS_GETCWD) return sys_getcwd((char *)args[0], args[1]);
     if (num == SYS_READDIR) return sys_readdir((char *)args[0], args[1], (char *)args[2]);
+    // Signals are the compat layer's machinery, but they are useful to
+    // C4IX's own shell too: `jobs` could list a background task and
+    // nothing could stop it. A C4IX program installs no handlers, so
+    // for one of those this is simply "cancel that job".
+    if (num == SYS_KILL)   return ck_kill(args[0], args[1]);
     if (num == SYS_YIELD)  { sched_yield(); return 0; }
     if (num == SYS_GETPID) return t ? t->id : -1;
     if (num == SYS_SBRK)   return (int)malloc(args[0]);

@@ -17,7 +17,8 @@ enum {
     SYS_SBRK = 208, SYS_GETPID = 209,
     SYS_DUP = 210, SYS_DUP2 = 211, SYS_PIPE = 212,
     SYS_CYCLES = 213, SYS_TASKINFO = 214,
-    SYS_CHDIR = 215, SYS_MKDIR = 216, SYS_GETCWD = 217, SYS_READDIR = 218
+    SYS_CHDIR = 215, SYS_MKDIR = 216, SYS_GETCWD = 217, SYS_READDIR = 218,
+    SYS_KILL = 219
 };
 // taskinfo record, in order: id, parent, state, privs, nsyscalls,
 // ntraps, cycles, then a 16-byte name
@@ -65,7 +66,8 @@ int  utaskinfo(int index, int *out);   // 1 if that task slot exists
 int  uchdir(char *path);
 int  umkdir(char *path);
 int  ugetcwd(char *buf, int len);
-int  ureaddir(char *path, int index, char *name);  // 1 dir, 0 file, -1 end
+int  ureaddir(char *path, int index, char *name);   // 1 dir, 0 file, -1 end
+int  ukill(int pid, int sig);   // SIGTERM/SIGINT/SIGKILL end a task
 int *ualloc(int bytes);
 int  getpid();
 

@@ -297,6 +297,19 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     // to land in.
     interval = (sched_interval && sched_lockdepth == 0) ? sched_interval : 0;
 
+    // If the task about to run has a signal waiting, enter its handler
+    // instead -- by rewriting the very registers just settled on.
+    //
+    // This is the ONLY delivery point, and it is here for a reason.
+    // Above, a SV_FRAME task has already been turned into real
+    // registers, so this never sees a forged frame; and whether or not
+    // a switch happened, a/bp/sp/returnpc now describe the incoming
+    // context, so the same code serves both. The mode and interval
+    // just computed are handed over to be stored in the frame the
+    // handler returns through, while this frame keeps them -- which is
+    // what runs the handler itself in the task's own mode.
+    ck_signal_deliver(sched_cur, &a, &bp, &sp, &returnpc, mode, interval);
+
     // The flag stays set for the WHOLE handler, not just the service
     // call: everything below it -- task_release, the slab allocator,
     // any kprintf -- takes sched_lock, and an unlock outside the flag
@@ -316,47 +329,44 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
 // user work, so "the current task" is as likely to be the kernel's
 // idle loop as the program the person meant to stop.
 //
-// C4IX has no process groups, but it does not need them: a shell
-// WAITS on the job it is running, so the foreground task is the user
-// task that another USER task is waiting on. The waiter has to be
-// userland -- init waits on the shell exactly the same way, and
-// Ctrl-C must not kill the shell. A background job started with '&'
-// has nobody waiting on it, so it is correctly left alone, and the
-// innermost job wins when shells nest, because ids only grow.
+// C4IX has no process groups and does not need them. A terminal picks
+// its foreground job from a structure that is already here: init waits
+// on the program it launched, a shell waits on the job it is running,
+// so DESCEND THE WAIT CHAIN and the innermost task is the one in
+// front. C4KE asks its programs to declare themselves instead
+// (c4ke_set_focus), which is why the compat layer accepts that call
+// and ignores it -- this answer is derived, and cannot go stale.
 static struct task *sched_foreground() {
-    struct task *t, *w, *best;
+    struct task *t, *n;
+    int guard;
 
-    best = 0;
-    t = task_head;
-    while (t) {
-        if (t->privs == PRIV_USER && t->state != TS_ZOMBIE) {
-            w = task_head;
-            while (w) {
-                if (w->privs == PRIV_USER && w->state == TS_WAITING
-                    && w->wait_for == t->id) {
-                    if (!best || t->id > best->id) best = t;
-                    w = 0;
-                } else w = w->next;
-            }
+    // The session's top-level program: whatever a kernel task waits on.
+    t = 0;
+    n = task_head;
+    while (n) {
+        if (n->privs == PRIV_KERNEL && n->state == TS_WAITING) {
+            if ((t = task_get(n->wait_for))) break;
         }
-        t = t->next;
+        n = n->next;
     }
-    return best;
+    if (!t) return 0;
+    // Then inwards, one job at a time. The guard is paranoia about a
+    // wait cycle, which should be impossible.
+    guard = 0;
+    while (t->state == TS_WAITING && guard < 32) {
+        if (!(n = task_get(t->wait_for))) break;
+        t = n;
+        ++guard;
+    }
+    return (t->state == TS_ZOMBIE) ? 0 : t;
 }
 
-// Is anyone sitting at a prompt? A user task parked on console input
-// is a shell waiting to be typed at, which means the Ctrl-C was typed
-// AT that prompt -- so there is no foreground job and nothing should
-// be cancelled, background jobs included.
-static int sched_at_prompt() {
-    struct task *t;
-    t = task_head;
-    while (t) {
-        if (t->privs == PRIV_USER && t->state == TS_BLOCKED
-            && t->block_vn && t->block_vn->type == VN_CONSOLE) return 1;
-        t = t->next;
-    }
-    return 0;
+// A task parked on console input is a shell waiting to be typed at,
+// which means the Ctrl-C was typed AT it. Nothing to cancel -- and in
+// particular not a background job, which is not in front of anything.
+static int sched_reading_console(struct task *t) {
+    return t && t->state == TS_BLOCKED && t->block_vn
+        && t->block_vn->type == VN_CONSOLE;
 }
 
 // Kernel tasks are spared (killing init or boot ends everything). The
@@ -365,15 +375,20 @@ static int sched_at_prompt() {
 static void sched_interrupt() {
     struct task *t;
 
-    // With no foreground job, fall back to the running task -- but
-    // only when nobody is at a prompt. That fallback is there for a
-    // user program running with no shell above it; without the guard
-    // it would let a Ctrl-C typed at an idle prompt kill whatever
-    // background job happened to be running.
     t = sched_foreground();
-    if (!t && !sched_at_prompt()) t = sched_cur;
+    if (sched_reading_console(t)) t = 0;
+    // No foreground job: fall back to the running task, which covers a
+    // program with nothing above it at all.
+    if (!t) t = sched_cur;
     if (!t || t->privs != PRIV_USER) {
         kputs("\nc4ix: interrupt (nothing running to cancel)\n");
+        return;
+    }
+    // A C4KE program that installed a SIGINT handler gets to shut
+    // itself down; that is the whole point of installing one.
+    if (ck_has_handler(t, CK_SIGINT)) {
+        kprintf("\nc4ix: interrupt: SIGINT to task %d '%s'\n", t->id, t->name);
+        ck_kill(t->id, CK_SIGINT);
         return;
     }
     kprintf("\nc4ix: interrupt: cancelling task %d '%s'\n", t->id, t->name);

@@ -293,6 +293,145 @@ static void ck_export_free(int *kti) {
     free(kti);
 }
 
+// ---- signals ----
+//
+// Per task, lazily: CK_SIG_MAX triples of {pending, blocked, handler},
+// the same shape C4KE uses so the semantics are directly comparable.
+// Allocated on the first signal() call, which for a u0 program is
+// eight calls into its constructor.
+//
+// Delivery is the interesting half, and it happens in
+// ck_signal_deliver below.
+
+static int ck_tlev_word;   // a TLEV instruction, addressed as data
+
+static int *ck_sigtab(struct task *t, int make) {
+    int *s;
+    if (t->ck_sigh) return (int *)t->ck_sigh;
+    if (!make) return 0;
+    if (!(s = (int *)malloc(CK_SIG_MAX * 3 * 8))) return 0;
+    memset(s, 0, CK_SIG_MAX * 3 * 8);
+    t->ck_sigh = (int)s;
+    return s;
+}
+
+static int ck_signal(struct task *t, int sig, int handler) {
+    int *s;
+    int old;
+    if (!t || sig < 1 || sig >= CK_SIG_MAX) return 0;
+    if (!(s = ck_sigtab(t, 1))) return 0;
+    old = s[sig * 3 + 2];
+    s[sig * 3 + 2] = handler;
+    return old;
+}
+
+int ck_has_handler(struct task *t, int sig) {
+    int *s;
+    if (!t || sig < 1 || sig >= CK_SIG_MAX) return 0;
+    if (!(s = ck_sigtab(t, 0))) return 0;
+    return s[sig * 3 + 2] != 0;
+}
+
+// The default action when nobody installed a handler.
+//
+// IGNORE is the important half and it is not the obvious one: top
+// does kill(parent(), SIGUSR1) unconditionally to say it started, and
+// innerbench -- its parent -- installs no SIGUSR1 handler. A POSIX
+// "terminate" default would kill innerbench the moment top came up.
+// The three that do terminate are the three a person means by them.
+static int ck_default_kills(int sig) {
+    return sig == CK_SIGKILL || sig == CK_SIGTERM || sig == CK_SIGINT;
+}
+
+int ck_kill(int pid, int sig) {
+    struct task *t;
+    int *s;
+
+    if (sig < 1 || sig >= CK_SIG_MAX) return -1;
+    if (!(t = task_get(pid))) return -1;
+    if (t->state == TS_ZOMBIE) return -1;
+
+    s = ck_sigtab(t, 0);
+    if (!s || !s[sig * 3 + 2]) {
+        if (!ck_default_kills(sig)) return 0;
+        t->exitcode = C4IX_EXIT_INTERRUPTED;
+        t->state = TS_ZOMBIE;
+        return 0;
+    }
+
+    ++s[sig * 3];
+    ++t->ck_sigpend;
+    // A signal wakes a parked task -- otherwise a handler installed to
+    // shut a sleeping program down would never get to run, which is
+    // exactly what innerbench's graceful shutdown depends on.
+    if (t->state == TS_SLEEPING || t->state == TS_WAITING
+        || t->state == TS_BLOCKED) t->state = TS_READY;
+    return 0;
+}
+
+// Deliver one pending signal to the task that is about to resume, by
+// building it a trap frame by hand -- the same frame c4m's trap()
+// builds, so the handler returns through an ordinary TLEV and lands
+// exactly where the task was.
+//
+// MODE and INTERVAL are the context the task would have resumed with,
+// computed by the caller. They go INTO the frame, so the handler's
+// return restores them; the caller's own frame slots keep them too,
+// which is what runs the handler itself in the right mode.
+//
+// Two slots are easy to leave out and neither failure is local:
+//
+//   bp+6 mode      -- TLEV loads it into the mode register. C4KE left
+//                     this uninitialised, and the resulting garbage
+//                     made the next PRTF look like a protected-mode
+//                     violation. That was its shutdown segfault.
+//   bp+9 interval  -- C4IX opted into CONF_TRAP_RESTORES_INTERVAL, so
+//                     TLEV restores the preemption interval from here.
+//                     Omit it and the handler's return loads garbage:
+//                     preemption stops, or the cycle interrupt fires
+//                     continuously.
+void ck_signal_deliver(struct task *t, int *pa, int *pbp, int *psp,
+                       int *ppc, int mode, int interval) {
+    int *sp, *s, *h;
+    int sig;
+
+    if (!t || !t->ck_sigpend || t->state == TS_ZOMBIE) return;
+    if (!(s = ck_sigtab(t, 0))) { t->ck_sigpend = 0; return; }
+
+    sig = 1;
+    while (sig < CK_SIG_MAX) {
+        if (s[sig * 3] && s[sig * 3 + 2]) break;
+        ++sig;
+    }
+    if (sig == CK_SIG_MAX) { t->ck_sigpend = 0; return; }
+    --s[sig * 3];
+    --t->ck_sigpend;
+    h = (int *)s[sig * 3 + 2];
+
+    if (!ck_tlev_word) ck_tlev_word = __opcode("TLEV");
+
+    sp = (int *)*psp;
+    sp = sp - 15;              // c4m's TRAP_OFFSET, so the frame has slack
+
+    *--sp = interval;          // bp+9
+    *--sp = C4IX_TRAP_SIGNAL;  // bp+8
+    *--sp = sig;               // bp+7
+    *--sp = mode;              // bp+6
+    *--sp = *pa;               // bp+5
+    *--sp = *pbp;              // bp+4
+    *--sp = *psp;              // bp+3  the ORIGINAL sp, not the offset one
+    *--sp = *ppc;              // bp+2
+    *--sp = (int)&ck_tlev_word; // bp+1  where the handler's LEV lands
+    --sp;                      // bp+0
+    *pbp = (int)sp;
+    *sp = (int)sp;             // self-referential, exactly as c4m does
+
+    // Room for the handler's own locals, read from the ENT it skips.
+    sp = sp - h[1];
+    *psp = (int)sp;
+    *ppc = (int)(h + 2);
+}
+
 void ck_task_free(struct task *t) {
     if (t->ck_sigh) { free((int *)t->ck_sigh); t->ck_sigh = 0; }
     if (t->argv_vec) { free((int *)t->argv_vec); t->argv_vec = 0; }
@@ -381,9 +520,10 @@ int ck_dispatch(int num, int *args) {
         return 0;
     }
 
+    if (num == CK_USER_SIGNAL)         return ck_signal(t, args[0], args[1]);
+    if (num == CK_USER_KILL)           return ck_kill(args[0], args[1]);
+
     // ---- not yet implemented; each is a later stage ----
-    if (num == CK_USER_SIGNAL)         return 0;   // stage 5
-    if (num == CK_USER_KILL)           return -1;  // stage 5
     if (num == CK_AWAIT_PID)           return -1;  // stage 6
     if (num == CK_USER_START_C4R)      return 0;   // stage 6
     if (num == CK_KERN_TASKS_EXPORT)   return ck_export();

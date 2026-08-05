@@ -218,6 +218,30 @@ static void sh_jobs() {
     }
 }
 
+// kill [-SIG] %JOB|PID ...
+//
+// A job number is what the person has in front of them, since `jobs`
+// printed it, so "%1" is the natural handle; a bare number is a pid,
+// for anything this shell did not start. The default is 15 (TERM),
+// which for a program with no handler simply cancels it.
+static void sh_kill(char **argv, int argc) {
+    int i, sig, pid, n;
+
+    sig = 15;
+    i = 1;
+    if (i < argc && argv[i][0] == '-') { sig = sh_atoi(argv[i] + 1); ++i; }
+    if (i >= argc) { uprintf("kill: usage: kill [-SIG] %%JOB | PID\n"); return; }
+    while (i < argc) {
+        if (argv[i][0] == '%') {
+            n = sh_atoi(argv[i] + 1);
+            if (n < 1 || n > njobs) { uprintf("kill: no such job: %s\n", argv[i]); ++i; continue; }
+            pid = job_pid[n - 1];
+        } else pid = sh_atoi(argv[i]);
+        if (ukill(pid, sig) < 0) uprintf("kill: no such task: %s\n", argv[i]);
+        ++i;
+    }
+}
+
 static void sh_waitall() {
     int i, st;
     i = 0;
@@ -243,9 +267,15 @@ static int sh_builtin(char **argv, int argc) {
     }
     if (!ustrcmp(argv[0], "jobs")) { sh_jobs(); return 1; }
     if (!ustrcmp(argv[0], "wait")) { sh_waitall(); return 1; }
+    // `jobs` could show you a background task and nothing could stop
+    // it. A job number is the useful handle -- "%1" the way a real
+    // shell spells it -- with a raw pid accepted for anything the
+    // shell did not start.
+    if (!ustrcmp(argv[0], "kill")) { sh_kill(argv, argc); return 1; }
     if (!ustrcmp(argv[0], "help")) {
         uprintf("c4ix-sh: cmd [args] [< in] [> out] [| cmd ...] [&]\n");
-        uprintf("builtins: exit jobs wait cd pwd help\n");
+        uprintf("builtins: exit jobs wait kill cd pwd help\n");
+        uprintf("  kill [-SIG] %%JOB | PID   default signal 15 (TERM)\n");
         return 1;
     }
     if (!ustrcmp(argv[0], "cd")) {

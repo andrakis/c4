@@ -1,0 +1,25 @@
+C4IX booting, N cycles spent loading the kernel image
+c4ix: host c4m, info Nxf2
+c4ix: protected mode on for user tasks, preemption on
+c4ix: task N 'init' created, scheduling after N cycles
+c4top: use ctrl+c to exit
+
+Tasks: N total, N running, N waiting, N zombie, N free
+Usage: N% (N% kernel cycles, Nms idle time, N.N M cycles/s, interval time unknown (first run))
+ PID PARENT CMD STATE PRIV NI T% C% time/INTER cycles/INTER traps/INTER time/TOTAL cycles/TOTAL traps/TOTAL STACK MEM ( N total )
+ N N boot R K N N% N% N N.N k N N N.N k N N N
+ N N init W K N N% N% N N.N k N N N.N k N N N
+ N N top.c4r R U N N% N% N N.N M N N N.N M N N N
+----------
+
+Tasks: N total, N running, N waiting, N zombie, N free
+Usage: N% (N% kernel cycles, Nms idle time, N.N k cycles/s, interval time Nms)
+ PID PARENT CMD STATE PRIV NI T% C% time/INTER cycles/INTER traps/INTER time/TOTAL cycles/TOTAL traps/TOTAL STACK MEM ( N total )
+ N N boot R K N N% N% N N.N k N N N.N k N N N
+ N N init W K N N% N% N N N N N.N k N N N
+ N N top.c4r R U N N% N% N N.N k N N N.N M N N N
+----------
+sl4b: cache 'task' objsize N perslab N slabs N allocs N frees N live N
+sl4b: cache 'file' objsize N perslab N slabs N allocs N frees N live N
+sl4b: cache 'vnode' objsize N perslab N slabs N allocs N frees N live N
+c4ix: shutdown complete, N tasks remain

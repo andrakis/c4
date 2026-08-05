@@ -433,6 +433,46 @@ test-c4ix-fmt: c4m c4ix.c4r c4ix-fmt.c4r
 test-c4ix-c4: c4 c4m c4ix.c4r $(C4IX_PROGS)
 	$(C4) $(C4M).c load-c4r.c -- c4ix.c4r $(C4IX_ARGS) | sed '/^exit([0-9-]*) cycle = /d' | $(C4IX_MASK) | cmp - $(C4IX_SRC)/tests/x5-c4m.txt
 	@echo "test-c4ix-c4: OK"
+# The C4KE compatibility layer: C4KE's own binaries, UNMODIFIED,
+# running as C4IX tasks. These are the same files C4KE's suite runs --
+# if one ever needs a rebuild to pass, the compatibility layer is
+# wrong, and that is the strongest check available here.
+#
+# Numbers are masked because they are measurements: cycle counts,
+# timings and percentages all move between runs. A digit run survives
+# only when a letter precedes it, so c4ix, c4m, sl4b and ps.c4r stay
+# readable while "27.598 M" becomes "N.N M". Whitespace is squeezed
+# too, because ps sizes its columns from the data it is given; column
+# layout is pinned exactly by test-c4ix-fmt instead, which is the test
+# that exists to catch formatter regressions.
+#
+# spin and benchtop never exit by design, so they are smoke-tested
+# under a timeout rather than pinned.
+C4KE_MASK := sed -E -e 's/^[0-9]+/N/' -e 's/([^A-Za-z])[0-9]+/\1N/g' \
+                    -e 's/[[:space:]]+/ /g' -e 's/ $$//'
+
+test-c4ix-c4ke: c4m c4ix.c4r pre
+	$(C4M) load-c4r.c -- c4ix.c4r ps.c4r | $(C4KE_MASK) | cmp - $(C4IX_SRC)/tests/ck-ps.txt
+	$(C4M) load-c4r.c -- c4ix.c4r top.c4r -b -n 2 | $(C4KE_MASK) | cmp - $(C4IX_SRC)/tests/ck-top.txt
+	$(C4M) load-c4r.c -- c4ix.c4r bench.c4r -q | $(C4KE_MASK) | cmp - $(C4IX_SRC)/tests/ck-bench.txt
+	$(C4M) load-c4r.c -- c4ix.c4r innerbench.c4r -B -n 2 -q -T | $(C4KE_MASK) | cmp - $(C4IX_SRC)/tests/ck-innerbench.txt
+	@# Neither of these ever exits on its own.
+	timeout 20 stdbuf -o0 $(C4M) load-c4r.c -- c4ix.c4r spin.c4r 2>&1 | grep -q "running forever"
+	timeout 90 stdbuf -o0 $(C4M) load-c4r.c -- c4ix.c4r benchtop.c4r 2>&1 | grep -q "Benchmark complete"
+	@# What the mask deliberately destroys: the reaper keeps the zombie
+	@# column at zero even though innerbench never waits on its children.
+	$(C4M) load-c4r.c -- c4ix.c4r innerbench.c4r -B -n 3 -q | grep -q "0 zombie"
+	@echo "test-c4ix-c4ke: OK"
+
+# innerbench's DEFAULT mode: each "benchmark" is a whole C4KE compiled
+# from source inside a nested c4m, running as a C4IX task. It works --
+# a nested kernel's ITH is absorbed by the nested interpreter and never
+# reaches the host -- but it takes minutes, so it stays out of the
+# pinned suite for the same reason test-c4ix-c4 does.
+test-c4ix-c4ke-nested: c4m c4ix.c4r c4m.c4r pre
+	$(C4M) load-c4r.c -- c4ix.c4r innerbench.c4r -n 1 -T | grep -q "benchmark processes finished"
+	@echo "test-c4ix-c4ke-nested: OK"
+
 # X5: the OS benchmark, and the one number that compares directly
 # with C4KE -- cycles from VM start to userland running, same VM and
 # same counter on both sides.
@@ -714,7 +754,7 @@ PHONY += run run-vg test test-massive
 PHONY += run-alt run-alt-vg test-alt test-massive-alt
 PHONY += run-c4 run-c4-vg test-c4 test-massive-c4
 PHONY += run-c4-alt run-c4-alt-vg
-PHONY += test-c4ix test-c4ix-fmt test-c4ix-c4 run-c4ix run-c4ix-c4 demo-c4ix demo-c4ix-c4 bench-c4ix
+PHONY += test-c4ix test-c4ix-fmt test-c4ix-c4ke test-c4ix-c4ke-nested test-c4ix-c4 run-c4ix run-c4ix-c4 demo-c4ix demo-c4ix-c4 bench-c4ix
 PHONY += pkg c4rs or1k
 PHONY += pi
 # Don't bother with the dump or link utility for now

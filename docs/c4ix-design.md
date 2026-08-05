@@ -129,6 +129,9 @@ loading or assigning a whole struct is an error.
   `&`, builtins enough to demo `cat file | wc > out`.
 - **X5 — polish.** DONE, see 6 and 7. Suite and benchmark ported;
   boot-cycle and workload measurements against C4KE.
+- **X6 — C4KE compatibility.** DONE, see 6.2. C4KE's own binaries run
+  unmodified as C4IX tasks: its syscall ABI is a second door into the
+  same trap gate, and answering it costs one module.
 
 ### 4.3 What gets reused
 
@@ -436,13 +439,38 @@ loading or assigning a whole struct is an error.
       way, which is exactly why the waiter must be userland. A '&'
       job has nobody waiting on it and is left alone, and a Ctrl-C
       typed while any shell sits at a prompt cancels nothing at all.)
+- [x] X6 C4KE compatibility (2026-08-05): C4KE's binaries -- ps, top,
+      spin, bench, benchtop, innerbench -- run UNMODIFIED as C4IX
+      tasks, including innerbench's nested-kernel mode. See 6.2 for
+      the design, the measurements and the parts that were not
+      obvious. Pinned by `make test-c4ix-c4ke`.
+      Two changes to C4IX proper came out of it and are worth having
+      on their own. printf became real in both implementations, which
+      is what `make test-c4ix-fmt` now pins by driving one format
+      string through the userland formatter AND the trapped-PRTF path
+      and comparing. And the idle loop reaps: a zombie used to be
+      released only by whoever waited on it, so a parent that never
+      waits -- innerbench spawns several benches and can only wait on
+      one -- left them on the list for the whole run. Only children of
+      USER tasks are swept, and that is not caution: kernel code waits
+      by POINTER and holds those pointers across waits, so sweeping
+      init's second child while it waited on its first handed
+      task_wait a dangling pointer. Userland only names a task by id,
+      and a reaped id is answered from a 32-entry table of recent exit
+      statuses.
+      The shell gained `kill [-SIG] %JOB|PID` at the same time, since
+      `jobs` could list a background task and nothing could stop it.
 ## 6.1 Running it
 
     make run-c4ix        an interactive shell on c4m
     make run-c4ix-c4     the same through plain c4 -> c4m
     make demo-c4ix       the guided tour: every milestone in order
     make test-c4ix       the pinned suite
+    make test-c4ix-fmt   both printf implementations, against each other
+    make test-c4ix-c4ke  C4KE's own binaries, unmodified, as C4IX tasks
     make bench-c4ix      boot cost and the OS microbenchmarks
+
+    make test-c4ix-c4ke-nested   a whole C4KE inside a nested c4m (slow)
 
 ### The kernel's command line
 
@@ -482,7 +510,96 @@ In the shell, anything in the tree named `c4ix-NAME.c4r` is a
 command: echo, cat, wc, ls, mkdir, ps, top, bench, spin, hello. The
 prompt carries the working directory, `help` lists the builtins, and
 `exit` or end-of-file leaves, which shuts the kernel down. Ctrl-C
-cancels the foreground job and does nothing at an idle prompt.
+cancels the foreground job and does nothing at an idle prompt;
+`jobs` lists background tasks and `kill [-SIG] %JOB|PID` ends one.
+
+## 6.2 The C4KE compatibility layer (2026-08-05)
+
+C4KE's own binaries run as C4IX tasks, **unmodified** -- the same
+files C4KE's suite runs. If one ever needs a rebuild to pass, the
+layer is wrong, and that is the strongest check available.
+
+    ./c4m load-c4r.c -- c4ix.c4r ps.c4r
+    ./c4m load-c4r.c -- c4ix.c4r top.c4r -b -n 2
+    ./c4m load-c4r.c -- c4ix.c4r innerbench.c4r -n 2
+
+Working: `ps`, `top`, `spin`, `bench`, `benchtop`, `innerbench` --
+including innerbench's default mode, where each "benchmark" is a whole
+C4KE compiled from source inside a nested c4m.
+
+### How it attaches
+
+C4KE reaches its kernel through custom opcodes >= 128, which no VM
+implements, so they arrive as `TRAP_ILLOP` -- the same door C4IX's own
+`SYS_*` gateway uses, with the same argument shape. The hook is one
+`else if` in `sched_trap`'s ILLOP gate, and one module, `c4ke.c`.
+
+Only `OP_REQUEST_SYMBOL` (128) is a fixed number. u0 asks for every
+other service **by name** at startup, so C4IX assigns its own
+numbering and the binaries never need to know. Lookup uses `memcmp`
+-- the `MCMP` opcode, one instruction -- over `len + 1` bytes, so the
+match is exact rather than C4KE's prefix compare, with a length test
+in front that rejects nearly every candidate in two instructions. A
+hand-rolled comparator would be ~8 instructions per character, and u0
+issues 27 lookups before `main`.
+
+### Why it is slower, and why that is the right trade
+
+`bench` scores about 72% of its C4KE figure, the nested kernel about
+65%, with wall time within 6%. Under C4KE every `printf` goes straight
+to the host; under C4IX each one traps and the kernel formats it onto
+whatever fd the parent supplied. That is the tax for having pipes,
+redirection and a VFS at all -- C4KE is faster the way DOS is faster,
+by not offering the feature.
+
+### The parts that were not obvious
+
+- **Constructors must run in the task**, not at load time. C4IX ran
+  them in the SPAWNING task's context, and u0's constructor caches its
+  pid and its parent's and installs eight signal handlers -- all of
+  which would have been wired to the wrong task. They now run from
+  `task_shim`, which also made destructors possible for the first
+  time, closing an X1 debt.
+- **printf had to become real.** Both implementations knew five
+  conversions; `ps` uses `%3ld`, `%4ld.%03d`, `%2d`, `%3d%%` and
+  `%*s`. The last is the one that proves it: an unrecognised spec that
+  does not *consume* its width argument shifts every conversion after
+  it, so the output would be wrong rather than merely misaligned.
+- **Signal delivery builds a trap frame by hand**, and two slots have
+  no local symptom if omitted: `bp+6` mode (the garbage C4KE left
+  there was its shutdown segfault) and `bp+9` interval (C4IX opted
+  into `CONF_TRAP_RESTORES_INTERVAL`, so TLEV restores preemption from
+  it).
+- **The default action for an unhandled signal is IGNORE**, except
+  KILL, TERM and INT. `top` signals its parent with SIGUSR1
+  unconditionally and `innerbench` installs no handler for it, so a
+  POSIX "terminate" default would kill innerbench the moment top
+  started.
+- **argv must be copied.** `benchtop` rewrites its own argv array
+  between spawns and `innerbench` frees its argv while the spawned
+  tasks still run.
+- **Ctrl-C derives the foreground job** from the wait chain rather
+  than being told. C4KE has programs declare themselves with
+  `c4ke_set_focus`; the compat layer accepts that call and ignores it.
+- **The image comes from `argv[0]`**, not from the `name` argument,
+  which is a label -- innerbench passes the title "inner-kernel" with
+  `argv[0] = "c4m"`.
+
+### What a nested kernel does NOT do
+
+It does not steal the host's trap handler. `c4m.c` never *calls*
+`install_trap_handler`; its `ITH` case is a store to the interpreter's
+own variable, so a nested C4KE's `ITH` is absorbed by the nested c4m
+and never reaches the host. `c4m.c4r` emits no `ITH` and no `C4CF` at
+all. The hazard is narrower: loading `c4ke.c4r` **directly** as a C4IX
+task, with no c4m in between, would replace the handler -- the
+documented "a child kernel disables its parent". Nothing in the target
+set does that.
+
+Running `c4ke.c4r` directly would need per-task trap handlers, which
+C4IX could actually provide (unlike C4KE, it has per-task state: a
+trapped `ITH` could go in the task struct and `sched_trap` could
+dispatch faults to it). Not done, and not needed.
 
 ## 7. Measured results (2026-08-03)
 

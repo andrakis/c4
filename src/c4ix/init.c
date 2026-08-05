@@ -111,6 +111,13 @@ static void io_redirect(char *prog) {
         kputs("init: cannot create /ram/out\n");
         return;
     }
+    // Announce this BEFORE the redirection, not after. From here until
+    // the child exits, everything it prints goes into the file -- so
+    // if the caller's program list is short enough that something
+    // interactive lands in this slot, the terminal falls silent with
+    // no explanation and looks hung. It is not hung; the child is
+    // waiting to be typed at, and its prompt went into /ram/out.
+    kprintf("init: running '%s' with fd 1 redirected into /ram/out\n", prog);
     saved = sys_dup(FD_STDOUT);
     sys_dup2(fd, FD_STDOUT);
     t = task_spawn(prog, 1, 0);

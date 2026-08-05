@@ -25,6 +25,7 @@ uhello: exiting with 7
 init: 'c4ix-uhello.c4r' exited 7 after 9 syscalls
 init: --- X3: files, redirection, pipes ---
 init: read 22 bytes back: written to a ram file
+init: running 'c4ix-hello.c4r' with fd 1 redirected into /ram/out
 init: 'c4ix-hello.c4r' ran with fd 1 redirected; /ram/out holds 58 bytes:
 hello: running as a c4ix task
 hello: argc 1 doubled six 6

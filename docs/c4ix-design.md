@@ -400,6 +400,42 @@ loading or assigning a whole struct is an error.
       cost, outside the design envelope" was wrong; it was this bug.
       The `spin 1`-from-the-shell hang and the `ps -s` hang are both
       this, and both pass now.)
+- [x] Console input without stopping the machine (2026-08-05):
+      a read on fd 0 blocks the HOST, and the host is the whole
+      virtual machine -- every task stopped while one of them waited
+      for a keystroke. con.c now opens a second descriptor on the
+      same terminal with O_NONBLOCK (c4sh's technique, and it works
+      on both hosts: on a delayed pipe, native c4m spun two million
+      times without blocking and the c4-hosted chain a quarter
+      million). vfs_readable answers for the console the same way it
+      answers for a pipe, so a task waiting for input parks in
+      TS_BLOCKED and rides the existing restartable-syscall path;
+      nothing new was needed in sys.c.
+      Two things fall out of it, one good and one that had to be
+      paid for. The good one: Ctrl-C works at an idle prompt, since
+      the VM is no longer parked inside a host read. The cost: the
+      idle loop now really is a loop, so it backs off with an
+      escalating nap (100us doubling to 20ms) and the machine sits at
+      0% CPU at a prompt; and polling costs a host read() every time
+      the scheduler asks, once per blocked reader per scheduling
+      decision, so con.c rate-limits the actual read to one per
+      100k virtual cycles. Virtual cycles stop during the nap, which
+      is why the idle loop calls con_wake() to reopen the gate.
+      Two signal bugs surfaced with it, both real and both older
+      than the change. c4m delivered a pending signal regardless of
+      the interrupt mask, so a Ctrl-C landing while the kernel was
+      inside its own trap handler hit the handler's re-entry guard
+      and was DROPPED; signals are now deferred while masked (for
+      kernels that opted into trap_restores_interval, since only they
+      have told c4m that a zero interval means masked). And Ctrl-C
+      cancelled "the current task", which stopped being the right
+      answer once the idle loop ran alongside user work. C4IX has no
+      process groups but does not need them: a shell waits on the job
+      it is running, so the foreground task is the user task that
+      another USER task waits on -- init waits on the shell the same
+      way, which is exactly why the waiter must be userland. A '&'
+      job has nobody waiting on it and is left alone, and a Ctrl-C
+      typed while any shell sits at a prompt cancels nothing at all.)
 ## 6.1 Running it
 
     make run-c4ix        an interactive shell on c4m

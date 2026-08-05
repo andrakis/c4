@@ -23,6 +23,10 @@
 
 enum { C4IX_STACK_WORDS = 8192 };   // 64KB per task
 
+// Idle backoff, in microseconds: how long the boot task sleeps when
+// every other task is parked waiting on the outside world.
+enum { IDLE_NAP_MIN = 100, IDLE_NAP_MAX = 20000 };
+
 struct task *sched_cur;
 static struct task *boot_task;
 static int sched_on_c4m;
@@ -269,23 +273,69 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
 // TRAP_SIGNAL at the next instruction boundary with whatever handler
 // was registered -- so it arrives here like any other trap.
 //
-// What should die is the program that is running, not the machine.
-// Kernel tasks are spared (killing init or boot ends everything),
-// and so is a task nobody is waiting on -- at an idle prompt the
-// running task is the boot idle loop, and there is nothing to
-// interrupt. The victim becomes a zombie with a distinguishable
-// status, so whoever waits on it learns it was interrupted.
+// What should die is the program that is running, not the machine,
+// and not whichever task the signal happened to land on. Since the
+// console stopped blocking the host, the idle loop runs alongside
+// user work, so "the current task" is as likely to be the kernel's
+// idle loop as the program the person meant to stop.
 //
-// One honest limitation: while the shell sits at the prompt the VM
-// is inside the host's blocking read, so a signal is not seen until
-// a line arrives. Interrupting a RUNNING program, which is the case
-// that matters, works.
+// C4IX has no process groups, but it does not need them: a shell
+// WAITS on the job it is running, so the foreground task is the user
+// task that another USER task is waiting on. The waiter has to be
+// userland -- init waits on the shell exactly the same way, and
+// Ctrl-C must not kill the shell. A background job started with '&'
+// has nobody waiting on it, so it is correctly left alone, and the
+// innermost job wins when shells nest, because ids only grow.
+static struct task *sched_foreground() {
+    struct task *t, *w, *best;
+
+    best = 0;
+    t = task_head;
+    while (t) {
+        if (t->privs == PRIV_USER && t->state != TS_ZOMBIE) {
+            w = task_head;
+            while (w) {
+                if (w->privs == PRIV_USER && w->state == TS_WAITING
+                    && w->wait_for == t->id) {
+                    if (!best || t->id > best->id) best = t;
+                    w = 0;
+                } else w = w->next;
+            }
+        }
+        t = t->next;
+    }
+    return best;
+}
+
+// Is anyone sitting at a prompt? A user task parked on console input
+// is a shell waiting to be typed at, which means the Ctrl-C was typed
+// AT that prompt -- so there is no foreground job and nothing should
+// be cancelled, background jobs included.
+static int sched_at_prompt() {
+    struct task *t;
+    t = task_head;
+    while (t) {
+        if (t->privs == PRIV_USER && t->state == TS_BLOCKED
+            && t->block_vn && t->block_vn->type == VN_CONSOLE) return 1;
+        t = t->next;
+    }
+    return 0;
+}
+
+// Kernel tasks are spared (killing init or boot ends everything). The
+// victim becomes a zombie with a distinguishable status, so whoever
+// waits on it learns it was interrupted.
 static void sched_interrupt() {
     struct task *t;
 
-    t = sched_cur;
-    if (!t) return;
-    if (t->privs != PRIV_USER) {
+    // With no foreground job, fall back to the running task -- but
+    // only when nobody is at a prompt. That fallback is there for a
+    // user program running with no shell above it; without the guard
+    // it would let a Ctrl-C typed at an idle prompt kill whatever
+    // background job happened to be running.
+    t = sched_foreground();
+    if (!t && !sched_at_prompt()) t = sched_cur;
+    if (!t || t->privs != PRIV_USER) {
         kputs("\nc4ix: interrupt (nothing running to cancel)\n");
         return;
     }
@@ -433,15 +483,22 @@ void sched_init(int interval) {
     sched_cur = boot_task;
 
     if (sched_on_c4m) {
-        // Ask c4m to treat the interrupt mask as part of the trapped
-        // context, restored by TLEV. That is what lets sched_trap set
-        // preemption for the incoming task through its `interval`
-        // parameter instead of arming the machine mid-switch.
-        __c4_configure(C4IX_CONF_TRAP_RESTORES_INTERVAL, 1);
         install_trap_handler((int)&sched_trap);
         // Ctrl-C arrives as a trap through the same handler.
         __c4_signal(__c4_sigint(), (int)&sched_trap);
         if (interval) {
+            // Ask c4m to treat the interrupt mask as part of the
+            // trapped context, restored by TLEV. That is what lets
+            // sched_trap set preemption for the incoming task through
+            // its `interval` parameter instead of arming the machine
+            // mid-switch -- and it also tells c4m that a zero interval
+            // means "masked", so signals are deferred to the next
+            // unmasked instruction rather than delivered into a
+            // handler that cannot accept them.
+            //
+            // Only meaningful with preemption: without it the interval
+            // is always zero and nothing would ever be delivered.
+            __c4_configure(C4IX_CONF_TRAP_RESTORES_INTERVAL, 1);
             sched_interval = interval;
             __c4_configure(C4IX_CONF_HANDLER, (int)&sched_trap);
             __c4_configure(C4IX_CONF_INTERVAL, interval);
@@ -465,17 +522,41 @@ void sched_stop() {
 // nobody waited for.
 void sched_run() {
     struct task *t;
-    int live;
+    int live, ready, nap;
 
+    nap = 0;
     live = 1;
     while (live) {
         live = 0;
+        ready = 0;
         t = task_head;
         while (t) {
-            if (t != sched_cur && t->state != TS_ZOMBIE) live = 1;
+            if (t != sched_cur && t->state != TS_ZOMBIE) {
+                live = 1;
+                if (t->state != TS_BLOCKED && t->state != TS_WAITING) ready = 1;
+            }
             t = t->next;
         }
-        if (live) sched_yield();
+        if (!live) break;
+        // Everything alive is parked on something that has not
+        // arrived -- console input, usually. Nothing can make progress
+        // until the outside world does, and yielding in a tight loop
+        // would burn a core waiting for a keystroke. So back off the
+        // way c4sh does: double the nap up to a ceiling, and drop
+        // straight back to zero the moment there is work again. The
+        // ceiling is well inside human reaction time, so the prompt
+        // still feels immediate.
+        if (ready) nap = 0;
+        else {
+            nap = nap ? nap * 2 : IDLE_NAP_MIN;
+            if (nap > IDLE_NAP_MAX) nap = IDLE_NAP_MAX;
+            __c4_usleep(nap);
+            // The cycle counter stood still while we slept, so the
+            // console's own rate limit has no way to know that real
+            // time passed. Tell it.
+            con_wake();
+        }
+        sched_yield();
     }
     live = 1;
     while (live) {

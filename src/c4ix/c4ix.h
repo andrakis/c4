@@ -177,6 +177,10 @@ char *host_name();
 // All kernel output goes through here; the only opcode used is PUTC,
 // which every host implements. kprintf lines are atomic: the body
 // runs inside sched_lock, so preemption never interleaves them.
+void con_init();
+void con_wake();           // let the next poll reach the host again
+int con_poll();            // 1 if a console read would not block
+int con_read(char *buf, int len);
 int kputc(int c);
 int kputs(char *s);
 int kprintf(char *fmt, ...);

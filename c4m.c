@@ -1490,8 +1490,22 @@ int c4m_main(int argc, char **argv)
 		// Disable cycle interrupt and set unprotected mode
 		cycle_interrupt_interval = 0;
 		mode = MODE_UNPROTECTED;
-	// Check for pending signals from the signal handler
-	} else if (pending_signal) {
+	// Check for pending signals from the signal handler.
+	//
+	// A signal is an asynchronous interrupt like the cycle one, so it
+	// honours the same mask -- but only for kernels that have told us
+	// the interval IS a mask, by opting into trap_restores_interval.
+	// Without that, a masked interval and "this kernel simply never
+	// enabled preemption" are indistinguishable, and deferring would
+	// mean never delivering.
+	//
+	// Deferred, not dropped: pending_signal stays set, so the signal
+	// arrives as soon as the mask lifts. Delivering it regardless is
+	// how Ctrl-C used to vanish -- the trap landed while the kernel
+	// was inside its own handler, the handler's re-entry guard turned
+	// delivery into a no-op, and the signal was gone.
+	} else if (pending_signal
+	           && !(trap_restores_interval && !cycle_interrupt_interval)) {
 		// TODO: sometimes crashes here, as if signal_handlers[pending_signal] points to code that has been
 		//       deallocated.
 		// printf("c4m: trapping pending signal %d\n", pending_signal);

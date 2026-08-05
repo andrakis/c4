@@ -62,6 +62,7 @@ static int vfs_nameeq(char *a, char *b) {
 }
 
 void vfs_init() {
+    con_init();
     vn_cache = sl4b_cache_create("vnode", sizeof(struct vnode), 8);
     file_cache = sl4b_cache_create("file", sizeof(struct file), 16);
     console = (struct vnode *)sl4b_alloc(vn_cache);
@@ -282,7 +283,12 @@ struct vnode *vn_hostfile(int host) {
 // A pipe read blocks when the buffer is drained and a writer is
 // still around; once the last writer closes, the same emptiness
 // means end of file instead.
+//
+// The console answers the same question, which is what lets a task
+// waiting for a keystroke park in TS_BLOCKED like any other blocked
+// reader instead of stopping the machine inside a host read.
 int vfs_readable(struct vnode *vn, int pos) {
+    if (vn->type == VN_CONSOLE) return con_poll();
     if (vn->type != VN_PIPE) return 1;
     if (vn->size > vn->rpos) return 1;
     return vn->writers == 0;
@@ -294,7 +300,7 @@ int vfs_read(struct file *f, char *buf, int len) {
 
     sched_lock();
     vn = f->vn;
-    if (vn->type == VN_CONSOLE) { sched_unlock(); return read(0, buf, len); }
+    if (vn->type == VN_CONSOLE) { sched_unlock(); return con_read(buf, len); }
     if (vn->type == VN_HOSTFILE) { sched_unlock(); return read(vn->host, buf, len); }
 
     if (vn->type == VN_PIPE) {

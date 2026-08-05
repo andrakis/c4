@@ -242,52 +242,163 @@ static void uputb(int c) {
     if (ufmt_n == UFMT_BUF) uflush();
 }
 
-static void uputnum(int v, int base) {
-    char buf[24];
-    char *digits;
-    int i;
-
-    digits = "0123456789abcdef";
-    i = 0;
-    if (v < 0 && base == 10) { uputb('-'); v = -v; }
-    if (v == 0) { buf[i] = '0'; ++i; }
-    while (v) {
-        buf[i] = digits[v - (v / base) * base]; ++i;
-        v = v / base;
-    }
-    while (i) { --i; uputb(buf[i]); }
+static void upadch(int c, int n) {
+    while (n > 0) { uputb(c); --n; }
 }
 
-// %d %x %s %c %% -- the same subset the kernel's kprintf and its
-// PRTF emulation accept, so a program's output looks identical
-// whichever path it takes.
+// Digits of V in BASE, most significant first, into BUF; returns the
+// length. Base 16 is UNSIGNED -- C4 has no unsigned type, so the
+// shift is masked back to 60 bits rather than sign-extending.
+static int udigits(char *buf, int v, int base) {
+    char tmp[72];
+    char *ds;
+    int n, i, mask;
+
+    ds = "0123456789abcdef";
+    mask = (1 << 60) - 1;
+    n = 0;
+    if (!v) { tmp[0] = '0'; n = 1; }
+    while (v) {
+        if (base == 16) { tmp[n] = ds[v & 15]; v = (v >> 4) & mask; }
+        else { tmp[n] = ds[v - (v / base) * base]; v = v / base; }
+        ++n;
+    }
+    i = 0;
+    while (n) { --n; buf[i] = tmp[n]; ++i; }
+    return i;
+}
+
+// Flags '-' and '0' ('+', ' ', '#' accepted and ignored), a width or
+// '*', a precision or '.*', the length modifiers l/ll/h/z (every
+// integer here is one machine word), and d i u x X c s %.
+//
+// This is deliberately the SAME parser as the kernel's sys_vprintf,
+// which services printf for programs that never heard of C4IX. A
+// program's output must not depend on which path it took, so the two
+// are tested against one format string -- keep them in step.
+//
+// An unrecognised conversion prints verbatim and consumes NOTHING,
+// so the remaining arguments stay aligned.
 //
 // va_end must see the va_list exactly where va_start left it (it
 // re-reads the count slot), so the format loop walks a copy.
 // Returns characters written.
 static int uformat(int fd, char *fmt, int *walk) {
+    char num[80];
     char *s;
-    int n, c;
+    int n, c, v, width, prec, left, zero, len, neg, i, base, upper;
 
     ufmt_fd = fd;
     n = 0;
     while (*fmt) {
         c = *fmt; ++fmt;
-        if (c != '%') { uputb(c); ++n; }
-        else if (*fmt == 0) { uputb('%'); ++n; }
-        else {
-            c = *fmt; ++fmt;
-            if (c == 'd')      uputnum(va_arg(walk, int), 10);
-            else if (c == 'x') uputnum(va_arg(walk, int), 16);
-            else if (c == 's') {
-                s = va_arg(walk, char *);
-                if (!s) s = "(null)";
-                while (*s) { uputb(*s); ++s; ++n; }
-            }
-            else if (c == 'c') { uputb(va_arg(walk, int)); ++n; }
-            else if (c == '%') { uputb('%'); ++n; }
-            else { uputb('%'); uputb(c); n = n + 2; }
+        if (c != '%') { uputb(c); ++n; continue; }
+        if (!*fmt) { uputb('%'); ++n; break; }
+
+        left = 0; zero = 0;
+        while (1) {
+            c = *fmt;
+            if (c == '-') { left = 1; ++fmt; }
+            else if (c == '0') { zero = 1; ++fmt; }
+            else if (c == '+' || c == ' ' || c == '#') { ++fmt; }
+            else break;
         }
+
+        width = 0;
+        if (*fmt == '*') {
+            ++fmt;
+            width = va_arg(walk, int);
+            if (width < 0) { left = 1; width = -width; }
+        } else {
+            while (*fmt >= '0' && *fmt <= '9') {
+                width = width * 10 + (*fmt - '0'); ++fmt;
+            }
+        }
+
+        prec = -1;
+        if (*fmt == '.') {
+            ++fmt; prec = 0;
+            if (*fmt == '*') {
+                ++fmt;
+                prec = va_arg(walk, int);
+                if (prec < 0) prec = -1;
+            } else {
+                while (*fmt >= '0' && *fmt <= '9') {
+                    prec = prec * 10 + (*fmt - '0'); ++fmt;
+                }
+            }
+        }
+
+        while (*fmt == 'l' || *fmt == 'h' || *fmt == 'z') ++fmt;
+
+        c = *fmt;
+        if (!c) { uputb('%'); ++n; break; }
+        ++fmt;
+
+        if (c == '%') {
+            if (!left) { upadch(' ', width - 1); n = n + width - 1; }
+            uputb('%'); ++n;
+            if (left) { upadch(' ', width - 1); n = n + width - 1; }
+            continue;
+        }
+
+        if (c != 'd' && c != 'i' && c != 'u' && c != 'x' && c != 'X'
+            && c != 'c' && c != 's') {
+            uputb('%'); uputb(c); n = n + 2;
+            continue;
+        }
+
+        if (c == 'c') {
+            v = va_arg(walk, int);
+            if (!left) { upadch(' ', width - 1); if (width > 1) n = n + width - 1; }
+            uputb(v); ++n;
+            if (left) { upadch(' ', width - 1); if (width > 1) n = n + width - 1; }
+            continue;
+        }
+
+        if (c == 's') {
+            s = va_arg(walk, char *);
+            if (!s) s = "(null)";
+            len = 0;
+            while (s[len] && (prec < 0 || len < prec)) ++len;
+            if (!left) { upadch(' ', width - len); if (width > len) n = n + width - len; }
+            i = 0;
+            while (i < len) { uputb(s[i]); ++i; ++n; }
+            if (left) { upadch(' ', width - len); if (width > len) n = n + width - len; }
+            continue;
+        }
+
+        v = va_arg(walk, int);
+        upper = (c == 'X');
+        base = (c == 'x' || c == 'X') ? 16 : 10;
+        neg = 0;
+        if (base == 10 && v < 0) { neg = 1; v = -v; }
+        len = udigits(num, v, base);
+        if (upper) {
+            i = 0;
+            while (i < len) {
+                if (num[i] >= 'a' && num[i] <= 'f') num[i] = num[i] - 32;
+                ++i;
+            }
+        }
+        // an explicit precision is a minimum digit count and overrides
+        // zero padding, as in C
+        if (prec >= 0) {
+            zero = 0;
+            while (len < prec) {
+                i = len;
+                while (i) { num[i] = num[i - 1]; --i; }
+                num[0] = '0';
+                ++len;
+            }
+        }
+        i = len + neg;
+        if (!left && !zero) { upadch(' ', width - i); if (width > i) n = n + width - i; }
+        if (neg) { uputb('-'); ++n; }
+        if (!left && zero) { upadch('0', width - i); if (width > i) n = n + width - i; }
+        i = 0;
+        while (i < len) { uputb(num[i]); ++i; ++n; }
+        if (left) { upadch(' ', width - len - neg); if (width > len + neg) n = n + width - len - neg; }
     }
     uflush();
     return n;

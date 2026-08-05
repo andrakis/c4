@@ -387,7 +387,7 @@ c4ix-%.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libc4ix.c4l $(C4IX_SRC)/user/%.c
 C4IX_PROGS := c4ix-hello.c4r c4ix-uhello.c4r c4ix-echo.c4r c4ix-wc.c4r \
               c4ix-cat.c4r c4ix-sh.c4r c4ix-ps.c4r c4ix-bench.c4r \
               c4ix-cycles.c4r c4ix-ls.c4r c4ix-mkdir.c4r c4ix-top.c4r \
-              c4ix-spin.c4r
+              c4ix-spin.c4r c4ix-fmt.c4r
 # The demonstrations are opt-in (--demo) and take their six images
 # positionally; `c4ix.c4r --help` documents the roles. With no
 # arguments at all the kernel boots to a shell, which is what
@@ -408,6 +408,20 @@ C4IX_MASK := sed -E 's/[0-9]+ cycles/N cycles/g'
 test-c4ix: c4m c4ix.c4r $(C4IX_PROGS)
 	$(C4M) load-c4r.c -- c4ix.c4r $(C4IX_ARGS) | $(C4IX_MASK) | cmp - $(C4IX_SRC)/tests/x5-c4m.txt
 	@echo "test-c4ix: OK"
+# There are two printf implementations a C4IX program can reach --
+# libc4ix formats in userland, while a raw printf traps and the KERNEL
+# formats it -- and output must not depend on which one was used.
+# c4ix-fmt prints every case through both; this extracts the two sets
+# and compares them, so drift is a diff rather than a surprise. The
+# pin then fixes what the shared answer actually is.
+test-c4ix-fmt: c4m c4ix.c4r c4ix-fmt.c4r
+	@$(C4M) load-c4r.c -- c4ix.c4r c4ix-fmt.c4r > .c4ix_fmt.out
+	@sed -n 's/^u|//p' .c4ix_fmt.out > .c4ix_fmt.u
+	@sed -n 's/^p|//p' .c4ix_fmt.out > .c4ix_fmt.p
+	cmp .c4ix_fmt.u .c4ix_fmt.p
+	cmp .c4ix_fmt.u $(C4IX_SRC)/tests/fmt.txt
+	@rm -f .c4ix_fmt.out .c4ix_fmt.u .c4ix_fmt.p
+	@echo "test-c4ix-fmt: OK"
 # The same thing with c4m itself interpreted by plain c4. Correct but
 # very slow (nested interpretation), so it is not part of test-c4ix.
 test-c4ix-c4: c4 c4m c4ix.c4r $(C4IX_PROGS)
@@ -694,7 +708,7 @@ PHONY += run run-vg test test-massive
 PHONY += run-alt run-alt-vg test-alt test-massive-alt
 PHONY += run-c4 run-c4-vg test-c4 test-massive-c4
 PHONY += run-c4-alt run-c4-alt-vg
-PHONY += test-c4ix test-c4ix-c4 run-c4ix run-c4ix-c4 demo-c4ix demo-c4ix-c4 bench-c4ix
+PHONY += test-c4ix test-c4ix-fmt test-c4ix-c4 run-c4ix run-c4ix-c4 demo-c4ix demo-c4ix-c4 bench-c4ix
 PHONY += pkg c4rs or1k
 PHONY += pi
 # Don't bother with the dump or link utility for now

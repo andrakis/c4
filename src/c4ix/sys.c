@@ -255,58 +255,188 @@ int sys_dispatch(int num, int *args) {
 // that ADJ and returnpc[1] is n. Arguments sit above sp in the same
 // order c4m would have read them.
 //
-// The supported conversions are kprintf's (%d %x %s %c %%); anything
-// else prints verbatim rather than silently dropping its argument.
+// The conversion set has to be REAL, not kprintf's five. c4m's PRTF
+// hands the format string to the host's printf, so a program written
+// for c4m expects everything the host supports; the moment such a
+// program runs behind protected mode, this function is what it gets
+// instead. C4KE's ps alone uses %3ld, %4ld.%03d, %2d, %3d%% and %*s,
+// and %*s is the one that proves the point -- an unrecognised spec
+// that does not CONSUME its width argument shifts every conversion
+// after it, so the output is not merely misaligned, it is wrong.
+//
+// Supported: flags '-' and '0' (and '+', ' ', '#' accepted and
+// ignored), a width or '*', a precision or '.*', the length
+// modifiers l/ll/h/z (every integer here is one word), and the
+// conversions d i u x X c s %. libc4ix's uformat is the same parser
+// for userland -- keep the two in step.
+//
 // Output is buffered into one write: through the fd layer this may
 // be a pipe or a RAM file, and byte-at-a-time would be absurd.
-static int sys_vprintf(int fd, char *fmt, int *argv, int argc) {
-    char buf[512];
-    char *digits, *s;
-    int n, c, i, v, base, used, dstart;
 
-    digits = "0123456789abcdef";
+enum { PF_BUF = 512, PF_HIGH = 480 };
+
+static char pf_buf[PF_BUF];
+static int  pf_n;
+static int  pf_fd;
+static int  pf_out;      // characters emitted, printf's return value
+
+static void pf_flush() {
+    if (pf_n) { sys_write(pf_fd, pf_buf, pf_n); pf_n = 0; }
+}
+
+static void pf_ch(int c) {
+    pf_buf[pf_n] = c;
+    ++pf_n;
+    ++pf_out;
+    if (pf_n >= PF_HIGH) pf_flush();
+}
+
+static void pf_pad(int c, int n) {
+    while (n > 0) { pf_ch(c); --n; }
+}
+
+// Digits of V in BASE, most significant first, into BUF; returns the
+// length. Base 16 is treated as UNSIGNED: C4 has no unsigned type, so
+// the shift is masked back down to 60 bits rather than sign-extending.
+static int pf_digits(char *buf, int v, int base) {
+    char tmp[72];
+    char *ds;
+    int n, i, mask;
+
+    ds = "0123456789abcdef";
+    mask = (1 << 60) - 1;
     n = 0;
-    used = 0;
-    while (*fmt) {
-        if (n > 480) { sys_write(fd, buf, n); n = 0; }
-        c = *fmt; ++fmt;
-        if (c != '%') { buf[n] = c; ++n; }
-        else if (*fmt == 0) { buf[n] = '%'; ++n; }
-        else {
-            c = *fmt; ++fmt;
-            if (c == '%') { buf[n] = '%'; ++n; }
-            else if (c == 'd' || c == 'x' || c == 'c' || c == 's') {
-                v = (used < argc) ? argv[used] : 0;
-                ++used;
-                if (c == 's') {
-                    s = (char *)v;
-                    if (!s) s = "(null)";
-                    while (*s) {
-                        buf[n] = *s; ++n; ++s;
-                        if (n > 480) { sys_write(fd, buf, n); n = 0; }
-                    }
-                } else if (c == 'c') { buf[n] = v; ++n; }
-                else {
-                    base = (c == 'x') ? 16 : 10;
-                    if (v < 0 && base == 10) { buf[n] = '-'; ++n; v = -v; }
-                    dstart = n;
-                    if (v == 0) { buf[n] = '0'; ++n; }
-                    while (v) {
-                        buf[n] = digits[v - (v / base) * base]; ++n;
-                        v = v / base;
-                    }
-                    // digits came out backwards: reverse in place
-                    i = n - 1;
-                    while (dstart < i) {
-                        c = buf[dstart]; buf[dstart] = buf[i]; buf[i] = c;
-                        ++dstart; --i;
-                    }
-                }
-            } else { buf[n] = '%'; ++n; buf[n] = c; ++n; }
-        }
+    if (!v) { tmp[0] = '0'; n = 1; }
+    while (v) {
+        if (base == 16) { tmp[n] = ds[v & 15]; v = (v >> 4) & mask; }
+        else { tmp[n] = ds[v - (v / base) * base]; v = v / base; }
+        ++n;
     }
-    if (n) sys_write(fd, buf, n);
-    return n;
+    i = 0;
+    while (n) { --n; buf[i] = tmp[n]; ++i; }
+    return i;
+}
+
+static int sys_vprintf(int fd, char *fmt, int *argv, int argc) {
+    char num[80];
+    char *s;
+    int c, v, used, width, prec, left, zero, len, neg, i, base, upper;
+
+    pf_fd = fd;
+    pf_n = 0;
+    pf_out = 0;
+    used = 0;
+
+    while (*fmt) {
+        c = *fmt; ++fmt;
+        if (c != '%') { pf_ch(c); continue; }
+        if (!*fmt) { pf_ch('%'); break; }
+
+        // flags
+        left = 0; zero = 0;
+        while (1) {
+            c = *fmt;
+            if (c == '-') { left = 1; ++fmt; }
+            else if (c == '0') { zero = 1; ++fmt; }
+            else if (c == '+' || c == ' ' || c == '#') { ++fmt; }
+            else break;
+        }
+
+        // width, possibly from an argument -- a negative one means
+        // left-justify, which is how ps asks for it (ps.c:312 computes
+        // a width of -2)
+        width = 0;
+        if (*fmt == '*') {
+            ++fmt;
+            width = (used < argc) ? argv[used] : 0; ++used;
+            if (width < 0) { left = 1; width = -width; }
+        } else {
+            while (*fmt >= '0' && *fmt <= '9') {
+                width = width * 10 + (*fmt - '0'); ++fmt;
+            }
+        }
+
+        // precision: minimum digits for integers, maximum for strings
+        prec = -1;
+        if (*fmt == '.') {
+            ++fmt; prec = 0;
+            if (*fmt == '*') {
+                ++fmt;
+                prec = (used < argc) ? argv[used] : 0; ++used;
+                if (prec < 0) prec = -1;
+            } else {
+                while (*fmt >= '0' && *fmt <= '9') {
+                    prec = prec * 10 + (*fmt - '0'); ++fmt;
+                }
+            }
+        }
+
+        // length modifiers: every integer here is one machine word
+        while (*fmt == 'l' || *fmt == 'h' || *fmt == 'z') ++fmt;
+
+        c = *fmt;
+        if (!c) { pf_ch('%'); break; }
+        ++fmt;
+
+        if (c == '%') { pf_pad(' ', left ? 0 : width - 1); pf_ch('%');
+                        pf_pad(' ', left ? width - 1 : 0); continue; }
+
+        // Anything unrecognised prints verbatim AND CONSUMES NOTHING,
+        // which keeps the remaining arguments aligned.
+        if (c != 'd' && c != 'i' && c != 'u' && c != 'x' && c != 'X'
+            && c != 'c' && c != 's') {
+            pf_ch('%'); pf_ch(c);
+            continue;
+        }
+
+        v = (used < argc) ? argv[used] : 0; ++used;
+
+        if (c == 'c') {
+            if (!left) pf_pad(' ', width - 1);
+            pf_ch(v);
+            if (left) pf_pad(' ', width - 1);
+            continue;
+        }
+
+        if (c == 's') {
+            s = (char *)v;
+            if (!s) s = "(null)";
+            len = 0;
+            while (s[len] && (prec < 0 || len < prec)) ++len;
+            if (!left) pf_pad(' ', width - len);
+            i = 0;
+            while (i < len) { pf_ch(s[i]); ++i; }
+            if (left) pf_pad(' ', width - len);
+            continue;
+        }
+
+        // integers
+        upper = (c == 'X');
+        base = (c == 'x' || c == 'X') ? 16 : 10;
+        neg = 0;
+        if (base == 10 && v < 0) { neg = 1; v = -v; }
+        len = pf_digits(num, v, base);
+        if (upper) {
+            i = 0;
+            while (i < len) {
+                if (num[i] >= 'a' && num[i] <= 'f') num[i] = num[i] - 32;
+                ++i;
+            }
+        }
+        // an explicit precision is a minimum digit count, and it
+        // overrides zero padding (C's rule)
+        if (prec >= 0) { zero = 0; while (len < prec) { i = len; while (i) { num[i] = num[i - 1]; --i; } num[0] = '0'; ++len; } }
+        i = len + neg;
+        if (!left && !zero) pf_pad(' ', width - i);
+        if (neg) pf_ch('-');
+        if (!left && zero) pf_pad('0', width - i);
+        i = 0;
+        while (i < len) { pf_ch(num[i]); ++i; }
+        if (left) pf_pad(' ', width - len - neg);
+    }
+
+    pf_flush();
+    return pf_out;
 }
 
 // A protected task executed a host syscall opcode. Service it on the
@@ -341,6 +471,10 @@ void sys_pmviolation(int op, int *sp, int *returnpc, int *a) {
     if (op == C4IX_OP_OPEN) { *a = sys_open((char *)sp[1], sp[0]); return; }
     if (op == C4IX_OP_READ) { *a = sys_read(sp[2], (char *)sp[1], sp[0]); return; }
     if (op == C4IX_OP_CLOS) { *a = sys_close(sp[0]); return; }
+    // Verbatim, not synthesized. Programs branch on these bits --
+    // C4KE's ps patches its own code differently when C4I_C4 is set --
+    // so the only safe answer is what the machine actually is.
+    if (op == C4IX_OP_INFO) { *a = host_info(); return; }
     if (op == C4IX_OP_MALC) { *a = (int)malloc(sp[0]); return; }
     if (op == C4IX_OP_FREE) { free((int *)sp[0]); *a = 0; return; }
     if (op == C4IX_OP_EXIT) {

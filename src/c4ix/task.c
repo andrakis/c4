@@ -107,6 +107,7 @@ static struct task *task_reaplist;   // released, waiting to be freed
 // Free what a task owns. Only ever called for a task nobody is
 // standing on -- see task_release.
 static void task_destroy(struct task *t) {
+    ck_task_free(t);
     if (t->stack) free((int *)t->stack);
     if (t->img_code) free((int *)t->img_code);
     if (t->img_data) free((char *)t->img_data);

@@ -280,6 +280,15 @@ struct task {
     int  cycles;               // VM cycles this task has been given
     int  cycles_in;            // counter value when it last started running
     int  ntraps;               // traps taken on its behalf
+    // C4KE compatibility state (c4ke.c). Zero for every task that
+    // never uses it -- sl4b_alloc memsets, so this costs nothing to
+    // carry and nothing to initialise.
+    int  ck_sigh;              // int * : CK_SIG_MAX triples, 0 = never used
+    int  ck_sigpend;           // pending signal count, so the fast path is one test
+    int  ck_excl;              // holds the exclusive (preemption-masked) lock
+    int  ck_wake;              // TS_SLEEPING: __time() value to wake at
+    int  argv_vec;             // char ** owned by this task, 0 if not owned
+    int  argv_data;            // char *  backing store for the above
     char name[TASK_NAME_MAX];
 };
 
@@ -298,6 +307,43 @@ struct task *task_first();
 struct task *task_next(struct task *t);
 int          task_count();
 void         task_shutdown();
+
+// ---- C4KE compatibility (c4ke.c) ----
+//
+// C4KE's userland reaches its kernel through custom opcodes >= 128
+// that no VM implements, so they arrive as TRAP_ILLOP exactly like
+// C4IX's own SYS_* gateway. Only OP_REQUEST_SYMBOL is a fixed number;
+// every other service is looked up BY NAME at program start (u0.h's
+// __u0_ops_init), so C4IX is free to assign whatever numbers it
+// likes. These are they.
+enum {
+    CK_BASE = 128,
+    CK_REQUEST_SYMBOL = 128,   // fixed by include/u0.h
+    CK_C4INFO = 129, CK_TIME = 130, CK_SCHEDULE = 131,
+    CK_AWAIT_MESSAGE = 132, CK_AWAIT_PID = 133,
+    CK_KERN_TASKS_EXPORT = 134, CK_KERN_TASKS_EXPORT_UPDATE = 135,
+    CK_KERN_TASKS_EXPORT_FREE = 136, CK_KERN_TASKS_RUNNING = 137,
+    CK_USER_START_C4R = 138, CK_KERN_TASK_CURRENT_ID = 139,
+    CK_KERN_TASK_RUNNING = 140, CK_KERN_TASK_COUNT = 141,
+    CK_TASK_FINISH = 142, CK_TASK_FOCUS = 143, CK_TASK_EXIT = 144,
+    CK_USER_SIGNAL = 145, CK_USER_KILL = 146, CK_USER_SLEEP = 147,
+    CK_USER_PID = 148, CK_USER_PARENT = 149,
+    CK_CURRENTTASK_UPDATE_NAME = 150, CK_DEBUG_KERNELSTATE = 151,
+    CK_KERN_REQUEST_EXCLUSIVE = 152, CK_KERN_RELEASE_EXCLUSIVE = 153,
+    CK_TASK_CYCLES = 154, CK_HALT = 155,
+    CK_TOP = 160               // exclusive; 156..159 spare for the VFS ops
+};
+
+// C4KE ABI constants. These MUST match include/u0.h -- they are read
+// straight out of a shared buffer by an unmodified C4KE binary.
+enum { CK_SIG_MAX = 64 };
+enum { CK_SIGINT = 2, CK_SIGKILL = 9, CK_SIGUSR1 = 10, CK_SIGTERM = 15 };
+// u0.h:27 -- note this disagrees with C4IX's own PRIV_*, which is
+// PRIV_KERNEL = 0, PRIV_USER = 1. Convert at the boundary.
+enum { CK_PRIV_NONE = 0, CK_PRIV_USER = 1, CK_PRIV_KERNEL = 2 };
+
+int  ck_dispatch(int num, int *args);
+void ck_task_free(struct task *t);   // release compat state on reap
 
 // ---- scheduler (sched.c) ----
 // One switch mechanism, two backends. On c4m every switch runs in a

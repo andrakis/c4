@@ -190,11 +190,25 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
             // arguments above it. Cast BEFORE the offset: sp is an
             // int parameter, so "sp + 1" would step one byte.
             a = sys_dispatch(param, (int *)sp + 1);
+        } else if (param >= CK_BASE && param < CK_TOP) {
+            // A C4KE program. Same door, same argument shape --
+            // C4KE's ABI puts the opcode at sp[0] too.
+            a = ck_dispatch(param, (int *)sp + 1);
         } else {
             kprintf("c4ix: task %d hit illegal opcode %d\n",
                 sched_cur ? sched_cur->id : -1, param);
             task_exit(-1);
         }
+    } else if (trap == C4IX_TRAP_OPV) {
+        // c4m raises this when OPCD is handed a number below ADJ --
+        // in practice, opcode 0, which is what a C4KE program ends up
+        // executing when a symbol lookup failed and it stored the 0.
+        // Without this branch the task would sail on with a wrong
+        // result and the real fault would surface somewhere useless.
+        kprintf("c4ix: task %d executed opcode %d via OPCD "
+                "(an unresolved C4KE symbol?); killing it\n",
+            sched_cur ? sched_cur->id : -1, param);
+        task_exit(-1);
     } else if (trap == C4IX_TRAP_PM) {
         sys_pmviolation(param, (int *)sp, (int *)returnpc, &a);
     } else if (trap == C4IX_TRAP_SIGNAL) {

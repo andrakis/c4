@@ -347,7 +347,7 @@ test-oisc4-nested: $(OISC4) $(C4) $(C4M) oisc4-lc.c4r $(TESTS)/hello.c4r
 # preprocessed, compiled to a .c4o object with full optimization, and
 # the kernel image is linked by c4rlink.
 C4IX_SRC  := src/c4ix
-C4IX_MODS := boot con va host sl4b task sched vfs sys loader init
+C4IX_MODS := boot con va host sl4b task sched vfs sys c4ke loader init
 c4ix.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/c4ix.h $(patsubst %,$(C4IX_SRC)/%.c,$(C4IX_MODS))
 	@# No gcc here: c4lc preprocesses the modules itself (L9). Each
 	@# object is byte-identical to the gcc -E path, pinned by test-c4lc.

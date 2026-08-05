@@ -971,6 +971,16 @@ static void process_trap (int *task, int type, int parameter, int *handler) {
 	bp = (int *)task[TASK_REG_BP];
 	pc = (int *)task[TASK_REG_PC];
 	a  = task[TASK_REG_A];
+	// This frame is going to be handed to TLEV, which restores every
+	// slot in it including the mode. Without protected mode there is
+	// no interesting value to compute -- but there is still a slot,
+	// and leaving it uninitialised pushes whatever the stack held.
+	// TLEV then loads that into the machine's mode register, and the
+	// next SYSCALL opcode from the resumed task looks like a
+	// protected-mode violation. Signals are delivered through here,
+	// so shutdown -- which TERMs every surviving task -- hit it every
+	// time.
+	mode = MODE_UNPROTECTED;
 	if (kernel_pm_support)
 		mode = task[TASK_PRIVS] == PRIV_KERNEL ? MODE_UNPROTECTED : MODE_PROTECTED;
 	temp = sp;
@@ -2200,7 +2210,25 @@ static void trap_handler (int trap, int ins, int mode, int a, int *bp, int *sp, 
 
 	// Protected mode violation (SYSCALL)
 	else if (trap == TRAP_PM_VIOLATION) {
-		// Jump to handler if we have one (don't check, shouldn't happen unless we do)
+		// Every other branch checks its target before jumping to it,
+		// and this one is no more trustworthy: kernel_syscall_handler
+		// is only set by the pm extension's start, so with
+		// CONFIG_ENABLE_PM off it is null and this jump lands on
+		// address zero. Say so instead of segfaulting the VM.
+		if (!kernel_syscall_handler) {
+			printf("c4ke: protected mode violation (opcode %d) from task %d, "
+			       "but no syscall handler is installed\n",
+			       ins, kernel_task_current[TASK_ID]);
+			kernel_print_task(kernel_task_current);
+			c4r_print_stacktrace(kernel_c4r, (int *)kernel_task_current[TASK_C4R], bp, returnpc);
+			kernel_task_current[TASK_EXIT_CODE] = -1000;
+			kernel_task_finish(kernel_task_current);
+			kernel_task_current[TASK_STATE] = STATE_ZOMBIE;
+			++kernel_tasks_zombie;
+			__c4_jmp((int *)&trap_schedule_in_trap + 2);
+			printf("c4ke: unable to terminate faulting process\n");
+			exit(-4);
+		}
 		// Adjust stack based on bp for handler we're about to jump into.
 		// TODO: removed the adjustment for now, not using stack variables.
 		// __c4_adjust(kernel_syscall_handler_stack);

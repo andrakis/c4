@@ -21,7 +21,6 @@
 
 #include "c4ix.h"
 
-enum { C4IX_STACK_WORDS = 8192 };   // 64KB per task
 
 // Idle backoff, in microseconds: how long the boot task sleeps when
 // every other task is parked waiting on the outside world.

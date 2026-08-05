@@ -143,6 +143,156 @@ static void ck_kernelstate() {
         task_count(), ready, waiting, zombie, sched_switches);
 }
 
+// ---- the task table, as C4KE's ps and top expect to read it ----
+//
+// One kernel-allocated block: a three-word header, then CK_TASK_SLOTS
+// fixed-size records that userland indexes directly. This is a hard
+// ABI, not a copy-out API -- ps reads it with the offsets from u0.h
+// and mutates its own copy in place -- so the layout in c4ix.h has to
+// match u0.h exactly.
+
+// Cycles per millisecond, measured once. C4IX has no per-task
+// millisecond accounting and adding one would mean calling __time()
+// at every context switch; the TIMEMS column is a display, so it is
+// DERIVED from the cycle count that is already exact. Calibrating
+// costs one busy wait at the first ps.
+static int ck_cpms;
+
+static void ck_calibrate() {
+    int t0, c0, ms;
+
+    if (ck_cpms) return;
+    // Wait for a tick boundary first, so the window is a whole
+    // number of milliseconds rather than a partial one.
+    t0 = __time();
+    while (__time() == t0) ;
+    t0 = __time();
+    c0 = __c4_cycles();
+    while ((ms = __time() - t0) < 100) ;
+    ck_cpms = (__c4_cycles() - c0) / ms;
+    if (ck_cpms < 1) ck_cpms = 1;
+}
+
+static char *ck_strdup(char *s) {
+    char *d;
+    int n, i;
+    n = 0;
+    while (s[n]) ++n;
+    if (!(d = (char *)malloc(n + 1))) return 0;
+    i = 0;
+    while (i <= n) { d[i] = s[i]; ++i; }
+    return d;
+}
+
+// C4IX's TS_* are small integers; C4KE's STATE_* are bit flags that
+// ps tests with &. A zero state means "empty slot", so a live task
+// must never map to one.
+static int ck_state(struct task *t) {
+    if (t->state == TS_ZOMBIE) return CK_STATE_ZOMBIE;
+    if (t->state == TS_READY || t->state == TS_RUNNING)
+        return CK_STATE_LOADED | CK_STATE_RUNNING;
+    return CK_STATE_LOADED | CK_STATE_WAITING;
+}
+
+static int ck_wstate(struct task *t) {
+    if (t->state == TS_SLEEPING) return CK_WSTATE_TIME;
+    if (t->state == TS_WAITING) return CK_WSTATE_PID;
+    // ps prints 'S' for this one: parked inside a syscall, which is
+    // exactly what a blocked read is.
+    if (t->state == TS_BLOCKED) return CK_WSTATE_SYSCALL;
+    return CK_WSTATE_NONE;
+}
+
+// C4KE numbers privilege NONE=0, USER=1, KERNEL=2; C4IX numbers it
+// KERNEL=0, USER=1. They agree on 1 and on nothing else. ps indexes
+// prio_table = "-UK" with this, so getting it wrong prints '-' for
+// every kernel task -- a wrong answer that looks plausible.
+static int ck_privs_out(int p) {
+    return (p == PRIV_KERNEL) ? CK_PRIV_KERNEL : CK_PRIV_USER;
+}
+
+static void ck_export_fill(int *kti) {
+    int *kte;
+    struct task *t;
+    int n, cyc;
+
+    ck_calibrate();
+    kte = kti + CK_KTI__Sz;
+    n = 0;
+    t = task_head;
+    while (t && n < CK_TASK_SLOTS) {
+        // The name is a COPY. One address space means a pointer into
+        // the task would work -- right up to the refresh where that
+        // task has been reaped and ps prints from freed slab memory.
+        if (kte[CK_KTE_NAME]) free((char *)kte[CK_KTE_NAME]);
+        kte[CK_KTE_NAME] = (int)ck_strdup(t->name);
+        kte[CK_KTE_NAMELEN] = 0;
+        while (t->name[kte[CK_KTE_NAMELEN]]) ++kte[CK_KTE_NAMELEN];
+
+        cyc = t->cycles + ((t == sched_current()) ? (__c4_cycles() - t->cycles_in) : 0);
+
+        kte[CK_KTE_STATE] = ck_state(t);
+        kte[CK_KTE_WAITSTATE] = ck_wstate(t);
+        kte[CK_KTE_ID] = t->id;
+        kte[CK_KTE_PARENT] = t->parent;
+        kte[CK_KTE_PRIORITY] = 0;
+        kte[CK_KTE_PRIVS] = ck_privs_out(t->privs);
+        kte[CK_KTE_NICE] = 0;
+        kte[CK_KTE_CYCLES] = cyc;
+        kte[CK_KTE_TIMEMS] = cyc / ck_cpms;
+        kte[CK_KTE_TRAPS] = t->ntraps;
+        // BYTES USED, not the base address: the stack grows down from
+        // the top of the allocation, so used = top - sp. sv_sp is only
+        // current as of this task's last context switch, which is the
+        // same accuracy C4KE reports. The boot task runs on the VM's
+        // own stack and has no allocation to measure.
+        kte[CK_KTE_STACK] = t->stack
+            ? (t->stack + C4IX_STACK_WORDS * 8) - t->sv_sp : 0;
+        kte[CK_KTE_ALLOC] = 0;   // C4IX does not track per-task allocation
+
+        kte = kte + CK_KTE__Sz;
+        ++n;
+        t = t->next;
+    }
+    // Clear any records left over from a larger listing, or ps would
+    // report tasks that have gone.
+    while (n < CK_TASK_SLOTS) {
+        if (kte[CK_KTE_NAME]) { free((char *)kte[CK_KTE_NAME]); kte[CK_KTE_NAME] = 0; }
+        kte[CK_KTE_STATE] = CK_STATE_UNLOADED;
+        kte = kte + CK_KTE__Sz;
+        ++n;
+    }
+    kti[CK_KTI_USED] = task_count() < CK_TASK_SLOTS ? task_count() : CK_TASK_SLOTS;
+}
+
+static int ck_export() {
+    int *kti;
+    int words;
+
+    words = CK_KTI__Sz + CK_TASK_SLOTS * CK_KTE__Sz;
+    if (!(kti = (int *)malloc(words * 8))) return 0;
+    memset(kti, 0, words * 8);
+    kti[CK_KTI_COUNT] = CK_TASK_SLOTS;
+    kti[CK_KTI_LIST] = (int)(kti + CK_KTI__Sz);
+    ck_export_fill(kti);
+    return (int)kti;
+}
+
+static void ck_export_free(int *kti) {
+    int *kte;
+    int n;
+
+    if (!kti) return;
+    kte = kti + CK_KTI__Sz;
+    n = 0;
+    while (n < CK_TASK_SLOTS) {
+        if (kte[CK_KTE_NAME]) free((char *)kte[CK_KTE_NAME]);
+        kte = kte + CK_KTE__Sz;
+        ++n;
+    }
+    free(kti);
+}
+
 void ck_task_free(struct task *t) {
     if (t->ck_sigh) { free((int *)t->ck_sigh); t->ck_sigh = 0; }
     if (t->argv_vec) { free((int *)t->argv_vec); t->argv_vec = 0; }
@@ -236,9 +386,15 @@ int ck_dispatch(int num, int *args) {
     if (num == CK_USER_KILL)           return -1;  // stage 5
     if (num == CK_AWAIT_PID)           return -1;  // stage 6
     if (num == CK_USER_START_C4R)      return 0;   // stage 6
-    if (num == CK_KERN_TASKS_EXPORT)   return 0;   // stage 4
-    if (num == CK_KERN_TASKS_EXPORT_UPDATE) return 0;
-    if (num == CK_KERN_TASKS_EXPORT_FREE)   return 0;
+    if (num == CK_KERN_TASKS_EXPORT)   return ck_export();
+    if (num == CK_KERN_TASKS_EXPORT_UPDATE) {
+        if (args[0]) ck_export_fill((int *)args[0]);
+        return 0;
+    }
+    if (num == CK_KERN_TASKS_EXPORT_FREE) {
+        ck_export_free((int *)args[0]);
+        return 0;
+    }
 
     kprintf("c4ix: c4ke: task %d used unimplemented service %d\n",
         t ? t->id : -1, num);

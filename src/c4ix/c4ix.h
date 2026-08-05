@@ -232,6 +232,7 @@ void  sl4b_stats();
 // task_next() wraps from the tail back to the head: that round-robin
 // walk is the loop the scheduler context-switches along.
 enum { TASK_NAME_MAX = 16 };
+enum { C4IX_STACK_WORDS = 8192 };   // 64KB per task
 // TS_WAITING = blocked on another task (wait); TS_BLOCKED = blocked
 // on a vnode (an empty pipe); TS_SLEEPING = blocked on the clock.
 // All three are woken by the scheduler when their condition clears.
@@ -340,6 +341,33 @@ enum {
 
 // C4KE ABI constants. These MUST match include/u0.h -- they are read
 // straight out of a shared buffer by an unmodified C4KE binary.
+//
+// The task-table export: a three-word header followed by a fixed
+// number of fixed-size records. ps walks records 0 .. KTI_USED-1 and
+// treats a ZERO STATE as an empty slot, so every live record must
+// have STATE_LOADED set.
+enum { CK_KTI_COUNT = 0, CK_KTI_USED = 1, CK_KTI_LIST = 2, CK_KTI__Sz = 3 };
+enum {
+    CK_KTE_STATE = 0, CK_KTE_WAITSTATE = 1, CK_KTE_ID = 2,
+    CK_KTE_PARENT = 3, CK_KTE_NAME = 4, CK_KTE_NAMELEN = 5,
+    CK_KTE_PRIORITY = 6, CK_KTE_PRIVS = 7, CK_KTE_NICE = 8,
+    CK_KTE_CYCLES = 9, CK_KTE_TIMEMS = 10, CK_KTE_TRAPS = 11,
+    CK_KTE_STACK = 12, CK_KTE_ALLOC = 13, CK_KTE__Sz = 14
+};
+// Bit flags, tested with & by ps -- not small integers like TS_*.
+enum {
+    CK_STATE_UNLOADED = 0x0, CK_STATE_LOADED = 0x1,
+    CK_STATE_RUNNING = 0x2, CK_STATE_WAITING = 0x4,
+    CK_STATE_TRAPPED = 0x8, CK_STATE_ETHEREAL = 0x10,
+    CK_STATE_ZOMBIE = 0x20
+};
+enum {
+    CK_WSTATE_NONE = 0, CK_WSTATE_TIME = 1, CK_WSTATE_PID = 2,
+    CK_WSTATE_SYSCALL = 3, CK_WSTATE_MESSAGE = 4
+};
+// C4KE's table is a fixed 192 slots; C4IX's task list has no maximum,
+// so this is purely how many the export can describe at once.
+enum { CK_TASK_SLOTS = 128 };
 enum { CK_SIG_MAX = 64 };
 enum { CK_SIGINT = 2, CK_SIGKILL = 9, CK_SIGUSR1 = 10, CK_SIGTERM = 15 };
 // u0.h:27 -- note this disagrees with C4IX's own PRIV_*, which is

@@ -22,7 +22,27 @@
 
 #include "c4ix_user.h"
 
+// Also the proof that constructors and destructors run IN THE TASK.
+// Both used to be the loader's business: constructors ran in the
+// spawning task's context, and destructors did not run at all. A
+// constructor that asks who it is has to be told the truth, so it
+// runs here now -- and having somewhere to run it that still has the
+// image mapped is what finally made destructors possible.
+static int ctor_pid;
+
+static void __attribute__((constructor)) fmt_ctor() {
+    ctor_pid = getpid();
+}
+
+static void __attribute__((destructor)) fmt_dtor() {
+    uprintf("fmt: destructor ran, pid %d\n", getpid());
+}
+
 int main(int argc, char **argv) {
+    // If this printed the parent's id, the constructor ran in the
+    // wrong context -- which is exactly what used to happen.
+    uprintf("fmt: constructor saw pid %d, main sees %d\n", ctor_pid, getpid());
+
     uprintf("u|[%*s]\n", 6, "ab");
     printf("p|[%*s]\n", 6, "ab");
 

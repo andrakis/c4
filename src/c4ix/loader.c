@@ -4,12 +4,12 @@
 // parser. No invoke-stub gymnastics here: the kernel is c4lc code,
 // so calling loaded code is an ordinary indirect call.
 //
-// task_spawn wraps it into the task machinery: constructors run at
-// load time in the spawning task's context, the entry becomes a task
-// through the normal shim, and the image segments are freed when the
-// task is reaped. Destructors are parsed but NOT run at X1 --
-// documented debt, they need an exit path that still has the image
-// mapped.
+// task_spawn wraps it into the task machinery: the entry becomes a
+// task through the normal shim, and the image segments are freed when
+// the task is reaped. Constructors and destructors are resolved here
+// but RUN BY THE TASK, in task_shim -- this function executes in the
+// spawning task's context, and a constructor that asks who it is must
+// not be told the parent.
 //
 
 #include "c4ix.h"
@@ -66,10 +66,10 @@ static void loader_systable(char *p, int nsyms, int database) {
 // Load and relocate. Returns 1 and fills img on success.
 int c4r_load(char *path, struct c4r_image *img) {
     char *buf, *p, *data;
-    int *code, *cons;
+    int *code, *cons, *des;
     int fd, n, total;
     int entry, codelen, datalen, patchlen, symlen, conslen, deslen;
-    int i, ptype, paddr, pvalu, e;
+    int i, ptype, paddr, pvalu;
 
     if (!(buf = (char *)malloc(C4R_BUF_MAX))) return 0;
     if ((fd = open(path, 0)) < 0) {
@@ -132,12 +132,24 @@ int c4r_load(char *path, struct c4r_image *img) {
         ++i;
     }
 
-    // constructor and destructor lists ('c' and 'd' markers), then
-    // the symbol section ('S'). Symbols are read BEFORE constructors
-    // run: libc4ix's constructor needs the systable already injected.
+    // Constructor and destructor lists ('c' and 'd' markers), then
+    // the symbol section ('S').
+    //
+    // Neither list is RUN here. They are copied out and resolved to
+    // absolute addresses so the new task can run them itself, because
+    // this function executes in the SPAWNING task's context -- the
+    // new task does not exist yet. A constructor that asks who it is
+    // would be told the parent. That is fatal for C4KE programs: u0's
+    // constructor caches its pid and its parent's, and installs eight
+    // signal handlers, so every one of them would be wired to the
+    // wrong task.
+    //
+    // The lists point INTO buf, which is freed below, so copying is
+    // not an optimisation -- it is the only way to defer them.
     p = p + 8;   // 'c' marker
     cons = (int *)p;
     p = p + conslen * 8;
+    des = (int *)p + 1;   // past the 'd' marker
     p = p + 8;   // 'd' marker
     p = p + deslen * 8;
     p = p + 8;   // 'S' marker
@@ -145,15 +157,25 @@ int c4r_load(char *path, struct c4r_image *img) {
     // the real gateway so protected mode means something.
     if (host_type() == HOST_C4) loader_systable(p, symlen, (int)data);
 
-    // constructors run now, in the loading task's context
-    i = 0;
-    while (i < conslen) {
-        e = (int)(code + cons[i]);
-        e();
-        ++i;
+    img->cons = 0;
+    img->des = 0;
+    if (conslen) {
+        if (!(img->cons = (int)malloc(conslen * 8))) {
+            free((int *)code); free((char *)data); free(buf);
+            return 0;
+        }
+        i = 0;
+        while (i < conslen) { ((int *)img->cons)[i] = (int)(code + cons[i]); ++i; }
     }
-    // destructors are counted but not run (X1 debt): they need an
-    // exit path that still has the image mapped.
+    if (deslen) {
+        if (!(img->des = (int)malloc(deslen * 8))) {
+            if (img->cons) free((int *)img->cons);
+            free((int *)code); free((char *)data); free(buf);
+            return 0;
+        }
+        i = 0;
+        while (i < deslen) { ((int *)img->des)[i] = (int)(code + des[i]); ++i; }
+    }
 
     img->code = (int)code;
     img->data = (int)data;
@@ -176,10 +198,16 @@ struct task *task_spawn_priv(char *path, int argc, int argv, int privs) {
     if (!(t = task_create(path, img.entry, argc, argv))) {
         free((int *)img.code);
         free((char *)img.data);
+        if (img.cons) free((int *)img.cons);
+        if (img.des) free((int *)img.des);
         return 0;
     }
     t->img_code = img.code;
     t->img_data = img.data;
+    t->img_cons = img.cons;
+    t->img_ncons = img.ncons;
+    t->img_des = img.des;
+    t->img_ndes = img.ndes;
     t->privs = (host_type() == HOST_C4M) ? privs : PRIV_KERNEL;
     return t;
 }

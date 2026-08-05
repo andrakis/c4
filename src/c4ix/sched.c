@@ -443,12 +443,44 @@ static int task_lost() {
     return 0;
 }
 
-// Every task starts here (via the forged frame): call the real entry,
-// turn its return value into an exit.
+// Every task starts here (via the forged frame): run the image's
+// constructors, call the real entry, run its destructors, and turn
+// the return value into an exit.
+//
+// The constructors run HERE rather than at load time because this is
+// the first code that executes as the new task. The loader runs in
+// the SPAWNING task's context -- the new task does not exist yet, so
+// a constructor asking who it is would be told the parent. C4KE's u0
+// caches its pid and its parent's and installs eight signal handlers
+// in its constructor, so every one of them would have been wired to
+// the wrong task.
+//
+// Destructors run in reverse, the C convention, and it matters here:
+// u0's own destructor frees the table the others might use. This is
+// the first time C4IX has run them at all -- an X1 debt, closed by
+// having somewhere to run them that still has the image mapped.
 static int task_shim(int entry, int argc, int argv) {
-    int e, r;
+    struct task *t;
+    int e, r, i;
+
+    t = sched_cur;
+    i = 0;
+    while (i < t->img_ncons) {
+        e = ((int *)t->img_cons)[i];
+        // The one argument is u0's `int *c4r` module pointer, which it
+        // stores and never dereferences. A constructor declared with
+        // no parameters simply never reads it.
+        e(0);
+        ++i;
+    }
     e = entry;
     r = e(argc, argv);
+    i = t->img_ndes;
+    while (i) {
+        --i;
+        e = ((int *)t->img_des)[i];
+        e();
+    }
     task_exit(r);
     return 0;   // unreachable
 }

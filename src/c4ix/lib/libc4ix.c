@@ -21,6 +21,9 @@
 
 int __c4ix_systable;      // filled by the kernel loader on plain c4
 static int uva_use_trap;  // 1 = trap gateway, 0 = direct call
+static int uva_ready;     // library set up? see libc4ix_ready()
+
+static void libc4ix_ready();
 
 // ---- the gate ----
 
@@ -28,6 +31,7 @@ static int __c4ix_syscall(int num, int a, int b, int c) {
     int args[3];
     int f;
 
+    if (!uva_ready) libc4ix_ready();
     if (uva_use_trap) {
         // __c4_opcode pushes left to right and OPCD reads the opcode
         // number from *sp, so the arguments are listed in REVERSE --
@@ -75,6 +79,9 @@ static int *uva_m_arg;
 static int  uva_m_n;
 
 int *__c4cc_make_va(int count) {
+    // &count is a fixed frame slot, so the call below cannot disturb
+    // the argument walk that follows it.
+    if (!uva_ready) libc4ix_ready();
     uva_m_n   = count;
     uva_m_arg = &count + count;
     uva_m_ptr = &uva_stack[uva_vptr];
@@ -430,14 +437,31 @@ int ufprintf(int fd, char *fmt, ...) {
 
 // ---- startup ----
 //
-// Runs before main (the loader executes constructors at load time,
-// after it has injected the systable). Picking the door here means
-// the stubs never branch on host detection again.
-static void __attribute__((constructor)) libc4ix_init() {
+// Setup happens ON DEMAND, not only from the constructor, because a
+// constructor cannot know it runs first. The program's OWN
+// constructors are in the same list as this one, and if one of them
+// makes a syscall before this has run, the gate reads uva_use_trap as
+// 0 and calls through __c4ix_systable -- which is 0 on c4m, because
+// the loader only injects it where traps do not exist. A call to
+// address zero, from the first line of a program, for want of an
+// ordering guarantee the C4R format does not actually give us (the
+// priority field exists but load-c4r.c never reads it).
+//
+// So every entry point that needs the library checks. The constructor
+// stays, because doing it once up front is still cheaper than the
+// branch being taken later, and because it keeps the common case
+// exactly as it was.
+static void libc4ix_ready() {
+    if (uva_ready) return;
+    uva_ready = 1;
     uva_stack = malloc(sizeof(int) * UVA_STACK);
     memset(uva_stack, 0, sizeof(int) * UVA_STACK);
     uva_vptr = 0;
     // A host with no systable must have trap machinery; a host with
     // one is plain c4, where traps do not exist.
     uva_use_trap = !__c4ix_systable;
+}
+
+static void __attribute__((constructor)) libc4ix_init() {
+    libc4ix_ready();
 }

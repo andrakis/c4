@@ -267,6 +267,10 @@ struct task {
     int  stack;                // malloc'd stack base, 0 for the boot task
     int  img_code;             // loaded .c4r segments to free on reap,
     int  img_data;             //   0 for kernel-code tasks
+    int  img_cons;             // int * : constructors this task must run
+    int  img_ncons;            //   before main, in its OWN context
+    int  img_des;              // int * : destructors, run in reverse
+    int  img_ndes;             //   after main returns
     int  privs;                // PRIV_*
     int  nsyscalls;            // syscalls serviced, for the X2 report
     int  wait_for;             // TS_WAITING: the task id being waited on
@@ -367,12 +371,18 @@ int          task_wait(struct task *t);
 extern int   sched_switches;   // context switches since boot
 
 // ---- .c4r loader (loader.c) ----
+// Constructor and destructor lists are copied out of the image buffer
+// and resolved to ABSOLUTE addresses, because the task runs them
+// itself: at load time the task does not exist yet, and a constructor
+// that asks who it is would be told the spawning task.
 struct c4r_image {
     int code;                  // malloc'd code segment (int *)
     int data;                  // malloc'd data segment (char *)
     int entry;                 // absolute entry address
-    int ncons;                 // constructors already run at load
-    int ndes;                  // destructors present but NOT run (X1)
+    int cons;                  // malloc'd int[ncons], absolute addresses
+    int ncons;
+    int des;                   // malloc'd int[ndes], absolute addresses
+    int ndes;
 };
 
 int          c4r_load(char *path, struct c4r_image *img);

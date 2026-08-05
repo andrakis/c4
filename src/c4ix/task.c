@@ -111,6 +111,8 @@ static void task_destroy(struct task *t) {
     if (t->stack) free((int *)t->stack);
     if (t->img_code) free((int *)t->img_code);
     if (t->img_data) free((char *)t->img_data);
+    if (t->img_cons) free((int *)t->img_cons);
+    if (t->img_des) free((int *)t->img_des);
     sl4b_free(task_cache, (char *)t);
 }
 

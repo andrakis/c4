@@ -403,7 +403,11 @@ C4IX_ARGS := --demo c4ix-hello.c4r c4ix-uhello.c4r c4ix-echo.c4r c4ix-wc.c4r \
 # Cycle counts are masked: they are a measurement, not behaviour, and
 # they move whenever the kernel's size changes. `make bench-c4ix`
 # reports them unmasked.
-C4IX_MASK := sed -E 's/[0-9]+ cycles/N cycles/g'
+# The info word is the HOST's capability bits, not C4IX behaviour:
+# native c4m reports 0xf2, c4m interpreted by plain c4 reports 0x83
+# (no high-resolution timer, signals or floating point down there).
+# The line below it says in words what actually matters.
+C4IX_MASK := sed -E -e 's/[0-9]+ cycles/N cycles/g' -e 's/info 0x[0-9a-f]+/info 0xHH/'
 # C4IX targets c4m. It is not a plain-c4 program and does not try to
 # be: its images use the extended opcodes (C4CY, PUTC) and indirect
 # calls (JSRI/JSRS) that the base VM does not have. c4m is the layer

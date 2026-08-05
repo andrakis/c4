@@ -1,5 +1,5 @@
 C4IX booting, N cycles spent loading the kernel image
-c4ix: host c4m, info 0xf2
+c4ix: host c4m, info 0xHH
 c4ix: protected mode on for user tasks, preemption on
 c4ix: task 1 'init' created, scheduling after N cycles
 init: c4ix init v1 on c4m

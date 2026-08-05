@@ -911,20 +911,34 @@ void *c4_memcpy(void *dst, void *src, int len) {
 
   //printf("c4_memcpy(%p, %p, %d)\n", dst, src, len);
   //stacktrace();
+  // The loops below were `while (i++ < max) di[i] = si[i];`, which is
+  // off by one at BOTH ends: the post-increment means the body first
+  // runs with i == 1, so element 0 is never copied, and the last
+  // iteration touches element max -- one past the end of both
+  // buffers. Element 0 staying whatever the destination already held
+  // is the subtler half: a freshly malloc'd block reads as zero, so a
+  // copied .c4r image lost the first word of its code segment, and
+  // opcode 0 is LEA. An image whose entry is at offset 0 -- which is
+  // most of them -- had the ENT of its entry point silently replaced,
+  // so calling it skipped the ENT, the callee ran on its CALLER's
+  // frame, and its LEV returned through the caller's saved bp and pc.
+  // The read and write past the end is the louder half, and showed up
+  // as glibc aborting on a corrupted heap top chunk.
+  //
+  // Only reachable when c4m is interpreted by plain c4: compiled
+  // natively, c4_memcpy is #defined to the host memcpy below.
   i = 0;
   if ((int)dst % sizeof(int) == 0 &&
       (int)src % sizeof(int) == 0 &&
       len % sizeof(int) == 0) {
     // Word copy
-    di = (int*)dst; si = (int*)src; i = 0;
+    di = (int*)dst; si = (int*)src;
     max = len / sizeof(int);
-    while(i++ < max)
-      di[i] = si[i];
+    while (i < max) { di[i] = si[i]; ++i; }
   } else {
     // Byte copy
     dc = (char*)dst; sc = (char*)src;
-    while(i++ < len)
-      dc[i] = sc[i];
+    while (i < len) { dc[i] = sc[i]; ++i; }
   }
   return dst;
 }

@@ -59,7 +59,7 @@
 	;; c4mp only: processor control. Appended, never inserted -- the
 	;; list index IS the opcode number, and it is mirrored in c4m.c,
 	;; load-c4r.c, oisc4.c and c4cc.c.
-	CPUI CPUN CPUS CPUH))
+	CPUI CPUN CPUS CPUH CAS XCHG FADD CWAI CWAK IPI))
 (define c4r:nops (length c4r:ops))
 
 ;; does opcode n take an operand word? LEA..ADJ are 0..7; JSRI 61 JSRS 62

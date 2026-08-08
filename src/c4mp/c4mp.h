@@ -83,6 +83,14 @@ enum {
     // kernel can emulate them; a guest should test C4I_SMP first
     // rather than find out by trapping.
     CPUI,CPUN,CPUS,CPUH,
+    // Atomics. In simulated SMP these are ordinary reads and writes,
+    // because CPUs only ever change at a c4_run boundary and so every
+    // instruction is already atomic. They become real atomics in pass
+    // 2 -- and a guest written against them today keeps working, which
+    // is the point of having them now.
+    CAS ,XCHG,FADD,
+    // The futex pair, and a directed interrupt.
+    CWAI,CWAK,IPI ,
     INS_SIZE
 };
 
@@ -102,8 +110,10 @@ enum {
     TRAP_DEBUG
 };
 
-// TRAP_HARD_IRQ sub-codes.
-enum { HIRQ_CYCLE };
+// TRAP_HARD_IRQ sub-codes. The handler tells them apart by this, and
+// an IPI carries no payload of its own: a sender with something to say
+// writes it to memory first, which is what shared memory is for.
+enum { HIRQ_CYCLE, HIRQ_IPI };
 
 // __c4_configure options.
 enum { CONF_CYCLE_INTERRUPT_INTERVAL, CONF_CYCLE_INTERRUPT_HANDLER, CONF_PRIVS,
@@ -154,6 +164,9 @@ struct c4_cpu {
     int *ihand;             // cycle interrupt handler
     int  ival;              // cycle interrupt interval; 0 also means masked
     int  tri;               // CONF_TRAP_RESTORES_INTERVAL
+    int *waitaddr;          // CPU_WAIT: the address parked on
+    int  waitval;           //           the value it must change from
+    int  ipipend;           // an inter-processor interrupt is waiting
     int *stkbase;           // stack allocation to free, 0 if borrowed
 };
 
@@ -162,8 +175,8 @@ struct c4_cpu {
 // a finished machine in one case and a deadlocked one in the other.
 enum { CPU_OFF, CPU_RUN, CPU_WAIT, CPU_HALT };
 
-// Why c4_run returned.
-enum { RUN_QUANTUM, RUN_EXIT, RUN_HALT, RUN_FAULT };
+// Why c4_run returned. Appended to, never reordered: -v prints it.
+enum { RUN_QUANTUM, RUN_EXIT, RUN_HALT, RUN_FAULT, RUN_WAIT };
 
 // ---- a loaded image ----
 struct c4r_image {
@@ -195,6 +208,12 @@ int  c4_smp_init(int ncpu);
 int  c4_smp_run(int quantum);
 void c4_smp_free();
 int  c4_cpu_start(int id, int entry, int stacktop);
+// Wake at most n processors parked on addr; n <= 0 means all. Returns
+// how many were woken.
+int  c4_cpu_wake(int addr, int n);
+// Raise HIRQ_IPI on another processor. A parked target is woken too,
+// or the interrupt could never be delivered.
+int  c4_cpu_ipi(int id);
 
 // ---- vm.c ----
 extern int c4mp_debug;      // -d: trace every instruction

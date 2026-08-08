@@ -109,6 +109,60 @@ int c4_cpu_start(int id, int entry, int stacktop) {
     return 1;
 }
 
+//
+// __c4_wake(addr, n): release processors parked on addr with CWAI.
+// n <= 0 wakes all of them. Returns how many were woken.
+//
+// There is no lost-wakeup race to guard against here, and it is worth
+// saying why, because this is the classic place for one. On real
+// hardware `if (*addr == val) park();` can lose a wake that lands
+// between the test and the park. CWAI is a single instruction that
+// does both, and instructions are atomic in simulated SMP, so the
+// window does not exist. A wake arriving before the park simply leaves
+// *addr changed, and CWAI's own test then declines to park at all.
+//
+int c4_cpu_wake(int addr, int n) {
+    struct c4_cpu *c;
+    int i, woken;
+
+    if (!addr) return 0;
+    woken = 0;
+    for (i = 0; i < c4_ncpu; ++i) {
+        if (n > 0 && woken >= n) break;
+        c = c4_cpus + i;
+        if (c->state != CPU_WAIT) continue;
+        if (c->waitaddr != (int *)addr) continue;
+        c->waitaddr = 0;
+        c->waitval = 0;
+        c->state = CPU_RUN;
+        ++woken;
+    }
+    return woken;
+}
+
+//
+// __c4_ipi(id): raise HIRQ_IPI on another processor.
+//
+// A parked target is woken as well. Without that an IPI to a sleeping
+// CPU could never be delivered -- the interrupt is only noticed by a
+// running instruction stream -- and "wake it up and let it look
+// around" is most of what an IPI is for.
+//
+int c4_cpu_ipi(int id) {
+    struct c4_cpu *c;
+
+    if (id < 0 || id >= c4_ncpu) return 0;
+    c = c4_cpus + id;
+    if (c->state == CPU_HALT || c->state == CPU_OFF) return 0;
+    c->ipipend = 1;
+    if (c->state == CPU_WAIT) {
+        c->waitaddr = 0;
+        c->waitval = 0;
+        c->state = CPU_RUN;
+    }
+    return 1;
+}
+
 // Report where every CPU stopped. Only interesting when the machine
 // wedged, which is exactly when there is nothing else to go on.
 static void c4_smp_report(char *why) {
@@ -121,7 +175,8 @@ static void c4_smp_report(char *why) {
         printf("  cpu %d: ", i);
         if (c->state == CPU_OFF)       printf("off");
         else if (c->state == CPU_RUN)  printf("running");
-        else if (c->state == CPU_WAIT) printf("waiting");
+        else if (c->state == CPU_WAIT) printf("waiting on 0x%X for it to stop being %d",
+                                              c->waitaddr, c->waitval);
         else                           printf("halted, status %d", c->status);
         printf(", pc 0x%X, %d cycles\n", c->pc, c->cycle);
     }

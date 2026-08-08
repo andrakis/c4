@@ -159,6 +159,12 @@ int main(int argc, char **argv) {
             printf("c4mp: cpu %d ran %d cycles\n", i, c4_cpus[i].cycle);
     }
     i = cpu0->status;
+    // A machine that wedged must not exit like one that finished. The
+    // deadlock diagnostic prints, but a caller comparing exit codes --
+    // which is what the test suite does -- would otherwise see success.
+    // __c4_configure already sets a status of its own, so only supply
+    // one where nothing did.
+    if (r == RUN_FAULT && !i) i = -1;
 
     c4_smp_free();
     free(boot);

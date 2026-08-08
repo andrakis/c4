@@ -69,7 +69,8 @@ void c4_vm_init() {
         "C4IV,"
         "FLT ,"
         "JSRI,JSRS,JMPA,TLEV,DBG ,"
-        "CPUI,CPUN,CPUS,CPUH,";
+        "CPUI,CPUN,CPUS,CPUH,"
+        "CAS ,XCHG,FADD,CWAI,CWAK,IPI ,";
 }
 
 char *c4_opname(int op) {
@@ -266,6 +267,27 @@ int c4_run(struct c4_cpu * RESTRICT c, int quantum) {
         // stepping over it costs one tick.
         if (ival && !(cycle % ival) && *pc != TLEV) {
             c4_trap(TRAP_HARD_IRQ, HIRQ_CYCLE, ihand, &sp, &bp, &pc, a, mode, ival);
+            ival = 0;
+            mode = MODE_UNPROTECTED;
+        } else if (c->ipipend) {
+            // A directed interrupt from another processor. Delivered
+            // through the same handler as the cycle tick, with
+            // HIRQ_IPI to tell them apart, and unconditionally: an IPI
+            // is a request from a peer, not a timer, so honouring the
+            // preemption mask would let a CPU that has masked itself
+            // ignore its peers indefinitely.
+            //
+            // Read through c rather than cached in a local, which is
+            // what makes a CPU interrupting ITSELF work -- it sets the
+            // flag and sees it on the next instruction. It is also the
+            // one field here another processor writes, so PASS 2 MUST
+            // make it volatile or atomic: with real threads nothing
+            // stops the compiler hoisting this load out of the loop,
+            // and the symptom would be an IPI that is simply never
+            // noticed. Simulated SMP is safe because no other CPU runs
+            // between this instruction and the next.
+            c->ipipend = 0;
+            c4_trap(TRAP_HARD_IRQ, HIRQ_IPI, ihand, &sp, &bp, &pc, a, mode, ival);
             ival = 0;
             mode = MODE_UNPROTECTED;
         } else if (pending_signal && !(tri && !ival)) {
@@ -545,6 +567,61 @@ int c4_run(struct c4_cpu * RESTRICT c, int quantum) {
             c->state = CPU_HALT;
             reason = RUN_HALT;
             run = 0;
+            break;
+
+        // ---- atomics ----
+        //
+        // Unguarded, like MSET/MCMP/MCPY: they touch only memory the
+        // guest already addresses, so protected mode has no interest
+        // in them.
+        //
+        // Every one of these is a plain read-modify-write, and that is
+        // CORRECT here rather than a shortcut: a CPU only ever changes
+        // at a c4_run boundary, so an instruction cannot be split.
+        // Pass 2 replaces the bodies with __atomic_* builtins and
+        // nothing above this line changes.
+        case CAS:
+            // __c4_cas(addr, expect, new) -> the value found there
+            t = (int *)sp[2];
+            a = *t;
+            if (a == sp[1]) *t = sp[0];
+            break;
+        case XCHG:
+            // __c4_xchg(addr, val) -> the old value
+            t = (int *)sp[1];
+            a = *t;
+            *t = sp[0];
+            break;
+        case FADD:
+            // __c4_fadd(addr, delta) -> the old value
+            t = (int *)sp[1];
+            a = *t;
+            *t = a + sp[0];
+            break;
+
+        // ---- park and wake ----
+        case CWAI:
+            // __c4_wait(addr, val): park while *addr is still val.
+            // Returns 1 if it did not park because the value had
+            // already changed, 0 when woken. Callers should re-test in
+            // a loop -- a wake is a hint, not a guarantee, and IPI
+            // releases a parked CPU too.
+            t = (int *)sp[1];
+            if (!t || *t != sp[0]) { a = 1; break; }
+            c->waitaddr = t;
+            c->waitval = sp[0];
+            c->state = CPU_WAIT;
+            a = 0;
+            reason = RUN_WAIT;
+            run = 0;
+            break;
+        case CWAK:
+            // __c4_wake(addr, n) -> how many were woken; n <= 0 = all
+            a = c4_cpu_wake(sp[1], sp[0]);
+            break;
+        case IPI:
+            // __c4_ipi(cpu) -> 1 if it was raised
+            a = c4_cpu_ipi(*sp);
             break;
 
         default:

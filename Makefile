@@ -343,6 +343,19 @@ oisc4-lc.c4r: c4sp $(C4LC_LISP) src/oisc4/oisc4.c
 	rm -f .c4lc_o4.c
 test-oisc4: $(OISC4) $(C4M) c4.c4r c4sp.c4r $(TESTS_C4R)
 	bash src/oisc4/test-oisc4.sh
+
+# C4BB: the breadboard computer (docs/c4bb-design.md). A JS-simulated
+# microcoded 32-bit hardware implementation of the c4m instruction
+# set; verified against a 32-bit native build of c4m by test-c4bb.
+c4cc32: $(C4CC_SRCS)
+	gcc -m32 $(NATIVE_CC_OPTS) src/c4cc/asm-c4r.c -o c4cc32 -lm
+c4m32: c4m.c c4m_float.c
+	gcc -m32 $(NATIVE_CC_OPTS) c4m.c c4m_float.c -o c4m32 -lm
+c4bb-32bit: c4cc32 c4m32
+c4bb-images: c4bb-32bit
+	bash src/c4bb/tests/build-images.sh
+test-c4bb: c4bb-images $(C4M) $(TESTS_C4R)
+	bash src/c4bb/tests/test-c4bb.sh
 test-oisc4-nested: $(OISC4) $(C4) $(C4M) oisc4-lc.c4r $(TESTS)/hello.c4r
 	$(C4M) load-c4r.c -- oisc4-lc.c4r -m 32 $(TESTS)/hello.c4r | grep -q yello
 	$(C4) c4l.c oisc4-lc.c4r -m 32 $(TESTS)/hello.c4r | grep -q yello
@@ -376,9 +389,15 @@ c4mp.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4MP_SRC)/c4mp.h $(patsubst %,$(C4MP_SR
 # processor opcodes, which c4cc does not know.
 c4mp-smp0.c4r: c4sp $(C4LC_LISP) $(C4MP_SRC)/guest/smp0.c
 	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O $(C4MP_SRC)/guest/smp0.c c4mp-smp0.c4r > /dev/null
+# smp1 exercises every stage-3 opcode; deadlock exists to wedge the
+# machine on purpose and be diagnosed for it.
+c4mp-smp1.c4r: c4sp $(C4LC_LISP) $(C4MP_SRC)/guest/smp1.c
+	./c4sp -c 6000000 src/c4sp/lisp/c4lc.lisp -O $(C4MP_SRC)/guest/smp1.c c4mp-smp1.c4r > /dev/null
+c4mp-deadlock.c4r: c4sp $(C4LC_LISP) $(C4MP_SRC)/guest/deadlock.c
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O $(C4MP_SRC)/guest/deadlock.c c4mp-deadlock.c4r > /dev/null
 # Not in the default suite: the native sweep runs every test image
 # through two VMs and the hosted checks run them through three.
-test-c4mp: c4m c4mp c4mp.c4r c4mp-smp0.c4r $(TESTS_C4R)
+test-c4mp: c4m c4mp c4mp.c4r c4mp-smp0.c4r c4mp-smp1.c4r c4mp-deadlock.c4r $(TESTS_C4R)
 	bash $(C4MP_SRC)/test-c4mp.sh
 
 # C4IX (docs/c4ix-design.md): the c4lc-compiled OS. Each module is

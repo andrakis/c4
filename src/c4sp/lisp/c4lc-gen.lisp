@@ -127,7 +127,9 @@
 	;; program that calls them must test __c4_info() & C4I_SMP first,
 	;; or it gets an illegal instruction there instead of an answer.
 	("__c4_cpu_id" CPUI) ("__c4_cpu_count" CPUN)
-	("__c4_cpu_start" CPUS) ("__c4_cpu_halt" CPUH)))
+	("__c4_cpu_start" CPUS) ("__c4_cpu_halt" CPUH)
+	("__c4_cas" CAS) ("__c4_xchg" XCHG) ("__c4_fadd" FADD)
+	("__c4_wait" CWAI) ("__c4_wake" CWAK) ("__c4_ipi" IPI)))
 (define g:sysinit (lambda (l)
 	(if (empty? l) nil
 	(begin

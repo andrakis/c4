@@ -6,14 +6,17 @@ a.out
 tmp/
 *.c4r
 node_modules/
-c4
-c4.o
-c4cc
-c4cc.o
-c4m
-c4m.o
-# Anchored: an unanchored "c4mp" also matches the src/c4mp/ SOURCE
-# directory, which git would then ignore entirely.
+# All anchored to the root. These are build outputs, but a bare name
+# also matches any DIRECTORY of that name at any depth -- "c4cc" was
+# hiding the whole of src/c4cc/, so a new file added there would have
+# been invisible to git rather than merely untracked. Tracked files
+# survived, which is why it went unnoticed.
+/c4
+/c4.o
+/c4cc
+/c4cc.o
+/c4m
+/c4m.o
 /c4mp
 /c4mp.o
 .c4mp_*.c4o
@@ -21,6 +24,6 @@ u0.c4l
 libc4ix.c4l
 .cx_*
 
-c4rdump
-c4rlink
+/c4rdump
+/c4rlink
 /c4sp

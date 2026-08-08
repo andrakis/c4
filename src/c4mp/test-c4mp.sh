@@ -157,5 +157,61 @@ else
     echo "test-c4mp: SKIP multiprocessing ($SMP0 not built)"
 fi
 
+# ---- 6. atomics, park/wake, and interrupts ----
+SMP1=c4mp-smp1.c4r
+if [ -f "$SMP1" ]; then
+    # Every phase self-checks and smp1 exits non-zero if any of them
+    # disagrees, so the exit status is as much the test as the pin is.
+    timeout 300 $C4MP -cpus 4 "$SMP1" </dev/null > "$TMP/a" 2>&1
+    ra=$?
+    if [ "$ra" != 0 ]; then
+        echo "test-c4mp: FAIL smp1 exited $ra"; cat "$TMP/a" | head -12; fail=1
+    elif ! cmp -s "$TMP/a" src/c4mp/tests/smp1-4cpu.txt; then
+        echo "test-c4mp: FAIL smp1 on 4 processors differs from the pin"
+        diff src/c4mp/tests/smp1-4cpu.txt "$TMP/a" | head -8
+        fail=1
+    fi
+
+    # One processor must still pass every phase that does not need a
+    # peer -- the atomics have to work when there is nothing to race.
+    timeout 300 $C4MP "$SMP1" </dev/null > "$TMP/b" 2>&1 || { echo "test-c4mp: FAIL smp1 on one processor"; cat "$TMP/b" | head -12; fail=1; }
+    grep -q "smp1: all OK" "$TMP/b" || { echo "test-c4mp: FAIL smp1 -cpus 1 did not finish clean"; fail=1; }
+
+    timeout 900 $C4M load-c4r.c -- c4mp.c4r -cpus 4 "$SMP1" </dev/null > "$TMP/c" 2>&1
+    if ! cmp -s "$TMP/c" src/c4mp/tests/smp1-4cpu.txt; then
+        echo "test-c4mp: FAIL smp1 hosted by c4m differs from the pin"
+        diff src/c4mp/tests/smp1-4cpu.txt "$TMP/c" | head -8
+        fail=1
+    fi
+    [ $fail = 0 ] && echo "test-c4mp: atomics, park/wake and interrupts OK"
+else
+    echo "test-c4mp: SKIP stage-3 opcodes ($SMP1 not built)"
+fi
+
+# ---- 7. deadlock is diagnosed, not hung ----
+# The one thing a simulated multiprocessor can do that a real one
+# cannot. Every processor parks on a word nobody sets; c4mp must say
+# so and exit non-zero rather than spin. Addresses are not compared --
+# they differ every run, and the point is the diagnosis, not the heap.
+DL=c4mp-deadlock.c4r
+if [ -f "$DL" ]; then
+    timeout 60 $C4MP -cpus 4 "$DL" </dev/null > "$TMP/a" 2>&1
+    rd=$?
+    if [ "$rd" = 0 ]; then
+        echo "test-c4mp: FAIL a deadlocked machine exited 0"; fail=1
+    elif [ "$rd" = 124 ]; then
+        echo "test-c4mp: FAIL a deadlocked machine hung instead of being diagnosed"; fail=1
+    fi
+    grep -q "every processor is parked" "$TMP/a" || {
+        echo "test-c4mp: FAIL no deadlock diagnostic"; cat "$TMP/a" | head -8; fail=1; }
+    [ "$(grep -c 'waiting on' "$TMP/a")" = 4 ] || {
+        echo "test-c4mp: FAIL diagnostic did not name all four parked processors"; fail=1; }
+    grep -q UNREACHABLE "$TMP/a" && {
+        echo "test-c4mp: FAIL a parked processor was resumed"; fail=1; }
+    [ $fail = 0 ] && echo "test-c4mp: deadlock diagnosed OK"
+else
+    echo "test-c4mp: SKIP deadlock ($DL not built)"
+fi
+
 if [ $fail = 0 ]; then echo "test-c4mp: OK"; else echo "test-c4mp: FAILED"; fi
 exit $fail

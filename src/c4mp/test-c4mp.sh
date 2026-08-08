@@ -87,5 +87,26 @@ timeout 300 $C4MP c4mp.c4r c4mp.c4r "$TESTS/hello.c4r" </dev/null | grep -q yell
     || { echo "test-c4mp: FAIL c4mp -> c4mp -> c4mp -> hello"; fail=1; }
 [ $fail = 0 ] && echo "test-c4mp: nesting OK"
 
+# ---- 4. slicing invariance ----
+# Stopping a CPU mid-stream and resuming it must change nothing. This
+# is the whole mechanism a second processor rests on, exercised here
+# against a single CPU where any difference is unambiguously the VM's
+# fault. The cycle count is compared too, not just the output: an
+# earlier version got the output right while inflating the counter by
+# one per slice, which would have quietly moved every preemption tick
+# once the cycle interrupt started using it.
+for b in hello factorial test_basic test_printf tests; do
+    ref=$(timeout 60 $C4MP -v "$TESTS/$b.c4r" </dev/null 2>&1 | mask)
+    for q in 1 2 7 1000; do
+        got=$(timeout 120 $C4MP -q $q -v "$TESTS/$b.c4r" </dev/null 2>&1 | mask)
+        if [ "$ref" != "$got" ]; then
+            echo "test-c4mp: FAIL $b: -q $q differs from an unbroken run"
+            diff <(echo "$ref") <(echo "$got") | head -6
+            fail=1
+        fi
+    done
+done
+[ $fail = 0 ] && echo "test-c4mp: slicing invariance OK"
+
 if [ $fail = 0 ]; then echo "test-c4mp: OK"; else echo "test-c4mp: FAILED"; fi
 exit $fail

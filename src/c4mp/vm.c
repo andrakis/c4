@@ -211,18 +211,50 @@ static void c4_trap(int type, int parameter, int *handler,
 int c4_run(struct c4_cpu * RESTRICT c, int quantum) {
     int *pc, *sp, *bp, *traph, *ihand, *t;
     int a, mode, cycle, ival, tri;
-    int i, r, run, reason;
+    int i, r, run, reason, deadline;
 
     pc = c->pc; sp = c->sp; bp = c->bp;
     a = c->a; mode = c->mode; cycle = c->cycle;
     ival = c->ival; tri = c->tri;
     traph = c->traph; ihand = c->ihand;
 
+    // The quantum is a cycle deadline. -1 means "no deadline": cycle
+    // only ever counts up from zero, so it can never reach it. The +1
+    // is because the test sits after the increment, and is what makes
+    // quantum=0 run nothing and quantum=n run exactly n instructions.
+    //
+    // How this is written matters more than it looks, all measured on
+    // a 20M-iteration loop against c4m's 1.26s:
+    //
+    //   while (run && quantum) + conditional decrement    1.41s
+    //   while (cycle != deadline)                         1.36s
+    //   while (deadline--)                                1.75s
+    //   while (run) + if (cycle == deadline) break        1.28s   <-- this
+    //   no quantum check at all                           1.14s
+    //
+    // The obvious form costs 24% of runtime. Making the deadline the
+    // loop condition is worse still, because it puts the freshly
+    // incremented cycle on the critical path of the loop branch,
+    // whereas `run` almost never changes and predicts perfectly.
+    //
+    // The 1.14s floor is real and reachable: an unbounded run needs no
+    // deadline test at all, and pass 2 gives every CPU its own thread
+    // and calls this with quantum = -1 exactly once. Specialising the
+    // unbounded case is worth doing when that lands and both modes can
+    // be measured; it is not worth duplicating the dispatch for now.
+    deadline = quantum < 0 ? -1 : cycle + quantum;
+
     run = 1;
     reason = RUN_QUANTUM;
 
-    while (run && quantum) {
-        if (quantum > 0) --quantum;
+    while (run) {
+        // Before the increment, not after. After, the aborting
+        // iteration still bumps the counter, so every slice inflates
+        // it by one -- hello.c4r reported 55 cycles under -q 1 against
+        // 28 unbroken. cycle is not a statistic: C4CY hands it to
+        // guests and the preemption tick is cycle % ival, so drift
+        // would move when a kernel gets interrupted.
+        if (cycle == deadline) break;
         ++cycle;
 
         // TLEV restores five registers in one step and there is no way
@@ -413,11 +445,7 @@ int c4_run(struct c4_cpu * RESTRICT c, int quantum) {
 #endif
             break;
         case SIGI:
-#ifdef __c4cc__
             a = __c4_sigint();
-#else
-            a = __c4_sigint();
-#endif
             break;
         case SIGH:
 #ifdef __c4cc__
@@ -475,10 +503,19 @@ int c4_run(struct c4_cpu * RESTRICT c, int quantum) {
             break;
 
         case C4IV:
-            // __c4_invoke exists to let plain-c4-hosted code call a
-            // computed address through a self-modifying stub. c4mp is
-            // never hosted by plain c4, so there is nothing to do --
-            // and nothing to fault, since native c4m is also a no-op.
+            // __c4_invoke(addr): call a computed address as if it were
+            // a C4 function, via c4m's self-modifying stub.
+#ifdef __c4cc__
+            // Hosted, which is what the early c4mp targets: pass it
+            // straight to the host. Guest, c4mp and host share one
+            // address space, so the address on the stack is one the
+            // host's stub can jump to.
+            a = __c4_invoke(*sp);
+#else
+            // Native c4m compiles its own C4IV out entirely (the stub
+            // is #if NOT_NATIVE), leaving the accumulator alone. Do
+            // the same, so the two agree.
+#endif
             break;
 
         case FLT:

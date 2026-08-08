@@ -33,6 +33,7 @@ static void usage() {
     printf("  -d       trace every instruction\n");
     printf("  -v       report load and exit details\n");
     printf("  -p KB    stack size per CPU in KB (default %d)\n", C4MP_STACK_SZ / 1024);
+    printf("  -q N     run in slices of N instructions (default: one unbroken run)\n");
     printf("  --       end of options\n");
 }
 
@@ -49,11 +50,12 @@ int main(int argc, char **argv) {
     struct c4r_image img;
     struct c4_cpu cpu;
     int *stack, *boot, *p, *sp;
-    int stacksz, verbose, nboot, i, r;
+    int stacksz, verbose, nboot, i, r, quantum;
     char opt;
 
     c4_vm_init();
     stacksz = C4MP_STACK_SZ;
+    quantum = -1;
     verbose = 0;
     c4mp_debug = 0;
 
@@ -63,6 +65,12 @@ int main(int argc, char **argv) {
         if (opt == '-') { --argc; ++argv; break; }
         else if (opt == 'd') c4mp_debug = 1;
         else if (opt == 'v') verbose = 1;
+        else if (opt == 'q') {
+            --argc; ++argv;
+            if (argc <= 0) { printf("c4mp: -q needs a slice length\n"); return -1; }
+            quantum = c4_atoi(*argv);
+            if (quantum < 1) { printf("c4mp: -q must be at least 1\n"); return -1; }
+        }
         else if (opt == 'p') {
             --argc; ++argv;
             if (argc <= 0) { printf("c4mp: -p needs a size in KB\n"); return -1; }
@@ -125,7 +133,15 @@ int main(int argc, char **argv) {
     cpu.tri = 0;
     cpu.stkbase = stack;
 
-    r = c4_run(&cpu, -1);
+    // Slicing must not change behaviour: the only difference between
+    // -q 1 and one unbroken run is how many times the registers make
+    // the round trip through struct c4_cpu. That is the whole
+    // mechanism stage 2's second processor rests on, so it is worth
+    // being able to exercise it against a single CPU first, where any
+    // difference in output is unambiguously this code's fault.
+    do {
+        r = c4_run(&cpu, quantum);
+    } while (r == RUN_QUANTUM && cpu.state == CPU_RUN);
 
     if (verbose)
         printf("c4mp: exit %d after %d cycles (reason %d)\n", cpu.status, cpu.cycle, r);

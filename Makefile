@@ -356,6 +356,38 @@ c4bb-images: c4bb-32bit
 	bash src/c4bb/tests/build-images.sh
 test-c4bb: c4bb-images $(C4M) $(TESTS_C4R)
 	bash src/c4bb/tests/test-c4bb.sh
+
+# C4OR1K: OR1000/OpenRISC emulator ported from jor1k, compiled by
+# c4lc, run under c4m (docs/c4or1k-design.md).
+#
+# M0 (throughput sanity check) was a single main.c; from M1 the
+# decoder is real and lives in its own module, linked with c4rlink
+# the same way src/c4mp does it.
+C4OR1K_SRC  := src/c4or1k
+C4OR1K_MODS := mem cpu main
+C4OR1K_HDRS := $(C4OR1K_SRC)/cpu.h $(C4OR1K_SRC)/mem.h
+c4or1k.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4OR1K_HDRS) $(patsubst %,$(C4OR1K_SRC)/%.c,$(C4OR1K_MODS))
+	for m in $(C4OR1K_MODS); do \
+		./c4sp -c 16000000 src/c4sp/lisp/c4lc.lisp -c -I $(C4OR1K_SRC) \
+			$(C4OR1K_SRC)/$$m.c .c4or1k_$$m.c4o > /dev/null || exit 1; \
+	done
+	$(C4RLINK) $(patsubst %,.c4or1k_%.c4o,$(C4OR1K_MODS)) -o c4or1k.c4r
+	rm -f .c4or1k_*.c4o
+# M1's cross-checked test program (tests/m1_test.s -> .bin via
+# tools/asm.py) run through the real decoder.
+src/c4or1k/tests/m1_test.bin: src/c4or1k/tests/m1_test.s src/c4or1k/tools/asm.py
+	python3 src/c4or1k/tools/asm.py src/c4or1k/tests/m1_test.s bin > src/c4or1k/tests/m1_test.bin
+c4or1k-m1: c4m c4or1k.c4r src/c4or1k/tests/m1_test.bin
+	./c4m load-c4r.c -- c4or1k.c4r src/c4or1k/tests/m1_test.bin
+# Cross-checks cpu.c against jor1k's own safecpu.js (tools/or1k-oracle.js)
+# on the same test program: every register, SR_F/SR_CY/SR_OV, and the
+# RAM window every test result is written into must match exactly.
+# (No process substitution: plain sh, not bash, runs make recipes here.)
+c4or1k-m1-check: c4m c4or1k.c4r src/c4or1k/tests/m1_test.bin
+	./c4m load-c4r.c -- c4or1k.c4r src/c4or1k/tests/m1_test.bin | grep -v '^c4or1k:' | grep -v 'guest instructions/sec' > .c4or1k_check_c.txt
+	node src/c4or1k/tools/or1k-oracle.js src/c4or1k/tests/m1_test.bin | grep -v '^c4or1k-oracle:' > .c4or1k_check_js.txt
+	diff .c4or1k_check_c.txt .c4or1k_check_js.txt && echo "c4or1k-m1-check: OK (bit-for-bit match against jor1k)"
+	rm -f .c4or1k_check_c.txt .c4or1k_check_js.txt
 test-oisc4-nested: $(OISC4) $(C4) $(C4M) oisc4-lc.c4r $(TESTS)/hello.c4r
 	$(C4M) load-c4r.c -- oisc4-lc.c4r -m 32 $(TESTS)/hello.c4r | grep -q yello
 	$(C4) c4l.c oisc4-lc.c4r -m 32 $(TESTS)/hello.c4r | grep -q yello
@@ -811,6 +843,7 @@ PHONY += run-c4 run-c4-vg test-c4 test-massive-c4
 PHONY += run-c4-alt run-c4-alt-vg
 PHONY += test-c4ix test-c4ix-fmt test-c4ix-c4ke test-c4ix-c4ke-nested test-c4ix-c4 run-c4ix run-c4ix-c4 demo-c4ix demo-c4ix-c4 bench-c4ix
 PHONY += test-c4mp
+PHONY += c4or1k-m0 c4or1k-m1 c4or1k-m1-check
 PHONY += pkg c4rs or1k
 PHONY += pi
 # Don't bother with the dump or link utility for now

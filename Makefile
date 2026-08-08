@@ -376,9 +376,13 @@ test-c4bb: c4bb-images $(C4M) $(TESTS_C4R)
 C4OR1K_SRC  := src/c4or1k
 C4OR1K_MODS := mem mmio uart con bootfs virtio virtio9p cpu boot main
 C4OR1K_HDRS := $(C4OR1K_SRC)/cpu.h $(C4OR1K_SRC)/mem.h
+# -O (M7): ~4% faster on a real boot workload, byte-for-byte identical
+# output on the full M1-M4 regression suite and a real boot -- a small
+# but real, zero-cost win worth keeping on by default given how many
+# guest instructions a full boot to a shell needs (see M6).
 c4or1k.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4OR1K_HDRS) $(patsubst %,$(C4OR1K_SRC)/%.c,$(C4OR1K_MODS))
 	for m in $(C4OR1K_MODS); do \
-		./c4sp -c 16000000 src/c4sp/lisp/c4lc.lisp -c -I $(C4OR1K_SRC) \
+		./c4sp -c 16000000 src/c4sp/lisp/c4lc.lisp -O -c -I $(C4OR1K_SRC) \
 			$(C4OR1K_SRC)/$$m.c .c4or1k_$$m.c4o > /dev/null || exit 1; \
 	done
 	$(C4RLINK) $(patsubst %,.c4or1k_%.c4o,$(C4OR1K_MODS)) -o c4or1k.c4r

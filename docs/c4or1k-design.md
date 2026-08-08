@@ -484,8 +484,22 @@ against the specific console this project's launch script feeds.
 Worth revisiting if the `run-c4or1k.sh` interactive path (a real
 terminal, not piped input) is exercised directly.
 
-**M7 — stretch.** `c4lc -O`, `fs.json` overlay, optional virtio-block/
-ATA. Framebuffer/keyboard stay out of scope.
+**M7 — stretch.**
+
+- **`c4lc -O`: done, enabled by default.** All ten modules compile
+  clean under `-O`; the linked image is ~1.2% smaller, and a real
+  60M-instruction boot run is ~4% faster (132.6s vs 137.6s) with
+  byte-for-byte identical output on the full M1-M4 regression suite
+  and the boot log itself. Smaller than the ~1.44x this same optimizer
+  gets on compiler-workload benchmarks elsewhere in this repo --
+  `cpu_step`'s dispatch is already a tight if/else-if chain with
+  little redundant-expression fat for the tree/peephole passes to
+  remove -- but strictly positive with zero correctness cost, and
+  worth keeping given how many guest instructions a full boot needs
+  (M6). Wired into the default `c4or1k.c4r` build rule, not a
+  separate opt-in target.
+- **`fs.json` overlay, optional virtio-block/ATA — not attempted.**
+  Framebuffer/keyboard stay explicitly out of scope regardless.
 
 **M8 - faster** Implement the fastcpu.js-based emulator.
 

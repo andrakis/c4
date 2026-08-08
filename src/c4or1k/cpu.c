@@ -144,30 +144,26 @@ void cpu_set_spr(int idx, int val) {
     address = idx & 0x7FF;
     group = (idx >> 11) & 0x1F;
 
-    switch (group) {
-    case 0:
+    if (group == 0) {
         if (address == SPR_SR) cpu_set_flags(val);
         group0[address] = val;
-        break;
-    case 1: group1[address] = val; break;
-    case 2: group2[address] = val; break;
-    case 3: case 4:
+    } else if (group == 1) {
+        group1[address] = val;
+    } else if (group == 2) {
+        group2[address] = val;
+    } else if (group == 3 || group == 4) {
         // data/instruction cache: not supported, accepted no-op
-        break;
-    case 8:
+    } else if (group == 8) {
         // accepted no-op
-        break;
-    case 9:
+    } else if (group == 9) {
         if (address == 0) PICMR = val | 0x3; // non-maskable interrupt bits always on
         else if (address == 2) { /* PICSR: writes ignored, matches jor1k */ }
         else printf("cpu_set_spr: unsupported PIC address %d\n", address);
-        break;
-    case 10:
+    } else if (group == 10) {
         if (address == 0) TTMR = val;
         else if (address == 1) TTCR = val;
         else printf("cpu_set_spr: unsupported tick timer address %d\n", address);
-        break;
-    default:
+    } else {
         printf("cpu_set_spr: unsupported SPR group %d\n", group);
     }
 }
@@ -177,19 +173,21 @@ int cpu_get_spr(int idx) {
     address = idx & 0x7FF;
     group = (idx >> 11) & 0x1F;
 
-    switch (group) {
-    case 0:
+    if (group == 0) {
         if (address == SPR_SR) return cpu_get_flags();
         return group0[address];
-    case 1: return group1[address];
-    case 2: return group2[address];
-    case 8: return 0;
-    case 9:
+    } else if (group == 1) {
+        return group1[address];
+    } else if (group == 2) {
+        return group2[address];
+    } else if (group == 8) {
+        return 0;
+    } else if (group == 9) {
         if (address == 0) return PICMR;
         else if (address == 2) return PICSR;
         printf("cpu_get_spr: unsupported PIC address %d\n", address);
         return 0;
-    case 10:
+    } else if (group == 10) {
         if (address == 0) return TTMR;
         else if (address == 1) return TTCR;
         printf("cpu_get_spr: unsupported tick timer address %d\n", address);
@@ -331,6 +329,20 @@ void cpu_dump() {
     }
 }
 
+// Deliberately if/else-if, not switch, unlike every other dispatch in
+// this project (mmio.c, uart.c, virtio.c, and cpu_set_spr/cpu_get_spr
+// above all use switch/case). This function and its 0x2E/0x2F/0x38/
+// 0x39 sub-dispatches were switch-based for a time during M5 and
+// reproducibly caused a SIGSEGV partway through a real Linux boot
+// (never in the M1-M4 test suite, which never exercises anywhere near
+// the opcode/func diversity a real kernel does) -- bisected down to
+// cpu.c specifically (reverting only this function's switches, with
+// every other switch in the project left in place, made the crash go
+// away; reverting only the widest single sub-switch was not enough by
+// itself, implicating c4lc's jumptable codegen more broadly here
+// rather than one specific case range). c4lc-gen.lisp is off-limits
+// to modify (project convention), so this stays if/else rather than
+// chasing a compiler fix. See docs/c4or1k-design.md's M5 section.
 int cpu_step(int halt_pc) {
     int ins, opcode, rd, ra, rb, rA, rB, imm, simm, func, jump, i, result, addr, phys;
 
@@ -350,137 +362,113 @@ int cpu_step(int halt_pc) {
     rB = r[rb];
     imm = sext(ins, 16);
 
-    switch (opcode) {
-    case 0x00:                         // l.j
+    if (opcode == 0x00) {              // l.j
         jump = pc + sext(ins, 26);
         pc = nextpc; nextpc = jump; delayedins = 1;
         return 0;
-    case 0x01:                         // l.jal
+    } else if (opcode == 0x01) {       // l.jal
         r[9] = sext((nextpc << 2) + 4, 32);
         jump = pc + sext(ins, 26);
         pc = nextpc; nextpc = jump; delayedins = 1;
         return 0;
-    case 0x03:                         // l.bnf
+    } else if (opcode == 0x03) {       // l.bnf
         if (!SR_F) {
             jump = pc + sext(ins, 26);
             pc = nextpc; nextpc = jump; delayedins = 1;
             return 0;
         }
-        break;
-    case 0x04:                         // l.bf
+    } else if (opcode == 0x04) {       // l.bf
         if (SR_F) {
             jump = pc + sext(ins, 26);
             pc = nextpc; nextpc = jump; delayedins = 1;
             return 0;
         }
-        break;
-    case 0x05:                         // l.nop
-        break;
-    case 0x06:                         // l.movhi
+    } else if (opcode == 0x05) {       // l.nop
+        // nothing
+    } else if (opcode == 0x06) {       // l.movhi
         r[rd] = sext((ins & 0xFFFF) << 16, 32);
-        break;
-    case 0x08:                         // l.sys / l.trap
+    } else if (opcode == 0x08) {       // l.sys / l.trap
         if ((ins & 0xFFFF0000) == 0x21000000) cpu_exception(EXCEPT_TRAP, group0[SPR_EEAR_BASE]);
         else cpu_exception(EXCEPT_SYSCALL, group0[SPR_EEAR_BASE]);
-        break;
-    case 0x09:                         // l.rfe
+    } else if (opcode == 0x09) {       // l.rfe
         nextpc = cpu_get_spr(SPR_EPCR_BASE) >> 2;
         pc = nextpc; nextpc = pc + 1; delayedins = 0;
         cpu_set_flags(cpu_get_spr(SPR_ESR_BASE));
         return 0;
-    case 0x11:                         // l.jr
+    } else if (opcode == 0x11) {       // l.jr
         jump = rB >> 2;
         pc = nextpc; nextpc = jump; delayedins = 1;
         return 0;
-    case 0x12:                         // l.jalr
+    } else if (opcode == 0x12) {       // l.jalr
         r[9] = sext((nextpc << 2) + 4, 32);
         jump = rB >> 2;
         pc = nextpc; nextpc = jump; delayedins = 1;
         return 0;
-    case 0x1B:                         // l.lwa
+    } else if (opcode == 0x1B) {       // l.lwa
         addr = rA + imm;
         phys = dtlb_lookup(addr, 0);
         if (phys != -1) {
             EA = phys;
             r[rd] = sext(ram_lw(phys), 32);
         }
-        break;
-    case 0x21:                         // l.lwz
+    } else if (opcode == 0x21) {       // l.lwz
         addr = rA + imm;
         phys = dtlb_lookup(addr, 0);
         if (phys != -1) r[rd] = sext(ram_lw(phys), 32);
-        break;
-    case 0x23:                         // l.lbz
+    } else if (opcode == 0x23) {       // l.lbz
         addr = rA + imm;
         phys = dtlb_lookup(addr, 0);
         if (phys != -1) r[rd] = ram_lb(phys);
-        break;
-    case 0x24:                         // l.lbs
+    } else if (opcode == 0x24) {       // l.lbs
         addr = rA + imm;
         phys = dtlb_lookup(addr, 0);
         if (phys != -1) r[rd] = sext(ram_lb(phys), 8);
-        break;
-    case 0x25:                         // l.lhz
+    } else if (opcode == 0x25) {       // l.lhz
         addr = rA + imm;
         phys = dtlb_lookup(addr, 0);
         if (phys != -1) r[rd] = ram_lh(phys);
-        break;
-    case 0x26:                         // l.lhs
+    } else if (opcode == 0x26) {       // l.lhs
         addr = rA + imm;
         phys = dtlb_lookup(addr, 0);
         if (phys != -1) r[rd] = sext(ram_lh(phys), 16);
-        break;
-    case 0x27:                         // l.addi
+    } else if (opcode == 0x27) {       // l.addi
         result = sext(rA + imm, 32);
         SR_CY = result < rA;
         SR_OV = (((rA ^ imm ^ -1) & (rA ^ result)) & 0x80000000) ? 1 : 0;
         r[rd] = result;
-        break;
-    case 0x29:                         // l.andi
+    } else if (opcode == 0x29) {       // l.andi
         r[rd] = rA & (ins & 0xFFFF);
-        break;
-    case 0x2A:                         // l.ori
+    } else if (opcode == 0x2A) {       // l.ori
         r[rd] = rA | (ins & 0xFFFF);
-        break;
-    case 0x2B:                         // l.xori
+    } else if (opcode == 0x2B) {       // l.xori
         r[rd] = sext(rA ^ imm, 32);
-        break;
-    case 0x2D:                         // l.mfspr
+    } else if (opcode == 0x2D) {       // l.mfspr
         r[rd] = cpu_get_spr(rA | (ins & 0xFFFF));
-        break;
-    case 0x2E:                         // l.slli / l.srli / l.srai
+    } else if (opcode == 0x2E) {       // l.slli / l.srli / l.srai
         func = (ins >> 6) & 0x3;
-        switch (func) {
-        case 0: r[rd] = sext(rA << (ins & 0x1F), 32); break;  // slli
-        case 1: r[rd] = uval(rA) >> (ins & 0x1F); break;       // srli (logical; safecpu.js's own comment mislabels this "rori" -- the code is `>>>`, see cpu.h)
-        case 2: r[rd] = rA >> (ins & 0x1F); break;             // srai (arithmetic -- c4lc's native >> is exactly this)
-        default:
-            printf("cpu_step: unimplemented 0x2E func at pc=%d (ins=0x%x)\n", pc, ins); cpu_dump(); return 2;
-        }
-        break;
-    case 0x2F:                         // l.sfXXi
+        if (func == 0) r[rd] = sext(rA << (ins & 0x1F), 32);       // slli
+        else if (func == 1) r[rd] = uval(rA) >> (ins & 0x1F);       // srli (logical; safecpu.js's own comment mislabels this "rori" -- the code is `>>>`, see cpu.h)
+        else if (func == 2) r[rd] = rA >> (ins & 0x1F);              // srai (arithmetic -- c4lc's native >> is exactly this)
+        else { printf("cpu_step: unimplemented 0x2E func at pc=%d (ins=0x%x)\n", pc, ins); cpu_dump(); return 2; }
+    } else if (opcode == 0x2F) {       // l.sfXXi
         func = (ins >> 21) & 0x1F;
-        switch (func) {
-        case 0x0: SR_F = (rA == imm); break;
-        case 0x1: SR_F = (rA != imm); break;
-        case 0x2: SR_F = (uval(rA) > uval(imm)); break;
-        case 0x3: SR_F = (uval(rA) >= uval(imm)); break;
-        case 0x4: SR_F = (uval(rA) < uval(imm)); break;
-        case 0x5: SR_F = (uval(rA) <= uval(imm)); break;
-        case 0xa: SR_F = (rA > imm); break;
-        case 0xb: SR_F = (rA >= imm); break;
-        case 0xc: SR_F = (rA < imm); break;
-        case 0xd: SR_F = (rA <= imm); break;
-        default:
-            printf("cpu_step: unimplemented 0x2F func at pc=%d (ins=0x%x)\n", pc, ins); cpu_dump(); return 2;
-        }
-        break;
-    case 0x30:                         // l.mtspr
+        if (func == 0x0) SR_F = (rA == imm);
+        else if (func == 0x1) SR_F = (rA != imm);
+        else if (func == 0x2) SR_F = (uval(rA) > uval(imm));
+        else if (func == 0x3) SR_F = (uval(rA) >= uval(imm));
+        else if (func == 0x4) SR_F = (uval(rA) < uval(imm));
+        else if (func == 0x5) SR_F = (uval(rA) <= uval(imm));
+        else if (func == 0xa) SR_F = (rA > imm);
+        else if (func == 0xb) SR_F = (rA >= imm);
+        else if (func == 0xc) SR_F = (rA < imm);
+        else if (func == 0xd) SR_F = (rA <= imm);
+        else { printf("cpu_step: unimplemented 0x2F func at pc=%d (ins=0x%x)\n", pc, ins); cpu_dump(); return 2; }
+    } else if (opcode == 0x30) {       // l.mtspr
         simm = ((ins >> 10) & 0xF800) | (ins & 0x7FF); // NOT sign-extended: an SPR-index component, not a byte offset
         pc = nextpc; nextpc = pc + 1; delayedins = 0;
         cpu_set_spr(rA | simm, rB);
         return 0;
-    case 0x33:                         // l.swa
+    } else if (opcode == 0x33) {       // l.swa
         simm = sext(((ins >> 10) & 0xF800) | (ins & 0x7FF), 16);
         addr = rA + simm;
         phys = dtlb_lookup(addr, 1);
@@ -489,96 +477,77 @@ int cpu_step(int halt_pc) {
             EA = -1;
             if (SR_F) ram_sw(phys, rB);
         }
-        break;
-    case 0x35:                         // l.sw
+    } else if (opcode == 0x35) {       // l.sw
         simm = sext(((ins >> 10) & 0xF800) | (ins & 0x7FF), 16);
         addr = rA + simm;
         phys = dtlb_lookup(addr, 1);
         if (phys != -1) ram_sw(phys, rB);
-        break;
-    case 0x36:                         // l.sb
+    } else if (opcode == 0x36) {       // l.sb
         simm = sext(((ins >> 10) & 0xF800) | (ins & 0x7FF), 16);
         addr = rA + simm;
         phys = dtlb_lookup(addr, 1);
         if (phys != -1) ram_sb(phys, rB);
-        break;
-    case 0x37:                         // l.sh
+    } else if (opcode == 0x37) {       // l.sh
         simm = sext(((ins >> 10) & 0xF800) | (ins & 0x7FF), 16);
         addr = rA + simm;
         phys = dtlb_lookup(addr, 1);
         if (phys != -1) ram_sh(phys, rB);
-        break;
-    case 0x38:                         // three-operand ALU
+    } else if (opcode == 0x38) {       // three-operand ALU
         func = ins & 0x3CF;
-        switch (func) {
-        case 0x0:                                      // add
+        if (func == 0x0) {                          // add
             result = sext(rA + rB, 32);
             SR_CY = result < rA;
             SR_OV = (((rA ^ rB ^ -1) & (rA ^ result)) & 0x80000000) ? 1 : 0;
             r[rd] = result;
-            break;
-        case 0x2:                                       // sub
+        } else if (func == 0x2) {                    // sub
             result = sext(rA - rB, 32);
             SR_CY = rB > rA;
             SR_OV = (((rA ^ rB) & (rA ^ result)) & 0x80000000) ? 1 : 0;
             r[rd] = result;
-            break;
-        case 0x3: r[rd] = rA & rB; break;                // and
-        case 0x4: r[rd] = rA | rB; break;                // or
-        case 0x5: r[rd] = sext(rA ^ rB, 32); break;      // xor
-        case 0x8: r[rd] = sext(rA << (rB & 0x1F), 32); break; // sll
-        case 0x48: r[rd] = uval(rA) >> (rB & 0x1F); break;    // srl
-        case 0x88: r[rd] = rA >> (rB & 0x1F); break;          // sra
-        case 0xf:                                        // ff1
+        } else if (func == 0x3) r[rd] = rA & rB;      // and
+        else if (func == 0x4) r[rd] = rA | rB;        // or
+        else if (func == 0x5) r[rd] = sext(rA ^ rB, 32); // xor
+        else if (func == 0x8) r[rd] = sext(rA << (rB & 0x1F), 32); // sll
+        else if (func == 0x48) r[rd] = uval(rA) >> (rB & 0x1F);    // srl
+        else if (func == 0x88) r[rd] = rA >> (rB & 0x1F);          // sra
+        else if (func == 0xf) {                       // ff1
             r[rd] = 0;
             for (i = 0; i < 32; ++i) {
                 if (rA & (1 << i)) { r[rd] = i + 1; break; }
             }
-            break;
-        case 0x10f:                                       // fl1
+        } else if (func == 0x10f) {                    // fl1
             r[rd] = 0;
             for (i = 31; i >= 0; --i) {
                 if (rA & (1 << i)) { r[rd] = i + 1; break; }
             }
-            break;
-        case 0x306:                                        // mul
+        } else if (func == 0x306) {                     // mul
             result = sext(rA * rB, 32);
             SR_OV = (rA * rB < -2147483648 || rA * rB > 2147483647) ? 1 : 0;
             SR_CY = (uval(rA) * uval(rB) > 4294967295) ? 1 : 0;
             r[rd] = result;
-            break;
-        case 0x30a:                                         // divu
+        } else if (func == 0x30a) {                      // divu
             SR_CY = (rB == 0);
             SR_OV = 0;
             if (!SR_CY) r[rd] = uval(rA) / uval(rB);
-            break;
-        case 0x309:                                          // div
+        } else if (func == 0x309) {                       // div
             SR_CY = (rB == 0);
             SR_OV = 0;
             if (!SR_CY) r[rd] = sext(rA / rB, 32);
-            break;
-        default:
-            printf("cpu_step: unimplemented 0x38 func at pc=%d (ins=0x%x)\n", pc, ins); cpu_dump(); return 2;
-        }
-        break;
-    case 0x39:                         // l.sfXX
+        } else { printf("cpu_step: unimplemented 0x38 func at pc=%d (ins=0x%x)\n", pc, ins); cpu_dump(); return 2; }
+    } else if (opcode == 0x39) {       // l.sfXX
         func = (ins >> 21) & 0x1F;
-        switch (func) {
-        case 0x0: SR_F = (rA == rB); break;
-        case 0x1: SR_F = (rA != rB); break;
-        case 0x2: SR_F = (uval(rA) > uval(rB)); break;
-        case 0x3: SR_F = (uval(rA) >= uval(rB)); break;
-        case 0x4: SR_F = (uval(rA) < uval(rB)); break;
-        case 0x5: SR_F = (uval(rA) <= uval(rB)); break;
-        case 0xa: SR_F = (rA > rB); break;
-        case 0xb: SR_F = (rA >= rB); break;
-        case 0xc: SR_F = (rA < rB); break;
-        case 0xd: SR_F = (rA <= rB); break;
-        default:
-            printf("cpu_step: unimplemented 0x39 func at pc=%d (ins=0x%x)\n", pc, ins); cpu_dump(); return 2;
-        }
-        break;
-    default:
+        if (func == 0x0) SR_F = (rA == rB);
+        else if (func == 0x1) SR_F = (rA != rB);
+        else if (func == 0x2) SR_F = (uval(rA) > uval(rB));
+        else if (func == 0x3) SR_F = (uval(rA) >= uval(rB));
+        else if (func == 0x4) SR_F = (uval(rA) < uval(rB));
+        else if (func == 0x5) SR_F = (uval(rA) <= uval(rB));
+        else if (func == 0xa) SR_F = (rA > rB);
+        else if (func == 0xb) SR_F = (rA >= rB);
+        else if (func == 0xc) SR_F = (rA < rB);
+        else if (func == 0xd) SR_F = (rA <= rB);
+        else { printf("cpu_step: unimplemented 0x39 func at pc=%d (ins=0x%x)\n", pc, ins); cpu_dump(); return 2; }
+    } else {
         printf("cpu_step: unimplemented opcode 0x%x at pc=%d (ins=0x%x)\n", opcode, pc, ins);
         cpu_dump();
         return 2;

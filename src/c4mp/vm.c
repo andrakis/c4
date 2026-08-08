@@ -68,7 +68,8 @@ void c4_vm_init() {
         "SIGH,SIGI,USLP,INFO,OPSL,"
         "C4IV,"
         "FLT ,"
-        "JSRI,JSRS,JMPA,TLEV,DBG ,";
+        "JSRI,JSRS,JMPA,TLEV,DBG ,"
+        "CPUI,CPUN,CPUS,CPUH,";
 }
 
 char *c4_opname(int op) {
@@ -107,9 +108,10 @@ static int c4mp_info() {
     // the host, so report what the host can actually do rather than
     // what c4mp would like to claim. C4I_C4 propagates for the same
     // reason -- if the host is ultimately plain c4, so are we.
-    return (__c4_info() & (C4I_C4 | C4I_HRT | C4I_SIG | C4I_FLT)) | C4I_C4M | C4I_PROT;
+    return (__c4_info() & (C4I_C4 | C4I_HRT | C4I_SIG | C4I_FLT))
+           | C4I_C4M | C4I_PROT | C4I_SMP;
 #else
-    return C4I_C4M | C4I_HRT | C4I_SIG | C4I_FLT | C4I_PROT;
+    return C4I_C4M | C4I_HRT | C4I_SIG | C4I_FLT | C4I_PROT | C4I_SMP;
 #endif
 }
 
@@ -526,6 +528,23 @@ int c4_run(struct c4_cpu * RESTRICT c, int quantum) {
 #else
             a = c4_float_instruction(sp);
 #endif
+            break;
+
+        // ---- processors ----
+        case CPUI: a = c->id; break;
+        case CPUN: a = c4_ncpu; break;
+        case CPUS:
+            // __c4_cpu_start(id, entry, stacktop): args are pushed
+            // left to right, so the last one pushed is on top.
+            a = c4_cpu_start(sp[2], sp[1], sp[0]);
+            break;
+        case CPUH:
+            // Halt this processor, not the machine. Reached either by
+            // the guest calling it or by a secondary's entry function
+            // returning into the sentinel c4_cpu_start planted.
+            c->state = CPU_HALT;
+            reason = RUN_HALT;
+            run = 0;
             break;
 
         default:

@@ -122,7 +122,12 @@
 	("__c4_adjust" _ADJ) ("__c4_configure" C4CF) ("__c4_cycles" C4CY)
 	("__time" TIME) ("__c4_signal" SIGH) ("__c4_sigint" SIGI)
 	("__c4_usleep" USLP) ("__c4_info" INFO) ("__c4_ops_list" OPSL)
-	("__c4_invoke" C4IV) ("__c4_float" FLT)))
+	("__c4_invoke" C4IV) ("__c4_float" FLT)
+	;; c4mp's processor opcodes (66+). c4m does not have these; a
+	;; program that calls them must test __c4_info() & C4I_SMP first,
+	;; or it gets an illegal instruction there instead of an answer.
+	("__c4_cpu_id" CPUI) ("__c4_cpu_count" CPUN)
+	("__c4_cpu_start" CPUS) ("__c4_cpu_halt" CPUH)))
 (define g:sysinit (lambda (l)
 	(if (empty? l) nil
 	(begin

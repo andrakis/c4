@@ -33,7 +33,8 @@ static void usage() {
     printf("  -d       trace every instruction\n");
     printf("  -v       report load and exit details\n");
     printf("  -p KB    stack size per CPU in KB (default %d)\n", C4MP_STACK_SZ / 1024);
-    printf("  -q N     run in slices of N instructions (default: one unbroken run)\n");
+    printf("  -q N     instructions per slice (default %d with -cpus, otherwise unbroken)\n", C4MP_QUANTUM);
+    printf("  -cpus N  number of processors (default 1)\n");
     printf("  --       end of options\n");
 }
 
@@ -48,14 +49,15 @@ static int c4_atoi(char *s) {
 
 int main(int argc, char **argv) {
     struct c4r_image img;
-    struct c4_cpu cpu;
     int *stack, *boot, *p, *sp;
-    int stacksz, verbose, nboot, i, r, quantum;
+    int stacksz, verbose, nboot, i, r, quantum, ncpu;
+    struct c4_cpu *cpu0;
     char opt;
 
     c4_vm_init();
     stacksz = C4MP_STACK_SZ;
-    quantum = -1;
+    quantum = 0;      // 0 = not given; resolved once ncpu is known
+    ncpu = 1;
     verbose = 0;
     c4mp_debug = 0;
 
@@ -70,6 +72,12 @@ int main(int argc, char **argv) {
             if (argc <= 0) { printf("c4mp: -q needs a slice length\n"); return -1; }
             quantum = c4_atoi(*argv);
             if (quantum < 1) { printf("c4mp: -q must be at least 1\n"); return -1; }
+        }
+        else if (opt == 'c') {
+            --argc; ++argv;
+            if (argc <= 0) { printf("c4mp: -cpus needs a count\n"); return -1; }
+            ncpu = c4_atoi(*argv);
+            if (ncpu < 1) { printf("c4mp: -cpus must be at least 1\n"); return -1; }
         }
         else if (opt == 'p') {
             --argc; ++argv;
@@ -117,40 +125,47 @@ int main(int argc, char **argv) {
     __c4_signal_init();
 #endif
 
-    // Nothing reads bp before the trampoline's first ENT, so pointing
-    // it at the stack top is enough.
-    cpu.pc = boot;
-    cpu.sp = sp;
-    cpu.bp = sp;
-    cpu.a = 0;
-    cpu.mode = MODE_UNPROTECTED;
-    cpu.cycle = 0;
-    cpu.state = CPU_RUN;
-    cpu.status = 0;
-    cpu.traph = 0;
-    cpu.ihand = 0;
-    cpu.ival = 0;
-    cpu.tri = 0;
-    cpu.stkbase = stack;
+    // With one processor there is nothing to interleave, so an
+    // unbroken run is both fastest and exactly what c4m does. With
+    // more than one an unbounded quantum would let CPU 0 finish before
+    // CPU 1 ever started, which is not a multiprocessor.
+    if (!quantum) quantum = (ncpu > 1) ? C4MP_QUANTUM : -1;
 
-    // Slicing must not change behaviour: the only difference between
-    // -q 1 and one unbroken run is how many times the registers make
-    // the round trip through struct c4_cpu. That is the whole
-    // mechanism stage 2's second processor rests on, so it is worth
-    // being able to exercise it against a single CPU first, where any
-    // difference in output is unambiguously this code's fault.
-    do {
-        r = c4_run(&cpu, quantum);
-    } while (r == RUN_QUANTUM && cpu.state == CPU_RUN);
+    if (!c4_smp_init(ncpu)) {
+        printf("c4mp: could not allocate %d processors\n", ncpu);
+        free(boot); free(stack); c4r_free(&img);
+        return -1;
+    }
+    // CPU 0 starts on the bootstrap. Nothing reads bp before the
+    // trampoline's first ENT, so the stack top will do.
+    cpu0 = c4_cpus;
+    cpu0->pc = boot;
+    cpu0->sp = sp;
+    cpu0->bp = sp;
+    cpu0->mode = MODE_UNPROTECTED;
+    cpu0->state = CPU_RUN;
+    cpu0->stkbase = stack;
+    // Every other processor stays CPU_OFF until the guest starts it
+    // with __c4_cpu_start. There is no "boot all CPUs at main": which
+    // processors exist is the machine's business, what runs on them is
+    // the guest's.
 
-    if (verbose)
-        printf("c4mp: exit %d after %d cycles (reason %d)\n", cpu.status, cpu.cycle, r);
+    r = c4_smp_run(quantum);
 
+    if (verbose) {
+        printf("c4mp: exit %d after %d cycles (reason %d)\n",
+               cpu0->status, cpu0->cycle, r);
+        for (i = 1; i < c4_ncpu; ++i)
+            printf("c4mp: cpu %d ran %d cycles\n", i, c4_cpus[i].cycle);
+    }
+    i = cpu0->status;
+
+    c4_smp_free();
     free(boot);
     free(stack);
     c4r_free(&img);
 #ifndef __c4cc__
     __c4_signal_shutdown();
 #endif
-    return cpu.status;
+    return i;
 }

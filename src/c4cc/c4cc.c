@@ -217,7 +217,13 @@ void c4cc_init_instructions() {
 	// Unsupported float instruction
 	"FLT ,"
 	// Instructions
-	"JSRI,JSRS,JMPA,TLEV,DBG ,";
+	"JSRI,JSRS,JMPA,TLEV,DBG ,"
+	// c4mp's processor opcodes. Names only, so c4rdump can disassemble
+	// a c4mp image -- it indexes this table with no bounds check, so
+	// without them an opcode of 66 reads past the end. c4cc_keywords
+	// below is deliberately NOT extended: c4cc targets c4m, which does
+	// not have these, and c4lc is the compiler that emits them.
+	"CPUI,CPUN,CPUS,CPUH,";
 	c4cc_keywords =
 		"static extern __attribute__ constructor destructor "     // Ignored by c4m
 		"char else enum if int return sizeof for continue while " // Keywords

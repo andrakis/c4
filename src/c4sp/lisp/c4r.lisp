@@ -55,7 +55,11 @@
 	OPEN READ CLOS PRTF MALC FREE MSET MCMP EXIT
 	PUTC PUTS RALC MCPY STRC ITH _OPC _BLT _TRP OPCD
 	_JMP _ADJ C4CF C4CY TIME SIGH SIGI USLP INFO OPSL
-	C4IV FLT JSRI JSRS JMPA TLEV DBG))
+	C4IV FLT JSRI JSRS JMPA TLEV DBG
+	;; c4mp only: processor control. Appended, never inserted -- the
+	;; list index IS the opcode number, and it is mirrored in c4m.c,
+	;; load-c4r.c, oisc4.c and c4cc.c.
+	CPUI CPUN CPUS CPUH))
 (define c4r:nops (length c4r:ops))
 
 ;; does opcode n take an operand word? LEA..ADJ are 0..7; JSRI 61 JSRS 62

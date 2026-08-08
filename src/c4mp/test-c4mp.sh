@@ -108,5 +108,54 @@ for b in hello factorial test_basic test_printf tests; do
 done
 [ $fail = 0 ] && echo "test-c4mp: slicing invariance OK"
 
+# ---- 5. more than one processor ----
+# The transcript is PINNED, which is only possible because simulated
+# SMP is deterministic: fixed quantum, fixed order. Native SMP (pass 2)
+# will not be pinnable and will have to assert invariants instead --
+# keep the two kinds of check apart and labelled.
+SMP0=c4mp-smp0.c4r
+if [ -f "$SMP0" ]; then
+    timeout 60 $C4MP -cpus 4 "$SMP0" </dev/null > "$TMP/a" 2>&1
+    if ! cmp -s "$TMP/a" src/c4mp/tests/smp0-4cpu.txt; then
+        echo "test-c4mp: FAIL smp0 on 4 processors differs from the pin"
+        diff src/c4mp/tests/smp0-4cpu.txt "$TMP/a" | head -8
+        fail=1
+    fi
+
+    # Determinism is the property the pin depends on, so check it
+    # directly rather than trusting one comparison.
+    if ! cmp -s <(timeout 60 $C4MP -cpus 4 "$SMP0" </dev/null 2>&1) "$TMP/a"; then
+        echo "test-c4mp: FAIL smp0 is not deterministic across runs"
+        fail=1
+    fi
+
+    # The quantum must actually drive the interleaving. If a different
+    # slice length produced identical output, the CPUs would be running
+    # to completion in turn and this whole stage would be a fiction.
+    if cmp -s <(timeout 60 $C4MP -cpus 4 -q 250 "$SMP0" </dev/null 2>&1) "$TMP/a"; then
+        echo "test-c4mp: FAIL -q 250 interleaves identically to -q 1000"
+        fail=1
+    fi
+
+    # Totals must hold however many processors share the work: each
+    # worker owns its own slot, so nothing here depends on atomics.
+    for n in 1 2 4 8; do
+        want="smp0: total $((n * 4 * 3000)) across $n cpu(s), expected $((n * 4 * 3000))"
+        got=$(timeout 60 $C4MP -cpus $n "$SMP0" </dev/null 2>&1 | tail -1)
+        [ "$got" = "$want" ] || { echo "test-c4mp: FAIL -cpus $n: $got"; fail=1; }
+    done
+
+    # And the whole point: simulated SMP on a host that has none.
+    timeout 600 $C4M load-c4r.c -- c4mp.c4r -cpus 4 "$SMP0" </dev/null 2>&1 > "$TMP/b"
+    if ! cmp -s "$TMP/b" src/c4mp/tests/smp0-4cpu.txt; then
+        echo "test-c4mp: FAIL smp0 on 4 processors hosted by c4m differs from the pin"
+        diff src/c4mp/tests/smp0-4cpu.txt "$TMP/b" | head -8
+        fail=1
+    fi
+    [ $fail = 0 ] && echo "test-c4mp: multiprocessing OK"
+else
+    echo "test-c4mp: SKIP multiprocessing ($SMP0 not built)"
+fi
+
 if [ $fail = 0 ]; then echo "test-c4mp: OK"; else echo "test-c4mp: FAILED"; fi
 exit $fail

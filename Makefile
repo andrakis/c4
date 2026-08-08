@@ -356,7 +356,7 @@ test-oisc4-nested: $(OISC4) $(C4) $(C4M) oisc4-lc.c4r $(TESTS)/hello.c4r
 # c4m can host. The second is a backwards-compatibility proof, since
 # c4m has no multiprocessing to offer.
 C4MP_SRC  := src/c4mp
-C4MP_MODS := vm loader main
+C4MP_MODS := vm smp loader main
 C4MP_HDRS := $(C4MP_SRC)/c4mp.h $(INCLUDE)/c4.h $(INCLUDE)/c4m_float.h $(INCLUDE)/c4m_util.h
 c4mp: $(patsubst %,$(C4MP_SRC)/%.c,$(C4MP_MODS)) $(C4MP_HDRS) c4m_float.c
 	$(NATIVE_CC) $(NATIVE_CC_OPTS) -I $(C4MP_SRC) \
@@ -371,9 +371,14 @@ c4mp.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4MP_SRC)/c4mp.h $(patsubst %,$(C4MP_SR
 	done
 	$(C4RLINK) $(patsubst %,.c4mp_%.c4o,$(C4MP_MODS)) -o c4mp.c4r
 	rm -f .c4mp_*.c4o
+# The stage-2 guest: starts every processor the machine offers and
+# proves they interleave. Compiled by c4lc because it calls the
+# processor opcodes, which c4cc does not know.
+c4mp-smp0.c4r: c4sp $(C4LC_LISP) $(C4MP_SRC)/guest/smp0.c
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O $(C4MP_SRC)/guest/smp0.c c4mp-smp0.c4r > /dev/null
 # Not in the default suite: the native sweep runs every test image
 # through two VMs and the hosted checks run them through three.
-test-c4mp: c4m c4mp c4mp.c4r $(TESTS_C4R)
+test-c4mp: c4m c4mp c4mp.c4r c4mp-smp0.c4r $(TESTS_C4R)
 	bash $(C4MP_SRC)/test-c4mp.sh
 
 # C4IX (docs/c4ix-design.md): the c4lc-compiled OS. Each module is
@@ -802,7 +807,9 @@ c4m: c4m.c
 	gcc $(EXTRA_CC) -O2 -g -idirafter include -I . c4m.c c4m_float.c -o c4m -lm
 c4cc: $(C4CC_SRCS)
 	$(call compile_c,src/c4cc/asm-c4r.c,c4cc)
-$(C4RDUMP): src/c4ke/bin/c4rdump.c load-c4r.c
+# c4rdump compiles c4cc.c in for its instruction name table, so it
+# has to rebuild when that table changes.
+$(C4RDUMP): src/c4ke/bin/c4rdump.c load-c4r.c src/c4cc/c4cc.c
 #gcc $(EXTRA_CC) -O2 -g -Isrc/c4cc -I include -I . src/c4ke/bin/c4rdump.c -o $(C4RDUMP)
 	$(NATIVE_CC) $(NATIVE_CC_OPTS) -Isrc/c4cc src/c4ke/bin/c4rdump.c -o $(C4RDUMP)
 $(C4RLINK): src/c4ke/bin/c4rlink.c src/c4cc/asm-c4r.c src/c4cc/c4cc.c load-c4r.c

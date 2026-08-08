@@ -1,0 +1,18 @@
+smp0: 4 processor(s)
+cpu 0 tick 0 count 3000
+cpu 1 tick 0 count 3000
+cpu 2 tick 0 count 3000
+cpu 3 tick 0 count 3000
+cpu 0 tick 1 count 6000
+cpu 1 tick 1 count 6000
+cpu 2 tick 1 count 6000
+cpu 3 tick 1 count 6000
+cpu 0 tick 2 count 9000
+cpu 1 tick 2 count 9000
+cpu 2 tick 2 count 9000
+cpu 3 tick 2 count 9000
+cpu 0 tick 3 count 12000
+cpu 1 tick 3 count 12000
+cpu 2 tick 3 count 12000
+cpu 3 tick 3 count 12000
+smp0: total 48000 across 4 cpu(s), expected 48000

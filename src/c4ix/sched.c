@@ -245,7 +245,7 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     // a single-word opcode, so the arithmetic is the same for the
     // gateway and for an emulated host opcode.)
     if (sys_restart) {
-        returnpc = returnpc - 8;
+        returnpc = returnpc - sizeof(int);
         sys_restart = 0;
     }
 
@@ -262,7 +262,7 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
             // past it, exactly where the frame's LEV would have left it.
             a = 0;
             bp = n->sv_bp;
-            sp = n->sv_sp + 16;
+            sp = n->sv_sp + 2 * sizeof(int);
             returnpc = n->sv_pc;
         }
         // Charge the outgoing task for the slice it just ran, and
@@ -537,8 +537,8 @@ int task_wait(struct task *t) {
 int sched_forge(struct task *t, int entry, int argc, int argv) {
     int *stk, *x;
 
-    if (!(stk = (int *)malloc(C4IX_STACK_WORDS * 8))) return 0;
-    memset(stk, 0, C4IX_STACK_WORDS * 8);
+    if (!(stk = (int *)malloc(C4IX_STACK_WORDS * sizeof(int)))) return 0;
+    memset(stk, 0, C4IX_STACK_WORDS * sizeof(int));
     x = stk + C4IX_STACK_WORDS - 8;   // slack above, as C4KE leaves
 
     x[0] = 0;
@@ -573,7 +573,7 @@ void sched_forge_argv(struct task *t, int argv) {
 
 void sched_init(int interval) {
     sched_on_c4m = (host_type() == HOST_C4M);
-    sched_tramp = (int)&trampoline + 16;   // past ENT 0: the LEV word
+    sched_tramp = (int)&trampoline + 2 * sizeof(int);   // past ENT 0: the LEV word
 
     boot_task = task_adopt("boot");
     boot_task->state = TS_RUNNING;

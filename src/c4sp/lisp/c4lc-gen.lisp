@@ -32,7 +32,11 @@
 (define g:CHAR 0)
 (define g:INT 1)
 (define g:PTR 2)
-(define g:WORD 8)
+;; target word size follows the host running the compiler, like c4cc's
+;; sizeof(int): a 64-bit c4sp emits 64-bit images, a 32-bit build
+;; (c4sp32) emits 32-bit ones. c4r.lisp's encoder does the same.
+(define g:WORD (sys:wordsize))
+(define g:WMASK (- g:WORD 1))
 
 ;; ---- emission state ----
 
@@ -57,7 +61,7 @@
 ;; padding bytes must be written: the buffer is malloc'd, and garbage
 ;; padding would make the emitted image nondeterministic
 (define g:dalign (lambda ()
-	(if (= 0 (bit:and g:dlen 7)) nil
+	(if (= 0 (bit:and g:dlen g:WMASK)) nil
 	(begin
 		(string:byte! g:data g:dlen 0)
 		(set! g:dlen (+ g:dlen 1))
@@ -214,17 +218,17 @@
 		(define asz (g:third m))
 		(define words
 			(if (= asz nil)
-				(/ (+ (g:tysize mty) 7) 8)
+				(/ (+ (g:tysize mty) g:WMASK) g:WORD)
 			(if (= (- mty g:PTR) g:CHAR)
-				(/ (+ asz 7) 8)
-			(* asz (/ (+ (g:elemsize mty) 7) 8)))))
+				(/ (+ asz g:WMASK) g:WORD)
+			(* asz (/ (+ (g:elemsize mty) g:WMASK) g:WORD)))))
 		(define bytes
 			(if (= asz nil)
 				(if (g:svalue? mty) (g:tysize mty) nil)
 			(if (= (- mty g:PTR) g:CHAR) asz (* asz (g:elemsize mty)))))
 		(next g:slayout (tail ms) isu
-			(if isu off (+ off (* words 8)))
-			(if (> (* words 8) mx) (* words 8) mx)
+			(if isu off (+ off (* words g:WORD)))
+			(if (> (* words g:WORD) mx) (* words g:WORD) mx)
 			(g:cons (list (g:second m) off mty bytes) acc))))))
 
 ;; step size for ++/--/ptr arithmetic on type ty: pointers step their
@@ -956,7 +960,7 @@
 					(if (if (= size nil) (g:svalue? ty) false) (g:tysize ty)
 					(if (= size nil) nil
 					(if (= (- ty g:PTR) g:CHAR) size
-						(* size (* 8 (/ (+ (g:tysize (- ty g:PTR)) 7) 8)))))))
+						(* size (* g:WORD (/ (+ (g:tysize (- ty g:PTR)) g:WMASK) g:WORD)))))))
 				(set! g:syms (g:cons
 					(list n 'extg ty g:nexterns arrbytes) g:syms))
 				(set! g:externs (g:cons
@@ -1050,7 +1054,7 @@
 		(define bytewise (= elem g:CHAR))
 		(g:dalign)
 		(define at g:dlen)
-		(define bytes (if bytewise s (* s (* 8 (/ (+ (g:tysize elem) 7) 8)))))
+		(define bytes (if bytewise s (* s (* g:WORD (/ (+ (g:tysize elem) g:WMASK) g:WORD)))))
 		(if (> (+ at bytes) g:DMAX) (g:die "data segment full") nil)
 		(if (= init nil) (g:dzero bytes)
 		(if (= (head init) 'braces)
@@ -1093,10 +1097,10 @@
 		(define size (index d 3))
 		(define ty (g:second d))
 		(if (= size nil)
-			(if (g:svalue? ty) (/ (+ (g:tysize ty) 7) 8) 1)
+			(if (g:svalue? ty) (/ (+ (g:tysize ty) g:WMASK) g:WORD) 1)
 		(if (= (- ty g:PTR) g:CHAR)
-			(/ (+ size 7) 8)
-		(* size (/ (+ (g:elemsize ty) 7) 8)))))))
+			(/ (+ size g:WMASK) g:WORD)
+		(* size (/ (+ (g:elemsize ty) g:WMASK) g:WORD)))))))
 ;; its sizeof value in bytes, nil for plain scalars
 (define g:lbytes (lambda (d)
 	(begin
@@ -1359,7 +1363,7 @@
 				(set! syms (+ syms (g:extsection (g:reverse g:externs) base (list))))
 				(set! code (g:remapext code base (list))))
 			nil)
-		(list 2 64 (if m (list 'code (index m 3)) -1)
+		(list 2 (* 8 g:WORD) (if m (list 'code (index m 3)) -1)
 			code
 			(string:substr g:data 0 g:dlen)
 			syms

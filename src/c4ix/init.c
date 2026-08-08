@@ -316,9 +316,10 @@ static int init_demo(int argc, char **av) {
 }
 
 int init_main(int argc, int argv) {
-    struct task *a;
+    struct task *a, *v;
     char **av;
     char *shargv[2];
+    char *vav[1];
     int i;
 
     av = (char **)argv;
@@ -341,6 +342,13 @@ int init_main(int argc, int argv) {
     // Nothing left to run: the default, and the reason the default is
     // worth having.
     if (i >= argc) {
+        // Populate the VFS tree from c4ix.vfs.txt (if present on
+        // disk) before the shell starts, so ls/cat show real content
+        // from the first prompt. Not fatal if missing or it fails -
+        // vfsload says why and the tree is simply left at defaults.
+        vav[0] = "c4ix-vfsload.c4r";
+        if ((v = task_spawn(vav[0], 1, (int)vav))) task_wait(v);
+
         shargv[0] = "c4ix-sh.c4r";
         shargv[1] = 0;
         if (!(a = task_spawn(shargv[0], 1, (int)shargv))) {

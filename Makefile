@@ -347,12 +347,22 @@ test-oisc4: $(OISC4) $(C4M) c4.c4r c4sp.c4r $(TESTS_C4R)
 # C4BB: the breadboard computer (docs/c4bb-design.md). A JS-simulated
 # microcoded 32-bit hardware implementation of the c4m instruction
 # set; verified against a 32-bit native build of c4m by test-c4bb.
+#
+# c4sp32 makes c4lc a 32-bit compiler: c4lc's word size follows the
+# host running it (g:WORD in c4lc-gen.lisp), so the same Lisp emits
+# 32-bit images under c4sp32 and byte-identical 64-bit images under
+# c4sp. The c4bb firmware builds with c4lc; the test corpus builds
+# with c4cc32 so the parity suite exercises both compilers.
 c4cc32: $(C4CC_SRCS)
 	gcc -m32 $(NATIVE_CC_OPTS) src/c4cc/asm-c4r.c -o c4cc32 -lm
 c4m32: c4m.c c4m_float.c
 	gcc -m32 $(NATIVE_CC_OPTS) c4m.c c4m_float.c -o c4m32 -lm
-c4bb-32bit: c4cc32 c4m32
-c4bb-images: c4bb-32bit
+c4sp32: $(C4SP_SRCS)
+	gcc -m32 $(EXTRA_CC) -O0 -g -Iinclude -I. -o c4sp32 src/c4sp/c4sp.c
+c4rlink32: $(SRCS)/c4ke/bin/c4rlink.c $(SRCS)/c4cc/asm-c4r.c
+	gcc -m32 $(NATIVE_CC_OPTS) -Isrc/c4cc -o c4rlink32 $(SRCS)/c4ke/bin/c4rlink.c -lm
+c4bb-32bit: c4cc32 c4m32 c4sp32 c4rlink32
+c4bb-images: c4bb-32bit $(C4LC_LISP)
 	bash src/c4bb/tests/build-images.sh
 test-c4bb: c4bb-images $(C4M) $(TESTS_C4R)
 	bash src/c4bb/tests/test-c4bb.sh

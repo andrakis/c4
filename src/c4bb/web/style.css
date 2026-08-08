@@ -1,0 +1,83 @@
+/* c4bb - synthwave breadboard */
+:root {
+  --bg: #0d0b1e;
+  --panel: #14102a;
+  --chip: #1a1633;
+  --edge: #3a3160;
+  --text: #c8c2e8;
+  --dim: #6a6396;
+  --pink: #ff2d95;
+  --cyan: #00e5ff;
+  --yellow: #ffe66d;
+  --green: #3dff9e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font-family: "JetBrains Mono", "Fira Mono", monospace; font-size: 13px;
+}
+/* Intentionally NOT height:100vh: the board's aspect ratio can make
+   #left taller than the viewport, and we want the page to scroll in
+   that case rather than clip the terminal. min-height keeps short
+   pages filling the screen without forcing tall ones to compress. */
+#layout { display: flex; gap: 8px; padding: 8px; min-height: 100vh; align-items: flex-start; }
+#left { flex: 1; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+#right { width: 340px; display: flex; flex-direction: column; gap: 8px; align-self: flex-start; position: sticky; top: 8px; }
+
+#toolbar {
+  display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+  background: var(--panel); border: 1px solid var(--edge);
+  border-radius: 6px; padding: 6px 10px;
+}
+#toolbar button, #toolbar select {
+  background: var(--chip); color: var(--text); border: 1px solid var(--edge);
+  border-radius: 4px; padding: 4px 10px; font: inherit; cursor: pointer;
+}
+#toolbar button:hover { border-color: var(--cyan); color: var(--cyan); }
+#toolbar button.active { border-color: var(--pink); color: var(--pink); }
+#speedlabel { color: var(--dim); display: flex; gap: 6px; align-items: center; }
+#speed { width: 110px; accent-color: var(--pink); }
+#status { margin-left: auto; color: var(--dim); }
+
+#board {
+  /* scales with width like before, but capped so a wide window can't
+     make it grow tall enough to push the terminal off the page */
+  width: 100%; aspect-ratio: 980 / 560; max-height: 55vh;
+  background: var(--bg);
+  border: 1px solid var(--edge); border-radius: 6px;
+}
+#term-header { display: flex; align-items: center; gap: 8px; }
+#kbd-status {
+  font-size: 12px; color: var(--dim);
+  border: 1px solid var(--edge); border-radius: 10px; padding: 2px 10px;
+}
+#kbd-status.listening { color: var(--green); border-color: var(--green); }
+#kbd-status.inert { color: var(--dim); border-style: dashed; }
+#terminal {
+  flex: 0 0 380px; overflow-y: auto; white-space: pre-wrap; word-break: break-all;
+  background: #060512; color: var(--green);
+  border: 1px solid var(--edge); border-radius: 6px; padding: 10px;
+  font-size: 15px; line-height: 1.4; outline: none; cursor: text;
+}
+#terminal:focus { border-color: var(--green); box-shadow: 0 0 0 1px var(--green) inset; }
+#terminal:empty::before {
+  content: attr(data-placeholder);
+  color: var(--dim); font-style: italic;
+}
+
+.panel {
+  background: var(--panel); border: 1px solid var(--edge);
+  border-radius: 6px; padding: 8px 10px; overflow: auto;
+}
+.panel h3 {
+  margin: 0 0 6px; font-size: 12px; font-weight: normal;
+  color: var(--pink); text-transform: uppercase; letter-spacing: 2px;
+}
+#regs { width: 100%; border-collapse: collapse; }
+#regs td { padding: 1px 6px; }
+#regs td.name { color: var(--dim); width: 3.5em; }
+#regs td.val { color: var(--cyan); }
+#regs tr.changed td.val { color: var(--yellow); }
+#ucode-panel { max-height: 420px; }
+#ucode { margin: 0; color: var(--dim); font-size: 12px; line-height: 1.5; }
+#ucode .cur { color: var(--yellow); background: #2a2347; display: inline-block; width: 100%; }

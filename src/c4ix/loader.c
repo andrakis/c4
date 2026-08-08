@@ -105,33 +105,33 @@ int c4r_load(char *path, struct c4r_image *img) {
     }
     p = p + 13;   // signature, version, wordbits, padding
 
-    entry    = loader_word(p); p = p + 8;
-    codelen  = loader_word(p); p = p + 8;
-    datalen  = loader_word(p); p = p + 8;
-    patchlen = loader_word(p); p = p + 8;
-    symlen   = loader_word(p); p = p + 8;
-    conslen  = loader_word(p); p = p + 8;
-    deslen   = loader_word(p); p = p + 8;
+    entry    = loader_word(p); p = p + sizeof(int);
+    codelen  = loader_word(p); p = p + sizeof(int);
+    datalen  = loader_word(p); p = p + sizeof(int);
+    patchlen = loader_word(p); p = p + sizeof(int);
+    symlen   = loader_word(p); p = p + sizeof(int);
+    conslen  = loader_word(p); p = p + sizeof(int);
+    deslen   = loader_word(p); p = p + sizeof(int);
 
     // code: copy out of the read buffer into an exact-size allocation
-    p = p + 8;   // 'C' marker word
-    if (!(code = (int *)malloc(codelen * 8))) { free(buf); return 0; }
-    memcpy(code, p, codelen * 8);
-    p = p + codelen * 8;
+    p = p + sizeof(int);   // 'C' marker word
+    if (!(code = (int *)malloc(codelen * sizeof(int)))) { free(buf); return 0; }
+    memcpy(code, p, codelen * sizeof(int));
+    p = p + codelen * sizeof(int);
 
     // data: fresh zero-padded allocation, word-aligned by malloc
-    p = p + 8;   // 'D' marker
+    p = p + sizeof(int);   // 'D' marker
     if (!(data = (char *)malloc(datalen + 8))) { free(code); free(buf); return 0; }
     memset(data, 0, datalen + 8);
     memcpy(data, p, datalen);
     p = p + datalen;
 
     // patches: byte-offset address rewrites into the fresh segments
-    p = p + 8;   // 'P' marker
+    p = p + sizeof(int);   // 'P' marker
     i = 0;
     while (i < patchlen) {
-        ptype = loader_word(p); paddr = loader_word(p + 8); pvalu = loader_word(p + 16);
-        p = p + 24;
+        ptype = loader_word(p); paddr = loader_word(p + sizeof(int)); pvalu = loader_word(p + 2 * sizeof(int));
+        p = p + 3 * sizeof(int);
         if (ptype == -1) code[paddr] = (int)(code + pvalu);
         else if (ptype == -2) code[paddr] = (int)(data + pvalu);
         else if (ptype == -3) *(int *)(data + paddr) = (int)(code + pvalu);
@@ -154,13 +154,13 @@ int c4r_load(char *path, struct c4r_image *img) {
     //
     // The lists point INTO buf, which is freed below, so copying is
     // not an optimisation -- it is the only way to defer them.
-    p = p + 8;   // 'c' marker
+    p = p + sizeof(int);   // 'c' marker
     cons = (int *)p;
-    p = p + conslen * 8;
+    p = p + conslen * sizeof(int);
     des = (int *)p + 1;   // past the 'd' marker
-    p = p + 8;   // 'd' marker
-    p = p + deslen * 8;
-    p = p + 8;   // 'S' marker
+    p = p + sizeof(int);   // 'd' marker
+    p = p + deslen * sizeof(int);
+    p = p + sizeof(int);   // 'S' marker
     // Only where traps do not exist: on c4m userland must go through
     // the real gateway so protected mode means something.
     if (host_type() == HOST_C4) loader_systable(p, symlen, (int)data);
@@ -168,7 +168,7 @@ int c4r_load(char *path, struct c4r_image *img) {
     img->cons = 0;
     img->des = 0;
     if (conslen) {
-        if (!(img->cons = (int)malloc(conslen * 8))) {
+        if (!(img->cons = (int)malloc(conslen * sizeof(int)))) {
             free((int *)code); free((char *)data); free(buf);
             return 0;
         }
@@ -176,7 +176,7 @@ int c4r_load(char *path, struct c4r_image *img) {
         while (i < conslen) { ((int *)img->cons)[i] = (int)(code + cons[i]); ++i; }
     }
     if (deslen) {
-        if (!(img->des = (int)malloc(deslen * 8))) {
+        if (!(img->des = (int)malloc(deslen * sizeof(int)))) {
             if (img->cons) free((int *)img->cons);
             free((int *)code); free((char *)data); free(buf);
             return 0;

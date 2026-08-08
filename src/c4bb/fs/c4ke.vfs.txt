@@ -1,0 +1,67 @@
+# C4KE VFS file listing - the manifest vfsload.c reads at boot to
+# populate the kernel's RAM filesystem (see c4ke.c's ramfs_*, and
+# vfsload.c for exactly which parts of this format are implemented).
+#
+# This is the curated, working descendant of the original c4ke.vfs.txt
+# prototype at the repo root (which documents the full intended
+# grammar in comments) - trimmed to reference only files vfsload can
+# actually find on the c4bb disk, and with its one syntax slip (a
+# missing line-continuation backslash in BIN_TEST) fixed.
+#
+# This file is SOURCE, not a build artifact: build-images.sh copies it
+# onto the disk directory, but the disk directory itself is rebuilt
+# from scratch freely (rm -rf src/c4bb/images && ...), so it must not
+# live there.
+
+#
+# Definitions
+#
+BIN_CORE  = c4 c4m c4cc
+BIN_BENCH = bench benchtop innerbench
+BIN_C4R   = c4rdump c4rlink
+BIN_UTIL  = type xxd top ls ps echo cat kill spin c4le
+# c4ke itself is deliberately NOT in here: it's a kernel, not an
+# application, and installs kernel-exclusive VM state (the one trap
+# handler slot, the custom-opcode table) that a nested copy running
+# under a running C4KE would fight the parent for. Its source is
+# still browsable, just added by hand below rather than through the
+# automatic each($BIN_ALL) machinery every other entry goes through.
+BIN_C4KE  = c4ke.vfs init vfsload
+BIN_SHELL = c4sh eshell
+BIN_ALL   = $(BIN_CORE) $(BIN_BENCH) $(BIN_C4R) \
+            $(BIN_UTIL) $(BIN_C4KE) $(BIN_SHELL)
+BIN_TEST  = hello tests factorial multifun \
+            test-order test-ptrs test_continue test_args test_exit \
+            test_printloop test_basic test_malloc test_float mandel
+
+#
+# Filesystem tree
+#
+/: root
+	each($BIN_ALL):
+		# Until eshell/c4sh updated to use PATH environment variable, make
+		# the files available in the root directory.
+		$1: ilink(/bin/$1)  # c4 -> /bin/c4.c4r, invisible symlink
+		bin/:
+			$1: $1.c4r # c4 -> c4.c4r, invisible symlink
+	home/:
+		user/:
+			each($BIN_TEST):
+				# The tests will live here
+				$1: $1.c4r
+				# As will their source files
+				$1.c: $1.c
+	usr/
+		src/
+			bin/
+				# Add the source files for the binaries
+				each($BIN_ALL): $1.c
+			include/:
+				# Add the headers
+				c4.h
+				c4ke.h
+				c4m.h
+				service.h
+			# the kernel's own source - browsable, not runnable (see
+			# the note by BIN_C4KE above)
+			c4ke.c

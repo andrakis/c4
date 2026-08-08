@@ -27,3 +27,13 @@ libc4ix.c4l
 /c4rdump
 /c4rlink
 /c4sp
+
+# c4bb (the breadboard computer): 32-bit native toolchain builds, and
+# the whole images/ tree, which build-images.sh regenerates from
+# source (src/c4bb/fs/*.vfs.txt is the actual source and lives outside
+# this directory on purpose, so it survives `rm -rf images/`).
+/c4cc32
+/c4m32
+/c4rlink32
+/c4sp32
+src/c4bb/images/

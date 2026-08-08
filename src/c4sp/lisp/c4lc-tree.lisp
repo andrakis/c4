@@ -80,7 +80,8 @@
 			(if (>= (t:second e) 1024) e
 			(begin
 				(set! t:nfold (+ t:nfold 1))
-				(list 'num (if (= (t:second e) 0) 1 8))))
+				;; word size follows the host, like c4lc-gen's g:WORD
+				(list 'num (if (= (t:second e) 0) 1 (sys:wordsize)))))
 		(if (= h 'call)
 			(t:cons 'call (t:cons (t:second e) (t:fexprs (tail (tail e)) (list))))
 		(if (= h 'comma) (t:cons 'comma (t:fexprs (tail e) (list)))

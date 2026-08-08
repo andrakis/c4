@@ -113,6 +113,19 @@ int main (int argc, char **argv) {
 		// TODO: do we need to start_eshell = 1; here?
 	}
 
+	// Populate the kernel RAM filesystem from c4ke.vfs.txt (if present
+	// on disk) before anything else runs, so ls/cat have real content
+	// from the first prompt onward. Not fatal if it's missing or fails
+	// - vfsload says why and ramfs is simply left empty.
+	if (shell_argv) {
+		shell_argv[0] = "vfsload";
+		if ((pid = kern_user_start_c4r(1, shell_argv, "vfsload", PRIV_KERNEL))) {
+			await_pid(pid);
+		} else {
+			printf("init: vfsload failed to start\n");
+		}
+	}
+
 	// Arguments on the command line? Attempt to start that
 	if (argc > 1) {
 		if (!(pid = kern_user_start_c4r(argc - 1, argv + 1, *(argv + 1), PRIV_KERNEL))) {

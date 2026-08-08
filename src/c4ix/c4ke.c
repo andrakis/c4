@@ -247,7 +247,7 @@ static void ck_export_fill(int *kti) {
         // same accuracy C4KE reports. The boot task runs on the VM's
         // own stack and has no allocation to measure.
         kte[CK_KTE_STACK] = t->stack
-            ? (t->stack + C4IX_STACK_WORDS * 8) - t->sv_sp : 0;
+            ? (t->stack + C4IX_STACK_WORDS * sizeof(int)) - t->sv_sp : 0;
         kte[CK_KTE_ALLOC] = 0;   // C4IX does not track per-task allocation
 
         kte = kte + CK_KTE__Sz;
@@ -270,8 +270,8 @@ static int ck_export() {
     int words;
 
     words = CK_KTI__Sz + CK_TASK_SLOTS * CK_KTE__Sz;
-    if (!(kti = (int *)malloc(words * 8))) return 0;
-    memset(kti, 0, words * 8);
+    if (!(kti = (int *)malloc(words * sizeof(int)))) return 0;
+    memset(kti, 0, words * sizeof(int));
     kti[CK_KTI_COUNT] = CK_TASK_SLOTS;
     kti[CK_KTI_LIST] = (int)(kti + CK_KTI__Sz);
     ck_export_fill(kti);
@@ -327,7 +327,7 @@ static int ck_argv_copy(struct task *t, int argc, char **argv) {
         else bytes = bytes + 1;
         ++i;
     }
-    if (!(vec = (char **)malloc((argc + 1) * 8))) return 0;
+    if (!(vec = (char **)malloc((argc + 1) * sizeof(int)))) return 0;
     if (!(blob = (char *)malloc(bytes))) { free((int *)vec); return 0; }
 
     p = blob;
@@ -415,8 +415,8 @@ static int *ck_sigtab(struct task *t, int make) {
     int *s;
     if (t->ck_sigh) return (int *)t->ck_sigh;
     if (!make) return 0;
-    if (!(s = (int *)malloc(CK_SIG_MAX * 3 * 8))) return 0;
-    memset(s, 0, CK_SIG_MAX * 3 * 8);
+    if (!(s = (int *)malloc(CK_SIG_MAX * 3 * sizeof(int)))) return 0;
+    memset(s, 0, CK_SIG_MAX * 3 * sizeof(int));
     t->ck_sigh = (int)s;
     return s;
 }

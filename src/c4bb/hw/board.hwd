@@ -1,0 +1,73 @@
+# board.hwd - physical layout of the c4bb breadboard computer.
+#
+# This file describes the BOARD: which chips exist, where they sit,
+# which nets connect them, and which control signals belong to each
+# module. It is consumed by the renderer (web/board.js) - behavior
+# comes exclusively from microcode.uc, so the picture can never
+# disagree with the machine.
+#
+#   module NAME kind=K at=X,Y size=W,H label="..." sigs=A,B,C leds=hex|bin
+#   net NAME width=N route=X1,Y1 X2,Y2 ...
+#   connect MOD -> NET            (drawn as a stub from module to net)
+#
+# Coordinates are board units (the renderer scales to fit).
+
+# ---- CPU registers, top row -------------------------------------------
+module PC   kind=counter at=40,60   size=150,80 label="PC - program counter"  sigs=PC_OUT,PC_IN,PC_INC leds=hex
+module IR   kind=reg     at=220,60  size=150,80 label="IR - instruction"      sigs=IR_IN leds=op
+module OPR  kind=reg     at=400,60  size=150,80 label="OPR - operand"         sigs=OPR_OUT,OPR_OUTX4,OPR_IN leds=hex
+module UC   kind=ucode   at=580,40  size=240,120 label="microcode ROM + step counter" sigs=DISPATCH leds=upc
+
+# ---- working registers, second row ------------------------------------
+module A    kind=reg     at=40,190  size=150,80 label="A - accumulator" sigs=A_OUT,A_IN leds=hex
+module SP   kind=counter at=220,190 size=150,80 label="SP - stack ptr"  sigs=SP_OUT,SP_IN,SP_INC,SP_DEC leds=hex
+module BP   kind=reg     at=400,190 size=150,80 label="BP - frame base" sigs=BP_OUT,BP_IN leds=hex
+module CYC  kind=counter at=580,190 size=110,80 label="cycle counter"   sigs=CYC_OUT leds=hex
+module MODE kind=latch   at=710,190 size=110,80 label="mode / traps"    sigs= leds=mode
+
+# ---- ALU and temporaries, third row -----------------------------------
+module B    kind=reg     at=40,320  size=110,80 label="B - ALU left"   sigs=B_OUT,B_IN,B_INC1 leds=hex
+module T    kind=reg     at=170,320 size=110,80 label="T - temp"       sigs=T_OUT,T_OUTX4,T_IN,T_DEC1 leds=hex
+module U    kind=reg     at=300,320 size=110,80 label="U - utility"    sigs=U_OUT,U_IN,U_INC1 leds=hex
+module ALU  kind=alu     at=430,320 size=190,80 label="ALU (left op right)" sigs=ALU_OUT,ALU_LA,ALU_RT,ALU_RM leds=aluop
+module CONST kind=rom    at=640,320 size=110,80 label="const ROM"      sigs=C_OUT leds=hex
+
+# ---- memory, fourth row ------------------------------------------------
+module MAR  kind=reg     at=40,450  size=130,80 label="MAR - mem addr" sigs=MAR_IN leds=hex
+module MDR  kind=reg     at=190,450 size=130,80 label="MDR - mem data" sigs=MDR_OUT,MDR_IN leds=hex
+module RAM  kind=ram     at=340,450 size=210,80 label="RAM - 32MB arena" sigs=MEM_RD,MEM_RDB,MEM_RDBU,MEM_WR,MEM_WRB leds=none
+
+# ---- device bus, bottom row -------------------------------------------
+module UART  kind=uart   at=590,450 size=110,80 label="UART"        sigs= leds=tx
+module TIMER kind=timer  at=720,450 size=110,80 label="timer"       sigs= leds=none
+module POWER kind=power  at=850,450 size=90,80  label="power"       sigs= leds=run
+module NROM  kind=rom    at=850,320 size=90,80  label="opname ROM"  sigs= leds=none
+
+# ---- nets --------------------------------------------------------------
+# the single main bus: a horizontal spine with vertical taps
+net BUS  width=32 route=20,155 960,155
+net CTRL width=30 route=20,285 960,285
+net MEMB width=32 route=40,555 940,555
+
+connect PC   -> BUS
+connect IR   -> BUS
+connect OPR  -> BUS
+connect A    -> BUS
+connect SP   -> BUS
+connect BP   -> BUS
+connect CYC  -> BUS
+connect B    -> BUS
+connect T    -> BUS
+connect U    -> BUS
+connect ALU  -> BUS
+connect CONST-> BUS
+connect MAR  -> BUS
+connect MDR  -> BUS
+connect UC   -> CTRL
+connect MAR  -> MEMB
+connect MDR  -> MEMB
+connect RAM  -> MEMB
+connect UART -> MEMB
+connect TIMER-> MEMB
+connect POWER-> MEMB
+connect NROM -> MEMB

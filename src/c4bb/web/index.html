@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>c4bb - the c4m breadboard computer</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="layout">
+  <div id="left">
+    <div id="toolbar">
+      <select id="program"></select>
+      <button id="reset">Reset</button>
+      <button id="ustep" title="one microstep">&micro;Step</button>
+      <button id="istep" title="one instruction">Step</button>
+      <button id="run">Run</button>
+      <button id="turbo">Turbo</button>
+      <button id="pause">Pause</button>
+      <label id="speedlabel">speed <input type="range" id="speed" min="0" max="100" value="35"></label>
+      <span id="status">loading&hellip;</span>
+    </div>
+    <canvas id="board" width="980" height="560"></canvas>
+    <div id="term-header">
+      <span id="kbd-status">click the terminal below to type</span>
+    </div>
+    <div id="terminal" tabindex="0" title="click to focus keyboard input"></div>
+  </div>
+  <div id="right">
+    <div class="panel" id="regs-panel"><h3>registers</h3><table id="regs"></table></div>
+    <div class="panel" id="ucode-panel"><h3 id="ucode-title">microcode</h3><pre id="ucode"></pre></div>
+  </div>
+</div>
+<script type="module" src="app.js"></script>
+</body>
+</html>

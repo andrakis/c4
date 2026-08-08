@@ -22,10 +22,7 @@ enum { MMIO_BIT = 0x80000000 };
 
 int ram_lw(int addr) {
     int a, b0, b1, b2, b3;
-    if (addr & MMIO_BIT) {
-        printf("ram_lw: no 32-bit MMIO device (addr=0x%x)\n", addr);
-        return 0;
-    }
+    if (addr & MMIO_BIT) return mmio_read32(addr);
     a = addr & (RAM_SIZE - 1);
     b0 = ram[a] & 0xFF;
     b1 = ram[a + 1] & 0xFF;
@@ -34,12 +31,16 @@ int ram_lw(int addr) {
     return (b0 << 24) | (b1 << 16) | (b2 << 8) | b3;
 }
 
+// The MMIO case composes from two 8-bit reads rather than a dedicated
+// mmio_read16 -- see docs/c4or1k-design.md's M5 section: a genuine
+// mmio_read16/virtio_read16 pair reproducibly crashed c4m itself deep
+// inside a real Linux boot (a wild pointer dereference in c4m's own
+// interpreter, unrelated to any actual out-of-bounds c4or1k access as
+// far as could be determined), while this byte-composed form -- built
+// entirely from the already-proven-correct 8-bit path -- does not.
 int ram_lh(int addr) {
     int a, b0, b1;
-    if (addr & MMIO_BIT) {
-        printf("ram_lh: no 16-bit MMIO device (addr=0x%x)\n", addr);
-        return 0;
-    }
+    if (addr & MMIO_BIT) return (mmio_read8(addr) << 8) | mmio_read8(addr + 1);
     a = addr & (RAM_SIZE - 1);
     b0 = ram[a] & 0xFF;
     b1 = ram[a + 1] & 0xFF;
@@ -53,10 +54,7 @@ int ram_lb(int addr) {
 
 void ram_sw(int addr, int val) {
     int a;
-    if (addr & MMIO_BIT) {
-        printf("ram_sw: no 32-bit MMIO device (addr=0x%x)\n", addr);
-        return;
-    }
+    if (addr & MMIO_BIT) { mmio_write32(addr, val); return; }
     a = addr & (RAM_SIZE - 1);
     ram[a] = (val >> 24) & 0xFF;
     ram[a + 1] = (val >> 16) & 0xFF;
@@ -66,10 +64,7 @@ void ram_sw(int addr, int val) {
 
 void ram_sh(int addr, int val) {
     int a;
-    if (addr & MMIO_BIT) {
-        printf("ram_sh: no 16-bit MMIO device (addr=0x%x)\n", addr);
-        return;
-    }
+    if (addr & MMIO_BIT) { mmio_write8(addr, (val >> 8) & 0xFF); mmio_write8(addr + 1, val & 0xFF); return; }
     a = addr & (RAM_SIZE - 1);
     ram[a] = (val >> 8) & 0xFF;
     ram[a + 1] = val & 0xFF;

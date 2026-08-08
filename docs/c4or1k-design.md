@@ -331,12 +331,132 @@ needed it, not because M6 turned out to be unnecessary — M6's job is
 tuning cadence/batch size for a full interactive boot, not building
 tick delivery from scratch.
 
-**M5 — 9P root filesystem (basefs.json only).** Not started.
+**M5 — 9P root filesystem (basefs.json only). Done — the kernel
+mounts it.** Four new modules, `tools/mkbootfs.js` (offline, Node):
 
-**M6 — IRQ/timer tuning to reach a shell prompt.** Not started.
+- `bootfs.c`/`bootfs.h` — the inode tree. `filesystem.js`'s async,
+  network-fed `FS` object has no equivalent here: everything
+  `basefs.json` describes is either already resident (loaded from
+  `bootfs.blob` at startup) or created synchronously by a 9p request,
+  so every `bootfs_*` call returns immediately — no `AddEvent`
+  deferred-callback machinery needed. Inodes are parallel `malloc`'d
+  int arrays (mode/uid/gid/parentid/firstid/nextid/size/bloboff),
+  matching mem.c's own reasoning: c4lc's 256KB data-segment cap is
+  shared across every global in the linked program, so anything
+  nontrivially sized has to be heap-allocated rather than a static
+  array. Directory listings (`.`/`..`/children, in 9p2000.L's Q/d/b/s
+  wire format) are built lazily on first open and cached, mirroring
+  `FillDirectory`'s `updatedir` dirty-flag pattern exactly.
+- `virtio.c`/`virtio.h` — the virtio-mmio transport, matched against
+  `dev/virtio.js`'s `VirtIODev` at the register level (same offsets,
+  same "modern" version=2 negotiation, so legacy-only fields like
+  `QUEUEALIGN`-driven ring layout never come into play). Only one
+  device exists (the 9p filesystem), so unlike jor1k's generic
+  `dev.ReceiveRequest`/`dev.SendReply` callback object, this calls
+  `virtio9p_receive_request()` directly.
+- `virtio9p.c`/`virtio9p.h` — the 9P2000.L protocol handler, ported
+  op-for-op from `dev/virtio/9p.js` (statfs, walk, {t,l}open, lcreate,
+  mkdir, symlink, readlink, link, mknod, getattr, setattr, read,
+  treaddir, write, renameat, unlinkat, clunk, xattrwalk, version,
+  attach, flush, lock) — everything the reference implements except
+  the "always report full capabilities" xattr behavior, deliberately
+  narrowed to "report no xattr support" instead, which just makes the
+  guest kernel fall back to the plain setuid-bit permission model any
+  real capability-less filesystem would produce.
+- `tools/mkbootfs.js` — flattens `basefs.json` plus every file's real
+  content (decompressing `bin/busybox.bz2` via the host's `bunzip2`,
+  simpler and more robust than re-hosting jor1k's own `bzip2.js` in a
+  Node build script that never runs inside `c4m`) into `bootfs.idx`
+  (fixed 64-byte records) + `bootfs.blob` (concatenated file bytes),
+  offline, at build time — `bootfs.c` has no JSON parser and no
+  network, so this has to happen before the emulator ever runs.
+
+**Verification note, a deliberate scope change from the plan.** The
+plan called for diffing a jorconsole-captured 9p request/response
+trace against this port's own trace. In practice jorconsole's own
+`fsloader.js` is async/network-fed even for `basefs.json`, so it isn't
+a clean, deterministic byte-for-byte oracle the way `safecpu.js` was
+for M1/M2 — and the more meaningful gate at this stage is simpler
+anyway: does a real, unmodified kernel actually mount the filesystem
+and exec real userspace binaries through it. It does (see below), which
+exercises the protocol far more thoroughly than a captured trace from
+one boot would.
+
+**Two real bugs found the hard way, both by bisecting a real boot
+against a c4m-level `gdb` backtrace, not by inspection:**
+
+1. **`rd_le32`'s missing sign extension (bootfs.c) — the actual root
+   cause of a SIGSEGV that took most of a day to pin down.** Every
+   `-1` sentinel `mkbootfs.js` writes (empty directories' `firstid`,
+   list-terminator `nextid`, the root's `parentid`) is stored as its
+   real byte pattern, `0xFFFFFFFF`. `bootfs.c`'s byte-composing reader
+   didn't sign-extend that back to `-1` the way `cpu.c`'s `sext()`
+   does for exactly this class of value — c4lc's 64-bit `int` reads it
+   back as the *positive* 4294967295 instead. `bootfs_search`'s
+   `while (id != -1)` loop then treats that as a real, wildly
+   out-of-bounds inode index, computes a pointer from it, and
+   dereferences it. This only ever fires when a walk reaches an empty
+   directory or a list's true end — invisible to any hand-written test
+   program, and in a real boot it first triggers resolving `/sbin/init`
+   (`/sbin` is empty in `basefs.json`; `init` only exists as a symlink
+   under `/bin`), i.e. exactly the point a kernel's own init-path probe
+   sequence is expected to try and fail. Symptoms were badly
+   misleading before this was found: the crash *looked* sensitive to
+   unrelated changes (cpu.c's dispatch style, mem.c's 16-bit MMIO
+   path, c4m's `-P` pool-size flag, even stdio buffering) because each
+   of those shifts `malloc`'s heap layout enough to sometimes land the
+   wild pointer in unmapped memory (a hard crash) and sometimes not
+   (silent, undetected corruption) — none of them were the actual bug.
+   The fix is one function: `rd_le32` masks to 32 bits then applies
+   the same mask+XOR/subtract sign-extension `cpu.c`'s `sext()` uses.
+   Pinned down by adding `stdbuf -oL`-forced unbuffered logging (stdio
+   is fully buffered against a non-tty output, so a crash mid-run was
+   silently discarding the last several KB of already-*printed*
+   diagnostic output every time) plus targeted `printf`s in the 9p walk
+   handler, which caught the exact failing call:
+   `bootfs_search(idx=30 /* /sbin */, "init")`.
+2. **A second UART is load-bearing, not optional.** `basefs.json`'s
+   `/etc/inittab` has `ttyS1::respawn:-login -f root` in addition to
+   the console's own `-login -f user` — jor1k's real device map
+   includes a second 16550 (`uartdev1` @ `0x96000000`, IRQ 3), and this
+   project's UART support was single-instance until M5. Without it,
+   `getty`'s driver on ttyS1 never gets a coherent "no data yet, sleep"
+   signal from the generic "unimplemented device" MMIO fallback and
+   hot-loops polling registers forever, burning the entire instruction
+   budget before `ttyS0`'s own login ever gets scheduled. Fixed by
+   parameterizing `uart.c` (all per-UART state as `int[2]` arrays, a
+   `unit` argument threaded through every function) rather than
+   duplicating the module — unit 1 has no real byte source (there's
+   only one host terminal, wired to unit 0 via `con.c`), so its own
+   `getty` just blocks forever exactly like a real unconnected serial
+   port would, which is the correct, harmless outcome.
+
+**A performance fix alongside these, not a correctness one:** once
+real Linux is actually running rather than panicking early, devices
+this project doesn't implement (ethernet's link-status poll, chiefly)
+get probed continuously in the background, not just once during early
+boot the way M4 saw. `mmio.c`'s per-access diagnostic `printf` — fine
+when it fired a handful of times — was measurably the dominant cost
+once it started firing millions of times; `warn_once()` now reports
+each unique top byte a single time.
+
+**M6 — IRQ/timer tuning to reach a shell prompt. In progress.** With
+M5's fixes in place the kernel mounts the 9p root filesystem
+(`VFS: Mounted root (9p filesystem) readonly on device 0:12.`), execs
+real userspace (`/etc/init.d/rcS`: `mount -a`, `busybox --install`,
+`mkdir`/`mount` for `/dev/pts` and `/dev/shm`, `ifup -a`, `inetd`), and
+reaches `udhcpc`'s DHCP discover/retry/give-up cycle (no ethernet
+device exists, so this fails as expected) — all confirmed on a real,
+unmodified kernel and root filesystem, not a synthetic test. Reaching
+an actual interactive shell prompt needs enough instruction budget to
+get past `udhcpc`'s own retry/backoff timing (each cycle burns real
+guest instructions waiting on jiffies) and both `inittab` `respawn`
+entries spawning; still running as of this writing.
 
 **M7 — stretch.** `c4lc -O`, `fs.json` overlay, optional virtio-block/
 ATA. Framebuffer/keyboard stay out of scope.
+
+**M8 - faster** Implement the fastcpu.js-based emulator.
 
 ## Related future work (not this project)
 

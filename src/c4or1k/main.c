@@ -34,6 +34,9 @@
 #include "uart.h"
 #include "con.h"
 #include "boot.h"
+#include "virtio.h"
+#include "virtio9p.h"
+#include "bootfs.h"
 
 enum { FILEBUFSZ = 0x10000 }; // c4lc enum initializers must be a literal, not "1 << 16"
 char filebuf[FILEBUFSZ];
@@ -83,13 +86,15 @@ int str_to_int(char *s) {
 }
 
 int main(int argc, char **argv) {
-    char *path;
+    char *path, *bootfs_idx_path, *bootfs_blob_path;
     int nwords, status, steps, t0, t1, dt_ms, ips, run_mode, boot_mode, maxsteps, length;
 
     path = argc > 1 ? argv[1] : "src/c4or1k/tests/m1_test.bin";
     run_mode = (argc > 2 && argv[2][0] == '-' && argv[2][1] == 'r');
     boot_mode = (argc > 2 && argv[2][0] == '-' && argv[2][1] == 'b');
     maxsteps = (boot_mode && argc > 3) ? str_to_int(argv[3]) : 0; // 0 = unbounded
+    bootfs_idx_path = (boot_mode && argc > 4) ? argv[4] : "src/c4or1k/images/bootfs.idx";
+    bootfs_blob_path = (boot_mode && argc > 5) ? argv[5] : "src/c4or1k/images/bootfs.blob";
 
     mem_init();
     cpu_reset();
@@ -97,6 +102,10 @@ int main(int argc, char **argv) {
     con_init();
 
     if (boot_mode) {
+        virtio_reset();
+        virtio9p_init();
+        bootfs_init(bootfs_idx_path, bootfs_blob_path);
+
         length = load_kernel(path);
         if (length < 0) return 1;
         patch_kernel(length, RAM_SIZE / 0x100000);

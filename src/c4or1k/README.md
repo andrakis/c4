@@ -9,34 +9,48 @@ Console only -- no framebuffer, no keyboard device. Terminal raw mode
 is handled by `run-c4or1k.sh`, an external wrapper, not by the VM (the
 C4 VM has no ioctl/termios facility, see that script's header comment).
 
-## Status: M4 done -- it boots real Linux (M0-M3 preserved in docs/c4or1k-design.md)
+## Status: M5 done, M6 in progress -- it mounts a real 9p root filesystem and runs real userspace (M0-M4 preserved in docs/c4or1k-design.md)
 
     make c4or1k-boot                # boot a real kernel; N=<steps> to change the budget (default 2M)
 
-Reaches `VFS: Cannot open root device "host" ... Kernel panic - not
-syncing: VFS: Unable to mount root fs` -- the exact, generic Linux
-failure any emulator without a working root filesystem produces (no
-9P device yet; that's M5). Along the way: the real kernel boot banner,
-memory/MMU setup, the full kernel command line, and dozens of
-subsystem/driver init messages, all on the real UART console. Devices
-this project doesn't implement (virtio-block, a second UART, DRM,
-ATA, keyboard, ethernet, RTC) all probe and fail *gracefully* instead
-of wedging the boot -- `mmio.c`/`mem.c` print one diagnostic line per
-unrecognized access rather than faulting silently.
+Boots an unmodified `vmlinux.bin` from the reset vector through the
+full kernel init sequence, mounts basefs.json's root filesystem over
+9p (`VFS: Mounted root (9p filesystem) readonly on device 0:12.`), and
+execs real userspace: `/etc/init.d/rcS` (`mount -a`, `busybox
+--install`, `ifup -a`, `inetd`), then `udhcpc`'s DHCP discover/retry
+cycle (fails gracefully -- no ethernet device exists). Reaching an
+actual shell prompt just needs enough instruction budget past that
+point; see `docs/c4or1k-design.md`'s M6 section for current status.
 
-Getting here needed one real fix: automatic tick-timer interrupt
-delivery, deferred since M2, turned out not to be optional -- the
-first boot attempt hung forever retry-polling an unimplemented ATA
-controller, because nothing was advancing jiffies for its timeout to
-expire against. `cpu_tick_check` (cpu.c) is now wired into `main.c`'s
-loop. See `docs/c4or1k-design.md`'s M4 section for the full story.
+Two real bugs surfaced getting here, both found by bisecting a real
+boot under `gdb` rather than by inspection -- `bootfs.c`'s 32-bit
+record reader wasn't sign-extending `-1` sentinels (silently misread
+as a huge positive "index" that walking an empty directory then
+dereferenced as a wild pointer), and `basefs.json`'s `/etc/inittab`
+turns out to spawn a second getty on a second UART this project didn't
+have yet. See `docs/c4or1k-design.md`'s M5 section for both stories in
+full -- they're worth reading if you're adding a new device or backing
+store, since both bugs were badly misleading before they were pinned
+down.
+
+Devices this project doesn't implement (virtio-block, DRM, ATA,
+keyboard, touchscreen, ethernet, RTC) all probe and fail *gracefully*
+instead of wedging the boot -- `mmio.c` reports each unique
+unimplemented device once (`warn_once()`), not once per access, since
+several of them get polled continuously once real Linux is actually
+running rather than panicking early.
 
 `cpu.c`/`mem.c` implement the full non-privileged OR1000 integer ISA,
 SPRs, the SR flag register, exception delivery, and DTLB/ITLB miss +
 permission checks (not a page-table walk -- that's the guest kernel's
-job). `uart.c`/`mmio.c`/`con.c` make it interactive. `boot.c` loads a
-raw kernel image and patches its DTB's memory-size property, matching
-jor1k's `OnKernelLoaded`/`PatchKernel` exactly.
+job). `uart.c` (two units -- ttyS0 is the real console, ttyS1 has no
+host backing and just blocks forever like an unconnected port),
+`mmio.c`, `con.c` make it interactive. `boot.c` loads a raw kernel
+image and patches its DTB's memory-size property. `bootfs.c` +
+`virtio.c` + `virtio9p.c` are the 9p root filesystem -- an in-memory
+inode tree loaded from `tools/mkbootfs.js`'s offline flattening of
+jor1k's `basefs.json`, served over a virtio-mmio transport and a
+9P2000.L protocol handler.
 
     make c4or1k-m1-check           # M1: full ISA, diffed against jor1k
     make c4or1k-m2-check           # M2: SPRs/exceptions/TLB, diffed against jor1k

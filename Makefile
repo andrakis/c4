@@ -374,7 +374,7 @@ test-c4bb: c4bb-images $(C4M) $(TESTS_C4R)
 # decoder is real and lives in its own module, linked with c4rlink
 # the same way src/c4mp does it.
 C4OR1K_SRC  := src/c4or1k
-C4OR1K_MODS := mem mmio uart con cpu boot main
+C4OR1K_MODS := mem mmio uart con bootfs virtio virtio9p cpu boot main
 C4OR1K_HDRS := $(C4OR1K_SRC)/cpu.h $(C4OR1K_SRC)/mem.h
 c4or1k.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4OR1K_HDRS) $(patsubst %,$(C4OR1K_SRC)/%.c,$(C4OR1K_MODS))
 	for m in $(C4OR1K_MODS); do \
@@ -438,8 +438,18 @@ c4or1k-m3-int-check: c4m c4or1k.c4r src/c4or1k/tests/m3_echo_int.bin
 # Override with e.g. `make c4or1k-boot N=20000000` for a longer run.
 VMLINUX := ../jorconsole/jor1k-sysroot/or1k/vmlinux.bin
 N := 2000000
-c4or1k-boot: c4m c4or1k.c4r
-	./c4m load-c4r.c -- c4or1k.c4r $(VMLINUX) -b $(N)
+# M5: 9p root filesystem, basefs.json only (docs/c4or1k-design.md).
+# tools/mkbootfs.js flattens basefs.json + its real file content
+# (decompressing bin/busybox.bz2 via the host's bunzip2) into
+# bootfs.idx/bootfs.blob offline -- bootfs.c has no JSON parser and no
+# network, see that tool's header comment.
+BASEFS_JSON := ../jorconsole/jor1k-sysroot/or1k/basefs.json
+BASEFS_SRC  := ../jorconsole/jor1k/sys/or1k/basefs
+src/c4or1k/images/bootfs.idx src/c4or1k/images/bootfs.blob: src/c4or1k/tools/mkbootfs.js $(BASEFS_JSON)
+	mkdir -p src/c4or1k/images
+	node src/c4or1k/tools/mkbootfs.js $(BASEFS_JSON) $(BASEFS_SRC) src/c4or1k/images/bootfs.idx src/c4or1k/images/bootfs.blob
+c4or1k-boot: c4m c4or1k.c4r src/c4or1k/images/bootfs.idx src/c4or1k/images/bootfs.blob
+	./c4m load-c4r.c -- c4or1k.c4r $(VMLINUX) -b $(N) src/c4or1k/images/bootfs.idx src/c4or1k/images/bootfs.blob
 test-oisc4-nested: $(OISC4) $(C4) $(C4M) oisc4-lc.c4r $(TESTS)/hello.c4r
 	$(C4M) load-c4r.c -- oisc4-lc.c4r -m 32 $(TESTS)/hello.c4r | grep -q yello
 	$(C4) c4l.c oisc4-lc.c4r -m 32 $(TESTS)/hello.c4r | grep -q yello

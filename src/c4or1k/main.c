@@ -1,19 +1,26 @@
-// c4or1k test harness: loads a flat binary of big-endian 32-bit
-// words (produced by tools/asm.py's "bin" mode) into guest RAM at
-// address 0, runs it as a straight-line (non-looping) program until
-// pc falls off the end, and dumps every register plus SR_F/SR_CY/
-// SR_OV -- a format tools/or1k-oracle.js matches line-for-line, so
-// the two can be diffed directly.
+// c4or1k test harness AND console-mode entry point. Loads a flat
+// binary of big-endian 32-bit words (produced by tools/asm.py's "bin"
+// mode) into guest RAM at address 0, runs it via the same
+// cpu_step(halt_pc) loop either way:
+//
+//   - test mode (default): the program is straight-line and falls
+//     off the end at a known word count; every register plus SR_F/
+//     SR_CY/SR_OV is dumped in a format tools/or1k-oracle.js matches
+//     line-for-line, so the two can be diffed directly.
+//   - console mode (-r): the program (tests/m3_echo.s, for now) polls
+//     the UART and loops until it decides to halt itself (Ctrl-D);
+//     no dump at the end, since there's no oracle-comparable state
+//     for an interactive session, and stdin is polled every
+//     iteration via con_poll_and_feed() (cheaply, thanks to its own
+//     internal rate gate -- see con.c).
 //
 // M0's throughput result (main.c's earlier, single-file content) is
-// preserved in docs/c4or1k-design.md and README.md; this file now
-// serves as the general test-program runner from M1 onward, and
-// still reports guest-instructions/sec each run as a cheap ongoing
-// check that the full ~100-instruction decode hasn't cratered
-// throughput relative to that result.
+// preserved in docs/c4or1k-design.md and README.md.
 
 #include "cpu.h"
 #include "mem.h"
+#include "uart.h"
+#include "con.h"
 
 enum { FILEBUFSZ = 0x10000 }; // c4lc enum initializers must be a literal, not "1 << 16"
 char filebuf[FILEBUFSZ];
@@ -53,18 +60,24 @@ int load_program(char *path) {
 
 int main(int argc, char **argv) {
     char *path;
-    int nwords, status, steps, t0, t1, dt_ms, ips;
+    int nwords, status, steps, t0, t1, dt_ms, ips, run_mode;
 
     path = argc > 1 ? argv[1] : "src/c4or1k/tests/m1_test.bin";
+    run_mode = (argc > 2 && argv[2][0] == '-' && argv[2][1] == 'r');
 
     mem_init();
     cpu_reset();
+    uart_reset();
+    con_init();
     nwords = load_program(path);
     if (nwords < 0) return 1;
 
     steps = 0;
     t0 = __time();
-    while ((status = cpu_step(nwords)) == 0) {
+    while (1) {
+        con_poll_and_feed();
+        status = cpu_step(nwords);
+        if (status != 0) break;
         ++steps;
     }
     t1 = __time();
@@ -74,6 +87,8 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    if (run_mode) return 0; // no dump for an interactive/piped console session
+
     dt_ms = t1 - t0;
     printf("c4or1k: ran %d instructions from %s in %d ms\n", steps, path, dt_ms);
     if (dt_ms > 0) {
@@ -82,6 +97,6 @@ int main(int argc, char **argv) {
     }
 
     cpu_dump();
-    ram_dump(0x1000, 64); // covers every offset tests/m1_test.s writes (see its header comment)
+    ram_dump(0x1000, 64); // covers every offset tests/m1_test.s / tests/m2_test.s write (see their header comments)
     return 0;
 }

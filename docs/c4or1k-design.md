@@ -216,9 +216,51 @@ deliberate scope cut:
   `EXCEPT_TICK` on a schedule yet, since that needs the main-loop
   batching M3/M6 add.
 
-**M3 — UART + launch script + console I/O.** Not started.
-`run-c4or1k.sh` already exists (M0); M3 wires it to a real UART device
-and the `con.c`-style non-blocking stdin pattern.
+**M3 — UART + launch script + console I/O. Done.** `uart.c` is a
+16550-compatible device matching `jor1k/js/worker/dev/uart.js`
+exactly (register offsets, LSR/IER/IIR/FCR bits, the DLAB-aliased
+DLL/DLH pair, the CTI/THRI/MSI interrupt-priority order) at MMIO base
+`0x90000000`, IRQ line 2 (both confirmed against jor1k's `system.js`).
+`mmio.c` is a minimal top-byte dispatcher (`mem.c`'s `ram_l*`/`ram_s*`
+now check bit 31 of the address and route there instead of into
+`ram[]`) — one device today, shaped to add more at M5. `con.c` is
+`src/c4ix/con.c`'s non-blocking-second-fd pattern verbatim (same
+reason: a blocking `read(0, ...)` would freeze this single-threaded
+VM), polled every `main.c` loop iteration — cheaply, since the gate
+inside `con_poll_and_feed()` itself rate-limits the actual host
+`read()` call, the same way `con_poll()` does. `run-c4or1k.sh` (M0)
+needed no changes; it was already the correct wrapper.
+
+**Verification: two working echo servers, byte-for-byte.**
+`tests/m3_echo.s` polls `LSR` and echoes; `tests/m3_echo_int.s` does
+the same job but interrupt-driven — `UART_IER_RDI` + `SR_IEE` +
+`PICMR`, with the actual echo happening in a handler at
+`EXCEPT_INT`'s real vector, exercising the whole M2+M3 IRQ pipeline
+end to end (UART → `cpu_raise_interrupt` → `PICMR`/`PICSR` →
+`cpu_check_for_interrupt` → `EXCEPT_INT` → handler → `l.rfe`). Both
+halt on Ctrl-D (0x04) and both are checked non-interactively by piping
+a string ending in Ctrl-D through `run-c4or1k.sh` and diffing the
+echoed bytes against the input (`make c4or1k-m3-check`,
+`c4or1k-m3-int-check`) — **exact match**, first real run, for both.
+Neither is cross-checked against jor1k's own oracle the way M1/M2's
+tests are: extending `tools/or1k-oracle.js` to simulate real-time
+stdin arrival wasn't worth building for this milestone, so this is
+functional verification (the echo is provably correct) rather than
+the bit-for-bit-against-jor1k standard set earlier — worth knowing if
+a future milestone's UART-adjacent change ever needs a stronger check
+than "does it still echo."
+
+One real design decision worth recording: the interrupt-driven test's
+handler can't just `l.rfe` back to the spin loop when it sees Ctrl-D
+— main.c's `cpu_step(halt_pc)` harness needs the program to reach a
+known final address to stop, and an intentionally-infinite spin loop
+never does that on its own. The handler instead **overwrites its own
+return address**: `movhi`/`ori` builds `final_halt`'s byte address
+(the same `%hi`/`%lo` trick `tests/m1_test.s` uses for `l.jalr`),
+`l.mtspr`s it into `EPCR`, then `l.rfe`s — landing execution at
+`final_halt` instead of back in the spin loop. Ordinary OR1000 code,
+not a c4or1k-specific mechanism; worth remembering as a pattern for
+any future test whose main flow doesn't naturally terminate.
 
 **M4 — boot loader.** Not started. `jorconsole/jor1k-sysroot/or1k/
 vmlinux.bin` is already a decompressed raw flat binary (jorconsole's

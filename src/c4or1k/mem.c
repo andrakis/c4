@@ -1,4 +1,5 @@
 #include "mem.h"
+#include "mmio.h"
 
 char *ram;
 
@@ -7,8 +8,24 @@ void mem_init() {
     memset(ram, 0, RAM_SIZE);
 }
 
+// RAM vs MMIO is decided by bit 31 of the (already physical, past any
+// DTLB translation) address -- jor1k's Read/WriteXBig do this as
+// `addr >= 0` on a genuine JS int32, which is bit 31 in disguise.
+// c4lc's `int` doesn't wrap at 32 bits, so an address a register
+// happens to hold sign-extended (e.g. the UART base 0x90000000,
+// stored via sext(..., 32) because it doesn't fit as a positive
+// 32-bit value) can arrive here as a large *negative* 64-bit number
+// instead of a small positive one -- "addr < 0" would still work by
+// accident for that specific case, but `addr & 0x80000000` is the
+// actual, width-independent test, and is what MMIO_BIT below uses.
+enum { MMIO_BIT = 0x80000000 };
+
 int ram_lw(int addr) {
     int a, b0, b1, b2, b3;
+    if (addr & MMIO_BIT) {
+        printf("ram_lw: no 32-bit MMIO device (addr=0x%x)\n", addr);
+        return 0;
+    }
     a = addr & (RAM_SIZE - 1);
     b0 = ram[a] & 0xFF;
     b1 = ram[a + 1] & 0xFF;
@@ -19,6 +36,10 @@ int ram_lw(int addr) {
 
 int ram_lh(int addr) {
     int a, b0, b1;
+    if (addr & MMIO_BIT) {
+        printf("ram_lh: no 16-bit MMIO device (addr=0x%x)\n", addr);
+        return 0;
+    }
     a = addr & (RAM_SIZE - 1);
     b0 = ram[a] & 0xFF;
     b1 = ram[a + 1] & 0xFF;
@@ -26,11 +47,16 @@ int ram_lh(int addr) {
 }
 
 int ram_lb(int addr) {
+    if (addr & MMIO_BIT) return mmio_read8(addr);
     return ram[addr & (RAM_SIZE - 1)] & 0xFF;
 }
 
 void ram_sw(int addr, int val) {
     int a;
+    if (addr & MMIO_BIT) {
+        printf("ram_sw: no 32-bit MMIO device (addr=0x%x)\n", addr);
+        return;
+    }
     a = addr & (RAM_SIZE - 1);
     ram[a] = (val >> 24) & 0xFF;
     ram[a + 1] = (val >> 16) & 0xFF;
@@ -40,12 +66,17 @@ void ram_sw(int addr, int val) {
 
 void ram_sh(int addr, int val) {
     int a;
+    if (addr & MMIO_BIT) {
+        printf("ram_sh: no 16-bit MMIO device (addr=0x%x)\n", addr);
+        return;
+    }
     a = addr & (RAM_SIZE - 1);
     ram[a] = (val >> 8) & 0xFF;
     ram[a + 1] = val & 0xFF;
 }
 
 void ram_sb(int addr, int val) {
+    if (addr & MMIO_BIT) { mmio_write8(addr, val); return; }
     ram[addr & (RAM_SIZE - 1)] = val & 0xFF;
 }
 

@@ -78,7 +78,8 @@ int uart_read8(int addr) {
         if (addr == UART_DLH) return uart_DLH;
     }
 
-    if (addr == UART_RXBUF) {
+    switch (addr) {
+    case UART_RXBUF:
         ret = 0;
         if (rx_len > 0) {
             ret = rxbuf[rx_head];
@@ -90,19 +91,19 @@ int uart_read8(int addr) {
             uart_ack_interrupt(UART_IIR_CTI);
         }
         return ret & 0xFF;
-    } else if (addr == UART_IER) {
+    case UART_IER:
         return uart_IER & 0x0F;
-    } else if (addr == UART_MSR) {
+    case UART_MSR:
         ret = uart_MSR;
         uart_MSR = uart_MSR & 0xF0; // reset the "delta" bits, matches uart.js
         return ret;
-    } else if (addr == UART_IIR) {
+    case UART_IIR:
         ret = (uart_IIR & 0x0F) | 0xC0; // top two bits (fifo enabled) always set
         if (uart_IIR == UART_IIR_THRI) uart_ack_interrupt(UART_IIR_THRI);
         return ret;
-    } else if (addr == UART_LCR) {
+    case UART_LCR:
         return uart_LCR;
-    } else if (addr == UART_LSR) {
+    case UART_LSR:
         return uart_LSR;
     }
     printf("uart_read8: unsupported register %d\n", addr);
@@ -117,28 +118,34 @@ void uart_write8(int addr, int x) {
         if (addr == UART_DLH) { uart_DLH = x; return; }
     }
 
-    if (addr == UART_TXBUF) {
+    switch (addr) {
+    case UART_TXBUF:
         // No real TX buffer: putchar() is the "sent immediately" jor1k
         // itself does (uart.js: "the data is sent immediately").
         uart_LSR = uart_LSR & ~UART_LSR_TRANSMITTER_EMPTY;
         putchar(x);
         uart_LSR = uart_LSR | UART_LSR_TRANSMITTER_EMPTY | UART_LSR_TX_EMPTY;
         uart_throw_interrupt(UART_IIR_THRI);
-    } else if (addr == UART_IER) {
+        break;
+    case UART_IER:
         uart_IER = x & 0x0F;
         uart_check_interrupt();
-    } else if (addr == UART_FCR) {
+        break;
+    case UART_FCR:
         uart_FCR = x & 0xC9;
         if (uart_FCR & 2) {
             uart_ack_interrupt(UART_IIR_CTI);
             rx_head = 0; rx_len = 0;
         }
         // FCR&4 (clear TX fifo): no-op, there's no TX buffer to clear.
-    } else if (addr == UART_LCR) {
+        break;
+    case UART_LCR:
         uart_LCR = x;
-    } else if (addr == UART_MCR) {
+        break;
+    case UART_MCR:
         uart_MCR = x;
-    } else {
+        break;
+    default:
         printf("uart_write8: unsupported register %d\n", addr);
     }
 }

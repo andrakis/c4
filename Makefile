@@ -388,6 +388,17 @@ c4or1k-m1-check: c4m c4or1k.c4r src/c4or1k/tests/m1_test.bin
 	node src/c4or1k/tools/or1k-oracle.js src/c4or1k/tests/m1_test.bin | grep -v '^c4or1k-oracle:' > .c4or1k_check_js.txt
 	diff .c4or1k_check_c.txt .c4or1k_check_js.txt && echo "c4or1k-m1-check: OK (bit-for-bit match against jor1k)"
 	rm -f .c4or1k_check_c.txt .c4or1k_check_js.txt
+# M2's cross-checked test program: SPRs, SR flags, EXCEPT_SYSCALL/
+# EXCEPT_TRAP/EXCEPT_DTLBMISS delivery, l.rfe.
+src/c4or1k/tests/m2_test.bin: src/c4or1k/tests/m2_test.s src/c4or1k/tools/asm.py
+	python3 src/c4or1k/tools/asm.py src/c4or1k/tests/m2_test.s bin > src/c4or1k/tests/m2_test.bin
+c4or1k-m2: c4m c4or1k.c4r src/c4or1k/tests/m2_test.bin
+	./c4m load-c4r.c -- c4or1k.c4r src/c4or1k/tests/m2_test.bin
+c4or1k-m2-check: c4m c4or1k.c4r src/c4or1k/tests/m2_test.bin
+	./c4m load-c4r.c -- c4or1k.c4r src/c4or1k/tests/m2_test.bin | grep -v '^c4or1k:' | grep -v 'guest instructions/sec' > .c4or1k_check_c.txt
+	node src/c4or1k/tools/or1k-oracle.js src/c4or1k/tests/m2_test.bin | grep -v '^c4or1k-oracle:' > .c4or1k_check_js.txt
+	diff .c4or1k_check_c.txt .c4or1k_check_js.txt && echo "c4or1k-m2-check: OK (bit-for-bit match against jor1k)"
+	rm -f .c4or1k_check_c.txt .c4or1k_check_js.txt
 test-oisc4-nested: $(OISC4) $(C4) $(C4M) oisc4-lc.c4r $(TESTS)/hello.c4r
 	$(C4M) load-c4r.c -- oisc4-lc.c4r -m 32 $(TESTS)/hello.c4r | grep -q yello
 	$(C4) c4l.c oisc4-lc.c4r -m 32 $(TESTS)/hello.c4r | grep -q yello
@@ -843,7 +854,7 @@ PHONY += run-c4 run-c4-vg test-c4 test-massive-c4
 PHONY += run-c4-alt run-c4-alt-vg
 PHONY += test-c4ix test-c4ix-fmt test-c4ix-c4ke test-c4ix-c4ke-nested test-c4ix-c4 run-c4ix run-c4ix-c4 demo-c4ix demo-c4ix-c4 bench-c4ix
 PHONY += test-c4mp
-PHONY += c4or1k-m0 c4or1k-m1 c4or1k-m1-check
+PHONY += c4or1k-m0 c4or1k-m1 c4or1k-m1-check c4or1k-m2 c4or1k-m2-check
 PHONY += pkg c4rs or1k
 PHONY += pi
 # Don't bother with the dump or link utility for now

@@ -121,6 +121,15 @@ function main() {
     // address 0 with no boot vector to honor, so the oracle must too.
     cpu.pc = 0;
     cpu.nextpc = 1;
+    // Reset()'s Exception(EXCEPT_RESET, 0) call also sets ESR to
+    // GetFlags() as it stood mid-construction (SR_SM/SR_FO already on
+    // -> 0x8001), where cpu.c's simpler cpu_reset() (no vector jump,
+    // see its comment) leaves ESR at 0. Every other Reset()-touched
+    // field (EEAR, EPCR, SR_SM/IEE/TEE/DME/IME/OVE) already lands on
+    // the same value cpu_reset() uses, checked by hand against
+    // Exception()'s unconditional resets -- ESR is the one real
+    // difference between "went through the vector" and "didn't".
+    cpu.group0[64] = 0; // SPR_ESR_BASE
 
     let steps = 0;
     const maxSteps = 100000; // guard against a runaway test program
@@ -133,8 +142,15 @@ function main() {
         }
     }
 
+    const b = (v) => (v ? 1 : 0);
     console.log(`c4or1k-oracle: ran ${steps} instructions from ${binPath}`);
-    console.log(`pc=${cpu.pc} nextpc=${cpu.nextpc} SR_F=${cpu.SR_F ? 1 : 0} SR_CY=${cpu.SR_CY ? 1 : 0} SR_OV=${cpu.SR_OV ? 1 : 0}`);
+    // Matches cpu_dump()'s format exactly (cpu.c), field for field, so
+    // the two can be diffed line for line -- see make c4or1k-m1-check
+    // and (from M2) c4or1k-m2-check.
+    console.log(`pc=${cpu.pc} nextpc=${cpu.nextpc} SR_F=${b(cpu.SR_F)} SR_CY=${b(cpu.SR_CY)} SR_OV=${b(cpu.SR_OV)}`);
+    console.log(`SR_SM=${b(cpu.SR_SM)} SR_TEE=${b(cpu.SR_TEE)} SR_IEE=${b(cpu.SR_IEE)} SR_DME=${b(cpu.SR_DME)} SR_IME=${b(cpu.SR_IME)}`);
+    console.log(`EPCR=${cpu.GetSPR(32) | 0} EEAR=${cpu.GetSPR(48) | 0} ESR=${cpu.GetSPR(64) | 0}`); // SPR_EPCR/EEAR/ESR_BASE
+    console.log(`TTMR=${cpu.TTMR | 0} TTCR=${cpu.TTCR | 0} PICMR=${cpu.PICMR | 0} PICSR=${cpu.PICSR | 0}`);
     for (let i = 0; i < 32; i++) {
         console.log(`r${i}=${cpu.r[i] | 0}`);
     }

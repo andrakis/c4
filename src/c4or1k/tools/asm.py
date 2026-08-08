@@ -39,6 +39,7 @@ SF_REG = {  # (0x39<<26)|(subop<<21)|(rA<<16)|(rB<<11)
 }
 IMM_OP = {  # (op<<26)|(rD<<21)|(rA<<16)|(imm&0xFFFF)
     "movhi": 0x06, "addi": 0x27, "andi": 0x29, "ori": 0x2A, "xori": 0x2B,
+    "mfspr": 0x2D,  # mfspr rD, rA, imm -- rD = GetSPR(r[rA] | imm)
 }
 SF_IMM = {  # (0x2F<<26)|(subop<<21)|(rA<<16)|(imm&0xFFFF)
     "sfeqi": 0x0, "sfnei": 0x1, "sfgtui": 0x2, "sfgeui": 0x3, "sfltui": 0x4,
@@ -59,6 +60,9 @@ def parse_lines(text):
         if line.endswith(":"):
             out.append(("label", line[:-1]))
             continue
+        if line.startswith(".org"):
+            out.append(("org", int(line.split()[1], 0)))
+            continue
         parts = line.replace(",", " ").split()
         out.append(("ins", parts[0], parts[1:]))
     return out
@@ -67,12 +71,20 @@ def parse_lines(text):
 def assemble(text):
     lines = parse_lines(text)
 
-    # pass 1: label -> word address
+    # pass 1: label -> word address. ".org N" jumps the word-address
+    # counter forward to N (word units) -- for planting a tiny
+    # exception handler at a real vector address (e.g. EXCEPT_SYSCALL
+    # = 0xC00 bytes = word 0x300) without typing hundreds of nop
+    # lines to pad a straight-line test program out to it.
     labels = {}
     addr = 0
     for item in lines:
         if item[0] == "label":
             labels[item[1]] = addr
+        elif item[0] == "org":
+            if item[1] < addr:
+                raise ValueError(f".org {item[1]} goes backward from {addr}")
+            addr = item[1]
         else:
             addr += 1
 
@@ -93,6 +105,11 @@ def assemble(text):
     addr = 0
     for item in lines:
         if item[0] == "label":
+            continue
+        if item[0] == "org":
+            while addr < item[1]:
+                words.append(0)  # l.j 0 (self-jump) -- unreachable filler, never meant to execute
+                addr += 1
             continue
         mnem, args = item[1], item[2]
 
@@ -137,6 +154,18 @@ def assemble(text):
             target = labels[args[0]]
             offset = target - addr
             w = (BRANCH_OP[mnem] << 26) | (offset & 0x3FFFFFF)
+        elif mnem == "mtspr":
+            # mtspr rA, rB, imm -- SetSPR(r[rA] | imm, r[rB]); imm is a
+            # split field like a store offset, but NOT sign-extended
+            # (an SPR-index component, not a byte offset -- cpu.c).
+            ra, rb, imm = reg(args[0]), reg(args[1]), int(args[2], 0)
+            w = (0x30 << 26) | (((imm >> 11) & 0x1F) << 21) | (ra << 16) | (rb << 11) | (imm & 0x7FF)
+        elif mnem == "rfe":
+            w = (0x09 << 26)
+        elif mnem == "sys":
+            w = (0x08 << 26) | 0x0000FFFF  # top 16 bits (0x2000) != 0x2100 -> EXCEPT_SYSCALL, not TRAP (cpu.c's 0x21000000 test)
+        elif mnem == "trap":
+            w = (0x08 << 26) | 0x01000000  # (ins & 0xFFFF0000) == 0x21000000 -> EXCEPT_TRAP
         else:
             raise ValueError(f"unknown mnemonic: {mnem!r}")
 

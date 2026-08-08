@@ -158,9 +158,63 @@ byte-swapped storage. An oracle that invents its own "obviously
 correct" big-endian formula instead of reading `ram.js` will produce
 self-consistent-looking wrong answers, not a crash.
 
-**M2 — SPRs, exceptions, MMU, real TLB-miss vectors.** Not started.
+**M2 — SPRs, exceptions, MMU, real TLB-miss vectors. Done.** `cpu.c`
+gained: the full SR flag register (`cpu_set_flags`/`cpu_get_flags`,
+packing/unpacking all 17 flag bits exactly as safecpu.js's SetFlags/
+GetFlags do); `cpu_get_spr`/`cpu_set_spr` (group 0 general SPRs +
+SR, group 1/2 DTLB/ITLB match+translate registers, group 9 PIC,
+group 10 tick timer -- TTMR/TTCR are stored but nothing fires
+`EXCEPT_TICK` automatically yet, see below); `cpu_exception` (EPCR/
+EEAR/ESR save, the EXCEPT_SYSCALL-vs-everything-else EPCR-offset
+distinction, the flag resets, the vector jump); `l.mfspr`/`l.mtspr`/
+`l.rfe`/`l.sys`/`l.trap`, all real now; and `dtlb_lookup`/`fetch_ins`,
+which check the current DTLB/ITLB match register and permission bits
+and raise `EXCEPT_DTLBMISS`/`EXCEPT_ITLBMISS`/`EXCEPT_DPF`/
+`EXCEPT_IPF` on a miss or fault -- **not** a page-table walk. Per the
+plan, that's deliberate: real OR1000 software (the guest kernel) owns
+its own page tables and installs the resulting TLB entry with
+`l.mtspr` from its own miss handler; this function's only job is to
+notice there's no entry and raise the vector, exactly as safecpu.js's
+`DTLBLookup`/`GetInstruction` do.
 
-**M2 — SPRs, exceptions, MMU, real TLB-miss vectors.** Not started.
+**Verification: bit-for-bit match against jor1k, again.**
+`tests/m2_test.s` exercises: a general-SPR read/write round-trip; the
+SR flag round-trip through `l.mtspr`/`l.mfspr` (including SR_FO being
+force-set on every write, matching `cpu_set_flags`); `l.sys` and
+`l.trap` each firing their real vector, with tiny handlers planted at
+the *actual* vector addresses via a new `.org` assembler directive
+(`tools/asm.py`) rather than inline with the code that triggers
+them -- that's genuinely where the CPU jumps; and a full DTLB-miss
+round trip: an `l.lwz` faults with no TLB entry installed, the
+handler at `EXCEPT_DTLBMISS`'s vector installs a matching entry via
+two `l.mtspr`s and returns with `l.rfe`, which (per real OR1000
+semantics, `EPCR` pointed *at* the faulting instruction, not past it)
+retries the same `l.lwz` -- which now succeeds and reads back the
+value pre-stored at that physical address. `make c4or1k-m2-check`:
+**exact match**, first real run.
+
+Two things worth flagging, one a real fidelity note and one a
+deliberate scope cut:
+
+- **`EXCEPT_SYSCALL` and every other exception type save `EPCR`
+  differently, and it matters for how a handler must behave.**
+  `EXCEPT_SYSCALL` saves `(pc<<2)+4`, so a plain `l.rfe` naturally
+  continues at the instruction *after* the trap. Everything else
+  (`EXCEPT_TRAP` included) saves `(pc<<2)` — pointing *at* the
+  faulting/trapping instruction — so a handler that wants to return
+  past it (as `tests/m2_test.s`'s trap handler does) must bump `EPCR`
+  by 4 itself before `l.rfe`, and a TLB-miss handler that does
+  *nothing* to `EPCR` gets the retry-on-return behavior automatically.
+  Both are exercised in the test program precisely because they're
+  easy to get backwards.
+- **TLB entry LRU bits are not checked at all** (real jor1k aborts —
+  crashes the whole worker — if a guest ever sets them; nothing in
+  this project's test programs does either). Not a page-table walk
+  either, per above — that's the guest kernel's job starting at M4.
+  Automatic tick-timer interrupt delivery is also still deferred:
+  `TTMR`/`TTCR` are readable/writable SPRs now, but nothing fires
+  `EXCEPT_TICK` on a schedule yet, since that needs the main-loop
+  batching M3/M6 add.
 
 **M3 — UART + launch script + console I/O.** Not started.
 `run-c4or1k.sh` already exists (M0); M3 wires it to a real UART device

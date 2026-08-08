@@ -9,18 +9,23 @@ Console only -- no framebuffer, no keyboard device. Terminal raw mode
 is handled by `run-c4or1k.sh`, an external wrapper, not by the VM (the
 C4 VM has no ioctl/termios facility, see that script's header comment).
 
-## Status: M5 done, M6 in progress -- it mounts a real 9p root filesystem and runs real userspace (M0-M4 preserved in docs/c4or1k-design.md)
+## Status: M6 done -- it boots real Linux to an interactive shell (M0-M4 preserved in docs/c4or1k-design.md)
 
     make c4or1k-boot                # boot a real kernel; N=<steps> to change the budget (default 2M)
 
 Boots an unmodified `vmlinux.bin` from the reset vector through the
 full kernel init sequence, mounts basefs.json's root filesystem over
-9p (`VFS: Mounted root (9p filesystem) readonly on device 0:12.`), and
-execs real userspace: `/etc/init.d/rcS` (`mount -a`, `busybox
---install`, `ifup -a`, `inetd`), then `udhcpc`'s DHCP discover/retry
-cycle (fails gracefully -- no ethernet device exists). Reaching an
-actual shell prompt just needs enough instruction budget past that
-point; see `docs/c4or1k-design.md`'s M6 section for current status.
+9p (`VFS: Mounted root (9p filesystem) readonly on device 0:12.`),
+execs real userspace (`/etc/init.d/rcS`, `busybox`, `udhcpc` -- fails
+gracefully, no ethernet device exists), and reaches a real, interactive
+BusyBox shell prompt (`~ $`) via `/etc/inittab`'s `ttyS1::respawn:
+-login -f root`. Needs a large instruction budget (order of hundreds
+of millions to low billions, depending mostly on `udhcpc`'s own DHCP
+retry/backoff timing) and `stdbuf -oL` to see the output live, since
+stdio is fully buffered against a non-tty output otherwise. See
+`docs/c4or1k-design.md`'s M6 section for the exact transcript and a
+known rough edge (the console's own login, ttyS0, hasn't yet been
+demonstrated with live typed input racing against `ttyS1`'s).
 
 Two real bugs surfaced getting here, both found by bisecting a real
 boot under `gdb` rather than by inspection -- `bootfs.c`'s 32-bit

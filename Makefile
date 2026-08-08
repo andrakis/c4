@@ -434,8 +434,14 @@ c4or1k-m3-int-check: c4m c4or1k.c4r src/c4or1k/tests/m3_echo_int.bin
 	rm -f .c4or1k_check_in.txt .c4or1k_check_out.txt
 # M4: boot loader. VMLINUX is jorconsole's already-decompressed image
 # (see boot.h); -b MAXSTEPS bounds a boot attempt by instruction
-# count, since there's no panic detection yet to stop on its own.
-# Override with e.g. `make c4or1k-boot N=20000000` for a longer run.
+# count, since there's no panic detection yet to stop on its own. The
+# default here only reaches the pre-M5 VFS panic quickly, as a fast
+# sanity check -- reaching the real interactive shell M6 added needs
+# N in the hundreds of millions to low billions (mostly udhcpc's own
+# DHCP retry/backoff timing) and `stdbuf -oL ./c4m ...` to see output
+# live rather than losing it to stdio's full-buffering on a crash or
+# early -b cutoff. Try e.g. `stdbuf -oL ./c4m load-c4r.c -- c4or1k.c4r
+# $(VMLINUX) -b 700000000 <bootfs.idx> <bootfs.blob>` directly.
 VMLINUX := ../jorconsole/jor1k-sysroot/or1k/vmlinux.bin
 N := 2000000
 # M5: 9p root filesystem, basefs.json only (docs/c4or1k-design.md).

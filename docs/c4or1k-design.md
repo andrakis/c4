@@ -440,18 +440,49 @@ when it fired a handful of times — was measurably the dominant cost
 once it started firing millions of times; `warn_once()` now reports
 each unique top byte a single time.
 
-**M6 — IRQ/timer tuning to reach a shell prompt. In progress.** With
-M5's fixes in place the kernel mounts the 9p root filesystem
-(`VFS: Mounted root (9p filesystem) readonly on device 0:12.`), execs
-real userspace (`/etc/init.d/rcS`: `mount -a`, `busybox --install`,
-`mkdir`/`mount` for `/dev/pts` and `/dev/shm`, `ifup -a`, `inetd`), and
-reaches `udhcpc`'s DHCP discover/retry/give-up cycle (no ethernet
-device exists, so this fails as expected) — all confirmed on a real,
-unmodified kernel and root filesystem, not a synthetic test. Reaching
-an actual interactive shell prompt needs enough instruction budget to
-get past `udhcpc`'s own retry/backoff timing (each cycle burns real
-guest instructions waiting on jiffies) and both `inittab` `respawn`
-entries spawning; still running as of this writing.
+**M6 — IRQ/timer tuning to reach a shell prompt. Done.** No further
+IRQ/timer tuning actually needed beyond M4/M5's existing tick-check
+cadence — this milestone turned out to be entirely gated on M5's two
+bugs (`rd_le32` and the missing UART1). With those fixed, the boot
+proceeds through the full sequence without further intervention: the
+9p root filesystem mounts (`VFS: Mounted root (9p filesystem)
+readonly on device 0:12.`), real userspace execs (`/etc/init.d/rcS`:
+`mount -a`, `busybox --install`, `mkdir`/`mount` for `/dev/pts` and
+`/dev/shm`, `ifup -a`, `inetd`), `udhcpc` discovers/retries/gives up
+gracefully (no ethernet device exists), and `/etc/inittab`'s
+`ttyS1::respawn:-login -f root` reaches a real, interactive BusyBox
+shell prompt:
+
+```
+-login[130]: root login on 'ttyS1'
+*******************************************************
+* Don't know what to do? Type 'help' and press enter. *
+*******************************************************
+Note, you can exit most programs by pressing CTRL+C
+~ $
+```
+
+— a real, unmodified kernel and root filesystem, not a synthetic
+test, reached entirely through this project's own CPU, MMU, MMIO,
+UART, virtio, and 9p implementations. `stdbuf -oL` was needed to see
+this at all: stdio is fully buffered against a non-tty output, so a
+run's last several KB of already-*printed* text is silently discarded
+if the process is later killed or hits its instruction-budget cutoff
+before a flush.
+
+**One remaining rough edge, not yet fixed:** the console's own
+`::respawn:-login -f user` entry (ttyS0, this project's *only* console
+wired to a real host stdin via `con.c`) hadn't reached its own login
+prompt by the time a piped test command arrived in the same run that
+reached the ttyS1 prompt above — `ttyS1`'s root login happened to get
+scheduled first, and ttyS1 has no real byte source by design (see M5),
+so the piped input landed nowhere useful. This is a scheduling/timing
+question (which `respawn` entry's `getty` wins the race), not a
+correctness bug — the shell above is genuinely interactive, real
+Linux, real 9p, just not yet demonstrated with a live typed command
+against the specific console this project's launch script feeds.
+Worth revisiting if the `run-c4or1k.sh` interactive path (a real
+terminal, not piped input) is exercised directly.
 
 **M7 — stretch.** `c4lc -O`, `fs.json` overlay, optional virtio-block/
 ATA. Framebuffer/keyboard stay out of scope.

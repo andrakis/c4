@@ -364,7 +364,7 @@ test-c4bb: c4bb-images $(C4M) $(TESTS_C4R)
 # decoder is real and lives in its own module, linked with c4rlink
 # the same way src/c4mp does it.
 C4OR1K_SRC  := src/c4or1k
-C4OR1K_MODS := mem mmio uart con cpu main
+C4OR1K_MODS := mem mmio uart con cpu boot main
 C4OR1K_HDRS := $(C4OR1K_SRC)/cpu.h $(C4OR1K_SRC)/mem.h
 c4or1k.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4OR1K_HDRS) $(patsubst %,$(C4OR1K_SRC)/%.c,$(C4OR1K_MODS))
 	for m in $(C4OR1K_MODS); do \
@@ -422,6 +422,14 @@ c4or1k-m3-int-check: c4m c4or1k.c4r src/c4or1k/tests/m3_echo_int.bin
 	./src/c4or1k/run-c4or1k.sh c4or1k.c4r src/c4or1k/tests/m3_echo_int.bin -r < .c4or1k_check_in.txt > .c4or1k_check_out.txt
 	diff .c4or1k_check_in.txt .c4or1k_check_out.txt && echo "c4or1k-m3-int-check: OK (interrupt-driven echo, byte-for-byte)"
 	rm -f .c4or1k_check_in.txt .c4or1k_check_out.txt
+# M4: boot loader. VMLINUX is jorconsole's already-decompressed image
+# (see boot.h); -b MAXSTEPS bounds a boot attempt by instruction
+# count, since there's no panic detection yet to stop on its own.
+# Override with e.g. `make c4or1k-boot N=20000000` for a longer run.
+VMLINUX := ../jorconsole/jor1k-sysroot/or1k/vmlinux.bin
+N := 2000000
+c4or1k-boot: c4m c4or1k.c4r
+	./c4m load-c4r.c -- c4or1k.c4r $(VMLINUX) -b $(N)
 test-oisc4-nested: $(OISC4) $(C4) $(C4M) oisc4-lc.c4r $(TESTS)/hello.c4r
 	$(C4M) load-c4r.c -- oisc4-lc.c4r -m 32 $(TESTS)/hello.c4r | grep -q yello
 	$(C4) c4l.c oisc4-lc.c4r -m 32 $(TESTS)/hello.c4r | grep -q yello
@@ -877,7 +885,7 @@ PHONY += run-c4 run-c4-vg test-c4 test-massive-c4
 PHONY += run-c4-alt run-c4-alt-vg
 PHONY += test-c4ix test-c4ix-fmt test-c4ix-c4ke test-c4ix-c4ke-nested test-c4ix-c4 run-c4ix run-c4ix-c4 demo-c4ix demo-c4ix-c4 bench-c4ix
 PHONY += test-c4mp
-PHONY += c4or1k-m0 c4or1k-m1 c4or1k-m1-check c4or1k-m2 c4or1k-m2-check c4or1k-m3 c4or1k-m3-check c4or1k-m3-int-check
+PHONY += c4or1k-m0 c4or1k-m1 c4or1k-m1-check c4or1k-m2 c4or1k-m2-check c4or1k-m3 c4or1k-m3-check c4or1k-m3-int-check c4or1k-boot
 PHONY += pkg c4rs or1k
 PHONY += pi
 # Don't bother with the dump or link utility for now

@@ -262,9 +262,74 @@ return address**: `movhi`/`ori` builds `final_halt`'s byte address
 not a c4or1k-specific mechanism; worth remembering as a pattern for
 any future test whose main flow doesn't naturally terminate.
 
-**M4 — boot loader.** Not started. `jorconsole/jor1k-sysroot/or1k/
+**M4 — boot loader. Done — real Linux boots.** `boot.c`'s
+`load_kernel`/`patch_kernel` are a direct port of `system.js`'s
+`OnKernelLoaded`/`PatchKernel`: `jorconsole/jor1k-sysroot/or1k/
 vmlinux.bin` is already a decompressed raw flat binary (jorconsole's
-own postinstall unpacked it) — no bzip2 or ELF parsing needed.
+own postinstall unpacked it), so `load_kernel` is a plain streamed
+`read()` straight into `ram[]` at address 0 — no bzip2 or ELF parsing,
+and no `Little2Big` byte-swap either (mem.c already stores genuine
+big-endian bytes in the file's natural order, so there's nothing to
+swap). `patch_kernel` replicates the exact byte-offset/value guard
+`PatchKernel` uses to find the DTB's `"memory\0"` property and
+overwrite its size cell — copied verbatim rather than re-derived, per
+the original plan. `main.c` gained a boot mode (`-b [maxsteps]`) that
+starts execution at the real reset vector (`0x100`, not address 0)
+with no natural halt address, since a kernel doesn't fall off the end
+of its own image; `maxsteps` bounds a run by instruction count, the
+only stopping mechanism available before real panic detection exists.
+
+**Result: `make c4or1k-boot` reaches the exact expected panic.**
+`VFS: Cannot open root device "host" or unknown-block(0,0): error -2`
+/ `Kernel panic - not syncing: VFS: Unable to mount root fs on
+unknown-block(0,0)`, printed once, with the CPU then idle (no spin of
+repeated panic output) — the standard, generic Linux VFS failure any
+emulator without a working root filesystem produces, not jor1k- or
+c4or1k-specific text, so this is strong independent evidence on its
+own rather than something that needed a side-by-side jorconsole run
+to trust. Along the way the real kernel boot banner, memory/MMU setup
+(`setup_memory`, `map_ram`, `itlb_miss_handler`/`dtlb_miss_handler`
+registration), the full kernel command line
+(`root=host rootfstype=9p rootflags=trans=virtio console=uart,mmio,
+0x90000000,115200 ...`), and dozens of subsystem/driver init messages
+(network protocol families, TCP/UDP hash tables, SCSI, ALSA, block
+layer, io schedulers, 9P/v9fs registration) all appear correctly on
+the UART console — exercising the CPU, exceptions, DTLB/ITLB, and
+UART/MMIO layers against real, unmodified Linux code far beyond
+anything the hand-written M1-M3 test programs touched.
+
+Devices this project doesn't implement (virtio-block at three
+addresses, a second UART/`ttyS1`, DRM/framebuffer, ATA/PATA, keyboard/
+touchscreen, ethernet, RTC) all probe and fail *gracefully* — the
+kernel's own drivers print their normal "not found"-style messages
+(`Wrong magic value 0x00000000!`, etc.) and move on, rather than the
+boot wedging. `mmio.c`/`mem.c` print one diagnostic line per
+unrecognized access rather than faulting, which is what makes this
+observable at all instead of an opaque hang.
+
+**One real bug found and fixed, and it was the reason the first boot
+attempt never got here**: automatic tick-timer interrupt delivery had
+been deliberately deferred all the way from M2 ("needs the main-loop
+batching M3/M6 add" — see this doc's M2 section). The very first boot
+attempt got only as far as the ATA/PATA driver probe before getting
+stuck retry-polling forever — a strong signal that *something* waits
+on a timeout that never expires, and TTMR/TTCR being pure inert
+storage (readable/writable via `l.mtspr`/`l.mfspr`, but never firing
+`EXCEPT_TICK`) was exactly that something: any kernel code path
+blocked on jiffies advancing hangs forever without it. `cpu_tick_check`
+(cpu.c) ports safecpu.js's Step-loop tick logic — advance `TTCR`,
+raise `EXCEPT_TICK` when `SR_TEE` and the pending bit are set —
+restructured for a one-instruction-at-a-time driver instead of
+jor1k's N-at-a-time `Step(steps, clockspeed)`: `main.c` calls it every
+64 instructions, matching jor1k's own batch cadence but coarser on
+delivery latency (up to 63 instructions late), which doesn't matter
+for unblocking a timeout. Once wired in, the *same* 100M-instruction
+budget that previously never left the ATA probe reached the panic
+with room to spare. Worth remembering for M6 ("IRQ/timer tuning"):
+the tick mechanism itself was pulled forward from there because M4
+needed it, not because M6 turned out to be unnecessary — M6's job is
+tuning cadence/batch size for a full interactive boot, not building
+tick delivery from scratch.
 
 **M5 — 9P root filesystem (basefs.json only).** Not started.
 

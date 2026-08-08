@@ -22,7 +22,11 @@
 
 // c4lc's enum initializers must be a plain numeric literal, not an
 // expression -- 0x100000, not "1 << 20".
-enum { RAM_SIZE = 0x100000 }; // 1MB, plenty for hand-written test programs
+//
+// 32MB, matching jor1k's own default `memorysize` (index.js) -- not
+// just "plenty for hand-written test programs" from M4 on: this is
+// what a real vmlinux.bin actually needs room to boot into.
+enum { RAM_SIZE = 0x2000000 };
 
 extern char *ram;
 

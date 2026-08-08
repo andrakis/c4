@@ -55,6 +55,27 @@ void cpu_clear_interrupt(int line) {
     PICSR = PICSR & ~(1 << line);
 }
 
+// See cpu.h: combines safecpu.js's once-per-64-instructions TTCR
+// advance with its every-instruction SR_TEE delivery check into one
+// call, made every 64 instructions by main.c -- coarser delivery
+// latency than jor1k's (up to 63 instructions late), immaterial for
+// unblocking a jiffies-driven wait.
+void cpu_tick_check(int clockspeed) {
+    int delta;
+    if ((TTMR >> 30) != 0) {
+        delta = (TTMR & 0xFFFFFFF) - (TTCR & 0xFFFFFFF);
+        if (delta < 0) delta = delta + 0xFFFFFFF;
+        TTCR = (TTCR + clockspeed) & 0xFFFFFFFF;
+        if (delta < clockspeed) {
+            if (TTMR & (1 << 29)) TTMR = TTMR | (1 << 28); // set pending
+        }
+    }
+    if (SR_TEE && (TTMR & (1 << 28))) {
+        cpu_exception(EXCEPT_TICK, group0[SPR_EEAR_BASE]);
+        pc = nextpc; nextpc = pc + 1;
+    }
+}
+
 // Bit layout, vector list, and the abort-on-unsupported-feature set
 // (little-endian mode, context IDs, exception prefix, delay-slot
 // exceptions) are all read straight from safecpu.js's SetFlags -- see

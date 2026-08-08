@@ -1,18 +1,30 @@
-// c4or1k test harness AND console-mode entry point. Loads a flat
-// binary of big-endian 32-bit words (produced by tools/asm.py's "bin"
-// mode) into guest RAM at address 0, runs it via the same
-// cpu_step(halt_pc) loop either way:
+// c4or1k test harness, console-mode, AND boot-mode entry point. All
+// three drive the same cpu_step(halt_pc) loop:
 //
-//   - test mode (default): the program is straight-line and falls
-//     off the end at a known word count; every register plus SR_F/
-//     SR_CY/SR_OV is dumped in a format tools/or1k-oracle.js matches
-//     line-for-line, so the two can be diffed directly.
-//   - console mode (-r): the program (tests/m3_echo.s, for now) polls
-//     the UART and loops until it decides to halt itself (Ctrl-D);
-//     no dump at the end, since there's no oracle-comparable state
-//     for an interactive session, and stdin is polled every
-//     iteration via con_poll_and_feed() (cheaply, thanks to its own
-//     internal rate gate -- see con.c).
+//   - test mode (default): loads a flat binary of big-endian 32-bit
+//     words (tools/asm.py's "bin" mode) at guest address 0. The
+//     program is straight-line and falls off the end at a known word
+//     count; every register plus SR_F/SR_CY/SR_OV is dumped in a
+//     format tools/or1k-oracle.js matches line-for-line, so the two
+//     can be diffed directly.
+//   - console mode (-r): same loader, but the program (tests/
+//     m3_echo*.s) polls the UART and loops until it decides to halt
+//     itself (Ctrl-D); no dump at the end, since there's no
+//     oracle-comparable state for an interactive session.
+//   - boot mode (-b [maxsteps]): loads a raw kernel image via
+//     boot.c's load_kernel/patch_kernel instead, starts execution at
+//     the real OR1000 reset vector (0x100) instead of address 0, and
+//     runs with no natural halt address (nwords = -1, so cpu_step's
+//     `pc == halt_pc` check never fires) -- a kernel doesn't fall off
+//     the end of its own image. maxsteps (0 = unbounded) exists
+//     because there's nothing else to bound it with yet: no panic
+//     detection, just a instruction-count cutoff for observing how
+//     far a boot attempt gets.
+//
+// stdin is polled every loop iteration in all three modes via
+// con_poll_and_feed() -- cheaply, thanks to its own internal rate
+// gate (con.c) -- since test-mode programs never touch the UART and
+// the poll is a no-op for them regardless.
 //
 // M0's throughput result (main.c's earlier, single-file content) is
 // preserved in docs/c4or1k-design.md and README.md.
@@ -21,6 +33,7 @@
 #include "mem.h"
 #include "uart.h"
 #include "con.h"
+#include "boot.h"
 
 enum { FILEBUFSZ = 0x10000 }; // c4lc enum initializers must be a literal, not "1 << 16"
 char filebuf[FILEBUFSZ];
@@ -58,27 +71,55 @@ int load_program(char *path) {
     return addr >> 2;
 }
 
+// c4 has no atoi/library string routines.
+int str_to_int(char *s) {
+    int n;
+    n = 0;
+    while (*s >= '0' && *s <= '9') {
+        n = n * 10 + (*s - '0');
+        ++s;
+    }
+    return n;
+}
+
 int main(int argc, char **argv) {
     char *path;
-    int nwords, status, steps, t0, t1, dt_ms, ips, run_mode;
+    int nwords, status, steps, t0, t1, dt_ms, ips, run_mode, boot_mode, maxsteps, length;
 
     path = argc > 1 ? argv[1] : "src/c4or1k/tests/m1_test.bin";
     run_mode = (argc > 2 && argv[2][0] == '-' && argv[2][1] == 'r');
+    boot_mode = (argc > 2 && argv[2][0] == '-' && argv[2][1] == 'b');
+    maxsteps = (boot_mode && argc > 3) ? str_to_int(argv[3]) : 0; // 0 = unbounded
 
     mem_init();
     cpu_reset();
     uart_reset();
     con_init();
-    nwords = load_program(path);
-    if (nwords < 0) return 1;
+
+    if (boot_mode) {
+        length = load_kernel(path);
+        if (length < 0) return 1;
+        patch_kernel(length, RAM_SIZE / 0x100000);
+        pc = 0x100 >> 2; nextpc = pc + 1; // real OR1000 reset vector, not address 0
+        nwords = -1; // no natural halt address for a kernel image
+        printf("c4or1k: booting %s (%d bytes) from the reset vector\n", path, length);
+    } else {
+        nwords = load_program(path);
+        if (nwords < 0) return 1;
+    }
 
     steps = 0;
     t0 = __time();
     while (1) {
         con_poll_and_feed();
+        if (!(steps & 63)) cpu_tick_check(64); // cadence matches safecpu.js's Step loop, see cpu.h
         status = cpu_step(nwords);
         if (status != 0) break;
         ++steps;
+        if (boot_mode && maxsteps && steps >= maxsteps) {
+            printf("c4or1k: stopped after %d instructions (-b limit)\n", steps);
+            break;
+        }
     }
     t1 = __time();
 
@@ -87,7 +128,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    if (run_mode) return 0; // no dump for an interactive/piped console session
+    if (run_mode || boot_mode) return 0; // no register/RAM dump: neither has oracle-comparable final state
 
     dt_ms = t1 - t0;
     printf("c4or1k: ran %d instructions from %s in %d ms\n", steps, path, dt_ms);

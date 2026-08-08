@@ -91,6 +91,19 @@ void cpu_check_for_interrupt();
 void cpu_raise_interrupt(int line);
 void cpu_clear_interrupt(int line);
 
+// Advances TTCR and fires EXCEPT_TICK when due, matching safecpu.js's
+// Step loop exactly (the `if (!(steps&63)) {...tick...}` block run
+// once per 64-instruction batch, plus the SR_TEE-gated delivery check
+// that runs every instruction) -- except restructured for a
+// one-instruction-at-a-time driver instead of jor1k's N-at-a-time
+// Step(steps, clockspeed): call cpu_tick_check(clockspeed) from the
+// main loop every 64 instructions (main.c), not every instruction.
+// Deferred through M1-M3 (see this file's top comment); needed
+// starting M4 because kernel code that busy-waits on a jiffies-driven
+// timeout hangs forever without it -- found by a real boot attempt
+// getting stuck retry-polling an unimplemented ATA controller.
+void cpu_tick_check(int clockspeed);
+
 // Runs one instruction. Returns 0 to keep running, 1 once pc reaches
 // halt_pc (without executing it), 2 if the fetched opcode (or SPR
 // group, or TLB LRU state) isn't implemented yet (state has already

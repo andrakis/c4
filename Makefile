@@ -349,6 +349,33 @@ test-oisc4-nested: $(OISC4) $(C4) $(C4M) oisc4-lc.c4r $(TESTS)/hello.c4r
 	$(OISC4) -m 192 oisc4-lc.c4r -m 32 $(TESTS)/hello.c4r | grep -q yello
 	@echo "test-oisc4-nested: OK"
 
+# c4mp (docs/c4mp-design.md): the multiprocessor VM. Unlike c4m it
+# carries no compiler -- it loads .c4r images -- and unlike c4m it is
+# compiled by c4lc, so it may use structs, for, -> and a preprocessor.
+# Two builds from one source: a native executable, and an image that
+# c4m can host. The second is a backwards-compatibility proof, since
+# c4m has no multiprocessing to offer.
+C4MP_SRC  := src/c4mp
+C4MP_MODS := vm loader main
+C4MP_HDRS := $(C4MP_SRC)/c4mp.h $(INCLUDE)/c4.h $(INCLUDE)/c4m_float.h $(INCLUDE)/c4m_util.h
+c4mp: $(patsubst %,$(C4MP_SRC)/%.c,$(C4MP_MODS)) $(C4MP_HDRS) c4m_float.c
+	$(NATIVE_CC) $(NATIVE_CC_OPTS) -I $(C4MP_SRC) \
+		$(patsubst %,$(C4MP_SRC)/%.c,$(C4MP_MODS)) c4m_float.c -o c4mp -lm
+# No gcc here, the same way C4IX does it: c4lc preprocesses the modules
+# itself (L9). -D __c4cc__=1 is what the gcc -E path defines, and it is
+# how c4mp.h decides whether restrict and the host headers exist.
+c4mp.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4MP_SRC)/c4mp.h $(patsubst %,$(C4MP_SRC)/%.c,$(C4MP_MODS))
+	for m in $(C4MP_MODS); do \
+		./c4sp -c 8000000 src/c4sp/lisp/c4lc.lisp -O -c -I $(C4MP_SRC) -D __c4cc__=1 \
+			$(C4MP_SRC)/$$m.c .c4mp_$$m.c4o > /dev/null || exit 1; \
+	done
+	$(C4RLINK) $(patsubst %,.c4mp_%.c4o,$(C4MP_MODS)) -o c4mp.c4r
+	rm -f .c4mp_*.c4o
+# Not in the default suite: the native sweep runs every test image
+# through two VMs and the hosted checks run them through three.
+test-c4mp: c4m c4mp c4mp.c4r $(TESTS_C4R)
+	bash $(C4MP_SRC)/test-c4mp.sh
+
 # C4IX (docs/c4ix-design.md): the c4lc-compiled OS. Each module is
 # preprocessed, compiled to a .c4o object with full optimization, and
 # the kernel image is linked by c4rlink.
@@ -729,7 +756,7 @@ test-link: c4m $(C4CC) $(C4RLINK)
 clean-c4rs:
 	rm -rf $(C4RS) $(BIN) *.c4r c4ke.pre.c
 clean: clean-c4rs
-	rm -rf $(C4) $(C4M) $(C4CC)
+	rm -rf $(C4) $(C4M) $(C4CC) c4mp
 pkg:
 	tar cjf $(PKG) c4ke.vfs.txt *.c src include Makefile
 # These rules are for personal testing
@@ -759,6 +786,7 @@ PHONY += run-alt run-alt-vg test-alt test-massive-alt
 PHONY += run-c4 run-c4-vg test-c4 test-massive-c4
 PHONY += run-c4-alt run-c4-alt-vg
 PHONY += test-c4ix test-c4ix-fmt test-c4ix-c4ke test-c4ix-c4ke-nested test-c4ix-c4 run-c4ix run-c4ix-c4 demo-c4ix demo-c4ix-c4 bench-c4ix
+PHONY += test-c4mp
 PHONY += pkg c4rs or1k
 PHONY += pi
 # Don't bother with the dump or link utility for now

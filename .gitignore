@@ -12,6 +12,11 @@ c4cc
 c4cc.o
 c4m
 c4m.o
+# Anchored: an unanchored "c4mp" also matches the src/c4mp/ SOURCE
+# directory, which git would then ignore entirely.
+/c4mp
+/c4mp.o
+.c4mp_*.c4o
 u0.c4l
 libc4ix.c4l
 .cx_*

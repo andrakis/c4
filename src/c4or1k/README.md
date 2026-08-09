@@ -25,8 +25,9 @@ C4 VM has no ioctl/termios facility, see that script's header comment).
 Boots an unmodified `vmlinux.bin` from the reset vector through the
 full kernel init sequence, mounts basefs.json's root filesystem over
 9p (`VFS: Mounted root (9p filesystem) readonly on device 0:12.`),
-execs real userspace (`/etc/init.d/rcS`, `busybox`, `udhcpc` -- fails
-gracefully, no ethernet device exists), and reaches a real, interactive
+execs real userspace (`/etc/init.d/rcS`, `busybox`, `udhcpc` -- which
+now gets a real DHCP lease from the M15 ethernet device + synthetic
+LAN peer), and reaches a real, interactive
 BusyBox shell prompt (`~ $`) via `/etc/inittab`'s `ttyS1::respawn:
 -login -f root`. Needs a large instruction budget (order of hundreds
 of millions to low billions, depending mostly on `udhcpc`'s own DHCP
@@ -48,7 +49,8 @@ store, since both bugs were badly misleading before they were pinned
 down.
 
 Devices this project doesn't implement (virtio-block, DRM, ATA,
-keyboard, touchscreen, ethernet, RTC) all probe and fail *gracefully*
+keyboard, touchscreen, RTC -- ethernet IS implemented as of M15) all
+probe and fail *gracefully*
 instead of wedging the boot -- `mmio.c` reports each unique
 unimplemented device once (`warn_once()`), not once per access, since
 several of them get polled continuously once real Linux is actually

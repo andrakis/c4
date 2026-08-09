@@ -80,26 +80,51 @@ extern int group2[2048]; // ITLB match (0x200|set) / translate (0x280|set) regis
 extern int TTMR, TTCR;     // tick timer mode/count (SPR group 10)
 extern int PICMR, PICSR;   // interrupt controller mask/status (SPR group 9)
 
-// M8: single-entry same-page translation cache for dtlb_lookup/
-// fetch_ins (ported from fastcpu.js's read32tlblookup/instlblookup
-// idea, see docs/c4or1k-design.md's M8 section) -- on a same-page
-// repeat access, skip the group1/group2 tag-match array read and go
-// straight to the permission check against the cached tlbtr. Unlike
-// fastcpu.js's own version, this is keyed on SR_SM (vpage AND SR_SM
-// must both match the cached entry) rather than relying on
-// invalidating the cache at every exception: fastcpu.js's own
-// invalidation happens in Exception() and SPR group1/group2 writes,
-// but SR_SM can also change via l.rfe or a direct l.mtspr(SPR_SR, ..)
-// with neither of those firing, which would let a stale permission
-// check leak across a supervisor/user mode change on the same page --
-// see the M8 design doc section for the full analysis. Keying on
-// SR_SM directly closes that gap without needing to enumerate every
-// place SR_SM can change. The cache is still invalidated on any write
-// to the corresponding SPR group (cpu_set_spr), since the guest can
-// rewrite a TLB entry's tag/permission bits without raising an
-// exception at all (e.g. an explicit TLB flush). -1 means empty.
-extern int dtlb_cache_vpage, dtlb_cache_sm, dtlb_cache_tlbtr;
-extern int itlb_cache_vpage, itlb_cache_sm, itlb_cache_tlbtr;
+// M8/M9: single-entry same-page translation cache for dtlb_lookup
+// (ported from fastcpu.js's read32tlblookup idea, see
+// docs/c4or1k-design.md's M8/M9 sections) -- on a same-page repeat
+// access, skip the group1[] tag-match array read AND (M9) the
+// permission bit-test, going straight to the ALREADY-DECIDED
+// dtlb_cache_rok/_wok. Unlike fastcpu.js's own version, this is keyed
+// on SR_SM (vpage AND SR_SM must both match the cached entry) rather
+// than relying on invalidating the cache at every exception:
+// fastcpu.js's own invalidation happens in Exception() and SPR
+// group1/group2 writes, but SR_SM can also change via l.rfe or a
+// direct l.mtspr(SPR_SR, ..) with neither of those firing, which would
+// let a stale permission check leak across a supervisor/user mode
+// change on the same page -- see the M8 design doc section for the
+// full analysis. Keying on SR_SM directly closes that gap without
+// needing to enumerate every place SR_SM can change. The cache is
+// still invalidated on any write to the corresponding SPR group
+// (cpu_set_spr), since the guest can rewrite a TLB entry's tag/
+// permission bits without raising an exception at all (e.g. an
+// explicit TLB flush). -1 (dtlb_cache_vpage) means empty.
+//
+// M9: cpu_run_batch's load/store cases now check dtlb_cache_vpage/_sm
+// directly and, on a hit, use dtlb_cache_phys/_rok/_wok without
+// calling dtlb_lookup at all -- the same fetch_ins-avoidance idea
+// itlb_cache_* applies to instruction fetch, applied here to data
+// access. dtlb_lookup is now the cold path only, called on an actual
+// miss (new page, new mode, or invalidation).
+extern int dtlb_cache_vpage, dtlb_cache_sm, dtlb_cache_phys, dtlb_cache_rok, dtlb_cache_wok;
+
+// M9: itlb_cache_* is the M8 idea taken one step further for the one
+// path that runs on literally every instruction. M8 still called
+// fetch_ins() on every fetch (even a cache hit paid a function-call),
+// and fetch_ins re-derived the permission bit-test from the cached
+// tlbtr every time even though that result can't change without an
+// invalidation. cpu_run_batch (cpu.c) now checks itlb_cache_vpage/_sm
+// directly and, on a hit, reads itlb_cache_phys/_xok (the physical
+// page base and the ALREADY-DECIDED permission result, computed once
+// when the entry was populated) without calling fetch_ins at all --
+// fetch_ins is now purely the cold path, called only on an actual
+// cache miss (new page, new mode, or an invalidation from
+// cpu_set_spr). This is the actual "fence" idea from fastcpu.js
+// applied to what c4m's cost model rewards: c4m has no JIT, so
+// skipping the per-instruction function CALL (not just the tag-check
+// logic inside it) is where the win is -- see docs/c4or1k-design.md's
+// M9 section. -1 (itlb_cache_vpage) means empty.
+extern int itlb_cache_vpage, itlb_cache_sm, itlb_cache_phys, itlb_cache_xok;
 
 int sext(int v, int bits);
 

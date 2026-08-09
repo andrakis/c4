@@ -607,50 +607,89 @@ on average (fetch, decode, dispatch, execute, writeback) -- already
 tight, which is consistent with M8 only finding 7.6%: there wasn't
 much bookkeeping fat left to cache away.
 
-**Option A -- keep optimizing c4or1k. Implemented (batching), not
-implemented (the literal fastcpu.js fence rewrite).** The original
-scoping here assumed the payoff was in porting fastcpu.js's fence-at-
-jump/page-boundary scheme, which amortizes per-instruction exception/
-TLB-check *logic*. Revisiting that assumption before building it: that
-scheme was designed for jor1k's V8 host, where function calls are
-nearly free after JIT and per-instruction branch logic is what's left
-to cut. c4m has no JIT -- calls cost real bytecode overhead on every
-invocation -- so the more relevant cost for *this* host turned out to
-be call/loop overhead, not per-instruction exception-check logic (M8's
-lookup caches already made that cheap). `cpu_step(halt_pc)` (one
-instruction per call) became `cpu_run_batch(halt_pc, max_batch, *ran)`
-(cpu.c/cpu.h): the entire per-instruction switch now runs inside a
-`for` loop within one function call, executing up to `max_batch`
-instructions (main.c passes 64, matching the cadence already
-established for interrupt/tick delivery in M8) before returning to
-main.c's driver loop. Every mid-switch `return 0` (branch taken,
-`l.rfe`, `l.mtspr`) became `continue`; the five "unimplemented"
-fault paths set a `fault` flag and `break` out to a single post-switch
-check, since c4lc has no labeled break/goto to exit nested switches
-directly (confirmed via `c4lc-gen.lisp`: `continue` inside a `switch`
-correctly targets the enclosing `for` loop, not the switch, since
-`g:switchstmt` only saves/restores `g:brk`, not `g:cont` -- verified
-against the compiler source before relying on it, not assumed). This
-is a smaller, safer change than fastcpu.js's fence scheme: it doesn't
-touch instruction semantics, delay-slot handling, or TLB/exception
-logic at all, only where the driver-loop boundary falls.
+**Option A -- keep optimizing c4or1k. Implemented, in two passes.**
+The original scoping here assumed the payoff was in porting
+fastcpu.js's fence-at-jump/page-boundary scheme, which amortizes
+per-instruction exception/TLB-check *logic*. Revisiting that
+assumption before building it: that scheme was designed for jor1k's
+V8 host, where function calls are nearly free after JIT and
+per-instruction branch logic is what's left to cut. c4m has no JIT --
+calls cost real bytecode overhead on every invocation -- so the more
+relevant cost for *this* host is call overhead, not per-instruction
+exception-check logic (M8's lookup caches already made that cheap).
+Two rounds of work followed that reasoning rather than porting
+fastcpu.js's scheme literally:
 
-**Verified**: same standard as M8 -- full `c4or1k-m1-check`/`m2-check`/
-`m3-check`/`m3-int-check` pass unchanged, and a 60M-instruction `-b`
-boot run is byte-for-byte identical to the pre-M9 (post-M8) boot log.
-**Measured**: 124.3s (M8) to 119.85s (M9) on the same 60M-instruction
-run -- **~3.6% faster**, smaller than hoped (the loop/call overhead
-this removes turned out to be a smaller slice of the ~9-10 op budget
-than expected), cumulative ~11% faster than pre-M8. The literal
-fastcpu.js fence-at-jump/page-boundary rewrite -- restructuring
-`cpu_step` around basic blocks rather than a fixed instruction-count
-batch, so it can skip TLB/exception rechecks specifically at
-control-flow edges -- remains unimplemented; given how modest M9's
-gain was, and that the reasoning above suggests its target (exception-
-check logic, already cheap post-M8) isn't where this host's remaining
-cost lives, it's not obviously worth its verification burden either.
-Hard-capped regardless by c4m's own ~4.4M-instr/sec ceiling -- no
-amount of restructuring `cpu_run_batch` beats that.
+1. **Batching.** `cpu_step(halt_pc)` (one instruction per call) became
+   `cpu_run_batch(halt_pc, max_batch, *ran)` (cpu.c/cpu.h): the entire
+   per-instruction switch now runs inside a `for` loop within one
+   function call, executing up to `max_batch` instructions (main.c
+   passes 64, matching the cadence already established for
+   interrupt/tick delivery in M8) before returning to main.c's driver
+   loop. Every mid-switch `return 0` (branch taken, `l.rfe`,
+   `l.mtspr`) became `continue`; the five "unimplemented" fault paths
+   set a `fault` flag and `break` out to a single post-switch check,
+   since c4lc has no labeled break/goto to exit nested switches
+   directly (confirmed via `c4lc-gen.lisp`: `continue` inside a
+   `switch` correctly targets the enclosing `for` loop, not the
+   switch, since `g:switchstmt` only saves/restores `g:brk`, not
+   `g:cont` -- verified against the compiler source before relying on
+   it, not assumed). This collapses main.c's own per-iteration
+   overhead (status check, step counting, maxsteps check) from once
+   per instruction to once per batch, on top of the `cpu_run_batch`
+   call itself.
+2. **Inlined TLB fast paths -- the actual "fence" idea, adapted.**
+   Even after batching, every fetch still called `fetch_ins()` and
+   every load/store still called `dtlb_lookup()`, paying a function
+   call on every cache *hit* too, not just on a miss. `itlb_cache_*`
+   and `dtlb_cache_*` (cpu.h) were extended to cache the *decided*
+   permission result (`itlb_cache_xok`, `dtlb_cache_rok`/`_wok`), not
+   just the raw `tlbtr` bits -- correct because that decision can't
+   change while the cache entry stays valid (invalidated on any
+   group1/group2 SPR write, same as M8). `cpu_run_batch` now checks
+   `itlb_cache_vpage`/`_sm` directly and, on a hit, reads
+   `itlb_cache_phys`/`_xok` inline -- no call to `fetch_ins` at all.
+   `fetch_ins`/`dtlb_lookup` became cold-path-only, called solely on
+   an actual miss. The ten load/store sites share this logic via a
+   `DTLB_FAST(addr, write, out)` function-like macro (cpu.c) rather
+   than ten hand-copied inline blocks -- verified c4lc's preprocessor
+   handles a multi-line, brace-bodied function-like macro correctly
+   (`c4lc-pp.lisp` splices backslash-newlines) before relying on it
+   for something used at ten call sites. This is the real "fence"
+   concept -- treat a validated region as needing no per-instruction
+   re-validation -- but implemented as call-avoidance (inlining a
+   cached decision) rather than fastcpu.js's literal basic-block
+   restructuring, because call avoidance is what actually matters on
+   a no-JIT host.
+
+**Verified**, same standard both times: full `c4or1k-m1-check`/
+`m2-check`/`m3-check`/`m3-int-check` pass unchanged, a 60M-instruction
+`-b` boot run byte-for-byte identical to the previous stage's boot
+log at every step, and (both stages) a full 700M-instruction boot
+reaching the identical interactive shell prompt as M6/M8.
+
+**Measured**, same 60M-instruction run throughout:
+
+| stage | time | vs. previous |
+|---|---|---|
+| pre-M8 baseline | 134.6s | -- |
+| M8 (TLB cache + poll batching) | 124.3s | -7.6% |
+| M9 batching (`cpu_run_batch`) | 119.85s | -3.6% |
+| M9 inlined ITLB fast path | 117.35s | -2.1% |
+| M9 inlined DTLB fast path | 116.18s | -1.0% |
+
+**~13.7% cumulative** since pre-M8, ~6.6% since M8. Each pass gave a
+real, verified, byte-identical-output gain, but each smaller than the
+last -- consistent with the ~9-10 VM-op/instruction budget being
+dominated by fetch/decode/execute/writeback, not by anything
+TLB/exception/call-related left to cut. Hard-capped regardless by
+c4m's own ~4.4M-instr/sec ceiling: no amount of restructuring
+`cpu_run_batch` beats that ceiling, and the remaining ~90% of the
+per-instruction cost isn't addressable without either a different
+execution model or reducing c4m's own per-VM-instruction cost (out of
+scope -- would mean changing c4m.c/c4.c itself, well beyond this
+project). This is very likely close to the practical ceiling for
+"emulate OR1000 by interpretation on c4m as it exists today."
 
 **Option B -- target a CISC guest ISA (e.g. x86) instead of OR1000.**
 The intuition -- fewer, denser CISC instructions mean less total guest-

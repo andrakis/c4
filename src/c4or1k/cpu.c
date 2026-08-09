@@ -16,8 +16,8 @@ int group2[2048];
 int TTMR, TTCR;
 int PICMR, PICSR;
 
-int dtlb_cache_vpage, dtlb_cache_sm, dtlb_cache_tlbtr;
-int itlb_cache_vpage, itlb_cache_sm, itlb_cache_tlbtr;
+int dtlb_cache_vpage, dtlb_cache_sm, dtlb_cache_phys, dtlb_cache_rok, dtlb_cache_wok;
+int itlb_cache_vpage, itlb_cache_sm, itlb_cache_phys, itlb_cache_xok;
 
 // See cpu.h's header comment and docs/c4or1k-design.md: this is NOT
 // the "(v << (32-bits)) >> (32-bits)" idiom. That relies on the left
@@ -247,76 +247,70 @@ void cpu_exception(int excepttype, int addr) {
 // safecpu.js's DTLBLookup/GetInstruction do. See cpu.h for why TLB
 // LRU bits aren't checked at all.
 //
-// M8: dtlb_cache_* (declared/explained in cpu.h) short-circuits the
-// group1[] tag-match read on a same-page, same-mode repeat access --
-// real workloads re-hit the same page across many consecutive loads/
-// stores, so this is a near-certain win rather than a speculative one.
+// M9: cold path only (see cpu.h's dtlb_cache_* comment), called by
+// cpu_run_batch's DTLB_FAST macro only when SR_DME is on and the
+// cache doesn't already match. A tag mismatch raises EXCEPT_DTLBMISS
+// without touching the cache, same reasoning as fetch_ins's ITLB
+// miss path. A tag match populates dtlb_cache_phys/_rok/_wok --
+// BOTH permission decisions are made once here (not just the one
+// `write` asked about), since the next access to this cached page
+// might be a different direction and byproduct-caching the other
+// direction's answer is free once tlbtr is already in hand.
 int dtlb_lookup(int addr, int write) {
     int setindex, tlmbr, tlbtr, vpage;
     if (!SR_DME) return addr;
     vpage = addr >> 13;
-    if (vpage == dtlb_cache_vpage && SR_SM == dtlb_cache_sm) {
-        tlbtr = dtlb_cache_tlbtr; // same page, same mode as last time: skip the tag-match read entirely
-    } else {
-        setindex = vpage & 63;
-        tlmbr = group1[0x200 | setindex];
-        if (((tlmbr & 1) == 0) || ((tlmbr >> 19) != (addr >> 19))) {
-            cpu_exception(EXCEPT_DTLBMISS, addr);
-            return -1;
-        }
-        tlbtr = group1[0x280 | setindex];
-        dtlb_cache_vpage = vpage;
-        dtlb_cache_sm = SR_SM;
-        dtlb_cache_tlbtr = tlbtr;
+    setindex = vpage & 63;
+    tlmbr = group1[0x200 | setindex];
+    if (((tlmbr & 1) == 0) || ((tlmbr >> 19) != (addr >> 19))) {
+        cpu_exception(EXCEPT_DTLBMISS, addr);
+        return -1;
     }
-    if (SR_SM) {
-        if ((!write && !(tlbtr & 0x100)) || (write && !(tlbtr & 0x200))) {
-            cpu_exception(EXCEPT_DPF, addr);
-            return -1;
-        }
-    } else {
-        if ((!write && !(tlbtr & 0x40)) || (write && !(tlbtr & 0x80))) {
-            cpu_exception(EXCEPT_DPF, addr);
-            return -1;
-        }
+    tlbtr = group1[0x280 | setindex];
+    dtlb_cache_vpage = vpage;
+    dtlb_cache_sm = SR_SM;
+    dtlb_cache_phys = tlbtr & 0xFFFFE000;
+    dtlb_cache_rok = SR_SM ? ((tlbtr & 0x100) != 0) : ((tlbtr & 0x40) != 0);
+    dtlb_cache_wok = SR_SM ? ((tlbtr & 0x200) != 0) : ((tlbtr & 0x80) != 0);
+    if ((write && !dtlb_cache_wok) || (!write && !dtlb_cache_rok)) {
+        cpu_exception(EXCEPT_DPF, addr);
+        return -1;
     }
-    return (tlbtr & 0xFFFFE000) | (addr & 0x1FFF);
+    return dtlb_cache_phys | (addr & 0x1FFF);
 }
 
 // Returns the fetched word, or -1 if an ITLB miss/fault was raised
-// (cpu_step must then skip decode entirely for this cycle, matching
-// safecpu.js's Step loop: `if (ins==-1) { pc=nextpc++; continue; }`).
+// (cpu_run_batch must then skip decode entirely for this cycle,
+// matching safecpu.js's Step loop: `if (ins==-1) { pc=nextpc++;
+// continue; }`).
 //
-// M8: itlb_cache_* is dtlb_lookup's same trick applied to instruction
-// fetch -- this runs on literally every instruction (unlike
-// dtlb_lookup, which only runs for loads/stores), and code executes
-// sequentially within a page the overwhelming majority of the time
-// (a page is 8192 bytes / 2048 instructions), so the cache-hit path
-// dominates almost all real execution once SR_IME is on.
+// M9: cold path only, called by cpu_run_batch's inlined fast path
+// (see cpu.h's itlb_cache_* comment) only when SR_IME is on and the
+// cache doesn't already match -- a new page, a new privilege mode, or
+// an invalidation from cpu_set_spr. Does the real group2 tag-match
+// lookup; a tag mismatch raises EXCEPT_ITLBMISS without touching the
+// cache (there's no valid translation yet to cache -- the guest's own
+// miss handler installs one via l.mtspr, which invalidates
+// itlb_cache_vpage, forcing a fresh lookup on the retry after l.rfe).
+// A tag match populates itlb_cache_phys/_xok -- the permission
+// decision is made ONCE here, not re-derived on every cache hit,
+// since it can't change while the cache entry stays valid.
 int fetch_ins(int addr) {
     int setindex, tlmbr, tlbtr, vpage;
-    if (!SR_IME) return ram_lw(addr);
     vpage = addr >> 13;
-    if (vpage == itlb_cache_vpage && SR_SM == itlb_cache_sm) {
-        tlbtr = itlb_cache_tlbtr;
-    } else {
-        setindex = vpage & 63;
-        tlmbr = group2[0x200 | setindex];
-        if (((tlmbr & 1) == 0) || ((tlmbr >> 19) != (addr >> 19))) {
-            cpu_exception(EXCEPT_ITLBMISS, pc << 2);
-            return -1;
-        }
-        tlbtr = group2[0x280 | setindex];
-        itlb_cache_vpage = vpage;
-        itlb_cache_sm = SR_SM;
-        itlb_cache_tlbtr = tlbtr;
+    setindex = vpage & 63;
+    tlmbr = group2[0x200 | setindex];
+    if (((tlmbr & 1) == 0) || ((tlmbr >> 19) != (addr >> 19))) {
+        cpu_exception(EXCEPT_ITLBMISS, pc << 2);
+        return -1;
     }
-    if (SR_SM) {
-        if (!(tlbtr & 0x40)) { cpu_exception(EXCEPT_IPF, pc << 2); return -1; }
-    } else {
-        if (!(tlbtr & 0x80)) { cpu_exception(EXCEPT_IPF, pc << 2); return -1; }
-    }
-    return ram_lw((tlbtr & 0xFFFFE000) | (addr & 0x1FFF));
+    tlbtr = group2[0x280 | setindex];
+    itlb_cache_vpage = vpage;
+    itlb_cache_sm = SR_SM;
+    itlb_cache_phys = tlbtr & 0xFFFFE000;
+    itlb_cache_xok = SR_SM ? ((tlbtr & 0x40) != 0) : ((tlbtr & 0x80) != 0);
+    if (!itlb_cache_xok) { cpu_exception(EXCEPT_IPF, pc << 2); return -1; }
+    return ram_lw(itlb_cache_phys | (addr & 0x1FFF));
 }
 
 void cpu_reset() {
@@ -365,6 +359,23 @@ void cpu_dump() {
     }
 }
 
+// M9: the DTLB_FAST-macro-avoidance idea from itlb_cache_* (cpu.h)
+// applied to the ten load/store sites in cpu_run_batch below -- a
+// function-like macro instead of ten hand-copies of the same six
+// lines, since ten near-identical inline blocks are ten chances for
+// one of them to drift or typo. Expands to a statement (not an
+// expression), so it's always used as `DTLB_FAST(addr, 0-or-1,
+// dest);` -- vpage is cpu_run_batch's own local, already declared for
+// the ITLB fast path above, reused here.
+#define DTLB_FAST(a, wr, out) { \
+    vpage = (a) >> 13; \
+    if (!SR_DME) out = (a); \
+    else if (vpage == dtlb_cache_vpage && SR_SM == dtlb_cache_sm) { \
+        if (wr ? !dtlb_cache_wok : !dtlb_cache_rok) { cpu_exception(EXCEPT_DPF, (a)); out = -1; } \
+        else out = dtlb_cache_phys | ((a) & 0x1FFF); \
+    } else out = dtlb_lookup((a), wr); \
+}
+
 // switch/case, matching mmio.c/uart.c/virtio.c and this file's own
 // cpu_set_spr/cpu_get_spr above (and safecpu.js's own switch(ins>>>26)
 // structure, the porting reference). This was briefly reverted to
@@ -389,12 +400,28 @@ void cpu_dump() {
 // break/goto to jump out of nested switches directly. See cpu.h for
 // why batching this way, not fastcpu.js's fence-at-jump scheme.
 int cpu_run_batch(int halt_pc, int max_batch, int *ran) {
-    int bn, fault, ins, opcode, rd, ra, rb, rA, rB, imm, simm, func, jump, i, result, addr, phys;
+    int bn, fault, ins, opcode, rd, ra, rb, rA, rB, imm, simm, func, jump, i, result, addr, phys, vpage;
 
     for (bn = 0; bn < max_batch; ++bn) {
     if (pc == halt_pc) { *ran = bn; return 1; }
 
-    ins = fetch_ins(pc << 2);
+    // M9: inlined fast path for the itlb_cache_* hit case (cpu.h) --
+    // avoids the fetch_ins() call entirely (not just its internal
+    // work) on what is, once SR_IME is on, the overwhelming majority
+    // of instruction fetches. fetch_ins is still called, unchanged,
+    // for the cold path (SR_IME off, or an actual cache miss).
+    addr = pc << 2;
+    if (!SR_IME) {
+        ins = ram_lw(addr);
+    } else {
+        vpage = addr >> 13;
+        if (vpage == itlb_cache_vpage && SR_SM == itlb_cache_sm) {
+            if (!itlb_cache_xok) { cpu_exception(EXCEPT_IPF, addr); ins = -1; }
+            else ins = ram_lw(itlb_cache_phys | (addr & 0x1FFF));
+        } else {
+            ins = fetch_ins(addr);
+        }
+    }
     if (ins == -1) {
         pc = nextpc; nextpc = pc + 1;
         continue;
@@ -458,7 +485,7 @@ int cpu_run_batch(int halt_pc, int max_batch, int *ran) {
         continue;
     case 0x1B:                         // l.lwa
         addr = rA + imm;
-        phys = dtlb_lookup(addr, 0);
+        DTLB_FAST(addr, 0, phys);
         if (phys != -1) {
             EA = phys;
             r[rd] = sext(ram_lw(phys), 32);
@@ -466,27 +493,27 @@ int cpu_run_batch(int halt_pc, int max_batch, int *ran) {
         break;
     case 0x21:                         // l.lwz
         addr = rA + imm;
-        phys = dtlb_lookup(addr, 0);
+        DTLB_FAST(addr, 0, phys);
         if (phys != -1) r[rd] = sext(ram_lw(phys), 32);
         break;
     case 0x23:                         // l.lbz
         addr = rA + imm;
-        phys = dtlb_lookup(addr, 0);
+        DTLB_FAST(addr, 0, phys);
         if (phys != -1) r[rd] = ram_lb(phys);
         break;
     case 0x24:                         // l.lbs
         addr = rA + imm;
-        phys = dtlb_lookup(addr, 0);
+        DTLB_FAST(addr, 0, phys);
         if (phys != -1) r[rd] = sext(ram_lb(phys), 8);
         break;
     case 0x25:                         // l.lhz
         addr = rA + imm;
-        phys = dtlb_lookup(addr, 0);
+        DTLB_FAST(addr, 0, phys);
         if (phys != -1) r[rd] = ram_lh(phys);
         break;
     case 0x26:                         // l.lhs
         addr = rA + imm;
-        phys = dtlb_lookup(addr, 0);
+        DTLB_FAST(addr, 0, phys);
         if (phys != -1) r[rd] = sext(ram_lh(phys), 16);
         break;
     case 0x27:                         // l.addi
@@ -542,7 +569,7 @@ int cpu_run_batch(int halt_pc, int max_batch, int *ran) {
     case 0x33:                         // l.swa
         simm = sext(((ins >> 10) & 0xF800) | (ins & 0x7FF), 16);
         addr = rA + simm;
-        phys = dtlb_lookup(addr, 1);
+        DTLB_FAST(addr, 1, phys);
         if (phys != -1) {
             SR_F = (phys == EA);
             EA = -1;
@@ -552,19 +579,19 @@ int cpu_run_batch(int halt_pc, int max_batch, int *ran) {
     case 0x35:                         // l.sw
         simm = sext(((ins >> 10) & 0xF800) | (ins & 0x7FF), 16);
         addr = rA + simm;
-        phys = dtlb_lookup(addr, 1);
+        DTLB_FAST(addr, 1, phys);
         if (phys != -1) ram_sw(phys, rB);
         break;
     case 0x36:                         // l.sb
         simm = sext(((ins >> 10) & 0xF800) | (ins & 0x7FF), 16);
         addr = rA + simm;
-        phys = dtlb_lookup(addr, 1);
+        DTLB_FAST(addr, 1, phys);
         if (phys != -1) ram_sb(phys, rB);
         break;
     case 0x37:                         // l.sh
         simm = sext(((ins >> 10) & 0xF800) | (ins & 0x7FF), 16);
         addr = rA + simm;
-        phys = dtlb_lookup(addr, 1);
+        DTLB_FAST(addr, 1, phys);
         if (phys != -1) ram_sh(phys, rB);
         break;
     case 0x38:                         // three-operand ALU

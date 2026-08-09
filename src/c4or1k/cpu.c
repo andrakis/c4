@@ -1,5 +1,24 @@
 #include "cpu.h"
 #include "mem.h"
+#include "jit.h"
+
+// M13: the JIT's driver-loop hooks cost real per-instruction
+// bookkeeping (~7% wall-clock measured with the JIT merely compiled
+// in but disabled), so they are compiled OUT unless the build defines
+// C4OR1K_JIT (the `c4or1k-jit.c4r` Makefile target). The default and
+// -mcisc images carry none of this -- their generated code is
+// unchanged from M12. JCHK0 marks "the next instruction is a delay
+// slot, don't bother looking up" points; JCHKD marks the shared tail
+// where a just-executed delay slot makes the NEXT pc a branch target.
+#ifdef C4OR1K_JIT
+#define JCHK0 jchk = 0;
+#define JCHKD jchk = delayedins;
+#define JCHK1 jchk = 1;
+#else
+#define JCHK0
+#define JCHKD
+#define JCHK1
+#endif
 
 int r[NREGS];
 int pc, nextpc;
@@ -26,10 +45,15 @@ int itlb_cache_vpage, itlb_cache_sm, itlb_cache_phys, itlb_cache_xok;
 // extending it. This mask + XOR/subtract form only relies on
 // `1 << bits` for a small constant bits, so it is correct at any
 // host word width.
+// The (int)1 casts are for the NATIVE build (M13: gcc with `#define
+// int long`, see native.h): a bare literal `1` is a 32-bit C int
+// there, and `1 << 32` / `1 << 31` are undefined/negative where this
+// function needs 2^32 / +2^31. Under c4lc every literal is already
+// word-width, so the casts change nothing in the hosted builds.
 int sext(int v, int bits) {
     int signbit;
-    v = v & ((1 << bits) - 1);
-    signbit = 1 << (bits - 1);
+    v = v & (((int)1 << bits) - 1);
+    signbit = (int)1 << (bits - 1);
     return (v ^ signbit) - signbit;
 }
 
@@ -400,10 +424,61 @@ void cpu_dump() {
 // break/goto to jump out of nested switches directly. See cpu.h for
 // why batching this way, not fastcpu.js's fence-at-jump scheme.
 int cpu_run_batch(int halt_pc, int max_batch, int *ran) {
-    int bn, fault, ins, opcode, rd, ra, rb, rA, rB, imm, simm, func, jump, i, result, addr, phys, vpage;
+    int bn, fault, ins, opcode, rd, ra, rb, rA, rB, imm, simm, func, jump, i, result, addr, phys, vpage, jk, jchk, jneg1, jneg2;
 
+    // M13: jchk gates the JIT lookup. Calling jit_try on EVERY
+    // instruction measured 33% SLOWER than no JIT at all -- the call
+    // plus its cache probes cost more, on the majority of pcs that
+    // never run a block, than the covered blocks saved. Translated
+    // blocks start where control ARRIVES, though: loop heads and other
+    // branch targets, plus wherever a previous block ended (chaining).
+    // So the lookup runs only (a) at the first instruction of a batch,
+    // (b) right after a taken branch's delay slot (the tail below sets
+    // jchk = delayedins: 1 exactly when the instruction just executed
+    // WAS a delay slot, making the next one the branch target),
+    // (c) after l.rfe/l.mtspr/a fetch fault (vector entry), and
+    // (d) after a JIT block completes (the next block may chain).
+    // Sequentially-interpreted code pays one local-variable test per
+    // instruction instead of a full lookup. A block reachable ONLY by
+    // straight-line fall-through from interpreted code is missed --
+    // that is the deliberate trade, and it is a performance trade
+    // only, never a correctness one: jit_try validates everything
+    // regardless of when it is consulted.
+    // jneg1/jneg2: the last two control-flow-target pcs where jit_try
+    // declined -- a hot loop whose head starts with a load/store/branch
+    // (never translatable) would otherwise pay a full, useless jit_try
+    // call on EVERY iteration; with these it pays two local compares.
+    // Reset each batch, so a page whose code changes mid-run is stale
+    // for at most 63 instructions -- and a stale negative only means
+    // one instruction gets interpreted instead of jitted, never wrong
+    // execution.
+#ifdef C4OR1K_JIT
+    jchk = 1;
+    jneg1 = -1;
+    jneg2 = -1;
+#endif
     for (bn = 0; bn < max_batch; ++bn) {
     if (pc == halt_pc) { *ran = bn; return 1; }
+
+    // M13: give the JIT first refusal at control-flow targets. If a
+    // translated block runs, it executed jk whole guest instructions
+    // and left every piece of cpu state exactly as jk interpreter
+    // iterations would have; account for them against this batch and
+    // move on. (`continue` re-adds 1 via the for-loop's ++bn.)
+    // jit_try never runs a block that wouldn't fit in the remaining
+    // batch budget, so tick/interrupt cadence is bit-identical to
+    // pure interpretation -- see jit.h.
+#ifdef C4OR1K_JIT
+    if (jchk) {
+        if (pc != jneg1 && pc != jneg2) {
+            jk = jit_try(halt_pc, max_batch - bn);
+            if (jk) { bn = bn + jk - 1; continue; }   // jchk stays 1: try chaining
+            jneg2 = jneg1;
+            jneg1 = pc;
+        }
+        jchk = 0;
+    }
+#endif
 
     // M9: inlined fast path for the itlb_cache_* hit case (cpu.h) --
     // avoids the fetch_ins() call entirely (not just its internal
@@ -424,6 +499,7 @@ int cpu_run_batch(int halt_pc, int max_batch, int *ran) {
     }
     if (ins == -1) {
         pc = nextpc; nextpc = pc + 1;
+        JCHK1                      // vector entry: a fresh control-flow target
         continue;
     }
 
@@ -461,24 +537,24 @@ int cpu_run_batch(int halt_pc, int max_batch, int *ran) {
     switch (opcode) {
     case 0x00:                         // l.j
         jump = pc + sext(ins, 26);
-        pc = nextpc; nextpc = jump; delayedins = 1;
+        pc = nextpc; nextpc = jump; delayedins = 1; JCHK0
         continue;
     case 0x01:                         // l.jal
         r[9] = sext((nextpc << 2) + 4, 32);
         jump = pc + sext(ins, 26);
-        pc = nextpc; nextpc = jump; delayedins = 1;
+        pc = nextpc; nextpc = jump; delayedins = 1; JCHK0
         continue;
     case 0x03:                         // l.bnf
         if (!SR_F) {
             jump = pc + sext(ins, 26);
-            pc = nextpc; nextpc = jump; delayedins = 1;
+            pc = nextpc; nextpc = jump; delayedins = 1; JCHK0
             continue;
         }
         break;
     case 0x04:                         // l.bf
         if (SR_F) {
             jump = pc + sext(ins, 26);
-            pc = nextpc; nextpc = jump; delayedins = 1;
+            pc = nextpc; nextpc = jump; delayedins = 1; JCHK0
             continue;
         }
         break;
@@ -495,17 +571,18 @@ int cpu_run_batch(int halt_pc, int max_batch, int *ran) {
         nextpc = cpu_get_spr(SPR_EPCR_BASE) >> 2;
         pc = nextpc; nextpc = pc + 1; delayedins = 0;
         cpu_set_flags(cpu_get_spr(SPR_ESR_BASE));
+        JCHK1                          // exception return: a control-flow target
         continue;
     case 0x11:                         // l.jr
         rB = r[rb];
         jump = rB >> 2;
-        pc = nextpc; nextpc = jump; delayedins = 1;
+        pc = nextpc; nextpc = jump; delayedins = 1; JCHK0
         continue;
     case 0x12:                         // l.jalr
         rB = r[rb];
         r[9] = sext((nextpc << 2) + 4, 32);
         jump = rB >> 2;
-        pc = nextpc; nextpc = jump; delayedins = 1;
+        pc = nextpc; nextpc = jump; delayedins = 1; JCHK0
         continue;
     case 0x1B:                         // l.lwa
         imm = sext(ins, 16);
@@ -599,6 +676,7 @@ int cpu_run_batch(int halt_pc, int max_batch, int *ran) {
         simm = ((ins >> 10) & 0xF800) | (ins & 0x7FF); // NOT sign-extended: an SPR-index component, not a byte offset
         pc = nextpc; nextpc = pc + 1; delayedins = 0;
         cpu_set_spr(rA | simm, rB);
+        JCHK1                          // post-mtspr code is often a fresh ALU run
         continue;
     case 0x33:                         // l.swa
         rB = r[rb];
@@ -657,13 +735,13 @@ int cpu_run_batch(int halt_pc, int max_batch, int *ran) {
         case 0xf:                                        // ff1
             r[rd] = 0;
             for (i = 0; i < 32; ++i) {
-                if (rA & (1 << i)) { r[rd] = i + 1; break; }
+                if (rA & ((int)1 << i)) { r[rd] = i + 1; break; }
             }
             break;
         case 0x10f:                                       // fl1
             r[rd] = 0;
             for (i = 31; i >= 0; --i) {
-                if (rA & (1 << i)) { r[rd] = i + 1; break; }
+                if (rA & ((int)1 << i)) { r[rd] = i + 1; break; }
             }
             break;
         case 0x306:                                        // mul
@@ -713,7 +791,9 @@ int cpu_run_batch(int halt_pc, int max_batch, int *ran) {
     if (fault) { *ran = bn; return 2; }
 
     r[0] = 0; // nothing here writes r0; kept explicit, matches M0
-    pc = nextpc; nextpc = pc + 1; delayedins = 0;
+    pc = nextpc; nextpc = pc + 1;
+    JCHKD               // 1 iff this WAS a delay slot: next pc is the branch target
+    delayedins = 0;
     }
 
     *ran = max_batch;

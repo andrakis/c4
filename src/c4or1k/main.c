@@ -39,6 +39,7 @@
 #include "virtio.h"
 #include "virtio9p.h"
 #include "bootfs.h"
+#include "jit.h"
 
 enum { FILEBUFSZ = 0x10000 }; // c4lc enum initializers must be a literal, not "1 << 16"
 char filebuf[FILEBUFSZ];
@@ -89,7 +90,7 @@ int str_to_int(char *s) {
 
 int main(int argc, char **argv) {
     char *path, *bootfs_idx_path, *bootfs_blob_path;
-    int nwords, status, steps, t0, t1, dt_ms, ips, run_mode, boot_mode, maxsteps, length, batch, ran;
+    int nwords, status, steps, t0, t1, dt_ms, ips, run_mode, boot_mode, maxsteps, length, batch, ran, jit_enable, ai;
 
     path = argc > 1 ? argv[1] : "src/c4or1k/tests/m1_test.bin";
     run_mode = (argc > 2 && argv[2][0] == '-' && argv[2][1] == 'r');
@@ -98,7 +99,24 @@ int main(int argc, char **argv) {
     bootfs_idx_path = (boot_mode && argc > 4) ? argv[4] : "src/c4or1k/images/bootfs.idx";
     bootfs_blob_path = (boot_mode && argc > 5) ? argv[5] : "src/c4or1k/images/bootfs.blob";
 
+    // M13: the JIT build (c4or1k-jit.c4r) runs with translation ON by
+    // default -- v2 measured decisively faster (docs, M13) -- with
+    // `-nojit` as the opt-out; `-jit` is accepted for explicitness.
+    // Both flags go last so they never disturb the positional
+    // arguments. The default and -mcisc images compile the hooks out
+    // entirely and ignore both.
+    jit_enable = 1;
+    ai = 1;
+    while (ai < argc) {
+        if (!memcmp(argv[ai], "-nojit", 7)) jit_enable = 0;
+        ++ai;
+    }
+
     mem_init();
+#ifdef C4OR1K_JIT
+    jit_init(jit_enable); // M13: must precede ANY guest RAM store (load_program/
+                          // load_kernel/virtio all bump jit_pagegen via mem.c)
+#endif
     cpu_reset();
     uart_reset();
     con_init();
@@ -142,6 +160,9 @@ int main(int argc, char **argv) {
         if (status != 0) break;
         if (boot_mode && maxsteps && steps >= maxsteps) {
             printf("c4or1k: stopped after %d instructions (-b limit)\n", steps);
+#ifdef C4OR1K_JIT
+            if (jit_enable) printf("c4or1k: jit ran %d blocks covering %d instructions\n", jit_nblocks, jit_ninstr);
+#endif
             break;
         }
     }

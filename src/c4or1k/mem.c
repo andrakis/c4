@@ -1,5 +1,6 @@
 #include "mem.h"
 #include "mmio.h"
+#include "jit.h"
 
 char *ram;
 
@@ -52,10 +53,21 @@ int ram_lb(int addr) {
     return ram[addr & (RAM_SIZE - 1)] & 0xFF;
 }
 
+// M13: every RAM store bumps the JIT's per-page generation counter so
+// a translated block over code that has since been overwritten (page
+// cache reuse, program loading over 9p -- which also lands here, via
+// virtio.c's ram_sb calls) self-invalidates on its next lookup. This
+// is the entire write-side of the JIT's coherence story, which is why
+// it lives here unconditionally rather than behind a check: mem_init/
+// jit_init run before anything can store (main.c), so jit_pagegen is
+// always allocated by the time these run.
 void ram_sw(int addr, int val) {
     int a;
     if (addr & MMIO_BIT) { mmio_write32(addr, val); return; }
     a = addr & (RAM_SIZE - 1);
+#ifdef C4OR1K_JIT
+    ++jit_pagegen[a >> 13];
+#endif
     ram[a] = (val >> 24) & 0xFF;
     ram[a + 1] = (val >> 16) & 0xFF;
     ram[a + 2] = (val >> 8) & 0xFF;
@@ -66,13 +78,21 @@ void ram_sh(int addr, int val) {
     int a;
     if (addr & MMIO_BIT) { mmio_write8(addr, (val >> 8) & 0xFF); mmio_write8(addr + 1, val & 0xFF); return; }
     a = addr & (RAM_SIZE - 1);
+#ifdef C4OR1K_JIT
+    ++jit_pagegen[a >> 13];
+#endif
     ram[a] = (val >> 8) & 0xFF;
     ram[a + 1] = val & 0xFF;
 }
 
 void ram_sb(int addr, int val) {
+    int a;
     if (addr & MMIO_BIT) { mmio_write8(addr, val); return; }
-    ram[addr & (RAM_SIZE - 1)] = val & 0xFF;
+    a = addr & (RAM_SIZE - 1);
+#ifdef C4OR1K_JIT
+    ++jit_pagegen[a >> 13];
+#endif
+    ram[a] = val & 0xFF;
 }
 
 // Prints nwords words starting at base, one per line, for diffing

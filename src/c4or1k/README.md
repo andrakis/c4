@@ -9,11 +9,18 @@ Console only -- no framebuffer, no keyboard device. Terminal raw mode
 is handled by `run-c4or1k.sh`, an external wrapper, not by the VM (the
 C4 VM has no ioctl/termios facility, see that script's header comment).
 
-## Status: M6 done -- it boots real Linux to an interactive shell; M7-M12 (perf work) landed since, ~34% faster cumulative, a second host, and new CISC opcodes (M0-M4 preserved in docs/c4or1k-design.md)
+## Status: M6 done -- it boots real Linux to an interactive shell. M7-M13: hosted perf work (c4mp host, -mcisc, a real JIT emitting c4m bytecode -- fastest hosted config ~2x the original). M14: the NATIVE build boots the same kernel to the same shell in ~7 SECONDS (vs ~25 hosted minutes originally) -- byte-identical output, same sources. (M0-M4 preserved in docs/c4or1k-design.md)
+
+    make c4or1k-boot-native N=700000000  # THE fast path: gcc-compiled emulator, full Linux boot to a real shell in ~7s (see M14)
 
     make c4or1k-boot                # boot a real kernel under c4m; N=<steps> to change the budget (default 2M)
     make c4or1k-boot-mp              # same, under c4mp instead -- ~18-20% faster, same .c4r, zero source changes (see M11)
     make c4or1k-boot-cisc            # under c4mp, compiled with c4lc's -mcisc (LXI/SXI fused opcodes) -- c4m cannot run this image at all (see M12)
+    make c4or1k-boot-jit             # M13 v2: the FASTEST configuration -- the JIT build under c4mp. Translates guest code (ALU runs, loads/
+                                     # stores, fused loops, call/return/branch terminators) into real c4m bytecode at runtime; ~28% faster than
+                                     # M12 on the standard 60M-instruction benchmark with 56% of instructions running inside translated blocks,
+                                     # byte-identical output. On by default in this image (-nojit to disable). See docs/c4or1k-design.md's M13
+                                     # section for the whole story, including why v1 of this same JIT was net-slower and what changed.
 
 Boots an unmodified `vmlinux.bin` from the reset vector through the
 full kernel init sequence, mounts basefs.json's root filesystem over

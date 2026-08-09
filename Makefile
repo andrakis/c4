@@ -375,7 +375,12 @@ test-c4bb: c4bb-images $(C4M) $(TESTS_C4R)
 # the same way src/c4mp does it.
 C4OR1K_SRC  := src/c4or1k
 C4OR1K_MODS := mem mmio uart console bootfs virtio virtio9p cpu boot main
-C4OR1K_HDRS := $(C4OR1K_SRC)/cpu.h $(C4OR1K_SRC)/mem.h
+# M13: the JIT build carries one extra module and compiles everything
+# with -D C4OR1K_JIT=1, which is what actually enables the driver-loop
+# hooks in cpu.c/mem.c/main.c -- without the define those compile to
+# exactly the M12 code, so the default and -mcisc images pay nothing.
+C4OR1K_JIT_MODS := mem mmio uart console bootfs virtio virtio9p jit cpu boot main
+C4OR1K_HDRS := $(C4OR1K_SRC)/cpu.h $(C4OR1K_SRC)/mem.h $(C4OR1K_SRC)/jit.h
 # -O (M7): ~4% faster on a real boot workload, byte-for-byte identical
 # output on the full M1-M4 regression suite and a real boot -- a small
 # but real, zero-cost win worth keeping on by default given how many
@@ -400,6 +405,17 @@ c4or1k-cisc.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4OR1K_HDRS) $(patsubst %,$(C4OR
 	done
 	$(C4RLINK) $(patsubst %,.c4or1k_cisc_%.c4o,$(C4OR1K_MODS)) -o c4or1k-cisc.c4r
 	rm -f .c4or1k_cisc_*.c4o
+# M13: the JIT-enabled build (see C4OR1K_JIT_MODS above and jit.h's
+# status note: correct and fully verified, but off by default and
+# net-slower at current coverage -- run with `-jit` as the last
+# argument to enable translation at runtime).
+c4or1k-jit.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4OR1K_HDRS) $(C4OR1K_SRC)/jit.h $(patsubst %,$(C4OR1K_SRC)/%.c,$(C4OR1K_JIT_MODS))
+	for m in $(C4OR1K_JIT_MODS); do \
+		./c4sp -c 16000000 src/c4sp/lisp/c4lc.lisp -O -c -I $(C4OR1K_SRC) -D C4OR1K_JIT=1 \
+			$(C4OR1K_SRC)/$$m.c .c4or1k_jit_$$m.c4o > /dev/null || exit 1; \
+	done
+	$(C4RLINK) $(patsubst %,.c4or1k_jit_%.c4o,$(C4OR1K_JIT_MODS)) -o c4or1k-jit.c4r
+	rm -f .c4or1k_jit_*.c4o
 # M1's cross-checked test program (tests/m1_test.s -> .bin via
 # tools/asm.py) run through the real decoder.
 src/c4or1k/tests/m1_test.bin: src/c4or1k/tests/m1_test.s src/c4or1k/tools/asm.py
@@ -410,10 +426,14 @@ c4or1k-m1: c4m c4or1k.c4r src/c4or1k/tests/m1_test.bin
 # on the same test program: every register, SR_F/SR_CY/SR_OV, and the
 # RAM window every test result is written into must match exactly.
 # (No process substitution: plain sh, not bash, runs make recipes here.)
-c4or1k-m1-check: c4m c4or1k.c4r src/c4or1k/tests/m1_test.bin
+c4or1k-m1-check: c4m c4or1k.c4r c4or1k-jit.c4r c4or1k-native src/c4or1k/tests/m1_test.bin
 	./c4m load-c4r.c -- c4or1k.c4r src/c4or1k/tests/m1_test.bin | grep -v '^c4or1k:' | grep -v 'guest instructions/sec' > .c4or1k_check_c.txt
 	node src/c4or1k/tools/or1k-oracle.js src/c4or1k/tests/m1_test.bin | grep -v '^c4or1k-oracle:' > .c4or1k_check_js.txt
 	diff .c4or1k_check_c.txt .c4or1k_check_js.txt && echo "c4or1k-m1-check: OK (bit-for-bit match against jor1k)"
+	./c4m load-c4r.c -- c4or1k-jit.c4r src/c4or1k/tests/m1_test.bin -jit | grep -v '^c4or1k:' | grep -v 'guest instructions/sec' > .c4or1k_check_c.txt
+	diff .c4or1k_check_c.txt .c4or1k_check_js.txt && echo "c4or1k-m1-check: OK (bit-for-bit match against jor1k, -jit)"
+	./c4or1k-native src/c4or1k/tests/m1_test.bin | grep -v '^c4or1k:' | grep -v 'guest instructions/sec' > .c4or1k_check_c.txt
+	diff .c4or1k_check_c.txt .c4or1k_check_js.txt && echo "c4or1k-m1-check: OK (bit-for-bit match against jor1k, native)"
 	rm -f .c4or1k_check_c.txt .c4or1k_check_js.txt
 # M2's cross-checked test program: SPRs, SR flags, EXCEPT_SYSCALL/
 # EXCEPT_TRAP/EXCEPT_DTLBMISS delivery, l.rfe.
@@ -421,10 +441,14 @@ src/c4or1k/tests/m2_test.bin: src/c4or1k/tests/m2_test.s src/c4or1k/tools/asm.py
 	python3 src/c4or1k/tools/asm.py src/c4or1k/tests/m2_test.s bin > src/c4or1k/tests/m2_test.bin
 c4or1k-m2: c4m c4or1k.c4r src/c4or1k/tests/m2_test.bin
 	./c4m load-c4r.c -- c4or1k.c4r src/c4or1k/tests/m2_test.bin
-c4or1k-m2-check: c4m c4or1k.c4r src/c4or1k/tests/m2_test.bin
+c4or1k-m2-check: c4m c4or1k.c4r c4or1k-jit.c4r c4or1k-native src/c4or1k/tests/m2_test.bin
 	./c4m load-c4r.c -- c4or1k.c4r src/c4or1k/tests/m2_test.bin | grep -v '^c4or1k:' | grep -v 'guest instructions/sec' > .c4or1k_check_c.txt
 	node src/c4or1k/tools/or1k-oracle.js src/c4or1k/tests/m2_test.bin | grep -v '^c4or1k-oracle:' > .c4or1k_check_js.txt
 	diff .c4or1k_check_c.txt .c4or1k_check_js.txt && echo "c4or1k-m2-check: OK (bit-for-bit match against jor1k)"
+	./c4m load-c4r.c -- c4or1k-jit.c4r src/c4or1k/tests/m2_test.bin -jit | grep -v '^c4or1k:' | grep -v 'guest instructions/sec' > .c4or1k_check_c.txt
+	diff .c4or1k_check_c.txt .c4or1k_check_js.txt && echo "c4or1k-m2-check: OK (bit-for-bit match against jor1k, -jit)"
+	./c4or1k-native src/c4or1k/tests/m2_test.bin | grep -v '^c4or1k:' | grep -v 'guest instructions/sec' > .c4or1k_check_c.txt
+	diff .c4or1k_check_c.txt .c4or1k_check_js.txt && echo "c4or1k-m2-check: OK (bit-for-bit match against jor1k, native)"
 	rm -f .c4or1k_check_c.txt .c4or1k_check_js.txt
 # M3: UART + console I/O. tests/m3_echo.s polls LSR and echoes every
 # received byte back out through TXBUF, halting on Ctrl-D (0x04).
@@ -486,6 +510,22 @@ c4or1k-boot-mp: c4mp c4or1k.c4r src/c4or1k/images/bootfs.idx src/c4or1k/images/b
 # requires c4mp, c4m cannot run it at all (see c4or1k-cisc.c4r above).
 c4or1k-boot-cisc: c4mp c4or1k-cisc.c4r src/c4or1k/images/bootfs.idx src/c4or1k/images/bootfs.blob
 	./c4mp c4or1k-cisc.c4r $(VMLINUX) -b $(N) src/c4or1k/images/bootfs.idx src/c4or1k/images/bootfs.blob
+# M13 v2: the JIT build -- the fastest HOSTED configuration (~28% over
+# M12 on the standard 60M-instruction benchmark, byte-identical
+# output; see docs/c4or1k-design.md's M13 section). Translation is on
+# by default in this image; pass -nojit (last) to disable at runtime.
+c4or1k-boot-jit: c4mp c4or1k-jit.c4r src/c4or1k/images/bootfs.idx src/c4or1k/images/bootfs.blob
+	./c4mp c4or1k-jit.c4r $(VMLINUX) -b $(N) src/c4or1k/images/bootfs.idx src/c4or1k/images/bootfs.blob
+# M13: the NATIVE build -- the same c4or1k sources compiled directly
+# by gcc (c4mp-style dual-build; src/c4or1k/native.h maps the c4lc
+# dialect onto the host, exactly c4.c's own `#define int long` trick).
+# No c4m, no c4mp, no JIT: this measures the emulator alone, with the
+# interpretation tax at zero. Same argv contract as the hosted builds.
+c4or1k-native: $(patsubst %,$(C4OR1K_SRC)/%.c,$(C4OR1K_MODS)) $(C4OR1K_HDRS) $(C4OR1K_SRC)/native.h
+	gcc -O2 -w -include $(C4OR1K_SRC)/native.h \
+		$(patsubst %,$(C4OR1K_SRC)/%.c,$(C4OR1K_MODS)) -o c4or1k-native
+c4or1k-boot-native: c4or1k-native src/c4or1k/images/bootfs.idx src/c4or1k/images/bootfs.blob
+	./c4or1k-native $(VMLINUX) -b $(N) src/c4or1k/images/bootfs.idx src/c4or1k/images/bootfs.blob
 test-oisc4-nested: $(OISC4) $(C4) $(C4M) oisc4-lc.c4r $(TESTS)/hello.c4r
 	$(C4M) load-c4r.c -- oisc4-lc.c4r -m 32 $(TESTS)/hello.c4r | grep -q yello
 	$(C4) c4l.c oisc4-lc.c4r -m 32 $(TESTS)/hello.c4r | grep -q yello
@@ -941,7 +981,7 @@ PHONY += run-c4 run-c4-vg test-c4 test-massive-c4
 PHONY += run-c4-alt run-c4-alt-vg
 PHONY += test-c4ix test-c4ix-fmt test-c4ix-c4ke test-c4ix-c4ke-nested test-c4ix-c4 run-c4ix run-c4ix-c4 demo-c4ix demo-c4ix-c4 bench-c4ix
 PHONY += test-c4mp
-PHONY += c4or1k-m0 c4or1k-m1 c4or1k-m1-check c4or1k-m2 c4or1k-m2-check c4or1k-m3 c4or1k-m3-check c4or1k-m3-int-check c4or1k-boot c4or1k-boot-mp c4or1k-boot-cisc
+PHONY += c4or1k-m0 c4or1k-m1 c4or1k-m1-check c4or1k-m2 c4or1k-m2-check c4or1k-m3 c4or1k-m3-check c4or1k-m3-int-check c4or1k-boot c4or1k-boot-mp c4or1k-boot-cisc c4or1k-boot-jit c4or1k-boot-native
 PHONY += pkg c4rs or1k
 PHONY += pi
 # Don't bother with the dump or link utility for now

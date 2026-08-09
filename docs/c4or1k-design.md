@@ -1487,10 +1487,102 @@ first-class: hosted is the point of the project (an OS booting on an
 emulator running on the C4 stack); native is how you'd actually use
 it.
 
+## M15 — ethernet: the guest gets a network (eth0, DHCP)
+
+The boot log had always carried `libphy: ethoc-mdio: probed` and a
+failed device probe at `0x92000000`, and ended userspace with
+`udhcpc: no lease, failing`: the guest kernel's stock OpenCores
+`ethoc` driver was looking for a MAC that was not there. M15 supplies
+it, and something for it to talk to.
+
+**The device (`eth.c`, `eth.h`).** A port of jor1k's
+`dev/ethmac.js`, op for op, under the same bit-for-bit-oracle
+discipline the CPU used against `safecpu.js`: MMIO at `0x92000000`
+(routed from `mmio.c`), IRQ line 4, the MII PHY register file (with
+the basic-mode-status bits set so the driver sees "link up, autoneg
+complete" and binds rather than parking on "no carrier"), the 128
+64-bit transmit/receive buffer descriptors, and the frame paths that
+read a TX frame out of guest RAM and write an RX frame into it. FCS is
+omitted throughout, exactly as ethmac.js does (its TX CRC path is
+commented out; its RX path asserts CRC=0 "we don't get a CRC from TAP
+devices"), so no frame on any path carries a checksum and the length
+fields follow ethmac.js's payload+4 convention.
+
+**The interrupt discipline is the one real subtlety.** A guest store
+to the device (arming a TX descriptor, unmasking an interrupt) runs
+deep inside `cpu_run_batch`'s store handler, which is about to advance
+`pc`/`nextpc`. If the device asserted the CPU IRQ line right there,
+interrupt delivery could rewrite those registers mid-instruction. So
+the device NEVER touches the IRQ line during an MMIO access -- it only
+sets `INT_SOURCE` bits -- and `eth_poll()` reconciles the line from
+`(INT_MASK & INT_SOURCE)` once per main-loop iteration (`net_poll`),
+the same between-instructions cadence `con_poll`/`cpu_tick_check`
+already use. Symmetrically, an inbound frame is never injected into
+the RX ring from inside a store: `net_tx` (called from the store)
+only enqueues, and `net_poll` drains the queue into `eth_rx` on that
+same cadence.
+
+**The peer (`net.c`, `net.h`).** A device with nothing on the other
+end is just a probe that succeeds. Rather than reach for a host socket
+(which the hosted builds cannot do, and which needs a new VM
+primitive -- see below), `net.c` is a synthetic LAN peer at 10.0.0.1
+that answers, in pure computation:
+- **ARP** -- "who has 10.0.0.1" gets our MAC, so the guest can address
+  the gateway.
+- **DHCP** -- DISCOVER -> OFFER and REQUEST -> ACK, handing the guest
+  10.0.0.2 with router and DNS 10.0.0.1 and an 86400s lease (full
+  BOOTP frame, IP + UDP framing, IP header checksum).
+- **ICMP echo** -- echo request -> reply, so `ping 10.0.0.1` from the
+  guest shell round-trips.
+
+Because it is pure byte manipulation with no host calls, the exact
+same code proves the whole guest<->NIC path in the native build AND
+the hosted (c4m/c4mp) builds -- no new VM primitive required.
+
+**Result.** eth0 comes up and gets a real lease:
+
+```
+udhcpc: started, v1.26.2
+Setting IP address 0.0.0.0 on eth0
+udhcpc: sending discover
+udhcpc: sending select for 10.0.0.2
+udhcpc: lease of 10.0.0.2 obtained, lease time 86400
+Setting IP address 10.0.0.2 on eth0
+Adding router 10.0.0.1
+ Adding DNS server 10.0.0.1
+```
+
+That exercises the entire path end to end: the guest's IP stack
+builds a DISCOVER, the driver DMAs it through a TX descriptor,
+`eth_transmit` hands the frame to `net_tx`, the responder synthesizes
+an OFFER, `net_poll` lands it in an RX descriptor and `eth_poll`
+raises IRQ 4, the driver's ISR reads it, and udhcpc completes the
+four-way exchange. The full 700M-instruction boot still reaches the
+interactive shell (native: ~3.6s), and the m1/m2 oracle checks
+(default/-jit/native) are untouched -- they never address the
+ethernet device. This is the deliberately fast proof the methodology
+asked for: prove the emulator can carry a real network, native-fast,
+before wiring real external connectivity.
+
+**What real connectivity needs (the c4mp step).** The synthetic peer
+is a stand-in for the actual host network. To bridge the emulated NIC
+to the real world -- a TAP interface, or a userspace socket -- the
+hosted VM needs a way to do host I/O beyond the file/stdio calls c4/
+c4m/c4mp expose today: a socket/packet primitive (open a TAP fd or a
+datagram socket, non-blocking read/write). That is a c4mp addition,
+not a c4or1k one, and is the natural next step now that the device
+and the guest-facing path are proven. In the native build a TAP
+backend could be dropped in behind `net_tx`/`net_poll` immediately
+(the host has `/dev/net/tun`), gated on privileges; the interface
+(`net_tx` out, `eth_rx` in) is already the right seam for it.
+
 ## Related future work (not this project)
 
-c4mp (the multiprocessor VM, `src/c4mp`) has no networking support.
-Adding it would matter here too: a full Linux boot benefits from a
-working network device, and jor1k itself emulates one (`ethmac.js`,
-out of scope for c4or1k's own M0–M6 per the "headless console" plan
-above). Noted for later, not blocking anything above.
+c4mp (the multiprocessor VM, `src/c4mp`) has no host-socket primitive.
+M15 built the ethernet device and a synthetic peer that needs none, so
+the guest has a working network today -- but bridging that NIC to the
+real host network (a TAP interface or a datagram socket) needs c4mp to
+grow a socket/packet I/O call, the way it already exposes file I/O.
+That is the one remaining piece for real external connectivity, and
+the `net_tx`/`eth_rx` seam is already shaped to drop a TAP backend in
+behind it (see M15).

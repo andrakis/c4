@@ -9,7 +9,7 @@ Console only -- no framebuffer, no keyboard device. Terminal raw mode
 is handled by `run-c4or1k.sh`, an external wrapper, not by the VM (the
 C4 VM has no ioctl/termios facility, see that script's header comment).
 
-## Status: M6 done -- it boots real Linux to an interactive shell. M7-M13: hosted perf work (c4mp host, -mcisc, a real JIT emitting c4m bytecode -- fastest hosted config ~2x the original). M14: the NATIVE build boots the same kernel to the same shell in ~7 SECONDS (vs ~25 hosted minutes originally) -- byte-identical output, same sources. (M0-M4 preserved in docs/c4or1k-design.md)
+## Status: M6 done -- it boots real Linux to an interactive shell. M7-M13: hosted perf work (c4mp host, -mcisc, a real JIT emitting c4m bytecode -- fastest hosted config ~2x the original). M14: the NATIVE build boots the same kernel to the same shell in ~4 SECONDS (vs ~25 hosted minutes originally) -- byte-identical output, same sources. M15: an ethmac ethernet device + a pure-C synthetic LAN peer bring eth0 up and get a real DHCP lease (native and hosted alike). (M0-M4 preserved in docs/c4or1k-design.md)
 
     make c4or1k-boot-native N=700000000  # THE fast path: gcc-compiled emulator, full Linux boot to a real shell in ~7s (see M14)
 

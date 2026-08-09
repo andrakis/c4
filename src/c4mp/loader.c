@@ -30,7 +30,7 @@ int c4r_load(char *path, struct c4r_image *img) {
     char *buf, *p, *data;
     int *code, *cons, *des;
     int fd, n, total, i;
-    int entry, codelen, datalen, patchlen, symlen, conslen, deslen;
+    int entry, codelen, datalen, patchlen, symlen, conslen, deslen, memsz;
     int ptype, paddr, pvalu;
 
     img->code = 0; img->data = 0; img->entry = 0;
@@ -67,6 +67,10 @@ int c4r_load(char *path, struct c4r_image *img) {
         free(buf);
         return 0;
     }
+    // The padding word (byte offset 5) is the data MEMSZ in format v3:
+    // the total in-memory data size, whose excess over datalen is
+    // zero-filled BSS. v2 has no such field (memsz = datalen).
+    memsz = (p[3] >= 3) ? loader_word(p + 5) : 0;
     p = p + 13;   // signature(3), version(1), wordbits(1), padding(8)
 
     entry    = loader_word(p); p = p + 8;
@@ -76,6 +80,7 @@ int c4r_load(char *path, struct c4r_image *img) {
     symlen   = loader_word(p); p = p + 8;
     conslen  = loader_word(p); p = p + 8;
     deslen   = loader_word(p); p = p + 8;
+    if (memsz < datalen) memsz = datalen;
 
     // code
     p = p + 8;   // 'C' marker word
@@ -83,11 +88,13 @@ int c4r_load(char *path, struct c4r_image *img) {
     memcpy(code, p, codelen * 8);
     p = p + codelen * 8;
 
-    // data: one word of zero padding past the end, because a guest
-    // may address the last word by pointer arithmetic.
+    // data: allocate the full in-memory size (memsz >= datalen), plus
+    // one word of zero padding past the end because a guest may address
+    // the last word by pointer arithmetic. Everything is zeroed, so the
+    // BSS tail [datalen, memsz) is ready; only datalen bytes are copied.
     p = p + 8;   // 'D' marker
-    if (!(data = (char *)malloc(datalen + 8))) { free(code); free(buf); return 0; }
-    memset(data, 0, datalen + 8);
+    if (!(data = (char *)malloc(memsz + 8))) { free(code); free(buf); return 0; }
+    memset(data, 0, memsz + 8);
     memcpy(data, p, datalen);
     p = p + datalen;
 

@@ -31,7 +31,12 @@ enum {
 	C4I_C4KE = 0x200, // C4KE is running
 };
 
-enum { C4R__Supported_Version = 2 };
+// Version 3 adds the data MEMSZ field (see C4R_HDR_MEMSZ): the data
+// segment's total in-memory size, which may exceed the DATALEN bytes
+// actually stored -- the excess is BSS (zero-initialized, occupies no
+// image bytes). Version 2 images have no such field; for them MEMSZ is
+// taken to equal DATALEN. Both versions load.
+enum { C4R__Supported_Version = 3 };
 
 enum {
 	C4ROPT_NONE,
@@ -56,6 +61,8 @@ enum {
 	C4R_HDR_SYMBOLSLEN, // int
 	C4R_HDR_CONSTRUCTLEN, // int
 	C4R_HDR_DESTRUCTLEN, // int
+	C4R_HDR_MEMSZ,       // int -- data segment total in-memory size (v3+);
+	                     //        >= DATALEN, the excess is zero-filled BSS.
 	C4R_HDR__Sz
 };
 
@@ -251,6 +258,9 @@ void c4r_dump_info (int *c4r) {
 		printf("  Entry = 0x%x", header[C4R_HDR_ENTRY]);
 	printf("  Code = %d", header[C4R_HDR_CODELEN]);
 	printf("  Data = %d", header[C4R_HDR_DATALEN]);
+	if (header[C4R_HDR_MEMSZ] > header[C4R_HDR_DATALEN])
+		printf(" (mem %d, +%d bss)", header[C4R_HDR_MEMSZ],
+		       header[C4R_HDR_MEMSZ] - header[C4R_HDR_DATALEN]);
 	printf("  Patch = %d", header[C4R_HDR_PATCHLEN]);
 	printf("  Symbols = %d" ,header[C4R_HDR_SYMBOLSLEN]);
 	printf("  Cons = %d", header[C4R_HDR_CONSTRUCTLEN]);
@@ -361,11 +371,14 @@ int *c4r_load_opt_real (char *file, int options) {
 			header[C4R_HDR_SIGNATURE] = c4r__charword('C', '4', 'R', 0);
 			c4r_src_read(fd, buffer, 1); header[C4R_HDR_VERSION] = *buffer;
 			c4r_src_read(fd, buffer, 1); header[C4R_HDR_WORDBITS]= *buffer;
-			// Read padding
-			// x = sizeof(int) - 6; // 5 for what was just read
+			// The 8 padding bytes after magic+version+wordbits are,
+			// as of format v3, the data MEMSZ field (a word at byte
+			// offset 5). v2 wrote 'p' filler here; for v2 images MEMSZ
+			// is fixed up to DATALEN below.
 			i = sizeof(int) - 1;
 			x = (5 + i) & ~i;
-			c4r_src_read(fd, buffer, x); // skip padding
+			c4r_src_read(fd, buffer, x); // padding word: MEMSZ (v3+)
+			header[C4R_HDR_MEMSZ] = *(int *)buffer;
 			wordbytes = header[C4R_HDR_WORDBITS] / 8;
 			c4r_src_read(fd, buffer, wordbytes); header[C4R_HDR_ENTRY] = *(int *)buffer;
 			c4r_src_read(fd, buffer, wordbytes); header[C4R_HDR_CODELEN] = *(int *)buffer;
@@ -382,12 +395,22 @@ int *c4r_load_opt_real (char *file, int options) {
 				       header[C4R_HDR_WORDBITS], sizeof(int) * 8);
 				return c4r;
 			}
-			// Allow only current version
-			else if (header[C4R_HDR_VERSION] && header[C4R_HDR_VERSION] != C4R__Supported_Version) {
+			// Accept the current version and the immediately prior one
+			// (v2 has no MEMSZ field -- its "padding word" is filler,
+			// so MEMSZ = DATALEN for it: no BSS).
+			else if (header[C4R_HDR_VERSION] &&
+			         header[C4R_HDR_VERSION] != C4R__Supported_Version &&
+			         header[C4R_HDR_VERSION] != C4R__Supported_Version - 1) {
 				printf("lc4r: error, c4r file uses version %d and we support only %d\n",
 				       header[C4R_HDR_VERSION], C4R__Supported_Version);
 				return c4r;
 			}
+			if (header[C4R_HDR_VERSION] < C4R__Supported_Version)
+				header[C4R_HDR_MEMSZ] = header[C4R_HDR_DATALEN];
+			// A malformed/short MEMSZ must never be smaller than what is
+			// actually stored.
+			if (header[C4R_HDR_MEMSZ] < header[C4R_HDR_DATALEN])
+				header[C4R_HDR_MEMSZ] = header[C4R_HDR_DATALEN];
 
 			if (c4r_verbose) c4r_dump_info(c4r);
 
@@ -402,8 +425,12 @@ int *c4r_load_opt_real (char *file, int options) {
 				bad = C4R_BAD_CODE;
 			else memset(code, 0, i);
 			if (c4r_verbose) printf("lc4r: %ld code allocated\n", i);
-			if (header[C4R_HDR_DATALEN]) {
-				if (!(data = malloc((i = sizeof(char)* header[C4R_HDR_DATALEN]))))
+			// Allocate the full in-memory size (MEMSZ >= DATALEN) and
+			// zero it, so the unstored tail [DATALEN, MEMSZ) is BSS --
+			// zero-filled and ready, having cost no image bytes. Only
+			// DATALEN bytes are read from the file, below.
+			if (header[C4R_HDR_MEMSZ]) {
+				if (!(data = malloc((i = sizeof(char)* header[C4R_HDR_MEMSZ]))))
 					bad = bad | C4R_BAD_DATA;
 				else memset(data, 0, i);
 			}

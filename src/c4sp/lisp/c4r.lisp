@@ -93,11 +93,15 @@
 	(define Version (string:byte F 3))
 	(define Wordbits (string:byte F 4))
 	(if (not (= Wordbits (* 8 W))) (error "c4r: word size mismatch"))
-	;; header words start after 3+1+1 bytes plus 8 padding bytes
+	;; header words start after 3+1+1 bytes plus 8 padding bytes; the
+	;; padding word (byte 5) is the data MEMSZ in v3, filler in v2
 	(define H 13)
 	(define Entry     (string:word F H))
 	(define Codelen   (string:word F (+ H W)))
 	(define Datalen   (string:word F (+ H (* 2 W))))
+	;; MEMSZ: v3 reads the padding word; v2 has none (no BSS)
+	(define Memsz (if (>= Version 3) (string:word F 5) Datalen))
+	(if (< Memsz Datalen) (set! Memsz Datalen) nil)
 	(define Patchlen  (string:word F (+ H (* 3 W))))
 	(define Symslen   (string:word F (+ H (* 4 W))))
 	(define Conslen   (string:word F (+ H (* 5 W))))
@@ -131,10 +135,18 @@
 	;; decode the instruction stream
 	(define Code (reverse (c4r:decode-code F CodeAt Codelen Labels Patches 0 (list))))
 
+	;; the module's Data is always the FULL in-memory image (length =
+	;; MEMSZ): the stored bytes, then a zeroed BSS tail. string:alloc
+	;; zeroes, so copying the stored prefix in is enough. Keeping Data
+	;; full-length means encode/roundtrip and c4rlink see it uniformly;
+	;; encode re-derives MEMSZ as (length Data) and re-trims.
+	(define DataFull (string:alloc Memsz))
+	(c4r:copy-string (string:substr F DataAt Datalen) DataFull 0 0)
+
 	(list Version Wordbits
 		(if (= -1 Entry) -1 (list 'code Entry))
 		Code
-		(string:substr F DataAt Datalen)
+		DataFull
 		(c4r:label-syms Syms)
 		(c4r:label-offsets Cons)
 		(c4r:label-offsets Des)
@@ -281,6 +293,38 @@
 ;; ---- writing ----
 
 ;; Encode a module back to a byte string.
+;; ---- format v3: data MEMSZ + trailing-zero (BSS) trim ----
+;;
+;; v3 stores only the data bytes up to the last NON-zero byte; the
+;; full in-memory size (MEMSZ) rides in the header padding word (byte
+;; offset 5), and the loader zero-fills [stored, MEMSZ). That trailing
+;; zero region is BSS: it occupies no image bytes. c4r:v3 gates this;
+;; The compiler (c4lc.lisp) sets it to force v3 on every image it emits.
+;; Left false, encode instead PRESERVES the module's own version -- so
+;; roundtrip (decode then encode) reproduces a v2 image as v2 and a v3
+;; image as v3, byte-identically.
+(define c4r:v3 false)
+
+;; extra in-memory data bytes beyond the module's Data string: the
+;; word-align pad plus the BSS size the compiler segregated out (see
+;; c4lc-gen's gen:bssextra). MEMSZ = (length Data) + this. Set by the
+;; caller (c4lc.lisp) before each encode; reset to 0 afterward so a
+;; later encode without BSS is unaffected.
+(define c4r:bss-extra 0)
+
+;; stored length = full length minus the trailing run of zero bytes.
+(define c4r:stored-len (lambda (Data n)
+	(if (= n 0) 0
+	(if (= 0 (string:byte Data (- n 1))) (next c4r:stored-len Data (- n 1))
+	n))))
+
+;; copy exactly N bytes (c4r:copy-string copies all of Src, which is
+;; longer than the stored length once trailing zeros are trimmed)
+(define c4r:copy-string-n (lambda (Src Out At I N)
+	(if (>= I N) Out (begin
+		(string:byte! Out (+ At I) (string:byte Src I))
+		(next c4r:copy-string-n Src Out At (+ I 1) N)))))
+
 (define c4r:encode (lambda (M) (begin
 	(define Version (head M))
 	(define Wordbits (second M))
@@ -290,6 +334,9 @@
 	(define Syms (index M 5))
 	(define Cons (index M 6))
 	(define Des (index M 7))
+	;; emit v3 (MEMSZ + BSS trim) when the compiler forces it, or when
+	;; the module itself is already v3 (roundtrip preserves the version)
+	(define EmitV3 (if c4r:v3 true (>= Version 3)))
 
 	;; pass 1: instruction sizes give each label its new offset. The
 	;; label table is a word array indexed by label id.
@@ -300,12 +347,13 @@
 	;; patch count = reference operands + data-resident patches
 	(define DPatches (index M 8))
 	(define Patchlen (+ (c4r:count-refs Code 0) (length DPatches)))
-	(define Datalen (length Data))
+	(define Memsz (+ (length Data) c4r:bss-extra)) ;; full in-memory data size (+ BSS)
+	(define Datalen (if EmitV3 (c4r:stored-len Data (length Data)) (length Data)))  ;; stored bytes
 	(define Conslen (length Cons))
 	(define Deslen (length Des))
 	(define Symslen (length Syms))
 
-	;; total file size
+	;; total file size (only the STORED data bytes are written)
 	(define Total (+ 13 (* 7 W)
 		W (* Codelen W)
 		W Datalen
@@ -317,11 +365,13 @@
 
 	;; header
 	(string:byte! Out 0 67) (string:byte! Out 1 52) (string:byte! Out 2 82)
-	(string:byte! Out 3 Version)
+	(string:byte! Out 3 (if EmitV3 3 Version))
 	(string:byte! Out 4 Wordbits)
 	(define I 5)
-	;; asm-c4r pads with 'p' characters
-	(c4r:fill-bytes Out 5 8 112)
+	;; padding word (byte 5): MEMSZ in v3, else 'p' filler as asm-c4r uses
+	(if EmitV3
+		(begin (c4r:fill-bytes Out 5 8 0) (string:word! Out 5 Memsz))
+		(c4r:fill-bytes Out 5 8 112))
 	(string:word! Out 13 (if (= -1 Entry) -1 (c4r:label LT (second Entry))))
 	(string:word! Out (+ 13 W) Codelen)
 	(string:word! Out (+ 13 (* 2 W)) Datalen)
@@ -347,7 +397,7 @@
 	(c4r:emit-code Code Out CodeAt PatchAt LT 0)
 	(c4r:emit-dpatches DPatches Out
 		(+ PatchAt (* (c4r:count-refs Code 0) (* 3 W))) LT)
-	(c4r:copy-string Data Out DataAt 0)
+	(c4r:copy-string-n Data Out DataAt 0 Datalen)  ;; stored bytes only
 	(c4r:emit-words (c4r:resolve-offsets Cons LT) Out ConsAt)
 	(c4r:emit-words (c4r:resolve-offsets Des LT) Out DesAt)
 	(c4r:emit-syms Syms Out SymsAt LT)

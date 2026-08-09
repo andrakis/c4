@@ -73,7 +73,7 @@ int c4r_load(char *path, struct c4r_image *img) {
     char *buf, *p, *data;
     int *code, *cons, *des;
     int fd, n, total;
-    int entry, codelen, datalen, patchlen, symlen, conslen, deslen;
+    int entry, codelen, datalen, patchlen, symlen, conslen, deslen, memsz;
     int i, ptype, paddr, pvalu;
 
     if (!(buf = (char *)malloc(C4R_BUF_MAX))) return 0;
@@ -103,6 +103,9 @@ int c4r_load(char *path, struct c4r_image *img) {
         free(buf);
         return 0;
     }
+    // padding word (byte 5) = data MEMSZ in v3 (total in-memory size,
+    // excess over datalen is zero-filled BSS); v2 has none.
+    memsz = (p[3] >= 3) ? loader_word(p + 5) : 0;
     p = p + 13;   // signature, version, wordbits, padding
 
     entry    = loader_word(p); p = p + sizeof(int);
@@ -112,6 +115,7 @@ int c4r_load(char *path, struct c4r_image *img) {
     symlen   = loader_word(p); p = p + sizeof(int);
     conslen  = loader_word(p); p = p + sizeof(int);
     deslen   = loader_word(p); p = p + sizeof(int);
+    if (memsz < datalen) memsz = datalen;
 
     // code: copy out of the read buffer into an exact-size allocation
     p = p + sizeof(int);   // 'C' marker word
@@ -119,10 +123,12 @@ int c4r_load(char *path, struct c4r_image *img) {
     memcpy(code, p, codelen * sizeof(int));
     p = p + codelen * sizeof(int);
 
-    // data: fresh zero-padded allocation, word-aligned by malloc
+    // data: allocate the full in-memory size (memsz), zero-padded by
+    // malloc+memset so the BSS tail [datalen, memsz) is ready; only
+    // datalen bytes are copied from the image.
     p = p + sizeof(int);   // 'D' marker
-    if (!(data = (char *)malloc(datalen + 8))) { free(code); free(buf); return 0; }
-    memset(data, 0, datalen + 8);
+    if (!(data = (char *)malloc(memsz + 8))) { free(code); free(buf); return 0; }
+    memset(data, 0, memsz + 8);
     memcpy(data, p, datalen);
     p = p + datalen;
 

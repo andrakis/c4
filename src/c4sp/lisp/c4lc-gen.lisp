@@ -58,6 +58,49 @@
 (define g:data nil)
 (define g:dlen 0)
 
+;; ---- bss (uninitialized data) ----
+;;
+;; A global with NO initializer occupies no image bytes: instead of
+;; writing its zeros into g:data (which both bloats the image and
+;; consumes the DMAX build buffer), it is placed in a separate BSS
+;; region that lives AFTER all initialized data. Its symbol offset is
+;; stored NEGATIVE-ENCODED as -(bssoff+1) -- distinguishable from a
+;; real (non-negative) data offset without a type test -- and both the
+;; symbol table and the emitted operands are relocated to their final
+;; absolute data offset at module finalize (g:module), once the total
+;; initialized-data length (the BSS base) is known. g:blen is the BSS
+;; byte cursor; the final in-memory data size is (bss base) + g:blen,
+;; reported to the loader as the image's MEMSZ so it zero-fills the
+;; region at load. Nothing is ever written to g:data for BSS, so a
+;; program may declare arbitrarily large uninitialized arrays without
+;; approaching DMAX.
+(define g:blen 0)
+
+;; align the bss cursor to a word (every allocation starts word-aligned,
+;; matching g:dalign's behaviour for the data segment)
+(define g:balign (lambda ()
+	(if (= 0 (bit:and g:blen g:WMASK)) nil
+	(begin (set! g:blen (+ g:blen 1)) (next g:balign)))))
+
+;; reserve nb bss bytes; returns the negative-encoded relative offset
+(define g:balloc (lambda (nb)
+	(begin
+		(g:balign)
+		(define at g:blen)
+		(set! g:blen (+ g:blen nb))
+		(- (- 0 at) 1))))
+
+;; is a 'glo symbol offset a bss (negative-encoded) offset?
+(define g:bss? (lambda (off) (< off 0)))
+;; decode a negative-encoded bss offset back to its relative byte offset
+(define g:bssoff (lambda (off) (- (- 0 off) 1)))
+
+;; the operand for a global at offset `off` (int = data, negative = bss):
+;; a (data N) or (bss N) reference, resolved to an absolute (data N) at
+;; finalize (g:resolvebss)
+(define g:glooperand (lambda (off)
+	(if (g:bss? off) (list 'bss (g:bssoff off)) (list 'data off))))
+
 ;; padding bytes must be written: the buffer is malloc'd, and garbage
 ;; padding would make the emitted image nondeterministic
 (define g:dalign (lambda ()
@@ -265,7 +308,7 @@
 		(define s (g:find n))
 		(define cl (g:second s))
 		(if (= cl 'loc) (g:emit (list 'LEA (- g:loc (index s 3))))
-		(if (= cl 'glo) (g:emit (list 'IMM (list 'data (index s 3))))
+		(if (= cl 'glo) (g:emit (list 'IMM (g:glooperand (index s 3))))
 		(if (= cl 'extg) (g:emit (list 'IMM (list 'extph (index s 3))))
 		(if (if (= cl 'fun) true (= cl 'ext))
 			;; &fn: the function's address. Marked like an array so
@@ -479,7 +522,7 @@
 					(print ";; c4lc WARNING: argument count mismatch in call to"
 						n "- expected" (index s 4) "given" t)))
 				(g:emit (list 'JSR (g:funref s))))
-		(if (= cl 'glo) (g:emit (list 'JSRI (list 'data (index s 3))))
+		(if (= cl 'glo) (g:emit (list 'JSRI (g:glooperand (index s 3))))
 		(if (= cl 'extg) (g:emit (list 'JSRI (list 'extph (index s 3))))
 		(if (= cl 'loc) (g:emit (list 'JSRS (- g:loc (index s 3))))
 		(g:die (+ "bad function call: " n)))))))
@@ -627,7 +670,7 @@
 				(g:varload s))
 		(if (= cl 'glo)
 			(begin
-				(g:emit (list 'IMM (list 'data (index s 3))))
+				(g:emit (list 'IMM (g:glooperand (index s 3))))
 				(g:varload s))
 		(if (= cl 'extg)
 			(begin
@@ -1085,17 +1128,15 @@
 	(begin
 		(if (= init nil) nil
 			(g:die (+ "struct globals cannot be initialized: " n)))
-		(g:dalign)
-		(define at g:dlen)
 		(define bytes (g:tysize ty))
-		(if (> (+ at bytes) g:DMAX) (g:die "data segment full") nil)
-		(g:dzero bytes)
-		(set! g:syms (g:cons (list n 'glo ty at bytes gattrs) g:syms)))))
+		;; a struct global is never initialized -> pure BSS
+		(set! g:syms (g:cons (list n 'glo ty (g:balloc bytes) bytes gattrs) g:syms)))))
 
 (define g:globalscalar (lambda (n ty init gattrs)
 	(begin
 		(define at
-			(if (= init nil) (g:dword 0)
+			;; no initializer -> BSS (one word); otherwise placed in data
+			(if (= init nil) (g:balloc g:WORD)
 			(if (= (head init) 'num) (g:dword (g:second init))
 			(if (= (head init) 'str)
 				(begin
@@ -1121,11 +1162,20 @@
 	(begin
 		(define elem (- ty g:PTR))
 		(define bytewise (= elem g:CHAR))
+		(define bytes (if bytewise s (* s (* g:WORD (/ (+ (g:tysize elem) g:WMASK) g:WORD)))))
+		;; an uninitialized array is pure BSS (occupies no image bytes,
+		;; does not touch g:data/DMAX -- so it may be arbitrarily large)
+		(if (= init nil)
+			(set! g:syms (g:cons (list n 'glo ty (g:balloc bytes) bytes gattrs) g:syms))
+			(g:globalarrayinit n ty s init gattrs elem bytewise bytes)))))
+
+;; the initialized-array case (kept out of g:globalarray so its own BSS
+;; branch stays a simple one-liner). Storage goes in the data segment.
+(define g:globalarrayinit (lambda (n ty s init gattrs elem bytewise bytes)
+	(begin
 		(g:dalign)
 		(define at g:dlen)
-		(define bytes (if bytewise s (* s (* g:WORD (/ (+ (g:tysize elem) g:WMASK) g:WORD)))))
 		(if (> (+ at bytes) g:DMAX) (g:die "data segment full") nil)
-		(if (= init nil) (g:dzero bytes)
 		(if (= (head init) 'braces)
 			(begin
 				(if (g:svalue? elem)
@@ -1139,7 +1189,7 @@
 					(g:die (+ "string does not fit the array " n)) nil)
 				(g:dstrbytes (g:second init) 0)
 				(g:dzero (- s (length (g:second init)))))
-		(g:die (+ "unsupported array initializer for " n)))))
+		(g:die (+ "unsupported array initializer for " n))))
 		(set! g:syms (g:cons (list n 'glo ty at bytes gattrs) g:syms)))))
 (define g:dstrbytes (lambda (str i)
 	(if (>= i (length str)) nil
@@ -1397,12 +1447,46 @@
 
 ;; ---- module assembly ----
 
+;; BSS finalize: bss-relative offsets become absolute data offsets once
+;; the base (the word-aligned end of the initialized data) is known.
+;; gen:bssextra carries the extra in-memory bytes beyond the data image
+;; (alignment pad + bss size) so c4r:encode can record MEMSZ.
+(define gen:bssextra 0)
+
+;; rebuild a symbol list, resolving 'glo entries whose offset is a bss
+;; (negative-encoded) offset to base + relative
+(define g:resolvesyms (lambda (ss base)
+	(if (empty? ss) (list)
+	(begin
+		(define s (head ss))
+		(g:cons
+			(if (if (= (g:second s) 'glo) (g:bss? (index s 3)) false)
+				(list (head s) 'glo (g:third s)
+					(+ base (g:bssoff (index s 3))) (index s 4) (index s 5))
+				s)
+			(g:resolvesyms (tail ss) base))))))
+
+;; rewrite (bss N) operands in the code to absolute (data base+N)
+(define g:resolvecode (lambda (cs base)
+	(if (empty? cs) (list)
+	(begin
+		(define i (head cs))
+		(g:cons
+			(if (if (= 2 (length i))
+					(if (= 'list (typeof (second i))) (= 'bss (head (second i))) false)
+					false)
+				(list (head i) (list 'data (+ base (second (second i)))))
+				i)
+			(g:resolvecode (tail cs) base))))))
+
 (define gen:module (lambda (ast)
 	(begin
 		(set! g:code (list))
 		(set! g:nlabel 0)
 		(set! g:data (string:alloc g:DMAX))
 		(set! g:dlen 0)
+		(set! g:blen 0)
+		(set! gen:bssextra 0)
 		(set! g:dpatches (list))
 		(set! g:syms (list))
 		(set! g:cons* (list))
@@ -1424,8 +1508,14 @@
 		(define m (g:lookup "main" g:syms))
 		(if m nil
 			(if gen:objmode nil (g:die "no main function")))
-		(define syms (g:symsection (g:reverse g:syms) 0 (list)))
-		(define code (g:reverse g:code))
+		;; BSS finalize: bss base = word-aligned end of the data image;
+		;; resolve bss-relative offsets in both the symbol table and the
+		;; code before either is serialized. gen:bssextra = the bytes the
+		;; loader must zero-fill beyond the stored data (align pad + bss).
+		(define bssbase (* g:WORD (/ (+ g:dlen g:WMASK) g:WORD)))
+		(set! gen:bssextra (- (+ bssbase g:blen) g:dlen))
+		(define syms (g:symsection (g:resolvesyms (g:reverse g:syms) bssbase) 0 (list)))
+		(define code (g:resolvecode (g:reverse g:code) bssbase))
 		(if (> g:nexterns 0)
 			(begin
 				(define base (length syms))

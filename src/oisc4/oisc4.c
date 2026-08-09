@@ -653,7 +653,7 @@ int vm_run () {
 
 char *t_file;     // raw file bytes
 int   t_flen;
-int   t_entry, t_codelen, t_datalen, t_patchlen, t_conslen, t_deslen;
+int   t_entry, t_codelen, t_datalen, t_patchlen, t_conslen, t_deslen, t_memsz;
 int  *t_code;     // code words (host copy)
 char *t_data;     // data bytes (host copy)
 int  *t_patches;  // patchlen * 3 words
@@ -688,8 +688,12 @@ int load_c4r (char *path) {
 		printf("oisc4: '%s' has no C4R signature\n", path);
 		return 1;
 	}
-	if (t_file[3] && t_file[3] != 2) { printf("oisc4: unsupported c4r version %d\n", t_file[3]); return 1; }
+	if (t_file[3] && t_file[3] != 2 && t_file[3] != 3) { printf("oisc4: unsupported c4r version %d\n", t_file[3]); return 1; }
 	if (t_file[4] != 64) { printf("oisc4: c4r uses %d-bit words, need 64\n", t_file[4]); return 1; }
+
+	// padding word (byte 5) = data MEMSZ in v3 (total in-memory size,
+	// the excess over datalen being zero-filled BSS); v2 has none.
+	t_memsz = (t_file[3] >= 3) ? *(int *)(t_file + 5) : 0;
 
 	rd_pos = 13; // 3 sig + 1 version + 1 bits + 8 padding
 	t_entry    = rd_word();
@@ -699,6 +703,7 @@ int load_c4r (char *path) {
 	rd_word(); // symbols (skipped)
 	t_conslen  = rd_word();
 	t_deslen   = rd_word();
+	if (t_memsz < t_datalen) t_memsz = t_datalen;
 
 	if (t_entry == -1) { printf("oisc4: image has no entry point\n"); return 1; }
 
@@ -1038,7 +1043,10 @@ int translate (int argc, char **argv) {
 
 	// Layout: data, argv, heap, stack
 	lay_database = align8(lay_codeend) + 64;
-	lay_argvbase = align8(lay_database + t_datalen) + 64;
+	// reserve the full in-memory data size (t_memsz) so the BSS tail
+	// beyond t_datalen -- zero in the zeroed arena -- is not overrun by
+	// the argv/heap regions placed after it.
+	lay_argvbase = align8(lay_database + t_memsz) + 64;
 	// argv: argc words, then the strings
 	need = argc * 8;
 	i = 0; while (i < argc) { s = argv[i]; while (*s++) ++need; ++need; ++i; }

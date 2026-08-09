@@ -40,7 +40,11 @@ $PREPROC -Isrc/tests $U0 src/tests/test_float.c 2>/dev/null | $CC -o $OUT/test_f
 # c4ke-lc.c4r rule, at 32 bits). Skipped when already newer.
 DISK=$OUT/disk
 mkdir -p $DISK
-if [ ! -f $OUT/c4ke32.c4r ] || [ src/c4ke/c4ke.c -nt $OUT/c4ke32.c4r ]; then
+# Rebuild when c4ke.c OR its embedded loader (#include "./load-c4r.c",
+# resolving to the repo-root load-c4r.c) is newer -- else a load-c4r.c
+# change (e.g. a new .c4r format version) silently leaves a stale
+# kernel that rejects freshly-built images.
+if [ ! -f $OUT/c4ke32.c4r ] || [ src/c4ke/c4ke.c -nt $OUT/c4ke32.c4r ] || [ load-c4r.c -nt $OUT/c4ke32.c4r ]; then
     $PREPROC src/c4ke/c4ke.c > .c4bb_klc.c
     ./c4sp32 -c 64000000 src/c4sp/lisp/c4lc.lisp -O .c4bb_klc.c $OUT/c4ke32.c4r > /dev/null
     rm -f .c4bb_klc.c
@@ -139,7 +143,8 @@ cp src/c4ke/include/service.h $DISK/
 C4IX_MODS="boot console va host sl4b task sched vfs sys c4ke loader init"
 C4IX_USER="hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt"
 if [ ! -f $OUT/c4ix32.c4r ] || [ src/c4ix/sched.c -nt $OUT/c4ix32.c4r ] || \
-   [ src/c4ix/c4ix.h -nt $OUT/c4ix32.c4r ] || [ src/c4ix/init.c -nt $OUT/c4ix32.c4r ]; then
+   [ src/c4ix/c4ix.h -nt $OUT/c4ix32.c4r ] || [ src/c4ix/init.c -nt $OUT/c4ix32.c4r ] || \
+   [ src/c4ix/loader.c -nt $OUT/c4ix32.c4r ]; then
     objs=""
     for m in $C4IX_MODS; do
         ./c4sp32 -c 8000000 src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix src/c4ix/$m.c .c4bb_ix_$m.c4o > /dev/null

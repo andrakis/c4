@@ -403,10 +403,15 @@ static int c4r_write (int *c4r, char *file) {
 	writechecked(fd, "C4R", 3);
 	version  = hdr[C4R_HDR_VERSION];  writechecked(fd, &version, 1);
 	wordbits = hdr[C4R_HDR_WORDBITS]; writechecked(fd, &wordbits, 1);
-	// Padding, same formula as the loader
+	// The padding word (byte offset 5) carries MEMSZ in format v3: the
+	// data segment's total in-memory size, the excess over DATALEN
+	// being zero-filled BSS (see load-c4r.c). One word, then 'p' filler
+	// for any remaining padding bytes (only when int < 8 bytes wide).
 	i = sizeof(int) - 1;
 	tmp = (5 + i) & ~i;
-	while (tmp--) writechecked(fd, "p", 1);
+	writechecked(fd, &hdr[C4R_HDR_MEMSZ], sizeof(int));
+	tmp = tmp - sizeof(int);
+	while (tmp-- > 0) writechecked(fd, "p", 1);
 	tmp = hdr[C4R_HDR_ENTRY];        writechecked(fd, &tmp, sizeof(int));
 	tmp = hdr[C4R_HDR_CODELEN];      writechecked(fd, &tmp, sizeof(int));
 	tmp = hdr[C4R_HDR_DATALEN];      writechecked(fd, &tmp, sizeof(int));
@@ -482,6 +487,8 @@ int main (int argc, char **argv) {
 	char *spec, *arg, *outfile;
 	int  *hdr;
 	int   count_code, count_data, count_patch, count_con, count_des, count_sym;
+	int   dstored;
+	char *dbytes;
 
 	// Set defaults
 	spec = argv[0];
@@ -561,9 +568,14 @@ int main (int argc, char **argv) {
 			c4rs_it[CL_OFFSET_CODE] = count_code;
 			c4rs_it[CL_OFFSET_DATA] = count_data;
 			hdr = (int *)c4rs_it[CL_HEADER];
-			// Track statistics
+			// Track statistics. The data cursor advances by each module's
+			// MEMSZ (its data image PLUS its BSS), so the next module --
+			// and every relocated data reference in this one -- sits past
+			// this module's BSS, and that BSS becomes a zero gap in the
+			// merged image. Only DATALEN bytes are copied in (below); the
+			// gap stays zero because the master data buffer is zeroed.
 			count_code  = count_code  + hdr[C4R_HDR_CODELEN];
-			count_data  = count_data  + hdr[C4R_HDR_DATALEN];
+			count_data  = count_data  + hdr[C4R_HDR_MEMSZ];
 			count_patch = count_patch + hdr[C4R_HDR_PATCHLEN];
 			count_con   = count_con   + hdr[C4R_HDR_CONSTRUCTLEN];
 			count_des   = count_des   + hdr[C4R_HDR_DESTRUCTLEN];
@@ -601,6 +613,13 @@ int main (int argc, char **argv) {
 		printf("%s: failed to allocate %d bytes for master data\n", spec, count_data);
 		return 5;
 	}
+	// Zero the whole merged data region so inter-module BSS gaps (and
+	// each module's own BSS) read as zero -- only DATALEN bytes per
+	// module are copied over this.
+	if (count_data) memset((char *)master[C4R_DATA], 0, count_data);
+	// count_data is the total in-memory size = MEMSZ. DATALEN (the
+	// stored/trimmed length) is computed after the merge, below.
+	hdr[C4R_HDR_MEMSZ]   = count_data;
 	hdr[C4R_HDR_DATALEN] = count_data;
 	if (count_patch && !(master[C4R_PATCHES] = (int)malloc((i = sizeof(int) * C4R_PAT__Sz * count_patch)))) {
 		printf("%s: failed to allocate %d bytes for master patches\n", spec, i);
@@ -630,6 +649,17 @@ int main (int argc, char **argv) {
 	} else {
 		if (hdr[C4R_HDR_ENTRY] == -1 && !cl_libmode)
 			printf("%s: warning: no entry point in any input\n", spec);
+		// Trim the merged data's trailing zeros for storage: DATALEN
+		// (stored) shrinks to the last non-zero byte, MEMSZ keeps the
+		// full size so the loader zero-fills the tail. Data-resident
+		// patches land in the loader's zero-filled MEMSZ region, so
+		// trimming placeholder zeros is safe. (The common win: a large
+		// uninitialized global at the end of the last module drops out
+		// of the image entirely.)
+		dstored = hdr[C4R_HDR_MEMSZ];
+		dbytes = (char *)master[C4R_DATA];
+		while (dstored > 0 && dbytes[dstored - 1] == 0) --dstored;
+		hdr[C4R_HDR_DATALEN] = dstored;
 		if (cl_verbose) printf("%s: writing to '%s'...\n", spec, outfile);
 		if (c4r_write(master, outfile))
 			failed = 1;

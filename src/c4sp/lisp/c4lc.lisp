@@ -87,7 +87,14 @@
 			(load "c4opt.lisp")
 			(set! M (c4opt:optimize M)))
 		nil)
+	;; Format v3 for both objects and whole-program images: uninitialized
+	;; globals are segregated to BSS (gen:bssextra), which occupies no
+	;; image bytes and is zero-filled at load. c4rlink accumulates each
+	;; object's MEMSZ when merging, so objects carry it too.
+	(set! c4r:v3 true)
+	(set! c4r:bss-extra gen:bssextra)
 	(define Out (c4r:encode M))
+	(set! c4r:bss-extra 0)
 	(if (file:write OutName Out)
 		(print ";; c4lc:" In "-" (length Out) "bytes -" OutName)
 		(error "c4lc: write failed")))

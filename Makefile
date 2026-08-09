@@ -460,6 +460,15 @@ src/c4or1k/images/bootfs.idx src/c4or1k/images/bootfs.blob: src/c4or1k/tools/mkb
 	node src/c4or1k/tools/mkbootfs.js $(BASEFS_JSON) $(BASEFS_SRC) src/c4or1k/images/bootfs.idx src/c4or1k/images/bootfs.blob
 c4or1k-boot: c4m c4or1k.c4r src/c4or1k/images/bootfs.idx src/c4or1k/images/bootfs.blob
 	./c4m load-c4r.c -- c4or1k.c4r $(VMLINUX) -b $(N) src/c4or1k/images/bootfs.idx src/c4or1k/images/bootfs.blob
+# M11: c4mp (src/c4mp) is opcode-for-opcode compatible with c4m -- a
+# guest .c4r image cannot tell the two apart -- and runs any .c4r
+# directly (no load-c4r.c wrapper). Verified byte-for-byte identical
+# boot output against c4m, ~18-20% faster wall-clock with zero source
+# changes to c4or1k (docs/c4or1k-design.md's M11 section). c4m itself
+# is intentionally NOT modified to get this -- see that section for
+# why (plain c4 must still be able to parse c4m.c).
+c4or1k-boot-mp: c4mp c4or1k.c4r src/c4or1k/images/bootfs.idx src/c4or1k/images/bootfs.blob
+	./c4mp c4or1k.c4r $(VMLINUX) -b $(N) src/c4or1k/images/bootfs.idx src/c4or1k/images/bootfs.blob
 test-oisc4-nested: $(OISC4) $(C4) $(C4M) oisc4-lc.c4r $(TESTS)/hello.c4r
 	$(C4M) load-c4r.c -- oisc4-lc.c4r -m 32 $(TESTS)/hello.c4r | grep -q yello
 	$(C4) c4l.c oisc4-lc.c4r -m 32 $(TESTS)/hello.c4r | grep -q yello
@@ -915,7 +924,7 @@ PHONY += run-c4 run-c4-vg test-c4 test-massive-c4
 PHONY += run-c4-alt run-c4-alt-vg
 PHONY += test-c4ix test-c4ix-fmt test-c4ix-c4ke test-c4ix-c4ke-nested test-c4ix-c4 run-c4ix run-c4ix-c4 demo-c4ix demo-c4ix-c4 bench-c4ix
 PHONY += test-c4mp
-PHONY += c4or1k-m0 c4or1k-m1 c4or1k-m1-check c4or1k-m2 c4or1k-m2-check c4or1k-m3 c4or1k-m3-check c4or1k-m3-int-check c4or1k-boot
+PHONY += c4or1k-m0 c4or1k-m1 c4or1k-m1-check c4or1k-m2 c4or1k-m2-check c4or1k-m3 c4or1k-m3-check c4or1k-m3-int-check c4or1k-boot c4or1k-boot-mp
 PHONY += pkg c4rs or1k
 PHONY += pi
 # Don't bother with the dump or link utility for now

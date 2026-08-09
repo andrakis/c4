@@ -433,8 +433,22 @@ int cpu_run_batch(int halt_pc, int max_batch, int *ran) {
     rb = (ins >> 11) & 0x1F;
     rA = r[ra];
     rB = r[rb];
-    imm = sext(ins, 16);
     fault = 0;
+    // M11: `imm` used to be computed unconditionally here (every
+    // instruction paid a sext() *function call* -- JSR/ENT/LEV
+    // overhead, not just a shift+mask -- regardless of whether that
+    // opcode uses an immediate at all). Roughly two thirds of the
+    // opcodes below don't touch imm (branches, register-register ALU,
+    // l.mtspr/l.rfe, stores, which already compute their own simm
+    // lazily the same way). `simm` was already lazy; this makes imm
+    // match it -- each of the nine cases that actually needs imm
+    // computes it as its own first statement instead. See
+    // docs/c4or1k-design.md's M11 section for why this replaced the
+    // originally-scoped "decode cache" idea: a real accounting of
+    // c4lc's VM-op cost showed shift/mask decode (opcode/rd/ra/rb)
+    // is already cheap enough that caching it doesn't clearly help,
+    // but an eager function call for a value ~2/3 of instructions
+    // never use clearly does.
 
     switch (opcode) {
     case 0x00:                         // l.j
@@ -484,6 +498,7 @@ int cpu_run_batch(int halt_pc, int max_batch, int *ran) {
         pc = nextpc; nextpc = jump; delayedins = 1;
         continue;
     case 0x1B:                         // l.lwa
+        imm = sext(ins, 16);
         addr = rA + imm;
         DTLB_FAST(addr, 0, phys);
         if (phys != -1) {
@@ -492,31 +507,37 @@ int cpu_run_batch(int halt_pc, int max_batch, int *ran) {
         }
         break;
     case 0x21:                         // l.lwz
+        imm = sext(ins, 16);
         addr = rA + imm;
         DTLB_FAST(addr, 0, phys);
         if (phys != -1) r[rd] = sext(ram_lw(phys), 32);
         break;
     case 0x23:                         // l.lbz
+        imm = sext(ins, 16);
         addr = rA + imm;
         DTLB_FAST(addr, 0, phys);
         if (phys != -1) r[rd] = ram_lb(phys);
         break;
     case 0x24:                         // l.lbs
+        imm = sext(ins, 16);
         addr = rA + imm;
         DTLB_FAST(addr, 0, phys);
         if (phys != -1) r[rd] = sext(ram_lb(phys), 8);
         break;
     case 0x25:                         // l.lhz
+        imm = sext(ins, 16);
         addr = rA + imm;
         DTLB_FAST(addr, 0, phys);
         if (phys != -1) r[rd] = ram_lh(phys);
         break;
     case 0x26:                         // l.lhs
+        imm = sext(ins, 16);
         addr = rA + imm;
         DTLB_FAST(addr, 0, phys);
         if (phys != -1) r[rd] = sext(ram_lh(phys), 16);
         break;
     case 0x27:                         // l.addi
+        imm = sext(ins, 16);
         result = sext(rA + imm, 32);
         SR_CY = result < rA;
         SR_OV = (((rA ^ imm ^ -1) & (rA ^ result)) & 0x80000000) ? 1 : 0;
@@ -529,6 +550,7 @@ int cpu_run_batch(int halt_pc, int max_batch, int *ran) {
         r[rd] = rA | (ins & 0xFFFF);
         break;
     case 0x2B:                         // l.xori
+        imm = sext(ins, 16);
         r[rd] = sext(rA ^ imm, 32);
         break;
     case 0x2D:                         // l.mfspr
@@ -546,6 +568,7 @@ int cpu_run_batch(int halt_pc, int max_batch, int *ran) {
         break;
     case 0x2F:                         // l.sfXXi
         func = (ins >> 21) & 0x1F;
+        imm = sext(ins, 16);
         switch (func) {
         case 0x0: SR_F = (rA == imm); break;
         case 0x1: SR_F = (rA != imm); break;

@@ -9,9 +9,10 @@ Console only -- no framebuffer, no keyboard device. Terminal raw mode
 is handled by `run-c4or1k.sh`, an external wrapper, not by the VM (the
 C4 VM has no ioctl/termios facility, see that script's header comment).
 
-## Status: M6 done -- it boots real Linux to an interactive shell; M7 (-O) and M8 (SR_SM-safe TLB lookup cache) landed since (M0-M4 preserved in docs/c4or1k-design.md)
+## Status: M6 done -- it boots real Linux to an interactive shell; M7-M11 (perf work) landed since, ~31% faster cumulative and a second, faster host (M0-M4 preserved in docs/c4or1k-design.md)
 
-    make c4or1k-boot                # boot a real kernel; N=<steps> to change the budget (default 2M)
+    make c4or1k-boot                # boot a real kernel under c4m; N=<steps> to change the budget (default 2M)
+    make c4or1k-boot-mp              # same, under c4mp instead -- ~18-20% faster, same .c4r, zero source changes (see M11)
 
 Boots an unmodified `vmlinux.bin` from the reset vector through the
 full kernel init sequence, mounts basefs.json's root filesystem over

@@ -894,11 +894,145 @@ c4m) target *different, complementary* cost centers -- one cuts VM-op
 *count* via redundant-decode avoidance, the other cuts native cost
 *per* VM-op that still runs. Combined, compounding rather than
 additive, a **very rough 1.5-2x** total improvement over the current
-post-M9 baseline seems like a defensible estimate (e.g. ~0.65 x 0.80 ~
+post-M9 baseline seemed like a defensible estimate (e.g. ~0.65 x 0.80 ~
 0.5, i.e. roughly half the wall time) -- real and worth having, but
 still not the order-of-magnitude a JIT could give, and still bounded
-by needing to actually build and verify both pieces. Nothing here is
-implemented; this is investigation only, as asked.
+by needing to actually build and verify both pieces. Nothing here was
+implemented as of this write-up; this was investigation only, as
+asked.
+
+**Important correction, acted on in M11: the "dispatch fix in c4m"
+half of this was wrong to propose and was reverted before being
+committed.** c4m.c must stay parseable by plain, unmodified c4 --
+`./c4 c4m.c ...` is a real, exercised bootstrapping/self-hosting path
+(`test-c4`), and plain c4's own compiler cannot parse a `switch`
+statement. This is not new information this project should have had
+to rediscover: `src/c4mp/vm.c`'s own header comment documents that
+exact if-chain-to-switch conversion being tried in c4m and reverted
+for precisely this reason (commit `29d6f57`), and separately notes it
+measured as **no faster natively even ignoring the breakage** -- both
+facts this investigation's Option 2 missed by reasoning from a
+disassembly finding (§Finding 2 above) without checking prior art
+first. c4m.c was changed, fully regression-tested across every
+dependent project in this repo (all green), and then reverted anyway
+once this was pointed out, because passing tests was never the actual
+bar -- staying parseable by plain c4 is a hard constraint testing
+alone doesn't surface. See M11 below for what was built instead.
+
+## M11 — decode-cache pivot, and c4mp: a free native speedup
+
+Two results this milestone, neither the one originally scoped:
+
+### The "decode cache" reconsidered, and replaced with lazy `imm`
+
+M10 estimated a decode cache (opcode/rd/ra/rb/func, cached per guest
+instruction address) at roughly 30-45%, reasoning from the >99% code
+reuse Finding 1 measured. Working out the actual implementation before
+committing to the memory cost (parallel arrays sized to guest RAM, or
+a hash-indexed cache with its own tag-comparison overhead) surfaced a
+problem with that estimate: c4or1k runs *interpreted*, under c4m/
+c4mp, so "cost" here means c4-bytecode VM-op count, not native CPU
+cycles. Under that accounting, the opcode/rd/ra/rb shift-and-mask
+extraction this would cache is already cheap (a `SHR`+`AND` pair per
+field, 2 VM-ops each) -- a cache *lookup* (address arithmetic + a
+tag-compare + several array reads) costs a comparable number of VM-ops
+to just re-deriving the fields, so caching *that* specifically isn't
+clearly a win at all once counted honestly, which is consistent with
+the c4m dispatch-fix mistake above: assuming "fewer native operations"
+without checking what actually costs what under *this* execution
+model.
+
+What *is* expensive: `imm = sext(ins, 16)`, computed unconditionally
+at the top of `cpu_run_batch` for every single instruction regardless
+of type, where `sext()` is a real function call (`JSR`/`ENT`/body/
+`LEV` -- c4lc has no inlining). `simm` (the store/`l.mtspr` operand)
+was already computed lazily, only inside the specific cases that use
+it; `imm` wasn't, for no principled reason. Of the ~29 core opcodes,
+only 9 (the loads, `l.addi`, `l.xori`, `l.sfXXi`) actually use `imm` --
+roughly two thirds of dispatched instructions (branches, register-
+register ALU, `l.mtspr`, `l.rfe`, stores, ...) were paying a full
+function call for a value they never read. Fixed by moving
+`imm = sext(ins, 16)` out of the unconditional prelude and into each
+of the nine case bodies that need it (cpu.c), matching the pattern
+`simm` already used. No caching, no extra memory, no self-modifying-
+code correctness question to reason about -- pure removal of
+unconditional waste.
+
+**Verified**: full regression suite unchanged, 60M-instruction boot
+byte-for-byte identical, full 700M-instruction boot reaches the same
+shell prompt. **Measured** (60M-instruction run, under c4m):
+109.14s vs. the post-M9 116.18s baseline -- **~6.1% faster**.
+
+### c4mp: opcode-compatible, native, and already faster -- with zero source changes
+
+Per explicit correction mid-milestone: c4m must not change (see above).
+Asked to look at `src/c4mp` instead -- a second C4 host, written in
+c4lc's fuller dialect (structs, `switch`, a real preprocessor) rather
+than the minimal subset plain c4 must still parse, and buildable two
+ways from one source: `./c4mp` (native, `gcc`-compiled directly, no
+self-hosting constraint to preserve) and `c4mp.c4r` (the same source
+compiled by c4lc, so it can also run *hosted under c4m* -- "a
+backwards-compatibility proof, since c4m has no multiprocessing to
+offer," per `src/c4mp/vm.c`'s own header comment).
+
+That header comment turned out to be exactly the prior art this
+milestone needed and initially missed (see the correction above): c4m
+*was* tried with a real `switch` dispatch once, reverted for the
+self-hosting reason, and **measured as no faster natively even
+setting the breakage aside** -- switch's only confirmed win was 1.79x
+for *nested* interpretation (a switch-based guest under an if-chain
+host benefits from the guest needing fewer VM-instructions to express
+its own dispatch; this is about guest code *shape*, not host dispatch
+*mechanism*, and is exactly what `cpu_run_batch`'s own
+`switch (opcode)` already exploits, unrelated to c4m's or c4mp's own
+native dispatch).
+
+Given that, the useful question about c4mp isn't "does its switch
+dispatch make it faster" (prior art says: not for this reason) --
+it's simpler: **c4mp's instruction semantics are c4m's, opcode for
+opcode, "guest images cannot tell the two apart"** (same source
+comment). Since c4or1k.c4r is a completely ordinary `.c4r` image with
+nothing c4-specific in it, and `./c4mp image.c4r [args...]` runs any
+`.c4r` directly (no `load-c4r.c` wrapper needed -- c4mp "carries no
+compiler, it loads .c4r images"), the obvious experiment is just
+running it, unmodified:
+
+    ./c4mp c4or1k.c4r <vmlinux.bin> -b <N> <bootfs.idx> <bootfs.blob>
+
+**It works, with zero source changes to c4or1k.** Verified: `m1_test.bin`/
+`m2_test.bin` output byte-for-byte identical to c4m's; a 60M-instruction
+boot byte-for-byte identical to c4m's boot log; a full 700M-instruction
+boot reaches the same interactive shell prompt. **Measured** (60M-
+instruction run, pre-lazy-`imm` c4or1k.c4r): **95.05s under c4mp vs.
+116.18s under c4m -- ~18.2% faster**, from nothing but running the
+identical bytecode on a different, already-existing host. Combined
+with the lazy-`imm` fix above (still c4or1k-side, applies to either
+host): **93.11s under c4mp -- ~19.9% faster than the post-M9 c4m
+baseline**, ~30.8% faster than the pre-M8 starting point.
+
+A `c4or1k-boot-mp` Makefile target now runs the same boot via `./c4mp`
+directly, alongside the existing `c4or1k-boot` (c4m).
+
+**Why this is faster is not fully pinned down** -- the switch-vs-if-
+chain distinction specifically was already ruled out by prior art, so
+it's likely some combination of c4mp's fuller C dialect letting gcc
+make different (not necessarily "better dispatch," just different)
+codegen choices elsewhere in the interpreter loop, and/or the register-
+struct-based design `vm.c`'s header comment describes ("`c4_run` loads
+registers into locals, runs a quantum, stores them back") producing
+tighter code than c4m's globals-based interpreter body. Worth a closer
+look if pushed further, but not required to *use* the result: the
+measurement is real and reproducible regardless of full attribution.
+
+**Where new VM-level work belongs, going forward:** c4mp, not c4m.
+It has the language features (real `switch`, structs, a preprocessor)
+that make adding new fused opcodes safe and ordinary to write, without
+c4m's plain-c4-parseability constraint standing in the way. That work
+-- e.g. the fused-opcode idea from M10's Option 2 -- was not attempted
+this milestone (out of scope for what was asked), but c4mp is now
+confirmed as the right place for it whenever it's picked up, and
+already delivers a real, free, zero-risk speedup on its own before any
+new opcodes are added at all.
 
 ## Related future work (not this project)
 

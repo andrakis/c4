@@ -9,7 +9,7 @@ Console only -- no framebuffer, no keyboard device. Terminal raw mode
 is handled by `run-c4or1k.sh`, an external wrapper, not by the VM (the
 C4 VM has no ioctl/termios facility, see that script's header comment).
 
-## Status: M6 done -- it boots real Linux to an interactive shell (M0-M4 preserved in docs/c4or1k-design.md)
+## Status: M6 done -- it boots real Linux to an interactive shell; M7 (-O) and M8 (SR_SM-safe TLB lookup cache) landed since (M0-M4 preserved in docs/c4or1k-design.md)
 
     make c4or1k-boot                # boot a real kernel; N=<steps> to change the budget (default 2M)
 

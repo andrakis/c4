@@ -80,6 +80,27 @@ extern int group2[2048]; // ITLB match (0x200|set) / translate (0x280|set) regis
 extern int TTMR, TTCR;     // tick timer mode/count (SPR group 10)
 extern int PICMR, PICSR;   // interrupt controller mask/status (SPR group 9)
 
+// M8: single-entry same-page translation cache for dtlb_lookup/
+// fetch_ins (ported from fastcpu.js's read32tlblookup/instlblookup
+// idea, see docs/c4or1k-design.md's M8 section) -- on a same-page
+// repeat access, skip the group1/group2 tag-match array read and go
+// straight to the permission check against the cached tlbtr. Unlike
+// fastcpu.js's own version, this is keyed on SR_SM (vpage AND SR_SM
+// must both match the cached entry) rather than relying on
+// invalidating the cache at every exception: fastcpu.js's own
+// invalidation happens in Exception() and SPR group1/group2 writes,
+// but SR_SM can also change via l.rfe or a direct l.mtspr(SPR_SR, ..)
+// with neither of those firing, which would let a stale permission
+// check leak across a supervisor/user mode change on the same page --
+// see the M8 design doc section for the full analysis. Keying on
+// SR_SM directly closes that gap without needing to enumerate every
+// place SR_SM can change. The cache is still invalidated on any write
+// to the corresponding SPR group (cpu_set_spr), since the guest can
+// rewrite a TLB entry's tag/permission bits without raising an
+// exception at all (e.g. an explicit TLB flush). -1 means empty.
+extern int dtlb_cache_vpage, dtlb_cache_sm, dtlb_cache_tlbtr;
+extern int itlb_cache_vpage, itlb_cache_sm, itlb_cache_tlbtr;
+
 int sext(int v, int bits);
 
 void cpu_set_flags(int x);

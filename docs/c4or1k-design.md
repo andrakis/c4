@@ -501,63 +501,95 @@ terminal, not piped input) is exercised directly.
 - **`fs.json` overlay, optional virtio-block/ATA — not attempted.**
   Framebuffer/keyboard stay explicitly out of scope regardless.
 
-**M8 — faster: a fastcpu.js-based emulator. Investigated, scoped, not
-implemented.** `jor1k/js/worker/or1k/fastcpu.js` (1,609 lines, vs.
-safecpu.js's ~1,100 -- the CPU this project actually ports) turns out
-to be a fundamentally different execution model, not a drop-in faster
-decode loop, and its real speedup techniques don't decompose cleanly
-into a small, safely-verifiable patch on top of `cpu_step`'s current
-one-instruction-at-a-time structure:
+**M8 — faster: a fastcpu.js-based emulator. Scoped subset implemented.**
+`jor1k/js/worker/or1k/fastcpu.js` (1,609 lines, vs. safecpu.js's ~1,100
+-- the CPU this project actually ports) turns out to be a fundamentally
+different execution model, not a drop-in faster decode loop, and its
+real speedup techniques don't decompose cleanly into a small, safely-
+verifiable patch on top of `cpu_step`'s current one-instruction-at-a-
+time structure. This milestone was first investigated and scoped
+without implementation (see below), then revisited to actually build
+the one piece that scoping pass found safely bounded, plus one
+additional main-loop optimization found while re-reading the driver
+loop for this pass:
 
 - **The actual big win is `fence`-based straight-line batch
-  execution**, not anything specific to any one instruction.
-  `fastcpu.js` runs instructions in a tight inner loop until hitting a
-  jump or a page boundary (`fence`), only paying the cost of a fresh
-  "should I check for a TLB miss / interrupt / page crossing" decision
-  at those boundaries rather than on every single instruction. Porting
-  this faithfully means restructuring `cpu_step` around basic blocks,
-  not adding a helper function -- a rewrite comparable in scope to the
+  execution, and it is still NOT implemented.** `fastcpu.js` runs
+  instructions in a tight inner loop until hitting a jump or a page
+  boundary (`fence`), only paying the cost of a fresh "should I check
+  for a TLB miss / interrupt / page crossing" decision at those
+  boundaries rather than on every single instruction. Porting this
+  faithfully means restructuring `cpu_step` around basic blocks, not
+  adding a helper function -- a rewrite comparable in scope to the
   original M1 CPU port itself, with its own oracle-diffing
   verification burden to match (nothing in the current M1/M2 test
   suite exercises "does a batch boundary get drawn in the right place"
-  the way it exercises individual instruction semantics).
-- **The single-entry TLB lookup cache is real, bounded, and
-  low-risk in isolation** (`read32tlblookup`/`read32tlbcheck` and
-  siblings, one pair per access width/direction: cache the last
-  virtual page translated, skip `DTLBLookup`'s tag check entirely on
-  a same-page hit) -- but **it has a genuine, undocumented correctness
-  gap**: a cache hit skips the *permission* check along with the tag
-  check, and the permission bits `dtlb_lookup` tests depend on
-  `SR_SM` (supervisor vs. user mode), which the cache key doesn't
-  include. A same-page access that crosses a supervisor/user mode
-  switch between two hits on the same cached entry could silently
-  allow what should be a permission fault. Whether real OR1000 Linux
-  workloads happen to avoid ever exercising that gap is not something
-  this investigation determined either way -- porting the cache
-  *safely* means keying it on `SR_SM` too (or re-deriving the
-  permission decision from cached `tlbtr` bits instead of skipping it
-  outright), which is easy to state but changes the caching scheme
-  from "port fastcpu.js's code" to "port a corrected version of it,"
-  worth its own dedicated verification pass rather than a same-session
-  addition after M0-M7 already landed.
+  the way it exercises individual instruction semantics). That
+  cost/benefit judgment hasn't changed; this remains future work.
+- **The single-entry TLB lookup cache: implemented, with the
+  permission-check gap closed.** `fastcpu.js`'s own version
+  (`read32tlblookup`/`read32tlbcheck` and siblings, one pair per access
+  width/direction: cache the last virtual page translated, skip
+  `DTLBLookup`'s tag check entirely on a same-page hit) has a genuine,
+  undocumented correctness gap -- a cache hit skips the *permission*
+  check along with the tag check, and the permission bits depend on
+  `SR_SM` (supervisor vs. user mode), which fastcpu.js's cache key
+  doesn't include. fastcpu.js instead relies on invalidating all its
+  TLB caches inside `Exception()` (SR_SM always becomes 1 there) and on
+  SPR group1/group2 writes, but `l.rfe` and a direct `l.mtspr(SPR_SR,
+  ..)` can both change `SR_SM` without going through either of those
+  paths, which would let a stale permission decision leak across a
+  mode change on the same page. `dtlb_cache_*`/`itlb_cache_*` (cpu.h/
+  cpu.c) close this by keying the cache on `(vpage, SR_SM)` directly --
+  a hit requires both to match the cached entry, so there's no event to
+  enumerate and no way to miss one. The cache is separately invalidated
+  on any write to the owning SPR group (`cpu_set_spr`'s group 1/2
+  cases) to handle the guest rewriting a TLB entry's tag/permission
+  bits without raising an exception at all (an explicit flush). Applied
+  to both `dtlb_lookup` (every load/store) and `fetch_ins` (every
+  single instruction fetch, unconditionally -- code executes
+  sequentially within a page the overwhelming majority of the time, so
+  this path sees a very high hit rate once `SR_IME` is on).
+- **`con_poll_and_feed()` moved off the per-instruction hot path.**
+  Found while re-reading `main.c`'s driver loop for this milestone, not
+  from fastcpu.js: it was called once per *guest instruction* --
+  cheaply, thanks to its own internal rate gate (`con.c`'s
+  `CON_POLL_CYCLES`), but the call+gate-check overhead itself was still
+  paid every instruction regardless of whether the gate was open. Moved
+  onto `cpu_tick_check`'s existing once-per-64-instructions cadence;
+  the internal gate already tolerates far coarser polling than that
+  (order 1,000+ guest instructions between real `read()`s), so this
+  doesn't change observable input latency, just how often the call
+  itself happens.
 - **`doze` (SPR group 8 / power-management, `fastcpu.js` lines
   ~393-394 and ~1168-1174) is not the idle-skip optimization it first
-  looks like.** It makes `Step()` return early to jor1k's own
-  browser-hosted scheduler when the guest enters its idle loop with no
-  interrupt imminent -- a JS-event-loop cooperation mechanism (don't
-  hog the browser tab), not a "fast-forward wall-clock time past an
-  idle period" mechanism. `cpu_tick_check`'s existing per-64-instruction
-  cadence already handles tick delivery correctly during idle; `doze`
-  wouldn't reduce the guest-instruction count a real idle period costs
-  in this project's headless, single-process model the way it looked
-  like it might before reading the actual code.
+  looks like, and still isn't implemented.** It makes `Step()` return
+  early to jor1k's own browser-hosted scheduler when the guest enters
+  its idle loop with no interrupt imminent -- a JS-event-loop
+  cooperation mechanism (don't hog the browser tab), not a "fast-
+  forward wall-clock time past an idle period" mechanism.
+  `cpu_tick_check`'s existing per-64-instruction cadence already
+  handles tick delivery correctly during idle; `doze` wouldn't reduce
+  the guest-instruction count a real idle period costs in this
+  project's headless, single-process model the way it looked like it
+  might before reading the actual code.
 
-Given M0-M7 all landed the same session as this investigation and are
-fully verified end to end (M6: a real interactive shell), the judgment
-call here is to document these findings precisely rather than rush a
-same-session implementation of the one piece (TLB caching) that's
-actually safely scoped -- correctly keying it on `SR_SM` needs its own
-verification pass, not a late addition without one.
+**Verification and measured result.** The TLB-cache change touches
+every load/store/fetch, so it's verified the same way M1/M2 are: the
+full `c4or1k-m1-check`/`m2-check`/`m3-check`/`m3-int-check` suite
+passes unchanged after this change (bit-for-bit against the jor1k
+oracle, byte-for-byte echoed I/O). For the boot path specifically (no
+oracle exists past early boot -- see "Where jor1k stops being an
+oracle" below), a 60M-instruction `-b` boot run was captured before and
+after this milestone's changes and diffed: **byte-for-byte identical
+boot log**, confirming the cache and the polling-cadence change are
+behaviorally invisible, only faster. Wall-clock, same 60M-instruction
+run, same host, back-to-back: **134.6s before, 124.3s after -- about
+7.6% faster**, on top of M7's `-O`. Smaller than the multiple-times
+speedup `fence`-based batching would give (that's still unbuilt), but
+real, measured, and free of the correctness risk that made the full
+fastcpu.js port a same-session no-go the first time through this
+milestone.
 
 ## Related future work (not this project)
 

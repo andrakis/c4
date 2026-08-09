@@ -120,8 +120,17 @@ int main(int argc, char **argv) {
     steps = 0;
     t0 = __time();
     while (1) {
-        con_poll_and_feed();
-        if (!(steps & 63)) cpu_tick_check(64); // cadence matches safecpu.js's Step loop, see cpu.h
+        // M8: con_poll_and_feed() moved onto cpu_tick_check's existing
+        // once-per-64-instructions cadence instead of running every
+        // single instruction. Its own internal rate gate (con.c,
+        // CON_POLL_CYCLES) already skips the real read() syscall most
+        // calls anyway, but the call+gate-check overhead itself was
+        // still paid every guest instruction; batching it here saves
+        // that on the other 63/64 iterations without changing polling
+        // latency in practice (64 guest instructions is far below the
+        // ~1000+ guest instructions the internal gate already allows
+        // between actual reads).
+        if (!(steps & 63)) { con_poll_and_feed(); cpu_tick_check(64); }
         status = cpu_step(nwords);
         if (status != 0) break;
         ++steps;

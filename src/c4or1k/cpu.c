@@ -16,6 +16,9 @@ int group2[2048];
 int TTMR, TTCR;
 int PICMR, PICSR;
 
+int dtlb_cache_vpage, dtlb_cache_sm, dtlb_cache_tlbtr;
+int itlb_cache_vpage, itlb_cache_sm, itlb_cache_tlbtr;
+
 // See cpu.h's header comment and docs/c4or1k-design.md: this is NOT
 // the "(v << (32-bits)) >> (32-bits)" idiom. That relies on the left
 // shift truncating at bit 31, which never happens on c4lc's 64-bit
@@ -149,8 +152,8 @@ void cpu_set_spr(int idx, int val) {
         if (address == SPR_SR) cpu_set_flags(val);
         group0[address] = val;
         break;
-    case 1: group1[address] = val; break;
-    case 2: group2[address] = val; break;
+    case 1: group1[address] = val; dtlb_cache_vpage = -1; break;
+    case 2: group2[address] = val; itlb_cache_vpage = -1; break;
     case 3: case 4:
         // data/instruction cache: not supported, accepted no-op
         break;
@@ -243,16 +246,29 @@ void cpu_exception(int excepttype, int addr) {
 // entry (or no permission) and raise the vector, exactly as
 // safecpu.js's DTLBLookup/GetInstruction do. See cpu.h for why TLB
 // LRU bits aren't checked at all.
+//
+// M8: dtlb_cache_* (declared/explained in cpu.h) short-circuits the
+// group1[] tag-match read on a same-page, same-mode repeat access --
+// real workloads re-hit the same page across many consecutive loads/
+// stores, so this is a near-certain win rather than a speculative one.
 int dtlb_lookup(int addr, int write) {
-    int setindex, tlmbr, tlbtr;
+    int setindex, tlmbr, tlbtr, vpage;
     if (!SR_DME) return addr;
-    setindex = (addr >> 13) & 63;
-    tlmbr = group1[0x200 | setindex];
-    if (((tlmbr & 1) == 0) || ((tlmbr >> 19) != (addr >> 19))) {
-        cpu_exception(EXCEPT_DTLBMISS, addr);
-        return -1;
+    vpage = addr >> 13;
+    if (vpage == dtlb_cache_vpage && SR_SM == dtlb_cache_sm) {
+        tlbtr = dtlb_cache_tlbtr; // same page, same mode as last time: skip the tag-match read entirely
+    } else {
+        setindex = vpage & 63;
+        tlmbr = group1[0x200 | setindex];
+        if (((tlmbr & 1) == 0) || ((tlmbr >> 19) != (addr >> 19))) {
+            cpu_exception(EXCEPT_DTLBMISS, addr);
+            return -1;
+        }
+        tlbtr = group1[0x280 | setindex];
+        dtlb_cache_vpage = vpage;
+        dtlb_cache_sm = SR_SM;
+        dtlb_cache_tlbtr = tlbtr;
     }
-    tlbtr = group1[0x280 | setindex];
     if (SR_SM) {
         if ((!write && !(tlbtr & 0x100)) || (write && !(tlbtr & 0x200))) {
             cpu_exception(EXCEPT_DPF, addr);
@@ -270,16 +286,31 @@ int dtlb_lookup(int addr, int write) {
 // Returns the fetched word, or -1 if an ITLB miss/fault was raised
 // (cpu_step must then skip decode entirely for this cycle, matching
 // safecpu.js's Step loop: `if (ins==-1) { pc=nextpc++; continue; }`).
+//
+// M8: itlb_cache_* is dtlb_lookup's same trick applied to instruction
+// fetch -- this runs on literally every instruction (unlike
+// dtlb_lookup, which only runs for loads/stores), and code executes
+// sequentially within a page the overwhelming majority of the time
+// (a page is 8192 bytes / 2048 instructions), so the cache-hit path
+// dominates almost all real execution once SR_IME is on.
 int fetch_ins(int addr) {
-    int setindex, tlmbr, tlbtr;
+    int setindex, tlmbr, tlbtr, vpage;
     if (!SR_IME) return ram_lw(addr);
-    setindex = (addr >> 13) & 63;
-    tlmbr = group2[0x200 | setindex];
-    if (((tlmbr & 1) == 0) || ((tlmbr >> 19) != (addr >> 19))) {
-        cpu_exception(EXCEPT_ITLBMISS, pc << 2);
-        return -1;
+    vpage = addr >> 13;
+    if (vpage == itlb_cache_vpage && SR_SM == itlb_cache_sm) {
+        tlbtr = itlb_cache_tlbtr;
+    } else {
+        setindex = vpage & 63;
+        tlmbr = group2[0x200 | setindex];
+        if (((tlmbr & 1) == 0) || ((tlmbr >> 19) != (addr >> 19))) {
+            cpu_exception(EXCEPT_ITLBMISS, pc << 2);
+            return -1;
+        }
+        tlbtr = group2[0x280 | setindex];
+        itlb_cache_vpage = vpage;
+        itlb_cache_sm = SR_SM;
+        itlb_cache_tlbtr = tlbtr;
     }
-    tlbtr = group2[0x280 | setindex];
     if (SR_SM) {
         if (!(tlbtr & 0x40)) { cpu_exception(EXCEPT_IPF, pc << 2); return -1; }
     } else {
@@ -297,6 +328,9 @@ void cpu_reset() {
     PICMR = 0x3; PICSR = 0;
     delayedins = 0;
     EA = -1;
+
+    dtlb_cache_vpage = -1;
+    itlb_cache_vpage = -1;
 
     group0[SPR_IMMUCFGR] = 0x18;
     group0[SPR_DMMUCFGR] = 0x18;

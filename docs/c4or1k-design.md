@@ -1343,13 +1343,13 @@ path. Translation is ON by default in the c4or1k-jit.c4r image
 (`-nojit` opts out); the default and -mcisc images compile the hooks
 out and are unchanged from M12. m1/m2-check run the default, JIT, and
 (M14) native builds every time; boot logs byte-identical in every
-configuration. Depth of boot-log verification at commit time: v1
-verified through a full 700M-instruction boot to the interactive
-shell; v2 verified byte-identical through 150M instructions (well
-into userspace -- udhcpc retries -- and past heavy demand-paging
-DTLB-fault traffic, which is what v2's new fault paths exercise),
-with the full 700M v2 run left running rather than blocking the
-commit on ~13 hosted minutes. One cautionary artifact worth
+configuration. Both v1 and v2 are verified byte-identical through
+full 700M-instruction boots to the interactive shell (v2's landed
+shortly after the commit that introduced it, run in the background
+rather than blocking ~13 hosted minutes; two independent v2 700M
+runs also produced identical block statistics -- 17,847,288 blocks
+covering 102,723,897 instructions -- confirming the JIT is fully
+deterministic at depth). One cautionary artifact worth
 recording: an earlier "divergence" in a v2 700M log turned out to be
 two processes (an interrupted background run and its relaunch)
 writing the same log file -- sparse-file NUL holes, not guest

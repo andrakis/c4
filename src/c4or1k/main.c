@@ -40,6 +40,8 @@
 #include "virtio9p.h"
 #include "bootfs.h"
 #include "jit.h"
+#include "eth.h"
+#include "net.h"
 
 enum { FILEBUFSZ = 0x10000 }; // c4lc enum initializers must be a literal, not "1 << 16"
 char filebuf[FILEBUFSZ];
@@ -121,6 +123,11 @@ int main(int argc, char **argv) {
     uart_reset();
     con_init();
 
+    eth_reset();       // M15: ethmac device + its synthetic-LAN backend.
+    net_reset();       // Harmless in test mode (the guest never touches
+                       // 0x92000000 there); wired unconditionally so the
+                       // device state is always defined.
+
     if (boot_mode) {
         virtio_reset();
         virtio9p_init();
@@ -152,6 +159,9 @@ int main(int argc, char **argv) {
     t0 = __time();
     while (1) {
         con_poll_and_feed();
+        net_poll();       // M15: drain queued ethernet replies + reconcile
+                          // the eth IRQ line here (between instructions),
+                          // never from inside a guest store -- see net.h.
         cpu_tick_check(64);
         batch = 64;
         if (boot_mode && maxsteps && (maxsteps - steps) < batch) batch = maxsteps - steps;

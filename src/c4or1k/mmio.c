@@ -1,13 +1,14 @@
 #include "mmio.h"
 #include "uart.h"
 #include "virtio.h"
+#include "eth.h"
 
 // Top-byte device selector, matching jor1k's own `devices[(addr>>24)&0xFF]`
 // switch-like dispatch table -- see mmio.h. Case labels must be plain
 // literals under c4lc (`case (UART_MMIO_BASE >> 24) & 0xFF:` doesn't
 // parse as a constant expression), so these mirror UART_MMIO_BASE/
 // VIRTIO_MMIO_BASE's top bytes by hand rather than computing them.
-enum { UART_TOP = 0x90, UART1_TOP = 0x96, VIRTIO_TOP = 0x97 };
+enum { UART_TOP = 0x90, UART1_TOP = 0x96, VIRTIO_TOP = 0x97, ETH_TOP = 0x92 };
 
 // Devices this project doesn't implement (ethernet, framebuffer,
 // touchscreen, keyboard, sound, RTC, ATA, ...) probe-and-fail
@@ -54,6 +55,7 @@ int mmio_read32(int addr) {
     top = (addr >> 24) & 0xFF;
     switch (top) {
     case VIRTIO_TOP: return virtio_read32(addr & 0xFFFFFF);
+    case ETH_TOP: return eth_read32(addr & 0xFFF);
     }
     warn_once("mmio_read32", top, addr);
     return 0;
@@ -64,6 +66,7 @@ void mmio_write32(int addr, int val) {
     top = (addr >> 24) & 0xFF;
     switch (top) {
     case VIRTIO_TOP: virtio_write32(addr & 0xFFFFFF, val); return;
+    case ETH_TOP: eth_write32(addr & 0xFFF, val); return;
     }
     warn_once("mmio_write32", top, addr);
 }

@@ -387,7 +387,7 @@ define c4lc_compile_par
 		|| { echo "c4lc: a parallel module compile failed"; exit 1; }
 endef
 C4OR1K_SRC  := src/c4or1k
-C4OR1K_MODS := mem mmio uart console bootfs virtio virtio9p cpu boot main
+C4OR1K_MODS := mem mmio uart console bootfs virtio virtio9p eth net cpu boot main
 
 # Parallel per-module c4lc compile. The modules are independent .c ->
 # .c4o objects, and a single c4lc invocation is slow, so run several
@@ -401,7 +401,7 @@ endef
 # with -D C4OR1K_JIT=1, which is what actually enables the driver-loop
 # hooks in cpu.c/mem.c/main.c -- without the define those compile to
 # exactly the M12 code, so the default and -mcisc images pay nothing.
-C4OR1K_JIT_MODS := mem mmio uart console bootfs virtio virtio9p jit cpu boot main
+C4OR1K_JIT_MODS := mem mmio uart console bootfs virtio virtio9p eth net jit cpu boot main
 C4OR1K_HDRS := $(C4OR1K_SRC)/cpu.h $(C4OR1K_SRC)/mem.h $(C4OR1K_SRC)/jit.h
 # -O (M7): ~4% faster on a real boot workload, byte-for-byte identical
 # output on the full M1-M4 regression suite and a real boot -- a small

@@ -373,8 +373,30 @@ test-c4bb: c4bb-images $(C4M) $(TESTS_C4R)
 # M0 (throughput sanity check) was a single main.c; from M1 the
 # decoder is real and lives in its own module, linked with c4rlink
 # the same way src/c4mp does it.
+
+# Per-module c4lc compiles are independent, and each takes a few
+# seconds, so run them in parallel. C4LC_JOBS defaults to nproc (this
+# box has 6 cores; ~11 c4or1k modules => roughly 2x wall-clock). Any
+# module's non-zero exit propagates through xargs (exit 123), failing
+# the recipe. $(1)=c4lc flags, $(2)=modules, $(3)=include dir,
+# $(4)=object-name prefix. The `{}` is xargs's per-module substitution.
+C4LC_JOBS ?= $(shell nproc 2>/dev/null || echo 4)
+define c4lc_compile_par
+	printf '%s\n' $(2) | xargs -P $(C4LC_JOBS) -I{} sh -c \
+		'./c4sp -c 16000000 src/c4sp/lisp/c4lc.lisp $(1) -c -I $(3) $(3)/{}.c $(4){}.c4o > /dev/null' \
+		|| { echo "c4lc: a parallel module compile failed"; exit 1; }
+endef
 C4OR1K_SRC  := src/c4or1k
 C4OR1K_MODS := mem mmio uart console bootfs virtio virtio9p cpu boot main
+
+# Parallel per-module c4lc compile. The modules are independent .c ->
+# .c4o objects, and a single c4lc invocation is slow, so run several
+# at once via xargs -P. C4LC_JOBS defaults to nproc.
+# $(1)=extra c4lc flags  $(2)=module list  $(3)=-I dir  $(4)=obj prefix
+C4LC_JOBS ?= $(shell nproc 2>/dev/null || echo 4)
+define c4lc_compile_par
+printf '%s\n' $(2) | xargs -P $(C4LC_JOBS) -I@@ sh -c './c4sp -c 16000000 src/c4sp/lisp/c4lc.lisp $(1) -c -I $(3) $(3)/@@.c $(4)@@.c4o >/dev/null'
+endef
 # M13: the JIT build carries one extra module and compiles everything
 # with -D C4OR1K_JIT=1, which is what actually enables the driver-loop
 # hooks in cpu.c/mem.c/main.c -- without the define those compile to
@@ -386,10 +408,7 @@ C4OR1K_HDRS := $(C4OR1K_SRC)/cpu.h $(C4OR1K_SRC)/mem.h $(C4OR1K_SRC)/jit.h
 # but real, zero-cost win worth keeping on by default given how many
 # guest instructions a full boot to a shell needs (see M6).
 c4or1k.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4OR1K_HDRS) $(patsubst %,$(C4OR1K_SRC)/%.c,$(C4OR1K_MODS))
-	for m in $(C4OR1K_MODS); do \
-		./c4sp -c 16000000 src/c4sp/lisp/c4lc.lisp -O -c -I $(C4OR1K_SRC) \
-			$(C4OR1K_SRC)/$$m.c .c4or1k_$$m.c4o > /dev/null || exit 1; \
-	done
+	$(call c4lc_compile_par,-O,$(C4OR1K_MODS),$(C4OR1K_SRC),.c4or1k_)
 	$(C4RLINK) $(patsubst %,.c4or1k_%.c4o,$(C4OR1K_MODS)) -o c4or1k.c4r
 	rm -f .c4or1k_*.c4o
 # M12: -mcisc build, emitting c4mp's LXI/SXI fused array-element
@@ -399,10 +418,7 @@ c4or1k.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4OR1K_HDRS) $(patsubst %,$(C4OR1K_SR
 # trap as illegal opcodes there); only c4mp can, see c4or1k-boot-cisc
 # below and docs/c4or1k-design.md's M12 section.
 c4or1k-cisc.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4OR1K_HDRS) $(patsubst %,$(C4OR1K_SRC)/%.c,$(C4OR1K_MODS))
-	for m in $(C4OR1K_MODS); do \
-		./c4sp -c 16000000 src/c4sp/lisp/c4lc.lisp -mcisc -O -c -I $(C4OR1K_SRC) \
-			$(C4OR1K_SRC)/$$m.c .c4or1k_cisc_$$m.c4o > /dev/null || exit 1; \
-	done
+	$(call c4lc_compile_par,-mcisc -O,$(C4OR1K_MODS),$(C4OR1K_SRC),.c4or1k_cisc_)
 	$(C4RLINK) $(patsubst %,.c4or1k_cisc_%.c4o,$(C4OR1K_MODS)) -o c4or1k-cisc.c4r
 	rm -f .c4or1k_cisc_*.c4o
 # M13: the JIT-enabled build (see C4OR1K_JIT_MODS above and jit.h's
@@ -410,10 +426,7 @@ c4or1k-cisc.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4OR1K_HDRS) $(patsubst %,$(C4OR
 # net-slower at current coverage -- run with `-jit` as the last
 # argument to enable translation at runtime).
 c4or1k-jit.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4OR1K_HDRS) $(C4OR1K_SRC)/jit.h $(patsubst %,$(C4OR1K_SRC)/%.c,$(C4OR1K_JIT_MODS))
-	for m in $(C4OR1K_JIT_MODS); do \
-		./c4sp -c 16000000 src/c4sp/lisp/c4lc.lisp -O -c -I $(C4OR1K_SRC) -D C4OR1K_JIT=1 \
-			$(C4OR1K_SRC)/$$m.c .c4or1k_jit_$$m.c4o > /dev/null || exit 1; \
-	done
+	$(call c4lc_compile_par,-O -D C4OR1K_JIT=1,$(C4OR1K_JIT_MODS),$(C4OR1K_SRC),.c4or1k_jit_)
 	$(C4RLINK) $(patsubst %,.c4or1k_jit_%.c4o,$(C4OR1K_JIT_MODS)) -o c4or1k-jit.c4r
 	rm -f .c4or1k_jit_*.c4o
 # M1's cross-checked test program (tests/m1_test.s -> .bin via

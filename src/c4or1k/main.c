@@ -23,7 +23,7 @@
 //
 // stdin is polled every loop iteration in all three modes via
 // con_poll_and_feed() -- cheaply, thanks to its own internal rate
-// gate (con.c) -- since test-mode programs never touch the UART and
+// gate (console.c) -- since test-mode programs never touch the UART and
 // the poll is a no-op for them regardless.
 //
 // M0's throughput result (main.c's earlier, single-file content) is
@@ -32,7 +32,7 @@
 #include "cpu.h"
 #include "mem.h"
 #include "uart.h"
-#include "con.h"
+#include "console.h"
 #include "boot.h"
 #include "virtio.h"
 #include "virtio9p.h"
@@ -122,7 +122,7 @@ int main(int argc, char **argv) {
     while (1) {
         // M8: con_poll_and_feed() moved onto cpu_tick_check's existing
         // once-per-64-instructions cadence instead of running every
-        // single instruction. Its own internal rate gate (con.c,
+        // single instruction. Its own internal rate gate (console.c,
         // CON_POLL_CYCLES) already skips the real read() syscall most
         // calls anyway, but the call+gate-check overhead itself was
         // still paid every guest instruction; batching it here saves

@@ -374,7 +374,7 @@ test-c4bb: c4bb-images $(C4M) $(TESTS_C4R)
 # decoder is real and lives in its own module, linked with c4rlink
 # the same way src/c4mp does it.
 C4OR1K_SRC  := src/c4or1k
-C4OR1K_MODS := mem mmio uart con bootfs virtio virtio9p cpu boot main
+C4OR1K_MODS := mem mmio uart console bootfs virtio virtio9p cpu boot main
 C4OR1K_HDRS := $(C4OR1K_SRC)/cpu.h $(C4OR1K_SRC)/mem.h
 # -O (M7): ~4% faster on a real boot workload, byte-for-byte identical
 # output on the full M1-M4 regression suite and a real boot -- a small
@@ -508,7 +508,7 @@ test-c4mp: c4m c4mp c4mp.c4r c4mp-smp0.c4r c4mp-smp1.c4r c4mp-deadlock.c4r $(TES
 # preprocessed, compiled to a .c4o object with full optimization, and
 # the kernel image is linked by c4rlink.
 C4IX_SRC  := src/c4ix
-C4IX_MODS := boot con va host sl4b task sched vfs sys c4ke loader init
+C4IX_MODS := boot console va host sl4b task sched vfs sys c4ke loader init
 c4ix.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/c4ix.h $(patsubst %,$(C4IX_SRC)/%.c,$(C4IX_MODS))
 	@# No gcc here: c4lc preprocesses the modules itself (L9). Each
 	@# object is byte-identical to the gcc -E path, pinned by test-c4lc.

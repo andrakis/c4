@@ -406,7 +406,7 @@ loading or assigning a whole struct is an error.
 - [x] Console input without stopping the machine (2026-08-05):
       a read on fd 0 blocks the HOST, and the host is the whole
       virtual machine -- every task stopped while one of them waited
-      for a keystroke. con.c now opens a second descriptor on the
+      for a keystroke. console.c now opens a second descriptor on the
       same terminal with O_NONBLOCK (c4sh's technique, and it works
       on both hosts: on a delayed pipe, native c4m spun two million
       times without blocking and the c4-hosted chain a quarter
@@ -421,7 +421,7 @@ loading or assigning a whole struct is an error.
       escalating nap (100us doubling to 20ms) and the machine sits at
       0% CPU at a prompt; and polling costs a host read() every time
       the scheduler asks, once per blocked reader per scheduling
-      decision, so con.c rate-limits the actual read to one per
+      decision, so console.c rate-limits the actual read to one per
       100k virtual cycles. Virtual cycles stop during the nap, which
       is why the idle loop calls con_wake() to reopen the gate.
       Two signal bugs surfaced with it, both real and both older

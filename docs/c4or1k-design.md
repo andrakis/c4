@@ -64,9 +64,9 @@ No `ioctl`/`termios` facility exists anywhere in c4/c4m: `READ`/
 guest just inherits whatever termios state fd 0 already has.
 `run-c4or1k.sh` puts the terminal in raw mode before exec'ing the
 emulator and restores it on exit via a trap — the only viable
-approach, and the same division of responsibility C4IX's `con.c` uses
+approach, and the same division of responsibility C4IX's `console.c` uses
 (cooked tty assumed, worked around at the OS layer). Console I/O
-(M3) will also reuse `con.c`'s non-blocking-second-fd pattern for
+(M3) will also reuse `console.c`'s non-blocking-second-fd pattern for
 stdin, since a blocking `read()` on fd 0 would freeze the whole
 single-threaded VM process while waiting for a keystroke.
 
@@ -223,8 +223,8 @@ DLL/DLH pair, the CTI/THRI/MSI interrupt-priority order) at MMIO base
 `0x90000000`, IRQ line 2 (both confirmed against jor1k's `system.js`).
 `mmio.c` is a minimal top-byte dispatcher (`mem.c`'s `ram_l*`/`ram_s*`
 now check bit 31 of the address and route there instead of into
-`ram[]`) — one device today, shaped to add more at M5. `con.c` is
-`src/c4ix/con.c`'s non-blocking-second-fd pattern verbatim (same
+`ram[]`) — one device today, shaped to add more at M5. `console.c` is
+`src/c4ix/console.c`'s non-blocking-second-fd pattern verbatim (same
 reason: a blocking `read(0, ...)` would freeze this single-threaded
 VM), polled every `main.c` loop iteration — cheaply, since the gate
 inside `con_poll_and_feed()` itself rate-limits the actual host
@@ -427,7 +427,7 @@ against a c4m-level `gdb` backtrace, not by inspection:**
    parameterizing `uart.c` (all per-UART state as `int[2]` arrays, a
    `unit` argument threaded through every function) rather than
    duplicating the module — unit 1 has no real byte source (there's
-   only one host terminal, wired to unit 0 via `con.c`), so its own
+   only one host terminal, wired to unit 0 via `console.c`), so its own
    `getty` just blocks forever exactly like a real unconnected serial
    port would, which is the correct, harmless outcome.
 
@@ -472,7 +472,7 @@ before a flush.
 
 **One remaining rough edge, not yet fixed:** the console's own
 `::respawn:-login -f user` entry (ttyS0, this project's *only* console
-wired to a real host stdin via `con.c`) hadn't reached its own login
+wired to a real host stdin via `console.c`) hadn't reached its own login
 prompt by the time a piped test command arrived in the same run that
 reached the ttyS1 prompt above — `ttyS1`'s root login happened to get
 scheduled first, and ttyS1 has no real byte source by design (see M5),
@@ -553,7 +553,7 @@ loop for this pass:
 - **`con_poll_and_feed()` moved off the per-instruction hot path.**
   Found while re-reading `main.c`'s driver loop for this milestone, not
   from fastcpu.js: it was called once per *guest instruction* --
-  cheaply, thanks to its own internal rate gate (`con.c`'s
+  cheaply, thanks to its own internal rate gate (`console.c`'s
   `CON_POLL_CYCLES`), but the call+gate-check overhead itself was still
   paid every instruction regardless of whether the gate was open. Moved
   onto `cpu_tick_check`'s existing once-per-64-instructions cadence;
@@ -590,6 +590,84 @@ speedup `fence`-based batching would give (that's still unbuilt), but
 real, measured, and free of the correctness risk that made the full
 fastcpu.js port a same-session no-go the first time through this
 milestone.
+
+## M9 — where next: three directions, investigated, none started
+
+After M8, a boot to the interactive shell (§M6) still takes on the
+order of 5-25 minutes of wall time depending how far past the shell
+prompt the run is left going, prompting a look at whether to keep
+pushing on c4or1k specifically, change the guest ISA, or abandon CPU
+emulation altogether in favor of a native kernel. Grounded in real
+numbers rather than intuition:
+
+**The baseline.** c4m's own raw ceiling is ~4.4M VM-instructions/sec.
+Post-M8, c4or1k sustains ~483K-500K guest OR1000 instructions/sec,
+i.e. each emulated guest instruction costs **~9-10 c4m VM instructions**
+on average (fetch, decode, dispatch, execute, writeback) -- already
+tight, which is consistent with M8 only finding 7.6%: there wasn't
+much bookkeeping fat left to cache away.
+
+**Option A -- finish the fastcpu.js fence-based rewrite (§M8).**
+Fencing only removes the per-instruction exception/TLB-check slice of
+that ~9-10 op budget, not the fetch/decode/execute core, which a
+straight-line batch doesn't shrink. Realistic ceiling: perhaps another
+1.3-2x, for a rewrite previously scoped as comparable in size to the
+whole M1 CPU port. Even at 2x this halves boot time, not order-of-
+magnitude -- and it's hard-capped by c4m's own 4.4M-instr/sec ceiling
+regardless of how cpu_step is structured. Worth doing eventually; won't
+turn minutes into seconds.
+
+**Option B -- target a CISC guest ISA (e.g. x86) instead of OR1000.**
+The intuition -- fewer, denser CISC instructions mean less total guest-
+instruction count for the same boot workload -- is real but outweighed
+by the other side of the ledger in a non-JIT interpreter: x86 code
+density buys maybe 1.5-3x fewer static instructions over an equivalent
+RISC build, but x86's variable-length, prefix-laden decode costs
+several times more c4m VM-ops per instruction to interpret than
+OR1000's fixed 32-bit format does today. Likely a wash at best,
+plausibly a net loss. Separately, the implementation cost dwarfs what
+c4or1k took: safecpu.js was ~1,100 lines and this project was still a
+full multi-milestone build; a Linux-capable x86 core plus its own
+PC-platform device set (8259 PIC, 8253 PIT, real-mode boot sequence,
+etc. -- none of which exist anywhere in this repo yet) is a
+substantially larger, higher-risk redo for uncertain-to-negative
+payoff. **Not recommended.**
+
+**Option C -- a Tilck-style native kernel instead of CPU emulation.**
+This is the one with real payoff, and this repo already has most of
+the infrastructure: `docs/c4ix-design.md`'s C4IX is a from-scratch OS
+compiled by c4lc -- protected mode, trap-based syscalls
+(open/read/write/spawn/wait/pipe/dup2/exit/...), a real interactive
+shell with pipelines and redirection -- running as *native* c4m code,
+paying zero CPU-emulation tax. Measured (§7 of that doc): C4IX boots to
+a userland shell in ~343K VM cycles, well under a tenth of a second at
+c4m's raw throughput -- roughly four to five orders of magnitude faster
+than c4or1k's Linux boot, because it isn't paying an emulation tax *or*
+real Linux's much heavier device/driver init at all.
+
+The catch is real and worth stating precisely, because "Tilck-style"
+undersells it: Tilck's actual trick is running *unmodified x86 ELF
+binaries* (real busybox, real bash) under a much simpler kernel -- the
+CPU still has to execute that real x86 machine code somehow (Tilck
+runs on real or emulated x86 hardware). c4m has no such escape hatch:
+it only executes c4lc-compiled code, so nothing built for x86/ARM/
+OR1000 can run on it unmodified regardless of kernel design. A "Tilck
+for C4" gets syscall-ABI compatibility, not binary compatibility -- a
+busybox-equivalent userland would need its C source recompiled by
+c4lc, and would likely need real porting work rather than a drop-in
+recompile, since real busybox's build system, macro use, and libc
+surface go beyond c4lc's L7/L8 dialect (`docs/c4lc-design.md`) as it
+stands today.
+
+**Where this leaves it.** Option C is the highest-payoff direction and
+is mostly a matter of widening C4IX's existing syscall/libc surface
+rather than a from-scratch project. Option A remains worth finishing
+on its own terms (it preserves "boots a real, unmodified vmlinux.bin,"
+which C4IX's approach cannot ever claim) but has a hard ceiling. Option
+B is not recommended. None of the three has been started as of this
+write-up -- this section is scoping only, matching the house style
+that M8's own investigation pass set (document precisely, implement
+only once scoped and asked for).
 
 ## Related future work (not this project)
 

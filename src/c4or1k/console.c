@@ -1,11 +1,11 @@
-#include "con.h"
+#include "console.h"
 #include "uart.h"
 
 // O_NONBLOCK is 0x800 on Linux; no header defines it for this dialect
-// (same constant src/c4ix/con.c uses, for the same reason).
+// (same constant src/c4ix/console.c uses, for the same reason).
 enum { CON_O_RDONLY = 0, CON_O_NONBLOCK = 0x800 };
 enum { CON_BUF = 256 };
-enum { CON_POLL_CYCLES = 100000 }; // matches c4ix/con.c's gate interval
+enum { CON_POLL_CYCLES = 100000 }; // matches c4ix/console.c's gate interval
 
 int con_fd;
 int con_eof;

@@ -177,7 +177,7 @@ int   host_type();
 int   host_has(int bit);
 char *host_name();
 
-// ---- console (con.c) ----
+// ---- console (console.c) ----
 // All kernel output goes through here; the only opcode used is PUTC,
 // which every host implements. kprintf lines are atomic: the body
 // runs inside sched_lock, so preemption never interleaves them.

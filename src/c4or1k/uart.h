@@ -12,7 +12,7 @@
 // and instead hot-loops polling registers forever, burning the whole
 // instruction budget before ttyS0's own getty/login ever gets a
 // chance to run. Unit 1 never receives real host input (there's only
-// one real terminal, wired to unit 0 via con.c) -- its getty just
+// one real terminal, wired to unit 0 via console.c) -- its getty just
 // blocks forever, exactly like a real unconnected serial port would.
 //
 // Byte-width registers only (l.lbz/l.sb from the guest): jor1k's

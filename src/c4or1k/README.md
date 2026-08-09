@@ -50,7 +50,7 @@ SPRs, the SR flag register, exception delivery, and DTLB/ITLB miss +
 permission checks (not a page-table walk -- that's the guest kernel's
 job). `uart.c` (two units -- ttyS0 is the real console, ttyS1 has no
 host backing and just blocks forever like an unconnected port),
-`mmio.c`, `con.c` make it interactive. `boot.c` loads a raw kernel
+`mmio.c`, `console.c` make it interactive. `boot.c` loads a raw kernel
 image and patches its DTB's memory-size property. `bootfs.c` +
 `virtio.c` + `virtio9p.c` are the 9p root filesystem -- an in-memory
 inode tree loaded from `tools/mkbootfs.js`'s offline flattening of

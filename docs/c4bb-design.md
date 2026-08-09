@@ -82,7 +82,7 @@ unchanged by `make test-c4ix`).
 
 fd 0 is the blocking line-buffered keyboard (a cooked tty); opening
 `/dev/stdin` gives a byte fd where empty reads return -1 exactly like
-Linux O_NONBLOCK — so C4IX's console (src/c4ix/con.c) works unmodified.
+Linux O_NONBLOCK — so C4IX's console (src/c4ix/console.c) works unmodified.
 A blocking READ that would wait returns -2 to the microcode, which
 rewinds PC one word and retries: the machine keeps taking cycle
 interrupts while a task waits for input, so the OS keeps scheduling

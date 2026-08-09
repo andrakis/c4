@@ -8,7 +8,7 @@
 # already has. Putting fd 0 in raw mode is therefore an *external*,
 # host-side concern -- this script -- not something c4or1k itself can
 # or should do. This is the same division of responsibility as
-# src/c4ix/con.c, which assumes a cooked tty on fd 0 by default and
+# src/c4ix/console.c, which assumes a cooked tty on fd 0 by default and
 # works around it at the OS layer (non-blocking re-open), not the VM
 # layer.
 #

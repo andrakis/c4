@@ -136,7 +136,7 @@ cp src/c4ke/include/service.h $DISK/
 # ---- C4IX and its userland ------------------------------------------
 # modules compiled by 32-bit c4lc (its own preprocessor), linked by
 # the 32-bit c4rlink; userland links against libc4ix
-C4IX_MODS="boot con va host sl4b task sched vfs sys c4ke loader init"
+C4IX_MODS="boot console va host sl4b task sched vfs sys c4ke loader init"
 C4IX_USER="hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt"
 if [ ! -f $OUT/c4ix32.c4r ] || [ src/c4ix/sched.c -nt $OUT/c4ix32.c4r ] || \
    [ src/c4ix/c4ix.h -nt $OUT/c4ix32.c4r ] || [ src/c4ix/init.c -nt $OUT/c4ix32.c4r ]; then

@@ -591,7 +591,7 @@ real, measured, and free of the correctness risk that made the full
 fastcpu.js port a same-session no-go the first time through this
 milestone.
 
-## M9 — where next: three directions, investigated, none started
+## M9 — where next: three directions, one implemented
 
 After M8, a boot to the interactive shell (§M6) still takes on the
 order of 5-25 minutes of wall time depending how far past the shell
@@ -607,15 +607,50 @@ on average (fetch, decode, dispatch, execute, writeback) -- already
 tight, which is consistent with M8 only finding 7.6%: there wasn't
 much bookkeeping fat left to cache away.
 
-**Option A -- finish the fastcpu.js fence-based rewrite (§M8).**
-Fencing only removes the per-instruction exception/TLB-check slice of
-that ~9-10 op budget, not the fetch/decode/execute core, which a
-straight-line batch doesn't shrink. Realistic ceiling: perhaps another
-1.3-2x, for a rewrite previously scoped as comparable in size to the
-whole M1 CPU port. Even at 2x this halves boot time, not order-of-
-magnitude -- and it's hard-capped by c4m's own 4.4M-instr/sec ceiling
-regardless of how cpu_step is structured. Worth doing eventually; won't
-turn minutes into seconds.
+**Option A -- keep optimizing c4or1k. Implemented (batching), not
+implemented (the literal fastcpu.js fence rewrite).** The original
+scoping here assumed the payoff was in porting fastcpu.js's fence-at-
+jump/page-boundary scheme, which amortizes per-instruction exception/
+TLB-check *logic*. Revisiting that assumption before building it: that
+scheme was designed for jor1k's V8 host, where function calls are
+nearly free after JIT and per-instruction branch logic is what's left
+to cut. c4m has no JIT -- calls cost real bytecode overhead on every
+invocation -- so the more relevant cost for *this* host turned out to
+be call/loop overhead, not per-instruction exception-check logic (M8's
+lookup caches already made that cheap). `cpu_step(halt_pc)` (one
+instruction per call) became `cpu_run_batch(halt_pc, max_batch, *ran)`
+(cpu.c/cpu.h): the entire per-instruction switch now runs inside a
+`for` loop within one function call, executing up to `max_batch`
+instructions (main.c passes 64, matching the cadence already
+established for interrupt/tick delivery in M8) before returning to
+main.c's driver loop. Every mid-switch `return 0` (branch taken,
+`l.rfe`, `l.mtspr`) became `continue`; the five "unimplemented"
+fault paths set a `fault` flag and `break` out to a single post-switch
+check, since c4lc has no labeled break/goto to exit nested switches
+directly (confirmed via `c4lc-gen.lisp`: `continue` inside a `switch`
+correctly targets the enclosing `for` loop, not the switch, since
+`g:switchstmt` only saves/restores `g:brk`, not `g:cont` -- verified
+against the compiler source before relying on it, not assumed). This
+is a smaller, safer change than fastcpu.js's fence scheme: it doesn't
+touch instruction semantics, delay-slot handling, or TLB/exception
+logic at all, only where the driver-loop boundary falls.
+
+**Verified**: same standard as M8 -- full `c4or1k-m1-check`/`m2-check`/
+`m3-check`/`m3-int-check` pass unchanged, and a 60M-instruction `-b`
+boot run is byte-for-byte identical to the pre-M9 (post-M8) boot log.
+**Measured**: 124.3s (M8) to 119.85s (M9) on the same 60M-instruction
+run -- **~3.6% faster**, smaller than hoped (the loop/call overhead
+this removes turned out to be a smaller slice of the ~9-10 op budget
+than expected), cumulative ~11% faster than pre-M8. The literal
+fastcpu.js fence-at-jump/page-boundary rewrite -- restructuring
+`cpu_step` around basic blocks rather than a fixed instruction-count
+batch, so it can skip TLB/exception rechecks specifically at
+control-flow edges -- remains unimplemented; given how modest M9's
+gain was, and that the reasoning above suggests its target (exception-
+check logic, already cheap post-M8) isn't where this host's remaining
+cost lives, it's not obviously worth its verification burden either.
+Hard-capped regardless by c4m's own ~4.4M-instr/sec ceiling -- no
+amount of restructuring `cpu_run_batch` beats that.
 
 **Option B -- target a CISC guest ISA (e.g. x86) instead of OR1000.**
 The intuition -- fewer, denser CISC instructions mean less total guest-
@@ -659,15 +694,14 @@ recompile, since real busybox's build system, macro use, and libc
 surface go beyond c4lc's L7/L8 dialect (`docs/c4lc-design.md`) as it
 stands today.
 
-**Where this leaves it.** Option C is the highest-payoff direction and
-is mostly a matter of widening C4IX's existing syscall/libc surface
-rather than a from-scratch project. Option A remains worth finishing
-on its own terms (it preserves "boots a real, unmodified vmlinux.bin,"
-which C4IX's approach cannot ever claim) but has a hard ceiling. Option
-B is not recommended. None of the three has been started as of this
-write-up -- this section is scoping only, matching the house style
-that M8's own investigation pass set (document precisely, implement
-only once scoped and asked for).
+**Where this leaves it.** Option A's batching landed (~11% cumulative
+over M8, real but modest); the literal fastcpu.js fence rewrite is
+deliberately not attempted for the reasons above. Option C remains the
+highest-payoff direction and is mostly a matter of widening C4IX's
+existing syscall/libc surface rather than a from-scratch project --
+next up when picked up. Option A still preserves "boots a real,
+unmodified vmlinux.bin," which C4IX's approach cannot ever claim, so
+it's not superseded, just capped. Option B remains not recommended.
 
 ## Related future work (not this project)
 

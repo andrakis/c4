@@ -377,15 +377,27 @@ void cpu_dump() {
 // after re-testing a full boot against the real fix with this function
 // back to switch/case: clean, no crash, same result as if/else. See
 // docs/c4or1k-design.md's M5 section for the full bisection story.
-int cpu_step(int halt_pc) {
-    int ins, opcode, rd, ra, rb, rA, rB, imm, simm, func, jump, i, result, addr, phys;
+//
+// M9: this was cpu_step(halt_pc), executing exactly one instruction
+// per call. The body below is unchanged per-instruction -- every
+// mid-switch `return 0` (branch taken, l.rfe, l.mtspr) became
+// `continue` to the next batch iteration instead, and the four
+// sub-switch "unimplemented func" paths plus the outer "unimplemented
+// opcode" path now set `fault` and break out to a single post-switch
+// check instead of returning 2 directly, since a fault must end the
+// whole batch (not just this switch), and c4lc has no labeled
+// break/goto to jump out of nested switches directly. See cpu.h for
+// why batching this way, not fastcpu.js's fence-at-jump scheme.
+int cpu_run_batch(int halt_pc, int max_batch, int *ran) {
+    int bn, fault, ins, opcode, rd, ra, rb, rA, rB, imm, simm, func, jump, i, result, addr, phys;
 
-    if (pc == halt_pc) return 1;
+    for (bn = 0; bn < max_batch; ++bn) {
+    if (pc == halt_pc) { *ran = bn; return 1; }
 
     ins = fetch_ins(pc << 2);
     if (ins == -1) {
         pc = nextpc; nextpc = pc + 1;
-        return 0;
+        continue;
     }
 
     opcode = (ins >> 26) & 0x3F;
@@ -395,29 +407,30 @@ int cpu_step(int halt_pc) {
     rA = r[ra];
     rB = r[rb];
     imm = sext(ins, 16);
+    fault = 0;
 
     switch (opcode) {
     case 0x00:                         // l.j
         jump = pc + sext(ins, 26);
         pc = nextpc; nextpc = jump; delayedins = 1;
-        return 0;
+        continue;
     case 0x01:                         // l.jal
         r[9] = sext((nextpc << 2) + 4, 32);
         jump = pc + sext(ins, 26);
         pc = nextpc; nextpc = jump; delayedins = 1;
-        return 0;
+        continue;
     case 0x03:                         // l.bnf
         if (!SR_F) {
             jump = pc + sext(ins, 26);
             pc = nextpc; nextpc = jump; delayedins = 1;
-            return 0;
+            continue;
         }
         break;
     case 0x04:                         // l.bf
         if (SR_F) {
             jump = pc + sext(ins, 26);
             pc = nextpc; nextpc = jump; delayedins = 1;
-            return 0;
+            continue;
         }
         break;
     case 0x05:                         // l.nop
@@ -433,16 +446,16 @@ int cpu_step(int halt_pc) {
         nextpc = cpu_get_spr(SPR_EPCR_BASE) >> 2;
         pc = nextpc; nextpc = pc + 1; delayedins = 0;
         cpu_set_flags(cpu_get_spr(SPR_ESR_BASE));
-        return 0;
+        continue;
     case 0x11:                         // l.jr
         jump = rB >> 2;
         pc = nextpc; nextpc = jump; delayedins = 1;
-        return 0;
+        continue;
     case 0x12:                         // l.jalr
         r[9] = sext((nextpc << 2) + 4, 32);
         jump = rB >> 2;
         pc = nextpc; nextpc = jump; delayedins = 1;
-        return 0;
+        continue;
     case 0x1B:                         // l.lwa
         addr = rA + imm;
         phys = dtlb_lookup(addr, 0);
@@ -501,7 +514,7 @@ int cpu_step(int halt_pc) {
         case 1: r[rd] = uval(rA) >> (ins & 0x1F); break;       // srli (logical; safecpu.js's own comment mislabels this "rori" -- the code is `>>>`, see cpu.h)
         case 2: r[rd] = rA >> (ins & 0x1F); break;             // srai (arithmetic -- c4lc's native >> is exactly this)
         default:
-            printf("cpu_step: unimplemented 0x2E func at pc=%d (ins=0x%x)\n", pc, ins); cpu_dump(); return 2;
+            printf("cpu_step: unimplemented 0x2E func at pc=%d (ins=0x%x)\n", pc, ins); cpu_dump(); fault = 1; break;
         }
         break;
     case 0x2F:                         // l.sfXXi
@@ -518,14 +531,14 @@ int cpu_step(int halt_pc) {
         case 0xc: SR_F = (rA < imm); break;
         case 0xd: SR_F = (rA <= imm); break;
         default:
-            printf("cpu_step: unimplemented 0x2F func at pc=%d (ins=0x%x)\n", pc, ins); cpu_dump(); return 2;
+            printf("cpu_step: unimplemented 0x2F func at pc=%d (ins=0x%x)\n", pc, ins); cpu_dump(); fault = 1; break;
         }
         break;
     case 0x30:                         // l.mtspr
         simm = ((ins >> 10) & 0xF800) | (ins & 0x7FF); // NOT sign-extended: an SPR-index component, not a byte offset
         pc = nextpc; nextpc = pc + 1; delayedins = 0;
         cpu_set_spr(rA | simm, rB);
-        return 0;
+        continue;
     case 0x33:                         // l.swa
         simm = sext(((ins >> 10) & 0xF800) | (ins & 0x7FF), 16);
         addr = rA + simm;
@@ -604,7 +617,7 @@ int cpu_step(int halt_pc) {
             if (!SR_CY) r[rd] = sext(rA / rB, 32);
             break;
         default:
-            printf("cpu_step: unimplemented 0x38 func at pc=%d (ins=0x%x)\n", pc, ins); cpu_dump(); return 2;
+            printf("cpu_step: unimplemented 0x38 func at pc=%d (ins=0x%x)\n", pc, ins); cpu_dump(); fault = 1; break;
         }
         break;
     case 0x39:                         // l.sfXX
@@ -621,16 +634,21 @@ int cpu_step(int halt_pc) {
         case 0xc: SR_F = (rA < rB); break;
         case 0xd: SR_F = (rA <= rB); break;
         default:
-            printf("cpu_step: unimplemented 0x39 func at pc=%d (ins=0x%x)\n", pc, ins); cpu_dump(); return 2;
+            printf("cpu_step: unimplemented 0x39 func at pc=%d (ins=0x%x)\n", pc, ins); cpu_dump(); fault = 1; break;
         }
         break;
     default:
         printf("cpu_step: unimplemented opcode 0x%x at pc=%d (ins=0x%x)\n", opcode, pc, ins);
         cpu_dump();
-        return 2;
+        fault = 1;
     }
+
+    if (fault) { *ran = bn; return 2; }
 
     r[0] = 0; // nothing here writes r0; kept explicit, matches M0
     pc = nextpc; nextpc = pc + 1; delayedins = 0;
+    }
+
+    *ran = max_batch;
     return 0;
 }

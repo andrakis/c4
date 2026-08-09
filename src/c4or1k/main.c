@@ -1,5 +1,7 @@
 // c4or1k test harness, console-mode, AND boot-mode entry point. All
-// three drive the same cpu_step(halt_pc) loop:
+// three drive the same cpu_run_batch(halt_pc, batch, &ran) loop (see
+// cpu.h -- M9 folded what used to be a one-instruction-per-call
+// cpu_step into a 64-instructions-per-call batch runner):
 //
 //   - test mode (default): loads a flat binary of big-endian 32-bit
 //     words (tools/asm.py's "bin" mode) at guest address 0. The
@@ -14,17 +16,17 @@
 //   - boot mode (-b [maxsteps]): loads a raw kernel image via
 //     boot.c's load_kernel/patch_kernel instead, starts execution at
 //     the real OR1000 reset vector (0x100) instead of address 0, and
-//     runs with no natural halt address (nwords = -1, so cpu_step's
-//     `pc == halt_pc` check never fires) -- a kernel doesn't fall off
-//     the end of its own image. maxsteps (0 = unbounded) exists
-//     because there's nothing else to bound it with yet: no panic
-//     detection, just a instruction-count cutoff for observing how
-//     far a boot attempt gets.
+//     runs with no natural halt address (nwords = -1, so
+//     cpu_run_batch's `pc == halt_pc` check never fires) -- a kernel
+//     doesn't fall off the end of its own image. maxsteps (0 =
+//     unbounded) exists because there's nothing else to bound it with
+//     yet: no panic detection, just a instruction-count cutoff for
+//     observing how far a boot attempt gets.
 //
-// stdin is polled every loop iteration in all three modes via
-// con_poll_and_feed() -- cheaply, thanks to its own internal rate
-// gate (console.c) -- since test-mode programs never touch the UART and
-// the poll is a no-op for them regardless.
+// stdin is polled once per batch (every 64 instructions) in all three
+// modes via con_poll_and_feed() -- cheaply, thanks to its own internal
+// rate gate (console.c) -- since test-mode programs never touch the
+// UART and the poll is a no-op for them regardless.
 //
 // M0's throughput result (main.c's earlier, single-file content) is
 // preserved in docs/c4or1k-design.md and README.md.
@@ -87,7 +89,7 @@ int str_to_int(char *s) {
 
 int main(int argc, char **argv) {
     char *path, *bootfs_idx_path, *bootfs_blob_path;
-    int nwords, status, steps, t0, t1, dt_ms, ips, run_mode, boot_mode, maxsteps, length;
+    int nwords, status, steps, t0, t1, dt_ms, ips, run_mode, boot_mode, maxsteps, length, batch, ran;
 
     path = argc > 1 ? argv[1] : "src/c4or1k/tests/m1_test.bin";
     run_mode = (argc > 2 && argv[2][0] == '-' && argv[2][1] == 'r');
@@ -117,23 +119,27 @@ int main(int argc, char **argv) {
         if (nwords < 0) return 1;
     }
 
+    // M9: cpu_run_batch replaces the old one-instruction-per-call
+    // cpu_step, so this loop now runs once per BATCH (64 instructions,
+    // matching the cadence M8 already established for
+    // con_poll_and_feed/cpu_tick_check -- see cpu.h) rather than once
+    // per guest instruction. That collapses this loop's own iteration
+    // overhead (status check, step counting, maxsteps check) and the
+    // cpu_step call/return itself down to once per 64 instructions
+    // instead of once per instruction. batch is shortened only for
+    // the final iteration under a maxsteps cutoff, so "stopped after
+    // N instructions (-b limit)" still reports exactly N, never an
+    // overshoot past the requested budget.
     steps = 0;
     t0 = __time();
     while (1) {
-        // M8: con_poll_and_feed() moved onto cpu_tick_check's existing
-        // once-per-64-instructions cadence instead of running every
-        // single instruction. Its own internal rate gate (console.c,
-        // CON_POLL_CYCLES) already skips the real read() syscall most
-        // calls anyway, but the call+gate-check overhead itself was
-        // still paid every guest instruction; batching it here saves
-        // that on the other 63/64 iterations without changing polling
-        // latency in practice (64 guest instructions is far below the
-        // ~1000+ guest instructions the internal gate already allows
-        // between actual reads).
-        if (!(steps & 63)) { con_poll_and_feed(); cpu_tick_check(64); }
-        status = cpu_step(nwords);
+        con_poll_and_feed();
+        cpu_tick_check(64);
+        batch = 64;
+        if (boot_mode && maxsteps && (maxsteps - steps) < batch) batch = maxsteps - steps;
+        status = cpu_run_batch(nwords, batch, &ran);
+        steps = steps + ran;
         if (status != 0) break;
-        ++steps;
         if (boot_mode && maxsteps && steps >= maxsteps) {
             printf("c4or1k: stopped after %d instructions (-b limit)\n", steps);
             break;

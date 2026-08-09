@@ -125,15 +125,36 @@ void cpu_clear_interrupt(int line);
 // getting stuck retry-polling an unimplemented ATA controller.
 void cpu_tick_check(int clockspeed);
 
-// Runs one instruction. Returns 0 to keep running, 1 once pc reaches
-// halt_pc (without executing it), 2 if the fetched opcode (or SPR
-// group, or TLB LRU state) isn't implemented yet (state has already
-// been dumped to stdout when this happens). A real DTLB/ITLB miss or
-// permission fault is NOT this -- cpu_exception() already redirected
-// pc/nextpc to the vector, and cpu_step returns 0 normally, matching
-// jor1k's own "fault -> deliver exception -> fall through to the
-// normal pc advance" control flow.
-int cpu_step(int halt_pc);
+// Runs up to max_batch instructions in a single call (formerly
+// cpu_step(halt_pc), one instruction per call -- renamed since it's no
+// longer one-at-a-time), writing the number actually executed to
+// *ran (less than max_batch only if halt_pc or a fault ended the
+// batch early). Per-instruction semantics are unchanged from before
+// batching: return 0 to keep running (*ran == max_batch, the batch
+// completed without stopping early), 1 once pc reaches halt_pc
+// (without executing it, *ran instructions ran before that), 2 if the
+// fetched opcode (or SPR group, or TLB LRU state) isn't implemented
+// yet (state has already been dumped to stdout when this happens). A
+// real DTLB/ITLB miss or permission fault is NOT a batch-ending event
+// -- cpu_exception() already redirected pc/nextpc to the vector and
+// the loop keeps going, matching jor1k's own "fault -> deliver
+// exception -> fall through to the normal pc advance" control flow.
+//
+// Batching (see docs/c4or1k-design.md's M9/"Option A" section) exists
+// because c4m has no JIT: every call from main.c's driver loop pays
+// real function-call overhead, and main.c's own per-iteration
+// bookkeeping (status check, step counting, maxsteps check) is paid
+// per call too. This is NOT a port of fastcpu.js's fence-at-jump/
+// page-boundary scheme -- that scheme amortizes per-instruction
+// TLB/exception *logic*, which is cheap here after M8's lookup caches
+// and isn't the dominant cost in an interpreter with real call
+// overhead. Instead this collapses the driver-loop's own overhead by
+// running a whole batch inside one call, stopping every max_batch
+// instructions so interrupt/tick-timer delivery latency (main.c calls
+// con_poll_and_feed/cpu_tick_check between batches) is unchanged from
+// before batching -- main.c passes 64, matching the cadence that
+// already governed tick/poll timing pre-M9.
+int cpu_run_batch(int halt_pc, int max_batch, int *ran);
 
 void cpu_reset();
 void cpu_dump();

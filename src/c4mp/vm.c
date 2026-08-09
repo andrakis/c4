@@ -624,6 +624,26 @@ int c4_run(struct c4_cpu * RESTRICT c, int quantum) {
             a = c4_cpu_ipi(*sp);
             break;
 
+        // ---- CISC: fused array-element load/store (M12, -mcisc) ----
+        //
+        // Not syscalls -- no ADJ follows these, unlike CPUS/CAS/etc.
+        // above. c4lc emits them directly in place of the IMM/PSH/
+        // SHL/ADD/LI (or .../ADD/PSH/../SI) sequence indexing a
+        // known-8-byte-element array otherwise costs, only when
+        // -mcisc is given. See c4lc-gen.lisp's g:indexload-cisc/
+        // g:indexstore-cisc for the exact codegen shape each expects.
+        case LXI:
+            // a = *(int*)(base + index*8); base = *sp++ (popped),
+            // index = a (already in the accumulator).
+            a = *(int *)(*sp++ + a * 8);
+            break;
+        case SXI:
+            // *(int*)(base + index*8) = a (value already in the
+            // accumulator); base = sp[1], index = sp[0], both popped.
+            *(int *)(sp[1] + sp[0] * 8) = a;
+            sp += 2;
+            break;
+
         default:
             // Everything unknown becomes a trap, which is the whole
             // custom-opcode mechanism: a kernel claims a number and

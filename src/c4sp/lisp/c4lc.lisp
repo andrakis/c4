@@ -18,6 +18,7 @@
 	(load "c4r.lisp")
 	(define Opt false)
 	(define Obj false)
+	(define Cisc false)        ;; -mcisc: emit c4mp-only fused opcodes (M12)
 	(define Pp false)          ;; -P: preprocess internally (L9)
 	(define Paths nil)
 	(define PreDefs nil)
@@ -28,6 +29,18 @@
 			(begin (set! Opt true) (set! Args (tail Args)) (next flags))
 		(if (= (+ "" (head Args)) "-c")
 			(begin (set! Obj true) (set! Args (tail Args)) (next flags))
+		;; -mcisc: emit LXI/SXI (and any future fused opcodes) for
+		;; array-of-8-byte-element indexing instead of the generic
+		;; IMM/PSH/SHL/ADD/LI-or-SI sequence. Only c4mp understands
+		;; them -- c4m traps them as an illegal opcode (see c4mp.h) --
+		;; so code compiled with this flag must be run under c4mp, not
+		;; c4m. Off by default: this is why the flag exists at all,
+		;; rather than emitting them unconditionally the way c4mp's
+		;; own processor opcodes are (those are explicit function
+		;; calls a program opts into; LXI/SXI would otherwise silently
+		;; change every array access in every c4lc-compiled program).
+		(if (= (+ "" (head Args)) "-mcisc")
+			(begin (set! Cisc true) (set! Args (tail Args)) (next flags))
 		;; -P runs c4lc's own preprocessor instead of expecting a
 		;; source that gcc -E has already been through. -I adds an
 		;; include directory, -D predefines a macro.
@@ -45,12 +58,13 @@
 				(set! PreDefs (+ PreDefs (list (+ "" (index Args 1)))))
 				(set! Args (tail (tail Args)))
 				(next flags))
-		nil))))))))
+		nil)))))))))
 	(flags)
 	(if (< (length Args) 2) (error "usage: c4lc.lisp [-O] [-c] in.c out"))
 	(define In (head Args))
 	(define OutName (index Args 1))
 	(set! gen:objmode Obj)
+	(set! gen:cisc Cisc)
 	(define Ast (parse:program
 		(if Pp
 			(begin

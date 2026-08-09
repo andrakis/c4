@@ -224,7 +224,11 @@ void c4cc_init_instructions() {
 	// below is deliberately NOT extended: c4cc targets c4m, which does
 	// not have these, and c4lc is the compiler that emits them.
 	"CPUI,CPUN,CPUS,CPUH,"
-	"CAS ,XCHG,FADD,CWAI,CWAK,IPI ,";
+	"CAS ,XCHG,FADD,CWAI,CWAK,IPI ,"
+	// M12: c4mp-only fused array-element load/store, -mcisc only.
+	// Same reason as the processor opcodes above -- c4rdump indexes
+	// this table with no bounds check.
+	"LXI ,SXI ,";
 	c4cc_keywords =
 		"static extern __attribute__ constructor destructor "     // Ignored by c4m
 		"char else enum if int return sizeof for continue while " // Keywords

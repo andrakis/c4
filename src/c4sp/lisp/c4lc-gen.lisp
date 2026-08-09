@@ -296,6 +296,61 @@
 		(g:emit '(ADD))
 		(set! g:ty (- t g:PTR)))))
 
+;; M12, -mcisc: true iff `e` (an 'index node) is a plain `var[expr]`
+;; whose base has a statically-known 8-byte scalar element type (int,
+;; or any pointer-of-pointer type -- never struct, never char).
+;; Deliberately conservative: a base more complex than a bare variable
+;; (a struct member, a dereferenced pointer expression, the result of
+;; a call, ...) returns false and falls back to the general
+;; g:indexaddr path, since establishing its type here would mean
+;; either evaluating it twice or duplicating type inference this file
+;; already does elsewhere as a side effect of code generation.
+(define g:cisc-eligible-index? (lambda (e)
+	(begin
+		(define base (g:second e))
+		(if (= (head base) 'var)
+			(begin
+				(define s (g:find (g:second base)))
+				(define bt (g:third s))
+				(if (g:isptr bt)
+					(begin
+						(define pt (- bt g:PTR))
+						(if (< pt g:STRUCT0)
+							(if (= pt g:CHAR) false true)
+							false))
+					false))
+			false))))
+
+;; M12: LXI-based load for a cisc-eligible `arr[idx]`. Same base/idx
+;; evaluation order as g:indexaddr, just without the separate scale/
+;; add/load steps LXI folds into one opcode.
+(define g:indexload-cisc (lambda (e)
+	(begin
+		(g:expr (g:second e))          ;; a = base
+		(define t g:ty)
+		(g:emit '(PSH))                 ;; stack=[base]
+		(g:expr (g:third e))            ;; a = idx
+		(g:emit '(LXI))                  ;; a = *(int*)(base + idx*8)
+		(set! g:ty (- t g:PTR))
+		(set! g:lastarray false))))
+
+;; M12: SXI-based store for a cisc-eligible `arr[idx] = rhs`. base and
+;; idx both stay on the stack (unscaled) until rhs is evaluated, so
+;; SXI can do base+idx*8+store in one opcode instead of computing the
+;; address first (which would need a third stack slot to hold it
+;; across evaluating rhs).
+(define g:indexstore-cisc (lambda (lv rhs)
+	(begin
+		(g:expr (g:second lv))         ;; a = base
+		(define pt (- g:ty g:PTR))
+		(g:emit '(PSH))                 ;; stack=[base]
+		(g:expr (g:third lv))           ;; a = idx
+		(g:emit '(PSH))                  ;; stack=[base, idx]
+		(g:expr rhs)                      ;; a = value
+		(g:emit '(SXI))                    ;; *(int*)(base+idx*8) = a; pop 2
+		(set! g:ty pt)
+		(set! g:lastarray false))))
+
 ;; s.n / p->n: address of the member in the accumulator, g:ty = the
 ;; member's type. For . the operand is a struct VALUE expression
 ;; (which evaluates to its address, like arrays); for -> a pointer.
@@ -458,13 +513,19 @@
 		(if (= h 'call) (g:call e)
 		(if (= h 'assign)
 			(begin
-				(g:addr (g:second e))
-				(if g:lastarray (g:die "bad lvalue in assignment") nil)
-				(define t g:ty)
-				(g:emit '(PSH))
-				(g:expr (g:third e))
-				(g:store! t)
-				(set! g:ty t))
+				(define lv (g:second e))
+				(if (if gen:cisc
+						(if (= (head lv) 'index) (g:cisc-eligible-index? lv) false)
+						false)
+					(g:indexstore-cisc lv (g:third e))
+					(begin
+						(g:addr lv)
+						(if g:lastarray (g:die "bad lvalue in assignment") nil)
+						(define t g:ty)
+						(g:emit '(PSH))
+						(g:expr (g:third e))
+						(g:store! t)
+						(set! g:ty t))))
 		(if (= h 'deref)
 			(begin
 				(g:expr (g:second e))
@@ -518,11 +579,13 @@
 				(g:emit (list 'IMM (index sa 4)))
 				(set! g:ty g:INT))
 		(if (= h 'index)
-			(begin
-				(g:indexaddr e)
-				(if (g:svalue? g:ty)
-					(set! g:lastarray true)   ;; struct element: address
-				(g:load! g:ty)))
+			(if (if gen:cisc (g:cisc-eligible-index? e) false)
+				(g:indexload-cisc e)
+				(begin
+					(g:indexaddr e)
+					(if (g:svalue? g:ty)
+						(set! g:lastarray true)   ;; struct element: address
+					(g:load! g:ty))))
 		(if (= h 'member)
 			(begin
 				(g:memberaddr e false)
@@ -877,6 +940,12 @@
 ;; the same contract: legal to declare and call-compile, fatal to
 ;; execute.
 (define gen:objmode false)
+;; M12, -mcisc: emit c4mp-only fused array-element opcodes (LXI/SXI)
+;; instead of the generic index codegen, for int/pointer-element
+;; (8-byte) arrays -- see g:indexload-cisc/g:indexstore-cisc below and
+;; docs/c4or1k-design.md's M12 section. Off by default; code compiled
+;; with it must run under c4mp, not c4m (c4m traps the new opcodes).
+(define gen:cisc false)
 (define g:stubs nil)     ;; (LABEL ...) pending stub labels
 (define g:externs nil)   ;; (NAME TYPE VARIADIC) in first-seen order
 (define g:nexterns 0)

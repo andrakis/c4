@@ -387,6 +387,19 @@ c4or1k.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4OR1K_HDRS) $(patsubst %,$(C4OR1K_SR
 	done
 	$(C4RLINK) $(patsubst %,.c4or1k_%.c4o,$(C4OR1K_MODS)) -o c4or1k.c4r
 	rm -f .c4or1k_*.c4o
+# M12: -mcisc build, emitting c4mp's LXI/SXI fused array-element
+# opcodes wherever c4lc-gen.lisp finds a plain var[idx] with an
+# 8-byte-element (int/pointer) array -- cpu.c's r[]/group0[]/
+# group1[]/group2[] all qualify. c4m cannot run this image (LXI/SXI
+# trap as illegal opcodes there); only c4mp can, see c4or1k-boot-cisc
+# below and docs/c4or1k-design.md's M12 section.
+c4or1k-cisc.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4OR1K_HDRS) $(patsubst %,$(C4OR1K_SRC)/%.c,$(C4OR1K_MODS))
+	for m in $(C4OR1K_MODS); do \
+		./c4sp -c 16000000 src/c4sp/lisp/c4lc.lisp -mcisc -O -c -I $(C4OR1K_SRC) \
+			$(C4OR1K_SRC)/$$m.c .c4or1k_cisc_$$m.c4o > /dev/null || exit 1; \
+	done
+	$(C4RLINK) $(patsubst %,.c4or1k_cisc_%.c4o,$(C4OR1K_MODS)) -o c4or1k-cisc.c4r
+	rm -f .c4or1k_cisc_*.c4o
 # M1's cross-checked test program (tests/m1_test.s -> .bin via
 # tools/asm.py) run through the real decoder.
 src/c4or1k/tests/m1_test.bin: src/c4or1k/tests/m1_test.s src/c4or1k/tools/asm.py
@@ -469,6 +482,10 @@ c4or1k-boot: c4m c4or1k.c4r src/c4or1k/images/bootfs.idx src/c4or1k/images/bootf
 # why (plain c4 must still be able to parse c4m.c).
 c4or1k-boot-mp: c4mp c4or1k.c4r src/c4or1k/images/bootfs.idx src/c4or1k/images/bootfs.blob
 	./c4mp c4or1k.c4r $(VMLINUX) -b $(N) src/c4or1k/images/bootfs.idx src/c4or1k/images/bootfs.blob
+# M12: the -mcisc build (LXI/SXI fused array-element opcodes) --
+# requires c4mp, c4m cannot run it at all (see c4or1k-cisc.c4r above).
+c4or1k-boot-cisc: c4mp c4or1k-cisc.c4r src/c4or1k/images/bootfs.idx src/c4or1k/images/bootfs.blob
+	./c4mp c4or1k-cisc.c4r $(VMLINUX) -b $(N) src/c4or1k/images/bootfs.idx src/c4or1k/images/bootfs.blob
 test-oisc4-nested: $(OISC4) $(C4) $(C4M) oisc4-lc.c4r $(TESTS)/hello.c4r
 	$(C4M) load-c4r.c -- oisc4-lc.c4r -m 32 $(TESTS)/hello.c4r | grep -q yello
 	$(C4) c4l.c oisc4-lc.c4r -m 32 $(TESTS)/hello.c4r | grep -q yello
@@ -924,7 +941,7 @@ PHONY += run-c4 run-c4-vg test-c4 test-massive-c4
 PHONY += run-c4-alt run-c4-alt-vg
 PHONY += test-c4ix test-c4ix-fmt test-c4ix-c4ke test-c4ix-c4ke-nested test-c4ix-c4 run-c4ix run-c4ix-c4 demo-c4ix demo-c4ix-c4 bench-c4ix
 PHONY += test-c4mp
-PHONY += c4or1k-m0 c4or1k-m1 c4or1k-m1-check c4or1k-m2 c4or1k-m2-check c4or1k-m3 c4or1k-m3-check c4or1k-m3-int-check c4or1k-boot c4or1k-boot-mp
+PHONY += c4or1k-m0 c4or1k-m1 c4or1k-m1-check c4or1k-m2 c4or1k-m2-check c4or1k-m3 c4or1k-m3-check c4or1k-m3-int-check c4or1k-boot c4or1k-boot-mp c4or1k-boot-cisc
 PHONY += pkg c4rs or1k
 PHONY += pi
 # Don't bother with the dump or link utility for now

@@ -91,6 +91,13 @@ enum {
     CAS ,XCHG,FADD,
     // The futex pair, and a directed interrupt.
     CWAI,CWAK,IPI ,
+    // M12: fused array-element load/store, gated behind c4lc's
+    // -mcisc flag -- see docs/c4or1k-design.md's M12 section. c4m
+    // does not have these either, same "arrives as TRAP_ILLOP" rule
+    // as the processor/atomic opcodes above; nothing emits them
+    // unless -mcisc was passed, so ordinary (non-c4or1k) programs are
+    // unaffected either way.
+    LXI ,SXI ,
     INS_SIZE
 };
 

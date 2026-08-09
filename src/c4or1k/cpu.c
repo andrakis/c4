@@ -432,8 +432,16 @@ int cpu_run_batch(int halt_pc, int max_batch, int *ran) {
     ra = (ins >> 16) & 0x1F;
     rb = (ins >> 11) & 0x1F;
     rA = r[ra];
-    rB = r[rb];
     fault = 0;
+    // M12: rB = r[rb] used to be unconditional here too, same shape
+    // as the old eager `imm` below -- only 9 of the ~29 opcodes
+    // (l.jr/l.jalr, the four stores, l.mtspr, and the two func-
+    // switched reg-reg classes 0x38/0x39) ever read it. Moved to each
+    // of those case bodies, mirroring M11's imm fix exactly. Real
+    // work: a global-array read like this measured at ~10 c4-bytecode
+    // VM-ops each (docs/c4or1k-design.md's M12 section), noticeably
+    // more expensive than the sext() call imm's fix targeted, so
+    // skipping it for opcodes that never use it matters more here.
     // M11: `imm` used to be computed unconditionally here (every
     // instruction paid a sext() *function call* -- JSR/ENT/LEV
     // overhead, not just a shift+mask -- regardless of whether that
@@ -489,10 +497,12 @@ int cpu_run_batch(int halt_pc, int max_batch, int *ran) {
         cpu_set_flags(cpu_get_spr(SPR_ESR_BASE));
         continue;
     case 0x11:                         // l.jr
+        rB = r[rb];
         jump = rB >> 2;
         pc = nextpc; nextpc = jump; delayedins = 1;
         continue;
     case 0x12:                         // l.jalr
+        rB = r[rb];
         r[9] = sext((nextpc << 2) + 4, 32);
         jump = rB >> 2;
         pc = nextpc; nextpc = jump; delayedins = 1;
@@ -585,11 +595,13 @@ int cpu_run_batch(int halt_pc, int max_batch, int *ran) {
         }
         break;
     case 0x30:                         // l.mtspr
+        rB = r[rb];
         simm = ((ins >> 10) & 0xF800) | (ins & 0x7FF); // NOT sign-extended: an SPR-index component, not a byte offset
         pc = nextpc; nextpc = pc + 1; delayedins = 0;
         cpu_set_spr(rA | simm, rB);
         continue;
     case 0x33:                         // l.swa
+        rB = r[rb];
         simm = sext(((ins >> 10) & 0xF800) | (ins & 0x7FF), 16);
         addr = rA + simm;
         DTLB_FAST(addr, 1, phys);
@@ -600,24 +612,28 @@ int cpu_run_batch(int halt_pc, int max_batch, int *ran) {
         }
         break;
     case 0x35:                         // l.sw
+        rB = r[rb];
         simm = sext(((ins >> 10) & 0xF800) | (ins & 0x7FF), 16);
         addr = rA + simm;
         DTLB_FAST(addr, 1, phys);
         if (phys != -1) ram_sw(phys, rB);
         break;
     case 0x36:                         // l.sb
+        rB = r[rb];
         simm = sext(((ins >> 10) & 0xF800) | (ins & 0x7FF), 16);
         addr = rA + simm;
         DTLB_FAST(addr, 1, phys);
         if (phys != -1) ram_sb(phys, rB);
         break;
     case 0x37:                         // l.sh
+        rB = r[rb];
         simm = sext(((ins >> 10) & 0xF800) | (ins & 0x7FF), 16);
         addr = rA + simm;
         DTLB_FAST(addr, 1, phys);
         if (phys != -1) ram_sh(phys, rB);
         break;
     case 0x38:                         // three-operand ALU
+        rB = r[rb];
         func = ins & 0x3CF;
         switch (func) {
         case 0x0:                                      // add
@@ -671,6 +687,7 @@ int cpu_run_batch(int halt_pc, int max_batch, int *ran) {
         }
         break;
     case 0x39:                         // l.sfXX
+        rB = r[rb];
         func = (ins >> 21) & 0x1F;
         switch (func) {
         case 0x0: SR_F = (rA == rB); break;

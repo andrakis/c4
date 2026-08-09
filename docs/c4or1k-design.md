@@ -733,14 +733,172 @@ recompile, since real busybox's build system, macro use, and libc
 surface go beyond c4lc's L7/L8 dialect (`docs/c4lc-design.md`) as it
 stands today.
 
-**Where this leaves it.** Option A's batching landed (~11% cumulative
-over M8, real but modest); the literal fastcpu.js fence rewrite is
-deliberately not attempted for the reasons above. Option C remains the
-highest-payoff direction and is mostly a matter of widening C4IX's
-existing syscall/libc surface rather than a from-scratch project --
-next up when picked up. Option A still preserves "boots a real,
-unmodified vmlinux.bin," which C4IX's approach cannot ever claim, so
-it's not superseded, just capped. Option B remains not recommended.
+**Where this leaves it.** Option A landed in full, including a fence-
+style rewrite adapted to c4m's cost model (~13.7% cumulative over M8 --
+see the table below). Option C remains the highest-payoff direction
+and is mostly a matter of widening C4IX's existing syscall/libc surface
+rather than a from-scratch project -- next up when picked up. Option A
+still preserves "boots a real, unmodified vmlinux.bin," which C4IX's
+approach cannot ever claim, so it's not superseded, just capped.
+Option B remains not recommended. §M10 below investigates two further
+angles specifically asked about after M9 landed: a genuinely different
+execution model, and changes to c4m itself.
+
+## M10 — investigation: a different execution model, and changes to c4m
+
+M9 squeezed real but shrinking gains out of `cpu_run_batch` itself
+(7.6%, 3.6%, 2.1%, 1.0% -- each pass targeting real overhead but
+finding less of it left). This section asks two harder questions
+instead of continuing to tune that same function: would a genuinely
+different execution model for c4or1k help, and is there room in c4m
+itself? Both investigated with real measurements, nothing implemented
+here -- this is scoping, matching the M8/M9 house style.
+
+### Finding 1: guest code reuse is extreme
+
+A throwaway instrumentation pass (a `malloc`'d bitmap over guest RAM,
+one byte per instruction word, set on first fetch; reverted after
+measuring, never committed) counted distinct instruction *addresses*
+fetched against total fetches during a real boot:
+
+| total instructions fetched | distinct addresses ever fetched |
+|---|---|
+| 10,000,000 | 47,348 |
+| 50,000,000 | 160,946 |
+| 100,000,000 | 172,418 |
+| 180,000,000 | 188,521 |
+| 270,000,000 | 188,528 |
+
+By 270M instructions, the distinct-address count has essentially
+stopped growing (188,521 -> 188,525 -> 188,526 -> 188,528 across the
+last 90M instructions) while the total keeps climbing -- the system
+has settled into steady-state idle/polling behavior (busy-wait loops,
+periodic retries) re-executing the same ~188K-instruction working set
+over and over. **Average reuse by 270M instructions: ~1,430x per
+distinct address.** cpu_run_batch re-fetches and re-decodes every one
+of those repeat visits from scratch today -- M8/M9's caching avoided
+redundant *TLB* lookups on a repeat visit, but not redundant *decode*
+(the `(ins >> N) & mask` field extraction) or redundant *dispatch*
+(the `switch (opcode)`, and for four opcode classes a second inner
+`switch (func)`).
+
+### Finding 2: c4m's own native dispatch is a linear scan, not a jump table
+
+Checked rather than assumed, since M5's cpu.c switch/if-else bisection
+already burned real time on an unverified belief about codegen:
+`objdump -d c4m` on the `-O2 -g` build shows `c4m_main`'s bytecode
+dispatch (`if (i == LEA) ... else if (i == IMM) ... else if (i == JMP)
+...`, c4m.c around line 1563) contains **no indexed/computed jump
+anywhere in the function** -- no `jmp *(...,%reg,N)` jump-table
+pattern, just a straight-line chain of compare-and-branch. GCC did not
+convert this to a jump table at `-O2`, likely because it isn't a
+literal C `switch` (the debug-output and `OPCD`-special-case code
+immediately above it breaks the canonical shape GCC's switch-lowering
+pass looks for) and a hand-rolled if-chain doesn't get the same
+treatment reliably. Consequence: opcodes further down the enum pay
+more sequential comparisons to reach than ones near the top --
+`ADD`/`SUB` (extremely common: every pointer-offset calculation and
+most arithmetic) are comparisons **#26/#27** in the chain; `LEA`/`IMM`
+(also extremely common: every variable access) are comparisons #1/#2.
+This is a real, fixable inefficiency in shared infrastructure, not
+speculative -- every C4-family project pays it, not just c4or1k.
+
+(A back-of-envelope cross-check: c4or1k's ~500K guest-instr/sec at
+~7-8 c4m VM-ops/guest-instruction post-M9 implies roughly 3.5-4M c4m
+VM-ops/sec sustained, well under the ~4.4M VM-instr/sec ceiling
+measured on a trivial 8-opcode loop back in M0 -- consistent with
+real workloads exercising opcodes further down the (unordered) chain
+than that loop did, though this is inference from wall-clock timing,
+not a direct cycle measurement: `perf` isn't available in this
+sandbox (`perf_event_paranoid` blocks it), so this is corroborating,
+not conclusive on its own.)
+
+### Option 1: a decode/dispatch cache in c4or1k (different execution model, no c4m changes)
+
+Given Finding 1, a per-guest-instruction-address cache of already-
+*decoded* fields (opcode, rd, ra, rb, imm, and for the four sub-
+switched opcode classes, `func` too) -- populated on first visit to an
+address, read directly on every subsequent visit -- would skip the
+`>>`/`&` field-extraction work entirely on what the data shows is the
+overwhelming majority of fetches. Pushed further (cache a single,
+pre-combined dispatch key spanning opcode+func so a second inner
+`switch` is never needed on a hit), it approaches genuine "direct
+threaded code," a well-established interpreter technique. Estimated
+effect: decode/sub-dispatch is roughly 2-4 of the ~7-8 VM-ops a guest
+instruction costs today; cutting most of that on a >99%-hit-rate cache
+plausibly drops the average to roughly 4-5 VM-ops, i.e. **very roughly
+another 30-45% wall-clock improvement**, in the same spirit as M8/M9
+but hitting a cost center they didn't touch (decode/dispatch itself,
+not TLB lookups or call overhead). Risk: moderate, confined entirely
+to c4or1k's own code (no shared-infrastructure blast radius) -- the
+one real correctness concern is self-modifying guest code invalidating
+a stale cache entry (module loading, JIT'd BPF); this project's fixed
+kernel+busybox boot workload plausibly never exercises that, but it
+would need either a check (any RAM write inside the "ever cached"
+range invalidates that entry) or an explicit documented assumption,
+not silence. Verification burden: same standard as M8/M9 (regression
+suite + byte-identical boot-log diffing) should suffice, since this is
+"cache values that don't change" applied one layer higher.
+
+### Option 2: changes to c4m itself
+
+Two tiers, clearly different in risk:
+
+- **Fix the dispatch (Finding 2).** Reordering the if-chain by real
+  hot/cold frequency, or (better, more reliably optimizable) rewriting
+  it as an actual C `switch (i)` so GCC's own switch-lowering has a
+  clean shape to work with, is small, mechanical, and localized to one
+  function. It benefits every C4-family project (c4ke, c4ix, c4bb,
+  c4sp, c4mp, oisc4), not just c4or1k -- real payoff, genuinely low
+  risk, but needs the same broad regression pass across all of them
+  before it could be trusted, not just c4or1k's own suite. Estimated
+  effect: hard to pin precisely without `perf` access in this sandbox,
+  but a **rough 10-30%** reduction in c4m's own per-VM-instruction
+  native cost is a defensible estimate given the confirmed linear-scan
+  finding, not a guess pulled from nothing.
+- **New fused opcodes** (e.g. a combined "load local variable value"
+  op collapsing today's `LEA`+`LI`/`LC` pair, which is an extremely
+  common pattern in c4lc-emitted code) would cut VM-op *count*, on top
+  of Option 1's cache reducing *redundant* decode of the ops that
+  remain. Needs matching changes in both c4m.c (new opcode handling)
+  and `c4lc-gen.lisp` (peephole recognition to actually emit it,
+  building on the pattern `-O`'s existing peephole pass already
+  establishes) -- moderate effort, moderate-to-good payoff (**rough
+  20-40%** VM-op-count reduction is plausible given how pervasive
+  local-variable access is), moderate risk (touches the compiler and
+  the interpreter in lockstep; must not silently break any other
+  project built on this toolchain).
+- **A real JIT (bytecode -> host native code)** is the only lever
+  that could plausibly deliver an order-of-magnitude win (**5-20x**,
+  based on typical interpreter-to-simple-JIT ratios), and Finding 1's
+  ~1,430x reuse ratio is close to the ideal profile for one --
+  translate a hot address once, run native code on every subsequent
+  visit instead of re-interpreting. But this is an enormous
+  undertaking: register allocation from c4's stack-based execution
+  model onto host registers, native code generation (x86-64 here),
+  and correct interaction with every existing c4m feature this
+  investigation didn't even need to touch (traps, protected mode,
+  signals, C4KE's task switching, self-modifying-code invalidation).
+  It is comparable in scope to writing a new compiler backend, touches
+  the shared foundation every other project in this repo depends on,
+  and failure modes (a JIT miscompilation) are substantially harder to
+  diagnose than anything hit so far -- M5's SIGSEGV saga was hard
+  *with* pure interpretation as the baseline. **Not recommended to
+  start casually**; if ever pursued, it should be its own dedicated,
+  heavily-gated project, not a c4or1k milestone.
+
+### Where this leaves it
+
+Options 1 and 2's first tier (decode cache in c4or1k; dispatch fix in
+c4m) target *different, complementary* cost centers -- one cuts VM-op
+*count* via redundant-decode avoidance, the other cuts native cost
+*per* VM-op that still runs. Combined, compounding rather than
+additive, a **very rough 1.5-2x** total improvement over the current
+post-M9 baseline seems like a defensible estimate (e.g. ~0.65 x 0.80 ~
+0.5, i.e. roughly half the wall time) -- real and worth having, but
+still not the order-of-magnitude a JIT could give, and still bounded
+by needing to actually build and verify both pieces. Nothing here is
+implemented; this is investigation only, as asked.
 
 ## Related future work (not this project)
 

@@ -20,7 +20,7 @@ $CC -o $OUT/hello32.c4r src/tests/hello.c > /dev/null
 
 # standard u0-linked tests
 for t in factorial test_basic test_malloc test_static tests multifun \
-         test-order test-ptrs test_continue mandel test_args test_exit \
+         test-order test-ptrs test_continue mandel rps test_args test_exit \
          cycles test_printloop test_printf; do
     $CC -o $OUT/$t.c4r $U0 src/tests/$t.c > /dev/null
 done
@@ -85,7 +85,7 @@ done
 cp $OUT/hello32.c4r $DISK/hello.c4r
 for t in tests factorial multifun test-order test-ptrs test_continue \
          test_args test_exit test_printloop test_basic test_malloc \
-         test_float mandel; do
+         test_float mandel rps; do
     cp $OUT/$t.c4r $DISK/$t.c4r 2>/dev/null || true
 done
 
@@ -130,7 +130,7 @@ for n in $BIN_ALL_SRC; do
 done
 BIN_TEST_SRC="hello tests factorial multifun test-order test-ptrs \
               test_continue test_args test_exit test_printloop \
-              test_basic test_malloc test_float mandel"
+              test_basic test_malloc test_float mandel rps"
 for n in $BIN_TEST_SRC; do
     cp src/tests/$n.c $DISK/$n.c 2>/dev/null || true
 done

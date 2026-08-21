@@ -32,7 +32,7 @@ BIN_ALL   = $(BIN_CORE) $(BIN_BENCH) $(BIN_C4R) \
             $(BIN_UTIL) $(BIN_C4KE) $(BIN_SHELL)
 BIN_TEST  = hello tests factorial multifun \
             test-order test-ptrs test_continue test_args test_exit \
-            test_printloop test_basic test_malloc test_float mandel
+            test_printloop test_basic test_malloc test_float mandel rps
 
 #
 # Filesystem tree

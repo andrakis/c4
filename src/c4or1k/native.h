@@ -32,6 +32,36 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <time.h>
+#include <termios.h>
+#include <signal.h>
+
+// M18: raw terminal mode for the native build. Same contract as the
+// c4mp TRAW opcode (see src/c4mp/vm.c): put fd 0 in raw mode so a typed
+// Ctrl+C reaches the guest instead of killing the emulator; tty-aware
+// no-op on a pipe; restored on normal exit (atexit) and SIGTERM/SIGHUP.
+static struct termios __c4or1k_tty_saved;
+static int __c4or1k_tty_raw;
+static void __c4or1k_tty_restore(void) { if (__c4or1k_tty_raw) { tcsetattr(0, TCSANOW, &__c4or1k_tty_saved); __c4or1k_tty_raw = 0; } }
+static void __c4or1k_tty_sig(int s) { __c4or1k_tty_restore(); signal(s, SIG_DFL); raise(s); }
+static int __c4or1k_termraw(int on) {
+    struct termios raw;
+    if (on) {
+        if (!isatty(0)) return 0;
+        if (__c4or1k_tty_raw) return 1;
+        if (tcgetattr(0, &__c4or1k_tty_saved)) return 0;
+        raw = __c4or1k_tty_saved;
+        cfmakeraw(&raw);
+        tcsetattr(0, TCSANOW, &raw);
+        __c4or1k_tty_raw = 1;
+        atexit(__c4or1k_tty_restore);
+        signal(SIGTERM, __c4or1k_tty_sig);
+        signal(SIGHUP, __c4or1k_tty_sig);
+        return 1;
+    }
+    __c4or1k_tty_restore();
+    return 0;
+}
+#define __c4_termraw(on) __c4or1k_termraw(on)
 
 static long __time_ms_now() {
     struct timespec ts;
@@ -43,5 +73,15 @@ static long __time_ms_now() {
 static long __c4_cycles_counter;
 static long __c4_cycles_now() { __c4_cycles_counter += 10000; return __c4_cycles_counter; }
 #define __c4_cycles() __c4_cycles_now()
+
+// M15 idle: the c4lc dialect reaches usleep as the __c4_usleep intrinsic
+// (USLP opcode). Natively it is just the libc call. main.c's boot loop
+// uses it to nap while the guest is in PMR doze (see cpu.c / M17).
+#define __c4_usleep(us) usleep(us)
+
+// M16: the native build has a real host FPU, so fpu.c takes its
+// real-float path. The hosted builds (no float type in c4lc) fall to
+// fpu.c's native-only stub. See fpu.h.
+#define C4OR1K_NATIVE_FLOAT 1
 
 #define int long

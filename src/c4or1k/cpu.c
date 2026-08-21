@@ -1,6 +1,7 @@
 #include "cpu.h"
 #include "mem.h"
 #include "jit.h"
+#include "fpu.h"
 
 // M13: the JIT's driver-loop hooks cost real per-instruction
 // bookkeeping (~7% wall-clock measured with the JIT merely compiled
@@ -33,6 +34,7 @@ int group0[2048];
 int group1[2048];
 int group2[2048];
 int TTMR, TTCR;
+int cpu_dozed; // set when the guest enters PMR doze; see cpu_should_idle (M17)
 int PICMR, PICSR;
 
 int dtlb_cache_vpage, dtlb_cache_sm, dtlb_cache_phys, dtlb_cache_rok, dtlb_cache_wok;
@@ -102,6 +104,21 @@ void cpu_tick_check(int clockspeed) {
         pc = nextpc; nextpc = pc + 1;
     }
 }
+
+// ---- idle / PMR-doze support (M17) --------------------------------
+// OpenRISC Linux idles by writing PMR to enter doze (the case-8 SPR
+// write above sets cpu_dozed) and waiting for its next interrupt.
+// jor1k's fastcpu.js meets that by RETURNING to the browser scheduler,
+// which sleeps until the next timer event (fastcpu.js:394 sets doze,
+// :1168 returns on the following mtspr). c4or1k has no outer scheduler,
+// so main.c naps in place instead: it resets cpu_dozed before each
+// batch, and a still-set flag afterwards means the guest ended the
+// batch idle, so it sleeps and advances the clock over the nap via
+// cpu_tick_check (the guest reads TTCR for udelay, so the clock must
+// only ever move forward and at the natural rate -- routing the advance
+// through cpu_tick_check guarantees both). Any delivered exception
+// (cpu_exception) clears cpu_dozed -- an interrupt wakes the CPU. See
+// main.c's boot loop for the full rationale.
 
 // Bit layout, vector list, and the abort-on-unsupported-feature set
 // (little-endian mode, context IDs, exception prefix, delay-slot
@@ -182,7 +199,13 @@ void cpu_set_spr(int idx, int val) {
         // data/instruction cache: not supported, accepted no-op
         break;
     case 8:
-        // accepted no-op
+        // Power management (PMR). The guest's arch_cpu_idle writes this
+        // to enter doze; we don't model clock gating, but we DO use the
+        // write as the "guest is idle" signal so the host can nap
+        // instead of spinning the idle loop -- see cpu_should_idle and
+        // main.c's boot loop (M17). jor1k's fastcpu.js catches the same
+        // write (SetSPR group 8 -> doze) for the same purpose.
+        cpu_dozed = 1;
         break;
     case 9:
         if (address == 0) PICMR = val | 0x3; // non-maskable interrupt bits always on
@@ -237,6 +260,7 @@ void cpu_exception(int excepttype, int addr) {
     cpu_set_spr(SPR_EEAR_BASE, addr);
     cpu_set_spr(SPR_ESR_BASE, cpu_get_flags());
 
+    cpu_dozed = 0; // an interrupt (or any exception) wakes the CPU from doze
     EA = -1;
     SR_OVE = 0;
     SR_SM = 1;
@@ -356,6 +380,7 @@ void cpu_reset() {
     group0[SPR_DCCFGR] = 0x48;
     group0[SPR_VR] = 0x12000001;
     group0[SPR_UPR] = 0x619;
+    cpu_dozed = 0;
 
     // Flags per safecpu.js's constructor (SR_SM/SR_FO on, all else
     // off) -- NOT routed through cpu_exception(EXCEPT_RESET, ...) the
@@ -762,6 +787,31 @@ int cpu_run_batch(int halt_pc, int max_batch, int *ran) {
             break;
         default:
             printf("cpu_step: unimplemented 0x38 func at pc=%d (ins=0x%x)\n", pc, ins); cpu_dump(); fault = 1; break;
+        }
+        break;
+    case 0x32:                         // lf.* single-precision floating point
+        // Register fields are the standard rd/ra/rb (fastcpu.js's
+        // rA=(ins>>14)&0x7C etc. are the same numbers <<2). rA already
+        // holds r[ra]; rB is read here like the other reg-reg classes.
+        // All arithmetic lives in fpu.c so this stays a pure dispatch.
+        rB = r[rb];
+        func = ins & 0xFF;
+        switch (func) {
+        case 0x00: r[rd] = fpu_add(rA, rB); break;          // lf.add.s
+        case 0x01: r[rd] = fpu_sub(rA, rB); break;          // lf.sub.s
+        case 0x02: r[rd] = fpu_mul(rA, rB); break;          // lf.mul.s
+        case 0x03: r[rd] = fpu_div(rA, rB); break;          // lf.div.s
+        case 0x04: r[rd] = fpu_itof(sext(rA, 32)); break;   // lf.itof.s (signed int -> float)
+        case 0x05: r[rd] = fpu_ftoi(rA); break;             // lf.ftoi.s (float -> int)
+        case 0x07: r[rd] = fpu_madd(r[rd], rA, rB); break;  // lf.madd.s (rD += rA*rB)
+        case 0x08: SR_F = fpu_eq(rA, rB); break;            // lf.sfeq.s
+        case 0x09: SR_F = fpu_ne(rA, rB); break;            // lf.sfne.s
+        case 0x0a: SR_F = fpu_gt(rA, rB); break;            // lf.sfgt.s
+        case 0x0b: SR_F = fpu_ge(rA, rB); break;            // lf.sfge.s
+        case 0x0c: SR_F = fpu_lt(rA, rB); break;            // lf.sflt.s
+        case 0x0d: SR_F = fpu_le(rA, rB); break;            // lf.sfle.s
+        default:
+            printf("cpu_step: unimplemented lf.* func 0x%x at pc=%d (ins=0x%x)\n", func, pc, ins); cpu_dump(); fault = 1; break;
         }
         break;
     case 0x39:                         // l.sfXX

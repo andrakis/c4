@@ -98,6 +98,11 @@ enum {
     // unless -mcisc was passed, so ordinary (non-c4or1k) programs are
     // unaffected either way.
     LXI ,SXI ,
+    // Raw-terminal-mode toggle (host tcsetattr), M18. c4or1k calls it
+    // to put fd 0 in raw mode so Ctrl+C reaches the guest instead of
+    // killing the emulator. c4m has no such opcode -- appended, not
+    // inserted, same rule as the processor/atomic/cisc opcodes above.
+    TRAW,
     INS_SIZE
 };
 

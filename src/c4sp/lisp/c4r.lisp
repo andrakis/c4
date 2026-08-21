@@ -63,7 +63,10 @@
 	;; c4mp only, M12: fused array-element load/store, emitted by
 	;; c4lc-gen.lisp only under -mcisc. Same rule: c4m does not know
 	;; these numbers either, appended not inserted.
-	LXI SXI))
+	LXI SXI
+	;; raw-terminal-mode toggle: a c4mp host syscall (tcsetattr) that
+	;; c4or1k uses to forward Ctrl+C to the guest. Appended, not inserted.
+	TRAW))
 (define c4r:nops (length c4r:ops))
 
 ;; does opcode n take an operand word? LEA..ADJ are 0..7; JSRI 61 JSRS 62

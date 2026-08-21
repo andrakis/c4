@@ -46,6 +46,10 @@
 enum { FILEBUFSZ = 0x10000 }; // c4lc enum initializers must be a literal, not "1 << 16"
 char filebuf[FILEBUFSZ];
 
+// M17 idle nap length. Bounds both console-input latency (a keystroke
+// is seen within one nap) and the coarseness of the clock advance.
+enum { IDLE_NAP_US = 200 };
+
 // Loads a big-endian word stream into ram[] starting at address 0.
 // Returns the word count, or -1 on error.
 int load_program(char *path) {
@@ -93,6 +97,7 @@ int str_to_int(char *s) {
 int main(int argc, char **argv) {
     char *path, *bootfs_idx_path, *bootfs_blob_path;
     int nwords, status, steps, t0, t1, dt_ms, ips, run_mode, boot_mode, maxsteps, length, batch, ran, jit_enable, ai;
+    int napped_us; // M17: total microseconds spent in idle naps, excluded from the active-rate estimate
 
     path = argc > 1 ? argv[1] : "src/c4or1k/tests/m1_test.bin";
     run_mode = (argc > 2 && argv[2][0] == '-' && argv[2][1] == 'r');
@@ -139,6 +144,12 @@ int main(int argc, char **argv) {
         pc = 0x100 >> 2; nextpc = pc + 1; // real OR1000 reset vector, not address 0
         nwords = -1; // no natural halt address for a kernel image
         printf("c4or1k: booting %s (%d bytes) from the reset vector\n", path, length);
+        // M18: raw mode so a typed Ctrl+C reaches the guest (its tty
+        // signals the foreground process) instead of killing us. Ctrl-]
+        // x quits the emulator. Boot mode only -- the m-checks run test/
+        // console mode under c4m, which has no TRAW opcode. tty-aware:
+        // a no-op on piped input, so scripted boots still work.
+        con_raw_enable();
     } else {
         nwords = load_program(path);
         if (nwords < 0) return 1;
@@ -156,6 +167,7 @@ int main(int argc, char **argv) {
     // N instructions (-b limit)" still reports exactly N, never an
     // overshoot past the requested budget.
     steps = 0;
+    napped_us = 0;
     t0 = __time();
     while (1) {
         con_poll_and_feed();
@@ -163,11 +175,52 @@ int main(int argc, char **argv) {
                           // the eth IRQ line here (between instructions),
                           // never from inside a guest store -- see net.h.
         cpu_tick_check(64);
+
         batch = 64;
         if (boot_mode && maxsteps && (maxsteps - steps) < batch) batch = maxsteps - steps;
+        cpu_dozed = 0;   // M17: detect a PMR doze that happens DURING this batch
         status = cpu_run_batch(nwords, batch, &ran);
         steps = steps + ran;
         if (status != 0) break;
+
+        // M17 -- idle nicely instead of pegging a host core. cpu_dozed
+        // is a ONE-SHOT: reset above, set only if the guest wrote PMR
+        // (arch_cpu_idle) during the batch and no exception then cleared
+        // it -- i.e. the batch ended with the guest idle. (Checking a
+        // persistent flag at the top of the loop instead was the bug
+        // that throttled the ethernet PHY probe to a crawl: the guest
+        // dozes once during an msleep, then does real polling work with
+        // no intervening exception, so the flag stayed set and every
+        // batch napped.) When genuinely idle the guest re-enters doze
+        // every batch, so this naps every batch => the host core sleeps.
+        //
+        // The nap does NOT manufacture ticks (c4or1k's mode-3 tick only
+        // fires as TTCR crosses the period; injecting ticks corrupts
+        // guest timekeeping and hangs delay loops). It advances TTCR by
+        // the cycles the idle spin WOULD have consumed at the current
+        // rate and lets cpu_tick_check deliver a tick only where a
+        // non-idle run would -- so the guest's timeline is unchanged,
+        // the core just sleeps. Console/eth input still lands via
+        // con_poll/net_poll and wakes it within one nap.
+        if (boot_mode && cpu_dozed && !(SR_IEE && (PICMR & PICSR))) {
+            int active, ipms, adv;
+            // Advance the clock by what the idle spin WOULD have run in
+            // one nap, at the ACTIVE instruction rate. Measuring against
+            // active time (wall time minus time already slept) is
+            // essential: dividing by raw elapsed collapses the rate once
+            // naps dominate -- steps stops growing while elapsed keeps
+            // climbing -- which starves tick delivery and hangs the
+            // guest. Excluding nap time keeps ipms at the true execution
+            // rate, so the guest clock advances at the same cadence idle
+            // or busy.
+            active = (__time() - t0) - napped_us / 1000;   // active ms = wall ms minus slept ms
+            ipms = (steps && active > 0) ? steps / active : 30000; // guest instr (~cycles)/ms
+            adv = (ipms * IDLE_NAP_US) / 1000;
+            if (adv < 64) adv = 64;
+            __c4_usleep(IDLE_NAP_US);
+            napped_us = napped_us + IDLE_NAP_US;
+            cpu_tick_check(adv);   // advance the clock over the nap; delivers a tick iff one is due
+        }
         if (boot_mode && maxsteps && steps >= maxsteps) {
             printf("c4or1k: stopped after %d instructions (-b limit)\n", steps);
 #ifdef C4OR1K_JIT
@@ -177,6 +230,7 @@ int main(int argc, char **argv) {
         }
     }
     t1 = __time();
+    if (boot_mode) con_raw_disable();   // M18: restore the terminal on every exit path
 
     if (status == 2) {
         printf("FAULT after %d instructions\n", steps);

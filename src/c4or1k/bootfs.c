@@ -1,10 +1,18 @@
 #include "bootfs.h"
 
 // bootfs.idx record layout, must match tools/mkbootfs.js exactly:
-// name[32] then 8 x int32 LE (mode,uid,gid,parentid,firstid,nextid,size,bloboff).
-enum { REC_LEN = 64 };
-enum { REC_MODE = 32, REC_UID = 36, REC_GID = 40, REC_PARENTID = 44,
-       REC_FIRSTID = 48, REC_NEXTID = 52, REC_SIZE = 56, REC_BLOBOFF = 60 };
+// name[BOOTFS_NAME_LEN] then 8 x int32 LE (mode,uid,gid,parentid,
+// firstid,nextid,size,bloboff). The int32 fields sit immediately after
+// the name slot, so their offsets are all relative to BOOTFS_NAME_LEN
+// (raised to 64 for the extended fs -- see bootfs.h).
+// c4lc requires LITERAL enum initializers (no BOOTFS_NAME_LEN+N
+// expressions), so these are spelled out for BOOTFS_NAME_LEN=64: the
+// int32 fields sit right after the 64-byte name slot. Keep in lockstep
+// with BOOTFS_NAME_LEN and tools/mkbootfs.js's RECORD_LEN if either
+// changes.
+enum { REC_LEN = 96 };   // 64 (name) + 8 x int32
+enum { REC_MODE = 64, REC_UID = 68, REC_GID = 72, REC_PARENTID = 76,
+       REC_FIRSTID = 80, REC_NEXTID = 84, REC_SIZE = 88, REC_BLOBOFF = 92 };
 
 int *m_mode, *m_uid, *m_gid, *m_parentid, *m_firstid, *m_nextid;
 int *m_size, *m_bloboff, *m_atime, *m_mtime, *m_ctime, *m_dirty;

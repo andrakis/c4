@@ -150,6 +150,12 @@ void cpu_clear_interrupt(int line);
 // getting stuck retry-polling an unimplemented ATA controller.
 void cpu_tick_check(int clockspeed);
 
+// Idle / PMR-doze support (M17): cpu_dozed is set when the guest writes
+// PMR (arch_cpu_idle) and cleared by any delivered exception. main.c
+// resets it before each batch and, if it's set afterwards, naps the
+// host instead of spinning the guest idle loop. See main.c's boot loop.
+extern int cpu_dozed;
+
 // Runs up to max_batch instructions in a single call (formerly
 // cpu_step(halt_pc), one instruction per call -- renamed since it's no
 // longer one-at-a-time), writing the number actually executed to

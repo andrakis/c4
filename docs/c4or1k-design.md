@@ -1576,13 +1576,169 @@ backend could be dropped in behind `net_tx`/`net_poll` immediately
 (the host has `/dev/net/tun`), gated on privileges; the interface
 (`net_tx` out, `eth_rx` in) is already the right seam for it.
 
-## Related future work (not this project)
+## M16 — the extended filesystem, and floating point (native)
 
-c4mp (the multiprocessor VM, `src/c4mp`) has no host-socket primitive.
-M15 built the ethernet device and a synthetic peer that needs none, so
-the guest has a working network today -- but bridging that NIC to the
-real host network (a TAP interface or a datagram socket) needs c4mp to
-grow a socket/packet I/O call, the way it already exposes file I/O.
-That is the one remaining piece for real external connectivity, and
-the `net_tx`/`eth_rx` seam is already shaped to drop a TAP backend in
-behind it (see M15).
+Two changes that only matter once the guest runs a *real* userland
+rather than basefs's busybox-only tree.
+
+**Extended filesystem.** jor1k boots from a tiny `basefs.json` and then
+overlays the full `fs.json` (~7000 inodes, ~127MB of bz2-compressed
+backing: real bash/perl/X libs/man pages). c4or1k has no network to
+lazy-load over, so `tools/mkbootfs.js` now flattens BOTH manifests into
+one resident `bootfs-ext.idx/.blob`, merging shared directories exactly
+the way jor1k's `fsloader.js` does (a re-seen directory is merged into,
+a re-seen file shadows the earlier one). `BOOTFS_NAME_LEN` went 32->64
+(the longest name is 54 bytes) and `BOOTFS_MAX_INODES` 1024->16384. The
+record layout is now parametric on `BOOTFS_NAME_LEN` in both the tool
+and `bootfs.c`. NATIVE-ONLY for now (`make c4or1k-boot-native-ext`): the
+~300MB resident blob is impractical under c4m/c4mp, exactly the "prove
+it native first" call the rest of this project follows.
+
+**Floating point (opcode 0x32, `lf.*`).** basefs never executed an FP
+instruction; the real userland does immediately (`help`, awk, perl).
+The OR1000 single-precision group keeps binary32 values in the GPRs, so
+`fpu.c` takes/returns raw float32 bit patterns. It has two
+implementations, chosen by `native.h`'s `C4OR1K_NATIVE_FLOAT`:
+
+  * NATIVE: real host floats via a `float`/`unsigned` union
+    bit-reinterpret (the `#define int long` leaves `unsigned`/`float`
+    genuinely 32-bit). Complete and exact: add/sub/mul/div/madd,
+    itof/ftoi (floor, matching jor1k), and the six ordered compares.
+  * HOSTED: the c4lc dialect has no `float` type and the FLT opcode is
+    stubbed on several loaders, so the hosted path is a native-only
+    stub that warns once and yields 0. It never fires on the tested
+    hosted paths (basefs's shell and the m-checks use no FP); a hosted
+    soft-float or verified `__c4_float` wiring is future work.
+
+`cpu.c`'s `case 0x32` is a pure dispatch into `fpu.c`; the register
+fields are the standard rd/ra/rb. Verified end to end: on the extended
+fs, `awk 'BEGIN{printf "%.4f", 22/7}'` prints `3.1429` and perl's
+`sqrt(2)` is `1.4142135623731`.
+
+## M17 — idle nicely (PMR doze), the fastcpu.js lesson
+
+The native build pegged a host core at 100% even with the guest doing
+nothing, because OpenRISC's `arch_cpu_idle` enters "doze" (a write to
+the power-management SPR, group 8) and then, since doze is a no-op in
+emulation, the guest just spins its idle loop waiting for the next
+interrupt. jor1k's `fastcpu.js` solves the same problem by RETURNING to
+the browser scheduler on the doze write, which sleeps until the next
+timer event (fastcpu.js:394 sets `doze`, :1168 returns).
+
+c4or1k has no outer scheduler to return to, so it naps in place.
+`case 8` sets `cpu_dozed`; `main.c` resets that flag before each batch
+and, if it is still set afterwards (the batch ended idle) and no
+interrupt is pending, sleeps `IDLE_NAP_US` (200us) and advances the
+clock over the nap via `cpu_tick_check`. Result: 3s boot to the shell,
+**~4% idle CPU** (was 100%), console input still wakes the guest within
+one nap.
+
+Three traps found the hard way, all worth stating:
+
+  1. **cpu_dozed must be a ONE-SHOT, reset per batch.** A first version
+     checked a persistent flag at the top of the loop; the guest dozes
+     once during an msleep, then does real polling work with no
+     intervening exception, so the flag stayed set and every batch
+     napped -- throttling the ethernet PHY probe to a crawl (it looked
+     like a hang).
+  2. **Never move TTCR backwards, and advance it at the NATURAL rate.**
+     The guest reads TTCR directly for `udelay`/delay-calibration.
+     Writing it backwards hangs a delay loop; advancing it faster or
+     slower than the real execution rate desyncs the boot's timer state
+     machines. The nap advances TTCR by `ipms * nap` cycles (ipms = the
+     ACTIVE instruction rate, measured against wall time MINUS time
+     already slept -- dividing by raw elapsed collapses the estimate
+     once naps dominate and starves tick delivery).
+  3. **Block-buffering hid all of this.** Redirecting boot stdout to a
+     file is block-buffered, so the last visible line lagged the real
+     boot position by up to 4KB -- for a long time it looked stuck at a
+     partial "lib" line when the boot was in fact progressing. Always
+     verify boot progress with `stdbuf -oL`.
+
+## M18 — raw terminal mode + Ctrl+C forwarding, and synthetic DNS
+
+**Ctrl+C to the guest.** Before this, a typed Ctrl+C hit the emulator's
+own (cooked) terminal and killed the process. It should reach the guest
+so the guest's tty line discipline signals the guest's foreground
+process. The fix is to put fd 0 in raw mode from inside the VM, which
+the C4 VM historically could not do (no termios -- that was the whole
+reason `run-c4or1k.sh` existed). So c4mp grows one new opcode, **TRAW**
+(`__c4_termraw(on)`): a host `tcsetattr`/`cfmakeraw` toggle, tty-aware
+(a no-op returning 0 on a pipe), restored on exit via atexit and on
+SIGTERM/SIGHUP. It is appended to the opcode enum (c4mp.h, vm.c's name
+table, `c4r.lisp`'s `c4r:ops`, and c4lc-gen's syscall table -- appended,
+never inserted, same rule as the M12 cisc opcodes). The native build
+implements the same contract with real termios in `native.h`.
+
+`console.c` enables raw mode in BOOT MODE ONLY (the m1/m2/m3 checks run
+test/console mode under c4m, which has no TRAW opcode) and forwards
+every byte to the guest -- Ctrl+C (0x03) included. A two-key escape
+`Ctrl-] x` quits the emulator (Ctrl-] chosen over qemu's Ctrl-A so the
+guest shell keeps Ctrl-A for beginning-of-line); `Ctrl-] Ctrl-]` sends a
+literal Ctrl-]. Verified: with `sleep 30` running, a typed Ctrl+C
+interrupts the sleep and returns to the shell while the emulator stays
+alive.
+
+**Synthetic DNS.** The guest gets `10.0.0.1` as its DNS server from the
+M15 DHCP OFFER, but nothing answered port 53, so name resolution failed
+(direct IPs pinged fine). `net.c` now has a synthetic resolver: it
+answers A queries from a deterministic, made-up `11.x.x.x` address
+(the QNAME hashed via FNV-1a), other qtypes with a well-formed
+NOERROR/0-answer. Off-subnet on purpose -- the guest then routes to it
+via the gateway, whose ARP and ICMP echo this peer already answers, so
+`ping google.com` resolves AND gets replies. Real name resolution still
+needs the c4mp socket bridge below.
+
+## Toward real connectivity: c4mp host sockets + a C4IX Linux-compat layer (plan)
+
+Everything above is self-contained: the guest network is a synthetic
+peer (ARP/DHCP/ICMP/DNS) with no host I/O, so it works identically
+native and hosted. Real external connectivity -- the guest actually
+reaching the host's network -- is the one piece still missing, and it
+is deliberately scoped as future work because it needs new primitives
+BELOW c4or1k, in c4mp. This section records the agreed direction.
+
+**Step 1 -- native TAP backend (small, immediate).** The native build
+already has a real host; a TAP/socket backend can drop straight in
+behind the `net_tx` (guest->host) / `eth_rx` (host->guest) seam that
+M15 shaped for exactly this. Open `/dev/net/tun` (or a datagram
+socket), non-blocking; `net_poll` drains it into `eth_rx`. Gated on
+privileges. This proves end-to-end external traffic native-first,
+same methodology as the rest of the project, without touching the VM.
+
+**Step 2 -- a c4mp socket/packet primitive (the VM piece).** For the
+HOSTED builds to reach the host network, c4mp must grow host I/O beyond
+the file/stdio calls it exposes today: a small socket/packet opcode
+family (open a TAP fd or datagram socket, non-blocking read/write),
+added the same way M18's TRAW was -- appended opcodes, native
+implementation in `vm.c`, stubbed under a hosted c4mp. c4or1k then uses
+it behind the same `net_tx`/`eth_rx` seam, so the guest-facing code is
+unchanged.
+
+**Step 3 -- the bigger vehicle: a Linux-compat layer on C4IX (opt-in,
+cisc-only).** The proposed longer-term home for host networking is not
+c4or1k at all but C4IX (this repo's Linux-like OS, `src/c4ix`, compiled
+by c4lc): add an opt-in, `-mcisc`-only Linux syscall-compatibility
+layer so real OpenRISC/Linux userland -- starting with busybox -- runs
+directly on C4IX, backed by a real TCP/IP stack over the c4mp socket
+primitive from Step 2. That turns "emulate a whole Linux kernel to get
+a shell" into "run the Linux userland on C4IX directly," which is
+dramatically cheaper than the full-system emulation c4or1k does, while
+reusing the socket primitive. Rough milestone shape:
+
+  * L0 -- syscall shim: map the busybox-critical Linux syscalls
+    (open/read/write/close/stat/mmap-ish/brk/clone-lite/wait/execve,
+    the socket set) onto C4IX's own, behind an opt-in ABI flag; cisc
+    only, so it never touches the base C4IX build.
+  * L1 -- ELF/loader for static OpenRISC busybox, or a c4lc-compiled
+    busybox subset; get `sh` + coreutils applets running.
+  * L2 -- TCP/IP: a minimal stack (ARP/IP/UDP/TCP/DNS) over the c4mp
+    socket/packet primitive, exposed through the Step-1 syscalls.
+  * L3 -- reconcile with c4or1k: the two share the ethernet framing and
+    the synthetic-peer test harness, so c4or1k's `net.c` becomes the
+    offline oracle for C4IX's stack.
+
+This is a multi-part initiative spanning c4mp and C4IX, not a c4or1k
+change, and is written here as the shared plan of record; the concrete
+next step whenever it is picked up is Step 1 (native TAP), which is
+low-risk and immediately demonstrable.

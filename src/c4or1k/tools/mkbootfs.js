@@ -31,7 +31,21 @@
 // system tool is simpler and more robust than re-hosting jor1k's JS
 // decompressor in a script that never runs inside c4m.
 //
-// Usage: node mkbootfs.js basefs.json basefs-src-dir out.idx out.blob
+// MULTIPLE MANIFESTS / MERGE: jor1k boots by loading basefs.json, then
+// overlaying the much larger fs.json (jorconsole loads the second over
+// the first -- see filesystem.js's OnLoaded). Both are walked into one
+// shared inode tree, and a directory that already exists is *merged
+// into*, not duplicated. This tool replicates that: pass any number of
+// (manifest, src-dir) pairs and they are processed in order into one
+// combined idx/blob, using fsloader.js's HandleDirContents merge rule
+// (a re-seen directory reuses the existing inode; a re-seen file is
+// prepended and shadows the earlier one, exactly as jor1k's newest-
+// first child list resolves it). This is how the extended filesystem
+// reaches c4or1k -- everything resident up front, since there is no
+// network to lazy-load over (see bootfs.h).
+//
+// Usage: node mkbootfs.js out.idx out.blob manifest1.json srcdir1 \
+//                                          [manifest2.json srcdir2 ...]
 
 "use strict";
 
@@ -44,16 +58,20 @@ const S_IFREG = 0x8000;
 const S_IFDIR = 0x4000;
 const S_IRWXUGO = 0x1FF;
 
-const NAME_LEN = 32;
-const RECORD_LEN = 64; // name[32] + 8 x int32
+const NAME_LEN = 64;   // must match bootfs.h's BOOTFS_NAME_LEN. Raised from
+                       // 32 for the extended fs, whose longest name is 54.
+const RECORD_LEN = NAME_LEN + 32; // name[NAME_LEN] + 8 x int32
 
-if (process.argv.length < 6) {
-    console.error("usage: mkbootfs.js basefs.json basefs-src-dir out.idx out.blob");
+// Usage: mkbootfs.js OUT_IDX OUT_BLOB (MANIFEST SRCDIR)...
+const args = process.argv.slice(2);
+if (args.length < 4 || (args.length % 2) !== 0) {
+    console.error("usage: mkbootfs.js out.idx out.blob (manifest.json src-dir)...");
     process.exit(1);
 }
-const [, , basefsJsonPath, basefsSrcDir, outIdxPath, outBlobPath] = process.argv;
-
-const manifest = JSON.parse(fs.readFileSync(basefsJsonPath, "utf8"));
+const outIdxPath = args[0];
+const outBlobPath = args[1];
+const manifestPairs = []; // [{jsonPath, srcDir}, ...] processed in order
+for (let i = 2; i < args.length; i += 2) manifestPairs.push({ jsonPath: args[i], srcDir: args[i + 1] });
 
 // inode[i] = { name, mode, uid, gid, parentid, firstid, nextid, size, data }
 // data is a Buffer (file content or symlink target bytes) or null (dir).
@@ -78,9 +96,20 @@ function fullPath(idx) {
     return p.substring(1);
 }
 
-function loadFileData(tag, idx) {
+// Mirrors FS.prototype.Search: the newest child of parentid whose name
+// matches (children are prepended, so a linear scan newest-first would
+// do; parentid+name equality over the flat array is equivalent and
+// simpler here). -1 if absent.
+function search(parentid, name) {
+    for (let i = inodes.length - 1; i >= 0; --i) {
+        if (inodes[i].parentid === parentid && inodes[i].name === name) return i;
+    }
+    return -1;
+}
+
+function loadFileData(tag, idx, srcDir) {
     const srcRel = tag.src ? tag.src : fullPath(idx);
-    const srcPath = path.join(basefsSrcDir, srcRel);
+    const srcPath = path.join(srcDir, srcRel);
     if (tag.c) {
         const data = execFileSync("bunzip2", ["-c", srcPath + ".bz2"], { maxBuffer: 1 << 28 });
         if (data.length != tag.size) {
@@ -95,8 +124,23 @@ function loadFileData(tag, idx) {
     return data;
 }
 
-function handleDirContents(list, parentid) {
+function handleDirContents(list, parentid, srcDir) {
     for (const tag of list) {
+        // fsloader.js's merge rule: if a same-named entry already exists
+        // under parentid AND this tag is a directory (no symlink path,
+        // no file size), recurse into the existing inode instead of
+        // creating a duplicate. This is what lets fs.json overlay
+        // basefs.json -- their shared dirs (/usr, /etc, /root, ...) fuse
+        // into one tree. A re-seen file/symlink is NOT merged: it's
+        // created and, being newer, shadows the earlier one on lookup
+        // (bootfs_search returns the newest match), exactly as jor1k's
+        // newest-first child list resolves it.
+        const existing = search(parentid, tag.name);
+        if (existing !== -1 && !tag.path && (typeof tag.size === "undefined")) {
+            if (tag.child) handleDirContents(tag.child, existing, srcDir);
+            continue;
+        }
+
         const idx = pushInode({
             name: tag.name,
             mode: 0,
@@ -116,10 +160,10 @@ function handleDirContents(list, parentid) {
             inode.size = inode.data.length;
         } else if (typeof tag.size === "undefined") { // directory
             inode.mode = parseInt(tag.mode, 8) | S_IFDIR;
-            if (tag.child) handleDirContents(tag.child, idx);
+            if (tag.child) handleDirContents(tag.child, idx, srcDir);
         } else { // regular file
             inode.mode = parseInt(tag.mode, 8) | S_IFREG;
-            inode.data = loadFileData(tag, idx);
+            inode.data = loadFileData(tag, idx, srcDir);
             inode.size = inode.data.length;
         }
     }
@@ -127,7 +171,12 @@ function handleDirContents(list, parentid) {
 
 // Root directory, matching fsloader's this.fs.CreateDirectory("", -1).
 pushInode({ name: "", mode: S_IRWXUGO | S_IFDIR, uid: 0, gid: 0, parentid: -1, firstid: -1, nextid: -1, size: 0, data: null });
-handleDirContents(manifest.fs, 0);
+// Each manifest is walked into the shared tree in order, so a later
+// manifest (fs.json) overlays an earlier one (basefs.json).
+for (const { jsonPath, srcDir } of manifestPairs) {
+    const manifest = JSON.parse(fs.readFileSync(jsonPath, "utf8"));
+    handleDirContents(manifest.fs, 0, srcDir);
+}
 
 // Lay out the blob and assign bloboff to every inode with data.
 const chunks = [];
@@ -154,14 +203,14 @@ inodes.forEach((inode, i) => {
         process.exit(1);
     }
     nameBytes.copy(idx, off);
-    idx.writeInt32LE(inode.mode, off + 32);
-    idx.writeInt32LE(inode.uid, off + 36);
-    idx.writeInt32LE(inode.gid, off + 40);
-    idx.writeInt32LE(inode.parentid, off + 44);
-    idx.writeInt32LE(inode.firstid, off + 48);
-    idx.writeInt32LE(inode.nextid, off + 52);
-    idx.writeInt32LE(inode.size, off + 56);
-    idx.writeInt32LE(inode.bloboff, off + 60);
+    idx.writeInt32LE(inode.mode, off + NAME_LEN);
+    idx.writeInt32LE(inode.uid, off + NAME_LEN + 4);
+    idx.writeInt32LE(inode.gid, off + NAME_LEN + 8);
+    idx.writeInt32LE(inode.parentid, off + NAME_LEN + 12);
+    idx.writeInt32LE(inode.firstid, off + NAME_LEN + 16);
+    idx.writeInt32LE(inode.nextid, off + NAME_LEN + 20);
+    idx.writeInt32LE(inode.size, off + NAME_LEN + 24);
+    idx.writeInt32LE(inode.bloboff, off + NAME_LEN + 28);
 });
 
 fs.writeFileSync(outIdxPath, idx);

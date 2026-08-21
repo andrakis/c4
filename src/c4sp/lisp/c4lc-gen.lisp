@@ -176,7 +176,8 @@
 	("__c4_cpu_id" CPUI) ("__c4_cpu_count" CPUN)
 	("__c4_cpu_start" CPUS) ("__c4_cpu_halt" CPUH)
 	("__c4_cas" CAS) ("__c4_xchg" XCHG) ("__c4_fadd" FADD)
-	("__c4_wait" CWAI) ("__c4_wake" CWAK) ("__c4_ipi" IPI)))
+	("__c4_wait" CWAI) ("__c4_wake" CWAK) ("__c4_ipi" IPI)
+	("__c4_termraw" TRAW)))
 (define g:sysinit (lambda (l)
 	(if (empty? l) nil
 	(begin

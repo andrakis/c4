@@ -174,6 +174,17 @@ test-c4l: $(C4) $(C4M) $(C4CC) $(TESTS)/hello.c4r
 	rm -f .c4l_sw.c4r
 	@echo "test-c4l: OK"
 
+# cpp, the C preprocessor for the C4 toolchain (docs/c4dos-design.md).
+# Strict-c4 dialect: the same source is a native binary here, a .c4r
+# via c4cc, and runs interpreted under plain c4 (test-cpp checks that
+# tower). It exists so the self-hosting ladder can preprocess without
+# gcc; the pin is image parity against the gcc -E pipeline.
+cpp: src/c4dos/cpp.c
+	gcc -O2 -o cpp src/c4dos/cpp.c
+
+test-cpp: cpp $(C4) $(C4CC)
+	bash src/c4dos/tests/test-cpp.sh
+
 # c4sp, the Lisp interpreter (docs/c4sp-design.md)
 C4SP_SRCS := src/c4sp/c4sp.c src/c4sp/include/cell.h src/c4sp/include/gc.h \
              src/c4sp/include/cells.h src/c4sp/include/atoms.h \
@@ -387,7 +398,7 @@ define c4lc_compile_par
 		|| { echo "c4lc: a parallel module compile failed"; exit 1; }
 endef
 C4OR1K_SRC  := src/c4or1k
-C4OR1K_MODS := mem mmio uart console bootfs virtio virtio9p eth net cpu boot main
+C4OR1K_MODS := mem mmio uart console bootfs virtio virtio9p eth net fpu cpu boot main
 
 # Parallel per-module c4lc compile. The modules are independent .c ->
 # .c4o objects, and a single c4lc invocation is slow, so run several
@@ -401,8 +412,8 @@ endef
 # with -D C4OR1K_JIT=1, which is what actually enables the driver-loop
 # hooks in cpu.c/mem.c/main.c -- without the define those compile to
 # exactly the M12 code, so the default and -mcisc images pay nothing.
-C4OR1K_JIT_MODS := mem mmio uart console bootfs virtio virtio9p eth net jit cpu boot main
-C4OR1K_HDRS := $(C4OR1K_SRC)/cpu.h $(C4OR1K_SRC)/mem.h $(C4OR1K_SRC)/jit.h
+C4OR1K_JIT_MODS := mem mmio uart console bootfs virtio virtio9p eth net fpu jit cpu boot main
+C4OR1K_HDRS := $(C4OR1K_SRC)/cpu.h $(C4OR1K_SRC)/mem.h $(C4OR1K_SRC)/jit.h $(C4OR1K_SRC)/fpu.h
 # -O (M7): ~4% faster on a real boot workload, byte-for-byte identical
 # output on the full M1-M4 regression suite and a real boot -- a small
 # but real, zero-cost win worth keeping on by default given how many
@@ -507,7 +518,21 @@ BASEFS_JSON := ../jorconsole/jor1k-sysroot/or1k/basefs.json
 BASEFS_SRC  := ../jorconsole/jor1k/sys/or1k/basefs
 src/c4or1k/images/bootfs.idx src/c4or1k/images/bootfs.blob: src/c4or1k/tools/mkbootfs.js $(BASEFS_JSON)
 	mkdir -p src/c4or1k/images
-	node src/c4or1k/tools/mkbootfs.js $(BASEFS_JSON) $(BASEFS_SRC) src/c4or1k/images/bootfs.idx src/c4or1k/images/bootfs.blob
+	node src/c4or1k/tools/mkbootfs.js src/c4or1k/images/bootfs.idx src/c4or1k/images/bootfs.blob $(BASEFS_JSON) $(BASEFS_SRC)
+# The EXTENDED filesystem: basefs.json overlaid with jor1k's full
+# fs.json (~7000 inodes, ~127MB of bz2-compressed backing -- the real
+# Debian/OpenRISC userland: bash, perl, X libs, man pages, ...). Built
+# by the same tool from BOTH manifests merged (mkbootfs.js's header
+# explains the fs.json overlay + dir-merge). NATIVE-ONLY for now: the
+# resident blob is far too large to be practical under c4m/c4mp (the
+# user's call -- prove it native first, backport the loading strategy
+# later if it's worth it). bootfs.c loads it exactly like the small one.
+EXTFS_JSON := ../jorconsole/jor1k-sysroot/fs.json
+EXTFS_SRC  := ../jorconsole/jor1k-sysroot/fs
+src/c4or1k/images/bootfs-ext.idx src/c4or1k/images/bootfs-ext.blob: src/c4or1k/tools/mkbootfs.js $(BASEFS_JSON) $(EXTFS_JSON)
+	mkdir -p src/c4or1k/images
+	node src/c4or1k/tools/mkbootfs.js src/c4or1k/images/bootfs-ext.idx src/c4or1k/images/bootfs-ext.blob \
+		$(BASEFS_JSON) $(BASEFS_SRC) $(EXTFS_JSON) $(EXTFS_SRC)
 c4or1k-boot: c4m c4or1k.c4r src/c4or1k/images/bootfs.idx src/c4or1k/images/bootfs.blob
 	./c4m load-c4r.c -- c4or1k.c4r $(VMLINUX) -b $(N) src/c4or1k/images/bootfs.idx src/c4or1k/images/bootfs.blob
 # M11: c4mp (src/c4mp) is opcode-for-opcode compatible with c4m -- a
@@ -539,6 +564,11 @@ c4or1k-native: $(patsubst %,$(C4OR1K_SRC)/%.c,$(C4OR1K_MODS)) $(C4OR1K_HDRS) $(C
 		$(patsubst %,$(C4OR1K_SRC)/%.c,$(C4OR1K_MODS)) -o c4or1k-native
 c4or1k-boot-native: c4or1k-native src/c4or1k/images/bootfs.idx src/c4or1k/images/bootfs.blob
 	./c4or1k-native $(VMLINUX) -b $(N) src/c4or1k/images/bootfs.idx src/c4or1k/images/bootfs.blob
+# The extended-filesystem boot -- NATIVE ONLY (see the bootfs-ext rule).
+# The full userland reaches an interactive shell with real bash, perl,
+# man, vi, etc. instead of just busybox. Same emulator, larger backing.
+c4or1k-boot-native-ext: c4or1k-native src/c4or1k/images/bootfs-ext.idx src/c4or1k/images/bootfs-ext.blob
+	./c4or1k-native $(VMLINUX) -b $(N) src/c4or1k/images/bootfs-ext.idx src/c4or1k/images/bootfs-ext.blob
 test-oisc4-nested: $(OISC4) $(C4) $(C4M) oisc4-lc.c4r $(TESTS)/hello.c4r
 	$(C4M) load-c4r.c -- oisc4-lc.c4r -m 32 $(TESTS)/hello.c4r | grep -q yello
 	$(C4) c4l.c oisc4-lc.c4r -m 32 $(TESTS)/hello.c4r | grep -q yello

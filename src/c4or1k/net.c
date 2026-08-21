@@ -188,6 +188,69 @@ void handle_icmp(char *f, int ihl, int icmp, int iptot) {
     ip_finish();
 }
 
+// ---- DNS ------------------------------------------------------------
+// A synthetic resolver. There is no real upstream (the whole peer is
+// pure C, no host sockets -- see net.h), so every name is answered from
+// a deterministic, made-up address instead of a real lookup: the QNAME
+// bytes are hashed into an off-subnet 11.x.x.x address. Off-subnet
+// matters -- the guest then routes to it via the gateway (whose ARP and
+// ICMP echo this peer already answers), so `ping <name>` resolves AND
+// gets replies, where before name resolution failed outright. Only A
+// (IPv4) queries get an answer; anything else (AAAA, ...) gets a
+// well-formed NOERROR/0-answer response so the resolver moves on rather
+// than hanging. Real name resolution needs the c4mp socket bridge
+// (docs/c4or1k-design.md's M15/future-work + M18 plan).
+void handle_dns(char *f, int l4) {
+    int dns, id, qdcount, qtype, qname_off, o, hash, synth_ip, sport, src_ip, qend, qlen, i;
+    dns = l4 + 8;                                  // DNS starts after the UDP header
+    id = g16(f, dns);
+    qdcount = g16(f, dns + 4);
+    if (qdcount < 1) return;
+
+    // Walk the QNAME labels (bounded) to find its terminating 0, then
+    // QTYPE/QCLASS follow. Hash the name bytes for the synthetic answer.
+    qname_off = dns + 12;
+    o = qname_off;
+    hash = 0x811c9dc5;                             // FNV-1a offset basis
+    i = 0;
+    while (i < 255 && (g8(f, o) != 0)) {
+        hash = (hash ^ g8(f, o)) * 16777619;
+        ++o; ++i;
+    }
+    qend = o;                                      // the 0 length-octet
+    qtype = g16(f, qend + 1);
+    qlen = (qend + 1) - qname_off;                 // QNAME length incl. the 0 octet
+    src_ip = g32(f, 26);
+    sport = g16(f, l4);                            // guest's query source port
+
+    // 11.x.x.x from the low 24 bits of the hash (never .0 in the last
+    // octet, to avoid a network address).
+    synth_ip = 0x0B000000 | (hash & 0x00FFFFFF);
+    if ((synth_ip & 0xFF) == 0) synth_ip = synth_ip | 1;
+
+    ip_begin(eth_mac, GW_IP, src_ip, 17);          // reply src = the DNS server, dst = guest
+    { int udp_off, udp_len, ancount;
+      ancount = (qtype == 1) ? 1 : 0;              // answer only A queries
+      udp_off = nc;
+      p16(53); p16(sport);                         // UDP sport=53, dport=guest
+      p16(0); p16(0);                              // length (patched), checksum 0 (unused)
+      p16(id);                                     // DNS id (echo)
+      p16(0x8180);                                 // flags: response, RD, RA, NOERROR
+      p16(1); p16(ancount); p16(0); p16(0);        // QD=1, AN, NS=0, AR=0
+      pbytes(f, qname_off, qlen);                  // echo the QNAME
+      p16(qtype); p16(1);                          // QTYPE, QCLASS=IN
+      if (ancount) {
+          p16(0xC00C);                             // NAME: pointer to the QNAME at offset 12
+          p16(1); p16(1);                          // TYPE=A, CLASS=IN
+          p32(60);                                 // TTL
+          p16(4); p32(synth_ip);                   // RDLENGTH=4, RDATA=synthetic IPv4
+      }
+      udp_len = nc - udp_off;
+      patch16(udp_off + 4, udp_len);               // UDP length
+    }
+    ip_finish();
+}
+
 // ---- entry ----------------------------------------------------------
 void net_tx(char *f, int len) {
     int ethertype, proto, ihl, l4, iptot;
@@ -202,6 +265,7 @@ void net_tx(char *f, int len) {
     iptot = g16(f, 16);
     l4 = 14 + ihl;                                 // transport header offset
     if (proto == 17 && g16(f, l4 + 2) == 67) handle_dhcp(f, ihl, l4);
+    else if (proto == 17 && g16(f, l4 + 2) == 53) handle_dns(f, l4);
     else if (proto == 1) handle_icmp(f, ihl, l4, iptot);
 }
 

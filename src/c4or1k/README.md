@@ -5,13 +5,16 @@ and compiled by c4lc. A port of [jor1k](https://github.com/s-macke/jor1k)
 (a JavaScript OR1000 emulator) to the C4 VM toolchain. See
 `docs/c4or1k-design.md` for the milestone roadmap and design rationale.
 
-Console only -- no framebuffer, no keyboard device. Terminal raw mode
-is handled by `run-c4or1k.sh`, an external wrapper, not by the VM (the
-C4 VM has no ioctl/termios facility, see that script's header comment).
+Console only -- no framebuffer, no keyboard device. As of M18 the VM
+puts its own terminal in raw mode (a new c4mp `TRAW` opcode / native
+termios), so a typed **Ctrl+C is forwarded to the guest** instead of
+killing the emulator; `Ctrl-] x` quits. (`run-c4or1k.sh` remains as an
+external fallback for the plain-c4m path, which has no TRAW opcode.)
 
-## Status: M6 done -- it boots real Linux to an interactive shell. M7-M13: hosted perf work (c4mp host, -mcisc, a real JIT emitting c4m bytecode -- fastest hosted config ~2x the original). M14: the NATIVE build boots the same kernel to the same shell in ~4 SECONDS (vs ~25 hosted minutes originally) -- byte-identical output, same sources. M15: an ethmac ethernet device + a pure-C synthetic LAN peer bring eth0 up and get a real DHCP lease (native and hosted alike). (M0-M4 preserved in docs/c4or1k-design.md)
+## Status: M6 done -- it boots real Linux to an interactive shell. M7-M13: hosted perf work (c4mp host, -mcisc, a real JIT emitting c4m bytecode -- fastest hosted config ~2x the original). M14: the NATIVE build boots the same kernel to the same shell in ~4 SECONDS (vs ~25 hosted minutes originally) -- byte-identical output, same sources. M15: an ethmac ethernet device + a pure-C synthetic LAN peer bring eth0 up and get a real DHCP lease (native and hosted alike). M16: the EXTENDED filesystem (basefs+fs.json merged, ~7000 inodes of real userland -- bash/perl/X libs) boots natively, and OR1000 single-precision floating point (lf.*) is implemented (native), so awk/perl math works. M17: the guest idles nicely -- PMR-doze detection drops a pegged core to ~4% at the shell. M18: raw terminal mode + Ctrl+C forwarding, and a synthetic DNS responder so `ping google.com` resolves. (M0-M4 preserved in docs/c4or1k-design.md)
 
-    make c4or1k-boot-native N=700000000  # THE fast path: gcc-compiled emulator, full Linux boot to a real shell in ~7s (see M14)
+    make c4or1k-boot-native N=700000000      # THE fast path: gcc-compiled emulator, full Linux boot to a real shell in ~7s (see M14)
+    make c4or1k-boot-native-ext N=900000000  # M16: same, but the EXTENDED filesystem (real bash/perl/X userland; native only)
 
     make c4or1k-boot                # boot a real kernel under c4m; N=<steps> to change the budget (default 2M)
     make c4or1k-boot-mp              # same, under c4mp instead -- ~18-20% faster, same .c4r, zero source changes (see M11)

@@ -38,6 +38,53 @@
 
 int c4mp_debug;
 
+// ---- raw terminal mode (TRAW opcode, M18) ---------------------------
+// c4or1k needs fd 0 in raw mode so a typed Ctrl+C is delivered to the
+// guest as a byte (its tty line discipline then signals the guest's
+// foreground process) instead of the host terminal turning it into a
+// SIGINT that kills the emulator. The C4 VM otherwise has no termios
+// facility (that was why run-c4or1k.sh existed), so this host syscall
+// adds exactly that one capability. tty-aware: a no-op returning 0 when
+// fd 0 is not a tty (piped input, tests), so those paths are unchanged.
+// Restored on normal exit via atexit and on SIGTERM/SIGHUP.
+//
+// c4.h has already done `#define int __INTPTR_TYPE__` by this point, so
+// `int` here would be `long` -- wrong for termios/signal, whose real
+// prototypes take a genuine `int`. Undef it around this block (the same
+// trick c4.c/native.h use) and restore it after.
+#ifndef __c4cc__
+#undef int
+#include <termios.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <signal.h>
+static struct termios c4_tty_saved;
+static int c4_tty_raw_on;
+static void c4_tty_restore() { if (c4_tty_raw_on) { tcsetattr(0, TCSANOW, &c4_tty_saved); c4_tty_raw_on = 0; } }
+static void c4_tty_sig(int s) { c4_tty_restore(); signal(s, SIG_DFL); raise(s); }
+static int c4_termraw(int on) {
+    struct termios raw;
+    if (on) {
+        if (!isatty(0)) return 0;
+        if (c4_tty_raw_on) return 1;
+        if (tcgetattr(0, &c4_tty_saved)) return 0;
+        raw = c4_tty_saved;
+        cfmakeraw(&raw);
+        tcsetattr(0, TCSANOW, &raw);
+        c4_tty_raw_on = 1;
+        atexit(c4_tty_restore);
+        signal(SIGTERM, c4_tty_sig);
+        signal(SIGHUP, c4_tty_sig);
+        return 1;
+    }
+    c4_tty_restore();
+    return 0;
+}
+#define int __INTPTR_TYPE__
+#else
+static int c4_termraw(int on) { return 0; } // no termios under a hosted c4mp
+#endif
+
 // The address of this word is the return PC pushed into every trap
 // frame, so a handler's ordinary LEV lands on a TLEV. It holds the
 // TLEV opcode itself; c4m does the same with tlev_instruction.
@@ -70,7 +117,8 @@ void c4_vm_init() {
         "FLT ,"
         "JSRI,JSRS,JMPA,TLEV,DBG ,"
         "CPUI,CPUN,CPUS,CPUH,"
-        "CAS ,XCHG,FADD,CWAI,CWAK,IPI ,";
+        "CAS ,XCHG,FADD,CWAI,CWAK,IPI ,"
+        "LXI ,SXI ,TRAW,";
 }
 
 char *c4_opname(int op) {
@@ -550,6 +598,12 @@ int c4_run(struct c4_cpu * RESTRICT c, int quantum) {
 #else
             a = c4_float_instruction(sp);
 #endif
+            break;
+
+        case TRAW:
+            // __c4_termraw(on): put fd 0 in (on!=0) or out of raw mode.
+            // Returns 1 if raw mode is in effect, else 0.
+            a = c4_termraw(*sp);
             break;
 
         // ---- processors ----

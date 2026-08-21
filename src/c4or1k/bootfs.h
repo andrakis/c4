@@ -15,8 +15,13 @@
 // needs (its files are fetched over the network) has no reason to
 // exist here; every bootfs_* call below returns its result immediately.
 
-enum { BOOTFS_MAX_INODES = 1024 };
-enum { BOOTFS_NAME_LEN = 32 };
+// Sized for the extended filesystem (basefs.json + fs.json merged:
+// ~7100 inodes, longest name 54 bytes), with headroom for the inodes a
+// running guest creates (TLCREATE/TMKDIR). The basefs-only build uses a
+// fraction of this; the arrays are malloc'd, so the cap only bounds the
+// allocation, it is not a per-boot cost.
+enum { BOOTFS_MAX_INODES = 16384 };
+enum { BOOTFS_NAME_LEN = 64 };
 
 // S_IFMT bits, matching filesystem.js.
 enum { BOOTFS_S_IFDIR = 0x4000, BOOTFS_S_IFREG = 0x8000, BOOTFS_S_IFLNK = 0xA000 };

@@ -105,13 +105,18 @@ c4/c4m have NO file-write primitive (READ only). Writing therefore is
 a DOS SERVICE: an in-memory RAM disk (name → buffer table) reachable
 through `__c4dos_api`, DOS-style `DEVICE=RAMDISK.SYS`. `DIR` lists
 the union of the host/c4bb disk (read-only) and the RAM disk (rw);
-opens check the RAM disk first. Output redirection (`CPP FOO.C >
-FOO.I` in batch) captures console output through the single
-choke-point writer (the c4lm stdio.h pattern) into a RAM-disk file.
-This is what makes the self-hosting ladder possible in-machine:
-compiler outputs land on the RAM disk, and the next stage reads them
-back. (In HOMEWARD, persistent disk write arrives later as built
-hardware; the RAM disk is honest about what the machine can do.)
+opens check the RAM disk first. This is what makes the self-hosting
+ladder possible in-machine: compiler outputs land on the RAM disk,
+and the next stage reads them back. (In HOMEWARD, persistent disk
+write arrives later as built hardware; the RAM disk is honest about
+what the machine can do.)
+
+DECISION (user, 2026-08-21): NO `>` output redirection. Compilers and
+tools write files DIRECTLY through the API (`dos_create`/`dos_write`/
+`dos_close` slots) instead of a captured console — simpler, and
+anything printf-shaped can be done in software where needed (the c4lm
+stdio.h vsnprintf is sitting right there when a tool wants it). Batch
+stays a command list, not a shell language.
 
 ## CONFIG.SYS and AUTOEXEC.BAT
 

@@ -1,0 +1,3 @@
+@ECHO OFF
+ECHO Welcome to C4DOS
+VER

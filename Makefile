@@ -185,6 +185,13 @@ cpp: src/c4dos/cpp.c
 test-cpp: cpp $(C4) $(C4CC)
 	bash src/c4dos/tests/test-cpp.sh
 
+# C4DOS, the single-tasking trap-free DOS (docs/c4dos-design.md).
+# Strict-c4 core: the same image runs on c4bb, under native c4m, and
+# under PLAIN c4 via c4l.c (the clockless build) - test-c4dos checks
+# all three plus the c4-inside-DOS-inside-c4bb nesting.
+test-c4dos: cpp $(C4) $(C4M) $(C4CC) $(TESTS)/hello.c4r
+	bash src/c4dos/tests/test-c4dos.sh
+
 # c4sp, the Lisp interpreter (docs/c4sp-design.md)
 C4SP_SRCS := src/c4sp/c4sp.c src/c4sp/include/cell.h src/c4sp/include/gc.h \
              src/c4sp/include/cells.h src/c4sp/include/atoms.h \

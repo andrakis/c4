@@ -1,0 +1,2 @@
+REM C4DOS machine configuration
+DEVICE=CLOCK.SYS

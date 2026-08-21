@@ -140,5 +140,7 @@ hardware; the RAM disk is honest about what the machine can do.)
 ## The ladder (for HOMEWARD)
 
 samples → C4DOS (this) → C4DOS runs cpp+c4cc to build C4KE → C4KE
-(traps, preemption) → C4KE builds C4IX → C4IX (protected mode) →
-network coprocessor board (c4mp direction; SMP is a stretch goal).
+(traps, preemption) hosts c4sp + c4lc → c4lc builds C4IX (protected
+mode) → network coprocessor sub-board + CPU support → C4IX rebuilt
+with networking → the time machine's control link (c4mp direction;
+SMP is a stretch goal).

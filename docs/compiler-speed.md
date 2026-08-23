@@ -198,9 +198,22 @@ The honest denominator for anything measured later. Re-measure
       if-chain did not appear in the native profile at all. It may still matter
       under c4m, where each comparison is a whole VM instruction, so measure
       there with `__c4_cycles()` before spending anything on it.
-- [ ] **A1.4** Unpin `gcc -O0` (`Makefile:404-408`): `setjmp` into a local
-      `jmp_buf` immediately before the root scan and include the buffer in the
-      scanned range, plus `-fno-omit-frame-pointer`
+- [x] **A1.4** `gcc -O0` unpinned — native c4sp now builds at
+      `-O2 -fno-omit-frame-pointer`, worth **2.26x** on a module compile
+      (522.2 ms → 231.5 ms), byte-identical output. `gc_collect()` spills the
+      callee-saved registers with `setjmp` into a buffer in its own frame and
+      starts the conservative scan at that buffer, so a cell whose only
+      reference is in a register is still found. Native-only (`#if NATIVE`):
+      under the C4 VM there are no such registers and the scan is already
+      exact.
+
+      **The pin was real, and the fix was verified to be what lifts it**: an
+      `-O2` build *without* the spill dies immediately on `gcloop.lisp` with
+      `undefined variable: n` and crashes every real compile. With it,
+      `gcloop.lisp` passes and `sched.c` compiles byte-identically at arena
+      sizes of 200k, 400k and 1M cells — small enough to force collections
+      throughout. `test-c4sp`, `test-c4sp-opt`, `test-c4sp-deep`, `test-c4lc`,
+      `test-c4ix` all green.
 - [x] **A1.5** `c4sp.c4r` and `c4sp32.c4r` are now built by `c4lc -O`, not
       c4cc. 289,852 → 243,957 bytes (−15.8%) at 64 bits, 147,392 → 124,361
       (−15.6%) at 32 bits. This is the image every hosted run uses — under c4m,

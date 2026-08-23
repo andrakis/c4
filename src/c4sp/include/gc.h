@@ -9,6 +9,10 @@
 // point and statistics exist now so nothing above this file changes shape
 // when the real collector lands.
 
+#if NATIVE
+#include <setjmp.h>
+#endif
+
 int *gc_arena;        // base of the cell arena
 int  gc_arena_words;  // total words in the arena
 int  gc_ncells;       // cells in the arena
@@ -117,6 +121,17 @@ void gc_drain () {
 // only reference to a cell in a callee-saved register. Under the C4 VM the
 // scan is exact by construction.
 void gc_collect () {
+#if NATIVE
+	// Spill the callee-saved registers into a buffer that lives in this
+	// frame, so the stack scan below sees them. Without this the scan
+	// only finds cells that happen to be in memory, and an optimising
+	// gcc is free to keep the ONLY reference to a live cell in a
+	// register -- which is why this file forced the native build to
+	// -O0 (Makefile). The buffer is scanned first because p starts at
+	// its address. Under the C4 VM there are no such registers and the
+	// scan is already exact, so this is native-only.
+	jmp_buf gc_regs;
+#endif
 	int *p, *c;
 	int i, freed;
 
@@ -132,7 +147,12 @@ void gc_collect () {
 	gc_mark((int)gc_root_b);
 	gc_mark((int)gc_root_c);
 	// ...and the C4 stack, scanned conservatively.
+#if NATIVE
+	setjmp(gc_regs);
+	p = (int *)&gc_regs;
+#else
 	p = (int *)(&p + 1);
+#endif
 	while (p < gc_stack_base) {
 		gc_mark(*p);
 		++p;

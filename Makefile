@@ -439,11 +439,16 @@ C4SP_SRCS := src/c4sp/c4sp.c src/c4sp/include/cell.h src/c4sp/include/gc.h \
              src/c4sp/include/read.h src/c4sp/include/stdlib.h \
              src/c4sp/include/eval.h src/c4sp/include/cek.h \
              include/c4_float.h
-# -O0 is load-bearing: the collector finds roots by scanning the stack, and
-# an optimizing gcc may keep the only reference to a cell in a register.
-# Under the C4 VM the scan is exact; this caveat is native-only.
+# -O2 is safe since gc_collect() spills the callee-saved registers with
+# setjmp and scans the buffer along with the stack (src/c4sp/include/gc.h).
+# Before that it was NOT: an optimizing gcc keeps the only reference to a
+# live cell in a register, the conservative scan misses it, and the cell is
+# collected -- an -O2 build without the spill dies on gcloop.lisp with
+# "undefined variable: n" and crashes every real compile. Under the C4 VM
+# there are no such registers and the scan is exact, so none of this
+# applies to c4sp.c4r.
 c4sp: $(C4SP_SRCS)
-	gcc $(EXTRA_CC) -O0 -g -Iinclude -I. -o c4sp src/c4sp/c4sp.c
+	gcc $(EXTRA_CC) -O2 -fno-omit-frame-pointer -g -Iinclude -I. -o c4sp src/c4sp/c4sp.c
 # Built by c4lc -O, not c4cc: measurably smaller and never slower
 # (docs/c4lc-design.md 11 measures -18.1% instructions on this image),
 # and this is the c4sp that every hosted run uses -- under c4m, inside
@@ -623,7 +628,7 @@ c4cc32: $(C4CC_SRCS)
 c4m32: c4m.c c4m_float.c
 	gcc -m32 $(NATIVE_CC_OPTS) c4m.c c4m_float.c -o c4m32 -lm
 c4sp32: $(C4SP_SRCS)
-	gcc -m32 $(EXTRA_CC) -O0 -g -Iinclude -I. -o c4sp32 src/c4sp/c4sp.c
+	gcc -m32 $(EXTRA_CC) -O2 -fno-omit-frame-pointer -g -Iinclude -I. -o c4sp32 src/c4sp/c4sp.c
 # 32-bit .c4r builds of the toolchain, for the c4bb disk: these are the
 # tools a system on that machine has to reach for, so they have to be
 # images the machine can load, not host binaries.

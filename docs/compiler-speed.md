@@ -195,18 +195,36 @@ The honest denominator for anything measured later. Re-measure
       (baseline 43.013 s for the compiles alone).
 
 - [ ] **A1.3** c4sp JSRI builtin dispatch — **deprioritised by A1.1**: the
-      if-chain did not appear in the profile at all natively. It may still
-      matter under c4m, where each comparison is a whole VM instruction, so
-      measure there with `__c4_cycles()` before spending anything on it.
+      if-chain did not appear in the native profile at all. It may still matter
+      under c4m, where each comparison is a whole VM instruction, so measure
+      there with `__c4_cycles()` before spending anything on it.
 - [ ] **A1.4** Unpin `gcc -O0` (`Makefile:404-408`): `setjmp` into a local
       `jmp_buf` immediately before the root scan and include the buffer in the
       scanned range, plus `-fno-omit-frame-pointer`
-- [ ] **A1.5** Build `c4sp.c4r` with `c4lc -O` instead of `c4cc`
-      (`Makefile:409-410`)
-- [ ] **A1.6** Parallelise the C4IX module build — `c4lc_compile_par` already
-      exists (`Makefile:611-628`) and `C4IX_MODS` is still a serial `for`
-      (`Makefile:842`). *(Note: the Makefile defines `c4lc_compile_par` twice;
-      the later definition wins.)*
+- [x] **A1.5** `c4sp.c4r` and `c4sp32.c4r` are now built by `c4lc -O`, not
+      c4cc. 289,852 → 243,957 bytes (−15.8%) at 64 bits, 147,392 → 124,361
+      (−15.6%) at 32 bits. This is the image every hosted run uses — under c4m,
+      inside C4KE, and on c4bb — so it is the one whose size and speed are felt.
+      `test-c4sp` green.
+- [x] **A1.6** C4IX module build parallelised through the existing
+      `c4lc_compile_par`. Full clean build of kernel + `libc4ix` + all 14
+      userland programs: **5.110 s**, from ~60 s at the start. `test-c4ix`
+      green.
+
+      **Found while doing it, and pre-existing: `c4rlink` is not
+      reproducible.** Linking the *same* twelve `.c4o` objects twice gives
+      images of identical size differing in 7,395 bytes. It is not the
+      parallelism and not c4lc — individual module compiles are deterministic
+      and byte-identical to the pre-change compiler. It is **ASLR**: under
+      `setarch -R` two links are byte-identical. c4rlink writes its own heap
+      addresses into the operand words of patched slots (the image has 1,878
+      patches), and those words are dead — the loader overwrites them via the
+      patch table, which is why every test still passes. Worth fixing, because
+      byte-comparison is this tree's main verification tool and any
+      link-involving "identical image" check is currently impossible. Not
+      fixed here: it is a change to a tool C4KE, C4IX, c4or1k and c4bb all
+      depend on, and it is outside A1.
+
 - [ ] **A1.7** Final re-measure, all wins combined
 
 ---

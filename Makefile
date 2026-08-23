@@ -444,8 +444,14 @@ C4SP_SRCS := src/c4sp/c4sp.c src/c4sp/include/cell.h src/c4sp/include/gc.h \
 # Under the C4 VM the scan is exact; this caveat is native-only.
 c4sp: $(C4SP_SRCS)
 	gcc $(EXTRA_CC) -O0 -g -Iinclude -I. -o c4sp src/c4sp/c4sp.c
-c4sp.c4r: $(C4CC) $(C4SP_SRCS)
-	$(PREPROC) src/c4sp/c4sp.c | $(C4CC) -o c4sp.c4r -
+# Built by c4lc -O, not c4cc: measurably smaller and never slower
+# (docs/c4lc-design.md 11 measures -18.1% instructions on this image),
+# and this is the c4sp that every hosted run uses -- under c4m, inside
+# C4KE, and on c4bb -- so it is the one whose size and speed are felt.
+c4sp.c4r: c4sp $(C4LC_LISP) $(C4SP_SRCS)
+	$(PREPROC) src/c4sp/c4sp.c > .c4sp_lcpp.c
+	$(C4SPLC) -c 16000000 src/c4sp/lisp/c4lc.lisp -O .c4sp_lcpp.c c4sp.c4r > /dev/null
+	rm -f .c4sp_lcpp.c
 # c4sp test, three parts:
 #  1. the canonical written form of each sample must survive a
 #     parse -> print -> parse -> print round trip;
@@ -621,8 +627,10 @@ c4sp32: $(C4SP_SRCS)
 # 32-bit .c4r builds of the toolchain, for the c4bb disk: these are the
 # tools a system on that machine has to reach for, so they have to be
 # images the machine can load, not host binaries.
-c4sp32.c4r: c4cc32 $(C4SP_SRCS)
-	$(PREPROC) src/c4sp/c4sp.c | ./c4cc32 -o c4sp32.c4r - > /dev/null
+c4sp32.c4r: c4sp32 $(C4LC_LISP) $(C4SP_SRCS)
+	$(PREPROC) src/c4sp/c4sp.c > .c4sp32_lcpp.c
+	./c4sp32 -R -c 16000000 src/c4sp/lisp/c4lc.lisp -O .c4sp32_lcpp.c c4sp32.c4r > /dev/null
+	rm -f .c4sp32_lcpp.c
 cpp32.c4r: c4cc32 include/c4dos.h $(SRCS)/c4dos/cpp.c
 	./c4cc32 -o cpp32.c4r include/c4dos.h $(SRCS)/c4dos/cpp.c > /dev/null
 
@@ -877,9 +885,10 @@ C4IX_MODS := boot console va host sl4b task sched vfs sys c4ke loader init
 c4ix.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/c4ix.h $(patsubst %,$(C4IX_SRC)/%.c,$(C4IX_MODS))
 	@# No gcc here: c4lc preprocesses the modules itself (L9). Each
 	@# object is byte-identical to the gcc -E path, pinned by test-c4lc.
-	for m in $(C4IX_MODS); do \
-		$(C4SPLC) -c 4000000 src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC) $(C4IX_SRC)/$$m.c .c4ix_$$m.c4o > /dev/null || exit 1; \
-	done
+	@# The twelve modules are independent .c -> .c4o compiles, so run
+	@# them in parallel exactly as the c4or1k rules do. c4lc_compile_par
+	@# propagates any module's failure through xargs.
+	$(call c4lc_compile_par,-O,$(C4IX_MODS),$(C4IX_SRC),.c4ix_)
 	$(C4RLINK) $(patsubst %,.c4ix_%.c4o,$(C4IX_MODS)) -o c4ix.c4r
 	rm -f .c4ix_*.pp.c .c4ix_*.c4o
 

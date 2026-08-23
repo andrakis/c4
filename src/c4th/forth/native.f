@@ -22,6 +22,7 @@ CREATE NSCR 4 CELLS ALLOT
 VARIABLE NDEPTH
 VARIABLE NACC
 VARIABLE NOK                       \ cleared when something is unsupported
+VARIABLE NBAD                      \ the xt that stopped it, for surveying
 
 1024 CONSTANT NMAX
 CREATE NMAP  NMAX CELLS ALLOT      \ threaded cell offset -> native address
@@ -126,13 +127,17 @@ CREATE NTGT NMAX CELLS ALLOT       \ non-zero if a threaded offset is branched t
    DUP nBRANCH = IF DROP
       SPILL 0 JMP, DUP 1 CELLS + @ SRCOFF FIX!
       2 CELLS + EXIT THEN
-   nEXIT = IF NEED-ACC LEV, 1 CELLS + EXIT THEN
-   \ anything else: this backend does not know it
-   0 NOK ! 1 CELLS + ;
+   DUP nEXIT = IF DROP NEED-ACC LEV, 1 CELLS + EXIT THEN
+   \ Anything else: this backend does not know it. Note the DUP above --
+   \ without it this arm consumes the xt and the fallback below then
+   \ operates on the ADDRESS instead, quietly eating a loop variable
+   \ rather than underflowing. That shape reports "declined" for the
+   \ wrong reason and looks fine.
+   NBAD ! 0 NOK ! 1 CELLS + ;
 
 : NCOMPILE ( body end -- ok? )
    OVER NBASE !  ASM-RESET
-   0 NDEPTH !  0 NACC !  0 NFIXN !  1 NOK !
+   0 NDEPTH !  0 NACC !  0 NFIXN !  1 NOK !  0 NBAD !
    NMAX 0 DO 0 NTGT I CELLS + ! LOOP
    \ Find the branch targets first. At a target the accumulator must be
    \ free, because the state there cannot depend on which way it was

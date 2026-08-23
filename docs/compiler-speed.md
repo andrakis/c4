@@ -296,6 +296,51 @@ per module.
 
 ---
 
+## How much is the Lisp interpreter actually costing? (measured 2026-08-23)
+
+Asked after A1 landed, because the c4bb figures still looked large. Answered
+with callgrind, exact instruction counts, same sources, same machine — c4cc
+(a C compiler written in C) against c4lc (a Lisp compiler on a Lisp
+interpreter):
+
+| workload | c4cc | c4lc | ratio |
+|---|---|---|---|
+| startup only (`int main(){return 0;}`) | 186,244 | 58,248,216 | 313x |
+| `src/tests/c4lc_l2.c` (~2.5 KB) | 369,408 | 152,648,002 | 413x |
+| `src/c4cc/c4cc.c` (75,651 B) | 579,257 | 2,255,151,237 | **3,893x** |
+
+Subtracting startup gives the marginal cost per source byte on the large file:
+**c4cc 5.2 instructions/byte, c4lc 29,040** — about **5,600x**. c4lc's *startup
+alone* is 100x c4cc's entire self-compile.
+
+c4cc is not a fair opponent — it is single-pass, has no AST, no optimizer, no
+preprocessor and a smaller language — so a C- or Forth-hosted compiler with
+c4lc's actual feature set would cost more than c4cc, plausibly 10-50x more.
+Even so that lands at 50-250 instructions/byte against c4lc's 29,040: a
+**100-500x** reduction.
+
+**What that means for c4bb.** A real C4IX module is 5.95 G cycles today. At
+100-500x less it is 12-60 M cycles, i.e. **roughly 0.6-3 seconds** on c4bb at
+~20M instructions/s — instead of 4m43s. The twelve-module kernel would go from
+~57 minutes to well under two minutes.
+
+**This overturns the conclusion recorded after A1** ("c4bb is not fast enough
+and no rewrite fixes it"). That was reasoned from the assumption that the
+residual cost was inherent compilation work. It is not: it is ~99.97%
+interpretation overhead. A2 is therefore justified again, and on much stronger
+evidence than the build-time argument that originally motivated it — the case
+now rests on hosted execution, where A1's wins cannot reach because `-O2` and
+native code do not exist for a `.c4r` image.
+
+**Host language for A2 is now an open choice.** C and Forth both compile to
+native code and so both collect the same 100-500x; speed no longer
+discriminates between them. What is left is ergonomics: C ports more
+mechanically from the existing Lisp (recursive functions over tagged lists),
+while Forth gives back the metaprogramming that Lisp was providing and is a
+language the project wants for its own sake.
+
+---
+
 ## Track A2 — c4lcc, c4lc in C
 
 Port c4lc to the C4 L7 dialect, keeping its architecture, phases, IR and `.c4r`

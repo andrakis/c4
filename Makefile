@@ -460,7 +460,8 @@ C4TH_SRCS := src/c4th/c4th.c src/c4th/include/mem.h src/c4th/include/dict.h \
              src/c4th/include/io.h src/c4th/include/inner.h \
              src/c4th/include/prim.h src/c4th/include/num.h \
              src/c4th/include/outer.h src/c4th/forth/core.f \
-             src/c4th/forth/asm.f src/c4th/forth/peep.f
+             src/c4th/forth/asm.f src/c4th/forth/peep.f \
+             src/c4th/forth/native.f
 # c4th (docs/c4th-design.md): a Forth for C4, built two ways from one
 # source exactly as c4sp is. -O2 needs no apology here -- c4th has no
 # collector scanning the stack, so nothing pins the native build open.
@@ -534,6 +535,17 @@ test-c4th: c4th c4th.c4r $(C4M) $(C4KE_C4R)
 	# unoptimized golden.
 	echo c4th | ./c4th src/c4th/forth/core.f src/c4th/forth/peep.f src/c4th/tests/peepon.f src/c4th/tests/tester.fr src/c4th/tests/core.fr | cmp - src/c4th/tests/expected/core-64.txt
 	echo c4th | $(C4M) load-c4r.c -- c4th.c4r src/c4th/forth/core.f src/c4th/forth/peep.f src/c4th/tests/peepon.f src/c4th/tests/tester.fr src/c4th/tests/core.fr | cmp - src/c4th/tests/expected/core-64.txt
+	# B5: the native backend. Only under c4m -- INVOKE is an indirect
+	# call through generated code, and the gcc build has no VM to invoke
+	# into, so natively it is a stub returning zero.
+	#
+	# The threaded engine is the oracle: it is the one that passes the
+	# Forth-2012 CORE suite. Every word is run both ways and the answers
+	# must agree. The last two entries must report "declined" -- words
+	# that reorder the stack are left threaded on purpose, and a backend
+	# that quietly emitted worse or wrong code for them would be worse
+	# than no backend at all.
+	$(C4M) load-c4r.c -- c4th.c4r src/c4th/forth/core.f src/c4th/forth/asm.f src/c4th/forth/native.f src/c4th/tests/b5.f | cmp - src/c4th/tests/expected/b5.txt
 	rm -f .c4th_core .c4th_fact.c4r .c4th_ccasm
 	@echo "test-c4th: OK"
 

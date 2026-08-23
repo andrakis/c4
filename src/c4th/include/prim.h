@@ -205,7 +205,21 @@ void th_p_dots (int *w) {           // .S -- non-standard but indispensable
 // natively CYCLES reads zero and INVOKE does nothing. That is the honest
 // behaviour -- there is no cycle counter and no VM to invoke into.
 void th_p_cycles (int *w) { th_push(__c4_cycles()); }
-void th_p_invoke (int *w) { th_push(__c4_invoke((int *)th_pop())); }
+// Call generated code. Not __c4_invoke: c4m implements C4IV only when it
+// is itself running under plain c4 (c4m.c's NOT_NATIVE branch), so
+// natively it does nothing and returns the accumulator unchanged. An
+// indirect call through a local is a JSRS, which works on every host --
+// the same mechanism the inner interpreter already runs on.
+#ifndef __c4cc__
+#define th_nf() ((int (*)())th_nf)()
+#endif
+
+void th_p_invoke (int *w) {
+	int *th_nf;
+
+	th_nf = (int *)th_pop();
+	th_push(th_nf());
+}
 
 void th_p_bye (int *w)  { th_ip = 0; th_quit = 1; }
 

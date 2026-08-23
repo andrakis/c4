@@ -345,11 +345,49 @@ with.
       final one; since the scratch buffer still held a copy, that too appeared
       to work until the next definition was optimized over the top of it. All
       three were found by the standards suite, none by the rule tests.
-- [ ] **B5** Native backend + metacompiler. **Do not start before B3 is
-      complete** — the standard suite is the oracle that catches stack-model
-      bugs. *Verify:* the c4opt byte-identical differential above; then
-      `native.f` compiles itself → `gen2.c4r`, `gen2` compiles it again →
-      `gen3.c4r`, `cmp gen2.c4r gen3.c4r`
+- [~] **B5** Native backend — **the compiler core is in and measured; the
+      deferred-operand model and the metacompiler are not.**
+
+      **The probe first** (`src/c4th/bench/`), because the strategy choice is
+      expensive to get wrong. Three timings of one loop under c4m:
+      threaded 343 cycles/iteration, strategy (a) 126, strategy (b) ceiling
+      24. So: build (b), `sp` as the data stack with TOS in the accumulator.
+
+      **`native.f` (200 lines) compiles the reorder-free subset**: literals,
+      `+ - * / MOD AND OR XOR`, all six comparisons, `1+ 1- @ C@ DUP DROP`,
+      `BRANCH`/`0BRANCH` and `EXIT`. Measured on a counting loop under c4m:
+
+      | | cycles | |
+      |---|---|---|
+      | threaded | 60,400,337 | |
+      | **native** | **1,400,337** | **43x**, 29 instructions emitted |
+
+      `: T 2 3 + ;` compiles to `ENT 0; IMM 2; PSH; IMM 3; ADD; LEV` — optimal.
+
+      **What it declines, and why it declines rather than trying.** `SWAP`,
+      `OVER`, `ROT` and `!` are left threaded. C4's store is
+      `*(int *)*sp++ = a`, so the destination must be pushed *before* the
+      value is computed — and here the value is already in the accumulator,
+      which loading the address would destroy. There is one register.  Done
+      properly through the frame, `SWAP` costs about seventeen instructions,
+      which is worse than what the threaded interpreter charges: compiling it
+      would make code *slower*.
+
+      The answer is a **deferred-operand model** — hold the top few stack
+      items as compile-time descriptions (this one is a literal, that one is a
+      fetch) and emit only when something forces them into existence. Then
+      `1 2 SWAP -` emits `IMM 2; PSH; IMM 1; SUB` with `SWAP` free, and
+      `x addr !` can push the address first because the *compiler* decides
+      the order. That is the rest of B5.
+
+      *Verified:* `make test-c4th` runs every word both ways against the
+      threaded engine — which is the oracle, being the one that passes the
+      CORE suite — and requires the declined words to say so.
+
+- [ ] **B5b** Deferred-operand model (unblocks `SWAP`/`OVER`/`ROT`/`!`),
+      calls between natively-compiled words, `(DO)`/`(LOOP)` natively, then
+      the metacompiler and `.c4r` emission with the `cmp gen2.c4r gen3.c4r`
+      fixed point and the `c4opt` byte-identical differential.
 - [ ] **B6** c4th inside C4IX. *Verify:* runs from the C4IX shell, output pinned
 
 ### Risks

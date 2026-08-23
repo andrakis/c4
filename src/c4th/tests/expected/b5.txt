@@ -1,0 +1,14 @@
+T1 ok
+T2 ok
+T3 ok
+T4 ok
+T5 ok
+T6 ok
+T7 ok
+T8 ok
+TA ok
+TB ok
+TC ok
+TD ok
+TE declined
+TF declined

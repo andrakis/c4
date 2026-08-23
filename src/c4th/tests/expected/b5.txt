@@ -7,9 +7,9 @@ T6 ok
 T7 ok
 T8 ok
 TA ok
-TB ok
 TC ok
 TD ok
+TB (unbalanced, expect declined) declined EXIT
 TE ok
 TF ok
 TG ok
@@ -22,3 +22,46 @@ TM ok
 TN ok
 TO ok
 TP ok
+A1 ok
+A2 ok
+A3 ok
+A4 ok
+A5 ok
+A6 ok
+A7 ok
+A8 (?DO with equal limits) ok
+A9 ok
+B1 ok
+B2 ok
+B3 ok
+B4 ok
+B5 ok
+B6 ok
+B7 ok
+C1 ok
+C2 ok
+C3 ok
+C4 ok
+C5 ok
+C6 ok
+C7 ok
+D1 ok
+D2 ok
+D3 ok
+D4 (recursive, expect declined) declined D4
+E1 ok
+E2 ok
+E3 ok
+E4 ok
+E5 ok
+E6 ok
+E7 ok
+E8 ok
+E9 ok
+F1 ok
+F2 ok
+F3 ok
+F4 ok
+F5 ok
+F6 (2!) compiles
+F7 (calls . , expect declined) declined .

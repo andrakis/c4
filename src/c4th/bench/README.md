@@ -28,3 +28,25 @@ Reproduce:
     ./c4cc -o /tmp/b.c4r src/c4th/bench/native.c && ./c4m load-c4r.c -- /tmp/b.c4r
     ./c4cc -o /tmp/a.c4r src/c4th/bench/strategy_a.c && ./c4m load-c4r.c -- /tmp/a.c4r
     ./c4m load-c4r.c -- c4th.c4r src/c4th/forth/core.f src/c4th/bench/threaded.f
+
+## b5c.f — counted loops, inlined calls, stack reordering (B5c)
+
+The B5 probe answered "which strategy"; this one answers "what did B5c
+buy". Five loops, each run threaded and then compiled and run natively,
+under c4m where `CYCLES` is a real counter:
+
+    ./c4m load-c4r.c -- c4th.c4r src/c4th/forth/core.f \
+        src/c4th/forth/asm.f src/c4th/forth/native.f src/c4th/bench/b5c.f
+
+| | threaded | native | |
+|---|---|---|---|
+| `DO`/`LOOP` with `I` | 34,300,951 | 1,700,354 | 20x |
+| `BEGIN`/`WHILE` with `>R`/`R>` | 107,201,208 | 3,100,351 | 34x |
+| loop calling another word | 20,080,951 | 440,354 | 45x |
+| loop reordering the stack | 21,681,110 | 1,540,357 | 14x |
+| loop through a `VARIABLE` | 71,501,323 | 2,200,356 | 32x |
+
+The call case is the fastest because inlining removes the call
+altogether; the shuffle case is the slowest because a permutation the
+compiler cannot do by moving code has to go through the frame, at about
+ten instructions an item.

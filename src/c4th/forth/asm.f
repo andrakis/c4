@@ -13,7 +13,7 @@
 \ This is the piece B5's native backend emits through, so it is worth
 \ having correct and readable before anything depends on it.
 
-CREATE ASMBUF 8192 ALLOT
+CREATE ASMBUF 65536 ALLOT
 VARIABLE ASMP
 : ASM-RESET  ASMBUF ASMP ! ;
 ASM-RESET

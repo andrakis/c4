@@ -224,7 +224,10 @@ void th_p_cycles (int *w) { th_push(__c4_cycles()); }
 // indirect call through a local is a JSRS, which works on every host --
 // the same mechanism the inner interpreter already runs on.
 #ifndef __c4cc__
-#define th_nf() ((int (*)())th_nf)()
+#define th_nf()        ((int (*)(void))th_nf)()
+#define th_nf1(a)      ((int (*)(int))th_nf1)(a)
+#define th_nf2(a,b)    ((int (*)(int,int))th_nf2)(a,b)
+#define th_nf3(a,b,c)  ((int (*)(int,int,int))th_nf3)(a,b,c)
 #endif
 
 void th_p_invoke (int *w) {
@@ -232,6 +235,31 @@ void th_p_invoke (int *w) {
 
 	th_nf = (int *)th_pop();
 	th_push(th_nf());
+}
+
+// Generated code for a word that takes arguments follows C4's own calling
+// convention -- the caller pushes them and the callee reads them off bp --
+// so calling it IS an ordinary call with that many arguments. Forth pushes
+// the first argument first, and so does C4, so the orders already agree.
+void th_p_invoke1 (int *w) {
+	int *th_nf1; int a;
+
+	th_nf1 = (int *)th_pop(); a = th_pop();
+	th_push(th_nf1(a));
+}
+
+void th_p_invoke2 (int *w) {
+	int *th_nf2; int a, b;
+
+	th_nf2 = (int *)th_pop(); b = th_pop(); a = th_pop();
+	th_push(th_nf2(a, b));
+}
+
+void th_p_invoke3 (int *w) {
+	int *th_nf3; int a, b, c;
+
+	th_nf3 = (int *)th_pop(); c = th_pop(); b = th_pop(); a = th_pop();
+	th_push(th_nf3(a, b, c));
 }
 
 void th_p_bye (int *w)  { th_ip = 0; th_quit = 1; }
@@ -426,5 +454,8 @@ void th_prims_init () {
 	th_defword("HEX",0,(int)&th_p_hex);
 	th_defword("CYCLES",0,(int)&th_p_cycles);
 	th_defword("INVOKE",0,(int)&th_p_invoke);
+	th_defword("INVOKE1",0,(int)&th_p_invoke1);
+	th_defword("INVOKE2",0,(int)&th_p_invoke2);
+	th_defword("INVOKE3",0,(int)&th_p_invoke3);
 	th_defword("BYE",0,(int)&th_p_bye);
 }

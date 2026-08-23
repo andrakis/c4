@@ -1,36 +1,41 @@
 \ Which words does the native backend decline, and what stops it?
 \
-\ This is the measurement that decides whether c4m needs new opcodes: if
-\ most refusals are stack reordering, opcodes would pay; if they are calls
-\ or loop control, they would not, and the work belongs in the compiler.
+\ This is the measurement that decides where the backend's remaining work
+\ is -- and, at B5b, whether c4m needed new stack opcodes. It walks
+\ core.f's colon definitions, tries to compile each one, and names the
+\ word that stopped it.
+\
+\ core.f only: the words asm.f and native.f define are the compiler's own
+\ scaffolding and would swamp the count. CMOVE is core.f's last
+\ definition, and the dictionary is a chain from newest to oldest, so
+\ starting there surveys core.f and then the primitives, which are not
+\ colon words and are skipped.
 
 : >CODE ( xt -- a )  5 CELLS + @ ;
 : >NLEN ( xt -- n )  3 CELLS + @ ;
 : >NAME ( xt -- a )  2 CELLS + @ ;
+: .WNAME ( xt -- )   DUP >NAME SWAP >NLEN TYPE ;
 : PROBE ;
 ' PROBE >CODE CONSTANT COLONS     \ what a colon definition's code field holds
 
-\ A definition ends at its EXIT; nothing in core.f uses EXIT mid-word.
-: BODY-END ( body -- end )
-   BEGIN DUP @ nEXIT = 0= WHILE
-      DUP @ DUP nLIT = SWAP DUP n0BRANCH = SWAP nBRANCH = OR OR
-      IF 2 CELLS + ELSE 1 CELLS + THEN
-   REPEAT 1 CELLS + ;
+\ Nothing in Forth declares how many arguments a definition takes, so
+\ NCOMPILE? asks the compiler: it tries each arity in turn and the
+\ fewest that compiles without underflowing is the answer.
 
 VARIABLE NTRIED  VARIABLE NDONE
-: SURVEY ( -- )
+: SURVEY ( xt -- )
    0 NTRIED !  0 NDONE !
-   LATEST
    BEGIN DUP WHILE
       DUP >CODE COLONS = IF
-         DUP >BODY DUP BODY-END NCOMPILE
+         DUP >BODY DUP BODY-END NCOMPILE?
          1 NTRIED +!
-         IF 1 NDONE +!
-         ELSE ."   declined: " DUP DUP >NAME SWAP >NLEN TYPE
-              ."   stopped by: " NBAD @ ?DUP IF DUP >NAME SWAP >NLEN TYPE ELSE ." (end)" THEN CR
+         DUP 0 >= IF 1 NDONE +!
+              ."   compiled: " OVER .WNAME ."  ( " . ." in )" CR
+         ELSE DROP ."   declined: " DUP .WNAME
+              ."   stopped by: " NBAD @ ?DUP IF .WNAME ELSE ." (nothing)" THEN CR
          THEN
       THEN
       @                                 \ W_LINK is the first cell
    REPEAT DROP
    ." compiled " NDONE @ . ." of " NTRIED @ . ." colon words" CR ;
-SURVEY
+' CMOVE SURVEY

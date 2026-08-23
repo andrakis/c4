@@ -537,16 +537,25 @@ test-c4th: c4th c4th.c4r $(C4M) $(C4KE_C4R)
 	echo c4th | $(C4M) load-c4r.c -- c4th.c4r src/c4th/forth/core.f src/c4th/forth/peep.f src/c4th/tests/peepon.f src/c4th/tests/tester.fr src/c4th/tests/core.fr | cmp - src/c4th/tests/expected/core-64.txt
 	# B5: the native backend. Only under c4m -- INVOKE is an indirect
 	# call through generated code, and the gcc build has no VM to invoke
-	# into, so natively it is a stub returning zero.
+	# into, so natively there is nothing to invoke.
 	#
 	# The threaded engine is the oracle: it is the one that passes the
-	# Forth-2012 CORE suite. Every word is run both ways and the answers
-	# must agree. The last two entries must report "declined" -- words
-	# that reorder the stack are left threaded on purpose, and a backend
-	# that quietly emitted worse or wrong code for them would be worse
-	# than no backend at all.
-	$(C4M) load-c4r.c -- c4th.c4r src/c4th/forth/core.f src/c4th/forth/asm.f src/c4th/forth/native.f src/c4th/tests/b5.f | cmp - src/c4th/tests/expected/b5.txt
-	rm -f .c4th_core .c4th_fact.c4r .c4th_ccasm
+	# Forth-2012 CORE suite. Every word is compiled, CALLED, and its
+	# answer compared against the threaded one -- so this checks the
+	# emitted code runs, not merely that the compiler did not complain.
+	#
+	# Two checks, as for the CORE suite. The transcript is pinned, and
+	# independently every line must end in "ok" except the four that are
+	# meant to decline: an IF whose arms leave different depths, a
+	# recursive word, 2! (which has no single result to compare), and a
+	# word calling a primitive the backend cannot emit. A backend that
+	# quietly emitted worse or wrong code would be worse than none, so
+	# the declines are part of the specification.
+	$(C4M) load-c4r.c -- c4th.c4r src/c4th/forth/core.f src/c4th/forth/asm.f src/c4th/forth/native.f src/c4th/tests/b5.f > .c4th_b5
+	cmp .c4th_b5 src/c4th/tests/expected/b5.txt
+	test 4 = `grep -vc " ok$$" .c4th_b5`
+	test 0 = `grep -c "MISMATCH" .c4th_b5`
+	rm -f .c4th_core .c4th_fact.c4r .c4th_ccasm .c4th_b5
 	@echo "test-c4th: OK"
 
 c4sp: $(C4SP_SRCS)

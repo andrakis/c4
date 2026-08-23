@@ -469,11 +469,101 @@ reordering is still a top blocker in code that matters.
       and the compile-time dictionary words (`HERE`, `,`) that the control
       structures are built from.
 
-- [ ] **B5c** Calls between compiled words — inlining looks better than a
-      software return stack, since a call would cost about as much as the
-      `NEXT` it replaces — plus `(DO)`/`(LOOP)`, then the metacompiler and
-      `.c4r` emission with the `cmp gen2.c4r gen3.c4r` fixed point and the
-      `c4opt` byte-identical differential.
+- [x] **B5c** Calls, counted loops, and a frame — **every structural
+      reason the backend used to decline a word is gone.** What is left is
+      that primitives written in C cannot be inlined; nothing about the
+      stack, the calls or the control flow blocks compilation any more.
+
+      **Calls are inlined**, not called. B5b's note that a software return
+      stack would cost about as much per call as the `NEXT` it replaces
+      still stands, and inlining is better than either: the callee's items
+      merge into the caller's model, so a called word optimizes as if it
+      had been written out. A `CONSTANT` — which is `CREATE , DOES> @` —
+      inlines to `IMM addr; LI`. Recursion is declined, which is the
+      honest answer for an inliner, and is what `RECURSE` gets.
+
+      **`ENT` earns its operand.** The backend now reserves frame cells
+      below `bp`, which gives it somewhere to put things that are not
+      stack items: `>R`'s saved value, and a counted loop's index and
+      limit. `I` becomes `LEA`/`LI` — two instructions where the threaded
+      engine charges twenty — and `LOOP` is thirteen. The frame size is
+      not known until the end, so `ENT`'s operand and every frame-relative
+      `LEA` are patched once compilation finishes.
+
+      **And every live item now has an address**, because the frame is
+      `bp`-relative while the data stack grows below it: item *i* is at
+      `bp-(frame+i+1)`. That is the general fallback the deferred model
+      never had. `OVER` and `2DUP` become two instructions each rather
+      than a decline; `ROT`, `-ROT` and `2SWAP` join `SWAP` as free
+      buffer permutations, with a through-memory version for when the
+      regions are pinned; and `MIN`, `MAX`, `ABS`, `U<`, `U>`, `/MOD`,
+      `+!`, `LSHIFT` and `2/` all become emittable.
+
+      **Definitions that take arguments compile too**, with C4's own
+      calling convention — so `INVOKE1`/`INVOKE2`/`INVOKE3` call a
+      compiled word exactly as C4 calls any function, and `src/c4th/tests/b5.f`
+      *runs* the compiled code rather than only checking that the compiler
+      did not complain. Nothing in Forth declares an arity, so `NCOMPILE?`
+      asks the compiler: the fewest arguments that compile without
+      underflowing is the answer. It gets `2!` right at three and
+      `WITHIN` at three.
+
+      | | threaded | native | |
+      |---|---|---|---|
+      | `DO`/`LOOP` with `I` | 34,300,951 | 1,700,354 | **20x** |
+      | `BEGIN`/`WHILE` with `>R`/`R>` | 107,201,208 | 3,100,351 | **34x** |
+      | loop calling another word | 20,080,951 | 440,354 | **45x** |
+      | loop reordering the stack | 21,681,110 | 1,540,357 | **14x** |
+      | loop through a `VARIABLE` | 71,501,323 | 2,200,356 | **32x** |
+
+      *Verified:* `make test-c4th`. Sixty-three words are compiled, called
+      and compared against the threaded engine, and exactly four decline —
+      pinned two ways, as the CORE suite is, so the golden cannot quietly
+      bless a regression.
+
+      **The design mistake worth recording.** The first version left
+      arguments where C4 puts them, at `bp+2` and up, and taught the model
+      to address two kinds of item. It passed every straight-line test and
+      then failed on `?DO` inside a word with arguments — because a loop
+      body that spills an argument *changes what kind of item it is*, so
+      the model at the back edge was not the model the loop was entered
+      with, and the code emitted on the first pass addressed the wrong
+      place on the second. The fix was to stop having two kinds: the
+      prologue copies the arguments onto the stack, three instructions
+      each, once. The body then has one uniform model, `+` is one `ADD`
+      again, and the loop converges. **A uniform model was both simpler
+      and faster than the clever one**, and the only reason the clever one
+      was caught is that the depth check at every branch target refused to
+      compile it.
+
+      Two other things that check turned into declines rather than wrong
+      answers: an `IF` whose arms leave different numbers of values, and
+      the fall-through into `?DO`'s loop entry — which is unreachable
+      code, so the model there has to be *adopted* from whoever branches
+      in rather than checked against whatever the dead path left behind.
+
+      **The emitted code still uses only base opcodes** — nothing above
+      `MOD`, and no `JSR`, since calls are inlined — so a generated image
+      runs on plain `c4` as well as on `c4m`. That is worth more than the
+      instructions a `PUTC` would save, and it is why `EMIT` is left
+      declined.
+
+      **What the survey now says** (`src/c4th/tests/survey.f`, over
+      `core.f`): 8 of 30 colon words compile, and **every one of the other
+      22 is stopped by a primitive written in C** — `MOVE`, `FILL`, `.`,
+      `SPACE`, `M*`, `,`, `HERE`, `CREATE`. Not one is stopped by a stack
+      operation, a call, a loop or a branch. The ratio understates the
+      backend badly, because `core.f` is a *compiler library*: two thirds
+      of it is compile-time words that poke `HERE` and `,`. The useful
+      reading is not the fraction but the list of blockers, and that list
+      is now entirely "primitives the backend cannot inline", which is
+      B5d's problem, not the code generator's.
+
+- [ ] **B5d** The metacompiler and `.c4r` emission — the `cmp gen2.c4r
+      gen3.c4r` fixed point and the `c4opt` byte-identical differential.
+      This is also where the C primitives stop being a wall: an image
+      whose words are all native does not have a C `th_dstack` for them
+      to work on.
 - [ ] **B6** c4th inside C4IX. *Verify:* runs from the C4IX shell, output pinned
 
 ### Risks

@@ -340,6 +340,51 @@ static int canonicalize_patches (int *master) {
 	return 0;
 }
 
+// Blank the operand words that the patch table covers, so that linking the
+// same objects twice produces the same bytes.
+//
+// c4rlink reads its inputs through c4r_load_opt(), which APPLIES their
+// patches -- so every patched word arrives already holding a real address
+// in this process's heap. Merging copies those words into the master image
+// and writing them out puts them in the file. That is why linking the same
+// twelve objects twice gave images of identical size differing in 7,395
+// bytes: the varying part was ASLR, and under setarch -R the two links
+// matched exactly.
+//
+// The words are dead. load-c4r.c's patch loop assigns each target outright
+// from the entry's VALUE field and never reads what was there, and c4rlink
+// itself only ever rebases the table's ADDRESS and VALUE fields -- neither
+// consults the word. c4r.lisp already documents that an operand emitted
+// without its raw value is written as 0 and loads identically. So zeroing
+// costs nothing and buys reproducible images, which matters because
+// byte-comparison is how nearly everything in this tree is verified.
+//
+// Address space follows the patch type: DCODE and DDATA name a byte offset
+// into data; everything else -- including symbol-typed patches still
+// unresolved in library mode -- names a word index into code.
+static void blank_patch_targets (int *master) {
+	int  *mhdr, *patch, *code;
+	char *data;
+	int   i, n, t;
+
+	mhdr  = (int *)master[C4R_HEADER];
+	patch = (int *)master[C4R_PATCHES];
+	code  = (int *)master[C4R_CODE];
+	data  = (char *)master[C4R_DATA];
+	n = mhdr[C4R_HDR_PATCHLEN];
+	i = 0;
+	while (i < n) {
+		t = patch[C4R_PAT_TYPE];
+		if (t == C4R_PTYPE_DCODE || t == C4R_PTYPE_DDATA) {
+			if (data) *(int *)(data + patch[C4R_PAT_ADDRESS]) = 0;
+		} else {
+			if (code) code[patch[C4R_PAT_ADDRESS]] = 0;
+		}
+		patch = patch + C4R_PAT__Sz;
+		++i;
+	}
+}
+
 // Rewrite symbol-typed patches whose symbols are now defined into CODE
 // patches. Returns the number of unresolved symbol references remaining.
 static int resolve_patches (int *master) {
@@ -725,6 +770,9 @@ int main (int argc, char **argv) {
 		// trimming placeholder zeros is safe. (The common win: a large
 		// uninitialized global at the end of the last module drops out
 		// of the image entirely.)
+		// Before the trim, so data-resident patch slots that are now
+		// zero can also fall off the end.
+		blank_patch_targets(master);
 		dstored = hdr[C4R_HDR_MEMSZ];
 		dbytes = (char *)master[C4R_DATA];
 		while (dstored > 0 && dbytes[dstored - 1] == 0) --dstored;

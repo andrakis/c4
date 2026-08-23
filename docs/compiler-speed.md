@@ -115,6 +115,31 @@ of something we never allocated does exactly what it did before.
       protected task's first `memset`, since libc4ix uses them in userland).
       Not started.
 
+- [x] **0.7** **`c4rlink` is reproducible.** Linking the same twelve `.c4o`
+      objects twice used to give images of identical size differing in 7,395
+      bytes. Not the parallelism and not c4lc — individual module compiles are
+      deterministic. It was **ASLR**: c4rlink reads its inputs through
+      `c4r_load_opt`, which *applies* their patches, so every patched word
+      arrived holding a real address in the linker's own heap, and merging
+      wrote those addresses into the output. Under `setarch -R` two links
+      matched exactly.
+
+      Fixed by `blank_patch_targets()`, which zeroes every word the patch
+      table covers just before the data trim. The words are dead: load-c4r.c's
+      patch loop assigns each target outright from the entry's VALUE field and
+      never reads what was there, and c4rlink only rebases the table's ADDRESS
+      and VALUE fields — verified by reading both. c4r.lisp already documents
+      that an operand emitted without its raw value is written as 0 and loads
+      identically. Address space follows the patch type: `DCODE`/`DDATA` are a
+      byte offset into data, everything else — including symbol-typed patches
+      still unresolved in library mode — a word index into code.
+
+      Verified: three links of the same objects byte-identical; two full clean
+      parallel `make c4ix.c4r` byte-identical; image size unchanged (252,613).
+      Green: `test-link`, `test-c4ix`, `test-c4l`, `test-c4ke-ramfs`, `test`,
+      `test-c4lc`, `test-c4sp`, `test-c4sp-opt`, `test-oisc4`, `test-c4m-mem`,
+      `test-c4dos`.
+
 ### Open questions raised by this work
 
 - **Why the plain-c4 chain frees more than it allocates — ANSWERED.**
@@ -235,19 +260,7 @@ The honest denominator for anything measured later. Re-measure
       userland programs: **5.110 s**, from ~60 s at the start. `test-c4ix`
       green.
 
-      **Found while doing it, and pre-existing: `c4rlink` is not
-      reproducible.** Linking the *same* twelve `.c4o` objects twice gives
-      images of identical size differing in 7,395 bytes. It is not the
-      parallelism and not c4lc — individual module compiles are deterministic
-      and byte-identical to the pre-change compiler. It is **ASLR**: under
-      `setarch -R` two links are byte-identical. c4rlink writes its own heap
-      addresses into the operand words of patched slots (the image has 1,878
-      patches), and those words are dead — the loader overwrites them via the
-      patch table, which is why every test still passes. Worth fixing, because
-      byte-comparison is this tree's main verification tool and any
-      link-involving "identical image" check is currently impossible. Not
-      fixed here: it is a change to a tool C4KE, C4IX, c4or1k and c4bb all
-      depend on, and it is outside A1.
+      **Found while doing it, pre-existing, now fixed (see Track 0.7).**
 
 - [x] **A1.7** Final measurements, all wins combined. hyperfine, 5 runs
       (3 for the builds), output byte-identical to the pre-change compiler

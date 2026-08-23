@@ -447,6 +447,32 @@ C4SP_SRCS := src/c4sp/c4sp.c src/c4sp/include/cell.h src/c4sp/include/gc.h \
 # "undefined variable: n" and crashes every real compile. Under the C4 VM
 # there are no such registers and the scan is exact, so none of this
 # applies to c4sp.c4r.
+C4TH_SRCS := src/c4th/c4th.c src/c4th/include/mem.h src/c4th/include/dict.h \
+             src/c4th/include/inner.h src/c4th/include/prim.h
+# c4th (docs/c4th-design.md): a Forth for C4, built two ways from one
+# source exactly as c4sp is. -O2 needs no apology here -- c4th has no
+# collector scanning the stack, so nothing pins the native build open.
+c4th: $(C4TH_SRCS)
+	gcc $(EXTRA_CC) -O2 -fno-omit-frame-pointer -g -idirafter include -I. -o c4th src/c4th/c4th.c
+c4th.c4r: $(C4CC) $(C4TH_SRCS)
+	$(PREPROC) src/c4th/c4th.c | $(C4CC) -o c4th.c4r - > /dev/null
+
+# B1 pins the engine itself, before there is any outer interpreter to read
+# Forth with: the driver hand-threads a body cell by cell for 10! and runs
+# it. The check is not just the number -- a body that left junk on either
+# stack would still print 3628800 -- so the selftest also requires both
+# stacks to come back empty.
+#
+# Three hosts, one golden. The native build is gcc's; the .c4r build runs
+# under c4m; and the same image runs inside C4KE, which is the one that
+# proves the indirect call through a local really is a JSRS the kernel can
+# host, rather than something only gcc's cast macro makes work.
+test-c4th: c4th c4th.c4r $(C4M) $(C4KE_C4R)
+	./c4th -selftest | cmp - src/c4th/tests/expected/b1.txt
+	$(C4M) load-c4r.c -- c4th.c4r -selftest | cmp - src/c4th/tests/expected/b1.txt
+	$(C4M) load-c4r.c -- $(C4KE_C4R) c4th.c4r -selftest | grep -q "selftest ok"
+	@echo "test-c4th: OK"
+
 c4sp: $(C4SP_SRCS)
 	gcc $(EXTRA_CC) -O2 -fno-omit-frame-pointer -g -Iinclude -I. -o c4sp src/c4sp/c4sp.c
 # Built by c4lc -O, not c4cc: measurably smaller and never slower
@@ -1366,6 +1392,7 @@ PHONY += run-c4-alt run-c4-alt-vg
 PHONY += test-c4ix test-c4ix-fmt test-c4ix-c4ke test-c4ix-c4ke-nested test-c4ix-c4 run-c4ix run-c4ix-c4 demo-c4ix demo-c4ix-c4 bench-c4ix
 PHONY += test-c4mp
 PHONY += test-c4m-mem
+PHONY += test-c4th
 PHONY += c4or1k-m0 c4or1k-m1 c4or1k-m1-check c4or1k-m2 c4or1k-m2-check c4or1k-m3 c4or1k-m3-check c4or1k-m3-int-check c4or1k-boot c4or1k-boot-mp c4or1k-boot-cisc c4or1k-boot-jit c4or1k-boot-native
 PHONY += pkg c4rs or1k
 PHONY += pi

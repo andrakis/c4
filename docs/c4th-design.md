@@ -232,8 +232,19 @@ with.
 ## 9. Milestones
 
 - [ ] **B0** This document + ladder, before any code
-- [ ] **B1** Cells, dictionary, inner interpreter, a dozen primitives.
-      *Verify:* `./c4th -selftest` prints 3628800 from a hand-threaded factorial
+- [x] **B1** Cells, dictionary, inner interpreter, fourteen primitives.
+      `mem.h` 89, `dict.h` 98, `inner.h` 70, `prim.h` 90, `c4th.c` 175 — 522
+      lines. *Verified:* `make test-c4th` — `./c4th -selftest` prints
+      `3628800` and `selftest ok`, and the same golden is reproduced by
+      `c4th.c4r` under c4m and by the same image running inside C4KE. The
+      selftest also requires **both stacks to come back empty**, since a body
+      that left junk behind would still print the right number.
+
+      Notes from building it: `strcmp` and `atoi` are not C4 builtins (the
+      list is open/read/close/printf/malloc/free/memset/memcmp/exit plus
+      c4m's putchar/puts/realloc/memcpy/stacktrace), so the driver carries its
+      own. And c4cc mis-emits a bare function name used as a value, so every
+      code field is written `(int)&fn` — the `&` is load-bearing.
 - [ ] **B2** Outer interpreter, ~120 primitives, both builds.
       *Verify:* `: SQ DUP * ; 7 SQ .` → `49` natively and under c4m
 - [ ] **B3** `core.f` + the Forth-2012 CORE suite. **The first rung that means

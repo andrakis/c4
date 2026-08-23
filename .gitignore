@@ -47,3 +47,4 @@ c4or1k-native
 # scratch directories the test scripts create and trap-remove
 .c4dos_test_tmp/
 .ladder_test_tmp/
+/c4th

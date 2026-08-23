@@ -352,6 +352,42 @@ mechanically from the existing Lisp (recursive functions over tagged lists),
 while Forth gives back the metaprogramming that Lisp was providing and is a
 language the project wants for its own sake.
 
+## Where c4sp's time goes now (re-profiled after A1)
+
+callgrind, `c4lc -O -c src/c4ix/sched.c`, 1.435 G instructions:
+
+| share | area |
+|---|---|
+| ~41% | `eval` dispatch (`eval'2`, `eval.cold'2`) |
+| ~25% | environments (`env_local_pair` 16.0%, `env_get_named`, `env_bind`) |
+| ~12% | GC (`gc_alloc_cell` 6.9%, `gc_collect` 5.0%) |
+| ~9% | `builtin_call` (the if-chain) |
+| 4% | `atom_intern` |
+
+**The profile is flat — there is no hot spot left.** That is the shape of "a
+tree-walking interpreter is simply slow", and it means further c4sp tuning has
+hit diminishing returns: the plausible remaining wins (indexing *local* frames,
+the JSRI builtin dispatch, cheaper atoms) are worth perhaps 1.3-2x combined,
+against the 100-500x that not interpreting is worth.
+
+Note `env_local_pair` is still 16% even with the global frame indexed: those
+are the *local* frames now, walked per lambda call.
+
+**Consequence for the choice of next step.** ~41% dispatch + ~25% environments
++ ~9% builtin dispatch is work that compilation removes outright; GC and
+consing (~12%) survive it. So *compiling* the Lisp — which needs no port at
+all, since c4lc uses neither `call/cc` nor first-class environments — is worth
+perhaps 10-30x, while a rewrite in C or Forth also replaces cons lists with
+arrays and the collector with an arena, which is where the rest of the
+100-500x lives. For the c4bb goal (a module in seconds, not minutes) only the
+rewrite clears the bar.
+
+**And a sequencing fact for the Forth route**: a *threaded* Forth is itself an
+interpreter, perhaps 5-20x off native C. Hosting a compiler on c4th therefore
+only pays after c4th's **native backend** (B5 in `docs/c4th-design.md`), not
+after the threaded core. B1-B3 are worth doing for their own sake; they are not
+by themselves a compiler-speed step.
+
 ---
 
 ## Track A2 — c4lcc, c4lc in C

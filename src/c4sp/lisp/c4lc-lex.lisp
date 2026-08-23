@@ -39,6 +39,14 @@
 (define lex:val 0)      ;; mailbox: value from the number scanners
 (define lex:oplen 1)    ;; mailbox: bytes consumed by lex:op
 
+;; Conforming escapes (L10). Off by default, so a source lexes exactly
+;; as it always did and the c4cc differential battery keeps its
+;; premise. On (-conforming), escape sequences mean what C says they
+;; mean: \t is 9 not 8, \r is 13 not 10, \a \b \f \v decode, and
+;; \xHH / \NNN exist at all -- which is what lets a program write
+;; "\033[2J" instead of poking 27 in as an integer.
+(define lex:conforming false)
+
 ;; ---- character classes (booleans only; see dialect warning) ----
 
 (define lex:identstart? (lambda (c)
@@ -170,6 +178,38 @@
 	(if (= c 48) 0
 	c))))))
 
+;; C limits an octal escape to three digits -- "\0012" is \001 then
+;; '2' -- unlike lex:octal, which is a number scanner and runs to the
+;; first non-digit. A hex escape really is unbounded in C, so \xHH
+;; reuses lex:hex as-is.
+(define lex:escoctal (lambda (i n v)
+	(begin
+		(define c (lex:peek i))
+		(if (if (< n 3) (lex:octdigit? c) false)
+			(next lex:escoctal (+ i 1) (+ n 1) (+ (* v 8) (- c 48)))
+		(begin (set! lex:val v) i)))))
+
+;; The escape at i, where i is the byte AFTER the backslash. Returns
+;; the index just past the escape and leaves the decoded byte in the
+;; lex:val mailbox -- the same contract as lex:hex/lex:octal, because
+;; \xHH and \NNN are literally those scanners. The old fixed-width
+;; (+ i 2) in lex:strdecode is what made multi-byte escapes impossible.
+(define lex:escape2 (lambda (i)
+	(begin
+		(define c (lex:peek i))
+		(if lex:conforming
+			(if (= c 110) (begin (set! lex:val 10) (+ i 1))
+			(if (= c 116) (begin (set! lex:val  9) (+ i 1))
+			(if (= c 114) (begin (set! lex:val 13) (+ i 1))
+			(if (= c  97) (begin (set! lex:val  7) (+ i 1))
+			(if (= c  98) (begin (set! lex:val  8) (+ i 1))
+			(if (= c 102) (begin (set! lex:val 12) (+ i 1))
+			(if (= c 118) (begin (set! lex:val 11) (+ i 1))
+			(if (if (= c 120) true (= c 88)) (lex:hex (+ i 1) 0)
+			(if (lex:octdigit? c) (lex:escoctal i 0 0)
+			(begin (set! lex:val c) (+ i 1)))))))))))
+		(begin (set! lex:val (lex:escape c)) (+ i 1))))))
+
 ;; decode [i,end) into buf; returns the decoded length
 (define lex:strdecode (lambda (i end buf n)
 	(if (>= i end) n
@@ -177,8 +217,9 @@
 		(define c (string:byte lex:src i))
 		(if (= c 92)
 			(begin
-				(string:byte! buf n (lex:escape (lex:peek (+ i 1))))
-				(next lex:strdecode (+ i 2) end buf (+ n 1)))
+				(define j (lex:escape2 (+ i 1)))
+				(string:byte! buf n lex:val)
+				(next lex:strdecode j end buf (+ n 1)))
 		(begin
 			(string:byte! buf n c)
 			(next lex:strdecode (+ i 1) end buf (+ n 1))))))))

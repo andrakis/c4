@@ -63,6 +63,12 @@ enum { LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,
 enum { MAX_SEARCH = 512 };
 enum { BUF_MAX  = 4194304 };  // 4MB image read buffer
 enum { LINEMAX  = 256 };
+enum { DIRMAX   = 16384 };   // c4dos.dir, slurped for name resolution
+enum { RAMFILES  = 64 };     // RAM disk slots
+enum { RAMHANDLE = 8 };      // RAM files open at once
+enum { RAMFD     = 1000 };   // pseudo-fd base, above any host descriptor
+enum { RAMSIZE   = 1048576 };// default RAM disk budget, SIZE= overrides
+enum { C4DOS_API_SLOTS = 32 }; // API table words (include/c4dos.h agrees)
 enum { ARGVMAX  = 16 };
 enum { BATDEPTH = 4 };
 
@@ -78,6 +84,30 @@ int g_in_trans;          // a transient is running (dos_exit sanity check)
 char *g_line;            // the command line buffer
 char **g_argv;           // parsed argument vector
 char *g_scratch;         // shared file-read scratch (BUF_MAX)
+char *g_dirbuf;          // c4dos.dir contents (NOT g_scratch: a name is
+                         // resolved while a caller is filling scratch)
+char *g_namebuf;         // the real spelling a resolve found
+char *g_progbuf;         // a command with ".c4r" appended
+char *g_batbuf;          // a command with ".bat" appended
+char *g_batreq;          // dispatch found a batch file; the CALLER runs it
+int   g_batdepth;
+
+// ---- the RAM disk (DEVICE=RAMDISK.SYS) -----------------------------------
+// c4 and c4m have no write primitive at all, and c4bb's disk controller
+// is read-only, so "writing a file" cannot mean what it usually means.
+// It is a DOS SERVICE instead: a name -> buffer table that lives as long
+// as the machine is on. Opens check it BEFORE the disk, so a tool that
+// rewrites a file shadows the read-only original rather than failing.
+int  g_ramdisk;          // DEVICE=RAMDISK.SYS installed
+int  g_ram_budget;       // total bytes allowed
+int  g_ram_used;         // total bytes held
+int  g_ram_n;            // slots in use
+int *g_ram_name;         // char* per slot
+int *g_ram_data;         // char* per slot
+int *g_ram_len;          // bytes held per slot
+int *g_ram_cap;          // bytes allocated per slot
+int *g_rh_slot;          // open handle -> slot, -1 free
+int *g_rh_pos;           // open handle -> read position
 char *g_inbuf;           // console byte stream: one read() may carry
 int g_inlen; int g_inpos; // many lines (a pipe) or one (a cooked tty),
                           // so lines are extracted here, never assumed.
@@ -113,6 +143,20 @@ int starts_ci (char *s, char *prefix) {
     ++s; ++prefix;
   }
   return 1;
+}
+
+// ---- the shared scratch --------------------------------------------------
+// g_scratch is 4MB, and the biggest single thing DOS holds. A kernel
+// loaded by dosload is about to want every byte of it, so the API can
+// hand it back (slot TRIM). That is only safe if nobody caches the
+// pointer: every user asks for it through here, and gets it back --
+// re-allocated if it went away. Returns 0 only when memory is gone,
+// which every caller already had to handle.
+char *scratch_need () {
+  if (!g_scratch) {
+    if (!(g_scratch = malloc(BUF_MAX))) printf("c4dos: out of memory\n");
+  }
+  return g_scratch;
 }
 
 // ---- the invoke stub (c4l.c's mechanism) ---------------------------------
@@ -219,6 +263,213 @@ int inject_api (char *p, int nsyms, char *database, int *api) {
 }
 
 // Load path -> the img_* registers. Returns 1 on success.
+// ---- the RAM disk --------------------------------------------------------
+
+// slot holding `name`, or -1. Case-insensitive, like every other name
+// on this system.
+int ram_find (char *name) {
+  int i;
+  i = 0;
+  while (i < g_ram_n) {
+    if (cieq((char *)g_ram_name[i], name)) return i;
+    ++i;
+  }
+  return 0 - 1;
+}
+
+// create or truncate `name` with room for `cap` bytes; returns the slot
+int ram_create (char *name, int cap) {
+  int i, slot;
+  char *p, *q;
+  if (!g_ramdisk) return 0 - 1;
+  slot = ram_find(name);
+  if (slot >= 0) {
+    g_ram_used = g_ram_used - g_ram_cap[slot];
+    if (g_ram_data[slot]) free((char *)g_ram_data[slot]);
+  } else {
+    if (g_ram_n >= RAMFILES) { printf("ramdisk full (%d files)\n", RAMFILES); return 0 - 1; }
+    slot = g_ram_n;
+    if (!(p = malloc(LINEMAX))) return 0 - 1;
+    q = p;
+    while (*name) { *q = *name; ++q; ++name; }
+    *q = 0;
+    g_ram_name[slot] = (int)p;
+    ++g_ram_n;
+  }
+  if (cap < 4096) cap = 4096;
+  if (g_ram_used + cap + 1 > g_ram_budget) {
+    printf("ramdisk full (%d bytes)\n", g_ram_budget);
+    g_ram_data[slot] = 0; g_ram_len[slot] = 0; g_ram_cap[slot] = 0;
+    return 0 - 1;
+  }
+  if (!(p = malloc(cap + 1))) {
+    g_ram_data[slot] = 0; g_ram_len[slot] = 0; g_ram_cap[slot] = 0;
+    return 0 - 1;
+  }
+  g_ram_data[slot] = (int)p;
+  g_ram_len[slot] = 0;
+  g_ram_cap[slot] = cap + 1;
+  g_ram_used = g_ram_used + cap + 1;
+  p[0] = 0;
+  i = 0;
+  return slot;
+}
+
+// Append, growing the buffer when it runs out. A tool streaming an
+// image out has no idea how big it will be, and realloc is documented
+// broken under c4m, so this doubles by hand.
+int ram_write (int slot, char *buf, int n) {
+  char *d, *nb;
+  int i, need;
+  if (slot < 0 || slot >= g_ram_n) return 0;
+  d = (char *)g_ram_data[slot];
+  if (!d) return 0;
+  need = g_ram_len[slot] + n + 1;
+  if (need > g_ram_cap[slot]) {
+    i = g_ram_cap[slot] * 2 + n + 4096;
+    if (g_ram_used - g_ram_cap[slot] + i > g_ram_budget) {
+      printf("ramdisk full (%d bytes)\n", g_ram_budget);
+      return 0;
+    }
+    if (!(nb = malloc(i))) { printf("c4dos: out of memory\n"); return 0; }
+    need = 0;
+    while (need < g_ram_len[slot]) { nb[need] = d[need]; ++need; }
+    free(d);
+    g_ram_used = g_ram_used - g_ram_cap[slot] + i;
+    g_ram_cap[slot] = i;
+    g_ram_data[slot] = (int)nb;
+    d = nb;
+  }
+  i = 0;
+  while (i < n) { d[g_ram_len[slot] + i] = buf[i]; ++i; }
+  g_ram_len[slot] = g_ram_len[slot] + n;
+  d[g_ram_len[slot]] = 0;
+  return n;
+}
+
+// open a RAM file for reading; returns a pseudo-fd or -1
+int ram_open (char *name) {
+  int slot, h;
+  if (!g_ramdisk) return 0 - 1;
+  if ((slot = ram_find(name)) < 0) return 0 - 1;
+  h = 0;
+  while (h < RAMHANDLE) {
+    if (g_rh_slot[h] < 0) {
+      g_rh_slot[h] = slot;
+      g_rh_pos[h] = 0;
+      return RAMFD + h;
+    }
+    ++h;
+  }
+  return 0 - 1;
+}
+
+// ---- finding a file ------------------------------------------------------
+//
+// DOS never cared about case; a host filesystem does, and c4bb's disk
+// does too. Rather than guess at spellings, ask the directory: DIR is
+// already a file (c4dos.dir), and it is the only thing on this system
+// that knows what is actually here. If a name does not open as typed,
+// scan the listing for a case-insensitive match and open the spelling
+// that exists. A disk with no c4dos.dir simply keeps the old
+// behaviour, which is the same trade DIR already makes.
+
+// compare s against the line at p, which ends at CR, LF or NUL
+int line_eq_ci (char *p, char *s) {
+  while (*s && *p && *p != 10 && *p != 13) {
+    if (upper(*p) != upper(*s)) return 0;
+    ++p; ++s;
+  }
+  if (*s) return 0;
+  return !*p || *p == 10 || *p == 13;
+}
+
+// c4dos.dir into g_dirbuf; returns its length, 0 if there is no listing
+int dir_slurp () {
+  int fd, n, total, going;
+  // The raw open, deliberately: this is the resolver, and routing it
+  // through dos_open would recurse straight back into itself.
+  if ((fd = open("c4dos.dir", 0)) < 0) return 0;
+  total = 0;
+  going = 1;
+  while (going) {
+    if ((n = read(fd, g_dirbuf + total, 4096)) <= 0) going = 0;
+    else {
+      total = total + n;
+      if (total >= DIRMAX - 4097) going = 0;
+    }
+  }
+  close(fd);
+  g_dirbuf[total] = 0;
+  return total;
+}
+
+// the real spelling of `name` according to the listing, or 0
+char *dir_resolve (char *name) {
+  char *p, *q;
+  if (!dir_slurp()) return 0;
+  p = g_dirbuf;
+  while (*p) {
+    if (line_eq_ci(p, name)) {
+      q = g_namebuf;
+      while (*p && *p != 10 && *p != 13) { *q = *p; ++q; ++p; }
+      *q = 0;
+      return g_namebuf;
+    }
+    while (*p && *p != 10) ++p;
+    if (*p) ++p;
+  }
+  return 0;
+}
+
+// open for reading, case-insensitively. Every file this system opens
+// goes through here.
+int dos_open (char *path) {
+  int fd;
+  char *real;
+  // "./name" IS "name". c4ke.c says #include "./load-c4r.c", and a
+  // name that came out of an archive is stored plainly -- c4bb's own
+  // disk controller strips the prefix for the same reason.
+  if (path[0] == '.' && path[1] == '/') path = path + 2;
+  // RAM first, disk second -- the same precedence C4KE's loader uses,
+  // and the reason a tool can rewrite a file that shipped read-only.
+  if ((fd = ram_open(path)) >= 0) return fd;
+  if ((fd = open(path, 0)) >= 0) return fd;
+  if ((real = dir_resolve(path))) {
+    if ((fd = ram_open(real)) >= 0) return fd;
+    return open(real, 0);
+  }
+  return 0 - 1;
+}
+
+// Reads and closes have to go through here too: a pseudo-fd is not
+// something the host has ever heard of.
+int dos_read (int fd, char *buf, int n) {
+  int h, slot, left, i;
+  char *d;
+  if (fd < RAMFD) return read(fd, buf, n);
+  h = fd - RAMFD;
+  if (h < 0 || h >= RAMHANDLE) return 0;
+  slot = g_rh_slot[h];
+  if (slot < 0) return 0;
+  d = (char *)g_ram_data[slot];
+  left = g_ram_len[slot] - g_rh_pos[h];
+  if (left <= 0) return 0;
+  if (n < left) left = n;
+  i = 0;
+  while (i < left) { buf[i] = d[g_rh_pos[h] + i]; ++i; }
+  g_rh_pos[h] = g_rh_pos[h] + left;
+  return left;
+}
+
+int dos_close (int fd) {
+  int h;
+  if (fd < RAMFD) return close(fd);
+  h = fd - RAMFD;
+  if (h >= 0 && h < RAMHANDLE) g_rh_slot[h] = 0 - 1;
+  return 0;
+}
+
 int c4r_load (char *path, int *api) {
   char *p, *data;
   int *code, *cons, *des;
@@ -226,10 +477,11 @@ int c4r_load (char *path, int *api) {
   int entry, codelen, datalen, patchlen, symlen, conslen, deslen, memsz;
   int i, ptype, paddr, pvalu;
 
-  if ((fd = open(path, 0)) < 0) return 0;
+  if (!scratch_need()) return 0;
+  if ((fd = dos_open(path)) < 0) return 0;
   total = 0;
-  while ((n = read(fd, g_scratch + total, 65536)) > 0) total = total + n;
-  close(fd);
+  while ((n = dos_read(fd, g_scratch + total, 65536)) > 0) total = total + n;
+  dos_close(fd);
   if (total < 13) { printf("c4dos: %s is not a program\n", path); return 0; }
 
   p = g_scratch;
@@ -342,12 +594,13 @@ int run_program (char *path, int argc, char **argv) {
 // print a file to the console; returns 1 if it existed
 int type_file (char *path) {
   int fd, n, i;
-  if ((fd = open(path, 0)) < 0) return 0;
-  while ((n = read(fd, g_scratch, 4096)) > 0) {
+  if (!scratch_need()) return 0;
+  if ((fd = dos_open(path)) < 0) return 0;
+  while ((n = dos_read(fd, g_scratch, 4096)) > 0) {
     i = 0;
     while (i < n) { printf("%c", g_scratch[i]); ++i; }
   }
-  close(fd);
+  dos_close(fd);
   return 1;
 }
 
@@ -406,8 +659,18 @@ int cmd_ver () {
 // the c4bb web app makes with manifest.json. An honest limitation:
 // early machines listed what the label said.
 int cmd_dir () {
-  if (type_file("c4dos.dir")) return 0;
-  printf("no c4dos.dir on this disk - the raw disk has no directory service\n");
+  int i;
+  if (!type_file("c4dos.dir"))
+    printf("no c4dos.dir on this disk - the raw disk has no directory service\n");
+  if (g_ramdisk) {
+    i = 0;
+    while (i < g_ram_n) {
+      printf("%s  <ram> %d bytes\n", (char *)g_ram_name[i], g_ram_len[i]);
+      ++i;
+    }
+    printf("ramdisk: %d of %d bytes used, %d file(s)\n",
+           g_ram_used, g_ram_budget, g_ram_n);
+  }
   return 0;
 }
 
@@ -471,8 +734,146 @@ int is_program_name (char *s) {
       && upper(s[n - 1]) == 'R';
 }
 
+// ---- the transient API (include/c4dos.h is the other half) ---------------
+// A transient reaches these by address, out of the table the loader
+// wrote into its __c4dos_api global. They are ordinary functions; the
+// only unusual thing is who calls them.
+int dos_api_create (char *name) {
+  if (!g_ramdisk) return 0 - 1;
+  return ram_create(name, 4096);
+}
+int dos_api_write (int slot, char *buf, int len) { return ram_write(slot, buf, len); }
+int dos_api_close (int slot) { return 0; }
+// The read half: DOS's own opener, which checks RAM before disk, made
+// available to a transient whose own open() only ever sees the host.
+int dos_api_open (char *name) { return dos_open(name); }
+int dos_api_read (int fd, char *buf, int len) { return dos_read(fd, buf, len); }
+int dos_api_rclose (int fd) { return dos_close(fd); }
+
+// ---- API v2: enumeration, and handing memory back ------------------------
+// v1 could create, write, open and read a file BY NAME. That is enough
+// for a tool, and not enough for a loader: a kernel taking over the
+// machine wants everything the RAM disk holds without being told what
+// is on it, the way a boot loader hands an initrd over whole. These
+// four say what is there, and the last two say "you can have the
+// memory now".
+int dos_api_count () { if (!g_ramdisk) return 0; return g_ram_n; }
+int dos_api_entname (int i) {
+  if (!g_ramdisk || i < 0 || i >= g_ram_n) return 0;
+  return g_ram_name[i];
+}
+int dos_api_entsize (int i) {
+  if (!g_ramdisk || i < 0 || i >= g_ram_n) return 0 - 1;
+  return g_ram_len[i];
+}
+int dos_api_entdata (int i) {
+  if (!g_ramdisk || i < 0 || i >= g_ram_n) return 0;
+  return g_ram_data[i];
+}
+
+// Give back the 4MB read scratch. Every DOS routine that wants it
+// calls scratch_need(), so this is safe at any moment; the next TYPE
+// or RUN simply pays for one malloc. Returns the bytes released.
+int dos_api_trim () {
+  if (!g_scratch) return 0;
+  free(g_scratch);
+  g_scratch = 0;
+  return BUF_MAX;
+}
+
+// Give back the RAM disk contents. The caller has copied out whatever
+// it wanted (ENTDATA pointers are dead after this). The slot table
+// itself stays -- the disk is empty, not uninstalled -- so a transient
+// that returns to the prompt finds a working, bare RAM disk rather
+// than a broken one. Returns the bytes released.
+int dos_api_release () {
+  int i, freed;
+  if (!g_ramdisk) return 0;
+  freed = 0;
+  i = 0;
+  while (i < g_ram_n) {
+    if (g_ram_data[i]) { freed = freed + g_ram_cap[i]; free((char *)g_ram_data[i]); }
+    if (g_ram_name[i]) free((char *)g_ram_name[i]);
+    g_ram_data[i] = 0; g_ram_name[i] = 0; g_ram_len[i] = 0; g_ram_cap[i] = 0;
+    ++i;
+  }
+  g_ram_n = 0;
+  g_ram_used = 0;
+  i = 0;
+  while (i < RAMHANDLE) { g_rh_slot[i] = 0 - 1; ++i; }
+  return freed;
+}
+
+// COPY src dst -- the one builtin that WRITES, and the demonstration
+// that the RAM disk works. There is no '>' redirection on this system
+// by decision (docs/c4dos-design.md); a tool that wants to produce a
+// file does it directly, and this is the smallest thing that does.
+int cmd_copy (char *src, char *dst) {
+  int fd, n, total, slot;
+  if (!src || !dst || !*src || !*dst) { printf("usage: COPY src dst\n"); return 1; }
+  if (!g_ramdisk) { printf("no ramdisk - add DEVICE=RAMDISK.SYS to CONFIG.SYS\n"); return 1; }
+  if (!scratch_need()) return 1;
+  if ((fd = dos_open(src)) < 0) { printf("file not found: %s\n", src); return 1; }
+  total = 0;
+  while ((n = dos_read(fd, g_scratch + total, 4096)) > 0) total = total + n;
+  dos_close(fd);
+  if ((slot = ram_create(dst, total)) < 0) return 1;
+  ram_write(slot, g_scratch, total);
+  printf("%s -> %s (%d bytes)\n", src, dst, total);
+  return 0;
+}
+
+// A bare command with ".c4r" appended, if that names something that
+// opens. This is the courtesy COMMAND.COM extended with COM/EXE/BAT:
+// you type the program, not the file. Returns 0 when there is no such
+// program, so an unknown word still reaches "bad command or file name"
+// rather than being reported as a broken executable.
+char *prog_ext (char *name) {
+  char *q, *s;
+  int fd;
+  if (xlen(name) + 5 > LINEMAX) return 0;
+  q = g_progbuf;
+  s = name;
+  while (*s) { *q = *s; ++q; ++s; }
+  *q = '.'; ++q; *q = 'c'; ++q; *q = '4'; ++q; *q = 'r'; ++q; *q = 0;
+  if ((fd = dos_open(g_progbuf)) < 0) return 0;
+  dos_close(fd);
+  return g_progbuf;
+}
+
+// Does this name a batch file? As typed if it already ends .bat, else
+// with .bat appended -- the same courtesy prog_ext extends to .c4r.
+int is_bat_name (char *s) {
+  int n;
+  n = xlen(s);
+  if (n < 5) return 0;
+  return s[n - 4] == '.' && upper(s[n - 3]) == 'B' && upper(s[n - 2]) == 'A'
+      && upper(s[n - 1]) == 'T';
+}
+
+char *bat_path (char *name) {
+  char *q, *s;
+  int fd;
+  if (xlen(name) + 5 > LINEMAX) return 0;
+  q = g_batbuf;
+  s = name;
+  while (*s) { *q = *s; ++q; ++s; }
+  if (!is_bat_name(name)) { *q = '.'; ++q; *q = 'b'; ++q; *q = 'a'; ++q; *q = 't'; ++q; }
+  *q = 0;
+  if ((fd = dos_open(g_batbuf)) < 0) return 0;
+  dos_close(fd);
+  return g_batbuf;
+}
+
+// RUN's argument: as typed if it opens, else with ".c4r" appended.
+char *prog_path (char *name) {
+  int fd;
+  if ((fd = dos_open(name)) >= 0) { dos_close(fd); return name; }
+  return prog_ext(name);
+}
+
 int dispatch (int argc) {
-  char *cmd; int r;
+  char *cmd, *path; int r;
   if (!argc) return 0;
   cmd = g_argv[0];
   if (cieq(cmd, "REM")) return 0;
@@ -487,15 +888,27 @@ int dispatch (int argc) {
   if (cieq(cmd, "VER")) return cmd_ver();
   if (cieq(cmd, "DIR")) return cmd_dir();
   if (cieq(cmd, "TYPE")) return cmd_type(argc > 1 ? g_argv[1] : 0);
+  if (cieq(cmd, "COPY"))
+    return cmd_copy(argc > 1 ? g_argv[1] : 0, argc > 2 ? g_argv[2] : 0);
   if (cieq(cmd, "TIME")) return cmd_time();
   if (cieq(cmd, "MEM")) return cmd_mem();
   if (cieq(cmd, "EXIT")) { g_quit = 1; return 0; }
   if (cieq(cmd, "RUN")) {
-    if (argc < 2) { printf("usage: RUN program.c4r [args]\n"); return 1; }
-    return run_program(g_argv[1], argc - 1, g_argv + 1);
+    if (argc < 2) { printf("usage: RUN program[.c4r] [args]\n"); return 1; }
+    if (!(path = prog_path(g_argv[1]))) {
+      printf("file not found: %s\n", g_argv[1]);
+      return 1;
+    }
+    return run_program(path, argc - 1, g_argv + 1);
   }
   if (is_program_name(cmd)) return run_program(cmd, argc, g_argv);
-  printf("bad command or file name: %s\n", cmd);
+  // Not a builtin and no extension typed: try it as a program name.
+  if ((path = prog_ext(cmd))) return run_program(path, argc, g_argv);
+  // Then as a batch file. dispatch cannot run one itself -- run_batch
+  // is defined further down and this dialect is define-before-use, so
+  // the batch is handed back and whoever called dispatch runs it.
+  if ((path = bat_path(cmd))) { g_batreq = path; return 0; }
+  printf("bad command or file name: %s\n", g_argv[0]);
   return 1;
 }
 
@@ -506,10 +919,11 @@ int dispatch (int argc) {
 int run_batch (char *path, int depth) {
   char *buf, *p, *e; int fd, n, total, show;
   if (depth > BATDEPTH) { printf("batch nested too deep\n"); return 1; }
-  if ((fd = open(path, 0)) < 0) return 1;
+  if (!scratch_need()) return 1;
+  if ((fd = dos_open(path)) < 0) return 1;
   total = 0;
-  while ((n = read(fd, g_scratch + total, 4096)) > 0) total = total + n;
-  close(fd);
+  while ((n = dos_read(fd, g_scratch + total, 4096)) > 0) total = total + n;
+  dos_close(fd);
   if (!(buf = malloc(total + 1))) { printf("c4dos: out of memory\n"); return 1; }
   n = 0;
   while (n < total) { buf[n] = g_scratch[n]; ++n; }
@@ -532,6 +946,11 @@ int run_batch (char *path, int depth) {
     while (total < n) { g_line[total] = p[total]; ++total; }
     if (show && g_line[0]) printf("A>%s\n", g_line);
     dispatch(parse_line());
+    if (g_batreq) {
+      g_batreq = 0;
+      if (depth + 1 <= BATDEPTH) run_batch(g_batbuf, depth + 1);
+      else printf("batch nested too deep\n");
+    }
     p = *e ? e + 1 : e;
   }
   free(buf);
@@ -540,10 +959,11 @@ int run_batch (char *path, int depth) {
 
 int read_config () {
   char *buf, *p, *e; int fd, n, total;
-  if ((fd = open("config.sys", 0)) < 0) return 0;
+  if (!scratch_need()) return 0;
+  if ((fd = dos_open("config.sys")) < 0) return 0;
   total = 0;
-  while ((n = read(fd, g_scratch + total, 4096)) > 0) total = total + n;
-  close(fd);
+  while ((n = dos_read(fd, g_scratch + total, 4096)) > 0) total = total + n;
+  dos_close(fd);
   if (!(buf = malloc(total + 1))) return 0;
   n = 0;
   while (n < total) { buf[n] = g_scratch[n]; ++n; }
@@ -561,6 +981,22 @@ int read_config () {
       printf("DEVICE=CLOCK.SYS: this build has no clock hardware support\n");
 #endif
     }
+    if (starts_ci(p, "DEVICE=RAMDISK.SYS")) {
+      g_ramdisk = 1;
+      g_ram_budget = RAMSIZE;
+      n = 0;
+      while (p + n < e && !starts_ci(p + n, "SIZE=")) ++n;
+      if (p + n < e) {
+        total = 0;
+        n = n + 5;
+        while (p + n < e && p[n] >= '0' && p[n] <= '9') {
+          total = total * 10 + (p[n] - '0');
+          ++n;
+        }
+        if (total > 0) g_ram_budget = total;
+      }
+      printf("ramdisk device installed, %d bytes\n", g_ram_budget);
+    }
     // FILES=, SHELL=, other DEVICE= lines: reserved, ignored
     p = *e ? e + 1 : e;
   }
@@ -576,15 +1012,43 @@ int main (int argc, char **argv) {
   stub();               // arm the invoke stub before anything else
   learn_trampoline();   // and learn the double-LEV tail address
 
-  if (!(g_scratch = malloc(BUF_MAX))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!scratch_need()) return 1;
   if (!(g_line = malloc(LINEMAX))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!(g_dirbuf = malloc(DIRMAX))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!(g_namebuf = malloc(LINEMAX))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!(g_progbuf = malloc(LINEMAX + 8))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!(g_batbuf  = malloc(LINEMAX + 8))) { printf("c4dos: out of memory\n"); return 1; }
+  g_batreq = 0;
+  if (!(g_ram_name = malloc(RAMFILES * sizeof(int)))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!(g_ram_data = malloc(RAMFILES * sizeof(int)))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!(g_ram_len  = malloc(RAMFILES * sizeof(int)))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!(g_ram_cap  = malloc(RAMFILES * sizeof(int)))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!(g_rh_slot  = malloc(RAMHANDLE * sizeof(int)))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!(g_rh_pos   = malloc(RAMHANDLE * sizeof(int)))) { printf("c4dos: out of memory\n"); return 1; }
+  n = 0;
+  while (n < RAMHANDLE) { g_rh_slot[n] = 0 - 1; ++n; }
   if (!(g_inbuf = malloc(INBUFMAX))) { printf("c4dos: out of memory\n"); return 1; }
   g_inlen = 0;
   g_inpos = 0;
   if (!(g_argv = malloc(ARGVMAX * sizeof(char *)))) { printf("c4dos: out of memory\n"); return 1; }
-  if (!(g_api = malloc(8 * sizeof(int)))) { printf("c4dos: out of memory\n"); return 1; }
+  // 32 slots, ZEROED. The v1 table allocated 16 and filled 9, so slots
+  // 9-15 were whatever the heap had in them -- a transient that read
+  // one got a plausible-looking address and jumped to it. Room to grow
+  // is cheap; uninitialised function pointers are not.
+  if (!(g_api = malloc(C4DOS_API_SLOTS * sizeof(int)))) { printf("c4dos: out of memory\n"); return 1; }
+  memset(g_api, 0, C4DOS_API_SLOTS * sizeof(int));
   g_api[0] = ('C' << 16) + ('4' << 8) + 'D';   // magic
   g_api[1] = 0;                                // dos_exit entry: see c4dos.h
+  g_api[2] = 0;                                // filled after CONFIG.SYS
+  g_api[3] = (int)&dos_api_write;
+  g_api[4] = (int)&dos_api_close;
+  g_api[5] = 2;                                // API version
+  g_api[6] = (int)&dos_api_open;
+  g_api[7] = (int)&dos_api_read;
+  g_api[8] = (int)&dos_api_rclose;
+  // v2 slots 13/14 are about DOS's own memory and do not need a disk.
+  g_api[13] = (int)&dos_api_trim;
+  g_api[14] = (int)&dos_api_release;
   g_echo = 1;
   g_clock = 0;
   g_quit = 0;
@@ -592,12 +1056,30 @@ int main (int argc, char **argv) {
 
   cmd_ver();
   read_config();
+  // Only now is it known whether there is anywhere to write. Advertise
+  // CREATE only if there is: a transient checks that slot before
+  // believing any of the API, so a DOS booted without
+  // DEVICE=RAMDISK.SYS honestly reports that it cannot save a file
+  // rather than failing halfway through one.
+  if (g_ramdisk) {
+    g_api[2]  = (int)&dos_api_create;
+    // Enumeration follows the same rule: only offered when there is a
+    // disk to enumerate, so a caller that checks the slot is told the
+    // truth rather than being handed an always-empty listing.
+    g_api[9]  = (int)&dos_api_count;
+    g_api[10] = (int)&dos_api_entname;
+    g_api[11] = (int)&dos_api_entsize;
+    g_api[12] = (int)&dos_api_entdata;
+  }
   run_batch("autoexec.bat", 0);
 
   while (!g_quit) {
     printf("A>");
     if (!get_line()) g_quit = 1;         // EOF: the console went away
-    else dispatch(parse_line());
+    else {
+      dispatch(parse_line());
+      if (g_batreq) { g_batreq = 0; run_batch(g_batbuf, 1); }
+    }
   }
   printf("C4DOS: system halted\n");
   return 0;

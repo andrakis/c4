@@ -175,30 +175,37 @@
 	(if (= (p:kind) 'Mul) (begin (p:advance) (next p:stars (+ ty p:PTR)))
 	ty)))
 
-;; ---- constants: [-] Num | enum id  (char literals are already Num) ----
+;; ---- constants: an integer constant expression ----
 
-;; An integer constant expression: literals, enum names, and the
-;; arithmetic between them. Array sizes and enum values are the two
+;; Literals, character literals, enum names, and the arithmetic between
+;; them. Array sizes, case labels, initializers and enum values are the
 ;; places C requires one, and "int t[MAX * WORDS]" is ordinary enough
 ;; that refusing it is a bug rather than a simplification.
+;;
+;; The operator set is C's integer-constant subset, in C's precedence
+;; order: | ^ & << >> + - * / % and the unary - + ~ !. The unary case
+;; recurses, so "- -1" and "!!X" parse; the old hand-rolled single-flag
+;; negation could not. ~x is written -x-1 rather than a bit:not, which
+;; c4sp does not have, and % uses the truncating form from t:arith
+;; (c4lc-tree.lisp) so the folded value matches what the VM computes.
 (define p:constatom (lambda (what)
-	(begin
-		(define neg (if (= (p:kind) 'Sub) (begin (p:advance) true) false))
-		(define v
-			(if (= (p:kind) 'Num) (begin (define n (p:value)) (p:advance) n)
-			(if (= (p:kind) 'Lparen)
-				(begin
-					(p:advance)
-					(define inner (p:const what))
-					(p:expect 'Rparen ") in constant expression")
-					inner)
-			(if (= (p:kind) 'Id)
-				(begin
-					(define ev (p:enumval))
-					(if (= ev false) (p:die (+ what " must be an integer constant"))
-						(begin (p:advance) ev)))
-			(p:die (+ what " must be an integer constant"))))))
-		(if neg (- 0 v) v))))
+	(if (= (p:kind) 'Sub)   (begin (p:advance) (- 0 (p:constatom what)))
+	(if (= (p:kind) 'Add)   (begin (p:advance) (p:constatom what))
+	(if (= (p:kind) 'Tilde) (begin (p:advance) (- 0 (+ (p:constatom what) 1)))
+	(if (= (p:kind) 'Not)   (begin (p:advance) (if (= 0 (p:constatom what)) 1 0))
+	(if (= (p:kind) 'Num) (begin (define n (p:value)) (p:advance) n)
+	(if (= (p:kind) 'Lparen)
+		(begin
+			(p:advance)
+			(define inner (p:const what))
+			(p:expect 'Rparen ") in constant expression")
+			inner)
+	(if (= (p:kind) 'Id)
+		(begin
+			(define ev (p:enumval))
+			(if (= ev false) (p:die (+ what " must be an integer constant"))
+				(begin (p:advance) ev)))
+	(p:die (+ what " must be an integer constant")))))))))))
 
 (define p:constmul (lambda (what)
 	(next p:constmul/2 what (p:constatom what))))
@@ -207,16 +214,51 @@
 		(begin (p:advance) (next p:constmul/2 what (* l (p:constatom what))))
 	(if (= (p:kind) 'Div)
 		(begin (p:advance) (next p:constmul/2 what (/ l (p:constatom what))))
+	(if (= (p:kind) 'Mod)
+		(begin
+			(p:advance)
+			(define r (p:constatom what))
+			(next p:constmul/2 what (- l (* (/ l r) r))))
+	l)))))
+
+(define p:constadd (lambda (what)
+	(next p:constadd/2 what (p:constmul what))))
+(define p:constadd/2 (lambda (what l)
+	(if (= (p:kind) 'Add)
+		(begin (p:advance) (next p:constadd/2 what (+ l (p:constmul what))))
+	(if (= (p:kind) 'Sub)
+		(begin (p:advance) (next p:constadd/2 what (- l (p:constmul what))))
 	l))))
 
-(define p:const (lambda (what)
-	(next p:const/2 what (p:constmul what))))
-(define p:const/2 (lambda (what l)
-	(if (= (p:kind) 'Add)
-		(begin (p:advance) (next p:const/2 what (+ l (p:constmul what))))
-	(if (= (p:kind) 'Sub)
-		(begin (p:advance) (next p:const/2 what (- l (p:constmul what))))
+(define p:constshift (lambda (what)
+	(next p:constshift/2 what (p:constadd what))))
+(define p:constshift/2 (lambda (what l)
+	(if (= (p:kind) 'Shl)
+		(begin (p:advance) (next p:constshift/2 what (bit:shl l (p:constadd what))))
+	(if (= (p:kind) 'Shr)
+		(begin (p:advance) (next p:constshift/2 what (bit:shr l (p:constadd what))))
 	l))))
+
+(define p:constand (lambda (what)
+	(next p:constand/2 what (p:constshift what))))
+(define p:constand/2 (lambda (what l)
+	(if (= (p:kind) 'And)
+		(begin (p:advance) (next p:constand/2 what (bit:and l (p:constshift what))))
+	l)))
+
+(define p:constxor (lambda (what)
+	(next p:constxor/2 what (p:constand what))))
+(define p:constxor/2 (lambda (what l)
+	(if (= (p:kind) 'Xor)
+		(begin (p:advance) (next p:constxor/2 what (bit:xor l (p:constand what))))
+	l)))
+
+(define p:const (lambda (what)
+	(next p:const/2 what (p:constxor what))))
+(define p:const/2 (lambda (what l)
+	(if (= (p:kind) 'Or)
+		(begin (p:advance) (next p:const/2 what (bit:or l (p:constxor what))))
+	l)))
 
 ;; ---- expressions ----
 
@@ -631,15 +673,13 @@
 		(if (= (p:kind) 'Id) nil (p:die "bad enum identifier"))
 		(define n (p:value))
 		(p:advance)
+		;; Any integer constant expression, not just [-]Num. p:enums is
+		;; updated below BEFORE the recursive call, so a constant named
+		;; earlier in this same body is already visible here:
+		;; enum { A = 1, B = A + 1 } works.
 		(define v
 			(if (= (p:kind) 'Assign)
-				(begin
-					(p:advance)
-					(define neg (if (= (p:kind) 'Sub) (begin (p:advance) true) false))
-					(if (= (p:kind) 'Num) nil (p:die "bad enum initializer"))
-					(define x (p:value))
-					(p:advance)
-					(if neg (- 0 x) x))
+				(begin (p:advance) (p:const "enum initializer"))
 			i))
 		(if (= (p:kind) 'Comma) (p:advance) nil)
 		(set! p:enums (p:cons (list n v) p:enums))

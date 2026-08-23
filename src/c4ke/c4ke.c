@@ -3838,5 +3838,6 @@ int main (int argc, char **argv) {
 #include "src/c4ke/extensions/c4ke_ipc.c"
 #include "src/c4ke/extensions/c4ke_plus.c"
 #include "src/c4ke/extensions/c4ke_pm.c"
+#include "src/c4ke/extensions/c4ke_dos.c"
 
 #endif // ifndef C4KE

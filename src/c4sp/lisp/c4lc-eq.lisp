@@ -12,7 +12,15 @@
 	(load "c4lc-gen.lisp")
 	(load "c4r.lisp")
 	(if (< (length argv) 2) (error "usage: c4lc-eq.lisp in.c ref.c4r"))
-	(define Out (c4r:encode (gen:module (parse:program (lex:file (head argv))))))
+	;; Encode exactly as c4lc.lisp does. The driver segregates
+	;; uninitialized globals to BSS and stamps format v3; encoding here
+	;; without doing the same compares a v2 image against a v3 one and
+	;; reports a one-byte difference that has nothing to do with host
+	;; independence, which is all this test is meant to measure.
+	(define M (gen:module (parse:program (lex:file (head argv)))))
+	(set! c4r:v3 true)
+	(set! c4r:bss-extra gen:bssextra)
+	(define Out (c4r:encode M))
 	(define Ref (file:read (file:path (index argv 1))))
 	(if (= Out Ref)
 		(print "c4lc fixed point:" (head argv) "-" (length Out) "bytes identical")

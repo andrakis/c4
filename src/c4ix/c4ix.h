@@ -115,7 +115,12 @@ enum { VN_NAME_MAX = 24, PATH_MAX = 96 };
 // RDWR so they can be passed straight through for host files.
 enum {
     C4IX_O_RDONLY = 0, C4IX_O_WRONLY = 1, C4IX_O_RDWR = 2,
-    C4IX_O_CREAT = 256, C4IX_O_TRUNC = 512
+    C4IX_O_CREAT = 256, C4IX_O_TRUNC = 512,
+    // Linux's value. A task that opens a host file non-blocking means
+    // it, and sys_open has to pass the bit through: a read on a
+    // blocking host fd calls the host read() directly (vfs.c) and
+    // stops the WHOLE VM, not just the caller.
+    C4IX_O_NONBLOCK = 2048
 };
 
 struct vnode {

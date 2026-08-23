@@ -62,6 +62,15 @@ export const OPNAMES =
 // (a terminal in cooked mode); opening "/dev/stdin" with O_NONBLOCK
 // (0x800) yields a nonblocking byte fd whose empty read returns -1,
 // the Linux EAGAIN convention C4IX's console expects (con.c:53).
+// Opening "/dev/tty" instead yields a RAW keyboard fd: same EAGAIN
+// convention, but no line discipline, so a keystroke is readable the
+// instant it arrives instead of when Enter is pressed. That is the
+// difference between a shell and a game; /dev/stdin's behaviour is
+// deliberately untouched so c4sh, C4IX's console and every existing
+// golden keep the cooked semantics they were written against.
+// The name is chosen because it already means this on a real host:
+// /dev/tty is the controlling terminal, so the identical guest code
+// works under native c4m, where rawness comes from stty outside.
 // Real files come from a caller-supplied name -> Uint8Array map.
 // READ returns -2 for "would block"; the microcode rewinds PC by one
 // word and retries, so the machine keeps taking interrupts while a
@@ -76,6 +85,8 @@ export class Devices {
     this.onByte = opts.onByte || null;// UART TX sink: fn(byteValue)
     this.rxFifo = [];                 // keyboard bytes
     this.rxEof = false;               // Ctrl-D / end of input stream
+    this.rawKbd = 0;                  // open raw keyboards; a host UI
+                                      // suppresses local echo while > 0
     this.sleepMs = 0;                 // accumulated USLP time
     this.halted = false;
     this.status = 0;
@@ -94,9 +105,11 @@ export class Devices {
 
   diskOpen(nameAddr) {
     const name = this.arena.cstring(nameAddr >>> 0, 256);
-    if (name === '/dev/stdin') {
+    if (name === '/dev/stdin' || name === '/dev/tty') {
       const fd = this.nextFd++;
-      this.fds.set(fd, { kbd: true, nonblock: !!(this.diskFlags & O_NONBLOCK) });
+      const raw = name === '/dev/tty';
+      this.fds.set(fd, { kbd: true, raw, nonblock: !!(this.diskFlags & O_NONBLOCK) });
+      if (raw) this.rawKbd++;
       return fd;
     }
     const clean = name.startsWith('./') ? name.slice(2) : name;
@@ -126,10 +139,15 @@ export class Devices {
   // drain keystrokes out of rxFifo faster than a human could press
   // Backspace, breaking line editing; waiting for \n here is what
   // keeps not-yet-committed characters available to erase.
-  kbdRead(addr, len, nonblock) {
+  kbdRead(addr, len, nonblock, raw) {
     if (this.rxFifo.length === 0) return this.rxEof ? 0 : (nonblock ? -1 : -2);
-    const nl = this.rxFifo.indexOf(10);
-    if (nl < 0 && !this.rxEof) return nonblock ? -1 : -2;
+    // A raw fd is the one caller that has opted out of line buffering,
+    // so it takes whatever has arrived. Everyone else still waits for
+    // the newline that commits the line.
+    if (!raw) {
+      const nl = this.rxFifo.indexOf(10);
+      if (nl < 0 && !this.rxEof) return nonblock ? -1 : -2;
+    }
     let n = 0;
     while (n < len && this.rxFifo.length) {
       const b = this.rxFifo.shift();
@@ -145,7 +163,7 @@ export class Devices {
     const f = this.fds.get(this.diskFd);
     if (this.diskFd === FD_KEYBOARD) return this.kbdRead(this.diskAddr, len, false);
     if (!f) return -1;
-    if (f.kbd) return this.kbdRead(this.diskAddr, len, f.nonblock);
+    if (f.kbd) return this.kbdRead(this.diskAddr, len, f.nonblock, f.raw);
     const n = Math.min(len, f.data.length - f.pos);
     for (let i = 0; i < n; i++) this.arena.write8(this.diskAddr + i, f.data[f.pos + i]);
     f.pos += n;
@@ -212,7 +230,7 @@ export class Devices {
       case DISK_LEN:   this.diskResult = this.diskRead(val | 0); return;
       case DISK_CLOSE: {
         const f = this.fds.get(val | 0);
-        if (f) { this.fds.delete(val | 0); this.diskResult = 0; }
+        if (f) { if (f.raw) this.rawKbd--; this.fds.delete(val | 0); this.diskResult = 0; }
         else this.diskResult = -1;
         return;
       }

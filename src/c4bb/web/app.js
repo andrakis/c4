@@ -24,11 +24,21 @@ const $ = id => document.getElementById(id);
 // no one listening. Only the two interactive OS images read a
 // keyboard, so they're flagged and labeled for it.
 const PROGRAMS = [
-  'c4ix32', 'c4ke32', 'hello32', 'factorial', 'test_basic', 'mandel',
+  'c4ix32', 'c4ke32', 'c4dos32', 'hello32', 'factorial', 'test_basic', 'mandel',
   'tests', 'test_malloc', 'test_printloop', 'cycles', 'test_float',
   'bb_customop', 'bb_preempt', 'bb_pm',
 ];
-const INTERACTIVE = new Set(['c4ix32', 'c4ke32']);
+const INTERACTIVE = new Set(['c4ix32', 'c4ke32', 'c4dos32']);
+
+// Which disk directory an image boots against. `disk` is the shared
+// one where all three systems live together; the derived disks
+// (build-images.sh) are curated per system, which is what you want the
+// moment you are BUILDING on one rather than demonstrating it. Anything
+// not named here gets the shared disk.
+const DISKS = {
+  c4dos32: 'dos-recovery',   // DOS, a compiler, and the kernel sources
+};
+const DEFAULT_DISK = 'disk';
 
 let ucSource, boardDef, fwBytes, ucode;
 let machine, turbo, progImg, renderer;
@@ -66,16 +76,20 @@ async function init() {
   requestAnimationFrame(frame);
 }
 
-let diskFiles = null;
-async function loadDisk() {
-  if (diskFiles) return diskFiles;
-  diskFiles = new Map();
+// One cache entry per disk directory: switching programs must not
+// re-fetch a disk already in memory, and must not hand one program the
+// other's files.
+const diskCache = new Map();
+async function loadDisk(dir) {
+  if (diskCache.has(dir)) return diskCache.get(dir);
+  const files = new Map();
+  diskCache.set(dir, files);
   try {
-    const names = await (await fetch('../images/disk/manifest.json')).json();
+    const names = await (await fetch(`../images/${dir}/manifest.json`)).json();
     await Promise.all(names.map(async n =>
-      diskFiles.set(n, await fetchBin(`../images/disk/${n}`))));
+      files.set(n, await fetchBin(`../images/${dir}/${n}`))));
   } catch { /* no disk built; programs that open files will get -1 */ }
-  return diskFiles;
+  return files;
 }
 
 async function reset() {
@@ -84,7 +98,7 @@ async function reset() {
   const progBytes = await fetchBin(`../images/${prog}.c4r`);
   const arena = new Arena(32 * 1024 * 1024);
   const dev = new Devices(arena, {
-    files: await loadDisk(),
+    files: await loadDisk(DISKS[prog] || DEFAULT_DISK),
     onByte: b => terminal.write(b),
   });
   machine = new Machine(arena, ucode, dev, { onLog: s => terminal.writeString(s) });

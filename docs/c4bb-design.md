@@ -72,7 +72,8 @@ unchanged by `make test-c4ix`).
     0x118 USLP_US      write: advance simulated clock
     0x120-0x138 disk controller: NAME (write ptr -> open, read -> fd),
                 FD/ADDR/LEN (LEN write triggers DMA, read -> result),
-                CLOSE, FLAGS (O_NONBLOCK honored for "/dev/stdin")
+                CLOSE, FLAGS (O_NONBLOCK honored for "/dev/stdin"
+                and "/dev/tty")
     0x134 OPNAME       write name ptr, read opcode number (_OPC)
     0x140 POWER        write -> halt with status (EXIT lands here)
     0x144/8 HEAP_BASE/END   set by the loader, read by the firmware
@@ -83,6 +84,47 @@ unchanged by `make test-c4ix`).
 fd 0 is the blocking line-buffered keyboard (a cooked tty); opening
 `/dev/stdin` gives a byte fd where empty reads return -1 exactly like
 Linux O_NONBLOCK — so C4IX's console (src/c4ix/console.c) works unmodified.
+
+Opening **`/dev/tty`** gives the same non-blocking byte fd with the line
+discipline switched off: a keystroke is readable the instant it arrives
+rather than when Enter commits the line. `/dev/stdin` keeps cooked
+semantics unchanged, deliberately — the line buffer is what lets
+Backspace erase a character that no reader has taken yet, and an
+earlier attempt to skip it for non-blocking readers let a turbo-mode
+reader drain the FIFO faster than a human could type. Two names, two
+behaviours, no flag day.
+
+The split exists because a shell and a game want opposite things.
+`src/tests/raycast.c` polls for WASD every frame and must never wait
+for a newline; c4sh must. `/dev/tty` is the right name for it because
+it already means this on a real host — it is the controlling terminal,
+so the identical guest code works under native c4m, where rawness comes
+from `stty raw -echo` outside the VM (src/c4or1k/run-c4or1k.sh does
+exactly that). A guest that asks for `/dev/tty` and gets -1 falls back
+to `/dev/stdin` and degrades to batched input.
+
+`Devices.rawKbd` counts the open raw descriptors, so an embedding UI
+can suppress its own local echo while one is held.
+
+The web terminal (`web/panels.js`) has a SCREEN, not just a scrollback.
+It began as a teletype -- one string, re-rendered whole, every non-SGR
+CSI dropped -- which is right for a shell and wrong for anything that
+repaints: a full-screen program had to scroll the previous frame off to
+draw the next, and the picture visibly jumped. It now keeps a cell grid
+with a cursor and handles the sequences such a program actually uses:
+`H`/`f` (position), `J` (erase display), `K` (erase line), `A`-`D` and
+`G` (movement), and `?25` hide/show. Scrollback is unchanged -- lines
+accumulate, and "the screen" is the last `rows` of them, which is what
+`ESC[H` homes to -- so a program that never positions the cursor
+behaves exactly as it always did.
+
+One detail is load-bearing: **the wrap at the last column is deferred**,
+as on real hardware. Filling the final column does not move the cursor;
+it arms a wrap that the next printable character takes. Wrapping eagerly
+costs an extra line for every full-width row, so a program drawing an
+80-column frame grows the buffer by a whole screen per frame instead of
+repainting in place. `src/c4bb/tests/test-terminal.mjs` pins both that
+and the teletype behaviour, and runs at the top of test-c4bb.sh.
 A blocking READ that would wait returns -2 to the microcode, which
 rewinds PC one word and retries: the machine keeps taking cycle
 interrupts while a task waits for input, so the OS keeps scheduling
@@ -202,6 +244,55 @@ preprocessor hangs on `u0.h` specifically (reproduces at 64-bit too,
 so it's not a word-size issue) - preprocess with `gcc -E` first, the
 same workaround the kernel build already used.
 
+## The disks
+
+`build-images.sh` builds one shared disk, `images/disk/`, where all
+three systems live together: C4DOS's `config.sys` sits beside C4KE's
+`c4ke.vfs.txt` and C4IX's binaries, and each system opens the parts it
+knows about. That is a fine thing to *demonstrate* — an embedder who
+already serves this directory gets all three for the cost of one more
+image — and a bad thing to *build on*.
+
+So the tail of the script derives two curated disks from it. That
+section is **append-only**: everything above it produces the shared
+disk `test-c4bb.sh` boots, and must not move, so the derivation only
+copies and deletes — it compiles nothing.
+
+- **`images/dos-recovery/`** — the emergency recovery floppy: C4DOS's
+  boot files with a 16 MB RAM disk, `dostar`, `cpp`, `c4cc`, `dosload`,
+  `c4ke-src.tar`, `build.bat`, and `c4sh.c4r`. **No `init.c4r`**, on
+  purpose: `BUILD.BAT` compiles one, and the kernel is supposed to boot
+  *that* one out of memory. Putting a prebuilt init here would hide a
+  broken handover.
+
+      node src/c4bb/sim/cli.js -i -d src/c4bb/images/dos-recovery            src/c4bb/images/c4dos32.c4r
+
+- **`images/c4ke-root/`** — a C4KE root filesystem with its own
+  toolchain: c4sp, c4rlink, c4cc, the 27 `.lisp` files c4lc is written
+  in, `u0.h`, and C4IX's sources under `src/c4ix/`. Derived by
+  **subtraction** — copy the shared disk, delete the C4DOS and C4IX
+  *binary* parts — because the manifest names ~106 entries and every
+  one has to exist on the disk; a hand-written include list would drift
+  out of step with it, subtraction cannot.
+
+      node src/c4bb/sim/cli.js -i -m 64 -d src/c4bb/images/c4ke-root            src/c4bb/images/c4ke32.c4r
+
+  Its manifest is `c4ke.vfs.txt` concatenated with
+  `src/c4bb/fs/c4ke-dev.vfs.txt` (both curated source), adding
+  `/usr/src/c4ix`, `/usr/src/c4sp.c`, `/usr/lib/u0.h` and
+  `/usr/lib/lisp`. 151 entries, against `RAMFS_MAX` of 256. Those files
+  were physically on the shared disk already and named in no manifest,
+  so from inside C4KE they did not exist — `ls /usr/src` showed a
+  machine that could not see what it is for.
+
+  The shared disk's own manifest is deliberately left alone: another
+  ~45 entries there would spend `test-c4bb`'s cycle budget and eat into
+  `RAMFS_MAX` for files only a build needs.
+
+`web/app.js` picks the disk per program through a `DISKS` map (default
+`disk`), with one cache entry per directory, so `c4dos32` in the web
+demo boots the recovery floppy.
+
 ## The C4IX filesystem
 
 `src/c4ix/user/vfsload.c` is the same idea aimed at C4IX's real,
@@ -276,9 +367,19 @@ illustrative chip schematics (not yet drawn).
   interleavings legitimately differ once firmware printf costs cycles)
 - C4IX boot with protected mode + spawned ps (grep assertions)
 - step-vs-turbo lockstep over three images
+- C4DOS booting the shared disk
 
 Browser verification is headless Chromium via raw CDP capture (see
 `docs/` notes in the repo user's memory: page.screenshot hangs).
+
+`tests/test-ladder.sh` is **not** part of `make test-c4bb` and is meant
+to be run by hand: it compiles an operating system inside a virtual
+machine and takes minutes. It walks the whole climb — C4DOS builds
+C4KE, `dosload` hands the machine over, the kernel seeds its RAM
+filesystem from DOS's RAM disk and boots the init that only exists in
+memory, then c4cc/c4rlink and c4lc/c4rlink each complete a compile-link
+round trip entirely in that filesystem. `docs/homeward-ladder.md`
+tracks the whole thing.
 
 ## Upstream discoveries made along the way
 
@@ -293,6 +394,17 @@ Browser verification is headless Chromium via raw CDP capture (see
 - C4IX had 64-bit word-size assumptions (sched.c trampoline +16 and
   returnpc -8, loader.c's byte walk, several malloc sizes); fixed with
   sizeof(int) arithmetic, 64-bit behavior pinned by make test-c4ix
+- sim/loader.js ignored the format-v3 MEMSZ word (byte 5), so the BSS
+  a c4lc image declares -- its uninitialized globals, which occupy no
+  image bytes -- was never reserved. `top` came from the on-disk data
+  length, so the heap (and any image loaded after) began INSIDE those
+  globals and malloc handed out memory that aliased them. It hid for a
+  while because it only bites a program that both has uninitialized
+  globals and allocates: src/tests/raycast.c does both, and showed up
+  as a maze that generated identically on c4bb and c4m32 but rendered
+  from a different camera position. Found 2026-08-22; the fix is to
+  read MEMSZ and reserve max(DATALEN, MEMSZ). The arena is already
+  zero-filled, so reserving the space is the whole fix.
 
 ## Known deviations from native c4m
 

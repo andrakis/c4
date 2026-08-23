@@ -69,13 +69,25 @@ $PREPROC $BIN/vfsload.c > .c4bb_vfsload_pp.c
 ./c4sp32 -c 16000000 src/c4sp/lisp/c4lc.lisp -O .c4bb_vfsload_pp.c $DISK/vfsload.c4r > /dev/null
 rm -f .c4bb_vfsload_pp.c
 
+# raycast: also c4lc, also no u0, and additionally -conforming so it
+# can write ANSI escapes as "\033[" instead of poking 27 in as an
+# integer. No gcc -E here -- it includes nothing, so c4lc's own
+# preprocessor handles the one -D and the #ifdef it guards.
+./c4sp32 -c 16000000 src/c4sp/lisp/c4lc.lisp -O -conforming -D RC_KE=1 \
+    src/tests/raycast.c $DISK/raycast.c4r > /dev/null
+
 # the self-hosted core (c4, c4m, c4cc) and the C4R toolchain, same
 # recipes as the Makefile's native (64-bit) rules, just via c4cc32
 $CC -o $DISK/c4.c4r $U0 c4.c > /dev/null
 $PREPROC c4m.c 2>/dev/null | $CC -o $DISK/c4m.c4r - > /dev/null
-$CC -o $DISK/c4cc.c4r $U0 load-c4r.c src/c4cc/c4cc.c src/c4cc/asm-c4r.c > /dev/null
-$CC -o $DISK/c4rdump.c4r $U0 load-c4r.c src/c4cc/c4cc.c src/c4cc/asm-c4r.c $BIN/c4rdump.c > /dev/null
-$CC -o $DISK/c4rlink.c4r $U0 load-c4r.c src/c4cc/c4cc.c src/c4cc/asm-c4r.c $BIN/c4rlink.c > /dev/null
+# include/c4dos.h rides along as a source file (c4cc has no
+# preprocessor): c4cc reads its input through the DOS API when it is
+# running as a transient, so a source another tool just wrote to the
+# RAM disk is findable, and writes its output back the same way.
+CCSRC="$U0 include/c4dos.h load-c4r.c src/c4cc/c4cc.c src/c4cc/asm-c4r.c"
+$CC -o $DISK/c4cc.c4r $CCSRC > /dev/null
+$CC -o $DISK/c4rdump.c4r $CCSRC $BIN/c4rdump.c > /dev/null
+$CC -o $DISK/c4rlink.c4r $CCSRC $BIN/c4rlink.c > /dev/null
 
 # benchmarks
 for t in bench benchtop innerbench; do
@@ -131,6 +143,7 @@ done
 BIN_TEST_SRC="hello tests factorial multifun test-order test-ptrs \
               test_continue test_args test_exit test_printloop \
               test_basic test_malloc test_float mandel rps"
+cp src/tests/raycast.c $DISK/raycast.c
 for n in $BIN_TEST_SRC; do
     cp src/tests/$n.c $DISK/$n.c 2>/dev/null || true
 done
@@ -142,19 +155,30 @@ cp src/c4ke/include/service.h $DISK/
 # the 32-bit c4rlink; userland links against libc4ix
 C4IX_MODS="boot console va host sl4b task sched vfs sys c4ke loader init"
 C4IX_USER="hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt"
+# c4sp arena, in cells. 8000000 was a guess with no measurement behind
+# it, and at 21 bytes a cell (32-bit: gc.h/cell.h) that is ~168MB --
+# more than c4bb has (32MB default), so nothing built this way could
+# ever be built INSIDE the machine. The measured floor is 100k-200k
+# cells per module (sys, c4ke and libc4ix are the 200k ones); this is
+# 2x the worst, and every object it produces is byte-identical to the
+# 8000000 one. ~8.4MB, which fits.
+# The native (64-bit) build in the Makefile still says 4000000: these
+# floors were measured at 32 bits, and an unmeasured change there would
+# be the same guess with a smaller number.
+C4IX_CELLS=400000
 if [ ! -f $OUT/c4ix32.c4r ] || [ src/c4ix/sched.c -nt $OUT/c4ix32.c4r ] || \
    [ src/c4ix/c4ix.h -nt $OUT/c4ix32.c4r ] || [ src/c4ix/init.c -nt $OUT/c4ix32.c4r ] || \
    [ src/c4ix/loader.c -nt $OUT/c4ix32.c4r ]; then
     objs=""
     for m in $C4IX_MODS; do
-        ./c4sp32 -c 8000000 src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix src/c4ix/$m.c .c4bb_ix_$m.c4o > /dev/null
+        ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix src/c4ix/$m.c .c4bb_ix_$m.c4o > /dev/null
         objs="$objs .c4bb_ix_$m.c4o"
     done
     ./c4rlink32 $objs -o $OUT/c4ix32.c4r
-    ./c4sp32 -c 8000000 src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix/include src/c4ix/lib/libc4ix.c .c4bb_ix_lib.c4o > /dev/null
+    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix/include src/c4ix/lib/libc4ix.c .c4bb_ix_lib.c4o > /dev/null
     ./c4rlink32 -r .c4bb_ix_lib.c4o -o .c4bb_libc4ix32.c4l
     for u in $C4IX_USER; do
-        ./c4sp32 -c 8000000 src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix/include src/c4ix/user/$u.c .c4bb_ix_u.c4o > /dev/null
+        ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix/include src/c4ix/user/$u.c .c4bb_ix_u.c4o > /dev/null
         ./c4rlink32 .c4bb_ix_u.c4o .c4bb_libc4ix32.c4l -o $DISK/c4ix-$u.c4r > /dev/null
     done
     # the VFS loader: c4ix-vfsload.c4r, NOT plain vfsload.c4r - C4KE
@@ -164,7 +188,7 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ src/c4ix/sched.c -nt $OUT/c4ix32.c4r ] || \
     # C4IX's build ran second, so C4KE started running C4IX's loader
     # under itself - "c4ix-" keeps it consistent with every other
     # C4IX binary here, all of which face the same shared-disk risk).
-    ./c4sp32 -c 8000000 src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix/include src/c4ix/user/vfsload.c .c4bb_ix_u.c4o > /dev/null
+    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix/include src/c4ix/user/vfsload.c .c4bb_ix_u.c4o > /dev/null
     ./c4rlink32 .c4bb_ix_u.c4o .c4bb_libc4ix32.c4l -o $DISK/c4ix-vfsload.c4r > /dev/null
     rm -f .c4bb_ix_*.c4o .c4bb_ix_*.pp.c .c4bb_libc4ix32.c4l
 fi
@@ -184,10 +208,162 @@ done
 cp src/c4ix/c4ix.h $DISK/c4ix.h
 cp src/c4ix/include/c4ix_user.h $DISK/c4ix_user.h
 
+# ---- the ladder ------------------------------------------------------
+# HOMEWARD's premise is that you climb this disk: C4DOS boots, C4DOS
+# boots C4KE, C4KE's RAM filesystem is what finally lets a compiler
+# WRITE, and that is what makes C4IX buildable. So the systems above
+# each rung have to BE here, as images the machine can load.
+#
+# The rung is closed as of the DOS API work: C4DOS has a RAM disk
+# (DEVICE=RAMDISK.SYS), transients reach it through __c4dos_api
+# (include/c4dos.h), so cpp and c4cc can WRITE under DOS -- and the
+# kernel extension c4ke_dos.c copies that whole RAM disk into C4KE's
+# own RAM filesystem at boot, so the kernel and init C4DOS just built
+# are what actually run. c4sp/c4lc still only know how to find C4KE's
+# ramfs (custom opcodes a trap-free DOS does not offer), which is
+# correct: they are the C4KE rung's tools, used to build C4IX.
+# docs/homeward-ladder.md tracks the whole climb.
+cp $OUT/c4ke32.c4r $DISK/c4ke.c4r
+cp $OUT/c4ix32.c4r $DISK/c4ix.c4r
+
+# The toolchain, as machine-loadable images. c4/c4m/c4cc/c4rlink/
+# c4rdump are copied by the BIN_ALL loop above; these two were only
+# ever host binaries.
+$PREPROC src/c4sp/c4sp.c | $CC -o $DISK/c4sp.c4r - > /dev/null
+$CC -o $DISK/cpp.c4r include/c4dos.h src/c4dos/cpp.c > /dev/null
+
+# c4lc is not an image at all -- it is Lisp that c4sp reads at runtime,
+# by bare filename, from the working directory. On this machine that
+# directory is the disk, so the whole toolchain has to sit at the top
+# level beside c4sp.c4r or none of it loads.
+cp src/c4sp/lisp/*.lisp $DISK/
+
+# u0.h is what a C4KE program is compiled against, and the C4IX kernel
+# sources are what c4lc is FOR. Both go under src/, mirroring the repo:
+# the disk is flat but its keys hold slashes, so a path is just a
+# longer name, and src/c4ix/init.c stops colliding with C4KE's own
+# init.c at the top level.
+cp include/u0.h $DISK/u0.h
+mkdir -p $DISK/src/c4ix/include $DISK/src/c4ix/lib $DISK/src/c4ix/user $DISK/src/c4sp
+# Two sources the disk carried the BINARIES of but not the source: you
+# could run c4sp and C4IX's vfsload on this machine and not rebuild
+# either of them, which is exactly the thing the ladder is about.
+cp src/c4sp/c4sp.c              $DISK/src/c4sp/c4sp.c
+cp src/c4ix/user/vfsload.c      $DISK/src/c4ix/user/vfsload.c
+for m in $C4IX_MODS; do cp src/c4ix/$m.c $DISK/src/c4ix/$m.c; done
+cp src/c4ix/c4ix.h              $DISK/src/c4ix/c4ix.h
+cp src/c4ix/include/c4ix_user.h $DISK/src/c4ix/include/c4ix_user.h
+cp src/c4ix/lib/libc4ix.c       $DISK/src/c4ix/lib/libc4ix.c
+
+# The build kit: one archive of every source a kernel build reaches
+# for, the tool that unpacks it, and the batch that drives the whole
+# thing. This is the ladder made runnable -- boot c4dos32.c4r on this
+# disk, type BUILD, and the machine compiles its own next operating
+# system out of the RAM disk.
+$CC -o $DISK/dostar.c4r include/c4dos.h src/c4dos/dostar.c > /dev/null
+# dosload: LOADLIN for C4DOS. Not required to boot a kernel (plain RUN
+# works and injects the API too) -- it is what frees DOS's 4MB scratch
+# first and gives the kernel a command line of its own.
+$CC -o $DISK/dosload.c4r include/c4dos.h src/c4dos/dosload.c > /dev/null
+cp c4ke-src.tar $DISK/ 2>/dev/null || make c4ke-src.tar > /dev/null 2>&1 && cp c4ke-src.tar $DISK/
+cp src/c4dos/fs/BUILD.BAT $DISK/build.bat
+
+# ---- C4DOS ----------------------------------------------------------
+# The third system on this disk. Built with our own cpp rather than
+# gcc -E, because c4dos.c's whole point is that the toolchain can eat
+# its own food; raw c4cc32 would skip the '#' lines and compile both
+# sides of the clock #if into one image. The clock build is the one
+# worth shipping: c4bb HAS a TIME device, and DEVICE=CLOCK.SYS gates it
+# at runtime anyway.
+#
+# config.sys/autoexec.bat/c4dos.dir go on the disk so c4dos32.c4r boots
+# against the SAME disk as c4ke32 and c4ix32 -- an embedder that
+# already serves this directory gets DOS for the cost of one more
+# image. c4dos.dir is generated last, below, because it has to list
+# whatever actually ended up here.
+if [ -x ./cpp ]; then
+    ./cpp -DC4DOS_CLOCK=1 src/c4dos/c4dos.c > .c4bb_dos_pp.c
+    $CC -o $OUT/c4dos32.c4r .c4bb_dos_pp.c > /dev/null
+    rm -f .c4bb_dos_pp.c
+    sed 's/SIZE=[0-9]*/SIZE=16777216/' src/c4dos/fs/CONFIG.SYS > $DISK/config.sys
+    cp src/c4dos/fs/AUTOEXEC.BAT $DISK/autoexec.bat
+else
+    echo "c4bb: no ./cpp, skipping c4dos32 (run 'make cpp')" >&2
+fi
+
+# C4DOS's directory service IS a file: DIR types c4dos.dir, because the
+# raw disk cannot enumerate itself. It is also the name resolver --
+# dos_open falls back to a case-insensitive scan of this listing and
+# opens the spelling it finds -- so it must carry TRUE on-disk names.
+# Generated here, after every other copy.
+if [ -f $DISK/config.sys ]; then
+    (cd $DISK && ls -p | grep -v '/$' | grep -v '^manifest.json$' > c4dos.dir)
+fi
+
 # manifest for the web app's disk loader (recursive: some entries,
 # like src/c4ke/c4ke.c, are real subdirectories on purpose - see the
 # innerbench comment above)
 (cd $DISK && find . -type f -not -name manifest.json | sed 's|^\./||') | \
     awk 'BEGIN{printf "["} NR>1{printf ","} {printf "\"%s\"", $0} END{print "]"}' > $DISK/manifest.json
 
+# ---- per-system disks -----------------------------------------------
+# APPEND-ONLY SECTION. Everything above builds the ONE shared disk that
+# test-c4bb.sh boots, and must not move. This derives two curated disks
+# from it by copying named subsets -- no new compilation, so nothing
+# here can change what the shared disk contains.
+#
+# Why two more disks at all: the shared disk is a demonstration that
+# three operating systems can live on one, which is a fine thing to
+# show and a bad thing to BUILD on. A recovery floppy that boots DOS
+# and rebuilds the kernel should not carry C4IX's userland, and a C4KE
+# root filesystem carrying its own compiler should not have to share a
+# manifest with C4DOS's config.sys.
+DOSDISK=$OUT/dos-recovery
+ROOTDISK=$OUT/c4ke-root
+rm -rf $DOSDISK $ROOTDISK
+mkdir -p $DOSDISK $ROOTDISK
+
+# --- the emergency recovery disk: DOS, a compiler, and the sources ---
+# Boot with: node src/c4bb/sim/cli.js -i -d $DOSDISK $OUT/c4dos32.c4r
+# then type BUILD, then RUN dosload.c4r c4ke.c4r
+if [ -f $DISK/config.sys ]; then
+    cp $DISK/config.sys $DISK/autoexec.bat $DOSDISK/
+    for f in dostar.c4r cpp.c4r c4cc.c4r dosload.c4r c4ke-src.tar build.bat; do
+        [ -f $DISK/$f ] && cp $DISK/$f $DOSDISK/
+    done
+    # c4sh is NOT built by BUILD.BAT and the init that is built spawns
+    # it, so it has to be here or the kernel comes up with no shell.
+    # init.c4r is deliberately absent: the one that boots must be the
+    # one the machine just compiled, which is the whole point.
+    cp $DISK/c4sh.c4r $DOSDISK/
+    (cd $DOSDISK && ls -p | grep -v '/$' | grep -v '^manifest.json$' > c4dos.dir)
+    (cd $DOSDISK && find . -type f -not -name manifest.json | sed 's|^\./||') | \
+        awk 'BEGIN{printf "["} NR>1{printf ","} {printf "\"%s\"", $0} END{print "]"}' > $DOSDISK/manifest.json
+fi
+
+# --- the C4KE root filesystem: userland plus the toolchain -----------
+# Boot with: node src/c4bb/sim/cli.js -i -m 64 -d $ROOTDISK $OUT/c4ke32.c4r
+# The manifest is the base one plus src/c4bb/fs/c4ke-dev.vfs.txt, which
+# names the toolchain and C4IX's sources -- both were physically on the
+# shared disk and in no manifest, so from inside C4KE they did not
+# exist. Concatenated, not duplicated, so it cannot drift.
+# Derived by SUBTRACTION, not by listing what to keep. The manifest
+# names ~106 entries and every one of them has to be on the disk or the
+# boot reports failures, so a hand-curated include list is a standing
+# invitation to drift. Copy the shared disk and remove the things that
+# belong to the other two systems instead -- what is left is by
+# construction everything C4KE's manifest can ask for.
+cp -r $DISK/. $ROOTDISK/
+rm -f $ROOTDISK/manifest.json $ROOTDISK/c4dos.dir
+rm -f $ROOTDISK/config.sys $ROOTDISK/autoexec.bat $ROOTDISK/build.bat
+rm -f $ROOTDISK/c4ke-src.tar $ROOTDISK/dostar.c4r $ROOTDISK/dosload.c4r
+# C4IX's binaries go; C4IX's SOURCES stay, because building them is
+# what this disk is for.
+rm -f $ROOTDISK/c4ix.c4r $ROOTDISK/c4ix-*.c4r $ROOTDISK/c4ix.vfs.txt
+rm -f $ROOTDISK/c4ix-*.c $ROOTDISK/c4ix.h $ROOTDISK/c4ix_user.h
+cat src/c4bb/fs/c4ke.vfs.txt src/c4bb/fs/c4ke-dev.vfs.txt > $ROOTDISK/c4ke.vfs.txt
+(cd $ROOTDISK && find . -type f -not -name manifest.json | sed 's|^\./||') | \
+    awk 'BEGIN{printf "["} NR>1{printf ","} {printf "\"%s\"", $0} END{print "]"}' > $ROOTDISK/manifest.json
+
 echo "c4bb: images built in $OUT"
+echo "c4bb: derived disks: $DOSDISK ($(ls $DOSDISK | wc -l) files), $ROOTDISK ($(find $ROOTDISK -type f | wc -l) files)"

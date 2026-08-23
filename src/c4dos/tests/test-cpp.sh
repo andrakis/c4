@@ -48,7 +48,12 @@ pin c4m     ""            c4m.c
 # the tower: plain c4 interpreting cpp.c, output byte-identical
 # (c4 appends its own "exit(N) cycle = M" line - strip it)
 $CPP -Iinclude -I. $CD include/u0.h src/tests/test_vprintf.c > $T/native.i
-./c4 src/c4dos/cpp.c -Iinclude -I. $CD include/u0.h src/tests/test_vprintf.c \
+# cpp now calls the C4DOS API for -o, and plain c4 takes exactly ONE
+# source file -- so the tower gets the header concatenated in, the same
+# way c4cc is handed it as a source. gcc reaches the stubs through
+# c4dos_native.h instead; neither build can see the other's copy.
+cat include/c4dos.h src/c4dos/cpp.c > $T/cpp_tower.c
+./c4 $T/cpp_tower.c -Iinclude -I. $CD include/u0.h src/tests/test_vprintf.c \
   | grep -v '^exit([0-9-]*) cycle = ' > $T/interp.i
 cmp -s $T/native.i $T/interp.i || { echo "test-cpp: TOWER MISMATCH (plain c4 vs native)"; exit 1; }
 echo "test-cpp: the tower holds (plain c4 output identical)"

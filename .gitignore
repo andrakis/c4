@@ -39,3 +39,11 @@ libc4ix.c4l
 /c4sp32
 src/c4bb/images/
 c4or1k-native
+/c4dos-disk/
+/c4dos-disk32/
+/c4dos-build/
+/c4ke-src.tar
+
+# scratch directories the test scripts create and trap-remove
+.c4dos_test_tmp/
+.ladder_test_tmp/

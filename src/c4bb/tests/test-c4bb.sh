@@ -20,7 +20,12 @@ FILTER='/^Trap type/d; /missed a trap/d'
 fail=0
 
 # render times differ between VMs; compare the text, not the milliseconds
-NORM='s/rendered in [0-9]*ms/rendered in Xms/'
+# Wall-clock and cycle-derived figures are host-dependent by nature and
+# are not what these comparisons are about: c4bb's malloc/printf live in
+# firmware (guest code) where native c4m's are single opcodes, so the
+# instruction counts legitimately differ even when every rendered byte
+# matches.
+NORM='s/rendered in [0-9]*ms/rendered in Xms/; s|f/s [ 0-9]\{5\}|f/s XXXXX|g; s/kc [ 0-9]\{5\}/kc XXXXX/g'
 
 check () {
     name="$1"; shift
@@ -60,7 +65,20 @@ for t in hello32 test_basic test_static test_vprintf tests \
          test_printloop mandel test_float; do
     check "$t" $IMAGES/$t.c4r
 done
+# The web terminal's screen model (cursor addressing, deferred wrap).
+# Pure JS, no machine involved, so it runs first and fails fast.
+node src/c4bb/tests/test-terminal.mjs || fail=1
+
 check cycles $IMAGES/cycles.c4r      # exact cycle-counter parity
+
+# raycast: 20 frames of integer DDA, fixed seed, demo mode (which reads
+# no input, so the run is a pure function of its arguments). This is
+# the sharpest 32-bit check in the suite -- every Q12 intermediate in
+# the renderer is budgeted to stay under 2^30 precisely so c4bb's
+# 32-bit words and native 64-bit ones agree, and a budget that is wrong
+# shows up here as a frame diff rather than as a picture that merely
+# looks a bit odd. f/s is wall-clock and is normalised away by $NORM.
+check raycast $IMAGES/disk/raycast.c4r 21x21 -s 7 -d -n 20 -g 80x22
 
 # trap machinery: custom opcodes via ILLOP, preemption timer,
 # protected mode (see src/ for why test_customop can't be used)
@@ -171,5 +189,28 @@ s1=$?
 $C4M32 $IMAGES/hello32.c4r >/dev/null 2>&1
 s2=$?
 if [ "$s1" = "$s2" ]; then echo "test-c4bb: exit-status OK"; else echo "test-c4bb: exit-status FAILED ($s1 vs $s2)"; fail=1; fi
+
+# ---- C4DOS on the shipped disk --------------------------------------
+# The third system in the images set, and the one an embedder gets for
+# free: c4dos32.c4r boots the SAME disk as c4ke32 and c4ix32. This pins
+# that the image is built, that CONFIG.SYS reaches it (the clock is
+# gated behind DEVICE=CLOCK.SYS), that a transient loads and draws, and
+# that control comes back to the prompt afterwards.
+if [ -f $IMAGES/c4dos32.c4r ]; then
+    dos_out=$(printf 'VER\nTIME\nRUN raycast.c4r 15x15 -s 3 -d -n 2 -g 40x12\nECHO dos-ok\nEXIT\n' \
+        | timeout 300 $C4BB -c 900000000 -d $IMAGES/disk $IMAGES/c4dos32.c4r 2>/dev/null)
+    dos_rows=$(echo "$dos_out" | grep -c '48;5;')
+    if echo "$dos_out" | grep -q "clock device installed" \
+       && [ "$dos_rows" = 24 ] \
+       && echo "$dos_out" | grep -q "dos-ok" \
+       && echo "$dos_out" | grep -q "system halted"; then
+        echo "test-c4bb: c4dos boots the shared disk OK"
+    else
+        echo "test-c4bb: c4dos boots the shared disk FAILED (rows=$dos_rows)"
+        fail=1
+    fi
+else
+    echo "test-c4bb: c4dos32 image missing, SKIPPED"
+fi
 
 if [ $fail = 0 ]; then echo "test-c4bb: OK"; else echo "test-c4bb: FAILURES"; exit 1; fi

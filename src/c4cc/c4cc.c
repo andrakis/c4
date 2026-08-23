@@ -55,6 +55,12 @@
 #include <string.h>
 
 #include "c4.h"
+// The C4DOS API. gcc takes the STUBS -- there is no DOS on a host, and
+// dos_can_write() answering 0 is the honest result. c4 and c4cc skip
+// '#' lines entirely and never see this; they are handed the real
+// include/c4dos.h as a source file instead.
+#include "c4dos_native.h"
+
 #define NO_LOADC4R_MAIN 1
 #include "load-c4r.c"
 
@@ -1977,13 +1983,20 @@ int c4cc_readargs (int argc, char **argv) {
   } else {
   while (r > 0 && argc >= 1 && **argv && **argv != '-' && *(*argv + 1) != '-') {
     //printf("open(%s) (argc=%lld)\n", *argv, argc);
-    if ((fd = open(*argv, 0)) < 0) { printf("could not open(%s)\n", *argv); return -1; }
-    if ((i = read(fd, p, r)) <= 0) { printf("read() returned %d\n", i); return -1; }
+    // Ask C4DOS first when there is one: its opener checks the RAM disk
+    // before the real disk, so a source file another tool just produced
+    // is findable. A transient's own open() only ever sees the host.
+    i = dos_readable() ? dos_slurp(*argv, p, r) : -1;
+    if (i >= 0) fd = -1;
+    else {
+      if ((fd = open(*argv, 0)) < 0) { printf("could not open(%s)\n", *argv); return -1; }
+      if ((i = read(fd, p, r)) <= 0) { printf("read() returned %d\n", i); return -1; }
+    }
     p[i] = 0;
     // Advance p to the nul we just wrote, new content will go here
     p = p + i;
     r = r - i;
-    close(fd);
+    if (fd >= 0) close(fd);   // -1 when C4DOS supplied the source
     --argc; ++argv;
   }
   }

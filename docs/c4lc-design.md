@@ -128,8 +128,9 @@ them).
 
 Escape decoding mirrors c4cc exactly, quirks included: `\n`→10,
 `\t`→8 (sic — c4cc maps tab to 8, not 9), `\r`→10 (sic), `\0`→0, any
-other escaped char is itself. `#` skips to end of line. `//` and
-`/* */` comments.
+other escaped char is itself — **unless `-conforming` is given**, which
+swaps in the real C table (L10, §5.1). `#` skips to end of line. `//`
+and `/* */` comments.
 
 ### 5.1 Deliberate divergences from c4cc (all c4cc bugs)
 
@@ -137,6 +138,24 @@ other escaped char is itself. `#` skips to end of line. `//` and
   loses count).
 - An empty char literal `''` is Num 0 (c4cc leaves stale ival).
 - A multi-char literal `'ab'` is the last char, as c4cc.
+
+Those three are unconditional. One divergence is **opt-in**, because
+turning it on by default would break the differential battery's
+premise (the same source, both compilers, byte-identical output):
+
+- `-conforming` decodes escapes the way C defines them rather than the
+  way c4cc does: `\t`→9, `\r`→13, `\a\b\f\v`→7/8/12/11, and `\xHH`
+  and `\NNN` decode at all (octal capped at three digits, hex
+  unbounded, both as C specifies). `\0` is unchanged — it is octal in
+  both tables. Without the flag the lexer behaves exactly as it always
+  did, which is what `expected/c4lc-tokens.txt` and
+  `expected/c4lc-esc-quirks.txt` pin.
+
+  The flag exists because emitting an ANSI escape is otherwise
+  impossible: `"\033[2J"` decodes to a NUL byte followed by `33[2J`,
+  so every program that wants one has to poke 27 in as an integer
+  (see src/tests/mandel.c, and the `enum { TAB = 9, CR = 13 };`
+  workarounds in src/c4ke/bin/vfsload.c and src/c4dos/cpp.c).
 
 ## 6. AST (L1) — implemented
 
@@ -329,6 +348,33 @@ battery green and adds its own target.
   module with c4lc instead of gcc -E produces a BYTE-IDENTICAL
   object. That held for all eleven kernel modules, and the X5 boot
   pins are unchanged with gcc gone from the build.
+
+- **L10 (DONE): `-conforming` escape sequences.** `lex:conforming`
+  selects a real C escape table; off by default (§5.1). The decoder
+  moved from `lex:escape`, which returned one byte for a fixed
+  two-byte escape, to `lex:escape2`, which returns the index just past
+  the escape and leaves the byte in the `lex:val` mailbox — the same
+  contract `lex:hex` and `lex:octal` already used, which is what makes
+  variable-width `\xHH` and `\NNN` expressible. `lex:strend` needed no
+  change: a backslash still swallows exactly one byte for
+  quote-scanning purposes, and no hex or octal digit is a quote.
+  The preprocessor comes along for free, since it works on tokens that
+  the lexer has already decoded.
+
+- **L11 (DONE): integer constant expressions in enum bodies.**
+  `p:enumbody` took `Num` or `-Num` only; it now calls `p:const`, the
+  constant-expression parser that array sizes already used and that
+  already resolved enum constants by name. `p:enums` is updated before
+  the recursive call, so a constant named earlier in the same body is
+  visible to the next one: `enum { A = 1, B = A + 1 }` works.
+  `p:const` itself was widened from `+ - * /` to C's full
+  integer-constant operator set — `| ^ & << >> + - * / %` and the
+  unary `- + ~ !`, with the unary case recursing so `- -1` and `!!X`
+  parse. Its other three call sites (case labels, array sizes, brace
+  initializers) inherit that, so `int t[1 << SHIFT]` and
+  `case FLAG_A|FLAG_B:` now work too. gcc is the oracle for both:
+  c4cc's enum parser (c4cc.c:1342) has the same literal-only
+  restriction, so this cannot go in the differential battery.
 
 ## 11. Measured results (2026-08-03)
 

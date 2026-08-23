@@ -28,6 +28,16 @@ export function parseC4r(bytes) {
   const w = () => { const v = dv.getInt32(p, true); p += 4; return v; };
   const entry = w(), codeLen = w(), dataLen = w(), patchLen = w(),
         symbolsLen = w(), consLen = w(), desLen = w();
+  // Format v3 puts the data segment's in-memory size in the word at
+  // byte 5, where v2 wrote filler (c4r.lisp, load-c4r.c:64). Anything
+  // past DATALEN is BSS: uninitialized globals that occupy no image
+  // bytes and must be zero at entry. Ignoring it is not merely a
+  // missing feature -- the next thing placed in the arena (the heap,
+  // or another image) lands ON TOP of those globals, so a c4lc-built
+  // program's uninitialized globals get overwritten by its own
+  // malloc'd memory. The arena is already zero-filled, so reserving
+  // the space is all that is needed.
+  const memsz = Math.max(dataLen, version >= 3 ? dv.getInt32(5, true) : dataLen);
 
   w();                                       // 'C' marker
   const code = new Int32Array(codeLen);
@@ -46,7 +56,7 @@ export function parseC4r(bytes) {
   const des = []; for (let i = 0; i < desLen; i++) des.push(w());
   // 'S' symbols follow; not needed to run
 
-  return { version, entry, code, data, patches, cons, des, symbolsLen };
+  return { version, entry, code, data, memsz, patches, cons, des, symbolsLen };
 }
 
 // Place an image in the arena. codeBase word-aligned; data follows.
@@ -74,7 +84,7 @@ export function loadImage(arena, img, base) {
   return {
     entryAddr: codeBase + img.entry * 4,
     codeBase, dataBase,
-    top: (dataBase + img.data.length + 7) & ~3,
+    top: (dataBase + Math.max(img.data.length, img.memsz | 0) + 7) & ~3,
     cons: img.cons.map(o => codeBase + o * 4),
     des: img.des.map(o => codeBase + o * 4),
   };

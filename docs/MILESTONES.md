@@ -480,6 +480,43 @@ one piece is a good project. The fact that they all share one C
 dialect and one VM contract, and every seam between them is verified
 rather than assumed, is the part worth being excited about.
 
+## The HOMEWARD ladder — DOS hands the machine to the kernel
+
+The tower above is built *by* the host and *verified* against the VM.
+The ladder is the other direction: a machine that builds its own next
+operating system, with nothing outside it involved.
+
+Two things blocked it and are now closed. **C4DOS could build C4KE but
+not hand it over** — `BUILD.BAT` compiled a kernel *and* an init onto
+DOS's RAM disk, and the kernel then booted the *prebuilt* init off the
+floppy, because its loader only knew the host filesystem. A kernel
+extension (`src/c4ke/extensions/c4ke_dos.c`) now runs at `KEXT_START`,
+after the VFS opcodes exist and before the init task is created, and
+copies the whole DOS RAM disk into the kernel's own RAM filesystem —
+then releases DOS's memory. It is the initrd handover in its usual
+shape. `dosload.c4r` is the LOADLIN of this machine: same job, plus a
+kernel command line and DOS's 4 MB scratch handed back.
+
+**And `c4rlink` refused to write under the VM at all**, so C4IX — twelve
+objects plus a library — could not be linked on the machine that runs
+it. It does not need a write syscall: the image renders into memory
+through the same path c4cc already used, and goes to the kernel's RAM
+filesystem or the DOS RAM disk. It reads from there too now, which is
+what lets it see objects a compiler just produced.
+
+Both toolchains complete a round trip in memory: c4cc compiles two
+objects, c4rlink links them, the kernel runs the result; and c4lc — on
+c4sp, in the machine — compiles a real C4IX kernel module that c4rlink
+reads straight back out. `bash src/c4bb/tests/test-ladder.sh` walks the
+whole thing; `docs/homeward-ladder.md` is the tracker.
+
+One measurement worth keeping: the C4IX build passed `-c 8000000` cells
+to c4sp, a number with nothing behind it. At 21 bytes a cell that is
+~168 MB — more than c4bb has, so nothing built that way could ever have
+been built *inside* the machine. The measured floor is 100k–200k cells
+per module; the build scripts now say 400,000, and every object is
+byte-identical to its 8M build.
+
 ## What's still open
 
 Kept here on purpose, not swept into the wins above:

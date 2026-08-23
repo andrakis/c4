@@ -20,6 +20,7 @@
 	(define Obj false)
 	(define Cisc false)        ;; -mcisc: emit c4mp-only fused opcodes (M12)
 	(define Pp false)          ;; -P: preprocess internally (L9)
+	(define Conf false)        ;; -conforming: real C escapes (L10)
 	(define Paths nil)
 	(define PreDefs nil)
 	(define Args argv)
@@ -44,6 +45,14 @@
 		;; -P runs c4lc's own preprocessor instead of expecting a
 		;; source that gcc -E has already been through. -I adds an
 		;; include directory, -D predefines a macro.
+		;; -conforming: decode escape sequences the way C defines them
+		;; instead of reproducing c4cc's table (\t->8, \r->10, no
+		;; \xHH or \NNN). Off by default for the same reason -mcisc
+		;; is: the c4cc differential battery compiles the SAME source
+		;; with both compilers, and the L0 lexer golden pins the quirks
+		;; deliberately. A program opts in, and then "\033[2J" works.
+		(if (= (+ "" (head Args)) "-conforming")
+			(begin (set! Conf true) (set! Args (tail Args)) (next flags))
 		(if (= (+ "" (head Args)) "-P")
 			(begin (set! Pp true) (set! Args (tail Args)) (next flags))
 		(if (= (+ "" (head Args)) "-I")
@@ -58,11 +67,12 @@
 				(set! PreDefs (+ PreDefs (list (+ "" (index Args 1)))))
 				(set! Args (tail (tail Args)))
 				(next flags))
-		nil)))))))))
+		nil))))))))))
 	(flags)
 	(if (< (length Args) 2) (error "usage: c4lc.lisp [-O] [-c] in.c out"))
 	(define In (head Args))
 	(define OutName (index Args 1))
+	(set! lex:conforming Conf)
 	(set! gen:objmode Obj)
 	(set! gen:cisc Cisc)
 	(define Ast (parse:program

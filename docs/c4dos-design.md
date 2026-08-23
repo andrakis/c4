@@ -101,15 +101,64 @@ binary can run under C4DOS, C4KE, or bare — the shim checks the slot.
 
 ## Files, writing, and the RAM disk
 
-c4/c4m have NO file-write primitive (READ only). Writing therefore is
-a DOS SERVICE: an in-memory RAM disk (name → buffer table) reachable
-through `__c4dos_api`, DOS-style `DEVICE=RAMDISK.SYS`. `DIR` lists
-the union of the host/c4bb disk (read-only) and the RAM disk (rw);
-opens check the RAM disk first. This is what makes the self-hosting
-ladder possible in-machine: compiler outputs land on the RAM disk,
-and the next stage reads them back. (In HOMEWARD, persistent disk
-write arrives later as built hardware; the RAM disk is honest about
-what the machine can do.)
+c4/c4m have NO file-write primitive (READ only), and c4bb's disk
+controller is read-only too. Writing is therefore a DOS SERVICE: an
+in-memory RAM disk (name → buffer table), DOS-style
+`DEVICE=RAMDISK.SYS SIZE=n` (default 1 MB, 64 slots).
+
+**Implemented.** `DIR` lists the union of the disk (read-only) and the
+RAM disk (rw, marked `<ram>` with a usage line); opens check the RAM
+disk FIRST, so a tool that rewrites a file shadows the read-only
+original rather than failing. RAM files carry pseudo-descriptors above
+`RAMFD`, which is why every read and close inside DOS goes through
+`dos_read`/`dos_close` -- a pseudo-fd is not something the host has
+ever heard of. `COPY src dst` is the builtin that writes, and `RUN`
+loads out of RAM, which is the point: one stage's output is the next
+stage's input. All of it is stock-c4 opcodes, so the clockless build
+still runs the purity tower under unmodified `./c4`.
+
+**Reachable from a transient too.** `include/c4dos.h` is the other half
+of the ABI. DOS's loader scans each image's symbol section for
+`__c4dos_api` and writes the table's address into it (`inject_api`), so
+a tool built against that header calls DOS's own routines by address,
+through the invoke stub. `cpp` and `c4cc` both use it -- that is how
+`BUILD.BAT` gets a kernel onto the RAM disk with no write syscall
+anywhere in the machine.
+
+c4sp/c4lc deliberately stay out of this: they only ever run under C4KE,
+where the RAM filesystem is reached through custom opcodes instead, and
+a trap-free DOS has none to offer.
+
+### API versions
+
+The table is 32 words, zeroed at boot. Slot 5 is the version.
+
+| slot | v1 | | slot | v2 |
+|---|---|---|---|---|
+| 0 | magic `C4D` | | 9 | `count()` → RAM disk entries |
+| 1 | `dos_exit` (reserved, always 0) | | 10 | `entname(i)` → `char *` |
+| 2 | `create(name)` | | 11 | `entsize(i)` → bytes |
+| 3 | `write(h, buf, len)` | | 12 | `entdata(i)` → `char *` |
+| 4 | `close(h)` | | 13 | `trim()` → scratch bytes released |
+| 5 | version | | 14 | `release()` → RAM disk bytes released |
+| 6 | `open(name)` | | | |
+| 7 | `read(h, buf, len)` | | | |
+| 8 | `close(h)` | | | |
+
+Slots 2 and 9–12 are advertised only when `DEVICE=RAMDISK.SYS` was
+installed, so a caller that checks a slot is told the truth rather than
+handed an always-empty listing. **Everything at 9 and above must be
+gated on the version word**: a v1 DOS allocated sixteen words and
+filled nine, leaving uninitialised heap where a caller would read a
+function pointer. `dos_can_enum()` in the header does both checks.
+
+v1 lets a tool ask for a file BY NAME. v2 is for a *loader*: something
+taking the machine over wants everything the RAM disk holds without
+being told what is on it, and then wants the memory. That is what
+`src/c4ke/extensions/c4ke_dos.c` does with it.
+
+(In HOMEWARD, persistent disk write arrives later as built hardware;
+the RAM disk is honest about what the machine can do.)
 
 DECISION (user, 2026-08-21): NO `>` output redirection. Compilers and
 tools write files DIRECTLY through the API (`dos_create`/`dos_write`/
@@ -118,10 +167,40 @@ anything printf-shaped can be done in software where needed (the c4lm
 stdio.h vsnprintf is sitting right there when a tool wants it). Batch
 stays a command list, not a shell language.
 
+## dosload — LOADLIN for C4DOS
+
+`src/c4dos/dosload.c`, built as `dosload.c4r`. Loads an image, hands
+DOS's memory back, and jumps:
+
+    RUN dosload.c4r c4ke.c4r -v 50
+
+**Be clear about what it does not do.** `RUN c4ke.c4r` already works,
+and DOS already injects the API into it, so a kernel started the
+ordinary way can already find the RAM disk. dosload adds two things:
+
+- **Memory.** DOS holds a 4 MB read scratch and cannot free it while
+  running a program, because the loaded image's constructor and
+  destructor tables point *into* that scratch. dosload copies those
+  tables out and resolves them to absolute addresses first, so it can
+  call `dos_trim()` before the kernel starts. It declares no
+  destructors of its own — DOS walks *its* destructor table out of the
+  freed scratch afterwards, and zero iterations never touch it. Do not
+  add one.
+- **A command line.** `RUN` passes a transient its own arguments;
+  dosload passes the image name as `argv[0]` and everything after it as
+  the loaded program's, so `-v 50`, `-c N` or an alternate init reach
+  the kernel's `parse_commandline`.
+
+Strict c4, nothing above the `EXIT` opcode: `make test-dosload` pins
+that with `c4l.c`, which refuses an image that uses more and names the
+instruction. This is a tool the player runs *at* the C4DOS rung, and
+loading a kernel must not be the thing that demands a better CPU.
+
 ## CONFIG.SYS and AUTOEXEC.BAT
 
-- `CONFIG.SYS`: `DEVICE=CLOCK.SYS` (enables TIME/C4CY use),
-  `DEVICE=RAMDISK.SYS SIZE=n`, `FILES=n`, `SHELL=...` (reserved).
+- `CONFIG.SYS`: `DEVICE=CLOCK.SYS` (enables TIME/C4CY use) and
+  `DEVICE=RAMDISK.SYS SIZE=n`, both implemented; `FILES=n`,
+  `SHELL=...` reserved.
   Parsed with a flattened-locals descent (the vfsload.c skeleton,
   c4cc-dialect).
 - `AUTOEXEC.BAT`: line-per-command batch, `ECHO`, `REM`, `@` prefix,
@@ -130,6 +209,65 @@ stays a command list, not a shell language.
 - Builtins: `DIR`, `TYPE`, `RUN` (implicit for *.C4R names), `ECHO`,
   `VER`, `TIME` (wants CLOCK.SYS), `MEM`, `EXIT` (halts — the one
   legitimate use of the EXIT opcode).
+
+## Building and running
+
+Three images, because they answer three different questions. All go
+through our own `cpp` -- raw `c4cc` skips `#` lines and would compile
+both sides of the clock `#if` into one image.
+
+| target | what it is |
+|---|---|
+| `make c4dos.c4r` | clockless, 64-bit. The purity pin: runs under unmodified `./c4` via `c4l.c`, which refuses any image using an opcode above `EXIT` -- `TIME` included. |
+| `make c4dos-clock.c4r` | the same plus `TIME`, gated at runtime behind `DEVICE=CLOCK.SYS`. The dev loop. |
+| `make c4dos32.c4r` | 32-bit clock build: the image c4bb boots, and the one an embedder wants. Also built into `src/c4bb/images/` by `build-images.sh`. |
+
+C4DOS has no notion of a drive. It opens `config.sys`, `autoexec.bat`
+and `c4dos.dir` relative to the working directory, so "the disk" is
+simply a directory you `cd` into (or hand to c4bb with `-d`). `make`
+assembles two, since a 32-bit machine will not load a 64-bit transient:
+`c4dos-disk/` for the native runs and `c4dos-disk32/` for c4bb. Both
+carry `hello.c4r` and `raycast.c4r`.
+
+    make run-c4dos        # native c4m, clock build -- the A> prompt
+    make run-c4dos-c4     # the tower: unmodified c4 -> c4l -> DOS
+    make run-c4dos-bb     # the breadboard machine, interactive
+
+`EXIT` halts. `DIR`, `TYPE`, `RUN`, `ECHO`, `VER`, `TIME`, `MEM` are the
+builtins; `RUN raycast.c4r -d` is the one transient with something to
+look at.
+
+### Finding a file
+
+`c4dos.dir` IS the directory service -- `DIR` types that file, because
+the raw disk cannot enumerate itself -- and it doubles as the name
+resolver. Every open goes through `dos_open`, which tries the name as
+typed and, failing that, scans the listing for a case-insensitive match
+and opens the spelling that actually exists. So `HELLO`, `hello.c4r`
+and `Hello.C4r` all reach the same file, the way DOS always let them.
+
+A command with no extension gets `.c4r` appended and retried, which is
+the courtesy `COMMAND.COM` extended with `COM`/`EXE`/`BAT`: you type
+the program, not the file. `RUN` does the same to its argument. A word
+that resolves to nothing still reaches `bad command or file name`,
+rather than being reported as a broken executable.
+
+Two consequences worth knowing:
+
+- **`c4dos.dir` must carry the TRUE on-disk spellings.** `dos_open`
+  opens the name it finds in the listing, so an entry of `HELLO.C4R`
+  beside a file called `hello.c4r` would defeat the very lookup it
+  exists to serve. Both make-built floppies generate it with `ls`, and
+  `DIR` therefore shows real case rather than shouting.
+- **A disk with no listing keeps exact-match behaviour**, which is the
+  same trade `DIR` already makes. Nothing depends on the fallback
+  existing.
+
+`src/c4bb/images/disk/` carries `config.sys`, `autoexec.bat` and a
+generated `c4dos.dir` alongside the C4KE and C4IX corpus, so
+`c4dos32.c4r` boots the SAME disk as `c4ke32.c4r` and `c4ix32.c4r`. An
+embedder already serving that directory gets a third operating system
+for the cost of one more image.
 
 ## Testing
 
@@ -149,3 +287,14 @@ samples → C4DOS (this) → C4DOS runs cpp+c4cc to build C4KE → C4KE
 mode) → network coprocessor sub-board + CPU support → C4IX rebuilt
 with networking → the time machine's control link (c4mp direction;
 SMP is a stretch goal).
+
+The DOS→C4KE rung is closed: `BUILD.BAT` compiles a kernel *and* an
+init onto the RAM disk, and `c4ke_dos.c` (a kernel extension, running
+at `KEXT_START`) copies the whole RAM disk into the kernel's own RAM
+filesystem before the init task is created. Since `task_loadc4r` checks
+that filesystem before the host, the init that boots is the one the
+machine just built — it never existed as a file. The DOS RAM disk is
+released immediately afterwards; it was the initrd.
+
+Progress against the rest of the ladder is tracked in
+`docs/homeward-ladder.md`.

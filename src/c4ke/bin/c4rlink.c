@@ -382,17 +382,38 @@ static int resolve_patches (int *master) {
 // Serialize a c4r structure to a file. Layout must match c4r_load_opt_real
 // in load-c4r.c. Returns 0 on success.
 static int c4r_write (int *c4r, char *file) {
-	int  fd, i, n, tmp;
+	int  fd, i, n, tmp, vfsput;
 	int *hdr, *p, *sym;
 	char version, wordbits, tmpc;
 
+	// Writing under the VM. There is no write() syscall on c4/c4m, which
+	// is why this used to refuse outright -- and why C4IX could not be
+	// linked on the machine that runs it. It does not need one: the
+	// image is rendered into memory through the asmc4r_use_mem path this
+	// file already links (writechecked, asm-c4r.c), then handed to
+	// whoever can store it. Under C4KE that is the kernel's RAM
+	// filesystem (OP_VFS_PUT); under C4DOS it is the RAM disk. The
+	// pattern is asmc4r_Source's, deliberately -- c4cc already writes
+	// its objects exactly this way, and this is the consumer of them.
+	fd = 0 - 1;
+	vfsput = 0;
 	if (is_c4()) {
-		// The write() syscall does not exist under plain c4/C4KE.
-		printf("c4rlink: writing output is not supported under c4\n");
-		return 1;
+#if !NATIVE
+		// Probe only when a trap handler is installed, i.e. a kernel is
+		// servicing opcodes; 128 is what a missed trap leaves behind.
+		if (__c4_info() & C4I_TRAPH)
+			vfsput = __c4_opcode("OP_VFS_PUT", 128); // 128 = OP_REQUEST_SYMBOL
+		if (vfsput <= 128 && !dos_can_write()) {
+			printf("c4rlink: cannot write '%s' -- no kernel RAM filesystem and no C4DOS RAM disk\n", file);
+			return 1;
+		}
+		asmc4r_use_mem = 1;
+		asmc4r_memlen = 0;
+#endif
 	}
 
 	hdr = (int *)c4r[C4R_HEADER];
+	if (!asmc4r_use_mem)
 	if ((fd = open(file, O_TRUNC | O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR)) < 0) {
 		printf("c4rlink: failed to open '%s' for writing\n", file);
 		return 1;
@@ -476,6 +497,28 @@ static int c4r_write (int *c4r, char *file) {
 		++i;
 	}
 
+	if (asmc4r_use_mem) {
+		// Clear the flag FIRST: it is a global shared with c4cc's writer
+		// and every path out of here has to leave it off.
+		asmc4r_use_mem = 0;
+#if !NATIVE
+		if (vfsput > 128) {
+			if (__c4_opcode(asmc4r_memlen, asmc4r_membuf, file, vfsput)) {
+				printf("c4rlink: unable to store '%s' in the RAM filesystem\n", file);
+				return 1;
+			}
+			printf("c4rlink: wrote %d bytes to ramfs:%s\n", asmc4r_memlen, file);
+			return 0;
+		}
+		if (dos_put(file, asmc4r_membuf, asmc4r_memlen) < 0) {
+			printf("c4rlink: unable to store '%s' on the RAM disk\n", file);
+			return 1;
+		}
+		printf("c4rlink: wrote %d bytes to ram:%s\n", asmc4r_memlen, file);
+#endif
+		return 0;
+	}
+
 	close(fd);
 	return 0;
 }
@@ -489,6 +532,8 @@ int main (int argc, char **argv) {
 	int   count_code, count_data, count_patch, count_con, count_des, count_sym;
 	int   dstored;
 	char *dbytes;
+	char *vfsbuf;    // kernel RAM filesystem contents, when there are any
+	int   vfslen, vfsget;
 
 	// Set defaults
 	spec = argv[0];
@@ -555,6 +600,30 @@ int main (int argc, char **argv) {
 				return 3;
 			}
 			if (cl_verbose) printf("%s: loading '%s'...\n", spec, *argv);
+			// The RAM filesystem shadows the host, the same way the
+			// kernel's own loader does it (c4ke.c's task_loadc4r). This
+			// is the consumer side of the write path above: a .c4o that
+			// c4lc or c4cc just produced under C4KE exists only in
+			// memory, and without this c4rlink could not see the twelve
+			// objects C4IX is linked from.
+			loaded = 0;
+#if !NATIVE
+			// Resolved by name, the way asm-c4r.c resolves OP_VFS_PUT,
+			// rather than through u0.h -- c4rlink's own build does not
+			// include u0.h (C4R_C4CC_SRCS expands $(U0) before it is
+			// defined), and load-c4r.c already supplies C4I_TRAPH.
+			// Probe only with a trap handler installed; 128 is what a
+			// missed trap leaves in the accumulator.
+			vfsget = 0;
+			vfsbuf = 0;
+			if (__c4_info() & C4I_TRAPH)
+				vfsget = __c4_opcode("OP_VFS_GET", 128); // 128 = OP_REQUEST_SYMBOL
+			if (vfsget > 128)
+				vfsbuf = (char *)__c4_opcode(&vfslen, *argv, vfsget);
+			if (vfsbuf)
+				loaded = c4r_load_mem(*argv, vfsbuf, vfslen, C4ROPT_SYMBOLS);
+#endif
+			if (!loaded)
 			if (!(loaded = c4r_load_opt(*argv, C4ROPT_SYMBOLS))) {
 				printf("%s: failed to load '%s', aborting\n", spec, *argv);
 				return 2;

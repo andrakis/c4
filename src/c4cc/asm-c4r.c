@@ -554,11 +554,17 @@ void asmc4r_dump_symbol_to_file (int fd, int *d, int id) {
 	tmp = strc_b - strc_a; writechecked(fd, &tmp, 1); // NameLen
 	// TODO: symbols end up unaligned, need to write strings with padding.
 	writechecked(fd, strc_a, strc_b - strc_a); // Name
-	// TODO: check type, function, etc, output adjusted value
-	// Value
+	// Value, REBASED. A symbol's value has to mean something to whoever
+	// reads the image back, and a compile-time host address means
+	// nothing: functions were already emitted as an offset from the code
+	// start, and globals now get the same treatment against the data
+	// start. Leaving Glo raw is what made C4DOS's inject_api (which
+	// computes database + value) write through a wild pointer -- the
+	// bug hid because nothing had ever asked for a global by name.
 	class = d[Class];
-    value = d[Val];
+	value = d[Val];
 	if (class == Fun) value = (int *)d[emit_Val] - asmc4r_e_start;
+	else if (class == Glo) value = (char *)d[Val] - data_s;
 	writechecked(fd, &value, sizeof(int));
 	// Length
 	//writechecked(fd, &d[emit_Length], sizeof(int));
@@ -791,6 +797,27 @@ void asmc4r_Source () {
 			       asmc4r_opt_outfile);
 		else
 			printf("c4cc: wrote %d bytes to ramfs:%s\n",
+			       asmc4r_memlen, asmc4r_opt_outfile);
+		return;
+	}
+
+	// Under C4DOS: the same render-into-memory path, handed to the DOS
+	// RAM disk through __c4dos_api instead of to a kernel's ramfs.
+	// C4DOS is deliberately trap-free, so the probe above finds
+	// nothing there -- a DOS cannot answer custom opcodes and is not
+	// pretending to. dos_can_write() is false when the machine booted
+	// without DEVICE=RAMDISK.SYS, and then this falls through to the
+	// honest complaint below rather than losing the output quietly.
+	if (dos_can_write()) {
+		asmc4r_use_mem = 1;
+		asmc4r_memlen = 0;
+		dump_to_file(asmc4r_opt_outfile);
+		asmc4r_use_mem = 0;
+		if (dos_put(asmc4r_opt_outfile, asmc4r_membuf, asmc4r_memlen) < 0)
+			printf("c4cc: unable to store '%s' on the RAM disk\n",
+			       asmc4r_opt_outfile);
+		else
+			printf("c4cc: wrote %d bytes to ram:%s\n",
 			       asmc4r_memlen, asmc4r_opt_outfile);
 		return;
 	}

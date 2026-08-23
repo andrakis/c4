@@ -1,0 +1,81 @@
+# c4ke-dev.vfs.txt - the DEVELOPER half of the C4KE manifest.
+#
+# build-images.sh concatenates c4ke.vfs.txt and this file into the
+# c4ke.vfs.txt on the c4ke-root disk (vfsload reads that name by
+# default). Concatenated rather than duplicated so the base manifest
+# stays the single description of C4KE proper and this cannot drift
+# from it; the format is indentation-driven, so these lines simply
+# continue the "/: root" tree the base file opened.
+#
+# What it adds: the toolchain that builds C4IX, and C4IX's own
+# sources. Both are physically on the disk already and neither was
+# named in any manifest, so from inside C4KE they did not exist -
+# "ls /usr/src" showed a machine that could not see what it is for.
+#
+# It is deliberately NOT added to the shared disk's manifest: ~45
+# more entries against RAMFS_MAX (256) and test-c4bb's cycle budget,
+# for files only a build needs.
+
+	usr/
+		src/
+			# c4sp: the Lisp machine c4lc runs on. Its image is
+			# c4sp.c4r at the top level; this is the source.
+			c4sp.c: src/c4sp/c4sp.c
+			# C4IX, the thing the ladder is climbing towards. The
+			# disk keys hold slashes, so these map a short name in
+			# the tree to the real path on the disk.
+			c4ix/:
+				boot.c: src/c4ix/boot.c
+				console.c: src/c4ix/console.c
+				va.c: src/c4ix/va.c
+				host.c: src/c4ix/host.c
+				sl4b.c: src/c4ix/sl4b.c
+				task.c: src/c4ix/task.c
+				sched.c: src/c4ix/sched.c
+				vfs.c: src/c4ix/vfs.c
+				sys.c: src/c4ix/sys.c
+				c4ke.c: src/c4ix/c4ke.c
+				loader.c: src/c4ix/loader.c
+				init.c: src/c4ix/init.c
+				c4ix.h: src/c4ix/c4ix.h
+				libc4ix.c: src/c4ix/lib/libc4ix.c
+				c4ix_user.h: src/c4ix/include/c4ix_user.h
+				vfsload.c: src/c4ix/user/vfsload.c
+		lib/:
+			# u0.h is what a C4KE program is compiled against.
+			u0.h: u0.h
+		lisp/:
+			# c4lc, the C compiler, is not an image: it is Lisp that
+			# c4sp reads at runtime BY BARE FILENAME from the working
+			# directory, which on this machine is the disk. So these
+			# are on the disk whether or not they are listed here --
+			# the listing is what makes them visible to ls inside the
+			# machine, which is the difference between a toolchain
+			# being present and being findable.
+			arguments.lisp: arguments.lisp
+			c4lc-ast.lisp: c4lc-ast.lisp
+			c4lc-eq.lisp: c4lc-eq.lisp
+			c4lc-gen.lisp: c4lc-gen.lisp
+			c4lc-lex.lisp: c4lc-lex.lisp
+			c4lc.lisp: c4lc.lisp
+			c4lc-parse.lisp: c4lc-parse.lisp
+			c4lc-ppdump.lisp: c4lc-ppdump.lisp
+			c4lc-pp.lisp: c4lc-pp.lisp
+			c4lc-tokens.lisp: c4lc-tokens.lisp
+			c4lc-tree.lisp: c4lc-tree.lisp
+			c4opt.lisp: c4opt.lisp
+			c4opt-run.lisp: c4opt-run.lisp
+			c4r.lisp: c4r.lisp
+			c4r-roundtrip.lisp: c4r-roundtrip.lisp
+			callcc.lisp: callcc.lisp
+			deeprec.lisp: deeprec.lisp
+			fac.lisp: fac.lisp
+			floats.lisp: floats.lisp
+			gcloop.lisp: gcloop.lisp
+			listadd.lisp: listadd.lisp
+			macros.lisp: macros.lisp
+			quote.lisp: quote.lisp
+			set.lisp: set.lisp
+			seval.lisp: seval.lisp
+			switch.lisp: switch.lisp
+			truthy.lisp: truthy.lisp

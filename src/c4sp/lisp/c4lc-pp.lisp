@@ -98,7 +98,7 @@
 			(begin
 				(define pr (pp:params (tail rest) nil))
 				(pp:define! n (head pr) (head (tail pr))))
-			(pp:define! n nil rest)))))
+			(pp:define! n false rest)))))
 
 ;; parameter list after '('; returns (PARAMS BODY)
 (define pp:params (lambda (toks acc)
@@ -284,7 +284,11 @@
 	(begin
 		(define params (head (tail m)))
 		(define body (head (tail (tail m))))
-		(if (= params nil)
+		;; false = object-like. An empty LIST is a function-like macro
+		;; with no parameters -- "#define f() 0" is legal C, and
+		;; treating it as object-like expanded f() to the body with a
+		;; stray "()" left behind after it.
+		(if (= params false)
 			(list (pp:reline body ln) rest)
 		(begin
 			;; function-like: only expands when an argument list
@@ -546,11 +550,11 @@
 	(begin
 		(define eq (pp:eqpos spec 0))
 		(if (< eq 0)
-			(pp:define! spec nil (list (list 'Num 1 0)))
+			(pp:define! spec false (list (list 'Num 1 0)))
 		(begin
 			(define n (string:substr spec 0 eq))
 			(define v (string:substr spec (+ eq 1) (- (length spec) (+ eq 1))))
-			(pp:define! n nil (lex:string v)))))))
+			(pp:define! n false (lex:string v)))))))
 (define pp:predefines (lambda (l)
 	(if (empty? l) nil
 	(begin

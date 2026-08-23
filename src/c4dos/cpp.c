@@ -57,6 +57,12 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <string.h>
+// The C4DOS API. gcc takes the STUBS -- there is no DOS on a host, and
+// dos_can_write() answering 0 is the honest result. c4 and c4cc skip
+// '#' lines entirely and never see this; they are handed the real
+// include/c4dos.h as a source file instead.
+#include "c4dos_native.h"
+
 #define int long long
 
 // plain c4's enum parser takes literal numbers only - no expressions
@@ -98,6 +104,8 @@ int die (char *msg, char *what) {
   exit(1);
   return 0;
 }
+
+char *g_outfile;         // -o: write here instead of the console
 
 int emit (int c) {
   char *nb; int i;
@@ -157,6 +165,15 @@ int mac_add (char *name, int nlen, char *params, int np, char *body) {
 // read whole file into an exact-size NUL-terminated allocation, or 0
 char *read_file (char *path) {
   int fd, n, total; char *s;
+  // Ask C4DOS first when there is one: its opener checks the RAM disk
+  // before the real disk, so a source or header that was unpacked into
+  // memory a moment ago is findable. cpp's own open() only ever sees
+  // the host, which is exactly wrong for a machine whose only writable
+  // filesystem lives in RAM.
+  if (dos_readable()) {
+    total = dos_slurp(path, (char *)g_scratch, FILEMAX - 65536);
+    if (total >= 0) return strdupn((char *)g_scratch, total);
+  }
   if ((fd = open(path, 0)) < 0) return 0;
   total = 0;
   while ((n = read(fd, (char *)g_scratch + total, 65536)) > 0) {
@@ -884,7 +901,7 @@ int main (int argc, char **argv) {
     ++i;
   }
   if (!nfiles) {
-    printf("usage: cpp [-Idir]... [-DNAME[=VAL]]... file.c [file2.c...]\n");
+    printf("usage: cpp [-Idir]... [-DNAME[=VAL]]... [-o out] file.c [file2.c...]\n");
     return 1;
   }
 
@@ -892,7 +909,9 @@ int main (int argc, char **argv) {
   i = 0;
   while (i < argc) {
     a = argv[i];
-    if (a[0] == '-' && (a[1] == 'I' || a[1] == 'D') && !a[2]) ++i;   // skip the flag's value
+    if (a[0] == '-' && a[1] == 'o' && !a[2]) { ++i; g_outfile = argv[i]; }
+    else if (a[0] == '-' && a[1] == 'o') g_outfile = a + 2;
+    else if (a[0] == '-' && (a[1] == 'I' || a[1] == 'D') && !a[2]) ++i;   // skip the flag's value
     else if (a[0] != '-') {
       if (!(buf = read_file(a))) { printf("cpp: cannot open %s\n", a); return 1; }
       // this file's directory, for its quoted includes
@@ -907,6 +926,24 @@ int main (int argc, char **argv) {
   }
 
   emit(0);
+  // -o names a file instead of the console. It exists for C4DOS: there
+  // is no '>' redirection on that system by decision, so a tool that
+  // produces a file writes it itself, through the DOS RAM disk. On a
+  // host build, and under a DOS with no DEVICE=RAMDISK.SYS, there is
+  // nowhere to put it and saying so beats writing the whole
+  // translation unit to a console nobody asked to read.
+  if (g_outfile) {
+    if (!dos_can_write()) {
+      printf("cpp: -o needs C4DOS with DEVICE=RAMDISK.SYS\n");
+      return 1;
+    }
+    if (dos_put(g_outfile, g_out, g_outn - 1) < 0) {
+      printf("cpp: could not write %s\n", g_outfile);
+      return 1;
+    }
+    printf("cpp: wrote %d bytes to ram:%s\n", g_outn - 1, g_outfile);
+    return 0;
+  }
   printf("%s", g_out);
   return 0;
 }

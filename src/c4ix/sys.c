@@ -78,7 +78,14 @@ int sys_open(char *path, int flags) {
         if (!(vn = vfs_ramfile(path))) return -1;
         return fd_open_vnode(t, vn, flags);
     }
-    if ((h = open(path, flags & 3)) < 0) return -1;
+    // Mask to the flags the host may see, but O_NONBLOCK must survive:
+    // dropping it silently turns a caller's non-blocking descriptor
+    // into a blocking one, and vfs_read on a VN_HOSTFILE goes straight
+    // to the host read(), which halts every task in the system rather
+    // than parking one. vfs_readable already answers 1 unconditionally
+    // for host files, so nothing parks on this path either way, and a
+    // -1/EAGAIN return is what a non-blocking reader already expects.
+    if ((h = open(path, (flags & 3) | (flags & C4IX_O_NONBLOCK))) < 0) return -1;
     if (!(vn = vn_hostfile(h))) { close(h); return -1; }
     if ((fd = fd_open_vnode(t, vn, flags)) < 0) { close(h); return -1; }
     return fd;

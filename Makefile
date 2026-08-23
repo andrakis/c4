@@ -48,10 +48,13 @@ SRCS      := src
 INCLUDE   := include
 C4CC_SRCS := $(SRCS)/c4cc/c4cc.c $(SRCS)/c4cc/asm-c4r.c
 # Version of C4CC compiled to .c4r format
-C4R_C4CC_SRCS := $(U0) load-c4r.c $(SRCS)/c4cc/c4cc.c $(SRCS)/c4cc/asm-c4r.c
+# include/c4dos.h rides along as a SOURCE file, the way u0.h does:
+# c4cc has no preprocessor, and asm-c4r.c calls dos_can_write/dos_put
+# to save its output when it is running as a C4DOS transient.
+C4R_C4CC_SRCS := $(U0) include/c4dos.h load-c4r.c $(SRCS)/c4cc/c4cc.c $(SRCS)/c4cc/asm-c4r.c
 C4KE_SRCS := load-c4r.c $(SRCS)/c4ke/c4ke.c \
              $(SRCS)/c4ke/extensions/c4ke_ipc.c $(SRCS)/c4ke/extensions/c4ke_plus.c \
-             $(SRCS)/c4ke/extensions/c4ke_pm.c
+             $(SRCS)/c4ke/extensions/c4ke_pm.c $(SRCS)/c4ke/extensions/c4ke_dos.c
 C4KE_HDRS := $(INCLUDE)/c4.h $(INCLUDE)/c4m.h
 C4KE_C4R  := c4ke.c4r
 BIN_D     := $(SRCS)/c4ke/bin
@@ -75,7 +78,7 @@ C4R_C4RDUMP := c4rdump.c4r
 C4R_C4RLINK := c4rlink.c4r
 BENCHS    := $(SRCS)/bench/bench.c4r $(SRCS)/bench/benchtop.c4r $(SRCS)/bench/innerbench.c4r
 TESTS     := src/tests
-TESTS_C4R := $(TESTS)/hello.c4r $(TESTS)/mandel.c4r $(TESTS)/factorial.c4r $(TESTS)/fun_with_ptrs.c4r \
+TESTS_C4R := $(TESTS)/raycast.c4r $(TESTS)/hello.c4r $(TESTS)/mandel.c4r $(TESTS)/factorial.c4r $(TESTS)/fun_with_ptrs.c4r \
              $(TESTS)/multifun.c4r $(TESTS)/test-order.c4r $(TESTS)/test-ptrs.c4r $(TESTS)/test_args.c4r \
 			 $(TESTS)/test_basic.c4r $(TESTS)/test_crash.c4r $(TESTS)/test_customop.c4r $(TESTS)/test_exit.c4r \
 			 $(TESTS)/test_fread.c4r $(TESTS)/test_infiniteloop.c4r \
@@ -84,7 +87,8 @@ TESTS_C4R := $(TESTS)/hello.c4r $(TESTS)/mandel.c4r $(TESTS)/factorial.c4r $(TES
 			 $(TESTS)/rps.c4r $(TESTS)/test_continue.c4r $(TESTS)/test_timekeeping.c4r \
 			 $(TESTS)/test_float.c4r $(TESTS)/test_vprintf.c4r \
 			 $(TESTS)/test_ramfs.c4r $(TESTS)/test_selfhost.c4r $(TESTS)/test_ramopt.c4r \
-			 $(TESTS)/test_ramcc.c4r $(TESTS)/cycles.c4r
+			 $(TESTS)/test_ramcc.c4r $(TESTS)/test_ramlink.c4r \
+			 $(TESTS)/test_ixbuild.c4r $(TESTS)/cycles.c4r
 BIN       := c4.c4r $(C4R_C4CC) $(C4R_C4RDUMP) $(C4R_C4RLINK) $(C4R_TOP) \
             $(C4M).c4r \
             $(C4KE_C4R) \
@@ -179,11 +183,210 @@ test-c4l: $(C4) $(C4M) $(C4CC) $(TESTS)/hello.c4r
 # via c4cc, and runs interpreted under plain c4 (test-cpp checks that
 # tower). It exists so the self-hosting ladder can preprocess without
 # gcc; the pin is image parity against the gcc -E pipeline.
-cpp: src/c4dos/cpp.c
-	gcc -O2 -o cpp src/c4dos/cpp.c
+# The host build stubs the DOS API out: dos_can_write() is false, so -o
+# reports that it needs a DOS rather than pretending.
+cpp: src/c4dos/cpp.c include/c4dos_native.h
+	gcc -O2 -idirafter include -o cpp src/c4dos/cpp.c
 
 test-cpp: cpp $(C4) $(C4CC)
 	bash src/c4dos/tests/test-cpp.sh
+
+# C4DOS images. c4dos.c is strict-c4 dialect and must go through our
+# own cpp: raw c4cc skips '#' lines entirely and would compile BOTH
+# sides of the clock #if into one image. Three artifacts, because they
+# answer three different questions:
+#
+#   c4dos.c4r        clockless, 64-bit. The PURITY pin -- it runs under
+#                    unmodified ./c4 via c4l.c, which refuses any image
+#                    using an opcode above EXIT, TIME included.
+#   c4dos-clock.c4r  the same plus TIME, gated at runtime behind
+#                    CONFIG.SYS's DEVICE=CLOCK.SYS. The dev loop.
+#   c4dos32.c4r      32-bit clock build: the image c4bb boots, and the
+#                    one an embedder (HOMEWARD) wants.
+c4dos.c4r: cpp $(C4CC) $(SRCS)/c4dos/c4dos.c
+	./cpp $(SRCS)/c4dos/c4dos.c > .c4dos_pp.c
+	$(C4CC) -o $@ .c4dos_pp.c > /dev/null
+	@rm -f .c4dos_pp.c
+
+c4dos-clock.c4r: cpp $(C4CC) $(SRCS)/c4dos/c4dos.c
+	./cpp -DC4DOS_CLOCK=1 $(SRCS)/c4dos/c4dos.c > .c4dos_ppck.c
+	$(C4CC) -o $@ .c4dos_ppck.c > /dev/null
+	@rm -f .c4dos_ppck.c
+
+c4dos32.c4r: cpp c4cc32 $(SRCS)/c4dos/c4dos.c
+	./cpp -DC4DOS_CLOCK=1 $(SRCS)/c4dos/c4dos.c > .c4dos_pp32.c
+	./c4cc32 -o $@ .c4dos_pp32.c > /dev/null
+	@rm -f .c4dos_pp32.c
+
+# dostar: unpack an archive onto the RAM disk. Building C4KE in-machine
+# needs its source, three extensions and two dozen headers to be THERE
+# first, and a read-only disk plus a RAM disk means one archive read
+# once. Format is C4TAR1 (see src/c4dos/dostar.c) -- dull on purpose,
+# so the recipe below can write one with shell and strict c4 can read
+# it back.
+dostar.c4r: $(C4CC) include/c4dos.h $(SRCS)/c4dos/dostar.c
+	$(C4CC) -o $@ include/c4dos.h $(SRCS)/c4dos/dostar.c > /dev/null
+dostar32.c4r: c4cc32 include/c4dos.h $(SRCS)/c4dos/dostar.c
+	./c4cc32 -o $@ include/c4dos.h $(SRCS)/c4dos/dostar.c > /dev/null
+
+# dosload -- LOADLIN for C4DOS: loads an image, hands DOS's 4MB scratch
+# back, and runs it with a command line of its own. Strict c4, nothing
+# above EXIT: `make test-dosload` pins that with c4l.c, because this is
+# a tool the player uses AT the C4DOS rung and it must not raise it.
+dosload.c4r: $(C4CC) include/c4dos.h $(SRCS)/c4dos/dosload.c
+	$(C4CC) -o $@ include/c4dos.h $(SRCS)/c4dos/dosload.c > /dev/null
+dosload32.c4r: c4cc32 include/c4dos.h $(SRCS)/c4dos/dosload.c
+	./c4cc32 -o $@ include/c4dos.h $(SRCS)/c4dos/dosload.c > /dev/null
+
+# The purity pin, on its own so it can be run in a second: c4l refuses
+# an image using anything above EXIT and NAMES the instruction.
+test-dosload: $(C4) dosload.c4r
+	@./c4 c4l.c dosload.c4r 2>&1 | grep -q "needs " && \
+		{ echo "test-dosload: FAIL - dosload left the C4DOS rung:"; ./c4 c4l.c dosload.c4r; exit 1; } || true
+	@echo "test-dosload: stock-c4 opcodes only OK"
+
+# The C4KE build kit: everything cpp and c4cc need to produce a
+# bootable kernel and its init process, in one file.
+#
+# The names in the archive are the names the SOURCES ASK FOR, not the
+# repo's paths -- c4ke.c says #include "./load-c4r.c" and cpp resolves
+# that against the including file's own directory, so the kernel has
+# to land at the top level with load-c4r.c beside it, exactly as it
+# sits in the repo root. The extensions and headers keep their paths
+# because that is how they are spelled. The RAM disk is flat and its
+# keys hold slashes, so a path is just a longer file name.
+#
+#   repo path : name in the archive
+C4KE_KIT := src/c4ke/c4ke.c:c4ke.c \
+            load-c4r.c:load-c4r.c \
+            src/c4ke/extensions/c4ke_ipc.c:src/c4ke/extensions/c4ke_ipc.c \
+            src/c4ke/extensions/c4ke_plus.c:src/c4ke/extensions/c4ke_plus.c \
+            src/c4ke/extensions/c4ke_pm.c:src/c4ke/extensions/c4ke_pm.c \
+            src/c4ke/extensions/c4ke_dos.c:src/c4ke/extensions/c4ke_dos.c \
+            src/c4ke/bin/ps.c:ps.c \
+            src/c4ke/bin/eshell.c:eshell.c \
+            src/c4ke/services/init.c:init.c \
+            $(foreach h,$(wildcard include/*.h),$(h):$(h)) \
+            $(foreach h,$(wildcard include/c4ke/*.h),$(h):$(h))
+
+# $(1) = output archive, $(2) = src:name pairs
+define c4tar_build
+	@printf 'C4TAR1\n' > $(1)
+	@for pair in $(2); do \
+		src=$${pair%%:*}; name=$${pair#*:}; \
+		printf '%s %d\n' "$$name" "$$(wc -c < $$src)" >> $(1); \
+		cat $$src >> $(1); \
+	done
+	@echo "$(1): $$(wc -c < $(1)) bytes, $$(echo $(2) | wc -w) files"
+endef
+
+# prerequisites are the SOURCE halves of the pairs, not the names
+C4KE_KIT_SRCS := $(foreach p,$(C4KE_KIT),$(firstword $(subst :, ,$(p))))
+c4ke-src.tar: $(C4KE_KIT_SRCS)
+	$(call c4tar_build,c4ke-src.tar,$(C4KE_KIT))
+
+# raycast's C4DOS build# raycast's C4DOS build: stock-c4 opcodes plus TIME, nothing else. A
+# transient with something to draw, and the honest test of that
+# restriction (src/tests/raycast.c's RC_DOS branch).
+raycast-dos.c4r: c4sp $(C4LC_LISP) $(TESTS)/raycast.c
+	./c4sp -c 16000000 src/c4sp/lisp/c4lc.lisp -O -conforming -D RC_DOS=1 \
+		$(TESTS)/raycast.c $@ > /dev/null
+
+# A boot floppy for the native run targets. C4DOS has no notion of a
+# drive: it opens config.sys, autoexec.bat and c4dos.dir relative to
+# the working directory, so "the disk" is simply a directory you cd
+# into. c4dos.dir IS the directory service -- DIR types that file,
+# because the raw disk cannot enumerate itself -- so it is generated
+# from whatever actually landed here.
+C4DOS_DISK := c4dos-disk
+$(C4DOS_DISK): c4dos-clock.c4r $(TESTS)/hello.c4r raycast-dos.c4r \
+               $(SRCS)/c4dos/fs/CONFIG.SYS $(SRCS)/c4dos/fs/AUTOEXEC.BAT
+	@mkdir -p $(C4DOS_DISK)
+	@cp $(SRCS)/c4dos/fs/CONFIG.SYS   $(C4DOS_DISK)/config.sys
+	@cp $(SRCS)/c4dos/fs/AUTOEXEC.BAT $(C4DOS_DISK)/autoexec.bat
+	@cp $(TESTS)/hello.c4r            $(C4DOS_DISK)/hello.c4r
+	@cp raycast-dos.c4r               $(C4DOS_DISK)/raycast.c4r
+	@# The redirection creates c4dos.dir before ls runs, so the listing
+	@# includes itself, which is what DOS expects to see. Real case, not
+	@# shouted: this listing is also the NAME RESOLVER -- dos_open opens
+	@# whatever spelling it finds here -- so an entry of HELLO.C4R beside
+	@# a file called hello.c4r would defeat the lookup it exists to serve.
+	@cd $(C4DOS_DISK) && ls > c4dos.dir
+	@echo "c4dos-disk: ready -- try DIR, VER, TIME, RUN hello.c4r, RUN raycast.c4r"
+
+# The 32-bit halves of the same three things. c4bb is a 32-bit machine
+# and refuses a 64-bit image outright, so its floppy needs its own
+# transients rather than the ones next door.
+hello32.c4r: c4cc32 $(TESTS)/hello.c
+	./c4cc32 -o $@ $(TESTS)/hello.c > /dev/null
+
+raycast-dos32.c4r: c4sp32 $(C4LC_LISP) $(TESTS)/raycast.c
+	./c4sp32 -c 16000000 src/c4sp/lisp/c4lc.lisp -O -conforming -D RC_DOS=1 \
+		$(TESTS)/raycast.c $@ > /dev/null
+
+C4DOS_DISK32 := c4dos-disk32
+$(C4DOS_DISK32): hello32.c4r raycast-dos32.c4r \
+                 $(SRCS)/c4dos/fs/CONFIG.SYS $(SRCS)/c4dos/fs/AUTOEXEC.BAT
+	@mkdir -p $(C4DOS_DISK32)
+	@cp $(SRCS)/c4dos/fs/CONFIG.SYS   $(C4DOS_DISK32)/config.sys
+	@cp $(SRCS)/c4dos/fs/AUTOEXEC.BAT $(C4DOS_DISK32)/autoexec.bat
+	@cp hello32.c4r                   $(C4DOS_DISK32)/hello.c4r
+	@cp raycast-dos32.c4r             $(C4DOS_DISK32)/raycast.c4r
+	@cd $(C4DOS_DISK32) && ls > c4dos.dir
+	@echo "c4dos-disk32: ready (32-bit, for c4bb)"
+
+# A floppy that can BUILD C4KE and boot it, which is the whole ladder
+# in one directory: dostar unpacks the sources onto the RAM disk, cpp
+# and c4cc turn them into a kernel, and RUN boots it.
+#
+# init.c4r/c4sh.c4r/vfsload.c4r ride along prebuilt. BUILD.BAT does
+# compile init itself, but the kernel's own loader (load-c4r.c) opens
+# files with the host open() and has never heard of the DOS RAM disk,
+# so the copy it can actually LOAD is the one on the disk. Building it
+# in-machine and booting that same image needs load-c4r.c to learn the
+# API -- see docs/c4dos-design.md.
+C4DOS_BUILD_DISK := c4dos-build
+$(C4DOS_BUILD_DISK): c4dos-clock.c4r dostar.c4r cpp.c4r c4cc.c4r c4ke-src.tar dosload.c4r \
+                     $(INIT) $(C4SH) $(VFS) $(SRCS)/c4dos/fs/BUILD.BAT
+	@mkdir -p $(C4DOS_BUILD_DISK)
+	@sed 's/SIZE=[0-9]*/SIZE=16777216/' $(SRCS)/c4dos/fs/CONFIG.SYS > $(C4DOS_BUILD_DISK)/config.sys
+	@cp $(SRCS)/c4dos/fs/AUTOEXEC.BAT $(C4DOS_BUILD_DISK)/autoexec.bat
+	@cp $(SRCS)/c4dos/fs/BUILD.BAT    $(C4DOS_BUILD_DISK)/build.bat
+	@cp dostar.c4r cpp.c4r c4cc.c4r c4ke-src.tar dosload.c4r $(C4DOS_BUILD_DISK)/
+	@cp $(INIT) $(C4SH) $(VFS) $(C4DOS_BUILD_DISK)/
+	@cp c4ke.vfs.txt $(C4DOS_BUILD_DISK)/ 2>/dev/null || true
+	@cd $(C4DOS_BUILD_DISK) && ls -p | grep -v '/$$' > c4dos.dir
+	@echo "c4dos-build: ready -- boot it, type BUILD, then RUN dosload.c4r c4ke.c4r"
+
+# cpp as a 64-bit image, for the native build floppy
+cpp.c4r: $(C4CC) include/c4dos.h $(SRCS)/c4dos/cpp.c
+	$(C4CC) -o $@ include/c4dos.h $(SRCS)/c4dos/cpp.c > /dev/null
+
+# The ladder, interactively: boot C4DOS on that floppy and type BUILD.
+run-c4dos-build: $(C4M) c4dos-clock.c4r $(C4DOS_BUILD_DISK)
+	@cd $(C4DOS_BUILD_DISK) && $(CURDIR)/c4m $(CURDIR)/load-c4r.c -- $(CURDIR)/c4dos-clock.c4r
+
+# An interactive C4DOS session, which is what the thing is for: an A># An interactive C4DOS session, which is what the thing is for: an A>
+# prompt, DIR/TYPE/RUN/TIME/MEM/VER, EXIT to halt. `cd` because the
+# working directory IS the disk.
+run-c4dos: $(C4M) c4dos-clock.c4r $(C4DOS_DISK)
+	@cd $(C4DOS_DISK) && $(CURDIR)/c4m $(CURDIR)/load-c4r.c -- $(CURDIR)/c4dos-clock.c4r
+# The same session on the ORIGINAL interpreter, through c4l: unmodified
+# c4 runs the loader runs DOS runs your program. Clockless, so TIME
+# says so -- an image with TIME in it is one c4l would refuse.
+run-c4dos-c4: $(C4) c4dos.c4r $(C4DOS_DISK)
+	@cd $(C4DOS_DISK) && $(CURDIR)/c4 $(CURDIR)/c4l.c $(CURDIR)/c4dos.c4r
+# And on the breadboard machine, which is where an embedder meets it.
+run-c4dos-bb: c4dos32.c4r $(C4DOS_DISK32)
+	node src/c4bb/sim/cli.js -i -d $(C4DOS_DISK32) c4dos32.c4r
+
+# The whole HOMEWARD ladder, end to end: C4DOS builds C4KE, dosload
+# hands the machine over, the kernel boots the init it was just handed,
+# and both toolchains complete a compile-link round trip in the RAM
+# filesystem. MINUTES long, and deliberately not part of any other
+# suite -- docs/homeward-ladder.md is the tracker.
+test-ladder: cpp $(C4) $(C4M) $(C4CC) c4sp
+	@bash src/c4bb/tests/test-ladder.sh
 
 # C4DOS, the single-tasking trap-free DOS (docs/c4dos-design.md).
 # Strict-c4 core: the same image runs on c4bb, under native c4m, and
@@ -377,6 +580,14 @@ c4m32: c4m.c c4m_float.c
 	gcc -m32 $(NATIVE_CC_OPTS) c4m.c c4m_float.c -o c4m32 -lm
 c4sp32: $(C4SP_SRCS)
 	gcc -m32 $(EXTRA_CC) -O0 -g -Iinclude -I. -o c4sp32 src/c4sp/c4sp.c
+# 32-bit .c4r builds of the toolchain, for the c4bb disk: these are the
+# tools a system on that machine has to reach for, so they have to be
+# images the machine can load, not host binaries.
+c4sp32.c4r: c4cc32 $(C4SP_SRCS)
+	$(PREPROC) src/c4sp/c4sp.c | ./c4cc32 -o c4sp32.c4r - > /dev/null
+cpp32.c4r: c4cc32 include/c4dos.h $(SRCS)/c4dos/cpp.c
+	./c4cc32 -o cpp32.c4r include/c4dos.h $(SRCS)/c4dos/cpp.c > /dev/null
+
 c4rlink32: $(SRCS)/c4ke/bin/c4rlink.c $(SRCS)/c4cc/asm-c4r.c
 	gcc -m32 $(NATIVE_CC_OPTS) -Isrc/c4cc -o c4rlink32 $(SRCS)/c4ke/bin/c4rlink.c -lm
 c4bb-32bit: c4cc32 c4m32 c4sp32 c4rlink32
@@ -782,6 +993,38 @@ demo-c4ix-c4: c4 c4m c4ix.c4r $(C4IX_PROGS)
 # L0: golden token dump of a sample covering every token kind and c4cc
 # lexer quirk, native and under c4m, plus a full lex of c4cc.c itself
 # (whose token list needs a bigger cell arena than the default).
+# raycast: the renderer is deterministic by construction -- a
+# word-size-independent PRNG, demo mode consumes no input, and -n
+# bounds the run -- so a fixed seed gives byte-identical frames. The
+# 32-vs-64-bit leg is the one that matters: a Q12 intermediate that
+# wraps on c4bb's 32-bit words and not on native 64-bit ones shows up
+# here as a frame diff instead of as a subtly wrong picture nobody
+# notices. f/s is masked because it is wall-clock; kc is not masked,
+# because the instruction count per frame IS deterministic.
+RAYCAST_ARGS := 21x21 -s 7 -d -n 20 -g 80x22
+RAYCAST_MASK := sed -E 's,f/s [ 0-9]{5},f/s XXXXX,g'
+
+test-raycast: c4sp c4sp32 $(C4M) c4m32 $(TESTS)/raycast.c4r
+	./c4m load-c4r.c -- $(TESTS)/raycast.c4r $(RAYCAST_ARGS) \
+		| $(RAYCAST_MASK) | cmp - $(TESTS)/raycast.golden.txt
+	./c4sp32 -c 16000000 src/c4sp/lisp/c4lc.lisp -O -conforming -D RC_KE=1 \
+		$(TESTS)/raycast.c .raycast32.c4r > /dev/null
+	./c4m32 load-c4r.c -- .raycast32.c4r $(RAYCAST_ARGS) \
+		| $(RAYCAST_MASK) | cmp - $(TESTS)/raycast.golden.txt
+	./c4m load-c4r.c -- $(TESTS)/raycast.c4r 15x15 -s 3 -M | cmp - $(TESTS)/raycast.maze.txt
+	./c4m load-c4r.c -- $(TESTS)/raycast.c4r 15x15 -s 3 -d -n 3000 -g 80x22 \
+		| grep -qE "seen +97"
+	@# The interactive path, which demo mode never touches. -K forces
+	@# the keys to come from stdin rather than /dev/tty, so this behaves
+	@# the same with or without a controlling terminal. Six keys plus
+	@# the frame that processes 'q' is seven frames of 14 rows: it fails
+	@# if the key queue is not drained after end-of-input retires the
+	@# descriptor, which is how the batched case used to lose keys.
+	test $$(printf 'ddwwwwq' | ./c4m load-c4r.c -- $(TESTS)/raycast.c4r \
+		15x15 -s 3 -i -K -g 40x14 2>&1 | grep -c '48;5;') -eq 98
+	@rm -f .raycast32.c4r
+	@echo "test-raycast: OK"
+
 test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.c4r
 	./c4sp src/c4sp/lisp/c4lc-tokens.lisp src/tests/c4lc_lex_sample.c | cmp - src/c4sp/tests/expected/c4lc-tokens.txt
 	./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/c4lc-tokens.lisp src/tests/c4lc_lex_sample.c | cmp - src/c4sp/tests/expected/c4lc-tokens.txt
@@ -881,6 +1124,28 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O src/tests/c4lc_l7.c .c4lc_b.c4r > /dev/null
 	./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-l7.txt
 	./c4sp -c 2000000 src/c4sp/lisp/c4r-roundtrip.lisp .c4lc_b.c4r | grep -q "roundtrip identical"
+	# L11: integer constant expressions in enum bodies. p:const already
+	# resolved enum names and already backed array sizes, case labels
+	# and initializers; the enum parser just never used it. gcc is the
+	# oracle -- c4cc's enum parser takes literal numbers only, so it
+	# cannot compile this and the differential battery cannot hold it.
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp $(TESTS)/c4lc_enum.c .c4lc_b.c4r > /dev/null
+	./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-enum.txt
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O $(TESTS)/c4lc_enum.c .c4lc_b.c4r > /dev/null
+	./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-enum.txt
+	# L10: -conforming escapes. The token golden is the tight check --
+	# it pins the lexer directly instead of a program's output. Then
+	# the runtime oracle, and then the SAME source WITHOUT the flag,
+	# which must still print the c4cc quirks: an opt-in flag that is
+	# always on is not opt-in, and nothing else would catch that.
+	./c4sp -c 2000000 src/c4sp/lisp/c4lc-tokens.lisp -conforming $(TESTS)/c4lc_lex_sample.c \
+		| cmp - src/c4sp/tests/expected/c4lc-tokens-conforming.txt
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -conforming $(TESTS)/c4lc_esc.c .c4lc_b.c4r > /dev/null
+	./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-esc.txt
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O -conforming $(TESTS)/c4lc_esc.c .c4lc_b.c4r > /dev/null
+	./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-esc.txt
+	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O $(TESTS)/c4lc_esc.c .c4lc_b.c4r > /dev/null
+	./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-esc-quirks.txt
 	# L8: object mode. -c leaves undefined prototypes as SYMBOL-typed
 	# patches with extern symbol entries for c4rlink. c4lc objects link
 	# with c4cc objects in either direction; an L7 struct program built
@@ -981,6 +1246,10 @@ test-c4ke-ramfs: pre c4sp.c4r
 	$(C4M) $(RUN_C4KE) test_selfhost | grep -q "yello"
 	$(C4M) $(RUN_C4KE) test_ramopt | grep -q "yello"
 	$(C4M) $(RUN_C4KE) c4sp.c4r src/c4sp/tests/ramfs.lisp | grep -q "ramfs roundtrip ok"
+	# Linking in the machine: two objects compiled to the RAM filesystem,
+	# LINKED from it, and the result run out of it. This is the pin for
+	# building C4IX in-machine -- it is twelve objects plus a library.
+	$(C4M) $(RUN_C4KE) test_ramlink | grep -q "b_add(3, 4) = 7"
 	@echo "test-c4ke-ramfs: OK"
 
 # Linking test: compile two modules separately, link both ways, run each,
@@ -1066,7 +1335,9 @@ c4m.c4r: c4m.c $(U0) include/c4m.h $(C4CC)
 	$(PREPROC) c4m.c | $(C4CC) -o c4m.c4r -
 
 # C4KE - The C4 Kernel Experiment, and supporting files
-$(C4KE_C4R): $(C4CC)
+# The extensions are #included by c4ke.c, so a change to one has to
+# rebuild the kernel -- C4KE_SRCS names them all.
+$(C4KE_C4R): $(C4CC) $(C4KE_SRCS)
 	$(PREPROC) src/c4ke/c4ke.c | $(C4CC) -o $(C4KE_C4R) -
 # The init process
 $(INIT): $(C4CC) $(INIT_SRCS)
@@ -1101,6 +1372,20 @@ $(BIN_D)/%.c4r: $(SRCS)/c4ke/bin/%.c $(C4KE_WATCH) $(C4CC)
 $(SRCS)/bench/%.c4r: $(SRCS)/bench/%.c $(C4KE_WATCH) $(C4CC)
 	$(C4CC) -o $@ $(U0) $<
 #
+# raycast, the console raycaster (src/tests/raycast.c).
+#
+# Exclusive rule, and c4lc rather than c4cc, for three reasons:
+#   - -conforming, so ANSI escapes can be written as "\033[" instead of
+#     poked in as integers the way mandel.c has to;
+#   - no u0, because c4lc's preprocessor hangs on u0.h (see the vfsload
+#     note in src/c4bb/tests/build-images.sh) and the program needs
+#     nothing from it -- puts/__time/__c4_cycles are c4lc builtins;
+#   - -D, which is also what turns the preprocessor ON. Compiled with
+#     no -D at all, BOTH sides of the RC_DOS #ifdef would be compiled.
+$(TESTS)/raycast.c4r: c4sp $(C4LC_LISP) $(TESTS)/raycast.c
+	./c4sp -c 16000000 src/c4sp/lisp/c4lc.lisp -O -conforming -D RC_KE=1 \
+		$(TESTS)/raycast.c $@ > /dev/null
+
 # A variety of test programs
 #
 # Exclusive rule: this test program doesn't link with u0

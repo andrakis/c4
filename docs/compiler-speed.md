@@ -238,7 +238,50 @@ The honest denominator for anything measured later. Re-measure
       fixed here: it is a change to a tool C4KE, C4IX, c4or1k and c4bb all
       depend on, and it is outside A1.
 
-- [ ] **A1.7** Final re-measure, all wins combined
+- [x] **A1.7** Final measurements, all wins combined. hyperfine, 5 runs
+      (3 for the builds), output byte-identical to the pre-change compiler
+      throughout.
+
+### Native (64-bit)
+
+| workload | before | after | |
+|---|---|---|---|
+| **C4IX kernel** (12 modules + link) | 43.013 s | **1.490 s** | **28.9x** |
+| **C4IX full** (kernel + libc4ix + 14 programs) | ~60 s | **3.411 s** | **~18x** |
+| one module, `sched.c -O -c` | 5.341 s | 0.2315 s | 23.1x |
+| lex `c4cc.c` (75,651 bytes) | 902.6 ms | 128.5 ms | 7.02x |
+| full `-O` compile of `c4lc_l2.c` | 627.8 ms | 107.7 ms | 5.83x |
+
+### Hosted under c4m
+
+| workload | before | after | |
+|---|---|---|---|
+| lex `c4cc.c` | 41.9 s | 15.2 s | 2.76x |
+| full `-O` compile of `c4lc_l2.c` | 7.21 s | 3.81 s | 1.89x |
+
+### Hosted on c4bb (the 32-bit simulated hardware)
+
+Cycle counts as well as wall clock, since cycles are host-independent.
+
+| workload | before | after | |
+|---|---|---|---|
+| lex `c4cc.c` | 477.5 s / 10.06 G cyc | 177.6 s / 3.68 G cyc | 2.69x |
+| full `-O` compile of `c4lc_l2.c` | 85.0 s / 1.758 G cyc | 46.3 s / 0.938 G cyc | 1.87x |
+| **real C4IX module** `sched.c -O -c -P` | — | **283.1 s / 5.95 G cyc** | |
+
+**Why the hosted gains are smaller than the native ones.** `-O2` is worth
+2.26x and applies only to the native binary — a `.c4r` image cannot benefit
+from it. Divide the native ratios by 2.26 and they land on the hosted ones
+(7.02 / 2.26 = 3.1 against 2.76 measured for the lexer). The hosted images
+did take the equivalent win available to them, which is being built by
+`c4lc -O` (A1.5). So the index, `-R` and the `c4lc -O` image are the whole
+of the hosted gain, and they are at their ceiling for this set of changes.
+
+**On c4bb specifically**: a real C4IX kernel module now compiles in ~4m43s
+of simulated hardware, so the twelve-module kernel is roughly **an hour**
+inside c4bb. Nothing here changes that order of magnitude — c4bb runs at
+about 20M instructions/s simulated, and the compiler needs ~6 G of them
+per module.
 
 ---
 

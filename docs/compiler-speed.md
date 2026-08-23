@@ -117,14 +117,25 @@ of something we never allocated does exactly what it did before.
 
 ### Open questions raised by this work
 
-- **Why does the plain-c4 chain free more than it allocates?** `./c4 c4m.c
-  load-c4r.c -- prog.c4r` issues 8 MALCs and 16 FREEs; native c4m issues 17 and
-  17, with the loader's own allocations (255, 72, 88, 98, 760, 32, 120, 56, 6
-  bytes) plainly visible. In the plain-c4 chain those nine allocations do not
-  reach c4m's MALC handler at all, yet their frees reach its FREE handler. The
-  side-table design is immune either way, so this did not need answering to land
-  the fix — but something is asymmetric between the hosts and it is worth
-  knowing what.
+- **Why the plain-c4 chain frees more than it allocates — ANSWERED.**
+  `load-c4r.c:648-652`: when `__c4_info() & C4I_C4` says the host is plain c4,
+  `c4r_load_opt` routes the whole load through `c4r_load_opt_pure`, which is
+  `__c4_invoke((int *)&c4r_load_opt_pure_passthrough)` — the `C4IV` opcode,
+  "call a section of code as if it were a C4 function". That runs the load
+  outside the normal guest instruction loop, so its nine `malloc` calls
+  (255, 72, 88, 98, 760, 32, 120, 56, 6 bytes) land on the **outer** VM's MALC
+  and never reach c4m's handler. Cleanup through `c4r_free` runs as ordinary
+  guest code, so its `free` calls **do** reach c4m's FREE. Hence 8 MALCs and
+  16 FREEs where the native run is 17/17.
+
+  So memory is allocated by one VM and freed by another. Raw `malloc`/`free`
+  both bottom out in libc, so it works; any header scheme breaks on exactly
+  those pointers, which is what happened. The side table is immune, and this
+  is the specific reason it was the right call rather than a lucky one.
+
+  Latent, not urgent: an allocation crossing a VM boundary is fragile, and
+  anything that ever makes the two VMs' allocators differ will break this
+  path. Worth tidying when `C4IV`'s semantics are next revisited.
 - **`test-c4mp` / raycast is red on `main` as it stands.** Not investigated.
 
 Payoff beyond the bug: removes the "never call realloc" constraint, so c4th can
@@ -267,7 +278,7 @@ Cycle counts as well as wall clock, since cycles are host-independent.
 |---|---|---|---|
 | lex `c4cc.c` | 477.5 s / 10.06 G cyc | 177.6 s / 3.68 G cyc | 2.69x |
 | full `-O` compile of `c4lc_l2.c` | 85.0 s / 1.758 G cyc | 46.3 s / 0.938 G cyc | 1.87x |
-| **real C4IX module** `sched.c -O -c -P` | — | **283.1 s / 5.95 G cyc** | |
+| **real C4IX module** `sched.c -O -c -P` | 829.9 s / 16.49 G cyc | **283.1 s / 5.95 G cyc** | **2.93x** |
 
 **Why the hosted gains are smaller than the native ones.** `-O2` is worth
 2.26x and applies only to the native binary — a `.c4r` image cannot benefit
@@ -277,9 +288,9 @@ did take the equivalent win available to them, which is being built by
 `c4lc -O` (A1.5). So the index, `-R` and the `c4lc -O` image are the whole
 of the hosted gain, and they are at their ceiling for this set of changes.
 
-**On c4bb specifically**: a real C4IX kernel module now compiles in ~4m43s
-of simulated hardware, so the twelve-module kernel is roughly **an hour**
-inside c4bb. Nothing here changes that order of magnitude — c4bb runs at
+**On c4bb specifically**: a real C4IX kernel module now compiles in **4m43s**
+of simulated hardware, down from **13m50s** — so the twelve-module kernel goes
+from roughly 2h46m to roughly **57 minutes** inside c4bb. Nothing here changes that order of magnitude — c4bb runs at
 about 20M instructions/s simulated, and the compiler needs ~6 G of them
 per module.
 

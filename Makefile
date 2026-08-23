@@ -555,6 +555,11 @@ test-c4th: c4th c4th.c4r $(C4M) $(C4KE_C4R)
 	cmp .c4th_b5 src/c4th/tests/expected/b5.txt
 	test 4 = `grep -vc " ok$$" .c4th_b5`
 	test 0 = `grep -c "MISMATCH" .c4th_b5`
+	# The same suite again with the B5c opcode probe on, so the five
+	# experimental c4m opcodes are checked by running every word rather
+	# than by trusting the benchmark that motivated them. The transcript
+	# must come out byte-identical: same answers, different instructions.
+	$(C4M) load-c4r.c -- c4th.c4r src/c4th/forth/core.f src/c4th/forth/asm.f src/c4th/forth/native.f src/c4th/tests/nopc.f src/c4th/tests/b5.f | cmp - src/c4th/tests/expected/b5.txt
 	rm -f .c4th_core .c4th_fact.c4r .c4th_ccasm .c4th_b5
 	@echo "test-c4th: OK"
 
@@ -1492,6 +1497,12 @@ c4: c4.c
 	$(call compile_c,$<,$@)
 c4m: c4m.c
 	gcc $(EXTRA_CC) -O2 -fwrapv -g -idirafter include -I . c4m.c c4m_float.c -o c4m -lm
+# The B5c opcode probe's measuring half -- see docs/c4th-design.md. It
+# generates an instrumented copy of c4m rather than living in c4m.c,
+# because plain c4 compiles both arms of an #ifdef (c4.c:74 skips only
+# the "#" line), and the probe is not C4-subset C.
+c4m-fuse: c4m.c c4cc.c4r c4sp.c4r
+	sh src/c4th/bench/fuse-probe.sh
 c4cc: $(C4CC_SRCS)
 	$(call compile_c,src/c4cc/asm-c4r.c,c4cc)
 # c4rdump compiles c4cc.c in for its instruction name table, so it

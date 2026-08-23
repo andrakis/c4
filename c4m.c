@@ -275,6 +275,18 @@ enum {
 	FLT ,
 	// Instructions
 	JSRI,JSRS,JMPA,TLEV,DBG ,
+	// 66-78 belong to c4mp (CPUI..TRAW, see src/c4mp/c4mp.h). c4m does
+	// not implement them and still traps them as TRAP_ILLOP; they are
+	// named here only so that anything appended below lands on the
+	// number it would really have. A guest must keep feature-testing
+	// with C4I_SMP rather than by asking for these by name.
+	RS66,RS67,RS68,RS69,RS70,RS71,RS72,RS73,RS74,RS75,RS76,RS77,RS78,
+	// EXPERIMENTAL -- the B5c opcode probe, see docs/c4th-design.md.
+	// Fused frame access and immediate arithmetic, measured against
+	// c4th's native backend. c4m ONLY: nothing else in the tree knows
+	// these numbers, so nothing else can emit or receive them, and no
+	// existing program's behaviour changes by their existing.
+	LDL ,STL ,POPA,ADDI,MULI,
 	// End of instructions
 	INS_SIZE,
 };
@@ -296,7 +308,11 @@ void c4m_setup_opcodes () {
 	// Unsupported float instruction
 	"FLT ,"
 	// Instructions
-	"JSRI,JSRS,JMPA,TLEV,DBG ,";
+	"JSRI,JSRS,JMPA,TLEV,DBG ,"
+	// reserved for c4mp
+	"RS66,RS67,RS68,RS69,RS70,RS71,RS72,RS73,RS74,RS75,RS76,RS77,RS78,"
+	// experimental, c4m only
+	"LDL ,STL ,POPA,ADDI,MULI,";
 }
 char *c4m_builtins;
 void c4m_setup_builtins () {
@@ -1712,7 +1728,10 @@ int c4m_main(int argc, char **argv)
     // This opcode is handled here so debug output can show the opcode
     if (i == OPCD) {
         i = *sp;
-        if (i <= ADJ) {
+        // The experimental opcodes take an operand too, and it would be
+        // read out of the CALLER's instruction stream -- so OPCD has to
+        // refuse them for the same reason it refuses LEA..ADJ.
+        if (i <= ADJ || i == LDL || i == STL || i == ADDI || i == MULI) {
             printf("%.4s does not support opcodes requiring arguments (%.4s given)\n",
                    &c4m_opcodes[OPCD * 5], &c4m_opcodes[i * 5]);
 			// Raise an OPV trap
@@ -1735,10 +1754,20 @@ int c4m_main(int argc, char **argv)
       } else {
           printf("unknown %-*d (0x%X)", padding, i, i);
       }
-      if (i <= ADJ || i == JSRI || i == JSRS) printf(" %d\n", *pc); else printf("\n");
+      if (i <= ADJ || i == JSRI || i == JSRS
+          || i == LDL || i == STL || i == ADDI || i == MULI) printf(" %d\n", *pc);
+      else printf("\n");
     }
 
     if      (i == LEA) a = (int)(bp + *pc++);                             // load local address
+    // The experimental opcodes sit here, in the hot part of the chain,
+    // because the point of the probe is what they cost when they are
+    // used -- not what an if-else chain costs at position eighty.
+    else if (i == LDL) a = *(int *)(bp + *pc++);                          // load local
+    else if (i == STL) *(int *)(bp + *pc++) = a;                          // store local
+    else if (i == POPA) a = *sp++;                                        // pop into the accumulator
+    else if (i == ADDI) a = a + *pc++;                                    // add immediate
+    else if (i == MULI) a = a * *pc++;                                    // multiply immediate
     else if (i == IMM) a = *pc++;                                         // load global address or immediate
     else if (i == JMP) pc = (int *)*pc;                                   // jump
     else if (i == JMPA) pc = (int *)a;                                    // jump using accumulator

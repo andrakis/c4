@@ -559,6 +559,124 @@ reordering is still a top blocker in code that matters.
       is now entirely "primitives the backend cannot inline", which is
       B5d's problem, not the code generator's.
 
+### Does c4m want new opcodes? (asked again, and measured, 2026-08-23)
+
+B5b asked this about *stack* opcodes and answered no: the compiler makes
+`SWAP` disappear, so an opcode for it would optimize a case that no
+longer exists. B5c's decision rule was to re-ask once calls and loops
+were in — this time with the experiment actually built, in **c4m only**,
+and deliberately **not in c4bb**, whose microcode makes every opcode
+hardware-description work.
+
+**What was built.** Five opcodes appended to `c4m.c` at 79 — the first
+numbers free after c4mp's 66-78 — implementing the sequences the backend
+emits most:
+
+| | | replaces |
+|---|---|---|
+| `LDL n` | `a = *(bp+n)` | `LEA n; LI` |
+| `STL n` | `*(bp+n) = a` | `LEA n; PSH; …; SI`, *and the ordering problem with it* |
+| `POPA` | `a = *sp++` | `IMM 0; ADD` |
+| `ADDI n` | `a = a + n` | `PSH; IMM n; ADD` |
+| `MULI n` | `a = a * n` | `PSH; IMM n; MUL` |
+
+`native.f` emits them when `NOPC` is set; it is **off by default**, so
+the committed compiler still emits nothing above `MOD` and its output
+still runs on plain `c4`. Nothing else in the tree knows these numbers,
+so nothing else can emit or receive them.
+
+Three things the experiment had to get right, and they are the same
+three any real version would:
+
+* **`OPCD` had to be taught to refuse them.** It already refuses
+  `LEA..ADJ` because an opcode executed through `OPCD` would read its
+  operand out of the *caller's* instruction stream; `LDL`, `STL`, `ADDI`
+  and `MULI` take an operand too, so they needed the same guard — and
+  the debug disassembler needed the same one-line extension. Appending
+  an opcode is never just the table.
+* **The numbering hole is real.** 66-78 are c4mp's (`CPUI..TRAW`), so
+  the enum names them `RS66..RS78` and starts at 79. c4m still traps
+  them as `TRAP_ILLOP`; a guest must keep feature-testing with
+  `C4I_SMP`, not by asking for a name.
+* **The probe could not live in `c4m.c`.** Plain c4 compiles *both* arms
+  of an `#ifdef` — `c4.c:74` skips only the `#` line, which is why
+  `#if C4_ONLY` in `c4m.c` works the way it does — and `./c4 ./c4m.c` is
+  a test (`test-c4m-mem`). An `#ifdef`'d probe using `long long`,
+  `fprintf` and function-pointer parameters compiles fine under gcc and
+  breaks that test, which is exactly what happened. The probe generates
+  an instrumented copy instead.
+
+One guest-visible consequence, recorded rather than hidden: `OPSL`
+returns the opcode name string, which is now longer. Nothing in the tree
+enumerates it — the full suite is green — but a guest that did would see
+the reserved and experimental names.
+
+**Correctness first.** The whole B5 suite — sixty-three words compiled,
+called, and compared against the threaded engine — produces a
+**byte-identical transcript** with the opcodes on. That is the check that
+matters; fewer instructions proves nothing by itself.
+
+**What they are worth to c4th**, on `src/c4th/bench/b5c.f`:
+
+| | base | fused | | vs threaded |
+|---|---|---|---|---|
+| `DO`/`LOOP` with `I` | 1,700,354 | 1,000,343 | **1.70x** | 20x → **34x** |
+| `BEGIN`/`WHILE` with `>R`/`R>` | 3,100,351 | 1,700,347 | **1.82x** | 34x → **63x** |
+| loop calling another word | 440,354 | 300,343 | **1.47x** | 45x → **66x** |
+| loop reordering the stack | 1,540,357 | 1,280,346 | **1.20x** | 14x → **16x** |
+| loop through a `VARIABLE` | 2,200,356 | 1,500,346 | **1.47x** | 32x → **47x** |
+
+and the emitted code is about 30% smaller (56 → 33 instructions for the
+counting loop).
+
+**But the interesting number is not c4th's.** `make c4m-fuse`
+(`src/c4th/bench/fuse-probe.sh`) generates an instrumented c4m that runs
+a greedy peephole over the instructions a workload *actually executes*
+and reports how many a given opcode set would remove — a different and
+more interesting question than a static count over an image, since the
+hot code is a small part of any image. On two real workloads:
+
+| workload | instructions | set A (the five above) | set B (see below) |
+|---|---|---|---|
+| `c4cc` compiling `c4.c` | 11,373,735 | **13.44%** | **36.14%** |
+| `c4sp -R` running c4lc's lexer over `c4.c` | 1,639,556,989 | **23.81%** | **33.84%** |
+
+Set A understates itself — `STL` and `POPA` replace patterns that are not
+adjacent pairs, so the counter cannot see them. Set B is what the
+instruction profile actually asks for: `LDL`, plus **`LDG` (`IMM g; LI`,
+a global read)**, plus `PSHL`/`PSHG` (`LEA n; LI; PSH`, pushing a local
+or global), plus the **whole immediate-ALU family** rather than just
+`ADDI` and `MULI`. The pair histogram is unambiguous about why — on the
+c4sp workload `LEA` alone is **15.7% of every instruction executed**, and
+`LEA LI` is 11.8% of all adjacent pairs; on the c4cc workload `PSH IMM`
+is 18.6% and `IMM LI` 10.3%.
+
+**So: yes, but not the ones the question started from.** The lever is
+**fused frame and global access plus immediate operands**, and it is
+worth about a third of every instruction executed by `c4cc` and by the
+c4sp that hosts c4lc — which is Track A's problem, not c4th's. That is a
+much larger prize than anything c4th alone would justify.
+
+**And the second register is answered by the same data.** Once `LDL`/
+`STL` exist, a frame cell costs exactly one instruction to read or write,
+which is what a register costs on an interpreted VM — so a second
+register buys nothing a frame cell does not, while `LDL`/`STL` give an
+unbounded number of them. The places the backend still spends
+instructions are three-way permutations and pushes, and a second register
+does not fix those either. **Fused access dominates a second register on
+this machine**, and it does so for every program, not just c4th's.
+
+**The cost of going across the board is unchanged and is the open
+question.** An opcode's number and name live in `c4.c`, `c4m.c`, `c4l.c`,
+`load-c4r.c`, `src/c4mp/{c4mp.h,vm.c}`, `src/oisc4/oisc4.c`,
+`src/c4cc/c4cc.c`, `src/c4bb/sim/devices.js` and `c4r.lisp` — and c4bb
+needs **microcode**, since `src/c4bb/hw/microcode.uc` implements each
+opcode individually. Emitting them also means changing `c4cc` and
+`c4lc-gen.lisp`, which is where the 36% would actually be collected;
+c4or1k's `-mcisc` (`docs/c4or1k-design.md`) is the precedent for gating
+that behind a flag. **Everything above is c4m-only and reverts in one
+commit** if the answer is no.
+
 - [ ] **B5d** The metacompiler and `.c4r` emission — the `cmp gen2.c4r
       gen3.c4r` fixed point and the `c4opt` byte-identical differential.
       This is also where the C primitives stop being a wall: an image

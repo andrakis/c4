@@ -55,6 +55,13 @@ VARIABLE NBAD                      \ the xt that stopped it, for surveying
 VARIABLE NDEAD                     \ set where control cannot fall through
 VARIABLE NCUR                      \ the word being emitted, for NBAD
 
+\ The B5c opcode probe. Set NOPC and the backend emits c4m's five
+\ experimental fused opcodes -- LDL, STL, POPA, ADDI, MULI -- instead of
+\ the two- and three-instruction sequences that stand in for them. OFF by
+\ default, because with it off the emitted code uses nothing above MOD
+\ and so runs on plain c4 as well as on c4m. See docs/c4th-design.md.
+VARIABLE NOPC
+
 CREATE ISTART NITEMS CELLS ALLOT   \ where item i's code begins, or -1 for
                                    \ "not movable"
 VARIABLE NENTRY                    \ arguments the definition was given
@@ -95,12 +102,22 @@ VARIABLE 'NBODY                    \ NEMIT and NBODY are mutually recursive
 : ASM@  ( off -- a )   ASMBUF + ;
 
 : SPILL     NACC @ IF PSH, 0 NACC ! THEN ;
-: NEED-ACC  NACC @ 0= IF 0 IMM, ADD, 1 NACC ! THEN ;
+: NEED-ACC  NACC @ 0= IF
+               NOPC @ IF POPA, ELSE 0 IMM, ADD, THEN  1 NACC ! THEN ;
+
+\ a = a + n, and a = a * n. Without the opcodes these are three
+\ instructions each, which is what 1+, CELLS, NEGATE and the true-flag
+\ conversion all cost today.
+: NADD, ( n -- )  NOPC @ IF ADDI, ELSE >R PSH, R> IMM, ADD, THEN ;
+: NMUL, ( n -- )  NOPC @ IF MULI, ELSE >R PSH, R> IMM, MUL, THEN ;
+
+\ acc = frame cell k, for a compile-time-known k.
+: FLD, ( k -- )  NEGATE  NOPC @ IF LDL, ELSE LEA, LI, THEN ;
 
 \ Forth wants all-bits-set for true; C4's comparisons yield 1. Multiplying
-\ by -1 is the cheapest exact conversion: three instructions, and it is
-\ correct for the 0/1 the VM actually produces.
-: TOFLAG    PSH, -1 IMM, MUL, ;
+\ by -1 is the cheapest exact conversion, and it is correct for the 0/1
+\ the VM actually produces.
+: TOFLAG    -1 NMUL, ;
 
 \ A word that needs n items and has not got them is a broken definition,
 \ so say so rather than emitting code that reads below the stack.
@@ -159,8 +176,13 @@ VARIABLE 'NBODY                    \ NEMIT and NBODY are mutually recursive
    1+ NEGATE LEA,
    ASM-HERE 1 CELLS - NLEAREC  ASM-LEN NPINOFF ! ;
 
+: ILD, ( i -- )                              \ acc = value of item i
+   NOPC @ 0= IF IADDR, LI, EXIT THEN
+   1+ NEGATE LDL,
+   ASM-HERE 1 CELLS - NLEAREC  ASM-LEN NPINOFF ! ;
+
 : NA, ( d -- )  NDEPTH @ 1- SWAP - IADDR, ;  \ d items below the top
-: NL, ( d -- )  NA, LI, ;
+: NL, ( d -- )  NDEPTH @ 1- SWAP - ILD, ;
 
 \ Push a copy of the item d below the top. This is OVER, 2DUP, 2OVER and
 \ TUCK's second half, and it is two instructions.
@@ -173,9 +195,16 @@ VARIABLE 'NBODY                    \ NEMIT and NBODY are mutually recursive
    DUP NDEPTH @ > IF DROP 0 NOK ! EXIT THEN
    ?DUP IF DUP ADJ, NEGATE NDEPTH +! THEN ;
 
-\ Move the top item into frame cell k and drop it.
+\ Move the top item into frame cell k and drop it. With STL that is the
+\ whole of it -- and the ordering problem that made stores expensive
+\ disappears, because STL takes its address as an operand rather than
+\ off the stack.
 : SLOT! ( k -- )
    1 NEED
+   NOPC @ IF
+      NEED-ACC  NEGATE STL,  -1 NDEPTH +!  0 NACC !
+      ASM-LEN NPINOFF !  EXIT
+   THEN
    SPILL
    NEGATE LEA, PSH,                \ &frame[k]
    0 NL,                           \ the value
@@ -185,7 +214,7 @@ VARIABLE 'NBODY                    \ NEMIT and NBODY are mutually recursive
 
 \ Push frame cell k. Bp-relative, so this region IS movable.
 : SLOT@ ( k -- )
-   NEWITEM  NEGATE LEA, LI,  1 NACC ! ;
+   NEWITEM  FLD,  1 NACC ! ;
 
 \ -- permuting the top regions -----------------------------------------
 \ The problem SWAP poses is not shuffling a stack, it is that C4 has one
@@ -402,11 +431,15 @@ CREATE NVPROBE
 : N-PLOOP ( a -- )
    NLSP @ 0= IF DROP 0 NOK ! EXIT THEN
    SPILL
-   NLIDX NEGATE LEA, PSH,          \ &index
-   NLIDX NEGATE LEA, LI,           \ index
-   PSH, 1 IMM, ADD,                \ index+1
-   SI,                             \ store it; SI leaves it in the accumulator
-   PSH, NLIDX 1+ NEGATE LEA, LI,   \ limit
+   NOPC @ IF
+      NLIDX FLD,  1 ADDI,  NLIDX NEGATE STL,
+   ELSE
+      NLIDX NEGATE LEA, PSH,       \ &index
+      NLIDX FLD,                   \ index
+      PSH, 1 IMM, ADD,             \ index+1
+      SI,                          \ store it; SI leaves it in the accumulator
+   THEN
+   PSH, NLIDX 1+ FLD,              \ limit
    NE,                             \ index+1 <> limit
    0 BNZ,
    1 CELLS + @ SRCOFF DUP FIX! TDEP!
@@ -423,12 +456,18 @@ CREATE NVPROBE
    1 NEED
    1 SLOT+ >R
    R@ SLOT!                        \ the step
-   NLIDX NEGATE LEA, LI, PSH, NLIDX 1+ NEGATE LEA, LI, SUB,   \ i-l
+   NLIDX FLD, PSH, NLIDX 1+ FLD, SUB,                         \ i-l
    PSH,
-   NLIDX NEGATE LEA, PSH,
-   NLIDX NEGATE LEA, LI, PSH, R> NEGATE LEA, LI, ADD,         \ nu = i+n
-   SI,
-   PSH, NLIDX 1+ NEGATE LEA, LI, SUB,                         \ nu-l
+   NOPC @ IF
+      NLIDX FLD, PSH, R@ FLD, ADD,                            \ nu = i+n
+      NLIDX NEGATE STL,
+   ELSE
+      NLIDX NEGATE LEA, PSH,
+      NLIDX FLD, PSH, R@ FLD, ADD,
+      SI,
+   THEN
+   R> DROP
+   PSH, NLIDX 1+ FLD, SUB,                                    \ nu-l
    XOR,
    PSH, 0 IMM, LT,
    0 BZ,
@@ -457,7 +496,7 @@ CREATE NVPROBE
    SPILL
    0 NL, PSH, 0 IMM, LT,
    0 BZ, >MARK
-      0 NL, PSH, -1 IMM, MUL,
+      0 NL, -1 NMUL,
       0 JMP, >MARK
    SWAP >RESOLVE
       0 NL,
@@ -579,15 +618,15 @@ CREATE NVPROBE
    DUP n>  = IF 2DROP #GT CMP, EXIT THEN
    DUP n<= = IF 2DROP #LE CMP, EXIT THEN
    DUP n>= = IF 2DROP #GE CMP, EXIT THEN
-   DUP n1+ = IF 2DROP 1 NEED NEED-ACC PSH, 1 IMM, ADD, EXIT THEN
-   DUP n1- = IF 2DROP 1 NEED NEED-ACC PSH, 1 IMM, SUB, EXIT THEN
+   DUP n1+ = IF 2DROP 1 NEED NEED-ACC 1 NADD, EXIT THEN
+   DUP n1- = IF 2DROP 1 NEED NEED-ACC -1 NADD, EXIT THEN
    DUP n@  = IF 2DROP 1 NEED NEED-ACC LI, EXIT THEN
    DUP nC@ = IF 2DROP 1 NEED NEED-ACC LC, EXIT THEN
-   DUP n2* = IF 2DROP 1 NEED NEED-ACC PSH, 2 IMM, MUL, EXIT THEN
+   DUP n2* = IF 2DROP 1 NEED NEED-ACC 2 NMUL, EXIT THEN
    DUP n2DIV = IF 2DROP 1 NEED NEED-ACC PSH, 1 IMM, SHR, EXIT THEN
-   DUP nCELLS = IF 2DROP 1 NEED NEED-ACC PSH, 1 CELLS IMM, MUL, EXIT THEN
-   DUP nCELL+ = IF 2DROP 1 NEED NEED-ACC PSH, 1 CELLS IMM, ADD, EXIT THEN
-   DUP nNEG = IF 2DROP 1 NEED NEED-ACC PSH, -1 IMM, MUL, EXIT THEN
+   DUP nCELLS = IF 2DROP 1 NEED NEED-ACC 1 CELLS NMUL, EXIT THEN
+   DUP nCELL+ = IF 2DROP 1 NEED NEED-ACC 1 CELLS NADD, EXIT THEN
+   DUP nNEG = IF 2DROP 1 NEED NEED-ACC -1 NMUL, EXIT THEN
    DUP nINV = IF 2DROP 1 NEED NEED-ACC PSH, -1 IMM, XOR, EXIT THEN
    DUP n0= = IF 2DROP 1 NEED NEED-ACC PSH, 0 IMM, EQ, TOFLAG EXIT THEN
    DUP n0<> = IF 2DROP 1 NEED NEED-ACC PSH, 0 IMM, NE, TOFLAG EXIT THEN

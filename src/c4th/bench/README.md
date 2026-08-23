@@ -50,3 +50,46 @@ The call case is the fastest because inlining removes the call
 altogether; the shuffle case is the slowest because a permutation the
 compiler cannot do by moving code has to go through the frame, at about
 ten instructions an item.
+
+## The opcode probe (B5c)
+
+Two halves, both in the tree.
+
+The **emitting** half is `NOPC` in `src/c4th/forth/native.f` and five
+opcodes in `c4m.c` at 79 up — `LDL`, `STL`, `POPA`, `ADDI`, `MULI`.
+`NOPC` is off by default, so the committed compiler emits nothing above
+`MOD` and its output still runs on plain `c4`. To measure with them on,
+put `1 NOPC !` in a file loaded before the benchmark:
+
+    echo '1 NOPC !' > .nopc.f
+    ./c4m load-c4r.c -- c4th.c4r src/c4th/forth/core.f \
+        src/c4th/forth/asm.f src/c4th/forth/native.f .nopc.f \
+        src/c4th/bench/b5c.f
+
+The same file loaded before `src/c4th/tests/b5.f` produces a transcript
+byte-identical to `expected/b5.txt`, which is how the opcodes were
+checked before any of the numbers were believed.
+
+|  | base | fused | |
+|---|---|---|---|
+| `DO`/`LOOP` with `I` | 1,700,354 | 1,000,343 | 1.70x |
+| `BEGIN`/`WHILE` with `>R`/`R>` | 3,100,351 | 1,700,347 | 1.82x |
+| loop calling another word | 440,354 | 300,343 | 1.47x |
+| loop reordering the stack | 1,540,357 | 1,280,346 | 1.20x |
+| loop through a `VARIABLE` | 2,200,356 | 1,500,346 | 1.47x |
+
+The **measuring** half is `make c4m-fuse` (`fuse-probe.sh`), which
+generates an instrumented c4m and runs a greedy peephole over the
+instructions two real workloads actually execute. It generates rather
+than living in `c4m.c` because plain c4 compiles *both* arms of an
+`#ifdef` — `c4.c:74` skips only the `#` line — and `./c4 ./c4m.c` is a
+test.
+
+| workload | instructions | set A | set B |
+|---|---|---|---|
+| `c4cc` compiling `c4.c` | 11,373,735 | 13.44% | 36.14% |
+| `c4sp -R`, c4lc's lexer over `c4.c` | 1,639,556,989 | 23.81% | 33.84% |
+
+Set A is the five opcodes above; set B adds a global load, push-local and
+push-global, and the whole immediate-ALU family. See
+`docs/c4th-design.md` for what follows from that.

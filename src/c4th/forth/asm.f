@@ -36,6 +36,11 @@ ASM-RESET
 36 CONSTANT #MSET  37 CONSTANT #MCMP  38 CONSTANT #EXIT  39 CONSTANT #PUTC
 40 CONSTANT #PUTS  41 CONSTANT #RALC  42 CONSTANT #MCPY  43 CONSTANT #STRC
 61 CONSTANT #JSRI  62 CONSTANT #JSRS  63 CONSTANT #JMPA  64 CONSTANT #TLEV
+\ 66-78 belong to c4mp. 79 up are the experimental fused opcodes that
+\ exist in c4m ONLY, for the B5c probe -- see docs/c4th-design.md.
+\ Nothing emits them unless NOPC is set in native.f.
+79 CONSTANT #LDL   80 CONSTANT #STL   81 CONSTANT #POPA
+82 CONSTANT #ADDI  83 CONSTANT #MULI
 
 \ -- the emitters ------------------------------------------------------
 \ Operand-carrying first. LEA and ADJ count cells; IMM is a value; JMP,
@@ -62,6 +67,12 @@ ASM-RESET
 : MOD,  #MOD OP, ;   : PRTF, #PRTF OP, ;  : EXIT, #EXIT OP, ;
 : PUTC, #PUTC OP, ;  : JMPA, #JMPA OP, ;
 
+: LDL,  ( n -- )  #LDL  OP2, ;
+: STL,  ( n -- )  #STL  OP2, ;
+: ADDI, ( n -- )  #ADDI OP2, ;
+: MULI, ( n -- )  #MULI OP2, ;
+: POPA, #POPA OP, ;
+
 \ -- forward references ------------------------------------------------
 \ A branch whose target is not known yet is emitted with a zero operand
 \ and patched later. >MARK leaves the operand's address; >RESOLVE fills it
@@ -74,12 +85,14 @@ ASM-RESET
 \ Four characters per mnemonic, indexed by opcode -- the same shape as
 \ c4.c's own name string, which is what the VM's own debug output uses.
 
-S" LEA IMM JMP JSR BZ  BNZ ENT ADJ LEV LI  LC  SI  SC  PSH OR  XOR AND EQ  NE  LT  GT  LE  GE  SHL SHR ADD SUB MUL DIV MOD OPENREADCLOSPRTFMALCFREEMSETMCMPEXITPUTCPUTSRALCMCPYSTRCITH _OPC_BLT_TRPOPCD_JMP_ADJC4CFC4CYTIMESIGHSIGIUSLPINFOOPSLC4IVFLT JSRIJSRSJMPATLEVDBG " DROP CONSTANT OPNAMES
+S" LEA IMM JMP JSR BZ  BNZ ENT ADJ LEV LI  LC  SI  SC  PSH OR  XOR AND EQ  NE  LT  GT  LE  GE  SHL SHR ADD SUB MUL DIV MOD OPENREADCLOSPRTFMALCFREEMSETMCMPEXITPUTCPUTSRALCMCPYSTRCITH _OPC_BLT_TRPOPCD_JMP_ADJC4CFC4CYTIMESIGHSIGIUSLPINFOOPSLC4IVFLT JSRIJSRSJMPATLEVDBG RS66RS67RS68RS69RS70RS71RS72RS73RS74RS75RS76RS77RS78LDL STL POPAADDIMULI" DROP CONSTANT OPNAMES
 
 : .OPNAME ( n -- )  4 * OPNAMES +  4 OVER + SWAP
                     BEGIN 2DUP > WHILE DUP C@ EMIT 1+ REPEAT 2DROP ;
 
-: HAS-OPERAND? ( op -- f )  DUP #ADJ <=  OVER #JSRI = OR  SWAP #JSRS = OR ;
+: HAS-OPERAND? ( op -- f )  DUP #ADJ <=  OVER #JSRI = OR  OVER #JSRS = OR
+                            OVER #LDL = OR  OVER #STL = OR
+                            OVER #ADDI = OR SWAP #MULI = OR ;
 
 \ Addresses inside the emitted code are printed as * rather than as
 \ numbers: they depend on where the buffer happened to land, and the

@@ -430,10 +430,50 @@ decision, since `SWAP`, `OVER` and `DROP` need no operand.
 **Decision rule:** build B5b, re-run `survey.f`, and add `SWAP` only if
 reordering is still a top blocker in code that matters.
 
-- [ ] **B5b** Deferred-operand model (unblocks `SWAP`/`OVER`/`ROT`/`!`),
-      calls between natively-compiled words, `(DO)`/`(LOOP)` natively, then
-      the metacompiler and `.c4r` emission with the `cmp gen2.c4r gen3.c4r`
-      fixed point and the `c4opt` byte-identical differential.
+- [x] **B5b** The deferred model — **`SWAP`, `OVER`, `!`, `C!` and
+      `VARIABLE` references now compile, and `SWAP` costs nothing at all.**
+
+      The insight is to stop treating emitted code as fixed. Every item on
+      the compile-time stack records **where its code begins**, so the
+      compiler can still move it. `SWAP` becomes a rotation of the output
+      buffer:
+
+          [ codeA ][ PSH ][ codeB ]  ->  [ codeB ][ PSH ][ codeA ]
+
+      Sound because each region is balanced — it computes one value into the
+      accumulator and leaves the stack as it found it — and because no region
+      spans a branch: every branch flushes the model first. `1 2 SWAP -`
+      compiles to `IMM 2; PSH; IMM 1; SUB`; the `SWAP` is *gone*.
+
+      **`!` falls out of it.** Forth writes the value before the address while
+      C4's `SI` wants the address pushed first, so with `SWAP` free, `!` is
+      `SWAP` then `SI` — and the reason B5 declined stores disappears.
+
+      `OVER` re-runs the region below the top, which is only safe when that
+      region can simply be executed again; it is allowed for a bare `IMM` — a
+      literal or a variable's address, the case that actually occurs — and
+      declined otherwise rather than guessed at. A `CREATE`d word is just its
+      body address, so every `VARIABLE` reference is one `IMM`.
+
+      Also fixed on the way: **`MOVE` used `memcpy`**, which is undefined for
+      overlapping regions, and Forth-2012 requires overlap to work. The code
+      motion above slides blocks over themselves, so this was load-bearing.
+
+      | | threaded | native | |
+      |---|---|---|---|
+      | counting loop | 60,400,337 | 1,400,337 | **43x** |
+      | loop through a `VARIABLE` | 124,600,868 | 2,400,342 | **52x** |
+
+      Coverage of `core.f`, by `src/c4th/tests/survey.f`: **3 → 17 of 101**
+      colon words. The remainder is calls to other words, `(DO)`/`(LOOP)`,
+      and the compile-time dictionary words (`HERE`, `,`) that the control
+      structures are built from.
+
+- [ ] **B5c** Calls between compiled words — inlining looks better than a
+      software return stack, since a call would cost about as much as the
+      `NEXT` it replaces — plus `(DO)`/`(LOOP)`, then the metacompiler and
+      `.c4r` emission with the `cmp gen2.c4r gen3.c4r` fixed point and the
+      `c4opt` byte-identical differential.
 - [ ] **B6** c4th inside C4IX. *Verify:* runs from the C4IX shell, output pinned
 
 ### Risks

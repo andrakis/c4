@@ -10,5 +10,15 @@ TA ok
 TB ok
 TC ok
 TD ok
-TE declined
-TF declined
+TE ok
+TF ok
+TG ok
+TH ok
+TI ok
+TJ ok
+TK ok
+TL ok
+TM ok
+TN ok
+TO ok
+TP ok

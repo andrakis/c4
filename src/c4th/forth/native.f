@@ -40,33 +40,88 @@ CREATE NTGT NMAX CELLS ALLOT       \ non-zero if a threaded offset is branched t
 \ correct for the 0/1 the VM actually produces.
 : TOFLAG    PSH, -1 IMM, MUL, ;
 
-\ -- what this backend does NOT compile, and why ----------------------
+\ -- items, regions, and code motion -----------------------------------
 \
-\ SWAP, OVER, ROT and ! are left threaded. This is not an oversight and
-\ not laziness about typing them out: C4's store is
-\ `*(int *)*sp++ = a`, so the DESTINATION has to be pushed before the
-\ value is computed -- and here the value is already sitting in the
-\ accumulator, which loading the address would destroy. There is one
-\ register, so there is nowhere to put it first.
+\ The problem SWAP poses is not shuffling a stack, it is that C4 has one
+\ register: with x2 in the accumulator and x1 beneath it there is nowhere
+\ to put x2 while x1 is fetched. Through memory it costs about seventeen
+\ instructions, more than the interpreter charges, so compiling it that
+\ way would make code slower.
 \
-\ Done properly, SWAP through the frame costs about seventeen
-\ instructions, which is worse than the twenty-odd cycles the threaded
-\ inner interpreter charges for it. So compiling it badly would make
-\ code slower, not faster.
+\ The way out is to stop treating emitted code as fixed. Every item on the
+\ compile-time stack remembers where its code begins, so the compiler can
+\ still move it, and SWAP becomes a rotation of the output buffer that
+\ costs nothing at runtime:
 \
-\ The real answer is a deferred-operand model: keep the top few stack
-\ items as compile-time descriptions -- this one is a literal, that one
-\ is a fetch from an address -- and only emit code when something forces
-\ them into existence. Then `1 2 SWAP -` emits IMM 2, PSH, IMM 1, SUB
-\ and SWAP costs nothing, and `x addr !` can emit the address push
-\ first because the compiler, not the machine, decides the order. That
-\ is the rest of B5 and it is a real piece of work; it is not something
-\ to bolt on.
+\     [ codeA ][ PSH ][ codeB ]   ->   [ codeB ][ PSH ][ codeA ]
 \
-\ Until then NCOMPILE reports failure for any word it cannot do well,
-\ and the caller keeps the threaded definition. Refusing is the honest
-\ behaviour: a native backend that silently emits worse code than the
-\ interpreter is worse than no backend.
+\ That is sound because each region is balanced -- it computes one value
+\ into the accumulator and leaves the stack as it found it -- and because
+\ no region ever spans a branch: branches flush the model first.
+\
+\ And ! falls out of it. Forth writes the value before the address while
+\ C4's SI wants the address pushed first, so with SWAP free, ! is SWAP
+\ then SI.
+
+64 CONSTANT NITEMS
+CREATE ISTART NITEMS CELLS ALLOT    \ where item i's code begins, as an offset
+CREATE ISCRATCH 1024 CELLS ALLOT
+
+VARIABLE SAOFF  VARIABLE SBOFF  VARIABLE SLENA  VARIABLE SLENB
+
+: IOFF  ( i -- off )   CELLS ISTART + @ ;
+: IOFF! ( off i -- )   CELLS ISTART + ! ;
+: ASM@  ( off -- a )   ASMBUF + ;
+
+\ Start a new item. Whatever is in the accumulator belongs to the item
+\ below, so spill it, then record where this one begins.
+: NEWITEM ( -- )
+   SPILL
+   NDEPTH @ NITEMS < IF ASM-LEN NDEPTH @ IOFF! ELSE 0 NOK ! THEN
+   1 NDEPTH +! ;
+
+\ After a branch nothing may move across it, so every live item is marked
+\ as having no movable region.
+: NFLUSH ( -- )
+   NDEPTH @ 0 ?DO ASM-LEN I IOFF! LOOP ;
+
+\ Rotate the top two regions. Region A runs from item n-2's start to item
+\ n-1's start and ends with the PSH that spilled it; region B is the rest.
+\ Declines on an empty region -- after DUP the top item has no code of its
+\ own, and rotating it would move a PSH in front of the code that fills
+\ the accumulator it pushes.
+: N-SWAP ( -- ok? )
+   NDEPTH @ 2 < IF 0 EXIT THEN
+   NEED-ACC
+   NDEPTH @ 2 - IOFF SAOFF !
+   NDEPTH @ 1- IOFF SBOFF !
+   SBOFF @ SAOFF @ - 1 CELLS - SLENA !
+   ASM-LEN SBOFF @ -           SLENB !
+   SLENA @ 0 <= IF 0 EXIT THEN
+   SLENB @ 0 <= IF 0 EXIT THEN
+   SLENA @ 1024 CELLS > IF 0 EXIT THEN
+   SAOFF @ ASM@  ISCRATCH  SLENA @ MOVE                  \ stash codeA
+   SBOFF @ ASM@  SAOFF @ ASM@  SLENB @ MOVE              \ codeB to the front
+   #PSH  SAOFF @ SLENB @ + ASM@ !                        \ the spill, after it
+   ISCRATCH  SAOFF @ SLENB @ + 1 CELLS + ASM@  SLENA @ MOVE
+   SAOFF @ SLENB @ + 1 CELLS +  NDEPTH @ 1- IOFF!
+   1 ;
+
+\ OVER copies the item below the top. That is only safe when its region
+\ can simply be run again, so it is allowed for a bare IMM -- a literal or
+\ a variable's address, which is the case that actually occurs -- and
+\ declined otherwise rather than guessed at.
+: N-OVER ( -- ok? )
+   NDEPTH @ 2 < IF 0 EXIT THEN
+   NEED-ACC
+   NDEPTH @ 2 - IOFF SAOFF !
+   NDEPTH @ 1- IOFF SBOFF !
+   SBOFF @ SAOFF @ - 1 CELLS - SLENA !
+   SLENA @ 2 CELLS <> IF 0 EXIT THEN
+   SAOFF @ ASM@ @ #IMM <> IF 0 EXIT THEN
+   SAOFF @ 1 CELLS + ASM@ @
+   NEWITEM IMM,  1 NACC !
+   1 ;
 
 \ -- the words this backend knows -------------------------------------
 ' + CONSTANT n+   ' - CONSTANT n-   ' * CONSTANT n*   ' / CONSTANT n/
@@ -79,6 +134,20 @@ CREATE NTGT NMAX CELLS ALLOT       \ non-zero if a threaded offset is branched t
 ' 1+ CONSTANT n1+  ' 1- CONSTANT n1-
 ' LIT CONSTANT nLIT  ' BRANCH CONSTANT nBRANCH  ' 0BRANCH CONSTANT n0BRANCH
 ' EXIT CONSTANT nEXIT
+' ! CONSTANT n!  ' C! CONSTANT nC!  ' 0= CONSTANT n0=
+' 0<> CONSTANT n0<>  ' 0< CONSTANT n0<  ' 0> CONSTANT n0>
+' NEGATE CONSTANT nNEG  ' INVERT CONSTANT nINV  ' NIP CONSTANT nNIP
+' 2* CONSTANT n2*  ' CELLS CONSTANT nCELLS  ' CELL+ CONSTANT nCELL+
+' SWAP CONSTANT nSWAP  ' OVER CONSTANT nOVER
+
+\ A CREATEd word -- every VARIABLE, every CONSTANT's underlying store --
+\ just pushes the address of its body. That is a literal, so it compiles
+\ to one IMM and needs nothing else. Finding out whether an xt is one
+\ means comparing its code field against a known example's.
+CREATE NVPROBE
+' NVPROBE 5 CELLS + @ CONSTANT NDOVAR
+: >WCODE ( xt -- a )  5 CELLS + @ ;
+: >WBODY ( xt -- a )  9 CELLS + ;
 
 : BIN, ( opcode -- )  NEED-ACC OP, -1 NDEPTH +! ;
 : CMP, ( opcode -- )  NEED-ACC OP, TOFLAG -1 NDEPTH +! ;
@@ -95,7 +164,7 @@ CREATE NTGT NMAX CELLS ALLOT       \ non-zero if a threaded offset is branched t
 : SRCOFF ( a -- n )  NBASE @ - 1 CELLS / ;
 
 : NEMIT ( a xt -- a' )        \ emit one threaded instruction
-   DUP nLIT = IF DROP SPILL DUP 1 CELLS + @ IMM, 1 NACC ! 1 NDEPTH +! 2 CELLS + EXIT THEN
+   DUP nLIT = IF DROP NEWITEM DUP 1 CELLS + @ IMM, 1 NACC ! 2 CELLS + EXIT THEN
    DUP n+ = IF DROP #ADD BIN, 1 CELLS + EXIT THEN
    DUP n- = IF DROP #SUB BIN, 1 CELLS + EXIT THEN
    DUP n* = IF DROP #MUL BIN, 1 CELLS + EXIT THEN
@@ -114,7 +183,25 @@ CREATE NTGT NMAX CELLS ALLOT       \ non-zero if a threaded offset is branched t
    DUP n1- = IF DROP NEED-ACC PSH, 1 IMM, SUB, 1 CELLS + EXIT THEN
    DUP n@  = IF DROP NEED-ACC LI, 1 CELLS + EXIT THEN
    DUP nC@ = IF DROP NEED-ACC LC, 1 CELLS + EXIT THEN
-   DUP nDUP = IF DROP NEED-ACC PSH, 1 NDEPTH +! 1 CELLS + EXIT THEN
+   DUP nDUP = IF DROP NEED-ACC PSH, ASM-LEN NDEPTH @ IOFF! 1 NDEPTH +! 1 CELLS + EXIT THEN
+   DUP nSWAP = IF DROP N-SWAP 0= IF 0 NOK ! THEN 1 CELLS + EXIT THEN
+   DUP nOVER = IF DROP N-OVER 0= IF 0 NOK ! THEN 1 CELLS + EXIT THEN
+   \ ! is SWAP then SI: the rotation puts the address on the stack and
+   \ leaves the value in the accumulator, which is exactly what SI wants.
+   DUP n!  = IF DROP N-SWAP 0= IF 0 NOK ! 1 CELLS + EXIT THEN
+                   SI, -2 NDEPTH +! 0 NACC ! 1 CELLS + EXIT THEN
+   DUP nC! = IF DROP N-SWAP 0= IF 0 NOK ! 1 CELLS + EXIT THEN
+                   SC, -2 NDEPTH +! 0 NACC ! 1 CELLS + EXIT THEN
+   DUP nNIP = IF DROP NEED-ACC 1 ADJ, -1 NDEPTH +! 1 CELLS + EXIT THEN
+   DUP n0= = IF DROP NEED-ACC PSH, 0 IMM, EQ, TOFLAG 1 CELLS + EXIT THEN
+   DUP n0<> = IF DROP NEED-ACC PSH, 0 IMM, NE, TOFLAG 1 CELLS + EXIT THEN
+   DUP n0< = IF DROP NEED-ACC PSH, 0 IMM, LT, TOFLAG 1 CELLS + EXIT THEN
+   DUP n0> = IF DROP NEED-ACC PSH, 0 IMM, GT, TOFLAG 1 CELLS + EXIT THEN
+   DUP nNEG = IF DROP NEED-ACC PSH, -1 IMM, MUL, 1 CELLS + EXIT THEN
+   DUP nINV = IF DROP NEED-ACC PSH, -1 IMM, XOR, 1 CELLS + EXIT THEN
+   DUP n2* = IF DROP NEED-ACC PSH, 2 IMM, MUL, 1 CELLS + EXIT THEN
+   DUP nCELLS = IF DROP NEED-ACC PSH, 1 CELLS IMM, MUL, 1 CELLS + EXIT THEN
+   DUP nCELL+ = IF DROP NEED-ACC PSH, 1 CELLS IMM, ADD, 1 CELLS + EXIT THEN
    DUP nDROP = IF DROP NACC @ IF 0 NACC ! ELSE 1 ADJ, THEN
                     -1 NDEPTH +! 1 CELLS + EXIT THEN
    \ Branches canonicalise: everything on the stack, accumulator free, so
@@ -122,12 +209,15 @@ CREATE NTGT NMAX CELLS ALLOT       \ non-zero if a threaded offset is branched t
    \ reached. 0BRANCH needs its flag in the accumulator to test.
    DUP n0BRANCH = IF DROP
       NEED-ACC 0 BZ, DUP 1 CELLS + @ SRCOFF FIX!
-      -1 NDEPTH +! 0 NACC !
+      -1 NDEPTH +! 0 NACC ! NFLUSH
       2 CELLS + EXIT THEN
    DUP nBRANCH = IF DROP
-      SPILL 0 JMP, DUP 1 CELLS + @ SRCOFF FIX!
+      SPILL 0 JMP, DUP 1 CELLS + @ SRCOFF FIX! NFLUSH
       2 CELLS + EXIT THEN
    DUP nEXIT = IF DROP NEED-ACC LEV, 1 CELLS + EXIT THEN
+   \ CREATEd word: push its body address, which is a compile-time
+   \ constant, so this is one IMM and the deferred model can move it.
+   DUP >WCODE NDOVAR = IF >WBODY NEWITEM IMM, 1 NACC ! 1 CELLS + EXIT THEN
    \ Anything else: this backend does not know it. Note the DUP above --
    \ without it this arm consumes the xt and the fallback below then
    \ operates on the ADDRESS instead, quietly eating a loop variable
@@ -155,7 +245,7 @@ CREATE NTGT NMAX CELLS ALLOT       \ non-zero if a threaded offset is branched t
    OVER                                    ( body end a )
    0 ENT,                                  \ no locals: the data stack is the C4 stack
    BEGIN 2DUP > NOK @ AND WHILE
-      DUP SRCOFF CELLS NTGT + @ IF SPILL THEN
+      DUP SRCOFF CELLS NTGT + @ IF SPILL NFLUSH THEN
       DUP SRCOFF CELLS NMAP + ASM-HERE SWAP !
       DUP DUP @ NEMIT NIP
    REPEAT DROP 2DROP

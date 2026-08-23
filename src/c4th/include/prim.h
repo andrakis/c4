@@ -155,7 +155,20 @@ void th_p_store (int *w) { int a,x; a=th_pop(); x=th_pop(); *(int *)a = x; }
 void th_p_cfetch (int *w){ th_push(*(char *)th_pop()); }
 void th_p_cstore (int *w){ int a,x; a=th_pop(); x=th_pop(); *(char *)a = x; }
 void th_p_plusstore (int *w){ int a,x; a=th_pop(); x=th_pop(); *(int *)a = *(int *)a + x; }
-void th_p_move (int *w) { int n,d,s; n=th_pop(); d=th_pop(); s=th_pop(); if (n>0) memcpy((char *)d,(char *)s,n); }
+// Forth-2012 requires MOVE to work when the regions overlap; memcpy does
+// not promise that, and the native backend's code motion slides blocks
+// over themselves. Copy in whichever direction is safe.
+void th_p_move (int *w) {
+	int   n, d, s, i;
+	char *dp;
+	char *sp2;
+
+	n = th_pop(); d = th_pop(); s = th_pop();
+	if (n <= 0 || d == s) return;
+	dp = (char *)d; sp2 = (char *)s;
+	if (d < s) { i = 0; while (i < n) { dp[i] = sp2[i]; ++i; } }
+	else       { i = n; while (i > 0) { --i; dp[i] = sp2[i]; } }
+}
 void th_p_fill (int *w) { int c,n,a; c=th_pop(); n=th_pop(); a=th_pop(); if (n>0) memset((char *)a,c,n); }
 
 // -- dictionary space -------------------------------------------------

@@ -30,3 +30,18 @@
 \ Declined, and it must say so rather than emit something wrong.
 : TE 1 2 SWAP - ;            TE ." TE " LATEST >BODY HERE ROT CHECK
 : TF 3 4 OVER + + ;          TF ." TF " LATEST >BODY HERE ROT CHECK
+
+\ B5b: the deferred model. SWAP and OVER are compile-time reorderings of
+\ already-emitted code, ! falls out of SWAP, and a VARIABLE reference is
+\ just a literal address.
+VARIABLE V
+: TG 42 V ! V @ ;            TG ." TG " LATEST >BODY HERE ROT CHECK
+: TH 7 V ! 3 V @ + ;         TH ." TH " LATEST >BODY HERE ROT CHECK
+: TI 1 2 3 SWAP DROP - ;     TI ." TI " LATEST >BODY HERE ROT CHECK
+: TJ 9 V ! V @ V @ * ;       TJ ." TJ " LATEST >BODY HERE ROT CHECK
+: TK 5 0= ;                  TK ." TK " LATEST >BODY HERE ROT CHECK
+: TL 0 0= ;                  TL ." TL " LATEST >BODY HERE ROT CHECK
+: TM 6 NEGATE ;              TM ." TM " LATEST >BODY HERE ROT CHECK
+: TN 5 INVERT ;              TN ." TN " LATEST >BODY HERE ROT CHECK
+: TO 3 CELLS ;               TO ." TO " LATEST >BODY HERE ROT CHECK
+: TP 4 2 NIP ;               TP ." TP " LATEST >BODY HERE ROT CHECK

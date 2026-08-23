@@ -384,6 +384,52 @@ with.
       threaded engine — which is the oracle, being the one that passes the
       CORE suite — and requires the declined words to say so.
 
+### Should c4m get new stack opcodes? (asked and measured 2026-08-23)
+
+`src/c4th/tests/survey.f` walks every colon definition in `core.f`, tries
+to compile each natively, and reports what stopped it. Of the declines,
+**two are stack reordering** — `SWAP` in `2!`, `OVER` in `WITHIN`. Every
+other one is a primitive the backend has not implemented yet (`0=`, `>R`,
+`,`, `HERE`, `MAX`) or a call to another colon word (`*/MOD`, `.`,
+`CREATE`). Both of those are pure compiler work with no ecosystem cost.
+
+Caveat worth stating: `core.f` is a *compiler library*, full of
+compile-time words that poke `HERE` and `,`. It is not representative of
+application code, so treat the ratio as directional.
+
+**Decision: not yet.**
+
+1. Reordering is not what is blocking compilation; coverage and calls are.
+2. The deferred-operand model of B5b removes most `SWAP`s at compile
+   time. Adding a `SWAP` opcode first would be optimizing a case the
+   compiler is about to make disappear.
+3. The cost is larger than the tables. The opcode name string and enum
+   live in `c4.c`, `c4m.c`, `c4l.c`, `load-c4r.c`, `src/c4mp/{c4mp.h,vm.c}`,
+   `src/oisc4/oisc4.c`, `src/c4cc/c4cc.c`, `src/c4bb/sim/devices.js` and
+   `c4r.lisp` — and **c4bb needs microcode**, since
+   `src/c4bb/hw/microcode.uc` implements each opcode individually
+   (`op PSH:`, `op JMPA:` …). That is hardware-description work, not a
+   table edit. Homeward mirrors it too.
+4. Numbering starts at **79**: `src/c4mp/c4mp.h` already occupies 66-78,
+   so c4m's own table keeps a permanent hole.
+
+**If one is ever added, make it `SWAP`.** It is the single highest-value
+choice because it also fixes stores: `!` becomes `SWAP; SI`. Stores are
+the one place the compiler cannot always reorder its way out — C4's `SI`
+wants the address pushed before the value is computed, while Forth writes
+the value first, and when the value is a computed expression rather than
+something re-materializable the deferred model cannot hoist it.
+
+**A correction on what is possible:** operand-carrying opcodes are not
+actually restricted to numbers below `ADJ`. Every VM decides with
+`i <= ADJ`, but c4m already extends that to `i <= ADJ || i == JSRI ||
+i == JSRS`, so an appended opcode *can* take an operand — it just has to
+be added to that test everywhere the table is mirrored. Moot for this
+decision, since `SWAP`, `OVER` and `DROP` need no operand.
+
+**Decision rule:** build B5b, re-run `survey.f`, and add `SWAP` only if
+reordering is still a top blocker in code that matters.
+
 - [ ] **B5b** Deferred-operand model (unblocks `SWAP`/`OVER`/`ROT`/`!`),
       calls between natively-compiled words, `(DO)`/`(LOOP)` natively, then
       the metacompiler and `.c4r` emission with the `cmp gen2.c4r gen3.c4r`

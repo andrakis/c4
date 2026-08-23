@@ -301,6 +301,10 @@ void th_p_does (int *w) {             // DOES> (immediate)
 
 void th_p_tobody (int *w) { th_push(th_pop() + W__Sz * sizeof(int)); }
 
+// LATEST is how a tool word reaches the definition just compiled -- the
+// peephole optimizer's way in.
+void th_p_latest (int *w) { th_push((int)th_latest); }
+
 
 // WORD returns a COUNTED string -- length byte first -- in a transient
 // buffer, and FIND consumes one. They are the old-style pair; the modern
@@ -451,6 +455,7 @@ void th_outer_init () {
 	th_defword("CREATE", 0, (int)&th_p_create);
 	th_defword("DOES>", FL_IMMEDIATE | FL_COMPONLY, (int)&th_p_does);
 	th_defword(">BODY", 0, (int)&th_p_tobody);
+	th_defword("LATEST", 0, (int)&th_p_latest);
 	th_defword("EVALUATE", 0, (int)&th_p_evaluate);
 	th_defword(">NUMBER", 0, (int)&th_p_tonumber);
 	th_defword("ABORT", 0, (int)&th_p_abort);

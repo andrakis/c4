@@ -459,7 +459,8 @@ C4SP_SRCS := src/c4sp/c4sp.c src/c4sp/include/cell.h src/c4sp/include/gc.h \
 C4TH_SRCS := src/c4th/c4th.c src/c4th/include/mem.h src/c4th/include/dict.h \
              src/c4th/include/io.h src/c4th/include/inner.h \
              src/c4th/include/prim.h src/c4th/include/num.h \
-             src/c4th/include/outer.h src/c4th/forth/core.f
+             src/c4th/include/outer.h src/c4th/forth/core.f \
+             src/c4th/forth/asm.f src/c4th/forth/peep.f
 # c4th (docs/c4th-design.md): a Forth for C4, built two ways from one
 # source exactly as c4sp is. -O2 needs no apology here -- c4th has no
 # collector scanning the stack, so nothing pins the native build open.
@@ -513,7 +514,27 @@ test-c4th: c4th c4th.c4r $(C4M) $(C4KE_C4R)
 	grep -q "End of Core word set tests" .c4th_core
 	echo c4th | $(C4M) load-c4r.c -- c4th.c4r src/c4th/forth/core.f src/c4th/tests/tester.fr src/c4th/tests/core.fr | cmp - src/c4th/tests/expected/core-64.txt
 	echo c4th | $(C4M) load-c4r.c -- $(C4KE_C4R) c4th.c4r src/c4th/forth/core.f src/c4th/tests/tester.fr src/c4th/tests/core.fr | grep -q "End of Core word set tests"
-	rm -f .c4th_core
+	# B4: the assembler and the peephole.
+	#
+	# asm.f is checked against c4cc rather than against itself: the same
+	# program is compiled by c4cc and hand-assembled in Forth, and the two
+	# instruction sequences must match. Addresses are masked -- they
+	# depend on where the segments landed, and the claim is about the
+	# encoding, not the layout.
+	./c4cc -o .c4th_fact.c4r src/c4th/tests/fact.c > /dev/null
+	./c4rdump -c .c4th_fact.c4r 2>/dev/null | grep -E '^0x' | sed -E 's/^0x[0-9a-f]+: +//; s/[0-9]{7,}/*/; s/ +$$//' > .c4th_ccasm
+	./c4th src/c4th/forth/core.f src/c4th/forth/asm.f src/c4th/tests/fact.f | sed -E 's/ +$$//' | cmp - .c4th_ccasm
+	# Each peephole rule fires, and behaviour is unchanged -- including
+	# the cases where compaction moves a branch target.
+	./c4th src/c4th/forth/core.f src/c4th/forth/peep.f src/c4th/tests/b4.f | cmp - src/c4th/tests/expected/b4.txt
+	# The real check: run the whole Forth-2012 CORE suite again with the
+	# peephole applied to EVERY definition, including the test harness's
+	# own. A peephole exercised only by its own tests is one nobody
+	# trusts; the transcript must come out byte-identical to the
+	# unoptimized golden.
+	echo c4th | ./c4th src/c4th/forth/core.f src/c4th/forth/peep.f src/c4th/tests/peepon.f src/c4th/tests/tester.fr src/c4th/tests/core.fr | cmp - src/c4th/tests/expected/core-64.txt
+	echo c4th | $(C4M) load-c4r.c -- c4th.c4r src/c4th/forth/core.f src/c4th/forth/peep.f src/c4th/tests/peepon.f src/c4th/tests/tester.fr src/c4th/tests/core.fr | cmp - src/c4th/tests/expected/core-64.txt
+	rm -f .c4th_core .c4th_fact.c4r .c4th_ccasm
 	@echo "test-c4th: OK"
 
 c4sp: $(C4SP_SRCS)

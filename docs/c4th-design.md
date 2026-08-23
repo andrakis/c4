@@ -306,9 +306,45 @@ with.
       it, c4sp and c4th implement languages whose integers are its cells — so
       `-fwrapv` now applies tree-wide. It matters more since A1.4 put the
       native c4sp on `-O2` for the first time.
-- [ ] **B4** P1 threaded-code peephole + `asm.f` (a C4 opcode assembler in
-      Forth). *Verify:* `make test-c4th` green with P1 on; `asm.f` assembles a
-      hand-written factorial to bytes identical to `c4cc`'s
+- [x] **B4** P1 threaded-code peephole + `asm.f`. `asm.f` 118, `peep.f` 168.
+      *Verified:* `make test-c4th`, three ways.
+
+      **`asm.f` against c4cc.** `src/c4th/tests/fact.c` is compiled by c4cc
+      and the same program hand-assembled in `src/c4th/tests/fact.f`; the two
+      instruction sequences must match. Addresses are masked — they depend on
+      where the segments landed, and the claim is about the encoding.
+      Emitting words carry a trailing comma (`IMM,`, `ADD,`), which is the
+      Forth convention for "compile this" and incidentally keeps `AND`, `OR`,
+      `XOR` and `LT` from colliding with the Forth words of those names.
+
+      **The peephole, rule by rule.** `LIT a LIT b +|-|*` folds; `DUP DROP`,
+      `SWAP SWAP` and `>R R>` cancel. Compaction moves addresses, so this is a
+      real rebuild: decode the body, copy survivors into a scratch buffer
+      recording where each lands, rewrite every branch operand through that
+      map, copy back. A rule is refused if it would delete an instruction that
+      something branches to.
+
+      **And the check that actually matters**: the whole Forth-2012 CORE suite
+      run again with the peephole applied to *every* definition, including the
+      test harness's own, producing a transcript byte-identical to the
+      unoptimized golden — natively and under c4m. A peephole exercised only
+      by its own tests is one nobody trusts.
+
+      **Honest result: 2 instructions removed across the entire suite.** Hand
+      written Forth has almost no redundancy for these rules to find. That was
+      the expectation going in, and it is why B4 exists: the pattern matcher,
+      the instruction decoder and the address fixup all had to be built and
+      debugged, and B5 needs all three.
+
+      Two bugs, both instructive. `FOLD?` left its address on the stack in one
+      branch and not the other. And the final `MOVE` ran backwards, so the
+      rebuilt body was never installed while `HERE` still moved down —
+      silently truncating every definition, which looked like success on any
+      word that did not need its tail. The rebuilt code's branch operands were
+      then written with addresses inside the *scratch* buffer rather than the
+      final one; since the scratch buffer still held a copy, that too appeared
+      to work until the next definition was optimized over the top of it. All
+      three were found by the standards suite, none by the rule tests.
 - [ ] **B5** Native backend + metacompiler. **Do not start before B3 is
       complete** — the standard suite is the oracle that catches stack-model
       bugs. *Verify:* the c4opt byte-identical differential above; then

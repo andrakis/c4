@@ -1,0 +1,28 @@
+ENT  0
+LEA  2
+LI
+PSH
+IMM  2
+LT
+BZ   *
+IMM  1
+LEV
+LEA  2
+LI
+PSH
+LEA  2
+LI
+PSH
+IMM  1
+SUB
+PSH
+JSR  *
+ADJ  1
+MUL
+LEV
+ENT  0
+IMM  10
+PSH
+JSR  *
+ADJ  1
+LEV

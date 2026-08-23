@@ -93,6 +93,14 @@ void th_p_rot (int *w)  { int a,b,c; c=th_pop(); b=th_pop(); a=th_pop(); th_push
 void th_p_nrot (int *w) { int a,b,c; c=th_pop(); b=th_pop(); a=th_pop(); th_push(c); th_push(a); th_push(b); }
 void th_p_qdup (int *w) { int x; x = th_pop(); th_push(x); if (x) th_push(x); }
 void th_p_depth (int *w){ th_push(th_sp - th_dstack); }
+// PICK is CORE EXT rather than CORE, but the peephole's pattern matcher
+// reads several instructions ahead and wants it. 0 PICK is DUP.
+void th_p_pick (int *w) {
+	int n;
+	n = th_pop();
+	if (n < 0 || th_sp - th_dstack <= n) { printf("c4th: PICK out of range\n"); th_err = 1; return; }
+	th_push(th_sp[-1 - n]);
+}
 void th_p_2dup (int *w) { int a,b; b=th_pop(); a=th_pop(); th_push(a); th_push(b); th_push(a); th_push(b); }
 void th_p_2drop (int *w){ th_pop(); th_pop(); }
 void th_p_2swap (int *w){ int a,b,c,d; d=th_pop(); c=th_pop(); b=th_pop(); a=th_pop(); th_push(c); th_push(d); th_push(a); th_push(b); }
@@ -323,6 +331,7 @@ void th_prims_init () {
 	th_defword("NIP",0,(int)&th_p_nip);        th_defword("TUCK",0,(int)&th_p_tuck);
 	th_defword("ROT",0,(int)&th_p_rot);        th_defword("-ROT",0,(int)&th_p_nrot);
 	th_defword("?DUP",0,(int)&th_p_qdup);      th_defword("DEPTH",0,(int)&th_p_depth);
+	th_defword("PICK",0,(int)&th_p_pick);
 	th_defword("2DUP",0,(int)&th_p_2dup);      th_defword("2DROP",0,(int)&th_p_2drop);
 	th_defword("2SWAP",0,(int)&th_p_2swap);    th_defword("2OVER",0,(int)&th_p_2over);
 	th_defword(">R",FL_COMPONLY,(int)&th_p_tor);

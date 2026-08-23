@@ -560,6 +560,15 @@ test-c4th: c4th c4th.c4r $(C4M) $(C4KE_C4R)
 	# than by trusting the benchmark that motivated them. The transcript
 	# must come out byte-identical: same answers, different instructions.
 	$(C4M) load-c4r.c -- c4th.c4r src/c4th/forth/core.f src/c4th/forth/asm.f src/c4th/forth/native.f src/c4th/tests/nopc.f src/c4th/tests/b5.f | cmp - src/c4th/tests/expected/b5.txt
+	# And the differential fuzzer, both ways. b5.f is the cases somebody
+	# thought of; this is two thousand nobody did -- random balanced
+	# definitions with branches, IF/ELSE and counted loops, each run on
+	# the threaded engine and then compiled and CALLED, with the answers
+	# required to agree. The seed is fixed, so a failure reproduces.
+	# Verified to actually catch things: a one-character change to -ROT's
+	# permutation turns this from 0 mismatches into 8.
+	$(C4M) load-c4r.c -- c4th.c4r src/c4th/forth/core.f src/c4th/forth/asm.f src/c4th/forth/native.f src/c4th/tests/fuzz.f | cmp - src/c4th/tests/expected/fuzz.txt
+	$(C4M) load-c4r.c -- c4th.c4r src/c4th/forth/core.f src/c4th/forth/asm.f src/c4th/forth/native.f src/c4th/tests/nopc.f src/c4th/tests/fuzz.f | cmp - src/c4th/tests/expected/fuzz.txt
 	rm -f .c4th_core .c4th_fact.c4r .c4th_ccasm .c4th_b5
 	@echo "test-c4th: OK"
 

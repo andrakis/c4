@@ -559,6 +559,71 @@ reordering is still a top blocker in code that matters.
       is now entirely "primitives the backend cannot inline", which is
       B5d's problem, not the code generator's.
 
+### The fuzzer, and the bug it found (2026-08-23)
+
+`b5.f` is sixty-three cases somebody thought of, and the Forth-2012 CORE
+suite exercises the *threaded* engine, not the backend. So
+`src/c4th/tests/fuzz.f` generates cases nobody thought of — 75,000 of
+them across five seeds with no mismatch, after the one below was fixed: random
+definitions built from a table of operations, each one run on the
+threaded engine — the oracle, since it is what passes the standards
+suite — and then compiled and **called**, with the answers required to
+agree. Two thousand per run, both with the fused opcodes and without,
+pinned in `make test-c4th`.
+
+Three things make it worth having rather than decorative:
+
+* **Every generated definition is balanced by construction.** The
+  generator tracks the compile-time depth and only picks an operation
+  the depth can afford, then pads or drops back at the end of every
+  block. A definition that underflows, or whose `IF` arms leave
+  different depths, tests the backend's *refusal* rather than its code.
+* **It generates control flow**, not just expressions: `IF`, `IF/ELSE`
+  and counted loops with `I`, because the branch-target depth check, the
+  pin and the loop's frame cells only come out under control flow. And
+  `@`, `!` and `+!` on one scratch cell — always a valid address, and
+  the reason to bother is that `!` is where the permutation machinery is
+  used in anger, since C4's store wants its address pushed before the
+  value is computed while Forth writes the value first.
+* **It was verified to fail.** A one-character change to `-ROT`'s
+  permutation turns 0 mismatches into 8, with the offending definition
+  printed. A fuzzer that cannot fail is decoration.
+
+**And it found a real one, in code that shipped at B5b.** A permutation
+rebuilds the top regions and writes the `PSH` separators back between
+them — and it assumed the cell just before each region *was* such a
+separator. It usually is: `NEWITEM` spills the accumulator, and that
+spill is the `PSH`. But when the item below is **already on the stack**,
+no `PSH` is emitted, and the preceding cell is ordinary code. The rebuild
+then wrote `PSH` over it. In the case the fuzzer found that cell was an
+`ADJ`'s operand, which became `ADJ 13` — sixteen bytes of stack dropped
+instead of one, `LEV` returning through garbage, and the VM executing
+random memory.
+
+The shape worth remembering is not the off-by-one. It is that **the
+model knew something the buffer did not**: whether a spill had happened
+was a fact about compilation that was never written down, so the rebuild
+re-derived it from the buffer and got it wrong. `ISEP` writes it down.
+The fix is three lines; finding it was the whole point of the exercise.
+
+And it turns out to be the *right* check for a second reason. A region
+is only movable because it is balanced — it computes one value into the
+accumulator and leaves the stack as it found it. An item that reached
+the stack without its own spill got there because something else pushed
+it, which means the code attributed to it has a net effect on the stack
+and is not balanced. So "no separator" and "not balanced" are the same
+condition, and `ISEP` refuses both at once. `1 2 V ! 3 SWAP -` is the
+smallest case: the region attributed to the `1` runs through the whole
+store and leaves a value on the stack, so rotating it would be wrong
+twice over. The word still compiles and still gives 2 — the permutation
+just goes through the frame instead, which is what that fallback is for.
+
+`nDUP`, `SWAP` after a store, and `2DROP` followed by a literal are all
+ways to reach it, and none of `b5.f`, the CORE suite or `survey.f`
+did — because it needs a permutation whose *lower* operand was left on
+the stack by something other than its own spill, which is a shape hand
+written test cases do not naturally take.
+
 ### Does c4m want new opcodes? (asked again, and measured, 2026-08-23)
 
 B5b asked this about *stack* opcodes and answered no: the compiler makes

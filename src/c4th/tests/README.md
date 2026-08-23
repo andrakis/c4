@@ -22,6 +22,39 @@ on failure — so they need no reference Forth to compare against.
 
 ---
 
+## fuzz.f — the differential fuzzer
+
+`b5.f` is the cases somebody thought of. `fuzz.f` generates the ones
+nobody did: random definitions built from a table of operations, each run
+on the threaded engine — the oracle, since it is what passes the
+Forth-2012 CORE suite — and then compiled and **called**, with the
+answers required to agree.
+
+Every definition is balanced by construction: the generator tracks the
+compile-time depth and only picks an operation the depth can afford, and
+every block pads or drops back to the depth it started at. A definition
+that underflows, or whose `IF` arms leave different depths, would test
+the backend's *refusal* rather than its code. It generates `IF`,
+`IF/ELSE`, counted loops with `I`, and `@`/`!`/`+!` on a single scratch
+cell.
+
+The seed is fixed, so a failure is the same failure tomorrow and on the
+other host, and a mismatch prints the offending definition's opcode
+sequence. `make test-c4th` runs 2000 definitions with the fused opcodes
+and 2000 without. For a deeper run:
+
+    ./c4m load-c4r.c -- c4th.c4r src/c4th/forth/core.f \
+        src/c4th/forth/asm.f src/c4th/forth/native.f \
+        src/c4th/tests/fuzz.f -e '999 SEED ! 15000 FUZZ'
+
+**It has caught two things so far.** A deliberate one-character change to
+`-ROT`'s permutation turns 0 mismatches into 8 — a fuzzer that cannot
+fail is decoration. And a real bug that shipped at B5b: a permutation
+rebuilding the top regions assumed the cell before each region was the
+`PSH` that spilled the one below, which is untrue when that item was
+already on the stack. It wrote `PSH` over an `ADJ`'s operand. See
+`docs/c4th-design.md`.
+
 TODO: Difficulty selection determine endgame goals:
 * Easy: boot C4DOS, connect a serial cable to time travel machine, use a terminal application to communicate over serial with the time travel device.
 * Medium: boot C4KE, connect a network cable to a low bandwidth network connection (better than serial, not as good as ethernet), communicate to the time travel device. No DHCP, static addresses. I'm thinking an address could be 0 - 127, a single byte.

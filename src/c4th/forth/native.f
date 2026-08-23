@@ -64,6 +64,7 @@ VARIABLE NOPC
 
 CREATE ISTART NITEMS CELLS ALLOT   \ where item i's code begins, or -1 for
                                    \ "not movable"
+CREATE ISEP   NITEMS CELLS ALLOT   \ 1 if a PSH separator precedes it
 VARIABLE NENTRY                    \ arguments the definition was given
 CREATE ISCRATCH 65536 ALLOT
 VARIABLE NPINOFF                   \ nothing starting below this may move
@@ -125,7 +126,15 @@ VARIABLE 'NBODY                    \ NEMIT and NBODY are mutually recursive
 
 \ Start a new item. Whatever is in the accumulator belongs to the item
 \ below, so spill it, then record where this one begins.
+\
+\ ISEP records whether that spill actually happened. It usually does, and
+\ then the cell just before this item's code is the PSH that pushed the
+\ one below -- which is the separator a permutation rewrites. When the
+\ item below was ALREADY on the stack, no PSH is emitted, the preceding
+\ cell is ordinary code, and a permutation that assumed otherwise would
+\ overwrite it. See NPERM.
 : NEWITEM ( -- )
+   NDEPTH @ NITEMS < IF NACC @ NDEPTH @ CELLS ISEP + ! THEN
    SPILL
    NDEPTH @ NITEMS < IF ASM-LEN NDEPTH @ IOFF! ELSE 0 NOK ! THEN
    1 NDEPTH +! ;
@@ -254,6 +263,12 @@ VARIABLE NK  VARIABLE NB0  VARIABLE NPP  VARIABLE NPI  VARIABLE NPB
    NEED-ACC
    NK @ 0 DO
       NB0 @ I + IOFF  DUP 0 < IF DROP UNLOOP 0 EXIT THEN  I R@S !
+   LOOP
+   \ Every region but the first must be preceded by a real PSH, because
+   \ the rebuild writes the separators back and would otherwise write one
+   \ over a cell that is code -- which is a wrong answer, not a crash.
+   NK @ 1 ?DO
+      NB0 @ I + CELLS ISEP + @ 0= IF UNLOOP 0 EXIT THEN
    LOOP
    0 R@S @ NPINOFF @ < IF 0 EXIT THEN
    NK @ 1- 0 ?DO
@@ -556,6 +571,7 @@ CREATE NVPROBE
    2 NEED
    NDEPTH @ 2 < IF EXIT THEN
    NEED-ACC
+   NDEPTH @ 1- CELLS ISEP + @ 0= IF 1 N-COPY EXIT THEN
    NDEPTH @ 2 - IOFF   NDEPTH @ 1- IOFF   ( sa sb )
    2DUP 0 >= SWAP 0 >= AND IF
       2DUP SWAP - 1 CELLS -  2 CELLS = IF

@@ -178,6 +178,35 @@ test-c4l: $(C4) $(C4M) $(C4CC) $(TESTS)/hello.c4r
 	rm -f .c4l_sw.c4r
 	@echo "test-c4l: OK"
 
+# c4m's guest allocator: MALC, FREE and RALC (docs/compiler-speed.md).
+# RALC was dead -- in the opcode enum and the builtin table, but with its
+# VM case commented out, so guest code compiled fine and then fell through
+# to the unknown-instruction path with the SIZE argument left in the
+# accumulator. Using that as a pointer segfaults, which is why this test
+# pins behaviour rather than merely "does not crash".
+#
+# What the three legs pin, and why each is here:
+#   native c4m       -- the ordinary path, against a gcc-generated golden
+#   ./c4 c4m.c       -- c4m interpreted by UNMODIFIED c4. This is the leg
+#                       that matters most: it proves the allocator is
+#                       written in the plain c4 subset, and it is the leg
+#                       that caught the first design. Sizes are kept in a
+#                       side table rather than a header in front of each
+#                       block, because guest free() is reached by pointers
+#                       guest malloc() never produced -- this chain issues
+#                       8 MALCs and 16 FREEs where the native run is a
+#                       balanced 17/17, so free(q - 1) would corrupt the
+#                       heap. c4's own trailing "exit(N) cycle = M" line
+#                       is stripped; it is c4 reporting on c4m, not output.
+# The golden is gcc's, so a divergence is a real divergence from C, not
+# from some earlier c4m.
+test-c4m-mem: $(C4) $(C4M) $(C4CC)
+	$(C4CC) -o .c4m_ralloc.c4r $(TESTS)/test_realloc.c
+	$(C4M) load-c4r.c -- .c4m_ralloc.c4r | cmp - $(TESTS)/expected/test_realloc.txt
+	$(C4) $(C4M).c load-c4r.c -- .c4m_ralloc.c4r | sed -e '/^exit([0-9-]*) cycle = [0-9]*$$/d' | cmp - $(TESTS)/expected/test_realloc.txt
+	rm -f .c4m_ralloc.c4r
+	@echo "test-c4m-mem: OK"
+
 # cpp, the C preprocessor for the C4 toolchain (docs/c4dos-design.md).
 # Strict-c4 dialect: the same source is a native binary here, a .c4r
 # via c4cc, and runs interpreted under plain c4 (test-cpp checks that
@@ -1300,6 +1329,7 @@ PHONY += run-c4 run-c4-vg test-c4 test-massive-c4
 PHONY += run-c4-alt run-c4-alt-vg
 PHONY += test-c4ix test-c4ix-fmt test-c4ix-c4ke test-c4ix-c4ke-nested test-c4ix-c4 run-c4ix run-c4ix-c4 demo-c4ix demo-c4ix-c4 bench-c4ix
 PHONY += test-c4mp
+PHONY += test-c4m-mem
 PHONY += c4or1k-m0 c4or1k-m1 c4or1k-m1-check c4or1k-m2 c4or1k-m2-check c4or1k-m3 c4or1k-m3-check c4or1k-m3-int-check c4or1k-boot c4or1k-boot-mp c4or1k-boot-cisc c4or1k-boot-jit c4or1k-boot-native
 PHONY += pkg c4rs or1k
 PHONY += pi

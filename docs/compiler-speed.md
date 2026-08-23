@@ -1,0 +1,222 @@
+# Compiler speed — c4m memory opcodes, c4sp cheap wins, and c4lcc
+
+Tracker for the work that makes C4IX build fast. Companion to
+`docs/c4th-design.md` (a separate, independent track).
+
+**Rule for this document:** tick a box only when its verification command has
+actually been run and is green, and paste the one-line evidence beside it.
+Anything discovered mid-implementation that changes a later milestone gets
+written in here, not just said in conversation — including bugs found on the
+way and scope corrections. Say plainly what was *not* done and why.
+
+## Why
+
+Building C4IX costs ~60 s of compiler time for an OS of 3,700 lines: 12 serial
+`c4sp`+`c4lc` invocations at ~43 s for the kernel, plus ~18.5 s for `libc4ix`
+and the 14 userland programs. Under `c4m` the same work carries a ~65-70x
+interpretation penalty, which is why every Makefile rule runs `./c4sp`
+natively.
+
+The cost is structural. c4sp's values are 4-word heap cells under a
+conservative mark & sweep collector; environments are alists, so every variable
+reference is a linear walk; every CEK continuation frame is an arena
+allocation; builtin dispatch is a ~30-comparison if-chain
+(`src/c4sp/include/stdlib.h:9-10`); and the native build is pinned at `gcc -O0`
+because the collector finds roots by scanning the stack (`Makefile:404-408`).
+
+## Measurements taken while planning (2026-08-23)
+
+Recorded here because two of them contradict what the docs say.
+
+- **The published baseline is stale.** `docs/c4lc-design.md:59-65` records
+  0.67 s / 14,981 tokens for lexing `c4cc.c`. Actual, three identical runs:
+  `./c4sp -c 2000000 .../c4lc-tokens.lisp -count src/c4cc/c4cc.c` →
+  `tokens 15023`, **0.90 s**.
+- **c4lc uses no `call/cc` and no first-class environments.** Zero occurrences
+  across `c4lc*.lisp`, `c4r.lisp`, `c4opt.lisp`. So none of c4sp's expensive
+  machinery — the CEK conversion, reified envs — is doing anything for c4lc.
+- **Therefore `-R` (the recursive evaluator, already shipped as c4sp's oracle)
+  is both safe and faster for c4lc.** Full lex+parse of `c4cc.c`:
+  CEK **3.75 s**, `-R` **2.60 s** — **1.44x from a flag that already exists.**
+- **The C4 L7 dialect already carries programs bigger than c4lc.**
+  `src/c4or1k/` is 4,917 lines in that dialect, compiled by c4lc, and boots a
+  real Linux kernel. c4lc itself is 4,823 lines of Lisp.
+
+All later timings use `hyperfine` (warmup + medians), not hand-rolled loops.
+
+---
+
+## Track 0 — c4m's memory opcodes
+
+Three findings, verified by reading `c4m.c`:
+
+- **`RALC` is dead.** The case is commented out (`c4m.c:1690`) but `realloc` is
+  in the builtin table (`c4m.c:308`) and `RALC` is in the opcode enum, so guest
+  code compiles and then falls through to the unknown-instruction path, leaving
+  the size argument in the accumulator.
+- **`c4_malloc`/`c4_free`/`c4_realloc` do not exist on either host.** The
+  native block has all three commented out with `// TODO: native c4_malloc, etc
+  disabled due to bad implementation` (`c4m.c:1026-1029`); there is no
+  C4-hosted implementation at all. The VM calls raw `malloc`/`free`.
+- **`MSET`, `MCMP`, `MCPY` have no protected-mode guard** (`c4m.c:1700-1702`)
+  while `MALC`, `FREE`, `PRTF` do. A protected task can `memset`/`memcpy` over
+  arbitrary host memory, including kernel structures and the VM's own state.
+  `STRC`'s guard is commented out too (`c4m.c:1704-1709`).
+
+**Design as built — a side table, not a size header.** The obvious fix is to
+over-allocate, stash the length in front of the block and return the word after
+it. **That is wrong here, and it was tried first.** Guest `free()` is reached by
+pointers that guest `malloc()` never produced: instrumenting the MALC and FREE
+opcode handlers on `./c4 c4m.c load-c4r.c -- prog.c4r` shows the loader issuing
+**8 MALCs and 16 FREEs**, where the identical workload on native c4m is a
+balanced **17/17**. With a header, those eight extra frees become `free(q - 1)`
+on pointers that were never offset — heap corruption, and in practice an
+immediate `free(): invalid pointer` abort.
+
+So sizes live in a **pointer-keyed side table** and guest pointers are handed
+out and taken back byte-for-byte as before:
+
+    c4_malloc(n)      p = malloc(n); record (p, n); return p
+    c4_free(p)        forget p (a no-op if it was never ours); free(p)
+    c4_realloc(p,n)   !p -> malloc; n <= 0 -> free, null;
+                      look up old size; malloc, copy min(old,n), free old;
+                      refuse (return 0) if the pointer is not one of ours
+
+Open addressing, linear probing, power-of-two capacity, tombstones on delete,
+rehash on growth. It needs only `malloc`, `free`, `memset` and the existing
+`c4_memcpy`, so **one implementation serves both hosts** and they cannot drift.
+The compatibility risk is zero *by construction* rather than by audit: `free()`
+of something we never allocated does exactly what it did before.
+
+- [x] **0.1** Audit of `FREE` call sites — **and the lesson**: the source-level
+      audit (`load-c4r.c`, `c4ke.c`, `src/c4ix/*`, `c4sp`, `c4l.c`,
+      `src/c4mp/*`) found no `free()` of a non-`malloc` pointer and was
+      therefore **wrong**. Only instrumenting the opcode handlers at runtime
+      revealed the 8-vs-16 asymmetry. Audit the behaviour, not the source.
+- [x] **0.2** `src/tests/test_realloc.c` — grow, shrink, NULL ptr, from-null,
+      growth loop, alloc/realloc/free churn — green under gcc, which generated
+      `src/tests/expected/test_realloc.txt`. `realloc(p, 0)` is deliberately
+      **not** exercised for its return value beyond "frees and yields null",
+      since the C standards diverge there; c4m matches glibc.
+- [x] **0.3** `c4_malloc`/`c4_free`/`c4_realloc` + the side table implemented in
+      `c4m.c`; `RALC` re-enabled with the same protected-mode guard `MALC` and
+      `FREE` carry
+- [x] **0.4** `make test-c4m-mem` green: native c4m and `./c4 c4m.c` (c4m
+      interpreted by unmodified c4) both reproduce the gcc golden exactly. The
+      second leg is also the proof that the new code is in the plain c4 subset.
+- [x] **0.5** Full suite green — `test-c4l`, `test-link`, `test-c4sp`, `test`,
+      `test-c4ke-ramfs`, `test-oisc4`, `test-c4lc`, `test-c4ix` all PASS.
+      **`test-c4mp` FAILS, and did so before this change too** (verified by
+      stashing `c4m.c` and rebuilding): `test-c4mp: FAIL raycast: output
+      differs`. Pre-existing, unrelated, and **still open** — see below.
+- [ ] **0.6** PM guards for `MSET`/`MCMP`/`MCPY` behind a `CONF_` flag, opt-in
+      like `CONF_TRAP_RESTORES_INTERVAL`, with kernel-side emulation in C4IX
+      (**separate change** — guarding them unconditionally would trap every
+      protected task's first `memset`, since libc4ix uses them in userland).
+      Not started.
+
+### Open questions raised by this work
+
+- **Why does the plain-c4 chain free more than it allocates?** `./c4 c4m.c
+  load-c4r.c -- prog.c4r` issues 8 MALCs and 16 FREEs; native c4m issues 17 and
+  17, with the loader's own allocations (255, 72, 88, 98, 760, 32, 120, 56, 6
+  bytes) plainly visible. In the plain-c4 chain those nine allocations do not
+  reach c4m's MALC handler at all, yet their frees reach its FREE handler. The
+  side-table design is immune either way, so this did not need answering to land
+  the fix — but something is asymmetric between the hosts and it is worth
+  knowing what.
+- **`test-c4mp` / raycast is red on `main` as it stands.** Not investigated.
+
+Payoff beyond the bug: removes the "never call realloc" constraint, so c4th can
+grow its arenas instead of pre-sizing them.
+
+---
+
+## Track A1 — the cheap wins
+
+The honest denominator for anything measured later. Re-measure
+`make c4ix.c4r $(C4IX_PROGS)` from clean after each and paste the number.
+
+- [ ] **A1.0** Baseline: full clean C4IX build timed with hyperfine
+- [ ] **A1.1** `perf` profile of native c4sp during a real c4lc run — *before*
+      assuming where the time goes. Record the top symbols here.
+- [ ] **A1.2** `-R` verified safe across all 12 C4IX modules + the `src/tests`
+      parse sweep (risk: C-stack depth, the one thing CEK bought), then made
+      the default in the c4lc Makefile invocations. Keep CEK reachable.
+- [ ] **A1.3** c4sp JSRI builtin dispatch (design §7, never built;
+      `stdlib.h:9-10`). Buildable now: `c4cc.c:808-810` emits `IMM &fn` and
+      `load-c4r.c:997-1001` shows the macro idiom that makes gcc accept the
+      same source. Measure with `__c4_cycles()` around `builtin_call` first.
+- [ ] **A1.4** Unpin `gcc -O0` (`Makefile:404-408`): `setjmp` into a local
+      `jmp_buf` immediately before the root scan and include the buffer in the
+      scanned range, plus `-fno-omit-frame-pointer`
+- [ ] **A1.5** Build `c4sp.c4r` with `c4lc -O` instead of `c4cc`
+      (`Makefile:409-410`)
+- [ ] **A1.6** Parallelise the C4IX module build — `c4lc_compile_par` already
+      exists (`Makefile:611-628`) and `C4IX_MODS` is still a serial `for`
+      (`Makefile:842`). *(Note: the Makefile defines `c4lc_compile_par` twice;
+      the later definition wins.)*
+- [ ] **A1.7** Final re-measure, all wins combined
+
+---
+
+## Track A2 — c4lcc, c4lc in C
+
+Port c4lc to the C4 L7 dialect, keeping its architecture, phases, IR and `.c4r`
+output exactly. Builds two ways: `gcc -O2` natively, and `c4lc`/`c4lcc` for
+`c4lcc.c4r` under c4m.
+
+**Why this is the low-risk option:** at every step c4lc is a working oracle
+emitting byte-identical expected output. The port never has to be guessed at.
+
+**Where the speed comes from**, only one of which is "being compiled":
+native code; **arena allocation, no GC** (a compiler is a batch process —
+bump-allocate, free everything at exit); and **arrays instead of cons cells**
+for the hot structures (`c4lc-design.md §12` proposes this itself — the token
+list for `c4cc.c` is 15,023 tokens × 4-word cells today).
+
+Each module is differentially verified against the Lisp before moving on.
+
+- [ ] **A2.1** `c4r.c` ← `c4r.lisp` (561 L) — byte-identical round trip of
+      existing `.c4r` images vs `c4r-roundtrip.lisp`
+- [ ] **A2.2** `lex.c` ← `c4lc-lex.lisp` (375 L) — token dump ==
+      `expected/c4lc-tokens.txt`; `-count` on `c4cc.c` == 15,023
+- [ ] **A2.3** `pp.c` ← `c4lc-pp.lisp` (576 L) — output byte-identical to
+      `gcc -E` for all 12 C4IX modules (the existing bar)
+- [ ] **A2.4** `parse.c` ← `c4lc-parse.lisp` (888 L) — AST dump ==
+      `expected/c4lc-ast.txt`; parse sweep over `src/tests/*.c`
+- [ ] **A2.5** `gen.c` ← `c4lc-gen.lisp` (1534 L) — emitted `.c4r`
+      **byte-identical to c4lc's** across the whole `C4LC_DIFF` corpus
+- [ ] **A2.6** `tree.c` + `opt.c` ← `c4lc-tree.lisp` + `c4opt.lisp` (779 L) —
+      `-O` output byte-identical
+- [ ] **A2.7** Driver + `-c` object mode — `.c4o` objects link with c4cc/c4lc
+      objects in either order
+- [ ] **A2.8** Bootstrap fixed point: c4lc compiles `c4lcc.c` → `c4lcc.c4r`,
+      then c4lcc compiles `c4lcc.c` itself → **byte-identical**, because a
+      faithful port emits what c4lc emits
+- [ ] **A2.9** C4IX rebuilt with c4lcc, images byte-identical to the c4lc
+      build, before switching `Makefile:839` over
+- [ ] **A2.10** Final numbers: native C4IX build time, and `c4lcc.c4r` under
+      c4m vs `c4cc`
+
+Expect ~6,000-7,000 lines of C for 4,823 of Lisp.
+
+---
+
+## Out of scope / later
+
+- Anything about hosting a compiler on Forth. Answered during planning: Forth's
+  ceiling is no higher than C's (both end at native code) and its port is the
+  hardest of the options, because it is point-free — `c4lc-gen.lisp`'s 1,534
+  lines of recursion with many named locals would need redesigning, not
+  translating. c4th is built for its own sake instead; see
+  `docs/c4th-design.md`.
+- Host choice does not affect C99 coverage: the features live in the ~4,800
+  lines of front-end logic, so every option carries all of them and the
+  "keep C99" requirement is exactly the porting cost.
+
+## Process
+
+`timeout N` on every `c4`/`c4m`/`c4sp` invocation and
+`pkill -f "c4m load-c4r"` afterwards; no background jobs left running; read any
+regenerated golden file for its failure text before committing it.

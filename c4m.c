@@ -1038,6 +1038,184 @@ int do_puts   (char *str) { return printf("%s", str); }
 #define do_puts(s)         puts(s)
 #endif
 
+// Guest memory: malloc(), free() and realloc() for the MALC, FREE and RALC
+// opcodes.
+//
+// The VM has no way to ask the host how large an allocation was, which is
+// why the C4 versions of malloc()/realloc() were removed in 2024 (see the
+// note at the top of this file) and why RALC has been dead ever since --
+// its case was commented out, so guest code compiled fine and then fell
+// through to the unknown-instruction path, leaving the SIZE argument in
+// the accumulator for the guest to use as a pointer. That is a segfault,
+// not a diagnostic.
+//
+// The obvious fix is a size header: over-allocate, stash the length in
+// front, hand back the word after it. DO NOT DO THAT. Guest free() is
+// reached by pointers that guest malloc() never produced -- measured, on
+// ./c4 c4m.c load-c4r.c -- prog.c4r, where the loader issues 8 MALCs and
+// 16 FREEs while the same run compiled natively is a balanced 17/17. A
+// header makes free() do free(q - 1), and on those pointers that is heap
+// corruption. (Why the counts differ between hosts is a separate open
+// question, recorded in docs/compiler-speed.md; it is not this code's to
+// answer, and this design does not care either way.)
+//
+// So sizes live in a side table keyed by pointer, and guest pointers are
+// handed out and taken back EXACTLY as before. free() of something we
+// never allocated falls through to a plain free(), which is precisely
+// what it did before this change -- the compatibility risk is zero by
+// construction rather than by audit. Only realloc() needs the table, and
+// realloc() is only ever legal on your own allocation.
+//
+// Open addressing, linear probing, power-of-two capacity, tombstones on
+// delete. Growth rehashes into a fresh pair of arrays, so it needs only
+// malloc/free/memset -- all of which plain c4 has. That matters: ONE
+// implementation serves both hosts and they cannot drift apart.
+enum { C4_MT_EMPTY = 0, C4_MT_DEAD = 1, C4_MT_MIN = 4096 };
+
+int *c4_mt_key;   // pointer keys; 0 = never used, 1 = tombstone
+int *c4_mt_val;   // sizes, parallel to c4_mt_key
+int  c4_mt_cap;   // capacity, always a power of two
+int  c4_mt_fill;  // live entries + tombstones (what probing must bound)
+int  c4_mt_live;  // live entries only
+
+// Heap pointers are at least word aligned, so the low bits carry no
+// information; fold a high slice down before masking or every allocation
+// in one arena lands in the same cluster.
+int c4_mt_slot (int p) {
+  int h;
+
+  h = (p >> 4) ^ (p >> 20);
+  if (h < 0) h = 0 - h;
+  return h & (c4_mt_cap - 1);
+}
+
+void c4_mt_setup (int cap) {
+  c4_mt_cap  = cap;
+  c4_mt_key  = malloc(cap * sizeof(int));
+  c4_mt_val  = malloc(cap * sizeof(int));
+  if (!c4_mt_key || !c4_mt_val) { c4_mt_cap = 0; return; }
+  memset((char *)c4_mt_key, 0, cap * sizeof(int));
+  memset((char *)c4_mt_val, 0, cap * sizeof(int));
+  c4_mt_fill = 0;
+  c4_mt_live = 0;
+}
+
+// Insert without growing or checking for duplicates. Used by both the
+// public insert and by rehashing, which knows its keys are distinct.
+void c4_mt_put_raw (int p, int n) {
+  int i;
+
+  i = c4_mt_slot(p);
+  while (c4_mt_key[i] != C4_MT_EMPTY && c4_mt_key[i] != C4_MT_DEAD) {
+    if (c4_mt_key[i] == p) { c4_mt_val[i] = n; return; }
+    i = (i + 1) & (c4_mt_cap - 1);
+  }
+  if (c4_mt_key[i] == C4_MT_EMPTY) ++c4_mt_fill;
+  c4_mt_key[i] = p;
+  c4_mt_val[i] = n;
+  ++c4_mt_live;
+}
+
+// Rehash into a table sized for the LIVE entries, which also sweeps the
+// tombstones away. Called when probing distance would otherwise grow.
+void c4_mt_grow () {
+  int *oldk;
+  int *oldv;
+  int  oldcap, i, want;
+
+  oldk = c4_mt_key; oldv = c4_mt_val; oldcap = c4_mt_cap;
+  want = C4_MT_MIN;
+  while (want < (c4_mt_live + c4_mt_live + c4_mt_live)) want = want + want;
+  c4_mt_setup(want);
+  if (!c4_mt_cap) { c4_mt_key = oldk; c4_mt_val = oldv; c4_mt_cap = oldcap; return; }
+  i = 0;
+  while (i < oldcap) {
+    if (oldk[i] != C4_MT_EMPTY && oldk[i] != C4_MT_DEAD)
+      c4_mt_put_raw(oldk[i], oldv[i]);
+    ++i;
+  }
+  free(oldk);
+  free(oldv);
+}
+
+void c4_mt_put (int p, int n) {
+  if (!c4_mt_cap) c4_mt_setup(C4_MT_MIN);
+  if (!c4_mt_cap) return;                       // out of memory: sizes are
+                                                // lost, realloc will refuse
+  // Keep the table at most half full counting tombstones, so a probe
+  // always terminates quickly.
+  if ((c4_mt_fill + c4_mt_fill) >= c4_mt_cap) c4_mt_grow();
+  c4_mt_put_raw(p, n);
+}
+
+// Returns the recorded size, or -1 if we did not allocate this pointer.
+int c4_mt_get (int p) {
+  int i, n;
+
+  if (!c4_mt_cap) return -1;
+  i = c4_mt_slot(p);
+  n = 0;
+  while (c4_mt_key[i] != C4_MT_EMPTY && n < c4_mt_cap) {
+    if (c4_mt_key[i] == p) return c4_mt_val[i];
+    i = (i + 1) & (c4_mt_cap - 1);
+    ++n;
+  }
+  return -1;
+}
+
+// Drop a pointer, leaving a tombstone so probe chains through it survive.
+void c4_mt_del (int p) {
+  int i, n;
+
+  if (!c4_mt_cap) return;
+  i = c4_mt_slot(p);
+  n = 0;
+  while (c4_mt_key[i] != C4_MT_EMPTY && n < c4_mt_cap) {
+    if (c4_mt_key[i] == p) {
+      c4_mt_key[i] = C4_MT_DEAD;
+      c4_mt_val[i] = 0;
+      --c4_mt_live;
+      return;
+    }
+    i = (i + 1) & (c4_mt_cap - 1);
+    ++n;
+  }
+}
+
+int c4_malloc (int n) {
+  int p;
+
+  if (n < 0) return 0;
+  if (!(p = (int)malloc(n))) return 0;
+  c4_mt_put(p, n);
+  return p;
+}
+
+void c4_free (int p) {
+  if (!p) return;
+  c4_mt_del(p);          // a no-op for pointers that were never ours
+  free((void *)p);
+}
+
+int c4_realloc (int p, int n) {
+  int r, old;
+
+  // realloc(0, n) is malloc(n); realloc(p, 0) frees and yields null,
+  // which is what glibc does and therefore what the gcc oracle in
+  // src/tests/test_realloc.c pins.
+  if (!p) return c4_malloc(n);
+  if (n <= 0) { c4_free(p); return 0; }
+  old = c4_mt_get(p);
+  // A pointer we never handed out has no recorded length, so there is no
+  // safe number of bytes to copy. Refusing is the only honest answer.
+  if (old < 0) return 0;
+  if (!(r = c4_malloc(n))) return 0;
+  if (old > n) old = n;
+  c4_memcpy((char *)r, (char *)p, old);
+  c4_free(p);
+  return r;
+}
+
 int  tlev_instruction;
 
 // When set, TLEV restores the cycle interrupt interval that was in
@@ -1680,17 +1858,25 @@ int c4m_main(int argc, char **argv)
     }
     else if (i == MALC) {
 		if (mode == MODE_UNPROTECTED)
-            a = (int)malloc(*sp);
+            a = c4_malloc(*sp);
 		else {
 			trap(TRAP_PM_VIOLATION, MALC, trap_handler, &sp, &bp, &pc, a, mode);
 			cycle_interrupt_interval = 0;
 			mode = MODE_UNPROTECTED;
 		}
 	}
-    //else if (i == RALC) a = (int)c4_realloc((int*)sp[1], *sp);
+    else if (i == RALC) {
+		if (mode == MODE_UNPROTECTED)
+            a = c4_realloc(sp[1], *sp);
+		else {
+			trap(TRAP_PM_VIOLATION, RALC, trap_handler, &sp, &bp, &pc, a, mode);
+			cycle_interrupt_interval = 0;
+			mode = MODE_UNPROTECTED;
+		}
+	}
     else if (i == FREE) {
 		if (mode == MODE_UNPROTECTED)
-            free((void *)*sp);
+            c4_free(*sp);
 		else {
 			trap(TRAP_PM_VIOLATION, FREE, trap_handler, &sp, &bp, &pc, a, mode);
 			cycle_interrupt_interval = 0;

@@ -44,6 +44,15 @@ C4M       := ./c4m
 C4CC      := ./c4cc
 C4RDUMP   := ./c4rdump
 C4RLINK   := ./c4rlink
+# c4sp running c4lc. -R selects the recursive evaluator instead of the CEK
+# machine: c4lc uses neither call/cc nor first-class environments, the two
+# things CEK exists for, so it only pays the cost -- every kont push is an
+# arena allocation. Worth 1.63x on the C4IX kernel build. Verified
+# byte-identical on all 12 C4IX modules and on the three deep bootstrap
+# images (c4ke.c, c4sp.c, c4m.c), and pinned by test-c4lc. The test rules
+# below deliberately stay on the default evaluator, so both paths are
+# exercised and a divergence would show up as a failing diff, not silence.
+C4SPLC    := ./c4sp -R
 SRCS      := src
 INCLUDE   := include
 C4CC_SRCS := $(SRCS)/c4cc/c4cc.c $(SRCS)/c4cc/asm-c4r.c
@@ -318,7 +327,7 @@ c4ke-src.tar: $(C4KE_KIT_SRCS)
 # transient with something to draw, and the honest test of that
 # restriction (src/tests/raycast.c's RC_DOS branch).
 raycast-dos.c4r: c4sp $(C4LC_LISP) $(TESTS)/raycast.c
-	./c4sp -c 16000000 src/c4sp/lisp/c4lc.lisp -O -conforming -D RC_DOS=1 \
+	$(C4SPLC) -c 16000000 src/c4sp/lisp/c4lc.lisp -O -conforming -D RC_DOS=1 \
 		$(TESTS)/raycast.c $@ > /dev/null
 
 # A boot floppy for the native run targets. C4DOS has no notion of a
@@ -567,15 +576,15 @@ C4LC_LISP := src/c4sp/lisp/c4lc.lisp src/c4sp/lisp/c4lc-lex.lisp \
 # copying over c4ke.c4r / c4sp.c4r / c4m.c4r.
 c4ke-lc.c4r: c4sp $(C4LC_LISP) $(SRCS)/c4ke/c4ke.c
 	$(PREPROC) $(SRCS)/c4ke/c4ke.c > .c4lc_klc.c
-	./c4sp -c 32000000 src/c4sp/lisp/c4lc.lisp -O .c4lc_klc.c c4ke-lc.c4r
+	$(C4SPLC) -c 32000000 src/c4sp/lisp/c4lc.lisp -O .c4lc_klc.c c4ke-lc.c4r
 	rm -f .c4lc_klc.c
 c4sp-lc.c4r: c4sp $(C4LC_LISP) $(C4SP_SRCS)
 	$(PREPROC) src/c4sp/c4sp.c > .c4lc_klc.c
-	./c4sp -c 16000000 src/c4sp/lisp/c4lc.lisp -O .c4lc_klc.c c4sp-lc.c4r
+	$(C4SPLC) -c 16000000 src/c4sp/lisp/c4lc.lisp -O .c4lc_klc.c c4sp-lc.c4r
 	rm -f .c4lc_klc.c
 c4m-lc.c4r: c4sp $(C4LC_LISP) c4m.c
 	$(PREPROC) c4m.c > .c4lc_klc.c
-	./c4sp -c 16000000 src/c4sp/lisp/c4lc.lisp -O .c4lc_klc.c c4m-lc.c4r
+	$(C4SPLC) -c 16000000 src/c4sp/lisp/c4lc.lisp -O .c4lc_klc.c c4m-lc.c4r
 	rm -f .c4lc_klc.c
 
 # OISC4: the One Instruction Set Computer (docs/oisc4-design.md).
@@ -589,7 +598,7 @@ oisc4: $(OISC4)
 # or oisc4 itself (OISC on OISC).
 oisc4-lc.c4r: c4sp $(C4LC_LISP) src/oisc4/oisc4.c
 	$(PREPROC) src/oisc4/oisc4.c > .c4lc_o4.c
-	./c4sp -c 16000000 src/c4sp/lisp/c4lc.lisp -O .c4lc_o4.c oisc4-lc.c4r
+	$(C4SPLC) -c 16000000 src/c4sp/lisp/c4lc.lisp -O .c4lc_o4.c oisc4-lc.c4r
 	rm -f .c4lc_o4.c
 test-oisc4: $(OISC4) $(C4M) c4.c4r c4sp.c4r $(TESTS_C4R)
 	bash src/oisc4/test-oisc4.sh
@@ -641,7 +650,7 @@ test-c4bb: c4bb-images $(C4M) $(TESTS_C4R)
 C4LC_JOBS ?= $(shell nproc 2>/dev/null || echo 4)
 define c4lc_compile_par
 	printf '%s\n' $(2) | xargs -P $(C4LC_JOBS) -I{} sh -c \
-		'./c4sp -c 16000000 src/c4sp/lisp/c4lc.lisp $(1) -c -I $(3) $(3)/{}.c $(4){}.c4o > /dev/null' \
+		'$(C4SPLC) -c 16000000 src/c4sp/lisp/c4lc.lisp $(1) -c -I $(3) $(3)/{}.c $(4){}.c4o > /dev/null' \
 		|| { echo "c4lc: a parallel module compile failed"; exit 1; }
 endef
 C4OR1K_SRC  := src/c4or1k
@@ -653,7 +662,7 @@ C4OR1K_MODS := mem mmio uart console bootfs virtio virtio9p eth net fpu cpu boot
 # $(1)=extra c4lc flags  $(2)=module list  $(3)=-I dir  $(4)=obj prefix
 C4LC_JOBS ?= $(shell nproc 2>/dev/null || echo 4)
 define c4lc_compile_par
-printf '%s\n' $(2) | xargs -P $(C4LC_JOBS) -I@@ sh -c './c4sp -c 16000000 src/c4sp/lisp/c4lc.lisp $(1) -c -I $(3) $(3)/@@.c $(4)@@.c4o >/dev/null'
+printf '%s\n' $(2) | xargs -P $(C4LC_JOBS) -I@@ sh -c '$(C4SPLC) -c 16000000 src/c4sp/lisp/c4lc.lisp $(1) -c -I $(3) $(3)/@@.c $(4)@@.c4o >/dev/null'
 endef
 # M13: the JIT build carries one extra module and compiles everything
 # with -D C4OR1K_JIT=1, which is what actually enables the driver-loop
@@ -839,7 +848,7 @@ c4mp: $(patsubst %,$(C4MP_SRC)/%.c,$(C4MP_MODS)) $(C4MP_HDRS) c4m_float.c
 # how c4mp.h decides whether restrict and the host headers exist.
 c4mp.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4MP_SRC)/c4mp.h $(patsubst %,$(C4MP_SRC)/%.c,$(C4MP_MODS))
 	for m in $(C4MP_MODS); do \
-		./c4sp -c 8000000 src/c4sp/lisp/c4lc.lisp -O -c -I $(C4MP_SRC) -D __c4cc__=1 \
+		$(C4SPLC) -c 8000000 src/c4sp/lisp/c4lc.lisp -O -c -I $(C4MP_SRC) -D __c4cc__=1 \
 			$(C4MP_SRC)/$$m.c .c4mp_$$m.c4o > /dev/null || exit 1; \
 	done
 	$(C4RLINK) $(patsubst %,.c4mp_%.c4o,$(C4MP_MODS)) -o c4mp.c4r
@@ -848,13 +857,13 @@ c4mp.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4MP_SRC)/c4mp.h $(patsubst %,$(C4MP_SR
 # proves they interleave. Compiled by c4lc because it calls the
 # processor opcodes, which c4cc does not know.
 c4mp-smp0.c4r: c4sp $(C4LC_LISP) $(C4MP_SRC)/guest/smp0.c
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O $(C4MP_SRC)/guest/smp0.c c4mp-smp0.c4r > /dev/null
+	$(C4SPLC) -c 4000000 src/c4sp/lisp/c4lc.lisp -O $(C4MP_SRC)/guest/smp0.c c4mp-smp0.c4r > /dev/null
 # smp1 exercises every stage-3 opcode; deadlock exists to wedge the
 # machine on purpose and be diagnosed for it.
 c4mp-smp1.c4r: c4sp $(C4LC_LISP) $(C4MP_SRC)/guest/smp1.c
-	./c4sp -c 6000000 src/c4sp/lisp/c4lc.lisp -O $(C4MP_SRC)/guest/smp1.c c4mp-smp1.c4r > /dev/null
+	$(C4SPLC) -c 6000000 src/c4sp/lisp/c4lc.lisp -O $(C4MP_SRC)/guest/smp1.c c4mp-smp1.c4r > /dev/null
 c4mp-deadlock.c4r: c4sp $(C4LC_LISP) $(C4MP_SRC)/guest/deadlock.c
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O $(C4MP_SRC)/guest/deadlock.c c4mp-deadlock.c4r > /dev/null
+	$(C4SPLC) -c 4000000 src/c4sp/lisp/c4lc.lisp -O $(C4MP_SRC)/guest/deadlock.c c4mp-deadlock.c4r > /dev/null
 # Not in the default suite: the native sweep runs every test image
 # through two VMs and the hosted checks run them through three.
 test-c4mp: c4m c4mp c4mp.c4r c4mp-smp0.c4r c4mp-smp1.c4r c4mp-deadlock.c4r $(TESTS_C4R)
@@ -869,7 +878,7 @@ c4ix.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/c4ix.h $(patsubst %,$(C4IX_SR
 	@# No gcc here: c4lc preprocesses the modules itself (L9). Each
 	@# object is byte-identical to the gcc -E path, pinned by test-c4lc.
 	for m in $(C4IX_MODS); do \
-		./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC) $(C4IX_SRC)/$$m.c .c4ix_$$m.c4o > /dev/null || exit 1; \
+		$(C4SPLC) -c 4000000 src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC) $(C4IX_SRC)/$$m.c .c4ix_$$m.c4o > /dev/null || exit 1; \
 	done
 	$(C4RLINK) $(patsubst %,.c4ix_%.c4o,$(C4IX_MODS)) -o c4ix.c4r
 	rm -f .c4ix_*.pp.c .c4ix_*.c4o
@@ -878,17 +887,17 @@ c4ix.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/c4ix.h $(patsubst %,$(C4IX_SR
 # protected mode its printf traps and the kernel emulates it onto the
 # fd layer -- redirection for programs that never heard of C4IX.
 c4ix-hello.c4r: c4sp $(C4LC_LISP) $(C4IX_SRC)/user/hello.c
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O $(C4IX_SRC)/user/hello.c c4ix-hello.c4r > /dev/null
+	$(C4SPLC) -c 4000000 src/c4sp/lisp/c4lc.lisp -O $(C4IX_SRC)/user/hello.c c4ix-hello.c4r > /dev/null
 
 # libc4ix, the userland C library, as a c4rlink archive
 libc4ix.c4l: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/lib/libc4ix.c $(C4IX_SRC)/include/c4ix_user.h
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC)/include $(C4IX_SRC)/lib/libc4ix.c .c4ix_lib.c4o > /dev/null
+	$(C4SPLC) -c 4000000 src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC)/include $(C4IX_SRC)/lib/libc4ix.c .c4ix_lib.c4o > /dev/null
 	$(C4RLINK) -r .c4ix_lib.c4o -o libc4ix.c4l
 	rm -f .c4ix_lib.pp.c .c4ix_lib.c4o
 
 # userland programs built against the library: all IO via syscalls
 c4ix-%.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libc4ix.c4l $(C4IX_SRC)/user/%.c
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC)/include $(C4IX_SRC)/user/$*.c .c4ix_u.c4o > /dev/null
+	$(C4SPLC) -c 4000000 src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC)/include $(C4IX_SRC)/user/$*.c .c4ix_u.c4o > /dev/null
 	$(C4RLINK) .c4ix_u.c4o libc4ix.c4l -o $@
 	rm -f .c4ix_u.pp.c .c4ix_u.c4o
 
@@ -1263,6 +1272,19 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	./c4m load-c4r.c -- c4ke-lc.c4r test_basic 2>&1 | grep -q "clean shutdown"
 	./c4m load-c4r.c -- c4ke-lc.c4r test_basic 2>&1 | grep -q "^  5"
 	rm -f .c4lc_a.c4r .c4lc_b.c4r .c4lc_bo.c4r .c4lc_pp.c .c4lc_out_a .c4lc_sp.c4r .c4lc_ref.c4r
+	# The two evaluators must agree. Every build rule above runs c4lc under
+	# -R (the recursive evaluator) rather than the CEK machine, because
+	# c4lc uses neither call/cc nor first-class environments and so pays
+	# CEK's per-call arena allocation for nothing. That is only safe while
+	# the two produce the same image, so pin it here on a source that
+	# exercises the whole pipeline, with and without -O.
+	./c4sp    -c 4000000 src/c4sp/lisp/c4lc.lisp -O src/tests/c4lc_l7.c .c4lc_cek.c4r > /dev/null
+	./c4sp -R -c 4000000 src/c4sp/lisp/c4lc.lisp -O src/tests/c4lc_l7.c .c4lc_rec.c4r > /dev/null
+	cmp .c4lc_cek.c4r .c4lc_rec.c4r
+	./c4sp    -c 4000000 src/c4sp/lisp/c4lc.lisp src/tests/c4lc_l7.c .c4lc_cek.c4r > /dev/null
+	./c4sp -R -c 4000000 src/c4sp/lisp/c4lc.lisp src/tests/c4lc_l7.c .c4lc_rec.c4r > /dev/null
+	cmp .c4lc_cek.c4r .c4lc_rec.c4r
+	rm -f .c4lc_cek.c4r .c4lc_rec.c4r
 	@echo "test-c4lc: OK"
 
 # The C4KE RAM filesystem: opcode-level access, the self-hosting loop

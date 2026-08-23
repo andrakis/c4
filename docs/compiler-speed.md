@@ -180,12 +180,20 @@ The honest denominator for anything measured later. Re-measure
       Green: `test-c4sp`, `test-c4sp-opt`, `test-c4sp-deep`, `test-c4lc`,
       `test-c4ix`. All 12 C4IX objects byte-identical to the pre-change
       compiler's.
-- [ ] **A1.2** `-R` as the default for the c4lc invocations. Now worth **1.63x
-      on top** of the index (kernel build 7.811 s → **4.798 s**, total **8.96x**
-      vs baseline), and all 12 modules emit byte-identical objects either way.
-      Still to check before flipping the default: the deep workloads
-      (`c4ke-lc.c4r`, `c4sp-lc.c4r` at `-c 32000000`), because C-stack depth is
-      the one thing CEK bought. Keep CEK reachable.
+- [x] **A1.2** `-R` is now the default for the c4lc **build** rules
+      (`C4SPLC := ./c4sp -R`, `Makefile:55`). c4lc uses neither `call/cc` nor
+      first-class environments — the two things the CEK machine exists for — so
+      it only pays CEK's cost, an arena allocation per continuation frame.
+      Verified byte-identical on all 12 C4IX modules **and** on the three deep
+      bootstrap images (`c4ke.c` 200,713 bytes / 5,618 lines, `c4sp.c`, `c4m.c`),
+      which also settles the C-stack-depth worry — the deepest input in the tree
+      does not come close. The **test** rules deliberately stay on the CEK
+      machine so both paths keep running, and `test-c4lc` now pins that the two
+      evaluators emit the same image with and without `-O`.
+
+      **Full clean `make c4ix.c4r`, 12 modules plus the link: 4.509 s**
+      (baseline 43.013 s for the compiles alone).
+
 - [ ] **A1.3** c4sp JSRI builtin dispatch — **deprioritised by A1.1**: the
       if-chain did not appear in the profile at all natively. It may still
       matter under c4m, where each comparison is a whole VM instruction, so

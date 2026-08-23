@@ -448,7 +448,8 @@ C4SP_SRCS := src/c4sp/c4sp.c src/c4sp/include/cell.h src/c4sp/include/gc.h \
 # there are no such registers and the scan is exact, so none of this
 # applies to c4sp.c4r.
 C4TH_SRCS := src/c4th/c4th.c src/c4th/include/mem.h src/c4th/include/dict.h \
-             src/c4th/include/inner.h src/c4th/include/prim.h
+             src/c4th/include/io.h src/c4th/include/inner.h \
+             src/c4th/include/prim.h src/c4th/include/outer.h
 # c4th (docs/c4th-design.md): a Forth for C4, built two ways from one
 # source exactly as c4sp is. -O2 needs no apology here -- c4th has no
 # collector scanning the stack, so nothing pins the native build open.
@@ -471,6 +472,17 @@ test-c4th: c4th c4th.c4r $(C4M) $(C4KE_C4R)
 	./c4th -selftest | cmp - src/c4th/tests/expected/b1.txt
 	$(C4M) load-c4r.c -- c4th.c4r -selftest | cmp - src/c4th/tests/expected/b1.txt
 	$(C4M) load-c4r.c -- $(C4KE_C4R) c4th.c4r -selftest | grep -q "selftest ok"
+	# B2: the outer interpreter. b2.f walks every primitive group -- there
+	# are no control structures yet, since IF/THEN and friends are Forth
+	# written in Forth and arrive with core.f at B3 -- and the golden is
+	# shared by the native and .c4r builds, so a divergence between the
+	# two hosts is a failing cmp rather than something noticed later.
+	# BASE is checked through HEX/DECIMAL rather than by storing 10 into
+	# BASE, because 10 typed while hex is sixteen; . prints in BASE.
+	./c4th src/c4th/tests/b2.f | cmp - src/c4th/tests/expected/b2.txt
+	$(C4M) load-c4r.c -- c4th.c4r src/c4th/tests/b2.f | cmp - src/c4th/tests/expected/b2.txt
+	./c4th -e ': SQ DUP * ; 7 SQ . CR' | grep -q "^49"
+	$(C4M) load-c4r.c -- c4th.c4r -e ': SQ DUP * ; 7 SQ . CR' | grep -q "^49"
 	@echo "test-c4th: OK"
 
 c4sp: $(C4SP_SRCS)

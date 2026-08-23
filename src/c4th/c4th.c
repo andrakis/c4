@@ -6,19 +6,24 @@
 //   run:     ./c4m load-c4r.c -- c4th.c4r [args]
 //
 // Usage:
-//   c4th [-selftest] [-i cells] [-d cells] [-r cells]
+//   c4th [-selftest] [-e text] [-i cells] [-d cells] [-r cells] [file.f ...]
 //     -selftest   run the B1 hand-threaded checks and exit
+//     -e text     interpret text, then continue with any files
 //     -i cells    image size   (default 262144 cells)
 //     -d cells    data stack   (default 1024)
 //     -r cells    return stack (default 256)
+//   Files are interpreted in order. With neither -e nor a file, c4th reads
+//   standard input.
 
 #include "c4.h"
 #include "c4m.h"
 
 #include "src/c4th/include/mem.h"
 #include "src/c4th/include/dict.h"
+#include "src/c4th/include/io.h"
 #include "src/c4th/include/inner.h"
 #include "src/c4th/include/prim.h"
+#include "src/c4th/include/outer.h"
 
 // A hand-threaded 10! -- there is no outer interpreter until B2, so B1
 // proves the engine by building a body cell by cell and running it.
@@ -42,18 +47,18 @@ int th_selftest () {
 	int *xLIT, *xDUP, *xDROP, *xSWAP, *xOVER, *xMUL, *xSUB;
 	int *xBRANCH, *xZBRANCH, *xDOT, *xCR, *xBYE;
 
-	xLIT     = th_find("LIT", 3);
-	xDUP     = th_find("DUP", 3);
-	xDROP    = th_find("DROP", 4);
-	xSWAP    = th_find("SWAP", 4);
-	xOVER    = th_find("OVER", 4);
-	xMUL     = th_find("*", 1);
-	xSUB     = th_find("-", 1);
-	xBRANCH  = th_find("BRANCH", 6);
-	xZBRANCH = th_find("0BRANCH", 7);
-	xDOT     = th_find(".", 1);
-	xCR      = th_find("CR", 2);
-	xBYE     = th_find("BYE", 3);
+	xLIT     = th_findz("LIT");
+	xDUP     = th_findz("DUP");
+	xDROP    = th_findz("DROP");
+	xSWAP    = th_findz("SWAP");
+	xOVER    = th_findz("OVER");
+	xMUL     = th_findz("*");
+	xSUB     = th_findz("-");
+	xBRANCH  = th_findz("BRANCH");
+	xZBRANCH = th_findz("0BRANCH");
+	xDOT     = th_findz(".");
+	xCR      = th_findz("CR");
+	xBYE     = th_findz("BYE");
 	if (!xLIT || !xDUP || !xDROP || !xSWAP || !xOVER || !xMUL || !xSUB ||
 	    !xBRANCH || !xZBRANCH || !xDOT || !xCR || !xBYE) {
 		printf("c4th: selftest: a primitive is missing from the dictionary\n");
@@ -121,18 +126,44 @@ int th_atoi (char *s) {
 	return n;
 }
 
+// Interpret a whole text, then drop the source. Returns 0 on failure.
+int th_run_text (char *text, int len, int owned) {
+	int ok;
+
+	if (!th_src_push(text, len, owned)) return 0;
+	ok = th_interpret();
+	th_src_pop();
+	return ok;
+}
+
+int th_run_file (char *path) {
+	char *text;
+	int   len, ok;
+
+	if (!(text = th_slurp(path, &len))) {
+		printf("c4th: cannot open '%s'\n", path);
+		return 0;
+	}
+	ok = th_run_text(text, len, 1);
+	return ok;
+}
+
 void th_usage () {
-	printf("usage: c4th [-selftest] [-i cells] [-d cells] [-r cells]\n");
+	printf("usage: c4th [-selftest] [-e text] [-i cells] [-d cells] [-r cells] [file.f ...]\n");
 }
 
 int main (int argc, char **argv) {
-	int  image, dcells, rcells, selftest;
+	int   image, dcells, rcells, selftest, ran, i, n;
 	char *a;
+	char *evaltext;
+	char *stdintext;
 
 	image    = 262144;
 	dcells   = 1024;
 	rcells   = 256;
 	selftest = 0;
+	evaltext = 0;
+	ran      = 0;
 
 	--argc; ++argv;
 	while (argc > 0) {
@@ -142,6 +173,7 @@ int main (int argc, char **argv) {
 		else if (th_eqz(a, "-i") && argc > 1) { --argc; ++argv; image  = th_atoi(*argv); }
 		else if (th_eqz(a, "-d") && argc > 1) { --argc; ++argv; dcells = th_atoi(*argv); }
 		else if (th_eqz(a, "-r") && argc > 1) { --argc; ++argv; rcells = th_atoi(*argv); }
+		else if (th_eqz(a, "-e") && argc > 1) { --argc; ++argv; evaltext = *argv; }
 		else { th_usage(); return 1; }
 		--argc; ++argv;
 	}
@@ -150,14 +182,35 @@ int main (int argc, char **argv) {
 		printf("c4th: could not allocate image or stacks\n");
 		return 1;
 	}
+	if (!(th_srcs = malloc(TH_SRC_MAX * SRC__Sz * sizeof(int)))) return 1;
+	if (!(th_tramps = malloc(TH_TRAMP_MAX * 2 * sizeof(int)))) return 1;
+	th_srcd   = 0;
 	th_latest = 0;
 	th_prims_init();
+	th_outer_init();
 	if (th_err) return 1;
 
 	if (selftest) return th_selftest();
 
-	// B2 brings the outer interpreter; until then there is nothing else
-	// to do, and saying so beats exiting silently.
-	printf("c4th: no outer interpreter yet (B2); try -selftest\n");
+	if (evaltext) {
+		n = 0; while (evaltext[n]) ++n;
+		if (!th_run_text(evaltext, n, 0)) return 1;
+		ran = 1;
+	}
+	i = 0;
+	while (i < argc && !th_quit) {
+		if (!th_run_file(argv[i])) return 1;
+		ran = 1;
+		++i;
+	}
+	if (!ran && !th_quit) {
+		// No -e and no files: read standard input, so c4th composes with
+		// a pipe the way every other tool here does.
+		if (!(stdintext = th_slurp("/dev/stdin", &n))) {
+			printf("c4th: cannot read standard input\n");
+			return 1;
+		}
+		if (!th_run_text(stdintext, n, 1)) return 1;
+	}
 	return 0;
 }

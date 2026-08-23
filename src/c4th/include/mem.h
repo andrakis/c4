@@ -22,6 +22,8 @@ int *th_rstack;     // return stack base
 int *th_rp;         // one past top of return stack
 int *th_rstop;
 int  th_err;        // set non-zero to abort the inner loop
+int  th_quit;       // set by BYE: unwind everything and leave
+int  th_base;       // numeric base, shared by the parser and by .
 
 // Stack limits are checked on every push and pop. That costs a compare in
 // the hottest code in the system, and it is worth it: an unchecked Forth

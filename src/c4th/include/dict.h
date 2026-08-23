@@ -51,6 +51,13 @@ int th_streq (char *a, char *b, int len) {
 	return 1;
 }
 
+int th_strlen (char *s) {
+	int n;
+	n = 0;
+	while (s[n]) ++n;
+	return n;
+}
+
 // Lay down a header and return its xt. The name is copied into the image,
 // so the caller's buffer need not outlive the call.
 int *th_create (char *name, int len, int flags, int code) {
@@ -80,6 +87,14 @@ int *th_create (char *name, int len, int flags, int code) {
 	return xt;
 }
 
+// Define by name alone. Passing the length separately is exactly the kind
+// of redundancy that goes wrong -- it did, once, and DUP silently vanished
+// from the dictionary because its registration said 4 -- so nothing spells
+// a length out any more.
+int *th_defword (char *name, int flags, int code) {
+	return th_create(name, th_strlen(name), flags, code);
+}
+
 // Most recent definition wins, which is what redefinition means in Forth.
 int *th_find (char *name, int len) {
 	int *xt;
@@ -95,4 +110,8 @@ int *th_find (char *name, int len) {
 		xt = (int *)xt[W_LINK];
 	}
 	return 0;
+}
+
+int *th_findz (char *name) {
+	return th_find(name, th_strlen(name));
 }

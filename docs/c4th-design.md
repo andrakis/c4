@@ -245,8 +245,26 @@ with.
       c4m's putchar/puts/realloc/memcpy/stacktrace), so the driver carries its
       own. And c4cc mis-emits a bare function name used as a value, so every
       code field is written `(int)&fn` — the `&` is load-bearing.
-- [ ] **B2** Outer interpreter, ~120 primitives, both builds.
-      *Verify:* `: SQ DUP * ; 7 SQ .` → `49` natively and under c4m
+- [x] **B2** Outer interpreter and the primitive set, both builds.
+      `io.h` 107 (line-at-a-time sources on a stack, so `INCLUDED` and
+      `EVALUATE` can nest at B3), `outer.h` 216, `prim.h` 79 words. *Verified:*
+      `make test-c4th` — `: SQ DUP * ; 7 SQ .` gives `49` natively and under
+      c4m, and `src/c4th/tests/b2.f` walks every primitive group against one
+      golden shared by both hosts. Also runs unchanged inside C4KE.
+
+      Three things worth carrying forward:
+
+      * **Name lengths were passed alongside the name, and one was wrong** —
+        `DUP` was registered with length 4, so it silently vanished from the
+        dictionary and every lookup of it failed. Fixed by removing the
+        redundancy rather than the instance: `th_defword()` and `th_findz()`
+        take the name alone and measure it.
+      * **`.` must print in `BASE`**, not decimal. Forth-2012 defines it over
+        the pictured-output words, which arrive with `num.h` at B3; until then
+        the conversion is written directly so `BASE` means what it says from
+        the start.
+      * `HEX`/`DECIMAL` exist for a reason: `10 BASE !` typed while hex sets
+        the base to sixteen, so a test that flips base has to use them.
 - [ ] **B3** `core.f` + the Forth-2012 CORE suite. **The first rung that means
       anything** — everything before it is scaffolding.
       *Verify:* `make test-c4th`

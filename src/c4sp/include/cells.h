@@ -180,9 +180,60 @@ int *mk_env (int *parent) {
 	return c;
 }
 
+// The global frame, indexed.
+//
+// The comment above is right about local frames and badly wrong about the
+// global one. Under c4lc the global frame holds every function of all eight
+// Lisp modules plus the builtins -- hundreds of bindings -- and every
+// reference to any of them walks that list from the front. Measured with
+// callgrind on one C4IX module (c4lc -O -c src/c4ix/boot.c),
+// env_local_pair was 77.08% of all instructions executed. Not the
+// collector (5.7% for alloc and collect together), not the CEK machine
+// (4.3%). The environment walk WAS the interpreter.
+//
+// Atom ids are interned as small dense integers, so the global frame needs
+// no hash: an array indexed by id straight to the pair is exact and O(1).
+// The bindings list is still maintained, so printing, env:capture and the
+// collector see exactly what they saw before -- this is a lookup index,
+// not a change of representation.
+//
+// Two invariants make it safe, both checked when it was written:
+//   * env_define is the ONLY code that adds a binding, so the index cannot
+//     miss one;
+//   * nothing anywhere removes a binding, so an indexed pair can never be
+//     collected out from under the index. It is not a GC root and does not
+//     need to be: every pair in it is also in the global frame's list,
+//     which is reachable from gc_root_genv.
+// If the index cannot be allocated it is switched off for good and every
+// lookup falls back to the scan, so running out of memory costs speed and
+// nothing else.
+int *env_gidx;       // atom id -> (atom . value) pair, 0 = not bound
+int  env_gidx_cap;
+int  env_gidx_off;   // set once if an allocation fails: scan from then on
+
+void env_gidx_grow (int id) {
+	int *n;
+	int  cap, i;
+
+	if (env_gidx_off) return;
+	cap = env_gidx_cap ? env_gidx_cap : 256;
+	while (cap <= id) cap = cap + cap;
+	if (!(n = malloc(cap * sizeof(int)))) { env_gidx_off = 1; return; }
+	memset((char *)n, 0, cap * sizeof(int));
+	i = 0;
+	while (i < env_gidx_cap) { n[i] = env_gidx[i]; ++i; }
+	if (env_gidx) free(env_gidx);
+	env_gidx     = n;
+	env_gidx_cap = cap;
+}
+
 // Find the (atom . value) pair for id in this frame only.
 int *env_local_pair (int *env, int id) {
 	int *b, *pair;
+	if (env == gc_root_genv && !env_gidx_off) {
+		if (id < env_gidx_cap) return (int *)env_gidx[id];
+		return 0;
+	}
 	b = (int *)env[CELL_A];
 	while (b) {
 		pair = (int *)b[CELL_A];
@@ -211,6 +262,10 @@ int *env_define (int *env, int id, int *value) {
 	}
 	pair = cons(mk_atom(id), value);
 	env[CELL_A] = (int)cons(pair, (int *)env[CELL_A]);
+	if (env == gc_root_genv && !env_gidx_off) {
+		if (id >= env_gidx_cap) env_gidx_grow(id);
+		if (id <  env_gidx_cap) env_gidx[id] = (int)pair;
+	}
 	return value;
 }
 

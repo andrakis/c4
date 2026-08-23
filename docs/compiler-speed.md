@@ -137,16 +137,59 @@ grow its arenas instead of pre-sizing them.
 The honest denominator for anything measured later. Re-measure
 `make c4ix.c4r $(C4IX_PROGS)` from clean after each and paste the number.
 
-- [ ] **A1.0** Baseline: full clean C4IX build timed with hyperfine
-- [ ] **A1.1** `perf` profile of native c4sp during a real c4lc run — *before*
-      assuming where the time goes. Record the top symbols here.
-- [ ] **A1.2** `-R` verified safe across all 12 C4IX modules + the `src/tests`
-      parse sweep (risk: C-stack depth, the one thing CEK bought), then made
-      the default in the c4lc Makefile invocations. Keep CEK reachable.
-- [ ] **A1.3** c4sp JSRI builtin dispatch (design §7, never built;
-      `stdlib.h:9-10`). Buildable now: `c4cc.c:808-810` emits `IMM &fn` and
-      `load-c4r.c:997-1001` shows the macro idiom that makes gcc accept the
-      same source. Measure with `__c4_cycles()` around `builtin_call` first.
+- [x] **A1.0** Baseline, hyperfine, 3 runs: the 12-module C4IX kernel build is
+      **43.013 s ± 0.199**.
+- [x] **A1.1** Profile first — and it overturned the plan. `perf` is unusable
+      here (`perf_event_paranoid = 4`, no sudo), so callgrind on one module
+      (`c4lc -O -c src/c4ix/boot.c`, 7.5e9 instructions):
+
+      | share | function |
+      |---|---|
+      | **77.08%** | `cells.h:env_local_pair` |
+      | 4.31% | `cek.h:eval_cek` |
+      | 3.66% | `gc.h:gc_alloc_cell` |
+      | 3.03% | `cells.h:cell_type` |
+      | 2.06% | `gc.h:gc_collect` |
+      | 1.40% | `cells.h:cons` |
+
+      **The environment walk *was* the interpreter.** Not the collector (5.7%
+      for alloc and collect together), not the CEK machine, and the builtin
+      if-chain I had expected to dominate does not even appear. Every item
+      below was re-ordered around this.
+- [x] **A1.1a** **Index the global frame** (`src/c4sp/include/cells.h`). The
+      header comment there says a linear scan "wins over any hash" for a frame
+      holding "a handful of bindings" — true for locals, and catastrophic for
+      the global frame, which under c4lc holds every function of all eight Lisp
+      modules plus the builtins. Atom ids are interned dense integers, so no
+      hash is needed: an array from id straight to the `(atom . value)` pair.
+      The bindings list is still maintained, so printing, `env:capture` and the
+      collector see exactly what they saw before. Safe because `env_define` is
+      the only code that adds a binding and nothing anywhere removes one, so an
+      indexed pair cannot be collected out from under the index; and the index
+      needs no GC root of its own, since every pair in it is also in the global
+      list. ~40 lines.
+
+      **Measured, 5 runs each, output verified byte-identical:**
+
+      | workload | before | after | |
+      |---|---|---|---|
+      | `c4lc -O -c src/c4ix/sched.c` | 5.341 s | **1.048 s** | 5.10x |
+      | lex `c4cc.c` (the doc's benchmark) | 0.90 s | **0.571 s** | 1.58x |
+      | **C4IX kernel, all 12 modules** | **43.013 s** | **7.811 s** | **5.51x** |
+
+      Green: `test-c4sp`, `test-c4sp-opt`, `test-c4sp-deep`, `test-c4lc`,
+      `test-c4ix`. All 12 C4IX objects byte-identical to the pre-change
+      compiler's.
+- [ ] **A1.2** `-R` as the default for the c4lc invocations. Now worth **1.63x
+      on top** of the index (kernel build 7.811 s → **4.798 s**, total **8.96x**
+      vs baseline), and all 12 modules emit byte-identical objects either way.
+      Still to check before flipping the default: the deep workloads
+      (`c4ke-lc.c4r`, `c4sp-lc.c4r` at `-c 32000000`), because C-stack depth is
+      the one thing CEK bought. Keep CEK reachable.
+- [ ] **A1.3** c4sp JSRI builtin dispatch — **deprioritised by A1.1**: the
+      if-chain did not appear in the profile at all natively. It may still
+      matter under c4m, where each comparison is a whole VM instruction, so
+      measure there with `__c4_cycles()` before spending anything on it.
 - [ ] **A1.4** Unpin `gcc -O0` (`Makefile:404-408`): `setjmp` into a local
       `jmp_buf` immediately before the root scan and include the buffer in the
       scanned range, plus `-fno-omit-frame-pointer`

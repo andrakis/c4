@@ -200,6 +200,13 @@ void th_p_dots (int *w) {           // .S -- non-standard but indispensable
 	p = th_dstack;
 	while (p < th_sp) { printf("%d ", *p); p = p + 1; }
 }
+// CYCLES and INVOKE are how c4th measures and runs native C4 code. Both
+// are c4m opcodes; include/c4m.h stubs them to 0 for the gcc build, so
+// natively CYCLES reads zero and INVOKE does nothing. That is the honest
+// behaviour -- there is no cycle counter and no VM to invoke into.
+void th_p_cycles (int *w) { th_push(__c4_cycles()); }
+void th_p_invoke (int *w) { th_push(__c4_invoke((int *)th_pop())); }
+
 void th_p_bye (int *w)  { th_ip = 0; th_quit = 1; }
 
 
@@ -390,5 +397,7 @@ void th_prims_init () {
 	th_defword("ACCEPT",0,(int)&th_p_accept);
 	th_defword("DECIMAL",0,(int)&th_p_decimal);
 	th_defword("HEX",0,(int)&th_p_hex);
+	th_defword("CYCLES",0,(int)&th_p_cycles);
+	th_defword("INVOKE",0,(int)&th_p_invoke);
 	th_defword("BYE",0,(int)&th_p_bye);
 }

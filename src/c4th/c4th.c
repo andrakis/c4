@@ -23,6 +23,7 @@
 #include "src/c4th/include/io.h"
 #include "src/c4th/include/inner.h"
 #include "src/c4th/include/prim.h"
+#include "src/c4th/include/num.h"
 #include "src/c4th/include/outer.h"
 
 // A hand-threaded 10! -- there is no outer interpreter until B2, so B1
@@ -65,12 +66,12 @@ int th_selftest () {
 		return 1;
 	}
 
-	body = th_here;
+	body = th_align_here();
 	th_comma((int)xLIT); th_comma(10);
 	th_comma((int)xLIT); th_comma(1);
-	loop = th_here;
+	loop = th_align_here();
 	th_comma((int)xOVER);
-	th_comma((int)xZBRANCH); fixup_end = th_here; th_comma(0);
+	th_comma((int)xZBRANCH); fixup_end = th_align_here(); th_comma(0);
 	th_comma((int)xOVER);
 	th_comma((int)xMUL);
 	th_comma((int)xSWAP);
@@ -78,7 +79,7 @@ int th_selftest () {
 	th_comma((int)xSUB);
 	th_comma((int)xSWAP);
 	th_comma((int)xBRANCH); th_comma((int)loop);
-	*fixup_end = (int)th_here;
+	*fixup_end = (int)th_align_here();
 	th_comma((int)xSWAP);
 	th_comma((int)xDROP);
 	th_comma((int)xDOT);
@@ -165,17 +166,21 @@ int main (int argc, char **argv) {
 	evaltext = 0;
 	ran      = 0;
 
+	// Sizing flags are read in a first pass, because the image has to
+	// exist before anything can run. Everything else -- -e and file names
+	// -- is then processed strictly in the order given, so
+	// `c4th core.f -e "..."` means what it looks like.
 	--argc; ++argv;
-	while (argc > 0) {
-		a = *argv;
-		if (*a != '-') break;
+	i = 0;
+	while (i < argc) {
+		a = argv[i];
 		if      (th_eqz(a, "-selftest")) selftest = 1;
-		else if (th_eqz(a, "-i") && argc > 1) { --argc; ++argv; image  = th_atoi(*argv); }
-		else if (th_eqz(a, "-d") && argc > 1) { --argc; ++argv; dcells = th_atoi(*argv); }
-		else if (th_eqz(a, "-r") && argc > 1) { --argc; ++argv; rcells = th_atoi(*argv); }
-		else if (th_eqz(a, "-e") && argc > 1) { --argc; ++argv; evaltext = *argv; }
-		else { th_usage(); return 1; }
-		--argc; ++argv;
+		else if (th_eqz(a, "-i") && i + 1 < argc) { ++i; image  = th_atoi(argv[i]); }
+		else if (th_eqz(a, "-d") && i + 1 < argc) { ++i; dcells = th_atoi(argv[i]); }
+		else if (th_eqz(a, "-r") && i + 1 < argc) { ++i; rcells = th_atoi(argv[i]); }
+		else if (th_eqz(a, "-e") && i + 1 < argc) { ++i; }
+		else if (*a == '-' && a[1]) { th_usage(); return 1; }
+		++i;
 	}
 
 	if (!th_mem_init(image, dcells, rcells)) {
@@ -187,25 +192,35 @@ int main (int argc, char **argv) {
 	th_srcd   = 0;
 	th_latest = 0;
 	th_prims_init();
+	th_num_init();
 	th_outer_init();
 	if (th_err) return 1;
 
 	if (selftest) return th_selftest();
 
-	if (evaltext) {
-		n = 0; while (evaltext[n]) ++n;
-		if (!th_run_text(evaltext, n, 0)) return 1;
-		ran = 1;
-	}
 	i = 0;
 	while (i < argc && !th_quit) {
-		if (!th_run_file(argv[i])) return 1;
+		a = argv[i];
+		if (th_eqz(a, "-selftest")) { ++i; continue; }
+		if (th_eqz(a, "-i") || th_eqz(a, "-d") || th_eqz(a, "-r")) { i = i + 2; continue; }
+		if (th_eqz(a, "-e")) {
+			++i;
+			if (i < argc) {
+				evaltext = argv[i];
+				n = 0; while (evaltext[n]) ++n;
+				if (!th_run_text(evaltext, n, 0)) return 1;
+				ran = 1;
+			}
+			++i;
+			continue;
+		}
+		if (!th_run_file(a)) return 1;
 		ran = 1;
 		++i;
 	}
 	if (!ran && !th_quit) {
-		// No -e and no files: read standard input, so c4th composes with
-		// a pipe the way every other tool here does.
+		// Nothing named: read standard input, so c4th composes with a
+		// pipe the way every other tool here does.
 		if (!(stdintext = th_slurp("/dev/stdin", &n))) {
 			printf("c4th: cannot read standard input\n");
 			return 1;

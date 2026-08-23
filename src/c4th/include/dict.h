@@ -21,6 +21,7 @@ enum { W_LINK,      // previous header, 0 ends the chain
        W_CODE,      // address of do_colon / do_var / do_const / a primitive
        W_PRIM,      // primitive number, or -1        (B5)
        W_NATIVE,    // natively compiled body, or 0   (B5)
+       W_DOES,      // for a word made by CREATE ... DOES>, the code to run
        W__Sz };
 
 enum { FL_IMMEDIATE = 1, FL_HIDDEN = 2, FL_COMPONLY = 4, FL_NATIVE = 8 };
@@ -71,9 +72,9 @@ int *th_create (char *name, int len, int flags, int code) {
 	while (i < len) { np[i] = name[i]; ++i; }
 	np[len] = 0;
 
-	xt = th_here;
-	if (th_here + W__Sz > th_limit) { printf("c4th: image full\n"); th_err = 1; return 0; }
-	th_here = th_here + W__Sz;
+	xt = th_align_here();
+	if (th_hp + W__Sz * sizeof(int) > th_hlimit) { printf("c4th: image full\n"); th_err = 1; return 0; }
+	th_hp = th_hp + W__Sz * sizeof(int);
 
 	xt[W_LINK]   = (int)th_latest;
 	xt[W_HASH]   = th_hash(name, len);
@@ -83,6 +84,7 @@ int *th_create (char *name, int len, int flags, int code) {
 	xt[W_CODE]   = code;
 	xt[W_PRIM]   = -1;
 	xt[W_NATIVE] = 0;
+	xt[W_DOES]   = 0;
 	th_latest = xt;
 	return xt;
 }
@@ -93,6 +95,12 @@ int *th_create (char *name, int len, int flags, int code) {
 // a length out any more.
 int *th_defword (char *name, int flags, int code) {
 	return th_create(name, th_strlen(name), flags, code);
+}
+
+// The same, for a name parsed out of the input, where the length is known
+// and the text is not nul terminated.
+int *th_defword_n (char *name, int len, int flags, int code) {
+	return th_create(name, len, flags, code);
 }
 
 // Most recent definition wins, which is what redefinition means in Forth.

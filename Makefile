@@ -32,7 +32,16 @@
 PKG       := package.tgz
 NATIVE_CC := gcc
 EXTRA_CC  :=
-NATIVE_CC_OPTS := -O2 -g -idirafter include -I . $(EXTRA_CC)
+# -fwrapv is a correctness flag here, not a tuning one. Everything built
+# with these options emulates a machine whose arithmetic wraps -- c4m and
+# c4mp are that machine, c4cc compiles for it, c4sp and c4th implement
+# languages whose integers are its cells. In C, signed overflow is
+# undefined, so at -O2 gcc is entitled to assume it never happens: it
+# folded `if (d < 0) d = 0 - d;` on the assumption that the result must be
+# positive, and SM/REM then returned the wrong quotient for a divisor of
+# MIN-INT. Found by the Forth-2012 CORE suite; -O0 and -fwrapv both give
+# the right answer, -O2 alone does not.
+NATIVE_CC_OPTS := -O2 -fwrapv -g -idirafter include -I . $(EXTRA_CC)
 NATIVE_TARGETS := c4 c4m c4cc
 # Preprocessor, will use our own at some point
 # We use our own include directories, and have some stdlib style headers.
@@ -449,12 +458,13 @@ C4SP_SRCS := src/c4sp/c4sp.c src/c4sp/include/cell.h src/c4sp/include/gc.h \
 # applies to c4sp.c4r.
 C4TH_SRCS := src/c4th/c4th.c src/c4th/include/mem.h src/c4th/include/dict.h \
              src/c4th/include/io.h src/c4th/include/inner.h \
-             src/c4th/include/prim.h src/c4th/include/outer.h
+             src/c4th/include/prim.h src/c4th/include/num.h \
+             src/c4th/include/outer.h src/c4th/forth/core.f
 # c4th (docs/c4th-design.md): a Forth for C4, built two ways from one
 # source exactly as c4sp is. -O2 needs no apology here -- c4th has no
 # collector scanning the stack, so nothing pins the native build open.
 c4th: $(C4TH_SRCS)
-	gcc $(EXTRA_CC) -O2 -fno-omit-frame-pointer -g -idirafter include -I. -o c4th src/c4th/c4th.c
+	gcc $(EXTRA_CC) -O2 -fwrapv -fno-omit-frame-pointer -g -idirafter include -I. -o c4th src/c4th/c4th.c
 c4th.c4r: $(C4CC) $(C4TH_SRCS)
 	$(PREPROC) src/c4th/c4th.c | $(C4CC) -o c4th.c4r - > /dev/null
 
@@ -483,10 +493,31 @@ test-c4th: c4th c4th.c4r $(C4M) $(C4KE_C4R)
 	$(C4M) load-c4r.c -- c4th.c4r src/c4th/tests/b2.f | cmp - src/c4th/tests/expected/b2.txt
 	./c4th -e ': SQ DUP * ; 7 SQ . CR' | grep -q "^49"
 	$(C4M) load-c4r.c -- c4th.c4r -e ': SQ DUP * ; 7 SQ . CR' | grep -q "^49"
+	# B3: the Forth-2012 CORE word set, against the standard suite.
+	# src/c4th/tests/{tester.fr,core.fr} are vendored verbatim from Gerry
+	# Jackson's Forth-2012 test suite (see the README there) and are NOT
+	# to be edited: the value of a standards suite is precisely that we
+	# did not write it and it does not know what c4th happens to
+	# implement.
+	#
+	# Two checks, deliberately. The transcript is compared against a
+	# golden, so a change in WHICH things pass is a diff rather than
+	# silent drift; and independently the count of failure lines must be
+	# zero, so the golden can never quietly bless a regression. The suite
+	# is self-verifying -- it prints only on failure -- so this needs no
+	# reference Forth. A line is piped in because the ACCEPT section
+	# genuinely reads the terminal.
+	echo c4th | ./c4th src/c4th/forth/core.f src/c4th/tests/tester.fr src/c4th/tests/core.fr > .c4th_core
+	cmp .c4th_core src/c4th/tests/expected/core-64.txt
+	test 0 = `grep -c "INCORRECT RESULT\|WRONG NUMBER OF RESULTS" .c4th_core`
+	grep -q "End of Core word set tests" .c4th_core
+	echo c4th | $(C4M) load-c4r.c -- c4th.c4r src/c4th/forth/core.f src/c4th/tests/tester.fr src/c4th/tests/core.fr | cmp - src/c4th/tests/expected/core-64.txt
+	echo c4th | $(C4M) load-c4r.c -- $(C4KE_C4R) c4th.c4r src/c4th/forth/core.f src/c4th/tests/tester.fr src/c4th/tests/core.fr | grep -q "End of Core word set tests"
+	rm -f .c4th_core
 	@echo "test-c4th: OK"
 
 c4sp: $(C4SP_SRCS)
-	gcc $(EXTRA_CC) -O2 -fno-omit-frame-pointer -g -Iinclude -I. -o c4sp src/c4sp/c4sp.c
+	gcc $(EXTRA_CC) -O2 -fwrapv -fno-omit-frame-pointer -g -Iinclude -I. -o c4sp src/c4sp/c4sp.c
 # Built by c4lc -O, not c4cc: measurably smaller and never slower
 # (docs/c4lc-design.md 11 measures -18.1% instructions on this image),
 # and this is the c4sp that every hosted run uses -- under c4m, inside
@@ -666,7 +697,7 @@ c4cc32: $(C4CC_SRCS)
 c4m32: c4m.c c4m_float.c
 	gcc -m32 $(NATIVE_CC_OPTS) c4m.c c4m_float.c -o c4m32 -lm
 c4sp32: $(C4SP_SRCS)
-	gcc -m32 $(EXTRA_CC) -O2 -fno-omit-frame-pointer -g -Iinclude -I. -o c4sp32 src/c4sp/c4sp.c
+	gcc -m32 $(EXTRA_CC) -O2 -fwrapv -fno-omit-frame-pointer -g -Iinclude -I. -o c4sp32 src/c4sp/c4sp.c
 # 32-bit .c4r builds of the toolchain, for the c4bb disk: these are the
 # tools a system on that machine has to reach for, so they have to be
 # images the machine can load, not host binaries.
@@ -1418,7 +1449,7 @@ PHONY += pi
 c4: c4.c
 	$(call compile_c,$<,$@)
 c4m: c4m.c
-	gcc $(EXTRA_CC) -O2 -g -idirafter include -I . c4m.c c4m_float.c -o c4m -lm
+	gcc $(EXTRA_CC) -O2 -fwrapv -g -idirafter include -I . c4m.c c4m_float.c -o c4m -lm
 c4cc: $(C4CC_SRCS)
 	$(call compile_c,src/c4cc/asm-c4r.c,c4cc)
 # c4rdump compiles c4cc.c in for its instruction name table, so it

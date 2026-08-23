@@ -265,9 +265,47 @@ with.
         the start.
       * `HEX`/`DECIMAL` exist for a reason: `10 BASE !` typed while hex sets
         the base to sixteen, so a test that flips base has to use them.
-- [ ] **B3** `core.f` + the Forth-2012 CORE suite. **The first rung that means
-      anything** — everything before it is scaffolding.
-      *Verify:* `make test-c4th`
+- [x] **B3** `core.f` + the Forth-2012 CORE suite. **PASSES, zero failures**,
+      natively, as `c4th.c4r` under c4m (byte-identical transcript), and
+      inside C4KE. `num.h` 199, `core.f` 96, plus parsing/compiling words in
+      `outer.h`. *Verified:* `make test-c4th`, which compares the whole
+      transcript against a golden **and** independently asserts zero failure
+      lines, so the golden cannot quietly bless a regression.
+
+      Bugs the suite found, none of which self-testing would have:
+
+      * **`RSHIFT` must be logical, `2/` arithmetic.** C's `>>` on a signed
+        value is arithmetic, so `-1 RSHIFT 1` came back as `-1` instead of
+        MAX-INT — and the suite *builds* MAX-INT and MIN-INT out of exactly
+        that expression, so every comparison test at the extremes failed at
+        once.
+      * **`th_uless` was inverted.** When one operand has the top bit set it
+        is the *larger* unsigned, not the smaller.
+      * **`0 - MIN-INT` is still MIN-INT**, so `.` printed punctuation for it.
+        The magnitude has to be read unsigned.
+      * **gcc at `-O2` exploits signed-overflow UB** — see the note below; the
+        fix was tree-wide.
+      * **The `SWAP` in `BEGIN`/`WHILE`/`REPEAT` belongs in `WHILE`.** With it
+        in `REPEAT` the single-`WHILE` case still works, while
+        `BEGIN .. WHILE .. WHILE .. REPEAT .. ELSE .. THEN` compiles a branch
+        to the wrong address — a segfault, not a failed assertion. The suite's
+        `GI5` is exactly that shape.
+      * **`ALLOT` reserves address units, not cells.** HERE is byte granular;
+        cell-granular allotment fails `1STA 1+ -> 2NDA` and fails it quietly,
+        since everything still runs and only the addresses are wrong.
+      * **The text interpreter must consume the delimiter that ends a word**,
+        or `CHAR " GS3 GOODBYE"` is eight characters instead of seven.
+
+      **A finding that reaches past c4th: `-fwrapv` is a correctness flag for
+      this whole tree.** `SM/REM` returned the wrong quotient for a divisor of
+      MIN-INT, and only at `-O2`: gcc is entitled to assume signed overflow
+      never happens, so it folded `if (d < 0) d = 0 - d;` on the assumption
+      the result must be positive. `-O0` and `-fwrapv` both give the right
+      answer. Everything built from `NATIVE_CC_OPTS` emulates a machine whose
+      arithmetic wraps — c4m and c4mp *are* that machine, c4cc compiles for
+      it, c4sp and c4th implement languages whose integers are its cells — so
+      `-fwrapv` now applies tree-wide. It matters more since A1.4 put the
+      native c4sp on `-O2` for the first time.
 - [ ] **B4** P1 threaded-code peephole + `asm.f` (a C4 opcode assembler in
       Forth). *Verify:* `make test-c4th` green with P1 on; `asm.f` assembles a
       hand-written factorial to bytes identical to `c4cc`'s

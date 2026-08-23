@@ -12,9 +12,14 @@
 // what makes the threaded core simple. The native backend at B5 is where
 // that question gets interesting again.
 
-int *th_mem;        // base of the image
-int *th_here;       // next free cell
-int *th_limit;      // one past the end
+// HERE is a BYTE address, because Forth's address unit is a byte: ALLOT
+// reserves address units, C, lays down one, and the suite checks that two
+// consecutive C, land one apart. Cell-granular allotment fails that, and
+// it fails it quietly -- everything still runs, the addresses are just
+// wrong. Cell writes align first; nothing else has to think about it.
+int  *th_mem;       // base of the image
+char *th_hp;        // next free byte
+char *th_hlimit;    // one past the end
 int *th_dstack;     // data stack base
 int *th_sp;         // one past top of data stack
 int *th_dstop;      // one past the end of the data stack
@@ -53,34 +58,40 @@ int th_rpop () {
 	return *th_rp;
 }
 
-// HERE, and the two ways of advancing it.
-int *th_here_get () { return th_here; }
+// Round HERE up to a cell boundary and return it as a cell pointer.
+int *th_align_here () {
+	int a;
 
-void th_comma (int x) {
-	if (th_here >= th_limit) { printf("c4th: image full\n"); th_err = 1; return; }
-	*th_here = x;
-	th_here = th_here + 1;
+	a = (int)th_hp;
+	a = (a + sizeof(int) - 1) / sizeof(int) * sizeof(int);
+	th_hp = (char *)a;
+	return (int *)th_hp;
 }
 
-// Reserve n BYTES, rounded up to a whole number of cells, and return the
-// address of the first. Used for name text, which is the only byte-sized
-// thing in the image at B1.
+void th_comma (int x) {
+	int *p;
+
+	p = th_align_here();
+	if (th_hp + sizeof(int) > th_hlimit) { printf("c4th: image full\n"); th_err = 1; return; }
+	*p = x;
+	th_hp = th_hp + sizeof(int);
+}
+
+// ALLOT: exactly n address units, no rounding. A negative n releases.
 char *th_alloc_bytes (int n) {
 	char *r;
-	int   cells;
 
-	cells = (n + sizeof(int) - 1) / sizeof(int);
-	if (th_here + cells > th_limit) { printf("c4th: image full\n"); th_err = 1; return 0; }
-	r = (char *)th_here;
-	th_here = th_here + cells;
+	if (th_hp + n > th_hlimit) { printf("c4th: image full\n"); th_err = 1; return 0; }
+	r = th_hp;
+	th_hp = th_hp + n;
 	return r;
 }
 
 int th_mem_init (int image_cells, int dcells, int rcells) {
 	th_err = 0;
 	if (!(th_mem = malloc(image_cells * sizeof(int)))) return 0;
-	th_here  = th_mem;
-	th_limit = th_mem + image_cells;
+	th_hp     = (char *)th_mem;
+	th_hlimit = (char *)(th_mem + image_cells);
 	if (!(th_dstack = malloc(dcells * sizeof(int)))) return 0;
 	th_sp    = th_dstack;
 	th_dstop = th_dstack + dcells;

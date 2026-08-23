@@ -9,6 +9,79 @@
 // function name used as a value, and the & is what makes it emit the
 // address.
 
+// -- unsigned arithmetic on a signed cell ------------------------------
+//
+// C4 has no unsigned type, so a cell whose top bit is set reads as
+// negative and every ordinary comparison and division is wrong for it.
+// These do the unsigned thing anyway. They matter more than they look:
+// U., U<, UM/MOD and the whole pictured-output path are defined on
+// unsigned values, and the Forth-2012 suite checks all of them at the
+// extremes where the top bit is set.
+
+int th_uless (int a, int b) {
+	if ((a < 0) == (b < 0)) return a < b;   // same half: signed order agrees
+	return b < 0;                            // the one with the top bit set
+}                                            // is the LARGER unsigned
+
+// q = a / d and r = a % d, both unsigned. The shift-by-one dance is the
+// standard way to do it without a wider type: halving a first makes it
+// non-negative, and the correction loop puts back what the halving lost.
+void th_udivmod (int a, int d, int *q, int *r) {
+	int qq, rr, half, mask;
+
+	if (d == 0) { *q = 0; *r = 0; return; }
+	if (a >= 0 && d > 0) { *q = a / d; *r = a % d; return; }
+	if (d < 0) {                             // divisor has the top bit set
+		if (th_uless(a, d)) { *q = 0; *r = a; }
+		else                { *q = 1; *r = a - d; }
+		return;
+	}
+	// Half the top-bit mask, doubled -- written this way because a
+	// literal would be wrong at 32 bits, and 1 << (bits-1) would shift
+	// into the sign bit. c4th runs at both widths: c4sp32 builds the
+	// 32-bit toolchain c4bb boots.
+	half = 1;
+	half = half << (sizeof(int) * 8 - 2);
+	mask = half - 1 + half;
+	qq = ((a >> 1) & mask) / d * 2;
+	rr = a - qq * d;
+	while (!th_uless(rr, d)) { rr = rr - d; qq = qq + 1; }
+	*q = qq;
+	*r = rr;
+}
+
+// RSHIFT is a LOGICAL shift in Forth-2012, but C's >> on a signed value
+// is arithmetic, so -1 RSHIFT 1 would come back as -1 instead of MAX-INT.
+// The suite builds MAX-INT and MIN-INT out of exactly that expression, so
+// getting it wrong makes every comparison test at the extremes fail --
+// which is how it was found.
+int th_urshift (int a, int b) {
+	int half, mask;
+
+	if (b <= 0) return a;
+	if (b >= sizeof(int) * 8) return 0;
+	half = 1;
+	half = half << (sizeof(int) * 8 - 2);
+	mask = half - 1 + half;
+	return ((a >> 1) & mask) >> (b - 1);
+}
+
+void th_print_unum (int v, int base) {
+	char buf[72];
+	int  i, q, r;
+
+	if (base < 2) base = 10;
+	i = 0;
+	if (!v) { buf[i] = '0'; ++i; }
+	while (v) {
+		th_udivmod(v, base, &q, &r);
+		if (r < 10) buf[i] = '0' + r; else buf[i] = 'A' + r - 10;
+		++i;
+		v = q;
+	}
+	while (i > 0) { --i; th_emit(buf[i]); }
+}
+
 // -- stack ------------------------------------------------------------
 void th_p_dup (int *w)  { int x; x = th_pop(); th_push(x); th_push(x); }
 void th_p_drop (int *w) { th_pop(); }
@@ -39,14 +112,14 @@ void th_p_mod (int *w)  { int a,b; b=th_pop(); a=th_pop(); if (!b) { printf("c4t
 void th_p_divmod (int *w){ int a,b; b=th_pop(); a=th_pop(); if (!b) { printf("c4th: division by zero\n"); th_err=1; return; } th_push(a%b); th_push(a/b); }
 void th_p_1plus (int *w){ th_push(th_pop()+1); }
 void th_p_1minus (int *w){ th_push(th_pop()-1); }
-void th_p_2times (int *w){ th_push(th_pop()*2); }
-void th_p_2div (int *w) { th_push(th_pop()/2); }
+void th_p_2times (int *w){ th_push(th_pop() << 1); }
+void th_p_2div (int *w) { th_push(th_pop() >> 1); }   // arithmetic: 2/ propagates the sign
 void th_p_negate (int *w){ th_push(0-th_pop()); }
 void th_p_abs (int *w)  { int x; x=th_pop(); if (x<0) x=0-x; th_push(x); }
 void th_p_min (int *w)  { int a,b; b=th_pop(); a=th_pop(); if (a<b) th_push(a); else th_push(b); }
 void th_p_max (int *w)  { int a,b; b=th_pop(); a=th_pop(); if (a>b) th_push(a); else th_push(b); }
 void th_p_lshift (int *w){ int a,b; b=th_pop(); a=th_pop(); th_push(a<<b); }
-void th_p_rshift (int *w){ int a,b; b=th_pop(); a=th_pop(); th_push(a>>b); }
+void th_p_rshift (int *w){ int a,b; b=th_pop(); a=th_pop(); th_push(th_urshift(a,b)); }
 
 // -- logic and comparison ---------------------------------------------
 // Forth-2012 flags are all-bits-set for true, so comparisons yield 0 or -1
@@ -58,6 +131,8 @@ void th_p_invert (int *w){ th_push(~th_pop()); }
 void th_p_eq (int *w)   { int a,b; b=th_pop(); a=th_pop(); if (a==b) th_push(-1); else th_push(0); }
 void th_p_ne (int *w)   { int a,b; b=th_pop(); a=th_pop(); if (a!=b) th_push(-1); else th_push(0); }
 void th_p_lt (int *w)   { int a,b; b=th_pop(); a=th_pop(); if (a<b) th_push(-1); else th_push(0); }
+void th_p_ult (int *w)  { int a,b; b=th_pop(); a=th_pop(); if (th_uless(a,b)) th_push(-1); else th_push(0); }
+void th_p_ugt (int *w)  { int a,b; b=th_pop(); a=th_pop(); if (th_uless(b,a)) th_push(-1); else th_push(0); }
 void th_p_gt (int *w)   { int a,b; b=th_pop(); a=th_pop(); if (a>b) th_push(-1); else th_push(0); }
 void th_p_le (int *w)   { int a,b; b=th_pop(); a=th_pop(); if (a<=b) th_push(-1); else th_push(0); }
 void th_p_ge (int *w)   { int a,b; b=th_pop(); a=th_pop(); if (a>=b) th_push(-1); else th_push(0); }
@@ -76,10 +151,10 @@ void th_p_move (int *w) { int n,d,s; n=th_pop(); d=th_pop(); s=th_pop(); if (n>0
 void th_p_fill (int *w) { int c,n,a; c=th_pop(); n=th_pop(); a=th_pop(); if (n>0) memset((char *)a,c,n); }
 
 // -- dictionary space -------------------------------------------------
-void th_p_here (int *w) { th_push((int)th_here); }
+void th_p_here (int *w) { th_push((int)th_hp); }
 void th_p_comma (int *w){ th_comma(th_pop()); }
 void th_p_ccomma (int *w){ char *p; p = th_alloc_bytes(1); if (p) *p = th_pop(); }
-void th_p_allot (int *w){ int n; n = th_pop(); if (n > 0) th_alloc_bytes(n); }
+void th_p_allot (int *w){ int n; n = th_pop(); if (n > 0) th_alloc_bytes(n); else if (n < 0) th_hp = th_hp + n; }
 void th_p_cells (int *w){ th_push(th_pop() * sizeof(int)); }
 void th_p_cellplus (int *w){ th_push(th_pop() + sizeof(int)); }
 
@@ -99,22 +174,12 @@ void th_p_space (int *w){ th_emit(' '); }
 // then this is the same conversion written directly, so that BASE means
 // what it says from the start rather than only after B3.
 void th_print_num (int v, int base) {
-	char buf[72];
-	int  i, neg, d;
-
-	if (base < 2) base = 10;
-	neg = 0;
-	if (v < 0) { neg = 1; v = 0 - v; }
-	i = 0;
-	if (!v) { buf[i] = '0'; ++i; }
-	while (v) {
-		d = v % base;
-		if (d < 10) buf[i] = '0' + d; else buf[i] = 'A' + d - 10;
-		++i;
-		v = v / base;
-	}
-	if (neg) { buf[i] = '-'; ++i; }
-	while (i > 0) { --i; th_emit(buf[i]); }
+	// The magnitude is taken as an UNSIGNED value, because 0 - MIN-INT is
+	// still MIN-INT: negating it and then dividing produced negative
+	// digits and printed punctuation. Reading it unsigned is exactly
+	// right -- the magnitude of MIN-INT really is 2^(bits-1).
+	if (v < 0) { th_emit('-'); th_print_unum(0 - v, base); }
+	else th_print_unum(v, base);
 }
 
 void th_p_dot (int *w)  { th_print_num(th_pop(), th_base); th_emit(' '); }
@@ -128,6 +193,129 @@ void th_p_dots (int *w) {           // .S -- non-standard but indispensable
 	while (p < th_sp) { printf("%d ", *p); p = p + 1; }
 }
 void th_p_bye (int *w)  { th_ip = 0; th_quit = 1; }
+
+
+// -- counted loops ----------------------------------------------------
+//
+// DO ... LOOP keeps its limit and index on the return stack, so a loop
+// body can still use >R and R> as long as it balances them. I reaches past
+// nothing; J reaches past one loop's pair.
+
+void th_p_pdo (int *w) {             // (DO) ( limit index -- )
+	int i, l;
+	i = th_pop(); l = th_pop();
+	th_rpush(l); th_rpush(i);
+}
+
+void th_p_ploop (int *w) {           // (LOOP): ++index, branch back unless done
+	int i, l;
+	if (th_rp - th_rstack < 2) { printf("c4th: (LOOP) outside a loop\n"); th_err = 1; return; }
+	i = th_rp[-1] + 1;
+	l = th_rp[-2];
+	if (i == l) { th_rp = th_rp - 2; th_ip = th_ip + 1; }
+	else        { th_rp[-1] = i; th_ip = (int *)*th_ip; }
+}
+
+void th_p_pploop (int *w) {          // (+LOOP) ( n -- )
+	int i, l, n, nu;
+
+	n = th_pop();
+	if (th_rp - th_rstack < 2) { printf("c4th: (+LOOP) outside a loop\n"); th_err = 1; return; }
+	i = th_rp[-1];
+	l = th_rp[-2];
+	nu = i + n;
+	// Terminate when the index crosses the boundary between limit-1 and
+	// limit, in EITHER direction -- which is what the standard says, and
+	// why a plain i >= l test is wrong for a negative step. Biasing both
+	// the old and new index by the limit turns "crossed" into "the sign
+	// of the difference changed", which is one xor.
+	if (((i - l) ^ (nu - l)) < 0) { th_rp = th_rp - 2; th_ip = th_ip + 1; }
+	else                          { th_rp[-1] = nu;   th_ip = (int *)*th_ip; }
+}
+
+void th_p_i (int *w) {
+	if (th_rp - th_rstack < 1) { printf("c4th: I outside a loop\n"); th_err = 1; return; }
+	th_push(th_rp[-1]);
+}
+
+void th_p_j (int *w) {
+	if (th_rp - th_rstack < 3) { printf("c4th: J outside two loops\n"); th_err = 1; return; }
+	th_push(th_rp[-3]);
+}
+
+void th_p_unloop (int *w) {
+	if (th_rp - th_rstack < 2) { printf("c4th: UNLOOP outside a loop\n"); th_err = 1; return; }
+	th_rp = th_rp - 2;
+}
+
+// -- inline strings ---------------------------------------------------
+//
+// (S") is followed in the body by a length cell and then the bytes,
+// padded out to a whole number of cells. It pushes address and length and
+// steps th_ip past the lot, so a string costs no runtime allocation.
+
+void th_p_psquote (int *w) {
+	int   n, cells;
+	char *p;
+
+	n = *th_ip;
+	p = (char *)(th_ip + 1);
+	cells = (n + sizeof(int) - 1) / sizeof(int);
+	th_push((int)p);
+	th_push(n);
+	th_ip = th_ip + 1 + cells;
+}
+
+// -- odds and ends core.f needs ---------------------------------------
+void th_p_count (int *w) { int a; a = th_pop(); th_push(a + 1); th_push(*(char *)a); }
+void th_p_chars (int *w) { }                      // CHARS is the identity here
+void th_p_charplus (int *w) { th_push(th_pop() + 1); }
+void th_p_aligned (int *w) {
+	int a;
+	a = th_pop();
+	th_push((a + sizeof(int) - 1) / sizeof(int) * sizeof(int));
+}
+void th_p_align (int *w) { th_align_here(); }
+void th_p_bl (int *w)    { th_push(32); }
+void th_p_udot (int *w)  { th_print_unum(th_pop(), th_base); th_emit(' '); }
+// ACCEPT reads a line from the terminal, not from the source file -- it
+// is the one word here that genuinely wants fd 0. A byte at a time is a
+// syscall per character, which is slow under the VM and irrelevant: the
+// suite calls it once.
+void th_p_accept (int *w) {
+	int   n, a, i;
+	char  ch;
+
+	n = th_pop();
+	a = th_pop();
+	i = 0;
+	while (i < n) {
+		if (read(0, &ch, 1) != 1) break;
+		if (ch == '\n') break;
+		((char *)a)[i] = ch;
+		++i;
+	}
+	th_push(i);
+}
+
+void th_p_source (int *w) {
+	int *s;
+	s = th_src();
+	th_push(s[SRC_LINE]);
+	th_push(s[SRC_LLEN]);
+}
+void th_p_toin (int *w) { th_push((int)(th_src() + SRC_IN)); }
+void th_p_refill (int *w) { if (th_refill()) th_push(-1); else th_push(0); }
+void th_p_key (int *w) {
+	int  *s;
+	char *line;
+	// KEY from the current line; enough for the suite, which never uses it
+	// interactively.
+	s = th_src();
+	line = (char *)s[SRC_LINE];
+	if (s[SRC_IN] < s[SRC_LLEN]) { th_push(line[s[SRC_IN]]); s[SRC_IN] = s[SRC_IN] + 1; }
+	else th_push(10);
+}
 
 void th_prims_init () {
 	th_defword("DUP",0,(int)&th_p_dup);        th_defword("DROP",0,(int)&th_p_drop);
@@ -170,6 +358,27 @@ void th_prims_init () {
 	th_defword("EMIT",0,(int)&th_p_emit);      th_defword("CR",0,(int)&th_p_cr);
 	th_defword("SPACE",0,(int)&th_p_space);    th_defword(".",0,(int)&th_p_dot);
 	th_defword("TYPE",0,(int)&th_p_type);      th_defword(".S",0,(int)&th_p_dots);
+	th_defword("(DO)",FL_COMPONLY,(int)&th_p_pdo);
+	th_defword("(LOOP)",FL_COMPONLY,(int)&th_p_ploop);
+	th_defword("(+LOOP)",FL_COMPONLY,(int)&th_p_pploop);
+	th_defword("I",FL_COMPONLY,(int)&th_p_i);
+	th_defword("J",FL_COMPONLY,(int)&th_p_j);
+	th_defword("UNLOOP",FL_COMPONLY,(int)&th_p_unloop);
+	th_defword("(S\")",FL_COMPONLY,(int)&th_p_psquote);
+	th_defword("COUNT",0,(int)&th_p_count);
+	th_defword("CHARS",0,(int)&th_p_chars);
+	th_defword("CHAR+",0,(int)&th_p_charplus);
+	th_defword("ALIGNED",0,(int)&th_p_aligned);
+	th_defword("ALIGN",0,(int)&th_p_align);
+	th_defword("BL",0,(int)&th_p_bl);
+	th_defword("U.",0,(int)&th_p_udot);
+	th_defword("U<",0,(int)&th_p_ult);
+	th_defword("U>",0,(int)&th_p_ugt);
+	th_defword("SOURCE",0,(int)&th_p_source);
+	th_defword(">IN",0,(int)&th_p_toin);
+	th_defword("REFILL",0,(int)&th_p_refill);
+	th_defword("KEY",0,(int)&th_p_key);
+	th_defword("ACCEPT",0,(int)&th_p_accept);
 	th_defword("DECIMAL",0,(int)&th_p_decimal);
 	th_defword("HEX",0,(int)&th_p_hex);
 	th_defword("BYE",0,(int)&th_p_bye);

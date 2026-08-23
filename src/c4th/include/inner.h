@@ -55,6 +55,17 @@ void th_do_var (int *w) {
 	th_push((int)(w + W__Sz));
 }
 
+// A word made by CREATE ... DOES>: push the body address, then run the
+// code the defining word left behind. That is the whole of DOES>, and it
+// is why W_DOES earns a header slot rather than a corner of another one --
+// a DSL built on c4th (the stated further goal) lives or dies on CREATE
+// and DOES> being real rather than approximated.
+void th_do_does (int *w) {
+	th_push((int)(w + W__Sz));
+	th_rpush((int)th_ip);
+	th_ip = (int *)w[W_DOES];
+}
+
 // CONSTANT: push the value stored in the body.
 void th_do_const (int *w) {
 	th_push(*(w + W__Sz));

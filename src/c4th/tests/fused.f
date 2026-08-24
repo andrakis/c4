@@ -102,25 +102,9 @@ PAIR
    #LEV B2,
 11 22 RUN2 S" POPA" SAME
 
-\ -- the immediate-ALU family -----------------------------------------
-\ One rule, sixteen opcodes: OPI, turns any binary opcode into its
-\ immediate form, which is exactly why the family is complete rather
-\ than trimmed to the ones a measurement happened to show.
-CREATE ALUOPS
-   #OR , #XOR , #AND , #EQ , #NE , #LT , #GT , #LE ,
-   #GE , #SHL , #SHR , #ADD , #SUB , #MUL , #DIV , #MOD ,
-16 CONSTANT #ALU
-VARIABLE AOP   VARIABLE AIM
-
-: ALUTEST ( op imm -- )
-   AIM !  AOP !
-   PAIR
-   0 ENT,   3 LEA, LI,   AIM @ AOP @ OPI,   LEV,
-   #ENT B2, 0 B2,   #LEA B2, 3 B2, #LI B2,
-                    #PSH B2, #IMM B2, AIM @ B2, AOP @ B2,   #LEV B2,
-   57 22 RUN2 AOP @ SAMEOP ;
-
-: ALUALL  #ALU 0 DO  I CELLS ALUOPS + @  3  ALUTEST  LOOP ;
-ALUALL
+\ The immediate-ALU family is deliberately absent. It was measured at
+\ 1.0% of c4cc's executed instructions and 5.2% of c4sp's -- sixteen
+\ opcodes, and sixteen microcode routines on c4bb, for that. The ten
+\ above are 35.1% and 32.3% on their own. docs/fused-opcodes.md.
 
 ." fused: " FAILS @ . ." mismatches" CR

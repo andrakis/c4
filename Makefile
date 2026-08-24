@@ -480,7 +480,7 @@ c4th.c4r: $(C4CC) $(C4TH_SRCS)
 # under c4m; and the same image runs inside C4KE, which is the one that
 # proves the indirect call through a local really is a JSRS the kernel can
 # host, rather than something only gcc's cast macro makes work.
-test-c4th: c4th c4th.c4r $(C4M) $(C4KE_C4R)
+test-c4th: c4th c4th.c4r $(C4M) c4mp $(C4KE_C4R)
 	./c4th -selftest | cmp - src/c4th/tests/expected/b1.txt
 	$(C4M) load-c4r.c -- c4th.c4r -selftest | cmp - src/c4th/tests/expected/b1.txt
 	$(C4M) load-c4r.c -- $(C4KE_C4R) c4th.c4r -selftest | grep -q "selftest ok"
@@ -555,17 +555,20 @@ test-c4th: c4th c4th.c4r $(C4M) $(C4KE_C4R)
 	cmp .c4th_b5 src/c4th/tests/expected/b5.txt
 	test 4 = `grep -vc " ok$$" .c4th_b5`
 	test 0 = `grep -c "MISMATCH" .c4th_b5`
-	# The same suite again with the B5c opcode probe on, so the five
-	# experimental c4m opcodes are checked by running every word rather
-	# than by trusting the benchmark that motivated them. The transcript
-	# must come out byte-identical: same answers, different instructions.
+	# The same suite again with the fused opcodes on -- under plain
+	# c4m, because the three the backend uses (LDL, STL, POPA) are the
+	# three c4m has. That is the split, checked from this side; the
+	# other side is test-fuse, where c4m must REFUSE an image using the
+	# seven it does not have. Byte-identical transcript either way:
+	# same answers, fewer instructions.
 	$(C4M) load-c4r.c -- c4th.c4r src/c4th/forth/core.f src/c4th/forth/asm.f src/c4th/forth/native.f src/c4th/tests/nopc.f src/c4th/tests/b5.f | cmp - src/c4th/tests/expected/b5.txt
 	# Every fused opcode against the sequence it replaces, at the VM
 	# level: each is hand-assembled into a tiny function, its unfused
 	# twin into another, both are called and the answers must agree.
 	# c4th's assembler is the only thing in the tree that can lay down
-	# an arbitrary instruction and then call it. docs/fused-opcodes.md.
-	$(C4M) load-c4r.c -- c4th.c4r src/c4th/forth/core.f src/c4th/forth/asm.f src/c4th/tests/fused.f > .c4th_fused
+	# an arbitrary instruction and then call it. Under c4mp, because
+	# this one exercises all ten. docs/fused-opcodes.md.
+	./c4mp c4th.c4r src/c4th/forth/core.f src/c4th/forth/asm.f src/c4th/tests/fused.f > .c4th_fused
 	cmp .c4th_fused src/c4th/tests/expected/fused.txt
 	test 0 = `grep -c MISMATCH .c4th_fused`
 	# And the differential fuzzer, both ways. b5.f is the cases somebody
@@ -582,20 +585,23 @@ test-c4th: c4th c4th.c4r $(C4M) $(C4KE_C4R)
 
 # The fused opcodes (docs/fused-opcodes.md), end to end: take a real
 # image, run c4opt's fuse pass over it, and require that it behaves
-# identically on every host that has them -- and is refused BY NAME on
-# the one that does not.
+# identically on the hosts that have them -- and is REFUSED by the ones
+# that do not.
 #
-# The refusal matters as much as the acceptance. c4.c is deliberately not
-# given these opcodes, so plain c4 must say which one it lacks rather
-# than execute rubbish; before the tables were mirrored it would have
-# read past the end of its own name string to find out.
+# The refusal matters as much as the acceptance. Neither c4.c nor c4m.c
+# is given these opcodes, so plain c4 must name the one it lacks and c4m
+# must trap it, rather than either executing rubbish; before the tables
+# were mirrored, c4l read past the end of its own name string to find
+# out what to say.
 test-fuse: c4sp c4cc $(C4M) c4mp $(OISC4) c4l.c
 	./c4cc -o .fuse_t.c4r src/tests/tests.c > /dev/null
 	./c4sp -c 8000000 src/c4sp/lisp/c4opt-run.lisp -mfuse .fuse_t.c4r .fuse_tf.c4r > /dev/null
 	$(C4M) load-c4r.c -- .fuse_t.c4r  | grep -q "tests succeeded"
-	$(C4M) load-c4r.c -- .fuse_tf.c4r | grep -q "tests succeeded"
 	./c4mp .fuse_tf.c4r               | grep -q "tests succeeded"
 	$(OISC4) .fuse_tf.c4r             | grep -q "tests succeeded"
+	# And the two machines that do NOT have them must say so rather
+	# than execute rubbish: c4m traps the opcode, plain c4 names it.
+	$(C4M) load-c4r.c -- .fuse_tf.c4r 2>&1 | grep -q "is not an instruction this machine has"
 	./c4 c4l.c .fuse_tf.c4r 2>&1 | grep -q "which plain c4 does not have"
 	./c4 c4l.c .fuse_t.c4r  | grep -q "tests succeeded"
 	rm -f .fuse_t.c4r .fuse_tf.c4r

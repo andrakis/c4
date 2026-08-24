@@ -343,8 +343,14 @@
 
 ;; ---- fuse: the fused opcodes (docs/fused-opcodes.md) ----------------
 ;;
-;; Off unless asked for, because c4.c does not have these opcodes and a
-;; fused image therefore does not run under plain c4.
+;; Off unless asked for: c4mp has these opcodes, c4m and plain c4 do not,
+;; so a fused image runs under c4mp (and oisc4) and nowhere else.
+;;
+;; Ten opcodes, not the twenty-six an earlier draft had. The immediate
+;; ALU family (PSH; IMM n; OP -> OPI n) was measured at 1.0% of c4cc's
+;; executed instructions and 5.2% of c4sp's -- sixteen opcodes, and on
+;; c4bb sixteen microcode routines, for that. The ten below are 35.1%
+;; and 32.3% on their own. See docs/fused-opcodes.md.
 ;;
 ;; This is the right place for it rather than inside c4cc or c4lc-gen:
 ;; the list is already labelled, so a fusion is pure list manipulation
@@ -358,16 +364,6 @@
 
 (define opt:fuse-on false)
 (define opt:n-fuse 0)
-
-;; the immediate form of a binary opcode, or false
-(define opt:immform (lambda (Name)
-	(next opt:immform/3 Name
-		'(OR XOR AND EQ NE LT GT LE GE SHL SHR ADD SUB MUL DIV MOD)
-		'(ORI XORI ANDI EQI NEI LTI GTI LEI GEI SHLI SHRI ADDI SUBI MULI DIVI MODI))))
-(define opt:immform/3 (lambda (Name L R)
-	(if (empty? L) false
-		(if (= Name (head L)) (head R)
-			(next opt:immform/3 Name (tail L) (tail R))))))
 
 (define opt:drop (lambda (L N) (if (= 0 N) L (next opt:drop (tail L) (- N 1)))))
 
@@ -384,15 +380,13 @@
 		(define C (if (empty? (tail R)) false (head (head (tail R)))))
 		(if (if (= C 'PSH) (if (= B 'LI) (if (= A 'LEA) true (= A 'IMM)) false) false)
 			(list (list (if (= A 'LEA) 'PSHL 'PSHG) (second I)) 3)
-		(if (if (= A 'PSH) (if (= B 'IMM) (not (= false (opt:immform C))) false) false)
-			(list (list (opt:immform C) (second I2)) 3)
 		(if (if (= B 'LI)  (= A 'LEA) false) (list (list 'LDL  (second I)) 2)
 		(if (if (= B 'LI)  (= A 'IMM) false) (list (list 'LDG  (second I)) 2)
 		(if (if (= B 'PSH) (= A 'LEA) false) (list (list 'LEAP (second I)) 2)
 		(if (if (= B 'PSH) (= A 'IMM) false) (list (list 'IMMP (second I)) 2)
 		(if (if (= B 'PSH) (= A 'LI)  false) (list (list 'LIP) 2)
 		(if (if (= B 'LI)  (= A 'ADD) false) (list (list 'ADDL) 2)
-			false)))))))))))))
+			false))))))))))))
 
 (define opt:fuse (lambda (Code) (if opt:fuse-on (next opt:fuse/2 Code (list)) Code)))
 (define opt:fuse/2 (lambda (Code Acc)

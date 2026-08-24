@@ -285,20 +285,28 @@ enum {
 	CPUI,CPUN,CPUS,CPUH,
 	CAS ,XCHG,FADD,CWAI,CWAK,IPI ,
 	LXI ,SXI ,TRAW,
-	// Fused opcodes -- see docs/fused-opcodes.md. Each replaces a two or
-	// three instruction sequence that a third of the instructions two
-	// real workloads execute is made of. Every one carries at most one
-	// operand word, so nothing that walks code learns a new shape.
+	// The fused opcodes -- see docs/fused-opcodes.md. THE SPLIT IS
+	// DELIBERATE. c4m implements exactly three of them:
 	//
-	// Nothing emits them unless asked (c4cc/c4lc -mfuse, c4th's NOPC),
-	// so no existing program's behaviour changes by their existing.
-	// c4.c does NOT have them: a fused image does not run under plain
-	// c4, which is why emission is opt-in.
+	//   LDL  a = *(bp+n)      STL  *(bp+n) = a      POPA  a = *sp++
+	//
+	// which are what a stack-machine code generator needs to treat the
+	// frame as registers -- c4th's native backend uses these three and
+	// nothing else, and without them >R, DO/LOOP and every spill cost
+	// three instructions instead of one.
+	//
+	// The other seven are compiler-shaped -- they pay for c4cc's and
+	// c4lc's output, not for a Forth's -- and they live in c4mp only.
+	// c4m is the workhorse that boots C4KE and the machine c4bb models
+	// in hardware, where each opcode is microcode and ROM depth on a
+	// breadboard. Three is about twelve microsteps; ten is forty-odd.
+	// Keeping the seven in c4mp is what lets a c4mp-capable c4bb be an
+	// EXTENSION of the base board rather than a second one.
+	//
+	// All ten are NAMED here so every mirrored table holds the same
+	// names at the same numbers, so the disassembler names one rather
+	// than printing "unknown", and so c4l can say what an image needs.
 	LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,
-	// The immediate-ALU family, in the same order as OR..MOD above, so
-	// that the immediate form of opcode k is ORI + (k - OR).
-	ORI ,XORI,ANDI,EQI ,NEI ,LTI ,GTI ,LEI ,GEI ,SHLI,
-	SHRI,ADDI,SUBI,MULI,DIVI,MODI,
 	// End of instructions
 	INS_SIZE,
 };
@@ -325,17 +333,16 @@ void c4m_setup_opcodes () {
 	"CPUI,CPUN,CPUS,CPUH,"
 	"CAS ,XCHG,FADD,CWAI,CWAK,IPI ,"
 	"LXI ,SXI ,TRAW,"
-	// fused -- docs/fused-opcodes.md
-	"LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,"
-	"ORI ,XORI,ANDI,EQI ,NEI ,LTI ,GTI ,LEI ,GEI ,SHLI,"
-	"SHRI,ADDI,SUBI,MULI,DIVI,MODI,";
+	// fused -- docs/fused-opcodes.md. LDL, STL and POPA are implemented
+	// here; the other seven are c4mp's, and named only.
+	"LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,";
 }
 // One place decides which opcodes carry an operand word. Everything that
 // walks code -- the debug disassembler, OPCD's refusal -- asks here.
 int c4m_has_operand (int i) {
 	return i <= ADJ || i == JSRI || i == JSRS
-	    || (i >= LDL && i <= IMMP)          // LIP and ADDL take none
-	    || i == STL || (i >= ORI && i <= MODI);
+	    || (i >= LDL && i <= IMMP)          // LIP, ADDL and POPA take none
+	    || i == STL;
 }
 char *c4m_builtins;
 void c4m_setup_builtins () {
@@ -1781,36 +1788,11 @@ int c4m_main(int argc, char **argv)
     }
 
     if      (i == LEA) a = (int)(bp + *pc++);                             // load local address
-    // The fused opcodes sit here, in the hot part of the chain, because
-    // the whole point of them is what they cost when they are used --
-    // not what an if-else chain costs at position eighty.
+    // The three fused opcodes c4m has, in the hot part of the chain
+    // because that is the whole point of them.
     else if (i == LDL)  a = *(int *)(bp + *pc++);                         // load local
-    else if (i == LDG)  a = *(int *)*pc++;                                // load global
-    else if (i == PSHL) { a = *(int *)(bp + *pc++); *--sp = a; }          // push local
-    else if (i == PSHG) { a = *(int *)*pc++; *--sp = a; }                 // push global
-    else if (i == LEAP) { a = (int)(bp + *pc++); *--sp = a; }             // push local address
-    else if (i == IMMP) { a = *pc++; *--sp = a; }                         // push immediate
-    else if (i == LIP)  { a = *(int *)a; *--sp = a; }                     // load int, push
-    else if (i == ADDL) a = *(int *)(*sp++ + a);                          // add then load int
     else if (i == STL)  *(int *)(bp + *pc++) = a;                         // store local
     else if (i == POPA) a = *sp++;                                        // pop into the accumulator
-    // The immediate-ALU family. a OP n, where PSH; IMM n; OP was three.
-    else if (i == ORI)  a = a |  *pc++;
-    else if (i == XORI) a = a ^  *pc++;
-    else if (i == ANDI) a = a &  *pc++;
-    else if (i == EQI)  a = a == *pc++;
-    else if (i == NEI)  a = a != *pc++;
-    else if (i == LTI)  a = a <  *pc++;
-    else if (i == GTI)  a = a >  *pc++;
-    else if (i == LEI)  a = a <= *pc++;
-    else if (i == GEI)  a = a >= *pc++;
-    else if (i == SHLI) a = a << *pc++;
-    else if (i == SHRI) a = a >> *pc++;
-    else if (i == ADDI) a = a +  *pc++;
-    else if (i == SUBI) a = a -  *pc++;
-    else if (i == MULI) a = a *  *pc++;
-    else if (i == DIVI) a = a /  *pc++;
-    else if (i == MODI) a = a %  *pc++;
     else if (i == IMM) a = *pc++;                                         // load global address or immediate
     else if (i == JMP) pc = (int *)*pc;                                   // jump
     else if (i == JMPA) pc = (int *)a;                                    // jump using accumulator
@@ -2108,10 +2090,31 @@ int c4m_main(int argc, char **argv)
 			// Maybe the running code can emulate this instruction
 			trap(TRAP_ILLOP, FLT, trap_handler, &sp, &bp, &pc, a, mode);
 		}
+    } else if (!trap_handler && i >= 0 && i < INS_SIZE) {
+			// An opcode this machine KNOWS THE NAME OF but does not
+			// implement -- c4mp's, or one of the seven fused opcodes
+			// that live there. That is a machine mismatch, not a custom
+			// opcode, so halt and say so.
+			//
+			// Trapping into nowhere and resuming is not an option here:
+			// pc is past the opcode but NOT past its operand, so
+			// carrying on executes a data word and walks off into
+			// memory. That used to be a segfault with no explanation,
+			// which is a poor way to find out an image was built for
+			// c4mp.
+			//
+			// An opcode OUTSIDE the table keeps the old behaviour and
+			// falls through below: that is the custom-opcode
+			// convention, where a program raises an opcode a kernel
+			// emulates, and running the same program with no kernel is
+			// expected to print the missed trap and carry on (see
+			// src/oisc4/test-oisc4.sh, which filters exactly that).
+			printf("c4m: %.4s (opcode %d) at 0x%X is not an instruction this machine has,\n",
+			       &c4m_opcodes[i * 5], i, pc - 1);
+			printf("c4m: and no trap handler is installed to emulate it. Halting.\n");
+			status = -1;
+			run = 0;
     } else {
-//        if (trap_handler == 0) {
-//            printf("unknown instruction = %d! cycle = %d\n", i, cycle); status = -1; run = 0;
-//        } else {
 			// printf("c4m: illegal opcode %d, invoking trap handler 0x%X\n", i, trap_handler);
 			trap(TRAP_ILLOP, i, trap_handler, &sp, &bp, &pc, a, mode);
 			// A trap handler must run privileged, as it does at every
@@ -2122,7 +2125,6 @@ int c4m_main(int argc, char **argv)
 			// top of the first. (C4KE is unaffected: it compiles its
 			// protected mode out, so mode is already unprotected.)
 			mode = MODE_UNPROTECTED;
-//        }
     }
   }
 

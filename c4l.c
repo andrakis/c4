@@ -121,9 +121,7 @@ int main (int argc, char **argv) {
     "CPUI,CPUN,CPUS,CPUH,"
     "CAS ,XCHG,FADD,CWAI,CWAK,IPI ,"
     "LXI ,SXI ,TRAW,"
-    "LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,"
-    "ORI ,XORI,ANDI,EQI ,NEI ,LTI ,GTI ,LEI ,GEI ,SHLI,"
-    "SHRI,ADDI,SUBI,MULI,DIVI,MODI,";
+    "LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,";
 
   if (!(buf = malloc(BUF_MAX))) { printf("c4l: out of memory\n"); return 1; }
   if ((fd = open(*argv, 0)) < 0) { printf("c4l: cannot open %s\n", *argv); return 1; }

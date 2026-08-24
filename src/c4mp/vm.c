@@ -119,17 +119,15 @@ void c4_vm_init() {
         "CPUI,CPUN,CPUS,CPUH,"
         "CAS ,XCHG,FADD,CWAI,CWAK,IPI ,"
         "LXI ,SXI ,TRAW,"
-        "LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,"
-        "ORI ,XORI,ANDI,EQI ,NEI ,LTI ,GTI ,LEI ,GEI ,SHLI,"
-        "SHRI,ADDI,SUBI,MULI,DIVI,MODI,";
+        "LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,";
 }
 
 // One place decides which opcodes carry an operand word, the same rule
 // c4m_has_operand states in c4m.c. LIP, ADDL and POPA take none.
 int c4_has_operand(int op) {
     return op <= ADJ || op == JSRI || op == JSRS
-        || (op >= LDL && op <= IMMP)
-        || op == STL || (op >= ORI && op <= MODI);
+        || (op >= LDL && op <= IMMP)   // LIP, ADDL and POPA take none
+        || op == STL;
 }
 
 char *c4_opname(int op) {
@@ -404,22 +402,6 @@ int c4_run(struct c4_cpu * RESTRICT c, int quantum) {
         case ADDL: a = *(int *)(*sp++ + a); break;
         case STL:  *(int *)(bp + *pc++) = a; break;
         case POPA: a = *sp++; break;
-        case ORI:  a = a |  *pc++; break;
-        case XORI: a = a ^  *pc++; break;
-        case ANDI: a = a &  *pc++; break;
-        case EQI:  a = a == *pc++; break;
-        case NEI:  a = a != *pc++; break;
-        case LTI:  a = a <  *pc++; break;
-        case GTI:  a = a >  *pc++; break;
-        case LEI:  a = a <= *pc++; break;
-        case GEI:  a = a >= *pc++; break;
-        case SHLI: a = a << *pc++; break;
-        case SHRI: a = a >> *pc++; break;
-        case ADDI: a = a +  *pc++; break;
-        case SUBI: a = a -  *pc++; break;
-        case MULI: a = a *  *pc++; break;
-        case DIVI: a = a /  *pc++; break;
-        case MODI: a = a %  *pc++; break;
         case IMM:  a = *pc++; break;                      // immediate / global address
         case JMP:  pc = (int *)*pc; break;
         case JMPA: pc = (int *)a; break;                  // jump through the accumulator

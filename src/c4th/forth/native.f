@@ -55,11 +55,12 @@ VARIABLE NBAD                      \ the xt that stopped it, for surveying
 VARIABLE NDEAD                     \ set where control cannot fall through
 VARIABLE NCUR                      \ the word being emitted, for NBAD
 
-\ The B5c opcode probe. Set NOPC and the backend emits c4m's five
-\ experimental fused opcodes -- LDL, STL, POPA, ADDI, MULI -- instead of
-\ the two- and three-instruction sequences that stand in for them. OFF by
-\ default, because with it off the emitted code uses nothing above MOD
-\ and so runs on plain c4 as well as on c4m. See docs/c4th-design.md.
+\ Set NOPC and the backend emits the fused opcodes it can use -- LDL,
+\ STL and POPA -- instead of the two- and three-instruction sequences
+\ that stand in for them. OFF by default, because with it off the
+\ emitted code uses nothing above MOD and runs on every host; with it
+\ on it needs c4mp, which is where those opcodes live.
+\ See docs/fused-opcodes.md.
 VARIABLE NOPC
 
 CREATE ISTART NITEMS CELLS ALLOT   \ where item i's code begins, or -1 for
@@ -106,12 +107,14 @@ VARIABLE 'NBODY                    \ NEMIT and NBODY are mutually recursive
 : NEED-ACC  NACC @ 0= IF
                NOPC @ IF POPA, ELSE 0 IMM, ADD, THEN  1 NACC ! THEN ;
 
-\ a OP n. Without the fused opcodes this is three instructions, which is
-\ what 1+, CELLS, NEGATE, INVERT, 2/, 0=, MIN, MAX, ABS and the true-flag
-\ conversion all cost. One rule covers all sixteen operators.
-: NOPI, ( n op -- )
-   NOPC @ IF OPI, EXIT THEN
-   >R  PSH,  IMM,  R> OP, ;
+\ a OP n -- three instructions, which is what 1+, CELLS, NEGATE, INVERT,
+\ 2/, 0=, MIN, MAX, ABS and the true-flag conversion all cost. There is
+\ no fused form: the immediate-ALU family was measured at 1.0% of c4cc's
+\ executed instructions and 5.2% of c4sp's, which did not justify
+\ sixteen more opcodes and sixteen more microcode routines on c4bb.
+\ Writing it as one rule anyway keeps the call sites honest about what
+\ they cost.
+: NOPI, ( n op -- )  >R  PSH,  IMM,  R> OP, ;
 : NADD, ( n -- )  #ADD NOPI, ;
 : NMUL, ( n -- )  #MUL NOPI, ;
 
@@ -450,7 +453,7 @@ CREATE NVPROBE
    NLSP @ 0= IF DROP 0 NOK ! EXIT THEN
    SPILL
    NOPC @ IF
-      NLIDX FLD,  1 ADDI,  NLIDX NEGATE STL,
+      NLIDX FLD,  1 NADD,  NLIDX NEGATE STL,
    ELSE
       NLIDX NEGATE LEA, PSH,       \ &index
       NLIDX FLD,                   \ index

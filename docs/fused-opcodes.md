@@ -40,34 +40,75 @@ rather than the top of either list.
 
 ## What
 
-Twenty-five opcodes at **79 and up**, the first numbers free after c4mp's
-66-78 (`CPUI..TRAW`). Eight fused memory and stack forms, the accumulator
-pop c4th's backend wants, and the complete immediate-ALU family.
+**Ten opcodes at 79-88**, the first numbers free after c4mp's 66-78
+(`CPUI..TRAW`), and **split across two machines**:
 
-| | | replaces |
-|---|---|---|
-| `LDL n`  | `a = *(bp+n)` | `LEA n; LI` |
-| `LDG n`  | `a = *(int *)n` | `IMM n; LI` |
-| `PSHL n` | `a = *(bp+n); *--sp = a` | `LEA n; LI; PSH` |
-| `PSHG n` | `a = *(int *)n; *--sp = a` | `IMM n; LI; PSH` |
-| `LEAP n` | `a = (int)(bp+n); *--sp = a` | `LEA n; PSH` |
-| `IMMP n` | `a = n; *--sp = a` | `IMM n; PSH` |
-| `LIP`    | `a = *(int *)a; *--sp = a` | `LI; PSH` |
-| `ADDL`   | `a = *(int *)(*sp++ + a)` | `ADD; LI` |
-| `POPA`   | `a = *sp++` | `IMM 0; ADD` |
-| `OPI n`  | `a = a OP n`, for all sixteen ALU opcodes | `PSH; IMM n; OP` |
+| | | replaces | c4m | c4mp |
+|---|---|---|---|---|
+| `LDL n`  | `a = *(bp+n)` | `LEA n; LI` | ✓ | ✓ |
+| `STL n`  | `*(bp+n) = a` | `LEA n; PSH; …; SI` | ✓ | ✓ |
+| `POPA`   | `a = *sp++` | `IMM 0; ADD` | ✓ | ✓ |
+| `LDG n`  | `a = *(int *)n` | `IMM n; LI` | | ✓ |
+| `PSHL n` | `a = *(bp+n); *--sp = a` | `LEA n; LI; PSH` | | ✓ |
+| `PSHG n` | `a = *(int *)n; *--sp = a` | `IMM n; LI; PSH` | | ✓ |
+| `LEAP n` | `a = (int)(bp+n); *--sp = a` | `LEA n; PSH` | | ✓ |
+| `IMMP n` | `a = n; *--sp = a` | `IMM n; PSH` | | ✓ |
+| `LIP`    | `a = *(int *)a; *--sp = a` | `LI; PSH` | | ✓ |
+| `ADDL`   | `a = *(int *)(*sp++ + a)` | `ADD; LI` | | ✓ |
 
-**The immediate family is complete rather than trimmed to what the
-measurement shows.** A partial family means the code generator carries a
-list of which operators have an immediate form and a fallback for the
-rest, and that asymmetry is where bugs live; a complete one is the single
-rule "a binary operator whose right operand is a constant". The VM cost of
-the ones that never fire is one line each.
+**Why three in c4m.** `LDL`, `STL` and `POPA` are what a stack-machine
+code generator needs to treat the frame as registers, and c4th's native
+backend uses those three and nothing else. Without them `>R`, `DO`/`LOOP`
+and every spill cost three instructions instead of one. They are worth
+about **twelve microsteps** on c4bb.
 
-**Every operand is one word**, so nothing that walks code has to learn a
-new instruction shape — only which opcodes carry an operand. `LDG` and
-`PSHG` take a data address, so their operand goes in the `.c4r` patch
-table exactly as the `IMM` they replace did.
+**Why the other seven are c4mp's.** They are compiler-shaped — they pay
+for `c4cc`'s and `c4lc`'s output, not for a Forth's. c4m is the workhorse
+that boots C4KE and the machine c4bb models in hardware, and there each
+opcode is microcode and ROM depth on a breadboard. Keeping the seven in
+c4mp is what lets a **c4mp-capable c4bb be an extension of the base
+board** rather than a second one — the base machine boots C4KE, and the
+extension makes the same software run faster.
+
+### The immediate-ALU family, and why it is not here
+
+An earlier draft had twenty-six opcodes: these ten plus the complete
+immediate-ALU family (`PSH; IMM n; OP` → `OPI n`, sixteen of them). The
+argument was code-generator uniformity — a partial family means the
+compiler carries a list of which operators have an immediate form.
+
+**Measured, that family is worth 1.0% of `c4cc`'s executed instructions
+and 5.2% of `c4sp`'s.** The ten above are 35.1% and 32.3% on their own.
+Sixteen opcodes, and on c4bb sixteen microcode routines to write and
+verify, for the last twentieth. The uniformity argument also evaporates
+once there are *no* immediate forms: there is nothing to be asymmetric
+about, and the fuse pass gets smaller.
+
+It stays measurable rather than settled: `sh src/c4th/bench/fuse-probe.sh`
+still lists every candidate rule, so if a workload ever wants them the
+case can be made from data.
+
+## What this costs c4bb
+
+The question this whole shape answers. `src/c4bb/hw/microcode.uc` is 549
+lines / **319 microsteps** across 65 opcodes today.
+
+* **No new circuitry.** Every fused opcode is a *concatenation of
+  transfers the board already performs* — same registers, same ALU, same
+  bus. The two control patterns needed are already in use:
+  `ALU_OUT MAR_IN` at line 223 and `ALU_LA` at 355.
+* **No second implementation.** `src/c4bb/sim/turbo.js` compiles the same
+  assembled step tables into JS, so writing the microcode gets the fast
+  engine free; the lockstep test pins step ≡ turbo, and `test-c4bb.sh`
+  anchors both against native c4m.
+* **The base board: three opcodes, about twelve microsteps** (+4%), plus
+  three names and an `INS_SIZE` bump in `src/c4bb/sim/{devices,machine}.js`.
+* **The c4mp extension: seven more, about thirty-four microsteps.**
+
+What actually grows is ROM — dispatch depth and step count — which on a
+breadboard is chips rather than gates. Worth knowing before starting:
+c4bb's `INS_SIZE` is **66**, so it does not have c4mp's `CPUI..TRAW`
+either; a c4mp-capable c4bb is already a larger job than these seven.
 
 ## Where it has to be mirrored
 
@@ -87,9 +128,29 @@ header says so. The numbers and names must agree in:
 
 **`c4.c` is not on that list and is not touched.** It is the base VM and
 the reference every layer degrades to. The consequence is stated plainly
-rather than worked around: **an image built with fused opcodes does not
-run under plain `c4`**, which is why emission is behind a flag and off by
-default. `c4or1k`'s `-mcisc` (`docs/c4or1k-design.md`) is the precedent.
+rather than worked around: **an image built with fused opcodes runs under
+c4mp and oisc4, and nowhere else** — not plain `c4`, and not `c4m` unless
+the only fused opcodes in it are `LDL`, `STL` and `POPA`. That is why
+emission is behind a flag and off by default. `c4or1k`'s `-mcisc`
+(`docs/c4or1k-design.md`) is the precedent.
+
+**And a machine must fail cleanly on an opcode it lacks.** It did not.
+`c4m` trapped `TRAP_ILLOP`, found no handler, printed "missed a trap" and
+*carried on* — with `pc` past the opcode but not past its operand, so it
+executed a data word and walked off into memory. A segfault with no
+explanation is a poor way to discover an image was built for c4mp, and
+c4m now meets such images on purpose.
+
+The fix had to be narrow, because trap-and-continue is load-bearing
+elsewhere: a program raises a custom opcode a kernel emulates, and
+running it with no kernel is *expected* to print the missed trap and
+carry on — `src/oisc4/test-oisc4.sh` filters exactly that, which is how
+the first, too-broad fix was caught. So the rule is now:
+
+* an opcode **in c4m's table** that c4m does not implement is a machine
+  mismatch — name it and halt;
+* an opcode **outside the table** is a custom opcode — trap, and behave
+  exactly as before.
 
 **c4bb is deliberately out of scope**, per the standing instruction to
 leave it until this is proven on the main toolchains.
@@ -100,20 +161,25 @@ decision to turn the flag on by default rather than precede it.
 ## Ladder
 
 - [x] **F0** This document, before any code
-- [x] **F1** `c4m` implements all twenty-six. *Verified:* c4th's B5
+- [x] **F1** The opcodes, and who implements them. *Verified:* c4th's B5
       suite (63 words compiled, called and compared against the threaded
       engine) and its fuzzer (2000 random definitions) produce
       transcripts **byte-identical** with the backend emitting them and
-      without. Plus `src/c4th/tests/fused.f`, which checks each opcode
+      without — under plain `c4m`, since the three it uses are the three
+      c4m has. Plus `src/c4th/tests/fused.f`, which checks each opcode
       against the sequence it replaces at the VM level: hand-assemble
-      both, call both, require agreement. All twenty-six, zero
+      both, call both, require agreement. All ten under c4mp, zero
       mismatches, pinned in `make test-c4th`.
+
+      The split is pinned from both sides: `test-c4th` requires c4m to
+      *run* the three, and `test-fuse` requires c4m to *refuse* an image
+      using the other seven.
 - [x] **F2** Numbering and names mirrored everywhere above, and one
       rule per host decides which opcodes carry an operand
       (`c4m_has_operand`, `c4_has_operand`, `has_operand`,
       `c4r:has-operand`). *Verified:* every suite unchanged.
 
-      Two pre-existing gaps closed on the way, both of the same kind:
+      Three pre-existing gaps closed on the way. Two of a kind:
       `c4l.c`, `load-c4r.c` and `oisc4.c` had no names at all for
       c4mp's 66-78, and `c4cc.c` was missing `TRAW` at 78 — and all four
       index those tables **with no bounds check**. Disassembling or
@@ -124,10 +190,14 @@ decision to turn the flag on by default rather than precede it.
       visible consequence: `__opcode("CPUI")` now answers 66 on c4m
       instead of -1. Nothing in the tree looks opcodes up by name, and
       a guest is supposed to feature-test with `C4I_SMP`.
-- [x] **F3** `c4mp` and `oisc4` execute them. c4mp is twenty-six switch
-      cases; oisc4's expansions really are concatenations of the ones it
-      already had, with the self-patch offsets recounted from each
-      block's start.
+
+      And the third, found by this work rather than inherited from it:
+      c4m had **no safe failure mode for an opcode it does not have** —
+      see the note under "Where it has to be mirrored".
+- [x] **F3** `c4mp` and `oisc4` execute all ten; `c4m` executes three.
+      c4mp is ten switch cases; oisc4's expansions really are
+      concatenations of the ones it already had, with the self-patch
+      offsets recounted from each block's start.
 
       One trap found while doing it: oisc4's syscall catch-all was
       `op >= OPEN && op < INS_MAX`, so *extending the enum* would have
@@ -184,6 +254,36 @@ decision to turn the flag on by default rather than precede it.
       42.8%. That is not luck: the probe and the pass use the same greedy
       left-to-right rule, so the only place they can disagree is where
       the pass refuses to cross a label.
+
+### What the split costs
+
+Dropping sixteen opcodes and moving seven cost less than it sounds.
+
+| | c4m unfused | best available |
+|---|---|---|
+| c4lc's lexer, all 26 on c4mp | 6.88 s | 3.71 s (**1.83x**) |
+| c4lc's lexer, these 10 on c4mp | 6.88 s | 3.96 s (**1.74x**) |
+
+c4th, whose backend only ever used three of them, keeps most of its win
+from `LDL`/`STL`/`POPA` alone:
+
+| | threaded | +3 opcodes | (all 26 gave) |
+|---|---|---|---|
+| `DO`/`LOOP` with `I` | 1x | **28x** | 34x |
+| `BEGIN`/`WHILE` + `>R`/`R>` | 1x | **51x** | 63x |
+| loop calling another word | 1x | **59x** | 66x |
+| loop through a `VARIABLE` | 1x | **42x** | 47x |
+
+And two things that are *not* costs, measured rather than assumed:
+
+* **Adding opcodes to c4m's dispatch is free.** Same unfused workload,
+  c4m before any of this versus c4m now: **6.828 s vs 6.834 s, 1.00x.**
+  So "it slows the base VM down" is not an argument against; "it is
+  microcode and ROM on a breadboard" is, which is why the split is where
+  it is.
+* **Running under c4mp is not a penalty.** c4mp is already 1.13x faster
+  than c4m on this workload, so moving the seven there costs nothing to
+  reach — it is the fastest configuration in the tree either way.
 
 ### What is left
 

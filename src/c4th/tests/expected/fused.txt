@@ -8,20 +8,4 @@ LIP  ok
 ADDL ok
 STL  ok
 POPA ok
-OR   ok
-XOR  ok
-AND  ok
-EQ   ok
-NE   ok
-LT   ok
-GT   ok
-LE   ok
-GE   ok
-SHL  ok
-SHR  ok
-ADD  ok
-SUB  ok
-MUL  ok
-DIV  ok
-MOD  ok
 fused: 0 mismatches

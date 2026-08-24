@@ -237,9 +237,7 @@ void c4cc_init_instructions() {
 	"LXI ,SXI ,TRAW,"
 	// The fused opcodes -- docs/fused-opcodes.md. Names only unless
 	// -mfuse was passed; same no-bounds-check reason as above.
-	"LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,"
-	"ORI ,XORI,ANDI,EQI ,NEI ,LTI ,GTI ,LEI ,GEI ,SHLI,"
-	"SHRI,ADDI,SUBI,MULI,DIVI,MODI,";
+	"LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,";
 	c4cc_keywords =
 		"static extern __attribute__ constructor destructor "     // Ignored by c4m
 		"char else enum if int return sizeof for continue while " // Keywords

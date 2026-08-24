@@ -108,11 +108,13 @@ enum {
     // workloads execute are made of, emitted only under -mfuse.
     // Appended, never inserted; the same numbers as c4m.c, c4l.c,
     // load-c4r.c, oisc4.c, c4cc.c and c4r.lisp.
+    //
+    // c4mp implements these; c4m names them and traps them, the same
+    // arrangement as CPUI..TRAW above. That is deliberate: c4m is the
+    // machine c4bb models in hardware, and each opcode is microcode and
+    // ROM depth on a breadboard, so a c4mp-capable c4bb can be an
+    // extension of the base board rather than a second one.
     LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,
-    // the immediate-ALU family, in the same order as OR..MOD, so the
-    // immediate form of opcode k is ORI + (k - OR)
-    ORI ,XORI,ANDI,EQI ,NEI ,LTI ,GTI ,LEI ,GEI ,SHLI,
-    SHRI,ADDI,SUBI,MULI,DIVI,MODI,
     INS_SIZE
 };
 

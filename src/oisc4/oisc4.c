@@ -121,8 +121,6 @@ enum {
 	// inserted; the same numbers as c4m.c, c4l.c, load-c4r.c, c4mp.h,
 	// c4cc.c and c4r.lisp.
 	LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,
-	ORI ,XORI,ANDI,EQI ,NEI ,LTI ,GTI ,LEI ,GEI ,SHLI,
-	SHRI,ADDI,SUBI,MULI,DIVI,MODI,
 	INS_MAX
 };
 
@@ -468,9 +466,7 @@ int vm_opcode_lookup (int nameoff) {
 	"CPUI,CPUN,CPUS,CPUH,"
 	"CAS ,XCHG,FADD,CWAI,CWAK,IPI ,"
 	"LXI ,SXI ,TRAW,"
-	"LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,"
-	"ORI ,XORI,ANDI,EQI ,NEI ,LTI ,GTI ,LEI ,GEI ,SHLI,"
-	"SHRI,ADDI,SUBI,MULI,DIVI,MODI,";
+	"LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,";
 	r = 0;
 	while (r < INS_MAX) {
 		a = name; b = ops + r * 5;
@@ -775,7 +771,7 @@ int  oe;           // emission cursor (arena byte offset)
 int has_operand (int op) {
 	return op <= ADJ || op == JSRI || op == JSRS
 	    || (op >= LDL && op <= IMMP)
-	    || op == STL || (op >= ORI && op <= MODI);
+	    || op == STL;
 }
 
 // OISC instructions emitted for each c4 opcode (fixed per opcode).
@@ -800,7 +796,6 @@ int o4_size (int op) {
 	if (op == ADDL) return 8;
 	if (op == STL) return 2;
 	if (op == POPA) return 3;
-	if (op >= ORI && op <= MODI) return 4;
 	// The syscall class ends at DBG. Bounding it by INS_MAX would make
 	// every opcode appended after DBG look like a syscall.
 	if (op >= OPEN && op <= DBG) return 3;  // syscall class
@@ -1014,12 +1009,6 @@ void translate_one (int i) {
 		emit(RSP, 0, b + 1 * INSTB);        // patch src of #2
 		emit(PH, 0, RA);                    // a = [sp]
 		emit(RSP, 8, RSP);
-	}
-	else if (op >= ORI && op <= MODI) {
-		emit(RA, 0, P_MATHX);               // X = a
-		emit(RZ, operand(i + 1), P_MATHY);  // Y = n
-		emit(RZ, op - ORI, P_MATHOP);       // same order as OR..MOD
-		emit(P_MATHV, 0, RA);               // a = result
 	}
 	else if (op >= OPEN && op <= DBG) { // remaining syscall class
 		emit(RSP, 0, RR0);

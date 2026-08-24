@@ -106,11 +106,14 @@ VARIABLE 'NBODY                    \ NEMIT and NBODY are mutually recursive
 : NEED-ACC  NACC @ 0= IF
                NOPC @ IF POPA, ELSE 0 IMM, ADD, THEN  1 NACC ! THEN ;
 
-\ a = a + n, and a = a * n. Without the opcodes these are three
-\ instructions each, which is what 1+, CELLS, NEGATE and the true-flag
-\ conversion all cost today.
-: NADD, ( n -- )  NOPC @ IF ADDI, ELSE >R PSH, R> IMM, ADD, THEN ;
-: NMUL, ( n -- )  NOPC @ IF MULI, ELSE >R PSH, R> IMM, MUL, THEN ;
+\ a OP n. Without the fused opcodes this is three instructions, which is
+\ what 1+, CELLS, NEGATE, INVERT, 2/, 0=, MIN, MAX, ABS and the true-flag
+\ conversion all cost. One rule covers all sixteen operators.
+: NOPI, ( n op -- )
+   NOPC @ IF OPI, EXIT THEN
+   >R  PSH,  IMM,  R> OP, ;
+: NADD, ( n -- )  #ADD NOPI, ;
+: NMUL, ( n -- )  #MUL NOPI, ;
 
 \ acc = frame cell k, for a compile-time-known k.
 : FLD, ( k -- )  NEGATE  NOPC @ IF LDL, ELSE LEA, LI, THEN ;
@@ -451,7 +454,7 @@ CREATE NVPROBE
    ELSE
       NLIDX NEGATE LEA, PSH,       \ &index
       NLIDX FLD,                   \ index
-      PSH, 1 IMM, ADD,             \ index+1
+      1 NADD,             \ index+1
       SI,                          \ store it; SI leaves it in the accumulator
    THEN
    PSH, NLIDX 1+ FLD,              \ limit
@@ -484,7 +487,7 @@ CREATE NVPROBE
    R> DROP
    PSH, NLIDX 1+ FLD, SUB,                                    \ nu-l
    XOR,
-   PSH, 0 IMM, LT,
+   0 #LT NOPI,
    0 BZ,
    1 CELLS + @ SRCOFF DUP FIX! TDEP!
    1 SLOT-
@@ -509,7 +512,7 @@ CREATE NVPROBE
 : N-ABS ( -- )
    1 NEED
    SPILL
-   0 NL, PSH, 0 IMM, LT,
+   0 NL, 0 #LT NOPI,
    0 BZ, >MARK
       0 NL, -1 NMUL,
       0 JMP, >MARK
@@ -524,8 +527,8 @@ CREATE NVPROBE
 : N-UCMP ( gt? -- )
    2 NEED
    SPILL
-   IF 0 ELSE 1 THEN  DUP >R  NL, PSH, NMININT IMM, XOR, PSH,
-   R> 1 XOR NL, PSH, NMININT IMM, XOR,
+   IF 0 ELSE 1 THEN  DUP >R  NL, NMININT #XOR NOPI, PSH,
+   R> 1 XOR NL, NMININT #XOR NOPI,
    LT,
    2 NDROPS  NRESULT  TOFLAG
    ASM-LEN NPINOFF ! ;
@@ -639,15 +642,15 @@ CREATE NVPROBE
    DUP n@  = IF 2DROP 1 NEED NEED-ACC LI, EXIT THEN
    DUP nC@ = IF 2DROP 1 NEED NEED-ACC LC, EXIT THEN
    DUP n2* = IF 2DROP 1 NEED NEED-ACC 2 NMUL, EXIT THEN
-   DUP n2DIV = IF 2DROP 1 NEED NEED-ACC PSH, 1 IMM, SHR, EXIT THEN
+   DUP n2DIV = IF 2DROP 1 NEED NEED-ACC 1 #SHR NOPI, EXIT THEN
    DUP nCELLS = IF 2DROP 1 NEED NEED-ACC 1 CELLS NMUL, EXIT THEN
    DUP nCELL+ = IF 2DROP 1 NEED NEED-ACC 1 CELLS NADD, EXIT THEN
    DUP nNEG = IF 2DROP 1 NEED NEED-ACC -1 NMUL, EXIT THEN
-   DUP nINV = IF 2DROP 1 NEED NEED-ACC PSH, -1 IMM, XOR, EXIT THEN
-   DUP n0= = IF 2DROP 1 NEED NEED-ACC PSH, 0 IMM, EQ, TOFLAG EXIT THEN
-   DUP n0<> = IF 2DROP 1 NEED NEED-ACC PSH, 0 IMM, NE, TOFLAG EXIT THEN
-   DUP n0< = IF 2DROP 1 NEED NEED-ACC PSH, 0 IMM, LT, TOFLAG EXIT THEN
-   DUP n0> = IF 2DROP 1 NEED NEED-ACC PSH, 0 IMM, GT, TOFLAG EXIT THEN
+   DUP nINV = IF 2DROP 1 NEED NEED-ACC -1 #XOR NOPI, EXIT THEN
+   DUP n0= = IF 2DROP 1 NEED NEED-ACC 0 #EQ NOPI, TOFLAG EXIT THEN
+   DUP n0<> = IF 2DROP 1 NEED NEED-ACC 0 #NE NOPI, TOFLAG EXIT THEN
+   DUP n0< = IF 2DROP 1 NEED NEED-ACC 0 #LT NOPI, TOFLAG EXIT THEN
+   DUP n0> = IF 2DROP 1 NEED NEED-ACC 0 #GT NOPI, TOFLAG EXIT THEN
    \ DUP is the spill NEWITEM already emits: the value stays in the
    \ accumulator and a copy of it is now on the stack.
    DUP nDUP = IF 2DROP 1 NEED NEED-ACC NEWITEM 1 NACC !

@@ -560,6 +560,14 @@ test-c4th: c4th c4th.c4r $(C4M) $(C4KE_C4R)
 	# than by trusting the benchmark that motivated them. The transcript
 	# must come out byte-identical: same answers, different instructions.
 	$(C4M) load-c4r.c -- c4th.c4r src/c4th/forth/core.f src/c4th/forth/asm.f src/c4th/forth/native.f src/c4th/tests/nopc.f src/c4th/tests/b5.f | cmp - src/c4th/tests/expected/b5.txt
+	# Every fused opcode against the sequence it replaces, at the VM
+	# level: each is hand-assembled into a tiny function, its unfused
+	# twin into another, both are called and the answers must agree.
+	# c4th's assembler is the only thing in the tree that can lay down
+	# an arbitrary instruction and then call it. docs/fused-opcodes.md.
+	$(C4M) load-c4r.c -- c4th.c4r src/c4th/forth/core.f src/c4th/forth/asm.f src/c4th/tests/fused.f > .c4th_fused
+	cmp .c4th_fused src/c4th/tests/expected/fused.txt
+	test 0 = `grep -c MISMATCH .c4th_fused`
 	# And the differential fuzzer, both ways. b5.f is the cases somebody
 	# thought of; this is two thousand nobody did -- random balanced
 	# definitions with branches, IF/ELSE and counted loops, each run on
@@ -569,7 +577,7 @@ test-c4th: c4th c4th.c4r $(C4M) $(C4KE_C4R)
 	# permutation turns this from 0 mismatches into 8.
 	$(C4M) load-c4r.c -- c4th.c4r src/c4th/forth/core.f src/c4th/forth/asm.f src/c4th/forth/native.f src/c4th/tests/fuzz.f | cmp - src/c4th/tests/expected/fuzz.txt
 	$(C4M) load-c4r.c -- c4th.c4r src/c4th/forth/core.f src/c4th/forth/asm.f src/c4th/forth/native.f src/c4th/tests/nopc.f src/c4th/tests/fuzz.f | cmp - src/c4th/tests/expected/fuzz.txt
-	rm -f .c4th_core .c4th_fact.c4r .c4th_ccasm .c4th_b5
+	rm -f .c4th_core .c4th_fact.c4r .c4th_ccasm .c4th_b5 .c4th_fused
 	@echo "test-c4th: OK"
 
 c4sp: $(C4SP_SRCS)

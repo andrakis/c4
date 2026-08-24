@@ -745,6 +745,16 @@ enum {
 	FLT ,
 	// Instructions
 	JSRI,JSRS,JMPA,TLEV,DBG ,
+	// c4mp's, which this loader names but never executes
+	CPUI,CPUN,CPUS,CPUH,
+	CAS ,XCHG,FADD,CWAI,CWAK,IPI ,
+	LXI ,SXI ,TRAW,
+	// The fused opcodes -- docs/fused-opcodes.md. Appended, never
+	// inserted: the list index IS the opcode number and it is mirrored
+	// across c4m.c, c4l.c, c4mp.h, oisc4.c, c4cc.c and c4r.lisp.
+	LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,
+	ORI ,XORI,ANDI,EQI ,NEI ,LTI ,GTI ,LEI ,GEI ,SHLI,
+	SHRI,ADDI,SUBI,MULI,DIVI,MODI,
 	// End of instructions
 	INS_SIZE,
 };

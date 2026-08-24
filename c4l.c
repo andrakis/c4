@@ -113,7 +113,17 @@ int main (int argc, char **argv) {
     "OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,EXIT,"
     "PUTC,PUTS,RALC,MCPY,STRC,ITH ,_OPC,_BLT,_TRP,OPCD,"
     "_JMP,_ADJ,C4CF,C4CY,TIME,SIGH,SIGI,USLP,INFO,OPSL,"
-    "C4IV,FLT ,JSRI,JSRS,JMPA,TLEV,DBG ,";
+    "C4IV,FLT ,JSRI,JSRS,JMPA,TLEV,DBG ,"
+    // Everything below is an opcode plain c4 does not have, so this
+    // table exists only to name it in the refusal message -- which
+    // indexes with no bounds check, exactly as c4cc's does. 66-78 are
+    // c4mp's; 79 up are the fused opcodes (docs/fused-opcodes.md).
+    "CPUI,CPUN,CPUS,CPUH,"
+    "CAS ,XCHG,FADD,CWAI,CWAK,IPI ,"
+    "LXI ,SXI ,TRAW,"
+    "LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,"
+    "ORI ,XORI,ANDI,EQI ,NEI ,LTI ,GTI ,LEI ,GEI ,SHLI,"
+    "SHRI,ADDI,SUBI,MULI,DIVI,MODI,";
 
   if (!(buf = malloc(BUF_MAX))) { printf("c4l: out of memory\n"); return 1; }
   if ((fd = open(*argv, 0)) < 0) { printf("c4l: cannot open %s\n", *argv); return 1; }

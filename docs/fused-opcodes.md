@@ -99,19 +99,45 @@ decision to turn the flag on by default rather than precede it.
 
 ## Ladder
 
-- [ ] **F0** This document, before any code
-- [ ] **F1** `c4m` implements all twenty-five. *Verify:* c4th's B5 suite
-      and its fuzzer, with the backend emitting them, produce transcripts
-      byte-identical to the ones without — same answers, fewer
-      instructions. Every existing suite unchanged.
-- [ ] **F2** Numbering and names mirrored everywhere above. *Verify:*
-      every suite unchanged; `c4rdump` disassembles a fused image without
-      reading past its table; `c4l` refuses one by name rather than
-      crashing.
-- [ ] **F3** `c4mp` and `oisc4` execute them. oisc4's expansions are
-      concatenations of the ones it already has, so the check is that a
-      fused image and its unfused twin produce identical output under
-      both.
+- [x] **F0** This document, before any code
+- [x] **F1** `c4m` implements all twenty-six. *Verified:* c4th's B5
+      suite (63 words compiled, called and compared against the threaded
+      engine) and its fuzzer (2000 random definitions) produce
+      transcripts **byte-identical** with the backend emitting them and
+      without. Plus `src/c4th/tests/fused.f`, which checks each opcode
+      against the sequence it replaces at the VM level: hand-assemble
+      both, call both, require agreement. All twenty-six, zero
+      mismatches, pinned in `make test-c4th`.
+- [x] **F2** Numbering and names mirrored everywhere above, and one
+      rule per host decides which opcodes carry an operand
+      (`c4m_has_operand`, `c4_has_operand`, `has_operand`,
+      `c4r:has-operand`). *Verified:* every suite unchanged.
+
+      Two pre-existing gaps closed on the way, both of the same kind:
+      `c4l.c`, `load-c4r.c` and `oisc4.c` had no names at all for
+      c4mp's 66-78, and `c4cc.c` was missing `TRAW` at 78 — and all four
+      index those tables **with no bounds check**. Disassembling or
+      refusing a c4mp image read past the end.
+
+      `c4m`'s 66-78 are now c4mp's real names rather than `RS66..RS78`
+      placeholders, so all seven tables are literally the same list. The
+      visible consequence: `__opcode("CPUI")` now answers 66 on c4m
+      instead of -1. Nothing in the tree looks opcodes up by name, and
+      a guest is supposed to feature-test with `C4I_SMP`.
+- [x] **F3** `c4mp` and `oisc4` execute them. c4mp is twenty-six switch
+      cases; oisc4's expansions really are concatenations of the ones it
+      already had, with the self-patch offsets recounted from each
+      block's start.
+
+      One trap found while doing it: oisc4's syscall catch-all was
+      `op >= OPEN && op < INS_MAX`, so *extending the enum* would have
+      made every appended opcode look like a syscall and silently
+      mistranslate. It is now bounded by `DBG`, which is where that class
+      actually ends. `make test-oisc4` green.
+
+      `test-c4mp` still fails on `raycast: output differs` — verified
+      pre-existing by building HEAD in a clean worktree and reproducing
+      it there.
 - [ ] **F4** `c4cc -mfuse`. *Verify:* the default build is
       **byte-identical** to today's; the `-mfuse` build of the same source
       behaves identically and executes measurably fewer instructions.

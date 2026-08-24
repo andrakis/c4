@@ -234,7 +234,12 @@ void c4cc_init_instructions() {
 	// M12: c4mp-only fused array-element load/store, -mcisc only.
 	// Same reason as the processor opcodes above -- c4rdump indexes
 	// this table with no bounds check.
-	"LXI ,SXI ,";
+	"LXI ,SXI ,TRAW,"
+	// The fused opcodes -- docs/fused-opcodes.md. Names only unless
+	// -mfuse was passed; same no-bounds-check reason as above.
+	"LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,"
+	"ORI ,XORI,ANDI,EQI ,NEI ,LTI ,GTI ,LEI ,GEI ,SHLI,"
+	"SHRI,ADDI,SUBI,MULI,DIVI,MODI,";
 	c4cc_keywords =
 		"static extern __attribute__ constructor destructor "     // Ignored by c4m
 		"char else enum if int return sizeof for continue while " // Keywords

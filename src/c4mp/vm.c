@@ -118,7 +118,18 @@ void c4_vm_init() {
         "JSRI,JSRS,JMPA,TLEV,DBG ,"
         "CPUI,CPUN,CPUS,CPUH,"
         "CAS ,XCHG,FADD,CWAI,CWAK,IPI ,"
-        "LXI ,SXI ,TRAW,";
+        "LXI ,SXI ,TRAW,"
+        "LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,"
+        "ORI ,XORI,ANDI,EQI ,NEI ,LTI ,GTI ,LEI ,GEI ,SHLI,"
+        "SHRI,ADDI,SUBI,MULI,DIVI,MODI,";
+}
+
+// One place decides which opcodes carry an operand word, the same rule
+// c4m_has_operand states in c4m.c. LIP, ADDL and POPA take none.
+int c4_has_operand(int op) {
+    return op <= ADJ || op == JSRI || op == JSRS
+        || (op >= LDL && op <= IMMP)
+        || op == STL || (op >= ORI && op <= MODI);
 }
 
 char *c4_opname(int op) {
@@ -360,7 +371,7 @@ int c4_run(struct c4_cpu * RESTRICT c, int quantum) {
         // inline operand that OPCD has no way to supply.
         if (i == OPCD) {
             i = *sp;
-            if (i <= ADJ) {
+            if (c4_has_operand(i)) {
                 printf("%.4s does not support opcodes requiring arguments (%.4s given)\n",
                        c4_opname(OPCD), c4_opname(i));
                 c4_trap(TRAP_OPV, i, traph, &sp, &bp, &pc, a, mode, ival);
@@ -375,12 +386,40 @@ int c4_run(struct c4_cpu * RESTRICT c, int quantum) {
             printf("A=0x%-8X> ", a);
             if (i >= 0 && i < INS_SIZE) printf("%.4s", c4_opname(i));
             else printf("unknown %-8d (0x%X)", i, i);
-            if (i <= ADJ || i == JSRI || i == JSRS) printf(" %d\n", *pc);
+            if (c4_has_operand(i)) printf(" %d\n", *pc);
             else printf("\n");
         }
 
         switch (i) {
         case LEA:  a = (int)(bp + *pc++); break;          // local address
+        // The fused opcodes. Each is exactly the sequence it replaces,
+        // written out -- docs/fused-opcodes.md.
+        case LDL:  a = *(int *)(bp + *pc++); break;
+        case LDG:  a = *(int *)*pc++; break;
+        case PSHL: a = *(int *)(bp + *pc++); *--sp = a; break;
+        case PSHG: a = *(int *)*pc++; *--sp = a; break;
+        case LEAP: a = (int)(bp + *pc++); *--sp = a; break;
+        case IMMP: a = *pc++; *--sp = a; break;
+        case LIP:  a = *(int *)a; *--sp = a; break;
+        case ADDL: a = *(int *)(*sp++ + a); break;
+        case STL:  *(int *)(bp + *pc++) = a; break;
+        case POPA: a = *sp++; break;
+        case ORI:  a = a |  *pc++; break;
+        case XORI: a = a ^  *pc++; break;
+        case ANDI: a = a &  *pc++; break;
+        case EQI:  a = a == *pc++; break;
+        case NEI:  a = a != *pc++; break;
+        case LTI:  a = a <  *pc++; break;
+        case GTI:  a = a >  *pc++; break;
+        case LEI:  a = a <= *pc++; break;
+        case GEI:  a = a >= *pc++; break;
+        case SHLI: a = a << *pc++; break;
+        case SHRI: a = a >> *pc++; break;
+        case ADDI: a = a +  *pc++; break;
+        case SUBI: a = a -  *pc++; break;
+        case MULI: a = a *  *pc++; break;
+        case DIVI: a = a /  *pc++; break;
+        case MODI: a = a %  *pc++; break;
         case IMM:  a = *pc++; break;                      // immediate / global address
         case JMP:  pc = (int *)*pc; break;
         case JMPA: pc = (int *)a; break;                  // jump through the accumulator

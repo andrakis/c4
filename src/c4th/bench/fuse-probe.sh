@@ -1,10 +1,12 @@
 #!/bin/sh
-# The B5c opcode probe's measuring half: how many of the instructions a
-# workload ACTUALLY EXECUTES would a given set of fused opcodes remove?
+# How many of the instructions a workload ACTUALLY EXECUTES would a given
+# set of fused opcodes remove, and which of them earn their keep?
 #
 # A greedy left-to-right peephole over the executed instruction stream,
 # which is a different and more interesting question than a static count
-# over an image -- the hot code is a small part of any image.
+# over an image -- the hot code is a small part of any image. Each rule
+# reports how much it removes IN THE SET, so a rule whose pattern is
+# always swallowed by a longer one shows up as worth nothing.
 #
 # The instrumentation is generated into a throwaway copy of c4m.c rather
 # than living in it. c4m.c is compiled by PLAIN C4 as well as by gcc, and
@@ -20,56 +22,93 @@ python3 - "$OUT.c" <<'PY'
 import sys
 src = open('c4m.c').read()
 src = src.replace("#include <stdio.h>", "#include <stdio.h>\n#include <stdlib.h>", 1)
-src = src.replace("char *c4m_opcodes;", "long long fu_tot, fu_saveA, fu_saveB;\nvoid fu_feed (int i);\nchar *c4m_opcodes;", 1)
+src = src.replace("char *c4m_opcodes;",
+                  "long long fu_tot;\nvoid fu_feed (int i);\nchar *c4m_opcodes;", 1)
 
 PROBE = r'''
-int fuA_q[4], fuA_n, fuB_q[4], fuB_n;
-int fu_isalu (int x) {
-  return x == ADD || x == SUB || x == MUL || x == DIV || x == MOD
-      || x == AND || x == OR  || x == XOR || x == SHL || x == SHR
-      || x == EQ  || x == NE  || x == LT  || x == GT || x == LE || x == GE;
+/* Candidate rules, longest first: a greedy match takes the first that
+   fits, so a three-instruction fusion always wins over the two it
+   contains. RULES is {length, op0, op1, op2, saving}. */
+#define FU_NRULE 26
+int fu_rop[FU_NRULE][3];
+int fu_rlen[FU_NRULE];
+char *fu_rname[FU_NRULE];
+long long fu_rhit[FU_NRULE];
+int fu_ninit;
+
+void fu_rule (int k, int len, int a, int b, int c, char *nm) {
+  fu_rlen[k] = len; fu_rop[k][0] = a; fu_rop[k][1] = b; fu_rop[k][2] = c;
+  fu_rname[k] = nm;
 }
-/* Set A: the five opcodes the probe actually built into c4m and measured
-   end to end. STL and POPA replace patterns that are not adjacent pairs,
-   so this UNDERSTATES set A. */
-int fuA_match (int *q, int n) {
-  if (n >= 3 && q[0] == PSH && q[1] == IMM && (q[2] == ADD || q[2] == MUL)) return 3;
-  if (n >= 2 && q[0] == LEA && q[1] == LI) return 2;
-  return 0;
+void fu_rules_init () {
+  int k;
+  k = 0;
+  /* three-instruction fusions */
+  fu_rule(k++, 3, PSH, IMM, ADD, "ADDI  a = a + n         (PSH IMM ADD)");
+  fu_rule(k++, 3, PSH, IMM, SUB, "SUBI  a = a - n         (PSH IMM SUB)");
+  fu_rule(k++, 3, PSH, IMM, MUL, "MULI  a = a * n         (PSH IMM MUL)");
+  fu_rule(k++, 3, PSH, IMM, DIV, "DIVI  a = a / n         (PSH IMM DIV)");
+  fu_rule(k++, 3, PSH, IMM, MOD, "MODI  a = a % n         (PSH IMM MOD)");
+  fu_rule(k++, 3, PSH, IMM, AND, "ANDI  a = a & n         (PSH IMM AND)");
+  fu_rule(k++, 3, PSH, IMM, OR,  "ORI   a = a | n         (PSH IMM OR)");
+  fu_rule(k++, 3, PSH, IMM, XOR, "XORI  a = a ^ n         (PSH IMM XOR)");
+  fu_rule(k++, 3, PSH, IMM, SHL, "SHLI  a = a << n        (PSH IMM SHL)");
+  fu_rule(k++, 3, PSH, IMM, SHR, "SHRI  a = a >> n        (PSH IMM SHR)");
+  fu_rule(k++, 3, PSH, IMM, EQ,  "EQI   a = a == n        (PSH IMM EQ)");
+  fu_rule(k++, 3, PSH, IMM, NE,  "NEI   a = a != n        (PSH IMM NE)");
+  fu_rule(k++, 3, PSH, IMM, LT,  "LTI   a = a < n         (PSH IMM LT)");
+  fu_rule(k++, 3, PSH, IMM, GT,  "GTI   a = a > n         (PSH IMM GT)");
+  fu_rule(k++, 3, PSH, IMM, LE,  "LEI   a = a <= n        (PSH IMM LE)");
+  fu_rule(k++, 3, PSH, IMM, GE,  "GEI   a = a >= n        (PSH IMM GE)");
+  fu_rule(k++, 3, LEA, LI,  PSH, "PSHL  push local n      (LEA LI PSH)");
+  fu_rule(k++, 3, IMM, LI,  PSH, "PSHG  push global n     (IMM LI PSH)");
+  fu_rule(k++, 3, LEA, LC,  PSH, "PSHLC push local char   (LEA LC PSH)");
+  fu_rule(k++, 3, IMM, LC,  PSH, "PSHGC push global char  (IMM LC PSH)");
+  /* two-instruction fusions */
+  fu_rule(k++, 2, LEA, LI,  -1,  "LDL   a = *(bp+n)       (LEA LI)");
+  fu_rule(k++, 2, IMM, LI,  -1,  "LDG   a = *(int *)n     (IMM LI)");
+  fu_rule(k++, 2, LEA, PSH, -1,  "LEAP  push bp+n         (LEA PSH)");
+  fu_rule(k++, 2, IMM, PSH, -1,  "IMMP  push n            (IMM PSH)");
+  fu_rule(k++, 2, LI,  PSH, -1,  "LIP   a = *a; push a    (LI PSH)");
+  fu_rule(k++, 2, ADD, LI,  -1,  "ADDL  a = *(*sp++ + a)  (ADD LI)");
+  fu_ninit = k;
 }
-/* Set B: what the instruction profile actually asks for -- load local,
-   load global, push local, push global, and the whole immediate-ALU
-   family. Not built; this is the estimate that says whether it is worth
-   building. */
-int fuB_match (int *q, int n) {
-  if (n >= 3 && q[0] == PSH && q[1] == IMM && fu_isalu(q[2])) return 3;
-  if (n >= 3 && q[0] == LEA && q[1] == LI && q[2] == PSH) return 3;
-  if (n >= 3 && q[0] == IMM && q[1] == LI && q[2] == PSH) return 3;
-  if (n >= 2 && q[0] == LEA && q[1] == LI) return 2;
-  if (n >= 2 && q[0] == IMM && q[1] == LI) return 2;
-  if (n >= 2 && q[0] == LEA && q[1] == PSH) return 2;
-  return 0;
-}
-void fu_step (int *q, int *np, long long *save, int (*m)(int *, int), int x) {
-  int k, j;
-  q[(*np)++] = x;
-  if (*np < 3) return;
-  k = m(q, *np);
-  if (k) { *save = *save + (k - 1); *np = 0;
-           for (j = k; j < 3; ++j) q[(*np)++] = q[j]; }
-  else   { for (j = 1; j < 3; ++j) q[j-1] = q[j]; *np = 2; }
-}
+
+int fu_q[4], fu_n;
 void fu_feed (int i) {
-  fu_step(fuA_q, &fuA_n, &fu_saveA, fuA_match, i);
-  fu_step(fuB_q, &fuB_n, &fu_saveB, fuB_match, i);
+  int r, k, j, m;
+  if (!fu_ninit) fu_rules_init();
+  fu_q[fu_n++] = i;
+  if (fu_n < 3) return;
+  m = -1;
+  for (r = 0; r < fu_ninit; ++r) {
+    k = fu_rlen[r];
+    if (fu_rop[r][0] == fu_q[0] && fu_rop[r][1] == fu_q[1]
+        && (k == 2 || fu_rop[r][2] == fu_q[2])) { m = r; break; }
+  }
+  if (m >= 0) {
+    ++fu_rhit[m];
+    k = fu_rlen[m];
+    fu_n = 0;
+    for (j = k; j < 3; ++j) fu_q[fu_n++] = fu_q[j];
+  } else {
+    for (j = 1; j < 3; ++j) fu_q[j-1] = fu_q[j];
+    fu_n = 2;
+  }
 }
+
 void fu_report () {
+  int r; long long saved, s;
   if (!fu_tot) return;
-  fprintf(stderr, "FUSE: %lld instructions executed\n", fu_tot);
-  fprintf(stderr, "FUSE:   set A (LDL, ADDI, MULI)                   removes %lld = %.2f%%\n",
-          fu_saveA, 100.0 * fu_saveA / fu_tot);
-  fprintf(stderr, "FUSE:   set B (LDL LDG PSHL PSHG + ALU-immediate) removes %lld = %.2f%%\n",
-          fu_saveB, 100.0 * fu_saveB / fu_tot);
+  saved = 0;
+  for (r = 0; r < fu_ninit; ++r) saved = saved + fu_rhit[r] * (fu_rlen[r] - 1);
+  fprintf(stderr, "FUSE: %lld instructions executed; the set below removes %lld = %.2f%%\n",
+          fu_tot, saved, 100.0 * saved / fu_tot);
+  for (r = 0; r < fu_ninit; ++r) {
+    s = fu_rhit[r] * (fu_rlen[r] - 1);
+    fprintf(stderr, "FUSE:   %-34s %10lld hits  %6.2f%%\n",
+            fu_rname[r], fu_rhit[r], 100.0 * s / fu_tot);
+  }
 }
 
 // types
@@ -86,6 +125,6 @@ open(sys.argv[1], 'w').write(src)
 PY
 gcc -O2 -fwrapv -g -idirafter include -I . "$OUT.c" c4m_float.c -o "$OUT" -lm 2>/dev/null
 echo "--- c4cc compiling c4.c ---"
-"$OUT" load-c4r.c -- c4cc.c4r -o "$OUT.c4r" c4.c > /dev/null 2>>/dev/stderr || true
+"$OUT" load-c4r.c -- c4cc.c4r -o "$OUT.c4r" c4.c > /dev/null
 echo "--- c4sp -R running c4lc's lexer over c4.c ---"
 "$OUT" load-c4r.c -- c4sp.c4r -R -c 8000000 src/c4sp/lisp/c4lc-tokens.lisp -count c4.c > /dev/null

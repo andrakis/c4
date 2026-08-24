@@ -66,12 +66,32 @@
 	LXI SXI
 	;; raw-terminal-mode toggle: a c4mp host syscall (tcsetattr) that
 	;; c4or1k uses to forward Ctrl+C to the guest. Appended, not inserted.
-	TRAW))
+	TRAW
+	;; The fused opcodes -- docs/fused-opcodes.md. Two- and three-
+	;; instruction sequences a third of the instructions real workloads
+	;; execute are made of, emitted only under -mfuse. Appended, never
+	;; inserted.
+	LDL LDG PSHL PSHG LEAP IMMP LIP ADDL STL POPA
+	;; the immediate-ALU family, in the same order as OR..MOD, so the
+	;; immediate form of opcode k is ORI + (k - OR)
+	ORI XORI ANDI EQI NEI LTI GTI LEI GEI SHLI
+	SHRI ADDI SUBI MULI DIVI MODI))
 (define c4r:nops (length c4r:ops))
 
-;; does opcode n take an operand word? LEA..ADJ are 0..7; JSRI 61 JSRS 62
+;; does opcode n take an operand word? LEA..ADJ are 0..7; JSRI 61 JSRS 62;
+;; of the fused opcodes LDL..IMMP are 79..84, STL is 87 and the whole
+;; immediate-ALU family is 89..104 -- LIP, ADDL and POPA take none.
+;; No `and` here: it lives in macros.lisp, and c4r.lisp is loaded by
+;; programs that do not load that.
 (define c4r:has-operand (lambda (n)
-	(if (<= n 7) true (if (= n 61) true (= n 62)))))
+	(if (<= n 7) true
+	(if (= n 61) true
+	(if (= n 62) true
+	(if (= n 87) true
+	(if (< n 79) false
+	(if (<= n 84) true
+	(if (< n 89) false
+	    (<= n 104))))))))))
 
 (define c4r:opname (lambda (n) (index c4r:ops n)))
 (define c4r:opnum (lambda (name) (next c4r:opnum/3 name c4r:ops 0)))

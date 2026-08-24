@@ -113,6 +113,16 @@ enum {
 	_JMP,_ADJ,C4CF,C4CY,TIME,
 	SIGH,SIGI,USLP,INFO,OPSL,
 	C4IV,FLT ,JSRI,JSRS,JMPA,TLEV,DBG ,
+	// c4mp's, which this translator names but does not implement
+	CPUI,CPUN,CPUS,CPUH,
+	CAS ,XCHG,FADD,CWAI,CWAK,IPI ,
+	LXI ,SXI ,TRAW,
+	// The fused opcodes -- docs/fused-opcodes.md. Appended, never
+	// inserted; the same numbers as c4m.c, c4l.c, load-c4r.c, c4mp.h,
+	// c4cc.c and c4r.lisp.
+	LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,
+	ORI ,XORI,ANDI,EQI ,NEI ,LTI ,GTI ,LEI ,GEI ,SHLI,
+	SHRI,ADDI,SUBI,MULI,DIVI,MODI,
 	INS_MAX
 };
 
@@ -454,7 +464,13 @@ int vm_opcode_lookup (int nameoff) {
 	"ITH ,_OPC,_BLT,_TRP,OPCD,"
 	"_JMP,_ADJ,C4CF,C4CY,TIME,"
 	"SIGH,SIGI,USLP,INFO,OPSL,"
-	"C4IV,FLT ,JSRI,JSRS,JMPA,TLEV,DBG ,";
+	"C4IV,FLT ,JSRI,JSRS,JMPA,TLEV,DBG ,"
+	"CPUI,CPUN,CPUS,CPUH,"
+	"CAS ,XCHG,FADD,CWAI,CWAK,IPI ,"
+	"LXI ,SXI ,TRAW,"
+	"LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,"
+	"ORI ,XORI,ANDI,EQI ,NEI ,LTI ,GTI ,LEI ,GEI ,SHLI,"
+	"SHRI,ADDI,SUBI,MULI,DIVI,MODI,";
 	r = 0;
 	while (r < INS_MAX) {
 		a = name; b = ops + r * 5;
@@ -754,9 +770,12 @@ int *tr_ptype;     // per code word: 0 none, 1 CODE patch, 2 DATA patch
 int *tr_pval;      // patch value for the above
 int  oe;           // emission cursor (arena byte offset)
 
-// Does this opcode carry an operand word?
+// Does this opcode carry an operand word? Same rule as c4m_has_operand
+// in c4m.c -- LIP, ADDL and POPA take none.
 int has_operand (int op) {
-	return op <= ADJ || op == JSRI || op == JSRS;
+	return op <= ADJ || op == JSRI || op == JSRS
+	    || (op >= LDL && op <= IMMP)
+	    || op == STL || (op >= ORI && op <= MODI);
 }
 
 // OISC instructions emitted for each c4 opcode (fixed per opcode).
@@ -772,7 +791,19 @@ int o4_size (int op) {
 	if (op == LEV) return 7;
 	if (op == SC) return 11;
 	if (op == PRTF) return 4;
-	if (op >= OPEN && op < INS_MAX) return 3;  // syscall class
+	// The fused opcodes -- each is exactly the sequence it replaces,
+	// so its expansion is the concatenation of theirs.
+	if (op == LDL || op == LDG) return 3;
+	if (op == PSHL || op == PSHG) return 6;
+	if (op == LEAP || op == IMMP) return 4;
+	if (op == LIP) return 5;
+	if (op == ADDL) return 8;
+	if (op == STL) return 2;
+	if (op == POPA) return 3;
+	if (op >= ORI && op <= MODI) return 4;
+	// The syscall class ends at DBG. Bounding it by INS_MAX would make
+	// every opcode appended after DBG look like a syscall.
+	if (op >= OPEN && op <= DBG) return 3;  // syscall class
 	printf("oisc4: unknown opcode %ld during sizing\n", op);
 	exit(-1);
 }
@@ -932,7 +963,65 @@ void translate_one (int i) {
 		emit(RSP, 0, RR0);
 		emit(RZ, op, P_SYSCALL);
 	}
-	else if (op >= OPEN && op < INS_MAX) { // remaining syscall class
+	// -- the fused opcodes ------------------------------------------
+	// Each is the concatenation of the expansions it replaces. The
+	// self-patching offsets are counted from this block's start, which
+	// is the only thing that changes when two blocks are run together.
+	else if (op == LDL || op == LDG) {
+		if (op == LDL) emit(RBP, t_code[i + 1] * 8, RA);
+		else           emit(RZ, operand(i + 1), RA);
+		emit(RA, 0, b + 2 * INSTB);         // patch src of #3
+		emit(PH, 0, RA);                    // a = [a]
+	}
+	else if (op == PSHL || op == PSHG) {
+		if (op == PSHL) emit(RBP, t_code[i + 1] * 8, RA);
+		else            emit(RZ, operand(i + 1), RA);
+		emit(RA, 0, b + 2 * INSTB);
+		emit(PH, 0, RA);                    // a = [a]
+		emit(RSP, -8, RSP);
+		emit(RSP, 0, b + 5 * INSTB + 16);   // patch dst of #6
+		emit(RA, 0, PH);                    // [sp] = a
+	}
+	else if (op == LEAP || op == IMMP) {
+		if (op == LEAP) emit(RBP, t_code[i + 1] * 8, RA);
+		else            emit(RZ, operand(i + 1), RA);
+		emit(RSP, -8, RSP);
+		emit(RSP, 0, b + 3 * INSTB + 16);   // patch dst of #4
+		emit(RA, 0, PH);                    // [sp] = a
+	}
+	else if (op == LIP) {
+		emit(RA, 0, b + 1 * INSTB);         // patch src of #2
+		emit(PH, 0, RA);                    // a = [a]
+		emit(RSP, -8, RSP);
+		emit(RSP, 0, b + 4 * INSTB + 16);   // patch dst of #5
+		emit(RA, 0, PH);                    // [sp] = a
+	}
+	else if (op == ADDL) {
+		emit(RSP, 0, b + 1 * INSTB);        // patch src of #2
+		emit(PH, 0, P_MATHX);               // X = [sp]
+		emit(RSP, 8, RSP);
+		emit(RA, 0, P_MATHY);               // Y = a
+		emit(RZ, ADD - OR, P_MATHOP);
+		emit(P_MATHV, 0, RA);               // a = [sp] + a
+		emit(RA, 0, b + 7 * INSTB);         // patch src of #8
+		emit(PH, 0, RA);                    // a = [a]
+	}
+	else if (op == STL) {
+		emit(RBP, t_code[i + 1] * 8, b + 1 * INSTB + 16);  // patch dst of #2
+		emit(RA, 0, PH);                    // [bp + n] = a
+	}
+	else if (op == POPA) {
+		emit(RSP, 0, b + 1 * INSTB);        // patch src of #2
+		emit(PH, 0, RA);                    // a = [sp]
+		emit(RSP, 8, RSP);
+	}
+	else if (op >= ORI && op <= MODI) {
+		emit(RA, 0, P_MATHX);               // X = a
+		emit(RZ, operand(i + 1), P_MATHY);  // Y = n
+		emit(RZ, op - ORI, P_MATHOP);       // same order as OR..MOD
+		emit(P_MATHV, 0, RA);               // a = result
+	}
+	else if (op >= OPEN && op <= DBG) { // remaining syscall class
 		emit(RSP, 0, RR0);
 		emit(RZ, op, P_SYSCALL);
 		emit(P_SYSCALL, 0, RA);

@@ -36,11 +36,18 @@ ASM-RESET
 36 CONSTANT #MSET  37 CONSTANT #MCMP  38 CONSTANT #EXIT  39 CONSTANT #PUTC
 40 CONSTANT #PUTS  41 CONSTANT #RALC  42 CONSTANT #MCPY  43 CONSTANT #STRC
 61 CONSTANT #JSRI  62 CONSTANT #JSRS  63 CONSTANT #JMPA  64 CONSTANT #TLEV
-\ 66-78 belong to c4mp. 79 up are the experimental fused opcodes that
-\ exist in c4m ONLY, for the B5c probe -- see docs/c4th-design.md.
-\ Nothing emits them unless NOPC is set in native.f.
-79 CONSTANT #LDL   80 CONSTANT #STL   81 CONSTANT #POPA
-82 CONSTANT #ADDI  83 CONSTANT #MULI
+\ 66-78 belong to c4mp. 79 up are the fused opcodes -- see
+\ docs/fused-opcodes.md. Nothing emits them unless NOPC is set in
+\ native.f, so by default the assembler's output still runs on plain c4.
+79 CONSTANT #LDL   80 CONSTANT #LDG   81 CONSTANT #PSHL  82 CONSTANT #PSHG
+83 CONSTANT #LEAP  84 CONSTANT #IMMP  85 CONSTANT #LIP   86 CONSTANT #ADDL
+87 CONSTANT #STL   88 CONSTANT #POPA
+\ The immediate-ALU family, in the same order as OR..MOD, so the
+\ immediate form of opcode k is #ORI + (k - #OR).
+89 CONSTANT #ORI   90 CONSTANT #XORI  91 CONSTANT #ANDI  92 CONSTANT #EQI
+93 CONSTANT #NEI   94 CONSTANT #LTI   95 CONSTANT #GTI   96 CONSTANT #LEI
+97 CONSTANT #GEI   98 CONSTANT #SHLI  99 CONSTANT #SHRI 100 CONSTANT #ADDI
+101 CONSTANT #SUBI 102 CONSTANT #MULI 103 CONSTANT #DIVI 104 CONSTANT #MODI
 
 \ -- the emitters ------------------------------------------------------
 \ Operand-carrying first. LEA and ADJ count cells; IMM is a value; JMP,
@@ -67,11 +74,24 @@ ASM-RESET
 : MOD,  #MOD OP, ;   : PRTF, #PRTF OP, ;  : EXIT, #EXIT OP, ;
 : PUTC, #PUTC OP, ;  : JMPA, #JMPA OP, ;
 
-: LDL,  ( n -- )  #LDL  OP2, ;
+: LDL,  ( n -- )  #LDL  OP2, ;   : LDG,  ( n -- )  #LDG  OP2, ;
+: PSHL, ( n -- )  #PSHL OP2, ;   : PSHG, ( n -- )  #PSHG OP2, ;
+: LEAP, ( n -- )  #LEAP OP2, ;   : IMMP, ( n -- )  #IMMP OP2, ;
 : STL,  ( n -- )  #STL  OP2, ;
-: ADDI, ( n -- )  #ADDI OP2, ;
-: MULI, ( n -- )  #MULI OP2, ;
-: POPA, #POPA OP, ;
+: LIP,  #LIP  OP, ;   : ADDL, #ADDL OP, ;   : POPA, #POPA OP, ;
+
+\ The immediate form of a binary opcode: OPI, takes the value and the
+\ ordinary opcode, which is what makes this one rule rather than sixteen
+\ special cases in the backend.
+: OPI,  ( n op -- )  #OR - #ORI + OP2, ;
+: ORI,  ( n -- ) #ORI  OP2, ;   : XORI, ( n -- ) #XORI OP2, ;
+: ANDI, ( n -- ) #ANDI OP2, ;   : EQI,  ( n -- ) #EQI  OP2, ;
+: NEI,  ( n -- ) #NEI  OP2, ;   : LTI,  ( n -- ) #LTI  OP2, ;
+: GTI,  ( n -- ) #GTI  OP2, ;   : LEI,  ( n -- ) #LEI  OP2, ;
+: GEI,  ( n -- ) #GEI  OP2, ;   : SHLI, ( n -- ) #SHLI OP2, ;
+: SHRI, ( n -- ) #SHRI OP2, ;   : ADDI, ( n -- ) #ADDI OP2, ;
+: SUBI, ( n -- ) #SUBI OP2, ;   : MULI, ( n -- ) #MULI OP2, ;
+: DIVI, ( n -- ) #DIVI OP2, ;   : MODI, ( n -- ) #MODI OP2, ;
 
 \ -- forward references ------------------------------------------------
 \ A branch whose target is not known yet is emitted with a zero operand
@@ -85,14 +105,18 @@ ASM-RESET
 \ Four characters per mnemonic, indexed by opcode -- the same shape as
 \ c4.c's own name string, which is what the VM's own debug output uses.
 
-S" LEA IMM JMP JSR BZ  BNZ ENT ADJ LEV LI  LC  SI  SC  PSH OR  XOR AND EQ  NE  LT  GT  LE  GE  SHL SHR ADD SUB MUL DIV MOD OPENREADCLOSPRTFMALCFREEMSETMCMPEXITPUTCPUTSRALCMCPYSTRCITH _OPC_BLT_TRPOPCD_JMP_ADJC4CFC4CYTIMESIGHSIGIUSLPINFOOPSLC4IVFLT JSRIJSRSJMPATLEVDBG RS66RS67RS68RS69RS70RS71RS72RS73RS74RS75RS76RS77RS78LDL STL POPAADDIMULI" DROP CONSTANT OPNAMES
+S" LEA IMM JMP JSR BZ  BNZ ENT ADJ LEV LI  LC  SI  SC  PSH OR  XOR AND EQ  NE  LT  GT  LE  GE  SHL SHR ADD SUB MUL DIV MOD OPENREADCLOSPRTFMALCFREEMSETMCMPEXITPUTCPUTSRALCMCPYSTRCITH _OPC_BLT_TRPOPCD_JMP_ADJC4CFC4CYTIMESIGHSIGIUSLPINFOOPSLC4IVFLT JSRIJSRSJMPATLEVDBG RS66RS67RS68RS69RS70RS71RS72RS73RS74RS75RS76RS77RS78LDL LDG PSHLPSHGLEAPIMMPLIP ADDLSTL POPAORI XORIANDIEQI NEI LTI GTI LEI GEI SHLISHRIADDISUBIMULIDIVIMODI" DROP CONSTANT OPNAMES
 
 : .OPNAME ( n -- )  4 * OPNAMES +  4 OVER + SWAP
                     BEGIN 2DUP > WHILE DUP C@ EMIT 1+ REPEAT 2DROP ;
 
-: HAS-OPERAND? ( op -- f )  DUP #ADJ <=  OVER #JSRI = OR  OVER #JSRS = OR
-                            OVER #LDL = OR  OVER #STL = OR
-                            OVER #ADDI = OR SWAP #MULI = OR ;
+\ One place decides which opcodes carry an operand word -- the same rule
+\ c4m_has_operand states in c4m.c. LIP, ADDL and POPA take none.
+: HAS-OPERAND? ( op -- f )
+   DUP #ADJ <=  OVER #JSRI = OR  OVER #JSRS = OR
+   OVER DUP #LDL >= SWAP #IMMP <= AND OR
+   OVER #STL = OR
+   SWAP DUP #ORI >= SWAP #MODI <= AND OR ;
 
 \ Addresses inside the emitted code are printed as * rather than as
 \ numbers: they depend on where the buffer happened to land, and the

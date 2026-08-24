@@ -275,18 +275,30 @@ enum {
 	FLT ,
 	// Instructions
 	JSRI,JSRS,JMPA,TLEV,DBG ,
-	// 66-78 belong to c4mp (CPUI..TRAW, see src/c4mp/c4mp.h). c4m does
-	// not implement them and still traps them as TRAP_ILLOP; they are
-	// named here only so that anything appended below lands on the
-	// number it would really have. A guest must keep feature-testing
-	// with C4I_SMP rather than by asking for these by name.
-	RS66,RS67,RS68,RS69,RS70,RS71,RS72,RS73,RS74,RS75,RS76,RS77,RS78,
-	// EXPERIMENTAL -- the B5c opcode probe, see docs/c4th-design.md.
-	// Fused frame access and immediate arithmetic, measured against
-	// c4th's native backend. c4m ONLY: nothing else in the tree knows
-	// these numbers, so nothing else can emit or receive them, and no
-	// existing program's behaviour changes by their existing.
-	LDL ,STL ,POPA,ADDI,MULI,
+	// 66-78 are c4mp's (see src/c4mp/c4mp.h). c4m does not implement
+	// them and still traps them as TRAP_ILLOP; they are named here so
+	// that every mirrored table holds the same names at the same
+	// numbers, and so the debug disassembler names them rather than
+	// printing "unknown". A guest must keep feature-testing with
+	// C4I_SMP rather than by asking for one of these by name -- and
+	// note that __opcode() will now answer with a number for them.
+	CPUI,CPUN,CPUS,CPUH,
+	CAS ,XCHG,FADD,CWAI,CWAK,IPI ,
+	LXI ,SXI ,TRAW,
+	// Fused opcodes -- see docs/fused-opcodes.md. Each replaces a two or
+	// three instruction sequence that a third of the instructions two
+	// real workloads execute is made of. Every one carries at most one
+	// operand word, so nothing that walks code learns a new shape.
+	//
+	// Nothing emits them unless asked (c4cc/c4lc -mfuse, c4th's NOPC),
+	// so no existing program's behaviour changes by their existing.
+	// c4.c does NOT have them: a fused image does not run under plain
+	// c4, which is why emission is opt-in.
+	LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,
+	// The immediate-ALU family, in the same order as OR..MOD above, so
+	// that the immediate form of opcode k is ORI + (k - OR).
+	ORI ,XORI,ANDI,EQI ,NEI ,LTI ,GTI ,LEI ,GEI ,SHLI,
+	SHRI,ADDI,SUBI,MULI,DIVI,MODI,
 	// End of instructions
 	INS_SIZE,
 };
@@ -309,10 +321,21 @@ void c4m_setup_opcodes () {
 	"FLT ,"
 	// Instructions
 	"JSRI,JSRS,JMPA,TLEV,DBG ,"
-	// reserved for c4mp
-	"RS66,RS67,RS68,RS69,RS70,RS71,RS72,RS73,RS74,RS75,RS76,RS77,RS78,"
-	// experimental, c4m only
-	"LDL ,STL ,POPA,ADDI,MULI,";
+	// c4mp's, which c4m names but does not implement
+	"CPUI,CPUN,CPUS,CPUH,"
+	"CAS ,XCHG,FADD,CWAI,CWAK,IPI ,"
+	"LXI ,SXI ,TRAW,"
+	// fused -- docs/fused-opcodes.md
+	"LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,"
+	"ORI ,XORI,ANDI,EQI ,NEI ,LTI ,GTI ,LEI ,GEI ,SHLI,"
+	"SHRI,ADDI,SUBI,MULI,DIVI,MODI,";
+}
+// One place decides which opcodes carry an operand word. Everything that
+// walks code -- the debug disassembler, OPCD's refusal -- asks here.
+int c4m_has_operand (int i) {
+	return i <= ADJ || i == JSRI || i == JSRS
+	    || (i >= LDL && i <= IMMP)          // LIP and ADDL take none
+	    || i == STL || (i >= ORI && i <= MODI);
 }
 char *c4m_builtins;
 void c4m_setup_builtins () {
@@ -1728,10 +1751,10 @@ int c4m_main(int argc, char **argv)
     // This opcode is handled here so debug output can show the opcode
     if (i == OPCD) {
         i = *sp;
-        // The experimental opcodes take an operand too, and it would be
-        // read out of the CALLER's instruction stream -- so OPCD has to
+        // The fused opcodes take an operand too, and it would be read
+        // out of the CALLER's instruction stream -- so OPCD has to
         // refuse them for the same reason it refuses LEA..ADJ.
-        if (i <= ADJ || i == LDL || i == STL || i == ADDI || i == MULI) {
+        if (c4m_has_operand(i)) {
             printf("%.4s does not support opcodes requiring arguments (%.4s given)\n",
                    &c4m_opcodes[OPCD * 5], &c4m_opcodes[i * 5]);
 			// Raise an OPV trap
@@ -1754,20 +1777,40 @@ int c4m_main(int argc, char **argv)
       } else {
           printf("unknown %-*d (0x%X)", padding, i, i);
       }
-      if (i <= ADJ || i == JSRI || i == JSRS
-          || i == LDL || i == STL || i == ADDI || i == MULI) printf(" %d\n", *pc);
-      else printf("\n");
+      if (c4m_has_operand(i)) printf(" %d\n", *pc); else printf("\n");
     }
 
     if      (i == LEA) a = (int)(bp + *pc++);                             // load local address
-    // The experimental opcodes sit here, in the hot part of the chain,
-    // because the point of the probe is what they cost when they are
-    // used -- not what an if-else chain costs at position eighty.
-    else if (i == LDL) a = *(int *)(bp + *pc++);                          // load local
-    else if (i == STL) *(int *)(bp + *pc++) = a;                          // store local
+    // The fused opcodes sit here, in the hot part of the chain, because
+    // the whole point of them is what they cost when they are used --
+    // not what an if-else chain costs at position eighty.
+    else if (i == LDL)  a = *(int *)(bp + *pc++);                         // load local
+    else if (i == LDG)  a = *(int *)*pc++;                                // load global
+    else if (i == PSHL) { a = *(int *)(bp + *pc++); *--sp = a; }          // push local
+    else if (i == PSHG) { a = *(int *)*pc++; *--sp = a; }                 // push global
+    else if (i == LEAP) { a = (int)(bp + *pc++); *--sp = a; }             // push local address
+    else if (i == IMMP) { a = *pc++; *--sp = a; }                         // push immediate
+    else if (i == LIP)  { a = *(int *)a; *--sp = a; }                     // load int, push
+    else if (i == ADDL) a = *(int *)(*sp++ + a);                          // add then load int
+    else if (i == STL)  *(int *)(bp + *pc++) = a;                         // store local
     else if (i == POPA) a = *sp++;                                        // pop into the accumulator
-    else if (i == ADDI) a = a + *pc++;                                    // add immediate
-    else if (i == MULI) a = a * *pc++;                                    // multiply immediate
+    // The immediate-ALU family. a OP n, where PSH; IMM n; OP was three.
+    else if (i == ORI)  a = a |  *pc++;
+    else if (i == XORI) a = a ^  *pc++;
+    else if (i == ANDI) a = a &  *pc++;
+    else if (i == EQI)  a = a == *pc++;
+    else if (i == NEI)  a = a != *pc++;
+    else if (i == LTI)  a = a <  *pc++;
+    else if (i == GTI)  a = a >  *pc++;
+    else if (i == LEI)  a = a <= *pc++;
+    else if (i == GEI)  a = a >= *pc++;
+    else if (i == SHLI) a = a << *pc++;
+    else if (i == SHRI) a = a >> *pc++;
+    else if (i == ADDI) a = a +  *pc++;
+    else if (i == SUBI) a = a -  *pc++;
+    else if (i == MULI) a = a *  *pc++;
+    else if (i == DIVI) a = a /  *pc++;
+    else if (i == MODI) a = a %  *pc++;
     else if (i == IMM) a = *pc++;                                         // load global address or immediate
     else if (i == JMP) pc = (int *)*pc;                                   // jump
     else if (i == JMPA) pc = (int *)a;                                    // jump using accumulator

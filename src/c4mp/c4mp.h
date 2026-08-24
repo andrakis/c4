@@ -103,6 +103,16 @@ enum {
     // killing the emulator. c4m has no such opcode -- appended, not
     // inserted, same rule as the processor/atomic/cisc opcodes above.
     TRAW,
+    // The fused opcodes -- docs/fused-opcodes.md. Two- and three-
+    // instruction sequences that a third of the instructions two real
+    // workloads execute are made of, emitted only under -mfuse.
+    // Appended, never inserted; the same numbers as c4m.c, c4l.c,
+    // load-c4r.c, oisc4.c, c4cc.c and c4r.lisp.
+    LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,
+    // the immediate-ALU family, in the same order as OR..MOD, so the
+    // immediate form of opcode k is ORI + (k - OR)
+    ORI ,XORI,ANDI,EQI ,NEI ,LTI ,GTI ,LEI ,GEI ,SHLI,
+    SHRI,ADDI,SUBI,MULI,DIVI,MODI,
     INS_SIZE
 };
 

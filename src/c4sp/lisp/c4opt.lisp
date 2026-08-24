@@ -341,6 +341,71 @@
 					(if (opt:is I 'LEV) true (opt:is I 'JMPA)))))))
 )))
 
+;; ---- fuse: the fused opcodes (docs/fused-opcodes.md) ----------------
+;;
+;; Off unless asked for, because c4.c does not have these opcodes and a
+;; fused image therefore does not run under plain c4.
+;;
+;; This is the right place for it rather than inside c4cc or c4lc-gen:
+;; the list is already labelled, so a fusion is pure list manipulation
+;; with no address arithmetic and no patch-table surgery -- and it then
+;; applies to any .c4r, whichever compiler produced it.
+;;
+;; It runs ONCE, after the main pipeline has reached its fixpoint, so
+;; that no other pass has to understand the fused forms and so that
+;; fusing never hides a fold from the round that follows. Longest window
+;; first: LEA;LI;PSH is PSHL, not LDL;PSH.
+
+(define opt:fuse-on false)
+(define opt:n-fuse 0)
+
+;; the immediate form of a binary opcode, or false
+(define opt:immform (lambda (Name)
+	(next opt:immform/3 Name
+		'(OR XOR AND EQ NE LT GT LE GE SHL SHR ADD SUB MUL DIV MOD)
+		'(ORI XORI ANDI EQI NEI LTI GTI LEI GEI SHLI SHRI ADDI SUBI MULI DIVI MODI))))
+(define opt:immform/3 (lambda (Name L R)
+	(if (empty? L) false
+		(if (= Name (head L)) (head R)
+			(next opt:immform/3 Name (tail L) (tail R))))))
+
+(define opt:drop (lambda (L N) (if (= 0 N) L (next opt:drop (tail L) (- N 1)))))
+
+;; The window, as (list Replacement Consumed), or false. A label, a raw
+;; word or a patched table word never matches an opcode name, so the
+;; window cannot cross one -- which is the same reason the other passes
+;; are safe.
+(define opt:fuse-try (lambda (I R) (begin
+	(if (empty? R) false
+	(begin
+		(define A (head I))
+		(define I2 (head R))
+		(define B (head I2))
+		(define C (if (empty? (tail R)) false (head (head (tail R)))))
+		(if (if (= C 'PSH) (if (= B 'LI) (if (= A 'LEA) true (= A 'IMM)) false) false)
+			(list (list (if (= A 'LEA) 'PSHL 'PSHG) (second I)) 3)
+		(if (if (= A 'PSH) (if (= B 'IMM) (not (= false (opt:immform C))) false) false)
+			(list (list (opt:immform C) (second I2)) 3)
+		(if (if (= B 'LI)  (= A 'LEA) false) (list (list 'LDL  (second I)) 2)
+		(if (if (= B 'LI)  (= A 'IMM) false) (list (list 'LDG  (second I)) 2)
+		(if (if (= B 'PSH) (= A 'LEA) false) (list (list 'LEAP (second I)) 2)
+		(if (if (= B 'PSH) (= A 'IMM) false) (list (list 'IMMP (second I)) 2)
+		(if (if (= B 'PSH) (= A 'LI)  false) (list (list 'LIP) 2)
+		(if (if (= B 'LI)  (= A 'ADD) false) (list (list 'ADDL) 2)
+			false)))))))))))))
+
+(define opt:fuse (lambda (Code) (if opt:fuse-on (next opt:fuse/2 Code (list)) Code)))
+(define opt:fuse/2 (lambda (Code Acc)
+	(if (empty? Code) (reverse Acc)
+		(begin
+			(define T (opt:fuse-try (head Code) (tail Code)))
+			(if (= false T)
+				(next opt:fuse/2 (tail Code) (cons (head Code) Acc))
+				(begin
+					(set! opt:n-fuse (+ 1 opt:n-fuse))
+					(next opt:fuse/2 (opt:drop Code (second T))
+						(cons (head T) Acc))))))))
+
 ;; ---- the pipeline ----
 
 (define opt:passes (lambda (Code Syms)
@@ -358,7 +423,7 @@
 (define c4opt:optimize (lambda (M) (begin
 	(set! opt:n-fold 0) (set! opt:n-shl 0) (set! opt:n-adj0 0)
 	(set! opt:n-jmpnext 0) (set! opt:n-thread 0) (set! opt:n-dead 0)
-	(set! opt:n-tail 0)
+	(set! opt:n-tail 0) (set! opt:n-fuse 0)
 	(define Code (index M 3))
 	(define Before (opt:count-instrs Code))
 	(define Rounds 0)
@@ -370,10 +435,13 @@
 (define c4opt:optloop (lambda (M Code Before N Prev Rounds) (begin
 	(if (if (= N Prev) true (>= Rounds 10))
 		(begin
+			;; fuse runs once, after the fixpoint
+			(set! Code (opt:fuse Code))
+			(set! N (opt:count-instrs Code))
 			(print ";; c4opt:" Before "->" N "instructions in" Rounds "rounds")
 			(print ";;   fold" opt:n-fold " mul->shl" opt:n-shl " adj0" opt:n-adj0
 				" jmp-next" opt:n-jmpnext " threaded" opt:n-thread " dead" opt:n-dead
-				" tail" opt:n-tail)
+				" tail" opt:n-tail " fused" opt:n-fuse)
 			(list (head M) (second M) (third M) Code (index M 4)
 				(index M 5) (index M 6) (index M 7) (index M 8)))
 		(begin

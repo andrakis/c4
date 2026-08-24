@@ -138,9 +138,69 @@ decision to turn the flag on by default rather than precede it.
       `test-c4mp` still fails on `raycast: output differs` — verified
       pre-existing by building HEAD in a clean worktree and reproducing
       it there.
-- [ ] **F4** `c4cc -mfuse`. *Verify:* the default build is
-      **byte-identical** to today's; the `-mfuse` build of the same source
-      behaves identically and executes measurably fewer instructions.
-- [ ] **F5** `c4lc -mfuse`. Same bar, plus the whole C4IX build.
-- [ ] **F6** Measure what it was all for: C4IX build time, `c4lc` under
-      `c4m`, `c4cc` compiling itself.
+- [x] **F4/F5** Emission, as a `fuse` pass in **`c4opt`** rather than in
+      either compiler.
+
+      That is the change of plan worth explaining. c4cc emits into a code
+      array *and* a parallel recorder, at dozens of sites; teaching both
+      to fuse would have been dozens of edits and a rebuild of the patch
+      table. `c4opt` already operates on the **labelled instruction list**
+      `c4r.lisp` decodes, where a fusion is pure list manipulation — no
+      address arithmetic, no patch-table surgery, because the labels are
+      the addresses. One implementation, and it applies to any `.c4r`
+      whichever compiler produced it.
+
+      It runs **once, after the main pipeline reaches its fixpoint**, so
+      no other pass has to understand the fused forms and so fusing never
+      hides a fold from the round after. Longest window first, so
+      `LEA;LI;PSH` becomes `PSHL` and not `LDL;PSH`. A window never
+      crosses a label, for the same reason the other passes are safe: a
+      label is not an opcode name, so it cannot match.
+
+      Two ways in: `c4lc -mfuse` (which implies `-O`), and
+      `c4sp c4opt-run.lisp -mfuse in.c4r out.c4r` for an image from any
+      compiler, c4cc's included.
+
+      *Verified* by `make test-fuse`: a real image, fused, must behave
+      identically under **c4m, c4mp and oisc4** — and be refused **by
+      name** under plain c4, which is what the mirrored tables bought.
+      Plus a wider differential: the fused `c4sp.c4r` reproduces the
+      native `c4sp` output for **all 27** files in `src/c4sp/lisp/`.
+
+- [x] **F6** What it was all for.
+
+      | workload | instructions | fused | |
+      |---|---|---|---|
+      | `c4sp -R`, c4lc's lexer over `c4.c` | 1,639,556,989 | 1,025,451,397 | **−37.5%** |
+      | `c4cc` compiling `c4.c` | 11,393,181 | 6,514,076 | **−42.8%** |
+      | C4IX, full demo boot (kernel only) | 6,924,837 | 4,834,738 | **−30.2%** |
+
+      Wall clock under `c4m`, by hyperfine: the c4lc lexer **1.56x**
+      faster (6.80s → 4.37s), `c4cc` **1.64x** (57.7ms → 35.2ms). Images
+      shrink too — `c4cc.c4r` 412,942 → 323,446 bytes (−21.7%),
+      `c4sp.c4r` 243,957 → 199,997 (−18.0%).
+
+      The measurement predicted 36-37% and the pass delivered 37.5% and
+      42.8%. That is not luck: the probe and the pass use the same greedy
+      left-to-right rule, so the only place they can disagree is where
+      the pass refuses to cross a label.
+
+### What is left
+
+**About 6% is still on the table**, and it is all the same thing: after
+fusing, the probe still reports ~6% removable on both `c4cc` and the
+C4IX kernel. Those are pairs that are *dynamically* adjacent but have a
+label between them statically, and the pass will not fuse across a label
+because something might branch to the second instruction. Many of those
+labels are targets of nothing — c4opt has no pass that drops an
+unreferenced label. That pass, and then re-running fuse, is the obvious
+next increment.
+
+**Turning `-mfuse` on by default is a separate decision**, and it needs
+c4bb first: the moment the default build fuses, C4IX stops running on
+the breadboard. Everything above is opt-in, so nothing is blocked on
+that.
+
+**Userland is unfused.** The C4IX number above fuses only the kernel;
+the programs it runs are ordinary images. Fusing those too is a Makefile
+change once the default question is settled.

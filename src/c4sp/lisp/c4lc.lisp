@@ -19,6 +19,7 @@
 	(define Opt false)
 	(define Obj false)
 	(define Cisc false)        ;; -mcisc: emit c4mp-only fused opcodes (M12)
+	(define Fuse false)        ;; -mfuse: emit the fused opcodes
 	(define Pp false)          ;; -P: preprocess internally (L9)
 	(define Conf false)        ;; -conforming: real C escapes (L10)
 	(define Paths nil)
@@ -42,6 +43,15 @@
 		;; change every array access in every c4lc-compiled program).
 		(if (= (+ "" (head Args)) "-mcisc")
 			(begin (set! Cisc true) (set! Args (tail Args)) (next flags))
+		;; -mfuse: run c4opt's fuse pass, which rewrites the two- and
+		;; three-instruction sequences a third of the instructions real
+		;; workloads execute are made of into single opcodes
+		;; (docs/fused-opcodes.md). c4m, c4mp and oisc4 have them;
+		;; PLAIN C4 DOES NOT, so an image built with this does not run
+		;; under ./c4 or ./c4 c4l.c. Off by default for exactly that
+		;; reason, and it implies -O since the pass lives in c4opt.
+		(if (= (+ "" (head Args)) "-mfuse")
+			(begin (set! Fuse true) (set! Opt true) (set! Args (tail Args)) (next flags))
 		;; -P runs c4lc's own preprocessor instead of expecting a
 		;; source that gcc -E has already been through. -I adds an
 		;; include directory, -D predefines a macro.
@@ -67,7 +77,7 @@
 				(set! PreDefs (+ PreDefs (list (+ "" (index Args 1)))))
 				(set! Args (tail (tail Args)))
 				(next flags))
-		nil))))))))))
+		nil)))))))))))
 	(flags)
 	(if (< (length Args) 2) (error "usage: c4lc.lisp [-O] [-c] in.c out"))
 	(define In (head Args))
@@ -95,6 +105,9 @@
 	(if Opt
 		(begin
 			(load "c4opt.lisp")
+			;; after the load, because that is where opt:fuse-on is
+			;; defined
+			(set! opt:fuse-on Fuse)
 			(set! M (c4opt:optimize M)))
 		nil)
 	;; Format v3 for both objects and whole-program images: uninitialized

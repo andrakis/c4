@@ -580,6 +580,27 @@ test-c4th: c4th c4th.c4r $(C4M) $(C4KE_C4R)
 	rm -f .c4th_core .c4th_fact.c4r .c4th_ccasm .c4th_b5 .c4th_fused
 	@echo "test-c4th: OK"
 
+# The fused opcodes (docs/fused-opcodes.md), end to end: take a real
+# image, run c4opt's fuse pass over it, and require that it behaves
+# identically on every host that has them -- and is refused BY NAME on
+# the one that does not.
+#
+# The refusal matters as much as the acceptance. c4.c is deliberately not
+# given these opcodes, so plain c4 must say which one it lacks rather
+# than execute rubbish; before the tables were mirrored it would have
+# read past the end of its own name string to find out.
+test-fuse: c4sp c4cc $(C4M) c4mp $(OISC4) c4l.c
+	./c4cc -o .fuse_t.c4r src/tests/tests.c > /dev/null
+	./c4sp -c 8000000 src/c4sp/lisp/c4opt-run.lisp -mfuse .fuse_t.c4r .fuse_tf.c4r > /dev/null
+	$(C4M) load-c4r.c -- .fuse_t.c4r  | grep -q "tests succeeded"
+	$(C4M) load-c4r.c -- .fuse_tf.c4r | grep -q "tests succeeded"
+	./c4mp .fuse_tf.c4r               | grep -q "tests succeeded"
+	$(OISC4) .fuse_tf.c4r             | grep -q "tests succeeded"
+	./c4 c4l.c .fuse_tf.c4r 2>&1 | grep -q "which plain c4 does not have"
+	./c4 c4l.c .fuse_t.c4r  | grep -q "tests succeeded"
+	rm -f .fuse_t.c4r .fuse_tf.c4r
+	@echo "test-fuse: OK"
+
 c4sp: $(C4SP_SRCS)
 	gcc $(EXTRA_CC) -O2 -fwrapv -fno-omit-frame-pointer -g -Iinclude -I. -o c4sp src/c4sp/c4sp.c
 # Built by c4lc -O, not c4cc: measurably smaller and never slower

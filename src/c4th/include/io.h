@@ -75,6 +75,12 @@ int th_refill () {
 }
 
 // Read a whole file. Returns 0 and leaves th_err alone if it cannot be
+// A scratch buffer for nul-terminating a Forth string before handing it
+// to open(), which wants a C string. One buffer is enough: nothing holds
+// a path across a call.
+enum { TH_PATH_MAX = 1024 };
+char th_pathbuf[TH_PATH_MAX];
+
 // opened, so the caller can report the name.
 char *th_slurp (char *path, int *lenout) {
 	int   fd, n, cap, got;

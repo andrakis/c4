@@ -742,7 +742,8 @@ c4or1k's `-mcisc` (`docs/c4or1k-design.md`) is the precedent for gating
 that behind a flag. **Everything above is c4m-only and reverts in one
 commit** if the answer is no.
 
-- [ ] **B5d** The metacompiler: `.c4r` emission. This is the rung that
+- [~] **B5d** The metacompiler: `.c4r` emission — **done except the
+      self-hosting fixed point**. This is the rung that
       turns c4th from a REPL with a code generator into a **compiler** —
       `c4th -o prog.c4r prog.f` producing a standalone image that
       `load-c4r.c` relocates, `c4rdump` inspects and c4m runs, with no
@@ -762,13 +763,61 @@ commit** if the answer is no.
       ordinary C4 function — which the backend already knows how to
       emit, since B5c gave it C4's calling convention.
 
-      - [ ] **B5d.1** The writer, and a program that exits with a value.
-            `SAVE-FILE`, the header, and code/data/patch segments.
-      - [ ] **B5d.2** Target data: `VARIABLE`s that live in the image's
-            data segment and reach it through the patch table.
-      - [ ] **B5d.3** Output, so a generated program can say something.
-      - [ ] **B5d.4** The differential: every generated image must behave
-            identically after `c4opt`, and under `-mfuse` on c4mp.
+      - [x] **B5d.1** The writer, and a program that exits with a value.
+            `SAVE-FILE` (native only — the C4 VM has no write syscall,
+            the same limit `c4sp`'s `file:write` lives with), the header,
+            and the code/data/patch segments. `: MAIN 6 7 * ;` → an image
+            c4m runs and exits 42 from.
+      - [x] **B5d.2** Target data. `TVARIABLE` makes an ordinary c4th
+            variable *and* records its host body address against an
+            offset in the image's data segment; the relocation walk turns
+            the `IMM` the backend already emits for it into a data patch.
+            The map carries the length too, which buys **initialized
+            data** for nothing: `TSYNC` copies each variable's host bytes
+            into the image at save time, so `4242 MAGIC !` at compile
+            time is what the image starts with.
+      - [x] **B5d.3** Output. `EMIT` compiles to `PRTF` and a `"%c"` in
+            the image's data — **`PRTF`, not c4m's `PUTC`**, so a
+            generated program that prints still runs on plain `c4`.
+            `src/c4th/forth/trt.f` then writes the number printer in
+            Forth, which is the point rather than a convenience: c4th's
+            own `.` is a C function operating on a C data stack, and a
+            standalone image has neither, so the way past the C
+            primitives is not to call them but to write them again in a
+            language the compiler can see.
+      - [x] **B5d.4** The differential. `src/c4th/tests/b5d.f` runs a
+            program on c4th's threaded engine — the oracle, since that is
+            the engine that passes the CORE suite — then compiles it, and
+            `make test-c4th` requires the image to print exactly the same
+            thing on **c4m, c4mp, oisc4 and plain c4**, after `c4opt`,
+            and with `-mfuse` under c4mp. Plus `c4r-roundtrip`, which
+            decodes and re-encodes the image byte for byte: that checks
+            the FORMAT rather than the behaviour, and a subtly wrong
+            writer passes a forgiving loader and fails it.
+
+      **Three real things this shook out.**
+
+      `RSHIFT` had never been implemented — B5c recorded it as declined
+      and moved on. It is logical where C4's `SHR` is arithmetic, the
+      same trap B3 fell into in the threaded engine, and zero needs its
+      own arm because every branchless version is wrong there
+      (`-1 << 0` is `-1`).
+
+      **`TSAVE` wrote an image after a failed compile.** A compiler that
+      emits something after declining is worse than one that emits
+      nothing: the file exists, looks plausible, and traps on its first
+      instruction. It now refuses.
+
+      **The `.c4r` code stream is 1-based.** Word 0 is never an
+      instruction, because c4cc emits through `*++e` —
+      `src/oisc4/oisc4.c:1108` says so outright and `c4rdump` assumes it
+      too. Starting at 0 produced an image **c4m ran perfectly**, since
+      its entry index is right either way, and which every tool that
+      *walks* the stream mis-decoded from the first word. oisc4 reported
+      `unknown opcode 72` — the `'H'` of a hello program, read as an
+      instruction. That is precisely what a third independent writer is
+      for: the convention was undocumented anywhere except in the two
+      readers that depend on it.
       - [ ] **B5d.5** The fixed point — `native.f` compiling itself to
             `gen2.c4r`, `gen2` compiling it again, `cmp gen2 gen3`. This
             needs the compiler itself to be compilable, which needs the

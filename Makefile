@@ -480,7 +480,7 @@ c4th.c4r: $(C4CC) $(C4TH_SRCS)
 # under c4m; and the same image runs inside C4KE, which is the one that
 # proves the indirect call through a local really is a JSRS the kernel can
 # host, rather than something only gcc's cast macro makes work.
-test-c4th: c4th c4th.c4r $(C4M) c4mp $(C4KE_C4R)
+test-c4th: c4th c4th.c4r $(C4M) c4mp $(OISC4) c4sp $(C4KE_C4R)
 	./c4th -selftest | cmp - src/c4th/tests/expected/b1.txt
 	$(C4M) load-c4r.c -- c4th.c4r -selftest | cmp - src/c4th/tests/expected/b1.txt
 	$(C4M) load-c4r.c -- $(C4KE_C4R) c4th.c4r -selftest | grep -q "selftest ok"
@@ -571,6 +571,32 @@ test-c4th: c4th c4th.c4r $(C4M) c4mp $(C4KE_C4R)
 	./c4mp c4th.c4r src/c4th/forth/core.f src/c4th/forth/asm.f src/c4th/tests/fused.f > .c4th_fused
 	cmp .c4th_fused src/c4th/tests/expected/fused.txt
 	test 0 = `grep -c MISMATCH .c4th_fused`
+	# B5d: the metacompiler. c4th compiles a program to a standalone
+	# .c4r and the image must behave exactly as c4th's own threaded
+	# engine did running the same source -- on every machine that can
+	# run it. The interpreter is the oracle here for the reason it was
+	# at B5: it is the engine that passes the Forth-2012 CORE suite.
+	#
+	# Native c4th only: writing the file needs a write syscall and the
+	# C4 VM has none.
+	./c4th src/c4th/forth/core.f src/c4th/forth/asm.f src/c4th/forth/native.f src/c4th/forth/c4r.f src/c4th/forth/trt.f src/c4th/tests/b5d.f > .c4th_b5di
+	cmp .c4th_b5di src/c4th/tests/expected/b5d.txt
+	$(C4M) load-c4r.c -- .c4th_b5d.c4r | cmp - .c4th_b5di
+	./c4mp .c4th_b5d.c4r              | cmp - .c4th_b5di
+	$(OISC4) .c4th_b5d.c4r            | cmp - .c4th_b5di
+	# Plain c4 too: the generated code uses nothing above EXIT, which is
+	# why EMIT compiles to PRTF rather than to c4m's PUTC.
+	./c4 c4l.c .c4th_b5d.c4r | sed '/^exit(/d' | cmp - .c4th_b5di
+	# Independent confirmation that the FORMAT is right, not just the
+	# behaviour: c4r.lisp decodes the image and re-encodes it byte for
+	# byte. A writer that is subtly wrong passes the behaviour checks on
+	# a forgiving loader and fails this.
+	./c4sp -c 30000000 src/c4sp/lisp/c4r-roundtrip.lisp .c4th_b5d.c4r | grep -q "roundtrip identical"
+	# And it must survive the optimizer, and the fused opcodes.
+	./c4sp -c 30000000 src/c4sp/lisp/c4opt-run.lisp .c4th_b5d.c4r .c4th_b5do.c4r > /dev/null
+	$(C4M) load-c4r.c -- .c4th_b5do.c4r | cmp - .c4th_b5di
+	./c4sp -c 30000000 src/c4sp/lisp/c4opt-run.lisp -mfuse .c4th_b5d.c4r .c4th_b5df.c4r > /dev/null
+	./c4mp .c4th_b5df.c4r | cmp - .c4th_b5di
 	# And the differential fuzzer, both ways. b5.f is the cases somebody
 	# thought of; this is two thousand nobody did -- random balanced
 	# definitions with branches, IF/ELSE and counted loops, each run on
@@ -581,6 +607,7 @@ test-c4th: c4th c4th.c4r $(C4M) c4mp $(C4KE_C4R)
 	$(C4M) load-c4r.c -- c4th.c4r src/c4th/forth/core.f src/c4th/forth/asm.f src/c4th/forth/native.f src/c4th/tests/fuzz.f | cmp - src/c4th/tests/expected/fuzz.txt
 	$(C4M) load-c4r.c -- c4th.c4r src/c4th/forth/core.f src/c4th/forth/asm.f src/c4th/forth/native.f src/c4th/tests/nopc.f src/c4th/tests/fuzz.f | cmp - src/c4th/tests/expected/fuzz.txt
 	rm -f .c4th_core .c4th_fact.c4r .c4th_ccasm .c4th_b5 .c4th_fused
+	rm -f .c4th_b5di .c4th_b5d.c4r .c4th_b5do.c4r .c4th_b5df.c4r
 	@echo "test-c4th: OK"
 
 # The fused opcodes (docs/fused-opcodes.md), end to end: take a real

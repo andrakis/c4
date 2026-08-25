@@ -262,6 +262,36 @@ void th_p_invoke3 (int *w) {
 	th_push(th_nf3(a, b, c));
 }
 
+// SAVE-FILE ( addr len c-addr u -- flag )
+//
+// The C4 VM has no write syscall, so this works on the gcc build only --
+// the same limit c4sp's file:write lives with (src/c4sp/include/stdlib.h),
+// and the same 577/384 (O_WRONLY|O_CREAT|O_TRUNC, 0600) it uses. Under
+// c4m the metacompiler can still build an image and compare it in
+// memory; it just cannot put it on disk.
+void th_p_savefile (int *w) {
+	int a, n, na, nu;
+#if NATIVE
+	int fd, wr;
+	char *path;
+#endif
+
+	nu = th_pop(); na = th_pop(); n = th_pop(); a = th_pop();
+#if NATIVE
+	if (nu >= TH_PATH_MAX) { printf("c4th: SAVE-FILE: name too long\n"); th_push(0); return; }
+	path = th_pathbuf;
+	memcpy(path, (char *)na, nu);
+	path[nu] = 0;
+	if ((fd = open(path, 577, 384)) < 0) { th_push(0); return; }
+	wr = write(fd, (char *)a, n);
+	close(fd);
+	th_push(wr == n ? -1 : 0);
+#else
+	printf("c4th: SAVE-FILE needs a native build -- the C4 VM has no write syscall\n");
+	th_push(0);
+#endif
+}
+
 void th_p_bye (int *w)  { th_ip = 0; th_quit = 1; }
 
 
@@ -457,5 +487,6 @@ void th_prims_init () {
 	th_defword("INVOKE1",0,(int)&th_p_invoke1);
 	th_defword("INVOKE2",0,(int)&th_p_invoke2);
 	th_defword("INVOKE3",0,(int)&th_p_invoke3);
+	th_defword("SAVE-FILE",0,(int)&th_p_savefile);
 	th_defword("BYE",0,(int)&th_p_bye);
 }

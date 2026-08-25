@@ -352,8 +352,18 @@ VARIABLE NK  VARIABLE NB0  VARIABLE NPP  VARIABLE NPI  VARIABLE NPB
 ' I CONSTANT nI       ' J CONSTANT nJ         ' UNLOOP CONSTANT nUNLOOP
 ' (S") CONSTANT nPSQ
 ' LSHIFT CONSTANT nLSH ' 2/ CONSTANT n2DIV    ' +! CONSTANT nPLUSST
+' RSHIFT CONSTANT nRSH
 ' MIN CONSTANT nMIN   ' MAX CONSTANT nMAX     ' ABS CONSTANT nABS
 ' U< CONSTANT nULT    ' U> CONSTANT nUGT      ' /MOD CONSTANT nDIVMOD
+' EMIT CONSTANT nEMIT
+
+\ EMIT is the one primitive the backend can compile, and only when it is
+\ told where a "%c" lives in the image being built -- which is the
+\ metacompiler's business, not the code generator's, so c4r.f sets this
+\ and it is zero otherwise. PRTF rather than PUTC deliberately: PUTC is
+\ a c4m extension, PRTF is opcode 33 and in the base set, so a generated
+\ image that prints still runs on plain c4.
+VARIABLE NFMTC
 
 \ Header accessors, and the three code fields worth recognising: a colon
 \ definition, a CREATEd word (every VARIABLE), and a CREATE/DOES> word
@@ -499,6 +509,27 @@ CREATE NVPROBE
 
 \ -- the ones that need a branch of their own --------------------------
 
+\ RSHIFT is LOGICAL and C4's SHR is arithmetic, which is the same trap
+\ B3 fell into in the threaded engine. Shifting one place, clearing the
+\ sign bit the arithmetic shift replicated, and shifting the rest works
+\ for every count except zero -- so zero gets its own arm rather than a
+\ clever mask, because `-1 << 0` is -1 and every branchless version of
+\ this is wrong there.
+: N-RSHIFT ( -- )
+   2 NEED
+   SPILL
+   0 NL,  0 #EQ NOPI,                     \ u = 0?
+   0 BZ, >MARK                            ( m1 )
+      1 NL,                               \ u = 0: x unchanged
+      0 JMP, >MARK                        ( m1 m2 )
+   SWAP >RESOLVE                          ( m2 )
+      1 NL, PSH, 1 IMM, SHR,              \ x >> 1, arithmetic
+      PSH, NMININT INVERT IMM, AND,       \ drop the replicated sign bit
+      PSH, 0 NL, -1 NADD, SHR,            \ >> (u-1)
+   >RESOLVE
+   2 NDROPS  NRESULT
+   ASM-LEN NPINOFF ! ;
+
 : N-MINMAX ( swap? -- )       \ 0 = MAX, 1 = MIN
    2 NEED
    SPILL
@@ -634,6 +665,7 @@ CREATE NVPROBE
    DUP nOR  = IF 2DROP #OR  BIN, EXIT THEN
    DUP nXOR = IF 2DROP #XOR BIN, EXIT THEN
    DUP nLSH = IF 2DROP #SHL BIN, EXIT THEN
+   DUP nRSH = IF 2DROP N-RSHIFT EXIT THEN
    DUP n=  = IF 2DROP #EQ CMP, EXIT THEN
    DUP n<> = IF 2DROP #NE CMP, EXIT THEN
    DUP n<  = IF 2DROP #LT CMP, EXIT THEN
@@ -684,6 +716,19 @@ CREATE NVPROBE
    DUP nULT = IF 2DROP 0 N-UCMP EXIT THEN
    DUP nUGT = IF 2DROP 1 N-UCMP EXIT THEN
    DUP nDIVMOD = IF 2DROP N-DIVMOD EXIT THEN
+   \ printf(fmt, c). c4m reads the argument count from the operand of
+   \ the ADJ that must follow, and finds the format string deepest --
+   \ so the two are pushed fmt first, and the character is read back
+   \ through bp, which those pushes do not move.
+   DUP nEMIT = IF 2DROP
+      NFMTC @ 0= IF 0 NOK ! EXIT THEN
+      1 NEED  SPILL
+      NFMTC @ IMM,  PSH,
+      0 NL,  PSH,
+      PRTF,  2 ADJ,
+      1 NDROPS
+      ASM-LEN NPINOFF !
+      EXIT THEN
    DUP nTOR = IF 2DROP 1 NEED 1 SLOT+ SLOT! EXIT THEN
    DUP nRFROM = IF 2DROP NRSP @ 0= IF 0 NOK !
                     ELSE NRSP @ SLOT@ 1 SLOT- THEN EXIT THEN

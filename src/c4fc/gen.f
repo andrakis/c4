@@ -15,16 +15,28 @@
 : LOAD, ( ct -- )   t_char = IF oLC OP, ELSE oLI OP, THEN ;
 : STORE, ( ct -- )  t_char = IF oSC OP, ELSE oSI OP, THEN ;
 
+\ An AGGREGATE -- an array, or a struct variable -- is a name that
+\ stands for its own address, so its value IS the LEA and there is no
+\ load. That one flag is the whole of array decay.
 :M GEN-ADDR n_var  >sym @ y.val @ oLEA OP2, ;M
-:M GEN      n_var  >sym @ DUP y.val @ oLEA OP2, y.ct @ LOAD, ;M
+:M GEN      n_var {: n | y -- :}
+   n >sym @ TO y   y y.val @ oLEA OP2,
+   y y.agg @ IF EXIT THEN   y y.ct @ LOAD, ;M
 :M GEN-ADDR n_gvar >sym @ y.val @ IMMG, ;M
-:M GEN      n_gvar >sym @ DUP y.val @ IMMG, y.ct @ LOAD, ;M
+:M GEN      n_gvar {: n | y -- :}
+   n >sym @ TO y   y y.val @ IMMG,
+   y y.agg @ IF EXIT THEN   y y.ct @ LOAD, ;M
 
 :M CT n_num  DROP t_int ;M
 :M CT n_str  DROP 2 ;M                  \ char *
 :M CT n_var  >sym @ y.ct @ ;M
 :M CT n_gvar >sym @ y.ct @ ;M
-:M CT n_bin  DROP t_int ;M
+:M CT n_bin {: n | lt -- :}
+   n >lhs @ CT TO lt
+   n >op @ oADD = lt T-PTR? AND IF lt EXIT THEN
+   n >op @ oSUB = lt T-PTR? AND IF
+      n >rhs @ CT lt = IF t_int EXIT THEN  lt EXIT THEN
+   t_int ;M
 :M CT n_call DROP t_int ;M
 :M CT n_asgn >lhs @ CT ;M
 
@@ -33,10 +45,36 @@
    n >rhs @ GEN
    n >lhs @ CT STORE, ;M
 
-:M GEN n_bin {: n -- :}
+\ Pointer arithmetic scales by what the pointer points AT, and a step of
+\ one emits no multiply at all -- which is not an optimisation but what
+\ c4lc does: char * walks byte by byte with no MUL in sight.
+: SCALE, ( t -- )   T-STEP DUP 1 = IF DROP EXIT THEN oPSH OP, oIMM OP2, oMUL OP, ;
+: STEP-OF ( t -- n ) DUP T-PTR? IF T-STEP ELSE DROP 1 THEN ;
+
+:M GEN n_bin {: n | lt op -- :}
+   n >lhs @ CT TO lt   n >op @ TO op
+   op oADD = lt T-PTR? AND IF
+      n >lhs @ GEN oPSH OP,  n >rhs @ GEN  lt SCALE,  oADD OP, EXIT THEN
+   op oSUB = lt T-PTR? AND IF
+      n >rhs @ CT lt = IF                \ pointer minus pointer is a count
+         n >lhs @ GEN oPSH OP,  n >rhs @ GEN  oSUB OP,
+         lt T-STEP DUP 1 = IF DROP EXIT THEN
+         oPSH OP, oIMM OP2, oDIV OP, EXIT THEN
+      n >lhs @ GEN oPSH OP,  n >rhs @ GEN  lt SCALE,  oSUB OP, EXIT THEN
+   n >lhs @ GEN  oPSH OP,  n >rhs @ GEN  op OP, ;M
+
+:M GEN-ADDR n_index {: n -- :}
    n >lhs @ GEN  oPSH OP,
-   n >rhs @ GEN
-   n >op @ OP, ;M
+   n >rhs @ GEN  n >lhs @ CT SCALE,
+   oADD OP, ;M
+:M GEN n_index {: n -- :}  n GEN-ADDR  n CT LOAD, ;M
+:M CT  n_index  >lhs @ CT T-DEREF ;M
+
+:M GEN-ADDR n_member {: n -- :}
+   n >lhs @ GEN
+   n >moff @ ?DUP IF oPSH OP, oIMM OP2, oADD OP, THEN ;M
+:M GEN n_member {: n -- :}  n GEN-ADDR  n >mtype @ LOAD, ;M
+:M CT  n_member  >mtype @ ;M
 
 \ Arguments push left to right, then the call, then the drop. A builtin
 \ is the same shape with an opcode where the JSR goes -- which is why
@@ -80,17 +118,18 @@
 \ why the sequence is LEA, PSH, LI rather than LEA, LI, PSH. The postfix
 \ forms undo the change on the RESULT afterwards, which is exactly how
 \ c4 gets the old value without a temporary.
-: INCDEC, ( node op -- ) {: n op -- :}
+: INCDEC, ( node op -- ) {: n op | t -- :}
+   n >opnd @ CT TO t
    n >opnd @ GEN-ADDR  oPSH OP,
-   n >opnd @ CT LOAD,
-   oPSH OP,  1 oIMM OP2,  op OP,
-   n >opnd @ CT STORE, ;
+   t LOAD,
+   oPSH OP,  t STEP-OF oIMM OP2,  op OP,
+   t STORE, ;
 :M GEN n_preinc   oADD INCDEC, ;M
 :M GEN n_predec   oSUB INCDEC, ;M
 :M GEN n_postinc {: n -- :}
-   n oADD INCDEC,  oPSH OP, 1 oIMM OP2, oSUB OP, ;M
+   n oADD INCDEC,  oPSH OP, n >opnd @ CT STEP-OF oIMM OP2, oSUB OP, ;M
 :M GEN n_postdec {: n -- :}
-   n oSUB INCDEC,  oPSH OP, 1 oIMM OP2, oADD OP, ;M
+   n oSUB INCDEC,  oPSH OP, n >opnd @ CT STEP-OF oIMM OP2, oADD OP, ;M
 :M CT n_preinc   >opnd @ CT ;M
 :M CT n_predec   >opnd @ CT ;M
 :M CT n_postinc  >opnd @ CT ;M

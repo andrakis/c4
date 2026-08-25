@@ -124,10 +124,10 @@ CREATE GPL GPMAX CELLS ALLOT   VARIABLE GPN   0 GPN !
    u 1+ DN +!                           \ the nul is part of the string
    off ;
 
-: FIX-GLOBALS ( base -- ) {: base | p -- :}
+: FIX-GLOBALS ( map -- ) {: map | p -- :}
    GPN @ 0 ?DO
       GPL I CELLS + @ 3 * CELLS PATCH @ + 2 CELLS + TO p
-      base p @ CELLS + p !
+      p @ CELLS map + @  p !
    LOOP ;
 
 \ -- symbols ------------------------------------------------------------
@@ -138,13 +138,18 @@ CREATE GPL GPMAX CELLS ALLOT   VARIABLE GPN   0 GPN !
 \ every store.
 BEGIN-STRUCTURE SYMR
    FIELD: y.name  FIELD: y.nlen  FIELD: y.type  FIELD: y.class  FIELD: y.val
-   FIELD: y.ct
+   FIELD: y.ct    FIELD: y.agg   FIELD: y.sz
 END-STRUCTURE
 : SYM[] ( i -- a )  SYMR * SYMS @ + ;
-: SYM, ( a u type class val -- ) {: a u t c v | y -- :}
+\ attrs 0x40 marks an AGGREGATE -- an array, or a struct variable. Both
+\ are names that stand for an address rather than a value, and c4lc
+\ flags them the same way.
+64 CONSTANT ATTR-ARRAY
+: SYM, ( a u type class val attrs -- ) {: a u t c v at | y -- :}
    SN @ SMAX < 0= IF ." c4fc: too many symbols" CR ABORT THEN
    SN @ SYM[] TO y
    a y y.name !  u y y.nlen !  t y y.type !  c y y.class !  v y y.val !
+   at y y.agg !
    1 SN +! ;
 
 \ -- writing it out -----------------------------------------------------
@@ -172,7 +177,7 @@ CREATE WSCR 1 CELLS ALLOT
    SN @ 0 ?DO
       I SYM[] TO y
       I FW                               \ id
-      y y.type @ FW   y y.class @ FW   0 FW
+      y y.type @ FW   y y.class @ FW   y y.agg @ FW
       y y.nlen @ EMIT   y y.name @ y y.nlen @ TYPE
       y y.val @ FW
    LOOP ;

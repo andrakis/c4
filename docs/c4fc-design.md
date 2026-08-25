@@ -311,13 +311,48 @@ The bar rises rung by rung and c4lc supplies it at every one.
       when the lowest case is zero**: four words, invisible until a
       switch happens to start at `case 0`, and the only difference left
       when everything else matched.
-- [ ] **F5** Types, beyond the char/int distinction the slice needed:
-      pointer scaling, arrays, structs. *Verify:* `sizeof`, pointer
-      arithmetic and struct offsets agree with c4lc on a dedicated
-      corpus. **Interleaved with F6, not before it** — the slice showed
-      that codegen asks the type system a question at every store.
-- [ ] **F6** Codegen for what F4 and F5 add. *Verify:* byte-identical to
-      c4lc's, the bar the slice established.
+- [x] **F5/F6** Types and the codegen that asks them questions, done
+      together because the slice had already shown they interleave.
+      Pointer scaling, arrays, structs, enums, `sizeof`, `[]`, `.` and
+      `->`. *Verified:* `spike5.c` and `spike6.c`, **byte-identical to
+      c4lc**, along with everything before them.
+
+      **A type is one integer, and the encoding is c4lc's** rather than
+      one of my own — the `.c4r` symbol record carries it, so
+      byte-identity means carrying the same number. `char` is 0, `int`
+      is 1, every `*` adds 2, and `struct k` is `1024 + 64k`. Sixty-four
+      apart is what leaves room for thirty-one levels of indirection
+      before two structs could collide; it was read off three structs in
+      one file rather than guessed. `src/c4fc/types.f` is that algebra
+      and nothing else: how big is a type, what does a pointer to it
+      step by, what is it a pointer to.
+
+      Four things the differential settled that no reading would have.
+
+      **A pointer steps by what it points at, and a step of one emits no
+      multiply at all.** `char *p; p + i` is `PSH; ADD` with no `MUL`
+      anywhere — not an optimisation, just what c4lc emits, and the same
+      rule governs `++`, `--`, `[]` and pointer subtraction. A `struct P
+      *` steps by 24.
+
+      **Struct members are cell-sized.** `{ char a; char b; int c; }` is
+      twenty-four bytes and `b` is at eight, not one.
+
+      **An aggregate is a name that stands for its own address.** Arrays
+      and struct variables both carry `attrs 0x40` in the symbol record,
+      and the whole of array decay is that one flag: the `GEN` method
+      emits the `LEA` and stops, where a scalar would go on to load.
+      A local array of four ints takes slots 1..4 and its name is
+      `LEA -4`, because locals grow downwards and an array's name is the
+      address of its lowest slot.
+
+      **`x.m` is `(&x)->m`.** There is one member node, not two: the
+      parser wraps the base and codegen never asks which spelling it
+      came from.
+
+      Left for F7, and left deliberately: array members inside structs,
+      initialisers, `static`/`extern`, varargs, and constant expressions
+      in `enum` bodies (c4lc's L11) — the parser takes a literal there.
 - [ ] **F7** Full subset: arrays, structs, `switch`, varargs, statics.
       *Verify:* the whole `C4LC_DIFF` corpus, byte-identical.
 - [ ] **F8** The optimizer. *Verify:* `-O` output byte-identical to

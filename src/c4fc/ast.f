@@ -30,6 +30,13 @@ NODE: n_postdec NFIELD: >opnd                  ;NODE
 \ Short-circuit operators are control flow, not arithmetic: a || b is a
 \ branch around b, which is why they are node kinds of their own rather
 \ than rows in the infix table.
+\ a[i] and x.m / p->m. There is one member kind, not two: x.m is (&x)->m
+\ once the parser has wrapped the base, so the node always holds an
+\ address-producing expression and codegen never asks which spelling it
+\ came from.
+NODE: n_index  NFIELD: >lhs  NFIELD: >rhs      ;NODE
+NODE: n_member NFIELD: >lhs  NFIELD: >moff NFIELD: >mtype ;NODE
+
 NODE: n_lor    NFIELD: >lhs  NFIELD: >rhs      ;NODE
 NODE: n_land   NFIELD: >lhs  NFIELD: >rhs      ;NODE
 NODE: n_cond   NFIELD: >cond NFIELD: >body NFIELD: >else ;NODE

@@ -712,6 +712,9 @@ test-c4th-os: c4th c4th.c4r $(C4M) c4ix.c4r c4ix-sh.c4r c4ke.c4r c4dos-clock.c4r
 # phase, with nothing above it edited.
 C4FC_LIB := src/c4th/forth/core.f src/c4th/forth/ext.f \
             src/c4th/forth/locals.f src/c4fc/dsl.f src/c4fc/lex.f
+C4FC_ALL := $(C4FC_LIB) src/c4fc/ast.f src/c4fc/emit.f src/c4fc/gen.f \
+            src/c4fc/parse.f src/c4fc/c4fc.f
+C4FC_SPIKE := src/tests/hello.c src/c4fc/tests/spike1.c src/c4fc/tests/spike2.c
 
 # F2, the lexer. The oracle is c4lc's own, three ways: its golden dump
 # of the sample that carries every token kind and quirk, the same with
@@ -740,7 +743,19 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp
 	     || { echo "test-c4fc: the lexer differs from c4lc on $$f"; exit 1; }; \
 	   echo "  lex ok: $$f"; \
 	done
-	@rm -f .c4fc_lex.txt .c4fc_a.txt .c4fc_b.txt
+	# The vertical slice: hello.c and two programs of straight-line C
+	# compiled all the way to a .c4r and required to be BYTE-IDENTICAL
+	# to c4lc's. That is the bar the whole ladder is verified against,
+	# so it is worth answering early and on a small program rather than
+	# after the preprocessor and the parser are built on the assumption.
+	@for f in $(C4FC_SPIKE); do \
+	   ./c4sp -c 8000000 src/c4sp/lisp/c4lc.lisp $$f .c4fc_lc.c4r > /dev/null 2>&1; \
+	   ./c4th $(C4FC_ALL) -e ": GO S\" $$f\" C4FC ; GO" > .c4fc_fc.c4r; \
+	   cmp .c4fc_lc.c4r .c4fc_fc.c4r \
+	     || { echo "test-c4fc: $$f differs from c4lc"; exit 1; }; \
+	   echo "  gen ok: $$f"; \
+	done
+	@rm -f .c4fc_lex.txt .c4fc_a.txt .c4fc_b.txt .c4fc_lc.c4r .c4fc_fc.c4r
 	@echo "test-c4fc: OK"
 
 # The fused opcodes (docs/fused-opcodes.md), end to end: take a real

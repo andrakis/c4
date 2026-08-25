@@ -86,13 +86,18 @@ int wordat (char *p) { return *(int *)p; }
 // JSRS) never need a case of their own.
 int scan_extended (int *code, int codelen) {
   int i;
-  // From ONE, not zero. The .c4r code stream is 1-based -- c4cc emits
-  // through *++e, so word 0 is never an instruction -- and starting at
-  // zero walks the whole image one word out of phase, reading every
-  // operand as an opcode. It survived this long because the operands in
-  // small images are small; an IMM of a sign mask is not, and reading
-  // one as an opcode indexes the name table a gigabyte past its end.
-  i = 1;
+  // Where the stream STARTS is not fixed, and getting it wrong walks
+  // the whole image one word out of phase, reading every operand as an
+  // opcode. c4cc emits through *++e, so word 0 is never an instruction
+  // and its images are 1-based; c4lc puts its first instruction at word
+  // 0. A zero first word settles it: LEA is opcode 0, and no function
+  // begins with LEA -- every one begins with ENT.
+  //
+  // It survived this long because the operands in small images are
+  // small and stayed inside the opcode table by luck. An IMM of a sign
+  // mask does not, and reading one as an opcode indexes the name table
+  // a gigabyte past its end.
+  i = code[0] ? 0 : 1;
   while (i < codelen) {
     if (code[i] > EXIT) return i;
     if (code[i] <= ADJ) i = i + 2; else i = i + 1;

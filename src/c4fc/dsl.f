@@ -47,6 +47,17 @@ END-STRUCTURE
 : V! ( x i v -- )  v.data @ SWAP CELLS + ! ;
 : V# ( v -- n )    v.len @ ;
 
+\ -- diagnostics --------------------------------------------------------
+\ A number with no trailing space, because c4th's . prints one and a
+\ message reads better without it.
+
+CREATE .NBUF 24 ALLOT   VARIABLE .NBP
+: .N ( n -- )
+   DUP 0< IF 45 EMIT NEGATE THEN
+   .NBUF 24 + .NBP !
+   BEGIN -1 .NBP +!  DUP 10 MOD 48 + .NBP @ C!  10 /  DUP 0= UNTIL DROP
+   .NBP @  .NBUF 24 + OVER -  TYPE ;
+
 \ -- nodes --------------------------------------------------------------
 
 64 CONSTANT TAG-MAX

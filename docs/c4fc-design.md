@@ -232,13 +232,61 @@ The bar rises rung by rung and c4lc supplies it at every one.
       says 15,024 today. The plan's figure was measured before something
       moved and nobody had a reason to look again — which is the same
       thing `docs/c4lc-design.md`'s stale 0.67 s turned out to be.
+- [x] **The vertical slice**, taken ahead of F3-F5 on purpose. `hello.c`
+      and two programs of straight-line C compiled all the way to a
+      `.c4r` and **byte-identical to c4lc's** — `src/c4fc/{ast,emit,gen,
+      parse,c4fc}.f`, about 400 lines. The ladder's one real unknown was
+      whether byte-identity is reachable at all or whether matching
+      c4lc would mean copying incidental decisions rather than making
+      them. **It is reachable, and nothing had to be copied** — every
+      difference that came up was a rule c4lc follows for a reason.
+
+      Six of those rules, none of them in any document, all found by
+      decoding an image rather than reading source:
+
+      1. **c4lc's code stream is ZERO-based.** c4cc emits through `*++e`
+         so its images never use word 0; c4lc puts its first instruction
+         there. Both are loadable and both conventions live in the tree
+         — which means `c4l.c`'s pre-flight walk cannot assume either.
+         It now takes a zero first word as the signal, because `LEA` is
+         opcode 0 and no function begins with one.
+      2. **Version 3, and v2's eight padding bytes hold the data
+         segment's MEMSZ** — its size in memory, which is larger than
+         the bytes written.
+      3. **The data segment is written with trailing zeros trimmed.**
+         The loader zero-fills to memsz, so a string's terminating nul
+         at the very end of the segment is simply not stored.
+      4. **Globals are laid out after every string literal**, so their
+         addresses are the last thing known — which is why their patches
+         are revisited at the end, and why c4lc's symbol table lists a
+         global declared first after every function.
+      5. **A patched operand's code word depends on the patch kind**: a
+         data reference writes zero there and carries the value in the
+         patch, a code reference writes the target. Neither half is
+         visible in a small program — the first shows up with two string
+         literals, the second with a call to anything but function zero.
+      6. **The symbol record's `type` field is the C type**, so
+         `char *greeting` is 2 where `int count` is 1. One byte.
+
+      And one that is not about the format at all: **the type system is
+      not optional even at this scale.** `char c; c = 65;` is `SC`, not
+      `SI`. A third generic, `CT`, answers "what type is this
+      expression" in seven one-line methods, and `GEN n_asgn` asks the
+      lvalue rather than assuming. That is F5 arriving inside F6, and
+      the ladder below is reordered to admit it.
+
 - [ ] **F3** Preprocessor. *Verify:* byte-identical to `gcc -E` on the
       twelve C4IX modules.
-- [ ] **F4** Parser. *Verify:* AST dump == c4lc's over `src/tests/*.c`.
-- [ ] **F5** Types. *Verify:* `sizeof`, pointer scaling and struct
-      offsets agree with c4lc on a dedicated corpus.
-- [ ] **F6** Minimal codegen. *Verify:* `hello`, `factorial`, `puts`
-      byte-identical to c4lc's.
+- [ ] **F4** Parser: control flow (`if`, `while`, `for`, `switch`),
+      which the slice does not have, on the recursive-descent skeleton
+      it does. *Verify:* AST dump == c4lc's over `src/tests/*.c`.
+- [ ] **F5** Types, beyond the char/int distinction the slice needed:
+      pointer scaling, arrays, structs. *Verify:* `sizeof`, pointer
+      arithmetic and struct offsets agree with c4lc on a dedicated
+      corpus. **Interleaved with F6, not before it** — the slice showed
+      that codegen asks the type system a question at every store.
+- [ ] **F6** Codegen for what F4 and F5 add. *Verify:* byte-identical to
+      c4lc's, the bar the slice established.
 - [ ] **F7** Full subset: arrays, structs, `switch`, varargs, statics.
       *Verify:* the whole `C4LC_DIFF` corpus, byte-identical.
 - [ ] **F8** The optimizer. *Verify:* `-O` output byte-identical to

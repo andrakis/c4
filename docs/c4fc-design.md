@@ -207,7 +207,31 @@ The bar rises rung by rung and c4lc supplies it at every one.
 - [x] **F1** The DSL: `ext.f`, `locals.f`, `dsl.f`, the `NOTFOUND` hook.
       *Verified:* `make test-c4fc`, native and under c4m, including the
       add-a-construct demonstration.
-- [ ] **F2** Lexer. *Verify:* token dump == c4lc's; 15,023 on `c4cc.c`.
+- [x] **F2** Lexer, `src/c4fc/lex.f` — three tables and a loop.
+      *Verified:* c4lc's golden dump of the sample, the same again with
+      `-conforming` escapes, 15,024 tokens on `c4cc.c`, and a sweep of
+      twelve real sources (`c4.c`, `c4m.c`, `c4dos.c`, `cpu.c`, …)
+      each compared against freshly generated c4lc output —
+      byte-identical on all of them. Incidentally 3x faster than c4lc's
+      on `c4cc.c`, 0.30 s against 1.0 s, which is not the point and is
+      not claimed anywhere else.
+
+      Two things it shook out.
+
+      **The golden dump is lossy and c4fc reproduces that.** c4sp prints
+      a token line as a C string, so `"tab\there\rcr\0nul..."` loses
+      everything from the `\0` onward — the rest of the string, the
+      line number and the closing paren. c4lc's *token* is intact; only
+      its dump is. Reproducing the truncation keeps the oracle exact,
+      which is worth more than a prettier transcript: a change in what
+      the lexer does stays a diff instead of hiding among a known one.
+      The bytes are still checked, by every phase after this one, which
+      reads the token rather than the transcript.
+
+      **The count is 15,024, not the 15,023 the plan recorded.** c4lc
+      says 15,024 today. The plan's figure was measured before something
+      moved and nobody had a reason to look again — which is the same
+      thing `docs/c4lc-design.md`'s stale 0.67 s turned out to be.
 - [ ] **F3** Preprocessor. *Verify:* byte-identical to `gcc -E` on the
       twelve C4IX modules.
 - [ ] **F4** Parser. *Verify:* AST dump == c4lc's over `src/tests/*.c`.

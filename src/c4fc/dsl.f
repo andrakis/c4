@@ -23,7 +23,8 @@
 
 VARIABLE ARENA   VARIABLE ARENA-TOP   VARIABLE ARENA-END
 : ARENA-INIT ( n -- )  DUP ALLOCATE DUP ARENA ! DUP ARENA-TOP !  SWAP + ARENA-END ! ;
-: ALLOT: ( n -- a )
+: ALLOT: ( n -- a )                       \ cell-aligned: cells are what go in it
+   1 CELLS 1- + 1 CELLS 1- INVERT AND
    ARENA-TOP @ SWAP OVER + DUP ARENA-END @ > IF ." c4fc: arena full" CR ABORT THEN
    ARENA-TOP ! ;
 

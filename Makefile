@@ -711,11 +711,36 @@ test-c4th-os: c4th c4th.c4r $(C4M) c4ix.c4r c4ix-sh.c4r c4ke.c4r c4dos-clock.c4r
 # than asserted: a new construct is one NODE: line and one :M per
 # phase, with nothing above it edited.
 C4FC_LIB := src/c4th/forth/core.f src/c4th/forth/ext.f \
-            src/c4th/forth/locals.f src/c4fc/dsl.f
+            src/c4th/forth/locals.f src/c4fc/dsl.f src/c4fc/lex.f
 
-test-c4fc: c4th c4th.c4r $(C4M)
+# F2, the lexer. The oracle is c4lc's own, three ways: its golden dump
+# of the sample that carries every token kind and quirk, the same with
+# -conforming escapes, and then a sweep of real sources compared against
+# freshly generated c4lc output -- which is the check that matters,
+# because the sample is 70 lines and c4m.c is thirteen thousand tokens.
+#
+# head -n -1 strips the "nil" c4sp's REPL prints after the dump.
+C4FC_LEX_SWEEP := c4.c c4m.c c4l.c load-c4r.c src/c4th/c4th.c \
+                  src/c4cc/asm-c4r.c src/c4dos/c4dos.c src/c4ix/vfs.c \
+                  src/c4ix/sched.c src/c4or1k/cpu.c src/tests/mandel.c \
+                  src/tests/tests.c
+
+test-c4fc: c4th c4th.c4r $(C4M) c4sp
 	./c4th $(C4FC_LIB) src/c4fc/tests/dsl.f | cmp - src/c4fc/tests/expected/dsl.txt
 	$(C4M) load-c4r.c -- c4th.c4r $(C4FC_LIB) src/c4fc/tests/dsl.f | cmp - src/c4fc/tests/expected/dsl.txt
+	./c4th $(C4FC_LIB) -e ': GO 4194304 ARENA-INIT S" src/tests/c4lc_lex_sample.c" LEX-FILE DUMP-TOKENS ; GO' > .c4fc_lex.txt
+	head -n -1 src/c4sp/tests/expected/c4lc-tokens.txt | cmp - .c4fc_lex.txt
+	./c4th $(C4FC_LIB) -e ': GO 4194304 ARENA-INIT 1 CONFORMING ! S" src/tests/c4lc_lex_sample.c" LEX-FILE DUMP-TOKENS ; GO' > .c4fc_lex.txt
+	head -n -1 src/c4sp/tests/expected/c4lc-tokens-conforming.txt | cmp - .c4fc_lex.txt
+	./c4th $(C4FC_LIB) -e ': GO 33554432 ARENA-INIT S" src/c4cc/c4cc.c" LEX-FILE COUNT-TOKENS ; GO' | grep -q "^tokens 15024$$"
+	@for f in $(C4FC_LEX_SWEEP); do \
+	   ./c4sp -c 80000000 src/c4sp/lisp/c4lc-tokens.lisp $$f > .c4fc_a.txt 2>&1; \
+	   ./c4th $(C4FC_LIB) -e ": GO 67108864 ARENA-INIT S\" $$f\" LEX-FILE DUMP-TOKENS ; GO" > .c4fc_b.txt 2>&1; \
+	   head -n -1 .c4fc_a.txt | cmp -s - .c4fc_b.txt \
+	     || { echo "test-c4fc: the lexer differs from c4lc on $$f"; exit 1; }; \
+	   echo "  lex ok: $$f"; \
+	done
+	@rm -f .c4fc_lex.txt .c4fc_a.txt .c4fc_b.txt
 	@echo "test-c4fc: OK"
 
 # The fused opcodes (docs/fused-opcodes.md), end to end: take a real

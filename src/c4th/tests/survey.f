@@ -27,7 +27,7 @@ VARIABLE NTRIED  VARIABLE NDONE
    0 NTRIED !  0 NDONE !
    BEGIN DUP WHILE
       DUP >CODE COLONS = IF
-         DUP >BODY DUP BODY-END NCOMPILE?
+         DUP DUP >BODY SWAP >WEND NCOMPILE?
          1 NTRIED +!
          DUP 0 >= IF 1 NDONE +!
               ."   compiled: " OVER .WNAME ."  ( " . ." in )" CR

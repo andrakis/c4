@@ -155,7 +155,7 @@ VARIABLE TBASE  VARIABLE TOP  VARIABLE TARG  VARIABLE TAT
 \ -- compiling a word into the image ------------------------------------
 
 : TCOMPILE ( xt n -- ok? )           \ n = entry arguments
-   >R >BODY DUP BODY-END R> NCOMPILE-N
+   >R DUP >BODY SWAP >WEND R> NCOMPILE-N
    DUP IF TRELOC DROP ELSE 0 TOK ! THEN ;
 
 : TMAIN ( xt -- ok? )                \ compile it as the image's entry

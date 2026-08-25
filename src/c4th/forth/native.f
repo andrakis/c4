@@ -54,6 +54,8 @@ VARIABLE NOK                       \ cleared when something is unsupported
 VARIABLE NBAD                      \ the xt that stopped it, for surveying
 VARIABLE NDEAD                     \ set where control cannot fall through
 VARIABLE NCUR                      \ the word being emitted, for NBAD
+VARIABLE NDBGA  VARIABLE NDBGB     \ the two depths a join disagreed about
+VARIABLE NBADIN                    \ the word being INLINED when it failed
 
 \ Set NOPC and the backend emits the fused opcodes it can use -- LDL,
 \ STL and POPA -- instead of the two- and three-instruction sequences
@@ -91,6 +93,9 @@ VARIABLE NENTA                     \ address of ENT's operand cell
 CREATE NLSTK 32 CELLS ALLOT        \ open counted loops: their index cell
 VARIABLE NLSP
 
+CREATE NEXITM 64 CELLS ALLOT       \ pending jumps from an inlined EXIT
+VARIABLE NEXITN
+VARIABLE NEXITD                    \ depth they all agreed on, or -1
 CREATE NINSTK NINMAX CELLS ALLOT   \ words currently being inlined
 VARIABLE NINSP
 VARIABLE NINL                      \ inline depth: 0 means the outer word
@@ -99,8 +104,21 @@ VARIABLE 'NBODY                    \ NEMIT and NBODY are mutually recursive
 
 \ -- the accumulator model ---------------------------------------------
 
-: IOFF  ( i -- off )   CELLS ISTART + @ ;
-: IOFF! ( off i -- )   CELLS ISTART + ! ;
+\ Bounds-checked, and not as a belt-and-braces measure: NEWITEM keeps
+\ counting past NITEMS after it has set NOK, because the model has to
+\ stay arithmetically right for the rest of the instruction, and every
+\ unguarded ISTART access then writes off the end of the array -- into
+\ c4th's own dictionary, which is a corrupted compiler rather than a
+\ failed compile. An index outside the model reads -1 ("not movable"),
+\ which is the safe answer everywhere it is used.
+: IOFF  ( i -- off )
+   DUP 0 >= OVER NITEMS < AND IF CELLS ISTART + @ ELSE DROP -1 THEN ;
+: IOFF! ( off i -- )
+   DUP 0 >= OVER NITEMS < AND IF CELLS ISTART + ! ELSE 2DROP THEN ;
+: ISEP@ ( i -- f )
+   DUP 0 >= OVER NITEMS < AND IF CELLS ISEP + @ ELSE DROP 0 THEN ;
+: ISEP! ( f i -- )
+   DUP 0 >= OVER NITEMS < AND IF CELLS ISEP + ! ELSE 2DROP THEN ;
 : ASM@  ( off -- a )   ASMBUF + ;
 
 : SPILL     NACC @ IF PSH, 0 NACC ! THEN ;
@@ -140,7 +158,7 @@ VARIABLE 'NBODY                    \ NEMIT and NBODY are mutually recursive
 \ cell is ordinary code, and a permutation that assumed otherwise would
 \ overwrite it. See NPERM.
 : NEWITEM ( -- )
-   NDEPTH @ NITEMS < IF NACC @ NDEPTH @ CELLS ISEP + ! THEN
+   NACC @ NDEPTH @ ISEP!
    SPILL
    NDEPTH @ NITEMS < IF ASM-LEN NDEPTH @ IOFF! ELSE 0 NOK ! THEN
    1 NDEPTH +! ;
@@ -156,7 +174,7 @@ VARIABLE 'NBODY                    \ NEMIT and NBODY are mutually recursive
 \ operation would turn into a wrong rotation, since the region would then
 \ appear to be that operation's code alone.
 : NFLUSH ( -- )
-   NDEPTH @ 0 ?DO -1 I IOFF! LOOP ;
+   NDEPTH @ NITEMS MIN 0 ?DO -1 I IOFF! LOOP ;
 
 \ -- the frame ---------------------------------------------------------
 \ Cell k of the frame is at LEA -k. Allocation is a stack: a counted loop
@@ -274,7 +292,7 @@ VARIABLE NK  VARIABLE NB0  VARIABLE NPP  VARIABLE NPI  VARIABLE NPB
    \ the rebuild writes the separators back and would otherwise write one
    \ over a cell that is code -- which is a wrong answer, not a crash.
    NK @ 1 ?DO
-      NB0 @ I + CELLS ISEP + @ 0= IF UNLOOP 0 EXIT THEN
+      NB0 @ I + ISEP@ 0= IF UNLOOP 0 EXIT THEN
    LOOP
    0 R@S @ NPINOFF @ < IF 0 EXIT THEN
    NK @ 1- 0 ?DO
@@ -402,7 +420,51 @@ CREATE NVPROBE
 : NBRANCHY? ( xt -- f )
    DUP nBRANCH = OVER n0BRANCH = OR OVER nPLOOP = OR SWAP nPPLOOP = OR ;
 
-\ A definition ends at its EXIT.
+\ Where a definition's body ends.
+\
+\ NOT "at its first EXIT", which is what this used to say. A word with an
+\ early return -- `... IF ... EXIT THEN ...`, which native.f's own words
+\ are full of -- got silently truncated there, and the inliner then
+\ compiled half a word. The dictionary knows the real answer: th_create
+\ lays a word's name down immediately before its header, so the body of
+\ W ends exactly where the name of the word created after W begins, and
+\ the newest word's body ends at HERE.
+VARIABLE WEY  VARIABLE WEA  VARIABLE WEL  VARIABLE WEB
+
+\ The region a word occupies: from its body to the name of the word
+\ created after it, or to HERE for the newest.
+: >WLIM ( xt -- limit )
+   0 WEY !
+   LATEST
+   BEGIN DUP WHILE                          ( xt cur )
+      2DUP = IF
+         2DROP
+         WEY @ ?DUP IF 2 CELLS + @ ELSE HERE THEN
+         EXIT
+      THEN
+      DUP WEY !
+      @
+   REPEAT 2DROP HERE ;
+
+\ The body ends after the LAST EXIT in that region, not at the limit.
+\ HERE is not the answer on its own: anything that allots after the
+\ newest definition -- an interpreted S", which copies its text into the
+\ image -- moves it past the body, and the emit loop then walks the text
+\ as instructions. That is a segfault, and it is what `S" out.c4r"
+\ ' MAIN TC4R` did.
+: >WEND ( xt -- end )
+   DUP >WBODY DUP WEA ! WEB !
+   >WLIM WEL !
+   BEGIN WEA @ WEL @ < WHILE
+      WEA @ @ nEXIT = IF WEA @ 1 CELLS + WEB ! THEN
+      WEA @ NSTEP                            ( next )
+      DUP WEA @ <= IF DROP WEL @ THEN        \ never go backwards
+      WEA !
+   REPEAT
+   WEB @ ;
+
+\ Still needed for a DOES> body, which is a tail of its definer's and has
+\ no header of its own to bound it.
 : BODY-END ( body -- end )
    BEGIN DUP @ nEXIT = 0= WHILE NSTEP REPEAT 1 CELLS + ;
 
@@ -427,7 +489,7 @@ CREATE NVPROBE
    DUP NMAX >= IF DROP EXIT THEN
    CELLS NTDEP +
    DUP @ 0 < IF NDEPTH @ SWAP ! EXIT THEN
-   @ NDEPTH @ <> IF 0 NOK ! THEN ;
+   @ DUP NDEPTH @ <> IF NDBGA ! NDEPTH @ NDBGB ! 0 NOK ! ELSE DROP THEN ;
 
 \ Reaching a target from code that cannot fall through -- the cell after
 \ an unconditional BRANCH, which is where ?DO puts its loop entry --
@@ -608,7 +670,7 @@ CREATE NVPROBE
    2 NEED
    NDEPTH @ 2 < IF EXIT THEN
    NEED-ACC
-   NDEPTH @ 1- CELLS ISEP + @ 0= IF 1 N-COPY EXIT THEN
+   NDEPTH @ 1- ISEP@ 0= IF 1 N-COPY EXIT THEN
    NDEPTH @ 2 - IOFF   NDEPTH @ 1- IOFF   ( sa sb )
    2DUP 0 >= SWAP 0 >= AND IF
       2DUP SWAP - 1 CELLS -  2 CELLS = IF
@@ -633,7 +695,7 @@ CREATE NVPROBE
 
 : NCALL ( xt -- )
    DUP NINSEEN? IF NBAD ! 0 NOK ! EXIT THEN
-   DUP >WBODY DUP BODY-END              ( xt body end )
+   DUP >WBODY OVER >WEND                ( xt body end )
    ROT NPUSHIN 0= IF 2DROP 0 NOK ! EXIT THEN
    1 NINL +!
    'NBODY @ EXECUTE
@@ -751,9 +813,21 @@ CREATE NVPROBE
       SPILL 0 JMP,
       1 CELLS + @ SRCOFF DUP FIX! TDEP!
       NFLUSH 1 NDEAD ! EXIT THEN
+   \ An EXIT at the very end of an inlined body is the fall-through and
+   \ emits nothing. One in the MIDDLE becomes a jump to the end of the
+   \ inlined region, resolved when the body finishes -- which is what
+   \ makes `IF ... EXIT THEN` inlinable at all. Every such path has to
+   \ arrive at that join with the same depth, checked the same way a
+   \ branch target is.
    DUP nEXIT = IF DROP
-      NINL @ IF  NEND @ 1 CELLS - <> IF 0 NOK ! THEN
-             ELSE DROP NDEPTH @ IF NEED-ACC THEN LEV, 1 NDEAD ! THEN
+      NINL @ 0= IF DROP NDEPTH @ IF NEED-ACC THEN LEV, 1 NDEAD ! EXIT THEN
+      NEND @ 1 CELLS - = IF EXIT THEN
+      SPILL  0 JMP,
+      NEXITN @ 64 < IF >MARK NEXITN @ CELLS NEXITM + !  1 NEXITN +!
+                  ELSE 0 NOK ! THEN
+      NEXITD @ 0 < IF NDEPTH @ NEXITD !
+                ELSE NEXITD @ NDEPTH @ <> IF 0 NOK ! THEN THEN
+      NFLUSH  1 NDEAD !
       EXIT THEN
    DUP >WCODE NCOLON = IF NIP NCALL EXIT THEN
    DUP >WCODE NDOESC = IF NIP NCALL-DOES EXIT THEN
@@ -777,6 +851,7 @@ CREATE NVPROBE
 
 : NBODY ( body end -- )
    NBASE @ >R  NEND @ >R  NORIG @ >R
+   NEXITN @ >R  NEXITD @ >R  -1 NEXITD !
    OVER NBASE !  DUP NEND !
    NSLOT @ NORIG !
    2DUP SWAP - 1 CELLS / NSLOT +!
@@ -788,11 +863,25 @@ CREATE NVPROBE
          DUP SRCOFF DUP CELLS NTGT + @ IF SPILL DUP TARGET! NFLUSH THEN DROP
          DUP SRCOFF CELLS NMAP + ASM-HERE SWAP !
          DUP DUP @ DUP NCUR ! NEMIT
-         NOK @ 0= NBAD @ 0= AND IF NCUR @ NBAD ! THEN
+         NOK @ 0= NBAD @ 0= AND IF
+            NCUR @ NBAD !
+            NINSP @ 0> IF NINSP @ 1- CELLS NINSTK + @ NBADIN ! THEN
+         THEN
          NSTEP
       REPEAT DROP
    THEN
    2DROP
+   \ Land every inlined EXIT here, and require the fall-through to agree
+   \ with them about how deep the stack is.
+   R> R>                                        ( oldD oldN )
+   NOK @ IF
+      DUP NEXITN @ < IF
+         NEXITD @ 0 >= IF NEXITD @ NDEPTH @ <> IF 0 NOK ! THEN THEN
+         SPILL NFLUSH
+         NEXITN @ OVER ?DO I CELLS NEXITM + @ >RESOLVE LOOP
+      THEN
+   THEN
+   NEXITN !  NEXITD !
    R> NORIG !  R> NEND !  R> NBASE ! ;
 
 ' NBODY 'NBODY !
@@ -818,7 +907,8 @@ CREATE NVPROBE
    0 NFIXN !  0 NLEAN !  0 NPINOFF !  0 NDEAD !
    0 NRSP !   0 NRMAX !  0 NLSP !
    0 NINSP !  0 NINL !
-   0 NSLOT !  0 NBASE !  0 NORIG !  0 NEND !
+   0 NSLOT !  0 NBASE !  0 NORIG !  0 NEND !  0 NBADIN !
+   0 NEXITN !  -1 NEXITD !
    DUP NITEMS > IF 0 NOK ! THEN
    0 ENT,  ASM-HERE 1 CELLS - NENTA !
    NOK @ IF
@@ -826,6 +916,7 @@ CREATE NVPROBE
    THEN
    DROP
    NOK @ IF 'NBODY @ EXECUTE ELSE 2DROP THEN
+   ASM-OVF @ IF 0 NOK ! THEN
    NOK @ IF
       NFIXN @ 0 ?DO
          I CELLS NFIXT + @ CELLS NMAP + @

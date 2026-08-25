@@ -22,14 +22,14 @@ VARIABLE XA  VARIABLE XB  VARIABLE XC  VARIABLE XR
    ELSE .WHY THEN
    R> DROP CR ;
 
-: CK1 ( xt -- ) >BODY DUP BODY-END 1 NCOMPILE-N
+: CK1 ( xt -- ) DUP >BODY SWAP >WEND 1 NCOMPILE-N
    IF XA @ ASMBUF INVOKE1 XR @ = IF ." ok" ELSE ." MISMATCH" THEN ELSE .WHY THEN CR ;
-: CK2 ( xt -- ) >BODY DUP BODY-END 2 NCOMPILE-N
+: CK2 ( xt -- ) DUP >BODY SWAP >WEND 2 NCOMPILE-N
    IF XA @ XB @ ASMBUF INVOKE2 XR @ = IF ." ok" ELSE ." MISMATCH" THEN ELSE .WHY THEN CR ;
-: CK3 ( xt -- ) >BODY DUP BODY-END 3 NCOMPILE-N
+: CK3 ( xt -- ) DUP >BODY SWAP >WEND 3 NCOMPILE-N
    IF XA @ XB @ XC @ ASMBUF INVOKE3 XR @ = IF ." ok" ELSE ." MISMATCH" THEN ELSE .WHY THEN CR ;
 \ For a word with no single result to compare: does it compile at all?
-: CKC ( xt n -- ) >R >BODY DUP BODY-END R> NCOMPILE-N
+: CKC ( xt n -- ) >R DUP >BODY SWAP >WEND R> NCOMPILE-N
    IF ." compiles" ELSE .WHY THEN CR ;
 
 \ -- B5: the reorder-free subset -------------------------------------

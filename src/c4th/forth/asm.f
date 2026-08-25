@@ -13,12 +13,20 @@
 \ This is the piece B5's native backend emits through, so it is worth
 \ having correct and readable before anything depends on it.
 
-CREATE ASMBUF 65536 ALLOT
+65536 CONSTANT ASMSIZE
+CREATE ASMBUF ASMSIZE ALLOT
 VARIABLE ASMP
-: ASM-RESET  ASMBUF ASMP ! ;
+VARIABLE ASM-OVF                 \ set when a program outgrows the buffer
+: ASM-RESET  ASMBUF ASMP !  0 ASM-OVF ! ;
 ASM-RESET
 
-: OP,   ( n -- )  ASMP @ !  1 CELLS ASMP +! ;
+\ Bounds-checked, because the inliner has no natural size limit: a word
+\ that inlines a word that inlines a word runs off the end, and writing
+\ past a CREATEd buffer in c4th's own image corrupts the dictionary
+\ rather than failing. The backend turns ASM-OVF into a decline.
+: OP,   ( n -- )
+   ASMP @ ASMBUF - ASMSIZE 1 CELLS - < IF ASMP @ !  1 CELLS ASMP +!
+   ELSE DROP 1 ASM-OVF ! THEN ;
 : OP2,  ( n op -- )  OP, OP, ;          \ opcode first, then its operand
 : ASM-HERE ( -- a )  ASMP @ ;
 : ASM-LEN  ( -- n )  ASMP @ ASMBUF - ;

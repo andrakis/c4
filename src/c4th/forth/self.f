@@ -134,8 +134,8 @@ CREATE UDBUF 24 ALLOT   VARIABLE UDP
    UDP @ BEGIN DUP UDBUF 24 + < WHILE DUP C@ EMIT 1+ REPEAT DROP ;
 
 : DIE ( -- )  1 HALT ;
-: BAD ( a n -- )
-   S" self: " TYPE TYPE S"  ?" TYPE CR DIE ;
+: BAD  ( a n -- )  S" self: " TYPE TYPE CR DIE ;
+: BADW ( a n -- )  S" self: I do not know the word " TYPE TYPE CR DIE ;
 
 \ -- building the image --------------------------------------------------
 \ Code word 0 is never an instruction: the .c4r code stream is 1-based,
@@ -736,7 +736,7 @@ VARIABLE TA  VARIABLE TN
       TA @ TN @ ?NUM IF
          CSTATE @ IF LIT, ELSE CTPUSH THEN
       ELSE
-         DROP TA @ TN @ BAD
+         DROP TA @ TN @ BADW
       THEN
    ELSE
       DOWORD

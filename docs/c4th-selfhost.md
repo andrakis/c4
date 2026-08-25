@@ -47,24 +47,69 @@ on plain `c4` as well as c4m, c4mp and oisc4.
 
 ## The ladder
 
-- [ ] **S0** The tracker, before the code.
-- [ ] **S1** The four primitives c4th lacks: `ALLOCATE`, `OPENF`,
-      `READF`, `CLOSEF`. Each is one C4 syscall, so self.f can emit them
-      directly. *Verify:* `make test-c4th` still green.
-- [ ] **S2** The assembler and the runtime library: the data stack, the
-      return stack, the loop stack, and the ~55 helpers, most from four
-      templates (BINOP, CMP, UNOP, MOVCELL). *Verify:* a hand-built image
-      that pushes two numbers, adds and exits with the answer.
-- [ ] **S3** The front end: source buffer, `WORD`, comments, number
+- [x] **S0** The tracker, before the code.
+- [x] **S1** The five primitives c4th lacked: `ALLOCATE`, `OPENF`,
+      `READF`, `CLOSEF` and `HALT`. Each is one C4 syscall, so self.f
+      emits them directly and the compiled compiler reaches memory and
+      files by the route the hosted one does. `ALLOCATE` rather than
+      static arrays for the same reason `SAVE-FILE` is a primitive: the
+      image's data segment is written out byte for byte, so half a
+      megabyte of compiler buffers there is half a megabyte the image
+      has to print. *Verify:* `make test-c4th` green.
+- [x] **S2** The assembler and the runtime library: the data stack, the
+      return stack, the loop stack, and the fifty-odd helpers -- forty of
+      them from four templates. C4's ALU is `a = *sp++ OP a`, a Forth
+      stack machine already, so the only mismatch a template has to
+      absorb is that C4's comparisons yield 0/1 where Forth's yield
+      0/-1: one `SUB` from zero.
+- [x] **S3** The front end: source buffer, `WORD`, comments, number
       conversion, the dictionary, `:` `;`, control flow, `VARIABLE`
-      `CONSTANT` `CREATE ALLOT`, `S"` `."` `CHAR`. *Verify:* self.f
-      compiles `src/c4th/tests/self1.f` and the image prints what c4th
-      prints running the same file.
-- [ ] **S4** The `.c4r` writer, to stdout. *Verify:* `c4r-roundtrip`
-      decodes and re-encodes the image byte for byte, as B5d required of
-      c4r.f.
-- [ ] **S5** The closure check: self.f compiles self.f. Every word its
-      own source uses is one its own compiler knows. *Verify:* gen1.c4r
-      exists and c4rdump reads it.
-- [ ] **S6** The fixed point. *Verify:* `cmp gen1.c4r gen2.bin` and
-      `cmp gen2.bin gen3.bin`, wired into `make test-c4th`.
+      `CONSTANT` `CREATE ALLOT`, `S"`. No `."` and no `CHAR`: `S" ..."
+      TYPE` says the first and a named constant says the second, and a
+      directive not owed is a directive that cannot be wrong.
+      *Verify:* `src/c4th/tests/self1.f`, run on c4th and then compiled,
+      prints the same thing on c4m, c4mp, oisc4 and plain c4.
+- [x] **S4** The `.c4r` writer, to standard output rather than to a
+      file -- the C4 VM has no write syscall, so a compiled compiler
+      could not open one, and a compiler that writes to stdout is the
+      same compiler on both sides of the bootstrap. *Verify:*
+      `c4r-roundtrip` decodes and re-encodes the image byte for byte, as
+      B5d required of c4r.f.
+- [x] **S5** The closure check: self.f compiles self.f. Every word its
+      own source uses is one its own compiler knows -- the compiler
+      refuses a word it does not have, so the check is the compile.
+      *Verify:* 9,619 instructions, 238,850 bytes, and `c4r-roundtrip`
+      re-encodes it byte for byte.
+- [x] **S6** The fixed point. gen1 == gen2 == gen3, and the same three
+      bytes-for-bytes on c4m, c4mp, oisc4 and plain c4. It also survives
+      `c4opt`: the optimizer rewrites the compiler and the rewritten
+      compiler emits the identical image. Wired into `make test-c4th`.
+
+## What it cost to say, and two things it found
+
+The compiler is 822 lines and reached its own fixed point on the first
+attempt that ran -- which is much less a claim about the code than about
+the oracle underneath it. Every one of the fifty-odd helpers had already
+been checked by `self1.f` against c4th's threaded engine before the
+compiler was ever pointed at itself.
+
+**The patch table has to be in ADDRESS order.** `c4r.lisp` walks the
+instruction stream and the patch list together and says so outright:
+"patch list out of sync with instruction stream". A forward branch whose
+patch is recorded when it is RESOLVED lands after the patches for
+instructions between the branch and its target. So a forward branch here
+carries its PATCH index rather than its code address, and the patch goes
+in when the branch is emitted, with a value filled in later. Nothing
+else in the tree emits patches out of order, so nothing else had found
+this; `load-c4r.c` applies them in any order and never noticed.
+
+**`c4l.c`'s pre-flight scan started at word 0.** The `.c4r` code stream
+is 1-based -- c4cc emits through `*++e` -- so `scan_extended` walked
+every image one word out of phase, reading each operand as an opcode. It
+survived years of images because their operands are small and stayed
+inside the opcode table by luck. `self.f` emits an `IMM` of a sign mask,
+and reading that as an opcode indexes the name table a gigabyte past its
+end: a segfault, on the first image this rung produced. Same off-by-one
+the B5d writer made from the other side, and the same lesson -- the
+1-based convention was written down in exactly the two readers that
+depended on it.

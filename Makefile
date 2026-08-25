@@ -606,8 +606,49 @@ test-c4th: c4th c4th.c4r $(C4M) c4mp $(OISC4) c4sp $(C4KE_C4R)
 	# permutation turns this from 0 mismatches into 8.
 	$(C4M) load-c4r.c -- c4th.c4r src/c4th/forth/core.f src/c4th/forth/asm.f src/c4th/forth/native.f src/c4th/tests/fuzz.f | cmp - src/c4th/tests/expected/fuzz.txt
 	$(C4M) load-c4r.c -- c4th.c4r src/c4th/forth/core.f src/c4th/forth/asm.f src/c4th/forth/native.f src/c4th/tests/nopc.f src/c4th/tests/fuzz.f | cmp - src/c4th/tests/expected/fuzz.txt
+	# B5d.5: the fixed point. src/c4th/forth/self.f is a Forth
+	# compiler written in the Forth it compiles -- see
+	# docs/c4th-selfhost.md for why that, and not native.f, is what
+	# a fixed point needs.
+	#
+	# First the ordinary differential, as at B5d: c4th runs the
+	# program, self.f compiles it, and the image must print the same
+	# thing on every machine that can run it. Plain c4 included --
+	# self.f emits nothing above EXIT.
+	./c4th src/c4th/forth/core.f src/c4th/tests/self1.f -e 'MAIN' > .c4th_self1i
+	./c4th src/c4th/forth/core.f src/c4th/forth/self.f \
+	       -e 'S" src/c4th/tests/self1.f" CSTR SRCP ! MAIN' > .c4th_self1.c4r
+	$(C4M) load-c4r.c -- .c4th_self1.c4r | cmp - .c4th_self1i
+	./c4mp .c4th_self1.c4r               | cmp - .c4th_self1i
+	$(OISC4) .c4th_self1.c4r             | cmp - .c4th_self1i
+	./c4 c4l.c .c4th_self1.c4r | sed '/^exit(/d' | cmp - .c4th_self1i
+	./c4sp -c 40000000 src/c4sp/lisp/c4r-roundtrip.lisp .c4th_self1.c4r | grep -q "roundtrip identical"
+	# Then the compiler on itself. gen1 is self.f compiled by self.f
+	# running on c4th's threaded engine -- the engine that passes the
+	# Forth-2012 CORE suite; gen2 is self.f compiled by gen1; gen3 by
+	# gen2. All three are the same bytes, which is the claim: the
+	# hosted compiler and the compiled compiler agree, and the
+	# compiled one agrees with itself.
+	./c4th src/c4th/forth/core.f src/c4th/forth/self.f -e 'MAIN' > .c4th_gen1.c4r
+	$(C4M) load-c4r.c -- .c4th_gen1.c4r > .c4th_gen2.bin
+	cmp .c4th_gen1.c4r .c4th_gen2.bin
+	$(C4M) load-c4r.c -- .c4th_gen2.bin > .c4th_gen3.bin
+	cmp .c4th_gen1.c4r .c4th_gen3.bin
+	# and the same fixed point on the other three machines. Plain c4
+	# adds its own exit() line after the image, so compare the image's
+	# worth of bytes rather than filtering a binary through sed.
+	./c4mp .c4th_gen2.bin    | cmp - .c4th_gen1.c4r
+	$(OISC4) .c4th_gen2.bin  | cmp - .c4th_gen1.c4r
+	./c4 c4l.c .c4th_gen2.bin | head -c `stat -c %s .c4th_gen1.c4r` | cmp - .c4th_gen1.c4r
+	./c4sp -c 200000000 src/c4sp/lisp/c4r-roundtrip.lisp .c4th_gen1.c4r | grep -q "roundtrip identical"
+	# And it must survive the optimizer: c4opt rewrites the compiler,
+	# and the rewritten compiler still emits the same image it did.
+	./c4sp -c 200000000 src/c4sp/lisp/c4opt-run.lisp .c4th_gen1.c4r .c4th_gen1o.c4r > /dev/null
+	$(C4M) load-c4r.c -- .c4th_gen1o.c4r | cmp - .c4th_gen1.c4r
 	rm -f .c4th_core .c4th_fact.c4r .c4th_ccasm .c4th_b5 .c4th_fused
 	rm -f .c4th_b5di .c4th_b5d.c4r .c4th_b5do.c4r .c4th_b5df.c4r
+	rm -f .c4th_self1i .c4th_self1.c4r
+	rm -f .c4th_gen1.c4r .c4th_gen1o.c4r .c4th_gen2.bin .c4th_gen3.bin
 	@echo "test-c4th: OK"
 
 # The fused opcodes (docs/fused-opcodes.md), end to end: take a real

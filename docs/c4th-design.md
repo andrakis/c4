@@ -742,8 +742,7 @@ c4or1k's `-mcisc` (`docs/c4or1k-design.md`) is the precedent for gating
 that behind a flag. **Everything above is c4m-only and reverts in one
 commit** if the answer is no.
 
-- [~] **B5d** The metacompiler: `.c4r` emission — **done except the
-      self-hosting fixed point**. This is the rung that
+- [x] **B5d** The metacompiler: `.c4r` emission. This is the rung that
       turns c4th from a REPL with a code generator into a **compiler** —
       `c4th -o prog.c4r prog.f` producing a standalone image that
       `load-c4r.c` relocates, `c4rdump` inspects and c4m runs, with no
@@ -818,9 +817,9 @@ commit** if the answer is no.
       instruction. That is precisely what a third independent writer is
       for: the convention was undocumented anywhere except in the two
       readers that depend on it.
-      - [~] **B5d.5** The fixed point — `native.f` compiling itself to
-            `gen2.c4r`, `gen2` compiling it again, `cmp gen2 gen3`.
-            **Not done, and the reason is worth more than the rung.**
+      - [x] **B5d.5** The fixed point — see `docs/c4th-selfhost.md` for
+            the ladder and the results. **The reason it is not native.f
+            compiling itself is worth more than the rung.**
 
             The plan was "the compiler needs the C primitives it leans on
             written in Forth". Pointing the compiler at its own source
@@ -876,12 +875,32 @@ commit** if the answer is no.
             126-vs-24 cycles was measuring strategy (a) applied to every
             operation, not to the boundary.
 
-            The rest of the front end is ordinary work by comparison:
-            a dictionary, `WORD`, number conversion, `:`/`;`, and file
-            input through the `OPEN`/`READ` opcodes, all of which the
-            backend can already compile or nearly can (`(S")` needs the
-            same target-data hook `EMIT`'s format string uses, and
-            `MOVE`/`FILL` can be written in Forth).
+            **But native.f's input is c4th's threaded code, not text.**
+            For a generated image to compile native.f it would first
+            have to BE c4th — outer interpreter, threaded compiler,
+            dictionary, inner interpreter — which is the whole C kernel
+            ported to Forth before the rung is even reached. A fixed
+            point does not need that tower. It needs a compiler written
+            in the language it compiles.
+
+            So `src/c4th/forth/self.f` is exactly that: 822 lines, a
+            single-pass Forth-to-`.c4r` compiler in the subset of Forth
+            it itself implements, reading text and emitting an image.
+            It is the third independent `.c4r` writer §8 asked for, and
+            it uses subroutine threading over a software data stack —
+            strategy (a) — where native.f keeps strategy (b) and keeps
+            being the fast backend. Simple and obviously correct is the
+            right trade for the one program that has to compile itself,
+            and every opcode it emits is `<= EXIT`, so its images run on
+            plain c4 too.
+
+            gen1 is self.f compiled by self.f running on c4th's threaded
+            engine; gen2 is self.f compiled by gen1; gen3 by gen2. All
+            three are the same 238,850 bytes, on c4m, c4mp, oisc4 and
+            plain c4, and `c4opt` can rewrite the compiler without
+            changing what it emits. The strong equality is gen1 == gen2:
+            the compiler interpreted and the compiler compiled agree
+            byte for byte.
 - [ ] **B6** c4th inside C4IX. *Verify:* runs from the C4IX shell, output pinned
 
 ### Risks

@@ -292,6 +292,26 @@ void th_p_savefile (int *w) {
 #endif
 }
 
+// The four the self-hosting compiler needs, and c4th did not have --
+// each is one C4 syscall, which is the point: self.f emits MALC, OPEN,
+// READ and CLOS for them directly, so the compiled compiler reaches
+// memory and files by the same route the hosted one does. OPENF takes a
+// nul-terminated path because open() does, and because a Forth string
+// with an explicit length would need a scratch buffer in the target for
+// no gain -- self.f builds the nul itself.
+//
+// ALLOCATE is here rather than as an ordinary Forth word for the reason
+// SAVE-FILE is: the image's data segment is written out byte for byte,
+// so a compiler's buffers must NOT live there. Half a megabyte of zeros
+// in the file is half a megabyte the image has to print.
+void th_p_allocate (int *w) { th_push((int)malloc(th_pop())); }
+void th_p_openf (int *w)    { th_push(open((char *)th_pop(), 0)); }
+void th_p_readf (int *w)    { int fd, a, n; n = th_pop(); a = th_pop(); fd = th_pop(); th_push(read(fd, (char *)a, n)); }
+void th_p_closef (int *w)   { close(th_pop()); }
+// HALT ( n -- ) is exit(n). c4th has BYE, but BYE takes no status and a
+// compiler that has just refused a program must say so in its exit code.
+void th_p_halt (int *w)     { exit(th_pop()); }
+
 void th_p_bye (int *w)  { th_ip = 0; th_quit = 1; }
 
 
@@ -488,5 +508,10 @@ void th_prims_init () {
 	th_defword("INVOKE2",0,(int)&th_p_invoke2);
 	th_defword("INVOKE3",0,(int)&th_p_invoke3);
 	th_defword("SAVE-FILE",0,(int)&th_p_savefile);
+	th_defword("ALLOCATE",0,(int)&th_p_allocate);
+	th_defword("OPENF",0,(int)&th_p_openf);
+	th_defword("READF",0,(int)&th_p_readf);
+	th_defword("CLOSEF",0,(int)&th_p_closef);
+	th_defword("HALT",0,(int)&th_p_halt);
 	th_defword("BYE",0,(int)&th_p_bye);
 }

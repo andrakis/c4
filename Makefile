@@ -712,8 +712,9 @@ test-c4th-os: c4th c4th.c4r $(C4M) c4ix.c4r c4ix-sh.c4r c4ke.c4r c4dos-clock.c4r
 # phase, with nothing above it edited.
 C4FC_LIB := src/c4th/forth/core.f src/c4th/forth/ext.f \
             src/c4th/forth/locals.f src/c4fc/dsl.f src/c4fc/lex.f
-C4FC_ALL := $(C4FC_LIB) src/c4fc/ast.f src/c4fc/types.f src/c4fc/emit.f \
-            src/c4fc/gen.f src/c4fc/parse.f src/c4fc/opt.f src/c4fc/c4fc.f
+C4FC_ALL := $(C4FC_LIB) src/c4fc/pp.f src/c4fc/ast.f src/c4fc/types.f \
+            src/c4fc/emit.f src/c4fc/gen.f src/c4fc/parse.f src/c4fc/opt.f \
+            src/c4fc/c4fc.f
 C4FC_SPIKE := src/tests/hello.c src/c4fc/tests/spike1.c src/c4fc/tests/spike2.c \
               src/c4fc/tests/spike3.c src/c4fc/tests/spike4.c \
               src/c4fc/tests/spike5.c src/c4fc/tests/spike6.c \
@@ -730,6 +731,20 @@ C4FC_LEX_SWEEP := c4.c c4m.c c4l.c load-c4r.c src/c4th/c4th.c \
                   src/c4cc/asm-c4r.c src/c4dos/c4dos.c src/c4ix/vfs.c \
                   src/c4ix/sched.c src/c4or1k/cpu.c src/tests/mandel.c \
                   src/tests/tests.c
+
+# F3, the preprocessor sweep: <source>:<-I directory>. The twelve C4IX
+# modules are the bar the design named; the rest are there because a
+# preprocessor that only ever sees one project's headers has not been
+# tested. src/c4dos/c4dos.c is deliberately absent -- it is built by gcc's
+# cpp and c4cc, and its `#define int long long` macro-defines a KEYWORD,
+# which neither c4lc nor c4fc models.
+C4FC_PP_SWEEP = $(patsubst %,src/c4ix/%.c:src/c4ix,$(C4IX_MODS)) \
+                 src/c4ix/lib/libc4ix.c:src/c4ix/include \
+                 src/c4ix/user/sh.c:src/c4ix/include \
+                 src/c4or1k/cpu.c:src/c4or1k src/c4mp/vm.c:src/c4mp \
+                 src/c4cc/c4cc.c:. src/c4ke/c4ke.c:src/c4ke \
+                 src/c4th/c4th.c:src/c4th/include src/c4sp/c4sp.c:src/c4sp/include \
+                 load-c4r.c:.
 
 test-c4fc: c4th c4th.c4r $(C4M) c4sp
 	./c4th $(C4FC_LIB) src/c4fc/tests/dsl.f | cmp - src/c4fc/tests/expected/dsl.txt
@@ -783,8 +798,41 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp
 	     || { echo "test-c4fc: -O changed what $$f does"; exit 1; }; \
 	   echo "  opt ok: $$f"; \
 	done
+	# F3: the preprocessor. Three bars, weakest first.
+	#
+	# One, the feature battery -- the same file c4lc's own L9 test uses,
+	# compared token for token against c4lc's preprocessor. Tokens and
+	# not text: gcc -E emits `# 12 "file"` markers and c4fc consumes
+	# them, so the two can never agree on a line number and must agree
+	# on everything else.
+	./c4sp -c 8000000 src/c4sp/lisp/c4lc-ppdump.lisp $(TESTS)/c4lc_pp.c > .c4fc_a.txt
+	./c4th $(C4FC_LIB) src/c4fc/pp.f -e ': GO 67108864 ARENA-INIT PP-RESET S" $(TESTS)/c4lc_pp.c" PP-FILE DUMP-PPTOKENS ; GO' > .c4fc_b.txt
+	head -n -1 .c4fc_a.txt | cmp - .c4fc_b.txt
+	# Two, the bar the design asked for: real modules, preprocessed by
+	# c4fc, against the SAME modules preprocessed by gcc -E. Every one of
+	# the twelve C4IX modules plus a spread of the rest of the tree.
+	# __GNUC__ is defined on the c4fc side because gcc defines it on its
+	# own side and c4.h branches on it; the other four are what $(PREPROC)
+	# passes.
+	@for spec in $(C4FC_PP_SWEEP); do \
+	   f=$${spec%%:*}; inc=$${spec##*:}; \
+	   gcc -E -Iinclude -I. -I$$inc -DC4CC=1 -D__c4__=1 -D__C4CC__=1 -D__c4cc__=1 -C $$f > .c4fc_pp.c 2>/dev/null || exit 1; \
+	   ./c4th $(C4FC_LIB) src/c4fc/pp.f -e ": GO 200000000 ARENA-INIT S\" .c4fc_pp.c\" LEX-FILE DUMP-PPTOKENS ; GO" > .c4fc_a.txt 2>&1; \
+	   ./c4th $(C4FC_LIB) src/c4fc/pp.f -e ": GO 200000000 ARENA-INIT PP-RESET S\" include\" PP-PATH S\" .\" PP-PATH S\" $$inc\" PP-PATH S\" C4CC=1\" PP-DEFINE S\" __c4__=1\" PP-DEFINE S\" __C4CC__=1\" PP-DEFINE S\" __c4cc__=1\" PP-DEFINE S\" __GNUC__=1\" PP-DEFINE S\" $$f\" PP-FILE DUMP-PPTOKENS ; GO" > .c4fc_b.txt 2>&1; \
+	   cmp -s .c4fc_a.txt .c4fc_b.txt \
+	     || { echo "test-c4fc: the preprocessor differs from gcc -E on $$f"; exit 1; }; \
+	   echo "  pp ok: $$f"; \
+	done
+	# Three, the strongest: a program that USES the preprocessor,
+	# compiled all the way to an image, byte-identical to c4lc -P's --
+	# and then run, because an image that matches and does the wrong
+	# thing would mean both compilers are wrong the same way.
+	./c4sp -c 8000000 src/c4sp/lisp/c4lc.lisp -P -I src/c4fc/tests src/c4fc/tests/spike9.c .c4fc_lc.c4r > /dev/null
+	./c4th $(C4FC_ALL) -e ': GO C4FC-INIT -P S" src/c4fc/tests" -I S" src/c4fc/tests/spike9.c" C4FC ; GO' > .c4fc_fc.c4r
+	cmp .c4fc_lc.c4r .c4fc_fc.c4r
+	$(C4M) load-c4r.c -- .c4fc_fc.c4r | cmp - src/c4fc/tests/expected/spike9.txt
 	@rm -f .c4fc_lex.txt .c4fc_a.txt .c4fc_b.txt .c4fc_lc.c4r .c4fc_fc.c4r
-	@rm -f .c4fc_o0.c4r .c4fc_o1.c4r .c4fc_o2.c4r .c4fc_r0 .c4fc_r1
+	@rm -f .c4fc_o0.c4r .c4fc_o1.c4r .c4fc_o2.c4r .c4fc_r0 .c4fc_r1 .c4fc_pp.c
 	@echo "test-c4fc: OK"
 
 # The fused opcodes (docs/fused-opcodes.md), end to end: take a real

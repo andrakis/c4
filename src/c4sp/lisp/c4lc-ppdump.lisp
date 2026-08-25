@@ -2,6 +2,9 @@
 ;; gcc -E: the two must agree token for token, which is a stronger
 ;; check than comparing text (whitespace and line markers differ).
 (begin
+	;; c4r.lisp for cons, which c4lc-pp.lisp uses in the #elif branch and
+	;; which reaches it via c4lc.lisp in the real pipeline
+	(load "c4r.lisp")
 	(load "c4lc-lex.lisp")
 	(load "c4lc-pp.lisp")
 	(define Args argv)

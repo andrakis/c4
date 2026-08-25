@@ -275,8 +275,79 @@ The bar rises rung by rung and c4lc supplies it at every one.
       lvalue rather than assuming. That is F5 arriving inside F6, and
       the ladder below is reordered to admit it.
 
-- [ ] **F3** Preprocessor. *Verify:* byte-identical to `gcc -E` on the
-      twelve C4IX modules.
+- [x] **F3** Preprocessor. `#include` (both forms, searched along `-I`),
+      `#define` object- and function-like, `#undef`, `#ifdef`/`#ifndef`/
+      `#if`/`#elif`/`#else`/`#endif` with constant expressions, `#`
+      stringize, `##` paste, line continuation, `-D`, and gcc's
+      `# 12 "file"` markers consumed so an already-preprocessed source
+      still works. *Verified:* three bars, in `make test-c4fc`.
+
+      **The token stream is a stack.** c4lc splices an expansion onto
+      the front of a cons list and walks the result; here the pending
+      tokens live in a vector used as a stack, and "push it back so it
+      is rescanned" is one `V,`. `#include` is the same operation with
+      a whole file's tokens, which is why an include costs no
+      recursion and no second walk.
+
+      **It works on tokens, and there is still only one lexer.**
+      `PPMODE` changes four things -- `#` and `##` become tokens, a
+      `<header>` after `include` is one `Str`, an identifier records
+      whether `(` TOUCHES it, and a newline clears the header scan --
+      and changes nothing else. That last bit is the whole of what
+      separates `#define ADD(a,b)` from `#define TWO (x + y)`, and the
+      standard draws the line at the space, so the lexer has to be the
+      one to see it.
+
+      **A token now carries the serial of the buffer it came from.** A
+      directive runs to the end of its LINE, and after an `#include`
+      two files' line numbers sit next to each other on one stream;
+      c4lc splices token lists and has the same exposure. One extra
+      field closes it.
+
+      Four deliberate divergences from c4lc, all toward what C says
+      and all invisible on this tree's sources: a conditional level
+      records whether a branch has been TAKEN, so `#if 1 / #elif 1 /
+      #else` does not run the `#else` arm; `defined(X)` protects `X`
+      from expansion even when `X` is a macro (c4lc expands it first
+      and then asks whether the *result* is defined); a macro is
+      painted blue while its own expansion is rescanned, so a
+      self-referential `#define` terminates instead of looping; and a
+      quoted `#include` resolves against **the including file's
+      directory** before the `-I` list, rather than against the
+      current one -- which is the difference between `include/c4.h`
+      and the `c4.h` that is not in the root, and the only divergence
+      any real file in this tree noticed.
+
+      *Verified*, weakest bar first:
+      - `src/tests/c4lc_pp.c`, the battery c4lc's own L9 test uses,
+        **token for token identical to c4lc's preprocessor**. (That
+        needed a one-line fix to `c4lc-ppdump.lisp`, which had never
+        been wired into a test and did not load the file `cons` lives
+        in, so it died on the first `#elif`.)
+      - **Twenty-one real sources preprocessed by c4fc against the
+        same sources preprocessed by `gcc -E`**, identical token for
+        token -- the twelve C4IX modules the design named, plus
+        libc4ix, a userland program, `c4or1k/cpu.c`, `c4mp/vm.c`,
+        `c4cc.c`, `c4ke.c`, `c4th.c`, `c4sp.c` and `load-c4r.c`.
+        Tokens and not text, because gcc emits `# 12 "file"` markers
+        and c4fc consumes them, so the two can never agree on a line
+        number and must agree on everything else.
+      - `src/c4fc/tests/spike9.c`, a program that *uses* the
+        preprocessor, compiled to an image **byte-identical to
+        `c4lc -P`'s** -- and then run, because two compilers agreeing
+        on a wrong image is not a passing test.
+
+      `-P` is c4lc's flag and, like c4lc, it is off by default: without
+      it the lexer skips `#` lines, which is what a source that has
+      already been through `gcc -E` needs. Keeping the default the same
+      as the oracle's is what lets every F2-F8 differential stay a
+      straight byte comparison.
+
+      Two things neither compiler models, recorded so nobody hunts
+      them: a `#define` whose name is a **keyword** (`c4dos.c` has
+      `#define int long long`, and is built by gcc's cpp and c4cc for
+      that reason), and system headers -- `#include_next` and
+      `/usr/include` are not on the map for either.
 - [x] **F4** Control flow, and everything that turned out to come with
       it. `if`/`else`, `while`, `for`, `do`/`while`, `break`,
       `continue`, `?:`, `switch`; the unary operators `! ~ - * &`,

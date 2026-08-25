@@ -35,6 +35,11 @@ CREATE KNLEN KIND-MAX CELLS ALLOT
 
 KIND: Eof   KIND: Num   KIND: Id    KIND: Str
 KIND: Hash  KIND: HashHash
+\ EndMac is not a C token: it is the marker the preprocessor pushes
+\ after a macro's expansion so it knows when the expansion has been
+\ rescanned and the macro may be expanded again. It never reaches the
+\ output, and pp.f is the only file that mentions it.
+KIND: EndMac
 \ keywords
 KIND: Char  KIND: Else  KIND: Enum  KIND: If    KIND: Int
 KIND: Return KIND: Sizeof KIND: While KIND: Switch KIND: Case
@@ -140,6 +145,16 @@ OPER [   Brak   OPER ]   Rbrak  OPER .   Dot
 VARIABLE SRC   VARIABLE SLEN   VARIABLE POS   VARIABLE LINE
 VARIABLE CONFORMING   0 CONFORMING !
 
+\ Preprocessor mode. In it '#' and '##' become tokens instead of a
+\ line to skip, <header> after `include` is one Str token, and an
+\ identifier records whether '(' touches it. Everything else -- every
+\ escape quirk, every operator -- is the same lexer, which is the
+\ point: pp.f works on TOKENS, so there is only ever one tokenizer.
+VARIABLE PPMODE    0 PPMODE !
+VARIABLE WANT-HDR  0 WANT-HDR !
+: BYTES2= ( a1 u1 a2 u2 -- f )
+   ROT OVER <> IF DROP 2DROP 0 EXIT THEN  BYTES= ;
+
 : PEEK ( i -- c )  DUP SLEN @ < IF SRC @ + C@ ELSE DROP 0 THEN ;
 : CH   ( -- c )    POS @ PEEK ;
 : AT-END? ( -- f ) POS @ SLEN @ >= ;
@@ -157,15 +172,26 @@ VARIABLE CONFORMING   0 CONFORMING !
 
 \ -- tokens -------------------------------------------------------------
 
+\ t.adj is set on an identifier that '(' TOUCHES, which is the one bit
+\ that separates a function-like #define from an object-like one whose
+\ body happens to start with a paren. t.file is the serial of the
+\ buffer the token was lexed from: a directive runs to the end of its
+\ LINE, and after an #include two different files' line numbers sit
+\ next to each other on the stream.
 BEGIN-STRUCTURE TOK
    FIELD: t.kind   FIELD: t.val   FIELD: t.len   FIELD: t.line
+   FIELD: t.adj    FIELD: t.file
 END-STRUCTURE
 
 CREATE TOKS VEC ALLOT
+VARIABLE LEXV   TOKS LEXV !               \ where TOK, appends
+VARIABLE LEXF   0 LEXF !                  \ serial of the buffer in hand
+VARIABLE T-ADJ  0 T-ADJ !                 \ consumed by the next TOK,
 : TOK, ( kind val len -- ) {: k v n | t -- :}
    TOK ALLOT: TO t
    k t t.kind !  v t t.val !  n t t.len !  LINE @ t t.line !
-   t TOKS V, ;
+   T-ADJ @ t t.adj !  0 T-ADJ !  LEXF @ t t.file !
+   t LEXV @ V, ;
 
 \ -- scanners -----------------------------------------------------------
 
@@ -235,7 +261,12 @@ CREATE TOKS VEC ALLOT
    BEGIN CH ID? WHILE 1 POS +! REPEAT
    SRC @ s + TO a   POS @ s - TO u
    a u KW-FIND DUP 0< 0= IF 0 0 TOK, EXIT THEN
-   DROP  Id a u TOK, ;
+   DROP
+   PPMODE @ IF
+      a u S" include" BYTES2= IF 1 WANT-HDR ! THEN   \ arm the <...> scan
+      CH 40 = IF 1 T-ADJ ! THEN                      \ '(' TOUCHES the name
+   THEN
+   Id a u TOK, ;
 
 : T-NUM   Num SCAN-NUMBER 0 TOK, ;
 
@@ -276,12 +307,28 @@ CREATE TOKS VEC ALLOT
 
 \ -- the loop -----------------------------------------------------------
 
+\ #include <name>: one Str token, not a stream of operators
+: T-HEADER {: | s n dst -- :}
+   1 POS +!  POS @ TO s
+   BEGIN AT-END? 0= CH 62 <> AND CH 10 <> AND WHILE 1 POS +! REPEAT
+   POS @ s - TO n
+   n 1+ ALLOT: TO dst   SRC @ s + dst n MOVE
+   1 POS +!  0 WANT-HDR !
+   1 T-ADJ !                              \ t.adj on a Str marks <angle>
+   Str dst n TOK, ;
+
+: T-HASH
+   PPMODE @ 0= IF SKIP-LINE EXIT THEN
+   POS @ 1+ PEEK 35 = IF HashHash 0 0 TOK, 2 POS +! EXIT THEN
+   Hash 0 0 TOK, 1 POS +! ;
+
 : LEX-STEP {: | c -- :}
    CH TO c
    c 92 = POS @ 1+ PEEK 10 = AND IF 2 POS +! EXIT THEN   \ splice
-   c 10 = IF 1 POS +! 1 LINE +! EXIT THEN
+   c 10 = IF 1 POS +! 1 LINE +! 0 WANT-HDR ! EXIT THEN
    c 33 < IF 1 POS +! EXIT THEN
-   c 35 = IF SKIP-LINE EXIT THEN                          \ a # line, skipped
+   c 35 = IF T-HASH EXIT THEN
+   WANT-HDR @ c 60 = AND IF T-HEADER EXIT THEN
    c ID1? IF T-IDENT EXIT THEN
    c DIG? IF T-NUM   EXIT THEN
    c 47  = IF T-SLASH EXIT THEN
@@ -293,16 +340,44 @@ CREATE TOKS VEC ALLOT
 CREATE PATHB 1024 ALLOT
 : ZPATH ( a u -- z )  DUP >R PATHB SWAP MOVE 0 PATHB R@ + C! R> DROP PATHB ;
 
-: LEX-FILE ( a u -- )
-   ZPATH OPENF DUP 0< IF ." lex: cannot open the source" CR ABORT THEN
-   4194304 ALLOCATE SRC !
-   0 SLEN !
-   BEGIN DUP SRC @ SLEN @ + 65536 READF DUP 0> WHILE SLEN +! REPEAT
-   DROP CLOSEF
-   0 POS !  1 LINE !
-   TOKS 262144 VEC-INIT
+\ A file is read into a scratch buffer and then copied into the arena
+\ at its real size, because Id and Str tokens point INTO the source and
+\ so it has to outlive the scan -- and because #include means several
+\ sources are live at once.
+4194304 CONSTANT RDMAX
+VARIABLE RDBUF   0 RDBUF !
+VARIABLE #FILES  0 #FILES !
+: READ-FILE ( a u -- addr len ) {: a u | fd n dst -- addr len :}
+   a u ZPATH OPENF TO fd
+   fd 0< IF ." lex: cannot open the source" CR ABORT THEN
+   RDBUF @ 0= IF RDMAX ALLOCATE RDBUF ! THEN
+   0 TO n
+   BEGIN fd RDBUF @ n + 65536 READF DUP 0> WHILE n + TO n REPEAT DROP
+   fd CLOSEF
+   n 1+ ALLOT: TO dst   RDBUF @ dst n MOVE
+   dst n ;
+
+: LEX-BUF ( addr len v -- ) {: addr len v -- :}
+   addr SRC !  len SLEN !  0 POS !  1 LINE !  0 WANT-HDR !  0 T-ADJ !
+   v LEXV !  1 #FILES +!  #FILES @ LEXF !
    BEGIN AT-END? 0= WHILE LEX-STEP REPEAT
    Eof 0 0 TOK, ;
+
+: NEW-VEC ( n -- v ) {: n | v -- v :}  VEC ALLOT: TO v  v n VEC-INIT  v ;
+
+: LEX-FILE ( a u -- )                     \ the whole file into TOKS
+   READ-FILE TOKS DUP 262144 VEC-INIT LEX-BUF ;
+: LEX-FILE>V ( a u -- v )                 \ ... into a vector of its own
+   READ-FILE 4096 NEW-VEC DUP >R LEX-BUF R> ;
+\ The directory a quoted #include is resolved relative to: everything up
+\ to the last '/' of the path, empty when there is none.
+: DIRNAME ( a u -- a u' ) {: a u | r -- a r :}   \ includes the trailing '/'
+   0 TO r
+   u 0 ?DO a I + C@ 47 = IF I 1+ TO r THEN LOOP
+   a r ;
+: LEX-STR>V ( a u -- v ) {: a u | dst -- v :}
+   u 1+ ALLOT: TO dst  a dst u MOVE
+   dst u 64 NEW-VEC DUP >R LEX-BUF R> ;
 
 \ -- the dump, in c4lc's format -----------------------------------------
 \ Rendered into a buffer and then printed AS A C STRING, stopping at the

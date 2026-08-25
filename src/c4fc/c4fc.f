@@ -9,12 +9,27 @@
 
 VARIABLE OPTIMIZE   0 OPTIMIZE !
 
+\ The arena has to exist before -I and -D can be recorded, so the setup
+\ is its own word and C4FC falls back to it -- which keeps the bare
+\ `S" f.c" C4FC` that every spike test uses working unchanged.
+\ -P is c4lc's flag and c4lc's default: without it the LEXER skips '#'
+\ lines, which is what a source that has already been through gcc -E
+\ needs. With it c4fc does the job itself. Keeping the default the same
+\ as the oracle's is what lets every F2-F8 differential stay a straight
+\ byte comparison.
+VARIABLE PREPROCESS   0 PREPROCESS !
+: -P ( -- )  1 PREPROCESS ! ;
+VARIABLE C4FC-READY   0 C4FC-READY !
+: C4FC-INIT ( -- )  67108864 ARENA-INIT  PP-RESET  1 C4FC-READY ! ;
+: -I ( a u -- )  PP-PATH ;
+: -D ( a u -- )  PP-DEFINE ;
+
 : C4FC ( a u -- )                       \ compile that file, image to stdout
-   67108864 ARENA-INIT
+   C4FC-READY @ 0= IF C4FC-INIT THEN
    EMIT-INIT
    NSYM SYMR * ALLOCATE STAB !  0 STN !  0 NGLO !  0 GPN !
    BUILTINS
-   LEX-FILE
+   PREPROCESS @ IF PP-FILE ELSE LEX-FILE THEN
    0 TP !
    PROGRAM
    ENTRY @ 0< IF ." c4fc: no main" CR ABORT THEN

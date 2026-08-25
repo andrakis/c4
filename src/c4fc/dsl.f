@@ -38,9 +38,18 @@ BEGIN-STRUCTURE VEC
 END-STRUCTURE
 
 : VEC-INIT ( v n -- )  {: v n -- :}  n CELLS ALLOCATE v v.data !  0 v v.len !  n v v.cap ! ;
+\ Doubling, and the old block is simply let go of: there is no FREE in
+\ c4th and a compiler is a batch process, so the peak is what matters
+\ and it is bounded by twice the final size.
+: VEC-GROW ( v -- ) {: v | nc nd -- :}
+   v v.cap @ 2* DUP 0= IF DROP 16 THEN TO nc
+   nc CELLS ALLOCATE TO nd
+   nd 0= IF ." c4fc: out of memory growing a vector" CR ABORT THEN
+   v v.data @ nd v v.len @ CELLS MOVE
+   nd v v.data !  nc v v.cap ! ;
 : V, ( x v -- )
    {: x v -- :}
-   v v.len @ v v.cap @ >= IF ." c4fc: vector full" CR ABORT THEN
+   v v.len @ v v.cap @ >= IF v VEC-GROW THEN
    x  v v.data @ v v.len @ CELLS + !
    1 v v.len +! ;
 : V@ ( i v -- x )  v.data @ SWAP CELLS + @ ;

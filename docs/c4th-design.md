@@ -829,36 +829,52 @@ commit** if the answer is no.
             THEN` now inlines, which it did not. That work is done and is
             worth having on its own.
 
-            **But `EXECUTE` cannot be compiled at all under this
-            backend's model, and a Forth interpreter is `EXECUTE`.**
+            **Targeting c4m rather than plain c4 settles the design
+            question this rung ran into**, and it needs no new opcodes.
 
-            C4's `JSRS n` pushes the return address onto `sp` — and in
-            strategy (b), `sp` IS the data stack. That part is fine: the
-            callee's `ENT` puts the saved bp and the return address
-            above its arguments, so a word compiled with entry arity *k*
-            finds them at `bp+2..` exactly as B5c arranged, and the
-            caller removes them with `ADJ k` afterwards.
+            The question was `EXECUTE`, which a Forth interpreter *is*.
+            C4's `JSRS` pushes the return address onto `sp` — and in
+            strategy (b) `sp` is the data stack. That part works: the
+            callee's `ENT` puts the saved bp and return address above its
+            arguments, so a word compiled with entry arity *k* finds them
+            at `bp+2..` exactly as B5c arranged. The problem was *k*:
+            `ADJ` takes a compile-time constant and an interpreter
+            dispatching an arbitrary xt does not know the arity until run
+            time.
 
-            The problem is *k*. `ADJ` takes a compile-time constant, and
-            an interpreter executing an arbitrary xt does not know the
-            arity until run time. So self-hosting needs one of:
+            c4m has `_ADJ` (opcode **50**, `sp = sp + *sp`) — a stack
+            adjust whose count comes off the stack. Measured, not
+            assumed, by hand-assembling it: **the count is in words and
+            includes its own cell**, and `JSRS` + `_ADJ` performs an
+            indirect call whose argument drop is computed at run time.
+            c4mp and oisc4 have both opcodes too.
 
-            * **a runtime stack adjust** — c4m has `_ADJ` (`sp = sp +
-              *sp`), which would work and would make the self-hosted c4th
-              require c4m rather than plain c4;
-            * **callee-cleanup**, which means the callee moving its own
-              return address before `LEV`; or
-            * **strategy (a) for the target** — a separate data stack, so
-              every word is arity 0 and `EXECUTE` is an ordinary indirect
-              call. Uniform, and what every native-code Forth does. The
-              B5 probe measured that at **126 cycles/iteration against
-              strategy (b)'s 24**, so it is not a free choice.
+            **But the deeper answer is that the interpreter should not be
+            trying to model `sp` at all.** native.f's model tracks where
+            every live value sits relative to `bp`, and a word the
+            interpreter executes moves `sp` by an amount no compiler can
+            know. Any scheme that keeps the interpreter's own values on
+            `sp` across a dispatch is wrong for that reason, whatever the
+            calling convention.
 
-            The likely answer is a hybrid — (a) at the dispatch boundary
-            where arity is unknown, (b) inside compiled words where it is
-            not — but that is a second calling convention for the target,
-            not a few more primitives. It wants its own design pass
-            rather than being carried in on the end of B5d.
+            So the target Forth gets **two stacks and a bridge**, which
+            is what every native-code Forth does:
+
+            * The Forth data stack is an array in the image's data, with
+              its own pointer — the interpreter and the user's words
+              share it, and no compiler models it.
+            * A word's BODY is still compiled in strategy (b), with the
+              C4 stack as scratch, at full speed. Only its *interface*
+              changes: a prologue pops its arguments off the Forth stack
+              and an epilogue pushes its result back. That is B5c's entry
+              arity plus an epilogue, not a new code generator.
+            * `EXECUTE` is then `JSRS` with no arguments and nothing to
+              clean up, because every word's C4 arity is zero.
+
+            The cost is a few instructions per CALL rather than per
+            operation, which is the right place to pay it: the B5 probe's
+            126-vs-24 cycles was measuring strategy (a) applied to every
+            operation, not to the boundary.
 
             The rest of the front end is ordinary work by comparison:
             a dictionary, `WORD`, number conversion, `:`/`;`, and file

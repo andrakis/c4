@@ -651,6 +651,55 @@ test-c4th: c4th c4th.c4r $(C4M) c4mp $(OISC4) c4sp $(C4KE_C4R)
 	rm -f .c4th_gen1.c4r .c4th_gen1o.c4r .c4th_gen2.bin .c4th_gen3.bin
 	@echo "test-c4th: OK"
 
+# B6: c4th on the operating systems. docs/c4th-design.md.
+#
+# c4th needs nothing from any of them and gets nothing: it asks for
+# open, read, close, malloc and printf, which is what it would ask a
+# bare VM for, and each kernel answers in its own way -- C4KE and C4IX
+# by trapping the syscall out of a protected task and emulating it,
+# C4DOS by getting out of the way. The same c4th.c4r runs on all three.
+C4TH_OS_PROG := src/c4th/forth/core.f src/c4th/tests/self1.f src/c4th/tests/run-main.f
+# The kernels announce themselves; only the program's own output is
+# being compared.
+C4TH_KE_FILTER := grep -v "^c4ke\|^lc4r\|^ \|^$$\|Have a nice"
+C4TH_IX_MASK := sed -E -e 's/[0-9]+ cycles/N cycles/g' -e 's/info 0x[0-9a-f]+/info 0xHH/'
+
+c4dos-c4th: c4dos-clock.c4r c4th.c4r $(SRCS)/c4dos/fs/CONFIG.SYS
+	@mkdir -p c4dos-c4th
+	@cp $(SRCS)/c4dos/fs/CONFIG.SYS c4dos-c4th/config.sys
+	@printf 'ECHO OFF\n' > c4dos-c4th/autoexec.bat
+	@cp c4th.c4r c4dos-c4th/
+	@cp src/c4th/forth/core.f src/c4th/tests/self1.f src/c4th/tests/run-main.f c4dos-c4th/
+	@cd c4dos-c4th && ls > c4dos.dir
+	@echo "c4dos-c4th: ready -- boot it and type RUN c4th.c4r core.f self1.f run-main.f"
+
+test-c4th-os: c4th c4th.c4r $(C4M) c4ix.c4r c4ix-sh.c4r c4ke.c4r c4dos-clock.c4r c4dos-c4th
+	# The host is the oracle, as everywhere else in this suite.
+	./c4th $(C4TH_OS_PROG) > .c4th_os_ref
+	# C4KE: a protected task, syscalls trapped and emulated.
+	$(C4M) load-c4r.c -- c4ke.c4r c4th.c4r $(C4TH_OS_PROG) | $(C4TH_KE_FILTER) | cmp - .c4th_os_ref
+	# C4DOS: no protection and no processes -- RUN loads the image and
+	# calls it, and the working directory IS the disk, so the source
+	# files sit beside the interpreter.
+	cd c4dos-c4th && printf 'RUN c4th.c4r core.f self1.f run-main.f\nEXIT\n' | \
+		$(CURDIR)/$(C4M) $(CURDIR)/load-c4r.c -- $(CURDIR)/c4dos-clock.c4r \
+		| sed -e '1,/^A>ECHO OFF/d' -e '$$d' -e 's/^A>//' | cmp - $(CURDIR)/.c4th_os_ref
+	# C4IX: driven by C4IX's own shell, so every line is also a test of
+	# spawn, argv, the fd layer and redirection. The session compiles a
+	# program, runs what it built, then compiles the COMPILER and runs
+	# that -- the B5d.5 fixed point, inside the kernel. The image comes
+	# back on standard output between two halves of a transcript, so
+	# the two are checked separately.
+	$(C4M) load-c4r.c -- c4ix.c4r c4ix-sh.c4r src/c4th/tests/c4ix.sh > .c4th_ix.out
+	head -c `grep -abo -m1 C4R .c4th_ix.out | head -1 | cut -d: -f1` .c4th_ix.out \
+		| $(C4TH_IX_MASK) | cmp - src/c4th/tests/expected/c4ix.txt
+	./c4th src/c4th/forth/core.f src/c4th/forth/self.f -e 'MAIN' > .c4th_gen1.c4r
+	tail -c +`expr \`grep -abo -m1 C4R .c4th_ix.out | head -1 | cut -d: -f1\` + 1` .c4th_ix.out \
+		| head -c `stat -c %s .c4th_gen1.c4r` | cmp - .c4th_gen1.c4r
+	grep -q "shutdown complete" .c4th_ix.out
+	rm -f .c4th_os_ref .c4th_ix.out .c4th_gen1.c4r
+	@echo "test-c4th-os: OK"
+
 # The fused opcodes (docs/fused-opcodes.md), end to end: take a real
 # image, run c4opt's fuse pass over it, and require that it behaves
 # identically on the hosts that have them -- and is REFUSED by the ones
@@ -1145,7 +1194,15 @@ c4ix-%.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libc4ix.c4l $(C4IX_SRC)/user/%.c
 
 # X3 boot pins: the linked kernel boots natively on c4m (preemptive,
 # user tasks behind protected mode) and degraded on plain c4 through
-# the c4l loader (cooperative, no hardware boundary). Output is exact
+# the c4l loader (cooperative, no hardware boundary).
+#
+# The ping/pong lines in this pin record a SCHEDULING interleaving, and
+# it moves when the kernel's cost does: teaching c4r_load to look in the
+# RAM filesystem (docs/c4th-design.md, B6) swapped "ping 2" and
+# "pong 2" and changed nothing else. That is a measurement sitting in a
+# behaviour pin -- deterministic, so it is not flaky, but it means any
+# change to the kernel's timing shows up here as a diff to read rather
+# than a regression to fix. Output is exact
 # per host; the differences are by design and worth reading:
 # c4ix-hello.c4r calls printf directly, so on c4m it traps and the
 # kernel emulates it onto the fd layer -- which is why redirecting it

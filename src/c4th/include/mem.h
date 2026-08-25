@@ -90,6 +90,16 @@ char *th_alloc_bytes (int n) {
 int th_mem_init (int image_cells, int dcells, int rcells) {
 	th_err = 0;
 	if (!(th_mem = malloc(image_cells * sizeof(int)))) return 0;
+	// Zeroed, and this is not tidiness. VARIABLE reserves a cell and
+	// says nothing about its contents, so every Forth that leans on a
+	// variable starting at zero is leaning on the allocator -- and it
+	// gets away with it, because a fresh malloc from the host is fresh
+	// pages, which are zero. Run the same c4th as a task under C4IX,
+	// where the kernel hands back memory some earlier task returned,
+	// and the same code reads whatever was there before: self.f's
+	// PICK-SOURCE found ARGC nonzero, took the argv branch, and
+	// dereferenced address 8. Nothing had changed but the allocator.
+	memset(th_mem, 0, image_cells * sizeof(int));
 	th_hp     = (char *)th_mem;
 	th_hlimit = (char *)(th_mem + image_cells);
 	if (!(th_dstack = malloc(dcells * sizeof(int)))) return 0;

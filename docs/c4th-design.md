@@ -901,7 +901,47 @@ commit** if the answer is no.
             changing what it emits. The strong equality is gen1 == gen2:
             the compiler interpreted and the compiler compiled agree
             byte for byte.
-- [ ] **B6** c4th inside C4IX. *Verify:* runs from the C4IX shell, output pinned
+- [x] **B6** c4th on the operating systems: C4DOS, C4KE and C4IX, from
+      one unmodified `c4th.c4r`. *Verify:* `make test-c4th-os`.
+
+      **It needed nothing, which is the finding.** c4th asks for open,
+      read, close, malloc and printf, which is what it would ask a bare
+      VM for; each kernel answers in its own way -- C4KE and C4IX by
+      trapping the syscall out of a protected task and emulating it,
+      C4DOS by getting out of the way -- and the same image runs on all
+      three with byte-identical output. The images c4th's compiler
+      PRODUCES run there too, and on plain c4 besides, because self.f
+      emits nothing above `EXIT`.
+
+      Under C4IX it is driven by C4IX's own shell
+      (`src/c4th/tests/c4ix.sh`), so every line is also a test of spawn,
+      argv, the fd layer and redirection. That session compiles a
+      program, runs what it built, and then compiles the COMPILER and
+      runs that: **B5d.5's fixed point, inside the kernel**, and the
+      image it produces there is byte-identical to the one the host
+      produces. The VM has no write syscall, so the shell's redirection
+      is standing in for one -- which is also what made a small change
+      to `src/c4ix/loader.c` necessary. It read images from the host
+      only, and a program the machine produced itself cannot BE on the
+      host: nothing running under the VM can put a file there. It now
+      looks in the RAM filesystem first, so
+      `c4th.c4r ... > /ram/prog.c4r` followed by `/ram/prog.c4r` is a
+      whole compile-and-run loop and the kernel can finally run
+      something it made.
+
+      **And one real bug, which only an operating system could have
+      found.** c4th zeroes its image now. `VARIABLE` reserves a cell and
+      says nothing about its contents, so a Forth that leans on a
+      variable starting at zero is leaning on the allocator -- and it
+      gets away with it, because a fresh `malloc` from the host is fresh
+      pages, which are zero. Run the same c4th as a task under C4IX,
+      where the kernel hands back memory an earlier task returned, and
+      the same code reads whatever was there before: self.f's
+      `PICK-SOURCE` found `ARGC` nonzero, took the argv branch, and
+      dereferenced address 8. Nothing had changed but the allocator.
+      It presented as a segfault in the HOST, deterministic, and it went
+      away if any command ran first -- which is the shape of every
+      uninitialised-memory bug there has ever been.
 
 ### Risks
 

@@ -113,3 +113,47 @@ end: a segfault, on the first image this rung produced. Same off-by-one
 the B5d writer made from the other side, and the same lesson -- the
 1-based convention was written down in exactly the two readers that
 depended on it.
+
+## Where it runs (B6)
+
+One unmodified `c4th.c4r`, and one unmodified image out of it.
+
+| | c4th itself | images self.f produces |
+|---|---|---|
+| plain `c4` | no — it uses opcodes above `EXIT`; `c4l` names `OPCD` at code+10 | yes |
+| `c4m` (and c4m under plain c4) | yes | yes |
+| `c4mp`, `oisc4` | yes | yes |
+| **C4DOS** (under c4m) | yes — `RUN c4th.c4r core.f prog.f` | yes |
+| **C4KE** | yes | yes |
+| **C4IX** | yes, including from its shell | yes, including from a RAM file |
+
+c4th asks each of them for open, read, close, malloc and printf, which
+is what it would ask a bare VM for. C4KE and C4IX trap those out of a
+protected task and emulate them; C4DOS gets out of the way. Nothing in
+c4th knows which it is talking to.
+
+The one thing that did need building is on the kernel's side.
+`src/c4ix/loader.c` read images from the host only, and **a program the
+machine produced itself cannot be on the host**: the VM has no write
+syscall, so nothing running under it can put a file there. The loader
+now falls back to the RAM filesystem, which makes
+
+    c4th.c4r ... > /ram/prog.c4r
+    /ram/prog.c4r
+
+a whole compile-and-run loop with the shell's redirection standing in
+for the write syscall. `src/c4th/tests/c4ix.sh` does exactly that, and
+then does it to the compiler: **the fixed point, inside the kernel**,
+with the image C4IX builds byte-identical to the one the host builds.
+
+**And one real bug, which only an operating system could have found.**
+`VARIABLE` reserves a cell and says nothing about its contents, so a
+Forth that leans on a variable starting at zero is leaning on the
+allocator — and it gets away with it, because a fresh `malloc` from the
+host is fresh pages, which are zero. Run the same c4th as a task under
+C4IX, where the kernel hands back memory an earlier task returned, and
+the same code reads whatever was there before: `PICK-SOURCE` found
+`ARGC` nonzero, took the argv branch, and dereferenced address 8. It
+presented as a segfault in the *host*, deterministic, and it went away
+if any command ran first — the shape of every uninitialised-memory bug
+there has ever been. c4th zeroes its image now.

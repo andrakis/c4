@@ -8,8 +8,8 @@ ping 0
 pong 0
 ping 1
 pong 1
-ping 2
 pong 2
+ping 2
 init: ping exited 103, pong exited 203
 init: busy done 1 1, preempted 1 1
 init: spawned 'c4ix-hello.c4r' as task 6 (protected)

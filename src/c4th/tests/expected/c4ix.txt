@@ -1,0 +1,39 @@
+C4IX booting, N cycles spent loading the kernel image
+c4ix: host c4m, info 0xHH
+c4ix: protected mode on for user tasks, preemption on
+c4ix: task 1 'init' created, scheduling after N cycles
+c4th: the selftest
+3628800 
+c4th: selftest ok
+c4th: interpreting a program
+1 4 9 16 25 36 49 64 81 
+190 
+-3 -2 -1 0 1 2 3 4 
+7 -7 -17 
+32 3 2 
+0.2.4.6.8.
+18 
+hello, self
+9223372036854775807 15 1024 -1 
+4242 100 
+1 3 2 1 2 1 7 8 5 5 9 9 
+-1 0 -1 -1 0 3 5 
+c4th: compiling that program, and running what it built
+56032 bytes 183 lines
+1 4 9 16 25 36 49 64 81 
+190 
+-3 -2 -1 0 1 2 3 4 
+7 -7 -17 
+32 3 2 
+0.2.4.6.8.
+18 
+hello, self
+9223372036854775807 15 1024 -1 
+4242 100 
+1 3 2 1 2 1 7 8 5 5 9 9 
+-1 0 -1 -1 0 3 5 
+c4th: compiling the compiler
+238850 bytes 144 lines
+c4th: and the compiler it built, compiling itself
+238850 bytes 144 lines
+c4th: the second image follows

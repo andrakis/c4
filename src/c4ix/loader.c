@@ -1,6 +1,6 @@
 //
-// C4IX .c4r loader: read an image from the host filesystem, relocate
-// it, and hand back an entry address -- the in-kernel port of c4l.c's
+// C4IX .c4r loader: read an image from the RAM filesystem or the host,
+// relocate it, and hand back an entry address -- the in-kernel port of c4l.c's
 // parser. No invoke-stub gymnastics here: the kernel is c4lc code,
 // so calling loaded code is an ordinary indirect call.
 //
@@ -75,18 +75,46 @@ int c4r_load(char *path, struct c4r_image *img) {
     int fd, n, total;
     int entry, codelen, datalen, patchlen, symlen, conslen, deslen, memsz;
     int i, ptype, paddr, pvalu;
+    struct vnode *vn;
 
     if (!(buf = (char *)malloc(C4R_BUF_MAX))) return 0;
-    if ((fd = open(path, 0)) < 0) {
-        // Silent: callers try several candidate names (the shell
-        // resolves "wc" against three), so a miss is routine and the
-        // caller is the one that knows when to complain.
-        free(buf);
-        return 0;
+    if ((fd = open(path, 0)) >= 0) {
+        total = 0;
+        while ((n = read(fd, buf + total, 65536)) > 0) total = total + n;
+        close(fd);
+    } else {
+        vn = vfs_lookup(path);
+        if (!vn || vn->type != VN_RAMFILE) {
+            // Silent: callers try several candidate names (the shell
+            // resolves "wc" against three), so a miss is routine and
+            // the caller is the one that knows when to complain.
+            free(buf);
+            return 0;
+        }
+        // The host had no such file, so try the RAM filesystem -- and
+        // this is not a convenience. A program the machine produced
+        // ITSELF cannot be on the host: the C4 VM has no write syscall,
+        // so nothing running under it can put a file there. What a
+        // compiler running as a task CAN do is write to standard output
+        // and let the shell redirect that into a RAM file, so
+        // `c4th.c4r ... > /ram/prog.c4r` and then `/ram/prog.c4r` is
+        // the whole compile-and-run loop, and this is what joins the
+        // two halves. Without it the kernel can only ever run programs
+        // that were built somewhere else.
+        //
+        // Second, not first, so that loading a host image costs exactly
+        // what it always did. The order is invisible otherwise: a RAM
+        // path and a host path cannot name the same file.
+        total = vn->size;
+        if (total > C4R_BUF_MAX) {
+            kprintf("c4ix: loader: %s is %d bytes, over the %d limit\n",
+                    path, total, C4R_BUF_MAX);
+            free(buf);
+            return 0;
+        }
+        i = 0;
+        while (i < total) { buf[i] = vn->data[i]; ++i; }
     }
-    total = 0;
-    while ((n = read(fd, buf + total, 65536)) > 0) total = total + n;
-    close(fd);
     if (total < 13) {
         if (!loader_quiet) kprintf("c4ix: loader: %s is not a .c4r\n", path);
         free(buf); return 0;

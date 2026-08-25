@@ -35,7 +35,7 @@ NODE: n_postdec NFIELD: >opnd                  ;NODE
 \ address-producing expression and codegen never asks which spelling it
 \ came from.
 NODE: n_index  NFIELD: >lhs  NFIELD: >rhs      ;NODE
-NODE: n_member NFIELD: >lhs  NFIELD: >moff NFIELD: >mtype ;NODE
+NODE: n_member NFIELD: >lhs  NFIELD: >moff NFIELD: >mtype NFIELD: >magg ;NODE
 
 NODE: n_lor    NFIELD: >lhs  NFIELD: >rhs      ;NODE
 NODE: n_land   NFIELD: >lhs  NFIELD: >rhs      ;NODE

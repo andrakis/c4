@@ -30,6 +30,7 @@ CREATE MB-NAME  MMAX-MEM CELLS ALLOT
 CREATE MB-NLEN  MMAX-MEM CELLS ALLOT
 CREATE MB-TYPE  MMAX-MEM CELLS ALLOT
 CREATE MB-OFF   MMAX-MEM CELLS ALLOT
+CREATE MB-AGG   MMAX-MEM CELLS ALLOT     \ an array member is its own address
 VARIABLE #MEMS   0 #MEMS !
 
 : T-BASE ( t -- b )
@@ -66,13 +67,14 @@ VARIABLE #MEMS   0 #MEMS !
    k ;
 : ST-TYPE ( k -- t )  T-STRIDE * T-STRUCT0 + ;
 
-: MEM, ( struct a u type off -- ) {: k a u t o -- :}
+: MEM, ( struct a u type off agg -- ) {: k a u t o ag -- :}
    #MEMS @ MMAX-MEM < 0= IF ." c4fc: too many struct members" CR ABORT THEN
    k #MEMS @ CELLS MB-OWNER + !
    a #MEMS @ CELLS MB-NAME  + !
    u #MEMS @ CELLS MB-NLEN  + !
    t #MEMS @ CELLS MB-TYPE  + !
    o #MEMS @ CELLS MB-OFF   + !
+   ag #MEMS @ CELLS MB-AGG  + !
    1 #MEMS +! ;
 : MEM-FIND ( struct a u -- i|-1 ) {: k a u -- i :}
    #MEMS @ 0 ?DO

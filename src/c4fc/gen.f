@@ -22,9 +22,14 @@
 :M GEN      n_var {: n | y -- :}
    n >sym @ TO y   y y.val @ oLEA OP2,
    y y.agg @ IF EXIT THEN   y y.ct @ LOAD, ;M
-:M GEN-ADDR n_gvar >sym @ y.val @ IMMG, ;M
+\ An initialised global's address is final the moment it is declared,
+\ because region 1 begins at zero; every other global is a slot number
+\ until the end of the program.
+: GADDR, ( y -- ) {: y -- :}
+   y y.ini @ IF y y.val @ IMMI, ELSE y y.val @ IMMG, THEN ;
+:M GEN-ADDR n_gvar >sym @ GADDR, ;M
 :M GEN      n_gvar {: n | y -- :}
-   n >sym @ TO y   y y.val @ IMMG,
+   n >sym @ TO y   y GADDR,
    y y.agg @ IF EXIT THEN   y y.ct @ LOAD, ;M
 
 :M CT n_num  DROP t_int ;M
@@ -73,19 +78,36 @@
 :M GEN-ADDR n_member {: n -- :}
    n >lhs @ GEN
    n >moff @ ?DUP IF oPSH OP, oIMM OP2, oADD OP, THEN ;M
-:M GEN n_member {: n -- :}  n GEN-ADDR  n >mtype @ LOAD, ;M
+:M GEN n_member {: n -- :}
+   n GEN-ADDR
+   n >magg @ IF EXIT THEN               \ an array member is its address
+   n >mtype @ LOAD, ;M
 :M CT  n_member  >mtype @ ;M
 
 \ Arguments push left to right, then the call, then the drop. A builtin
 \ is the same shape with an opcode where the JSR goes -- which is why
 \ printf needs no special case anywhere else.
-:M GEN n_call {: n | f -- :}
+\ Calling a variadic function: push everything, push how many of them
+\ were EXTRA, call __c4cc_make_va, drop the count and the extras, and
+\ push what it returned. The callee sees its fixed parameters plus one
+\ more -- which is why `int vsum(int n, ...)` finds n at bp+3 and not
+\ bp+2, and why the ... needs no prologue of its own.
+:M GEN n_call {: n | f k -- :}
    n >fn @ TO f
-   n >argn @ 0 ?DO
-      n >args @ I CELLS + @ GEN  oPSH OP,
-   LOOP
-   f y.class @ 2 = IF f y.val @ OP, ELSE f y.val @ JSRC, THEN
-   n >argn @ ?DUP IF oADJ OP2, THEN ;M
+   n >argn @ TO k
+   k 0 ?DO  n >args @ I CELLS + @ GEN  oPSH OP,  LOOP
+   f y.va @ IF
+      k f y.nfix @ - TO k                \ how many were extra
+      k oIMM OP2,  oPSH OP,
+      VA-MAKE @ JSRF,
+      k 1+ oADJ OP2,
+      oPSH OP,
+      f JSRF,
+      f y.nfix @ 1+ oADJ OP2,
+      EXIT
+   THEN
+   f y.class @ 2 = IF f y.val @ OP, ELSE f JSRF, THEN
+   k ?DUP IF oADJ OP2, THEN ;M
 
 :M STMT n_expst  >expr @ GEN ;M
 :M STMT n_ret    >expr @ GEN  oLEV OP, ;M

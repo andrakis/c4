@@ -24,11 +24,27 @@
   8192 CONSTANT PMAX
   4096 CONSTANT SMAX
 
+\ THE DATA SEGMENT IS THREE REGIONS, in this order:
+\
+\   1. globals WITH an initialiser, in declaration order
+\   2. string literals and jump tables, in the order they are met
+\   3. globals WITHOUT one
+\
+\ which is c4lc's layout and is not the obvious one -- a global
+\ initialised in a file whose first function contains a string still
+\ comes first. Only region 1's addresses are known as they are handed
+\ out; regions 2 and 3 are relative until every declaration has been
+\ seen, so their patches are revisited at the end.
 VARIABLE CODE   VARIABLE CN
-VARIABLE DATA   VARIABLE DN
+VARIABLE IDATA  VARIABLE IDN          \ region 1: initialised globals
+VARIABLE DATA   VARIABLE DN           \ region 2: strings and tables
+VARIABLE UDN                          \ region 3: the rest, size only
+VARIABLE DB2    VARIABLE DB3          \ where regions 2 and 3 begin
 VARIABLE PATCH  VARIABLE PN
 VARIABLE SYMS   VARIABLE SN
 VARIABLE ENTRY
+VARIABLE CONS   VARIABLE CONSN        \ constructors, as code indices
+VARIABLE DESS   VARIABLE DESN
 
  0 CONSTANT oLEA   1 CONSTANT oIMM   2 CONSTANT oJMP   3 CONSTANT oJSR
  4 CONSTANT oBZ    5 CONSTANT oBNZ   6 CONSTANT oENT   7 CONSTANT oADJ
@@ -45,6 +61,11 @@ VARIABLE ENTRY
 : EMIT-INIT
    CMAX CELLS ALLOCATE CODE !      0 CN !
    DMAX ALLOCATE DATA !            0 DN !
+   DMAX ALLOCATE IDATA !           0 IDN !
+   0 UDN !  0 DB2 !  0 DB3 !
+   256 CELLS ALLOCATE CONS !       0 CONSN !
+   256 CELLS ALLOCATE DESS !       0 DESN !
+   IDATA @ DMAX 0 FILL
    PMAX 3 * CELLS ALLOCATE PATCH ! 0 PN !
    SMAX 5 * CELLS ALLOCATE SYMS !  0 SN !
    DATA @ DMAX 0 FILL
@@ -66,6 +87,9 @@ VARIABLE ENTRY
    t p !   a p CELL+ !   v p 2 CELLS + !
    1 PN +! ;
 
+4096 CONSTANT DSMAX
+CREATE DSL DSMAX CELLS ALLOT   VARIABLE DSN   0 DSN !
+
 \ A patched operand carries its value in the patch, and what the CODE
 \ word holds depends on which kind it is: a data reference writes ZERO
 \ there, a code reference writes the target. The asymmetry is real and
@@ -73,7 +97,10 @@ VARIABLE ENTRY
 \ the moment there are two string literals (the second's IMM is 0 in the
 \ code and 3 in the patch), the code rule the moment a call target is
 \ not function zero.
-: IMMD, ( off -- ) {: off -- :}         \ IMM of an address in the data
+: IMMD, ( off -- ) {: off -- :}         \ IMM of a REGION 2 address
+   oIMM OP,  -2 CHERE off PAT,  0 C,
+   PN @ 1- DSL DSN @ CELLS + !  1 DSN +! ;
+: IMMI, ( off -- ) {: off -- :}         \ IMM of a REGION 1 address, final
    oIMM OP,  -2 CHERE off PAT,  0 C, ;
 : JSRC, ( target -- ) {: t -- :}        \ a call to a known function
    oJSR OP,  -1 CHERE t PAT,  t C, ;
@@ -89,9 +116,22 @@ VARIABLE TABN   0 TABN !
 : TABPAT, ( dataoff code -- )
    TABN @ TABMAX < 0= IF ." c4fc: too many jump table entries" CR ABORT THEN
    TABC TABN @ CELLS + !   TABD TABN @ CELLS + !   1 TABN +! ;
-: EMIT-TABPATS
-   TABN @ 0 ?DO -3  TABD I CELLS + @  TABC I CELLS + @  PAT, LOOP ;
+: EMIT-TABPATS ( base -- )              \ jump tables live in region 2 too
+   TABN @ 0 ?DO DUP TABD I CELLS + @ +  TABC I CELLS + @  -3 ROT ROT PAT, LOOP
+   DROP ;
 
+\ A call to a function that has only been PROTOTYPED does not know where
+\ it will land, so every call to a user function is recorded and fixed
+\ when the whole program has been read. Both halves need fixing: the
+\ patch's value and the code word, because a code reference carries its
+\ target in both.
+2048 CONSTANT FWMAX
+CREATE FWP FWMAX CELLS ALLOT
+CREATE FWS FWMAX CELLS ALLOT
+VARIABLE FWN   0 FWN !
+: JSRF, ( sym -- ) {: y -- :}
+   oJSR OP,  -1 CHERE 0 PAT,  0 C,
+   PN @ 1- FWP FWN @ CELLS + !   y FWS FWN @ CELLS + !   1 FWN +! ;
 \ Branches carry a code patch exactly as calls do, so a forward branch
 \ has two things to fill in later -- the patch's value and the code word
 \ -- and what it carries around meanwhile is its PATCH index.
@@ -105,11 +145,24 @@ VARIABLE TABN   0 TABN !
 : BACK, ( op target -- ) {: op t -- :}
    op OP,  -1 CHERE t PAT,  t C, ;
 
+\ Region 1: an initialised global's address IS its offset, because that
+\ region starts at zero.
+: ID-ALLOT ( n -- off )
+   IDN @ 1 CELLS 1- + 1 CELLS 1- INVERT AND IDN !
+   IDN @ SWAP IDN +! ;
+: ID-C! ( c off -- )  IDATA @ + C! ;
+: ID-! ( v off -- )   IDATA @ + ! ;
+
 \ A global's address is not known until every string literal has been
 \ seen, because c4lc lays the globals out AFTER them -- so the patch is
 \ recorded with the global's number and revisited at the end.
 1024 CONSTANT GPMAX
 CREATE GPL GPMAX CELLS ALLOT   VARIABLE GPN   0 GPN !
+: FIX-REGION2 ( base -- ) {: b | p -- :}   \ shift every region 2 reference
+   DSN @ 0 ?DO
+      DSL I CELLS + @ 3 * CELLS PATCH @ + 2 CELLS + TO p
+      p @ b + p !
+   LOOP ;
 : IMMG, ( slot -- ) {: slot -- :}
    oIMM OP,  -2 CHERE slot PAT,  0 C,
    PN @ 1- GPL GPN @ CELLS + !  1 GPN +! ;
@@ -139,7 +192,9 @@ CREATE GPL GPMAX CELLS ALLOT   VARIABLE GPN   0 GPN !
 BEGIN-STRUCTURE SYMR
    FIELD: y.name  FIELD: y.nlen  FIELD: y.type  FIELD: y.class  FIELD: y.val
    FIELD: y.ct    FIELD: y.agg   FIELD: y.sz
+   FIELD: y.va    FIELD: y.nfix  FIELD: y.ini   FIELD: y.sc
 END-STRUCTURE
+VARIABLE VA-MAKE   0 VA-MAKE !          \ code index of __c4cc_make_va
 : SYM[] ( i -- a )  SYMR * SYMS @ + ;
 \ attrs 0x40 marks an AGGREGATE -- an array, or a struct variable. Both
 \ are names that stand for an address rather than a value, and c4lc
@@ -152,14 +207,31 @@ END-STRUCTURE
    at y y.agg !
    1 SN +! ;
 
+: FIX-FORWARDS {: | p v -- :}
+   FWN @ 0 ?DO
+      FWP I CELLS + @ 3 * CELLS PATCH @ + TO p
+      FWS I CELLS + @ y.val @ TO v
+      v 0< IF ." c4fc: a function was called but never defined" CR ABORT THEN
+      v p 2 CELLS + !
+      v p CELL+ @ CELLS CODE @ + !
+   LOOP ;
+
+
 \ -- writing it out -----------------------------------------------------
 
 CREATE WSCR 1 CELLS ALLOT
 : FW  ( w -- )  WSCR !  1 CELLS 0 ?DO WSCR I + C@ EMIT LOOP ;
 : FMK ( c -- )  EMIT  1 CELLS 1- 0 ?DO 0 EMIT LOOP ;
-: MEMSZ ( -- n )  DN @ 1 CELLS 1- + 1 CELLS 1- INVERT AND ;
-: DTRIM ( -- n )                        \ bytes worth writing
-   MEMSZ BEGIN DUP 0> IF DUP 1- DATA @ + C@ 0= ELSE 0 THEN WHILE 1- REPEAT ;
+: ALIGNUP ( n -- n )  1 CELLS 1- + 1 CELLS 1- INVERT AND ;
+: MEMSZ ( -- n )  DB3 @ UDN @ + ALIGNUP ;
+\ The whole segment, assembled: region 1's bytes, then region 2's, then
+\ nothing at all -- region 3 is zeros and the loader supplies them.
+: DBYTE ( i -- c )
+   DUP IDN @ < IF IDATA @ + C@ EXIT THEN
+   DUP DB2 @ >= OVER DB2 @ DN @ + < AND IF DB2 @ - DATA @ + C@ EXIT THEN
+   DROP 0 ;
+: DTRIM ( -- n )
+   MEMSZ BEGIN DUP 0> IF DUP 1- DBYTE 0= ELSE 0 THEN WHILE 1- REPEAT ;
 
 : WRITE-IMAGE {: | dl y -- :}
    DTRIM TO dl
@@ -167,12 +239,12 @@ CREATE WSCR 1 CELLS ALLOT
    3 EMIT                                \ version 3, as c4lc writes
    1 CELLS 8 * EMIT
    MEMSZ FW                              \ v3 puts memsz in v2's padding
-   ENTRY @ FW   CN @ FW   dl FW   PN @ FW   SN @ FW   0 FW   0 FW
+   ENTRY @ FW   CN @ FW   dl FW   PN @ FW   SN @ FW   CONSN @ FW   DESN @ FW
    67 FMK  CN @ 0 ?DO I CELLS CODE @ + @ FW LOOP
-   68 FMK  dl 0 ?DO I DATA @ + C@ EMIT LOOP
+   68 FMK  dl 0 ?DO I DBYTE EMIT LOOP
    80 FMK  PN @ 3 * 0 ?DO I CELLS PATCH @ + @ FW LOOP
-   99 FMK
-  100 FMK
+   99 FMK  CONSN @ 0 ?DO I CELLS CONS @ + @ FW LOOP
+  100 FMK  DESN @ 0 ?DO I CELLS DESS @ + @ FW LOOP
    83 FMK
    SN @ 0 ?DO
       I SYM[] TO y

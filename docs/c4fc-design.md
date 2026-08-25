@@ -353,8 +353,46 @@ The bar rises rung by rung and c4lc supplies it at every one.
       Left for F7, and left deliberately: array members inside structs,
       initialisers, `static`/`extern`, varargs, and constant expressions
       in `enum` bodies (c4lc's L11) — the parser takes a literal there.
-- [ ] **F7** Full subset: arrays, structs, `switch`, varargs, statics.
-      *Verify:* the whole `C4LC_DIFF` corpus, byte-identical.
+- [x] **F7** The rest of the subset: storage classes, prototypes,
+      initialisers, constant expressions, variadic functions, and the
+      constructor and destructor lists. *Verified:* `spike7.c` and
+      `spike8.c`, **byte-identical to c4lc**, with everything before
+      them.
+
+      **The data segment is three regions, in this order:** globals
+      *with* an initialiser, then string literals and jump tables, then
+      globals without. That is not the obvious layout and it is not
+      source order — a global initialised in a file whose first function
+      contains a string still comes first. Only region 1's addresses are
+      known as they are handed out, so regions 2 and 3 are relative
+      until the last declaration has been read and every patch that
+      names one is revisited at the end.
+
+      **`...` is not a special form.** It is one more parameter,
+      unnamed, and the *call site* does the work: push everything, push
+      how many were extra, call `__c4cc_make_va`, drop the count and the
+      extras, push what it returned. The callee needs no prologue at
+      all — which is exactly why `int vsum(int n, ...)` finds `n` at
+      `bp+3` and not `bp+2`.
+
+      The symbol record's attribute word turns out to carry five things,
+      each found by compiling a file that used one: `0x1` constructor,
+      `0x2` destructor, `0x8` static, `0x20` variadic, `0x40`
+      aggregate. Constructors and destructors also put their code index
+      in the image's own `c` and `d` lists, which is what makes them
+      run.
+
+      **Calls are all forward references now.** A prototype means a call
+      can precede the definition, so every call to a user function is
+      recorded and fixed when the program has been read — both halves of
+      it, because a code reference carries its target in the patch *and*
+      in the code word.
+
+      One deliberate divergence, in the direction of accepting more:
+      c4lc rejects `sizeof` inside an `enum` body ("enum initializer
+      must be an integer constant") and c4fc allows it, because the
+      constant evaluator walks the same precedence table the code path
+      does and `sizeof` was already on it.
 - [ ] **F8** The optimizer. *Verify:* `-O` output byte-identical to
       `c4opt`, the differential B5 already uses.
 - [ ] **F9** The closing loop. *Verify:* c4fc compiles `c4th.c`, and the

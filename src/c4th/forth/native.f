@@ -374,6 +374,7 @@ VARIABLE NK  VARIABLE NB0  VARIABLE NPP  VARIABLE NPI  VARIABLE NPB
 ' MIN CONSTANT nMIN   ' MAX CONSTANT nMAX     ' ABS CONSTANT nABS
 ' U< CONSTANT nULT    ' U> CONSTANT nUGT      ' /MOD CONSTANT nDIVMOD
 ' EMIT CONSTANT nEMIT
+' EXECUTE CONSTANT nEXEC
 
 \ EMIT is the one primitive the backend can compile, and only when it is
 \ told where a "%c" lives in the image being built -- which is the
@@ -782,6 +783,20 @@ VARIABLE WEY  VARIABLE WEA  VARIABLE WEL  VARIABLE WEB
    \ the ADJ that must follow, and finds the format string deepest --
    \ so the two are pushed fmt first, and the character is read back
    \ through bp, which those pushes do not move.
+   \ EXECUTE is one indirect call and nothing else, because in the target
+   \ every word has C4 arity zero: it takes its arguments off the FORTH
+   \ data stack, which no compiler models, and puts its result back
+   \ there. JSRS calls through a frame cell, so the xt goes into one
+   \ first. See docs/c4th-design.md, B5d.5.
+   DUP nEXEC = IF 2DROP
+      1 NEED  NEED-ACC
+      1 SLOT+ >R
+      R@ NEGATE STL,
+      R@ NEGATE JSRS,
+      R> DROP  1 SLOT-
+      -1 NDEPTH +!  0 NACC !
+      ASM-LEN NPINOFF !
+      EXIT THEN
    DUP nEMIT = IF 2DROP
       NFMTC @ 0= IF 0 NOK ! EXIT THEN
       1 NEED  SPILL

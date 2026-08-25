@@ -64,4 +64,5 @@ F3 ok
 F4 ok
 F5 ok
 F6 (2!) compiles
+F8 (EXECUTE) ok
 F7 (calls . , expect declined) declined .

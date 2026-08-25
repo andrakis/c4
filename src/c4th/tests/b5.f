@@ -135,6 +135,16 @@ VARIABLE V
 : F4 /MOD SWAP - ;         17 XA ! 5 XB ! XA @ XB @ F4 XR ! ." F4 " ' F4 CK2
 : F5 SQ SWAP SQ - ;        3 XA ! 5 XB ! XA @ XB @ F5 XR ! ." F5 " ' F5 CK2
 : F6 SWAP OVER ! CELL+ ! ; ." F6 (2!) "  ' F6 3 CKC
+\ EXECUTE, which is the whole of a Forth interpreter's dispatch. In the
+\ target every word has C4 arity zero -- it takes its arguments off the
+\ Forth data stack, which no compiler models -- so this is one indirect
+\ call through a frame cell and nothing else. The callee here is
+\ hand-assembled, because the point is that the CALL works.
+CREATE XCB 64 ALLOT
+#ENT XCB !  0 XCB 1 CELLS + !  #IMM XCB 2 CELLS + !  4242 XCB 3 CELLS + !
+#LEV XCB 4 CELLS + !
+: F8 EXECUTE ;             XCB XA !  4242 XR !      ." F8 (EXECUTE) " ' F8 CK1
+
 \ A word whose body reaches a primitive the backend cannot emit says so,
 \ and names it.
 : F7 @ . ;                 ." F7 (calls . , expect declined) " ' F7 CK1

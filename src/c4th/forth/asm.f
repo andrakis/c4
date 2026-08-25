@@ -67,6 +67,12 @@ ASM-RESET
 : JSRI, ( a -- )  #JSRI OP2, ;
 : JSRS, ( n -- )  #JSRS OP2, ;
 
+\ Two c4m opcodes the self-hosted target needs. c4th images target c4m
+\ (plain c4 users run ./c4 c4m.c), so these are fair game -- and neither
+\ is new: both have been in c4m, c4mp and oisc4 all along.
+50 CONSTANT #_ADJ                \ sp = sp + *sp -- a run-time stack adjust
+: _ADJ, #_ADJ OP, ;
+
 : LEV,  #LEV OP, ;   : LI,   #LI  OP, ;   : LC,   #LC  OP, ;
 : SI,   #SI  OP, ;   : SC,   #SC  OP, ;   : PSH,  #PSH OP, ;
 : OR,   #OR  OP, ;   : XOR,  #XOR OP, ;   : AND,  #AND OP, ;

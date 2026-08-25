@@ -277,9 +277,40 @@ The bar rises rung by rung and c4lc supplies it at every one.
 
 - [ ] **F3** Preprocessor. *Verify:* byte-identical to `gcc -E` on the
       twelve C4IX modules.
-- [ ] **F4** Parser: control flow (`if`, `while`, `for`, `switch`),
-      which the slice does not have, on the recursive-descent skeleton
-      it does. *Verify:* AST dump == c4lc's over `src/tests/*.c`.
+- [x] **F4** Control flow, and everything that turned out to come with
+      it. `if`/`else`, `while`, `for`, `do`/`while`, `break`,
+      `continue`, `?:`, `switch`; the unary operators `! ~ - * &`,
+      prefix and postfix `++`/`--`, short-circuit `&&`/`||`, `sizeof`,
+      compound statements. *Verified:* `src/c4fc/tests/spike3.c` and
+      `spike4.c`, **byte-identical to c4lc**.
+
+      Three things worth writing down.
+
+      **`&&` and `||` are control flow, not arithmetic.** They had been
+      rows in the infix table mapping to `AND` and `OR`, which is wrong
+      and which nothing had caught because the slice's programs did not
+      use them. They are branches around the right operand, so they are
+      node kinds with methods — the table is for operators that really
+      are one opcode.
+
+      **`continue` in a `for` loop is a FORWARD branch.** It targets the
+      step, and the step is emitted after the body. So `break` and
+      `continue` are both marks resolved when the loop closes, rather
+      than one being a jump to a known address — which also makes the
+      three loop kinds share one resolver.
+
+      **`switch` is a jump table in the data segment**, dispatched
+      through `JMPA`, with the table's entries as data-to-code patches
+      (type -3) written after every code patch because that is the order
+      c4lc writes them and `c4r.lisp` walks the two lists together. The
+      table is allocated *after* its body is parsed — a string literal
+      inside the switch gets the lower address, which is checkable and
+      is checked. Entries with no case of their own hold the default
+      target, which is the end when there is no `default` at all. And
+      the `IMM lo SUB` that turns a value into an index is **omitted
+      when the lowest case is zero**: four words, invisible until a
+      switch happens to start at `case 0`, and the only difference left
+      when everything else matched.
 - [ ] **F5** Types, beyond the char/int distinction the slice needed:
       pointer scaling, arrays, structs. *Verify:* `sizeof`, pointer
       arithmetic and struct offsets agree with c4lc on a dedicated

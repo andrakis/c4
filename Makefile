@@ -714,7 +714,8 @@ C4FC_LIB := src/c4th/forth/core.f src/c4th/forth/ext.f \
             src/c4th/forth/locals.f src/c4fc/dsl.f src/c4fc/lex.f
 C4FC_ALL := $(C4FC_LIB) src/c4fc/ast.f src/c4fc/emit.f src/c4fc/gen.f \
             src/c4fc/parse.f src/c4fc/c4fc.f
-C4FC_SPIKE := src/tests/hello.c src/c4fc/tests/spike1.c src/c4fc/tests/spike2.c
+C4FC_SPIKE := src/tests/hello.c src/c4fc/tests/spike1.c src/c4fc/tests/spike2.c \
+              src/c4fc/tests/spike3.c src/c4fc/tests/spike4.c
 
 # F2, the lexer. The oracle is c4lc's own, three ways: its golden dump
 # of the sample that carries every token kind and quirk, the same with
@@ -743,11 +744,12 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp
 	     || { echo "test-c4fc: the lexer differs from c4lc on $$f"; exit 1; }; \
 	   echo "  lex ok: $$f"; \
 	done
-	# The vertical slice: hello.c and two programs of straight-line C
-	# compiled all the way to a .c4r and required to be BYTE-IDENTICAL
-	# to c4lc's. That is the bar the whole ladder is verified against,
-	# so it is worth answering early and on a small program rather than
-	# after the preprocessor and the parser are built on the assumption.
+	# Whole programs compiled to a .c4r and required to be
+	# BYTE-IDENTICAL to c4lc's -- the bar the whole ladder is verified
+	# against. spike1 and spike2 are the straight-line slice that
+	# answered whether the bar is reachable at all; spike3 is F4's
+	# control flow and spike4 its switch, which is a jump table in the
+	# data segment reached through JMPA.
 	@for f in $(C4FC_SPIKE); do \
 	   ./c4sp -c 8000000 src/c4sp/lisp/c4lc.lisp $$f .c4fc_lc.c4r > /dev/null 2>&1; \
 	   ./c4th $(C4FC_ALL) -e ": GO S\" $$f\" C4FC ; GO" > .c4fc_fc.c4r; \

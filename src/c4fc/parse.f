@@ -57,7 +57,8 @@ CREATE INO IMAX CELLS ALLOT
 : IN-FIND ( kind -- i|-1 ) {: k -- i :}
    #IN @ 0 ?DO k I CELLS INK + @ = IF I UNLOOP EXIT THEN LOOP -1 ;
 
-Lor  3 oOR  INFIX   Lan 4 oAND INFIX
+\ || and && are NOT here: they are short-circuit branches, so they are
+\ node kinds with methods rather than rows with an opcode.
 Or   5 oOR  INFIX   Xor 6 oXOR INFIX   And 7 oAND INFIX
 Eq   8 oEQ  INFIX   Ne  8 oNE  INFIX
 Lt   9 oLT  INFIX   Gt  9 oGT  INFIX   Le  9 oLE  INFIX   Ge 9 oGE INFIX
@@ -97,9 +98,14 @@ DEFER EXPR                              \ ( lev -- node )
 : PRIMARY ( -- node ) {: | s a u v k nd -- n :}
    TK Num = IF TV TNEXT n_num N1 EXIT THEN
    TK Str = IF TV TL D-STR, TNEXT n_str N1 EXIT THEN
+   TK Sizeof = IF                       \ sizeof(type) folds to a constant
+      TNEXT Lparen WANT
+      PARSE-TYPE t_char = IF 1 ELSE 1 CELLS THEN
+      Rparen WANT n_num N1 EXIT
+   THEN
    TK Lparen = IF
       TNEXT
-      TYPE? IF SKIP-TYPE Rparen WANT 12 EXPR EXIT THEN    \ a cast emits nothing
+      TYPE? IF SKIP-TYPE Rparen WANT 13 EXPR EXIT THEN   \ a cast emits nothing
       1 EXPR Rparen WANT EXIT
    THEN
    TK Id = IF
@@ -116,11 +122,42 @@ DEFER EXPR                              \ ( lev -- node )
    THEN
    ." c4fc: line " TOK@ t.line @ .N ." : an expression was expected" CR ABORT ;
 
-: (EXPR) ( lev -- node ) {: lev | n i p r nd -- n :}
-   PRIMARY TO n
+: POSTFIX ( -- node )
+   PRIMARY
+   BEGIN
+      TK Inc = IF TNEXT n_postinc N1 ELSE
+      TK Dec = IF TNEXT n_postdec N1 ELSE EXIT THEN THEN
+   AGAIN ;
+
+\ Unary operators bind tighter than any infix one, so each parses its
+\ operand at the Inc level. Negating a literal folds, as c4 does it --
+\ which is why -1 is one IMM and not a multiply.
+: UNARY ( -- node )
+   TK Not   = IF TNEXT 13 EXPR n_not   N1 EXIT THEN
+   TK Tilde = IF TNEXT 13 EXPR n_bnot  N1 EXIT THEN
+   TK Sub   = IF TNEXT
+                 TK Num = IF TV NEGATE TNEXT n_num N1 EXIT THEN
+                 13 EXPR n_neg N1 EXIT THEN
+   TK Add   = IF TNEXT 13 EXPR EXIT THEN            \ unary plus is nothing
+   TK Mul   = IF TNEXT 13 EXPR n_deref N1 EXIT THEN
+   TK And   = IF TNEXT 13 EXPR n_addr  N1 EXIT THEN
+   TK Inc   = IF TNEXT 13 EXPR n_preinc N1 EXIT THEN
+   TK Dec   = IF TNEXT 13 EXPR n_predec N1 EXIT THEN
+   POSTFIX ;
+
+: (EXPR) ( lev -- node ) {: lev | n i p r q nd -- n :}
+   UNARY TO n
    BEGIN
       TK Assign = lev 1 <= AND IF
          TNEXT  n 1 EXPR n_asgn N2 TO n
+      ELSE TK Cond = lev 2 <= AND IF
+         TNEXT  1 EXPR TO r  Colon WANT  2 EXPR TO q
+         n_cond 4 CELLS NEW TO nd
+         n nd >cond !  r nd >body !  q nd >else !  nd TO n
+      ELSE TK Lor = lev 3 <= AND IF
+         TNEXT  n 4 EXPR n_lor N2 TO n
+      ELSE TK Lan = lev 4 <= AND IF
+         TNEXT  n 5 EXPR n_land N2 TO n
       ELSE
          TK IN-FIND TO i
          i 0< IF n EXIT THEN
@@ -131,15 +168,88 @@ DEFER EXPR                              \ ( lev -- node )
          n_bin 4 CELLS NEW TO nd
          n nd >lhs !  r nd >rhs !  i CELLS INO + @ nd >op !
          nd TO n
-      THEN
+      THEN THEN THEN THEN
    AGAIN ;
 ' (EXPR) IS EXPR
 
 \ -- statements ---------------------------------------------------------
 
-: STATEMENT ( -- node )
-   TK Return = IF TNEXT 1 EXPR Semi WANT n_ret N1 EXIT THEN
+DEFER STATEMENT                         \ blocks and statements nest
+
+: COMPOUND ( -- node ) {: | v n -- :}   \ { ... } with no declarations in it
+   Lbrace WANT
+   256 CELLS ALLOT: TO v   0 TO n
+   BEGIN TK Rbrace <> WHILE  STATEMENT v n CELLS + !  n 1+ TO n  REPEAT
+   Rbrace WANT
+   v n n_blk N2 ;
+
+256 CONSTANT CVMAX
+CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
+: CASE-VALUE ( -- v )
+   TK Sub = IF TNEXT TV NEGATE Num WANT EXIT THEN
+   TV Num WANT ;
+
+: (STATEMENT) ( -- node ) {: | c b e i s nd lo hi -- n :}
+   TK Semi   = IF TNEXT n_empty 1 CELLS NEW EXIT THEN
+   TK Lbrace = IF COMPOUND EXIT THEN
+   TK If = IF
+      TNEXT Lparen WANT 1 EXPR TO c Rparen WANT
+      STATEMENT TO b   0 TO e
+      TK Else = IF TNEXT STATEMENT TO e THEN
+      n_if 4 CELLS NEW TO nd
+      c nd >cond !  b nd >body !  e nd >else !  nd EXIT
+   THEN
+   TK While = IF
+      TNEXT Lparen WANT 1 EXPR TO c Rparen WANT  STATEMENT TO b
+      n_while 3 CELLS NEW TO nd
+      c nd >cond !  b nd >body !  nd EXIT
+   THEN
+   TK Do = IF
+      TNEXT STATEMENT TO b
+      While WANT Lparen WANT 1 EXPR TO c Rparen WANT Semi WANT
+      n_do 3 CELLS NEW TO nd
+      c nd >cond !  b nd >body !  nd EXIT
+   THEN
+   TK For = IF
+      TNEXT Lparen WANT
+      0 TO i   TK Semi   <> IF 1 EXPR TO i THEN  Semi WANT
+      0 TO c   TK Semi   <> IF 1 EXPR TO c THEN  Semi WANT
+      0 TO s   TK Rparen <> IF 1 EXPR TO s THEN  Rparen WANT
+      STATEMENT TO b
+      n_for 5 CELLS NEW TO nd
+      c nd >cond !  b nd >body !  i nd >init !  s nd >step !  nd EXIT
+   THEN
+   TK Switch = IF
+      TNEXT Lparen WANT 1 EXPR TO c Rparen WANT
+      CVN @ TO i
+      STATEMENT TO b
+      CVN @ i = IF ." c4fc: a switch with no cases" CR ABORT THEN
+      CVAL i CELLS + @ TO lo   lo TO hi
+      CVN @ i ?DO
+         CVAL I CELLS + @ TO s
+         s lo < IF s TO lo THEN
+         s hi > IF s TO hi THEN
+      LOOP
+      n_switch 6 CELLS NEW TO nd
+      c nd >cond !  b nd >body !  lo nd >lo !  hi nd >hi !
+      \ The table is allocated HERE, after the body -- which is where
+      \ c4lc puts it: a string literal inside the switch gets the lower
+      \ address.
+      D-ALIGN  hi lo - 1+ CELLS D-ALLOT nd >tab !
+      i CVN !
+      nd EXIT
+   THEN
+   TK Case = IF
+      TNEXT CASE-VALUE TO c Colon WANT
+      c CVAL CVN @ CELLS + !  1 CVN +!
+      c n_case N1 EXIT
+   THEN
+   TK Default = IF TNEXT Colon WANT n_default 1 CELLS NEW EXIT THEN
+   TK Break    = IF TNEXT Semi WANT n_break 1 CELLS NEW EXIT THEN
+   TK Continue = IF TNEXT Semi WANT n_cont  1 CELLS NEW EXIT THEN
+   TK Return   = IF TNEXT 1 EXPR Semi WANT n_ret N1 EXIT THEN
    1 EXPR Semi WANT n_expst N1 ;
+' (STATEMENT) IS STATEMENT
 
 : LOCAL-DECLS {: | ct -- :}
    BEGIN TYPE? WHILE
@@ -227,4 +337,5 @@ DEFER EXPR                              \ ( lev -- node )
 
 : PROGRAM
    BEGIN TK Eof <> WHILE DECL REPEAT
-   PLACE-GLOBALS ;
+   PLACE-GLOBALS
+   EMIT-TABPATS ;

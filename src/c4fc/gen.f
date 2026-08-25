@@ -53,3 +53,193 @@
 :M STMT n_ret    >expr @ GEN  oLEV OP, ;M
 :M STMT n_blk {: n -- :}
    n >len @ 0 ?DO n >list @ I CELLS + @ STMT LOOP ;M
+
+\ -- unary --------------------------------------------------------------
+\ Each is what c4 emits, and each is worth reading once: ! is a compare
+\ against zero, ~ is an XOR with -1, and unary minus is a multiply by -1
+\ with the -1 pushed FIRST, because C4's MUL takes its left operand off
+\ the stack.
+
+:M GEN n_not   >opnd @ GEN  oPSH OP,  0 oIMM OP2,  oEQ  OP, ;M
+:M GEN n_bnot  >opnd @ GEN  oPSH OP, -1 oIMM OP2,  oXOR OP, ;M
+:M GEN n_neg   -1 oIMM OP2, oPSH OP,  >opnd @ GEN  oMUL OP, ;M
+
+\ A pointer's VALUE is the address it points at, so dereferencing for an
+\ address is the operand's value and nothing else.
+:M GEN-ADDR n_deref  >opnd @ GEN ;M
+:M GEN      n_deref {: n -- :}  n >opnd @ GEN  n CT LOAD, ;M
+:M GEN      n_addr   >opnd @ GEN-ADDR ;M
+
+:M CT n_not   DROP t_int ;M
+:M CT n_bnot  DROP t_int ;M
+:M CT n_neg   DROP t_int ;M
+:M CT n_addr  >opnd @ CT 2 + ;M
+:M CT n_deref >opnd @ CT 2 - ;M
+
+\ ++ and -- reuse one address for both the load and the store, which is
+\ why the sequence is LEA, PSH, LI rather than LEA, LI, PSH. The postfix
+\ forms undo the change on the RESULT afterwards, which is exactly how
+\ c4 gets the old value without a temporary.
+: INCDEC, ( node op -- ) {: n op -- :}
+   n >opnd @ GEN-ADDR  oPSH OP,
+   n >opnd @ CT LOAD,
+   oPSH OP,  1 oIMM OP2,  op OP,
+   n >opnd @ CT STORE, ;
+:M GEN n_preinc   oADD INCDEC, ;M
+:M GEN n_predec   oSUB INCDEC, ;M
+:M GEN n_postinc {: n -- :}
+   n oADD INCDEC,  oPSH OP, 1 oIMM OP2, oSUB OP, ;M
+:M GEN n_postdec {: n -- :}
+   n oSUB INCDEC,  oPSH OP, 1 oIMM OP2, oADD OP, ;M
+:M CT n_preinc   >opnd @ CT ;M
+:M CT n_predec   >opnd @ CT ;M
+:M CT n_postinc  >opnd @ CT ;M
+:M CT n_postdec  >opnd @ CT ;M
+
+\ -- short-circuit and the conditional ---------------------------------
+
+:M GEN n_lor {: n | m -- :}
+   n >lhs @ GEN   oBNZ BR, TO m   n >rhs @ GEN   m >RES ;M
+:M GEN n_land {: n | m -- :}
+   n >lhs @ GEN   oBZ  BR, TO m   n >rhs @ GEN   m >RES ;M
+:M GEN n_cond {: n | m1 m2 -- :}
+   n >cond @ GEN   oBZ BR, TO m1
+   n >body @ GEN   oJMP BR, TO m2
+   m1 >RES
+   n >else @ GEN
+   m2 >RES ;M
+:M CT n_lor  DROP t_int ;M
+:M CT n_land DROP t_int ;M
+:M CT n_cond >body @ CT ;M
+
+\ -- statements ---------------------------------------------------------
+\ break and continue are forward branches recorded on two stacks and
+\ resolved when the loop that owns them closes. continue is forward even
+\ in a while loop, where its target is behind it -- a mark is a hole to
+\ fill, and filling it with an address already known is the same work.
+
+1024 CONSTANT MMAX
+CREATE BRKM MMAX CELLS ALLOT   VARIABLE BRKN   0 BRKN !
+CREATE CNTM MMAX CELLS ALLOT   VARIABLE CNTN   0 CNTN !
+: BRK, ( -- )  oJMP BR, BRKM BRKN @ CELLS + !  1 BRKN +! ;
+: CNT, ( -- )  oJMP BR, CNTM CNTN @ CELLS + !  1 CNTN +! ;
+: RESOLVE-LOOP ( brkbase cntbase brktarget cnttarget -- ) {: bb cb bt ct -- :}
+   BRKN @ bb ?DO BRKM I CELLS + @ bt RESTO LOOP   bb BRKN !
+   CNTN @ cb ?DO CNTM I CELLS + @ ct RESTO LOOP   cb CNTN ! ;
+
+:M STMT n_break  DROP BRK, ;M
+:M STMT n_cont   DROP CNT, ;M
+:M STMT n_empty  DROP ;M
+
+:M STMT n_if {: n | m1 m2 -- :}
+   n >cond @ GEN   oBZ BR, TO m1
+   n >body @ STMT
+   n >else @ IF
+      oJMP BR, TO m2   m1 >RES   n >else @ STMT   m2 >RES
+   ELSE
+      m1 >RES
+   THEN ;M
+
+:M STMT n_while {: n | top m bb cb -- :}
+   BRKN @ TO bb   CNTN @ TO cb
+   CHERE TO top
+   n >cond @ GEN   oBZ BR, TO m
+   n >body @ STMT
+   oJMP top BACK,
+   m >RES
+   bb cb CHERE top RESOLVE-LOOP ;M
+
+:M STMT n_do {: n | top m bb cb cont -- :}
+   BRKN @ TO bb   CNTN @ TO cb
+   CHERE TO top
+   n >body @ STMT
+   CHERE TO cont
+   n >cond @ GEN
+   oBNZ top BACK,
+   bb cb CHERE cont RESOLVE-LOOP ;M
+
+\ continue in a for loop goes to the STEP, not to the condition, and the
+\ step is emitted after the body -- so it is a genuine forward branch.
+:M STMT n_for {: n | top m bb cb cont -- :}
+   BRKN @ TO bb   CNTN @ TO cb
+   n >init @ ?DUP IF GEN THEN
+   CHERE TO top
+   -1 TO m                              \ patch 0 is a real patch index
+   n >cond @ ?DUP IF GEN  oBZ BR, TO m THEN
+   n >body @ STMT
+   CHERE TO cont
+   n >step @ ?DUP IF GEN THEN
+   oJMP top BACK,
+   m 0< 0= IF m >RES THEN
+   bb cb CHERE cont RESOLVE-LOOP ;M
+
+\ -- switch -------------------------------------------------------------
+\ A jump table, not a chain of compares, because that is what c4lc emits:
+\
+\    <expr>                     JMP dispatch
+\    <case bodies, each labelled where it starts>
+\    JMP end                    -- the fall-out of the last case
+\  dispatch:
+\    PSH IMM lo SUB             -- index = value - lowest case
+\    PSH PSH PSH                -- three copies: two compares and the index
+\    IMM hi-lo GT  BNZ oob1
+\    IMM 0     LT  BNZ oob2
+\    IMM 8 MUL PSH IMM table ADD LI JMPA
+\  oob1: ADJ 2 JMP default      -- each path drops what its compare left
+\  oob2: ADJ 1 JMP default
+\  end:
+\
+\ Entries with no case of their own hold the default target, which is the
+\ end when there is no default at all.
+
+BEGIN-STRUCTURE SWC
+   FIELD: w.tab  FIELD: w.lo  FIELD: w.hi  FIELD: w.def  FIELD: w.ent
+END-STRUCTURE
+VARIABLE CURSW   0 CURSW !
+
+:M STMT n_case {: n | w -- :}
+   CURSW @ TO w
+   w 0= IF ." c4fc: case outside a switch" CR ABORT THEN
+   CHERE  w w.ent @  n >val @ w w.lo @ -  CELLS +  ! ;M
+:M STMT n_default {: n | w -- :}
+   CURSW @ TO w
+   w 0= IF ." c4fc: default outside a switch" CR ABORT THEN
+   CHERE w w.def ! ;M
+
+:M STMT n_switch {: n | w save m e bb m1 m2 m3 m4 end def k -- :}
+   CURSW @ TO save
+   SWC ALLOT: TO w
+   n >tab @ w w.tab !  n >lo @ w w.lo !  n >hi @ w w.hi !  -1 w w.def !
+   n >hi @ n >lo @ - 1+ TO k
+   k CELLS ALLOT: w w.ent !
+   k 0 ?DO -1 w w.ent @ I CELLS + ! LOOP
+   w CURSW !
+   BRKN @ TO bb
+   n >cond @ GEN
+   oJMP BR, TO m
+   n >body @ STMT
+   oJMP BR, TO e                        \ the last case falls out here
+   m >RES
+   \ Subtracting the lowest case is skipped when it is zero -- four
+   \ words c4lc does not spend, and a difference invisible until a
+   \ switch happens to start at case 0.
+   n >lo @ ?DUP IF oPSH OP, oIMM OP2, oSUB OP, THEN
+   oPSH OP,  oPSH OP,  oPSH OP,
+   k 1- oIMM OP2,  oGT OP,   oBNZ BR, TO m1
+   0 oIMM OP2,     oLT OP,   oBNZ BR, TO m2
+   1 CELLS oIMM OP2,  oMUL OP,
+   oPSH OP,  n >tab @ IMMD,  oADD OP,
+   oLI OP,   oJMPA OP,
+   m1 >RES  2 oADJ OP2,  oJMP BR, TO m3
+   m2 >RES  1 oADJ OP2,  oJMP BR, TO m4
+   CHERE TO end
+   e >RES
+   w w.def @ 0< IF end ELSE w w.def @ THEN TO def
+   m3 def RESTO   m4 def RESTO
+   k 0 ?DO
+      w w.tab @ I CELLS +
+      w w.ent @ I CELLS + @ DUP 0< IF DROP def THEN
+      TABPAT,
+   LOOP
+   BRKN @ bb ?DO BRKM I CELLS + @ end RESTO LOOP   bb BRKN !
+   save CURSW ! ;M

@@ -40,7 +40,7 @@ VARIABLE ENTRY
 28 CONSTANT oDIV  29 CONSTANT oMOD
 30 CONSTANT oOPEN 31 CONSTANT oREAD 32 CONSTANT oCLOS 33 CONSTANT oPRTF
 34 CONSTANT oMALC 35 CONSTANT oFREE 36 CONSTANT oMSET 37 CONSTANT oMCMP
-38 CONSTANT oEXIT
+38 CONSTANT oEXIT 63 CONSTANT oJMPA
 
 : EMIT-INIT
    CMAX CELLS ALLOCATE CODE !      0 CN !
@@ -77,6 +77,33 @@ VARIABLE ENTRY
    oIMM OP,  -2 CHERE off PAT,  0 C, ;
 : JSRC, ( target -- ) {: t -- :}        \ a call to a known function
    oJSR OP,  -1 CHERE t PAT,  t C, ;
+
+\ A jump table's entries are code addresses living in DATA, which is
+\ patch type -3. They are collected rather than emitted as they are
+\ found, because c4lc writes every one of them after every code patch
+\ and c4r.lisp walks the patch list against the instruction stream.
+1024 CONSTANT TABMAX
+CREATE TABD TABMAX CELLS ALLOT
+CREATE TABC TABMAX CELLS ALLOT
+VARIABLE TABN   0 TABN !
+: TABPAT, ( dataoff code -- )
+   TABN @ TABMAX < 0= IF ." c4fc: too many jump table entries" CR ABORT THEN
+   TABC TABN @ CELLS + !   TABD TABN @ CELLS + !   1 TABN +! ;
+: EMIT-TABPATS
+   TABN @ 0 ?DO -3  TABD I CELLS + @  TABC I CELLS + @  PAT, LOOP ;
+
+\ Branches carry a code patch exactly as calls do, so a forward branch
+\ has two things to fill in later -- the patch's value and the code word
+\ -- and what it carries around meanwhile is its PATCH index.
+: BR, ( op -- mark ) {: op -- m :}
+   op OP,  -1 CHERE 0 PAT,  0 C,  PN @ 1- ;
+: RESTO ( mark target -- ) {: m t | p -- :}
+   m 3 * CELLS PATCH @ + TO p
+   t p 2 CELLS + !
+   t p CELL+ @ CELLS CODE @ + ! ;
+: >RES ( mark -- )  CHERE RESTO ;
+: BACK, ( op target -- ) {: op t -- :}
+   op OP,  -1 CHERE t PAT,  t C, ;
 
 \ A global's address is not known until every string literal has been
 \ seen, because c4lc lays the globals out AFTER them -- so the patch is

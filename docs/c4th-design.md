@@ -818,11 +818,54 @@ commit** if the answer is no.
       instruction. That is precisely what a third independent writer is
       for: the convention was undocumented anywhere except in the two
       readers that depend on it.
-      - [ ] **B5d.5** The fixed point — `native.f` compiling itself to
-            `gen2.c4r`, `gen2` compiling it again, `cmp gen2 gen3`. This
-            needs the compiler itself to be compilable, which needs the
-            C primitives it leans on to exist in Forth; it is the rung
-            after the four above, not part of them.
+      - [~] **B5d.5** The fixed point — `native.f` compiling itself to
+            `gen2.c4r`, `gen2` compiling it again, `cmp gen2 gen3`.
+            **Not done, and the reason is worth more than the rung.**
+
+            The plan was "the compiler needs the C primitives it leans on
+            written in Forth". Pointing the compiler at its own source
+            found four bugs first — see the commit; three of them could
+            corrupt c4th's own memory rather than fail, and `IF ... EXIT
+            THEN` now inlines, which it did not. That work is done and is
+            worth having on its own.
+
+            **But `EXECUTE` cannot be compiled at all under this
+            backend's model, and a Forth interpreter is `EXECUTE`.**
+
+            C4's `JSRS n` pushes the return address onto `sp` — and in
+            strategy (b), `sp` IS the data stack. That part is fine: the
+            callee's `ENT` puts the saved bp and the return address
+            above its arguments, so a word compiled with entry arity *k*
+            finds them at `bp+2..` exactly as B5c arranged, and the
+            caller removes them with `ADJ k` afterwards.
+
+            The problem is *k*. `ADJ` takes a compile-time constant, and
+            an interpreter executing an arbitrary xt does not know the
+            arity until run time. So self-hosting needs one of:
+
+            * **a runtime stack adjust** — c4m has `_ADJ` (`sp = sp +
+              *sp`), which would work and would make the self-hosted c4th
+              require c4m rather than plain c4;
+            * **callee-cleanup**, which means the callee moving its own
+              return address before `LEV`; or
+            * **strategy (a) for the target** — a separate data stack, so
+              every word is arity 0 and `EXECUTE` is an ordinary indirect
+              call. Uniform, and what every native-code Forth does. The
+              B5 probe measured that at **126 cycles/iteration against
+              strategy (b)'s 24**, so it is not a free choice.
+
+            The likely answer is a hybrid — (a) at the dispatch boundary
+            where arity is unknown, (b) inside compiled words where it is
+            not — but that is a second calling convention for the target,
+            not a few more primitives. It wants its own design pass
+            rather than being carried in on the end of B5d.
+
+            The rest of the front end is ordinary work by comparison:
+            a dictionary, `WORD`, number conversion, `:`/`;`, and file
+            input through the `OPEN`/`READ` opcodes, all of which the
+            backend can already compile or nearly can (`(S")` needs the
+            same target-data hook `EMIT`'s format string uses, and
+            `MOVE`/`FILL` can be written in Forth).
 - [ ] **B6** c4th inside C4IX. *Verify:* runs from the C4IX shell, output pinned
 
 ### Risks

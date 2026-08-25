@@ -700,6 +700,24 @@ test-c4th-os: c4th c4th.c4r $(C4M) c4ix.c4r c4ix-sh.c4r c4ke.c4r c4dos-clock.c4r
 	rm -f .c4th_os_ref .c4th_ix.out .c4th_gen1.c4r
 	@echo "test-c4th-os: OK"
 
+# c4fc: the C99 compiler in Forth, and the DSL it is written in.
+# docs/c4fc-design.md. Nothing of the compiler exists yet; what this
+# pins is the vocabulary underneath it -- the Forth-2012 word sets
+# c4th's kernel lacks (ext.f), named locals (locals.f), and the
+# compiler substrate (dsl.f): arena, vectors, tagged nodes and
+# generics.
+#
+# The last section of the test is the design's whole claim, run rather
+# than asserted: a new construct is one NODE: line and one :M per
+# phase, with nothing above it edited.
+C4FC_LIB := src/c4th/forth/core.f src/c4th/forth/ext.f \
+            src/c4th/forth/locals.f src/c4fc/dsl.f
+
+test-c4fc: c4th c4th.c4r $(C4M)
+	./c4th $(C4FC_LIB) src/c4fc/tests/dsl.f | cmp - src/c4fc/tests/expected/dsl.txt
+	$(C4M) load-c4r.c -- c4th.c4r $(C4FC_LIB) src/c4fc/tests/dsl.f | cmp - src/c4fc/tests/expected/dsl.txt
+	@echo "test-c4fc: OK"
+
 # The fused opcodes (docs/fused-opcodes.md), end to end: take a real
 # image, run c4opt's fuse pass over it, and require that it behaves
 # identically on the hosts that have them -- and is REFUSED by the ones

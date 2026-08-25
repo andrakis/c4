@@ -350,6 +350,30 @@ void th_p_findw (int *w) {           // FIND ( c-addr -- c-addr 0 | xt +-1 )
 // -- the loop ---------------------------------------------------------
 
 // Interpret the current source to exhaustion. Returns 0 on error or BYE.
+// NOTFOUND ( c-addr u -- flag ) is the one extension point the outer
+// interpreter has: a word that is neither in the dictionary nor a number
+// is offered to it before the error is printed, and a true flag means it
+// dealt with the name. That is enough to add whole layers of syntax in
+// Forth alone -- named locals resolve their argument names here -- and a
+// layer can chain by saving the handler it replaces. Zero means no
+// handler, which is where c4th starts.
+int *th_notfound;
+
+int th_try_notfound (char *name, int len) {
+	int *xt;
+
+	xt = th_notfound;
+	th_notfound = 0;                 // no recursion into ourselves
+	th_push((int)name);
+	th_push(len);
+	th_call(xt);
+	th_notfound = xt;
+	if (th_err) return 1;            // it complained; do not complain twice
+	return th_pop();
+}
+
+void th_p_notfound (int *w) { th_push((int)&th_notfound); }
+
 int th_interpret () {
 	int *xt;
 	int  n;
@@ -366,6 +390,8 @@ int th_interpret () {
 		} else if (th_number(th_wname, th_wlen, &n)) {
 			if (th_state) { th_comma((int)th_xlit); th_comma(n); }
 			else th_push(n);
+		} else if (th_notfound && th_try_notfound(th_wname, th_wlen)) {
+			// handled: see NOTFOUND above
 		} else {
 			printf("c4th: %.*s ?\n", th_wlen, th_wname);
 			th_err = 1;
@@ -426,6 +452,7 @@ void th_p_abort (int *w) {
 
 void th_outer_init () {
 	th_state  = 0;
+	th_notfound = 0;
 	th_base   = 10;
 	th_trampd = 0;
 	th_quit   = 0;
@@ -440,6 +467,7 @@ void th_outer_init () {
 	th_defword("'", 0, (int)&th_p_tick);
 	th_defword("LITERAL", FL_IMMEDIATE | FL_COMPONLY, (int)&th_p_literal);
 	th_defword("STATE", 0, (int)&th_p_state);
+	th_defword("NOTFOUND", 0, (int)&th_p_notfound);
 	th_defword("BASE", 0, (int)&th_p_base);
 	th_defword("\\", FL_IMMEDIATE, (int)&th_p_backslash);
 	th_defword("(", FL_IMMEDIATE, (int)&th_p_paren);

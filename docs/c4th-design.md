@@ -742,11 +742,38 @@ c4or1k's `-mcisc` (`docs/c4or1k-design.md`) is the precedent for gating
 that behind a flag. **Everything above is c4m-only and reverts in one
 commit** if the answer is no.
 
-- [ ] **B5d** The metacompiler and `.c4r` emission — the `cmp gen2.c4r
-      gen3.c4r` fixed point and the `c4opt` byte-identical differential.
-      This is also where the C primitives stop being a wall: an image
-      whose words are all native does not have a C `th_dstack` for them
-      to work on.
+- [ ] **B5d** The metacompiler: `.c4r` emission. This is the rung that
+      turns c4th from a REPL with a code generator into a **compiler** —
+      `c4th -o prog.c4r prog.f` producing a standalone image that
+      `load-c4r.c` relocates, `c4rdump` inspects and c4m runs, with no
+      c4th anywhere in sight.
+
+      The shape, from §8: one vocabulary and a relocating `,`, not a
+      two-vocabulary cross compiler — host and target are the same word
+      size and machine. **Recording every intra-image pointer while
+      building into a buffer at a notional base IS the `.c4r` patch
+      table**, so there is no new format and no new loader.
+
+      Two facts settle most of the design. `load-c4r.c:504-520` applies
+      a patch as `*(code+addr) = (int)(code+val)` for a code reference
+      and `*(code+addr) = (int)(data+val)` for a data one, so a
+      reference only has to be *recorded*, never computed. And
+      `load-c4r.c:1049` calls the entry as `entry(argc, argv)` — an
+      ordinary C4 function — which the backend already knows how to
+      emit, since B5c gave it C4's calling convention.
+
+      - [ ] **B5d.1** The writer, and a program that exits with a value.
+            `SAVE-FILE`, the header, and code/data/patch segments.
+      - [ ] **B5d.2** Target data: `VARIABLE`s that live in the image's
+            data segment and reach it through the patch table.
+      - [ ] **B5d.3** Output, so a generated program can say something.
+      - [ ] **B5d.4** The differential: every generated image must behave
+            identically after `c4opt`, and under `-mfuse` on c4mp.
+      - [ ] **B5d.5** The fixed point — `native.f` compiling itself to
+            `gen2.c4r`, `gen2` compiling it again, `cmp gen2 gen3`. This
+            needs the compiler itself to be compilable, which needs the
+            C primitives it leans on to exist in Forth; it is the rung
+            after the four above, not part of them.
 - [ ] **B6** c4th inside C4IX. *Verify:* runs from the C4IX shell, output pinned
 
 ### Risks

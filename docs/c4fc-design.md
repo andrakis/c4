@@ -393,18 +393,48 @@ The bar rises rung by rung and c4lc supplies it at every one.
       must be an integer constant") and c4fc allows it, because the
       constant evaluator walks the same precedence table the code path
       does and `sizeof` was already on it.
-- [ ] **F8** The optimizer. *Verify:* `-O` output byte-identical to
-      `c4opt`, the differential B5 already uses.
+- [x] **F8** The optimizer: `fold`, `shl`, `adj0`, `jmpnext`, `thread`,
+      `tail` and `dead`, run to a fixpoint in c4opt's order.
+      *Verified:* `c4fc -O` against the Lisp `c4opt` applied to c4fc's
+      own unoptimised output, on all nine programs, and the optimised
+      image does exactly what the unoptimised one did.
+
+      **The passes cannot work on a finished image** — deleting one
+      instruction moves every address after it — so `src/c4fc/opt.f`
+      decodes the image into the labelled form c4opt works on, optimises
+      that, and assembles it again. Decoding has to be c4r.lisp's
+      reconstruction exactly, because a different set of labels is a
+      different program shape: a code offset becomes a label if the
+      entry, a `-1` patch, a `-3` patch (a switch table entry naming
+      code from data), a constructor, a destructor or a defined
+      function's symbol points at it. **Round-tripping with no passes
+      reproduces the image byte for byte**, and that was checked before
+      any pass was trusted.
+
+      **Byte-identity with c4opt turned out to be the wrong bar, and
+      finding out why took the longest.** c4opt leaves the
+      PRE-optimisation address in the code word of a patched operand and
+      puts the correct one in the patch; the loader overwrites the word,
+      so the image runs correctly and the stale word is never executed.
+      Two images can therefore be identical in every way that runs and
+      still differ byte for byte — the patch lists were identical and
+      only the operand words differed. `src/c4fc/tests/imgcmp.f` applies
+      the code-resident patches to both images and compares the rest,
+      which touches only words the loader overwrites anyway, so a
+      difference in the patches, the data, the symbols or an instruction
+      still shows. c4fc writes the post-optimisation address in both
+      places; reproducing the staleness to win a `cmp` would have been
+      copying a defect, which §"Risks" said the fallback exists for.
 - [ ] **F9** The closing loop. *Verify:* c4fc compiles `c4th.c`, and the
       result passes the Forth-2012 CORE suite.
 
 ## Risks, and one thing deliberately left out
 
-1. **Byte-identity may not survive every construct.** c4lc's temporary
-   and label allocation is deterministic but incidental; matching it
-   exactly could mean copying decisions rather than making them. The
-   fallback bar is stated above, and the moment it is used it goes in
-   this document with the construct that forced it.
+1. **Byte-identity may not survive every construct.** It survived all
+   of F2 to F7 without a single decision having to be copied. It did NOT
+   survive F8, and the reason is recorded there: c4opt leaves a stale
+   address in a patched operand's code word, and the fallback bar
+   ("identical once loaded") is what F8 uses.
 2. **`c4th`'s image is one arena and c4fc will want a lot of it.** The
    arena is separate (`ALLOCATE`), so this is a flag, not a redesign.
 3. **The DSL uses `EVALUATE`, `POSTPONE` and `CREATE/DOES>`**, which

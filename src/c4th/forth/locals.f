@@ -94,7 +94,11 @@ VARIABLE LPREV
 
 \ -- the syntax ---------------------------------------------------------
 
+\ Forth-2012 allows one {: per definition, and a second one used to
+\ silently discard the first one's names -- which shows up much later as
+\ "TO: not found" on a name that is plainly right there. Say so instead.
 : {:
+   LON @ IF ." locals.f: a second {: in one definition" CR ABORT THEN
    0 LN ! 0 LNB ! 1 LON ! 0 LARGS ! 0 LPH ! 0 LDONE !
    BEGIN
       BL WORD COUNT DUP 0= IF 2DROP ." locals.f: {: without :}" CR ABORT THEN

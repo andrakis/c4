@@ -713,7 +713,7 @@ test-c4th-os: c4th c4th.c4r $(C4M) c4ix.c4r c4ix-sh.c4r c4ke.c4r c4dos-clock.c4r
 C4FC_LIB := src/c4th/forth/core.f src/c4th/forth/ext.f \
             src/c4th/forth/locals.f src/c4fc/dsl.f src/c4fc/lex.f
 C4FC_ALL := $(C4FC_LIB) src/c4fc/ast.f src/c4fc/types.f src/c4fc/emit.f \
-            src/c4fc/gen.f src/c4fc/parse.f src/c4fc/c4fc.f
+            src/c4fc/gen.f src/c4fc/parse.f src/c4fc/opt.f src/c4fc/c4fc.f
 C4FC_SPIKE := src/tests/hello.c src/c4fc/tests/spike1.c src/c4fc/tests/spike2.c \
               src/c4fc/tests/spike3.c src/c4fc/tests/spike4.c \
               src/c4fc/tests/spike5.c src/c4fc/tests/spike6.c \
@@ -762,7 +762,29 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp
 	     || { echo "test-c4fc: $$f differs from c4lc"; exit 1; }; \
 	   echo "  gen ok: $$f"; \
 	done
+	# F8: the optimizer. c4fc -O against the Lisp c4opt applied to
+	# c4fc's own unoptimised output -- the differential the design has
+	# asked for since B5. Compared as the LOADER sees them: c4opt leaves
+	# the PRE-optimisation address in a patched operand's code word and
+	# puts the right one in the patch, so two images can be identical in
+	# every way that runs and still differ byte for byte. imgcmp.f
+	# applies the code-resident patches to both and compares the rest,
+	# which touches only words the loader overwrites anyway.
+	@for f in $(C4FC_SPIKE); do \
+	   ./c4th $(C4FC_ALL) -e ": GO S\" $$f\" C4FC ; GO" > .c4fc_o0.c4r; \
+	   ./c4th $(C4FC_ALL) -e ": GO 1 OPTIMIZE ! S\" $$f\" C4FC ; GO" > .c4fc_o1.c4r; \
+	   ./c4sp -c 60000000 src/c4sp/lisp/c4opt-run.lisp .c4fc_o0.c4r .c4fc_o2.c4r >/dev/null 2>&1; \
+	   ./c4th $(C4FC_ALL) src/c4fc/tests/imgcmp.f \
+	      -e ': GO S" .c4fc_o1.c4r" S" .c4fc_o2.c4r" IMGCMP ; GO' | grep -q identical \
+	     || { echo "test-c4fc: -O differs from c4opt on $$f"; exit 1; }; \
+	   ( $(C4M) load-c4r.c -- .c4fc_o0.c4r; echo "exit $$?" ) > .c4fc_r0 2>&1; \
+	   ( $(C4M) load-c4r.c -- .c4fc_o1.c4r; echo "exit $$?" ) > .c4fc_r1 2>&1; \
+	   cmp -s .c4fc_r0 .c4fc_r1 \
+	     || { echo "test-c4fc: -O changed what $$f does"; exit 1; }; \
+	   echo "  opt ok: $$f"; \
+	done
 	@rm -f .c4fc_lex.txt .c4fc_a.txt .c4fc_b.txt .c4fc_lc.c4r .c4fc_fc.c4r
+	@rm -f .c4fc_o0.c4r .c4fc_o1.c4r .c4fc_o2.c4r .c4fc_r0 .c4fc_r1
 	@echo "test-c4fc: OK"
 
 # The fused opcodes (docs/fused-opcodes.md), end to end: take a real

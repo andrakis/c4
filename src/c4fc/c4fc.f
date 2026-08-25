@@ -7,6 +7,8 @@
    S" memset" c_builtin oMSET t_int 0 0 ST,   S" memcmp" c_builtin oMCMP t_int 0 0 ST,
    S" exit"   c_builtin oEXIT t_int 0 0 ST, ;
 
+VARIABLE OPTIMIZE   0 OPTIMIZE !
+
 : C4FC ( a u -- )                       \ compile that file, image to stdout
    67108864 ARENA-INIT
    EMIT-INIT
@@ -16,4 +18,5 @@
    0 TP !
    PROGRAM
    ENTRY @ 0< IF ." c4fc: no main" CR ABORT THEN
+   OPTIMIZE @ IF OPT-RUN THEN
    WRITE-IMAGE ;

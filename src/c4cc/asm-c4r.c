@@ -75,21 +75,27 @@
 // | |-----------------------------------------------------------------------| |
 // | | Type | Name       | Purpose                                           | |
 // | |-----------------------------------------------------------------------| |
-// | |  B   | Priority   | Lower priorities run first                        | |
 // | |  W   | Value      | Code offset of function to call                   | |
+// | | (A priority byte was proposed and never written: both c4cc and    | |
+// | |  c4lc emit one word per entry, and load-c4r.c reads one.)         | |
 // |---------------------------------------------------------------------------|
 // | Symbols segment format: S                                                 |
 // | |-----------------------------------------------------------------------| |
 // | | Type | Name       | Purpose                                           | |
 // | |-----------------------------------------------------------------------| |
 // | |  W   | Id         | C4 symbol id                                      | |
-// | |  B   | Type       | C4 type                                           | |
-// | |  B   | Class      | C4 class                                          | |
+// | |  W   | Type       | C4 type                                           | |
+// | |  W   | Class      | C4 class                                          | |
 // | |  W   | Attributes | Eg static, external, etc                          | |
 // | |  B   | NameLen    |                                                   | |
 // | |  B.. | Name       | NameLen bytes, not including nul terminator       | |
 // | |  W   | Value      |                                                   | |
-// | |  W   | Length     | Useful only for functions currently               | |
+// | | Type and Class are WORDS, not bytes, and there is no trailing      | |
+// | | Length -- checked against what c4cc and c4lc actually write and    | |
+// | | against c4r.lisp, which reads it. Attribute bits in use: 0x1       | |
+// | | constructor, 0x2 destructor, 0x8 static, 0x20 variadic, 0x40       | |
+// | | aggregate (an array or a struct variable, whose name stands for    | |
+// | | its own address).                                                  | |
 // | |-----------------------------------------------------------------------| |
 // |---------------------------------------------------------------------------|
 // |---------------------------------------------------------------------------|

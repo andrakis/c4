@@ -30,6 +30,7 @@ VARIABLE MAXLBL
 \ address in this unit, so nothing here can move it.
 4 CONSTANT a_ext
 
+VARIABLE PMAP                           \ code address -> its patch, or 0
 : I[] ( buf i -- a )  4 CELLS * + ;
 : I.K ( a -- a )  ;
 : I.O ( a -- a )  1 CELLS + ;
@@ -40,7 +41,8 @@ VARIABLE MAXLBL
    MAXI 4 CELLS * ALLOCATE IBUF !
    MAXI 4 CELLS * ALLOCATE JBUF !
    MAXI CELLS ALLOCATE LMAP !
-   CMAX ALLOCATE ISLBL ! ;
+   CMAX ALLOCATE ISLBL !
+   CMAX CELLS ALLOCATE PMAP ! ;
 
 : ITEM, ( buf n kind op arg at -- n' ) {: b n k o a t | p -- n :}
    n MAXI < 0= IF ." c4fc: too many instructions to optimise" CR ABORT THEN
@@ -67,14 +69,24 @@ VARIABLE MAXLBL
       y y.class @ 129 = IF y y.val @ MARK-LABEL THEN
    LOOP ;
 
-\ the patch aimed at this word, or 0
-: PATCH-AT ( off -- p|0 ) {: off | p -- p :}
+\ The patch aimed at this word, or 0.
+\
+\ This was a scan of the whole patch list per instruction, which is a
+\ product: twenty-five thousand instructions against two and a half
+\ thousand patches is sixty million comparisons, and it cost more than
+\ every other phase of -O put together. One walk of the patch list fills
+\ a map indexed by code address instead, and the question becomes a
+\ fetch. Only CODE-RESIDENT patches go in it; the data-resident ones
+\ address the data segment and would collide.
+: PMAP-BUILD ( -- ) {: | p -- :}
+   PMAP @ CMAX CELLS 0 FILL
    PN @ 0 ?DO
       I 3 * CELLS PATCH @ + TO p
-      p CELL+ @ off = IF
-         p @ -2 >=  p @ -1000 <=  OR IF p UNLOOP EXIT THEN
+      p @ -1 = p @ -2 = OR p @ -1000 <= OR IF
+         p  p CELL+ @ CELLS PMAP @ + !
       THEN
-   LOOP 0 ;
+   LOOP ;
+: PATCH-AT ( off -- p|0 )  CELLS PMAP @ + @ ;
 
 \ LEA..ADJ carry an operand, and so do JSRI and JSRS -- which c4fc did
 \ not emit until it had to compile a call through a function pointer.
@@ -88,6 +100,7 @@ VARIABLE MAXLBL
 
 : DECODE {: | i n w p op -- :}
    MARK-LABELS
+   PMAP-BUILD
    0 TO n   0 TO i
    BEGIN i CN @ < WHILE
       i LABEL? IF IBUF @ n k_label i 0 a_none ITEM, TO n THEN

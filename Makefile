@@ -106,7 +106,8 @@ TESTS_C4R := $(TESTS)/raycast.c4r $(TESTS)/hello.c4r $(TESTS)/mandel.c4r $(TESTS
 			 $(TESTS)/test_float.c4r $(TESTS)/test_vprintf.c4r \
 			 $(TESTS)/test_ramfs.c4r $(TESTS)/test_selfhost.c4r $(TESTS)/test_ramopt.c4r \
 			 $(TESTS)/test_ramcc.c4r $(TESTS)/test_ramlink.c4r \
-			 $(TESTS)/test_ixbuild.c4r $(TESTS)/cycles.c4r
+			 $(TESTS)/test_ixbuild.c4r $(TESTS)/cycles.c4r \
+			 $(TESTS)/test_for.c4r
 BIN       := c4.c4r $(C4R_C4CC) $(C4R_C4RDUMP) $(C4R_C4RLINK) $(C4R_TOP) \
             $(C4M).c4r \
             $(C4KE_C4R) \
@@ -457,6 +458,15 @@ test-c4dos-build32: c4dos32.c4r $(C4DOS_BUILD_DISK32)
 	@grep -o "c4bb: [0-9]* cycles in [0-9.]*s" .c4dos_b32.log
 	@rm -f .c4dos_b32.log
 	@echo "test-c4dos-build32: OK"
+
+# c4cc's for statement. It had never worked -- see src/tests/test_for.c
+# -- so this pins it against gcc's output for the same program, which is
+# how every other language feature here is checked.
+test-c4cc-for: $(C4CC) $(C4M) $(TESTS)/test_for.c
+	$(C4CC) -o .c4cc_for.c4r $(TESTS)/test_for.c > /dev/null
+	$(C4M) load-c4r.c -- .c4cc_for.c4r | cmp - $(TESTS)/expected/test_for.txt
+	@rm -f .c4cc_for.c4r
+	@echo "test-c4cc-for: OK"
 
 # An interactive C4DOS session, which is what the thing is for: an A># An interactive C4DOS session, which is what the thing is for: an A>
 # prompt, DIR/TYPE/RUN/TIME/MEM/VER, EXIT to halt. `cd` because the
@@ -817,7 +827,7 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c
 	head -n -1 src/c4sp/tests/expected/c4lc-tokens.txt | cmp - .c4fc_lex.txt
 	./c4th $(C4FC_LIB) -e ': GO 4194304 ARENA-INIT 1 CONFORMING ! S" src/tests/c4lc_lex_sample.c" LEX-FILE DUMP-TOKENS ; GO' > .c4fc_lex.txt
 	head -n -1 src/c4sp/tests/expected/c4lc-tokens-conforming.txt | cmp - .c4fc_lex.txt
-	./c4th $(C4FC_LIB) -e ': GO 33554432 ARENA-INIT S" src/c4cc/c4cc.c" LEX-FILE COUNT-TOKENS ; GO' | grep -q "^tokens 15024$$"
+	./c4th $(C4FC_LIB) -e ': GO 33554432 ARENA-INIT S" src/c4cc/c4cc.c" LEX-FILE COUNT-TOKENS ; GO' | grep -q "^tokens 15125$$"
 	@for f in $(C4FC_LEX_SWEEP); do \
 	   ./c4sp src/c4sp/lisp/c4lc-tokens.lisp $$f > .c4fc_a.txt 2>&1; \
 	   ./c4th $(C4FC_LIB) -e ": GO 67108864 ARENA-INIT S\" $$f\" LEX-FILE DUMP-TOKENS ; GO" > .c4fc_b.txt 2>&1; \
@@ -2060,7 +2070,7 @@ c4rs: pre
 # Marking the below rules as PHONY using singular .PHONY rule
 PHONY  = pre all clean-c4rs clean
 PHONY += test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
-PHONY += run-c4dos-build32 test-c4dos-build32
+PHONY += run-c4dos-build32 test-c4dos-build32 test-c4cc-for
 PHONY += run run-vg test test-massive
 PHONY += run-alt run-alt-vg test-alt test-massive-alt
 PHONY += run-c4 run-c4-vg test-c4 test-massive-c4

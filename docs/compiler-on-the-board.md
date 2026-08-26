@@ -157,6 +157,71 @@ is worth ~30x, it lands at ~2 minutes, and it should be judged against
 what else two months of work could buy. It is **not** the way to make
 C4KE build quickly on c4bb.
 
+## The other half: C4IX
+
+The progression the machine has to walk is **C4DOS -> compile C4KE ->
+compile C4IX**. The first arrow is done and takes 13.7 s. The second one
+is where the remaining work is, and it is not a speed problem.
+
+### What it costs today
+
+| compiler | instructions / preprocessed line | C4IX (8,913 lines) |
+|---|---:|---:|
+| `c4cc` (native VM code) | 22,500 | **~10 s** |
+| `c4lc` on `c4sp32` (Lisp on Lisp) | 3,200,000 | ~23 min |
+| `c4fc` on `c4th32` (Forth on Forth) | 7,300,000 | ~66 min |
+
+The c4lc figure is measured, not scaled: `va.c`, the *smallest* C4IX
+module at 514 preprocessed lines, on the board:
+
+    node src/c4bb/sim/cli.js -s -m 512 -d ixdisk c4sp32.c4r -R \
+         src/c4sp/lisp/c4lc.lisp -O -c va.i out.c4o
+    -> 1,646,519,810 cycles in 81.20s
+
+Worth recording that the Lisp compiler on the Lisp interpreter is **2.3x
+cheaper per line than the Forth compiler on the Forth interpreter**. Both
+are three hundred times the compiler that is native code.
+
+### Why c4cc cannot do it, exactly
+
+Every one of the twelve C4IX modules dies in the same place:
+
+    boot: 139: bad global declaration struct vnode {
+
+Probed feature by feature, what c4cc has and has not:
+
+| | |
+|---|---|
+| has | `enum`, `switch`, `sizeof`, `?:`, `while`, `break`, `continue` |
+| **lacks** | `struct`, `union`, `typedef`, `.`/`->`, struct-size pointer arithmetic, `do/while`, all ten compound assignments, block-scoped declarations with initializers |
+
+That list is exactly **c4lc's L7** (`docs/c4lc-design.md` §10), the
+milestone written *because* C4IX needed it. So the question "how does the
+board compile C4IX quickly" has one honest answer: **teach c4cc L7.**
+
+It is a bounded job with three oracles — `src/tests/c4lc_l7.c` differs
+c4lc against gcc already, c4lc is a working reference, and c4fc is a
+second one whose whole struct algebra is 86 lines of `src/c4fc/types.f`.
+Object mode is *not* needed: c4cc concatenates its inputs, so the twelve
+modules compile whole-program in one invocation and c4rlink never enters
+the picture.
+
+### A bug found while probing, and fixed
+
+c4cc's `for` statement **had never worked**. The branch never consumed
+its own keyword, so the open-paren check saw `For` and every for-loop
+c4cc was ever handed died on `open paren expected`. With that fixed the
+rest of the branch was still wrong — the `;` handling was one expression
+out of step, and the closing jump targeted the `BZ`'s patch slot rather
+than the step — so it is rewritten to the layout its own comment
+described, and `src/tests/test_for.c` pins it against gcc's output.
+
+Nothing in the tree writes a `for`: it was all written against c4, which
+has no `for`, and `src/tests/test_continue.c` says "We only have while
+loops currently" in its second line. That is why five years of tests
+never touched it. It matters now because a person writing C at the C4DOS
+prompt will type one within a minute.
+
 ## Milestones
 
 - [x] **M0** This tracker, with the measurements above, before any code.
@@ -190,6 +255,13 @@ C4KE build quickly on c4bb.
 
       **Fourteen seconds for a machine to compile and boot its own
       operating system**, which is the whole point of the exercise.
+- [x] **M6** `for` in c4cc: fixed, rewritten, and pinned against gcc by
+      `make test-c4cc-for` / `src/tests/test_for.c`.
+- [ ] **M7** L7 in c4cc — `struct`, `union`, `typedef`, `.`/`->` with
+      struct-size pointer arithmetic, `do/while`, compound assignment,
+      block-scoped declarations. The bar is `src/tests/c4lc_l7.c` against
+      gcc, then the twelve C4IX modules compiling, then `c4ix.c4r`
+      booting on c4bb.
 
 ## What is deliberately not here
 

@@ -1025,8 +1025,8 @@ void expr(int lev)
 
 void stmt()
 {
-  int *a, *b;
-  int *oa, *ob, *oc;
+  int *a, *b, *c, *d;
+  int *oa, *ob, *oc, *od;
   int *last_continue;
   // switch state (see the Switch branch below)
   int *swv, *swa, *swea, *tlbl;
@@ -1242,39 +1242,66 @@ void stmt()
     free(swv); free(swa);
   }
   else if (tk == For) {
-    // for( initializers; condition; each-loop )
-    //   [{ statement... } | statement];
-    // initializers
-    // a: condition
-    //    bz d     // TODO
-    //    jmp c    // TODO
-    // b: each-loop
-    //    jmp a
-    // c: statement
-    //    jmp b
-    // d: out of loop
+    // for (init; cond; step) body, laid out the way the comment below
+    // always said it should be:
+    //
+    //     init
+    //   a: cond
+    //      BZ  d          // test failed: leave
+    //      JMP c          // test passed: skip the step, run the body
+    //   b: step
+    //      JMP a
+    //   c: body
+    //      JMP b
+    //   d:
+    //
+    // The step has to be EMITTED where it is written -- this is a
+    // single-pass compiler and it cannot hold the body back -- so the
+    // first pass through jumps over it. That extra JMP is the whole
+    // price of not buffering.
+    //
+    // None of this worked before 2026-08-26: the For branch never
+    // consumed its own keyword, so the open-paren check below saw For
+    // and every for-loop c4cc was ever handed died on "open paren
+    // expected". Nothing in the tree writes one -- everything here was
+    // written against c4, which has no for -- so it went unnoticed.
+    // With that fixed, the ';' handling was one expression out of step
+    // and the closing jump went to the BZ's patch slot rather than to
+    // the step, so the statement is rewritten rather than nudged.
+    // All three sections may be empty; an empty condition is true.
+    next();
     if (tk == '(') next(); else { printf("%d: in 'for': open paren expected\n", line); die(-1); }
-    expr(Assign); // Possibly compound
-    a = e; // Save comparison start
-    oa = emit_CurrentAddress();
-    expr(Assign);
-    *++e = BZ; b = ++e; // Skip loop if test fails
-    ob = emit_BZPH();
+    if (tk != ';') expr(Assign);
     if (tk == ';') next(); else { printf("%d: in 'for': semicolon expected after initializers\n", line); die(-1); }
-    // b: each-loop
-    last_continue = curr_continue;
-    curr_continue = ob + 1;
-    brk_base = brk_top; ++brk_depth;
-    expr(Assign);
+
+    a = e + 1;                       // a: the condition
+    oa = emit_CurrentAddress();
+    if (tk != ';') expr(Assign);
+    else { *++e = IMM; *++e = 1; emit_IMM(1); }
     if (tk == ';') next(); else { printf("%d: in 'for': semicolon expected after condition\n", line); die(-1); }
-    *++e = JMP; *++e = (int)a; // return to a
-    emit_JMP(oa);
+    *++e = BZ;  d = ++e;             // -> d, out of the loop
+    od = emit_BZPH();
+    *++e = JMP; c = ++e;             // -> c, the body
+    oc = emit_JMPPH();
+
+    b = e + 1;                       // b: the step
+    ob = emit_CurrentAddress();
+    last_continue = curr_continue;
+    curr_continue = ob;              // continue runs the step, then tests
+    brk_base = brk_top; ++brk_depth;
+    if (tk != ')') expr(Assign);
     if (tk == ')') next(); else { printf("%d: in 'for': close paren expected\n", line); die(-1); }
+    *++e = JMP; *++e = (int)a;
+    emit_JMP(oa);
+
+    *c = (int)(e + 1);               // c: the body
+    emit_UpdateAddress(oc, emit_CurrentAddress());
     stmt();
-    *++e = JMP; *++e = (int)b; // return to b (each-loop)
+    *++e = JMP; *++e = (int)b;
     emit_JMP(ob);
-    *b = (int)(e + 1); // Update end of loop address
-    emit_UpdateAddress(ob, emit_CurrentAddress());
+
+    *d = (int)(e + 1);               // d: past the loop
+    emit_UpdateAddress(od, emit_CurrentAddress());
     curr_continue = last_continue;
     --brk_depth;
     while (brk_top > brk_base) {

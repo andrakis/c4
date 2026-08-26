@@ -362,8 +362,7 @@ DEFER STATEMENT                         \ blocks and statements nest
 \ its name stands for the address of the LOWEST one -- locals grow
 \ downwards, so int a[4] as the first local is slots 1..4 and a is
 \ LEA -4.
-: LOCAL-DECLS ( v -- cnt ) {: v | ct dt t a u sz cnt ag na iv ivn y nd nn -- cnt :}
-   0 TO cnt
+: LOCAL-DECLS ( v -- ) {: v | ct dt t a u sz ag na iv ivn y nd nn -- :}
    BEGIN TYPE? WHILE
       BASE-TYPE TO ct
       BEGIN
@@ -416,25 +415,32 @@ DEFER STATEMENT                         \ blocks and statements nest
             nd nn >expr !  y nn >isym !  iv nn >ivals !  ivn nn >ivn !
             ag IF na ELSE -1 THEN nn >icount !
             dt t_char = ag AND nn >ibyte !
-            nn v cnt CELLS + !  cnt 1+ TO cnt
+            nn v V,
          THEN
          TK Comma = WHILE TNEXT
       REPEAT
       Semi WANT
-   REPEAT
-   cnt ;
+   REPEAT ;
 
 \ Every block takes declarations, not just a function's outermost one:
 \ C allows them at the top of any block and real code writes them there.
 \ The frame only ever grows -- a nested block's slots are not reused
 \ once it closes, which is what c4lc does too.
-: COMPOUND ( -- node ) {: | v n -- :}
+\
+\ The statements are gathered in a GROWABLE vector and then copied into
+\ the arena at their real size. They used to go straight into a fixed
+\ 256-cell array with nothing checking the count, which is fine until a
+\ switch with twenty-five arms writes past the end of it.
+: COMPOUND ( -- node ) {: | v a n -- :}
    Lbrace WANT
-   256 CELLS ALLOT: TO v
-   v LOCAL-DECLS TO n
-   BEGIN TK Rbrace <> WHILE  STATEMENT v n CELLS + !  n 1+ TO n  REPEAT
+   VEC ALLOT: TO v   v 64 VEC-INIT
+   v LOCAL-DECLS
+   BEGIN TK Rbrace <> WHILE  STATEMENT v V,  REPEAT
    Rbrace WANT
-   v n n_blk N2 ;
+   v V# TO n
+   n 1 MAX CELLS ALLOT: TO a
+   n 0 ?DO I v V@  a I CELLS + !  LOOP
+   a n n_blk N2 ;
 
 256 CONSTANT CVMAX
 CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !

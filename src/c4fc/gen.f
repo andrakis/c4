@@ -62,7 +62,32 @@
 :M CT n_call >fn @ y.ct @ ;M
 :M CT n_asgn >lhs @ CT ;M
 
+\ -mcisc: LXI and SXI fold scale-add-load (or -store) into one opcode,
+\ but only for `var[expr]` whose base is a PLAIN VARIABLE of statically
+\ known 8-byte scalar element type. Anything more complex -- a member, a
+\ dereference, a call -- falls back, because establishing its type here
+\ would mean either evaluating it twice or duplicating the inference
+\ that codegen already does as a side effect. Deliberately the same
+\ conservatism as c4lc's, so the two agree.
+: CISC-INDEX? ( n -- f ) {: n | b t -- f :}
+   CISC @ 0= IF 0 EXIT THEN
+   n >TAG n_index <> IF 0 EXIT THEN
+   n >lhs @ TO b
+   b >TAG n_var <> b >TAG n_gvar <> AND IF 0 EXIT THEN
+   b CT TO t
+   t T-PTR? 0= IF 0 EXIT THEN
+   t T-DEREF TO t
+   t T-STRUCT? IF 0 EXIT THEN
+   t t_char <> ;
+
 :M GEN n_asgn {: n -- :}
+   \ base and index both stay on the stack, unscaled, until the value is
+   \ evaluated -- SXI wants all three, and computing the address first
+   \ would need a slot to hold it across the right-hand side.
+   n >lhs @ CISC-INDEX? IF
+      n >lhs @ >lhs @ GEN  oPSH OP,
+      n >lhs @ >rhs @ GEN  oPSH OP,
+      n >rhs @ GEN  oSXI OP, EXIT THEN
    n >lhs @ GEN-ADDR  oPSH OP,
    n >rhs @ GEN
    n >lhs @ CT STORE, ;M
@@ -89,7 +114,10 @@
    n >lhs @ GEN  oPSH OP,
    n >rhs @ GEN  n >lhs @ CT SCALE,
    oADD OP, ;M
-:M GEN n_index {: n -- :}  n GEN-ADDR  n CT LOAD, ;M
+:M GEN n_index {: n -- :}
+   n CISC-INDEX? IF
+      n >lhs @ GEN  oPSH OP,  n >rhs @ GEN  oLXI OP, EXIT THEN
+   n GEN-ADDR  n CT LOAD, ;M
 :M CT  n_index  >lhs @ CT T-DEREF ;M
 
 :M GEN-ADDR n_member {: n -- :}
@@ -316,10 +344,13 @@ BEGIN-STRUCTURE SWC
 END-STRUCTURE
 VARIABLE CURSW   0 CURSW !
 
-:M STMT n_case {: n | w -- :}
+:M STMT n_case {: n | w i -- :}
    CURSW @ TO w
    w 0= IF ." c4fc: case outside a switch" CR ABORT THEN
-   CHERE  w w.ent @  n >val @ w w.lo @ -  CELLS +  ! ;M
+   n >val @ w w.lo @ - TO i
+   i 0< i w w.hi @ w w.lo @ - > OR IF
+      ." c4fc: case " n >val @ .N ." is outside its switch's range " CR ABORT THEN
+   CHERE  w w.ent @  i CELLS +  ! ;M
 :M STMT n_default {: n | w -- :}
    CURSW @ TO w
    w 0= IF ." c4fc: default outside a switch" CR ABORT THEN

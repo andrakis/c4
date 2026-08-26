@@ -756,7 +756,7 @@ C4FC_GEN_SWEEP := hello multifun puts reverse test_basic test_continue \
                   test_static test_switch tests c4lc_l2 global \
                   test_gcscan vararg2 test_vprintf c4_jailbreak
 
-test-c4fc: c4th c4th.c4r $(C4M) c4sp
+test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c
 	./c4th $(C4FC_LIB) src/c4fc/tests/dsl.f | cmp - src/c4fc/tests/expected/dsl.txt
 	$(C4M) load-c4r.c -- c4th.c4r $(C4FC_LIB) src/c4fc/tests/dsl.f | cmp - src/c4fc/tests/expected/dsl.txt
 	./c4th $(C4FC_LIB) -e ': GO 4194304 ARENA-INIT S" src/tests/c4lc_lex_sample.c" LEX-FILE DUMP-TOKENS ; GO' > .c4fc_lex.txt
@@ -899,6 +899,36 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp
 	./c4sp src/c4sp/lisp/c4lc.lisp -O -P -I include -I . -I src/c4dos -D C4CC=1 -D __c4cc__=1 src/c4dos/c4dos.c .c4fc_lc.c4r > /dev/null
 	./c4th $(C4FC_ALL) -e ': GO 1 OPTIMIZE ! C4FC-INIT -P S" include" -I S" ." -I S" src/c4dos" -I S" C4CC=1" -D S" __c4cc__=1" -D S" src/c4dos/c4dos.c" C4FC ; GO' > .c4fc_fc.c4r
 	cmp .c4fc_lc.c4r .c4fc_fc.c4r
+	# -mcisc and -mfuse, the opcodes c4m does not have. -mcisc is a
+	# codegen choice (LXI/SXI fold scale-add-load into one c4mp opcode
+	# for var[expr] with an 8-byte scalar element type); -mfuse is a
+	# peephole pass that runs ONCE after the fixpoint. Both are checked
+	# the way everything else here is -- against c4lc, byte for byte --
+	# and then against the machines: c4mp runs the fused image, and c4m
+	# and plain c4 must NAME the opcode they lack rather than execute
+	# rubbish.
+	@for f in $(C4FC_SPIKE); do \
+	   for m in "-mfuse" "-mcisc -O" "-mcisc -mfuse"; do \
+	      ./c4sp src/c4sp/lisp/c4lc.lisp $$m $$f .c4fc_lc.c4r >/dev/null 2>&1; \
+	      ./c4th $(C4FC_ALL) -e ": GO `echo $$m | sed 's/-O/1 OPTIMIZE !/'` S\" $$f\" C4FC ; GO" > .c4fc_fc.c4r 2>&1; \
+	      cmp -s .c4fc_lc.c4r .c4fc_fc.c4r \
+	        || { echo "test-c4fc: $$f differs from c4lc $$m"; exit 1; }; \
+	   done; \
+	   echo "  mcisc/mfuse ok: $$f"; \
+	done
+	./c4th $(C4FC_ALL) -e ': GO -mfuse -mcisc S" src/tests/tests.c" C4FC ; GO' > .c4fc_fc.c4r
+	./c4mp .c4fc_fc.c4r | grep -q "tests succeeded"
+	$(C4M) load-c4r.c -- .c4fc_fc.c4r 2>&1 | grep -q "is not an instruction this machine has"
+	./c4 c4l.c .c4fc_fc.c4r 2>&1 | grep -q "which plain c4 does not have"
+	# ... and the build that really uses -mcisc: three c4or1k modules as
+	# objects, byte-identical to c4lc's.
+	@for m in cpu mem virtio9p; do \
+	   ./c4sp src/c4sp/lisp/c4lc.lisp -mcisc -O -c -I $(C4OR1K_SRC) $(C4OR1K_SRC)/$$m.c .c4fc_lc.c4o >/dev/null 2>&1; \
+	   ./c4th $(C4FC_ALL) -e ": GO -mcisc 1 OPTIMIZE ! -c C4FC-INIT -P S\" include\" -I S\" .\" -I S\" $(C4OR1K_SRC)\" -I S\" C4CC=1\" -D S\" __c4__=1\" -D S\" __C4CC__=1\" -D S\" __c4cc__=1\" -D S\" $(C4OR1K_SRC)/$$m.c\" C4FC ; GO" > .c4fc_fc.c4o 2>&1; \
+	   cmp -s .c4fc_lc.c4o .c4fc_fc.c4o \
+	     || { echo "test-c4fc: c4or1k/$$m.c4o differs from c4lc -mcisc -O -c"; exit 1; }; \
+	   echo "  mcisc obj ok: $$m"; \
+	done
 	# F10, object mode: the whole of C4IX. Twelve .c4o objects, each
 	# byte-identical to the one c4lc -O -c writes, linked by c4rlink into
 	# a kernel that must equal the committed image and then boot. An

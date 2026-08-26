@@ -413,6 +413,53 @@ VARIABLE EMM  VARIABLE SMM  VARIABLE BANM
    0 TO n
    IN# @ 0 ?DO I LBL? 0= IF n 1+ TO n THEN LOOP
    n ;
+\ -- fuse ----------------------------------------------------------------
+\ docs/fused-opcodes.md. Two- and three-instruction windows collapsed
+\ into one opcode, LONGEST FIRST -- LEA;LI;PSH is PSHL, not LDL then a
+\ stray PSH. The fused instruction keeps the operand AND the operand
+\ kind of the one it starts with, so an IMM of a data address fuses to a
+\ PSHG of the same data address and the patch survives.
+\
+\ It runs ONCE, after the fixpoint, so that no other pass has to
+\ understand the fused forms and so that fusing never hides a fold from
+\ the round that would have followed. A label ends a window, which is
+\ the same reason every other pass here is safe.
+
+: FUSE2 ( a b -- op ) {: a b -- op :}    \ two-instruction windows, or -1
+   b oLI = IF  a oLEA = IF oLDL EXIT THEN  a oIMM = IF oLDG EXIT THEN
+               a oADD = IF oADDL EXIT THEN  THEN
+   b oPSH = IF  a oLEA = IF oLEAP EXIT THEN  a oIMM = IF oIMMP EXIT THEN
+                a oLI  = IF oLIP EXIT THEN  THEN
+   -1 ;
+
+: PASS-FUSE {: | i a b c op -- :}
+   0 JN# !   0 TO i
+   BEGIN i IN# @ < WHILE
+      i LBL? IF i COPY-ITEM  i 1+ TO i
+      ELSE
+         i IOP TO a
+         i 1+ IN# @ < IF i 1+ LBL? IF -1 ELSE i 1+ IOP THEN ELSE -1 THEN TO b
+         i 2 + IN# @ < IF i 2 + LBL? IF -1 ELSE i 2 + IOP THEN ELSE -1 THEN TO c
+         c oPSH = b oLI = AND  a oLEA = a oIMM = OR AND IF
+            k_insn  a oLEA = IF oPSHL ELSE oPSHG THEN
+            i IARG  i ITY  EMIT-ITEM
+            i 3 + TO i
+         ELSE
+            a b FUSE2 TO op
+            op 0< IF i COPY-ITEM  i 1+ TO i
+            ELSE
+               op oLIP = op oADDL = OR IF
+                  k_insn op 0 a_none EMIT-ITEM
+               ELSE
+                  k_insn op  i IARG  i ITY  EMIT-ITEM
+               THEN
+               i 2 + TO i
+            THEN
+         THEN
+      THEN
+   REPEAT
+   SWAP-BUFS ;
+
 : OPT-PASSES
    PASS-FOLD PASS-SHL PASS-ADJ0 PASS-JMPNEXT PASS-THREAD PASS-TAIL
    PASS-ADJ0 PASS-DEAD ;
@@ -424,4 +471,5 @@ VARIABLE EMM  VARIABLE SMM  VARIABLE BANM
       OPT-PASSES
       n TO prev   COUNT-INSNS TO n   rounds 1+ TO rounds
    REPEAT
+   FUSE @ IF PASS-FUSE THEN
    ENCODE ;

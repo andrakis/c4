@@ -25,6 +25,11 @@
 \ to ask about it: the tree passes run between parsing a function body
 \ and generating it.
 VARIABLE OPTIMIZE   0 OPTIMIZE !
+\ -mcisc and -mfuse: opcodes c4m does not have. Off by default, because
+\ turning them on silently changes which machines an image runs on --
+\ -mcisc needs c4mp, and -mfuse takes plain c4 away too.
+VARIABLE CISC       0 CISC !
+VARIABLE FUSE       0 FUSE !
 
 GENERIC: FOLD ( node -- node' )
 

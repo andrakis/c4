@@ -658,6 +658,36 @@ The bar rises rung by rung and c4lc supplies it at every one.
         declaration put `sched_switches` first in the BSS instead of
         last.
 
+- [x] **F11** `-mcisc` and `-mfuse`, the opcodes c4m does not have.
+      *Verified:* every spike byte-identical to `c4lc` under `-mfuse`,
+      `-mcisc -O` and both together; three c4or1k modules byte-identical
+      as `-mcisc -O -c` objects, which is the build that actually uses
+      it; and `tests.c` compiled with both **runs under c4mp** while c4m
+      and plain c4 NAME the opcode they lack rather than execute rubbish.
+
+      `-mcisc` is a codegen choice: `LXI`/`SXI` fold scale-add-load (and
+      -store) into one opcode for `var[expr]` whose base is a plain
+      variable of statically known 8-byte scalar element type. The
+      conservatism is copied deliberately -- a base more complex than a
+      bare variable falls back, because establishing its type there would
+      mean evaluating it twice or duplicating inference codegen already
+      does as a side effect.
+
+      `-mfuse` is a peephole pass that runs ONCE after the fixpoint, so
+      no other pass has to understand the fused forms and a fusion can
+      never hide a fold from the round that would have followed. Longest
+      window first, and the fused instruction keeps the operand AND the
+      operand kind of the one it starts with -- an `IMM` of a data
+      address fuses to a `PSHG` of the same address and the patch
+      survives.
+
+      It also found a latent limit that had nothing to do with either
+      flag: **a block's statement array was a fixed 256 cells with
+      nothing checking the count**, and `virtio9p.c` has a switch with
+      twenty-five arms. Statements are gathered in a growable vector now
+      and copied to the arena at their real size. `case` outside its
+      switch's range is a named error rather than a wild store, too.
+
 ## What it costs to run
 
 Measured on a 6-core box, `/usr/bin/time -v`, one process at a time.

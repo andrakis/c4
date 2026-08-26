@@ -45,6 +45,10 @@ VARIABLE C4FC-READY   0 C4FC-READY !
 \ -c: compile one unit to an OBJECT. What it cannot resolve it names,
 \ and c4rlink resolves it later against the units that can.
 : -c ( -- )  1 OBJECT ! ;
+\ -mcisc needs c4mp; -mfuse takes plain c4 away as well, and implies -O
+\ because the pass it turns on lives in the optimizer.
+: -mcisc ( -- )  1 CISC ! ;
+: -mfuse ( -- )  1 FUSE !  1 OPTIMIZE ! ;
 
 \ Everything a compile of one unit starts from. -O runs it twice: the
 \ first pass exists only to learn which functions are reachable, and

@@ -72,6 +72,15 @@ VARIABLE DESS   VARIABLE DESN
 66 CONSTANT oCPUI 67 CONSTANT oCPUN 68 CONSTANT oCPUS 69 CONSTANT oCPUH
 70 CONSTANT oCAS  71 CONSTANT oXCHG 72 CONSTANT oFADD 73 CONSTANT oCWAI
 74 CONSTANT oCWAK 75 CONSTANT oIPI  78 CONSTANT oTRAW
+\ c4mp's fused array-element opcodes, emitted only under -mcisc.
+76 CONSTANT oLXI  77 CONSTANT oSXI
+\ The fused opcodes (docs/fused-opcodes.md), emitted only under -mfuse:
+\ two- and three-instruction sequences a third of the instructions real
+\ workloads execute are made of. LDL..IMMP carry the operand of the
+\ instruction they start with, LIP/ADDL/POPA carry none.
+79 CONSTANT oLDL  80 CONSTANT oLDG  81 CONSTANT oPSHL 82 CONSTANT oPSHG
+83 CONSTANT oLEAP 84 CONSTANT oIMMP 85 CONSTANT oLIP  86 CONSTANT oADDL
+87 CONSTANT oSTL  88 CONSTANT oPOPA
 
 : EMIT-INIT
    CMAX CELLS ALLOCATE CODE !      0 CN !

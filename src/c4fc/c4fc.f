@@ -39,7 +39,7 @@
 VARIABLE PREPROCESS   0 PREPROCESS !
 : -P ( -- )  1 PREPROCESS ! ;
 VARIABLE C4FC-READY   0 C4FC-READY !
-: C4FC-INIT ( -- )  67108864 ARENA-INIT  PP-RESET  1 C4FC-READY ! ;
+: C4FC-INIT ( -- )  262144 ARENA-INIT  PP-RESET  1 C4FC-READY ! ;
 : -I ( a u -- )  PP-PATH ;
 : -D ( a u -- )  PP-DEFINE ;
 \ -c: compile one unit to an OBJECT. What it cannot resolve it names,

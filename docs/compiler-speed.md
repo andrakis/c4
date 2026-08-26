@@ -439,6 +439,31 @@ list for `c4cc.c` is 15,023 tokens × 4-word cells today).
 
 Each module is differentially verified against the Lisp before moving on.
 
+> **TRACK A2 IS RETIRED (2026-08-26).** Not abandoned — answered from the
+> other side, and the ten items below are kept only as the record of what
+> was planned.
+>
+> A2's premise was that C compiled by `gcc -O2` is the right road to a
+> fast compiler, and that premise was correct when it was written. What
+> changed is `c4fc` (`docs/c4fc-design.md`): a C99 compiler with c4lc's
+> coverage, byte-identical to it on nineteen programs, `c4th.c`, C4KE,
+> C4DOS and all twelve C4IX objects, with `-O`, `-c`, `-mfuse` and
+> `-mcisc`. It is **2-5x faster than c4lc and needs a fraction of the
+> memory**, and it does that *inside the machine*: it runs on c4th, which
+> runs on c4m, which is what c4bb is in hardware.
+>
+> `gcc -O2` is a ceiling that only exists on a host that has gcc. The
+> breadboard does not, and the breadboard is where compile time is about
+> to matter. Six thousand lines to reach a ceiling that is not over the
+> target is the wrong trade — and the C4IX build that motivated the whole
+> track now takes **0.60 s** (A1 plus the growable arena, A1.8).
+>
+> If a native-speed compiler is ever wanted again, the cheap version is
+> to port `c4fc` rather than `c4lc`: it is 3,200 lines of Forth against
+> c4lc's 4,800 of Lisp, its phases are already tables and generics, and
+> `docs/c4fc-design.md` records every rule it had to follow.
+
+
 - [ ] **A2.1** `c4r.c` ← `c4r.lisp` (561 L) — byte-identical round trip of
       existing `.c4r` images vs `c4r-roundtrip.lisp`
 - [ ] **A2.2** `lex.c` ← `c4lc-lex.lisp` (375 L) — token dump ==

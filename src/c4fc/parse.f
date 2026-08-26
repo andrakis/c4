@@ -10,6 +10,13 @@
 \ is declared at its top. That is a real constraint on how these words
 \ are shaped and it is worth stating rather than working around.
 
+\ The compile-time symbol table is the one buffer here that may NOT be
+\ grown, because it is the one whose entries are pointed AT: an n_var
+\ node holds the symbol itself, and so do the forward-reference list,
+\ VA-MAKE and the switch record. Moving it would leave every one of
+\ them pointing into freed memory. It is also the cheapest thing in the
+\ compiler -- eight thousand entries is under half a megabyte -- so it
+\ is simply sized once and generously, and the abort stays an abort.
 8192 CONSTANT NSYM
 VARIABLE STAB   VARIABLE STN
 VARIABLE NLOC                           \ locals in the function in hand

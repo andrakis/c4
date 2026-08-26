@@ -348,15 +348,26 @@ CREATE PATHB 1024 ALLOT
 \ at its real size, because Id and Str tokens point INTO the source and
 \ so it has to outlive the scan -- and because #include means several
 \ sources are live at once.
-4194304 CONSTANT RDMAX
+\ Grown as the file is read rather than sized for the largest source
+\ anyone might ever hand it. It is kept between files, so the cost is
+\ the biggest single source, not the sum.
+VARIABLE RDMAX   0 RDMAX !
 VARIABLE RDBUF   0 RDBUF !
+: RD-GROW ( -- ) {: | n new -- :}
+   RDMAX @ 2* 65536 MAX TO n
+   n ALLOCATE TO new
+   new 0= IF ." lex: out of memory reading the source" CR ABORT THEN
+   RDBUF @ IF RDBUF @ new RDMAX @ MOVE THEN
+   new RDBUF !   n RDMAX ! ;
 VARIABLE #FILES  0 #FILES !
 : READ-FILE ( a u -- addr len ) {: a u | fd n dst -- addr len :}
    a u ZPATH OPENF TO fd
    fd 0< IF ." lex: cannot open the source" CR ABORT THEN
-   RDBUF @ 0= IF RDMAX ALLOCATE RDBUF ! THEN
    0 TO n
-   BEGIN fd RDBUF @ n + 65536 READF DUP 0> WHILE n + TO n REPEAT DROP
+   BEGIN
+      n 65536 + RDMAX @ > IF RD-GROW THEN
+      fd RDBUF @ n + 65536 READF DUP 0>
+   WHILE n + TO n REPEAT DROP
    fd CLOSEF
    n 1+ ALLOT: TO dst   RDBUF @ dst n MOVE
    dst n ;

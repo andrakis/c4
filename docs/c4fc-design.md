@@ -738,6 +738,40 @@ on the optimised one runs **1.25x faster** under c4m (2.00 s against
 fast as the `c4cc`-built `c4th.c4r` it replaces. All three hosts -- and
 native c4th -- produce the same image byte for byte.
 
+## Fitting on a small machine
+
+c4fc's memory was a set of guesses, and the biggest one was larger than
+the whole of c4bb. Every buffer is now either **grown on demand** or
+**sized from the program**, and the difference is not subtle:
+
+    c4fc -O, peak RSS (64-bit; halve it for a 32-bit board)
+      hello.c    ~30 MB  ->  11 MB
+      c4th.c        -    ->  15 MB
+      C4KE       ~38 MB  ->  20 MB
+
+The arena is a **list of blocks**, because a bump allocator that never
+frees can simply start another one — nothing moves, so every pointer
+already handed out stays good. The code, patch, data and symbol-section
+buffers double where their bounds check used to abort. The optimizer's
+item buffers are **sized from the code length**, which is known exactly
+by the time it runs: the old fixed quarter-million entries were 33 MB of
+item buffers for a hello world.
+
+Three things that fell out of doing it:
+
+- **`D-ALLOT` and `ID-ALLOT` had no bounds check at all.** They bumped
+  a cursor past the end of the block and wrote there. Growth is the
+  check, and the data buffers grow ZEROED because a partially
+  initialised array leaves the rest of itself to be read as zeros.
+- **The symbol section was allocated at five cells a record and indexed
+  at twelve.** Harmless while symbol counts stayed under a third of the
+  capacity, which is exactly the kind of bug that waits.
+- **The compile-time symbol table is the one buffer that may NOT move**,
+  because it is the one that is pointed AT: an `n_var` node holds the
+  symbol itself, and so do the forward-reference list, `VA-MAKE` and the
+  switch record. It stays fixed and generous — eight thousand entries is
+  under half a megabyte — and its abort stays an abort.
+
 ## Risks, and one thing deliberately left out
 
 1. **Byte-identity may not survive every construct.** It survived all

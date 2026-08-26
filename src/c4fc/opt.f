@@ -15,7 +15,13 @@
 \ Round-tripping with no passes at all must reproduce the image byte for
 \ byte, and that is checked before any pass is trusted.
 
-262144 CONSTANT MAXI
+\ Sized from the code, not guessed. By the time the optimizer runs, CN
+\ is final and every instruction is at least one word, so the item count
+\ starts below CN; the passes then remove far more than the one item
+\ PASS-SHL ever adds. Twice the code length plus a floor is generous and
+\ it is PROPORTIONAL, which the old fixed quarter-million was not -- on
+\ a 32-bit machine that was 33 MB of item buffers for a hello world.
+VARIABLE MAXI
 VARIABLE IBUF  VARIABLE IN#
 VARIABLE JBUF  VARIABLE JN#
 VARIABLE LMAP                           \ label id -> address, when encoding
@@ -31,6 +37,9 @@ VARIABLE MAXLBL
 4 CONSTANT a_ext
 
 VARIABLE PMAP                           \ code address -> its patch, or 0
+\ The pass working sets, allocated with everything else: FT for thread,
+\ EMM/SMM/BANM for tail.
+VARIABLE FT   VARIABLE EMM   VARIABLE SMM   VARIABLE BANM
 : I[] ( buf i -- a )  4 CELLS * + ;
 : I.K ( a -- a )  ;
 : I.O ( a -- a )  1 CELLS + ;
@@ -38,14 +47,19 @@ VARIABLE PMAP                           \ code address -> its patch, or 0
 : I.T ( a -- a )  3 CELLS + ;
 
 : OPT-INIT
-   MAXI 4 CELLS * ALLOCATE IBUF !
-   MAXI 4 CELLS * ALLOCATE JBUF !
-   MAXI CELLS ALLOCATE LMAP !
-   CMAX ALLOCATE ISLBL !
-   CMAX CELLS ALLOCATE PMAP ! ;
+   CN @ 2 * 4096 + MAXI !
+   MAXI @ 4 CELLS * ALLOCATE IBUF !
+   MAXI @ 4 CELLS * ALLOCATE JBUF !
+   MAXI @ CELLS ALLOCATE LMAP !
+   MAXI @ CELLS ALLOCATE FT !
+   MAXI @ CELLS ALLOCATE EMM !
+   MAXI @ CELLS ALLOCATE SMM !
+   MAXI @ ALLOCATE BANM !
+   CN @ 1+ ALLOCATE ISLBL !
+   CN @ 1+ CELLS ALLOCATE PMAP ! ;
 
 : ITEM, ( buf n kind op arg at -- n' ) {: b n k o a t | p -- n :}
-   n MAXI < 0= IF ." c4fc: too many instructions to optimise" CR ABORT THEN
+   n MAXI @ < 0= IF ." c4fc: too many instructions to optimise" CR ABORT THEN
    b n I[] TO p
    k p I.K !   o p I.O !   a p I.A !   t p I.T !
    n 1+ ;
@@ -56,7 +70,7 @@ VARIABLE PMAP                           \ code address -> its patch, or 0
 : LABEL? ( off -- f )    ISLBL @ + C@ 0<> ;
 
 : MARK-LABELS {: | y p -- :}
-   ISLBL @ CMAX 0 FILL
+   ISLBL @ CN @ 1+ 0 FILL
    ENTRY @ 0< 0= IF ENTRY @ MARK-LABEL THEN
    PN @ 0 ?DO
       I 3 * CELLS PATCH @ + TO p
@@ -79,7 +93,7 @@ VARIABLE PMAP                           \ code address -> its patch, or 0
 \ fetch. Only CODE-RESIDENT patches go in it; the data-resident ones
 \ address the data segment and would collide.
 : PMAP-BUILD ( -- ) {: | p -- :}
-   PMAP @ CMAX CELLS 0 FILL
+   PMAP @ CN @ 1+ CELLS 0 FILL
    PN @ 0 ?DO
       I 3 * CELLS PATCH @ + TO p
       p @ -1 = p @ -2 = OR p @ -1000 <= OR IF
@@ -126,7 +140,7 @@ VARIABLE PMAP                           \ code address -> its patch, or 0
 \ -- encoding ------------------------------------------------------------
 
 : ASSIGN-ADDRESSES {: | i n a p -- :}
-   LMAP @ MAXI CELLS 0 FILL
+   LMAP @ MAXI @ CELLS 0 FILL
    0 TO a
    IN# @ 0 ?DO
       IBUF @ I I[] TO p
@@ -275,7 +289,6 @@ VARIABLE PMAP                           \ code address -> its patch, or 0
 \ A jump to a label whose only content is JMP L2 can go to L2 directly.
 \ One level, and never a self-loop.
 
-VARIABLE FT
 : MAX-LABEL ( -- n ) {: | m -- m :}
    0 TO m
    IN# @ 0 ?DO I LBL? IF I IOP m > IF I IOP TO m THEN THEN LOOP
@@ -289,8 +302,8 @@ VARIABLE FT
       i 1+ TO i
    REPEAT -1 ;
 : PASS-THREAD {: | i t f -- :}
-   FT @ 0= IF MAXI CELLS ALLOCATE FT ! THEN
-   FT @ MAXI CELLS 0 FILL
+
+   FT @ MAXI @ CELLS 0 FILL
    IN# @ 0 ?DO
       I LBL? IF
          I 1+ FOLLOWING-JMP TO t
@@ -337,7 +350,6 @@ VARIABLE FT
 \ stack. Variadic callees are excluded -- their argument slots would be
 \ read out of the caller's frame.
 
-VARIABLE EMM  VARIABLE SMM  VARIABLE BANM
 : EM[] ( l -- a )  CELLS EMM @ + ;
 : SM[] ( l -- a )  CELLS SMM @ + ;
 : BAN[] ( l -- a ) BANM @ + ;
@@ -356,9 +368,7 @@ VARIABLE EMM  VARIABLE SMM  VARIABLE BANM
    f SM[] @ 0> IF f ELSE -1 THEN ;
 
 : PASS-TAIL {: | i f maxl nextid curm pending y -- :}
-   EMM @ 0= IF MAXI CELLS ALLOCATE EMM !  MAXI CELLS ALLOCATE SMM !
-               MAXI ALLOCATE BANM ! THEN
-   EMM @ MAXI CELLS 0 FILL   SMM @ MAXI CELLS 0 FILL   BANM @ MAXI 0 FILL
+   EMM @ MAXI @ CELLS 0 FILL   SMM @ MAXI @ CELLS 0 FILL   BANM @ MAXI @ 0 FILL
    MAX-LABEL TO maxl
    SN @ 0 ?DO
       I SYM[] TO y

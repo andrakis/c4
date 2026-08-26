@@ -1,0 +1,34 @@
+: SQ DUP * ;
+ENT  0 
+LEA  2 
+LI  
+PSH 
+IMM  0 
+ADD 
+PSH 
+MUL 
+LEV 
+: ABS3 DUP 0< IF NEGATE THEN ;
+ENT  0 
+LEA  2 
+LI  
+PSH 
+IMM  0 
+ADD 
+PSH 
+PSH 
+IMM  0 
+LT  
+PSH 
+IMM  -1 
+MUL 
+BZ   *
+IMM  0 
+ADD 
+PSH 
+IMM  -1 
+MUL 
+PSH 
+IMM  0 
+ADD 
+LEV 

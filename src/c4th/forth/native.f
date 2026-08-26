@@ -955,3 +955,22 @@ VARIABLE WEY  VARIABLE WEA  VARIABLE WEL  VARIABLE WEB
    NARITYMAX 1+ 0 DO
       2DUP I NCOMPILE-N IF 2DROP I UNLOOP EXIT THEN
    LOOP 2DROP -1 ;
+
+\ -- looking at it ------------------------------------------------------
+\ What did that compile to? The pieces were all here -- NCOMPILE-N turns
+\ a definition into C4 code and asm.f's DIS lists a code buffer -- so
+\ SEE is the two of them introduced to each other.
+\
+\ N is the arity, because the backend passes arguments the way C4 passes
+\ any function's: `1 SEE SQ` compiles SQ as a one-argument function.
+\ Getting it wrong is not dangerous, it just declines.
+\
+\ Branch targets print as * rather than as numbers: they depend on where
+\ the buffer happened to land, and the point of a listing is the shape.
+
+: SEE ( n "name" -- )
+   >R ASM-RESET
+   BL WORD FIND 0= IF R> DROP ." SEE: no such word" CR EXIT THEN
+   DUP >BODY SWAP >WEND R> NCOMPILE-N
+   IF DIS ELSE ." SEE: the backend declined this word" CR THEN ;
+

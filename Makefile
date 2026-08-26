@@ -525,6 +525,13 @@ test-c4th: c4th c4th.c4r $(C4M) c4mp $(OISC4) c4sp $(C4KE_C4R)
 	./c4cc -o .c4th_fact.c4r src/c4th/tests/fact.c > /dev/null
 	./c4rdump -c .c4th_fact.c4r 2>/dev/null | grep -E '^0x' | sed -E 's/^0x[0-9a-f]+: +//; s/[0-9]{7,}/*/; s/ +$$//' > .c4th_ccasm
 	./c4th src/c4th/forth/core.f src/c4th/forth/asm.f src/c4th/tests/fact.f | sed -E 's/ +$$//' | cmp - .c4th_ccasm
+	# SEE: the same disassembler pointed at COMPILED Forth rather than at
+	# hand-written assembly. The listing is where the accumulator model
+	# stops being a paragraph -- DROP is `IMM 0; ADD` because C4's ALU
+	# already pops, and a flag is `PSH; IMM -1; MUL` because Forth wants
+	# -1 where C4 gives 1.
+	./c4th src/c4th/forth/core.f src/c4th/forth/asm.f src/c4th/forth/peep.f \
+	       src/c4th/forth/native.f src/c4th/tests/see.f | cmp - src/c4th/tests/expected/see.txt
 	# Each peephole rule fires, and behaviour is unchanged -- including
 	# the cases where compaction moves a branch target.
 	./c4th src/c4th/forth/core.f src/c4th/forth/peep.f src/c4th/tests/b4.f | cmp - src/c4th/tests/expected/b4.txt

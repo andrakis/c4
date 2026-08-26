@@ -21,12 +21,27 @@
 \ A compiler is a batch process: bump-allocate and let go of everything
 \ at the end. No free, no GC, no ownership.
 
-VARIABLE ARENA   VARIABLE ARENA-TOP   VARIABLE ARENA-END
-: ARENA-INIT ( n -- )  DUP ALLOCATE DUP ARENA ! DUP ARENA-TOP !  SWAP + ARENA-END ! ;
+\ It is a LIST OF BLOCKS, because a bump allocator that never frees can
+\ simply start another one -- nothing moves, so every pointer already
+\ handed out stays good. That matters more than it sounds: the arena
+\ used to be one 64 MB malloc, which is larger than the whole of c4bb.
+\ A compiler that only fits on the machine that is compiling FOR the
+\ small machine is the wrong shape.
+VARIABLE ARENA-TOP   VARIABLE ARENA-END   VARIABLE ARENA-BLK
+: ARENA-BLOCK ( n -- ) {: n | b -- :}
+   n ARENA-BLK @ MAX TO n
+   n ALLOCATE TO b
+   b 0= IF ." c4fc: out of memory for the arena" CR ABORT THEN
+   b ARENA-TOP !   b n + ARENA-END !
+   ARENA-BLK @ 2* ARENA-BLK ! ;          \ later blocks are bigger
+: ARENA-INIT ( n -- )  DUP ARENA-BLK !  ARENA-BLOCK ;
 : ALLOT: ( n -- a )                       \ cell-aligned: cells are what go in it
-   1 CELLS 1- + 1 CELLS 1- INVERT AND
-   ARENA-TOP @ SWAP OVER + DUP ARENA-END @ > IF ." c4fc: arena full" CR ABORT THEN
-   ARENA-TOP ! ;
+   {: n | a -- a :}
+   n 1 CELLS 1- + 1 CELLS 1- INVERT AND TO n
+   ARENA-TOP @ n + ARENA-END @ > IF n ARENA-BLOCK THEN
+   ARENA-TOP @ TO a
+   a n + ARENA-TOP !
+   a ;
 
 \ -- growable vectors ---------------------------------------------------
 \ Token lists, instruction lists, symbol tables. Arrays, not cons cells.
@@ -41,6 +56,17 @@ END-STRUCTURE
 \ Doubling, and the old block is simply let go of: there is no FREE in
 \ c4th and a compiler is a batch process, so the peak is what matters
 \ and it is bounded by twice the final size.
+\
+\ GROW is the same idea for the buffers that are NOT vectors -- the code
+\ stream, the patch table, the symbol section. Each is a raw block with
+\ its own cursor, so the pattern is: notice it is full where the bounds
+\ check already was, and double it there.
+: GROW ( addrvar capvar elembytes -- ) {: av cv esz | n new -- :}
+   cv @ 2* TO n
+   n esz * ALLOCATE TO new
+   new 0= IF ." c4fc: out of memory growing a buffer" CR ABORT THEN
+   av @ new  cv @ esz *  MOVE
+   new av !   n cv ! ;
 : VEC-GROW ( v -- ) {: v | nc nd -- :}
    v v.cap @ 2* DUP 0= IF DROP 16 THEN TO nc
    nc CELLS ALLOCATE TO nd

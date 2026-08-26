@@ -19,10 +19,14 @@
 \   4. LEV ends a function, and `return` emits its own -- so a function
 \      whose last statement is a return gets one LEV, not two.
 
-1048576 CONSTANT CMAX
- 524288 CONSTANT DMAX
-  65536 CONSTANT PMAX
-  16384 CONSTANT SMAX
+\ Starting sizes, not limits: each of these buffers doubles where its
+\ bounds check used to abort. Small on purpose -- most compiles are
+\ small, and the one that is not pays for what it uses.
+   4096 CONSTANT CMAX0
+   8192 CONSTANT DMAX0
+   1024 CONSTANT PMAX0
+    512 CONSTANT SMAX0
+VARIABLE CMAX   VARIABLE DMAX   VARIABLE IMAX   VARIABLE PMAX   VARIABLE SMAX
 
 \ THE DATA SEGMENT IS THREE REGIONS, in this order:
 \
@@ -82,23 +86,32 @@ VARIABLE DESS   VARIABLE DESN
 83 CONSTANT oLEAP 84 CONSTANT oIMMP 85 CONSTANT oLIP  86 CONSTANT oADDL
 87 CONSTANT oSTL  88 CONSTANT oPOPA
 
+BEGIN-STRUCTURE SYMR
+   FIELD: y.name  FIELD: y.nlen  FIELD: y.type  FIELD: y.class  FIELD: y.val
+   FIELD: y.ct    FIELD: y.agg   FIELD: y.sz
+   FIELD: y.va    FIELD: y.nfix  FIELD: y.ini   FIELD: y.sc
+END-STRUCTURE
+VARIABLE VA-MAKE   0 VA-MAKE !          \ code index of __c4cc_make_va
+: SYM[] ( i -- a )  SYMR * SYMS @ + ;
+
 : EMIT-INIT
-   CMAX CELLS ALLOCATE CODE !      0 CN !
-   DMAX ALLOCATE DATA !            0 DN !
-   DMAX ALLOCATE IDATA !           0 IDN !
+   CMAX0 CMAX !  DMAX0 DMAX !  DMAX0 IMAX !  PMAX0 PMAX !  SMAX0 SMAX !
+   CMAX @ CELLS ALLOCATE CODE !    0 CN !
+   DMAX @ ALLOCATE DATA !          0 DN !
+   IMAX @ ALLOCATE IDATA !         0 IDN !
    0 UDN !  0 DB2 !  0 DB3 !
    256 CELLS ALLOCATE CONS !       0 CONSN !
    256 CELLS ALLOCATE DESS !       0 DESN !
-   IDATA @ DMAX 0 FILL
-   PMAX 3 * CELLS ALLOCATE PATCH ! 0 PN !
-   SMAX 5 * CELLS ALLOCATE SYMS !  0 SN !
-   DATA @ DMAX 0 FILL
+   IDATA @ IMAX @ 0 FILL
+   PMAX @ 3 * CELLS ALLOCATE PATCH ! 0 PN !
+   SMAX @ SYMR * ALLOCATE SYMS !  0 SN !
+   DATA @ DMAX @ 0 FILL
    -1 ENTRY ! ;
 
 \ -- code ---------------------------------------------------------------
 
 : C, ( w -- )
-   CN @ CMAX < 0= IF ." c4fc: code overflow" CR ABORT THEN
+   CN @ CMAX @ >= IF CODE CMAX 1 CELLS GROW THEN
    CODE @ CN @ CELLS + !  1 CN +! ;
 : OP,   ( op -- )    C, ;
 : OP2,  ( n op -- )  C, C, ;
@@ -120,7 +133,7 @@ VARIABLE LABMAX   -1 LABMAX !
 : LAST-OP ( -- w )   CN @ 0= IF -1 EXIT THEN CODE @ CN @ 1- CELLS + @ ;
 
 : PAT, ( type addr value -- ) {: t a v | p -- :}
-   PN @ PMAX < 0= IF ." c4fc: patch overflow" CR ABORT THEN
+   PN @ PMAX @ >= IF PATCH PMAX 3 CELLS GROW THEN
    PN @ 3 * CELLS PATCH @ + TO p
    t p !   a p CELL+ !   v p 2 CELLS + !
    1 PN +! ;
@@ -218,9 +231,19 @@ VARIABLE FWN   0 FWN !
 
 \ Region 1: an initialised global's address IS its offset, because that
 \ region starts at zero.
-: ID-ALLOT ( n -- off )
+\ The data buffers grow ZEROED, because a partially-initialised array
+\ leaves the rest of itself to be read as zeros. Neither of these two
+\ had a bounds check at all before -- they simply bumped the cursor past
+\ the end of the block and wrote there.
+: DGROW ( addrvar capvar -- ) {: av cv | old -- :}
+   cv @ TO old
+   av cv 1 GROW
+   av @ old +   cv @ old -   0 FILL ;
+: ID-ALLOT ( n -- off ) {: n | off -- off :}
    IDN @ 1 CELLS 1- + 1 CELLS 1- INVERT AND IDN !
-   IDN @ SWAP IDN +! ;
+   IDN @ TO off
+   BEGIN off n + IMAX @ > WHILE IDATA IMAX DGROW REPEAT
+   n IDN +!  off ;
 \ A string a GLOBAL INITIALISER needs is allocated here rather than with
 \ the other literals, because c4lc lays the data out in one pass over
 \ the declarations and the string is met while that global is: the
@@ -322,7 +345,10 @@ VARIABLE EXTN   0 EXTN !
 \ -- data ---------------------------------------------------------------
 
 : D-ALIGN  DN @ 1 CELLS 1- + 1 CELLS 1- INVERT AND DN ! ;
-: D-ALLOT ( n -- off )  DN @ SWAP DN +! ;
+: D-ALLOT ( n -- off ) {: n | off -- off :}
+   DN @ TO off
+   BEGIN off n + DMAX @ > WHILE DATA DMAX DGROW REPEAT
+   n DN +!  off ;
 : D-STR, ( a u -- off ) {: a u | off -- off :}
    DN @ TO off
    a  DATA @ off +  u MOVE
@@ -341,19 +367,12 @@ VARIABLE EXTN   0 EXTN !
 \ TYPE, which the image format has no room for and the compiler cannot
 \ do without -- char and int differ by one opcode at every load and
 \ every store.
-BEGIN-STRUCTURE SYMR
-   FIELD: y.name  FIELD: y.nlen  FIELD: y.type  FIELD: y.class  FIELD: y.val
-   FIELD: y.ct    FIELD: y.agg   FIELD: y.sz
-   FIELD: y.va    FIELD: y.nfix  FIELD: y.ini   FIELD: y.sc
-END-STRUCTURE
-VARIABLE VA-MAKE   0 VA-MAKE !          \ code index of __c4cc_make_va
-: SYM[] ( i -- a )  SYMR * SYMS @ + ;
 \ attrs 0x40 marks an AGGREGATE -- an array, or a struct variable. Both
 \ are names that stand for an address rather than a value, and c4lc
 \ flags them the same way.
 64 CONSTANT ATTR-ARRAY
 : SYM, ( a u type class val attrs -- ) {: a u t c v at | y -- :}
-   SN @ SMAX < 0= IF ." c4fc: too many symbols" CR ABORT THEN
+   SN @ SMAX @ >= IF SYMS SMAX SYMR GROW THEN
    SN @ SYM[] TO y
    a y y.name !  u y y.nlen !  t y y.type !  c y y.class !  v y y.val !
    at y y.agg !

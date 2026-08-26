@@ -1,0 +1,19 @@
+B4KE1
+# B4KE's own test: the C4IX build in miniature. Two modules that
+# reference each other's symbols, compiled separately, an object list
+# written by the build, a link that reads the list back as a response
+# file, and the image run. Everything lives in the kernel's RAM
+# filesystem; nothing here touches the host.
+ECHO b4ke: compiling module a...
+TARGET tla.c4o
+RUN c4cc.c4r -o tla.c4o src/tests/test_link_a.c
+ECHO b4ke: compiling module b...
+TARGET tlb.c4o
+RUN c4cc.c4r -o tlb.c4o src/tests/test_link_b.c
+ECHO b4ke: writing the object list...
+LIST b4ke.objs tla.c4o tlb.c4o
+ECHO b4ke: linking through the list...
+TARGET b4ked.c4r
+RUN c4rlink.c4r @b4ke.objs -o b4ked.c4r
+ECHO b4ke: running what we built...
+RUN b4ked.c4r

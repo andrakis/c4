@@ -580,6 +580,10 @@ int main (int argc, char **argv) {
 	char *vfsbuf;    // kernel RAM filesystem contents, when there are any
 	int   vfslen, vfsget;
 
+	// @file arguments first, so an object list written by a build can
+	// stand in for a command line C4DOS cannot hold (asm-c4r.c).
+	if (!(argv = respfile_expand(argc, argv, &argc))) return 1;
+
 	// Set defaults
 	spec = argv[0];
 	outfile = "a.c4r";

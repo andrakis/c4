@@ -45,6 +45,7 @@ c4or1k-native
 /c4dos-build32/
 /c4dos-c4th/
 /c4ke-src.tar
+/tools-src.tar
 
 # scratch directories the test scripts create and trap-remove
 .c4dos_test_tmp/

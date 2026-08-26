@@ -922,6 +922,99 @@ void asmc4r_Source () {
 	}
 }
 
+// -- response files ---------------------------------------------------
+//
+// An argument of the form @NAME is replaced by the whitespace-separated
+// words in the file NAME. This is the DOS-era answer to a command line
+// that will not hold the command, and it is here for exactly that
+// reason: C4DOS keeps fifteen tokens of a line (ARGVMAX, c4dos.c:72,
+// and parse_line stops at ARGVMAX - 1), while linking C4IX needs
+//
+//     RUN c4rlink.c4r <twelve objects> -o c4ix.c4r
+//
+// which is sixteen. With this, the same link is four tokens and the
+// object list lives in a file the build wrote. See
+// docs/compiler-on-the-board.md.
+//
+// The file is found the way every input here is found: ask C4DOS
+// first (its opener sees the RAM disk, so a list another tool just
+// wrote is findable), then the C4KE RAM filesystem, then the host.
+// '#' begins a comment that runs to the end of the line, so a generated
+// list can say what it is.
+enum { RESPF_MAX = 4096, RESPF_BYTES = 65536 };
+
+int respf_isspace (int c) { return c == ' ' || c == 9 || c == 10 || c == 13; }
+
+char **respfile_expand (int argc, char **argv, int *outargc) {
+	int    i, n, cap, got, fd, vfsget, vfslen;
+	char  *buf, *p, *vfsbuf;
+	char **out;
+
+	i = 0; n = 0;
+	while (i < argc) { if (argv[i] && *argv[i] == '@' && argv[i][1]) ++n; ++i; }
+	if (!n) { *outargc = argc; return argv; }
+
+	cap = RESPF_MAX;
+	if (!(out = malloc((cap + 1) * sizeof(char *)))) {
+		printf("response file: out of memory\n");
+		return 0;
+	}
+	n = 0;
+	i = 0;
+	while (i < argc) {
+		if (!(argv[i] && *argv[i] == '@' && argv[i][1])) {
+			if (n >= cap) { printf("response file: more than %d arguments\n", cap); return 0; }
+			out[n++] = argv[i];
+			++i;
+			continue;
+		}
+		if (!(buf = malloc(RESPF_BYTES))) {
+			printf("response file: out of memory\n");
+			return 0;
+		}
+		got = dos_readable() ? dos_slurp(argv[i] + 1, buf, RESPF_BYTES - 1) : -1;
+		if (got < 0) {
+			vfsget = 0;
+			vfsbuf = 0;
+#if !NATIVE
+			if (__c4_info() & C4I_TRAPH)
+				vfsget = __c4_opcode("OP_VFS_GET", 128); // 128 = OP_REQUEST_SYMBOL
+			if (vfsget > 128)
+				vfsbuf = (char *)__c4_opcode(&vfslen, argv[i] + 1, vfsget);
+#endif
+			if (vfsbuf) {
+				got = vfslen;
+				if (got > RESPF_BYTES - 1) got = RESPF_BYTES - 1;
+				memcpy(buf, vfsbuf, got);
+			}
+			else {
+				if ((fd = open(argv[i] + 1, 0)) < 0) {
+					printf("response file: cannot open '%s'\n", argv[i] + 1);
+					return 0;
+				}
+				got = read(fd, buf, RESPF_BYTES - 1);
+				close(fd);
+				if (got < 0) got = 0;
+			}
+		}
+		buf[got] = 0;
+		p = buf;
+		while (*p) {
+			while (*p && respf_isspace(*p)) ++p;
+			if (!*p) break;
+			if (*p == '#') { while (*p && *p != 10) ++p; continue; }
+			if (n >= cap) { printf("response file: more than %d arguments\n", cap); return 0; }
+			out[n++] = p;
+			while (*p && !respf_isspace(*p)) ++p;
+			if (*p) { *p = 0; ++p; }
+		}
+		++i;
+	}
+	out[n] = 0;
+	*outargc = n;
+	return out;
+}
+
 int asmc4r_main (int argc, char **argv) {
 	int poolsz, result, i;
 	char *arg;
@@ -937,6 +1030,8 @@ int asmc4r_main (int argc, char **argv) {
 	asmc4r_opt_source = 0;
 	asmc4r_opt_pie = 1;
 	//src = 0; // don't allow src output
+
+	if (!(argv = respfile_expand(argc, argv, &argc))) return -1;
 
 	if ((i = asmc4r_parse_commandline(&argc, &argv)))
 		return i;

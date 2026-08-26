@@ -484,15 +484,54 @@ test-c4dos-ladder32: c4dos32.c4r $(C4DOS_BUILD_DISK32)
 	printf 'LADDER\nRUN dosload.c4r c4ke.c4r\n\\q\n' \
 	  | node src/c4bb/sim/cli.js -s -m 224 -d $(C4DOS_BUILD_DISK32) c4dos32.c4r \
 	  > .c4dos_l32.log 2>&1
-	grep -q "wrote 213438 bytes to ram:c4cc2.c4r" .c4dos_l32.log
-	grep -q "wrote 213438 bytes to ram:c4cc3.c4r" .c4dos_l32.log
-	grep -q "wrote 71846 bytes to ram:cpp2.c4r"   .c4dos_l32.log
-	grep -q "wrote 187771 bytes to ram:c4ke.c4r"  .c4dos_l32.log
+	@# Nothing is hardcoded: a byte count here would only pin whatever
+	@# c4cc happened to compile to on the day. What must hold is that the
+	@# compiler is a FIXED POINT (the one it builds of itself is the same
+	@# as the one that built it) and that the kernel it produces is the
+	@# same as the one the SHIPPED compiler produces from the same .i.
+	@sz () { sed -n "s/.*wrote \\([0-9]*\\) bytes to ram:$$1$$/\\1/p" .c4dos_l32.log | head -1; }; \
+	 a=$$(sz c4cc2.c4r); b=$$(sz c4cc3.c4r); k=$$(sz c4ke.c4r); z=$$(sz c4ke0.c4r); \
+	 [ -n "$$a" ] && [ "$$a" = "$$b" ] || { echo "ladder: not a fixed point ($$a vs $$b)"; exit 1; }; \
+	 [ -n "$$k" ] && [ "$$k" = "$$z" ] || { echo "ladder: self-built compiler drifted ($$k vs $$z)"; exit 1; }; \
+	 echo "ladder: c4cc is a fixed point at $$a bytes; both kernels are $$k bytes"
 	grep -q "C4SH - The C4 SHell" .c4dos_l32.log
 	grep -q "clean shutdown" .c4dos_l32.log
 	@grep -o "c4bb: [0-9]* cycles in [0-9.]*s" .c4dos_l32.log
 	@rm -f .c4dos_l32.log
 	@echo "test-c4dos-ladder32: OK"
+
+# Response files: @NAME on a command line is replaced by the words in
+# NAME. The point is that C4DOS holds fifteen tokens and linking C4IX
+# needs sixteen (docs/compiler-on-the-board.md), so the check is that
+# the two links produce THE SAME IMAGE -- an expanded argument has to be
+# indistinguishable from one that was typed.
+test-respfile: $(C4CC) $(C4RLINK) $(C4M)
+	$(C4CC) -o .rf_a.c4o $(TESTS)/test_link_a.c > /dev/null
+	$(C4CC) -o .rf_b.c4o $(TESTS)/test_link_b.c > /dev/null
+	$(C4RLINK) .rf_a.c4o .rf_b.c4o -o .rf_plain.c4r > /dev/null
+	printf '# an object list, as a build would write it\n.rf_a.c4o\n.rf_b.c4o\n' > .rf_objs.txt
+	$(C4RLINK) @.rf_objs.txt -o .rf_resp.c4r > /dev/null
+	cmp .rf_plain.c4r .rf_resp.c4r
+	$(C4M) load-c4r.c -- .rf_resp.c4r | grep -q "b_add(3, 4) = 7"
+	@rm -f .rf_a.c4o .rf_b.c4o .rf_plain.c4r .rf_resp.c4r .rf_objs.txt
+	@echo "test-respfile: OK"
+
+# B4KE: the C4IX build in miniature, inside C4KE. Two modules compiled
+# separately into the RAM filesystem, an object list the BUILD wrote, a
+# link that reads that list back as a response file, and the image run.
+# Every verb of the format is exercised, and the second run proves the
+# skip rule -- the targets are gone with the kernel, so it re-runs; what
+# is pinned is that a dry run touches nothing.
+test-b4ke: $(B4KE) $(C4KE_C4R) $(C4M) $(C4R_C4CC) $(C4R_C4RLINK) $(TESTS)/test_link_a.c
+	$(C4M) $(RUN_C4KE) b4ke -f $(SRCS)/c4ke/bin/b4ke-selftest.b4k > .b4ke.log 2>&1
+	grep -q "c4rlink: wrote 1898 bytes to ramfs:b4ked.c4r" .b4ke.log
+	grep -q "b_add(3, 4) = 7" .b4ke.log
+	grep -q "b4ke: 4 ran, 0 skipped, 0 failed" .b4ke.log
+	$(C4M) $(RUN_C4KE) b4ke -f $(SRCS)/c4ke/bin/b4ke-selftest.b4k -n > .b4ke_n.log 2>&1
+	grep -q "would run: c4rlink.c4r @b4ke.objs -o b4ked.c4r" .b4ke_n.log
+	grep -q "b4ke: 0 ran, 0 skipped, 0 failed" .b4ke_n.log
+	@rm -f .b4ke.log .b4ke_n.log
+	@echo "test-b4ke: OK"
 
 # c4cc's for statement. It had never worked -- see src/tests/test_for.c
 # -- so this pins it against gcc's output for the same program, which is
@@ -2105,7 +2144,7 @@ c4rs: pre
 # Marking the below rules as PHONY using singular .PHONY rule
 PHONY  = pre all clean-c4rs clean
 PHONY += test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
-PHONY += run-c4dos-build32 test-c4dos-build32 test-c4cc-for
+PHONY += run-c4dos-build32 test-c4dos-build32 test-c4cc-for test-respfile test-b4ke
 PHONY += test-c4dos-ladder32
 PHONY += run run-vg test test-massive
 PHONY += run-alt run-alt-vg test-alt test-massive-alt
@@ -2180,6 +2219,13 @@ $(C4R_TOP): $(C4CC) $(U0) $(SRCS)/c4ke/bin/ps.c $(SRCS)/c4ke/bin/top.c $(C4KE_WA
 # C4KE version of c4cc
 $(C4R_C4CC): $(C4CC) $(U0) load-c4r.c $(SRCS)/c4cc/c4cc.c $(SRCS)/c4cc/asm-c4r.c
 	$(C4CC) -o $(C4R_C4CC) $(C4R_C4CC_SRCS)
+# B4KE, the build tool -- docs/compiler-on-the-board.md. A C4KE program
+# by decision: it needs tasks it can wait for and a filesystem it can
+# write, and C4DOS has neither. That is part of what building the kernel
+# buys you.
+B4KE := b4ke.c4r
+$(B4KE): $(C4CC) $(U0) $(SRCS)/c4ke/bin/b4ke.c $(C4KE_WATCH)
+	$(C4CC) -o $(B4KE) $(U0) $(SRCS)/c4ke/bin/b4ke.c > /dev/null
 # c4rdump, requires c4cc sources until proper headers implemented
 $(C4R_C4RDUMP): $(C4CC) $(U0) $(C4R_C4CC_SRCS) $(SRCS)/c4ke/bin/c4rdump.c
 	$(C4CC) -o $(C4R_C4RDUMP) $(C4R_C4CC_SRCS) $(SRCS)/c4ke/bin/c4rdump.c

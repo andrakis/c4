@@ -277,36 +277,94 @@ one the narrative wants:
 
     C4DOS -> toolchain -> C4KE -> [B4KE + L7] -> C4IX
 
-## B4KE — what is decided and what is not
+## B4KE, and response files
 
-**Decided by measurement:**
+Both open questions were answered on 2026-08-26, and the answers divide
+the work cleanly.
 
-- **It is needed for C4IX and not for C4KE.** See above.
-- **It cannot do timestamps under C4DOS.** The RAM disk keeps name,
-  data, length and capacity per slot and nothing else (`c4dos.c:102-108`)
-  — there are no modification times to compare, clock device or not. So
-  B4KE's dependency rule is *presence plus declared order*, not `make`'s
-  newer-than. Under C4KE it could do better; it should not, until both
-  hosts can.
-- **Under C4KE the ground is already proven.** `test_ramlink` compiles,
-  links and runs a program entirely in the RAM filesystem, and
-  `test_ixbuild` takes a real C4IX module through c4lc to an object and
-  reads it back with c4rlink. What is missing is the driver, not the
-  plumbing.
+### Response files close the command-line gap
 
-**Open, and genuinely a choice:**
+`@NAME` on any c4cc or c4rlink command line is replaced by the
+whitespace-separated words in `NAME` (`respfile_expand`, in
+`src/c4cc/asm-c4r.c`, so both tools get it from one place). The file is
+found the way every input here is found: C4DOS first, then the C4KE RAM
+filesystem, then the host — so a list a build just wrote is findable by
+the tool that has to read it. `#` starts a comment.
 
-1. **How B4KE runs a step under C4DOS.** The API table has fifteen of
-   thirty-two slots used and no spawn. Either B4KE writes a `.BAT` and
-   lets C4DOS run it (`run_batch` already nests four deep, zero API
-   change), or C4DOS gains a `SPAWN` slot at v3 and B4KE stays in
-   control of failures and output.
-2. **How the sixteen-token wall gets crossed.** Either the tools learn
-   response files — `c4rlink @objs.txt`, about twenty lines, and exactly
-   what a DOS linker did — or `ARGVMAX` goes up and the wall stops being
-   part of the story.
+The link that could not be typed is now four tokens:
 
-Neither is decidable from measurement; both change what gets built.
+    RUN c4rlink.c4r @c4ix.objs -o c4ix.c4r
+
+`make test-respfile` pins the only thing that matters: the image built
+through a response file is **byte-identical** to the one built by typing
+the arguments. An expanded argument has to be indistinguishable from one
+that was there all along.
+
+### B4KE is a C4KE program, by decision
+
+C4DOS keeps `BUILD.BAT` and `LADDER.BAT`. B4KE runs only under C4KE,
+because C4KE is what gives it the two things a build tool needs and DOS
+has neither: **tasks it can start and wait for**
+(`kern_user_start_c4r` / `await_pid`) and **a filesystem it can write
+and read back** (`OP_VFS_*`). That is not a limitation dressed up as a
+feature — it is part of the answer to "what did building the kernel buy
+me", which is the question the ladder exists to make the player ask.
+
+`src/c4ke/bin/b4ke.c`, 250 lines, five verbs, one per line, dull on
+purpose in the way `C4TAR1` is dull:
+
+    B4KE1                     magic, first line
+    # ...                     comment
+    ECHO text                 progress, for a person watching
+    LIST name word word ...   write those words to `name`, one per line
+                              -- the object list a later RUN passes as
+                              @name
+    TARGET name               what the NEXT run must produce; if it is
+                              already there the run is skipped
+    RUN prog arg arg ...      start it, wait for it
+
+`-f FILE` chooses the build file (default `BUILD.B4K`), `-n` says what
+it would do without doing it, `-k` keeps going past a failure.
+
+**Presence, not timestamps — and that is not laziness.** `make` decides
+by comparing modification times. Neither filesystem here has any: C4DOS's
+RAM disk keeps name, data, length and capacity per slot and nothing else
+(`c4dos.c:102-108`), and C4KE's ramfs is the same shape. So the rule is
+"if the target is already there, skip it", which is enough to resume an
+interrupted build and honest about what this machine can actually know.
+Deleting a target is how you force a rebuild — which is why `rm` exists
+on every system that ever worked this way.
+
+**A step is judged by what it produced.** There is no exit status to
+read across `await_pid`, so B4KE checks that `TARGET` exists afterwards
+and stops if it does not. That is also the only check that survives a
+tool which fails halfway and leaves nothing behind.
+
+### The C4IX build in miniature, and it runs
+
+`src/c4ke/bin/b4ke-selftest.b4k` is the C4IX shape at 1/6th scale: two
+modules that reference each other's symbols, compiled separately into
+the RAM filesystem, an object list **written by the build**, a link that
+reads that list back as a response file, and the image run. Under C4KE:
+
+    b4ke: compiling module a...
+    c4cc: wrote 983 bytes to ramfs:tla.c4o
+    b4ke: compiling module b...
+    c4cc: wrote 1133 bytes to ramfs:tlb.c4o
+    b4ke: writing the object list...
+    b4ke: linking through the list...
+    c4rlink: wrote 1898 bytes to ramfs:b4ked.c4r
+    b4ke: running what we built...
+    b_add(3, 4) = 7
+    b4ke: 4 ran, 0 skipped, 0 failed
+
+1,898 bytes is what the same link produces on the host. `make test-b4ke`
+pins it, and pins the dry run touching nothing.
+
+**What is still missing for the real thing is L7, not B4KE.** The
+twelve-module C4IX build is this file with twelve `TARGET`/`RUN` pairs
+and a longer `LIST`. It will work the day a compiler on this machine can
+read `struct vnode {`.
 
 ## Milestones
 
@@ -344,9 +402,23 @@ Neither is decidable from measurement; both change what gets built.
 - [x] **M6** `for` in c4cc: fixed, rewritten, and pinned against gcc by
       `make test-c4cc-for` / `src/tests/test_for.c`.
 - [x] **M7** `LADDER.BAT`: the machine rebuilds its own toolchain and
-      builds the kernel with what it built, in 31.5 s, pinned by
-      `make test-c4dos-ladder32`.
-- [ ] **M8** B4KE, once its two open questions are answered.
+      builds the kernel with what it built, pinned by
+      `make test-c4dos-ladder32` — which hardcodes no byte counts and
+      instead derives the two facts that matter:
+
+          ladder: c4cc is a fixed point at 218124 bytes;
+                  both kernels are 187771 bytes
+          c4bb: 824181150 cycles in 38.63s
+
+      "Both kernels" is the self-built compiler's output against the
+      shipped compiler's, from the same `.i` — if a self-built compiler
+      ever drifted, that is where it would show.
+- [x] **M8a** Response files in c4cc and c4rlink — `make test-respfile`:
+      `cmp .rf_plain.c4r .rf_resp.c4r` passes, so an expanded argument
+      is indistinguishable from a typed one.
+- [x] **M8b** B4KE, a C4KE program — `make test-b4ke`:
+      `b4ke: 4 ran, 0 skipped, 0 failed`, and the linked image is the
+      same 1898 bytes the host link produces.
 - [ ] **M9** L7 in c4cc — `struct`, `union`, `typedef`, `.`/`->` with
       struct-size pointer arithmetic, `do/while`, compound assignment,
       block-scoped declarations. The bar is `src/tests/c4lc_l7.c` against

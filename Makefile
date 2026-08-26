@@ -746,6 +746,16 @@ C4FC_PP_SWEEP = $(patsubst %,src/c4ix/%.c:src/c4ix,$(C4IX_MODS)) \
                  src/c4th/c4th.c:src/c4th/include src/c4sp/c4sp.c:src/c4sp/include \
                  load-c4r.c:.
 
+# F9, the codegen sweep: whole programs c4fc preprocesses AND compiles
+# itself, against c4lc given the same source through gcc -E. factorial,
+# test_malloc, test-oisc and test_printf are absent because c4lc cannot
+# compile them by this route (they have their own paths in test-c4lc),
+# so there would be no oracle.
+C4FC_GEN_SWEEP := hello multifun puts reverse test_basic test_continue \
+                  test_coop_switch test_globals test-order test-ptrs \
+                  test_static test_switch tests c4lc_l2 global \
+                  test_gcscan vararg2 test_vprintf c4_jailbreak
+
 test-c4fc: c4th c4th.c4r $(C4M) c4sp
 	./c4th $(C4FC_LIB) src/c4fc/tests/dsl.f | cmp - src/c4fc/tests/expected/dsl.txt
 	$(C4M) load-c4r.c -- c4th.c4r $(C4FC_LIB) src/c4fc/tests/dsl.f | cmp - src/c4fc/tests/expected/dsl.txt
@@ -831,6 +841,33 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp
 	./c4th $(C4FC_ALL) -e ': GO C4FC-INIT -P S" src/c4fc/tests" -I S" src/c4fc/tests/spike9.c" C4FC ; GO' > .c4fc_fc.c4r
 	cmp .c4fc_lc.c4r .c4fc_fc.c4r
 	$(C4M) load-c4r.c -- .c4fc_fc.c4r | cmp - src/c4fc/tests/expected/spike9.txt
+	# F9, part one: whole programs compiled by c4fc THROUGH ITS OWN
+	# PREPROCESSOR, byte-identical to c4lc handed the same source via
+	# gcc -E. This is the differential that found local initialisers,
+	# indirect calls, casts-as-types, sizeof(array), the comma operator,
+	# `int *a, *b`, a bare `return;` and `char *s = "..."` -- every one
+	# of them a construct the spikes never wrote and every real header
+	# does.
+	@for t in $(C4FC_GEN_SWEEP); do \
+	   gcc -E -Iinclude -I. -DC4CC=1 -D__c4__=1 -D__C4CC__=1 -D__c4cc__=1 -C \
+	      $(TESTS)/$$t.c > .c4fc_pp.c 2>/dev/null; \
+	   ./c4sp -c 80000000 src/c4sp/lisp/c4lc.lisp .c4fc_pp.c .c4fc_lc.c4r >/dev/null 2>&1 \
+	     || { echo "test-c4fc: c4lc could not compile $$t"; exit 1; }; \
+	   ./c4th $(C4FC_ALL) -e ": GO C4FC-INIT -P S\" include\" -I S\" .\" -I S\" C4CC=1\" -D S\" __c4__=1\" -D S\" __C4CC__=1\" -D S\" __c4cc__=1\" -D S\" __GNUC__=1\" -D S\" $(TESTS)/$$t.c\" C4FC ; GO" > .c4fc_fc.c4r 2>&1; \
+	   cmp -s .c4fc_lc.c4r .c4fc_fc.c4r \
+	     || { echo "test-c4fc: $$t differs from c4lc (-P)"; exit 1; }; \
+	   echo "  gen -P ok: $$t"; \
+	done
+	# F9, the closing loop: c4fc compiles c4th.c -- preprocessor and all,
+	# thirteen headers and thirty thousand tokens -- to an image
+	# BYTE-IDENTICAL to c4lc's, and the c4th that comes out passes the
+	# Forth-2012 CORE suite with the same transcript the pinned golden
+	# holds. The Forth compiles the C compiler that compiles the Forth.
+	$(PREPROC) -I src/c4th/include src/c4th/c4th.c > .c4fc_pp.c
+	./c4sp -c 40000000 src/c4sp/lisp/c4lc.lisp .c4fc_pp.c .c4fc_lc.c4r > /dev/null
+	./c4th $(C4FC_ALL) -e ': GO C4FC-INIT -P S" include" -I S" ." -I S" src/c4th/include" -I S" C4CC=1" -D S" __c4__=1" -D S" __C4CC__=1" -D S" __c4cc__=1" -D S" __GNUC__=1" -D S" src/c4th/c4th.c" C4FC ; GO' > .c4fc_fc.c4r
+	cmp .c4fc_lc.c4r .c4fc_fc.c4r
+	echo c4th | $(C4M) load-c4r.c -- .c4fc_fc.c4r src/c4th/forth/core.f src/c4th/tests/tester.fr src/c4th/tests/core.fr | cmp - src/c4th/tests/expected/core-64.txt
 	@rm -f .c4fc_lex.txt .c4fc_a.txt .c4fc_b.txt .c4fc_lc.c4r .c4fc_fc.c4r
 	@rm -f .c4fc_o0.c4r .c4fc_o1.c4r .c4fc_o2.c4r .c4fc_r0 .c4fc_r1 .c4fc_pp.c
 	@echo "test-c4fc: OK"

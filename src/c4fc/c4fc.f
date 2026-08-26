@@ -1,11 +1,32 @@
 \ c4fc.f -- the driver.
 
+\ c4cc's library table plus c4's intrinsics, in c4lc's order. Every one
+\ compiles to its opcode where the call would be, so `read(fd, b, n)` is
+\ three pushes and one instruction.
+: BUILTIN ( a u op -- )  c_builtin SWAP t_int 0 0 ST, ;
 : BUILTINS
-   S" open"   c_builtin oOPEN t_int 0 0 ST,   S" read"   c_builtin oREAD t_int 0 0 ST,
-   S" close"  c_builtin oCLOS t_int 0 0 ST,   S" printf" c_builtin oPRTF t_int 0 0 ST,
-   S" malloc" c_builtin oMALC t_int 0 0 ST,   S" free"   c_builtin oFREE t_int 0 0 ST,
-   S" memset" c_builtin oMSET t_int 0 0 ST,   S" memcmp" c_builtin oMCMP t_int 0 0 ST,
-   S" exit"   c_builtin oEXIT t_int 0 0 ST, ;
+   S" open"   oOPEN BUILTIN   S" read"    oREAD BUILTIN
+   S" close"  oCLOS BUILTIN   S" printf"  oPRTF BUILTIN
+   S" malloc" oMALC BUILTIN   S" free"    oFREE BUILTIN
+   S" memset" oMSET BUILTIN   S" memcmp"  oMCMP BUILTIN
+   S" exit"   oEXIT BUILTIN   S" putchar" oPUTC BUILTIN
+   S" puts"   oPUTS BUILTIN   S" realloc" oRALC BUILTIN
+   S" memcpy" oMCPY BUILTIN   S" stacktrace" oSTRC BUILTIN
+   S" install_trap_handler" oITH BUILTIN
+   S" __opcode" o_OPC BUILTIN  S" __builtin" o_BLT BUILTIN
+   S" __c4_trap" o_TRP BUILTIN S" __c4_opcode" oOPCD BUILTIN
+   S" __c4_jmp" o_JMP BUILTIN  S" __c4_adjust" o_ADJ BUILTIN
+   S" __c4_configure" oC4CF BUILTIN  S" __c4_cycles" oC4CY BUILTIN
+   S" __time" oTIME BUILTIN    S" __c4_signal" oSIGH BUILTIN
+   S" __c4_sigint" oSIGI BUILTIN     S" __c4_usleep" oUSLP BUILTIN
+   S" __c4_info" oINFO BUILTIN S" __c4_ops_list" oOPSL BUILTIN
+   S" __c4_invoke" oC4IV BUILTIN     S" __c4_float" oFLT BUILTIN
+   S" __c4_cpu_id" oCPUI BUILTIN     S" __c4_cpu_count" oCPUN BUILTIN
+   S" __c4_cpu_start" oCPUS BUILTIN  S" __c4_cpu_halt" oCPUH BUILTIN
+   S" __c4_cas" oCAS BUILTIN   S" __c4_xchg" oXCHG BUILTIN
+   S" __c4_fadd" oFADD BUILTIN S" __c4_wait" oCWAI BUILTIN
+   S" __c4_wake" oCWAK BUILTIN S" __c4_ipi" oIPI BUILTIN
+   S" __c4_termraw" oTRAW BUILTIN ;
 
 VARIABLE OPTIMIZE   0 OPTIMIZE !
 

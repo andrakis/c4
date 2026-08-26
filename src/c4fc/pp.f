@@ -534,11 +534,24 @@ VARIABLE #DIR   0 #DIR !
 1024 CONSTANT FDIR-MAX
 CREATE FDIRA FDIR-MAX CELLS ALLOT
 CREATE FDIRU FDIR-MAX CELLS ALLOT
+CREATE FNAMEA FDIR-MAX CELLS ALLOT
+CREATE FNAMEU FDIR-MAX CELLS ALLOT
 VARIABLE CURFILE   0 CURFILE !
 : FDIR! ( a u serial -- ) {: a u s -- :}
    s FDIR-MAX < IF a s CELLS FDIRA + !  u s CELLS FDIRU + ! THEN ;
 : FDIR@ ( serial -- a u ) {: s -- a u :}
    s FDIR-MAX < IF s CELLS FDIRA + @  s CELLS FDIRU + @ ELSE 0 0 THEN ;
+: FNAME! ( a u serial -- ) {: a u s -- :}
+   s FDIR-MAX < IF a s CELLS FNAMEA + !  u s CELLS FNAMEU + ! THEN ;
+\ Which file a token came from, so a diagnostic can say so: a parse
+\ error thirty thousand tokens into an #include chain that names only a
+\ line number names almost nothing.
+: FNAME@ ( serial -- a u ) {: s -- a u :}
+   s FDIR-MAX < IF s CELLS FNAMEA + @  s CELLS FNAMEU + @ ELSE 0 0 THEN ;
+: .WHERE ( t -- ) {: t | a u -- :}
+   t t.file @ FNAME@ TO u TO a
+   u IF a u TYPE ELSE ." (source)" THEN
+   [CHAR] : EMIT  t t.line @ .N ;
 
 VARIABLE #INCL   0 #INCL !
 CREATE IPATH 1024 ALLOT
@@ -568,8 +581,10 @@ CREATE IPATH 1024 ALLOT
    LOOP
    ." c4fc: cannot find include: " a u TYPE CR ABORT ;
 : PP-LEX-INCLUDE ( a u -- v ) {: a u | v -- v :}
-   a u PP-STR LEX-FILE>V TO v                 \ the path must outlive the read
-   a u DIRNAME PP-STR LEXF @ FDIR!
+   a u PP-STR TO u TO a                       \ the path must outlive the read
+   a u LEX-FILE>V TO v
+   a u DIRNAME LEXF @ FDIR!
+   a u LEXF @ FNAME!
    v ;
 : D-INCLUDE ( v -- ) {: v | ex n -- :}
    1 #INCL +!
@@ -642,6 +657,18 @@ DIRECTIVE  error   D-ERROR
       THEN THEN THEN THEN
    REPEAT ;
 
+\ Keywords, at last. Every word came out of the lexer as an Id because
+\ that is the order C puts the phases in; now that no more expansion can
+\ happen, the ones that name a keyword become one.
+: RECLASSIFY ( -- ) {: | t k -- :}
+   TOKS V# 0 ?DO
+      I TOKS V@ TO t
+      t t.kind @ Id = IF
+         t t.val @ t t.len @ KW-FIND TO k
+         k 0< 0= IF k t t.kind !  0 t t.val !  0 t t.len ! THEN
+      THEN
+   LOOP ;
+
 \ -- entry points -------------------------------------------------------
 
 : PP-RESET ( -- )
@@ -662,7 +689,8 @@ DIRECTIVE  error   D-ERROR
    TOKS 262144 VEC-INIT   TOKS PPOUT !
    65536 NEW-VEC PPIN !
    PP-LEX-INCLUDE PP-PUSHV
-   PP-GO ;
+   PP-GO
+   RECLASSIFY ;
 
 \ The dump the differential compares: kind and value only. gcc -E and
 \ c4fc's own preprocessor agree on the TOKENS and cannot agree on the

@@ -260,13 +260,17 @@ VARIABLE T-ADJ  0 T-ADJ !                 \ consumed by the next TOK,
    POS @ TO s
    BEGIN CH ID? WHILE 1 POS +! REPEAT
    SRC @ s + TO a   POS @ s - TO u
-   a u KW-FIND DUP 0< 0= IF 0 0 TOK, EXIT THEN
-   DROP
+   \ In PPMODE every word is an Id: keywords do not exist yet. C
+   \ recognises them in a phase AFTER macro expansion, which is exactly
+   \ why `#define int long` is legal and why `#ifndef int` asks about a
+   \ macro rather than about a type. pp.f classifies them at the end.
    PPMODE @ IF
       a u S" include" BYTES2= IF 1 WANT-HDR ! THEN   \ arm the <...> scan
       CH 40 = IF 1 T-ADJ ! THEN                      \ '(' TOUCHES the name
+      Id a u TOK, EXIT
    THEN
-   Id a u TOK, ;
+   a u KW-FIND DUP 0< 0= IF 0 0 TOK, EXIT THEN
+   DROP  Id a u TOK, ;
 
 : T-NUM   Num SCAN-NUMBER 0 TOK, ;
 

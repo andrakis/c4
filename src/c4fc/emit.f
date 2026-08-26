@@ -56,7 +56,22 @@ VARIABLE DESS   VARIABLE DESN
 28 CONSTANT oDIV  29 CONSTANT oMOD
 30 CONSTANT oOPEN 31 CONSTANT oREAD 32 CONSTANT oCLOS 33 CONSTANT oPRTF
 34 CONSTANT oMALC 35 CONSTANT oFREE 36 CONSTANT oMSET 37 CONSTANT oMCMP
-38 CONSTANT oEXIT 63 CONSTANT oJMPA
+38 CONSTANT oEXIT
+\ The rest of c4's library and intrinsic opcodes. The list index IS the
+\ opcode number and it is mirrored in c4m.c, load-c4r.c, oisc4.c, c4cc.c
+\ and c4r.lisp, so these are appended and never inserted.
+39 CONSTANT oPUTC 40 CONSTANT oPUTS 41 CONSTANT oRALC 42 CONSTANT oMCPY
+43 CONSTANT oSTRC 44 CONSTANT oITH  45 CONSTANT o_OPC 46 CONSTANT o_BLT
+47 CONSTANT o_TRP 48 CONSTANT oOPCD 49 CONSTANT o_JMP 50 CONSTANT o_ADJ
+51 CONSTANT oC4CF 52 CONSTANT oC4CY 53 CONSTANT oTIME 54 CONSTANT oSIGH
+55 CONSTANT oSIGI 56 CONSTANT oUSLP 57 CONSTANT oINFO 58 CONSTANT oOPSL
+59 CONSTANT oC4IV 60 CONSTANT oFLT
+61 CONSTANT oJSRI 62 CONSTANT oJSRS 63 CONSTANT oJMPA
+\ c4mp only: the processor opcodes. c4m does not have these; a program
+\ that calls them must test __c4_info() & C4I_SMP first.
+66 CONSTANT oCPUI 67 CONSTANT oCPUN 68 CONSTANT oCPUS 69 CONSTANT oCPUH
+70 CONSTANT oCAS  71 CONSTANT oXCHG 72 CONSTANT oFADD 73 CONSTANT oCWAI
+74 CONSTANT oCWAK 75 CONSTANT oIPI  78 CONSTANT oTRAW
 
 : EMIT-INIT
    CMAX CELLS ALLOCATE CODE !      0 CN !
@@ -100,8 +115,11 @@ CREATE DSL DSMAX CELLS ALLOT   VARIABLE DSN   0 DSN !
 : IMMD, ( off -- ) {: off -- :}         \ IMM of a REGION 2 address
    oIMM OP,  -2 CHERE off PAT,  0 C,
    PN @ 1- DSL DSN @ CELLS + !  1 DSN +! ;
-: IMMI, ( off -- ) {: off -- :}         \ IMM of a REGION 1 address, final
-   oIMM OP,  -2 CHERE off PAT,  0 C, ;
+\ The operand form is shared by IMM and by JSRI: calling through a
+\ global function pointer takes the same data reference as loading it.
+: DOP, ( op off -- ) {: op off -- :}    \ a REGION 1 address, final
+   op OP,  -2 CHERE off PAT,  0 C, ;
+: IMMI, ( off -- )  oIMM SWAP DOP, ;
 : JSRC, ( target -- ) {: t -- :}        \ a call to a known function
    oJSR OP,  -1 CHERE t PAT,  t C, ;
 
@@ -111,14 +129,31 @@ CREATE DSL DSMAX CELLS ALLOT   VARIABLE DSN   0 DSN !
 \ and c4r.lisp walks the patch list against the instruction stream.
 1024 CONSTANT TABMAX
 CREATE TABD TABMAX CELLS ALLOT
-CREATE TABC TABMAX CELLS ALLOT
+CREATE TABC TABMAX CELLS ALLOT          \ the value
+CREATE TABB TABMAX CELLS ALLOT          \ 1 = the SLOT is in region 2
+CREATE TABT TABMAX CELLS ALLOT          \   2 = the VALUE is; +patch type
 VARIABLE TABN   0 TABN !
-: TABPAT, ( dataoff code -- )
-   TABN @ TABMAX < 0= IF ." c4fc: too many jump table entries" CR ABORT THEN
+\ Everything a DATA word can refer to. All three live in one list and in
+\ the order they were met, because that is one list in c4lc and the
+\ order is visible in the image.
+: (TABPAT) ( slot value flags type -- )
+   TABN @ TABMAX < 0= IF ." c4fc: too many data patches" CR ABORT THEN
+   TABT TABN @ CELLS + !   TABB TABN @ CELLS + !
    TABC TABN @ CELLS + !   TABD TABN @ CELLS + !   1 TABN +! ;
-: EMIT-TABPATS ( base -- )              \ jump tables live in region 2 too
-   TABN @ 0 ?DO DUP TABD I CELLS + @ +  TABC I CELLS + @  -3 ROT ROT PAT, LOOP
-   DROP ;
+\ a switch jump table: a region 2 slot holding a code address
+: TABPAT, ( slot code -- )   1 -3 (TABPAT) ;
+\ `int *fp = &fn;`: a region 1 slot holding a code address
+: FNPAT,  ( slot code -- )   0 -3 (TABPAT) ;
+\ `char *s = "...";`: a region 1 slot holding the address of a string
+\ that is ALSO in region 1 -- see ID-STR, below for why.
+: STRPAT, ( slot off -- )    0 -4 (TABPAT) ;
+: EMIT-TABPATS ( base -- ) {: b | f -- :}
+   TABN @ 0 ?DO
+      TABB I CELLS + @ TO f
+      TABD I CELLS + @  f 1 AND IF b + THEN
+      TABC I CELLS + @  f 2 AND IF b + THEN
+      TABT I CELLS + @  ROT ROT PAT,
+   LOOP ;
 
 \ A call to a function that has only been PROTOTYPED does not know where
 \ it will land, so every call to a user function is recorded and fixed
@@ -129,9 +164,15 @@ VARIABLE TABN   0 TABN !
 CREATE FWP FWMAX CELLS ALLOT
 CREATE FWS FWMAX CELLS ALLOT
 VARIABLE FWN   0 FWN !
-: JSRF, ( sym -- ) {: y -- :}
-   oJSR OP,  -1 CHERE 0 PAT,  0 C,
+\ A reference to a function by name, which may not have been compiled
+\ yet: the patch is recorded now with a placeholder and FIX-FORWARDS
+\ fills in the address once the whole unit is parsed. JSR calls it; IMM
+\ takes its address, and a threaded Forth's dictionary is nothing but a
+\ table of those.
+: FREF, ( op sym -- ) {: op y -- :}
+   op OP,  -1 CHERE 0 PAT,  0 C,
    PN @ 1- FWP FWN @ CELLS + !   y FWS FWN @ CELLS + !   1 FWN +! ;
+: JSRF, ( sym -- )  oJSR SWAP FREF, ;
 \ Branches carry a code patch exactly as calls do, so a forward branch
 \ has two things to fill in later -- the patch's value and the code word
 \ -- and what it carries around meanwhile is its PATCH index.
@@ -150,6 +191,14 @@ VARIABLE FWN   0 FWN !
 : ID-ALLOT ( n -- off )
    IDN @ 1 CELLS 1- + 1 CELLS 1- INVERT AND IDN !
    IDN @ SWAP IDN +! ;
+\ A string a GLOBAL INITIALISER needs is allocated here rather than with
+\ the other literals, because c4lc lays the data out in one pass over
+\ the declarations and the string is met while that global is: the
+\ pointer's own word comes AFTER the bytes it points at.
+: ID-STR, ( a u -- off ) {: a u | off -- off :}
+   u 1+ ID-ALLOT TO off
+   a  IDATA @ off +  u MOVE
+   off ;
 : ID-C! ( c off -- )  IDATA @ + C! ;
 : ID-! ( v off -- )   IDATA @ + ! ;
 
@@ -163,9 +212,10 @@ CREATE GPL GPMAX CELLS ALLOT   VARIABLE GPN   0 GPN !
       DSL I CELLS + @ 3 * CELLS PATCH @ + 2 CELLS + TO p
       p @ b + p !
    LOOP ;
-: IMMG, ( slot -- ) {: slot -- :}
-   oIMM OP,  -2 CHERE slot PAT,  0 C,
+: GOP, ( op slot -- ) {: op slot -- :}
+   op OP,  -2 CHERE slot PAT,  0 C,
    PN @ 1- GPL GPN @ CELLS + !  1 GPN +! ;
+: IMMG, ( slot -- )  oIMM SWAP GOP, ;
 
 \ -- data ---------------------------------------------------------------
 

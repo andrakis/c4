@@ -27,10 +27,23 @@
 \ until the end of the program.
 : GADDR, ( y -- ) {: y -- :}
    y y.ini @ IF y y.val @ IMMI, ELSE y y.val @ IMMG, THEN ;
+\ Calling through a POINTER, which is what a threaded Forth spends its
+\ life doing: JSRI through a global, JSRS through a frame slot. Only a
+\ name whose class is fun or ext is a JSR to a known address.
+: GJSRI, ( y -- ) {: y -- :}
+   y y.ini @ IF oJSRI y y.val @ DOP, ELSE oJSRI y y.val @ GOP, THEN ;
 :M GEN-ADDR n_gvar >sym @ GADDR, ;M
 :M GEN      n_gvar {: n | y -- :}
    n >sym @ TO y   y GADDR,
    y y.agg @ IF EXIT THEN   y y.ct @ LOAD, ;M
+
+:M GEN      n_fnref  >sym @ oIMM SWAP FREF, ;M
+:M GEN-ADDR n_fnref  >sym @ oIMM SWAP FREF, ;M
+:M CT       n_fnref  >sym @ y.ct @ ;M
+
+:M GEN      n_cast >expr @ GEN ;M
+:M GEN-ADDR n_cast >expr @ GEN-ADDR ;M
+:M CT       n_cast >ctype @ ;M
 
 :M CT n_num  DROP t_int ;M
 :M CT n_str  DROP 2 ;M                  \ char *
@@ -42,7 +55,7 @@
    n >op @ oSUB = lt T-PTR? AND IF
       n >rhs @ CT lt = IF t_int EXIT THEN  lt EXIT THEN
    t_int ;M
-:M CT n_call DROP t_int ;M
+:M CT n_call >fn @ y.ct @ ;M
 :M CT n_asgn >lhs @ CT ;M
 
 :M GEN n_asgn {: n -- :}
@@ -92,6 +105,13 @@
 \ push what it returned. The callee sees its fixed parameters plus one
 \ more -- which is why `int vsum(int n, ...)` finds n at bp+3 and not
 \ bp+2, and why the ... needs no prologue of its own.
+\ Every operand is evaluated, in order, and the value is the last one's
+\ -- so the type is the last one's too.
+:M CT n_comma {: n -- t :}  n >args @ n >argn @ 1- CELLS + @ CT ;M
+:M GEN n_comma {: n | v -- :}
+   n >args @ TO v
+   n >argn @ 0 ?DO I CELLS v + @ GEN LOOP ;M
+
 :M GEN n_call {: n | f k -- :}
    n >fn @ TO f
    n >argn @ TO k
@@ -106,11 +126,33 @@
       f y.nfix @ 1+ oADJ OP2,
       EXIT
    THEN
-   f y.class @ 2 = IF f y.val @ OP, ELSE f JSRF, THEN
+   f y.class @ c_builtin = IF f y.val @ OP, ELSE
+   f y.class @ c_glo     = IF f GJSRI, ELSE
+   f y.class @ c_loc     = IF f y.val @ oJSRS OP2, ELSE
+   f JSRF, THEN THEN THEN
    k ?DUP IF oADJ OP2, THEN ;M
 
+\ A scalar takes SI even when it is a char, which is what c4cc did and
+\ what c4lc kept; an array is stored element by element, the elements
+\ past the initialiser list zeroed.
+:M STMT n_linit {: n | y off v c s val -- :}
+   n >isym @ TO y   y y.val @ TO off
+   n >icount @ TO s
+   s 0< IF
+      off oLEA OP2,  oPSH OP,  n >expr @ GEN  oSI OP,  EXIT THEN
+   n >ivals @ TO v   n >ivn @ TO c
+   s 0 ?DO
+      I c < IF I CELLS v + @ ELSE 0 THEN TO val
+      n >ibyte @ IF
+         off oLEA OP2,  oPSH OP,  I oIMM OP2,  oADD OP,  oPSH OP,
+         val oIMM OP2,  oSC OP,
+      ELSE
+         off I + oLEA OP2,  oPSH OP,  val oIMM OP2,  oSI OP,
+      THEN
+   LOOP ;M
+
 :M STMT n_expst  >expr @ GEN ;M
-:M STMT n_ret    >expr @ GEN  oLEV OP, ;M
+:M STMT n_ret    >expr @ ?DUP IF GEN THEN  oLEV OP, ;M
 :M STMT n_blk {: n -- :}
    n >len @ 0 ?DO n >list @ I CELLS + @ STMT LOOP ;M
 

@@ -15,6 +15,14 @@ NODE: n_gvar   NFIELD: >sym                    ;NODE
 NODE: n_asgn   NFIELD: >lhs  NFIELD: >rhs      ;NODE
 NODE: n_bin    NFIELD: >lhs  NFIELD: >rhs  NFIELD: >op ;NODE
 NODE: n_call   NFIELD: >fn   NFIELD: >args NFIELD: >argn ;NODE
+\ (a, b, c) -- the comma operator, and only inside parentheses, which is
+\ where C puts it everywhere it is not a separator. va_arg is written
+\ with one, so the whole of stdarg.h needs it.
+\ >fn is unused and present so that >args and >argn keep n_call's
+\ offsets: the field names are shared deliberately (see dsl.f), so a
+\ kind that spells one differently silently rewrites it for every kind
+\ compiled after it.
+NODE: n_comma  NFIELD: >fn NFIELD: >args NFIELD: >argn ;NODE
 \ Unary operators. Each is one row here, one GEN method, and (where it
 \ can be assigned through) one GEN-ADDR.
 NODE: n_not    NFIELD: >opnd                   ;NODE
@@ -60,6 +68,20 @@ NODE: n_cont                                   ;NODE
 NODE: n_empty                                  ;NODE
 
 NODE: n_ret    NFIELD: >expr                   ;NODE
+\ A cast emits nothing and changes everything: (char *)p is the same
+\ address and a different type, and the type is what decides LC against
+\ LI, SC against SI, and whether p[i] scales by one or by eight.
+NODE: n_cast   NFIELD: >expr NFIELD: >ctype     ;NODE
+\ A function's name used as a value: its address. Not an lvalue, and no
+\ load follows it -- the same shape an array name has.
+NODE: n_fnref  NFIELD: >sym                    ;NODE
+\ A local's initialiser, which is CODE: it runs every time the block is
+\ entered, which is the whole difference between a local and a global
+\ and the reason two calls to the same function see fresh values.
+\ >icount is -1 for a scalar and the element count for an array; >ivn is
+\ how many values were actually supplied, the rest being zero.
+NODE: n_linit  NFIELD: >expr NFIELD: >isym NFIELD: >ivals
+               NFIELD: >ivn  NFIELD: >icount NFIELD: >ibyte ;NODE
 NODE: n_expst  NFIELD: >expr                   ;NODE
 NODE: n_blk    NFIELD: >list NFIELD: >len      ;NODE
 
@@ -72,3 +94,9 @@ GENERIC: CT                             \ an expression's C type
 \ only question codegen asks of a type is "is it char", because that is
 \ LC/SC against LI/SI, and it is asked of the lvalue.
 0 CONSTANT t_char   1 CONSTANT t_int
+
+\ Symbol classes. They live here rather than with the parser because gen
+\ reads them too: what a call compiles to -- an opcode, a JSR, a JSRI or
+\ a JSRS -- is decided entirely by the class of the name being called.
+0 CONSTANT c_glo   1 CONSTANT c_fun   2 CONSTANT c_builtin   3 CONSTANT c_loc
+4 CONSTANT c_const

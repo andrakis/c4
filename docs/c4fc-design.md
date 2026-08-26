@@ -496,8 +496,68 @@ The bar rises rung by rung and c4lc supplies it at every one.
       still shows. c4fc writes the post-optimisation address in both
       places; reproducing the staleness to win a `cmp` would have been
       copying a defect, which §"Risks" said the fallback exists for.
-- [ ] **F9** The closing loop. *Verify:* c4fc compiles `c4th.c`, and the
-      result passes the Forth-2012 CORE suite.
+- [x] **F9** The closing loop. *Verified:* c4fc preprocesses and compiles
+      `src/c4th/c4th.c` -- thirteen headers, thirty thousand tokens --
+      into an image **byte-identical to c4lc's**, and the c4th that comes
+      out passes the Forth-2012 CORE suite with a transcript identical
+      to the pinned golden. *The Forth compiles the C compiler that
+      compiles the Forth.*
+
+      **The loop is a test that writes its own bug list.** Every rung
+      before this one was verified against programs written to exercise
+      the rung. c4th.c was written to be a Forth, and it named eight
+      constructs the spikes had never used, in the order it met them:
+
+      - **`int *is, *id;`** -- stars belong to the DECLARATOR, not to
+        the base type. Parsing them with the type made the second
+        declarator inherit the first's, so `int *a, b` declared two
+        pointers. The same bug was in struct members and in globals.
+      - **`return;`** with no value, which is what a `void` function
+        does and is a `LEV` with nothing computed before it.
+      - **the comma operator**, because `va_arg` is written with one,
+        which means the whole of `stdarg.h` needs it.
+      - **`(char *)p` as a type, not as nothing.** A cast emits no code
+        and changes everything: it is what decides `LC` against `LI`
+        and whether `p[i]` scales by one or by eight. Skipping the type
+        was the F5 lesson arriving a second time.
+      - **calling through a pointer** -- `JSRI` through a global,
+        `JSRS` through a frame slot. What a call compiles to is decided
+        entirely by the CLASS of the name being called, which is why
+        those constants moved out of the parser and into `ast.f`.
+      - **a function's name as a value**, which is `IMM <code address>`
+        and not the `LEA` a variable would get. A threaded Forth's
+        dictionary is a table of those, so there were 156 of them.
+      - **local initialisers**, which are CODE: they run every time the
+        block is entered, which is the whole difference between a local
+        and a global.
+      - **`char *s = "...";`** at file scope, where the string's bytes
+        are laid down BEFORE the pointer's own word, because c4lc lays
+        the data out in one pass over the declarations and meets the
+        string while it is meeting that global.
+
+      And `sizeof(name)`, which is answered from the symbol's byte size
+      and so needed initialised arrays to record one.
+
+      Along the way the preprocessor lost a wart. C recognises keywords
+      in a phase AFTER macro expansion, which is why `#define int long`
+      is legal and `#ifndef int` asks about a macro rather than about a
+      type. So PPMODE now lexes every word as an `Id` and `pp.f`
+      classifies them at the end -- which deleted the special case that
+      mapped `If` and `Else` back to text for `#if` and `#else`, and
+      made `src/tests/c4_jailbreak.c` compile through c4fc's own
+      preprocessor rather than only through gcc's.
+
+      The differential that found all of this is now the test:
+      **nineteen whole programs preprocessed AND compiled by c4fc,
+      byte-identical to c4lc handed the same source through `gcc -E`**
+      -- `tests.c`, `global.c` and `c4lc_l2.c` among them.
+
+      One number, since the premise that started this was speed:
+      **c4fc compiles `c4th.c` in 0.5 s where c4lc takes 2.6 s**, both
+      including their own preprocessing. That is not why to do this and
+      it does not change the Track A case -- `gcc -O2` remains the
+      ceiling -- but a compiler inside the machine that is not slower
+      than the one outside it is worth writing down.
 
 ## Risks, and one thing deliberately left out
 

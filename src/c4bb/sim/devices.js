@@ -56,7 +56,15 @@ export const OPNAMES =
   'OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,EXIT,' +
   'PUTC,PUTS,RALC,MCPY,STRC,ITH ,_OPC,_BLT,_TRP,OPCD,' +
   '_JMP,_ADJ,C4CF,C4CY,TIME,SIGH,SIGI,USLP,INFO,OPSL,' +
-  'C4IV,FLT ,JSRI,JSRS,JMPA,TLEV,DBG ,';
+  'C4IV,FLT ,JSRI,JSRS,JMPA,TLEV,DBG ,' +
+  // c4mp's (66-78), named so a disassembler names them; this board does
+  // not execute them, exactly as c4m names them without executing them.
+  'CPUI,CPUN,CPUS,CPUH,' +
+  'CAS ,XCHG,FADD,CWAI,CWAK,IPI ,' +
+  'LXI ,SXI ,TRAW,' +
+  // fused (79-88), docs/fused-opcodes.md. LDL, STL and POPA are real
+  // here (hw/microcode.uc); the other seven are c4mp's and named only.
+  'LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,';
 
 // Disk controller fd space: 0 is the blocking, line-buffered keyboard
 // (a terminal in cooked mode); opening "/dev/stdin" with O_NONBLOCK

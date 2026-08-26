@@ -19,7 +19,21 @@ export const REG_NAMES = ['PC', 'SP', 'BP', 'A', 'IR', 'OPR', 'MAR', 'MDR', 'B',
 // Opcode numbers (c4m.c:261)
 export const OP = {};
 OPNAMES.match(/.{5}/g).forEach((n, i) => { OP[n.slice(0, 4).trim()] = i; });
-export const INS_SIZE = 66;
+// 89, not 66: the opcode ROM now names c4mp's 66-78 and the fused
+// 79-88 as well. Naming is not implementing -- an opcode with no
+// microcode has dispatchTab[-1] and misses its trap exactly as an
+// unknown one did before. What changes is that the board can EXECUTE
+// LDL/STL/POPA and NAME the rest (docs/fused-opcodes.md).
+export const INS_SIZE = 89;
+
+// The single place that decides which opcodes carry an operand word,
+// mirroring c4m_has_operand (c4m.c:344) exactly -- including JSRI and
+// JSRS, which this board's OPCD guard used to miss.
+export function hasOperand (ir) {
+  return ir <= OP.ADJ || ir === OP.JSRI || ir === OP.JSRS
+      || (ir >= OP.LDL && ir <= OP.IMMP)   // LIP, ADDL and POPA take none
+      || ir === OP.STL;
+}
 
 const TRAP_NAMES = ['TRAP_ILLOP', 'TRAP_HARD_IRQ', 'TRAP_SOFT_IRQ', 'TRAP_SIGNAL',
                     'TRAP_SEGV', 'TRAP_OPV', 'TRAP_PM_VIOLATION', 'TRAP_DEBUG'];
@@ -251,7 +265,7 @@ export class Machine {
     // re-dispatched; complain, raise (missed) OPV, execute C4CY.
     // Detect "came from OPCD" by the current step's scope.
     const step = this.ucode.steps[this.upc];
-    if (step.scope === 'OPCD' && ir <= OP.ADJ) {
+    if (step.scope === 'OPCD' && hasOperand(ir)) {
       const name = i => OPNAMES.slice(i * 5, i * 5 + 4);
       this.printVm(`${name(OP.OPCD)} does not support opcodes requiring arguments (${name(ir)} given)\n`);
       const t = this.jamTrap(5 /* TRAP_OPV */, ir, this.trapHandler,

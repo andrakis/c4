@@ -25,6 +25,21 @@ for t in factorial test_basic test_malloc test_static tests multifun \
     $CC -o $OUT/$t.c4r $U0 src/tests/$t.c > /dev/null
 done
 
+# ---- the fused opcodes (79-88) --------------------------------------
+# c4bb executes all ten (hw/microcode.uc), so it can run the differential
+# c4th's assembler was written for: every fused opcode against the exact
+# instruction sequence it replaces, both hand-assembled into tiny
+# functions and called. On the host that runs under c4mp, because c4m
+# implements only three of them.
+FUSEDISK=$OUT/fused
+mkdir -p $FUSEDISK
+cp src/c4th/forth/core.f src/c4th/forth/asm.f src/c4th/tests/fused.f $FUSEDISK/
+cp c4th32.c4r $FUSEDISK/c4th32.c4r
+# A fused image, for the lockstep and same-answers checks: identical
+# program, fewer instructions, and it must still agree with its unfused
+# twin step for step between the two engines.
+./c4sp32 src/c4sp/lisp/c4opt-run.lisp -mfuse $OUT/factorial.c4r $OUT/factorial-fused.c4r > /dev/null
+
 # c4bb's own trap-machinery tests (src/tests/test_customop predates
 # TLEV/DBG and uses colliding opcode numbers, so it cannot be used)
 for t in bb_customop bb_preempt bb_pm; do
@@ -229,7 +244,16 @@ cp $OUT/c4ix32.c4r $DISK/c4ix.c4r
 # The toolchain, as machine-loadable images. c4/c4m/c4cc/c4rlink/
 # c4rdump are copied by the BIN_ALL loop above; these two were only
 # ever host binaries.
-$PREPROC src/c4sp/c4sp.c | $CC -o $DISK/c4sp.c4r - > /dev/null
+# c4sp is the compiler's host, so it is the one image on this disk worth
+# building the expensive way: c4lc -O rather than c4cc (A1.5), and -mfuse
+# because THIS MACHINE HAS ALL TEN FUSED OPCODES and nothing else that
+# reads this disk does. Measured on a real C4IX module, c4lc -R -O -c:
+# 1,646,519,810 instructions unfused against 888,446,891 fused, 81.20s
+# against 51.84s. The image is smaller too, 124,361 -> 105,864 bytes.
+# docs/fused-opcodes.md F7.
+$PREPROC src/c4sp/c4sp.c > .c4bb_c4sp_pp.c
+./c4sp32 -R src/c4sp/lisp/c4lc.lisp -O -mfuse .c4bb_c4sp_pp.c $DISK/c4sp.c4r > /dev/null
+rm -f .c4bb_c4sp_pp.c
 $CC -o $DISK/cpp.c4r include/c4dos.h src/c4dos/cpp.c > /dev/null
 
 # c4lc is not an image at all -- it is Lisp that c4sp reads at runtime,

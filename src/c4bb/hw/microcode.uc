@@ -547,3 +547,84 @@ op _TRP: jsop
 op DBG: jsop
 op C4IV: jsop
 op FLT: jsop
+
+# ---- fused (79-88): docs/fused-opcodes.md -----------------------------
+#
+# The board implements the same THREE c4m implements -- LDL, STL, POPA.
+# They are what a stack-machine code generator needs to treat the frame
+# as registers, and they cost no new circuitry: every transfer below is
+# one the board already performs elsewhere. LDL is LEA's address sum
+# with the result going to MAR instead of A; STL is that plus the write
+# PSH already does; POPA is LEV's pop without the destination.
+#
+# The other seven (LDG PSHL PSHG LEAP IMMP LIP ADDL) are c4mp's by the
+# c4m/c4mp split, and they are here too -- because on a board the split
+# is about MICROSTEPS, not about which VM binary you run, and these
+# seven need no new circuitry either. They are also where the compiler
+# win lives: PSHL alone is 17.2% of what `c4sp -R` executes running
+# c4lc, against LDL's 3.2% (docs/fused-opcodes.md). c4mp's OTHER
+# extension -- CPUI..TRAW at 66-78 -- is a genuinely bigger job (more
+# than one CPU on the board) and buys no speed, so it is not here.
+
+op LDL operand:                 # a = *(bp+n)     was: LEA n; LI
+    OPR_OUTX4 B_IN
+    BP_OUT T_IN
+    ALU=ADD ALU_RT ALU_OUT MAR_IN
+    MEM_RD MDR_OUT A_IN
+
+op STL operand:                 # *(bp+n) = a     was: LEA n; PSH; ...; SI
+    OPR_OUTX4 B_IN
+    BP_OUT T_IN
+    ALU=ADD ALU_RT ALU_OUT MAR_IN
+    A_OUT MDR_IN MEM_WR
+
+op POPA:                        # a = *sp++       was: IMM 0; ADD
+    SP_OUT MAR_IN
+    MEM_RD MDR_OUT A_IN SP_INC
+
+op LDG operand:                 # a = *(int*)n    was: IMM n; LI
+    OPR_OUT MAR_IN
+    MEM_RD MDR_OUT A_IN
+
+op PSHL operand:                # a = *(bp+n); push    was: LEA n; LI; PSH
+    OPR_OUTX4 B_IN
+    BP_OUT T_IN
+    ALU=ADD ALU_RT ALU_OUT MAR_IN
+    MEM_RD MDR_OUT A_IN
+    SP_DEC
+    SP_OUT MAR_IN
+    A_OUT MDR_IN MEM_WR
+
+op PSHG operand:                # a = *(int*)n; push   was: IMM n; LI; PSH
+    OPR_OUT MAR_IN
+    MEM_RD MDR_OUT A_IN
+    SP_DEC
+    SP_OUT MAR_IN
+    A_OUT MDR_IN MEM_WR
+
+op LEAP operand:                # a = bp+n; push       was: LEA n; PSH
+    OPR_OUTX4 B_IN
+    BP_OUT T_IN
+    ALU=ADD ALU_RT ALU_OUT A_IN
+    SP_DEC
+    SP_OUT MAR_IN
+    A_OUT MDR_IN MEM_WR
+
+op IMMP operand:                # a = n; push          was: IMM n; PSH
+    OPR_OUT A_IN
+    SP_DEC
+    SP_OUT MAR_IN
+    A_OUT MDR_IN MEM_WR
+
+op LIP:                         # a = *(int*)a; push   was: LI; PSH
+    A_OUT MAR_IN
+    MEM_RD MDR_OUT A_IN
+    SP_DEC
+    SP_OUT MAR_IN
+    A_OUT MDR_IN MEM_WR
+
+op ADDL:                        # a = *(int*)(*sp++ + a)   was: ADD; LI
+    SP_OUT MAR_IN
+    MEM_RD MDR_OUT B_IN SP_INC
+    ALU=ADD ALU_OUT MAR_IN
+    MEM_RD MDR_OUT A_IN

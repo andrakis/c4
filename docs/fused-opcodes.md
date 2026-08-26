@@ -237,24 +237,63 @@ decision to turn the flag on by default rather than precede it.
       Plus a wider differential: the fused `c4sp.c4r` reproduces the
       native `c4sp` output for **all 27** files in `src/c4sp/lisp/`.
 
-- [ ] **F7** **c4bb.** The board has none of this: `INS_SIZE` is 66, so
-      it lacks c4mp's `CPUI..TRAW` (66-78) as well as these ten (79-88),
-      and every number in F6 is therefore unavailable to the one machine
-      the whole ladder is aimed at. This is where the win now sits, and
-      `docs/compiler-on-the-board.md` records why it matters: with `-R`
-      banked, C4IX takes about 57 minutes to build inside c4bb, and
-      −37.5% on what `c4sp -R` executes takes that to about 36.
+- [x] **F7** **c4bb executes all ten.** The board had none of them and
+      `INS_SIZE` was 66, so every number in F6 was unavailable to the one
+      machine the ladder is aimed at. Now:
 
-      In HOMEWARD this is not a chore, it is a rung: booting C4DOS earns
-      the c4m opcodes, reaching C4KE earns c4mp's, and the fused set is
-      what makes building C4IX bearable. The player makes their own
-      machine faster and the compiler they already have gets quicker.
+      * `hw/microcode.uc` gains ten routines, **43 microsteps**
+        (372 → 415 across 65 → 75 opcodes). **No new circuitry**: every
+        transfer is one the board already performed. `LDL` is `LEA`'s
+        address sum with the result going to `MAR` instead of `A`; `STL`
+        is that plus the write `PSH` already does; `POPA` is `LEV`'s pop
+        without the destination; the other seven are concatenations of
+        the same.
+      * `sim/devices.js` names 66-88 in the opcode ROM (c4mp's 66-78 as
+        well, named but not executed, exactly as `c4m` names them);
+        `sim/machine.js` bumps `INS_SIZE` to 89 and grows a `hasOperand`
+        that mirrors `c4m_has_operand` — **which fixes an existing gap**,
+        since the board's `OPCD` guard was `ir <= ADJ` and so missed
+        `JSRI`/`JSRS` too.
+      * **What did NOT go in**: c4mp's `CPUI..TRAW` (66-78). On a board
+        the c4m/c4mp split is about microsteps, not about which binary
+        you run, and those thirteen need more than one CPU while buying
+        no speed. The seven "c4mp" fused ones are pure microcode and are
+        where the compiler win lives, so they are here.
 
-      Order: the base three (`LDL`/`STL`/`POPA`, ~12 microsteps) first,
-      since c4m already executes them and `c4th`'s backend already emits
-      them; then c4mp's 66-78; then the remaining seven. Bar at each
-      step: c4bb's lockstep test (step engine == turbo engine) and
-      `test-c4bb.sh` against native c4m.
+      **Verified**, `make test-c4bb`:
+
+          test-c4bb: fused all ten OK
+          test-c4bb: fused image OK (same answers, 4769 -> 4457 instructions)
+          test-c4bb: lockstep-factorial-fused OK
+
+      The first line is `src/c4th/tests/fused.f` — each opcode
+      hand-assembled into a tiny function, its unfused twin into
+      another, both called, answers compared — run on the board with
+      **0 mismatches and 0 missed traps**. That last number is the
+      proof the microcode is real: on the board as it was, the same
+      program took **25,141,893 missed traps** and produced garbage.
+      The lockstep line is the step engine against the turbo engine on
+      a fused image, which is what stops the two from disagreeing about
+      microcode written today.
+
+      **What it was for**, `c4lc -R -O -c` on a real C4IX module,
+      measured on c4bb:
+
+      | | instructions | wall |
+      |---|---:|---:|
+      | unfused | 1,646,519,810 | 81.20 s |
+      | **fused** | **888,446,891** | **51.84 s** |
+      | | **−46.0%** | **1.57x** |
+
+      Better than F6's −37.5%, which was the lexer alone; a full `-O -c`
+      compile has more of these shapes in it. The image shrinks too,
+      124,361 → 105,864 bytes (−14.9%).
+
+      So `src/c4bb/tests/build-images.sh` now builds the **disk's**
+      `c4sp.c4r` with `c4lc -O -mfuse` instead of `c4cc` — this is the
+      one machine that has all ten, and nothing else reads that disk.
+      A twelve-module C4IX build inside c4bb goes from about 57 minutes
+      to about **31**.
 
 - [x] **F6** What it was all for.
 

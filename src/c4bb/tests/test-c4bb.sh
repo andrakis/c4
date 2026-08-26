@@ -174,8 +174,41 @@ else
     fail=1
 fi
 
+# ---- the fused opcodes (79-88) --------------------------------------
+# The board executes all ten. This is the differential c4th's assembler
+# was written for: each fused opcode hand-assembled into a tiny
+# function, its unfused twin into another, both called, answers
+# compared. On the host it runs under c4mp because c4m has only three.
+# "0 missed traps" is half the point -- before the microcode existed,
+# this program took 25 million of them.
+fused_out=$($C4BB -s -m 96 -d $IMAGES/fused $IMAGES/fused/c4th32.c4r \
+                  core.f asm.f fused.f 2>&1)
+if echo "$fused_out" | grep -q "fused: 0 mismatches" &&
+   [ "$(echo "$fused_out" | grep -c ' ok$')" = "10" ] &&
+   echo "$fused_out" | grep -q "0 missed traps"; then
+    echo "test-c4bb: fused all ten OK"
+else
+    echo "test-c4bb: fused FAILED"
+    echo "$fused_out" | tail -5
+    fail=1
+fi
+
+# A fused image against its unfused twin: same answers, fewer
+# instructions. Both numbers matter -- equal output alone would pass if
+# the fuse pass had done nothing.
+plain_out=$($C4BB -s $IMAGES/factorial.c4r 2>&1)
+fuse_out=$($C4BB -s $IMAGES/factorial-fused.c4r 2>&1)
+plain_n=$(echo "$plain_out" | sed -n 's/^c4bb: \([0-9]*\) cycles.*/\1/p')
+fuse_n=$(echo "$fuse_out" | sed -n 's/^c4bb: \([0-9]*\) cycles.*/\1/p')
+if [ "$(echo "$plain_out" | grep -v '^c4bb:')" = "$(echo "$fuse_out" | grep -v '^c4bb:')" ] &&
+   [ -n "$fuse_n" ] && [ "$fuse_n" -lt "$plain_n" ]; then
+    echo "test-c4bb: fused image OK (same answers, $plain_n -> $fuse_n instructions)"
+else
+    echo "test-c4bb: fused image FAILED ($plain_n vs $fuse_n)"; fail=1
+fi
+
 # step engine vs turbo engine: register-level lockstep
-for t in hello32 tests factorial; do
+for t in hello32 tests factorial factorial-fused; do
     if node src/c4bb/tools/lockstep.js $IMAGES/$t.c4r >/dev/null 2>&1; then
         echo "test-c4bb: lockstep-$t OK"
     else

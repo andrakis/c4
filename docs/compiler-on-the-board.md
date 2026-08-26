@@ -266,12 +266,11 @@ compiles the same step tables.
 |---|---|
 | in-machine, as it was (no `-R`) | ~2.5 hours |
 | in-machine, with `-R` — **today** | **~57 minutes** |
-| with the fused opcodes on the board | ~36 minutes |
+| with the fused opcodes on the board — **today** | **~31 minutes** |
 | with the Lisp *compiled* rather than interpreted | minutes |
 
-The first two rows are banked. The third is a real project with a
-measured payoff and a design already written. The fourth is the one that
-reaches "minutes", and `docs/compiler-speed.md` sizes it: ~41% eval
+The first three rows are banked. The fourth is the one that reaches
+"minutes", and `docs/compiler-speed.md` sizes it: ~41% eval
 dispatch plus ~25% environments plus ~9% builtin dispatch is work that
 compiling removes outright, which is where its 10-30x comes from. None
 of the three touches c4cc, and all three keep C4IX a thing you build
@@ -500,10 +499,16 @@ read `struct vnode {`.
 - [x] **M9** `-R` in the in-machine c4lc invocations (`test_ramcc.c`,
       `test_ixbuild.c`) — 2.83x on the board, `make test-c4lc` and
       `make test-c4ke-ramfs` green.
-- [ ] **M10** c4bb grows opcodes: c4mp's 66-78, then the fused 79-88.
-      `docs/fused-opcodes.md` has the design and the cost; the bar is
-      c4bb's lockstep test plus `test-c4bb.sh` against native c4m, then
-      `c4sp32.c4r` rebuilt with `-mfuse` and the C4IX module re-timed.
+- [x] **M10** c4bb executes all ten fused opcodes (F7 in
+      `docs/fused-opcodes.md`). 43 microsteps, no new circuitry, and
+      `c4lc -R -O -c` on a C4IX module goes 1,646,519,810 → 888,446,891
+      instructions, 81.20 s → 51.84 s (**−46.0%, 1.57x**). The board's
+      own `c4sp.c4r` is now built `c4lc -O -mfuse`. C4IX inside c4bb:
+      about 57 minutes → about **31**.
+
+      Deliberately not done: c4mp's `CPUI..TRAW` (66-78). Those need
+      more than one CPU on the board and buy no compile speed; the seven
+      "c4mp" *fused* opcodes are pure microcode, so they went in.
 - [ ] **M11** Compiling the Lisp instead of interpreting it — the only
       step that reaches "minutes". Not started, not scoped.
 - [~] **REJECTED** L7 in c4cc. See above: it collapses the C4KE rung and

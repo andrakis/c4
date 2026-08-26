@@ -329,6 +329,17 @@ define c4tar_build
 endef
 
 # prerequisites are the SOURCE halves of the pairs, not the names
+# The compiler's own source, so the machine can rebuild the toolchain
+# before it builds anything else -- LADDER.BAT, docs/compiler-on-the-board.md.
+# Flat names: c4cc has no preprocessor and skips '#' lines, so nothing
+# here needs its directory back.
+C4TOOLS_KIT := include/c4dos.h:c4dos.h load-c4r.c:load-c4r.c \
+               $(SRCS)/c4cc/c4cc.c:c4cc.c $(SRCS)/c4cc/asm-c4r.c:asm-c4r.c \
+               $(SRCS)/c4dos/cpp.c:cpp.c
+C4TOOLS_KIT_SRCS := $(foreach p,$(C4TOOLS_KIT),$(firstword $(subst :, ,$(p))))
+tools-src.tar: $(C4TOOLS_KIT_SRCS)
+	$(call c4tar_build,tools-src.tar,$(C4TOOLS_KIT))
+
 C4KE_KIT_SRCS := $(foreach p,$(C4KE_KIT),$(firstword $(subst :, ,$(p))))
 c4ke-src.tar: $(C4KE_KIT_SRCS)
 	$(call c4tar_build,c4ke-src.tar,$(C4KE_KIT))
@@ -395,12 +406,14 @@ $(C4DOS_DISK32): hello32.c4r raycast-dos32.c4r \
 # API -- see docs/c4dos-design.md.
 C4DOS_BUILD_DISK := c4dos-build
 $(C4DOS_BUILD_DISK): c4dos-clock.c4r dostar.c4r cpp.c4r c4cc.c4r c4ke-src.tar dosload.c4r \
+                     tools-src.tar $(SRCS)/c4dos/fs/LADDER.BAT \
                      $(INIT) $(C4SH) $(VFS) $(SRCS)/c4dos/fs/BUILD.BAT
 	@mkdir -p $(C4DOS_BUILD_DISK)
 	@sed 's/SIZE=[0-9]*/SIZE=16777216/' $(SRCS)/c4dos/fs/CONFIG.SYS > $(C4DOS_BUILD_DISK)/config.sys
 	@cp $(SRCS)/c4dos/fs/AUTOEXEC.BAT $(C4DOS_BUILD_DISK)/autoexec.bat
 	@cp $(SRCS)/c4dos/fs/BUILD.BAT    $(C4DOS_BUILD_DISK)/build.bat
-	@cp dostar.c4r cpp.c4r c4cc.c4r c4ke-src.tar dosload.c4r $(C4DOS_BUILD_DISK)/
+	@cp $(SRCS)/c4dos/fs/LADDER.BAT   $(C4DOS_BUILD_DISK)/ladder.bat
+	@cp dostar.c4r cpp.c4r c4cc.c4r c4ke-src.tar dosload.c4r tools-src.tar $(C4DOS_BUILD_DISK)/
 	@cp $(INIT) $(C4SH) $(VFS) $(C4DOS_BUILD_DISK)/
 	@cp c4ke.vfs.txt $(C4DOS_BUILD_DISK)/ 2>/dev/null || true
 	@cd $(C4DOS_BUILD_DISK) && ls -p | grep -v '/$$' > c4dos.dir
@@ -421,12 +434,14 @@ run-c4dos-build: $(C4M) c4dos-clock.c4r $(C4DOS_BUILD_DISK)
 C4DOS_BUILD_DISK32 := c4dos-build32
 $(C4DOS_BUILD_DISK32): c4dos32.c4r dostar32.c4r cpp32.c4r c4cc32.c4r c4ke-src.tar \
                        dosload32.c4r init32.c4r c4sh32.c4r c4ke.vfs32.c4r \
+                       tools-src.tar $(SRCS)/c4dos/fs/LADDER.BAT \
                        $(SRCS)/c4dos/fs/BUILD.BAT
 	@mkdir -p $(C4DOS_BUILD_DISK32)
 	@sed 's/SIZE=[0-9]*/SIZE=16777216/' $(SRCS)/c4dos/fs/CONFIG.SYS > $(C4DOS_BUILD_DISK32)/config.sys
 	@cp $(SRCS)/c4dos/fs/AUTOEXEC.BAT $(C4DOS_BUILD_DISK32)/autoexec.bat
 	@cp $(SRCS)/c4dos/fs/BUILD.BAT    $(C4DOS_BUILD_DISK32)/build.bat
-	@cp c4ke-src.tar                  $(C4DOS_BUILD_DISK32)/
+	@cp $(SRCS)/c4dos/fs/LADDER.BAT   $(C4DOS_BUILD_DISK32)/ladder.bat
+	@cp c4ke-src.tar tools-src.tar    $(C4DOS_BUILD_DISK32)/
 	@cp dostar32.c4r   $(C4DOS_BUILD_DISK32)/dostar.c4r
 	@cp cpp32.c4r      $(C4DOS_BUILD_DISK32)/cpp.c4r
 	@cp c4cc32.c4r     $(C4DOS_BUILD_DISK32)/c4cc.c4r
@@ -458,6 +473,26 @@ test-c4dos-build32: c4dos32.c4r $(C4DOS_BUILD_DISK32)
 	@grep -o "c4bb: [0-9]* cycles in [0-9.]*s" .c4dos_b32.log
 	@rm -f .c4dos_b32.log
 	@echo "test-c4dos-build32: OK"
+
+# LADDER.BAT: the machine rebuilding its own toolchain before it builds
+# anything with it. The two checks that matter are the fixed point (the
+# compiler c4cc2 builds of itself is the same size as c4cc2) and the
+# kernel byte count matching the one the SHIPPED tools produce -- if a
+# self-built compiler drifted, the kernel would be the first place it
+# showed. Then it boots what it built and shuts down cleanly.
+test-c4dos-ladder32: c4dos32.c4r $(C4DOS_BUILD_DISK32)
+	printf 'LADDER\nRUN dosload.c4r c4ke.c4r\n\\q\n' \
+	  | node src/c4bb/sim/cli.js -s -m 224 -d $(C4DOS_BUILD_DISK32) c4dos32.c4r \
+	  > .c4dos_l32.log 2>&1
+	grep -q "wrote 213438 bytes to ram:c4cc2.c4r" .c4dos_l32.log
+	grep -q "wrote 213438 bytes to ram:c4cc3.c4r" .c4dos_l32.log
+	grep -q "wrote 71846 bytes to ram:cpp2.c4r"   .c4dos_l32.log
+	grep -q "wrote 187771 bytes to ram:c4ke.c4r"  .c4dos_l32.log
+	grep -q "C4SH - The C4 SHell" .c4dos_l32.log
+	grep -q "clean shutdown" .c4dos_l32.log
+	@grep -o "c4bb: [0-9]* cycles in [0-9.]*s" .c4dos_l32.log
+	@rm -f .c4dos_l32.log
+	@echo "test-c4dos-ladder32: OK"
 
 # c4cc's for statement. It had never worked -- see src/tests/test_for.c
 # -- so this pins it against gcc's output for the same program, which is
@@ -2071,6 +2106,7 @@ c4rs: pre
 PHONY  = pre all clean-c4rs clean
 PHONY += test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
 PHONY += run-c4dos-build32 test-c4dos-build32 test-c4cc-for
+PHONY += test-c4dos-ladder32
 PHONY += run run-vg test test-massive
 PHONY += run-alt run-alt-vg test-alt test-massive-alt
 PHONY += run-c4 run-c4-vg test-c4 test-massive-c4

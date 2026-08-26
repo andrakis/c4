@@ -222,6 +222,92 @@ loops currently" in its second line. That is why five years of tests
 never touched it. It matters now because a person writing C at the C4DOS
 prompt will type one within a minute.
 
+## The ladder, as it now runs in the machine
+
+HOMEWARD's premise (`docs/homeward-ladder.md`) is that the player climbs
+from transistors to C4IX. The software half of that climb should be
+*earned* — each rung built by the rung below it, not handed over
+preinstalled. `LADDER.BAT` on the build floppy is that climb, and on
+2026-08-26 the breadboard ran all of it:
+
+| | rung | evidence |
+|---|---|---|
+| 1 | the seed compiler builds **a compiler** | `wrote 213438 bytes to ram:c4cc2.c4r` |
+| 2 | that compiler builds **the preprocessor** | `wrote 71846 bytes to ram:cpp2.c4r` |
+| 3 | and **builds itself again** | `wrote 213438 bytes to ram:c4cc3.c4r` — same size: the fixed point |
+| 4 | the new tools build **the kernel** | `wrote 187771 bytes to ram:c4ke.c4r` — the same byte count the shipped tools produce |
+| 5 | and **the init process** | `wrote 61911 bytes to ram:init.c4r` |
+| 6 | the machine **boots what it built** | `C4SH - The C4 SHell`, then `clean shutdown` |
+
+    c4bb: 666752554 cycles in 31.49s
+
+**Thirty-one seconds**, and every image after rung 1 was made by an image
+this machine compiled. `make test-c4dos-ladder32` pins it — including the
+two numbers that would move first if a self-built compiler ever drifted.
+
+## Why B4KE has to exist, and it is not a convenience
+
+C4DOS parses a command line into at most **fifteen tokens including the
+verb** (`ARGVMAX = 16`, and `parse_line` stops at `argc < ARGVMAX - 1`).
+Demonstrated on the board rather than read off the source — fifteen
+arguments handed to a program that prints its own `argv`:
+
+    A>RUN args.c4r a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15
+    Arg count: 14
+    ...
+    At 13: a13
+
+`a14` and `a15` are gone, silently. Now count the sentence that links
+C4IX:
+
+    RUN c4rlink.c4r boot.c4o console.c4o va.c4o host.c4o sl4b.c4o
+        task.c4o sched.c4o vfs.c4o sys.c4o c4ke.c4o loader.c4o
+        init.c4o -o c4ix.c4r
+
+That is sixteen tokens. **The machine cannot say the sentence that
+links its own operating system.** A build tool that reads a file instead
+of a command line is therefore not a quality-of-life feature; it is the
+only way the sentence gets said. That is B4KE's reason to exist, it is
+demonstrable in-game, and it is the same wall DOS linkers hit and
+answered with response files.
+
+The kernel rung does not hit that wall, which is why C4KE builds today
+and C4IX does not. So the ladder's shape is forced and it is exactly the
+one the narrative wants:
+
+    C4DOS -> toolchain -> C4KE -> [B4KE + L7] -> C4IX
+
+## B4KE — what is decided and what is not
+
+**Decided by measurement:**
+
+- **It is needed for C4IX and not for C4KE.** See above.
+- **It cannot do timestamps under C4DOS.** The RAM disk keeps name,
+  data, length and capacity per slot and nothing else (`c4dos.c:102-108`)
+  — there are no modification times to compare, clock device or not. So
+  B4KE's dependency rule is *presence plus declared order*, not `make`'s
+  newer-than. Under C4KE it could do better; it should not, until both
+  hosts can.
+- **Under C4KE the ground is already proven.** `test_ramlink` compiles,
+  links and runs a program entirely in the RAM filesystem, and
+  `test_ixbuild` takes a real C4IX module through c4lc to an object and
+  reads it back with c4rlink. What is missing is the driver, not the
+  plumbing.
+
+**Open, and genuinely a choice:**
+
+1. **How B4KE runs a step under C4DOS.** The API table has fifteen of
+   thirty-two slots used and no spawn. Either B4KE writes a `.BAT` and
+   lets C4DOS run it (`run_batch` already nests four deep, zero API
+   change), or C4DOS gains a `SPAWN` slot at v3 and B4KE stays in
+   control of failures and output.
+2. **How the sixteen-token wall gets crossed.** Either the tools learn
+   response files — `c4rlink @objs.txt`, about twenty lines, and exactly
+   what a DOS linker did — or `ARGVMAX` goes up and the wall stops being
+   part of the story.
+
+Neither is decidable from measurement; both change what gets built.
+
 ## Milestones
 
 - [x] **M0** This tracker, with the measurements above, before any code.
@@ -257,7 +343,11 @@ prompt will type one within a minute.
       operating system**, which is the whole point of the exercise.
 - [x] **M6** `for` in c4cc: fixed, rewritten, and pinned against gcc by
       `make test-c4cc-for` / `src/tests/test_for.c`.
-- [ ] **M7** L7 in c4cc — `struct`, `union`, `typedef`, `.`/`->` with
+- [x] **M7** `LADDER.BAT`: the machine rebuilds its own toolchain and
+      builds the kernel with what it built, in 31.5 s, pinned by
+      `make test-c4dos-ladder32`.
+- [ ] **M8** B4KE, once its two open questions are answered.
+- [ ] **M9** L7 in c4cc — `struct`, `union`, `typedef`, `.`/`->` with
       struct-size pointer arithmetic, `do/while`, compound assignment,
       block-scoped declarations. The bar is `src/tests/c4lc_l7.c` against
       gcc, then the twelve C4IX modules compiling, then `c4ix.c4r`

@@ -59,17 +59,16 @@ VARIABLE C4FC-READY   0 C4FC-READY !
 : C4FC ( a u -- )                       \ compile that file, image to stdout
    C4FC-READY @ 0= IF C4FC-INIT THEN
    PREPROCESS @ IF PP-FILE ELSE LEX-FILE THEN
-   \ The discovery pass. -O wants the call graph; -c wants to know which
-   \ names this unit defines, so that a prototype for one it does not
-   \ becomes an extern. Both want the same walk.
-   OPTIMIZE @ OBJECT @ OR IF
-      T2-RESET  DECL-RESET  0 EXTN !  1 COLLECT !
-      UNIT-RESET PROGRAM
-      T2-CLOSE  MAKE-EXTERNS  0 COLLECT !
-      UNIT-RESET PREREGISTER PROGRAM
-   ELSE
-      UNIT-RESET PROGRAM
-   THEN
+   \ The discovery pass, which runs whatever the flags say. -O wants the
+   \ call graph and -c wants to know which names this unit defines, but
+   \ the plain compile wants something from it too: a call to a function
+   \ defined further down with no prototype anywhere resolves only if
+   \ something has read ahead. Making that depend on -O would mean
+   \ `c4fc f.c` rejecting a file `c4fc -O f.c` compiles.
+   T2-RESET  DECL-RESET  0 EXTN !  1 COLLECT !
+   UNIT-RESET PROGRAM
+   T2-CLOSE  MAKE-EXTERNS  0 COLLECT !
+   UNIT-RESET PREREGISTER PROGRAM
    OBJECT @ 0= ENTRY @ 0< AND IF ." c4fc: no main" CR ABORT THEN
    OPTIMIZE @ IF OPT-RUN THEN
    OBJECT @ IF SN @ FIX-EXTERNS  EXT-SYMS THEN

@@ -5,12 +5,12 @@
 {
    c4sp-conservative-stack-scan-cond
    Memcheck:Cond
-   fun:gc_valid_cell
+   fun:gc_cellidx
 }
 {
    c4sp-conservative-stack-scan-value
    Memcheck:Value8
-   fun:gc_valid_cell
+   fun:gc_cellidx
 }
 {
    c4sp-conservative-stack-scan-mark

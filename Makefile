@@ -336,7 +336,7 @@ c4ke-src.tar: $(C4KE_KIT_SRCS)
 # transient with something to draw, and the honest test of that
 # restriction (src/tests/raycast.c's RC_DOS branch).
 raycast-dos.c4r: c4sp $(C4LC_LISP) $(TESTS)/raycast.c
-	$(C4SPLC) -c 16000000 src/c4sp/lisp/c4lc.lisp -O -conforming -D RC_DOS=1 \
+	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -conforming -D RC_DOS=1 \
 		$(TESTS)/raycast.c $@ > /dev/null
 
 # A boot floppy for the native run targets. C4DOS has no notion of a
@@ -368,7 +368,7 @@ hello32.c4r: c4cc32 $(TESTS)/hello.c
 	./c4cc32 -o $@ $(TESTS)/hello.c > /dev/null
 
 raycast-dos32.c4r: c4sp32 $(C4LC_LISP) $(TESTS)/raycast.c
-	./c4sp32 -c 16000000 src/c4sp/lisp/c4lc.lisp -O -conforming -D RC_DOS=1 \
+	./c4sp32 src/c4sp/lisp/c4lc.lisp -O -conforming -D RC_DOS=1 \
 		$(TESTS)/raycast.c $@ > /dev/null
 
 C4DOS_DISK32 := c4dos-disk32
@@ -591,11 +591,11 @@ test-c4th: c4th c4th.c4r $(C4M) c4mp $(OISC4) c4sp $(C4KE_C4R)
 	# behaviour: c4r.lisp decodes the image and re-encodes it byte for
 	# byte. A writer that is subtly wrong passes the behaviour checks on
 	# a forgiving loader and fails this.
-	./c4sp -c 30000000 src/c4sp/lisp/c4r-roundtrip.lisp .c4th_b5d.c4r | grep -q "roundtrip identical"
+	./c4sp src/c4sp/lisp/c4r-roundtrip.lisp .c4th_b5d.c4r | grep -q "roundtrip identical"
 	# And it must survive the optimizer, and the fused opcodes.
-	./c4sp -c 30000000 src/c4sp/lisp/c4opt-run.lisp .c4th_b5d.c4r .c4th_b5do.c4r > /dev/null
+	./c4sp src/c4sp/lisp/c4opt-run.lisp .c4th_b5d.c4r .c4th_b5do.c4r > /dev/null
 	$(C4M) load-c4r.c -- .c4th_b5do.c4r | cmp - .c4th_b5di
-	./c4sp -c 30000000 src/c4sp/lisp/c4opt-run.lisp -mfuse .c4th_b5d.c4r .c4th_b5df.c4r > /dev/null
+	./c4sp src/c4sp/lisp/c4opt-run.lisp -mfuse .c4th_b5d.c4r .c4th_b5df.c4r > /dev/null
 	./c4mp .c4th_b5df.c4r | cmp - .c4th_b5di
 	# And the differential fuzzer, both ways. b5.f is the cases somebody
 	# thought of; this is two thousand nobody did -- random balanced
@@ -622,7 +622,7 @@ test-c4th: c4th c4th.c4r $(C4M) c4mp $(OISC4) c4sp $(C4KE_C4R)
 	./c4mp .c4th_self1.c4r               | cmp - .c4th_self1i
 	$(OISC4) .c4th_self1.c4r             | cmp - .c4th_self1i
 	./c4 c4l.c .c4th_self1.c4r | sed '/^exit(/d' | cmp - .c4th_self1i
-	./c4sp -c 40000000 src/c4sp/lisp/c4r-roundtrip.lisp .c4th_self1.c4r | grep -q "roundtrip identical"
+	./c4sp src/c4sp/lisp/c4r-roundtrip.lisp .c4th_self1.c4r | grep -q "roundtrip identical"
 	# Then the compiler on itself. gen1 is self.f compiled by self.f
 	# running on c4th's threaded engine -- the engine that passes the
 	# Forth-2012 CORE suite; gen2 is self.f compiled by gen1; gen3 by
@@ -640,10 +640,10 @@ test-c4th: c4th c4th.c4r $(C4M) c4mp $(OISC4) c4sp $(C4KE_C4R)
 	./c4mp .c4th_gen2.bin    | cmp - .c4th_gen1.c4r
 	$(OISC4) .c4th_gen2.bin  | cmp - .c4th_gen1.c4r
 	./c4 c4l.c .c4th_gen2.bin | head -c `stat -c %s .c4th_gen1.c4r` | cmp - .c4th_gen1.c4r
-	./c4sp -c 200000000 src/c4sp/lisp/c4r-roundtrip.lisp .c4th_gen1.c4r | grep -q "roundtrip identical"
+	./c4sp src/c4sp/lisp/c4r-roundtrip.lisp .c4th_gen1.c4r | grep -q "roundtrip identical"
 	# And it must survive the optimizer: c4opt rewrites the compiler,
 	# and the rewritten compiler still emits the same image it did.
-	./c4sp -c 200000000 src/c4sp/lisp/c4opt-run.lisp .c4th_gen1.c4r .c4th_gen1o.c4r > /dev/null
+	./c4sp src/c4sp/lisp/c4opt-run.lisp .c4th_gen1.c4r .c4th_gen1o.c4r > /dev/null
 	$(C4M) load-c4r.c -- .c4th_gen1o.c4r | cmp - .c4th_gen1.c4r
 	rm -f .c4th_core .c4th_fact.c4r .c4th_ccasm .c4th_b5 .c4th_fused
 	rm -f .c4th_b5di .c4th_b5d.c4r .c4th_b5do.c4r .c4th_b5df.c4r
@@ -765,7 +765,7 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp
 	head -n -1 src/c4sp/tests/expected/c4lc-tokens-conforming.txt | cmp - .c4fc_lex.txt
 	./c4th $(C4FC_LIB) -e ': GO 33554432 ARENA-INIT S" src/c4cc/c4cc.c" LEX-FILE COUNT-TOKENS ; GO' | grep -q "^tokens 15024$$"
 	@for f in $(C4FC_LEX_SWEEP); do \
-	   ./c4sp -c 80000000 src/c4sp/lisp/c4lc-tokens.lisp $$f > .c4fc_a.txt 2>&1; \
+	   ./c4sp src/c4sp/lisp/c4lc-tokens.lisp $$f > .c4fc_a.txt 2>&1; \
 	   ./c4th $(C4FC_LIB) -e ": GO 67108864 ARENA-INIT S\" $$f\" LEX-FILE DUMP-TOKENS ; GO" > .c4fc_b.txt 2>&1; \
 	   head -n -1 .c4fc_a.txt | cmp -s - .c4fc_b.txt \
 	     || { echo "test-c4fc: the lexer differs from c4lc on $$f"; exit 1; }; \
@@ -781,7 +781,7 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp
 	# F7 -- storage classes, prototypes, initialisers, constant
 	# expressions, variadic functions and the constructor lists.
 	@for f in $(C4FC_SPIKE); do \
-	   ./c4sp -c 8000000 src/c4sp/lisp/c4lc.lisp $$f .c4fc_lc.c4r > /dev/null 2>&1; \
+	   ./c4sp src/c4sp/lisp/c4lc.lisp $$f .c4fc_lc.c4r > /dev/null 2>&1; \
 	   ./c4th $(C4FC_ALL) -e ": GO S\" $$f\" C4FC ; GO" > .c4fc_fc.c4r; \
 	   cmp .c4fc_lc.c4r .c4fc_fc.c4r \
 	     || { echo "test-c4fc: $$f differs from c4lc"; exit 1; }; \
@@ -801,7 +801,7 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp
 	# The "identical once loaded" fallback was an artefact of the tool
 	# being compared against, not of the format.
 	@for f in $(C4FC_SPIKE); do \
-	   ./c4sp -c 8000000 src/c4sp/lisp/c4lc.lisp -O $$f .c4fc_o2.c4r >/dev/null 2>&1; \
+	   ./c4sp src/c4sp/lisp/c4lc.lisp -O $$f .c4fc_o2.c4r >/dev/null 2>&1; \
 	   ./c4th $(C4FC_ALL) -e ": GO S\" $$f\" C4FC ; GO" > .c4fc_o0.c4r; \
 	   ./c4th $(C4FC_ALL) -e ": GO 1 OPTIMIZE ! S\" $$f\" C4FC ; GO" > .c4fc_o1.c4r; \
 	   cmp -s .c4fc_o1.c4r .c4fc_o2.c4r \
@@ -819,7 +819,7 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp
 	# not text: gcc -E emits `# 12 "file"` markers and c4fc consumes
 	# them, so the two can never agree on a line number and must agree
 	# on everything else.
-	./c4sp -c 8000000 src/c4sp/lisp/c4lc-ppdump.lisp $(TESTS)/c4lc_pp.c > .c4fc_a.txt
+	./c4sp src/c4sp/lisp/c4lc-ppdump.lisp $(TESTS)/c4lc_pp.c > .c4fc_a.txt
 	./c4th $(C4FC_LIB) src/c4fc/pp.f -e ': GO 67108864 ARENA-INIT PP-RESET S" $(TESTS)/c4lc_pp.c" PP-FILE DUMP-PPTOKENS ; GO' > .c4fc_b.txt
 	head -n -1 .c4fc_a.txt | cmp - .c4fc_b.txt
 	# Two, the bar the design asked for: real modules, preprocessed by
@@ -841,7 +841,7 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp
 	# compiled all the way to an image, byte-identical to c4lc -P's --
 	# and then run, because an image that matches and does the wrong
 	# thing would mean both compilers are wrong the same way.
-	./c4sp -c 8000000 src/c4sp/lisp/c4lc.lisp -P -I src/c4fc/tests src/c4fc/tests/spike9.c .c4fc_lc.c4r > /dev/null
+	./c4sp src/c4sp/lisp/c4lc.lisp -P -I src/c4fc/tests src/c4fc/tests/spike9.c .c4fc_lc.c4r > /dev/null
 	./c4th $(C4FC_ALL) -e ': GO C4FC-INIT -P S" src/c4fc/tests" -I S" src/c4fc/tests/spike9.c" C4FC ; GO' > .c4fc_fc.c4r
 	cmp .c4fc_lc.c4r .c4fc_fc.c4r
 	$(C4M) load-c4r.c -- .c4fc_fc.c4r | cmp - src/c4fc/tests/expected/spike9.txt
@@ -855,12 +855,12 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp
 	@for t in $(C4FC_GEN_SWEEP); do \
 	   gcc -E -Iinclude -I. -DC4CC=1 -D__c4__=1 -D__C4CC__=1 -D__c4cc__=1 -C \
 	      $(TESTS)/$$t.c > .c4fc_pp.c 2>/dev/null; \
-	   ./c4sp -c 80000000 src/c4sp/lisp/c4lc.lisp .c4fc_pp.c .c4fc_lc.c4r >/dev/null 2>&1 \
+	   ./c4sp src/c4sp/lisp/c4lc.lisp .c4fc_pp.c .c4fc_lc.c4r >/dev/null 2>&1 \
 	     || { echo "test-c4fc: c4lc could not compile $$t"; exit 1; }; \
 	   ./c4th $(C4FC_ALL) -e ": GO C4FC-INIT -P S\" include\" -I S\" .\" -I S\" C4CC=1\" -D S\" __c4__=1\" -D S\" __C4CC__=1\" -D S\" __c4cc__=1\" -D S\" __GNUC__=1\" -D S\" $(TESTS)/$$t.c\" C4FC ; GO" > .c4fc_fc.c4r 2>&1; \
 	   cmp -s .c4fc_lc.c4r .c4fc_fc.c4r \
 	     || { echo "test-c4fc: $$t differs from c4lc (-P)"; exit 1; }; \
-	   ./c4sp -c 80000000 src/c4sp/lisp/c4lc.lisp -O .c4fc_pp.c .c4fc_lc.c4r >/dev/null 2>&1 \
+	   ./c4sp src/c4sp/lisp/c4lc.lisp -O .c4fc_pp.c .c4fc_lc.c4r >/dev/null 2>&1 \
 	     || { echo "test-c4fc: c4lc -O could not compile $$t"; exit 1; }; \
 	   ./c4th $(C4FC_ALL) -e ": GO 1 OPTIMIZE ! C4FC-INIT -P S\" include\" -I S\" .\" -I S\" C4CC=1\" -D S\" __c4__=1\" -D S\" __C4CC__=1\" -D S\" __c4cc__=1\" -D S\" __GNUC__=1\" -D S\" $(TESTS)/$$t.c\" C4FC ; GO" > .c4fc_fc.c4r 2>&1; \
 	   cmp -s .c4fc_lc.c4r .c4fc_fc.c4r \
@@ -873,13 +873,13 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp
 	# Forth-2012 CORE suite with the same transcript the pinned golden
 	# holds. The Forth compiles the C compiler that compiles the Forth.
 	$(PREPROC) -I src/c4th/include src/c4th/c4th.c > .c4fc_pp.c
-	./c4sp -c 40000000 src/c4sp/lisp/c4lc.lisp .c4fc_pp.c .c4fc_lc.c4r > /dev/null
+	./c4sp src/c4sp/lisp/c4lc.lisp .c4fc_pp.c .c4fc_lc.c4r > /dev/null
 	./c4th $(C4FC_ALL) -e ': GO C4FC-INIT -P S" include" -I S" ." -I S" src/c4th/include" -I S" C4CC=1" -D S" __c4__=1" -D S" __C4CC__=1" -D S" __c4cc__=1" -D S" __GNUC__=1" -D S" src/c4th/c4th.c" C4FC ; GO' > .c4fc_fc.c4r
 	cmp .c4fc_lc.c4r .c4fc_fc.c4r
 	echo c4th | $(C4M) load-c4r.c -- .c4fc_fc.c4r src/c4th/forth/core.f src/c4th/tests/tester.fr src/c4th/tests/core.fr | cmp - src/c4th/tests/expected/core-64.txt
 	# ... and again with -O, where the tree passes take about a fifth of
 	# the image away and the suite must still pass.
-	./c4sp -c 40000000 src/c4sp/lisp/c4lc.lisp -O .c4fc_pp.c .c4fc_lc.c4r > /dev/null
+	./c4sp src/c4sp/lisp/c4lc.lisp -O .c4fc_pp.c .c4fc_lc.c4r > /dev/null
 	./c4th $(C4FC_ALL) -e ': GO 1 OPTIMIZE ! C4FC-INIT -P S" include" -I S" ." -I S" src/c4th/include" -I S" C4CC=1" -D S" __c4__=1" -D S" __C4CC__=1" -D S" __c4cc__=1" -D S" __GNUC__=1" -D S" src/c4th/c4th.c" C4FC ; GO' > .c4fc_fc.c4r
 	cmp .c4fc_lc.c4r .c4fc_fc.c4r
 	echo c4th | $(C4M) load-c4r.c -- .c4fc_fc.c4r src/c4th/forth/core.f src/c4th/tests/tester.fr src/c4th/tests/core.fr | cmp - src/c4th/tests/expected/core-64.txt
@@ -891,12 +891,12 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp
 	# function-like macro named without an argument list is an error
 	# there and stands for itself here, which is what C says.
 	$(PREPROC) -I src/c4ke src/c4ke/c4ke.c > .c4fc_pp.c
-	./c4sp -c 40000000 src/c4sp/lisp/c4lc.lisp -O .c4fc_pp.c .c4fc_lc.c4r > /dev/null
+	./c4sp src/c4sp/lisp/c4lc.lisp -O .c4fc_pp.c .c4fc_lc.c4r > /dev/null
 	./c4th $(C4FC_ALL) -e ': GO 1 OPTIMIZE ! C4FC-INIT -P S" include" -I S" ." -I S" src/c4ke" -I S" C4CC=1" -D S" __c4__=1" -D S" __C4CC__=1" -D S" __c4cc__=1" -D S" src/c4ke/c4ke.c" C4FC ; GO' > .c4fc_fc.c4r
 	cmp .c4fc_lc.c4r .c4fc_fc.c4r
 	$(C4M) load-c4r.c -- .c4fc_fc.c4r test_basic 2>&1 | grep -q "clean shutdown"
 	$(C4M) load-c4r.c -- .c4fc_fc.c4r test_basic 2>&1 | grep -q "^  5"
-	./c4sp -c 40000000 src/c4sp/lisp/c4lc.lisp -O -P -I include -I . -I src/c4dos -D C4CC=1 -D __c4cc__=1 src/c4dos/c4dos.c .c4fc_lc.c4r > /dev/null
+	./c4sp src/c4sp/lisp/c4lc.lisp -O -P -I include -I . -I src/c4dos -D C4CC=1 -D __c4cc__=1 src/c4dos/c4dos.c .c4fc_lc.c4r > /dev/null
 	./c4th $(C4FC_ALL) -e ': GO 1 OPTIMIZE ! C4FC-INIT -P S" include" -I S" ." -I S" src/c4dos" -I S" C4CC=1" -D S" __c4cc__=1" -D S" src/c4dos/c4dos.c" C4FC ; GO' > .c4fc_fc.c4r
 	cmp .c4fc_lc.c4r .c4fc_fc.c4r
 	# F10, object mode: the whole of C4IX. Twelve .c4o objects, each
@@ -907,7 +907,7 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp
 	# patches that reference those names carry a symbol id where a
 	# whole-program image would carry -1 or -2.
 	@for m in $(C4IX_MODS); do \
-	   ./c4sp -c 500000 src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC) $(C4IX_SRC)/$$m.c .c4fc_lc.c4o >/dev/null 2>&1 \
+	   ./c4sp src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC) $(C4IX_SRC)/$$m.c .c4fc_lc.c4o >/dev/null 2>&1 \
 	     || { echo "test-c4fc: c4lc could not compile $$m"; exit 1; }; \
 	   ./c4th $(C4FC_ALL) -e ": GO 1 OPTIMIZE ! -c C4FC-INIT -P S\" include\" -I S\" .\" -I S\" $(C4IX_SRC)\" -I S\" C4CC=1\" -D S\" __c4__=1\" -D S\" __C4CC__=1\" -D S\" __c4cc__=1\" -D S\" $(C4IX_SRC)/$$m.c\" C4FC ; GO" > .c4fc_ix_$$m.c4o 2>&1; \
 	   cmp -s .c4fc_lc.c4o .c4fc_ix_$$m.c4o \
@@ -935,7 +935,7 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp
 # out what to say.
 test-fuse: c4sp c4cc $(C4M) c4mp $(OISC4) c4l.c
 	./c4cc -o .fuse_t.c4r src/tests/tests.c > /dev/null
-	./c4sp -c 8000000 src/c4sp/lisp/c4opt-run.lisp -mfuse .fuse_t.c4r .fuse_tf.c4r > /dev/null
+	./c4sp src/c4sp/lisp/c4opt-run.lisp -mfuse .fuse_t.c4r .fuse_tf.c4r > /dev/null
 	$(C4M) load-c4r.c -- .fuse_t.c4r  | grep -q "tests succeeded"
 	./c4mp .fuse_tf.c4r               | grep -q "tests succeeded"
 	$(OISC4) .fuse_tf.c4r             | grep -q "tests succeeded"
@@ -955,7 +955,7 @@ c4sp: $(C4SP_SRCS)
 # C4KE, and on c4bb -- so it is the one whose size and speed are felt.
 c4sp.c4r: c4sp $(C4LC_LISP) $(C4SP_SRCS)
 	$(PREPROC) src/c4sp/c4sp.c > .c4sp_lcpp.c
-	$(C4SPLC) -c 16000000 src/c4sp/lisp/c4lc.lisp -O .c4sp_lcpp.c c4sp.c4r > /dev/null
+	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O .c4sp_lcpp.c c4sp.c4r > /dev/null
 	rm -f .c4sp_lcpp.c
 # c4sp test, three parts:
 #  1. the canonical written form of each sample must survive a
@@ -1015,8 +1015,8 @@ test-c4sp: c4sp c4sp.c4r c4m $(C4KE_C4R)
 	cmp hello.c4r .c4sp_rt.c4r
 	./c4m load-c4r.c -- .c4sp_rt.c4r | grep -q yello
 	rm -f .c4sp_rt.c4r
-	./c4sp -c 2000000 src/c4sp/lisp/c4r-roundtrip.lisp test_float.c4r | grep -q "roundtrip identical"
-	./c4sp -c 8000000 src/c4sp/lisp/c4r-roundtrip.lisp c4sp.c4r | grep -q "roundtrip identical"
+	./c4sp src/c4sp/lisp/c4r-roundtrip.lisp test_float.c4r | grep -q "roundtrip identical"
+	./c4sp src/c4sp/lisp/c4r-roundtrip.lisp c4sp.c4r | grep -q "roundtrip identical"
 	./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/c4r-roundtrip.lisp hello.c4r | grep -q "roundtrip identical"
 	@echo "test-c4sp: OK"
 
@@ -1032,11 +1032,11 @@ test-c4sp-deep: c4sp.c4r c4m
 # require an identical -S listing (modulo the absolute pool addresses the
 # listing prints, which differ between any two runs).
 test-c4sp-opt: c4sp c4sp.c4r c4m $(C4KE_C4R)
-	./c4sp -c 4000000 src/c4sp/lisp/c4opt-run.lisp factorial.c4r .c4sp_opt.c4r
+	./c4sp src/c4sp/lisp/c4opt-run.lisp factorial.c4r .c4sp_opt.c4r
 	./c4m load-c4r.c -- $(C4KE_C4R) factorial.c4r 2>&1 | grep -v "^c4ke\|^lc4r\|stacktrace\|Have a nice" > .c4sp_opt_a
 	./c4m load-c4r.c -- $(C4KE_C4R) .c4sp_opt.c4r 2>&1 | grep -v "^c4ke\|^lc4r\|stacktrace\|Have a nice" > .c4sp_opt_b
 	cmp .c4sp_opt_a .c4sp_opt_b
-	./c4sp -c 16000000 src/c4sp/lisp/c4opt-run.lisp $(C4R_C4CC) .c4sp_opt_cc.c4r
+	./c4sp src/c4sp/lisp/c4opt-run.lisp $(C4R_C4CC) .c4sp_opt_cc.c4r
 	./c4m load-c4r.c -- $(C4R_C4CC) -S src/tests/multifun.c 2>&1 | sed -E 's/[0-9]{9,}/ADDR/g' > .c4sp_opt_a
 	./c4m load-c4r.c -- .c4sp_opt_cc.c4r -S src/tests/multifun.c 2>&1 | sed -E 's/[0-9]{9,}/ADDR/g' > .c4sp_opt_b
 	cmp .c4sp_opt_a .c4sp_opt_b
@@ -1087,15 +1087,15 @@ C4LC_LISP := src/c4sp/lisp/c4lc.lisp src/c4sp/lisp/c4lc-lex.lisp \
 # copying over c4ke.c4r / c4sp.c4r / c4m.c4r.
 c4ke-lc.c4r: c4sp $(C4LC_LISP) $(SRCS)/c4ke/c4ke.c
 	$(PREPROC) $(SRCS)/c4ke/c4ke.c > .c4lc_klc.c
-	$(C4SPLC) -c 32000000 src/c4sp/lisp/c4lc.lisp -O .c4lc_klc.c c4ke-lc.c4r
+	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O .c4lc_klc.c c4ke-lc.c4r
 	rm -f .c4lc_klc.c
 c4sp-lc.c4r: c4sp $(C4LC_LISP) $(C4SP_SRCS)
 	$(PREPROC) src/c4sp/c4sp.c > .c4lc_klc.c
-	$(C4SPLC) -c 16000000 src/c4sp/lisp/c4lc.lisp -O .c4lc_klc.c c4sp-lc.c4r
+	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O .c4lc_klc.c c4sp-lc.c4r
 	rm -f .c4lc_klc.c
 c4m-lc.c4r: c4sp $(C4LC_LISP) c4m.c
 	$(PREPROC) c4m.c > .c4lc_klc.c
-	$(C4SPLC) -c 16000000 src/c4sp/lisp/c4lc.lisp -O .c4lc_klc.c c4m-lc.c4r
+	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O .c4lc_klc.c c4m-lc.c4r
 	rm -f .c4lc_klc.c
 
 # OISC4: the One Instruction Set Computer (docs/oisc4-design.md).
@@ -1109,7 +1109,7 @@ oisc4: $(OISC4)
 # or oisc4 itself (OISC on OISC).
 oisc4-lc.c4r: c4sp $(C4LC_LISP) src/oisc4/oisc4.c
 	$(PREPROC) src/oisc4/oisc4.c > .c4lc_o4.c
-	$(C4SPLC) -c 16000000 src/c4sp/lisp/c4lc.lisp -O .c4lc_o4.c oisc4-lc.c4r
+	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O .c4lc_o4.c oisc4-lc.c4r
 	rm -f .c4lc_o4.c
 test-oisc4: $(OISC4) $(C4M) c4.c4r c4sp.c4r $(TESTS_C4R)
 	bash src/oisc4/test-oisc4.sh
@@ -1134,7 +1134,7 @@ c4sp32: $(C4SP_SRCS)
 # images the machine can load, not host binaries.
 c4sp32.c4r: c4sp32 $(C4LC_LISP) $(C4SP_SRCS)
 	$(PREPROC) src/c4sp/c4sp.c > .c4sp32_lcpp.c
-	./c4sp32 -R -c 16000000 src/c4sp/lisp/c4lc.lisp -O .c4sp32_lcpp.c c4sp32.c4r > /dev/null
+	./c4sp32 -R src/c4sp/lisp/c4lc.lisp -O .c4sp32_lcpp.c c4sp32.c4r > /dev/null
 	rm -f .c4sp32_lcpp.c
 cpp32.c4r: c4cc32 include/c4dos.h $(SRCS)/c4dos/cpp.c
 	./c4cc32 -o cpp32.c4r include/c4dos.h $(SRCS)/c4dos/cpp.c > /dev/null
@@ -1163,7 +1163,7 @@ test-c4bb: c4bb-images $(C4M) $(TESTS_C4R)
 C4LC_JOBS ?= $(shell nproc 2>/dev/null || echo 4)
 define c4lc_compile_par
 	printf '%s\n' $(2) | xargs -P $(C4LC_JOBS) -I{} sh -c \
-		'$(C4SPLC) -c 16000000 src/c4sp/lisp/c4lc.lisp $(1) -c -I $(3) $(3)/{}.c $(4){}.c4o > /dev/null' \
+		'$(C4SPLC) src/c4sp/lisp/c4lc.lisp $(1) -c -I $(3) $(3)/{}.c $(4){}.c4o > /dev/null' \
 		|| { echo "c4lc: a parallel module compile failed"; exit 1; }
 endef
 C4OR1K_SRC  := src/c4or1k
@@ -1175,7 +1175,7 @@ C4OR1K_MODS := mem mmio uart console bootfs virtio virtio9p eth net fpu cpu boot
 # $(1)=extra c4lc flags  $(2)=module list  $(3)=-I dir  $(4)=obj prefix
 C4LC_JOBS ?= $(shell nproc 2>/dev/null || echo 4)
 define c4lc_compile_par
-printf '%s\n' $(2) | xargs -P $(C4LC_JOBS) -I@@ sh -c '$(C4SPLC) -c 16000000 src/c4sp/lisp/c4lc.lisp $(1) -c -I $(3) $(3)/@@.c $(4)@@.c4o >/dev/null'
+printf '%s\n' $(2) | xargs -P $(C4LC_JOBS) -I@@ sh -c '$(C4SPLC) src/c4sp/lisp/c4lc.lisp $(1) -c -I $(3) $(3)/@@.c $(4)@@.c4o >/dev/null'
 endef
 # M13: the JIT build carries one extra module and compiles everything
 # with -D C4OR1K_JIT=1, which is what actually enables the driver-loop
@@ -1361,7 +1361,7 @@ c4mp: $(patsubst %,$(C4MP_SRC)/%.c,$(C4MP_MODS)) $(C4MP_HDRS) c4m_float.c
 # how c4mp.h decides whether restrict and the host headers exist.
 c4mp.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4MP_SRC)/c4mp.h $(patsubst %,$(C4MP_SRC)/%.c,$(C4MP_MODS))
 	for m in $(C4MP_MODS); do \
-		$(C4SPLC) -c 8000000 src/c4sp/lisp/c4lc.lisp -O -c -I $(C4MP_SRC) -D __c4cc__=1 \
+		$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -c -I $(C4MP_SRC) -D __c4cc__=1 \
 			$(C4MP_SRC)/$$m.c .c4mp_$$m.c4o > /dev/null || exit 1; \
 	done
 	$(C4RLINK) $(patsubst %,.c4mp_%.c4o,$(C4MP_MODS)) -o c4mp.c4r
@@ -1370,13 +1370,13 @@ c4mp.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4MP_SRC)/c4mp.h $(patsubst %,$(C4MP_SR
 # proves they interleave. Compiled by c4lc because it calls the
 # processor opcodes, which c4cc does not know.
 c4mp-smp0.c4r: c4sp $(C4LC_LISP) $(C4MP_SRC)/guest/smp0.c
-	$(C4SPLC) -c 4000000 src/c4sp/lisp/c4lc.lisp -O $(C4MP_SRC)/guest/smp0.c c4mp-smp0.c4r > /dev/null
+	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O $(C4MP_SRC)/guest/smp0.c c4mp-smp0.c4r > /dev/null
 # smp1 exercises every stage-3 opcode; deadlock exists to wedge the
 # machine on purpose and be diagnosed for it.
 c4mp-smp1.c4r: c4sp $(C4LC_LISP) $(C4MP_SRC)/guest/smp1.c
-	$(C4SPLC) -c 6000000 src/c4sp/lisp/c4lc.lisp -O $(C4MP_SRC)/guest/smp1.c c4mp-smp1.c4r > /dev/null
+	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O $(C4MP_SRC)/guest/smp1.c c4mp-smp1.c4r > /dev/null
 c4mp-deadlock.c4r: c4sp $(C4LC_LISP) $(C4MP_SRC)/guest/deadlock.c
-	$(C4SPLC) -c 4000000 src/c4sp/lisp/c4lc.lisp -O $(C4MP_SRC)/guest/deadlock.c c4mp-deadlock.c4r > /dev/null
+	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O $(C4MP_SRC)/guest/deadlock.c c4mp-deadlock.c4r > /dev/null
 # Not in the default suite: the native sweep runs every test image
 # through two VMs and the hosted checks run them through three.
 test-c4mp: c4m c4mp c4mp.c4r c4mp-smp0.c4r c4mp-smp1.c4r c4mp-deadlock.c4r $(TESTS_C4R)
@@ -1401,17 +1401,17 @@ c4ix.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/c4ix.h $(patsubst %,$(C4IX_SR
 # protected mode its printf traps and the kernel emulates it onto the
 # fd layer -- redirection for programs that never heard of C4IX.
 c4ix-hello.c4r: c4sp $(C4LC_LISP) $(C4IX_SRC)/user/hello.c
-	$(C4SPLC) -c 4000000 src/c4sp/lisp/c4lc.lisp -O $(C4IX_SRC)/user/hello.c c4ix-hello.c4r > /dev/null
+	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O $(C4IX_SRC)/user/hello.c c4ix-hello.c4r > /dev/null
 
 # libc4ix, the userland C library, as a c4rlink archive
 libc4ix.c4l: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/lib/libc4ix.c $(C4IX_SRC)/include/c4ix_user.h
-	$(C4SPLC) -c 4000000 src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC)/include $(C4IX_SRC)/lib/libc4ix.c .c4ix_lib.c4o > /dev/null
+	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC)/include $(C4IX_SRC)/lib/libc4ix.c .c4ix_lib.c4o > /dev/null
 	$(C4RLINK) -r .c4ix_lib.c4o -o libc4ix.c4l
 	rm -f .c4ix_lib.pp.c .c4ix_lib.c4o
 
 # userland programs built against the library: all IO via syscalls
 c4ix-%.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libc4ix.c4l $(C4IX_SRC)/user/%.c
-	$(C4SPLC) -c 4000000 src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC)/include $(C4IX_SRC)/user/$*.c .c4ix_u.c4o > /dev/null
+	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC)/include $(C4IX_SRC)/user/$*.c .c4ix_u.c4o > /dev/null
 	$(C4RLINK) .c4ix_u.c4o libc4ix.c4l -o $@
 	rm -f .c4ix_u.pp.c .c4ix_u.c4o
 
@@ -1567,7 +1567,7 @@ RAYCAST_MASK := sed -E 's,f/s [ 0-9]{5},f/s XXXXX,g'
 test-raycast: c4sp c4sp32 $(C4M) c4m32 $(TESTS)/raycast.c4r
 	./c4m load-c4r.c -- $(TESTS)/raycast.c4r $(RAYCAST_ARGS) \
 		| $(RAYCAST_MASK) | cmp - $(TESTS)/raycast.golden.txt
-	./c4sp32 -c 16000000 src/c4sp/lisp/c4lc.lisp -O -conforming -D RC_KE=1 \
+	./c4sp32 src/c4sp/lisp/c4lc.lisp -O -conforming -D RC_KE=1 \
 		$(TESTS)/raycast.c .raycast32.c4r > /dev/null
 	./c4m32 load-c4r.c -- .raycast32.c4r $(RAYCAST_ARGS) \
 		| $(RAYCAST_MASK) | cmp - $(TESTS)/raycast.golden.txt
@@ -1588,7 +1588,7 @@ test-raycast: c4sp c4sp32 $(C4M) c4m32 $(TESTS)/raycast.c4r
 test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.c4r
 	./c4sp src/c4sp/lisp/c4lc-tokens.lisp src/tests/c4lc_lex_sample.c | cmp - src/c4sp/tests/expected/c4lc-tokens.txt
 	./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/c4lc-tokens.lisp src/tests/c4lc_lex_sample.c | cmp - src/c4sp/tests/expected/c4lc-tokens.txt
-	./c4sp -c 2000000 src/c4sp/lisp/c4lc-tokens.lisp -count src/c4cc/c4cc.c | grep -q "^tokens [0-9]"
+	./c4sp src/c4sp/lisp/c4lc-tokens.lisp -count src/c4cc/c4cc.c | grep -q "^tokens [0-9]"
 	# L1: AST golden of the sample, native and under c4m
 	./c4sp src/c4sp/lisp/c4lc-ast.lisp src/tests/c4lc_lex_sample.c | cmp - src/c4sp/tests/expected/c4lc-ast.txt
 	./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/c4lc-ast.lisp src/tests/c4lc_lex_sample.c | cmp - src/c4sp/tests/expected/c4lc-ast.txt
@@ -1604,17 +1604,17 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 		*/c4lc_pp.c) continue;; \
 		*/oldtest_vararg*.c|*/oldvararg3.c|*/test_vprintf.c|*/vararg*.c) \
 			$(PREPROC) $$f > .c4lc_pp.c 2>/dev/null; \
-			./c4sp -c 4000000 src/c4sp/lisp/c4lc-ast.lisp -check .c4lc_pp.c | grep -q "^parse ok" || exit 1;; \
+			./c4sp src/c4sp/lisp/c4lc-ast.lisp -check .c4lc_pp.c | grep -q "^parse ok" || exit 1;; \
 		*) \
-			./c4sp -c 4000000 src/c4sp/lisp/c4lc-ast.lisp -check $$f | grep -q "^parse ok" || exit 1;; \
+			./c4sp src/c4sp/lisp/c4lc-ast.lisp -check $$f | grep -q "^parse ok" || exit 1;; \
 		esac; \
 	done
 	# L1: the exact self-compile unit c4cc consumes (raw concatenation,
 	# no cpp -- c4cc skips '#' lines), and preprocessed c4sp.c
 	cat $(U0) load-c4r.c $(SRCS)/c4cc/c4cc.c $(SRCS)/c4cc/asm-c4r.c > .c4lc_cat.c
-	./c4sp -c 8000000 src/c4sp/lisp/c4lc-ast.lisp -check .c4lc_cat.c | grep -q "^parse ok"
+	./c4sp src/c4sp/lisp/c4lc-ast.lisp -check .c4lc_cat.c | grep -q "^parse ok"
 	$(PREPROC) src/c4sp/c4sp.c > .c4lc_pp.c
-	./c4sp -c 8000000 src/c4sp/lisp/c4lc-ast.lisp -check .c4lc_pp.c | grep -q "^parse ok"
+	./c4sp src/c4sp/lisp/c4lc-ast.lisp -check .c4lc_pp.c | grep -q "^parse ok"
 	rm -f .c4lc_cat.c .c4lc_pp.c
 	# L2: code generation. The L2 sample compiles under both c4cc and
 	# c4lc and the two binaries must behave identically under c4m.
@@ -1623,13 +1623,13 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	# must also roundtrip through c4r.lisp byte-identically and stay
 	# correct after the c4opt passes.
 	$(C4CC) -o .c4lc_a.c4r src/tests/c4lc_l2.c
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp src/tests/c4lc_l2.c .c4lc_b.c4r > /dev/null
+	./c4sp src/c4sp/lisp/c4lc.lisp src/tests/c4lc_l2.c .c4lc_b.c4r > /dev/null
 	./c4m load-c4r.c -- .c4lc_a.c4r > .c4lc_out_a
 	./c4m load-c4r.c -- .c4lc_b.c4r | cmp - .c4lc_out_a
-	./c4sp -c 2000000 src/c4sp/lisp/c4r-roundtrip.lisp .c4lc_b.c4r | grep -q "roundtrip identical"
-	./c4sp -c 2000000 src/c4sp/lisp/c4opt-run.lisp .c4lc_b.c4r .c4lc_bo.c4r > /dev/null
+	./c4sp src/c4sp/lisp/c4r-roundtrip.lisp .c4lc_b.c4r | grep -q "roundtrip identical"
+	./c4sp src/c4sp/lisp/c4opt-run.lisp .c4lc_b.c4r .c4lc_bo.c4r > /dev/null
 	./c4m load-c4r.c -- .c4lc_bo.c4r | cmp - .c4lc_out_a
-	./c4sp -c 2000000 src/c4sp/lisp/c4lc.lisp src/tests/c4lc_for.c .c4lc_f.c4r > /dev/null
+	./c4sp src/c4sp/lisp/c4lc.lisp src/tests/c4lc_for.c .c4lc_f.c4r > /dev/null
 	./c4m load-c4r.c -- .c4lc_f.c4r | cmp - src/c4sp/tests/expected/c4lc-for.txt
 	rm -f .c4lc_a.c4r .c4lc_b.c4r .c4lc_bo.c4r .c4lc_f.c4r .c4lc_out_a
 	# L3: full subset. Every deterministic raw test c4cc compiles must
@@ -1639,72 +1639,72 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	for t in $(C4LC_DIFF); do \
 		$(C4CC) -o .c4lc_a.c4r src/tests/$$t.c > /dev/null 2>&1 || exit 1; \
 		./c4m load-c4r.c -- .c4lc_a.c4r > .c4lc_out_a 2>&1; \
-		./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp src/tests/$$t.c .c4lc_b.c4r > /dev/null || exit 1; \
+		./c4sp src/c4sp/lisp/c4lc.lisp src/tests/$$t.c .c4lc_b.c4r > /dev/null || exit 1; \
 		./c4m load-c4r.c -- .c4lc_b.c4r 2>&1 | cmp - .c4lc_out_a || exit 1; \
 	done
 	for t in $(C4LC_DIFF_MASKED); do \
 		$(C4CC) -o .c4lc_a.c4r src/tests/$$t.c > /dev/null 2>&1 || exit 1; \
 		./c4m load-c4r.c -- .c4lc_a.c4r 2>&1 | sed -E 's/0x[0-9a-f]+/ADDR/g' > .c4lc_out_a; \
-		./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp src/tests/$$t.c .c4lc_b.c4r > /dev/null || exit 1; \
+		./c4sp src/c4sp/lisp/c4lc.lisp src/tests/$$t.c .c4lc_b.c4r > /dev/null || exit 1; \
 		./c4m load-c4r.c -- .c4lc_b.c4r 2>&1 | sed -E 's/0x[0-9a-f]+/ADDR/g' | cmp - .c4lc_out_a || exit 1; \
 	done
 	for t in $(C4LC_DIFF_PP); do \
 		$(PREPROC) src/tests/$$t.c > .c4lc_pp.c 2>/dev/null; \
 		$(C4CC) -o .c4lc_a.c4r .c4lc_pp.c > /dev/null 2>&1 || exit 1; \
 		./c4m load-c4r.c -- .c4lc_a.c4r > .c4lc_out_a 2>&1; \
-		./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp .c4lc_pp.c .c4lc_b.c4r > /dev/null || exit 1; \
+		./c4sp src/c4sp/lisp/c4lc.lisp .c4lc_pp.c .c4lc_b.c4r > /dev/null || exit 1; \
 		./c4m load-c4r.c -- .c4lc_b.c4r 2>&1 | cmp - .c4lc_out_a || exit 1; \
 	done
 	# switch images must roundtrip and survive the optimizer (the
 	# jumptable's dcode label targets move with the code)
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp src/tests/test_switch.c .c4lc_b.c4r > /dev/null
-	./c4sp -c 2000000 src/c4sp/lisp/c4r-roundtrip.lisp .c4lc_b.c4r | grep -q "roundtrip identical"
-	./c4sp -c 2000000 src/c4sp/lisp/c4opt-run.lisp .c4lc_b.c4r .c4lc_bo.c4r > /dev/null
+	./c4sp src/c4sp/lisp/c4lc.lisp src/tests/test_switch.c .c4lc_b.c4r > /dev/null
+	./c4sp src/c4sp/lisp/c4r-roundtrip.lisp .c4lc_b.c4r | grep -q "roundtrip identical"
+	./c4sp src/c4sp/lisp/c4opt-run.lisp .c4lc_b.c4r .c4lc_bo.c4r > /dev/null
 	./c4m load-c4r.c -- .c4lc_bo.c4r | cmp - src/c4sp/tests/expected/test_switch.txt
 	# L4: -O runs the c4opt passes in-process (no intermediate file).
 	# The optimized image differs from the two-step pipeline's only in
 	# patch-covered operand words -- dead values the loader overwrites
 	# -- so the bar is identical behavior; the tail pass lets a million
 	# mutual tail calls run flat with no separate optimizer step.
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O src/tests/c4lc_l2.c .c4lc_b.c4r | grep -q "tree: folded"
+	./c4sp src/c4sp/lisp/c4lc.lisp -O src/tests/c4lc_l2.c .c4lc_b.c4r | grep -q "tree: folded"
 	$(C4CC) -o .c4lc_a.c4r src/tests/c4lc_l2.c
 	./c4m load-c4r.c -- .c4lc_a.c4r > .c4lc_out_a
 	./c4m load-c4r.c -- .c4lc_b.c4r | cmp - .c4lc_out_a
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O src/tests/test_switch.c .c4lc_b.c4r > /dev/null
+	./c4sp src/c4sp/lisp/c4lc.lisp -O src/tests/test_switch.c .c4lc_b.c4r > /dev/null
 	./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/test_switch.txt
-	./c4sp -c 2000000 src/c4sp/lisp/c4r-roundtrip.lisp .c4lc_b.c4r | grep -q "roundtrip identical"
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O src/tests/test_tailcall.c .c4lc_b.c4r | grep -q " tail 2"
+	./c4sp src/c4sp/lisp/c4r-roundtrip.lisp .c4lc_b.c4r | grep -q "roundtrip identical"
+	./c4sp src/c4sp/lisp/c4lc.lisp -O src/tests/test_tailcall.c .c4lc_b.c4r | grep -q " tail 2"
 	./c4m load-c4r.c -- .c4lc_b.c4r | grep -q "parity 0 counter 1000000"
 	# L7: structs, unions, typedef, member access, do-while, compound
 	# assignment, block-scoped declarations with expression
 	# initializers. gcc generated the expected output; c4cc cannot
 	# compile any of this.
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp src/tests/c4lc_l7.c .c4lc_b.c4r > /dev/null
+	./c4sp src/c4sp/lisp/c4lc.lisp src/tests/c4lc_l7.c .c4lc_b.c4r > /dev/null
 	./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-l7.txt
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O src/tests/c4lc_l7.c .c4lc_b.c4r > /dev/null
+	./c4sp src/c4sp/lisp/c4lc.lisp -O src/tests/c4lc_l7.c .c4lc_b.c4r > /dev/null
 	./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-l7.txt
-	./c4sp -c 2000000 src/c4sp/lisp/c4r-roundtrip.lisp .c4lc_b.c4r | grep -q "roundtrip identical"
+	./c4sp src/c4sp/lisp/c4r-roundtrip.lisp .c4lc_b.c4r | grep -q "roundtrip identical"
 	# L11: integer constant expressions in enum bodies. p:const already
 	# resolved enum names and already backed array sizes, case labels
 	# and initializers; the enum parser just never used it. gcc is the
 	# oracle -- c4cc's enum parser takes literal numbers only, so it
 	# cannot compile this and the differential battery cannot hold it.
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp $(TESTS)/c4lc_enum.c .c4lc_b.c4r > /dev/null
+	./c4sp src/c4sp/lisp/c4lc.lisp $(TESTS)/c4lc_enum.c .c4lc_b.c4r > /dev/null
 	./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-enum.txt
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O $(TESTS)/c4lc_enum.c .c4lc_b.c4r > /dev/null
+	./c4sp src/c4sp/lisp/c4lc.lisp -O $(TESTS)/c4lc_enum.c .c4lc_b.c4r > /dev/null
 	./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-enum.txt
 	# L10: -conforming escapes. The token golden is the tight check --
 	# it pins the lexer directly instead of a program's output. Then
 	# the runtime oracle, and then the SAME source WITHOUT the flag,
 	# which must still print the c4cc quirks: an opt-in flag that is
 	# always on is not opt-in, and nothing else would catch that.
-	./c4sp -c 2000000 src/c4sp/lisp/c4lc-tokens.lisp -conforming $(TESTS)/c4lc_lex_sample.c \
+	./c4sp src/c4sp/lisp/c4lc-tokens.lisp -conforming $(TESTS)/c4lc_lex_sample.c \
 		| cmp - src/c4sp/tests/expected/c4lc-tokens-conforming.txt
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -conforming $(TESTS)/c4lc_esc.c .c4lc_b.c4r > /dev/null
+	./c4sp src/c4sp/lisp/c4lc.lisp -conforming $(TESTS)/c4lc_esc.c .c4lc_b.c4r > /dev/null
 	./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-esc.txt
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O -conforming $(TESTS)/c4lc_esc.c .c4lc_b.c4r > /dev/null
+	./c4sp src/c4sp/lisp/c4lc.lisp -O -conforming $(TESTS)/c4lc_esc.c .c4lc_b.c4r > /dev/null
 	./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-esc.txt
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O $(TESTS)/c4lc_esc.c .c4lc_b.c4r > /dev/null
+	./c4sp src/c4sp/lisp/c4lc.lisp -O $(TESTS)/c4lc_esc.c .c4lc_b.c4r > /dev/null
 	./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-esc-quirks.txt
 	# L8: object mode. -c leaves undefined prototypes as SYMBOL-typed
 	# patches with extern symbol entries for c4rlink. c4lc objects link
@@ -1715,52 +1715,52 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	$(C4CC) -o .c4lc_ob1.c4o $(TESTS)/test_link_b.c > /dev/null 2>&1
 	$(C4RLINK) .c4lc_oa1.c4o .c4lc_ob1.c4o -o .c4lc_ol.c4r
 	./c4m load-c4r.c -- .c4lc_ol.c4r > .c4lc_out_a 2>&1
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -c $(TESTS)/test_link_a.c .c4lc_oa2.c4o > /dev/null
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -c $(TESTS)/test_link_b.c .c4lc_ob2.c4o > /dev/null
+	./c4sp src/c4sp/lisp/c4lc.lisp -c $(TESTS)/test_link_a.c .c4lc_oa2.c4o > /dev/null
+	./c4sp src/c4sp/lisp/c4lc.lisp -c $(TESTS)/test_link_b.c .c4lc_ob2.c4o > /dev/null
 	$(C4RLINK) .c4lc_oa2.c4o .c4lc_ob2.c4o -o .c4lc_ol.c4r
 	./c4m load-c4r.c -- .c4lc_ol.c4r 2>&1 | cmp - .c4lc_out_a
 	$(C4RLINK) .c4lc_oa1.c4o .c4lc_ob2.c4o -o .c4lc_ol.c4r
 	./c4m load-c4r.c -- .c4lc_ol.c4r 2>&1 | cmp - .c4lc_out_a
 	$(C4RLINK) .c4lc_oa2.c4o .c4lc_ob1.c4o -o .c4lc_ol.c4r
 	./c4m load-c4r.c -- .c4lc_ol.c4r 2>&1 | cmp - .c4lc_out_a
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O -c $(TESTS)/test_link_c.c .c4lc_oa2.c4o > /dev/null
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O -c $(TESTS)/test_link_d.c .c4lc_ob2.c4o > /dev/null
+	./c4sp src/c4sp/lisp/c4lc.lisp -O -c $(TESTS)/test_link_c.c .c4lc_oa2.c4o > /dev/null
+	./c4sp src/c4sp/lisp/c4lc.lisp -O -c $(TESTS)/test_link_d.c .c4lc_ob2.c4o > /dev/null
 	$(C4RLINK) .c4lc_oa2.c4o .c4lc_ob2.c4o -o .c4lc_ol.c4r
 	./c4m load-c4r.c -- .c4lc_ol.c4r | cmp - src/c4sp/tests/expected/c4lc-link.txt
 	cat $(TESTS)/test_link_d.c $(TESTS)/test_link_c.c > .c4lc_pp.c
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp .c4lc_pp.c .c4lc_ol.c4r > /dev/null
+	./c4sp src/c4sp/lisp/c4lc.lisp .c4lc_pp.c .c4lc_ol.c4r > /dev/null
 	./c4m load-c4r.c -- .c4lc_ol.c4r | cmp - src/c4sp/tests/expected/c4lc-link.txt
 	# L8, extern DATA: test_link_e.c defines shared globals (scalar,
 	# array, char array, struct, fn-address slot), test_link_f.c
 	# declares them extern; symbol patches resolve to DATA patches.
 	# Linked both orders, -O objects, and the whole-program concat
 	# (extern before definition) all match committed gcc output.
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -c $(TESTS)/test_link_e.c .c4lc_oa2.c4o > /dev/null
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -c $(TESTS)/test_link_f.c .c4lc_ob2.c4o > /dev/null
+	./c4sp src/c4sp/lisp/c4lc.lisp -c $(TESTS)/test_link_e.c .c4lc_oa2.c4o > /dev/null
+	./c4sp src/c4sp/lisp/c4lc.lisp -c $(TESTS)/test_link_f.c .c4lc_ob2.c4o > /dev/null
 	$(C4RLINK) .c4lc_oa2.c4o .c4lc_ob2.c4o -o .c4lc_ol.c4r
 	./c4m load-c4r.c -- .c4lc_ol.c4r | cmp - src/c4sp/tests/expected/c4lc-extdata.txt
 	$(C4RLINK) .c4lc_ob2.c4o .c4lc_oa2.c4o -o .c4lc_ol.c4r
 	./c4m load-c4r.c -- .c4lc_ol.c4r | cmp - src/c4sp/tests/expected/c4lc-extdata.txt
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O -c $(TESTS)/test_link_e.c .c4lc_oa2.c4o > /dev/null
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O -c $(TESTS)/test_link_f.c .c4lc_ob2.c4o > /dev/null
+	./c4sp src/c4sp/lisp/c4lc.lisp -O -c $(TESTS)/test_link_e.c .c4lc_oa2.c4o > /dev/null
+	./c4sp src/c4sp/lisp/c4lc.lisp -O -c $(TESTS)/test_link_f.c .c4lc_ob2.c4o > /dev/null
 	$(C4RLINK) .c4lc_oa2.c4o .c4lc_ob2.c4o -o .c4lc_ol.c4r
 	./c4m load-c4r.c -- .c4lc_ol.c4r | cmp - src/c4sp/tests/expected/c4lc-extdata.txt
 	cat $(TESTS)/test_link_f.c $(TESTS)/test_link_e.c > .c4lc_pp.c
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp .c4lc_pp.c .c4lc_ol.c4r > /dev/null
+	./c4sp src/c4sp/lisp/c4lc.lisp .c4lc_pp.c .c4lc_ol.c4r > /dev/null
 	./c4m load-c4r.c -- .c4lc_ol.c4r | cmp - src/c4sp/tests/expected/c4lc-extdata.txt
 	rm -f .c4lc_oa1.c4o .c4lc_ob1.c4o .c4lc_oa2.c4o .c4lc_ob2.c4o .c4lc_ol.c4r
 	# L9: c4lc's own preprocessor. First the feature battery against
 	# committed gcc-verified output (includes, object- and
 	# function-like macros, line continuation, nesting, #ifdef/#ifndef
 	# /#if/#elif/#else/#endif with constant expressions, #undef).
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -P $(TESTS)/c4lc_pp.c .c4lc_b.c4r > /dev/null
+	./c4sp src/c4sp/lisp/c4lc.lisp -P $(TESTS)/c4lc_pp.c .c4lc_b.c4r > /dev/null
 	./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-pp.txt
 	# Then the property that matters: preprocessing a real module
 	# with c4lc instead of gcc -E must produce the SAME OBJECT, byte
 	# for byte. If that holds, gcc is no longer in the pipeline.
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix src/c4ix/vfs.c .c4lc_oa2.c4o > /dev/null
+	./c4sp src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix src/c4ix/vfs.c .c4lc_oa2.c4o > /dev/null
 	$(PREPROC) src/c4ix/vfs.c > .c4lc_pp.c
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp -O -c .c4lc_pp.c .c4lc_ob2.c4o > /dev/null
+	./c4sp src/c4sp/lisp/c4lc.lisp -O -c .c4lc_pp.c .c4lc_ob2.c4o > /dev/null
 	cmp .c4lc_oa2.c4o .c4lc_ob2.c4o
 	rm -f .c4lc_oa2.c4o .c4lc_ob2.c4o
 	# L5, the bootstrap battery: c4lc -O compiles the interpreter it
@@ -1768,7 +1768,7 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	# exercises the CEK machine), the byte-level c4r roundtrip, and
 	# c4lc's own parser.
 	$(PREPROC) src/c4sp/c4sp.c > .c4lc_pp.c
-	./c4sp -c 16000000 src/c4sp/lisp/c4lc.lisp -O .c4lc_pp.c .c4lc_sp.c4r > /dev/null
+	./c4sp src/c4sp/lisp/c4lc.lisp -O .c4lc_pp.c .c4lc_sp.c4r > /dev/null
 	./c4m load-c4r.c -- .c4lc_sp.c4r src/c4sp/lisp/fac.lisp | grep -q "Factorial of 10 = 3628800"
 	./c4m load-c4r.c -- .c4lc_sp.c4r src/c4sp/lisp/truthy.lisp | cmp - src/c4sp/tests/expected/truthy.txt
 	./c4m load-c4r.c -- .c4lc_sp.c4r src/c4sp/lisp/callcc.lisp | cmp - src/c4sp/tests/expected/callcc.txt
@@ -1779,9 +1779,9 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	# bytes on three hosts -- native c4sp, c4sp.c4r under c4m, and the
 	# interpreter c4lc just compiled. Compiled and compared in memory
 	# (the bare VM cannot write files).
-	./c4sp -c 4000000 src/c4sp/lisp/c4lc.lisp src/tests/c4lc_l2.c .c4lc_ref.c4r > /dev/null
-	./c4m load-c4r.c -- c4sp.c4r -c 4000000 src/c4sp/lisp/c4lc-eq.lisp src/tests/c4lc_l2.c .c4lc_ref.c4r | grep -q "identical"
-	./c4m load-c4r.c -- .c4lc_sp.c4r -c 4000000 src/c4sp/lisp/c4lc-eq.lisp src/tests/c4lc_l2.c .c4lc_ref.c4r | grep -q "identical"
+	./c4sp src/c4sp/lisp/c4lc.lisp src/tests/c4lc_l2.c .c4lc_ref.c4r > /dev/null
+	./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/c4lc-eq.lisp src/tests/c4lc_l2.c .c4lc_ref.c4r | grep -q "identical"
+	./c4m load-c4r.c -- .c4lc_sp.c4r src/c4sp/lisp/c4lc-eq.lisp src/tests/c4lc_l2.c .c4lc_ref.c4r | grep -q "identical"
 	# L5, the compiler inside the OS: c4lc compiles hello.c under C4KE
 	# into the kernel RAM filesystem and the kernel executes the fresh
 	# image from memory -- no write ever touches the host filesystem
@@ -1800,11 +1800,11 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	# CEK's per-call arena allocation for nothing. That is only safe while
 	# the two produce the same image, so pin it here on a source that
 	# exercises the whole pipeline, with and without -O.
-	./c4sp    -c 4000000 src/c4sp/lisp/c4lc.lisp -O src/tests/c4lc_l7.c .c4lc_cek.c4r > /dev/null
-	./c4sp -R -c 4000000 src/c4sp/lisp/c4lc.lisp -O src/tests/c4lc_l7.c .c4lc_rec.c4r > /dev/null
+	./c4sp    src/c4sp/lisp/c4lc.lisp -O src/tests/c4lc_l7.c .c4lc_cek.c4r > /dev/null
+	./c4sp -R src/c4sp/lisp/c4lc.lisp -O src/tests/c4lc_l7.c .c4lc_rec.c4r > /dev/null
 	cmp .c4lc_cek.c4r .c4lc_rec.c4r
-	./c4sp    -c 4000000 src/c4sp/lisp/c4lc.lisp src/tests/c4lc_l7.c .c4lc_cek.c4r > /dev/null
-	./c4sp -R -c 4000000 src/c4sp/lisp/c4lc.lisp src/tests/c4lc_l7.c .c4lc_rec.c4r > /dev/null
+	./c4sp    src/c4sp/lisp/c4lc.lisp src/tests/c4lc_l7.c .c4lc_cek.c4r > /dev/null
+	./c4sp -R src/c4sp/lisp/c4lc.lisp src/tests/c4lc_l7.c .c4lc_rec.c4r > /dev/null
 	cmp .c4lc_cek.c4r .c4lc_rec.c4r
 	rm -f .c4lc_cek.c4r .c4lc_rec.c4r
 	@echo "test-c4lc: OK"
@@ -1964,7 +1964,7 @@ $(SRCS)/bench/%.c4r: $(SRCS)/bench/%.c $(C4KE_WATCH) $(C4CC)
 #   - -D, which is also what turns the preprocessor ON. Compiled with
 #     no -D at all, BOTH sides of the RC_DOS #ifdef would be compiled.
 $(TESTS)/raycast.c4r: c4sp $(C4LC_LISP) $(TESTS)/raycast.c
-	./c4sp -c 16000000 src/c4sp/lisp/c4lc.lisp -O -conforming -D RC_KE=1 \
+	./c4sp src/c4sp/lisp/c4lc.lisp -O -conforming -D RC_KE=1 \
 		$(TESTS)/raycast.c $@ > /dev/null
 
 # A variety of test programs

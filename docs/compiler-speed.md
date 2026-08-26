@@ -230,6 +230,38 @@ The honest denominator for anything measured later. Re-measure
       **Full clean `make c4ix.c4r`, 12 modules plus the link: 4.509 s**
       (baseline 43.013 s for the compiles alone).
 
+- [x] **A1.8** **The arena grows** (`src/c4sp/include/gc.h`). `-c` was a hard
+      preallocation of one `malloc`, memset and threaded onto a free list, so
+      the number in a Makefile rule WAS that rule's resident set. Guess high
+      and a job needing eighteen megabytes took five hundred and spent more
+      time faulting in untouched arena than compiling; guess low and the
+      collector thrashed a 99%-live heap. Neither mistake is available now:
+      the arena is a list of blocks, `-c` is where it starts, and a block is
+      added when a collection leaves less free space than live data.
+
+      **Sizing it is the whole trick, and against LIVE rather than against
+      the arena.** What a collection costs is set by how much is reachable;
+      what it returns is the free space. Total mark work over a run is
+      therefore `allocations / free-per-cycle * live`, and the only lever is
+      the ratio. A heap of twice the live set makes mark work equal total
+      allocations; four times makes it a third of that, and past eight the
+      returns stop. Four is the default, and the block is sized to restore
+      the ratio in ONE step -- arriving there by doubling means a full
+      collection at every size on the way.
+
+      *Verified:* every `-c` flag deleted from the Makefile (ninety of them),
+      and `make test test-c4th test-c4lc test-c4sp test-c4fc` green. The real
+      parallel C4IX kernel build, peak RSS across all six jobs:
+
+          before   3012 MB   1.59 s
+          after      89 MB   0.60 s
+
+      **34x less memory and 2.6x faster**, and nothing to tune. The one case
+      that is slower is a single very large unit -- C4KE as one file goes
+      4.6 s to 7.8 s -- because a preallocated gigabyte never collects at
+      all. That trade is the right way round for a machine that has to fit
+      the compiler as well as the program.
+
 - [ ] **A1.3** c4sp JSRI builtin dispatch — **deprioritised by A1.1**: the
       if-chain did not appear in the native profile at all. It may still matter
       under c4m, where each comparison is a whole VM instruction, so measure

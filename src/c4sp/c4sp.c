@@ -15,7 +15,7 @@
 //     -R         use the recursive reference evaluator instead of the CEK
 //                machine (kept as the oracle the machine is diffed against)
 //     -i         interactive REPL (after running file.lisp, when given)
-//     -c ncells  set the cell arena size (default 65536)
+//     -c ncells  first block of the cell arena (default 65536; it grows)
 
 #include "c4.h"
 #include "c4m.h"

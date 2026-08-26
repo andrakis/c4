@@ -9,7 +9,7 @@
 //   c4th [-selftest] [-e text] [-i cells] [-d cells] [-r cells] [file.f ...]
 //     -selftest   run the B1 hand-threaded checks and exit
 //     -e text     interpret text, then continue with any files
-//     -i cells    image size   (default 262144 cells)
+//     -i cells    image size   (default 1048576 cells)
 //     -d cells    data stack   (default 1024)
 //     -r cells    return stack (default 256)
 //   Files are interpreted in order. With neither -e nor a file, c4th reads
@@ -159,7 +159,7 @@ int main (int argc, char **argv) {
 	char *evaltext;
 	char *stdintext;
 
-	image    = 262144;
+	image    = 1048576;   // c4fc's vocabulary alone is most of the old default
 	dcells   = 1024;
 	rcells   = 256;
 	selftest = 0;

@@ -238,6 +238,51 @@ CREATE GPL GPMAX CELLS ALLOT   VARIABLE GPN   0 GPN !
    PN @ 1- GPL GPN @ CELLS + !  1 GPN +! ;
 : IMMG, ( slot -- )  oIMM SWAP GOP, ;
 
+\ -- externs, and object mode -------------------------------------------
+\ A .c4o names what it could not resolve. An unresolved reference is an
+\ opcode whose operand word is zero and whose patch carries the SYMBOL
+\ ID in the type field -- where a whole-program image would carry -1 or
+\ -2 -- and the symbol itself sits at the end of the section with
+\ ATTR_EXTERN and a value of zero, for c4rlink to fill in.
+\
+\ The id is not known until every DEFINED symbol has been numbered, so
+\ the patch is written with the type -1000-k and rewritten at the end.
+\ That placeholder is out of range of every real type, which is what
+\ lets the peephole passes carry it through unharmed.
+
+VARIABLE OBJECT   0 OBJECT !
+
+512 CONSTANT EXTMAX
+CREATE EXT-A EXTMAX CELLS ALLOT         \ name
+CREATE EXT-U EXTMAX CELLS ALLOT
+CREATE EXT-T EXTMAX CELLS ALLOT         \ C type
+CREATE EXT-C EXTMAX CELLS ALLOT         \ 129 a function, 131 data
+CREATE EXT-V EXTMAX CELLS ALLOT         \ variadic
+CREATE EXT-G EXTMAX CELLS ALLOT         \ array bytes, 0 if not an array
+VARIABLE EXTN   0 EXTN !
+
+: EXT-FIND ( a u -- k|-1 ) {: a u -- k :}
+   EXTN @ 0 ?DO
+      u I CELLS EXT-U + @ = IF
+         a  I CELLS EXT-A + @  u BYTES= IF I UNLOOP EXIT THEN
+      THEN
+   LOOP -1 ;
+: EXT-NEW ( a u ct class va agg -- k ) {: a u ct c va ag | k -- k :}
+   EXTN @ EXTMAX < 0= IF ." c4fc: too many externs" CR ABORT THEN
+   EXTN @ TO k
+   a k CELLS EXT-A + !   u k CELLS EXT-U + !   ct k CELLS EXT-T + !
+   c k CELLS EXT-C + !   va k CELLS EXT-V + !  ag k CELLS EXT-G + !
+   1 EXTN +!  k ;
+
+: EXT-TYPE ( k -- t )  -1000 SWAP - ;    \ the placeholder patch type
+: EXTREF, ( op k -- ) {: op k -- :}
+   op OP,   k EXT-TYPE CHERE 0 PAT,   0 C, ;
+: FIX-EXTERNS ( base -- ) {: b | p -- :}
+   PN @ 0 ?DO
+      I 3 * CELLS PATCH @ + TO p
+      p @ -1000 <= IF  b -1000 p @ - +  p !  0 p 2 CELLS + !  THEN
+   LOOP ;
+
 \ -- constant arithmetic ------------------------------------------------
 \ One table, used twice: the TREE pass folds `3 * 4` in the AST and the
 \ peephole pass folds `IMM 3; PSH; IMM 4; MUL` in the instruction
@@ -305,11 +350,28 @@ VARIABLE VA-MAKE   0 VA-MAKE !          \ code index of __c4cc_make_va
    at y y.agg !
    1 SN +! ;
 
+\ ATTR_EXTERN is 16; 32 marks a variadic function and 64 an aggregate,
+\ exactly as a defined symbol carries them.
+: EXT-SYMS ( -- ) {: | at -- :}
+   EXTN @ 0 ?DO
+      16 TO at
+      I CELLS EXT-V + @ IF at 32 OR TO at THEN
+      I CELLS EXT-G + @ IF at 64 OR TO at THEN
+      I CELLS EXT-A + @  I CELLS EXT-U + @
+      I CELLS EXT-T + @  I CELLS EXT-C + @  0  at  SYM, 
+   LOOP ;
+
 : FIX-FORWARDS {: | p v -- :}
    FWN @ 0 ?DO
       FWP I CELLS + @ 3 * CELLS PATCH @ + TO p
       FWS I CELLS + @ y.val @ TO v
-      v 0< IF ." c4fc: a function was called but never defined" CR ABORT THEN
+      \ In object mode an undefined callee is an EXTERN and its call site
+      \ never got here -- except during the discovery pass, which runs
+      \ before the externs exist and whose output is thrown away.
+      v 0< IF
+         OBJECT @ IF 0 TO v
+         ELSE ." c4fc: a function was called but never defined" CR ABORT THEN
+      THEN
       v p 2 CELLS + !
       v p CELL+ @ CELLS CODE @ + !
    LOOP ;

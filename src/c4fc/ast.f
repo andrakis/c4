@@ -109,3 +109,6 @@ GENERIC: CT                             \ an expression's C type
 \ a JSRS -- is decided entirely by the class of the name being called.
 0 CONSTANT c_glo   1 CONSTANT c_fun   2 CONSTANT c_builtin   3 CONSTANT c_loc
 4 CONSTANT c_const
+\ Object mode only: declared here, defined in another unit. The value
+\ field holds the extern index rather than an address.
+5 CONSTANT c_ext   6 CONSTANT c_extg

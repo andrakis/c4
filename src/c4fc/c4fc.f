@@ -42,6 +42,9 @@ VARIABLE C4FC-READY   0 C4FC-READY !
 : C4FC-INIT ( -- )  67108864 ARENA-INIT  PP-RESET  1 C4FC-READY ! ;
 : -I ( a u -- )  PP-PATH ;
 : -D ( a u -- )  PP-DEFINE ;
+\ -c: compile one unit to an OBJECT. What it cannot resolve it names,
+\ and c4rlink resolves it later against the units that can.
+: -c ( -- )  1 OBJECT ! ;
 
 \ Everything a compile of one unit starts from. -O runs it twice: the
 \ first pass exists only to learn which functions are reachable, and
@@ -56,12 +59,18 @@ VARIABLE C4FC-READY   0 C4FC-READY !
 : C4FC ( a u -- )                       \ compile that file, image to stdout
    C4FC-READY @ 0= IF C4FC-INIT THEN
    PREPROCESS @ IF PP-FILE ELSE LEX-FILE THEN
-   OPTIMIZE @ IF
-      T2-RESET  1 COLLECT !
-      UNIT-RESET PROGRAM             \ pass one: the call graph
-      T2-CLOSE  0 COLLECT !
+   \ The discovery pass. -O wants the call graph; -c wants to know which
+   \ names this unit defines, so that a prototype for one it does not
+   \ becomes an extern. Both want the same walk.
+   OPTIMIZE @ OBJECT @ OR IF
+      T2-RESET  DECL-RESET  0 EXTN !  1 COLLECT !
+      UNIT-RESET PROGRAM
+      T2-CLOSE  MAKE-EXTERNS  0 COLLECT !
+      UNIT-RESET PREREGISTER PROGRAM
+   ELSE
+      UNIT-RESET PROGRAM
    THEN
-   UNIT-RESET PROGRAM
-   ENTRY @ 0< IF ." c4fc: no main" CR ABORT THEN
+   OBJECT @ 0= ENTRY @ 0< AND IF ." c4fc: no main" CR ABORT THEN
    OPTIMIZE @ IF OPT-RUN THEN
+   OBJECT @ IF SN @ FIX-EXTERNS  EXT-SYMS THEN
    WRITE-IMAGE ;

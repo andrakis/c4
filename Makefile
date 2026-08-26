@@ -899,6 +899,26 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp
 	./c4sp -c 40000000 src/c4sp/lisp/c4lc.lisp -O -P -I include -I . -I src/c4dos -D C4CC=1 -D __c4cc__=1 src/c4dos/c4dos.c .c4fc_lc.c4r > /dev/null
 	./c4th $(C4FC_ALL) -e ': GO 1 OPTIMIZE ! C4FC-INIT -P S" include" -I S" ." -I S" src/c4dos" -I S" C4CC=1" -D S" __c4cc__=1" -D S" src/c4dos/c4dos.c" C4FC ; GO' > .c4fc_fc.c4r
 	cmp .c4fc_lc.c4r .c4fc_fc.c4r
+	# F10, object mode: the whole of C4IX. Twelve .c4o objects, each
+	# byte-identical to the one c4lc -O -c writes, linked by c4rlink into
+	# a kernel that must equal the committed image and then boot. An
+	# object is where a compiler's bookkeeping shows: what it could not
+	# resolve it has to NAME, in the order c4lc names them, and the
+	# patches that reference those names carry a symbol id where a
+	# whole-program image would carry -1 or -2.
+	@for m in $(C4IX_MODS); do \
+	   ./c4sp -c 500000 src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC) $(C4IX_SRC)/$$m.c .c4fc_lc.c4o >/dev/null 2>&1 \
+	     || { echo "test-c4fc: c4lc could not compile $$m"; exit 1; }; \
+	   ./c4th $(C4FC_ALL) -e ": GO 1 OPTIMIZE ! -c C4FC-INIT -P S\" include\" -I S\" .\" -I S\" $(C4IX_SRC)\" -I S\" C4CC=1\" -D S\" __c4__=1\" -D S\" __C4CC__=1\" -D S\" __c4cc__=1\" -D S\" $(C4IX_SRC)/$$m.c\" C4FC ; GO" > .c4fc_ix_$$m.c4o 2>&1; \
+	   cmp -s .c4fc_lc.c4o .c4fc_ix_$$m.c4o \
+	     || { echo "test-c4fc: $$m.c4o differs from c4lc -O -c"; exit 1; }; \
+	   echo "  obj ok: $$m"; \
+	done
+	$(C4RLINK) $(patsubst %,.c4fc_ix_%.c4o,$(C4IX_MODS)) -o .c4fc_ix.c4r
+	$(MAKE) c4ix.c4r
+	cmp .c4fc_ix.c4r c4ix.c4r
+	$(C4M) load-c4r.c -- .c4fc_ix.c4r --demo 2>&1 | grep -q "shutdown complete"
+	@rm -f .c4fc_lc.c4o .c4fc_ix.c4r .c4fc_ix_*.c4o
 	@rm -f .c4fc_lex.txt .c4fc_a.txt .c4fc_b.txt .c4fc_lc.c4r .c4fc_fc.c4r
 	@rm -f .c4fc_o0.c4r .c4fc_o1.c4r .c4fc_o2.c4r .c4fc_r0 .c4fc_r1 .c4fc_pp.c
 	@echo "test-c4fc: OK"

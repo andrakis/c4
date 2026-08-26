@@ -25,6 +25,10 @@ VARIABLE MAXLBL
 \ item: kind, op, arg, argkind
 0 CONSTANT k_insn   1 CONSTANT k_label
 0 CONSTANT a_none   1 CONSTANT a_plain  2 CONSTANT a_code  3 CONSTANT a_data
+\ An unresolved reference: the argument is the placeholder patch type
+\ itself, carried through untouched -- the symbol it names has no
+\ address in this unit, so nothing here can move it.
+4 CONSTANT a_ext
 
 : I[] ( buf i -- a )  4 CELLS * + ;
 : I.K ( a -- a )  ;
@@ -67,7 +71,9 @@ VARIABLE MAXLBL
 : PATCH-AT ( off -- p|0 ) {: off | p -- p :}
    PN @ 0 ?DO
       I 3 * CELLS PATCH @ + TO p
-      p CELL+ @ off = p @ -2 >= AND IF p UNLOOP EXIT THEN
+      p CELL+ @ off = IF
+         p @ -2 >=  p @ -1000 <=  OR IF p UNLOOP EXIT THEN
+      THEN
    LOOP 0 ;
 
 \ LEA..ADJ carry an operand, and so do JSRI and JSRS -- which c4fc did
@@ -89,8 +95,9 @@ VARIABLE MAXLBL
       w HAS-OPERAND?  i 1+ CN @ < AND  i 1+ LABEL? 0= AND IF
          i 1+ PATCH-AT TO p
          p IF
-            p @ -1 = IF IBUF @ n k_insn w  p 2 CELLS + @ a_code ITEM, TO n
-                     ELSE IBUF @ n k_insn w  p 2 CELLS + @ a_data ITEM, TO n THEN
+            p @ -1 = IF IBUF @ n k_insn w  p 2 CELLS + @ a_code ITEM, TO n ELSE
+            p @ -1000 <= IF IBUF @ n k_insn w  p @ a_ext ITEM, TO n
+                     ELSE IBUF @ n k_insn w  p 2 CELLS + @ a_data ITEM, TO n THEN THEN
          ELSE
             IBUF @ n k_insn w  i 1+ CELLS CODE @ + @  a_plain ITEM, TO n
          THEN
@@ -126,8 +133,11 @@ VARIABLE MAXLBL
          p I.T @ a_code = IF
             p I.O @ OP,  -1 CHERE p I.A @ LADDR PAT,  p I.A @ LADDR C,
          ELSE
+         p I.T @ a_ext = IF
+            p I.O @ OP,  p I.A @ CHERE 0 PAT,  0 C,
+         ELSE
             p I.O @ OP,  -2 CHERE p I.A @ PAT,  0 C,
-         THEN THEN THEN
+         THEN THEN THEN THEN
       THEN
    LOOP
    ENTRY @ 0< 0= IF ENTRY @ LADDR ENTRY ! THEN

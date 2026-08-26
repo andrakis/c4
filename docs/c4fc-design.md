@@ -611,6 +611,53 @@ The bar rises rung by rung and c4lc supplies it at every one.
       the same −18.1% `docs/c4lc-design.md` records for c4lc's own `-O`,
       and the resulting c4th runs c4fc **1.26x faster** under c4m.
 
+- [x] **F10** Object mode, and C4IX. `-c` compiles one unit to a `.c4o`:
+      what it cannot resolve it NAMES, and c4rlink resolves it later.
+      *Verified:* **all twelve C4IX modules, each byte-identical to
+      `c4lc -O -c`**, linked by c4rlink into a kernel byte-identical to
+      the committed `c4ix.c4r`, which boots and shuts down cleanly.
+
+      An unresolved reference is an opcode whose operand word is zero
+      and whose patch carries the **symbol id in the type field**, where
+      a whole-program image carries -1 or -2. The id is not known until
+      every defined symbol has been numbered, so the patch is written
+      with the placeholder type `-1000-k` and rewritten at the end --
+      out of range of every real type, which is what lets the peephole
+      passes carry it through untouched.
+
+      The extern ids follow c4lc's order and c4lc's order is two walks,
+      not one: every prototype first, then every extern datum. Deciding
+      which prototype needs one means knowing whether the unit defines
+      it further down, which is what the discovery pass already knows,
+      so `-c` runs the same pass `-O` does.
+
+      Five more gaps, each named by a real module:
+
+      - **`__c4cc_make_va` from a PROTOTYPE.** Every C4IX module
+        declares it and none defines it, and c4fc only recorded it at a
+        definition -- so a variadic call in `boot.c` called through a
+        null symbol and segfaulted. c4lc says "include stdarg.h"; c4fc
+        now says the same rather than crashing.
+      - **The variadic call path called `JSRF,` directly** instead of
+        going through the class dispatch, so a variadic function
+        declared in another unit was called as though it were defined
+        in this one. Both paths are now one word, `CALL,`.
+      - **Declarations in a NESTED block.** `COMPOUND` was "{ ... }
+        with no declarations in it", which is not a thing C has. Every
+        block takes them now, and the frame only ever grows -- which is
+        also what c4lc does.
+      - **A call to a function defined later with no prototype
+        anywhere.** c4lc registers every defined function in a pre-pass;
+        c4fc resolves names as it parses. The discovery pass supplies
+        the same list, so `PREREGISTER` puts them in before the second
+        pass reads a line. The discovery pass itself has to tolerate the
+        unknown name -- it is the thing being discovered.
+      - **`extern int x;` allocates nothing**, whether or not it becomes
+        an extern symbol: if the unit defines `x` further down, that
+        definition allocates it, at its own position. Allocating at the
+        declaration put `sched_switches` first in the BSS instead of
+        last.
+
 ## Risks, and one thing deliberately left out
 
 1. **Byte-identity may not survive every construct.** It survived all

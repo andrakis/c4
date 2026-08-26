@@ -26,6 +26,7 @@
 \ because region 1 begins at zero; every other global is a slot number
 \ until the end of the program.
 : GADDR, ( y -- ) {: y -- :}
+   y y.class @ c_extg = IF oIMM y y.val @ EXTREF, EXIT THEN
    y y.ini @ IF y y.val @ IMMI, ELSE y y.val @ IMMG, THEN ;
 \ Calling through a POINTER, which is what a threaded Forth spends its
 \ life doing: JSRI through a global, JSRS through a frame slot. Only a
@@ -37,8 +38,11 @@
    n >sym @ TO y   y GADDR,
    y y.agg @ IF EXIT THEN   y y.ct @ LOAD, ;M
 
-:M GEN      n_fnref  >sym @ oIMM SWAP FREF, ;M
-:M GEN-ADDR n_fnref  >sym @ oIMM SWAP FREF, ;M
+: FNADDR, ( y -- ) {: y -- :}
+   y y.class @ c_ext = IF oIMM y y.val @ EXTREF, EXIT THEN
+   oIMM y FREF, ;
+:M GEN      n_fnref  >sym @ FNADDR, ;M
+:M GEN-ADDR n_fnref  >sym @ FNADDR, ;M
 :M CT       n_fnref  >sym @ y.ct @ ;M
 
 :M GEN      n_cast >expr @ GEN ;M
@@ -112,6 +116,18 @@
    n >args @ TO v
    n >argn @ 0 ?DO I CELLS v + @ GEN LOOP ;M
 
+\ What a call compiles to is decided entirely by the CLASS of the name
+\ being called: an opcode for a builtin, JSR to a known address, JSRI
+\ through a global, JSRS through a frame slot, and an unresolved
+\ reference for anything this unit only declares.
+: CALL, ( y -- ) {: f -- :}
+   f y.class @ c_builtin = IF f y.val @ OP, EXIT THEN
+   f y.class @ c_glo     = IF f GJSRI, EXIT THEN
+   f y.class @ c_loc     = IF f y.val @ oJSRS OP2, EXIT THEN
+   f y.class @ c_ext     = IF oJSR  f y.val @ EXTREF, EXIT THEN
+   f y.class @ c_extg    = IF oJSRI f y.val @ EXTREF, EXIT THEN
+   f JSRF, ;
+
 :M GEN n_call {: n | f k -- :}
    n >fn @ TO f
    n >argn @ TO k
@@ -119,17 +135,17 @@
    f y.va @ IF
       k f y.nfix @ - TO k                \ how many were extra
       k oIMM OP2,  oPSH OP,
-      VA-MAKE @ JSRF,
+      VA-MAKE @ 0= IF
+         ." c4fc: a variadic call needs __c4cc_make_va -- include stdarg.h"
+         CR ABORT THEN
+      VA-MAKE @ CALL,
       k 1+ oADJ OP2,
       oPSH OP,
-      f JSRF,
+      f CALL,
       f y.nfix @ 1+ oADJ OP2,
       EXIT
    THEN
-   f y.class @ c_builtin = IF f y.val @ OP, ELSE
-   f y.class @ c_glo     = IF f GJSRI, ELSE
-   f y.class @ c_loc     = IF f y.val @ oJSRS OP2, ELSE
-   f JSRF, THEN THEN THEN
+   f CALL,
    k ?DUP IF oADJ OP2, THEN ;M
 
 \ A scalar takes SI even when it is a char, which is what c4cc did and

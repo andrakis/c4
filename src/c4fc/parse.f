@@ -227,7 +227,15 @@ CREATE SLBUF 8192 ALLOT
       TK Id = IF
          TV TO a  TL TO u  TNEXT
          a u ST-FIND TO s
-         s 0= IF ." c4fc: undeclared " a u TYPE CR ABORT THEN
+         \ The discovery pass runs before anything is known, and a call may
+      \ come before the definition with no prototype anywhere -- which
+      \ is the very thing that pass exists to find out. Stand a
+      \ placeholder in and carry on; its output is thrown away.
+      s 0= IF
+         COLLECT @ IF
+            a u c_fun -1 t_int 0 0 ST,  STN @ 1- ST[] TO s
+         ELSE ." c4fc: undeclared " a u TYPE CR ABORT THEN
+      THEN
          s y.sz @ 0= IF ." c4fc: sizeof needs an array: " a u TYPE CR ABORT THEN
          s y.sz @  Rparen WANT  n_num N1 EXIT
       THEN
@@ -251,7 +259,15 @@ CREATE SLBUF 8192 ALLOT
    TK Id = IF
       TV TO a  TL TO u  TNEXT
       a u ST-FIND TO s
-      s 0= IF ." c4fc: undeclared " a u TYPE CR ABORT THEN
+      \ The discovery pass runs before anything is known, and a call may
+      \ come before the definition with no prototype anywhere -- which
+      \ is the very thing that pass exists to find out. Stand a
+      \ placeholder in and carry on; its output is thrown away.
+      s 0= IF
+         COLLECT @ IF
+            a u c_fun -1 t_int 0 0 ST,  STN @ 1- ST[] TO s
+         ELSE ." c4fc: undeclared " a u TYPE CR ABORT THEN
+      THEN
       TK Lparen = IF
          TNEXT ARGS TO k TO v
          n_call 4 CELLS NEW TO nd
@@ -259,8 +275,9 @@ CREATE SLBUF 8192 ALLOT
          nd EXIT
       THEN
       s y.class @ c_const = IF s y.val @ n_num N1 EXIT THEN
-      s y.class @ c_fun = IF s n_fnref N1 EXIT THEN
-      s  s y.class @ c_glo = IF n_gvar ELSE n_var THEN  N1 EXIT
+      s y.class @ c_fun = s y.class @ c_ext = OR IF s n_fnref N1 EXIT THEN
+      s  s y.class @ c_glo = s y.class @ c_extg = OR IF n_gvar ELSE n_var THEN
+      N1 EXIT
    THEN
    ." c4fc: " TOK@ .WHERE ." : an expression was expected" CR ABORT ;
 
@@ -341,9 +358,80 @@ CREATE SLBUF 8192 ALLOT
 
 DEFER STATEMENT                         \ blocks and statements nest
 
-: COMPOUND ( -- node ) {: | v n -- :}   \ { ... } with no declarations in it
+\ An array or a struct takes as many frame slots as it takes cells, and
+\ its name stands for the address of the LOWEST one -- locals grow
+\ downwards, so int a[4] as the first local is slots 1..4 and a is
+\ LEA -4.
+: LOCAL-DECLS ( v -- cnt ) {: v | ct dt t a u sz cnt ag na iv ivn y nd nn -- cnt :}
+   0 TO cnt
+   BEGIN TYPE? WHILE
+      BASE-TYPE TO ct
+      BEGIN
+         ct STARS TO dt
+         TV TO a  TL TO u  Id WANT
+         dt TO t   0 TO sz   0 TO ag   -1 TO na
+         TK Brak = IF
+            TNEXT
+            TK Rbrak = IF -1 TO na ELSE CONST-EXPR TO na THEN
+            Rbrak WANT
+            1 TO ag   dt 2 + TO t
+         ELSE
+            dt T-STRUCT? IF dt T-SIZE TO sz THEN
+         THEN
+         \ the initialiser, which is CODE and belongs to the block
+         0 TO iv   0 TO ivn   0 TO nd
+         TK Assign = IF
+            TNEXT
+            ag IF
+               TK Str = IF
+                  TL TO ivn   ivn CELLS ALLOT: TO iv
+                  ivn 0 ?DO TV I + C@ iv I CELLS + ! LOOP
+                  na 0< IF ivn 1+ TO na THEN
+                  TNEXT
+               ELSE
+                  Lbrace WANT
+                  256 CELLS ALLOT: TO iv   0 TO ivn
+                  BEGIN TK Rbrace <> WHILE
+                     CONST-EXPR iv ivn CELLS + !  ivn 1+ TO ivn
+                     TK Comma = IF TNEXT THEN
+                  REPEAT
+                  Rbrace WANT
+                  na 0< IF ivn TO na THEN
+               THEN
+            ELSE
+               1 EXPR TO nd
+            THEN
+         THEN
+         ag IF  na 1 < IF 1 TO na THEN  na dt T-SIZE * TO sz  THEN
+         sz 0= IF
+            1 NLOC +!
+            a u c_loc NLOC @ NEGATE dt 0 0 ST,
+         ELSE
+            sz 1 CELLS 1- + 1 CELLS / NLOC +!
+            a u c_loc NLOC @ NEGATE t 1 sz ST,
+         THEN
+         nd 0<> ivn 0<> OR IF
+            STN @ 1- ST[] TO y
+            n_linit 7 CELLS NEW TO nn
+            nd nn >expr !  y nn >isym !  iv nn >ivals !  ivn nn >ivn !
+            ag IF na ELSE -1 THEN nn >icount !
+            dt t_char = ag AND nn >ibyte !
+            nn v cnt CELLS + !  cnt 1+ TO cnt
+         THEN
+         TK Comma = WHILE TNEXT
+      REPEAT
+      Semi WANT
+   REPEAT
+   cnt ;
+
+\ Every block takes declarations, not just a function's outermost one:
+\ C allows them at the top of any block and real code writes them there.
+\ The frame only ever grows -- a nested block's slots are not reused
+\ once it closes, which is what c4lc does too.
+: COMPOUND ( -- node ) {: | v n -- :}
    Lbrace WANT
-   256 CELLS ALLOT: TO v   0 TO n
+   256 CELLS ALLOT: TO v
+   v LOCAL-DECLS TO n
    BEGIN TK Rbrace <> WHILE  STATEMENT v n CELLS + !  n 1+ TO n  REPEAT
    Rbrace WANT
    v n n_blk N2 ;
@@ -413,81 +501,8 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
    1 EXPR Semi WANT n_expst N1 ;
 ' (STATEMENT) IS STATEMENT
 
-\ An array or a struct takes as many frame slots as it takes cells, and
-\ its name stands for the address of the LOWEST one -- locals grow
-\ downwards, so int a[4] as the first local is slots 1..4 and a is
-\ LEA -4.
-: LOCAL-DECLS ( v -- cnt ) {: v | ct dt t a u sz cnt ag na iv ivn y nd nn -- cnt :}
-   0 TO cnt
-   BEGIN TYPE? WHILE
-      BASE-TYPE TO ct
-      BEGIN
-         ct STARS TO dt
-         TV TO a  TL TO u  Id WANT
-         dt TO t   0 TO sz   0 TO ag   -1 TO na
-         TK Brak = IF
-            TNEXT
-            TK Rbrak = IF -1 TO na ELSE CONST-EXPR TO na THEN
-            Rbrak WANT
-            1 TO ag   dt 2 + TO t
-         ELSE
-            dt T-STRUCT? IF dt T-SIZE TO sz THEN
-         THEN
-         \ the initialiser, which is CODE and belongs to the block
-         0 TO iv   0 TO ivn   0 TO nd
-         TK Assign = IF
-            TNEXT
-            ag IF
-               TK Str = IF
-                  TL TO ivn   ivn CELLS ALLOT: TO iv
-                  ivn 0 ?DO TV I + C@ iv I CELLS + ! LOOP
-                  na 0< IF ivn 1+ TO na THEN
-                  TNEXT
-               ELSE
-                  Lbrace WANT
-                  256 CELLS ALLOT: TO iv   0 TO ivn
-                  BEGIN TK Rbrace <> WHILE
-                     CONST-EXPR iv ivn CELLS + !  ivn 1+ TO ivn
-                     TK Comma = IF TNEXT THEN
-                  REPEAT
-                  Rbrace WANT
-                  na 0< IF ivn TO na THEN
-               THEN
-            ELSE
-               1 EXPR TO nd
-            THEN
-         THEN
-         ag IF  na 1 < IF 1 TO na THEN  na dt T-SIZE * TO sz  THEN
-         sz 0= IF
-            1 NLOC +!
-            a u c_loc NLOC @ NEGATE dt 0 0 ST,
-         ELSE
-            sz 1 CELLS 1- + 1 CELLS / NLOC +!
-            a u c_loc NLOC @ NEGATE t 1 sz ST,
-         THEN
-         nd 0<> ivn 0<> OR IF
-            STN @ 1- ST[] TO y
-            n_linit 7 CELLS NEW TO nn
-            nd nn >expr !  y nn >isym !  iv nn >ivals !  ivn nn >ivn !
-            ag IF na ELSE -1 THEN nn >icount !
-            dt t_char = ag AND nn >ibyte !
-            nn v cnt CELLS + !  cnt 1+ TO cnt
-         THEN
-         TK Comma = WHILE TNEXT
-      REPEAT
-      Semi WANT
-   REPEAT
-   cnt ;
 
-: BLOCK ( -- node ) {: | v n -- :}
-   Lbrace WANT
-   256 CELLS ALLOT: TO v                \ one block's worth; blocks nest by
-   v LOCAL-DECLS TO n                   \ each taking its own
-   BEGIN TK Rbrace <> WHILE
-      STATEMENT v n CELLS + !  n 1+ TO n
-   REPEAT
-   Rbrace WANT
-   v n n_blk N2 ;
+: BLOCK ( -- node )  COMPOUND ;
 
 \ -- declarations -------------------------------------------------------
 
@@ -540,7 +555,18 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
    STN @ TO base   0 NLOC !
    PARAMS TO va TO n
    va y y.va !   n va - y y.nfix !
-   TK Semi = IF TNEXT base STN ! EXIT THEN    \ a prototype and nothing more
+   \ Recorded from the PROTOTYPE as well as the definition: a variadic
+   \ call site needs __c4cc_make_va, and a unit that only declares it --
+   \ every C4IX module does -- still calls it.
+   a u S" __c4cc_make_va" NAME=? IF y VA-MAKE ! THEN
+   TK Semi = IF                              \ a prototype and nothing more
+      TNEXT
+      COLLECT @ IF a u ct va PROTO, THEN
+      OBJECT @ COLLECT @ 0= AND IF
+         a u EXT-FIND TO fi
+         fi 0< 0= IF c_ext y y.class !  fi y y.val ! THEN
+      THEN
+      base STN ! EXIT THEN
    \ Pass two of -O: a function nothing live can reach is skipped whole
    \ -- no symbol, no code, no strings, as if it had not been written.
    OPTIMIZE @ COLLECT @ 0= AND IF
@@ -554,13 +580,17 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
    a u ct 129 CHERE  sc at OR  va IF 32 OR THEN  SYM,
    at 1 AND IF CHERE CONSN @ CELLS CONS @ + !  1 CONSN +! THEN
    at 2 AND IF CHERE DESN  @ CELLS DESS @ + !  1 DESN  +! THEN
-   a u S" __c4cc_make_va" NAME=? IF y VA-MAKE ! THEN
    BLOCK TO body                        \ parse first: ENT needs the count
    OPTIMIZE @ IF body FOLD TO body THEN
    \ Pass one of -O: who does this function reach, and is it a root?
    COLLECT @ IF
       a u FN-DEF TO fi
+      fi ct  n va -  va FN-SIG!
+      a u DG-DEF
       at 3 AND IF a u ROOT, THEN
+      \ In object mode every non-static function is exported, so every
+      \ one of them is a root: another unit may call it.
+      OBJECT @ sc 8 <> AND IF a u ROOT, THEN
       a u S" main" NAME=? IF a u ROOT, THEN
       a u S" __c4cc_make_va" NAME=? IF a u ROOT, THEN
       fi CURFN !  body REFS  -1 CURFN !
@@ -623,7 +653,7 @@ CREATE IVAL IVMAX CELLS ALLOT
       et t_char = IF off I + ID-C! ELSE off I CELLS + ID-! THEN
    LOOP ;
 
-: DECL {: | a u ct dt t n sz ag sc at y ivn off es fa fu fr fs -- :}
+: DECL {: | a u ct dt t n sz ag sc at y ivn off es fa fu fr fs fx fk -- :}
    TK Enum = IF ENUM-DECL EXIT THEN
    STORAGE TO sc
    TYPE? 0= IF ." c4fc: a declaration was expected" CR ABORT THEN
@@ -692,19 +722,53 @@ CREATE IVAL IVMAX CELLS ALLOT
          STN @ 1- ST[] TO y   1 y y.ini !  sc 0 MAX y y.sc !
       ELSE
          ag IF n 1 < IF 1 TO n THEN n es T-SIZE * TO sz THEN
+         \ `extern int x;` with no initialiser declares nothing here.
+         \ In object mode it becomes a reference for c4rlink to fill in;
+         \ in whole-program mode it is a global like any other.
+         COLLECT @ IF
+            sc -1 = IF a u t ag IF sz ELSE 0 THEN EXTG, ELSE a u DG-DEF THEN
+         THEN
+         \ `extern int x;` allocates nothing, whether or not it turns out
+         \ to be an extern: if the unit defines x further down, that
+         \ definition is what allocates it, and at its own position.
+         0 TO fx
+         OBJECT @ COLLECT @ 0= AND sc -1 = AND IF
+            a u EXT-FIND TO fk
+            fk 0< 0= a u ST-FIND 0= AND IF
+               a u c_extg fk t ag sz ST,
+               STN @ 1- ST[] TO y   0 y y.sc !
+            THEN
+            1 TO fx
+         THEN
          \ extern int x; int x;  is one global, not two -- a repeated
          \ declaration of a name already known is the same object.
-         a u ST-FIND TO y
-         y IF y y.class @ c_glo <> IF 0 TO y THEN THEN
-         y 0= IF
-            a u c_glo NGLO @ t ag sz ST,
-            STN @ 1- ST[] TO y   sc 0 MAX y y.sc !
-            1 NGLO +!
+         fx 0= IF
+            a u ST-FIND TO y
+            y IF y y.class @ c_glo <> IF 0 TO y THEN THEN
+            y 0= IF
+               a u c_glo NGLO @ t ag sz ST,
+               STN @ 1- ST[] TO y   sc 0 MAX y y.sc !
+               1 NGLO +!
+            THEN
          THEN
       THEN
       TK Comma = WHILE TNEXT
    REPEAT
    Semi WANT ;
+
+\ Every function this unit defines, registered before a line of it is
+\ read -- so a call that comes before the definition and has no
+\ prototype resolves, which is what c4lc's own pre-pass buys. Only the
+\ live ones: a function -O has dropped is not there to be called.
+: PREREGISTER ( -- ) {: | y -- :}
+   #FNS @ 0 ?DO
+      OPTIMIZE @ 0= I CELLS FN-LIVE + @ 0<> OR IF
+         I CELLS FN-A + @  I CELLS FN-U + @  c_fun -1
+         I CELLS FN-T + @  0 0 ST,
+         STN @ 1- ST[] TO y
+         I CELLS FN-V + @ y y.va !   I CELLS FN-N + @ y y.nfix !
+      THEN
+   LOOP ;
 
 \ Where the three data regions actually land. Region 1 was placed as it
 \ was declared; regions 2 and 3 are relative until now, so every patch

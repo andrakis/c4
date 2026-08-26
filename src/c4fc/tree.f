@@ -179,6 +179,13 @@ VARIABLE NFOLD   0 NFOLD !
 CREATE FN-A    FNMAX CELLS ALLOT
 CREATE FN-U    FNMAX CELLS ALLOT
 CREATE FN-LIVE FNMAX CELLS ALLOT
+\ ...and what a call site needs to know before the definition is read:
+\ its return type, how many fixed parameters it takes, and whether it is
+\ variadic. c4lc registers every defined function in a pre-pass for the
+\ same reason -- a call may come first, with no prototype anywhere.
+CREATE FN-T    FNMAX CELLS ALLOT
+CREATE FN-N    FNMAX CELLS ALLOT
+CREATE FN-V    FNMAX CELLS ALLOT
 VARIABLE #FNS   0 #FNS !
 VARIABLE CURFN  -1 CURFN !              \ which function is being walked
 
@@ -205,7 +212,10 @@ VARIABLE NDROP     0 NDROP !
    #FNS @ FNMAX < 0= IF ." c4fc: too many functions" CR ABORT THEN
    a #FNS @ CELLS FN-A + !   u #FNS @ CELLS FN-U + !
    0 #FNS @ CELLS FN-LIVE + !
+   1 #FNS @ CELLS FN-T + !  0 #FNS @ CELLS FN-N + !  0 #FNS @ CELLS FN-V + !
    #FNS @   1 #FNS +! ;
+: FN-SIG! ( i ct nfix va -- ) {: i ct n va -- :}
+   ct i CELLS FN-T + !  n i CELLS FN-N + !  va i CELLS FN-V + ! ;
 : REF, ( a u -- ) {: a u -- :}
    #REFS @ REFMAX < 0= IF ." c4fc: too many references" CR ABORT THEN
    CURFN @ #REFS @ CELLS REF-F + !
@@ -294,3 +304,59 @@ GENERIC: REFS ( node -- )
 :M REFS n_blk    {: n | v -- :}
    n >list @ TO v
    n >len @ 0 ?DO I CELLS v + @ REFS LOOP ;M
+
+\ -- what the unit DEFINES, and what it only declares ---------------------
+\ Object mode has to know, at a prototype, whether the function is
+\ defined further down the file -- which is exactly what the pass the
+\ tree passes already run is for, so `-c` runs it too.
+\
+\ The extern ids are handed out between the passes and in c4lc's order:
+\ every prototype first, in the order they appear, then every extern
+\ datum. Not interleaved, because c4lc numbers them in two walks.
+
+1024 CONSTANT DGMAX
+CREATE DG-A DGMAX CELLS ALLOT
+CREATE DG-U DGMAX CELLS ALLOT
+VARIABLE #DG   0 #DG !
+: DG-DEF ( a u -- ) {: a u -- :}
+   #DG @ DGMAX < 0= IF ." c4fc: too many definitions" CR ABORT THEN
+   a #DG @ CELLS DG-A + !  u #DG @ CELLS DG-U + !  1 #DG +! ;
+: DG-DEFINED? ( a u -- f ) {: a u -- f :}
+   #DG @ 0 ?DO
+      u I CELLS DG-U + @ = IF
+         a I CELLS DG-A + @ u BYTES= IF -1 UNLOOP EXIT THEN
+      THEN
+   LOOP 0 ;
+
+512 CONSTANT PLMAX
+CREATE PL-A PLMAX CELLS ALLOT   CREATE PL-U PLMAX CELLS ALLOT
+CREATE PL-T PLMAX CELLS ALLOT   CREATE PL-V PLMAX CELLS ALLOT
+VARIABLE #PL   0 #PL !
+: PROTO, ( a u ct va -- ) {: a u ct va -- :}
+   #PL @ PLMAX < 0= IF ." c4fc: too many prototypes" CR ABORT THEN
+   a #PL @ CELLS PL-A + !  u #PL @ CELLS PL-U + !
+   ct #PL @ CELLS PL-T + !  va #PL @ CELLS PL-V + !  1 #PL +! ;
+
+CREATE XG-A PLMAX CELLS ALLOT   CREATE XG-U PLMAX CELLS ALLOT
+CREATE XG-T PLMAX CELLS ALLOT   CREATE XG-G PLMAX CELLS ALLOT
+VARIABLE #XG   0 #XG !
+: EXTG, ( a u ct agg -- ) {: a u ct ag -- :}
+   #XG @ PLMAX < 0= IF ." c4fc: too many extern data" CR ABORT THEN
+   a #XG @ CELLS XG-A + !  u #XG @ CELLS XG-U + !
+   ct #XG @ CELLS XG-T + !  ag #XG @ CELLS XG-G + !  1 #XG +! ;
+
+: DECL-RESET  0 #DG !  0 #PL !  0 #XG ! ;
+
+: MAKE-EXTERNS ( -- ) {: | a u -- :}
+   #PL @ 0 ?DO
+      I CELLS PL-A + @ TO a   I CELLS PL-U + @ TO u
+      a u DG-DEFINED? 0=  a u EXT-FIND 0< AND IF
+         a u  I CELLS PL-T + @  129  I CELLS PL-V + @  0  EXT-NEW DROP
+      THEN
+   LOOP
+   #XG @ 0 ?DO
+      I CELLS XG-A + @ TO a   I CELLS XG-U + @ TO u
+      a u DG-DEFINED? 0=  a u EXT-FIND 0< AND IF
+         a u  I CELLS XG-T + @  131  0  I CELLS XG-G + @  EXT-NEW DROP
+      THEN
+   LOOP ;

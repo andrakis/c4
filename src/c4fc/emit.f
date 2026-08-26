@@ -426,7 +426,12 @@ CREATE WSCR 1 CELLS ALLOT
    67 EMIT 52 EMIT 82 EMIT               \ "C4R"
    3 EMIT                                \ version 3, as c4lc writes
    1 CELLS 8 * EMIT
-   MEMSZ FW                              \ v3 puts memsz in v2's padding
+   \ v3 puts memsz in v2's eight padding bytes -- and the field is EIGHT
+   \ BYTES whatever the word size is, so a 32-bit image writes the word
+   \ and then four zeros. Writing one word and stopping made a header
+   \ four bytes short, which nothing noticed until c4fc ran on a 32-bit
+   \ machine: at 64 bits one word IS the field.
+   MEMSZ FW   8 1 CELLS - 0 ?DO 0 EMIT LOOP
    ENTRY @ FW   CN @ FW   dl FW   PN @ FW   SN @ FW   CONSN @ FW   DESN @ FW
    67 FMK  CN @ 0 ?DO I CELLS CODE @ + @ FW LOOP
    68 FMK  dl 0 ?DO I DBYTE EMIT LOOP

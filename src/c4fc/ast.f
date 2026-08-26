@@ -9,7 +9,10 @@
 \ table rather than by a predicate somebody has to maintain.
 
 NODE: n_num    NFIELD: >val                    ;NODE
-NODE: n_str    NFIELD: >off                    ;NODE
+\ A string literal carries its BYTES, not a data offset: the offset is
+\ handed out during emission, and a literal inside a branch the tree
+\ pass deletes must never be handed one at all.
+NODE: n_str    NFIELD: >off  NFIELD: >slen     ;NODE
 NODE: n_var    NFIELD: >sym                    ;NODE
 NODE: n_gvar   NFIELD: >sym                    ;NODE
 NODE: n_asgn   NFIELD: >lhs  NFIELD: >rhs      ;NODE
@@ -56,10 +59,11 @@ NODE: n_if     NFIELD: >cond NFIELD: >body NFIELD: >else ;NODE
 NODE: n_while  NFIELD: >cond NFIELD: >body                ;NODE
 NODE: n_do     NFIELD: >cond NFIELD: >body                ;NODE
 NODE: n_for    NFIELD: >cond NFIELD: >body NFIELD: >init NFIELD: >step ;NODE
-\ A switch carries where its jump table lives and the range it covers;
-\ the table's CONTENTS are code addresses, filled in as the case labels
-\ are reached during codegen.
-NODE: n_switch NFIELD: >cond NFIELD: >body NFIELD: >tab
+\ A switch carries the range its jump table covers. WHERE the table
+\ lives is decided during emission, not here: data addresses are handed
+\ out in generation order, and a switch the tree pass deletes must not
+\ have taken one.
+NODE: n_switch NFIELD: >cond NFIELD: >body
                NFIELD: >lo   NFIELD: >hi                   ;NODE
 NODE: n_case   NFIELD: >val                                ;NODE
 NODE: n_default                                            ;NODE
@@ -84,6 +88,11 @@ NODE: n_linit  NFIELD: >expr NFIELD: >isym NFIELD: >ivals
                NFIELD: >ivn  NFIELD: >icount NFIELD: >ibyte ;NODE
 NODE: n_expst  NFIELD: >expr                   ;NODE
 NODE: n_blk    NFIELD: >list NFIELD: >len      ;NODE
+
+\ Constructors for the one- and two-field shapes, which is most of them.
+: N1 ( v tag -- n )   2 CELLS NEW TUCK 1 CELLS + ! ;
+: N2 ( a b tag -- n ) 3 CELLS NEW {: a b n -- n :}
+   a n 1 CELLS + !  b n 2 CELLS + !  n ;
 
 GENERIC: GEN                            \ an expression, as a value
 GENERIC: GEN-ADDR                       \ an expression, as an address

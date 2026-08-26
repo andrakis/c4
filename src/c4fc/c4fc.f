@@ -28,8 +28,6 @@
    S" __c4_wake" oCWAK BUILTIN S" __c4_ipi" oIPI BUILTIN
    S" __c4_termraw" oTRAW BUILTIN ;
 
-VARIABLE OPTIMIZE   0 OPTIMIZE !
-
 \ The arena has to exist before -I and -D can be recorded, so the setup
 \ is its own word and C4FC falls back to it -- which keeps the bare
 \ `S" f.c" C4FC` that every spike test uses working unchanged.
@@ -45,14 +43,25 @@ VARIABLE C4FC-READY   0 C4FC-READY !
 : -I ( a u -- )  PP-PATH ;
 : -D ( a u -- )  PP-DEFINE ;
 
+\ Everything a compile of one unit starts from. -O runs it twice: the
+\ first pass exists only to learn which functions are reachable, and
+\ throws its buffers away.
+: UNIT-RESET ( -- )
+   EMIT-RESET
+   NSYM SYMR * ALLOCATE STAB !  0 STN !  0 NGLO !
+   0 #STRUCTS !  0 #MEMS !  0 VA-MAKE !
+   0 TP !
+   BUILTINS ;
+
 : C4FC ( a u -- )                       \ compile that file, image to stdout
    C4FC-READY @ 0= IF C4FC-INIT THEN
-   EMIT-INIT
-   NSYM SYMR * ALLOCATE STAB !  0 STN !  0 NGLO !  0 GPN !
-   BUILTINS
    PREPROCESS @ IF PP-FILE ELSE LEX-FILE THEN
-   0 TP !
-   PROGRAM
+   OPTIMIZE @ IF
+      T2-RESET  1 COLLECT !
+      UNIT-RESET PROGRAM             \ pass one: the call graph
+      T2-CLOSE  0 COLLECT !
+   THEN
+   UNIT-RESET PROGRAM
    ENTRY @ 0< IF ." c4fc: no main" CR ABORT THEN
    OPTIMIZE @ IF OPT-RUN THEN
    WRITE-IMAGE ;

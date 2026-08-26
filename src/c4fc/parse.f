@@ -10,7 +10,7 @@
 \ is declared at its top. That is a real constraint on how these words
 \ are shaped and it is worth stating rather than working around.
 
-512 CONSTANT NSYM
+8192 CONSTANT NSYM
 VARIABLE STAB   VARIABLE STN
 VARIABLE NLOC                           \ locals in the function in hand
 VARIABLE NGLO                           \ globals, numbered; placed at the end
@@ -128,10 +128,6 @@ DEFER CEXPR
 
 \ -- nodes --------------------------------------------------------------
 
-: N1 ( v tag -- n )   2 CELLS NEW TUCK 1 CELLS + ! ;
-: N2 ( a b tag -- n ) 3 CELLS NEW {: a b n -- n :}
-   a n 1 CELLS + !  b n 2 CELLS + !  n ;
-
 \ -- expressions --------------------------------------------------------
 
 DEFER EXPR                              \ ( lev -- node )
@@ -201,9 +197,27 @@ DEFER EXPR                              \ ( lev -- node )
    Rparen WANT
    v n ;
 
+\ Adjacent string literals are one string, which is how a long message
+\ is written across two lines. Expressions only, as in c4lc: an
+\ initialiser takes the first literal and nothing more.
+\
+\ The bytes are copied into the ARENA and the data offset is not handed
+\ out until emission, because c4lc allocates its literals during code
+\ generation and the tree passes run before that: a string inside
+\ `if (0)` costs nothing in c4lc's image and must cost nothing here.
+CREATE SLBUF 8192 ALLOT
+: STR-LIT ( -- a u ) {: | n d -- a u :}
+   0 TO n
+   BEGIN TK Str = WHILE
+      n TL + 8192 > IF ." c4fc: string literal too long" CR ABORT THEN
+      TV SLBUF n + TL MOVE   n TL + TO n   TNEXT
+   REPEAT
+   n 1+ ALLOT: TO d   SLBUF d n MOVE
+   d n ;
+
 : PRIMARY ( -- node ) {: | s a u v k nd ct -- n :}
    TK Num = IF TV TNEXT n_num N1 EXIT THEN
-   TK Str = IF TV TL D-STR, TNEXT n_str N1 EXIT THEN
+   TK Str = IF STR-LIT n_str N2 EXIT THEN
    \ sizeof(type) folds to a constant, and so does sizeof(array): the
    \ operand is a NAME rather than a type exactly when it lexes as an
    \ identifier, and then it has to be an array, because that is the
@@ -379,12 +393,8 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
          s lo < IF s TO lo THEN
          s hi > IF s TO hi THEN
       LOOP
-      n_switch 6 CELLS NEW TO nd
+      n_switch 5 CELLS NEW TO nd
       c nd >cond !  b nd >body !  lo nd >lo !  hi nd >hi !
-      \ The table is allocated HERE, after the body -- which is where
-      \ c4lc puts it: a string literal inside the switch gets the lower
-      \ address.
-      D-ALIGN  hi lo - 1+ CELLS D-ALLOT nd >tab !
       i CVN !
       nd EXIT
    THEN
@@ -506,7 +516,22 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
    n va - 0 ?DO  n 2 + I 1+ -  base I + ST[] y.val !  LOOP
    n va ;
 
-: FUNCTION ( a u ct sc at -- ) {: a u ct sc at | base body y n va -- :}
+\ Skip a function body at the TOKEN level -- no parse, so no string
+\ literal is allocated and no symbol is made. A dead function has to
+\ cost nothing at all, not merely emit nothing.
+: SKIP-BODY ( -- ) {: | d -- :}
+   0 TO d
+   BEGIN
+      TK Eof = IF ." c4fc: unterminated function body" CR ABORT THEN
+      TK Lbrace = IF d 1+ TO d THEN
+      TK Rbrace = IF d 1- TO d THEN
+      TNEXT
+      d 0=
+   UNTIL ;
+
+: FUNCTION ( a u ct sc at -- )
+   {: a u ct sc at | base body y n va base0 fi -- :}
+   STN @ TO base0
    a u ST-FIND TO y
    y 0= IF
       a u c_fun -1 ct 0 0 ST,
@@ -516,6 +541,12 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
    PARAMS TO va TO n
    va y y.va !   n va - y y.nfix !
    TK Semi = IF TNEXT base STN ! EXIT THEN    \ a prototype and nothing more
+   \ Pass two of -O: a function nothing live can reach is skipped whole
+   \ -- no symbol, no code, no strings, as if it had not been written.
+   OPTIMIZE @ COLLECT @ 0= AND IF
+      a u FN-LIVE? 0= IF
+         1 NDROP +!  SKIP-BODY  base0 STN !  EXIT THEN
+   THEN
    CHERE y y.val !
    a u S" main" NAME=? IF CHERE ENTRY ! THEN
    \ 0x20 marks a variadic function, which is one byte and the last
@@ -525,10 +556,22 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
    at 2 AND IF CHERE DESN  @ CELLS DESS @ + !  1 DESN  +! THEN
    a u S" __c4cc_make_va" NAME=? IF y VA-MAKE ! THEN
    BLOCK TO body                        \ parse first: ENT needs the count
+   OPTIMIZE @ IF body FOLD TO body THEN
+   \ Pass one of -O: who does this function reach, and is it a root?
+   COLLECT @ IF
+      a u FN-DEF TO fi
+      at 3 AND IF a u ROOT, THEN
+      a u S" main" NAME=? IF a u ROOT, THEN
+      a u S" __c4cc_make_va" NAME=? IF a u ROOT, THEN
+      fi CURFN !  body REFS  -1 CURFN !
+   THEN
+   LABEL-RESET
    NLOC @ oENT OP2,
    body STMT
    \ return emits its own LEV, so a function ending in one gets one LEV
-   LAST-OP oLEV <> IF oLEV OP, THEN
+   \ -- unless a branch lands here, in which case the LEV that is here
+   \ belongs to the arm that took it and the other arm needs its own.
+   LAST-OP oLEV <> LABEL-HERE? OR IF oLEV OP, THEN
    base STN ! ;                         \ parameters and locals go out of scope
 
 \ enum { A, B = 5, C };  -- constants, folded to literals where used.
@@ -611,6 +654,7 @@ CREATE IVAL IVMAX CELLS ALLOT
             y y.class @ c_fun <> y y.val @ 0< OR IF
                ." c4fc: & initialiser requires a defined function" CR ABORT THEN
             y y.val @ TO fr
+            COLLECT @ IF fa fu ROOT, THEN   \ a global holding &fn is a root
             0 IVAL !  1 TO ivn
          ELSE
          TK Str = IF
@@ -665,7 +709,7 @@ CREATE IVAL IVMAX CELLS ALLOT
 \ Where the three data regions actually land. Region 1 was placed as it
 \ was declared; regions 2 and 3 are relative until now, so every patch
 \ that names one gets shifted here.
-1024 CONSTANT GMAX
+8192 CONSTANT GMAX
 CREATE GOFF GMAX CELLS ALLOT
 : PLACE-GLOBALS {: | off y -- :}
    IDN @ ALIGNUP DB2 !

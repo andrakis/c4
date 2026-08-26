@@ -559,6 +559,58 @@ The bar rises rung by rung and c4lc supplies it at every one.
       ceiling -- but a compiler inside the machine that is not slower
       than the one outside it is worth writing down.
 
+- [x] **L6** The tree passes, and `-O` matching `c4lc -O` byte for byte.
+      `src/c4fc/tree.f`. *Verified:* nineteen programs, `c4th.c`, C4KE
+      and C4DOS, each compiled with `-O` and **byte-identical to
+      `c4lc -O`**; C4KE also boots and shuts down cleanly, and the `-O`
+      c4th passes the Forth-2012 CORE suite.
+
+      **T1, constant folding.** One `FOLD` method per node kind, sharing
+      `FOLD1` with the peephole pass so the two cannot disagree about
+      what `3 / 0` or `-1 >> 2` means. `&&` and `||` fold with c4's
+      exact result semantics -- `a && b` is b's VALUE when a is truthy,
+      not 1 -- and `if`, `while` and `for` with constant conditions lose
+      the arm that never runs.
+
+      **T2, dead function elimination**, which needs the whole program
+      and c4fc generates each function as it parses it. So `-O` compiles
+      the unit **twice**: the first pass exists only to build the call
+      graph and is thrown away, the second skips every function nothing
+      live can reach -- at the TOKEN level, so a dead function costs no
+      symbol, no code and no string. Parsing twice is cheap here in a
+      way it would not be in the Lisp: the first pass of C4KE costs
+      0.4 s.
+
+      Three things fell out of it, each a bug the differential named:
+
+      **A string literal must not be allocated until it is emitted.**
+      c4fc handed out data offsets while parsing; c4lc hands them out
+      during code generation, which is after the tree passes. A message
+      inside `if (0)` was still in c4fc's image, 94 bytes that nothing
+      referenced. The literal now carries its bytes and gets its offset
+      in `GEN`. The switch jump table moved for the same reason and to
+      the same place.
+
+      **`JSRI` and `JSRS` take an operand**, and the peephole decoder's
+      list said only LEA..ADJ did. The operand word round-trips as if it
+      were an instruction, so nothing looked wrong -- the PATCH on it was
+      silently dropped, and a call through a function pointer went to
+      whatever lives at address zero. c4fc had emitted neither opcode
+      until F9.
+
+      **A trailing `LEV` is needed when a LABEL lands at the end of a
+      function.** `int f (int x) { if (x) return 1; }` ends with a LEV
+      that only the taken arm reaches; the false arm branches past it
+      and off the end of the function into whatever was compiled next.
+      Judging by "the last thing emitted was a LEV" is wrong, and c4lc
+      is right by accident of representation: its labels sit in the
+      instruction list and break the chain. c4fc now tracks the highest
+      address anything has branched to.
+
+      One number: `-O` takes `c4th.c4r` from 217,298 bytes to 177,940,
+      the same −18.1% `docs/c4lc-design.md` records for c4lc's own `-O`,
+      and the resulting c4th runs c4fc **1.26x faster** under c4m.
+
 ## Risks, and one thing deliberately left out
 
 1. **Byte-identity may not survive every construct.** It survived all

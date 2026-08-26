@@ -19,10 +19,10 @@
 \   4. LEV ends a function, and `return` emits its own -- so a function
 \      whose last statement is a return gets one LEV, not two.
 
-262144 CONSTANT CMAX
- 65536 CONSTANT DMAX
-  8192 CONSTANT PMAX
-  4096 CONSTANT SMAX
+1048576 CONSTANT CMAX
+ 524288 CONSTANT DMAX
+  65536 CONSTANT PMAX
+  16384 CONSTANT SMAX
 
 \ THE DATA SEGMENT IS THREE REGIONS, in this order:
 \
@@ -94,6 +94,20 @@ VARIABLE DESS   VARIABLE DESN
 : OP,   ( op -- )    C, ;
 : OP2,  ( n op -- )  C, C, ;
 : CHERE ( -- n )     CN @ ;
+
+\ The highest code address anything has branched TO in the function
+\ being compiled. It answers one question, at the end: is there a LABEL
+\ here? A function whose last statement is `if (x) return 1;` ends with
+\ a LEV that only the TAKEN arm reaches, and the false arm branches
+\ past it -- so it still needs a LEV of its own. Judging that by "the
+\ last thing emitted was a LEV" runs off the end of the function into
+\ whatever was compiled next; c4lc gets it right because its labels sit
+\ in the instruction list and break the chain.
+VARIABLE LABMAX   -1 LABMAX !
+: LABEL@ ( addr -- )  LABMAX @ MAX LABMAX ! ;
+: LABEL-RESET ( -- )  -1 LABMAX ! ;
+: LABEL-HERE? ( -- f )  LABMAX @ CHERE >= ;
+
 : LAST-OP ( -- w )   CN @ 0= IF -1 EXIT THEN CODE @ CN @ 1- CELLS + @ ;
 
 : PAT, ( type addr value -- ) {: t a v | p -- :}
@@ -102,7 +116,7 @@ VARIABLE DESS   VARIABLE DESN
    t p !   a p CELL+ !   v p 2 CELLS + !
    1 PN +! ;
 
-4096 CONSTANT DSMAX
+32768 CONSTANT DSMAX
 CREATE DSL DSMAX CELLS ALLOT   VARIABLE DSN   0 DSN !
 
 \ A patched operand carries its value in the patch, and what the CODE
@@ -127,7 +141,7 @@ CREATE DSL DSMAX CELLS ALLOT   VARIABLE DSN   0 DSN !
 \ patch type -3. They are collected rather than emitted as they are
 \ found, because c4lc writes every one of them after every code patch
 \ and c4r.lisp walks the patch list against the instruction stream.
-1024 CONSTANT TABMAX
+8192 CONSTANT TABMAX
 CREATE TABD TABMAX CELLS ALLOT
 CREATE TABC TABMAX CELLS ALLOT          \ the value
 CREATE TABB TABMAX CELLS ALLOT          \ 1 = the SLOT is in region 2
@@ -141,18 +155,24 @@ VARIABLE TABN   0 TABN !
    TABT TABN @ CELLS + !   TABB TABN @ CELLS + !
    TABC TABN @ CELLS + !   TABD TABN @ CELLS + !   1 TABN +! ;
 \ a switch jump table: a region 2 slot holding a code address
-: TABPAT, ( slot code -- )   1 -3 (TABPAT) ;
+: TABPAT, ( slot code -- )   DUP LABEL@  1 -3 (TABPAT) ;
 \ `int *fp = &fn;`: a region 1 slot holding a code address
 : FNPAT,  ( slot code -- )   0 -3 (TABPAT) ;
 \ `char *s = "...";`: a region 1 slot holding the address of a string
 \ that is ALSO in region 1 -- see ID-STR, below for why.
 : STRPAT, ( slot off -- )    0 -4 (TABPAT) ;
-: EMIT-TABPATS ( base -- ) {: b | f -- :}
+\ The optimizer moves code, so a data word holding a CODE address has to
+\ be remapped when it does. It sets TAB-MAP; nothing else does, and the
+\ two paths are otherwise the same loop rather than two copies of it.
+: TAB-SAME ( a -- a ) ;
+DEFER TAB-MAP ( codeaddr -- codeaddr' )
+' TAB-SAME IS TAB-MAP
+: EMIT-TABPATS ( base -- ) {: b | f ty -- :}
    TABN @ 0 ?DO
-      TABB I CELLS + @ TO f
+      TABB I CELLS + @ TO f   TABT I CELLS + @ TO ty
       TABD I CELLS + @  f 1 AND IF b + THEN
-      TABC I CELLS + @  f 2 AND IF b + THEN
-      TABT I CELLS + @  ROT ROT PAT,
+      TABC I CELLS + @  ty -3 = IF TAB-MAP ELSE f 2 AND IF b + THEN THEN
+      ty  ROT ROT PAT,
    LOOP ;
 
 \ A call to a function that has only been PROTOTYPED does not know where
@@ -160,7 +180,7 @@ VARIABLE TABN   0 TABN !
 \ when the whole program has been read. Both halves need fixing: the
 \ patch's value and the code word, because a code reference carries its
 \ target in both.
-2048 CONSTANT FWMAX
+32768 CONSTANT FWMAX
 CREATE FWP FWMAX CELLS ALLOT
 CREATE FWS FWMAX CELLS ALLOT
 VARIABLE FWN   0 FWN !
@@ -181,10 +201,11 @@ VARIABLE FWN   0 FWN !
 : RESTO ( mark target -- ) {: m t | p -- :}
    m 3 * CELLS PATCH @ + TO p
    t p 2 CELLS + !
-   t p CELL+ @ CELLS CODE @ + ! ;
+   t p CELL+ @ CELLS CODE @ + !
+   t LABEL@ ;
 : >RES ( mark -- )  CHERE RESTO ;
 : BACK, ( op target -- ) {: op t -- :}
-   op OP,  -1 CHERE t PAT,  t C, ;
+   op OP,  -1 CHERE t PAT,  t C,  t LABEL@ ;
 
 \ Region 1: an initialised global's address IS its offset, because that
 \ region starts at zero.
@@ -205,7 +226,7 @@ VARIABLE FWN   0 FWN !
 \ A global's address is not known until every string literal has been
 \ seen, because c4lc lays the globals out AFTER them -- so the patch is
 \ recorded with the global's number and revisited at the end.
-1024 CONSTANT GPMAX
+8192 CONSTANT GPMAX
 CREATE GPL GPMAX CELLS ALLOT   VARIABLE GPN   0 GPN !
 : FIX-REGION2 ( base -- ) {: b | p -- :}   \ shift every region 2 reference
    DSN @ 0 ?DO
@@ -216,6 +237,33 @@ CREATE GPL GPMAX CELLS ALLOT   VARIABLE GPN   0 GPN !
    op OP,  -2 CHERE slot PAT,  0 C,
    PN @ 1- GPL GPN @ CELLS + !  1 GPN +! ;
 : IMMG, ( slot -- )  oIMM SWAP GOP, ;
+
+\ -- constant arithmetic ------------------------------------------------
+\ One table, used twice: the TREE pass folds `3 * 4` in the AST and the
+\ peephole pass folds `IMM 3; PSH; IMM 4; MUL` in the instruction
+\ stream. They must agree, and the way to make them agree is to have
+\ one of them. Division by zero never folds -- it is left to fail at
+\ runtime, where C says it may.
+: ASHR ( a b -- v )  {: a b -- v :}
+   a 0< IF a INVERT b RSHIFT INVERT ELSE a b RSHIFT THEN ;
+: FOLD1 ( a b op -- v ok ) {: a b o -- v ok :}
+   o oADD = IF a b +      1 EXIT THEN
+   o oSUB = IF a b -      1 EXIT THEN
+   o oMUL = IF a b *      1 EXIT THEN
+   o oDIV = IF b 0= IF 0 0 EXIT THEN a b /   1 EXIT THEN
+   o oMOD = IF b 0= IF 0 0 EXIT THEN a b MOD 1 EXIT THEN
+   o oAND = IF a b AND    1 EXIT THEN
+   o oOR  = IF a b OR     1 EXIT THEN
+   o oXOR = IF a b XOR    1 EXIT THEN
+   o oSHL = IF a b LSHIFT 1 EXIT THEN
+   o oSHR = IF a b ASHR   1 EXIT THEN
+   o oEQ  = IF a b =  1 AND 1 EXIT THEN
+   o oNE  = IF a b <> 1 AND 1 EXIT THEN
+   o oLT  = IF a b <  1 AND 1 EXIT THEN
+   o oGT  = IF a b >  1 AND 1 EXIT THEN
+   o oLE  = IF a b <= 1 AND 1 EXIT THEN
+   o oGE  = IF a b >= 1 AND 1 EXIT THEN
+   0 0 ;
 
 \ -- data ---------------------------------------------------------------
 
@@ -303,3 +351,10 @@ CREATE WSCR 1 CELLS ALLOT
       y y.nlen @ EMIT   y y.name @ y y.nlen @ TYPE
       y y.val @ FW
    LOOP ;
+
+\ The counters that live beside the tables they index. They are here
+\ rather than in EMIT-INIT only because EMIT-INIT is defined before the
+\ tables are; -O compiles a unit twice and both passes start clean.
+: EMIT-RESET ( -- )
+   EMIT-INIT
+   0 DSN !  0 TABN !  0 FWN !  0 GPN !  -1 LABMAX ! ;

@@ -70,8 +70,15 @@ VARIABLE MAXLBL
       p CELL+ @ off = p @ -2 >= AND IF p UNLOOP EXIT THEN
    LOOP 0 ;
 
-\ LEA..ADJ carry an operand and nothing else c4fc emits does.
-: HAS-OPERAND? ( op -- f )  DUP 0< 0= SWAP 7 <= AND ;
+\ LEA..ADJ carry an operand, and so do JSRI and JSRS -- which c4fc did
+\ not emit until it had to compile a call through a function pointer.
+\ Getting this list wrong does not corrupt the code, because the operand
+\ word round-trips as if it were an instruction; it silently drops the
+\ PATCH on it, and the call then goes to wherever address zero is.
+: HAS-OPERAND? ( op -- f ) {: o -- f :}
+   o 0< IF 0 EXIT THEN
+   o 7 <= IF -1 EXIT THEN
+   o oJSRI = o oJSRS = OR ;
 
 : DECODE {: | i n w p op -- :}
    MARK-LABELS
@@ -130,10 +137,12 @@ VARIABLE MAXLBL
       I SYM[] TO y
       y y.class @ 129 = IF y y.val @ LADDR y y.val ! THEN
    LOOP
-   \ the data-resident table patches come last, as they did before
-   TABN @ 0 ?DO
-      -3  DB2 @ TABD I CELLS + @ +  TABC I CELLS + @ LADDR  PAT,
-   LOOP ;
+   \ the data-resident patches come last, as they did before -- jump
+   \ tables, `int *fp = &fn;` and `char *s = "..."` alike, with the code
+   \ addresses among them remapped through LADDR
+   ['] LADDR IS TAB-MAP
+   DB2 @ EMIT-TABPATS
+   ['] TAB-SAME IS TAB-MAP ;
 
 \ -- reading the item list ----------------------------------------------
 
@@ -163,28 +172,8 @@ VARIABLE MAXLBL
 \ -- fold ---------------------------------------------------------------
 \ The window is IMM a; PSH; IMM b; OP, and the stack operand is on the
 \ LEFT, so the value is a OP b. A folded IMM is fed back in: constants
-\ cascade.
-
-: ASHR ( a b -- v )  {: a b -- v :}
-   a 0< IF a INVERT b RSHIFT INVERT ELSE a b RSHIFT THEN ;
-: FOLD1 ( a b op -- v ok ) {: a b o -- v ok :}
-   o oADD = IF a b +      1 EXIT THEN
-   o oSUB = IF a b -      1 EXIT THEN
-   o oMUL = IF a b *      1 EXIT THEN
-   o oDIV = IF b 0= IF 0 0 EXIT THEN a b /   1 EXIT THEN
-   o oMOD = IF b 0= IF 0 0 EXIT THEN a b MOD 1 EXIT THEN
-   o oAND = IF a b AND    1 EXIT THEN
-   o oOR  = IF a b OR     1 EXIT THEN
-   o oXOR = IF a b XOR    1 EXIT THEN
-   o oSHL = IF a b LSHIFT 1 EXIT THEN
-   o oSHR = IF a b ASHR   1 EXIT THEN
-   o oEQ  = IF a b =  1 AND 1 EXIT THEN
-   o oNE  = IF a b <> 1 AND 1 EXIT THEN
-   o oLT  = IF a b <  1 AND 1 EXIT THEN
-   o oGT  = IF a b >  1 AND 1 EXIT THEN
-   o oLE  = IF a b <= 1 AND 1 EXIT THEN
-   o oGE  = IF a b >= 1 AND 1 EXIT THEN
-   0 0 ;
+\ cascade. FOLD1 itself lives in emit.f, because the TREE pass folds
+\ the same operators on the same rules before any of this runs.
 
 : PASS-FOLD {: | i j pv go ok v -- :}
    0 JN# !   0 TO i

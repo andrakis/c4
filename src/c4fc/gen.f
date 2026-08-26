@@ -6,7 +6,7 @@
 \ than by a flag.
 
 :M GEN n_num   >val @ oIMM OP2, ;M
-:M GEN n_str   >off @ IMMD, ;M
+:M GEN n_str   {: n -- :}  n >off @ n >slen @ D-STR, IMMD, ;M
 
 \ A variable's symbol carries the LEA operand it was given: positive for
 \ a parameter, negative for a local. c4 addresses both the same way, so
@@ -312,7 +312,7 @@ VARIABLE CURSW   0 CURSW !
 :M STMT n_switch {: n | w save m e bb m1 m2 m3 m4 end def k -- :}
    CURSW @ TO save
    SWC ALLOT: TO w
-   n >tab @ w w.tab !  n >lo @ w w.lo !  n >hi @ w w.hi !  -1 w w.def !
+   n >lo @ w w.lo !  n >hi @ w w.hi !  -1 w w.def !
    n >hi @ n >lo @ - 1+ TO k
    k CELLS ALLOT: w w.ent !
    k 0 ?DO -1 w w.ent @ I CELLS + ! LOOP
@@ -323,6 +323,10 @@ VARIABLE CURSW   0 CURSW !
    n >body @ STMT
    oJMP BR, TO e                        \ the last case falls out here
    m >RES
+   \ The table is allocated HERE, after the body and before the dispatch
+   \ code, which is where c4lc puts it: a string literal inside the
+   \ switch gets the lower address.
+   D-ALIGN  k CELLS D-ALLOT w w.tab !
    \ Subtracting the lowest case is skipped when it is zero -- four
    \ words c4lc does not spend, and a difference invisible until a
    \ switch happens to start at case 0.
@@ -331,7 +335,7 @@ VARIABLE CURSW   0 CURSW !
    k 1- oIMM OP2,  oGT OP,   oBNZ BR, TO m1
    0 oIMM OP2,     oLT OP,   oBNZ BR, TO m2
    1 CELLS oIMM OP2,  oMUL OP,
-   oPSH OP,  n >tab @ IMMD,  oADD OP,
+   oPSH OP,  w w.tab @ IMMD,  oADD OP,
    oLI OP,   oJMPA OP,
    m1 >RES  2 oADJ OP2,  oJMP BR, TO m3
    m2 >RES  1 oADJ OP2,  oJMP BR, TO m4

@@ -713,8 +713,8 @@ test-c4th-os: c4th c4th.c4r $(C4M) c4ix.c4r c4ix-sh.c4r c4ke.c4r c4dos-clock.c4r
 C4FC_LIB := src/c4th/forth/core.f src/c4th/forth/ext.f \
             src/c4th/forth/locals.f src/c4fc/dsl.f src/c4fc/lex.f
 C4FC_ALL := $(C4FC_LIB) src/c4fc/pp.f src/c4fc/ast.f src/c4fc/types.f \
-            src/c4fc/emit.f src/c4fc/gen.f src/c4fc/parse.f src/c4fc/opt.f \
-            src/c4fc/c4fc.f
+            src/c4fc/emit.f src/c4fc/tree.f src/c4fc/gen.f src/c4fc/parse.f \
+            src/c4fc/opt.f src/c4fc/c4fc.f
 C4FC_SPIKE := src/tests/hello.c src/c4fc/tests/spike1.c src/c4fc/tests/spike2.c \
               src/c4fc/tests/spike3.c src/c4fc/tests/spike4.c \
               src/c4fc/tests/spike5.c src/c4fc/tests/spike6.c \
@@ -787,21 +787,25 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp
 	     || { echo "test-c4fc: $$f differs from c4lc"; exit 1; }; \
 	   echo "  gen ok: $$f"; \
 	done
-	# F8: the optimizer. c4fc -O against the Lisp c4opt applied to
-	# c4fc's own unoptimised output -- the differential the design has
-	# asked for since B5. Compared as the LOADER sees them: c4opt leaves
-	# the PRE-optimisation address in a patched operand's code word and
-	# puts the right one in the patch, so two images can be identical in
-	# every way that runs and still differ byte for byte. imgcmp.f
-	# applies the code-resident patches to both and compares the rest,
-	# which touches only words the loader overwrites anyway.
+	# F8 and L6: the optimizer, both halves. -O is the AST passes
+	# (constant folding, dead function elimination) followed by the six
+	# peephole passes, and the bar is c4lc -O itself, byte for byte.
+	#
+	# That bar is stronger than the one F8 shipped with, and the reason
+	# it is now reachable is worth writing down: F8 compared against
+	# c4opt-run.lisp, which DECODES a finished image, optimises and
+	# re-encodes -- and leaves the pre-optimisation address in a patched
+	# operand's code word. c4lc never goes through that path; it
+	# optimises its own labelled IR and encodes once, so both the word
+	# and the patch get the final address, which is what c4fc does too.
+	# The "identical once loaded" fallback was an artefact of the tool
+	# being compared against, not of the format.
 	@for f in $(C4FC_SPIKE); do \
+	   ./c4sp -c 8000000 src/c4sp/lisp/c4lc.lisp -O $$f .c4fc_o2.c4r >/dev/null 2>&1; \
 	   ./c4th $(C4FC_ALL) -e ": GO S\" $$f\" C4FC ; GO" > .c4fc_o0.c4r; \
 	   ./c4th $(C4FC_ALL) -e ": GO 1 OPTIMIZE ! S\" $$f\" C4FC ; GO" > .c4fc_o1.c4r; \
-	   ./c4sp -c 60000000 src/c4sp/lisp/c4opt-run.lisp .c4fc_o0.c4r .c4fc_o2.c4r >/dev/null 2>&1; \
-	   ./c4th $(C4FC_ALL) src/c4fc/tests/imgcmp.f \
-	      -e ': GO S" .c4fc_o1.c4r" S" .c4fc_o2.c4r" IMGCMP ; GO' | grep -q identical \
-	     || { echo "test-c4fc: -O differs from c4opt on $$f"; exit 1; }; \
+	   cmp -s .c4fc_o1.c4r .c4fc_o2.c4r \
+	     || { echo "test-c4fc: -O differs from c4lc -O on $$f"; exit 1; }; \
 	   ( $(C4M) load-c4r.c -- .c4fc_o0.c4r; echo "exit $$?" ) > .c4fc_r0 2>&1; \
 	   ( $(C4M) load-c4r.c -- .c4fc_o1.c4r; echo "exit $$?" ) > .c4fc_r1 2>&1; \
 	   cmp -s .c4fc_r0 .c4fc_r1 \
@@ -856,7 +860,12 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp
 	   ./c4th $(C4FC_ALL) -e ": GO C4FC-INIT -P S\" include\" -I S\" .\" -I S\" C4CC=1\" -D S\" __c4__=1\" -D S\" __C4CC__=1\" -D S\" __c4cc__=1\" -D S\" __GNUC__=1\" -D S\" $(TESTS)/$$t.c\" C4FC ; GO" > .c4fc_fc.c4r 2>&1; \
 	   cmp -s .c4fc_lc.c4r .c4fc_fc.c4r \
 	     || { echo "test-c4fc: $$t differs from c4lc (-P)"; exit 1; }; \
-	   echo "  gen -P ok: $$t"; \
+	   ./c4sp -c 80000000 src/c4sp/lisp/c4lc.lisp -O .c4fc_pp.c .c4fc_lc.c4r >/dev/null 2>&1 \
+	     || { echo "test-c4fc: c4lc -O could not compile $$t"; exit 1; }; \
+	   ./c4th $(C4FC_ALL) -e ": GO 1 OPTIMIZE ! C4FC-INIT -P S\" include\" -I S\" .\" -I S\" C4CC=1\" -D S\" __c4__=1\" -D S\" __C4CC__=1\" -D S\" __c4cc__=1\" -D S\" __GNUC__=1\" -D S\" $(TESTS)/$$t.c\" C4FC ; GO" > .c4fc_fc.c4r 2>&1; \
+	   cmp -s .c4fc_lc.c4r .c4fc_fc.c4r \
+	     || { echo "test-c4fc: $$t differs from c4lc -O"; exit 1; }; \
+	   echo "  gen -P ok (-O and not): $$t"; \
 	done
 	# F9, the closing loop: c4fc compiles c4th.c -- preprocessor and all,
 	# thirteen headers and thirty thousand tokens -- to an image
@@ -868,6 +877,28 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp
 	./c4th $(C4FC_ALL) -e ': GO C4FC-INIT -P S" include" -I S" ." -I S" src/c4th/include" -I S" C4CC=1" -D S" __c4__=1" -D S" __C4CC__=1" -D S" __c4cc__=1" -D S" __GNUC__=1" -D S" src/c4th/c4th.c" C4FC ; GO' > .c4fc_fc.c4r
 	cmp .c4fc_lc.c4r .c4fc_fc.c4r
 	echo c4th | $(C4M) load-c4r.c -- .c4fc_fc.c4r src/c4th/forth/core.f src/c4th/tests/tester.fr src/c4th/tests/core.fr | cmp - src/c4th/tests/expected/core-64.txt
+	# ... and again with -O, where the tree passes take about a fifth of
+	# the image away and the suite must still pass.
+	./c4sp -c 40000000 src/c4sp/lisp/c4lc.lisp -O .c4fc_pp.c .c4fc_lc.c4r > /dev/null
+	./c4th $(C4FC_ALL) -e ': GO 1 OPTIMIZE ! C4FC-INIT -P S" include" -I S" ." -I S" src/c4th/include" -I S" C4CC=1" -D S" __c4__=1" -D S" __C4CC__=1" -D S" __c4cc__=1" -D S" __GNUC__=1" -D S" src/c4th/c4th.c" C4FC ; GO' > .c4fc_fc.c4r
+	cmp .c4fc_lc.c4r .c4fc_fc.c4r
+	echo c4th | $(C4M) load-c4r.c -- .c4fc_fc.c4r src/c4th/forth/core.f src/c4th/tests/tester.fr src/c4th/tests/core.fr | cmp - src/c4th/tests/expected/core-64.txt
+	# L6 on two whole operating systems. C4DOS and C4KE are the largest
+	# things in the tree c4fc can compile as one unit, and the second is
+	# a kernel: an image that is byte-identical AND boots is a stronger
+	# statement than either alone. C4KE also goes through gcc -E on the
+	# c4lc side because c4lc's own preprocessor cannot read it -- a
+	# function-like macro named without an argument list is an error
+	# there and stands for itself here, which is what C says.
+	$(PREPROC) -I src/c4ke src/c4ke/c4ke.c > .c4fc_pp.c
+	./c4sp -c 40000000 src/c4sp/lisp/c4lc.lisp -O .c4fc_pp.c .c4fc_lc.c4r > /dev/null
+	./c4th $(C4FC_ALL) -e ': GO 1 OPTIMIZE ! C4FC-INIT -P S" include" -I S" ." -I S" src/c4ke" -I S" C4CC=1" -D S" __c4__=1" -D S" __C4CC__=1" -D S" __c4cc__=1" -D S" src/c4ke/c4ke.c" C4FC ; GO' > .c4fc_fc.c4r
+	cmp .c4fc_lc.c4r .c4fc_fc.c4r
+	$(C4M) load-c4r.c -- .c4fc_fc.c4r test_basic 2>&1 | grep -q "clean shutdown"
+	$(C4M) load-c4r.c -- .c4fc_fc.c4r test_basic 2>&1 | grep -q "^  5"
+	./c4sp -c 40000000 src/c4sp/lisp/c4lc.lisp -O -P -I include -I . -I src/c4dos -D C4CC=1 -D __c4cc__=1 src/c4dos/c4dos.c .c4fc_lc.c4r > /dev/null
+	./c4th $(C4FC_ALL) -e ': GO 1 OPTIMIZE ! C4FC-INIT -P S" include" -I S" ." -I S" src/c4dos" -I S" C4CC=1" -D S" __c4cc__=1" -D S" src/c4dos/c4dos.c" C4FC ; GO' > .c4fc_fc.c4r
+	cmp .c4fc_lc.c4r .c4fc_fc.c4r
 	@rm -f .c4fc_lex.txt .c4fc_a.txt .c4fc_b.txt .c4fc_lc.c4r .c4fc_fc.c4r
 	@rm -f .c4fc_o0.c4r .c4fc_o1.c4r .c4fc_o2.c4r .c4fc_r0 .c4fc_r1 .c4fc_pp.c
 	@echo "test-c4fc: OK"

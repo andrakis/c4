@@ -530,7 +530,8 @@ test-c4th: c4th c4th.c4r $(C4M) c4mp $(OISC4) c4sp $(C4KE_C4R)
 	# stops being a paragraph -- DROP is `IMM 0; ADD` because C4's ALU
 	# already pops, and a flag is `PSH; IMM -1; MUL` because Forth wants
 	# -1 where C4 gives 1.
-	./c4th src/c4th/forth/core.f src/c4th/forth/asm.f src/c4th/forth/peep.f \
+	./c4th src/c4th/forth/core.f src/c4th/forth/ext.f src/c4th/forth/locals.f \
+	       src/c4th/forth/asm.f src/c4th/forth/peep.f \
 	       src/c4th/forth/native.f src/c4th/tests/see.f | cmp - src/c4th/tests/expected/see.txt
 	# Each peephole rule fires, and behaviour is unchanged -- including
 	# the cases where compaction moves a branch target.

@@ -357,7 +357,15 @@ VARIABLE NK  VARIABLE NB0  VARIABLE NPP  VARIABLE NPI  VARIABLE NPB
 ' OVER CONSTANT nOVER  ' @ CONSTANT n@  ' C@ CONSTANT nC@
 ' 1+ CONSTANT n1+  ' 1- CONSTANT n1-
 ' LIT CONSTANT nLIT  ' BRANCH CONSTANT nBRANCH  ' 0BRANCH CONSTANT n0BRANCH
-' EXIT CONSTANT nEXIT
+\ Not ' EXIT. Once locals.f has loaded, EXIT is an IMMEDIATE word that
+\ COMPILES the original one, so a body ends with an xt that is no longer
+\ reachable by that name -- and >WEND, which finds a body's end by
+\ looking for it, then finds no end at all and reports the body as
+\ empty. Everything after that is silently wrong: the inliner compiles
+\ nothing and says it succeeded. Learning the terminator from a probe
+\ definition is immune to that and to whatever redefines EXIT next.
+: (NEXIT-PROBE) ;
+' (NEXIT-PROBE) 9 CELLS + @ CONSTANT nEXIT
 ' ! CONSTANT n!  ' C! CONSTANT nC!  ' 0= CONSTANT n0=
 ' 0<> CONSTANT n0<>  ' 0< CONSTANT n0<  ' 0> CONSTANT n0>
 ' NEGATE CONSTANT nNEG  ' INVERT CONSTANT nINV  ' NIP CONSTANT nNIP

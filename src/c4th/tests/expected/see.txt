@@ -32,3 +32,5 @@ PSH
 IMM  0 
 ADD 
 LEV 
+: SQL {: n -- r :}  n n * ;
+SEE: the backend declined this word

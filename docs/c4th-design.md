@@ -958,3 +958,49 @@ commit** if the answer is no.
 Brad Rodriguez, *Moving Forth* (the canonical treatment of ITC/DTC/STC/token
 threading — it is the B5 decision); *jonesforth* (a literate ITC Forth, the
 closest prior art to §3).
+
+## native.f and c4fc: measured, and the answer is no
+
+The obvious idea, once c4fc ran on the breadboard and a real C4IX module
+took 5m29s there, is to switch on `native.f` and compile the compiler's
+hot words to real C4 code. It does not work, and the reason is
+structural rather than a missing feature.
+
+**`native.f` INLINES calls and declines recursion.** Its own header says
+so, and it is the right decision for what it is: a software return stack
+would cost about what the `NEXT` it replaces costs, and inlining lets a
+callee's items merge into the caller's model so a called word optimises
+as if written out. c4fc is recursive descent with generic dispatch
+through `EXECUTE` on a method table -- the one shape an inliner cannot
+see through, and the one it refuses outright.
+
+Probed directly, all ten of c4fc's hottest words are declined:
+
+    C, OP,                  declined at BRANCH
+    V, ALLOT: TOK, LEX-STEP OP-MATCH KW-FIND PP-SPELL   declined at !
+    PATCH-AT                declined at CELLS
+
+It is also not a drop-in: `NCOMPILE-N` compiles ONE word into `ASMBUF`
+with a C calling convention, called through `INVOKE1/2/3`. There is no
+installer that swaps a word's implementation in the dictionary --
+`W_NATIVE` is in the header (`dict.h`) and nothing populates it.
+
+So making c4fc fast on the board is not "switch on native.f". It is
+either a backend that compiles calls as calls, or `self.f` growing
+enough of the language to metacompile c4fc into a `.c4r`. Both are real
+projects; neither is a flag.
+
+### One bug the attempt did find, and it was silent
+
+`nEXIT` was `' EXIT`. **`locals.f` redefines `EXIT` as an IMMEDIATE word
+that COMPILES the original**, so once locals.f has loaded, a body ends
+with an xt that is no longer reachable by that name. `>WEND` finds a
+body's end by looking for it, found none, and returned the body address
+itself -- an EMPTY body. The inliner then compiled nothing and reported
+success, which is the worst failure mode available: `NCOMPILE-N` said 1,
+`SEE` printed `ENT` and `LEV` and nothing between them, and a survey of
+765 words said every one of them compiled.
+
+`nEXIT` is now learned from a probe definition rather than assumed,
+which is immune to that and to whatever redefines `EXIT` next. The `SEE`
+golden loads `locals.f` for exactly this reason.

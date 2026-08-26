@@ -7,6 +7,7 @@
 // always was, and a program that does must land on the same rows every
 // frame. Run: node src/c4bb/tests/test-terminal.mjs
 import { Terminal } from '../web/panels.js';
+import { readFileSync } from 'fs';
 
 let fails = 0;
 const eq = (name, got, want) => {
@@ -91,6 +92,51 @@ const text = t => t.lines.map(r => r.map(c => c.ch).join('').replace(/\s+$/, '')
   feed(t, '\x1b[?25lhi\x1b[?25h');
   eq('cursor hide/show consumed', text(t), 'hi');
   eq('hide tracked', t.cursorHidden, false);
+}
+
+// ---- the keyboard contract -----------------------------------------
+// A full-screen program gets its arrows and function keys through
+// app.js's KEYSEQ table, and decodes them with src/c4tui/c4tui.c. Those
+// are two files that must agree about the same escape sequences and
+// have no other reason to stay in step, so this reads both and checks.
+{
+  const here = new URL('.', import.meta.url).pathname;
+  const app = readFileSync(here + '../web/app.js', 'utf8');
+  const tui = readFileSync(here + '../../c4tui/c4tui.c', 'utf8');
+
+  const m = app.match(/const KEYSEQ = \{([\s\S]*?)\n\};/);
+  eq('KEYSEQ table present', !!m, true);
+  const seqs = [...(m ? m[1] : '').matchAll(/(\w+):\s*'([^']*)'/g)]
+                 .map(x => [x[1], x[2].replace(/\\x1b/g, '\x1b')
+                                      .replace(/\\t/g, '\t').replace(/\\r/g, '\r')
+                                      .replace(/\\x7f/g, '\x7f')]);
+  eq('every special key is covered', seqs.length >= 22, true);
+
+  // Every CSI/SS3 sequence the browser sends must be one c4tui's
+  // decoder names. A sequence it drops would reach the program as a
+  // stray Escape and a letter, which is exactly the bug this replaced.
+  let unknown = [];
+  for (const [name, seq] of seqs) {
+    if (seq[0] !== '\x1b') continue;
+    if (seq[1] === 'O') {                       // ESC O P..S
+      if (!tui.includes(`c == '${seq[2]}') return TUI_F`)) unknown.push(name);
+    } else if (seq[1] === '[') {
+      const body = seq.slice(2);
+      if (/^[A-Z]$/.test(body)) {
+        if (!tui.includes(`c == '${body}') return TUI_`)) unknown.push(name);
+      } else {                                  // ESC [ n ~
+        const n = parseInt(body, 10);
+        if (!new RegExp(`n1 == ${n}\\)\\s*return TUI_`).test(tui)) unknown.push(name);
+      }
+    }
+  }
+  eq('c4tui decodes every sequence app.js sends', unknown.join(',') || 'none', 'none');
+
+  // And the raw/cooked switch itself: app.js must consult rawKbd, and
+  // cli.js must too, or a full-screen program is echoed over.
+  eq('app.js honours rawKbd', /dev\.rawKbd\s*>\s*0/.test(app), true);
+  const cli = readFileSync(here + '../sim/cli.js', 'utf8');
+  eq('cli.js honours rawKbd', /dev\.rawKbd\s*>\s*0/.test(cli), true);
 }
 
 console.log(fails ? `test-terminal: ${fails} FAILED` : 'test-terminal: OK');

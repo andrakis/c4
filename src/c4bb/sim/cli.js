@@ -98,11 +98,18 @@ async function main(argv) {
           if (machine.signalHandlers.get(2)) machine.pendingSignal = 2;
           else { flush(); process.exit(130); }        // no handler: die
         } else if (b === 4) dev.rxEof = true;
-        else {
-          // Always echo: neither kernel's shell disables terminal
-          // echo (c4sh.c's own char-reader has its putchar(c)
-          // commented out, written expecting the host tty to do it,
-          // like a real unmodified terminal always does).
+        else if (dev.rawKbd > 0) {
+          // A program has /dev/tty open, so it owns the screen: forward
+          // the byte exactly as the tty sent it -- escape sequences and
+          // all, which setRawMode already gives us -- and do NOT echo.
+          // An echo here lands wherever the cursor happens to be and
+          // corrupts whatever the program was painting.
+          dev.rxFifo.push(b);
+        } else {
+          // Cooked: neither kernel's shell disables terminal echo
+          // (c4sh.c's own char-reader has its putchar(c) commented out,
+          // written expecting the host tty to do it, like a real
+          // unmodified terminal always does).
           const c = b === 13 ? 10 : b;                // CR -> LF
           dev.rxFifo.push(c);
           process.stdout.write(String.fromCharCode(c));

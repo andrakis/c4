@@ -215,13 +215,35 @@ $('turbo').onclick = () => {
 };
 $('pause').onclick = () => { setMode('pause', 'pause'); draw(); };
 
-// Keyboard input feeds the keyboard device. Neither kernel's shell
-// ever disables terminal echo (c4sh.c's own char-reader has its
-// putchar(c) commented out - it was written expecting the host tty to
-// echo, exactly like a real unmodified Linux terminal in canonical
-// mode always does regardless of which fd a program reads from). So
-// the host - us - always echoes and always does local backspace line
-// editing; there is no raw/no-echo mode to detect here.
+// Keyboard input feeds the keyboard device, in one of two modes.
+//
+// COOKED, which is what a shell wants. Neither kernel's shell ever
+// disables terminal echo (c4sh.c's own char-reader has its putchar(c)
+// commented out - it was written expecting the host tty to echo,
+// exactly like a real unmodified Linux terminal in canonical mode
+// always does regardless of which fd a program reads from). So the
+// host - us - echoes and does local backspace line editing.
+//
+// RAW, which is what a full-screen program wants, and which is exactly
+// what dev.rawKbd has been counting all along: it goes up when a
+// program opens /dev/tty (devices.js:112) and down when it closes it.
+// A program that has done that owns the screen, so we must NOT echo -
+// a local echo lands wherever the cursor happens to be and corrupts
+// whatever it was painting - and we must send the keys it cannot
+// otherwise get. Arrows, function keys, Home/End and Alt-letter are
+// how a DOS-style UI is driven, and e.key for all of them is a WORD,
+// so the old length === 1 test dropped every one.
+const KEYSEQ = {
+  ArrowUp: '\x1b[A', ArrowDown: '\x1b[B', ArrowRight: '\x1b[C', ArrowLeft: '\x1b[D',
+  Home: '\x1b[H', End: '\x1b[F', PageUp: '\x1b[5~', PageDown: '\x1b[6~',
+  Insert: '\x1b[2~', Delete: '\x1b[3~',
+  F1: '\x1bOP', F2: '\x1bOQ', F3: '\x1bOR', F4: '\x1bOS',
+  F5: '\x1b[15~', F6: '\x1b[17~', F7: '\x1b[18~', F8: '\x1b[19~',
+  F9: '\x1b[20~', F10: '\x1b[21~', F11: '\x1b[23~', F12: '\x1b[24~',
+  Tab: '\t', Escape: '\x1b', Enter: '\r', Backspace: '\x7f',
+};
+
+function sendKeys(dev, s) { for (let i = 0; i < s.length; ++i) dev.rxFifo.push(s.charCodeAt(i)); }
 $('terminal').addEventListener('focus', () => updateKbdStatus(INTERACTIVE.has($('program').value)));
 $('terminal').addEventListener('blur', () => updateKbdStatus(INTERACTIVE.has($('program').value)));
 $('terminal').addEventListener('keydown', e => {
@@ -230,6 +252,19 @@ $('terminal').addEventListener('keydown', e => {
     machine.pendingSignal = 2;                        // SIGINT
   } else if (e.ctrlKey && e.key === 'd') {
     dev.rxEof = true;
+  } else if (dev.rawKbd > 0) {
+    // Raw: send, never echo. The program is painting.
+    if (e.altKey && e.key.length === 1) {
+      sendKeys(dev, '\x1b' + e.key);                  // ESC-prefixed: Alt-F
+    } else if (KEYSEQ[e.key] !== undefined) {
+      sendKeys(dev, KEYSEQ[e.key]);
+    } else if (e.ctrlKey && e.key.length === 1) {
+      const c = e.key.toLowerCase().charCodeAt(0);
+      if (c >= 97 && c <= 122) dev.rxFifo.push(c - 96);   // Ctrl-A is 1
+      else return;
+    } else if (e.key.length === 1 && !e.metaKey) {
+      dev.rxFifo.push(e.key.charCodeAt(0));
+    } else return;
   } else if (e.key === 'Enter') {
     dev.rxFifo.push(10);
     terminal.write(10);

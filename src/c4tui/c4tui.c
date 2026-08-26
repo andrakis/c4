@@ -346,6 +346,11 @@ enum {
   TUI_ALT = 512      // TUI_ALT + 'f' is Alt-F, which is how menus open
 };
 enum { TUI_ESC = 27, TUI_ENTER = 13, TUI_TAB = 9, TUI_BS = 127 };
+// A tty in raw mode sends CR for Enter and a cooked one sends LF, and
+// c4bb's cli.js converts one to the other unless a program has /dev/tty
+// open. Accepting both costs nothing and removes a whole class of "it
+// works under cli.js but not in the browser".
+int tui_isenter (int k) { return k == 13 || k == 10; }
 
 void tui_kbd_open () {
   tui_fd = open("/dev/tty", TUI_O_NONBLOCK);
@@ -562,7 +567,7 @@ int tui_popup (int x, int y, int *items, int n, int start, int a, int asel) {
     tui_flush();
     k = tui_key();
     if (k == TUI_ESC)   { tui_restore(blk); return 0 - 1; }
-    if (k == TUI_ENTER) { tui_restore(blk); return sel; }
+    if (tui_isenter(k)) { tui_restore(blk); return sel; }
     if (k == TUI_UP || k == TUI_DOWN) {
       i = k == TUI_UP ? 0 - 1 : 1;
       while (1) {
@@ -610,7 +615,7 @@ int tui_dialog (char *title, char *msg, int *buttons, int nb, int a, int asel) {
     k = tui_key();
     if (nb == 0) { tui_restore(blk); return 0; }
     if (k == TUI_ESC)   { tui_restore(blk); return 0 - 1; }
-    if (k == TUI_ENTER) { tui_restore(blk); return sel; }
+    if (tui_isenter(k)) { tui_restore(blk); return sel; }
     if (k == TUI_LEFT)  { --sel; if (sel < 0) sel = nb - 1; }
     if (k == TUI_RIGHT || k == TUI_TAB) { ++sel; if (sel >= nb) sel = 0; }
   }
@@ -636,7 +641,7 @@ int tui_input (int x, int y, int w, char *buf, int max, int a) {
     tui_cursor(x + pos - off, y);
     tui_flush();
     k = tui_key();
-    if (k == TUI_ENTER) {
+    if (tui_isenter(k)) {
       i = 0; while (i <= len) { buf[i] = tmp[i]; ++i; }
       buf[len] = 0;
       free(tmp); tui_restore(blk); tui_nocursor(); return 1;
@@ -689,7 +694,7 @@ int tui_list (int x, int y, int w, int h, char *title, int *items, int n,
     tui_flush();
     k = tui_key();
     if (k == TUI_ESC)   { tui_restore(blk); return 0 - 1; }
-    if (k == TUI_ENTER) { tui_restore(blk); return sel; }
+    if (tui_isenter(k)) { tui_restore(blk); return sel; }
     if (k == TUI_UP)    { if (sel > 0) --sel; }
     if (k == TUI_DOWN)  { if (sel < n - 1) ++sel; }
     if (k == TUI_PGUP)  { sel = sel - rows; if (sel < 0) sel = 0; }

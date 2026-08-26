@@ -413,6 +413,51 @@ cpp.c4r: $(C4CC) include/c4dos.h $(SRCS)/c4dos/cpp.c
 run-c4dos-build: $(C4M) c4dos-clock.c4r $(C4DOS_BUILD_DISK)
 	@cd $(C4DOS_BUILD_DISK) && $(CURDIR)/c4m $(CURDIR)/load-c4r.c -- $(CURDIR)/c4dos-clock.c4r
 
+# The same floppy at 32 bits, which is the one the BREADBOARD boots. Every
+# image on it has to be one c4bb can load, so all six come from c4cc32.
+# docs/compiler-on-the-board.md is the tracker; the point of this disk is
+# that the machine builds its own kernel in seconds rather than in an hour.
+C4DOS_BUILD_DISK32 := c4dos-build32
+$(C4DOS_BUILD_DISK32): c4dos32.c4r dostar32.c4r cpp32.c4r c4cc32.c4r c4ke-src.tar \
+                       dosload32.c4r init32.c4r c4sh32.c4r c4ke.vfs32.c4r \
+                       $(SRCS)/c4dos/fs/BUILD.BAT
+	@mkdir -p $(C4DOS_BUILD_DISK32)
+	@sed 's/SIZE=[0-9]*/SIZE=16777216/' $(SRCS)/c4dos/fs/CONFIG.SYS > $(C4DOS_BUILD_DISK32)/config.sys
+	@cp $(SRCS)/c4dos/fs/AUTOEXEC.BAT $(C4DOS_BUILD_DISK32)/autoexec.bat
+	@cp $(SRCS)/c4dos/fs/BUILD.BAT    $(C4DOS_BUILD_DISK32)/build.bat
+	@cp c4ke-src.tar                  $(C4DOS_BUILD_DISK32)/
+	@cp dostar32.c4r   $(C4DOS_BUILD_DISK32)/dostar.c4r
+	@cp cpp32.c4r      $(C4DOS_BUILD_DISK32)/cpp.c4r
+	@cp c4cc32.c4r     $(C4DOS_BUILD_DISK32)/c4cc.c4r
+	@cp dosload32.c4r  $(C4DOS_BUILD_DISK32)/dosload.c4r
+	@cp init32.c4r     $(C4DOS_BUILD_DISK32)/init.c4r
+	@cp c4sh32.c4r     $(C4DOS_BUILD_DISK32)/c4sh.c4r
+	@cp c4ke.vfs32.c4r $(C4DOS_BUILD_DISK32)/c4ke.vfs.c4r
+	@cp c4ke.vfs.txt   $(C4DOS_BUILD_DISK32)/ 2>/dev/null || true
+	@cd $(C4DOS_BUILD_DISK32) && ls -p | grep -v '/$$' > c4dos.dir
+	@echo "c4dos-build32: ready -- boot it on c4bb, type BUILD"
+
+# The breadboard building its own kernel, interactively.
+run-c4dos-build32: c4dos32.c4r $(C4DOS_BUILD_DISK32)
+	node src/c4bb/sim/cli.js -s -m 160 -i -d $(C4DOS_BUILD_DISK32) c4dos32.c4r
+
+# The whole ladder in one command, and the answer to "how long does a
+# machine take to build its own operating system": C4DOS boots on c4bb,
+# unpacks the kernel sources onto a RAM disk, preprocesses and compiles
+# them, boots the image it just made and shuts it down cleanly. Under
+# fifteen seconds. c4fc does the compile alone in about seventy minutes
+# -- docs/compiler-on-the-board.md has the instruction counts for why.
+test-c4dos-build32: c4dos32.c4r $(C4DOS_BUILD_DISK32)
+	printf 'BUILD\nRUN dosload.c4r c4ke.c4r\n\\q\n' \
+	  | node src/c4bb/sim/cli.js -s -m 192 -d $(C4DOS_BUILD_DISK32) c4dos32.c4r \
+	  > .c4dos_b32.log 2>&1
+	grep -q "Kernel ready" .c4dos_b32.log
+	grep -q "C4SH - The C4 SHell" .c4dos_b32.log
+	grep -q "clean shutdown" .c4dos_b32.log
+	@grep -o "c4bb: [0-9]* cycles in [0-9.]*s" .c4dos_b32.log
+	@rm -f .c4dos_b32.log
+	@echo "test-c4dos-build32: OK"
+
 # An interactive C4DOS session, which is what the thing is for: an A># An interactive C4DOS session, which is what the thing is for: an A>
 # prompt, DIR/TYPE/RUN/TIME/MEM/VER, EXIT to halt. `cd` because the
 # working directory IS the disk.
@@ -1273,6 +1318,19 @@ c4sp32.c4r: c4sp32 $(C4LC_LISP) $(C4SP_SRCS)
 cpp32.c4r: c4cc32 include/c4dos.h $(SRCS)/c4dos/cpp.c
 	./c4cc32 -o cpp32.c4r include/c4dos.h $(SRCS)/c4dos/cpp.c > /dev/null
 
+# c4cc as a 32-bit image. The board's C compiler: docs/compiler-on-the-board.md
+# measures it at 124M instructions for the whole C4KE kernel, against 85.5
+# BILLION for c4fc, which is why the build floppy carries this and not that.
+c4cc32.c4r: c4cc32 $(C4R_C4CC_SRCS)
+	./c4cc32 -o $@ $(C4R_C4CC_SRCS) > /dev/null
+# The three programs a freshly built kernel needs to boot, at 32 bits.
+init32.c4r: c4cc32 $(INIT_SRCS)
+	./c4cc32 -o $@ $(INIT_SRCS) > /dev/null
+c4sh32.c4r: c4cc32 $(C4SH_SRCS)
+	./c4cc32 -o $@ $(C4SH_SRCS) > /dev/null
+c4ke.vfs32.c4r: c4cc32 $(VFS_SRCS)
+	./c4cc32 -o $@ $(VFS_SRCS) > /dev/null
+
 c4rlink32: $(SRCS)/c4ke/bin/c4rlink.c $(SRCS)/c4cc/asm-c4r.c
 	gcc -m32 $(NATIVE_CC_OPTS) -Isrc/c4cc -o c4rlink32 $(SRCS)/c4ke/bin/c4rlink.c -lm
 c4bb-32bit: c4cc32 c4m32 c4sp32 c4rlink32
@@ -2002,6 +2060,7 @@ c4rs: pre
 # Marking the below rules as PHONY using singular .PHONY rule
 PHONY  = pre all clean-c4rs clean
 PHONY += test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
+PHONY += run-c4dos-build32 test-c4dos-build32
 PHONY += run run-vg test test-massive
 PHONY += run-alt run-alt-vg test-alt test-massive-alt
 PHONY += run-c4 run-c4-vg test-c4 test-massive-c4

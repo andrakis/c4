@@ -78,7 +78,8 @@ C4KE_C4R  := c4ke.c4r
 BIN_D     := $(SRCS)/c4ke/bin
 C4KE_BIN  := $(BIN_D)/c4le.c4r $(BIN_D)/cat.c4r $(BIN_D)/echo.c4r \
              $(BIN_D)/kill.c4r $(BIN_D)/ls.c4r $(BIN_D)/ps.c4r \
-             $(BIN_D)/spin.c4r $(BIN_D)/type.c4r $(BIN_D)/xxd.c4r
+             $(BIN_D)/spin.c4r $(BIN_D)/type.c4r $(BIN_D)/xxd.c4r \
+             $(BIN_D)/b4ke.c4r
 U0        := $(INCLUDE)/u0.h
 PS_C      := $(SRCS)/c4ke/bin/ps.c
 ESHELL_C  := $(SRCS)/c4ke/bin/eshell.c
@@ -522,7 +523,8 @@ test-respfile: $(C4CC) $(C4RLINK) $(C4M)
 # Every verb of the format is exercised, and the second run proves the
 # skip rule -- the targets are gone with the kernel, so it re-runs; what
 # is pinned is that a dry run touches nothing.
-test-b4ke: $(B4KE) $(C4KE_C4R) $(C4M) $(C4R_C4CC) $(C4R_C4RLINK) $(TESTS)/test_link_a.c
+test-b4ke: $(BIN_D)/b4ke.c4r $(C4KE_C4R) $(C4M) $(C4R_C4CC) $(C4R_C4RLINK) $(TESTS)/test_link_a.c
+	cp $(BIN_D)/b4ke.c4r .
 	$(C4M) $(RUN_C4KE) b4ke -f $(SRCS)/c4ke/bin/b4ke-selftest.b4k > .b4ke.log 2>&1
 	grep -q "c4rlink: wrote 1898 bytes to ramfs:b4ked.c4r" .b4ke.log
 	grep -q "b_add(3, 4) = 7" .b4ke.log
@@ -2219,13 +2221,6 @@ $(C4R_TOP): $(C4CC) $(U0) $(SRCS)/c4ke/bin/ps.c $(SRCS)/c4ke/bin/top.c $(C4KE_WA
 # C4KE version of c4cc
 $(C4R_C4CC): $(C4CC) $(U0) load-c4r.c $(SRCS)/c4cc/c4cc.c $(SRCS)/c4cc/asm-c4r.c
 	$(C4CC) -o $(C4R_C4CC) $(C4R_C4CC_SRCS)
-# B4KE, the build tool -- docs/compiler-on-the-board.md. A C4KE program
-# by decision: it needs tasks it can wait for and a filesystem it can
-# write, and C4DOS has neither. That is part of what building the kernel
-# buys you.
-B4KE := b4ke.c4r
-$(B4KE): $(C4CC) $(U0) $(SRCS)/c4ke/bin/b4ke.c $(C4KE_WATCH)
-	$(C4CC) -o $(B4KE) $(U0) $(SRCS)/c4ke/bin/b4ke.c > /dev/null
 # c4rdump, requires c4cc sources until proper headers implemented
 $(C4R_C4RDUMP): $(C4CC) $(U0) $(C4R_C4CC_SRCS) $(SRCS)/c4ke/bin/c4rdump.c
 	$(C4CC) -o $(C4R_C4RDUMP) $(C4R_C4CC_SRCS) $(SRCS)/c4ke/bin/c4rdump.c

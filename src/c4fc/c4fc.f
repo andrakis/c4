@@ -45,6 +45,10 @@ VARIABLE C4FC-READY   0 C4FC-READY !
 \ -c: compile one unit to an OBJECT. What it cannot resolve it names,
 \ and c4rlink resolves it later against the units that can.
 : -c ( -- )  1 OBJECT ! ;
+\ -o names the output file. Without it the image goes to stdout, which
+\ is what a Makefile wants and what C4DOS cannot use -- there is no '>'
+\ on that system by decision, so a tool writes its own file.
+: -o ( a u -- )  OUT>FILE ;
 \ -mcisc needs c4mp; -mfuse takes plain c4 away as well, and implies -O
 \ because the pass it turns on lives in the optimizer.
 : -mcisc ( -- )  1 CISC ! ;

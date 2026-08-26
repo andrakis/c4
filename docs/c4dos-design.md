@@ -298,3 +298,62 @@ released immediately afterwards; it was the initrd.
 
 Progress against the rest of the ladder is tracked in
 `docs/homeward-ladder.md`.
+
+## c4fc, the compiler in the machine
+
+`make c4dos-c4fc` builds a floppy whose compiler is **c4fc**, and
+`make test-c4dos-c4fc` runs the whole loop: C4DOS boots, loads c4fc,
+compiles a C program, writes the image to its RAM disk, and runs what it
+just built.
+
+The existing build floppy uses `cpp` + `c4cc`, which is the pair that
+has always been able to do it. This one carries `c4th.c4r` and c4fc's
+Forth sources plus `c4rlink.c4r`, so the machine can compile a unit to
+an OBJECT and link objects into a program -- the shape a real toolchain
+has and the one c4cc cannot do.
+
+**The thing that had to be built first: c4fc could not write a file.**
+It emitted its image to stdout, which is what a Makefile wants and what
+C4DOS cannot use -- there is no `>` on this system by decision, and a
+tool is expected to write its own file. The VM has no write syscall
+either, so the only route is C4DOS's own API table.
+
+`src/c4th/forth/dos.f` is that route, and it is small because the pieces
+were already there. C4DOS's loader patches the address of its API table
+into any image carrying the symbol `__c4dos_api`, so c4th declares one
+and hands it to Forth through the `C4DOS-API` primitive. The table's
+slots hold ordinary function addresses, and c4th's `INVOKE1`/`INVOKE3`
+call an address with arguments -- the invoke stub `include/c4dos.h`
+describes exists because C cannot call through a variable; Forth can.
+`SAVE-BLOCK` then means "put this block in this file" on whichever
+machine we are on: DOS if there is a DOS, the host's own `open`/`write`
+if we are native, and an honest failure on a bare VM where neither
+exists. c4fc grew `-o` on top of it.
+
+Three things worth knowing before working here:
+
+- **`ARGVMAX` is 16 tokens.** `RUN c4th.c4r <fifteen .f files>` is
+  silently truncated and nothing happens. The floppy ships c4fc as ONE
+  concatenated file, which is also one open instead of fifteen.
+- **`IF`/`THEN` are compile-only**, so the top level of a `.f` file
+  cannot branch -- it has to be a definition that is then run. Getting
+  that wrong runs both arms.
+- **A stale `c4dos32.c4r` is invisible and expensive.** Nothing in the
+  disk rules depends on it, so an image a day older than `c4dos.c` will
+  boot happily and hand out an API table with only the magic filled in.
+  If a transient reports slot 0 correct and every other slot zero, that
+  is what happened.
+
+### What it costs, and what would change it
+
+Loading c4fc on c4bb is about 19 s -- 3,200 lines of Forth read and
+compiled through the threaded interpreter before a line of C is seen --
+and compiling one real C4IX module took 5m29s. **The load is 6% of
+that**, so an image save would not be the win it looks like, and c4th
+cannot do one anyway: its dictionary holds real machine addresses
+(`docs/c4th-design.md`), so a saved image is unrelocatable, and there is
+no write syscall to save it with.
+
+The lever is the other 94%. `src/c4th/forth/native.f` compiles Forth
+words to real C4 code and is not switched on here; that is where the
+time is.

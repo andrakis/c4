@@ -407,9 +407,35 @@ VARIABLE EXTN   0 EXTN !
 
 \ -- writing it out -----------------------------------------------------
 
+\ Where the image goes. c4fc wrote it to stdout, which is fine for a
+\ Makefile with a redirect and useless on C4DOS, where there is no '>'
+\ by decision and a tool is expected to write the file itself. OUT-C is
+\ the one place that decides; OUT>FILE collects into a buffer and
+\ SAVE-BLOCK puts it where it belongs.
+VARIABLE OUTBUF   0 OUTBUF !
+VARIABLE OUTN     0 OUTN !
+VARIABLE OUTMAX   0 OUTMAX !
+VARIABLE OUTNAME  0 OUTNAME !   VARIABLE OUTNLEN  0 OUTNLEN !
+
+: OUT>STDOUT ( -- )  0 OUTNAME !  0 OUTNLEN ! ;
+: OUT>FILE ( a u -- )  OUTNLEN !  OUTNAME ! ;
+: OUT-RESET ( -- )
+   0 OUTN !
+   OUTNAME @ IF
+      OUTBUF @ 0= IF 65536 DUP OUTMAX ! ALLOCATE OUTBUF ! THEN
+   THEN ;
+: OUT-C ( c -- )
+   OUTNAME @ 0= IF EMIT EXIT THEN
+   OUTN @ OUTMAX @ >= IF OUTBUF OUTMAX 1 GROW THEN
+   OUTBUF @ OUTN @ + C!  1 OUTN +! ;
+: OUT-FLUSH ( -- )
+   OUTNAME @ 0= IF EXIT THEN
+   OUTBUF @ OUTN @  OUTNAME @ OUTNLEN @  SAVE-BLOCK
+   0= IF ." c4fc: cannot write " OUTNAME @ OUTNLEN @ TYPE CR ABORT THEN ;
+
 CREATE WSCR 1 CELLS ALLOT
-: FW  ( w -- )  WSCR !  1 CELLS 0 ?DO WSCR I + C@ EMIT LOOP ;
-: FMK ( c -- )  EMIT  1 CELLS 1- 0 ?DO 0 EMIT LOOP ;
+: FW  ( w -- )  WSCR !  1 CELLS 0 ?DO WSCR I + C@ OUT-C LOOP ;
+: FMK ( c -- )  OUT-C  1 CELLS 1- 0 ?DO 0 OUT-C LOOP ;
 : ALIGNUP ( n -- n )  1 CELLS 1- + 1 CELLS 1- INVERT AND ;
 : MEMSZ ( -- n )  DB3 @ UDN @ + ALIGNUP ;
 \ The whole segment, assembled: region 1's bytes, then region 2's, then
@@ -423,18 +449,19 @@ CREATE WSCR 1 CELLS ALLOT
 
 : WRITE-IMAGE {: | dl y -- :}
    DTRIM TO dl
-   67 EMIT 52 EMIT 82 EMIT               \ "C4R"
-   3 EMIT                                \ version 3, as c4lc writes
-   1 CELLS 8 * EMIT
+   OUT-RESET
+   67 OUT-C 52 OUT-C 82 OUT-C            \ "C4R"
+   3 OUT-C                               \ version 3, as c4lc writes
+   1 CELLS 8 * OUT-C
    \ v3 puts memsz in v2's eight padding bytes -- and the field is EIGHT
    \ BYTES whatever the word size is, so a 32-bit image writes the word
    \ and then four zeros. Writing one word and stopping made a header
    \ four bytes short, which nothing noticed until c4fc ran on a 32-bit
    \ machine: at 64 bits one word IS the field.
-   MEMSZ FW   8 1 CELLS - 0 ?DO 0 EMIT LOOP
+   MEMSZ FW   8 1 CELLS - 0 ?DO 0 OUT-C LOOP
    ENTRY @ FW   CN @ FW   dl FW   PN @ FW   SN @ FW   CONSN @ FW   DESN @ FW
    67 FMK  CN @ 0 ?DO I CELLS CODE @ + @ FW LOOP
-   68 FMK  dl 0 ?DO I DBYTE EMIT LOOP
+   68 FMK  dl 0 ?DO I DBYTE OUT-C LOOP
    80 FMK  PN @ 3 * 0 ?DO I CELLS PATCH @ + @ FW LOOP
    99 FMK  CONSN @ 0 ?DO I CELLS CONS @ + @ FW LOOP
   100 FMK  DESN @ 0 ?DO I CELLS DESS @ + @ FW LOOP
@@ -443,9 +470,11 @@ CREATE WSCR 1 CELLS ALLOT
       I SYM[] TO y
       I FW                               \ id
       y y.type @ FW   y y.class @ FW   y y.agg @ FW
-      y y.nlen @ EMIT   y y.name @ y y.nlen @ TYPE
+      y y.nlen @ OUT-C
+      y y.nlen @ 0 ?DO y y.name @ I + C@ OUT-C LOOP
       y y.val @ FW
-   LOOP ;
+   LOOP
+   OUT-FLUSH ;
 
 \ The counters that live beside the tables they index. They are here
 \ rather than in EMIT-INIT only because EMIT-INIT is defined before the

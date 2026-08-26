@@ -718,7 +718,8 @@ test-c4th-os: c4th c4th.c4r $(C4M) c4ix.c4r c4ix-sh.c4r c4ke.c4r c4dos-clock.c4r
 # than asserted: a new construct is one NODE: line and one :M per
 # phase, with nothing above it edited.
 C4FC_LIB := src/c4th/forth/core.f src/c4th/forth/ext.f \
-            src/c4th/forth/locals.f src/c4fc/dsl.f src/c4fc/lex.f
+            src/c4th/forth/locals.f src/c4th/forth/dos.f \
+            src/c4fc/dsl.f src/c4fc/lex.f
 C4FC_ALL := $(C4FC_LIB) src/c4fc/pp.f src/c4fc/ast.f src/c4fc/types.f \
             src/c4fc/emit.f src/c4fc/tree.f src/c4fc/gen.f src/c4fc/parse.f \
             src/c4fc/opt.f src/c4fc/c4fc.f
@@ -959,6 +960,57 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c
 	@rm -f .c4fc_lex.txt .c4fc_a.txt .c4fc_b.txt .c4fc_lc.c4r .c4fc_fc.c4r
 	@rm -f .c4fc_o0.c4r .c4fc_o1.c4r .c4fc_o2.c4r .c4fc_r0 .c4fc_r1 .c4fc_pp.c
 	@echo "test-c4fc: OK"
+
+# A C4DOS floppy whose COMPILER IS c4fc. The existing build floppy uses
+# cpp + c4cc, which is the pair that has always been able to do it; this
+# one carries c4th32 and c4fc's Forth sources instead, plus c4rlink, so
+# the machine can compile a unit to an object and link objects into a
+# kernel -- the shape a real toolchain has and the one c4cc cannot do.
+#
+# The compiler is source rather than an image because c4th has no image
+# save: its dictionary holds real machine addresses (docs/c4th-design.md)
+# so a saved image is unrelocatable, and the VM has no write syscall to
+# save one with in the first place. Loading the sources costs 19 s on
+# c4bb, which is real and is not where the time goes -- see
+# docs/c4dos-design.md.
+C4FC_FORTH := src/c4th/forth/core.f src/c4th/forth/ext.f \
+              src/c4th/forth/locals.f src/c4th/forth/dos.f \
+              src/c4fc/dsl.f src/c4fc/lex.f src/c4fc/pp.f src/c4fc/ast.f \
+              src/c4fc/types.f src/c4fc/emit.f src/c4fc/tree.f \
+              src/c4fc/gen.f src/c4fc/parse.f src/c4fc/opt.f src/c4fc/c4fc.f
+
+C4DOS_FC_DISK := c4dos-c4fc
+$(C4DOS_FC_DISK): c4dos-clock.c4r c4th32.c4r $(C4R_C4RLINK) dostar.c4r \
+                  c4ke-src.tar dosload.c4r $(C4FC_FORTH) \
+                  $(SRCS)/c4dos/fs/CONFIG.SYS $(SRCS)/c4dos/fs/CC.BAT $(SRCS)/c4dos/fs/cc.f
+	@mkdir -p $(C4DOS_FC_DISK)
+	@sed 's/SIZE=[0-9]*/SIZE=16777216/' $(SRCS)/c4dos/fs/CONFIG.SYS > $(C4DOS_FC_DISK)/config.sys
+	@cp $(SRCS)/c4dos/fs/CC.BAT $(C4DOS_FC_DISK)/cc.bat
+	@cp $(SRCS)/c4dos/fs/cc.f   $(C4DOS_FC_DISK)/cc.f
+	@printf 'int main(){ printf("built by c4fc, inside the machine\\n"); return 0; }\n' > $(C4DOS_FC_DISK)/hello.c
+	@cp c4th32.c4r $(C4DOS_FC_DISK)/c4th.c4r
+	@cp $(C4R_C4RLINK) dostar.c4r dosload.c4r c4ke-src.tar $(C4DOS_FC_DISK)/
+	@# ONE file, not sixteen: C4DOS's ARGVMAX is 16 tokens, so
+	@# "RUN c4th.c4r <fifteen .f files>" is silently truncated and
+	@# nothing happens. Concatenated in load order, which is also one
+	@# open instead of fifteen on a machine where an open is not cheap.
+	@cat $(C4FC_FORTH) > $(C4DOS_FC_DISK)/c4fc.f
+	@cd $(C4DOS_FC_DISK) && ls > c4dos.dir
+	@echo "c4dos-c4fc: ready -- RUN c4th.c4r ... or CC"
+
+# The whole loop in one command: C4DOS boots, loads c4fc, compiles a C
+# program, writes the image to its RAM disk through the API table, and
+# runs what it just built. Three minutes, so it is not in `make test`.
+test-c4dos-c4fc: c4dos32.c4r $(C4DOS_FC_DISK)
+	printf 'RUN c4th.c4r c4fc.f cc.f\nRUN hello.c4r\n' \
+	  | node src/c4bb/sim/cli.js -m 96 -d $(C4DOS_FC_DISK) c4dos32.c4r \
+	  | tee .c4dos_fc.log | grep -q "built by c4fc, inside the machine"
+	grep -q "^wrote the object" .c4dos_fc.log
+	rm -f .c4dos_fc.log
+	@echo "test-c4dos-c4fc: OK"
+
+run-c4dos-c4fc: c4dos32.c4r $(C4DOS_FC_DISK)
+	node src/c4bb/sim/cli.js -m 96 -i -d $(C4DOS_FC_DISK) c4dos32.c4r
 
 # c4th for the breadboard. c4bb is a 32-bit machine, so the image has to
 # be built by a 32-bit compiler -- c4lc under c4sp32, the same route
@@ -1948,7 +2000,7 @@ c4rs: pre
 
 # Marking the below rules as PHONY using singular .PHONY rule
 PHONY  = pre all clean-c4rs clean
-PHONY += test-c4tui test-c4th-bb
+PHONY += test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
 PHONY += run run-vg test test-massive
 PHONY += run-alt run-alt-vg test-alt test-massive-alt
 PHONY += run-c4 run-c4-vg test-c4 test-massive-c4

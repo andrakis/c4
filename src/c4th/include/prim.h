@@ -262,6 +262,15 @@ void th_p_invoke3 (int *w) {
 	th_push(th_nf3(a, b, c));
 }
 
+// C4DOS-API ( -- addr )
+//
+// The address of C4DOS's API table, or 0 when not running under DOS.
+// The DOS loader writes it into __c4dos_api by scanning the symbol
+// section, so a c4th built any way at all gets it for free -- and Forth
+// can then call the table's slots with INVOKE1/2/3, which is how
+// anything on this family produces a file.
+void th_p_dosapi (int *w) { th_push((int)__c4dos_api); }
+
 // SAVE-FILE ( addr len c-addr u -- flag )
 //
 // The C4 VM has no write syscall, so this works on the gcc build only --
@@ -508,6 +517,7 @@ void th_prims_init () {
 	th_defword("INVOKE2",0,(int)&th_p_invoke2);
 	th_defword("INVOKE3",0,(int)&th_p_invoke3);
 	th_defword("SAVE-FILE",0,(int)&th_p_savefile);
+	th_defword("C4DOS-API",0,(int)&th_p_dosapi);
 	th_defword("ALLOCATE",0,(int)&th_p_allocate);
 	th_defword("OPENF",0,(int)&th_p_openf);
 	th_defword("READF",0,(int)&th_p_readf);

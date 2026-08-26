@@ -18,6 +18,16 @@
 #include "c4.h"
 #include "c4m.h"
 
+// C4DOS patches this with the address of its API table when it loads an
+// image that has the symbol -- the loader_systable pattern, see
+// include/c4dos.h. A program not running under DOS is left with 0 here,
+// which is how it knows. c4th does nothing with it itself; it hands it
+// to Forth (the C4DOS-API primitive) so that src/c4th/forth/dos.f can
+// call DOS's create/write/close and put a compiler's output on the RAM
+// disk. The VM has no write syscall, so this is the ONLY way anything
+// running on c4m can produce a file.
+int *__c4dos_api;
+
 #include "src/c4th/include/mem.h"
 #include "src/c4th/include/dict.h"
 #include "src/c4th/include/io.h"

@@ -237,6 +237,19 @@ VARIABLE FT   VARIABLE EMM   VARIABLE SMM   VARIABLE BANM
 
 \ -- shl ----------------------------------------------------------------
 \ PSH; IMM 8; MUL -> PSH; IMM 3; SHL, which every pointer subscript emits.
+\
+\ EIGHT, not `1 CELLS`. Matching the host's word size looks more correct
+\ and is a wrong-code bug: c4opt's rule fires only on a multiply by 8
+\ and emits a shift by 3, so on a 32-bit machine -- where a subscript
+\ scales by 4 -- it simply does not fire and c4lc leaves the MUL alone.
+\ c4fc matched on `1 CELLS` and still emitted the hardcoded 3, which on
+\ c4bb turned every `p[i]` into a multiply by EIGHT. Found by compiling
+\ a C4IX module on the breadboard and diffing the object against c4lc's.
+\
+\ So this is deliberately the same 64-bit-only rule c4opt has, because
+\ byte-identity with c4lc is the bar at both word sizes. That c4opt
+\ leaves a free shift on the table at 32 bits is true, and is c4opt's to
+\ take up if anyone wants it.
 
 : PASS-SHL {: | i -- :}
    0 JN# !   0 TO i
@@ -244,7 +257,7 @@ VARIABLE FT   VARIABLE EMM   VARIABLE SMM   VARIABLE BANM
       i oPSH BARE?
       i 2 + IN# @ < AND
       i 1+ oIMM PLAINOP? AND
-      IF i 1+ IARG 1 CELLS = i 2 + oMUL BARE? AND ELSE 0 THEN
+      IF i 1+ IARG 8 = i 2 + oMUL BARE? AND ELSE 0 THEN
       IF
          k_insn oPSH 0 a_none EMIT-ITEM
          k_insn oIMM 3 a_plain EMIT-ITEM

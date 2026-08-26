@@ -772,6 +772,45 @@ Three things that fell out of doing it:
   switch record. It stays fixed and generous — eight thousand entries is
   under half a megabyte — and its abort stays an abort.
 
+## On the breadboard
+
+c4fc runs on c4th; c4th runs on c4m; c4bb is c4m in hardware. So the
+compiler runs on the breadboard, and on 2026-08-26 it did:
+
+    node src/c4bb/sim/cli.js -m 96 -d disk c4th32.c4r <the .f files> \
+         -e ': GO 1 OPTIMIZE ! -c C4FC-INIT ... S" vfs.c" C4FC ; GO'
+
+    a real C4IX module, -O -c, on the board:   5m29s
+    the object c4lc -O -c writes at 32 bits:   byte-identical
+
+`make c4th32.c4r` builds the 32-bit c4th (c4lc under c4sp32, the route
+`c4ke32.c4r` takes); `make test-c4th-bb` is the cheap half of the check.
+The five minutes are not a routine test.
+
+**Two 64-bit assumptions had to come out first, and only a 32-bit
+machine could have found either.**
+
+- **The `.c4r` memsz field is eight bytes, not one word.** v3 puts the
+  data segment's memory size in the eight padding bytes v2 left after
+  the wordbits byte, and the field is eight bytes whatever the word size
+  is. c4fc wrote one word and stopped — which at 64 bits IS the field,
+  and at 32 bits left the header four bytes short, so every section
+  marker after it was misread.
+- **The `shl` pass was 64-bit only and did not say so.** c4opt's rule
+  fires only on a multiply by 8 and emits a shift by 3, so at 32 bits —
+  where a subscript scales by 4 — it does not fire at all. c4fc matched
+  on `1 CELLS`, the *host's* word size, and still emitted the hardcoded
+  3: every `p[i]` on the board became a multiply by eight. It now has
+  c4opt's rule exactly, because byte-identity with c4lc is the bar at
+  both word sizes.
+
+**Where the time goes, and what would move it.** Nineteen of the 5m29s
+is loading the compiler — 3,200 lines of Forth read and compiled through
+the threaded interpreter, before a line of C is seen. Two things would
+change the shape: `native.f` compiles hot Forth words to real C4 code
+and is not switched on here, and c4th can save an image, which would
+make the load one-time. Neither is done.
+
 ## Risks, and one thing deliberately left out
 
 1. **Byte-identity may not survive every construct.** It survived all

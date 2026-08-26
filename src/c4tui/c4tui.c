@@ -148,19 +148,6 @@ void tui_nocursor ()           { tui_curon = 0; }
 // UTF-8 line-drawing character would arrive as three cells of noise;
 // tui_boxstyle(1) switches to them anyway for a native run in a UTF-8
 // terminal, where they look like the real thing.
-int tui_bs;                       // 0 = ASCII, 1 = single line
-
-char *tui_bc (int which) {
-  if (tui_bs == 0) {
-    if (which == 0) return "+"; if (which == 1) return "+";
-    if (which == 2) return "+"; if (which == 3) return "+";
-    if (which == 4) return "-"; return "|";
-  }
-  if (which == 0) return "\xe2\x94\x8c"; if (which == 1) return "\xe2\x94\x90";
-  if (which == 2) return "\xe2\x94\x94"; if (which == 3) return "\xe2\x94\x98";
-  if (which == 4) return "\xe2\x94\x80"; return "\xe2\x94\x82";
-}
-
 void tui_box (int x, int y, int w, int h, int a) {
   int i;
   if (w < 2 || h < 2) return;
@@ -213,6 +200,10 @@ void tui_shadow (int x, int y, int w, int h) {
 // block the caller passes back to tui_restore.
 int tui_save (int x, int y, int w, int h) {
   int *s; int r, c, i;
+  if (x < 0) x = 0; if (y < 0) y = 0;
+  if (x + w > tui_w) w = tui_w - x;
+  if (y + h > tui_h) h = tui_h - y;
+  if (w <= 0 || h <= 0) return 0;
   s = malloc((w * h * 2 + 4) * sizeof(int));
   if (!s) return 0;
   s[0] = x; s[1] = y; s[2] = w; s[3] = h;
@@ -347,7 +338,7 @@ enum { TUI_RING = 256 };
 // they arrive; everything else is above 255 so a caller can switch on
 // the lot without ambiguity.
 enum {
-  TUI_NONE = 0 - 1,
+  TUI_NONE = 4095,          // not -1: c4cc's enum parser takes literals only
   TUI_UP = 256, TUI_DOWN, TUI_LEFT, TUI_RIGHT,
   TUI_HOME, TUI_END, TUI_PGUP, TUI_PGDN, TUI_INS, TUI_DEL,
   TUI_F1, TUI_F2, TUI_F3, TUI_F4, TUI_F5, TUI_F6,
@@ -369,7 +360,6 @@ int tui_poll () {
   if (n <= 0) return 0;
   i = 0;
   while (i < n) {
-    tui_rb = tui_rb;
     *(char *)(tui_rb + (tui_rt % TUI_RING)) = b[i];
     ++tui_rt; ++i;
   }
@@ -461,4 +451,250 @@ int tui_key_nb () {
 int tui_key () {
   int c;
   while (1) { c = tui_key_nb(); if (c != TUI_NONE) return c; }
+}
+
+// ---- start and stop ------------------------------------------------
+
+int tui_pal;      // the DOS-to-ANSI colour permutation, as bytes
+
+void tui_init (int w, int h) {
+  int n;
+  tui_w = w; tui_h = h;
+  n = w * h;
+  tui_ch = (int)malloc(n);   tui_at = (int)malloc(n);
+  tui_pch = (int)malloc(n);  tui_pat = (int)malloc(n);
+  // Worst case is every cell changed and every cell a different colour:
+  // an SGR run is under 16 bytes and a position under 10.
+  tui_bufmax = n * 20 + 256;
+  tui_buf = (int)malloc(tui_bufmax);
+  tui_rb  = (int)malloc(TUI_RING);
+  tui_pal = (int)malloc(8);
+  // DOS black,blue,green,cyan,red,magenta,brown,grey
+  //  -> ANSI  0,   4,    2,    6,   1,      5,      3,    7
+  *(char *)(tui_pal + 0) = 0; *(char *)(tui_pal + 1) = 4;
+  *(char *)(tui_pal + 2) = 2; *(char *)(tui_pal + 3) = 6;
+  *(char *)(tui_pal + 4) = 1; *(char *)(tui_pal + 5) = 5;
+  *(char *)(tui_pal + 6) = 3; *(char *)(tui_pal + 7) = 7;
+  tui_ansi = tui_pal;
+  tui_rh = 0; tui_rt = 0;
+  tui_curx = 0; tui_cury = 0; tui_curon = 0; tui_hwcur = 0;
+  tui_kbd_open();
+  tui_cls(tui_attr(TUI_LGREY, TUI_BLACK));
+  tui_damage();
+  // Clear the real screen and hide the real cursor; from here on the
+  // grid is the only thing that decides what is on it.
+  printf("\033[2J\033[?25l\033[H");
+}
+
+void tui_hwcursor (int on) { tui_hwcur = on; printf(on ? "\033[?25h" : "\033[?25l"); }
+
+void tui_end () {
+  printf("\033[0m\033[?25h\033[%d;1H\n", tui_h);
+  if (tui_fd >= 0) close(tui_fd);
+}
+
+// ---- widgets -------------------------------------------------------
+// Each one draws into the grid and returns; the modal ones run their own
+// key loop and put back what they covered. None of them owns the screen,
+// so an editor can mix them with its own drawing freely.
+
+// A menu BAR: names laid out left to right, one highlighted. The caller
+// owns the array of names and the index; this only draws.
+void tui_menubar (int y, int *names, int n, int sel, int a, int asel) {
+  int i, x;
+  tui_fill(0, y, tui_w, 1, ' ', a);
+  x = 1;
+  i = 0;
+  while (i < n) {
+    if (i == sel) {
+      tui_put(x - 1, y, ' ', asel);
+      x = tui_text(x, y, (char *)names[i], asel);
+      tui_put(x, y, ' ', asel); ++x;
+    } else {
+      x = tui_text(x, y, (char *)names[i], a);
+      x = x + 2;
+    }
+    ++i;
+  }
+}
+
+// Where a menu bar's nth name starts, so a pull-down can line up under
+// it. Same walk as above, which is why it is a separate word rather
+// than a guess at the caller's end.
+int tui_menux (int *names, int n, int which) {
+  int i, x;
+  x = 1; i = 0;
+  while (i < which && i < n) { x = x + tui_strlen((char *)names[i]) + 2; ++i; }
+  return x - 1;
+}
+
+// A pull-down or pop-up list. Runs its own loop and returns the chosen
+// index, or -1 for Escape. The caller's screen is saved and restored,
+// so nothing has to be redrawn afterwards.
+//
+// Items beginning with '-' are separators and cannot be selected, which
+// is how a DOS menu groups things.
+int tui_popup (int x, int y, int *items, int n, int start, int a, int asel) {
+  int w, h, i, k, sel, blk, len;
+  w = 0; i = 0;
+  while (i < n) { len = tui_strlen((char *)items[i]); if (len > w) w = len; ++i; }
+  w = w + 4; h = n + 2;
+  if (x + w > tui_w) x = tui_w - w;
+  if (x < 0) x = 0;
+  if (y + h > tui_h) y = tui_h - h;
+  if (y < 0) y = 0;
+  blk = tui_save(x, y, w + 1, h + 1);
+  sel = start;
+  if (sel < 0 || sel >= n) sel = 0;
+  while (*(char *)items[sel] == '-') { ++sel; if (sel >= n) sel = 0; }
+
+  while (1) {
+    tui_window(x, y, w, h, 0, a);
+    tui_shadow(x, y, w, h);
+    i = 0;
+    while (i < n) {
+      if (*(char *)items[i] == '-')
+        tui_fill(x + 1, y + 1 + i, w - 2, 1, '-', a);
+      else
+        tui_textf(x + 2, y + 1 + i, (char *)items[i], i == sel ? asel : a, w - 4);
+      ++i;
+    }
+    tui_flush();
+    k = tui_key();
+    if (k == TUI_ESC)   { tui_restore(blk); return 0 - 1; }
+    if (k == TUI_ENTER) { tui_restore(blk); return sel; }
+    if (k == TUI_UP || k == TUI_DOWN) {
+      i = k == TUI_UP ? 0 - 1 : 1;
+      while (1) {
+        sel = sel + i;
+        if (sel < 0) sel = n - 1;
+        if (sel >= n) sel = 0;
+        if (*(char *)items[sel] != '-') break;
+      }
+    }
+    if (k == TUI_HOME) { sel = 0; while (*(char *)items[sel] == '-') ++sel; }
+    if (k == TUI_END)  { sel = n - 1; while (*(char *)items[sel] == '-') --sel; }
+  }
+}
+
+// A message with buttons along the bottom. Returns the button index, or
+// -1 for Escape. buttons may be 0, in which case any key dismisses it --
+// which is what an error box wants.
+int tui_dialog (char *title, char *msg, int *buttons, int nb, int a, int asel) {
+  int w, h, x, y, i, k, sel, blk, bx, bw;
+  w = tui_strlen(msg) + 6;
+  if (title) { i = tui_strlen(title) + 6; if (i > w) w = i; }
+  bw = 0; i = 0;
+  while (i < nb) { bw = bw + tui_strlen((char *)buttons[i]) + 4; ++i; }
+  if (bw + 4 > w) w = bw + 4;
+  if (w > tui_w - 2) w = tui_w - 2;
+  h = nb > 0 ? 6 : 5;
+  x = (tui_w - w) / 2; y = (tui_h - h) / 2;
+  blk = tui_save(x, y, w + 1, h + 1);
+  sel = 0;
+  while (1) {
+    tui_window(x, y, w, h, title, a);
+    tui_shadow(x, y, w, h);
+    tui_text(x + 3, y + 2, msg, a);
+    if (nb > 0) {
+      bx = x + (w - bw) / 2;
+      i = 0;
+      while (i < nb) {
+        bx = tui_text(bx, y + 4, "[ ", i == sel ? asel : a);
+        bx = tui_text(bx, y + 4, (char *)buttons[i], i == sel ? asel : a);
+        bx = tui_text(bx, y + 4, " ]", i == sel ? asel : a);
+        ++i;
+      }
+    }
+    tui_flush();
+    k = tui_key();
+    if (nb == 0) { tui_restore(blk); return 0; }
+    if (k == TUI_ESC)   { tui_restore(blk); return 0 - 1; }
+    if (k == TUI_ENTER) { tui_restore(blk); return sel; }
+    if (k == TUI_LEFT)  { --sel; if (sel < 0) sel = nb - 1; }
+    if (k == TUI_RIGHT || k == TUI_TAB) { ++sel; if (sel >= nb) sel = 0; }
+  }
+}
+
+// A single-line editable field, in place, with a drawn cursor. Returns
+// 1 on Enter and 0 on Escape; buf is left as it was on Escape, so a
+// caller can offer a default without copying it first.
+int tui_input (int x, int y, int w, char *buf, int max, int a) {
+  int len, pos, k, i, off, blk;
+  char *tmp;
+  tmp = malloc(max + 1);
+  if (!tmp) return 0;
+  len = tui_strlen(buf);
+  i = 0; while (i <= len) { tmp[i] = buf[i]; ++i; }
+  pos = len; off = 0;
+  blk = tui_save(x, y, w, 1);
+  while (1) {
+    if (pos < off) off = pos;
+    if (pos - off >= w) off = pos - w + 1;
+    i = 0;
+    while (i < w) { tui_put(x + i, y, off + i < len ? tmp[off + i] : ' ', a); ++i; }
+    tui_cursor(x + pos - off, y);
+    tui_flush();
+    k = tui_key();
+    if (k == TUI_ENTER) {
+      i = 0; while (i <= len) { buf[i] = tmp[i]; ++i; }
+      buf[len] = 0;
+      free(tmp); tui_restore(blk); tui_nocursor(); return 1;
+    }
+    if (k == TUI_ESC) { free(tmp); tui_restore(blk); tui_nocursor(); return 0; }
+    if (k == TUI_LEFT)  { if (pos > 0) --pos; }
+    else if (k == TUI_RIGHT) { if (pos < len) ++pos; }
+    else if (k == TUI_HOME)  { pos = 0; }
+    else if (k == TUI_END)   { pos = len; }
+    else if (k == 8 || k == TUI_BS) {
+      if (pos > 0) { i = pos; while (i <= len) { tmp[i - 1] = tmp[i]; ++i; } --pos; --len; }
+    }
+    else if (k == TUI_DEL) {
+      if (pos < len) { i = pos; while (i < len) { tmp[i] = tmp[i + 1]; ++i; } --len; }
+    }
+    else if (k >= 32 && k < 127 && len < max) {
+      i = len; while (i >= pos) { tmp[i + 1] = tmp[i]; --i; }
+      tmp[pos] = k; ++pos; ++len;
+    }
+  }
+}
+
+// A scrolling picker: the shape a file-open box and a "find in files"
+// result list both want. Returns the chosen index, or -1.
+int tui_list (int x, int y, int w, int h, char *title, int *items, int n,
+              int start, int a, int asel) {
+  int sel, top, i, k, rows, blk;
+  rows = h - 2;
+  sel = start; if (sel < 0 || sel >= n) sel = 0;
+  top = 0;
+  blk = tui_save(x, y, w + 1, h + 1);
+  while (1) {
+    if (sel < top) top = sel;
+    if (sel >= top + rows) top = sel - rows + 1;
+    tui_window(x, y, w, h, title, a);
+    tui_shadow(x, y, w, h);
+    i = 0;
+    while (i < rows) {
+      if (top + i < n)
+        tui_textf(x + 1, y + 1 + i, (char *)items[top + i],
+                  top + i == sel ? asel : a, w - 2);
+      ++i;
+    }
+    // A scroll bar, when there is more than fits -- drawn in the frame
+    // itself, which is where DOS put it.
+    if (n > rows) {
+      i = (sel * (rows - 1)) / (n - 1);
+      tui_put(x + w - 1, y + 1 + i, '#', a);
+    }
+    tui_flush();
+    k = tui_key();
+    if (k == TUI_ESC)   { tui_restore(blk); return 0 - 1; }
+    if (k == TUI_ENTER) { tui_restore(blk); return sel; }
+    if (k == TUI_UP)    { if (sel > 0) --sel; }
+    if (k == TUI_DOWN)  { if (sel < n - 1) ++sel; }
+    if (k == TUI_PGUP)  { sel = sel - rows; if (sel < 0) sel = 0; }
+    if (k == TUI_PGDN)  { sel = sel + rows; if (sel >= n) sel = n - 1; }
+    if (k == TUI_HOME)  { sel = 0; }
+    if (k == TUI_END)   { sel = n - 1; }
+  }
 }

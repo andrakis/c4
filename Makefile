@@ -960,6 +960,50 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c
 	@rm -f .c4fc_o0.c4r .c4fc_o1.c4r .c4fc_o2.c4r .c4fc_r0 .c4fc_r1 .c4fc_pp.c
 	@echo "test-c4fc: OK"
 
+# c4th for the breadboard. c4bb is a 32-bit machine, so the image has to
+# be built by a 32-bit compiler -- c4lc under c4sp32, the same route
+# c4ke32.c4r takes. c4lc's own preprocessor cannot read c4th.c (a
+# function-like macro named without an argument list is an error there),
+# so this one goes through gcc -E like the c4cc-built c4th.c4r does.
+#
+# What it is FOR: c4fc runs on c4th, so a 32-bit c4th is a C compiler on
+# the breadboard. It compiles a real C4IX module there, byte-identical to
+# c4lc's object -- see docs/c4fc-design.md. Not a routine test: it takes
+# five and a half minutes on the board.
+c4th32.c4r: c4sp32 $(C4LC_LISP) $(C4TH_SRCS)
+	$(PREPROC) -I src/c4th/include src/c4th/c4th.c > .c4th32_pp.c
+	./c4sp32 -R src/c4sp/lisp/c4lc.lisp -O .c4th32_pp.c $@ > /dev/null
+	rm -f .c4th32_pp.c
+
+# The cheap half of that: c4th itself on the breadboard.
+test-c4th-bb: c4th32.c4r
+	node src/c4bb/sim/cli.js c4th32.c4r -e ': SQ DUP * ; 7 SQ . CR' | grep -q "^49"
+	@echo "test-c4th-bb: OK"
+
+# c4tui: the character-cell UI library for C4DOS (docs/c4tui-design.md).
+# The demo is also the test -- it is driven by a fixed key script and its
+# output pinned, which checks the drawing AND the damage tracking: the
+# golden records that a dialog costs 417 bytes where the first frame
+# costs 2521. A change that repainted everything would still LOOK right
+# and would show up here immediately.
+c4tui-demo.c4r: c4sp $(C4LC_LISP) src/c4tui/c4tui.c src/c4tui/demo.c
+	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -conforming -P -I src/c4tui \
+		src/c4tui/demo.c $@ > /dev/null
+c4tui-demo32.c4r: c4sp32 $(C4LC_LISP) src/c4tui/c4tui.c src/c4tui/demo.c
+	./c4sp32 -R src/c4sp/lisp/c4lc.lisp -O -conforming -P -I src/c4tui \
+		src/c4tui/demo.c $@ > /dev/null
+
+test-c4tui: $(C4M) c4tui-demo.c4r c4tui-demo32.c4r
+	printf '\033OQ\r\033' > .c4tui_keys
+	$(C4M) load-c4r.c -- c4tui-demo.c4r < .c4tui_keys | cmp - src/c4tui/tests/expected/demo.txt
+	# The same program on the breadboard, byte for byte -- the library
+	# emits nothing that depends on the host.
+	node src/c4bb/sim/cli.js c4tui-demo32.c4r < .c4tui_keys | cmp - src/c4tui/tests/expected/demo.txt
+	# and the flush really is incremental
+	$(C4M) load-c4r.c -- c4tui-demo.c4r < .c4tui_keys | awk 'NR==2 { exit !(length($$0) < 600) }'
+	rm -f .c4tui_keys
+	@echo "test-c4tui: OK"
+
 # The fused opcodes (docs/fused-opcodes.md), end to end: take a real
 # image, run c4opt's fuse pass over it, and require that it behaves
 # identically on the hosts that have them -- and is REFUSED by the ones
@@ -1904,6 +1948,7 @@ c4rs: pre
 
 # Marking the below rules as PHONY using singular .PHONY rule
 PHONY  = pre all clean-c4rs clean
+PHONY += test-c4tui test-c4th-bb
 PHONY += run run-vg test test-massive
 PHONY += run-alt run-alt-vg test-alt test-massive-alt
 PHONY += run-c4 run-c4-vg test-c4 test-massive-c4

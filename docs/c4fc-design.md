@@ -658,6 +658,56 @@ The bar rises rung by rung and c4lc supplies it at every one.
         declaration put `sched_switches` first in the BSS instead of
         last.
 
+## What it costs to run
+
+Measured on a 6-core box, `/usr/bin/time -v`, one process at a time.
+Both compilers preprocess the source themselves except where noted.
+
+**c4lc's memory is a knob, and the repo has it set wrong.** `c4sp -c N`
+preallocates the cell pool -- roughly 32 bytes a cell -- and touches all
+of it, so the number in the Makefile IS the resident set. The values
+there are far above what the work needs, and the excess costs time as
+well as memory: page faults on a pool nothing uses.
+
+    C4IX, all twelve modules, -O -c, serial
+      c4lc  -c 16000000  (as the Makefile builds it)   517 MB   6.65 s
+      c4lc  -c   500000  (smallest that completes)      18 MB   3.40 s
+      c4fc                                              23 MB   3.00 s
+
+    C4KE, one unit, -O   (c4lc through gcc -E; c4fc alone)
+      c4lc  -c 32000000  (as the Makefile builds it)  1010 MB   4.55 s
+      c4lc  -c  1000000                                 34 MB   8.84 s
+      c4fc                                              29 MB   5.30 s
+
+    C4DOS, one unit, -O
+      c4lc  -c 16000000                                506 MB   1.17 s
+      c4lc  -c   250000                                 10 MB   1.46 s
+      c4fc                                              23 MB   0.96 s
+
+    ... and without -O, where c4fc pays for neither the second pass nor
+    the peephole fixpoint:
+      C4KE    c4lc -c 1000000   34 MB  3.52 s      c4fc  16 MB  0.87 s
+      C4DOS   c4lc -c  250000   10 MB  0.49 s      c4fc  12 MB  0.18 s
+
+c4fc's footprint is a constant, not a knob: an arena, a code buffer and
+a patch buffer, all sized once and mostly untouched. Nothing has to be
+guessed and nothing has to be tuned per input, which is the difference
+that matters on a machine that has to fit the compiler as well as the
+program.
+
+**`c4lc` cannot preprocess C4KE at all** -- a function-like macro named
+without an argument list is an error there and stands for itself here,
+which is what C says -- so the C4KE row above has gcc in c4lc's pipeline
+and nothing in c4fc's.
+
+**The compiler compiled by itself.** `c4fc -O` takes `c4th.c4r` from
+217,298 bytes to 177,940 (-18.1%, the same figure `c4lc -O` gets on
+`c4sp.c`), both images pass the Forth-2012 CORE suite, and c4fc hosted
+on the optimised one runs **1.25x faster** under c4m (2.00 s against
+2.50 s compiling `spike6.c`). c4fc's own unoptimised image is exactly as
+fast as the `c4cc`-built `c4th.c4r` it replaces. All three hosts -- and
+native c4th -- produce the same image byte for byte.
+
 ## Risks, and one thing deliberately left out
 
 1. **Byte-identity may not survive every construct.** It survived all

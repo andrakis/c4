@@ -11,12 +11,18 @@ int main (int argc, char **argv) {
 	cargv[0] = "c4sp.c4r";
 	cargv[1] = "-c";
 	cargv[2] = "500000";
-	cargv[3] = "src/c4sp/lisp/c4lc.lisp";
-	cargv[4] = "src/tests/hello.c";
-	cargv[5] = "ramcc.c4r";
-	cargv[6] = 0;
+	// -R: the recursive evaluator. c4lc uses neither call/cc nor
+	// first-class environments, so the CEK machine buys it nothing and
+	// costs it a great deal -- 2.8x under the VM, measured on c4bb
+	// (docs/compiler-on-the-board.md). The host build rules have used
+	// -R since A1.2; the in-machine ones never did.
+	cargv[3] = "-R";
+	cargv[4] = "src/c4sp/lisp/c4lc.lisp";
+	cargv[5] = "src/tests/hello.c";
+	cargv[6] = "ramcc.c4r";
+	cargv[7] = 0;
 	printf("ramcc: compiling hello.c inside C4KE...\n");
-	task = kern_user_start_c4r(6, cargv, "c4sp", PRIV_USER);
+	task = kern_user_start_c4r(7, cargv, "c4sp", PRIV_USER);
 	if (task <= 0) { printf("ramcc: could not start c4sp\n"); return 1; }
 	await_pid(task);
 	len = 0;

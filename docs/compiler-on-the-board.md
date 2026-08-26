@@ -196,15 +196,93 @@ Probed feature by feature, what c4cc has and has not:
 | **lacks** | `struct`, `union`, `typedef`, `.`/`->`, struct-size pointer arithmetic, `do/while`, all ten compound assignments, block-scoped declarations with initializers |
 
 That list is exactly **c4lc's L7** (`docs/c4lc-design.md` §10), the
-milestone written *because* C4IX needed it. So the question "how does the
-board compile C4IX quickly" has one honest answer: **teach c4cc L7.**
+milestone written *because* C4IX needed it.
 
-It is a bounded job with three oracles — `src/tests/c4lc_l7.c` differs
-c4lc against gcc already, c4lc is a working reference, and c4fc is a
-second one whose whole struct algebra is 86 lines of `src/c4fc/types.f`.
-Object mode is *not* needed: c4cc concatenates its inputs, so the twelve
-modules compile whole-program in one invocation and c4rlink never enters
-the picture.
+### And teaching it to c4cc is the wrong answer — decided 2026-08-26
+
+The obvious move is to give c4cc L7. It is rejected, for two reasons
+that are about the shape of the system rather than the size of the job:
+
+1. **It collapses a rung.** c4cc runs under C4DOS. A c4cc that can
+   compile C4IX means C4DOS can build C4IX directly, and then C4KE is
+   not *needed* for anything — it becomes scenery on a ladder whose
+   whole point is that each rung is load-bearing. The ladder says C4IX
+   is built under C4KE; a compiler that makes that false is a bug in the
+   design, not a feature.
+2. **It duplicates c4lc and c4fc.** L7 exists twice already, carefully,
+   with byte-identity between the two implementations as the bar. A
+   third would be the third place a struct layout can disagree, in
+   exchange for nothing the tree does not already have.
+
+**So C4IX is compiled by c4lc, under C4KE, which is what
+`docs/homeward-ladder.md` said all along.** The problem is not the
+language. It is the clock.
+
+### The clock, then
+
+Two levers, one of them free and already banked.
+
+**`-R` was missing from every in-machine invocation.** c4lc uses neither
+`call/cc` nor first-class environments, so c4sp's CEK machine buys it
+nothing and costs it a great deal. The host build rules have passed `-R`
+since `docs/compiler-speed.md`'s A1.2; `test_ramcc.c` and
+`test_ixbuild.c` — the two places c4lc runs *inside the machine* —
+never did. Measured on c4bb, `c4lc -O -c` on one C4IX module:
+
+    without -R:  4,659,055,710 cycles / 253.45 s
+    with -R:     1,646,519,810 cycles /  81.20 s      2.83x
+
+Both now pass it. (The 1.44x recorded natively is smaller because the
+CEK machine's allocation is proportionally dearer under a VM than under
+gcc -O2.)
+
+**The other lever is the machine, and it is already designed.**
+`docs/fused-opcodes.md` measured, on the instructions these workloads
+actually execute, what a set of fused opcodes removes:
+
+| workload | instructions | fused | |
+|---|---|---|---|
+| `c4sp -R`, c4lc's lexer over `c4.c` | 1,639,556,989 | 1,025,451,397 | **−37.5%** |
+| `c4cc` compiling `c4.c` | 11,393,181 | 6,514,076 | **−42.8%** |
+| C4IX, full demo boot | 6,924,837 | 4,834,738 | **−30.2%** |
+
+One rule alone — `PSHL` (`LEA LI PSH`, reading a local) — is **17.2%** of
+what c4sp executes, which is the same `env_local_pair` cost the callgrind
+profile shows as 16%.
+
+Those ten opcodes live at 79-88. `c4mp` and `oisc4` execute all ten,
+`c4m` executes three, `c4opt`'s `fuse` pass emits them — and **c4bb has
+none of them, nor c4mp's 66-78 either** (`INS_SIZE` is 66). So the entire
+measured win is sitting on the other side of microcode that has not been
+written. `docs/fused-opcodes.md` costs it: no new circuitry, every fused
+opcode being a concatenation of transfers the board already performs;
+about twelve microsteps for the base three (+4% of 319) and about
+thirty-four for the c4mp seven; and `turbo.js` gets it free because it
+compiles the same step tables.
+
+### What that adds up to, honestly
+
+| | C4IX on c4bb |
+|---|---|
+| in-machine, as it was (no `-R`) | ~2.5 hours |
+| in-machine, with `-R` — **today** | **~57 minutes** |
+| with the fused opcodes on the board | ~36 minutes |
+| with the Lisp *compiled* rather than interpreted | minutes |
+
+The first two rows are banked. The third is a real project with a
+measured payoff and a design already written. The fourth is the one that
+reaches "minutes", and `docs/compiler-speed.md` sizes it: ~41% eval
+dispatch plus ~25% environments plus ~9% builtin dispatch is work that
+compiling removes outright, which is where its 10-30x comes from. None
+of the three touches c4cc, and all three keep C4IX a thing you build
+under C4KE.
+
+**And the opcode rung is the one that belongs to the player.** Booting
+C4DOS earns the c4m opcodes; reaching C4KE earns c4mp's; the fused set
+is what makes building C4IX bearable rather than merely possible. That
+is the machine getting better because its owner made it better, which is
+what HOMEWARD is about — and it is the reason to spend the microsteps
+rather than take the shortcut through c4cc.
 
 ### A bug found while probing, and fixed
 
@@ -419,11 +497,17 @@ read `struct vnode {`.
 - [x] **M8b** B4KE, a C4KE program — `make test-b4ke`:
       `b4ke: 4 ran, 0 skipped, 0 failed`, and the linked image is the
       same 1898 bytes the host link produces.
-- [ ] **M9** L7 in c4cc — `struct`, `union`, `typedef`, `.`/`->` with
-      struct-size pointer arithmetic, `do/while`, compound assignment,
-      block-scoped declarations. The bar is `src/tests/c4lc_l7.c` against
-      gcc, then the twelve C4IX modules compiling, then `c4ix.c4r`
-      booting on c4bb.
+- [x] **M9** `-R` in the in-machine c4lc invocations (`test_ramcc.c`,
+      `test_ixbuild.c`) — 2.83x on the board, `make test-c4lc` and
+      `make test-c4ke-ramfs` green.
+- [ ] **M10** c4bb grows opcodes: c4mp's 66-78, then the fused 79-88.
+      `docs/fused-opcodes.md` has the design and the cost; the bar is
+      c4bb's lockstep test plus `test-c4bb.sh` against native c4m, then
+      `c4sp32.c4r` rebuilt with `-mfuse` and the C4IX module re-timed.
+- [ ] **M11** Compiling the Lisp instead of interpreting it — the only
+      step that reaches "minutes". Not started, not scoped.
+- [~] **REJECTED** L7 in c4cc. See above: it collapses the C4KE rung and
+      duplicates work that exists twice already.
 
 ## What is deliberately not here
 

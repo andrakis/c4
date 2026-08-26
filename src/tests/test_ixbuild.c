@@ -20,21 +20,27 @@ int main (int argc, char **argv) {
 	char **cargv;
 	int task, len;
 
-	if (!(cargv = malloc(11 * sizeof(char *)))) return 1;
+	if (!(cargv = malloc(12 * sizeof(char *)))) return 1;
 
 	cargv[0] = "c4sp.c4r";
 	cargv[1] = "-c";
 	cargv[2] = "400000";
-	cargv[3] = "src/c4sp/lisp/c4lc.lisp";
-	cargv[4] = "-O";
-	cargv[5] = "-c";
-	cargv[6] = "-I";
-	cargv[7] = "src/c4ix";
-	cargv[8] = "src/c4ix/boot.c";
-	cargv[9] = "ixboot.c4o";
-	cargv[10] = 0;
+	// -R: the recursive evaluator, which the host build rules have used
+	// since A1.2 and this one never did. c4lc uses neither call/cc nor
+	// first-class environments, so CEK buys it nothing; on c4bb the
+	// same module costs 4.66 G instructions without -R and 1.65 G with
+	// it (docs/compiler-on-the-board.md).
+	cargv[3] = "-R";
+	cargv[4] = "src/c4sp/lisp/c4lc.lisp";
+	cargv[5] = "-O";
+	cargv[6] = "-c";
+	cargv[7] = "-I";
+	cargv[8] = "src/c4ix";
+	cargv[9] = "src/c4ix/boot.c";
+	cargv[10] = "ixboot.c4o";
+	cargv[11] = 0;
 	printf("ixbuild: c4lc is compiling src/c4ix/boot.c (slow)...\n");
-	task = kern_user_start_c4r(10, cargv, "c4sp", PRIV_USER);
+	task = kern_user_start_c4r(11, cargv, "c4sp", PRIV_USER);
 	if (task <= 0) { printf("ixbuild: could not start c4sp\n"); return 1; }
 	await_pid(task);
 

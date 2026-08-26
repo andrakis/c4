@@ -237,6 +237,25 @@ decision to turn the flag on by default rather than precede it.
       Plus a wider differential: the fused `c4sp.c4r` reproduces the
       native `c4sp` output for **all 27** files in `src/c4sp/lisp/`.
 
+- [ ] **F7** **c4bb.** The board has none of this: `INS_SIZE` is 66, so
+      it lacks c4mp's `CPUI..TRAW` (66-78) as well as these ten (79-88),
+      and every number in F6 is therefore unavailable to the one machine
+      the whole ladder is aimed at. This is where the win now sits, and
+      `docs/compiler-on-the-board.md` records why it matters: with `-R`
+      banked, C4IX takes about 57 minutes to build inside c4bb, and
+      −37.5% on what `c4sp -R` executes takes that to about 36.
+
+      In HOMEWARD this is not a chore, it is a rung: booting C4DOS earns
+      the c4m opcodes, reaching C4KE earns c4mp's, and the fused set is
+      what makes building C4IX bearable. The player makes their own
+      machine faster and the compiler they already have gets quicker.
+
+      Order: the base three (`LDL`/`STL`/`POPA`, ~12 microsteps) first,
+      since c4m already executes them and `c4th`'s backend already emits
+      them; then c4mp's 66-78; then the remaining seven. Bar at each
+      step: c4bb's lockstep test (step engine == turbo engine) and
+      `test-c4bb.sh` against native c4m.
+
 - [x] **F6** What it was all for.
 
       | workload | instructions | fused | |

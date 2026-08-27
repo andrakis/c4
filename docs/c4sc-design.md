@@ -106,29 +106,69 @@ later. `gen1 == gen2 == gen3` is the fixed point, exactly as `self.f`
 does it in `docs/c4th-selfhost.md`. Estimated 900-1,400 lines — it is a
 pattern match over eight forms plus a symbol table.
 
-## What it is actually worth — and a correction
+## What it is actually worth — measured, not argued
 
-`docs/compiler-speed.md` says compiling is "worth perhaps 10-30x". **That
-number does not follow from its own profile and should not be relied
-on.** Removing 41% + 25% + 9% = 75% of the work is 4x, not 30x.
+**M0 is done and the answer is 16x to 44x on the machine that matters.**
 
-The honest arithmetic:
+Two kernels, each written twice: once in the c4sp Lisp, once as C over
+c4sp's own cells and collector — which is what c4sc would generate.
+Kernel A is list walking (`head`, `tail`, `empty?`, `=`, `+`), which the
+Lisp-level profile below says is c4lc's dominant shape. Kernel B is
+`fib`, two non-tail *user* calls per node, the pessimistic bracket.
+`src/c4sp/bench/` holds both and how to run them.
 
-- **4x** if compilation removed only dispatch, environments and builtin
-  dispatch, and nothing else changed.
-- Environments in c4sp are *alists*, so every parameter binding conses.
-  Compiling makes locals into C locals, so a large share of the 12% GC
-  and consing goes with the environments rather than surviving them.
-- Atom interning (4%) mostly moves to startup.
+| | interpreted | compiled | |
+|---|---:|---:|---:|
+| **A native** | 2.435 s | 152.8 ms | **15.9x** |
+| **A hosted (c4m)** | 8m14s | 11.2 s | **44.1x** |
+| **B native** | 543.5 ms | 118.6 ms | **4.6x** |
+| **B hosted (c4m)** | 1m26s | 5.3 s | **16.2x** |
 
-That puts the realistic figure at **5-8x, not 10-30x**, which is still
-the difference between thirty-one minutes and **four to six** — the first
-thing on this ladder that reaches the word "minutes".
+**Hosted beats native, and that is the whole point.** Natively you remove
+one level of interpretation out of one. Hosted you remove one out of two,
+and the level that survives is itself a VM. So the machine that needs the
+win most is the one that gets the most of it — c4bb, where C4IX is built
+by `c4lc.lisp` interpreted by `c4sp.c4r` interpreted by the board, and
+would instead be built by `c4lc.c4r` interpreted by the board.
 
-**M0 exists to settle this before anyone writes a compiler.** Guessing
-this number wrong is exactly the mistake the `native.f` attempt made
-(`docs/c4th-design.md`), and the lesson from that is to measure the
-ceiling first and cheaply.
+### Why kernel A is the right shape
+
+A scratch Lisp-level profiler in `eval`'s application path (counting the
+name in head position, which is what a compiler turns into a C function)
+over `c4lc -O -c src/c4ix/sched.c`:
+
+    applications: 2,867,236
+      20.67%  head          1.95%  string:byte
+      16.34%  =             1.59%  opt:is
+      11.17%  tail          1.26%  reverse/2
+      10.38%  empty?        1.26%  cons
+       6.84%  +             1.25%  lex:kwlook
+       3.78%  list          1.02%  p:assoc/atom
+
+**76% of all applications are builtins** — which are already C. What
+compiling removes is not their bodies but everything around them: the
+`eval` dispatch, the environment lookup, the argument list consed for
+every call, and the builtin if-chain. Kernel A is that, exactly.
+
+### Two corrections, and I got the second one wrong too
+
+`docs/compiler-speed.md` said "worth perhaps 10-30x". I argued that down
+to 5-8x, reasoning that removing 41% dispatch + 25% environments + 9%
+builtin dispatch is 4x. **That arithmetic was wrong**, and the
+measurement says so: it ignored that the interpreter conses an argument
+list *per application*, so removing applications removes most of the
+allocator traffic and the GC work with it, and it ignored that the
+hosted case removes a whole level rather than a share of one.
+
+Natively, 4.6x-15.9x — near my range. Hosted, 16.2x-44.1x — near the
+original one. Both documents were partly right about different machines,
+which is exactly why M0 was a measurement and not a paragraph.
+
+### What that means for the board
+
+C4IX inside c4bb is about 31 minutes today (`-R` plus the fused
+opcodes). c4lc compiled, taken conservatively at the pessimistic bracket
+of 16x, is **under two minutes**. At the shape c4lc actually has, less.
 
 ## Risks
 
@@ -155,11 +195,15 @@ ceiling first and cheaply.
 Each rung is verified against the interpreter, which is a working oracle
 for all of them.
 
-- [ ] **M0** *Measure the ceiling before building anything.* Hand-write
-      the C for the three hottest functions (from a fresh callgrind run),
-      link them into c4sp as builtins, and time `c4lc -O -c` on a C4IX
-      module against the interpreted originals. **If the extrapolated
-      whole-program figure is under 3x, stop and say so.** Budget: a day.
+- [x] **M0** *Measure the ceiling before building anything.* Done
+      differently from the plan and better: the plan said "hand-compile
+      the three hottest functions", but the Lisp-level profile showed the
+      three hottest are `head`, `=` and `tail` — **builtins, already C**.
+      So the thing to measure was the call protocol around them, which is
+      what the two kernels in `src/c4sp/bench/` do.
+
+      **Gate was 3x. Measured 16.2x-44.1x hosted, 4.6x-15.9x native.**
+      Proceed.
 - [ ] **M1** *Expansion factor.* c4sc emits C for `c4opt.lisp` (445
       lines, the smallest self-contained file) only. Measure the
       generated line count and that `c4lc -O -c` compiles it. No

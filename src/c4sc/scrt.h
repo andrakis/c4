@@ -152,6 +152,7 @@ int *sc_str_setword (int *s, int *i, int *v) {
 }
 int *sc_file_read (int *p) { return builtin_call(B_FILE_READ, cons(p, 0), 0); }
 int *sc_file_exists (int *p) { return builtin_call(B_FILE_EXISTS, cons(p, 0), 0); }
+int *sc_wordsize () { return mk_int(sizeof(int)); }
 
 // error takes only its first argument, whatever the arity at the call
 // site, so the list is built for the same reason print's is: it is cold

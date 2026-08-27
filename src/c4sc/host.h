@@ -45,33 +45,19 @@ int *sc_call_named (char *name, int *args) {
 	return sc_apply(f, args);
 }
 
-// -- what the generated c4opt unit expects from c4r.lisp ---------------
-int *L_cons (int *x, int *l) { return sc_call_named("cons", cons(x, cons(l, 0))); }
-int *L_second (int *l) { return sc_call_named("second", cons(l, 0)); }
-int *L_third (int *l) { return sc_call_named("third", cons(l, 0)); }
-int *L_reverse (int *l) { return sc_call_named("reverse", cons(l, 0)); }
-int *L_c4r_58max_45label (int *a, int *b) {
-	return sc_call_named("c4r:max-label", cons(a, cons(b, 0)));
-}
-int *L_W;   // c4r.lisp's word size, copied in before each entry
+// c4r.lisp used to be reached through this bridge -- cons, second,
+// third, reverse, c4r:max-label and W were interpreted, and the compiled
+// c4opt called into the evaluator for every one. From M5 c4r.lisp is
+// compiled too, so those definitions are gone and the calls are direct.
+// What is left of the bridge is what the HOST still needs: applying a
+// name from the global environment, which is how file:read and
+// file:write are reached without duplicating c4sp's path handling.
 
-// -- the entry point, as a builtin -------------------------------------
-// The driver calls (c4sc:optimize M). opt:fuse-on is a variable the
-// driver sets, and the compiled unit has its own copy of it, so it is
-// carried across here rather than being read twice from two places.
-int *L_c4opt_58optimize (int *M);
-int *L_opt_58fuse_45on;
+// The compiled units' initialisers.
 void sc_init_opt ();
 void sc_init_lex ();
 void sc_init_pp ();
 void sc_init_parse ();
-
-int *sc_bridge_optimize (int *args) {
-	int *fuse;
-
-	if (!sc_ready) { sc_init_opt(); sc_ready = 1; }
-	L_W = sc_lookup("W");
-	fuse = sc_lookup("opt:fuse-on");
-	L_opt_58fuse_45on = fuse ? fuse : cell_false;
-	return L_c4opt_58optimize(car(args));
-}
+void sc_init_c4r ();
+void sc_init_tree ();
+void sc_init_gen ();

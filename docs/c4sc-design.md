@@ -365,9 +365,50 @@ for all of them.
       **null cell**, and `typeof` calls that an atom — the same answer it
       gives the atom `nil` — so the terminator has to be recognised with
       `empty?` as well. One printed dot, in one place, in one file.
-- [ ] **M5** *The back end.* `c4lc-gen.lisp` (1,534 lines),
-      `c4lc-tree.lisp`, `c4r.lisp`. Emitted `.c4r` **byte-identical to
-      the interpreter's** across the whole `C4LC_DIFF` corpus.
+- [x] **M5** *The back end, and the bridge is gone.* `make
+      test-c4sc-back`:
+
+          corpus ok: 21 programs, plain and -O, byte-identical
+          obj ok: boot (8071) ... c4ke (57146) ... init (32371)
+          cmp .c4sc_ix.c4r c4ix.c4r
+          test-c4sc-back: OK -- the kernel it built is the committed
+          one, and it boots
+
+      **Seven units, and nothing of the pipeline is interpreted any
+      more.** Lexer, preprocessor, parser, tree passes, code generator,
+      peephole passes and the `.c4r` writer are all compiled; the only
+      things still reached through the interpreter are `file:read` and
+      `file:write`, which is where c4sp resolves a path and chooses
+      between the host and C4KE's ramfs — a policy worth having once.
+
+      `c4lc-gen.lisp`, 1,534 lines, comes to **5,793** — the largest
+      unit, and comfortably under c4lc's ~7,300-line ceiling. M1
+      projected ~6,800 from the 4.46x it measured; the real figure is
+      3.78x, because the biggest file is the one with the most
+      straight-line code.
+
+      **The bridge in `host.h` is deleted.** `cons`, `second`, `third`,
+      `reverse`, `c4r:max-label` and `W` were interpreted, so the
+      compiled c4opt called into the evaluator for every cons; now
+      `c4r.lisp` is compiled and those calls are direct. One flag
+      difference had to be fixed to make the comparison honest: in
+      c4lc, `-I` and `-D` imply `-P`, and the host now does the same.
+
+      **Speed**, the full twelve-module C4IX build, all objects
+      byte-identical:
+
+      | | wall | user |
+      |---|---:|---:|
+      | interpreted | 2.272 s | 1.450 s |
+      | **compiled** | **1.126 s** | **0.314 s** |
+      | | **2.02x** | **4.6x** |
+
+      The wall figure is dragged by ~0.8 s of arena allocation that both
+      sides pay twelve times over, once per process. On one module with
+      a 4M-cell arena it is 2.90x wall and 5.7x user — and the output is
+      byte-identical at every arena size tried, which is worth stating:
+      the collector runs at different moments on the two sides and the
+      image does not move.
 - [ ] **M6** *The whole compiler.* `c4lc.c4r` as a native image. C4IX
       rebuilt with it: twelve objects byte-identical to today's, linking
       to a kernel byte-identical to the committed `c4ix.c4r`, which

@@ -543,17 +543,18 @@ test-b4ke: $(BIN_D)/b4ke.c4r $(C4KE_C4R) $(C4M) $(C4R_C4CC) $(C4R_C4RLINK) $(TES
 test-c4sc: c4sp $(C4LC_LISP) $(C4SC_GEN) src/c4sc/scrt.h
 	@# Each unit stands alone: no preprocessing, and every runtime name
 	@# is a declaration that c4lc -c turns into a symbol for c4rlink.
-	@for u in opt lex pp parse; do \
+	@for u in opt lex pp parse c4r tree gen; do \
 	   ./c4sp -R -c 16000000 $(SRCS)/c4sp/lisp/c4lc.lisp -O -c \
 	       src/c4sc/c4$${u}_gen.c .c4sc_$$u.c4o > /dev/null || exit 1; \
 	   test -s .c4sc_$$u.c4o || exit 1; \
 	 done
 	@echo "test-c4sc: OK -- four units, all compiled by c4lc -O -c:"
-	@for u in opt:c4opt lex:c4lc-lex pp:c4lc-pp parse:c4lc-parse; do \
+	@for u in opt:c4opt lex:c4lc-lex pp:c4lc-pp parse:c4lc-parse \
+	          c4r:c4r tree:c4lc-tree gen:c4lc-gen; do \
 	   n=$${u%%:*}; f=$${u##*:}; \
 	   echo "  $$f.lisp $$(wc -l < $(SRCS)/c4sp/lisp/$$f.lisp) -> $$(wc -l < src/c4sc/c4$${n}_gen.c) lines"; \
 	 done
-	@rm -f .c4sc_opt.c4o .c4sc_lex.c4o .c4sc_pp.c4o .c4sc_parse.c4o
+	@rm -f .c4sc_*.c4o
 
 # M2: the compiled c4opt has to produce the SAME IMAGES as the
 # interpreted one. c4sc-host is c4opt-run.lisp with exactly one
@@ -562,7 +563,8 @@ test-c4sc: c4sp $(C4LC_LISP) $(C4SC_GEN) src/c4sc/scrt.h
 # the optimizer is compiled. Built at c4sp's own -O2, so the collector
 # is doing the same job here as it does there.
 C4SC_GEN := src/c4sc/c4opt_gen.c src/c4sc/c4lex_gen.c \
-            src/c4sc/c4pp_gen.c src/c4sc/c4parse_gen.c
+            src/c4sc/c4pp_gen.c src/c4sc/c4parse_gen.c \
+            src/c4sc/c4c4r_gen.c src/c4sc/c4tree_gen.c src/c4sc/c4gen_gen.c
 src/c4sc/c4opt_gen.c: c4sp src/c4sc/c4sc.lisp $(SRCS)/c4sp/lisp/c4opt.lisp
 	./c4sp -R -c 8000000 src/c4sc/c4sc.lisp $(SRCS)/c4sp/lisp/c4opt.lisp $@ opt > /dev/null
 src/c4sc/c4lex_gen.c: c4sp src/c4sc/c4sc.lisp $(SRCS)/c4sp/lisp/c4lc-lex.lisp
@@ -571,6 +573,12 @@ src/c4sc/c4pp_gen.c: c4sp src/c4sc/c4sc.lisp $(SRCS)/c4sp/lisp/c4lc-pp.lisp
 	./c4sp -R -c 8000000 src/c4sc/c4sc.lisp $(SRCS)/c4sp/lisp/c4lc-pp.lisp $@ pp > /dev/null
 src/c4sc/c4parse_gen.c: c4sp src/c4sc/c4sc.lisp $(SRCS)/c4sp/lisp/c4lc-parse.lisp
 	./c4sp -R -c 8000000 src/c4sc/c4sc.lisp $(SRCS)/c4sp/lisp/c4lc-parse.lisp $@ parse > /dev/null
+src/c4sc/c4c4r_gen.c: c4sp src/c4sc/c4sc.lisp $(SRCS)/c4sp/lisp/c4r.lisp
+	./c4sp -R -c 8000000 src/c4sc/c4sc.lisp $(SRCS)/c4sp/lisp/c4r.lisp $@ c4r > /dev/null
+src/c4sc/c4tree_gen.c: c4sp src/c4sc/c4sc.lisp $(SRCS)/c4sp/lisp/c4lc-tree.lisp
+	./c4sp -R -c 8000000 src/c4sc/c4sc.lisp $(SRCS)/c4sp/lisp/c4lc-tree.lisp $@ tree > /dev/null
+src/c4sc/c4gen_gen.c: c4sp src/c4sc/c4sc.lisp $(SRCS)/c4sp/lisp/c4lc-gen.lisp
+	./c4sp -R -c 8000000 src/c4sc/c4sc.lisp $(SRCS)/c4sp/lisp/c4lc-gen.lisp $@ gen > /dev/null
 
 c4sc-host: c4sp $(C4SC_GEN) src/c4sc/c4sc-host.c src/c4sc/host.h src/c4sc/scrt.h
 	gcc $(EXTRA_CC) -O2 -fwrapv -fno-omit-frame-pointer -g -Iinclude -I. -o c4sc-host src/c4sc/c4sc-host.c
@@ -657,6 +665,45 @@ test-c4sc-front: c4sc-host c4sp
 	 done; [ $$fail = 0 ] || exit 1
 	@rm -f .c4sc_g.i .c4sc_a.txt .c4sc_b.txt .c4sc_ast.txt
 	@echo "test-c4sc-front: OK"
+
+# M5: the back end, and the bar is the OUTPUT. Every image the compiled
+# compiler writes must be byte-identical to the interpreted one's, over
+# the same corpus test-c4lc uses, plain and -O; then the twelve C4IX
+# modules as objects; then those objects linked into a kernel that must
+# equal the committed c4ix.c4r and boot. Nothing of the pipeline is
+# interpreted any more -- lexer, preprocessor, parser, tree passes, code
+# generator, peephole passes and the .c4r writer are all compiled, and
+# only file:read and file:write are still c4sp's.
+C4SC_BACK_DIFF := c4_jailbreak factorial hello multifun puts reverse \
+                  test_basic test_continue test_coop_switch test_globals \
+                  test_malloc test-order test-ptrs test_static test_switch \
+                  tests c4lc_l2 global test_gcscan test-oisc test_printf
+test-c4sc-back: c4sc-host c4sp $(C4RLINK) $(C4M)
+	@fail=0; for b in $(C4SC_BACK_DIFF); do \
+	   f=$(TESTS)/$$b.c; \
+	   for fl in "" "-O"; do \
+	     ./c4sp -R -c 16000000 $(SRCS)/c4sp/lisp/c4lc.lisp $$fl $$f .c4sc_i.c4r >/dev/null 2>&1; \
+	     ./c4sc-host -c 16000000 compile $$fl $$f .c4sc_c.c4r >/dev/null 2>&1; \
+	     cmp -s .c4sc_i.c4r .c4sc_c.c4r \
+	       || { echo "test-c4sc-back: $$b $$fl DIFFERS"; fail=1; }; \
+	   done; \
+	 done; [ $$fail = 0 ] || exit 1
+	@echo "  corpus ok: $(words $(C4SC_BACK_DIFF)) programs, plain and -O, byte-identical"
+	@fail=0; for m in $(C4IX_MODS); do \
+	   ./c4sp -R -c 33554432 $(SRCS)/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC) \
+	       $(C4IX_SRC)/$$m.c .c4sc_i.c4o >/dev/null 2>&1; \
+	   ./c4sc-host -c 33554432 compile -O -c -I $(C4IX_SRC) \
+	       $(C4IX_SRC)/$$m.c .c4sc_$$m.c4o >/dev/null 2>&1; \
+	   cmp -s .c4sc_i.c4o .c4sc_$$m.c4o \
+	     || { echo "test-c4sc-back: $$m.c4o DIFFERS"; fail=1; continue; }; \
+	   echo "  obj ok: $$m ($$(wc -c < .c4sc_$$m.c4o) bytes)"; \
+	 done; [ $$fail = 0 ] || exit 1
+	$(C4RLINK) $(patsubst %,.c4sc_%.c4o,$(C4IX_MODS)) -o .c4sc_ix.c4r
+	$(MAKE) c4ix.c4r
+	cmp .c4sc_ix.c4r c4ix.c4r
+	$(C4M) load-c4r.c -- .c4sc_ix.c4r --demo 2>&1 | grep -q "shutdown complete"
+	@rm -f .c4sc_i.c4r .c4sc_c.c4r .c4sc_i.c4o .c4sc_*.c4o .c4sc_ix.c4r
+	@echo "test-c4sc-back: OK -- the kernel it built is the committed one, and it boots"
 
 # c4cc's for statement. It had never worked -- see src/tests/test_for.c
 # -- so this pins it against gcc's output for the same program, which is
@@ -2270,7 +2317,7 @@ c4rs: pre
 PHONY  = pre all clean-c4rs clean
 PHONY += test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
 PHONY += run-c4dos-build32 test-c4dos-build32 test-c4cc-for test-respfile test-b4ke
-PHONY += test-c4sc test-c4sc-run test-c4sc-lex test-c4sc-front
+PHONY += test-c4sc test-c4sc-run test-c4sc-lex test-c4sc-front test-c4sc-back
 PHONY += test-c4dos-ladder32
 PHONY += run run-vg test test-massive
 PHONY += run-alt run-alt-vg test-alt test-massive-alt

@@ -182,7 +182,8 @@
 	(if (= F 'file:read)    "sc_file_read"
 	(if (= F 'file:path)    "sc_file_path"
 	(if (= F 'file:exists)  "sc_file_exists"
-		false)))))))))))))))))))))))))))))
+	(if (= F 'sys:wordsize) "sc_wordsize"
+		false))))))))))))))))))))))))))))))
 
 ;; The arithmetic ones nest: (+ a b c) is sc_add(sc_add(a,b),c).
 (define sc:arith (lambda (F)
@@ -652,6 +653,7 @@
 (sc:proto "int *sc_file_path (int *p);")
 (sc:proto "int *sc_file_exists (int *p);")
 (sc:proto "int *sc_error (int *args);")
+(sc:proto "int *sc_wordsize ();")
 (sc:proto "int *sc_typeof (int *x);")
 (sc:proto "int *sc_print (int *args);")
 (sc:proto "int *sc_str (char *s, int n);")

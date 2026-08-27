@@ -55,3 +55,4 @@ c4or1k-native
 /c4m-fuse
 /src/c4sc/c4opt_gen.c
 /c4sc-host
+/src/c4sc/c4lex_gen.c

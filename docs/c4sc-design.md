@@ -289,8 +289,48 @@ for all of them.
          24,623 instructions against 24,617. That is the argument for
          having the big images in the corpus rather than the quick
          ones.
-- [ ] **M3** *The lexer.* `c4lc-lex.lisp` (375 lines). Token dump ==
-      `expected/c4lc-tokens.txt`; `-count` on `c4cc.c` == 15,125.
+- [x] **M3** *The lexer.* `make test-c4sc-lex`: the dump and the
+      `-conforming` dump both match the committed expected files,
+      `-count` on `c4cc.c` is 15,125, and the whole of test-c4fc's lexer
+      sweep — thirteen files, ~67,000 tokens — is identical to the
+      interpreter's, `c4cc.c` included. 375 lines of Lisp → 1,601 of C
+      (4.27x, in line with c4opt's 4.46x), and `c4lc-lex.lisp` needs no
+      externs at all.
+
+      **The bar had to be the DUMP, not the count.** The first version
+      counted 15,125 tokens — exactly right — while lexing every
+      keyword as an identifier. `c4lc-lex.lisp`'s keyword table is a
+      quoted literal, `'(("char" Char) ("else" Else) ...)`, and c4sc was
+      materialising quoted data by printing it back and re-reading it.
+      The printer does not quote strings, so `"char"` came back as the
+      atom `char` and `lex:kwlook` never matched. Quoted data is now
+      built **structurally** — cons by cons, `sc_str` for a string and
+      `sc_atom` for an atom — which is exact by construction and drops
+      the runtime reader dependency entirely.
+
+      **And a shim that delegates is not a shim.** `sc_str_byte` was
+      `builtin_call(B_STR_BYTE, cons(s, cons(i, 0)), 0)` — which conses
+      an argument list and walks the thirty-way if-chain, reintroducing
+      one layer down exactly the call protocol compiling exists to
+      remove. Invisible on c4opt, which barely touches strings;
+      immediate on a lexer. `string:byte`, `string:byte!` and
+      `string:substr` are now written out against cells.
+
+      **Speed, on the first rung that is on c4lc's real hot path.**
+      Lexing eight concatenated copies of `c4cc.c` (16,872 lines,
+      120,993 tokens, both sides agreeing):
+
+      | | wall | user |
+      |---|---:|---:|
+      | interpreted | 1.019 s | 0.945 s |
+      | **compiled** | **191 ms** | **117 ms** |
+      | | **5.33x** | **8.1x** |
+
+      On `c4cc.c` alone it is 1.73x wall, because at that size half the
+      wall clock is arena setup in both — which is why the measurement
+      uses an input big enough for the work to dominate. Between M0's
+      two brackets (4.6x and 15.9x native), which is where a real
+      workload should sit.
 - [ ] **M4** *The rest of the front end.* `c4lc-pp.lisp`,
       `c4lc-parse.lisp`. Preprocessed output byte-identical to `gcc -E`
       for all twelve C4IX modules; AST dump == the committed expected.

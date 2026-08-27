@@ -24,29 +24,78 @@
 #include "src/c4sc/scrt.h"
 #include "src/c4sc/host.h"
 #include "src/c4sc/c4opt_gen.c"
+#include "src/c4sc/c4lex_gen.c"
 
 int *sc_eval_str (char *text) {
 	return eval(rd_read(text, cs_strlen(text)), sc_genv);
 }
 
+// tokens mode: c4lc-tokens.lisp, with lex:file compiled. The output has
+// to match the interpreted driver line for line, which is what
+// src/c4sp/tests/expected/c4lc-tokens.txt already pins for c4lc.
+int sc_tokens (int argc, char **argv) {
+	int *toks, *l;
+	int  counting, conforming, n;
+	char *file;
+
+	counting = conforming = 0;
+	if (argc > 0 && !memcmp(*argv, "-count", 7)) { counting = 1; --argc; ++argv; }
+	else if (argc > 0 && !memcmp(*argv, "-conforming", 12)) { conforming = 1; --argc; ++argv; }
+	if (argc < 1) { printf("usage: c4sc-host tokens [-count|-conforming] file.c\n"); return 1; }
+	file = *argv;
+
+	sc_init_lex();
+	L_lex_58conforming = conforming ? cell_true : cell_false;
+	toks = L_lex_58file(mk_string(file));
+	if (c4sp_err) { printf("c4sc-host: %s\n", c4sp_err_msg); return 1; }
+
+	if (counting) {
+		n = 0; l = toks;
+		while (cell_type(l) == T_CONS) { ++n; l = (int *)l[CELL_B]; }
+		printf("tokens %d\n", n);
+		return 0;
+	}
+	l = toks;
+	while (cell_type(l) == T_CONS) {
+		pr_reset();
+		cell_write((int *)l[CELL_A], 0);
+		printf("%s\n", pr_term());
+		l = (int *)l[CELL_B];
+	}
+	return 0;
+}
+
 int main (int argc, char **argv) {
 	int *orig, *m, *m2, *out, *r;
 	char *in, *outname;
-	int   fuse;
+	int   fuse, tokens, cells;
 
 	gc_stack_base = (int *)&orig;
 	fuse = 0;
+	tokens = 0;
+	cells = 4000000;   // the same default the timings use for c4sp
 	--argc; ++argv;
+	if (argc > 1 && !memcmp(*argv, "-c", 3)) {
+		--argc; ++argv;
+		cells = 0;
+		in = *argv;
+		while (*in >= '0' && *in <= '9') cells = cells * 10 + (*in++ - '0');
+		--argc; ++argv;
+	}
+	if (argc > 0 && !memcmp(*argv, "tokens", 7)) { tokens = 1; --argc; ++argv; }
+	else if (argc > 0 && !memcmp(*argv, "opt", 4)) { --argc; ++argv; }
 	if (argc > 0 && !memcmp(*argv, "-mfuse", 7)) { fuse = 1; --argc; ++argv; }
-	if (argc < 2) { printf("usage: c4sc-host [-mfuse] in.c4r out.c4r\n"); return 1; }
-	in = *argv; outname = argv[1];
+	if (!tokens && argc < 2) { printf("usage: c4sc-host [opt] [-mfuse] in.c4r out.c4r\n"); return 1; }
+	in = *argv; outname = tokens ? 0 : argv[1];
 
 	if (atoms_init()) return 1;
-	if (gc_init(8000000)) return 1;
+	if (gc_init(cells)) return 1;
 	if (pr_init()) return 1;
 	sc_genv = mk_env(0);
 	gc_root_genv = sc_genv;
 	stdlib_init(sc_genv);
+
+	if (tokens) return sc_tokens(argc, argv);
 
 	sc_eval_str("(load \"src/c4sp/lisp/c4r.lisp\")");
 	if (c4sp_err) { printf("c4sc-host: %s\n", c4sp_err_msg); return 1; }

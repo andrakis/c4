@@ -94,21 +94,40 @@
 						(string:substr S I 1))))))))))
 (define sc:esc (lambda (S) (sc:esc/2 S 0 (length S) "")))
 
-;; A literal cell -> the name of the global holding it. Strings become
-;; sc_str, everything else is printed back and re-read by sc_read, which
-;; is the one place c4sc leans on c4sp's reader at runtime.
+;; A literal cell -> the name of the global holding it.
+;;
+;; Quoted data is built STRUCTURALLY -- cons by cons, atom by atom --
+;; rather than printed back and re-read. Printing loses the difference
+;; between a string and an atom: c4lc-lex.lisp's keyword table is
+;;     '(("char" Char) ("else" Else) ...)
+;; and the round trip turned every "char" into the atom char, so every
+;; keyword lexed as an identifier. The count was still right, which is
+;; why the token DUMP is the bar and not the count.
+(define sc:qlit (lambda (X)
+	(begin
+		(define T (typeof X))
+		(if (= T 'number) (+ "mk_int(" (+ (sc:text X) ")"))
+		(if (= T 'string) (sc:strlit "sc_str" X)
+		(if (= T 'list)
+			(if (empty? X) "0"
+				(+ "sc_cons(" (+ (sc:qlit (head X)) (+ ", " (+ (sc:qlit (tail X)) ")")))))
+			(sc:strlit "sc_atom" X)))))))
+
+(define sc:strlit (lambda (Fn X)
+	(begin
+		(define S (sc:text X))
+		(+ Fn (+ "(" (+ DQ (+ (sc:esc S) (+ DQ (+ ", " (+ (sc:text (length S)) ")"))))))))))
+
 (define sc:lit (lambda (X Str)
 	(begin
 		(define Nm (sc:litname))
-		(define S (sc:text X))
 		(set! sc:nlit (+ sc:nlit 1))
 		(set! sc:decls (+ sc:decls (+ "int *" (+ Nm (+ ";" NL)))))
 		(set! sc:inits (+ sc:inits
 			(+ TAB (+ "gc_add_root((int *)&" (+ Nm (+ ");" NL))))))
 		(set! sc:inits (+ sc:inits
-			(+ TAB (+ Nm (+ " = " (+ (if Str "sc_str(" "sc_read(")
-				(+ DQ (+ (sc:esc S) (+ DQ (+ ", "
-					(+ (sc:text (length S)) (+ ");" NL))))))))))))
+			(+ TAB (+ Nm (+ " = "
+				(+ (if Str (sc:strlit "sc_str" X) (sc:qlit X)) (+ ";" NL)))))))
 		Nm)))
 
 ;; ---- temporaries -----------------------------------------------------
@@ -151,7 +170,10 @@
 	(if (= F 'string:byte!) "sc_str_setbyte"
 	(if (= F 'string:word)  "sc_str_word"
 	(if (= F 'string:word!) "sc_str_setword"
-		false)))))))))))))))))))))))))
+	(if (= F 'string:substr) "sc_str_substr"
+	(if (= F 'file:read)    "sc_file_read"
+	(if (= F 'file:path)    "sc_file_path"
+		false))))))))))))))))))))))))))))
 
 ;; The arithmetic ones nest: (+ a b c) is sc_add(sc_add(a,b),c).
 (define sc:arith (lambda (F)
@@ -534,6 +556,10 @@
 ;; ---- driver ----------------------------------------------------------
 (define In (+ "" (head argv)))
 (define Out (+ "" (head (tail argv))))
+;; The init function is named per unit, because a host that links two
+;; generated units would otherwise have two sc_init()s.
+(define Unit (if (empty? (tail (tail argv))) "sc_init"
+	(+ "sc_init_" (+ "" (index argv 2)))))
 (define Src (debug:parse (file:read In)))
 (define Forms (if (= (head Src) 'begin) (tail Src) (list Src)))
 
@@ -595,15 +621,19 @@
 (sc:proto "int *sc_str_setbyte (int *s, int *i, int *v);")
 (sc:proto "int *sc_str_word (int *s, int *i);")
 (sc:proto "int *sc_str_setword (int *s, int *i, int *v);")
+(sc:proto "int *sc_str_substr (int *s, int *a, int *b);")
+(sc:proto "int *sc_file_read (int *p);")
+(sc:proto "int *sc_file_path (int *p);")
 (sc:proto "int *sc_typeof (int *x);")
 (sc:proto "int *sc_print (int *args);")
 (sc:proto "int *sc_str (char *s, int n);")
 (sc:proto "int *sc_read (char *s, int n);")
+(sc:proto "int *sc_atom (char *s, int n);")
 (set! Text (+ Text NL))
 (set! Text (+ Text (+ "int *sc_top;" NL)))
 (set! Text (+ Text sc:extdecls))
 (set! Text (+ Text sc:decls))
-(set! Text (+ Text (+ NL (+ "void sc_init ()" NL))))
+(set! Text (+ Text (+ NL (+ "void " (+ Unit (+ " ()" NL))))))
 (set! Text (+ Text (+ "{" NL)))
 (set! Text (+ Text sc:inits))
 (set! Text (+ Text (+ "}" (+ NL NL))))

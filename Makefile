@@ -540,14 +540,18 @@ test-b4ke: $(BIN_D)/b4ke.c4r $(C4KE_C4R) $(C4M) $(C4R_C4CC) $(C4R_C4RLINK) $(TES
 # is M2, where the images c4opt rewrites have to come out byte-identical
 # to the interpreted pass's. What this pins is the expansion factor,
 # which is the risk that decides whether the rest is feasible at all.
-test-c4sc: c4sp $(C4LC_LISP) src/c4sc/c4sc.lisp src/c4sc/scrt.h
-	./c4sp -R -c 8000000 src/c4sc/c4sc.lisp src/c4sp/lisp/c4opt.lisp .c4sc_gen.c > /dev/null
-	$(PREPROC) .c4sc_gen.c > .c4sc_gen_pp.c
-	./c4sp -R -c 16000000 src/c4sp/lisp/c4lc.lisp -O -c .c4sc_gen_pp.c .c4sc_gen.c4o > /dev/null
-	test -s .c4sc_gen.c4o
-	@echo "test-c4sc: OK -- $$(wc -l < src/c4sp/lisp/c4opt.lisp) lines of Lisp \
--> $$(wc -l < .c4sc_gen.c) lines of C, and c4lc -O -c compiles it"
-	@rm -f .c4sc_gen.c .c4sc_gen_pp.c .c4sc_gen.c4o
+test-c4sc: c4sp $(C4LC_LISP) $(C4SC_GEN) src/c4sc/scrt.h
+	@# Each unit stands alone: no preprocessing, and every runtime name
+	@# is a declaration that c4lc -c turns into a symbol for c4rlink.
+	@for u in opt lex; do \
+	   ./c4sp -R -c 16000000 $(SRCS)/c4sp/lisp/c4lc.lisp -O -c \
+	       src/c4sc/c4$${u}_gen.c .c4sc_$$u.c4o > /dev/null || exit 1; \
+	   test -s .c4sc_$$u.c4o || exit 1; \
+	 done
+	@echo "test-c4sc: OK -- c4opt.lisp $$(wc -l < $(SRCS)/c4sp/lisp/c4opt.lisp) \
+-> $$(wc -l < src/c4sc/c4opt_gen.c) lines, c4lc-lex.lisp \
+$$(wc -l < $(SRCS)/c4sp/lisp/c4lc-lex.lisp) -> $$(wc -l < src/c4sc/c4lex_gen.c), both compiled by c4lc -O -c"
+	@rm -f .c4sc_opt.c4o .c4sc_lex.c4o
 
 # M2: the compiled c4opt has to produce the SAME IMAGES as the
 # interpreted one. c4sc-host is c4opt-run.lisp with exactly one
@@ -555,9 +559,11 @@ test-c4sc: c4sp $(C4LC_LISP) src/c4sc/c4sc.lisp src/c4sc/scrt.h
 # interpreter, reached through the bridge in src/c4sc/host.h, and only
 # the optimizer is compiled. Built at c4sp's own -O2, so the collector
 # is doing the same job here as it does there.
-C4SC_GEN := src/c4sc/c4opt_gen.c
-$(C4SC_GEN): c4sp src/c4sc/c4sc.lisp $(SRCS)/c4sp/lisp/c4opt.lisp
-	./c4sp -R -c 8000000 src/c4sc/c4sc.lisp $(SRCS)/c4sp/lisp/c4opt.lisp $@ > /dev/null
+C4SC_GEN := src/c4sc/c4opt_gen.c src/c4sc/c4lex_gen.c
+src/c4sc/c4opt_gen.c: c4sp src/c4sc/c4sc.lisp $(SRCS)/c4sp/lisp/c4opt.lisp
+	./c4sp -R -c 8000000 src/c4sc/c4sc.lisp $(SRCS)/c4sp/lisp/c4opt.lisp $@ opt > /dev/null
+src/c4sc/c4lex_gen.c: c4sp src/c4sc/c4sc.lisp $(SRCS)/c4sp/lisp/c4lc-lex.lisp
+	./c4sp -R -c 8000000 src/c4sc/c4sc.lisp $(SRCS)/c4sp/lisp/c4lc-lex.lisp $@ lex > /dev/null
 
 c4sc-host: c4sp $(C4SC_GEN) src/c4sc/c4sc-host.c src/c4sc/host.h src/c4sc/scrt.h
 	gcc $(EXTRA_CC) -O2 -fwrapv -fno-omit-frame-pointer -g -Iinclude -I. -o c4sc-host src/c4sc/c4sc-host.c
@@ -586,6 +592,32 @@ test-c4sc-run: c4sc-host c4sp $(C4SC_CORPUS)
 	cmp .c4sc_i.c4r .c4sc_c.c4r
 	@rm -f .c4sc_i.c4r .c4sc_c.c4r .c4sc_i.log .c4sc_c.log .c4sc_i.n .c4sc_c.n
 	@echo "test-c4sc-run: OK"
+
+# M3: the lexer. The bar is the token DUMP, not the count -- the count
+# was right while every keyword was lexing as an identifier, because a
+# quoted table printed back and re-read had turned its strings into
+# atoms. The sweep is the same corpus test-c4fc uses for c4fc's lexer.
+C4SC_LEX_SWEEP := c4.c c4m.c c4l.c load-c4r.c $(SRCS)/c4th/c4th.c \
+                  $(SRCS)/c4cc/asm-c4r.c $(SRCS)/c4dos/c4dos.c \
+                  $(SRCS)/c4ix/vfs.c $(SRCS)/c4ix/sched.c \
+                  $(SRCS)/c4or1k/cpu.c $(TESTS)/mandel.c $(TESTS)/tests.c \
+                  $(SRCS)/c4cc/c4cc.c
+test-c4sc-lex: c4sc-host c4sp
+	./c4sc-host tokens $(TESTS)/c4lc_lex_sample.c > .c4sc_lex.txt
+	head -n -1 $(SRCS)/c4sp/tests/expected/c4lc-tokens.txt | cmp - .c4sc_lex.txt
+	./c4sc-host tokens -conforming $(TESTS)/c4lc_lex_sample.c > .c4sc_lex.txt
+	head -n -1 $(SRCS)/c4sp/tests/expected/c4lc-tokens-conforming.txt | cmp - .c4sc_lex.txt
+	./c4sc-host tokens -count $(SRCS)/c4cc/c4cc.c | grep -q "^tokens 15125$$"
+	@fail=0; for f in $(C4SC_LEX_SWEEP); do \
+	   ./c4sp -R -c 33554432 $(SRCS)/c4sp/lisp/c4lc-tokens.lisp $$f > .c4sc_i.txt 2>&1; \
+	   head -n -1 .c4sc_i.txt > .c4sc_i2.txt; \
+	   ./c4sc-host -c 33554432 tokens $$f > .c4sc_c.txt 2>&1; \
+	   cmp -s .c4sc_i2.txt .c4sc_c.txt \
+	     || { echo "test-c4sc-lex: $$f DIFFERS"; fail=1; continue; }; \
+	   echo "  ok: $$f ($$(wc -l < .c4sc_c.txt) tokens)"; \
+	 done; [ $$fail = 0 ] || exit 1
+	@rm -f .c4sc_lex.txt .c4sc_i.txt .c4sc_i2.txt .c4sc_c.txt
+	@echo "test-c4sc-lex: OK"
 
 # c4cc's for statement. It had never worked -- see src/tests/test_for.c
 # -- so this pins it against gcc's output for the same program, which is
@@ -2199,7 +2231,7 @@ c4rs: pre
 PHONY  = pre all clean-c4rs clean
 PHONY += test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
 PHONY += run-c4dos-build32 test-c4dos-build32 test-c4cc-for test-respfile test-b4ke
-PHONY += test-c4sc test-c4sc-run
+PHONY += test-c4sc test-c4sc-run test-c4sc-lex
 PHONY += test-c4dos-ladder32
 PHONY += run run-vg test test-massive
 PHONY += run-alt run-alt-vg test-alt test-massive-alt

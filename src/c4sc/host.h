@@ -61,12 +61,12 @@ int *L_W;   // c4r.lisp's word size, copied in before each entry
 // carried across here rather than being read twice from two places.
 int *L_c4opt_58optimize (int *M);
 int *L_opt_58fuse_45on;
-void sc_init ();
+void sc_init_opt ();
 
 int *sc_bridge_optimize (int *args) {
 	int *fuse;
 
-	if (!sc_ready) { sc_init(); sc_ready = 1; }
+	if (!sc_ready) { sc_init_opt(); sc_ready = 1; }
 	L_W = sc_lookup("W");
 	fuse = sc_lookup("opt:fuse-on");
 	L_opt_58fuse_45on = fuse ? fuse : cell_false;

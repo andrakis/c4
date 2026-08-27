@@ -535,6 +535,20 @@ test-b4ke: $(BIN_D)/b4ke.c4r $(C4KE_C4R) $(C4M) $(C4R_C4CC) $(C4R_C4RLINK) $(TES
 	@rm -f .b4ke.log .b4ke_n.log
 	@echo "test-b4ke: OK"
 
+# c4sc: the c4sp Lisp, compiled to C (docs/c4sc-design.md). M1 emits C
+# for one file and checks c4lc can compile it. Nothing RUNS yet -- that
+# is M2, where the images c4opt rewrites have to come out byte-identical
+# to the interpreted pass's. What this pins is the expansion factor,
+# which is the risk that decides whether the rest is feasible at all.
+test-c4sc: c4sp $(C4LC_LISP) src/c4sc/c4sc.lisp src/c4sc/scrt.h
+	./c4sp -R -c 8000000 src/c4sc/c4sc.lisp src/c4sp/lisp/c4opt.lisp .c4sc_gen.c > /dev/null
+	$(PREPROC) .c4sc_gen.c > .c4sc_gen_pp.c
+	./c4sp -R -c 16000000 src/c4sp/lisp/c4lc.lisp -O -c .c4sc_gen_pp.c .c4sc_gen.c4o > /dev/null
+	test -s .c4sc_gen.c4o
+	@echo "test-c4sc: OK -- $$(wc -l < src/c4sp/lisp/c4opt.lisp) lines of Lisp \
+-> $$(wc -l < .c4sc_gen.c) lines of C, and c4lc -O -c compiles it"
+	@rm -f .c4sc_gen.c .c4sc_gen_pp.c .c4sc_gen.c4o
+
 # c4cc's for statement. It had never worked -- see src/tests/test_for.c
 # -- so this pins it against gcc's output for the same program, which is
 # how every other language feature here is checked.
@@ -2147,6 +2161,7 @@ c4rs: pre
 PHONY  = pre all clean-c4rs clean
 PHONY += test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
 PHONY += run-c4dos-build32 test-c4dos-build32 test-c4cc-for test-respfile test-b4ke
+PHONY += test-c4sc
 PHONY += test-c4dos-ladder32
 PHONY += run run-vg test test-massive
 PHONY += run-alt run-alt-vg test-alt test-massive-alt

@@ -172,12 +172,21 @@ of 16x, is **under two minutes**. At the shape c4lc actually has, less.
 
 ## Risks
 
-1. **The generated C may be bigger than c4lc has ever compiled.** c4lc's
-   largest input today is ~7,300 preprocessed lines (`c4cc.c`). 5,016
-   lines of Lisp at a 2-4x expansion is 10,000-20,000. Mitigated by the
-   per-file object build, which caps a unit at ~5,000 lines — but it is
-   the risk most likely to bite, and M1 measures the expansion factor on
-   one real file before committing.
+1. **~~The generated C may be bigger than c4lc has ever compiled.~~**
+   **Retired by M1, but only just, and with one condition.** At the
+   measured 4.46x the whole corpus is ~22,400 lines of C — four times
+   anything c4lc compiles today — but it is twelve units, and the
+   largest, `c4lc-gen.lisp` at 1,534 lines, comes to about **6,800**,
+   just under c4lc's current largest input (`c4cc.c`, 7,313
+   preprocessed). So it fits **per unit**.
+
+   The condition: M1's generated file `#include`s the whole of c4sp's
+   runtime, which is another ~3,100 preprocessed lines *per unit*. That
+   is fine for one file and not fine for twelve. M2 has to make the
+   runtime one separate object that the generated units declare rather
+   than contain — the machinery already exists, since c4sc already emits
+   `extern` declarations for the names `c4opt.lisp` uses from
+   `c4r.lisp`.
 2. **Stack depth.** Compiled code recurses on the C4 stack. This is
    already retired: `-R` does exactly that and has run the whole corpus
    since A1.2. If it were going to blow, it would have blown then.
@@ -204,10 +213,34 @@ for all of them.
 
       **Gate was 3x. Measured 16.2x-44.1x hosted, 4.6x-15.9x native.**
       Proceed.
-- [ ] **M1** *Expansion factor.* c4sc emits C for `c4opt.lisp` (445
-      lines, the smallest self-contained file) only. Measure the
-      generated line count and that `c4lc -O -c` compiles it. No
-      execution yet.
+- [x] **M1** *Expansion factor.* `src/c4sc/c4sc.lisp` (the compiler,
+      ~430 lines) and `src/c4sc/scrt.h` (the runtime shim, 115) emit C
+      for `c4opt.lisp`, and `c4lc -O -c` compiles it. `make test-c4sc`:
+
+          test-c4sc: OK -- 445 lines of Lisp -> 1985 lines of C,
+          and c4lc -O -c compiles it
+
+      **4.46x, not the 2-4x this document guessed.** The first emitter
+      gave 5.83x; inlining arguments that are just a variable or a
+      literal — instead of giving every one its own temporary and its
+      own statement — took a third off, and that was worth doing before
+      recording a number rather than after. `opt:drop` comes out as:
+
+          int *L_opt_58drop (int *L_L, int *L_N)
+          {
+              int *r; int *t0; int *t1;
+              while (1) {
+              t0 = sc_eq(mk_int(0), L_N);
+              if (sc_true(t0)) { r = L_L; } else {
+              t0 = sc_tail(L_L);
+              t1 = sc_sub(L_N, mk_int(1));
+              L_L = t0; L_N = t1;
+              continue; }
+              return r; }
+          }
+
+      — the self tail call as a `continue`, the literals hoisted into
+      `sc_init`, and nothing else invented.
 - [ ] **M2** *One file runs.* `c4opt.lisp` compiled and linked against
       c4sp's runtime, driven by `c4opt-run.lisp`'s entry point: the
       images it rewrites must be **byte-identical** to the interpreted

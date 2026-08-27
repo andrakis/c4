@@ -549,6 +549,44 @@ test-c4sc: c4sp $(C4LC_LISP) src/c4sc/c4sc.lisp src/c4sc/scrt.h
 -> $$(wc -l < .c4sc_gen.c) lines of C, and c4lc -O -c compiles it"
 	@rm -f .c4sc_gen.c .c4sc_gen_pp.c .c4sc_gen.c4o
 
+# M2: the compiled c4opt has to produce the SAME IMAGES as the
+# interpreted one. c4sc-host is c4opt-run.lisp with exactly one
+# substitution -- c4r.lisp's decoder and encoder still run in the
+# interpreter, reached through the bridge in src/c4sc/host.h, and only
+# the optimizer is compiled. Built at c4sp's own -O2, so the collector
+# is doing the same job here as it does there.
+C4SC_GEN := src/c4sc/c4opt_gen.c
+$(C4SC_GEN): c4sp src/c4sc/c4sc.lisp $(SRCS)/c4sp/lisp/c4opt.lisp
+	./c4sp -R -c 8000000 src/c4sc/c4sc.lisp $(SRCS)/c4sp/lisp/c4opt.lisp $@ > /dev/null
+
+c4sc-host: c4sp $(C4SC_GEN) src/c4sc/c4sc-host.c src/c4sc/host.h src/c4sc/scrt.h
+	gcc $(EXTRA_CC) -O2 -fwrapv -fno-omit-frame-pointer -g -Iinclude -I. -o c4sc-host src/c4sc/c4sc-host.c
+
+# The corpus is test-c4sp-opt's, plus the two biggest images in the tree
+# -- c4cc.c4r is 423 KB and 26,818 instructions, which is where a
+# transliteration bug that survives factorial shows up.
+C4SC_CORPUS := factorial.c4r $(C4R_C4CC) $(C4KE_C4R) $(TESTS)/tests.c4r \
+               $(TESTS)/test_globals.c4r $(TESTS)/mandel.c4r
+test-c4sc-run: c4sc-host c4sp $(C4SC_CORPUS)
+	@fail=0; for img in $(C4SC_CORPUS); do \
+	   b=$$(basename $$img); \
+	   ./c4sp -R -c 16000000 $(SRCS)/c4sp/lisp/c4opt-run.lisp $$img .c4sc_i.c4r > .c4sc_i.log 2>&1; \
+	   ./c4sc-host $$img .c4sc_c.c4r > .c4sc_c.log 2>&1; \
+	   cmp -s .c4sc_i.c4r .c4sc_c.c4r || { echo "test-c4sc-run: $$b IMAGE DIFFERS"; fail=1; continue; }; \
+	   grep -E '^;; c4opt: [0-9]|^;;   fold' .c4sc_i.log > .c4sc_i.n; \
+	   grep -E '^;; c4opt: [0-9]|^;;   fold' .c4sc_c.log > .c4sc_c.n; \
+	   cmp -s .c4sc_i.n .c4sc_c.n \
+	     || { echo "test-c4sc-run: $$b COUNTERS DIFFER"; fail=1; continue; }; \
+	   echo "  ok: $$b (image and pass counts identical)"; \
+	 done; \
+	 [ $$fail = 0 ] || exit 1
+	@# and the fuse pass, which rewrites a third of the instructions
+	./c4sp -R -c 16000000 $(SRCS)/c4sp/lisp/c4opt-run.lisp -mfuse factorial.c4r .c4sc_i.c4r > /dev/null
+	./c4sc-host -mfuse factorial.c4r .c4sc_c.c4r > /dev/null
+	cmp .c4sc_i.c4r .c4sc_c.c4r
+	@rm -f .c4sc_i.c4r .c4sc_c.c4r .c4sc_i.log .c4sc_c.log .c4sc_i.n .c4sc_c.n
+	@echo "test-c4sc-run: OK"
+
 # c4cc's for statement. It had never worked -- see src/tests/test_for.c
 # -- so this pins it against gcc's output for the same program, which is
 # how every other language feature here is checked.
@@ -2161,7 +2199,7 @@ c4rs: pre
 PHONY  = pre all clean-c4rs clean
 PHONY += test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
 PHONY += run-c4dos-build32 test-c4dos-build32 test-c4cc-for test-respfile test-b4ke
-PHONY += test-c4sc
+PHONY += test-c4sc test-c4sc-run
 PHONY += test-c4dos-ladder32
 PHONY += run run-vg test test-massive
 PHONY += run-alt run-alt-vg test-alt test-massive-alt

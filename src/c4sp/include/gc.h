@@ -35,6 +35,25 @@ int *gc_freelist;     // head of the free list (threaded through CELL_A)
 int  gc_free_count;   // cells currently on the free list
 int *gc_stack_base;   // recorded once at startup, scan upper bound (M2)
 
+// Extra roots, for cells held ONLY in a C global.
+//
+// The conservative stack scan finds everything the interpreter holds,
+// because the interpreter holds it in locals. Compiled code
+// (docs/c4sc-design.md) does not: a generated unit keeps its literal
+// table and its top-level defines in C globals, which are not on the
+// stack and were not scanned. That is the one rooting job compilation
+// adds, and it is a slot list rather than a value list because a global
+// like a counter is REASSIGNED -- rooting the cell it held at startup
+// would root the wrong thing after the first `set!`.
+enum { GC_EXTRA_MAX = 4096 };
+int  *gc_extra;       // each entry is the ADDRESS of an int * variable
+int   gc_nextra;
+int gc_add_root (int *slot) {
+	if (gc_nextra >= GC_EXTRA_MAX) return 0;
+	gc_extra[gc_nextra++] = (int)slot;
+	return 1;
+}
+
 // Statistics, reported by (gc:stats)
 int  gc_total_allocs; // cells handed out since start
 int  gc_collections;  // collect() runs
@@ -97,6 +116,11 @@ int gc_addblock (int n) {
 // Initialize the arena and thread the free list. Returns 0 on success.
 // NCELLS is the first block; the rest arrive as they are needed.
 int gc_init (int ncells) {
+	gc_nextra = 0;
+	if (!(gc_extra = malloc(GC_EXTRA_MAX * sizeof(int)))) {
+		printf("c4sp: cannot allocate the root table\n");
+		return 1;
+	}
 	gc_nblocks = 0;
 	gc_ncells = 0;
 	gc_freelist = 0;
@@ -200,6 +224,9 @@ void gc_collect () {
 	gc_mark((int)gc_root_a);
 	gc_mark((int)gc_root_b);
 	gc_mark((int)gc_root_c);
+	// ...the globals compiled code registered...
+	i = 0;
+	while (i < gc_nextra) { gc_mark(*(int *)gc_extra[i]); ++i; }
 	// ...and the C4 stack, scanned conservatively.
 #if NATIVE
 	setjmp(gc_regs);

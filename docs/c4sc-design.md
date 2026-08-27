@@ -241,10 +241,54 @@ for all of them.
 
       — the self tail call as a `continue`, the literals hoisted into
       `sc_init`, and nothing else invented.
-- [ ] **M2** *One file runs.* `c4opt.lisp` compiled and linked against
-      c4sp's runtime, driven by `c4opt-run.lisp`'s entry point: the
-      images it rewrites must be **byte-identical** to the interpreted
-      pass's, across the existing `test-c4sp-opt` corpus.
+- [x] **M2** *One file runs, and it is right.* `make test-c4sc-run`:
+
+          ok: factorial.c4r (image and pass counts identical)
+          ok: c4cc.c4r (image and pass counts identical)
+          ok: c4ke.c4r (image and pass counts identical)
+          ok: tests.c4r (image and pass counts identical)
+          ok: test_globals.c4r (image and pass counts identical)
+          ok: mandel.c4r (image and pass counts identical)
+          test-c4sc-run: OK
+
+      `src/c4sc/c4sc-host.c` is `c4opt-run.lisp` with exactly one
+      substitution: c4r.lisp's decoder and encoder still run in the
+      interpreter, reached through `src/c4sc/host.h`'s bridge, and only
+      the optimizer is compiled. Both the images and the per-pass
+      counters match, with `-mfuse` as well (341 fusions either way).
+      Built at c4sp's own `-O2`.
+
+      **M1's condition is discharged.** The generated unit now declares
+      the runtime instead of `#include`ing it, so it stands alone: no
+      preprocessing at all, and `c4lc -O -c` produces a 154,049-byte
+      object where the self-contained version produced 397,353.
+
+      **Two things the design got wrong, both found here.**
+
+      1. **Compiled globals are not rooted.** This document said
+         compilation needs "no rooting work at all" because the
+         collector scans the C4 stack. That is true of locals and false
+         of globals: a generated unit keeps its literal table and its
+         top-level defines in C globals, which are not on the stack.
+         `gc.h` gains `gc_add_root`, a list of **slots** rather than
+         values — a global like a counter is reassigned, so rooting the
+         cell it held at startup would root the wrong thing after the
+         first `set!`. c4sc emits a registration before each global's
+         initialiser. Ten lines in the collector; every c4sp suite still
+         green.
+      2. **A self tail call may not inline its arguments.** Assigning
+         the parameters happens in order, and an argument may name a
+         parameter an earlier assignment has already overwritten.
+         `c4opt:optloop` is exactly that shape — it passes the old `N`
+         as `Prev` — so the fixpoint loop ran **one round** and stopped.
+         Arguments to a self tail call now go to temporaries first.
+
+         `factorial.c4r` came out byte-identical **with the bug still in
+         it**, because one round happened to reach its fixpoint. Only
+         `c4cc.c4r` — 423 KB, 26,818 instructions — showed it, as
+         24,623 instructions against 24,617. That is the argument for
+         having the big images in the corpus rather than the quick
+         ones.
 - [ ] **M3** *The lexer.* `c4lc-lex.lisp` (375 lines). Token dump ==
       `expected/c4lc-tokens.txt`; `-count` on `c4cc.c` == 15,125.
 - [ ] **M4** *The rest of the front end.* `c4lc-pp.lisp`,

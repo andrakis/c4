@@ -455,8 +455,40 @@ for all of them.
       in the collector and in cold code that runs once, none of which
       compiling makes faster. 7.9x is below M0's bracket, and M0's job
       was to clear a 3x gate, which it did by a wide margin either way.
-- [ ] **M7** *The fixed point.* c4sc compiles itself: gen1 == gen2 ==
-      gen3.
+- [x] **M7** *The fixed point.* `make test-c4sc-self`:
+
+          gen1 == gen2 (75956 bytes)
+          gen2 == gen3 -- fixed point
+          and it emits the same seven units the interpreter does
+          test-c4sc-self: OK
+
+      gen1 is `c4sc.lisp` compiled by the **interpreted** c4sc; gen2 is
+      `c4sc.lisp` compiled by gen1; gen3 by gen2. The first equality is
+      the interesting one — the compiler running on c4sp's evaluator and
+      the same compiler running as compiled C emit the same text — and
+      the last check is stronger than the fixed point itself: the
+      compiled compiler emits byte-identical C for all seven units of
+      c4lc as well.
+
+      680 lines of Lisp → 3,699 of C (5.4x, the highest of any unit:
+      c4sc is written in small functions).
+
+      `c4sc-self` is its own binary rather than an eighth unit of the
+      host, and for a concrete reason: `c4sc.lisp` defines `second` and
+      `third`, and so does `c4r.lisp`. Two units that both define a name
+      cannot share a link, because the mangling is name-based on purpose
+      — that is what makes a call from one unit into another resolve at
+      all.
+
+      **The bug it found, which nothing else could have.** `sc_empty`
+      was `cell_type(l) != T_CONS`. `stdlib.h`'s `empty?` is: nil is
+      empty, a string is empty when it has no bytes, **everything else
+      including an atom is not**. "Not a cons" agrees on lists and on
+      the end of a list, which is every single use across the seven
+      units of c4lc — and disagrees on an atom. `c4sc.lisp` is the first
+      caller to ask about one, in `sc:qlit`, deciding whether a quoted
+      datum is the end of a list. So the compiled c4sc turned every
+      quoted atom into `0`, and only compiling *itself* went near it.
 - [ ] **M8** *On the board.* `c4lc.c4r` at 32 bits, `-mfuse`, on the
       c4bb disk. Re-time one C4IX module and the twelve-module build, and
       write the number into `docs/compiler-on-the-board.md`.

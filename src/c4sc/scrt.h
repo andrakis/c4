@@ -27,7 +27,21 @@ int *sc_bool (int v) { return bool_cell(v); }
 int *sc_cons (int *a, int *d) { return cons(a, d); }
 int *sc_head (int *l) { return (cell_type(l) == T_CONS) ? (int *)l[CELL_A] : 0; }
 int *sc_tail (int *l) { return (cell_type(l) == T_CONS) ? (int *)l[CELL_B] : 0; }
-int *sc_empty (int *l) { return sc_bool(cell_type(l) != T_CONS); }
+// empty? is NOT "not a cons". stdlib.h says: nil is empty, a string is
+// empty when it has no bytes, and everything else -- including an atom
+// and including a cons -- is not. "Not a cons" agrees on lists and on
+// the end of a list, which is every use in the seven units, and
+// disagrees on an atom. c4sc.lisp is the first caller to ask about one
+// (sc:qlit, deciding whether a quoted datum is the end of a list), and
+// it was the self-compile that noticed.
+int *sc_empty (int *l) {
+	int t;
+
+	t = cell_type(l);
+	if (t == T_NIL) return cell_true;
+	if (t == T_STRING) return sc_bool(l[CELL_B] == 0);
+	return cell_false;
+}
 
 int *sc_index (int *l, int *n) {
 	int i;
@@ -153,6 +167,19 @@ int *sc_str_setword (int *s, int *i, int *v) {
 int *sc_file_read (int *p) { return builtin_call(B_FILE_READ, cons(p, 0), 0); }
 int *sc_file_exists (int *p) { return builtin_call(B_FILE_EXISTS, cons(p, 0), 0); }
 int *sc_wordsize () { return mk_int(sizeof(int)); }
+int *sc_file_write (int *n, int *d) {
+	return builtin_call(B_FILE_WRITE, cons(n, cons(d, 0)), 0);
+}
+int *sc_str_join (int *sep, int *l) { return builtin_join(cons(sep, cons(l, 0))); }
+
+// debug:parse is c4sp's reader as a builtin, and c4sc uses it to read
+// the Lisp it compiles. Which is why the self-compile at M7 needs it:
+// a compiler that reads its own language needs a reader, and c4sp
+// already has exactly one.
+int *sc_parse (int *s) {
+	if (cell_type(s) != T_STRING) { c4sp_error("debug:parse needs a string"); return 0; }
+	return rd_read((char *)s[CELL_A], s[CELL_B]);
+}
 
 // error takes only its first argument, whatever the arity at the call
 // site, so the list is built for the same reason print's is: it is cold

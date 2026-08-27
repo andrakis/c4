@@ -749,6 +749,43 @@ test-c4sc-image: c4sc.c4r c4sc-host $(C4M) c4sp
 	@rm -f .c4sc_n.c4o
 	@echo "test-c4sc-image: OK"
 
+# M7: the fixed point. gen1 is c4sc.lisp compiled by the INTERPRETED
+# c4sc; gen2 is c4sc.lisp compiled by gen1; gen3 by gen2. All three must
+# be the same bytes. The first equality is the interesting one: the
+# compiler running on c4sp's evaluator and the same compiler running as
+# compiled C emit the same text.
+#
+# c4sc-self is its own binary because c4sc.lisp defines `second` and
+# `third` and so does c4r.lisp -- two units that both define a name
+# cannot share a link, and the mangling is name-based on purpose so that
+# a call from one unit to another resolves at all.
+c4sc-self: c4sp src/c4sc/c4sc.lisp src/c4sc/c4sc-self.c src/c4sc/scrt.h
+	./c4sp -R -c 8000000 src/c4sc/c4sc.lisp src/c4sc/c4sc.lisp src/c4sc/c4self_gen.c c4sc > /dev/null
+	gcc $(EXTRA_CC) -O2 -fwrapv -fno-omit-frame-pointer -g -Iinclude -I. -o c4sc-self src/c4sc/c4sc-self.c
+
+test-c4sc-self: c4sc-self $(C4SC_GEN)
+	cp src/c4sc/c4self_gen.c .c4sc_gen1.c
+	./c4sc-self src/c4sc/c4sc.lisp .c4sc_gen2.c c4sc > /dev/null
+	cmp .c4sc_gen1.c .c4sc_gen2.c
+	@echo "  gen1 == gen2 ($$(wc -c < .c4sc_gen2.c) bytes)"
+	cp .c4sc_gen2.c src/c4sc/c4self_gen.c
+	gcc $(EXTRA_CC) -O2 -fwrapv -fno-omit-frame-pointer -g -Iinclude -I. -o .c4sc_self2 src/c4sc/c4sc-self.c
+	./.c4sc_self2 src/c4sc/c4sc.lisp .c4sc_gen3.c c4sc > /dev/null
+	cmp .c4sc_gen2.c .c4sc_gen3.c
+	@echo "  gen2 == gen3 -- fixed point"
+	@# and the compiled compiler has to compile the seven units exactly
+	@# as the interpreted one does
+	@fail=0; for spec in opt:c4opt lex:c4lc-lex pp:c4lc-pp parse:c4lc-parse \
+	                     c4r:c4r tree:c4lc-tree gen:c4lc-gen; do \
+	   u=$${spec%%:*}; f=$${spec##*:}; \
+	   ./.c4sc_self2 $(SRCS)/c4sp/lisp/$$f.lisp .c4sc_s.c $$u > /dev/null; \
+	   cmp -s .c4sc_s.c src/c4sc/c4$${u}_gen.c \
+	     || { echo "test-c4sc-self: $$u differs from the interpreted c4sc"; fail=1; }; \
+	 done; [ $$fail = 0 ] || exit 1
+	@echo "  and it emits the same seven units the interpreter does"
+	@rm -f .c4sc_gen1.c .c4sc_gen2.c .c4sc_gen3.c .c4sc_self2 .c4sc_s.c
+	@echo "test-c4sc-self: OK"
+
 # c4cc's for statement. It had never worked -- see src/tests/test_for.c
 # -- so this pins it against gcc's output for the same program, which is
 # how every other language feature here is checked.
@@ -2362,7 +2399,7 @@ PHONY  = pre all clean-c4rs clean
 PHONY += test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
 PHONY += run-c4dos-build32 test-c4dos-build32 test-c4cc-for test-respfile test-b4ke
 PHONY += test-c4sc test-c4sc-run test-c4sc-lex test-c4sc-front test-c4sc-back
-PHONY += test-c4sc-image
+PHONY += test-c4sc-image test-c4sc-self
 PHONY += test-c4dos-ladder32
 PHONY += run run-vg test test-massive
 PHONY += run-alt run-alt-vg test-alt test-massive-alt

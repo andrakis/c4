@@ -62,3 +62,5 @@ c4or1k-native
 /src/c4sc/c4tree_gen.c
 /src/c4sc/c4gen_gen.c
 /c4sc.c4r
+/src/c4sc/c4self_gen.c
+/c4sc-self

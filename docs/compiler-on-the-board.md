@@ -266,11 +266,27 @@ compiles the same step tables.
 |---|---|
 | in-machine, as it was (no `-R`) | ~2.5 hours |
 | in-machine, with `-R` — **today** | **~57 minutes** |
-| with the fused opcodes on the board — **today** | **~31 minutes** |
-| with the Lisp *compiled* rather than interpreted | minutes |
+| with the fused opcodes on the board | ~30 minutes |
+| **with the Lisp compiled rather than interpreted — today** | **4.6 minutes** |
 
-The first three rows are banked. The fourth is the one that reaches
-"minutes", and `docs/compiler-speed.md` sizes it: ~41% eval
+**All four rows are banked.** `docs/c4sc-design.md` has the ladder: c4sc
+is 680 lines of Lisp that transliterates the c4sp Lisp to C, c4lc's seven
+units go through it, `c4lc -O -c` compiles them and c4rlink joins them
+into one 865 KB image. Every step is pinned against the interpreter —
+the same tokens, the same AST, the same `.c4r` bytes, and the twelve
+C4IX objects linking to the committed kernel, which boots.
+
+Measured on c4bb, the twelve-module C4IX build with the compiled
+compiler is **5,615,710,882 cycles — 4.6 minutes** at the board's
+20.5M inst/s. Head to head on single modules it is 3.85x on the
+smallest and 7.68x on the largest, the difference being how much of
+each run is fixed cost; across the whole build it is about **6.6x**.
+
+So the question this document opened with — how long does a machine take
+to compile its own operating system — now has four answers, and the
+distance between the first and the last is **thirty-three fold**.
+
+The older reasoning, for the record: and `docs/compiler-speed.md` sizes it: ~41% eval
 dispatch plus ~25% environments plus ~9% builtin dispatch is work that
 compiling removes outright, which is where its 10-30x comes from. None
 of the three touches c4cc, and all three keep C4IX a thing you build

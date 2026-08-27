@@ -786,6 +786,51 @@ test-c4sc-self: c4sc-self $(C4SC_GEN)
 	@rm -f .c4sc_gen1.c .c4sc_gen2.c .c4sc_gen3.c .c4sc_self2 .c4sc_s.c
 	@echo "test-c4sc-self: OK"
 
+# M8: the compiler on the breadboard. Eight objects at 32 bits, linked,
+# then run through c4opt's fuse pass -- which is why the FUSED image is
+# made from the linked one rather than from fused objects: fusion
+# rewrites instruction sequences and c4opt does that to a whole image,
+# the same path build-images.sh already uses for factorial-fused.
+#
+# The result runs on c4bb, c4mp and oisc4 but NOT on c4m, which has only
+# three of the ten fused opcodes -- so the unfused image is kept as
+# well, and that is the one the byte-identity check uses.
+c4sc32.c4r: c4sp32 c4rlink32 $(C4LC_LISP) $(C4SC_GEN) src/c4sc/c4sc-main.c \
+            src/c4sc/body.h src/c4sc/host.h src/c4sc/scrt.h
+	$(PREPROC) src/c4sc/c4sc-main.c > .c4sc32_main.c
+	./c4sp32 -R -c 33554432 $(SRCS)/c4sp/lisp/c4lc.lisp -O -c .c4sc32_main.c .c4sc32_o_main.c4o > /dev/null
+	@for u in $(C4SC_UNITS); do \
+	   echo "  unit: $$u"; \
+	   ./c4sp32 -R -c 33554432 $(SRCS)/c4sp/lisp/c4lc.lisp -O -c \
+	       src/c4sc/c4$${u}_gen.c .c4sc32_o_$$u.c4o > /dev/null || exit 1; \
+	 done
+	./c4rlink32 .c4sc32_o_main.c4o $(patsubst %,.c4sc32_o_%.c4o,$(C4SC_UNITS)) -o c4sc32.c4r
+	@rm -f .c4sc32_main.c .c4sc32_o_*.c4o
+	@echo "c4sc32.c4r: $$(wc -c < c4sc32.c4r) bytes"
+
+c4sc32-fused.c4r: c4sc32.c4r c4sp32 $(C4LC_LISP)
+	./c4sp32 -R -c 33554432 $(SRCS)/c4sp/lisp/c4opt-run.lisp -mfuse c4sc32.c4r $@ > /dev/null
+	@echo "c4sc32-fused.c4r: $$(wc -c < $@) bytes"
+
+# One module on the board, and the object it reports has to be the one
+# c4lc reports at 32 bits. boot.c because it is the smallest -- the
+# whole twelve is four and a half minutes and belongs in the tracker,
+# not in a test.
+test-c4sc-board: c4sc32-fused.c4r c4sc32.c4r c4sp32 c4m32
+	@rm -rf .c4sc_bd && mkdir -p .c4sc_bd/src/c4ix
+	@cp $(C4IX_SRC)/*.c $(C4IX_SRC)/*.h .c4sc_bd/src/c4ix/ && cp -r include .c4sc_bd/
+	./c4sp32 -R -c 16000000 $(SRCS)/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC) \
+	    $(C4IX_SRC)/boot.c .c4sc_bd_i.c4o > /dev/null
+	@n=`wc -c < .c4sc_bd_i.c4o`; \
+	 h=`node src/c4bb/sim/cli.js -s -m 512 -d .c4sc_bd c4sc32-fused.c4r -c 8000000 \
+	      compile -O -c -I src/c4ix src/c4ix/boot.c out.c4o 2>&1 \
+	    | sed -n 's/.* - \([0-9]*\) bytes.*/\1/p'`; \
+	 [ -n "$$h" ] && [ "$$n" = "$$h" ] \
+	   || { echo "test-c4sc-board: board $$h vs c4lc $$n"; exit 1; }; \
+	 echo "  board compile: boot.c $$h bytes, same as c4lc at 32 bits"
+	@rm -rf .c4sc_bd .c4sc_bd_i.c4o
+	@echo "test-c4sc-board: OK"
+
 # c4cc's for statement. It had never worked -- see src/tests/test_for.c
 # -- so this pins it against gcc's output for the same program, which is
 # how every other language feature here is checked.
@@ -2399,7 +2444,7 @@ PHONY  = pre all clean-c4rs clean
 PHONY += test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
 PHONY += run-c4dos-build32 test-c4dos-build32 test-c4cc-for test-respfile test-b4ke
 PHONY += test-c4sc test-c4sc-run test-c4sc-lex test-c4sc-front test-c4sc-back
-PHONY += test-c4sc-image test-c4sc-self
+PHONY += test-c4sc-image test-c4sc-self test-c4sc-board
 PHONY += test-c4dos-ladder32
 PHONY += run run-vg test test-massive
 PHONY += run-alt run-alt-vg test-alt test-massive-alt

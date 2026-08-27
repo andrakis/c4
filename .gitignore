@@ -64,3 +64,5 @@ c4or1k-native
 /c4sc.c4r
 /src/c4sc/c4self_gen.c
 /c4sc-self
+/c4sc32.c4r
+/c4sc32-fused.c4r

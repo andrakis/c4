@@ -489,9 +489,46 @@ for all of them.
       caller to ask about one, in `sc:qlit`, deciding whether a quoted
       datum is the end of a list. So the compiled c4sc turned every
       quoted atom into `0`, and only compiling *itself* went near it.
-- [ ] **M8** *On the board.* `c4lc.c4r` at 32 bits, `-mfuse`, on the
-      c4bb disk. Re-time one C4IX module and the twelve-module build, and
-      write the number into `docs/compiler-on-the-board.md`.
+- [x] **M8** *On the board.* `make test-c4sc-board` pins that the image
+      compiles `boot.c` to the same 4,739 bytes c4lc does at 32 bits.
+      The timings are below and in `docs/compiler-on-the-board.md`.
+
+      `c4sc32.c4r` is 1,020,679 bytes; fused, 865,015. The **fused**
+      image is made from the **linked** one rather than from fused
+      objects, because fusion rewrites instruction sequences and c4opt
+      does that to a whole image — the path `build-images.sh` already
+      uses for `factorial-fused`. It runs on c4bb, c4mp and oisc4 but
+      not on c4m, which has only three of the ten; the unfused image is
+      kept for exactly that reason and is what the byte check uses.
+
+      **Every module, measured on c4bb, compiled against interpreted:**
+
+      | module | interpreted | compiled | |
+      |---|---:|---:|---:|
+      | `va.c` | 1,157,832,514 | 300,912,162 | 3.85x |
+      | `sched.c` | 3,945,287,115 | 583,412,932 | 6.76x |
+      | `c4ke.c` | 6,532,518,374 | 851,044,456 | 7.68x |
+
+      The ratio climbs with the module because both sides carry a fixed
+      cost — loading an 865 KB image and building its literal tables on
+      one side, loading c4sp and reading seven `.lisp` files on the
+      other — and the bigger the module, the smaller that share.
+
+      **The twelve-module C4IX build, compiled, measured in full:**
+
+          boot 299.9M   console 375.5M   va 300.9M   host 291.8M
+          sl4b 325.9M   task 379.9M    sched 583.4M  vfs 533.9M
+          sys 718.5M    c4ke 851.0M    loader 469.0M init 486.0M
+          ------------------------------------------------------
+          total 5,615,710,882 cycles = 4.6 minutes at 20.5M inst/s
+                                       (5.8 minutes wall, measured)
+
+      The interpreted twelve was not run end to end — it is half an hour
+      — but fitting the three measured pairs against object size gives
+      **~37 G cycles, about 30 minutes**, which is what
+      `docs/compiler-on-the-board.md` already predicted from a different
+      direction. So the compiled compiler is **~6.6x** on the real
+      workload.
 
 ## What this is not
 

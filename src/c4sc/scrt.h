@@ -151,6 +151,12 @@ int *sc_str_setword (int *s, int *i, int *v) {
 	return builtin_call(B_STR_SETWORD, cons(s, cons(i, cons(v, 0))), 0);
 }
 int *sc_file_read (int *p) { return builtin_call(B_FILE_READ, cons(p, 0), 0); }
+int *sc_file_exists (int *p) { return builtin_call(B_FILE_EXISTS, cons(p, 0), 0); }
+
+// error takes only its first argument, whatever the arity at the call
+// site, so the list is built for the same reason print's is: it is cold
+// and it stops the shim inventing a different truncation rule.
+int *sc_error (int *args) { return builtin_call(B_ERROR, args, 0); }
 int *sc_file_path (int *p) { return builtin_call(B_FILE_PATH, cons(p, 0), 0); }
 
 // print is variadic, and cold -- twice in all of c4opt -- so it is the

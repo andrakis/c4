@@ -25,6 +25,8 @@
 #include "src/c4sc/host.h"
 #include "src/c4sc/c4opt_gen.c"
 #include "src/c4sc/c4lex_gen.c"
+#include "src/c4sc/c4pp_gen.c"
+#include "src/c4sc/c4parse_gen.c"
 
 int *sc_eval_str (char *text) {
 	return eval(rd_read(text, cs_strlen(text)), sc_genv);
@@ -65,14 +67,110 @@ int sc_tokens (int argc, char **argv) {
 	return 0;
 }
 
+// pp mode: c4lc-ppdump.lisp, with the preprocessor compiled. The flags
+// are parsed HERE rather than in a Lisp driver, because pp:paths is a
+// global the compiled unit owns -- a driver's (set! pp:paths ...) would
+// set the interpreter's copy and the compiled code would read its own.
+// Same reason opt mode carries opt:fuse-on across by hand.
+int sc_pp (int argc, char **argv) {
+	int *paths, *tail, *e, *toks, *t;
+
+	sc_init_lex();
+	sc_init_pp();
+	paths = tail = 0;
+	while (argc > 1 && **argv == '-') {
+		if (!memcmp(*argv, "-I", 3)) {
+			e = cons(mk_string(argv[1]), 0);
+			if (tail) { tail[CELL_B] = (int)e; tail = e; } else paths = tail = e;
+		} else if (!memcmp(*argv, "-D", 3)) {
+			L_pp_58predefine(mk_string(argv[1]));
+		} else { printf("c4sc-host: unknown flag %s\n", *argv); return 1; }
+		argc = argc - 2; argv = argv + 2;
+	}
+	if (argc < 1) { printf("usage: c4sc-host pp [-I dir] [-D name] file.c\n"); return 1; }
+	L_pp_58paths = paths;
+
+	toks = L_pp_58file(mk_string(*argv));
+	if (c4sp_err) { printf("c4sc-host: %s\n", c4sp_err_msg); return 1; }
+	while (cell_type(toks) == T_CONS) {
+		// the driver prints (+ "" kind) and (+ "" value), which is
+		// cell_write on each with a space between
+		t = (int *)toks[CELL_A];
+		pr_reset();
+		cell_write(sc_head(t), 0);
+		pr_ch(' ');
+		cell_write(sc_head(sc_tail(t)), 0);
+		printf("%s\n", pr_term());
+		toks = (int *)toks[CELL_B];
+	}
+	return 0;
+}
+
+// pptok mode: lex an ALREADY preprocessed file in pp mode and dump the
+// same kind/value pairs pp mode dumps. This is the gcc -E side of the
+// differential test-c4fc uses: gcc preprocesses, we lex; we preprocess,
+// we lex. The two token streams must agree, which is a stronger check
+// than comparing text (whitespace and line markers differ).
+int sc_pptok (int argc, char **argv) {
+	int *toks, *t;
+
+	if (argc < 1) { printf("usage: c4sc-host pptok file.i\n"); return 1; }
+	// NOT pp mode: an ordinary lex SKIPS '#' lines, which is how gcc's
+	// `# 12 "file"` markers stay out of the comparison. test-c4fc's
+	// differential is built the same way, LEX-FILE against PP-FILE.
+	sc_init_lex();
+	toks = L_lex_58file(mk_string(*argv));
+	if (c4sp_err) { printf("c4sc-host: %s\n", c4sp_err_msg); return 1; }
+	while (cell_type(toks) == T_CONS) {
+		t = (int *)toks[CELL_A];
+		pr_reset();
+		cell_write(sc_head(t), 0);
+		pr_ch(' ');
+		cell_write(sc_head(sc_tail(t)), 0);
+		printf("%s\n", pr_term());
+		toks = (int *)toks[CELL_B];
+	}
+	return 0;
+}
+
+// ast mode: c4lc-ast.lisp, with lex:file and parse:program compiled.
+int sc_ast (int argc, char **argv) {
+	int *ast, *l;
+	int  checking, n;
+
+	checking = 0;
+	if (argc > 0 && !memcmp(*argv, "-check", 7)) { checking = 1; --argc; ++argv; }
+	if (argc < 1) { printf("usage: c4sc-host ast [-check] file.c\n"); return 1; }
+
+	sc_init_lex();
+	sc_init_parse();
+	ast = L_parse_58program(L_lex_58file(mk_string(*argv)));
+	if (c4sp_err) { printf("c4sc-host: %s\n", c4sp_err_msg); return 1; }
+
+	l = sc_tail(ast);
+	if (checking) {
+		n = 0;
+		while (cell_type(l) == T_CONS) { ++n; l = (int *)l[CELL_B]; }
+		printf("parse ok %s (%d decls)\n", *argv, n);
+		return 0;
+	}
+	while (cell_type(l) == T_CONS) {
+		pr_reset();
+		cell_write((int *)l[CELL_A], 0);
+		printf("%s\n", pr_term());
+		l = (int *)l[CELL_B];
+	}
+	return 0;
+}
+
 int main (int argc, char **argv) {
 	int *orig, *m, *m2, *out, *r;
 	char *in, *outname;
-	int   fuse, tokens, cells;
+	int   fuse, tokens, pp, ast, pptok, cells;
 
 	gc_stack_base = (int *)&orig;
 	fuse = 0;
-	tokens = 0;
+	tokens = pp = ast = pptok = 0;
 	cells = 4000000;   // the same default the timings use for c4sp
 	--argc; ++argv;
 	if (argc > 1 && !memcmp(*argv, "-c", 3)) {
@@ -83,10 +181,13 @@ int main (int argc, char **argv) {
 		--argc; ++argv;
 	}
 	if (argc > 0 && !memcmp(*argv, "tokens", 7)) { tokens = 1; --argc; ++argv; }
+	else if (argc > 0 && !memcmp(*argv, "pptok", 6)) { pptok = 1; --argc; ++argv; }
+	else if (argc > 0 && !memcmp(*argv, "pp", 3)) { pp = 1; --argc; ++argv; }
+	else if (argc > 0 && !memcmp(*argv, "ast", 4)) { ast = 1; --argc; ++argv; }
 	else if (argc > 0 && !memcmp(*argv, "opt", 4)) { --argc; ++argv; }
 	if (argc > 0 && !memcmp(*argv, "-mfuse", 7)) { fuse = 1; --argc; ++argv; }
-	if (!tokens && argc < 2) { printf("usage: c4sc-host [opt] [-mfuse] in.c4r out.c4r\n"); return 1; }
-	in = *argv; outname = tokens ? 0 : argv[1];
+	if (!tokens && !pp && !ast && !pptok && argc < 2) { printf("usage: c4sc-host [opt] [-mfuse] in.c4r out.c4r\n"); return 1; }
+	in = *argv; outname = (tokens || pp || ast || pptok) ? 0 : argv[1];
 
 	if (atoms_init()) return 1;
 	if (gc_init(cells)) return 1;
@@ -96,6 +197,9 @@ int main (int argc, char **argv) {
 	stdlib_init(sc_genv);
 
 	if (tokens) return sc_tokens(argc, argv);
+	if (pp) return sc_pp(argc, argv);
+	if (pptok) return sc_pptok(argc, argv);
+	if (ast) return sc_ast(argc, argv);
 
 	sc_eval_str("(load \"src/c4sp/lisp/c4r.lisp\")");
 	if (c4sp_err) { printf("c4sc-host: %s\n", c4sp_err_msg); return 1; }

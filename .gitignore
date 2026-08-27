@@ -56,3 +56,5 @@ c4or1k-native
 /src/c4sc/c4opt_gen.c
 /c4sc-host
 /src/c4sc/c4lex_gen.c
+/src/c4sc/c4pp_gen.c
+/src/c4sc/c4parse_gen.c

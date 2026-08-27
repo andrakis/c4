@@ -73,13 +73,14 @@
 ;; Strings and quoted data are built ONCE, in sc_init, so a hot loop is
 ;; not re-reading its own constants. The table is a list of C statements
 ;; and the name is its index.
+(define sc:qpfx "Q")
 (define sc:defined nil)
 (define sc:extvars nil)
 (define sc:extdecls "")
 (define sc:curlocals nil)
 (define sc:called nil)
 (define sc:nlit 0)
-(define sc:litname (lambda () (+ "Q" (sc:text sc:nlit))))
+(define sc:litname (lambda () (+ sc:qpfx (sc:text sc:nlit))))
 
 ;; C string escaping: c4lc's lexer takes \" \\ and \n, which is all a
 ;; Lisp datum printed back can contain.
@@ -106,12 +107,18 @@
 (define sc:qlit (lambda (X)
 	(begin
 		(define T (typeof X))
+		;; The end of a list is the NULL cell, and typeof calls it an
+		;; atom -- the same answer it gives the atom nil -- so the check
+		;; has to be empty? as well. Emitting sc_atom("nil") instead of 0
+		;; built '(continue) as the improper list (continue . nil), which
+		;; only showed up in the AST dump, in one place, as a printed dot.
+		(if (if (= T 'atom) (empty? X) false) "0"
 		(if (= T 'number) (+ "mk_int(" (+ (sc:text X) ")"))
 		(if (= T 'string) (sc:strlit "sc_str" X)
 		(if (= T 'list)
 			(if (empty? X) "0"
 				(+ "sc_cons(" (+ (sc:qlit (head X)) (+ ", " (+ (sc:qlit (tail X)) ")")))))
-			(sc:strlit "sc_atom" X)))))))
+			(sc:strlit "sc_atom" X))))))))
 
 (define sc:strlit (lambda (Fn X)
 	(begin
@@ -136,6 +143,7 @@
 ;; high-water mark becomes the function's declarations.
 (define sc:temp 0)
 (define sc:maxtemp 0)
+(define sc:initmax 0)
 (define sc:newtemp (lambda ()
 	(begin
 		(define T (+ "t" (sc:text sc:temp)))
@@ -173,7 +181,8 @@
 	(if (= F 'string:substr) "sc_str_substr"
 	(if (= F 'file:read)    "sc_file_read"
 	(if (= F 'file:path)    "sc_file_path"
-		false))))))))))))))))))))))))))))
+	(if (= F 'file:exists)  "sc_file_exists"
+		false)))))))))))))))))))))))))))))
 
 ;; The arithmetic ones nest: (+ a b c) is sc_add(sc_add(a,b),c).
 (define sc:arith (lambda (F)
@@ -258,7 +267,8 @@
 									(if (= (sc:arith H) false)
 										(if (= H 'list) false
 										(if (= H 'print) false
-											(sc:note-call H (length (tail X)))))
+										(if (= H 'error) false
+											(sc:note-call H (length (tail X))))))
 										false)
 									false))
 							false)
@@ -272,7 +282,7 @@
 		(begin (sc:scan (head L)) (next sc:scan* (tail L))))))
 
 (define sc:protoargs (lambda (I N Acc First)
-	(if (>= I N) (if First "void" Acc)
+	(if (>= I N) Acc
 		(next sc:protoargs (+ I 1) N
 			(+ Acc (+ (if First "" ", ") (+ "int *a" (sc:text I)))) false))))
 
@@ -396,12 +406,14 @@
 			(sc:b (+ TAB (+ Dst (+ " = " (+ (sc:conses As) (+ ";" NL))))))
 		(if (= F 'print)
 			(sc:b (+ TAB (+ Dst (+ " = sc_print(" (+ (sc:conses As) (+ ");" NL))))))
+		(if (= F 'error)
+			(sc:b (+ TAB (+ Dst (+ " = sc_error(" (+ (sc:conses As) (+ ");" NL))))))
 		(if (= Ar false)
 			(sc:b (+ TAB (+ Dst (+ " = "
 				(+ (if (= B false) (sc:mang F) B)
 					(+ "(" (+ (sc:commas As "" true) (+ ");" NL))))))))
 			(sc:b (+ TAB (+ Dst (+ " = "
-				(+ (sc:nest Ar (tail As) (head As)) (+ ";" NL)))))))))
+				(+ (sc:nest Ar (tail As) (head As)) (+ ";" NL))))))))))
 		(set! sc:temp Mark))))
 
 (define sc:conses (lambda (L)
@@ -426,6 +438,10 @@
 
 (define sc:setform (lambda (X Dst)
 	(begin
+		;; the TARGET needs declaring too: c4lc-pp.lisp does
+		;; (set! lex:pp true), and a store to a sibling unit's global is
+		;; as much an extern reference as a load from one.
+		(sc:noteref (second X))
 		(sc:expr (third X) (sc:mang (second X)))
 		(sc:b (+ TAB (+ Dst (+ " = " (+ (sc:mang (second X)) (+ ";" NL)))))))))
 
@@ -464,7 +480,7 @@
 
 ;; ---- functions -------------------------------------------------------
 (define sc:params (lambda (Ps Acc First)
-	(if (empty? Ps) (if First "void" Acc)
+	(if (empty? Ps) Acc
 		(next sc:params (tail Ps)
 			(+ Acc (+ (if First "" ", ") (+ "int *" (sc:mang (head Ps))))) false))))
 
@@ -539,13 +555,15 @@
 						(set! sc:maxtemp 0)
 						(set! sc:body "")
 						(sc:expr (third X) (sc:mang (second X)))
+						(if (> sc:maxtemp sc:initmax) (set! sc:initmax sc:maxtemp) false)
 						(set! sc:inits (+ sc:inits sc:body)))))
 				(begin
 					;; a bare top-level expression: run it in sc_init too
 					(set! sc:temp 0)
 					(set! sc:maxtemp 1)
 					(set! sc:body "")
-					(sc:expr X "sc_top")
+					(sc:expr X TopName)
+					(if (> sc:maxtemp sc:initmax) (set! sc:initmax sc:maxtemp) false)
 					(set! sc:inits (+ sc:inits sc:body)))))
 		false)))
 
@@ -558,8 +576,16 @@
 (define Out (+ "" (head (tail argv))))
 ;; The init function is named per unit, because a host that links two
 ;; generated units would otherwise have two sc_init()s.
-(define Unit (if (empty? (tail (tail argv))) "sc_init"
-	(+ "sc_init_" (+ "" (index argv 2)))))
+(define UnitName (if (empty? (tail (tail argv))) "" (+ "" (index argv 2))))
+(define Unit (if (= UnitName "") "sc_init" (+ "sc_init_" UnitName)))
+;; Literals and the top-level scratch are named PER UNIT. Two units in
+;; one translation unit share a namespace -- including four generated
+;; files into one host made lex's Q50 (the atom Id) and pp's Q50 (the
+;; empty string) the same C global, and the later initialiser won, so
+;; every identifier came out of the lexer with an empty kind. c4rlink
+;; would have had the same collision across objects.
+(set! sc:qpfx (if (= UnitName "") "Q" (+ "Q_" (+ UnitName "_"))))
+(define TopName (if (= UnitName "") "sc_top" (+ "sc_top_" UnitName)))
 (define Src (debug:parse (file:read In)))
 (define Forms (if (= (head Src) 'begin) (tail Src) (list Src)))
 
@@ -624,17 +650,23 @@
 (sc:proto "int *sc_str_substr (int *s, int *a, int *b);")
 (sc:proto "int *sc_file_read (int *p);")
 (sc:proto "int *sc_file_path (int *p);")
+(sc:proto "int *sc_file_exists (int *p);")
+(sc:proto "int *sc_error (int *args);")
 (sc:proto "int *sc_typeof (int *x);")
 (sc:proto "int *sc_print (int *args);")
 (sc:proto "int *sc_str (char *s, int n);")
 (sc:proto "int *sc_read (char *s, int n);")
 (sc:proto "int *sc_atom (char *s, int n);")
 (set! Text (+ Text NL))
-(set! Text (+ Text (+ "int *sc_top;" NL)))
+(set! Text (+ Text (+ "int *" (+ TopName (+ ";" NL)))))
 (set! Text (+ Text sc:extdecls))
 (set! Text (+ Text sc:decls))
 (set! Text (+ Text (+ NL (+ "void " (+ Unit (+ " ()" NL))))))
 (set! Text (+ Text (+ "{" NL)))
+;; sc_init is a function like any other and its temporaries have to be
+;; declared: a top-level (define x (f (g y))) needs one, and C4 has no
+;; mid-block declarations.
+(set! Text (+ Text (sc:tempdecls 0 sc:initmax "")))
 (set! Text (+ Text sc:inits))
 (set! Text (+ Text (+ "}" (+ NL NL))))
 (set! Text (+ Text sc:funs))

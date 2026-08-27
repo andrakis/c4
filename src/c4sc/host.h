@@ -62,6 +62,9 @@ int *L_W;   // c4r.lisp's word size, copied in before each entry
 int *L_c4opt_58optimize (int *M);
 int *L_opt_58fuse_45on;
 void sc_init_opt ();
+void sc_init_lex ();
+void sc_init_pp ();
+void sc_init_parse ();
 
 int *sc_bridge_optimize (int *args) {
 	int *fuse;

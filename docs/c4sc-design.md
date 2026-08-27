@@ -331,9 +331,40 @@ for all of them.
       uses an input big enough for the work to dominate. Between M0's
       two brackets (4.6x and 15.9x native), which is where a real
       workload should sit.
-- [ ] **M4** *The rest of the front end.* `c4lc-pp.lisp`,
-      `c4lc-parse.lisp`. Preprocessed output byte-identical to `gcc -E`
-      for all twelve C4IX modules; AST dump == the committed expected.
+- [x] **M4** *The rest of the front end.* `make test-c4sc-front`: the
+      compiled preprocessor's token stream is identical to `gcc -E`'s
+      across **all twelve C4IX modules** (the differential test-c4fc
+      uses — gcc preprocesses and we lex, we preprocess and we lex), the
+      AST dump matches the committed expected file, and all twelve
+      modules parse to the same declaration counts as the interpreter.
+      576 → 2,549 lines and 888 → 3,869 (4.43x and 4.36x). All four
+      units compile standalone under `c4lc -O -c`.
+
+      **Three bugs, and the third is the one worth remembering.**
+
+      1. `sc_init` used temporaries it never declared — a top-level
+         `(define x (f (g y)))` needs one, and C4 has no mid-block
+         declarations. Invisible in the first three units because none
+         of their top-level forms is a nested call.
+      2. c4 spells an empty parameter list `()`, not `(void)`. c4opt and
+         the lexer have no zero-argument functions; `pp:epeek` and
+         `p:kind` are full of them.
+      3. **Every unit named its literals `Q0, Q1, …`, and four units in
+         one translation unit merged them into single C globals.** The
+         lexer's `Q50` was the atom `Id`; the preprocessor's `Q50` was
+         the empty string; `sc_init_pp` ran second and won, so every
+         identifier came out of the lexer with an empty kind and the
+         preprocessor decided `main` was a macro. Literals are now named
+         per unit. This was never going to stay a host-only problem —
+         c4rlink links separate objects into one symbol namespace, so
+         M6 would have hit it with the collision spread across files.
+
+      And one more from the AST dump, which is why that dump is the bar
+      rather than a declaration count: `'(continue)` was being built as
+      the improper list `(continue . nil)`. The end of a list is the
+      **null cell**, and `typeof` calls that an atom — the same answer it
+      gives the atom `nil` — so the terminator has to be recognised with
+      `empty?` as well. One printed dot, in one place, in one file.
 - [ ] **M5** *The back end.* `c4lc-gen.lisp` (1,534 lines),
       `c4lc-tree.lisp`, `c4r.lisp`. Emitted `.c4r` **byte-identical to
       the interpreter's** across the whole `C4LC_DIFF` corpus.

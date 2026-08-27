@@ -53,6 +53,31 @@ int *sc_call_named (char *name, int *args) {
 // name from the global environment, which is how file:read and
 // file:write are reached without duplicating c4sp's path handling.
 
+// What the driver calls in the generated units. Declaring them here
+// serves both builds: in the native one the generated file's definition
+// follows and agrees, and in the object one c4lc -c turns each into an
+// extern symbol for c4rlink.
+extern int *L_lex_58conforming;
+extern int *L_lex_58pp;
+int *L_lex_58file (int *a0);
+extern int *L_pp_58paths;
+int *L_pp_58file (int *a0);
+int *L_pp_58predefine (int *a0);
+int *L_pp_58predefines (int *a0);
+int *L_parse_58program (int *a0);
+extern int *L_c4r_58v3;
+extern int *L_c4r_58bss_45extra;
+int *L_c4r_58decode (int *a0);
+int *L_c4r_58encode (int *a0);
+extern int *L_tree_58objmode;
+int *L_tree_58optimize (int *a0);
+extern int *L_gen_58objmode;
+extern int *L_gen_58cisc;
+extern int *L_gen_58bssextra;
+int *L_gen_58module (int *a0);
+extern int *L_opt_58fuse_45on;
+int *L_c4opt_58optimize (int *a0);
+
 // The compiled units' initialisers.
 void sc_init_opt ();
 void sc_init_lex ();

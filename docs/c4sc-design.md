@@ -409,10 +409,52 @@ for all of them.
       byte-identical at every arena size tried, which is worth stating:
       the collector runs at different moments on the two sides and the
       image does not move.
-- [ ] **M6** *The whole compiler.* `c4lc.c4r` as a native image. C4IX
-      rebuilt with it: twelve objects byte-identical to today's, linking
-      to a kernel byte-identical to the committed `c4ix.c4r`, which
-      boots.
+- [x] **M6** *The whole compiler, as an image.* The C4IX half was done
+      at M5 — twelve objects byte-identical, linked to the committed
+      `c4ix.c4r`, booting. What remained was the compiler itself
+      becoming a `.c4r` rather than a native binary, and `make
+      test-c4sc-image` has it:
+
+          c4sc.c4r: 2005668 bytes
+          hosted lex: tokens 15125
+          hosted compile: boot (8071 bytes, same as native)
+          hosted compile: va (7802), host (6113), sl4b (11010)
+          test-c4sc-image: OK
+
+      Eight objects — the seven generated units plus a driver carrying
+      the runtime — linked by **c4rlink**, which is where M4's per-unit
+      literal naming earned itself: seven objects in one symbol
+      namespace would otherwise have collided seven ways instead of
+      once.
+
+      `src/c4sc/body.h` is the driver, shared by both builds:
+      `c4sc-host.c` includes the generated units for the native binary
+      the differential tests use, and `c4sc-main.c` declares them so
+      `c4lc -c` makes them extern symbols. The driver goes through
+      `gcc -E` first, for the reason `c4sp.c4r` does — c4lc's own
+      preprocessor refuses a function-like macro named without an
+      argument list, and `c4.h` has one.
+
+      Bare c4m has no write syscall, the same limit c4lc has, so the
+      size line is printed **before** the write is attempted. That makes
+      a hosted run comparable with a native one on the number that
+      matters, and under C4KE the write lands in the ramfs and works.
+
+      **Hosted speed, which is the point of all of it:**
+
+      | workload, under c4m | interpreted | compiled | |
+      |---|---:|---:|---:|
+      | lex `c4cc.c` (the tracker's own benchmark) | 16.9 s | **1.91 s** | **8.9x** |
+      | compile `src/c4ix/sched.c` `-O -c` | 27.5 s | **3.51 s** | **7.9x** |
+
+      **And a correction to M0.** M0 measured 16.2x-44.1x hosted on two
+      kernels and predicted C4IX inside c4bb would drop from ~31 minutes
+      to "under two". The real whole-program figure is **7.9x**, so
+      about **four minutes**. The kernels were tighter loops than a
+      compiler is: a real compile spends more of itself in allocation,
+      in the collector and in cold code that runs once, none of which
+      compiling makes faster. 7.9x is below M0's bracket, and M0's job
+      was to clear a 3x gate, which it did by a wide margin either way.
 - [ ] **M7** *The fixed point.* c4sc compiles itself: gen1 == gen2 ==
       gen3.
 - [ ] **M8** *On the board.* `c4lc.c4r` at 32 bits, `-mfuse`, on the

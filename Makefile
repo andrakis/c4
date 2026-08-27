@@ -705,6 +705,50 @@ test-c4sc-back: c4sc-host c4sp $(C4RLINK) $(C4M)
 	@rm -f .c4sc_i.c4r .c4sc_c.c4r .c4sc_i.c4o .c4sc_*.c4o .c4sc_ix.c4r
 	@echo "test-c4sc-back: OK -- the kernel it built is the committed one, and it boots"
 
+# M6: the compiler as an IMAGE. The seven generated units and the driver
+# are compiled to objects and linked by c4rlink, so c4lc -- lexer,
+# preprocessor, parser, tree passes, code generator, peephole passes and
+# the .c4r writer -- becomes one .c4r that runs anywhere c4m does. This
+# is what M8 puts on the board.
+#
+# The driver goes through gcc -E first for the reason c4sp.c4r does:
+# c4lc's own preprocessor refuses a function-like macro named without an
+# argument list, and c4.h has one.
+C4SC_UNITS := opt lex pp parse c4r tree gen
+c4sc.c4r: c4sp $(C4LC_LISP) $(C4RLINK) $(C4SC_GEN) src/c4sc/c4sc-main.c \
+          src/c4sc/body.h src/c4sc/host.h src/c4sc/scrt.h
+	$(PREPROC) src/c4sc/c4sc-main.c > .c4sc_main.c
+	$(C4SPLC) $(SRCS)/c4sp/lisp/c4lc.lisp -O -c .c4sc_main.c .c4sc_o_main.c4o > /dev/null
+	@for u in $(C4SC_UNITS); do \
+	   echo "  unit: $$u"; \
+	   $(C4SPLC) -c 33554432 $(SRCS)/c4sp/lisp/c4lc.lisp -O -c \
+	       src/c4sc/c4$${u}_gen.c .c4sc_o_$$u.c4o > /dev/null || exit 1; \
+	 done
+	$(C4RLINK) .c4sc_o_main.c4o $(patsubst %,.c4sc_o_%.c4o,$(C4SC_UNITS)) -o $@
+	@rm -f .c4sc_main.c .c4sc_o_*.c4o
+	@echo "c4sc.c4r: $$(wc -c < $@) bytes"
+
+test-c4sc-image: c4sc.c4r c4sc-host $(C4M) c4sp
+	@# the image runs, and computes what the interpreter computes
+	$(C4M) load-c4r.c -- c4sc.c4r -c 4000000 tokens -count $(SRCS)/c4cc/c4cc.c \
+	  | grep -q "^tokens 15125$$"
+	@echo "  hosted lex: tokens 15125"
+	@# a real compile, hosted: the image it produces has to be the size
+	@# the native build produces. Bare c4m has no write syscall -- the
+	@# same limit c4lc has -- so the size line is printed before the
+	@# write is attempted and that is what is compared.
+	@fail=0; for m in boot va host sl4b; do \
+	   n=`./c4sc-host -c 8000000 compile -O -c -I $(C4IX_SRC) $(C4IX_SRC)/$$m.c .c4sc_n.c4o 2>&1 \
+	      | sed -n 's/.* - \([0-9]*\) bytes.*/\1/p'`; \
+	   h=`$(C4M) load-c4r.c -- c4sc.c4r -c 8000000 compile -O -c -I $(C4IX_SRC) \
+	      $(C4IX_SRC)/$$m.c out.c4o 2>&1 | sed -n 's/.* - \([0-9]*\) bytes.*/\1/p'`; \
+	   [ -n "$$n" ] && [ "$$n" = "$$h" ] \
+	     || { echo "test-c4sc-image: $$m hosted $$h vs native $$n"; fail=1; continue; }; \
+	   echo "  hosted compile: $$m ($$h bytes, same as native)"; \
+	 done; [ $$fail = 0 ] || exit 1
+	@rm -f .c4sc_n.c4o
+	@echo "test-c4sc-image: OK"
+
 # c4cc's for statement. It had never worked -- see src/tests/test_for.c
 # -- so this pins it against gcc's output for the same program, which is
 # how every other language feature here is checked.
@@ -2318,6 +2362,7 @@ PHONY  = pre all clean-c4rs clean
 PHONY += test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
 PHONY += run-c4dos-build32 test-c4dos-build32 test-c4cc-for test-respfile test-b4ke
 PHONY += test-c4sc test-c4sc-run test-c4sc-lex test-c4sc-front test-c4sc-back
+PHONY += test-c4sc-image
 PHONY += test-c4dos-ladder32
 PHONY += run run-vg test test-massive
 PHONY += run-alt run-alt-vg test-alt test-massive-alt

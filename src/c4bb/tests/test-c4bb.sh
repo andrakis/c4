@@ -193,11 +193,16 @@ fi
 # amount of time on every host; the PIT fires every N milliseconds. This
 # checks that it fires at all, that the count is right, and that the
 # ticks are spread over real time rather than arriving together.
+# The second pass is the one that matters to a kernel: it masks and
+# unmasks the timer on every pass of its wait loop, thousands of times
+# per period, the way C4KE does around every critical path. A mask that
+# restarted the countdown would deliver no ticks at all.
 pit_out=$(timeout 120 $C4BB -m 8 $IMAGES/bb_pit.c4r 2>&1)
-if echo "$pit_out" | grep -q "real time"; then
-    echo "test-c4bb: pit OK ($(echo "$pit_out" | grep -o 'spread over [0-9]*ms'))"
+pit_ok=$(echo "$pit_out" | grep -c "real time")
+if [ "$pit_ok" = 2 ]; then
+    echo "test-c4bb: pit OK (free running and masked every pass)"
 else
-    echo "test-c4bb: pit FAILED"; echo "$pit_out" | tail -3; fail=1
+    echo "test-c4bb: pit FAILED"; echo "$pit_out" | tail -4; fail=1
 fi
 
 # ---- the fused opcodes (79-88) --------------------------------------

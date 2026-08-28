@@ -480,20 +480,31 @@ costs nothing measurable.
       Bar: `top` refreshes once a real second on a host that runs the
       simulator at half speed, and the pinned cycle-derived tests are
       unaffected.
-- [~] **M14 — the programmable interrupt timer.** The device is done
-      and pinned; no kernel uses it yet. `PIT_MS` (0x1a0) asks for a
-      tick every N real milliseconds and raises the same
+- [x] **M14 — the programmable interrupt timer.** The device is done
+      and pinned; C4KE is to schedule on it. `PIT_MS` (0x1a0) asks for
+      a tick every N real milliseconds and raises the same
       `TRAP_HARD_IRQ` the cycle interrupt does, so a kernel that has a
-      handler needs no new one. Remaining: C4KE scheduling on it with
-      the cycle timer switched off.
+      handler needs no new one.
+  - [x] Masking preserves the timer's phase, so a kernel that hides
+        from it in every critical path is not a kernel that never
+        gets a tick.
+  - [x] C4KE asks whether the device is there, asks whether it
+        answers, and schedules on it when both say yes.
+  - [x] A machine without it, or with one that does not answer, boots
+        and runs exactly as it did before.
 - [ ] **M15 — per-rung opcode budgets in the suite.** `opscan` already
       takes a ceiling; give each rung's images their own and make it a
       test, so "the player must extend the CPU before X" is asserted
       rather than described.
-- [ ] **M16 — u0-free builds of the C4DOS-rung programs.** bench,
-      innerbench, mandel, rps, c4tui and `c4m.c` at opcodes ≤ EXIT,
-      the way `raycast-dos` already is. This is the one with real work
-      in it.
+- [x] **M16 — u0-free builds of the C4DOS-rung programs.** `c4.c`,
+      `c4m.c`, mandel and rps at opcodes <= EXIT (plus TIME), the way
+      `raycast-dos` already is. **bench and innerbench are not on this
+      list** — they are C4KE and C4IX programs and stay that way.
+  - [x] `c4.c` and `c4m.c`, as separate images from the u0 ones.
+        Running `c4m.c` inside `c4.c4r` inside the board is the
+        software proof of the VM, and it must need no extended opcode
+        to be that.
+  - [x] mandel and rps, from the same sources the C4KE builds use.
 
 ## Notes taken while scoping
 
@@ -563,6 +574,172 @@ find out whether the registers exist: **native c4m has no device window
 there**, so the poke is a wild access rather than a zero. The capability
 is announced, and anything that does not see the bit keeps doing what it
 did before — which is what C4KE will do when it moves onto the PIT.
+
+### M14: C4KE schedules on the timer
+
+The kernel that boots on the board now takes its scheduling tick from
+the wall clock instead of from a count of instructions, and the two
+paragraphs that used to say what the cycle interrupt was for say it
+best:
+
+    c4ke: measuring instructions per second, if this step gets stuck, pass -a to c4m...
+    c4ke: instructions per second roughly: 1.000 M, measurement cycles: 200.265 k
+    c4ke: setting cycle interrupt to 50003 (50.003 k) cycles
+
+became
+
+    c4ke: scheduling on the interval timer, every 10ms of real time
+
+The measurement existed to turn "how fast is this host" into a cycle
+count, and a timer that counts milliseconds has no use for the answer.
+Deleting the question took the board's boot from **726ms and 2.047 G
+cycles to 3ms and 76.5 k cycles** -- a good deal of that was the
+measurement, and the rest is that a kernel booting on a real 10ms tick
+is not being interrupted 20 times on the way up.
+
+**Detection is two questions and both have to be asked.** `__c4_info()`
+answers the first, and it has to: 0x1a0 cannot be probed blind, because
+on every host that is not the board it is ordinary memory, and a store
+there corrupts whatever lives at 0x1a0 rather than doing nothing. Only
+once the capability bit says the window is real is it safe to ask the
+second, which is whether the device behind it behaves -- arm an
+interval, read it back, mask it, read that back. A machine that claims
+the bit and answers something else schedules on the cycle counter
+exactly as before, and so does native c4m, and so does a C4KE running
+nested inside a c4m on the board, because the inner VM's `c4_info()` is
+its own and does not carry the board's bits. `-c nn` is the override,
+and it is the honest one: it says "use the cycle interrupt, at this
+interval", which is a thing to say only if that is what you want.
+
+### What the kernel taught the hardware
+
+Masking. A kernel hides from its own timer on the way into every
+critical path and comes back out on the way from it -- that is what
+`critical_path_start`/`critical_path_end` are, and on a busy kernel it
+happens many times per tick. The PIT as first built restarted its
+countdown on every write of the interval, so **a kernel that took a
+critical path more often than once per period would never be
+interrupted again.** It would mask itself to death, and the symptom
+would have read as "the scheduler stopped", not as a timer bug.
+
+So writing 0 now stops the timer and leaves the deadline where it is,
+and re-arming the same interval resumes toward it; only a genuinely
+different interval starts a new countdown. The cycle interrupt has this
+for free, because its counter is free-running and `cycle % interval`
+does not care when the interval was written -- the PIT had to be told.
+`src/c4bb/tests/src/bb_pit.c` has a second pass for it: the same four
+ticks over the same 300ms, with the wait loop masking and unmasking on
+every turn.
+
+    pit: 100ms apart requested
+    pit: free running -- 4 ticks over 300ms, real time
+    pit: masked every pass -- 4 ticks over 300ms, real time
+
+Not a hypothetical: with the phase-preserving line taken back out, the
+second pass delivers no ticks at all.
+
+### What a faster kernel found: the reaper was on the wrong clock
+
+`test-task-mem` failed the moment C4KE stopped burning cycles on the
+way up, and the failure is worth keeping written down because the bug
+was always there.
+
+    leak: round allocated 24 of 24 blocks     x4
+    fw: malloc(262160) failed: 2 free blocks, 156920 bytes
+    leak: round allocated 18 of 24 blocks
+    test_leak: round 5 only got some of its memory
+
+`test_leak` starts twelve children in turn, each of which allocates 6 MB
+and frees none of it, and it passes only because the kernel takes a dead
+task's memory back. The idle task does that -- and it used to wait a
+second between sweeps. Two things were wrong with that. The small one is
+that the wait bought nothing: `kernel_tasks_zombie` already gates the
+sweep, and one sweep takes it to zero, so the table was never being
+walked without something to find. The large one is that the second is
+measured with `__time()`, which is **derived from the cycle counter** --
+so it is a count of work, not an amount of time. The old kernel spent
+2 G cycles measuring its own speed before it ever scheduled anything,
+and that made the wait look short. The new one boots in 76 k cycles, and
+suddenly twelve dead tasks' worth of heap was sitting there waiting for
+a clock that was barely moving.
+
+So the sweep now happens whenever there is something to sweep. It was
+always safe there: `kernel_task_finish` has already copied the exit code
+into whatever task was waiting on this one, so nothing still needs to
+read the corpse.
+
+This is the shape of thing to expect more of. Anything in C4KE that
+says "after N milliseconds" is really saying "after N cycles", and the
+two have just stopped being interchangeable.
+
+### And one from the machine itself
+
+`test-c4dos-build32` -- C4DOS compiling this kernel on the board --
+failed on the first attempt with
+
+    cpp: c4ke.c:1135: backslash-newline continuation is not supported
+
+The new `critical_path_start`/`critical_path_end` had been written
+across three lines with backslashes, which gcc's preprocessor takes
+without comment. The one that runs on the machine (`src/c4dos/cpp.c`)
+does not, and this kernel has to be buildable by it or the ladder has a
+missing rung. They are one line each now, with a comment saying why.
+
+### M16: the C4DOS rung gets c4, c4m, mandel and rps
+
+All four at opcodes <= EXIT, and none of them needed a second source, a
+`-D` or an `#ifdef` -- which matters, because the compiler that runs on
+the machine has no `#` to read.
+
+**c4 and c4m were already there.** Hand c4cc the plain sources and it
+walks into `c4m.c`'s `#if C4_ONLY` branch -- the one written for
+running under plain c4 -- because c4cc skips `#` lines and compiles the
+code between them. What comes out uses nothing above `EXIT`, and it
+runs:
+
+    $ ./c4m32 load-c4r.c -- c4-dos32.c4r c4m.c load-c4r.c -- hello32.c4r
+    yello
+    exit(0) cycle = 14957271
+
+That chain is the VM proved in software, and it has to be provable at
+this rung or it proves nothing about what the machine could already do
+on the day it booted. On the board, from the C4DOS prompt, with the
+whole stack underneath:
+
+    A>RUN c4.c4r c4m.c load-c4r.c -- mandel.c4r 24x10 -m
+    Custom size: 24x10
+    c4m: unable to open uptime file
+    ......,''''''~~=[&~~',,,
+    .....,'''''~~~=;..==~',,
+    ...
+    exit(0) cycle = 48432715
+
+(The uptime complaint is that branch's clock: it reads `/proc/uptime`,
+because the one host it was written for is a Linux box running real c4,
+and c4 has no `TIME`. Harmless, and it is why the render claims 0ms.) The u0 and preprocessed builds of both are the
+ones one rung up, and they are separate images: those reach `INFO` and
+`JSRS`.
+
+**mandel and rps needed `include/u0lite.h`.** Not a stripped u0 --
+u0's own definitions, copied, of the parts that need no kernel and no
+opcode: `strlen`, `strcmp`, the character tests, and the same linear
+congruential generator. The names match u0's exactly, so a program's
+source does not know which build it is in:
+
+    c4cc -o prog.c4r include/u0.h     prog.c   # the C4KE / C4IX build
+    c4cc -o prog.c4r include/u0lite.h prog.c   # the C4DOS build
+
+That is the whole mechanism. c4cc compiles every function in a source
+it is handed whether it is called or not, so what makes an image
+base-c4 is **which library it was handed**, and nothing else.
+
+One thing was deleted rather than ported. mandel's `main()` used to
+patch `mandelbrot_render()` into a jump to one of two bodies, choosing
+the `__c4_invoke()` one when `__c4_info()` said we were on plain c4,
+where a pure function is called faster. That cost `OPCD`, `INFO` and
+the invoke -- three opcodes the rung does not have -- to buy some
+milliseconds on the one host that is not the interesting one. The
+picture out of both builds is byte-identical.
 
 ---
 

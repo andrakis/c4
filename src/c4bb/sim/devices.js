@@ -156,8 +156,9 @@ export class Devices {
     // default it is the wall clock, which is the whole point.
     this.hostNow = opts.hostNow || (() => Date.now());
     this.t0 = this.hostNow();
-    this.pitMs = 0;                   // 0 = the PIT is off
-    this.pitNext = 0;
+    this.pitMs = 0;                   // 0 = the PIT is off (or masked)
+    this.pitArmed = 0;                // the interval last armed, masked or not
+    this.pitNext = 0;                 // when the next tick is due, host ms
     this.fds = new Map();             // fd -> {data, pos} | {kbd, nonblock} | {w}
     this.nextFd = FD_FIRST;
     this.diskFlags = 0;
@@ -372,10 +373,29 @@ export class Devices {
       // same trap the cycle interrupt does, so a kernel that already
       // has a handler needs no new one -- it just stops having to guess
       // how many cycles a second is on this host.
-      case PIT_MS:
-        this.pitMs = Math.max(0, val | 0);
-        this.pitNext = this.pitMs ? this.hostNow() + this.pitMs : 0;
+      //
+      // Arming, re-arming and MASKING are three different writes, and
+      // what tells them apart is the phase. A kernel hides from its own
+      // timer in every critical path -- 0 on the way in, the interval
+      // on the way out -- so if writing the interval always restarted
+      // the countdown, a kernel that entered a critical path more often
+      // than once an interval would never tick again. It would mask
+      // itself to death.
+      //
+      // So: 0 stops the timer and LEAVES THE DEADLINE WHERE IT IS, and
+      // re-arming the same interval resumes toward that deadline. Only
+      // a genuinely new interval starts a new countdown. The cycle
+      // interrupt gets this for free, because its counter is
+      // free-running and `cycle % interval` does not care when the
+      // interval was written; the PIT has to be told.
+      case PIT_MS: {
+        const ms = Math.max(0, val | 0);
+        if (!ms) { this.pitMs = 0; return; }          // masked, phase kept
+        if (ms !== this.pitArmed || !this.pitNext)
+          this.pitNext = this.hostNow() + ms;         // a new countdown
+        this.pitMs = this.pitArmed = ms;
         return;
+      }
       case DISK_DRIVE:
         // Out of range selects nothing rather than crashing: a program
         // asking for drive 3 on a two-drive machine should see empty
@@ -404,6 +424,7 @@ export class Devices {
       // Halts like POWER, and the host boots the firmware again.
       case RESET:
         this.pitMs = 0;
+        this.pitArmed = 0;
         this.pitNext = 0;
         this.resetRequested = true;
         this.halted = true;

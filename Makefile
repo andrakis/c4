@@ -334,7 +334,12 @@ endef
 # before it builds anything else -- LADDER.BAT, docs/compiler-on-the-board.md.
 # Flat names: c4cc has no preprocessor and skips '#' lines, so nothing
 # here needs its directory back.
+# u0lite.h rides along because it is what a program on this rung is
+# compiled AGAINST -- rebuilding mandel or rps in the machine means
+# handing c4cc that file instead of u0.h, and it has to be there to
+# hand over. See include/u0lite.h.
 C4TOOLS_KIT := include/c4dos.h:c4dos.h load-c4r.c:load-c4r.c \
+               include/u0lite.h:u0lite.h \
                $(SRCS)/c4cc/c4cc.c:c4cc.c $(SRCS)/c4cc/asm-c4r.c:asm-c4r.c \
                $(SRCS)/c4dos/cpp.c:cpp.c
 C4TOOLS_KIT_SRCS := $(foreach p,$(C4TOOLS_KIT),$(firstword $(subst :, ,$(p))))
@@ -395,6 +400,32 @@ hello32.c4r: c4cc32 $(TESTS)/hello.c
 raycast-dos32.c4r: c4sp32 $(C4LC_LISP) $(TESTS)/raycast.c
 	./c4sp32 src/c4sp/lisp/c4lc.lisp -O -conforming -D RC_DOS=1 \
 		$(TESTS)/raycast.c $@ > /dev/null
+
+# The rest of the C4DOS rung: the same sources the C4KE builds use,
+# compiled against u0lite instead of u0 (include/u0lite.h says why).
+# No preprocessor is involved and no -D is passed -- what makes these
+# base-c4 images is which library they are handed, and c4cc has no # to
+# read anyway.
+#
+# c4.c and c4m.c are handed NOTHING, and that is the interesting part.
+# Both are self-contained C, and unpreprocessed c4cc walks straight into
+# c4m.c's `#if C4_ONLY` branch -- the one written for running under
+# plain c4 -- because it skips the # lines and compiles the code
+# between them. So the VM's own C4DOS build falls out of the source as
+# it stands, with no flag and no second file: `c4m.c4r` inside
+# `c4.c4r` inside the board is the whole VM proved in software, needing
+# not one opcode the machine did not have on the day it booted.
+c4-dos32.c4r: c4cc32 c4.c
+	./c4cc32 -o $@ c4.c > /dev/null
+
+c4m-dos32.c4r: c4cc32 c4m.c
+	./c4cc32 -o $@ c4m.c > /dev/null
+
+mandel-dos32.c4r: c4cc32 $(INCLUDE)/u0lite.h $(TESTS)/mandel.c
+	./c4cc32 -o $@ $(INCLUDE)/u0lite.h $(TESTS)/mandel.c > /dev/null
+
+rps-dos32.c4r: c4cc32 $(INCLUDE)/u0lite.h $(TESTS)/rps.c
+	./c4cc32 -o $@ $(INCLUDE)/u0lite.h $(TESTS)/rps.c > /dev/null
 
 C4DOS_DISK32 := c4dos-disk32
 $(C4DOS_DISK32): hello32.c4r raycast-dos32.c4r \
@@ -475,6 +506,7 @@ $(C4DOS_IX_DISK): c4dos32.c4r dostar32.c4r cpp32.c4r c4cc32.c4r dosload32.c4r \
                   tools-src.tar init32.c4r c4sh32.c4r c4ke.vfs32.c4r \
                   b4ke32.c4r tar32.c4r ls32.c4r ps32.c4r \
                   bbsave32.c4r save32.c4r raycast-dos32.c4r reboot32.c4r \
+                  c4-dos32.c4r c4m-dos32.c4r mandel-dos32.c4r rps-dos32.c4r \
                   $(BIN_D)/c4ix.b4k \
                   $(SRCS)/c4dos/fs/LADDER.BAT $(SRCS)/c4dos/fs/IX.BAT \
                   $(SRCS)/c4dos/fs/c4ix.objs $(SRCS)/c4dos/fs/CONFIG.SYS
@@ -527,13 +559,23 @@ $(C4DOS_IX_DISK): c4dos32.c4r dostar32.c4r cpp32.c4r c4cc32.c4r dosload32.c4r \
 	@./c4cc32 -o $(C4DOS_IX_DISK)/bench.c4r $(U0) $(SRCS)/bench/bench.c > /dev/null
 	@./c4cc32 -o $(C4DOS_IX_DISK)/benchtop.c4r $(U0) $(BIN_D)/ps.c $(SRCS)/bench/benchtop.c > /dev/null
 	@./c4cc32 -o $(C4DOS_IX_DISK)/innerbench.c4r $(U0) $(SRCS)/bench/innerbench.c > /dev/null
-	@./c4cc32 -o $(C4DOS_IX_DISK)/mandel.c4r $(U0) $(TESTS)/mandel.c > /dev/null
+	@# The C4DOS rung proper: mandel, rps, raycast, c4 and c4m, none of
+	@# them needing an opcode above EXIT (raycast and mandel want TIME,
+	@# to time themselves). These are what a player has to play with
+	@# BEFORE extending the CPU, which is the whole reason they are
+	@# built this way -- see include/u0lite.h and test-c4bb-baseops.
+	@cp mandel-dos32.c4r $(C4DOS_IX_DISK)/mandel.c4r
+	@cp rps-dos32.c4r    $(C4DOS_IX_DISK)/rps.c4r
 	@# raycast needs c4lc: its enums have expressions in them, which is
 	@# an L11 feature c4cc does not have. The DOS build is stock-c4
 	@# opcodes only, so it runs on every rung from here up.
 	@cp raycast-dos32.c4r $(C4DOS_IX_DISK)/raycast.c4r
-	@./c4cc32 -o $(C4DOS_IX_DISK)/c4.c4r $(U0) c4.c > /dev/null
-	@$(PREPROC) c4m.c | ./c4cc32 -o $(C4DOS_IX_DISK)/c4m.c4r - > /dev/null
+	@# c4 running c4m running a .c4r is the VM proved in software, and
+	@# it has to be provable at THIS rung or it proves nothing about
+	@# what the machine can already do. Both come from the unadorned
+	@# sources; the u0 and preprocessed builds are the ones one rung up.
+	@cp c4-dos32.c4r  $(C4DOS_IX_DISK)/c4.c4r
+	@cp c4m-dos32.c4r $(C4DOS_IX_DISK)/c4m.c4r
 	@# innerbench compiles a whole C4KE inside a nested c4m, so it wants
 	@# these three by the exact names it opens them with.
 	@mkdir -p $(C4DOS_IX_DISK)/src/c4ke
@@ -1874,11 +1916,19 @@ test-c4bb-storage: c4dos32.c4r $(C4DOS_IX_DISK)
 # player reaches BEFORE they have extended their CPU, so an opcode above
 # EXIT in either is a milestone given away for free. C4DOS's TIME is the
 # one deliberate exception -- that is the CLOCK.SYS rung.
-test-c4bb-baseops: src/c4bb/fw/fw.c4r c4dos32.c4r dostar32.c4r dosload32.c4r reboot32.c4r
+test-c4bb-baseops: src/c4bb/fw/fw.c4r c4dos32.c4r dostar32.c4r dosload32.c4r reboot32.c4r \
+                   c4-dos32.c4r c4m-dos32.c4r mandel-dos32.c4r rps-dos32.c4r \
+                   raycast-dos32.c4r
 	node src/c4bb/tools/opscan.mjs src/c4bb/fw/fw.c4r dostar32.c4r \
-	                               dosload32.c4r reboot32.c4r
-	node src/c4bb/tools/opscan.mjs -max 53 c4dos32.c4r
-	@echo "test-c4bb-baseops: OK -- the BIOS is base c4, C4DOS is base c4 + TIME"
+	                               dosload32.c4r reboot32.c4r \
+	                               c4-dos32.c4r c4m-dos32.c4r rps-dos32.c4r
+	@# C4DOS itself, and the two programs that time themselves, are
+	@# base c4 plus TIME. Nothing on this rung may reach OPCD, INFO or
+	@# JSRS: extending the CPU to get those is the player's job, and a
+	@# disk that quietly needed them would make the milestone a lie.
+	node src/c4bb/tools/opscan.mjs -max 53 c4dos32.c4r mandel-dos32.c4r \
+	                                       raycast-dos32.c4r
+	@echo "test-c4bb-baseops: OK -- BIOS base c4; C4DOS, c4, c4m, mandel, rps, raycast base c4 (+TIME)"
 
 # C4OR1K: OR1000/OpenRISC emulator ported from jor1k, compiled by
 # c4lc, run under c4m (docs/c4or1k-design.md).

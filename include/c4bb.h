@@ -98,6 +98,13 @@ int bb_rtc () { return *(int *)BB_RTC; }
 // Ask for a tick every N real milliseconds, raising the same trap the
 // cycle interrupt does -- so a kernel that already has a handler needs
 // no new one, and stops having to guess how many cycles a second is on
-// this host. 0 turns it off.
+// this host.
+//
+// 0 MASKS the timer rather than forgetting it: the deadline stays where
+// it was, and re-arming the same interval resumes toward it. That is
+// what makes bb_pit(0) safe to use the way a kernel uses it, which is
+// on the way into every critical path -- a mask that restarted the
+// countdown would let a kernel that masks often enough never tick at
+// all. Writing a DIFFERENT interval does start a new countdown.
 void bb_pit (int ms) { *(int *)BB_PIT = ms; }
 int  bb_pit_get ()   { return *(int *)BB_PIT; }

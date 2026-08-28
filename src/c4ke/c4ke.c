@@ -257,6 +257,29 @@ enum { MODE_UNPROTECTED, MODE_PROTECTED };
 // Configure codes, for use with CSYS/__c4_configure
 enum { C4KE_CONF_CYCLE_INTERRUPT_INTERVAL, C4KE_CONF_CYCLE_INTERRUPT_HANDLER };
 
+// The programmable interrupt timer, when there is one.
+//
+// c4bb puts a real timer at a device register (include/c4bb.h) and
+// announces it in __c4_info(). It raises exactly the trap the cycle
+// interrupt raises, through exactly the handler the cycle interrupt
+// uses, so the whole of C4KE's scheduling works unchanged -- the only
+// difference is what decides WHEN. The cycle interrupt fires after so
+// many instructions, which means the kernel has to measure how fast
+// this host runs and then guess a number; the timer fires after so
+// many real milliseconds, which is the thing the kernel actually
+// wanted to say.
+//
+// These are addresses, and only on a machine that has the device.
+// Nothing here is touched unless kernel_pit_ms is set, and that is
+// only set after __c4_info() says the register window is real -- under
+// native c4m 0x1a0 is ordinary memory and a store there is a wild
+// write, not a harmless no-op. See docs/c4bb-storage.md M14.
+enum {
+	C4KE_PIT_REG  = 0x1a0,  // r/w: tick every N real ms, 0 masks it
+	C4KE_PIT_INFO = 0x800,  // __c4_info(): this machine has the clock
+	C4KE_PIT_MS   = 10      // the scheduling tick we ask for, real ms
+};
+
 static char *VERSION() { return "0.66"; }
 
 // Task state, keep up to date in u0.c
@@ -725,6 +748,10 @@ static int enable_measurement; // perform speed measurement at startup
 static int enable_test_tasks;  // launch internal test tasks
 static int kernel_cycles_count, kernel_cycles_base;
 static int kernel_cycles_force;
+// Non-zero when scheduling runs off a real timer rather than the cycle
+// counter, and then it is the interval in milliseconds. Doubles as the
+// "is this machine's PIT ours to touch" flag: see C4KE_PIT_REG.
+static int kernel_pit_ms;
 
 // Track task counts
 static int  kernel_tasks_unloaded, kernel_tasks_loaded;
@@ -1084,24 +1111,61 @@ static void process_trap (int *task, int type, int parameter, int *handler) {
 // These function disable the cycle interrupt during critical paths where an
 // interrupt could leave the kernel in an inconsistent state.
 //
+// Both timers mask the same way: write zero going in, write the
+// interval coming out. The PIT keeps its deadline across a mask -- see
+// include/c4bb.h -- precisely so that this, which happens on every
+// trap, cannot starve it.
 #if NO_INLINE
 static void critical_path_start () {
 	//if (!critical_path_value)
-		__c4_configure(C4KE_CONF_CYCLE_INTERRUPT_INTERVAL, 0);
+		if (kernel_pit_ms) *(int *)C4KE_PIT_REG = 0;
+		else __c4_configure(C4KE_CONF_CYCLE_INTERRUPT_INTERVAL, 0);
 	//++critical_path_value;
 	//printf("c4ke: critical path value now at %d\n", critical_path_value);
 }
 static void critical_path_end() {
 	//if (critical_path_value && !--critical_path_value) {
-		__c4_configure(C4KE_CONF_CYCLE_INTERRUPT_INTERVAL, kernel_cycles_count);
+		if (kernel_pit_ms) *(int *)C4KE_PIT_REG = kernel_pit_ms;
+		else __c4_configure(C4KE_CONF_CYCLE_INTERRUPT_INTERVAL, kernel_cycles_count);
 	//	critical_path_value = 0;
 	//}
 	//printf("c4ke: critical path value now at %d\n", critical_path_value);
 }
 #else
-#define critical_path_start()   __c4_configure(C4KE_CONF_CYCLE_INTERRUPT_INTERVAL, 0)
-#define critical_path_end()     __c4_configure(C4KE_CONF_CYCLE_INTERRUPT_INTERVAL, kernel_cycles_count)
+// One line each, and they have to stay that way: the preprocessor that
+// runs ON the machine (src/c4dos/cpp.c) has no backslash-newline
+// continuation, and this kernel has to be buildable by it.
+#define critical_path_start()   (kernel_pit_ms ? (*(int *)C4KE_PIT_REG = 0) : __c4_configure(C4KE_CONF_CYCLE_INTERRUPT_INTERVAL, 0))
+#define critical_path_end()     (kernel_pit_ms ? (*(int *)C4KE_PIT_REG = kernel_pit_ms) : __c4_configure(C4KE_CONF_CYCLE_INTERRUPT_INTERVAL, kernel_cycles_count))
 #endif
+
+// Is there a timer, and does it answer?
+//
+// Two questions, and both have to be asked. __c4_info() answers the
+// first, and it has to: the register cannot be probed blind, because
+// on every host that is NOT the board 0x1a0 is ordinary memory, and a
+// store there corrupts whatever lives at 0x1a0 instead of doing
+// nothing. Only once the bit says the window is real is it safe to ask
+// the second question, which is whether the device behind it behaves:
+// arm an interval, read it back, mask it, read that back. A machine
+// that claims the bit and answers something else is a machine we
+// schedule on the cycle counter, exactly as before.
+//
+// Masking at the end is not tidiness -- it leaves the timer off until
+// the kernel is ready to be interrupted, which is stage 4.
+static int kernel_pit_probe (int ms) {
+	int *reg;
+	int armed;
+
+	if (!(c4_info & C4KE_PIT_INFO)) return 0;
+	reg = (int *)C4KE_PIT_REG;
+	*reg = ms;
+	armed = *reg;
+	*reg = 0;
+	if (armed != ms) return 0;
+	if (*reg) return 0;
+	return ms;
+}
 
 //
 // Timekeeping helpers
@@ -2699,39 +2763,48 @@ static int task_idle (int argc, char **argv) {
 	int i, *t;
 	int run;
 	int spin;
-	int zombie_reap_time, zrp;
 	int load_balance_time, lbt;
 
 	//printf("idle: task %d starting idle loop\n", kernel_task_current[TASK_ID]);
 	run = 1;
-	zombie_reap_time = load_balance_time = __time();
+	load_balance_time = __time();
 	// TODO: c4cc, while(1) should use unconditional jump
 	while (1) {
-		// a trap has been called recently, use the last timestamps
-		//zrp = lbt = kernel_last_time;
-		zrp = kernel_last_time;
-
-		// Clear out zombie tasks, and do inventory on task counts
-		// Ensure there's actually other tasks running.
+		// Clear out zombie tasks, and do inventory on task counts.
 		// Disables task switching whilst this is performed.
-		// Only occurs after 1 second has passed.
+		//
+		// This used to wait a second between sweeps. Two things were
+		// wrong with that. The small one is that it bought nothing:
+		// kernel_tasks_zombie already gates the sweep, and one sweep
+		// takes it to zero, so the table is never walked without
+		// something to find. The large one is that a dead task's
+		// memory is held for that whole second, and the second is
+		// measured in __time() -- which is derived from the cycle
+		// counter, so it is a count of work rather than an amount of
+		// time, and on a fast host it is a very long while indeed. A
+		// program that starts one child after another, each freeing
+		// nothing and each relying on the kernel to take its memory
+		// back (src/tests/test_leak.c is exactly that), ran out of
+		// heap while twelve dead tasks' worth of it sat waiting for a
+		// clock.
+		//
+		// Reaping is safe here and always was: kernel_task_finish has
+		// already copied the exit code into whatever task was waiting
+		// on this one, so nothing still needs to read the corpse.
 		if (kernel_tasks_zombie) {
-			if (zrp - zombie_reap_time >= 1000) {
-				zombie_reap_time = zrp;
-				i = 0;
-				t = kernel_tasks + (TASK__Sz * 2); // Skip kernel and idle tasks
-				critical_path_start();
-				while (++i < KERN_TASK_COUNT) {
-					// Might not see tasks that zombify straight away, but that's ok
-					if (t[TASK_STATE] & STATE_ZOMBIE) {
-						kernel_clean_task(t);
-						--kernel_tasks_zombie;
-						++kernel_tasks_unloaded;
-					}
-					t = t + TASK__Sz;
+			i = 0;
+			t = kernel_tasks + (TASK__Sz * 2); // Skip kernel and idle tasks
+			critical_path_start();
+			while (++i < KERN_TASK_COUNT) {
+				// Might not see tasks that zombify straight away, but that's ok
+				if (t[TASK_STATE] & STATE_ZOMBIE) {
+					kernel_clean_task(t);
+					--kernel_tasks_zombie;
+					++kernel_tasks_unloaded;
 				}
-				critical_path_end();
+				t = t + TASK__Sz;
 			}
+			critical_path_end();
 		}
 
 		if (schedule()) {
@@ -3713,6 +3786,21 @@ int main (int argc, char **argv) {
 		// Abort early
 		return -1;
 	}
+	// Schedule on a real timer if this machine has one.
+	//
+	// `-c nn` is the override, and it is the honest one: it says "use
+	// the cycle interrupt, at this interval", which is a thing to say
+	// only if you want the cycle interrupt. Tests that pin a boot want
+	// exactly that, and so does anyone comparing two runs.
+	if (!kernel_cycles_force)
+		kernel_pit_ms = kernel_pit_probe(C4KE_PIT_MS);
+	if (kernel_pit_ms) {
+		// The measurement exists to turn "how fast is this host" into a
+		// cycle count, and a timer that counts milliseconds has no use
+		// for the answer. Skipping it is most of a second off the boot.
+		enable_measurement = 0;
+		kernel_cycles_count = 0;
+	}
 	// TODO: schedule_task_mask unused
 	schedule_task_mask = STATE_LOADED | STATE_RUNNING | STATE_WAITING;
 	kernel_tasks_unloaded = KERN_TASK_COUNT;
@@ -3804,14 +3892,20 @@ int main (int argc, char **argv) {
 					   i, t, kernel_cycles_count);
 		}
 	}
-	if (!kernel_cycles_force && kernel_cycles_count < KERNEL_CYCLES_MIN)
-		kernel_cycles_count = KERNEL_CYCLES_MIN;
-	else
-		kernel_cycles_count = kernel_cycles_count / 2;
-	if (kernel_verbosity >= VERB_MIN) {
-		printf("c4ke: setting cycle interrupt to %ld (", kernel_cycles_count);
-		print_int_readable(kernel_cycles_count);
-		printf(") cycles\n");
+	if (kernel_pit_ms) {
+		if (kernel_verbosity >= VERB_MIN)
+			printf("c4ke: scheduling on the interval timer, every %dms of real time\n",
+			       kernel_pit_ms);
+	} else {
+		if (!kernel_cycles_force && kernel_cycles_count < KERNEL_CYCLES_MIN)
+			kernel_cycles_count = KERNEL_CYCLES_MIN;
+		else
+			kernel_cycles_count = kernel_cycles_count / 2;
+		if (kernel_verbosity >= VERB_MIN) {
+			printf("c4ke: setting cycle interrupt to %ld (", kernel_cycles_count);
+			print_int_readable(kernel_cycles_count);
+			printf(") cycles\n");
+		}
 	}
 	if (kernel_cycles_count < KERNEL_SLOW_THRESHOLD) {
 		// kernel_is_slow = 1;
@@ -4077,8 +4171,12 @@ int main (int argc, char **argv) {
 		printf("c4ke: configure cycle interrupt handler to 0x%lx\n", (int *)&ih_cycle);
 	}
 	__c4_configure(C4KE_CONF_CYCLE_INTERRUPT_HANDLER, (int *)&ih_cycle);
-	if (kernel_verbosity >= VERB_MIN)
-		printf("c4ke: configure cycle interrupt interval to %d\n", kernel_cycles_count);
+	if (kernel_verbosity >= VERB_MIN) {
+		if (kernel_pit_ms)
+			printf("c4ke: arm the interval timer at %dms\n", kernel_pit_ms);
+		else
+			printf("c4ke: configure cycle interrupt interval to %d\n", kernel_cycles_count);
+	}
 	critical_path_end();
 	kernel_schedule_time = __time();
 	// Save cycle count
@@ -4091,7 +4189,8 @@ int main (int argc, char **argv) {
 		printf(" cycles, entering task scheduling...\n\n");
 	}
 	kernel_last_cycle = __c4_cycles();
-	__c4_configure(C4KE_CONF_CYCLE_INTERRUPT_INTERVAL, kernel_cycles_count);
+	if (kernel_pit_ms) *(int *)C4KE_PIT_REG = kernel_pit_ms;
+	else __c4_configure(C4KE_CONF_CYCLE_INTERRUPT_INTERVAL, kernel_cycles_count);
 	// No longer in early boot
 	kernel_running = 1;
 
@@ -4133,6 +4232,14 @@ int main (int argc, char **argv) {
 	}
 	if (kernel_verbosity >= VERB_MED)
 		printf("c4ke: halting cycle interrupt...\n");
+	// Stop the timer BEFORE clearing the flag, or the flag is cleared
+	// while the timer is still live and nothing ever turns it off --
+	// which on the board means a trap into a handler whose tasks have
+	// all been freed.
+	if (kernel_pit_ms) {
+		*(int *)C4KE_PIT_REG = 0;
+		kernel_pit_ms = 0;
+	}
 	__c4_configure(C4KE_CONF_CYCLE_INTERRUPT_INTERVAL, 0);
 	if (kernel_verbosity >= VERB_MED)
 		printf("c4ke: cleaning up all tasks...\n");

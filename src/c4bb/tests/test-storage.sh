@@ -28,7 +28,7 @@ grep -q "dostar.c4r" $T/dir.log
 { printf 'RUN dostar.c4r x tools-src.tar\n'; sleep 10;
   printf 'RUN bbsave.c4r 1:\n';              sleep 20; } \
   | timeout 300 $CLI -i -m 32 -d $T/d0 -w $T/d1 c4dos32.c4r > $T/save.log 2>&1 || true
-grep -q "^bbsave: 5 files" $T/save.log
+grep -q "^bbsave: 6 files" $T/save.log
 
 # Byte-identical to what went in, on the host side of the medium.
 cmp $T/d1/c4cc.c     src/c4cc/c4cc.c
@@ -36,6 +36,7 @@ cmp $T/d1/cpp.c      src/c4dos/cpp.c
 cmp $T/d1/load-c4r.c load-c4r.c
 cmp $T/d1/asm-c4r.c  src/c4cc/asm-c4r.c
 cmp $T/d1/c4dos.h    include/c4dos.h
+cmp $T/d1/u0lite.h   include/u0lite.h
 
 # --- 3. a LATER machine reads it back ---------------------------------
 # Nothing of the first run survives except the medium: this is a new

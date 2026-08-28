@@ -96,7 +96,13 @@ async function reset() {
   const prog = $('program').value || PROGRAMS[0];
   const interactive = INTERACTIVE.has(prog);
   const progBytes = await fetchBin(`../images/${prog}.c4r`);
-  const arena = new Arena(32 * 1024 * 1024);
+  // 128 MB, not 32. The recovery disk can now build C4IX as well as
+  // C4KE, and C4DOS does not return a transient's memory when it exits
+  // -- the image and whatever it allocated stay held -- so twelve
+  // compiler runs in one session accumulate. 128 MB is what the whole
+  // climb needs with c4sc at a 200,000-cell arena, measured; the
+  // largest single module fits in 48.
+  const arena = new Arena(128 * 1024 * 1024);
   const dev = new Devices(arena, {
     files: await loadDisk(DISKS[prog] || DEFAULT_DISK),
     onByte: b => terminal.write(b),

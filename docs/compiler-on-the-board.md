@@ -459,6 +459,52 @@ twelve-module C4IX build is this file with twelve `TARGET`/`RUN` pairs
 and a longer `LIST`. It will work the day a compiler on this machine can
 read `struct vnode {`.
 
+## Walking it, on c4bb
+
+One session, one floppy, C4DOS to C4IX. `make c4dos-c4ix32` builds the
+disk; everything on it is 32-bit and the compiler is `-mfuse`, so it
+needs the ten fused opcodes F7 gave the board.
+
+    make c4dos-c4ix32
+    node src/c4bb/sim/cli.js -s -m 128 -i -d c4dos-c4ix32 c4dos32.c4r
+
+Then, at the `A>` prompt:
+
+| type | what happens | time |
+|---|---|---|
+| `LADDER` | the seed c4cc rebuilds itself and cpp, reaches a fixed point, and the tools it just built compile C4KE from source | ~40 s |
+| `RUN dosload.c4r c4ke.c4r` | boots the kernel the machine compiled | ~1 s |
+| `IX` | the **compiled** c4lc compiles the twelve C4IX modules and c4rlink joins them | ~3m45s |
+| `RUN dosload.c4r c4ix.c4r` | boots C4IX, protected mode and preemption on, to `c4ix:/$` | ~1 s |
+
+`LADDER` and `IX` are alternatives, not a sequence — booting C4KE ends
+the DOS session, and the RAM disk goes with it. Type one or the other.
+`make test-c4dos-c4ix32` runs the second non-interactively and checks it
+reaches the C4IX shell; `make test-c4dos-ladder32` does the first.
+
+**In the browser** it is the same disk: `src/c4bb/images/dos-recovery`
+now carries the whole climb, so opening `src/c4bb/web/index.html`,
+choosing **c4dos32** and typing `LADDER` or `IX` does exactly what the
+CLI does. The page's arena went from 32 MB to **128** for it.
+
+**Why 128 MB, and it is not the RAM disk.** C4DOS does not return a
+transient's memory when it exits — `RUN` mallocs the image's code and
+data and never frees them, and whatever the transient itself allocated
+is gone too. One compiler run is comfortable in 48 MB; twelve in one
+session accumulate. The arena c4sc asks for is most of it, which is why
+`IX.BAT` passes `-c 200000` rather than something generous: at 200,000
+cells the whole climb fits in 128 MB, and the largest module still
+compiles. **A C4DOS that reclaimed a transient's heap would remove the
+whole constraint**, and is not written.
+
+**What had to be added for any of this to work.** `c4sp`'s `file:read`,
+`file:write`, `file:exists` and `file:path` now know the C4DOS API —
+a transient's own `open()` only ever sees the host disk, which is why
+c4cc has carried `dos_slurp` all along. Without it the compiler could
+not find a header it had not been handed or write the object it just
+made. `c4rlink` needed the same on the read side: it had the
+load-from-memory path for C4KE's ramfs and nothing for DOS's.
+
 ## Milestones
 
 - [x] **M0** This tracker, with the measurements above, before any code.

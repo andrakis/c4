@@ -44,6 +44,8 @@
 
 #define NO_ASMC4R_MAIN 1
 // Also includes c4cc.c, which includes load-c4r.c
+enum { CL_DOSMAX = 1048576 };   // biggest object c4rlink reads from DOS
+
 #include "asm-c4r.c"
 
 // Structure for holding loaded .c4r modules
@@ -671,6 +673,20 @@ int main (int argc, char **argv) {
 				vfsbuf = (char *)__c4_opcode(&vfslen, *argv, vfsget);
 			if (vfsbuf)
 				loaded = c4r_load_mem(*argv, vfsbuf, vfslen, C4ROPT_SYMBOLS);
+			// And the same thing one rung down. Under C4DOS the objects
+			// a compiler just wrote are on the RAM disk, which a
+			// transient's own open() cannot see -- the identical
+			// problem the C4KE branch above solves, with DOS's opener
+			// in place of the kernel's.
+			if (!loaded && dos_readable()) {
+				if (!(vfsbuf = malloc(CL_DOSMAX))) {
+					printf("%s: out of memory reading '%s'\n", spec, *argv);
+					return 2;
+				}
+				if ((vfslen = dos_slurp(*argv, vfsbuf, CL_DOSMAX)) > 0)
+					loaded = c4r_load_mem(*argv, vfsbuf, vfslen, C4ROPT_SYMBOLS);
+				if (!loaded) free(vfsbuf);
+			}
 #endif
 			if (!loaded)
 			if (!(loaded = c4r_load_opt(*argv, C4ROPT_SYMBOLS))) {

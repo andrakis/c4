@@ -20,6 +20,26 @@
 #include "c4.h"
 #include "c4m.h"
 #include "c4_float.h"
+// The C4DOS API, for file:read and file:write. A transient's own open()
+// only ever sees the host disk (src/c4cc/c4cc.c:2016), so a compiler
+// running under C4DOS reaches the RAM disk the way every other tool
+// here does -- through the injected table. Injected as a symbol by the
+// DOS loader; zero when there is no DOS, which is how it knows.
+// The C4DOS API, for file:read and file:write. A transient's own open()
+// only ever sees the host disk (src/c4cc/c4cc.c:2016), so a compiler
+// running under C4DOS reaches the RAM disk the way every other tool
+// here does: through the table the DOS loader injects.
+//
+// gcc takes the stubs -- there is no DOS on a host, and dos_can_write()
+// answering 0 is the honest result. The IMAGE builds take the real
+// header, selected by -DC4SP_DOS=1 at the gcc -E step, because that is
+// the only build where the answer can be yes. c4cc.c makes the same
+// choice by skipping '#' lines; c4sp.c is preprocessed, so it says so.
+#ifdef C4SP_DOS
+#include "c4dos.h"
+#else
+#include "c4dos_native.h"
+#endif
 
 #include "src/c4sp/include/cell.h"
 #include "src/c4sp/include/gc.h"

@@ -251,7 +251,7 @@ cp $OUT/c4ix32.c4r $DISK/c4ix.c4r
 # 1,646,519,810 instructions unfused against 888,446,891 fused, 81.20s
 # against 51.84s. The image is smaller too, 124,361 -> 105,864 bytes.
 # docs/fused-opcodes.md F7.
-$PREPROC src/c4sp/c4sp.c > .c4bb_c4sp_pp.c
+$PREPROC -DC4SP_DOS=1 src/c4sp/c4sp.c > .c4bb_c4sp_pp.c
 ./c4sp32 -R src/c4sp/lisp/c4lc.lisp -O -mfuse .c4bb_c4sp_pp.c $DISK/c4sp.c4r > /dev/null
 rm -f .c4bb_c4sp_pp.c
 $CC -o $DISK/cpp.c4r include/c4dos.h src/c4dos/cpp.c > /dev/null
@@ -360,6 +360,18 @@ if [ -f $DISK/config.sys ]; then
     # init.c4r is deliberately absent: the one that boots must be the
     # one the machine just compiled, which is the whole point.
     cp $DISK/c4sh.c4r $DOSDISK/
+    # The whole climb, when the pieces exist: LADDER builds C4KE from
+    # source with cpp and c4cc, IX builds C4IX with the COMPILED c4lc
+    # (docs/c4sc-design.md), and dosload boots either. c4sc.c4r and the
+    # C4IX sources are what make the second half possible; without them
+    # this stays the C4KE recovery disk it has always been.
+    for f in ladder.bat ix.bat c4ix.objs tools-src.tar c4ix-src.tar \
+             c4sc.c4r c4rlink.c4r init.c4r c4ke.vfs.c4r \
+             c4ix-sh.c4r c4ix-ls.c4r c4ix-cat.c4r c4ix-ps.c4r; do
+        [ -f ../../../c4dos-c4ix32/$f ] && cp ../../../c4dos-c4ix32/$f $DOSDISK/
+        [ -f $OUT/../../../c4dos-c4ix32/$f ] && cp $OUT/../../../c4dos-c4ix32/$f $DOSDISK/
+    done
+    [ -f c4dos-c4ix32/config.sys ] && cp c4dos-c4ix32/config.sys $DOSDISK/config.sys
     (cd $DOSDISK && ls -p | grep -v '/$' | grep -v '^manifest.json$' > c4dos.dir)
     (cd $DOSDISK && find . -type f -not -name manifest.json | sed 's|^\./||') | \
         awk 'BEGIN{printf "["} NR>1{printf ","} {printf "\"%s\"", $0} END{print "]"}' > $DOSDISK/manifest.json

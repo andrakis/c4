@@ -13,6 +13,14 @@
 #include "c4.h"
 #include "c4m.h"
 #include "c4_float.h"
+// The C4DOS API, as c4sp.c selects it: stubs for a host build, the real
+// table for an image, so a compiler running at the C4DOS rung can reach
+// the RAM disk.
+#ifdef C4SP_DOS
+#include "c4dos.h"
+#else
+#include "c4dos_native.h"
+#endif
 #include "src/c4sp/include/cell.h"
 #include "src/c4sp/include/gc.h"
 #include "src/c4sp/include/cells.h"

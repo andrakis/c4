@@ -342,6 +342,18 @@ tools-src.tar: $(C4TOOLS_KIT_SRCS)
 	$(call c4tar_build,tools-src.tar,$(C4TOOLS_KIT))
 
 C4KE_KIT_SRCS := $(foreach p,$(C4KE_KIT),$(firstword $(subst :, ,$(p))))
+# src/c4ix spelled out rather than $(C4IX_SRC): both it and C4IX_MODS
+# are defined further down, and := expands now. The Makefile already
+# carries one bug of exactly this shape (see c4rlink.c's note on $(U0)).
+C4IX_KIT := $(foreach m,boot console va host sl4b task sched vfs sys c4ke loader init,\
+              src/c4ix/$(m).c:src/c4ix/$(m).c) \
+            src/c4ix/c4ix.h:src/c4ix/c4ix.h \
+            $(foreach h,$(wildcard include/*.h),$(h):$(h)) \
+            $(foreach h,$(wildcard include/c4ke/*.h),$(h):$(h))
+C4IX_KIT_SRCS := $(foreach p,$(C4IX_KIT),$(firstword $(subst :, ,$(p))))
+c4ix-src.tar: $(C4IX_KIT_SRCS)
+	$(call c4tar_build,c4ix-src.tar,$(C4IX_KIT))
+
 c4ke-src.tar: $(C4KE_KIT_SRCS)
 	$(call c4tar_build,c4ke-src.tar,$(C4KE_KIT))
 
@@ -410,7 +422,7 @@ $(C4DOS_BUILD_DISK): c4dos-clock.c4r dostar.c4r cpp.c4r c4cc.c4r c4ke-src.tar do
                      tools-src.tar $(SRCS)/c4dos/fs/LADDER.BAT \
                      $(INIT) $(C4SH) $(VFS) $(SRCS)/c4dos/fs/BUILD.BAT
 	@mkdir -p $(C4DOS_BUILD_DISK)
-	@sed 's/SIZE=[0-9]*/SIZE=16777216/' $(SRCS)/c4dos/fs/CONFIG.SYS > $(C4DOS_BUILD_DISK)/config.sys
+	@sed 's/SIZE=8388608/SIZE=16777216/' $(SRCS)/c4dos/fs/CONFIG.SYS > $(C4DOS_BUILD_DISK)/config.sys
 	@cp $(SRCS)/c4dos/fs/AUTOEXEC.BAT $(C4DOS_BUILD_DISK)/autoexec.bat
 	@cp $(SRCS)/c4dos/fs/BUILD.BAT    $(C4DOS_BUILD_DISK)/build.bat
 	@cp $(SRCS)/c4dos/fs/LADDER.BAT   $(C4DOS_BUILD_DISK)/ladder.bat
@@ -438,7 +450,7 @@ $(C4DOS_BUILD_DISK32): c4dos32.c4r dostar32.c4r cpp32.c4r c4cc32.c4r c4ke-src.ta
                        tools-src.tar $(SRCS)/c4dos/fs/LADDER.BAT \
                        $(SRCS)/c4dos/fs/BUILD.BAT
 	@mkdir -p $(C4DOS_BUILD_DISK32)
-	@sed 's/SIZE=[0-9]*/SIZE=16777216/' $(SRCS)/c4dos/fs/CONFIG.SYS > $(C4DOS_BUILD_DISK32)/config.sys
+	@sed 's/SIZE=8388608/SIZE=16777216/' $(SRCS)/c4dos/fs/CONFIG.SYS > $(C4DOS_BUILD_DISK32)/config.sys
 	@cp $(SRCS)/c4dos/fs/AUTOEXEC.BAT $(C4DOS_BUILD_DISK32)/autoexec.bat
 	@cp $(SRCS)/c4dos/fs/BUILD.BAT    $(C4DOS_BUILD_DISK32)/build.bat
 	@cp $(SRCS)/c4dos/fs/LADDER.BAT   $(C4DOS_BUILD_DISK32)/ladder.bat
@@ -453,6 +465,43 @@ $(C4DOS_BUILD_DISK32): c4dos32.c4r dostar32.c4r cpp32.c4r c4cc32.c4r c4ke-src.ta
 	@cp c4ke.vfs.txt   $(C4DOS_BUILD_DISK32)/ 2>/dev/null || true
 	@cd $(C4DOS_BUILD_DISK32) && ls -p | grep -v '/$$' > c4dos.dir
 	@echo "c4dos-build32: ready -- boot it on c4bb, type BUILD"
+
+# The whole climb on one floppy: C4DOS boots, LADDER builds C4KE from
+# source, IX builds C4IX with the compiled compiler, and dosload boots
+# either one. docs/compiler-on-the-board.md walks it.
+C4DOS_IX_DISK := c4dos-c4ix32
+$(C4DOS_IX_DISK): c4dos32.c4r dostar32.c4r cpp32.c4r c4cc32.c4r dosload32.c4r \
+                  c4rlink32.c4r c4sc32-fused.c4r c4ke-src.tar c4ix-src.tar \
+                  tools-src.tar init32.c4r c4sh32.c4r c4ke.vfs32.c4r \
+                  $(SRCS)/c4dos/fs/LADDER.BAT $(SRCS)/c4dos/fs/IX.BAT \
+                  $(SRCS)/c4dos/fs/c4ix.objs $(SRCS)/c4dos/fs/CONFIG.SYS
+	@mkdir -p $(C4DOS_IX_DISK)
+	@sed 's/SIZE=8388608/SIZE=33554432/' $(SRCS)/c4dos/fs/CONFIG.SYS > $(C4DOS_IX_DISK)/config.sys
+	@cp $(SRCS)/c4dos/fs/AUTOEXEC.BAT $(C4DOS_IX_DISK)/autoexec.bat
+	@cp $(SRCS)/c4dos/fs/LADDER.BAT   $(C4DOS_IX_DISK)/ladder.bat
+	@cp $(SRCS)/c4dos/fs/IX.BAT       $(C4DOS_IX_DISK)/ix.bat
+	@cp $(SRCS)/c4dos/fs/c4ix.objs    $(C4DOS_IX_DISK)/
+	@cp c4ke-src.tar c4ix-src.tar tools-src.tar $(C4DOS_IX_DISK)/
+	@cp dostar32.c4r   $(C4DOS_IX_DISK)/dostar.c4r
+	@cp cpp32.c4r      $(C4DOS_IX_DISK)/cpp.c4r
+	@cp c4cc32.c4r     $(C4DOS_IX_DISK)/c4cc.c4r
+	@cp dosload32.c4r  $(C4DOS_IX_DISK)/dosload.c4r
+	@cp c4rlink32.c4r  $(C4DOS_IX_DISK)/c4rlink.c4r
+	@cp c4sc32-fused.c4r $(C4DOS_IX_DISK)/c4sc.c4r
+	@cp init32.c4r     $(C4DOS_IX_DISK)/init.c4r
+	@cp c4sh32.c4r     $(C4DOS_IX_DISK)/c4sh.c4r
+	@cp c4ke.vfs32.c4r $(C4DOS_IX_DISK)/c4ke.vfs.c4r
+	@# C4IX's own userland, prebuilt at 32 bits by build-images.sh: init
+	@# looks for c4ix-sh.c4r and the kernel it just built has no way to
+	@# make one, because libc4ix is a separate ladder.
+	@cp src/c4bb/images/disk/c4ix-sh.c4r src/c4bb/images/disk/c4ix-ls.c4r \
+	    src/c4bb/images/disk/c4ix-cat.c4r src/c4bb/images/disk/c4ix-ps.c4r \
+	    $(C4DOS_IX_DISK)/ 2>/dev/null || true
+	@cd $(C4DOS_IX_DISK) && ls -p | grep -v '/$$' > c4dos.dir
+	@echo "c4dos-c4ix32: ready -- boot it on c4bb, then LADDER, then IX"
+
+run-c4dos-c4ix32: c4dos32.c4r $(C4DOS_IX_DISK)
+	node src/c4bb/sim/cli.js -s -m 640 -i -d $(C4DOS_IX_DISK) c4dos32.c4r
 
 # The breadboard building its own kernel, interactively.
 run-c4dos-build32: c4dos32.c4r $(C4DOS_BUILD_DISK32)
@@ -717,7 +766,7 @@ test-c4sc-back: c4sc-host c4sp $(C4RLINK) $(C4M)
 C4SC_UNITS := opt lex pp parse c4r tree gen
 c4sc.c4r: c4sp $(C4LC_LISP) $(C4RLINK) $(C4SC_GEN) src/c4sc/c4sc-main.c \
           src/c4sc/body.h src/c4sc/host.h src/c4sc/scrt.h
-	$(PREPROC) src/c4sc/c4sc-main.c > .c4sc_main.c
+	$(PREPROC) -DC4SP_DOS=1 src/c4sc/c4sc-main.c > .c4sc_main.c
 	$(C4SPLC) $(SRCS)/c4sp/lisp/c4lc.lisp -O -c .c4sc_main.c .c4sc_o_main.c4o > /dev/null
 	@for u in $(C4SC_UNITS); do \
 	   echo "  unit: $$u"; \
@@ -797,7 +846,7 @@ test-c4sc-self: c4sc-self $(C4SC_GEN)
 # well, and that is the one the byte-identity check uses.
 c4sc32.c4r: c4sp32 c4rlink32 $(C4LC_LISP) $(C4SC_GEN) src/c4sc/c4sc-main.c \
             src/c4sc/body.h src/c4sc/host.h src/c4sc/scrt.h
-	$(PREPROC) src/c4sc/c4sc-main.c > .c4sc32_main.c
+	$(PREPROC) -DC4SP_DOS=1 src/c4sc/c4sc-main.c > .c4sc32_main.c
 	./c4sp32 -R -c 33554432 $(SRCS)/c4sp/lisp/c4lc.lisp -O -c .c4sc32_main.c .c4sc32_o_main.c4o > /dev/null
 	@for u in $(C4SC_UNITS); do \
 	   echo "  unit: $$u"; \
@@ -830,6 +879,23 @@ test-c4sc-board: c4sc32-fused.c4r c4sc32.c4r c4sp32 c4m32
 	 echo "  board compile: boot.c $$h bytes, same as c4lc at 32 bits"
 	@rm -rf .c4sc_bd .c4sc_bd_i.c4o
 	@echo "test-c4sc-board: OK"
+
+# The whole climb, non-interactive: C4DOS boots, IX compiles the twelve
+# C4IX modules with the compiled c4lc and links them, dosload boots the
+# kernel that came out, and C4IX reaches its own shell. About four
+# minutes of simulated hardware, so it is not in any default chain.
+# LADDER's half is pinned separately by test-c4dos-ladder32.
+test-c4dos-c4ix32: c4dos32.c4r $(C4DOS_IX_DISK)
+	printf 'IX\nRUN dosload.c4r c4ix.c4r\nls\nexit\n' \
+	  | node src/c4bb/sim/cli.js -s -m 128 -d $(C4DOS_IX_DISK) c4dos32.c4r \
+	  > .c4dos_ix.log 2>&1
+	grep -q "c4rlink: wrote .* to ram:c4ix.c4r" .c4dos_ix.log
+	grep -q "C4IX booting" .c4dos_ix.log
+	grep -q "c4ix-sh -- 'help' for builtins" .c4dos_ix.log
+	grep -q "shutdown complete" .c4dos_ix.log
+	@grep -o "c4bb: [0-9]* cycles in [0-9.]*s" .c4dos_ix.log
+	@rm -f .c4dos_ix.log
+	@echo "test-c4dos-c4ix32: OK -- C4DOS built C4IX and booted it"
 
 # c4cc's for statement. It had never worked -- see src/tests/test_for.c
 # -- so this pins it against gcc's output for the same program, which is
@@ -1412,7 +1478,7 @@ $(C4DOS_FC_DISK): c4dos-clock.c4r c4th32.c4r $(C4R_C4RLINK) dostar.c4r \
                   c4ke-src.tar dosload.c4r $(C4FC_FORTH) \
                   $(SRCS)/c4dos/fs/CONFIG.SYS $(SRCS)/c4dos/fs/CC.BAT $(SRCS)/c4dos/fs/cc.f
 	@mkdir -p $(C4DOS_FC_DISK)
-	@sed 's/SIZE=[0-9]*/SIZE=16777216/' $(SRCS)/c4dos/fs/CONFIG.SYS > $(C4DOS_FC_DISK)/config.sys
+	@sed 's/SIZE=8388608/SIZE=16777216/' $(SRCS)/c4dos/fs/CONFIG.SYS > $(C4DOS_FC_DISK)/config.sys
 	@cp $(SRCS)/c4dos/fs/CC.BAT $(C4DOS_FC_DISK)/cc.bat
 	@cp $(SRCS)/c4dos/fs/cc.f   $(C4DOS_FC_DISK)/cc.f
 	@printf 'int main(){ printf("built by c4fc, inside the machine\\n"); return 0; }\n' > $(C4DOS_FC_DISK)/hello.c
@@ -1515,7 +1581,7 @@ c4sp: $(C4SP_SRCS)
 # and this is the c4sp that every hosted run uses -- under c4m, inside
 # C4KE, and on c4bb -- so it is the one whose size and speed are felt.
 c4sp.c4r: c4sp $(C4LC_LISP) $(C4SP_SRCS)
-	$(PREPROC) src/c4sp/c4sp.c > .c4sp_lcpp.c
+	$(PREPROC) -DC4SP_DOS=1 src/c4sp/c4sp.c > .c4sp_lcpp.c
 	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O .c4sp_lcpp.c c4sp.c4r > /dev/null
 	rm -f .c4sp_lcpp.c
 # c4sp test, three parts:
@@ -1651,7 +1717,7 @@ c4ke-lc.c4r: c4sp $(C4LC_LISP) $(SRCS)/c4ke/c4ke.c
 	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O .c4lc_klc.c c4ke-lc.c4r
 	rm -f .c4lc_klc.c
 c4sp-lc.c4r: c4sp $(C4LC_LISP) $(C4SP_SRCS)
-	$(PREPROC) src/c4sp/c4sp.c > .c4lc_klc.c
+	$(PREPROC) -DC4SP_DOS=1 src/c4sp/c4sp.c > .c4lc_klc.c
 	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O .c4lc_klc.c c4sp-lc.c4r
 	rm -f .c4lc_klc.c
 c4m-lc.c4r: c4sp $(C4LC_LISP) c4m.c
@@ -1694,7 +1760,7 @@ c4sp32: $(C4SP_SRCS)
 # tools a system on that machine has to reach for, so they have to be
 # images the machine can load, not host binaries.
 c4sp32.c4r: c4sp32 $(C4LC_LISP) $(C4SP_SRCS)
-	$(PREPROC) src/c4sp/c4sp.c > .c4sp32_lcpp.c
+	$(PREPROC) -DC4SP_DOS=1 src/c4sp/c4sp.c > .c4sp32_lcpp.c
 	./c4sp32 -R src/c4sp/lisp/c4lc.lisp -O .c4sp32_lcpp.c c4sp32.c4r > /dev/null
 	rm -f .c4sp32_lcpp.c
 cpp32.c4r: c4cc32 include/c4dos.h $(SRCS)/c4dos/cpp.c
@@ -1713,6 +1779,8 @@ c4sh32.c4r: c4cc32 $(C4SH_SRCS)
 c4ke.vfs32.c4r: c4cc32 $(VFS_SRCS)
 	./c4cc32 -o $@ $(VFS_SRCS) > /dev/null
 
+c4rlink32.c4r: c4cc32 $(C4R_C4CC_SRCS) $(SRCS)/c4ke/bin/c4rlink.c
+	./c4cc32 -o $@ $(C4R_C4CC_SRCS) $(SRCS)/c4ke/bin/c4rlink.c > /dev/null
 c4rlink32: $(SRCS)/c4ke/bin/c4rlink.c $(SRCS)/c4cc/asm-c4r.c
 	gcc -m32 $(NATIVE_CC_OPTS) -Isrc/c4cc -o c4rlink32 $(SRCS)/c4ke/bin/c4rlink.c -lm
 c4bb-32bit: c4cc32 c4m32 c4sp32 c4rlink32
@@ -2442,7 +2510,7 @@ c4rs: pre
 # Marking the below rules as PHONY using singular .PHONY rule
 PHONY  = pre all clean-c4rs clean
 PHONY += test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
-PHONY += run-c4dos-build32 test-c4dos-build32 test-c4cc-for test-respfile test-b4ke
+PHONY += run-c4dos-build32 test-c4dos-build32 run-c4dos-c4ix32 test-c4dos-c4ix32 test-c4cc-for test-respfile test-b4ke
 PHONY += test-c4sc test-c4sc-run test-c4sc-lex test-c4sc-front test-c4sc-back
 PHONY += test-c4sc-image test-c4sc-self test-c4sc-board
 PHONY += test-c4dos-ladder32

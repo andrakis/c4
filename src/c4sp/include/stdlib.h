@@ -59,6 +59,8 @@ int *bool_cell (int b) { return b ? cell_true : cell_false; }
 // Lisp-style falsiness: false, nil/() and integer 0 are the falsy
 // values. A deliberate divergence from alisp, where only the atom false
 // is false. Floats are always truthy (0.0 included), as in Common Lisp.
+enum { DOS_SLURP_MAX = 1048576 };   // biggest source c4sp will read from DOS
+
 int cell_is_false (int *x) {
 	int t;
 	t = cell_type(x);
@@ -512,11 +514,24 @@ int *builtin_call (int id, int *args, int *env) {
 	if (id == B_FILE_EXISTS) {
 		pr_reset(); cell_write(a0, 0);
 		if (c4sp_vfs_get(pr_term(), &len)) return cell_true;
+		// The preprocessor asks this for every -I directory of every
+		// #include, so DOS has to answer it too -- without this, c4lc
+		// under C4DOS finds no header it did not already have.
+		if (dos_readable() && (n = dos_fopen(pr_term())) >= 0) {
+			dos_fclose(n);
+			return cell_true;
+		}
 		return bool_cell(file_exists(file_find(pr_buf, pr_len)) != 0);
 	}
 	if (id == B_FILE_PATH) {
 		pr_reset(); cell_write(a0, 0);
 		if (c4sp_vfs_get(pr_term(), &len)) return mk_string(pr_buf);
+		// A name DOS can open is already the name to use: the RAM disk
+		// is flat and exact, with none of the host's search prefixes.
+		if (dos_readable() && (n = dos_fopen(pr_term())) >= 0) {
+			dos_fclose(n);
+			return mk_string(pr_term());
+		}
 		s = file_find(pr_buf, pr_len);
 		return mk_string(s);
 	}
@@ -524,6 +539,18 @@ int *builtin_call (int id, int *args, int *env) {
 		pr_reset(); cell_write(a0, 0);
 		if ((s = c4sp_vfs_get(pr_term(), &len)))
 			return mk_string_len(s, len);
+		// Under C4DOS, ask DOS before the host: its opener checks the
+		// RAM disk first, so a source another tool just unpacked is
+		// findable. A transient's own open() cannot see it.
+		if (dos_readable()) {
+			if (!(s = malloc(DOS_SLURP_MAX))) { c4sp_error("file:read: out of memory"); return 0; }
+			if ((len = dos_slurp(pr_term(), s, DOS_SLURP_MAX - 1)) >= 0) {
+				x = mk_string_len(s, len);
+				free(s);
+				return x;
+			}
+			free(s);
+		}
 		s = file_find(pr_buf, pr_len);
 		if (!(s = rd_file(s, &len))) { c4sp_error("file:read: cannot open file"); return 0; }
 		x = mk_string_len(s, len);
@@ -581,8 +608,12 @@ int *builtin_call (int id, int *args, int *env) {
 #else
 		// The C4 VM has no write syscall, but under C4KE the kernel RAM
 		// filesystem takes the bytes -- and the kernel can execute an
-		// image stored there.
+		// image stored there. Under C4DOS the RAM disk does the same
+		// job, through the API table the loader injects, which is what
+		// lets a compiler run at the DOS rung at all.
 		pr_reset(); cell_write(a0, 0);
+		if (dos_can_write())
+			return bool_cell(dos_put(pr_term(), (char *)a1[CELL_A], a1[CELL_B]) == a1[CELL_B]);
 		if (c4sp_vfs_ok())
 			return bool_cell(!c4sp_vfs_put(pr_term(), (char *)a1[CELL_A], a1[CELL_B]));
 		c4sp_error("file:write needs C4KE (RAM filesystem) or a native build");

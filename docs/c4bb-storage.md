@@ -126,3 +126,131 @@ HOMEWARD question, not a c4bb one; the flag is all the machine owes it.
 - **a second machine, started later, with drive 1 as its drive 0, reads
   them back** — which is the whole point;
 - and the same save onto a `-d` (read-only) drive is refused.
+
+---
+
+# Part 2 — a BIOS, an install step, and a C4KE you can actually use
+
+Requested 2026-08-28, after the first walkthrough
+(`docs/climbing-the-ladder.md`) worked but showed up five gaps. In
+priority order as agreed: the walkthrough is written down, C4KE is
+missing most of its userland on the disk the player actually boots, `ls`
+is unreadable, `ps`/`top` are too wide, and the firmware should behave
+like a BIOS so that inserting a floppy and rebooting is the whole
+interface.
+
+## The shape it is aiming at
+
+    power on ─► banner
+             ─► probe and report RAM
+             ─► probe drives, boot the first with a boot image
+             ─► no media?  say so, wait, try again  ◄── player inserts a disk
+
+    C4DOS floppy in drive 0, blank in drive 1
+      LADDER          builds the toolchain and C4KE
+      INSTALL 1:      kernel + tools + SOURCES for everything C4KE and
+                      C4IX will need, onto the blank
+      eject, reboot ─► C4KE boots from drive 1
+      build its own tools, `save 1:`  ─► they persist
+      B4KE builds C4IX onto a third medium ─► reboot ─► C4IX
+
+Each rung writes the next rung's disk. Nothing has to be built twice,
+and nothing is lost when the machine stops.
+
+## Milestones
+
+- [x] **M7 — `ls` that understands directories.** ramfs is flat and
+      every name is a full path, so `ls` prints all 151 of them. It
+      should show one level: the files in a directory, and the
+      subdirectories as names ending in `/`. Bar: `ls /bin` on the C4KE
+      root disk fits in 80x25 and `ls` at the root shows directories,
+      not their contents.
+- [x] **M8 — `ps` and `top` that fit.** Most of the width is column
+      titles, not data. Bar: default output ≤ 80 columns with the
+      information that matters kept, and a `-w` for the wide form that
+      exists today.
+- [x] **M9 — C4KE's userland on the disk the player boots.** `top`,
+      `bench`, `innerbench`, `mandel`, `raycast` and the sources
+      `innerbench` needs (`c4.c`, `c4m.c`) are on `c4ke-root` and on
+      none of the climb disks. Bar: after the walkthrough's C4KE boots,
+      those all run.
+- [ ] **M10 — the firmware boots like a BIOS.** Banner, a RAM probe it
+      prints, a drive probe, boot the first medium that has a boot
+      image, and a retry loop that says `no valid media` and picks up a
+      disk inserted while it waits. Bar: start the machine with no
+      media, insert one, and it boots without being restarted.
+- [ ] **M11 — `INSTALL`.** A C4DOS transient that writes a bootable
+      medium: the kernel, the tools, and the sources for everything the
+      next two rungs will build. Bar: `LADDER`, `INSTALL 1:`, eject,
+      reboot, and C4KE comes up from drive 1 with its own source tree.
+- [ ] **M12 — the same one rung up.** C4KE builds its tools and saves
+      them; B4KE builds C4IX and installs a C4IX boot disk. Bar: three
+      power-ons, three systems, each booted from a disk the previous
+      one wrote.
+
+### M7, M8, M9 — done, with the evidence
+
+**`ls`.** ramfs stays flat; the directory structure is inferred from the
+names. Everything under the prefix is split at the next `/`, files are
+listed by what remains and the first component of anything deeper is
+listed once with a trailing `/`. Root went from 151 full paths to 26
+entries:
+
+    c4sh> ls
+    bench       benchtop    bin/        c4          c4cc        c4ke.vfs
+    c4le        c4m         c4rdump     c4rlink     c4sh        cat
+    echo        eshell      home/       init        innerbench  kill
+    ls          ps          spin        top         type        usr/
+    vfsload     xxd
+    26 entries in /
+    c4sh> ls /usr
+    lib/   lisp/  src/
+    3 entries in /usr/
+
+`ls -a` is the old flat listing. Names that are not absolute — anything
+a tool wrote into the ramfs, like c4rlink's `c4ix.c4r` — show at the top
+level too, which is where they are.
+
+**`ps`.** 170 columns to 56, and the wide one is still there under `-w`:
+
+      PID PPID S P  NI  T%  C%     TIME  CYCLES     MEM  CMD
+        0    0 W K   0 78% 77%     4254   4.0M   1.3M  kernel
+        1    0 R K   9  0%  1%       51  53.0k      0  kernel/idle
+        5    2 R U   9 10% 10%      553 553.2k      0  C4SH
+
+Two things had to change beyond the printing: `print_int_compact`,
+because `print_int_readable` spends ten columns on every number; and
+c4sh's `ps` builtin, which calls `ps()` directly rather than exec'ing
+`ps.c4r`, so it has to parse `-w` itself. **c4sh links ps.c** — a
+rebuilt `ps.c4r` alone changes nothing about what the shell prints,
+which cost an hour to notice.
+
+**The userland.** `top bench benchtop innerbench mandel raycast c4 c4m
+cat echo kill spin type xxd c4le` are now built onto the climb floppy,
+plus `load-c4r.c`, `c4m.c` and `src/c4ke/c4ke.c` under the exact names
+innerbench opens them by. Built in the disk rule with c4cc32 rather than
+copied from `c4ke-root`, because that disk is derived from this one and
+the dependency would be a circle. raycast is the exception: its enums
+have expressions in them, which is a c4lc L11 feature c4cc has not got,
+so the stock-c4 `raycast-dos32.c4r` is what goes on the disk.
+
+Verified by booting C4KE against the climb floppy: `top -b -n 1` prints
+the narrow table, `bench -q` runs, `mandel` renders in 7582 ms.
+
+## Notes taken while scoping
+
+- **The tools are not missing, the disk is.** `src/c4bb/images/c4ke-root`
+  already carries `top`, `bench`, `innerbench`, `mandel`, `raycast`,
+  `c4.c4r`, `c4m.c4r` and the sources. `c4dos-c4ix32` — the disk the
+  walkthrough boots — carries almost none of it. M9 is mostly a
+  packaging question, and M11 is the answer to it: the player *installs*
+  them rather than the floppy having shipped with them.
+- **Console width is a HOMEWARD decision, not a c4bb one.** The CLI
+  writes to the host terminal and has no width. Widening the game's
+  console to 180x25 and narrowing `ps` are independent, and both are
+  worth doing — the second one helps at any width.
+- **The firmware already has what a BIOS needs except a loader.**
+  `fw.c` has malloc, a printf, and the device registers; what it cannot
+  do is load a `.c4r` and jump into it, which is what `sim/loader.js`
+  does from the host today. `src/c4dos/dosload.c` is that loader in
+  strict c4, so the code to copy exists.

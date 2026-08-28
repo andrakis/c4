@@ -93,6 +93,69 @@ static void print_int_readable (int n) {
 	}
 }
 
+// Seven columns, never more. print_int_readable spends ten on every
+// number and the columns it feeds are three characters of data behind
+// twelve of title -- which is how the default listing came to be 170
+// wide on a console that is 80.
+static void print_int_compact (int n) {
+	int table_pos, x, rem;
+	table_pos = rem = 0;
+	if (n < 0) { printf("      -"); return; }
+	while (table_pos < readable_int_max && (x = n / 1000) > 0) {
+		rem = n % 1000;
+		n = x;
+		++table_pos;
+	}
+	if (readable_int_table[table_pos] != ' ')
+		printf("%4ld.%1d%c", n, rem / 100, readable_int_table[table_pos]);
+	else
+		printf("%7ld", n);
+}
+
+// 0 is the narrow listing that fits a real console; -w restores the one
+// that was here first, which has four more columns and needs 170.
+// Zeroed in a constructor rather than left to the loader: this file is
+// #included into top.c and init.c as well as built on its own, and a
+// global that is only sometimes zero is the kind of bug that shows up
+// as one program's flag being set by another.
+int ps_wide;
+static int __attribute__((constructor)) ps_wide_init () { ps_wide = 0; return 0; }
+
+// The narrow listing. Widths are fixed rather than measured: a column
+// that changes width between refreshes makes `top` unreadable, and the
+// compact number printer already handles anything that does not fit.
+//
+//   S  state, one letter    P  privilege, K or U
+//   T% wall-clock share     C% cycle share
+//
+static void ps_print_narrow (int task_count, int mem_total) {
+	int *t;
+	int  i;
+
+	printf("  PID PPID S P  NI  T%%  C%%     TIME  CYCLES     MEM  CMD\n");
+	ps_count_running = 0;
+	t = __ps_tasks;
+	i = 0;
+	while (++i < task_count) {
+		if (*t) {
+			printf("%5d%5d ", t[TASK_ID], t[TASK_PARENT]);
+			if (*t & STATE_WAITING && t[TASK_WAITSTATE] == WSTATE_SYSCALL) printf("S");
+			else kern_print_task_state(*t);
+			printf(" %c%4d%3d%%%3d%%", prio_table[t[TASK_PRIVS]], t[TASK_NICE],
+			       t[TASK_USAGE_T], t[TASK_USAGE_C]);
+			printf("%9ld", t[TASK_TIMEMS]);
+			print_int_compact(t[TASK_CYCLES]);
+			print_int_compact(t[TASK_MEM_ALLOC]);
+			printf("  %s\n", (char *)t[TASK_CMD]);
+			++ps_count_running;
+		}
+		t = t + TASK__Sz;
+	}
+	printf("total memory ");
+	print_int_compact(mem_total);
+	printf("\n");
+}
+
 int time_refresh;
 void ps_real () {
 	int *t, i, l, c, x;
@@ -279,6 +342,20 @@ void ps_real () {
 	printf("\nTasks: %3d total, %d running, %d waiting, %d zombie, %d free\n",
 	       tasks_loaded - 1, tasks_running, tasks_waiting, tasks_zombie, tasks_free);
 	// Print usage
+	if (!ps_wide) {
+		printf("Usage: %3d%% cpu, %d%% kernel, %dms idle, ",
+		       c4_plain ? cpu_usage_c : cpu_usage_t, cpu_usage_k, cpu_usage_i);
+		if (__ps_interval_time == 0) print_int_compact(cpu_total_c);
+		else {
+			l = time_refresh - __ps_interval_time;
+			if (l) print_int_compact(cpu_total_c * 100 / (l / 10));
+			else   printf("%7d", l);
+		}
+		printf(" cyc/s\n");
+		__ps_interval_time = time_refresh;
+		ps_print_narrow(task_count, mem_total);
+		return;
+	}
 	if (c4_plain)
 		printf("Usage: %3d%% (%d%% kernel cycles, %dms idle time, ",
 		       cpu_usage_c, cpu_usage_k, cpu_usage_i);
@@ -450,6 +527,12 @@ void ps_uninit () {
 
 #ifndef PS_NOMAIN
 int main (int argc, char **argv) {
+	int i;
+	i = 1;
+	while (i < argc) {
+		if (argv[i][0] == '-' && argv[i][1] == 'w') ps_wide = 1;
+		++i;
+	}
 	if (ps_init()) return -1;
 	ps();
 	ps_uninit();

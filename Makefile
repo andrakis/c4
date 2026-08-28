@@ -474,7 +474,7 @@ $(C4DOS_IX_DISK): c4dos32.c4r dostar32.c4r cpp32.c4r c4cc32.c4r dosload32.c4r \
                   c4rlink32.c4r c4sc32-fused.c4r c4ke-src.tar c4ix-src.tar \
                   tools-src.tar init32.c4r c4sh32.c4r c4ke.vfs32.c4r \
                   b4ke32.c4r tar32.c4r ls32.c4r ps32.c4r \
-                  bbsave32.c4r save32.c4r \
+                  bbsave32.c4r save32.c4r raycast-dos32.c4r \
                   $(BIN_D)/c4ix.b4k \
                   $(SRCS)/c4dos/fs/LADDER.BAT $(SRCS)/c4dos/fs/IX.BAT \
                   $(SRCS)/c4dos/fs/c4ix.objs $(SRCS)/c4dos/fs/CONFIG.SYS
@@ -509,6 +509,30 @@ $(C4DOS_IX_DISK): c4dos32.c4r dostar32.c4r cpp32.c4r c4cc32.c4r dosload32.c4r \
 	@# writable medium in the machine -- `cli.js -w dir`.
 	@cp bbsave32.c4r   $(C4DOS_IX_DISK)/bbsave.c4r
 	@cp save32.c4r     $(C4DOS_IX_DISK)/save.c4r
+	@# C4KE's own userland. It was on c4ke-root and on none of the disks
+	@# a player ever boots, so the kernel they built came up with a
+	@# shell and almost nothing to run in it. Built here rather than
+	@# copied from another disk, because that disk is derived from this
+	@# one and the dependency would be a circle.
+	@for t in cat echo kill spin type xxd c4le; do \
+	   ./c4cc32 -o $(C4DOS_IX_DISK)/$$t.c4r $(U0) $(BIN_D)/$$t.c > /dev/null || exit 1; \
+	 done
+	@./c4cc32 -o $(C4DOS_IX_DISK)/top.c4r $(U0) $(BIN_D)/ps.c $(BIN_D)/top.c > /dev/null
+	@./c4cc32 -o $(C4DOS_IX_DISK)/bench.c4r $(U0) $(SRCS)/bench/bench.c > /dev/null
+	@./c4cc32 -o $(C4DOS_IX_DISK)/benchtop.c4r $(U0) $(BIN_D)/ps.c $(SRCS)/bench/benchtop.c > /dev/null
+	@./c4cc32 -o $(C4DOS_IX_DISK)/innerbench.c4r $(U0) $(SRCS)/bench/innerbench.c > /dev/null
+	@./c4cc32 -o $(C4DOS_IX_DISK)/mandel.c4r $(U0) $(TESTS)/mandel.c > /dev/null
+	@# raycast needs c4lc: its enums have expressions in them, which is
+	@# an L11 feature c4cc does not have. The DOS build is stock-c4
+	@# opcodes only, so it runs on every rung from here up.
+	@cp raycast-dos32.c4r $(C4DOS_IX_DISK)/raycast.c4r
+	@./c4cc32 -o $(C4DOS_IX_DISK)/c4.c4r $(U0) c4.c > /dev/null
+	@$(PREPROC) c4m.c | ./c4cc32 -o $(C4DOS_IX_DISK)/c4m.c4r - > /dev/null
+	@# innerbench compiles a whole C4KE inside a nested c4m, so it wants
+	@# these three by the exact names it opens them with.
+	@mkdir -p $(C4DOS_IX_DISK)/src/c4ke
+	@cp src/c4ke/c4ke.c $(C4DOS_IX_DISK)/src/c4ke/c4ke.c
+	@cp load-c4r.c c4m.c $(C4DOS_IX_DISK)/
 	@# C4IX's own userland, prebuilt at 32 bits by build-images.sh: init
 	@# looks for c4ix-sh.c4r and the kernel it just built has no way to
 	@# make one, because libc4ix is a separate ladder.

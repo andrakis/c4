@@ -83,7 +83,10 @@ int main(int argc, char **argv) {
         while (i < n) {
             base = i * TASKINFO_WORDS;
             was = top_prev(snap[base]);
+            // The low word carries at a billion (sched.c), so a delta
+            // across a carry looks negative. It is one billion more.
             delta = (was < 0) ? snap[base + 6] : snap[base + 6] - was;
+            if (delta < 0) delta = delta + 1000000000;
             if (delta > 0) busy = busy + delta;
             ++i;
         }
@@ -105,7 +108,10 @@ int main(int argc, char **argv) {
         while (i < n) {
             base = i * TASKINFO_WORDS;
             was = top_prev(snap[base]);
+            // The low word carries at a billion (sched.c), so a delta
+            // across a carry looks negative. It is one billion more.
             delta = (was < 0) ? snap[base + 6] : snap[base + 6] - was;
+            if (delta < 0) delta = delta + 1000000000;
             if (delta < 0) delta = 0;
             pct = delta * 100 / busy;
             upadnum(snap[base], 4);
@@ -114,8 +120,8 @@ int main(int argc, char **argv) {
             upadstr(snap[base + 3] ? "user" : "kernel", 8);
             upadnum(pct, 7);
             upadcycles(delta, 11);
-            upadcycles(snap[base + 6], 11);
-            uprintf(" %s\n", (char *)(snap + base + 7));
+            upadcycles2(snap[base + 7], snap[base + 6], 11);
+            uprintf(" %s\n", (char *)(snap + base + 8));
             ++i;
         }
 

@@ -329,6 +329,7 @@ enum {
 	TASK_DBGSTACK,    // int *, stack size for debug handler
 	TASK_STACK_LOW,   // int *, lowest SP ever observed for this task
 	TASK_STACK_BROKEN,// int, non-zero once the stack guard has been reported
+	TASK_CYCLES_HI,   // int, billions of cycles; see kernel_add_cycles
 	TASK_MEM_HEAD,    // int *, head of this task's tracked allocation list
 	TASK_LOADING,     // int, set until the task enters the program's main
 	TASK__Sz          // task structure size
@@ -376,6 +377,7 @@ enum {
 	KTE_TASK_PRIVS,  // int, see PRIV_*
 	KTE_TASK_NICE,   // int
 	KTE_TASK_CYCLES, // int
+	KTE_TASK_CYCLES_HI, // int, billions
 	KTE_TASK_TIMEMS, // int
 	KTE_TASK_TRAPS,  // int
 	KTE_TASK_STACK,  // int
@@ -913,6 +915,29 @@ enum { MAX_BALANCE_RANGE = 2 };
 //}
 
 // Cycle count helper
+// Cycles, in two words, because one is not enough.
+//
+// The VM's counter is 32 bits on a 32-bit machine and a single C4IX
+// build passes 2^31 several times over -- which showed up in ps as a
+// negative number of cycles. Rather than pretend to have a 64-bit type
+// this system does not have, the count is kept as
+//
+//     cycles = TASK_CYCLES_HI * 1000000000 + TASK_CYCLES
+//
+// -- decimal carry, so printing it is two ordinary numbers and no
+// arithmetic wider than an int ever happens. A slice is around a
+// million cycles, so the loop below almost always runs once.
+static void kernel_add_cycles (int *t, int d) {
+	int lo;
+	if (d < 0) return;              // a wrapped sample: not a real slice
+	lo = t[TASK_CYCLES] + d;
+	while (lo >= 1000000000) {
+		lo = lo - 1000000000;
+		++t[TASK_CYCLES_HI];
+	}
+	t[TASK_CYCLES] = lo;
+}
+
 static int cycles_difference () {
 	int c, d;
 	c = __c4_cycles();
@@ -1093,14 +1118,14 @@ static int time_difference () {
 #if NO_INLINE
 // Update the current task's timekeeping details.
 static void current_task_timekeeping () {
-	kernel_task_current[TASK_CYCLES] = kernel_task_current[TASK_CYCLES] + cycles_difference();
+	kernel_add_cycles(kernel_task_current, cycles_difference());
 	kernel_task_current[TASK_TIMEMS] = kernel_task_current[TASK_TIMEMS] + time_difference();
 	++kernel_task_current[TASK_TRAPS];
 }
 
 // Update the kernel tasks' timekeeping details.
 static void kernel_task_timekeeping () {
-	kernel_tasks[TASK_CYCLES] = kernel_tasks[TASK_CYCLES] + cycles_difference();
+	kernel_add_cycles(kernel_tasks, cycles_difference());
 	kernel_tasks[TASK_TIMEMS] = kernel_tasks[TASK_TIMEMS] + time_difference();
 }
 
@@ -1117,8 +1142,8 @@ static void trap_exit() {
 }
 #else
 // TODO: c4m doesn't understand macro continuations, these must be on one line
-#define current_task_timekeeping() kernel_task_current[TASK_CYCLES] = kernel_task_current[TASK_CYCLES] + cycles_difference(); kernel_task_current[TASK_TIMEMS] = kernel_task_current[TASK_TIMEMS] + time_difference(); ++kernel_task_current[TASK_TRAPS];
-#define kernel_task_timekeeping() kernel_tasks[TASK_CYCLES] = kernel_tasks[TASK_CYCLES] + cycles_difference(); kernel_tasks[TASK_TIMEMS] = kernel_tasks[TASK_TIMEMS] + time_difference();
+#define current_task_timekeeping() kernel_add_cycles(kernel_task_current, cycles_difference()); kernel_task_current[TASK_TIMEMS] = kernel_task_current[TASK_TIMEMS] + time_difference(); ++kernel_task_current[TASK_TRAPS];
+#define kernel_task_timekeeping() kernel_add_cycles(kernel_tasks, cycles_difference()); kernel_tasks[TASK_TIMEMS] = kernel_tasks[TASK_TIMEMS] + time_difference();
 #define trap_enter()          critical_path_start(); current_task_timekeeping();
 #define trap_exit()           kernel_task_timekeeping(); critical_path_end();
 #endif
@@ -3135,6 +3160,7 @@ static void kern_tasks_export_update_real () {
 			// Update these values every cycle
 			target[KTE_TASK_WAITSTATE] = t[TASK_WAITSTATE];
 			target[KTE_TASK_CYCLES] = t[TASK_CYCLES];
+			target[KTE_TASK_CYCLES_HI] = t[TASK_CYCLES_HI];
 			target[KTE_TASK_TIMEMS] = t[TASK_TIMEMS];
 			target[KTE_TASK_TRAPS]  = t[TASK_TRAPS];
 			target[KTE_TASK_STACK]  = (t[TASK_BASE] ? (TASK_STACK_GUARD + TASK_STACK_SIZE - (t[TASK_REG_SP] - t[TASK_BASE])) : 0);
@@ -3929,6 +3955,7 @@ int main (int argc, char **argv) {
 	kernel_task_current[TASK_EXIT_CODE] = 0;
 	kernel_task_current[TASK_TIMEMS] = 0;
 	kernel_task_current[TASK_CYCLES] = __c4_cycles();
+	kernel_task_current[TASK_CYCLES_HI] = 0;
 	kernel_task_current[TASK_TRAPS] = 0;
 	kernel_task_current[TASK_C4R] = 0;
 	kernel_task_current[TASK_MBOX] = kernel_task_current[TASK_MBOX_SZ] = 0;
@@ -4057,6 +4084,7 @@ int main (int argc, char **argv) {
 	// Save cycle count
 	kernel_last_cycle = __c4_cycles() - measurement_cycles;
 	kernel_tasks[TASK_CYCLES] = kernel_last_cycle;
+	kernel_tasks[TASK_CYCLES_HI] = 0;
 	if (kernel_verbosity >= VERB_MIN) {
 		printf("c4ke: Kernel ready in %ldms after ", kernel_schedule_time - kernel_start_time);
 		print_int_readable(kernel_last_cycle);

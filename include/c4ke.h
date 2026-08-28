@@ -47,6 +47,7 @@ enum {
 	KTE_TASK_PRIVS,    // int, PRIV_*
 	KTE_TASK_NICE,     // int
 	KTE_TASK_CYCLES,   // int
+	KTE_TASK_CYCLES_HI,// int, billions; total = HI * 1000000000 + CYCLES
 	KTE_TASK_TIMEMS,   // int
 	KTE_TASK_TRAPS,    // int
 	KTE_TASK_STACK,    // int

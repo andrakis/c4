@@ -145,12 +145,14 @@ int sys_taskinfo(int index, int *out) {
     out[3] = t->privs;
     out[4] = t->nsyscalls;
     out[5] = t->ntraps;
-    // The running task's own total does not include the slice it is
-    // in the middle of, so add it -- otherwise ps always reports
-    // itself as having used nothing.
+    // The running task's own total does not include the slice it is in
+    // the middle of, so add it -- otherwise ps always reports itself as
+    // having used nothing. Carried the same way the counter is kept.
     out[6] = t->cycles + ((t == sched_current())
         ? (__c4_cycles() - t->cycles_in) : 0);
-    dst = (char *)(out + 7);
+    out[7] = t->cycles_hi;
+    while (out[6] >= 1000000000) { out[6] = out[6] - 1000000000; ++out[7]; }
+    dst = (char *)(out + 8);
     i = 0;
     while (i < TASK_NAME_MAX) { dst[i] = t->name[i]; ++i; }
     return 1;

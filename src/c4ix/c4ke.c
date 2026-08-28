@@ -239,6 +239,11 @@ static void ck_export_fill(int *kti) {
         kte[CK_KTE_PRIVS] = ck_privs_out(t->privs);
         kte[CK_KTE_NICE] = 0;
         kte[CK_KTE_CYCLES] = cyc;
+        kte[CK_KTE_CYCLES_HI] = 0;
+        while (kte[CK_KTE_CYCLES] >= 1000000000) {
+            kte[CK_KTE_CYCLES] = kte[CK_KTE_CYCLES] - 1000000000;
+            ++kte[CK_KTE_CYCLES_HI];
+        }
         kte[CK_KTE_TIMEMS] = cyc / ck_cpms;
         kte[CK_KTE_TRAPS] = t->ntraps;
         // BYTES USED, not the base address: the stack grows down from

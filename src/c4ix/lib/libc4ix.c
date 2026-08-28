@@ -173,6 +173,35 @@ int upadnum(int v, int width) {
 }
 
 // Cycle counts get large fast, so scale them the way C4KE's ps does.
+//
+// The two-word form: hi counts BILLIONS (sched.c's sched_add_cycles),
+// so a value with a high word is already at least giga and is scaled
+// from there. Nothing here is wider than an int, which is the point --
+// one word overflowed at 2^31 and printed a negative number of cycles.
+int upadcycles2(int hi, int lo, int width) {
+    char buf[32];
+    int whole, frac, n;
+    char suffix;
+
+    if (!hi) return upadcycles(lo, width);
+
+    whole = hi;
+    frac = lo / 1000000;                   // three decimals of the billions
+    suffix = 'G';
+    if (hi >= 1000000) { whole = hi / 1000000; frac = (hi / 1000) - whole * 1000; suffix = 'P'; }
+    else if (hi >= 1000) { whole = hi / 1000; frac = hi - whole * 1000; suffix = 'T'; }
+
+    n = upad_digits(whole, buf);
+    buf[n] = '.'; ++n;
+    buf[n] = '0' + frac / 100; ++n;
+    buf[n] = '0' + (frac / 10) - (frac / 100) * 10; ++n;
+    buf[n] = '0' + frac - (frac / 10) * 10; ++n;
+    buf[n] = suffix; ++n;
+    buf[n] = ' '; ++n;
+    upad_emit(buf, n, width + 1, 1);
+    return (n > width) ? n : width;
+}
+
 int upadcycles(int v, int width) {
     char buf[32];
     int whole, frac, n;

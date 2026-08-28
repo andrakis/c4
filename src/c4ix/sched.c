@@ -32,6 +32,21 @@ static int sched_on_c4m;
 static int sched_interval;   // preemption interval, 0 = cooperative only
 static int sched_lockdepth;
 static int sched_tramp;      // address of the trampoline's LEV
+
+// Add a slice to a task's cycle count, carrying into the high word.
+//
+// cycles = cycles_hi * 1000000000 + cycles (c4ix.h). Decimal carry
+// rather than a 64-bit type this system does not have, so printing it
+// is two ordinary numbers and nothing here is ever wider than an int.
+// A negative delta means the VM's counter wrapped between samples,
+// which is not a slice anyone ran.
+static void sched_add_cycles(struct task *t, int d) {
+    int lo;
+    if (d < 0) return;
+    lo = t->cycles + d;
+    while (lo >= 1000000000) { lo = lo - 1000000000; ++t->cycles_hi; }
+    t->cycles = lo;
+}
 static int sched_intrap;     // inside the trap handler: no re-entry
 
 int sched_switches;          // context switches since boot
@@ -269,7 +284,7 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
         // start the incoming task's clock. This is the accounting ps
         // and top report, and it is exact: the VM counter is the
         // same one the scheduler runs on.
-        t->cycles = t->cycles + (__c4_cycles() - t->cycles_in);
+        sched_add_cycles(t, __c4_cycles() - t->cycles_in);
         n->cycles_in = __c4_cycles();
         // the mask travels with the task, not with the machine
         t->lockdepth = sched_lockdepth;
@@ -423,7 +438,7 @@ static void coop_switch(struct task *next) {
     *bp = (int)f;
     *(bp + 1) = sched_tramp;
 
-    old->cycles = old->cycles + (__c4_cycles() - old->cycles_in);
+    sched_add_cycles(old, __c4_cycles() - old->cycles_in);
     next->cycles_in = __c4_cycles();
     old->lockdepth = sched_lockdepth;
     sched_lockdepth = next->lockdepth;

@@ -24,6 +24,7 @@ enum {
 	TASK_USAGE_C,
 	TASK_TIMEMS,
 	TASK_CYCLES,
+	TASK_CYCLES_HI,
 	TASK_TRAPS,
 	TASK_STACK,
 	TASK_MEM_ALLOC,
@@ -112,6 +113,42 @@ static void print_int_compact (int n) {
 		printf("%7ld", n);
 }
 
+// A cycle count that outgrew one word.
+//
+// The kernel keeps it as hi * 1000000000 + lo (c4ke.c's
+// kernel_add_cycles) because the VM's counter is 32 bits and a real
+// build passes 2^31 several times over -- which used to print as a
+// negative number. Nothing here is wider than an int: the high word is
+// already in billions, so it is scaled through G, T and P directly.
+static void print_cycles_compact (int hi, int lo) {
+	int table_pos, x, rem;
+	if (!hi) { print_int_compact(lo); return; }
+	// hi counts billions, which is 'G' -- three steps up the table.
+	table_pos = 3;
+	rem = lo / 100000000;                 // first decimal of the billions
+	while (table_pos < readable_int_max && (x = hi / 1000) > 0) {
+		rem = (hi % 1000) / 100;
+		hi = x;
+		++table_pos;
+	}
+	printf("%4ld.%1d%c", hi, rem, readable_int_table[table_pos]);
+}
+
+// The same, in print_int_readable's ten columns, for the wide listing.
+static void print_cycles_readable (int hi, int lo) {
+	int table_pos, x, rem;
+	if (!hi) { print_int_readable(lo); return; }
+	table_pos = 3;                        // hi counts billions: 'G'
+	rem = lo / 1000000;                   // three decimals of the billions
+	while (table_pos < readable_int_max && (x = hi / 1000) > 0) {
+		rem = hi % 1000;
+		hi = x;
+		++table_pos;
+	}
+	printf("%4ld.%03d %c", hi, rem, readable_int_table[table_pos]);
+}
+
+
 // 0 is the narrow listing that fits a real console; -w restores the one
 // that was here first, which has four more columns and needs 170.
 // Zeroed in a constructor rather than left to the loader: this file is
@@ -144,7 +181,7 @@ static void ps_print_narrow (int task_count, int mem_total) {
 			printf(" %c%4d%3d%%%3d%%", prio_table[t[TASK_PRIVS]], t[TASK_NICE],
 			       t[TASK_USAGE_T], t[TASK_USAGE_C]);
 			printf("%9ld", t[TASK_TIMEMS]);
-			print_int_compact(t[TASK_CYCLES]);
+			print_cycles_compact(t[TASK_CYCLES_HI], t[TASK_CYCLES]);
 			print_int_compact(t[TASK_MEM_ALLOC]);
 			printf("  %s\n", (char *)t[TASK_CMD]);
 			++ps_count_running;
@@ -197,6 +234,7 @@ void ps_real () {
 			t[TASK_TIMEMS]      = ti[KTE_TASK_TIMEMS];
 			t[TASK_LAST_CYCLES] = t[TASK_CYCLES];
 			t[TASK_CYCLES]      = ti[KTE_TASK_CYCLES];
+			t[TASK_CYCLES_HI]   = ti[KTE_TASK_CYCLES_HI];
 			t[TASK_LAST_TRAPS]  = t[TASK_TRAPS];
 			t[TASK_TRAPS]       = ti[KTE_TASK_TRAPS];
 			t[TASK_STACK]       = ti[KTE_TASK_STACK];
@@ -426,7 +464,7 @@ void ps_real () {
 			printf("      ");
 			print_int_readable(t[TASK_DIFF_TRAPS]);
 			printf("   %ld%*s    ", t[TASK_TIMEMS], 5 + __ps_cols[COL_TIMETOTAL] - col[COL_TIMETOTAL], " ");
-			print_int_readable(t[TASK_CYCLES]);
+			print_cycles_readable(t[TASK_CYCLES_HI], t[TASK_CYCLES]);
 			printf("  ");
 			print_int_readable(t[TASK_TRAPS]);
 			print_int_readable(t[TASK_STACK]);

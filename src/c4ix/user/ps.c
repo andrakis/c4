@@ -17,7 +17,7 @@ static char *ps_state(int st) {
 
 int main(int argc, char **argv) {
     int info[TASKINFO_WORDS];
-    int i, total, stable;
+    int i, total, total_hi, stable;
 
     // -s omits the counters. They are exact and useful, but they
     // shift with every change to the kernel, so a test that pins
@@ -38,6 +38,7 @@ int main(int argc, char **argv) {
     }
     uprintf(" NAME\n");
     total = 0;
+    total_hi = 0;
     i = 0;
     while (utaskinfo(i, info)) {
         upadnum(info[0], 4);
@@ -47,16 +48,18 @@ int main(int argc, char **argv) {
         if (!stable) {
             upadnum(info[4], 8);
             upadnum(info[5], 9);
-            upadcycles(info[6], 11);
+            upadcycles2(info[7], info[6], 11);
         }
-        uprintf(" %s\n", (char *)(info + 7));
+        uprintf(" %s\n", (char *)(info + 8));
         total = total + info[6];
+        total_hi = total_hi + info[7];
+        while (total >= 1000000000) { total = total - 1000000000; ++total_hi; }
         ++i;
     }
     if (stable) uprintf("%d tasks\n", i);
     else {
         uprintf("%d tasks, ", i);
-        upadcycles(total, 0);
+        upadcycles2(total_hi, total, 0);
         uprintf("cycles accounted\n");
     }
     return 0;

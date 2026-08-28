@@ -72,7 +72,12 @@ enum {
 };
 // taskinfo fills, in order: id, parent, state, privs, nsyscalls,
 // ntraps, cycles, then the name packed into the remaining words.
-enum { TASKINFO_WORDS = 9 };
+// One task's worth of what utaskinfo reports: eight integers, then the
+// name as TASK_NAME_MAX bytes. Sized generously and in WORDS, because
+// how many words sixteen bytes is depends on the machine -- at 9 this
+// was two words short on a 32-bit host and utaskinfo wrote past the
+// caller's array.
+enum { TASKINFO_WORDS = 24 };
 enum { FD_STDIN = 0, FD_STDOUT = 1, FD_STDERR = 2, FD_MAX = 16 };
 
 int  sys_dispatch(int num, int *args);   // args[0]=first, args[1]=second...
@@ -288,7 +293,13 @@ struct task {
     struct vnode *cwd;         // working directory, inherited on spawn
     int  lockdepth;            // preemption-mask depth, saved across switches
     int  parent;               // task id that spawned this one
-    int  cycles;               // VM cycles this task has been given
+    // Cycles, in two words: cycles_hi * 1000000000 + cycles. One is not
+    // enough -- the VM's counter is 32 bits on a 32-bit machine and a
+    // single C4IX build passes 2^31 several times over, which used to
+    // print as a NEGATIVE number of cycles in ps. Decimal carry, so
+    // nothing here is ever wider than an int (sched_add_cycles).
+    int  cycles;               // VM cycles this task has been given, low
+    int  cycles_hi;            // ... and billions
     int  cycles_in;            // counter value when it last started running
     int  ntraps;               // traps taken on its behalf
     // C4KE compatibility state (c4ke.c). Zero for every task that
@@ -359,8 +370,13 @@ enum {
     CK_KTE_STATE = 0, CK_KTE_WAITSTATE = 1, CK_KTE_ID = 2,
     CK_KTE_PARENT = 3, CK_KTE_NAME = 4, CK_KTE_NAMELEN = 5,
     CK_KTE_PRIORITY = 6, CK_KTE_PRIVS = 7, CK_KTE_NICE = 8,
-    CK_KTE_CYCLES = 9, CK_KTE_TIMEMS = 10, CK_KTE_TRAPS = 11,
-    CK_KTE_STACK = 12, CK_KTE_ALLOC = 13, CK_KTE__Sz = 14
+    // CYCLES_HI is billions: C4KE keeps the count in two words because
+    // one overflows at 2^31 and printed a negative number of cycles
+    // (c4ke.c's kernel_add_cycles). The layout has to match include/u0.h
+    // exactly -- this is C4KE's ABI, being spoken by a different kernel.
+    CK_KTE_CYCLES = 9, CK_KTE_CYCLES_HI = 10, CK_KTE_TIMEMS = 11,
+    CK_KTE_TRAPS = 12, CK_KTE_STACK = 13, CK_KTE_ALLOC = 14,
+    CK_KTE__Sz = 15
 };
 // Bit flags, tested with & by ps -- not small integers like TS_*.
 enum {

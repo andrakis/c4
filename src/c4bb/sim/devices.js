@@ -68,7 +68,13 @@ export const PIT_MS      = 0x1a0;  // r/w: tick every N real ms (0 = off)
 
 // c4_info() capability bits (c4m.c:206)
 export const C4I_C4M = 0x2, C4I_HRT = 0x10, C4I_SIG = 0x20,
-             C4I_FLT = 0x40, C4I_PROT = 0x80, C4I_TRAPH = 0x400;
+             C4I_FLT = 0x40, C4I_PROT = 0x80, C4I_TRAPH = 0x400,
+// This machine has the clock and timer registers (RTC_MS, PIT_MS). A
+// kernel cannot just poke 0x19c to find out, because native c4m has no
+// device window there and the poke would be a wild access -- so the
+// capability is announced the way every other one is, and a kernel that
+// does not see the bit keeps counting cycles.
+             C4I_PIT = 0x800;
 
 // How fast the machine thinks it is. This was 1000 -- a 1 MHz machine --
 // while the simulator actually executes fifteen to twenty million
@@ -305,7 +311,7 @@ export class Devices {
       case INFO_REG: {
         // mirrors native c4_info() | TRAPH (c4m.c:1033, 1814)
         const m = this.machine;
-        return C4I_C4M | C4I_HRT | C4I_SIG | C4I_FLT | C4I_PROT |
+        return C4I_C4M | C4I_HRT | C4I_SIG | C4I_FLT | C4I_PROT | C4I_PIT |
                (m && m.trapHandler ? C4I_TRAPH : 0);
       }
       case TRAPH_REG:    return this.machine.trapHandler | 0;

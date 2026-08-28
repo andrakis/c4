@@ -513,9 +513,60 @@ costs nothing measurable.
   does from the host today. `src/c4dos/dosload.c` is that loader in
   strict c4, so the code to copy exists.
 
+### The cycle columns — implemented 2026-08-28
+
+Both kernels now keep the count in **two words**, decimal carry:
+
+    cycles = cycles_hi * 1000000000 + cycles
+
+Decimal rather than binary because printing it is then two ordinary
+numbers and nothing is ever wider than an `int` — this system has no
+64-bit type and adding one for a counter would be the wrong trade.
+`kernel_add_cycles` (C4KE) and `sched_add_cycles` (C4IX) carry on the
+way in; `print_cycles_compact` / `print_cycles_readable` (C4KE's ps) and
+`upadcycles2` (libc4ix) print the pair, scaling from G because the high
+word is already in billions. A negative delta means the VM's counter
+wrapped between samples and is dropped: it is not a slice anyone ran.
+
+**It is an ABI change, and it touched four places that all had to agree**
+— `include/u0.h` and `include/c4ke.h` (C4KE's exported task record),
+`src/c4ix/c4ix.h`'s `CK_KTE_*` (the same record, spoken by C4IX's C4KE
+compatibility layer), and `TASKINFO_WORDS` for C4IX's own. Getting the
+third wrong segfaults C4IX the moment it runs C4KE's `ps`, which is
+exactly what happened.
+
+**A pre-existing bug found on the way.** `TASKINFO_WORDS` was 9: seven
+integers plus `TASK_NAME_MAX` bytes of name. Sixteen bytes is two words
+on a 64-bit host and **four** on the board — so on 32 bits `utaskinfo`
+wrote two words past the caller's array, every call. It is sized in
+words now, generously, with a comment saying why.
+
+`top`'s per-interval delta also had to learn about the carry: a delta
+taken across one looks negative and is a billion more.
+
+Goldens regenerated and read before committing: `x5-c4m.txt` (the demo's
+ping/pong interleaving moved, twice, because the task struct changed
+size — stable across three runs each time), `ck-ps.txt` and
+`ck-top.txt` (which had not been regenerated since `ps` went narrow).
+
+### Detecting the clock
+
+`c4_info()` on the board sets **`C4I_PIT` (0x800)**, and `bb_has_clock()`
+in `include/c4bb_info.h` tests it. **A separate header, deliberately:**
+everything in `c4bb.h` is a plain load or store and costs no opcode
+above `EXIT`, which is what lets a C4DOS-rung program read the clock;
+asking `c4_info()` is `INFO`, opcode 57, and c4cc compiles every
+function in a header whether it is called or not — `reboot.c4r` went
+over budget the moment the check shared a file with the accessors, and
+`make test-c4bb-baseops` said so. A kernel cannot simply poke `0x19c` to
+find out whether the registers exist: **native c4m has no device window
+there**, so the poke is a wild access rather than a zero. The capability
+is announced, and anything that does not see the bit keeps doing what it
+did before — which is what C4KE will do when it moves onto the PIT.
+
 ---
 
-## Examined, not fixed: C4IX's cycle column goes negative
+## Examined, and now fixed: C4IX's cycle column went negative
 
 Asked for 2026-08-28. The finding, so it does not have to be found
 again.

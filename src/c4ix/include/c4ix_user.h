@@ -22,7 +22,12 @@ enum {
 };
 // taskinfo record, in order: id, parent, state, privs, nsyscalls,
 // ntraps, cycles, then a 16-byte name
-enum { TASKINFO_WORDS = 9 };
+// One task's worth of what utaskinfo reports: eight integers, then the
+// name as TASK_NAME_MAX bytes. Sized generously and in WORDS, because
+// how many words sixteen bytes is depends on the machine -- at 9 this
+// was two words short on a 32-bit host and utaskinfo wrote past the
+// caller's array.
+enum { TASKINFO_WORDS = 24 };
 enum { TS_READY = 1, TS_RUNNING = 2, TS_ZOMBIE = 3, TS_WAITING = 4, TS_BLOCKED = 5 };
 enum { STDIN = 0, STDOUT = 1, STDERR = 2 };
 // open() flags; the low two bits match the host's.
@@ -79,6 +84,7 @@ int  upadstr(char *s, int width);
 int  upadhdr(char *s, int width);   // heading for a right-aligned column
 int  upadnum(int v, int width);
 int  upadcycles(int v, int width);
+int  upadcycles2(int hi, int lo, int width);
 
 int  uputchar(int c);
 int  uputs(char *s);

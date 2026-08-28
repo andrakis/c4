@@ -401,6 +401,12 @@ rm -f $ROOTDISK/c4ix-*.c $ROOTDISK/c4ix.h $ROOTDISK/c4ix_user.h
 # b4ke drives it, c4sc is the compiled c4lc, c4rlink joins the objects.
 # docs/c4sc-design.md and src/c4ke/bin/c4ix.b4k.
 $CC -o $ROOTDISK/b4ke.c4r $U0 $BIN/b4ke.c > /dev/null
+# tar unpacks an archive into the ramfs (dostar's job, one rung up), and
+# save writes the ramfs onto a drive, so what C4KE builds can outlive it.
+# docs/climbing-the-ladder.md, docs/c4bb-storage.md.
+$CC -o $ROOTDISK/tar.c4r $U0 $BIN/tar.c > /dev/null
+$CC -o $ROOTDISK/save.c4r $U0 include/c4bb.h $BIN/save.c > /dev/null
+cp c4ix-src.tar $ROOTDISK/ 2>/dev/null || true
 [ -f c4sc32-fused.c4r ] && cp c4sc32-fused.c4r $ROOTDISK/c4sc.c4r
 cp $BIN/c4ix.b4k $ROOTDISK/
 cat src/c4bb/fs/c4ke.vfs.txt src/c4bb/fs/c4ke-dev.vfs.txt > $ROOTDISK/c4ke.vfs.txt

@@ -17,7 +17,7 @@
 //
 // Firmware is loaded from src/c4bb/fw/fw.c4r next to this script.
 
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, basename } from 'node:path';
 import { Arena, CONS_RET } from './arena.js';
@@ -31,20 +31,25 @@ const here = dirname(fileURLToPath(import.meta.url));
 
 function parseArgs(argv) {
   const o = { arenaMb: 32, maxCycles: Infinity, stats: false, useStep: false,
-              diskDir: null, interactive: false };
+              diskDir: null, drives: [], interactive: false };
   let i = 0;
   while (i < argv.length && argv[i].startsWith('-')) {
     if (argv[i] === '-m') o.arenaMb = parseInt(argv[++i], 10);
     else if (argv[i] === '-c') o.maxCycles = parseInt(argv[++i], 10);
     else if (argv[i] === '-s') o.stats = true;
-    else if (argv[i] === '-d') o.diskDir = argv[++i];
+    // -d attaches a read-only medium, -w a writable one, in the order
+    // given: the first is drive 0, the next drive 1, and a guest reaches
+    // another one by name ("1:c4ke.c4r") or by the DISK_DRIVE register.
+    // docs/c4bb-storage.md. -d alone still means what it always did.
+    else if (argv[i] === '-d') { o.diskDir = argv[++i]; o.drives.push({ dir: o.diskDir, writable: false }); }
+    else if (argv[i] === '-w') { const dir = argv[++i]; o.drives.push({ dir, writable: true }); }
     else if (argv[i] === '-i') o.interactive = true;
     else if (argv[i] === '--step') o.useStep = true;
     else { console.error(`c4bb: unknown option ${argv[i]}`); process.exit(1); }
     i++;
   }
   if (i >= argv.length) {
-    console.error('usage: cli.js [-m MB] [-c cycles] [-s] [-d dir] [-i] [--step] program.c4r [args...]');
+    console.error('usage: cli.js [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [--step] program.c4r [args...]');
     process.exit(1);
   }
   o.progPath = argv[i];
@@ -83,15 +88,40 @@ async function main(argv) {
   const arena = new Arena(o.arenaMb * 1024 * 1024);
   const out = [];
   const flush = () => { if (out.length) { process.stdout.write(Buffer.from(out)); out.length = 0; } };
+  // A writable drive is a host directory, and closing a file there
+  // writes it through -- so a medium really does survive the machine
+  // being switched off, which is the whole point of having one.
+  const drives = (o.drives.length ? o.drives : [{ dir: o.diskDir, writable: false }])
+    .map(d => ({
+      files: loadDisk(d.dir),
+      writable: d.writable,
+      dir: d.dir,
+      sink: d.writable && d.dir
+        ? (name, bytes) => {
+            const full = join(d.dir, name);
+            mkdirSync(dirname(full), { recursive: true });
+            writeFileSync(full, bytes);
+          }
+        : null,
+    }));
   const dev = new Devices(arena, {
-    files: loadDisk(o.diskDir),
+    drives,
     onByte: b => { out.push(b); if (out.length >= 4096 || b === 10) flush(); },
   });
   const machine = new Machine(arena, assemble(ucSource), dev);
 
-  if (o.interactive && process.stdin.isTTY) {
-    process.stdin.setRawMode(true);
+  // -i streams stdin as it arrives, whether stdin is a terminal or a
+  // pipe. That distinction matters because C4KE hands the console to
+  // the FOCUSED task: bytes that arrive while a task is running go to
+  // that task, and a shell command queued behind a five-minute compile
+  // is simply lost. Prefeeding the whole pipe (the branch below) is
+  // right for a batch session and wrong for a scripted interactive one,
+  // which is why the walkthrough in docs/climbing-the-ladder.md can be
+  // driven by a shell script with sleeps in it.
+  if (o.interactive) {
+    if (process.stdin.isTTY) process.stdin.setRawMode(true);
     process.stdin.resume();
+    process.stdin.on('end', () => { dev.rxEof = true; });
     process.stdin.on('data', buf => {
       for (const b of buf) {
         if (b === 3) {

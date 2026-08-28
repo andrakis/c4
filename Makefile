@@ -422,7 +422,7 @@ $(C4DOS_BUILD_DISK): c4dos-clock.c4r dostar.c4r cpp.c4r c4cc.c4r c4ke-src.tar do
                      tools-src.tar $(SRCS)/c4dos/fs/LADDER.BAT \
                      $(INIT) $(C4SH) $(VFS) $(SRCS)/c4dos/fs/BUILD.BAT
 	@mkdir -p $(C4DOS_BUILD_DISK)
-	@sed 's/SIZE=8388608/SIZE=16777216/' $(SRCS)/c4dos/fs/CONFIG.SYS > $(C4DOS_BUILD_DISK)/config.sys
+	@sed 's/SIZE=[0-9]*/SIZE=16777216/' $(SRCS)/c4dos/fs/CONFIG.SYS > $(C4DOS_BUILD_DISK)/config.sys
 	@cp $(SRCS)/c4dos/fs/AUTOEXEC.BAT $(C4DOS_BUILD_DISK)/autoexec.bat
 	@cp $(SRCS)/c4dos/fs/BUILD.BAT    $(C4DOS_BUILD_DISK)/build.bat
 	@cp $(SRCS)/c4dos/fs/LADDER.BAT   $(C4DOS_BUILD_DISK)/ladder.bat
@@ -450,7 +450,7 @@ $(C4DOS_BUILD_DISK32): c4dos32.c4r dostar32.c4r cpp32.c4r c4cc32.c4r c4ke-src.ta
                        tools-src.tar $(SRCS)/c4dos/fs/LADDER.BAT \
                        $(SRCS)/c4dos/fs/BUILD.BAT
 	@mkdir -p $(C4DOS_BUILD_DISK32)
-	@sed 's/SIZE=8388608/SIZE=16777216/' $(SRCS)/c4dos/fs/CONFIG.SYS > $(C4DOS_BUILD_DISK32)/config.sys
+	@sed 's/SIZE=[0-9]*/SIZE=16777216/' $(SRCS)/c4dos/fs/CONFIG.SYS > $(C4DOS_BUILD_DISK32)/config.sys
 	@cp $(SRCS)/c4dos/fs/AUTOEXEC.BAT $(C4DOS_BUILD_DISK32)/autoexec.bat
 	@cp $(SRCS)/c4dos/fs/BUILD.BAT    $(C4DOS_BUILD_DISK32)/build.bat
 	@cp $(SRCS)/c4dos/fs/LADDER.BAT   $(C4DOS_BUILD_DISK32)/ladder.bat
@@ -473,10 +473,13 @@ C4DOS_IX_DISK := c4dos-c4ix32
 $(C4DOS_IX_DISK): c4dos32.c4r dostar32.c4r cpp32.c4r c4cc32.c4r dosload32.c4r \
                   c4rlink32.c4r c4sc32-fused.c4r c4ke-src.tar c4ix-src.tar \
                   tools-src.tar init32.c4r c4sh32.c4r c4ke.vfs32.c4r \
+                  b4ke32.c4r tar32.c4r ls32.c4r ps32.c4r \
+                  bbsave32.c4r save32.c4r \
+                  $(BIN_D)/c4ix.b4k \
                   $(SRCS)/c4dos/fs/LADDER.BAT $(SRCS)/c4dos/fs/IX.BAT \
                   $(SRCS)/c4dos/fs/c4ix.objs $(SRCS)/c4dos/fs/CONFIG.SYS
 	@mkdir -p $(C4DOS_IX_DISK)
-	@sed 's/SIZE=8388608/SIZE=33554432/' $(SRCS)/c4dos/fs/CONFIG.SYS > $(C4DOS_IX_DISK)/config.sys
+	@sed 's/SIZE=[0-9]*/SIZE=33554432/' $(SRCS)/c4dos/fs/CONFIG.SYS > $(C4DOS_IX_DISK)/config.sys
 	@cp $(SRCS)/c4dos/fs/AUTOEXEC.BAT $(C4DOS_IX_DISK)/autoexec.bat
 	@cp $(SRCS)/c4dos/fs/LADDER.BAT   $(C4DOS_IX_DISK)/ladder.bat
 	@cp $(SRCS)/c4dos/fs/IX.BAT       $(C4DOS_IX_DISK)/ix.bat
@@ -491,6 +494,21 @@ $(C4DOS_IX_DISK): c4dos32.c4r dostar32.c4r cpp32.c4r c4cc32.c4r dosload32.c4r \
 	@cp init32.c4r     $(C4DOS_IX_DISK)/init.c4r
 	@cp c4sh32.c4r     $(C4DOS_IX_DISK)/c4sh.c4r
 	@cp c4ke.vfs32.c4r $(C4DOS_IX_DISK)/c4ke.vfs.c4r
+	@# The C4KE rung. Everything above this line is what C4DOS needs to
+	@# build and boot a kernel; these four are what that kernel needs to
+	@# build C4IX ITSELF -- tar unpacks the source into its own RAM
+	@# filesystem, b4ke drives the twelve compiles and the link, and ls
+	@# and ps are there so the shell has something to show.
+	@cp b4ke32.c4r     $(C4DOS_IX_DISK)/b4ke.c4r
+	@cp tar32.c4r      $(C4DOS_IX_DISK)/tar.c4r
+	@cp ls32.c4r       $(C4DOS_IX_DISK)/ls.c4r
+	@cp ps32.c4r       $(C4DOS_IX_DISK)/ps.c4r
+	@cp $(BIN_D)/c4ix.b4k $(C4DOS_IX_DISK)/
+	@# Keeping what you built: bbsave writes C4DOS's RAM disk onto
+	@# another drive, save does the same for C4KE's ramfs. Both need a
+	@# writable medium in the machine -- `cli.js -w dir`.
+	@cp bbsave32.c4r   $(C4DOS_IX_DISK)/bbsave.c4r
+	@cp save32.c4r     $(C4DOS_IX_DISK)/save.c4r
 	@# C4IX's own userland, prebuilt at 32 bits by build-images.sh: init
 	@# looks for c4ix-sh.c4r and the kernel it just built has no way to
 	@# make one, because libc4ix is a separate ladder.
@@ -499,6 +517,7 @@ $(C4DOS_IX_DISK): c4dos32.c4r dostar32.c4r cpp32.c4r c4cc32.c4r dosload32.c4r \
 	    $(C4DOS_IX_DISK)/ 2>/dev/null || true
 	@cd $(C4DOS_IX_DISK) && ls -p | grep -v '/$$' > c4dos.dir
 	@echo "c4dos-c4ix32: ready -- boot it on c4bb, then LADDER, then IX"
+	@echo "                 (or LADDER, dosload c4ke.c4r, and build C4IX from inside it)"
 
 run-c4dos-c4ix32: c4dos32.c4r $(C4DOS_IX_DISK)
 	node src/c4bb/sim/cli.js -s -m 640 -i -d $(C4DOS_IX_DISK) c4dos32.c4r
@@ -1478,7 +1497,7 @@ $(C4DOS_FC_DISK): c4dos-clock.c4r c4th32.c4r $(C4R_C4RLINK) dostar.c4r \
                   c4ke-src.tar dosload.c4r $(C4FC_FORTH) \
                   $(SRCS)/c4dos/fs/CONFIG.SYS $(SRCS)/c4dos/fs/CC.BAT $(SRCS)/c4dos/fs/cc.f
 	@mkdir -p $(C4DOS_FC_DISK)
-	@sed 's/SIZE=8388608/SIZE=16777216/' $(SRCS)/c4dos/fs/CONFIG.SYS > $(C4DOS_FC_DISK)/config.sys
+	@sed 's/SIZE=[0-9]*/SIZE=16777216/' $(SRCS)/c4dos/fs/CONFIG.SYS > $(C4DOS_FC_DISK)/config.sys
 	@cp $(SRCS)/c4dos/fs/CC.BAT $(C4DOS_FC_DISK)/cc.bat
 	@cp $(SRCS)/c4dos/fs/cc.f   $(C4DOS_FC_DISK)/cc.f
 	@printf 'int main(){ printf("built by c4fc, inside the machine\\n"); return 0; }\n' > $(C4DOS_FC_DISK)/hello.c
@@ -1779,6 +1798,27 @@ c4sh32.c4r: c4cc32 $(C4SH_SRCS)
 c4ke.vfs32.c4r: c4cc32 $(VFS_SRCS)
 	./c4cc32 -o $@ $(VFS_SRCS) > /dev/null
 
+# The three C4KE programs the full climb needs after the kernel boots:
+# tar unpacks C4IX's source into the RAM filesystem, b4ke drives the
+# twelve compiles and the link, and the shell needs something to list.
+# The two halves of "keep what you just built": one transient for
+# C4DOS's RAM disk, one program for C4KE's ramfs, both driving c4bb's
+# disk registers through include/c4bb.h. Board only, like dostar and
+# dosload -- docs/c4bb-storage.md.
+bbsave32.c4r: c4cc32 include/c4dos.h include/c4bb.h $(SRCS)/c4dos/bbsave.c
+	./c4cc32 -o $@ include/c4dos.h include/c4bb.h $(SRCS)/c4dos/bbsave.c > /dev/null
+save32.c4r: c4cc32 $(U0) include/c4bb.h $(BIN_D)/save.c
+	./c4cc32 -o $@ $(U0) include/c4bb.h $(BIN_D)/save.c > /dev/null
+
+b4ke32.c4r: c4cc32 $(U0) $(BIN_D)/b4ke.c
+	./c4cc32 -o $@ $(U0) $(BIN_D)/b4ke.c > /dev/null
+tar32.c4r: c4cc32 $(U0) $(BIN_D)/tar.c
+	./c4cc32 -o $@ $(U0) $(BIN_D)/tar.c > /dev/null
+ls32.c4r: c4cc32 $(U0) $(BIN_D)/ls.c
+	./c4cc32 -o $@ $(U0) $(BIN_D)/ls.c > /dev/null
+ps32.c4r: c4cc32 $(U0) $(BIN_D)/ps.c
+	./c4cc32 -o $@ $(U0) $(BIN_D)/ps.c > /dev/null
+
 c4rlink32.c4r: c4cc32 $(C4R_C4CC_SRCS) $(SRCS)/c4ke/bin/c4rlink.c
 	./c4cc32 -o $@ $(C4R_C4CC_SRCS) $(SRCS)/c4ke/bin/c4rlink.c > /dev/null
 c4rlink32: $(SRCS)/c4ke/bin/c4rlink.c $(SRCS)/c4cc/asm-c4r.c
@@ -1788,6 +1828,11 @@ c4bb-images: c4bb-32bit $(C4LC_LISP)
 	bash src/c4bb/tests/build-images.sh
 test-c4bb: c4bb-images $(C4M) $(TESTS_C4R)
 	bash src/c4bb/tests/test-c4bb.sh
+
+# Drives and media (docs/c4bb-storage.md). Separate from test-c4bb
+# because it needs the C4DOS climb disk, which test-c4bb does not build.
+test-c4bb-storage: c4dos32.c4r $(C4DOS_IX_DISK)
+	bash src/c4bb/tests/test-storage.sh
 
 # C4OR1K: OR1000/OpenRISC emulator ported from jor1k, compiled by
 # c4lc, run under c4m (docs/c4or1k-design.md).
@@ -2542,7 +2587,7 @@ c4rs: pre
 # Marking the below rules as PHONY using singular .PHONY rule
 PHONY  = pre all clean-c4rs clean
 PHONY += test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
-PHONY += run-c4dos-build32 test-c4dos-build32 run-c4dos-c4ix32 test-c4dos-c4ix32 test-c4cc-for test-respfile test-b4ke
+PHONY += run-c4dos-build32 test-c4dos-build32 run-c4dos-c4ix32 test-c4dos-c4ix32 test-c4cc-for test-respfile test-b4ke test-c4bb-storage
 PHONY += test-c4sc test-c4sc-run test-c4sc-lex test-c4sc-front test-c4sc-back
 PHONY += test-c4sc-image test-c4sc-self test-c4sc-board
 PHONY += test-c4dos-ladder32

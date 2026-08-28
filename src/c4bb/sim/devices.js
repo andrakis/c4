@@ -23,6 +23,10 @@ export const DISK_LEN  = 0x12c;
 export const DISK_CLOSE= 0x130;
 export const OPNAME    = 0x134;
 export const DISK_FLAGS= 0x138;
+// Drives (docs/c4bb-storage.md). The read side above is unchanged and
+// still talks to whichever drive is selected; these say WHICH, how many
+// there are, and whether the one selected can be written to.
+export const DISK_DRIVE= 0x13c;  // r/w: selected drive, 0-based
 export const POWER     = 0x140;
 export const HEAP_BASE = 0x144;
 export const HEAP_END  = 0x148;
@@ -41,6 +45,17 @@ export const HND_REG      = 0x16c;  // jam latch: handler address
 // raised (c4m.c:1121,1132); the sites zero/drop them afterwards
 export const JMODE_REG    = 0x170;  // mode at jam time
 export const JINTERVAL_REG= 0x174;  // interval at jam time
+
+// The write head. Deliberately the same shape as the read side, so a
+// guest that can read a file can write one by learning four addresses
+// and no new opcode -- fw.c already drives DEV_INTERVAL this way.
+export const DISK_WNAME  = 0x178;  // w: create/truncate -> fd, or -1
+export const DISK_WADDR  = 0x17c;  // w: buffer address
+export const DISK_WLEN   = 0x180;  // w: write N bytes -> N written
+export const DISK_WCLOSE = 0x184;  // w: close and flush -> 0, or -1
+export const DISK_COUNT  = 0x188;  // r: how many drives are attached
+export const DISK_RO     = 0x18c;  // r: 1 if the selected drive is read-only
+export const DISK_EJECT  = 0x190;  // w: empty the drive whose number is written
 
 // c4_info() capability bits (c4m.c:206)
 export const C4I_C4M = 0x2, C4I_HRT = 0x10, C4I_SIG = 0x20,
@@ -102,13 +117,40 @@ export class Devices {
     this.heapEnd = 0;
     this.uartActivity = 0;            // counters for the renderer
     this.diskActivity = 0;
-    this.files = opts.files || new Map();   // name -> Uint8Array
-    this.fds = new Map();             // fd -> {data, pos} | {kbd, nonblock}
+    // Drives (docs/c4bb-storage.md). One machine, several media: drive
+    // 0 is what `files` used to be and every existing caller still gets
+    // exactly that. A drive is { files, writable, sink } -- sink is
+    // whatever the host does with a written file (a directory on the
+    // CLI, an image in the browser); a drive with no sink is read-only
+    // no matter what it says.
+    this.drives = opts.drives ||
+                  [{ files: opts.files || new Map(), writable: false, sink: null }];
+    this.drive = 0;                   // the selected drive
+    this.fds = new Map();             // fd -> {data, pos} | {kbd, nonblock} | {w}
     this.nextFd = FD_FIRST;
     this.diskFlags = 0;
     this.diskFd = 0;
     this.diskAddr = 0;
     this.diskResult = 0;
+  }
+
+  // What `files` meant before there was more than one drive. Kept as a
+  // property so nothing that reaches for dev.files has to know.
+  get files () { return this.drives[this.drive] ? this.drives[this.drive].files : new Map(); }
+
+  // "1:name" says which drive; anything else means the selected one.
+  // C4DOS already thinks in drive letters, and a prefix costs the
+  // machine nothing -- no register to set, no state to get wrong.
+  resolveDrive (name) {
+    if (name.length > 1 && name[1] === ':') {
+      const d = name.charCodeAt(0);
+      let n = -1;
+      if (d >= 48 && d <= 57) n = d - 48;               // "0:".."9:"
+      else if (d >= 65 && d <= 90) n = d - 65;          // "A:".."Z:"
+      else if (d >= 97 && d <= 122) n = d - 97;         // "a:".."z:"
+      if (n >= 0) return { drv: n, rest: name.slice(2) };
+    }
+    return { drv: this.drive, rest: name };
   }
 
   diskOpen(nameAddr) {
@@ -120,17 +162,21 @@ export class Devices {
       if (raw) this.rawKbd++;
       return fd;
     }
-    const clean = name.startsWith('./') ? name.slice(2) : name;
-    let data = this.files.get(clean) ?? this.files.get(name);
+    const { drv, rest } = this.resolveDrive(name);
+    const media = this.drives[drv];
+    if (!media) return -1;
+    const files = media.files;
+    const clean = rest.startsWith('./') ? rest.slice(2) : rest;
+    let data = files.get(clean) ?? files.get(rest);
     // The disk is flat, but ls/cat show the vfs.txt tree's hierarchical
     // paths (e.g. "/home/user/hello.c") since that's what ramfs holds -
     // real disk-I/O tools like c4cc never learned that vocabulary and
     // ask for the path verbatim. Falling back to the basename here,
     // once, transparently to every guest program, means "cat" showing
     // you a path is also a path you can hand to any other tool.
-    if (!data && name.includes('/')) {
-      const base = name.slice(name.lastIndexOf('/') + 1);
-      data = this.files.get(base);
+    if (!data && rest.includes('/')) {
+      const base = rest.slice(rest.lastIndexOf('/') + 1);
+      data = files.get(base);
     }
     if (!data) return -1;
     const fd = this.nextFd++;
@@ -178,6 +224,43 @@ export class Devices {
     return n;
   }
 
+  // Create or truncate a file on a drive. A drive with no sink is a
+  // pressed disc: it can be read forever and never written.
+  diskCreate (nameAddr) {
+    const name = this.arena.cstring(nameAddr >>> 0, 256);
+    const { drv, rest } = this.resolveDrive(name);
+    const media = this.drives[drv];
+    if (!media || !media.writable || !media.sink) return -1;
+    const fd = this.nextFd++;
+    this.fds.set(fd, { w: { media, name: rest, chunks: [], len: 0 } });
+    return fd;
+  }
+
+  diskWrite (len) {
+    this.diskActivity++;
+    const f = this.fds.get(this.diskFd);
+    if (!f || !f.w) return -1;
+    const n = Math.max(0, len | 0);
+    const buf = this.arena.u8.slice(this.diskAddr >>> 0, (this.diskAddr >>> 0) + n);
+    f.w.chunks.push(buf);
+    f.w.len += n;
+    return n;
+  }
+
+  // Close is where a written file becomes real, in one piece: a half
+  // written medium after a crash is a bug report nobody can read.
+  diskWClose (fd) {
+    const f = this.fds.get(fd | 0);
+    if (!f || !f.w) return -1;
+    const all = new Uint8Array(f.w.len);
+    let at = 0;
+    for (const c of f.w.chunks) { all.set(c, at); at += c.length; }
+    f.w.media.files.set(f.w.name, all);
+    this.fds.delete(fd | 0);
+    try { f.w.media.sink(f.w.name, all); } catch { return -1; }
+    return 0;
+  }
+
   simMs() {
     const cyc = this.machine ? this.machine.cycle : 0;
     return (Math.floor(cyc / CYCLES_PER_MS) + this.sleepMs) | 0;
@@ -211,6 +294,15 @@ export class Devices {
       case DISK_NAME:    return this.diskResult | 0;
       case DISK_LEN:     return this.diskResult | 0;
       case DISK_CLOSE:   return this.diskResult | 0;
+      case DISK_DRIVE:   return this.drive | 0;
+      case DISK_COUNT:   return this.drives.length | 0;
+      case DISK_RO: {
+        const m = this.drives[this.drive];
+        return (m && m.writable && m.sink) ? 0 : 1;
+      }
+      case DISK_WNAME:   return this.diskResult | 0;
+      case DISK_WLEN:    return this.diskResult | 0;
+      case DISK_WCLOSE:  return this.diskResult | 0;
       default:         return 0;
     }
   }
@@ -240,6 +332,21 @@ export class Devices {
         const f = this.fds.get(val | 0);
         if (f) { if (f.raw) this.rawKbd--; this.fds.delete(val | 0); this.diskResult = 0; }
         else this.diskResult = -1;
+        return;
+      }
+      case DISK_DRIVE:
+        // Out of range selects nothing rather than crashing: a program
+        // asking for drive 3 on a two-drive machine should see empty
+        // media, which is what an empty drive looks like anyway.
+        this.drive = (val | 0) >= 0 ? (val | 0) : 0;
+        return;
+      case DISK_WNAME:  this.diskResult = this.diskCreate(val); return;
+      case DISK_WADDR:  this.diskAddr = val | 0; return;
+      case DISK_WLEN:   this.diskResult = this.diskWrite(val | 0); return;
+      case DISK_WCLOSE: this.diskResult = this.diskWClose(val | 0); return;
+      case DISK_EJECT: {
+        const m = this.drives[val | 0];
+        if (m) { m.files = new Map(); m.ejected = true; }
         return;
       }
       case POWER:

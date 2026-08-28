@@ -53,8 +53,15 @@ enum {
 	SCR_RETRY,              // Syscall needs more time
 };
 
-// Syscalls we handle
-static int OPEN, READ, CLOS, PUTC, PUTS, PRTF, MALC, FREE, INFO, STRC;
+// Syscalls we handle.
+//
+// Prefixed, because load-c4r.c's opcode enum already owns the bare
+// names -- OPEN, READ, MALC and the rest are constants there. Declaring
+// variables over them worked under c4cc and made c4lc refuse the file
+// outright ("bad lvalue: num" -- assigning to a number), which is why a
+// protected-mode kernel could never be built by the compiler the board
+// uses.
+static int pm_OPEN, pm_READ, pm_CLOS, pm_PUTC, pm_PUTS, pm_PRTF, pm_MALC, pm_FREE, pm_RALC, pm_INFO, pm_STRC;
 
 // Local data
 static int *kernel_pm_thread;
@@ -79,18 +86,18 @@ static int pm_dispatch_run (int *t, int ins, int *sp, int *a, int *returnpc) {
 	//if (0 && !t[TASK_EXCLUSIVE])
 	//	printf("c4ke: pm_dispatch_run, using ins %d\n", ins);
 
-	if (ins == OPEN) {
+	if (ins == pm_OPEN) {
 		*a = open((char *)sp[1], *sp);
-	} else if (ins == READ) {
+	} else if (ins == pm_READ) {
 		*a = read(sp[2], (char *)sp[1], *sp);
-	} else if (ins == CLOS) {
+	} else if (ins == pm_CLOS) {
 		*a = close(*sp);
-	} else if (ins == PUTC) {
+	} else if (ins == pm_PUTC) {
 		*a = putchar(*((char *)sp));
 	//} else if (ins == PUTS) {
 	//	// TODO: write *sp string to stream
 	//	*a = puts((char *)*sp);
-	} else if (ins == PRTF) {
+	} else if (ins == pm_PRTF) {
 		// TODO: deprecate PRTF, implement it as calls to puts and putc in user library.
 		r = returnpc[1]; // grab the number of arguments from the ADJ x following the printf
 		t = sp + r;
@@ -103,15 +110,17 @@ static int pm_dispatch_run (int *t, int ins, int *sp, int *a, int *returnpc) {
 		else if (r == 6) *a = printf((char*)t[-1], t[-2], t[-3], t[-4], t[-5], t[-6]);
 		else if (r == 7) *a = printf((char*)t[-1], t[-2], t[-3], t[-4], t[-5], t[-6], t[-7]);
 		else { printf("c4ke: Too many arguments to printf! (%ld)\n", r); exit(-1); }
-	} else if (ins == MALC) {
-		// TODO: record allocation details somewhere...
-		*a = (int)malloc(*sp);
-		if (*a != 0)
-			t[TASK_MEM_ALLOC] = t[TASK_MEM_ALLOC] + *sp;
-	} else if (ins == FREE) {
-		// TODO: update allocation details somewhere...
-		free((int *)*sp);
-	} else if (ins == INFO) {
+	} else if (ins == pm_MALC) {
+		*a = (int)kernel_task_malloc(t, *sp);
+	} else if (ins == pm_FREE) {
+		kernel_task_free(t, (int *)*sp);
+	} else if (ins == pm_RALC) {
+		// c4m guards RALC alongside MALC and FREE (c4m.c:1922), and it
+		// was the one gated opcode the board's PM_GATED set had never
+		// mirrored -- so a protected task's realloc trapped on one host
+		// and ran straight through on the other. Both gate it now.
+		*a = (int)kernel_task_realloc(t, (int *)sp[1], *sp);
+	} else if (ins == pm_INFO) {
 		// Provide more info
 		*a = __c4_info() | C4I_C4KE;
 	} else {
@@ -232,8 +241,17 @@ static void pm_syscall_handler (int trap, int ins, int mode, int a, int *bp, int
 	// printf("Syscall handler: T%d  I%d(0x%X) mode%d\n", trap, ins, ins, mode);
 	// printf("  SP=0x%X  BP=0x%X  ReturnPC=0x%X\n", sp, bp, returnpc);
 
+	// Memory syscalls are always serviced here, whatever the task's
+	// exclusivity. The dispatcher thread exists because C4KE has no
+	// streams and IO from several tasks would otherwise interleave into
+	// nonsense; MALC, FREE and RALC neither print nor block, and sending
+	// them round the houses costs two context switches and a scan of the
+	// task table for an operation that is a few dozen instructions.
+	// A compiler allocates thousands of times per module, so this is the
+	// difference between protected mode being usable and not.
 	//if (kernel_is_slow || kernel_task_current[TASK_EXCLUSIVE]) {
-	if (kernel_task_current[TASK_EXCLUSIVE]) {
+	if (ins == pm_MALC || ins == pm_FREE || ins == pm_RALC ||
+	    kernel_task_current[TASK_EXCLUSIVE]) {
 	// TODO: servicing reads immediately due to how slow load-c4r is.
 	// if (ins == READ || kernel_task_current[TASK_EXCLUSIVE]) {
 	// if (kernel_task_current[TASK_EXCLUSIVE]) {
@@ -295,21 +313,22 @@ static int pm_start () {
 			printf("c4ke: protected mode handler stack size: %d\n", kernel_syscall_handler_stack);
 		}
 		// Request opcodes
-		OPEN = __opcode("OPEN");
-		READ = __opcode("READ");
-		CLOS = __opcode("CLOS");
-		PUTC = __opcode("PUTC");
-		PUTS = __opcode("PUTS");
-		PRTF = __opcode("PRTF");
-		MALC = __opcode("MALC");
-		FREE = __opcode("FREE");
-		INFO = __opcode("INFO");
-		STRC = __opcode("STRC");
+		pm_OPEN = __opcode("OPEN");
+		pm_READ = __opcode("READ");
+		pm_CLOS = __opcode("CLOS");
+		pm_PUTC = __opcode("PUTC");
+		pm_PUTS = __opcode("PUTS");
+		pm_PRTF = __opcode("PRTF");
+		pm_MALC = __opcode("MALC");
+		pm_FREE = __opcode("FREE");
+		pm_RALC = __opcode("RALC");
+		pm_INFO = __opcode("INFO");
+		pm_STRC = __opcode("STRC");
 		if (kernel_verbosity >= VERB_MED) {
-			printf("c4ke: handled syscalls: OPEN(%d) READ(%d) CLOS(%d) ", OPEN, READ, CLOS);
-			printf("PUTC(%d) PUTS(%d) PRTF(%d) ", PUTC, PUTS, PRTF);
-			printf("MALC(%d) FREE(%d) INFO(%d) ", MALC, FREE, INFO);
-			printf("STRC(%d)\n", STRC);
+			printf("c4ke: handled syscalls: OPEN(%d) READ(%d) CLOS(%d) ", pm_OPEN, pm_READ, pm_CLOS);
+			printf("PUTC(%d) PUTS(%d) PRTF(%d) ", pm_PUTC, pm_PUTS, pm_PRTF);
+			printf("MALC(%d) FREE(%d) RALC(%d) INFO(%d) ", pm_MALC, pm_FREE, pm_RALC, pm_INFO);
+			printf("STRC(%d)\n", pm_STRC);
 		}
 		kernel_pm_thread = 0;
 		if ((argv = malloc(sizeof(char **) * 32))) {

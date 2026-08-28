@@ -206,11 +206,8 @@ int *mk_env (int *parent) {
 //     which is reachable from gc_root_genv.
 // If the index cannot be allocated it is switched off for good and every
 // lookup falls back to the scan, so running out of memory costs speed and
-// nothing else.
-int *env_gidx;       // atom id -> (atom . value) pair, 0 = not bound
-int  env_gidx_cap;
-int  env_gidx_off;   // set once if an allocation fails: scan from then on
-
+// nothing else. (env_gidx and its two companions are declared up in
+// gc.h, which is included first and has to release them in gc_shutdown.)
 void env_gidx_grow (int id) {
 	int *n;
 	int  cap, i;

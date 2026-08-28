@@ -66,6 +66,12 @@ int  *gc_worklist;    // explicit mark worklist; a cell enters at most once,
                       // so gc_ncells entries can never overflow
 int   gc_wl_top;
 
+// The global-environment index, defined here rather than in cells.h only
+// because gc_shutdown below releases it and c4 wants a declaration first.
+int *env_gidx;       // atom id -> (atom . value) pair, 0 = not bound
+int  env_gidx_cap;
+int  env_gidx_off;   // set once if an allocation fails: scan from then on
+
 // Explicit roots. The global environment reaches almost everything; the
 // spare slots are for the CEK machine's registers (design 6.2), so the
 // collector needs no changes when that lands.
@@ -111,6 +117,55 @@ int gc_addblock (int n) {
 	}
 
 	return 0;
+}
+
+// Give the arena back.
+//
+// A process exiting on a host does not need this -- the operating system
+// reclaims everything, and for years that was the whole story. A TASK
+// exiting under C4KE does: the kernel returns the stack, the code, the
+// data, the argv and the C4R it allocated FOR the task, and has no way
+// to know about anything the task allocated for ITSELF. Twelve compiler
+// runs in one session then leave twelve arenas behind, and the arena is
+// most of what a compiler run is. See docs/task-memory.md.
+//
+// Strings own a malloc'd buffer outside the arena, so they have to be
+// released one at a time; a cell on the free list has type T_NIL (the
+// sweep clears it), so the test is the same one the sweep uses.
+void gc_shutdown () {
+	int *base, *c;
+	int  b, i;
+
+	b = gc_nblocks;
+	while (b--) {
+		base = (int *)gc_block[b];
+		if (!base) continue;
+		i = gc_block_cells[b];
+		while (i--) {
+			c = base + i * CELL__Sz;
+			if (c[CELL_TYPE] == T_STRING && c[CELL_A]) free((char *)c[CELL_A]);
+			c[CELL_TYPE] = T_NIL;
+		}
+		free(base);
+		gc_block[b] = 0;
+		gc_block_cells[b] = 0;
+	}
+	gc_nblocks = 0;
+	gc_ncells = 0;
+	gc_free_count = 0;
+	gc_freelist = 0;
+	gc_root_genv = gc_root_a = gc_root_b = gc_root_c = 0;
+	gc_root_true = gc_root_false = 0;
+	if (gc_marks)    { free(gc_marks);              gc_marks = 0; }
+	if (gc_worklist) { free((char *)gc_worklist);   gc_worklist = 0; }
+	if (gc_extra)    { free((char *)gc_extra);      gc_extra = 0; }
+	gc_nextra = 0;
+	// The global-environment index lives in cells.h and outlives the
+	// arena it indexes; there is nothing left to look up now.
+	if (env_gidx) free(env_gidx);
+	env_gidx = 0;
+	env_gidx_cap = 0;
+	env_gidx_off = 0;
 }
 
 // Initialize the arena and thread the free list. Returns 0 on success.

@@ -60,6 +60,24 @@ void __fw_heap_init () {
 // Save/restore (not set/clear) so nested calls - PRTF allocating
 // __fw_tmp while already inside another malloc, say - stay correct:
 // the inner call's restore leaves the outer call's mask in place.
+// A failed allocation used to be silent: fw_malc returned 0, the caller
+// said "out of memory", and nothing said whether the heap was full or
+// merely broken. It is worth one line on the way out, because those two
+// have nothing in common as bugs -- a heap eaten by a task that overran
+// its stack reports megabytes free and a free list of nonsense.
+void __fw_oom (int size) {
+    int *blk, n, total, largest;
+    n = 0; total = 0; largest = 0;
+    blk = __fw_free;
+    while (blk) {
+        ++n; total = total + blk[0];
+        if (blk[0] > largest) largest = blk[0];
+        blk = (int *)blk[1];
+    }
+    printf("fw: malloc(%d) failed: %d free blocks, %d bytes, largest %d\n",
+           size, n, total, largest);
+}
+
 int fw_malc (int size) {
     int *blk, *prev, *rest, need, saved, result;
     saved = *(int *)DEV_INTERVAL;
@@ -87,6 +105,7 @@ int fw_malc (int size) {
         }
     }
     *(int *)DEV_INTERVAL = saved;
+    if (!result) __fw_oom(size);
     return result;
 }
 

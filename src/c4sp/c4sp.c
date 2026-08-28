@@ -109,7 +109,10 @@ void c4sp_repl (int *genv) {
 	}
 }
 
-int main (int argc, char **argv) {
+// See gc_shutdown in include/gc.h: main() wraps the driver so that every
+// exit path returns the arena, which matters when this runs as a task
+// under a kernel that cannot see a task's own allocations.
+static int c4sp_run (int argc, char **argv) {
 	int   opt_parse, opt_cells, opt_repl, endopts;
 	char *file, *src;
 	int   srclen;
@@ -203,4 +206,14 @@ int main (int argc, char **argv) {
 
 	if (opt_repl) c4sp_repl(genv);
 	return 0;
+}
+
+int main (int argc, char **argv) {
+	int r;
+	r = c4sp_run(argc, argv);
+	gc_shutdown();
+	pr_shutdown();
+	atoms_shutdown();
+	stdlib_shutdown();
+	return r;
 }

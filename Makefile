@@ -2467,6 +2467,38 @@ test-c4ke-ramfs: pre c4sp.c4r
 	$(C4M) $(RUN_C4KE) test_ramlink | grep -q "b_add(3, 4) = 7"
 	@echo "test-c4ke-ramfs: OK"
 
+# --- Task memory (docs/task-memory.md) --------------------------------
+#
+# A task's malloc() only reaches the kernel when protected mode is on,
+# and protected mode is not the default, so both of these build their
+# own kernel rather than using the shipped one.
+c4ke-pm.c4r: $(C4CC) $(C4KE_SRCS)
+	$(PREPROC) -DCONFIG_ENABLE_PM=1 src/c4ke/c4ke.c | $(C4CC) -o $@ -
+c4ke32-pm.c4r: c4cc32 $(C4KE_SRCS)
+	$(PREPROC) -DCONFIG_ENABLE_PM=1 src/c4ke/c4ke.c | ./c4cc32 -o $@ -
+c4ke32-nopm.c4r: c4cc32 $(C4KE_SRCS)
+	$(PREPROC) src/c4ke/c4ke.c | ./c4cc32 -o $@ -
+
+# test_leak allocates 6 MB in each of twelve tasks and frees none of it,
+# on purpose, and each round reports how much it got. On a 32 MB
+# breadboard, 72 MB of leak can only run to the end if the kernel takes
+# each task's memory back when the task ends -- so the control run with
+# the same test on a kernel WITHOUT protected mode is part of the test:
+# it must fail, or the passing run proves nothing.
+test-task-mem: c4ke-pm.c4r c4ke32-pm.c4r c4ke32-nopm.c4r $(C4M) $(C4CC) c4cc32 $(TESTS)/test_leak.c
+	$(C4CC) -o .tm_leak.c4r $(U0) $(TESTS)/test_leak.c
+	$(C4M) load-c4r.c -- c4ke-pm.c4r .tm_leak.c4r | grep -q "test_leak: 12 rounds done"
+	@mkdir -p .tm_disk
+	./c4cc32 -o .tm_disk/test_leak.c4r $(U0) $(TESTS)/test_leak.c
+	node src/c4bb/sim/cli.js -m 32 -d .tm_disk c4ke32-pm.c4r test_leak.c4r \
+	  | grep -q "test_leak: 12 rounds done"
+	# The control. Without the tracking, the machine runs out partway.
+	! node src/c4bb/sim/cli.js -m 32 -d .tm_disk c4ke32-nopm.c4r test_leak.c4r \
+	  | grep -q "test_leak: 12 rounds done"
+	@rm -rf .tm_disk .tm_leak.c4r
+	@echo "test-task-mem: OK -- 72 MB of leak in a 32 MB machine, and the"
+	@echo "                     same test failing without the tracking"
+
 # Linking test: compile two modules separately, link both ways, run each,
 # and exercise library mode (-r) with a relink of the written library.
 test-link: c4m $(C4CC) $(C4RLINK)
@@ -2482,7 +2514,7 @@ test-link: c4m $(C4CC) $(C4RLINK)
 	rm -f tla.c4o tlb.c4o tla.c4l test_link.c4r test_link2.c4r test_link3.c4r
 	@echo "test-link: OK"
 clean-c4rs:
-	rm -rf $(C4RS) $(BIN) *.c4r c4ke.pre.c
+	rm -rf $(C4RS) $(BIN) *.c4r c4ke.pre.c .tm_disk .tm_leak.c4r
 clean: clean-c4rs
 	rm -rf $(C4) $(C4M) $(C4CC) c4mp
 pkg:

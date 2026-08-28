@@ -153,7 +153,22 @@
 /// Feel free to play around with the values in this enum
 enum {                         // Main configuration section
 	KERN_TASK_COUNT = 192,     // Fixed count until updated to use linked list
-	TASK_STACK_SIZE = 0xFFFF,  // How much stack memory to allocate to tasks.
+	// How much stack memory to allocate to tasks.
+	//
+	// This was 0xFFFF -- 64 KB, 16k words on a 32-bit machine -- and a
+	// recursive-descent compiler does not fit in it. c4sc walking the
+	// AST of src/c4ix/sched.c ran off the bottom and kept pushing,
+	// straight through the heap blocks below, and the failure surfaced
+	// thousands of allocations later as a free() on a block header that
+	// had been eaten. See docs/task-memory.md; the guard below is there
+	// so that never happens quietly again.
+	TASK_STACK_SIZE = 0x40000,
+	// Poisoned words below every task stack. A frame is entered with a
+	// single ENT that moves sp by the whole local count at once, so a
+	// one-word canary can be jumped clean over; this is sized to be
+	// wider than any plausible frame.
+	TASK_STACK_GUARD = 256,           // bytes
+	TASK_STACK_POISON = 0x57415348,   // "WASH" -- what is left when the tide goes out
 	SIGNAL_MAX = 64,           // How many signals are supported
 	// Minimum acceptable cycles between cycle-based interrupt.
 	// Values below this may crash the kernel.
@@ -312,8 +327,32 @@ enum {
 	TASK_EXTDATA,     // int *, task extension data
 	TASK_DBGHANDLER,  // int *, pointer to debug handler
 	TASK_DBGSTACK,    // int *, stack size for debug handler
+	TASK_STACK_LOW,   // int *, lowest SP ever observed for this task
+	TASK_STACK_BROKEN,// int, non-zero once the stack guard has been reported
+	TASK_MEM_HEAD,    // int *, head of this task's tracked allocation list
+	TASK_LOADING,     // int, set until the task enters the program's main
 	TASK__Sz          // task structure size
 };
+
+// Tracked task allocations.
+//
+// A task's own malloc()s are invisible to the kernel unless protected
+// mode is on, and even then only if somebody records them -- which is
+// what extensions/c4ke_pm.c does. Each tracked block carries four words
+// in front of what the task is given: its size, its place in the owning
+// task's doubly-linked list, and a magic that is a sanity marker rather
+// than a test (whether a pointer is ours is answered by the ktm_ set in
+// kernel_task_malloc, which cannot be fooled and does not read memory
+// that may not be ours). A program that frees everything it allocated
+// leaves the chain empty; the point is that it does not have to.
+enum {
+	TMEM_MAGIC,
+	TMEM_NEXT,
+	TMEM_PREV,
+	TMEM_SIZE,
+	TMEM__Sz
+};
+enum { TMEM_MAGIC_VALUE = 0x4D454D30 };   // "MEM0"
 
 // Kernel task information, the superstructure for kernel task information
 // returned via kern_tasks_export() in u0.c
@@ -372,6 +411,7 @@ enum {
 	// Exit a task - similar to OP_TASK_FINISH, but called by the user.
 	// (int exit_code) -> does not return
 	OP_TASK_EXIT,
+	OP_TASK_EXEC,
 	// Indicate which task is currently focused
 	// (int pid)
 	OP_TASK_FOCUS,
@@ -476,6 +516,7 @@ static int request_symbol (char *symbol) {
 	if (!memcmp(symbol, "OP_USER_KILL", 12)) return OP_USER_KILL;
 	if (!memcmp(symbol, "OP_AWAIT_PID", 12)) return OP_AWAIT_PID;
 	if (!memcmp(symbol, "OP_TASK_EXIT", 12)) return OP_TASK_EXIT;
+	if (!memcmp(symbol, "OP_TASK_EXEC", 12)) return OP_TASK_EXEC;
 	if (!memcmp(symbol, "OP_TASK_FOCUS", 13)) return OP_TASK_FOCUS;
 	if (!memcmp(symbol, "OP_USER_SLEEP", 13)) return OP_USER_SLEEP;
 	if (!memcmp(symbol, "OP_TASK_CYCLES", 14)) return OP_TASK_CYCLES;
@@ -663,6 +704,7 @@ static int *kernel_extensions, kernel_ext_count, kernel_ext_errno;
 static int  kernel_ext_initialized;
 static int *kernel_syscall_handler, kernel_syscall_handler_stack;
 static int  kernel_mem_alloc;
+static int  kernel_stack_overruns;
 static int  kernel_pm_support;
 static int schedule_task_mask;
 static int  kernel_is_slow;
@@ -1395,6 +1437,192 @@ static int kext_register (char *name, int *init, int *start, int *shutdown) {
 }
 
 
+//
+// Task memory: what a task owns, and who gives it back.
+//
+// A task's own malloc()s never reach the kernel unless protected mode is
+// on; when it is, they arrive here (extensions/c4ke_pm.c) and this is
+// where they are written down. A program is not obliged to free what it
+// allocated -- and even a program that would has no say in being killed
+// -- so the kernel keeps the list and empties it in kernel_clean_task.
+// Without this, twelve compiler runs in one session leave twelve arenas
+// behind and the machine needs four times the memory it should.
+// See docs/task-memory.md.
+//
+// Each tracked block carries TMEM__Sz words in front of the pointer the
+// task is given, holding its size and its place in the owning task's
+// doubly-linked list.
+//
+// The awkward part is FREE. A protected task can perfectly well free
+// something it did NOT get from here: u0's atexit table is allocated by
+// a constructor, which the loader runs in kernel mode, and released by a
+// destructor, which runs in the task. Deciding by peeking at the words
+// in front of the pointer is both an out-of-bounds read and a guess, so
+// instead the kernel keeps a set of the pointers it handed out -- the
+// same open-addressed shape as c4m's own c4_mt_ table (c4m.c:1150),
+// tombstones and all, since membership is the only question there is no
+// value array. A pointer that is not in it is freed exactly as given.
+//
+enum { KTM_EMPTY, KTM_DEAD };     // 0 and 1 are not valid heap pointers
+static int *ktm_key;
+static int  ktm_cap, ktm_live, ktm_used;
+
+static int ktm_slot (int p) {
+	// Heap pointers are at least 8-byte aligned, so the low three bits
+	// carry nothing; fold the high half down so that a run of adjacent
+	// allocations does not become a run of adjacent slots.
+	return ((p >> 3) ^ (p >> 17)) & (ktm_cap - 1);
+}
+
+// Insert into a table known to have room. Used by the rehash, where
+// growing again would be circular.
+static void ktm_put_raw (int p) {
+	int i;
+	i = ktm_slot(p);
+	while (ktm_key[i] != KTM_EMPTY) {
+		if (ktm_key[i] == p) return;
+		i = (i + 1) & (ktm_cap - 1);
+	}
+	ktm_key[i] = p;
+	++ktm_live;
+	++ktm_used;
+}
+
+// Returns 0 on success. Rehashes at the same size when the table is
+// mostly tombstones, which is the steady state for a compiler.
+static int ktm_grow () {
+	int *old;
+	int  oldcap, cap, i;
+
+	old = ktm_key;
+	oldcap = ktm_cap;
+	cap = ktm_cap ? ktm_cap + ktm_cap : 1024;
+	if (ktm_live * 4 < oldcap) cap = oldcap;
+	if (!(ktm_key = malloc(cap * sizeof(int)))) { ktm_key = old; return 1; }
+	memset(ktm_key, 0, cap * sizeof(int));
+	ktm_cap = cap;
+	ktm_live = 0;
+	ktm_used = 0;
+	i = 0;
+	while (i < oldcap) {
+		if (old[i] != KTM_EMPTY && old[i] != KTM_DEAD) ktm_put_raw(old[i]);
+		++i;
+	}
+	if (old) free(old);
+	return 0;
+}
+
+static int ktm_put (int p) {
+	int i;
+	if (ktm_used + ktm_used >= ktm_cap)
+		if (ktm_grow()) return 0;
+	i = ktm_slot(p);
+	while (ktm_key[i] != KTM_EMPTY && ktm_key[i] != KTM_DEAD) {
+		if (ktm_key[i] == p) return 1;
+		i = (i + 1) & (ktm_cap - 1);
+	}
+	if (ktm_key[i] == KTM_EMPTY) ++ktm_used;
+	ktm_key[i] = p;
+	++ktm_live;
+	return 1;
+}
+
+static int ktm_has (int p) {
+	int i, n;
+	if (!ktm_cap) return 0;
+	i = ktm_slot(p);
+	n = 0;
+	while (ktm_key[i] != KTM_EMPTY && n < ktm_cap) {
+		if (ktm_key[i] == p) return 1;
+		i = (i + 1) & (ktm_cap - 1);
+		++n;
+	}
+	return 0;
+}
+
+static void ktm_del (int p) {
+	int i, n;
+	if (!ktm_cap) return;
+	i = ktm_slot(p);
+	n = 0;
+	while (ktm_key[i] != KTM_EMPTY && n < ktm_cap) {
+		if (ktm_key[i] == p) { ktm_key[i] = KTM_DEAD; --ktm_live; return; }
+		i = (i + 1) & (ktm_cap - 1);
+		++n;
+	}
+}
+
+static int *kernel_task_malloc (int *t, int size) {
+	int *p;
+
+	if (size < 0) return 0;
+	if (!(p = malloc(size + sizeof(int) * TMEM__Sz))) return 0;
+	p[TMEM_MAGIC] = TMEM_MAGIC_VALUE;
+	p[TMEM_PREV]  = 0;
+	p[TMEM_NEXT]  = t[TASK_MEM_HEAD];
+	p[TMEM_SIZE]  = size;
+	if (p[TMEM_NEXT]) ((int *)p[TMEM_NEXT])[TMEM_PREV] = (int)p;
+	t[TASK_MEM_HEAD]  = (int)p;
+	t[TASK_MEM_ALLOC] = t[TASK_MEM_ALLOC] + size;
+	p = p + TMEM__Sz;
+	ktm_put((int)p);
+	return p;
+}
+
+static void kernel_task_free (int *t, int *ptr) {
+	int *p;
+
+	if (!ptr) return;
+	if (!ktm_has((int)ptr)) { free(ptr); return; }   // not ours; as given
+	ktm_del((int)ptr);
+	p = ptr - TMEM__Sz;
+	if (p[TMEM_PREV]) ((int *)p[TMEM_PREV])[TMEM_NEXT] = p[TMEM_NEXT];
+	else              t[TASK_MEM_HEAD] = p[TMEM_NEXT];
+	if (p[TMEM_NEXT]) ((int *)p[TMEM_NEXT])[TMEM_PREV] = p[TMEM_PREV];
+	t[TASK_MEM_ALLOC] = t[TASK_MEM_ALLOC] - p[TMEM_SIZE];
+	p[TMEM_MAGIC] = 0;
+	free(p);
+}
+
+static int *kernel_task_realloc (int *t, int *ptr, int size) {
+	int *n, *p;
+	int  old, i;
+	char *s, *d;
+
+	if (!ptr) return kernel_task_malloc(t, size);
+	if (size <= 0) { kernel_task_free(t, ptr); return 0; }
+	// A pointer this kernel never handed out has no recorded length, so
+	// there is no safe number of bytes to copy -- the same answer c4m's
+	// own c4_realloc gives (c4m.c:1252).
+	if (!ktm_has((int)ptr)) return 0;
+	p = ptr - TMEM__Sz;
+	old = p[TMEM_SIZE];
+	if (old >= size) return ptr;
+	if (!(n = kernel_task_malloc(t, size))) return 0;
+	s = (char *)ptr;
+	d = (char *)n;
+	i = 0;
+	while (i < old) { d[i] = s[i]; ++i; }
+	kernel_task_free(t, ptr);
+	return n;
+}
+
+// Everything the task still owns. Called from kernel_clean_task, which
+// is the one place that knows a task is really finished with.
+static void kernel_task_release (int *t) {
+	int *p, *next;
+
+	p = (int *)t[TASK_MEM_HEAD];
+	while (p) {
+		next = (int *)p[TMEM_NEXT];
+		ktm_del((int)(p + TMEM__Sz));
+		p[TMEM_MAGIC] = 0;
+		free(p);
+		p = next;
+	}
+	t[TASK_MEM_HEAD] = 0;
+}
+
 // Clean up a task. Called by idle and the kernel shutdown routine.
 // Assumes already in critical path section.
 static void kernel_clean_task (int *t) {
@@ -1410,6 +1638,11 @@ static void kernel_clean_task (int *t) {
 	// kernel_task_current = ct;
 
 	// Free the data used by this process
+
+	// Everything the task allocated for ITSELF, if the kernel was in a
+	// position to see it. This is the one kind of memory a task can own
+	// that nothing else will ever return.
+	kernel_task_release(t);
 
 	if ((p = (int *)t[TASK_NAME])) {
 		if (t != kernel_tasks)
@@ -1461,10 +1694,58 @@ static int *kernel_task_sighandler (int *task, int sig) {
 #define kernel_task_sighandler(task, sig) ((int *)task[TASK_SIGHANDLERS]) + (sig * SIGH__Sz)
 #endif
 
+//
+// Stack guard.
+//
+// Every task stack is allocated with TASK_STACK_GUARD poisoned bytes
+// underneath it. A task that recurses past the bottom writes into those
+// words first and into somebody else's heap block second; checking the
+// poison at every context switch turns a silent, delayed heap
+// corruption into a message naming the task that caused it.
+//
+// The check runs on the OUTGOING task: kernel_before_switch is called
+// after its registers have been saved and before kernel_task_current is
+// moved on, so kernel_task_current is still the task that just ran.
+//
+static int kernel_stack_intact (int *t) {
+	int *g, i;
+	if (!t[TASK_BASE]) return 1;
+	g = (int *)t[TASK_BASE];
+	i = TASK_STACK_GUARD / sizeof(int);
+	while (i--)
+		if (g[i] != TASK_STACK_POISON) return 0;
+	return 1;
+}
+
+static void kernel_stack_check (int *t) {
+	int used;
+	if (!t[TASK_BASE]) return;
+	// Low-water mark, sampled at every switch. Not exact -- a peak
+	// between two switches is invisible, and trap_schedule_in_trap calls
+	// kernel_before_switch before it saves the outgoing registers, so
+	// there the reading is one switch stale -- but enough to size a
+	// stack by. The guard check below reads memory, not registers, and
+	// is exact either way.
+	if (!t[TASK_STACK_LOW] || t[TASK_REG_SP] < t[TASK_STACK_LOW])
+		t[TASK_STACK_LOW] = t[TASK_REG_SP];
+	if (t[TASK_STACK_BROKEN]) return;
+	if (kernel_stack_intact(t)) return;
+	t[TASK_STACK_BROKEN] = 1;
+	++kernel_stack_overruns;
+	used = TASK_STACK_GUARD + TASK_STACK_SIZE - (t[TASK_REG_SP] - t[TASK_BASE]);
+	printf("c4ke: task %d (%s) OVERRAN ITS STACK: %d of %d bytes, guard broken.\n",
+	       t[TASK_ID], t[TASK_NAME] ? (char *)t[TASK_NAME] : "?", used, TASK_STACK_SIZE);
+	printf("c4ke: the heap below 0x%lx is no longer trustworthy.\n", t[TASK_BASE]);
+}
+
 // Before switching to a task, check if any signals are pending, and if so
-// cause a process trap before we switch to it.
+// cause a process trap before we switch to it. Also the point at which
+// the task being switched AWAY from has its stack guard checked.
 static void kernel_before_switch (int *task) {
 	int *sigh, i;
+
+	if (kernel_task_current && kernel_task_current != task)
+		kernel_stack_check(kernel_task_current);
 
 	// TODO: need a SIGWAITING or something to tell if the process is already in a signal handler.
 	if (task[TASK_SIGPENDING]) {
@@ -1506,6 +1787,14 @@ static void kernel_task_finish (int *task) {
 	// kext_run_all1(KEXT_EVENT, KEVT_TASK_FINISH);
 	// kernel_event_handler(KEVT_TASK_FINISH, task);
 	// kernel_task_current = ct;
+
+	// A task that overran and then exited without being switched out
+	// once more would otherwise never be checked.
+	kernel_stack_check(task);
+	if (kernel_verbosity >= VERB_MAX && task[TASK_STACK_LOW])
+		printf("c4ke: task %d used at most %d of %d stack bytes\n", task[TASK_ID],
+		       TASK_STACK_GUARD + TASK_STACK_SIZE - (task[TASK_STACK_LOW] - task[TASK_BASE]),
+		       TASK_STACK_SIZE);
 
 	// Update kernel counters
 	s = task[TASK_STATE];
@@ -1575,7 +1864,7 @@ static void trap_schedule_in_trap (int trap, int ins, int mode, int a, int *bp, 
 	kernel_task_current[TASK_REG_PC] = (int)returnpc;
 	// Load new state
 	if (kernel_pm_support)
-		mode = trap_schedule_in_trap_next[TASK_PRIVS] == PRIV_KERNEL ? MODE_UNPROTECTED : MODE_PROTECTED;
+		mode = (trap_schedule_in_trap_next[TASK_PRIVS] == PRIV_KERNEL || trap_schedule_in_trap_next[TASK_LOADING]) ? MODE_UNPROTECTED : MODE_PROTECTED;
 	a  =        trap_schedule_in_trap_next[TASK_REG_A];
 	bp = (int *)trap_schedule_in_trap_next[TASK_REG_BP];
 	sp = (int *)trap_schedule_in_trap_next[TASK_REG_SP];
@@ -1650,6 +1939,26 @@ static void op_peek_sp (int trap, int ins, int mode, int a, int *bp, int *sp, in
 	trap_exit();
 }
 
+// Enter the program.
+//
+// A task starts life as the LOADER -- task_loadc4r, which is kernel
+// code -- and only becomes the program at the moment it calls the
+// program's main. That distinction matters as soon as the kernel tracks
+// a task's allocations: everything the loader allocates (the image, its
+// relocated code and data, the task's name) is the KERNEL's to free, in
+// kernel_clean_task, and tracking it as the task's own would free it
+// twice. So a task runs unprotected until this opcode, whatever
+// privilege it was started with.
+//
+// The mode change takes effect immediately because mode is part of the
+// trap frame TLEV restores -- the same lever pm_syscall_handler uses.
+static void op_task_exec (int trap, int ins, int mode, int a, int *bp, int *sp, int *returnpc) {
+	kernel_task_current[TASK_LOADING] = 0;
+	if (kernel_pm_support)
+		mode = kernel_task_current[TASK_PRIVS] == PRIV_KERNEL ? MODE_UNPROTECTED : MODE_PROTECTED;
+	trap_exit();
+}
+
 // Handle a schedule request.
 // We do this by obtaining a new task, saving the register state to the old task,
 // and putting the new task register state in place before returning.
@@ -1669,7 +1978,7 @@ static void op_schedule (int trap, int ins, int mode, int a, int *bp, int *sp, i
 		// Load new state
 		kernel_before_switch(next);
 		if (kernel_pm_support)
-			mode = next[TASK_PRIVS] == PRIV_KERNEL ? MODE_UNPROTECTED : MODE_PROTECTED;
+			mode = (next[TASK_PRIVS] == PRIV_KERNEL || next[TASK_LOADING]) ? MODE_UNPROTECTED : MODE_PROTECTED;
 		a  =        next[TASK_REG_A];
 		bp = (int *)next[TASK_REG_BP];
 		sp = (int *)next[TASK_REG_SP];
@@ -1715,7 +2024,7 @@ static void op_task_finish (int trap, int ins, int mode, int a, int *bp, int *sp
 	// printf("op_task_finish: found task, loading %d\n", next[TASK_ID]);
 	// Load new state
 	if (kernel_pm_support)
-		mode = next[TASK_PRIVS] == PRIV_KERNEL ? MODE_UNPROTECTED : MODE_PROTECTED;
+		mode = (next[TASK_PRIVS] == PRIV_KERNEL || next[TASK_LOADING]) ? MODE_UNPROTECTED : MODE_PROTECTED;
 	a  =        next[TASK_REG_A];
 	bp = (int *)next[TASK_REG_BP];
 	sp = (int *)next[TASK_REG_SP];
@@ -1752,7 +2061,7 @@ static void op_task_exit (int trap, int ins, int mode, int a, int *bp, int *sp, 
 
 	// Load new state
 	if (kernel_pm_support)
-		mode = next[TASK_PRIVS] == PRIV_KERNEL ? MODE_UNPROTECTED : MODE_PROTECTED;
+		mode = (next[TASK_PRIVS] == PRIV_KERNEL || next[TASK_LOADING]) ? MODE_UNPROTECTED : MODE_PROTECTED;
 	a  =        next[TASK_REG_A];
 	bp = (int *)next[TASK_REG_BP];
 	sp = (int *)next[TASK_REG_SP];
@@ -1986,14 +2295,18 @@ static int *start_task_builtin (int *entry, int argc, char **_argv, char *name, 
 	if (kernel_verbosity >= VERB_MAX)
 		printf("c4ke: found free task at 0x%lx\n", t);
 
-	if (!(bp = sp = kmalloc(TASK_STACK_SIZE))) {
+	if (!(bp = sp = kmalloc(TASK_STACK_GUARD + TASK_STACK_SIZE))) {
 		free(t);
 		start_errno = START_NOSTACK;
 		if (kernel_running)
 			critical_path_end();
 		return 0;
 	}
-	memset(sp, 0, TASK_STACK_SIZE);
+	memset(sp, 0, TASK_STACK_GUARD + TASK_STACK_SIZE);
+	// Poison the guard. Everything above it is the task's; anything that
+	// disturbs these words has already left its own stack.
+	i = TASK_STACK_GUARD / sizeof(int);
+	while (i--) sp[i] = TASK_STACK_POISON;
 	if (kernel_verbosity >= VERB_MAX)
 		printf("c4ke: allocated %d bytes for task stack at 0x%lx\n", TASK_STACK_SIZE, bp);
 
@@ -2057,7 +2370,7 @@ static int *start_task_builtin (int *entry, int argc, char **_argv, char *name, 
 	t[TASK_BASE] = (int)bp;
 	t[TASK_CODE] = 0;
 	t[TASK_DATA] = 0;
-	bp = sp = (int *)((int)sp + TASK_STACK_SIZE);
+	bp = sp = (int *)((int)sp + TASK_STACK_GUARD + TASK_STACK_SIZE);
 
 	// Avoid a c4 issue where printf can read past the allocated stack
 	sp = bp = sp - 6;
@@ -2072,6 +2385,10 @@ static int *start_task_builtin (int *entry, int argc, char **_argv, char *name, 
 	if (kernel_verbosity >= VERB_MAX) {
 		printf("c4ke: updating task at 0x%lx\n", t);
 	}
+	// Every task begins in the loader; see op_task_exec. Builtin kernel
+	// threads never clear it, which costs them nothing -- they are
+	// PRIV_KERNEL and unprotected either way.
+	t[TASK_LOADING] = 1;
 	t[TASK_ID] = ++kernel_task_id_counter;
 	t[TASK_NICE]   = t[TASK_NICE_BASE] = NICE_NORMAL; // default
 	// DEBUG renice based on name
@@ -2520,8 +2837,12 @@ static int task_loadc4r (int argc, char **argv) {
 	// c4r_dump_info(module);
 	result = -1;
 	kernel_task_current[TASK_C4R] = (int)module;
-	if (module[C4R_LOADCOMPLETE])
+	if (module[C4R_LOADCOMPLETE]) {
+		// Everything above this line was the kernel loading a program.
+		// Everything below it is the program.
+		__c4_opcode(OP_TASK_EXEC);
 		result = loadc4r_execute(module, argc, argv);
+	}
 	else
 		printf("c4ke: load not complete\n");
 	if (alt_file) free(alt_file);
@@ -2574,7 +2895,7 @@ static void ih_cycle (int type, int ins, int mode, int a, int *bp, int *sp, int 
 		curr[TASK_REG_PC] = (int)returnpc;
 		// Load new state
 		if (kernel_pm_support)
-			mode = next[TASK_PRIVS] == PRIV_KERNEL ? MODE_UNPROTECTED : MODE_PROTECTED;
+			mode = (next[TASK_PRIVS] == PRIV_KERNEL || next[TASK_LOADING]) ? MODE_UNPROTECTED : MODE_PROTECTED;
 		kernel_before_switch(next);
 		a  =        next[TASK_REG_A];
 		bp = (int *)next[TASK_REG_BP];
@@ -2816,7 +3137,7 @@ static void kern_tasks_export_update_real () {
 			target[KTE_TASK_CYCLES] = t[TASK_CYCLES];
 			target[KTE_TASK_TIMEMS] = t[TASK_TIMEMS];
 			target[KTE_TASK_TRAPS]  = t[TASK_TRAPS];
-			target[KTE_TASK_STACK]  = (t[TASK_BASE] ? (TASK_STACK_SIZE - (t[TASK_REG_SP] - t[TASK_BASE])) : 0);
+			target[KTE_TASK_STACK]  = (t[TASK_BASE] ? (TASK_STACK_GUARD + TASK_STACK_SIZE - (t[TASK_REG_SP] - t[TASK_BASE])) : 0);
 			if (t != kernel_tasks)
 				target[KTE_TASK_ALLOC]  = t[TASK_MEM_ALLOC];
 			else
@@ -3526,6 +3847,7 @@ int main (int argc, char **argv) {
 	install_custom_opcode(OP_TASK_FINISH, (int *)&op_task_finish);
 	// printf("c4ke: installed OP_TASK_FINISH using handler 0x%x\n", (int *)&op_task_finish);
 	install_custom_opcode(OP_TASK_EXIT, (int *)&op_task_exit);
+	install_custom_opcode(OP_TASK_EXEC, (int *)&op_task_exec);
 	install_custom_opcode(OP_TASK_FOCUS, (int *)&op_task_focus);
 	install_custom_opcode(OP_PEEK_BP, (int *)&op_peek_bp);
 	install_custom_opcode(OP_PEEK_SP, (int *)&op_peek_sp);
@@ -3820,6 +4142,11 @@ int main (int argc, char **argv) {
 			printf("c4ke: restoring old signal handler @ 0x%lx\n", old_sig_int);
 		__c4_signal(__c4_sigint(), old_sig_int);
 	}
+	// Always, at any verbosity: a task that overran its stack corrupted
+	// the heap, and every result produced after that point is suspect.
+	if (kernel_stack_overruns)
+		printf("c4ke: WARNING: %d task(s) overran their stack this session.\n",
+		       kernel_stack_overruns);
 	if (kernel_verbosity >= VERB_MED) {
 		t = __time();
 		printf("c4ke: clean shutdown in ");

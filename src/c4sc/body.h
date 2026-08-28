@@ -237,7 +237,13 @@ int sc_compile (int argc, char **argv) {
 	return 0;
 }
 
-int main (int argc, char **argv) {
+// The driver proper. main() is a wrapper so that every one of the
+// returns below passes through one place that hands the memory back --
+// see gc_shutdown in src/c4sp/include/gc.h. Under a host that is
+// courtesy; under C4KE, where this runs as a task and the kernel cannot
+// see a task's own allocations, it is the difference between twelve
+// compiles fitting in 32 MB and not.
+static int sc_run (int argc, char **argv) {
 	int *orig, *m, *m2, *out, *r;
 	char *in, *outname;
 	int   fuse, tokens, pp, ast, pptok, comp, cells;
@@ -299,4 +305,14 @@ int main (int argc, char **argv) {
 	r = sc_call_named("file:write", cons(mk_string(outname), cons(out, 0)));
 	if (c4sp_err || cell_is_false(r)) { printf("c4sc-host: write failed\n"); return 1; }
 	return 0;
+}
+
+int main (int argc, char **argv) {
+	int r;
+	r = sc_run(argc, argv);
+	gc_shutdown();
+	pr_shutdown();
+	atoms_shutdown();
+	stdlib_shutdown();
+	return r;
 }

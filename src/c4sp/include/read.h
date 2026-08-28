@@ -31,6 +31,14 @@ int pr_init () {
 
 void pr_reset () { pr_len = 0; }
 
+// Give the print buffer back. See gc_shutdown in gc.h for why a program
+// that is about to exit bothers.
+void pr_shutdown () {
+	if (pr_buf) free(pr_buf);
+	pr_buf = 0;
+	pr_len = pr_cap = 0;
+}
+
 void pr_ch (int c) {
 	char *n;
 	int i;

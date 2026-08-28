@@ -60,6 +60,20 @@ char *atom_name (int id) {
 	return atom_names[id];
 }
 
+// Give the atom table back. Atom names are copied on intern, so each one
+// owns its buffer.
+void atoms_shutdown () {
+	int i;
+	i = atom_count;
+	while (i--) if (atom_names[i]) free(atom_names[i]);
+	if (atom_names) free((char *)atom_names);
+	if (atom_lens)  free((char *)atom_lens);
+	atom_names = 0;
+	atom_lens = 0;
+	atom_count = 0;
+	atom_cap = 0;
+}
+
 // Returns 0 on success.
 int atoms_init () {
 	atom_cap = 512;

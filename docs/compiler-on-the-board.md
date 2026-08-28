@@ -512,30 +512,25 @@ heap scales correctly (a program that mallocs a megabyte at a time gets
 126, 254 and 510 MB at those three sizes), so the machine is not the
 limit either.
 
-The cause is written down in C4KE, in its own words
-(`src/c4ke/extensions/c4ke_pm.c:106`):
+**FIXED, and the cause was not what this section first said.** The
+paragraph that stood here blamed the untracked `MALC` in
+`src/c4ke/extensions/c4ke_pm.c:106`. That file is not compiled into the
+kernel at all — `CONFIG_ENABLE_PM` is 0 — so no `MALC` has ever passed
+through it, and the guess was wrong.
 
-        } else if (ins == MALC) {
-                // TODO: record allocation details somewhere...
-                *a = (int)malloc(*sp);
+The real cause was a **task stack overflow**: `TASK_STACK_SIZE` was
+0xFFFF, 64 KB, and `c4sc` compiling the largest module in C4IX ran off
+the bottom of it and wrote into the heap blocks underneath. That is why
+more memory changed nothing — a task's stack is a fixed size whatever
+`-m` says. `docs/task-memory.md` has the diagnosis, the fix, the guard
+that makes it impossible to happen quietly again, and the work that
+followed from it: C4KE now reclaims a task's own allocations, and c4sp
+and c4sc hand their arenas back.
 
-A protected task's `MALC` is forwarded straight to the firmware
-allocator and **never tracked**, so nothing is returned when the task
-exits — and c4sp's arena *grows* (heap = 4x live), so each compile
-leaves a progressively larger dead block behind whatever the initial
-`-c` was. Lowering it from 400,000 cells to 200,000 changed nothing,
-which is the giveaway: the initial size is not what accumulates.
-
-So **C4KE has the same gap C4DOS has**, one rung up and with a bigger
-budget, and the insensitivity to machine size points past simple
-exhaustion at the firmware free list — `src/c4bb/fw/fw.c:52` already
-documents that list being corruptible by an interrupt landing
-mid-mutation. Which of the two it is has not been established.
-
-**What would fix it** is the TODO: track a task's allocations and free
-them when it exits. That is a real piece of C4KE, it is the same feature
-C4DOS wants, and doing it once at the kernel rung would make B4KE the
-fastest route to C4IX rather than the incomplete one.
+**B4KE under C4KE now builds all twelve modules and links C4IX**, and
+does it in **16 MB** rather than the 128 MB the same build needed before
+(and against 128 MB for the C4DOS route). It is the fastest way to C4IX
+on this machine and the correct one.
 
 **Why 128 MB, and it is not the RAM disk.** C4DOS does not return a
 transient's memory when it exits — `RUN` mallocs the image's code and

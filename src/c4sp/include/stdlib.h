@@ -296,6 +296,8 @@ int file_exists (char *path) {
 
 char *file_path_buf;
 
+// Released by stdlib_shutdown, below.
+
 // Returns a nul-terminated path (static buffer), or the input name.
 char *file_find (char *name, int len) {
 	char *pre, *d, *s;
@@ -648,6 +650,12 @@ void stdlib_bind (int *env, char *name, int type, int id) {
 }
 
 // Populate the global environment.
+// The one buffer the library keeps between calls.
+void stdlib_shutdown () {
+	if (file_path_buf) free(file_path_buf);
+	file_path_buf = 0;
+}
+
 void stdlib_init (int *env) {
 	cell_true  = gc_root_true  = mk_atom(A_TRUE);
 	cell_false = gc_root_false = mk_atom(A_FALSE);

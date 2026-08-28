@@ -40,9 +40,15 @@ const TRAP_NAMES = ['TRAP_ILLOP', 'TRAP_HARD_IRQ', 'TRAP_SOFT_IRQ', 'TRAP_SIGNAL
 
 // Opcodes that trap with TRAP_PM_VIOLATION in protected mode
 // (the guarded cases in c4m.c's dispatch: OPEN READ CLOS PRTF MALC
-// FREE PUTC PUTS EXIT INFO; MSET/MCMP/MCPY/STRC/ITH/C4CF are not
+// FREE PUTC PUTS RALC EXIT INFO; MSET/MCMP/MCPY/STRC/ITH/C4CF are not
 // gated there, deliberately mirrored).
-export const PM_GATED = new Set([30, 31, 32, 33, 34, 35, 38, 39, 40, 57]);
+//
+// RALC (41) was missing here while c4m.c:1922 has always gated it. It
+// mattered the moment C4KE started tracking a protected task's
+// allocations (docs/task-memory.md): a realloc that traps on one host
+// and does not on the other is an allocation the kernel knows about on
+// one host and not the other.
+export const PM_GATED = new Set([30, 31, 32, 33, 34, 35, 38, 39, 40, 41, 57]);
 
 export class Machine {
   constructor(arena, ucode, devices, opts = {}) {

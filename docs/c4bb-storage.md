@@ -174,7 +174,7 @@ and nothing is lost when the machine stops.
       `innerbench` needs (`c4.c`, `c4m.c`) are on `c4ke-root` and on
       none of the climb disks. Bar: after the walkthrough's C4KE boots,
       those all run.
-- [ ] **M10 — the firmware boots like a BIOS.** Banner, a RAM probe it
+- [x] **M10 — the firmware boots like a BIOS.** Banner, a RAM probe it
       prints, a drive probe, boot the first medium that has a boot
       image, and a retry loop that says `no valid media` and picks up a
       disk inserted while it waits. Bar: start the machine with no
@@ -236,6 +236,79 @@ so the stock-c4 `raycast-dos32.c4r` is what goes on the disk.
 
 Verified by booting C4KE against the climb floppy: `top -b -n 1` prints
 the narrow table, `bench -q` runs, `mandel` renders in 7582 ms.
+
+### M10 — done
+
+`fw.c` has a `main()` now, and it is the BIOS. It runs when the machine
+is started with **no program** — `cli.js -d disk` with nothing after it
+— because then the firmware *is* the program (`loader.js` places it as
+both). An image named on the command line still boots exactly as before;
+that is the machine with something in ROM.
+
+    c4bb -- the breadboard computer
+    firmware: malloc, free, realloc, printf, 1 drives
+    bios: 30 MB RAM ok (0x7000-0x1eff000)
+    bios: drive 0 has c4dos32.c4r
+    bios: booting c4dos32.c4r
+    C4DOS version 0.1
+
+The RAM line is a real probe, not a report: it writes a pattern near
+each end of the heap and reads it back, so a machine configured with
+more memory than it has says so here rather than three minutes into a
+compile.
+
+**A medium is bootable if it has `boot.c4r`, or a `boot.cfg` naming the
+image.** The second exists so a disk that already carries a kernel under
+its own name does not need a second 200 KB copy of it.
+
+**Nothing to boot is not an error.** It says so, waits half a second off
+the machine's own millisecond counter, writes `DISK_RESCAN` for each
+drive and looks again — so a disk put in *while it waits* is picked up:
+
+    bios: drive 0: no boot media
+    bios: insert a bootable disk
+    ... (disk inserted here) ...
+    bios: drive 0 has c4dos32.c4r
+
+**The loader is in the firmware.** `__bios_exec` is a port of `c4l.c`,
+which is the same job in plain c4 — header, code, data, patch table,
+constructors, entry, destructors. Two differences: the word size, and
+that both segments are copied out of the read buffer so nothing depends
+on where it landed. Where c4l has to rewrite its own call site (plain c4
+has no indirect call), the board has `JSRS` and c4lc emits it, so a
+variable holding an address is simply called.
+
+### The reset — asked for while M10 was being built
+
+An operating system that has just written a boot disk needs to say "now
+boot it", and "stop the machine and start it again" is a different and
+much bigger thing on a homebrew computer.
+
+`RESET` (0x198): writing it halts like `POWER`, and the host zeroes the
+arena, resets every CPU latch (`Machine.reset()`), re-reads the media
+and boots the firmware again. **The drives survive** — they are the
+media, and a disk that has just been written is the whole reason to
+reset. A reset always boots the BIOS, never the image named at start,
+for the same reason.
+
+`bb_reboot()` in `include/c4bb.h`, and `src/c4bb/tools/reboot.c` builds
+to an image with no u0, no C4DOS API and no kernel service in it, so the
+same `reboot.c4r` is a C4DOS transient, a C4KE task and a C4IX program.
+
+    A>RUN reboot.c4r
+    rebooting...
+    c4bb: soft reset
+
+    c4bb -- the breadboard computer
+    bios: drive 0 has c4dos32.c4r
+    A>
+
+### raycast, on all three
+
+Shipped as the compiled `raycast-dos32.c4r` (c4lc, `-conforming`, stock
+c4 opcodes plus TIME), which is what makes one image enough. Verified
+rendering under **C4DOS**, under **C4KE**, and under **C4IX** — C4IX
+runs C4KE binaries, so no third build was needed.
 
 ## Notes taken while scoping
 

@@ -22,7 +22,10 @@ enum {
     VEC_MALC = 0x20, VEC_FREE = 0x24, VEC_RALC = 0x28,
     VEC_PRTF = 0x2c, VEC_STRC = 0x30,
     DEV_HEAP_BASE = 0x144, DEV_HEAP_END = 0x148,
-    DEV_INTERVAL = 0x154
+    DEV_INTERVAL = 0x154,
+    // Drives, for the BIOS at the bottom of this file.
+    DEV_DRIVE = 0x13c, DEV_DCOUNT = 0x188, DEV_DRO = 0x18c,
+    DEV_EJECT = 0x190, DEV_RESCAN = 0x194, DEV_TIME_MS = 0x10c
 };
 enum { FW_TMP_SZ = 80 };
 
@@ -322,4 +325,237 @@ void __attribute__((constructor)) fw_init (int c4r) {
     __fw_heap_init();
 }
 
-int main (int argc, char **argv) { return 0; }   // never the entry image
+//
+// The BIOS.
+//
+// Everything above this line is what the CPU's microcode reaches for
+// when a syscall opcode needs a subroutine. This part is the machine
+// switching on: a banner, a look at how much memory is really there, a
+// look at what is in the drives, and then it hands over. It runs only
+// when the machine is started with no program -- `cli.js -d disk` with
+// nothing after it -- because then the firmware IS the program.
+//
+// Why bother, when the host could just be told which image to run: on
+// the breadboard, changing what boots means changing what is in a
+// drive, and that is a thing a person does with their hands. Eject the
+// C4DOS floppy, and the next thing round the loop boots what is in
+// drive 1. See docs/c4bb-storage.md.
+//
+// A medium is bootable if it has boot.c4r, or a boot.cfg naming the
+// image to load. The second is there so a disk can boot a kernel it
+// already carries under its own name without a second 200 KB copy.
+//
+enum { BIOS_CHUNK = 65536 };
+
+// Calling into a freshly loaded image. c4l.c has to rewrite its own
+// call site to do this because plain c4 has no indirect call; the board
+// has JSRS and c4lc emits it, so a variable holding an address is
+// simply called.
+int __bios_call  (int *f, int a)        { return f(a); }
+int __bios_call2 (int *f, int a, int b) { return f(a, b); }
+
+// Half a second, measured off the machine's own millisecond counter --
+// no opcode, and the wait is real time rather than a cycle count, so a
+// person has a chance to put a disk in.
+void __bios_sleep () {
+    int t;
+    t = *(int *)DEV_TIME_MS;
+    while (*(int *)DEV_TIME_MS - t < 500) ;
+}
+
+char *__bios_buf;
+int   __bios_len, __bios_cap;
+
+int __bios_grow () {
+    char *n; int i;
+    if (!(n = (char *)fw_malc(__bios_cap + __bios_cap))) return 0;
+    i = 0;
+    while (i < __bios_len) { n[i] = __bios_buf[i]; ++i; }
+    fw_free((int)__bios_buf);
+    __bios_buf = n;
+    __bios_cap = __bios_cap + __bios_cap;
+    return 1;
+}
+
+// Read a whole file off the selected drive. Returns 0 if it is not
+// there; the buffer is __bios_buf / __bios_len.
+int __bios_slurp (char *name) {
+    int fd, n;
+    if ((fd = open(name, 0)) < 0) return 0;
+    __bios_cap = BIOS_CHUNK + BIOS_CHUNK;
+    if (!(__bios_buf = (char *)fw_malc(__bios_cap))) { close(fd); return 0; }
+    __bios_len = 0;
+    n = 1;
+    while (n > 0) {
+        if (__bios_len + BIOS_CHUNK > __bios_cap) {
+            if (!__bios_grow()) { close(fd); return 0; }
+        }
+        if ((n = read(fd, __bios_buf + __bios_len, BIOS_CHUNK)) > 0)
+            __bios_len = __bios_len + n;
+    }
+    close(fd);
+    return 1;
+}
+
+int __bios_wordat (char *p) { return *(int *)p; }
+
+// Load the image in __bios_buf and jump into it. Returns only if the
+// image is unusable -- if it runs, whatever it does is the rest of the
+// machine's life. A port of c4l.c's loader, which is the same job in
+// plain c4; the differences are the word size and that both segments
+// are copied out so nothing depends on where the read buffer landed.
+int __bios_exec (char *name) {
+    char *p, *data;
+    int  *code, *cons, *des, **av;
+    int   entry, codelen, datalen, memsz, patchlen, conslen, deslen;
+    int   i, w, ptype, paddr, pvalu;
+
+    p = __bios_buf;
+    if (__bios_len < 13) { printf("bios: %s is too short to be an image\n", name); return 0; }
+    if (!(p[0] == 'C' && p[1] == '4' && p[2] == 'R')) {
+        printf("bios: %s is not a .c4r\n", name); return 0;
+    }
+    if (p[4] != 32) { printf("bios: %s is %d-bit; this machine is 32\n", name, p[4]); return 0; }
+    // v3 records the data segment's in-memory size at byte 5; anything
+    // past DATALEN is BSS and has to exist, and be zero, before the
+    // image runs.
+    memsz = p[3] >= 3 ? __bios_wordat(p + 5) : 0;
+
+    w = sizeof(int);
+    p = p + 13;
+    entry    = __bios_wordat(p); p = p + w;
+    codelen  = __bios_wordat(p); p = p + w;
+    datalen  = __bios_wordat(p); p = p + w;
+    patchlen = __bios_wordat(p); p = p + w;
+    p = p + w;                                    // symbol count
+    conslen  = __bios_wordat(p); p = p + w;
+    deslen   = __bios_wordat(p); p = p + w;
+
+    if (memsz < datalen) memsz = datalen;
+
+    p = p + w;                                    // 'C' marker
+    if (!(code = (int *)fw_malc(codelen * w + w))) { printf("bios: out of memory\n"); return 0; }
+    i = 0;
+    while (i < codelen) { code[i] = __bios_wordat(p + i * w); ++i; }
+    p = p + codelen * w;
+
+    p = p + w;                                    // 'D' marker
+    if (!(data = (char *)fw_malc(memsz + w))) { printf("bios: out of memory\n"); return 0; }
+    i = 0;
+    while (i < memsz + w) { data[i] = 0; ++i; }
+    i = 0;
+    while (i < datalen) { data[i] = p[i]; ++i; }
+    p = p + datalen;
+
+    p = p + w;                                    // 'P' marker
+    i = 0;
+    while (i < patchlen) {
+        ptype = __bios_wordat(p);
+        paddr = __bios_wordat(p + w);
+        pvalu = __bios_wordat(p + w + w);
+        p = p + w + w + w;
+        if      (ptype == 0 - 1) code[paddr] = (int)(code + pvalu);
+        else if (ptype == 0 - 2) code[paddr] = (int)(data + pvalu);
+        else if (ptype == 0 - 3) *(int *)(data + paddr) = (int)(code + pvalu);
+        else if (ptype == 0 - 4) *(int *)(data + paddr) = (int)(data + pvalu);
+        ++i;
+    }
+
+    p = p + w;                                    // 'c' marker
+    cons = (int *)p; p = p + conslen * w;
+    p = p + w;                                    // 'd' marker
+    des = (int *)p;
+
+    // The image's own name is its argv[0]: a kernel skips it when it
+    // parses options, so it has to be there.
+    if (!(av = (int **)fw_malc(w + w))) { printf("bios: out of memory\n"); return 0; }
+    av[0] = (int *)name;
+    av[1] = 0;
+
+    printf("bios: booting %s\n", name);
+    i = 0;
+    while (i < conslen) { __bios_call(code + __bios_wordat((char *)(cons + i)), 0); ++i; }
+    __bios_call2(code + entry, 1, (int)av);
+    i = 0;
+    while (i < deslen) { __bios_call(code + __bios_wordat((char *)(des + i)), 0); ++i; }
+    return 1;
+}
+
+// Is there a medium in this drive worth booting? Leaves the drive
+// selected and returns the name to load, or 0.
+char *__bios_bootname (int d) {
+    char *n;
+    int   i;
+    *(int *)DEV_DRIVE = d;
+    if (__bios_slurp("boot.c4r")) return "boot.c4r";
+    if (__bios_slurp("boot.cfg")) {
+        // One line, the image's name. Trim at the first control char so
+        // a file written by anything at all still reads.
+        i = 0;
+        while (i < __bios_len && __bios_buf[i] > 32) ++i;
+        __bios_buf[i] = 0;
+        if (__bios_buf[0]) {
+            n = __bios_buf;
+            if (!__bios_slurp(n)) { printf("bios: drive %d: boot.cfg names %s, which is not there\n", d, n); return 0; }
+            return n;
+        }
+    }
+    return 0;
+}
+
+// A real look at the memory, not just a report of what the loader was
+// told: write a pattern near each end of the heap and read it back, so
+// a machine configured with more memory than it has says so here
+// rather than three minutes into a compile.
+void __bios_ram () {
+    int base, end, mb, *lo, *hi;
+    base = *(int *)DEV_HEAP_BASE;
+    end  = *(int *)DEV_HEAP_END;
+    mb = (end - base) / 1048576;
+    if (end <= base) { printf("bios: no usable memory\n"); return; }
+    lo = (int *)base;
+    hi = (int *)(end - 16);
+    *lo = 1234567;  *hi = 7654321;
+    if (*lo != 1234567 || *hi != 7654321) {
+        printf("bios: RAM test FAILED between 0x%x and 0x%x\n", base, end);
+        return;
+    }
+    *lo = 0; *hi = 0;
+    printf("bios: %d MB RAM ok (0x%x-0x%x)\n", mb, base, end);
+}
+
+int main (int argc, char **argv) {
+    char *name;
+    int   d, drives, waited;
+
+    printf("\n");
+    printf("c4bb -- the breadboard computer\n");
+    printf("firmware: malloc, free, realloc, printf, %d drives\n", *(int *)DEV_DCOUNT);
+    __bios_ram();
+
+    waited = 0;
+    while (1) {
+        drives = *(int *)DEV_DCOUNT;
+        d = 0;
+        while (d < drives) {
+            if ((name = __bios_bootname(d))) {
+                printf("bios: drive %d has %s\n", d, name);
+                if (__bios_exec(name)) return 0;
+            }
+            ++d;
+        }
+        // Nothing to boot. Say so once, then keep looking: a disk put
+        // in while we wait is the intended way to answer this.
+        if (!waited) {
+            d = 0;
+            while (d < drives) { printf("bios: drive %d: no boot media\n", d); ++d; }
+        }
+        printf("bios: insert a bootable disk\n");
+        __bios_sleep();
+        d = 0;
+        while (d < drives) { *(int *)DEV_RESCAN = d; ++d; }
+        ++waited;
+        if (waited > 600) { printf("bios: giving up\n"); return 1; }
+    }
+}
+

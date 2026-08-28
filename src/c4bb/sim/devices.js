@@ -56,6 +56,8 @@ export const DISK_WCLOSE = 0x184;  // w: close and flush -> 0, or -1
 export const DISK_COUNT  = 0x188;  // r: how many drives are attached
 export const DISK_RO     = 0x18c;  // r: 1 if the selected drive is read-only
 export const DISK_EJECT  = 0x190;  // w: empty the drive whose number is written
+export const DISK_RESCAN = 0x194;  // w: re-read the drive whose number is written
+export const RESET       = 0x198;  // w: soft reset -- back to the BIOS
 
 // c4_info() capability bits (c4m.c:206)
 export const C4I_C4M = 0x2, C4I_HRT = 0x10, C4I_SIG = 0x20,
@@ -126,6 +128,8 @@ export class Devices {
     this.drives = opts.drives ||
                   [{ files: opts.files || new Map(), writable: false, sink: null }];
     this.drive = 0;                   // the selected drive
+    this.onRescan = opts.onRescan || null;
+    this.resetRequested = false;
     this.fds = new Map();             // fd -> {data, pos} | {kbd, nonblock} | {w}
     this.nextFd = FD_FIRST;
     this.diskFlags = 0;
@@ -349,6 +353,22 @@ export class Devices {
         if (m) { m.files = new Map(); m.ejected = true; }
         return;
       }
+      // The BIOS's retry loop is only useful if a disk put in while it
+      // waits is actually seen, and the host read the medium once at
+      // start. This is the machine asking to look again.
+      case DISK_RESCAN:
+        if (this.onRescan) this.onRescan(val | 0);
+        return;
+      // A soft reset. An operating system that has just written a boot
+      // disk has no other way to say "start again and find it" -- the
+      // alternative is asking the player to stop the machine and start
+      // it, which on a homebrew computer is a different thing entirely.
+      // Halts like POWER, and the host boots the firmware again.
+      case RESET:
+        this.resetRequested = true;
+        this.halted = true;
+        this.status = val | 0;
+        return;
       case POWER:
         this.halted = true;
         this.status = val | 0;

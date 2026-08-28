@@ -27,7 +27,9 @@ enum {
 	BB_WCLOSE = 0x184,   // w:   close and flush -> 0, or -1
 	BB_COUNT  = 0x188,   // r:   how many drives are attached
 	BB_RO     = 0x18c,   // r:   1 if the selected drive is read-only
-	BB_EJECT  = 0x190    // w:   empty the drive whose number is written
+	BB_EJECT  = 0x190,   // w:   empty the drive whose number is written
+	BB_RESCAN = 0x194,   // w:   re-read the drive whose number is written
+	BB_RESET  = 0x198    // w:   soft reset -- back to the BIOS
 };
 
 // How many drives this machine has, and which one is selected.
@@ -68,3 +70,16 @@ int bb_put (char *name, char *buf, int len) {
 	}
 	return bb_close(fd);
 }
+
+// Ask the machine to start again. Does not return: the host zeroes the
+// arena, places the firmware, and the BIOS looks at the drives as if
+// the power had just come on -- so an operating system that has just
+// written a boot disk can say "now boot it" without anyone touching
+// the machine. The media survive; that is the difference between this
+// and switching off.
+void bb_reboot () {
+	*(int *)BB_RESET = 0;
+}
+
+// Take the medium out of a drive. The BIOS's wait loop notices.
+void bb_rescan (int n) { *(int *)BB_RESCAN = n; }

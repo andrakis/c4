@@ -125,7 +125,10 @@ done
 # than one already-buffered line at once - a real, pre-existing c4sh
 # bug (plausible on real hardware too under fast input), not
 # something c4bb should paper over by pacing input specially.
-c4ke_ls_out=$(printf 'ls /usr/src/bin\n\\q\n' | timeout 300 $C4BB -c 30000000 -d $IMAGES/disk $IMAGES/c4ke32.c4r 2>/dev/null)
+# -a is the flat listing: ls now infers directories from the names and
+# shows one level (basenames), so the full paths this pin is about are
+# what -a prints. The one-level form gets its own check below.
+c4ke_ls_out=$(printf 'ls -a /usr/src/bin\n\\q\n' | timeout 300 $C4BB -c 30000000 -d $IMAGES/disk $IMAGES/c4ke32.c4r 2>/dev/null)
 loaded_counts=$(echo "$c4ke_ls_out" | grep -oE '[0-9]+/[0-9]+ entries loaded')
 ok_n="${loaded_counts%%/*}"; total_n="${loaded_counts#*/}"; total_n="${total_n%% entries*}"
 if [ -n "$loaded_counts" ] && [ "$ok_n" = "$total_n" ] && [ -n "$total_n" ]; then
@@ -139,6 +142,17 @@ if echo "$c4ke_ls_out" | grep -qF "/usr/src/bin/ls.c"; then
     echo "test-c4bb: c4ke-vfs ls listing OK"
 else
     echo "test-c4bb: c4ke-vfs ls listing FAILED"; fail=1
+fi
+
+# And the default: one level, directories as names ending in '/', which
+# is what makes the root readable on an 80-column console at all.
+c4ke_lsdir_out=$(printf 'ls /usr\n\\q\n' | timeout 300 $C4BB -c 30000000 -d $IMAGES/disk $IMAGES/c4ke32.c4r 2>/dev/null)
+if echo "$c4ke_lsdir_out" | grep -qE '(^| )src/' && \
+   ! echo "$c4ke_lsdir_out" | grep -qF "/usr/src/bin/ls.c"; then
+    echo "test-c4bb: c4ke-vfs ls one level OK"
+else
+    echo "test-c4bb: c4ke-vfs ls one level FAILED"; fail=1
+    echo "$c4ke_lsdir_out" | tail -5
 fi
 
 c4ke_cat_out=$(printf 'cat /usr/src/bin/vfsload.c\n\\q\n' | timeout 300 $C4BB -c 30000000 -d $IMAGES/disk $IMAGES/c4ke32.c4r 2>/dev/null)

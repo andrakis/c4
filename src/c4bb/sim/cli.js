@@ -17,7 +17,7 @@
 //
 // Firmware is loaded from src/c4bb/fw/fw.c4r next to this script.
 
-import { readFileSync, readdirSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, basename } from 'node:path';
 import { Arena, CONS_RET } from './arena.js';
@@ -48,9 +48,18 @@ function parseArgs(argv) {
     else { console.error(`c4bb: unknown option ${argv[i]}`); process.exit(1); }
     i++;
   }
+  // No program: the firmware boots on its own, the way a machine with
+  // nothing but a BIOS does -- it looks for a medium. Which is the
+  // whole point of having drives (docs/c4bb-storage.md M10).
   if (i >= argv.length) {
-    console.error('usage: cli.js [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [--step] program.c4r [args...]');
-    process.exit(1);
+    if (!o.drives.length && !o.diskDir) {
+      console.error('usage: cli.js [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [--step] [program.c4r [args...]]');
+      console.error('       with no program, the firmware boots from the first medium that has one');
+      process.exit(1);
+    }
+    o.progPath = null;
+    o.progArgs = ['bios'];
+    return o;
   }
   o.progPath = argv[i];
   o.progArgs = argv.slice(i);           // argv[0] = program path, like c4l
@@ -67,6 +76,10 @@ function loadDisk(dir, rel = '') {
   const files = new Map();
   if (!dir) return files;
   const base = rel ? join(dir, rel) : dir;
+  // An empty drive is a real thing -- `-w mydisk` on a machine that has
+  // never written one is a BLANK medium, not an error, and that is
+  // exactly the case the whole install story starts from.
+  if (!existsSync(base)) return files;
   for (const name of readdirSync(base)) {
     const p = join(base, name);
     const key = rel ? `${rel}/${name}` : name;
@@ -83,7 +96,7 @@ async function main(argv) {
   const o = parseArgs(argv);
   const ucSource = readFileSync(join(here, '..', 'hw', 'microcode.uc'), 'utf8');
   const fwBytes = new Uint8Array(readFileSync(join(here, '..', 'fw', 'fw.c4r')));
-  const progBytes = new Uint8Array(readFileSync(o.progPath));
+  let progBytes = o.progPath ? new Uint8Array(readFileSync(o.progPath)) : null;
 
   const arena = new Arena(o.arenaMb * 1024 * 1024);
   const out = [];
@@ -91,6 +104,10 @@ async function main(argv) {
   // A writable drive is a host directory, and closing a file there
   // writes it through -- so a medium really does survive the machine
   // being switched off, which is the whole point of having one.
+  // A writable drive gets its directory made now rather than on the
+  // first write, so that a blank medium exists on the host as soon as
+  // it is in the machine -- and so `ls mydisk` says something.
+  for (const d of o.drives) if (d.writable && d.dir) mkdirSync(d.dir, { recursive: true });
   const drives = (o.drives.length ? o.drives : [{ dir: o.diskDir, writable: false }])
     .map(d => ({
       files: loadDisk(d.dir),
@@ -106,6 +123,8 @@ async function main(argv) {
     }));
   const dev = new Devices(arena, {
     drives,
+    // A disk put into the machine while the BIOS is waiting for one.
+    onRescan: n => { if (drives[n] && drives[n].dir) drives[n].files = loadDisk(drives[n].dir); },
     onByte: b => { out.push(b); if (out.length >= 4096 || b === 10) flush(); },
   });
   const machine = new Machine(arena, assemble(ucSource), dev);
@@ -156,9 +175,19 @@ async function main(argv) {
   }
 
   const t0 = Date.now();
-  const { progImg } = boot(machine, fwBytes, progBytes, o.progArgs);
-  const turbo = o.useStep ? null : new Turbo(machine);
-  let status;
+  // A soft reset re-runs everything below from a clean machine, which
+  // is what a reset button does: the arena is zeroed, the firmware is
+  // placed again, and the BIOS looks at the drives as if the power had
+  // just come on. The drives themselves survive, because they are the
+  // media -- that is the whole point of resetting rather than exiting.
+  let progImg, turbo, status;
+  // The reset comes back HERE. Everything in the loop is what happens
+  // when the power comes on; everything above it is the machine itself,
+  // which a reset does not rebuild -- the media in the drives least of
+  // all, since a disk that was just written is the reason to reset.
+  for (;;) {
+  ({ progImg } = boot(machine, fwBytes, progBytes, o.progArgs));
+  turbo = o.useStep ? null : new Turbo(machine);
   try {
     if (o.interactive) {
       // chunked async loop so stdin events can arrive
@@ -187,7 +216,23 @@ async function main(argv) {
       console.error(`c4bb: stopped at cycle budget (${machine.cycle} cycles)`);
       status = 9;
     } else throw e;
-  } finally {
+  }
+  if (!dev.resetRequested) break;
+  flush();
+  console.error('c4bb: soft reset');
+  arena.u8.fill(0);
+  dev.resetRequested = false;
+  dev.halted = false;
+  dev.fds = new Map();
+  dev.nextFd = 3;
+  dev.drive = 0;
+  machine.reset();
+  for (const d of drives) if (d.dir) d.files = loadDisk(d.dir);
+  // A reset boots the BIOS, not whatever image was named at start: the
+  // disk that has just been written is the one that should come up.
+  progBytes = null;
+  }
+  try { } finally {
     flush();
     if (process.stdin.isTTY && o.interactive) process.stdin.setRawMode(false);
   }

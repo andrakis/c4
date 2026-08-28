@@ -123,7 +123,11 @@ export function boot(machine, fwBytes, progBytes, argv) {
   initRom(arena);
 
   const fwImg = loadImage(arena, parseC4r(fwBytes), MEM_BASE);
-  const progImg = loadImage(arena, parseC4r(progBytes), fwImg.top + 16);
+  // No program image: the FIRMWARE is the program. That is the machine
+  // switched on with nothing in ROM but its BIOS, which then goes
+  // looking for a medium to boot -- docs/c4bb-storage.md M10.
+  const progImg = progBytes ? loadImage(arena, parseC4r(progBytes), fwImg.top + 16)
+                            : fwImg;
 
   // argv strings + pointer table in the reserved area above the stack
   let argPtr = arena.stackTop;
@@ -152,7 +156,7 @@ export function boot(machine, fwBytes, progBytes, argv) {
   // constructors: firmware first (fills the vector latches), then the
   // program's, each called with a single argument (c4l.c:188 passes 0)
   for (const c of fwImg.cons) callFunction(machine, c, [0]);
-  for (const c of progImg.cons) callFunction(machine, c, [0]);
+  if (progImg !== fwImg) for (const c of progImg.cons) callFunction(machine, c, [0]);
 
   // boot frame for main(argc, argv), pushed like c4m.c:1466 but with
   // the CONS_RET sentinel so destructors can run on normal return

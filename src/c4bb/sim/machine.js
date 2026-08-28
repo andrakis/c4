@@ -83,6 +83,23 @@ export class Machine {
     this.trapStart = ucode.routines.get('trap');
   }
 
+  // A soft reset: every latch the CPU owns back to power-on. The cycle
+  // counter deliberately keeps running -- it is the machine's clock,
+  // not the program's, and the timings in a session that reset twice
+  // should still add up. docs/c4bb-storage.md.
+  reset () {
+    this.regs.fill(0);
+    this.upc = FETCH;
+    this.mode = 0;
+    this.trapHandler = 0;
+    this.cycleInterval = 0;
+    this.cycleHandler = 0;
+    this.trapRestoresInterval = 0;
+    this.signalHandlers = new Map();
+    this.pendingSignal = 0;
+    this.tt = 0; this.tp = 0; this.hnd = 0;
+  }
+
   // The trap jam: latch type/parameter/handler and redirect the
   // sequencer into the trap microroutine. Site effects reproduce what
   // each c4m call site does around trap() - the sites differ (see

@@ -474,7 +474,7 @@ $(C4DOS_IX_DISK): c4dos32.c4r dostar32.c4r cpp32.c4r c4cc32.c4r dosload32.c4r \
                   c4rlink32.c4r c4sc32-fused.c4r c4ke-src.tar c4ix-src.tar \
                   tools-src.tar init32.c4r c4sh32.c4r c4ke.vfs32.c4r \
                   b4ke32.c4r tar32.c4r ls32.c4r ps32.c4r \
-                  bbsave32.c4r save32.c4r raycast-dos32.c4r \
+                  bbsave32.c4r save32.c4r raycast-dos32.c4r reboot32.c4r \
                   $(BIN_D)/c4ix.b4k \
                   $(SRCS)/c4dos/fs/LADDER.BAT $(SRCS)/c4dos/fs/IX.BAT \
                   $(SRCS)/c4dos/fs/c4ix.objs $(SRCS)/c4dos/fs/CONFIG.SYS
@@ -504,6 +504,12 @@ $(C4DOS_IX_DISK): c4dos32.c4r dostar32.c4r cpp32.c4r c4cc32.c4r dosload32.c4r \
 	@cp ls32.c4r       $(C4DOS_IX_DISK)/ls.c4r
 	@cp ps32.c4r       $(C4DOS_IX_DISK)/ps.c4r
 	@cp $(BIN_D)/c4ix.b4k $(C4DOS_IX_DISK)/
+	@cp reboot32.c4r   $(C4DOS_IX_DISK)/reboot.c4r
+	@# What makes this medium bootable to the BIOS (docs/c4bb-storage.md
+	@# M10). A name rather than a second copy of the image: the disk
+	@# already carries c4dos32.c4r's kernel under its own name.
+	@cp c4dos32.c4r    $(C4DOS_IX_DISK)/
+	@echo c4dos32.c4r > $(C4DOS_IX_DISK)/boot.cfg
 	@# Keeping what you built: bbsave writes C4DOS's RAM disk onto
 	@# another drive, save does the same for C4KE's ramfs. Both need a
 	@# writable medium in the machine -- `cli.js -w dir`.
@@ -1833,6 +1839,12 @@ bbsave32.c4r: c4cc32 include/c4dos.h include/c4bb.h $(SRCS)/c4dos/bbsave.c
 	./c4cc32 -o $@ include/c4dos.h include/c4bb.h $(SRCS)/c4dos/bbsave.c > /dev/null
 save32.c4r: c4cc32 $(U0) include/c4bb.h $(BIN_D)/save.c
 	./c4cc32 -o $@ $(U0) include/c4bb.h $(BIN_D)/save.c > /dev/null
+
+# reboot: no u0, no DOS API, no kernel -- the same image is a C4DOS
+# transient, a C4KE task and a C4IX program, because all it does is
+# write a device register.
+reboot32.c4r: c4cc32 include/c4bb.h $(SRCS)/c4bb/tools/reboot.c
+	./c4cc32 -o $@ include/c4bb.h $(SRCS)/c4bb/tools/reboot.c > /dev/null
 
 b4ke32.c4r: c4cc32 $(U0) $(BIN_D)/b4ke.c
 	./c4cc32 -o $@ $(U0) $(BIN_D)/b4ke.c > /dev/null

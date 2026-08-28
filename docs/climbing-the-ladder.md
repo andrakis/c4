@@ -6,7 +6,12 @@ booted from. This is the walkthrough: what to type, what happens, and
 what it costs.
 
     make c4dos-c4ix32
-    node src/c4bb/sim/cli.js -i -m 64 -d c4dos-c4ix32 c4dos32.c4r
+    node src/c4bb/sim/cli.js -i -m 64 -d c4dos-c4ix32
+
+No image on the command line: the firmware boots like a BIOS, finds the
+floppy in drive 0 and boots what its `boot.cfg` names
+(docs/c4bb-storage.md M10). Naming `c4dos32.c4r` at the end still works
+and is the machine with something in ROM instead.
 
 ## The session
 
@@ -95,14 +100,20 @@ now has **drives** (docs/c4bb-storage.md), so it does not have to:
 
     node src/c4bb/sim/cli.js -i -m 64 -d c4dos-c4ix32 -w mydisk c4dos32.c4r
 
-`-w` attaches a writable medium as drive 1. Then:
+`-w` attaches a writable medium as drive 1 — the directory is created
+if it is not there, because a blank disk is a real thing. Then:
 
 | where | type | what happens |
 |---|---|---|
 | `A>` | `LADDER` | as before |
 | `A>` | `RUN bbsave.c4r 1:` | every RAM-disk file onto drive 1 — including the kernel it just compiled |
 | | *power off* | |
-| | `cli.js -i -m 64 -d mydisk c4ke.c4r` | boot what you built, tomorrow |
+| | `cli.js -i -m 64 -d mydisk` | boot what you built, tomorrow |
+
+or, without stopping the machine at all, `RUN reboot.c4r`: the arena is
+zeroed, the drives are re-read, and the BIOS boots whatever is in them
+now. Which is the point — on a homebrew computer, "switch it off and on
+again" is a bigger ask than it sounds.
 
 and the same inside C4KE, with `save 1:` for the ramfs, which is how
 the C4IX that `b4ke` just built survives to be booted on its own.

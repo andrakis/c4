@@ -151,7 +151,10 @@ export class Turbo {
       // boundary interrupt checks; a boundary jam runs the trap
       // routine and lets the handler's first instruction reuse this
       // iteration's ++cycle (boundaryChecks gave the increment back)
-      if (m.cycleInterval || m.pendingSignal) {
+      // m.dev.pitMs joins the two things that can jam a trap between
+      // instructions: without it the PIT fires only in the step engine
+      // and never in the one that actually runs.
+      if (m.cycleInterval || m.pendingSignal || m.dev.pitMs) {
         const start = m.boundaryChecks();
         if (start === trapStart) { trapFn(m, ar, r); continue; }
       }

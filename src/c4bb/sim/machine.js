@@ -138,6 +138,25 @@ export class Machine {
   // instruction boundary, so boundary jams give back their increment
   // here to keep the two cases distinct and cycle-exact.
   boundaryChecks() {
+    // The programmable interrupt timer. Same trap as the cycle
+    // interrupt -- a kernel that has a handler needs no new one -- but
+    // it fires on the wall clock rather than on a cycle count, so a
+    // kernel does not have to guess how many cycles a second is on
+    // whatever host it woke up on.
+    //
+    // The host clock is only consulted every 4096 cycles: asking it on
+    // every instruction boundary costs more than the interrupt saves,
+    // and 4096 cycles is a fifth of a millisecond at 20 MHz.
+    if (this.dev.pitMs && (this.cycle & 4095) === 0 &&
+        this.arena.read32(this.regs[R.PC]) !== OP.TLEV) {
+      const now = this.dev.hostNow();
+      if (now >= this.dev.pitNext) {
+        this.dev.pitNext = now + this.dev.pitMs;
+        const t = this.jamTrap(1 /* HARD_IRQ */, 1 /* HIRQ_PIT */, this.cycleHandler,
+                               { zeroInterval: true, unprot: true });
+        if (t !== FETCH) { this.cycle--; return t; }
+      }
+    }
     if (this.cycleInterval && this.cycle % this.cycleInterval === 0 &&
         this.arena.read32(this.regs[R.PC]) !== OP.TLEV) {
       // TLEV is uninterruptible: it restores five registers atomically

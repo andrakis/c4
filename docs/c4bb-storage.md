@@ -377,6 +377,124 @@ before the summary so the last thing on screen is the result:
         8    7 R U   1  0%  0%       40 812.1k      0  top -b
         9    7 R U   9 99% 98%     5187 103.1M      0  c4sc.c4r -c 200000 compile -O -c -I src/c4ix ...
 
+---
+
+# Part 3 — clocks, and what each rung is allowed to need
+
+Decided with the user 2026-08-28, after the pacing fix landed.
+
+## Clocks
+
+A fixed cycle-derived clock is what makes tests repeatable, and it is
+also a lie: everyone's machine runs the simulator at a different speed,
+so a "second" is whatever the host managed. Both are wanted, for
+different jobs.
+
+- **Simulated ms** (`TIME_MS` / the `TIME` opcode) stays cycle-derived
+  and deterministic. Tests keep pinning it, and `cli.js -hz` sets the
+  rate.
+- **A real-time clock** the guest can read, which is what c4m already
+  has: natively a timestamp call, under plain c4 a read of
+  `/proc/uptime` (`c4m.c:1010`). C4KE measures itself against it, and
+  it is why `top` can refresh once a second on any host.
+- **A programmable interrupt timer**, so a kernel can ask for a tick at
+  a real rate instead of deriving one from a cycle count. Optional: the
+  cycle interrupt stays, and the PIT replaces it for kernels that want
+  wall-clock scheduling.
+
+`src/tests/test_timekeeping.c` is the user's existing experiment with
+the modes (`CRTK_BUILTIN` / `CRTK_UPTIME` / `CRTK_CYCLES`) and is the
+reference for what a guest should be able to choose between.
+
+Both new devices are **registers, not opcodes**, which matters: a
+program at the base-c4 rung can read a clock with an ordinary load and
+does not need the CPU extended to do it.
+
+## What each rung is allowed to need
+
+| rung | budget |
+|---|---|
+| **C4DOS and its programs** | opcodes ≤ `EXIT`, plus the UART and the clock registers, which are devices rather than opcodes |
+| **compilers for the next rung** | c4m level — `JSRS` and up. C4DOS may be stuck with `c4cc` until the player has added them, and that is the point |
+| **C4KE** | c4m level: `JSRS`, traps/`ITH`, a real-time clock query, and optionally the PIT in place of the cycle timer |
+| **C4IX** | the c4th extended opcodes on top. A player can experiment in a c4m-level C4KE for as long as they like before needing them |
+
+The rule of the ladder: **a compiler is allowed to need what the system
+it builds needs.** What must run at the lower rung is the *programs* —
+bench, innerbench, c4m.c, mandel, rps, raycast, c4tui.
+
+### Measured, and it is not free
+
+    $ node src/c4bb/tools/opscan.mjs bench.c4r innerbench.c4r c4m.c4r \
+                                     mandel.c4r rps.c4r raycast.c4r
+    bench.c4r:      USES OPCD (48) at code+22 and 70 more
+    innerbench.c4r: USES OPCD (48) at code+22 and 64 more
+    c4m.c4r:        USES OPCD (48) at code+10 and 108 more
+    mandel.c4r:     USES OPCD (48) at code+22 and 66 more
+    rps.c4r:        USES OPCD (48) at code+22 and 61 more
+    raycast.c4r:    USES TIME (53) at code+5958 and 2 more
+
+Every one of them except raycast is over budget for the same reason:
+**they are linked with `u0.h`**, whose opcode-request machinery is
+`__c4_opcode`, which is `OPCD` (48). raycast is the exception because
+its C4DOS build does not link u0 at all — which is exactly the shape
+the others need. The work is per-program and is not a recompile: they
+use u0 for pids, signals and the kernel task table, none of which
+exists at the C4DOS rung.
+
+### M13 and the PIT device — done
+
+Two registers, both readable and writable with ordinary loads and
+stores, so **a base-c4 program can read a clock and arm a timer without
+the CPU being extended**:
+
+    RTC_MS  0x19c   host milliseconds since power-on
+    PIT_MS  0x1a0   tick every N real ms (0 = off)
+
+`src/tests` proof that the clock is at the right rung — a program that
+reads it and nothing else:
+
+    $ node src/c4bb/sim/cli.js -m 8 clk.c4r
+    rtc: 18 -> 6912 ms (6894 elapsed), sum -204937536
+    $ node src/c4bb/tools/opscan.mjs clk.c4r
+    clk.c4r: ok, nothing above EXIT
+
+And the timer, `src/c4bb/tests/src/bb_pit.c`, four ticks at 100 ms:
+
+    pit: 4 ticks, 100ms apart requested
+    pit: spread over 300ms, real time
+
+Three intervals between four ticks, on the wall clock. One thing that
+had to be fixed to make it real: the jam check lives in
+`machine.boundaryChecks()`, and **turbo.js only calls it when
+`cycleInterval || pendingSignal`** — so the PIT fired in the step engine
+and never in the one that actually runs. `m.dev.pitMs` joins that
+condition. The host clock is consulted every 4096 cycles rather than
+every instruction, which is a fifth of a millisecond at 20 MHz and
+costs nothing measurable.
+
+## Milestones
+
+- [x] **M13 — the real-time clock.** A register the guest reads for
+      host milliseconds, alongside the deterministic simulated one.
+      Bar: `top` refreshes once a real second on a host that runs the
+      simulator at half speed, and the pinned cycle-derived tests are
+      unaffected.
+- [~] **M14 — the programmable interrupt timer.** The device is done
+      and pinned; no kernel uses it yet. `PIT_MS` (0x1a0) asks for a
+      tick every N real milliseconds and raises the same
+      `TRAP_HARD_IRQ` the cycle interrupt does, so a kernel that has a
+      handler needs no new one. Remaining: C4KE scheduling on it with
+      the cycle timer switched off.
+- [ ] **M15 — per-rung opcode budgets in the suite.** `opscan` already
+      takes a ceiling; give each rung's images their own and make it a
+      test, so "the player must extend the CPU before X" is asserted
+      rather than described.
+- [ ] **M16 — u0-free builds of the C4DOS-rung programs.** bench,
+      innerbench, mandel, rps, c4tui and `c4m.c` at opcodes ≤ EXIT,
+      the way `raycast-dos` already is. This is the one with real work
+      in it.
+
 ## Notes taken while scoping
 
 - **The tools are not missing, the disk is.** `src/c4bb/images/c4ke-root`
@@ -394,3 +512,40 @@ before the summary so the last thing on screen is the result:
   do is load a `.c4r` and jump into it, which is what `sim/loader.js`
   does from the host today. `src/c4dos/dosload.c` is that loader in
   strict c4, so the code to copy exists.
+
+---
+
+## Examined, not fixed: C4IX's cycle column goes negative
+
+Asked for 2026-08-28. The finding, so it does not have to be found
+again.
+
+**It is the accumulator, not the sampling.** `sched.c:272` does
+
+    t->cycles = t->cycles + (__c4_cycles() - t->cycles_in);
+
+and the *delta* is fine even when the counter wraps, because the
+subtraction wraps with it. What overflows is `t->cycles` itself —
+`int cycles` in `c4ix.h:291`, 32 bits on the board — after 2^31 cycles,
+which the C4IX build reaches several times over. `user/ps.c:59`'s
+`total` sums those, so it goes wrong sooner.
+
+`C4CY` is a 32-bit read (`CYC_OUT` in the microcode), but the board also
+exposes the full count as `CYCLE_LO`/`CYCLE_HI` device registers at
+0x110/0x114 — so the width is available, just not through the opcode.
+
+**Three shapes, cheapest last:**
+
+1. Read `CYCLE_HI`/`CYCLE_LO` instead of `C4CY`. Board-only — native c4m
+   has no such registers — so C4IX would need a host check for
+   something it should not have to care about.
+2. Keep counting in units of 1024 cycles. One line, loses precision, and
+   every number printed anywhere would change.
+3. **A second word.** `cycles_hi` alongside `cycles`, bumped when the
+   low word wraps, and a printer that combines the pair. About twenty
+   lines across `sched.c`, `c4ix.h`, the task export in `task.c` and
+   `user/ps.c` — and it touches the kernel/userland task-info ABI, so
+   those two have to change together.
+
+C4KE has the same shape in `TASK_CYCLES` and will do the same thing at
+the same point; whatever is done should be done to both.

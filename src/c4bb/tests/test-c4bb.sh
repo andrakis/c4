@@ -188,6 +188,18 @@ else
     fail=1
 fi
 
+# ---- the programmable interrupt timer -------------------------------
+# The cycle interrupt fires every N instructions, which is a different
+# amount of time on every host; the PIT fires every N milliseconds. This
+# checks that it fires at all, that the count is right, and that the
+# ticks are spread over real time rather than arriving together.
+pit_out=$(timeout 120 $C4BB -m 8 $IMAGES/bb_pit.c4r 2>&1)
+if echo "$pit_out" | grep -q "real time"; then
+    echo "test-c4bb: pit OK ($(echo "$pit_out" | grep -o 'spread over [0-9]*ms'))"
+else
+    echo "test-c4bb: pit FAILED"; echo "$pit_out" | tail -3; fail=1
+fi
+
 # ---- the fused opcodes (79-88) --------------------------------------
 # The board executes all ten. This is the differential c4th's assembler
 # was written for: each fused opcode hand-assembled into a tiny

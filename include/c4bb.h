@@ -29,7 +29,9 @@ enum {
 	BB_RO     = 0x18c,   // r:   1 if the selected drive is read-only
 	BB_EJECT  = 0x190,   // w:   empty the drive whose number is written
 	BB_RESCAN = 0x194,   // w:   re-read the drive whose number is written
-	BB_RESET  = 0x198    // w:   soft reset -- back to the BIOS
+	BB_RESET  = 0x198,   // w:   soft reset -- back to the BIOS
+	BB_RTC    = 0x19c,   // r:   host milliseconds since power-on
+	BB_PIT    = 0x1a0    // r/w: tick every N real ms (0 = off)
 };
 
 // How many drives this machine has, and which one is selected.
@@ -83,3 +85,19 @@ void bb_reboot () {
 
 // Take the medium out of a drive. The BIOS's wait loop notices.
 void bb_rescan (int n) { *(int *)BB_RESCAN = n; }
+
+// The world's clock, not the machine's.
+//
+// The TIME opcode reports SIMULATED milliseconds, derived from the
+// cycle counter: repeatable, which is what tests want, and a fiction,
+// because the simulator runs at whatever speed the host manages. This
+// is the real one, and it is a register rather than an opcode so that a
+// program at the base-c4 rung can read it with an ordinary load.
+int bb_rtc () { return *(int *)BB_RTC; }
+
+// Ask for a tick every N real milliseconds, raising the same trap the
+// cycle interrupt does -- so a kernel that already has a handler needs
+// no new one, and stops having to guess how many cycles a second is on
+// this host. 0 turns it off.
+void bb_pit (int ms) { *(int *)BB_PIT = ms; }
+int  bb_pit_get ()   { return *(int *)BB_PIT; }

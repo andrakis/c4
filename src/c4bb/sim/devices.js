@@ -58,6 +58,13 @@ export const DISK_RO     = 0x18c;  // r: 1 if the selected drive is read-only
 export const DISK_EJECT  = 0x190;  // w: empty the drive whose number is written
 export const DISK_RESCAN = 0x194;  // w: re-read the drive whose number is written
 export const RESET       = 0x198;  // w: soft reset -- back to the BIOS
+// Clocks. TIME_MS above is the machine's own, derived from the cycle
+// counter and therefore repeatable; these two are about the world
+// outside it, which is not. Registers rather than opcodes on purpose:
+// a program at the base-c4 rung can read a clock with an ordinary load
+// and does not need the CPU extended to do it.
+export const RTC_MS      = 0x19c;  // r: host milliseconds since power-on
+export const PIT_MS      = 0x1a0;  // r/w: tick every N real ms (0 = off)
 
 // c4_info() capability bits (c4m.c:206)
 export const C4I_C4M = 0x2, C4I_HRT = 0x10, C4I_SIG = 0x20,
@@ -139,6 +146,12 @@ export class Devices {
     this.onRescan = opts.onRescan || null;
     this.resetRequested = false;
     this.cyclesPerMs = opts.cyclesPerMs || CYCLES_PER_MS;
+    // The real clock. hostNow is injectable so a test can pin it; by
+    // default it is the wall clock, which is the whole point.
+    this.hostNow = opts.hostNow || (() => Date.now());
+    this.t0 = this.hostNow();
+    this.pitMs = 0;                   // 0 = the PIT is off
+    this.pitNext = 0;
     this.fds = new Map();             // fd -> {data, pos} | {kbd, nonblock} | {w}
     this.nextFd = FD_FIRST;
     this.diskFlags = 0;
@@ -307,6 +320,8 @@ export class Devices {
       case DISK_NAME:    return this.diskResult | 0;
       case DISK_LEN:     return this.diskResult | 0;
       case DISK_CLOSE:   return this.diskResult | 0;
+      case RTC_MS:       return (this.hostNow() - this.t0) | 0;
+      case PIT_MS:       return this.pitMs | 0;
       case DISK_DRIVE:   return this.drive | 0;
       case DISK_COUNT:   return this.drives.length | 0;
       case DISK_RO: {
@@ -347,6 +362,14 @@ export class Devices {
         else this.diskResult = -1;
         return;
       }
+      // Ask for a tick every N real milliseconds. The machine raises the
+      // same trap the cycle interrupt does, so a kernel that already
+      // has a handler needs no new one -- it just stops having to guess
+      // how many cycles a second is on this host.
+      case PIT_MS:
+        this.pitMs = Math.max(0, val | 0);
+        this.pitNext = this.pitMs ? this.hostNow() + this.pitMs : 0;
+        return;
       case DISK_DRIVE:
         // Out of range selects nothing rather than crashing: a program
         // asking for drive 3 on a two-drive machine should see empty
@@ -374,6 +397,8 @@ export class Devices {
       // it, which on a homebrew computer is a different thing entirely.
       // Halts like POWER, and the host boots the firmware again.
       case RESET:
+        this.pitMs = 0;
+        this.pitNext = 0;
         this.resetRequested = true;
         this.halted = true;
         this.status = val | 0;

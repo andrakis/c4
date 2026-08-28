@@ -397,6 +397,12 @@ rm -f $ROOTDISK/c4ke-src.tar $ROOTDISK/dostar.c4r $ROOTDISK/dosload.c4r
 # what this disk is for.
 rm -f $ROOTDISK/c4ix.c4r $ROOTDISK/c4ix-*.c4r $ROOTDISK/c4ix.vfs.txt
 rm -f $ROOTDISK/c4ix-*.c $ROOTDISK/c4ix.h $ROOTDISK/c4ix_user.h
+# The build tools, so C4KE can build C4IX the way it is meant to:
+# b4ke drives it, c4sc is the compiled c4lc, c4rlink joins the objects.
+# docs/c4sc-design.md and src/c4ke/bin/c4ix.b4k.
+$CC -o $ROOTDISK/b4ke.c4r $U0 $BIN/b4ke.c > /dev/null
+[ -f c4sc32-fused.c4r ] && cp c4sc32-fused.c4r $ROOTDISK/c4sc.c4r
+cp $BIN/c4ix.b4k $ROOTDISK/
 cat src/c4bb/fs/c4ke.vfs.txt src/c4bb/fs/c4ke-dev.vfs.txt > $ROOTDISK/c4ke.vfs.txt
 (cd $ROOTDISK && find . -type f -not -name manifest.json | sed 's|^\./||') | \
     awk 'BEGIN{printf "["} NR>1{printf ","} {printf "\"%s\"", $0} END{print "]"}' > $ROOTDISK/manifest.json

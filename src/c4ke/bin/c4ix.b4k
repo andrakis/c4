@@ -1,0 +1,42 @@
+B4KE1
+# Build C4IX under C4KE, with the compiled c4lc.
+#
+# This is the rung C4DOS cannot reach. Not because the compiler will not
+# run there -- it does -- but because C4DOS never returns a transient's
+# memory, so twelve compiler runs in one session accumulate every image
+# and every arena any of them touched. C4KE runs each one as a TASK and
+# reclaims it, which is most of what "a more capable system" means here.
+#
+# Each TARGET is checked after its RUN: a step is judged by what it
+# produced, because that is the only thing this machine can check
+# afterwards. Deleting an object is how you force one step to re-run.
+ECHO b4ke: C4IX, twelve modules and a link
+TARGET boot.c4o
+RUN c4sc.c4r -c 200000 compile -O -c -I src/c4ix src/c4ix/boot.c boot.c4o
+TARGET console.c4o
+RUN c4sc.c4r -c 200000 compile -O -c -I src/c4ix src/c4ix/console.c console.c4o
+TARGET va.c4o
+RUN c4sc.c4r -c 200000 compile -O -c -I src/c4ix src/c4ix/va.c va.c4o
+TARGET host.c4o
+RUN c4sc.c4r -c 200000 compile -O -c -I src/c4ix src/c4ix/host.c host.c4o
+TARGET sl4b.c4o
+RUN c4sc.c4r -c 200000 compile -O -c -I src/c4ix src/c4ix/sl4b.c sl4b.c4o
+TARGET task.c4o
+RUN c4sc.c4r -c 200000 compile -O -c -I src/c4ix src/c4ix/task.c task.c4o
+TARGET sched.c4o
+RUN c4sc.c4r -c 200000 compile -O -c -I src/c4ix src/c4ix/sched.c sched.c4o
+TARGET vfs.c4o
+RUN c4sc.c4r -c 200000 compile -O -c -I src/c4ix src/c4ix/vfs.c vfs.c4o
+TARGET sys.c4o
+RUN c4sc.c4r -c 200000 compile -O -c -I src/c4ix src/c4ix/sys.c sys.c4o
+TARGET c4ke.c4o
+RUN c4sc.c4r -c 200000 compile -O -c -I src/c4ix src/c4ix/c4ke.c c4ke.c4o
+TARGET loader.c4o
+RUN c4sc.c4r -c 200000 compile -O -c -I src/c4ix src/c4ix/loader.c loader.c4o
+TARGET init.c4o
+RUN c4sc.c4r -c 200000 compile -O -c -I src/c4ix src/c4ix/init.c init.c4o
+ECHO b4ke: linking
+LIST c4ix.objs boot.c4o console.c4o va.c4o host.c4o sl4b.c4o task.c4o sched.c4o vfs.c4o sys.c4o c4ke.c4o loader.c4o init.c4o
+TARGET c4ix.c4r
+RUN c4rlink.c4r @c4ix.objs -o c4ix.c4r
+ECHO b4ke: C4IX built

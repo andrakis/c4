@@ -487,6 +487,56 @@ now carries the whole climb, so opening `src/c4bb/web/index.html`,
 choosing **c4dos32** and typing `LADDER` or `IX` does exactly what the
 CLI does. The page's arena went from 32 MB to **128** for it.
 
+### Under C4KE with B4KE, which is where it belongs — and does not finish
+
+C4DOS is the wrong host for this and the walkthrough above is the
+consolation prize. The right shape is the one B4KE was written for:
+C4DOS builds C4KE, C4KE builds C4IX, and B4KE drives the twelve compiles
+and the link as **tasks** rather than transients.
+`src/c4ke/bin/c4ix.b4k` is that build file, and on the C4KE root disk:
+
+    node src/c4bb/sim/cli.js -s -m 256 -d src/c4bb/images/c4ke-root \
+         src/c4bb/images/c4ke32.c4r b4ke -f c4ix.b4k
+
+It is **more than twice as fast** — eight modules in 100 s against
+twelve in 225 s under C4DOS — and then it stops:
+
+    ;; c4lc: src/c4ix/sched.c - 19126 bytes - sched.c4o
+    c4sc-host: out of memory copying string
+    b4ke: 8 ran, 0 skipped, 1 failed
+
+**And more memory does not help.** 256 MB, 512 MB and 1 GB all fail on
+the same module at the same cycle count, to within thirty thousand
+cycles out of 1.59 billion — so it is not exhaustion. The board's own
+heap scales correctly (a program that mallocs a megabyte at a time gets
+126, 254 and 510 MB at those three sizes), so the machine is not the
+limit either.
+
+The cause is written down in C4KE, in its own words
+(`src/c4ke/extensions/c4ke_pm.c:106`):
+
+        } else if (ins == MALC) {
+                // TODO: record allocation details somewhere...
+                *a = (int)malloc(*sp);
+
+A protected task's `MALC` is forwarded straight to the firmware
+allocator and **never tracked**, so nothing is returned when the task
+exits — and c4sp's arena *grows* (heap = 4x live), so each compile
+leaves a progressively larger dead block behind whatever the initial
+`-c` was. Lowering it from 400,000 cells to 200,000 changed nothing,
+which is the giveaway: the initial size is not what accumulates.
+
+So **C4KE has the same gap C4DOS has**, one rung up and with a bigger
+budget, and the insensitivity to machine size points past simple
+exhaustion at the firmware free list — `src/c4bb/fw/fw.c:52` already
+documents that list being corruptible by an interrupt landing
+mid-mutation. Which of the two it is has not been established.
+
+**What would fix it** is the TODO: track a task's allocations and free
+them when it exits. That is a real piece of C4KE, it is the same feature
+C4DOS wants, and doing it once at the kernel rung would make B4KE the
+fastest route to C4IX rather than the incomplete one.
+
 **Why 128 MB, and it is not the RAM disk.** C4DOS does not return a
 transient's memory when it exits — `RUN` mallocs the image's code and
 data and never frees them, and whatever the transient itself allocated

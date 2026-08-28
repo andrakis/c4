@@ -31,7 +31,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 
 function parseArgs(argv) {
   const o = { arenaMb: 32, maxCycles: Infinity, stats: false, useStep: false,
-              diskDir: null, drives: [], interactive: false };
+              diskDir: null, drives: [], interactive: false,
+              mhz: 20, unpaced: false };
   let i = 0;
   while (i < argv.length && argv[i].startsWith('-')) {
     if (argv[i] === '-m') o.arenaMb = parseInt(argv[++i], 10);
@@ -44,6 +45,15 @@ function parseArgs(argv) {
     else if (argv[i] === '-d') { o.diskDir = argv[++i]; o.drives.push({ dir: o.diskDir, writable: false }); }
     else if (argv[i] === '-w') { const dir = argv[++i]; o.drives.push({ dir, writable: true }); }
     else if (argv[i] === '-i') o.interactive = true;
+    // How fast the machine claims to be, in MHz. It matters because
+    // guests time themselves against it: C4KE sizes its preemption
+    // interval from a measured instructions-per-second, and top
+    // refreshes once a "second".
+    else if (argv[i] === '-hz') o.mhz = parseFloat(argv[++i]);
+    // Let it run as fast as the host can rather than pacing to the
+    // machine's own clock. Faster, and time inside stops meaning
+    // anything -- which is what batch runs want.
+    else if (argv[i] === '--fast') o.unpaced = true;
     else if (argv[i] === '--step') o.useStep = true;
     else { console.error(`c4bb: unknown option ${argv[i]}`); process.exit(1); }
     i++;
@@ -53,7 +63,7 @@ function parseArgs(argv) {
   // whole point of having drives (docs/c4bb-storage.md M10).
   if (i >= argv.length) {
     if (!o.drives.length && !o.diskDir) {
-      console.error('usage: cli.js [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [--step] [program.c4r [args...]]');
+      console.error('usage: cli.js [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [-hz MHz] [--fast] [--step] [program.c4r [args...]]');
       console.error('       with no program, the firmware boots from the first medium that has one');
       process.exit(1);
     }
@@ -123,6 +133,7 @@ async function main(argv) {
     }));
   const dev = new Devices(arena, {
     drives,
+    cyclesPerMs: Math.max(1, Math.round(o.mhz * 1000)),
     // A disk put into the machine while the BIOS is waiting for one.
     onRescan: n => { if (drives[n] && drives[n].dir) drives[n].files = loadDisk(drives[n].dir); },
     onByte: b => { out.push(b); if (out.length >= 4096 || b === 10) flush(); },
@@ -159,6 +170,20 @@ async function main(argv) {
           // (c4sh.c's own char-reader has its putchar(c) commented out,
           // written expecting the host tty to do it, like a real
           // unmodified terminal always does).
+          //
+          // Backspace is the line discipline's job and always was --
+          // devices.js holds a line in rxFifo until Enter precisely so
+          // that not-yet-committed characters can still be erased, and
+          // then nothing ever erased them. DEL and BS both, because
+          // terminals disagree about which one the key sends.
+          if (b === 127 || b === 8) {
+            const n = dev.rxFifo.length;
+            if (n && dev.rxFifo[n - 1] !== 10) {
+              dev.rxFifo.pop();
+              process.stdout.write('\b \b');
+            }
+            continue;
+          }
           const c = b === 13 ? 10 : b;                // CR -> LF
           dev.rxFifo.push(c);
           process.stdout.write(String.fromCharCode(c));
@@ -188,6 +213,7 @@ async function main(argv) {
   for (;;) {
   ({ progImg } = boot(machine, fwBytes, progBytes, o.progArgs));
   turbo = o.useStep ? null : new Turbo(machine);
+  const tRun = Date.now();
   try {
     if (o.interactive) {
       // chunked async loop so stdin events can arrive
@@ -205,7 +231,17 @@ async function main(argv) {
         else { let n = 2e5; while (n-- && machine.step() &&
                machine.regs[R.PC] !== CONS_RET) ; }
         flush();
-        await new Promise(r => setImmediate(r));
+        // Pace to the machine's own clock. Without this the guest's
+        // idea of a second and the person's are different by a factor
+        // of twenty, so `top` redraws twenty times a second and a
+        // sleep() does not sleep. Deterministic: nothing about WHAT
+        // runs changes, only when the host lets it. --fast opts out,
+        // which is what batch runs want.
+        if (!o.unpaced) {
+          const ahead = dev.simMs() - (Date.now() - tRun);
+          if (ahead > 2) await new Promise(r => setTimeout(r, Math.min(ahead, 100)));
+          else await new Promise(r => setImmediate(r));
+        } else await new Promise(r => setImmediate(r));
       }
     } else {
       status = runToExit(machine, progImg, o.maxCycles, turbo);

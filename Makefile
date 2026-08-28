@@ -1870,6 +1870,16 @@ test-c4bb: c4bb-images $(C4M) $(TESTS_C4R)
 test-c4bb-storage: c4dos32.c4r $(C4DOS_IX_DISK)
 	bash src/c4bb/tests/test-storage.sh
 
+# What a rung is allowed to need. The BIOS and C4DOS are what a HOMEWARD
+# player reaches BEFORE they have extended their CPU, so an opcode above
+# EXIT in either is a milestone given away for free. C4DOS's TIME is the
+# one deliberate exception -- that is the CLOCK.SYS rung.
+test-c4bb-baseops: src/c4bb/fw/fw.c4r c4dos32.c4r dostar32.c4r dosload32.c4r reboot32.c4r
+	node src/c4bb/tools/opscan.mjs src/c4bb/fw/fw.c4r dostar32.c4r \
+	                               dosload32.c4r reboot32.c4r
+	node src/c4bb/tools/opscan.mjs -max 53 c4dos32.c4r
+	@echo "test-c4bb-baseops: OK -- the BIOS is base c4, C4DOS is base c4 + TIME"
+
 # C4OR1K: OR1000/OpenRISC emulator ported from jor1k, compiled by
 # c4lc, run under c4m (docs/c4or1k-design.md).
 #
@@ -2623,7 +2633,7 @@ c4rs: pre
 # Marking the below rules as PHONY using singular .PHONY rule
 PHONY  = pre all clean-c4rs clean
 PHONY += test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
-PHONY += run-c4dos-build32 test-c4dos-build32 run-c4dos-c4ix32 test-c4dos-c4ix32 test-c4cc-for test-respfile test-b4ke test-c4bb-storage
+PHONY += run-c4dos-build32 test-c4dos-build32 run-c4dos-c4ix32 test-c4dos-c4ix32 test-c4cc-for test-respfile test-b4ke test-c4bb-storage test-c4bb-baseops
 PHONY += test-c4sc test-c4sc-run test-c4sc-lex test-c4sc-front test-c4sc-back
 PHONY += test-c4sc-image test-c4sc-self test-c4sc-board
 PHONY += test-c4dos-ladder32

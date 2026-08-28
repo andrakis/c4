@@ -15,8 +15,9 @@
 // the rung below. So B4KE is part of the answer to "what did building
 // the kernel buy me".
 //
-//   b4ke [-f FILE] [-n] [-k]
+//   b4ke [-f FILE] [-n] [-k] [-t]
 //     -f FILE   build file (default BUILD.B4K)
+//     -t        run `top` alongside, so there is something to watch
 //     -n        say what would run, run nothing
 //     -k        keep going after a failed step
 //
@@ -48,6 +49,8 @@ enum { B4_LINE = 1024, B4_ARGS = 256, B4_LIST = 65536 };
 
 static char *b4_file;        // build file name
 static int   b4_dry;         // -n
+static int   b4_top;         // -t: pid of the top we started, or 0
+static char *b4_topargv[4];
 static int   b4_keep;        // -k
 static int   b4_line;        // line number, for messages
 static int   b4_ran;         // steps actually run
@@ -193,8 +196,21 @@ int main (int argc, char **argv) {
 		if (b4_streq(argv[i], "-f") && i + 1 < argc) { ++i; b4_file = argv[i]; }
 		else if (b4_streq(argv[i], "-n")) b4_dry = 1;
 		else if (b4_streq(argv[i], "-k")) b4_keep = 1;
-		else { printf("usage: b4ke [-f FILE] [-n] [-k]\n"); return 1; }
+		else if (b4_streq(argv[i], "-t")) b4_top = 1;
+		else { printf("usage: b4ke [-f FILE] [-n] [-k] [-t]\n"); return 1; }
 		++i;
+	}
+
+	// Twelve compiles is five minutes of a blank screen. innerbench
+	// solved this years ago by running `top` in the background, and a
+	// build is exactly the same problem: the interesting thing is not
+	// the output, it is that something is happening at all -- which
+	// task, how much memory, how far the machine has got.
+	if (b4_top) {
+		b4_topargv[0] = "top";
+		b4_topargv[1] = "-b";
+		if (!(b4_top = kern_user_start_c4r(2, b4_topargv, "top", PRIV_USER)))
+			printf("b4ke: could not start top; carrying on without it\n");
 	}
 
 	if (!(text = b4_slurp(b4_file, &len))) {
@@ -252,6 +268,12 @@ int main (int argc, char **argv) {
 		}
 	}
 
+	// Stop watching before the summary, so the last thing on the screen
+	// is the result and not a refresh over the top of it.
+	if (b4_top) {
+		kill(b4_top, SIGTERM);
+		sleep(200);
+	}
 	printf("b4ke: %d ran, %d skipped, %d failed\n", b4_ran, b4_skipped, b4_failed);
 	return b4_failed ? 1 : 0;
 }

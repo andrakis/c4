@@ -10,7 +10,8 @@
 //
 // Compiled with c4cc32 (no preprocessor: c4cc skips # lines). The
 // formatter is adapted from src/c4lm/include/stdio.h's vsnprintf,
-// emitting through putchar (the PUTC opcode) instead of a buffer.
+// emitting a byte at a time to the UART register instead of into a
+// buffer -- see __fw_putc.
 //
 // Heap bounds come from the HEAP_BASE/HEAP_END device registers,
 // set by the loader after all images are placed.
@@ -25,7 +26,8 @@ enum {
     DEV_INTERVAL = 0x154,
     // Drives, for the BIOS at the bottom of this file.
     DEV_DRIVE = 0x13c, DEV_DCOUNT = 0x188, DEV_DRO = 0x18c,
-    DEV_EJECT = 0x190, DEV_RESCAN = 0x194, DEV_TIME_MS = 0x10c
+    DEV_EJECT = 0x190, DEV_RESCAN = 0x194, DEV_TIME_MS = 0x10c,
+    DEV_UART_TX = 0x100
 };
 enum { FW_TMP_SZ = 80 };
 
@@ -151,9 +153,18 @@ int fw_ralc (int ptr, int size) {
     return nptr;
 }
 
+// One byte to the serial line.
+//
+// NOT putchar: that is PUTC, opcode 39, which is c4m's and not c4's --
+// and this file is the firmware, the thing that PROVIDES the syscalls
+// to everything above it. It cannot need one. A store to the UART's
+// transmit register is what the hardware actually does, and it is a
+// plain SI. See src/c4bb/tools/opscan.mjs, which is the pin.
+void __fw_putc (int c) { *(int *)DEV_UART_TX = c; }
+
 int __fw_strlen (char *s) { char *t; t = s; while (*t) ++t; return t - s; }
 
-// The formatting core: emits through putchar, returns the count.
+// The formatting core: emits a byte at a time, returns the count.
 // argp walks DOWNWARD: printf args were pushed left to right, so the
 // stack holds them at descending addresses after the format string.
 int __fw_vformat (char *f, int *argp) {
@@ -173,7 +184,7 @@ int __fw_vformat (char *f, int *argp) {
     smask = 2147483647;                  // 0x7fffffff
 
     while (*f) {
-        if (*f != '%') { putchar(*f); ++count; ++f; }
+        if (*f != '%') { __fw_putc(*f); ++count; ++f; }
         else {
             ++f;
             left = 0; zero = 0; plus = 0; space = 0; alt = 0;
@@ -281,15 +292,15 @@ int __fw_vformat (char *f, int *argp) {
                 pad = width - len - plen;
                 if (pad < 0) pad = 0;
                 if (!left && !zero)
-                    while (pad > 0) { putchar(' '); ++count; --pad; }
+                    while (pad > 0) { __fw_putc(' '); ++count; --pad; }
                 i = 0;
-                while (i < plen) { putchar(prefix[i]); ++count; ++i; }
+                while (i < plen) { __fw_putc(prefix[i]); ++count; ++i; }
                 if (!left && zero)
-                    while (pad > 0) { putchar('0'); ++count; --pad; }
+                    while (pad > 0) { __fw_putc('0'); ++count; --pad; }
                 i = 0;
-                while (i < len) { putchar(s[i]); ++count; ++i; }
+                while (i < len) { __fw_putc(s[i]); ++count; ++i; }
                 if (left)
-                    while (pad > 0) { putchar(' '); ++count; --pad; }
+                    while (pad > 0) { __fw_putc(' '); ++count; --pad; }
             }
         }
     }
@@ -347,12 +358,64 @@ void __attribute__((constructor)) fw_init (int c4r) {
 //
 enum { BIOS_CHUNK = 65536 };
 
-// Calling into a freshly loaded image. c4l.c has to rewrite its own
-// call site to do this because plain c4 has no indirect call; the board
-// has JSRS and c4lc emits it, so a variable holding an address is
-// simply called.
-int __bios_call  (int *f, int a)        { return f(a); }
-int __bios_call2 (int *f, int a, int b) { return f(a, b); }
+// Calling into a freshly loaded image, WITHOUT an indirect call.
+//
+// c4lc would happily emit JSRS for a variable holding an address, and
+// the board has it -- but JSRS is c4m's, not c4's. The BIOS and C4DOS
+// are the rungs a player reaches before they have extended the CPU, so
+// nothing here may use an opcode above EXIT. (`./c4 c4l.c fw.c4r`
+// refuses an image that does, which is the pin.)
+//
+// So: c4l.c's trick, verbatim in intent. A function locates its own
+// entry by walking back from its caller's return address to the ENT
+// that starts it, overwrites that ENT with JMP, and remembers where
+// the operand went. Every later call to it is a jump to whatever was
+// last written into that slot -- an indirect call built out of a
+// direct one and a store.
+enum { OP_JMP = 2, OP_ENT = 6, OP_ADJ = 7 };   // base c4 numbering
+enum { BIOS_SEARCH = 512 };
+
+int *__bios_slot;      // operand slot of the rewritten stub
+
+// Return pc of our caller, found on the stack relative to a local.
+int *__bios_caller (int dummy) {
+    int *addr, *next, i;
+    addr = (int *)(*(&addr + 2));
+    i = 0;
+    next = addr;
+    while (++i <= BIOS_SEARCH) {
+        --next;
+        if (*addr == OP_ENT) {
+            if (*next > OP_ADJ) return addr;
+        }
+        addr = next;
+    }
+    return 0;
+}
+
+// First call: locate self, become "JMP <slot>". Later calls: jump.
+int __bios_stub () {
+    int *self;
+    if (!(self = __bios_caller(0))) { printf("bios: cannot arm the call stub\n"); exit(1); }
+    *self = OP_JMP;
+    __bios_slot = self + 1;
+    return 0;
+}
+
+// The result is read back through a local so that -O cannot turn these
+// into tail calls: a tail call replaces the frame the stub walks.
+int __bios_call (int *f, int a) {
+    int r;
+    *__bios_slot = (int)f;
+    r = __bios_stub(a);
+    return r;
+}
+int __bios_call2 (int *f, int a, int b) {
+    int r;
+    *__bios_slot = (int)f;
+    r = __bios_stub(a, b);
+    return r;
+}
 
 // Half a second, measured off the machine's own millisecond counter --
 // no opcode, and the wait is real time rather than a cycle count, so a
@@ -527,6 +590,10 @@ void __bios_ram () {
 int main (int argc, char **argv) {
     char *name;
     int   d, drives, waited;
+
+    // Arm the call stub before anything else needs it: the first call
+    // is the one that rewrites it, and it must not be a real one.
+    __bios_stub();
 
     printf("\n");
     printf("c4bb -- the breadboard computer\n");

@@ -20,7 +20,7 @@ and is the machine with something in ROM instead.
 | `A>` | `LADDER` | the seed compiler rebuilds itself and the preprocessor, reaches a fixed point, and the tools it just built compile C4KE from its own source |
 | `A>` | `RUN dosload.c4r c4ke.c4r` | boots the kernel the machine compiled. C4DOS hands over its RAM disk on the way out, so everything just built is still there |
 | `c4sh>` | `tar x c4ix-src.tar` | C4KE unpacks C4IX's source into its own RAM filesystem — 43 files |
-| `c4sh>` | `b4ke -f c4ix.b4k` | twelve modules through the compiled compiler, then the link. This is the long one |
+| `c4sh>` | `b4ke -t -f c4ix.b4k` | twelve modules through the compiled compiler, then the link. This is the long one — `-t` runs `top` alongside so there is something to watch |
 | `c4sh>` | `c4ix.c4r c4ix-sh.c4r` | boots C4IX — protected mode, preemption — with a shell |
 | `c4ix:/$` | `ls`, `ps` | C4IX, running, showing its own tasks |
 
@@ -117,6 +117,14 @@ again" is a bigger ask than it sounds.
 
 and the same inside C4KE, with `save 1:` for the ramfs, which is how
 the C4IX that `b4ke` just built survives to be booted on its own.
+
+## The machine's clock
+
+`-hz` sets how fast the machine claims to be, default 20 MHz, and an
+interactive run is **paced to it** — a simulated second is a real one,
+`top` refreshes once a second and `sleep()` sleeps. `--fast` lets it
+run flat out instead, which is what the batch tests want. It changes
+nothing about what executes: the cycle counts are the same either way.
 
 ## In the browser
 

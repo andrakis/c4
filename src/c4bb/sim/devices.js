@@ -63,7 +63,15 @@ export const RESET       = 0x198;  // w: soft reset -- back to the BIOS
 export const C4I_C4M = 0x2, C4I_HRT = 0x10, C4I_SIG = 0x20,
              C4I_FLT = 0x40, C4I_PROT = 0x80, C4I_TRAPH = 0x400;
 
-export const CYCLES_PER_MS = 1000;   // a 1 MHz machine
+// How fast the machine thinks it is. This was 1000 -- a 1 MHz machine --
+// while the simulator actually executes fifteen to twenty million
+// instructions a second, so a simulated second went past in a
+// twentieth of a real one and `top`, which refreshes once a second,
+// redrew twenty times. 20 MHz is roughly what this simulator really
+// manages, so a simulated second is about a real one; cli.js -hz
+// changes it, and the interactive loop paces execution to it so the
+// match is exact rather than approximate.
+export const CYCLES_PER_MS = 20000;
 
 // Opcode-name ROM contents, 5 bytes per opcode, exactly as
 // c4m_setup_opcodes lays them out (c4m.c:278, c4l.c:110).
@@ -130,6 +138,7 @@ export class Devices {
     this.drive = 0;                   // the selected drive
     this.onRescan = opts.onRescan || null;
     this.resetRequested = false;
+    this.cyclesPerMs = opts.cyclesPerMs || CYCLES_PER_MS;
     this.fds = new Map();             // fd -> {data, pos} | {kbd, nonblock} | {w}
     this.nextFd = FD_FIRST;
     this.diskFlags = 0;
@@ -267,7 +276,7 @@ export class Devices {
 
   simMs() {
     const cyc = this.machine ? this.machine.cycle : 0;
-    return (Math.floor(cyc / CYCLES_PER_MS) + this.sleepMs) | 0;
+    return (Math.floor(cyc / this.cyclesPerMs) + this.sleepMs) | 0;
   }
 
   read32(addr) {

@@ -310,6 +310,73 @@ c4 opcodes plus TIME), which is what makes one image enough. Verified
 rendering under **C4DOS**, under **C4KE**, and under **C4IX** — C4IX
 runs C4KE binaries, so no third build was needed.
 
+### Four things fixed before M11, 2026-08-28
+
+**The BIOS must not need JSRS.** It did: c4lc will happily emit an
+indirect call for a variable holding an address, and the board has the
+opcode — but `JSRS` is c4m's, not c4's, and the BIOS and C4DOS are the
+rungs a player reaches *before* they have extended their CPU. Giving
+those rungs a c4m opcode gives away the milestone. So the firmware uses
+c4l.c's trick instead: a stub function finds its own `ENT` by walking
+back from its caller's return address, overwrites it with `JMP`, and
+remembers the operand slot — an indirect call built out of a direct one
+and a store. `-O` cannot turn the wrappers into tail calls, because a
+tail call replaces the frame the walk depends on; the result is read
+back through a local to stop it.
+
+**And `putchar` is not base c4 either.** `PUTC` is opcode 39, one above
+`EXIT`, and the firmware's own `printf` was using it — the thing that
+*provides* the syscalls cannot need one. It writes the UART's transmit
+register now, which is a plain `SI` and what the hardware actually does.
+
+`src/c4bb/tools/opscan.mjs` is the pin, and it reports what an image
+really uses:
+
+    $ node src/c4bb/tools/opscan.mjs src/c4bb/fw/fw.c4r
+    src/c4bb/fw/fw.c4r: ok, nothing above EXIT
+      uses: LEA IMM JMP JSR BZ BNZ ENT ADJ LEV LI LC SI SC PSH AND EQ NE
+            LT GT LE GE SHL SHR ADD SUB MUL DIV MOD OPEN READ CLOS PRTF EXIT
+
+`make test-c4bb-baseops` is the pin in the suite: the BIOS, `dostar`,
+`dosload` and `reboot` must have nothing above `EXIT`, and C4DOS
+nothing above `TIME`.
+
+`c4l.c` does the same job and refuses such an image by name, but it is
+built for the host's word size and these are 32-bit. Scanned alongside:
+`dostar`, `dosload` and `reboot` are clean; **C4DOS itself uses `TIME`
+(53)** and nothing else above `EXIT`, which is the CLOCK.SYS rung and
+already deliberate.
+
+**The clock was twenty times too fast.** `CYCLES_PER_MS` was 1000 — "a
+1 MHz machine" — while the simulator really executes fifteen to twenty
+million instructions a second, so a simulated second went past in a
+twentieth of a real one and `top`, which refreshes once a second,
+redrew twenty times. Two changes: the default is 20000 (`cli.js -hz`
+sets it), which is about what this simulator manages; and the
+interactive loop now **paces** execution to the machine's own clock, so
+the match is exact rather than approximate and `sleep()` sleeps.
+Deterministic — nothing about *what* runs changes, only when the host
+lets it — and `--fast` opts out for batch. `top -b -n 3` now refreshes
+three times, 992 ms and 1002 ms apart, and C4KE measures itself at
+"20.000 M" instructions per second.
+
+**Backspace never erased anything.** `devices.js` holds a line in
+`rxFifo` until Enter *precisely so that* not-yet-committed characters
+can be erased — the comment says so — and then nothing ever erased
+them. `cli.js` handles DEL and BS now (terminals disagree about which
+the key sends): pop the last uncommitted byte, echo ` `. Typing
+`lsXX<bs><bs>` reaches the guest as `ls`.
+
+**`b4ke -t` runs `top` alongside the build.** Twelve compiles is five
+minutes of a blank screen; innerbench solved this years ago and a build
+is the same problem. The watcher shows which task is running, what it
+is compiling and how much of the machine it is using, and is stopped
+before the summary so the last thing on screen is the result:
+
+        7    5 W U   9  0%  0%       13 260.7k      0  b4ke -t -f two.b4k
+        8    7 R U   1  0%  0%       40 812.1k      0  top -b
+        9    7 R U   9 99% 98%     5187 103.1M      0  c4sc.c4r -c 200000 compile -O -c -I src/c4ix ...
+
 ## Notes taken while scoping
 
 - **The tools are not missing, the disk is.** `src/c4bb/images/c4ke-root`

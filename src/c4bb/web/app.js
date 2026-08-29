@@ -62,6 +62,19 @@ const ROM_LABEL = {
 };
 const romId = dir => `rom:${dir}`;
 
+// The firmware, in the stages the player builds it in
+// (docs/c4bb-storage.md M6). Each is the same source with a piece
+// missing, and the piece really is missing -- which is what makes
+// "you cannot boot that yet" a fact about the machine rather than a
+// line in a design document.
+const FIRMWARES = [
+  ['fw-hello.c4r',  'fw: banner only'],
+  ['fw-ram.c4r',    'fw: + memory probe'],
+  ['fw-drives.c4r', 'fw: + drive probe'],
+  ['fw.c4r',        'fw: the BIOS'],
+];
+const DEFAULT_FW = 'fw.c4r';
+
 let ucSource, boardDef, fwBytes, ucode;
 let machine, turbo, progImg, renderer;
 let store, driveSet, drivePanel;
@@ -82,7 +95,7 @@ async function fetchBin(url) {
 async function init() {
   ucSource = await (await fetch('../hw/microcode.uc')).text();
   boardDef = parseBoard(await (await fetch('../hw/board.hwd')).text());
-  fwBytes = await fetchBin('../fw/fw.c4r');
+  fwBytes = await fetchBin(`../fw/${DEFAULT_FW}`);
   ucode = assemble(ucSource);
   renderer = new BoardRenderer($('board'), boardDef);
   ucodePanel = new UcodePanel($('ucode'), $('ucode-title'), ucode);
@@ -96,6 +109,16 @@ async function init() {
     sel.appendChild(o);
   }
   sel.onchange = () => reset();
+
+  const fws = $('firmware');
+  for (const [file, label] of FIRMWARES) {
+    const o = document.createElement('option');
+    o.value = file;
+    o.textContent = label;
+    fws.appendChild(o);
+  }
+  fws.value = DEFAULT_FW;
+  fws.onchange = () => reset();
 
   await initMedia();
   await reset();
@@ -257,6 +280,7 @@ async function build(prog, drives) {
 
 async function reset() {
   const prog = $('program').value || PROGRAMS[0];
+  fwBytes = await fetchBin(`../fw/${$('firmware').value || DEFAULT_FW}`);
   // Choosing a program is choosing a machine, and a machine comes with
   // the medium that program expects in drive 0. Everything after that
   // is the player's to move.

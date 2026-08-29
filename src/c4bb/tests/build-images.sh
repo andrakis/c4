@@ -13,7 +13,26 @@ mkdir -p $OUT
 # c4lc emits for its host's word size, so the 32-bit c4sp gives 32-bit
 # images. The corpus below builds with c4cc32 so the parity suite
 # exercises both compilers.
-./c4sp32 -c 64000000 src/c4sp/lisp/c4lc.lisp -O src/c4bb/fw/fw.c src/c4bb/fw/fw.c4r > /dev/null
+# The firmware, in its four stages (docs/c4bb-storage.md M6). One
+# source; what makes them different is which -D each is handed, and the
+# missing pieces are missing from the image rather than skipped at run
+# time. At least one -D always: c4lc turns its preprocessor on only
+# when there is one, and with none at all both sides of every #ifdef
+# would be compiled.
+#
+#   fw-hello    a banner. The board is alive and nothing else is built.
+#   fw-ram      + the memory probe
+#   fw-drives   + the drive probe: it can see a medium, not load one
+#   fw          + the loader and the retry loop -- the BIOS
+fwbuild () {                                  # fwbuild <out> <flags...>
+    out=$1; shift
+    ./c4sp32 -c 64000000 src/c4sp/lisp/c4lc.lisp -O "$@" \
+        src/c4bb/fw/fw.c src/c4bb/fw/$out.c4r > /dev/null
+}
+fwbuild fw-hello  -D FW_STAGE=0
+fwbuild fw-ram    -D FW_STAGE=1 -D FW_RAM=1
+fwbuild fw-drives -D FW_STAGE=2 -D FW_RAM=1 -D FW_DRIVES=1 -D FW_SEEONLY=1
+fwbuild fw        -D FW_STAGE=3 -D FW_RAM=1 -D FW_DRIVES=1 -D FW_BOOT=1
 
 # hello links without u0 (Makefile:860)
 $CC -o $OUT/hello32.c4r src/tests/hello.c > /dev/null

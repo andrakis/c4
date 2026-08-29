@@ -120,10 +120,20 @@ HOMEWARD question, not a c4bb one; the flag is all the machine owes it.
         because ejecting and rebooting is the whole climb.
   - [x] The part that has logic in it tested in node, the way the
         terminal's screen model already is.
-- [ ] **M6** `-fw` and a staged firmware set, so a rung can be denied
-      the hardware it has not built yet. Not started. `fw.c4r` is
-      already loaded as a separate file, so this is a flag and a set of
-      cut-down firmwares, not a change to the machine.
+- [x] **M6** `-fw` and a staged firmware set, so a rung can be denied
+      the hardware it has not built yet. `fw.c4r` is already loaded as
+      a separate file, so this is a flag and a set of cut-down
+      firmwares, not a change to the machine.
+  - [x] One source, not four. A firmware the player has not finished
+        is the same firmware with a piece missing, and two copies that
+        drift are worse than no staging at all.
+  - [x] Each stage must actually LACK what it has not built — the code
+        gone from the image, not a flag that declines to call it.
+  - [x] `-fw` on the CLI, and the set offered in the browser.
+  - [x] Every stage still at rung `base`: this is all before the
+        player has extended the CPU.
+  - [x] A test that each stage does its own job and refuses the next
+        one's.
 
 ### Bar, met
 
@@ -1095,6 +1105,132 @@ front-end fetches media out of `images/`. So `build-images.sh` makes a
 copy there, with the manifest the browser reads. Deliberately the
 **same** disk `test-c4bb-climb` boots: two ladders that differed by
 which front-end you used would be one ladder and one demo.
+
+### M6: the firmware, in the stages it gets built in
+
+    $ node src/c4bb/sim/cli.js -m 16 -fw hello -d src/c4bb/images/climb
+    c4bb -- the breadboard computer
+    firmware: malloc, free, realloc, printf, 1 drives
+    bios: no memory test in this firmware
+    bios: this firmware cannot read a drive
+
+    $ ... -fw ram
+    bios: 14 MB RAM ok (0x5000-0xeff000)
+    bios: this firmware cannot read a drive
+
+    $ ... -fw drives
+    bios: 14 MB RAM ok (0x5000-0xeff000)
+    bios: drive 0 has c4dos32.c4r
+    bios: this firmware cannot load an image
+
+    $ ... -fw bios
+    bios: drive 0 has c4dos32.c4r
+    bios: booting c4dos32.c4r
+    C4DOS version 0.1
+
+Four firmwares out of one source, and the third one is the interesting
+one: it can **see** the medium and cannot start it. That is the shape
+the whole game is in — the hardware to look at a disk and the hardware
+to boot one are different things, and the player builds them in that
+order.
+
+**The missing parts are missing.** A stage that still carried the
+loader and declined to call it would be a firmware pretending, and the
+sizes say which is which:
+
+    fw-hello   16319
+    fw-ram     17064
+    fw-drives  20031
+    fw         27445
+
+`make test-c4bb-firmware` checks both halves for all four — that each
+does its own job, that it refuses the next one's, that the sizes go up,
+and that every one of them is still at rung `base`, because all of this
+is before the player has extended the CPU.
+
+`-fw hello|ram|drives|bios`, or a path to any `.c4r`; the browser has
+the same four in a dropdown beside the program.
+
+### A c4lc preprocessor bug, found and worked around
+
+Building the stages needs `#ifdef`, and c4lc's preprocessor gets one
+case wrong. Minimal:
+
+    #ifndef A
+        printf("KEEP outer-then\n");
+    #else
+    #ifndef B
+        printf("DROP inner-then\n");
+    #else
+        printf("DROP inner-else\n");
+    #endif
+    #endif
+
+With neither defined this prints **`KEEP outer-then`** *and*
+**`DROP inner-else`**. The whole `#else` region should be gone.
+
+`c4lc-pp.lisp`'s `#else` flips the current level's skip flag
+unconditionally:
+
+    (list rest (pp:cons (if (head skip) false true) (tail skip)))
+
+`ifdef`, `ifndef` and `if` all guard with `(if skipping true ...)` — a
+new level inside a skipped region stays skipped whatever its condition
+says. `#else` has no such guard, so it turns skipping back ON... which
+is to say OFF, inside a region that must stay off. `#elif` has the same
+shape. (Nesting inside a *taken* `#else` is fine; it is only the
+skipped one that leaks.)
+
+**Not fixed here.** c4lc compiles C4IX and c4or1k, and a change to its
+preprocessor deserves its own pass with `make test-c4lc` and the
+byte-identical C4IX rebuild rather than riding along with a firmware
+change. `fw.c` is written flat instead — one condition per block, never
+a conditional inside another one's `#else` — which is clearer anyway,
+and cost one extra build flag (`FW_SEEONLY`) to say "has drives, has no
+loader" without nesting.
+
+### Testing the browser on the machine that has one
+
+`test-web.mjs` no longer launches a headless browser. It connects over
+CDP to the one the user has open, through the tunnel that runs outward
+from that machine — the same endpoint `~/git/Homeward`'s harnesses use.
+
+Getting the page to it took a detail. Homeward is loaded on the remote
+box as `localhost:5189` through a forwarded port, and that port is
+Homeward's. The house convention is
+`https://PORT.code.home.stargazer.onl`, which reaches `localhost:PORT`
+here through code-server's proxy — so the test tries that first and
+falls back to `http://LAN-IP:PORT`. Both work for c4bb, because unlike
+Homeward it needs no secure context: plain ES modules and **IndexedDB**
+are both fine on a LAN origin, which the test asserts rather than
+assumes, since every medium depends on it.
+
+    test-web: https://8479.code.home.stargazer.onl wants a code-server login; trying the next
+    test-web: http://127.0.0.1:9222 -> http://192.168.1.202:8479/src/c4bb/web/index.html
+      ok   the panel draws a row per drive
+      ok   IndexedDB is available on this origin
+      ok   all four firmware stages are offered
+      ok   the half-built firmware refuses the drive it can see
+      ok   the next stage sees the medium and still cannot start it
+      ok   the BIOS probes the drives and boots one
+      ok   C4DOS came up off the medium in drive 0
+      ok   the machine wrote to the blank medium
+      ok   and it is still there after a reload
+      ok   and Delete really removes it
+      ok   the user's tabs are as we found them
+    test-web: OK
+
+(The code-server session cookie is scoped to whichever subdomain you
+logged in at — logging in at `code.home.stargazer.onl` itself sets it
+for `.code.home.stargazer.onl` and every port subdomain under it.)
+
+**It is somebody else's browser**, and two things follow. The tab count
+is taken before and after and asserted equal; only the page the test
+opened is closed, and `browser.close()` on a CDP connection disconnects
+rather than killing anything. And the test cannot assume a clean
+IndexedDB — the media are kept in that browser, which is the point of
+them — so it measures the state it starts in, and deletes the medium it
+made on the way out.
 
 ---
 

@@ -8,8 +8,30 @@
 // arguments after a JSR, so these are plain functions and the trap
 // machinery is never involved.
 //
-// Compiled with c4cc32 (no preprocessor: c4cc skips # lines). The
-// formatter is adapted from src/c4lm/include/stdio.h's vsnprintf,
+// Compiled by c4lc, WITH its preprocessor, because this one source is
+// four firmwares (docs/c4bb-storage.md M6):
+//
+//   fw-hello    the board is alive: a banner, and nothing else
+//   fw-ram      + the memory probe
+//   fw-drives   + the drive probe -- it can see a medium, not load one
+//   fw          + the loader and the retry loop: the BIOS
+//
+// The player builds their machine up to that, and a firmware that has
+// not been finished must actually LACK the part that is missing, not
+// merely decline to call it -- so each piece is inside an #ifdef and is
+// not in the image at all until its flag is passed. `opscan` sizes tell
+// the truth about which is which.
+//
+// One source rather than four files, because a firmware the player has
+// not finished is the same firmware with a piece missing, and two
+// copies that drift are worse than no staging.
+//
+// NOTE: at least one -D must always be passed. c4lc turns its
+// preprocessor ON only when there is one, and with none at all BOTH
+// sides of every #ifdef here would be compiled. The full BIOS is built
+// with all three flags for exactly that reason.
+//
+// The formatter is adapted from src/c4lm/include/stdio.h's vsnprintf,
 // emitting a byte at a time to the UART register instead of into a
 // buffer -- see __fw_putc.
 //
@@ -372,6 +394,7 @@ enum { BIOS_CHUNK = 65536 };
 // the operand went. Every later call to it is a jump to whatever was
 // last written into that slot -- an indirect call built out of a
 // direct one and a store.
+#ifdef FW_BOOT
 enum { OP_JMP = 2, OP_ENT = 6, OP_ADJ = 7 };   // base c4 numbering
 enum { BIOS_SEARCH = 512 };
 
@@ -419,13 +442,20 @@ int __bios_call2 (int *f, int a, int b) {
 
 // Half a second, measured off the machine's own millisecond counter --
 // no opcode, and the wait is real time rather than a cycle count, so a
-// person has a chance to put a disk in.
+// person has a chance to put a disk in. Only the retry loop waits, and
+// only a firmware that can boot has one.
 void __bios_sleep () {
     int t;
     t = *(int *)DEV_TIME_MS;
     while (*(int *)DEV_TIME_MS - t < 500) ;
 }
+#endif /* FW_BOOT */
 
+// Reading a medium. The drive probe needs this as much as the loader
+// does -- "drive 0 has c4dos32.c4r" is an answer you get by opening
+// boot.cfg -- so it belongs to the stage that can see a drive, not the
+// one that can boot from it.
+#ifdef FW_DRIVES
 char *__bios_buf;
 int   __bios_len, __bios_cap;
 
@@ -460,6 +490,15 @@ int __bios_slurp (char *name) {
     return 1;
 }
 
+#endif /* FW_DRIVES */
+
+// The loader, and it is outside the block above rather than nested in
+// it. Everything here is FLAT -- one condition per block, never a
+// conditional inside another one's #else -- because c4lc's
+// preprocessor gets that wrong (docs/c4bb-storage.md M6 records the
+// repro). FW_BOOT implies FW_DRIVES in every build, so what this needs
+// from up there is always present.
+#ifdef FW_BOOT
 int __bios_wordat (char *p) { return *(int *)p; }
 
 // Load the image in __bios_buf and jump into it. Returns only if the
@@ -546,6 +585,9 @@ int __bios_exec (char *name) {
 
 // Is there a medium in this drive worth booting? Leaves the drive
 // selected and returns the name to load, or 0.
+#endif /* FW_BOOT */
+
+#ifdef FW_DRIVES
 char *__bios_bootname (int d) {
     char *n;
     int   i;
@@ -566,10 +608,13 @@ char *__bios_bootname (int d) {
     return 0;
 }
 
+#endif /* FW_DRIVES */
+
 // A real look at the memory, not just a report of what the loader was
 // told: write a pattern near each end of the heap and read it back, so
 // a machine configured with more memory than it has says so here
 // rather than three minutes into a compile.
+#ifdef FW_RAM
 void __bios_ram () {
     int base, end, mb, *lo, *hi;
     base = *(int *)DEV_HEAP_BASE;
@@ -586,20 +631,61 @@ void __bios_ram () {
     *lo = 0; *hi = 0;
     printf("bios: %d MB RAM ok (0x%x-0x%x)\n", mb, base, end);
 }
+#endif /* FW_RAM */
 
+// Every local is declared here whatever the stage. A word of stack for
+// something this firmware does not use is cheaper than four versions of
+// a declaration list, and the C4 dialect wants them at the top anyway.
 int main (int argc, char **argv) {
     char *name;
     int   d, drives, waited;
 
+#ifdef FW_BOOT
     // Arm the call stub before anything else needs it: the first call
     // is the one that rewrites it, and it must not be a real one.
     __bios_stub();
+#endif
 
     printf("\n");
     printf("c4bb -- the breadboard computer\n");
     printf("firmware: malloc, free, realloc, printf, %d drives\n", *(int *)DEV_DCOUNT);
-    __bios_ram();
 
+#ifdef FW_RAM
+    __bios_ram();
+#endif
+#ifndef FW_RAM
+    // The stage before the memory probe exists. It says so rather than
+    // saying nothing: a machine that is quiet about what it cannot do
+    // is a machine you debug instead of build.
+    printf("bios: no memory test in this firmware\n");
+#endif
+
+#ifndef FW_DRIVES
+    printf("bios: this firmware cannot read a drive\n");
+    return 0;
+#endif
+
+// It can see a medium and not load one, which is the whole point of
+// this stage: the drives work, and the thing that would start what is
+// on them has not been built.
+//
+// FW_SEEONLY is passed as its own flag rather than written as
+// "FW_DRIVES and not FW_BOOT", because that is a conditional inside
+// another one's #else and c4lc's preprocessor gets those wrong. Flat,
+// one condition per block, everywhere in this file.
+#ifdef FW_SEEONLY
+    drives = *(int *)DEV_DCOUNT;
+    d = 0;
+    while (d < drives) {
+        if ((name = __bios_bootname(d))) printf("bios: drive %d has %s\n", d, name);
+        else printf("bios: drive %d: no boot media\n", d);
+        ++d;
+    }
+    printf("bios: this firmware cannot load an image\n");
+    return 0;
+#endif
+
+#ifdef FW_BOOT
     waited = 0;
     while (1) {
         drives = *(int *)DEV_DCOUNT;
@@ -624,5 +710,6 @@ int main (int argc, char **argv) {
         ++waited;
         if (waited > 600) { printf("bios: giving up\n"); return 1; }
     }
+#endif /* FW_BOOT */
 }
 

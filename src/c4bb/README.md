@@ -25,6 +25,11 @@ Full design: `docs/c4bb-design.md`. Quick start:
     node src/c4bb/sim/cli.js -i -d src/c4bb/images/disk \
          src/c4bb/images/c4ix32.c4r
 
+    # the machine part-built: -fw hello|ram|drives|bios. The third can
+    # SEE the disk in the drive and cannot start it, which is the whole
+    # shape of the game -- docs/c4bb-storage.md M6.
+    node src/c4bb/sim/cli.js -m 16 -fw drives -d src/c4bb/images/climb
+
 Layout: `hw/` microcode + board description (the source of truth),
 `sim/` the engines and devices, `fw/` the boot firmware, `web/` the
 board UI, `tools/` lockstep prover, `tests/` build + parity scripts.

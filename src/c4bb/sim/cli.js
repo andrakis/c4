@@ -55,6 +55,12 @@ function parseArgs(argv) {
     // anything -- which is what batch runs want.
     else if (argv[i] === '--fast') o.unpaced = true;
     else if (argv[i] === '--step') o.useStep = true;
+    // Which firmware. A stage name (hello/ram/drives/bios) or a path.
+    // The stages are the machine part-built -- docs/c4bb-storage.md M6
+    // -- and exist so a rung can be denied hardware the player has not
+    // got to yet: `-fw ram` cannot read a drive, so it cannot boot
+    // C4DOS however good the disk in it is.
+    else if (argv[i] === '-fw') o.fw = argv[++i];
     else { console.error(`c4bb: unknown option ${argv[i]}`); process.exit(1); }
     i++;
   }
@@ -63,8 +69,9 @@ function parseArgs(argv) {
   // whole point of having drives (docs/c4bb-storage.md M10).
   if (i >= argv.length) {
     if (!o.drives.length && !o.diskDir) {
-      console.error('usage: cli.js [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [-hz MHz] [--fast] [--step] [program.c4r [args...]]');
+      console.error('usage: cli.js [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [-hz MHz] [--fast] [--step] [-fw STAGE] [program.c4r [args...]]');
       console.error('       with no program, the firmware boots from the first medium that has one');
+      console.error('       -fw hello|ram|drives|bios (default bios), or a path to a .c4r');
       process.exit(1);
     }
     o.progPath = null;
@@ -102,10 +109,28 @@ function loadDisk(dir, rel = '') {
   return files;
 }
 
+// The firmware, in its stages. One source built four ways
+// (src/c4bb/fw/fw.c); a name picks one, and anything with a slash or a
+// .c4r on it is taken as a path, so a firmware built somewhere else
+// still works.
+const FW_STAGES = {
+  hello:  'fw-hello.c4r',    // a banner. The board is alive.
+  ram:    'fw-ram.c4r',      // + the memory probe
+  drives: 'fw-drives.c4r',   // + the drive probe: sees a medium, cannot load it
+  bios:   'fw.c4r',          // + the loader and the retry loop
+};
+function firmwarePath(name) {
+  if (!name) return join(here, '..', 'fw', 'fw.c4r');
+  if (FW_STAGES[name]) return join(here, '..', 'fw', FW_STAGES[name]);
+  if (name.includes('/') || name.endsWith('.c4r')) return name;
+  console.error(`c4bb: no firmware stage '${name}' (have: ${Object.keys(FW_STAGES).join(', ')})`);
+  process.exit(1);
+}
+
 async function main(argv) {
   const o = parseArgs(argv);
   const ucSource = readFileSync(join(here, '..', 'hw', 'microcode.uc'), 'utf8');
-  const fwBytes = new Uint8Array(readFileSync(join(here, '..', 'fw', 'fw.c4r')));
+  const fwBytes = new Uint8Array(readFileSync(firmwarePath(o.fw)));
   let progBytes = o.progPath ? new Uint8Array(readFileSync(o.progPath)) : null;
 
   const arena = new Arena(o.arenaMb * 1024 * 1024);

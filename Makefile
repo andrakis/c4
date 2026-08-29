@@ -1945,16 +1945,23 @@ test-c4bb: c4bb-images $(C4M) $(TESTS_C4R)
 test-c4bb-storage: c4dos32.c4r $(C4DOS_IX_DISK)
 	bash src/c4bb/tests/test-storage.sh
 
-# The browser front-end, driven by a real browser (M5). Needs
-# Playwright, which this repo does not vendor -- point it at one:
+# The firmware's four stages (M6): each does its own job and refuses
+# the next one's, and the parts a stage has not got are missing from the
+# image rather than skipped at run time.
+test-c4bb-firmware: src/c4bb/images/climb
+	bash src/c4bb/tests/test-firmware.sh
+
+# The browser front-end, in a real browser on real hardware (M5, M6).
+# It talks over CDP to the browser the user has open -- the same
+# endpoint ~/git/Homeward's harnesses use, reached by the SSH tunnel
+# that runs outward from that machine to here. `--local` launches a
+# headless one instead.
 #
-#   make test-c4bb-web C4BB_PLAYWRIGHT=/path/to/node_modules/playwright
-#
-# Without it the test says so and passes: a test that cannot run is not
-# a test that failed, and `make test-c4bb` has no browser. What it
-# covers is the half test-drives.mjs cannot -- that the panel draws,
-# that the BIOS boots a medium out of a drive, and that a medium the
-# machine wrote is STILL THERE after a reload.
+# Skips and passes when there is no browser and no Playwright: a test
+# that cannot run is not a test that failed, and `make test-c4bb` has
+# neither. What it covers is what test-drives.mjs cannot -- the panel
+# drawing, a firmware stage refusing to boot, and a medium the machine
+# wrote being STILL THERE after a reload.
 test-c4bb-web: src/c4bb/images/climb
 	node src/c4bb/tests/test-web.mjs
 
@@ -1981,7 +1988,9 @@ OPSCAN := node src/c4bb/tools/opscan.mjs -q
 
 # The images at each rung. Named here rather than inline so that the
 # ceiling test and the floor test below cannot drift apart.
-RUNG_BASE  := src/c4bb/fw/fw.c4r dostar32.c4r dosload32.c4r reboot32.c4r \
+RUNG_BASE  := src/c4bb/fw/fw.c4r src/c4bb/fw/fw-hello.c4r \
+              src/c4bb/fw/fw-ram.c4r src/c4bb/fw/fw-drives.c4r \
+              dostar32.c4r dosload32.c4r reboot32.c4r \
               bbsave32.c4r install32.c4r cpp32.c4r c4-dos32.c4r c4m-dos32.c4r \
               rps-dos32.c4r
 RUNG_DOS   := c4dos32.c4r mandel-dos32.c4r raycast-dos32.c4r
@@ -2768,7 +2777,7 @@ c4rs: pre
 # Marking the below rules as PHONY using singular .PHONY rule
 PHONY  = pre all clean-c4rs clean
 PHONY += test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
-PHONY += run-c4dos-build32 test-c4dos-build32 run-c4dos-c4ix32 test-c4dos-c4ix32 test-c4cc-for test-respfile test-b4ke test-c4bb-storage test-c4bb-baseops test-c4bb-rungs test-c4bb-install test-c4bb-climb test-c4bb-web
+PHONY += run-c4dos-build32 test-c4dos-build32 run-c4dos-c4ix32 test-c4dos-c4ix32 test-c4cc-for test-respfile test-b4ke test-c4bb-storage test-c4bb-baseops test-c4bb-rungs test-c4bb-install test-c4bb-climb test-c4bb-web test-c4bb-firmware
 PHONY += test-c4sc test-c4sc-run test-c4sc-lex test-c4sc-front test-c4sc-back
 PHONY += test-c4sc-image test-c4sc-self test-c4sc-board
 PHONY += test-c4dos-ladder32

@@ -1912,23 +1912,49 @@ test-c4bb: c4bb-images $(C4M) $(TESTS_C4R)
 test-c4bb-storage: c4dos32.c4r $(C4DOS_IX_DISK)
 	bash src/c4bb/tests/test-storage.sh
 
-# What a rung is allowed to need. The BIOS and C4DOS are what a HOMEWARD
-# player reaches BEFORE they have extended their CPU, so an opcode above
-# EXIT in either is a milestone given away for free. C4DOS's TIME is the
-# one deliberate exception -- that is the CLOCK.SYS rung.
-test-c4bb-baseops: src/c4bb/fw/fw.c4r c4dos32.c4r dostar32.c4r dosload32.c4r reboot32.c4r \
-                   c4-dos32.c4r c4m-dos32.c4r mandel-dos32.c4r rps-dos32.c4r \
-                   raycast-dos32.c4r
-	node src/c4bb/tools/opscan.mjs src/c4bb/fw/fw.c4r dostar32.c4r \
-	                               dosload32.c4r reboot32.c4r \
-	                               c4-dos32.c4r c4m-dos32.c4r rps-dos32.c4r
-	@# C4DOS itself, and the two programs that time themselves, are
-	@# base c4 plus TIME. Nothing on this rung may reach OPCD, INFO or
-	@# JSRS: extending the CPU to get those is the player's job, and a
-	@# disk that quietly needed them would make the milestone a lie.
-	node src/c4bb/tools/opscan.mjs -max 53 c4dos32.c4r mandel-dos32.c4r \
-	                                       raycast-dos32.c4r
-	@echo "test-c4bb-baseops: OK -- BIOS base c4; C4DOS, c4, c4m, mandel, rps, raycast base c4 (+TIME)"
+# What each rung is allowed to need, and what it must need
+# (docs/c4bb-storage.md M15). HOMEWARD's ladder is a ladder of opcodes:
+# the player extends their own CPU to climb it, so an image that reaches
+# past its rung is a milestone given away for free -- and an image that
+# does NOT reach past the rung below is a milestone that was never there
+# at all. `opscan -rungs` prints the table; it is defined in one place,
+# in the tool.
+OPSCAN := node src/c4bb/tools/opscan.mjs -q
+
+# The images at each rung. Named here rather than inline so that the
+# ceiling test and the floor test below cannot drift apart.
+RUNG_BASE  := src/c4bb/fw/fw.c4r dostar32.c4r dosload32.c4r reboot32.c4r \
+              bbsave32.c4r cpp32.c4r c4-dos32.c4r c4m-dos32.c4r rps-dos32.c4r
+RUNG_DOS   := c4dos32.c4r mandel-dos32.c4r raycast-dos32.c4r
+RUNG_C4M   := src/c4bb/images/c4ke32.c4r src/c4bb/images/c4ix32.c4r \
+              c4cc32.c4r c4rlink32.c4r init32.c4r c4sh32.c4r ls32.c4r \
+              ps32.c4r tar32.c4r b4ke32.c4r save32.c4r c4ke.vfs32.c4r \
+              src/c4bb/images/disk/c4ix-sh.c4r src/c4bb/images/disk/c4ix-ps.c4r
+RUNG_FUSED := c4sc32-fused.c4r src/c4bb/images/factorial-fused.c4r
+
+test-c4bb-rungs: src/c4bb/fw/fw.c4r $(RUNG_BASE) $(RUNG_DOS) $(RUNG_C4M) $(RUNG_FUSED) \
+                 src/c4bb/images/c4ke32.c4r
+	@# 1. The top rung is exactly the machine. Read out of
+	@#    hw/microcode.uc, so an opcode gained or lost there without a
+	@#    rung to put it in says so here rather than never.
+	$(OPSCAN) -machine
+	@# 2. Ceilings. Nothing may reach above its own rung.
+	$(OPSCAN) -rung base  $(RUNG_BASE)
+	$(OPSCAN) -rung dos   $(RUNG_DOS)
+	$(OPSCAN) -rung c4m   $(RUNG_C4M)
+	$(OPSCAN) -rung fused $(RUNG_FUSED)
+	@# 3. Floors, and this is the half that makes the ladder real. Each
+	@#    rung's entry image must NOT fit the rung below -- otherwise
+	@#    "the player must extend the CPU before this" is a sentence in
+	@#    a document and nothing else.
+	$(OPSCAN) -needs base c4dos32.c4r
+	$(OPSCAN) -needs dos  src/c4bb/images/c4ke32.c4r c4cc32.c4r
+	$(OPSCAN) -needs c4m  $(RUNG_FUSED)
+	@echo "test-c4bb-rungs: OK -- four rungs, each image inside its own"
+	@echo "                       and above the one below"
+
+# The old name for the above, which docs and muscle memory still use.
+test-c4bb-baseops: test-c4bb-rungs
 
 # C4OR1K: OR1000/OpenRISC emulator ported from jor1k, compiled by
 # c4lc, run under c4m (docs/c4or1k-design.md).
@@ -2683,7 +2709,7 @@ c4rs: pre
 # Marking the below rules as PHONY using singular .PHONY rule
 PHONY  = pre all clean-c4rs clean
 PHONY += test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
-PHONY += run-c4dos-build32 test-c4dos-build32 run-c4dos-c4ix32 test-c4dos-c4ix32 test-c4cc-for test-respfile test-b4ke test-c4bb-storage test-c4bb-baseops
+PHONY += run-c4dos-build32 test-c4dos-build32 run-c4dos-c4ix32 test-c4dos-c4ix32 test-c4cc-for test-respfile test-b4ke test-c4bb-storage test-c4bb-baseops test-c4bb-rungs
 PHONY += test-c4sc test-c4sc-run test-c4sc-lex test-c4sc-front test-c4sc-back
 PHONY += test-c4sc-image test-c4sc-self test-c4sc-board
 PHONY += test-c4dos-ladder32

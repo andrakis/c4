@@ -337,9 +337,9 @@ really uses:
       uses: LEA IMM JMP JSR BZ BNZ ENT ADJ LEV LI LC SI SC PSH AND EQ NE
             LT GT LE GE SHL SHR ADD SUB MUL DIV MOD OPEN READ CLOS PRTF EXIT
 
-`make test-c4bb-baseops` is the pin in the suite: the BIOS, `dostar`,
-`dosload` and `reboot` must have nothing above `EXIT`, and C4DOS
-nothing above `TIME`.
+`make test-c4bb-rungs` is the pin in the suite (M15 below broadened it
+from the BIOS and C4DOS to all four rungs; `test-c4bb-baseops` is still
+an alias for it).
 
 `c4l.c` does the same job and refuses such an image by name, but it is
 built for the host's word size and these are 32-bit. Scanned alongside:
@@ -492,10 +492,22 @@ costs nothing measurable.
         answers, and schedules on it when both say yes.
   - [x] A machine without it, or with one that does not answer, boots
         and runs exactly as it did before.
-- [ ] **M15 — per-rung opcode budgets in the suite.** `opscan` already
-      takes a ceiling; give each rung's images their own and make it a
-      test, so "the player must extend the CPU before X" is asserted
-      rather than described.
+- [x] **M15 — per-rung opcode budgets in the suite.** `opscan` already
+      took a ceiling; each rung has its own now and it is a test, so
+      "the player must extend the CPU before X" is asserted rather
+      than described.
+  - [x] opscan's walk knows which opcodes carry an operand. It did
+        not, so every "uses:" list for an image containing `JSRS` was
+        partly fiction, and a budget built on it would have been too.
+  - [x] Named rungs, defined once, from what the images actually use
+        rather than from what the story says they use.
+  - [x] Every image is pinned to a rung.
+  - [x] **And each rung's entry image is pinned to NOT fit the rung
+        below.** Without this half the test is decorative: a ceiling
+        nothing reaches asserts nothing about needing to extend the
+        machine.
+  - [x] No rung may bless an opcode c4bb does not have -- nor the
+        machine gain one no rung has.
 - [x] **M16 — u0-free builds of the C4DOS-rung programs.** `c4.c`,
       `c4m.c`, mandel and rps at opcodes <= EXIT (plus TIME), the way
       `raycast-dos` already is. **bench and innerbench are not on this
@@ -569,7 +581,7 @@ above `EXIT`, which is what lets a C4DOS-rung program read the clock;
 asking `c4_info()` is `INFO`, opcode 57, and c4cc compiles every
 function in a header whether it is called or not — `reboot.c4r` went
 over budget the moment the check shared a file with the accessors, and
-`make test-c4bb-baseops` said so. A kernel cannot simply poke `0x19c` to
+`make test-c4bb-rungs` said so. A kernel cannot simply poke `0x19c` to
 find out whether the registers exist: **native c4m has no device window
 there**, so the poke is a wild access rather than a zero. The capability
 is announced, and anything that does not see the bit keeps doing what it
@@ -740,6 +752,88 @@ where a pure function is called faster. That cost `OPCD`, `INFO` and
 the invoke -- three opcodes the rung does not have -- to buy some
 milliseconds on the one host that is not the interesting one. The
 picture out of both builds is byte-identical.
+
+### M15: four rungs, and a floor under each one
+
+    $ node src/c4bb/tools/opscan.mjs -rungs
+    base   39 opcodes  stock c4, nothing added
+                       the BIOS, C4DOS transients, cpp, c4, c4m, rps
+    dos    40 opcodes  stock c4 plus a clock
+                       C4DOS itself, mandel, raycast -- anything that times itself
+    c4m    65 opcodes  c4m's own opcodes: JSRS, traps, signals, INFO and the rest
+                       c4cc and c4rlink, C4KE and C4IX, and both userlands
+    fused  75 opcodes  c4m plus the ten fused opcodes (docs/fused-opcodes.md)
+                       images built through the fused backend
+
+**The table is written from what the images measurably use, not from
+what the design says they use**, and the difference showed up twice.
+
+- **C4IX's image reaches no further than C4KE's.** Both sit at `c4m`.
+  The plan said the c4th extended opcodes would be needed to get to
+  C4IX; what actually needs them is the *fused build path*, which is a
+  different and later thing. Writing `c4ix` as its own rung would have
+  been pinning a story rather than a program, so there is no such rung.
+- **`c4cc` and `c4rlink` are at `c4m`, not at `dos`.** The compiler the
+  player runs under C4DOS uses `JSRS`, `OPCD`, `INFO`, `STRC` and
+  `MCPY` -- so "C4DOS is stuck with the shipped c4cc until the CPU is
+  extended" is not a design intention to be implemented, it is already
+  true and now asserted.
+
+### The half that makes it an assertion
+
+A ceiling nothing reaches asserts nothing. So each rung's entry image is
+also pinned to **not** fit the rung below:
+
+    $ node src/c4bb/tools/opscan.mjs -needs base c4dos32.c4r
+    c4dos32.c4r: needs more than rung base -- TIME
+    $ node src/c4bb/tools/opscan.mjs -needs dos c4ke32.c4r
+    c4ke32.c4r: needs more than rung dos -- MCPY ITH _OPC OPCD +10 more
+
+and the failure message is written to be read by whoever broke it:
+
+    c4-dos32.c4r: FITS rung base, so it does not require the machine to
+    be extended -- the milestone that says it does is a story, not a fact
+
+`-machine` closes the last gap, in both directions, by reading
+`hw/microcode.uc` rather than keeping a second copy of the list:
+
+    $ node src/c4bb/tools/opscan.mjs -machine
+    opscan: the top rung is exactly the machine -- 75 opcodes, microcode and budget agree
+
+An opcode in the microcode and in no rung is something the player can
+execute that no test notices; an opcode in a rung and not in the
+microcode is a budget permitting an instruction the board would trap
+on. Both were tried, and both are caught:
+
+    opscan: rung 'fused' permits _BLT, which the microcode does not have
+    opscan: the microcode has CAS, which no rung permits
+
+### The bug underneath all of it
+
+opscan's instruction walk was `i += (op <= 7) ? 2 : 1`, which is
+`c4l.c`'s rule. Correct **for c4l**, because c4l stops at the first
+opcode above `EXIT` and so never meets one that takes an operand.
+opscan keeps walking, so it met `JSRS` -- which does take one -- in
+every C4KE and C4IX image, went one word out of phase, and read the
+rest of the image's operands as instructions. That is where the `?-3`
+and `?-4` entries in the old "uses:" lists came from: pieces of
+somebody's address.
+
+    c4ke32.c4r  uses: ?-3 LEA IMM ... C4IV JSRS        <- before
+    c4ke32.c4r  uses: LEA IMM ... C4IV JSRS            <- after
+
+`c4m.c` has the answer in one place -- `c4m_has_operand()`, with the
+comment "One place decides which opcodes carry an operand word" -- and
+opscan asks the same question now. Worth saying plainly: **the budgets
+could not have been built on the old walk.** A tool that reports opcodes
+an image does not contain cannot be used to assert what an image needs.
+
+Two smaller things fell out. `-q` exists so the Makefile need not write
+`| grep -v '^  uses:'`: a pipe hands the recipe *grep's* exit status,
+and a budget test that cannot fail is worse than no budget test. And
+the opcode named in a failure is now the lowest-addressed one rather
+than whichever the iteration happened to reach first, so two runs blame
+the same instruction.
 
 ---
 

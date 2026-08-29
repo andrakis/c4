@@ -1,0 +1,80 @@
+# install.lst -- what makes a bootable C4KE medium.
+#
+# Read by `RUN install.c4r 1:` (src/c4dos/install.c). Every name is
+# fetched from wherever it actually is: C4DOS looks in the RAM disk
+# before the disk, so anything LADDER.BAT just compiled shadows the
+# copy that shipped on this floppy. That precedence is the point --
+# the medium gets the kernel THIS machine built, not the one it was
+# handed.
+#
+# `boot NAME` names the image the BIOS is to load and is copied like
+# any other entry; a leading `?` means copy it if it is there.
+#
+# See docs/c4bb-storage.md M11.
+
+# --- the system itself, both built by LADDER.BAT ---------------------
+boot c4ke.c4r
+init.c4r
+
+# --- the shell and the userland --------------------------------------
+# Without these the kernel comes up with nothing to run in it, which is
+# the mistake the climb disk made before M9.
+c4sh.c4r
+c4ke.vfs.c4r
+# vfsload and its manifest are what give the booted system a source
+# tree instead of a bare root. The manifest names more than any one
+# medium carries; vfsload loads what it finds and says how many.
+vfsload.c4r
+c4ke.vfs.txt
+ls.c4r
+ps.c4r
+top.c4r
+cat.c4r
+echo.c4r
+type.c4r
+xxd.c4r
+kill.c4r
+spin.c4r
+c4le.c4r
+reboot.c4r
+
+# --- something to do with it -----------------------------------------
+mandel.c4r
+rps.c4r
+raycast.c4r
+bench.c4r
+benchtop.c4r
+innerbench.c4r
+c4.c4r
+c4m.c4r
+
+# --- what the NEXT rung is built from ---------------------------------
+# tar unpacks these inside C4KE; b4ke drives the compiles and c4rlink
+# joins the objects. c4sc is the compiler c4ix.b4k calls.
+tar.c4r
+save.c4r
+b4ke.c4r
+c4sc.c4r
+c4rlink.c4r
+c4ix.b4k
+c4ix.objs
+c4ix-src.tar
+tools-src.tar
+c4ke-src.tar
+
+# --- C4IX's userland ---------------------------------------------------
+# init looks for c4ix-sh.c4r, and the kernel C4KE builds has no way to
+# make one: libc4ix is a separate ladder.
+c4ix-sh.c4r
+c4ix-ls.c4r
+c4ix-cat.c4r
+c4ix-ps.c4r
+
+# --- innerbench's inputs, by the exact names it opens them with -------
+load-c4r.c
+c4m.c
+
+# --- optional: only there if this session got that far -----------------
+?c4ke0.c4r
+?c4cc2.c4r
+?cpp2.c4r

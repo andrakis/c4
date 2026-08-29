@@ -179,10 +179,23 @@ and nothing is lost when the machine stops.
       image, and a retry loop that says `no valid media` and picks up a
       disk inserted while it waits. Bar: start the machine with no
       media, insert one, and it boots without being restarted.
-- [ ] **M11 — `INSTALL`.** A C4DOS transient that writes a bootable
+- [x] **M11 — `INSTALL`.** A C4DOS transient that writes a bootable
       medium: the kernel, the tools, and the sources for everything the
       next two rungs will build. Bar: `LADDER`, `INSTALL 1:`, eject,
       reboot, and C4KE comes up from drive 1 with its own source tree.
+  - [x] A manifest, not a hard-coded list. What belongs on a boot
+        medium is data about a disk, and the transient should not have
+        to be rebuilt to change it.
+  - [x] Sources come from wherever they are. `bbsave` can only write
+        the RAM disk; half of what an installed medium needs was never
+        in it and is still sitting on the C4DOS floppy.
+  - [x] Nothing is written until everything required has been found.
+        A manifest typo must not leave a half-installed disk that
+        boots into something missing.
+  - [x] `boot.cfg`, so the BIOS picks it up with no second copy of a
+        200 KB kernel under another name.
+  - [x] The end-to-end run, in one command, in the suite: build,
+        install, eject, reboot, and be in C4KE.
 - [ ] **M12 — the same one rung up.** C4KE builds its tools and saves
       them; B4KE builds C4IX and installs a C4IX boot disk. Bar: three
       power-ons, three systems, each booted from a disk the previous
@@ -834,6 +847,94 @@ and a budget test that cannot fail is worse than no budget test. And
 the opcode named in a failure is now the lowest-addressed one rather
 than whichever the iteration happened to reach first, so two runs blame
 the same instruction.
+
+### M11: the climb's second power-on
+
+    bios: drive 0 has c4dos32.c4r
+    bios: booting c4dos32.c4r
+    A>LADDER
+    ... c4cc: wrote 200005 bytes to ram:c4ke.c4r
+    A>RUN install.c4r 1:
+    install: reading install.lst
+      c4ke.c4r  200005
+      init.c4r  61911
+      ...
+    install: 46 files, 3768537 bytes onto drive 1, boot.cfg -> c4ke.c4r
+    install: eject drive 0 and reboot to start it
+    A>RUN reboot.c4r 0
+    ejecting drive 0...
+    rebooting...
+    c4bb: soft reset
+
+    bios: drive 1 has c4ke.c4r
+    bios: booting c4ke.c4r
+    c4ke v0.66 starting
+    ...
+    vfsload: 51/51 entries loaded from c4ke.vfs.txt
+    C4SH - The C4 SHell v 0.1a
+
+One machine, two boots, and the second one comes up in a system the
+first one compiled. `make test-c4bb-install` is the pin.
+
+**Why it is not `bbsave`.** bbsave writes the RAM disk, and a RAM disk
+is not a boot medium: half of what the next system needs was never in
+it. The shell, the userland, the archives holding the sources for the
+two rungs above — those are on the C4DOS floppy, and the floppy is the
+thing about to be ejected. So install reads a **list** and fetches each
+name from wherever it actually is, which turns out to be one call:
+C4DOS's own `open()` checks the RAM disk before the disk, so a file
+LADDER just compiled shadows the shipped copy of the same name. That
+precedence is exactly what a build wants, and it was already there.
+
+The manifest, `src/c4dos/fs/install.lst`, is deliberately almost no
+grammar: `boot NAME` names the image the BIOS is to load and is copied
+like any other entry, a leading `?` means copy it if it is there, `#`
+is a comment, everything else is required. What belongs on a boot
+medium is data about a disk, and changing it should not mean rebuilding
+the transient.
+
+**Two passes, and the second one is the point.** Nothing is written
+until every required name has been found:
+
+    A>RUN install.c4r 1:          (before LADDER)
+    install: reading install.lst
+      MISSING  c4ke.c4r
+    install: 1 file(s) not found -- nothing written
+             (build them first: LADDER, then INSTALL)
+
+Zero files on the medium. The alternative is a disk that is half an
+operating system — which boots, and then fails somewhere much further
+in, where the reason is far harder to see.
+
+### The eject matters as much as the install
+
+`reboot` takes a drive number now: `RUN reboot.c4r 0` ejects and then
+resets. Without the eject the BIOS finds drive 0 still bootable and you
+come up in exactly the system you were trying to leave.
+
+And that turned up a bug in the simulator. `cli.js` re-read every
+drive's host directory on a soft reset — which put the ejected disk
+back. Restarting a machine does not reload a disk somebody took out of
+it, and the whole climb turns on that, so reset now skips a drive that
+was ejected. Inserting one is `DISK_RESCAN`, which clears the flag,
+because from inside the machine "look again" is what putting a disk in
+looks like.
+
+### A manifest that fits the medium
+
+`vfsload` degrades gracefully on a disk that lacks what its manifest
+names — it skips and reports `44/106` — but c4ke-root's manifest names
+a `.c` beside every binary, and a climb medium carries its sources as
+**archives** instead, because `tar x c4ke-src.tar` inside the running
+system is a step the player takes. Pointed at an installed medium it
+printed two dozen `cannot open` lines on the way up, which on an 80x25
+console is the whole boot.
+
+So `src/c4bb/fs/c4ke-climb.vfs.txt` describes the shape this medium
+actually has, and the boot is clean: **51/51**. The test asserts the
+absence of `vfsload: cannot open` outright, which is what keeps
+`install.lst` and the climb manifest honest about each other — a name
+in one and not the other shows up there.
 
 ---
 

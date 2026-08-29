@@ -106,14 +106,25 @@ if it is not there, because a blank disk is a real thing. Then:
 | where | type | what happens |
 |---|---|---|
 | `A>` | `LADDER` | as before |
-| `A>` | `RUN bbsave.c4r 1:` | every RAM-disk file onto drive 1 — including the kernel it just compiled |
-| | *power off* | |
-| | `cli.js -i -m 64 -d mydisk` | boot what you built, tomorrow |
+| `A>` | `RUN install.c4r 1:` | a **bootable** medium on drive 1: the kernel it just compiled, the userland, and the sources for the two rungs above |
+| `A>` | `RUN reboot.c4r 0` | takes the C4DOS floppy out, and restarts |
+| | | the BIOS finds drive 1 and boots the kernel this machine made |
 
-or, without stopping the machine at all, `RUN reboot.c4r`: the arena is
-zeroed, the drives are re-read, and the BIOS boots whatever is in them
-now. Which is the point — on a homebrew computer, "switch it off and on
-again" is a bigger ask than it sounds.
+That is the whole loop, and it does not stop the machine once. The
+eject matters as much as the install: leave the floppy in and the BIOS
+finds drive 0 still bootable, and you come up in exactly the system you
+were trying to leave. `RUN reboot.c4r` with no drive just restarts.
+
+`install` reads `install.lst` and fetches each name from wherever it
+is — the RAM disk for what `LADDER` just built, the floppy for
+everything else — and writes `boot.cfg`, which is what the BIOS reads.
+Nothing is written until every required name has been found, so an
+install run before `LADDER` says what is missing and leaves the medium
+untouched.
+
+`RUN bbsave.c4r 1:` is the blunter tool beside it: every RAM-disk file
+onto a drive, no manifest and no boot record. Useful for keeping
+intermediate work; not a boot medium.
 
 and the same inside C4KE, with `save 1:` for the ramfs, which is how
 the C4IX that `b4ke` just built survives to be booted on its own.

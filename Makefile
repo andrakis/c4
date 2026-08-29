@@ -506,6 +506,8 @@ $(C4DOS_IX_DISK): c4dos32.c4r dostar32.c4r cpp32.c4r c4cc32.c4r dosload32.c4r \
                   tools-src.tar init32.c4r c4sh32.c4r c4ke.vfs32.c4r \
                   b4ke32.c4r tar32.c4r ls32.c4r ps32.c4r \
                   bbsave32.c4r save32.c4r raycast-dos32.c4r reboot32.c4r \
+                  install32.c4r $(SRCS)/c4dos/fs/install.lst \
+                  $(SRCS)/c4bb/fs/c4ke-climb.vfs.txt \
                   c4-dos32.c4r c4m-dos32.c4r mandel-dos32.c4r rps-dos32.c4r \
                   $(BIN_D)/c4ix.b4k \
                   $(SRCS)/c4dos/fs/LADDER.BAT $(SRCS)/c4dos/fs/IX.BAT \
@@ -547,6 +549,12 @@ $(C4DOS_IX_DISK): c4dos32.c4r dostar32.c4r cpp32.c4r c4cc32.c4r dosload32.c4r \
 	@# writable medium in the machine -- `cli.js -w dir`.
 	@cp bbsave32.c4r   $(C4DOS_IX_DISK)/bbsave.c4r
 	@cp save32.c4r     $(C4DOS_IX_DISK)/save.c4r
+	@# And the one that makes a medium BOOTABLE rather than merely
+	@# written: install reads install.lst and fetches every name from
+	@# wherever it is -- the RAM disk for what LADDER just built, this
+	@# floppy for everything else -- then writes boot.cfg. M11.
+	@cp install32.c4r  $(C4DOS_IX_DISK)/install.c4r
+	@cp $(SRCS)/c4dos/fs/install.lst $(C4DOS_IX_DISK)/install.lst
 	@# C4KE's own userland. It was on c4ke-root and on none of the disks
 	@# a player ever boots, so the kernel they built came up with a
 	@# shell and almost nothing to run in it. Built here rather than
@@ -587,6 +595,14 @@ $(C4DOS_IX_DISK): c4dos32.c4r dostar32.c4r cpp32.c4r c4cc32.c4r dosload32.c4r \
 	@cp src/c4bb/images/disk/c4ix-sh.c4r src/c4bb/images/disk/c4ix-ls.c4r \
 	    src/c4bb/images/disk/c4ix-cat.c4r src/c4bb/images/disk/c4ix-ps.c4r \
 	    $(C4DOS_IX_DISK)/ 2>/dev/null || true
+	@# vfsload is what gives a booted C4KE a source tree rather than a
+	@# bare root. It needs c4lc (real block scoping, not c4cc's), so it
+	@# comes from build-images.sh rather than being built here.
+	@cp src/c4bb/images/disk/vfsload.c4r $(C4DOS_IX_DISK)/ 2>/dev/null || true
+	@# The CLIMB manifest, not c4ke-root's: this medium carries the
+	@# sources as archives, so naming loose .c files would print two
+	@# dozen "cannot open" lines on the way up. src/c4bb/fs says why.
+	@cp $(SRCS)/c4bb/fs/c4ke-climb.vfs.txt $(C4DOS_IX_DISK)/c4ke.vfs.txt
 	@cd $(C4DOS_IX_DISK) && ls -p | grep -v '/$$' > c4dos.dir
 	@echo "c4dos-c4ix32: ready -- boot it on c4bb, then LADDER, then IX"
 	@echo "                 (or LADDER, dosload c4ke.c4r, and build C4IX from inside it)"
@@ -1879,6 +1895,8 @@ c4ke.vfs32.c4r: c4cc32 $(VFS_SRCS)
 # dosload -- docs/c4bb-storage.md.
 bbsave32.c4r: c4cc32 include/c4dos.h include/c4bb.h $(SRCS)/c4dos/bbsave.c
 	./c4cc32 -o $@ include/c4dos.h include/c4bb.h $(SRCS)/c4dos/bbsave.c > /dev/null
+install32.c4r: c4cc32 include/c4dos.h include/c4bb.h $(SRCS)/c4dos/install.c
+	./c4cc32 -o $@ include/c4dos.h include/c4bb.h $(SRCS)/c4dos/install.c > /dev/null
 save32.c4r: c4cc32 $(U0) include/c4bb.h $(BIN_D)/save.c
 	./c4cc32 -o $@ $(U0) include/c4bb.h $(BIN_D)/save.c > /dev/null
 
@@ -1912,6 +1930,12 @@ test-c4bb: c4bb-images $(C4M) $(TESTS_C4R)
 test-c4bb-storage: c4dos32.c4r $(C4DOS_IX_DISK)
 	bash src/c4bb/tests/test-storage.sh
 
+# The climb's second power-on (M11): C4DOS builds a kernel, INSTALL
+# writes it and everything around it onto a blank medium, the floppy
+# comes out, and the machine restarts into what it just made.
+test-c4bb-install: c4dos32.c4r $(C4DOS_IX_DISK)
+	bash src/c4bb/tests/test-install.sh
+
 # What each rung is allowed to need, and what it must need
 # (docs/c4bb-storage.md M15). HOMEWARD's ladder is a ladder of opcodes:
 # the player extends their own CPU to climb it, so an image that reaches
@@ -1924,7 +1948,8 @@ OPSCAN := node src/c4bb/tools/opscan.mjs -q
 # The images at each rung. Named here rather than inline so that the
 # ceiling test and the floor test below cannot drift apart.
 RUNG_BASE  := src/c4bb/fw/fw.c4r dostar32.c4r dosload32.c4r reboot32.c4r \
-              bbsave32.c4r cpp32.c4r c4-dos32.c4r c4m-dos32.c4r rps-dos32.c4r
+              bbsave32.c4r install32.c4r cpp32.c4r c4-dos32.c4r c4m-dos32.c4r \
+              rps-dos32.c4r
 RUNG_DOS   := c4dos32.c4r mandel-dos32.c4r raycast-dos32.c4r
 RUNG_C4M   := src/c4bb/images/c4ke32.c4r src/c4bb/images/c4ix32.c4r \
               c4cc32.c4r c4rlink32.c4r init32.c4r c4sh32.c4r ls32.c4r \
@@ -2709,7 +2734,7 @@ c4rs: pre
 # Marking the below rules as PHONY using singular .PHONY rule
 PHONY  = pre all clean-c4rs clean
 PHONY += test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
-PHONY += run-c4dos-build32 test-c4dos-build32 run-c4dos-c4ix32 test-c4dos-c4ix32 test-c4cc-for test-respfile test-b4ke test-c4bb-storage test-c4bb-baseops test-c4bb-rungs
+PHONY += run-c4dos-build32 test-c4dos-build32 run-c4dos-c4ix32 test-c4dos-c4ix32 test-c4cc-for test-respfile test-b4ke test-c4bb-storage test-c4bb-baseops test-c4bb-rungs test-c4bb-install
 PHONY += test-c4sc test-c4sc-run test-c4sc-lex test-c4sc-front test-c4sc-back
 PHONY += test-c4sc-image test-c4sc-self test-c4sc-board
 PHONY += test-c4dos-ladder32

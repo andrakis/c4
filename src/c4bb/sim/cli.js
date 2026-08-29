@@ -135,7 +135,15 @@ async function main(argv) {
     drives,
     cyclesPerMs: Math.max(1, Math.round(o.mhz * 1000)),
     // A disk put into the machine while the BIOS is waiting for one.
-    onRescan: n => { if (drives[n] && drives[n].dir) drives[n].files = loadDisk(drives[n].dir); },
+    // Rescan is the machine asking to look again, which is what
+    // putting a disk in looks like from inside -- so it also undoes an
+    // eject.
+    onRescan: n => {
+      if (drives[n] && drives[n].dir) {
+        drives[n].files = loadDisk(drives[n].dir);
+        drives[n].ejected = false;
+      }
+    },
     onByte: b => { out.push(b); if (out.length >= 4096 || b === 10) flush(); },
   });
   const machine = new Machine(arena, assemble(ucSource), dev);
@@ -263,7 +271,13 @@ async function main(argv) {
   dev.nextFd = 3;
   dev.drive = 0;
   machine.reset();
-  for (const d of drives) if (d.dir) d.files = loadDisk(d.dir);
+  // Re-read the media -- but not one that was taken OUT. Restarting a
+  // machine does not put a disk back in it, and the whole climb turns
+  // on that: install a boot medium in drive 1, eject drive 0, reset,
+  // and the BIOS must find drive 1 rather than the disk it just came
+  // from. (`d.dir` is the host directory; a drive with none was empty
+  // to begin with.)
+  for (const d of drives) if (d.dir && !d.ejected) d.files = loadDisk(d.dir);
   // A reset boots the BIOS, not whatever image was named at start: the
   // disk that has just been written is the one that should come up.
   progBytes = null;

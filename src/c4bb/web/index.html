@@ -26,6 +26,17 @@
     <div id="terminal" tabindex="0" title="click to focus keyboard input"></div>
   </div>
   <div id="right">
+    <div class="panel" id="drives-panel">
+      <h3>drives</h3>
+      <div id="drives"></div>
+      <div id="drive-actions">
+        <select id="usermedium" title="the media you have made"></select>
+        <button id="newmedium" title="a blank writable medium, kept in this browser">New</button>
+        <button id="erasemedium" title="empty it, keep it">Erase</button>
+        <button id="dropmedium" title="delete it for good">Delete</button>
+      </div>
+      <div id="drive-note"></div>
+    </div>
     <div class="panel" id="regs-panel"><h3>registers</h3><table id="regs"></table></div>
     <div class="panel" id="ucode-panel"><h3 id="ucode-title">microcode</h3><pre id="ucode"></pre></div>
   </div>

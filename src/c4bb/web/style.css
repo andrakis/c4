@@ -81,3 +81,34 @@ body {
 #ucode-panel { max-height: 420px; }
 #ucode { margin: 0; color: var(--dim); font-size: 12px; line-height: 1.5; }
 #ucode .cur { color: var(--yellow); background: #2a2347; display: inline-block; width: 100%; }
+
+/* ---- drives (docs/c4bb-storage.md M5) -------------------------------
+   One row per drive, and the row for the drive the BIOS booted is
+   marked: on a machine with three of them, "which one did it come up
+   from" is the question you ask most. */
+#drives .drive {
+  display: flex; align-items: center; gap: 6px; padding: 2px 0;
+}
+#drives .drive.booted .dnum { color: var(--green); }
+#drives .dnum { color: var(--dim); width: 1.6em; }
+#drives .dsel {
+  flex: 1; min-width: 0;
+  background: var(--chip); color: var(--text);
+  border: 1px solid var(--edge); border-radius: 4px;
+  padding: 2px 4px; font: inherit;
+}
+#drives .dinfo { color: var(--dim); font-size: 11px; width: 8.5em; text-align: right; }
+#drives button, #drive-actions button {
+  background: var(--chip); color: var(--text); border: 1px solid var(--edge);
+  border-radius: 4px; padding: 2px 8px; font: inherit; font-size: 11px; cursor: pointer;
+}
+#drives button:hover:not(:disabled), #drive-actions button:hover { border-color: var(--cyan); color: var(--cyan); }
+#drives button:disabled { color: var(--edge); cursor: default; }
+#drive-actions { display: flex; gap: 6px; margin-top: 8px; align-items: center; }
+#usermedium {
+  flex: 1; min-width: 0;
+  background: var(--chip); color: var(--text);
+  border: 1px solid var(--edge); border-radius: 4px;
+  padding: 2px 4px; font: inherit; font-size: 11px;
+}
+#drive-note { color: var(--dim); font-size: 11px; margin-top: 6px; line-height: 1.4; }

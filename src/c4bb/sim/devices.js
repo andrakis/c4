@@ -150,6 +150,7 @@ export class Devices {
                   [{ files: opts.files || new Map(), writable: false, sink: null }];
     this.drive = 0;                   // the selected drive
     this.onRescan = opts.onRescan || null;
+    this.onEject = opts.onEject || null;
     this.resetRequested = false;
     this.cyclesPerMs = opts.cyclesPerMs || CYCLES_PER_MS;
     // The real clock. hostNow is injectable so a test can pin it; by
@@ -409,6 +410,10 @@ export class Devices {
       case DISK_EJECT: {
         const m = this.drives[val | 0];
         if (m) { m.files = new Map(); m.ejected = true; }
+        // The host may be drawing what is in each drive, and a guest
+        // that takes a disk out (`reboot 0`) has just made that
+        // drawing wrong. The CLI has nothing to redraw and ignores it.
+        if (this.onEject) this.onEject(val | 0);
         return;
       }
       // The BIOS's retry loop is only useful if a disk put in while it

@@ -108,9 +108,18 @@ HOMEWARD question, not a c4bb one; the flag is all the machine owes it.
 - [x] **M4** C4KE can save: `save 1:` does the same for the ramfs
       (`src/c4ke/bin/save.c`), so the C4IX that b4ke just built can be
       put on a medium and booted on its own.
-- [ ] **M5** The browser: a drive panel — what is in each drive, eject,
-      insert, and a medium that survives a reload (IndexedDB). Not
-      started; the CLI is where the climb is tested.
+- [x] **M5** The browser: a drive panel — what is in each drive, eject,
+      insert, and a medium that survives a reload (IndexedDB).
+  - [x] The machine in the browser has drives rather than *a* disk.
+  - [x] A panel that says what is in each one, and takes a medium out
+        and puts one in.
+  - [x] Writable media that survive a reload, and are still there
+        tomorrow.
+  - [x] The BIOS as a boot option, and a soft reset that honours an
+        eject — otherwise the panel is a display and not a machine,
+        because ejecting and rebooting is the whole climb.
+  - [x] The part that has logic in it tested in node, the way the
+        terminal's screen model already is.
 - [ ] **M6** `-fw` and a staged firmware set, so a rung can be denied
       the hardware it has not built yet. Not started. `fw.c4r` is
       already loaded as a separate file, so this is a flag and a set of
@@ -1012,6 +1021,80 @@ Waiting on output rather than on a clock is also what makes the test
 usable: a sleep long enough for `b4ke` on a slow host is minutes of
 dead waiting on a fast one, and one short enough for a fast host fails
 on a slow one for no reason at all.
+
+### M5: the browser gets drives
+
+    drives
+    0:  [climb disk (C4DOS + the whole ladder)  ▾]  69 files, 3.8 MB, RO  [Eject]
+    1:  [medium 1                              ▾]   6 files, 196 KB      [Eject]
+    2:  [— empty —                             ▾]   no medium            [Eject]
+        [ medium 1 (6 files, 196 KB) ▾ ]  [New] [Erase] [Delete]
+
+Three drives, a medium in each or not, and **a medium is a named set of
+files in IndexedDB** rather than a directory on a host. That is the
+whole reason the store exists: the climb writes a boot disk and then
+restarts the machine to boot it, and a disk that evaporates when the
+tab reloads is not a disk.
+
+**The panel had to be a control, not a display.** Ejecting and
+restarting *is* the climb, so two things came with it: `(BIOS)` at the
+top of the program list — which hands the firmware the drives and lets
+it find something to boot, rather than jumping past it into an image —
+and the soft reset, which the CLI has had since M10 and the browser had
+not. `RUN reboot.c4r 0` now works here, and does the same thing: the
+arena is zeroed, the media come back **minus anything ejected**, and
+the BIOS runs rather than whatever was chosen at the start.
+
+A guest that takes a disk out has also just made the panel wrong, so
+`DISK_EJECT` gained an `onEject` hook beside the `onRescan` that was
+already there. The CLI has nothing to redraw and ignores it.
+
+### Two halves, and only one of them needs a browser
+
+`DriveSet` is the logic — which medium is in which drive, what a reset
+does about an eject, what the `Devices` layer should be handed — and it
+has no DOM in it. `DrivePanel` reads that and draws it. The split is
+not tidiness: the rule that **a soft reset must not put back a medium
+somebody took out** is the rule the whole climb rests on, and it is
+testable exactly because it does not live in a click handler.
+
+    $ node src/c4bb/tests/test-drives.mjs
+      ok   a reset does NOT put back what was ejected
+      ok   and does keep what was not
+      ok   a guest eject is the same as the button
+      ok   so the BIOS finds drive 1
+      ok   the medium remembers what was written
+      ...
+    test-drives: OK
+
+It runs inside `make test-c4bb`, beside the terminal's screen model.
+
+The other half genuinely needs a browser, and gets one: `test-web.mjs`
+serves the repo, drives Chromium, and walks the actual story —
+
+    $ C4BB_PLAYWRIGHT=... node src/c4bb/tests/test-web.mjs
+      ok   the panel draws a row per drive
+      ok   every shipped medium is offered
+      ok   drive 0 comes with a disk in it
+      ok   a new blank medium lands in a free drive
+      ok   the BIOS probes the drives and boots one
+      ok   C4DOS came up off the medium in drive 0
+      ok   the machine wrote to the blank medium
+      ok   and it is still there after a reload
+      ok   no errors on the page
+    test-web: OK
+
+Playwright is not vendored here, so `make test-c4bb-web` says so and
+passes when it is absent — a test that cannot run is not a test that
+failed, and `make test-c4bb` has no browser.
+
+### The disk the browser could not reach
+
+The whole ladder lives on `c4dos-c4ix32` at the repo root, and the web
+front-end fetches media out of `images/`. So `build-images.sh` makes a
+copy there, with the manifest the browser reads. Deliberately the
+**same** disk `test-c4bb-climb` boots: two ladders that differed by
+which front-end you used would be one ladder and one demo.
 
 ---
 

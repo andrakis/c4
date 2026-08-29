@@ -15,6 +15,11 @@ Full design: `docs/c4bb-design.md`. Quick start:
     python3 -m http.server 8471
     # -> http://localhost:8471/src/c4bb/web/index.html
     # pick c4ix32 or c4ke32, press Turbo, click the terminal, type.
+    #
+    # or pick (BIOS) and let it boot a drive: the panel on the right
+    # says what is in each one, New makes a blank writable medium that
+    # survives a reload, and the whole climb runs here --
+    # LADDER, INSTALL 1:, RUN reboot.c4r 0, and up comes what you built.
 
     # headless / terminal:
     node src/c4bb/sim/cli.js -i -d src/c4bb/images/disk \

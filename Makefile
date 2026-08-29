@@ -1945,6 +1945,22 @@ test-c4bb: c4bb-images $(C4M) $(TESTS_C4R)
 test-c4bb-storage: c4dos32.c4r $(C4DOS_IX_DISK)
 	bash src/c4bb/tests/test-storage.sh
 
+# The browser front-end, driven by a real browser (M5). Needs
+# Playwright, which this repo does not vendor -- point it at one:
+#
+#   make test-c4bb-web C4BB_PLAYWRIGHT=/path/to/node_modules/playwright
+#
+# Without it the test says so and passes: a test that cannot run is not
+# a test that failed, and `make test-c4bb` has no browser. What it
+# covers is the half test-drives.mjs cannot -- that the panel draws,
+# that the BIOS boots a medium out of a drive, and that a medium the
+# machine wrote is STILL THERE after a reload.
+test-c4bb-web: src/c4bb/images/climb
+	node src/c4bb/tests/test-web.mjs
+
+src/c4bb/images/climb: | $(C4DOS_IX_DISK)
+	bash src/c4bb/tests/build-images.sh
+
 # The whole climb (M11 and M12): three power-ons, three systems, each
 # booted from a medium the previous one wrote. M11's bar is a strict
 # prefix of M12's, so they share one script rather than building the
@@ -2752,7 +2768,7 @@ c4rs: pre
 # Marking the below rules as PHONY using singular .PHONY rule
 PHONY  = pre all clean-c4rs clean
 PHONY += test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
-PHONY += run-c4dos-build32 test-c4dos-build32 run-c4dos-c4ix32 test-c4dos-c4ix32 test-c4cc-for test-respfile test-b4ke test-c4bb-storage test-c4bb-baseops test-c4bb-rungs test-c4bb-install test-c4bb-climb
+PHONY += run-c4dos-build32 test-c4dos-build32 run-c4dos-c4ix32 test-c4dos-c4ix32 test-c4cc-for test-respfile test-b4ke test-c4bb-storage test-c4bb-baseops test-c4bb-rungs test-c4bb-install test-c4bb-climb test-c4bb-web
 PHONY += test-c4sc test-c4sc-run test-c4sc-lex test-c4sc-front test-c4sc-back
 PHONY += test-c4sc-image test-c4sc-self test-c4sc-board
 PHONY += test-c4dos-ladder32

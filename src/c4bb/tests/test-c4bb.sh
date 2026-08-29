@@ -65,9 +65,12 @@ for t in hello32 test_basic test_static test_vprintf tests \
          test_printloop mandel test_float; do
     check "$t" $IMAGES/$t.c4r
 done
-# The web terminal's screen model (cursor addressing, deferred wrap).
-# Pure JS, no machine involved, so it runs first and fails fast.
+# The web front-end's two pieces of real logic: the terminal's screen
+# model (cursor addressing, deferred wrap) and the drive set (what is in
+# each drive, and what a soft reset does about an eject). Pure JS, no
+# machine involved, so they run first and fail fast.
 node src/c4bb/tests/test-terminal.mjs || fail=1
+node src/c4bb/tests/test-drives.mjs   || fail=1
 
 check cycles $IMAGES/cycles.c4r      # exact cycle-counter parity
 

@@ -16,6 +16,8 @@ import { boot, callFunction } from '../sim/loader.js';
 import { Turbo } from '../sim/turbo.js';
 import { BoardRenderer } from './board.js';
 import { RegsPanel, UcodePanel, Terminal } from './panels.js';
+import { DriveSet, DrivePanel, EMPTY, humanBytes } from './drives.js';
+import { MediaStore, indexedDbBackend } from './store.js';
 
 const $ = id => document.getElementById(id);
 
@@ -23,12 +25,19 @@ const $ = id => document.getElementById(id);
 // the terminal does nothing for them - that's not a bug, there's just
 // no one listening. Only the two interactive OS images read a
 // keyboard, so they're flagged and labeled for it.
+// BIOS is first because it is the machine, and everything after it is
+// a shortcut past it. Choosing it hands the firmware the drives and
+// lets it find something to boot -- which is what makes the drive panel
+// a control rather than a display, and what makes the climb (install a
+// medium, eject, restart) possible here and not only in the CLI.
+const BIOS = '(BIOS)';
 const PROGRAMS = [
+  BIOS,
   'c4ix32', 'c4ke32', 'c4dos32', 'hello32', 'factorial', 'test_basic', 'mandel',
   'tests', 'test_malloc', 'test_printloop', 'cycles', 'test_float',
   'bb_customop', 'bb_preempt', 'bb_pm',
 ];
-const INTERACTIVE = new Set(['c4ix32', 'c4ke32', 'c4dos32']);
+const INTERACTIVE = new Set([BIOS, 'c4ix32', 'c4ke32', 'c4dos32']);
 
 // Which disk directory an image boots against. `disk` is the shared
 // one where all three systems live together; the derived disks
@@ -37,11 +46,25 @@ const INTERACTIVE = new Set(['c4ix32', 'c4ke32', 'c4dos32']);
 // not named here gets the shared disk.
 const DISKS = {
   c4dos32: 'dos-recovery',   // DOS, a compiler, and the kernel sources
+  [BIOS]:  'climb',          // the whole ladder: LADDER, install, b4ke
 };
 const DEFAULT_DISK = 'disk';
 
+// The media that ship with the machine. Read-only, fetched the first
+// time one is put in a drive rather than at startup -- the climb disk
+// alone is four megabytes, and most sessions never look at it.
+const ROM_DISKS = ['climb', 'dos-recovery', 'disk', 'c4ke-root'];
+const ROM_LABEL = {
+  climb:          'climb disk (C4DOS + the whole ladder)',
+  'dos-recovery': 'recovery disk (C4DOS + sources)',
+  disk:           'shared disk (all three systems)',
+  'c4ke-root':    'C4KE root (its full userland)',
+};
+const romId = dir => `rom:${dir}`;
+
 let ucSource, boardDef, fwBytes, ucode;
 let machine, turbo, progImg, renderer;
+let store, driveSet, drivePanel;
 let lastEvent = null;
 let mode = 'pause';          // pause | run | turbo
 let finished = false;
@@ -68,12 +91,116 @@ async function init() {
   for (const p of PROGRAMS) {
     const o = document.createElement('option');
     o.value = p;
-    o.textContent = INTERACTIVE.has(p) ? `${p} (interactive)` : p;
+    o.textContent = p === BIOS ? '(BIOS) - boot from a drive'
+                  : INTERACTIVE.has(p) ? `${p} (interactive)` : p;
     sel.appendChild(o);
   }
   sel.onchange = () => reset();
+
+  await initMedia();
   await reset();
   requestAnimationFrame(frame);
+}
+
+// ---- media and drives -----------------------------------------------
+
+async function initMedia() {
+  driveSet = new DriveSet(3);
+  for (const dir of ROM_DISKS)
+    driveSet.define({ id: romId(dir), label: ROM_LABEL[dir] || dir, files: new Map(), sink: null, dir });
+
+  // Whatever the player made last time. Loaded in full, because a
+  // medium they made is a medium they are about to use, and the
+  // alternative is a drive that reports 0 files until you touch it.
+  store = new MediaStore(indexedDbBackend());
+  try {
+    for (const m of await store.list())
+      driveSet.define({ id: m.id, label: m.label, files: await store.load(m.id), sink: store.sinkFor(m.id) });
+  } catch (e) {
+    // Private mode, or storage refused. The machine still runs; it
+    // just cannot keep anything, and saying so is better than a drive
+    // panel that silently loses a boot disk.
+    setStatus('no persistent storage in this browser - media will not survive a reload');
+  }
+
+  drivePanel = new DrivePanel($('drives'), driveSet, { onchange: () => drivesChanged() });
+  $('newmedium').onclick = () => newMedium();
+  $('erasemedium').onclick = () => eraseMedium();
+  $('dropmedium').onclick = () => dropMedium();
+}
+
+// A read-only medium's files are fetched the first time it is actually
+// put in a drive.
+async function ensureLoaded() {
+  await Promise.all([...driveSet.media.values()].map(async m => {
+    if (!m.dir || m.loaded) return;
+    if (!driveSet.slots.includes(m.id)) return;
+    m.files = await loadDisk(m.dir);
+    m.loaded = true;
+  }));
+}
+
+// A disk swapped while the machine is running is a disk swapped while
+// the machine is running: hand it the new list and let it find out on
+// its next open(), which is what a real drive does.
+async function drivesChanged() {
+  await ensureLoaded();
+  if (machine) machine.dev.drives = driveSet.toDevices();
+  renderDrives();
+}
+
+function userMedia() { return [...driveSet.media.values()].filter(m => !m.dir); }
+
+function renderDrives() {
+  drivePanel.render(machine ? machine.dev.drive : -1);
+  const sel = $('usermedium');
+  const was = sel.value;
+  sel.textContent = '';
+  for (const m of userMedia()) {
+    const o = document.createElement('option');
+    o.value = m.id;
+    o.textContent = `${m.label} (${m.files.size} files, ${humanBytes([...m.files.values()].reduce((a, b) => a + b.length, 0))})`;
+    sel.appendChild(o);
+  }
+  if ([...sel.options].some(o => o.value === was)) sel.value = was;
+  const none = userMedia().length === 0;
+  $('erasemedium').disabled = none;
+  $('dropmedium').disabled = none;
+  $('drive-note').textContent = none
+    ? 'New makes a blank writable medium. It is kept in this browser and survives a reload.'
+    : 'Media you make are kept in this browser. Pick (BIOS) above to boot from a drive rather than past it.';
+}
+
+async function newMedium() {
+  if (!store) return;
+  const n = userMedia().length + 1;
+  const m = await store.create(`medium ${n}`);
+  driveSet.define({ id: m.id, label: m.label, files: new Map(), sink: store.sinkFor(m.id) });
+  // Into the first free drive, because making one and then having to
+  // put it somewhere is two steps where the player meant one.
+  const free = driveSet.slots.indexOf(EMPTY);
+  if (free >= 0) driveSet.insert(free, m.id);
+  await drivesChanged();
+}
+
+async function eraseMedium() {
+  const id = $('usermedium').value;
+  const m = driveSet.media.get(id);
+  if (!m || !store) return;
+  if (!confirm(`Erase "${m.label}"? Every file on it goes.`)) return;
+  await store.erase(id);
+  m.files = new Map();
+  await drivesChanged();
+}
+
+async function dropMedium() {
+  const id = $('usermedium').value;
+  const m = driveSet.media.get(id);
+  if (!m || !store) return;
+  if (!confirm(`Delete "${m.label}" for good?`)) return;
+  await store.remove(id);
+  driveSet.forget(id);
+  await drivesChanged();
 }
 
 // One cache entry per disk directory: switching programs must not
@@ -92,10 +219,15 @@ async function loadDisk(dir) {
   return files;
 }
 
-async function reset() {
-  const prog = $('program').value || PROGRAMS[0];
+// Build the machine. `drives` is the drive list to hand it -- on a
+// player-initiated reset that is whatever the panel says, and on a
+// soft reset it is what survived the eject.
+async function build(prog, drives) {
   const interactive = INTERACTIVE.has(prog);
-  const progBytes = await fetchBin(`../images/${prog}.c4r`);
+  // (BIOS) has no image of its own: the firmware runs, probes the
+  // drives and boots the first one with something on it, exactly as
+  // the CLI does when handed no program.
+  const progBytes = prog === BIOS ? null : await fetchBin(`../images/${prog}.c4r`);
   // 128 MB, not 32. The recovery disk can now build C4IX as well as
   // C4KE, and C4DOS does not return a transient's memory when it exits
   // -- the image and whatever it allocated stay held -- so twelve
@@ -104,22 +236,52 @@ async function reset() {
   // largest single module fits in 48.
   const arena = new Arena(128 * 1024 * 1024);
   const dev = new Devices(arena, {
-    files: await loadDisk(DISKS[prog] || DEFAULT_DISK),
+    drives,
     onByte: b => terminal.write(b),
+    // A guest that takes a disk out has just made the panel wrong.
+    onEject: d => { driveSet.ejectedByGuest(d); renderDrives(); },
+    onRescan: () => renderDrives(),
   });
   machine = new Machine(arena, ucode, dev, { onLog: s => terminal.writeString(s) });
   machine.onEvent = e => { lastEvent = e; };
-  terminal.clear();
   $('terminal').dataset.placeholder = interactive
     ? 'click here, then type - this OS reads a real keyboard'
     : `${prog}.c4r just prints and exits - it never reads input, so there's nothing to type into`;
   updateKbdStatus(interactive);
-  ({ progImg } = boot(machine, fwBytes, progBytes, [prog + '.c4r']));
+  ({ progImg } = boot(machine, fwBytes, progBytes, progBytes ? [prog + '.c4r'] : []));
   turbo = new Turbo(machine);
   lastEvent = null;
   finished = false;
+  renderDrives();
+}
+
+async function reset() {
+  const prog = $('program').value || PROGRAMS[0];
+  // Choosing a program is choosing a machine, and a machine comes with
+  // the medium that program expects in drive 0. Everything after that
+  // is the player's to move.
+  const want = romId(DISKS[prog] || DEFAULT_DISK);
+  if (driveSet.media.has(want)) driveSet.insert(0, want);
+  await ensureLoaded();
+
+  terminal.clear();
+  await build(prog, driveSet.toDevices());
   mode = 'pause';
-  setStatus(`${prog}.c4r loaded - ready`);
+  setStatus(prog === BIOS ? 'BIOS - press Turbo to boot from a drive'
+                          : `${prog}.c4r loaded - ready`);
+  draw();
+}
+
+// The machine asking to start again (`RUN reboot.c4r 0`). The arena is
+// zeroed, the media come back MINUS anything that was ejected, and the
+// BIOS runs rather than whatever image was named at the start -- the
+// disk that was just written is the one that should come up. cli.js
+// does exactly this; this is the browser half of M10's soft reset.
+async function softReset() {
+  machine.dev.resetRequested = false;
+  terminal.writeString('\nc4bb: soft reset\n\n');
+  await build(BIOS, driveSet.survivesReset());
+  setStatus('soft reset - BIOS');
   draw();
 }
 
@@ -135,8 +297,21 @@ function updateKbdStatus(interactive) {
 
 function setStatus(s) { $('status').textContent = s; }
 
+// A reset is not a halt: the machine wants to be rebuilt, not stopped.
+// Handled before the halt check because a reset sets both.
+let resetting = false;
+function checkReset() {
+  if (resetting || !machine.dev.resetRequested) return false;
+  resetting = true;
+  const wasMode = mode;
+  mode = 'pause';
+  softReset().then(() => { resetting = false; mode = wasMode; });
+  return true;
+}
+
 function checkDone() {
   if (finished) return true;
+  if (checkReset()) return true;
   if (machine.dev.halted) {
     finished = true;
     mode = 'pause';

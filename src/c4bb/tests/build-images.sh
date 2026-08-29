@@ -390,6 +390,28 @@ fi
 # belong to the other two systems instead -- what is left is by
 # construction everything C4KE's manifest can ask for.
 cp -r $DISK/. $ROOTDISK/
+# --- the climb disk, for the browser ---------------------------------
+# The web front-end fetches media out of images/, and the whole ladder
+# lives on c4dos-c4ix32 at the repo root, which it cannot reach. So a
+# copy, with the manifest the browser reads. It is the SAME disk the
+# CLI climb test boots, deliberately: two ladders that differ by which
+# front-end you used would be one ladder and one demo.
+CLIMBDISK=$OUT/climb
+rm -rf $CLIMBDISK
+for root in ../../../c4dos-c4ix32 c4dos-c4ix32; do
+    if [ -d $root ]; then
+        mkdir -p $CLIMBDISK
+        cp -r $root/. $CLIMBDISK/
+        break
+    fi
+done
+if [ -d $CLIMBDISK ]; then
+    rm -f $CLIMBDISK/manifest.json
+    (cd $CLIMBDISK && find . -type f -not -name manifest.json | sed 's|^\./||') | \
+        awk 'BEGIN{printf "["} NR>1{printf ","} {printf "\"%s\"", $0} END{print "]"}' > $CLIMBDISK/manifest.json
+    echo "c4bb: browser climb disk: $CLIMBDISK ($(ls $CLIMBDISK | wc -l) entries)"
+fi
+
 rm -f $ROOTDISK/manifest.json $ROOTDISK/c4dos.dir
 rm -f $ROOTDISK/config.sys $ROOTDISK/autoexec.bat $ROOTDISK/build.bat
 rm -f $ROOTDISK/c4ke-src.tar $ROOTDISK/dostar.c4r $ROOTDISK/dosload.c4r

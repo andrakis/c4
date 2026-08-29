@@ -1,0 +1,32 @@
+# c4ix-climb.vfs.txt -- the tree for a C4IX medium kinstall wrote.
+#
+# The same relationship c4ke-climb.vfs.txt has to c4ke.vfs.txt, and for
+# the same reason. c4ix.vfs.txt next door describes the shared c4bb
+# disk, which carries a `c4ix-NAME.c` beside every binary. A climb
+# medium carries the binaries and ONE archive -- c4ix-src.tar -- because
+# unpacking it on the system you just booted is a step the player takes.
+#
+# Naming the loose sources here would print a line per missing file on
+# the way up, which on an 80x25 console is the boot.
+#
+# This file is SOURCE. The Makefile copies it onto the climb disk as
+# c4ix.vfs.txt, install.lst carries it to the C4KE medium, c4ix.lst
+# carries it to the C4IX one, and C4IX's vfsload reads it there.
+#
+# Keep it beside src/c4ke/fs/c4ix.lst: that says what is on the disk,
+# this says what the tree looks like, and a name in one and not the
+# other is a name vfsload will report.
+
+# vfsload itself is excluded, as in c4ix.vfs.txt: it is the boot-time
+# loader, named plainly rather than by the c4ix-NAME.c4r convention,
+# and it is not an app.
+BIN_ALL = hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt
+
+/: root
+	each($BIN_ALL):
+		# c4ix-hello.c4r -> /bin/hello, and an unqualified alias at the
+		# root so "hello" works from the shell without the prefix or
+		# the suffix.
+		$1: ilink(/bin/$1)
+		bin/:
+			$1: c4ix-$1.c4r

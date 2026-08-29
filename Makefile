@@ -507,7 +507,9 @@ $(C4DOS_IX_DISK): c4dos32.c4r dostar32.c4r cpp32.c4r c4cc32.c4r dosload32.c4r \
                   b4ke32.c4r tar32.c4r ls32.c4r ps32.c4r \
                   bbsave32.c4r save32.c4r raycast-dos32.c4r reboot32.c4r \
                   install32.c4r $(SRCS)/c4dos/fs/install.lst \
+                  kinstall32.c4r $(SRCS)/c4ke/fs/c4ix.lst \
                   $(SRCS)/c4bb/fs/c4ke-climb.vfs.txt \
+                  $(SRCS)/c4bb/fs/c4ix-climb.vfs.txt \
                   c4-dos32.c4r c4m-dos32.c4r mandel-dos32.c4r rps-dos32.c4r \
                   $(BIN_D)/c4ix.b4k \
                   $(SRCS)/c4dos/fs/LADDER.BAT $(SRCS)/c4dos/fs/IX.BAT \
@@ -555,6 +557,11 @@ $(C4DOS_IX_DISK): c4dos32.c4r dostar32.c4r cpp32.c4r c4cc32.c4r dosload32.c4r \
 	@# floppy for everything else -- then writes boot.cfg. M11.
 	@cp install32.c4r  $(C4DOS_IX_DISK)/install.c4r
 	@cp $(SRCS)/c4dos/fs/install.lst $(C4DOS_IX_DISK)/install.lst
+	@# And its counterpart one rung up, which install.lst carries onto
+	@# the C4KE medium so that the system C4KE builds can be installed
+	@# the same way. M12.
+	@cp kinstall32.c4r $(C4DOS_IX_DISK)/kinstall.c4r
+	@cp $(SRCS)/c4ke/fs/c4ix.lst     $(C4DOS_IX_DISK)/c4ix.lst
 	@# C4KE's own userland. It was on c4ke-root and on none of the disks
 	@# a player ever boots, so the kernel they built came up with a
 	@# shell and almost nothing to run in it. Built here rather than
@@ -592,9 +599,12 @@ $(C4DOS_IX_DISK): c4dos32.c4r dostar32.c4r cpp32.c4r c4cc32.c4r dosload32.c4r \
 	@# C4IX's own userland, prebuilt at 32 bits by build-images.sh: init
 	@# looks for c4ix-sh.c4r and the kernel it just built has no way to
 	@# make one, because libc4ix is a separate ladder.
-	@cp src/c4bb/images/disk/c4ix-sh.c4r src/c4bb/images/disk/c4ix-ls.c4r \
-	    src/c4bb/images/disk/c4ix-cat.c4r src/c4bb/images/disk/c4ix-ps.c4r \
-	    $(C4DOS_IX_DISK)/ 2>/dev/null || true
+	@# All of it, not the four it used to be: 417 KB total, and the
+	@# medium C4KE installs one rung up is only a real system if the
+	@# shell has something to run. c4ix-vfsload is what init spawns
+	@# before the shell, so without it C4IX boots to a bare tree.
+	@cp src/c4bb/images/disk/c4ix-*.c4r $(C4DOS_IX_DISK)/ 2>/dev/null || true
+	@cp $(SRCS)/c4bb/fs/c4ix-climb.vfs.txt $(C4DOS_IX_DISK)/c4ix.vfs.txt
 	@# vfsload is what gives a booted C4KE a source tree rather than a
 	@# bare root. It needs c4lc (real block scoping, not c4cc's), so it
 	@# comes from build-images.sh rather than being built here.
@@ -1897,6 +1907,11 @@ bbsave32.c4r: c4cc32 include/c4dos.h include/c4bb.h $(SRCS)/c4dos/bbsave.c
 	./c4cc32 -o $@ include/c4dos.h include/c4bb.h $(SRCS)/c4dos/bbsave.c > /dev/null
 install32.c4r: c4cc32 include/c4dos.h include/c4bb.h $(SRCS)/c4dos/install.c
 	./c4cc32 -o $@ include/c4dos.h include/c4bb.h $(SRCS)/c4dos/install.c > /dev/null
+# The same job one rung up, as a C4KE task rather than a C4DOS
+# transient. It has its own name because the DOS one is on the same
+# floppy and cannot run here -- it talks to a DOS that is gone.
+kinstall32.c4r: c4cc32 $(U0) include/c4bb.h $(BIN_D)/install.c
+	./c4cc32 -o $@ $(U0) include/c4bb.h $(BIN_D)/install.c > /dev/null
 save32.c4r: c4cc32 $(U0) include/c4bb.h $(BIN_D)/save.c
 	./c4cc32 -o $@ $(U0) include/c4bb.h $(BIN_D)/save.c > /dev/null
 
@@ -1930,11 +1945,14 @@ test-c4bb: c4bb-images $(C4M) $(TESTS_C4R)
 test-c4bb-storage: c4dos32.c4r $(C4DOS_IX_DISK)
 	bash src/c4bb/tests/test-storage.sh
 
-# The climb's second power-on (M11): C4DOS builds a kernel, INSTALL
-# writes it and everything around it onto a blank medium, the floppy
-# comes out, and the machine restarts into what it just made.
-test-c4bb-install: c4dos32.c4r $(C4DOS_IX_DISK)
-	bash src/c4bb/tests/test-install.sh
+# The whole climb (M11 and M12): three power-ons, three systems, each
+# booted from a medium the previous one wrote. M11's bar is a strict
+# prefix of M12's, so they share one script rather than building the
+# same kernel twice.
+test-c4bb-climb: c4dos32.c4r $(C4DOS_IX_DISK)
+	bash src/c4bb/tests/test-climb.sh
+
+test-c4bb-install: test-c4bb-climb
 
 # What each rung is allowed to need, and what it must need
 # (docs/c4bb-storage.md M15). HOMEWARD's ladder is a ladder of opcodes:
@@ -2734,7 +2752,7 @@ c4rs: pre
 # Marking the below rules as PHONY using singular .PHONY rule
 PHONY  = pre all clean-c4rs clean
 PHONY += test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
-PHONY += run-c4dos-build32 test-c4dos-build32 run-c4dos-c4ix32 test-c4dos-c4ix32 test-c4cc-for test-respfile test-b4ke test-c4bb-storage test-c4bb-baseops test-c4bb-rungs test-c4bb-install
+PHONY += run-c4dos-build32 test-c4dos-build32 run-c4dos-c4ix32 test-c4dos-c4ix32 test-c4cc-for test-respfile test-b4ke test-c4bb-storage test-c4bb-baseops test-c4bb-rungs test-c4bb-install test-c4bb-climb
 PHONY += test-c4sc test-c4sc-run test-c4sc-lex test-c4sc-front test-c4sc-back
 PHONY += test-c4sc-image test-c4sc-self test-c4sc-board
 PHONY += test-c4dos-ladder32

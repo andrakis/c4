@@ -126,6 +126,33 @@ untouched.
 onto a drive, no manifest and no boot record. Useful for keeping
 intermediate work; not a boot medium.
 
+### And again, one rung up
+
+The medium you just booted carries everything the next system is built
+from, so the same loop runs again from inside C4KE — with a third drive
+for what it makes:
+
+    node src/c4bb/sim/cli.js -i -m 256 -d c4dos-c4ix32 -w disk1 -w disk2
+
+| where | type | what happens |
+|---|---|---|
+| `c4sh>` | `tar x c4ix-src.tar` | C4IX's source, out of the archive the medium carried |
+| `c4sh>` | `b4ke -f c4ix.b4k` | twelve modules and a link |
+| `c4sh>` | `kinstall 2:` | a bootable C4IX medium on drive 2, from `c4ix.lst` |
+| `c4sh>` | `reboot 1` | and the machine comes up in C4IX |
+
+`kinstall` is `install` at the kernel rung — the ramfs first, then the
+drive this system booted from, so the kernel `b4ke` just built shadows
+anything of that name that shipped. It has its own name because the
+C4DOS `install.c4r` is on the same floppy and cannot run here; it talks
+to a DOS that is gone.
+
+`make test-c4bb-climb` runs the whole thing — three power-ons, three
+systems, each booted off the medium the last one wrote.
+
+`save 1:` is the blunt tool at this rung, as `bbsave` is one below:
+the whole ramfs onto a drive, no manifest and no boot record.
+
 and the same inside C4KE, with `save 1:` for the ramfs, which is how
 the C4IX that `b4ke` just built survives to be booted on its own.
 

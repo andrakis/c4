@@ -62,13 +62,34 @@ c4ix-src.tar
 tools-src.tar
 c4ke-src.tar
 
+# --- the tool that does this one rung up -------------------------------
+# kinstall is this program's counterpart as a C4KE task: after b4ke
+# builds C4IX, it reads c4ix.lst and writes the next medium. Both have
+# to be HERE, because this floppy is the last thing in the chain that
+# has them.
+kinstall.c4r
+c4ix.lst
+
 # --- C4IX's userland ---------------------------------------------------
-# init looks for c4ix-sh.c4r, and the kernel C4KE builds has no way to
-# make one: libc4ix is a separate ladder.
+# The kernel C4KE builds has no way to make these: libc4ix is a separate
+# ladder. init spawns c4ix-vfsload.c4r and then c4ix-sh.c4r with no
+# arguments at all, so those two are what "bootable" means for C4IX.
+c4ix-vfsload.c4r
 c4ix-sh.c4r
+c4ix.vfs.txt
 c4ix-ls.c4r
 c4ix-cat.c4r
 c4ix-ps.c4r
+c4ix-top.c4r
+c4ix-echo.c4r
+c4ix-wc.c4r
+c4ix-mkdir.c4r
+c4ix-hello.c4r
+c4ix-uhello.c4r
+c4ix-bench.c4r
+c4ix-cycles.c4r
+c4ix-spin.c4r
+c4ix-fmt.c4r
 
 # --- innerbench's inputs, by the exact names it opens them with -------
 load-c4r.c

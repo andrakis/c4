@@ -196,10 +196,17 @@ and nothing is lost when the machine stops.
         200 KB kernel under another name.
   - [x] The end-to-end run, in one command, in the suite: build,
         install, eject, reboot, and be in C4KE.
-- [ ] **M12 — the same one rung up.** C4KE builds its tools and saves
+- [x] **M12 — the same one rung up.** C4KE builds its tools and saves
       them; B4KE builds C4IX and installs a C4IX boot disk. Bar: three
       power-ons, three systems, each booted from a disk the previous
       one wrote.
+  - [x] `kinstall`, the C4KE-rung counterpart of the C4DOS `install`:
+        the ramfs first, then the drive this system booted from.
+  - [x] A C4IX medium that is a system rather than a kernel — `init`
+        spawns `c4ix-vfsload.c4r` and `c4ix-sh.c4r` with no arguments
+        at all, so a medium without those boots into nothing.
+  - [x] All three power-ons in one command, in the suite, driven by
+        what comes out rather than by a clock.
 
 ### M7, M8, M9 — done, with the evidence
 
@@ -935,6 +942,76 @@ actually has, and the boot is clean: **51/51**. The test asserts the
 absence of `vfsload: cannot open` outright, which is what keeps
 `install.lst` and the climb manifest honest about each other — a name
 in one and not the other shows up there.
+
+### M12: three power-ons, three systems
+
+    bios: drive 0 has c4dos32.c4r          <- the shipped floppy
+    A>LADDER
+    A>RUN install.c4r 1:
+    install: 60 files, 4101902 bytes onto drive 1, boot.cfg -> c4ke.c4r
+    A>RUN reboot.c4r 0
+
+    bios: drive 1 has c4ke.c4r             <- what C4DOS compiled
+    c4sh> tar x c4ix-src.tar
+    tar: extracted 46 files, 267613 bytes
+    c4sh> b4ke -f c4ix.b4k
+    b4ke: C4IX built
+    b4ke: 13 ran, 0 skipped, 0 failed
+    c4sh> kinstall 2:
+    kinstall: 21 files, 822372 bytes onto drive 2, boot.cfg -> c4ix.c4r
+    c4sh> reboot 1
+
+    bios: drive 2 has c4ix.c4r             <- what C4KE compiled
+    vfsload: 28/28 entries loaded from c4ix.vfs.txt
+    c4ix-sh -- 'help' for builtins
+
+Nothing crosses a boot except the media. `make test-c4bb-climb` is the
+pin, and M11's bar is a strict prefix of it, so they share one script
+rather than building the same kernel twice.
+
+`kinstall` is `install` one rung up, and the only real difference is
+where a file might be: **the ramfs first, then the drive this system
+booted from.** `c4ix.c4r` is in the ramfs because b4ke just put it
+there; the C4IX userland is on the medium because the rung below
+installed it. That is the same precedence C4DOS gets for free from its
+own `open()`, and the same one `tar.c`'s `slurp` has always used.
+
+It is `kinstall` and not `install` because the C4DOS transient of that
+name is on the same floppy and cannot run here — it talks to a DOS that
+is gone. Two rungs, two programs, two names, the way `bbsave` and
+`save` already are.
+
+**What "bootable" means for C4IX** turned out to be worth checking
+rather than assuming. With no arguments, `init.c` spawns
+`c4ix-vfsload.c4r` and then `c4ix-sh.c4r` — so a medium carrying only
+the kernel boots into a system with nothing to run, and the four C4IX
+images the climb disk used to carry were not the right four. It carries
+all fifteen now, which is 417 KB, and `c4ix-climb.vfs.txt` describes
+that shape the way `c4ke-climb.vfs.txt` describes the rung below:
+**28/28**, no `cannot open` on the way up.
+
+### The test had to watch, not count
+
+The first version fed each command when the previous one printed its
+summary, and hung for the full fifteen minutes:
+
+    c4sh> tar x c4ix-src.tar
+    b4ke -f c4ix.b4k
+    tar: extracted 46 files, 267613 bytes
+    c4sh>
+
+`b4ke` was echoed and never ran. **C4KE gives the console to the
+FOCUSED task**, so a line typed while a program is still finishing is
+simply gone — and `tar: extracted` is printed before `tar` hands the
+console back. The fix is to wait for the log to END in a prompt, which
+is the system saying it is idle and listening, and only then type. Two
+polls two seconds apart, because a prompt about to be followed by more
+output is not an idle one.
+
+Waiting on output rather than on a clock is also what makes the test
+usable: a sleep long enough for `b4ke` on a slow host is minutes of
+dead waiting on a fast one, and one short enough for a fast host fails
+on a slow one for no reason at all.
 
 ---
 

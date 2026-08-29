@@ -1,0 +1,48 @@
+# c4ix.lst -- what makes a bootable C4IX medium.
+#
+# Read by `kinstall 2:` (src/c4ke/bin/install.c) from inside C4KE, after
+# `tar x c4ix-src.tar` and `b4ke -f c4ix.b4k` have built the kernel.
+#
+# Each name is fetched from wherever it is: the ramfs first -- which is
+# where b4ke just put c4ix.c4r -- then the drive this system booted
+# from, which is where its userland has been sitting since the rung
+# below installed it.
+#
+# `boot NAME` names the image the BIOS is to load; `?` means optional;
+# `#` is a comment. See docs/c4bb-storage.md M12.
+
+# --- the kernel b4ke built --------------------------------------------
+boot c4ix.c4r
+
+# --- what C4IX starts on its own ---------------------------------------
+# With no arguments, init spawns c4ix-vfsload.c4r and then c4ix-sh.c4r
+# (src/c4ix/init.c). A medium without those boots into a kernel with
+# nothing to run.
+c4ix-vfsload.c4r
+c4ix-sh.c4r
+c4ix.vfs.txt
+
+# --- and the rest of the userland ---------------------------------------
+c4ix-ls.c4r
+c4ix-cat.c4r
+c4ix-ps.c4r
+c4ix-top.c4r
+c4ix-echo.c4r
+c4ix-wc.c4r
+c4ix-mkdir.c4r
+c4ix-hello.c4r
+c4ix-uhello.c4r
+c4ix-bench.c4r
+c4ix-cycles.c4r
+c4ix-spin.c4r
+c4ix-fmt.c4r
+
+# --- the source it was built from ---------------------------------------
+# So the medium can rebuild itself: unpack this on the next system and
+# everything above is reproducible from it.
+c4ix-src.tar
+
+# --- and a way back out --------------------------------------------------
+# reboot needs no u0 and no kernel service, so the one image runs as a
+# C4DOS transient, a C4KE task and a C4IX program alike.
+?reboot.c4r

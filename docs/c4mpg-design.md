@@ -4,7 +4,7 @@ A fork of `c4m` that checks every memory access against a table of what the
 running context is allowed to touch, and a C4KE kernel extension that keeps that
 table honest across task switches.
 
-STATUS: **M1 built and green, 2026-09-06.** `make test-mpg`. This document is
+STATUS: **M1 and M2 built and green, 2026-09-06.** `make test-mpg`. This document is
 the contract; deviations get written back here, and two have been — see
 "Deviations, and what M1 measured" below.
 
@@ -205,6 +205,7 @@ catches each and names the right region:
 | `mpg_freed.c` | writes through a pointer after freeing it |
 | `mpg_interior.c` | frees an interior pointer — the `free(t)` bug, verbatim |
 | `mpg_syscall.c` | `read(fd, buf, huge)` into a small buffer — the vfsload bug |
+| `mpg_unterminated.c` | `printf("%s", buf)` where buf has no NUL — its root cause |
 | `mpg_foreign.c` | (under C4KE) writes into another task's stack |
 | `mpg_kernel.c` | (under C4KE) writes into the exported task table |
 
@@ -213,6 +214,12 @@ run to completion with **zero** violations, or the guard is crying wolf and
 will be turned off within a day:
 
     make test-c4l  test-cpp  test-link  test  test-c4dos  test-c4bb
+
+**Pointed at real workloads so far (M1/M2):** the whole `src/tests` corpus, 73
+programs, byte-identical to plain `c4m`; and `c4mpg c4.c c4.c hello.c` — the
+guard hosting c4 hosting c4 hosting a program — clean. Feeding it a
+preprocessed `c4m.c` fails at `540: close paren expected`, identically under
+plain `c4m`, so that is c4m's own limit and not the guard's.
 
 **Then the real prize.** Point it at the two bugs whose root causes we already
 know, and confirm it names them at the moment of the write rather than
@@ -231,8 +238,10 @@ guard vaguer fails the build.
       and NAMED; 73 corpus programs run identically under the guard.
       `make test-mpg`. Built from `c4m.c -DC4MPG=1` rather than a forked file
       — see below.
-- [ ] **M2** Syscall buffer ranges (`READ`, `PRTF`, `MSET`, `MCMP`, `MCPY`).
-      `mpg_syscall` caught — the vfsload class.
+- [x] **M2** Syscall buffer ranges (`READ`, `OPEN`, `PUTS`, `PRTF`, `MSET`,
+      `MCMP`, `MCPY`), plus strings as ranges whose length nobody knows.
+      `mpg_syscall` AND `mpg_unterminated` caught — both halves of the vfsload
+      class.
 - [ ] **M3** The four opcodes, the narrowing rule, `TRAP_MPG_VIOLATION` with the
       full message. `mpg_freed`, `mpg_interior` caught.
 - [ ] **M4** `c4ke_mpg.c`: per-task regions from `TASK_EXTDATA`, context switch
@@ -282,6 +291,29 @@ After both: **73 of 73** corpus programs produce byte-identical output to plain
 `c4m`, zero violations. (Four of them print addresses of their own and so differ
 run to run under ASLR; the test names them rather than loosening the
 comparison.)
+
+### What M2 added, and the correction it needed
+
+The buffer half is the half no per-instruction check can do: the overrun in
+`read(fd, buf, 262144)` happens inside the HOST's `read()`, so not one guest
+`LI` or `SI` executes for it. `mpg_range` checks `[buf, buf+len)` before the
+pointer is handed over, and says:
+
+    c4mpg: read() into 0x586d10fecd40 (65536 bytes) -- outside every region this program owns
+    c4mpg:   nearest below: 'malloc' [0x586d10fecd40,0x586d10fecd80) rw
+    c4mpg:   it starts inside that region and runs 65472 bytes past the end
+
+**Strings needed a second pass, and the test caught the first one being lazy.**
+A string is a range whose length nobody knows until they have already read it,
+so `mpg_string` walks to the end of the owning region looking for the
+terminator. The first cut checked only `printf`'s FORMAT string, on the stated
+grounds that "c4m cannot know which of the arguments a `%s` will reach for".
+It can: the format is right there and the arguments are positional.
+`mpg_unterminated.c` walked straight past that version, printing eight bytes
+and whatever followed them — which is F12's root cause verbatim, *an
+unterminated buffer in the one function that had not been read*. `mpg_printf`
+now walks the format (counting `*` width arguments, which would otherwise
+misalign every `%s` after them) and checks each `%s` argument as a string.
 
 ### Performance, recorded whatever it says
 

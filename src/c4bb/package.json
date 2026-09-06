@@ -1,1 +1,7 @@
-{ "type": "module" }
+{
+  "type": "module",
+  "scripts": {
+    "start": "cd ../.. && make serve-c4bb",
+    "test": "cd ../.. && make test-c4bb"
+  }
+}

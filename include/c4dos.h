@@ -56,6 +56,9 @@ enum {
 
 // The first version that has the slots above. See dos_can_enum().
 enum { C4DOS_API_V2 = 2 };
+// v3 adds slot 15, the clock. See dos_can_time().
+enum { C4DOS_API_V3 = 3 };
+enum { C4DOS_SLOT_TIME = 15 };
 
 int *__c4dos_api;        // patched by the loader; 0 when not under DOS
 int *__c4dos_slot;       // the stub's operand cell
@@ -208,6 +211,33 @@ int dos_version () {
 int dos_can_enum () {
   if (dos_version() < C4DOS_API_V2) return 0;
   return __c4dos_api[C4DOS_SLOT_COUNT] != 0;
+}
+
+// ---- v3: the clock ------------------------------------------------------
+//
+// TIME is opcode 53, above EXIT, so a program that calls it directly
+// leaves the base rung. Asking DOS costs nothing above EXIT (this
+// header reaches the table through the invoke STUB, not an indirect
+// call), which is what lets c4m keep its place in RUNG_BASE and still
+// have a clock -- see src/c4dos/c4dos.c dos_api_time.
+//
+// Gated on BOTH the version word and the slot, the rule every slot at 9
+// and above follows: a v1 DOS allocated sixteen words and filled nine,
+// so slot 15 on one of those is uninitialised heap, not a zero.
+int dos_can_time () {
+  if (!dos_present()) return 0;
+  if (dos_version() < C4DOS_API_V3) return 0;
+  return __c4dos_api[C4DOS_SLOT_TIME] != 0;
+}
+
+// Milliseconds since the machine came up, or 0 when there is no clock
+// to ask. 0 is also a legitimate reading for the first millisecond of
+// uptime, so callers that need to distinguish "no clock" ask
+// dos_can_time() first rather than testing the result.
+int dos_time () {
+  if (!dos_can_time()) return 0;
+  if (!__c4dos_arm()) return 0;
+  return __c4dos_call0((int *)__c4dos_api[C4DOS_SLOT_TIME]);
 }
 
 int dos_count () {

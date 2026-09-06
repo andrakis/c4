@@ -116,6 +116,7 @@ int g_inlen; int g_inpos; // many lines (a pipe) or one (a cooked tty),
 
 int g_echo;              // batch ECHO state
 int g_clock;             // CONFIG.SYS said DEVICE=CLOCK.SYS
+int g_conflush;          // CONFIG.SYS said DEVICE=CONSOLE.SYS FLUSH
 int g_quit;              // EXIT was typed
 
 // loaded-image registers (the plain-c4 "struct")
@@ -576,11 +577,38 @@ int run_trans (int entry, int argc, char **argv) {
 // indirect calls, and everything else just returns from main.
 int *g_api;
 
+enum { C4DOS_REFUSE = 1127037010 };   // 'C','4','D','R'
+
+// A constructor returning EXACTLY C4DOS_REFUSE aborts the program.
+// There is no other way for a transient to decline: exit() is the EXIT
+// opcode, which halts the whole machine, and g_api[1] (dos_exit) is
+// permanently 0 -- returning from main is the only clean way out, and
+// a constructor cannot do that. u0.h uses this to say "requires C4KE"
+// instead of trap-storming through 38 opcode requests at a kernel that
+// is not here; libc4ix.c says the same for C4IX.
+//
+// It has to be a DISTINGUISHED value rather than "non-zero". A c4cc
+// constructor with no return statement returns whatever happened to be
+// in the accumulator, and c4cc.c4r's does: treating non-zero as a
+// refusal silently stopped the compiler from running, which showed up
+// as BUILD printing "Compiling the kernel" and then producing no
+// kernel at all.
+//
+// 1127037010 is 'C','4','D','R' -- "DOS, refuse" -- written out
+// because plain c4 cannot fold that in an enum. Kept in step with
+// include/c4dos.h, include/u0.h and src/c4ix/lib/libc4ix.c.
 int run_program (char *path, int argc, char **argv) {
   int r, i;
   if (!c4r_load(path, g_api)) return -1;
   i = 0;
-  while (i < img_ncons) { invoke1(img_code + img_cons[i], 0); ++i; }
+  while (i < img_ncons) {
+    if ((r = invoke1(img_code + img_cons[i], 0)) == C4DOS_REFUSE) {
+      free(img_code);
+      free(img_data);
+      return r;
+    }
+    ++i;
+  }
   r = run_trans(img_entry, argc, argv);
   i = 0;
   while (i < img_ndes) { invoke0(img_code + img_des[i]); ++i; }
@@ -590,19 +618,6 @@ int run_program (char *path, int argc, char **argv) {
 }
 
 // ---- files ---------------------------------------------------------------
-
-// print a file to the console; returns 1 if it existed
-int type_file (char *path) {
-  int fd, n, i;
-  if (!scratch_need()) return 0;
-  if ((fd = dos_open(path)) < 0) return 0;
-  while ((n = dos_read(fd, g_scratch, 4096)) > 0) {
-    i = 0;
-    while (i < n) { printf("%c", g_scratch[i]); ++i; }
-  }
-  dos_close(fd);
-  return 1;
-}
 
 // Pull ONE line from the console into g_line. Returns 0 on EOF.
 enum { INBUFMAX = 4096 };
@@ -646,6 +661,45 @@ int get_line () {
   return 1;
 }
 
+// Wait for the user before the next screenful. get_line() is exactly
+// the right reader here: it already understands that one read(0, ...)
+// may carry several lines, so a pause consumes ONE line and leaves the
+// rest of a piped script for the prompt to run. EOF stops the paging
+// rather than the file -- a script that piped no answer still wants
+// the whole thing typed.
+int type_more () {
+  printf("-- More --");
+  if (!g_conflush) printf("\n");
+  if (!get_line()) return 0;
+  return 1;
+}
+
+// print a file to the console; returns 1 if it existed.
+// page = lines per screenful, 0 for no paging.
+int type_file (char *path, int page) {
+  int fd, n, i, lines;
+  if (!scratch_need()) return 0;
+  if ((fd = dos_open(path)) < 0) return 0;
+  lines = 0;
+  while ((n = dos_read(fd, g_scratch, 4096)) > 0) {
+    i = 0;
+    while (i < n) {
+      printf("%c", g_scratch[i]);
+      if (page && g_scratch[i] == 10) {
+        ++lines;
+        if (lines >= page) {
+          lines = 0;
+          if (!type_more()) page = 0;   // EOF: type the rest straight out
+        }
+      }
+      ++i;
+    }
+  }
+  dos_close(fd);
+  return 1;
+}
+
+
 // ---- builtins ------------------------------------------------------------
 
 int cmd_ver () {
@@ -658,9 +712,9 @@ int cmd_ver () {
 // gives us), so DIR reads the disk's manifest file - the same move
 // the c4bb web app makes with manifest.json. An honest limitation:
 // early machines listed what the label said.
-int cmd_dir () {
+int cmd_dir (int page) {
   int i;
-  if (!type_file("c4dos.dir"))
+  if (!type_file("c4dos.dir", page))
     printf("no c4dos.dir on this disk - the raw disk has no directory service\n");
   if (g_ramdisk) {
     i = 0;
@@ -674,11 +728,60 @@ int cmd_dir () {
   return 0;
 }
 
-int cmd_type (char *path) {
-  if (!path || !*path) { printf("usage: TYPE file\n"); return 1; }
-  if (!type_file(path)) { printf("file not found: %s\n", path); return 1; }
+// How many lines to a screenful when /P is given. 23 leaves room for
+// the "-- More --" and the command that follows on a 25-line console.
+enum { PAGELINES = 23 };
+
+// Is /P (or -P) among the arguments? Returns the page size, or 0.
+// A switch, not a value: DOS spelled it /P and never asked how big the
+// screen was.
+int page_switch (int argc, char **argv) {
+  int i;
+  i = 1;
+  while (i < argc) {
+    if (cieq(argv[i], "/P") || cieq(argv[i], "-P")) return PAGELINES;
+    ++i;
+  }
   return 0;
 }
+
+// The first argument that is not a switch.
+char *first_operand (int argc, char **argv) {
+  int i;
+  i = 1;
+  while (i < argc) {
+    if (*argv[i] != '/' && *argv[i] != '-') return argv[i];
+    ++i;
+  }
+  return 0;
+}
+
+int cmd_type (int argc, char **argv) {
+  char *path;
+  path = first_operand(argc, argv);
+  if (!path || !*path) { printf("usage: TYPE file [/P]\n"); return 1; }
+  if (!type_file(path, page_switch(argc, argv))) {
+    printf("file not found: %s\n", path);
+    return 1;
+  }
+  return 0;
+}
+
+// v3 slot 15: the clock, for a transient that cannot reach one itself.
+//
+// __time() is the TIME opcode, and that is the whole problem it solves:
+// TIME is opcode 53, above EXIT, so a program that calls it directly
+// leaves the base rung -- and c4m-dos32.c4r is pinned at base in
+// RUNG_BASE precisely so the campaign can say "the VM needs no opcode
+// the machine did not boot with". Reaching the clock THROUGH this table
+// costs the caller nothing above EXIT (the invoke stub is base-c4), so
+// a transient gets a working clock without moving up a rung.
+//
+// Only advertised when CLOCK.SYS was installed AND this build has the
+// hardware compiled in -- the same honesty rule the RAMDISK slots keep.
+#if C4DOS_CLOCK
+int dos_api_time () { return __time(); }
+#endif
 
 int cmd_time () {
 #if C4DOS_CLOCK
@@ -886,8 +989,8 @@ int dispatch (int argc) {
     return 0;
   }
   if (cieq(cmd, "VER")) return cmd_ver();
-  if (cieq(cmd, "DIR")) return cmd_dir();
-  if (cieq(cmd, "TYPE")) return cmd_type(argc > 1 ? g_argv[1] : 0);
+  if (cieq(cmd, "DIR")) return cmd_dir(page_switch(argc, g_argv));
+  if (cieq(cmd, "TYPE")) return cmd_type(argc, g_argv);
   if (cieq(cmd, "COPY"))
     return cmd_copy(argc > 1 ? g_argv[1] : 0, argc > 2 ? g_argv[2] : 0);
   if (cieq(cmd, "TIME")) return cmd_time();
@@ -997,6 +1100,28 @@ int read_config () {
       }
       printf("ramdisk device installed, %d bytes\n", g_ram_budget);
     }
+    // Does this console flush a partial line? Natively PRTF bottoms out
+    // in the host libc, whose stdout is line-buffered on a TTY, so an
+    // "A>" with no newline sits in the buffer and the user cannot tell
+    // DOS is ready. c4bb's UART emits each byte as it is written, so
+    // there the classic DOS look works and is worth keeping.
+    //
+    // ANNOUNCED, NEVER PROBED. The only probe in the tree is
+    // include/c4bb_info.h, and that header says why it is no use here:
+    // it asks __c4_info(), INFO is opcode 57, and c4cc compiles every
+    // function in a header whether it is called or not -- so including
+    // it would put DOS above the base-c4 rung and break the purity pin.
+    // A config line costs nothing above EXIT.
+    if (starts_ci(p, "DEVICE=CONSOLE.SYS")) {
+      n = 0;
+      while (p + n < e && !starts_ci(p + n, "FLUSH")) ++n;
+      if (p + n < e) {
+        g_conflush = 1;
+        printf("console device installed, prompt unbuffered\n");
+      } else {
+        printf("DEVICE=CONSOLE.SYS: no mode given, prompt stays on its own line\n");
+      }
+    }
     // FILES=, SHELL=, other DEVICE= lines: reserved, ignored
     p = *e ? e + 1 : e;
   }
@@ -1042,7 +1167,7 @@ int main (int argc, char **argv) {
   g_api[2] = 0;                                // filled after CONFIG.SYS
   g_api[3] = (int)&dos_api_write;
   g_api[4] = (int)&dos_api_close;
-  g_api[5] = 2;                                // API version
+  g_api[5] = 3;                                // API version
   g_api[6] = (int)&dos_api_open;
   g_api[7] = (int)&dos_api_read;
   g_api[8] = (int)&dos_api_rclose;
@@ -1071,10 +1196,18 @@ int main (int argc, char **argv) {
     g_api[11] = (int)&dos_api_entsize;
     g_api[12] = (int)&dos_api_entdata;
   }
+#if C4DOS_CLOCK
+  // Same rule for the clock: offered only when the hardware was
+  // declared, so a caller that checks the slot is told the truth.
+  if (g_clock) g_api[15] = (int)&dos_api_time;
+#endif
   run_batch("autoexec.bat", 0);
 
   while (!g_quit) {
-    printf("A>");
+    // A console that cannot flush a partial line needs the newline, or
+    // the prompt is invisible until the next one. DEVICE=CONSOLE.SYS
+    // FLUSH says this one can, and keeps the classic look.
+    printf(g_conflush ? "A>" : "A>\n");
     if (!get_line()) g_quit = 1;         // EOF: the console went away
     else {
       dispatch(parse_line());

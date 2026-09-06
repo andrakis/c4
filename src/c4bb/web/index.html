@@ -17,10 +17,11 @@
       <button id="run">Run</button>
       <button id="turbo">Turbo</button>
       <button id="pause">Pause</button>
-      <label id="speedlabel">speed <input type="range" id="speed" min="0" max="100" value="35"></label>
+      <label id="speedlabel">speed <input type="range" id="speed" min="0" max="100" value="48"><span id="speedrate">&nbsp;</span></label>
       <span id="status">loading&hellip;</span>
     </div>
-    <canvas id="board" width="980" height="560"></canvas>
+    <div id="board-pane"><canvas id="board" width="980" height="560"></canvas></div>
+    <div id="splitter" title="drag to resize the board and the terminal (double-click to reset)"></div>
     <div id="term-header">
       <span id="kbd-status">click the terminal below to type</span>
     </div>

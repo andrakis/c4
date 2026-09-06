@@ -628,10 +628,14 @@ load-from-memory path for C4KE's ramfs and nothing for DOS's.
 - **No new VM opcodes.** `docs/c4th-design.md` §8 already rules on that.
 - **No `-O` on the board.** `c4cc` does not optimize and the kernel does
   not need it to boot; `c4opt` remains a host-side pass.
-- **`vfsload` is missing from the floppy.** The booted kernel says
-  `lc4r: unable to open 'vfsload' or 'vfsload.c4r'` and carries on to the
-  shell; the 64-bit `c4dos-build/` has the same gap. Not fixed here
-  because it is not what this tracker is about.
+- ~~**`vfsload` is missing from the floppy.**~~ **FIXED 2026-09-05**, along
+  with the rest of the userland — see `docs/dos-rung-fixes.md` F2. Both
+  build floppies now carry `vfsload.c4r` and a manifest shaped for what is
+  actually on them (`src/c4bb/fs/c4ke-build.vfs.txt`), so the booted kernel
+  reports `vfsload: 49/49 entries loaded` instead of the old
+  `lc4r: unable to open 'vfsload' or 'vfsload.c4r'`. The 64-bit vfsload
+  needed a Makefile rule of its own; it had only ever been built at 32 bits,
+  by `src/c4bb/tests/build-images.sh`.
 - **The `.c4o` route is not on this disk.** c4rlink and object mode are
   c4fc's, and `c4cc` compiles the kernel whole in one pass, so there is
   nothing to link. If the board ever wants separate compilation it is

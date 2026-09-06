@@ -112,7 +112,18 @@ rm -f .c4bb_vfsload_pp.c
 
 # the self-hosted core (c4, c4m, c4cc) and the C4R toolchain, same
 # recipes as the Makefile's native (64-bit) rules, just via c4cc32
-$CC -o $DISK/c4.c4r $U0 c4.c > /dev/null
+#
+# c4.c4r takes NO u0, the way c4m.c4r below it never did. THIS DISK IS
+# BOOTED BY C4DOS TOO (that is the whole point of shipping c4dos32.c4r
+# here), and u0 is the C4KE runtime: its constructor asks the kernel
+# for 38 opcodes, and under DOS there is no kernel to ask. It used to
+# "work" only because a missed trap on the board is silent and c4.c
+# never calls a C4KE service anyway -- so the failures were invisible
+# rather than absent. Now u0 declines outright ("This application
+# requires C4KE"), which makes the wrong build visible instead. c4.c is
+# self-contained, so the unadorned image is the one that runs on every
+# rung -- the same call the Makefile makes for c4-dos32.c4r.
+$CC -o $DISK/c4.c4r c4.c > /dev/null
 $PREPROC c4m.c 2>/dev/null | $CC -o $DISK/c4m.c4r - > /dev/null
 # include/c4dos.h rides along as a source file (c4cc has no
 # preprocessor): c4cc reads its input through the DOS API when it is
@@ -329,6 +340,10 @@ if [ -x ./cpp ]; then
     $CC -o $OUT/c4dos32.c4r .c4bb_dos_pp.c > /dev/null
     rm -f .c4bb_dos_pp.c
     sed 's/SIZE=[0-9]*/SIZE=16777216/' src/c4dos/fs/CONFIG.SYS > $DISK/config.sys
+    # The board's UART emits each byte as it is written, so the tight
+    # A> prompt works here. DOS defaults to a prompt on its own line,
+    # because a host libc buffers a partial one.
+    echo 'DEVICE=CONSOLE.SYS FLUSH' >> $DISK/config.sys
     cp src/c4dos/fs/AUTOEXEC.BAT $DISK/autoexec.bat
 else
     echo "c4bb: no ./cpp, skipping c4dos32 (run 'make cpp')" >&2

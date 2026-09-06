@@ -8,8 +8,10 @@ capable of booting C4KE and C4IX with full preemptive multitasking,
 protected mode, and a keyboard.
 
     make test-c4bb                          # build everything + verify
-    python3 -m http.server 8471             # then open
+    make serve-c4bb                         # then open
     #   http://localhost:8471/src/c4bb/web/index.html
+    #   (python3 -m http.server from the REPO ROOT -- app.js fetches
+    #    repo-root-relative paths, so serving web/ itself breaks drives)
     node src/c4bb/sim/cli.js -i -d src/c4bb/images/disk \
          src/c4bb/images/c4ix32.c4r         # interactive in a terminal
 

@@ -190,10 +190,22 @@ char *read_whole_file (char *name, int *plen) {
 	int fd, n;
 	char *buf;
 	if ((fd = open(name, 0)) < 0) { printf("vfsload: cannot open %s\n", name); return 0; }
-	if (!(buf = malloc(READ_CAP))) { close(fd); return 0; }
+	// +1 and a NUL, because the only consumer -- split_lines() -- walks
+	// this with `while (*p)` and never looks at *plen. Without the
+	// terminator the parser runs off the end of the file into whatever
+	// the heap happened to hold, and treats it as more manifest. That
+	// is not theoretical: booting C4KE nested under c4m on c4bb, right
+	// after BUILD had unpacked c4ke-src.tar and compiled a kernel, the
+	// bytes past the manifest were C SOURCE, and vfsload dutifully
+	// reported `too many entries, dropping free(custom_opcodes);` about
+	// a hundred times. Natively the next byte happened to be zero, so
+	// the same bug read as `55/55 entries loaded` -- it was always
+	// there, it just had a tidier heap to run into.
+	if (!(buf = malloc(READ_CAP + 1))) { close(fd); return 0; }
 	n = read(fd, buf, READ_CAP);
 	close(fd);
 	if (n < 0) { printf("vfsload: read failed on %s\n", name); free(buf); return 0; }
+	buf[n] = 0;
 	*plen = n;
 	return buf;
 }

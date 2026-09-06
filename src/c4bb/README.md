@@ -11,9 +11,12 @@ Full design: `docs/c4bb-design.md`. Quick start:
     make test-c4bb            # builds the 32-bit toolchain, firmware,
                               # images, both kernels; runs the suite
 
-    # the board in a browser (from the repo root):
-    python3 -m http.server 8471
+    # the board in a browser:
+    make serve-c4bb           # or: npm start, from this directory
     # -> http://localhost:8471/src/c4bb/web/index.html
+    # (that is python3 -m http.server 8471 from the REPO ROOT, which is
+    #  where it has to be served from: app.js fetches drive and image
+    #  paths that are repo-root-relative. C4BB_PORT=NNNN to move it.)
     # pick c4ix32 or c4ke32, press Turbo, click the terminal, type.
     #
     # or pick (BIOS) and let it boot a drive: the panel on the right

@@ -364,14 +364,45 @@ function iStep() {
   draw();
 }
 
-// speed slider: 0..100 -> ~1..80000 microsteps per frame (log scale)
+// speed slider: 0..100 -> 1/16 .. 100000 microsteps per frame, log scale.
+//
+// The bottom of the range used to be ONE microstep per frame, which is
+// 60 a second -- far too quick to follow a control line from register
+// to register, which is the whole reason the board is drawn at all. So
+// the scale now goes BELOW one step per frame: at 0 it is about four
+// microsteps a second, slow enough to read the microcode listing as it
+// advances. Fractional rates need an accumulator, since you cannot run
+// a sixteenth of a step.
+//
+// The exponent is (v/100)*6.2 - 1.2, so the top is 10^5 -- a little
+// faster than the old maximum rather than slower, because widening a
+// log scale at one end must not quietly narrow it at the other.
 function stepsPerFrame() {
-  return Math.max(1, Math.round(Math.pow(10, 0.05 * $('speed').value)));
+  return Math.pow(10, 0.062 * $('speed').value - 1.2);
+}
+
+let stepDebt = 0;   // fractional microsteps carried between frames
+
+// What the slider is actually asking for, in the units a person thinks
+// in. Shown next to the slider because "35" tells you nothing.
+function speedLabel() {
+  const perSec = stepsPerFrame() * 60;
+  if (perSec < 1)    return `${(1 / perSec).toFixed(1)}s/step`;
+  if (perSec < 1000) return `${perSec < 10 ? perSec.toFixed(1) : Math.round(perSec)}/s`;
+  if (perSec < 1e6)  return `${(perSec / 1000).toFixed(1)}k/s`;
+  return `${(perSec / 1e6).toFixed(1)}M/s`;
+}
+
+function updateSpeedLabel() {
+  const el = $('speedrate');
+  if (el) el.textContent = speedLabel();
 }
 
 function frame() {
   if (mode === 'run') {
-    const n = stepsPerFrame();
+    stepDebt += stepsPerFrame();
+    const n = Math.floor(stepDebt);
+    stepDebt -= n;
     for (let i = 0; i < n; i++) {
       if (checkDone()) break;
       machine.step();
@@ -407,6 +438,83 @@ function setMode(m, btn) {
   mode = m;
   for (const b of ['run', 'turbo', 'pause']) $(b).classList.toggle('active', b === btn);
 }
+
+// ---- the splitter --------------------------------------------------
+//
+// How much of the window is board and how much is terminal is a choice
+// that depends on what you are doing -- watching control lines, or
+// reading a full screen of program output -- so it is the user's, and
+// it is remembered. Stored as a FRACTION of the available height, not
+// a pixel count, so it still means the same thing in a window that has
+// since been resized or on a different monitor.
+const SPLIT_KEY = 'c4bb.boardFraction';
+const SPLIT_DEFAULT = 0.58;
+const SPLIT_MIN = 0.15, SPLIT_MAX = 0.85;
+
+function splitSpace() {
+  // the height #board-pane and #terminal share, once the fixed rows
+  // (toolbar, splitter, terminal header) and the flex gaps are out
+  const left = $('left');
+  const fixed = $('toolbar').offsetHeight + $('splitter').offsetHeight
+              + $('term-header').offsetHeight + 8 * 3;
+  return Math.max(120, left.clientHeight - fixed);
+}
+
+function applySplit(fraction) {
+  const f = Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, fraction));
+  $('board-pane').style.flexBasis = Math.round(splitSpace() * f) + 'px';
+  return f;
+}
+
+function loadSplit() {
+  let f = SPLIT_DEFAULT;
+  try {
+    const v = parseFloat(localStorage.getItem(SPLIT_KEY));
+    if (isFinite(v)) f = v;
+  } catch (e) { /* private window, or storage blocked: use the default */ }
+  applySplit(f);
+}
+
+function saveSplit(f) {
+  try { localStorage.setItem(SPLIT_KEY, String(f)); } catch (e) { /* not fatal */ }
+}
+
+(function wireSplitter() {
+  const bar = $('splitter');
+  let dragging = false;
+
+  const onMove = e => {
+    if (!dragging) return;
+    const top = $('board-pane').getBoundingClientRect().top;
+    saveSplit(applySplit((e.clientY - top) / splitSpace()));
+    e.preventDefault();
+  };
+  const onUp = () => {
+    if (!dragging) return;
+    dragging = false;
+    bar.classList.remove('dragging');
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onUp);
+  };
+
+  bar.addEventListener('pointerdown', e => {
+    dragging = true;
+    bar.classList.add('dragging');
+    // on window, not on the bar: the pointer outruns an 8px target
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    e.preventDefault();
+  });
+  bar.addEventListener('dblclick', () => { applySplit(SPLIT_DEFAULT); saveSplit(SPLIT_DEFAULT); });
+
+  // A window resize changes what the stored FRACTION works out to in
+  // pixels, so re-apply rather than leaving a stale basis behind.
+  window.addEventListener('resize', () => loadSplit());
+  loadSplit();
+})();
+
+$('speed').addEventListener('input', updateSpeedLabel);
+updateSpeedLabel();
 
 $('reset').onclick = () => reset();
 $('ustep').onclick = () => { setMode('pause', 'pause'); uStep(); };

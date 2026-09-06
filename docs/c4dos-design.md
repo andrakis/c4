@@ -133,7 +133,7 @@ a trap-free DOS has none to offer.
 
 The table is 32 words, zeroed at boot. Slot 5 is the version.
 
-| slot | v1 | | slot | v2 |
+| slot | v1 | | slot | v2 / v3 |
 |---|---|---|---|---|
 | 0 | magic `C4D` | | 9 | `count()` → RAM disk entries |
 | 1 | `dos_exit` (reserved, always 0) | | 10 | `entname(i)` → `char *` |
@@ -141,16 +141,29 @@ The table is 32 words, zeroed at boot. Slot 5 is the version.
 | 3 | `write(h, buf, len)` | | 12 | `entdata(i)` → `char *` |
 | 4 | `close(h)` | | 13 | `trim()` → scratch bytes released |
 | 5 | version | | 14 | `release()` → RAM disk bytes released |
-| 6 | `open(name)` | | | |
+| 6 | `open(name)` | | 15 | **v3** `time()` → ms since power-on |
 | 7 | `read(h, buf, len)` | | | |
 | 8 | `close(h)` | | | |
 
 Slots 2 and 9–12 are advertised only when `DEVICE=RAMDISK.SYS` was
-installed, so a caller that checks a slot is told the truth rather than
-handed an always-empty listing. **Everything at 9 and above must be
+installed, and slot 15 only when `DEVICE=CLOCK.SYS` was, so a caller
+that checks a slot is told the truth rather than handed an always-empty
+listing or a stopped clock. **Everything at 9 and above must be
 gated on the version word**: a v1 DOS allocated sixteen words and
 filled nine, leaving uninitialised heap where a caller would read a
-function pointer. `dos_can_enum()` in the header does both checks.
+function pointer. `dos_can_enum()` and `dos_can_time()` in the header do
+both checks.
+
+**Why the clock is in the table at all.** `TIME` is opcode 53, above
+`EXIT`, so a transient that calls it directly leaves the base rung —
+and `c4m-dos32.c4r` is pinned in `RUNG_BASE` so the campaign can say
+the VM needs no opcode the machine did not boot with. Borrowing DOS's
+clock through the table costs the caller nothing above `EXIT`, because
+this header reaches the slots through its invoke STUB rather than an
+indirect call. c4m is the first user: without it, `c4_time()` falls
+back to reading `/proc/uptime`, which no breadboard has, and a guest
+waiting for the clock to advance waits forever
+(`docs/dos-rung-fixes.md` F11).
 
 v1 lets a tool ask for a file BY NAME. v2 is for a *loader*: something
 taking the machine over wants everything the RAM disk holds without
@@ -198,17 +211,38 @@ loading a kernel must not be the thing that demands a better CPU.
 
 ## CONFIG.SYS and AUTOEXEC.BAT
 
-- `CONFIG.SYS`: `DEVICE=CLOCK.SYS` (enables TIME/C4CY use) and
-  `DEVICE=RAMDISK.SYS SIZE=n`, both implemented; `FILES=n`,
-  `SHELL=...` reserved.
+- `CONFIG.SYS`: `DEVICE=CLOCK.SYS` (enables TIME/C4CY use),
+  `DEVICE=RAMDISK.SYS SIZE=n` and `DEVICE=CONSOLE.SYS FLUSH`, all three
+  implemented; `FILES=n`, `SHELL=...` reserved.
   Parsed with a flattened-locals descent (the vfsload.c skeleton,
   c4cc-dialect).
+
+  `CONSOLE.SYS FLUSH` says **this console shows a partial line**, and
+  the prompt is `A>` with the cursor after it, the way DOS always
+  looked. Without it DOS puts the prompt on its own line instead,
+  because nothing in this family can flush a buffer: natively `PRTF`
+  bottoms out in the host libc, which is line-buffered on a TTY, so a
+  bare `A>` sits there unseen and the machine looks hung. eshell solved
+  the same problem the same way and says so at `src/c4ke/c4ke.c:90`.
+
+  It is a config line and not a probe on purpose. The only "is this
+  c4bb?" test in the tree is `include/c4bb_info.h`, and that header
+  says why it is no use here: it asks `__c4_info()`, `INFO` is opcode
+  57, and c4cc compiles every function in a header whether it is called
+  or not — so including it would put DOS above the base-c4 rung and
+  break the purity pin. *"The capability is announced, never probed."*
+  The c4bb disks announce it; the native ones do not.
 - `AUTOEXEC.BAT`: line-per-command batch, `ECHO`, `REM`, `@` prefix,
   run through the same reader as the interactive prompt (the c4sh
   INPUT_STDIN/INPUT_STREAM split, minus its known multi-line-read bug).
 - Builtins: `DIR`, `TYPE`, `RUN` (implicit for *.C4R names), `ECHO`,
   `VER`, `TIME` (wants CLOCK.SYS), `MEM`, `EXIT` (halts — the one
   legitimate use of the EXIT opcode).
+  `TYPE file /P` and `DIR /P` page: 23 lines, then `-- More --` and a
+  wait. The wait is `get_line()`, which already understands that one
+  `read(0, ...)` may carry several lines, so a pause eats exactly one
+  and leaves the rest of a piped script for the prompt. Paging is off
+  unless `/P` is given, so nothing that scripts `TYPE` changes.
 
 ## Building and running
 
@@ -232,6 +266,27 @@ carry `hello.c4r` and `raycast.c4r`.
     make run-c4dos        # native c4m, clock build -- the A> prompt
     make run-c4dos-c4     # the tower: unmodified c4 -> c4l -> DOS
     make run-c4dos-bb     # the breadboard machine, interactive
+    make serve-c4bb       # the breadboard machine, in a browser
+
+### The build floppy
+
+`make run-c4dos-build` is the one that matters for the ladder: boot it,
+type `BUILD`, then `dosload c4ke.c4r`, and you are in a kernel this
+machine just compiled. As of 2026-09-05 that floppy carries a **userland**
+-- `ls ps top cat echo type xxd kill spin c4le`, the three benchmarks, the
+games, and `c4`/`c4m` -- plus `vfsload.c4r` and a manifest shaped for it.
+Before that it carried only the toolchain, so the kernel it built came up
+with a shell and nothing to run in it: `ls` answered
+`lc4r: unable to open 'ls' or 'ls.c4r'`.
+
+Nothing in the kernel had to change for this. `task_loadc4r` checks the
+RAM filesystem and then the HOST, and the run target `cd`s into the
+floppy, so a `.c4r` sitting there is loadable. What `ls` *lists*, though,
+is the ramfs -- which is why `vfsload` has to be there too.
+
+The games and `c4`/`c4m` are the `u0lite` (or bare) builds, so one image
+runs at the `A>` prompt AND inside the kernel. `docs/dos-rung-fixes.md`
+tracks the whole change.
 
 `EXIT` halts. `DIR`, `TYPE`, `RUN`, `ECHO`, `VER`, `TIME`, `MEM` are the
 builtins; `RUN raycast.c4r -d` is the one transient with something to

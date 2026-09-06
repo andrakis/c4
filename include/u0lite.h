@@ -15,6 +15,11 @@
 //   c4cc -o prog.c4r include/u0.h     prog.c   # the C4KE / C4IX build
 //   c4cc -o prog.c4r include/u0lite.h prog.c   # the C4DOS build
 //
+// Pick wrong and you now find out politely: a u0 build run under C4DOS
+// prints "C4DOS: This application requires C4KE." and returns to the
+// prompt. u0.h's constructor checks for DOS before it asks the kernel
+// for anything -- see __c4dos_api there.
+//
 // The names match u0's exactly, so the program's source does not know
 // which build it is in. That is what lets mandel, rps and the rest be
 // ONE source that runs on every rung, with no #ifdef -- which matters,

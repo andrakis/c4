@@ -28,6 +28,19 @@ int main (int argc, char **argv) {
 
   if (!dos_present()) { printf("dosenum: no C4DOS here\n"); return 1; }
   printf("dosenum: api version %d\n", dos_version());
+
+  // v3 slot 15: the clock a transient cannot reach on its own without
+  // leaving the base rung. Reported here because this is the program
+  // that keeps the table honest, and because "the slot is advertised"
+  // and "the slot answers" are different claims -- c4m depends on the
+  // second one (src/c4dos/c4dos.c dos_api_time).
+  if (!dos_can_time()) printf("dosenum: no clock available\n");
+  else {
+    n = dos_time();
+    printf("dosenum: clock reads %d ms, %s\n", n,
+           n > 0 ? "running" : "stopped");
+  }
+
   if (!dos_can_enum()) { printf("dosenum: no enumeration available\n"); return 1; }
 
   n = dos_count();

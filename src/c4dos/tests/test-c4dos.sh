@@ -137,7 +137,21 @@ echo "test-c4dos: ramdisk OK"
 # and not at a plausible-looking address, which is exactly the bug the
 # v1 table had in slots 9-15 (allocated 16 words, filled 9).
 OUT=$(run_native c4dos-clock.c4r 'COPY hello.c4r work.c4r\nCOPY config.sys note.txt\nRUN dosenum.c4r\nEXIT\n')
-echo "$OUT" | grep -q "dosenum: api version 2"      || { echo "FAIL v2: version word"; exit 1; }
+# A FLOOR, not an exact match: the version goes UP when the table gains
+# slots (v3 added the clock), and a pinned number turns every deliberate
+# bump into a test failure that says nothing. What this leg cares about
+# is that enumeration is THERE, which is v2 and later.
+APIV=$(echo "$OUT" | sed -n 's/.*dosenum: api version \([0-9]*\).*/\1/p' | head -1)
+[ -n "$APIV" ] && [ "$APIV" -ge 2 ] || {
+    echo "FAIL v2: version word (got '${APIV:-none}', want >= 2)"; exit 1; }
+# v3 and up must also hand a transient a RUNNING clock: c4m borrows it
+# rather than calling TIME itself, which would take it off the base rung
+# (docs/dos-rung-fixes.md F11). A stopped clock is the exact failure
+# that hung the nested C4KE boot forever.
+if [ "$APIV" -ge 3 ]; then
+    echo "$OUT" | grep -q "dosenum: clock reads [0-9]* ms, running" || {
+        echo "FAIL v3: clock slot absent or stopped"; exit 1; }
+fi
 echo "$OUT" | grep -q "dosenum: 2 entries"          || { echo "FAIL v2: entry count"; exit 1; }
 echo "$OUT" | grep -q "work.c4r 434 bytes head=C4R" || { echo "FAIL v2: ENTDATA does not point at the image"; exit 1; }
 echo "$OUT" | grep -q "note.txt 81 bytes head=REM"  || { echo "FAIL v2: ENTDATA for a text file"; exit 1; }
@@ -180,8 +194,19 @@ if [ -f c4ke-src.tar ] && [ -f dostar.c4r ] && [ -f cpp.c4r ]; then
     # a run that printed nothing at all.
     OUT=$( cd $T/build && printf 'BUILD\nRUN c4ke.c4r\n' \
         | timeout 120 stdbuf -o0 "$R/c4m" "$R/load-c4r.c" -- "$R/$T/c4dos-clock.c4r" 2>&1 || true )
-    echo "$OUT" | grep -q "dostar: extracted 39 files" || {
+    # A FLOOR, not an exact count. c4ke-src.tar is C4KE_KIT, which ends
+    # in $(wildcard include/*.h) -- so the number goes up whenever a
+    # header is added, and a pinned figure rots silently. It already
+    # has, twice: 38 -> 39, and then 39 -> 42 when c4bb.h, c4bb_info.h
+    # and u0lite.h landed and nobody re-ran this leg. What the pin is
+    # actually for is "the unpack did not quietly stop working", and a
+    # floor says that without breaking every time the kernel grows a
+    # header.
+    UNP=$(echo "$OUT" | sed -n 's/.*dostar: extracted \([0-9]*\) files.*/\1/p' | head -1)
+    [ -n "$UNP" ] || {
         echo "FAIL ladder: unpack"; echo "$OUT" | head -20; exit 1; }
+    [ "$UNP" -ge 39 ] || {
+        echo "FAIL ladder: unpack extracted only $UNP files"; exit 1; }
     echo "$OUT" | grep -q "cpp: wrote .* to ram:c4ke.i" || { echo "FAIL ladder: preprocess"; exit 1; }
     echo "$OUT" | grep -q "c4cc: wrote .* to ram:c4ke.c4r" || { echo "FAIL ladder: compile kernel"; exit 1; }
     echo "$OUT" | grep -q "c4cc: wrote .* to ram:init.c4r" || { echo "FAIL ladder: compile init"; exit 1; }

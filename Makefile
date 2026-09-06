@@ -415,11 +415,36 @@ raycast-dos32.c4r: c4sp32 $(C4LC_LISP) $(TESTS)/raycast.c
 # it stands, with no flag and no second file: `c4m.c4r` inside
 # `c4.c4r` inside the board is the whole VM proved in software, needing
 # not one opcode the machine did not have on the day it booted.
+# The 64-bit twins of the same four. The native build floppy wants them
+# for exactly the reason the 32-bit one does: an image compiled against
+# u0lite (or against nothing, for c4.c and c4m.c) needs no opcode above
+# EXIT, so ONE file runs both at the A> prompt and inside the C4KE that
+# C4DOS builds. A u0 build would only run in the kernel.
+c4-dos.c4r: $(C4CC) c4.c
+	$(C4CC) -o $@ c4.c > /dev/null
+
+# c4m for the C4DOS rung gets include/c4dos.h prepended, and that is
+# what switches on the #if C4M_DOS branch in c4m_open/read/close: raw
+# c4cc skips # lines, so the branch is always compiled here, and the
+# header supplies dos_readable()/dos_fopen() for it. The result is that
+# every program this VM runs can see the DOS RAM disk -- `c4m
+# load-c4r.c -- c4ke` finds a kernel that exists nowhere but memory.
+# Still base-c4: c4dos.h reaches the API through its invoke STUB
+# (a self-rewritten JMP), not an indirect call.
+c4m-dos.c4r: $(C4CC) $(INCLUDE)/c4dos.h c4m.c
+	$(C4CC) -o $@ $(INCLUDE)/c4dos.h c4m.c > /dev/null
+
+mandel-dos.c4r: $(C4CC) $(INCLUDE)/u0lite.h $(TESTS)/mandel.c
+	$(C4CC) -o $@ $(INCLUDE)/u0lite.h $(TESTS)/mandel.c > /dev/null
+
+rps-dos.c4r: $(C4CC) $(INCLUDE)/u0lite.h $(TESTS)/rps.c
+	$(C4CC) -o $@ $(INCLUDE)/u0lite.h $(TESTS)/rps.c > /dev/null
+
 c4-dos32.c4r: c4cc32 c4.c
 	./c4cc32 -o $@ c4.c > /dev/null
 
-c4m-dos32.c4r: c4cc32 c4m.c
-	./c4cc32 -o $@ c4m.c > /dev/null
+c4m-dos32.c4r: c4cc32 $(INCLUDE)/c4dos.h c4m.c
+	./c4cc32 -o $@ $(INCLUDE)/c4dos.h c4m.c > /dev/null
 
 mandel-dos32.c4r: c4cc32 $(INCLUDE)/u0lite.h $(TESTS)/mandel.c
 	./c4cc32 -o $@ $(INCLUDE)/u0lite.h $(TESTS)/mandel.c > /dev/null
@@ -432,6 +457,10 @@ $(C4DOS_DISK32): hello32.c4r raycast-dos32.c4r \
                  $(SRCS)/c4dos/fs/CONFIG.SYS $(SRCS)/c4dos/fs/AUTOEXEC.BAT
 	@mkdir -p $(C4DOS_DISK32)
 	@cp $(SRCS)/c4dos/fs/CONFIG.SYS   $(C4DOS_DISK32)/config.sys
+	@# c4bb's UART emits each byte as it is written, so the classic
+	@# tight A> prompt works here. Say so: DOS defaults to a prompt on
+	@# its own line, because a host libc buffers a partial one.
+	@echo 'DEVICE=CONSOLE.SYS FLUSH' >> $(C4DOS_DISK32)/config.sys
 	@cp $(SRCS)/c4dos/fs/AUTOEXEC.BAT $(C4DOS_DISK32)/autoexec.bat
 	@cp hello32.c4r                   $(C4DOS_DISK32)/hello.c4r
 	@cp raycast-dos32.c4r             $(C4DOS_DISK32)/raycast.c4r
@@ -448,10 +477,26 @@ $(C4DOS_DISK32): hello32.c4r raycast-dos32.c4r \
 # so the copy it can actually LOAD is the one on the disk. Building it
 # in-machine and booting that same image needs load-c4r.c to learn the
 # API -- see docs/c4dos-design.md.
+# vfsload, 64-bit. It is what gives a booted C4KE a populated ramfs --
+# ls lists the RAM filesystem, not the host directory -- and until now
+# it only ever got built at 32 bits, by src/c4bb/tests/build-images.sh.
+# Same recipe as that script: c4lc rather than c4cc (vfsload wants real
+# block scoping, not c4cc's top-of-function declarations), and gcc -E
+# first because c4lc's own preprocessor hangs on u0.h -- a pre-existing
+# issue that reproduces at 64 bits too.
+vfsload.c4r: c4sp $(C4LC_LISP) $(BIN_D)/vfsload.c $(U0)
+	$(PREPROC) $(BIN_D)/vfsload.c > .vfsload_pp.c
+	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O .vfsload_pp.c $@ > /dev/null
+	@rm -f .vfsload_pp.c
+
 C4DOS_BUILD_DISK := c4dos-build
 $(C4DOS_BUILD_DISK): c4dos-clock.c4r dostar.c4r cpp.c4r c4cc.c4r c4ke-src.tar dosload.c4r \
                      tools-src.tar $(SRCS)/c4dos/fs/LADDER.BAT \
-                     $(INIT) $(C4SH) $(VFS) $(SRCS)/c4dos/fs/BUILD.BAT
+                     $(INIT) $(C4SH) $(VFS) $(SRCS)/c4dos/fs/BUILD.BAT \
+                     $(C4KE_BIN) $(C4R_TOP) $(BENCHS) vfsload.c4r \
+                     tar.c4r $(C4R_C4RLINK) \
+                     c4-dos.c4r c4m-dos.c4r mandel-dos.c4r rps-dos.c4r raycast-dos.c4r \
+                     $(SRCS)/c4bb/fs/c4ke-build.vfs.txt
 	@mkdir -p $(C4DOS_BUILD_DISK)
 	@sed 's/SIZE=[0-9]*/SIZE=16777216/' $(SRCS)/c4dos/fs/CONFIG.SYS > $(C4DOS_BUILD_DISK)/config.sys
 	@cp $(SRCS)/c4dos/fs/AUTOEXEC.BAT $(C4DOS_BUILD_DISK)/autoexec.bat
@@ -459,7 +504,43 @@ $(C4DOS_BUILD_DISK): c4dos-clock.c4r dostar.c4r cpp.c4r c4cc.c4r c4ke-src.tar do
 	@cp $(SRCS)/c4dos/fs/LADDER.BAT   $(C4DOS_BUILD_DISK)/ladder.bat
 	@cp dostar.c4r cpp.c4r c4cc.c4r c4ke-src.tar dosload.c4r tools-src.tar $(C4DOS_BUILD_DISK)/
 	@cp $(INIT) $(C4SH) $(VFS) $(C4DOS_BUILD_DISK)/
-	@cp c4ke.vfs.txt $(C4DOS_BUILD_DISK)/ 2>/dev/null || true
+	@# C4KE's userland. Without it the kernel this floppy builds comes
+	@# up with a shell and nothing to run in it -- `ls` answered
+	@# "unable to open 'ls' or 'ls.c4r'", which is what this whole
+	@# section is here to fix. Nothing needs to change in the kernel:
+	@# task_loadc4r checks the ramfs and then the HOST, and the run
+	@# target cd's into this directory, so a .c4r sitting here is
+	@# loadable. Copied from where they are built, not from the repo
+	@# root, whose copies only exist once `make pre` has run.
+	@cp $(C4KE_BIN) $(C4DOS_BUILD_DISK)/
+	@cp $(C4R_TOP) $(BENCHS) $(C4DOS_BUILD_DISK)/
+	@# vfsload is what gives the booted kernel a populated tree rather
+	@# than a bare root: `ls` lists the RAM filesystem, not this
+	@# directory. Its manifest is the floppy's own -- the repo-root one
+	@# names two dozen files that are not here and would print a column
+	@# of "cannot open" over the boot.
+	@cp vfsload.c4r $(C4DOS_BUILD_DISK)/
+	@# tar and c4rlink: with these, the kernel this floppy builds can
+	@# unpack its own sources and link objects, which is the shape the
+	@# rung above needs. b4ke rides along in $(C4KE_BIN) and drives them.
+	@cp tar.c4r $(C4R_C4RLINK) $(C4DOS_BUILD_DISK)/
+	@cp $(SRCS)/c4bb/fs/c4ke-build.vfs.txt $(C4DOS_BUILD_DISK)/c4ke.vfs.txt
+	@# The C4DOS rung proper: mandel, rps and raycast, plus c4 and c4m,
+	@# all compiled against u0lite or against nothing at all. That is
+	@# what makes ONE image run both at the A> prompt and inside the
+	@# kernel the machine just built -- see include/u0lite.h. (mandel
+	@# and raycast want TIME, to time themselves; this floppy boots the
+	@# clock build, so they have it.)
+	@cp mandel-dos.c4r  $(C4DOS_BUILD_DISK)/mandel.c4r
+	@cp rps-dos.c4r     $(C4DOS_BUILD_DISK)/rps.c4r
+	@cp raycast-dos.c4r $(C4DOS_BUILD_DISK)/raycast.c4r
+	@cp c4-dos.c4r      $(C4DOS_BUILD_DISK)/c4.c4r
+	@cp c4m-dos.c4r     $(C4DOS_BUILD_DISK)/c4m.c4r
+	@# innerbench compiles a whole C4KE inside a nested c4m, so it wants
+	@# these by the exact names it opens them with (src/bench/innerbench.c).
+	@mkdir -p $(C4DOS_BUILD_DISK)/src/c4ke
+	@cp $(SRCS)/c4ke/c4ke.c $(C4DOS_BUILD_DISK)/src/c4ke/c4ke.c
+	@cp load-c4r.c c4m.c c4.c $(C4DOS_BUILD_DISK)/
 	@cd $(C4DOS_BUILD_DISK) && ls -p | grep -v '/$$' > c4dos.dir
 	@echo "c4dos-build: ready -- boot it, type BUILD, then RUN dosload.c4r c4ke.c4r"
 
@@ -479,9 +560,16 @@ C4DOS_BUILD_DISK32 := c4dos-build32
 $(C4DOS_BUILD_DISK32): c4dos32.c4r dostar32.c4r cpp32.c4r c4cc32.c4r c4ke-src.tar \
                        dosload32.c4r init32.c4r c4sh32.c4r c4ke.vfs32.c4r \
                        tools-src.tar $(SRCS)/c4dos/fs/LADDER.BAT \
-                       $(SRCS)/c4dos/fs/BUILD.BAT
+                       $(SRCS)/c4dos/fs/BUILD.BAT ls32.c4r ps32.c4r \
+                       c4-dos32.c4r c4m-dos32.c4r mandel-dos32.c4r rps-dos32.c4r \
+                       raycast-dos32.c4r $(SRCS)/c4bb/fs/c4ke-build.vfs.txt \
+                       tar32.c4r c4rlink32.c4r b4ke32.c4r
 	@mkdir -p $(C4DOS_BUILD_DISK32)
 	@sed 's/SIZE=[0-9]*/SIZE=16777216/' $(SRCS)/c4dos/fs/CONFIG.SYS > $(C4DOS_BUILD_DISK32)/config.sys
+	@# c4bb's UART emits each byte as it is written, so the classic
+	@# tight A> prompt works here. Say so: DOS defaults to a prompt on
+	@# its own line, because a host libc buffers a partial one.
+	@echo 'DEVICE=CONSOLE.SYS FLUSH' >> $(C4DOS_BUILD_DISK32)/config.sys
 	@cp $(SRCS)/c4dos/fs/AUTOEXEC.BAT $(C4DOS_BUILD_DISK32)/autoexec.bat
 	@cp $(SRCS)/c4dos/fs/BUILD.BAT    $(C4DOS_BUILD_DISK32)/build.bat
 	@cp $(SRCS)/c4dos/fs/LADDER.BAT   $(C4DOS_BUILD_DISK32)/ladder.bat
@@ -493,7 +581,38 @@ $(C4DOS_BUILD_DISK32): c4dos32.c4r dostar32.c4r cpp32.c4r c4cc32.c4r c4ke-src.ta
 	@cp init32.c4r     $(C4DOS_BUILD_DISK32)/init.c4r
 	@cp c4sh32.c4r     $(C4DOS_BUILD_DISK32)/c4sh.c4r
 	@cp c4ke.vfs32.c4r $(C4DOS_BUILD_DISK32)/c4ke.vfs.c4r
-	@cp c4ke.vfs.txt   $(C4DOS_BUILD_DISK32)/ 2>/dev/null || true
+	@# The same userland the 64-bit build floppy carries, at 32 bits.
+	@# Built here rather than copied, because the disk that has these
+	@# prebuilt is derived from this family and the dependency would be
+	@# a circle -- the same reasoning as $(C4DOS_IX_DISK) above.
+	@cp b4ke32.c4r    $(C4DOS_BUILD_DISK32)/b4ke.c4r
+	@cp tar32.c4r     $(C4DOS_BUILD_DISK32)/tar.c4r
+	@cp c4rlink32.c4r $(C4DOS_BUILD_DISK32)/c4rlink.c4r
+	@cp ls32.c4r $(C4DOS_BUILD_DISK32)/ls.c4r
+	@cp ps32.c4r $(C4DOS_BUILD_DISK32)/ps.c4r
+	@for t in cat echo kill spin type xxd c4le; do \
+	   ./c4cc32 -o $(C4DOS_BUILD_DISK32)/$$t.c4r $(U0) $(BIN_D)/$$t.c > /dev/null || exit 1; \
+	 done
+	@./c4cc32 -o $(C4DOS_BUILD_DISK32)/top.c4r $(U0) $(BIN_D)/ps.c $(BIN_D)/top.c > /dev/null
+	@./c4cc32 -o $(C4DOS_BUILD_DISK32)/bench.c4r $(U0) $(SRCS)/bench/bench.c > /dev/null
+	@./c4cc32 -o $(C4DOS_BUILD_DISK32)/benchtop.c4r $(U0) $(BIN_D)/ps.c $(SRCS)/bench/benchtop.c > /dev/null
+	@./c4cc32 -o $(C4DOS_BUILD_DISK32)/innerbench.c4r $(U0) $(SRCS)/bench/innerbench.c > /dev/null
+	@# The C4DOS rung: u0lite (or bare) builds, so one image runs both
+	@# at the A> prompt and inside the kernel BUILD produces.
+	@cp mandel-dos32.c4r  $(C4DOS_BUILD_DISK32)/mandel.c4r
+	@cp rps-dos32.c4r     $(C4DOS_BUILD_DISK32)/rps.c4r
+	@cp raycast-dos32.c4r $(C4DOS_BUILD_DISK32)/raycast.c4r
+	@cp c4-dos32.c4r      $(C4DOS_BUILD_DISK32)/c4.c4r
+	@cp c4m-dos32.c4r     $(C4DOS_BUILD_DISK32)/c4m.c4r
+	@# innerbench opens these by the exact names in src/bench/innerbench.c.
+	@mkdir -p $(C4DOS_BUILD_DISK32)/src/c4ke
+	@cp $(SRCS)/c4ke/c4ke.c $(C4DOS_BUILD_DISK32)/src/c4ke/c4ke.c
+	@cp load-c4r.c c4m.c c4.c $(C4DOS_BUILD_DISK32)/
+	@# vfsload gives the booted kernel a populated tree. The 32-bit one
+	@# comes from build-images.sh (it needs c4lc), so take it if it is
+	@# there -- the floppy is still usable without it.
+	@cp $(SRCS)/c4bb/images/disk/vfsload.c4r $(C4DOS_BUILD_DISK32)/ 2>/dev/null || true
+	@cp $(SRCS)/c4bb/fs/c4ke-build.vfs.txt $(C4DOS_BUILD_DISK32)/c4ke.vfs.txt
 	@cd $(C4DOS_BUILD_DISK32) && ls -p | grep -v '/$$' > c4dos.dir
 	@echo "c4dos-build32: ready -- boot it on c4bb, type BUILD"
 
@@ -516,6 +635,10 @@ $(C4DOS_IX_DISK): c4dos32.c4r dostar32.c4r cpp32.c4r c4cc32.c4r dosload32.c4r \
                   $(SRCS)/c4dos/fs/c4ix.objs $(SRCS)/c4dos/fs/CONFIG.SYS
 	@mkdir -p $(C4DOS_IX_DISK)
 	@sed 's/SIZE=[0-9]*/SIZE=33554432/' $(SRCS)/c4dos/fs/CONFIG.SYS > $(C4DOS_IX_DISK)/config.sys
+	@# c4bb's UART emits each byte as it is written, so the classic
+	@# tight A> prompt works here. Say so: DOS defaults to a prompt on
+	@# its own line, because a host libc buffers a partial one.
+	@echo 'DEVICE=CONSOLE.SYS FLUSH' >> $(C4DOS_IX_DISK)/config.sys
 	@cp $(SRCS)/c4dos/fs/AUTOEXEC.BAT $(C4DOS_IX_DISK)/autoexec.bat
 	@cp $(SRCS)/c4dos/fs/LADDER.BAT   $(C4DOS_IX_DISK)/ladder.bat
 	@cp $(SRCS)/c4dos/fs/IX.BAT       $(C4DOS_IX_DISK)/ix.bat
@@ -1036,6 +1159,18 @@ run-c4dos-c4: $(C4) c4dos.c4r $(C4DOS_DISK)
 # And on the breadboard machine, which is where an embedder meets it.
 run-c4dos-bb: c4dos32.c4r $(C4DOS_DISK32)
 	node src/c4bb/sim/cli.js -i -d $(C4DOS_DISK32) c4dos32.c4r
+
+# The board in a browser. Served from the REPO ROOT, not src/c4bb/web:
+# web/app.js fetches drive and image paths that are repo-root-relative,
+# so a server rooted at the page's own directory comes up with an empty
+# drives panel and no obvious reason why. There is nothing to install --
+# no node_modules anywhere in this repo -- so this is python's http
+# server with a name attached to it.
+C4BB_PORT ?= 8471
+serve-c4bb:
+	@echo "c4bb: http://localhost:$(C4BB_PORT)/src/c4bb/web/index.html"
+	@echo "      pick c4ix32 or c4ke32, press Turbo, click the terminal, type."
+	@python3 -m http.server $(C4BB_PORT)
 
 # The whole HOMEWARD ladder, end to end: C4DOS builds C4KE, dosload
 # hands the machine over, the kernel boots the init it was just handed,
@@ -1596,6 +1731,10 @@ $(C4DOS_FC_DISK): c4dos-clock.c4r c4th32.c4r $(C4R_C4RLINK) dostar.c4r \
                   $(SRCS)/c4dos/fs/CONFIG.SYS $(SRCS)/c4dos/fs/CC.BAT $(SRCS)/c4dos/fs/cc.f
 	@mkdir -p $(C4DOS_FC_DISK)
 	@sed 's/SIZE=[0-9]*/SIZE=16777216/' $(SRCS)/c4dos/fs/CONFIG.SYS > $(C4DOS_FC_DISK)/config.sys
+	@# c4bb's UART emits each byte as it is written, so the classic
+	@# tight A> prompt works here. Say so: DOS defaults to a prompt on
+	@# its own line, because a host libc buffers a partial one.
+	@echo 'DEVICE=CONSOLE.SYS FLUSH' >> $(C4DOS_FC_DISK)/config.sys
 	@cp $(SRCS)/c4dos/fs/CC.BAT $(C4DOS_FC_DISK)/cc.bat
 	@cp $(SRCS)/c4dos/fs/cc.f   $(C4DOS_FC_DISK)/cc.f
 	@printf 'int main(){ printf("built by c4fc, inside the machine\\n"); return 0; }\n' > $(C4DOS_FC_DISK)/hello.c
@@ -1923,6 +2062,8 @@ reboot32.c4r: c4cc32 include/c4bb.h $(SRCS)/c4bb/tools/reboot.c
 
 b4ke32.c4r: c4cc32 $(U0) $(BIN_D)/b4ke.c
 	./c4cc32 -o $@ $(U0) $(BIN_D)/b4ke.c > /dev/null
+tar.c4r: $(C4CC) $(U0) $(BIN_D)/tar.c
+	$(C4CC) -o $@ $(U0) $(BIN_D)/tar.c > /dev/null
 tar32.c4r: c4cc32 $(U0) $(BIN_D)/tar.c
 	./c4cc32 -o $@ $(U0) $(BIN_D)/tar.c > /dev/null
 ls32.c4r: c4cc32 $(U0) $(BIN_D)/ls.c
@@ -1935,7 +2076,13 @@ c4rlink32.c4r: c4cc32 $(C4R_C4CC_SRCS) $(SRCS)/c4ke/bin/c4rlink.c
 c4rlink32: $(SRCS)/c4ke/bin/c4rlink.c $(SRCS)/c4cc/asm-c4r.c
 	gcc -m32 $(NATIVE_CC_OPTS) -Isrc/c4cc -o c4rlink32 $(SRCS)/c4ke/bin/c4rlink.c -lm
 c4bb-32bit: c4cc32 c4m32 c4sp32 c4rlink32
-c4bb-images: c4bb-32bit $(C4LC_LISP)
+# c4th32.c4r is copied by build-images.sh (the fused-opcode disk) but was
+# not named here, so the target only worked when some earlier build had
+# happened to leave that artifact lying around. It is gitignored, so a
+# fresh tree -- or any tree where it has since been cleaned away -- got
+# `cp: cannot stat 'c4th32.c4r'` and a failed test-c4bb. Name it and the
+# target builds what it uses.
+c4bb-images: c4bb-32bit $(C4LC_LISP) c4th32.c4r
 	bash src/c4bb/tests/build-images.sh
 test-c4bb: c4bb-images $(C4M) $(TESTS_C4R)
 	bash src/c4bb/tests/test-c4bb.sh
@@ -2780,7 +2927,7 @@ PHONY += test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
 PHONY += run-c4dos-build32 test-c4dos-build32 run-c4dos-c4ix32 test-c4dos-c4ix32 test-c4cc-for test-respfile test-b4ke test-c4bb-storage test-c4bb-baseops test-c4bb-rungs test-c4bb-install test-c4bb-climb test-c4bb-web test-c4bb-firmware
 PHONY += test-c4sc test-c4sc-run test-c4sc-lex test-c4sc-front test-c4sc-back
 PHONY += test-c4sc-image test-c4sc-self test-c4sc-board
-PHONY += test-c4dos-ladder32
+PHONY += test-c4dos-ladder32 serve-c4bb
 PHONY += run run-vg test test-massive
 PHONY += run-alt run-alt-vg test-alt test-massive-alt
 PHONY += run-c4 run-c4-vg test-c4 test-massive-c4

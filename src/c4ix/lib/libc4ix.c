@@ -20,6 +20,18 @@
 #include "c4ix_user.h"
 
 int __c4ix_systable;      // filled by the kernel loader on plain c4
+
+// Am I running under C4DOS? Same trick as the systable above, one rung
+// down: C4DOS's loader scans every image for this symbol and writes
+// its API table's address into it before it runs the constructors
+// (inject_api, src/c4dos/c4dos.c), so a non-zero here means DOS and
+// nothing else. Costs no opcode -- a plain global read -- which is the
+// point, because the alternative is finding out via the first write(),
+// and that is an OPCD into a kernel that is not there.
+//
+// Magic is ('C'<<16)+('4'<<8)+'D', matching dos_present() in
+// include/c4dos.h and the copy in include/u0.h.
+int *__c4dos_api;         // patched by the C4DOS loader; 0 when not under DOS
 static int uva_use_trap;  // 1 = trap gateway, 0 = direct call
 static int uva_ready;     // library set up? see libc4ix_ready()
 
@@ -492,6 +504,19 @@ static void libc4ix_ready() {
     uva_use_trap = !__c4ix_systable;
 }
 
-static void __attribute__((constructor)) libc4ix_init() {
+// Returns C4DOS_REFUSE to decline the program: C4DOS's run_program
+// treats that one value as "do not run this", which is the only way a
+// transient can decline (there is no exit that does not halt the
+// machine). Without it a C4IX binary typed at the A> prompt trap-storms
+// on its first write() and takes the session down with it.
+static int __attribute__((constructor)) libc4ix_init() {
+    // 1127037010 is C4DOS_REFUSE ('C','4','D','R'): a DISTINGUISHED
+    // value, because a constructor with no return statement returns
+    // whatever was in the accumulator. See src/c4dos/c4dos.c.
+    if (__c4dos_api && __c4dos_api[0] == 4404292) {
+        printf("C4DOS: This application requires C4IX.\n");
+        return 1127037010;
+    }
     libc4ix_ready();
+    return 0;
 }

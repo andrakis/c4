@@ -1011,6 +1011,24 @@ int c4_time () {
 	int fd, number, r;
 	char *buf, ch;
 
+#if C4M_DOS
+	// ASK C4DOS FIRST. Everything below reads /proc/uptime, which is a
+	// Linux fallback and exists on no breadboard -- so on c4bb this
+	// function latched c4_time_unavailable and returned 0 FOREVER. A
+	// guest that waits for the clock to move then waits forever: the
+	// C4KE boot's "measuring instructions per second" step never
+	// finished, at any cycle budget, which looked like slowness and was
+	// actually a stopped clock.
+	//
+	// DOS has the clock (TIME opcode, serviced by the board's microcode
+	// or by a native c4m) and lends it through API slot 15. Going that
+	// way rather than calling TIME here is deliberate: TIME is opcode
+	// 53, above EXIT, and c4m-dos32.c4r is pinned in RUNG_BASE so the
+	// campaign can say the VM needs no opcode the machine did not boot
+	// with. The API table costs nothing above EXIT.
+	if (dos_can_time()) return dos_time();
+#endif
+
 	// Don't complain endlessly
 	if (c4_time_unavailable)
 		return 0;
@@ -1435,6 +1453,53 @@ int c4_invoke_stub () {
 }
 
 ///
+// The VM's file syscalls, and the one place they are not just the host's.
+//
+// A program running INSIDE c4m reaches the outside world through these
+// opcodes, so whatever they can see, everything c4m interprets can see.
+// Under C4DOS that matters: the RAM disk lives in DOS's own memory and
+// a transient's open() has never heard of it, so `c4m load-c4r.c -- c4ke`
+// could not find a kernel the machine had just compiled -- load-c4r.c
+// was doing the open, one level down, and no amount of patching it
+// would help because it is compiled from source at runtime and has no
+// symbol table to inject into. Routing the VM's own OPEN/READ/CLOS
+// through the DOS API fixes it for load-c4r.c and for every other
+// program c4m will ever run, without any of them knowing.
+//
+// DOS checks the RAM disk BEFORE the real disk, so host files still
+// resolve; when there is no DOS, __c4dos_api is 0, dos_readable() is
+// false, and these are exactly the host calls they always were.
+//
+// C4M_DOS is defined only for the C4DOS-rung builds, which are the
+// ones compiled by raw c4cc -- it skips # lines, so the branch is
+// always present there and include/c4dos.h is prepended to supply it.
+// Every other build goes through gcc or gcc -E, where C4M_DOS is 0 and
+// the branch disappears: native ./c4m and the C4KE c4m.c4r are byte
+// for byte the programs they were.
+///
+
+int c4m_open (char *path, int flags) {
+#if C4M_DOS
+	if (dos_readable()) return dos_fopen(path);
+#endif
+	return open(path, flags);
+}
+
+int c4m_read (int fd, char *buf, int len) {
+#if C4M_DOS
+	if (dos_readable()) return dos_fread(fd, buf, len);
+#endif
+	return read(fd, buf, len);
+}
+
+int c4m_close (int fd) {
+#if C4M_DOS
+	if (dos_readable()) return dos_fclose(fd);
+#endif
+	return close(fd);
+}
+
+///
 // Callable main entry point, TODO: c4cc (should) includes this file for the opcode definitions.
 ///
 
@@ -1451,6 +1516,7 @@ int c4m_main(int argc, char **argv)
   int status, *idmain, *idmax;
   int len;
   char *x;
+
 
 
   //debug = 1;
@@ -1847,7 +1913,7 @@ int c4m_main(int argc, char **argv)
 	// SYSCALL functions
     else if (i == OPEN) {
 		if (mode == MODE_UNPROTECTED)
-            a = open((char *)sp[1], *sp);
+            a = c4m_open((char *)sp[1], *sp);
 		else {
 			trap(TRAP_PM_VIOLATION, OPEN, trap_handler, &sp, &bp, &pc, a, mode);
 			cycle_interrupt_interval = 0;
@@ -1856,7 +1922,7 @@ int c4m_main(int argc, char **argv)
 	}
     else if (i == READ) {
 		if (mode == MODE_UNPROTECTED)
-        a = read(sp[2], (char *)sp[1], *sp);
+        a = c4m_read(sp[2], (char *)sp[1], *sp);
 		else {
 			trap(TRAP_PM_VIOLATION, READ, trap_handler, &sp, &bp, &pc, a, mode);
 			cycle_interrupt_interval = 0;
@@ -1865,7 +1931,7 @@ int c4m_main(int argc, char **argv)
 	}
     else if (i == CLOS) {
 		if (mode == MODE_UNPROTECTED)
-            a = close(*sp);
+            a = c4m_close(*sp);
 		else {
 			trap(TRAP_PM_VIOLATION, CLOS, trap_handler, &sp, &bp, &pc, a, mode);
 			cycle_interrupt_interval = 0;
@@ -2073,6 +2139,32 @@ int c4m_main(int argc, char **argv)
 		// C4 Invoke
 		// TODO: only allow in unprotected mode?
 		// Update stub function to JMP to given address in *sp
+#if C4M_DOS
+		// THE INVOKE MUST NOT ESCAPE THIS INTERPRETER WHEN WE ARE THE
+		// ONE HOLDING THE FILESYSTEM.
+		//
+		// The stub below rewrites our OWN code to jump at the target,
+		// so the invoked function stops being something we interpret
+		// and becomes something the machine runs directly. Its
+		// syscalls then go straight to the disk controller and never
+		// reach the C4DOS RAM disk -- and load-c4r.c takes exactly
+		// that route for every load it does (c4r_load_opt_pure, which
+		// c4r_load picks whenever __c4_info() says C4I_C4). That is
+		// why `c4m load-c4r.c -- c4ke` could not find a kernel BUILD
+		// had just compiled: the open happened one level above the
+		// only place that knows what a RAM disk is.
+		//
+		// A JSR is the same call without the escape -- push the return
+		// address, jump, let the callee's LEV come back -- and it is
+		// what the #else branch below has always had a TODO asking
+		// for. Only taken when DOS is actually there, so a c4m running
+		// on bare hardware still gets the stub it always did.
+		if (dos_readable()) {
+			t = (int *)*sp;
+			*--sp = (int)pc;
+			pc = t;
+		} else {
+#endif
 #if NOT_NATIVE
 		*c4_invoke_stub_addr = *sp;
 		a = c4_invoke_stub();
@@ -2082,6 +2174,9 @@ int c4m_main(int argc, char **argv)
 			// TODO: emulate it by invoking a JSR
 			printf("c4m: invoke only supported under c4.\n");
 			a = 0;
+		}
+#endif
+#if C4M_DOS
 		}
 #endif
 	} else if (i == FLT) {

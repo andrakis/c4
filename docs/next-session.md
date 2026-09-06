@@ -39,7 +39,7 @@ ITH set`, 8 tasks, 183 free slots, and the cycle counter still climbing.
 ### What was fixed, and why it was not enough
 
 Two real bugs on the out-of-memory path, both in `start_task_builtin`
-(`src/c4ke/c4ke.c`), both now fixed and **uncommitted at time of writing**:
+(`src/c4ke/c4ke.c`), both fixed and committed in `7bdf570`:
 
 - Four error paths called `free(t)` where `t` is an INTERIOR pointer into the
   single `kernel_tasks` block. That hands the allocator a pointer it never

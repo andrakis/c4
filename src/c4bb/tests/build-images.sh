@@ -90,7 +90,7 @@ $CC -o $DISK/init.c4r  $U0 $BIN/ps.c $BIN/eshell.c src/c4ke/services/init.c > /d
 $CC -o $DISK/c4sh.c4r  $U0 $BIN/ps.c src/c4sh/c4sh.c src/c4sh/c4sh_builtins.c src/c4sh/c4sh_scripting.c > /dev/null
 $CC -o $DISK/eshell.c4r $U0 $BIN/ps.c $BIN/eshell.c > /dev/null
 $CC -o $DISK/c4ke.vfs.c4r $U0 src/c4ke/include/service.h src/c4ke/services/c4ke.vfs.c > /dev/null
-for t in ls ps cat echo kill spin c4le type xxd; do
+for t in ls ps cat echo kill spin c4le type xxd badop; do
     $CC -o $DISK/$t.c4r $U0 $BIN/$t.c > /dev/null
 done
 $CC -o $DISK/top.c4r $U0 $BIN/ps.c $BIN/top.c > /dev/null

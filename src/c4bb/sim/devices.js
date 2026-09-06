@@ -241,7 +241,18 @@ export class Devices {
       const b = this.rxFifo.shift();
       this.arena.write8(addr + n, b);
       n++;
-      if (!nonblock && b === 10) break;    // one line per read
+      // One line per read, for every canonical reader -- blocking or
+      // not. Stopping only on the blocking path (as this did) let a
+      // reader whose input arrived in a burst -- a paste, a scripted
+      // session, a browser that delivers a whole line at once -- take
+      // several lines in one read. c4sh reads /dev/stdin NON-blocking
+      // and keeps only what precedes the first newline, so every line
+      // after the first in such a read was silently thrown away: the
+      // shell answered the first command and then sat there with an
+      // empty queue, looking exactly like a hang. A raw fd (/dev/tty)
+      // is the one caller that asked for no line discipline and still
+      // takes whatever has arrived.
+      if (!raw && b === 10) break;
     }
     return n;
   }

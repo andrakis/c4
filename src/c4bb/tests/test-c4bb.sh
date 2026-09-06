@@ -122,12 +122,14 @@ done
 # referenced file must resolve - "cannot open"/"target not found"
 # means the manifest and the disk have drifted apart.
 #
-# One command per session, deliberately: c4sh's own stdin reader
-# (read_user_input_stdin in c4sh.c) silently drops bytes past the
-# first '\n' when a single non-blocking read() happens to return more
-# than one already-buffered line at once - a real, pre-existing c4sh
-# bug (plausible on real hardware too under fast input), not
-# something c4bb should paper over by pacing input specially.
+# These used to be one command per session because a second one was
+# silently dropped, and that was read as a c4sh bug: its non-blocking
+# reader keeps only what precedes the first '\n'. It is not. A real
+# terminal in canonical mode returns AT MOST ONE LINE per read, to
+# every reader, blocking or not - so c4sh's assumption is the correct
+# one and the line discipline was the layer at fault (kbdRead broke on
+# the newline only on the blocking path; docs/dos-rung-fixes.md F18).
+# The two-command leg below is here so that cannot come back.
 # -a is the flat listing: ls now infers directories from the names and
 # shows one level (basenames), so the full paths this pin is about are
 # what -a prints. The one-level form gets its own check below.
@@ -156,6 +158,41 @@ if echo "$c4ke_lsdir_out" | grep -qE '(^| )src/' && \
 else
     echo "test-c4bb: c4ke-vfs ls one level FAILED"; fail=1
     echo "$c4ke_lsdir_out" | tail -5
+fi
+
+# A task killed for raising an opcode nobody implements must not take
+# the shell with it, and its trace must name a real function. This is a
+# SMOKE test, not a regression test for F17: on a quiet boot the word
+# the out-of-range index lands on is zero, so a kernel without the
+# bounds check passes this too (checked, by building one). See
+# src/c4ke/bin/badop.c.
+c4ke_badop_out=$(printf 'badop.c4r\necho survived-the-kill\n\\q\n' | timeout 300 $C4BB -c 60000000 -d $IMAGES/disk $IMAGES/c4ke32.c4r 2>/dev/null)
+if echo "$c4ke_badop_out" | grep -qF "Custom opcode not found: 9001" && \
+   ! echo "$c4ke_badop_out" | grep -qF "STILL RUNNING" && \
+   echo "$c4ke_badop_out" | grep -qF "badop.c4r:main()" && \
+   echo "$c4ke_badop_out" | grep -qF "survived-the-kill" && \
+   echo "$c4ke_badop_out" | grep -qF "clean shutdown"; then
+    echo "test-c4bb: c4ke survives a task killed on a bad opcode OK"
+else
+    echo "test-c4bb: c4ke survives a task killed on a bad opcode FAILED"; fail=1
+    echo "$c4ke_badop_out" | tail -10
+fi
+
+# Two commands in one session, then quit. Nothing in this suite ran
+# more than one command per boot, which is why F18 - the line
+# discipline handing a reader several lines at once, so every line
+# after the first was thrown away - survived so long: the shell
+# answered the first command and then sat there, looking exactly like
+# a hang. The pin is that BOTH run and the session shuts down of its
+# own accord rather than being cut off at the cycle budget.
+c4ke_multi_out=$(printf 'ls\necho second-command\n\\q\n' | timeout 300 $C4BB -c 60000000 -d $IMAGES/disk $IMAGES/c4ke32.c4r 2>/dev/null)
+if echo "$c4ke_multi_out" | grep -qF "entries in /" && \
+   echo "$c4ke_multi_out" | grep -qF "second-command" && \
+   echo "$c4ke_multi_out" | grep -qF "clean shutdown"; then
+    echo "test-c4bb: c4ke two commands in one session OK"
+else
+    echo "test-c4bb: c4ke two commands in one session FAILED"; fail=1
+    echo "$c4ke_multi_out" | tail -8
 fi
 
 c4ke_cat_out=$(printf 'cat /usr/src/bin/vfsload.c\n\\q\n' | timeout 300 $C4BB -c 30000000 -d $IMAGES/disk $IMAGES/c4ke32.c4r 2>/dev/null)

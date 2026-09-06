@@ -6,109 +6,46 @@ did NOT finish, and what is known about it.
 
 ---
 
-## 1. The `innerbench -n 50` lockup — NOT FIXED
+## 1. The `innerbench -n 50` lockup — the corruption is fixed, the exhaustion is not
 
-### What the user reported
+**Settled 2026-09-06: F13 is NOT the cause.** Measured both ways on two disks
+identical but for `c4m.c4r`, `innerbench -mlqT -n 50` at `-m 128`: the pre-F13
+build produced **11** `Custom opcode not found` crashes, the F13 build **0**.
+Full write-up, including what F13 *did* silently cost, is
+`docs/dos-rung-fixes.md` round four.
 
-On c4bb in the browser: `innerbench -n 50`, then `ls` (works), then `ls`
-(fails, whole system locks). The `pc` register sits on a `TLEV` that appears to
-point at itself and never advances. Their screenshot showed `mode: unprotected,
-ITH set`, 8 tasks, 183 free slots, and the cycle counter still climbing.
+**What the crashes actually were.** `trap_handler` indexed `custom_opcodes` with
+no bounds check and jumped to whatever word it read (`c4ke.c`, TRAP_ILLOP arm).
+The opcode numbers are pointers, because `__c4_opcode` leaves its last-evaluated
+argument in `a` when a request is not serviced and `__u0_ops_init` stores that.
+So one task raising a bad opcode made the kernel jump into data, and the damage
+landed on bystanders — including c4sh, which is why `ls` worked and then the
+whole system stopped. Bounds check added; the same probe now kills only the
+offender, and the same innerbench run drops to 2 wild opcodes with real stack
+traces attached.
 
-### What is established, by measurement
+**Still open.** At `-n 50` / 128 MB the machine genuinely exhausts its heap and
+then spins forever with no way back to a prompt. That is now an honest resource
+limit (1708 `malloc failed` lines say so) rather than corruption, but a system
+that cannot say "I am out of memory, here is your shell back" is still wrong.
+Two leads, both newly visible only because F17 stopped eating them:
 
-- **The heap really does exhaust.** `fw: malloc(262144) failed: 2 free blocks,
-  56 bytes, largest 56`. The user's instinct was right.
-- **A hang at a `TLEV` is uninterruptible by construction.** `machine.js`
-  refuses both the PIT and the cycle interrupt when PC is at a `TLEV`
-  (it restores five registers atomically). So a frame that restores its own PC
-  hangs with nothing able to break in — that is why the WHOLE system stops
-  rather than one task dying.
-- In the trap frame, **`bp+0` pointing at itself is BY DESIGN** (the microcode
-  comments the bp-link slot as self-referencing). The user's screenshot showed
-  `MAR = BP+0x10` = `bp+4`, the SAVED-BP slot, holding the current bp. That one
-  is not by design.
-- **`innerbench -n 2` (the default) is healthy at 32 MB** — two nested c4m tasks
-  progressing, output flowing. Only the stress case exhausts.
-- **`innerbench -n 5` at 64 MB is CLEAN.** Ran the full 1441 s with **zero**
-  `Custom opcode not found`, output flowing the whole time (idle 1 s at every
-  sample). It did not finish only because each nested kernel compile is slow.
-  So the fault needs somewhere between 5 and 50 tasks -- bisect there, and note
-  that a healthy run looks like continuous output, not silence.
+- `c4ke: task 33 () OVERRAN ITS STACK: 44 of 262144 bytes, guard broken` — 44
+  bytes used and the guard broken is not an overrun, it is a wild write. Find
+  the writer.
+- `lc4r: unable to open '(null)' or '.c4r'` — a task started with a null name.
 
-### What was fixed, and why it was not enough
+**Reproduce it in seconds, not half an hour.** `innerbench -mlqT -n 50` (`-l`
+loads the precompiled `c4ke.c4r` instead of recompiling `c4ke.c`; `-T` skips
+`top`). Drive it with `src/c4bb/tests/drive.mjs`: paced writes to `cli.js -i`,
+output streamed to a file as it arrives.
 
-Two real bugs on the out-of-memory path, both in `start_task_builtin`
-(`src/c4ke/c4ke.c`), both fixed and committed in `7bdf570`:
-
-- Four error paths called `free(t)` where `t` is an INTERIOR pointer into the
-  single `kernel_tasks` block. That hands the allocator a pointer it never
-  issued — heap corruption, on the path taken when memory is short. It was also
-  unnecessary: the slot is claimed by writing `TASK_STATE` further down, so on
-  every failure path it is still `STATE_UNLOADED`.
-- `start_errno` was set in five places and read in NONE. A failed spawn was
-  silent. Now `start_fail()` reports:
-  `c4ke: cannot start 'inner-kernel': out of memory for a 262144 byte stack`
-
-**Verified: the message fires, and the lockup still happens.** `ls` afterwards
-still returns nothing. Do not assume these fixes address the reported bug; they
-are correct on their own merits and that is all that is proven.
-
-### The live lead
-
-In the post-fix run at `-m 128 -n 50`, five SPAWNED c4m tasks crashed like this,
-**before any malloc failure**:
-
-    c4ke: Custom opcode not found: 108138136, executed by task 19
-    c4ke: Custom opcode not found: 107377816, executed by task 21
-    c4ke: Custom opcode not found: 106617496, executed by task 23
-    c4ke: Custom opcode not found: 105857176, executed by task 25
-    c4ke: Custom opcode not found: 105096856, executed by task 27
-
-The values decrease by exactly **760,320** each time — one task-allocation
-stride. They are ADDRESSES being executed as opcodes, one per task, marching
-down the heap. Whatever computes them is off by a whole allocation per task.
-
-**This may be a regression introduced in this session.** F13 changed how the
-shared disk builds `c4m.c4r`:
-
-    # before (src/c4bb/tests/build-images.sh)
-    $PREPROC c4m.c | $CC -o $DISK/c4m.c4r -
-    # after
-    $CC -o $DISK/c4m.c4r include/c4dos.h c4m.c
-
-That was needed so `c4m` gets the DOS branch (raw `c4cc` skips `#` lines, which
-is what switches `#if C4M_DOS` on). But raw `c4cc` compiles **both arms of every
-`#if` in c4m.c**, where `gcc -E` picks one. `make test-c4bb` passes 41 legs
-after the change, but nothing in that suite runs fifty nested c4m instances.
-
-### The next experiment, in order
-
-1. Build `$DISK/c4m.c4r` the OLD way (`$PREPROC`), leave everything else, and
-   run `innerbench -n 50` at `-m 128`. If the five crashes vanish, F13 is the
-   cause and the fix is to get the DOS branch in without compiling both arms —
-   e.g. `$PREPROC -DC4M_DOS=1 c4m.c` with `c4dos.h` prepended separately, so the
-   preprocessor still picks arms.
-2. If they persist, bisect on task count between 5 (known clean) and 50 (known
-   bad) -- try `-n 20`, then `-n 10` -- and dump the offending address against
-   the task table to see what the 760,320 stride corresponds to. Budget ~25 min
-   per run; `-n 5` alone took 24 minutes without finishing.
-3. Only then look at the `TLEV` frame. The self-referencing saved-bp is very
-   likely downstream of whatever produces those addresses.
-
-### How to reproduce (the harness matters)
-
-    python3 <scratch>/lock2.py 128 50      # arena MB, -n count
-
-**`cli.js` MUST be given `-i`.** It feeds the keyboard only when `-i` is passed,
-or by prefeeding when stdin is a PIPE. A PTY without `-i` hits neither branch
-and the machine receives nothing — which looks EXACTLY like a hang and cost
-several hours of this session. **Always confirm a plain `ls` responds before
-concluding anything about a hang.**
-
-The harness must also stream its captured output to a file as it arrives.
-Buffering it and writing at the end loses everything when `timeout` sends
-SIGTERM.
+**Harness rule, restated because it bit again in a new shape.** Do not prefeed a
+pipe for a multi-command session. Until F18 was fixed the machine took the whole
+buffer in one read and threw away everything after the first line, so a correct
+machine looked hung. `cli.js -i` with paced writes is the only trustworthy way
+to type more than one command. Validate the harness on a known-good session
+before believing anything it tells you.
 
 ---
 
@@ -132,6 +69,19 @@ test corpus in that document is the first deliverable, not the last.
 
 ## 3. Smaller things left undone
 
+- **A decision is owed on the shared disk's `c4m.c4r`.** F13 built it with raw
+  `c4cc` to switch the DOS branch on, and raw `c4cc` skips `#include` too — so
+  that image has no `u0.h`, no `c4.h`, no `c4m_float.h`. Measured from inside the
+  machine, `__c4_info()` went from **242** (`C4M|HRT|SIG|FLT|PROT`) to **131**
+  (`C4|C4M|PROT`): the disk's c4m lost floating point, the high-resolution timer
+  and signals, and gained the `C4I_C4` bit that makes `c4r_load` pick
+  `c4r_load_opt_pure` for every nested load. It cannot simply be reverted: a
+  u0-linked c4m refuses to run under C4DOS by design (F5), and this one disk is
+  booted by all three systems. `$PREPROC -DC4M_DOS=1` does not settle it either
+  — the F11 clock branch sits inside `#if C4_ONLY`, which the preprocessor
+  evaluates to 0. Either ship two images (`c4m.c4r` for C4KE, `c4m-dos.c4r` for
+  the DOS rung) or move the DOS branches out of `#if C4_ONLY` so one image can
+  choose at run time. The user's call.
 - The Makefile's nine hand-picked `-m` values and `C4IX_CELLS` are still
   unmeasured guesses. `src/c4bb/tools/memcensus.mjs` now exists to derive them;
   nobody has. Measured so far: `c4ke32` 5.9 MB data / 420 B machine stack,

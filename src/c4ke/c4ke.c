@@ -2595,14 +2595,24 @@ static void trap_handler (int trap, int ins, int mode, int a, int *bp, int *sp, 
 	trap_enter();
 
 	if (trap == TRAP_ILLOP) {
-		//handler = (int *)custom_opcodes[ins - CO_BASE];
-		handler = (int *)(*(custom_opcodes + (ins - CO_BASE)));
+		// BOUNDS FIRST. custom_opcodes holds CO_MAX entries starting at
+		// CO_BASE, and ins is whatever the faulting task raised -- which
+		// under u0 can be a POINTER, because __c4_opcode leaves its
+		// last-evaluated argument in a when a request is not serviced and
+		// __u0_ops_init stores whatever comes back. Indexing on that read
+		// a word from arbitrary heap; if the word was non-zero the kernel
+		// then did __c4_adjust(handler[-1] * -1) and __c4_jmp(handler),
+		// so an out-of-range opcode became a wild stack adjustment and a
+		// jump to data. That is why one task raising a bad opcode took
+		// down bystanders and, often, the whole machine: the range check
+		// had been written and then commented out.
+		handler = 0;
+		if (ins >= CO_BASE && ins < CO_BASE + CO_MAX)
+			handler = (int *)(*(custom_opcodes + (ins - CO_BASE)));
 
 		// TODO: save current privilege and set kernel privilege mode for duration
 		//       of custom opcode. Must restore on return.
 
-		// Ensure within range
-		//if (ins >= CO_BASE && ins <= CO_BASE + CO_MAX && handler) {
 		if (handler) {
 			// Adjust stack based on bp for handler we're about to jump into.
 			// Reads x from ENT x instruction.
@@ -2759,7 +2769,11 @@ static void trap_handler (int trap, int ins, int mode, int a, int *bp, int *sp, 
 static int install_custom_opcode (int opcode, int *handler) {
 	int addr;
 
-	if (opcode >= CO_BASE && opcode <= CO_BASE + CO_MAX) {
+	// `<= CO_BASE + CO_MAX` was one too many: the table has CO_MAX
+	// entries, so the last valid opcode is CO_BASE + CO_MAX - 1 and the
+	// old bound let an extension write custom_opcodes[CO_MAX], one word
+	// past a kmalloc'd block.
+	if (opcode >= CO_BASE && opcode < CO_BASE + CO_MAX) {
 		addr = opcode - CO_BASE;
 		if (custom_opcodes[addr]) {
 			// Signal an error since we may be clobbering other custom opcodes

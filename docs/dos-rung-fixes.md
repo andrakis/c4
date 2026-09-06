@@ -170,6 +170,152 @@ behind** (`// ported from c4/src/c4bb/sim/machine.js @ af9f0af`), with 260 lines
 differing in `devices.js`, 81 in `microcode.uc`, and no PIT at all. That file calls c4bb
 "the behavioral oracle". Nothing in this tracker has reached it.
 
+## Round four (2026-09-06, second session): was F13 a regression?
+
+The previous session handed over one question: **F13 changed how the shared disk
+builds `c4m.c4r`, and raw `c4cc` compiles both arms of every `#if` — is the
+`innerbench -n 50` lockup mine?** It is not. What it is instead is worse, older,
+and in the kernel.
+
+| # | What | Where |
+|---|---|---|
+| F17 | C4KE dispatched a custom opcode by indexing `custom_opcodes` with **no bounds check**, then jumping to whatever word it read | `src/c4ke/c4ke.c` |
+| F18 | the board's line discipline released **more than one line** per canonical read, so every command after the first in a burst was thrown away | `src/c4bb/sim/devices.js` |
+| -- | F13's real (different) cost: the disk's c4m silently lost `u0.h`, `c4.h` and `c4m_float.h` | `src/c4bb/tests/build-images.sh` |
+
+### F13 is not the regression — measured both ways
+
+Two disks, identical but for `c4m.c4r`; `innerbench -mlqT -n 50` at `-m 128`
+(`-l` runs the precompiled `c4ke.c4r` instead of recompiling `c4ke.c`, which is
+the same stress in seconds rather than the 24 minutes `-n 5` took):
+
+| c4m.c4r built by | `Custom opcode not found` | what it did instead |
+|---|---|---|
+| `$PREPROC c4m.c` (pre-F13) | **11**, tasks 9 through 31 | went silent and spun |
+| `c4cc32 c4dos.h c4m.c` (F13) | **0** | 1708 honest `malloc failed` lines |
+
+So the crash cluster the handoff pointed at is *pre-existing* and belongs to the
+u0-linked c4m. The F13 build cannot exhibit it for a reason nobody intended:
+
+**Raw `c4cc` skips `#include` as well as `#if`.** It is not that both arms get
+compiled — it is that the headers never arrive. Comparing the two builds'
+function sets, F13's `c4m.c4r` is missing every one of u0's ~55 definitions
+(`vprintf`, `snprintf`, `strlen`, `memmove`, `calloc`, `rand`, the default
+signal handlers, `__u0_ops_init`, the vfs calls), plus `c4_float_instruction`
+from `c4m_float.h`. The image is 24KB smaller, which was the first clue.
+
+Measured from inside the machine, with a two-line guest that prints
+`__c4_info()`:
+
+- pre-F13: **242** = `C4M | HRT | SIG | FLT | PROT`
+- F13: **131** = `C4 | C4M | PROT`
+
+F13 cost the disk's c4m its floating point, its high-resolution timer and its
+signals, and turned **on** the `C4I_C4` bit — the very bit `build-images.sh`'s
+own comment worries about, because `c4r_load` picks `c4r_load_opt_pure` whenever
+`__c4_info()` says `C4I_C4`. Every nested load now takes a different path.
+
+**This is a real conflict, and it needs a decision rather than a patch.** A
+u0-linked c4m cannot run under C4DOS at all — u0's constructor refuses by
+design (F5) — and the shared disk is booted by C4DOS, C4KE and C4IX alike. One
+image cannot be both. `$PREPROC -DC4M_DOS=1`, the handoff's suggested fix, does
+not settle it either: the F11 clock branch lives inside `#if C4_ONLY`, which the
+preprocessor evaluates to 0, so that build gets the DOS *files* and loses the
+DOS *clock*. Left as F13 stands, with the cost written down here.
+
+### F17 — the wild jump under every one of these lockups
+
+`trap_handler`, on `TRAP_ILLOP`:
+
+    handler = (int *)(*(custom_opcodes + (ins - CO_BASE)));
+
+`custom_opcodes` holds `CO_MAX` (128) entries. `ins` is whatever the faulting
+task raised. There was no range check — the one that belongs there was written
+and then commented out, three lines below, where it had sat long enough to be
+furniture. So an out-of-range opcode read a word from arbitrary heap, and if
+that word was non-zero the kernel did `__c4_adjust(handler[-1] * -1)` and
+`__c4_jmp(handler)`: a stack adjustment and a jump, both taken from data.
+
+And the opcodes really are out of range, because they are **pointers**. A
+two-line probe (`__c4_opcode(name, 9001)` for an opcode nobody installed) shows
+where they come from: `__c4_opcode` leaves its last-evaluated argument in `a`
+when a request is not serviced, `__u0_ops_init` stores whatever comes back, and
+u0 then spends the rest of the run raising a string address as an opcode. That
+is the whole of `c4ke: Custom opcode not found: 108138136` — and the reason the
+values marched down by one allocation stride per task.
+
+The probe also showed the damage was not confined to the offender:
+
+    probe: good  name=6270592 -> 134
+    probe: bad   name=6270636 -> 0
+    c4ke: Custom opcode not found: 9001, executed by task 6
+    c4ke: Custom opcode not found: 50276, executed by task 5   <-- c4sh
+
+Task 5 is the shell. It had raised nothing; the kernel's jump had walked
+through it. **That is the user's report exactly** — a command works, the next
+one does not, and the whole system stops.
+
+With `if (ins >= CO_BASE && ins < CO_BASE + CO_MAX)` in front of the read, the
+same probe kills the offender and leaves task 5 alone, and the same
+`innerbench -n 50` goes from 11 wild opcodes to 2 — with a real stack trace
+attached (`c4m.c4r:calloc()+0x6064 / main()+0x30`) instead of the previous
+`could not find function entry`. Diagnostics that were being eaten now print:
+`task 33 OVERRAN ITS STACK: 44 of 262144 bytes, guard broken` — 44 bytes used
+and the guard broken is not an overrun, it is a wild write, and it was invisible
+before.
+
+**How much of that is proof, exactly.** The bug itself is not in question: an
+unchecked out-of-bounds read feeding an indirect jump is wrong on inspection,
+whatever it does on a given day. The run-to-run numbers above are one run each
+of a chaotic system and should be read as consistent-with, not as a measurement.
+The part that is not luck is qualitative: after the check, stack traces resolve
+and whole classes of diagnostic (the stack-guard reports) appear that had never
+printed before.
+
+**`badop.c4r` is a smoke test, not a regression test**, and it was checked
+against a kernel with the bounds check taken back out to make sure of that. On a
+quiet boot the word at the out-of-range index is zero, so the unfixed kernel
+behaves identically. Whether the read hurts depends on what the heap holds,
+which is exactly why this only ever bit a machine full of live tasks — and
+exactly why no cheap test was ever going to find it. What `badop` does pin is
+the kill path: the offender dies, the trace names `badop.c4r:main()`, the shell
+survives, and the session shuts down of its own accord.
+
+The installer had the matching off-by-one: `opcode <= CO_BASE + CO_MAX` let an
+extension write `custom_opcodes[CO_MAX]`, one word past the block. Now `<`.
+
+**Still open at `-n 50` / 128 MB:** the machine exhausts its heap and spins with
+no way back. That is a resource limit meeting a system that cannot report it and
+stop; it is no longer memory corruption.
+
+### F18 — the line discipline that handed out two lines at once
+
+`kbdRead` breaks at the newline only `if (!nonblock)`. c4sh opens `/dev/stdin`
+**non-blocking**, reads 99 bytes, keeps what precedes the first newline and
+discards the rest of the buffer. So any input that arrives in a burst — a paste,
+a scripted session, a front-end that delivers a whole line at once — loses every
+line after the first, and the shell sits with an empty queue looking exactly
+like a hang. The comment directly above the function already promised the
+opposite: *"does not release ANY of it to a reader - blocking or non-blocking -
+until Enter or EOF"*. It now breaks `if (!raw)`, so canonical readers get one
+line per read and `/dev/tty` still gets whatever has arrived.
+
+`printf 'ls\necho second\n\\q\n' | cli.js -d images/disk c4ke32.c4r` used to
+run `ls` and then hang to the cycle budget; it now runs all three and shuts down
+cleanly in 350ms.
+
+**Why no test caught it:** every C4KE leg in `test-c4bb.sh` types exactly one
+command and then `\q`. There was no two-command test to fail.
+
+### Method note: an instrument, validated first
+
+Four hours went into "lockups" last session that were a harness typing into a
+void. The same trap was waiting here in a different shape — prefeeding a pipe
+runs afoul of F18, so a *correct* machine looked hung. `drive.mjs` (paced writes
+to `cli.js -i`, output streamed to a file as it arrives, never buffered) was
+checked against a known-good four-command session **before** any conclusion was
+drawn from it. Everything above rests on it.
+
 ## Decisions taken with the user
 
 - **Guard C4DOS on both sides only.** u0 programs refuse under C4DOS, C4IX programs

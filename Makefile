@@ -48,6 +48,11 @@ NATIVE_TARGETS := c4 c4m c4cc
 # We also define the following symbols, which TODO needd to be narrowed down to a single
 # definition instead of the 4 we have.
 PREPROC   := gcc -E -Iinclude -I. -DC4CC=1 -D__c4__=1 -D__C4CC__=1 -D__c4cc__=1 -C
+# Our own preprocessor (src/c4dos/cpp.c), pinned byte-identical against
+# gcc -E over the whole corpus by src/c4dos/tests/test-cpp.sh. Used
+# wherever a build has to ANSWER a #if rather than skip it -- see the
+# c4m-dos rules below.
+OURCPP    := ./cpp -Iinclude -I. -DC4CC=1 -D__c4__=1 -D__C4CC__=1 -D__c4cc__=1
 C4        := ./c4
 C4M       := ./c4m
 C4CC      := ./c4cc
@@ -423,16 +428,31 @@ raycast-dos32.c4r: c4sp32 $(C4LC_LISP) $(TESTS)/raycast.c
 c4-dos.c4r: $(C4CC) c4.c
 	$(C4CC) -o $@ c4.c > /dev/null
 
-# c4m for the C4DOS rung gets include/c4dos.h prepended, and that is
-# what switches on the #if C4M_DOS branch in c4m_open/read/close: raw
-# c4cc skips # lines, so the branch is always compiled here, and the
-# header supplies dos_readable()/dos_fopen() for it. The result is that
-# every program this VM runs can see the DOS RAM disk -- `c4m
-# load-c4r.c -- c4ke` finds a kernel that exists nowhere but memory.
+# c4m for the C4DOS rung, through OUR OWN preprocessor.
+#
+# It used to go through raw c4cc, and relied on c4cc skipping '#' lines
+# to switch the #if C4M_DOS branch on. That works, and it is also how
+# the shared disk's c4m ended up with no u0.h, no c4.h and no
+# c4m_float.h and nobody noticing for a round -- c4cc skips '#include'
+# too (docs/dos-rung-fixes.md round four). A build should ask for what
+# it wants:
+#   -DC4M_FREESTANDING=1  no headers, the way c4cc used to get by never
+#                   opening one. The census insists: the tree's own
+#                   <string.h> defines memmove() via memcpy(), and MCPY
+#                   is opcode 42, above this image's rung.
+#   -DC4_ONLY=1     the C4 implementations, since there is no host libc
+#   -DNOT_NATIVE=1  what c4.h would have derived from __c4cc__
+#   -DC4M_DOS=1     the DOS file API and the DOS clock
+#   -DC4M_NO_U0=1   u0 declines to run under C4DOS by design (F5)
+# Same opcode set as the old raw-c4cc image, 63 bytes smaller (the dead
+# `if (0)` arm of C4IV goes), and now the result of a decision.
 # Still base-c4: c4dos.h reaches the API through its invoke STUB
-# (a self-rewritten JMP), not an indirect call.
-c4m-dos.c4r: $(C4CC) $(INCLUDE)/c4dos.h c4m.c
-	$(C4CC) -o $@ $(INCLUDE)/c4dos.h c4m.c > /dev/null
+# (a self-rewritten JMP), not an indirect call, and it rides along as a
+# source file because that is what its own header says it is.
+c4m-dos.c4r: $(C4CC) cpp $(INCLUDE)/c4dos.h c4m.c
+	$(OURCPP) -DC4M_FREESTANDING=1 -DC4_ONLY=1 -DNOT_NATIVE=1 -DC4M_DOS=1 -DC4M_NO_U0=1 $(INCLUDE)/c4dos.h c4m.c > .c4m_dos_pp.c
+	$(C4CC) -o $@ .c4m_dos_pp.c > /dev/null
+	@rm -f .c4m_dos_pp.c
 
 mandel-dos.c4r: $(C4CC) $(INCLUDE)/u0lite.h $(TESTS)/mandel.c
 	$(C4CC) -o $@ $(INCLUDE)/u0lite.h $(TESTS)/mandel.c > /dev/null
@@ -443,8 +463,11 @@ rps-dos.c4r: $(C4CC) $(INCLUDE)/u0lite.h $(TESTS)/rps.c
 c4-dos32.c4r: c4cc32 c4.c
 	./c4cc32 -o $@ c4.c > /dev/null
 
-c4m-dos32.c4r: c4cc32 $(INCLUDE)/c4dos.h c4m.c
-	./c4cc32 -o $@ $(INCLUDE)/c4dos.h c4m.c > /dev/null
+# 32-bit twin of c4m-dos.c4r above, same three -D and the same reason.
+c4m-dos32.c4r: c4cc32 cpp $(INCLUDE)/c4dos.h c4m.c
+	$(OURCPP) -DC4M_FREESTANDING=1 -DC4_ONLY=1 -DNOT_NATIVE=1 -DC4M_DOS=1 -DC4M_NO_U0=1 $(INCLUDE)/c4dos.h c4m.c > .c4m_dos32_pp.c
+	./c4cc32 -o $@ .c4m_dos32_pp.c > /dev/null
+	@rm -f .c4m_dos32_pp.c
 
 mandel-dos32.c4r: c4cc32 $(INCLUDE)/u0lite.h $(TESTS)/mandel.c
 	./c4cc32 -o $@ $(INCLUDE)/u0lite.h $(TESTS)/mandel.c > /dev/null
@@ -2098,7 +2121,9 @@ c4bb-32bit: c4cc32 c4m32 c4sp32 c4rlink32
 # fresh tree -- or any tree where it has since been cleaned away -- got
 # `cp: cannot stat 'c4th32.c4r'` and a failed test-c4bb. Name it and the
 # target builds what it uses.
-c4bb-images: c4bb-32bit $(C4LC_LISP) c4th32.c4r
+# ./cpp is a hard prerequisite now, not just for C4DOS: the shared
+# disk's c4m.c4r goes through it (build-images.sh).
+c4bb-images: c4bb-32bit $(C4LC_LISP) c4th32.c4r cpp
 	bash src/c4bb/tests/build-images.sh
 test-c4bb: c4bb-images $(C4M) $(TESTS_C4R)
 	bash src/c4bb/tests/test-c4bb.sh

@@ -7,6 +7,17 @@ CC=./c4cc32
 OUT=src/c4bb/images
 U0=include/u0.h
 PREPROC="gcc -E -Iinclude -I. -DC4CC=1 -D__c4__=1 -D__C4CC__=1 -D__c4cc__=1 -C"
+# Our own preprocessor (src/c4dos/cpp.c), same flags. It is pinned
+# against gcc -E for byte-identical images over the whole corpus
+# (src/c4dos/tests/test-cpp.sh), so choosing it costs nothing and means
+# the images a player can rebuild INSIDE the machine are built by the
+# tool that is in there with them.
+OURCPP="./cpp -Iinclude -I. -DC4CC=1 -D__c4__=1 -D__C4CC__=1 -D__c4cc__=1"
+if [ ! -x ./cpp ]; then
+    echo "c4bb: ./cpp is required (run 'make cpp') -- the shared disk's" >&2
+    echo "      c4m.c4r is built with it, not with gcc -E" >&2
+    exit 1
+fi
 mkdir -p $OUT
 
 # firmware: built with c4lc (the nicer compiler; real preprocessor).
@@ -124,14 +135,33 @@ rm -f .c4bb_vfsload_pp.c
 # self-contained, so the unadorned image is the one that runs on every
 # rung -- the same call the Makefile makes for c4-dos32.c4r.
 $CC -o $DISK/c4.c4r c4.c > /dev/null
-# c4m gets include/c4dos.h prepended, exactly as the Makefile's
-# c4m-dos32.c4r does and as the climb disk already copies. Going through
-# $PREPROC instead would honour the #if and compile the DOS branch OUT,
-# and THIS DISK IS BOOTED BY C4DOS -- so `c4m load-c4r.c -- c4ke` could
-# not see a kernel that LADDER had just built into the RAM disk, and c4m
-# had no clock (docs/dos-rung-fixes.md F7, F11). Raw c4cc skips # lines,
-# which is what switches the branch on.
-$CC -o $DISK/c4m.c4r include/c4dos.h c4m.c > /dev/null
+# c4m, through OUR OWN preprocessor.
+#
+# It was built by raw c4cc for one round, because c4cc skips '#' lines
+# and that switched the DOS branch on (F7, F11) where gcc -E had
+# compiled it out. It also skips '#include', which nobody noticed: that
+# image had no u0.h, no c4.h and no c4m_float.h, and measured from
+# inside the machine its __c4_info() had gone from 242 to 131 -- float,
+# the high-resolution timer and signals gone, and the C4I_C4 bit that
+# makes c4r_load pick c4r_load_opt_pure for every nested load turned on.
+# "Compile it with the compiler that ignores the question" is not a way
+# to answer a question (docs/dos-rung-fixes.md round four).
+#
+# ./cpp is a real preprocessor and it is ours -- the same one BUILD.BAT
+# runs inside the machine -- so this asks for exactly what it wants:
+#   -DC4M_DOS=1     the DOS file API and the DOS clock
+#   -DC4M_NO_U0=1   because THIS DISK IS BOOTED BY C4DOS, and u0 declines
+#                   to run there by design (F5)
+# and everything else -- float, the timer, signals, the host memcpy --
+# arrives the way it does in every other build, because the #if that
+# selects it is now evaluated rather than skipped.
+#
+# c4dos.h rides along as a second input file rather than an #include:
+# it is a source file by convention (see its own header), and ./cpp
+# concatenates its inputs the way gcc -E does.
+$OURCPP -DC4M_DOS=1 -DC4M_NO_U0=1 include/c4dos.h c4m.c > .c4bb_c4m_pp.c
+$CC -o $DISK/c4m.c4r .c4bb_c4m_pp.c > /dev/null
+rm -f .c4bb_c4m_pp.c
 # include/c4dos.h rides along as a source file (c4cc has no
 # preprocessor): c4cc reads its input through the DOS API when it is
 # running as a transient, so a source another tool just wrote to the

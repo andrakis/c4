@@ -69,19 +69,6 @@ test corpus in that document is the first deliverable, not the last.
 
 ## 3. Smaller things left undone
 
-- **A decision is owed on the shared disk's `c4m.c4r`.** F13 built it with raw
-  `c4cc` to switch the DOS branch on, and raw `c4cc` skips `#include` too — so
-  that image has no `u0.h`, no `c4.h`, no `c4m_float.h`. Measured from inside the
-  machine, `__c4_info()` went from **242** (`C4M|HRT|SIG|FLT|PROT`) to **131**
-  (`C4|C4M|PROT`): the disk's c4m lost floating point, the high-resolution timer
-  and signals, and gained the `C4I_C4` bit that makes `c4r_load` pick
-  `c4r_load_opt_pure` for every nested load. It cannot simply be reverted: a
-  u0-linked c4m refuses to run under C4DOS by design (F5), and this one disk is
-  booted by all three systems. `$PREPROC -DC4M_DOS=1` does not settle it either
-  — the F11 clock branch sits inside `#if C4_ONLY`, which the preprocessor
-  evaluates to 0. Either ship two images (`c4m.c4r` for C4KE, `c4m-dos.c4r` for
-  the DOS rung) or move the DOS branches out of `#if C4_ONLY` so one image can
-  choose at run time. The user's call.
 - The Makefile's nine hand-picked `-m` values and `C4IX_CELLS` are still
   unmeasured guesses. `src/c4bb/tools/memcensus.mjs` now exists to derive them;
   nobody has. Measured so far: `c4ke32` 5.9 MB data / 420 B machine stack,

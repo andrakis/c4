@@ -215,13 +215,58 @@ signals, and turned **on** the `C4I_C4` bit — the very bit `build-images.sh`'s
 own comment worries about, because `c4r_load` picks `c4r_load_opt_pure` whenever
 `__c4_info()` says `C4I_C4`. Every nested load now takes a different path.
 
-**This is a real conflict, and it needs a decision rather than a patch.** A
-u0-linked c4m cannot run under C4DOS at all — u0's constructor refuses by
-design (F5) — and the shared disk is booted by C4DOS, C4KE and C4IX alike. One
-image cannot be both. `$PREPROC -DC4M_DOS=1`, the handoff's suggested fix, does
-not settle it either: the F11 clock branch lives inside `#if C4_ONLY`, which the
-preprocessor evaluates to 0, so that build gets the DOS *files* and loses the
-DOS *clock*. Left as F13 stands, with the cost written down here.
+### Settled: use one of our own preprocessors
+
+The user's answer, and it is the right one: **we have preprocessors — use one.**
+`./cpp` (src/c4dos/cpp.c) is a real preprocessor, it is ours, it is the same one
+`BUILD.BAT` runs inside the machine, and it is pinned byte-identical against
+`gcc -E` over the corpus. "Compile it with the compiler that ignores the
+question" was never an answer to the question.
+
+And the user's other point is the one that explains how this happened at all:
+**c4m.c was originally written so that no `#else` or `#elif` was ever needed.**
+Every conditional ADDED something harmless, so a compiler with no preprocessor
+at all — which skips every `#` line and therefore compiles every arm — still
+produced a working program. That discipline had drifted. F11's DOS clock check
+was written INSIDE the `#if C4_ONLY` arm, so it existed only in builds that had
+no preprocessor; every build that had one evaluated `#define C4_ONLY 0`
+honestly, took the other arm, and quietly had no DOS clock. Whether c4m can ask
+DOS the time has nothing to do with whether it was compiled against a host libc.
+
+So, three things:
+
+- **`c4_time()` is now one function outside the split**, with the DOS check as
+  an additive `#if C4M_DOS` block at the top and `c4_time_host()` (the old
+  /proc/uptime reader, or `c4m_time()` in the native arm) underneath. The rule
+  is written into the comment: an `#ifdef` may only ADD something harmless,
+  never pick between two spellings of the same thing.
+- **The knobs are knobs.** `C4_ONLY` is `#ifndef`-guarded so a build can ask for
+  it; `C4M_NO_U0` suppresses the u0 include, because u0 declines under C4DOS by
+  design (F5) and that has to be a decision; `C4M_FREESTANDING` asks for the
+  no-headers build.
+- **Every build of `c4m.c` now goes through a preprocessor.** The shared disk's
+  (`build-images.sh`), and both `c4m-dos` rules in the Makefile.
+
+Measured after: `__c4_info()` back to **242**, and the clock moves
+(`t0=7 t1=8`) both standalone on the board and as a task under C4KE.
+
+**`C4M_FREESTANDING` is not a tidiness flag, and the rung census is why.** Give
+`c4m-dos32.c4r` a real preprocessor and it stops being a base-rung image:
+
+    c4m-dos32.c4r: ABOVE RUNG base -- uses MCPY (42) at code+1435 and 1 more
+
+The tree's own `include/string.h` DEFINES `memmove()` in terms of `memcpy()`
+under `__c4cc__`, and `include/c4ke/opcodes.h` defines `c4ke_opcode()` in terms
+of `__c4_opcode()`. Both are dead code in c4m and both are compiled in anyway,
+and `MCPY` (42) and `OPCD` are above the base rung this image is pinned to — so
+the DOS rung's VM would have needed a CPU the player has not extended yet. It
+was inside its rung only because raw c4cc never opened a header. With
+`-DC4M_FREESTANDING=1 -DC4_ONLY=1 -DNOT_NATIVE=1` it is inside again, with the
+same opcode set as before and 63 bytes smaller (the dead `if (0)` arm of `C4IV`
+goes). `test-c4bb-rungs` green.
+
+That census earned its keep here. It is the only thing in the tree that would
+have noticed, and it noticed immediately.
 
 ### F17 — the wild jump under every one of these lockups
 

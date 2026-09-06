@@ -134,12 +134,40 @@
 #define __C4M_C__ 1
 
 #define C4M_SIGNALS 1
+// FREESTANDING: no headers at all, and everything c4m needs it defines
+// itself -- the C4_ONLY arm further down is exactly that set.
+//
+// This is what a build through raw c4cc produced by accident, because
+// c4cc skips every '#' line and so never opened a header. The C4DOS
+// rung depends on it and nobody knew: the tree's own <string.h> defines
+// memmove() in terms of memcpy(), and memcpy is MCPY, opcode 42, ABOVE
+// the base rung c4m-dos32.c4r is pinned to (test-c4bb-rungs). Give that
+// build a real preprocessor without this switch and the census refuses
+// it, correctly -- the image would need a CPU the player has not
+// extended yet.
+//
+// So the flag exists to ASK for the headerless build. Its companions
+// are -DC4_ONLY=1 (the C4 implementations, since there is no host libc
+// to call) and -DNOT_NATIVE=1 (which c4.h would otherwise have derived
+// from __c4cc__), and c4dos.h/u0.h come in as SOURCE FILES the way c4cc
+// has always taken them.
+#ifndef C4M_FREESTANDING
 #include "c4.h"
 #include "c4m_float.h"
 #include <c4m_util.h>
+#endif
 
 #ifdef __c4cc__
+// u0 is the C4KE runtime, and it REFUSES to run under C4DOS by design
+// (docs/dos-rung-fixes.md F5: its constructor sees __c4dos_api and
+// declines rather than asking a kernel that is not there for 38
+// opcodes). So an image meant for a disk C4DOS also boots has to be
+// built without it -- ./cpp -DC4M_NO_U0=1 -- and that is a thing to
+// ASK FOR, not a thing to get because the compiler happened to have no
+// preprocessor and skipped this line.
+#ifndef C4M_NO_U0
 #include <u0.h>
+#endif
 #endif
 
 // Configurables
@@ -928,7 +956,11 @@ void print_stacktrace (int *pc_orig, int *idmain, int *idmax, int *bp, int *sp) 
 
 // This section is only compiled when run under C4 directly.
 // Here we put stubs or alternate implementations for functions that must be emulated under C4.
+// Overridable, so a build can ASK for the C4 implementations rather
+// than only ever getting them by being compiled with no preprocessor.
+#ifndef C4_ONLY
 #define C4_ONLY 0
+#endif
 #if C4_ONLY
 int pending_signal; // if a signal is pending
 int *signal_handlers;
@@ -1007,27 +1039,12 @@ enum {
 //       second number updates every 100ms.
 //       This is reverse on Debian-pi.
 //       Use -a flag to use alternate format.
-int c4_time () {
+// The host clock for a c4m with no host: /proc/uptime, which exists on
+// Linux and on no breadboard. c4_time() below is what callers use; this
+// is only its last resort.
+int c4_time_host () {
 	int fd, number, r;
 	char *buf, ch;
-
-#if C4M_DOS
-	// ASK C4DOS FIRST. Everything below reads /proc/uptime, which is a
-	// Linux fallback and exists on no breadboard -- so on c4bb this
-	// function latched c4_time_unavailable and returned 0 FOREVER. A
-	// guest that waits for the clock to move then waits forever: the
-	// C4KE boot's "measuring instructions per second" step never
-	// finished, at any cycle budget, which looked like slowness and was
-	// actually a stopped clock.
-	//
-	// DOS has the clock (TIME opcode, serviced by the board's microcode
-	// or by a native c4m) and lends it through API slot 15. Going that
-	// way rather than calling TIME here is deliberate: TIME is opcode
-	// 53, above EXIT, and c4m-dos32.c4r is pinned in RUNG_BASE so the
-	// campaign can say the VM needs no opcode the machine did not boot
-	// with. The API table costs nothing above EXIT.
-	if (dos_can_time()) return dos_time();
-#endif
 
 	// Don't complain endlessly
 	if (c4_time_unavailable)
@@ -1092,7 +1109,7 @@ int do_puts   (char *str) { return printf("%s", str); }
 //#define c4_free(p)         free(p)
 //#define c4_realloc(p,ns)   realloc(p, ns)
 #define c4_memcpy(d,s,n)   memcpy(d, s, n)
-#define c4_time()          c4m_time()
+#define c4_time_host()     c4m_time()
 #define c4_plain()         0 /* Plain C4 or compiled c4m natively? */
 #define c4_info()          (C4I_C4M | C4I_HRT | C4I_SIG | C4I_FLT | (pm_avail ? C4I_PROT : 0))
 #define c4_usleep(usec)    usleep(usec)
@@ -1101,6 +1118,46 @@ int do_puts   (char *str) { return printf("%s", str); }
 #define do_putchar(c)      putchar(c)
 #define do_puts(s)         puts(s)
 #endif
+
+// The clock, for every build there is.
+//
+// This sits OUTSIDE the C4_ONLY split on purpose, and the purpose is a
+// bug that cost a session. The DOS check used to live INSIDE the
+// C4_ONLY arm, which meant it existed only in builds where C4_ONLY was
+// true -- and C4_ONLY is only ever true by accident, when a build goes
+// through raw c4cc and every '#' line is skipped. Every build that has
+// a preprocessor evaluated `#define C4_ONLY 0` honestly, took the other
+// arm, and quietly had no DOS clock. Whether c4m can ask DOS the time
+// has nothing to do with whether it was compiled against a host libc;
+// nesting the one inside the other is what made "which compiler built
+// this" decide a feature.
+//
+// Additive by construction, so it survives a compiler with no
+// preprocessor at all: raw c4cc skips the '#' lines and compiles the
+// DOS check in, where it costs one runtime test on a machine that has
+// no DOS to answer it. That is the rule this file was written to and
+// had drifted from -- an '#ifdef' may only ADD something harmless,
+// never pick between two spellings of the same thing.
+int c4_time () {
+#if C4M_DOS
+	// ASK C4DOS FIRST. c4_time_host() reads /proc/uptime, which is a
+	// Linux fallback and exists on no breadboard -- so on c4bb this
+	// latched c4_time_unavailable and returned 0 FOREVER. A guest that
+	// waits for the clock to move then waits forever: the C4KE boot's
+	// "measuring instructions per second" step never finished, at any
+	// cycle budget, which looked like slowness and was actually a
+	// stopped clock.
+	//
+	// DOS has the clock (TIME opcode, serviced by the board's microcode
+	// or by a native c4m) and lends it through API slot 15. Going that
+	// way rather than calling TIME here is deliberate: TIME is opcode
+	// 53, above EXIT, and c4m-dos32.c4r is pinned in RUNG_BASE so the
+	// campaign can say the VM needs no opcode the machine did not boot
+	// with. The API table costs nothing above EXIT.
+	if (dos_can_time()) return dos_time();
+#endif
+	return c4_time_host();
+}
 
 // Guest memory: malloc(), free() and realloc() for the MALC, FREE and RALC
 // opcodes.

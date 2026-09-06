@@ -2363,6 +2363,21 @@ static void op_user_sleep (int trap, int ins, int mode, int a, int *bp, int *sp,
 // @param privileges   See PRIV_ enum
 // @return 0 on failure (with start_errno set), or on success the task structure
 //         created.
+// A spawn that fails should SAY SO. start_errno was set in five places
+// and read in none, so a task that could not be created looked exactly
+// like one that could -- the caller got a 0 and no reason, and under
+// memory pressure that is the difference between "the machine is out of
+// memory" and "the machine has stopped working".
+static void start_fail (int reason, char *name) {
+	start_errno = reason;
+	printf("c4ke: cannot start '%s': ", name ? name : "?");
+	if      (reason == START_NOFREE)  printf("no free task slot (%d in use)\n", KERN_TASK_COUNT);
+	else if (reason == START_NOSTACK) printf("out of memory for a %d byte stack\n", TASK_STACK_SIZE);
+	else if (reason == START_NOSIG)   printf("out of memory for signal handlers\n");
+	else if (reason == START_ARGV)    printf("out of memory for arguments\n");
+	else                              printf("reason %d\n", reason);
+}
+
 static int *start_task_builtin (int *entry, int argc, char **_argv, char *name, int privileges) {
 	int    *t, *temp, *sp, *bp, *sigh;
 	int    argv_size, i;
@@ -2376,7 +2391,7 @@ static int *start_task_builtin (int *entry, int argc, char **_argv, char *name, 
 
     start_errno = START_NONE;
 	if (!(t = kernel_task_find_free())) {
-		start_errno = START_NOFREE;
+		start_fail(START_NOFREE, name);
 		if (kernel_running)
 			critical_path_end();
 		return 0;
@@ -2385,8 +2400,16 @@ static int *start_task_builtin (int *entry, int argc, char **_argv, char *name, 
 		printf("c4ke: found free task at 0x%lx\n", t);
 
 	if (!(bp = sp = kmalloc(TASK_STACK_GUARD + TASK_STACK_SIZE))) {
-		free(t);
-		start_errno = START_NOSTACK;
+		// NOT free(t). `t` is an interior pointer into the single
+		// kernel_tasks block (kernel_task_find_free returns
+		// kernel_tasks + TASK__Sz * i), so handing it to free() gives
+		// the allocator a pointer it never issued and corrupts the
+		// heap -- on the OUT OF MEMORY path, which is exactly when the
+		// machine can least afford it. Nothing needs releasing either:
+		// the slot is claimed by writing TASK_STATE further down, and
+		// on every path up to there it is still STATE_UNLOADED, which
+		// is what find_free looks for.
+		start_fail(START_NOSTACK, name);
 		if (kernel_running)
 			critical_path_end();
 		return 0;
@@ -2400,9 +2423,9 @@ static int *start_task_builtin (int *entry, int argc, char **_argv, char *name, 
 		printf("c4ke: allocated %d bytes for task stack at 0x%lx\n", TASK_STACK_SIZE, bp);
 
 	if (!(sigh = kmalloc((i = sizeof(int) * SIGH__Sz * SIGNAL_MAX)))) {
-		free(t);
+		// see the free(t) note above: t is not the allocator's
 		free(bp);
-		start_errno = START_NOSIG;
+		start_fail(START_NOSIG, name);
 		if (kernel_running)
 			critical_path_end();
 		return 0;
@@ -2417,11 +2440,11 @@ static int *start_task_builtin (int *entry, int argc, char **_argv, char *name, 
 	// before the program is started loses the argv values.
 	t[TASK_ARGC] = argc;
 	if (!(argv = kmalloc((i = sizeof(char *) * (argc + 1))))) {
-		free(t);
+		// see the free(t) note above: t is not the allocator's
 		free(bp);
 		free(argv);
 		printf("c4ke: Unable to allocate argv\n");
-		start_errno = START_ARGV;
+		start_fail(START_ARGV, name);
 		if (kernel_running)
 			critical_path_end();
 		return 0;
@@ -2432,10 +2455,10 @@ static int *start_task_builtin (int *entry, int argc, char **_argv, char *name, 
 	// Bugfix(1): argv_size of 0 returns null under original c4
 	++argv_size;
 	if (!(argv_data = kmalloc(argv_size))) {
-		free(t);
+		// see the free(t) note above: t is not the allocator's
 		free(bp);
 		free(argv);
-		start_errno = START_ARGV;
+		start_fail(START_ARGV, name);
 		printf("c4ke: Unable to allocate argv data of %d\n", argv_size);
 		if (kernel_running)
 			critical_path_end();

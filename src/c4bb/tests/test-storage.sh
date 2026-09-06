@@ -26,7 +26,7 @@ grep -q "dostar.c4r" $T/dir.log
 
 # --- 2. write it ------------------------------------------------------
 { printf 'RUN dostar.c4r x tools-src.tar\n'; sleep 10;
-  printf 'RUN bbsave.c4r 1:\n';              sleep 20; } \
+  printf 'RUN bbsave.c4r B:\n';              sleep 20; } \
   | timeout 300 $CLI -i -m 32 -d $T/d0 -w $T/d1 c4dos32.c4r > $T/save.log 2>&1 || true
 grep -q "^bbsave: 6 files" $T/save.log
 
@@ -49,7 +49,7 @@ grep -q "a C preprocessor for the C4 toolchain" $T/back.log
 
 # --- 4. a read-only drive refuses ------------------------------------
 { printf 'RUN dostar.c4r x tools-src.tar\n'; sleep 10;
-  printf 'RUN bbsave.c4r 1:\n';              sleep 10; } \
+  printf 'RUN bbsave.c4r B:\n';              sleep 10; } \
   | timeout 300 $CLI -i -m 32 -d $T/d0 -d $T/d1 c4dos32.c4r > $T/ro.log 2>&1 || true
 grep -q "read-only" $T/ro.log
 

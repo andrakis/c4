@@ -351,6 +351,8 @@ if [ -x ./cpp ]; then
     # A> prompt works here. DOS defaults to a prompt on its own line,
     # because a host libc buffers a partial one.
     echo 'DEVICE=CONSOLE.SYS FLUSH' >> $DISK/config.sys
+    # ...and the drives, for the same announced-never-probed reason.
+    echo 'DEVICE=DRIVES.SYS' >> $DISK/config.sys
     cp src/c4dos/fs/AUTOEXEC.BAT $DISK/autoexec.bat
 else
     echo "c4bb: no ./cpp, skipping c4dos32 (run 'make cpp')" >&2

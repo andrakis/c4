@@ -1,6 +1,6 @@
 # install.lst -- what makes a bootable C4KE medium.
 #
-# Read by `RUN install.c4r 1:` (src/c4dos/install.c). Every name is
+# Read by `RUN install.c4r B:` (src/c4dos/install.c). Every name is
 # fetched from wherever it actually is: C4DOS looks in the RAM disk
 # before the disk, so anything LADDER.BAT just compiled shadows the
 # copy that shipped on this floppy. That precedence is the point --

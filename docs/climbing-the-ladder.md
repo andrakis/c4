@@ -106,7 +106,7 @@ if it is not there, because a blank disk is a real thing. Then:
 | where | type | what happens |
 |---|---|---|
 | `A>` | `LADDER` | as before |
-| `A>` | `RUN install.c4r 1:` | a **bootable** medium on drive 1: the kernel it just compiled, the userland, and the sources for the two rungs above |
+| `A>` | `RUN install.c4r B:` | a **bootable** medium on drive 1: the kernel it just compiled, the userland, and the sources for the two rungs above |
 | `A>` | `RUN reboot.c4r 0` | takes the C4DOS floppy out, and restarts |
 | | | the BIOS finds drive 1 and boots the kernel this machine made |
 
@@ -122,7 +122,7 @@ Nothing is written until every required name has been found, so an
 install run before `LADDER` says what is missing and leaves the medium
 untouched.
 
-`RUN bbsave.c4r 1:` is the blunter tool beside it: every RAM-disk file
+`RUN bbsave.c4r B:` is the blunter tool beside it: every RAM-disk file
 onto a drive, no manifest and no boot record. Useful for keeping
 intermediate work; not a boot medium.
 
@@ -138,7 +138,7 @@ for what it makes:
 |---|---|---|
 | `c4sh>` | `tar x c4ix-src.tar` | C4IX's source, out of the archive the medium carried |
 | `c4sh>` | `b4ke -f c4ix.b4k` | twelve modules and a link |
-| `c4sh>` | `kinstall 2:` | a bootable C4IX medium on drive 2, from `c4ix.lst` |
+| `c4sh>` | `kinstall C:` | a bootable C4IX medium on drive 2, from `c4ix.lst` |
 | `c4sh>` | `reboot 1` | and the machine comes up in C4IX |
 
 `kinstall` is `install` at the kernel rung — the ramfs first, then the

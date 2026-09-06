@@ -212,8 +212,9 @@ loading a kernel must not be the thing that demands a better CPU.
 ## CONFIG.SYS and AUTOEXEC.BAT
 
 - `CONFIG.SYS`: `DEVICE=CLOCK.SYS` (enables TIME/C4CY use),
-  `DEVICE=RAMDISK.SYS SIZE=n` and `DEVICE=CONSOLE.SYS FLUSH`, all three
-  implemented; `FILES=n`, `SHELL=...` reserved.
+  `DEVICE=RAMDISK.SYS SIZE=n`, `DEVICE=CONSOLE.SYS FLUSH` and
+  `DEVICE=DRIVES.SYS`, all four implemented; `FILES=n`, `SHELL=...`
+  reserved.
   Parsed with a flattened-locals descent (the vfsload.c skeleton,
   c4cc-dialect).
 
@@ -243,6 +244,35 @@ loading a kernel must not be the thing that demands a better CPU.
   `read(0, ...)` may carry several lines, so a pause eats exactly one
   and leaves the rest of a piped script for the prompt. Paging is off
   unless `/P` is given, so nothing that scripts `TYPE` changes.
+
+### Drives, and one spelling for them
+
+`DEVICE=DRIVES.SYS` tells DOS the machine has more than one drive. It is
+announced for the same reason the clock and the console are: the drive
+registers are a device window at `0x13c`/`0x188` on the board and
+ordinary memory under native c4m, so a probe would be a wild read. With
+the line, the prompt names the drive it is on and `B:` moves between
+them:
+
+    A>B:
+    B>DIR
+    B>A:
+    A>TYPE B:note.txt
+
+**Letters, everywhere a person can see.** The machine itself takes
+either spelling -- `Devices.resolveDrive` accepts `0:` and `A:` alike --
+but the prompt has said `A>` since the first boot, and `install 1:`
+against an `A>` prompt was two vocabularies for one idea. So the
+player-facing commands are `INSTALL B:`, `kinstall C:`,
+`RUN bbsave.c4r B:`, and `install` writes its destination prefix as a
+letter too. The drive NUMBER survives only where the hardware is the
+subject: `cli.js -d`, the BIOS, the drives panel, and
+`docs/c4bb-storage.md`'s register table.
+
+A prefix reaches across drives anywhere a filename is taken --
+`TYPE B:note.txt`, `COPY B:x.c y.c`, `RUN B:hello.c4r` -- and that
+needed no code in `dos_open`: the prefix is resolved by the disk
+controller, which has understood it since M5.
 
 ## Building and running
 

@@ -1,7 +1,7 @@
 // install -- write a bootable medium from a manifest.
 //
-//   RUN install.c4r 1:              read install.lst, write drive 1
-//   RUN install.c4r 1: c4ix.lst     a different manifest
+//   RUN install.c4r B:              read install.lst, write drive 1
+//   RUN install.c4r B: c4ix.lst     a different manifest
 //
 // The step the climb was missing. C4DOS builds a kernel into its RAM
 // disk (LADDER.BAT), and `bbsave` can put the RAM disk on a medium --
@@ -70,7 +70,7 @@ int drivenum (char *s) {
 // reads through the board's open(), which resolves against whichever
 // drive is current, and the read and the write are interleaved.
 char *at_dest (char *name) {
-	dst[0] = '0' + dest;
+	dst[0] = 'A' + dest;   // one spelling, everywhere the player can see
 	dst[1] = ':';
 	xcopy(dst + 2, name);
 	return dst;
@@ -177,7 +177,7 @@ int main (int argc, char **argv) {
 	if (argc > 2) lst = argv[2];
 
 	if ((dest = drivenum(argv[1])) < 0) {
-		printf("install: '%s' is not a drive -- try 1: or B:\n", argv[1]);
+		printf("install: '%s' is not a drive -- try B:\n", argv[1]);
 		return 1;
 	}
 	// Named with a single digit, so anything past 9 has no spelling

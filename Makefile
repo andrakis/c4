@@ -461,6 +461,10 @@ $(C4DOS_DISK32): hello32.c4r raycast-dos32.c4r \
 	@# tight A> prompt works here. Say so: DOS defaults to a prompt on
 	@# its own line, because a host libc buffers a partial one.
 	@echo 'DEVICE=CONSOLE.SYS FLUSH' >> $(C4DOS_DISK32)/config.sys
+	@# And the drives. Same rule: the board has them at 0x13c/0x188,
+	@# native c4m has ordinary memory there, so DOS is told rather than
+	@# left to probe. Without this line the prompt is A> and stays A>.
+	@echo 'DEVICE=DRIVES.SYS' >> $(C4DOS_DISK32)/config.sys
 	@cp $(SRCS)/c4dos/fs/AUTOEXEC.BAT $(C4DOS_DISK32)/autoexec.bat
 	@cp hello32.c4r                   $(C4DOS_DISK32)/hello.c4r
 	@cp raycast-dos32.c4r             $(C4DOS_DISK32)/raycast.c4r
@@ -570,6 +574,10 @@ $(C4DOS_BUILD_DISK32): c4dos32.c4r dostar32.c4r cpp32.c4r c4cc32.c4r c4ke-src.ta
 	@# tight A> prompt works here. Say so: DOS defaults to a prompt on
 	@# its own line, because a host libc buffers a partial one.
 	@echo 'DEVICE=CONSOLE.SYS FLUSH' >> $(C4DOS_BUILD_DISK32)/config.sys
+	@# And the drives. Same rule: the board has them at 0x13c/0x188,
+	@# native c4m has ordinary memory there, so DOS is told rather than
+	@# left to probe. Without this line the prompt is A> and stays A>.
+	@echo 'DEVICE=DRIVES.SYS' >> $(C4DOS_BUILD_DISK32)/config.sys
 	@cp $(SRCS)/c4dos/fs/AUTOEXEC.BAT $(C4DOS_BUILD_DISK32)/autoexec.bat
 	@cp $(SRCS)/c4dos/fs/BUILD.BAT    $(C4DOS_BUILD_DISK32)/build.bat
 	@cp $(SRCS)/c4dos/fs/LADDER.BAT   $(C4DOS_BUILD_DISK32)/ladder.bat
@@ -639,6 +647,10 @@ $(C4DOS_IX_DISK): c4dos32.c4r dostar32.c4r cpp32.c4r c4cc32.c4r dosload32.c4r \
 	@# tight A> prompt works here. Say so: DOS defaults to a prompt on
 	@# its own line, because a host libc buffers a partial one.
 	@echo 'DEVICE=CONSOLE.SYS FLUSH' >> $(C4DOS_IX_DISK)/config.sys
+	@# And the drives. Same rule: the board has them at 0x13c/0x188,
+	@# native c4m has ordinary memory there, so DOS is told rather than
+	@# left to probe. Without this line the prompt is A> and stays A>.
+	@echo 'DEVICE=DRIVES.SYS' >> $(C4DOS_IX_DISK)/config.sys
 	@cp $(SRCS)/c4dos/fs/AUTOEXEC.BAT $(C4DOS_IX_DISK)/autoexec.bat
 	@cp $(SRCS)/c4dos/fs/LADDER.BAT   $(C4DOS_IX_DISK)/ladder.bat
 	@cp $(SRCS)/c4dos/fs/IX.BAT       $(C4DOS_IX_DISK)/ix.bat
@@ -1735,6 +1747,10 @@ $(C4DOS_FC_DISK): c4dos-clock.c4r c4th32.c4r $(C4R_C4RLINK) dostar.c4r \
 	@# tight A> prompt works here. Say so: DOS defaults to a prompt on
 	@# its own line, because a host libc buffers a partial one.
 	@echo 'DEVICE=CONSOLE.SYS FLUSH' >> $(C4DOS_FC_DISK)/config.sys
+	@# And the drives. Same rule: the board has them at 0x13c/0x188,
+	@# native c4m has ordinary memory there, so DOS is told rather than
+	@# left to probe. Without this line the prompt is A> and stays A>.
+	@echo 'DEVICE=DRIVES.SYS' >> $(C4DOS_FC_DISK)/config.sys
 	@cp $(SRCS)/c4dos/fs/CC.BAT $(C4DOS_FC_DISK)/cc.bat
 	@cp $(SRCS)/c4dos/fs/cc.f   $(C4DOS_FC_DISK)/cc.f
 	@printf 'int main(){ printf("built by c4fc, inside the machine\\n"); return 0; }\n' > $(C4DOS_FC_DISK)/hello.c

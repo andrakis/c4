@@ -1,7 +1,7 @@
 // bbsave -- write the C4DOS RAM disk onto another drive.
 //
-//   RUN bbsave.c4r 1:          every RAM-disk file onto drive 1
-//   RUN bbsave.c4r 1: c4ke.c4r init.c4r     just those
+//   RUN bbsave.c4r B:          every RAM-disk file onto drive 1
+//   RUN bbsave.c4r B: c4ke.c4r init.c4r     just those
 //
 // This is the thing that makes the climb survive a power cut. C4DOS
 // builds a kernel into its RAM disk and the RAM disk dies with the

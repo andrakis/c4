@@ -7,12 +7,12 @@
 #
 #   BIOS boots drive 0 (C4DOS, the shipped floppy)
 #     LADDER                  builds a compiler, a preprocessor, a kernel
-#     install 1:              writes the C4KE medium, from install.lst
+#     install B:              writes the C4KE medium, from install.lst
 #     reboot 0                floppy OUT, restart
 #   BIOS boots drive 1 (C4KE -- the kernel C4DOS compiled)
 #     tar x c4ix-src.tar      the sources the medium was carrying
 #     b4ke -f c4ix.b4k        twelve modules and a link
-#     kinstall 2:             writes the C4IX medium, from c4ix.lst
+#     kinstall C:             writes the C4IX medium, from c4ix.lst
 #     reboot 1                that medium OUT, restart
 #   BIOS boots drive 2 (C4IX -- the kernel C4KE compiled)
 #
@@ -97,7 +97,7 @@ want () {                           # want <what> <pattern>
 await "BIOS boots drive 0" "bios: drive 0 has c4dos32.c4r" 60 || exit 1
 run "C4DOS built a kernel"       'A>' 'LADDER' \
     "Type RUN dosload.c4r c4ke.c4r"  600 || exit 1
-run "installed the C4KE medium"  'A>' 'RUN install.c4r 1:' \
+run "installed the C4KE medium"  'A>' 'RUN install.c4r B:' \
     "install: eject drive 0"         300 || exit 1
 want "install summary" "^install: [0-9]* files, [0-9]* bytes onto drive 1, boot.cfg -> c4ke.c4r"
 idle 'A>' 60 || exit 1
@@ -112,7 +112,7 @@ run "unpacked C4IX's source" 'c4sh>' 'tar x c4ix-src.tar' \
 run "C4KE built C4IX"        'c4sh>' 'b4ke -f c4ix.b4k' \
     "b4ke: C4IX built"           900 || exit 1
 want "b4ke had no failures" "b4ke: 13 ran, 0 skipped, 0 failed"
-run "installed the C4IX medium" 'c4sh>' 'kinstall 2:' \
+run "installed the C4IX medium" 'c4sh>' 'kinstall C:' \
     "kinstall: eject drive 1"    300 || exit 1
 want "kinstall summary" "^kinstall: [0-9]* files, [0-9]* bytes onto drive 2, boot.cfg -> c4ix.c4r"
 idle 'c4sh>' 60 || exit 1

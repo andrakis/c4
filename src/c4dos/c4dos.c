@@ -117,7 +117,37 @@ int g_inlen; int g_inpos; // many lines (a pipe) or one (a cooked tty),
 int g_echo;              // batch ECHO state
 int g_clock;             // CONFIG.SYS said DEVICE=CLOCK.SYS
 int g_conflush;          // CONFIG.SYS said DEVICE=CONSOLE.SYS FLUSH
+int g_drives;            // CONFIG.SYS said DEVICE=DRIVES.SYS
+int g_drive;             // the drive the prompt is on, 0 = A:
 int g_quit;              // EXIT was typed
+
+// ---- drives ---------------------------------------------------------
+//
+// BOARD ONLY, which is why it is gated. These are c4bb's memory-mapped
+// device registers (include/c4bb.h has the full set); on the board they
+// are ordinary loads and stores and cost no opcode above EXIT, and
+// under native c4m there is no device window there at all -- the read
+// would be a wild access rather than a zero. So DOS does not probe: it
+// is TOLD, by DEVICE=DRIVES.SYS, exactly as it is told about the clock
+// and the console. Without that line C4DOS behaves as it always has,
+// one drive called A: and no way to leave it.
+enum { BB_DRIVE = 0x13c, BB_COUNT = 0x188 };
+
+int drv_count ()       { if (!g_drives) return 1; return *(int *)BB_COUNT; }
+void drv_select (int n) { if (g_drives) *(int *)BB_DRIVE = n; }
+
+// 'A' + n, and back. The machine is happy with either spelling -- its
+// resolveDrive takes 0: and A: alike -- but a person should only ever
+// meet one, and the prompt has said A> since the first boot.
+int drv_letter (int n) { return 'A' + n; }
+int drv_num (char *s) {
+  int c;
+  if (!s[0] || s[1] != ':' || s[2]) return 0 - 1;
+  c = s[0];
+  if (c >= 'A' && c <= 'Z') return c - 'A';
+  if (c >= 'a' && c <= 'z') return c - 'a';
+  return 0 - 1;
+}
 
 // loaded-image registers (the plain-c4 "struct")
 int *img_code; char *img_data; int img_entry; int *img_cons; int img_ncons;
@@ -976,7 +1006,7 @@ char *prog_path (char *name) {
 }
 
 int dispatch (int argc) {
-  char *cmd, *path; int r;
+  char *cmd, *path; int r, i;
   if (!argc) return 0;
   cmd = g_argv[0];
   if (cieq(cmd, "REM")) return 0;
@@ -1003,6 +1033,23 @@ int dispatch (int argc) {
       return 1;
     }
     return run_program(path, argc - 1, g_argv + 1);
+  }
+  // A bare "B:" changes drive, the way it always has in a DOS. Checked
+  // before the program-name fall-through so it can never be mistaken
+  // for a file, and it is the only command whose whole spelling is its
+  // argument.
+  if ((i = drv_num(cmd)) >= 0) {
+    if (!g_drives) {
+      printf("no drive device - add DEVICE=DRIVES.SYS to CONFIG.SYS\n");
+      return 1;
+    }
+    if (i >= drv_count()) {
+      printf("no drive %c: - this machine has %d\n", drv_letter(i), drv_count());
+      return 1;
+    }
+    g_drive = i;
+    drv_select(i);
+    return 0;
   }
   if (is_program_name(cmd)) return run_program(cmd, argc, g_argv);
   // Not a builtin and no extension typed: try it as a program name.
@@ -1047,7 +1094,7 @@ int run_batch (char *path, int depth) {
     }
     total = 0;
     while (total < n) { g_line[total] = p[total]; ++total; }
-    if (show && g_line[0]) printf("A>%s\n", g_line);
+    if (show && g_line[0]) printf("%c>%s\n", drv_letter(g_drive), g_line);
     dispatch(parse_line());
     if (g_batreq) {
       g_batreq = 0;
@@ -1121,6 +1168,10 @@ int read_config () {
       } else {
         printf("DEVICE=CONSOLE.SYS: no mode given, prompt stays on its own line\n");
       }
+    }
+    if (starts_ci(p, "DEVICE=DRIVES.SYS")) {
+      g_drives = 1;
+      printf("drive device installed, %d drive(s)\n", drv_count());
     }
     // FILES=, SHELL=, other DEVICE= lines: reserved, ignored
     p = *e ? e + 1 : e;
@@ -1207,7 +1258,7 @@ int main (int argc, char **argv) {
     // A console that cannot flush a partial line needs the newline, or
     // the prompt is invisible until the next one. DEVICE=CONSOLE.SYS
     // FLUSH says this one can, and keeps the classic look.
-    printf(g_conflush ? "A>" : "A>\n");
+    printf(g_conflush ? "%c>" : "%c>\n", drv_letter(g_drive));
     if (!get_line()) g_quit = 1;         // EOF: the console went away
     else {
       dispatch(parse_line());

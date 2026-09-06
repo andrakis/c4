@@ -102,7 +102,7 @@ HOMEWARD question, not a c4bb one; the flag is all the machine owes it.
       (0x178–0x184), `include/c4bb.h` for guests, and `cli.js -w dir`
       writing through to a host directory. A file becomes real on
       close, in one piece.
-- [x] **M3** C4DOS can save: `RUN bbsave.c4r 1:` writes every RAM-disk
+- [x] **M3** C4DOS can save: `RUN bbsave.c4r B:` writes every RAM-disk
       file onto drive 1 (`src/c4dos/bbsave.c`, a transient — C4DOS
       itself is untouched, the same rung dostar and dosload sit on).
 - [x] **M4** C4KE can save: `save 1:` does the same for the ramfs
@@ -140,7 +140,7 @@ HOMEWARD question, not a c4bb one; the flag is all the machine owes it.
 `make test-c4bb-storage` (`src/c4bb/tests/test-storage.sh`):
 
 - two drives visible, drive 0 read as before;
-- `dostar x tools-src.tar` then `RUN bbsave.c4r 1:` → five files onto
+- `dostar x tools-src.tar` then `RUN bbsave.c4r B:` → five files onto
   drive 1, each `cmp`-identical to the source file that went in;
 - **a second machine, started later, with drive 1 as its drive 0, reads
   them back** — which is the whole point;
@@ -880,7 +880,7 @@ the same instruction.
     bios: booting c4dos32.c4r
     A>LADDER
     ... c4cc: wrote 200005 bytes to ram:c4ke.c4r
-    A>RUN install.c4r 1:
+    A>RUN install.c4r B:
     install: reading install.lst
       c4ke.c4r  200005
       init.c4r  61911
@@ -922,7 +922,7 @@ the transient.
 **Two passes, and the second one is the point.** Nothing is written
 until every required name has been found:
 
-    A>RUN install.c4r 1:          (before LADDER)
+    A>RUN install.c4r B:          (before LADDER)
     install: reading install.lst
       MISSING  c4ke.c4r
     install: 1 file(s) not found -- nothing written
@@ -966,7 +966,7 @@ in one and not the other shows up there.
 
     bios: drive 0 has c4dos32.c4r          <- the shipped floppy
     A>LADDER
-    A>RUN install.c4r 1:
+    A>RUN install.c4r B:
     install: 60 files, 4101902 bytes onto drive 1, boot.cfg -> c4ke.c4r
     A>RUN reboot.c4r 0
 
@@ -976,7 +976,7 @@ in one and not the other shows up there.
     c4sh> b4ke -f c4ix.b4k
     b4ke: C4IX built
     b4ke: 13 ran, 0 skipped, 0 failed
-    c4sh> kinstall 2:
+    c4sh> kinstall C:
     kinstall: 21 files, 822372 bytes onto drive 2, boot.cfg -> c4ix.c4r
     c4sh> reboot 1
 

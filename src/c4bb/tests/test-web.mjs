@@ -241,7 +241,7 @@ try {
   await page.click('#terminal');
   await page.keyboard.type('RUN dostar.c4r x tools-src.tar\n');
   await waitTerm('dostar: extracted');
-  await page.keyboard.type('RUN bbsave.c4r 1:\n');
+  await page.keyboard.type('RUN bbsave.c4r B:\n');
   await waitTerm('bbsave:');
   ok('the machine wrote to the blank medium', /bbsave: [1-9][0-9]* files/.test(await term()),
      (await term()).split('\n').filter(l => l.startsWith('bbsave')).join(' '));

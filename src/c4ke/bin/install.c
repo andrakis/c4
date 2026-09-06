@@ -1,7 +1,7 @@
 // kinstall -- write a bootable medium, from inside C4KE.
 //
-//   kinstall 2:              read c4ix.lst, write drive 2
-//   kinstall 2: other.lst    a different manifest
+//   kinstall C:              read c4ix.lst, write drive 2
+//   kinstall C: other.lst    a different manifest
 //
 // One rung up from src/c4dos/install.c and the same job: b4ke builds
 // C4IX into the ramfs, the ramfs dies with the kernel that owns it, and
@@ -62,7 +62,7 @@ static int drivenum (char *s) {
 // because reads have to keep coming from the drive we booted off while
 // the writes go somewhere else.
 static char *at_dest (char *name) {
-	dst[0] = '0' + dest;
+	dst[0] = 'A' + dest;   // one spelling, everywhere the player can see
 	dst[1] = ':';
 	xcopy(dst + 2, name);
 	return dst;
@@ -185,7 +185,7 @@ int main (int argc, char **argv) {
 	if (argc > 2) lst = argv[2];
 
 	if ((dest = drivenum(argv[1])) < 0) {
-		printf("kinstall: '%s' is not a drive -- try 2: or C:\n", argv[1]);
+		printf("kinstall: '%s' is not a drive -- try C:\n", argv[1]);
 		return 1;
 	}
 	if (dest > 9) {

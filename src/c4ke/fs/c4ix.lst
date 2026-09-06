@@ -1,6 +1,6 @@
 # c4ix.lst -- what makes a bootable C4IX medium.
 #
-# Read by `kinstall 2:` (src/c4ke/bin/install.c) from inside C4KE, after
+# Read by `kinstall C:` (src/c4ke/bin/install.c) from inside C4KE, after
 # `tar x c4ix-src.tar` and `b4ke -f c4ix.b4k` have built the kernel.
 #
 # Each name is fetched from wherever it is: the ramfs first -- which is

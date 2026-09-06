@@ -166,7 +166,18 @@ run-c4-alt: pre
 	$(C4) $(C4M).c -a $(RUN_C4KE)
 run-c4-alt-vg: pre
 	valgrind $(C4) $(C4M).c -a $(RUN_C4KE)
-test: pre
+# `make test` now ASSERTS before it demonstrates.
+#
+# test-c4m-mem and test-c4l are real assertions with expected output,
+# and both were PHONY targets in no aggregate whatsoever -- nothing ran
+# them. test-c4m-mem's own comment calls its third line "the leg that
+# matters most": `./c4 c4m.c load-c4r.c -- ...`, c4m interpreted by an
+# UNMODIFIED c4, which is the property this whole project is about. It
+# broke at fb6bf7a and stayed broken through a session and a half,
+# because the test that would have said so was never invoked.
+#
+# A test nobody runs is a comment that costs a build step.
+test: pre test-c4m-mem test-c4l
 	$(C4M) $(RUN_C4KE) innerbench
 test-alt: pre
 	$(C4M) -a $(RUN_C4KE) innerbench

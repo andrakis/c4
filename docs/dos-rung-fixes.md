@@ -182,6 +182,7 @@ and in the kernel.
 | F17 | C4KE dispatched a custom opcode by indexing `custom_opcodes` with **no bounds check**, then jumping to whatever word it read | `src/c4ke/c4ke.c` |
 | F18 | the board's line discipline released **more than one line** per canonical read, so every command after the first in a burst was thrown away | `src/c4bb/sim/devices.js` |
 | -- | F13's real (different) cost: the disk's c4m silently lost `u0.h`, `c4.h` and `c4m_float.h` | `src/c4bb/tests/build-images.sh` |
+| F19 | `./c4 c4m.c` broken since F7/F11, and the test that pins it ran in no suite | `c4m.c`, `Makefile` |
 
 ### F13 is not the regression — measured both ways
 
@@ -351,6 +352,43 @@ cleanly in 350ms.
 
 **Why no test caught it:** every C4KE leg in `test-c4bb.sh` types exactly one
 command and then `\q`. There was no two-command test to fail.
+
+### F19 — `./c4 c4m.c` had stopped working, and the pin for it was never run
+
+The DOS rung's own doctrine, turned on itself. `c4m.c` is written so that a
+compiler with no preprocessor still produces a working program — it skips the
+`#` lines and compiles what is between them. F7 and F11 put
+
+    if (dos_can_time()) return dos_time();
+    if (dos_readable()) return dos_fopen(path);
+
+inside `#if C4M_DOS` blocks, where plain `c4` compiles them and then cannot find
+the functions: they live in `include/c4dos.h`, and **plain c4 takes ONE source
+file**, so the header cannot be handed to it the way `c4cc` takes it. Result:
+
+    1166: bad function call
+
+An `#ifdef` may only ever add something HARMLESS, and a call to a function that
+does not exist is not harmless. So `c4m.c` now defines the six DOS entry points
+itself — inert, returning "there is no DOS" — under `#ifndef C4M_DOS`, which
+every DOS build drops because every DOS build has a preprocessor and passes
+`-DC4M_DOS=1`. Verified both ways: exactly one definition of `dos_readable` in
+each build. `./c4 c4m.c src/tests/hello.c` prints `yello` and
+`exit(0) cycle = 123155` — the identical cycle count to `55d26d5`, the last
+commit before it broke.
+
+**The part worth keeping is why nobody noticed.** There WAS a test.
+`test-c4m-mem`'s third line is `./c4 c4m.c load-c4r.c -- ...` and its own
+comment calls it *"the leg that matters most... it proves the allocator is
+written in the plain c4 subset"*. It is `PHONY` and it was in **no aggregate
+target**. Neither was `test-c4l`. Nothing invoked either of them, so the leg
+broke at `fb6bf7a` and stayed broken through a session and a half of work that
+ran `make test` constantly.
+
+`make test` now depends on both, and still finishes in under ten seconds.
+Checked by reintroducing the fault: with the fallbacks removed, `make test`
+fails at `test-c4m-mem`. A test nobody runs is a comment that costs a build
+step.
 
 ### Method note: an instrument, validated first
 

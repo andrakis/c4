@@ -194,6 +194,40 @@
 #endif
 #endif
 
+// The C4DOS API, when there is no C4DOS and no preprocessor to say so.
+//
+// PLAIN C4 COMPILES THE BODY OF EVERY #if. It skips the '#' lines and
+// keeps what is between them, which is the property this whole file is
+// written around -- see c4_time() below. It is also why `./c4 c4m.c`
+// stopped working when the DOS rung landed: the `#if C4M_DOS` blocks
+// call dos_can_time(), dos_readable() and friends, those live in
+// include/c4dos.h, and plain c4 takes ONE source file, so the header
+// cannot be handed to it the way c4cc takes it. The result was
+// `bad function call` at compile time, in the leg the whole project is
+// about -- c4m running under an unmodified c4.
+//
+// An `#ifdef` may only ever ADD SOMETHING HARMLESS. A call to a
+// function that does not exist is not harmless, so here is the
+// function. Inert: it says there is no DOS, the caller falls through to
+// the ordinary path, and the DOS build never sees these because it has
+// a preprocessor and passes -DC4M_DOS=1.
+//
+// If a build ever prepends c4dos.h WITHOUT that flag, these collide
+// with the real ones. Plain c4 refuses that outright ("duplicate
+// global definition"); c4cc was tried and took it without a word. So
+// what keeps them apart is the BUILD RULES, not the compiler: every
+// build that prepends c4dos.h passes -DC4M_DOS=1 -- the Makefile's two
+// c4m-dos rules and src/c4bb/tests/build-images.sh, all three of which
+// go through ./cpp for exactly this reason.
+#ifndef C4M_DOS
+int dos_readable () { return 0; }
+int dos_can_time () { return 0; }
+int dos_time     () { return 0; }
+int dos_fopen  (char *path)                { return 0 - 1; }
+int dos_fread  (int fd, char *buf, int len) { return 0 - 1; }
+int dos_fclose (int fd)                    { return 0 - 1; }
+#endif
+
 // Configurables
 enum {
 	// Pool size, in bytes

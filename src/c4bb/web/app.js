@@ -83,6 +83,15 @@ let mode = 'pause';          // pause | run | turbo
 let finished = false;
 
 const terminal = new Terminal($('terminal'));
+
+// Arena size in MB: ?mem=N, clamped to something a browser can actually
+// allocate. Read fresh each time so the board label and the arena can
+// never disagree.
+function arenaMb() {
+  const v = parseInt(new URLSearchParams(location.search).get('mem'), 10);
+  if (!isFinite(v) || v < 1) return 128;
+  return Math.min(2048, v);
+}
 const regsPanel = new RegsPanel($('regs'));
 let ucodePanel;
 
@@ -95,6 +104,15 @@ async function fetchBin(url) {
 async function init() {
   ucSource = await (await fetch('../hw/microcode.uc')).text();
   boardDef = parseBoard(await (await fetch('../hw/board.hwd')).text());
+  // The RAM module's label is written in board.hwd, so it said "32MB
+  // arena" long after the arena became 128 -- and a label that lies
+  // about the size is worse than no label, because it is exactly what
+  // you read when you are wondering whether you ran out. Say the real
+  // number, whatever ?mem= made it.
+  for (const m of boardDef.modules || [])
+    if (m.kind === 'ram') m.label = `RAM - ${arenaMb()}MB arena`;
+  // Also where a script can read it without parsing the canvas.
+  $('board').dataset.arenaMb = String(arenaMb());
   fwBytes = await fetchBin(`../fw/${DEFAULT_FW}`);
   ucode = assemble(ucSource);
   renderer = new BoardRenderer($('board'), boardDef);
@@ -257,7 +275,12 @@ async function build(prog, drives) {
   // compiler runs in one session accumulate. 128 MB is what the whole
   // climb needs with c4sc at a 200,000-cell arena, measured; the
   // largest single module fits in 48.
-  const arena = new Arena(128 * 1024 * 1024);
+  //
+  // ?mem=N overrides it, the way cli.js takes -m. Worth having for the
+  // same reason the CLI flag is: "does this need more memory than it
+  // has" is a question you answer by changing the memory, and until now
+  // the browser was the one machine where you could not.
+  const arena = new Arena(arenaMb() * 1024 * 1024);
   const dev = new Devices(arena, {
     drives,
     onByte: b => terminal.write(b),

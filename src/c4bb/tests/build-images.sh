@@ -124,7 +124,14 @@ rm -f .c4bb_vfsload_pp.c
 # self-contained, so the unadorned image is the one that runs on every
 # rung -- the same call the Makefile makes for c4-dos32.c4r.
 $CC -o $DISK/c4.c4r c4.c > /dev/null
-$PREPROC c4m.c 2>/dev/null | $CC -o $DISK/c4m.c4r - > /dev/null
+# c4m gets include/c4dos.h prepended, exactly as the Makefile's
+# c4m-dos32.c4r does and as the climb disk already copies. Going through
+# $PREPROC instead would honour the #if and compile the DOS branch OUT,
+# and THIS DISK IS BOOTED BY C4DOS -- so `c4m load-c4r.c -- c4ke` could
+# not see a kernel that LADDER had just built into the RAM disk, and c4m
+# had no clock (docs/dos-rung-fixes.md F7, F11). Raw c4cc skips # lines,
+# which is what switches the branch on.
+$CC -o $DISK/c4m.c4r include/c4dos.h c4m.c > /dev/null
 # include/c4dos.h rides along as a source file (c4cc has no
 # preprocessor): c4cc reads its input through the DOS API when it is
 # running as a transient, so a source another tool just wrote to the

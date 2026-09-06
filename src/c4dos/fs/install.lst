@@ -92,8 +92,15 @@ c4ix-spin.c4r
 c4ix-fmt.c4r
 
 # --- innerbench's inputs, by the exact names it opens them with -------
+# innerbench's DEFAULT mode is ONLY_C4M|ONLY_DIRECT, which invokes
+#   c4m load-c4r.c src/c4ke/c4ke.c -- -v 0 bench
+# so the kernel source is wanted under that exact path, slashes and all.
+# It was missing here, so innerbench worked on the directory-backed
+# disks (which have src/c4ke/c4ke.c) and failed on any medium install
+# wrote -- the one a player actually boots.
 load-c4r.c
 c4m.c
+src/c4ke/c4ke.c
 
 # --- optional: only there if this session got that far -----------------
 ?c4ke0.c4r

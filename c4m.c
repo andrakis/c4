@@ -1633,6 +1633,96 @@ void mpg_slow (int addr, int len, int need, char *what, int *pcv, int *bpv, int 
 	}
 	mpg_fault(addr, len, need, what, pcv, bpv, spv);
 }
+
+// M2: a whole BUFFER, not its first byte.
+//
+// This is the half no per-instruction check can ever do. The overrun in
+// read(fd, buf, 262144) into a 4 KB buffer happens inside the HOST's
+// read(), so no LI or SI ever executes for it and the guard would never
+// see a thing -- and that is the vfsload bug exactly
+// (docs/dos-rung-fixes.md F12). Checking [buf, buf+len) before handing
+// the pointer to the host is the only place it can be caught.
+//
+// Rare against the dispatch loop -- one call per syscall, not one per
+// instruction -- so this takes the slow path unconditionally rather
+// than growing another cache.
+void mpg_range (int addr, int len, int need, char *what, int *pcv, int *bpv, int *spv) {
+	if (!mpg_armed) return;
+	if (len <= 0) return;
+	mpg_slow(addr, len, need, what, pcv, bpv, spv);
+}
+
+// A NUL-terminated string, which is a range whose length nobody knows
+// until they have already read it. Walk to the end of the owning region
+// looking for the terminator: if there is none, the host's strlen would
+// have kept going into whatever came next, and "an unterminated buffer,
+// in the one function that had not been read" is the literal root cause
+// of F12.
+void mpg_string (int addr, char *what, int *pcv, int *bpv, int *spv) {
+	int p;
+	int *r;
+
+	if (!mpg_armed) return;
+	r = mpg_find(addr, 1);
+	if (!r) { mpg_fault(addr, 1, MPG_R, what, pcv, bpv, spv); return; }
+	if (!(r[REGION_PERM] & MPG_R)) { mpg_fault(addr, 1, MPG_R, what, pcv, bpv, spv); return; }
+	p = addr;
+	while (p < r[REGION_HI]) {
+		if (!*(char *)p) return;
+		++p;
+	}
+	printf("c4mpg: %s at %p runs to the end of '%s' with no terminator\n",
+	       what, (int *)addr, (char *)r[REGION_NAME]);
+	mpg_fault(r[REGION_HI], 1, MPG_R, "read past the end of an unterminated string", pcv, bpv, spv);
+}
+#endif
+
+#ifdef C4MPG
+// PRTF, all the way through: walk the format and check each %s
+// argument as a string.
+//
+// The first cut checked only the format string itself, on the grounds
+// that "c4m cannot know which of the arguments a %s will reach for".
+// It can. The format is right there, the arguments are positional, and
+// mpg_unterminated.c walked straight past a guard that did not read it
+// -- printing eight bytes and whatever followed them, which is F12's
+// root cause verbatim ("an unterminated buffer, in the one function
+// that had not been read").
+//
+// Arguments are t[-2], t[-3] ... in order, matching the call below.
+void mpg_printf (int fmt, int *t, int argn, int *pcv, int *bpv, int *spv) {
+	char *f;
+	int   k, c;
+
+	if (!mpg_armed) return;
+	mpg_string(fmt, "printf() format", pcv, bpv, spv);
+	f = (char *)fmt;
+	k = 2;                              // t[-2] is the first argument
+	while (*f) {
+		if (*f == '%') {
+			++f;
+			if (*f == '%') { ++f; }     // "%%" is a literal, no argument
+			else {
+				// flags, width, precision -- and '*' takes an argument
+				// of its own, which has to be counted or every %s after
+				// it lines up with the wrong pointer.
+				while (*f == '-' || *f == '+' || *f == ' ' || *f == '#' || *f == '0') ++f;
+				while (*f == '*' || (*f >= '0' && *f <= '9')) { if (*f == '*') ++k; ++f; }
+				if (*f == '.') {
+					++f;
+					while (*f == '*' || (*f >= '0' && *f <= '9')) { if (*f == '*') ++k; ++f; }
+				}
+				while (*f == 'l' || *f == 'h' || *f == 'z') ++f;
+				c = *f;
+				if (c) ++f;
+				if (k <= argn) {
+					if (c == 's') mpg_string(t[0 - k], "printf() %s argument", pcv, bpv, spv);
+					++k;
+				}
+			}
+		} else ++f;
+	}
+}
 #endif
 
 int c4_malloc (int n) {
@@ -2397,8 +2487,12 @@ int c4m_main(int argc, char **argv)
     else if (i == MOD) a = *sp++ %  a;
 	// SYSCALL functions
     else if (i == OPEN) {
-		if (mode == MODE_UNPROTECTED)
+		if (mode == MODE_UNPROTECTED) {
+#ifdef C4MPG
+            mpg_string(sp[1], "open() path", pc, bp, sp);
+#endif
             a = c4m_open((char *)sp[1], *sp);
+        }
 		else {
 			trap(TRAP_PM_VIOLATION, OPEN, trap_handler, &sp, &bp, &pc, a, mode);
 			cycle_interrupt_interval = 0;
@@ -2406,8 +2500,16 @@ int c4m_main(int argc, char **argv)
 		}
 	}
     else if (i == READ) {
-		if (mode == MODE_UNPROTECTED)
-        a = c4m_read(sp[2], (char *)sp[1], *sp);
+		if (mode == MODE_UNPROTECTED) {
+#ifdef C4MPG
+            // THE ONE THAT MATTERS. read() into a buffer smaller than
+            // the count is docs/dos-rung-fixes.md F12, and the overrun
+            // happens inside the host's read() where no guest
+            // instruction ever executes.
+            mpg_range(sp[1], *sp, MPG_W, "read() into", pc, bp, sp);
+#endif
+            a = c4m_read(sp[2], (char *)sp[1], *sp);
+        }
 		else {
 			trap(TRAP_PM_VIOLATION, READ, trap_handler, &sp, &bp, &pc, a, mode);
 			cycle_interrupt_interval = 0;
@@ -2433,8 +2535,12 @@ int c4m_main(int argc, char **argv)
 		}
 	}
 	else if (i == PUTS) {
-		if (mode == MODE_UNPROTECTED)
+		if (mode == MODE_UNPROTECTED) {
+#ifdef C4MPG
+            mpg_string(*sp, "puts() string", pc, bp, sp);
+#endif
             a = do_puts((char *)*sp);
+        }
 		else {
 			trap(TRAP_PM_VIOLATION, PUTS, trap_handler, &sp, &bp, &pc, a, mode);
 			cycle_interrupt_interval = 0;
@@ -2445,6 +2551,9 @@ int c4m_main(int argc, char **argv)
 		if (mode == MODE_UNPROTECTED) {
 			r = pc[1];
 			t = sp + r;
+#ifdef C4MPG
+			mpg_printf(t[-1], t, r, pc, bp, sp);
+#endif
 			// Fix potential access violation by not pushing arguments not given
 			//if (r == 1) a = printf((char*)t[-1]);
 			//else if (r == 2) a = printf((char*)t[-1], t[-2]);
@@ -2488,9 +2597,26 @@ int c4m_main(int argc, char **argv)
 			mode = MODE_UNPROTECTED;
 		}
 	}
-    else if (i == MSET) a = (int)memset((char *)sp[2], sp[1], *sp);
-    else if (i == MCMP) a = memcmp((char *)sp[2], (char *)sp[1], *sp);
-    else if (i == MCPY) a = (int)c4_memcpy((void*)sp[2], (void*)sp[1], *sp);
+    else if (i == MSET) {
+#ifdef C4MPG
+		mpg_range(sp[2], *sp, MPG_W, "memset() over", pc, bp, sp);
+#endif
+		a = (int)memset((char *)sp[2], sp[1], *sp);
+	}
+    else if (i == MCMP) {
+#ifdef C4MPG
+		mpg_range(sp[2], *sp, MPG_R, "memcmp() read of", pc, bp, sp);
+		mpg_range(sp[1], *sp, MPG_R, "memcmp() read of", pc, bp, sp);
+#endif
+		a = memcmp((char *)sp[2], (char *)sp[1], *sp);
+	}
+    else if (i == MCPY) {
+#ifdef C4MPG
+		mpg_range(sp[2], *sp, MPG_W, "memcpy() into", pc, bp, sp);
+		mpg_range(sp[1], *sp, MPG_R, "memcpy() from", pc, bp, sp);
+#endif
+		a = (int)c4_memcpy((void*)sp[2], (void*)sp[1], *sp);
+	}
     else if (i == STRC) {
 //		if (mode == MODE_UNPROTECTED) {
 			print_stacktrace(pc, idmain, idmax, bp, sp);
@@ -2714,7 +2840,7 @@ int c4m_main(int argc, char **argv)
 
 #ifdef C4MPG
   // What the guard cost, for anyone measuring it. The hit rate is the
-  // whole performance story: a miss is a binary search, a hit is three
+  // whole performance story: a miss is a binary search, a hit is two
   // comparisons in the dispatch loop, and C4 programs touch their
   // locals and one array (docs/c4mpg-design.md).
   if (verb)

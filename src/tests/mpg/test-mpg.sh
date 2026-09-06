@@ -51,6 +51,12 @@ want mpg_underrun 11 "outside every region" "nearest above: 'malloc'" \
                      "8 bytes higher" "int main()"
 want mpg_freed    11 "outside every region" "THIS WAS A REGION" "Use after free" \
                      "int main()"
+# M2: the buffer, not its first byte. These two are the vfsload bug
+# (docs/dos-rung-fixes.md F12) in both of its halves, and neither is
+# visible to a per-instruction check -- one overruns inside the host's
+# read(), the other inside the host's printf().
+want mpg_syscall      11 "read() into" "runs 65472 bytes past the end" "int main()"
+want mpg_unterminated 11 "printf() %s argument" "no terminator" "int main()"
 
 # ---- known good: identical to c4m, to the byte ----------------------
 # Programs that print an address of their own are excluded by name, not

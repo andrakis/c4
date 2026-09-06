@@ -108,6 +108,68 @@ EXIT (the invoke stub is base-c4):
   it at the other. Fractional rates need an accumulator. The slider also shows
   the rate it is asking for, because "35" tells you nothing.
 
+## Round three (2026-09-06)
+
+| # | What | Where |
+|---|---|---|
+| F13 | the shared disk's `c4m.c4r` was built through `gcc -E`, compiling the DOS branch OUT | `src/c4bb/tests/build-images.sh` |
+| F14 | `install.lst` never carried `src/c4ke/c4ke.c`, so innerbench worked on a directory disk and failed on a medium | `src/c4dos/fs/install.lst` |
+| F15 | no way to change the browser's arena, and the RAM label said 32MB while the arena was 128 | `src/c4bb/web/app.js` |
+| F16 | `A>` prompt but `install 1:` -- two vocabularies for one idea | `src/c4dos/c4dos.c` and 16 other sites |
+| -- | THE MEMORY CENSUS: the ladder's memory axis, never measured | `src/c4bb/tools/memcensus.mjs` |
+
+**F13 is the one worth remembering.** F7 gave c4m the DOS API behind `#if C4M_DOS`,
+which raw `c4cc` switches ON by skipping `#` lines. `build-images.sh` builds the shared
+disk's c4m through `$PREPROC` (gcc -E), which HONOURS the `#if` and compiles the branch
+out -- so the fix worked on the build floppies I tested and not on the medium a player
+boots. Two builds of the same source, one of them silently without the feature. The
+climb disk already copied `c4m-dos32.c4r`; the shared disk now builds the same way.
+
+**F16 turned out to be a naming problem, not a machinery one.** `Devices.resolveDrive`
+has accepted `0:` and `A:` alike since M5 -- its own comment says *"C4DOS already thinks
+in drive letters"* -- so cross-drive prefixes needed no code in `dos_open` at all, and
+`install`'s `drivenum()` already took letters. What was missing was C4DOS knowing which
+drive it was on. It does now, behind `DEVICE=DRIVES.SYS` (announced, never probed: those
+registers are a device window on the board and ordinary memory under native c4m).
+
+### The census, and two bugs in it
+
+`opscan.mjs` measured the opcode axis; nothing measured memory, so nine `-m` values and
+`C4IX_CELLS` were numbers arrived at by trying them until they stopped failing. Modelled
+on Homeward's `scripts/opcensus.ts`. Measured, at last:
+
+| image | data | machine stack | note |
+|---|---|---|---|
+| `c4ke32.c4r` | 5,931K | 420B | capped at 800M cycles |
+| `c4ix32.c4r` | 17,002K | 280B | capped at 800M cycles |
+| `hello32.c4r` | 28K | 228B | returned |
+
+The tiny stack figures are correct: C4KE gives each task a `kmalloc`'d stack, so task
+depth lands in **data**, which is the column that sizes `-m`. "capped" is the normal
+outcome for a kernel that boots to a shell and waits.
+
+Both of my own bugs in it are worth naming, because a measuring tool that is wrong is
+worse than none: it passed `{diskDir}` to `Devices`, which wants a **drives array** and
+ignored it silently, so every image ran with no disk and "returned" in a few thousand
+cycles reporting an appetite of nothing; and the formatter rounded sub-kilobyte readings
+to `0K`, which made a correct 236-byte measurement look like a dead instrument. Neither
+threw. Both produced a confident table.
+
+### Arena sizes, for the record
+
+Three different defaults, and I had them wrong in one direction while the user had them
+wrong in the other:
+
+- **c4bb/web: 128 MB**, and was before any of this work. What said 32 was the label in
+  `board.hwd`, stale since the arena was raised. Now generated from the real size.
+- **cli.js: 32 MB.**
+- **Homeward's oracle: 32 MB** (`opts.arenaBytes ?? 32 * 1024 * 1024`).
+
+And a finding that outlives this tracker: **Homeward's vendored c4bb is 21 commits
+behind** (`// ported from c4/src/c4bb/sim/machine.js @ af9f0af`), with 260 lines
+differing in `devices.js`, 81 in `microcode.uc`, and no PIT at all. That file calls c4bb
+"the behavioral oracle". Nothing in this tracker has reached it.
+
 ## Decisions taken with the user
 
 - **Guard C4DOS on both sides only.** u0 programs refuse under C4DOS, C4IX programs

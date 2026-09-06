@@ -18,6 +18,8 @@ node_modules/
 /c4cc.o
 /c4m
 /c4m.o
+/c4mpg
+/c4mpg32
 /c4mp
 /c4mp.o
 .c4mp_*.c4o

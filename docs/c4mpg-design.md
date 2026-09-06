@@ -236,8 +236,7 @@ guard vaguer fails the build.
 - [x] **M1** Region table, checks on `LI`/`LC`/`SI`/`SC`, `C4I_C4MPG`
       reported. No C4KE. `mpg_overrun`, `mpg_underrun` and `mpg_freed` caught
       and NAMED; 73 corpus programs run identically under the guard.
-      `make test-mpg`. Built from `c4m.c -DC4MPG=1` rather than a forked file
-      — see below.
+      `make test-mpg`, which checks the fork against `c4m.c` first.
 - [x] **M2** Syscall buffer ranges (`READ`, `OPEN`, `PUTS`, `PRTF`, `MSET`,
       `MCMP`, `MCPY`), plus strings as ranges whose length nobody knows.
       `mpg_syscall` AND `mpg_unterminated` caught — both halves of the vfsload
@@ -250,21 +249,33 @@ guard vaguer fails the build.
       before making it.
 - [ ] **M5** Performance measured against the `test-c4bb` and boot-cycle
       baselines, recorded in this file whatever it says.
-- [ ] **M6** Aimed at the known bugs; `make test-mpg` pinned.
+- [ ] **M6** Aimed at the known bugs; `make test-mpg` pinned (the known-bad
+      messages and the fork check are pinned already).
 
 ## Deviations, and what M1 measured
 
-**Built from `c4m.c -DC4MPG=1`, not a forked `c4mpg.c`.** Still a separate
-binary and a separate `.c4r`, still never a runtime flag — which is what that
-rule is for; a guard you can leave on by accident quietly changes every
-measurement in the repo. But a 2,300-line fork of the VM rots, and this tree
-already carries that exact wound: Homeward's vendored c4bb is 21 commits behind
-while its own header calls it "the behavioral oracle". A guard that has drifted
-from the VM it guards reports on a program nobody runs. Every `#ifdef C4MPG`
-block only ADDS, which is the rule `c4m.c` was written to (see
-`docs/dos-rung-fixes.md` round four) — and it is safe to rely on now precisely
-because no build of `c4m.c` goes through raw `c4cc` any more; they all go
-through `./cpp`, which evaluates the `#ifdef` instead of skipping it.
+**A fork after all, and the argument against it was wrong in an instructive
+way.** The first cut built the guard from `c4m.c` with `-DC4MPG=1`, reasoning
+that a 2,300-line fork rots and that an `#ifdef` was safe because no BUILD of
+`c4m.c` went through raw `c4cc` any more. The second half of that was true and
+beside the point. **`c4m.c` is read as SOURCE at run time.** `innerbench`
+launches `c4 c4m.c load-c4r.c -- src/c4ke/c4ke.c`, plain `c4` has no
+preprocessor, and it compiles what is between the `#` lines it skips — so every
+`#ifdef C4MPG` would have been unconditional code in every nested interpreter on
+the board. A conditional is only a conditional to something that evaluates it,
+and the exposure was at run time, not build time.
+
+So `c4mpg.c` is a real fork. The rot argument was also real, so it is paid for
+rather than argued away: **`src/tests/mpg/check-fork.sh` strips every block
+between the `//>>> c4mpg` and `//<<< c4mpg` markers and demands byte-identity
+with `c4m.c`**, and `make test-mpg` runs it first. `c4m.c` is derived from
+`c4mpg.c` by exactly that strip, so the two are identical by construction, and
+a change to one that does not reach the other fails the build with the lines
+named. It caught its first drift — four stray blank lines — within a minute of
+being written.
+
+The one thing left behind in `c4m.c` is `C4I_C4MPG = 0x100` in the info enum: a
+bit assignment, no code, so nobody reuses it.
 
 **The code region is writable.** `MPG_R | MPG_W | MPG_X`, not `rx`. Self
 modifying code is a documented, load-bearing technique in this family:

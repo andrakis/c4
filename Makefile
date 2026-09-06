@@ -456,23 +456,31 @@ c4-dos.c4r: $(C4CC) c4.c
 # (docs/compiler-speed.md). A guard you can leave on by accident quietly
 # changes every measurement in the repo.
 #
-# It is built from c4m.c rather than a forked c4mpg.c, which is a
-# deviation from the design document and is written down there and in
-# c4m.c beside the code. The short version: a 2,300-line fork of the VM
-# rots, this tree already carries that exact wound (Homeward's vendored
-# c4bb, 21 commits behind, calling itself the oracle), and a guard that
-# has drifted from the VM it guards reports on a program nobody runs.
+# A FORK of c4m.c, not one source with an #ifdef. The first attempt was
+# the latter and it was wrong for a reason worth keeping: c4m.c is read
+# as SOURCE at run time, by a plain c4 that has no preprocessor and
+# compiles what is between the '#' lines it skips. innerbench does
+# exactly that -- `c4 c4m.c load-c4r.c -- src/c4ke/c4ke.c` -- so the
+# guard would have been unconditional code in every nested interpreter
+# on the board. Checking that no BUILD used raw c4cc was true and beside
+# the point; a conditional is only a conditional to something that
+# evaluates it.
+#
+# A fork rots, so it is pinned: src/tests/mpg/check-fork.sh strips the
+# marked blocks out of c4mpg.c and demands byte-identity with c4m.c.
+# make test-mpg runs it first.
 # Both halves of the guard: the known-bad set is caught AND named, and
 # the whole corpus still runs identically under it. The second half is
 # the one that keeps it usable -- docs/c4mpg-design.md.
 test-mpg: c4mpg c4m
+	bash src/tests/mpg/check-fork.sh
 	bash src/tests/mpg/test-mpg.sh
 
-c4mpg: c4m.c c4m_float.c
-	gcc $(NATIVE_CC_OPTS) -DC4MPG=1 c4m.c c4m_float.c -o $@ -lm
+c4mpg: c4mpg.c c4m_float.c
+	gcc $(NATIVE_CC_OPTS) c4mpg.c c4m_float.c -o $@ -lm
 
-c4mpg32: c4m.c c4m_float.c
-	gcc -m32 $(NATIVE_CC_OPTS) -DC4MPG=1 c4m.c c4m_float.c -o $@ -lm
+c4mpg32: c4mpg.c c4m_float.c
+	gcc -m32 $(NATIVE_CC_OPTS) c4mpg.c c4m_float.c -o $@ -lm
 
 c4m-dos.c4r: $(C4CC) cpp $(INCLUDE)/c4dos.h c4m.c
 	$(OURCPP) -DC4M_FREESTANDING=1 -DC4_ONLY=1 -DNOT_NATIVE=1 -DC4M_DOS=1 -DC4M_NO_U0=1 $(INCLUDE)/c4dos.h c4m.c > .c4m_dos_pp.c

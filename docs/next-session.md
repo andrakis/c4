@@ -59,6 +59,13 @@ announced. Five known-bad programs caught AND named
 loop against a budget of 2x. `docs/c4mpg-design.md` has the deviations and
 every measurement.
 
+`c4mpg.c` is a real fork of `c4m.c`, pinned by `src/tests/mpg/check-fork.sh`:
+strip the marked blocks and it must be `c4m.c` byte for byte. It is a fork
+because **`c4m.c` is read as SOURCE at run time** — `innerbench` runs
+`c4 c4m.c load-c4r.c -- src/c4ke/c4ke.c` and plain `c4` has no preprocessor, so
+an `#ifdef` there is unconditional code in every nested interpreter. Edit
+`c4m.c`, then re-run the check; it names the lines that have gone out of step.
+
 **M3 next:** the four opcodes (`MPG_DEFINE`/`MPG_DROP`/`MPG_CONTEXT`/
 `MPG_QUERY`), the narrowing-only rule, and `TRAP_MPG_VIOLATION` so a program
 can handle a violation instead of only halting on it. Then M4 (`c4ke_mpg.c`,
@@ -76,6 +83,20 @@ to somebody else. Ownership, not liveness.
 
 ## 3. Smaller things left undone
 
+- **`./c4 c4m.c` has been broken since `fb6bf7a`**, which is innerbench's
+  `ONLY_C4` mode (`-c`) and the `./c4 c4m.c` leg the Makefile documents at line
+  215. Bisected: `55d26d5` works, `fb6bf7a` (the DOS rung, F11) does not, and
+  it fails the same way today —
+
+      1166: bad function call
+
+  on `if (dos_can_time()) return dos_time();`. Plain `c4` skips `#` lines and
+  compiles the body, and it takes **one** source file, so `c4dos.h` cannot be
+  handed to it the way `c4cc` takes it. This is the same rule the c4mpg fork is
+  about: an `#ifdef` may only add something HARMLESS, and a call to a function
+  that does not exist is not harmless. It needs a decision — retire the `-c`
+  mode, or reach the DOS clock some way plain c4 can swallow (a variable
+  tested rather than a function called, the way `__c4dos_api` already is).
 - The Makefile's nine hand-picked `-m` values and `C4IX_CELLS` are still
   unmeasured guesses. `src/c4bb/tools/memcensus.mjs` now exists to derive them;
   nobody has. Measured so far: `c4ke32` 5.9 MB data / 420 B machine stack,

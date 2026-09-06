@@ -1,3 +1,27 @@
+// c4mpg.c -- c4m with the memory protection guard.  docs/c4mpg-design.md
+//
+// A FORK OF c4m.c, ON PURPOSE, and the reason is worth the duplication.
+//
+// The obvious alternative -- one source, `#ifdef C4MPG` -- does not
+// work here, and the way it fails is the whole character of this
+// family. c4m.c is not only COMPILED; it is READ AS SOURCE at runtime.
+// `innerbench` launches `c4 c4m.c load-c4r.c -- src/c4ke/c4ke.c`, and
+// plain c4 has no preprocessor: it skips every '#' line and compiles
+// what is between them. So an `#ifdef C4MPG` in c4m.c is not a switch,
+// it is unconditional code in every nested interpreter on the board.
+// Checking that no BUILD used raw c4cc was not enough, because the
+// exposure is at run time.
+//
+// The duplication is real and it is paid for by src/tests/mpg/
+// check-fork.sh: strip the blocks between the `//>>> c4mpg` and
+// `//<<< c4mpg` markers below and what is left must be c4m.c, byte for
+// byte. `make test-mpg` runs that first. A fork that cannot drift
+// silently is a fork you can keep.
+//
+// Do not edit the unmarked parts of this file. Edit c4m.c and re-run
+// the check; it will tell you exactly which lines have gone out of
+// step.
+
 // c4m.c - C4 Multiload, an extension of C4, supporting multiple source
 //         files and some bells and whistles whilst still running under
 //         regular c4. Better results if compiled natively.
@@ -698,6 +722,35 @@ void expr(int lev)
   }
 }
 
+//>>> c4mpg
+// Guest-visible memory that c4m allocates during COMPILATION rather
+// than through MALC. There is exactly one kind so far and the guard
+// found it the way it is supposed to: the switch jumptable below is
+// plain malloc'd memory that the compiled program READS, through an
+// LI, on every switch. It belongs to no pool, it is created long
+// before the guard is armed, and test_switch tripped on it the first
+// time the corpus was run.
+//
+// Recorded here, turned into regions at arm time. Kept deliberately
+// small and non-growable: this is a list of the things c4m itself
+// hands the guest, and if it ever needs to be big, something has been
+// misunderstood.
+enum { MPG_NOTES = 1024 };
+int *mpg_notes;    // MPG_NOTES pairs: lo, hi
+int  mpg_note_n;
+
+void mpg_note (int lo, int hi) {
+	if (!mpg_notes) {
+		mpg_notes = malloc(MPG_NOTES * 2 * sizeof(int));
+		if (!mpg_notes) return;
+		memset((char *)mpg_notes, 0, MPG_NOTES * 2 * sizeof(int));
+	}
+	if (mpg_note_n >= MPG_NOTES) return;
+	mpg_notes[mpg_note_n * 2] = lo;
+	mpg_notes[mpg_note_n * 2 + 1] = hi;
+	++mpg_note_n;
+}
+//<<< c4mpg
 
 void stmt()
 {
@@ -804,6 +857,9 @@ void stmt()
       swrange = swmax - swmin;
       if (swrange >= SWITCH_MAX_RANGE) { printf("%d: switch range %d too sparse for a jump table\n", line, swrange); exit(-1); }
       if (!(tbl = malloc((swrange + 1) * sizeof(int)))) { printf("%d: switch: out of memory\n", line); exit(-1); }
+//>>> c4mpg
+      mpg_note((int)tbl, (int)tbl + (swrange + 1) * sizeof(int));
+//<<< c4mpg
       // bounds check, three copies of the index on the stack
       if (swmin) { *++e = PSH; *++e = IMM; *++e = swmin; *++e = SUB; }
       *++e = PSH; *++e = PSH; *++e = PSH;
@@ -1312,7 +1368,382 @@ void c4_mt_del (int p) {
   }
 }
 
+//>>> c4mpg
+///
+// c4mpg -- the memory protection guard.  docs/c4mpg-design.md
+///
+// Every load and store is checked against a table of what the running
+// program is allowed to touch, and the first violation HALTS, with the
+// stack trace of the instruction that did it.
+//
+// Why ownership and not liveness, which is the whole reason this is not
+// valgrind: every bug that motivated it writes into memory that is
+// validly allocated -- to somebody else. A task stack overrunning into
+// the next heap block, a kernel freeing a slot that lives inside a
+// legitimately allocated array, vfsload reading past its manifest into
+// whatever the heap held. A tool that only knows mapped from unmapped
+// sees none of them.
+//
+// WHY THIS IS A FORK. docs/c4mpg-design.md said so and the first
+// attempt argued its way out of it with -DC4MPG=1, on the grounds that
+// no BUILD of c4m.c went through raw c4cc any more. That was true and
+// beside the point: c4m.c is read as SOURCE at run time, by a plain c4
+// that has no preprocessor and compiles what is between the '#' lines
+// it skips. innerbench does exactly that -- `c4 c4m.c load-c4r.c --
+// src/c4ke/c4ke.c` -- so every nested interpreter on the board would
+// have been running the guard. A conditional is only a conditional to
+// something that evaluates it.
+//
+// The duplication is paid for by src/tests/mpg/check-fork.sh, which
+// strips the marked blocks and demands byte-identity with c4m.c.
 
+enum { MPG_R = 1, MPG_W = 2, MPG_X = 4 };
+enum { REGION_LO, REGION_HI, REGION_PERM, REGION_OWNER, REGION_NAME, REGION__Sz };
+enum { MPG_MAX = 16384 };
+
+int *mpg_tab;      // MPG_MAX * REGION__Sz words, sorted ascending by LO
+int  mpg_n;        // regions in use
+int  mpg_armed;    // 0 until the program's own memory has been described
+int  mpg_full;     // said once, if the table filled up
+
+// The cache, kept open as globals rather than behind a function,
+// because the dispatch loop tests it INLINE: on a hit the whole guard
+// costs two comparisons and no call.
+//
+// TWO caches, one for reads and one for writes, which is a change from
+// the design's single entry and was made on a measurement rather than a
+// hunch. One entry gave a 75% hit rate on a load/store loop, because
+// the commonest statement there is -- `buf[i] = i + n;` -- READS the
+// locals on the stack and WRITES the array, so a single slot thrashes
+// between two regions on every iteration. Split by access kind, each
+// slot is stable and the rate goes to ~100%. The permission is baked in
+// by construction: a region only ever enters the read cache if it is
+// readable, so the inline test does not have to check for it.
+int  mpg_rlo, mpg_rhi;   // a region known readable
+int  mpg_wlo, mpg_whi;   // a region known writable
+int  mpg_hits, mpg_misses;
+// idmain/idmax are locals of c4m_main and print_stacktrace needs them;
+// mpg_arm() parks copies here so a fault deep in the dispatch loop can
+// still name the function it happened in.
+int *mpg_idmain, *mpg_idmax;
+// A ring of the last few regions that were DROPPED, so a use-after-free
+// can be named as one. Without it the report for a freed pointer is
+// "nothing owns this", which is true and useless -- the reader wants to
+// know it USED to own it. Small and fixed: this is a hint for the
+// message, not a shadow heap.
+enum { MPG_GHOSTS = 64 };
+int *mpg_ghost;    // MPG_GHOSTS pairs: lo, hi
+int  mpg_ghost_at; // next slot to overwrite
+
+char *mpg_permstr (int perm) {
+	if (perm == (MPG_R | MPG_W | MPG_X)) return "rwx";
+	if (perm == (MPG_R | MPG_W)) return "rw";
+	if (perm == (MPG_R | MPG_X)) return "rx";
+	if (perm == MPG_R) return "r";
+	if (perm == MPG_W) return "w";
+	if (perm == MPG_X) return "x";
+	return "-";
+}
+
+void mpg_setup () {
+	mpg_tab = malloc(MPG_MAX * REGION__Sz * sizeof(int));
+	if (!mpg_tab) { printf("c4mpg: cannot allocate the region table\n"); exit(-1); }
+	memset((char *)mpg_tab, 0, MPG_MAX * REGION__Sz * sizeof(int));
+	mpg_ghost = malloc(MPG_GHOSTS * 2 * sizeof(int));
+	if (mpg_ghost) memset((char *)mpg_ghost, 0, MPG_GHOSTS * 2 * sizeof(int));
+	mpg_ghost_at = 0;
+	mpg_n = 0;
+	mpg_armed = 0;
+	mpg_rlo = mpg_rhi = mpg_wlo = mpg_whi = 0;
+}
+
+// Index of the LAST region whose LO is <= addr, or -1 if there is none.
+// Regions never overlap (mpg_define refuses that), so this one region
+// is the only candidate an address can possibly be inside.
+int mpg_floor (int addr) {
+	int lo, hi, mid, best;
+	int *r;
+
+	lo = 0; hi = mpg_n - 1; best = 0 - 1;
+	while (lo <= hi) {
+		mid = (lo + hi) / 2;
+		r = mpg_tab + mid * REGION__Sz;
+		if (r[REGION_LO] <= addr) { best = mid; lo = mid + 1; }
+		else hi = mid - 1;
+	}
+	return best;
+}
+
+// The region that wholly contains [addr, addr+len), or 0.
+int *mpg_find (int addr, int len) {
+	int i;
+	int *r;
+
+	i = mpg_floor(addr);
+	if (i < 0) return 0;
+	r = mpg_tab + i * REGION__Sz;
+	if (addr + len <= r[REGION_HI]) return r;
+	return 0;
+}
+
+// Add a region, keeping the table sorted by LO. Overlap is refused
+// rather than merged: two regions over one range with different
+// permissions is a real thing an MMU does, but it is the C4KE half of
+// this design (M4) and pretending to support it here would make
+// mpg_find quietly wrong.
+int mpg_define (int lo, int hi, int perm, char *name) {
+	int i, j;
+	int *r;
+
+	if (hi <= lo) return 0;
+	if (!mpg_tab) return 0;
+	if (mpg_n >= MPG_MAX) {
+		if (!mpg_full) {
+			mpg_full = 1;
+			printf("c4mpg: region table full at %d -- the guard is now INCOMPLETE\n", MPG_MAX);
+		}
+		return 0;
+	}
+	i = mpg_floor(lo);
+	if (i >= 0) {
+		r = mpg_tab + i * REGION__Sz;
+		if (lo < r[REGION_HI]) {
+			printf("c4mpg: refusing overlapping region '%s' [0x%X,0x%X) over '%s' [0x%X,0x%X)\n",
+			       name, lo, hi, (char *)r[REGION_NAME], r[REGION_LO], r[REGION_HI]);
+			return 0;
+		}
+	}
+	// Slide everything above it up one slot. Allocations are rare
+	// against accesses, so paying here to keep the search logarithmic
+	// is the right way round.
+	j = mpg_n;
+	while (j > i + 1) {
+		memcpy((char *)(mpg_tab + j * REGION__Sz),
+		       (char *)(mpg_tab + (j - 1) * REGION__Sz),
+		       REGION__Sz * sizeof(int));
+		--j;
+	}
+	r = mpg_tab + (i + 1) * REGION__Sz;
+	r[REGION_LO] = lo;
+	r[REGION_HI] = hi;
+	r[REGION_PERM] = perm;
+	r[REGION_OWNER] = 0;
+	r[REGION_NAME] = (int)name;
+	++mpg_n;
+	// The caches may now describe a range this insert has split. Cheaper
+	// to drop them than to reason about it.
+	mpg_rlo = mpg_rhi = mpg_wlo = mpg_whi = 0;
+	return i + 2;   // handle: index + 1, never 0
+}
+
+// Remove the region starting exactly at lo. Silent when there is none:
+// FREE is allowed to be handed a pointer c4m never issued, and says so
+// through its own path, not this one.
+int mpg_drop (int lo) {
+	int i, j, hi;
+	int *r;
+
+	if (!mpg_tab) return 0;
+	i = mpg_floor(lo);
+	if (i < 0) return 0;
+	r = mpg_tab + i * REGION__Sz;
+	if (r[REGION_LO] != lo) return 0;
+	// Read HI now. The shift below moves the NEXT region's words into
+	// the slot r points at, so reading it afterwards reports somebody
+	// else's end address -- which is the shape of bug this whole tool
+	// exists to catch, and it got written anyway.
+	hi = r[REGION_HI];
+	j = i;
+	while (j < mpg_n - 1) {
+		memcpy((char *)(mpg_tab + j * REGION__Sz),
+		       (char *)(mpg_tab + (j + 1) * REGION__Sz),
+		       REGION__Sz * sizeof(int));
+		++j;
+	}
+	--mpg_n;
+	if (mpg_ghost) {
+		mpg_ghost[mpg_ghost_at * 2] = lo;
+		mpg_ghost[mpg_ghost_at * 2 + 1] = hi;
+		mpg_ghost_at = (mpg_ghost_at + 1) % MPG_GHOSTS;
+	}
+	mpg_rlo = mpg_rhi = mpg_wlo = mpg_whi = 0;
+	return 1;
+}
+
+// The whole value of the guard is HERE: the trace is of the instruction
+// that made the bad access, not of the wreckage some thousands of
+// instructions later. Print and stop.
+void mpg_fault (int addr, int len, int need, char *what, int *pcv, int *bpv, int *spv) {
+	int i;
+	int *r;
+
+	// %p, not 0x%X: the addresses here are the whole point, and %X
+	// truncates a 64-bit pointer to its bottom half -- which reads as a
+	// plausible address and is not one. print_symbol above does the
+	// same thing for the same reason.
+	printf("c4mpg: %s %p (%d bytes) -- outside every region this program owns\n",
+	       what, (int *)addr, len);
+	i = mpg_floor(addr);
+	if (i >= 0) {
+		r = mpg_tab + i * REGION__Sz;
+		printf("c4mpg:   nearest below: '%s' [%p,%p) %s\n",
+		       (char *)r[REGION_NAME], (int *)r[REGION_LO], (int *)r[REGION_HI],
+		       mpg_permstr(r[REGION_PERM]));
+		if (addr >= r[REGION_HI])
+			printf("c4mpg:   this access ends %ld bytes past the end of it\n",
+			       addr + len - r[REGION_HI]);
+		else if ((r[REGION_PERM] & need) != need)
+			printf("c4mpg:   it starts inside that region, which is %s, and this access needs %s\n",
+			       mpg_permstr(r[REGION_PERM]), mpg_permstr(need));
+		else
+			printf("c4mpg:   it starts inside that region and runs %ld bytes past the end\n",
+			       addr + len - r[REGION_HI]);
+	}
+	// The nearest region ABOVE, which is the one that names an
+	// underrun: writing before a buffer has nothing below it to be
+	// "past the end of", and saying only "below every region" would
+	// leave the reader to work out which buffer was meant.
+	// ...but only when it is near enough to mean anything. A region a
+	// hundred megabytes away is not "the nearest", it is noise, and the
+	// pools and the heap sit in different parts of the address space.
+	if (i + 1 < mpg_n) {
+		r = mpg_tab + (i + 1) * REGION__Sz;
+		if (r[REGION_LO] - addr < 1048576)
+			printf("c4mpg:   nearest above: '%s' [%p,%p) %s, %ld bytes higher\n",
+			       (char *)r[REGION_NAME], (int *)r[REGION_LO], (int *)r[REGION_HI],
+			       mpg_permstr(r[REGION_PERM]), r[REGION_LO] - addr);
+	}
+	// Was this a region once? A use-after-free reads as "nothing owns
+	// it", which is exactly what a freed pointer looks like and exactly
+	// what the reader needs told.
+	i = 0;
+	while (i < MPG_GHOSTS) {
+		if (mpg_ghost && mpg_ghost[i * 2] && addr >= mpg_ghost[i * 2] && addr < mpg_ghost[i * 2 + 1]) {
+			printf("c4mpg:   THIS WAS A REGION: [%p,%p), freed. Use after free.\n",
+			       (int *)mpg_ghost[i * 2], (int *)mpg_ghost[i * 2 + 1]);
+			i = MPG_GHOSTS;
+		}
+		++i;
+	}
+	printf("c4mpg:   pc %p, %d regions, %d cache hits / %d misses\n",
+	       pcv, mpg_n, mpg_hits, mpg_misses);
+	// The trace of the instruction that DID it. This is the whole
+	// difference between the guard and a post-mortem.
+	print_stacktrace(pcv, mpg_idmain, mpg_idmax, bpv, spv);
+	printf("\n");
+	// 11, distinct from anything a guest program exits with, so a test
+	// can tell a caught violation from a program failing on its own.
+	exit(11);
+}
+
+// The miss path. Search, refill the cache on success, halt on failure.
+// Split from the inline test in the dispatch loop so that the common
+// case never makes a call at all.
+void mpg_slow (int addr, int len, int need, char *what, int *pcv, int *bpv, int *spv) {
+	int *r;
+
+	++mpg_misses;
+	r = mpg_find(addr, len);
+	if (r) {
+		if ((r[REGION_PERM] & need) == need) {
+			if (need == MPG_R) { mpg_rlo = r[REGION_LO]; mpg_rhi = r[REGION_HI]; }
+			else               { mpg_wlo = r[REGION_LO]; mpg_whi = r[REGION_HI]; }
+			return;
+		}
+	}
+	mpg_fault(addr, len, need, what, pcv, bpv, spv);
+}
+
+// M2: a whole BUFFER, not its first byte.
+//
+// This is the half no per-instruction check can ever do. The overrun in
+// read(fd, buf, 262144) into a 4 KB buffer happens inside the HOST's
+// read(), so no LI or SI ever executes for it and the guard would never
+// see a thing -- and that is the vfsload bug exactly
+// (docs/dos-rung-fixes.md F12). Checking [buf, buf+len) before handing
+// the pointer to the host is the only place it can be caught.
+//
+// Rare against the dispatch loop -- one call per syscall, not one per
+// instruction -- so this takes the slow path unconditionally rather
+// than growing another cache.
+void mpg_range (int addr, int len, int need, char *what, int *pcv, int *bpv, int *spv) {
+	if (!mpg_armed) return;
+	if (len <= 0) return;
+	mpg_slow(addr, len, need, what, pcv, bpv, spv);
+}
+
+// A NUL-terminated string, which is a range whose length nobody knows
+// until they have already read it. Walk to the end of the owning region
+// looking for the terminator: if there is none, the host's strlen would
+// have kept going into whatever came next, and "an unterminated buffer,
+// in the one function that had not been read" is the literal root cause
+// of F12.
+void mpg_string (int addr, char *what, int *pcv, int *bpv, int *spv) {
+	int p;
+	int *r;
+
+	if (!mpg_armed) return;
+	r = mpg_find(addr, 1);
+	if (!r) { mpg_fault(addr, 1, MPG_R, what, pcv, bpv, spv); return; }
+	if (!(r[REGION_PERM] & MPG_R)) { mpg_fault(addr, 1, MPG_R, what, pcv, bpv, spv); return; }
+	p = addr;
+	while (p < r[REGION_HI]) {
+		if (!*(char *)p) return;
+		++p;
+	}
+	printf("c4mpg: %s at %p runs to the end of '%s' with no terminator\n",
+	       what, (int *)addr, (char *)r[REGION_NAME]);
+	mpg_fault(r[REGION_HI], 1, MPG_R, "read past the end of an unterminated string", pcv, bpv, spv);
+}
+//<<< c4mpg
+
+//>>> c4mpg
+// PRTF, all the way through: walk the format and check each %s
+// argument as a string.
+//
+// The first cut checked only the format string itself, on the grounds
+// that "c4m cannot know which of the arguments a %s will reach for".
+// It can. The format is right there, the arguments are positional, and
+// mpg_unterminated.c walked straight past a guard that did not read it
+// -- printing eight bytes and whatever followed them, which is F12's
+// root cause verbatim ("an unterminated buffer, in the one function
+// that had not been read").
+//
+// Arguments are t[-2], t[-3] ... in order, matching the call below.
+void mpg_printf (int fmt, int *t, int argn, int *pcv, int *bpv, int *spv) {
+	char *f;
+	int   k, c;
+
+	if (!mpg_armed) return;
+	mpg_string(fmt, "printf() format", pcv, bpv, spv);
+	f = (char *)fmt;
+	k = 2;                              // t[-2] is the first argument
+	while (*f) {
+		if (*f == '%') {
+			++f;
+			if (*f == '%') { ++f; }     // "%%" is a literal, no argument
+			else {
+				// flags, width, precision -- and '*' takes an argument
+				// of its own, which has to be counted or every %s after
+				// it lines up with the wrong pointer.
+				while (*f == '-' || *f == '+' || *f == ' ' || *f == '#' || *f == '0') ++f;
+				while (*f == '*' || (*f >= '0' && *f <= '9')) { if (*f == '*') ++k; ++f; }
+				if (*f == '.') {
+					++f;
+					while (*f == '*' || (*f >= '0' && *f <= '9')) { if (*f == '*') ++k; ++f; }
+				}
+				while (*f == 'l' || *f == 'h' || *f == 'z') ++f;
+				c = *f;
+				if (c) ++f;
+				if (k <= argn) {
+					if (c == 's') mpg_string(t[0 - k], "printf() %s argument", pcv, bpv, spv);
+					++k;
+				}
+			}
+		} else ++f;
+	}
+}
+//<<< c4mpg
 
 int c4_malloc (int n) {
   int p;
@@ -1320,12 +1751,28 @@ int c4_malloc (int n) {
   if (n < 0) return 0;
   if (!(p = (int)malloc(n))) return 0;
   c4_mt_put(p, n);
+//>>> c4mpg
+  // Where a program's own allocations become regions. The design left
+  // this open -- the kernel cannot see a task's mallocs, so either MALC
+  // grows a region here or the C4KE extension has to intercept it --
+  // and here is simpler and does not depend on an extension that is
+  // compiled out. It is also the ONLY place that knows the length, and
+  // the length is the whole point: without it an overrun by one word
+  // is indistinguishable from a legal access.
+  mpg_define(p, p + n, MPG_R | MPG_W, "malloc");
+//<<< c4mpg
   return p;
 }
 
 void c4_free (int p) {
   if (!p) return;
   c4_mt_del(p);          // a no-op for pointers that were never ours
+//>>> c4mpg
+  // The region goes when the memory does, which is what makes a
+  // use-after-free a fault at the moment of the write rather than a
+  // surprise several thousand instructions later.
+  mpg_drop(p);
+//<<< c4mpg
   free((void *)p);
 }
 
@@ -1834,6 +2281,52 @@ int c4m_main(int argc, char **argv)
   free(_p);
   //free(_sym);
 
+//>>> c4mpg
+  // Describe the program's own memory, then arm. Everything below this
+  // line is checked; everything above it is c4m compiling, which does
+  // not go through LI/LC/SI/SC at all -- those are the GUEST's opcodes.
+  //
+  // Order matters only in that the table must be complete before the
+  // first instruction runs. A region missing here is not a silent gap:
+  // it is a halt on the first legitimate access to it, which is the
+  // right way round for an instrument (docs/c4mpg-design.md: "known-good
+  // second, and this half is not optional" -- a guard that cries wolf
+  // gets turned off within a day).
+  mpg_setup();
+  mpg_idmain = idmain;
+  mpg_idmax  = idmax;
+  mpg_define((int)_sym,  (int)_sym  + poolsz, MPG_R | MPG_W, "symbol table");
+  // The code area is WRITABLE, and that is not a concession. Self
+  // modifying code is a documented, load-bearing technique in this
+  // family: c4m's own c4_invoke_stub rewrites its first instruction to
+  // a JMP, include/c4dos.h's __c4dos_stub does the same to reach the
+  // DOS API on a machine with no indirect call, and
+  // src/tests/c4_jailbreak.c is a whole test about doing it on purpose.
+  // A guard that forbids the VM's own idioms is a guard that gets
+  // turned off. (Narrowing this per-program is what MPG_DEFINE is for,
+  // at M3.)
+  mpg_define((int)_e,    (int)_e    + poolsz, MPG_R | MPG_W | MPG_X, "code");
+  mpg_define((int)_data, (int)_data + poolsz, MPG_R | MPG_W, "data");
+  mpg_define((int)_sp,   (int)_sp   + poolsz, MPG_R | MPG_W, "stack");
+  // argv is HOST memory: c4m hands the guest its own argv array and the
+  // strings inside it, neither of which is in any pool. A program that
+  // reads its arguments is doing nothing wrong and must not trip.
+  mpg_define((int)argv, (int)argv + (argc + 1) * sizeof(int), MPG_R, "argv");
+  i = 0;
+  while (i < argc) {
+    if (argv[i])
+      mpg_define((int)argv[i], (int)argv[i] + strlen(argv[i]) + 1, MPG_R, "argv string");
+    ++i;
+  }
+  // ...and the jumptables the compiler built along the way.
+  i = 0;
+  while (i < mpg_note_n) {
+    mpg_define(mpg_notes[i * 2], mpg_notes[i * 2 + 1], MPG_R, "switch jumptable");
+    ++i;
+  }
+  mpg_armed = 1;
+  if (verb) printf("c4mpg: armed with %d regions\n", mpg_n);
+//<<< c4mpg
 
   // run...
   if (verb) printf("c4m: run!\n");
@@ -1954,15 +2447,42 @@ int c4m_main(int argc, char **argv)
 //			trap(TRAP_SEGV, a, trap_handler, &sp, &bp, &pc, a);
 //		} else
 //#endif
+//>>> c4mpg
+			// The guard, inline. On a cache hit this is two comparisons
+			// and no call, which is why the cache is open globals rather
+			// than something with an interface.
+			if (mpg_armed) {
+				if (a >= mpg_rlo && a + sizeof(int) <= mpg_rhi) ++mpg_hits;
+				else mpg_slow(a, sizeof(int), MPG_R, "read", pc, bp, sp);
+			}
+//<<< c4mpg
 			a = *(int *)a;                                     // load int
 	}
     else if (i == LC)  {
+//>>> c4mpg
+		if (mpg_armed) {
+			if (a >= mpg_rlo && a + 1 <= mpg_rhi) ++mpg_hits;
+			else mpg_slow(a, 1, MPG_R, "read", pc, bp, sp);
+		}
+//<<< c4mpg
 		a = *(char *)a;                                                   // load char
 	}
     else if (i == SI)  {
+//>>> c4mpg
+		if (mpg_armed) {
+			if (*sp >= mpg_wlo && *sp + sizeof(int) <= mpg_whi) ++mpg_hits;
+			else mpg_slow(*sp, sizeof(int), MPG_W, "wrote", pc, bp, sp);
+		}
+//<<< c4mpg
 		*(int *)*sp++ = a;                                                // store int
 	}
     else if (i == SC)  {
+//>>> c4mpg
+		if (mpg_armed) {
+			if (*sp >= mpg_wlo && *sp + 1 <= mpg_whi) ++mpg_hits;
+			else mpg_slow(*sp, 1, MPG_W, "wrote", pc, bp, sp);
+		}
+//<<< c4mpg
 		a = *(char *)*sp++ = a;                                           // store char
 	}
     else if (i == PSH) *--sp = a;                                         // push
@@ -1986,6 +2506,9 @@ int c4m_main(int argc, char **argv)
 	// SYSCALL functions
     else if (i == OPEN) {
 		if (mode == MODE_UNPROTECTED) {
+//>>> c4mpg
+            mpg_string(sp[1], "open() path", pc, bp, sp);
+//<<< c4mpg
             a = c4m_open((char *)sp[1], *sp);
         }
 		else {
@@ -1996,6 +2519,13 @@ int c4m_main(int argc, char **argv)
 	}
     else if (i == READ) {
 		if (mode == MODE_UNPROTECTED) {
+//>>> c4mpg
+            // THE ONE THAT MATTERS. read() into a buffer smaller than
+            // the count is docs/dos-rung-fixes.md F12, and the overrun
+            // happens inside the host's read() where no guest
+            // instruction ever executes.
+            mpg_range(sp[1], *sp, MPG_W, "read() into", pc, bp, sp);
+//<<< c4mpg
             a = c4m_read(sp[2], (char *)sp[1], *sp);
         }
 		else {
@@ -2024,6 +2554,9 @@ int c4m_main(int argc, char **argv)
 	}
 	else if (i == PUTS) {
 		if (mode == MODE_UNPROTECTED) {
+//>>> c4mpg
+            mpg_string(*sp, "puts() string", pc, bp, sp);
+//<<< c4mpg
             a = do_puts((char *)*sp);
         }
 		else {
@@ -2036,6 +2569,9 @@ int c4m_main(int argc, char **argv)
 		if (mode == MODE_UNPROTECTED) {
 			r = pc[1];
 			t = sp + r;
+//>>> c4mpg
+			mpg_printf(t[-1], t, r, pc, bp, sp);
+//<<< c4mpg
 			// Fix potential access violation by not pushing arguments not given
 			//if (r == 1) a = printf((char*)t[-1]);
 			//else if (r == 2) a = printf((char*)t[-1], t[-2]);
@@ -2080,12 +2616,23 @@ int c4m_main(int argc, char **argv)
 		}
 	}
     else if (i == MSET) {
+//>>> c4mpg
+		mpg_range(sp[2], *sp, MPG_W, "memset() over", pc, bp, sp);
+//<<< c4mpg
 		a = (int)memset((char *)sp[2], sp[1], *sp);
 	}
     else if (i == MCMP) {
+//>>> c4mpg
+		mpg_range(sp[2], *sp, MPG_R, "memcmp() read of", pc, bp, sp);
+		mpg_range(sp[1], *sp, MPG_R, "memcmp() read of", pc, bp, sp);
+//<<< c4mpg
 		a = memcmp((char *)sp[2], (char *)sp[1], *sp);
 	}
     else if (i == MCPY) {
+//>>> c4mpg
+		mpg_range(sp[2], *sp, MPG_W, "memcpy() into", pc, bp, sp);
+		mpg_range(sp[1], *sp, MPG_R, "memcpy() from", pc, bp, sp);
+//<<< c4mpg
 		a = (int)c4_memcpy((void*)sp[2], (void*)sp[1], *sp);
 	}
     else if (i == STRC) {
@@ -2200,6 +2747,9 @@ int c4m_main(int argc, char **argv)
 		// Trap this under protected mode
 		if (mode == MODE_UNPROTECTED)
             a = c4_info() | (trap_handler ? C4I_TRAPH : 0)
+//>>> c4mpg
+                | C4I_C4MPG
+//<<< c4mpg
                 ;
 		else {
 			trap(TRAP_PM_VIOLATION, INFO, trap_handler, &sp, &bp, &pc, a, mode);
@@ -2306,6 +2856,16 @@ int c4m_main(int argc, char **argv)
     }
   }
 
+//>>> c4mpg
+  // What the guard cost, for anyone measuring it. The hit rate is the
+  // whole performance story: a miss is a binary search, a hit is two
+  // comparisons in the dispatch loop, and C4 programs touch their
+  // locals and one array (docs/c4mpg-design.md).
+  if (verb)
+    printf("c4mpg: %d checks, %d cache hits, %d misses, %d regions at exit\n",
+           mpg_hits + mpg_misses, mpg_hits, mpg_misses, mpg_n);
+  mpg_armed = 0;
+//<<< c4mpg
 
   // free memory
   //free(_p);

@@ -30,8 +30,11 @@ ITH set`, 8 tasks, 183 free slots, and the cycle counter still climbing.
   is not by design.
 - **`innerbench -n 2` (the default) is healthy at 32 MB** — two nested c4m tasks
   progressing, output flowing. Only the stress case exhausts.
-- **`innerbench -n 5` at 64 MB was still healthy at 12 minutes.** The fault needs
-  many tasks.
+- **`innerbench -n 5` at 64 MB is CLEAN.** Ran the full 1441 s with **zero**
+  `Custom opcode not found`, output flowing the whole time (idle 1 s at every
+  sample). It did not finish only because each nested kernel compile is slow.
+  So the fault needs somewhere between 5 and 50 tasks -- bisect there, and note
+  that a healthy run looks like continuous output, not silence.
 
 ### What was fixed, and why it was not enough
 
@@ -86,9 +89,10 @@ after the change, but nothing in that suite runs fifty nested c4m instances.
    cause and the fix is to get the DOS branch in without compiling both arms —
    e.g. `$PREPROC -DC4M_DOS=1 c4m.c` with `c4dos.h` prepended separately, so the
    preprocessor still picks arms.
-2. If they persist, bisect on task count (`-n 10`, `-n 20`) to find where the
-   crashes start, then dump the offending address against the task table to see
-   what the stride corresponds to.
+2. If they persist, bisect on task count between 5 (known clean) and 50 (known
+   bad) -- try `-n 20`, then `-n 10` -- and dump the offending address against
+   the task table to see what the 760,320 stride corresponds to. Budget ~25 min
+   per run; `-n 5` alone took 24 minutes without finishing.
 3. Only then look at the `TLEV` frame. The self-referencing saved-bp is very
    likely downstream of whatever produces those addresses.
 

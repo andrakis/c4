@@ -10,6 +10,8 @@
 //   -d dir       serve every file in dir through the disk controller
 //   -i           interactive: raw stdin feeds the keyboard device
 //   --step       use the microstep engine instead of turbo
+//   --whowrote   remember which PC last wrote each word, and answer
+//                questions about it through the port at 0x1a4/0x1a8
 //
 // Non-interactive runs with piped stdin prefeed it to the keyboard
 // FIFO with EOF set, so scripted OS sessions work:
@@ -32,7 +34,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 function parseArgs(argv) {
   const o = { arenaMb: 32, maxCycles: Infinity, stats: false, useStep: false,
               diskDir: null, drives: [], interactive: false,
-              mhz: 20, unpaced: false };
+              mhz: 20, unpaced: false, whowrote: false };
   let i = 0;
   while (i < argv.length && argv[i].startsWith('-')) {
     if (argv[i] === '-m') o.arenaMb = parseInt(argv[++i], 10);
@@ -54,6 +56,14 @@ function parseArgs(argv) {
     // machine's own clock. Faster, and time inside stops meaning
     // anything -- which is what batch runs want.
     else if (argv[i] === '--fast') o.unpaced = true;
+    // Record, for every word of the arena, the PC of the last
+    // instruction that stored there -- and answer questions about it
+    // through a device port. For finding the writer behind a "guard
+    // broken" report, which is the one thing nothing else can say.
+    // See src/c4bb/sim/arena-whowrote.js. Costs an arena-sized table,
+    // and nothing at all when the flag is absent: the module is not
+    // even loaded.
+    else if (argv[i] === '--whowrote') o.whowrote = true;
     else if (argv[i] === '--step') o.useStep = true;
     // Which firmware. A stage name (hello/ram/drives/bios) or a path.
     // The stages are the machine part-built -- docs/c4bb-storage.md M6
@@ -69,7 +79,7 @@ function parseArgs(argv) {
   // whole point of having drives (docs/c4bb-storage.md M10).
   if (i >= argv.length) {
     if (!o.drives.length && !o.diskDir) {
-      console.error('usage: cli.js [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [-hz MHz] [--fast] [--step] [-fw STAGE] [program.c4r [args...]]');
+      console.error('usage: cli.js [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [-hz MHz] [--fast] [--step] [--whowrote] [-fw STAGE] [program.c4r [args...]]');
       console.error('       with no program, the firmware boots from the first medium that has one');
       console.error('       -fw hello|ram|drives|bios (default bios), or a path to a .c4r');
       process.exit(1);
@@ -133,7 +143,14 @@ async function main(argv) {
   const fwBytes = new Uint8Array(readFileSync(firmwarePath(o.fw)));
   let progBytes = o.progPath ? new Uint8Array(readFileSync(o.progPath)) : null;
 
-  const arena = new Arena(o.arenaMb * 1024 * 1024);
+  // The provenance build is a FORK (arena-whowrote.js), imported only
+  // when asked for, so an ordinary run never even parses it and the
+  // call sites in turbo's generated code stay monomorphic on the one
+  // Arena class they have always seen.
+  const ArenaClass = o.whowrote
+    ? (await import('./arena-whowrote.js')).Arena
+    : Arena;
+  const arena = new ArenaClass(o.arenaMb * 1024 * 1024);
   const out = [];
   const flush = () => { if (out.length) { process.stdout.write(Buffer.from(out)); out.length = 0; } };
   // A writable drive is a host directory, and closing a file there
@@ -172,6 +189,11 @@ async function main(argv) {
     onByte: b => { out.push(b); if (out.length >= 4096 || b === 10) flush(); },
   });
   const machine = new Machine(arena, assemble(ucSource), dev);
+  // The arena reads the writing PC straight out of the shared register
+  // array. That is what keeps turbo.js and machine.js unforked, and it
+  // covers --step for free: both engines load their working copies
+  // from this array at the start of every routine.
+  if (o.whowrote) { arena.regs = machine.regs; arena.pcIndex = R.PC; }
 
   // -i streams stdin as it arrives, whether stdin is a terminal or a
   // pipe. That distinction matters because C4KE hands the console to

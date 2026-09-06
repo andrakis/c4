@@ -183,6 +183,7 @@ and in the kernel.
 | F18 | the board's line discipline released **more than one line** per canonical read, so every command after the first in a burst was thrown away | `src/c4bb/sim/devices.js` |
 | -- | F13's real (different) cost: the disk's c4m silently lost `u0.h`, `c4.h` and `c4m_float.h` | `src/c4bb/tests/build-images.sh` |
 | F19 | `./c4 c4m.c` broken since F7/F11, and the test that pins it ran in no suite | `c4m.c`, `Makefile` |
+| F20 | nothing could say WHO wrote a broken stack guard | `src/c4bb/sim/arena-whowrote.js` |
 
 ### F13 is not the regression — measured both ways
 
@@ -389,6 +390,59 @@ ran `make test` constantly.
 Checked by reintroducing the fault: with the fallbacks removed, `make test`
 fails at `test-c4m-mem`. A test nobody runs is a comment that costs a build
 step.
+
+### F20 — the board can be asked who wrote a word, and the asking costs nothing
+
+C4KE finds its damage late:
+
+    c4ke: task 33 () OVERRAN ITS STACK: 44 of 262144 bytes, guard broken
+    c4ke: the heap below 0x1da472c is no longer trustworthy
+
+44 bytes of stack used and the guard word broken, so the write came from
+somewhere else entirely, some unknown time earlier. Every question about that
+write has been answerable except the one that matters: **who**.
+
+`src/c4bb/sim/arena-whowrote.js` answers it — a fork of `arena.js` that keeps a
+`Uint32Array` the size of the arena, one word per word, holding the PC of the
+last instruction to store there, and a port at `0x1a4`/`0x1a8` to ask. Selected
+by `cli.js --whowrote`, which imports the module only when asked, so an ordinary
+run never even parses it. **`arena.js` is not modified at all** —
+`check-fork-arena.sh` strips the marked blocks out of the fork and demands the
+remainder be `arena.js` byte for byte.
+
+Neither `turbo.js` nor `machine.js` needed forking: both engines keep their
+registers in one shared array and load working copies from it at routine entry,
+so the arena reads `r[R.PC]` directly. `--step` is covered for free.
+
+Regions, as in c4mpg, were the alternative and were the wrong tool here: they
+need to know where allocations begin and end, and on the board that lives inside
+`fw.c`'s free list — coupling the simulator to a C data structure that is itself
+a suspect. Provenance needs none of it. C4KE asks through the announced bit
+(`include/c4bb_info.h`, `bb_has_whowrote()`), never by probing, because those
+addresses are ordinary memory under native c4m.
+
+**And then it perturbed exactly what it was measuring.** Pointed at
+`innerbench -n 50` at `-m 128`, the guarded run produced **9,691** custom-opcode
+faults in the idle task that the control produced none of. That is not a
+discovery, it is the tool: the table makes the machine about ten times slower per
+instruction (the guest's clock reported 12,444 ms against the control's 1,276 ms
+for the same work), while c4bb's PIT keeps firing on REAL time — so the guest
+takes ten times the preemption per instruction it normally would. Re-run with
+`-hz 2`, which tells the machine it is as slow as it has become: **0 faults.**
+
+| run | faults |
+|---|---|
+| control, `-hz 20` | 0 |
+| `--whowrote`, `-hz 20` | 9,691 |
+| `--whowrote`, `-hz 2` | 0 |
+
+Two things to keep. **Use `-hz` to match the guard when running it against
+anything time-sensitive**, or the instrument writes the result. And, separately
+and worth its own investigation: **C4KE under ten times its usual real-time
+preemption produces thousands of bystander faults in the idle task** — the
+values are nearly all multiples of 256. That is a genuine fragility, found by
+accident, and it is a plausible relative of what a player sees when the browser
+tab running c4bb is slow.
 
 ### Method note: an instrument, validated first
 

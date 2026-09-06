@@ -72,7 +72,7 @@ cp c4th32.c4r $FUSEDISK/c4th32.c4r
 
 # c4bb's own trap-machinery tests (src/tests/test_customop predates
 # TLEV/DBG and uses colliding opcode numbers, so it cannot be used)
-for t in bb_customop bb_preempt bb_pm bb_pit; do
+for t in bb_customop bb_preempt bb_pm bb_pit bb_whowrote; do
     $CC -o $OUT/$t.c4r src/c4bb/tests/src/$t.c > /dev/null
 done
 

@@ -178,6 +178,25 @@ else
     echo "$c4ke_badop_out" | tail -10
 fi
 
+# The provenance port (src/c4bb/sim/arena-whowrote.js), both ways.
+#
+# The pin is NOT "an answer came back" -- a constant would pass that.
+# It is that two stores from two different functions produce two
+# DIFFERENT non-zero PCs, which is the only thing that makes the port
+# useful for chasing a write nobody owns up to. And that without the
+# flag the port is silent, because those addresses are ordinary memory
+# on every other host and a guest must not probe them.
+bash src/c4bb/tests/check-fork-arena.sh || fail=1
+ww_off=$(timeout 300 $C4BB -c 40000000 $IMAGES/bb_whowrote.c4r 2>/dev/null)
+ww_on=$(timeout 300 $C4BB --whowrote -c 40000000 $IMAGES/bb_whowrote.c4r 2>/dev/null)
+if echo "$ww_off" | grep -qF "port silent" && \
+   echo "$ww_on" | grep -qF "two stores, two different PCs, OK"; then
+    echo "test-c4bb: whowrote port silent when absent, exact when fitted OK"
+else
+    echo "test-c4bb: whowrote port FAILED"; fail=1
+    echo "  without: $ww_off"; echo "  with:    $ww_on"
+fi
+
 # Two commands in one session, then quit. Nothing in this suite ran
 # more than one command per boot, which is why F18 - the line
 # discipline handing a reader several lines at once, so every line

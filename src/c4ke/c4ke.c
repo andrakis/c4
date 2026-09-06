@@ -137,6 +137,10 @@
 #define C4_SIGNALS 1
 #include "c4.h"
 #include "c4m.h"
+// Board capabilities, announced through __c4_info(). Used by
+// kernel_stack_check to ask c4bb who wrote a broken guard word; inert
+// and harmless anywhere else, because the bit is never set there.
+#include "c4bb_info.h"
 #define NO_LOADC4R_MAIN
 #include "./load-c4r.c"
 
@@ -1812,7 +1816,8 @@ static int kernel_stack_intact (int *t) {
 }
 
 static void kernel_stack_check (int *t) {
-	int used;
+	int used, i;
+	int *g;
 	if (!t[TASK_BASE]) return;
 	// Low-water mark, sampled at every switch. Not exact -- a peak
 	// between two switches is invisible, and trap_schedule_in_trap calls
@@ -1830,6 +1835,26 @@ static void kernel_stack_check (int *t) {
 	printf("c4ke: task %d (%s) OVERRAN ITS STACK: %d of %d bytes, guard broken.\n",
 	       t[TASK_ID], t[TASK_NAME] ? (char *)t[TASK_NAME] : "?", used, TASK_STACK_SIZE);
 	printf("c4ke: the heap below 0x%lx is no longer trustworthy.\n", t[TASK_BASE]);
+	// ...and on a board fitted with the provenance port, WHO. This is
+	// the question the guard could never answer: it notices at a
+	// context switch, some unknown time after the write, and 44 bytes
+	// of stack used with the guard broken means the write came from
+	// somewhere else entirely. c4bb remembers the PC that last stored
+	// to each word, so ask it.
+	//
+	// Gated on the announcement, never probed: those addresses are
+	// c4bb devices and c4m's own memory everywhere else, so a kernel
+	// that runs in both places must not touch them uninvited
+	// (include/c4bb_info.h).
+	if (bb_has_whowrote()) {
+		g = (int *)t[TASK_BASE];
+		i = TASK_STACK_GUARD / sizeof(int);
+		while (i--) {
+			if (g[i] != TASK_STACK_POISON)
+				printf("c4ke: guard word 0x%lx was last written by pc 0x%lx\n",
+				       &g[i], bb_whowrote((int)&g[i]));
+		}
+	}
 }
 
 // Before switching to a task, check if any signals are pending, and if so

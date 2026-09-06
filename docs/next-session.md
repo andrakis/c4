@@ -83,17 +83,26 @@ names the region, C4KE names the task and kills it, and the machine carries on.
 so a program can describe its own memory rather than only inherit what MALC
 knows.
 
-**The board-side guard is the other open piece**, and it is the one aimed at the
-lockup. Every memory access in BOTH c4bb engines goes through `Arena`
-(`src/c4bb/sim/arena.js`, 75 lines) — `read32`/`read8s`/`read8u`/`write32`/
-`write8` — so that is the seam. The user's requirement is a FORK, not a flag, so
-the existing interpreter does not slow down: `arena.js` and `turbo.js` copied
-(turbo compiles `ar.write32(mar,mdr)` and would need to pass `pc`), selected by
-a `cli.js` flag that dynamically imports them so a normal run never loads the
-module. Registers 0x1a4 upward are free in the device window for a query port.
-The primitive worth having is not regions but **last-writer-per-word**: C4KE
-already detects the damage late (`OVERRAN ITS STACK ... guard broken`) and what
-nobody can answer is who wrote it.
+**The board-side guard is BUILT** — `--whowrote`, a fork of `arena.js` that
+records the PC of the last writer of every word and answers through a port at
+0x1a4/0x1a8. C4KE asks it when a stack guard is found broken. `arena.js` is
+untouched and `check-fork-arena.sh` keeps the fork honest.
+`docs/dos-rung-fixes.md` F20 has the whole of it.
+
+**Two things it left open, and the second is the more interesting.**
+
+1. **The tool perturbs the workload it was built for.** At `-m 128 -n 50` the
+   guarded run made the machine ~10x slower per instruction while c4bb's PIT
+   went on firing on REAL time, so the guest took 10x the preemption and
+   produced 9,691 idle-task faults the control did not have. `-hz 2` brings it
+   back to 0. Either always scale `-hz` when guarding, or make the PIT scale
+   itself — the latter is probably right and is a small change in `devices.js`.
+2. **C4KE under 10x real-time preemption produces thousands of bystander faults
+   in the idle task**, values nearly all multiples of 256. Found by accident and
+   never investigated. It is a genuine fragility and a plausible relative of
+   what a player sees when the browser tab running c4bb is slow — which is the
+   ORIGINAL report. Worth chasing on its own, and `--whowrote -hz 2` is now the
+   instrument for it.
 
 The user asked for this specifically because four bugs in one day were all
 "something wrote where it should not, and it surfaced somewhere else much

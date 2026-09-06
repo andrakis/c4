@@ -18,3 +18,24 @@
 enum { BB_I_PIT = 0x800 };      // c4bb has RTC_MS and PIT_MS
 
 int bb_has_clock () { return __c4_info() & BB_I_PIT; }
+
+// c4bb can be asked which PC last wrote to an address
+// (src/c4bb/sim/arena-whowrote.js, cli.js --whowrote). Fitted only when
+// the machine was started with that flag, which is why it is announced
+// here rather than assumed: the port lives at 0x1a4/0x1a8, and under
+// native c4m those addresses are c4m's OWN MEMORY. Writing there to see
+// what happens is the one thing this must never do.
+enum { BB_I_WHOWROTE = 0x1000 };
+enum { BB_WW_QUERY = 420, BB_WW_ANSWER = 424 };   // 0x1a4, 0x1a8
+
+int bb_has_whowrote () { return __c4_info() & BB_I_WHOWROTE; }
+
+// Which PC last stored to `addr`, or 0 for "nobody yet" / not fitted.
+// CHECK bb_has_whowrote() FIRST.
+int bb_whowrote (int addr) {
+	int *q, *ans;
+	q = (int *)BB_WW_QUERY;
+	ans = (int *)BB_WW_ANSWER;
+	*q = addr;
+	return *ans;
+}

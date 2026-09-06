@@ -67,6 +67,7 @@ export const RTC_MS      = 0x19c;  // r: host milliseconds since power-on
 export const PIT_MS      = 0x1a0;  // r/w: tick every N real ms (0 = off)
 
 // c4_info() capability bits (c4m.c:206)
+export const C4I_WHOWROTE = 0x1000;   // the provenance port is fitted
 export const C4I_C4M = 0x2, C4I_HRT = 0x10, C4I_SIG = 0x20,
              C4I_FLT = 0x40, C4I_PROT = 0x80, C4I_TRAPH = 0x400,
 // This machine has the clock and timer registers (RTC_MS, PIT_MS). A
@@ -324,7 +325,14 @@ export class Devices {
       case INFO_REG: {
         // mirrors native c4_info() | TRAPH (c4m.c:1033, 1814)
         const m = this.machine;
+        // C4I_WHOWROTE is set only when the provenance arena is in
+        // (cli.js --whowrote), because only then does the port at
+        // 0x1a4/0x1a8 exist. Announced, never probed: a guest asks
+        // here and stays away from those addresses otherwise, which
+        // matters because under native c4m they are its own memory.
+        // A cold path -- INFO is read once at boot.
         return C4I_C4M | C4I_HRT | C4I_SIG | C4I_FLT | C4I_PROT | C4I_PIT |
+               (this.arena && this.arena.writer ? C4I_WHOWROTE : 0) |
                (m && m.trapHandler ? C4I_TRAPH : 0);
       }
       case TRAPH_REG:    return this.machine.trapHandler | 0;

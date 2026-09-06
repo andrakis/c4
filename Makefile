@@ -483,7 +483,7 @@ c4-dos.c4r: $(C4CC) c4.c
 # Both halves of the guard: the known-bad set is caught AND named, and
 # the whole corpus still runs identically under it. The second half is
 # the one that keeps it usable -- docs/c4mpg-design.md.
-test-mpg: c4mpg c4m
+test-mpg: c4mpg c4m $(C4KE_C4R) $(BIN_D)/badmem.c4r
 	bash src/tests/mpg/check-fork.sh
 	bash src/tests/mpg/test-mpg.sh
 

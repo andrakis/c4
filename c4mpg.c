@@ -333,6 +333,11 @@ enum {
 	TRAP_PM_VIOLATION,
 	// Debug trap, used by DBG opcode
 	TRAP_DEBUG,
+	// A load or store outside every region the running context owns.
+	// Raised only by c4mpg (docs/c4mpg-design.md); listed here so the
+	// number is reserved across the whole family and the two enums stay
+	// in step. Plain c4m never raises it.
+	TRAP_MPG_VIOLATION,
 };
 // TRAP_HARD_IRQ codes
 enum {
@@ -1479,6 +1484,11 @@ int  mpg_hits, mpg_misses;
 // mpg_arm() parks copies here so a fault deep in the dispatch loop can
 // still name the function it happened in.
 int *mpg_idmain, *mpg_idmax;
+// A mirror of the interpreter's trap_handler, which is a LOCAL of
+// c4m_main and so invisible down here. It decides one thing: whether
+// there is a kernel above us that can say more about this violation
+// than we can, or whether we are the last word and have to halt.
+int  mpg_handler;
 // A ring of the last few regions that were DROPPED, so a use-after-free
 // can be named as one. Without it the report for a freed pointer is
 // "nothing owns this", which is true and useless -- the reader wants to
@@ -1646,7 +1656,7 @@ int mpg_drop (int lo) {
 // The whole value of the guard is HERE: the trace is of the instruction
 // that made the bad access, not of the wreckage some thousands of
 // instructions later. Print and stop.
-void mpg_fault (int addr, int len, int need, char *what, int *pcv, int *bpv, int *spv) {
+int mpg_fault (int addr, int len, int need, char *what, int *pcv, int *bpv, int *spv) {
 	int i;
 	int *r;
 
@@ -1700,6 +1710,20 @@ void mpg_fault (int addr, int len, int need, char *what, int *pcv, int *bpv, int
 	}
 	printf("c4mpg:   pc %p, %d regions, %d cache hits / %d misses\n",
 	       pcv, mpg_n, mpg_hits, mpg_misses);
+
+	// AND THAT IS AS FAR AS c4mpg CAN HONESTLY GO.
+	//
+	// Everything above is a fact only the guard holds: the region
+	// table, which region was nearest, how far past its end the access
+	// ran. Everything a reader actually wants NEXT -- which task did
+	// it, what it was called, where it was in ITS OWN code, and whether
+	// the machine can carry on without it -- is C4KE's, and c4mpg knows
+	// nothing about C4KE. So when there is a trap handler installed,
+	// the caller raises TRAP_MPG_VIOLATION and lets it answer; c4mpg's
+	// own stack trace and halt are the fallback for a program running
+	// with no kernel under it.
+	if (mpg_handler) return 1;
+
 	// The trace of the instruction that DID it. This is the whole
 	// difference between the guard and a post-mortem.
 	print_stacktrace(pcv, mpg_idmain, mpg_idmax, bpv, spv);
@@ -1707,12 +1731,13 @@ void mpg_fault (int addr, int len, int need, char *what, int *pcv, int *bpv, int
 	// 11, distinct from anything a guest program exits with, so a test
 	// can tell a caught violation from a program failing on its own.
 	exit(11);
+	return 1;
 }
 
 // The miss path. Search, refill the cache on success, halt on failure.
 // Split from the inline test in the dispatch loop so that the common
 // case never makes a call at all.
-void mpg_slow (int addr, int len, int need, char *what, int *pcv, int *bpv, int *spv) {
+int mpg_slow (int addr, int len, int need, char *what, int *pcv, int *bpv, int *spv) {
 	int *r;
 
 	++mpg_misses;
@@ -1721,10 +1746,10 @@ void mpg_slow (int addr, int len, int need, char *what, int *pcv, int *bpv, int 
 		if ((r[REGION_PERM] & need) == need) {
 			if (need == MPG_R) { mpg_rlo = r[REGION_LO]; mpg_rhi = r[REGION_HI]; }
 			else               { mpg_wlo = r[REGION_LO]; mpg_whi = r[REGION_HI]; }
-			return;
+			return 0;
 		}
 	}
-	mpg_fault(addr, len, need, what, pcv, bpv, spv);
+	return mpg_fault(addr, len, need, what, pcv, bpv, spv);
 }
 
 // M2: a whole BUFFER, not its first byte.
@@ -1739,10 +1764,10 @@ void mpg_slow (int addr, int len, int need, char *what, int *pcv, int *bpv, int 
 // Rare against the dispatch loop -- one call per syscall, not one per
 // instruction -- so this takes the slow path unconditionally rather
 // than growing another cache.
-void mpg_range (int addr, int len, int need, char *what, int *pcv, int *bpv, int *spv) {
-	if (!mpg_armed) return;
-	if (len <= 0) return;
-	mpg_slow(addr, len, need, what, pcv, bpv, spv);
+int mpg_range (int addr, int len, int need, char *what, int *pcv, int *bpv, int *spv) {
+	if (!mpg_armed) return 0;
+	if (len <= 0) return 0;
+	return mpg_slow(addr, len, need, what, pcv, bpv, spv);
 }
 
 // A NUL-terminated string, which is a range whose length nobody knows
@@ -1751,22 +1776,22 @@ void mpg_range (int addr, int len, int need, char *what, int *pcv, int *bpv, int
 // have kept going into whatever came next, and "an unterminated buffer,
 // in the one function that had not been read" is the literal root cause
 // of F12.
-void mpg_string (int addr, char *what, int *pcv, int *bpv, int *spv) {
+int mpg_string (int addr, char *what, int *pcv, int *bpv, int *spv) {
 	int p;
 	int *r;
 
-	if (!mpg_armed) return;
+	if (!mpg_armed) return 0;
 	r = mpg_find(addr, 1);
-	if (!r) { mpg_fault(addr, 1, MPG_R, what, pcv, bpv, spv); return; }
-	if (!(r[REGION_PERM] & MPG_R)) { mpg_fault(addr, 1, MPG_R, what, pcv, bpv, spv); return; }
+	if (!r) return mpg_fault(addr, 1, MPG_R, what, pcv, bpv, spv);
+	if (!(r[REGION_PERM] & MPG_R)) return mpg_fault(addr, 1, MPG_R, what, pcv, bpv, spv);
 	p = addr;
 	while (p < r[REGION_HI]) {
-		if (!*(char *)p) return;
+		if (!*(char *)p) return 0;
 		++p;
 	}
 	printf("c4mpg: %s at %p runs to the end of '%s' with no terminator\n",
 	       what, (int *)addr, (char *)r[REGION_NAME]);
-	mpg_fault(r[REGION_HI], 1, MPG_R, "read past the end of an unterminated string", pcv, bpv, spv);
+	return mpg_fault(r[REGION_HI], 1, MPG_R, "read past the end of an unterminated string", pcv, bpv, spv);
 }
 //<<< c4mpg
 
@@ -1783,12 +1808,12 @@ void mpg_string (int addr, char *what, int *pcv, int *bpv, int *spv) {
 // that had not been read").
 //
 // Arguments are t[-2], t[-3] ... in order, matching the call below.
-void mpg_printf (int fmt, int *t, int argn, int *pcv, int *bpv, int *spv) {
+int mpg_printf (int fmt, int *t, int argn, int *pcv, int *bpv, int *spv) {
 	char *f;
-	int   k, c;
+	int   k, c, bad;
 
-	if (!mpg_armed) return;
-	mpg_string(fmt, "printf() format", pcv, bpv, spv);
+	if (!mpg_armed) return 0;
+	bad = mpg_string(fmt, "printf() format", pcv, bpv, spv);
 	f = (char *)fmt;
 	k = 2;                              // t[-2] is the first argument
 	while (*f) {
@@ -1809,12 +1834,13 @@ void mpg_printf (int fmt, int *t, int argn, int *pcv, int *bpv, int *spv) {
 				c = *f;
 				if (c) ++f;
 				if (k <= argn) {
-					if (c == 's') mpg_string(t[0 - k], "printf() %s argument", pcv, bpv, spv);
+					if (c == 's') bad = bad | mpg_string(t[0 - k], "printf() %s argument", pcv, bpv, spv);
 					++k;
 				}
 			}
 		} else ++f;
 	}
+	return bad;
 }
 //<<< c4mpg
 
@@ -2109,6 +2135,9 @@ int c4m_main(int argc, char **argv)
   debug = 0;
   verb = 0;
   trap_handler = (int *)0;
+//>>> c4mpg
+  mpg_handler = 0;
+//<<< c4mpg
   a = 0;
   time_altmode = 0;
   // Used to protect traps from just returning instead of using TLEV.
@@ -2526,7 +2555,8 @@ int c4m_main(int argc, char **argv)
 			// than something with an interface.
 			if (mpg_armed) {
 				if (a >= mpg_rlo && a + sizeof(int) <= mpg_rhi) ++mpg_hits;
-				else mpg_slow(a, sizeof(int), MPG_R, "read", pc, bp, sp);
+				else if (mpg_slow(a, sizeof(int), MPG_R, "read", pc, bp, sp))
+					trap(TRAP_MPG_VIOLATION, a, trap_handler, &sp, &bp, &pc, a, mode);
 			}
 //<<< c4mpg
 			a = *(int *)a;                                     // load int
@@ -2535,7 +2565,8 @@ int c4m_main(int argc, char **argv)
 //>>> c4mpg
 		if (mpg_armed) {
 			if (a >= mpg_rlo && a + 1 <= mpg_rhi) ++mpg_hits;
-			else mpg_slow(a, 1, MPG_R, "read", pc, bp, sp);
+			else if (mpg_slow(a, 1, MPG_R, "read", pc, bp, sp))
+				trap(TRAP_MPG_VIOLATION, a, trap_handler, &sp, &bp, &pc, a, mode);
 		}
 //<<< c4mpg
 		a = *(char *)a;                                                   // load char
@@ -2544,7 +2575,8 @@ int c4m_main(int argc, char **argv)
 //>>> c4mpg
 		if (mpg_armed) {
 			if (*sp >= mpg_wlo && *sp + sizeof(int) <= mpg_whi) ++mpg_hits;
-			else mpg_slow(*sp, sizeof(int), MPG_W, "wrote", pc, bp, sp);
+			else if (mpg_slow(*sp, sizeof(int), MPG_W, "wrote", pc, bp, sp))
+				trap(TRAP_MPG_VIOLATION, *sp, trap_handler, &sp, &bp, &pc, a, mode);
 		}
 //<<< c4mpg
 		*(int *)*sp++ = a;                                                // store int
@@ -2553,7 +2585,8 @@ int c4m_main(int argc, char **argv)
 //>>> c4mpg
 		if (mpg_armed) {
 			if (*sp >= mpg_wlo && *sp + 1 <= mpg_whi) ++mpg_hits;
-			else mpg_slow(*sp, 1, MPG_W, "wrote", pc, bp, sp);
+			else if (mpg_slow(*sp, 1, MPG_W, "wrote", pc, bp, sp))
+				trap(TRAP_MPG_VIOLATION, *sp, trap_handler, &sp, &bp, &pc, a, mode);
 		}
 //<<< c4mpg
 		a = *(char *)*sp++ = a;                                           // store char
@@ -2580,7 +2613,8 @@ int c4m_main(int argc, char **argv)
     else if (i == OPEN) {
 		if (mode == MODE_UNPROTECTED) {
 //>>> c4mpg
-            mpg_string(sp[1], "open() path", pc, bp, sp);
+            if (mpg_string(sp[1], "open() path", pc, bp, sp))
+                trap(TRAP_MPG_VIOLATION, sp[1], trap_handler, &sp, &bp, &pc, a, mode);
 //<<< c4mpg
             a = c4m_open((char *)sp[1], *sp);
         }
@@ -2597,7 +2631,8 @@ int c4m_main(int argc, char **argv)
             // the count is docs/dos-rung-fixes.md F12, and the overrun
             // happens inside the host's read() where no guest
             // instruction ever executes.
-            mpg_range(sp[1], *sp, MPG_W, "read() into", pc, bp, sp);
+            if (mpg_range(sp[1], *sp, MPG_W, "read() into", pc, bp, sp))
+                trap(TRAP_MPG_VIOLATION, sp[1], trap_handler, &sp, &bp, &pc, a, mode);
 //<<< c4mpg
             a = c4m_read(sp[2], (char *)sp[1], *sp);
         }
@@ -2628,7 +2663,8 @@ int c4m_main(int argc, char **argv)
 	else if (i == PUTS) {
 		if (mode == MODE_UNPROTECTED) {
 //>>> c4mpg
-            mpg_string(*sp, "puts() string", pc, bp, sp);
+            if (mpg_string(*sp, "puts() string", pc, bp, sp))
+                trap(TRAP_MPG_VIOLATION, *sp, trap_handler, &sp, &bp, &pc, a, mode);
 //<<< c4mpg
             a = do_puts((char *)*sp);
         }
@@ -2643,7 +2679,8 @@ int c4m_main(int argc, char **argv)
 			r = pc[1];
 			t = sp + r;
 //>>> c4mpg
-			mpg_printf(t[-1], t, r, pc, bp, sp);
+			if (mpg_printf(t[-1], t, r, pc, bp, sp))
+				trap(TRAP_MPG_VIOLATION, t[-1], trap_handler, &sp, &bp, &pc, a, mode);
 //<<< c4mpg
 			// Fix potential access violation by not pushing arguments not given
 			//if (r == 1) a = printf((char*)t[-1]);
@@ -2690,21 +2727,24 @@ int c4m_main(int argc, char **argv)
 	}
     else if (i == MSET) {
 //>>> c4mpg
-		mpg_range(sp[2], *sp, MPG_W, "memset() over", pc, bp, sp);
+		if (mpg_range(sp[2], *sp, MPG_W, "memset() over", pc, bp, sp))
+			trap(TRAP_MPG_VIOLATION, sp[2], trap_handler, &sp, &bp, &pc, a, mode);
 //<<< c4mpg
 		a = (int)memset((char *)sp[2], sp[1], *sp);
 	}
     else if (i == MCMP) {
 //>>> c4mpg
-		mpg_range(sp[2], *sp, MPG_R, "memcmp() read of", pc, bp, sp);
-		mpg_range(sp[1], *sp, MPG_R, "memcmp() read of", pc, bp, sp);
+		if (mpg_range(sp[2], *sp, MPG_R, "memcmp() read of", pc, bp, sp)
+		  | mpg_range(sp[1], *sp, MPG_R, "memcmp() read of", pc, bp, sp))
+			trap(TRAP_MPG_VIOLATION, sp[2], trap_handler, &sp, &bp, &pc, a, mode);
 //<<< c4mpg
 		a = memcmp((char *)sp[2], (char *)sp[1], *sp);
 	}
     else if (i == MCPY) {
 //>>> c4mpg
-		mpg_range(sp[2], *sp, MPG_W, "memcpy() into", pc, bp, sp);
-		mpg_range(sp[1], *sp, MPG_R, "memcpy() from", pc, bp, sp);
+		if (mpg_range(sp[2], *sp, MPG_W, "memcpy() into", pc, bp, sp)
+		  | mpg_range(sp[1], *sp, MPG_R, "memcpy() from", pc, bp, sp))
+			trap(TRAP_MPG_VIOLATION, sp[2], trap_handler, &sp, &bp, &pc, a, mode);
 //<<< c4mpg
 		a = (int)c4_memcpy((void*)sp[2], (void*)sp[1], *sp);
 	}
@@ -2775,11 +2815,17 @@ int c4m_main(int argc, char **argv)
 				// Remove trap handler
 				a = (int)trap_handler;
 				trap_handler = 0;
+//>>> c4mpg
+				mpg_handler = 0;
+//<<< c4mpg
 			} else {
 				// Function address, skipping ENT x. Stack is adjusted in trap handler
 				// below by inspecting the skipped ENT x.
 				a = (int)trap_handler;
 				trap_handler = (int *)*sp;
+//>>> c4mpg
+				mpg_handler = *sp;
+//<<< c4mpg
 			}
 //		} else {
 //			trap(TRAP_PM_VIOLATION, ITH, trap_handler, &sp, &bp, &pc, a, mode);

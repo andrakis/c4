@@ -4,7 +4,7 @@ A fork of `c4m` that checks every memory access against a table of what the
 running context is allowed to touch, and a C4KE kernel extension that keeps that
 table honest across task switches.
 
-STATUS: **M1, M2 and M5 built and green, 2026-09-06.** `make test-mpg`. This document is
+STATUS: **M1, M2, M5 and M3's trap half built and green, 2026-09-06.** `make test-mpg`. This document is
 the contract; deviations get written back here, and two have been — see
 "Deviations, and what M1 measured" below.
 
@@ -241,8 +241,9 @@ guard vaguer fails the build.
       `MCMP`, `MCPY`), plus strings as ranges whose length nobody knows.
       `mpg_syscall` AND `mpg_unterminated` caught — both halves of the vfsload
       class.
-- [ ] **M3** The four opcodes, the narrowing rule, `TRAP_MPG_VIOLATION` with the
-      full message. `mpg_freed`, `mpg_interior` caught.
+- [~] **M3** `TRAP_MPG_VIOLATION` done, **and C4KE handles it** — see "Who says
+      what" below. The four opcodes and the narrowing rule are still to do.
+      (`mpg_freed` was caught back at M1, out of the allocator hook.)
 - [ ] **M4** `c4ke_mpg.c`: per-task regions from `TASK_EXTDATA`, context switch
       on trap and `TLEV`. `mpg_foreign`, `mpg_kernel` caught. **No change to
       `c4ke.c`** — if one turns out to be unavoidable, write down why here
@@ -400,6 +401,58 @@ A second read slot was tried. It took the hit rate to 87.5% and made the program
 calls it saves. Reverted, and recorded here rather than kept as a plausible
 optimisation nobody timed. Splitting the cache into a read slot and a write slot
 is kept — it costs nothing and the permission check falls out of it.
+
+## Who says what: the trap, and why C4KE answers it
+
+The user's design note, and it is the right shape: **c4mpg should not be the one
+talking about tasks, because it has never heard of one.** So a violation is now
+a trap, `TRAP_MPG_VIOLATION`, and the two halves of the report come from the two
+places that actually hold the facts:
+
+    c4mpg: wrote 0x61c9ee0ac7e0 (8 bytes) -- outside every region this program owns
+    c4mpg:   nearest below: 'malloc' [0x61c9ee0ac7c0,0x61c9ee0ac7e0) rw
+    c4mpg:   this access ends 8 bytes past the end of it
+    c4ke: task 2 'badmem.c4r' touched 0x61c9ee0ac7e0, which it does not own
+    c4ke: task 'badmem.c4r' at 0x61c9ee0129c0:
+      Id: 2 State: 0x3 R
+      Registers: A=0x63  BP=0x61c9ee0a31d8  SP=0x61c9ee0a31c0  PC=0x61c9ee0a84b0
+      badmem.c4r:main()+0x2f8
+        c4ke.c4r:__loadc4r_execute_entry()+0x60
+          c4ke.c4r:loadc4r_execute()+0x850
+            c4ke.c4r:task_loadc4r()+0x1398
+
+**c4mpg holds the region table**, so it alone can say which region was nearest,
+what its permissions were, how far past the end the access ran, and whether the
+address used to be a region and was freed. **C4KE holds the task table**, so it
+alone can say who, what they were called, where they were in their own code, and
+— the part that matters most — that this is one task's problem and not the
+machine's. It kills that task and schedules the next one.
+
+Before this, a violation called `exit(11)` and took the whole VM with it. Now
+the board carries on and shuts down of its own accord, which is the difference
+between a debugging session and a halted machine.
+
+### How it is wired, and what it costs when off
+
+- `mpg_fault` prints the region facts and RETURNS rather than halting. The call
+  site raises the trap. Only the miss path grew a return-value test; the inline
+  cache check in the dispatch loop is untouched.
+- `mpg_handler` mirrors the interpreter's `trap_handler`, which is a local of
+  `c4m_main` and invisible from the guard. It decides one thing: whether there
+  is a kernel above that can say more than we can. With no handler — a bare
+  program, `src/tests/mpg/*` — c4mpg still prints its own stack trace and exits
+  11, exactly as before.
+- `TRAP_MPG_VIOLATION` is appended to the trap enum in `c4m.c`, `c4mpg.c` AND
+  `src/c4ke/c4ke.c`, so the number is reserved across the family and the enums
+  stay in step. Plain c4m never raises it.
+- C4KE's arm is one `else if` near the bottom of `trap_handler`, alongside
+  `TRAP_SEGV` and `TRAP_OPV` and built the same way. A kernel running under
+  plain `c4m` never reaches it, so it costs nothing anywhere else.
+
+`src/c4ke/bin/badmem.c` is the pin: one word past a `malloc`, as a C4KE task.
+`make test-mpg` asserts both halves of the message, the resolved trace, and the
+clean shutdown — plus a control that plain `c4m` lets the same task run to
+completion, so the leg is testing the guard and not something else.
 
 ## What this is not
 

@@ -247,6 +247,11 @@ enum {
 	TRAP_PM_VIOLATION,
 	// Debug trap, used by DBG opcode
 	TRAP_DEBUG,
+	// A load or store outside every region the running context owns.
+	// Raised only by c4mpg (docs/c4mpg-design.md); listed here so the
+	// number is reserved across the whole family and the two enums stay
+	// in step. Plain c4m never raises it.
+	TRAP_MPG_VIOLATION,
 };
 
 // Instruction mode  : unprotected (default) and protected.
@@ -2572,6 +2577,7 @@ static int *start_task_builtin (int *entry, int argc, char **_argv, char *name, 
 //   * TRAP_ILLOP: illegal opcode, look up handler or kill task if not present
 //   * TRAP_PM_VIOLATION: SYSCALL in protected mode, emulate it
 //   * TRAP_DEBUG: trigger the attached debugger
+//   * TRAP_MPG_VIOLATION: a region violation under c4mpg, kill task
 //
 // This handler allows a number of custom opcodes. It jumps directly into
 // the custom handler.
@@ -2696,6 +2702,41 @@ static void trap_handler (int trap, int ins, int mode, int a, int *bp, int *sp, 
 		__c4_jmp((int *)&trap_schedule_in_trap + 2);
 		printf("c4ke: unable to terminate segfaulting process\n");
 		exit(-4);
+	}
+
+	// A load or store outside every region the running task owns --
+	// c4mpg only (docs/c4mpg-design.md), and inert under plain c4m,
+	// which never raises this trap.
+	//
+	// THE DIVISION OF LABOUR IS THE POINT. c4mpg has already printed
+	// the things only it can know: which region was nearest, what its
+	// permissions were, how many bytes past its end the access ran,
+	// whether the address used to be a region and was freed. It cannot
+	// say WHO, because it has never heard of a task. That is all here:
+	// the id, the name the task was started with, its registers, and a
+	// stack trace through its own .c4r symbols. And then the machine
+	// carries on -- one task dies, which is the difference between a
+	// debugging session and a halted board.
+	else if (trap == TRAP_MPG_VIOLATION) {
+		// Update task info using trap details, so the print below and
+		// the stack trace both see where it actually was.
+		kernel_task_current[TASK_REG_A]  = (int)a;
+		kernel_task_current[TASK_REG_BP] = (int)bp;
+		kernel_task_current[TASK_REG_SP] = (int)sp;
+		kernel_task_current[TASK_REG_PC] = (int)returnpc;
+		printf("c4ke: task %d '%s' touched 0x%lx, which it does not own\n",
+		       kernel_task_current[TASK_ID],
+		       (char *)kernel_task_current[TASK_NAME], ins);
+		kernel_print_task(kernel_task_current);
+		c4r_print_stacktrace(kernel_c4r, (int *)kernel_task_current[TASK_C4R], bp, returnpc);
+		// Kill the task and schedule()
+		kernel_task_current[TASK_EXIT_CODE] = -1000;
+		kernel_task_finish(kernel_task_current);
+		kernel_task_current[TASK_STATE] = STATE_ZOMBIE;
+		++kernel_tasks_zombie;
+		__c4_jmp((int *)&trap_schedule_in_trap + 2);
+		printf("c4ke: unable to terminate the task that broke a region\n");
+		exit(-5);
 	}
 
 	// OPCD fault?

@@ -58,6 +58,57 @@ want mpg_freed    11 "outside every region" "THIS WAS A REGION" "Use after free"
 want mpg_syscall      11 "read() into" "runs 65472 bytes past the end" "int main()"
 want mpg_unterminated 11 "printf() %s argument" "no terminator" "int main()"
 
+# ---- the two halves, under a real kernel ----------------------------
+# The division of labour is the design, so it is what gets pinned:
+#
+#   c4mpg says WHAT was touched -- the nearest region, its permissions,
+#   how far past its end. Only the guard holds a region table.
+#   C4KE says WHO -- the task id, the name it was started with, and a
+#   stack trace through its own .c4r symbols. Only the kernel knows a
+#   task exists.
+#
+# And then the KERNEL SURVIVES. One task dies; the machine shuts down
+# of its own accord. That is the difference between a debugging session
+# and a halted board, and it is why the guard raises a trap instead of
+# calling exit().
+KE=c4ke.c4r
+BADMEM=src/c4ke/bin/badmem.c4r
+if [ -f $KE ] && [ -f $BADMEM ]; then
+    ke_out=$(timeout 300 $MPG load-c4r.c -- $KE $BADMEM 2>&1)
+    ok=1
+    for phrase in \
+        "c4mpg: wrote" \
+        "nearest below: 'malloc'" \
+        "8 bytes past the end of it" \
+        "which it does not own" \
+        "badmem.c4r:main()" \
+        "c4ke.c4r:task_loadc4r()" \
+        "clean shutdown"; do
+        echo "$ke_out" | grep -qF "$phrase" || { echo "test-mpg: c4ke leg missing: $phrase"; ok=0; }
+    done
+    # The task must die, not survive its own violation.
+    if echo "$ke_out" | grep -qF "badmem: still running"; then
+        echo "test-mpg: c4ke leg -- the task ran on past the violation"; ok=0
+    fi
+    if [ $ok = 1 ]; then
+        echo "test-mpg: c4mpg names the region, C4KE names the task, kernel survives OK"
+    else
+        echo "$ke_out" | sed 's/^/    /' | head -20; fail=1
+    fi
+
+    # And the control: under plain c4m the same task sails through, so
+    # the leg above is testing the guard and not something else.
+    plain_out=$(timeout 300 $C4M load-c4r.c -- $KE $BADMEM 2>&1)
+    if echo "$plain_out" | grep -qF "badmem: still running"; then
+        echo "test-mpg: control -- plain c4m lets it through, as it should OK"
+    else
+        echo "test-mpg: control FAILED -- plain c4m did not run badmem to completion"
+        echo "$plain_out" | tail -5 | sed 's/^/    /'; fail=1
+    fi
+else
+    echo "test-mpg: skipping the C4KE leg ($KE or $BADMEM missing)"
+fi
+
 # ---- known good: identical to c4m, to the byte ----------------------
 # Programs that print an address of their own are excluded by name, not
 # by a loose comparison: their output legitimately differs run to run

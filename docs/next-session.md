@@ -76,7 +76,26 @@ the memory-exhaustion path, which never happens against 4 GB of host RAM. That
 is a much smaller place to look than "somewhere in C4KE", and it is the next
 thing to look in.
 
-**M3 next for c4mpg:**The user asked for this specifically because four bugs in one day were all
+**M3 is half done.** `TRAP_MPG_VIOLATION` exists and **C4KE handles it**: c4mpg
+names the region, C4KE names the task and kills it, and the machine carries on.
+`src/c4ke/bin/badmem.c` pins both halves. What is left of M3 is the four opcodes
+(`MPG_DEFINE`/`MPG_DROP`/`MPG_CONTEXT`/`MPG_QUERY`) and the narrowing-only rule,
+so a program can describe its own memory rather than only inherit what MALC
+knows.
+
+**The board-side guard is the other open piece**, and it is the one aimed at the
+lockup. Every memory access in BOTH c4bb engines goes through `Arena`
+(`src/c4bb/sim/arena.js`, 75 lines) — `read32`/`read8s`/`read8u`/`write32`/
+`write8` — so that is the seam. The user's requirement is a FORK, not a flag, so
+the existing interpreter does not slow down: `arena.js` and `turbo.js` copied
+(turbo compiles `ar.write32(mar,mdr)` and would need to pass `pc`), selected by
+a `cli.js` flag that dynamically imports them so a normal run never loads the
+module. Registers 0x1a4 upward are free in the device window for a query port.
+The primitive worth having is not regions but **last-writer-per-word**: C4KE
+already detects the damage late (`OVERRAN ITS STACK ... guard broken`) and what
+nobody can answer is who wrote it.
+
+The user asked for this specifically because four bugs in one day were all
 "something wrote where it should not, and it surfaced somewhere else much
 later", and valgrind cannot help when the memory written IS validly allocated —
 to somebody else. Ownership, not liveness.

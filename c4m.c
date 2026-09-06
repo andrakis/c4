@@ -309,6 +309,11 @@ enum {
 	TRAP_PM_VIOLATION,
 	// Debug trap, used by DBG opcode
 	TRAP_DEBUG,
+	// A load or store outside every region the running context owns.
+	// Raised only by c4mpg (docs/c4mpg-design.md); listed here so the
+	// number is reserved across the whole family and the two enums stay
+	// in step. Plain c4m never raises it.
+	TRAP_MPG_VIOLATION,
 };
 // TRAP_HARD_IRQ codes
 enum {

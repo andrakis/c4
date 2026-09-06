@@ -49,21 +49,29 @@ before believing anything it tells you.
 
 ---
 
-## 2. `docs/c4mpg-design.md` — designed, not built
+## 2. c4mpg — M1 is in, M2 is next
 
-A complete design for a memory-protection fork of `c4m` plus a C4KE extension:
-region table with owner+permissions, `C4I_C4MPG = 0x100` (verified free), four
-custom opcodes with a narrowing-only rule, `TRAP_MPG_VIOLATION` that halts at
-the bad write, and `c4ke_mpg.c` using `TASK_EXTDATA` and the `JMP`+`ENT`
-trampoline patch. Six milestones, M0 through M6.
+`make test-mpg` is green: the region table, checks on `LI`/`LC`/`SI`/`SC`,
+`C4I_C4MPG` announced, `mpg_overrun` / `mpg_underrun` / `mpg_freed` caught and
+NAMED, and 73 corpus programs byte-identical to plain `c4m` under the guard.
+1.07x on a load/store-heavy loop, against a budget of 2x.
+`docs/c4mpg-design.md` has the two deviations and everything M1 measured.
+
+**M2 is the one that matters most** and it is the next thing to do: the syscall
+buffer ranges (`READ`, `PRTF`, `MSET`, `MCMP`, `MCPY`, `WRIT`) checked over
+`[buf, buf+len)` rather than the first byte. `read(fd, buf, 262144)` into a 4 KB
+buffer IS the vfsload bug (F12), and no per-instruction check can ever see it,
+because the overrun happens inside the host's `read` and not in guest code.
+`src/tests/mpg/mpg_syscall.c` is the deliverable.
+
+Then M3 (the four opcodes, the narrowing rule, `TRAP_MPG_VIOLATION`), M4
+(`c4ke_mpg.c`, per-task regions, no change to `c4ke.c`), M6 (aim it at
+`innerbench -n 50` and at the reverted F12).
 
 The user asked for this specifically because four bugs in one day were all
 "something wrote where it should not, and it surfaced somewhere else much
 later", and valgrind cannot help when the memory written IS validly allocated —
 to somebody else. Ownership, not liveness.
-
-Start at M1 (region table, `LI`/`LC`/`SI`/`SC` only, no C4KE). The known-bad
-test corpus in that document is the first deliverable, not the last.
 
 ---
 

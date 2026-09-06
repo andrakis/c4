@@ -4,9 +4,9 @@ A fork of `c4m` that checks every memory access against a table of what the
 running context is allowed to touch, and a C4KE kernel extension that keeps that
 table honest across task switches.
 
-STATUS: designed, not built. This document is the contract; deviations get
-written back here. Written 2026-09-06 at the user's request, to be implemented
-in a fresh session.
+STATUS: **M1 built and green, 2026-09-06.** `make test-mpg`. This document is
+the contract; deviations get written back here, and two have been — see
+"Deviations, and what M1 measured" below.
 
 ## Why
 
@@ -226,9 +226,11 @@ guard vaguer fails the build.
 ## Milestones
 
 - [ ] **M0** This document, reviewed.
-- [ ] **M1** `c4mpg.c` forked from `c4m.c`, region table, checks on `LI`/`LC`/
-      `SI`/`SC` only, `C4I_C4MPG` reported. No C4KE. `mpg_overrun` and
-      `mpg_underrun` caught; every existing test still green.
+- [x] **M1** Region table, checks on `LI`/`LC`/`SI`/`SC`, `C4I_C4MPG`
+      reported. No C4KE. `mpg_overrun`, `mpg_underrun` and `mpg_freed` caught
+      and NAMED; 73 corpus programs run identically under the guard.
+      `make test-mpg`. Built from `c4m.c -DC4MPG=1` rather than a forked file
+      — see below.
 - [ ] **M2** Syscall buffer ranges (`READ`, `PRTF`, `MSET`, `MCMP`, `MCPY`).
       `mpg_syscall` caught — the vfsload class.
 - [ ] **M3** The four opcodes, the narrowing rule, `TRAP_MPG_VIOLATION` with the
@@ -240,6 +242,68 @@ guard vaguer fails the build.
 - [ ] **M5** Performance measured against the `test-c4bb` and boot-cycle
       baselines, recorded in this file whatever it says.
 - [ ] **M6** Aimed at the known bugs; `make test-mpg` pinned.
+
+## Deviations, and what M1 measured
+
+**Built from `c4m.c -DC4MPG=1`, not a forked `c4mpg.c`.** Still a separate
+binary and a separate `.c4r`, still never a runtime flag — which is what that
+rule is for; a guard you can leave on by accident quietly changes every
+measurement in the repo. But a 2,300-line fork of the VM rots, and this tree
+already carries that exact wound: Homeward's vendored c4bb is 21 commits behind
+while its own header calls it "the behavioral oracle". A guard that has drifted
+from the VM it guards reports on a program nobody runs. Every `#ifdef C4MPG`
+block only ADDS, which is the rule `c4m.c` was written to (see
+`docs/dos-rung-fixes.md` round four) — and it is safe to rely on now precisely
+because no build of `c4m.c` goes through raw `c4cc` any more; they all go
+through `./cpp`, which evaluates the `#ifdef` instead of skipping it.
+
+**The code region is writable.** `MPG_R | MPG_W | MPG_X`, not `rx`. Self
+modifying code is a documented, load-bearing technique in this family:
+`c4_invoke_stub` rewrites its own first instruction to a `JMP`,
+`include/c4dos.h`'s `__c4dos_stub` does the same to reach the DOS API on a
+machine with no indirect call, and `src/tests/c4_jailbreak.c` is a whole test
+about doing it deliberately. A guard that forbids the VM's own idioms is a guard
+that gets turned off. Narrowing it per-program is what `MPG_DEFINE` is for, at
+M3.
+
+### What the known-good half found, which is why it is not optional
+
+Both findings came from the first corpus run, and neither was a bug in the
+programs:
+
+- **`test_switch` tripped on c4m's own switch jumptables.** They are plain
+  `malloc`'d memory (`stmt()`), the compiled program READS them through an `LI`
+  on every switch, and they belong to no pool. c4m hands the guest memory in
+  places other than `MALC`, and the guard had to be told. `mpg_note()` records
+  them during compilation; they become regions at arm time.
+- **`c4_jailbreak` tripped on writing into the code area** — see above.
+
+After both: **73 of 73** corpus programs produce byte-identical output to plain
+`c4m`, zero violations. (Four of them print addresses of their own and so differ
+run to run under ASLR; the test names them rather than loosening the
+comparison.)
+
+### Performance, recorded whatever it says
+
+Budget was under 2x, say so if worse than 3x. Measured on a load/store-heavy
+loop (4,000 iterations over a 256-word buffer, 16.4M checked accesses), eight
+runs each:
+
+| | wall |
+|---|---|
+| `c4m` | 1.59 s |
+| `c4mpg` | 1.70 s |
+
+**1.07x.** The cache hit rate is 75%, not the "high nineties" the design
+expected, and the reason is worth keeping: the commonest statement in that loop
+is `sum = sum + buf[i]`, whose READS alternate between the locals on the stack
+and the array on the heap, so a one-entry cache thrashes every iteration.
+
+A second read slot was tried. It took the hit rate to 87.5% and made the program
+**slower** (1.11x), because the extra inline comparison costs more than the
+calls it saves. Reverted, and recorded here rather than kept as a plausible
+optimisation nobody timed. Splitting the cache into a read slot and a write slot
+is kept — it costs nothing and the permission check falls out of it.
 
 ## What this is not
 
@@ -254,15 +318,17 @@ guard vaguer fails the build.
 
 ## Open questions
 
-1. **Where do a task's own `malloc`s become regions?** The kernel cannot see
-   them — `kernel_task_malloc` exists but is called only by itself, and its one
-   real caller is `c4ke_pm.c`, which is compiled out (`CONFIG_ENABLE_PM = 0`).
-   Either `MALC` grows a region automatically in `c4mpg`, or the extension has
-   to intercept it. The former is simpler and does not depend on a shelved
-   extension; prefer it unless it proves wrong.
+1. ~~**Where do a task's own `malloc`s become regions?**~~ **Answered at M1:
+   in `MALC`.** `c4_malloc` defines the region and `c4_free` drops it, which is
+   also the only place that knows the LENGTH — and the length is the whole
+   point, since without it an overrun by one word is indistinguishable from a
+   legal access. It came with a free bonus: use-after-free falls out of the same
+   hook, so `mpg_freed` is caught at M1 rather than M3. A small ring of the last
+   64 dropped regions lets the report say "THIS WAS A REGION ... freed" instead
+   of "nothing owns this", which is true and useless.
 2. **What owns firmware memory on c4bb?** `fw.c` allocates from the same arena
    and predates any context. Probably one region owned by 0, defined at boot.
-3. **Does the region table live in guest memory or host memory?** Host is
-   simpler and cannot itself be corrupted by the bug being hunted — which is a
-   strong argument, given that a guard living in the memory it protects is a
-   guard that fails exactly when it is needed.
+3. ~~**Does the region table live in guest memory or host memory?**~~
+   **Answered at M1: host.** It is c4mpg's own `malloc`'d array, in none of the
+   pools and in no region, so nothing the guard is hunting can reach it. A guard
+   living in the memory it protects fails exactly when it is needed.

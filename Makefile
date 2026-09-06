@@ -449,6 +449,31 @@ c4-dos.c4r: $(C4CC) c4.c
 # Still base-c4: c4dos.h reaches the API through its invoke STUB
 # (a self-rewritten JMP), not an indirect call, and it rides along as a
 # source file because that is what its own header says it is.
+# c4mpg -- c4m with the memory protection guard. docs/c4mpg-design.md.
+#
+# A SEPARATE BINARY, never a runtime flag: the guard costs time on every
+# load and store, and c4m is what the whole ladder is benchmarked on
+# (docs/compiler-speed.md). A guard you can leave on by accident quietly
+# changes every measurement in the repo.
+#
+# It is built from c4m.c rather than a forked c4mpg.c, which is a
+# deviation from the design document and is written down there and in
+# c4m.c beside the code. The short version: a 2,300-line fork of the VM
+# rots, this tree already carries that exact wound (Homeward's vendored
+# c4bb, 21 commits behind, calling itself the oracle), and a guard that
+# has drifted from the VM it guards reports on a program nobody runs.
+# Both halves of the guard: the known-bad set is caught AND named, and
+# the whole corpus still runs identically under it. The second half is
+# the one that keeps it usable -- docs/c4mpg-design.md.
+test-mpg: c4mpg c4m
+	bash src/tests/mpg/test-mpg.sh
+
+c4mpg: c4m.c c4m_float.c
+	gcc $(NATIVE_CC_OPTS) -DC4MPG=1 c4m.c c4m_float.c -o $@ -lm
+
+c4mpg32: c4m.c c4m_float.c
+	gcc -m32 $(NATIVE_CC_OPTS) -DC4MPG=1 c4m.c c4m_float.c -o $@ -lm
+
 c4m-dos.c4r: $(C4CC) cpp $(INCLUDE)/c4dos.h c4m.c
 	$(OURCPP) -DC4M_FREESTANDING=1 -DC4_ONLY=1 -DNOT_NATIVE=1 -DC4M_DOS=1 -DC4M_NO_U0=1 $(INCLUDE)/c4dos.h c4m.c > .c4m_dos_pp.c
 	$(C4CC) -o $@ .c4m_dos_pp.c > /dev/null

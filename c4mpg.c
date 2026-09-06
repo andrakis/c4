@@ -213,12 +213,15 @@
 // a preprocessor and passes -DC4M_DOS=1.
 //
 // If a build ever prepends c4dos.h WITHOUT that flag, these collide
-// with the real ones. Plain c4 refuses that outright ("duplicate
-// global definition"); c4cc was tried and took it without a word. So
-// what keeps them apart is the BUILD RULES, not the compiler: every
-// build that prepends c4dos.h passes -DC4M_DOS=1 -- the Makefile's two
-// c4m-dos rules and src/c4bb/tests/build-images.sh, all three of which
-// go through ./cpp for exactly this reason.
+// with the real ones -- and the two hosts disagree about that ON
+// PURPOSE. Plain c4 refuses a duplicate global outright ("duplicate
+// global definition"). c4m ALLOWS redefinition, by design and as part
+// of what multiload is for, and c4cc inherited it. So a collision here
+// would be silent on the host that matters, and what keeps them apart
+// is the BUILD RULES rather than the compiler: every build that
+// prepends c4dos.h passes -DC4M_DOS=1 -- the Makefile's two c4m-dos
+// rules and src/c4bb/tests/build-images.sh, all three through ./cpp
+// for exactly this reason.
 #ifndef C4M_DOS
 int dos_readable () { return 0; }
 int dos_can_time () { return 0; }
@@ -1433,12 +1436,28 @@ void c4_mt_del (int p) {
 
 enum { MPG_R = 1, MPG_W = 2, MPG_X = 4 };
 enum { REGION_LO, REGION_HI, REGION_PERM, REGION_OWNER, REGION_NAME, REGION__Sz };
-enum { MPG_MAX = 16384 };
+// The table GROWS. It started as a fixed 16,384 entries on the design's
+// reasoning that "region counts are small -- a task has a stack, a code
+// area, a data area, and its own allocations". That holds for one
+// program and is wrong for the thing this tool was built to look at:
+// pointed at C4KE running innerbench -n 50, fifty nested kernels filled
+// it and the guard said so --
+//
+//   c4mpg: region table full at 16384 -- the guard is now INCOMPLETE
+//   c4mpg: wrote 0x559e9cd0f7e0 (1 bytes) -- outside every region ...
+//
+// -- and the "violation" on the next line was the cap, not the kernel:
+// with the table full a new allocation gets no region, so a perfectly
+// legal write into it reads as a fault. That message is the only reason
+// a false finding was not reported as the prize. It stays, for the day
+// growth itself fails.
+enum { MPG_MIN_CAP = 4096 };
 
-int *mpg_tab;      // MPG_MAX * REGION__Sz words, sorted ascending by LO
+int *mpg_tab;      // mpg_cap * REGION__Sz words, sorted ascending by LO
+int  mpg_cap;      // entries the table can hold
 int  mpg_n;        // regions in use
 int  mpg_armed;    // 0 until the program's own memory has been described
-int  mpg_full;     // said once, if the table filled up
+int  mpg_full;     // said once, if growth ever fails
 
 // The cache, kept open as globals rather than behind a function,
 // because the dispatch loop tests it INLINE: on a hit the whole guard
@@ -1480,9 +1499,10 @@ char *mpg_permstr (int perm) {
 }
 
 void mpg_setup () {
-	mpg_tab = malloc(MPG_MAX * REGION__Sz * sizeof(int));
+	mpg_cap = MPG_MIN_CAP;
+	mpg_tab = malloc(mpg_cap * REGION__Sz * sizeof(int));
 	if (!mpg_tab) { printf("c4mpg: cannot allocate the region table\n"); exit(-1); }
-	memset((char *)mpg_tab, 0, MPG_MAX * REGION__Sz * sizeof(int));
+	memset((char *)mpg_tab, 0, mpg_cap * REGION__Sz * sizeof(int));
 	mpg_ghost = malloc(MPG_GHOSTS * 2 * sizeof(int));
 	if (mpg_ghost) memset((char *)mpg_ghost, 0, MPG_GHOSTS * 2 * sizeof(int));
 	mpg_ghost_at = 0;
@@ -1525,18 +1545,37 @@ int *mpg_find (int addr, int len) {
 // permissions is a real thing an MMU does, but it is the C4KE half of
 // this design (M4) and pretending to support it here would make
 // mpg_find quietly wrong.
+// Double the table. Plain malloc/memcpy/free, deliberately: the region
+// table is HOST memory, in no pool and in no region, so growing it
+// cannot recurse back into mpg_define the way a guest allocation does.
+int mpg_grow () {
+	int *bigger, cap;
+
+	cap = mpg_cap + mpg_cap;
+	if (!(bigger = malloc(cap * REGION__Sz * sizeof(int)))) return 0;
+	memset((char *)bigger, 0, cap * REGION__Sz * sizeof(int));
+	memcpy((char *)bigger, (char *)mpg_tab, mpg_n * REGION__Sz * sizeof(int));
+	free((void *)mpg_tab);
+	mpg_tab = bigger;
+	mpg_cap = cap;
+	return 1;
+}
+
 int mpg_define (int lo, int hi, int perm, char *name) {
 	int i, j;
 	int *r;
 
 	if (hi <= lo) return 0;
 	if (!mpg_tab) return 0;
-	if (mpg_n >= MPG_MAX) {
-		if (!mpg_full) {
-			mpg_full = 1;
-			printf("c4mpg: region table full at %d -- the guard is now INCOMPLETE\n", MPG_MAX);
+	if (mpg_n >= mpg_cap) {
+		if (!mpg_grow()) {
+			if (!mpg_full) {
+				mpg_full = 1;
+				printf("c4mpg: cannot grow the region table past %d -- the guard is now INCOMPLETE\n", mpg_cap);
+				printf("c4mpg: every violation reported from here on may be this, and not a bug\n");
+			}
+			return 0;
 		}
-		return 0;
 	}
 	i = mpg_floor(lo);
 	if (i >= 0) {

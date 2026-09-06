@@ -189,12 +189,15 @@
 // a preprocessor and passes -DC4M_DOS=1.
 //
 // If a build ever prepends c4dos.h WITHOUT that flag, these collide
-// with the real ones. Plain c4 refuses that outright ("duplicate
-// global definition"); c4cc was tried and took it without a word. So
-// what keeps them apart is the BUILD RULES, not the compiler: every
-// build that prepends c4dos.h passes -DC4M_DOS=1 -- the Makefile's two
-// c4m-dos rules and src/c4bb/tests/build-images.sh, all three of which
-// go through ./cpp for exactly this reason.
+// with the real ones -- and the two hosts disagree about that ON
+// PURPOSE. Plain c4 refuses a duplicate global outright ("duplicate
+// global definition"). c4m ALLOWS redefinition, by design and as part
+// of what multiload is for, and c4cc inherited it. So a collision here
+// would be silent on the host that matters, and what keeps them apart
+// is the BUILD RULES rather than the compiler: every build that
+// prepends c4dos.h passes -DC4M_DOS=1 -- the Makefile's two c4m-dos
+// rules and src/c4bb/tests/build-images.sh, all three through ./cpp
+// for exactly this reason.
 #ifndef C4M_DOS
 int dos_readable () { return 0; }
 int dos_can_time () { return 0; }

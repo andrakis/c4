@@ -66,15 +66,17 @@ because **`c4m.c` is read as SOURCE at run time** — `innerbench` runs
 an `#ifdef` there is unconditional code in every nested interpreter. Edit
 `c4m.c`, then re-run the check; it names the lines that have gone out of step.
 
-**M3 next:** the four opcodes (`MPG_DEFINE`/`MPG_DROP`/`MPG_CONTEXT`/
-`MPG_QUERY`), the narrowing-only rule, and `TRAP_MPG_VIOLATION` so a program
-can handle a violation instead of only halting on it. Then M4 (`c4ke_mpg.c`,
-per-task regions from `TASK_EXTDATA`, **no change to `c4ke.c`**) and M6 (aim it
-at `innerbench -n 50` and at F12 reverted locally — that is the run that would
-name the wild write behind
-`task 33 OVERRAN ITS STACK: 44 of 262144 bytes, guard broken`).
+**Already pointed at the prize, with a result worth knowing.**
+`c4mpg load-c4r.c -- c4ke.c4r innerbench -n 50` — C4KE natively, fifty nested
+kernels — runs **clean**: zero violations, clean shutdown, 1.23x the plain
+`c4m` time. So the wild write the BOARD reports under the same workload
+(`task 33 OVERRAN ITS STACK: 44 of 262144 bytes, guard broken`) **does not
+reproduce natively**. It belongs to c4bb — its arena and `fw:` allocator — or to
+the memory-exhaustion path, which never happens against 4 GB of host RAM. That
+is a much smaller place to look than "somewhere in C4KE", and it is the next
+thing to look in.
 
-The user asked for this specifically because four bugs in one day were all
+**M3 next for c4mpg:**The user asked for this specifically because four bugs in one day were all
 "something wrote where it should not, and it surfaced somewhere else much
 later", and valgrind cannot help when the memory written IS validly allocated —
 to somebody else. Ownership, not liveness.

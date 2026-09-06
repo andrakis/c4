@@ -4,7 +4,7 @@ A fork of `c4m` that checks every memory access against a table of what the
 running context is allowed to touch, and a C4KE kernel extension that keeps that
 table honest across task switches.
 
-STATUS: **M1 and M2 built and green, 2026-09-06.** `make test-mpg`. This document is
+STATUS: **M1, M2 and M5 built and green, 2026-09-06.** `make test-mpg`. This document is
 the contract; deviations get written back here, and two have been — see
 "Deviations, and what M1 measured" below.
 
@@ -247,8 +247,9 @@ guard vaguer fails the build.
       on trap and `TLEV`. `mpg_foreign`, `mpg_kernel` caught. **No change to
       `c4ke.c`** — if one turns out to be unavoidable, write down why here
       before making it.
-- [ ] **M5** Performance measured against the `test-c4bb` and boot-cycle
-      baselines, recorded in this file whatever it says.
+- [x] **M5** Measured on a real kernel: **1.23x** over `c4m` for
+      `load-c4r.c -- c4ke.c4r innerbench -n 50`, 83.9 s against 103.6 s.
+      Recorded below with the microbenchmark that flattered it.
 - [ ] **M6** Aimed at the known bugs; `make test-mpg` pinned (the known-bad
       messages and the fork check are pinned already).
 
@@ -326,6 +327,43 @@ unterminated buffer in the one function that had not been read*. `mpg_printf`
 now walks the format (counting `*` width arguments, which would otherwise
 misalign every `%s` after them) and checks each `%s` argument as a string.
 
+### Pointed at a real kernel, which is where the instrument was found wanting
+
+`c4mpg load-c4r.c -- c4ke.c4r innerbench -n 50` — C4KE natively, fifty nested
+c4m instances each compiling and running a kernel of their own. No C4KE
+extension is needed for this to mean something: **C4KE's per-task stacks are
+`malloc`'d**, so every one of them is already a region, courtesy of the MALC
+hook.
+
+The first attempt did not find a kernel bug. It found mine:
+
+    c4mpg: region table full at 16384 -- the guard is now INCOMPLETE
+    c4mpg: wrote 0x559e9cd0f7e0 (1 bytes) -- outside every region this program owns
+
+The design said "region counts are small — a task has a stack, a code area, a
+data area, and its own allocations". True of one program, false of fifty nested
+kernels. And the "violation" on the second line is the cap, not the kernel: with
+the table full a new allocation gets no region, so a legal write into it reads
+as a fault. **That saturation message is the only reason a false finding was not
+reported as the prize.** The table grows now (doubling, host memory, so it
+cannot recurse into itself), and the message stays for the day growth itself
+fails.
+
+With that fixed: **zero violations, clean shutdown, 103 seconds.**
+
+**That is a real negative result and it narrows the hunt.** The wild write the
+board reports under the same workload —
+
+    c4ke: task 33 () OVERRAN ITS STACK: 44 of 262144 bytes, guard broken
+
+— 44 bytes used and the guard broken, which is a write from somewhere else
+entirely — **does not reproduce natively**. Fifty nested kernels with a
+permission check on every load and store, and nothing touched anything it did
+not own. So the corruption belongs to the board: either to c4bb's own arena and
+`fw:` allocator, or to the memory-exhaustion path, which never happens natively
+against 4 GB. That is where to look next, and it is a much smaller place than
+"somewhere in C4KE".
+
 ### Performance, recorded whatever it says
 
 Budget was under 2x, say so if worse than 3x. Measured on a load/store-heavy
@@ -337,7 +375,22 @@ runs each:
 | `c4m` | 1.59 s |
 | `c4mpg` | 1.70 s |
 
-**1.07x.** The cache hit rate is 75%, not the "high nineties" the design
+**1.07x** — on a microbenchmark, which flatters it. The honest number is the
+kernel one:
+
+| | wall |
+|---|---|
+| `c4m load-c4r.c -- c4ke.c4r innerbench -n 50` | 83.9 s |
+| `c4mpg` same | 103.6 s |
+
+**1.23x**, still well inside the 2x budget, and that is the figure to quote.
+Under that load the cache hit rate falls to about half (746M hits against 703M
+misses in the saturated run), because a kernel switching between fifty tasks has
+no locality of the kind one program has, and every miss is a binary search over
+tens of thousands of regions. If the guard ever needs to be faster, that is the
+place: the lookup, not the inline test.
+
+The microbenchmark's own hit rate is 75%, not the "high nineties" the design
 expected, and the reason is worth keeping: the commonest statement in that loop
 is `sum = sum + buf[i]`, whose READS alternate between the locals on the stack
 and the array on the heap, so a one-entry cache thrashes every iteration.

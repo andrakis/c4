@@ -42,6 +42,19 @@
 // boundaries, so emitting a whole frame costs ONE cycle, where printf
 // vectors into the firmware formatter (fw/fw.c) at ~15-20 instructions
 // per character -- about 40,000 cycles for the same frame.
+//
+// THREE builds, because there are three opcode budgets and the bottom
+// one is real. -D RC_C4=1 is C4DOS on PLAIN C4: the original opcode set
+// and nothing else, not even TIME. `make run-c4dos-c4` boots C4DOS that
+// way, and a raycast built for the DOS rung dies there with
+// `unknown instruction = 53` -- 53 being TIME, which the DOS rung has
+// (CONFIG.SYS DEVICE=CLOCK.SYS) and stock c4 does not.
+//
+// Losing the clock costs the f/s figure and nothing else: fps_tick
+// already guards its divide with `if (t != fps_t0)`, so a clock that
+// never moves leaves f/s at 0 rather than dividing by zero, and the
+// maze seed falls back to a fixed one unless -s says otherwise. A fixed
+// maze on a machine with no clock is the honest outcome.
 #ifdef RC_DOS
 // puts appends a newline of its own, so the printf form must too:
 // plat_emit means "the frame, then one newline" in both builds, and
@@ -49,10 +62,19 @@
 #define plat_emit(b)     printf("%s\n", (b))
 #define plat_cyc()       0
 #define plat_usleep(us)  0
+#define plat_time()      __time()
+#else
+#ifdef RC_C4
+#define plat_emit(b)     printf("%s\n", (b))
+#define plat_cyc()       0
+#define plat_usleep(us)  0
+#define plat_time()      0
 #else
 int plat_emit   (char *b)  { puts(b); return 0; }
 int plat_cyc    ()         { return __c4_cycles(); }
 int plat_usleep (int us)   { __c4_usleep(us); return 0; }
+int plat_time   ()         { return __time(); }
+#endif
 #endif
 
 // ---- fixed point ---------------------------------------------------
@@ -620,7 +642,7 @@ void fps_tick () {
   int t, c;
   ++fps_n;
   if (fps_n < 8) return;
-  t = __time(); c = plat_cyc();
+  t = plat_time(); c = plat_cyc();
   if (t != fps_t0) fps_val = (fps_n * 1000) / (t - fps_t0);
   if (c != fps_c0) fps_kc = (c - fps_c0) / (fps_n * 1000);
   fps_t0 = t; fps_c0 = c; fps_n = 0;
@@ -726,7 +748,7 @@ int main (int argc, char **argv) {
     return 1;
   }
 
-  if (!seed) seed = __time() ^ plat_cyc();
+  if (!seed) seed = plat_time() ^ plat_cyc();
   rng = seed & 65535;
   if (!rng) rng = 1;
   gen_map();
@@ -776,7 +798,7 @@ int main (int argc, char **argv) {
   // a visible cursor would flicker across the picture on every row.
   printf("\033[2J\033[?25l");
 
-  fps_t0 = __time(); fps_c0 = plat_cyc(); fps_n = 0;
+  fps_t0 = plat_time(); fps_c0 = plat_cyc(); fps_n = 0;
 
   i = 0;
   while (running) {

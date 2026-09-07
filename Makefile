@@ -268,19 +268,28 @@ test-cpp: cpp $(C4) $(C4CC)
 #                    CONFIG.SYS's DEVICE=CLOCK.SYS. The dev loop.
 #   c4dos32.c4r      32-bit clock build: the image c4bb boots, and the
 #                    one an embedder (HOMEWARD) wants.
-c4dos.c4r: cpp $(C4CC) $(SRCS)/c4dos/c4dos.c
+# Built by c4lc, not c4cc. C4DOS is the base rung of the ladder and is
+# reached by nothing below it, so what compiles it is a free choice --
+# and c4lc's -O is the better compiler: the 32-bit image drops from
+# 55,752 bytes to 53,915 and the whole boot from 851,400 cycles to
+# 851,184, with the console output byte-identical to the c4cc build.
+# c4lc emits for its host's word size, so c4sp gives the 64-bit images
+# and c4sp32 the one c4bb boots. ./cpp still does the preprocessing --
+# it is pinned byte-identical against gcc -E over the whole corpus, and
+# leaving it alone keeps this change to one variable.
+c4dos.c4r: cpp c4sp $(C4LC_LISP) $(SRCS)/c4dos/c4dos.c
 	./cpp $(SRCS)/c4dos/c4dos.c > .c4dos_pp.c
-	$(C4CC) -o $@ .c4dos_pp.c > /dev/null
+	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O .c4dos_pp.c $@ > /dev/null
 	@rm -f .c4dos_pp.c
 
-c4dos-clock.c4r: cpp $(C4CC) $(SRCS)/c4dos/c4dos.c
+c4dos-clock.c4r: cpp c4sp $(C4LC_LISP) $(SRCS)/c4dos/c4dos.c
 	./cpp -DC4DOS_CLOCK=1 $(SRCS)/c4dos/c4dos.c > .c4dos_ppck.c
-	$(C4CC) -o $@ .c4dos_ppck.c > /dev/null
+	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O .c4dos_ppck.c $@ > /dev/null
 	@rm -f .c4dos_ppck.c
 
-c4dos32.c4r: cpp c4cc32 $(SRCS)/c4dos/c4dos.c
+c4dos32.c4r: cpp c4sp32 $(C4LC_LISP) $(SRCS)/c4dos/c4dos.c
 	./cpp -DC4DOS_CLOCK=1 $(SRCS)/c4dos/c4dos.c > .c4dos_pp32.c
-	./c4cc32 -o $@ .c4dos_pp32.c > /dev/null
+	./c4sp32 -c 64000000 src/c4sp/lisp/c4lc.lisp -O .c4dos_pp32.c $@ > /dev/null
 	@rm -f .c4dos_pp32.c
 
 # dostar: unpack an archive onto the RAM disk. Building C4KE in-machine
@@ -385,6 +394,14 @@ raycast-dos.c4r: c4sp $(C4LC_LISP) $(TESTS)/raycast.c
 	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -conforming -D RC_DOS=1 \
 		$(TESTS)/raycast.c $@ > /dev/null
 
+# The bottom rung: C4DOS on PLAIN C4, where there is no TIME opcode.
+# The DOS build uses one (opcode 53) for its frame clock, so it dies on
+# `make run-c4dos-c4` with `unknown instruction = 53`. This build gives
+# up f/s and keeps everything else.
+raycast-c4.c4r: c4sp $(C4LC_LISP) $(TESTS)/raycast.c
+	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -conforming -D RC_C4=1 \
+		$(TESTS)/raycast.c $@ > /dev/null
+
 # A boot floppy for the native run targets. C4DOS has no notion of a
 # drive: it opens config.sys, autoexec.bat and c4dos.dir relative to
 # the working directory, so "the disk" is simply a directory you cd
@@ -392,13 +409,17 @@ raycast-dos.c4r: c4sp $(C4LC_LISP) $(TESTS)/raycast.c
 # because the raw disk cannot enumerate itself -- so it is generated
 # from whatever actually landed here.
 C4DOS_DISK := c4dos-disk
-$(C4DOS_DISK): c4dos-clock.c4r $(TESTS)/hello.c4r raycast-dos.c4r \
+$(C4DOS_DISK): c4dos-clock.c4r $(TESTS)/hello.c4r raycast-c4.c4r \
                $(SRCS)/c4dos/fs/CONFIG.SYS $(SRCS)/c4dos/fs/AUTOEXEC.BAT
 	@mkdir -p $(C4DOS_DISK)
 	@cp $(SRCS)/c4dos/fs/CONFIG.SYS   $(C4DOS_DISK)/config.sys
 	@cp $(SRCS)/c4dos/fs/AUTOEXEC.BAT $(C4DOS_DISK)/autoexec.bat
 	@cp $(TESTS)/hello.c4r            $(C4DOS_DISK)/hello.c4r
-	@cp raycast-dos.c4r               $(C4DOS_DISK)/raycast.c4r
+	@# This floppy is booted by run-c4dos (c4m) AND by run-c4dos-c4
+	@# (plain c4), and the lower of those two has no TIME opcode -- so
+	@# it carries the build BOTH can run. run-c4dos loses the f/s
+	@# figure by it and nothing else.
+	@cp raycast-c4.c4r                $(C4DOS_DISK)/raycast.c4r
 	@# The redirection creates c4dos.dir before ls runs, so the listing
 	@# includes itself, which is what DOS expects to see. Real case, not
 	@# shouted: this listing is also the NAME RESOLVER -- dos_open opens
@@ -566,13 +587,15 @@ $(C4DOS_BUILD_DISK): c4dos-clock.c4r dostar.c4r cpp.c4r c4cc.c4r c4ke-src.tar do
                      $(INIT) $(C4SH) $(VFS) $(SRCS)/c4dos/fs/BUILD.BAT \
                      $(C4KE_BIN) $(C4R_TOP) $(BENCHS) vfsload.c4r \
                      tar.c4r $(C4R_C4RLINK) \
-                     c4-dos.c4r c4m-dos.c4r mandel-dos.c4r rps-dos.c4r raycast-dos.c4r \
+                     c4-dos.c4r c4m-dos.c4r mandel-dos.c4r rps-dos.c4r $(TESTS)/raycast.c4r \
                      $(SRCS)/c4bb/fs/c4ke-build.vfs.txt
 	@mkdir -p $(C4DOS_BUILD_DISK)
 	@sed 's/SIZE=[0-9]*/SIZE=16777216/' $(SRCS)/c4dos/fs/CONFIG.SYS > $(C4DOS_BUILD_DISK)/config.sys
 	@cp $(SRCS)/c4dos/fs/AUTOEXEC.BAT $(C4DOS_BUILD_DISK)/autoexec.bat
 	@cp $(SRCS)/c4dos/fs/BUILD.BAT    $(C4DOS_BUILD_DISK)/build.bat
 	@cp $(SRCS)/c4dos/fs/LADDER.BAT   $(C4DOS_BUILD_DISK)/ladder.bat
+	@cp $(SRCS)/c4dos/fs/C4M-C4KE.BAT $(C4DOS_BUILD_DISK)/c4m-c4ke.bat
+	@cp $(SRCS)/c4dos/fs/BUILDC4M.BAT $(C4DOS_BUILD_DISK)/buildc4m.bat
 	@cp dostar.c4r cpp.c4r c4cc.c4r c4ke-src.tar dosload.c4r tools-src.tar $(C4DOS_BUILD_DISK)/
 	@cp $(INIT) $(C4SH) $(VFS) $(C4DOS_BUILD_DISK)/
 	@# C4KE's userland. Without it the kernel this floppy builds comes
@@ -604,7 +627,11 @@ $(C4DOS_BUILD_DISK): c4dos-clock.c4r dostar.c4r cpp.c4r c4cc.c4r c4ke-src.tar do
 	@# clock build, so they have it.)
 	@cp mandel-dos.c4r  $(C4DOS_BUILD_DISK)/mandel.c4r
 	@cp rps-dos.c4r     $(C4DOS_BUILD_DISK)/rps.c4r
-	@cp raycast-dos.c4r $(C4DOS_BUILD_DISK)/raycast.c4r
+	@# This floppy exists to boot C4KE under c4m, and both of those
+	@# have the full opcode set -- so raycast here is the C4KE build,
+	@# which emits a frame with one PUTS instead of going through the
+	@# formatter a character at a time.
+	@cp $(TESTS)/raycast.c4r $(C4DOS_BUILD_DISK)/raycast.c4r
 	@cp c4-dos.c4r      $(C4DOS_BUILD_DISK)/c4.c4r
 	@cp c4m-dos.c4r     $(C4DOS_BUILD_DISK)/c4m.c4r
 	@# innerbench compiles a whole C4KE inside a nested c4m, so it wants
@@ -621,7 +648,7 @@ cpp.c4r: $(C4CC) include/c4dos.h $(SRCS)/c4dos/cpp.c
 
 # The ladder, interactively: boot C4DOS on that floppy and type BUILD.
 run-c4dos-build: $(C4M) c4dos-clock.c4r $(C4DOS_BUILD_DISK)
-	@cd $(C4DOS_BUILD_DISK) && $(CURDIR)/c4m $(CURDIR)/load-c4r.c -- $(CURDIR)/c4dos-clock.c4r
+	cd $(C4DOS_BUILD_DISK) && $(CURDIR)/c4m $(CURDIR)/load-c4r.c -- $(CURDIR)/c4dos-clock.c4r
 
 # The same floppy at 32 bits, which is the one the BREADBOARD boots. Every
 # image on it has to be one c4bb can load, so all six come from c4cc32.
@@ -1229,12 +1256,12 @@ test-c4cc-for: $(C4CC) $(C4M) $(TESTS)/test_for.c
 # prompt, DIR/TYPE/RUN/TIME/MEM/VER, EXIT to halt. `cd` because the
 # working directory IS the disk.
 run-c4dos: $(C4M) c4dos-clock.c4r $(C4DOS_DISK)
-	@cd $(C4DOS_DISK) && $(CURDIR)/c4m $(CURDIR)/load-c4r.c -- $(CURDIR)/c4dos-clock.c4r
+	cd $(C4DOS_DISK) && $(CURDIR)/c4m $(CURDIR)/load-c4r.c -- $(CURDIR)/c4dos-clock.c4r
 # The same session on the ORIGINAL interpreter, through c4l: unmodified
 # c4 runs the loader runs DOS runs your program. Clockless, so TIME
 # says so -- an image with TIME in it is one c4l would refuse.
 run-c4dos-c4: $(C4) c4dos.c4r $(C4DOS_DISK)
-	@cd $(C4DOS_DISK) && $(CURDIR)/c4 $(CURDIR)/c4l.c $(CURDIR)/c4dos.c4r
+	cd $(C4DOS_DISK) && $(CURDIR)/c4 $(CURDIR)/c4l.c $(CURDIR)/c4dos.c4r
 # And on the breadboard machine, which is where an embedder meets it.
 run-c4dos-bb: c4dos32.c4r $(C4DOS_DISK32)
 	node src/c4bb/sim/cli.js -i -d $(C4DOS_DISK32) c4dos32.c4r

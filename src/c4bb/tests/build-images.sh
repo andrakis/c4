@@ -471,14 +471,44 @@ cp -r $DISK/. $ROOTDISK/
 # front-end you used would be one ladder and one demo.
 CLIMBDISK=$OUT/climb
 rm -rf $CLIMBDISK
+CLIMBSRC=
 for root in ../../../c4dos-c4ix32 c4dos-c4ix32; do
     if [ -d $root ]; then
         mkdir -p $CLIMBDISK
         cp -r $root/. $CLIMBDISK/
+        CLIMBSRC=$root
         break
     fi
 done
 if [ -d $CLIMBDISK ]; then
+    # SAY SO IF WHAT WE JUST COPIED IS OLDER THAN ITS SOURCE.
+    #
+    # This block COPIES; it does not build. c4dos-c4ix32 is made by its
+    # own Makefile target, and nothing here ever checked whether that
+    # target had been run since the sources changed. So a person who
+    # rebuilt "the images" got a fresh corpus and a two-day-old climb
+    # disk, booted the BIOS, and found a C4DOS that had never heard of
+    # the drive letters that landed yesterday -- with nothing anywhere
+    # saying which half was stale. That is a whole afternoon.
+    #
+    # A warning rather than an error: rebuilding the climb disk is
+    # expensive (it builds c4sc), this script has other reasons to run,
+    # and a person who knows the ladder is stale is allowed to carry on.
+    # Against the SOURCE image, never against the copy: cp gives the
+    # copy this moment's timestamp, so comparing with it says "fresh"
+    # for a disk built any time at all. (Written that way first, which
+    # is why the note is here.)
+    for src in src/c4dos/c4dos.c src/c4ke/c4ke.c src/c4ix/sched.c; do
+        [ -f "$src" ] || continue
+        [ -n "$CLIMBSRC" ] && [ -f "$CLIMBSRC/c4dos32.c4r" ] || continue
+        if [ "$src" -nt "$CLIMBSRC/c4dos32.c4r" ]; then
+            echo "c4bb: WARNING: the climb disk is older than $src." >&2
+            echo "c4bb:          It is COPIED here, not built -- run 'make c4dos-c4ix32'" >&2
+            echo "c4bb:          and then this script again, or the browser's BIOS boot" >&2
+            echo "c4bb:          will keep running the old ladder." >&2
+            break
+        fi
+    done
     rm -f $CLIMBDISK/manifest.json
     (cd $CLIMBDISK && find . -type f -not -name manifest.json | sed 's|^\./||') | \
         awk 'BEGIN{printf "["} NR>1{printf ","} {printf "\"%s\"", $0} END{print "]"}' > $CLIMBDISK/manifest.json

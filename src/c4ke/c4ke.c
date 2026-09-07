@@ -739,6 +739,25 @@ static int  kernel_ext_initialized;
 static int *kernel_syscall_handler, kernel_syscall_handler_stack;
 static int  kernel_mem_alloc;
 static int  kernel_stack_overruns;
+// Timer-interrupt re-entrancy and starvation (docs/next-session.md).
+//
+// RE-ENTRANCY: ih_cycle entered while a previous ih_cycle has not
+// finished. It masks the PIT on the way in and re-arms on the way out,
+// so this should be impossible -- except in the window between
+// critical_path_end() and the handler's TLEV, which is exactly where an
+// already-overdue timer would land.
+//
+// STARVATION: the next tick arriving so soon after the last re-arm that
+// the task switched to executed almost nothing. Not a bug in itself --
+// a saturated timer is allowed to saturate -- but it is the livelock,
+// and it is measurable where re-entrancy is not.
+static int  kernel_ih_depth;      // >0 while inside ih_cycle
+static int  kernel_ih_reentry;    // entered while already inside
+static int  kernel_ih_lastarm;    // cycle count at the previous re-arm
+static int  kernel_ih_starved;    // ticks that left the task ~no cycles
+static int  kernel_ih_minrun;     // fewest cycles a resumed task got
+static int  kernel_ih_ticks;      // ticks seen at all, so a zero can be read
+enum { IH_STARVED_CYCLES = 2000 };
 static int  kernel_pm_support;
 static int schedule_task_mask;
 static int  kernel_is_slow;
@@ -3077,6 +3096,7 @@ static int task_loadc4r (int argc, char **argv) {
 static void ih_cycle (int type, int ins, int mode, int a, int *bp, int *sp, int *returnpc) {
 	// TODO: move to a generic function? duplicates code from schedule
 	int *next, *curr;
+	int  ih_ran;
 
 	//if (critical_path_value) {
 	//	printf("c4ke: ih_cycle in critical path!? (level %d)\n", critical_path_value);
@@ -3084,6 +3104,27 @@ static void ih_cycle (int type, int ins, int mode, int a, int *bp, int *sp, int 
 	//}
 
 	critical_path_start();
+	// Measured first, before anything below can perturb it.
+	++kernel_ih_ticks;
+	if (kernel_ih_depth) {
+		++kernel_ih_reentry;
+		if (kernel_ih_reentry <= 3)
+			printf("c4ke: ih_cycle RE-ENTERED at depth %d -- a tick landed inside the handler\n",
+			       kernel_ih_depth);
+	}
+	++kernel_ih_depth;
+	if (kernel_ih_lastarm) {
+		ih_ran = __c4_cycles() - kernel_ih_lastarm;
+		if (!kernel_ih_minrun || ih_ran < kernel_ih_minrun) kernel_ih_minrun = ih_ran;
+		if (ih_ran < IH_STARVED_CYCLES) {
+			++kernel_ih_starved;
+			// Said as it happens: the runs this is meant to explain are
+			// the ones that never reach a shutdown to report at.
+			if (kernel_ih_starved <= 3 || !(kernel_ih_starved % 1000))
+				printf("c4ke: tick %d left the resumed task only %d cycles\n",
+				       kernel_ih_starved, ih_ran);
+		}
+	}
 	current_task_timekeeping();
 
 	// Getting too close to stack overflow error, just return.
@@ -3122,6 +3163,10 @@ static void ih_cycle (int type, int ins, int mode, int a, int *bp, int *sp, int 
 	}
 	kernel_task_timekeeping();
 	critical_path_end();
+	// The clock starts HERE, when the timer is live again, so what it
+	// measures is exactly what the resumed task gets to do.
+	kernel_ih_lastarm = __c4_cycles();
+	--kernel_ih_depth;
 }
 
 //
@@ -4395,6 +4440,9 @@ int main (int argc, char **argv) {
 	if (kernel_stack_overruns)
 		printf("c4ke: WARNING: %d task(s) overran their stack this session.\n",
 		       kernel_stack_overruns);
+	if (kernel_verbosity >= VERB_MED)
+		printf("c4ke: %d timer ticks, %d re-entrant, %d starved, thinnest run %d cycles.\n",
+		       kernel_ih_ticks, kernel_ih_reentry, kernel_ih_starved, kernel_ih_minrun);
 	if (kernel_verbosity >= VERB_MED) {
 		t = __time();
 		printf("c4ke: clean shutdown in ");

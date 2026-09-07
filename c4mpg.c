@@ -2092,24 +2092,64 @@ int c4_invoke_stub () {
 // for byte the programs they were.
 ///
 
+// A path beginning "/dev/" is a HOST device, not a C4DOS file, and
+// C4DOS's open takes a NAME AND NOTHING ELSE -- so routing one through
+// it silently drops the flags. That is where O_NONBLOCK went: raycast
+// asks for /dev/tty non-blocking, gets a blocking C4DOS handle, and
+// then renders no frame until Enter, because its poll is a read that
+// waits. Native c4m never showed it (no C4M_DOS, so no dos_fopen),
+// which is why `make run` was fine and the C4DOS-hosted chain was not.
+//
+// C4DOS has no notion of a device file, so nothing is lost by letting
+// these through to the host: a name it cannot open is one it would have
+// refused anyway.
+//
+// Written to be correct under PLAIN C4 TOO, which keeps the body of
+// every #if (see the note at the top of this file): with no DOS,
+// dos_readable() is the inert stub, every path takes the host branch,
+// and the table below simply never gets consulted.
+// A BITMASK, not an array: plain c4 has no global arrays, and this file
+// has to compile under it. Descriptors here are small -- the host hands
+// out the lowest free one and c4m opens a handful -- so one word covers
+// every fd a device could land on, and anything above 31 simply is not
+// remembered and behaves as it did before.
+int c4m_devfd;
+
+int c4m_isdev (char *path) {
+	if (!path) return 0;
+	if (*path != '/') return 0;
+	if (*(path + 1) != 'd') return 0;
+	if (*(path + 2) != 'e') return 0;
+	if (*(path + 3) != 'v') return 0;
+	return *(path + 4) == '/';
+}
+
+// The read side has to agree with the open side about whose handle this
+// is: C4DOS hands out small non-negative handles and so does the host,
+// so they cannot be told apart by value. The device ones are remembered.
+int c4m_isdevfd (int fd) {
+	if (fd < 0) return 0;
+	if (fd > 31) return 0;
+	return (c4m_devfd >> fd) & 1;
+}
+
 int c4m_open (char *path, int flags) {
-#if C4M_DOS
-	if (dos_readable()) return dos_fopen(path);
-#endif
-	return open(path, flags);
+	int fd;
+	if (dos_readable() && !c4m_isdev(path)) return dos_fopen(path);
+	fd = open(path, flags);
+	// Only worth remembering while a C4DOS is present to be confused
+	// with; without one, c4m_isdevfd is never asked.
+	if (fd >= 0 && fd < 32 && dos_readable()) c4m_devfd = c4m_devfd | (1 << fd);
+	return fd;
 }
 
 int c4m_read (int fd, char *buf, int len) {
-#if C4M_DOS
-	if (dos_readable()) return dos_fread(fd, buf, len);
-#endif
+	if (dos_readable() && !c4m_isdevfd(fd)) return dos_fread(fd, buf, len);
 	return read(fd, buf, len);
 }
 
 int c4m_close (int fd) {
-#if C4M_DOS
-	if (dos_readable()) return dos_fclose(fd);
-#endif
+	if (dos_readable() && !c4m_isdevfd(fd)) return dos_fclose(fd);
 	return close(fd);
 }
 

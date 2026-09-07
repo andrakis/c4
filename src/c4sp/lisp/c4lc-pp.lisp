@@ -34,6 +34,12 @@
 ;; ---- small list helpers (same style as the rest of c4lc) ----
 
 (define pp:cons (lambda (x l) (+ (list x) l)))
+;; Is any level of the conditional stack skipping? Used by #else and
+;; #elif to ask about their ENCLOSING levels, which is the difference
+;; between "this branch was not taken" and "none of this is being read
+;; at all".
+(define pp:any-skip? (lambda (l)
+	(if (empty? l) false (if (head l) true (next pp:any-skip? (tail l))))))
 (define pp:rev (lambda (l acc)
 	(if (empty? l) acc (next pp:rev (tail l) (pp:cons (head l) acc)))))
 (define pp:reverse (lambda (l) (pp:rev l nil)))
@@ -484,14 +490,38 @@
 				(begin
 					(if (empty? skip) (pp:die "#elif without #if") nil)
 					;; only reconsider if this level was skipping AND
-					;; no earlier branch has been taken
+					;; no earlier branch has been taken -- and NEVER if an
+					;; enclosing level is skipping, or this would start
+					;; reading a branch nested inside dropped text.
 					(list rest (cons
-						(if (head skip) (if (pp:evalif body) false true) true)
+						(if (pp:any-skip? (tail skip)) true
+						(if (head skip) (if (pp:evalif body) false true) true))
 						(tail skip))))
 			(if (= name "else")
 				(begin
 					(if (empty? skip) (pp:die "#else without #if") nil)
-					(list rest (pp:cons (if (head skip) false true) (tail skip))))
+					;; #else INHERITS. It used to simply flip the top of
+					;; the stack, which is right at the outermost level and
+					;; wrong everywhere else: an #else nested inside a
+					;; branch that is being dropped flipped "skipping" off
+					;; and started reading text no build should ever see.
+					;;
+					;; #ifdef already got this right (it consults
+					;; `skipping` above); #else and #elif did not. What it
+					;; cost: raycast.c has
+					;;     #ifdef RC_DOS ... #else #ifdef RC_C4 ... #else
+					;;     int plat_emit (char *b) ...
+					;; and the DOS arm #defines plat_emit(b). Built with
+					;; -D RC_DOS=1 the inner #else woke up, the skipped
+					;; declaration was read WITH the macro expanded over
+					;; its own name, and c4lc reported "bad parameter
+					;; declaration" on a line that build never uses.
+					;; raycast-dos32.c4r could not be built at all, which
+					;; took c4dos-c4ix32 with it, and with that the climb
+					;; disk the browser boots.
+					(list rest (pp:cons
+						(if (pp:any-skip? (tail skip)) true
+						(if (head skip) false true)) (tail skip))))
 			(if (= name "endif")
 				(begin
 					(if (empty? skip) (pp:die "#endif without #if") nil)

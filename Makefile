@@ -2197,6 +2197,29 @@ c4bb-32bit: c4cc32 c4m32 c4sp32 c4rlink32
 # disk's c4m.c4r goes through it (build-images.sh).
 c4bb-images: c4bb-32bit $(C4LC_LISP) c4th32.c4r cpp
 	bash src/c4bb/tests/build-images.sh
+
+# EVERYTHING THE BROWSER LOADS, in the right order. One target, because
+# "rebuild the images" is not the whole job and the missing half is
+# invisible.
+#
+# The web app offers four disks. Three of them (disk, dos-recovery,
+# c4ke-root) are BUILT by build-images.sh. The fourth -- climb, the one
+# the BIOS boots, the one the whole ladder lives on -- is only COPIED
+# there, from c4dos-c4ix32, which is made by its own target and by
+# nothing else. So `make c4bb-images` on its own produces a fresh corpus
+# beside a climb disk of whatever age it happened to be, and the symptom
+# is a C4DOS in the browser that has never heard of a feature that
+# landed days ago. It cost an afternoon to find that way once.
+#
+# c4dos-c4ix32 first because build-images.sh copies from it. It is the
+# expensive half (it builds c4sc), so this is not the target to reach
+# for while iterating on the corpus -- `make c4bb-images` still does
+# only that, deliberately.
+c4bb-web: c4dos-c4ix32
+	$(MAKE) c4bb-images
+	@echo ""
+	@echo "c4bb: everything the browser loads is current."
+	@echo "      now: make serve-c4bb"
 test-c4bb: c4bb-images $(C4M) $(TESTS_C4R)
 	bash src/c4bb/tests/test-c4bb.sh
 
@@ -3047,6 +3070,7 @@ PHONY += run-c4 run-c4-vg test-c4 test-massive-c4
 PHONY += run-c4-alt run-c4-alt-vg
 PHONY += test-c4ix test-c4ix-fmt test-c4ix-c4ke test-c4ix-c4ke-nested test-c4ix-c4 run-c4ix run-c4ix-c4 demo-c4ix demo-c4ix-c4 bench-c4ix
 PHONY += test-c4mp
+PHONY += c4bb-web
 PHONY += test-c4m-mem
 PHONY += test-c4th
 PHONY += c4or1k-m0 c4or1k-m1 c4or1k-m1-check c4or1k-m2 c4or1k-m2-check c4or1k-m3 c4or1k-m3-check c4or1k-m3-int-check c4or1k-boot c4or1k-boot-mp c4or1k-boot-cisc c4or1k-boot-jit c4or1k-boot-native

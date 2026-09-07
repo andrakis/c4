@@ -19,7 +19,9 @@
 	(define Opt false)
 	(define Obj false)
 	(define Cisc false)        ;; -mcisc: emit c4mp-only fused opcodes (M12)
-	(define Fuse false)        ;; -mfuse: emit the fused opcodes
+	(define Fuse false)
+	(define Inline false)      ;; -minline: T3, docs/inline-small-functions.md
+	(define InlRep false)      ;; -minline-why: T3's reasoning, per function
 	(define Pp false)          ;; -P: preprocess internally (L9)
 	(define Conf false)        ;; -conforming: real C escapes (L10)
 	(define Paths nil)
@@ -52,6 +54,23 @@
 		;; reason, and it implies -O since the pass lives in c4opt.
 		(if (= (+ "" (head Args)) "-mfuse")
 			(begin (set! Fuse true) (set! Opt true) (set! Args (tail Args)) (next flags))
+		;; -minline: splice the body of a small leaf function into its
+		;; call sites instead of calling it (docs/inline-small-functions.md).
+		;; A call costs JSR, ENT, ADJ and LEV whatever is on the other
+		;; side of it, and for a one-line accessor that is most of the
+		;; cost of using one. Unlike -mfuse this needs no opcode the
+		;; target lacks, so a -minline image runs anywhere its -O build
+		;; would; it is off by default only because it is the one tree
+		;; pass that moves code between functions. Implies -O.
+		(if (= (+ "" (head Args)) "-minline")
+			(begin (set! Inline true) (set! Opt true) (set! Args (tail Args)) (next flags))
+		;; -minline-why: say what T3 decided about every function and
+		;; why. The point of a heuristic pass is that its answer can be
+		;; read rather than inferred, and "inlined 2" on a kernel is a
+		;; question, not a result.
+		(if (= (+ "" (head Args)) "-minline-why")
+			(begin (set! Inline true) (set! InlRep true) (set! Opt true)
+				   (set! Args (tail Args)) (next flags))
 		;; -P runs c4lc's own preprocessor instead of expecting a
 		;; source that gcc -E has already been through. -I adds an
 		;; include directory, -D predefines a macro.
@@ -77,7 +96,7 @@
 				(set! PreDefs (+ PreDefs (list (+ "" (index Args 1)))))
 				(set! Args (tail (tail Args)))
 				(next flags))
-		nil)))))))))))
+		nil)))))))))))))
 	(flags)
 	(if (< (length Args) 2) (error "usage: c4lc.lisp [-O] [-c] in.c out"))
 	(define In (head Args))
@@ -99,6 +118,8 @@
 			;; functions), then generate, then the peephole passes
 			(load "c4lc-tree.lisp")
 			(set! tree:objmode Obj)
+			(set! tree:inlining Inline)
+			(set! tree:inlinereport InlRep)
 			(set! Ast (tree:optimize Ast)))
 		nil)
 	(define M (gen:module Ast))

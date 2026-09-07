@@ -156,7 +156,12 @@
    f y.class @ c_extg    = IF oJSRI f y.val @ EXTREF, EXIT THEN
    f JSRF, ;
 
-:M GEN n_call {: n | f k -- :}
+:M GEN n_call {: n | f k i -- :}
+   \ The splice replaces the call entirely -- arguments into the
+   \ callee's parameter slots, then its body generated in place. The
+   \ value arrives the same way it would have: in A.
+   n INL-TRY TO i
+   i 0< 0= IF  n i INL-SPLICE  EXIT THEN
    n >fn @ TO f
    n >argn @ TO k
    k 0 ?DO  n >args @ I CELLS + @ GEN  oPSH OP,  LOOP
@@ -196,7 +201,13 @@
    LOOP ;M
 
 :M STMT n_expst  >expr @ GEN ;M
-:M STMT n_ret    >expr @ ?DUP IF GEN THEN  oLEV OP, ;M
+\ Inside a spliced body there is no frame to leave, so a return is a
+\ jump to the end of the splice rather than a LEV. The value is already
+\ in A either way, which is the whole reason this needs no rewriting of
+\ the tree -- see inline.f.
+:M STMT n_ret
+   >expr @ ?DUP IF GEN THEN
+   INLRET @ IF oJMP BR, INLM, ELSE oLEV OP, THEN ;M
 :M STMT n_blk {: n -- :}
    n >len @ 0 ?DO n >list @ I CELLS + @ STMT LOOP ;M
 

@@ -53,6 +53,11 @@ VARIABLE C4FC-READY   0 C4FC-READY !
 \ because the pass it turns on lives in the optimizer.
 : -mcisc ( -- )  1 CISC ! ;
 : -mfuse ( -- )  1 FUSE !  1 OPTIMIZE ! ;
+\ -minline: splice a small function's body into its call sites instead
+\ of calling it (docs/inline-small-functions.md). Unlike -mfuse this
+\ needs no opcode the target lacks, so a -minline image runs wherever
+\ its -O build would. Implies -O.
+: -minline ( -- )  1 INLINING !  1 OPTIMIZE ! ;
 
 \ Everything a compile of one unit starts from. -O runs it twice: the
 \ first pass exists only to learn which functions are reachable, and
@@ -73,7 +78,7 @@ VARIABLE C4FC-READY   0 C4FC-READY !
    \ defined further down with no prototype anywhere resolves only if
    \ something has read ahead. Making that depend on -O would mean
    \ `c4fc f.c` rejecting a file `c4fc -O f.c` compiles.
-   T2-RESET  DECL-RESET  0 EXTN !  1 COLLECT !
+   T2-RESET  DECL-RESET  INL-RESET  INLM-RESET  0 EXTN !  1 COLLECT !
    UNIT-RESET PROGRAM
    T2-CLOSE  MAKE-EXTERNS  0 COLLECT !
    UNIT-RESET PREREGISTER PROGRAM

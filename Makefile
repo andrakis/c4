@@ -1546,7 +1546,8 @@ C4FC_LIB := src/c4th/forth/core.f src/c4th/forth/ext.f \
             src/c4th/forth/locals.f src/c4th/forth/dos.f \
             src/c4fc/dsl.f src/c4fc/lex.f
 C4FC_ALL := $(C4FC_LIB) src/c4fc/pp.f src/c4fc/ast.f src/c4fc/types.f \
-            src/c4fc/emit.f src/c4fc/tree.f src/c4fc/gen.f src/c4fc/parse.f \
+            src/c4fc/emit.f src/c4fc/tree.f src/c4fc/inline.f \
+            src/c4fc/gen.f src/c4fc/parse.f \
             src/c4fc/opt.f src/c4fc/c4fc.f
 C4FC_SPIKE := src/tests/hello.c src/c4fc/tests/spike1.c src/c4fc/tests/spike2.c \
               src/c4fc/tests/spike3.c src/c4fc/tests/spike4.c \

@@ -17,18 +17,16 @@
 \ them pointing into freed memory. It is also the cheapest thing in the
 \ compiler -- eight thousand entries is under half a megabyte -- so it
 \ is simply sized once and generously, and the abort stays an abort.
-8192 CONSTANT NSYM
-VARIABLE STAB   VARIABLE STN
-VARIABLE NLOC                           \ locals in the function in hand
-VARIABLE NGLO                           \ globals, numbered; placed at the end
-VARIABLE TP
-
-: ST[] ( i -- a )  SYMR * STAB @ + ;
+\ NSYM, STAB, STN, NLOC, NGLO, TP and ST[] moved to emit.f, next to the
+\ SYMR they are all about -- inline.f sits between emit.f and gen.f and
+\ needs the symbol table and the frame counter to retarget a spliced
+\ body's locals.
 : ST, ( a u class val ct agg sz -- ) {: a u c v ct ag sz | y -- :}
    STN @ NSYM < 0= IF ." c4fc: symbol table full" CR ABORT THEN
    STN @ ST[] TO y
    a y y.name !  u y y.nlen !  1 y y.type !  c y y.class !  v y y.val !
    ct y y.ct !  ag y y.agg !  sz y y.sz !
+   0 y y.atk !
    1 STN +! ;
 : ST-FIND ( a u -- sym|0 ) {: a u | y -- s :}    \ newest first: locals win
    STN @ 0 ?DO
@@ -282,7 +280,15 @@ CREATE SLBUF 8192 ALLOT
          nd EXIT
       THEN
       s y.class @ c_const = IF s y.val @ n_num N1 EXIT THEN
-      s y.class @ c_fun = s y.class @ c_ext = OR IF s n_fnref N1 EXIT THEN
+      \ A function's name used as a value: its address escapes here, and
+      \ this is the only place that can happen. Recording it HERE is why
+      \ the inliner needs no walker to find address-taken functions --
+      \ and why it cannot repeat c4lc's mistake of knowing only one of
+      \ the two spellings (docs/inline-small-functions.md).
+      s y.class @ c_fun = s y.class @ c_ext = OR IF
+         1 s y.atk !
+         s y.name @ s y.nlen @ ATK,
+         s n_fnref N1 EXIT THEN
       s  s y.class @ c_glo = s y.class @ c_extg = OR IF n_gvar ELSE n_var THEN
       N1 EXIT
    THEN
@@ -558,7 +564,7 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
    UNTIL ;
 
 : FUNCTION ( a u ct sc at -- )
-   {: a u ct sc at | base body y n va base0 fi -- :}
+   {: a u ct sc at | base body y n va base0 fi entp inlsv sn bodytp -- :}
    STN @ TO base0
    a u ST-FIND TO y
    y 0= IF
@@ -593,6 +599,7 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
    a u ct 129 CHERE  sc at OR  va IF 32 OR THEN  SYM,
    at 1 AND IF CHERE CONSN @ CELLS CONS @ + !  1 CONSN +! THEN
    at 2 AND IF CHERE DESN  @ CELLS DESS @ + !  1 DESN  +! THEN
+   TP @ TO bodytp                       \ for the inliner's size budget
    BLOCK TO body                        \ parse first: ENT needs the count
    OPTIMIZE @ IF body FOLD TO body THEN
    \ Pass one of -O: who does this function reach, and is it a root?
@@ -609,12 +616,46 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
       fi CURFN !  body REFS  -1 CURFN !
    THEN
    LABEL-RESET
+   \ Remember where the ENT is. A splice inside the body allocates more
+   \ frame words, and by then this instruction is already emitted -- so
+   \ its operand is patched afterwards rather than guessed at up front.
+   \ OP2, lays down [op][operand], so the operand is the next word.
+   CHERE TO entp
    NLOC @ oENT OP2,
+   \ A function whose address is taken must not be spliced INTO: C4KE
+   \ reads its ENT operand and jumps past it, so the frame that operand
+   \ describes is a contract with code elsewhere, and a splice grows it.
+   INLINING @ TO inlsv
+   a u ATK? IF 0 INLINING ! THEN
    body STMT
+   inlsv INLINING !
+   NLOC @ entp 1+ CELLS CODE @ + !
    \ return emits its own LEV, so a function ending in one gets one LEV
    \ -- unless a branch lands here, in which case the LEV that is here
    \ belongs to the arm that took it and the other arm needs its own.
    LAST-OP oLEV <> LABEL-HERE? OR IF oLEV OP, THEN
+   \ Worth splicing into its callers?
+   \
+   \ Size is measured in TOKENS -- the span this body consumed -- which
+   \ the parser already knows and which needs no walk over the tree.
+   \
+   \ The parameters and locals are NOT dropped for a candidate: its body
+   \ tree points at those symbol records, and a splice retargets their
+   \ y.val to slots in the caller. Blanking the name length instead
+   \ keeps them alive but unfindable, because ST-FIND matches on
+   \ `y.nlen @ u =` and no identifier has length zero.
+   STN @ base - TO sn
+   INLINING @ COLLECT @ 0= AND
+   va 0= AND  at 3 AND 0= AND  y y.atk @ 0= AND
+   a u ATK? 0= AND
+   a u S" main" NAME=? 0= AND
+   TP @ bodytp - INLMAX @ <= AND
+   sn 0> AND
+   IF
+      y body base sn n va - IC,
+      sn 0 ?DO  0 base I + ST[] y.nlen !  LOOP
+      EXIT
+   THEN
    base STN ! ;                         \ parameters and locals go out of scope
 
 \ enum { A, B = 5, C };  -- constants, folded to literals where used.

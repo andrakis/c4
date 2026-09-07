@@ -52,6 +52,29 @@
 		l)))
 (define g:label! (lambda (l) (g:emit (list 'label l))))
 
+;; The inliner's exit labels (docs/inline-small-functions.md T4b).
+;;
+;; A body with an early `return` cannot be spliced as a plain block --
+;; the return has to go SOMEWHERE, and in the callee that somewhere was
+;; LEV. T4 turns each one into a jump to the end of the block it spliced,
+;; which is exactly the shape `break` already has, so it reuses the
+;; machinery `break` uses rather than inventing any.
+;;
+;; The tree pass cannot name a generator label, so it names its own
+;; SPLICE, and the mapping is made here on first mention -- which may be
+;; the jump rather than the label, since the jump is always forward.
+;; Ids are unique across the module and labels reset with it, so one
+;; table for the module is right.
+(define g:ilabs (list))
+(define g:ilab (lambda (id)
+	(begin
+		(define e (g:lookup id g:ilabs))
+		(if e (g:second e)
+		(begin
+			(define l (g:newlabel))
+			(set! g:ilabs (g:cons (list id l) g:ilabs))
+			l)))))
+
 ;; ---- data segment ----
 
 (define g:DMAX 262144)
@@ -760,8 +783,12 @@
 			(if (= g:cont nil) (g:die "continue outside of loop")
 				(g:emit (list 'JMP (list 'code g:cont))))
 		(if (= h 'empty) nil
+		;; T4b: only the inliner makes these; the parser never does.
+		(if (= h 'ijmp)
+			(g:emit (list 'JMP (list 'code (g:ilab (g:second s)))))
+		(if (= h 'ilabel) (g:label! (g:ilab (g:second s)))
 		(if (= h 'switch) (g:switchstmt s)
-		(g:die (+ "bad statement node: " (+ "" h))))))))))))))))))
+		(g:die (+ "bad statement node: " (+ "" h))))))))))))))))))))
 (define g:stmts (lambda (l)
 	(if (empty? l) nil
 	(begin
@@ -1484,6 +1511,7 @@
 	(begin
 		(set! g:code (list))
 		(set! g:nlabel 0)
+		(set! g:ilabs (list))
 		(set! g:data (string:alloc g:DMAX))
 		(set! g:dlen 0)
 		(set! g:blen 0)

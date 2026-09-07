@@ -90,9 +90,27 @@ BEGIN-STRUCTURE SYMR
    FIELD: y.name  FIELD: y.nlen  FIELD: y.type  FIELD: y.class  FIELD: y.val
    FIELD: y.ct    FIELD: y.agg   FIELD: y.sz
    FIELD: y.va    FIELD: y.nfix  FIELD: y.ini   FIELD: y.sc
+   \ Set the moment a function's name is used as a VALUE (parse.f's
+   \ n_fnref). The inliner reads it; nothing else does.
+   FIELD: y.atk
 END-STRUCTURE
 VARIABLE VA-MAKE   0 VA-MAKE !          \ code index of __c4cc_make_va
 : SYM[] ( i -- a )  SYMR * SYMS @ + ;
+
+\ The parser's symbol table. It lives here rather than in parse.f
+\ because SYMR does, and because inline.f -- which loads between this
+\ file and gen.f -- needs both the table and the frame counter in order
+\ to point a spliced body's locals at slots in the caller.
+\
+\ One table for the whole unit, and nothing frees an entry: a compiler
+\ is a batch process. Eight thousand entries is under half a megabyte.
+8192 CONSTANT NSYM
+VARIABLE STAB   VARIABLE STN
+VARIABLE NLOC                           \ locals in the function in hand
+VARIABLE NGLO                           \ globals, numbered; placed at the end
+VARIABLE TP                             \ the token cursor
+
+: ST[] ( i -- a )  SYMR * STAB @ + ;
 
 : EMIT-INIT
    CMAX0 CMAX !  DMAX0 DMAX !  DMAX0 IMAX !  PMAX0 PMAX !  SMAX0 SMAX !

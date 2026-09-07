@@ -189,8 +189,24 @@ int asmc4r_parse_commandline (int *_argc, char ***_argv) {
 		}
 	}
 
-	// Move back one
-	++argc; --argv;
+	// Move back one -- BUT ONLY IF THE LOOP MOVED FORWARD.
+	//
+	// The loop above steps argv on before it looks at anything, so on
+	// leaving it argv points AT the first thing that was not an option
+	// and this puts it back to the conventional argv[0]-is-ignored
+	// shape. With no arguments at all the loop never runs, and stepping
+	// back from argv[0] reads the word BEFORE the array -- whatever the
+	// caller happened to leave there -- and hands it on as a filename.
+	// It also made argc 2, so the usage check below could not fire.
+	//
+	// That is why `c4cc` with no arguments did not print usage but
+	// appeared to compile itself: it opened a pointer nobody passed,
+	// which under C4KE lands on a nearby string, and the file it named
+	// began "C4R" because the things near it are images.
+	//
+	// argc only ever decreases in the loop, so "smaller than we came in
+	// with" is exactly "the loop advanced".
+	if (argc < *_argc) { ++argc; --argv; }
 
 	if (argc == 1) {
 		printf("usage: [-g] [-o outfile]\n");

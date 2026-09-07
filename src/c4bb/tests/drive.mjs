@@ -37,7 +37,14 @@ const script = argv.slice(sep + 1).map(s => {
 });
 
 const out = createWriteStream(log, { flags: 'w' });
-const p = spawn('node', cliArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
+// The command may be a .js for node to run (cli.js, the usual case) or
+// a native binary -- ./c4m, ./c4mpg -- because C4KE runs both ways and
+// c4sh drops input the same way in both. Native c4m has no line
+// discipline of ours between the pipe and the shell, so a scripted
+// session there needs pacing even more than the board does.
+const cmd = cliArgs[0].endsWith('.js') ? 'node' : cliArgs[0];
+const cmdArgs = cliArgs[0].endsWith('.js') ? cliArgs : cliArgs.slice(1);
+const p = spawn(cmd, cmdArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
 p.stdout.on('data', d => out.write(d));
 p.stderr.on('data', d => out.write(d));
 

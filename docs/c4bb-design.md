@@ -69,6 +69,8 @@ unchanged by `make test-c4ix`).
     0x100 UART_TX      write byte -> terminal
     0x104 UART_RX      read: next keyboard byte or -1
     0x108 UART_RXAVL   read: bytes available
+    0x1AC UART_TXADDR  write: buffer address (does not auto-advance)
+    0x1B0 UART_TXLEN   write N: emit N bytes from it; read -> N taken
     0x10C TIME_MS      simulated ms = cycle/1000 + usleep credit (1 MHz machine)
     0x110/4 CYCLE_LO/HI
     0x118 USLP_US      write: advance simulated clock
@@ -82,6 +84,14 @@ unchanged by `make test-c4ix`).
     0x14C INFO         capability bits, mirrors native c4_info()|TRAPH
     0x150-0x174 CPU control latches: TRAPH INTERVAL TRESTORE MODE,
                 and the trap-jam latches TT TP HND JMODE JINTERVAL
+
+`UART_TXADDR`/`UART_TXLEN` are the same shape as the disk write head and
+exist for the same reason (`docs/c4bb-uart-block.md`): the firmware
+formatter already holds a pointer and a length for every run it emits,
+and `PUTS` can serve none of them — it is NUL-terminated and appends a
+newline, where a literal run is a *slice* of the format string. Being
+registers rather than an opcode, they work at the base-c4 rung, which is
+the rung the C4DOS build of `raycast` is pinned to.
 
 fd 0 is the blocking line-buffered keyboard (a cooked tty); opening
 `/dev/stdin` gives a byte fd where empty reads return -1 exactly like

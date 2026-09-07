@@ -65,6 +65,18 @@ export const RESET       = 0x198;  // w: soft reset -- back to the BIOS
 // and does not need the CPU extended to do it.
 export const RTC_MS      = 0x19c;  // r: host milliseconds since power-on
 export const PIT_MS      = 0x1a0;  // r/w: tick every N real ms (0 = off)
+// The UART's block write (docs/c4bb-uart-block.md). Same shape as the
+// disk write head above, for the same reason: a length and an address
+// are what the firmware formatter already holds for a literal run, a
+// %s argument and a converted number, and PUTS can serve none of the
+// three -- it is NUL-terminated and it appends a newline, where a
+// literal run is a SLICE of the format string and %.*s has a length.
+// Registers rather than an opcode so this works at the base-c4 rung:
+// raycast's RC_DOS build is restricted to stock c4 plus TIME and is
+// the one build that pays the per-byte cost in full, so an opcode
+// outside the stock set is exactly what it could not have used.
+export const UART_TXADDR = 0x1ac;  // w: buffer address (does not advance)
+export const UART_TXLEN  = 0x1b0;  // w: emit N bytes from it -> N written
 
 // c4_info() capability bits (c4m.c:206)
 export const C4I_WHOWROTE = 0x1000;   // the provenance port is fitted
@@ -141,6 +153,8 @@ export class Devices {
     this.heapEnd = 0;
     this.uartActivity = 0;            // counters for the renderer
     this.diskActivity = 0;
+    this.uartTxAddr = 0;              // UART block-write latch
+    this.uartTxResult = 0;            // bytes the last block write took
     // Drives (docs/c4bb-storage.md). One machine, several media: drive
     // 0 is what `files` used to be and every existing caller still gets
     // exactly that. A drive is { files, writable, sink } -- sink is
@@ -293,6 +307,33 @@ export class Devices {
     return n;
   }
 
+  // The UART's block write: N bytes from the TXADDR latch, in order.
+  //
+  // Every byte goes through the same onByte sink one at a time and bumps
+  // the same activity counter, so nothing downstream can tell a block
+  // write from N stores to UART_TX -- the CLI's line buffering, the web
+  // terminal's parser and the board's TX lamp are all unchanged. What
+  // changes is only how many INSTRUCTIONS the guest spent getting here.
+  //
+  // A run that would fall off the end of the arena is clamped rather
+  // than wrapped or faulted: read32 already returns 0 past the end
+  // instead of trapping, and a UART is not the device to invent a new
+  // fault convention on. The count returned says how many bytes were
+  // actually taken, which is how a caller finds out.
+  uartWrite (len) {
+    const n = Math.max(0, len | 0);
+    if (!n) return 0;
+    const addr = this.uartTxAddr >>> 0;
+    if (addr >= this.arena.size) return 0;
+    const end = Math.min(addr + n, this.arena.size);
+    const u8 = this.arena.u8;
+    for (let a = addr; a < end; a++) {
+      this.uartActivity++;
+      if (this.onByte) this.onByte(u8[a]);
+    }
+    return end - addr;
+  }
+
   // Close is where a written file becomes real, in one piece: a half
   // written medium after a crash is a bug report nobody can read.
   diskWClose (fd) {
@@ -316,6 +357,8 @@ export class Devices {
     switch (addr) {
       case UART_RX:    return this.rxFifo.length ? this.rxFifo.shift() : -1;
       case UART_RXAVL: return this.rxFifo.length;
+      case UART_TXADDR: return this.uartTxAddr | 0;
+      case UART_TXLEN: return this.uartTxResult | 0;
       case TIME_MS:    return this.simMs();
       case CYCLE_LO:   return this.machine ? (this.machine.cycle | 0) : 0;
       case CYCLE_HI:   return this.machine ? (this.machine.cycle / 0x100000000) | 0 : 0;
@@ -368,6 +411,8 @@ export class Devices {
         this.uartActivity++;
         if (this.onByte) this.onByte(val & 0xff);
         return;
+      case UART_TXADDR: this.uartTxAddr = val | 0; return;
+      case UART_TXLEN:  this.uartTxResult = this.uartWrite(val | 0); return;
       case USLP_US:
         // usleep(val): advance simulated time; also count sub-ms sleeps
         this.sleepMs += Math.max(1, Math.floor(val / 1000));

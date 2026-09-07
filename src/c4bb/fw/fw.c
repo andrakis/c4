@@ -49,7 +49,13 @@ enum {
     // Drives, for the BIOS at the bottom of this file.
     DEV_DRIVE = 0x13c, DEV_DCOUNT = 0x188, DEV_DRO = 0x18c,
     DEV_EJECT = 0x190, DEV_RESCAN = 0x194, DEV_TIME_MS = 0x10c,
-    DEV_UART_TX = 0x100
+    DEV_UART_TX = 0x100,
+    // The UART's block write (docs/c4bb-uart-block.md): an address and
+    // a length, the same shape as the disk write head. Every run this
+    // formatter emits is already contiguous in memory and already has
+    // a length in hand, so handing one to the hardware costs two
+    // stores whatever its length is.
+    DEV_UART_TXADDR = 0x1ac, DEV_UART_TXLEN = 0x1b0
 };
 enum { FW_TMP_SZ = 80 };
 
@@ -184,6 +190,21 @@ int fw_ralc (int ptr, int size) {
 // plain SI. See src/c4bb/tools/opscan.mjs, which is the pin.
 void __fw_putc (int c) { *(int *)DEV_UART_TX = c; }
 
+// n bytes from s, in one go (docs/c4bb-uart-block.md).
+//
+// This is what __fw_putc cannot be: the cost of a call is paid ONCE for
+// the whole run rather than once per byte, so a 40-character literal
+// run leaves the machine for the price of two stores. The guard is not
+// decoration -- the device clamps a run that would fall off the arena
+// and answers with the count it actually took, but a zero or negative
+// length is the formatter's own empty case (a %s with precision 0, a
+// prefix that is not there) and is worth not entering the device for.
+void __fw_write (char *s, int n) {
+    if (n <= 0) return;
+    *(int *)DEV_UART_TXADDR = (int)s;
+    *(int *)DEV_UART_TXLEN  = n;
+}
+
 int __fw_strlen (char *s) { char *t; t = s; while (*t) ++t; return t - s; }
 
 // The formatting core: emits a byte at a time, returns the count.
@@ -206,7 +227,17 @@ int __fw_vformat (char *f, int *argp) {
     smask = 2147483647;                  // 0x7fffffff
 
     while (*f) {
-        if (*f != '%') { __fw_putc(*f); ++count; ++f; }
+        // A literal run is a SLICE of the format string, not a string
+        // of its own -- which is why PUTS cannot emit it and why the
+        // block write is length-counted. Finding the end still costs a
+        // pass, but a pass that only loads and compares, where the old
+        // loop also called __fw_putc and stepped two counters per byte.
+        if (*f != '%') {
+            s = f;
+            while (*f && *f != '%') ++f;
+            __fw_write(s, f - s);
+            count = count + (f - s);
+        }
         else {
             ++f;
             left = 0; zero = 0; plus = 0; space = 0; alt = 0;
@@ -313,14 +344,20 @@ int __fw_vformat (char *f, int *argp) {
             if (c) {
                 pad = width - len - plen;
                 if (pad < 0) pad = 0;
+                // The padding stays per-character: those bytes are
+                // generated, not stored anywhere, so there is no run to
+                // point the device at -- and a padded conversion is
+                // rare next to an unpadded one. The prefix and the body
+                // ARE runs: "0x", and either the caller's %s or the
+                // digits this function just wrote into tmp.
                 if (!left && !zero)
                     while (pad > 0) { __fw_putc(' '); ++count; --pad; }
-                i = 0;
-                while (i < plen) { __fw_putc(prefix[i]); ++count; ++i; }
+                __fw_write(prefix, plen);
+                count = count + plen;
                 if (!left && zero)
                     while (pad > 0) { __fw_putc('0'); ++count; --pad; }
-                i = 0;
-                while (i < len) { __fw_putc(s[i]); ++count; ++i; }
+                __fw_write(s, len);
+                count = count + len;
                 if (left)
                     while (pad > 0) { __fw_putc(' '); ++count; --pad; }
             }

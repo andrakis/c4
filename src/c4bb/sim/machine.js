@@ -137,7 +137,49 @@ export class Machine {
   // a fresh ++cycle. The trap microroutine always ends at the
   // instruction boundary, so boundary jams give back their increment
   // here to keep the two cases distinct and cycle-exact.
+  // A TLEV that restores its own address.
+  //
+  // TLEV takes the return PC from bp+2 (hw/microcode.uc). If the word
+  // there IS the address of the TLEV itself, executing it leaves PC
+  // exactly where it was, so it runs again, and again. And the two
+  // guards below refuse to interrupt at a TLEV -- correctly, it restores
+  // five registers and must not be cut in half -- so NOTHING CAN BREAK
+  // IN. The cycle counter climbs and the machine never moves. That is
+  // the shape of the original c4bb lockup: `ls` mid-run, pc parked on a
+  // TLEV, cycles rising, no way back.
+  //
+  // Detected rather than inferred: the condition is exact, one compare
+  // against one word, and there is no threshold or sampling to get
+  // wrong. It costs a read of bp+2 only when PC is already sitting on a
+  // TLEV, which the checks below were about to read anyway.
+  //
+  // Reported and halted, because there is nothing to resume: every
+  // future instruction is this one.
+  tlevWedged(pc) {
+    if (this.arena.read32(pc) !== OP.TLEV) return false;
+    return this.arena.read32((this.regs[R.BP] + 8) | 0) === pc;
+  }
+
+  reportTlevWedge(pc) {
+    const hex = n => '0x' + ((n >>> 0).toString(16).toUpperCase().padStart(8, '0'));
+    this.printVm(`c4bb: TLEV at ${hex(pc)} restores its own address -- this task can never advance.\n`);
+    this.printVm(`c4bb:   bp ${hex(this.regs[R.BP])}, and the saved pc at bp+2 is ${hex(pc)}.\n`);
+    this.printVm(`c4bb:   sp ${hex(this.regs[R.SP])}, a ${hex(this.regs[R.A])}, after ${this.cycle} cycles.\n`);
+    this.printVm(`c4bb:   A trap frame was built wrong or written over. Halting, because\n`);
+    this.printVm(`c4bb:   nothing can interrupt a TLEV and every instruction from here is\n`);
+    this.printVm(`c4bb:   this one.\n`);
+    this.dev.halted = true;
+    this.dev.status = -101;
+  }
+
   boundaryChecks() {
+    // Cheap: only when the PC is already on a TLEV, which is rare, and
+    // this function is the periodic one rather than the per-instruction
+    // one.
+    if (this.tlevWedged(this.regs[R.PC])) {
+      this.reportTlevWedge(this.regs[R.PC]);
+      return FETCH;
+    }
     // The programmable interrupt timer. Same trap as the cycle
     // interrupt -- a kernel that has a handler needs no new one -- but
     // it fires on the wall clock rather than on a cycle count, so a

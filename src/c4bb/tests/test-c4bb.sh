@@ -178,6 +178,12 @@ else
     echo "$c4ke_badop_out" | tail -10
 fi
 
+# The lockup that could not be interrupted: a TLEV whose frame restores
+# its own address. A unit test on a machine the test builds, because the
+# alternative is waiting for a corrupted frame to turn up, and a test
+# that waits for a bug is not a test.
+node src/c4bb/tests/test-tlev-wedge.mjs || fail=1
+
 # The provenance port (src/c4bb/sim/arena-whowrote.js), both ways.
 #
 # The pin is NOT "an answer came back" -- a constant would pass that.

@@ -2664,6 +2664,16 @@ static void trap_handler (int trap, int ins, int mode, int a, int *bp, int *sp, 
 		// Kill the task and schedule()
 		printf("c4ke: Custom opcode not found: %d, executed by task %d\n",
 			   ins, kernel_task_current[TASK_ID]);
+		// WAS THAT WORD WRITTEN, OR IS THE PC WRONG? Two very different
+		// bugs wear the same message. If something overwrote the
+		// instruction, the board remembers who; if nothing ever wrote
+		// there, the word is original and it is the PC that is wrong --
+		// a bad restore, not a bad write. Only c4bb with --whowrote can
+		// tell them apart, and it is announced, never probed
+		// (include/c4bb_info.h).
+		if (bb_has_whowrote())
+			printf("c4ke:   the word at 0x%lx was last written by pc 0x%lx (0 = never written)\n",
+			       returnpc - 1, bb_whowrote((int)(returnpc - 1)));
 		kernel_print_task(kernel_task_current);
 		c4r_print_stacktrace(kernel_c4r, (int *)kernel_task_current[TASK_C4R], bp, returnpc);
 		kernel_task_current[TASK_EXIT_CODE] = -1000;

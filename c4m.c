@@ -512,12 +512,19 @@ void next()
     if (tk == '\n') {
       if (src) {
         printf("%d: %.*s", line, p - lp, lp);
-        lp = p;
         while (le < e) {
           printf("%8.4s", &c4m_opcodes[*++le * 5]);
           if (*le <= ADJ) printf(" %d\n", *++le); else printf("\n");
         }
       }
+      // ALWAYS, not only under -s. lp is the start of the current line
+      // and dump_exit() prints [lp, p) to show which line an error is
+      // on -- so with lp left at byte zero it printed the whole file
+      // instead, and the error message went off the top of the
+      // scrollback with it. A compiler that answers "where?" with the
+      // entire input is worse than one that says nothing, because it
+      // takes the message you already had away with it.
+      lp = p;
       ++line;
     }
     else if (tk == '#') {

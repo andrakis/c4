@@ -137,10 +137,40 @@
 #define C4_SIGNALS 1
 #include "c4.h"
 #include "c4m.h"
-// Board capabilities, announced through __c4_info(). Used by
-// kernel_stack_check to ask c4bb who wrote a broken guard word; inert
-// and harmless anywhere else, because the bit is never set there.
-#include "c4bb_info.h"
+// The two board capabilities this kernel asks about, DEFINED HERE and
+// not reached through include/c4bb_info.h.
+//
+// c4ke.c is compiled FROM SOURCE by c4m at run time -- that is the
+// whole of innerbench's default mode, `c4m load-c4r.c src/c4ke/c4ke.c`
+// -- and c4m has no preprocessor. It skips '#' lines, so an #include
+// here brings in nothing and every function behind it is undefined. The
+// symptom is not a missing symbol either: c4m says
+//
+//   3057: bad function call (0)
+//
+// and then prints the rest of the file trying to show the line, which
+// buries the message in a screenful of its own source. The header is
+// still right for images built through a preprocessor; it is just not
+// reachable from a file that has to compile without one.
+//
+// Both are cheap enough to keep here in full. Announced, never probed
+// (include/c4bb_info.h has the reasoning): 0x1a4/0x1a8 are c4bb device
+// registers and ORDINARY MEMORY everywhere else, so nothing may touch
+// them unless __c4_info() says the port is fitted.
+enum { BB_I_WHOWROTE = 0x1000 };
+enum { BB_WW_QUERY = 420, BB_WW_ANSWER = 424 };   // 0x1a4, 0x1a8
+
+int bb_has_whowrote () { return __c4_info() & BB_I_WHOWROTE; }
+
+// Which PC last stored to `addr`, or 0 for "nobody yet"/not fitted.
+// CHECK bb_has_whowrote() FIRST.
+int bb_whowrote (int addr) {
+	int *q, *ans;
+	q = (int *)BB_WW_QUERY;
+	ans = (int *)BB_WW_ANSWER;
+	*q = addr;
+	return *ans;
+}
 #define NO_LOADC4R_MAIN
 #include "./load-c4r.c"
 

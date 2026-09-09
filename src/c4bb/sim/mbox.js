@@ -88,6 +88,12 @@ export class HostMailbox {
     return out;
   }
 
+  /** true when the guest has consumed every frame the host queued */
+  inboxEmpty() {
+    const w = this.arena.i32, r = this.toGuest;
+    return w[r.at + HEAD] === w[r.at + TAIL];
+  }
+
   /** words the guest has queued and the host has not drained */
   pending() {
     const w = this.arena.i32, r = this.toHost;

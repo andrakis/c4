@@ -91,7 +91,14 @@ mkdir -p $DISK
 # resolving to the repo-root load-c4r.c) is newer -- else a load-c4r.c
 # change (e.g. a new .c4r format version) silently leaves a stale
 # kernel that rejects freshly-built images.
-if [ ! -f $OUT/c4ke32.c4r ] || [ src/c4ke/c4ke.c -nt $OUT/c4ke32.c4r ] || [ load-c4r.c -nt $OUT/c4ke32.c4r ]; then
+# (the kernel #includes its extensions and the mailbox helpers: a change to any of
+#  them is a change to the kernel, or an edit there ships in an image built before it)
+kernel_stale=0
+[ -f $OUT/c4ke32.c4r ] || kernel_stale=1
+for dep in src/c4ke/c4ke.c load-c4r.c include/c4bb_mbox.h src/c4ke/extensions/*.c; do
+    [ "$dep" -nt $OUT/c4ke32.c4r ] && kernel_stale=1
+done
+if [ $kernel_stale = 1 ]; then
     $PREPROC src/c4ke/c4ke.c > .c4bb_klc.c
     ./c4sp32 -c 64000000 src/c4sp/lisp/c4lc.lisp -O .c4bb_klc.c $OUT/c4ke32.c4r > /dev/null
     rm -f .c4bb_klc.c
@@ -106,7 +113,11 @@ $CC -o $DISK/c4ke.vfs.c4r $U0 src/c4ke/include/service.h src/c4ke/services/c4ke.
 for t in ls ps cat echo kill spin c4le type xxd badop; do
     $CC -o $DISK/$t.c4r $U0 $BIN/$t.c > /dev/null
 done
-$CC -o $DISK/top.c4r $U0 $BIN/ps.c $BIN/top.c > /dev/null
+$CC -o $DISK/top.c4r $U0 $BIN/ps.c $BIN/top.c
+# the mailbox from a task: bound to the host, and task to task
+for t in mbecho mbpair; do
+    $CC -o $DISK/$t.c4r $U0 include/c4ke_mbox.h $BIN/$t.c > /dev/null
+done > /dev/null
 
 # vfsload: built with c4lc (needs real block scoping, not just c4cc's
 # top-of-function declarations). c4lc's own preprocessor hangs on

@@ -137,6 +137,10 @@
 #define C4_SIGNALS 1
 #include "c4.h"
 #include "c4m.h"
+// The c4bb mailbox helpers (guest side): inert on every host without the
+// C4I_MBOX bit, which is what mb_init checks first. Here, above the scheduler,
+// because extensions/c4ke_mbox.c needs them and c4 has no prototypes.
+#include "c4bb_mbox.h"
 // The two board capabilities this kernel asks about, DEFINED HERE and
 // not reached through include/c4bb_info.h.
 //
@@ -569,7 +573,34 @@ enum {
 	                           // number when registering opcodes.
 };
 
+// Extensions register their opcode names here; request_symbol asks this
+// table first, so u0's __c4_opcode("OP_X", OP_REQUEST_SYMBOL) reaches them.
+enum { KEXT_SYMBOLS_MAX = 32 };
+static char *kext_symbol_names[32];
+static int   kext_symbol_ops[32];
+static int   kext_symbol_count;
+static int kext_register_symbol (char *name, int opcode) {
+	if (kext_symbol_count >= KEXT_SYMBOLS_MAX) return 0;
+	kext_symbol_names[kext_symbol_count] = name;
+	kext_symbol_ops[kext_symbol_count] = opcode;
+	++kext_symbol_count;
+	return 1;
+}
+static int kext_symbol_lookup (char *symbol) {
+	int i; char *a, *b;
+	i = 0;
+	while (i < kext_symbol_count) {
+		a = symbol; b = kext_symbol_names[i];
+		while (*a && *a == *b) { ++a; ++b; }
+		if (!*a && !*b) return kext_symbol_ops[i];
+		++i;
+	}
+	return 0;
+}
+
 static int request_symbol (char *symbol) {
+	int op;
+	if ((op = kext_symbol_lookup(symbol))) return op;
 	if (!memcmp(symbol, "OP_HALT", 7)) return OP_HALT;
 	if (!memcmp(symbol, "OP_TIME", 7)) return OP_TIME;
 	if (!memcmp(symbol, "OP_C4INFO", 9)) return OP_C4INFO;
@@ -1300,6 +1331,14 @@ static int kernel_is_task_running (int *task) {
 #define schedule()                    __c4_opcode(OP_SCHEDULE)
 #endif
 
+// The host mailbox (c4bb MBOX_*, docs/c4bb-design.md): fitted or not, and the
+// task bound to host frames -- the first to receive or await them. The opcodes
+// live in extensions/c4ke_mbox.c; the state is here because the scheduler
+// below reads it and c4 has no prototypes.
+static int  mbx_fitted;
+static int *mbx_host_owner;
+static int  mbx_host_pending () { return mbx_fitted && mb_poll() != 0; }
+
 // Find a task to run.
 // Also handles certain wait states like sleeping.
 // Under C4, this function is invoked as pure C4 code, so much not
@@ -1346,14 +1385,14 @@ static int *kernel_task_find_real () {
 					result = t;
 			}
 			else if (ws == WSTATE_MESSAGE) {
-				// Control returns to op_await_message
-				// TODO: message waiting only supports timeout, never delivers messages.
-				//if (t[TASK_MBOX_COUNT] > 0) {
-				//	printf("c4ke: have %d messages for pid %d\n", t[TASK_MBOX_COUNT], t[TASK_ID]);
-				//	result = t;
-				//} else
-				if (kernel_last_time >= wa) {
-					// printf("c4ke: message timeout for pid %d\n", t[TASK_ID]);
+				// A message in the task's inbox, or a host frame for the task
+				// bound to the mailbox, wakes it with 1 in the accumulator (what
+				// OP_MBOX_AWAIT returns); a timeout (wa != 0) wakes it with 0.
+				if (t[TASK_MBOX_COUNT] > 0 || (t == mbx_host_owner && mbx_host_pending())) {
+					t[TASK_REG_A] = 1;
+					result = t;
+				} else if (wa && kernel_last_time >= wa) {
+					t[TASK_REG_A] = 0;
 					result = t;
 				}
 			}
@@ -1802,6 +1841,7 @@ static void kernel_clean_task (int *t) {
 	if ((p = (int *)t[TASK_ARGV])) free(p);
 	if ((p = (int *)t[TASK_ARGV_DATA])) free((char *)p);
 	if ((p = (int *)t[TASK_SIGHANDLERS])) free(p);
+	if ((p = (int *)t[TASK_MBOX])) free(p);   // extensions/c4ke_mbox.c's per-task inbox
 	// Only free a C4R the task actually owns. Builtin tasks (start_task_builtin)
 	// borrow the kernel's own C4R structure, which is owned by the loader that
 	// started the kernel -- freeing it here left loadc4r_run() with a dangling
@@ -2977,6 +3017,9 @@ static int task_idle (int argc, char **argv) {
 			// kernel_hlt_count = 0;
 			// TODO: check for next schedule time
 			//i = __time();
+			// Nothing runnable: tell a host that paces this machine by the
+			// mailbox that it may stop until it has queued something.
+			if (mbx_fitted) mb_bell(MB_BELL_IDLE);
 			__c4_usleep(KERNEL_IDLE_SLEEP_TIME);
 			//printf("(idle: slept for %d usec)\n", __time() - i);
 		}
@@ -4492,5 +4535,6 @@ int main (int argc, char **argv) {
 #include "src/c4ke/extensions/c4ke_plus.c"
 #include "src/c4ke/extensions/c4ke_pm.c"
 #include "src/c4ke/extensions/c4ke_dos.c"
+#include "src/c4ke/extensions/c4ke_mbox.c"
 
 #endif // ifndef C4KE

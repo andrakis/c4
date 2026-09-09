@@ -75,6 +75,8 @@ cp c4th32.c4r $FUSEDISK/c4th32.c4r
 for t in bb_customop bb_preempt bb_pm bb_pit bb_whowrote; do
     $CC -o $OUT/$t.c4r src/c4bb/tests/src/$t.c > /dev/null
 done
+# the mailbox probe: board-only header passed as a source (c4cc has no #include)
+$CC -o $OUT/bb_mbox.c4r include/c4bb_mbox.h src/c4bb/tests/src/bb_mbox.c > /dev/null
 
 # these include real headers, so they go through the preprocessor
 $PREPROC $U0 src/tests/test_vprintf.c 2>/dev/null | $CC -o $OUT/test_vprintf.c4r - > /dev/null

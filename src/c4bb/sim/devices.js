@@ -78,6 +78,17 @@ export const PIT_MS      = 0x1a0;  // r/w: tick every N real ms (0 = off)
 export const UART_TXADDR = 0x1ac;  // w: buffer address (does not advance)
 export const UART_TXLEN  = 0x1b0;  // w: emit N bytes from it -> N written
 
+// The mailbox: a region of guest RAM the host and the guest both read
+// and write (two rings of i32 frames, host->guest and guest->host), plus
+// three registers so each side can find it and wake the other. The rings
+// themselves are plain memory -- the host reaches them through the arena
+// typed array, the guest with ordinary loads and stores -- so a frame
+// costs no opcode and no copy. docs/c4bb-design.md "The mailbox".
+export const MBOX_BASE = 0x1b4;    // r: region base address (0 = not fitted)
+export const MBOX_LEN  = 0x1b8;    // r: region length in bytes
+export const MBOX_BELL = 0x1bc;    // w: guest->host doorbell (value to onDoorbell)
+                                   // r: host->guest interrupts pending, read-to-clear
+
 // c4_info() capability bits (c4m.c:206)
 export const C4I_WHOWROTE = 0x1000;   // the provenance port is fitted
 export const C4I_C4M = 0x2, C4I_HRT = 0x10, C4I_SIG = 0x20,
@@ -87,7 +98,10 @@ export const C4I_C4M = 0x2, C4I_HRT = 0x10, C4I_SIG = 0x20,
 // device window there and the poke would be a wild access -- so the
 // capability is announced the way every other one is, and a kernel that
 // does not see the bit keeps counting cycles.
-             C4I_PIT = 0x800;
+             C4I_PIT = 0x800,
+// The mailbox is fitted (MBOX_BASE/LEN/BELL). Same rule as the PIT: a
+// guest asks INFO first and never pokes 0x1b4 on a machine without it.
+             C4I_MBOX = 0x2000;
 
 // How fast the machine thinks it is. This was 1000 -- a 1 MHz machine --
 // while the simulator actually executes fifteen to twenty million
@@ -171,6 +185,14 @@ export class Devices {
     // The real clock. hostNow is injectable so a test can pin it; by
     // default it is the wall clock, which is the whole point.
     this.hostNow = opts.hostNow || (() => Date.now());
+    // The mailbox region {base, len}, laid out by the loader (boot's
+    // `mbox` option); onDoorbell(value) is the host's ear. mboxIrq is
+    // the host->guest side: raiseMbox() sets it, the machine jams a
+    // HARD_IRQ(HIRQ_MBOX) at the next boundary when a cycle handler is
+    // installed, and a guest with no handler polls MBOX_BELL instead.
+    this.mbox = opts.mbox || null;
+    this.onDoorbell = opts.onDoorbell || null;
+    this.mboxIrq = 0;
     this.t0 = this.hostNow();
     this.pitMs = 0;                   // 0 = the PIT is off (or masked)
     this.pitArmed = 0;                // the interval last armed, masked or not
@@ -375,6 +397,7 @@ export class Devices {
         // matters because under native c4m they are its own memory.
         // A cold path -- INFO is read once at boot.
         return C4I_C4M | C4I_HRT | C4I_SIG | C4I_FLT | C4I_PROT | C4I_PIT |
+               (this.mbox ? C4I_MBOX : 0) |
                (this.arena && this.arena.writer ? C4I_WHOWROTE : 0) |
                (m && m.trapHandler ? C4I_TRAPH : 0);
       }
@@ -401,9 +424,16 @@ export class Devices {
       case DISK_WNAME:   return this.diskResult | 0;
       case DISK_WLEN:    return this.diskResult | 0;
       case DISK_WCLOSE:  return this.diskResult | 0;
+      case MBOX_BASE:    return this.mbox ? this.mbox.base | 0 : 0;
+      case MBOX_LEN:     return this.mbox ? this.mbox.len | 0 : 0;
+      case MBOX_BELL: {  const n = this.mboxIrq | 0; this.mboxIrq = 0; return n; }
       default:         return 0;
     }
   }
+
+  // Host->guest: an interrupt at the next instruction boundary (if the
+  // guest installed a cycle handler), or a count a polling guest reads.
+  raiseMbox () { this.mboxIrq = (this.mboxIrq | 0) + 1; }
 
   write32(addr, val) {
     switch (addr) {
@@ -505,6 +535,7 @@ export class Devices {
         return;
       case HEAP_BASE: this.heapBase = val | 0; return;
       case HEAP_END:  this.heapEnd = val | 0;  return;
+      case MBOX_BELL: if (this.onDoorbell) this.onDoorbell(val | 0); return;
       case TRAPH_REG:    this.machine.trapHandler = val | 0; return;
       case INTERVAL_REG: this.machine.cycleInterval = val | 0; return;
       case TRESTORE_REG: this.machine.trapRestoresInterval = val | 0; return;

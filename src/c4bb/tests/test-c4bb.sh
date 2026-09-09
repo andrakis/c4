@@ -253,6 +253,14 @@ else
     fail=1
 fi
 
+# ---- the mailbox ------------------------------------------------------
+# Announced, never probed: without the region the probe must say so on
+# BOTH hosts (native c4m has no device window, so the same bytes must
+# run there untouched). With it, a node harness lays the rings out,
+# feeds frames, and pins the echoes, the doorbell and the interrupt.
+check bb_mbox $IMAGES/bb_mbox.c4r
+node src/c4bb/tests/test-mbox.mjs || fail=1
+
 # ---- the programmable interrupt timer -------------------------------
 # The cycle interrupt fires every N instructions, which is a different
 # amount of time on every host; the PIT fires every N milliseconds. This

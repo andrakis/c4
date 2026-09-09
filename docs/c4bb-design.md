@@ -84,6 +84,27 @@ unchanged by `make test-c4ix`).
     0x14C INFO         capability bits, mirrors native c4_info()|TRAPH
     0x150-0x174 CPU control latches: TRAPH INTERVAL TRESTORE MODE,
                 and the trap-jam latches TT TP HND JMODE JINTERVAL
+    0x1B4/8 MBOX_BASE/LEN  read: the mailbox region (0 = not fitted; INFO bit
+                C4I_MBOX 0x2000 announces it)
+    0x1BC MBOX_BELL    write: guest->host doorbell; read: host->guest
+                interrupts pending (read-to-clear)
+
+### The mailbox
+
+A host that boots with `boot(machine, fw, prog, argv, { mbox: bytes })`
+gets a region carved out below the stack reserve, `HEAP_END` lowered so
+the firmware allocator never reaches it, and `MBOX_BASE/LEN` pointing at
+it. Both rings live inside it (host->guest in the first half, guest->host
+in the second): `[cap][head][tail][data...]` in i32 words, head and tail
+monotonic word counters, a frame `[len][type][seq][payload...]` never
+wrapping (a `-1` marker skips to the next multiple of cap). The host
+reads and writes the rings straight through the arena typed array; the
+guest with loads and stores. A guest write to `MBOX_BELL` reaches the
+host's `onDoorbell(value)`; the host's `raiseMbox()` jams a
+`HARD_IRQ` with parameter `2` (HIRQ_MBOX) through the cycle handler at
+the next boundary -- the PIT's path with its own parameter -- or, for a
+guest with no handler, counts up in `MBOX_BELL` until read.
+Header for guests: `include/c4bb_mbox.h` (board only, after the INFO check).
 
 `UART_TXADDR`/`UART_TXLEN` are the same shape as the disk write head and
 exist for the same reason (`docs/c4bb-uart-block.md`): the firmware

@@ -1,0 +1,19 @@
+C4DOS version 0.1
+the operating system before operating systems
+clock device installed
+ramdisk device installed, 33554432 bytes
+console device installed, prompt unbuffered
+Welcome to C4DOS
+C4DOS version 0.1
+the operating system before operating systems
+A>RUN dostar.c4r x tools-src.tar
+dostar: extracted 6 files, 200463 bytes
+A>RUN bbsave.c4r B:
+  c4dos.h  8929
+  load-c4r.c  39023
+  u0lite.h  2367
+  c4cc.c  78390
+  asm-c4r.c  38130
+  cpp.c  33624
+bbsave: 6 files, 200463 bytes onto drive 1
+A>C4DOS: system halted

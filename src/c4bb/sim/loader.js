@@ -118,8 +118,12 @@ export function callFunction(machine, addr, args) {
 // Full boot: firmware + program + argv + constructors. Afterwards the
 // machine is ready to run; when PC reaches CONS_RET, main returned
 // (run destructors, status in A). The POWER device handles exit().
-export function boot(machine, fwBytes, progBytes, argv) {
+// opts.mbox: bytes to carve out below the stack reserve for the mailbox
+// (devices.js MBOX_*); the firmware sees a heap that stops short of it,
+// so nothing the guest allocates can land on the rings. Zero = not fitted.
+export function boot(machine, fwBytes, progBytes, argv, opts = {}) {
   const arena = machine.arena;
+  const mboxLen = (opts.mbox | 0) > 0 ? ((opts.mbox | 0) + 4095) & ~4095 : 0;
   initRom(arena);
 
   const fwImg = loadImage(arena, parseC4r(fwBytes), MEM_BASE);
@@ -146,9 +150,11 @@ export function boot(machine, fwBytes, progBytes, argv) {
 
   // heap bounds for the firmware allocator (1 MB stack reserve)
   const heapBase = (progImg.top + 4096) & ~4095;
-  const heapEnd = (arena.stackTop - 1024 * 1024) & ~4095;
+  const heapEnd = ((arena.stackTop - 1024 * 1024) & ~4095) - mboxLen;
   machine.dev.write32(HEAP_BASE, heapBase);
   machine.dev.write32(HEAP_END, heapEnd);
+  const mbox = mboxLen ? { base: heapEnd, len: mboxLen } : null;
+  if (mbox) { machine.dev.mbox = mbox; arena.u8.fill(0, mbox.base, mbox.base + mbox.len); }
 
   // initial stack
   machine.regs[R.SP] = machine.regs[R.BP] = arena.stackTop;
@@ -168,7 +174,7 @@ export function boot(machine, fwBytes, progBytes, argv) {
   machine.regs[R.PC] = progImg.entryAddr;
   machine.upc = FETCH;
 
-  return { fwImg, progImg, argvBase, heapBase, heapEnd };
+  return { fwImg, progImg, argvBase, heapBase, heapEnd, mbox };
 }
 
 // Run to completion after boot(); returns the exit status. When a

@@ -199,6 +199,17 @@ export class Machine {
         if (t !== FETCH) { this.cycle--; return t; }
       }
     }
+    // The mailbox: the host raised it (devices.js raiseMbox). Delivered
+    // through the cycle handler like the PIT, with its own parameter so
+    // the kernel can tell a frame from a tick. Edge: the jam clears it.
+    // No handler -> nothing to jam; the count stays for a polling guest.
+    if (this.dev.mboxIrq && this.cycleHandler &&
+        this.arena.read32(this.regs[R.PC]) !== OP.TLEV) {
+      this.dev.mboxIrq = 0;
+      const t = this.jamTrap(1 /* HARD_IRQ */, 2 /* HIRQ_MBOX */, this.cycleHandler,
+                             { zeroInterval: true, unprot: true });
+      if (t !== FETCH) { this.cycle--; return t; }
+    }
     if (this.cycleInterval && this.cycle % this.cycleInterval === 0 &&
         this.arena.read32(this.regs[R.PC]) !== OP.TLEV) {
       // TLEV is uninterruptible: it restores five registers atomically

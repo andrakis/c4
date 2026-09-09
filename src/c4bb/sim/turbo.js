@@ -154,7 +154,7 @@ export class Turbo {
       // m.dev.pitMs joins the two things that can jam a trap between
       // instructions: without it the PIT fires only in the step engine
       // and never in the one that actually runs.
-      if (m.cycleInterval || m.pendingSignal || m.dev.pitMs) {
+      if (m.cycleInterval || m.pendingSignal || m.dev.pitMs || m.dev.mboxIrq) {
         const start = m.boundaryChecks();
         if (start === trapStart) { trapFn(m, ar, r); continue; }
       }

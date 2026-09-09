@@ -36,11 +36,8 @@ const OP = Object.fromEntries(names.map((n, i) => [n, i]));
 // keeps walking, met JSRS in every C4KE and C4IX image, and came out
 // the far side reporting opcodes like `?-3` -- pieces of somebody's
 // operand, read as instructions.
-function hasOperand (op) {
-  return op <= OP.ADJ || op === OP.JSRI || op === OP.JSRS
-      || (op >= OP.LDL && op <= OP.IMMP)     // LIP, ADDL and POPA take none
-      || op === OP.STL;
-}
+// the machine's own answer (a set, so a permuted ROM keeps it right)
+import { hasOperand } from '../sim/machine.js';
 
 // Opcodes this machine does not have at all, at any rung.
 //

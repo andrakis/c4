@@ -114,8 +114,15 @@ export const C4I_C4M = 0x2, C4I_HRT = 0x10, C4I_SIG = 0x20,
 export const CYCLES_PER_MS = 20000;
 
 // Opcode-name ROM contents, 5 bytes per opcode, exactly as
-// c4m_setup_opcodes lays them out (c4m.c:278, c4l.c:110).
-export const OPNAMES =
+// c4m_setup_opcodes lay them out (c4m.c:278, c4l.c:110).
+//
+// A `let`: the ROM is the machine's opcode ENCODING, and a machine given
+// the same names in a different order reads a different encoding -- an
+// image built for one ROM means nothing under another. setOpnames() swaps
+// it; machine.js rebuilds every table derived from it (OP, the operand
+// set, PM_GATED).
+// ESM exports are live bindings, so every importer sees the new string.
+export let OPNAMES =
   'LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,' +
   'OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,' +
   'OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,EXIT,' +
@@ -130,6 +137,8 @@ export const OPNAMES =
   // fused (79-88), docs/fused-opcodes.md. LDL, STL and POPA are real
   // here (hw/microcode.uc); the other seven are c4mp's and named only.
   'LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,';
+export const STOCK_OPNAMES = OPNAMES;
+export function setOpnames (names) { OPNAMES = names; }
 
 // Disk controller fd space: 0 is the blocking, line-buffered keyboard
 // (a terminal in cooked mode); opening "/dev/stdin" with O_NONBLOCK

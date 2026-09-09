@@ -89,6 +89,23 @@ unchanged by `make test-c4ix`).
     0x1BC MBOX_BELL    write: guest->host doorbell; read: host->guest
                 interrupts pending (read-to-clear)
 
+### The name ROM is the encoding
+
+The opcode-name ROM (`devices.js OPNAMES`) is a live binding, not a
+constant. Every table that depends on opcode NUMBERS -- `OP`, the operand
+set, `PM_GATED` -- is rebuilt from the names by `machine.js
+rebuildOpcodeTables()`, and `setOpcodeNames` swaps the lot at once. They
+are sets rather than numeric ranges because nothing requires a ROM to list
+the names in the stock order.
+
+So a machine is defined by its ROM. Two machines given ROMs that list the
+same 89 names in a different order read different encodings, and an image
+built for one is garbage to the other: an opcode is one word and so is its
+operand, while patches and jump tables hold ADDRESSES, so a different
+numbering is a pure relabelling of the code words and nothing moves. The
+ordering in `devices.js` is the stock one -- what `c4m` uses, and what
+every image in this repo is built for.
+
 ### The mailbox
 
 A host that boots with `boot(machine, fw, prog, argv, { mbox: bytes })`

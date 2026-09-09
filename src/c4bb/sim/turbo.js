@@ -15,7 +15,7 @@
 // guard, jsops go through machine.execJsop.
 
 import { FETCH, DISPATCH, ALU_OPS } from './ucode.js';
-import { R, OP, INS_SIZE, PM_GATED, Machine } from './machine.js';
+import { R, OP, INS_SIZE, PM_GATED, Machine, hasOperand } from './machine.js';
 import { OPNAMES } from './devices.js';
 
 const REG_LOCAL = ['pc', 'sp', 'bp', 'a', 'ir', 'opr', 'mar', 'mdr', 'b', 't', 'u'];
@@ -162,7 +162,7 @@ export class Turbo {
       let fromOpcd = false;
       for (;;) {
         let ir = r[R.IR] | 0;
-        if (fromOpcd && ir <= OP.ADJ) {        // OPCD guard (c4m.c:1535)
+        if (fromOpcd && hasOperand(ir)) {      // OPCD guard (c4m.c:1535)
           const name = i => OPNAMES.slice(i * 5, i * 5 + 4);
           m.printVm(`${name(this.opcdNum)} does not support opcodes requiring arguments (${name(ir)} given)\n`);
           const t = m.jamTrap(5, ir, m.trapHandler, { zeroInterval: true, unprot: true });

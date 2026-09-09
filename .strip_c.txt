@@ -1,0 +1,76 @@
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F60BE0, sp=0xD0F3BE98, bp=0xD0F3BEB0, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F60C48, sp=0xD0F3BE98, bp=0xD0F3BEB0, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F60CB0, sp=0xD0F3BE98, bp=0xD0F3BEB0, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F60D18, sp=0xD0F3BE98, bp=0xD0F3BEB0, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F60D80, sp=0xD0F3BE98, bp=0xD0F3BEB0, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F60DE8, sp=0xD0F3BE98, bp=0xD0F3BEB0, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F60E50, sp=0xD0F3BE98, bp=0xD0F3BEB0, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F60EB8, sp=0xD0F3BE98, bp=0xD0F3BEB0, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F60F20, sp=0xD0F3BE98, bp=0xD0F3BEB0, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F60F88, sp=0xD0F3BE98, bp=0xD0F3BEB0, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F60FF0, sp=0xD0F3BE98, bp=0xD0F3BEB0, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F61058, sp=0xD0F3BE98, bp=0xD0F3BEB0, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F610C0, sp=0xD0F3BE98, bp=0xD0F3BEB0, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F61128, sp=0xD0F3BE98, bp=0xD0F3BEB0, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F61190, sp=0xD0F3BE98, bp=0xD0F3BEB0, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F611F8, sp=0xD0F3BE98, bp=0xD0F3BEB0, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F61260, sp=0xD0F3BE98, bp=0xD0F3BEB0, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F612C8, sp=0xD0F3BE98, bp=0xD0F3BEB0, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F61330, sp=0xD0F3BE98, bp=0xD0F3BEB0, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F61398, sp=0xD0F3BE98, bp=0xD0F3BEB0, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F61400, sp=0xD0F3BE98, bp=0xD0F3BEB0, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F61468, sp=0xD0F3BE98, bp=0xD0F3BEB0, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F614D0, sp=0xD0F3BE98, bp=0xD0F3BEB0, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F61538, sp=0xD0F3BE98, bp=0xD0F3BEB0, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F615A0, sp=0xD0F3BE98, bp=0xD0F3BEB0, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F61608, sp=0xD0F3BE98, bp=0xD0F3BEB0, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F61670, sp=0xD0F3BE98, bp=0xD0F3BEB0, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F638E0, sp=0xD0F3BE90, bp=0xD0F3BEA8, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F638E0, sp=0xD0F3BE90, bp=0xD0F3BEA8, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F638E0, sp=0xD0F3BE90, bp=0xD0F3BEA8, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F638E0, sp=0xD0F3BE90, bp=0xD0F3BEA8, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F638E0, sp=0xD0F3BE90, bp=0xD0F3BEA8, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F638E0, sp=0xD0F3BE90, bp=0xD0F3BEA8, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F638E0, sp=0xD0F3BE90, bp=0xD0F3BEA8, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F638E0, sp=0xD0F3BE90, bp=0xD0F3BEA8, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F650E8, sp=0xD0F3BEB8, bp=0xD0F3BED0, handler=0x0
+c4m: missed a trap, no handler installed
+Trap type TRAP_ILLOP start, offending instruction 48 at 0xB3F65140, sp=0xD0F3BEB8, bp=0xD0F3BED0, handler=0x0
+c4m: missed a trap, no handler installed
+A basic test of 2 + 3:
+  5

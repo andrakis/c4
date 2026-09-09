@@ -262,7 +262,7 @@ void c4r_dump_info (int *c4r) {
 		printf(" (mem %d, +%d bss)", header[C4R_HDR_MEMSZ],
 		       header[C4R_HDR_MEMSZ] - header[C4R_HDR_DATALEN]);
 	printf("  Patch = %d", header[C4R_HDR_PATCHLEN]);
-	printf("  Symbols = %d" ,header[C4R_HDR_SYMBOLSLEN]);
+	printf("  Symbols = %d%s" ,header[C4R_HDR_SYMBOLSLEN], header[C4R_HDR_SYMBOLSLEN] ? "" : " (stripped)");
 	printf("  Cons = %d", header[C4R_HDR_CONSTRUCTLEN]);
 	printf("  Des  = %d\n", header[C4R_HDR_DESTRUCTLEN]);
 	printf("lc4r:  0x%lx\n", c4r[C4R_CODE] + header[C4R_HDR_ENTRY]);

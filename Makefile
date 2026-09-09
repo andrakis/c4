@@ -3103,6 +3103,36 @@ $(C4RDUMP): src/c4ke/bin/c4rdump.c load-c4r.c src/c4cc/c4cc.c
 $(C4RLINK): src/c4ke/bin/c4rlink.c src/c4cc/asm-c4r.c src/c4cc/c4cc.c load-c4r.c
 	gcc $(EXTRA_CC) -O2 -g -Isrc/c4cc -I include -I . src/c4ke/bin/c4rlink.c -o $(C4RLINK)
 
+# c4rstrip is c4rlink under another name (it checks argv[0]): one input,
+# symbol table dropped, output over the input unless -o.
+c4rstrip: src/c4ke/bin/c4rlink.c src/c4cc/asm-c4r.c src/c4cc/c4cc.c load-c4r.c
+	gcc $(EXTRA_CC) -O2 -g -Isrc/c4cc -I include -I . src/c4ke/bin/c4rlink.c -o c4rstrip
+c4rstrip32: src/c4ke/bin/c4rlink.c src/c4cc/asm-c4r.c
+	gcc -m32 $(NATIVE_CC_OPTS) -Isrc/c4cc -o c4rstrip32 src/c4ke/bin/c4rlink.c -lm
+c4rstrip.c4r: c4rlink.c4r
+	cp c4rlink.c4r c4rstrip.c4r
+c4rstrip32.c4r: c4rlink32.c4r
+	cp c4rlink32.c4r c4rstrip32.c4r
+
+# A stripped image runs the same and carries no names: hello, stripped
+# natively and by the program running under c4m, must print the same,
+# shrink, and dump as "(stripped)"; c4rlink -s on a real link too.
+test-c4rstrip: c4rstrip c4rstrip.c4r $(C4M) $(C4RDUMP) $(C4RLINK) hello.c4r test_basic.c4r
+	./c4rstrip -o .strip_hello.c4r hello.c4r > /dev/null
+	[ $$(stat -c %s .strip_hello.c4r) -lt $$(stat -c %s hello.c4r) ]
+	$(C4M) load-c4r.c -- hello.c4r > .strip_a.txt 2>&1; $(C4M) load-c4r.c -- .strip_hello.c4r > .strip_b.txt 2>&1
+	cmp .strip_a.txt .strip_b.txt
+	$(C4RDUMP) .strip_hello.c4r | grep -q "Symbols = 0 (stripped)"
+	@# (c4rstrip.c4r under bare c4m parses and reports, but a bare guest has no
+	@#  write syscall -- it needs C4KE's ramfs or the C4DOS disk, like c4rlink.c4r)
+	$(C4M) load-c4r.c -- c4rstrip.c4r -o .strip_hello2.c4r hello.c4r 2>&1 | grep -q "1 symbols dropped"
+	$(C4RLINK) -s test_basic.c4r -o .strip_link.c4r > /dev/null
+	$(C4RDUMP) .strip_link.c4r | grep -q "Symbols = 0 (stripped)"
+	$(C4M) load-c4r.c -- test_basic.c4r > .strip_c.txt 2>&1; $(C4M) load-c4r.c -- .strip_link.c4r > .strip_d.txt 2>&1
+	cmp .strip_c.txt .strip_d.txt
+	@rm -f .strip_*
+	@echo "test-c4rstrip: OK"
+
 #
 # Rules to build C4R files
 #

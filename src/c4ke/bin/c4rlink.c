@@ -10,6 +10,15 @@
 //  - .c4l: C4R library, to be linked with .c4o files
 //
 // Invocation: c4rlink file1.c4r file2.c4r -o file3.c4r
+//             c4rlink -s ...          strip: write no symbol table (a release
+//                                     build; nothing a loader needs, only what
+//                                     c4rdump -s and stacktraces read, and what
+//                                     C4IX's loader uses to find __c4ix_systable
+//                                     on PLAIN c4 hosts -- c4m-class hosts go
+//                                     through the trap gateway and never look)
+//             c4rstrip [-o out] in.c4r  the same program under a second name:
+//                                     one input, strip on, output over the input
+//                                     unless -o (Makefile builds it from this file)
 // Compilation: gcc -Isrc/c4cc -Iinclude -I. src/c4ke/bin/c4rlink.c -o c4rlink
 //
 // Notes:
@@ -61,19 +70,28 @@ enum {
 	CL__Sz
 };
 
-int cl_verbose, cl_debug, cl_libmode;
+int cl_verbose, cl_debug, cl_libmode, cl_strip, cl_striptool;
 
 static void show_help (char *spec) {
+	if (cl_striptool)
+	printf("%s: Strip the symbol table from a .c4r\n"
+	       "%s: [-v] [-o outfile] [--] file.c4r\n"
+	       "     -v            Turn on verbose mode\n"
+	       "     -o outfile    Write to outfile (default: overwrite file.c4r)\n"
+	       "     --            End arguments\n", spec, spec);
+	else
 	printf("%s: Link multiple .c4r files into one\n"
-	       "%s: [-dvr] [-o outfile] [--] file1.c4r [...fileN.c4r]\n"
+	       "%s: [-dvrs] [-o outfile] [--] file1.c4r [...fileN.c4r]\n"
 	       "     -d            Turn on debug mode\n"
 	       "     -v            Turn on verbose mode\n"
 	       "     -r            Library mode: allow unresolved symbols\n"
+	       "     -s            Strip: write no symbol table (release builds)\n"
 	       "     -o outfile    Write to outfile (default: a.c4r)\n"
 	       "     --            End arguments\n", spec, spec);
 }
 
 static int my_strcmp (char *s1, char *s2) { while(*s1 && (*s1 == *s2)) { ++s1; ++s2; } return *s1 - *s2; }
+static int my_strncmp (char *s1, char *s2, int n) { while(n > 1 && *s1 && (*s1 == *s2)) { ++s1; ++s2; --n; } return n ? *s1 - *s2 : 0; }
 
 // Find a symbol in the master table by name; returns table index or -1.
 static int master_symfind (int *master, char *name, int len) {
@@ -484,7 +502,7 @@ static int c4r_write (int *c4r, char *file) {
 	tmp = hdr[C4R_HDR_CODELEN];      writechecked(fd, &tmp, sizeof(int));
 	tmp = hdr[C4R_HDR_DATALEN];      writechecked(fd, &tmp, sizeof(int));
 	tmp = hdr[C4R_HDR_PATCHLEN];     writechecked(fd, &tmp, sizeof(int));
-	tmp = hdr[C4R_HDR_SYMBOLSLEN];   writechecked(fd, &tmp, sizeof(int));
+	tmp = cl_strip ? 0 : hdr[C4R_HDR_SYMBOLSLEN]; writechecked(fd, &tmp, sizeof(int));
 	tmp = hdr[C4R_HDR_CONSTRUCTLEN]; writechecked(fd, &tmp, sizeof(int));
 	tmp = hdr[C4R_HDR_DESTRUCTLEN];  writechecked(fd, &tmp, sizeof(int));
 
@@ -530,7 +548,7 @@ static int c4r_write (int *c4r, char *file) {
 	// Symbols
 	writechecked(fd, "S\0\0\0\0\0\0\0", sizeof(int));
 	sym = (int *)c4r[C4R_SYMBOLS];
-	n = hdr[C4R_HDR_SYMBOLSLEN];
+	n = cl_strip ? 0 : hdr[C4R_HDR_SYMBOLSLEN];
 	i = 0;
 	while (i < n) {
 		tmp = sym[C4R_SYMB_ID];    writechecked(fd, &tmp, sizeof(int));
@@ -591,7 +609,13 @@ int main (int argc, char **argv) {
 	outfile = "a.c4r";
 	c4r_alloc = 256; // should be enough for everyone
 	c4r_pos = 0;
-	cl_debug = cl_verbose = cl_libmode = 0;
+	cl_debug = cl_verbose = cl_libmode = cl_strip = 0;
+	// The strip tool is this program under another name (argv[0] ends in
+	// "c4rstrip", with or without .c4r): one input, strip on.
+	cl_striptool = 0;
+	arg = spec; while (*arg) ++arg;
+	while (arg > spec && *(arg - 1) != '/') --arg;
+	if (!my_strncmp(arg, "c4rstrip", 8)) { cl_striptool = 1; cl_strip = 1; }
 	count_code = count_data = count_patch = count_con = count_des = count_sym = 0;
 	endargs = 0;
 	failed = 0;
@@ -628,6 +652,7 @@ int main (int argc, char **argv) {
 				if (*arg == 'd') cl_debug = 1;
 				else if (*arg == 'v') cl_verbose = 1;
 				else if (*arg == 'r') cl_libmode = 1;
+				else if (*arg == 's') cl_strip = 1;
 				else if (*arg == 'o') {
 					endopt = 1;
 					// grab outfile from next argv
@@ -797,6 +822,12 @@ int main (int argc, char **argv) {
 		dbytes = (char *)master[C4R_DATA];
 		while (dstored > 0 && dbytes[dstored - 1] == 0) --dstored;
 		hdr[C4R_HDR_DATALEN] = dstored;
+		if (cl_striptool) {
+			if (c4r_pos != 1) { printf("%s: strip one file at a time (%d given)\n", spec, c4r_pos); return 1; }
+			if (!my_strcmp(outfile, "a.c4r")) outfile = (char *)c4rs[CL_FILE];
+			printf("%s: %s: %d symbols dropped -> %s\n", spec, (char *)c4rs[CL_FILE], count_sym, outfile);
+		} else if (cl_strip && cl_libmode)
+			printf("%s: warning: -s with -r: a stripped library cannot be linked against\n", spec);
 		if (cl_verbose) printf("%s: writing to '%s'...\n", spec, outfile);
 		if (c4r_write(master, outfile))
 			failed = 1;

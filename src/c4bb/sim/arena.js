@@ -24,9 +24,13 @@ export const MEM_BASE = 0x1000;
 export const ARGS_RESERVE = 4096;
 
 export class Arena {
-  constructor(sizeBytes = 32 * 1024 * 1024) {
+  // A size, or a buffer to wrap: a SharedArrayBuffer lets a host on another
+  // thread read and write the mailbox rings while the machine runs.
+  constructor(sizeOrBuffer = 32 * 1024 * 1024) {
+    const buf = typeof sizeOrBuffer === 'number' ? new ArrayBuffer(sizeOrBuffer) : sizeOrBuffer;
+    const sizeBytes = buf.byteLength;
     this.size = sizeBytes;
-    this.buf = new ArrayBuffer(sizeBytes);
+    this.buf = buf;
     this.i32 = new Int32Array(this.buf);
     this.u8 = new Uint8Array(this.buf);
     this.dv = new DataView(this.buf);

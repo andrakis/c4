@@ -101,7 +101,7 @@ export function initRom(arena) {
 // have made (args pushed left to right, return pc = CONS_RET) and run
 // the machine until it comes back. This is the JS-side equivalent of
 // c4l.c's invoke stub.
-export function callFunction(machine, addr, args) {
+export function callFunction(machine, addr, args, maxCycles = 2e9) {
   const arena = machine.arena, regs = machine.regs;
   let sp = regs[R.SP];
   for (const a of args) { sp -= 4; arena.write32(sp, a | 0); }
@@ -109,7 +109,7 @@ export function callFunction(machine, addr, args) {
   regs[R.SP] = sp;
   regs[R.PC] = addr;
   machine.upc = FETCH;
-  if (!machine.runUntilPc(CONS_RET, 2e9))
+  if (!machine.runUntilPc(CONS_RET, maxCycles))
     throw new Error('c4bb: function call did not return');
   regs[R.SP] = (regs[R.SP] + 4 * args.length) | 0;   // caller cleanup (ADJ)
   return regs[R.A];
@@ -121,6 +121,11 @@ export function callFunction(machine, addr, args) {
 // opts.mbox: bytes to carve out below the stack reserve for the mailbox
 // (devices.js MBOX_*); the firmware sees a heap that stops short of it,
 // so nothing the guest allocates can land on the rings. Zero = not fitted.
+// opts.ctorBudget: cycles ONE constructor may take before boot gives up. The
+// default is effectively no limit, which is right for an image the machine can
+// read; an image it cannot -- a corrupt one, or one built for a different opcode
+// ROM -- has no constructors, only whatever the garbage does, and that does not
+// return. Lower it when running an image that may be garbage is the point.
 export function boot(machine, fwBytes, progBytes, argv, opts = {}) {
   const arena = machine.arena;
   const mboxLen = (opts.mbox | 0) > 0 ? ((opts.mbox | 0) + 4095) & ~4095 : 0;
@@ -165,8 +170,9 @@ export function boot(machine, fwBytes, progBytes, argv, opts = {}) {
 
   // constructors: firmware first (fills the vector latches), then the
   // program's, each called with a single argument (c4l.c:188 passes 0)
-  for (const c of fwImg.cons) callFunction(machine, c, [0]);
-  if (progImg !== fwImg) for (const c of progImg.cons) callFunction(machine, c, [0]);
+  const ctorBudget = opts.ctorBudget ?? 2e9;
+  for (const c of fwImg.cons) callFunction(machine, c, [0], ctorBudget);
+  if (progImg !== fwImg) for (const c of progImg.cons) callFunction(machine, c, [0], ctorBudget);
 
   // boot frame for main(argc, argv), pushed like c4m.c:1466 but with
   // the CONS_RET sentinel so destructors can run on normal return

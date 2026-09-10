@@ -25,7 +25,11 @@
 (define g:second (lambda (l) (index l 1)))
 (define g:third (lambda (l) (index l 2)))
 
-(define g:die (lambda (msg) (error (+ "c4lc gen: " msg))))
+;; the function being generated, so an error can say where it was found
+;; (AST nodes carry no line numbers; the parser's errors do, these name the function)
+(define g:curfn "")
+(define g:die (lambda (msg)
+	(error (+ "c4lc gen: " msg (if (= g:curfn "") "" (+ " (in function " g:curfn ")"))))))
 
 ;; ---- machine constants (c4cc's) ----
 
@@ -1375,6 +1379,7 @@
 (define g:function (lambda (d)
 	(begin
 		(define n (g:third d))
+		(set! g:curfn n)
 		(define ps (index d 3))
 		(define attrs (index d 5))
 		(define ls (tail (index d 6)))

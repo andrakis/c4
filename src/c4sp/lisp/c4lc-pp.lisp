@@ -77,12 +77,30 @@
 ;;
 ;; A directive is every token sharing the Hash's line. Returns
 ;; (DIRECTIVE-TOKENS REST).
-(define pp:takeline (lambda (toks ln acc)
+;;
+;; With Stop true it ALSO stops at the next Hash, and that is not a
+;; nicety. #include splices the included file's tokens in front of the
+;; rest, and those carry THEIR file's line numbers, so after a splice the
+;; numbers in the stream stop increasing -- they restart. A header whose
+;; last line is a directive (`#endif`: every guarded header there is),
+;; included from line N of a file whose line N is itself a directive,
+;; shares a line number that means nothing. Without the stop the `#endif`
+;; swallowed the next `#include` as part of its own line and THE HEADER
+;; WAS SILENTLY NEVER INCLUDED -- no error, just missing declarations and
+;; an "undefined identifier" from codegen a long way away.
+;;
+;; Stop is false for #define alone, whose body is the one place a '#' can
+;; legitimately appear (stringize, `#define STR(x) #x`, and `##` paste).
+;; So a header whose last line is a #define can still swallow what
+;; follows it; a header whose last line is #endif -- which is all of
+;; them -- cannot. Pinned by c4lc_ppinc.c in test-c4lc.
+(define pp:takeline (lambda (toks ln acc stop)
 	(if (empty? toks) (list (pp:reverse acc) toks)
 	(if (= (pp:kind (head toks)) 'Eof) (list (pp:reverse acc) toks)
+	(if (if stop (= (pp:kind (head toks)) 'Hash) false) (list (pp:reverse acc) toks)
 	(if (= (pp:line (head toks)) ln)
-		(next pp:takeline (tail toks) ln (pp:cons (head toks) acc))
-	(list (pp:reverse acc) toks))))))
+		(next pp:takeline (tail toks) ln (pp:cons (head toks) acc) stop)
+	(list (pp:reverse acc) toks)))))))
 
 ;; ---- #define ----
 ;;
@@ -552,7 +570,9 @@
 				(pp:reverse (pp:cons t acc)))
 		(if (= (pp:kind t) 'Hash)
 			(begin
-				(define dl (pp:takeline (tail toks) (pp:line t) nil))
+				;; #define is the only directive whose body may contain a '#'
+				(define dnm (if (empty? (tail toks)) "" (+ "" (pp:val (head (tail toks))))))
+				(define dl (pp:takeline (tail toks) (pp:line t) nil (if (= dnm "define") false true)))
 				(define r (pp:directive (head dl) (head (tail dl)) skip))
 				(next pp:go (head r) (head (tail r)) acc))
 		(if (if (empty? skip) false (head skip))

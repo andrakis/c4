@@ -2915,6 +2915,15 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	# /#if/#elif/#else/#endif with constant expressions, #undef).
 	./c4sp src/c4sp/lisp/c4lc.lisp -P $(TESTS)/c4lc_pp.c .c4lc_b.c4r > /dev/null
 	./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-pp.txt
+	# A header is SPLICED in front of the rest, carrying its own line
+	# numbers, so the numbers in the stream stop increasing. A directive
+	# used to be every token sharing the Hash's line, and a header ending
+	# in #endif (line 7 of c4lc_ppinc.h) included from a file whose line 7
+	# is the next #include had that #include swallowed -- the header was
+	# silently never included. No error; an undefined identifier from
+	# codegen a long way away. Both headers must arrive: 7 + 35.
+	./c4sp src/c4sp/lisp/c4lc.lisp -P -I $(TESTS) $(TESTS)/c4lc_ppinc.c .c4lc_b.c4r > /dev/null
+	./c4m load-c4r.c -- .c4lc_b.c4r > /dev/null; test $$? = 42
 	# Then the property that matters: preprocessing a real module
 	# with c4lc instead of gcc -E must produce the SAME OBJECT, byte
 	# for byte. If that holds, gcc is no longer in the pipeline.

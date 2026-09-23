@@ -127,6 +127,28 @@ export class Display {
           c.save(); c.beginPath(); c.rect(words[p], words[p + 1], words[p + 2], words[p + 3]); c.clip();
           this.clipped = true;
           break;
+        case CMD.FB: {
+          // A whole framebuffer, scaled to the display, then shown.
+          const w = words[p], h = words[p + 1];
+          if (w <= 0 || h <= 0 || w * h > len - 4) break;
+          if (!this.fbCanvas || this.fbCanvas.width !== w || this.fbCanvas.height !== h) {
+            this.fbCanvas = document.createElement('canvas');
+            this.fbCanvas.width = w; this.fbCanvas.height = h;
+            this.fbImage = new ImageData(w, h);
+          }
+          const px = new Uint32Array(this.fbImage.data.buffer);
+          for (let k = 0; k < w * h; k++) {
+            const v = words[p + 2 + k];
+            // 0x00RRGGBB in, RGBA bytes out (little-endian: ABGR in a word)
+            px[k] = 0xff000000 | ((v & 0xff) << 16) | (v & 0xff00) | ((v >> 16) & 0xff);
+          }
+          this.fbCanvas.getContext('2d').putImageData(this.fbImage, 0, 0);
+          c.imageSmoothingEnabled = false;
+          c.drawImage(this.fbCanvas, 0, 0, this.width, this.height);
+          this.presentMode = true;
+          this.present();
+          break;
+        }
         case CMD.NOCLIP:
           if (this.clipped) { c.restore(); this.clipped = false; }
           break;

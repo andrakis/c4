@@ -43,6 +43,28 @@ export async function run(ctx) {
   ok('the machine halts cleanly', await tab.waitFor('window.c4m.exited && window.c4m.exited.status === 0', 15000));
   ok('no page errors', tab.errors.length === 0, tab.errors.join('\n       '));
 
+  // ---- M5: the framebuffer ----------------------------------------------
+  console.log('test-web: the framebuffer demo');
+  tab.errors.length = 0;
+  await open('system=fb-demo');
+  ok('the framebuffer demo starts', await waitTerm('fb: 320x240 framebuffer', 30000), (await term()).slice(-300));
+  ok('framebuffer frames arrive', await tab.waitFor('window.c4m.status.gui && window.c4m.status.gui.flips > 10', 20000));
+  {
+    const h1 = await tab.eval(canvasHash);
+    await sleep(500);
+    ok('the framebuffer animates', h1 !== await tab.eval(canvasHash));
+    const p = await tab.eval(canvasPoint(0.25, 0.25));
+    await tab.mouse('mouseMoved', p.x, p.y);
+    await sleep(300);
+    await shot('fb-demo');
+    await tab.eval("document.getElementById('display').focus()");
+    await tab.key('q');
+    const done = await waitTerm('fb: done after', 15000);
+    ok('q ends it, and the events came by interrupt', done && /[1-9]\d* event interrupts, 1 keys/.test(await term()),
+       (await term()).slice(-200));
+  }
+  ok('no page errors', tab.errors.length === 0, tab.errors.join('\n       '));
+
   // ---- M4: a C4IX program ----------------------------------------------
   if (process.argv.includes('--no-c4ix')) return;
   console.log('test-web: gui under C4IX');

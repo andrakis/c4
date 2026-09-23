@@ -21,7 +21,10 @@
 //   0x424 BUTTONS  r    button bitmask
 //   0x428 TICKS    r    host milliseconds since the device was made
 //   0x42C DROPPED  r    events lost to a full ring
-//   0x430 FB, 0x434 FBPITCH, 0x438 FBFLIP   reserved for a pixel framebuffer
+//   0x430 FB       r/w  framebuffer base: pixels in guest memory, 0x00RRGGBB
+//   0x434 FBPITCH  r/w  bytes from one row to the next (0 = width * 4)
+//   0x438 FBFLIP   w    (w << 16) | h: copy that many pixels to the display,
+//                       scaled to fill it, then present
 //
 // The bell is synchronous: writing it drains the command ring into a
 // host-side queue on the spot, inside the store instruction. So a guest
@@ -43,6 +46,7 @@ export const GUI = {
 export const CMD = {
   CLEAR: 1, RECT: 2, RECTO: 3, LINE: 4, CIRCLE: 5, TEXT: 6, PIXEL: 7, PRESENT: 8,
   SIZE: 9, IMGDEF: 10, IMG: 11, CLIP: 12, NOCLIP: 13,
+  FB: 100,              // host-made: [w, h, ...pixels], from FBFLIP
 };
 export const EV = { MOVE: 1, DOWN: 2, UP: 3, KEYDOWN: 4, KEYUP: 5, RESIZE: 6, FOCUS: 7, WHEEL: 8 };
 const MASK = { [EV.MOVE]: 1, [EV.DOWN]: 2, [EV.UP]: 2, [EV.KEYDOWN]: 4, [EV.KEYUP]: 4,
@@ -65,6 +69,9 @@ export class GuiDevice {
     this.mouseX = 0; this.mouseY = 0; this.buttons = 0;
     this.dropped = 0;
     this.queue = [];                     // drained command words: [len, type, ...payload]
+    this.chunks = [];                    // earlier queues and framebuffer frames, in order
+    this.queued = 0;                     // words in chunks
+    this.fbBase = 0; this.fbPitch = 0; this.flips = 0;
     this.sizeReq = null;
     this.t0 = Date.now();
     this.commands = 0; this.presents = 0; this.events = 0; this.lostCommands = 0;
@@ -77,7 +84,9 @@ export class GuiDevice {
 
   read32(addr) {
     switch (addr) {
-      case GUI.CAPS: return 1 | 2 | 8;
+      case GUI.CAPS: return 1 | 2 | 4 | 8;
+      case GUI.FB: return this.fbBase;
+      case GUI.FBPITCH: return this.fbPitch;
       case GUI.W: return this.w;
       case GUI.H: return this.h;
       case GUI.RINGLEN: return this.ringLen;
@@ -116,6 +125,9 @@ export class GuiDevice {
         this.pull();
         return;
       case GUI.EVMASK: this.evmask = v | 0; return;
+      case GUI.FB: this.fbBase = v | 0; return;
+      case GUI.FBPITCH: this.fbPitch = v | 0; return;
+      case GUI.FBFLIP: this.flip((v >>> 16) & 0xffff, v & 0xffff); return;
       case GUI.IRQ: this.irqOn = v ? 1 : 0; return;
       default: return;
     }
@@ -128,7 +140,7 @@ export class GuiDevice {
     try { frames = this.mbox.drain(); }
     catch { this.mbox.layout(); return; }          // a corrupt ring: start it over
     for (const f of frames) {
-      if (this.queue.length + 2 + f.payload.length > QUEUE_LIMIT) { this.lostCommands++; continue; }
+      if (this.queued + this.queue.length + 2 + f.payload.length > QUEUE_LIMIT) { this.lostCommands++; continue; }
       this.queue.push(2 + f.payload.length, f.type);
       for (let i = 0; i < f.payload.length; i++) this.queue.push(f.payload[i]);
       this.commands++;
@@ -141,10 +153,50 @@ export class GuiDevice {
   // a guest that wrote frames and never rang still gets them drawn.
   drain() {
     this.pull();
-    if (!this.queue.length) return null;
-    const words = Int32Array.from(this.queue);
-    this.queue = [];
+    this.seal();
+    if (!this.chunks.length) return null;
+    const words = new Int32Array(this.queued);
+    let at = 0;
+    for (const c of this.chunks) { words.set(c, at); at += c.length; }
+    this.chunks = []; this.queued = 0;
     return words;
+  }
+
+  // Close off the commands queued so far as one chunk, keeping order with
+  // the framebuffer frames that go between them.
+  seal() {
+    if (!this.queue.length) return;
+    const c = Int32Array.from(this.queue);
+    this.queue = [];
+    this.chunks.push(c); this.queued += c.length;
+  }
+
+  // A framebuffer frame: w x h pixels from guest memory, copied now (the
+  // guest may start the next frame the moment the store completes), and
+  // queued behind every command written before it. The page draws it
+  // scaled to the display and presents.
+  flip(w, h) {
+    this.pull();
+    if (!w || !h || !this.fbBase) return;
+    const pitch = this.fbPitch || w * 4;
+    const base = this.fbBase;
+    if ((base & 3) || (pitch & 3) || base < 0x1000 || base + (h - 1) * pitch + w * 4 > this.arena.size) return;
+    const n = w * h;
+    if (this.queued + this.queue.length + n + 4 > QUEUE_LIMIT) { this.lostCommands++; return; }
+    this.seal();
+    // A framebuffer frame covers the whole display, so one still waiting
+    // with nothing after it is simply out of date: replace it.
+    const last = this.chunks[this.chunks.length - 1];
+    if (last && last[1] === CMD.FB) { this.chunks.pop(); this.queued -= last.length; this.skippedFlips = (this.skippedFlips | 0) + 1; }
+    const c = new Int32Array(4 + n);
+    c[0] = 4 + n; c[1] = CMD.FB; c[2] = w; c[3] = h;
+    const i32 = this.arena.i32;
+    for (let y = 0; y < h; y++) {
+      const row = (base + y * pitch) >> 2;
+      c.set(i32.subarray(row, row + w), 4 + y * w);
+    }
+    this.chunks.push(c); this.queued += c.length;
+    this.flips++;
   }
 
   takeSizeRequest() {
@@ -184,6 +236,6 @@ export class GuiDevice {
   stats() {
     return { w: this.w, h: this.h, attached: !!this.mbox, commands: this.commands,
              presents: this.presents, events: this.events, dropped: this.dropped,
-             lostCommands: this.lostCommands };
+             lostCommands: this.lostCommands, flips: this.flips };
   }
 }

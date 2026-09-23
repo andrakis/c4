@@ -70,4 +70,41 @@ check(texts.some(t => t.s === 'hello from c4m' && t.x === 316 && t.y === 194), '
 check(text().includes('gui: click at 300,200'), 'a click comes back to the program');
 check(text().includes("gui: key 75 'k'") && text().includes("gui: key 81 'q'"), 'keys come back to the program');
 check(gui.dropped === 0 && gui.lostCommands === 0, 'nothing dropped either way');
+
+// ---- the framebuffer, and events by interrupt ------------------------
+{
+  const FB = new URL('../../src/c4bb/images/fb-demo.c4r', import.meta.url);
+  const g = new GuiDevice({ w: 640, h: 480 });
+  const o = [];
+  const m = createMachine({ arenaMb: 16, gui: g, onByte: b => o.push(b) });
+  m.dev.rxEof = true;
+  boot(m, new Uint8Array(readFileSync(FB)), ['fb-demo.c4r', '100']);
+  let flips = 0, first = null, sent = false, rr;
+  for (let i = 0; i < 20000; i++) {
+    rr = m.run(320000);
+    const f = g.drain();
+    if (f) for (let k = 0; k < f.length; k += f[k]) {
+      if (f[k + 1] !== CMD.FB) continue;
+      flips++;
+      if (!first) first = f.slice(k, k + f[k]);
+    }
+    if (rr === STOP.HALT) break;
+    if (flips >= 3 && !sent) {
+      sent = true;
+      g.event({ kind: 'move', x: 100, y: 60, buttons: 0 });
+      g.event({ kind: 'keydown', code: 81, char: 113, mods: 0 });      // q
+    }
+  }
+  const t = Buffer.from(o).toString('latin1');
+  check(rr === STOP.HALT && m.dev.status === 0, 'fb-demo exits cleanly', t);
+  check(first && first[2] === 320 && first[3] === 240, 'a framebuffer frame is 320x240');
+  // frame 0 is a pure function of x and y (t = 0), crosshair aside
+  const px = (x, y) => first[4 + y * 320 + x];
+  const want = (x, y) => ((x & 255) << 16) | (((y + y) & 255) << 8) | ((x ^ y) & 255);
+  check(first && px(10, 20) === want(10, 20) && px(300, 7) === want(300, 7) && px(160, 120) === 0xffffff,
+        'its pixels are the ones the guest computed');
+  const irq = /(\d+) event interrupts, (\d+) keys/.exec(t);
+  check(irq && +irq[1] >= 1 && +irq[2] === 1, `events arrive by interrupt (${irq && irq[0]})`, t);
+  check(flips < 100, `q ended it after ${flips} flips`);
+}
 process.exit(fail);

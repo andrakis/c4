@@ -1,7 +1,7 @@
 // app.js - the c4m.js page: pick a system, boot it, wire the panes.
 //
 // URL parameters:
-//   ?system=c4ix|c4ke|gui-demo   which machine to boot (default c4ix)
+//   ?system=c4ix|c4ke|gui-demo|fb-demo   which machine to boot (default c4ix)
 //   ?image=URL&disk=URL          any other image and disk instead
 //   ?mhz=N                       how fast the machine claims to be (default 20)
 //   ?fast                        run as fast as the host can, unpaced
@@ -17,6 +17,8 @@ const SYSTEMS = {
   c4ix: { label: 'C4IX', image: `${IMAGES}/c4ix32.c4r`, disk: `${IMAGES}/disk`, argv: ['c4ix32.c4r'] },
   c4ke: { label: 'C4KE', image: `${IMAGES}/c4ke32.c4r`, disk: `${IMAGES}/disk`, argv: ['c4ke32.c4r'] },
   'gui-demo': { label: 'GUI demo (bare machine)', image: `${IMAGES}/gui-demo.c4r`, disk: null, argv: ['gui-demo.c4r'] },
+  // Computes every pixel itself, so it claims a faster clock than c4bb's 20 MHz.
+  'fb-demo': { label: 'Framebuffer demo (bare machine)', image: `${IMAGES}/fb-demo.c4r`, disk: null, argv: ['fb-demo.c4r'], mhz: 100 },
 };
 
 const $ = id => document.getElementById(id);
@@ -51,7 +53,7 @@ const opts = {
   ...sys,
   terminal: term,
   display: canvas,
-  mhz: Number(params.get('mhz')) || 20,
+  mhz: Number(params.get('mhz')) || sys.mhz || 20,
   unpaced: params.has('fast'),
   arenaMb: Number(params.get('mem')) || 64,
 };
@@ -64,7 +66,7 @@ vm.on('status', s => {
   const parts = [s.state, `${fmtRate(s.ips)} inst/s`, `cpu ${Math.round((s.busy || 0) * 100)}%`,
                  `t ${((s.simMs || 0) / 1000).toFixed(1)}s`];
   status.textContent = parts.join(' · ');
-  if (s.gui && s.gui.attached) info.textContent = `${s.gui.w}×${s.gui.h} · ${s.gui.presents} frames`;
+  if (s.gui && s.gui.attached) info.textContent = `${s.gui.w}×${s.gui.h} · ${s.gui.presents + s.gui.flips} frames`;
 });
 vm.on('kbd', ({ raw }) => updateKbd());
 vm.on('exit', e => { status.textContent = `halted, status ${e.status} after ${e.cycles} cycles`; });

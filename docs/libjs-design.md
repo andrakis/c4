@@ -148,7 +148,9 @@ before touching it.
 | 0x424 | BUTTONS | r | button bitmask |
 | 0x428 | TICKS | r | host milliseconds |
 | 0x42C | DROPPED | r | events lost to a full ring |
-| 0x430-0x438 | FB, FBPITCH, FBFLIP | | reserved for the framebuffer |
+| 0x430 | FB | r/w | framebuffer base, 0x00RRGGBB pixels in guest memory |
+| 0x434 | FBPITCH | r/w | bytes per row (0 = width * 4) |
+| 0x438 | FBFLIP | w | (w << 16) \| h: copy, scale to the display, present |
 
 The rings use exactly the c4bb mailbox format (`src/c4bb/sim/mbox.js`). The
 first half of the region carries events to the guest, the second half
@@ -246,7 +248,15 @@ commands to the host.
 ### M5: polish
 - [ ] Performance pass
 - [ ] SharedArrayBuffer display path behind `crossOriginIsolated`
-- [ ] Display interrupts (HIRQ 3)
-- [ ] Framebuffer mode
+- [x] Display interrupts: `gui_irq(1)` raises HARD_IRQ(3) through the cycle
+      handler when an event arrives. `fb-demo` takes its events that way;
+      pinned in `test-gui.mjs` and the CDP gate (2026-09-23)
+- [x] Framebuffer: FB/FBPITCH/FBFLIP at 0x430-0x438, `gui_fb`/`gui_flip` in
+      gui.h. A flip copies the pixels into the same ordered stream as the
+      commands, so text can be drawn over a frame; an unread frame with
+      nothing after it is replaced rather than queued. `fb-demo.c4r`
+      (320x240, every pixel computed by the guest): pixels checked exactly
+      in `test-gui.mjs`; in the browser on the 3060 Ti at the page's 100 MHz
+      for this demo, 74M inst/s, about 29 frames a second, 30% of a core
 - [ ] STRC with symbol names from the `.c4r` symbol section
 - [ ] Media panel (c4bb's `store.js` and `drives.js`)

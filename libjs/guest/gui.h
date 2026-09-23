@@ -28,6 +28,7 @@ enum {
 	GUI_CAPS = 0x400, GUI_W = 0x404, GUI_H = 0x408, GUI_RINGLEN = 0x40c, GUI_RING = 0x410,
 	GUI_BELL = 0x414, GUI_EVMASK = 0x418, GUI_IRQ = 0x41c, GUI_MOUSE = 0x420,
 	GUI_BUTTONS = 0x424, GUI_TICKS = 0x428, GUI_DROPPED = 0x42c,
+	GUI_FB = 0x430, GUI_FBPITCH = 0x434, GUI_FBFLIP = 0x438,
 	C4I_GUI = 0x4000
 };
 // commands
@@ -216,6 +217,25 @@ int gui_poll (int *ev) {
 	gui_in[2] = gui_in[2] + f[0];
 	return 1;
 }
+
+// The pixel framebuffer: w*h words of 0x00RRGGBB in our own memory,
+// pitch bytes from row to row (0 means w * 4). gui_flip copies it to the
+// display, scaled to fill it, and shows it; draw on top with the
+// commands above and gui_show again if you want an overlay.
+void gui_fb (int *pixels, int pitch) {
+	*(int *)GUI_FBPITCH = pitch;
+	*(int *)GUI_FB = (int)pixels;
+}
+void gui_flip (int w, int h) {
+	*(int *)GUI_BELL = 1;                    // commands before the frame stay before it
+	*(int *)GUI_FBFLIP = (w << 16) | h;
+}
+
+// Ask for HARD_IRQ(3) through the cycle handler whenever an event
+// arrives (1), or go back to polling (0). A program that wants this
+// installs a handler with __c4_configure(1, &handler) first.
+enum { HIRQ_GUI = 3 };
+void gui_irq (int on) { *(int *)GUI_IRQ = on; }
 
 int gui_mouse_x () { return *(int *)GUI_MOUSE >> 16; }
 int gui_mouse_y () { return *(int *)GUI_MOUSE & 65535; }

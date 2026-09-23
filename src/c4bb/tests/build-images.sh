@@ -80,6 +80,7 @@ $CC -o $OUT/bb_mbox.c4r include/c4bb_mbox.h src/c4bb/tests/src/bb_mbox.c > /dev/
 # libjs's display demo (docs/libjs-design.md): prints "not fitted" on any
 # machine without the display, so it is safe in every corpus.
 $CC -o $OUT/gui-demo.c4r libjs/guest/gui.h libjs/guest/gui-demo.c > /dev/null
+$CC -o $OUT/fb-demo.c4r libjs/guest/gui.h libjs/guest/fb-demo.c > /dev/null
 
 # these include real headers, so they go through the preprocessor
 $PREPROC $U0 src/tests/test_vprintf.c 2>/dev/null | $CC -o $OUT/test_vprintf.c4r - > /dev/null

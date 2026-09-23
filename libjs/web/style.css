@@ -1,0 +1,86 @@
+/* c4m.js - a terminal and a display, side by side (jor1k's layout).
+   The palette is c4bb's, so the two machines read as one family. */
+:root {
+  --bg: #0d0b1e;
+  --panel: #14102a;
+  --chip: #1a1633;
+  --edge: #3a3160;
+  --text: #c8c2e8;
+  --dim: #8a83b6;
+  --pink: #ff2d95;
+  --cyan: #00e5ff;
+  --yellow: #ffe66d;
+  --green: #3dff9e;
+  --screen: #060512;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font-family: ui-monospace, "JetBrains Mono", "Fira Mono", monospace; font-size: 13px;
+  display: flex; flex-direction: column;
+}
+
+#bar {
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  padding: 8px 16px; background: var(--panel); border-bottom: 1px solid var(--edge);
+}
+#brand { color: var(--pink); font-weight: bold; letter-spacing: 1px; margin-right: 8px; }
+.dim { color: var(--dim); }
+#bar label { color: var(--dim); display: flex; gap: 6px; align-items: center; }
+#bar button, #bar select {
+  background: var(--chip); color: var(--text); border: 1px solid var(--edge);
+  border-radius: 4px; padding: 4px 10px; font: inherit; cursor: pointer;
+}
+#bar button:hover, #bar select:hover { border-color: var(--cyan); color: var(--cyan); }
+#bar button.active { border-color: var(--pink); color: var(--pink); }
+#status { margin-left: auto; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+#panes {
+  flex: 1; min-height: 0;
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px; padding: 8px 16px 16px;
+}
+.pane {
+  display: flex; flex-direction: column; min-height: 0; min-width: 0;
+  background: var(--panel); border: 1px solid var(--edge); border-radius: 6px;
+}
+.pane-head {
+  display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+  border-bottom: 1px solid var(--edge);
+}
+.pane-head h2 {
+  margin: 0; font-size: 12px; font-weight: normal; color: var(--pink);
+  text-transform: uppercase; letter-spacing: 2px;
+}
+.pill {
+  margin-left: auto; font-size: 12px; color: var(--dim);
+  border: 1px solid var(--edge); border-radius: 10px; padding: 2px 10px;
+}
+.pill.live { color: var(--green); border-color: var(--green); }
+.pill.raw { color: var(--yellow); border-color: var(--yellow); }
+
+#terminal {
+  flex: 1 1 0; min-height: 0; overflow-y: auto;
+  white-space: pre-wrap; word-break: break-all;
+  background: var(--screen); color: var(--green);
+  padding: 10px; font-size: 14px; line-height: 1; outline: none; cursor: text;
+  border-radius: 0 0 6px 6px;
+}
+#terminal:focus { box-shadow: 0 0 0 1px var(--green) inset; }
+#terminal:empty::before { content: attr(data-placeholder); color: var(--dim); font-style: italic; }
+
+#display-wrap {
+  flex: 1 1 0; min-height: 0; display: flex; align-items: center; justify-content: center;
+  background: var(--screen); border-radius: 0 0 6px 6px; padding: 8px;
+}
+#display {
+  max-width: 100%; max-height: 100%; aspect-ratio: auto;
+  image-rendering: pixelated; background: #000; outline: none; cursor: crosshair;
+}
+#display:focus { box-shadow: 0 0 0 1px var(--cyan); }
+
+@media (max-width: 900px) {
+  #panes { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(320px, 1fr) auto; overflow-y: auto; }
+  #status { margin-left: 0; width: 100%; }
+}

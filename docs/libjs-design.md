@@ -199,10 +199,15 @@ commands to the host.
       `hello.c4r`, `\q` to "clean shutdown"
 
 ### M2: Worker and page
-- [ ] `worker.js`, `page.js`, `keys.js`, `web/`, `serve.mjs`
-- [ ] CDP gate: the C4IX shell prompt appears, typed `ps` lists tasks,
-      Ctrl-C interrupts `spin`, no page errors, and the machine reports
-      sleeping or blocked at an idle prompt
+- [x] `worker.js`, `page.js`, `keys.js`, `web/`, `serve.mjs`, and `tests/cdp.mjs`
+      (raw CDP, no Playwright)
+- [x] CDP gate, `node libjs/tests/test-web.mjs`, green on the 3060 Ti
+      (Chrome 156, 9224) through the code-server proxy, 2026-09-23: C4IX boots
+      to its shell in the Worker, typed `ps` lists tasks, idle at the prompt
+      reads `sleeping` at 0% CPU, Ctrl-C cancels `spin`, the shell answers
+      afterwards; C4KE boots to `c4sh>` and runs `hello.c4r`; no page errors.
+      Chrome delivers CDP key events only to the tab in front, so the gate
+      brings its own tab forward.
 
 ### M3: the display device and the standalone demo
 - [ ] `gui-device.js`, `display.js`, `guest/gui.h`, `guest/gui-demo.c`

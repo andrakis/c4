@@ -2229,6 +2229,16 @@ test-c4bb: c4bb-images $(C4M) $(TESTS_C4R)
 test-libjs: c4bb-images $(C4M) $(TESTS_C4R)
 	bash libjs/tests/test-libjs.sh
 
+# The page: http://localhost:8472/libjs/web/ (served from the repo root).
+LIBJS_PORT ?= 8472
+serve-libjs:
+	node libjs/serve.mjs $(LIBJS_PORT)
+
+# The page in the user's own Chrome over CDP (9224, then 9222).
+test-libjs-web:
+	node libjs/tests/test-web.mjs
+	node libjs/tests/test-web.mjs --gui
+
 # Drives and media (docs/c4bb-storage.md). Separate from test-c4bb
 # because it needs the C4DOS climb disk, which test-c4bb does not build.
 test-c4bb-storage: c4dos32.c4r $(C4DOS_IX_DISK)
@@ -3074,7 +3084,7 @@ c4rs: pre
 
 # Marking the below rules as PHONY using singular .PHONY rule
 PHONY  = pre all clean-c4rs clean
-PHONY += test-libjs test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
+PHONY += test-libjs serve-libjs test-libjs-web test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
 PHONY += run-c4dos-build32 test-c4dos-build32 run-c4dos-c4ix32 test-c4dos-c4ix32 test-c4cc-for test-respfile test-b4ke test-c4bb-storage test-c4bb-baseops test-c4bb-rungs test-c4bb-install test-c4bb-climb test-c4bb-web test-c4bb-firmware
 PHONY += test-c4sc test-c4sc-run test-c4sc-lex test-c4sc-front test-c4sc-back
 PHONY += test-c4sc-image test-c4sc-self test-c4sc-board

@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>c4m.js</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header id="bar">
+  <span id="brand">c4m<span class="dim">.js</span></span>
+  <label>system
+    <select id="system"></select>
+  </label>
+  <button id="reset" title="boot again from the same image">Reset</button>
+  <button id="pause" title="stop the clock">Pause</button>
+  <button id="ctrlc" title="send Ctrl-C (SIGINT)">Ctrl-C</button>
+  <span id="status">loading&hellip;</span>
+</header>
+<main id="panes">
+  <section class="pane" id="term-pane">
+    <div class="pane-head">
+      <h2>terminal</h2>
+      <span id="kbd" class="pill">click to type</span>
+    </div>
+    <div id="terminal" tabindex="0" data-placeholder="booting&hellip;"></div>
+  </section>
+  <section class="pane" id="display-pane">
+    <div class="pane-head">
+      <h2>display</h2>
+      <span id="display-info" class="pill">no program drawing</span>
+    </div>
+    <div id="display-wrap"><canvas id="display" width="640" height="480"></canvas></div>
+  </section>
+</main>
+<script type="module" src="app.js"></script>
+</body>
+</html>

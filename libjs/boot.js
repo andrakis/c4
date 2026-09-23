@@ -54,6 +54,33 @@ export function initRom(arena) {
   arena.writeBytes(OPNAMES_ROM, new TextEncoder().encode(OPNAMES));
 }
 
+// The function symbols of an image, for stack traces: [{ off, name }]
+// with off a code word offset, sorted. parseC4r stops before the symbol
+// section ('S', src/c4cc/asm-c4r.c), so this walks to it from the
+// header's lengths. Class 129 is a function (c4m.c's Fun).
+export function parseSymbols(bytes) {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const w = at => dv.getInt32(at, true);
+  const codeLen = w(17), dataLen = w(21), patchLen = w(25), symbolsLen = w(29), consLen = w(33), desLen = w(37);
+  let p = 41;
+  p += 4 + codeLen * 4;
+  p += 4 + dataLen;
+  p += 4 + patchLen * 12;
+  p += 4 + consLen * 4;
+  p += 4 + desLen * 4;
+  p += 4;                                        // 'S'
+  const out = [];
+  for (let i = 0; i < symbolsLen && p + 17 <= bytes.length; i++) {
+    const cls = w(p + 8);
+    const n = bytes[p + 16];
+    const name = new TextDecoder('latin1').decode(bytes.subarray(p + 17, p + 17 + n));
+    const val = w(p + 17 + n);
+    p += 17 + n + 4;
+    if (cls === 129) out.push({ off: val, name });
+  }
+  return out.sort((a, b) => a.off - b.off);
+}
+
 // opts.mbox: bytes of mailbox below the stack reserve (c4bb's MBOX_*);
 // opts.reserve: host-owned bytes below the mailbox, outside the heap.
 export function boot(machine, imageBytes, argv, opts = {}) {
@@ -107,6 +134,9 @@ export function boot(machine, imageBytes, argv, opts = {}) {
   const mbox = mboxLen ? { base: heapEnd + reserveLen, len: mboxLen } : null;
   if (mbox) { machine.dev.mbox = mbox; arena.u8.fill(0, mbox.base, mbox.base + mbox.len); }
 
+  try {
+    machine.symbols = parseSymbols(imageBytes).map(s => ({ addr: img.codeBase + s.off * 4, name: s.name }));
+  } catch { machine.symbols = []; }
   machine.sp = machine.bp = arena.stackTop;
   machine.pc = tramp;
   machine.a = 0;

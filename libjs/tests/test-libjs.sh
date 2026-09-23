@@ -81,6 +81,12 @@ else
     bad "fused all ten"; echo "$fused_out" | tail -5
 fi
 
+# ---- STRC, with names from the symbol section ------------------------------
+strc_out=$($LIBJS $IMAGES/libjs-strc.c4r 2>&1 | sed 's/ \[0x[0-9A-F]*\]//')
+strc_want=$(printf 'c4m: stacktrace:\n inner()\n  inner()\n   inner()\n    middle()\n     main()\nresult 7')
+if [ "$strc_out" = "$strc_want" ]; then ok "stacktrace names every frame"
+else bad "stacktrace names every frame"; echo "$strc_out"; fi
+
 # ---- exit status ----------------------------------------------------------
 $LIBJS $IMAGES/test_exit.c4r >/dev/null 2>&1; s1=$?
 $C4M32 $IMAGES/test_exit.c4r >/dev/null 2>&1; s2=$?

@@ -89,6 +89,7 @@ export class Machine {
     this.pendingSignal = 0;
     this.missedTraps = 0;
     this.lastTrap = null;
+    this.symbols = this.symbols || [];
     // c4bb's trap-jam latches, read through device registers. A direct
     // interpreter has no jam, so they stay zero.
     this.tt = 0; this.tp = 0; this.hnd = 0; this.jmode = 0; this.jinterval = 0;
@@ -314,7 +315,7 @@ export class Machine {
         return STOP.BUDGET;
       }
       case OP.STRC:
-        // A stack trace needs symbols; c4bb prints nothing here either.
+        this.stacktrace();
         return STOP.BUDGET;
       case OP.ITH: {
         const old = this.trapHandler;
@@ -423,6 +424,31 @@ export class Machine {
       return STOP.BUDGET;
     }
     return STOP.INPUT;
+  }
+
+  // STRC: walk the frame chain from here to main, naming each function
+  // from the image's symbol section (boot.js parseSymbols). Each frame's
+  // bp holds the caller's bp and, one word up, the return address.
+  stacktrace() {
+    const syms = this.symbols || [];
+    const hex = n => '0x' + ((n >>> 0).toString(16).toUpperCase());
+    const find = pc => {
+      let lo = 0, hi = syms.length - 1, best = null;
+      while (lo <= hi) {
+        const m = (lo + hi) >> 1;
+        if (syms[m].addr <= pc) { best = syms[m]; lo = m + 1; } else hi = m - 1;
+      }
+      return best;
+    };
+    let pc = this.pc - 4, bp = this.bp;
+    this.emitString('c4m: stacktrace:\n');
+    for (let depth = 0; depth < 64; depth++) {
+      const s = find(pc);
+      this.emitString(`${' '.repeat(depth + 1)}${s ? s.name : '?'}() [${s ? hex(s.addr) : hex(pc)}]\n`);
+      if (!s || s.name === 'main' || bp < 0x1000 || bp >= this.arena.size) break;
+      pc = this.ld32(bp + 4) - 4;
+      bp = this.ld32(bp);
+    }
   }
 
   tlevWedge(pc) {

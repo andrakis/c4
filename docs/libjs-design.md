@@ -246,8 +246,13 @@ commands to the host.
       while it drew.
 
 ### M5: polish
-- [ ] Performance pass
-- [ ] SharedArrayBuffer display path behind `crossOriginIsolated`
+- [ ] Performance pass. Not done, not needed yet: 106-190M inst/s in Node
+      and 74M in the browser for the framebuffer demo, which is paced to the
+      clock it claims. Revisit if a guest is CPU-bound in the browser.
+- [ ] SharedArrayBuffer display path. Not done, not needed yet: postMessage
+      costs about 2% CPU for the command ring; the framebuffer's 30% is the
+      guest computing pixels. `serve.mjs --isolate` already sends the
+      headers when it is wanted.
 - [x] Display interrupts: `gui_irq(1)` raises HARD_IRQ(3) through the cycle
       handler when an event arrives. `fb-demo` takes its events that way;
       pinned in `test-gui.mjs` and the CDP gate (2026-09-23)
@@ -258,5 +263,9 @@ commands to the host.
       (320x240, every pixel computed by the guest): pixels checked exactly
       in `test-gui.mjs`; in the browser on the 3060 Ti at the page's 100 MHz
       for this demo, 74M inst/s, about 29 frames a second, 30% of a core
-- [ ] STRC with symbol names from the `.c4r` symbol section
-- [ ] Media panel (c4bb's `store.js` and `drives.js`)
+- [x] STRC names each frame from the image's symbol section
+      (`boot.js` parseSymbols); pinned by `libjs-strc.c4r` in the suite
+- [ ] Media panel (c4bb's `store.js` and `drives.js`). Not done: C4IX writes
+      to its RAM filesystem, so nothing yet needs writable drives kept in the
+      browser. The worker already takes c4bb's drive list, so it is a page
+      change when it is wanted.

@@ -2229,10 +2229,11 @@ test-c4bb: c4bb-images $(C4M) $(TESTS_C4R)
 test-libjs: c4bb-images $(C4M) $(TESTS_C4R)
 	bash libjs/tests/test-libjs.sh
 
-# The page: http://localhost:8472/libjs/web/ (served from the repo root).
+# The page: http://localhost:8472/libjs/web/ (served from the repo root),
+# cross-origin isolated so the display takes the shared-memory path.
 LIBJS_PORT ?= 8472
 serve-libjs:
-	node libjs/serve.mjs $(LIBJS_PORT)
+	node libjs/serve.mjs $(LIBJS_PORT) --isolate
 
 # The page in the user's own Chrome over CDP (9224, then 9222).
 test-libjs-web:

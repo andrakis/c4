@@ -43,12 +43,16 @@ export async function run(ctx) {
   ok('the machine halts cleanly', await tab.waitFor('window.c4m.exited && window.c4m.exited.status === 0', 15000));
   ok('no page errors', tab.errors.length === 0, tab.errors.join('\n       '));
 
-  // ---- M5: the framebuffer ----------------------------------------------
+  // ---- the framebuffer, on the shared path and the message path ----------
+  // Paced first, as a person sees it; then unpaced (?fast), which pushes
+  // the display path as hard as the machine can, once each way.
   console.log('test-web: the framebuffer demo');
   tab.errors.length = 0;
   await open('system=fb-demo');
+  ok('the page is cross-origin isolated', await tab.eval('crossOriginIsolated === true'));
   ok('the framebuffer demo starts', await waitTerm('fb: 320x240 framebuffer', 30000), (await term()).slice(-300));
   ok('framebuffer frames arrive', await tab.waitFor('window.c4m.status.gui && window.c4m.status.gui.flips > 10', 20000));
+  ok('on the shared path', await tab.eval('window.c4m.status.gui.shared === true'));
   {
     const h1 = await tab.eval(canvasHash);
     await sleep(500);
@@ -63,6 +67,31 @@ export async function run(ctx) {
     ok('q ends it, and the events came by interrupt', done && /[1-9]\d* event interrupts, 1 keys/.test(await term()),
        (await term()).slice(-200));
   }
+  ok('no page errors', tab.errors.length === 0, tab.errors.join('\n       '));
+
+  const measure = async (label, query) => {
+    await open(query);
+    await tab.waitFor('window.c4m.status.gui && window.c4m.status.gui.flips > 20', 30000);
+    await sleep(1000);
+    const probe = `(() => { const s = window.c4m.status, d = window.c4m.display;
+      return { flips: s.gui.flips, drawn: d.framesDrawn, busy: s.busy, shared: s.gui.shared, t: performance.now() }; })()`;
+    // the page's main thread: how late animation frames run while this goes on
+    const jank = `new Promise(res => { let n = 0, worst = 0, last = performance.now(); const f = t => {
+      worst = Math.max(worst, t - last); last = t; if (++n < 120) requestAnimationFrame(f); else res(worst); };
+      requestAnimationFrame(f); })`;
+    const a = await tab.eval(probe);
+    const worst = await tab.eval(jank);
+    const b = await tab.eval(probe);
+    const dt = (b.t - a.t) / 1000;
+    const r = { label, shared: b.shared, flips: Math.round((b.flips - a.flips) / dt),
+                drawn: Math.round((b.drawn - a.drawn) / dt), busy: Math.round(b.busy * 100), worst: Math.round(worst) };
+    console.log(`  (${label}: guest flips ${r.flips}/s, page draws ${r.drawn}/s, worker ${r.busy}% busy, slowest page frame ${r.worst} ms)`);
+    return r;
+  };
+  const sh = await measure('shared, unpaced', 'system=fb-demo&fast');
+  const msg = await measure('messages, unpaced', 'system=fb-demo&fast&shared=0');
+  ok('unpaced, the shared path is taken and ?shared=0 turns it off', sh.shared === true && msg.shared === false);
+  ok('unpaced, both paths keep drawing', sh.drawn > 10 && msg.drawn > 10);
   ok('no page errors', tab.errors.length === 0, tab.errors.join('\n       '));
 
   // ---- M4: a C4IX program ----------------------------------------------

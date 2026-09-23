@@ -6,6 +6,8 @@
 //   ?mhz=N                       how fast the machine claims to be (default 20)
 //   ?fast                        run as fast as the host can, unpaced
 //   ?mem=MB                      arena size (default 64)
+//   ?shared=0                    use the message display path even when the page
+//                                is cross-origin isolated (serve.mjs --isolate)
 //
 // The running machine is window.c4m (page.js's C4M), so the console or a
 // test can drive it: c4m.write('ps\n'), c4m.status, await c4m.peek(a, n).
@@ -56,6 +58,7 @@ const opts = {
   mhz: Number(params.get('mhz')) || sys.mhz || 20,
   unpaced: params.has('fast'),
   arenaMb: Number(params.get('mem')) || 64,
+  shared: params.get('shared') !== '0',
 };
 const vm = new C4M(opts);
 window.c4m = vm;
@@ -66,7 +69,8 @@ vm.on('status', s => {
   const parts = [s.state, `${fmtRate(s.ips)} inst/s`, `cpu ${Math.round((s.busy || 0) * 100)}%`,
                  `t ${((s.simMs || 0) / 1000).toFixed(1)}s`];
   status.textContent = parts.join(' · ');
-  if (s.gui && s.gui.attached) info.textContent = `${s.gui.w}×${s.gui.h} · ${s.gui.presents + s.gui.flips} frames`;
+  if (s.gui && s.gui.attached)
+    info.textContent = `${s.gui.w}×${s.gui.h} · ${s.gui.presents + s.gui.flips} frames${s.gui.shared ? ' · shared' : ''}`;
 });
 vm.on('kbd', ({ raw }) => updateKbd());
 vm.on('exit', e => { status.textContent = `halted, status ${e.status} after ${e.cycles} cycles`; });

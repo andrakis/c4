@@ -18,6 +18,7 @@
 
 import { Terminal } from '../src/c4bb/web/panels.js';
 import { Display } from './display.js';
+import { makeShared } from './shared.js';
 
 async function fetchBytes(url) {
   const r = await fetch(url);
@@ -71,11 +72,18 @@ export class C4M {
     if (opts.disk instanceof Map) disk = [...opts.disk];
     else if (opts.disk) disk = await fetchDisk(opts.disk, (n, of) => this.emit('loading', { n, of }));
     const argv = opts.argv || [String(opts.image).split('/').pop()];
+    // The shared display path, when the page is cross-origin isolated and
+    // has a display; opts.shared === false asks for the message path.
+    if (this.display && opts.shared !== false && globalThis.crossOriginIsolated && !this.shared) {
+      this.shared = makeShared();
+      this.display.attachShared(this.shared);
+    }
     this.bootMsg = {
       type: 'boot', image: image.buffer.slice(image.byteOffset, image.byteOffset + image.byteLength),
       argv, disk: disk.map(([n, b]) => [n, b]), arenaMb: opts.arenaMb || 64,
       mhz: opts.mhz || 20, unpaced: !!opts.unpaced, mbox: opts.mbox | 0,
       gui: this.display ? { w: this.display.width, h: this.display.height } : (opts.gui || null),
+      shared: this.shared || null,
     };
     this.worker.postMessage(this.bootMsg);
   }
@@ -127,7 +135,7 @@ export class C4M {
   reset() {
     this.exited = null;
     if (this.term) this.term.clear();
-    if (this.display) this.display.clear();
+    if (this.display) { this.display.discard(); this.display.clear(); }
     this.worker.postMessage({ type: 'reset' });
   }
   terminate() { this.worker.terminate(); }

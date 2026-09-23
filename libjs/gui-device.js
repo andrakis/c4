@@ -47,6 +47,7 @@ export const CMD = {
   CLEAR: 1, RECT: 2, RECTO: 3, LINE: 4, CIRCLE: 5, TEXT: 6, PIXEL: 7, PRESENT: 8,
   SIZE: 9, IMGDEF: 10, IMG: 11, CLIP: 12, NOCLIP: 13,
   FB: 100,              // host-made: [w, h, ...pixels], from FBFLIP
+  FBREF: 101,           // host-made, shared path: [w, h]; the pixels are in the triple buffer (shared.js)
 };
 export const EV = { MOVE: 1, DOWN: 2, UP: 3, KEYDOWN: 4, KEYUP: 5, RESIZE: 6, FOCUS: 7, WHEEL: 8 };
 const MASK = { [EV.MOVE]: 1, [EV.DOWN]: 2, [EV.UP]: 2, [EV.KEYDOWN]: 4, [EV.KEYUP]: 4,
@@ -72,6 +73,7 @@ export class GuiDevice {
     this.chunks = [];                    // earlier queues and framebuffer frames, in order
     this.queued = 0;                     // words in chunks
     this.fbBase = 0; this.fbPitch = 0; this.flips = 0;
+    this.fbShared = opts.fbShared || null;   // shared.js FbProducer, when the page is isolated
     this.sizeReq = null;
     this.t0 = Date.now();
     this.commands = 0; this.presents = 0; this.events = 0; this.lostCommands = 0;
@@ -162,6 +164,14 @@ export class GuiDevice {
     return words;
   }
 
+  // Words drain() handed out that the shared ring had no room for: they
+  // go back at the front, ahead of anything queued since, so order holds.
+  putBack(words) {
+    if (!words.length) return;
+    const c = words.slice();
+    this.chunks.unshift(c); this.queued += c.length;
+  }
+
   // Close off the commands queued so far as one chunk, keeping order with
   // the framebuffer frames that go between them.
   seal() {
@@ -182,6 +192,13 @@ export class GuiDevice {
     const base = this.fbBase;
     if ((base & 3) || (pitch & 3) || base < 0x1000 || base + (h - 1) * pitch + w * 4 > this.arena.size) return;
     const n = w * h;
+    // Shared path: one copy into the triple buffer, and a two-word marker
+    // in the command stream where the frame belongs.
+    if (this.fbShared && this.fbShared.publish(this.arena.i32, base, pitch, w, h)) {
+      this.queue.push(4, CMD.FBREF, w, h);
+      this.flips++;
+      return;
+    }
     if (this.queued + this.queue.length + n + 4 > QUEUE_LIMIT) { this.lostCommands++; return; }
     this.seal();
     // A framebuffer frame covers the whole display, so one still waiting

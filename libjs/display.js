@@ -14,6 +14,7 @@
 // transparency: 0 is opaque, 255 is fully transparent.
 
 import { CMD } from './gui-device.js';
+import { RingReader, FbConsumer } from './shared.js';
 
 const css = rgb => '#' + ((rgb >>> 0) & 0xffffff).toString(16).padStart(6, '0');
 
@@ -51,6 +52,56 @@ export class Display {
     this.height = this.canvas.height = this.back.height = h;
     this.clipped = false;
     this.clear();
+  }
+
+  // The shared path (shared.js): commands come out of a ring in shared
+  // memory, read once per animation frame, and framebuffer frames out of
+  // a triple buffer. Nothing is posted; the page draws at display rate.
+  attachShared({ ring, fb }) {
+    this.ring = new RingReader(ring);
+    this.fb = new FbConsumer(fb);
+    this.fbGen = -1;
+    this.shared = true;
+    const pump = () => {
+      const words = this.ring.read();
+      if (words) this.draw(words);
+    };
+    const loop = () => { pump(); requestAnimationFrame(loop); };
+    requestAnimationFrame(loop);
+    // A hidden page gets no animation frames. Keep emptying the ring
+    // anyway, more slowly, so the Worker never has to hold commands back
+    // (or, eventually, drop them) because nobody is looking; the message
+    // path draws in a hidden tab too.
+    setInterval(() => { if (document.hidden) pump(); }, 200);
+  }
+
+  // Throw away whatever is waiting in the ring (a reset).
+  discard() { if (this.ring) this.ring.read(); }
+
+  // Draw w x h pixels of 0x00RRGGBB, scaled to the display. Converted to
+  // RGBA only when they are new (gen), so a frame drawn twice costs one
+  // drawImage the second time.
+  blitPixels(pixels, w, h, gen) {
+    if (!this.fbCanvas || this.fbCanvas.width !== w || this.fbCanvas.height !== h) {
+      this.fbCanvas = document.createElement('canvas');
+      this.fbCanvas.width = w; this.fbCanvas.height = h;
+      this.fbImage = new ImageData(w, h);
+      this.fbGen = -1;
+    }
+    if (gen === undefined || gen !== this.fbGen) {
+      const px = new Uint32Array(this.fbImage.data.buffer);
+      for (let k = 0; k < w * h; k++) {
+        const v = pixels[k];
+        // 0x00RRGGBB in, RGBA bytes out (little-endian: ABGR in a word)
+        px[k] = 0xff000000 | ((v & 0xff) << 16) | (v & 0xff00) | ((v >> 16) & 0xff);
+      }
+      this.fbCanvas.getContext('2d').putImageData(this.fbImage, 0, 0);
+      if (gen !== undefined) this.fbGen = gen;
+    }
+    this.ctx.imageSmoothingEnabled = false;
+    this.ctx.drawImage(this.fbCanvas, 0, 0, this.width, this.height);
+    this.presentMode = true;
+    this.present();
   }
 
   present() {
@@ -128,25 +179,19 @@ export class Display {
           this.clipped = true;
           break;
         case CMD.FB: {
-          // A whole framebuffer, scaled to the display, then shown.
+          // A whole framebuffer, carried in the stream (the message path).
           const w = words[p], h = words[p + 1];
           if (w <= 0 || h <= 0 || w * h > len - 4) break;
-          if (!this.fbCanvas || this.fbCanvas.width !== w || this.fbCanvas.height !== h) {
-            this.fbCanvas = document.createElement('canvas');
-            this.fbCanvas.width = w; this.fbCanvas.height = h;
-            this.fbImage = new ImageData(w, h);
-          }
-          const px = new Uint32Array(this.fbImage.data.buffer);
-          for (let k = 0; k < w * h; k++) {
-            const v = words[p + 2 + k];
-            // 0x00RRGGBB in, RGBA bytes out (little-endian: ABGR in a word)
-            px[k] = 0xff000000 | ((v & 0xff) << 16) | (v & 0xff00) | ((v >> 16) & 0xff);
-          }
-          this.fbCanvas.getContext('2d').putImageData(this.fbImage, 0, 0);
-          c.imageSmoothingEnabled = false;
-          c.drawImage(this.fbCanvas, 0, 0, this.width, this.height);
-          this.presentMode = true;
-          this.present();
+          this.blitPixels(words.subarray(p + 2, p + 2 + w * h), w, h);
+          break;
+        }
+        case CMD.FBREF: {
+          // The shared path: the newest frame in the triple buffer. An
+          // older marker in the same batch draws the same (newest) frame,
+          // which is why pixels are only converted when they change.
+          if (!this.fb) break;
+          const f = this.fb.acquire();
+          if (f.w > 0 && f.h > 0) this.blitPixels(f.pixels, f.w, f.h, f.gen);
           break;
         }
         case CMD.NOCLIP:

@@ -6,7 +6,8 @@
 // static server; nothing here needs cross-origin isolation.
 //
 // Page -> worker
-//   boot    { image: ArrayBuffer, argv, disk: [[name, ArrayBuffer]], arenaMb, mhz, unpaced, gui }
+//   boot    { image: ArrayBuffer, argv, disk: [[name, ArrayBuffer]], arenaMb, mhz, unpaced, gui, shared }
+//           shared: { ring, fb } SharedArrayBuffers from shared.js, when the page is isolated
 //   key     { key, ctrlKey, altKey, metaKey }     a keydown on the terminal
 //   input   { bytes: Uint8Array }                 typed programmatically
 //   signal  { sig }                               2 = Ctrl-C
@@ -18,7 +19,7 @@
 // Worker -> page
 //   out     { bytes }         console output, and the echo of what was typed
 //   kbd     { raw }           a program opened or closed /dev/tty
-//   display { frames }        draw commands (gui-device.js)
+//   display { frames }        draw commands (gui-device.js); not used on the shared path
 //   status  { ... }           about four times a second
 //   exit    { status, cycles }
 //   reply   { id, ... }       for peek and poke
@@ -28,8 +29,13 @@ import { createMachine, boot } from './boot.js';
 import { STOP } from './c4m.js';
 import { keyDown, typeBytes } from './keys.js';
 import { GuiDevice } from './gui-device.js';
+import { RingWriter, FbProducer } from './shared.js';
 
-let vm = null, bootMsg = null, gui = null;
+let vm = null, bootMsg = null, gui = null, ring = null, ringStalls = 0;
+// One producer per shared framebuffer for the Worker's whole life: which
+// slot is ours is state the page's side depends on, and a reset must not
+// forget it.
+let fbProducer = null, fbSab = null;
 let paused = false, halted = false, parked = false;
 let out = [];
 let tRun = 0, lostMs = 0, parkedAt = 0;
@@ -59,14 +65,24 @@ function flush() {
 function flushDisplay() {
   if (!gui) return;
   const frames = gui.drain();
-  if (frames) postMessage({ type: 'display', frames }, [frames.buffer]);
+  if (frames) {
+    if (ring) {
+      // Shared path: into the ring, as much as fits; the rest waits for
+      // the page to catch up (a background tab draws nothing).
+      const n = ring.write(frames);
+      if (n < frames.length) { gui.putBack(frames.subarray(n)); ringStalls++; }
+    } else postMessage({ type: 'display', frames }, [frames.buffer]);
+  }
   const req = gui.takeSizeRequest();
   if (req) postMessage({ type: 'gui', w: req.w, h: req.h });
 }
 
 function start(msg) {
   bootMsg = msg;
-  gui = msg.gui ? new GuiDevice(msg.gui) : null;
+  ring = msg.gui && msg.shared ? new RingWriter(msg.shared.ring) : null;
+  if (ring && fbSab !== msg.shared.fb) { fbSab = msg.shared.fb; fbProducer = new FbProducer(fbSab); }
+  gui = msg.gui ? new GuiDevice({ ...msg.gui, fbShared: ring ? fbProducer : null }) : null;
+  ringStalls = 0;
   // Files arrive as Uint8Arrays or bare ArrayBuffers; the disk
   // controller wants bytes it can index.
   const files = new Map((msg.disk || []).map(([n, b]) => [n, b instanceof Uint8Array ? b : new Uint8Array(b)]));
@@ -153,7 +169,7 @@ function postStatus(force) {
     missedTraps: vm.missedTraps,
     simMs: vm.dev.simMs(),
     raw: vm.dev.rawKbd > 0,
-    gui: gui ? gui.stats() : null,
+    gui: gui ? { ...gui.stats(), shared: !!ring, ringStalls } : null,
   });
   lastStatus = { t: now, cycle: ran, busy: busyMs };
 }

@@ -45,7 +45,9 @@ const ok = (name, cond, extra = '') => {
   return cond;
 };
 
-const server = makeServer();
+// Cross-origin isolated, so the page takes the shared display path by
+// default; the display legs also run once with ?shared=0 to compare.
+const server = makeServer(undefined, true);
 await new Promise(r => server.listen(PORT, '0.0.0.0', r));
 
 let browser = null, cdp = null;
@@ -81,10 +83,19 @@ async function open(query) {
         console.log('  (signed the browser into code-server)');
         await tab.goto(url);
       }
-      if (await tab.waitFor('!!window.c4m', 15000)) return base;
+      if (await tab.waitFor('!!window.c4m', 15000)) { await mustBeVisible(); return base; }
     } catch (e) { console.log(`  (${base}: ${e.message})`); }
   }
   return null;
+}
+// Chrome delivers CDP input only to a visible tab, and a covered window
+// counts as hidden. Say that plainly rather than fail every check after it.
+async function mustBeVisible() {
+  if (await tab.eval('document.visibilityState') === 'visible') return;
+  console.log('test-web: the browser tab is hidden -- the Chrome window is covered or minimised.');
+  console.log('          Bring Chrome to the front on that machine and run this again.');
+  await tab.close(); browser.disconnect(); server.close();
+  process.exit(3);
 }
 const term = () => tab.eval('document.getElementById("terminal").innerText');
 const waitTerm = (s, t = 30000) => tab.waitFor(`document.getElementById("terminal").innerText.includes(${JSON.stringify(s)})`, t);

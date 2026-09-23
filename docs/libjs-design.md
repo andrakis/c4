@@ -249,10 +249,23 @@ commands to the host.
 - [ ] Performance pass. Not done, not needed yet: 106-190M inst/s in Node
       and 74M in the browser for the framebuffer demo, which is paced to the
       clock it claims. Revisit if a guest is CPU-bound in the browser.
-- [ ] SharedArrayBuffer display path. Not done, not needed yet: postMessage
-      costs about 2% CPU for the command ring; the framebuffer's 30% is the
-      guest computing pixels. `serve.mjs --isolate` already sends the
-      headers when it is wanted.
+- [x] SharedArrayBuffer display path (`shared.js`, asked for 2026-09-23).
+      When the page is cross-origin isolated (`make serve-libjs` and the gate
+      send COOP/COEP; the code-server proxy passes them through), commands go
+      through a shared ring the page reads once per animation frame, and
+      framebuffer frames through a lock-free triple buffer, with only a marker
+      in the ring. A batch the ring cannot take is kept and retried, never
+      dropped; a hidden page keeps emptying the ring on a timer. `?shared=0`
+      forces the message path. `tests/test-shared.mjs` covers ring order across
+      wraps and a slow reader, the triple buffer's newest-frame and
+      never-the-same-slot rules, and fb-demo end to end. CDP gate green on the
+      3060 Ti, isolated, both paths.
+      **Measured, fb-demo unpaced:** both paths deliver 63 guest frames/s and
+      125 page draws/s, and the slowest page frame is 17 ms either way. The
+      Worker is 100% busy computing pixels, so the guest is the bottleneck, not
+      the display path. What the shared path buys: no message or allocation per
+      batch, and stale framebuffer frames are never drawn. Its advantage should
+      only show with a display load heavier than this demo.
 - [x] Display interrupts: `gui_irq(1)` raises HARD_IRQ(3) through the cycle
       handler when an event arrives. `fb-demo` takes its events that way;
       pinned in `test-gui.mjs` and the CDP gate (2026-09-23)

@@ -109,3 +109,54 @@ Also fixed on the way: `build-images.sh` rebuilt C4IX only when one of
 four kernel files changed, so edits to `sys.c`, `vfs.c`, libc4ix or any
 user program were silently not built. It now rebuilds when anything under
 `src/c4ix` (or `libjs/guest/gui.h`) is newer than the kernel image.
+
+## Part two: NT-style tools (asked for 2026-09-23)
+
+Explorer, Task Manager, Notepad, Calculator and Run, in the Windows NT 4
+style, all inside the desktop process. The desktop becomes several
+modules linked together (`src/c4ix/user/desktop/`): C4IX's compiler is
+given a fixed memory budget per file, and one file holding all of this
+would not fit it.
+
+**Kernel**: `SYS_STAT` (224: type and size of a path), `SYS_UNLINK` (225:
+remove a file, or an empty directory) and `SYS_RENAME` (226: give an
+entry a new name in the same directory). libc4ix: `ustat`, `uunlink`,
+`urename`.
+
+**Shared pieces**: a drawing layer every window draws through, clipped to
+its client area; widgets (buttons, list views with columns and
+selection, scroll bars, a menu bar with drop-down menus, text fields,
+tabs); a message box; resizable windows (drag the bottom-right corner).
+
+- **Explorer**: a folder tree next to a file list (Name, Size, Type), a
+  menu bar, an address box with Up, a status bar. Double-click opens a
+  folder, runs a program in a new Command Prompt, or opens anything else
+  in Notepad. New Folder, Delete (confirmed), Rename.
+- **Task Manager** (Ctrl+Shift+Esc too): Applications (the desktop's
+  windows, End Task, Switch To), Processes (every task with PID, CPU %,
+  CPU time in cycles, syscalls and state, End Process), Performance (a
+  CPU gauge and a scrolling history graph, totals).
+- **Notepad**: open, edit and save text files in C4IX's filesystem;
+  keyboard editing, mouse placement, scroll bar and wheel.
+- **Calculator**: 32-bit integers in Hex, Dec, Oct or Bin, with + - * /,
+  Mod, And, Or, Xor, Not, Lsh, Rsh.
+- **Run**: Start > Run... starts a program in a new Command Prompt.
+
+### D5: kernel
+- [ ] `SYS_STAT`, `SYS_UNLINK`, `SYS_RENAME`; libc4ix wrappers
+- [ ] native suites green
+
+### D6: the desktop as modules, and the shared pieces
+- [ ] modules and a build rule for them (Makefile and build-images.sh)
+- [ ] clipping, widgets, message box, resizing, the NT Start menu
+- [ ] test-desktop.mjs still green
+
+### D7: the tools
+- [ ] Explorer
+- [ ] Task Manager
+- [ ] Notepad
+- [ ] Calculator and Run
+- [ ] Headless tests for each
+
+### D8: in the browser
+- [ ] CDP gate drives each tool; screenshots checked by eye

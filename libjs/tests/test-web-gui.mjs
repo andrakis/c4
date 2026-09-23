@@ -114,6 +114,53 @@ export async function run(ctx) {
   console.log(`  (raycast: shared ${rs.flips} guest f/s vs messages ${rm.flips}; slowest page frame ${rs.worst} vs ${rm.worst} ms)`);
   ok('no page errors', tab.errors.length === 0, tab.errors.join('\n       '));
 
+  // ---- the C4IX desktop -------------------------------------------------------
+  // The canvas cannot be read as text, so the display records the strings
+  // of the last frame it showed (display.recordText) and this reads those.
+  console.log('test-web: the C4IX desktop');
+  tab.errors.length = 0;
+  await open('system=c4ix');
+  if (!ok('C4IX boots to its shell', await waitTerm('c4ix:/$', 90000))) return;
+  await tab.eval('window.c4m.display.recordText = true');
+  await focusTerm();
+  await tab.type('desktop\n');
+  ok('desktop starts from the shell', await waitTerm('desktop: running on the display', 30000), (await term()).slice(-300));
+  const shown = `window.c4m.display.shownText.map(t => t.s).join('\\n')`;
+  const shownHas = (re, t = 30000) => tab.waitFor(`${re}.test(${shown})`, t);
+  ok('the display becomes 800x600', await tab.waitFor("document.getElementById('display').width === 800", 15000));
+  ok('a terminal window shows the shell prompt', await shownHas('/c4ix:\\/\\$/', 60000));
+  // desktop coordinates to the page's
+  const at = async (x, y) => tab.eval(canvasPoint(x / 800, y / 600));
+  const clickAt = async (x, y) => {
+    const p = await at(x, y);
+    await tab.mouse('mouseMoved', p.x, p.y); await tab.mouse('mousePressed', p.x, p.y, 'left', 1); await tab.mouse('mouseReleased', p.x, p.y, 'left', 0);
+    await sleep(150);
+  };
+  await clickAt(300, 200);                      // into the terminal: focus the canvas and the window
+  await tab.type('ps\n');
+  ok('ps typed on the display runs in that window', await shownHas('/c4ix-desktop/') && await shownHas('/tasks,/'));
+  await clickAt(20, 582);                       // Start
+  ok('Start opens its menu', await shownHas('/Shut Down/'));
+  await clickAt(80, 600 - 30 - 90 + 6 + 12);    // Terminal
+  ok('a second terminal opens from the Start menu', await tab.waitFor(`(${shown}.match(/Terminal \\(task/g) || []).length >= 4`, 30000));
+  // drag the second window by its title bar
+  {
+    const a = await at(128 + 250, 54 + 10), b = await at(128 + 270, 54 + 170);   // mostly down: 800 wide leaves little room to the right
+    await tab.mouse('mouseMoved', a.x, a.y); await tab.mouse('mousePressed', a.x, a.y, 'left', 1);
+    for (let k = 1; k <= 8; k++) await tab.mouse('mouseMoved', a.x + (b.x - a.x) * k / 8, a.y + (b.y - a.y) * k / 8, 'left', 1);
+    await tab.mouse('mouseReleased', b.x, b.y, 'left', 0);
+    ok('a window drags by its title bar', await tab.waitFor(`window.c4m.display.shownText.some(t => t.s.startsWith('Terminal (task') && t.x > 160 && t.y > 200 && t.y < 560)`, 15000));
+  }
+  await sleep(500);
+  await shot('desktop');
+  // close the dragged window: its close button is at (x+630, y+6)
+  await clickAt(148 + 630 + 8, 214 + 6 + 6);
+  ok('its close button closes it', await tab.waitFor(`(${shown}.match(/Terminal \\(task/g) || []).length === 2`, 30000));
+  await clickAt(20, 582);
+  await clickAt(80, 600 - 30 - 90 + 6 + 2 * 26 + 12);   // Shut Down...
+  ok('Shut Down hands the console back', await waitTerm('desktop: shut down', 30000));
+  ok('no page errors', tab.errors.length === 0, tab.errors.join('\n       '));
+
   // ---- M4: a C4IX program ----------------------------------------------
   if (process.argv.includes('--no-c4ix')) return;
   console.log('test-web: gui under C4IX');

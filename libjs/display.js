@@ -34,6 +34,7 @@ export class Display {
     this.presentMode = false;            // true once the guest has sent a PRESENT
     this.framesDrawn = 0;
     this.commandsDrawn = 0;
+    this.recordText = false; this.texts = []; this.shownText = [];
     this.clear();
     this.listen();
   }
@@ -146,7 +147,13 @@ export class Display {
     if (this.coalescing) return;          // drawCoalesced presents once at the end
     this.front.drawImage(this.back, 0, 0);
     this.framesDrawn++;
+    if (this.recordText) this.shownText = this.texts.slice();
   }
+
+  // For tests: with recordText on, shownText is every string the last
+  // presented frame drew, as { x, y, s }. A canvas cannot be read back as
+  // text, and this is the next best thing to reading the screen.
+  noteText(x, y, s) { if (this.recordText) this.texts.push({ x, y, s }); }
 
   draw(words) {
     const c = this.ctx;
@@ -157,7 +164,9 @@ export class Display {
       this.commandsDrawn++;
       switch (type) {
         case CMD.CLEAR:
-          c.fillStyle = css(words[p]); c.fillRect(0, 0, this.width, this.height); break;
+          c.fillStyle = css(words[p]); c.fillRect(0, 0, this.width, this.height);
+          this.texts = [];
+          break;
         case CMD.RECT:
           c.fillStyle = css(words[p + 4]); c.fillRect(words[p], words[p + 1], words[p + 2], words[p + 3]); break;
         case CMD.RECTO:
@@ -180,6 +189,7 @@ export class Display {
           c.font = `${Math.max(4, words[p + 3])}px ui-monospace, "JetBrains Mono", monospace`;
           c.textBaseline = 'top';
           c.fillText(s, words[p], words[p + 1]);
+          this.noteText(words[p], words[p + 1], s);
           break;
         }
         case CMD.TEXT2: {
@@ -193,6 +203,7 @@ export class Display {
           c.textBaseline = 'top';
           let s = '';
           for (let k = 0; k < n; k++) s += String.fromCharCode((words[p + 7 + (k >> 2)] >>> ((k & 3) * 8)) & 0xff);
+          this.noteText(words[p], words[p + 1], s);
           if (!adv) c.fillText(s, words[p], words[p + 1]);
           else for (let k = 0; k < n; k++) if (s[k] !== ' ') c.fillText(s[k], words[p] + k * adv, words[p + 1]);
           break;

@@ -266,9 +266,12 @@ C4IX_USER="hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt gui
 # floors were measured at 32 bits, and an unmeasured change there would
 # be the same guess with a smaller number.
 C4IX_CELLS=400000
-if [ ! -f $OUT/c4ix32.c4r ] || [ src/c4ix/sched.c -nt $OUT/c4ix32.c4r ] || \
-   [ src/c4ix/c4ix.h -nt $OUT/c4ix32.c4r ] || [ src/c4ix/init.c -nt $OUT/c4ix32.c4r ] || \
-   [ src/c4ix/loader.c -nt $OUT/c4ix32.c4r ]; then
+# Rebuilt when ANY of C4IX changed -- kernel, libc4ix, headers, user
+# programs -- or the display header its programs include. This used to
+# list four kernel files, so an edit to sys.c, vfs.c or a user program
+# was silently not built.
+if [ ! -f $OUT/c4ix32.c4r ] || \
+   [ -n "$(find src/c4ix libjs/guest/gui.h -newer $OUT/c4ix32.c4r -type f -print -quit)" ]; then
     objs=""
     for m in $C4IX_MODS; do
         ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix src/c4ix/$m.c .c4bb_ix_$m.c4o > /dev/null

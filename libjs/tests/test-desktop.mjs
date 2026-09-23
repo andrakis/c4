@@ -18,7 +18,7 @@ import { GuiDevice, CMD } from '../gui-device.js';
 import { typeBytes } from '../keys.js';
 
 const ROOT = new URL('../../src/c4bb/images/', import.meta.url).pathname;
-const SW = 1024, SH = 768, TASK_H = 30;
+const SW = 800, SH = 600, TASK_H = 30;
 let fail = 0;
 const check = (cond, what, extra = '') => {
   console.log(`test-desktop: ${what} ${cond ? 'OK' : 'FAILED'}${!cond && extra ? '\n  ' + extra : ''}`);
@@ -66,9 +66,9 @@ const key = (ch, mods = 0) => {
 const type = s => { for (const ch of s) key(ch); };
 
 // The window rectangles, found from the title strings (the first window
-// opens at 60,30 and each next one 28,24 further; a terminal is 652x421).
+// opens at 100,30 and each next one 28,24 further; a terminal is 652x421).
 const TW = 80 * 8 + 12, THH = 24 * 16 + 4 + 4 * 2 + 18 + 1;
-const winRect = i => ({ x: 60 + i * 28, y: 30 + i * 24 });
+const winRect = i => ({ x: 100 + i * 28, y: 30 + i * 24 });
 
 // ---- boot C4IX and start the desktop from its console --------------------
 check(until(() => consoleText().includes('c4ix:/$'), 2000), 'C4IX boots to its shell');
@@ -112,8 +112,21 @@ ev({ kind: 'move', x: w0.x + 200, y: w0.y + 10, buttons: 0 });
 ev({ kind: 'down', x: w0.x + 200, y: w0.y + 10, button: 0 });
 ev({ kind: 'move', x: w0.x + 400, y: w0.y + 110, buttons: 1 });
 ev({ kind: 'up', x: w0.x + 400, y: w0.y + 110, button: 0 });
-run();
-check(frame.some(t => t.s.startsWith('Terminal (task') && t.x > w0.x + 200 && t.y > w0.y + 100), 'dragging the title bar moves the window');
+check(until(() => frame.some(t => t.s.startsWith('Terminal (task') && t.x > w0.x + 200 && t.y > w0.y + 100)), 'dragging the title bar moves the window');
+
+// ---- maximise, restore, minimise, restore from the taskbar -------------------
+// window 0 now sits at (300,130); its caption buttons are 16 wide, from the
+// right: close at x+630, maximise at x+612, minimise at x+596
+const titleOf = pred => frame.filter(t => t.s.startsWith('Terminal (task') && t.y < SH - TASK_H && pred(t));
+const mx = w0.x + 200, my = w0.y + 100;
+click(mx + 612 + 6, my + 6 + 6);
+check(until(() => titleOf(t => t.x < 40 && t.y < 12).length === 1), 'maximise fills the desktop');
+click(4 + 612 + 6 + (SW - 652), 4 + 2 + 6);           // the button, now at the right edge of the screen
+check(until(() => titleOf(t => t.x > mx && t.y > my).length === 1), 'and the same button restores it');
+click(mx + 596 + 6, my + 6 + 6);
+check(until(() => titleOf(t => t.x > mx && t.y > my).length === 0), 'minimise hides it');
+click(64 + 20, SH - TASK_H + 12);                       // its taskbar button, the first
+check(until(() => titleOf(t => t.x > mx && t.y > my).length === 1), 'and its taskbar button brings it back');
 
 // ---- close one, then shut down -----------------------------------------------
 click(w1.x + TW - 4 - 2 - 8, w1.y + 4 + 2 + 6);           // the second window's close button

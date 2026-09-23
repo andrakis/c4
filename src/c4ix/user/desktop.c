@@ -20,7 +20,7 @@
 #define malloc ualloc
 #include "libjs/guest/gui.h"
 
-enum { SW = 1024, SH = 768, TASK_H = 30, BORDER = 4, TITLE_H = 18,
+enum { SW = 800, SH = 600, TASK_H = 30, BORDER = 4, TITLE_H = 18,
        COLS = 80, ROWS = 24, CW = 8, CH = 16, FONT_PX = 14,
        MAXW = 6, LINE_MAX = 250, SIGTERM = 15 };
 enum { K_TERM = 1, K_ABOUT = 2 };
@@ -145,7 +145,7 @@ int new_window(int kind, char *title, int w, int h) {
     p = win_at(i);
     p->used = 1; p->kind = kind; p->min = 0; p->max = 0;
     n = 0; while (n < MAXW) { if (win_at(n)->used) ++n; else break; }
-    p->x = 60 + i * 28; p->y = 30 + i * 24;
+    p->x = 100 + i * 28; p->y = 30 + i * 24;      // clear of the desktop icons
     p->w = w; p->h = h;
     scpy(p->title, title);
     raise(i);

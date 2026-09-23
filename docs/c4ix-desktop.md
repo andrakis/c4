@@ -53,7 +53,8 @@ advance places each character exactly `advance` pixels after the last,
 which is what a character grid needs; 0 is the font's own spacing.
 
 **The desktop** (src/c4ix/user/desktop.c -> c4ix-desktop.c4r):
-- Asks for a 1024x768 display, attaches the rings, and redraws the whole
+- Asks for an 800x600 display (1024x768 was too small to read once the
+  page scaled it into its pane), attaches the rings, and redraws the whole
   scene when something changed. Idle, it sleeps (`umsleep`).
 - Windows are a z-ordered list. Title bar drag moves, a click raises and
   focuses, the three caption buttons minimise, maximise/restore and close.
@@ -92,6 +93,19 @@ which is what a character grid needs; 0 is the font's own spacing.
       entries (now 50/50) in test-libjs and test-c4bb.
 
 ### D4: in the browser
-- [ ] CDP gate: `desktop` from the C4IX shell, open a terminal from the
-      Start menu, type `ps` in it, drag it, open a second, close one
-- [ ] Screenshot checked by eye
+- [x] CDP gate (`test-web.mjs --gui`, 3060 Ti, 2026-09-23): `desktop` from
+      the C4IX shell; the display becomes 800x600; a terminal shows the
+      prompt; `ps` typed on the display runs in that window; Start opens its
+      menu and New Terminal opens a second window; a window drags by its
+      title bar; its close button closes it; Shut Down hands the console
+      back; no page errors. The strings drawn are read back through the
+      display's opt-in text log (`display.recordText`).
+- [x] Screenshot checked by eye. At the user's request the desktop is
+      800x600 (1024x768 was scaled down into the pane and hard to read), and
+      the page gives the display its natural width when it has room, so
+      it is shown pixel for pixel.
+
+Also fixed on the way: `build-images.sh` rebuilt C4IX only when one of
+four kernel files changed, so edits to `sys.c`, `vfs.c`, libc4ix or any
+user program were silently not built. It now rebuilds when anything under
+`src/c4ix` (or `libjs/guest/gui.h`) is newer than the kernel image.

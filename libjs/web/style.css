@@ -36,9 +36,13 @@ body {
 #bar button.active { border-color: var(--pink); color: var(--pink); }
 #status { margin-left: auto; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
+/* The display column is as wide as the canvas when there is room for it,
+   so what the machine draws is shown pixel for pixel -- a scaled-down
+   desktop is text nobody can read. The terminal takes what is left, and
+   on a narrow window the display shrinks rather than scrolls. */
 #panes {
   flex: 1; min-height: 0;
-  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  display: grid; grid-template-columns: minmax(320px, 1fr) minmax(0, max-content);
   gap: 8px; padding: 8px 16px 16px;
 }
 .pane {
@@ -71,7 +75,7 @@ body {
 #terminal:empty::before { content: attr(data-placeholder); color: var(--dim); font-style: italic; }
 
 #display-wrap {
-  flex: 1 1 0; min-height: 0; display: flex; align-items: center; justify-content: center;
+  flex: 1 1 0; min-height: 0; display: flex; align-items: flex-start; justify-content: center;
   background: var(--screen); border-radius: 0 0 6px 6px; padding: 8px;
 }
 #display {

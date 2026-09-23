@@ -245,7 +245,7 @@ done
 # root-caused - see docs/c4bb-design.md) intermittently corrupts one
 # entry's value, so this only requires the run to complete and load
 # MOST entries, not all of them.
-if echo "$c4ix_out" | grep -qE '4[0-9]/4[0-9] entries loaded from c4ix\.vfs\.txt'; then
+if echo "$c4ix_out" | grep -qE '[4-9][0-9]/[4-9][0-9] entries loaded from c4ix\.vfs\.txt'; then
     echo "test-c4bb: c4ix-vfs manifest mostly loaded OK"
 else
     echo "test-c4bb: c4ix-vfs manifest mostly loaded FAILED"

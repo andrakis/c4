@@ -6,13 +6,13 @@
 //
 //   0x0100-0x01FF  c4bb's device registers (src/c4bb/sim/devices.js),
 //                  reached through Arena.read32/write32 as on c4bb
-//   0x0400-0x043F  the display (gui-device.js), when one is fitted
+//   0x0400-0x047F  the display (gui-device.js), when one is fitted
 //   everything else  RAM: the TLEV word, the opcode-name ROM, ...
 //
 // Unaligned and out-of-range accesses behave as they do on c4bb: reads
 // give 0, writes are dropped.
 
-export const GUI_BASE = 0x400, GUI_END = 0x440;
+export const GUI_BASE = 0x400, GUI_END = 0x480;
 
 export class Bus {
   constructor(arena, gui = null) {

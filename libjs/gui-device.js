@@ -32,6 +32,8 @@
 //                       single memcpy. The page transposes with a canvas
 //                       transform, which costs nothing.
 //
+//   0x440 CLOCK    r    the host's local time of day, in seconds since midnight
+//
 // In the frames the host makes (FB, FBREF) the height word carries the
 // mode in bits 16 and up: h | (mode << 16).
 //
@@ -50,11 +52,12 @@ import { HostMailbox } from '../src/c4bb/sim/mbox.js';
 export const GUI = {
   CAPS: 0x400, W: 0x404, H: 0x408, RINGLEN: 0x40c, RING: 0x410, BELL: 0x414,
   EVMASK: 0x418, IRQ: 0x41c, MOUSE: 0x420, BUTTONS: 0x424, TICKS: 0x428, DROPPED: 0x42c,
-  FB: 0x430, FBPITCH: 0x434, FBFLIP: 0x438, FBMODE: 0x43c,
+  FB: 0x430, FBPITCH: 0x434, FBFLIP: 0x438, FBMODE: 0x43c, CLOCK: 0x440,
 };
 export const CMD = {
   CLEAR: 1, RECT: 2, RECTO: 3, LINE: 4, CIRCLE: 5, TEXT: 6, PIXEL: 7, PRESENT: 8,
   SIZE: 9, IMGDEF: 10, IMG: 11, CLIP: 12, NOCLIP: 13,
+  TEXT2: 14,            // [x, y, rgb, size, font, advance, n, chars]: 0 mono, 1 sans, 2 sans bold
   FB: 100,              // host-made: [w, h, ...pixels], from FBFLIP
   FBREF: 101,           // host-made, shared path: [w, h]; the pixels are in the triple buffer (shared.js)
 };
@@ -110,6 +113,7 @@ export class GuiDevice {
       case GUI.BUTTONS: return this.buttons;
       case GUI.TICKS: return (Date.now() - this.t0) | 0;
       case GUI.DROPPED: return this.dropped;
+      case GUI.CLOCK: { const d = new Date(); return d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds(); }
       default: return 0;
     }
   }

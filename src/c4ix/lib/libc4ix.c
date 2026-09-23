@@ -78,6 +78,9 @@ int ugetcwd(char *buf, int len)       { return __c4ix_syscall(SYS_GETCWD, (int)b
 int ureaddir(char *path, int i, char *nm) { return __c4ix_syscall(SYS_READDIR, (int)path, i, (int)nm); }
 int ukill(int pid, int sig)           { return __c4ix_syscall(SYS_KILL, pid, sig, 0); }
 int umsleep(int ms)                   { return __c4ix_syscall(SYS_SLEEP, ms, 0, 0); }
+int uavail(int fd)                    { return __c4ix_syscall(SYS_AVAIL, fd, 0, 0); }
+int uintr(int pid)                    { return __c4ix_syscall(SYS_INTR, pid, 0, 0); }
+int ucloexec(int fd, int on)          { return __c4ix_syscall(SYS_CLOEXEC, fd, on, 0); }
 
 int spawn(char *path, int argc, char **argv) {
     return __c4ix_syscall(SYS_SPAWN, (int)path, argc, (int)argv);

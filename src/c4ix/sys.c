@@ -211,6 +211,7 @@ int sys_readdir(char *path, int index, char *name) {
 // Both doors normalize into that shape before calling.
 int sys_dispatch(int num, int *args) {
     struct task *t, *s;
+    struct file *f;
 
     if ((t = sched_current())) ++t->nsyscalls;
 
@@ -237,6 +238,25 @@ int sys_dispatch(int num, int *args) {
     // same one C4KE's OP_USER_SLEEP makes (c4ke.c): park on the clock and
     // let the scheduler run everyone else, and nap when nobody is ready.
     // It completes on waking, so nothing re-executes.
+    // Bytes waiting on fd, without ever blocking: the desktop reads every
+    // terminal's pipe from one loop. 0 means empty with a writer still
+    // there, -1 end of file (or a bad fd).
+    if (num == SYS_AVAIL) {
+        if (!t || !(f = fd_get(t, args[0]))) return -1;
+        if (f->vn->type == VN_PIPE) {
+            if (f->vn->size > f->vn->rpos) return f->vn->size - f->vn->rpos;
+            return f->vn->writers ? 0 : -1;
+        }
+        if (f->vn->type == VN_CONSOLE) return con_poll() ? 1 : 0;
+        if (f->vn->type == VN_RAMFILE) return f->vn->size > f->pos ? f->vn->size - f->pos : -1;
+        return 1;
+    }
+    if (num == SYS_INTR) return sched_intr_below(task_get(args[0]));
+    if (num == SYS_CLOEXEC) {
+        if (!t || !fd_get(t, args[0])) return -1;
+        t->fdcloexec[args[0]] = args[1] ? 1 : 0;
+        return 0;
+    }
     if (num == SYS_SLEEP) {
         if (!t || args[0] <= 0) return 0;
         if (!sched_in_trap()) {

@@ -68,8 +68,8 @@ enum {
     SYS_CYCLES = 213, SYS_TASKINFO = 214,
     SYS_CHDIR = 215, SYS_MKDIR = 216, SYS_GETCWD = 217, SYS_READDIR = 218,
     SYS_KILL = 219,
-    SYS_SLEEP = 220,
-    SYS_TOP = 221          // one past the last: sched_trap's range check
+    SYS_SLEEP = 220, SYS_AVAIL = 221, SYS_INTR = 222, SYS_CLOEXEC = 223,
+    SYS_TOP = 224          // one past the last: sched_trap's range check
 };
 // taskinfo fills, in order: id, parent, state, privs, nsyscalls,
 // ntraps, cycles, then the name packed into the remaining words.
@@ -291,6 +291,7 @@ struct task {
     struct vnode *block_vn;    // TS_BLOCKED: the vnode being waited on
     int  block_pos;            // position the blocked read wants data past
     int  fds[FD_MAX];          // struct file *, 0 where the fd is closed
+    int  fdcloexec[FD_MAX];    // 1: this fd is not inherited on spawn (SYS_CLOEXEC)
     struct vnode *cwd;         // working directory, inherited on spawn
     int  lockdepth;            // preemption-mask depth, saved across switches
     int  parent;               // task id that spawned this one
@@ -425,6 +426,7 @@ int          sched_sleep_due(int *pms);   // earliest sleeper deadline, 0 if non
 void         sched_forge_argv(struct task *t, int argv);  // pre-start argv patch
 void         sched_stop();
 void         sched_yield();
+int          sched_intr_below(struct task *root);   // a terminal's Ctrl-C
 void         sched_lock();     // disable preemption (nestable)
 void         sched_unlock();
 struct task *sched_current();

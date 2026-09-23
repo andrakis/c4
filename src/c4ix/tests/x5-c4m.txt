@@ -62,7 +62,7 @@ cat: cannot open /ram/nonexistent
 after a failure the shell keeps going
 test: done
 init: shell exited 0 after 353 syscalls
-sl4b: cache 'task' objsize 432 perslab 16 slabs 1 allocs 45 frees 45 live 0
+sl4b: cache 'task' objsize 560 perslab 16 slabs 1 allocs 45 frees 45 live 0
 sl4b: cache 'file' objsize 32 perslab 16 slabs 1 allocs 33 frees 33 live 0
 sl4b: cache 'vnode' objsize 112 perslab 8 slabs 2 allocs 17 frees 7 live 10
 c4ix: shutdown complete, 0 tasks remain

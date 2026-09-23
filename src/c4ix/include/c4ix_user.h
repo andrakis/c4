@@ -18,7 +18,8 @@ enum {
     SYS_DUP = 210, SYS_DUP2 = 211, SYS_PIPE = 212,
     SYS_CYCLES = 213, SYS_TASKINFO = 214,
     SYS_CHDIR = 215, SYS_MKDIR = 216, SYS_GETCWD = 217, SYS_READDIR = 218,
-    SYS_KILL = 219, SYS_SLEEP = 220
+    SYS_KILL = 219, SYS_SLEEP = 220,
+    SYS_AVAIL = 221, SYS_INTR = 222, SYS_CLOEXEC = 223
 };
 // taskinfo record, in order: id, parent, state, privs, nsyscalls,
 // ntraps, cycles, then a 16-byte name
@@ -74,6 +75,9 @@ int  ugetcwd(char *buf, int len);
 int  ureaddir(char *path, int index, char *name);   // 1 dir, 0 file, -1 end
 int  ukill(int pid, int sig);   // SIGTERM/SIGINT/SIGKILL end a task
 int  umsleep(int ms);            // sleep; other tasks run meanwhile
+int  uavail(int fd);             // bytes waiting; 0 empty (never blocks), -1 end of file
+int  uintr(int pid);             // Ctrl-C for the job running under task pid
+int  ucloexec(int fd, int on);   // 1: spawned children do not inherit fd
 int *ualloc(int bytes);
 int  getpid();
 

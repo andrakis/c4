@@ -35,12 +35,19 @@ shaped so it can be added.
   when a pipe is empty but still has a writer, -1 at end of file. The
   desktop polls every terminal's output pipe from one loop, so it must
   never park on one of them. libc4ix: `uavail(fd)`.
+- `SYS_CLOEXEC` (223): mark a descriptor close-on-spawn. Spawn clones the
+  whole fd table, so without this every terminal's shell would hold the
+  desktop's end of its own stdin (and never see end of file) and of every
+  other terminal's pipes, and the 16-slot tables would fill. Per fd, not
+  per description: a dup of a marked fd is inherited. libc4ix:
+  `ucloexec(fd, on)`.
 - `SYS_INTR` (222): interrupt the foreground job below a given task,
   found the way the console finds its own (descend the wait chain from
   that task). A terminal window uses its shell's pid. libc4ix:
   `uintr(pid)`.
 
-**Display addition**: `TEXT2 [x, y, rgb, size, font, advance, n, chars]`.
+**Display additions**: a CLOCK register (0x440, host local seconds since
+midnight) for the taskbar clock, the window growing to 0x47F; and `TEXT2 [x, y, rgb, size, font, advance, n, chars]`.
 Font 0 is monospace, 1 a sans-serif UI face, 2 its bold. A non-zero
 advance places each character exactly `advance` pixels after the last,
 which is what a character grid needs; 0 is the font's own spacing.
@@ -58,23 +65,31 @@ which is what a character grid needs; 0 is the font's own spacing.
 ## Tracker
 
 ### D0: kernel
-- [ ] `SYS_AVAIL`, `SYS_INTR`, libc4ix `uavail`, `uintr`
-- [ ] `make test-c4ix` and `test-c4ix-c4ke` still green
+- [x] `SYS_AVAIL`, `SYS_INTR`, `SYS_CLOEXEC`; libc4ix `uavail`, `uintr`,
+      `ucloexec` (`SYS_TOP` is now 224)
+- [x] `make test-c4ix` and `test-c4ix-c4ke` green (2026-09-23). x5 re-pinned
+      for one line: the task struct's slab size, 432 -> 560, which is the
+      sixteen `fdcloexec` words
 
 ### D1: display
-- [ ] `TEXT2` in gui-device/display.js and `gui_text2` in gui.h
+- [x] `TEXT2` in gui-device/display.js and `gui_text2` in gui.h; CLOCK
 
 ### D2: the desktop shell
-- [ ] Windows: draw, raise, focus, drag, minimise, maximise, close
-- [ ] Taskbar: Start menu, window buttons, clock
-- [ ] Headless test drives it with display events
+- [x] Windows: draw, raise, focus, drag, minimise, maximise, close
+- [x] Taskbar: Start menu, window buttons, clock
+- [x] Headless test drives it with display events (`libjs/tests/test-desktop.mjs`,
+      in `make test-libjs`)
 
 ### D3: the terminal
-- [ ] A shell per window over pipes; output through the VT100 subset
-- [ ] Local line editing, Enter sends the line, Ctrl-C interrupts
-- [ ] Headless test: two terminals, a command in each, output lands in
-      the right window, Ctrl-C cancels `spin` in one without touching
-      the other
+- [x] A shell per window over pipes; output through the VT100 subset
+- [x] Local line editing, Enter sends the line, Ctrl-C interrupts
+- [x] Headless test (2026-09-23): `ps` typed in a window runs in that
+      window's shell and lands in that window; a second terminal from the
+      Start menu; `spin` there and Ctrl-C shows `^C` and stops it while the
+      first terminal still answers; dragging moves a window; closing one
+      removes it; Shut Down returns to the console, and no terminal shell
+      outlives the desktop. C4IX's vfs pins widened to `[4-9]x/[4-9]x`
+      entries (now 50/50) in test-libjs and test-c4bb.
 
 ### D4: in the browser
 - [ ] CDP gate: `desktop` from the C4IX shell, open a terminal from the

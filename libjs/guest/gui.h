@@ -28,15 +28,16 @@ enum {
 	GUI_CAPS = 0x400, GUI_W = 0x404, GUI_H = 0x408, GUI_RINGLEN = 0x40c, GUI_RING = 0x410,
 	GUI_BELL = 0x414, GUI_EVMASK = 0x418, GUI_IRQ = 0x41c, GUI_MOUSE = 0x420,
 	GUI_BUTTONS = 0x424, GUI_TICKS = 0x428, GUI_DROPPED = 0x42c,
-	GUI_FB = 0x430, GUI_FBPITCH = 0x434, GUI_FBFLIP = 0x438, GUI_FBMODE = 0x43c,
+	GUI_FB = 0x430, GUI_FBPITCH = 0x434, GUI_FBFLIP = 0x438, GUI_FBMODE = 0x43c, GUI_CLOCK = 0x440,
 	C4I_GUI = 0x4000
 };
 // commands
 enum {
 	GUI_CLEAR = 1, GUI_RECT = 2, GUI_RECTO = 3, GUI_LINE = 4, GUI_CIRCLE = 5, GUI_TEXT = 6,
 	GUI_PIXEL = 7, GUI_PRESENT = 8, GUI_SIZE = 9, GUI_IMGDEF = 10, GUI_IMG = 11,
-	GUI_CLIP = 12, GUI_NOCLIP = 13
+	GUI_CLIP = 12, GUI_NOCLIP = 13, GUI_TEXT2 = 14
 };
+enum { GUI_MONO = 0, GUI_SANS = 1, GUI_SANS_BOLD = 2 };
 // events: ev[0] is the type, ev[1..3] its payload
 enum {
 	GUI_EV_MOVE = 1,     // x, y, buttons
@@ -177,6 +178,24 @@ void gui_text (int x, int y, int rgb, int size, char *s) {
 	gui_commit();
 }
 
+// Text in a face (GUI_MONO, GUI_SANS, GUI_SANS_BOLD). advance > 0 puts
+// each character exactly that many pixels after the last -- a character
+// grid; 0 uses the face's own spacing. n characters of s (n < 0: all).
+void gui_text2 (int x, int y, int rgb, int size, int font, int advance, char *s, int n) {
+	int i, *p;
+	if (n < 0) { n = 0; while (s[n]) n = n + 1; }
+	if (!(p = gui_frame(GUI_TEXT2, 7 + (n + 3) / 4))) return;
+	p[0] = x; p[1] = y; p[2] = rgb; p[3] = size; p[4] = font; p[5] = advance; p[6] = n;
+	i = 0;
+	while (i < (n + 3) / 4) { p[7 + i] = 0; i = i + 1; }
+	i = 0;
+	while (i < n) {
+		p[7 + i / 4] = p[7 + i / 4] | ((s[i] & 255) << ((i % 4) * 8));
+		i = i + 1;
+	}
+	gui_commit();
+}
+
 // An image the host keeps under `id` for gui_image: w*h pixels of
 // 0x00RRGGBB, where a top byte of 255 is fully transparent.
 void gui_imgdef (int id, int w, int h, int *pixels) {
@@ -250,3 +269,4 @@ int gui_mouse_x () { return *(int *)GUI_MOUSE >> 16; }
 int gui_mouse_y () { return *(int *)GUI_MOUSE & 65535; }
 int gui_buttons () { return *(int *)GUI_BUTTONS; }
 int gui_ticks ()   { return *(int *)GUI_TICKS; }
+int gui_clock ()   { return *(int *)GUI_CLOCK; }   // local seconds since midnight

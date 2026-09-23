@@ -444,6 +444,7 @@ int fd_close(struct task *t, int fd) {
     sched_lock();
     if (!(f = fd_get(t, fd))) { sched_unlock(); return -1; }
     t->fds[fd] = 0;
+    t->fdcloexec[fd] = 0;
     file_unref(f);
     sched_unlock();
     return 0;
@@ -459,6 +460,7 @@ int fd_dup2(struct task *t, int oldfd, int newfd) {
     if (t->fds[newfd]) fd_close(t, newfd);
     ++f->refs;
     t->fds[newfd] = (int)f;
+    t->fdcloexec[newfd] = 0;          // a dup is inherited unless asked otherwise
     sched_unlock();
     return newfd;
 }
@@ -470,14 +472,18 @@ void fd_init_console(struct task *t) {
 }
 
 // Inherit the parent's table -- descriptions are shared, not copied,
-// so a redirected fd 1 stays redirected in the child.
+// so a redirected fd 1 stays redirected in the child. A descriptor the
+// parent marked close-on-spawn (SYS_CLOEXEC) is left out: the desktop
+// keeps its end of each terminal's pipes that way, so no shell holds the
+// write end of its own stdin (it would never see end of file) or any
+// other terminal's pipes.
 void fd_clone(struct task *dst, struct task *src) {
     struct file *f;
     int fd;
     sched_lock();
     fd = 0;
     while (fd < FD_MAX) {
-        if ((f = fd_get(src, fd))) {
+        if ((f = fd_get(src, fd)) && !src->fdcloexec[fd]) {
             ++f->refs;
             dst->fds[fd] = (int)f;
         }

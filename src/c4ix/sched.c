@@ -384,6 +384,30 @@ static int sched_reading_console(struct task *t) {
         && t->block_vn->type == VN_CONSOLE;
 }
 
+// Interrupt the foreground job below one task -- a terminal's own Ctrl-C.
+// The console's Ctrl-C starts from the session's top-level program; a
+// terminal window (c4ix-desktop) starts from the shell it runs, and
+// descends the same wait chain from there. Nothing is printed: the caller
+// is the terminal, and it shows ^C in its own window. 1 if a job was
+// cancelled or signalled, 0 if the root was not waiting on anything.
+int sched_intr_below(struct task *root) {
+    struct task *t, *n;
+    int guard;
+    if (!root) return -1;
+    t = root;
+    guard = 0;
+    while (t->state == TS_WAITING && guard < 32) {
+        if (!(n = task_get(t->wait_for))) break;
+        t = n;
+        ++guard;
+    }
+    if (t == root || t->state == TS_ZOMBIE || t->privs != PRIV_USER) return 0;
+    if (ck_has_handler(t, CK_SIGINT)) { ck_kill(t->id, CK_SIGINT); return 1; }
+    t->exitcode = C4IX_EXIT_INTERRUPTED;
+    t->state = TS_ZOMBIE;
+    return 1;
+}
+
 // Kernel tasks are spared (killing init or boot ends everything). The
 // victim becomes a zombie with a distinguishable status, so whoever
 // waits on it learns it was interrupted.

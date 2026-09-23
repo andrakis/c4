@@ -131,7 +131,7 @@ SharedArrayBuffer is an optimisation for later, behind `crossOriginIsolated`.
 
 ## The display device
 
-It sits at **0x0400-0x043F**. Guests check `__c4_info() & C4I_GUI` (0x4000)
+It sits at **0x0400-0x047F**. Guests check `__c4_info() & C4I_GUI` (0x4000)
 before touching it.
 
 | Address | Register | Access | Meaning |
@@ -151,6 +151,8 @@ before touching it.
 | 0x430 | FB | r/w | framebuffer base, 0x00RRGGBB pixels in guest memory |
 | 0x434 | FBPITCH | r/w | bytes per row (0 = width * 4) |
 | 0x438 | FBFLIP | w | (w << 16) \| h: copy, scale to the display, present |
+| 0x43C | FBMODE | r/w | 0 row-major, 1 column-major |
+| 0x440 | CLOCK | r | host local time, seconds since midnight |
 
 The rings use exactly the c4bb mailbox format (`src/c4bb/sim/mbox.js`). The
 first half of the region carries events to the guest, the second half

@@ -182,6 +182,21 @@ export class Display {
           c.fillText(s, words[p], words[p + 1]);
           break;
         }
+        case CMD.TEXT2: {
+          // Text with a face and, for a character grid, a fixed advance:
+          // each character exactly `advance` pixels after the last.
+          const n = Math.max(0, Math.min(words[p + 6], (len - 9) * 4));
+          const font = words[p + 4], adv = words[p + 5];
+          c.fillStyle = css(words[p + 2]);
+          c.font = `${font === 2 ? 'bold ' : ''}${Math.max(4, words[p + 3])}px ` +
+                   (font ? 'Tahoma, "Segoe UI", Verdana, sans-serif' : 'ui-monospace, Consolas, "DejaVu Sans Mono", monospace');
+          c.textBaseline = 'top';
+          let s = '';
+          for (let k = 0; k < n; k++) s += String.fromCharCode((words[p + 7 + (k >> 2)] >>> ((k & 3) * 8)) & 0xff);
+          if (!adv) c.fillText(s, words[p], words[p + 1]);
+          else for (let k = 0; k < n; k++) if (s[k] !== ' ') c.fillText(s[k], words[p] + k * adv, words[p + 1]);
+          break;
+        }
         case CMD.PIXEL:
           c.fillStyle = css(words[p + 2]); c.fillRect(words[p], words[p + 1], 1, 1); break;
         case CMD.PRESENT:

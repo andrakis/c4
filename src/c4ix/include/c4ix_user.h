@@ -18,7 +18,7 @@ enum {
     SYS_DUP = 210, SYS_DUP2 = 211, SYS_PIPE = 212,
     SYS_CYCLES = 213, SYS_TASKINFO = 214,
     SYS_CHDIR = 215, SYS_MKDIR = 216, SYS_GETCWD = 217, SYS_READDIR = 218,
-    SYS_KILL = 219
+    SYS_KILL = 219, SYS_SLEEP = 220
 };
 // taskinfo record, in order: id, parent, state, privs, nsyscalls,
 // ntraps, cycles, then a 16-byte name
@@ -28,7 +28,7 @@ enum {
 // was two words short on a 32-bit host and utaskinfo wrote past the
 // caller's array.
 enum { TASKINFO_WORDS = 24 };
-enum { TS_READY = 1, TS_RUNNING = 2, TS_ZOMBIE = 3, TS_WAITING = 4, TS_BLOCKED = 5 };
+enum { TS_READY = 1, TS_RUNNING = 2, TS_ZOMBIE = 3, TS_WAITING = 4, TS_BLOCKED = 5, TS_SLEEPING = 6 };
 enum { STDIN = 0, STDOUT = 1, STDERR = 2 };
 // open() flags; the low two bits match the host's.
 enum {
@@ -73,6 +73,7 @@ int  umkdir(char *path);
 int  ugetcwd(char *buf, int len);
 int  ureaddir(char *path, int index, char *name);   // 1 dir, 0 file, -1 end
 int  ukill(int pid, int sig);   // SIGTERM/SIGINT/SIGKILL end a task
+int  umsleep(int ms);            // sleep; other tasks run meanwhile
 int *ualloc(int bytes);
 int  getpid();
 

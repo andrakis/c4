@@ -5,10 +5,10 @@ c4ix: task 1 'init' created, scheduling after N cycles
 init: c4ix init v1 on c4m
 init: ping id 2, pong id 3, tasks 4
 ping 0
-ping 1
 pong 0
-ping 2
+ping 1
 pong 1
+ping 2
 pong 2
 init: ping exited 103, pong exited 203
 init: busy done 1 1, preempted 1 1

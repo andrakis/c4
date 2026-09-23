@@ -56,7 +56,7 @@ export async function run(ctx) {
   await focusTerm();
   await tab.type('ps\n');
   ok('the terminal still answers while it draws, and ps lists it',
-     await tab.waitFor(`/c4ix-gui/.test(document.getElementById('terminal').innerText.split('ps').pop())`, 15000),
+     await tab.waitFor(`/c4ix-gui/.test(document.getElementById('terminal').innerText.split('\\nps\\n').pop())`, 15000),
      (await term()).slice(-500));
   await mouseAndKeys('c4ix', ctx);
   const st = await tab.eval('window.c4m.status');

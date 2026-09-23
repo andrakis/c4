@@ -233,6 +233,21 @@ int sys_dispatch(int num, int *args) {
     // for one of those this is simply "cancel that job".
     if (num == SYS_KILL)   return ck_kill(args[0], args[1]);
     if (num == SYS_YIELD)  { sched_yield(); return 0; }
+    // Sleep for args[0] milliseconds. In a trap it is a state change, the
+    // same one C4KE's OP_USER_SLEEP makes (c4ke.c): park on the clock and
+    // let the scheduler run everyone else, and nap when nobody is ready.
+    // It completes on waking, so nothing re-executes.
+    if (num == SYS_SLEEP) {
+        if (!t || args[0] <= 0) return 0;
+        if (!sched_in_trap()) {
+            num = __time() + args[0];
+            while (__time() - num < 0) sched_yield();
+            return 0;
+        }
+        t->ck_wake = __time() + args[0];
+        t->state = TS_SLEEPING;
+        return 0;
+    }
     if (num == SYS_GETPID) return t ? t->id : -1;
     if (num == SYS_SBRK)   return (int)malloc(args[0]);
     if (num == SYS_EXIT)   { task_exit(args[0]); return 0; }

@@ -224,11 +224,24 @@ commands to the host.
       Screenshot checked by eye.
 
 ### M4: `gui` from the C4IX shell
-- [ ] `src/c4ix/user/gui.c` and a sleep syscall for frame pacing
-- [ ] Wired into the Makefile, `build-images.sh` and `c4ix.vfs.txt`
-- [ ] `make test-c4ix` still green
-- [ ] CDP gate: `gui` draws, `ps` in the terminal lists it while it runs, `q`
-      returns to the prompt
+- [x] `src/c4ix/user/gui.c` (the demo's own source, with printf, malloc and
+      the frame delay mapped onto libc4ix) and a sleep syscall:
+      `SYS_SLEEP` (220, `SYS_TOP` moves to 221) parks the task on the clock
+      the way C4KE's OP_USER_SLEEP already did; `umsleep(ms)` in libc4ix.
+      `ps` and `top` now name that state `sleep` instead of `?`.
+- [x] Wired into `C4IX_PROGS`, `build-images.sh` and `c4ix.vfs.txt`
+      (vfsload now 47/47)
+- [x] `make test-c4ix` and `make test-c4ix-c4ke` green; natively
+      `c4ix-gui.c4r` prints `gui: not fitted`. **The x5 pin was re-pinned**:
+      its ping/pong order was an interleaving set by preemption timing
+      (ping 0, ping 1, pong 0, ...), which one more branch in the syscall
+      dispatcher shifted. The new order is the strict alternation the
+      demo's own comment promises; nothing else in the pin changed.
+- [x] CDP gate, `test-web.mjs --gui`, green on the 3060 Ti (2026-09-23):
+      `gui &` from the shell draws; `ps` typed in the terminal while it runs
+      lists `c4ix-gui.c4r` as `sleep`; a click and a key on the canvas reach
+      it; q ends it and the shell carries on. The machine sat at 2% CPU
+      while it drew.
 
 ### M5: polish
 - [ ] Performance pass

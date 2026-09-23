@@ -68,7 +68,8 @@ enum {
     SYS_CYCLES = 213, SYS_TASKINFO = 214,
     SYS_CHDIR = 215, SYS_MKDIR = 216, SYS_GETCWD = 217, SYS_READDIR = 218,
     SYS_KILL = 219,
-    SYS_TOP = 220
+    SYS_SLEEP = 220,
+    SYS_TOP = 221          // one past the last: sched_trap's range check
 };
 // taskinfo fills, in order: id, parent, state, privs, nsyscalls,
 // ntraps, cycles, then the name packed into the remaining words.

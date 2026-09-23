@@ -77,6 +77,20 @@ int plat_time   ()         { return __time(); }
 #endif
 #endif
 
+// ---- the libjs display (-G) ------------------------------------------
+// The normal build only: gui.h reaches for INFO, which the DOS rungs do
+// not have. With -G WxH on a machine that has libjs's display
+// (docs/libjs-design.md), the view is WxH PIXELS instead of terminal
+// cells, drawn into a column-major framebuffer: each screen column is
+// three memcpy calls -- ceiling, wall, floor -- out of columns filled
+// once at start. MCPY is one opcode, so a frame costs the DDA and little
+// else, and the display path is what gets measured. Keys typed on the
+// display feed the same queue the terminal does.
+#ifdef RC_KE
+#include "libjs/guest/gui.h"
+#define RC_GUI 1
+#endif
+
 // ---- fixed point ---------------------------------------------------
 // Q12. Angles are BAM -- 256 units to a turn, held as a Q6 sub-index
 // so the whole circle is 16384 -- which makes wrapping an AND and
@@ -116,6 +130,8 @@ int demo, facing, idle, hud, covered;
 int dem_state, dem_t, dem_n, dem_a0, dem_da, dem_x0, dem_y0, dem_x1, dem_y1;
 int fps_t0, fps_c0, fps_n, fps_val, fps_kc;
 int frame_ms, running;
+int gfx;                  // -G: drawing on the libjs display
+int *gfb, *gceil, *gfloor, *gwall, *gring, *gev;   // framebuffer, source columns, ring, event
 
 int dx4[4] = {  1,  0, -1,  0 };     // 0=E 1=S 2=W 3=N
 int dy4[4] = {  0,  1,  0, -1 };
@@ -258,11 +274,14 @@ void render () {
     if (bot > vh) bot = vh;
     col_top[col] = top;
     col_bot[col] = bot;
-    col_bg[col] = pal[c * 6 + shade_of(g_dist, g_side)];
+    // the display wants the palette slot, the terminal the xterm colour
+    if (gfx) col_bg[col] = c * 6 + shade_of(g_dist, g_side);
+    else col_bg[col] = pal[c * 6 + shade_of(g_dist, g_side)];
     if (top < min_top) min_top = top;
     if (bot > max_bot) max_bot = bot;
   }
 }
+
 
 // ---- prng ----------------------------------------------------------
 // 16-bit xorshift, and the width is the whole point. The obvious LCG
@@ -643,10 +662,89 @@ void fps_tick () {
   ++fps_n;
   if (fps_n < 8) return;
   t = plat_time(); c = plat_cyc();
+#ifdef RC_GUI
+  // On the display, frames per REAL second: the machine's own clock is
+  // cycles over the MHz it claims, which an unpaced host outruns.
+  if (gfx) t = gui_ticks();
+#endif
   if (t != fps_t0) fps_val = (fps_n * 1000) / (t - fps_t0);
   if (c != fps_c0) fps_kc = (c - fps_c0) / (fps_n * 1000);
   fps_t0 = t; fps_c0 = c; fps_n = 0;
 }
+
+#ifdef RC_GUI
+// 0x00RRGGBB for a colour-cube triple (xterm's 6x6x6 levels)
+int cube_level (int v) { if (!v) return 0; return 55 + 40 * v; }
+
+// Source columns: the ceiling and floor as vertical gradients (a screen
+// column takes the slice it needs at the same rows), and one flat column
+// per wall colour, class * 6 + shade, the same palette the terminal uses.
+int gfx_init () {
+  int y, c, s, r, g, b, k, *col;
+  if (!gui_present()) { printf("raycast: -G needs the libjs display, and this machine has none\n"); return 0; }
+  gring = malloc(16384);
+  gev = malloc(4 * sizeof(int));
+  gfb = malloc(vw * vh * sizeof(int));
+  gceil = malloc(vh * sizeof(int));
+  gfloor = malloc(vh * sizeof(int));
+  gwall = malloc(36 * vh * sizeof(int));
+  if (!gring || !gfb || !gceil || !gfloor || !gwall) { printf("raycast: out of memory for -G\n"); return 0; }
+  if (!gui_attach(gring, 16384, 640, 480)) { printf("raycast: the display refused the ring\n"); return 0; }
+  gui_events(GUI_M_KEYS);
+  gui_fb_columns(gfb);
+  for (y = 0; y < vh; ++y) {
+    k = (y * 64) / vh;                                   // 0..63 down the screen
+    gceil[y] = ((8 + k / 3) << 16) | ((6 + k / 4) << 8) | (30 + k);
+    gfloor[y] = ((20 + k) << 16) | ((16 + k) << 8) | (12 + k / 2);
+  }
+  for (c = 1; c <= 5; ++c) {
+    for (s = 0; s < 6; ++s) {
+      r = cube_level((cls_r[c] * (6 - s)) / 6);
+      g = cube_level((cls_g[c] * (6 - s)) / 6);
+      b = cube_level((cls_b[c] * (6 - s)) / 6);
+      col = gwall + (c * 6 + s) * vh;
+      for (y = 0; y < vh; ++y) col[y] = (r << 16) | (g << 8) | b;
+    }
+  }
+  return 1;
+}
+
+// Keys typed on the display go into the terminal's queue; arrows become
+// the letters that move.
+void gfx_keys () {
+  int c, nx;
+  while (gui_poll(gev)) {
+    if (gev[0] != GUI_EV_KEYDOWN) continue;
+    c = gev[2];
+    if (gev[1] == 38) c = 'w';
+    else if (gev[1] == 40) c = 's';
+    else if (gev[1] == 37) c = 'a';
+    else if (gev[1] == 39) c = 'd';
+    if (c <= 0) continue;
+    nx = (kq_tail + 1) % KQ_SZ;
+    if (nx != kq_head) { kq[kq_tail] = c; kq_tail = nx; }
+  }
+}
+
+char gfx_msg[48];
+
+void gfx_frame () {
+  int col, top, bot, *dst;
+  for (col = 0; col < vw; ++col) {
+    dst = gfb + col * vh;
+    top = col_top[col]; bot = col_bot[col];
+    if (top > 0) memcpy(dst, gceil, top * sizeof(int));
+    if (bot > top) memcpy(dst + top, gwall + col_bg[col] * vh, (bot - top) * sizeof(int));
+    if (bot < vh) memcpy(dst + bot, gfloor + bot, (vh - bot) * sizeof(int));
+  }
+  gui_flip(vw, vh);
+  if (hud) {
+    put_num(put_str(gfx_msg, "f/s "), fps_val)[0] = 0;
+    gui_text(10, 8, 0xffffff, 16, gfx_msg);
+  }
+  gui_show();
+}
+#endif
 
 // ---- argv ----------------------------------------------------------
 int isnum (int c) { if (c >= '0') return c <= '9'; return 0; }
@@ -668,6 +766,7 @@ void usage (char *a0) {
   printf("  -s N  maze seed        -n N  render N frames then exit\n");
   printf("  -f N  frame cap in ms  -d/-i  force demo / interactive\n");
   printf("  -K    read keys from stdin instead of the terminal\n");
+  printf("  -G WxH  draw WxH pixels on the libjs display instead (keys there too)\n");
   printf("keys: w a s d move, m minimap, p demo, q quit\n");
   printf("  q is the quit key, not ESC: hosts that embed this terminal\n");
   printf("  intercept ESC for their own console toggle.\n");
@@ -696,7 +795,7 @@ int main (int argc, char **argv) {
       else if (*arg == 'K') in_pipe = 1;
       else if (*arg == 'd') want_demo = 1;
       else if (*arg == 'i') want_inter = 1;
-      else if (*arg == 'g' || *arg == 's' || *arg == 'n' || *arg == 'f') {
+      else if (*arg == 'g' || *arg == 'G' || *arg == 's' || *arg == 'n' || *arg == 'f') {
         c = *arg;
         ++arg;
         if (!*arg) { --ac; ++av; if (!ac) { usage(argv[0]); return 1; } arg = *av; }
@@ -704,6 +803,11 @@ int main (int argc, char **argv) {
           gw = atoi_at(&arg);
           if (*arg == 'x') { ++arg; gh = atoi_at(&arg); } else gh = 25;
           if (gw > 8 && gh > 6) { vw = gw; vh = gh; }
+        }
+        else if (c == 'G') {
+          gw = atoi_at(&arg);
+          if (*arg == 'x') { ++arg; gh = atoi_at(&arg); } else gh = (gw * 3) / 4;
+          if (gw >= 16 && gh >= 16 && gw <= 1024 && gh <= 1024) { vw = gw; vh = gh; gfx = 1; }
         }
         else if (c == 's') seed = atoi_at(&arg);
         else if (c == 'n') nframes = atoi_at(&arg);
@@ -748,6 +852,12 @@ int main (int argc, char **argv) {
     return 1;
   }
 
+#ifdef RC_GUI
+  if (gfx && !gfx_init()) return 1;
+#else
+  if (gfx) { printf("raycast: -G is not in this build\n"); return 1; }
+#endif
+
   if (!seed) seed = plat_time() ^ plat_cyc();
   rng = seed & 65535;
   if (!rng) rng = 1;
@@ -780,7 +890,12 @@ int main (int argc, char **argv) {
   // controlling terminal, which is exactly the bug this comment
   // replaces.
   in_fd = 0 - 1;
-  if (!want_demo) {
+  if (gfx) {
+    // keys come from the display (gfx_keys), never the terminal
+    kq = malloc(KQ_SZ * sizeof(int));
+    kq_head = 0; kq_tail = 0;
+    printf("raycast: %dx%d on the display. Click it, then w a s d or arrows to walk, m for the counter, q to quit.\n", vw, vh);
+  } else if (!want_demo) {
     in_init();
     // Degrade to a screensaver rather than block: with no input there
     // is no way to steer and no way to quit, so a frame count is the
@@ -796,9 +911,12 @@ int main (int argc, char **argv) {
 
   // Clear once, and hide the cursor: with the frame repainting in place
   // a visible cursor would flicker across the picture on every row.
-  printf("\033[2J\033[?25l");
+  if (!gfx) printf("\033[2J\033[?25l");
 
   fps_t0 = plat_time(); fps_c0 = plat_cyc(); fps_n = 0;
+#ifdef RC_GUI
+  if (gfx) fps_t0 = gui_ticks();
+#endif
 
   i = 0;
   while (running) {
@@ -810,6 +928,9 @@ int main (int argc, char **argv) {
       // batched case the queue exists for -- a host whose line
       // discipline hands over "wwwdq" in a single read.
       if (in_fd >= 0) in_poll();
+#ifdef RC_GUI
+      if (gfx) gfx_keys();
+#endif
       c = in_next();
       if (c >= 0) {
         idle = 0;
@@ -850,9 +971,11 @@ int main (int argc, char **argv) {
     if (demo) demo_step();
 
     render();
-    hud_draw();
-    frame_build();
-    plat_emit(frame);
+#ifdef RC_GUI
+    if (gfx) gfx_frame();
+    else
+#endif
+    { hud_draw(); frame_build(); plat_emit(frame); }
     fps_tick();
 
     ++i;
@@ -862,6 +985,13 @@ int main (int argc, char **argv) {
 
   // Put the terminal back as it was found: cursor visible, colour
   // reset, and the prompt on a line of its own below the frame.
+#ifdef RC_GUI
+  if (gfx) {
+    gui_detach();
+    printf("raycast: %d frames, %d f/s at the end\n", i, fps_val);
+    return 0;
+  }
+#endif
   printf("\033[?25h\033[0m\n");
   return 0;
 }

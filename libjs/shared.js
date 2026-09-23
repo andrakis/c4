@@ -103,17 +103,20 @@ export class FbProducer {
     this.slots = [0, 1, 2].map(i => new Int32Array(sab, (FB_HDR + i * this.max) * 4, this.max));
     this.back = 2;
   }
-  // Copy w x h pixels out of guest memory (i32, from byte address base,
-  // pitch bytes a row) and publish them. False if they do not fit.
-  publish(i32, base, pitch, w, h) {
-    if (w * h > this.max) return false;
+  // Copy `lines` runs of `run` words out of guest memory (i32, from byte
+  // address base, pitch bytes apart) and publish them, labelled w and hm
+  // (the height word with the mode in its high bits, gui-device.js).
+  // False if they do not fit.
+  publish(i32, base, pitch, run, lines, w = run, hm = lines) {
+    if (run * lines > this.max) return false;
     const s = this.slots[this.back];
-    for (let y = 0; y < h; y++) {
+    if (pitch === run * 4) s.set(i32.subarray(base >> 2, (base >> 2) + run * lines), 0);
+    else for (let y = 0; y < lines; y++) {
       const row = (base + y * pitch) >> 2;
-      s.set(i32.subarray(row, row + w), y * w);
+      s.set(i32.subarray(row, row + run), y * run);
     }
     this.ctl[4 + this.back * 2] = w;
-    this.ctl[5 + this.back * 2] = h;
+    this.ctl[5 + this.back * 2] = hm;
     this.back = Atomics.exchange(this.ctl, 0, this.back | FRESH) & 3;
     Atomics.add(this.ctl, 2, 1);
     return true;

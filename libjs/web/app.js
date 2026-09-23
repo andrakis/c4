@@ -1,7 +1,7 @@
 // app.js - the c4m.js page: pick a system, boot it, wire the panes.
 //
 // URL parameters:
-//   ?system=c4ix|c4ke|gui-demo|fb-demo   which machine to boot (default c4ix)
+//   ?system=c4ix|c4ke|gui-demo|fb-demo|raycast   which machine to boot (default c4ix)
 //   ?image=URL&disk=URL          any other image and disk instead
 //   ?mhz=N                       how fast the machine claims to be (default 20)
 //   ?fast                        run as fast as the host can, unpaced
@@ -21,6 +21,10 @@ const SYSTEMS = {
   'gui-demo': { label: 'GUI demo (bare machine)', image: `${IMAGES}/gui-demo.c4r`, disk: null, argv: ['gui-demo.c4r'] },
   // Computes every pixel itself, so it claims a faster clock than c4bb's 20 MHz.
   'fb-demo': { label: 'Framebuffer demo (bare machine)', image: `${IMAGES}/fb-demo.c4r`, disk: null, argv: ['fb-demo.c4r'], mhz: 100 },
+  // The raycaster drawing 640x480 on the display, as fast as the host can:
+  // unpaced, so the frame rate is the machine's and the display path's.
+  raycast: { label: 'Raycast 640x480 (bare machine)', image: `${IMAGES}/disk/raycast.c4r`, disk: null,
+             argv: ['raycast.c4r', '31x31', '-G', '640x480'], unpaced: true },
 };
 
 const $ = id => document.getElementById(id);
@@ -56,7 +60,7 @@ const opts = {
   terminal: term,
   display: canvas,
   mhz: Number(params.get('mhz')) || sys.mhz || 20,
-  unpaced: params.has('fast'),
+  unpaced: params.has('fast') || !!sys.unpaced,
   arenaMb: Number(params.get('mem')) || 64,
   shared: params.get('shared') !== '0',
 };

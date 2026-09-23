@@ -64,7 +64,7 @@ export class Display {
     this.shared = true;
     const pump = () => {
       const words = this.ring.read();
-      if (words) this.draw(words);
+      if (words) this.drawCoalesced(words);
     };
     const loop = () => { pump(); requestAnimationFrame(loop); };
     requestAnimationFrame(loop);
@@ -75,17 +75,49 @@ export class Display {
     setInterval(() => { if (document.hidden) pump(); }, 200);
   }
 
+  // One screen refresh's worth of commands, drawn once. Everything before
+  // the last full-screen frame (FB or FBREF) is covered by it, so only the
+  // commands that change state (SIZE, IMGDEF, CLIP, NOCLIP) are replayed
+  // from before it; the rest is drawn from that frame on, and shown with
+  // one present at the end instead of one per PRESENT. What the page shows
+  // after the batch is exactly what drawing every command would show.
+  drawCoalesced(words) {
+    let last = -1;
+    for (let i = 0; i < words.length && words[i] >= 2; i += words[i]) {
+      const t = words[i + 1];
+      if (t === CMD.FB || t === CMD.FBREF) last = i;
+    }
+    this.coalescing = true;
+    if (last > 0) {
+      const keep = [];
+      for (let i = 0; i < last; i += words[i]) {
+        const t = words[i + 1];
+        if (t === CMD.SIZE || t === CMD.IMGDEF || t === CMD.CLIP || t === CMD.NOCLIP)
+          for (let k = 0; k < words[i]; k++) keep.push(words[i + k]);
+      }
+      if (keep.length) this.draw(Int32Array.from(keep));
+      this.draw(words.subarray(last));
+    } else this.draw(words);
+    this.coalescing = false;
+    this.present();
+  }
+
   // Throw away whatever is waiting in the ring (a reset).
   discard() { if (this.ring) this.ring.read(); }
 
   // Draw w x h pixels of 0x00RRGGBB, scaled to the display. Converted to
   // RGBA only when they are new (gen), so a frame drawn twice costs one
   // drawImage the second time.
-  blitPixels(pixels, w, h, gen) {
-    if (!this.fbCanvas || this.fbCanvas.width !== w || this.fbCanvas.height !== h) {
+  // hm is the height word from the device: h | (mode << 16). In
+  // column-major mode (1) the pixels are w columns of h, which is an image
+  // h wide and w tall; a transform that swaps the axes draws it upright.
+  blitPixels(pixels, w, hm, gen) {
+    const mode = hm >>> 16, h = hm & 0xffff;
+    const iw = mode ? h : w, ih = mode ? w : h;
+    if (!this.fbCanvas || this.fbCanvas.width !== iw || this.fbCanvas.height !== ih) {
       this.fbCanvas = document.createElement('canvas');
-      this.fbCanvas.width = w; this.fbCanvas.height = h;
-      this.fbImage = new ImageData(w, h);
+      this.fbCanvas.width = iw; this.fbCanvas.height = ih;
+      this.fbImage = new ImageData(iw, ih);
       this.fbGen = -1;
     }
     if (gen === undefined || gen !== this.fbGen) {
@@ -99,12 +131,19 @@ export class Display {
       if (gen !== undefined) this.fbGen = gen;
     }
     this.ctx.imageSmoothingEnabled = false;
-    this.ctx.drawImage(this.fbCanvas, 0, 0, this.width, this.height);
+    if (mode) {
+      // source (u across, v down) -> display (x = v, y = u), scaled
+      this.ctx.setTransform(0, this.height / h, this.width / w, 0, 0, 0);
+      this.ctx.drawImage(this.fbCanvas, 0, 0);
+      this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+    } else this.ctx.drawImage(this.fbCanvas, 0, 0, this.width, this.height);
+    this.framesBlitted = (this.framesBlitted | 0) + 1;
     this.presentMode = true;
     this.present();
   }
 
   present() {
+    if (this.coalescing) return;          // drawCoalesced presents once at the end
     this.front.drawImage(this.back, 0, 0);
     this.framesDrawn++;
   }
@@ -180,9 +219,9 @@ export class Display {
           break;
         case CMD.FB: {
           // A whole framebuffer, carried in the stream (the message path).
-          const w = words[p], h = words[p + 1];
+          const w = words[p], hm = words[p + 1], h = hm & 0xffff;
           if (w <= 0 || h <= 0 || w * h > len - 4) break;
-          this.blitPixels(words.subarray(p + 2, p + 2 + w * h), w, h);
+          this.blitPixels(words.subarray(p + 2, p + 2 + w * h), w, hm);
           break;
         }
         case CMD.FBREF: {
@@ -191,7 +230,7 @@ export class Display {
           // which is why pixels are only converted when they change.
           if (!this.fb) break;
           const f = this.fb.acquire();
-          if (f.w > 0 && f.h > 0) this.blitPixels(f.pixels, f.w, f.h, f.gen);
+          if (f.w > 0 && (f.h & 0xffff) > 0) this.blitPixels(f.pixels, f.w, f.h, f.gen);
           break;
         }
         case CMD.NOCLIP:

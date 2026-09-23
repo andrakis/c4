@@ -31,7 +31,7 @@ import { keyDown, typeBytes } from './keys.js';
 import { GuiDevice } from './gui-device.js';
 import { RingWriter, FbProducer } from './shared.js';
 
-let vm = null, bootMsg = null, gui = null, ring = null, ringStalls = 0;
+let vm = null, bootMsg = null, gui = null, ring = null, ringStalls = 0, handoffMs = 0;
 // One producer per shared framebuffer for the Worker's whole life: which
 // slot is ours is state the page's side depends on, and a reset must not
 // forget it.
@@ -120,7 +120,9 @@ function tick() {
   }
   busyMs += performance.now() - t;
   flush();
+  const td = performance.now();
   flushDisplay();
+  handoffMs += performance.now() - td;
   if (dev.rawKbd !== lastRaw) { lastRaw = dev.rawKbd; postMessage({ type: 'kbd', raw: lastRaw > 0 }); }
 
   if (r === STOP.HALT) {
@@ -169,7 +171,8 @@ function postStatus(force) {
     missedTraps: vm.missedTraps,
     simMs: vm.dev.simMs(),
     raw: vm.dev.rawKbd > 0,
-    gui: gui ? { ...gui.stats(), shared: !!ring, ringStalls } : null,
+    runMs: Math.round(busyMs),
+    gui: gui ? { ...gui.stats(), shared: !!ring, ringStalls, handoffMs: Math.round(handoffMs) } : null,
   });
   lastStatus = { t: now, cycle: ran, busy: busyMs };
 }

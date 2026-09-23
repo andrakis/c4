@@ -260,12 +260,25 @@ commands to the host.
       wraps and a slow reader, the triple buffer's newest-frame and
       never-the-same-slot rules, and fb-demo end to end. CDP gate green on the
       3060 Ti, isolated, both paths.
-      **Measured, fb-demo unpaced:** both paths deliver 63 guest frames/s and
-      125 page draws/s, and the slowest page frame is 17 ms either way. The
-      Worker is 100% busy computing pixels, so the guest is the bottleneck, not
-      the display path. What the shared path buys: no message or allocation per
-      batch, and stale framebuffer frames are never drawn. Its advantage should
-      only show with a display load heavier than this demo.
+      **Measured, fb-demo unpaced:** both paths equal (63 guest frames/s):
+      the guest computing pixels is the bottleneck.
+      **Measured, raycast `-G 640x480` unpaced** (the heavy load: each column
+      is three memcpy calls out of a column-major framebuffer, FBMODE 1, so a
+      frame is ~518k instructions and 1.2 MB of pixels):
+      - Node, headless, 600 frames: shared **421 f/s**, messages 252 f/s
+        (737 MB through the device queue on the message path, none shared).
+      - Browser, 3060 Ti: shared 280-288 f/s, messages 295-324 f/s. The
+        Worker's own costs are lower on the shared path (flip copies ~30 vs
+        ~95 ms a second, hand-off ~1 vs ~80 ms), but its interpreter ran ~25%
+        slower per second of running (148M vs ~180M cycles/s). Keeping the
+        page's main thread half busy lifted the shared path to 335 f/s,
+        ahead of messages at 325: an idle-looking renderer gets its Worker
+        scheduled slower (on this Windows box; likely efficiency cores or
+        power throttling), which the message path avoids only because its
+        page is busy converting 300 frames a second. Not worked around.
+      - The page coalesces on the shared path: each batch is drawn once from
+        its last full-screen frame and presented once, so it converts about
+        30 frames/s instead of every one the guest makes.
 - [x] Display interrupts: `gui_irq(1)` raises HARD_IRQ(3) through the cycle
       handler when an event arrives. `fb-demo` takes its events that way;
       pinned in `test-gui.mjs` and the CDP gate (2026-09-23)

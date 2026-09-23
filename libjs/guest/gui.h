@@ -28,7 +28,7 @@ enum {
 	GUI_CAPS = 0x400, GUI_W = 0x404, GUI_H = 0x408, GUI_RINGLEN = 0x40c, GUI_RING = 0x410,
 	GUI_BELL = 0x414, GUI_EVMASK = 0x418, GUI_IRQ = 0x41c, GUI_MOUSE = 0x420,
 	GUI_BUTTONS = 0x424, GUI_TICKS = 0x428, GUI_DROPPED = 0x42c,
-	GUI_FB = 0x430, GUI_FBPITCH = 0x434, GUI_FBFLIP = 0x438,
+	GUI_FB = 0x430, GUI_FBPITCH = 0x434, GUI_FBFLIP = 0x438, GUI_FBMODE = 0x43c,
 	C4I_GUI = 0x4000
 };
 // commands
@@ -223,7 +223,16 @@ int gui_poll (int *ev) {
 // display, scaled to fill it, and shows it; draw on top with the
 // commands above and gui_show again if you want an overlay.
 void gui_fb (int *pixels, int pitch) {
+	*(int *)GUI_FBMODE = 0;
 	*(int *)GUI_FBPITCH = pitch;
+	*(int *)GUI_FB = (int)pixels;
+}
+// Column-major pixels: column x is h consecutive words at
+// pixels + x * h, so a program that draws in columns can fill each one
+// with memcpy. gui_flip(w, h) as usual; the display turns it upright.
+void gui_fb_columns (int *pixels) {
+	*(int *)GUI_FBMODE = 1;
+	*(int *)GUI_FBPITCH = 0;
 	*(int *)GUI_FB = (int)pixels;
 }
 void gui_flip (int w, int h) {

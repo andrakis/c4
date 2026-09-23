@@ -88,10 +88,30 @@ export async function run(ctx) {
     console.log(`  (${label}: guest flips ${r.flips}/s, page draws ${r.drawn}/s, worker ${r.busy}% busy, slowest page frame ${r.worst} ms)`);
     return r;
   };
-  const sh = await measure('shared, unpaced', 'system=fb-demo&fast');
-  const msg = await measure('messages, unpaced', 'system=fb-demo&fast&shared=0');
+  const sh = await measure('fb-demo, shared, unpaced', 'system=fb-demo&fast');
+  const msg = await measure('fb-demo, messages, unpaced', 'system=fb-demo&fast&shared=0');
   ok('unpaced, the shared path is taken and ?shared=0 turns it off', sh.shared === true && msg.shared === false);
   ok('unpaced, both paths keep drawing', sh.drawn > 10 && msg.drawn > 10);
+  ok('no page errors', tab.errors.length === 0, tab.errors.join('\n       '));
+
+  // ---- raycast at 640x480, flat out: the display path is the load -------
+  console.log('test-web: raycast -G 640x480');
+  tab.errors.length = 0;
+  const rs = await measure('raycast, shared', 'system=raycast');
+  ok('raycast draws on the display', rs.drawn > 10 && rs.flips > 10);
+  {
+    const h1 = await tab.eval(canvasHash);
+    await sleep(300);
+    ok('the view moves', h1 !== await tab.eval(canvasHash));
+    await shot('raycast');
+    await tab.eval("document.getElementById('display').focus()");
+    await tab.key('q');
+    ok('q on the display quits it', await waitTerm('raycast: ', 15000) && await tab.waitFor('window.c4m.exited && window.c4m.exited.status === 0', 15000),
+       (await term()).slice(-200));
+  }
+  const rm = await measure('raycast, messages', 'system=raycast&shared=0');
+  ok('raycast on the message path still draws', rm.drawn > 1);
+  console.log(`  (raycast: shared ${rs.flips} guest f/s vs messages ${rm.flips}; slowest page frame ${rs.worst} vs ${rm.worst} ms)`);
   ok('no page errors', tab.errors.length === 0, tab.errors.join('\n       '));
 
   // ---- M4: a C4IX program ----------------------------------------------

@@ -25,6 +25,15 @@
 //   0x434 FBPITCH  r/w  bytes from one row to the next (0 = width * 4)
 //   0x438 FBFLIP   w    (w << 16) | h: copy that many pixels to the display,
 //                       scaled to fill it, then present
+//   0x43C FBMODE   r/w  0 = row-major (pixel x,y at base + y*pitch + x*4);
+//                       1 = column-major (at base + x*pitch + y*4, pitch
+//                       defaulting to h * 4), so a program that draws in
+//                       columns -- a raycaster -- can fill each one with a
+//                       single memcpy. The page transposes with a canvas
+//                       transform, which costs nothing.
+//
+// In the frames the host makes (FB, FBREF) the height word carries the
+// mode in bits 16 and up: h | (mode << 16).
 //
 // The bell is synchronous: writing it drains the command ring into a
 // host-side queue on the spot, inside the store instruction. So a guest
@@ -41,7 +50,7 @@ import { HostMailbox } from '../src/c4bb/sim/mbox.js';
 export const GUI = {
   CAPS: 0x400, W: 0x404, H: 0x408, RINGLEN: 0x40c, RING: 0x410, BELL: 0x414,
   EVMASK: 0x418, IRQ: 0x41c, MOUSE: 0x420, BUTTONS: 0x424, TICKS: 0x428, DROPPED: 0x42c,
-  FB: 0x430, FBPITCH: 0x434, FBFLIP: 0x438,
+  FB: 0x430, FBPITCH: 0x434, FBFLIP: 0x438, FBMODE: 0x43c,
 };
 export const CMD = {
   CLEAR: 1, RECT: 2, RECTO: 3, LINE: 4, CIRCLE: 5, TEXT: 6, PIXEL: 7, PRESENT: 8,
@@ -72,7 +81,7 @@ export class GuiDevice {
     this.queue = [];                     // drained command words: [len, type, ...payload]
     this.chunks = [];                    // earlier queues and framebuffer frames, in order
     this.queued = 0;                     // words in chunks
-    this.fbBase = 0; this.fbPitch = 0; this.flips = 0;
+    this.fbBase = 0; this.fbPitch = 0; this.fbMode = 0; this.flips = 0; this.flipMs = 0;
     this.fbShared = opts.fbShared || null;   // shared.js FbProducer, when the page is isolated
     this.sizeReq = null;
     this.t0 = Date.now();
@@ -89,6 +98,7 @@ export class GuiDevice {
       case GUI.CAPS: return 1 | 2 | 4 | 8;
       case GUI.FB: return this.fbBase;
       case GUI.FBPITCH: return this.fbPitch;
+      case GUI.FBMODE: return this.fbMode;
       case GUI.W: return this.w;
       case GUI.H: return this.h;
       case GUI.RINGLEN: return this.ringLen;
@@ -129,6 +139,7 @@ export class GuiDevice {
       case GUI.EVMASK: this.evmask = v | 0; return;
       case GUI.FB: this.fbBase = v | 0; return;
       case GUI.FBPITCH: this.fbPitch = v | 0; return;
+      case GUI.FBMODE: this.fbMode = v & 1; return;
       case GUI.FBFLIP: this.flip((v >>> 16) & 0xffff, v & 0xffff); return;
       case GUI.IRQ: this.irqOn = v ? 1 : 0; return;
       default: return;
@@ -186,16 +197,26 @@ export class GuiDevice {
   // queued behind every command written before it. The page draws it
   // scaled to the display and presents.
   flip(w, h) {
+    const t0 = performance.now();
+    try { this.flipInner(w, h); } finally { this.flipMs += performance.now() - t0; }
+  }
+
+  flipInner(w, h) {
     this.pull();
     if (!w || !h || !this.fbBase) return;
-    const pitch = this.fbPitch || w * 4;
+    // Copied as `lines` runs of `run` words, `pitch` bytes apart: rows for
+    // row-major, columns for column-major.
+    const mode = this.fbMode;
+    const lines = mode ? w : h, run = mode ? h : w;
+    const pitch = this.fbPitch || run * 4;
     const base = this.fbBase;
-    if ((base & 3) || (pitch & 3) || base < 0x1000 || base + (h - 1) * pitch + w * 4 > this.arena.size) return;
+    const hm = h | (mode << 16);
+    if ((base & 3) || (pitch & 3) || base < 0x1000 || base + (lines - 1) * pitch + run * 4 > this.arena.size) return;
     const n = w * h;
-    // Shared path: one copy into the triple buffer, and a two-word marker
-    // in the command stream where the frame belongs.
-    if (this.fbShared && this.fbShared.publish(this.arena.i32, base, pitch, w, h)) {
-      this.queue.push(4, CMD.FBREF, w, h);
+    // Shared path: one copy into the triple buffer, and a small marker in
+    // the command stream where the frame belongs.
+    if (this.fbShared && this.fbShared.publish(this.arena.i32, base, pitch, run, lines, w, hm)) {
+      this.queue.push(4, CMD.FBREF, w, hm);
       this.flips++;
       return;
     }
@@ -206,11 +227,11 @@ export class GuiDevice {
     const last = this.chunks[this.chunks.length - 1];
     if (last && last[1] === CMD.FB) { this.chunks.pop(); this.queued -= last.length; this.skippedFlips = (this.skippedFlips | 0) + 1; }
     const c = new Int32Array(4 + n);
-    c[0] = 4 + n; c[1] = CMD.FB; c[2] = w; c[3] = h;
+    c[0] = 4 + n; c[1] = CMD.FB; c[2] = w; c[3] = hm;
     const i32 = this.arena.i32;
-    for (let y = 0; y < h; y++) {
+    for (let y = 0; y < lines; y++) {
       const row = (base + y * pitch) >> 2;
-      c.set(i32.subarray(row, row + w), 4 + y * w);
+      c.set(i32.subarray(row, row + run), 4 + y * run);
     }
     this.chunks.push(c); this.queued += c.length;
     this.flips++;
@@ -253,6 +274,6 @@ export class GuiDevice {
   stats() {
     return { w: this.w, h: this.h, attached: !!this.mbox, commands: this.commands,
              presents: this.presents, events: this.events, dropped: this.dropped,
-             lostCommands: this.lostCommands, flips: this.flips };
+             lostCommands: this.lostCommands, flips: this.flips, flipMs: Math.round(this.flipMs) };
   }
 }

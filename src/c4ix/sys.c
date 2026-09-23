@@ -252,6 +252,9 @@ int sys_dispatch(int num, int *args) {
         return 1;
     }
     if (num == SYS_INTR) return sched_intr_below(task_get(args[0]));
+    if (num == SYS_STAT)   return vfs_stat((char *)args[0], (int *)args[1]);
+    if (num == SYS_UNLINK) return vfs_unlink((char *)args[0]);
+    if (num == SYS_RENAME) return vfs_rename((char *)args[0], (char *)args[1]);
     if (num == SYS_CLOEXEC) {
         if (!t || !fd_get(t, args[0])) return -1;
         t->fdcloexec[args[0]] = args[1] ? 1 : 0;

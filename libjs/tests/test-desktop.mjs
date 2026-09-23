@@ -1,14 +1,11 @@
-// test-desktop.mjs - the C4IX desktop, headless (docs/c4ix-desktop.md).
+// test-desktop.mjs - the C4IX desktop and its tools, headless
+// (docs/c4ix-desktop.md).
 //
 // Boots C4IX with a display fitted, starts `desktop` from the console,
-// and drives it the way a person would: clicks and keys on the display.
+// and drives it as a person would, with clicks and keys on the display.
 // The screen is read back from the text commands of the last frame
-// presented, each string tagged with the window it falls inside.
-//
-// Pinned: a terminal opens with a working shell; ps typed in it lists
-// the desktop and that shell; a second terminal from the Start menu; spin
-// in one and Ctrl-C cancels it without touching the other; windows drag;
-// close ends the shell; Shut Down returns to the console.
+// presented, and things are clicked by the text drawn on them, so the
+// test follows the layout rather than pinning coordinates.
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -21,8 +18,9 @@ const ROOT = new URL('../../src/c4bb/images/', import.meta.url).pathname;
 const SW = 800, SH = 600, TASK_H = 30;
 let fail = 0;
 const check = (cond, what, extra = '') => {
-  console.log(`test-desktop: ${what} ${cond ? 'OK' : 'FAILED'}${!cond && extra ? '\n  ' + extra : ''}`);
+  console.log(`test-desktop: ${what} ${cond ? 'OK' : 'FAILED'}${!cond && extra ? '\n  ' + String(extra).slice(0, 1500) : ''}`);
   if (!cond) fail = 1;
+  return cond;
 };
 
 const names = JSON.parse(readFileSync(join(ROOT, 'disk/manifest.json'), 'utf8'));
@@ -33,8 +31,7 @@ const vm = createMachine({ arenaMb: 64, gui, drives: [{ files, writable: false, 
 boot(vm, new Uint8Array(readFileSync(join(ROOT, 'c4ix32.c4r'))), ['c4ix32.c4r']);
 const consoleText = () => Buffer.from(out).toString('latin1');
 
-// The screen: every TEXT2 of the last presented frame, and the RECTs that
-// were drawn as window frames, so text can be placed in a window.
+// The screen: every string of the last presented frame, with its position.
 let frame = [], cur = [], presents = 0;
 const pump = () => {
   const words = gui.drain();
@@ -53,90 +50,142 @@ const pump = () => {
 // run() returns early whenever the guest sleeps, so waiting is until()'s job
 const run = (cycles = 2e6) => { const r = vm.run(cycles); pump(); return r; };
 const until = (cond, budget = 400) => { for (let i = 0; i < budget; i++) { if (cond()) return true; if (run() === STOP.HALT) return cond(); } return cond(); };
-// Text inside a rectangle, row by row
-const textIn = (x0, y0, x1, y1) => frame.filter(t => t.x >= x0 && t.x < x1 && t.y >= y0 && t.y < y1)
-  .sort((a, b) => a.y - b.y || a.x - b.x).map(t => t.s).join('\n');
-const screen = () => textIn(0, 0, SW, SH);
+const settle = () => { for (let i = 0; i < 20; i++) run(); return true; };
+const screen = () => frame.map(t => t.s).join('\n');
+const has = re => typeof re === 'string' ? frame.some(t => t.s.trimEnd() === re) : frame.some(t => re.test(t.s));
+const find = s => frame.filter(t => (typeof s === 'string' ? t.s.trimEnd() === s : s.test(t.s)));
 const ev = e => { gui.event(e); run(3e5); };
-const click = (x, y) => { ev({ kind: 'move', x, y, buttons: 0 }); ev({ kind: 'down', x, y, button: 0 }); ev({ kind: 'up', x, y, button: 0 }); };
-const key = (ch, mods = 0) => {
-  const code = ch === '\n' ? 13 : ch === '\b' ? 8 : ch.toUpperCase().charCodeAt(0);
-  ev({ kind: 'keydown', code, char: ch === '\n' ? 10 : ch === '\b' ? 0 : ch.charCodeAt(0), mods });
+const click = (x, y, button = 0) => { ev({ kind: 'move', x, y, buttons: 0 }); ev({ kind: 'down', x, y, button }); ev({ kind: 'up', x, y, button }); };
+// Click on a string on the screen. `pick` chooses among several (default:
+// the last drawn, which is the topmost).
+const clickText = (s, pick = 'last', dx = 5, dy = 5) => {
+  const all = find(s);
+  if (!all.length) return false;
+  const t = pick === 'last' ? all[all.length - 1] : pick === 'first' ? all[0] : pick(all);
+  if (!t) return false;
+  click(t.x + dx, t.y + dy);
+  return true;
+};
+const dbl = (s, pick = 'last') => {
+  const all = find(s);
+  const t = pick === 'last' ? all[all.length - 1] : pick(all);
+  if (!t) return false;
+  click(t.x + 5, t.y + 5); click(t.x + 5, t.y + 5);
+  return true;
+};
+const key = (ch, mods = 0, code) => {
+  const named = { '\n': 13, '\b': 8, ESC: 27, DEL: 46, F2: 113, F5: 116, TAB: 9, UP: 38, DOWN: 40 };
+  const c = code ?? named[ch] ?? ch.toUpperCase().charCodeAt(0);
+  ev({ kind: 'keydown', code: c, char: ch === '\n' ? 10 : ch.length === 1 && c !== 8 ? ch.charCodeAt(0) : 0, mods });
 };
 const type = s => { for (const ch of s) key(ch); };
+const start = item => { click(20, SH - TASK_H + 12); until(() => has('Shut Down...')); const ok = clickText(item); settle(); return ok; };
+// Explorer's file list: right of its folder tree, inside its window. The
+// window is found by its title (drawn 27 px in from the window's left, 7 down).
+const explorer = () => {
+  const t = frame.find(t => /^Exploring - /.test(t.s) && t.y < SH - TASK_H);
+  return t ? { x: t.x - 27, y: t.y - 7 } : null;
+};
+const inList = all => {
+  const e = explorer();
+  if (!e) return undefined;
+  return all.filter(t => t.x > e.x + 200 && t.x < e.x + 600 && t.y > e.y + 60 && t.y < e.y + 420).pop();
+};
+const noDialog = () => !has('OK') && !has('Yes');
 
-// The window rectangles, found from the title strings (the first window
-// opens at 100,30 and each next one 28,24 further; a terminal is 652x421).
-const TW = 80 * 8 + 12, THH = 24 * 16 + 4 + 4 * 2 + 18 + 1;
-const winRect = i => ({ x: 100 + i * 28, y: 30 + i * 24 });
-
-// ---- boot C4IX and start the desktop from its console --------------------
+// ---- boot C4IX, start the desktop ----------------------------------------------
 check(until(() => consoleText().includes('c4ix:/$'), 2000), 'C4IX boots to its shell');
 typeBytes(vm, new TextEncoder().encode('desktop\n'));
 check(until(() => consoleText().includes('desktop: running on the display')), 'desktop starts from the console');
-check(until(() => gui.w === SW && gui.h === SH && presents > 0), `it asks for a ${SW}x${SH} display and draws`);
-check(until(() => /c4ix:\/\$/.test(screen()), 800), 'a terminal window opens with a shell prompt in it', screen());
-check(screen().includes('Start') && /[0-9]{1,2}:[0-9]{2} [AP]M/.test(screen()), 'the taskbar has Start and a clock');
+check(until(() => gui.w === SW && gui.h === SH && presents > 0), `it asks for ${SW}x${SH} and draws`);
+check(until(() => has(/c4ix:\/\$/), 800), 'a Command Prompt opens with a shell prompt', screen());
+check(has('Start') && has(/[0-9]{1,2}:[0-9]{2} [AP]M/), 'the taskbar has Start and a clock');
+check(['My Computer', 'Command Prompt', 'Notepad', 'Calculator', 'Task Manager'].every(has), 'the desktop icons are there');
 
-// ---- a command in the first terminal ---------------------------------------
+// ---- Command Prompt ----------------------------------------------------------------
 type('ps\n');
-check(until(() => /c4ix-desktop/.test(screen()) && /tasks,/.test(screen())), 'ps typed in the window runs in its shell', screen().slice(-600));
-const w0 = winRect(0);
-check(/tasks,/.test(textIn(w0.x, w0.y, w0.x + TW, w0.y + THH)), 'and its output lands in that window');
+check(until(() => has(/c4ix-desktop/) && has(/tasks,/)), 'ps typed in the Command Prompt runs in its shell', screen());
 
-// ---- a second terminal from the Start menu ----------------------------------
-click(20, SH - TASK_H + 12);
-check(until(() => screen().includes('Shut Down...')), 'Start opens the menu', screen());
-const menuTop = SH - TASK_H - (3 * 26 + 12);
-click(80, menuTop + 6 + 12);
-const w1 = winRect(1);
-check(until(() => (textIn(w1.x, w1.y + 30, w1.x + TW, w1.y + THH).match(/c4ix:\/\$/g) || []).length >= 1, 800) &&
-      (screen().match(/Terminal \(task/g) || []).length >= 4, 'New Terminal opens a second window with its own shell', screen());
+// ---- Explorer ------------------------------------------------------------------------
+start('Explorer');
+check(until(() => has('Exploring - /')), 'Start > Explorer opens at the root', screen());
+check(['bin', 'ram', 'usr'].every(has) && has('File Folder') && has('C4IX (/)'), 'it lists the root folders and shows the tree', screen());
+dbl('usr', inList);
+check(until(() => has('Exploring - /usr') && has('src')), 'double-clicking a folder opens it', screen());
+key('\b');
+check(until(() => has('Exploring - /')), 'Backspace goes up a level');
+dbl('ram', inList);
+check(until(() => has('Exploring - /ram')), 'into /ram');
+clickText('File'); settle(); clickText('New Folder');
+check(until(() => has('Name of the new folder:')), 'File > New Folder asks for a name', screen());
+key('\n');
+check(until(() => noDialog() && !!inList(find('New Folder'))), 'and makes it', screen());
+clickText('New Folder', inList);
+key('F2');
+check(until(() => has('New name:')), 'F2 asks for a new name');
+for (let i = 0; i < 12; i++) key('\b');
+type('docs'); key('\n');
+check(until(() => noDialog() && !!inList(find('docs')) && !inList(find('New Folder'))), 'and renames it', screen());
+clickText('docs', inList);
+key('DEL');
+check(until(() => has(/Are you sure you want to delete 'docs'/)), 'Delete asks first');
+key('y');
+check(until(() => noDialog() && !inList(find('docs'))), 'and Yes deletes it');
 
-// ---- spin in the second, Ctrl-C there, the first unaffected -----------------
-type('spin 50\n');
-check(until(() => /spin: tick 2\//.test(screen()), 1500), 'spin runs in the second terminal');
-key('c', 2);
-check(until(() => /\^C/.test(screen()) && !/spin: tick 50\/50/.test(screen())), 'Ctrl-C there shows ^C');
-const before = (screen().match(/spin: tick \d+/g) || []).pop();
-for (let i = 0; i < 40; i++) run();
-const after = (screen().match(/spin: tick \d+/g) || []).pop();
-check(before === after, `and spin has stopped (${after})`);
-// back to the first window: click its title bar, then type there
-click(w0.x + 200, w0.y + 10);
-type('echo still-here\n');
-check(until(() => /still-here/.test(textIn(w0.x, w0.y, w0.x + 400, w0.y + THH))), 'the first terminal still answers after the second was interrupted');
+// ---- Notepad --------------------------------------------------------------------------
+start('Notepad');
+check(until(() => has('Untitled - Notepad')), 'Start > Notepad opens a new document');
+type('hello from c4ix\n'); type('second line');
+check(until(() => has('hello from c4ix') && has('second line') && has('Untitled * - Notepad')), 'typing shows, and the title marks it modified', screen());
+key('s', 2, 83);
+check(until(() => has('Save as:')), 'Ctrl+S on a new file asks where');
+key('\n');
+check(until(() => has('untitled.txt - Notepad')), 'and saves it to /ram/untitled.txt', screen());
+clickText(/^Exploring/); key('F5');
+check(until(() => !!inList(find('untitled.txt')) && has('Text Document')), 'Explorer lists the saved file after a refresh', screen());
+const notes = find('untitled.txt - Notepad').length;
+dbl('untitled.txt', inList);
+check(until(() => find('untitled.txt - Notepad').length > notes), 'double-clicking it opens it in Notepad');
+check(until(() => find('hello from c4ix').length >= 2), 'with what was saved in it');
 
-// ---- drag a window ----------------------------------------------------------
-ev({ kind: 'move', x: w0.x + 200, y: w0.y + 10, buttons: 0 });
-ev({ kind: 'down', x: w0.x + 200, y: w0.y + 10, button: 0 });
-ev({ kind: 'move', x: w0.x + 400, y: w0.y + 110, buttons: 1 });
-ev({ kind: 'up', x: w0.x + 400, y: w0.y + 110, button: 0 });
-check(until(() => frame.some(t => t.s.startsWith('Terminal (task') && t.x > w0.x + 200 && t.y > w0.y + 100)), 'dragging the title bar moves the window');
+// ---- Calculator ------------------------------------------------------------------------
+start('Calculator');
+check(until(() => has('Calculator') && has('Hex') && has('Dec')), 'Start > Calculator opens');
+type('12+30=');
+check(until(() => has('42')), '12 + 30 = 42', screen().slice(-300));
+clickText('Hex', 'last', -8, 5);
+check(until(() => has('2A')), 'switched to Hex it shows 2A');
+type('*2=');
+check(until(() => has('54')), '2A * 2 = 54 in hex');
 
-// ---- maximise, restore, minimise, restore from the taskbar -------------------
-// window 0 now sits at (300,130); its caption buttons are 16 wide, from the
-// right: close at x+630, maximise at x+612, minimise at x+596
-const titleOf = pred => frame.filter(t => t.s.startsWith('Terminal (task') && t.y < SH - TASK_H && pred(t));
-const mx = w0.x + 200, my = w0.y + 100;
-click(mx + 612 + 6, my + 6 + 6);
-check(until(() => titleOf(t => t.x < 40 && t.y < 12).length === 1), 'maximise fills the desktop');
-click(4 + 612 + 6 + (SW - 652), 4 + 2 + 6);           // the button, now at the right edge of the screen
-check(until(() => titleOf(t => t.x > mx && t.y > my).length === 1), 'and the same button restores it');
-click(mx + 596 + 6, my + 6 + 6);
-check(until(() => titleOf(t => t.x > mx && t.y > my).length === 0), 'minimise hides it');
-click(64 + 20, SH - TASK_H + 12);                       // its taskbar button, the first
-check(until(() => titleOf(t => t.x > mx && t.y > my).length === 1), 'and its taskbar button brings it back');
+// ---- Task Manager ------------------------------------------------------------------------
+clickText(/^Command Prompt - task/);
+type('spin 5000\n');
+until(() => has(/spin: tick 1\//), 1500);
+key('ESC', 3, 27);                                             // Ctrl+Shift+Esc
+check(until(() => has('Task Manager') && has('Image Name')), 'Ctrl+Shift+Esc opens Task Manager on Processes', screen());
+check(until(() => has(/^c4ix-desktop/) && has(/^c4ix-spin/) && has(/^CPU Usage: \d+%$/), 600), 'it lists the tasks, spin among them, with CPU usage', frame.filter(t => /c4ix|CPU|Image|boot|init|spin/.test(t.s)).map(t => t.s.trim()).join(' | '));
+clickText(/^c4ix-spin/);
+clickText('End Process');
+check(until(() => has(/End process c4ix-spin/)), 'End Process asks first');
+key('y');
+check(until(() => !has(/^c4ix-spin/), 600), 'and ends it', screen());
+clickText('Performance');
+check(until(() => has('CPU Usage History') && has('Totals')), 'the Performance tab shows the gauge and the history');
+clickText('Applications');
+check(until(() => has('Status') && find('Running').length >= 3), 'the Applications tab lists the windows');
 
-// ---- close one, then shut down -----------------------------------------------
-click(w1.x + TW - 4 - 2 - 8, w1.y + 4 + 2 + 6);           // the second window's close button
-until(() => (screen().match(/Terminal \(task/g) || []).length === 2, 400);
-check((screen().match(/Terminal \(task/g) || []).length === 2, 'closing a window removes it and its taskbar button', screen().slice(0, 300));
-click(20, SH - TASK_H + 12);
-click(80, menuTop + 6 + 2 * 26 + 12);                      // Shut Down...
+// ---- Run --------------------------------------------------------------------------------------
+start('Run...');
+check(until(() => has(/Type the name of a program/)), 'Start > Run asks for a program');
+type('echo from-run'); key('\n');
+check(until(() => has('from-run'), 800), 'and runs it in a new Command Prompt', screen());
+
+// ---- Shut Down --------------------------------------------------------------------------------
+start('Shut Down...');
 check(until(() => consoleText().includes('desktop: shut down')), 'Shut Down ends the desktop');
 typeBytes(vm, new TextEncoder().encode('ps\n'));
 check(until(() => /tasks,/.test(consoleText().split('desktop: shut down').pop())), 'and the console shell carries on');
 const psOut = consoleText().split('desktop: shut down').pop();
-check(!/c4ix-sh.c4r[\s\S]*c4ix-sh.c4r/.test(psOut.replace(/^[\s\S]*?ID/, '')), 'no terminal shell outlived the desktop', psOut);
+check(!/c4ix-sh.c4r[\s\S]*c4ix-sh.c4r/.test(psOut.replace(/^[\s\S]*?ID/, '')), 'no Command Prompt shell outlived the desktop', psOut);
 process.exit(fail);

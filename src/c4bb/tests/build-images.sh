@@ -254,7 +254,7 @@ cp src/c4ke/include/service.h $DISK/
 # modules compiled by 32-bit c4lc (its own preprocessor), linked by
 # the 32-bit c4rlink; userland links against libc4ix
 C4IX_MODS="boot console va host sl4b task sched vfs sys c4ke loader init"
-C4IX_USER="hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt gui desktop"
+C4IX_USER="hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt gui"
 # c4sp arena, in cells. 8000000 was a guess with no measurement behind
 # it, and at 21 bytes a cell (32-bit: gc.h/cell.h) that is ~168MB --
 # more than c4bb has (32MB default), so nothing built this way could
@@ -284,6 +284,15 @@ if [ ! -f $OUT/c4ix32.c4r ] || \
         ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix/include src/c4ix/user/$u.c .c4bb_ix_u.c4o > /dev/null
         ./c4rlink32 .c4bb_ix_u.c4o .c4bb_libc4ix32.c4l -o $DISK/c4ix-$u.c4r > /dev/null
     done
+    # the desktop: several modules, linked together (docs/c4ix-desktop.md)
+    dobjs=""
+    for m in wm ui term files taskmgr apps; do
+        ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix/include -I src/c4ix/user/desktop \
+            src/c4ix/user/desktop/$m.c .c4bb_ix_d_$m.c4o > /dev/null
+        dobjs="$dobjs .c4bb_ix_d_$m.c4o"
+    done
+    ./c4rlink32 $dobjs .c4bb_libc4ix32.c4l -o $DISK/c4ix-desktop.c4r > /dev/null
+    rm -f $dobjs .c4bb_ix_d_*.pp.c
     # the VFS loader: c4ix-vfsload.c4r, NOT plain vfsload.c4r - C4KE
     # has its own boot-time loader of the same name on this shared
     # disk (src/c4ke/bin/vfsload.c), and the two would otherwise
@@ -308,6 +317,8 @@ cp src/c4bb/fs/c4ix.vfs.txt $DISK/
 for n in $C4IX_USER; do
     cp src/c4ix/user/$n.c $DISK/c4ix-$n.c
 done
+# the desktop's modules, one after another, as its one source file
+cat src/c4ix/user/desktop/desktop.h src/c4ix/user/desktop/*.c > $DISK/c4ix-desktop.c
 cp src/c4ix/c4ix.h $DISK/c4ix.h
 cp src/c4ix/include/c4ix_user.h $DISK/c4ix_user.h
 

@@ -69,7 +69,8 @@ enum {
     SYS_CHDIR = 215, SYS_MKDIR = 216, SYS_GETCWD = 217, SYS_READDIR = 218,
     SYS_KILL = 219,
     SYS_SLEEP = 220, SYS_AVAIL = 221, SYS_INTR = 222, SYS_CLOEXEC = 223,
-    SYS_TOP = 224          // one past the last: sched_trap's range check
+    SYS_STAT = 224, SYS_UNLINK = 225, SYS_RENAME = 226,
+    SYS_TOP = 227          // one past the last: sched_trap's range check
 };
 // taskinfo fills, in order: id, parent, state, privs, nsyscalls,
 // ntraps, cycles, then the name packed into the remaining words.
@@ -158,6 +159,9 @@ void         vfs_init();
 struct vnode *vfs_lookup(char *path);
 struct vnode *vfs_ramfile(char *path);   // find or create the file
 struct vnode *vfs_mkdir(char *path);
+int          vfs_stat(char *path, int *out);     // out[0] 1 dir, 2 file, 3 other; out[1] bytes
+int          vfs_unlink(char *path);
+int          vfs_rename(char *path, char *newname);
 struct vnode *vfs_root();
 struct vnode *vfs_cwd();
 int          vfs_chdir(char *path);

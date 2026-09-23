@@ -223,6 +223,64 @@ struct vnode *vfs_ramfile(char *path) {
     return vn;
 }
 
+// What a path is, for a file browser: out[0] is 1 for a directory, 2 for
+// a RAM file, 3 for anything else (the console, a pipe); out[1] is the
+// size in bytes of a RAM file. -1 when there is no such entry.
+int vfs_stat(char *path, int *out) {
+    struct vnode *vn;
+    sched_lock();
+    if (!(vn = vfs_walk(path, 0, 0))) { sched_unlock(); return -1; }
+    out[0] = vn->type == VN_DIR ? 1 : (vn->type == VN_RAMFILE ? 2 : 3);
+    out[1] = vn->type == VN_RAMFILE ? vn->size : 0;
+    sched_unlock();
+    return 0;
+}
+
+// Take an entry out of its directory. A directory must be empty, and a
+// file must not be open. A removed file's storage is freed; a removed
+// directory's vnode is not, because some task may still have it as its
+// working directory -- it lives on, detached, and costs one small struct.
+int vfs_unlink(char *path) {
+    struct vnode *vn, *p, *q;
+    sched_lock();
+    vn = vfs_walk(path, 0, 0);
+    if (!vn || vn == rootdir || !vn->parent || vn->refs > 0 ||
+        (vn->type == VN_DIR && vn->child) ||
+        (vn->type != VN_DIR && vn->type != VN_RAMFILE)) { sched_unlock(); return -1; }
+    p = vn->parent;
+    if (p->child == vn) p->child = vn->next;
+    else {
+        q = p->child;
+        while (q && q->next != vn) q = q->next;
+        if (!q) { sched_unlock(); return -1; }
+        q->next = vn->next;
+    }
+    vn->next = 0;
+    if (vn->type == VN_RAMFILE) {
+        if (vn->data) free(vn->data);
+        sl4b_free(vn_cache, (char *)vn);
+    }
+    sched_unlock();
+    return 0;
+}
+
+// A new name in the same directory. NEWNAME is one component: no '/',
+// not "." or "..", and not a name the directory already has.
+int vfs_rename(char *path, char *newname) {
+    struct vnode *vn;
+    int n;
+    n = 0;
+    while (newname[n]) { if (newname[n] == '/') return -1; ++n; }
+    if (!n || n >= VN_NAME_MAX) return -1;
+    if (newname[0] == '.' && (n == 1 || (n == 2 && newname[1] == '.'))) return -1;
+    sched_lock();
+    vn = vfs_walk(path, 0, 0);
+    if (!vn || vn == rootdir || !vn->parent || vfs_child(vn->parent, newname, n)) { sched_unlock(); return -1; }
+    vfs_namecpy(vn->name, newname);
+    sched_unlock();
+    return 0;
+}
+
 struct vnode *vfs_mkdir(char *path) {
     struct vnode *vn;
     sched_lock();

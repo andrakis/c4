@@ -2587,6 +2587,17 @@ libc4ix.c4l: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/lib/libc4ix.c $(C4IX_SRC)/
 	rm -f .c4ix_lib.pp.c .c4ix_lib.c4o
 
 # userland programs built against the library: all IO via syscalls
+# The desktop is several modules (docs/c4ix-desktop.md): each is compiled
+# on its own, then all are linked with libc4ix, like the kernel.
+C4IX_DESKTOP := wm ui term files taskmgr apps
+C4IX_DESKTOP_SRC := $(C4IX_DESKTOP:%=$(C4IX_SRC)/user/desktop/%.c) $(C4IX_SRC)/user/desktop/desktop.h libjs/guest/gui.h
+c4ix-desktop.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libc4ix.c4l $(C4IX_DESKTOP_SRC)
+	for m in $(C4IX_DESKTOP); do \
+	  $(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC)/include -I $(C4IX_SRC)/user/desktop $(C4IX_SRC)/user/desktop/$$m.c .c4ix_d_$$m.c4o > /dev/null || exit 1; \
+	done
+	$(C4RLINK) $(C4IX_DESKTOP:%=.c4ix_d_%.c4o) libc4ix.c4l -o $@
+	rm -f $(C4IX_DESKTOP:%=.c4ix_d_%.c4o) .c4ix_d_*.pp.c
+
 c4ix-%.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libc4ix.c4l $(C4IX_SRC)/user/%.c
 	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC)/include $(C4IX_SRC)/user/$*.c .c4ix_u.c4o > /dev/null
 	$(C4RLINK) .c4ix_u.c4o libc4ix.c4l -o $@

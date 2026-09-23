@@ -143,20 +143,58 @@ tabs); a message box; resizable windows (drag the bottom-right corner).
 - **Run**: Start > Run... starts a program in a new Command Prompt.
 
 ### D5: kernel
-- [ ] `SYS_STAT`, `SYS_UNLINK`, `SYS_RENAME`; libc4ix wrappers
-- [ ] native suites green
+- [x] `SYS_STAT`, `SYS_UNLINK`, `SYS_RENAME`; libc4ix `ustat`, `uunlink`,
+      `urename` (`SYS_TOP` is now 227). A removed directory is unlinked but
+      its vnode kept, since a task may still have it as its working
+      directory; an open file cannot be removed.
+- [x] native suites green: `make test-c4ix`, `test-c4ix-c4ke` (2026-09-23)
 
 ### D6: the desktop as modules, and the shared pieces
-- [ ] modules and a build rule for them (Makefile and build-images.sh)
-- [ ] clipping, widgets, message box, resizing, the NT Start menu
-- [ ] test-desktop.mjs still green
+- [x] `src/c4ix/user/desktop/`: `wm.c` (window manager, drawing layer,
+      menu bars, dialogs), `ui.c` (widgets), `term.c`, `files.c`,
+      `taskmgr.c`, `apps.c`, sharing `desktop.h`; linked by a Makefile rule
+      and by `build-images.sh`. The disk carries the modules concatenated
+      as `c4ix-desktop.c`.
+- [x] each window's client area is clipped; buttons, list views with
+      headers, scroll bars, menu bars with drop-downs, text fields, tabs,
+      group boxes, radio buttons; message and input boxes (modal);
+      windows resize from their corner; title-bar double click maximises;
+      the NT 4 Start menu with its banner; five desktop icons
+- [x] test-desktop.mjs green
 
 ### D7: the tools
-- [ ] Explorer
-- [ ] Task Manager
-- [ ] Notepad
-- [ ] Calculator and Run
-- [ ] Headless tests for each
+- [x] Explorer: tree + list (Name, Size, Type), menus, address, Up,
+      status bar; double-click opens folders, runs programs, opens text in
+      Notepad; New Folder, Delete (confirmed), Rename; F2, F5, Del,
+      Backspace, Enter, arrows
+- [x] Task Manager: Applications (End Task, Switch To, New Task),
+      Processes (name, PID, CPU %, CPU time, syscalls, state; End Process,
+      confirmed; kernel tasks refused), Performance (gauge, 60 s history,
+      totals); also Ctrl+Shift+Esc -- which in a browser on Windows is
+      taken by Windows itself, so the Start menu and the icon are the way
+      in there
+- [x] Notepad: open, edit, save (Ctrl+S, Save As), scroll bar, wheel,
+      modified mark in the title
+- [x] Calculator: 32-bit, Hex/Dec/Oct/Bin, + - * / Mod And Or Xor Not Lsh
+      Rsh, keyboard; Run (Start > Run..., and Task Manager's New Task)
+- [x] Headless (2026-09-23), 40 checks in `test-desktop.mjs`, twice green:
+      Explorer browses, makes, renames and deletes a folder in /ram;
+      Notepad saves /ram/untitled.txt, Explorer lists it and reopens it in
+      Notepad with its text; Calculator 12+30=42, 2A in Hex, 2A*2=54;
+      Task Manager lists spin, ends it on confirmation, shows the
+      Performance and Applications tabs; Run starts a command in a new
+      Command Prompt; Shut Down leaves no shell behind.
+      Found on the way: typing between two clicks no longer makes them a
+      double click, and F5 and Backspace work in either Explorer pane.
 
 ### D8: in the browser
-- [ ] CDP gate drives each tool; screenshots checked by eye
+- [x] CDP gate (3060 Ti, 2026-09-23): the desktop, `ps` in a Command Prompt,
+      Explorer opening /usr, Notepad typing, Calculator 6*7=42, Task Manager
+      processes with CPU usage and its Performance tab, Shut Down; no page
+      errors. Screenshots of Explorer, Notepad with Calculator, and Task
+      Manager checked by eye.
+
+Known: C4IX's boot loader race (docs/c4bb-design.md, "Known issue") now
+shows on every boot of this build as one extra, empty entry: "vfsload:
+cannot open" and 50/51. All 50 real entries load. It moves with timing --
+an instrumented vfsload loads 50/50 -- and is not caused by this work.

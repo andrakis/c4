@@ -15,8 +15,5 @@
   "bugs": {
     "url": "https://github.com/andrakis/c4/issues"
   },
-  "homepage": "https://github.com/andrakis/c4#readme",
-  "dependencies": {
-    "printj": "https://github.com/andrakis/printj.git"
-  }
+  "homepage": "https://github.com/andrakis/c4#readme"
 }

@@ -85,7 +85,7 @@ Interesting files
 
 * [load-c4r.c](load-c4r.c) - The "C4 Relocatable" executable loader and runner.
 
-* [c4cc.c](src/c4cc/c4cc.c) - A compiler for C4 - see also [asm-c4r.c](src/c4cc/asm-c4r.c), for compiling to `C4R` format, or [asm-js.c](src/c4cc/asm-js.c) for compiling to JavaScript.
+* [c4cc.c](src/c4cc/c4cc.c) - A compiler for C4 - see also [asm-c4r.c](src/c4cc/asm-c4r.c), for compiling to `C4R` format.
 
 * [c4le.c](src/c4ke/bin/c4le.c) - A C4 Line Editor.
 
@@ -103,9 +103,7 @@ Interesting files
 Other experiments
 -----------------
 
-* [asm-js.c](src/c4cc/asm-js.c) - A module for `C4CC` that compiles to files than can run under `C4JS`.
-
-* [libjs/](libjs/) - A JavaScript port of C4. Incomplete, slow, and cannot run C4KE.
+* [libjs/](libjs/) - c4m in JavaScript: a direct interpreter that boots the 32-bit C4KE and C4IX images, in Node or in a browser Web Worker. See [docs/libjs-design.md](docs/libjs-design.md).
 
 * OISC4: One Instruction Set Computer for C4 — C4 implemented using a single instruction. **Working**: [src/oisc4/oisc4.c](src/oisc4/oisc4.c) runs `.c4r` images (from `c4cc` or `c4lc`) by translating them onto the one-instruction machine, verified bit-identical against the `c4m` loader (`make test-oisc4`). The self-hosted `c4` compiler and the `c4sp` Lisp interpreter both run inside it, and a c4lc-compiled `oisc4-lc.c4r` runs nested under `c4m`, plain `c4`, or oisc4 itself. See [docs/oisc4-design.md](docs/oisc4-design.md).
 

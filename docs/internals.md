@@ -17,7 +17,7 @@ c4.c        original interpreter: compiler + VM in one file, ~535 lines
        └ c4ke.c    pre-emptive multitasking kernel, built on c4m's traps
           └ u0.h   user-side runtime; turns kernel traps into C functions
 c4cc.c      separate, richer compiler (for/continue/varargs/attributes),
-            emits through a handler table -> asm-c4r.c (.c4r) or asm-js.c
+            emits through a handler table -> asm-c4r.c (.c4r)
 ```
 
 Nesting really works: `./c4 c4m.c load-c4r.c -- c4ke.c4r` is c4 interpreting c4m
@@ -562,7 +562,7 @@ destructors (like the `atexit` runner) after.
 
 `src/c4cc/c4cc.c` is a fork of the c4 front end with the back end abstracted
 behind `c4cc_emithandlers[]`, an array of function pointers indexed by `EH_*`
-(`c4cc.c:208`). `asm-c4r.c` and `asm-js.c` fill that table in; the parser never
+(`c4cc.c:208`). `asm-c4r.c` fills that table in; the parser never
 names an output format.
 
 Over `c4.c`/`c4m.c` it adds:

@@ -89,8 +89,13 @@ Reused from `src/c4bb/sim/`: `arena.js`, `devices.js`, `loader.js`
   - MUL uses `Math.imul`. DIV and MOD by zero give 0.
   - All ten fused opcodes are implemented with c4mp's semantics, because the
     disk's `c4sp.c4r` is built with `-mfuse`.
-  - A blocking READ returns -2: rewind pc by one word and stop with `input`.
-  - USLP stops with `sleep`.
+  - A blocking READ returns -2 (c4bb's convention): pc goes back one word
+    so the READ runs again. Running it again changes nothing, so instead
+    of spinning the clock jumps to the next cycle interrupt, the state a
+    spin would reach. With no interrupt armed the run stops with `input`
+    and the host parks until a key arrives.
+  - USLP stops with `sleep`, so the host can pace.
+  - STRC prints nothing, as on c4bb: a stack trace needs symbols.
   - INFO includes `C4I_C4MJS` (0x8) and never `C4I_C4` (0x1). C4IV does
     nothing.
 - **The heap** keeps no headers in guest memory. Sizes live in a `Map`,
@@ -161,22 +166,37 @@ commands to the host.
 - [x] This document committed on `pm-investigation`.
 
 ### M0: interpreter and CLI, output identical to native
-- [ ] `c4m.js`, `bus.js`, `heap.js`, `printf.js`, `boot.js`, `cli.js`
-- [ ] `tests/test-printf.mjs`, `tests/test-heap.mjs` green
-- [ ] `tests/test-libjs.sh`: every image's output matches its oracle.
-      `./c4m32 load-c4r.c --` is the oracle except for the images where c4m32
-      misbehaves, which use 64-bit `./c4m`. Exit status pinned.
-- [ ] Speed measured with `cli.js -s --fast` on a C4IX boot and recorded
-      here (c4bb turbo: 18.5M inst/s; target at least 40M)
-- [ ] Old `libjs/c4.js`, `libjs/simplest/` and `src/c4cc/asm-js.c`
-      removed; README, `docs/internals.md` and `package.json` updated
+- [x] `c4m.js`, `bus.js`, `heap.js`, `printf.js`, `boot.js`, `cli.js`
+- [x] `tests/test-printf.mjs` (22 formats, expectations from glibc in a
+      `gcc -m32` build) and `tests/test-heap.mjs` green
+- [x] `tests/test-libjs.sh`: every image's output matches its oracle.
+      19 images against `./c4m32 load-c4r.c --` (including `cycles`,
+      `raycast`, `bb_customop`, `bb_preempt`, `bb_pm`, `bb_mbox`); factorial,
+      test_malloc, test_args and test_printf against 64-bit `./c4m`; exit
+      status pinned. (2026-09-23)
+- [x] Speed, `cli.js -s` (2026-09-23, Node 22, same host, same images):
+
+      | Workload | libjs | c4bb turbo |
+      |---|---|---|
+      | C4IX boot, 20M cycles | 106M inst/s | 19.3M inst/s |
+      | raycast, 200 frames | 190M inst/s | 19.7M inst/s |
+      | mandel | 78M inst/s | 18.5M inst/s |
+
+- [x] Old `libjs/c4.js`, `libjs/simplest/` and `src/c4cc/asm-js.c`
+      removed; README, `docs/internals.md` and `package.json` updated;
+      `make test-libjs` added
 
 ### M1: both kernels boot in Node
-- [ ] C4KE32: banner, `C4SH - The C4 SHell`, two commands, clean shutdown
-- [ ] C4IX32: `C4IX booting`, protected mode and preemption on,
-      `c4ix-ps.c4r` runs, vfsload loads (nearly) every entry
-- [ ] `bb_pit` and `bb_mbox` behave as they do on c4bb
-- [ ] Interactive `cli.js -i`: `ps`, `top`, `spin` then Ctrl-C
+- [x] C4KE32: banner, `C4SH - The C4 SHell`, two commands, clean shutdown,
+      106/106 filesystem entries, a task killed on a bad opcode leaves the
+      shell alive (all in `test-libjs.sh`, 2026-09-23)
+- [x] C4IX32: `C4IX booting`, protected mode and preemption on,
+      `c4ix-ps.c4r` runs, vfsload loaded 44/44 (2026-09-23)
+- [x] `bb_pit` (both passes) and `bb_mbox` behave as they do on c4bb
+- [x] Interactive `cli.js -i` through a real pty (2026-09-23): C4IX `ps`,
+      `spin` cancelled by Ctrl-C ("interrupt: cancelling task"), `top`, a
+      command afterwards, `exit` with a clean shutdown; C4KE `ps`,
+      `hello.c4r`, `\q` to "clean shutdown"
 
 ### M2: Worker and page
 - [ ] `worker.js`, `page.js`, `keys.js`, `web/`, `serve.mjs`

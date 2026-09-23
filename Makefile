@@ -2223,6 +2223,12 @@ c4bb-web: c4dos-c4ix32
 test-c4bb: c4bb-images $(C4M) $(TESTS_C4R)
 	bash src/c4bb/tests/test-c4bb.sh
 
+# libjs: c4m as a direct JavaScript interpreter (docs/libjs-design.md).
+# It runs the same 32-bit corpus c4bb does, so it needs no images of its
+# own; the suite diffs against native c4m32/c4m and boots both kernels.
+test-libjs: c4bb-images $(C4M) $(TESTS_C4R)
+	bash libjs/tests/test-libjs.sh
+
 # Drives and media (docs/c4bb-storage.md). Separate from test-c4bb
 # because it needs the C4DOS climb disk, which test-c4bb does not build.
 test-c4bb-storage: c4dos32.c4r $(C4DOS_IX_DISK)
@@ -3068,7 +3074,7 @@ c4rs: pre
 
 # Marking the below rules as PHONY using singular .PHONY rule
 PHONY  = pre all clean-c4rs clean
-PHONY += test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
+PHONY += test-libjs test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
 PHONY += run-c4dos-build32 test-c4dos-build32 run-c4dos-c4ix32 test-c4dos-c4ix32 test-c4cc-for test-respfile test-b4ke test-c4bb-storage test-c4bb-baseops test-c4bb-rungs test-c4bb-install test-c4bb-climb test-c4bb-web test-c4bb-firmware
 PHONY += test-c4sc test-c4sc-run test-c4sc-lex test-c4sc-front test-c4sc-back
 PHONY += test-c4sc-image test-c4sc-self test-c4sc-board

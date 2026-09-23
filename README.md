@@ -85,7 +85,7 @@ Interesting files
 
 * [load-c4r.c](load-c4r.c) - The "C4 Relocatable" executable loader and runner.
 
-* [c4cc.c](src/c4cc/c4cc.c) - A compiler for C4 - see also [asm-c4r.c](asm-c4r.c), for compiling to `C4R` format, or [asm-js.c](asm-js.c) for compiling to JavaScript.
+* [c4cc.c](src/c4cc/c4cc.c) - A compiler for C4 - see also [asm-c4r.c](src/c4cc/asm-c4r.c), for compiling to `C4R` format, or [asm-js.c](src/c4cc/asm-js.c) for compiling to JavaScript.
 
 * [c4le.c](src/c4ke/bin/c4le.c) - A C4 Line Editor.
 

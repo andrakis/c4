@@ -43,6 +43,7 @@ check64 () {
 # ---- pure units ---------------------------------------------------------
 node libjs/tests/test-printf.mjs || fail=1
 node libjs/tests/test-heap.mjs   || fail=1
+node libjs/tests/test-gui.mjs    || fail=1
 
 # ---- programs, byte for byte against native -----------------------------
 for t in hello32 test_basic test_static test_vprintf tests \
@@ -51,7 +52,9 @@ for t in hello32 test_basic test_static test_vprintf tests \
     check "$t" $IMAGES/$t.c4r
 done
 check raycast $IMAGES/disk/raycast.c4r 21x21 -s 7 -d -n 20 -g 80x22
-for t in bb_customop bb_preempt bb_pm bb_mbox; do
+# gui-demo: without a display fitted (the CLI fits none) it must say
+# "not fitted" on both hosts and touch nothing.
+for t in bb_customop bb_preempt bb_pm bb_mbox gui-demo; do
     check "$t" $IMAGES/$t.c4r
 done
 check64 factorial   $IMAGES/factorial.c4r   src/tests/factorial.c4r

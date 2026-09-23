@@ -210,11 +210,18 @@ commands to the host.
       brings its own tab forward.
 
 ### M3: the display device and the standalone demo
-- [ ] `gui-device.js`, `display.js`, `guest/gui.h`, `guest/gui-demo.c`
-- [ ] `tests/test-gui.mjs`: a MOVE and a KEYDOWN go in; RECT/TEXT/PRESENT
-      frames come out; the key is echoed
-- [ ] Native `c4m32` prints `gui: not fitted` for the demo
-- [ ] CDP gate: the canvas changes between presents and follows the mouse
+- [x] `gui-device.js`, `display.js`, `guest/gui.h`, `guest/gui-demo.c`;
+      `gui-demo.c4r` built by `build-images.sh`
+- [x] `tests/test-gui.mjs` (in `make test-libjs`): a move, a click and two
+      keys go in; CLEAR/RECT/LINE/TEXT/PRESENT frames come out, the text
+      follows the mouse to (300,200), the click and keys reach the program,
+      q ends it, nothing dropped (2026-09-23)
+- [x] Native `c4m32` and the display-less CLI both print `gui: not fitted`
+      (pinned in `test-libjs.sh`)
+- [x] CDP gate, `test-web.mjs --gui`, green on the 3060 Ti (2026-09-23): the
+      canvas changes between presents, a real click and key on the canvas
+      reach the program, q halts the machine with status 0, no page errors.
+      Screenshot checked by eye.
 
 ### M4: `gui` from the C4IX shell
 - [ ] `src/c4ix/user/gui.c` and a sleep syscall for frame pacing

@@ -77,6 +77,9 @@ for t in bb_customop bb_preempt bb_pm bb_pit bb_whowrote; do
 done
 # the mailbox probe: board-only header passed as a source (c4cc has no #include)
 $CC -o $OUT/bb_mbox.c4r include/c4bb_mbox.h src/c4bb/tests/src/bb_mbox.c > /dev/null
+# libjs's display demo (docs/libjs-design.md): prints "not fitted" on any
+# machine without the display, so it is safe in every corpus.
+$CC -o $OUT/gui-demo.c4r libjs/guest/gui.h libjs/guest/gui-demo.c > /dev/null
 
 # these include real headers, so they go through the preprocessor
 $PREPROC $U0 src/tests/test_vprintf.c 2>/dev/null | $CC -o $OUT/test_vprintf.c4r - > /dev/null

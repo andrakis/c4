@@ -78,21 +78,26 @@ int c4r_load(char *path, struct c4r_image *img) {
     struct vnode *vn;
 
     if (!(buf = (char *)malloc(C4R_BUF_MAX))) return 0;
-    if ((fd = open(path, 0)) >= 0) {
+    // A RAM file by this path wins over the host. The comment below once
+    // said the two could not name the same file, but a host is free to
+    // answer a path it does not have -- c4bb's disk tries the bare file
+    // name when the full path misses -- so "/ram/hello.c4r", compiled a
+    // moment ago, ran the disk's own hello.c4r instead.
+    vn = vfs_lookup(path);
+    if (vn && vn->type != VN_RAMFILE) vn = 0;
+    if (!vn && (fd = open(path, 0)) >= 0) {
         total = 0;
         while ((n = read(fd, buf + total, 65536)) > 0) total = total + n;
         close(fd);
     } else {
-        vn = vfs_lookup(path);
-        if (!vn || vn->type != VN_RAMFILE) {
+        if (!vn) {
             // Silent: callers try several candidate names (the shell
             // resolves "wc" against three), so a miss is routine and
             // the caller is the one that knows when to complain.
             free(buf);
             return 0;
         }
-        // The host had no such file, so try the RAM filesystem -- and
-        // this is not a convenience. A program the machine produced
+        // The RAM filesystem -- and this is not a convenience. A program the machine produced
         // ITSELF cannot be on the host: the C4 VM has no write syscall,
         // so nothing running under it can put a file there. What a
         // compiler running as a task CAN do is write to standard output
@@ -101,10 +106,6 @@ int c4r_load(char *path, struct c4r_image *img) {
         // the whole compile-and-run loop, and this is what joins the
         // two halves. Without it the kernel can only ever run programs
         // that were built somewhere else.
-        //
-        // Second, not first, so that loading a host image costs exactly
-        // what it always did. The order is invisible otherwise: a RAM
-        // path and a host path cannot name the same file.
         if (vn->lazy) vfs_fill(vn);
         total = vn->size;
         if (total > C4R_BUF_MAX) {

@@ -529,10 +529,11 @@ void sys_pmviolation(int op, int *sp, int *returnpc, int *a) {
     if (op == C4IX_OP_OPEN) { *a = sys_open((char *)sp[1], sp[0]); return; }
     if (op == C4IX_OP_READ) { *a = sys_read(sp[2], (char *)sp[1], sp[0]); return; }
     if (op == C4IX_OP_CLOS) { *a = sys_close(sp[0]); return; }
-    // Verbatim, not synthesized. Programs branch on these bits --
-    // C4KE's ps patches its own code differently when C4I_C4 is set --
-    // so the only safe answer is what the machine actually is.
-    if (op == C4IX_OP_INFO) { *a = host_info(); return; }
+    // Verbatim, not synthesized, but for C4I_TRAPH (host.c task_info).
+    // Programs branch on these bits -- C4KE's ps patches its own code
+    // differently when C4I_C4 is set -- so the answer is what the machine
+    // actually is, as the task sees it.
+    if (op == C4IX_OP_INFO) { *a = task_info(); return; }
     if (op == C4IX_OP_MALC) { *a = (int)malloc(sp[0]); return; }
     if (op == C4IX_OP_FREE) { free((int *)sp[0]); *a = 0; return; }
     if (op == C4IX_OP_EXIT) {

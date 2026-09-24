@@ -321,6 +321,15 @@ done
 cat src/c4ix/user/desktop/desktop.h src/c4ix/user/desktop/*.c > $DISK/c4ix-desktop.c
 cp src/c4ix/c4ix.h $DISK/c4ix.h
 cp src/c4ix/include/c4ix_user.h $DISK/c4ix_user.h
+# what C4IX's own compilers are for (docs/c4ix-desktop.md, part three)
+cp src/c4ix/include/window.h $DISK/c4ix-window.h
+for f in README.txt hello.c bounce.c; do cp src/c4ix/examples/$f $DISK/c4ix-examples-$f; done
+# c4th, the Forth that compiles images to stdout (the C4IX shell's
+# redirection is its file write), with the sources it reads.
+cp c4th32.c4r $DISK/c4th.c4r
+mkdir -p $DISK/src/c4th/forth $DISK/src/c4th/tests
+cp src/c4th/forth/*.f $DISK/src/c4th/forth/
+cp src/c4th/tests/self1.f src/c4th/tests/self1-c4r.f src/c4th/tests/run-main.f $DISK/src/c4th/tests/
 
 # ---- the ladder ------------------------------------------------------
 # HOMEWARD's premise is that you climb this disk: C4DOS boots, C4DOS

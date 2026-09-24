@@ -287,7 +287,8 @@ static void app_draw(struct win *w, int ox, int oy, int cw, int ch, int focused)
 static void app_mouse(struct win *w, int e, int x, int y) {
     int k, cw, ch;
     k = w->kind; cw = client_w(w); ch = client_h(w);
-    if (k == K_FILES) files_mouse(w, e, x, y, cw, ch);
+    if (k == K_TERM) term_mouse(w, e, x, y, cw, ch);
+    else if (k == K_FILES) files_mouse(w, e, x, y, cw, ch);
     else if (k == K_TASKS) tasks_mouse(w, e, x, y, cw, ch);
     else if (k == K_NOTE) note_mouse(w, e, x, y, cw, ch);
     else if (k == K_CALC) calc_mouse(w, e, x, y, cw, ch);

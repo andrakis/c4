@@ -23,6 +23,16 @@ int host_info() {
     return hinfo;
 }
 
+// What a TASK is told. host_info() was read at boot, before the kernel
+// installed its trap handler, so it lacks C4I_TRAPH (0x400) -- and that
+// bit is the machine's promise that probing a custom opcode is safe,
+// which for a task under C4IX it is: every one of them lands in this
+// kernel. C4KE's tools test it before asking for OP_VFS_PUT, so without
+// it c4cc could not write what it compiled. Everything else verbatim.
+int task_info() {
+    return host_info() | 0x400;
+}
+
 int host_type() {
     return (host_info() & C4IX_I_C4M) ? HOST_C4M : HOST_C4;
 }

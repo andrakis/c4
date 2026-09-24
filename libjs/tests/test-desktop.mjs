@@ -137,6 +137,21 @@ check(until(() => new Set(rects.map(r => r.rgb)).size > 8, 1500), `raycast draws
 until(() => has(/^c4ix:\/\$/), 1500);
 key('l', 2, 76);                                               // Ctrl-L: a clean screen for what follows
 
+// ---- compile a windowed program inside the machine, and run it ------------------------------
+type('c4cc -o /ram/bounce.c4r /usr/include/window.h /usr/src/examples/bounce.c\n');
+check(until(() => has(/c4cc: wrote \d+ bytes to ramfs:\/ram\/bounce.c4r/), 3000), 'c4cc compiles bounce.c inside C4IX', screen());
+type('/ram/bounce.c4r\n');
+check(until(() => has(/Bounce - compiled inside C4IX/) && has('Click me') && has('Button clicks:'), 1500),
+  'the program makes its Command Prompt its window, titled and drawn', screen());
+const sameRow = (label, value) => { const l = find(label)[0]; return !!l && frame.some(t => t.s === value && Math.abs(t.y - l.y) < 3 && t.x > l.x); };
+clickText('Click me');
+check(until(() => sameRow('Button clicks:', '1'), 400), 'clicking its button counts', screen());
+key('x');
+check(until(() => sameRow('Last key:', 'x'), 400), 'a key typed in the window reaches it');
+key('q');
+check(until(() => has(/bounce: \d+ frames, 1 clicks/) && !has('Click me'), 800), 'q ends it and the window is a terminal again', screen());
+check(has(/^Command Prompt - task \d+/), 'with its own title back');
+
 // ---- Explorer ------------------------------------------------------------------------
 start('Explorer');
 check(until(() => has('Exploring - /')), 'Start > Explorer opens at the root', screen());

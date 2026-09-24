@@ -169,6 +169,10 @@ int          vfs_unlink(char *path);
 int          vfs_rename(char *path, char *newname);
 int          vfs_lazyfile(char *path, char *host, int size);
 int          vfs_fill(struct vnode *vn);         // read a lazy file's bytes in; 1 if it has them
+int          vfs_put(char *path, char *buf, int len);   // C4KE OP_VFS_PUT
+char        *vfs_getdata(char *path, int *plen);        // C4KE OP_VFS_GET
+int          vfs_nfiles();                              // C4KE OP_VFS_COUNT: files in the cwd
+char        *vfs_fname(int i);                          // C4KE OP_VFS_NAME
 struct vnode *vfs_root();
 struct vnode *vfs_cwd();
 int          vfs_chdir(char *path);
@@ -195,6 +199,7 @@ void         fd_closeall(struct task *t);
 
 int   host_detect();
 int   host_info();
+int   task_info();   // host_info() as a task sees it: plus C4I_TRAPH
 int   host_type();
 int   host_has(int bit);
 char *host_name();
@@ -368,7 +373,11 @@ enum {
     CK_CURRENTTASK_UPDATE_NAME = 150, CK_DEBUG_KERNELSTATE = 151,
     CK_KERN_REQUEST_EXCLUSIVE = 152, CK_KERN_RELEASE_EXCLUSIVE = 153,
     CK_TASK_CYCLES = 154, CK_HALT = 155,
-    CK_TOP = 160               // exclusive; 156..159 spare for the VFS ops
+    // C4KE's kernel RAM filesystem, over C4IX's VFS: how c4cc, c4rlink
+    // and c4lc write what they build (docs/c4ix-desktop.md, part three)
+    CK_VFS_PUT = 156, CK_VFS_GET = 157, CK_VFS_UNLINK = 158,
+    CK_VFS_COUNT = 159, CK_VFS_NAME = 160,
+    CK_TOP = 161               // exclusive
 };
 
 // C4KE ABI constants. These MUST match include/u0.h -- they are read

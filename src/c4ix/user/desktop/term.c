@@ -6,10 +6,20 @@
 // here a line at a time, as a tty in cooked mode does, and sent down the
 // pipe on Enter. Ctrl-C interrupts the job running under this window's
 // shell and nothing else.
+//
+// A program may also make the window its canvas (include/window.h): it
+// writes drawing commands as escape sequences, ESC _ G ... ESC \, and
+// while it does the window shows the last frame it presented and sends
+// the mouse and keys down its stdin instead of editing a line. The
+// window becomes a terminal again when the program says so, when Ctrl-C
+// stops it, or when the shell's prompt comes back.
 
 #include "desktop.h"
 
 enum { COLS = 80, ROWS = 25, CW = 8, CH = 16, FONT_PX = 14, LINE_MAX = 250, IOBUF = 8192 };
+// graphics mode: the canvas (the grid's own area), a command buffer, and
+// the two display lists -- the one being built, and the one shown
+enum { GW = 640, GH = 400, APC_MAX = 300, GLIST = 6000 };
 
 struct term {
     int pid, in_w, out_r, ended;
@@ -19,6 +29,13 @@ struct term {
     char line[256];
     char pending[128];            // a command to type at the first prompt
     int cell[2000];               // ROWS * COLS: ch | fg << 8 | bg << 16, xterm-256 indices
+    int gfx, buttons;             // a canvas now; mouse buttons held on it
+    char title[48];               // the window's own title, while a program's shows
+    int alen;
+    char abuf[304];               // an ESC _ ... ESC \ command being read
+    int ncur, nshow;
+    int gcur[6000];               // GLIST words: [len, op, numbers..., text]
+    int gshow[6000];
 };
 
 static int pal[256];
@@ -26,6 +43,7 @@ static char tmp[128];
 static char iobuf[IOBUF];
 
 static struct term *T(struct win *w) { return (struct term *)w->st; }
+static struct win *feeding;       // the window whose output feed() is reading
 
 // xterm's 256 colours: the 16 VGA ones, a 6x6x6 cube, 24 greys.
 static int level(int v) { if (!v) return 0; return 55 + 40 * v; }
@@ -144,6 +162,92 @@ static void csi(struct term *t, int fin) {
     if (t->cy >= ROWS) t->cy = ROWS - 1;
 }
 
+// ---- graphics mode ------------------------------------------------------------------
+
+static void send(struct term *t, char *s) { write(t->in_w, s, ui_len(s)); }
+
+// An event down the program's stdin: ESC E kind a,b,c newline.
+static void event(struct term *t, int kind, int a, int b, int c) {
+    int k;
+    tmp[0] = 27; tmp[1] = 'E'; tmp[2] = kind; tmp[3] = 0;
+    ui_num(tmp + 3, a); k = ui_len(tmp); tmp[k] = ','; tmp[k + 1] = 0;
+    ui_num(tmp + k + 1, b); k = ui_len(tmp); tmp[k] = ','; tmp[k + 1] = 0;
+    ui_num(tmp + k + 1, c); k = ui_len(tmp); tmp[k] = 10; tmp[k + 1] = 0;
+    send(t, tmp);
+}
+
+static void gfx_mode(struct win *w, struct term *t, int on) {
+    if (on && !t->gfx) ui_cpy(t->title, w->title);
+    if (!on && t->gfx && t->title[0]) win_title(w, t->title);
+    t->gfx = on;
+    t->ncur = 0; t->nshow = 0; t->buttons = 0;
+    mark_dirty();
+}
+
+// One command, ESC _ and ESC \ already stripped: G, the op, numbers
+// separated by commas, and for text a ';' and the string.
+static void apc(struct win *w, struct term *t) {
+    int i, n, v, neg, op, len, *g, k, nums[8];
+    char *s;
+    t->abuf[t->alen] = 0;
+    if (t->alen < 2 || t->abuf[0] != 'G') return;
+    op = t->abuf[1];
+    i = 2; n = 0;
+    while (i < t->alen && t->abuf[i] != ';' && n < 8) {
+        v = 0; neg = 0;
+        if (t->abuf[i] == '-') { neg = 1; ++i; }
+        while (i < t->alen && t->abuf[i] >= '0' && t->abuf[i] <= '9') { v = v * 10 + (t->abuf[i] - '0'); ++i; }
+        nums[n] = neg ? 0 - v : v; ++n;
+        if (i < t->alen && t->abuf[i] == ',') ++i;
+        else break;
+    }
+    s = 0;
+    if (i < t->alen && t->abuf[i] == ';') s = t->abuf + i + 1;
+    if (op == 'o') {
+        gfx_mode(w, t, 1);
+        if (s && *s) { if (ui_len(s) > 44) s[44] = 0; win_title(w, s); }
+        event(t, 's', GW, GH, 0);
+        return;
+    }
+    if (op == 'q') { gfx_mode(w, t, 0); return; }
+    if (!t->gfx) return;
+    if (op == 'p') {
+        memcpy(t->gshow, t->gcur, t->ncur * sizeof(int));
+        t->nshow = t->ncur;
+        t->ncur = 0;
+        mark_dirty();
+        return;
+    }
+    // everything else is drawn later: into the list being built
+    len = 2 + n + (s ? 1 + (ui_len(s) + 4) / 4 : 0);
+    if (t->ncur + len > GLIST) return;           // a frame too big: the rest is dropped
+    g = t->gcur + t->ncur;
+    g[0] = len; g[1] = op;
+    k = 0;
+    while (k < n) { g[2 + k] = nums[k]; ++k; }
+    if (s) { g[2 + n] = ui_len(s); ui_cpy((char *)(g + 3 + n), s); }
+    t->ncur = t->ncur + len;
+}
+
+static void gfx_draw(struct term *t, int ox, int oy) {
+    int i, *g, n, op;
+    d_rect(ox, oy, GW, GH, 0);
+    i = 0;
+    while (i < t->nshow) {
+        g = t->gshow + i;
+        op = g[1];
+        n = g[0] - 2;
+        if (op == 'c' && n >= 1) d_rect(ox, oy, GW, GH, g[2]);
+        else if (op == 'r' && n >= 5) d_rect(ox + g[2], oy + g[3], g[4], g[5], g[6]);
+        else if (op == 'R' && n >= 5) d_recto(ox + g[2], oy + g[3], g[4], g[5], g[6]);
+        else if (op == 'l' && n >= 5) d_line(ox + g[2], oy + g[3], ox + g[4], oy + g[5], g[6]);
+        else if (op == 'd' && n >= 4) d_disc(ox + g[2], oy + g[3], g[4], g[5]);
+        else if (op == 't' && n >= 6) d_textn(ox + g[2], oy + g[3], g[4], g[5], F_SANS, 0, (char *)(g + 7), g[6]);
+        if (g[0] < 2) break;
+        i = i + g[0];
+    }
+}
+
 static void feed(struct term *t, char *buf, int n) {
     int i, c;
     i = 0;
@@ -152,7 +256,18 @@ static void feed(struct term *t, char *buf, int n) {
         ++i;
         if (t->esc == 1) {
             if (c == '[') { t->esc = 2; t->np = 0; t->priv = 0; t->param[0] = 0; }
+            else if (c == '_') { t->esc = 3; t->alen = 0; }
             else t->esc = 0;
+            continue;
+        }
+        if (t->esc == 3) {                         // inside ESC _ ... ESC \ 
+            if (c == 27) t->esc = 4;
+            else if (t->alen < APC_MAX) { t->abuf[t->alen] = c; ++t->alen; }
+            continue;
+        }
+        if (t->esc == 4) {
+            t->esc = 0;
+            if (c == '\\') apc(feeding, t);
             continue;
         }
         if (t->esc == 2) {
@@ -253,6 +368,7 @@ void term_tick(struct win *w) {
     int n, k, got;
     t = T(w);
     if (t->ended) return;
+    feeding = w;
     n = uavail(t->out_r);
     got = 0;
     // Take everything the program has written before drawing: a full-screen
@@ -264,6 +380,8 @@ void term_tick(struct win *w) {
         got = got + n;
         {
             feed(t, iobuf, n);
+            // the shell's prompt is back: whatever made this a canvas has ended
+            if (t->gfx && n >= 2 && iobuf[n - 2] == '$' && iobuf[n - 1] == 10) gfx_mode(w, t, 0);
             // the shell's prompt ends "$\n": time to type a waiting command
             if (t->pending[0] && n >= 2 && iobuf[n - 2] == '$' && iobuf[n - 1] == 10) {
                 k = ui_len(t->pending);
@@ -292,6 +410,7 @@ void term_key(struct win *w, int code, int ch, int mods) {
     t = T(w);
     if (t->ended) return;
     if ((mods & M_CTRL) && (ch == 'c' || ch == 'C' || code == 67)) {
+        if (t->gfx) gfx_mode(w, t, 0);
         say(t, "^C\n");
         t->llen = 0;
         // nothing running under the shell: an empty line brings a fresh prompt
@@ -302,6 +421,7 @@ void term_key(struct win *w, int code, int ch, int mods) {
         clear(t, 0, ROWS * COLS); t->cx = 0; t->cy = 0; mark_dirty();
         return;
     }
+    if (t->gfx) { event(t, 'k', code, ch, mods); return; }
     if (mods & M_CTRL) return;
     if (code == KEY_ENTER || ch == 10) {
         t->line[t->llen] = 10;
@@ -321,6 +441,19 @@ void term_key(struct win *w, int code, int ch, int mods) {
     }
 }
 
+// The mouse, for a program that made this window its canvas.
+void term_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
+    struct term *t;
+    t = T(w);
+    if (t->ended || !t->gfx) return;
+    x = x - 2; y = y - 2;                          // inside the sunken edge
+    if (x < 0) x = 0; if (y < 0) y = 0;
+    if (x >= GW) x = GW - 1; if (y >= GH) y = GH - 1;
+    if (ev == E_DOWN) { t->buttons = 1; event(t, 'd', x, y, 0); }
+    else if (ev == E_UP) { if (t->buttons) event(t, 'u', x, y, 0); t->buttons = 0; }
+    else if (ev == E_MOVE) event(t, 'm', x, y, t->buttons);
+}
+
 // The grid as runs: a rectangle per stretch of non-black background and a
 // line of text per stretch of one colour.
 void term_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
@@ -331,6 +464,7 @@ void term_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     d_rect(ox, oy, cw, ch, C_DARK);
     d_bevel(ox, oy, COLS * CW + 4, ROWS * CH + 4, B_SUNKEN);
     ox = ox + 2; oy = oy + 2;
+    if (t->gfx) { gfx_draw(t, ox, oy); return; }
     r = 0;
     while (r < ROWS) {
         row = t->cell + r * COLS;

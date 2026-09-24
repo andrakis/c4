@@ -295,6 +295,71 @@ int vfs_stat(char *path, int *out) {
     return 0;
 }
 
+// ---- C4KE's kernel RAM filesystem, over this one ----
+//
+// C4KE's compilers (c4cc, c4rlink, c4sp's c4lc) write what they build
+// with OP_VFS_PUT and read with OP_VFS_GET, because the VM has no write
+// opcode. C4KE's table is flat; here a name is a path, so a bare name
+// lands in the task's working directory, which is where C4KE's flat
+// names meant it. GET hands back the kernel's own bytes, NUL-terminated
+// after the end, as C4KE's does: one address space, so the task reads
+// them in place.
+
+int vfs_put(char *path, char *buf, int len) {
+    struct vnode *vn;
+    if (len < 0) return -1;
+    sched_lock();
+    vn = vfs_walk(path, 1, 0);
+    if (!vn || vn->type != VN_RAMFILE) { sched_unlock(); return -1; }
+    vn->lazy = 0;
+    vn->size = 0;
+    if (!vn_grow(vn, len + 1)) { sched_unlock(); return -1; }
+    memcpy(vn->data, buf, len);
+    vn->data[len] = 0;
+    vn->size = len;
+    sched_unlock();
+    return 0;
+}
+
+char *vfs_getdata(char *path, int *plen) {
+    struct vnode *vn;
+    sched_lock();
+    vn = vfs_walk(path, 0, 0);
+    if (!vn || vn->type != VN_RAMFILE) { sched_unlock(); return 0; }
+    if (vn->lazy) vfs_fill(vn);
+    if (!vn_grow(vn, vn->size + 1)) { sched_unlock(); return 0; }
+    vn->data[vn->size] = 0;
+    if (plen) *plen = vn->size;
+    sched_unlock();
+    return vn->data;
+}
+
+// The files (not folders) of the working directory, for COUNT and NAME.
+static struct vnode *vfs_nth_file(int i) {
+    struct vnode *vn;
+    vn = vfs_cwd()->child;
+    while (vn) {
+        if (vn->type == VN_RAMFILE) { if (!i) return vn; --i; }
+        vn = vn->next;
+    }
+    return 0;
+}
+
+int vfs_nfiles() {
+    struct vnode *vn;
+    int n;
+    n = 0;
+    vn = vfs_cwd()->child;
+    while (vn) { if (vn->type == VN_RAMFILE) ++n; vn = vn->next; }
+    return n;
+}
+
+char *vfs_fname(int i) {
+    struct vnode *vn;
+    if (i < 0 || !(vn = vfs_nth_file(i))) return 0;
+    return vn->name;
+}
+
 // Take an entry out of its directory. A directory must be empty, and a
 // file must not be open. A removed file's storage is freed; a removed
 // directory's vnode is not, because some task may still have it as its

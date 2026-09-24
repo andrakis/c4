@@ -48,6 +48,11 @@ static int ck_symbol(char *name) {
     if (memcmp(name, "OP_", 3)) return 0;
 
     if (CK_EQ("OP_HALT", 7))                     return CK_HALT;
+    if (CK_EQ("OP_VFS_PUT", 10))                 return CK_VFS_PUT;
+    if (CK_EQ("OP_VFS_GET", 10))                 return CK_VFS_GET;
+    if (CK_EQ("OP_VFS_NAME", 11))                return CK_VFS_NAME;
+    if (CK_EQ("OP_VFS_COUNT", 12))               return CK_VFS_COUNT;
+    if (CK_EQ("OP_VFS_UNLINK", 13))              return CK_VFS_UNLINK;
     if (CK_EQ("OP_TIME", 7))                     return CK_TIME;
     if (CK_EQ("OP_C4INFO", 9))                   return CK_C4INFO;
     if (CK_EQ("OP_USER_PID", 11))                return CK_USER_PID;
@@ -573,7 +578,7 @@ int ck_dispatch(int num, int *args) {
     if (num == CK_KERN_TASK_CURRENT_ID) return t ? t->id : -1;
     if (num == CK_TASK_CYCLES)
         return t ? t->cycles + (__c4_cycles() - t->cycles_in) : 0;
-    if (num == CK_C4INFO)              return host_info();
+    if (num == CK_C4INFO)              return task_info();
     if (num == CK_TIME)                return __time();
 
     // the task table, as far as this stage goes
@@ -658,6 +663,12 @@ int ck_dispatch(int num, int *args) {
         t->state = TS_WAITING;
         return 0;
     }
+    // the kernel RAM filesystem (vfs.c): C4KE's argument order, name first
+    if (num == CK_VFS_PUT)             return vfs_put((char *)args[0], (char *)args[1], args[2]);
+    if (num == CK_VFS_GET)             return (int)vfs_getdata((char *)args[0], (int *)args[1]);
+    if (num == CK_VFS_UNLINK)          return vfs_unlink((char *)args[0]);
+    if (num == CK_VFS_COUNT)           return vfs_nfiles();
+    if (num == CK_VFS_NAME)            return (int)vfs_fname(args[0]);
     if (num == CK_KERN_TASKS_EXPORT)   return ck_export();
     if (num == CK_KERN_TASKS_EXPORT_UPDATE) {
         if (args[0]) ck_export_fill((int *)args[0]);

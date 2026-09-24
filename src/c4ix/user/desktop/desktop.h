@@ -113,6 +113,7 @@ void term_draw(struct win *w, int ox, int oy, int cw, int ch, int focused);
 void term_key(struct win *w, int code, int ch, int mods);
 void term_tick(struct win *w);
 void term_close(struct win *w);
+void term_mouse(struct win *w, int ev, int x, int y, int cw, int ch);
 
 int  files_open(char *path);
 void files_draw(struct win *w, int ox, int oy, int cw, int ch, int focused);

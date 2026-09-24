@@ -190,6 +190,27 @@ export async function run(ctx) {
     await shot('splitter-dragged');
     await tab.eval("document.getElementById('splitter').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))");
   }
+  // compile a windowed program inside the machine, then run it (docs/c4ix-desktop.md part three)
+  // the window's title bar, not its taskbar button (which would minimise it)
+  await clickText('/^Command Prompt - task/', all => all.filter(t => t.y < 560).pop());
+  await tab.type('c4cc -o /ram/bounce.c4r /usr/include/window.h /usr/src/examples/bounce.c\n');
+  ok('c4cc compiles bounce.c inside C4IX', await shownHas('/c4cc: wrote \\d+ bytes to ramfs:\\/ram\\/bounce.c4r/', 60000), (await tab.eval(`${shown}.map(t => t.s).join(' | ')`)).slice(-600));
+  await tab.type('/ram/bounce.c4r\n');
+  ok('the program makes the Command Prompt its window', await shownHas('/^Bounce - compiled inside C4IX/', 30000) && await shownHas('/^Click me$/'));
+  {
+    const h1 = await tab.eval(canvasHash);
+    await sleep(400);
+    ok('and animates in it', h1 !== await tab.eval(canvasHash));
+    const sameRow = (label, value) => `(() => { const l = ${shown}.find(t => t.s === ${JSON.stringify(label)});
+      return !!l && ${shown}.some(t => t.s === ${JSON.stringify(value)} && Math.abs(t.y - l.y) < 3 && t.x > l.x); })()`;
+    await clickText('/^Click me$/');
+    ok('its button counts a click', await tab.waitFor(sameRow('Button clicks:', '1'), 15000));
+    await tab.type('x');
+    ok('a key typed on it reaches the program', await tab.waitFor(sameRow('Last key:', 'x'), 15000));
+    await shot('bounce');
+    await tab.type('q');
+    ok('q ends it and the window is a terminal again', await shownHas('/bounce: \\d+ frames, 1 clicks/', 15000));
+  }
   // Explorer
   await start('/^Explorer$/');
   ok('Start > Explorer opens at the root', await shownHas('/^Exploring - \\/$/'));

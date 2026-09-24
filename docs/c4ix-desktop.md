@@ -291,13 +291,42 @@ its output through C4KE's `OP_VFS_PUT`, the C4DOS RAM-disk API, or
 stdout. C4IX offers none of the first two, so c4cc, c4rlink and c4sp/c4lc
 all fail at the write. c4th writes images to stdout, and the C4IX shell
 can redirect that into a RAM file, so the Forth route works already.
-- [ ] **C1: C4KE's RAM-filesystem opcodes in C4IX.** OP_VFS_PUT, GET,
-      UNLINK, COUNT and NAME in `src/c4ix/c4ke.c`, over the C4IX VFS. This
-      unblocks c4cc, c4rlink and c4lc with no change to the tools.
-- [ ] **C2: the tools on the disk and in `/bin`.** c4cc, c4rlink, cpp,
-      c4sp with c4lc, c4th, and a 32-bit `libc4ix.c4l` plus the headers
-      a program is built against.
-- [ ] **C3: room to run them.** Task stack and memory for a compiler.
-- [ ] **C4: compile a GUI program inside the machine and run it.** A
-      sample source on the disk, built with the in-machine compiler from
-      a Command Prompt and run. Gate: headless, then the browser.
+- [x] **C1: C4KE's RAM-filesystem opcodes in C4IX.** OP_VFS_PUT, GET,
+      UNLINK, COUNT and NAME in `src/c4ix/c4ke.c`, over the C4IX VFS (a
+      bare name lands in the working directory; GET hands back the
+      kernel's bytes in place). CK_TOP went from 160 to 161. Tasks are now
+      told C4I_TRAPH: C4IX read the info bits at boot, before it installed
+      its trap handler, and c4cc will not probe for OP_VFS_PUT without it.
+- [x] **C2: the tools in `/bin`.** c4cc, c4rlink, c4rdump, cpp, c4sp (with
+      c4lc beside it on the disk) and c4th, with its Forth sources in
+      `/usr/src/forth`. `/usr/include` has `window.h` and `c4ix_user.h`;
+      `/usr/src/examples` has a README, hello.c and bounce.c. A 32-bit
+      `libc4ix.c4l` is not on the disk yet, so c4lc builds plain programs,
+      not C4IX-library ones.
+- [x] **C3: room to run them.** Measured rather than raised: c4cc
+      compiles bounce.c, c4lc compiles hello.c and c4th compiles and runs
+      its self-test image, all on the stock 32 KB task stack. Larger
+      c4lc builds are not measured.
+- [x] **The loader preferred the host.** A program compiled to
+      `/ram/hello.c4r` ran the disk's own `hello.c4r`, because the board's
+      disk answers a missing path by its bare file name. A RAM file by
+      the path now wins.
+- [x] **C4: compile a GUI program inside the machine and run it.** The
+      desktop owns the display, so a program gets a window through its
+      Command Prompt: `include/window.h` writes drawing commands to
+      stdout as ESC _ G ... ESC \ sequences, and the window sends mouse
+      and key events back on stdin. The window is the program's until it
+      closes it, Ctrl-C stops it, or the shell prompts again. The header
+      builds with c4cc (no preprocessor, structs or arrays) and with c4lc.
+      Headless desktop test and browser gate on the 3060 Ti: c4cc
+      compiles bounce.c in a Command Prompt; it takes the window, titled,
+      animates, counts a click on its button, sees a typed key, and q
+      gives the terminal back with its title.
+
+### Found on the way, not fixed
+- `make test-c4th-os`: the C4DOS leg prints an empty prompt line ahead of
+  c4th's output, so it differs from the reference at byte 1. Nothing it
+  runs changed in this work, and a fresh `c4dos-clock.c4r` does the same.
+- `test-c4ke-mbox` (in `test-c4bb`) fails about one run in four with
+  "Custom opcode not found: 1073741824" in the mbpair message. It fails
+  as often with the C4KE source from before this work.

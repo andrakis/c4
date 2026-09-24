@@ -12,8 +12,15 @@
 # (built and named plainly as vfsload.c4r, not the c4ix-NAME.c4r
 # convention every other user program follows), not a typical app.
 BIN_ALL = hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt gui desktop
+# The toolchain (docs/c4ix-desktop.md, part three): C4KE programs, which
+# run here through the compatibility layer, and write what they build
+# through its OP_VFS_PUT. In /bin only, under their own names.
+TOOLS = c4cc c4rlink c4rdump cpp c4sp c4th
 
 /: root
+	bin/:
+		each($TOOLS):
+			$1: $1.c4r
 	each($BIN_ALL):
 		# c4ix-hello.c4r -> /bin/hello, and an unqualified alias at the
 		# root so "hello" works from the shell without the c4ix- prefix
@@ -27,6 +34,22 @@ BIN_ALL = hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt gui 
 				# host filenames are prefixed c4ix-NAME.c: this disk is
 				# shared with C4KE, which has its own cat.c/ps.c/top.c
 				each($BIN_ALL): $1.c: c4ix-$1.c
+			# the programs to compile inside the machine (part three)
+			examples/:
+				README.txt: c4ix-examples-README.txt
+				hello.c: c4ix-examples-hello.c
+				bounce.c: c4ix-examples-bounce.c
+			# c4th's Forth: the core, and self.f, the part that writes images
+			forth/:
+				core.f: src/c4th/forth/core.f
+				self.f: src/c4th/forth/self.f
+				self1.f: src/c4th/tests/self1.f
+				self1-c4r.f: src/c4th/tests/self1-c4r.f
+				run-main.f: src/c4th/tests/run-main.f
 			include/:
 				c4ix.h
 				c4ix_user.h
+		# headers a program compiled here is built against
+		include/:
+			window.h: c4ix-window.h
+			c4ix_user.h

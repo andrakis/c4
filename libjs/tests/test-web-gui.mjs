@@ -152,6 +152,44 @@ export async function run(ctx) {
   await clickAt(300, 200);
   await tab.type('ps\n');
   ok('ps typed on the display runs in that window', await shownHas('/c4ix-desktop/') && await shownHas('/tasks,/'));
+  // top keeps going until Ctrl-C
+  await tab.type('top\n');
+  ok('top starts in the Command Prompt', await shownHas('/Ctrl-C to stop/'));
+  await sleep(4000);
+  ok('and is still running four seconds later', await shownHas('/Ctrl-C to stop/', 2000));
+  await tab.key('c', { ctrl: true });
+  ok('Ctrl-C stops it', await shownHas('/\\^C/'));
+  // raycast, drawn in colour in the Command Prompt
+  await tab.type('raycast.c4r 21x21 -s 7 -d -n 400 -g 80x25\n');
+  // colours inside the Command Prompt's text area only (the desktop around
+  // it has plenty of its own): the window is found by its title
+  const termColours = `(() => {
+    const t = window.c4m.display.shownText.find(t => /^Command Prompt - task/.test(t.s) && t.y < 560);
+    if (!t) return 0;
+    const x0 = t.x - 27 + 8, y0 = t.y - 7 + 25;
+    const c = document.getElementById('display'), d = c.getContext('2d').getImageData(x0, y0, 640, 400).data;
+    const seen = new Set(); for (let i = 0; i < d.length; i += 4 * 13) seen.add((d[i] << 16) | (d[i + 1] << 8) | d[i + 2]);
+    return seen.size; })()`;
+  // raycast prints its frame rate on its status line once it is drawing
+  ok('raycast draws in the Command Prompt', await shownHas('/ f\\/s /', 60000));
+  ok('in colour', await tab.waitFor(`${termColours} > 12`, 10000), String(await tab.eval(termColours)) + ' colours');
+  await sleep(500);
+  await shot('raycast-in-desktop');
+  await tab.key('c', { ctrl: true });
+  // the splitter: drag it left and the display grows
+  {
+    const w0 = await tab.eval("document.getElementById('display').getBoundingClientRect().width");
+    const s = await tab.eval("(() => { const r = document.getElementById('splitter').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()");
+    await tab.mouse('mouseMoved', s.x, s.y);
+    await tab.mouse('mousePressed', s.x, s.y, 'left', 1);
+    for (let k = 1; k <= 10; k++) await tab.mouse('mouseMoved', s.x - k * 40, s.y, 'left', 1);
+    await tab.mouse('mouseReleased', s.x - 400, s.y, 'left', 0);
+    await sleep(300);
+    const w1 = await tab.eval("document.getElementById('display').getBoundingClientRect().width");
+    ok(`dragging the splitter left makes the display larger (${Math.round(w0)} -> ${Math.round(w1)} px)`, w1 > w0 + 50);
+    await shot('splitter-dragged');
+    await tab.eval("document.getElementById('splitter').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))");
+  }
   // Explorer
   await start('/^Explorer$/');
   ok('Start > Explorer opens at the root', await shownHas('/^Exploring - \\/$/'));

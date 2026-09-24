@@ -9,7 +9,7 @@
 
 #include "desktop.h"
 
-enum { COLS = 80, ROWS = 24, CW = 8, CH = 16, FONT_PX = 14, LINE_MAX = 250 };
+enum { COLS = 80, ROWS = 25, CW = 8, CH = 16, FONT_PX = 14, LINE_MAX = 250, IOBUF = 8192 };
 
 struct term {
     int pid, in_w, out_r, ended;
@@ -18,28 +18,41 @@ struct term {
     int llen;
     char line[256];
     char pending[128];            // a command to type at the first prompt
-    int cell[1920];               // ROWS * COLS: ch | fg << 8 | bg << 12
+    int cell[2000];               // ROWS * COLS: ch | fg << 8 | bg << 16, xterm-256 indices
 };
 
-static int pal[16];
+static int pal[256];
 static char tmp[128];
-static char iobuf[1024];
+static char iobuf[IOBUF];
 
 static struct term *T(struct win *w) { return (struct term *)w->st; }
 
+// xterm's 256 colours: the 16 VGA ones, a 6x6x6 cube, 24 greys.
+static int level(int v) { if (!v) return 0; return 55 + 40 * v; }
 static void palette() {
+    int i, r, g, b, v;
     pal[0] = 0x000000; pal[1] = 0xaa0000; pal[2] = 0x00aa00; pal[3] = 0xaa5500;
     pal[4] = 0x0000aa; pal[5] = 0xaa00aa; pal[6] = 0x00aaaa; pal[7] = 0xc0c0c0;
     pal[8] = 0x555555; pal[9] = 0xff5555; pal[10] = 0x55ff55; pal[11] = 0xffff55;
     pal[12] = 0x5555ff; pal[13] = 0xff55ff; pal[14] = 0x55ffff; pal[15] = 0xffffff;
+    i = 16;
+    while (i < 232) {
+        r = (i - 16) / 36; g = ((i - 16) / 6) % 6; b = (i - 16) % 6;
+        pal[i] = (level(r) << 16) | (level(g) << 8) | level(b);
+        ++i;
+    }
+    while (i < 256) { v = 8 + 10 * (i - 232); pal[i] = (v << 16) | (v << 8) | v; ++i; }
 }
+
+// A 24-bit colour, as the nearest step of the cube.
+static int cube_step(int c) { if (c < 48) return 0; if (c < 115) return 1; return (c - 35) / 40; }
 
 // ---- the grid -------------------------------------------------------------------
 
 static void clear(struct term *t, int from, int to) {
     int k;
     k = from;
-    while (k < to) { t->cell[k] = ' ' | (7 << 8); ++k; }
+    while (k < to) { t->cell[k] = ' ' | (7 << 8) | (t->bg << 16); ++k; }
 }
 
 static void newline(struct term *t) {
@@ -57,7 +70,7 @@ static int attr(struct term *t) {
     f = t->fg; b = t->bg;
     if (t->bold && f < 8) f = f + 8;
     if (t->rev) { x = f; f = b; b = x; }
-    return (f << 8) | (b << 12);
+    return (f << 8) | (b << 16);
 }
 
 static void putc_(struct term *t, int c) {
@@ -68,7 +81,7 @@ static void putc_(struct term *t, int c) {
 }
 
 static void sgr(struct term *t) {
-    int k, p;
+    int k, p, v;
     if (!t->np) { t->np = 1; t->param[0] = 0; }
     k = 0;
     while (k < t->np) {
@@ -85,11 +98,16 @@ static void sgr(struct term *t) {
         else if (p >= 90 && p <= 97) t->fg = p - 90 + 8;
         else if (p >= 100 && p <= 107) t->bg = p - 100 + 8;
         else if (p == 38 || p == 48) {
-            // only the 16 colours exist here: take an index that is one of them
+            // 38;5;N / 48;5;N: one of the 256; 38;2;R;G;B: the nearest of them
             if (k + 2 < t->np && t->param[k + 1] == 5) {
-                if (t->param[k + 2] < 16) { if (p == 38) t->fg = t->param[k + 2]; else t->bg = t->param[k + 2]; }
+                v = t->param[k + 2] & 255;
+                if (p == 38) t->fg = v; else t->bg = v;
                 k = k + 2;
-            } else if (k + 1 < t->np && t->param[k + 1] == 2) k = k + 4;
+            } else if (k + 4 < t->np && t->param[k + 1] == 2) {
+                v = 16 + 36 * cube_step(t->param[k + 2]) + 6 * cube_step(t->param[k + 3]) + cube_step(t->param[k + 4]);
+                if (p == 38) t->fg = v; else t->bg = v;
+                k = k + 4;
+            }
         }
         ++k;
     }
@@ -232,14 +250,19 @@ void term_close(struct win *w) {
 // Output waiting in the pipe; never blocks.
 void term_tick(struct win *w) {
     struct term *t;
-    int n, k;
+    int n, k, got;
     t = T(w);
     if (t->ended) return;
     n = uavail(t->out_r);
-    if (n > 0) {
-        if (n > 1024) n = 1024;
+    got = 0;
+    // Take everything the program has written before drawing: a full-screen
+    // program writes a whole frame at once, and drawing half of one is flicker.
+    while (n > 0 && got < 65536) {
+        if (n > IOBUF) n = IOBUF;
         n = uread(t->out_r, iobuf, n);
-        if (n > 0) {
+        if (n <= 0) break;
+        got = got + n;
+        {
             feed(t, iobuf, n);
             // the shell's prompt ends "$\n": time to type a waiting command
             if (t->pending[0] && n >= 2 && iobuf[n - 2] == '$' && iobuf[n - 1] == 10) {
@@ -251,7 +274,9 @@ void term_tick(struct win *w) {
                 t->pending[0] = 0;
             }
         }
-    } else if (n < 0) {
+        n = uavail(t->out_r);
+    }
+    if (n < 0) {
         // every writer is gone: the shell exited
         uclose(t->in_w);
         uclose(t->out_r);
@@ -311,17 +336,17 @@ void term_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
         row = t->cell + r * COLS;
         c = 0;
         while (c < COLS) {
-            b = (row[c] >> 12) & 15;
+            b = (row[c] >> 16) & 255;
             start = c;
-            while (c < COLS && ((row[c] >> 12) & 15) == b) ++c;
+            while (c < COLS && ((row[c] >> 16) & 255) == b) ++c;
             if (b) d_rect(ox + start * CW, oy + r * CH, (c - start) * CW, CH, pal[b]);
         }
         c = 0;
         while (c < COLS) {
-            f = (row[c] >> 8) & 15;
+            f = (row[c] >> 8) & 255;
             start = c;
             s = tmp;
-            while (c < COLS && ((row[c] >> 8) & 15) == f && c - start < 90) { *s = row[c] & 255; ++s; ++c; }
+            while (c < COLS && ((row[c] >> 8) & 255) == f && c - start < 90) { *s = row[c] & 255; ++s; ++c; }
             *s = 0;
             k = 0; a = 0;
             while (tmp[k]) { if (tmp[k] != ' ') a = 1; ++k; }

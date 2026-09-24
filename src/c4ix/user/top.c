@@ -3,13 +3,13 @@
 // actually answers "what is using the machine" -- a total since boot
 // mostly tells you which task is oldest.
 //
-// Takes an iteration count (default 3) rather than running forever:
-// there is no non-blocking console read yet, so nothing could type
-// 'q' to stop it.
+// Runs until Ctrl-C, redrawing in place once a second, as top does;
+// `top N` stops after N screens. (It used to stop after three: it was
+// written before the console could be interrupted.)
 
 #include "c4ix_user.h"
 
-enum { MAX_TASKS = 32, SAMPLE_CYCLES = 200000 };
+enum { MAX_TASKS = 32, SAMPLE_MS = 1000 };
 
 static int prev_id[MAX_TASKS];
 static int prev_cyc[MAX_TASKS];
@@ -36,13 +36,17 @@ static int top_prev(int id) {
     return -1;
 }
 
-// Let the machine run for a while without spinning on it: yield
-// repeatedly until enough cycles have passed for the sample to mean
-// something.
+// Let the machine run for a second between samples, asleep rather than
+// spinning, so top itself costs almost nothing.
 static void top_settle() {
-    int t0;
-    t0 = ucycles();
-    while (ucycles() - t0 < SAMPLE_CYCLES) uyield();
+    umsleep(SAMPLE_MS);
+}
+
+// Clear the screen and home the cursor (ESC [ 2 J, ESC [ H), so each
+// sample replaces the last instead of scrolling.
+static void top_home() {
+    uputchar(27); uputchar('['); uputchar('2'); uputchar('J');
+    uputchar(27); uputchar('['); uputchar('H');
 }
 
 static int atoi_(char *s) {
@@ -59,11 +63,10 @@ int main(int argc, char **argv) {
     int snap[MAX_TASKS * TASKINFO_WORDS];
     int iters, it, i, j, n, was, delta, busy, pct, base;
 
-    iters = (argc > 1) ? atoi_(argv[1]) : 3;
-    if (iters < 1) iters = 1;
+    iters = (argc > 1) ? atoi_(argv[1]) : 0;   // 0: until Ctrl-C
 
     it = 0;
-    while (it < iters) {
+    while (!iters || it < iters) {
         top_settle();
 
         // one pass: copy the whole table, then work only from the
@@ -93,9 +96,10 @@ int main(int argc, char **argv) {
         }
         if (!busy) busy = 1;
 
-        uprintf("\ntop: %d tasks, ", n);
+        top_home();
+        uprintf("top: %d tasks, ", n);
         upadcycles(busy, 0);
-        uprintf("cycles this interval\n");
+        uprintf("cycles in the last second -- Ctrl-C to stop\n");
         upadhdr("ID", 4);
         upadhdr("PPID", 5);
         upadstr("STATE", 8);

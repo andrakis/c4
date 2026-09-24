@@ -76,31 +76,54 @@ export class Display {
     setInterval(() => { if (document.hidden) pump(); }, 200);
   }
 
-  // One screen refresh's worth of commands, drawn once. Everything before
-  // the last full-screen frame (FB or FBREF) is covered by it, so only the
-  // commands that change state (SIZE, IMGDEF, CLIP, NOCLIP) are replayed
-  // from before it; the rest is drawn from that frame on, and shown with
-  // one present at the end instead of one per PRESENT. What the page shows
-  // after the batch is exactly what drawing every command would show.
+  // One screen refresh's worth of commands, drawn once.
+  //
+  // The screen changes only where the guest said so -- at a PRESENT, or a
+  // framebuffer frame -- never at the end of a batch: a batch can end in
+  // the middle of a frame the guest is still drawing, and showing that is
+  // flicker. So the batch is cut after its last present point: everything
+  // up to there is drawn, from the last full-screen command before it
+  // (CLEAR, FB, FBREF: what came earlier is covered, so only the state
+  // commands among it are replayed), and shown once; what follows is the
+  // start of the next frame, drawn off screen and shown when its own
+  // present arrives. A guest that never presents is drawing in immediate
+  // mode, and each batch is shown as it comes.
   drawCoalesced(words) {
-    let last = -1;
+    let lastPresent = -1, end = 0;
     for (let i = 0; i < words.length && words[i] >= 2; i += words[i]) {
       const t = words[i + 1];
-      if (t === CMD.FB || t === CMD.FBREF) last = i;
+      if (t === CMD.PRESENT || t === CMD.FB || t === CMD.FBREF) { lastPresent = i; end = i + words[i]; }
     }
     this.coalescing = true;
-    if (last > 0) {
+    if (lastPresent < 0) {
+      this.draw(words);
+      this.coalescing = false;
+      if (!this.presentMode) this.present();
+      return;
+    }
+    let full = -1;
+    for (let i = 0; i < end; i += words[i]) {
+      const t = words[i + 1];
+      if (t === CMD.CLEAR || t === CMD.FB || t === CMD.FBREF) full = i;
+    }
+    if (full > 0) {
       const keep = [];
-      for (let i = 0; i < last; i += words[i]) {
+      for (let i = 0; i < full; i += words[i]) {
         const t = words[i + 1];
         if (t === CMD.SIZE || t === CMD.IMGDEF || t === CMD.CLIP || t === CMD.NOCLIP)
           for (let k = 0; k < words[i]; k++) keep.push(words[i + k]);
       }
       if (keep.length) this.draw(Int32Array.from(keep));
-      this.draw(words.subarray(last));
-    } else this.draw(words);
+      this.draw(words.subarray(full, end));
+    } else this.draw(words.subarray(0, end));
+    this.presentMode = true;
     this.coalescing = false;
     this.present();
+    if (end < words.length) {
+      this.coalescing = true;
+      this.draw(words.subarray(end));
+      this.coalescing = false;
+    }
   }
 
   // Throw away whatever is waiting in the ring (a reset).

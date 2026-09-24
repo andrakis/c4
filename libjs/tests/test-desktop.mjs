@@ -32,19 +32,20 @@ boot(vm, new Uint8Array(readFileSync(join(ROOT, 'c4ix32.c4r'))), ['c4ix32.c4r'])
 const consoleText = () => Buffer.from(out).toString('latin1');
 
 // The screen: every string of the last presented frame, with its position.
-let frame = [], cur = [], presents = 0;
+let frame = [], cur = [], presents = 0, rects = [], curRects = [];
 const pump = () => {
   const words = gui.drain();
   for (let i = 0; words && i < words.length; i += words[i]) {
     const t = words[i + 1];
-    if (t === CMD.CLEAR) cur = [];
+    if (t === CMD.CLEAR) { cur = []; curRects = []; }
+    if (t === CMD.RECT) curRects.push({ x: words[i + 2], y: words[i + 3], w: words[i + 4], h: words[i + 5], rgb: words[i + 6] });
     if (t === CMD.TEXT2) {
       const n = words[i + 8];
       let s = '';
       for (let k = 0; k < n; k++) s += String.fromCharCode((words[i + 9 + (k >> 2)] >>> ((k & 3) * 8)) & 0xff);
       cur.push({ x: words[i + 2], y: words[i + 3], s });
     }
-    if (t === CMD.PRESENT) { frame = cur; presents++; }
+    if (t === CMD.PRESENT) { frame = cur; rects = curRects; presents++; }
   }
 };
 // run() returns early whenever the guest sleeps, so waiting is until()'s job
@@ -105,6 +106,21 @@ check(['My Computer', 'Command Prompt', 'Notepad', 'Calculator', 'Task Manager']
 // ---- Command Prompt ----------------------------------------------------------------
 type('ps\n');
 check(until(() => has(/c4ix-desktop/) && has(/tasks,/)), 'ps typed in the Command Prompt runs in its shell', screen());
+
+// ---- top runs until Ctrl-C ----------------------------------------------------------------
+type('top\n');
+check(until(() => has(/Ctrl-C to stop/), 800), 'top starts in the Command Prompt', screen());
+const t0 = vm.dev.simMs();
+until(() => vm.dev.simMs() - t0 > 5000, 3000);
+check(has(/Ctrl-C to stop/) && !frame.some(t => /^c4ix:\/\$/.test(t.s) && t.y > 300), 'and is still running five machine-seconds later', screen());
+key('c', 2, 67);
+check(until(() => has(/\^C/) && frame.filter(t => /^c4ix:\/\$/.test(t.s)).length >= 1), 'Ctrl-C stops it and the prompt comes back', screen());
+
+// ---- raycast in the Command Prompt: 256 colours ---------------------------------------------
+type('raycast.c4r 15x15 -s 3 -d -n 30 -g 80x25\n');
+check(until(() => new Set(rects.map(r => r.rgb)).size > 8, 1500), `raycast draws in colour in the Command Prompt (${new Set(rects.map(r => r.rgb)).size} colours)`);
+until(() => has(/^c4ix:\/\$/), 1500);
+key('l', 2, 76);                                               // Ctrl-L: a clean screen for what follows
 
 // ---- Explorer ------------------------------------------------------------------------
 start('Explorer');

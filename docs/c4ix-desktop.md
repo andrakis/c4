@@ -198,3 +198,37 @@ Known: C4IX's boot loader race (docs/c4bb-design.md, "Known issue") now
 shows on every boot of this build as one extra, empty entry: "vfsload:
 cannot open" and 50/51. All 50 real entries load. It moves with timing --
 an instrumented vfsload loads 50/50 -- and is not caused by this work.
+
+## Fixes after the user's first look (2026-09-24)
+
+- [x] **`top` ran three times and quit.** It was written before the console
+      could be interrupted. It now runs until Ctrl-C, redrawing in place
+      (ESC[2J ESC[H) once a machine-second and sleeping in between; `top N`
+      still stops after N screens.
+- [x] **raycast in a Command Prompt had no colour and the desktop
+      flickered.** Four causes, all fixed:
+  - the terminal kept 16 colours and dropped raycast's 256-colour codes;
+    cells now hold xterm-256 indices (24-bit colours map to the nearest);
+  - it was 80x24, so raycast's 25-row frames scrolled every frame; it is
+    80x25 now;
+  - on the shared display path the page presented at the end of every
+    ring batch, so a batch that ended part-way through the desktop's
+    redraw showed the half-drawn scene. The page now presents only where
+    the guest presents, and draws a trailing partial frame off screen
+    (`display.js` drawCoalesced);
+  - the terminal read 1 KB per pass; it now drains its pipe before drawing,
+    so whole frames arrive together, and output-driven redraws are capped
+    at one per 25 ms of machine time (machine time, not host time: the two
+    run at different rates when the machine is unpaced, and on host time the
+    headless test saw no redraw at all).
+  The page's default pace also went from 20 to 100 MHz, the difference
+  between raycast managing a few frames a second in the desktop and 80.
+  Headless: 30 distinct colours drawn in the Command Prompt; browser:
+  raycast's status line and colour counted, screenshot checked.
+  raycast still reads keys through `/dev/tty`, which is the page's
+  terminal, not the window it draws in: `-d` (demo) runs it hands-free.
+- [x] **A movable split between the terminal and the display.** Drag the
+      bar between the panes (remembered; double-click resets). The canvas
+      scales to fill its pane, snapping to a whole-number scale with sharp
+      pixels when one is within 15% of the best fit. Browser gate: dragging
+      400 px grew the display from 800 to 1064 px.

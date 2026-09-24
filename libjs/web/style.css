@@ -36,15 +36,23 @@ body {
 #bar button.active { border-color: var(--pink); color: var(--pink); }
 #status { margin-left: auto; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-/* The display column is as wide as the canvas when there is room for it,
-   so what the machine draws is shown pixel for pixel -- a scaled-down
-   desktop is text nobody can read. The terminal takes what is left, and
-   on a narrow window the display shrinks rather than scrolls. */
+/* Terminal | splitter | display. The terminal's width is the person's to
+   choose (drag the splitter; kept in localStorage), the display takes the
+   rest, and the canvas is scaled to fill its pane (app.js fitDisplay). */
 #panes {
   flex: 1; min-height: 0;
-  display: grid; grid-template-columns: minmax(320px, 1fr) minmax(0, max-content);
-  gap: 8px; padding: 8px 16px 16px;
+  display: flex; gap: 0; padding: 8px 16px 16px;
 }
+#term-pane { flex: 0 0 var(--term-w, 680px); min-width: 240px; }
+#display-pane { flex: 1 1 0; min-width: 200px; }
+#splitter {
+  flex: 0 0 10px; cursor: col-resize; position: relative; touch-action: none;
+}
+#splitter::after {
+  content: ''; position: absolute; top: 0; bottom: 0; left: 4px; width: 2px;
+  background: var(--edge); border-radius: 1px;
+}
+#splitter:hover::after, #splitter.dragging::after { background: var(--pink); }
 .pane {
   display: flex; flex-direction: column; min-height: 0; min-width: 0;
   background: var(--panel); border: 1px solid var(--edge); border-radius: 6px;
@@ -75,16 +83,16 @@ body {
 #terminal:empty::before { content: attr(data-placeholder); color: var(--dim); font-style: italic; }
 
 #display-wrap {
-  flex: 1 1 0; min-height: 0; display: flex; align-items: flex-start; justify-content: center;
-  background: var(--screen); border-radius: 0 0 6px 6px; padding: 8px;
+  flex: 1 1 0; min-height: 0; min-width: 0; display: flex; align-items: flex-start; justify-content: center;
+  background: var(--screen); border-radius: 0 0 6px 6px; padding: 8px; overflow: hidden;
 }
-#display {
-  max-width: 100%; max-height: 100%; aspect-ratio: auto;
-  image-rendering: pixelated; background: #000; outline: none; cursor: crosshair;
-}
+#display { background: #000; outline: none; cursor: crosshair; flex: none; }
+#display.crisp { image-rendering: pixelated; }
 #display:focus { box-shadow: 0 0 0 1px var(--cyan); }
 
 @media (max-width: 900px) {
-  #panes { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(320px, 1fr) auto; overflow-y: auto; }
+  #panes { flex-direction: column; overflow-y: auto; }
+  #term-pane { flex: 0 0 320px; }
+  #splitter { display: none; }
   #status { margin-left: 0; width: 100%; }
 }

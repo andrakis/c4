@@ -807,7 +807,7 @@ static void shutdown_screen() {
 }
 
 int main(int argc, char **argv) {
-    int *region, k, busy, secs, clock_min, last_tick;
+    int *region, k, busy, secs, clock_min, last_tick, last_draw, input;
 
     if (!gui_present()) { printf("desktop: not fitted\n"); return 0; }
     region = ualloc(65536);
@@ -839,11 +839,11 @@ int main(int argc, char **argv) {
 
     term_open(0);
     running = 1; dirty = 1;
-    clock_min = 0 - 1; last_tick = 0;
+    clock_min = 0 - 1; last_tick = 0; last_draw = 0;
     while (running) {
-        busy = 0;
+        busy = 0; input = 0;
         while (gui_poll(ev)) {
-            busy = 1;
+            busy = 1; input = 1;
             if (ev[0] == GUI_EV_DOWN) mouse_down(ev[1], ev[2], ev[3]);
             else if (ev[0] == GUI_EV_UP) mouse_up(ev[1], ev[2]);
             else if (ev[0] == GUI_EV_MOVE) mouse_move(ev[1], ev[2]);
@@ -863,8 +863,13 @@ int main(int argc, char **argv) {
         }
         secs = gui_clock() / 60;
         if (secs != clock_min) { clock_min = secs; dirty = 1; }
-        if (dirty) { redraw(); busy = 1; }
-        if (!busy) umsleep(15);
+        // A redraw is the whole scene. Input gets one at once; a program
+        // pouring out text (raycast, top) gets at most one every 25 ms --
+        // it can print far faster than a person can read. Machine time
+        // (__time), the clock the desktop sleeps on: host time runs at a
+        // different rate whenever the machine is not paced to it.
+        if (dirty && (input || __time() - last_draw >= 25)) { redraw(); last_draw = __time(); busy = 1; }
+        if (!busy) umsleep(dirty ? 5 : 15);
     }
 
     k = 0;

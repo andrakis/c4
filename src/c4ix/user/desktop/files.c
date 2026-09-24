@@ -1,7 +1,8 @@
 // files.c -- Explorer. docs/c4ix-desktop.md.
 //
 // A folder tree beside a file list, over C4IX's VFS. Double-click opens:
-// a folder shows its contents, a .c4r program runs in a new Command
+// a folder shows its contents, a program (a .c4r, or anything C4R
+// inside, which is how /bin's are named) runs in a new Command
 // Prompt, anything else opens in Notepad. New Folder, Delete (confirmed)
 // and Rename go through the kernel's mkdir, unlink and rename.
 
@@ -13,7 +14,7 @@ struct files {
     char path[128];
     int n, sel, top;                   // the list: entries, selection, first row shown
     char name[MAXE * NAMEW];
-    int isdir[MAXE], size[MAXE];
+    int isdir[MAXE], size[MAXE], prog[MAXE];
     int nt, tsel, ttop;                // the tree: folders, their depth, the one shown
     char tpath[MAXT * 96];
     int tdepth[MAXT];
@@ -44,7 +45,7 @@ static int before(char *a, char *b) {
 
 // Read a directory: folders first, then files, each alphabetical.
 static void load(struct files *f) {
-    int i, j, r, s, d, st[2];
+    int i, j, r, s, d, st[3];
     char nm[NAMEW];
     f->n = 0;
     i = 0;
@@ -54,7 +55,9 @@ static void load(struct files *f) {
         ui_cpy(ename(f, f->n), nm);
         f->isdir[f->n] = r;
         join(tbuf, f->path, nm);
+        st[2] = 0;
         f->size[f->n] = (!r && ustat(tbuf, st) == 0) ? st[1] : 0;
+        f->prog[f->n] = !r && (st[2] || ui_ends(nm, ".c4r"));
         ++f->n;
         ++i;
     }
@@ -68,6 +71,7 @@ static void load(struct files *f) {
                 ui_cpy(nm, ename(f, j)); ui_cpy(ename(f, j), ename(f, j - 1)); ui_cpy(ename(f, j - 1), nm);
                 d = f->isdir[j]; f->isdir[j] = f->isdir[j - 1]; f->isdir[j - 1] = d;
                 s = f->size[j]; f->size[j] = f->size[j - 1]; f->size[j - 1] = s;
+                s = f->prog[j]; f->prog[j] = f->prog[j - 1]; f->prog[j - 1] = s;
                 --j;
             } else break;
         }
@@ -130,9 +134,9 @@ static void up(struct win *w) {
     go(w, f->path);
 }
 
-static char *type_of(char *name, int dir) {
+static char *type_of(char *name, int dir, int prog) {
     if (dir) return "File Folder";
-    if (ui_ends(name, ".c4r")) return "C4IX Program";
+    if (prog) return "C4IX Program";
     if (ui_ends(name, ".c")) return "C Source";
     if (ui_ends(name, ".h")) return "C Header";
     if (ui_ends(name, ".txt")) return "Text Document";
@@ -148,7 +152,7 @@ static void open_sel(struct win *w) {
     if (f->sel < 0 || f->sel >= f->n) return;
     join(tbuf, f->path, ename(f, f->sel));
     if (f->isdir[f->sel]) go(w, tbuf);
-    else if (ui_ends(tbuf, ".c4r")) run_command(tbuf);
+    else if (f->prog[f->sel]) run_command(tbuf);
     else note_open(tbuf);
 }
 
@@ -171,10 +175,10 @@ int files_open(char *path) {
 
 // ---- drawing --------------------------------------------------------------------
 
-static void small_icon(int dir, char *name, int x, int y) {
+static void small_icon(int dir, int prog, int x, int y) {
     if (dir) {
         d_rect(x, y + 2, 6, 2, 0xc8a000); d_rect(x, y + 4, 14, 9, 0xffd84a); d_recto(x, y + 4, 14, 9, 0x806000);
-    } else if (ui_ends(name, ".c4r")) {
+    } else if (prog) {
         d_rect(x, y + 1, 14, 12, C_WHITE); d_recto(x, y + 1, 14, 12, C_DARK); d_rect(x + 1, y + 2, 12, 3, C_TITLE);
     } else {
         d_rect(x + 2, y, 10, 14, C_WHITE); d_recto(x + 2, y, 10, 14, C_SHADOW);
@@ -211,7 +215,7 @@ void files_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
             d_rect(lx - 9, y + 8, 7, 1, C_SHADOW);
             d_rect(lx - 9, y - 2, 1, 10, C_SHADOW);
         }
-        small_icon(1, "", lx, y + 1);
+        small_icon(1, 0, lx, y + 1);
         tbuf[0] = 0;
         if (i == 0) ui_cpy(tbuf, "C4IX (/)");
         else {
@@ -239,7 +243,7 @@ void files_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     i = f->top;
     y = oy + TOOL_H + 22;
     while (i < f->n && i < f->top + rows) {
-        small_icon(f->isdir[i], ename(f, i), lx + 6, y + 1);
+        small_icon(f->isdir[i], f->prog[i], lx + 6, y + 1);
         sel_bg = i == f->sel;
         if (sel_bg) d_rect(lx + 23, y, ui_len(ename(f, i)) * 6 + 6, ROW_H - 1, f->pane == 0 && focused ? C_SEL : C_FACE);
         d_text(lx + 26, y + 2, sel_bg && f->pane == 0 && focused ? C_WHITE : C_DARK, F_SANS, ename(f, i));
@@ -248,7 +252,7 @@ void files_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
             ui_cat(tbuf, " KB");
             d_text(lx + 2 + widths[0] + widths[1] - ui_len(tbuf) * 6 - 8, y + 2, C_DARK, F_SANS, tbuf);
         }
-        d_text(lx + 2 + widths[0] + widths[1] + 6, y + 2, C_DARK, F_SANS, type_of(ename(f, i), f->isdir[i]));
+        d_text(lx + 2 + widths[0] + widths[1] + 6, y + 2, C_DARK, F_SANS, type_of(ename(f, i), f->isdir[i], f->prog[i]));
         y = y + ROW_H;
         ++i;
     }

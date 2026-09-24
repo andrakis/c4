@@ -232,3 +232,72 @@ an instrumented vfsload loads 50/50 -- and is not caused by this work.
       scales to fill its pane, snapping to a whole-number scale with sharp
       pixels when one is within 15% of the best fit. Browser gate: dragging
       400 px grew the display from 800 to 1064 px.
+
+## Part three: a lazy disk, programs from Explorer, compilers inside (asked for 2026-09-24)
+
+The web page fetched all 181 disk files, one by one, before the machine
+started, although a C4IX boot opens almost none of them. Explorer did not
+show the C4IX programs as programs, and could not run them. innerbench
+failed. The machine had no compilers to build a program with, and the
+user wants to compile a test GUI application inside it and run it.
+
+### L: the lazy disk
+- [x] **Lazy RAM files in the kernel.** A vnode can name a host file and
+      its size without holding its bytes (`vfs_lazyfile`, SYS_LAZYFILE 227).
+      The first read, write or program load fills it (`vfs_fill`), and a
+      truncating open drops the host copy. `ls` and stat need only the
+      size, so they never fill a file.
+- [x] **vfsload makes entries lazy.** The image build writes `c4ix.sizes`,
+      a "SIZE NAME" line per disk file. vfsload makes each entry named in
+      it a lazy file, and an alias of a lazy file another lazy file on the
+      same host bytes. Anything the table does not list is copied as
+      before, and with no table at all everything is.
+- [x] **The page fetches on demand.** The build also writes `index.json`,
+      names and sizes. The page sends only that to the worker. The
+      worker's disk fetches a file with a synchronous request the first
+      time the machine opens it, which is allowed in a worker, and the
+      machine's open is synchronous anyway. A disk with no index falls
+      back to the eager fetch, as does `lazy: false`.
+- [x] Evidence. Headless desktop test: booting reads 4 of 182 files.
+      Browser gate on the 3060 Ti: 4 of 182 fetched, shell prompt 1.2 s
+      after the page loaded. `x5-c4m.txt` re-pinned for the larger vnode
+      (112 to 128 bytes).
+
+### E: Explorer runs programs
+- [x] C4IX's programs live in `/bin` without a `.c4r` suffix, so Explorer
+      showed them as plain files and opened them in Notepad. stat now
+      says whether a file is a program: by its C4R signature, or for a
+      lazy file by its host name, so a listing never fetches anything.
+      Explorer shows these as "C4IX Program" with the program icon, and
+      double-click or File > Open runs one in a new Command Prompt.
+      Headless: `/bin` lists them as programs and double-clicking `hello`
+      runs it.
+
+### I: innerbench
+- [x] innerbench compiles C4KE from source in nested c4m instances, and
+      c4m has no preprocessor. The mailbox commit (ad57ad0, 2026-09-09)
+      gave c4ke.c global arrays, which c4's compiler cannot parse, and a
+      scheduler call into `c4bb_mbox.h`, which c4m never reads. Both inner
+      kernels died with "bad global declaration" while the outer one
+      still said "innerbench complete" and exited 0. The table is now
+      allocated, and the two mailbox reads the scheduler needs are
+      written out against the registers. `make test` now fails when an
+      inner kernel does not compile or no inner benchmark finishes; it
+      passes with the fix and fails on the old source.
+
+### C: compilers inside C4IX
+The survey (2026-09-24): the VM has no write opcode, so a compiler writes
+its output through C4KE's `OP_VFS_PUT`, the C4DOS RAM-disk API, or
+stdout. C4IX offers none of the first two, so c4cc, c4rlink and c4sp/c4lc
+all fail at the write. c4th writes images to stdout, and the C4IX shell
+can redirect that into a RAM file, so the Forth route works already.
+- [ ] **C1: C4KE's RAM-filesystem opcodes in C4IX.** OP_VFS_PUT, GET,
+      UNLINK, COUNT and NAME in `src/c4ix/c4ke.c`, over the C4IX VFS. This
+      unblocks c4cc, c4rlink and c4lc with no change to the tools.
+- [ ] **C2: the tools on the disk and in `/bin`.** c4cc, c4rlink, cpp,
+      c4sp with c4lc, c4th, and a 32-bit `libc4ix.c4l` plus the headers
+      a program is built against.
+- [ ] **C3: room to run them.** Task stack and memory for a compiler.
+- [ ] **C4: compile a GUI program inside the machine and run it.** A
+      sample source on the disk, built with the in-machine compiler from
+      a Command Prompt and run. Gate: headless, then the browser.

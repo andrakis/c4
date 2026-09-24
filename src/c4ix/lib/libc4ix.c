@@ -84,6 +84,7 @@ int ucloexec(int fd, int on)          { return __c4ix_syscall(SYS_CLOEXEC, fd, o
 int ustat(char *path, int *out)       { return __c4ix_syscall(SYS_STAT, (int)path, (int)out, 0); }
 int uunlink(char *path)               { return __c4ix_syscall(SYS_UNLINK, (int)path, 0, 0); }
 int urename(char *path, char *nn)     { return __c4ix_syscall(SYS_RENAME, (int)path, (int)nn, 0); }
+int ulazyfile(char *p, char *h, int n) { return __c4ix_syscall(SYS_LAZYFILE, (int)p, (int)h, n); }
 
 int spawn(char *path, int argc, char **argv) {
     return __c4ix_syscall(SYS_SPAWN, (int)path, argc, (int)argv);

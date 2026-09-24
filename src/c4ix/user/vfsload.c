@@ -450,11 +450,70 @@ void parse_block(int parentIndent, char *pathPrefix) {
 /// any ilink can read them back), then ilinks
 ///
 
-int load_entries() {
-    int i, ok, rlen, ilFd, ilLen;
-    char *rbuf, *ilBuf;
+// ---- lazy entries ----
+//
+// With c4ix.sizes on the disk (a line "SIZE NAME" per host file, written
+// by the image build), an entry is not copied at all: it becomes a lazy
+// RAM file (ulazyfile) that the kernel reads in from the host the first
+// time something uses it. A boot then reads nothing it does not run. An
+// entry the table does not list is copied as before, and with no table
+// at all everything is.
 
-    ok = 0;
+char *g_sizes;
+int g_sizes_len;
+
+// the size the table gives for host file NAME, or -1
+int size_of(char *name) {
+    int i, n, v, k;
+    if (!g_sizes) return 0 - 1;
+    n = ustrlen(name);
+    i = 0;
+    while (i < g_sizes_len) {
+        v = 0;
+        while (i < g_sizes_len && g_sizes[i] >= '0' && g_sizes[i] <= '9') { v = v * 10 + (g_sizes[i] - '0'); ++i; }
+        if (i < g_sizes_len && g_sizes[i] == ' ') ++i;
+        k = 0;
+        while (k < n && i + k < g_sizes_len && g_sizes[i + k] == name[k]) ++k;
+        if (k == n && (i + k >= g_sizes_len || g_sizes[i + k] == 10)) return v;
+        while (i < g_sizes_len && g_sizes[i] != 10) ++i;
+        ++i;
+    }
+    return 0 - 1;
+}
+
+void load_sizes() {
+    int fd, n;
+    g_sizes = 0;
+    if ((fd = uopen("c4ix.sizes", O_RD)) < 0) return;
+    g_sizes = (char *)ualloc(65536);
+    n = uread(fd, g_sizes, 65535);
+    uclose(fd);
+    if (n <= 0) { g_sizes = 0; return; }
+    g_sizes_len = n;
+}
+
+// the host name behind a vfs path an earlier entry made, or 0
+char *host_of(char *path) {
+    int i;
+    i = 0;
+    while (i < g_nentries) {
+        if (g_entry_is_ilink[i] != 1 && !ustrcmp(g_entry_path[i], path)) return g_entry_value[i];
+        ++i;
+    }
+    return 0;
+}
+
+int load_entries() {
+    int i, ok, rlen, ilFd, ilLen, sz, lazy;
+    char *rbuf, *ilBuf, *host;
+
+    ok = 0; lazy = 0;
+    i = 0;
+    while (i < g_nentries) {
+        if (!g_entry_is_ilink[i] && (sz = size_of(g_entry_value[i])) >= 0 &&
+            ulazyfile(g_entry_path[i], g_entry_value[i], sz) == 0) { ++ok; ++lazy; g_entry_is_ilink[i] = 2; }
+        ++i;
+    }
     i = 0;
     while (i < g_nentries) {
         if (!g_entry_is_ilink[i]) {
@@ -468,7 +527,10 @@ int load_entries() {
     }
     i = 0;
     while (i < g_nentries) {
-        if (g_entry_is_ilink[i]) {
+        // an alias of a lazy file is another lazy file on the same host bytes
+        if (g_entry_is_ilink[i] == 1 && (host = host_of(g_entry_value[i])) && (sz = size_of(host)) >= 0 &&
+            ulazyfile(g_entry_path[i], host, sz) == 0) { ++ok; ++lazy; }
+        else if (g_entry_is_ilink[i] == 1) {
             ilFd = uopen(g_entry_value[i], O_RD);
             if (ilFd < 0) {
                 uprintf("vfsload: ilink %s -> %s: target not found\n", g_entry_path[i], g_entry_value[i]);
@@ -481,6 +543,7 @@ int load_entries() {
         }
         ++i;
     }
+    if (lazy) uprintf("vfsload: %d entries left on the host until first use\n", lazy);
     return ok;
 }
 
@@ -502,6 +565,7 @@ int main(int argc, char **argv) {
     g_subst = (char **)ualloc(MAX_SUBST * sizeof(int));
     g_subst_depth = 0;
 
+    load_sizes();
     split_lines(manifest);
     extract_vars();
 

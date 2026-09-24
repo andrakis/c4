@@ -109,8 +109,13 @@ try {
     const base = await open('system=c4ix');
     if (!ok('the page loads and window.c4m exists', !!base, BASES.join(', '))) throw new Error('no page');
     console.log(`  (served at ${base})`);
+    const t0 = Date.now();
     ok('C4IX boots to its shell', await waitTerm('c4ix-sh', 90000) && await waitTerm('c4ix:/$', 30000),
        (await term()).slice(-400));
+    console.log(`  (shell prompt ${((Date.now() - t0) / 1000).toFixed(1)}s after the page loaded)`);
+    const disk = await tab.eval('window.c4m.status.disk');
+    ok(`the disk is lazy: boot fetched ${disk && disk.fetched} of ${disk && disk.files} files`,
+       !!disk && disk.lazy && disk.fetched < 15, JSON.stringify(disk));
     await focusTerm();
     await tab.type('ps\n');
     ok('typed ps lists the tasks', await waitTerm('tasks,', 30000), (await term()).slice(-400));

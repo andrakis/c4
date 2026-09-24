@@ -69,8 +69,8 @@ enum {
     SYS_CHDIR = 215, SYS_MKDIR = 216, SYS_GETCWD = 217, SYS_READDIR = 218,
     SYS_KILL = 219,
     SYS_SLEEP = 220, SYS_AVAIL = 221, SYS_INTR = 222, SYS_CLOEXEC = 223,
-    SYS_STAT = 224, SYS_UNLINK = 225, SYS_RENAME = 226,
-    SYS_TOP = 227          // one past the last: sched_trap's range check
+    SYS_STAT = 224, SYS_UNLINK = 225, SYS_RENAME = 226, SYS_LAZYFILE = 227,
+    SYS_TOP = 228          // one past the last: sched_trap's range check
 };
 // taskinfo fills, in order: id, parent, state, privs, nsyscalls,
 // ntraps, cycles, then the name packed into the remaining words.
@@ -143,6 +143,11 @@ struct vnode {
     struct vnode *child;        // VN_DIR: first entry
     struct vnode *parent;       // VN_DIR: enclosing directory
     char name[VN_NAME_MAX];     // one component, not a path
+    // A lazy RAM file (SYS_LAZYFILE): its bytes are still on the host,
+    // under this name, and are read in the first time anything opens,
+    // reads, writes or loads it. size is already right.
+    char *hostname;
+    int lazy;
 };
 
 struct file {
@@ -162,6 +167,8 @@ struct vnode *vfs_mkdir(char *path);
 int          vfs_stat(char *path, int *out);     // out[0] 1 dir, 2 file, 3 other; out[1] bytes
 int          vfs_unlink(char *path);
 int          vfs_rename(char *path, char *newname);
+int          vfs_lazyfile(char *path, char *host, int size);
+int          vfs_fill(struct vnode *vn);         // read a lazy file's bytes in; 1 if it has them
 struct vnode *vfs_root();
 struct vnode *vfs_cwd();
 int          vfs_chdir(char *path);

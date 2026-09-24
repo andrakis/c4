@@ -105,6 +105,7 @@ int c4r_load(char *path, struct c4r_image *img) {
         // Second, not first, so that loading a host image costs exactly
         // what it always did. The order is invisible otherwise: a RAM
         // path and a host path cannot name the same file.
+        if (vn->lazy) vfs_fill(vn);
         total = vn->size;
         if (total > C4R_BUF_MAX) {
             kprintf("c4ix: loader: %s is %d bytes, over the %d limit\n",

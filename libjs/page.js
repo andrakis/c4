@@ -44,6 +44,19 @@ async function fetchDisk(dir, onProgress) {
   return files;
 }
 
+// A lazy disk: index.json names every file and its size, and nothing
+// is fetched up front -- the worker reads a file from the server the
+// first time the machine opens it (LazyFiles in worker.js). A disk
+// with no index.json falls back to fetchDisk. opts.lazy === false
+// forces the old way.
+async function fetchIndex(dir) {
+  try {
+    const r = await fetch(`${dir}/index.json`);
+    if (!r.ok) return null;
+    return await r.json();
+  } catch { return null; }
+}
+
 export class C4M {
   static async boot(opts) {
     const vm = new C4M(opts);
@@ -68,9 +81,11 @@ export class C4M {
   async start(opts) {
     this.emit('status', { state: 'loading' });
     const image = opts.image instanceof Uint8Array ? opts.image : await fetchBytes(opts.image);
-    let disk = [];
+    let disk = [], lazy = null;
     if (opts.disk instanceof Map) disk = [...opts.disk];
-    else if (opts.disk) disk = await fetchDisk(opts.disk, (n, of) => this.emit('loading', { n, of }));
+    else if (opts.disk && opts.lazy !== false && (lazy = await fetchIndex(opts.disk))) {
+      lazy = { base: new URL(opts.disk + '/', location.href).href, index: lazy };
+    } else if (opts.disk) disk = await fetchDisk(opts.disk, (n, of) => this.emit('loading', { n, of }));
     const argv = opts.argv || [String(opts.image).split('/').pop()];
     // The shared display path, when the page is cross-origin isolated and
     // has a display; opts.shared === false asks for the message path.
@@ -80,7 +95,7 @@ export class C4M {
     }
     this.bootMsg = {
       type: 'boot', image: image.buffer.slice(image.byteOffset, image.byteOffset + image.byteLength),
-      argv, disk: disk.map(([n, b]) => [n, b]), arenaMb: opts.arenaMb || 64,
+      argv, disk: disk.map(([n, b]) => [n, b]), lazy, arenaMb: opts.arenaMb || 64,
       mhz: opts.mhz || 20, unpaced: !!opts.unpaced, mbox: opts.mbox | 0,
       gui: this.display ? { w: this.display.width, h: this.display.height } : (opts.gui || null),
       shared: this.shared || null,

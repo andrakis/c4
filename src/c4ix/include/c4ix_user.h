@@ -20,7 +20,7 @@ enum {
     SYS_CHDIR = 215, SYS_MKDIR = 216, SYS_GETCWD = 217, SYS_READDIR = 218,
     SYS_KILL = 219, SYS_SLEEP = 220,
     SYS_AVAIL = 221, SYS_INTR = 222, SYS_CLOEXEC = 223,
-    SYS_STAT = 224, SYS_UNLINK = 225, SYS_RENAME = 226
+    SYS_STAT = 224, SYS_UNLINK = 225, SYS_RENAME = 226, SYS_LAZYFILE = 227
 };
 // taskinfo record, in order: id, parent, state, privs, nsyscalls,
 // ntraps, cycles, then a 16-byte name
@@ -79,9 +79,10 @@ int  umsleep(int ms);            // sleep; other tasks run meanwhile
 int  uavail(int fd);             // bytes waiting; 0 empty (never blocks), -1 end of file
 int  uintr(int pid);             // Ctrl-C for the job running under task pid
 int  ucloexec(int fd, int on);   // 1: spawned children do not inherit fd
-int  ustat(char *path, int *out); // out[0] 1 dir, 2 file, 3 other; out[1] bytes; -1 none
+int  ustat(char *path, int *out); // out[0] 1 dir, 2 file, 3 other; out[1] bytes; out[2] 1 program; -1 none
 int  uunlink(char *path);         // remove a file, or an empty directory
 int  urename(char *path, char *newname);  // a new name in the same directory
+int  ulazyfile(char *path, char *host, int size); // a RAM file read from the host on first use
 int *ualloc(int bytes);
 int  getpid();
 

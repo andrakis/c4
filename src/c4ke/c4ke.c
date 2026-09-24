@@ -575,12 +575,21 @@ enum {
 
 // Extensions register their opcode names here; request_symbol asks this
 // table first, so u0's __c4_opcode("OP_X", OP_REQUEST_SYMBOL) reaches them.
+//
+// Pointers allocated on first use, NOT arrays: c4ke.c is compiled from
+// source by c4m at run time (innerbench, the C4DOS ladder), and c4's
+// compiler has no global arrays -- "static char *x[32];" is "bad global
+// declaration" there, which is how this table once broke innerbench.
 enum { KEXT_SYMBOLS_MAX = 32 };
-static char *kext_symbol_names[32];
-static int   kext_symbol_ops[32];
-static int   kext_symbol_count;
+static char **kext_symbol_names;
+static int   *kext_symbol_ops;
+static int    kext_symbol_count;
 static int kext_register_symbol (char *name, int opcode) {
 	if (kext_symbol_count >= KEXT_SYMBOLS_MAX) return 0;
+	if (!kext_symbol_names) {
+		if (!(kext_symbol_names = (char **)malloc(KEXT_SYMBOLS_MAX * sizeof(char *)))) return 0;
+		if (!(kext_symbol_ops = (int *)malloc(KEXT_SYMBOLS_MAX * sizeof(int)))) return 0;
+	}
 	kext_symbol_names[kext_symbol_count] = name;
 	kext_symbol_ops[kext_symbol_count] = opcode;
 	++kext_symbol_count;
@@ -1335,9 +1344,31 @@ static int kernel_is_task_running (int *task) {
 // task bound to host frames -- the first to receive or await them. The opcodes
 // live in extensions/c4ke_mbox.c; the state is here because the scheduler
 // below reads it and c4 has no prototypes.
+//
+// The two things the scheduler asks of the mailbox are written out here
+// against the registers, NOT through c4bb_mbox.h's mb_poll/mb_bell: this
+// file is compiled from source by c4m, which skips #include (see
+// bb_whowrote above), and calling a function it never saw is "bad
+// function call (0)" -- which is how the mailbox once broke innerbench.
+// Same register map and ring format as include/c4bb_mbox.h.
+enum { KMBX_BASE = 0x1b4, KMBX_BELL = 0x1bc, KMBX_BELL_IDLE = 2 };
 static int  mbx_fitted;
 static int *mbx_host_owner;
-static int  mbx_host_pending () { return mbx_fitted && mb_poll() != 0; }
+static int  mbx_host_pending () {
+	int *in, cap, head, tail, at;
+	if (!mbx_fitted) return 0;
+	in = (int *)*(int *)KMBX_BASE;
+	cap = in[0]; head = in[1]; tail = in[2];      // MB_CAP, MB_HEAD, MB_TAIL
+	if (head == tail) return 0;
+	at = tail % cap;
+	if (in[3 + at] == -1) {                        // skip marker: as mb_poll
+		tail = tail + (cap - at);
+		in[2] = tail;
+		if (head == tail) return 0;
+	}
+	return 1;
+}
+static void mbx_bell_idle () { *(int *)KMBX_BELL = KMBX_BELL_IDLE; }
 
 // Find a task to run.
 // Also handles certain wait states like sleeping.
@@ -3019,7 +3050,7 @@ static int task_idle (int argc, char **argv) {
 			//i = __time();
 			// Nothing runnable: tell a host that paces this machine by the
 			// mailbox that it may stop until it has queued something.
-			if (mbx_fitted) mb_bell(MB_BELL_IDLE);
+			if (mbx_fitted) mbx_bell_idle();
 			__c4_usleep(KERNEL_IDLE_SLEEP_TIME);
 			//printf("(idle: slept for %d usec)\n", __time() - i);
 		}

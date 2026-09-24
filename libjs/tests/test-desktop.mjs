@@ -23,8 +23,21 @@ const check = (cond, what, extra = '') => {
   return cond;
 };
 
-const names = JSON.parse(readFileSync(join(ROOT, 'disk/manifest.json'), 'utf8'));
-const files = new Map(names.map(n => [n, new Uint8Array(readFileSync(join(ROOT, 'disk', n)))]));
+// The disk the way the web page now serves it: lazily, a file read from
+// the host the first time the machine opens it (worker.js LazyFiles).
+const index = JSON.parse(readFileSync(join(ROOT, 'disk/index.json'), 'utf8'));
+class LazyDisk extends Map {
+  constructor(idx) { super(); this.sizes = new Map(idx); this.fetched = new Set(); }
+  has(n) { return super.has(n) || this.sizes.has(n); }
+  get(n) {
+    if (super.has(n)) return super.get(n);
+    if (!this.sizes.has(n)) return undefined;
+    const b = new Uint8Array(readFileSync(join(ROOT, 'disk', n)));
+    this.fetched.add(n); super.set(n, b);
+    return b;
+  }
+}
+const files = new LazyDisk(index);
 const gui = new GuiDevice({ w: 640, h: 480 });
 const out = [];
 const vm = createMachine({ arenaMb: 64, gui, drives: [{ files, writable: false, sink: null }], onByte: b => out.push(b) });
@@ -96,6 +109,8 @@ const noDialog = () => !has('OK') && !has('Yes');
 
 // ---- boot C4IX, start the desktop ----------------------------------------------
 check(until(() => consoleText().includes('c4ix:/$'), 2000), 'C4IX boots to its shell');
+check(/entries left on the host until first use/.test(consoleText()) && files.fetched.size < 12,
+  `booting reads ${files.fetched.size} of ${index.length} disk files; the rest stay lazy`, [...files.fetched].join(' '));
 typeBytes(vm, new TextEncoder().encode('desktop\n'));
 check(until(() => consoleText().includes('desktop: running on the display')), 'desktop starts from the console');
 check(until(() => gui.w === SW && gui.h === SH && presents > 0), `it asks for ${SW}x${SH} and draws`);
@@ -130,6 +145,13 @@ dbl('usr', inList);
 check(until(() => has('Exploring - /usr') && has('src')), 'double-clicking a folder opens it', screen());
 key('\b');
 check(until(() => has('Exploring - /')), 'Backspace goes up a level');
+dbl('bin', inList);
+check(until(() => has('Exploring - /bin') && !!inList(find('hello')) && find('C4IX Program').length >= 10),
+  '/bin lists its programs as C4IX Programs, with no .c4r in their names', screen());
+dbl('hello', inList);
+check(until(() => has(/hello: running as a c4ix task/), 800), 'double-clicking one runs it in a Command Prompt', screen());
+clickText(/^Exploring/); key('\b');
+check(until(() => has('Exploring - /')), 'and back up to the root');
 dbl('ram', inList);
 check(until(() => has('Exploring - /ram')), 'into /ram');
 clickText('File'); settle(); clickText('New Folder');

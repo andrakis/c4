@@ -177,8 +177,20 @@ run-c4-alt-vg: pre
 # because the test that would have said so was never invoked.
 #
 # A test nobody runs is a comment that costs a build step.
+#
+# innerbench compiles C4KE FROM SOURCE in nested c4m instances, and when
+# that compile failed ("bad global declaration" -- c4ke.c had gained
+# global arrays and a call into an #include c4m never reads) the outer
+# kernel still said "innerbench complete" and exited 0, for two weeks.
+# So the log is checked: a compile error fails the test, and so does no
+# inner benchmark finishing.
 test: pre test-c4m-mem test-c4l
-	$(C4M) $(RUN_C4KE) innerbench
+	@$(C4M) $(RUN_C4KE) innerbench 2>&1 | tee .test-innerbench.log
+	@if grep -Eq '^[0-9]+: (bad|undefined|unexpected|improper|expected)' .test-innerbench.log; then \
+		echo "test: an inner C4KE failed to compile (see above)"; rm -f .test-innerbench.log; exit 1; fi
+	@if ! grep -q 'Benchmark complete' .test-innerbench.log; then \
+		echo "test: no inner benchmark completed"; rm -f .test-innerbench.log; exit 1; fi
+	@rm -f .test-innerbench.log
 test-alt: pre
 	$(C4M) -a $(RUN_C4KE) innerbench
 test-c4: pre

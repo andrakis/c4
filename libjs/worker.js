@@ -31,6 +31,37 @@ import { keyDown, typeBytes } from './keys.js';
 import { GuiDevice } from './gui-device.js';
 import { RingWriter, FbProducer } from './shared.js';
 
+// A disk read on demand. The page sends an index of [name, size] and a
+// base URL; the first get() of a name fetches that one file with a
+// synchronous XHR (allowed in a worker, and the machine's OPEN is
+// synchronous anyway) and keeps it. Names not in the index are absent,
+// as on an eager disk, and files the machine writes are kept like any
+// other. The fetch count is in stats, for the tests.
+class LazyFiles extends Map {
+  constructor(base, index) {
+    super();
+    this.base = base;
+    this.sizes = new Map(index);
+    this.fetched = 0;
+    this.fetchedBytes = 0;
+  }
+  has(name) { return super.has(name) || this.sizes.has(name); }
+  get(name) {
+    if (super.has(name)) return super.get(name);
+    if (!this.sizes.has(name)) return undefined;
+    const x = new XMLHttpRequest();
+    x.open('GET', this.base + name.split('/').map(encodeURIComponent).join('/'), false);
+    x.responseType = 'arraybuffer';
+    x.send();
+    if (x.status !== 200) { this.sizes.delete(name); return undefined; }
+    const b = new Uint8Array(x.response);
+    this.fetched++; this.fetchedBytes += b.length;
+    super.set(name, b);
+    return b;
+  }
+  *keys() { const seen = new Set(super.keys()); yield* seen; for (const k of this.sizes.keys()) if (!seen.has(k)) yield k; }
+}
+
 let vm = null, bootMsg = null, gui = null, ring = null, ringStalls = 0, handoffMs = 0;
 // One producer per shared framebuffer for the Worker's whole life: which
 // slot is ours is state the page's side depends on, and a reset must not
@@ -85,7 +116,8 @@ function start(msg) {
   ringStalls = 0;
   // Files arrive as Uint8Arrays or bare ArrayBuffers; the disk
   // controller wants bytes it can index.
-  const files = new Map((msg.disk || []).map(([n, b]) => [n, b instanceof Uint8Array ? b : new Uint8Array(b)]));
+  const files = msg.lazy ? new LazyFiles(msg.lazy.base, msg.lazy.index)
+    : new Map((msg.disk || []).map(([n, b]) => [n, b instanceof Uint8Array ? b : new Uint8Array(b)]));
   const drives = [{ files, writable: false, sink: null }];
   vm = createMachine({
     arenaMb: msg.arenaMb || 64, drives, mhz: msg.mhz || 20, gui,
@@ -172,11 +204,17 @@ function postStatus(force) {
     simMs: vm.dev.simMs(),
     raw: vm.dev.rawKbd > 0,
     runMs: Math.round(busyMs),
+    disk: lazyStats(),
     gui: gui ? { ...gui.stats(), shared: !!ring, ringStalls, handoffMs: Math.round(handoffMs) } : null,
   });
   lastStatus = { t: now, cycle: ran, busy: busyMs };
 }
 setInterval(() => postStatus(false), 250);
+
+function lazyStats() {
+  const f = vm && vm.dev.drives[0] && vm.dev.drives[0].files;
+  return f instanceof LazyFiles ? { lazy: true, files: f.sizes.size, fetched: f.fetched, bytes: f.fetchedBytes } : { lazy: false };
+}
 
 function echo(bytes) { for (const b of bytes) out.push(b); flush(); }
 

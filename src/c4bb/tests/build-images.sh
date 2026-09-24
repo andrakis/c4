@@ -435,6 +435,24 @@ fi
 (cd $DISK && find . -type f -not -name manifest.json | sed 's|^\./||') | \
     awk 'BEGIN{printf "["} NR>1{printf ","} {printf "\"%s\"", $0} END{print "]"}' > $DISK/manifest.json
 
+# LAZY LOADING (docs/c4ix-desktop.md, part three). c4ix.sizes is a
+# "SIZE NAME" line per file: C4IX's vfsload reads it and makes each
+# entry a lazy RAM file that the kernel reads from the host only when
+# something first uses it. index.json is the same table for the web
+# page, whose worker then fetches a file on first read instead of all
+# of them before boot. Written last, after every copy above.
+(cd $DISK && find . -type f -not -name manifest.json -not -name c4ix.sizes -not -name index.json -not -name c4ix.sizes.tmp \
+    -printf '%s %P\n' | sort -k2) > $DISK/c4ix.sizes.tmp
+mv $DISK/c4ix.sizes.tmp $DISK/c4ix.sizes
+# index.json lists c4ix.sizes too -- a lazy disk serves only what its
+# index names, and without the table vfsload falls back to copying all.
+(cat $DISK/c4ix.sizes; echo "$(stat -c %s $DISK/c4ix.sizes) c4ix.sizes") | \
+    awk 'BEGIN{printf "["} NR>1{printf ","} {n=$0; sub(/^[0-9]+ /,"",n); printf "[\"%s\",%s]", n, $1} END{print "]"}' \
+    > $DISK/index.json
+# and the manifest again, so the eager loader sees c4ix.sizes too
+(cd $DISK && find . -type f -not -name manifest.json | sed 's|^\./||') | \
+    awk 'BEGIN{printf "["} NR>1{printf ","} {printf "\"%s\"", $0} END{print "]"}' > $DISK/manifest.json
+
 # ---- per-system disks -----------------------------------------------
 # APPEND-ONLY SECTION. Everything above builds the ONE shared disk that
 # test-c4bb.sh boots, and must not move. This derives two curated disks

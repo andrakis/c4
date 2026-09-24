@@ -71,7 +71,7 @@ int sys_open(char *path, int flags) {
 
     t = sched_current();
     if ((vn = vfs_lookup(path))) {
-        if (flags & C4IX_O_TRUNC) { vn->size = 0; }
+        if (flags & C4IX_O_TRUNC) { vn->size = 0; vn->lazy = 0; }   // the host bytes are not wanted
         return fd_open_vnode(t, vn, flags);
     }
     if (flags & C4IX_O_CREAT) {
@@ -255,6 +255,7 @@ int sys_dispatch(int num, int *args) {
     if (num == SYS_STAT)   return vfs_stat((char *)args[0], (int *)args[1]);
     if (num == SYS_UNLINK) return vfs_unlink((char *)args[0]);
     if (num == SYS_RENAME) return vfs_rename((char *)args[0], (char *)args[1]);
+    if (num == SYS_LAZYFILE) return vfs_lazyfile((char *)args[0], (char *)args[1], args[2]);
     if (num == SYS_CLOEXEC) {
         if (!t || !fd_get(t, args[0])) return -1;
         t->fdcloexec[args[0]] = args[1] ? 1 : 0;

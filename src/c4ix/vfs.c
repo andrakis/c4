@@ -223,15 +223,74 @@ struct vnode *vfs_ramfile(char *path) {
     return vn;
 }
 
+// A RAM file whose bytes stay on the host until something needs them.
+// vfsload makes these at boot instead of copying every file in its
+// manifest: on a host that fetches files over a network (libjs in a
+// browser) that is the difference between a boot that downloads the
+// whole disk and one that downloads what it runs. The size is known
+// now, so stat and ls are right before anything is read.
+int vfs_lazyfile(char *path, char *host, int size) {
+    struct vnode *vn;
+    int n;
+    sched_lock();
+    if (!(vn = vfs_walk(path, 1, 0)) || vn->type != VN_RAMFILE) { sched_unlock(); return -1; }
+    n = 0; while (host[n]) ++n;
+    if (vn->hostname) free(vn->hostname);
+    if (!(vn->hostname = (char *)malloc(n + 1))) { sched_unlock(); return -1; }
+    memcpy(vn->hostname, host, n + 1);
+    if (vn->data) { free(vn->data); vn->data = 0; vn->cap = 0; }
+    vn->size = size;
+    vn->lazy = 1;
+    sched_unlock();
+    return 0;
+}
+
+// Read a lazy file's bytes in from the host, once. After this it is an
+// ordinary RAM file. A host file that has gone leaves it empty.
+int vfs_fill(struct vnode *vn) {
+    int fd, n;
+    if (!vn || !vn->lazy) return 1;
+    vn->lazy = 0;
+    n = vn->size;
+    vn->size = 0;
+    if ((fd = open(vn->hostname, 0)) < 0) return 0;
+    if (!vn_grow(vn, n > 0 ? n : 64)) { close(fd); return 0; }
+    while (1) {
+        if (vn->size + 4096 > vn->cap && !vn_grow(vn, vn->cap * 2)) break;
+        n = read(fd, vn->data + vn->size, vn->cap - vn->size);
+        if (n <= 0) break;
+        vn->size = vn->size + n;
+    }
+    close(fd);
+    return 1;
+}
+
 // What a path is, for a file browser: out[0] is 1 for a directory, 2 for
 // a RAM file, 3 for anything else (the console, a pipe); out[1] is the
 // size in bytes of a RAM file. -1 when there is no such entry.
+// Is this file a program? A loaded file by its C4R signature; a lazy
+// one by the host name behind it, so asking never fetches the file (a
+// file browser asks for a whole folder at a time).
+static int vn_is_program(struct vnode *vn) {
+    int n;
+    if (vn->type != VN_RAMFILE) return 0;
+    if (vn->lazy) {
+        n = 0;
+        while (vn->hostname[n]) ++n;
+        return n > 4 && vn->hostname[n - 4] == '.' && vn->hostname[n - 3] == 'c' &&
+               vn->hostname[n - 2] == '4' && vn->hostname[n - 1] == 'r';
+    }
+    return vn->size >= 13 && vn->data[0] == 'C' && vn->data[1] == '4' && vn->data[2] == 'R';
+}
+
+// out[0] 1 dir, 2 file, 3 other; out[1] bytes; out[2] 1 for a program
 int vfs_stat(char *path, int *out) {
     struct vnode *vn;
     sched_lock();
     if (!(vn = vfs_walk(path, 0, 0))) { sched_unlock(); return -1; }
     out[0] = vn->type == VN_DIR ? 1 : (vn->type == VN_RAMFILE ? 2 : 3);
     out[1] = vn->type == VN_RAMFILE ? vn->size : 0;
+    out[2] = vn_is_program(vn);
     sched_unlock();
     return 0;
 }
@@ -258,6 +317,7 @@ int vfs_unlink(char *path) {
     vn->next = 0;
     if (vn->type == VN_RAMFILE) {
         if (vn->data) free(vn->data);
+        if (vn->hostname) free(vn->hostname);
         sl4b_free(vn_cache, (char *)vn);
     }
     sched_unlock();
@@ -374,6 +434,7 @@ int vfs_read(struct file *f, char *buf, int len) {
     }
 
     // RAM file: read from the description's own position
+    if (vn->lazy) vfs_fill(vn);
     n = vn->size - f->pos;
     if (n <= 0) { sched_unlock(); return 0; }
     if (n > len) n = len;
@@ -413,6 +474,7 @@ int vfs_write(struct file *f, char *buf, int len) {
 
     // RAM file: write at the description's position, extending as
     // needed (a gap left by seeking past the end stays zeroed).
+    if (vn->lazy) vfs_fill(vn);
     end = f->pos + len;
     if (!vn_grow(vn, end)) { sched_unlock(); return -1; }
     i = 0;
@@ -436,6 +498,7 @@ void vfs_dump(char *name) {
     struct vnode *vn;
     int i;
     if (!(vn = vfs_lookup(name))) { kprintf("(no such ram file: %s)\n", name); return; }
+    if (vn->lazy) vfs_fill(vn);
     i = 0;
     while (i < vn->size) { kputc(vn->data[i]); ++i; }
 }

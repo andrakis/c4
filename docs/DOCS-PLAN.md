@@ -3,7 +3,7 @@
 `pm-investigation` is 255 commits ahead of `master` and master has nothing it lacks, so the
 merge is a fast-forward. Before it happens, the documentation has to describe what the branch
 actually built: most of it lives only in commit messages and per-component design docs that
-stopped being updated weeks ago. This file is the tracker (the board reads it): tick a box only
+stopped being updated weeks ago. This file is the tracker (Muster reads it): tick a box only
 when the doc is written and checked against the code.
 
 Surveyed 2026-09-26. What exists today, per component, is noted under each milestone.

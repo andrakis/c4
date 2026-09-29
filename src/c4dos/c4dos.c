@@ -296,6 +296,15 @@ int inject_api (char *p, int nsyms, char *database, int *api) {
 // Load path -> the img_* registers. Returns 1 on success.
 // ---- the RAM disk --------------------------------------------------------
 
+// "ram:name" is the RAM disk's copy and nothing else. cpp and c4cc
+// report what they write as ram:<file>, so that spelling has to open --
+// but the RAM disk is not a drive you can switch to: it sits over every
+// drive, ahead of the disk, and the plain name reaches it too.
+char *ram_name (char *path) {
+  if (starts_ci(path, "RAM:")) return path + 4;
+  return 0;
+}
+
 // slot holding `name`, or -1. Case-insensitive, like every other name
 // on this system.
 int ram_find (char *name) {
@@ -313,6 +322,7 @@ int ram_create (char *name, int cap) {
   int i, slot;
   char *p, *q;
   if (!g_ramdisk) return 0 - 1;
+  if (ram_name(name)) name = ram_name(name);
   slot = ram_find(name);
   if (slot >= 0) {
     g_ram_used = g_ram_used - g_ram_cap[slot];
@@ -462,6 +472,7 @@ int dos_open (char *path) {
   // name that came out of an archive is stored plainly -- c4bb's own
   // disk controller strips the prefix for the same reason.
   if (path[0] == '.' && path[1] == '/') path = path + 2;
+  if ((real = ram_name(path))) return ram_open(real);
   // RAM first, disk second -- the same precedence C4KE's loader uses,
   // and the reason a tool can rewrite a file that shipped read-only.
   if ((fd = ram_open(path)) >= 0) return fd;
@@ -1033,6 +1044,11 @@ int dispatch (int argc) {
       return 1;
     }
     return run_program(path, argc - 1, g_argv + 1);
+  }
+  if (cieq(cmd, "RAM:")) {
+    printf("RAM: is not a drive - its files sit over every drive, ahead of the disk's\n");
+    printf("use the plain name (TYPE c4ke.i) or RAM:name for the RAM copy only\n");
+    return 1;
   }
   // A bare "B:" changes drive, the way it always has in a DOS. Checked
   // before the program-name fall-through so it can never be mistaken

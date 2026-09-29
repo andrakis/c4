@@ -77,7 +77,8 @@ C4CC_SRCS := $(SRCS)/c4cc/c4cc.c $(SRCS)/c4cc/asm-c4r.c
 C4R_C4CC_SRCS := $(U0) include/c4dos.h load-c4r.c $(SRCS)/c4cc/c4cc.c $(SRCS)/c4cc/asm-c4r.c
 C4KE_SRCS := load-c4r.c $(SRCS)/c4ke/c4ke.c \
              $(SRCS)/c4ke/extensions/c4ke_ipc.c $(SRCS)/c4ke/extensions/c4ke_plus.c \
-             $(SRCS)/c4ke/extensions/c4ke_pm.c $(SRCS)/c4ke/extensions/c4ke_dos.c
+             $(SRCS)/c4ke/extensions/c4ke_pm.c $(SRCS)/c4ke/extensions/c4ke_dos.c \
+             $(SRCS)/c4ke/extensions/c4ke_mbox.c
 C4KE_HDRS := $(INCLUDE)/c4.h $(INCLUDE)/c4m.h
 C4KE_C4R  := c4ke.c4r
 BIN_D     := $(SRCS)/c4ke/bin
@@ -349,6 +350,7 @@ C4KE_KIT := src/c4ke/c4ke.c:c4ke.c \
             src/c4ke/extensions/c4ke_plus.c:src/c4ke/extensions/c4ke_plus.c \
             src/c4ke/extensions/c4ke_pm.c:src/c4ke/extensions/c4ke_pm.c \
             src/c4ke/extensions/c4ke_dos.c:src/c4ke/extensions/c4ke_dos.c \
+            src/c4ke/extensions/c4ke_mbox.c:src/c4ke/extensions/c4ke_mbox.c \
             src/c4ke/bin/ps.c:ps.c \
             src/c4ke/bin/eshell.c:eshell.c \
             src/c4ke/services/init.c:init.c \

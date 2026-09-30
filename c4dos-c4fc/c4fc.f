@@ -1891,9 +1891,27 @@ BEGIN-STRUCTURE SYMR
    FIELD: y.name  FIELD: y.nlen  FIELD: y.type  FIELD: y.class  FIELD: y.val
    FIELD: y.ct    FIELD: y.agg   FIELD: y.sz
    FIELD: y.va    FIELD: y.nfix  FIELD: y.ini   FIELD: y.sc
+   \ Set the moment a function's name is used as a VALUE (parse.f's
+   \ n_fnref). The inliner reads it; nothing else does.
+   FIELD: y.atk
 END-STRUCTURE
 VARIABLE VA-MAKE   0 VA-MAKE !          \ code index of __c4cc_make_va
 : SYM[] ( i -- a )  SYMR * SYMS @ + ;
+
+\ The parser's symbol table. It lives here rather than in parse.f
+\ because SYMR does, and because inline.f -- which loads between this
+\ file and gen.f -- needs both the table and the frame counter in order
+\ to point a spliced body's locals at slots in the caller.
+\
+\ One table for the whole unit, and nothing frees an entry: a compiler
+\ is a batch process. Eight thousand entries is under half a megabyte.
+8192 CONSTANT NSYM
+VARIABLE STAB   VARIABLE STN
+VARIABLE NLOC                           \ locals in the function in hand
+VARIABLE NGLO                           \ globals, numbered; placed at the end
+VARIABLE TP                             \ the token cursor
+
+: ST[] ( i -- a )  SYMR * STAB @ + ;
 
 : EMIT-INIT
    CMAX0 CMAX !  DMAX0 DMAX !  DMAX0 IMAX !  PMAX0 PMAX !  SMAX0 SMAX !
@@ -2650,6 +2668,210 @@ VARIABLE #XG   0 #XG !
          a u  I CELLS XG-T + @  131  0  I CELLS XG-G + @  EXT-NEW DROP
       THEN
    LOOP ;
+\ c4fc inline.f -- the inliner (docs/inline-small-functions.md, I7).
+\
+\ A call in c4 costs JSR, ENT, ADJ and LEV whatever is on the other side
+\ of it, plus a push per argument and a bp-relative load for every
+\ parameter the body reads. For a one-line accessor that is most of the
+\ cost of using one.
+\
+\ THIS PORT IS SIMPLER THAN c4lc's, and the reason is worth stating.
+\
+\ c4lc rewrites the AST: it substitutes arguments, renames locals, and
+\ turns `return E` into an assignment plus a jump. c4fc does none of
+\ that, because it EMITS as it walks and GEN is read-only over the tree
+\ (there is not one store into a node in gen.f or emit.f). So a body is
+\ spliced by pointing the callee's symbols at fresh slots in the
+\ CALLER's frame and generating the SAME tree again. No copy, no
+\ rewrite, no substitution.
+\
+\ Two things fall out for free:
+\
+\   * `return` needs no rewriting. c4's result lives in A, and a spliced
+\     `return E` leaves E in A exactly as the call would have -- so it
+\     only has to jump instead of LEV. That is one flag and one branch
+\     in STMT n_ret, where c4lc needed a whole second pass (T4b) with
+\     two AST node kinds of its own.
+\   * and because the value arrives the same way, a splice works in
+\     EXPRESSION position. c4lc's T4 is restricted to `f(a);` and
+\     `x = f(a);`; this one is not.
+\
+\ What it shares is the rule that cost c4lc a miscompilation: a function
+\ whose ADDRESS IS TAKEN is closed to the inliner in BOTH directions --
+\ never spliced, and never spliced into. C4KE enters a custom opcode
+\ handler by reading its ENT operand and jumping past it
+\ (`__c4_adjust(*(handler - 1) * -1); __c4_jmp(handler);`), so the frame
+\ that ENT describes is a contract with code somewhere else, and growing
+\ it rewrites one side of that contract only.
+
+VARIABLE INLINING   0 INLINING !         \ -minline
+VARIABLE NINLINE    0 NINLINE !          \ splices performed
+
+\ How big a body is worth splicing, measured in TOKENS -- the span the
+\ parser consumed for it. c4lc counts AST nodes and needs a walk to do
+\ it; here the token cursor is already a size, for nothing.
+\
+\ 40 because a node is roughly one to two tokens, so it is the same
+\ neighbourhood as the 60 AST nodes c4lc measured on C4KE. That is a
+\ MATCHED default, not an independently measured one: c4fc has no
+\ speed benchmark of its own (docs/c4fc-design.md is explicit that it
+\ is not a speed play), so the honest thing is to inherit the figure
+\ that was measured and say so. What IS measured here is the cost of
+\ getting it wrong -- on the stress corpus the image goes 9,502 bytes
+\ at 24, 13,469 at 32, 16,029 at 60, so this grows code quickly and
+\ the budget is the whole of the control over it.
+VARIABLE INLMAX     40 INLMAX !
+
+\ ---- functions whose address is taken --------------------------------
+\ Kept by NAME rather than by symbol, because UNIT-RESET reallocates the
+\ symbol table between the two passes and a mark made in pass one has to
+\ survive into pass two -- exactly as T2's root and reference tables do.
+256 CONSTANT ATK-MAX
+VARIABLE ATK#    0 ATK# !
+VARIABLE ATK-A                            \ name pointer
+VARIABLE ATK-U                            \ name length
+
+: ATK-RESET ( -- )
+   0 ATK# !
+   ATK-MAX CELLS ALLOT: ATK-A !
+   ATK-MAX CELLS ALLOT: ATK-U ! ;
+
+: ATK? ( a u -- f ) {: a u -- f :}
+   ATK# @ 0 ?DO
+      I CELLS ATK-U @ + @ u = IF
+         I CELLS ATK-A @ + @  a u BYTES= IF TRUE UNLOOP EXIT THEN
+      THEN
+   LOOP FALSE ;
+
+: ATK, ( a u -- ) {: a u -- :}
+   a u ATK? IF EXIT THEN
+   ATK# @ ATK-MAX < IF
+      a ATK# @ CELLS ATK-A @ + !
+      u ATK# @ CELLS ATK-U @ + !
+      1 ATK# +!
+   THEN ;
+
+\ ---- the candidate table ---------------------------------------------
+\ Parallel arrays rather than a record, which is what the rest of this
+\ compiler does with small fixed tables (PMAP and LMAP in opt.f).
+64 CONSTANT IC-MAX
+VARIABLE IC#     0 IC# !
+VARIABLE IC-FN                            \ the function's symbol
+VARIABLE IC-BODY                          \ its body node
+VARIABLE IC-SB                            \ first symbol index: params, then locals
+VARIABLE IC-SN                            \ how many of them
+VARIABLE IC-NFIX                          \ how many of those are parameters
+
+: INL-RESET ( -- )
+   0 IC# !  0 NINLINE !
+   IC-MAX CELLS ALLOT: IC-FN !
+   IC-MAX CELLS ALLOT: IC-BODY !
+   IC-MAX CELLS ALLOT: IC-SB !
+   IC-MAX CELLS ALLOT: IC-SN !
+   IC-MAX CELLS ALLOT: IC-NFIX !
+   ATK-RESET ;
+
+: IC[] ( v i -- a )  CELLS SWAP @ + ;
+
+: IC-FIND ( y -- i|-1 ) {: y -- i :}
+   IC# @ 0 ?DO  y IC-FN I IC[] @ = IF I UNLOOP EXIT THEN  LOOP  -1 ;
+
+\ Record one. `sb` is the symbol index the parameters start at, `sn`
+\ counts parameters AND locals -- they are contiguous, because PARAMS
+\ declares its symbols and then the body's declarations follow, and
+\ nothing between them declares anything else.
+: IC, ( y body sb sn nfix -- ) {: y b sb sn nf -- :}
+   IC# @ IC-MAX < 0= IF EXIT THEN
+   y  IC-FN   IC# @ IC[] !
+   b  IC-BODY IC# @ IC[] !
+   sb IC-SB   IC# @ IC[] !
+   sn IC-SN   IC# @ IC[] !
+   nf IC-NFIX IC# @ IC[] !
+   1 IC# +! ;
+
+\ ---- returns inside a splice -----------------------------------------
+\ Non-zero while a spliced body is being generated. It does two jobs and
+\ they belong together: it tells n_ret to jump instead of LEV, and it
+\ stops a splice happening inside a splice. One level only -- nothing
+\ bounds a cascade but the call graph happening to be acyclic, and a
+\ self-recursive candidate would splice into itself forever.
+VARIABLE INLRET     0 INLRET !
+64 CONSTANT INLM-MAX
+VARIABLE INLM#      0 INLM# !
+VARIABLE INLMARKS
+
+: INLM-RESET ( -- )  INLM-MAX CELLS ALLOT: INLMARKS !  0 INLM# ! ;
+: INLM, ( m -- )
+   INLM# @ INLM-MAX < IF
+      INLM# @ CELLS INLMARKS @ + !  1 INLM# +!
+   ELSE DROP THEN ;
+
+\ every `return` in the body jumped here; resolve them all to this point
+: INLM-RES ( base -- ) {: b -- :}
+   INLM# @ b ?DO  I CELLS INLMARKS @ + @ >RES  LOOP
+   b INLM# ! ;
+
+\ ---- the splice ------------------------------------------------------
+
+\ Slots for the callee's parameters and locals, in the CALLER's frame.
+\ A local's val is its slot NEGATED (parse.f), so a fresh one is just
+\ the next NLOC.
+\
+\ Reserving and BINDING are deliberately two steps, with the arguments
+\ evaluated in between. An argument can contain a call that is itself
+\ spliced -- sq(sq(2)) -- and the inner splice retargets the very same
+\ symbols, because it is the same function. Binding before evaluating
+\ the arguments therefore has the inner splice overwrite the outer
+\ one's slots, and the outer body then reads the inner's: sq(sq(2))
+\ quietly returns 4 instead of 16. Assigning y.val last is what makes
+\ nesting safe, and it costs nothing.
+: INL-RESERVE ( i -- first ) {: i | n f -- f :}
+   IC-SN i IC[] @ TO n
+   NLOC @ 1+ TO f
+   NLOC @ n + NLOC !
+   f ;
+
+\ Each argument is evaluated ONCE, in order, into its parameter's slot
+\ -- addressed by NUMBER, since y.val is not bound yet. That is what
+\ makes this safe where c4lc's substitution needed purity rules: an
+\ argument here may call, assign and increment freely.
+: INL-ARGS ( n i first -- ) {: n i f | k -- :}
+   n >argn @ TO k
+   k 0 ?DO
+      f I + NEGATE oLEA OP2,
+      oPSH OP,
+      n >args @ I CELLS + @ GEN
+      oSI OP,
+   LOOP ;
+
+: INL-BIND ( i first -- ) {: i f | b n -- :}
+   IC-SB i IC[] @ TO b
+   IC-SN i IC[] @ TO n
+   n 0 ?DO  f I + NEGATE  b I + ST[] y.val !  LOOP ;
+
+: INL-SPLICE ( n i -- ) {: n i | old base f -- :}
+   i INL-RESERVE TO f
+   n i f INL-ARGS
+   i f INL-BIND
+   INLRET @ TO old   1 INLRET !
+   INLM# @ TO base
+   IC-BODY i IC[] @ STMT
+   base INLM-RES
+   old INLRET !
+   1 NINLINE +! ;
+
+\ May this call be spliced? -1 for no, otherwise the candidate index.
+\ The argument count must match exactly: c4 lets a call pass fewer than
+\ the callee declares and the callee simply reads rubbish, which is a
+\ thing a CALL can survive and a splice cannot.
+: INL-TRY ( n -- i ) {: n | f i -- i :}
+   INLINING @ 0= IF -1 EXIT THEN
+   INLRET @ IF -1 EXIT THEN
+   n >fn @ TO f
+   f IC-FIND TO i
+   i 0< IF -1 EXIT THEN
+   n >argn @ IC-NFIX i IC[] @ = 0= IF -1 EXIT THEN
+   i ;
 \ c4fc gen.f -- code emission, one method per node kind.
 \
 \ Nothing here dispatches. A kind reaches a phase by having a method in
@@ -2808,7 +3030,12 @@ VARIABLE #XG   0 #XG !
    f y.class @ c_extg    = IF oJSRI f y.val @ EXTREF, EXIT THEN
    f JSRF, ;
 
-:M GEN n_call {: n | f k -- :}
+:M GEN n_call {: n | f k i -- :}
+   \ The splice replaces the call entirely -- arguments into the
+   \ callee's parameter slots, then its body generated in place. The
+   \ value arrives the same way it would have: in A.
+   n INL-TRY TO i
+   i 0< 0= IF  n i INL-SPLICE  EXIT THEN
    n >fn @ TO f
    n >argn @ TO k
    k 0 ?DO  n >args @ I CELLS + @ GEN  oPSH OP,  LOOP
@@ -2848,7 +3075,13 @@ VARIABLE #XG   0 #XG !
    LOOP ;M
 
 :M STMT n_expst  >expr @ GEN ;M
-:M STMT n_ret    >expr @ ?DUP IF GEN THEN  oLEV OP, ;M
+\ Inside a spliced body there is no frame to leave, so a return is a
+\ jump to the end of the splice rather than a LEV. The value is already
+\ in A either way, which is the whole reason this needs no rewriting of
+\ the tree -- see inline.f.
+:M STMT n_ret
+   >expr @ ?DUP IF GEN THEN
+   INLRET @ IF oJMP BR, INLM, ELSE oLEV OP, THEN ;M
 :M STMT n_blk {: n -- :}
    n >len @ 0 ?DO n >list @ I CELLS + @ STMT LOOP ;M
 
@@ -3068,18 +3301,16 @@ VARIABLE CURSW   0 CURSW !
 \ them pointing into freed memory. It is also the cheapest thing in the
 \ compiler -- eight thousand entries is under half a megabyte -- so it
 \ is simply sized once and generously, and the abort stays an abort.
-8192 CONSTANT NSYM
-VARIABLE STAB   VARIABLE STN
-VARIABLE NLOC                           \ locals in the function in hand
-VARIABLE NGLO                           \ globals, numbered; placed at the end
-VARIABLE TP
-
-: ST[] ( i -- a )  SYMR * STAB @ + ;
+\ NSYM, STAB, STN, NLOC, NGLO, TP and ST[] moved to emit.f, next to the
+\ SYMR they are all about -- inline.f sits between emit.f and gen.f and
+\ needs the symbol table and the frame counter to retarget a spliced
+\ body's locals.
 : ST, ( a u class val ct agg sz -- ) {: a u c v ct ag sz | y -- :}
    STN @ NSYM < 0= IF ." c4fc: symbol table full" CR ABORT THEN
    STN @ ST[] TO y
    a y y.name !  u y y.nlen !  1 y y.type !  c y y.class !  v y y.val !
    ct y y.ct !  ag y y.agg !  sz y y.sz !
+   0 y y.atk !
    1 STN +! ;
 : ST-FIND ( a u -- sym|0 ) {: a u | y -- s :}    \ newest first: locals win
    STN @ 0 ?DO
@@ -3333,7 +3564,15 @@ CREATE SLBUF 8192 ALLOT
          nd EXIT
       THEN
       s y.class @ c_const = IF s y.val @ n_num N1 EXIT THEN
-      s y.class @ c_fun = s y.class @ c_ext = OR IF s n_fnref N1 EXIT THEN
+      \ A function's name used as a value: its address escapes here, and
+      \ this is the only place that can happen. Recording it HERE is why
+      \ the inliner needs no walker to find address-taken functions --
+      \ and why it cannot repeat c4lc's mistake of knowing only one of
+      \ the two spellings (docs/inline-small-functions.md).
+      s y.class @ c_fun = s y.class @ c_ext = OR IF
+         1 s y.atk !
+         s y.name @ s y.nlen @ ATK,
+         s n_fnref N1 EXIT THEN
       s  s y.class @ c_glo = s y.class @ c_extg = OR IF n_gvar ELSE n_var THEN
       N1 EXIT
    THEN
@@ -3609,7 +3848,7 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
    UNTIL ;
 
 : FUNCTION ( a u ct sc at -- )
-   {: a u ct sc at | base body y n va base0 fi -- :}
+   {: a u ct sc at | base body y n va base0 fi entp inlsv sn bodytp -- :}
    STN @ TO base0
    a u ST-FIND TO y
    y 0= IF
@@ -3644,6 +3883,7 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
    a u ct 129 CHERE  sc at OR  va IF 32 OR THEN  SYM,
    at 1 AND IF CHERE CONSN @ CELLS CONS @ + !  1 CONSN +! THEN
    at 2 AND IF CHERE DESN  @ CELLS DESS @ + !  1 DESN  +! THEN
+   TP @ TO bodytp                       \ for the inliner's size budget
    BLOCK TO body                        \ parse first: ENT needs the count
    OPTIMIZE @ IF body FOLD TO body THEN
    \ Pass one of -O: who does this function reach, and is it a root?
@@ -3660,12 +3900,46 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
       fi CURFN !  body REFS  -1 CURFN !
    THEN
    LABEL-RESET
+   \ Remember where the ENT is. A splice inside the body allocates more
+   \ frame words, and by then this instruction is already emitted -- so
+   \ its operand is patched afterwards rather than guessed at up front.
+   \ OP2, lays down [op][operand], so the operand is the next word.
+   CHERE TO entp
    NLOC @ oENT OP2,
+   \ A function whose address is taken must not be spliced INTO: C4KE
+   \ reads its ENT operand and jumps past it, so the frame that operand
+   \ describes is a contract with code elsewhere, and a splice grows it.
+   INLINING @ TO inlsv
+   a u ATK? IF 0 INLINING ! THEN
    body STMT
+   inlsv INLINING !
+   NLOC @ entp 1+ CELLS CODE @ + !
    \ return emits its own LEV, so a function ending in one gets one LEV
    \ -- unless a branch lands here, in which case the LEV that is here
    \ belongs to the arm that took it and the other arm needs its own.
    LAST-OP oLEV <> LABEL-HERE? OR IF oLEV OP, THEN
+   \ Worth splicing into its callers?
+   \
+   \ Size is measured in TOKENS -- the span this body consumed -- which
+   \ the parser already knows and which needs no walk over the tree.
+   \
+   \ The parameters and locals are NOT dropped for a candidate: its body
+   \ tree points at those symbol records, and a splice retargets their
+   \ y.val to slots in the caller. Blanking the name length instead
+   \ keeps them alive but unfindable, because ST-FIND matches on
+   \ `y.nlen @ u =` and no identifier has length zero.
+   STN @ base - TO sn
+   INLINING @ COLLECT @ 0= AND
+   va 0= AND  at 3 AND 0= AND  y y.atk @ 0= AND
+   a u ATK? 0= AND
+   a u S" main" NAME=? 0= AND
+   TP @ bodytp - INLMAX @ <= AND
+   sn 0> AND
+   IF
+      y body base sn n va - IC,
+      sn 0 ?DO  0 base I + ST[] y.nlen !  LOOP
+      EXIT
+   THEN
    base STN ! ;                         \ parameters and locals go out of scope
 
 \ enum { A, B = 5, C };  -- constants, folded to literals where used.
@@ -4423,6 +4697,11 @@ VARIABLE C4FC-READY   0 C4FC-READY !
 \ because the pass it turns on lives in the optimizer.
 : -mcisc ( -- )  1 CISC ! ;
 : -mfuse ( -- )  1 FUSE !  1 OPTIMIZE ! ;
+\ -minline: splice a small function's body into its call sites instead
+\ of calling it (docs/inline-small-functions.md). Unlike -mfuse this
+\ needs no opcode the target lacks, so a -minline image runs wherever
+\ its -O build would. Implies -O.
+: -minline ( -- )  1 INLINING !  1 OPTIMIZE ! ;
 
 \ Everything a compile of one unit starts from. -O runs it twice: the
 \ first pass exists only to learn which functions are reachable, and
@@ -4443,7 +4722,7 @@ VARIABLE C4FC-READY   0 C4FC-READY !
    \ defined further down with no prototype anywhere resolves only if
    \ something has read ahead. Making that depend on -O would mean
    \ `c4fc f.c` rejecting a file `c4fc -O f.c` compiles.
-   T2-RESET  DECL-RESET  0 EXTN !  1 COLLECT !
+   T2-RESET  DECL-RESET  INL-RESET  INLM-RESET  0 EXTN !  1 COLLECT !
    UNIT-RESET PROGRAM
    T2-CLOSE  MAKE-EXTERNS  0 COLLECT !
    UNIT-RESET PREREGISTER PROGRAM

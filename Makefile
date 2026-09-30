@@ -157,8 +157,10 @@ run-alt-vg: pre
 # Plain c4 runs c4m from SOURCE. c4.c is the base VM and stays
 # unmodified: it knows only the original opcode set, so it cannot run
 # a c4cc-compiled image directly -- and it does not need to, because
-# interpreting c4m.c gives the extended VM, and with it a real clock
-# (c4m's own c4m_time(), not something faked in the interpreter).
+# interpreting c4m.c gives the extended VM. Its clock there is the
+# C4_ONLY arm of c4_time_host(), which reads /proc/uptime: where that
+# file is missing (Windows) __time() returns 0 and C4KE needs -m to
+# skip its IPS measurement. A native c4m has a real clock.
 run-c4: pre
 	$(C4) $(C4M).c $(RUN_C4KE)
 run-c4-vg: pre
@@ -1844,6 +1846,7 @@ C4FC_FORTH := src/c4th/forth/core.f src/c4th/forth/ext.f \
               src/c4th/forth/locals.f src/c4th/forth/dos.f \
               src/c4fc/dsl.f src/c4fc/lex.f src/c4fc/pp.f src/c4fc/ast.f \
               src/c4fc/types.f src/c4fc/emit.f src/c4fc/tree.f \
+              src/c4fc/inline.f \
               src/c4fc/gen.f src/c4fc/parse.f src/c4fc/opt.f src/c4fc/c4fc.f
 
 C4DOS_FC_DISK := c4dos-c4fc
@@ -2360,14 +2363,6 @@ endef
 C4OR1K_SRC  := src/c4or1k
 C4OR1K_MODS := mem mmio uart console bootfs virtio virtio9p eth net fpu cpu boot main
 
-# Parallel per-module c4lc compile. The modules are independent .c ->
-# .c4o objects, and a single c4lc invocation is slow, so run several
-# at once via xargs -P. C4LC_JOBS defaults to nproc.
-# $(1)=extra c4lc flags  $(2)=module list  $(3)=-I dir  $(4)=obj prefix
-C4LC_JOBS ?= $(shell nproc 2>/dev/null || echo 4)
-define c4lc_compile_par
-printf '%s\n' $(2) | xargs -P $(C4LC_JOBS) -I@@ sh -c '$(C4SPLC) src/c4sp/lisp/c4lc.lisp $(1) -c -I $(3) $(3)/@@.c $(4)@@.c4o >/dev/null'
-endef
 # M13: the JIT build carries one extra module and compiles everything
 # with -D C4OR1K_JIT=1, which is what actually enables the driver-loop
 # hooks in cpu.c/mem.c/main.c -- without the define those compile to
@@ -2535,7 +2530,7 @@ test-oisc4-nested: $(OISC4) $(C4) $(C4M) oisc4-lc.c4r $(TESTS)/hello.c4r
 	$(OISC4) -m 192 oisc4-lc.c4r -m 32 $(TESTS)/hello.c4r | grep -q yello
 	@echo "test-oisc4-nested: OK"
 
-# c4mp (docs/c4mp-design.md): the multiprocessor VM. Unlike c4m it
+# c4mp (src/c4mp/README.md): the multiprocessor VM. Unlike c4m it
 # carries no compiler -- it loads .c4r images -- and unlike c4m it is
 # compiled by c4lc, so it may use structs, for, -> and a preprocessor.
 # Two builds from one source: a native executable, and an image that

@@ -59,15 +59,16 @@ Driven by a script with sleeps in it (`-i` streams a pipe now), on a
        4     2 run     user          37        41     53.708k  c4ix-ps.c4r
     4 tasks
 
-C4IX's own cycle column goes negative past 2^31 — it accounts in a
-single 32-bit int and the whole climb is billions of cycles. Noted, not
-fixed here.
+(When this was first run, C4IX's own cycle column went negative past
+2^31 — it accounted in a single 32-bit int and the whole climb is
+billions of cycles. Fixed the same day, f5c82a1: both kernels now keep
+cycles in two words, billions and the rest.)
 
 ## What each rung needs
 
 The reason this is a *ladder* and not a menu is that each rung needs
-strictly more machine than the last, which is the whole shape of
-HOMEWARD:
+strictly more machine than the last, which is the whole shape of the
+climb:
 
 | rung | needs |
 |---|---|
@@ -150,11 +151,9 @@ to a DOS that is gone.
 `make test-c4bb-climb` runs the whole thing — three power-ons, three
 systems, each booted off the medium the last one wrote.
 
-`save 1:` is the blunt tool at this rung, as `bbsave` is one below:
-the whole ramfs onto a drive, no manifest and no boot record.
-
-and the same inside C4KE, with `save 1:` for the ramfs, which is how
-the C4IX that `b4ke` just built survives to be booted on its own.
+`save B:` is the blunt tool at this rung, as `bbsave` is one below:
+the whole ramfs onto a drive, no manifest and no boot record (`save`
+takes `1:` as well as `B:`).
 
 ## The machine's clock
 

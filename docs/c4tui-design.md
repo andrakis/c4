@@ -133,11 +133,14 @@ The dialect is strict c4 — no structs, no `unsigned`, literals in enums
 - **The screen size is declared, not discovered.** There is no
   `TIOCGWINSZ` anywhere in this family. raycast has the same problem and
   the same answer: a flag.
-- **In a browser, keys do not arrive yet.** `src/c4bb/web/app.js:227`
-  forwards only single-character `e.key` values, so arrows, function
-  keys, Home/End and Tab are dropped, and it echoes unconditionally even
-  though `dev.rawKbd` is maintained for exactly this. Under
-  `cli.js -i` on a real tty everything works. That is c4bb's to fix and
-  it is small: encode the special keys, and honour `rawKbd`.
+- **Keys in a browser: fixed 2026-08-26 (d9f919e).** This used to say
+  they did not arrive: `app.js` forwarded only single-character `e.key`
+  values and echoed everything. Both front ends now honour
+  `dev.rawKbd`: in raw mode `app.js` sends the xterm sequences for
+  arrows, F1–F12, Home/End/PgUp/PgDn/Ins/Del, Tab and Esc, ESC-prefixes
+  Alt-letter, maps Ctrl-letter to 1..26 and echoes nothing, and
+  `cli.js` forwards the tty's bytes verbatim. `src/c4bb/tests/test-terminal.mjs`
+  checks that every sequence `app.js` sends is one this decoder names,
+  and the decoder accepts LF as well as CR for Enter.
 - `tui_input` is a single line. A multi-line editor is the editor's job
   — the library gives it the grid, the cursor and the keys.

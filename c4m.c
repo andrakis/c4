@@ -49,7 +49,7 @@
 // With plain c4:
 //  ./c4 c4m.c [-sSdpP] <first file.c> [file n.c, ...] [-- arguments...]
 // Example:
-//  c4 c4m.c classes.c classes_test.c -- test arguments
+//  c4 c4m.c src/c4ke/stdlib/classes.c src/c4ke/stdlib/classes_test.c -- test arguments
 //
 // Parameters:
 //  -s           Print the source and exit (memory leaks)
@@ -118,12 +118,15 @@
 //   + Used by C4KE in trap handlers.
 // - void __c4_adjust (int offset); Adjust the stack. Negative offset grows stack.
 // - int __opcode (char *name);     Request the integer value of an opcode.
-// - int __builtin (char *name);    Request the opcode for a builtin.
+// - int __builtin (char *name);    Reserved: meant to return the opcode for a
+//                                  builtin, but it is a stub that always
+//                                  returns -1 (see __builtin below). Use
+//                                  __opcode("NAME") instead.
 // - Adds JSRI: Jump to SubRoutine Indirect: 'int *f; int call_it(int a) { return f(a); }'
 // - Adds JSRS: Jump to SubRoutine on Stack: 'int call_it (int a, int *f){ return f(a); }' or
 //                                           'int call_it (int a) { int *f; f = (int *)&func; return f(a); }'
 // - Adds &function to get function address. Can be called if stored in an int*.
-//   See classes.c and classes_test.c for usage. // TODO: these files moved. Update locationj.
+//   See src/c4ke/stdlib/classes.c and classes_test.c for usage.
 // - Adds stacktrace() builtin
 // - Adds realloc() builtin
 // - Adds memcpy() builtin

@@ -215,7 +215,7 @@ that are about the shape of the system rather than the size of the job:
    exchange for nothing the tree does not already have.
 
 **So C4IX is compiled by c4lc, under C4KE, which is what
-`docs/homeward-ladder.md` said all along.** The problem is not the
+[the ladder plan](ladder-plan.md) said all along.** The problem is not the
 language. It is the clock.
 
 ### The clock, then
@@ -296,7 +296,7 @@ under C4KE.
 C4DOS earns the c4m opcodes; reaching C4KE earns c4mp's; the fused set
 is what makes building C4IX bearable rather than merely possible. That
 is the machine getting better because its owner made it better, which is
-what HOMEWARD is about — and it is the reason to spend the microsteps
+what the ladder is about — and it is the reason to spend the microsteps
 rather than take the shortcut through c4cc.
 
 ### A bug found while probing, and fixed
@@ -317,8 +317,9 @@ prompt will type one within a minute.
 
 ## The ladder, as it now runs in the machine
 
-HOMEWARD's premise (`docs/homeward-ladder.md`) is that the player climbs
-from transistors to C4IX. The software half of that climb should be
+The ladder's premise ([ladder-plan.md](ladder-plan.md)) is that the
+machine climbs to C4IX (C4DOS → C4KE → C4IX, each built by the one
+before). The software half of that climb should be
 *earned* — each rung built by the rung below it, not handed over
 preinstalled. `LADDER.BAT` on the build floppy is that climb, and on
 2026-08-26 the breadboard ran all of it:
@@ -616,8 +617,14 @@ load-from-memory path for C4KE's ramfs and nothing for DOS's.
       Deliberately not done: c4mp's `CPUI..TRAW` (66-78). Those need
       more than one CPU on the board and buy no compile speed; the seven
       "c4mp" *fused* opcodes are pure microcode, so they went in.
-- [ ] **M11** Compiling the Lisp instead of interpreting it — the only
-      step that reaches "minutes". Not started, not scoped.
+- [x] **M11** Compiling the Lisp instead of interpreting it — the only
+      step that reaches "minutes". *(This box read "not started" until
+      2026-09-30; the work was done as c4sc and tracked in
+      `docs/c4sc-design.md`.)* `c4sc32-fused.c4r` is c4lc compiled, the
+      compiler the in-machine C4IX build uses; the twelve-module build
+      is 5,615,710,882 cycles, **4.6 minutes** (see "What that adds up
+      to, honestly" above). `make test-c4sc-board`: one C4IX module
+      compiled on the board, byte-identical to c4lc.
 - [~] **REJECTED** L7 in c4cc. See above: it collapses the C4KE rung and
       duplicates work that exists twice already.
 

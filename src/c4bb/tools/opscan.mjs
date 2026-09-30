@@ -7,9 +7,9 @@
 //   node src/c4bb/tools/opscan.mjs -rungs
 //   node src/c4bb/tools/opscan.mjs -machine
 //
-// HOMEWARD's ladder is a ladder of opcodes: the player extends their
-// own CPU to climb it, and a rung they can already run is a rung they
-// have been given for free. `c4l.c` refuses an over-budget image and
+// The ladder is also a ladder of opcodes: a machine extended one rung
+// at a time must be able to climb it, and a rung it can already run is
+// a rung given away for free. `c4l.c` refuses an over-budget image and
 // names the instruction, but c4l is built for the host's word size and
 // these images are 32-bit, so the check lives here instead.
 //

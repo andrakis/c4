@@ -7,6 +7,11 @@ each layer above them extends it. Written from a full read of `c4.c`, `c4m.c`,
 Everything here was checked against the running code (`make c4 c4m c4cc`) rather
 than inferred from comments.
 
+Status (2026-09-30): brought current with the tree. File:line references
+(`c4m.c:1135` and so on) date from the original read in early August 2026
+and have drifted as the files grew; search for the named function or opcode
+instead of trusting the number.
+
 ## 0. The layer cake
 
 ```
@@ -22,6 +27,28 @@ c4cc.c      separate, richer compiler (for/continue/varargs/attributes),
 
 Nesting really works: `./c4 c4m.c load-c4r.c -- c4ke.c4r` is c4 interpreting c4m
 interpreting the kernel. It is slow but correct.
+
+`c4.c` is upstream's file, unmodified apart from a portability shim (the
+`INT_TYPE` word-size define at the top) and a little more `-d` output. It is
+the reference every other layer degrades to, so nothing here changes it.
+
+### 0.1 The rest of the tree
+
+This document covers c4, c4m, C4KE, c4cc, c4lm and protected mode. The other
+components have their own READMEs and design docs; [src/README.md](../src/README.md)
+lists them all.
+
+| Component | What it is | README |
+|---|---|---|
+| c4mp | c4m-compatible VM with no compiler: loads `.c4r` only, simulated SMP, all ten fused opcodes | [src/c4mp/README.md](../src/c4mp/README.md) |
+| c4mpg | marked fork of `c4m.c` that checks every load, store and syscall buffer against a region table | [src/README.md#c4mpg](../src/README.md#c4mpg), [c4mpg-design.md](c4mpg-design.md) |
+| c4bb | c4m as a microcoded 32-bit breadboard computer, simulated in JavaScript | [src/c4bb/README.md](../src/c4bb/README.md) |
+| libjs | c4m as a direct JavaScript interpreter; boots C4KE and C4IX in Node or a browser Worker | [libjs/README.md](../libjs/README.md) |
+| C4IX | the Unix-like second-generation OS (see §7.4 for its use of protected mode) | [src/c4ix/README.md](../src/c4ix/README.md) |
+| C4DOS | single-tasking, trap-free DOS; the first rung of [the ladder](ladder-plan.md) | [src/c4dos/README.md](../src/c4dos/README.md) |
+| c4sp / c4lc | a Lisp written in c4, and the optimizing C compiler written in it | [src/c4sp/README.md](../src/c4sp/README.md) |
+| c4sc | c4lc's Lisp transliterated to C, so the compiler runs fast in the machine | [src/c4sc/README.md](../src/c4sc/README.md) |
+| c4th / c4fc | Forth-2012 in c4, and a C compiler written in that Forth | [src/c4th/README.md](../src/c4th/README.md), [src/c4fc/README.md](../src/c4fc/README.md) |
 
 ---
 
@@ -353,21 +380,109 @@ Function pointers need no declared signature — `int *f; f = (int *)&g; f(1,2);
 works, and passing the wrong number of arguments simply reads the wrong stack
 slots. `c4cc` builds varargs on top of exactly this.
 
-## 3.2 New opcodes
+## 3.2 New opcodes, traps and settings — the full list
 
-Appended after `EXIT` so the original numbering is untouched:
+This is the one place that lists everything `c4m` adds over `c4`'s
+instruction set, with when it arrived. Checked against the enums in
+`c4m.c` (opcodes ~lines 339–390, `CONF_*` ~268, `TRAP_*` ~297) and
+`git log -S` on 2026-09-30.
 
-```
-PUTC PUTS RALC MCPY STRC        putchar/puts/realloc/memcpy/stacktrace
-ITH  _OPC _BLT _TRP OPCD        install_trap_handler, __opcode, __builtin,
-                                __c4_trap, __c4_opcode
-_JMP _ADJ C4CF C4CY TIME        __c4_jmp, __c4_adjust, __c4_configure,
-                                __c4_cycles, __time
-SIGH SIGI USLP INFO OPSL        signals, sigint, usleep, __c4_info, opcode list
-C4IV                            __c4_invoke
-FLT                             float (traps if unsupported)
-JSRI JSRS JMPA TLEV DBG         indirect calls, jump-via-A, trap return, debug
-```
+**How to read "arrived".** `c4m.c` began as `c4_multiload.c` (first
+commit `c980cab`, 2022-08-26) and was renamed in `2e3bb59` (2023-07-29).
+Until `9ccd20f` (2026-01-25) the extensions were *interleaved* with
+c4's own opcodes (`JSRI`/`JSRS` after `JSR`, `RALC` after `MALC`,
+`JMPA`/`TLEV` after `PSH`, everything else before `EXIT`), so an older
+arrival date is when the **name and behaviour** appeared, not the
+number. Since `9ccd20f` they are appended after `EXIT` (38), so c4's
+own numbering is untouched and the numbers below hold.
+
+### Opcodes
+
+| # | Name | Builtin / emitted by | What it does | Arrived |
+|---|---|---|---|---|
+| 39 | `PUTC` | `putchar` | write one character | `9ccd20f` 2026-01-25 |
+| 40 | `PUTS` | `puts` | write a string | `9ccd20f` 2026-01-25 |
+| 41 | `RALC` | `realloc` | guest realloc via the size table | `74652ff` 2023-05-17 (in `c4_multiload.c`); its VM case was commented out and it fell through to `TRAP_ILLOP` until `63e274a` 2026-08-23 (§3.6) |
+| 42 | `MCPY` | `memcpy` | copy bytes | `74652ff` 2023-05-17; off-by-one at both ends fixed `9d4c591` 2026-08-05 |
+| 43 | `STRC` | `stacktrace` | print a stack trace from the symbol table | `e05052e` 2022-08-26 |
+| 44 | `ITH` | `install_trap_handler` | install the trap handler, return the old one | `5b37f41` 2024-11-06 |
+| 45 | `_OPC` | `__opcode` | opcode number by name (`"LEV"` → 8) | `5b37f41` 2024-11-06 |
+| 46 | `_BLT` | `__builtin` | **named only**: no VM case, so it halts (no handler) or raises `TRAP_ILLOP`; the host-side `__builtin()` stub returns −1 (§3.6) | `5b37f41` 2024-11-06 |
+| 47 | `_TRP` | `__c4_trap(type, param)` | raise any trap from code (does not mask the cycle interrupt) | `5b37f41` 2024-11-06 |
+| 48 | `OPCD` | `__c4_opcode(args…, op)` | execute opcode `*sp`; one that takes an operand (incl. the fused ones) raises `TRAP_OPV` and becomes a harmless `C4CY` | `5b37f41` 2024-11-06 |
+| 49 | `_JMP` | `__c4_jmp` | `pc = *sp++` — leave one handler for another without touching the frame | `5b37f41` 2024-11-06 |
+| 50 | `_ADJ` | `__c4_adjust` | `sp += *sp` | `5b37f41` 2024-11-06 |
+| 51 | `C4CF` | `__c4_configure(CONF_*, v)` | set a `CONF_*` value, return the old one (table below) | `5b37f41` 2024-11-06 |
+| 52 | `C4CY` | `__c4_cycles` | the cycle counter | `5b37f41` 2024-11-06 |
+| 53 | `TIME` | `__time` | milliseconds (native clock; `/proc/uptime` under plain c4; 0 when neither answers, §4.7) | `5b37f41` 2024-11-06 |
+| 54 | `SIGH` | `__c4_signal(sig, handler)` | install a POSIX signal handler (native builds) | `5b37f41` 2024-11-06 |
+| 55 | `SIGI` | `__c4_sigint` | the SIGINT number (0 under plain c4) | `5b37f41` 2024-11-06 |
+| 56 | `USLP` | `__c4_usleep` | sleep | `5b37f41` 2024-11-06 |
+| 57 | `INFO` | `__c4_info` | the `C4I_*` capability bits, plus `C4I_TRAPH` (0x400) when a handler is installed; raises `TRAP_PM_VIOLATION` in protected mode | `5b37f41` 2024-11-06 |
+| 58 | `OPSL` | `__c4_ops_list` | the opcode-name string (`"LEA ,IMM ,…"`, 5 bytes a name) | `5b37f41` 2024-11-06 |
+| 59 | `C4IV` | `__c4_invoke` | self-modifying stub rewritten to a `JMP` (§3.5) | `9ccd20f` 2026-01-25 |
+| 60 | `FLT` | `__c4_float` | float sub-ops (`c4m_float.c`, `FLTI_*`) in native c4m; under plain c4 raises `TRAP_ILLOP` so a handler may emulate it | `9ccd20f` 2026-01-25 |
+| 61 | `JSRI` | compiler: call through an `int *` global | `pc = **pc` | original c4m (`c980cab` 2022-08-26) |
+| 62 | `JSRS` | compiler: call through an `int *` local | `pc = *(bp + n)` | original c4m (`c980cab` 2022-08-26) |
+| 63 | `JMPA` | compiler: `switch` jumptables | `pc = a` | `5b37f41` 2024-11-06 |
+| 64 | `TLEV` | trap return (the `tlev_instruction` word) | reload `pc/sp/bp/a/mode` from the handler's argument slots (§3.3) | `5b37f41` 2024-11-06 |
+| 65 | `DBG` | none (reach it with `__c4_opcode`) | raise `TRAP_DEBUG` | `9ccd20f` 2026-01-25 |
+| 66–69 | `CPUI CPUN CPUS CPUH` | — | c4mp's processor opcodes (SMP) | **named only** in c4m, `13a369d` 2026-08-23 |
+| 70–75 | `CAS XCHG FADD CWAI CWAK IPI` | — | c4mp's atomics, the futex pair, a directed interrupt | **named only**, `13a369d` 2026-08-23 |
+| 76–78 | `LXI SXI TRAW` | `c4lc -mcisc` (LXI/SXI) | c4mp's fused array-element load/store and raw-terminal toggle (c4or1k) | **named only**, `13a369d` 2026-08-23 |
+| 79 | `LDL` | `c4lc -mfuse`, c4th | `a = *(bp+n)` | the probe `13a369d` 2026-08-23; the set settled at ten (79–88) in `bbb9ec3` 2026-08-24 |
+| 80–86 | `LDG PSHL PSHG LEAP IMMP LIP ADDL` | `c4lc -mfuse` | the compiler-shaped seven (docs/fused-opcodes.md) | **named only** in c4m, `bbb9ec3` 2026-08-24; executed by c4mp, oisc4, c4bb, libjs |
+| 87 | `STL` | `c4lc -mfuse`, c4th | `*(bp+n) = a` | `bbb9ec3` 2026-08-24 |
+| 88 | `POPA` | `c4lc -mfuse`, c4th | `a = *sp++` | `bbb9ec3` 2026-08-24 |
+
+A **named-only** opcode is one c4m knows the name of but does not
+execute. With no trap handler installed it halts with "*NAME* (opcode
+*n*) … is not an instruction this machine has"; with one, it raises
+`TRAP_ILLOP` like any custom opcode. The names are there so every
+mirrored table (c4mp, oisc4, c4bb, libjs) holds the same names at the
+same numbers, the debug disassembler can name them, and `c4l` can say
+what an image needs; `__opcode()` answers with a number for them, so a
+guest must feature-test with `C4I_*` bits, not by name. Opcodes at or
+above `INS_SIZE` (89) are the custom range: C4KE's start at `CO_BASE`
+(128), §4.2.
+
+### Traps (`TRAP_*`, the handler's first argument)
+
+| # | Trap | Raised by | Arrived |
+|---|---|---|---|
+| 0 | `TRAP_ILLOP` | an opcode c4m does not execute — the custom-opcode hook; also `FLT` without float support | `5b37f41` 2024-11-06 |
+| 1 | `TRAP_HARD_IRQ` | the cycle interrupt, parameter `HIRQ_CYCLE` (0). c4bb adds `1` (PIT) and `2` (mailbox) through the same handler (§4.7) | `5b37f41` 2024-11-06 |
+| 2 | `TRAP_SOFT_IRQ` | `__c4_trap()` from user code | `5b37f41` 2024-11-06 |
+| 3 | `TRAP_SIGNAL` | a POSIX signal (native builds only) | `5b37f41` 2024-11-06 |
+| 4 | `TRAP_SEGV` | nothing today: its only raise site in `c4m.c` is commented out | `5b37f41` 2024-11-06 |
+| 5 | `TRAP_OPV` | `OPCD` asked to run an opcode that takes an operand | `5b37f41` 2024-11-06 |
+| 6 | `TRAP_PM_VIOLATION` | a syscall (or `INFO`) in protected mode — see Part 7 | `9ccd20f` 2026-01-25 |
+| 7 | `TRAP_DEBUG` | `DBG` | `9ccd20f` 2026-01-25 |
+| 8 | `TRAP_MPG_VIOLATION` | **reserved**: raised only by c4mpg (docs/c4mpg-design.md), never by plain c4m | `d9184c0` 2026-09-06 |
+
+### Settings (`CONF_*`, the first argument of `__c4_configure`)
+
+| # | Setting | Meaning | Arrived |
+|---|---|---|---|
+| 0 | `CONF_CYCLE_INTERRUPT_INTERVAL` | fire `TRAP_HARD_IRQ` every *n* cycles; 0 = masked (§3.4) | `5b37f41` 2024-11-06 |
+| 1 | `CONF_CYCLE_INTERRUPT_HANDLER` | the function that interrupt enters | `5b37f41` 2024-11-06 |
+| 2 | `CONF_PRIVS` | **named only** (with `PRIV_KERNEL`/`PRIV_USER`): `C4CF` does not handle it, prints "c4m: C4CF issue" and ends the run with −100 | `5b37f41` 2024-11-06 |
+| 3 | `CONF_TRAP_RESTORES_INTERVAL` | 1 = `TLEV` restores the interval saved at trap entry (§3.4) | `a18c38c` 2026-08-05 |
+
+The `C4I_*` bits `INFO` reports are the enum just above the traps in
+`c4m.c`. Two more come from c4bb rather than c4m, and a program asks
+for them the same way: `0x800` (the interval timer, `BB_I_PIT` in
+`include/c4bb_info.h`) and `0x2000` (the mailbox, `C4I_MBOX` in
+`include/c4bb_mbox.h`); §4.7 uses both.
+
+The fused opcodes split deliberately. `LDL n` (`a = *(bp+n)`), `STL n`
+(`*(bp+n) = a`) and `POPA` (`a = *sp++`) are what a stack-machine code
+generator needs to treat the frame as registers; c4th's native back end uses
+exactly those three. The other seven only pay for c4cc's and c4lc's output, so
+c4m names them but halts on them, and c4mp, oisc4, c4bb (in microcode) and
+libjs execute all ten. They are emitted only on request, by the `fuse` pass
+in c4opt (`c4lc -mfuse`, or `c4opt-run.lisp -mfuse` on any image), and plain
+c4 refuses a fused image by name. See [fused-opcodes.md](fused-opcodes.md).
 
 `__opcode("NAME")` (`OPSL`/`_OPC`) lets running code look opcode numbers up by
 name at runtime, which is how C4KE stays decoupled from c4m's numbering.
@@ -410,17 +525,9 @@ handler's parameters, an ordinary C assignment such as `sp = ...` or
 That is the entire mechanism behind C4KE. A trap handler is a C function that can
 rewrite the VM's registers by assigning to its own parameters.
 
-Trap sources:
-
-| Trap | Cause |
-|---|---|
-| `TRAP_ILLOP` | unknown opcode — the custom-opcode hook |
-| `TRAP_HARD_IRQ` | cycle interrupt (`HIRQ_CYCLE`) |
-| `TRAP_SOFT_IRQ` | `__c4_trap()` from user code |
-| `TRAP_SIGNAL` | POSIX signal (native builds only) |
-| `TRAP_SEGV`, `TRAP_OPV` | debugging aids |
-| `TRAP_PM_VIOLATION` | syscall in protected mode — **see caveat below** |
-| `TRAP_DEBUG` | `DBG` opcode |
+Trap sources: the `TRAP_*` table in §3.2 lists every one, what raises
+it and when it arrived. The one C4KE is built on is `TRAP_ILLOP`, the
+custom-opcode hook; `TRAP_PM_VIOLATION` is the subject of Part 7.
 
 ## 3.4 The cycle interrupt
 
@@ -432,7 +539,27 @@ __c4_configure(CONF_CYCLE_INTERRUPT_HANDLER, (int)&handler);
 The VM loop checks `if (interval && !(cycle % interval))` (`c4m.c:1314`) and
 fires `TRAP_HARD_IRQ`. It then **sets the interval to 0**, so the handler must
 re-arm it — which is exactly how C4KE's `critical_path_start/end` work
-(setting the interval to 0 is the kernel's "disable interrupts").
+(setting the interval to 0 is the kernel's "disable interrupts"). The
+interrupt never lands on a `TLEV`, since a half-finished trap return is not a
+context either side could resume.
+
+**`CONF_TRAP_RESTORES_INTERVAL` (2026-08-05).** A kernel can opt in with
+`__c4_configure(CONF_TRAP_RESTORES_INTERVAL, 1)`. `TLEV` then restores the
+interval that was in effect when the trap was taken, so the interrupt mask
+becomes part of the trapped context and stays masked across the whole
+handler, including its return. A handler that wants to choose the interval
+for the context it resumes declares an eighth parameter ahead of the usual
+seven:
+
+```c
+void handler(int interval, int trap, int ins, int mode, int a, int *bp, int *sp, int *returnpc);
+```
+
+Opting in also makes a zero interval mean "masked" for signals: a pending
+signal is deferred (not dropped) until the mask lifts. Without the opt-in a
+zero interval is indistinguishable from "preemption never enabled", so
+signals are delivered regardless. C4IX opts in (`sched.c`); c4mp, c4bb and
+libjs mirror it.
 
 ## 3.5 Helper builtins
 
@@ -448,7 +575,9 @@ re-arm it — which is exactly how C4KE's `critical_path_start/end` work
 
 ## 3.6 Caveats found while reading (verified)
 
-1. **`realloc()` is broken under `c4m`.** `RALC` is in the builtin list, so
+1. **`realloc()` was broken under `c4m`** (fixed 2026-08-23 in `63e274a`,
+   which also gave the guest allocator a size table; `make test-c4m-mem`
+   pins it under native c4m and under plain c4). As first found: `RALC` is in the builtin list, so
    `realloc` compiles to opcode 41, but the VM case is commented out
    (`c4m.c:1496`). It falls through to `TRAP_ILLOP`; with no handler installed
    `trap()` prints "missed a trap" and execution continues with `a` unchanged —
@@ -461,14 +590,14 @@ re-arm it — which is exactly how C4KE's `critical_path_start/end` work
    after=32
    ```
 
-   The pointer is silently replaced by `32`. Either implement `RALC` or remove
-   `realloc` from `c4m_builtins`.
+   The pointer was silently replaced by `32`. The fix implemented `RALC`.
 
 2. **Protected mode is switched off in three independent places.** See
    [Part 7](#part-7--protected-mode) — it is now working again after one
    ownership bug was fixed.
 
-3. `__builtin()` is a stub returning `-1` (`c4m.c:345`).
+3. `__builtin()` is a stub that always returns `-1` (the `__builtin`
+   function in `c4m.c`). Use `__opcode("NAME")`.
 
 4. `-p` / `-P` pool-size flags are noted as non-functional in the header comment
    and do parse, but they run before `poolsz` is used, so they *do* take effect —
@@ -482,7 +611,7 @@ re-arm it — which is exactly how C4KE's `critical_path_start/end` work
 
 # Part 4 — C4KE, and why the trap design matters
 
-`src/c4ke/c4ke.c` (~3650 lines) is a pre-emptive multitasking kernel. There is no
+`src/c4ke/c4ke.c` (~4580 lines on 2026-09-30) is a pre-emptive multitasking kernel. There is no
 inner VM: **every task is ordinary C4 code running on the one c4m interpreter**.
 A "context switch" is just a trap handler assigning new values to its own
 `a/bp/sp/returnpc` parameters before returning through `TLEV`.
@@ -492,7 +621,7 @@ A "context switch" is just a trap handler assigning new values to its own
 A task is an `int` array indexed by the `TASK_*` enum (`c4ke.c:275`). The parts
 that matter: `TASK_REG_A/BP/SP/PC` hold the saved registers, `TASK_STATE`
 (`STATE_RUNNING`/`WAITING`/`ZOMBIE`…), `TASK_NICE` for scheduling, `TASK_BASE`
-for the 64 KB stack, plus argv, signal handlers, mailbox and accounting.
+for the stack (256 KB since 2026-08-28, §4.7), plus argv, signal handlers, mailbox and accounting.
 
 ## 4.2 Custom opcodes
 
@@ -529,7 +658,8 @@ interval to 0 and back — interrupt masking, one `__c4_configure` call.
 
 ## 4.4 Starting and ending a task
 
-`start_task_builtin` (`c4ke.c:1810`) allocates a 0xFFFF-byte stack and builds the
+`start_task_builtin` allocates a `TASK_STACK_SIZE` stack (0xFFFF bytes until
+2026-08-28, 0x40000 since, with a poisoned guard below it — §4.7) and builds the
 same hand-made frame `c4.c` builds for `main`, but with a *custom opcode* as the
 trampoline:
 
@@ -556,6 +686,181 @@ then simply *calls the entry point as a C function* — loaded code is native VM
 code, not re-interpreted. Constructors (like `__u0_init`) run before `main`,
 destructors (like the `atexit` runner) after.
 
+c4cc writes format version 2. c4lc and `c4rlink` write version 3, whose only
+addition is a MEMSZ word in the old header padding, so uninitialized globals
+become zero-filled BSS instead of bytes in the file. `load-c4r.c` reads both;
+[src/c4cc/README.md](../src/c4cc/README.md) has the full layout.
+
+## 4.6 The RAM filesystem
+
+The kernel owns a flat table of named byte buffers, reachable from user
+tasks through the `OP_VFS_PUT/GET/UNLINK/COUNT/NAME` opcodes (u0 wrappers:
+`vfs_put`, `vfs_get`, ...) and consulted by the program loader **before**
+the host filesystem. Because the VM has no write syscall, this is the only
+write path that exists under the VM -- and it closes the loop: c4cc running
+under C4KE renders its image into memory and stores it with `OP_VFS_PUT`,
+and the kernel executes it straight from the table (`load-c4r.c` gained a
+memory-source mode, `c4r_load_mem`). `make test-c4ke-ramfs` demonstrates
+the whole cycle: compile inside C4KE, run from RAM, plus the same loop with
+c4sp's Lisp optimizer producing the image.
+
+Detecting the kernel without u0: probe `OP_REQUEST_SYMBOL` (fixed number
+128), but only when `__c4_info()` reports `C4I_TRAPH` (0x400, "a trap
+handler is installed") -- under bare c4m the probe would just print trap
+noise, and the missed trap deterministically leaves 128 in the
+accumulator, so any answer above 128 is a real kernel resolution.
+
+## 4.7 The mailbox, wall-clock scheduling and task memory
+
+Three things C4KE gained in August–September 2026, all visible mainly
+on c4bb, the simulated board (docs/c4bb-design.md).
+
+### The mailbox (ad57ad0, 2026-09-09)
+
+`src/c4ke/extensions/c4ke_mbox.c` carries frames **between the host and
+a task**, and **between tasks**. It is an ordinary kernel extension
+(`kext_register("mbox", …)`), in the Makefile's extension list and in
+c4bb's `build-images.sh`.
+
+*The host side* is c4bb's `MBOX_*` device (docs/c4bb-design.md, "The
+mailbox"). A host that boots with `boot(…, { mbox: bytes })` gets a
+region of guest RAM holding two rings, host→guest in the first half and
+guest→host in the second. A ring is `[cap][head][tail][data…]` in
+words, head and tail monotonic counters; a frame is
+`[len][type][seq][payload…]` (`len` counts the three header words) and
+never wraps — a `-1` at the head means "skip to the next multiple of
+cap". Both sides use plain loads and stores: the host through the
+arena's typed array (`src/c4bb/sim/mbox.js`, `HostMailbox`), the guest
+through `include/c4bb_mbox.h` (`mb_init`, `mb_poll`, `mb_done`,
+`mb_send`, `mb_bell`). The registers are `MB_BASE` 0x1b4, `MB_LEN`
+0x1b8 and `MB_BELL` 0x1bc: a guest write to the bell reaches the host's
+`onDoorbell` (1 = "I wrote frames", 2 = "idle, you may stop me"), and
+the host's `raiseMbox()` jams `TRAP_HARD_IRQ` with parameter 2 through
+the cycle handler — to C4KE just one more tick, which is enough for the
+scheduler to notice the frame. The device is announced by `C4I_MBOX`
+(0x2000) in `__c4_info()` and never probed; on native c4m those
+addresses are ordinary memory, so `mb_init` returns 0 without the bit.
+
+*The kernel side.* The first task to receive or await host frames
+becomes their **owner** (`mbx_host_owner`). Frames stay in the host
+ring until that task takes them, so the scheduler can see them waiting.
+Every task can also have an **inbox**: a ring of the same shape,
+1024 words, allocated on first delivery into `TASK_MBOX` and freed with
+the task (`kernel_clean_task`); its frames are
+`[len][type][sender pid][payload…]`. When nothing is runnable the idle
+task rings `MB_BELL_IDLE`.
+
+The scheduler reads the host ring directly against the registers
+(`mbx_host_pending` in `c4ke.c`) rather than through `c4bb_mbox.h`,
+because innerbench compiles `c4ke.c` from source in c4m, which skips
+`#include` — calling a function it never saw broke innerbench once
+(docs/c4ix-desktop.md, "I: innerbench").
+
+The opcodes sit at the top of the custom range (`MBX_OP_BASE` 248 =
+`CO_BASE + CO_MAX - 8`), are registered by name with
+`kext_register_symbol`, and a task resolves them through
+`OP_REQUEST_SYMBOL` (`include/c4ke_mbox.h`, passed as a source after
+`u0.h`, since c4cc has no `#include`):
+
+| Opcode | Wrapper | Does |
+|---|---|---|
+| `OP_MBOX_INFO` | `mbox_info()` | 1 when the host mailbox is fitted |
+| `OP_MBOX_SEND` | `mbox_send(type, payload, n)` | a frame to the host, then rings `MB_BELL_REPLY` |
+| `OP_MBOX_RECV` | `mbox_recv(buf, max)` | the next host frame into `buf` → its length in words, or 0 |
+| `OP_MBOX_AWAIT` | `mbox_await(timeout_ms)` | block until a host frame (owner) or an inbox message → 1; timeout → 0; 0 ms = never time out |
+| `OP_MSG_SEND` | `msg_send(pid, type, payload, n)` | a frame into `pid`'s inbox → 1, or 0 (no such pid, or full); wakes it if it is awaiting |
+| `OP_MSG_RECV` | `msg_recv(buf, max)` | the next inbox frame → its length, or 0; `buf[2]` is the sender |
+
+`OP_MBOX_AWAIT` returns at once with 1 if something is already there.
+Otherwise it parks the task in `WSTATE_MESSAGE` with
+`TASK_WAITARG = kernel_last_time + timeout` (0 for never) and switches
+away; `kernel_task_find_real` wakes it with 1 in `TASK_REG_A` when its
+inbox count is non-zero or (for the owner) a host frame is pending, and
+with 0 once the deadline passes. On a host without the mailbox (native
+c4m) `OP_MBOX_INFO` answers 0 and the task-to-task opcodes still work.
+
+**Tests.** `src/c4bb/tests/test-c4ke-mbox.mjs`, run by
+`test-c4bb.sh`, boots C4KE on c4bb with a mailbox fitted and runs two
+programs from `src/c4ke/bin/`: `mbecho.c` binds to the host mailbox and
+echoes every frame (type | 256, each payload word + 1; a type-0 frame
+ends it) while idling in the kernel between frames, pinned at 22 frames;
+`mbpair.c` starts a copy of itself as a child, which sends its parent
+three words with `msg_send`. **Known flaky:** it fails about one run in
+four (docs/c4ix-desktop.md, "Found on the way, not fixed"): the
+recorded symptom is C4KE's "Custom opcode not found: 1073741824" in the
+mbpair output, and the test check that trips is "kernel shut down
+cleanly". It fails as often with the C4KE source from before the
+desktop work; the cause is not yet known.
+
+### Scheduling on the wall clock (2574376, 2026-08-28)
+
+The cycle interrupt (§3.4) fires after so many *instructions*, so C4KE
+has to measure how fast the host runs and guess a count. c4bb also has
+an interval timer: `C4KE_PIT_REG` (0x1a0, `BB_PIT` in
+`include/c4bb.h`) ticks every *n* real milliseconds, 0 masks it, and it
+raises the same `TRAP_HARD_IRQ` through the same handler, so all of
+C4KE's scheduling works unchanged — only *when* differs.
+
+At boot `main` calls `kernel_pit_probe(C4KE_PIT_MS)` (10 ms) unless
+`-c` was given. The probe asks two questions. First `__c4_info()` must
+report `C4KE_PIT_INFO` (0x800, `BB_I_PIT` in `include/c4bb_info.h`):
+the register cannot be probed blind, because on every other host 0x1a0
+is ordinary memory and a store there is a wild write. Then it arms the
+interval, reads it back, masks it and reads that back; a machine that
+answers anything else schedules on the cycle counter. A non-zero result
+goes in `kernel_pit_ms`, which then also means "the PIT is ours to
+touch", and:
+
+* measurement is skipped (`enable_measurement = 0`) — the board's boot
+  went from 726 ms and 2.047 G cycles to 3 ms and 76.5 k;
+* `critical_path_start/end` mask by writing 0 / `kernel_pit_ms` to the
+  register instead of the cycle interval. The PIT keeps its deadline
+  across a mask (only a *different* interval restarts the countdown) —
+  a change this kernel forced on the hardware, because a kernel masking
+  on every trap would otherwise never be interrupted again;
+* the boot prints "scheduling on the interval timer, every 10ms of real
+  time" and arms the register just before scheduling starts.
+
+Native c4m, a C4KE nested inside c4m on the board, and `-c nn` all
+schedule on the cycle counter as before.
+
+**Without the PIT** the interval comes from `measure_ips()`: wait for
+`__time()` to change, then count cycles for 200 ms
+(`KERNEL_MEASURE_QUICK`) and scale by 5, giving instructions per
+second; the interval is a tenth of that, then halved (about 50 ms of
+work). `-m` skips the measurement and uses `KERNEL_CYCLES_MIN`
+(10000), which the same halving turns into 5000. `-c nn` asks for the
+cycle interrupt by name, skips the measurement and the minimum check,
+and is also halved: `-c 20000` schedules every 10000 cycles.
+
+**With no clock at all**, `__time()` returns 0 for ever: under plain c4
+c4m reads `/proc/uptime`, and when that cannot be opened it prints
+"unable to open uptime file" once and latches 0 (`c4_time_host`). The
+first loop of `measure_ips` then waits for time to move and never
+returns, so such a boot needs `-m` (or `-c`). (On c4bb the C4DOS build
+of c4m asks C4DOS's clock first, which is why the board no longer hangs
+there — the comment on `c4_time` in `c4m.c`.) Anything that waits on
+`kernel_last_time`, such as a sleep or an `OP_MBOX_AWAIT` timeout,
+cannot expire while the clock reads 0.
+
+### Task memory (a8a546b, 2026-08-28)
+
+[task-memory.md](task-memory.md) is the full account. In short: building
+C4IX under C4KE (`b4ke -f c4ix.b4k`) died with a false out-of-memory
+because c4sc's recursive descent overran the 64 KB (0xFFFF) task stack
+and wrote through the heap below it. The fix and what followed:
+
+* `TASK_STACK_SIZE` is now 0x40000 (256 KB), with a 256-byte guard of
+  poison words (`TASK_STACK_POISON`) below every stack, checked so an
+  overrun is **reported** (`TASK_STACK_LOW`, `TASK_STACK_BROKEN`)
+  instead of corrupting someone else's heap.
+* The kernel tracks a task's own allocations and reclaims them when
+  the task ends, exited or killed (`kernel_task_malloc` / `_free` /
+  `_realloc` / `_release`). That works where `MALC`/`FREE` trap, i.e.
+  for a task running protected; `make test-task-mem` pins it.
+* With the compilers' own cleanup added, the whole C4IX build under
+  C4KE went from needing 128 MB to fitting in 13 MB.
+
 ---
 
 # Part 5 — `c4cc`, the enhanced compiler
@@ -579,10 +884,17 @@ Over `c4.c`/`c4m.c` it adds:
   `emit_Length`, `ArgCount`
 * error messages that print the offending statement and column
 
-Not yet present (the "more keyword support" gap): `struct`/`union`/`typedef`,
-`do`/`switch`/`break`, `unsigned`/`short`/`long`, real arrays, and a
-preprocessor — `gcc -E` is currently used as the preprocessor, as in
-`gcc -E -DC4CC=1 -Iinclude src/tests/vararg.c | ./c4cc -o vararg.c4r -`.
+* `switch`/`case`/`default` (a jump table, needs c4m's `JMPA`), `break`,
+  arrays (`ATTR_ARRAY`), initialized globals and local initializers — see
+  "c4cc additions" in §1.7
+
+Still not present: `struct`/`union`/`typedef`, `do`/`while`,
+`unsigned`/`short`/`long`, and a preprocessor. Builds run a preprocessor
+first: `gcc -E` on the host, as in
+`gcc -E -DC4CC=1 -Iinclude src/tests/vararg.c | ./c4cc -o vararg.c4r -`, or
+the tree's own [cpp](../src/c4dos/cpp.c) inside C4DOS and C4KE. For
+structs and the rest, use c4lc ([c4lc-design.md](c4lc-design.md)).
+[src/c4cc/README.md](../src/c4cc/README.md) has the current limits.
 
 ## Test programs
 
@@ -687,38 +999,47 @@ pre-emption: without c4m's cycle interrupt nothing can interrupt a task that
 never calls `schedule()`. And a task blocked in `read()` still blocks the whole
 world.
 
-## 6.5 `c4l.c` — the loading system, productionized (2026-08-03)
+## 6.5 `c4l.c` — a `.c4r` loader for plain c4
 
 The invoke-stub trick above became [`c4l.c`](../c4l.c), a ~150-line
 loader in the strict c4 subset: `./c4 c4l.c program.c4r [args...]`
 reads a modern `.c4r` (all four patch types, including the
 data-resident `-3`/`-4`), runs constructors, enters `main` through the
-stub, and runs destructors. Three things made it possible:
+stub, and runs destructors.
 
-1. **`c4.c` executes (but never emits) the c4m extended opcodes.**
-   `JMPA JSRI JSRS _JMP _ADJ PUTC PUTS MCPY STRC TIME OPCD C4CY` plus
-   stubs for the trap/signal set. `INFO` returns 0 — no capabilities —
-   so well-written images (which probe `__c4_info()` before touching
-   anything exotic) keep to the paths plain c4 can run. `OPCD` leaves
-   its argument in the accumulator, the missed-probe convention. The
-   c4 *compiler* is untouched, so c4 still self-hosts.
-2. **`c4m.c`'s compiler gained `switch`/`case`/`default`/`break`**
-   (in-memory jumptable of absolute addresses, dispatched with JMPA —
-   c4cc's layout minus relocation), so c4m can still compile itself.
-3. **`c4m.c`'s dispatch loop became a `switch`.** Compiled by gcc it
-   is a native jumptable; compiled by c4cc/c4lc it is a `.c4r`
-   jumptable; interpreted by c4m it uses (2). Plain c4 cannot parse it
-   anymore — which is exactly what `c4l.c` is for, and why `run-c4`/
-   `test-c4` now run `./c4 c4l.c c4m.c4r ...` instead of interpreting
-   `c4m.c` source.
+What it can run is bounded by plain c4's instruction set, which ends at
+`EXIT`. An image runs only if its compiler emitted nothing above that: no
+indirect call (`JSRS`), custom opcode (`OPCD`), `putchar` (`PUTC`), cycle
+count (`C4CY`), jumptable `switch` (`JMPA`) or fused opcode. `scan_extended`
+checks up front and refuses such an image by naming the instruction
+("needs JMPA"), rather than letting c4 die later on a bare "unknown
+instruction". Those images want c4m, which plain c4 can still provide:
+`./c4 c4m.c load-c4r.c -- program.c4r`, one interpreter deeper.
 
-Measured (through native c4m): the compiled c4m image interpreting a
-5M-iteration compute loop dropped from 74.4s (if-chain dispatch) to
-41.6s (c4cc jumptable) / 41.0s (c4lc -O jumptable) — **1.79x faster**
-nested interpretation, exactly reproducible. The native gcc build
-gains ~3% on the c4sp compiler workload. `make test-c4l` pins the
-plain-c4 chains: a plain image, a switch image, and the compiled c4m
-interpreting C source.
+`make test-c4l` pins that boundary: plain c4 runs `hello.c4r` through
+`c4l.c`, refuses a `switch` image with "needs JMPA", and c4m runs the same
+image through `load-c4r.c`.
+
+**History (2026-08-03/04).** The first version (`5ba6241`) went further. It
+taught `c4.c`'s VM to execute c4m's extended opcodes and turned c4m's
+dispatch loop into a `switch`, which plain c4 cannot parse, so `run-c4` and
+`test-c4` ran a compiled `c4m.c4r` through `c4l.c`. Nested interpretation got
+1.79x faster (a 5M-iteration loop under the compiled c4m image: 74.4s to
+41.6s). Both halves were reverted the next day in `29d6f57`:
+
+* `c4.c` is back to unmodified. One of the added opcodes was a "clock" that
+  advanced once per call, which is why C4KE's `top` under `make run-c4`
+  redrew dozens of times a second.
+* c4m dispatches through the original if-else chain again, so plain c4
+  interprets `c4m.c` from source (`run-c4` is `./c4 c4m.c …` again). On the
+  native build the switch gained nothing on innerbench (14.10s/13.55s
+  if-else against 14.20s/14.21s switch); its only win was the nested case
+  it broke.
+
+Kept from that work: c4m's *compiler* still understands
+`switch`/`case`/`default`/`break` (it compiles C that uses them, emitting a
+jumptable dispatched with `JMPA`), and the two protected-mode fixes of
+§7.4.
 
 ---
 
@@ -857,24 +1178,16 @@ test`. C4IX additionally keeps a re-entry guard in its handler
 (`if (sched_intrap) return;`), because neither the `TRAP_ILLOP` site
 nor `_TRP` disables the cycle interrupt, so a hard IRQ can still land
 in the window before the handler masks it.
-## 4.6 The RAM filesystem
 
-The kernel owns a flat table of named byte buffers, reachable from user
-tasks through the `OP_VFS_PUT/GET/UNLINK/COUNT/NAME` opcodes (u0 wrappers:
-`vfs_put`, `vfs_get`, ...) and consulted by the program loader **before**
-the host filesystem. Because the VM has no write syscall, this is the only
-write path that exists under the VM -- and it closes the loop: c4cc running
-under C4KE renders its image into memory and stores it with `OP_VFS_PUT`,
-and the kernel executes it straight from the table (`load-c4r.c` gained a
-memory-source mode, `c4r_load_mem`). `make test-c4ke-ramfs` demonstrates
-the whole cycle: compile inside C4KE, run from RAM, plus the same loop with
-c4sp's Lisp optimizer producing the image.
+### Since (added 2026-09-30)
 
-Detecting the kernel without u0: probe `OP_REQUEST_SYMBOL` (fixed number
-128), but only when `__c4_info()` reports `C4I_TRAPH` (0x400, "a trap
-handler is installed") -- under bare c4m the probe would just print trap
-noise, and the missed trap deterministically leaves 128 in the
-accumulator, so any answer above 128 is a real kernel resolution.
+This section describes C4IX as of X2–X3 in August 2026 and is kept as
+that record. C4IX has grown a good deal since — built inside C4KE on
+the machine that runs it, `SYS_SLEEP`, a lazy disk, compilers running
+inside it, and a Windows 95-style desktop with a terminal emulator.
+The "Since X6" list at the end of section 6 of
+[c4ix-design.md](c4ix-design.md) names each change and its commit, and
+[c4ix-desktop.md](c4ix-desktop.md) is the desktop's design and tracker.
 
 ---
 

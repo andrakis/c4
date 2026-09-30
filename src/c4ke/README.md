@@ -138,13 +138,6 @@ The shell lives in [src/c4sh](../c4sh/README.md) and the benchmarks in
   allocated and never freed.
 - `src/c4bb/tests/test-c4ke-mbox.mjs` (run by `make test-c4bb`) fails intermittently in the mbpair
   step, as recorded in [docs/c4ix-desktop.md](../../docs/c4ix-desktop.md).
-- `extensions/c4ke_pm.c` still calls protected mode "Shelved";
-  `include/config.h` and [docs/task-memory.md](../../docs/task-memory.md)
-  are current. The header comment of `c4ke.c` lists only two of the five
-  extensions and says message passing is not implemented, which predates
-  the mailbox extension.
-- innerbench's `-V` option passes `-V` to the inner kernel, which has no
-  such option.
 
 ## Docs
 

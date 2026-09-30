@@ -60,6 +60,5 @@ today: named top-level functions, fixed arity, no closures, no higher-order
 calls. A change to those files that uses more than that will build under c4sp
 and break `make c4sc.c4r`.
 
-The Makefile's `C4LC_LISP` dependency list does not include
-`c4lc-pp.lisp`, so an edit to the preprocessor alone does not rebuild the
-images that depend on c4lc.
+The Makefile's `C4LC_LISP` lists every file `c4lc.lisp` loads, including
+`c4lc-pp.lisp`, so an edit to any of them rebuilds what c4lc built.

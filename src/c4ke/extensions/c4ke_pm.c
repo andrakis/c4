@@ -1,5 +1,10 @@
 // C4KE protected mode support extension.
-// STATUS: Shelved, makes the kernel slow and unstable.
+// STATUS: optional, off by default. Compiled in only with -DCONFIG_ENABLE_PM=1
+// (include/c4ke/config.h defaults it to 0) and active only on a c4m that reports
+// C4I_PROT. It was once shelved as slow and unstable; it now builds all of C4IX
+// under protection at about +13% cost, and `make test-task-mem` builds its own PM
+// kernels so it stays working (docs/task-memory.md). It stays off by default because
+// it changes the protection model for every task and syscall.
 //
 // Handles protected mode violations for system calls:
 //  o Output (PUTS, PRTF)

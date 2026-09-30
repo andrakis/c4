@@ -1,16 +1,19 @@
 //
-// C4IX X2: boot.
+// C4IX: boot.
 //
-// Ten .c4o objects (boot, con, va, host, sl4b, task, sched, sys,
-// loader, init) compiled by c4lc -O -c and linked by c4rlink. Boots
-// natively under c4m with preemptive scheduling and protected user
-// tasks; degraded under plain c4 through the c4l loader with
-// cooperative scheduling and no hardware boundary -- host_detect()
-// tells the two apart with one INFO opcode.
+// Twelve .c4o objects (boot, console, va, host, sl4b, task, sched,
+// vfs, sys, c4ke, loader, init) compiled by c4lc -O -c and linked by
+// c4rlink. Boots under c4m with preemptive scheduling and protected
+// user tasks. C4IX images use C4CY, PUTC, JSRI and JSRS, which plain
+// c4 lacks, so plain c4 runs C4IX through c4m itself
+// (c4 -> c4m.c -> C4IX, `make test-c4ix-c4`) and C4IX still sees a c4m
+// host. The cooperative, no-boundary path host_detect() selects when
+// __c4_info() reports no traps is still here, but no supported host
+// reaches it. (Written at X2, when a degraded plain-c4 boot through the
+// c4l loader still worked; docs/c4ix-design.md 4.1.)
 //
-// X2 scope: the syscall layer. User tasks run behind protected mode,
-// so their IO reaches the kernel whether they ask through libc4ix or
-// just call printf and get trapped.
+// User tasks run behind protected mode, so their IO reaches the kernel
+// whether they ask through libc4ix or just call printf and get trapped.
 //
 
 #include "c4ix.h"

@@ -59,8 +59,8 @@ also starts `top -b` unless given `-T`. From its help text:
           -c      Enable C4 mode (ignored if -m given)
           -m      Enable C4M mode (default if -c not given)
           -l      Use load-c4r by itself (ignored if -d given)
+          -d      Use load-c4r + c4ke.c from source (default)
           -v      Enable verbose mode
-          -V      Enable VFS process
           -t      Enable test processes
           -b args Pass args to bench
 
@@ -99,9 +99,3 @@ only when the nested c4m reads its clock from `/proc/uptime`.
 
 ## Limits and known issues
 
-- `-V` passes `-V` to the inner kernel, which has no such option (C4KE
-  accepts `-d -t -m -g -O -v -c`), so the inner kernel stops with "Invalid
-  option".
-- `-d` is accepted by the parser but no longer in the help text, and
-  `innerbench.c` marks the mode it sets as "No longer valid"; the default
-  mode sets the same flag.

@@ -2,9 +2,19 @@
 
 C4IX is a ground-up successor to C4KE: written against c4lc's extended
 language (structs and friends), built as separately compiled objects
-linked by c4rlink, optimized end to end by `c4lc -O`, targeting c4m
-first with a degraded-but-working plain-c4 mode via the c4l loader.
+linked by c4rlink, optimized end to end by `c4lc -O`, targeting c4m.
+(It was first planned with a degraded plain-c4 mode via the c4l loader;
+that was dropped on 2026-08-04 -- see 4.1. Under plain c4, C4IX runs
+through c4m itself: c4 -> c4m.c -> C4IX, `make test-c4ix-c4`.)
 The name is the user's, from an earlier rewrite attempt.
+
+STATUS (2026-09-30): X0–X6 done, plus directories and the preemption
+fixes (section 6). Since this document was last brought up to date
+(2026-08-09) C4IX has been built on the machine that runs it (the
+ladder), gained a sleep syscall, `gui`, a Windows-style desktop
+(docs/c4ix-desktop.md), a lazy disk, and compilers that run inside it;
+"Since X6" at the end of section 6 lists them. `src/c4ix/README.md`
+has the current build, run and test targets.
 
 Everything here builds on docs/c4lc-design.md (the compiler) and
 docs/internals.md §6.5 (the c4l loading system).
@@ -14,7 +24,9 @@ docs/internals.md §6.5 (the c4l loading system).
 C4KE is written in the bare c4 subset: every kernel structure is an
 int array indexed by enum offsets (`task[TASK_NICE]`), IO goes
 straight to the host (PRTF prints to stdout, unredirectable), and the
-whole kernel is one 3300-line translation unit compiled in one shot.
+whole kernel is one 3300-line translation unit compiled in one shot
+(3300 lines when this was written; `src/c4ke/c4ke.c` is about 4,600
+now).
 Each of those is a language problem, not an OS problem. Fix the
 language, and the OS gets to be ordinary readable code.
 
@@ -111,7 +123,8 @@ loading or assigning a whole struct is an error.
 
 - **X0 — boot.** Kernel of 3+ objects linked by c4rlink, boots on c4m,
   prints via its own kprintf, runs one init task, clean shutdown.
-  Also boots under `./c4 c4l.c` (degraded path proven early).
+  Also booted under `./c4 c4l.c` at the time (degraded path proven
+  early; dropped on 2026-08-04, see 4.1).
 - **X1 — tasks.** DONE, see §6. Tasks on the linked list X0
   established (no fixed table, no TASK_MAX), scheduler (preemptive on
   c4m via cycle interrupt, cooperative fallback) context-switching
@@ -174,10 +187,12 @@ loading or assigning a whole struct is an error.
       task_head.)
 - [x] X0 boot (2026-08-03: src/c4ix/ -- six modules (boot, con, va,
       host, task, init) each compiled `c4lc -O -c` and linked by
-      c4rlink into c4ix.c4r; boots natively on c4m and degraded on
-      plain c4 via the c4l loader, pinned exactly by `make test-c4ix`
-      against src/c4ix/tests/. Host detection via one INFO opcode
-      (0 = plain c4). Console is kprintf over PUTC only. Tasks are a
+      c4rlink into c4ix.c4r; boots natively on c4m and (then)
+      degraded on plain c4 via the c4l loader, pinned exactly by
+      `make test-c4ix` against src/c4ix/tests/. Host detection via one
+      INFO opcode (0 = plain c4, true only while c4.c carried extended
+      opcodes; reverted in 29d6f57, and the c4l route went with 4.1's
+      revision). Console is kprintf over PUTC only. Tasks are a
       malloc'd singly linked list -- no TASK_MAX -- with task_next()
       wrapping tail->head, the walk X1's context switch slots into;
       init runs as task 0 and task_shutdown() frees the list before
@@ -460,6 +475,41 @@ loading or assigning a whole struct is an error.
       statuses.
       The shell gained `kill [-SIG] %JOB|PID` at the same time, since
       `jobs` could list a background task and nothing could stop it.
+
+### Since X6 (recorded 2026-09-30; details in the commits named)
+
+- **c4r v3** (78c3601, 2026-08-09): the loader reads BSS and data of
+  any size (no 256 KB cap).
+- **Built on the machine that runs it** (36b58b8, 2026-08-23, and the
+  climb after it): c4rlink reads and writes the RAM filesystem, so C4KE
+  compiles C4IX's twelve modules and links them in-machine
+  (`c4ix-src.tar`, `b4ke -f c4ix.b4k`). docs/ladder-plan.md,
+  docs/climbing-the-ladder.md; `make test-c4dos-c4ix32`.
+- **Cycles in two words** (f5c82a1, 2026-08-28): `sched_add_cycles`
+  keeps billions and the rest, so `ps`/`top` stop printing negative
+  time on long runs.
+- **c4th on C4IX** (664ffdb, 2026-08-25): the loader looks in the RAM
+  filesystem (docs/c4th-design.md, B6).
+- **libc4ix declines under C4DOS** (fb6bf7a, 2026-09-06) instead of
+  trap-storming, using the `__c4dos_api` patch as the probe.
+- **`SYS_SLEEP`** (220) and `gui` (5493bec, 2026-09-23): a task parks
+  on the clock (`umsleep`); `user/gui.c` is the libjs display demo as a
+  C4IX program (natively it prints `gui: not fitted`).
+- **The desktop** (a38e63a, d5a9ff4, 2026-09-23): `c4ix-desktop.c4r`,
+  six modules in `src/c4ix/user/desktop/`, with `SYS_AVAIL`,
+  `SYS_INTR`, `SYS_CLOEXEC`, `SYS_STAT`, `SYS_UNLINK` and `SYS_RENAME`
+  added for it. docs/c4ix-desktop.md is its design and tracker.
+- **A lazy disk** (3f3bd65, 2026-09-24): `SYS_LAZYFILE`; vfsload makes
+  each manifest entry a RAM file the kernel reads in on first use, and
+  Explorer runs programs because `stat` says which files are programs.
+- **Compilers inside C4IX** (e427c9c, 2026-09-24): the compatibility
+  layer answers C4KE's RAM-filesystem opcodes and reports a trap
+  handler, so c4cc, c4rlink and c4lc (on c4sp) write what they build
+  into `/ram`; c4th, cpp and c4rdump are on the disk beside them, with
+  `/usr/src/examples`. The loader now prefers a RAM file to the host
+  file of the same name. `include/window.h` lets a program in a desktop
+  Command Prompt use that window as a canvas.
+
 ## 6.1 Running it
 
     make run-c4ix        an interactive shell on c4m
@@ -507,7 +557,8 @@ announces that before it happens for exactly this reason.
 it does nothing; it is still accepted so older command lines work.
 
 In the shell, anything in the tree named `c4ix-NAME.c4r` is a
-command: echo, cat, wc, ls, mkdir, ps, top, bench, spin, hello. The
+command: echo, cat, wc, ls, mkdir, ps, top, bench, spin, hello, cycles,
+fmt, gui, desktop (the last two need the libjs display). The
 prompt carries the working directory, `help` lists the builtins, and
 `exit` or end-of-file leaves, which shuts the kernel down. Ctrl-C
 cancels the foreground job and does nothing at an idle prompt;

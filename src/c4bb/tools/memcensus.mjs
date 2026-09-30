@@ -31,8 +31,8 @@
 //   node src/c4bb/tools/memcensus.mjs [-m MB] [-c cycles] [-d dir]
 //                                     [-json out.json] image.c4r [...]
 //
-// See docs/dos-rung-fixes.md and Homeward's scripts/opcensus.ts, which
-// is where the approach comes from.
+// See docs/dos-rung-fixes.md; the approach came from an embedder's
+// opcode census.
 
 import { readFileSync, writeFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { join } from 'node:path';

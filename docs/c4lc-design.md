@@ -26,6 +26,13 @@ interoperable with c4cc objects in the same link. X0 (the first
 C4IX boot) is DONE on this toolchain; the next compiler-side goal
 is L9, a native preprocessor (§10).
 
+Status 2026-09-30: L9 (preprocessor), L10 (`-conforming` escapes) and
+L11 (constant expressions in enums) are DONE too (§10). Since then c4lc
+has gained three opt-in code-generation flags, `-mcisc`, `-mfuse` and
+`-minline`, and four fixes from 2026-09-07 to 09-10 (§10, "Beyond
+L11"). c4lc now builds C4IX, C4DOS, `c4sp.c4r`, c4mp, c4or1k, c4tui and
+the 32-bit c4th. How an image is built from units is in §13.
+
 ## 1. Why
 
 c4cc inherits c4's architecture: one pass, no AST, code emitted while
@@ -84,7 +91,9 @@ printf-style calls. Divergences from c4cc are only where c4cc has
 outright bugs, and each is listed in §5.1.
 
 Not goals (for now): structs, typedef, preprocessor beyond `#`-line
-skipping, floats beyond what c4cc does.
+skipping, floats beyond what c4cc does. (That was the starting target.
+Structs, unions, typedef and `do/while` arrived in L7, and the
+preprocessor in L9.)
 
 ## 4. Pipeline
 
@@ -102,6 +111,10 @@ Modules, each a loadable file in src/c4sp/lisp/:
 | c4lc.lisp        | driver (flags, -O, out)   | L2        |
 | c4lc-tokens.lisp | token-dump driver (tests) | L0        |
 | c4lc-ast.lisp    | AST-dump driver (tests)   | L1        |
+| c4lc-tree.lisp   | tree passes (fold, DFE, inlining) | L6, T3/T4 |
+| c4lc-pp.lisp     | preprocessor (`-P -I -D`) | L9        |
+| c4lc-ppdump.lisp | preprocessor dump driver  | L9        |
+| c4lc-eq.lisp     | compile-and-compare driver (tests) | L5 |
 
 All offsets in bytes unless noted, matching c4r.lisp.
 
@@ -376,6 +389,54 @@ battery green and adds its own target.
   c4cc's enum parser (c4cc.c:1342) has the same literal-only
   restriction, so this cannot go in the differential battery.
 
+### Beyond L11 (to 2026-09-30)
+
+Three code-generation flags, all off by default, each documented in its
+own design doc:
+
+- **`-mcisc`** (c4or1k M12, [c4or1k-design.md](c4or1k-design.md)):
+  emits c4mp's `LXI`/`SXI` for a plain `var[idx]` over an 8-byte-element
+  array, instead of the generic `IMM/PSH/SHL/ADD/LI`-or-`SI` sequence.
+  Only c4mp executes them; c4m traps them. c4or1k's `-cisc` image is the
+  user.
+- **`-mfuse`** ([fused-opcodes.md](fused-opcodes.md)): runs c4opt's
+  `fuse` pass after the peephole pipeline reaches its fixpoint,
+  rewriting common two- and three-instruction sequences into the ten
+  fused opcodes (79-88). Implies `-O`. c4mp, oisc4, c4bb and libjs run
+  the result; c4m has only three of the ten and plain c4 none, so a fused
+  image is for those machines. The same pass is reachable for any image
+  as `c4sp c4opt-run.lisp -mfuse in.c4r out.c4r`.
+- **`-minline`** (2026-09-07, `d445540`,
+  [inline-small-functions.md](inline-small-functions.md)): T3
+  substitutes an expression body at its call sites, T4 splices a whole
+  body in statement position, and T4b lets a body return early through
+  optimizer-only `ijmp`/`ilabel` nodes (the C dialect gains no `goto`).
+  Budget 60 AST nodes. A function whose address is taken is never
+  spliced or spliced into. Implies `-O`. `-minline-why` reports what the
+  pass decided for every function.
+
+Fixes, 2026-09-07 to 09-10 (each with a regression in `test-c4lc` or the
+build that found it):
+
+- **`#else` inside skipped text** (2026-09-07, `25498f0`). `#else` and
+  `#elif` flipped the top of the conditional stack without asking
+  whether an enclosing level was already skipping, so an `#else` nested
+  in dropped text started reading it. Both now inherit the enclosing
+  skip (`pp:any-skip?`). Found through `raycast-dos32.c4r` in
+  `make c4dos-c4ix32`.
+- **Codegen errors name their function** (2026-09-10, `b7d3e7a`). AST
+  nodes carry no line numbers, so a codegen error now ends
+  `(in function NAME)`.
+- **A swallowed `#include`** (2026-09-10, `ab6205b`). A directive
+  collected every token sharing its line number, but an included file's
+  tokens carry their own file's numbers, so a header ending in `#endif`
+  could share a number with the includer's next `#include` line and
+  swallow it. The header was silently never included. A directive now
+  also stops at the next Hash, except `#define`, whose body may hold `#`
+  and `##`. Regression: `src/tests/c4lc_ppinc.c`.
+- **Inlining** (above) landed on 2026-09-07 with its own correctness
+  tests.
+
 ## 11. Measured results (2026-08-03)
 
 The three big images, compiled three ways. "c4opt" is the peephole
@@ -416,7 +477,9 @@ Runtime, all through native c4m:
   optimizer improving its own host); if needed, pack the token stream
   into a byte string instead of cons cells.
 - **GC pressure.** Token list + AST for c4cc.c ≈ a few hundred
-  thousand cells; pass `-c`. The GC is conservative mark&sweep and
+  thousand cells. As first written this needed a large `-c`; since
+  2026-08-26 the arena grows with the live set, so no `-c` is needed
+  (c4sp-design.md §4.10). The GC is conservative mark&sweep and
   already survives gcloop; watch `gc:stats` in stress tests.
 - **Dialect traps** (hard-won this session):
   - Falsiness is `false`, `nil`/`()` and integer `0` (Lisp-style, since
@@ -434,3 +497,26 @@ Runtime, all through native c4m:
 - **c4cc quirk drift.** Divergences are pinned in §5.1 and asserted by
   the golden lexer test; anything else that differs is a c4lc bug
   until proven otherwise by the differential battery.
+
+## 13. How images are built: units and c4rlink
+
+The standard way to build a multi-file image in this tree (C4IX,
+c4or1k, c4sc, c4mp) is **separate compilation, then link**:
+
+1. Each module is compiled on its own to an object:
+   `c4sp c4lc.lisp -O -c -I <dir> <dir>/mod.c mod.c4o`. `-c` makes
+   undefined prototypes extern symbols with SYMBOL-typed patches and
+   makes `main` optional. `-P`/`-I`/`-D` use c4lc's own preprocessor,
+   so no `gcc -E` is involved. The Makefile's `c4lc_compile_par` macro
+   runs the units in parallel.
+2. `c4rlink a.c4o b.c4o ... -o image.c4r` resolves the externs and
+   writes a `.c4r` (format version 3). `-s` strips the symbol table for
+   a release image; `-r` (library mode) allows unresolved symbols, which is
+   how a `.c4l` library such as `libc4ix.c4l` is made.
+3. For 32-bit targets (c4bb, `c4m32`), use `c4sp32` and `c4rlink32`,
+   which are the same sources built with `gcc -m32`.
+
+Do not build these with c4cc: it has no structs, typedef or
+preprocessor, and its images are 18–27% larger (§11). Single-file
+images (`c4sp.c4r`, C4DOS) are compiled by c4lc in one step without
+`-c`.

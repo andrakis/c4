@@ -83,7 +83,7 @@ copy.
 | `make test-c4dos-build32` | on c4bb: `BUILD`, then boot the kernel just built, to a clean shutdown |
 | `make test-c4dos-ladder32` | on c4bb: `LADDER` rebuilds the compiler to a fixed point, then the kernel; boots it |
 | `make test-c4dos-c4ix32` | on c4bb: `IX` builds C4IX with the compiled compiler and boots it. Slow (minutes) |
-| `make test-c4dos-c4fc` | on c4bb: c4fc compiles a C program and C4DOS runs the result. About three minutes |
+| `make test-c4dos-c4fc` | on c4bb: c4fc compiles a C program and C4DOS runs the result. About half a minute on the dev box |
 | `make test-ladder` | the full ladder on the host: C4DOS builds C4KE, `dosload` hands over, both toolchains compile and link in the RAM filesystem. Minutes |
 
 None of these is part of `make test`.
@@ -130,12 +130,6 @@ against `include/u0lite.h` instead of `u0.h`.
   unless saved with `bbsave` or `install`.
 - DOS never gets back memory a transient allocated; many compiler runs in
   one session accumulate. Building C4IX is left to C4KE for that reason.
-- `fs/CC.BAT` is stale: it names sixteen separate Forth files, which is
-  more than 16 tokens and not what the `c4dos-c4fc` floppy carries (one
-  concatenated `c4fc.f`), and it lacks `inline.f`. Use
-  `RUN c4th.c4r c4fc.f cc.f`, as `test-c4dos-c4fc` does.
-- The C4DOS leg of `make test-c4th-os` fails at byte 1 (an extra empty
-  prompt line), recorded in [docs/c4ix-desktop.md](../../docs/c4ix-desktop.md).
 
 ## Docs
 

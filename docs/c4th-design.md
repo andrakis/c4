@@ -39,16 +39,43 @@ with many named locals would have to be redesigned rather than translated.
 
 ## 2. Layout
 
-    src/c4th/c4th.c            driver, flags, REPL, image save/load
-    src/c4th/include/*.h       the kernel
-    src/c4th/forth/*.f         core.f, coreext.f, asm.f, native.f, c4r.f, meta.f
+As of 2026-09-30 (the plan listed `coreext.f` and `meta.f`; neither was
+written under that name: CORE EXT words went into `ext.f`, and the
+metacompiler is `c4r.f` plus `self.f`):
+
+    src/c4th/c4th.c            driver, flags, B1 selftest, main
+    src/c4th/include/*.h       the kernel (mem, dict, inner, prim, num, io, outer)
+    src/c4th/forth/core.f      the rest of Forth-2012 CORE, in Forth
+    src/c4th/forth/ext.f       CORE EXT + Structures: CASE/OF, DEFER/IS, VALUE/TO, BEGIN-STRUCTURE
+    src/c4th/forth/locals.f    Forth-2012 named locals {: a b | c -- d :}
+    src/c4th/forth/dos.f       write a file: C4DOS API table under C4DOS, host calls natively
+    src/c4th/forth/asm.f       assembler for C4 opcodes
+    src/c4th/forth/peep.f      P1, peephole optimizer over threaded code
+    src/c4th/forth/native.f    native backend (top of stack in the accumulator)
+    src/c4th/forth/c4r.f       metacompiler: target image, writes a .c4r
+    src/c4th/forth/trt.f       runtime for generated images
+    src/c4th/forth/self.f      Forth compiler in Forth, compiles itself to a fixed point
     src/c4th/tests/            vendored Forth-2012 suite + expected/*.txt
+    src/c4th/bench/            the B5 probe that chose the native backend
 
-Built exactly as `src/c4sp/c4sp.c` is (`Makefile:407-410`), but with `gcc -O2`:
-c4th has no conservative collector, so it is not pinned open the way c4sp is.
+`src/c4th/forth/README.md` has the load orders.
 
-    c4th:     gcc -O2 -Iinclude -I. -o c4th src/c4th/c4th.c
-    c4th.c4r: $(PREPROC) src/c4th/c4th.c | $(C4CC) -o c4th.c4r -
+Built from one source as `src/c4sp/c4sp.c` is, but with `gcc -O2` from the
+start: c4th has no conservative collector, so it was never pinned open the
+way c4sp was (c4sp has been `-O2` too since 2026-08-23).
+
+    c4th:        gcc -O2 -fwrapv -fno-omit-frame-pointer -g -idirafter include -I. -o c4th src/c4th/c4th.c
+    c4th.c4r:    $(PREPROC) src/c4th/c4th.c | $(C4CC) -o c4th.c4r -
+    c4th32.c4r:  $(PREPROC) -I src/c4th/include src/c4th/c4th.c, then c4lc -O under c4sp32 (for c4bb)
+
+**Hosts.** One `c4th.c4r` runs under c4m, c4mp, inside C4KE, inside
+**C4IX** (since 2026-09-24, `e427c9c`: it sits in `/bin` beside c4cc,
+c4lc and cpp, is driven by C4IX's shell, and compiles `self.f` inside the
+kernel), and under **C4DOS** (`RUN c4th.c4r core.f ...`; `dos.f` writes to
+the RAM disk through the C4DOS API table). `make test-c4th-os` runs the
+same image on C4KE, C4DOS and C4IX against the native build. c4th is also
+the host of c4fc (docs/c4fc-design.md), including on the `c4dos-c4fc`
+floppy.
 
 ## 3. Threading model — indirect, dispatched by `JSRS`
 
@@ -409,7 +436,7 @@ application code, so treat the ratio as directional.
    `c4r.lisp` — and **c4bb needs microcode**, since
    `src/c4bb/hw/microcode.uc` implements each opcode individually
    (`op PSH:`, `op JMPA:` …). That is hardware-description work, not a
-   table edit. Homeward mirrors it too.
+   table edit. An embedder that vendors c4bb mirrors it too.
 4. Numbering starts at **79**: `src/c4mp/c4mp.h` already occupies 66-78,
    so c4m's own table keeps a permanent hole.
 

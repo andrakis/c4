@@ -29,15 +29,20 @@
 //    c4cc -S include/u0.h src/tests/mandel.c
 //    c4cc -S include/u0.h src/c4ke/bin/ps.c src/c4ke/bin/top.c
 //
-// C4R File Format: Version 2 (with proposals for V3 not implemented)
+// C4R File Format: version 2 (what c4cc writes) and version 3
+// (what c4lc and c4rlink write). load-c4r.c reads both. src/c4cc/README.md
+// has the same description in prose.
 // |---------------------------------------------------------------------------|
 // | Header:                                                                   |
 // | |-----------------------------------------------------------------------| |
 // | | Type | Name           | Purpose                                       | |
 // | |-----------------------------------------------------------------------| |
 // | | B*3  | "C4R"          | Signature, 3 bytes                            | |
-// | | B    | Version        | Currently 2                                   | |
+// | | B    | Version        | 2 from c4cc; 3 from c4lc and c4rlink          | |
 // | | B    | WordBits       | How large a word is                           | |
+// | | B*8  | MEMSZ/padding  | v2: 'p' filler. v3: the first word (at byte   | |
+// | |      |                | offset 5) is the total in-memory data size;   | |
+// | |      |                | the part past DataLen is zero-filled BSS      | |
 // | | W    | Entry          | Position to begin code execution              | |
 // | | W    | CodeLen        | Length of code segment in words               | |
 // | | W    | DataLen        | Length of data segment in bytes               | |
@@ -47,8 +52,10 @@
 // | | W    | DestructLen    | Length of deconstruct segment in entries      | |
 // | |-----------------------------------------------------------------------| |
 // |---------------------------------------------------------------------------|
-// | Each segment is preceded by a symbol to indicate where in the file you    |
-// |  are when viewing. Use c4rdump for a more user-friendly way to view.      |
+// | Each segment is preceded by a one-word marker to indicate where in the    |
+// |  file you are when viewing. Use c4rdump for a more user-friendly view.    |
+// | Segments appear on disk in this order: C, D, P, c, d, S                   |
+// |  (code, data, patches, constructors, destructors, symbols).               |
 // |---------------------------------------------------------------------------|
 // | Data (D) and code segments (C) are just direct words to load into memory. |
 // |---------------------------------------------------------------------------|
@@ -99,28 +106,9 @@
 // | |-----------------------------------------------------------------------| |
 // |---------------------------------------------------------------------------|
 // |---------------------------------------------------------------------------|
-// | Unimplemented proposals: Version 3                                        |
-// | Version 3 would include a method to map instructions to source code, as   |
-// | well as a check to ensure the opcodes used at compile time match the ones |
-// | being used at runtime.                                                    |
-// | The following additional header content is proposed:                      |
-// | |-----------------------------------------------------------------------| |
-// | | Type | Name           | Purpose                                       | |
-// | |-----------------------------------------------------------------------| |
-// | | W    | CodePageLen    | V3 only: code pages                           | |
-// | | W    | InstructionsLen| V3 only: length of instructions section       | |
-// | | B*N  | Instructions   | V3 only: instruction section                  | |
-// | | W    | SourceMapLen   | V3: source map to function address table      | |
-// | |-----------------------------------------------------------------------| |
-// | Source map format: M (V3 only)                                            |
-// | |-----------------------------------------------------------------------| |
-// | | Type | Name       | Purpose                                           | |
-// | |-----------------------------------------------------------------------| |
-// | |  W   | Start      | Start offset of entry                             | |
-// | |  W   | End        | End offset of entry                               | |
-// | |  B   | Length     | Length of the text of this entry                  | |
-// | |  B.. | Text       | Source code text referencing code offset          | |
-// | |-----------------------------------------------------------------------| |
+// | Version 3 as built is only the MEMSZ field above. An earlier proposal    |
+// | for v3 (a source map, and a check that compile-time opcode numbers match |
+// | the runtime's) was never implemented.                                     |
 // |---------------------------------------------------------------------------|
 
 #define C4CC_INCLUDED

@@ -94,9 +94,6 @@ Details of the test files are in [tests/README.md](tests/README.md).
 
 ## Limits and known issues
 
-- `make test-c4th-os`: the C4DOS leg prints an empty prompt line ahead of
-  c4th's output and fails the comparison at byte 1 (recorded in
-  [c4ix-desktop.md](../../docs/c4ix-desktop.md)).
 - c4lc's own preprocessor cannot read `c4th.c` (a function-like macro named
   without an argument list), so both image builds go through `gcc -E`.
 - There is no saved image: the dictionary holds real addresses, so the

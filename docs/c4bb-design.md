@@ -7,6 +7,21 @@ in JavaScript, rendered as an interactive board in the browser — and
 capable of booting C4KE and C4IX with full preemptive multitasking,
 protected mode, and a keyboard.
 
+Status, 2026-09-30: C4DOS, C4KE and C4IX all boot on it, from drives that
+can be written, through a BIOS; the microcode implements all ten fused
+opcodes (79-88); the machine claims 20 MHz by default. Drives, media,
+firmware stages, clocks and the climb are in
+[c4bb-storage.md](c4bb-storage.md); the UART block write in
+[c4bb-uart-block.md](c4bb-uart-block.md). This document was written when
+the board was built (2026-08-08) and has been brought current since;
+where a section records how things were, it says so.
+
+The board itself has no display: it has a terminal. The pixel framebuffer,
+the display interrupts and the guest `gui.h` live in libjs, which reuses
+this board's memory map, devices and loader with a direct interpreter in
+place of the microcode -- see [libjs-design.md](libjs-design.md) and
+[../libjs/README.md](../libjs/README.md).
+
     make test-c4bb                          # build everything + verify
     make serve-c4bb                         # then open
     #   http://localhost:8471/src/c4bb/web/index.html
@@ -60,7 +75,7 @@ unchanged by `make test-c4ix`).
     0x0014         loader sentinel (constructor/main return address)
     0x0020-0x003F  firmware vector latches: MALC FREE RALC PRTF STRC
     0x0100-0x01FF  device registers (below)
-    0x0200-0x034F  opcode-name ROM (66 x 5 bytes, c4m's layout; OPSL/_OPC)
+    0x0200-0x03BC  opcode-name ROM (89 x 5 bytes, c4m's layout; OPSL/_OPC)
     0x1000         MEM_BASE: firmware image, program image(s), heap
     top - 4K       argv area; stack grows down from just below it
 
@@ -71,7 +86,8 @@ unchanged by `make test-c4ix`).
     0x108 UART_RXAVL   read: bytes available
     0x1AC UART_TXADDR  write: buffer address (does not auto-advance)
     0x1B0 UART_TXLEN   write N: emit N bytes from it; read -> N taken
-    0x10C TIME_MS      simulated ms = cycle/1000 + usleep credit (1 MHz machine)
+    0x10C TIME_MS      simulated ms = cycle/20000 + usleep credit (20 MHz by
+                default; cli.js -hz changes it)
     0x110/4 CYCLE_LO/HI
     0x118 USLP_US      write: advance simulated clock
     0x120-0x138 disk controller: NAME (write ptr -> open, read -> fd),
@@ -88,6 +104,12 @@ unchanged by `make test-c4ix`).
                 C4I_MBOX 0x2000 announces it)
     0x1BC MBOX_BELL    write: guest->host doorbell; read: host->guest
                 interrupts pending (read-to-clear)
+
+This list is the original set plus the UART block write and the mailbox.
+The registers added for storage and clocks since -- the drive selector,
+the disk write head (`DISK_W*`), `RESET`, `RTC_MS` and `PIT_MS` -- are
+described in [c4bb-storage.md](c4bb-storage.md); `sim/devices.js` is the
+complete list.
 
 ### The name ROM is the encoding
 
@@ -190,7 +212,11 @@ execute:
   time and emits an event per step for the board renderer;
 - the **turbo engine** (`sim/turbo.js`) compiles each opcode's step
   list into a JS function — same transfers, same cycle counts,
-  ~15-18 M instructions/s (the 1 MHz machine at ~17x realtime).
+  ~15-20 M instructions/s. That is why the machine claims 20 MHz by
+  default (`CYCLES_PER_MS` in `sim/devices.js`): it was 1 MHz until
+  `top`, refreshing once a simulated second, redrew twenty times a real
+  one. `cli.js -hz` changes the claim, and the interactive loop paces
+  execution to it.
 
 `tools/lockstep.js` proves the two engines register-identical at every
 instruction boundary. One bus, one transfer per microstep; the ALU
@@ -204,6 +230,22 @@ A few opcodes (`ITH C4CF SIGH SIGI _TRP DBG C4IV FLT`) run on a
 semantics lifted verbatim from c4m.c; candidates for real microcode
 later. Unknown opcodes >= 128 raise TRAP_ILLOP, which is the kernels'
 syscall mechanism; a missed trap is silent, the oisc4 convention.
+
+### The fused opcodes
+
+All ten fused opcodes (79-88: `LDL LDG PSHL PSHG LEAP IMMP LIP ADDL STL
+POPA`, [fused-opcodes.md](fused-opcodes.md)) are microcode routines here,
+added 2026-08-26 (baaf71d). They need no new circuitry: every transfer is
+one the board already performs elsewhere. LDL is LEA's address sum with
+the result going to MAR instead of A; STL adds the write PSH already
+does; POPA is LEV's pop without the destination; the other seven are
+concatenations of the same. c4m splits the ten three and seven between
+itself and c4mp; on the board the split is about microsteps, not which
+binary you run, so all ten are here. The ROM also names c4mp's 66-78
+(`CPUI`..`TRAW`) without executing them, as c4m does: those need more than
+one CPU and buy no speed. `test-c4bb` checks the ten with
+`src/c4th/tests/fused.f` (each against the sequence it replaces) and a
+fused image against its unfused twin.
 
 ### The trap machinery
 
@@ -237,7 +279,13 @@ too).
 `fw/fw.c` (compiled by 32-bit c4lc) supplies what native c4m borrows
 from libc: malloc/free/realloc (address-ordered free list with
 coalescing, heap bounds from HEAP_BASE/END) and the printf formatter
-(adapted from c4lm's vsnprintf, emitting through PUTC). The mechanism:
+(adapted from c4lm's vsnprintf). It never uses the PUTC opcode -- the
+firmware provides the syscalls, so it cannot need one: a single byte is a
+store to `UART_TX`, and every run the formatter already holds a pointer
+and length for (a literal slice of the format string, a `%s`, a converted
+number) goes out in one go through the UART block write, `UART_TXADDR`/
+`UART_TXLEN` (2026-09-07, [c4bb-uart-block.md](c4bb-uart-block.md)).
+The mechanism:
 a syscall opcode's in-place stack arguments are indistinguishable from
 ordinary function arguments after a JSR, so MALC's microcode is
 literally "JSR through the vector latch at 0x20". No trap is raised,
@@ -416,11 +464,17 @@ illustrative chip schematics (not yet drawn).
 - C4KE boot to c4sh + running hello off the disk (grep assertions —
   interleavings legitimately differ once firmware printf costs cycles)
 - C4IX boot with protected mode + spawned ps (grep assertions)
-- step-vs-turbo lockstep over three images
+- step-vs-turbo lockstep over four images (including a fused one)
 - C4DOS booting the shared disk
+- added since: the terminal's screen (`test-terminal.mjs`), all ten fused
+  opcodes and a fused image against its unfused twin, the mailbox
+  (`bb_mbox`, `test-mbox.mjs`, `test-c4ke-mbox.mjs`), and the `--whowrote`
+  provenance port
 
-Browser verification is headless Chromium via raw CDP capture (see
-`docs/` notes in the repo user's memory: page.screenshot hangs).
+The rest of the board's suites (`test-c4bb-storage`, `-firmware`,
+`-climb`, `-rungs`, `-web`) are listed in
+[../src/c4bb/README.md](../src/c4bb/README.md). `make test-c4bb-web`
+drives the page in a real browser over CDP, and skips when none answers.
 
 `tests/test-ladder.sh` is **not** part of `make test-c4bb` and is meant
 to be run by hand: it compiles an operating system inside a virtual
@@ -428,7 +482,7 @@ machine and takes minutes. It walks the whole climb — C4DOS builds
 C4KE, `dosload` hands the machine over, the kernel seeds its RAM
 filesystem from DOS's RAM disk and boots the init that only exists in
 memory, then c4cc/c4rlink and c4lc/c4rlink each complete a compile-link
-round trip entirely in that filesystem. `docs/homeward-ladder.md`
+round trip entirely in that filesystem. [ladder-plan.md](ladder-plan.md)
 tracks the whole thing.
 
 ## Upstream discoveries made along the way

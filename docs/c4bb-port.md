@@ -1,9 +1,20 @@
 # Porting the c4m and c4mp changes to c4bb
 
+> **Historical (2026-08-26).** This is the investigation as written that
+> day; its counts ("where c4bb is": 66 names, 319 microsteps, `INS_SIZE`
+> 66) are out of date. Since then, as of 2026-09-30: c4bb implements all
+> ten fused opcodes (F7 in [fused-opcodes.md](fused-opcodes.md),
+> `baaf71d`, the same day), names 89 opcodes, and its opcode-name ROM is
+> 89 x 5 bytes. `-mfuse` is still not the default. `test_realloc` is
+> still not in c4bb's image list, and `_BLT` still has no microcode.
+> [c4bb-design.md](c4bb-design.md) and
+> [../src/c4bb/README.md](../src/c4bb/README.md) describe the board as
+> it is now.
+
 An investigation, not a plan to execute. It answers three questions:
 what has changed on the VM side since c4bb was last touched, what each
 change would cost c4bb, and whether now is the moment. It also records
-what Homeward has to import, since c4bb is that project's oracle.
+what an embedder that vendors c4bb has to import.
 
 Everything below was measured or read on 2026-08-26 at `4e6c610`.
 **`make test-c4bb` passes as things stand** — nothing here is a
@@ -153,25 +164,25 @@ something does.** The order that costs least is therefore:
 3. only then write the microcode, and write the **seven**, not the
    three, if the reason is compile time.
 
-## What Homeward has to import
+## What the embedder has to import
 
-Homeward vendors `vendor/c4bb/{hw,sim}` and imports `machine.js`,
-`turbo.js`, `ucode.js` and `arena.js` (`scripts/opcensus.ts:27-30`).
+The embedder vendors `c4bb/{hw,sim}` and imports `machine.js`,
+`turbo.js`, `ucode.js` and `arena.js` (for its opcode census).
 Provenance is a one-line header on each file naming the commit it came
 from — currently `af9f0af`.
 
 **It is stale by exactly one commit.** `hw/microcode.uc` and five of the
 seven `sim/*.js` are byte-identical to c4bb today; `devices.js` and
-`loader.js` moved on in `36b58b8` (the HOMEWARD ladder commit). So an
+`loader.js` moved on in `36b58b8` (the ladder commit). So an
 import is a clean re-copy with the header line re-applied — there is no
 drift to reconcile, which is the good case and worth keeping that way.
 
-Two things would break Homeward if the fused opcodes land:
+Two things would break the embedder if the fused opcodes land:
 
-- `OP` and `INS_SIZE` are imported directly, and `scripts/opcensus.ts`
+- `OP` and `INS_SIZE` are imported directly, and its opcode census
   counts per opcode. A table growing from 66 to 89 entries changes what
   a census means, and 13 of the new names would be permanently zero.
 - The opcode-name ROM moving from 330 to 445 bytes changes the memory
-  map any Homeward content that inspects it depends on.
+  map any of the embedder's content that inspects it depends on.
 
 Neither is hard; both want to be noticed before rather than after.

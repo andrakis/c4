@@ -180,4 +180,4 @@ Further reading
 - [src/README.md](src/README.md): every project in more detail, and who compiles whom.
 - [docs/internals.md](docs/internals.md): how c4m, C4KE and C4IX work inside.
 - [docs/MILESTONES.md](docs/MILESTONES.md): what was built, in order.
-- [docs/](docs/): a design doc for most projects.
+- [docs/README.md](docs/README.md): a map of the design docs, trackers and histories.

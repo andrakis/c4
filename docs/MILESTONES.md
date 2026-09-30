@@ -47,6 +47,22 @@ Aug 8   c4or1k M5    — 9P root filesystem, in flight
 Everything here sits on top of `c4` (2014) and this fork's `c4m` and
 `C4KE`. The rest of this document goes layer by layer.
 
+That was the first week. What came after, each with a short section
+further down:
+
+```
+Aug 8-24  c4mp       — a multiprocessor VM; later all ten fused opcodes
+Aug 21    C4DOS      — a trap-free DOS, the ladder's first rung
+Aug 23-25 c4th       — a Forth, a native back end, a self-hosting compiler
+Aug 25-26 c4fc       — a C compiler in that Forth, byte-identical to c4lc
+Aug 28-29 the ladder — C4DOS → C4KE → C4IX climbed on the breadboard
+Sep 6     c4mpg      — a memory-protection guard, as a fork of c4m
+Sep 23-24 libjs      — c4m in JavaScript; C4IX's desktop in a browser
+```
+
+Status of this document: brought current 2026-09-30. Earlier sections
+keep their original dates and say where things have since changed.
+
 ---
 
 ## c4sp — a Lisp interpreter in the C4 subset
@@ -111,7 +127,8 @@ interpreter.
 
 ## c4lc — an optimizing C compiler, written in c4sp's Lisp
 
-**What it is.** `src/c4lc` is a ground-up replacement for the
+**What it is.** c4lc (`src/c4sp/lisp/c4lc*.lisp`; there is no
+`src/c4lc`) is a ground-up replacement for the
 original single-pass `c4cc` frontend: a real recursive-descent parser
 producing an AST, a code generator, a peephole optimizer, a tree-level
 optimizer, and (as of L9) its own preprocessor — the entire thing
@@ -430,7 +447,9 @@ something was blocked on a timeout that could never expire. Wiring in
 the *same* instruction budget that previously never left the ATA probe
 reach the panic with room to spare.
 
-**In flight right now: M5, a 9P root filesystem.** Not yet committed,
+**M5, a 9P root filesystem** (in flight when this was written; since
+done, 2026-08-08 — the kernel mounts it, and c4or1k now boots to a
+shell; see `docs/c4or1k-design.md`). As first recorded: not yet committed,
 but the plumbing is written and wired in: a virtio-mmio transport
 matched against jor1k's device model at the register level; a
 synchronous 9P2000.L protocol handler (no async event loop needed,
@@ -480,7 +499,83 @@ one piece is a good project. The fact that they all share one C
 dialect and one VM contract, and every seam between them is verified
 rather than assumed, is the part worth being excited about.
 
-## The HOMEWARD ladder — DOS hands the machine to the kernel
+## c4mp — a multiprocessor VM (2026-08-08 onward)
+
+`src/c4mp` executes c4m's instruction set with the same trap frame, but
+has no compiler: it loads `.c4r` images only, and because c4lc compiles
+it (not `c4.c`) it can use structs and a `switch` dispatch. Stages 0–3
+landed on 2026-08-08: the single-processor half, the quantum, more than
+one processor (a deterministic simulated SMP round robin), then
+atomics, park/wake and inter-processor interrupts. `LXI`/`SXI` (the
+`-mcisc` array opcodes) followed on 08-09 for c4or1k, and all ten fused
+opcodes on 08-24. It runs c4or1k about 18–20% faster than c4m, and
+builds both natively and as `c4mp.c4r`, which c4m hosts. `make
+test-c4mp`; reference: `src/c4mp/README.md`.
+
+## C4DOS — the operating system before operating systems (2026-08-21)
+
+A single-tasking, trap-free DOS with `CONFIG.SYS`, `AUTOEXEC.BAT`, an
+`A>` prompt, a RAM disk and transient programs. It uses nothing past
+c4's own opcodes, so its clockless build runs under unmodified `c4`
+through `c4l.c`, as well as on native c4m and on c4bb. It arrived with
+`cpp`, a C preprocessor in strict c4 that matches `gcc -E` byte for
+byte, so the machine can preprocess without gcc. Its floppies rebuild
+its own compiler, compile C4KE from source and hand over with
+`dosload`; the ladder section below is how. `make test-c4dos`;
+`docs/c4dos-design.md`.
+
+## c4th — a Forth for C4 (2026-08-23 to 08-25)
+
+A Forth-2012 CORE system in the C4 subset, indirect-threaded through
+`JSRS`, one source built natively and as a `.c4r`. In three days: the
+inner and outer interpreters and the vendored Forth-2012 suite (B1–B3),
+an assembler and peephole optimizer (B4), a native back end and a
+differential fuzzer (B5, 08-23), a metacompiler that writes standalone
+`.c4r` images plain c4 can run (B5d), `self.f`, a Forth compiler in Forth
+that reaches a byte-identical fixed point (B5d.5), and one image running
+on C4DOS, C4KE and C4IX (B6, 08-25). Its B5c opcode probe is what chose
+the ten fused opcodes. `make test-c4th`; `docs/c4th-design.md`.
+
+## c4fc — a C compiler written in Forth (2026-08-25 to 09-07)
+
+A C99 compiler with c4lc's coverage, written on c4th as a table-driven
+DSL: each C construct is one `NODE:` row plus one method per phase.
+Ladder F0–F11 shipped 2026-08-25/26, and at every rung the output is
+**byte-identical to c4lc's**: whole programs, `-O`, all twelve C4IX
+modules as objects linked to the same `c4ix.c4r`, and `c4th.c` itself,
+whose rebuilt c4th passes the Forth-2012 suite. On c4bb (08-26) it
+compiled a real C4IX module in 5m29s, byte-identical to c4lc's 32-bit
+object, and C4DOS got a floppy whose compiler is c4fc
+(`RUN c4th.c4r c4fc.f cc.f`). An inliner (`-minline`, `inline.f`)
+followed on 2026-09-07. It is not fast; it is a C compiler anywhere
+c4th runs, without a Lisp. `make test-c4fc`; `docs/c4fc-design.md`.
+
+## c4mpg — a memory-protection guard (2026-09-06)
+
+A marked fork of `c4m.c` that checks every load, store and syscall
+buffer against a region table and raises `TRAP_MPG_VIOLATION` on a
+miss. It is a fork rather than an `#ifdef` because plain c4 reads
+`c4m.c` as source and compiles both arms of every `#if`;
+`src/tests/mpg/check-fork.sh` strips the marked blocks and requires the
+rest to match `c4m.c` byte for byte. About 1.23x over c4m on
+innerbench. M1, M2, M5 and M3's trap half are built; per-task regions
+in C4KE (M4) and the rest are not started (checked 2026-09-30).
+`make test-mpg`; `docs/c4mpg-design.md`.
+
+## libjs — c4m in JavaScript (2026-09-23)
+
+A direct interpreter for the c4m VM: one `switch` over an `Int32Array`,
+106–190M instructions per second in Node on a C4IX boot and the
+raycaster, against about 19M for c4bb's turbo engine on the same images. It shares c4bb's memory map, devices and loader,
+and boots the 32-bit C4KE and C4IX images in Node or a browser Web
+Worker, with a terminal and a display the guest draws into. The same
+two days produced C4IX's desktop on that display: windows, a taskbar,
+terminals over pipes, Explorer, Task Manager, Notepad, Calculator, and
+compilers running inside C4IX. M0–M4 are done, and M5 except its
+performance pass and media panel. `make test-libjs`;
+`docs/libjs-design.md`.
+
+## The ladder — DOS hands the machine to the kernel
 
 The tower above is built *by* the host and *verified* against the VM.
 The ladder is the other direction: a machine that builds its own next
@@ -508,21 +603,29 @@ Both toolchains complete a round trip in memory: c4cc compiles two
 objects, c4rlink links them, the kernel runs the result; and c4lc — on
 c4sp, in the machine — compiles a real C4IX kernel module that c4rlink
 reads straight back out. `bash src/c4bb/tests/test-ladder.sh` walks the
-whole thing; `docs/homeward-ladder.md` is the tracker.
+whole thing; `docs/ladder-plan.md` is the tracker (complete,
+2026-08-23). The climb itself followed: C4DOS to C4IX on one floppy in
+one session on 2026-08-28, and three power-ons, each booting a system
+the one before wrote, pinned by `make test-c4bb-climb` on 2026-08-29
+(`docs/climbing-the-ladder.md`).
 
 One measurement worth keeping: the C4IX build passed `-c 8000000` cells
 to c4sp, a number with nothing behind it. At 21 bytes a cell that is
 ~168 MB — more than c4bb has, so nothing built that way could ever have
 been built *inside* the machine. The measured floor is 100k–200k cells
 per module; the build scripts now say 400,000, and every object is
-byte-identical to its 8M build.
+byte-identical to its 8M build. (Since 2026-08-26 the arena grows from a
+small first block, so the Makefile passes no `-c` at all.)
 
 ## What's still open
 
-Kept here on purpose, not swept into the wins above:
+Kept here on purpose, not swept into the wins above. These were
+recorded in the first week; the c4or1k and `realloc()` items were
+re-checked on 2026-09-30 and the rest have not been.
 
-- **c4or1k M5** — 9P plumbing is written but an actual successful
-  root-fs mount hasn't been confirmed yet.
+- ~~**c4or1k M5** — 9P plumbing is written but an actual successful
+  root-fs mount hasn't been confirmed yet.~~ Closed: the kernel mounts
+  it (`docs/c4or1k-design.md` M5).
 - **c4bb** — a preemption-timing race that corrupts one filesystem
   manifest entry intermittently, and a separate long-run `top` bug
   that locks the PC after ~1.1M cycles; root cause not yet found for
@@ -530,7 +633,8 @@ Kept here on purpose, not swept into the wins above:
 - **C4IX** — a known intermittent stall on a backgrounded, redirected
   command after many prior commands, tracked outside the pinned test
   suite rather than claimed fixed.
-- **C4KE** — `realloc()` is confirmed broken at the VM level
-  (`RALC`'s case is dead code, falls through to an unhandled trap);
-  protected-mode's `kernel/io` dispatcher costs ~13% of cycles because
+- **C4KE** — ~~`realloc()` is confirmed broken at the VM level
+  (`RALC`'s case is dead code, falls through to an unhandled trap)~~
+  fixed 2026-08-23 (`63e274a`), pinned by `make test-c4m-mem` under
+  native c4m and plain c4; protected-mode's `kernel/io` dispatcher costs ~13% of cycles because
   it spin-waits instead of parking.

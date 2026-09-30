@@ -131,8 +131,6 @@ target.
 
 - libc4ix's `printf` takes no width specifiers (`user/ps.c` pads by hand).
 - fd tables have 16 slots.
-- The C4DOS leg of `make test-c4th-os` fails at byte 1 (an extra empty
-  prompt line); recorded in [docs/c4ix-desktop.md](../../docs/c4ix-desktop.md).
 - A race not yet root-caused intermittently corrupts one entry when
   `c4ix-vfsload` fills the tree on c4bb, so `test-c4bb` only requires most
   entries to load (see `user/vfsload.c` and `src/c4bb/tests/test-c4bb.sh`).

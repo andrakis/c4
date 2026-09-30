@@ -5,7 +5,7 @@
 // arena, the hot opcodes run inline, and the rare ones (syscalls, traps,
 // TLEV) go through sys(), which works on the register fields.
 //
-// Shared with src/c4bb (imported, never edited -- Homeward vendors
+// Shared with src/c4bb (imported, never edited -- an embedder vendors
 // those files): the arena and its memory map, the device registers,
 // the disk controller and keyboard, the clocks and the mailbox. The
 // property names on Machine (cycle, trapHandler, cycleInterval, mode,

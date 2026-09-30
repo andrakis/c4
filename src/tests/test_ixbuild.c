@@ -13,7 +13,7 @@
 // its userland links against libc4ix and runs under C4IX, not under
 // C4KE.
 //
-// -c 400000 is the measured arena floor doubled (docs/homeward-ladder.md,
+// -c 400000 is the measured arena floor doubled (docs/ladder-plan.md,
 // M5). The 8000000 the build scripts used to pass is ~168MB of cells
 // and would not fit in the machine this is meant to run in.
 int main (int argc, char **argv) {

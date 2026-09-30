@@ -14,6 +14,18 @@ shrinking c4cc.c4r by 8.9% while it still emits identical code. This
 document remains the design rationale; deviations found during
 implementation are noted in the milestone commit messages.
 
+Since then (status 2026-09-30):
+
+* **The native build is `gcc -O2`** (2026-08-23, `56c7d43`). It was pinned
+  at `-O0`, because an optimizing gcc can keep the only reference to a live
+  cell in a callee-saved register, where the stack scan cannot see it.
+  `gc_collect()` now `setjmp`s into a buffer in its own frame, which spills
+  those registers to memory, and starts the scan at that buffer (§4.5). A
+  module compile got 2.26x faster (522.2 ms to 231.5 ms, identical output).
+* **The arena grows** (2026-08-26, `480217a`). It is a list of blocks, and
+  `-c` sets the first block rather than the ceiling (§4.10).
+* **`c4sp.c4r` is built by c4lc** (`c4lc -O`), not c4cc (§8).
+
 ---
 
 ## 1. Why
@@ -138,7 +150,10 @@ rule in §4.7 is respected.
 
 C4's stack grows down, and inside a function `&<first local> + 1 == bp`. So the
 collector takes the address of its own first local as the low end, and scans
-upward to a stack base recorded once at startup:
+upward to a stack base recorded once at startup. (The native build starts
+lower, at a `setjmp` buffer in `gc_collect()`'s own frame, so the
+callee-saved registers an optimizing gcc keeps cells in are scanned too;
+see `src/c4sp/include/gc.h`. Under the C4 VM there are no such registers.)
 
 ```c
 int *p, *top;
@@ -151,7 +166,8 @@ while (p < stack_base) {
 ```
 
 `looks_like_cell` is two comparisons and an alignment check, because every cell
-lives in one contiguous arena:
+lives in one contiguous arena (as designed; the arena is now a short list of
+blocks, walked per candidate pointer, see §4.10):
 
 ```c
 static int looks_like_cell (int w) {
@@ -219,6 +235,17 @@ conservative false positive delays that free by one cycle; nothing worse.
   measurable — the collector should report retained-vs-freed so this can be
   watched rather than guessed at.
 * A larger task stack makes GC slower, because the scan is proportional to it.
+
+**The arena grows (2026-08-26).** It was one fixed block for its first three
+weeks, so `-c` had to be guessed: too high and a job needing 18 MB held
+500 MB and spent its time faulting in untouched arena; too low and the
+collector thrashed a 99%-live heap. It is now a list of up to 24 blocks
+(`GC_MAXBLOCKS`) with one free list across them. After a collection that
+leaves less than three times the live set free, a block is added that
+restores a heap of four times the live set in one step, and at least doubles
+the arena. `-c` sets the first block (default 65536 cells). Removing the
+Makefile's ninety `-c` flags took the parallel C4IX kernel build from
+3012 MB peak RSS in 1.59 s to 89 MB in 0.60 s.
 
 ## 5. Reader and printer
 
@@ -385,16 +412,29 @@ src/c4sp/include/stdlib.h  builtins
 src/c4sp/lisp/*.lisp       ported alisp samples, then the optimizer
 ```
 
-Built like everything else in the repo:
+As first built, `c4sp.c4r` came from c4cc like everything else in the repo:
 
 ```make
 c4sp.c4r: $(C4CC) $(C4SP_SRCS) $(U0)
 	$(PREPROC) $(U0) src/c4sp/c4sp.c | $(C4CC) -o c4sp.c4r -
 ```
 
-Watch the pool limits: c4cc gives 256 KB each for text, data and symbols. The
-whole interpreter must fit, and c4m/c4cc accept multiple source files
-concatenated if splitting becomes necessary.
+(with c4cc's 256 KB pools for text, data and symbols as the limit to watch).
+
+Today (2026-09-30) the Makefile builds it with c4lc, which c4sp itself runs:
+
+```make
+c4sp: $(C4SP_SRCS)
+	gcc $(EXTRA_CC) -O2 -fwrapv -fno-omit-frame-pointer -g -Iinclude -I. -o c4sp src/c4sp/c4sp.c
+c4sp.c4r: c4sp $(C4LC_LISP) $(C4SP_SRCS)
+	$(PREPROC) -DC4SP_DOS=1 src/c4sp/c4sp.c > .c4sp_lcpp.c
+	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O .c4sp_lcpp.c c4sp.c4r > /dev/null
+```
+
+The c4lc image executes about 18% fewer instructions
+([c4lc-design.md](c4lc-design.md)), and it is the one every hosted run uses:
+under c4m, inside C4KE, and on c4bb. `-DC4SP_DOS=1` gives the image the
+C4DOS file API; the native build takes stubs.
 
 ## 9. The optimizer
 
@@ -532,7 +572,7 @@ All done; each has a commit and a test target.
 |---|---|---|
 | **M0** ✓ | Cells, arena, reader, printer. No GC — allocate until full. | Parse/print round-trips `fac.lisp` |
 | **M1** ✓ | Evaluator: atoms, ints, `quote if define set! lambda begin`, proc builtins | `fac.lisp` produces 3628800 |
-| **M2** ✓ | Mark & sweep with conservative stack scan; `gc:stats` | A loop allocating millions of cells runs in a fixed arena |
+| **M2** ✓ | Mark & sweep with conservative stack scan; `gc:stats` | A loop allocating millions of cells runs in a fixed arena (the arena has grown since 2026-08-26, §4.10) |
 | **M3** ✓ | `macro`, `fastmacro`, `next`, tail calls | `macros.lisp`, then `seval.lisp` runs `fac.lisp` |
 | **M3½** ✓ | CEK conversion (§6.2), diffed against the recursive evaluator | 4000-deep non-tail recursion under the C4 VM |
 | **M4** ✓ | Strings, floats, file IO, REPL, C4KE integration | `c4sp` runs as a C4KE process |
@@ -553,7 +593,8 @@ it could be built first, independently of the Lisp work.
   one is deleted — if it ever is; keeping it as an oracle has value.
 * **Arena sizing under C4KE.** 2 MB of cells inside a kernel whose tasks
   normally use 64 KB stacks is a large tenant. It may want to be a service
-  rather than an ordinary task.
+  rather than an ordinary task. (Partly answered 2026-08-26: the arena now
+  starts small and grows with the live set, §4.10.)
 * **Is binary32 enough?** The optimizer needs no floats at all; sample programs
   do. If `double` becomes necessary the library from §2 needs a 128-bit
   multiply path.

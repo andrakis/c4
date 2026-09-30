@@ -1,5 +1,9 @@
 # The DOS rung: six fixes, then four more
 
+> **Historical tracker (closed).** A record of fixes made 2026-09-05/06, kept for its
+> findings; nothing here is open work. What C4DOS is now: `docs/c4dos-design.md`
+> and `src/c4dos/README.md`. Line numbers and measurements below are as of those dates.
+
 Tracker for six papercuts found driving C4DOS/C4KE by hand, 2026-09-05. Plan
 agreed with the user before any code was written; this file is the contract, and
 deviations get written back here.
@@ -136,7 +140,7 @@ registers are a device window on the board and ordinary memory under native c4m)
 
 `opscan.mjs` measured the opcode axis; nothing measured memory, so nine `-m` values and
 `C4IX_CELLS` were numbers arrived at by trying them until they stopped failing. Modelled
-on Homeward's `scripts/opcensus.ts`. Measured, at last:
+on an embedder's opcode census script. Measured, at last:
 
 | image | data | machine stack | note |
 |---|---|---|---|
@@ -163,10 +167,10 @@ wrong in the other:
 - **c4bb/web: 128 MB**, and was before any of this work. What said 32 was the label in
   `board.hwd`, stale since the arena was raised. Now generated from the real size.
 - **cli.js: 32 MB.**
-- **Homeward's oracle: 32 MB** (`opts.arenaBytes ?? 32 * 1024 * 1024`).
+- **An embedder's vendored oracle: 32 MB** (`opts.arenaBytes ?? 32 * 1024 * 1024`).
 
-And a finding that outlives this tracker: **Homeward's vendored c4bb is 21 commits
-behind** (`// ported from c4/src/c4bb/sim/machine.js @ af9f0af`), with 260 lines
+And a finding that outlives this tracker: **the embedder's vendored c4bb was 21 commits
+behind** at the time (`// ported from c4/src/c4bb/sim/machine.js @ af9f0af`), with 260 lines
 differing in `devices.js`, 81 in `microcode.uc`, and no PIT at all. That file calls c4bb
 "the behavioral oracle". Nothing in this tracker has reached it.
 

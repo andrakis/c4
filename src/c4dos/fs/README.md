@@ -38,14 +38,11 @@ FLUSH`, `DEVICE=DRIVES.SYS`) or a larger `SIZE=`.
 | `c4ix.objs` | `c4dos-c4ix32` | the twelve C4IX objects in link order |
 | `install.lst` | `c4dos-c4ix32` | what `RUN install.c4r B:` writes to make a bootable C4KE medium |
 | `cc.f` | `c4dos-c4fc` | the C4DOS front end for c4fc: defines `CC` and `OBJ`; edit its last lines to choose the file to compile |
-| `CC.BAT` | `c4dos-c4fc` | stale, see below |
+| `CC.BAT` | `c4dos-c4fc` | `CC`: load c4fc (`RUN c4th.c4r c4fc.f cc.f`) and compile what `cc.f` names |
 
-`CC.BAT` loads the compiler as sixteen separate Forth files. The
-`c4dos-c4fc` floppy carries them concatenated as one `c4fc.f` (sixteen
-names do not fit on a C4DOS command line), and the list in `CC.BAT` lacks
-`inline.f`, which the Makefile's `C4FC_FORTH` now includes. The working
-command is `RUN c4th.c4r c4fc.f cc.f`, which is what `make test-c4dos-c4fc`
-types.
+The `c4dos-c4fc` floppy carries c4fc as one concatenated `c4fc.f`
+(the Makefile's `C4FC_FORTH`, in load order): sixteen separate names would
+not fit on a C4DOS command line. `make test-c4dos-c4fc` types `CC`.
 
 See [../README.md](../README.md) for the floppy targets and
 [docs/climbing-the-ladder.md](../../../docs/climbing-the-ladder.md) for a

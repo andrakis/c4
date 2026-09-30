@@ -2,8 +2,18 @@
 
 Scope for the last row of `docs/compiler-on-the-board.md`'s table: the
 step that takes building C4IX inside c4bb from about thirty-one minutes
-to minutes. Nothing here is built yet. This document exists to be argued
-with before anything is.
+to minutes. It was written before anything was built, to be argued with
+first.
+
+Status 2026-09-30: **built.** M0–M8 are all ticked below (2026-08-27/28):
+c4sc compiles c4lc's Lisp to C, `c4sc.c4r` reaches a byte-identical fixed
+point compiling itself (M7), and on c4bb the twelve-module C4IX build
+takes ~4.6 minutes compiled against ~30 interpreted (M8). The C4DOS →
+C4KE → C4IX climb uses it (`c4sc32.c4r` on the `c4dos-c4ix32` floppy). One
+known gap: c4sc's `compile` mode has no `-minline` (the Lisp driver does),
+and its bootstrap fixed point has not been re-run since inlining landed
+in the tree pass ([inline-small-functions.md](inline-small-functions.md)
+I6).
 
 **Rule for this document:** tick a box only when its verification command
 has been run green, with the evidence pasted beside it. Anything found
@@ -16,7 +26,7 @@ mid-implementation that changes a later milestone gets written here.
 | in-machine, as found | ~2.5 h | |
 | `-R` in the in-machine invocations | ~57 min | banked |
 | the ten fused opcodes on the board | ~31 min | banked (F7) |
-| **compiling the Lisp** | **this document** | |
+| **compiling the Lisp** | **~4.6 min** (5.8 wall) | **this document**, M8 |
 
 c4sp is a tree-walking interpreter and c4lc is 5,016 lines of Lisp that
 runs on it. `docs/compiler-speed.md` re-profiled it after every cheap win

@@ -7,7 +7,7 @@
 // are as refusing here as they are on the command line.
 //
 // It talks to a browser over CDP rather than launching a headless one.
-// The endpoint is whatever ~/git/Homeward's harness uses -- the user
+// The endpoint is the one the embedder's harness uses -- the user
 // runs an SSH tunnel from the machine with the browser on it, outward
 // to here, so 127.0.0.1:9222 reaches that Chrome's debug port.
 //
@@ -16,7 +16,7 @@
 //   node src/c4bb/tests/test-web.mjs --local     # a headless one here
 //
 // HOW THE BROWSER REACHES THE PAGE. Not localhost: the one forwarded
-// port is Homeward's dev server and is in use. Two ways that do work,
+// port is the embedder's dev server and is in use. Two ways that do work,
 // tried in this order:
 //
 //   https://PORT.code.home.stargazer.onl   the house convention -- that
@@ -28,7 +28,7 @@
 //
 // c4bb needs no secure context -- plain ES modules and IndexedDB both
 // work on a LAN origin -- which is why the fallback is a fallback and
-// not a defeat. Homeward cannot do this; its module loading trips on a
+// not a defeat. The embedder cannot do this; its module loading trips on a
 // non-secure origin. The IndexedDB claim is asserted below rather than
 // assumed, because every medium depends on it.
 //
@@ -63,7 +63,7 @@ const BASES = process.env.C4BB_URL ? [process.env.C4BB_URL]
             : [RELAY, LAN];
 
 // Playwright is not vendored here; the sibling checkouts have it, and
-// Homeward's harness looks in the same places.
+// the embedder's harness looks in the same places.
 const PW = [
   process.env.C4BB_PLAYWRIGHT,
   process.env.DS_PLAYWRIGHT,

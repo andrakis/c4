@@ -22,12 +22,17 @@
 //             c4m load-c4r.c -- c4ke                     # Run under a c4m interpreter
 //             c4 c4m.c load-c4r.c -- c4ke                # Run under a c4m interpreter within c4
 //
-// This kernel has some optional extras if compiled with them:
-//  - c4ke_ipc.c  - InterProcess Communication
-//  - c4ke_plus.c - Support for advanced features of c4plus
+// Kernel extensions (src/c4ke/extensions/, #included at the end of this file; absent when
+// c4m compiles this file from source, since c4m has no preprocessor):
+//  - c4ke_ipc.c  - InterProcess Communication by signals
+//  - c4ke_plus.c - Support for advanced features of c4plus (placeholder; no c4plus host)
+//  - c4ke_pm.c   - Protected mode, when built with -DCONFIG_ENABLE_PM=1 on a c4m with C4I_PROT
+//  - c4ke_dos.c  - The C4DOS hand-over: seeds the RAM filesystem from the DOS RAM disk
+//  - c4ke_mbox.c - Message frames: the c4bb host mailbox and per-task inboxes
+// See src/c4ke/extensions/README.md.
 //
-// See u0.c for the user mode interface to the kernel. u0.c is used for most programs compiled to
-// run under C4KE.
+// See include/u0.h for the user mode interface to the kernel. u0.h is used for most programs
+// compiled to run under C4KE.
 //
 // This kernel focuses on being as simple as possible. Features such as filesystems are implemented
 // in microservices (see c4ke.vfs.c) rather than being part of the kernel. There are two main reasons:
@@ -35,7 +40,9 @@
 //  - Keep it compatible with c4m. C4CC supports many more features than c4m, and services can take
 //    advantage of these improvements.
 //
-// The kernel supports (TODO but has not implemented) message passing and waiting (with timeouts.)
+// Message passing: c4ke_mbox.c gives each task an inbox (OP_MSG_SEND/RECV), connects the
+// c4bb host mailbox (OP_MBOX_*), and OP_MBOX_AWAIT waits for either with a timeout;
+// include/c4ke_mbox.h is the user side.
 //
 // This program compiles but does nothing useful under GCC.
 // This GCC-compatibility is provided so that IDE's can syntax check the file.
@@ -61,12 +68,11 @@
 // These executables are not interpreted, merely loaded and called directly
 // from the code that loaded it, as any other C function would be.
 //
-// Note that C4 only supports one keyboard entry method - a very primitive
-// readline supported by libc that allows text to be entered. Arrow keys
-// and other navigation are not supported, and the entire kernel is stopped
-// until the user presses enter, which disables task switching while awaiting
-// input. It does not seem feasible to implement any other method without
-// significantly altering C4 itself.
+// Keyboard input is line-based: C4 offers only libc's read, with no
+// arrow keys or other navigation. A plain blocking read stops the whole
+// kernel until Enter (eshell still reads that way). c4sh, the default
+// shell, instead opens /dev/stdin with O_NONBLOCK and sleeps between
+// polls, so other tasks keep running while it waits for a line.
 //
 // The shell can run programs in the background using the & symbol, just like
 // linux. Otherwise, a program will run in the foreground until it is done.

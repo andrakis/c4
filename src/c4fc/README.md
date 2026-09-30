@@ -77,7 +77,7 @@ Neither target is part of `make test`.
 | target | checks |
 |---|---|
 | `make test-c4fc` | the DSL; the lexer and preprocessor against c4lc's token dumps and against `gcc -E`; whole programs byte-identical to c4lc, plain and optimized; c4fc compiles `c4th.c` byte-identical to c4lc and the result passes the Forth-2012 suite; C4DOS and C4KE compiled whole; `-mcisc`/`-mfuse` |
-| `make test-c4dos-c4fc` | on the simulated c4bb: C4DOS loads c4fc, compiles `hello.c`, writes the image to the RAM disk and runs it (about three minutes) |
+| `make test-c4dos-c4fc` | on the simulated c4bb: C4DOS loads c4fc, compiles `hello.c`, writes the image to the RAM disk and runs it (about half a minute on the dev box) |
 
 ## Layout
 
@@ -110,11 +110,9 @@ Neither target is part of `make test`.
 
 - Slow: see the numbers above. The sources are loaded on every run, since
   c4th cannot save an image.
-- `src/c4dos/fs/CC.BAT` (copied to the disk as `cc.bat`) runs
-  `c4th.c4r core.f ext.f ... cc.f` with the separate `.f` files, but the disk
-  carries only the concatenated `c4fc.f`, and the list omits `inline.f`. Use
-  the `RUN c4th.c4r c4fc.f cc.f` line above, which is what
-  `test-c4dos-c4fc` runs.
+- On the C4DOS floppy, type `CC` (`cc.bat` runs `RUN c4th.c4r c4fc.f cc.f`;
+  `c4fc.f` is every source file concatenated, because sixteen names do not
+  fit on a C4DOS command line). `test-c4dos-c4fc` types exactly that.
 
 ## Docs
 

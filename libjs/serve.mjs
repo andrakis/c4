@@ -8,7 +8,9 @@
 // fetches images from src/c4bb/images. python3 -m http.server from the
 // root works just as well; this exists for --isolate, which adds the two
 // headers that make a page cross-origin isolated (and SharedArrayBuffer
-// available), for the zero-copy path libjs may grow later.
+// available). With them the display takes the shared-memory path
+// (shared.js: a command ring and a framebuffer triple buffer); without
+// them it posts messages.
 
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';

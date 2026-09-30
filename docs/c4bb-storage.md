@@ -1,5 +1,15 @@
 # Storage on the breadboard: drives, media, and what each rung can reach
 
+Status, 2026-09-30: all three parts are done — M0-M6 (drives, a write
+head, saving from C4DOS and C4KE, the browser's drive panel, staged
+firmware), M7-M12 (the BIOS, `INSTALL`, three power-ons from three
+media) and M13-M16 (the real-time clock, the PIT, per-rung opcode
+budgets, u0-free C4DOS-rung builds). The trackers below are the record
+of that work; "What the machine looked like when this began" describes it
+as it was when Part 1 began (2026-08-28), before any of it. The
+current test targets are listed in
+[../src/c4bb/README.md](../src/c4bb/README.md).
+
 ## Why
 
 c4bb has **one disk**, it is **read-only**, and everything a session
@@ -8,8 +18,8 @@ the climb has always had to be one sitting: the moment the machine is
 switched off, or the moment a kernel boots and the RAM disk goes with
 the system that owned it, the work is gone.
 
-It is also the wrong shape for HOMEWARD, where the progression is the
-point:
+It is also the wrong shape for the ladder as an embedder presents it,
+where the progression is the point:
 
 | rung | what the player has just made work | what it needs to keep |
 |---|---|---|
@@ -35,7 +45,9 @@ machine boots from drive 2.** Each rung needs a little more hardware
 than the last — another drive, a write head, a firmware that knows about
 either — which is exactly the shape of every other rung in this game.
 
-## What the machine looks like today
+## What the machine looked like when this began
+
+*(2026-08-28, before M1. Every gap listed here has since been closed.)*
 
 - `sim/cli.js` `loadDisk(dir)` walks one directory into a
   `Map<name, Uint8Array>` and hands it to `Devices`.
@@ -86,8 +98,8 @@ a thing the player does with their hands.
 
 **Firmware stages.** `fw.c4r` is already loaded separately from the
 program image, so a staged firmware is a file name, not a code change:
-`-fw fw-min.c4r`. What each stage does or does not implement is a
-HOMEWARD question, not a c4bb one; the flag is all the machine owes it.
+`-fw fw-min.c4r`. What each stage does or does not implement is an
+embedder's question, not a c4bb one; the flag is all the machine owes it.
 
 ## Milestones
 
@@ -565,7 +577,7 @@ costs nothing measurable.
   walkthrough boots — carries almost none of it. M9 is mostly a
   packaging question, and M11 is the answer to it: the player *installs*
   them rather than the floppy having shipped with them.
-- **Console width is a HOMEWARD decision, not a c4bb one.** The CLI
+- **Console width is an embedder's decision, not a c4bb one.** The CLI
   writes to the host terminal and has no width. Widening the game's
   console to 180x25 and narrowing `ps` are independent, and both are
   worth doing — the second one helps at any width.
@@ -1193,15 +1205,15 @@ loader" without nesting.
 
 `test-web.mjs` no longer launches a headless browser. It connects over
 CDP to the one the user has open, through the tunnel that runs outward
-from that machine — the same endpoint `~/git/Homeward`'s harnesses use.
+from that machine — the same endpoint the embedder's harnesses use.
 
-Getting the page to it took a detail. Homeward is loaded on the remote
-box as `localhost:5189` through a forwarded port, and that port is
-Homeward's. The house convention is
+Getting the page to it took a detail. The embedder is loaded on the
+remote box as `localhost:5189` through a forwarded port, and that port
+is the embedder's. The house convention is
 `https://PORT.code.home.stargazer.onl`, which reaches `localhost:PORT`
 here through code-server's proxy — so the test tries that first and
 falls back to `http://LAN-IP:PORT`. Both work for c4bb, because unlike
-Homeward it needs no secure context: plain ES modules and **IndexedDB**
+the embedder it needs no secure context: plain ES modules and **IndexedDB**
 are both fine on a LAN origin, which the test asserts rather than
 assumes, since every medium depends on it.
 

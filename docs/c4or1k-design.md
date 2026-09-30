@@ -5,12 +5,34 @@ real Linux kernel in a console, written in C and compiled by c4lc. It
 is a port of [jor1k](https://github.com/s-macke/jor1k) (a JavaScript
 OR1000 emulator originally built for the browser) to the C4 VM
 toolchain — the same toolchain that carries C4KE and C4IX. Console
-only: no framebuffer, no keyboard device. Terminal raw mode is an
-external concern (`run-c4or1k.sh`), not something the VM provides —
-see that script's header comment and "Why fd 0 needs a wrapper, not a
-VM change" below.
+only: no framebuffer, no keyboard device.
 
-    make c4or1k-m0                          # build + run M0
+Status, 2026-09-30: M0-M18 done. Terminal raw mode was an external
+concern (`run-c4or1k.sh`) until M18, which added c4mp's `TRAW` opcode
+(`__c4_termraw`); boot mode now puts the terminal in raw mode itself,
+under c4mp and in the native build (termios in `native.h`).
+`run-c4or1k.sh` is still used by the M3 targets. "Why fd 0 needs a
+wrapper, not a VM change" below is the pre-M18 reasoning, kept as
+history.
+
+The native build boots to the BusyBox shell in about 3-4 seconds (M15
+measured ~3.6 s, M17 3 s); M14's 6.5-6.7 s is the earlier figure.
+Hosted, the best configuration (the JIT under c4mp) took about 13
+minutes for the same boot.
+
+**Use `c4or1k-boot-mp`, `-jit` or `-native`, not `c4or1k-boot`.** Boot
+mode calls `__c4_termraw` before the kernel starts; plain c4m names
+`TRAW` but does not implement it, and halts on it when no trap handler
+is installed. And booting Linux hosted under c4m takes well over ten
+minutes anyway (~25 minutes before M8's caches). c4m still runs the
+test- and console-mode checks (M1-M3), which never call `TRAW`.
+
+    make c4or1k-boot-native N=700000000     # full boot, native (the fast path)
+    make c4or1k-boot-jit N=700000000        # hosted, fastest: the JIT under c4mp
+
+`make c4or1k-m0`, named in M0 below, no longer exists; `tools/asm_m0.py`
+is still in the tree. The current targets are listed in
+[src/c4or1k/README.md](../src/c4or1k/README.md).
 
 ## Why this is tractable
 
@@ -58,6 +80,9 @@ flattened to 1-D, which is how jor1k indexes them internally anyway.
 No struct-by-value params/returns — not needed here.
 
 ## Why fd 0 needs a wrapper, not a VM change
+
+*(Pre-M18. M18 gave c4mp a `TRAW` opcode, so this is no longer the
+whole story; see M18 below.)*
 
 No `ioctl`/`termios` facility exists anywhere in c4/c4m: `READ`/
 `WRITE` are thin wrappers over the host's `read()`/`write()`, so the

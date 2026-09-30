@@ -1,5 +1,9 @@
 # Fused opcodes: taking set B across the board
 
+Status, 2026-09-30: the ladder below is complete, F0-F7. All ten opcodes
+run on c4mp, oisc4, c4bb and libjs; c4m runs three. Emission (`-mfuse`)
+is still opt-in. See "Who executes which" under "What".
+
 ## Why
 
 `docs/c4th-design.md`'s B5c opcode probe measured, on the instructions two
@@ -56,6 +60,17 @@ rather than the top of either list.
 | `LIP`    | `a = *(int *)a; *--sp = a` | `LI; PSH` | | ✓ |
 | `ADDL`   | `a = *(int *)(*sp++ + a)` | `ADD; LI` | | ✓ |
 
+### Who executes which
+
+| host | executes | source |
+|---|---|---|
+| `c4m` | `LDL`, `STL`, `POPA`; names the other seven and halts on them | `c4m.c` |
+| `c4mp` | all ten, plus its own `LXI`/`SXI` (76-77, the `-mcisc` indexed load and store, which are not fused opcodes) | `src/c4mp/vm.c` |
+| `oisc4` | all ten, translated; names `LXI`/`SXI` but does not translate them | `src/oisc4/oisc4.c` |
+| `c4bb` | all ten, in microcode (F7) | `src/c4bb/hw/microcode.uc` |
+| libjs | all ten, with c4mp's meanings, so the disk's `-mfuse` images run as they do on c4bb | `libjs/c4m.js` |
+| plain `c4` | none; refuses a fused image by name | `c4l.c` `scan_extended` |
+
 **Why three in c4m.** `LDL`, `STL` and `POPA` are what a stack-machine
 code generator needs to treat the frame as registers, and c4th's native
 backend uses those three and nothing else. Without them `>R`, `DO`/`LOOP`
@@ -89,6 +104,10 @@ still lists every candidate rule, so if a workload ever wants them the
 case can be made from data.
 
 ## What this costs c4bb
+
+*This section is the estimate made before the work. F7 below did it: ten
+routines, 43 microsteps, no new circuitry, and `INS_SIZE` 89. The counts
+here are as they stood when it was written.*
 
 The question this whole shape answers. `src/c4bb/hw/microcode.uc` is 549
 lines / **319 microsteps** across 65 opcodes today.
@@ -129,7 +148,7 @@ header says so. The numbers and names must agree in:
 **`c4.c` is not on that list and is not touched.** It is the base VM and
 the reference every layer degrades to. The consequence is stated plainly
 rather than worked around: **an image built with fused opcodes runs under
-c4mp and oisc4, and nowhere else** — not plain `c4`, and not `c4m` unless
+c4mp and oisc4, and nowhere else** (since F7, also c4bb and libjs) — not plain `c4`, and not `c4m` unless
 the only fused opcodes in it are `LDL`, `STL` and `POPA`. That is why
 emission is behind a flag and off by default. `c4or1k`'s `-mcisc`
 (`docs/c4or1k-design.md`) is the precedent.
@@ -152,11 +171,15 @@ the first, too-broad fix was caught. So the rule is now:
 * an opcode **outside the table** is a custom opcode — trap, and behave
   exactly as before.
 
-**c4bb is deliberately out of scope**, per the standing instruction to
-leave it until this is proven on the main toolchains.
-`src/c4bb/hw/microcode.uc` implements each opcode individually, so this is
-hardware-description work, not a table edit, and it should follow a
-decision to turn the flag on by default rather than precede it.
+**c4bb was deliberately out of scope** at first, per the standing
+instruction to leave it until this was proven on the main toolchains.
+`src/c4bb/hw/microcode.uc` implements each opcode individually, so it is
+hardware-description work, not a table edit. It was done anyway, before
+any decision about the default, once F6 showed what it was worth: see
+F7. The mirrored names now also live in `src/c4bb/sim/devices.js`
+(the opcode ROM) and `src/c4bb/sim/machine.js` (`INS_SIZE`,
+`hasOperand`), and libjs's `libjs/c4m.js` imports the board's ROM and
+keeps its own `OP` table.
 
 ## Ladder
 
@@ -354,10 +377,16 @@ labels are targets of nothing — c4opt has no pass that drops an
 unreferenced label. That pass, and then re-running fuse, is the obvious
 next increment.
 
-**Turning `-mfuse` on by default is a separate decision**, and it needs
-c4bb first: the moment the default build fuses, C4IX stops running on
-the breadboard. Everything above is opt-in, so nothing is blocked on
-that.
+**Turning `-mfuse` on by default is a separate decision**, and it needed
+c4bb first: the moment the default build fuses, C4IX would have stopped
+running on the breadboard. F7 removed that obstacle; the remaining one is
+that c4m has three of the ten, so a default-fused image would no longer
+run under c4m. As of 2026-09-30 the default is still off: the Makefile
+passes `-mfuse` only to the targets that ask for it (the c4bb disk's
+`c4sp.c4r`, and the tests that check fused images).
+
+The unreferenced-label pass described above has not been written; the
+remaining ~6% is still on the table.
 
 **Userland is unfused.** The C4IX number above fuses only the kernel;
 the programs it runs are ordinary images. Fusing those too is a Makefile

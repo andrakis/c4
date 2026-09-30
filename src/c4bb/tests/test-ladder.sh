@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test-ladder.sh - the whole HOMEWARD ladder, end to end.
+# test-ladder.sh - the whole ladder, end to end.
 #
 # DELIBERATELY NOT IN `make test-c4bb`. It compiles an operating system
 # inside a virtual machine and takes minutes. Run it by hand, or when

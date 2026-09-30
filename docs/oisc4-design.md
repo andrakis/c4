@@ -1,5 +1,12 @@
 # OISC4 — the One Instruction Set Computer for C4
 
+Status, 2026-09-30: written 2026-08-04 and current except where marked.
+Since then OISC4 has learned the fused opcodes (79-88, see "The fused
+opcodes" in §4): support arrived in 958eeb1 (2026-08-24, the first
+twenty-six) and bbb9ec3 cut the set to the current ten the same day.
+The usage summary, host table and out-of-contract tests are also in
+[src/oisc4/README.md](../src/oisc4/README.md).
+
 `src/oisc4/oisc4.c` runs `.c4r` images — anything compiled by c4cc **or c4lc**
 — on a virtual machine with exactly one instruction:
 
@@ -184,6 +191,28 @@ argument in the accumulator (the missed-probe convention). Trap machinery
 (`ITH`/`TLEV`/cycle interrupts) is stubbed to 0: C4KE cannot run, which
 is expected — even plain c4 can't run it.
 
+### The fused opcodes (added 2026-08-24)
+
+All ten fused opcodes (`LDL LDG PSHL PSHG LEAP IMMP LIP ADDL STL POPA`,
+[fused-opcodes.md](fused-opcodes.md)) are translated. Each is exactly the
+sequence it replaces, so its expansion is the concatenation of theirs,
+with the self-patch offsets recounted from the block's start:
+
+| fused | n | | fused | n |
+|---|---|---|---|---|
+| `LDL`, `LDG` | 3 | | `LIP` | 5 |
+| `PSHL`, `PSHG` | 6 | | `ADDL` | 8 |
+| `LEAP`, `IMMP` | 4 | | `STL` | 2 |
+| | | | `POPA` | 3 |
+
+One trap found on the way: the syscall catch-all was `op >= OPEN && op <
+INS_MAX`, so extending the enum would have made every appended opcode
+look like a syscall and mistranslate silently. It is now bounded by
+`DBG`, where that class ends. c4mp's own 66-78 (`CPUI`..`TRAW`,
+including `LXI`/`SXI`) are named but not translated: an image that uses
+one stops at translation with "unknown opcode". `make test-fuse` runs a
+fused image on OISC4 alongside c4m and c4mp.
+
 ## 5. Verification and measurements
 
 `make test-oisc4` compares against `./c4m load-c4r.c -- <image>` with
@@ -318,11 +347,13 @@ stepper is replaced — which was the point of banning host pointers.
 
 ```
 src/oisc4/oisc4.c        VM + translator + loader, single file, c4 dialect
+src/oisc4/oisc4          the native build (tracked in git)
 src/oisc4/test-oisc4.sh  the comparison ladder
 make oisc4               native build
 make test-oisc4          output-compare ladder vs c4m
 make oisc4-lc.c4r        c4lc -O build of oisc4 itself
 make test-oisc4-nested   the three nesting chains
+make test-fuse           a fused image on c4m, c4mp and OISC4 (2026-08-24)
 ```
 
 Flags: `-d` trace (with `-c N`, only the last 100 cycles before the

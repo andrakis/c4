@@ -3,6 +3,12 @@
 Status tracker and design for the new `libjs/`. Tick a box only when the gate
 under it has passed, and write down the evidence next to it.
 
+Status, 2026-09-30: M0-M4 done, M5 done except the performance pass and the
+media panel (both left open on purpose, below). The display has grown a pixel
+framebuffer, display interrupts and a SharedArrayBuffer path since the
+decisions below were taken. The biggest program drawn on it is the C4IX
+desktop, tracked in [c4ix-desktop.md](c4ix-desktop.md).
+
 ## Why
 
 The old `libjs/` ran **plain c4** only, in Node only. It got its programs from
@@ -30,13 +36,14 @@ Out of scope for now: c4mp multiprocessing.
   (`src/c4bb/images/c4ke32.c4r`, `c4ix32.c4r`, `disk/`). The 64-bit `.c4r`
   files at the repo root do not load.
 - **GUI channel**: a draw-command ring to a `<canvas>` now. A pixel
-  framebuffer mode is reserved for later.
+  framebuffer mode is reserved for later. *(Built since, in M5: FB/FBPITCH/
+  FBFLIP.)*
 - **First demo**: a standalone `.c4r`, then a C4IX program run from the shell
   with the terminal still live.
 
 ## Ground rules
 
-- `src/c4bb/sim/*` and `src/c4bb/hw/*` are vendored verbatim into Homeward.
+- `src/c4bb/sim/*` and `src/c4bb/hw/*` are vendored verbatim into an embedder.
   libjs **imports them by relative path and never edits or moves them**.
   Anything that needs changing is copied into `libjs/` with a note saying
   where it came from.
@@ -60,9 +67,11 @@ Out of scope for now: c4mp multiprocessing.
 | `libjs/page.js` | The main-thread API, `C4M.boot(...)`. |
 | `libjs/display.js` | Draws command frames on the canvas and turns DOM events into event frames. |
 | `libjs/cli.js` | The Node runner, with c4bb's flags. |
+| `libjs/shared.js` | The display's SharedArrayBuffer path: a command ring and a framebuffer triple buffer, used when the page is cross-origin isolated. |
 | `libjs/serve.mjs` | A static server with optional COOP/COEP headers. |
 | `libjs/web/` | The page: terminal left, canvas right. |
 | `libjs/guest/gui.h`, `gui-demo.c` | The guest C API and the standalone demo. |
+| `libjs/guest/fb-demo.c` | The framebuffer demo: 320x240, every pixel computed by the guest, events by interrupt. |
 | `libjs/tests/` | The differential suite, unit tests, the GUI test and the CDP gate. |
 | `src/c4ix/user/gui.c` | `c4ix-gui.c4r`. |
 
@@ -116,7 +125,9 @@ is ignored.
 ## Worker protocol
 
 The baseline is postMessage only, so python's `http.server` is enough.
-SharedArrayBuffer is an optimisation for later, behind `crossOriginIsolated`.
+When the page is `crossOriginIsolated` (`serve.mjs --isolate`), the display
+uses SharedArrayBuffer instead (`shared.js`, M5); `?shared=0` forces the
+message path.
 
 - **Page to worker**: `boot`, `key`, `input`, `signal`, `eof`, `gui`,
   `pause`, `resume`, `reset`.

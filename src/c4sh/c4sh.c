@@ -2,22 +2,26 @@
 // C4SH - The C4 SHell for C4KE
 //
 // A shell with more advanced features than the emergency shell, such as:
-//  - builtin commands: help, fg, kill, set
+//  - builtin commands: help, fg, kill, ps, kdbg, toggle, echo, set, exit
+//    (and \q, an alias for exit)
 //  - detailed usage for builtin commands via help
-//  - functions
-//  - running scripts
+// There are no shell functions and no script-file mode: main always
+// reads commands from stdin.
 //
-// Compilation:
-//  ./c4r -o c4sh.c4r u0.c c4sh.c c4sh_builtins.c
-//  or let the Makefile do it for you as part of the run command:
-//  make run
+// Compilation (c4cc has no preprocessor, so the #includes below do
+// nothing and the sources are concatenated on the command line; each
+// builtins file registers its commands from a constructor, so order
+// matters):
+//  ./c4cc -o c4sh.c4r include/u0.h src/c4ke/bin/ps.c
+//         src/c4sh/c4sh.c src/c4sh/c4sh_builtins.c src/c4sh/c4sh_scripting.c
+//  or let the Makefile do it (make c4sh.c4r, part of make pre; C4SH_SRCS).
 //
 // Usage:
 //  - Type "help" for a command listing.
 //  - Any .c4r file can be run, and the .c4r extension does not need to be passed.
 //  - You can start a task in the background using & like in bash:
 //    top &
-//    - kill not implemented
+//    - kill [-L] [pid] sends a signal (kill -l lists them)
 //    - you can foreground the most recently executed background task by using:
 //      fg
 //  - Any task running in the foreground causes c4sh to wait, saving CPU cycles.

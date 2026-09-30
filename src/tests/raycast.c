@@ -506,8 +506,8 @@ char *put_num (char *p, int v) {
 char *put_str (char *p, char *s) { while (*s) *p++ = *s++; return p; }
 
 // Every row opens with its own SGR and closes with a reset. That is
-// not tidiness: HOMEWARD renders a sliding window of the last N lines
-// (ansiToHtml(term.tail(22))), so its SGR parser starts fresh at the
+// not tidiness: an embedding terminal may render a sliding window of the last N lines
+// (the last 22 lines turned to HTML), so its SGR parser starts fresh at the
 // top of the visible area -- colour carried across a line boundary is
 // lost the moment that line scrolls off the top.
 void frame_build () {
@@ -578,7 +578,7 @@ void frame_build () {
 
 // ---- HUD -----------------------------------------------------------
 // Composited into the character grid, never positioned with escapes.
-// HOMEWARD's terminal and c4bb's web terminal implement SGR and drop
+// Simple terminals, c4bb's web terminal among them, implement SGR and drop
 // every other CSI sequence, so ESC[H and ESC[2J do nothing at all
 // there: the only way to put something in a corner is to draw it into
 // the corner before the frame is built.
@@ -648,7 +648,7 @@ void hud_draw () {
   // derived from the cycle counter (a defined 1MHz machine, no wall
   // clock), so f/s is a simulated figure there while kc -- thousands
   // of VM instructions per frame -- is the honest one, and it is the
-  // number that matters when tuning against HOMEWARD's cycle budget.
+  // number that matters when tuning against a machine's cycle budget.
   hud_text(vw - 28, 0, "seen ");
   hud_num (vw - 23, 0, covered, 4);
   hud_text(vw - 18, 0, "f/s ");

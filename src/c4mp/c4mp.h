@@ -18,15 +18,18 @@
 // real C compiler that the machine registers are registers and that
 // guest stores cannot touch them.
 //
-// Three configurations from one source:
+// Configurations from one source:
 //
 //   ./c4mp prog.c4r                         native, one CPU
-//   ./c4mp -cpus 4 prog.c4r                 native, N host threads   (pass 2)
+//   ./c4mp -cpus 4 prog.c4r                 native, N simulated CPUs
 //   ./c4m load-c4r.c -- c4mp.c4r prog.c4r   hosted by c4m, simulated
 //
-// The last is a backwards-compatibility proof rather than the point:
-// c4m has no multiprocessing to offer, so SMP there is simulated by
-// interleaving contexts at a quantum boundary.
+// -cpus N always runs the simulated scheduler in smp.c: one host
+// thread, the CPUs interleaved round robin at a quantum boundary. That
+// is the only SMP there is today, natively or hosted. "Pass 2" -- one
+// host thread per CPU, with real atomics -- is planned (smp.c's header)
+// and NOT implemented. Hosting by c4m is a backwards-compatibility
+// proof rather than the point: c4m has no multiprocessing to offer.
 //
 
 #ifdef __c4cc__
@@ -109,11 +112,13 @@ enum {
     // Appended, never inserted; the same numbers as c4m.c, c4l.c,
     // load-c4r.c, oisc4.c, c4cc.c and c4r.lisp.
     //
-    // c4mp implements these; c4m names them and traps them, the same
-    // arrangement as CPUI..TRAW above. That is deliberate: c4m is the
-    // machine c4bb models in hardware, and each opcode is microcode and
-    // ROM depth on a breadboard, so a c4mp-capable c4bb can be an
-    // extension of the base board rather than a second one.
+    // c4mp implements all ten. c4m implements three (LDL, STL, POPA)
+    // and names the other seven: they trap to a handler if one is
+    // installed and halt the machine by name if not, the same
+    // arrangement as CPUI..TRAW above. The split was made because c4m is the machine
+    // c4bb models in hardware; c4bb has since implemented all ten in
+    // microcode anyway (docs/fused-opcodes.md, F7), as have oisc4 and
+    // libjs.
     LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,
     INS_SIZE
 };
@@ -160,7 +165,8 @@ enum {
     // a guest tests this bit, then calls __c4_cpu_count(). Without
     // that order an unguarded CPUN is an illegal opcode on c4m.
     C4I_SMP   = 0x100,
-    C4I_CISC  = 0x200,   // reserved for the superinstruction milestone
+    C4I_CISC  = 0x200,   // reserved; INFO never reports it, even though
+                         // c4mp executes LXI/SXI (test for c4mp by C4I_SMP)
     C4I_TRAPH = 0x400
 };
 

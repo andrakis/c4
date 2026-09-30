@@ -1,11 +1,14 @@
 // c4sp -- a Lisp interpreter in C4, modelled on alisp
 //
-// See docs/c4sp-design.md. Runs natively (gcc), under c4m, and -- compiled
-// by c4cc to a .c4r -- under plain c4 and C4KE.
+// See docs/c4sp-design.md. Runs natively (gcc), and -- compiled by c4lc
+// (c4lc -O, run by the native c4sp) to a .c4r -- under c4m, inside C4KE,
+// and on c4bb. The image carries the C4DOS file API (below).
 //
 // Build:
-//   native:  make c4sp        (gcc -O0: the collector scans the stack)
-//   c4r:     make c4sp.c4r
+//   native:  make c4sp        (gcc -O2: safe because gc_collect() spills
+//                              the callee-saved registers with setjmp
+//                              before scanning the stack; see gc.h)
+//   c4r:     make c4sp.c4r    (gcc -E -DC4SP_DOS=1, then c4lc -O)
 //   run:     ./c4m load-c4r.c -- c4sp.c4r file.lisp [args...]
 //   C4KE:    ./c4m load-c4r.c -- c4ke.c4r c4sp.c4r file.lisp
 //
@@ -20,11 +23,6 @@
 #include "c4.h"
 #include "c4m.h"
 #include "c4_float.h"
-// The C4DOS API, for file:read and file:write. A transient's own open()
-// only ever sees the host disk (src/c4cc/c4cc.c:2016), so a compiler
-// running under C4DOS reaches the RAM disk the way every other tool
-// here does -- through the injected table. Injected as a symbol by the
-// DOS loader; zero when there is no DOS, which is how it knows.
 // The C4DOS API, for file:read and file:write. A transient's own open()
 // only ever sees the host disk (src/c4cc/c4cc.c:2016), so a compiler
 // running under C4DOS reaches the RAM disk the way every other tool

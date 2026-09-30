@@ -1,5 +1,12 @@
 # c4fc — a C99 compiler in Forth, and the DSL it is written in
 
+Status 2026-09-30: the ladder below (F0–F11) is complete, built
+2026-08-25/26. Since then: an inliner, `src/c4fc/inline.f` with the
+`-minline` option (2026-09-07, `d445540`, I7 in
+[inline-small-functions.md](inline-small-functions.md)), and a C4DOS
+floppy whose compiler is c4fc (2026-08-26, see "Inside C4DOS and C4IX"
+below). The options c4fc takes are listed under "The compiler".
+
 ## What this is, and what it is not
 
 `c4fc` is a C99 compiler with c4lc's coverage, written in c4th, emitting
@@ -166,20 +173,46 @@ paragraph.
 Same phases as c4lc, same coverage, same output format. c4lc is the
 oracle at every step, which is the whole reason to keep the shape.
 
+As built (2026-09-30), in load order after c4th's `core.f ext.f
+locals.f dos.f`:
+
     src/c4fc/dsl.f       the vocabulary above
     src/c4fc/lex.f       tokens                     (c4lc L0)
     src/c4fc/pp.f        the preprocessor           (c4lc L9)
-    src/c4fc/parse.f     declarations, statements, expressions   (L1)
+    src/c4fc/ast.f       node kinds (NODE: rows) and the phases over them  (L1)
     src/c4fc/types.f     the type algebra           (part of L3)
-    src/c4fc/gen.f       code emission              (L2, L3)
-    src/c4fc/opt.f       the six c4opt passes       (L4, L6)
-    src/c4fc/c4fc.f      the driver, and .c4r out
+    src/c4fc/emit.f      code, data, patch and symbol segments; the .c4r writer
+    src/c4fc/tree.f      tree passes run by optimization   (L6)
+    src/c4fc/inline.f    the inliner, -minline      (c4lc T3/T4, 2026-09-07)
+    src/c4fc/gen.f       code generation, one method per node kind   (L2, L3)
+    src/c4fc/parse.f     declarations, statements, expressions   (L1)
+    src/c4fc/opt.f       the c4opt peephole passes  (L4)
+    src/c4fc/c4fc.f      the driver: builtins table, option words, C4FC
     src/c4fc/tests/      goldens and differentials
 
-The `.c4r` writer already exists twice — `c4r.f` (B5d) and inside
-`self.f` (B5d.5), where it is seventeen lines of code because everything
-hard about the format is the patch table and that is built as you go.
-c4fc uses `c4r.f`.
+The `.c4r` writer already existed twice when this was planned — `c4r.f`
+(B5d) and inside `self.f` (B5d.5), where it is seventeen lines of code
+because everything hard about the format is the patch table and that is
+built as you go. The plan was for c4fc to use `c4r.f`; as built it
+writes its own, in `emit.f`, and does not load `c4r.f`.
+
+**Options.** The compiler is the word `C4FC ( a u -- )`, which compiles
+the named file. Options are words run before it, inside a definition
+(`: GO ... C4FC ; GO`), because `IF`/`THEN` are compile-only:
+
+| word | effect |
+|---|---|
+| `C4FC-INIT` | set up the arena; needed before `-I` or `-D` |
+| `-P` | use c4fc's own preprocessor |
+| `S" dir" -I` | include path |
+| `S" NAME=1" -D` | predefined macro |
+| `-c` | compile one unit to an object for `c4rlink` |
+| `S" out" -o` | write to a file (through `dos.f`) instead of stdout |
+| `1 OPTIMIZE !` | c4lc's `-O`; there is no `-O` word |
+| `-mcisc` | c4mp's `LXI`/`SXI` (F11) |
+| `-mfuse` | the fused opcodes (F11); implies optimization |
+| `-minline` | inline small functions; implies optimization |
+| `1 CONFORMING !` | real C escape sequences, as c4lc's `-conforming` |
 
 ## Verification
 
@@ -693,6 +726,11 @@ The bar rises rung by rung and c4lc supplies it at every one.
 Measured on a 6-core box, `/usr/bin/time -v`, one process at a time.
 Both compilers preprocess the source themselves except where noted.
 
+*History: these figures were taken on 2026-08-26, before c4sp's arena
+learned to grow the same day (c4sp-design.md §4.10). The Makefile's `-c`
+flags are gone and c4lc now starts small and grows with the live set, so
+the "as the Makefile builds it" rows no longer describe the build.*
+
 **c4lc's memory is a knob, and the repo has it set wrong.** `c4sp -c N`
 preallocates the cell pool -- roughly 32 bytes a cell -- and touches all
 of it, so the number in the Makefile IS the resident set. The values
@@ -810,6 +848,34 @@ the threaded interpreter, before a line of C is seen. Two things would
 change the shape: `native.f` compiles hot Forth words to real C4 code
 and is not switched on here, and c4th can save an image, which would
 make the load one-time. Neither is done.
+
+## Inside C4DOS and C4IX
+
+**C4DOS** (2026-08-26, `30a82f4`). `make c4dos-c4fc` builds a floppy for
+c4bb with `c4th.c4r` (the 32-bit c4th), c4fc's Forth sources
+concatenated into one `c4fc.f` (a long `RUN` line would exceed C4DOS's
+16-token `ARGVMAX`), `cc.f`, `c4rlink.c4r` and a `hello.c`. At the `A>`
+prompt:
+
+    RUN c4th.c4r c4fc.f cc.f
+
+`src/c4dos/fs/cc.f` defines `CC` and `OBJ` with optimization, `-P` and
+the usual `-D`s set, and its `MAIN` compiles `hello.c`. The image goes to
+the RAM disk through `dos.f`'s `SAVE-BLOCK`, which calls the C4DOS API
+table (C4DOS has no redirection and the VM no write syscall, so this is
+the only route). With `-c` and `c4rlink` the machine compiles units to
+objects and links them, which c4cc cannot. `make test-c4dos-c4fc` runs
+the loop on the simulated c4bb in about three minutes; `make
+run-c4dos-c4fc` is the interactive version, where `CC` (the floppy's
+`cc.bat`) runs the same `RUN` line.
+
+**C4IX.** c4th has been in C4IX's `/bin` since 2026-09-24 (`e427c9c`),
+and C4IX's shell can redirect stdout into a RAM file, so c4fc's default
+of writing the image to stdout works there in principle. The C4IX disk
+carries only `core.f` and `self.f` (for c4th's own compiler), not c4fc's
+sources, and no test runs c4fc inside C4IX. What is pinned instead is
+that c4fc, on a native c4th, compiles all twelve C4IX modules to objects
+that link to a `c4ix.c4r` byte-identical to c4lc's (`make test-c4fc`).
 
 ## Risks, and one thing deliberately left out
 

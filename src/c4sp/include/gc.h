@@ -14,10 +14,9 @@
 // STARTS rather than what it is allowed to reach, and neither mistake is
 // available any more.
 //
-// The collector (mark & sweep, conservative over the C4 stack) arrives at
-// M2; until then gc_collect() reports arena exhaustion and exits. The entry
-// point and statistics exist now so nothing above this file changes shape
-// when the real collector lands.
+// The collector is mark & sweep, conservative over the C4 stack (M2); the
+// arena grows by adding blocks when a collection leaves too little free
+// (docs/c4sp-design.md).
 
 #if NATIVE
 #include <setjmp.h>

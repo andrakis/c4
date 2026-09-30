@@ -1,4 +1,12 @@
-# The HOMEWARD ladder — DOS→C4KE handover, and C4IX in-machine
+# The ladder — DOS→C4KE handover, and C4IX in-machine
+
+> **Completed plan (historical).** Every milestone below shipped by 2026-08-23; this file
+> is kept as the record of how, not as a to-do list. What came after — the climb on c4bb
+> with `LADDER`/`IX`, drives, `install`/`kinstall`, three power-ons (`make test-c4bb-climb`)
+> — is in `docs/climbing-the-ladder.md` and `docs/c4dos-design.md`. Line numbers quoted
+> below (`c4ke.c:3653` and so on) are as of 2026-08-23 and have since moved. Networking,
+> the rung after, has not been started (checked 2026-09-30). This file was renamed on
+> 2026-09-30; `git log --follow` reaches its history.
 
 **Status: M0–M8 complete, 2026-08-23.** Every suite green in one sweep afterwards —
 `test-c4dos` `test-cpp` `test-c4l` `test-link` `test` `test-c4ke-ramfs` `test-c4lc`
@@ -9,19 +17,20 @@ not start it without the user.
 **Status tracker.** This file is the authoritative record of where the ladder work stands.
 Tick a box only when its verification command has actually been run and is green, and paste
 the one-line evidence beside it. Update this file in the same commit as the work, so
-`git log docs/homeward-ladder.md` is a true history. Anything discovered mid-implementation
+`git log --follow docs/ladder-plan.md` is a true history. Anything discovered mid-implementation
 that changes the shape of a later milestone gets written *here*, not left in conversation.
 
 ---
 
 ## Why
 
-HOMEWARD's premise is that the player builds a CPU from the transistors up and then climbs it:
+The premise is a machine built from the transistors up and then climbed (an embedder that
+vendors c4bb puts a player in front of it):
 enough hardware for `IMM n` → more opcodes → the sample programs → **C4DOS** at pure-C4 level →
 C4DOS builds and boots **C4KE** → under C4KE, c4sp/c4lc/c4rlink build **C4IX** → C4IX gains
 networking (via c4mp, which is also where CISC lives for c4or1k).
 
-The hardware side of that ladder is Homeward's job. Two *software* things block it:
+The hardware side of that ladder is the embedder's job. Two *software* things block it:
 
 1. **C4KE can't see what C4DOS built.** `BUILD.BAT` already compiles a kernel *and* an init
    onto the DOS RAM disk, but the kernel's loader only knows the host filesystem — so the
@@ -36,7 +45,7 @@ The hardware side of that ladder is Homeward's job. Two *software* things block 
 | Seeding C4KE's RAM filesystem | A new **kernel extension**, alongside ipc/plus/pm — not a change to `load-c4r.c`. |
 | What gets seeded | **Everything on the DOS RAM disk** — it is the initrd. |
 | The loader | A **C4DOS-specific loader**, LOADLIN-shaped. May assume c4m-level hardware. |
-| Opcode gating in c4bb | **Dropped.** Homeward already surfaces this to the player, and c4bb is Homeward's *truth oracle* — a fitted-opcode gate would duplicate that work and diverge the reference from the thing testing against it. |
+| Opcode gating in c4bb | **Dropped.** The embedder already surfaces this to the player, and c4bb is its *truth oracle* — a fitted-opcode gate would duplicate that work and diverge the reference from the thing testing against it. |
 | Scope | Loader rung + C4IX unblock + disk reorganisation. |
 
 ## What is already true (do not rebuild these)
@@ -194,7 +203,7 @@ generation — every byte above it untouched, so the disk `test-c4bb.sh` boots c
 
 ### M0 — tracker + baseline
 
-- [x] `docs/homeward-ladder.md` written (this file)
+- [x] this file written
 - [x] Baseline recorded 2026-08-23, all three green before any change:
       `test-c4dos: ramdisk OK` (exit 0) · `test-link: OK` (exit 0) ·
       `test-c4bb: OK` (exit 0, through `c4dos boots the shared disk OK`)
@@ -351,7 +360,7 @@ nothing**; validate objects, not images. Pre-existing, unrelated to this work.
       note rewritten now the rung is closed
 - [x] `docs/c4bb-design.md`: a new "The disks" section — the shared disk, the two derived
       ones, why `c4ke-root` is derived by subtraction, and `test-ladder.sh` under Verification
-- [x] `docs/MILESTONES.md`: a "The HOMEWARD ladder" section, and the arena measurement
+- [x] `docs/MILESTONES.md`: a section on the ladder, and the arena measurement
 - [x] This file closed out
 
 ---
@@ -397,7 +406,7 @@ c4rlink round trip, and `test-ladder.sh`.
 
 ## Later — networking (the end goal, NOT this plan)
 
-The rung *above* everything above, and the game's actual win condition: **C4IX with networking,
+The rung *above* everything above, and the embedder's actual goal: **C4IX with networking,
 sending a command over the network card to the time-travel device.** Nothing here is designed
 yet; it is the shape of the next conversation. **Do not start until M8 is ticked.**
 
@@ -411,7 +420,7 @@ yet; it is the shape of the next conversation. **Do not start until M8 is ticked
 
 ## Deliberately out of scope (for this plan)
 
-- **Any change to c4bb's execution semantics.** It is Homeward's truth oracle; Homeward already
-  surfaces missing-opcode feedback to the player. The only c4bb edits here are to
+- **Any change to c4bb's execution semantics.** It is the embedder's truth oracle; the embedder
+  already surfaces missing-opcode feedback to the player. The only c4bb edits here are to
   `build-images.sh` and `web/app.js`'s disk selection — nothing in `sim/`.
-- Everything in **Later — networking** above, and any change to the HOMEWARD repo.
+- Everything in **Later — networking** above, and any change to the embedder's own repo.

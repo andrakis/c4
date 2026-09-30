@@ -2,13 +2,18 @@
 
 A single-tasking, trap-free disk operating system for the C4 family,
 in the spirit of classic DOS: `CONFIG.SYS`, `AUTOEXEC.BAT`, a prompt,
-transient programs that load, run, and return. Written for the
-HOMEWARD game's bring-up campaign (the OS you can run BEFORE building
-trap machinery), but a first-class citizen of this repo like every
-other subsystem.
+transient programs that load, run, and return. Written as the bottom
+rung of the ladder (C4DOS → C4KE → C4IX, each built by the one before:
+the OS you can run BEFORE building trap machinery), but a first-class
+citizen of this repo like every other subsystem.
 
-STATUS: in development, 2026-08-21. This doc is the contract; deviations
-get written back here.
+STATUS (2026-09-30): working, and the ladder it was written for is
+climbed. C4DOS boots on native c4m, under unmodified `c4` (clockless
+build) and on c4bb; its build floppy compiles C4KE in-machine (`BUILD`,
+`LADDER`), `dosload` hands the machine over, `install` writes a bootable
+medium, and `make test-c4bb-climb` pins three power-ons, each booting a
+system the one before wrote (docs/climbing-the-ladder.md). Written as the
+contract on 2026-08-21; deviations have been written back here since.
 
 ## Why it exists
 
@@ -32,16 +37,27 @@ needs is either plain-c4 or ordinary c4m microcode on c4bb:
 ```
 src/c4dos/
   cpp.c              # THE PREPROCESSOR (standalone pass; see below)
-  c4dos.c            # shell: CONFIG.SYS, AUTOEXEC.BAT, prompt, builtins
-  c4dos_load.c       # .c4r loader (c4ix/loader.c structure: v3 MEMSZ)
-                     #   + c4l.c invoke-stub call mechanism (plain-c4 safe)
-  include/c4dos.h    # transient-side API shim: exit(), dos_* services
+  c4dos.c            # the DOS: CONFIG.SYS, AUTOEXEC.BAT, prompt, builtins,
+                     #   RAM disk, API table, and the .c4r loader
+                     #   (c4ix/loader.c structure: v3 MEMSZ) + c4l.c
+                     #   invoke-stub call mechanism (plain-c4 safe)
+  dostar.c           # unpack a C4TAR1 archive onto the RAM disk
+  dosload.c          # LOADLIN for C4DOS (below)
+  bbsave.c           # write RAM-disk files to a c4bb drive
+  install.c          # write a bootable medium from a manifest (install.lst)
   fs/CONFIG.SYS      # curated boot config, copied onto the disk
   fs/AUTOEXEC.BAT
-  tests/build-images.sh
+  fs/BUILD.BAT, LADDER.BAT, IX.BAT, ...   # the in-machine builds
   tests/test-c4dos.sh
+  tests/test-cpp.sh
+include/c4dos.h      # transient-side API shim: exit(), dos_* services
+include/c4dos_native.h  # its stub for host builds
+src/c4bb/tests/build-images.sh   # also builds c4dos32.c4r into src/c4bb/images/
 docs/c4dos-design.md # this file
 ```
+
+(The loader was planned as a separate `c4dos_load.c`; it lives in
+`c4dos.c`.)
 
 ## The preprocessor (cpp.c)
 
@@ -109,7 +125,10 @@ in-memory RAM disk (name → buffer table), DOS-style
 **Implemented.** `DIR` lists the union of the disk (read-only) and the
 RAM disk (rw, marked `<ram>` with a usage line); opens check the RAM
 disk FIRST, so a tool that rewrites a file shadows the read-only
-original rather than failing. RAM files carry pseudo-descriptors above
+original rather than failing. `ram:name` opens the RAM disk's copy and
+nothing else (cpp and c4cc report what they write as `ram:<file>`, so
+that spelling has to open); a bare `RAM:` at the prompt explains that
+the RAM disk is not a drive. RAM files carry pseudo-descriptors above
 `RAMFD`, which is why every read and close inside DOS goes through
 `dos_read`/`dos_close` -- a pseudo-fd is not something the host has
 ever heard of. `COPY src dst` is the builtin that writes, and `RUN`
@@ -170,8 +189,9 @@ taking the machine over wants everything the RAM disk holds without
 being told what is on it, and then wants the memory. That is what
 `src/c4ke/extensions/c4ke_dos.c` does with it.
 
-(In HOMEWARD, persistent disk write arrives later as built hardware;
-the RAM disk is honest about what the machine can do.)
+(Persistent writes arrived later as hardware: c4bb's drives, reached by
+`bbsave` and `install`, which drive the disk registers directly. The RAM
+disk is still all a trap-free DOS writes through its API.)
 
 DECISION (user, 2026-08-21): NO `>` output redirection. Compilers and
 tools write files DIRECTLY through the API (`dos_create`/`dos_write`/
@@ -236,9 +256,10 @@ loading a kernel must not be the thing that demands a better CPU.
 - `AUTOEXEC.BAT`: line-per-command batch, `ECHO`, `REM`, `@` prefix,
   run through the same reader as the interactive prompt (the c4sh
   INPUT_STDIN/INPUT_STREAM split, minus its known multi-line-read bug).
-- Builtins: `DIR`, `TYPE`, `RUN` (implicit for *.C4R names), `ECHO`,
-  `VER`, `TIME` (wants CLOCK.SYS), `MEM`, `EXIT` (halts — the one
-  legitimate use of the EXIT opcode).
+- Builtins: `DIR`, `TYPE`, `COPY`, `RUN` (implicit for *.C4R names),
+  `ECHO`, `REM`, `VER`, `TIME` (wants CLOCK.SYS), `MEM`, `EXIT` (halts —
+  the one legitimate use of the EXIT opcode), and a drive letter such
+  as `B:` (below). A `.BAT` name runs the batch file.
   `TYPE file /P` and `DIR /P` page: 23 lines, then `-- More --` and a
   wait. The wait is `get_line()`, which already understands that one
   `read(0, ...)` may carry several lines, so a pause eats exactly one
@@ -277,8 +298,12 @@ controller, which has understood it since M5.
 ## Building and running
 
 Three images, because they answer three different questions. All go
-through our own `cpp` -- raw `c4cc` skips `#` lines and would compile
-both sides of the clock `#if` into one image.
+through our own `cpp` -- a compiler that skips `#` lines would compile
+both sides of the clock `#if` into one image -- and are then compiled by
+c4lc `-O` (c4sp for the 64-bit images, c4sp32 for `c4dos32.c4r`). They
+were c4cc builds when this was written; `src/c4dos/tests/test-c4dos.sh`
+still builds its own copies with `./cpp | ./c4cc`, so the test pins the
+c4cc route and the Makefile ships the c4lc one.
 
 | target | what it is |
 |---|---|
@@ -318,9 +343,23 @@ The games and `c4`/`c4m` are the `u0lite` (or bare) builds, so one image
 runs at the `A>` prompt AND inside the kernel. `docs/dos-rung-fixes.md`
 tracks the whole change.
 
-`EXIT` halts. `DIR`, `TYPE`, `RUN`, `ECHO`, `VER`, `TIME`, `MEM` are the
-builtins; `RUN raycast.c4r -d` is the one transient with something to
-look at.
+`EXIT` halts. `DIR`, `TYPE`, `COPY`, `RUN`, `ECHO`, `REM`, `VER`,
+`TIME`, `MEM` are the builtins; `RUN raycast.c4r -d` is the one transient
+with something to look at.
+
+### The tools on the floppies
+
+| tool | what it does |
+|---|---|
+| `dostar x\|t archive.tar` | unpacks a C4TAR1 archive onto the RAM disk (`c4ke-src.tar`, `tools-src.tar`, `c4ix-src.tar`) |
+| `dosload image.c4r [args]` | loads a kernel, gives back DOS's scratch, starts it (above) |
+| `bbsave B: [file...]` | writes RAM-disk files onto a c4bb drive: no manifest, no boot record |
+| `install B: [manifest]` | writes a **bootable** medium from `install.lst` (the default): fetches each name from the RAM disk or the floppy, writes nothing until every required name is found, then writes `boot.cfg` for the BIOS |
+
+`bbsave` and `install` drive c4bb's disk registers directly, so they
+are 32-bit, board-only transients (`bbsave32.c4r`, `install32.c4r`).
+`make c4dos-c4ix32` carries all four; the walkthrough is
+`docs/climbing-the-ladder.md`.
 
 ### Finding a file
 
@@ -356,16 +395,24 @@ for the cost of one more image.
 
 ## Testing
 
-- `make test-c4dos`: build 32-bit images, boot under c4bb
-  (`sim/cli.js`), pipe a scripted session, grep-assert (the
-  test-c4bb.sh pattern); plus native `./c4m c4dos-boot` parity where
-  output interleaving allows.
-- Purity pin: `./c4 c4l.c c4dos.c4r` runs the CLOCKLESS build (the
-  test-c4l pattern) — regression guard against extended opcodes
-  creeping into DOS core.
-- cpp pin: image byte-equality vs the gcc -E path over the corpus.
+None of these is part of `make test`.
 
-## The ladder (for HOMEWARD)
+| target | what it pins |
+|---|---|
+| `make test-c4dos` | four legs: native c4m, the clock build, unmodified `c4` through `c4l.c` (the purity pin: the clockless image uses no opcode above `EXIT`), and c4bb, including `c4.c4r` compiling hello inside it. Its script builds the images with `./cpp \| ./c4cc`, not the Makefile's c4lc |
+| `make test-cpp` | `cpp \| c4cc` and `gcc -E \| c4cc` give byte-identical images over the corpus, and `cpp.c` interpreted by plain c4 matches the native build |
+| `make test-dosload` | `dosload.c4r` uses no opcode above `EXIT` |
+| `make test-ladder` | the ladder on the host: C4DOS builds C4KE, `dosload` hands over, both toolchains compile and link in the RAM filesystem. Minutes |
+| `make test-c4dos-build32` | on c4bb: `BUILD`, then boot the kernel just built, to a clean shutdown |
+| `make test-c4dos-ladder32` | on c4bb: `LADDER` rebuilds the compiler to a fixed point, then the kernel; boots it |
+| `make test-c4dos-c4ix32` | on c4bb: `IX` builds C4IX with the compiled compiler and boots it. Minutes |
+| `make test-c4dos-c4fc` | on c4bb: c4fc compiles a C program and C4DOS runs the result. About three minutes |
+
+`make test-c4bb-climb` (in `src/c4bb/tests/test-climb.sh`) is the
+end-to-end one: three power-ons, three systems, each booted from a
+medium the previous one wrote with `install`/`kinstall`.
+
+## The ladder
 
 samples → C4DOS (this) → C4DOS runs cpp+c4cc to build C4KE → C4KE
 (traps, preemption) hosts c4sp + c4lc → c4lc builds C4IX (protected
@@ -373,7 +420,8 @@ mode) → network coprocessor sub-board + CPU support → C4IX rebuilt
 with networking → the time machine's control link (c4mp direction;
 SMP is a stretch goal).
 
-The DOS→C4KE rung is closed: `BUILD.BAT` compiles a kernel *and* an
+The DOS→C4KE rung is closed, and so is the rest of the software side
+through C4IX (the network sub-board and after are not started): `BUILD.BAT` compiles a kernel *and* an
 init onto the RAM disk, and `c4ke_dos.c` (a kernel extension, running
 at `KEXT_START`) copies the whole RAM disk into the kernel's own RAM
 filesystem before the init task is created. Since `task_loadc4r` checks
@@ -381,8 +429,8 @@ that filesystem before the host, the init that boots is the one the
 machine just built — it never existed as a file. The DOS RAM disk is
 released immediately afterwards; it was the initrd.
 
-Progress against the rest of the ladder is tracked in
-`docs/homeward-ladder.md`.
+The plan that got it there is `docs/ladder-plan.md` (complete); the
+climb by hand is `docs/climbing-the-ladder.md`.
 
 ## c4fc, the compiler in the machine
 

@@ -17,9 +17,12 @@
 ;; `# 123 "file"` line markers gcc -E emits (skipped, so this can
 ;; consume already-preprocessed sources too).
 ;;
-;; Not supported, and rejected rather than mis-expanded: stringize
-;; (#param) and paste (##). Nothing in this tree uses them. Variadic
-;; macros are likewise absent.
+;; Stringize (#param) and paste (##) are supported too (since
+;; 2026-08-04), including the two-level STR/XSTR idiom: an argument is
+;; macro-expanded before substitution except as an operand of # or ##.
+;; Paste splices the two spellings and re-lexes the result (pp:paste).
+;;
+;; Not supported: variadic macros (... and __VA_ARGS__).
 
 (begin
 

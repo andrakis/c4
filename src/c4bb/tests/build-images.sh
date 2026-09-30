@@ -332,7 +332,7 @@ cp src/c4th/forth/*.f $DISK/src/c4th/forth/
 cp src/c4th/tests/self1.f src/c4th/tests/self1-c4r.f src/c4th/tests/run-main.f $DISK/src/c4th/tests/
 
 # ---- the ladder ------------------------------------------------------
-# HOMEWARD's premise is that you climb this disk: C4DOS boots, C4DOS
+# The ladder's premise is that you climb this disk: C4DOS boots, C4DOS
 # boots C4KE, C4KE's RAM filesystem is what finally lets a compiler
 # WRITE, and that is what makes C4IX buildable. So the systems above
 # each rung have to BE here, as images the machine can load.
@@ -345,7 +345,7 @@ cp src/c4th/tests/self1.f src/c4th/tests/self1-c4r.f src/c4th/tests/run-main.f $
 # are what actually run. c4sp/c4lc still only know how to find C4KE's
 # ramfs (custom opcodes a trap-free DOS does not offer), which is
 # correct: they are the C4KE rung's tools, used to build C4IX.
-# docs/homeward-ladder.md tracks the whole climb.
+# docs/ladder-plan.md tracked the whole climb.
 cp $OUT/c4ke32.c4r $DISK/c4ke.c4r
 cp $OUT/c4ix32.c4r $DISK/c4ix.c4r
 

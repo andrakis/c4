@@ -1,4 +1,11 @@
-# What is still open — start here
+# What was still open on 2026-09-06
+
+> **Historical (a session hand-over, 2026-09-06).** Kept for its findings and
+> method notes; it is not the current open list. Since it was written: a TLEV that
+> restores its own address is now detected and named by c4bb (9e73d4b,
+> `src/c4bb/tests/test-tlev-wedge.mjs`); `innerbench` compiles C4KE again and
+> `make test` fails if it cannot (3f3bd65); the c4mpg status in section 2 is
+> kept current in `docs/c4mpg-design.md`.
 
 Written 2026-09-06 at the end of a long session, for whoever picks this up.
 `docs/dos-rung-fixes.md` is the tracker for what shipped; this file is only what
@@ -117,9 +124,9 @@ to somebody else. Ownership, not liveness.
   unmeasured guesses. `src/c4bb/tools/memcensus.mjs` now exists to derive them;
   nobody has. Measured so far: `c4ke32` 5.9 MB data / 420 B machine stack,
   `c4ix32` 17 MB / 280 B.
-- Homeward's vendored c4bb is ~21 commits behind (`@ af9f0af`), 260 lines adrift
-  in `devices.js`, no PIT — while its own header calls c4bb "the behavioral
-  oracle". None of this session's fixes have reached it.
+- An embedder's vendored c4bb was ~21 commits behind (`@ af9f0af`), 260 lines
+  adrift in `devices.js`, no PIT — while its own header calls c4bb "the
+  behavioral oracle". None of this session's fixes had reached it.
 - C4IX programs detect C4DOS but not C4KE. Doing it safely needs C4KE's loader
   to patch a `__c4ke_present` symbol; probing by name is unsafe because C4IX's
   `sched_trap` forwards C4KE-range opcodes to `ck_dispatch`.

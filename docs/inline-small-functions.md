@@ -113,9 +113,10 @@ value and must not become one.
       Budget picked by measurement; C4KE, C4IX and C4DOS all build and
       run. `make test-c4lc` green.
 - [x] **C4DOS** moved from c4cc to c4lc in the Makefile.
-- [ ] **T4b** the jump node, for the 202 C4KE + 100 C4IX call sites
-      whose bodies return early. The AST needs a forward-jump node that
-      only T4 creates -- the C dialect needs no `goto` for this.
+- [x] **T4b** the jump node, for the call sites whose bodies return
+      early: `ijmp`/`ilabel`, which only T4 creates and only
+      `c4lc-gen` reads -- the C dialect needs no `goto` for this. See
+      "T4b — bodies that return early" below.
 - [x] **I7** Ported to c4fc as `src/c4fc/inline.f` (+ hooks in emit.f,
       parse.f, gen.f, c4fc.f). `make test-c4fc` green, including
       `cmp .c4fc_ix.c4r c4ix.c4r` -- c4fc's C4IX is still byte-identical
@@ -512,7 +513,13 @@ budget 24, 13,469 at 32, 16,029 at 60. This grows code quickly.
 
 ## Still to do
 
+Status 2026-09-30. Shipped 2026-09-07 (`d445540`): T3, T4, T4b in c4lc and
+the I7 port to c4fc. `-minline` stays off by default in both compilers.
+
 - **I6** c4sc's bootstrap fixed point (the regeneration itself is done
   and verified).
-- **I7** the port to `src/c4fc/tree.f`, and c4fc's spike suite and
-  self-hosting fixed point.
+- **I7** is done (see the ladder and the I7 section above): it went into
+  `src/c4fc/inline.f`, not `tree.f` as first planned, and the spike
+  corpus plus the T3/T4/T4b tests produce identical output with and
+  without `-minline`. Not recorded as checked: c4fc's self-hosting fixed
+  point with `-minline` on.

@@ -52,7 +52,7 @@ Font 0 is monospace, 1 a sans-serif UI face, 2 its bold. A non-zero
 advance places each character exactly `advance` pixels after the last,
 which is what a character grid needs; 0 is the font's own spacing.
 
-**The desktop** (src/c4ix/user/desktop.c -> c4ix-desktop.c4r):
+**The desktop** (src/c4ix/user/desktop/, six modules linked with libc4ix -> c4ix-desktop.c4r; it was one file, `desktop.c`, until D6):
 - Asks for an 800x600 display (1024x768 was too small to read once the
   page scaled it into its pane), attaches the rings, and redraws the whole
   scene when something changed. Idle, it sleeps (`umsleep`).
@@ -327,6 +327,9 @@ can redirect that into a RAM file, so the Forth route works already.
 - `make test-c4th-os`: the C4DOS leg prints an empty prompt line ahead of
   c4th's output, so it differs from the reference at byte 1. Nothing it
   runs changed in this work, and a fresh `c4dos-clock.c4r` does the same.
+  *Fixed 2026-09-30:* that line is DOS's own `A>` prompt on a line of its
+  own (the console is unbuffered, so the prompt ends its line); the test's
+  filter now drops a bare `A>` line before stripping the prefix.
 - `test-c4ke-mbox` (in `test-c4bb`) fails about one run in four with
   "Custom opcode not found: 1073741824" in the mbpair message. It fails
   as often with the C4KE source from before this work.

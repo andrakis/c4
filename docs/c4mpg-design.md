@@ -8,6 +8,13 @@ STATUS: **M1, M2, M5 and M3's trap half built and green, 2026-09-06.** `make tes
 the contract; deviations get written back here, and two have been — see
 "Deviations, and what M1 measured" below.
 
+Checked 2026-09-30: unchanged since. M3's four opcodes and narrowing rule,
+M4 (`c4ke_mpg.c` does not exist) and M6 are not started. The only commits to
+`c4mpg.c` since are fork syncs that carry `c4m.c` fixes across (25498f0,
+e6ec92d), which is the job `src/tests/mpg/check-fork.sh` exists to enforce.
+The board-side ownership guard beside it (`--whowrote`, cc45d0e) is written up
+in `docs/dos-rung-fixes.md` F20, not here.
+
 ## Why
 
 Four bugs in one day, all of the same shape — something wrote where it should

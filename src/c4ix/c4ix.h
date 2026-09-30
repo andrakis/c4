@@ -1,18 +1,20 @@
 //
 // C4IX: kernel-wide declarations.
 //
-// Every module includes this and nothing else. The preprocessor
-// (gcc -E, the Makefile's PREPROC) runs before c4lc, so plain
-// macros and quoted includes are available even though c4lc itself
-// has no preprocessor.
+// Every module includes this and nothing else. c4lc preprocesses
+// each module itself (its L9 preprocessor; no gcc -E in the build),
+// so plain macros and quoted includes are available.
 //
 
 #ifndef __C4IX_H
 #define __C4IX_H 1
 
 // ---- host detection (host.c) ----
-// __c4_info() bit values, mirroring c4m.c's C4I_* enum. Plain c4's
-// INFO opcode returns 0, which is the whole degraded-mode signal.
+// __c4_info() bit values, mirroring c4m.c's C4I_* enum. A host with
+// no trap bits gets the cooperative, no-boundary path. (Plain c4 has
+// no INFO opcode at all -- the "returns 0" degraded signal was only
+// true while c4.c carried extended opcodes, reverted in 29d6f57 --
+// so C4IX reaches plain c4 only through c4m: c4 -> c4m.c -> C4IX.)
 enum {
     C4IX_I_C4   = 0x01,  // ultimately running under plain c4
     C4IX_I_C4M  = 0x02,  // running under c4m

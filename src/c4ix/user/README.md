@@ -1,0 +1,65 @@
+# src/c4ix/user — C4IX userland and the desktop
+
+Programs that run as C4IX user tasks, behind protected mode. Each
+`NAME.c` builds to `c4ix-NAME.c4r`:
+
+    make c4ix-NAME.c4r
+    # = c4lc -O -c -I src/c4ix/include user/NAME.c, then c4rlink with libc4ix.c4l
+
+They include `c4ix_user.h` and do all I/O through libc4ix's syscalls
+(`uprintf`, `ufprintf`, `uread`, …), so fd 0 and fd 1 are whatever the
+shell or the desktop set them to: the console, a RAM file, or a pipe. The
+C4IX shell finds a bare command name as `c4ix-NAME.c4r` or `NAME.c4r`.
+`C4IX_PROGS` in the Makefile is the set the tests build.
+
+## Programs
+
+| file | what |
+|---|---|
+| `sh.c` | `c4ix-sh`, the shell: pipelines of any length, `<` and `>`, `&` jobs, builtins `exit jobs wait kill cd pwd help`. No fork: it points its own fd 0/1 at a stage, spawns, and restores them |
+| `ls.c`, `cat.c`, `echo.c`, `wc.c`, `mkdir.c` | the usual; `cat` and `wc` read fd 0 when given no file |
+| `ps.c` | task table, one fixed-shape record per syscall |
+| `top.c` | samples the task table twice and reports what each task did in between |
+| `spin.c` | burns cycles with progress output, for Ctrl-C and preemption; takes a tick count (default 20) |
+| `bench.c` | the pi/factorial workload of `src/bench/bench.c` plus OS microbenchmarks (used by `make bench-c4ix`) |
+| `cycles.c` | prints the VM cycle counter first thing; the counterpart of `src/tests/cycles.c` under C4KE |
+| `fmt.c` | prints every format case through both `printf` paths (kernel-trapped and libc4ix) for `make test-c4ix-fmt` |
+| `hello.c` | calls `printf` directly, no library: a trapped host opcode the kernel redirects. Built alone as `c4ix-hello.c4r` |
+| `uhello.c` | the same greeting through libc4ix only |
+| `gui.c` | runs `libjs/guest/gui-demo.c` as a C4IX task; prints `gui: not fitted` without the libjs display |
+| `vfsload.c` | `c4ix-vfsload`: fills the hierarchical VFS from `c4ix.vfs.txt` at boot (same manifest format as `src/c4ke/bin/vfsload.c`) |
+
+## Shell scripts
+
+Run by `c4ix-sh` with the script as its argument.
+
+| file | what |
+|---|---|
+| `test.sh` | the functional suite: C4KE's test coverage re-expressed as shell commands; the sixth `--demo` image, so `make test-c4ix` pins its output |
+| `bench.sh` | `bench c4ix-hello.c4r`, for `make bench-c4ix` |
+| `demo.sh` | a short tour of redirection and pipelines |
+| `stress.sh` | runs under abnormal scheduling pressure; deliberately not pinned by any target |
+
+## desktop/
+
+A Windows NT 4-style desktop, one C4IX task built from six modules and
+linked with libc4ix (`make c4ix-desktop.c4r`; the 32-bit build comes from
+`build-images.sh`). It needs the libjs display: start C4IX in the libjs
+page and type `desktop`.
+
+| file | what |
+|---|---|
+| `desktop.h` | what the modules share: screen size (800x600), window kinds, colours, the `d_*` drawing layer |
+| `wm.c` | the window manager: the only module that touches the display (`libjs/guest/gui.h`); windows, taskbar with clock, Start menu (including Run…), menu bars, dialogs |
+| `ui.c` | stateless widgets drawn through `wm.c` |
+| `term.c` | Command Prompt: a real `c4ix-sh` task on pipes, drawn through a VT100 subset, line-edited locally; Ctrl-C interrupts its foreground job |
+| `files.c` | Explorer: folder tree and file list over the VFS; double-click runs a program in a new Command Prompt |
+| `taskmgr.c` | Task Manager: Applications, Processes (CPU share over the last second), Performance |
+| `apps.c` | Notepad, Calculator, About |
+
+Kernel calls the desktop added (`SYS_AVAIL`, `SYS_CLOEXEC`, `SYS_INTR`)
+and the display registers it uses are described in
+[docs/c4ix-desktop.md](../../../docs/c4ix-desktop.md). It is tested
+headless by `libjs/tests/test-desktop.mjs` (part of `make test-libjs`).
+That doc still refers to the desktop as a single `user/desktop.c`; it is
+the `desktop/` folder now.

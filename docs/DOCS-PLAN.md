@@ -9,11 +9,37 @@ when the doc is written and checked against the code.
 Surveyed 2026-09-26. What exists today, per component, is noted under each milestone.
 
 ## D0 — The index: a reader can find everything
-- [ ] README.md: a component index — c4m, c4mp, c4mpg, c4th, c4fc, c4lc (+ c4sp), c4dos, C4KE, C4IX, c4bb, libjs, c4or1k, oisc4 — one line each, a link to its doc, and how to build/run it
-- [ ] README.md: drop the stale bits ("preprocessor soon" — the branch has cpp)
+- [x] README.md: a component index — c4m, c4mp, c4mpg, c4th, c4fc, c4lc (+ c4sp), c4dos, C4KE, C4IX, c4bb, libjs, c4or1k, oisc4 — one line each, a link to its doc, and how to build/run it
+- [x] README.md: drop the stale bits ("preprocessor soon" — the branch has cpp)
 - [ ] docs/README.md: a map of docs/ — which docs are current references, which are trackers, which are historical (next-session.md, FULL_STACK_ACHIEVEMENT.md, dos-rung-fixes.md)
 - [ ] docs/MILESTONES.md: add sections for c4th, c4fc, libjs, c4mp, c4mpg, c4dos (today it has none of them, and c4dos one mention)
 - [ ] docs/internals.md: fix the section order (§4.6 sits after Part 7) and add pointers to the components it never mentions
+
+## D0a — READMEs (2026-09-30)
+Tick a box only when the file's links resolve and every make target it names passes `make -n`.
+- [x] fixes found on the way: `inline.f` in C4FC_FORTH, the duplicate `c4lc_compile_par`, two stale Makefile comments, the unused root package.json
+- [ ] test-c4dos-c4fc: with inline.f loaded, c4fc compiles hello.c inside C4DOS but the 180-byte image it writes runs silently (the same source compiled by c4fc on the host runs) — found 2026-09-30, not fixed
+- [x] README.md — rewritten: c4m first (runs under any unmodified c4), graceful degradation, the Windows clock, the ladder, component index
+- [x] src/README.md — per-project detail and who-compiles-whom
+- [x] src/c4ke/README.md (+ bin/, extensions/)
+- [x] src/c4ix/README.md (+ user/)
+- [x] src/c4dos/README.md (+ fs/)
+- [x] src/c4cc/README.md (the .c4r format, c4rlink/c4rstrip/c4rdump)
+- [x] src/c4sp/README.md (+ lisp/) — c4sp and c4lc
+- [x] src/c4sc/README.md
+- [x] src/c4th/README.md (+ forth/)
+- [x] src/c4fc/README.md
+- [x] src/c4sh/README.md
+- [x] src/c4tui/README.md
+- [x] src/c4mp/README.md (stands in for the never-written c4mp design doc)
+- [x] src/oisc4/README.md (takes the OISC explainer from the old root README)
+- [x] src/bench/README.md
+- [x] src/tests/README.md
+- [x] src/c4lm/README.md
+- [x] src/c4bb/README.md rewritten (+ hw/, fw/, sim/, web/, tests/, fs/, tools/)
+- [x] src/c4or1k/README.md refreshed
+- [x] libjs/README.md rewritten (+ guest/)
+- [x] include/README.md
 
 ## D1 — c4m: the extended interpreter
 Today: README "C4M?" section; internals Part 3 (§3.1–3.6); docs/fused-opcodes.md.

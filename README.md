@@ -1,160 +1,183 @@
-C4KE - C4 Kernel Experiment
-=============================================
+c4, over-extended
+=================
+
+[c4](https://github.com/rswier/c4) is "C in four functions": a self-hosting
+C subset compiler and VM in about 500 lines. It was an exercise in minimalism.
+
+This fork is an exercise in over-extending it. Starting from a VM that
+unmodified c4 can still run, it has grown a whole stack. That includes three
+operating systems, a Lisp, a Forth, and three more C compilers, one written in
+that Lisp and one in that Forth. There is a multiprocessor VM, a one-instruction
+computer, and a microcoded breadboard CPU that runs in the browser, plus an
+OpenRISC emulator that boots Linux. Each OS on the ladder can build the next
+from source. On the breadboard, C4DOS builds C4KE, and C4KE builds C4IX.
+
+[`c4.c`](c4.c) itself is kept as upstream wrote it. The only changes are a
+portability shim and a little more `-d` debug output.
+
+
+c4m: an extended c4 that any c4 can run
+---------------------------------------
 
-c4 was "An exercise in minimalism."
+[`c4m.c`](c4m.c) ("C4 Multiload") is c4's compiler and VM plus the machinery
+an operating system needs. **It is written in the c4 subset, so any unmodified
+c4 can compile and run it:**
+
+	$ ./c4 c4m.c load-c4r.c -- src/tests/hello.c4r
+	yello
+
+That is plain c4 interpreting c4m, which loads and runs a relocatable image
+built by [c4cc](src/c4cc/). Compiled natively (`gcc -O2 -o c4m c4m.c`), the
+same source runs much faster and picks up signals, floats and a real clock.
+
+What c4m adds over c4:
+
+| Area | Additions |
+|---|---|
+| Compiler | Reads several `.c` files as one program (the last definition wins). `&func` gives a function's address, and any `int *` can be called (`JSRI`/`JSRS`). `switch`/`case`/`break` compile to a jump table (`JMPA`). `static`, `extern` and `__attribute__((…))` are accepted. |
+| Traps | `install_trap_handler()` runs C code on an unknown opcode, a cycle interrupt, a signal, a segfault, or a protected-mode violation. The handler receives `mode, a, bp, sp, returnpc` as parameters. **Assigning to them changes where execution resumes**, which is all a task switch needs. |
+| Cycle interrupt | `__c4_configure(CONF_CYCLE_INTERRUPT_INTERVAL, n)` gives preemption. `CONF_TRAP_RESTORES_INTERVAL` keeps the interrupt masked for the whole handler. |
+| Custom opcodes | `__c4_opcode(args…, OP)` executes any opcode number. Unknown ones trap, so an OS can define its own system calls as opcodes. |
+| Protected mode | I/O opcodes executed in user mode trap to the kernel. |
+| Library opcodes | `putchar`, `puts`, `memcpy`, `realloc`, `stacktrace`. |
+| Introspection | `__c4_info()` returns capability bits (plain c4 underneath, high-resolution timer, signals, float, protected mode, trap handler installed). `__c4_cycles()`, `__time()` and `__opcode("NAME")` are also available. |
+| Other | `__c4_jmp`, `__c4_adjust`, and `__c4_invoke` (function pointers on a VM with none, by rewriting a stub). Fused `LDL`/`STL`/`POPA`. `FLT` (binary32 float, native builds only). |
+
+[docs/internals.md](docs/internals.md) explains how each extension works, and
+[src/README.md](src/README.md#c4m-and-its-loaders) lists the related files.
+
+
+Everything degrades gracefully
+------------------------------
+
+Every layer asks what it is running on, then either uses a slower fallback or
+says plainly what it can't do. It does not crash.
+
+- **One source, two arms.** Plain c4 skips `#` lines but compiles everything
+  between them. c4m.c puts its fallbacks in an `#if C4_ONLY` arm, so plain c4
+  compiles the fallbacks. A real preprocessor takes the `#else` arm and binds
+  the host's clock, signals and `memcpy` instead.
+- **Ask before using.** Programs check `__c4_info()` bits before relying on a
+  feature. Tools check `C4I_TRAPH` before probing custom opcodes. For example,
+  C4KE turns protected mode on only when `C4I_PROT` is set, and uses the
+  breadboard's timer only when the board says it has one.
+- **Refuse by name.** [`c4l.c`](c4l.c) loads `.c4r` images under plain c4.
+  Given an image that needs an opcode plain c4 lacks, it names the
+  instruction ("needs JMPA … which plain c4 does not have") and points you
+  at c4m. `make test-c4l` pins this.
 
-C4KE is "an exploration in over-extending minimalism." It provides a multitasking kernel, shell, compiler, and utilities.
+| Host | What runs |
+|---|---|
+| native `c4m` | Everything: C4KE and C4IX with preemption, signals, float, real clock |
+| `./c4 c4m.c …` (unmodified c4) | Same programs, slower. No signals or float; the clock is `/proc/uptime` (see below) |
+| `./c4 c4l.c prog.c4r` | Images that use only c4's own opcodes, for example C4DOS's clockless build |
+| 32-bit builds (`c4m32`, `c4cc32`, …) | The images the breadboard and libjs load |
+| [c4bb](src/c4bb/) / [libjs](libjs/) | 32-bit c4m in JavaScript: C4DOS, C4KE and C4IX in a browser |
 
-C4KE runs under a modified `c4` interpreter called `c4m`, which itself can be run be in an unmodified `c4` interpreter.
-It does however run much faster under a natively compiled `c4m`.
+### Time on Windows
 
+Under unmodified c4, c4m reads the time from `/proc/uptime`, because plain c4
+has no clock of its own. **Windows has no `/proc/uptime`.** There c4m prints
+`c4m: unable to open uptime file` once, and `__time()` returns 0 from then on.
+Anything that measures or waits on time stops working. C4KE, for instance,
+hangs at boot while measuring instructions per second unless it is started
+with `-m` (skip the measurement) or `-c N` (a fixed cycle interval).
 
-Architecture
-------------
+A natively compiled c4m from this fork has a real clock: `clock_gettime`, or
+`timespec_get` under MSVC. **On Windows, build c4m natively to get working
+time measurement.**
 
-C4KE is a pre-emptive multitasking operating system. It uses a cycle-based trap to switch between tasks automatically,
-or custom opcodes that can manually switch tasks (cooperative multitasking.)
 
-`c4m` can trap on unknown opcodes, and this feature is used to implement C4KE's extended opcodes. All registers, including
-return addresses, can be modified inside these trap handlers. By swapping register values from one task with those from another,
-task switching is accomplished transparently to running tasks.
+The stack
+---------
 
-C4KE uses a custom executable format, the [C4 Relocatable](src/c4cc/asm-c4r.c). This format contains symbols and runtime patch information.
+	               c4  (unmodified)
+	                │ interprets
+	               c4m ──────────── c4mp (SMP), c4mpg (memory guard), oisc4 (one instruction)
+	                │ runs .c4r images
+	   ┌────────────┼──────────────┬──────────────┐
+	 C4KE          C4IX           C4DOS          c4sp · c4th · c4or1k · …
+	 (multitasking) (Unix-like)    (single task)
 
+	 the same machine, microcoded:  c4bb (breadboard, browser)   libjs (fast JS interpreter)
 
-Running
--------
+**The ladder.** On the breadboard, one power-on can climb from a DOS to a
+Unix-like OS, each system compiled by the one before it:
 
-To run under the extended `c4m` interpreter, use:
+1. C4DOS boots and rebuilds its own compiler to a fixed point.
+2. It then compiles C4KE from source and hands its RAM disk to that kernel
+   with `dosload`.
+3. C4KE unpacks C4IX's source, compiles its modules, links them, and boots
+   it.
 
-	make run
+See [docs/climbing-the-ladder.md](docs/climbing-the-ladder.md).
 
-To run under the original `c4` interpreter, use:
 
-	make run-c4
+Components
+----------
 
-See the [Makefile](Makefile) for additional `make` targets.
+**Machines**
 
-Once in C4KE, type `help` for a command listing, or `ls` to display runnable programs.
+- [c4m](c4m.c): the extended interpreter above, with its loaders [`load-c4r.c`](load-c4r.c) and [`c4l.c`](c4l.c).
+- [c4mpg](src/README.md#c4mpg): c4m with a memory-protection guard on every load, store and buffer.
+- [c4mp](src/c4mp/): a multiprocessor c4m-compatible VM (SMP, atomics, fused opcodes) with no built-in compiler.
+- [oisc4](src/oisc4/): the whole VM reduced to one instruction. Runs `.c4r` images bit-identically to c4m.
+- [c4bb](src/c4bb/): c4m as a microcoded 32-bit breadboard computer, simulated and drawn in the browser.
+- [libjs](libjs/): c4m as a direct JavaScript interpreter in a Web Worker, with a display the guest draws into.
+- [c4or1k](src/c4or1k/): an OpenRISC emulator (a jor1k port) compiled by c4lc. Boots an unmodified Linux kernel.
 
-Try `bench` or `innerbench` to test out how fast C4KE runs on your system.
+**Operating systems**
 
+- [C4KE](src/c4ke/): the C4 Kernel Experiment. A preemptive multitasking kernel written in plain c4, with a shell, ramfs, IPC and a mailbox.
+- [C4IX](src/c4ix/): a Unix-like second OS with a VFS, pipes, redirection and protected-mode syscalls. It runs C4KE's programs unmodified and has a windowed desktop on libjs.
+- [C4DOS](src/c4dos/): a single-tasking DOS that needs no traps at all, and so runs even under plain c4. It is the ladder's first rung.
 
-C4M?
-----
+**Toolchain**
 
-`c4m` is the `C4 Multiloader`, an extended version of [c4](https://github.com/rswier/c4) which apart from adding a few new opcodes, can also read multiple .c source files sequentially to output a single program.
+- [c4cc](src/c4cc/): a C compiler to the relocatable [`.c4r`](src/c4cc/README.md) format, plus `c4rlink`, `c4rstrip` and `c4rdump`.
+- [cpp](src/c4dos/): a C preprocessor in c4, byte-for-byte with `gcc -E` on this tree.
+- [c4sp and c4lc](src/c4sp/): a Lisp written in c4, and an optimizing C compiler written in that Lisp. c4lc compiles most of the tree's images.
+- [c4sc](src/c4sc/): c4lc's Lisp compiled to C, so the compiler runs fast inside the machine.
+- [c4th](src/c4th/): Forth-2012 CORE, with a self-hosting metacompiler.
+- [c4fc](src/c4fc/): a C99 compiler written in Forth. Its output is byte-identical to c4lc's.
 
-Changes over C4:
+**Libraries and programs**
 
-* Designed to run under unmodified C4: any version of `c4` should be able to run `c4m` without changes.
+- [c4sh](src/c4sh/): C4KE's shell.
+- [c4tui](src/c4tui/): a character-cell UI library.
+- [include/](include/): the headers every build shares, including `u0.h`, the C4KE user runtime.
+- [src/tests](src/tests/) and [src/bench](src/bench/): the test corpus and benchmarks.
 
-* Designed to be enhanced when compiled natively: basic signal handling is supported (SIGINT), terminal control to come in the future.
+**Shelved**
 
-* Reads all given source files on the command line, as if they were one big file.
+- [c4lm](src/c4lm/): an early microkernel for plain c4. It is on hold; its lesson became `c4l.c`'s invoke stub.
+- [docs/c4gpu-design.md](docs/c4gpu-design.md): a GPU-hosted VM. Investigation only, no code.
 
-* Related to the above, allows multiple instances of functions and variables to exist. If there are multiple `main`'s, it is the last one seen that gets used. This functionality was a hack to enable modularization before a preprocessor was implemented, and will be replaced by proper preprocessing soon.
 
-* Can use the address of functions (`&func`) to store into `int *` variables.
+Quick start
+-----------
 
-* Can call C4 functions stored in `int *`: `int *func; func = (int *)&test; func(1, 2);`.
+	make                  # c4, c4m, c4cc, c4rlink and every .c4r image
+	make run              # C4KE under native c4m; type `help` or `ls`, try `bench`
+	make run-c4           # the same kernel under unmodified c4 (slow)
+	make test             # the core suite
 
-* Trap handlers: C code called when an event occurs. `c4m` additionally supports some POSIX signals, like SIGINT.
+	make run-c4ix         # C4IX's shell
+	make run-c4dos        # C4DOS's A> prompt
+	make run-c4dos-build  # a rung of the ladder: C4DOS builds C4KE from source on its floppy
 
-* Traps on unknown opcodes for custom handling or new opcodes implemented in C.
+	make serve-c4bb       # the breadboard: http://localhost:8471/src/c4bb/web/index.html
+	make serve-libjs      # libjs and the C4IX desktop: http://localhost:8472/libjs/web/
+	                      # (both need `make c4bb-images` first)
 
-* Cycle based trap for task switching.
+Each project's README gives its own targets. The [Makefile](Makefile) has the
+rest, with a comment above each rule.
 
-* Opcodes `JSRI`, `JSRS`: `JSR` variants that use a global variable (`I`) or a stack variable (`S`). Generated by `c4m`.
 
-* Builtin `__c4_opcode`: Allows custom opcodes to be executed, used heavily by [u0.h](include/u0.h).
+Further reading
+---------------
 
-* Builtin `__c4_jmp`: Unconditional jump to target address, used by [c4ke.c](src/c4ke/c4ke.c) for custom opcode handling.
-
-* Builtin `__c4_adjust`: Adjust the stack manually, allowing stack allocation/deallocation at will.
-
-* Builtin `__opcode`, `__builtin`: Allows querying the interpreter's opcodes and builtin functions.
-
-* Fixes a potential stack overflow when using printf()
-
-
-Interesting files
------------------
-
-* [c4ke.c](src/c4ke/c4ke.c) - The C4 Kernel Experiment, main source file.
-
-* [load-c4r.c](load-c4r.c) - The "C4 Relocatable" executable loader and runner.
-
-* [c4cc.c](src/c4cc/c4cc.c) - A compiler for C4 - see also [asm-c4r.c](src/c4cc/asm-c4r.c), for compiling to `C4R` format.
-
-* [c4le.c](src/c4ke/bin/c4le.c) - A C4 Line Editor.
-
-* [c4m.c](c4m.c) - An updated C4 interpreter with new opcodes and support for traps. Can be run under C4.
-
-* [c4.c](c4.c) - The original C4 interpreter, with only enough modifications to compile portably.
-
-* [u0.h](include/u0.h) - User runtime for C4KE programs, interfaces with C4KE via extended opcodes.
-
-* [mandel.c](src/tests/mandel.c) - A port of [Johnlon's Integer Mandelbrot](https://github.com/Johnlon/mandelbrot) to run on C4KE
-
-* [tests](src/tests/) - Various test programs
-
-
-Other experiments
------------------
-
-* [libjs/](libjs/) - c4m in JavaScript: a direct interpreter that boots the 32-bit C4KE and C4IX images, in Node or in a browser Web Worker. See [docs/libjs-design.md](docs/libjs-design.md).
-
-* OISC4: One Instruction Set Computer for C4 — C4 implemented using a single instruction. **Working**: [src/oisc4/oisc4.c](src/oisc4/oisc4.c) runs `.c4r` images (from `c4cc` or `c4lc`) by translating them onto the one-instruction machine, verified bit-identical against the `c4m` loader (`make test-oisc4`). The self-hosted `c4` compiler and the `c4sp` Lisp interpreter both run inside it, and a c4lc-compiled `oisc4-lc.c4r` runs nested under `c4m`, plain `c4`, or oisc4 itself. See [docs/oisc4-design.md](docs/oisc4-design.md).
-
-	* The earlier partial attempt lives on in [src/tests/oisc-c4.c](src/tests/oisc-c4.c) (compiler) and [src/tests/oisc-min.c](src/tests/oisc-min.c) (interpreter); its post-mortem is in the design doc. The notes below describe the instruction model both share.
-
-	* The instruction is: `add source, incremental, destination`.
-
-		* `source` is a memory address to read from.
-
-		* `incremental` is a literal value to add to the value read from `source`.
-
-		* `destination` is the memory address to write the result to.
-
-	* Additionally, flags are set to indicate whether the final value written to `destination` was:
-
-		* `LT0`: less than `0`
-
-		* `EQ0`: equal to `0`
-
-		* `GT0`: greater than `0`
-
-		* Flags are either `0` to indicate `false`, or `3` (the size of an instruction in words) to indicate `true`
-
-	* Code can arbritrarily jump by storing results into `PC`, or add the value of one of the above flags followed by two jump instructions. The first would execute if the flag was false, and the second would if the flag was true:
-
-		```
-		EQ0, LABEL_1, PC                ; Jump using flag and address of LABEL_1
-		LABEL_1: ABS0, NOT_EQ0, PC      ; was false, jump to NOT_EQ0
-		         ABS0, WAS_EQ0, PC      ; was true, jump to WAS_EQ0
-		NOT_EQ0: ; do something
-		         ABS0, DONE, PC         ; unconditional jump
-		WAS_EQ0: ; do something else
-		DONE:
-		```
-	
-	* Instructions in memory are able to be altered, and combined with jumping allow for later instructions to be modified based on conditions. This is used heavily by the [compiler](src/tests/oisc-c4.c) to implement many C4 instructions.
-
-		* For example, to implement the `LOAD INT` C4 instruction (`LI`), the value of a memory location needs to be dereferenced. This is done by altering a future instruction to change the `source` to the value read from memory:
-
-			```
-			      ABS0, some_variable, LOC1   ; Read from a variable (a memory address really),
-			                                  ; which must use ABS0 to get the true memory address,
-			                                  ; and alter the source in the next instruction.
-			LOC1: PLACEHOLDER, 0, R0          ; Read from altered source and store into register R0.
-			```
-
-			* `PLACEHOLDER` is just a visual reference to know where something will be updated. It could also be a different part of the instruction.
-
-	* By using such logic, all of C4 is able to be implemented, though cheated a little by the use of `DEVICE`s.
-
-	* `DEVICE`s: theoratical hardware devices listening on specific memory addresses, and triggering some sort of behaviour when read or written.
-
-		* Currently all math and IO operations are implemented as `DEVICE`s.
-
+- [src/README.md](src/README.md): every project in more detail, and who compiles whom.
+- [docs/internals.md](docs/internals.md): how c4m, C4KE and C4IX work inside.
+- [docs/MILESTONES.md](docs/MILESTONES.md): what was built, in order.
+- [docs/](docs/): a design doc for most projects.

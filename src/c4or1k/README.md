@@ -1,93 +1,157 @@
-# c4or1k
+# c4or1k — an OpenRISC emulator that boots Linux, compiled by c4lc
 
-An OR1000/OpenRISC emulator, capable of booting Linux, written in C
-and compiled by c4lc. A port of [jor1k](https://github.com/s-macke/jor1k)
-(a JavaScript OR1000 emulator) to the C4 VM toolchain. See
-`docs/c4or1k-design.md` for the milestone roadmap and design rationale.
+c4or1k emulates an OR1000/OpenRISC machine well enough to boot an unmodified
+Linux kernel to an interactive BusyBox shell. It is a port of
+[jor1k](https://github.com/s-macke/jor1k), a JavaScript OR1000 emulator, to
+the C4 toolchain: the sources are in the c4lc dialect of C, compiled by c4lc
+into `.c4r` images that run under c4m or c4mp. The same unmodified sources
+also compile with gcc, through a small shim, into a native executable.
 
-Console only -- no framebuffer, no keyboard device. As of M18 the VM
-puts its own terminal in raw mode (a new c4mp `TRAW` opcode / native
-termios), so a typed **Ctrl+C is forwarded to the guest** instead of
-killing the emulator; `Ctrl-] x` quits. (`run-c4or1k.sh` remains as an
-external fallback for the plain-c4m path, which has no TRAW opcode.)
+Console only: no framebuffer and no keyboard device. The kernel boots from
+the reset vector, mounts a root filesystem over 9p (virtio-mmio), brings up
+`eth0` with a DHCP lease from a synthetic LAN peer, and reaches a shell on
+the first UART. In boot mode the terminal is put in raw mode, so a typed
+Ctrl+C reaches the guest; `Ctrl-] x` quits the emulator and `Ctrl-] Ctrl-]`
+sends a literal Ctrl-].
 
-## Status: M6 done -- it boots real Linux to an interactive shell. M7-M13: hosted perf work (c4mp host, -mcisc, a real JIT emitting c4m bytecode -- fastest hosted config ~2x the original). M14: the NATIVE build boots the same kernel to the same shell in ~4 SECONDS (vs ~25 hosted minutes originally) -- byte-identical output, same sources. M15: an ethmac ethernet device + a pure-C synthetic LAN peer bring eth0 up and get a real DHCP lease (native and hosted alike). M16: the EXTENDED filesystem (basefs+fs.json merged, ~7000 inodes of real userland -- bash/perl/X libs) boots natively, and OR1000 single-precision floating point (lf.*) is implemented (native), so awk/perl math works. M17: the guest idles nicely -- PMR-doze detection drops a pegged core to ~4% at the shell. M18: raw terminal mode + Ctrl+C forwarding, and a synthetic DNS responder so `ping google.com` resolves. (M0-M4 preserved in docs/c4or1k-design.md)
+Status: milestones M0–M18 are done. M0–M6 got real Linux to a shell; M7–M13
+were hosted performance work (c4mp as host, c4lc's `-mcisc`, a JIT that
+emits c4m bytecode); M14 the native build; M15 ethernet and DHCP; M16 the
+extended filesystem and single-precision floating point; M17 idle detection
+(an idle shell drops to about 4% CPU); M18 raw terminal mode, Ctrl+C
+forwarding, and a synthetic DNS responder. The native build boots to the
+shell in about 3–4 seconds (M15 measured 3.6 s, M17 3 s); the best hosted
+configuration took about 13 minutes for the same boot.
 
-    make c4or1k-boot-native N=700000000      # THE fast path: gcc-compiled emulator, full Linux boot to a real shell in ~7s (see M14)
-    make c4or1k-boot-native-ext N=900000000  # M16: same, but the EXTENDED filesystem (real bash/perl/X userland; native only)
+## Needs: the jorconsole checkout
 
-    make c4or1k-boot                # boot a real kernel under c4m; N=<steps> to change the budget (default 2M)
-    make c4or1k-boot-mp              # same, under c4mp instead -- ~18-20% faster, same .c4r, zero source changes (see M11)
-    make c4or1k-boot-cisc            # under c4mp, compiled with c4lc's -mcisc (LXI/SXI fused opcodes) -- c4m cannot run this image at all (see M12)
-    make c4or1k-boot-jit             # M13 v2: the FASTEST configuration -- the JIT build under c4mp. Translates guest code (ALU runs, loads/
-                                     # stores, fused loops, call/return/branch terminators) into real c4m bytecode at runtime; ~28% faster than
-                                     # M12 on the standard 60M-instruction benchmark with 56% of instructions running inside translated blocks,
-                                     # byte-identical output. On by default in this image (-nojit to disable). See docs/c4or1k-design.md's M13
-                                     # section for the whole story, including why v1 of this same JIT was net-slower and what changed.
+The kernel, the root filesystem and the reference CPU are not in this repo.
+The Makefile expects [jorconsole](https://github.com/andrakis/jorconsole)
+checked out beside it as `../jorconsole`, with its `jor1k` and
+`jor1k-sysroot` submodules:
 
-Boots an unmodified `vmlinux.bin` from the reset vector through the
-full kernel init sequence, mounts basefs.json's root filesystem over
-9p (`VFS: Mounted root (9p filesystem) readonly on device 0:12.`),
-execs real userspace (`/etc/init.d/rcS`, `busybox`, `udhcpc` -- which
-now gets a real DHCP lease from the M15 ethernet device + synthetic
-LAN peer), and reaches a real, interactive
-BusyBox shell prompt (`~ $`) via `/etc/inittab`'s `ttyS1::respawn:
--login -f root`. Needs a large instruction budget (order of hundreds
-of millions to low billions, depending mostly on `udhcpc`'s own DHCP
-retry/backoff timing) and `stdbuf -oL` to see the output live, since
-stdio is fully buffered against a non-tty output otherwise. See
-`docs/c4or1k-design.md`'s M6 section for the exact transcript and a
-known rough edge (the console's own login, ttyS0, hasn't yet been
-demonstrated with live typed input racing against `ttyS1`'s).
+| Path | Used for |
+|---|---|
+| `../jorconsole/jor1k-sysroot/or1k/vmlinux.bin` | The kernel (already decompressed). |
+| `../jorconsole/jor1k-sysroot/or1k/basefs.json` and `../jorconsole/jor1k/sys/or1k/basefs` | The standard root filesystem. |
+| `../jorconsole/jor1k-sysroot/fs.json` and `../jorconsole/jor1k-sysroot/fs` | The extended filesystem (bash, perl, X libraries). |
+| `../jorconsole/jor1k/js/worker/or1k/safecpu.js` | jor1k's own CPU, which `tools/or1k-oracle.js` runs for the M1/M2 checks. |
 
-Two real bugs surfaced getting here, both found by bisecting a real
-boot under `gdb` rather than by inspection -- `bootfs.c`'s 32-bit
-record reader wasn't sign-extending `-1` sentinels (silently misread
-as a huge positive "index" that walking an empty directory then
-dereferenced as a wild pointer), and `basefs.json`'s `/etc/inittab`
-turns out to spawn a second getty on a second UART this project didn't
-have yet. See `docs/c4or1k-design.md`'s M5 section for both stories in
-full -- they're worth reading if you're adding a new device or backing
-store, since both bugs were badly misleading before they were pinned
-down.
+`tools/mkbootfs.js` flattens a filesystem manifest and its files into
+`images/bootfs.idx` + `images/bootfs.blob` (or `bootfs-ext.*`), because
+`bootfs.c` has no JSON parser. The boot targets build these on demand; they
+are generated and untracked (`src/c4or1k/.gitignore` ignores `images/`).
+Building the blob decompresses files with the host's `bunzip2`.
 
-Devices this project doesn't implement (virtio-block, DRM, ATA,
-keyboard, touchscreen, RTC -- ethernet IS implemented as of M15) all
-probe and fail *gracefully*
-instead of wedging the boot -- `mmio.c` reports each unique
-unimplemented device once (`warn_once()`), not once per access, since
-several of them get polled continuously once real Linux is actually
-running rather than panicking early.
+## Build
 
-`cpu.c`/`mem.c` implement the full non-privileged OR1000 integer ISA,
-SPRs, the SR flag register, exception delivery, and DTLB/ITLB miss +
-permission checks (not a page-table walk -- that's the guest kernel's
-job). `uart.c` (two units -- ttyS0 is the real console, ttyS1 has no
-host backing and just blocks forever like an unconnected port),
-`mmio.c`, `console.c` make it interactive. `boot.c` loads a raw kernel
-image and patches its DTB's memory-size property. `bootfs.c` +
-`virtio.c` + `virtio9p.c` are the 9p root filesystem -- an in-memory
-inode tree loaded from `tools/mkbootfs.js`'s offline flattening of
-jor1k's `basefs.json`, served over a virtio-mmio transport and a
-9P2000.L protocol handler.
+| Target | Output |
+|---|---|
+| `make c4or1k.c4r` | The hosted image, c4lc `-O`. Runs under c4m or c4mp. |
+| `make c4or1k-cisc.c4r` | Built with c4lc `-mcisc`, which emits c4mp's `LXI`/`SXI`. Runs under c4mp only. |
+| `make c4or1k-jit.c4r` | Adds `jit.c` and `-D C4OR1K_JIT=1`: translates guest code into c4m bytecode at run time. |
+| `make c4or1k-native` | `gcc -O2 -include src/c4or1k/native.h` over the same sources. |
 
-    make c4or1k-m1-check           # M1: full ISA, diffed against jor1k
-    make c4or1k-m2-check           # M2: SPRs/exceptions/TLB, diffed against jor1k
-    make c4or1k-m3                 # M3: interactive echo server (real terminal)
-    make c4or1k-m3-check           # M3: same, piped input, diffed byte-for-byte
-    make c4or1k-m3-int-check       # M3: interrupt-driven variant of the same test
+The hosted builds compile each module separately and in parallel
+(`C4LC_JOBS`, default `nproc`), then link with c4rlink.
 
-M1/M2 are diffed bit-for-bit against jor1k's own `safecpu.js`
-(`tools/or1k-oracle.js`); M3's two echo servers are verified by piping
-known input through and diffing the echoed output. M1 caught a
-delay-slot bug in the *test program* (not cpu.c) plus two bugs in the
-oracle itself. M2 added a `.org` assembler directive (`tools/asm.py`)
-for planting exception handlers at real vector addresses, and
-surfaced the EPCR-offset distinction between `EXCEPT_SYSCALL` and
-every other exception type. See `docs/c4or1k-design.md`'s per-
-milestone sections for all of it.
+## Run
 
-M0's throughput result (~1.37M guest instructions/sec on a tight
-8-opcode loop) is preserved in the design doc; the full decode hasn't
-been re-benchmarked in isolation, though the M4 boot (~100M
-instructions in a few minutes) gives a rough real-workload figure.
+    c4or1k PROGRAM.bin                          test mode: run a flat big-endian binary at address 0, dump registers
+    c4or1k PROGRAM.bin -r                       console mode: the program talks to the UART until it halts
+    c4or1k vmlinux.bin -b MAXSTEPS [IDX BLOB]   boot mode: load a kernel, start at the reset vector
+                                                (MAXSTEPS 0 = unbounded; IDX/BLOB default to images/bootfs.*)
+    ... -nojit                                  last argument: turn translation off in the JIT build
+
+Hosted, prefix with `./c4m load-c4r.c -- c4or1k.c4r` or `./c4mp c4or1k.c4r`;
+native, run `./c4or1k-native`. The boot targets wrap this:
+
+| Target | Runs |
+|---|---|
+| `make c4or1k-boot-native N=700000000` | The native build, full boot to a shell. The fast path. |
+| `make c4or1k-boot-native-ext N=900000000` | The same with the extended filesystem. Native only; the blob is too large to be practical hosted. |
+| `make c4or1k-boot-mp` | `c4or1k.c4r` under c4mp. |
+| `make c4or1k-boot-cisc` | `c4or1k-cisc.c4r` under c4mp. |
+| `make c4or1k-boot-jit` | `c4or1k-jit.c4r` under c4mp: the fastest hosted configuration. |
+| `make c4or1k-boot` | `c4or1k.c4r` under c4m (see Limits). |
+
+`N` is the instruction budget and defaults to 2,000,000, which only gets
+partway through the kernel. A full boot needs hundreds of millions to low
+billions, depending mostly on `udhcpc`'s DHCP retry timing. When the output
+is not a terminal, run through `stdbuf -oL` to see it live.
+
+## Test
+
+None of these are in `make test`. The M1 and M2 checks build all three
+emulators and need `../jorconsole`.
+
+| Target | Checks |
+|---|---|
+| `make c4or1k-m1-check` | The full integer ISA, bit for bit against jor1k's `safecpu.js`, for the default, JIT and native builds. |
+| `make c4or1k-m2-check` | SPRs, exceptions and TLB, the same way. |
+| `make c4or1k-m3-check` | A polled UART echo program: piped input comes back byte for byte. |
+| `make c4or1k-m3-int-check` | The interrupt-driven version. |
+| `make c4or1k-m1`, `c4or1k-m2`, `c4or1k-m3` | The same programs, run without the diff (`m3` interactive). |
+
+The test programs are `tests/*.s`, assembled by `tools/asm.py` into
+`tests/*.bin` (untracked).
+
+## Layout
+
+| File | What it is |
+|---|---|
+| `cpu.c`, `cpu.h` | The OR1000 integer ISA, SPRs, the SR flags, exception delivery, DTLB/ITLB checks, and the batch runner `cpu_run_batch`. |
+| `fpu.c`, `fpu.h` | Single-precision floating point (`lf.*`). |
+| `jit.c`, `jit.h` | The JIT: guest code to c4m bytecode, cached by guest physical address. Only in `c4or1k-jit.c4r`. |
+| `mem.c`, `mem.h` | Guest RAM. |
+| `mmio.c`, `mmio.h` | Routes a physical address to a device by its top byte; reports each unimplemented device once. |
+| `uart.c`, `uart.h` | Two 16550-compatible UARTs. The first is the console; the second has no host backing. |
+| `console.c`, `console.h` | Non-blocking stdin polling, raw mode and the `Ctrl-]` escape. |
+| `virtio.c`, `virtio.h` | The virtio-mmio transport. |
+| `virtio9p.c`, `virtio9p.h` | The 9P2000.L server for the root filesystem. |
+| `bootfs.c`, `bootfs.h` | The in-memory inode tree loaded from `bootfs.idx`/`bootfs.blob`. |
+| `eth.c`, `eth.h` | The OpenCores ethmac controller. |
+| `net.c`, `net.h` | The synthetic LAN peer: ARP, DHCP, ICMP echo, DNS. |
+| `boot.c`, `boot.h` | Loads the kernel and patches its device tree's memory size. |
+| `main.c` | Argument handling and the three modes. |
+| `native.h` | The shim force-included by the native build: libc headers, `#define int long`, `__time`, `__c4_cycles`, and termios for raw mode. |
+| `run-c4or1k.sh` | Puts the terminal in raw mode from outside, then runs `c4m load-c4r.c`. Used by the M3 targets. |
+| `tools/asm.py` | A two-pass OR1000 assembler for the test programs. `tools/asm_m0.py` is M0's original hand-assembler. |
+| `tools/or1k-oracle.js` | Runs a test binary through jor1k's `safecpu.js` and dumps state in `main.c`'s format. |
+| `tools/mkbootfs.js` | Flattens `basefs.json` (and optionally `fs.json`) into `bootfs.idx`/`bootfs.blob`. |
+| `tests/` | The M1–M3 test programs. |
+
+## Hosts
+
+| Host | Status |
+|---|---|
+| Native (`c4or1k-native`) | Full boot, standard and extended filesystem, raw mode through termios. |
+| c4mp | Runs every hosted image, including `-mcisc` and the JIT build. Raw mode through c4mp's `TRAW` opcode. |
+| c4m | Runs `c4or1k.c4r` and `c4or1k-jit.c4r` in test and console mode (the M1/M2/M3 checks). c4m has no `TRAW`, so boot mode stops (see Limits), and it cannot run the `-mcisc` image. |
+
+The hosted images are 64-bit, so they do not run on c4bb or libjs.
+
+## Limits and known issues
+
+- `make c4or1k-boot` runs boot mode under c4m, and boot mode calls
+  `__c4_termraw` (the `TRAW` opcode) before the kernel starts. c4m names
+  `TRAW` but does not implement it, and c4m halts on such an opcode when no
+  trap handler is installed ("not an instruction this machine has"). So this
+  target is expected to stop there; use `c4or1k-boot-mp`, `-jit` or
+  `-native`. This comes from reading `c4m.c` and `main.c`; it was not re-run
+  for this README.
+- Real network access is not there yet: the LAN peer is synthetic. `ping`
+  to a name resolves to a made-up 11.x.x.x address that the gateway answers.
+- The extended filesystem is native only.
+- Devices not implemented (virtio-block, DRM, ATA, keyboard, touchscreen,
+  RTC) probe and fail without stopping the boot.
+- The second getty, on the unbacked second UART, blocks forever, as an
+  unconnected port would.
+
+## Docs
+
+[docs/c4or1k-design.md](../../docs/c4or1k-design.md) has a section per
+milestone with transcripts, measurements and the bugs found on the way. Its
+opening paragraph has drifted: it says raw mode is external (`run-c4or1k.sh`)
+and not provided by the VM, which M18 changed, and it names `make
+c4or1k-m0`, which no longer exists.

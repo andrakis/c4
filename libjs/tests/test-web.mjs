@@ -10,8 +10,8 @@
 // so and fails; it does not go looking for another browser.
 //
 // The page is served from here and reached through the code-server proxy
-// (https://PORT.code.home.stargazer.onl), falling back to the LAN
-// address. If the proxy asks for a login, the code-server password from
+// (https://PORT.<C4_PROXY_DOMAIN>, see src/c4bb/tools/proxy-domain.mjs)
+// when one is configured, falling back to the LAN address. If the proxy asks for a login, the code-server password from
 // ~/.config/code-server/config.yaml is used (authorised 2026-09-11).
 //
 // Only the tab this opens is closed.
@@ -21,6 +21,7 @@ import { homedir, networkInterfaces } from 'node:os';
 import { join } from 'node:path';
 import { Browser } from './cdp.mjs';
 import { makeServer } from '../serve.mjs';
+import { proxyUrl } from '../../src/c4bb/tools/proxy-domain.mjs';
 
 const PORT = Number(process.env.LIBJS_PORT || 8473);
 const GUI = process.argv.includes('--gui');
@@ -30,7 +31,7 @@ const CDPS = process.env.LIBJS_CDP ? [process.env.LIBJS_CDP] : ['http://127.0.0.
 const lan = Object.values(networkInterfaces()).flat()
   .find(n => n && n.family === 'IPv4' && !n.internal && !n.address.startsWith('172.17.'))?.address || '127.0.0.1';
 const BASES = process.env.LIBJS_URL ? [process.env.LIBJS_URL]
-  : [`https://${PORT}.code.home.stargazer.onl`, `http://${lan}:${PORT}`];
+  : [proxyUrl(PORT), `http://${lan}:${PORT}`].filter(Boolean);
 
 let password = null;
 try {

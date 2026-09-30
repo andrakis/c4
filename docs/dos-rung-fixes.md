@@ -676,7 +676,7 @@ That was the specific thing that could not work before.
 
 ## Round two, verified
 
-Driven over raw CDP to the **Chromebook** (192.168.1.220, `ssh -N -L 9223:127.0.0.1:9222`)
+Driven over raw CDP to the **Chromebook** (`ssh -N -L 9223:127.0.0.1:9222` to it)
 with the page served through the code-server proxy, because the desktop CDP was in
 use by another session. Playwright's `connectOverCDP` times out enumerating targets
 on that box even at 90s -- a raw CDP client over the websocket connects instantly and

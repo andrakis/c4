@@ -16,6 +16,7 @@ import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { networkInterfaces } from 'node:os';
+import { proxyUrl } from '../src/c4bb/tools/proxy-domain.mjs';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const args = process.argv.slice(2);
@@ -53,7 +54,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       .find(n => n && n.family === 'IPv4' && !n.internal)?.address;
     console.log(`c4m.js: http://localhost:${PORT}/libjs/web/`);
     if (lan) console.log(`        http://${lan}:${PORT}/libjs/web/`);
-    console.log(`        https://${PORT}.code.home.stargazer.onl/libjs/web/`);
+    const proxy = proxyUrl(PORT);
+    if (proxy) console.log(`        ${proxy}/libjs/web/`);
     if (ISOLATE) console.log('        (cross-origin isolated)');
   });
 }

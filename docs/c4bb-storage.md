@@ -1209,16 +1209,16 @@ from that machine — the same endpoint the embedder's harnesses use.
 
 Getting the page to it took a detail. The embedder is loaded on the
 remote box as `localhost:5189` through a forwarded port, and that port
-is the embedder's. The house convention is
-`https://PORT.code.home.stargazer.onl`, which reaches `localhost:PORT`
-here through code-server's proxy — so the test tries that first and
+is the embedder's. A port proxy, when one is configured
+(`https://PORT.<C4_PROXY_DOMAIN>`, see `src/c4bb/tools/proxy-domain.mjs`),
+reaches `localhost:PORT` here through code-server — so the test tries that first and
 falls back to `http://LAN-IP:PORT`. Both work for c4bb, because unlike
 the embedder it needs no secure context: plain ES modules and **IndexedDB**
 are both fine on a LAN origin, which the test asserts rather than
 assumes, since every medium depends on it.
 
-    test-web: https://8479.code.home.stargazer.onl wants a code-server login; trying the next
-    test-web: http://127.0.0.1:9222 -> http://192.168.1.202:8479/src/c4bb/web/index.html
+    test-web: https://8479.<proxy-domain> wants a code-server login; trying the next
+    test-web: http://127.0.0.1:9222 -> http://<lan-ip>:8479/src/c4bb/web/index.html
       ok   the panel draws a row per drive
       ok   IndexedDB is available on this origin
       ok   all four firmware stages are offered
@@ -1233,8 +1233,8 @@ assumes, since every medium depends on it.
     test-web: OK
 
 (The code-server session cookie is scoped to whichever subdomain you
-logged in at — logging in at `code.home.stargazer.onl` itself sets it
-for `.code.home.stargazer.onl` and every port subdomain under it.)
+logged in at — logging in at the proxy domain itself sets it for
+every port subdomain under it.)
 
 **It is somebody else's browser**, and two things follow. The tab count
 is taken before and after and asserted equal; only the page the test

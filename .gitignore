@@ -71,3 +71,6 @@ c4or1k-native
 /c4dos-c4ix32/
 /c4ix-src.tar
 /c4rlink32.c4r
+
+# machine-specific proxy domain for the browser gates (src/c4bb/tools/proxy-domain.mjs)
+.proxy-domain

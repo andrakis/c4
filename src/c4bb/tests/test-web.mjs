@@ -19,8 +19,9 @@
 // port is the embedder's dev server and is in use. Two ways that do work,
 // tried in this order:
 //
-//   https://PORT.code.home.stargazer.onl   the house convention -- that
-//       host reaches localhost:PORT here. HTTPS, so no question about
+//   https://PORT.<C4_PROXY_DOMAIN>          a port proxy, when configured
+//       (src/c4bb/tools/proxy-domain.mjs) -- that host reaches
+//       localhost:PORT here. HTTPS, so no question about
 //       any API. It goes through code-server, so the browser needs a
 //       code-server session; without one it lands on /login and this
 //       falls through to the next.
@@ -41,6 +42,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { networkInterfaces } from 'node:os';
+import { proxyUrl } from '../tools/proxy-domain.mjs';
 
 const ROOT = new URL('../../..', import.meta.url).pathname;
 const PORT = Number(process.env.C4BB_PORT || 8479);
@@ -56,11 +58,11 @@ function lanAddress () {
   }
   return '127.0.0.1';
 }
-const RELAY = `https://${PORT}.code.home.stargazer.onl`;
+const RELAY = proxyUrl(PORT);
 const LAN = `http://${lanAddress()}:${PORT}`;
 const BASES = process.env.C4BB_URL ? [process.env.C4BB_URL]
             : LOCAL ? [`http://localhost:${PORT}`]
-            : [RELAY, LAN];
+            : [RELAY, LAN].filter(Boolean);
 
 // Playwright is not vendored here; the sibling checkouts have it, and
 // the embedder's harness looks in the same places.

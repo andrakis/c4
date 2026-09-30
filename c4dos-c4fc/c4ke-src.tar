@@ -1,5 +1,5 @@
 C4TAR1
-c4ke.c 164176
+c4ke.c 164677
 ///
 // C4 Kernel Experiment (C4KE)
 //
@@ -24,12 +24,17 @@ c4ke.c 164176
 //             c4m load-c4r.c -- c4ke                     # Run under a c4m interpreter
 //             c4 c4m.c load-c4r.c -- c4ke                # Run under a c4m interpreter within c4
 //
-// This kernel has some optional extras if compiled with them:
-//  - c4ke_ipc.c  - InterProcess Communication
-//  - c4ke_plus.c - Support for advanced features of c4plus
+// Kernel extensions (src/c4ke/extensions/, #included at the end of this file; absent when
+// c4m compiles this file from source, since c4m has no preprocessor):
+//  - c4ke_ipc.c  - InterProcess Communication by signals
+//  - c4ke_plus.c - Support for advanced features of c4plus (placeholder; no c4plus host)
+//  - c4ke_pm.c   - Protected mode, when built with -DCONFIG_ENABLE_PM=1 on a c4m with C4I_PROT
+//  - c4ke_dos.c  - The C4DOS hand-over: seeds the RAM filesystem from the DOS RAM disk
+//  - c4ke_mbox.c - Message frames: the c4bb host mailbox and per-task inboxes
+// See src/c4ke/extensions/README.md.
 //
-// See u0.c for the user mode interface to the kernel. u0.c is used for most programs compiled to
-// run under C4KE.
+// See include/u0.h for the user mode interface to the kernel. u0.h is used for most programs
+// compiled to run under C4KE.
 //
 // This kernel focuses on being as simple as possible. Features such as filesystems are implemented
 // in microservices (see c4ke.vfs.c) rather than being part of the kernel. There are two main reasons:
@@ -37,7 +42,9 @@ c4ke.c 164176
 //  - Keep it compatible with c4m. C4CC supports many more features than c4m, and services can take
 //    advantage of these improvements.
 //
-// The kernel supports (TODO but has not implemented) message passing and waiting (with timeouts.)
+// Message passing: c4ke_mbox.c gives each task an inbox (OP_MSG_SEND/RECV), connects the
+// c4bb host mailbox (OP_MBOX_*), and OP_MBOX_AWAIT waits for either with a timeout;
+// include/c4ke_mbox.h is the user side.
 //
 // This program compiles but does nothing useful under GCC.
 // This GCC-compatibility is provided so that IDE's can syntax check the file.
@@ -63,12 +70,11 @@ c4ke.c 164176
 // These executables are not interpreted, merely loaded and called directly
 // from the code that loaded it, as any other C function would be.
 //
-// Note that C4 only supports one keyboard entry method - a very primitive
-// readline supported by libc that allows text to be entered. Arrow keys
-// and other navigation are not supported, and the entire kernel is stopped
-// until the user presses enter, which disables task switching while awaiting
-// input. It does not seem feasible to implement any other method without
-// significantly altering C4 itself.
+// Keyboard input is line-based: C4 offers only libc's read, with no
+// arrow keys or other navigation. A plain blocking read stops the whole
+// kernel until Enter (eshell still reads that way). c4sh, the default
+// shell, instead opens /dev/stdin with O_NONBLOCK and sleeps between
+// polls, so other tasks keep running while it waits for a line.
 //
 // The shell can run programs in the background using the & symbol, just like
 // linux. Otherwise, a program will run in the foreground until it is done.
@@ -6156,9 +6162,14 @@ static int plus_shutdown () {
 static int __attribute__((constructor)) plus_constructor () {
 	kext_register("plus", (int *)&plus_init, (int *)&plus_start, (int *)&plus_shutdown);
 }
-src/c4ke/extensions/c4ke_pm.c 14151
+src/c4ke/extensions/c4ke_pm.c 14570
 // C4KE protected mode support extension.
-// STATUS: Shelved, makes the kernel slow and unstable.
+// STATUS: optional, off by default. Compiled in only with -DCONFIG_ENABLE_PM=1
+// (include/c4ke/config.h defaults it to 0) and active only on a c4m that reports
+// C4I_PROT. It was once shelved as slow and unstable; it now builds all of C4IX
+// under protection at about +13% cost, and `make test-task-mem` builds its own PM
+// kernels so it stays working (docs/task-memory.md). It stays off by default because
+// it changes the protection model for every task and syscall.
 //
 // Handles protected mode violations for system calls:
 //  o Output (PUTS, PRTF)
@@ -8525,7 +8536,7 @@ static void __print_stack (int *sp) {
 #undef STACK_WIDTH
 
 #endif
-include/c4dos.h 10217
+include/c4dos.h 10621
 // c4dos.h -- the transient-side C4DOS API.
 //
 // C4DOS loads a program into its own memory and jumps to it, so DOS's
@@ -8626,9 +8637,15 @@ int __c4dos_arm () {
   return __c4dos_slot != 0;
 }
 
+// call0 passes a dummy argument on purpose: c4lc -O turns a bare
+// "JSR f; LEV" into a tail call that enters f past its first word, and
+// the stub's first word is the JMP it rewrote itself into -- so a
+// zero-argument call re-ran the stub's body and rewrote the caller.
+// With an argument the call is followed by ADJ and stays a call.
+// (src/c4dos/c4dos.c's invoke0 had the same bug, 2026-09-30.)
 int __c4dos_call0 (int *code) {
   *__c4dos_slot = (int)code;
-  return __c4dos_stub();
+  return __c4dos_stub(0);
 }
 int __c4dos_call1 (int *code, int a) {
   *__c4dos_slot = (int)code;

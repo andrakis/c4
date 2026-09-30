@@ -73,7 +73,15 @@ int stub () {
   return 0;
 }
 
-int invoke0 (int *code) { *c4l_stub_slot = (int)code; return stub(); }
+// invoke0 passes a dummy argument on purpose. c4lc -O turns a bare
+// "JSR f; LEV" into a tail call, JMP f+2, which enters f PAST its first
+// word -- and the stub's first word is the JMP it rewrote itself into.
+// A zero-argument stub() call from here therefore re-ran the stub's
+// original body, which rewrote whatever code sat near the caller: under
+// C4DOS the first program with a destructor (c4th, anything built with
+// stdarg.h) left the next one silent or crashing. With an argument the
+// call is followed by ADJ, which is not a tail call. invoke1/2 always were.
+int invoke0 (int *code) { *c4l_stub_slot = (int)code; return stub(0); }
 int invoke1 (int *code, int a) { *c4l_stub_slot = (int)code; return stub(a); }
 int invoke2 (int *code, int a, int b) { *c4l_stub_slot = (int)code; return stub(a, b); }
 

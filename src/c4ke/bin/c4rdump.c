@@ -9,23 +9,31 @@
 
 enum { CH_TAB = 9 };
 
+// Disassemble the code segment. c4cc leaves word 0 unused (it emits
+// with *++e, as c4 does), while c4lc's code starts at word 0 with the
+// first function's ENT -- so start at 0 when that word is an ENT. Opcodes
+// that carry an operand: everything up to ADJ, JSRI/JSRS, and the fused
+// LDL..IMMP and STL (docs/fused-opcodes.md). An opcode past the name
+// table prints as ?N rather than indexing off its end.
+enum { OP_LDL = 79, OP_IMMP = 84, OP_STL = 87 };
 void c4r_dump_code (int *c4r) {
-	int *e, *le;
-	int *hdr, codelen;
-	int *x;
+	int *base, *le, *e;
+	int *hdr, nnames, op;
 	hdr = (int *)c4r[C4R_HEADER];
-	le = (int *)c4r[C4R_CODE];
-	e = le + hdr[C4R_HDR_CODELEN] - 1;
-	x = 0;
-	printf("Disassemble code from 0x%x - 0x%x (%d instructions)\n", le, e, (int)(e - le));
-	printf("Instructions @ 0x%x\n", c4cc_instructions);
+	base = le = (int *)c4r[C4R_CODE];
+	e = base + hdr[C4R_HDR_CODELEN];
+	nnames = 0;
+	while (c4cc_instructions[nnames * 5]) ++nnames;
+	if (*le != ENT) ++le;
+	printf("Disassemble code from 0x%x - 0x%x (%d words)\n", base, e, (int)(e - base));
 	while (le < e) {
-		printf("0x%x: ", x);
-		++le;
-		printf("%8.4s", &c4cc_instructions[*le * 5]);
-		if (*le <= ADJ || *le == JSRS || *le == JSRI) printf(" %ld\n", *++le);
+		printf("%6d: ", (int)(le - base));
+		op = *le++;
+		if (op >= 0 && op < nnames) printf("%8.4s", &c4cc_instructions[op * 5]);
+		else printf("     ?%d", op);
+		if (le < e && (op <= ADJ || op == JSRS || op == JSRI ||
+		    (op >= OP_LDL && op <= OP_IMMP) || op == OP_STL)) printf(" %ld\n", *le++);
 		else printf("\n");
-		++x;
 	}
 }
 

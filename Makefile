@@ -282,7 +282,7 @@ test-cpp: cpp $(C4) $(C4CC)
 #   c4dos-clock.c4r  the same plus TIME, gated at runtime behind
 #                    CONFIG.SYS's DEVICE=CLOCK.SYS. The dev loop.
 #   c4dos32.c4r      32-bit clock build: the image c4bb boots, and the
-#                    one an embedder (HOMEWARD) wants.
+#                    one an embedder of c4bb wants.
 # Built by c4lc, not c4cc. C4DOS is the base rung of the ladder and is
 # reached by nothing below it, so what compiles it is a free choice --
 # and c4lc's -O is the better compiler: the 32-bit image drops from
@@ -1294,11 +1294,11 @@ serve-c4bb:
 	@echo "      pick c4ix32 or c4ke32, press Turbo, click the terminal, type."
 	@python3 -m http.server $(C4BB_PORT)
 
-# The whole HOMEWARD ladder, end to end: C4DOS builds C4KE, dosload
+# The whole ladder, end to end: C4DOS builds C4KE, dosload
 # hands the machine over, the kernel boots the init it was just handed,
 # and both toolchains complete a compile-link round trip in the RAM
 # filesystem. MINUTES long, and deliberately not part of any other
-# suite -- docs/homeward-ladder.md is the tracker.
+# suite -- docs/ladder-plan.md is the (completed) tracker.
 test-ladder: cpp $(C4) $(C4M) $(C4CC) c4sp
 	@bash src/c4bb/tests/test-ladder.sh
 
@@ -1558,7 +1558,7 @@ test-c4th-os: c4th c4th.c4r $(C4M) c4ix.c4r c4ix-sh.c4r c4ke.c4r c4dos-clock.c4r
 	# files sit beside the interpreter.
 	cd c4dos-c4th && printf 'RUN c4th.c4r core.f self1.f run-main.f\nEXIT\n' | \
 		$(CURDIR)/$(C4M) $(CURDIR)/load-c4r.c -- $(CURDIR)/c4dos-clock.c4r \
-		| sed -e '1,/^A>ECHO OFF/d' -e '$$d' -e 's/^A>//' | cmp - $(CURDIR)/.c4th_os_ref
+		| sed -e '1,/^A>ECHO OFF/d' -e '$$d' -e '/^A>$$/d' -e 's/^A>//' | cmp - $(CURDIR)/.c4th_os_ref
 	# C4IX: driven by C4IX's own shell, so every line is also a test of
 	# spawn, argv, the fd layer and redirection. The session compiles a
 	# program, runs what it built, then compiles the COMPILER and runs
@@ -1850,8 +1850,8 @@ C4FC_FORTH := src/c4th/forth/core.f src/c4th/forth/ext.f \
               src/c4fc/gen.f src/c4fc/parse.f src/c4fc/opt.f src/c4fc/c4fc.f
 
 C4DOS_FC_DISK := c4dos-c4fc
-$(C4DOS_FC_DISK): c4dos-clock.c4r c4th32.c4r $(C4R_C4RLINK) dostar.c4r \
-                  c4ke-src.tar dosload.c4r $(C4FC_FORTH) \
+$(C4DOS_FC_DISK): c4dos32.c4r c4th32.c4r c4rlink32.c4r dostar32.c4r \
+                  c4ke-src.tar dosload32.c4r $(C4FC_FORTH) \
                   $(SRCS)/c4dos/fs/CONFIG.SYS $(SRCS)/c4dos/fs/CC.BAT $(SRCS)/c4dos/fs/cc.f
 	@mkdir -p $(C4DOS_FC_DISK)
 	@sed 's/SIZE=[0-9]*/SIZE=16777216/' $(SRCS)/c4dos/fs/CONFIG.SYS > $(C4DOS_FC_DISK)/config.sys
@@ -1867,7 +1867,13 @@ $(C4DOS_FC_DISK): c4dos-clock.c4r c4th32.c4r $(C4R_C4RLINK) dostar.c4r \
 	@cp $(SRCS)/c4dos/fs/cc.f   $(C4DOS_FC_DISK)/cc.f
 	@printf 'int main(){ printf("built by c4fc, inside the machine\\n"); return 0; }\n' > $(C4DOS_FC_DISK)/hello.c
 	@cp c4th32.c4r $(C4DOS_FC_DISK)/c4th.c4r
-	@cp $(C4R_C4RLINK) dostar.c4r dosload.c4r c4ke-src.tar $(C4DOS_FC_DISK)/
+	@# The floppy is booted by c4dos32 on c4bb, so every image on it is
+	@# 32-bit, under the plain names DOS is asked for (the 64-bit ones it
+	@# carried until 2026-09-30 were refused as "64-bit image").
+	@cp c4rlink32.c4r $(C4DOS_FC_DISK)/c4rlink.c4r
+	@cp dostar32.c4r  $(C4DOS_FC_DISK)/dostar.c4r
+	@cp dosload32.c4r $(C4DOS_FC_DISK)/dosload.c4r
+	@cp c4ke-src.tar $(C4DOS_FC_DISK)/
 	@# ONE file, not sixteen: C4DOS's ARGVMAX is 16 tokens, so
 	@# "RUN c4th.c4r <fifteen .f files>" is silently truncated and
 	@# nothing happens. Concatenated in load order, which is also one
@@ -1878,9 +1884,10 @@ $(C4DOS_FC_DISK): c4dos-clock.c4r c4th32.c4r $(C4R_C4RLINK) dostar.c4r \
 
 # The whole loop in one command: C4DOS boots, loads c4fc, compiles a C
 # program, writes the image to its RAM disk through the API table, and
-# runs what it just built. Three minutes, so it is not in `make test`.
+# runs what it just built. About half a minute, so not in `make test`.
+# It types CC, so CC.BAT -- what a user would type -- is what is tested.
 test-c4dos-c4fc: c4dos32.c4r $(C4DOS_FC_DISK)
-	printf 'RUN c4th.c4r c4fc.f cc.f\nRUN hello.c4r\n' \
+	printf 'CC\nRUN hello.c4r\n' \
 	  | node src/c4bb/sim/cli.js -m 96 -d $(C4DOS_FC_DISK) c4dos32.c4r \
 	  | tee .c4dos_fc.log | grep -q "built by c4fc, inside the machine"
 	grep -q "^wrote the object" .c4dos_fc.log
@@ -2087,10 +2094,12 @@ C4LC_DIFF := c4_jailbreak factorial hello multifun puts reverse \
              tests c4lc_l2
 C4LC_DIFF_MASKED := global test_gcscan test-oisc test_printf
 C4LC_DIFF_PP := vararg2 test_vprintf
+# Every file c4lc.lisp loads: c4lc-pp.lisp only under -P/-D, but a rule
+# that uses the preprocessor must still rebuild when it changes.
 C4LC_LISP := src/c4sp/lisp/c4lc.lisp src/c4sp/lisp/c4lc-lex.lisp \
              src/c4sp/lisp/c4lc-parse.lisp src/c4sp/lisp/c4lc-gen.lisp \
-             src/c4sp/lisp/c4lc-tree.lisp src/c4sp/lisp/c4r.lisp \
-             src/c4sp/lisp/c4opt.lisp
+             src/c4sp/lisp/c4lc-tree.lisp src/c4sp/lisp/c4lc-pp.lisp \
+             src/c4sp/lisp/c4r.lisp src/c4sp/lisp/c4opt.lisp
 
 # c4lc -O builds of the three big images (L6). Each is smaller and
 # never slower than its c4cc twin; see docs/c4lc-design.md 12 for
@@ -2270,7 +2279,7 @@ test-c4bb-firmware: src/c4bb/images/climb
 
 # The browser front-end, in a real browser on real hardware (M5, M6).
 # It talks over CDP to the browser the user has open -- the same
-# endpoint ~/git/Homeward's harnesses use, reached by the SSH tunnel
+# endpoint the embedder's harnesses use, reached by the SSH tunnel
 # that runs outward from that machine to here. `--local` launches a
 # headless one instead.
 #
@@ -2295,8 +2304,8 @@ test-c4bb-climb: c4dos32.c4r $(C4DOS_IX_DISK)
 test-c4bb-install: test-c4bb-climb
 
 # What each rung is allowed to need, and what it must need
-# (docs/c4bb-storage.md M15). HOMEWARD's ladder is a ladder of opcodes:
-# the player extends their own CPU to climb it, so an image that reaches
+# (docs/c4bb-storage.md M15). The ladder is also a ladder of opcodes:
+# a machine extended one rung at a time must be able to climb it, so an image that reaches
 # past its rung is a milestone given away for free -- and an image that
 # does NOT reach past the rung below is a milestone that was never there
 # at all. `opscan -rungs` prints the table; it is defined in one place,
@@ -2613,8 +2622,10 @@ c4ix-%.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libc4ix.c4l $(C4IX_SRC)/user/%.c
 	rm -f .c4ix_u.pp.c .c4ix_u.c4o
 
 # X3 boot pins: the linked kernel boots natively on c4m (preemptive,
-# user tasks behind protected mode) and degraded on plain c4 through
-# the c4l loader (cooperative, no hardware boundary).
+# user tasks behind protected mode). It once also booted degraded on
+# plain c4 through the c4l loader; C4IX images now use C4CY, PUTC,
+# JSRI and JSRS, which plain c4 lacks, so the plain-c4 route is
+# c4 -> c4m.c -> C4IX (test-c4ix-c4 below), against the same pin.
 #
 # The ping/pong lines in this pin record a SCHEDULING interleaving, and
 # it moves when the kernel's cost does: teaching c4r_load to look in the
@@ -2622,13 +2633,12 @@ c4ix-%.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libc4ix.c4l $(C4IX_SRC)/user/%.c
 # "pong 2" and changed nothing else. That is a measurement sitting in a
 # behaviour pin -- deterministic, so it is not flaky, but it means any
 # change to the kernel's timing shows up here as a diff to read rather
-# than a regression to fix. Output is exact
-# per host; the differences are by design and worth reading:
+# than a regression to fix. Worth reading in it:
 # c4ix-hello.c4r calls printf directly, so on c4m it traps and the
 # kernel emulates it onto the fd layer -- which is why redirecting it
-# into a RAM file captures 58 bytes there and 0 on plain c4, where a
-# raw printf has no boundary to cross. The pipeline (uecho | uwc)
-# works on both.
+# into a RAM file captures 58 bytes (the old plain-c4 route captured 0:
+# a raw printf had no boundary to cross there). The pipeline
+# (uecho | uwc) works either way.
 C4IX_PROGS := c4ix-hello.c4r c4ix-uhello.c4r c4ix-echo.c4r c4ix-wc.c4r \
               c4ix-cat.c4r c4ix-sh.c4r c4ix-ps.c4r c4ix-bench.c4r \
               c4ix-cycles.c4r c4ix-ls.c4r c4ix-mkdir.c4r c4ix-top.c4r \

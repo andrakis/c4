@@ -4,7 +4,12 @@ import { R, REG_NAMES } from '../sim/machine.js';
 import { OPNAMES } from '../sim/devices.js';
 
 const hex = v => '0x' + (v >>> 0).toString(16).toUpperCase().padStart(8, '0');
-const opname = i => (i >= 0 && i < 66) ? OPNAMES.slice(i * 5, i * 5 + 4).trim() : '?' + i;
+// Named for every entry the ROM holds (89 since the fused opcodes, 79-88),
+// not a hard-coded 66: the fused ones showed as ?79..?88.
+const opname = i => {
+  const n = (i >= 0 && i * 5 + 4 <= OPNAMES.length) ? OPNAMES.slice(i * 5, i * 5 + 4).trim() : '';
+  return n || '?' + i;
+};
 
 export class RegsPanel {
   constructor(table) {

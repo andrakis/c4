@@ -98,9 +98,15 @@ int __c4dos_arm () {
   return __c4dos_slot != 0;
 }
 
+// call0 passes a dummy argument on purpose: c4lc -O turns a bare
+// "JSR f; LEV" into a tail call that enters f past its first word, and
+// the stub's first word is the JMP it rewrote itself into -- so a
+// zero-argument call re-ran the stub's body and rewrote the caller.
+// With an argument the call is followed by ADJ and stays a call.
+// (src/c4dos/c4dos.c's invoke0 had the same bug, 2026-09-30.)
 int __c4dos_call0 (int *code) {
   *__c4dos_slot = (int)code;
-  return __c4dos_stub();
+  return __c4dos_stub(0);
 }
 int __c4dos_call1 (int *code, int a) {
   *__c4dos_slot = (int)code;

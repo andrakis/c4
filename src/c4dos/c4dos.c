@@ -40,10 +40,16 @@
 // local arrays, locals at top, single-word globals, literal enums,
 // definition before use). '\t'/'\r' written as 9/13 (lexer quirk).
 
-// Build (both variants go through our own cpp - raw c4cc would skip
-// the #if lines and compile BOTH clock branches in):
-//   ./cpp src/c4dos/c4dos.c | ./c4cc -o c4dos.c4r -            (clockless)
-//   ./cpp -DC4DOS_CLOCK=1 src/c4dos/c4dos.c | ./c4cc -o ... -  (with clock)
+// Build (every variant goes through our own cpp first - a compiler that
+// skips '#' lines would compile BOTH clock branches in), then c4lc -O.
+// What the Makefile does:
+//   ./cpp src/c4dos/c4dos.c > pp.c
+//   ./c4sp -R src/c4sp/lisp/c4lc.lisp -O pp.c c4dos.c4r           (clockless)
+//   ./cpp -DC4DOS_CLOCK=1 ... ; same c4lc line -> c4dos-clock.c4r (with clock)
+//   ./cpp -DC4DOS_CLOCK=1 ... ; ./c4sp32 -c 64000000 ... c4lc.lisp -O
+//                                                -> c4dos32.c4r  (c4bb)
+// (src/c4dos/tests/test-c4dos.sh still builds its own copies with
+// `./cpp | ./c4cc`, which works as well.)
 // The guard below keeps cpp from chasing gcc's headers; plain c4 and
 // raw c4cc skip '#' lines and never see any of it.
 #ifdef __GNUC__
@@ -216,7 +222,15 @@ int stub () {
   return 0;
 }
 
-int invoke0 (int *code) { *c4l_stub_slot = (int)code; return stub(); }
+// invoke0 passes a dummy argument on purpose. c4lc -O turns a bare
+// "JSR f; LEV" into a tail call, JMP f+2, which enters f PAST its first
+// word -- and the stub's first word is the JMP it rewrote itself into.
+// A zero-argument stub() call from here therefore re-ran the stub's
+// original body, which rewrote whatever code sat near the caller: under
+// C4DOS the first program with a destructor (c4th, anything built with
+// stdarg.h) left the next one silent or crashing. With an argument the
+// call is followed by ADJ, which is not a tail call. invoke1/2 always were.
+int invoke0 (int *code) { *c4l_stub_slot = (int)code; return stub(0); }
 int invoke1 (int *code, int a) { *c4l_stub_slot = (int)code; return stub(a); }
 int invoke2 (int *code, int a, int b) { *c4l_stub_slot = (int)code; return stub(a, b); }
 

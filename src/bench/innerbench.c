@@ -12,9 +12,8 @@ enum {
 	ONLY_C4M = 0x2,
 	ONLY_BENCH = 0x4, // Only run bench directly
 	ONLY_LOADC4R = 0x8,
-	ONLY_DIRECT = 0x10, // No longer valid
+	ONLY_DIRECT = 0x10, // load-c4r.c + c4ke.c from source (the default)
 	WITH_VERBOSE = 0x20,
-	WITH_VFS = 0x40,
 	WITH_TESTS = 0x80,
 	USE_QUIET = 0x100,
 	// For c4m, required on some versions of linux
@@ -107,7 +106,7 @@ void sighandler_SIGINT () {
 
 void show_help (char *invoke) {
 	printf("%s: run a set of inner benchmarks in their own c4(m) instances.\n", invoke);
-	printf("%s [-n x] [-aTBDqcmlvVt] [-b args]\n", invoke);
+	printf("%s [-n x] [-aTBDqcmldvt] [-b args]\n", invoke);
 	printf("      -n x    Start x (number) inner benchmarks\n"
 	       "              This option can be given in combination with others but must be\n"
 	       "              followed by a space and number.\n"
@@ -119,9 +118,8 @@ void show_help (char *invoke) {
 	       "      -c      Enable C4 mode (ignored if -m given)\n"
 	       "      -m      Enable C4M mode (default if -c not given)\n"
 	       "      -l      Use load-c4r by itself (ignored if -d given)\n"
-	       //"      -d      Use load-c4r + c4ke.c (default)\n"
+	       "      -d      Use load-c4r + c4ke.c from source (default)\n"
 	       "      -v      Enable verbose mode\n"
-	       "      -V      Enable VFS process\n"
 	       "      -t      Enable test processes\n"
 	       "\n"
 	       "      -b args Pass args to bench\n");
@@ -168,7 +166,6 @@ int main (int argc, char **argv) {
 				else if (*arg == 'l') mode = mode | ONLY_LOADC4R;
 				else if (*arg == 'd') mode = mode | ONLY_DIRECT;
 				else if (*arg == 'v') mode = mode | WITH_VERBOSE;
-				else if (*arg == 'V') mode = mode | WITH_VFS;
 				else if (*arg == 't') mode = mode | WITH_TESTS;
 				else if (*arg == 'a') mode = mode | USE_ALTMODE;
 				else if (*arg == 'B') mode = ONLY_BENCH;
@@ -278,9 +275,10 @@ int main (int argc, char **argv) {
 			psh("50"); // medium
 		else
 			psh("0");
-		// Other flags
-		if (mode & WITH_VFS)
-			psh("-V");
+		// Other flags. There is no VFS flag: C4KE has no -V (init.c
+		// starts the VFS service, and here bench is the inner init),
+		// so the -V this used to pass stopped the inner kernel with
+		// "Invalid option".
 		if (mode & WITH_TESTS)
 			psh("-t");
 	}

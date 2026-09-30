@@ -49,7 +49,7 @@
 //   0x0014         constructor-return sentinel (never executed as code)
 //   0x0020-0x003F  firmware vector latches (plain RAM, by convention)
 //   0x0100-0x01FF  memory-mapped device registers (see devices.js)
-//   0x0200-0x034F  opcode-name ROM (66 entries x 5 bytes, c4m layout)
+//   0x0200-0x03BC  opcode-name ROM (89 entries x 5 bytes, c4m layout)
 //   0x1000         MEM_BASE - loaded images, then heap
 //   top            stack, growing down (top 4KB reserved for argv)
 

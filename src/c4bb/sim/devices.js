@@ -134,8 +134,8 @@ export let OPNAMES =
   'CPUI,CPUN,CPUS,CPUH,' +
   'CAS ,XCHG,FADD,CWAI,CWAK,IPI ,' +
   'LXI ,SXI ,TRAW,' +
-  // fused (79-88), docs/fused-opcodes.md. LDL, STL and POPA are real
-  // here (hw/microcode.uc); the other seven are c4mp's and named only.
+  // fused (79-88), docs/fused-opcodes.md. All ten are microcoded here
+  // (hw/microcode.uc); c4m itself runs only LDL, STL and POPA.
   'LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,';
 export const STOCK_OPNAMES = OPNAMES;
 export function setOpnames (names) { OPNAMES = names; }

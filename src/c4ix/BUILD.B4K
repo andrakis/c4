@@ -1,0 +1,42 @@
+B4KE2
+# The C4IX kernel: twelve modules and a link, as build-images.sh and
+# `make c4ix.c4r` build it. The result is $(OUT)/c4ix.c4r, a kernel the
+# page can boot (?image=) once something gets it off the RAM disk.
+# Every module includes c4ix.h, so a change there rebuilds them all.
+SET ROOT /usr/src/c4
+SET OUT /ram/build
+# c4sc recurses deeply on a long function: 1 MB of stack (SYS_STACK)
+SET STACK 1048576
+SET LC c4sc -c 400000 compile -O -c -I src/c4ix
+SET H src/c4ix/c4ix.h
+CD $(ROOT)
+MKDIR $(OUT)/kernel
+DEPS $(OUT)/kernel/boot.c4o : src/c4ix/boot.c $(H)
+RUN $(LC) src/c4ix/boot.c $(OUT)/kernel/boot.c4o
+DEPS $(OUT)/kernel/console.c4o : src/c4ix/console.c $(H)
+RUN $(LC) src/c4ix/console.c $(OUT)/kernel/console.c4o
+DEPS $(OUT)/kernel/va.c4o : src/c4ix/va.c $(H)
+RUN $(LC) src/c4ix/va.c $(OUT)/kernel/va.c4o
+DEPS $(OUT)/kernel/host.c4o : src/c4ix/host.c $(H)
+RUN $(LC) src/c4ix/host.c $(OUT)/kernel/host.c4o
+DEPS $(OUT)/kernel/sl4b.c4o : src/c4ix/sl4b.c $(H)
+RUN $(LC) src/c4ix/sl4b.c $(OUT)/kernel/sl4b.c4o
+DEPS $(OUT)/kernel/task.c4o : src/c4ix/task.c $(H)
+RUN $(LC) src/c4ix/task.c $(OUT)/kernel/task.c4o
+DEPS $(OUT)/kernel/sched.c4o : src/c4ix/sched.c $(H)
+RUN $(LC) src/c4ix/sched.c $(OUT)/kernel/sched.c4o
+DEPS $(OUT)/kernel/vfs.c4o : src/c4ix/vfs.c $(H)
+RUN $(LC) src/c4ix/vfs.c $(OUT)/kernel/vfs.c4o
+DEPS $(OUT)/kernel/sys.c4o : src/c4ix/sys.c $(H)
+RUN $(LC) src/c4ix/sys.c $(OUT)/kernel/sys.c4o
+DEPS $(OUT)/kernel/c4ke.c4o : src/c4ix/c4ke.c $(H)
+RUN $(LC) src/c4ix/c4ke.c $(OUT)/kernel/c4ke.c4o
+DEPS $(OUT)/kernel/loader.c4o : src/c4ix/loader.c $(H)
+RUN $(LC) src/c4ix/loader.c $(OUT)/kernel/loader.c4o
+DEPS $(OUT)/kernel/init.c4o : src/c4ix/init.c $(H)
+RUN $(LC) src/c4ix/init.c $(OUT)/kernel/init.c4o
+SET OBJS boot.c4o console.c4o va.c4o host.c4o sl4b.c4o task.c4o sched.c4o vfs.c4o sys.c4o c4ke.c4o loader.c4o init.c4o
+CD $(OUT)/kernel
+LIST c4ix.objs $(OBJS)
+DEPS $(OUT)/c4ix.c4r : $(OBJS)
+RUN c4rlink @c4ix.objs -o $(OUT)/c4ix.c4r

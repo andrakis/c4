@@ -114,8 +114,8 @@ static int sh_split(char *line, char **words, int max) {
 
 // ---- command resolution ----
 //
-// A bare name is tried as c4ix-NAME.c4r first, then as written, then
-// with .c4r appended. The order matters in both directions: C4IX's
+// A bare name is tried as /bin/NAME first, then c4ix-NAME.c4r, then as
+// written, then with .c4r appended. The order matters in both directions: C4IX's
 // own programs win, because this tree also contains C4KE binaries
 // with the same names (ps.c4r, cat.c4r, echo.c4r) which are built
 // against a different kernel's ABI and die on an illegal opcode
@@ -133,11 +133,14 @@ static char *sh_cat(char *dst, char *src) {
     return dst;
 }
 
-// Build candidate FORM for NAME: 0 as written, 1 with .c4r, 2 with
-// the c4ix- prefix and .c4r. Returns 0 when there are no more.
+// Build candidate FORM for NAME: 0 /bin/NAME, 1 with the c4ix- prefix
+// and .c4r, 2 as written, 3 with .c4r. Returns 0 when there are no
+// more. /bin comes first so that a program rebuilt inside the machine
+// and installed there (b4ke -f INSTALL.B4K) is the one that runs; until
+// then /bin holds the same images the host names do.
 static char *sh_candidate(char *name, int form) {
     char *p;
-    int i, hasdot;
+    int i, hasdot, st[4];
 
     hasdot = 0;
     i = 0;
@@ -148,13 +151,21 @@ static char *sh_candidate(char *name, int form) {
     }
     if (hasdot) return (form == 0) ? name : 0;   // a path stands for itself
     if (form == 0) {
+        // only C4IX's own /bin: on a native host, an absent /bin/NAME
+        // would fall through to the HOST's /bin (/bin/echo is an ELF)
+        p = sh_cat(resolved, "/bin/");
+        sh_cat(p, name);
+        if (ustat(resolved, st) < 0 || st[0] != 2) return 0;
+        return resolved;
+    }
+    if (form == 1) {
         p = sh_cat(resolved, "c4ix-");
         p = sh_cat(p, name);
         sh_cat(p, ".c4r");
         return resolved;
     }
-    if (form == 1) return name;
-    if (form == 2) {
+    if (form == 2) return name;
+    if (form == 3) {
         p = sh_cat(resolved, name);
         sh_cat(p, ".c4r");
         return resolved;
@@ -368,7 +379,7 @@ static int sh_runline(char **w, int nw) {
         spawned = sh_dup_argv(argv, argc);
         pid = -1;
         form = 0;
-        while (form < 3 && pid < 0) {
+        while (form < 4 && pid < 0) {
             cand = sh_candidate(argv[0], form);
             if (cand) pid = spawn(cand, argc, spawned);
             ++form;

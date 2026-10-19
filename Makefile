@@ -2613,8 +2613,14 @@ libarc.c4l: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/lib/archive.c $(C4IX_SRC)/i
 	$(C4RLINK) -r .c4ix_arc.c4o -o libarc.c4l
 	rm -f .c4ix_arc.pp.c .c4ix_arc.c4o
 
+# C4IX rebuilds everything it ships, inside itself, with b4ke and the
+# BUILD.B4K files the root archive carries (libjs/tests/test-rebuild.sh).
+# About nine minutes; not in test-libjs.
+test-c4ix-rebuild: c4bb-images
+	bash libjs/tests/test-rebuild.sh
+
 # tar and gunzip link libarc as well as libc4ix
-C4IX_ARC_PROGS := c4ix-tar.c4r c4ix-gunzip.c4r
+C4IX_ARC_PROGS := c4ix-tar.c4r c4ix-gunzip.c4r c4ix-crc32.c4r
 $(C4IX_ARC_PROGS): c4ix-%.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libarc.c4l libc4ix.c4l $(C4IX_SRC)/user/%.c
 	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC)/include $(C4IX_SRC)/user/$*.c .c4ix_a_$*.c4o > /dev/null
 	$(C4RLINK) .c4ix_a_$*.c4o libarc.c4l libc4ix.c4l -o $@
@@ -2659,7 +2665,7 @@ C4IX_PROGS := c4ix-hello.c4r c4ix-uhello.c4r c4ix-echo.c4r c4ix-wc.c4r \
               c4ix-cat.c4r c4ix-sh.c4r c4ix-ps.c4r c4ix-bench.c4r \
               c4ix-cycles.c4r c4ix-ls.c4r c4ix-mkdir.c4r c4ix-top.c4r \
               c4ix-spin.c4r c4ix-fmt.c4r c4ix-gui.c4r c4ix-desktop.c4r \
-              $(C4IX_ARC_PROGS)
+              c4ix-b4ke.c4r $(C4IX_ARC_PROGS)
 # The demonstrations are opt-in (--demo) and take their six images
 # positionally; `c4ix.c4r --help` documents the roles. With no
 # arguments at all the kernel boots to a shell, which is what

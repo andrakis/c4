@@ -71,7 +71,7 @@ int sys_open(char *path, int flags) {
 
     t = sched_current();
     if ((vn = vfs_lookup(path))) {
-        if (flags & C4IX_O_TRUNC) { vn->size = 0; vn->lazy = 0; }   // the host bytes are not wanted
+        if (flags & C4IX_O_TRUNC) { vn->size = 0; vn->lazy = 0; vfs_touch(vn); }   // the host bytes are not wanted
         return fd_open_vnode(t, vn, flags);
     }
     if (flags & C4IX_O_CREAT) {
@@ -256,6 +256,14 @@ int sys_dispatch(int num, int *args) {
     if (num == SYS_UNLINK) return vfs_unlink((char *)args[0]);
     if (num == SYS_RENAME) return vfs_rename((char *)args[0], (char *)args[1]);
     if (num == SYS_LAZYFILE) return vfs_lazyfile((char *)args[0], (char *)args[1], args[2]);
+    // The stack the caller's later spawns get, in bytes; 0 for the
+    // default. A compiler on a big source wants more than the default
+    // and every task paying for that would be most of the memory.
+    if (num == SYS_STACK) {
+        if (!t || args[0] < 0 || args[0] > C4IX_STACK_MAX) return -1;
+        t->spawn_stack = args[0];
+        return 0;
+    }
     if (num == SYS_CLOEXEC) {
         if (!t || !fd_get(t, args[0])) return -1;
         t->fdcloexec[args[0]] = args[1] ? 1 : 0;
@@ -276,7 +284,10 @@ int sys_dispatch(int num, int *args) {
     if (num == SYS_SBRK)   return (int)malloc(args[0]);
     if (num == SYS_EXIT)   { task_exit(args[0]); return 0; }
     if (num == SYS_SPAWN) {
-        if (!(s = task_spawn((char *)args[0], args[1], args[2]))) return -1;
+        sched_next_stack_words = (t && t->spawn_stack) ? t->spawn_stack / sizeof(int) : 0;
+        s = task_spawn((char *)args[0], args[1], args[2]);
+        sched_next_stack_words = 0;
+        if (!s) return -1;
         // the child gets its own argv: the parent's may be gone, or
         // rewritten, by the time the child reads it
         if (ck_argv_copy(s, args[1], (char **)args[2])) sched_forge_argv(s, s->argv_vec);

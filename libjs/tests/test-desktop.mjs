@@ -120,7 +120,8 @@ check(['My Computer', 'Command Prompt', 'Notepad', 'Calculator', 'Task Manager']
 
 // ---- Command Prompt ----------------------------------------------------------------
 type('ps\n');
-check(until(() => has(/c4ix-desktop/) && has(/tasks,/)), 'ps typed in the Command Prompt runs in its shell', screen());
+// the shell finds the desktop as /bin/desktop now (it tries /bin first)
+check(until(() => has(/ (c4ix-)?desktop/) && has(/tasks,/)), 'ps typed in the Command Prompt runs in its shell', screen());
 
 // ---- top runs until Ctrl-C ----------------------------------------------------------------
 type('top\n');
@@ -161,10 +162,12 @@ check(until(() => has('Exploring - /usr') && has('src')), 'double-clicking a fol
 key('\b');
 check(until(() => has('Exploring - /')), 'Backspace goes up a level');
 dbl('bin', inList);
-check(until(() => has('Exploring - /bin') && !!inList(find('hello')) && find('C4IX Program').length >= 10),
+// b4ke, because it sorts first: /bin holds more programs than the list
+// shows at once, and one off the bottom cannot be double-clicked
+check(until(() => has('Exploring - /bin') && !!inList(find('b4ke')) && find('C4IX Program').length >= 10),
   '/bin lists its programs as C4IX Programs, with no .c4r in their names', screen());
-dbl('hello', inList);
-check(until(() => has(/hello: running as a c4ix task/), 800), 'double-clicking one runs it in a Command Prompt', screen());
+dbl('b4ke', inList);
+check(until(() => has(/b4ke: cannot read BUILD\.B4K/), 800), 'double-clicking one runs it in a Command Prompt', screen());
 clickText(/^Exploring/); key('\b');
 check(until(() => has('Exploring - /')), 'and back up to the root');
 dbl('ram', inList);
@@ -217,12 +220,12 @@ type('spin 5000\n');
 until(() => has(/spin: tick 1\//), 1500);
 key('ESC', 3, 27);                                             // Ctrl+Shift+Esc
 check(until(() => has('Task Manager') && has('Image Name')), 'Ctrl+Shift+Esc opens Task Manager on Processes', screen());
-check(until(() => has(/^c4ix-desktop/) && has(/^c4ix-spin/) && has(/^CPU Usage: \d+%$/), 600), 'it lists the tasks, spin among them, with CPU usage', frame.filter(t => /c4ix|CPU|Image|boot|init|spin/.test(t.s)).map(t => t.s.trim()).join(' | '));
-clickText(/^c4ix-spin/);
+check(until(() => has(/^(c4ix-)?desktop/) && has(/^(c4ix-spin\.c4r|spin) *$/) && has(/^CPU Usage: \d+%$/), 600), 'it lists the tasks, spin among them, with CPU usage', frame.filter(t => /c4ix|CPU|Image|boot|init|spin/.test(t.s)).map(t => t.s.trim()).join(' | '));
+clickText(/^(c4ix-spin\.c4r|spin) *$/);
 clickText('End Process');
-check(until(() => has(/End process c4ix-spin/)), 'End Process asks first');
+check(until(() => has(/End process (c4ix-)?spin/)), 'End Process asks first');
 key('y');
-check(until(() => !has(/^c4ix-spin/), 600), 'and ends it', screen());
+check(until(() => !has(/^(c4ix-spin\.c4r|spin) *$/), 600), 'and ends it', screen());
 clickText('Performance');
 check(until(() => has('CPU Usage History') && has('Totals')), 'the Performance tab shows the gauge and the history');
 clickText('Applications');

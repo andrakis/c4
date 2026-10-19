@@ -48,7 +48,7 @@ static int before(char *a, char *b) {
 
 // Read a directory: folders first, then files, each alphabetical.
 static void load(struct files *f) {
-    int i, j, r, s, d, st[3];
+    int i, j, r, s, d, st[4];
     char nm[NAMEW];
     f->n = 0;
     i = 0;

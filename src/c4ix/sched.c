@@ -222,6 +222,18 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     // Safe point: we are on the trapped task's stack, so any corpse
     // left over from an earlier exit can finally be freed.
     task_reap();
+    // The stack guard. A task whose stack pointer is inside the guard,
+    // or whose top guard word has been written, ran off the end of its
+    // stack: kill it here, before what it wrote under the stack -- some
+    // other allocation -- takes the machine down in some other task.
+    if (sched_cur && sched_cur->stack && sched_cur->privs == PRIV_USER &&
+        (sp < sched_cur->stack + C4IX_STACK_GUARD * sizeof(int) ||
+         ((int *)sched_cur->stack)[C4IX_STACK_GUARD - 1] != C4IX_STACK_POISON)) {
+        kprintf("c4ix: task %d (%s) overran its %d-byte stack; killing it\n",
+            sched_cur->id, sched_cur->name, sched_cur->stack_words * sizeof(int));
+        task_exit(-1);
+        trap = 0;
+    }
     if (trap == C4IX_TRAP_ILLOP) {
         if (param >= SYS_BASE && param < SYS_TOP) {
             // OPCD leaves the syscall number at *sp with the
@@ -573,12 +585,20 @@ int task_wait(struct task *t) {
 //   X[1] return pc -> task_shim
 //   X[2] where task_shim's own LEV would land -> task_lost
 //   X[3..5] task_shim's args, last first: argv, argc, entry
+int sched_next_stack_words;
+
 int sched_forge(struct task *t, int entry, int argc, int argv) {
     int *stk, *x;
+    int i, words;
 
-    if (!(stk = (int *)malloc(C4IX_STACK_WORDS * sizeof(int)))) return 0;
-    memset(stk, 0, C4IX_STACK_WORDS * sizeof(int));
-    x = stk + C4IX_STACK_WORDS - 8;   // slack above, as C4KE leaves
+    words = sched_next_stack_words > C4IX_STACK_WORDS ? sched_next_stack_words : C4IX_STACK_WORDS;
+    if (!(stk = (int *)malloc(words * sizeof(int)))) return 0;
+    memset(stk, 0, words * sizeof(int));
+    x = stk + words - 8;              // slack above, as C4KE leaves
+    t->stack_words = words;
+    // the guard: the stack grows down towards it
+    i = 0;
+    while (i < C4IX_STACK_GUARD) { stk[i] = C4IX_STACK_POISON; ++i; }
 
     x[0] = 0;
     x[1] = (int)&task_shim;

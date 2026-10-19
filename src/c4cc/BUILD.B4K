@@ -1,0 +1,28 @@
+B4KE2
+# The toolchain the disk carries that c4cc builds: c4cc itself, c4rlink
+# and c4rdump (which share its front end), cpp, plain c4, and c4m (after
+# cpp, the way build-images.sh's OURCPP runs it). c4cc has no
+# preprocessor, so headers ride along as source files.
+#
+# c4sc, c4sp and c4th are built by c4lc from gcc-preprocessed sources
+# on the host, and are not rebuilt here.
+SET ROOT /usr/src/c4
+SET OUT /ram/build
+SET CCSRC include/u0.h include/c4dos.h load-c4r.c src/c4cc/c4cc.c src/c4cc/asm-c4r.c
+SET CPPFLAGS -Iinclude -I. -DC4CC=1 -D__c4__=1 -D__C4CC__=1 -D__c4cc__=1
+CD $(ROOT)
+MKDIR $(OUT)/bin
+DEPS $(OUT)/bin/c4cc.c4r : $(CCSRC)
+RUN c4cc -o $(OUT)/bin/c4cc.c4r $(CCSRC)
+DEPS $(OUT)/bin/c4rdump.c4r : $(CCSRC) src/c4ke/bin/c4rdump.c
+RUN c4cc -o $(OUT)/bin/c4rdump.c4r $(CCSRC) src/c4ke/bin/c4rdump.c
+DEPS $(OUT)/bin/c4rlink.c4r : $(CCSRC) src/c4ke/bin/c4rlink.c
+RUN c4cc -o $(OUT)/bin/c4rlink.c4r $(CCSRC) src/c4ke/bin/c4rlink.c
+DEPS $(OUT)/bin/cpp.c4r : include/c4dos.h src/c4dos/cpp.c
+RUN c4cc -o $(OUT)/bin/cpp.c4r include/c4dos.h src/c4dos/cpp.c
+DEPS $(OUT)/bin/c4.c4r : c4.c
+RUN c4cc -o $(OUT)/bin/c4.c4r c4.c
+DEPS $(OUT)/c4m.pp.c : c4m.c include/c4dos.h
+RUN cpp $(CPPFLAGS) -DC4M_DOS=1 -DC4M_NO_U0=1 include/c4dos.h c4m.c > $(OUT)/c4m.pp.c
+DEPS $(OUT)/bin/c4m.c4r : $(OUT)/c4m.pp.c
+RUN c4cc -o $(OUT)/bin/c4m.c4r $(OUT)/c4m.pp.c

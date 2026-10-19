@@ -11,11 +11,12 @@
 # vfsload itself is deliberately excluded: it's the boot-time loader
 # (built and named plainly as vfsload.c4r, not the c4ix-NAME.c4r
 # convention every other user program follows), not a typical app.
-BIN_ALL = hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt gui desktop tar gunzip
+BIN_ALL = hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt gui desktop tar gunzip crc32 b4ke
 # The toolchain (docs/c4ix-desktop.md, part three): C4KE programs, which
 # run here through the compatibility layer, and write what they build
 # through its OP_VFS_PUT. In /bin only, under their own names.
-TOOLS = c4cc c4rlink c4rdump cpp c4sp c4th
+# c4sc is the compiled c4lc, what the BUILD.B4K files under /usr/src/c4 run.
+TOOLS = c4cc c4rlink c4rdump cpp c4sp c4th c4sc
 # Unpacked over / after everything above, by c4ix-tar in the background
 # (vfsload prints the task; "wait ID" blocks on it): the repo's sources
 # and docs under /usr/src/c4, the C4IX libraries in /usr/lib, and more

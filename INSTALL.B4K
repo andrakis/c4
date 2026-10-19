@@ -1,0 +1,34 @@
+B4KE2
+# Put what BUILD.B4K made where the system looks first: programs in /bin
+# (the shell tries /bin/NAME before anything else), libraries in
+# /usr/lib. The RAM copies win until the next boot, which starts again
+# from the disk. The kernel is not installed -- a running kernel cannot
+# replace itself; $(OUT)/c4ix.c4r is there to boot.
+SET OUT /ram/build
+COPY $(OUT)/bin/c4ix-hello.c4r /bin/hello
+COPY $(OUT)/bin/c4ix-uhello.c4r /bin/uhello
+COPY $(OUT)/bin/c4ix-echo.c4r /bin/echo
+COPY $(OUT)/bin/c4ix-wc.c4r /bin/wc
+COPY $(OUT)/bin/c4ix-cat.c4r /bin/cat
+COPY $(OUT)/bin/c4ix-sh.c4r /bin/sh
+COPY $(OUT)/bin/c4ix-ps.c4r /bin/ps
+COPY $(OUT)/bin/c4ix-bench.c4r /bin/bench
+COPY $(OUT)/bin/c4ix-cycles.c4r /bin/cycles
+COPY $(OUT)/bin/c4ix-ls.c4r /bin/ls
+COPY $(OUT)/bin/c4ix-mkdir.c4r /bin/mkdir
+COPY $(OUT)/bin/c4ix-top.c4r /bin/top
+COPY $(OUT)/bin/c4ix-spin.c4r /bin/spin
+COPY $(OUT)/bin/c4ix-fmt.c4r /bin/fmt
+COPY $(OUT)/bin/c4ix-gui.c4r /bin/gui
+COPY $(OUT)/bin/c4ix-b4ke.c4r /bin/b4ke
+COPY $(OUT)/bin/c4ix-tar.c4r /bin/tar
+COPY $(OUT)/bin/c4ix-gunzip.c4r /bin/gunzip
+COPY $(OUT)/bin/c4ix-crc32.c4r /bin/crc32
+COPY $(OUT)/bin/c4ix-desktop.c4r /bin/desktop
+COPY $(OUT)/bin/c4cc.c4r /bin/c4cc
+COPY $(OUT)/bin/c4rdump.c4r /bin/c4rdump
+COPY $(OUT)/bin/c4rlink.c4r /bin/c4rlink
+COPY $(OUT)/bin/cpp.c4r /bin/cpp
+COPY $(OUT)/lib/libc4ix.c4l /usr/lib/libc4ix.c4l
+COPY $(OUT)/lib/libarc.c4l /usr/lib/libarc.c4l
+ECHO b4ke: installed in /bin and /usr/lib

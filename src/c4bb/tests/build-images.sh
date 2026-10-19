@@ -254,9 +254,9 @@ cp src/c4ke/include/service.h $DISK/
 # modules compiled by 32-bit c4lc (its own preprocessor), linked by
 # the 32-bit c4rlink; userland links against libc4ix
 C4IX_MODS="boot console va host sl4b task sched vfs sys c4ke loader init"
-C4IX_USER="hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt gui"
+C4IX_USER="hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt gui b4ke"
 # userland that also links libarc (gzip and tar): the root archive's unpacker
-C4IX_ARC_USER="tar gunzip"
+C4IX_ARC_USER="tar gunzip crc32"
 # c4sp arena, in cells. 8000000 was a guess with no measurement behind
 # it, and at 21 bytes a cell (32-bit: gc.h/cell.h) that is ~168MB --
 # more than c4bb has (32MB default), so nothing built this way could
@@ -453,6 +453,11 @@ if [ -f $DISK/config.sys ]; then
     (cd $DISK && ls -p | grep -v '/$' | grep -v '^manifest.json$' > c4dos.dir)
 fi
 
+# c4sc, the compiled c4lc, so C4IX can rebuild itself: /usr/src/c4's
+# BUILD.B4K files run it (docs/c4sc-design.md). The c4ke-root disk below
+# carries the same image.
+[ -f c4sc32-fused.c4r ] && cp c4sc32-fused.c4r $DISK/c4sc.c4r
+
 # ---- the C4IX root archive -----------------------------------------
 # One gzipped tar of the repo's own sources and docs, unpacked over / by
 # C4IX's vfsload at boot (ARCHIVES in c4ix.vfs.txt, in the background).
@@ -466,7 +471,7 @@ ROOT=.c4bb_ix_root
 rm -rf $ROOT
 mkdir -p $ROOT/usr/src/c4 $ROOT/usr/lib $ROOT/usr/include
 if git rev-parse --git-dir > /dev/null 2>&1; then
-    git ls-files -- src docs include README.md LICENSE Makefile c4.c c4m.c c4m_float.c c4l.c load-c4r.c |
+    git ls-files -- src docs include libjs README.md LICENSE Makefile BUILD.B4K INSTALL.B4K c4.c c4m.c c4m_float.c c4l.c load-c4r.c |
         grep -v '^src/c4bb/images/\|^src/c4or1k/images/' |
         while read -r f; do
             [ -f "$f" ] && grep -Iq . "$f" 2>/dev/null || continue

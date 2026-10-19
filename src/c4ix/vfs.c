@@ -177,7 +177,19 @@ static struct vnode *vn_alloc(int type) {
     if (!(vn = (struct vnode *)sl4b_alloc(vn_cache))) return 0;
     vn->type = type;
     vn->refs = 0;
+    vfs_touch(vn);
     return vn;
+}
+
+// Modification order. Not a clock -- this machine's clocks differ by
+// host, and some hosts have none -- but a counter every create and
+// every write takes the next value of. That orders any two changes,
+// which is all a build tool needs to know which file is stale.
+static int vfs_clock;
+
+void vfs_touch(struct vnode *vn) {
+    vfs_clock = vfs_clock + 1;
+    vn->mtime = vfs_clock;
 }
 
 // Growable storage for RAM files and pipes. c4m's realloc opcode is
@@ -291,6 +303,7 @@ int vfs_stat(char *path, int *out) {
     out[0] = vn->type == VN_DIR ? 1 : (vn->type == VN_RAMFILE ? 2 : 3);
     out[1] = vn->type == VN_RAMFILE ? vn->size : 0;
     out[2] = vn_is_program(vn);
+    out[3] = vn->mtime;
     sched_unlock();
     return 0;
 }
@@ -317,6 +330,7 @@ int vfs_put(char *path, char *buf, int len) {
     memcpy(vn->data, buf, len);
     vn->data[len] = 0;
     vn->size = len;
+    vfs_touch(vn);
     sched_unlock();
     return 0;
 }
@@ -540,6 +554,7 @@ int vfs_write(struct file *f, char *buf, int len) {
     end = f->pos + len;
     if (!vn_grow(vn, end)) { sched_unlock(); return -1; }
     memcpy(vn->data + f->pos, buf, len);
+    vfs_touch(vn);
     f->pos = end;
     if (end > vn->size) vn->size = end;
     sched_unlock();

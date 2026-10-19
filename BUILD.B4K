@@ -1,0 +1,29 @@
+B4KE2
+# Rebuild what C4IX ships, inside C4IX.
+#
+#   b4ke -C /usr/src/c4                    everything, into /ram/build
+#   b4ke -C /usr/src/c4/src/c4ix/user      just the userland (any one directory works)
+#   b4ke -C /usr/src/c4 -f INSTALL.B4K     put the results in /bin and /usr/lib
+#
+# The root archive unpacks this tree at /usr/src/c4 (build-images.sh), and
+# these files are the same recipe build-images.sh follows on the host, so
+# what they make is byte for byte what the disk carries: `crc32` on both
+# says so. Each directory's BUILD.B4K stands alone; this one runs them in
+# the order they need each other -- libraries, then what links them.
+#
+# Run it twice and the second run does nothing: every step is a DEPS,
+# rebuilt only when a source is newer than what it made. Edit one file
+# and run it again, and only what that file feeds is rebuilt. -B rebuilds
+# everything regardless.
+SET OUT /ram/build
+ECHO b4ke: C4IX's libraries
+B4KE src/c4ix/lib ROOT=$(DIR) OUT=$(OUT)
+ECHO b4ke: the C4IX kernel
+B4KE src/c4ix ROOT=$(DIR) OUT=$(OUT)
+ECHO b4ke: C4IX's userland
+B4KE src/c4ix/user ROOT=$(DIR) OUT=$(OUT)
+ECHO b4ke: the desktop
+B4KE src/c4ix/user/desktop ROOT=$(DIR) OUT=$(OUT)
+ECHO b4ke: the toolchain c4cc builds
+B4KE src/c4cc ROOT=$(DIR) OUT=$(OUT)
+ECHO b4ke: all built, in $(OUT)

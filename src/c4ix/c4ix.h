@@ -72,7 +72,8 @@ enum {
     SYS_KILL = 219,
     SYS_SLEEP = 220, SYS_AVAIL = 221, SYS_INTR = 222, SYS_CLOEXEC = 223,
     SYS_STAT = 224, SYS_UNLINK = 225, SYS_RENAME = 226, SYS_LAZYFILE = 227,
-    SYS_TOP = 228          // one past the last: sched_trap's range check
+    SYS_STACK = 228,
+    SYS_TOP = 229          // one past the last: sched_trap's range check
 };
 // taskinfo fills, in order: id, parent, state, privs, nsyscalls,
 // ntraps, cycles, then the name packed into the remaining words.
@@ -153,6 +154,10 @@ struct vnode {
     // reads, writes or loads it. size is already right.
     char *hostname;
     int lazy;
+    // When it last changed, as a place in the order of changes rather
+    // than a time (vfs_touch): b4ke compares two, nothing else does. A
+    // file still on the host is 0, older than anything made here.
+    int mtime;
 };
 
 struct file {
@@ -169,7 +174,8 @@ void         vfs_init();
 struct vnode *vfs_lookup(char *path);
 struct vnode *vfs_ramfile(char *path);   // find or create the file
 struct vnode *vfs_mkdir(char *path);
-int          vfs_stat(char *path, int *out);     // out[0] 1 dir, 2 file, 3 other; out[1] bytes
+int          vfs_stat(char *path, int *out);     // out[0] 1 dir, 2 file, 3 other; out[1] bytes; out[2] program; out[3] mtime
+void         vfs_touch(struct vnode *vn);        // it changed: give it the next mtime
 int          vfs_unlink(char *path);
 int          vfs_rename(char *path, char *newname);
 int          vfs_lazyfile(char *path, char *host, int size);
@@ -261,11 +267,23 @@ void  sl4b_stats();
 
 // ---- tasks (task.c) ----
 // Tasks live on a malloc'd singly linked list -- no fixed table.
-// Structs come from an SL4B cache, stacks from malloc (64KB each).
+// Structs come from an SL4B cache, stacks from malloc (256KB each on a
+// 32-bit host).
 // task_next() wraps from the tail back to the head: that round-robin
 // walk is the loop the scheduler context-switches along.
 enum { TASK_NAME_MAX = 16 };
-enum { C4IX_STACK_WORDS = 8192 };   // 64KB per task
+// 256KB on a 32-bit host, C4KE's TASK_STACK_SIZE: C4IX runs C4KE's
+// programs, and c4sc compiling the larger kernel modules needs more
+// than 64KB -- it overran that under C4KE first (docs/task-memory.md)
+// and then here, where it wrote over the heap and took every task down.
+// The lowest C4IX_STACK_GUARD words are poison (sched_forge), checked
+// at every switch, so an overrun now kills the task that did it.
+enum { C4IX_STACK_WORDS = 65536, C4IX_STACK_GUARD = 64, C4IX_STACK_POISON = 0x57415348 };
+// A bigger stack for one spawn: SYS_STACK sets it per spawning task (b4ke's
+// $(STACK)), and sys.c hands it to sched_forge through this, for one call.
+// Up to C4IX_STACK_MAX bytes.
+enum { C4IX_STACK_MAX = 16777216 };
+extern int sched_next_stack_words;
 // TS_WAITING = blocked on another task (wait); TS_BLOCKED = blocked
 // on a vnode (an empty pipe); TS_SLEEPING = blocked on the clock.
 // All three are woken by the scheduler when their condition clears.
@@ -299,6 +317,8 @@ struct task {
     int  sv_sp;                // SV_REGS: sp    SV_FRAME: frame address
     int  sv_pc;                // SV_REGS: pc    SV_FRAME: saved pc value
     int  stack;                // malloc'd stack base, 0 for the boot task
+    int  stack_words;          // its size, C4IX_STACK_WORDS unless SYS_STACK asked
+    int  spawn_stack;          // SYS_STACK: bytes for the tasks this one spawns, 0 default
     int  img_code;             // loaded .c4r segments to free on reap,
     int  img_data;             //   0 for kernel-code tasks
     int  img_cons;             // int * : constructors this task must run

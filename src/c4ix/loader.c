@@ -87,7 +87,10 @@ int c4r_load(char *path, struct c4r_image *img) {
     if (vn && vn->type != VN_RAMFILE) vn = 0;
     if (!vn && (fd = open(path, 0)) >= 0) {
         total = 0;
-        while ((n = read(fd, buf + total, 65536)) > 0) total = total + n;
+        // never past the buffer: a host file of any size can be named
+        while (total < C4R_BUF_MAX &&
+               (n = read(fd, buf + total, C4R_BUF_MAX - total < 65536 ? C4R_BUF_MAX - total : 65536)) > 0)
+            total = total + n;
         close(fd);
     } else {
         if (!vn) {
@@ -237,9 +240,16 @@ int c4r_load(char *path, struct c4r_image *img) {
 struct task *task_spawn_priv(char *path, int argc, int argv, int privs) {
     struct c4r_image img;
     struct task *t;
+    char *name;
+    int i;
 
     if (!c4r_load(path, &img)) return 0;
-    if (!(t = task_create(path, img.entry, argc, argv))) {
+    // The task is named for the program, not the path it was found by:
+    // ps says "spin" whether the shell ran /bin/spin or a host image.
+    name = path;
+    i = 0;
+    while (path[i]) { if (path[i] == '/') name = path + i + 1; ++i; }
+    if (!(t = task_create(name, img.entry, argc, argv))) {
         free((int *)img.code);
         free((char *)img.data);
         if (img.cons) free((int *)img.cons);

@@ -257,7 +257,7 @@ static void ck_export_fill(int *kti) {
         // same accuracy C4KE reports. The boot task runs on the VM's
         // own stack and has no allocation to measure.
         kte[CK_KTE_STACK] = t->stack
-            ? (t->stack + C4IX_STACK_WORDS * sizeof(int)) - t->sv_sp : 0;
+            ? (t->stack + t->stack_words * sizeof(int)) - t->sv_sp : 0;
         kte[CK_KTE_ALLOC] = 0;   // C4IX does not track per-task allocation
 
         kte = kte + CK_KTE__Sz;

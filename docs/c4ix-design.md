@@ -526,6 +526,20 @@ loading or assigning a whole struct is an error.
   Explorer holds 400 entries a folder and 256 folders ten deep; the
   shell's `wait` takes a task id.
 
+- **Rebuilt inside itself** (branch c4ix-userland, 2026-10-19): C4IX
+  runs `b4ke -C /usr/src/c4` over the root archive's tree and rebuilds
+  the kernel, libc4ix, libarc, every userland program, the desktop and
+  the c4cc-built toolchain into `/ram/build`. All 24 c4lc-built images
+  come out byte for byte the host's. `user/b4ke.c` is a native port of
+  C4KE's b4ke with B4KE2's verbs; DEPS needs a modification order, so
+  vnodes carry `mtime` (a counter every create and write advances, out[3]
+  of `stat`). c4sc needed more stack than C4IX's 64 KB, and running off
+  the end took every task down, so a task stack is 256 KB (C4KE's), the
+  lowest 64 words are poison checked at every switch (an overrun kills
+  that task by name), and `SYS_STACK` (228) sets the stack a task's
+  later spawns get -- b4ke's `$(STACK)`, 1 MB for c4sc. The shell tries
+  `/bin/NAME` before `c4ix-NAME.c4r`, so `INSTALL.B4K`'s copies win.
+
 ## 6.1 Running it
 
     make run-c4ix        an interactive shell on c4m

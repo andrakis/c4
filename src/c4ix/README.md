@@ -63,7 +63,20 @@ board and libjs disk the manifest also names `c4ix-root.tgz`, which
 vfsload hands to `c4ix-tar` in the background: the repo's sources and
 docs appear under `/usr/src/c4` a few seconds after the prompt (`wait 3`
 blocks until they have), the C4IX libraries in `/usr/lib`, and more
-headers in `/usr/include`. Its builtins
+headers in `/usr/include`.
+
+That tree is enough to rebuild C4IX inside itself. `BUILD.B4K` files sit
+beside the sources, `b4ke` and `c4sc` (the compiled c4lc) are in `/bin`,
+and
+
+    b4ke -C /usr/src/c4                   the kernel, libraries, userland, desktop and toolchain, into /ram/build
+    b4ke -C /usr/src/c4/src/c4ix/user     or any one directory
+    b4ke -C /usr/src/c4 -f INSTALL.B4K    then /bin and /usr/lib get the results
+
+What c4lc builds comes out byte for byte the disk's; c4cc's images carry
+its own heap addresses in their symbol records, so they differ there and
+nowhere that runs. The whole tree is about 29G instructions (nine minutes
+under node). `make test-c4ix-rebuild` checks all of it. Its builtins
 are `exit jobs wait kill cd pwd help`; it has `<`, `>`, pipelines and `&`.
 `exit` or Ctrl-D shuts the kernel down.
 

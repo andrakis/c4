@@ -285,6 +285,12 @@ if [ ! -f $OUT/c4ix32.c4r ] || \
     ./c4rlink32 $objs -o $OUT/c4ix32.c4r
     ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix/include src/c4ix/lib/libc4ix.c .c4bb_ix_lib.c4o > /dev/null
     ./c4rlink32 -r .c4bb_ix_lib.c4o -o .c4bb_libc4ix32.c4l
+    # ... and as C4IX's first shared library, /lib/libc4ix.c4s: the same
+    # image, which programs linked with -l load at run time. c4rlink
+    # records /lib/ and the base name, so the copy it reads is named so.
+    mkdir -p .c4bb_lib
+    cp .c4bb_libc4ix32.c4l .c4bb_lib/libc4ix.c4s
+    cp .c4bb_libc4ix32.c4l $DISK/c4ix-libc4ix.c4s
     # libarc: inflate, CRC-32 and tar, for vfsload's root archive. -mfuse
     # like c4sp.c4r below: unpacking the archive is the one long job a
     # boot starts, and both machines that read this disk run fused code.
@@ -292,7 +298,12 @@ if [ ! -f $OUT/c4ix32.c4r ] || \
     ./c4rlink32 -r .c4bb_ix_arc.c4o -o .c4bb_libarc32.c4l
     for u in $C4IX_USER; do
         ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix/include src/c4ix/user/$u.c .c4bb_ix_u.c4o > /dev/null
-        ./c4rlink32 .c4bb_ix_u.c4o .c4bb_libc4ix32.c4l -o $DISK/c4ix-$u.c4r > /dev/null
+        # ls is the pilot for shared libraries: it loads libc4ix at run time
+        if [ $u = ls ]; then
+            ./c4rlink32 .c4bb_ix_u.c4o -l .c4bb_lib/libc4ix.c4s -o $DISK/c4ix-$u.c4r > /dev/null
+        else
+            ./c4rlink32 .c4bb_ix_u.c4o .c4bb_libc4ix32.c4l -o $DISK/c4ix-$u.c4r > /dev/null
+        fi
     done
     for u in $C4IX_ARC_USER; do
         ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix/include src/c4ix/user/$u.c .c4bb_ix_u.c4o > /dev/null
@@ -319,6 +330,7 @@ if [ ! -f $OUT/c4ix32.c4r ] || \
     # the libraries are kept: the root archive ships them in /usr/lib,
     # so a program can be linked inside the machine
     mv .c4bb_libc4ix32.c4l $OUT/libc4ix32.c4l
+    rm -rf .c4bb_lib
     mv .c4bb_libarc32.c4l $OUT/libarc32.c4l
     rm -f .c4bb_ix_*.c4o .c4bb_ix_*.pp.c
 fi

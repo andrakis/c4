@@ -37,6 +37,29 @@ void c4r_dump_code (int *c4r) {
 	}
 }
 
+// What a program linked against shared libraries (c4rlink -l) needs at
+// run time: each library (a __c4_needed symbol names its path in the
+// data), and how many symbol references are still to be resolved.
+void c4r_dump_dynamic (int *c4r) {
+	int *hdr, *sym, *patch, i, n, refs;
+	hdr = (int *)c4r[C4R_HEADER];
+	sym = (int *)c4r[C4R_SYMBOLS];
+	n = hdr[C4R_HDR_SYMBOLSLEN];
+	i = 0;
+	while (i < n) {
+		if (sym[C4R_SYMB_NAMELEN] == 11 && !memcmp((char *)sym[C4R_SYMB_NAME], "__c4_needed", 11))
+			printf("  Needs %s\n", (char *)c4r[C4R_DATA] + sym[C4R_SYMB_VALUE]);
+		sym = sym + C4R_SYMB__Sz;
+		++i;
+	}
+	patch = (int *)c4r[C4R_PATCHES];
+	n = hdr[C4R_HDR_PATCHLEN];
+	refs = 0;
+	i = 0;
+	while (i < n) { if (patch[C4R_PAT_TYPE] >= 0) ++refs; patch = patch + C4R_PAT__Sz; ++i; }
+	if (refs) printf("  %d symbol references to resolve at link or load time\n", refs);
+}
+
 int c4r_data_is_printable (char c) {
 	return c >= ' ' && c <= '~';
 }
@@ -142,7 +165,7 @@ int main (int argc, char **argv) {
 		} else {
 			if ((c4r = c4r_load_opt(*argv, C4ROPT_SYMBOLS))) {
 				if (!mode) mode = MODE_INFO;
-				if (mode & MODE_INFO) c4r_dump_info(c4r);
+				if (mode & MODE_INFO) { c4r_dump_info(c4r); c4r_dump_dynamic(c4r); }
 				if (mode & MODE_CODE) c4r_dump_code(c4r);
 				if (mode & MODE_DATA) c4r_dump_data(c4r);
 				if (mode & MODE_PATCHES) c4r_dump_patches(c4r);

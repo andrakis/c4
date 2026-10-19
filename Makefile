@@ -2658,6 +2658,18 @@ libarc.c4l: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/lib/archive.c $(C4IX_SRC)/i
 test-c4ix-rebuild: c4bb-images
 	bash libjs/tests/test-rebuild.sh
 
+# libc4ix as a shared library: the same image, loaded at run time by
+# programs linked with -l libc4ix.c4s. On a native host the loader finds
+# it here, beside the programs, when C4IX's /lib does not have it.
+libc4ix.c4s: libc4ix.c4l
+	cp libc4ix.c4l $@
+
+# ls is the pilot for shared libraries (docs/c4ix-design.md)
+c4ix-ls.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libc4ix.c4s $(C4IX_SRC)/user/ls.c
+	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC)/include $(C4IX_SRC)/user/ls.c .c4ix_ls.c4o > /dev/null
+	$(C4RLINK) .c4ix_ls.c4o -l libc4ix.c4s -o $@
+	rm -f .c4ix_ls.pp.c .c4ix_ls.c4o
+
 # tar and gunzip link libarc as well as libc4ix
 C4IX_ARC_PROGS := c4ix-tar.c4r c4ix-gunzip.c4r c4ix-crc32.c4r
 $(C4IX_ARC_PROGS): c4ix-%.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libarc.c4l libc4ix.c4l $(C4IX_SRC)/user/%.c

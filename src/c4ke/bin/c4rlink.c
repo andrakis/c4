@@ -48,8 +48,16 @@
 //     becomes a CODE patch pointing at the definition.
 //  5: Write the master image out.
 //
-// TODO: implement shared libraries in a similar manner, except that code and
-//       data can be anywhere (not necessarily appended to another .c4r.)
+// Shared libraries (-l LIB): LIB is a library (a -r image, named .c4s by
+// convention) that is NOT copied in. A reference to something LIB
+// defines stays a symbol patch in the output, and the output records
+// that it needs LIB: a static global named __c4_needed whose value is
+// the data offset of LIB's run-time path, "/lib/" and LIB's base name.
+// C4IX's loader (src/c4ix/loader.c) reads those, loads each library,
+// and resolves the patches against what it exports. The record is a
+// symbol rather than a new section because every reader of .c4r in
+// this repo already skips symbols it has no use for; so a dynamic
+// image keeps its symbol table, and -s is refused for one.
 
 #define NO_ASMC4R_MAIN 1
 // Also includes c4cc.c, which includes load-c4r.c
@@ -71,6 +79,12 @@ enum {
 };
 
 int cl_verbose, cl_debug, cl_libmode, cl_strip, cl_striptool;
+// -l: per library, its loaded structure, its run-time path, and whether
+// anything was resolved against it. CL_LIBMAX of them, malloc'd: c4cc
+// has no global arrays.
+enum { CL_LIBMAX = 8, CLL_STRUCT = 0, CLL_PATH, CLL_USED, CLL__Sz };
+int *cl_libs;
+int  cl_nlibs;
 
 static void show_help (char *spec) {
 	if (cl_striptool)
@@ -81,11 +95,12 @@ static void show_help (char *spec) {
 	       "     --            End arguments\n", spec, spec);
 	else
 	printf("%s: Link multiple .c4r files into one\n"
-	       "%s: [-dvrs] [-o outfile] [--] file1.c4r [...fileN.c4r]\n"
+	       "%s: [-dvrs] [-l lib.c4s] [-o outfile] [--] file1.c4r [...fileN.c4r]\n"
 	       "     -d            Turn on debug mode\n"
 	       "     -v            Turn on verbose mode\n"
 	       "     -r            Library mode: allow unresolved symbols\n"
 	       "     -s            Strip: write no symbol table (release builds)\n"
+	       "     -l lib.c4s    Link against a shared library: load it at run time\n"
 	       "     -o outfile    Write to outfile (default: a.c4r)\n"
 	       "     --            End arguments\n", spec, spec);
 }
@@ -407,8 +422,68 @@ static void blank_patch_targets (int *master) {
 
 // Rewrite symbol-typed patches whose symbols are now defined into CODE
 // patches. Returns the number of unresolved symbol references remaining.
+// The -l library that defines NAME (non-static, a function or a global),
+// or -1.
+static int lib_defines (char *name, int len) {
+	int *c4r, *hdr, *sym, k, i, n;
+	k = 0;
+	while (k < cl_nlibs) {
+		c4r = (int *)cl_libs[k * CLL__Sz + CLL_STRUCT];
+		hdr = (int *)c4r[C4R_HEADER];
+		sym = (int *)c4r[C4R_SYMBOLS];
+		n = hdr[C4R_HDR_SYMBOLSLEN];
+		i = 0;
+		while (i < n) {
+			if (sym[C4R_SYMB_NAMELEN] == len && !(sym[C4R_SYMB_ATTRS] & (ATTR_EXTERN | ATTR_STATIC)) &&
+			    (sym[C4R_SYMB_CLASS] == C4R_SCLASS_Fun || sym[C4R_SYMB_CLASS] == C4R_SCLASS_Glo) &&
+			    !memcmp((char *)sym[C4R_SYMB_NAME], name, len))
+				return k;
+			sym = sym + C4R_SYMB__Sz;
+			++i;
+		}
+		++k;
+	}
+	return -1;
+}
+
+// Record each library something was resolved against: its run-time path
+// appended to the data, and a static __c4_needed symbol pointing at it.
+// The symbol table has room: main allocates CL_LIBMAX spare entries.
+static int add_needed (int *master) {
+	int *mhdr, *sym, k, n, len, memsz;
+	char *path, *ndata;
+	mhdr = (int *)master[C4R_HEADER];
+	k = 0;
+	while (k < cl_nlibs) {
+		if (cl_libs[k * CLL__Sz + CLL_USED]) {
+			path = (char *)cl_libs[k * CLL__Sz + CLL_PATH];
+			len = 0; while (path[len]) ++len;
+			memsz = mhdr[C4R_HDR_MEMSZ];
+			if (!(ndata = malloc(memsz + len + 1))) return 1;
+			if (memsz) memcpy(ndata, (char *)master[C4R_DATA], memsz);
+			memcpy(ndata + memsz, path, len + 1);
+			if (master[C4R_DATA]) free((char *)master[C4R_DATA]);
+			master[C4R_DATA] = (int)ndata;
+			mhdr[C4R_HDR_MEMSZ] = memsz + len + 1;
+			n = mhdr[C4R_HDR_SYMBOLSLEN];
+			sym = (int *)master[C4R_SYMBOLS] + (n * C4R_SYMB__Sz);
+			sym[C4R_SYMB_ID]      = n;
+			sym[C4R_SYMB_TYPE]    = 2;                  // char *
+			sym[C4R_SYMB_CLASS]   = C4R_SCLASS_Glo;
+			sym[C4R_SYMB_ATTRS]   = ATTR_STATIC;
+			sym[C4R_SYMB_NAMELEN] = 11;
+			sym[C4R_SYMB_NAME]    = (int)c4r_strcpy_alloc("__c4_needed");
+			sym[C4R_SYMB_VALUE]   = memsz;
+			mhdr[C4R_HDR_SYMBOLSLEN] = n + 1;
+			if (cl_verbose) printf("c4rlink: needs %s\n", path);
+		}
+		++k;
+	}
+	return 0;
+}
+
 static int resolve_patches (int *master) {
-	int *mhdr, *patch, *sym, i, n, t, unresolved;
+	int *mhdr, *patch, *sym, i, n, t, k, unresolved;
 
 	mhdr = (int *)master[C4R_HEADER];
 	patch = (int *)master[C4R_PATCHES];
@@ -431,6 +506,10 @@ static int resolve_patches (int *master) {
 					       sym[C4R_SYMB_NAMELEN], (char *)sym[C4R_SYMB_NAME]);
 					++unresolved;
 				}
+			} else if ((k = lib_defines((char *)sym[C4R_SYMB_NAME], sym[C4R_SYMB_NAMELEN])) >= 0) {
+				// a shared library has it: the patch stays a symbol
+				// reference, for the loader
+				cl_libs[k * CLL__Sz + CLL_USED] = 1;
 			} else {
 				++unresolved;
 				if (!cl_libmode)
@@ -588,6 +667,44 @@ static int c4r_write (int *c4r, char *file) {
 	return 0;
 }
 
+// Load one .c4r with its symbols: from the kernel's RAM filesystem when
+// there is one, else C4DOS's RAM disk, else the host. 0 if it cannot be.
+static int *cl_load (char *name) {
+	int  *loaded;
+	char *vfsbuf;    // kernel RAM filesystem contents, when there are any
+	int   vfslen, vfsget;
+	loaded = 0;
+#if !NATIVE
+	// Resolved by name, the way asm-c4r.c resolves OP_VFS_PUT,
+	// rather than through u0.h -- c4rlink's own build does not
+	// include u0.h (C4R_C4CC_SRCS expands $(U0) before it is
+	// defined), and load-c4r.c already supplies C4I_TRAPH.
+	// Probe only with a trap handler installed; 128 is what a
+	// missed trap leaves in the accumulator.
+	vfsget = 0;
+	vfsbuf = 0;
+	if (__c4_info() & C4I_TRAPH)
+		vfsget = __c4_opcode("OP_VFS_GET", 128); // 128 = OP_REQUEST_SYMBOL
+	if (vfsget > 128)
+		vfsbuf = (char *)__c4_opcode(&vfslen, name, vfsget);
+	if (vfsbuf)
+		loaded = c4r_load_mem(name, vfsbuf, vfslen, C4ROPT_SYMBOLS);
+	// And the same thing one rung down. Under C4DOS the objects
+	// a compiler just wrote are on the RAM disk, which a
+	// transient's own open() cannot see -- the identical
+	// problem the C4KE branch above solves, with DOS's opener
+	// in place of the kernel's.
+	if (!loaded && dos_readable()) {
+		if (!(vfsbuf = malloc(CL_DOSMAX))) return 0;
+		if ((vfslen = dos_slurp(name, vfsbuf, CL_DOSMAX)) > 0)
+			loaded = c4r_load_mem(name, vfsbuf, vfslen, C4ROPT_SYMBOLS);
+		if (!loaded) free(vfsbuf);
+	}
+#endif
+	if (!loaded) loaded = c4r_load_opt(name, C4ROPT_SYMBOLS);
+	return loaded;
+}
+
 int main (int argc, char **argv) {
 	int   i, endargs, endopt, failed, unresolved;
 	int  *master, *loaded;
@@ -595,10 +712,8 @@ int main (int argc, char **argv) {
 	char *spec, *arg, *outfile;
 	int  *hdr;
 	int   count_code, count_data, count_patch, count_con, count_des, count_sym;
-	int   dstored;
+	int   dstored, k;
 	char *dbytes;
-	char *vfsbuf;    // kernel RAM filesystem contents, when there are any
-	int   vfslen, vfsget;
 
 	// @file arguments first, so an object list written by a build can
 	// stand in for a command line C4DOS cannot hold (asm-c4r.c).
@@ -617,6 +732,8 @@ int main (int argc, char **argv) {
 	while (arg > spec && *(arg - 1) != '/') --arg;
 	if (!my_strncmp(arg, "c4rstrip", 8)) { cl_striptool = 1; cl_strip = 1; }
 	count_code = count_data = count_patch = count_con = count_des = count_sym = 0;
+	cl_nlibs = 0;
+	if (!(cl_libs = malloc(CL_LIBMAX * CLL__Sz * sizeof(int)))) return 1;
 	endargs = 0;
 	failed = 0;
 
@@ -653,6 +770,27 @@ int main (int argc, char **argv) {
 				else if (*arg == 'v') cl_verbose = 1;
 				else if (*arg == 'r') cl_libmode = 1;
 				else if (*arg == 's') cl_strip = 1;
+				else if (*arg == 'l') {
+					endopt = 1;
+					--argc; ++argv;
+					if (!argc) { printf("%s: -l requires a library\n", spec); return 1; }
+					if (cl_nlibs >= CL_LIBMAX) { printf("%s: at most %d -l libraries\n", spec, CL_LIBMAX); return 1; }
+					if (!(loaded = cl_load(*argv))) {
+						printf("%s: failed to load library '%s', aborting\n", spec, *argv);
+						return 2;
+					}
+					// at run time it is /lib/ and its base name
+					arg = *argv; while (*arg) ++arg;
+					while (arg > *argv && *(arg - 1) != '/') --arg;
+					i = 0; while (arg[i]) ++i;
+					cl_libs[cl_nlibs * CLL__Sz + CLL_STRUCT] = (int)loaded;
+					cl_libs[cl_nlibs * CLL__Sz + CLL_PATH] = (int)malloc(i + 6);
+					memcpy((char *)cl_libs[cl_nlibs * CLL__Sz + CLL_PATH], "/lib/", 5);
+					memcpy((char *)cl_libs[cl_nlibs * CLL__Sz + CLL_PATH] + 5, arg, i + 1);
+					cl_libs[cl_nlibs * CLL__Sz + CLL_USED] = 0;
+					++cl_nlibs;
+					arg = "";
+				}
 				else if (*arg == 'o') {
 					endopt = 1;
 					// grab outfile from next argv
@@ -682,39 +820,7 @@ int main (int argc, char **argv) {
 			// c4lc or c4cc just produced under C4KE exists only in
 			// memory, and without this c4rlink could not see the twelve
 			// objects C4IX is linked from.
-			loaded = 0;
-#if !NATIVE
-			// Resolved by name, the way asm-c4r.c resolves OP_VFS_PUT,
-			// rather than through u0.h -- c4rlink's own build does not
-			// include u0.h (C4R_C4CC_SRCS expands $(U0) before it is
-			// defined), and load-c4r.c already supplies C4I_TRAPH.
-			// Probe only with a trap handler installed; 128 is what a
-			// missed trap leaves in the accumulator.
-			vfsget = 0;
-			vfsbuf = 0;
-			if (__c4_info() & C4I_TRAPH)
-				vfsget = __c4_opcode("OP_VFS_GET", 128); // 128 = OP_REQUEST_SYMBOL
-			if (vfsget > 128)
-				vfsbuf = (char *)__c4_opcode(&vfslen, *argv, vfsget);
-			if (vfsbuf)
-				loaded = c4r_load_mem(*argv, vfsbuf, vfslen, C4ROPT_SYMBOLS);
-			// And the same thing one rung down. Under C4DOS the objects
-			// a compiler just wrote are on the RAM disk, which a
-			// transient's own open() cannot see -- the identical
-			// problem the C4KE branch above solves, with DOS's opener
-			// in place of the kernel's.
-			if (!loaded && dos_readable()) {
-				if (!(vfsbuf = malloc(CL_DOSMAX))) {
-					printf("%s: out of memory reading '%s'\n", spec, *argv);
-					return 2;
-				}
-				if ((vfslen = dos_slurp(*argv, vfsbuf, CL_DOSMAX)) > 0)
-					loaded = c4r_load_mem(*argv, vfsbuf, vfslen, C4ROPT_SYMBOLS);
-				if (!loaded) free(vfsbuf);
-			}
-#endif
-			if (!loaded)
-			if (!(loaded = c4r_load_opt(*argv, C4ROPT_SYMBOLS))) {
+			if (!(loaded = cl_load(*argv))) {
 				printf("%s: failed to load '%s', aborting\n", spec, *argv);
 				return 2;
 			}
@@ -792,7 +898,8 @@ int main (int argc, char **argv) {
 		printf("%s: failed to allocate %d bytes for master destructors\n", spec, i);
 		return 7;
 	}
-	if (count_sym && !(master[C4R_SYMBOLS] = (int)malloc((i = sizeof(int) * C4R_SYMB__Sz * count_sym)))) {
+	// CL_LIBMAX spare entries: add_needed's __c4_needed symbols
+	if (!(master[C4R_SYMBOLS] = (int)malloc((i = sizeof(int) * C4R_SYMB__Sz * (count_sym + CL_LIBMAX))))) {
 		printf("%s: failed to allocate %d bytes for master symbols\n", spec, i);
 		return 8;
 	}
@@ -817,6 +924,12 @@ int main (int argc, char **argv) {
 		// of the image entirely.)
 		// Before the trim, so data-resident patch slots that are now
 		// zero can also fall off the end.
+		if (add_needed(master)) { printf("%s: out of memory\n", spec); return 4; }
+		if (cl_strip && hdr[C4R_HDR_SYMBOLSLEN] && !cl_striptool) {
+			k = 0;
+			while (k < cl_nlibs) { if (cl_libs[k * CLL__Sz + CLL_USED]) { cl_strip = 0; k = cl_nlibs; } ++k; }
+			if (!cl_strip) printf("%s: warning: -s ignored: a program that uses a shared library keeps its symbols\n", spec);
+		}
 		blank_patch_targets(master);
 		dstored = hdr[C4R_HDR_MEMSZ];
 		dbytes = (char *)master[C4R_DATA];

@@ -144,12 +144,22 @@ int task_ghost(int id, int *pcode) {
 // Free what a task owns. Only ever called for a task nobody is
 // standing on -- see task_release.
 static void task_destroy(struct task *t) {
+    int i;
     ck_task_free(t);
     if (t->stack) free((int *)t->stack);
     if (t->img_code) free((int *)t->img_code);
     if (t->img_data) free((char *)t->img_data);
     if (t->img_cons) free((int *)t->img_cons);
     if (t->img_des) free((int *)t->img_des);
+    if (t->img_libs) {
+        i = 0;
+        while (i < t->img_nlibs) {
+            free((int *)((int *)t->img_libs)[2 * i]);
+            free((char *)((int *)t->img_libs)[2 * i + 1]);
+            ++i;
+        }
+        free((int *)t->img_libs);
+    }
     sl4b_free(task_cache, (char *)t);
 }
 

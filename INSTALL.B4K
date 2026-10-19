@@ -30,5 +30,6 @@ COPY $(OUT)/bin/c4rdump.c4r /bin/c4rdump
 COPY $(OUT)/bin/c4rlink.c4r /bin/c4rlink
 COPY $(OUT)/bin/cpp.c4r /bin/cpp
 COPY $(OUT)/lib/libc4ix.c4l /usr/lib/libc4ix.c4l
+COPY $(OUT)/lib/libc4ix.c4s /lib/libc4ix.c4s
 COPY $(OUT)/lib/libarc.c4l /usr/lib/libarc.c4l
 ECHO b4ke: installed in /bin and /usr/lib

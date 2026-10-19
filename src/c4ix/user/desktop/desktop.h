@@ -8,6 +8,7 @@
 //   files.c     Explorer
 //   taskmgr.c   Task Manager
 //   apps.c      Notepad, Calculator, and the small windows (About)
+//   edit.c      Editor: the IDE, a VIM-mode editor that builds with b4ke
 //
 // Only wm.c includes gui.h and touches the display. Everything else draws
 // through the d_* functions below, which wm.c clips to the window being
@@ -20,7 +21,7 @@ enum { SW = 800, SH = 600, TASK_H = 30, BORDER = 4, TITLE_H = 18, MENU_H = 20,
 
 // window kinds
 enum { K_TERM = 1, K_ABOUT = 2, K_FILES = 3, K_TASKS = 4, K_NOTE = 5, K_CALC = 6,
-       K_MSG = 7, K_INPUT = 8 };
+       K_MSG = 7, K_INPUT = 8, K_EDIT = 9 };
 
 // colours
 enum { C_DESK = 0x008080, C_FACE = 0xc0c0c0, C_LIGHT = 0xffffff, C_SHADOW = 0x808080,
@@ -140,6 +141,15 @@ int  calc_open();
 void calc_draw(struct win *w, int ox, int oy, int cw, int ch, int focused);
 void calc_mouse(struct win *w, int ev, int x, int y, int cw, int ch);
 void calc_key(struct win *w, int code, int ch, int mods);
+
+int  edit_open(char *path);
+void edit_draw(struct win *w, int ox, int oy, int cw, int ch, int focused);
+void edit_mouse(struct win *w, int ev, int x, int y, int cw, int ch);
+void edit_key(struct win *w, int code, int ch, int mods);
+void edit_command(struct win *w, int menu, int item);
+void edit_answer(struct win *w, int action, int yes);
+void edit_tick(struct win *w);
+void edit_close(struct win *w);
 
 void about_open();
 void about_draw(struct win *w, int ox, int oy, int cw, int ch, int focused);

@@ -358,6 +358,13 @@ static int b4_run(char **w, int n) {
         return 1;
     }
     before = b4_target ? b4_mtime(b4_target) : 0;
+    // say what runs, as make does -- the Editor reads this to know which
+    // source an error that names only a line belongs to
+    uprintf("+");
+    i = 1;
+    while (i < n) uprintf(" %s", w[i++]);
+    if (out) uprintf(" > %s", out);
+    uprintf("\n");
 
     fd = 0 - 1; saved = 0 - 1;
     if (out) {

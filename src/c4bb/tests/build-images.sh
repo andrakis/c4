@@ -297,7 +297,7 @@ if [ ! -f $OUT/c4ix32.c4r ] || \
     done
     # the desktop: several modules, linked together (docs/c4ix-desktop.md)
     dobjs=""
-    for m in wm ui term files taskmgr apps; do
+    for m in wm ui term files taskmgr apps edit; do
         ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix/include -I src/c4ix/user/desktop \
             src/c4ix/user/desktop/$m.c .c4bb_ix_d_$m.c4o > /dev/null
         dobjs="$dobjs .c4bb_ix_d_$m.c4o"

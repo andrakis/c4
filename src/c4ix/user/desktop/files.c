@@ -3,7 +3,8 @@
 // A folder tree beside a file list, over C4IX's VFS. Double-click opens:
 // a folder shows its contents, a program (a .c4r, or anything C4R
 // inside, which is how /bin's are named) runs in a new Command
-// Prompt, anything else opens in Notepad. New Folder, Delete (confirmed)
+// Prompt, a source file opens in the Editor, anything else in Notepad.
+// New Folder, Delete (confirmed)
 // and Rename go through the kernel's mkdir, unlink and rename.
 
 #include "desktop.h"
@@ -149,6 +150,12 @@ static char *type_of(char *name, int dir, int prog) {
     return "File";
 }
 
+// what opens in the Editor rather than Notepad
+static int is_source(char *p) {
+    return ui_ends(p, ".c") || ui_ends(p, ".h") || ui_ends(p, ".b4k") || ui_ends(p, ".B4K") ||
+           ui_ends(p, ".lisp") || ui_ends(p, ".f") || ui_ends(p, ".js") || ui_ends(p, ".mjs");
+}
+
 static void open_sel(struct win *w) {
     struct files *f;
     f = F(w);
@@ -156,6 +163,7 @@ static void open_sel(struct win *w) {
     join(tbuf, f->path, ename(f, f->sel));
     if (f->isdir[f->sel]) go(w, tbuf);
     else if (f->prog[f->sel]) run_command(tbuf);
+    else if (is_source(tbuf)) edit_open(tbuf);
     else note_open(tbuf);
 }
 

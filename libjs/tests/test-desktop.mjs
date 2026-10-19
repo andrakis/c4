@@ -111,6 +111,10 @@ const noDialog = () => !has('OK') && !has('Yes');
 check(until(() => consoleText().includes('c4ix:/$'), 2000), 'C4IX boots to its shell');
 check(/entries left on the host until first use/.test(consoleText()) && files.fetched.size < 12,
   `booting reads ${files.fetched.size} of ${index.length} disk files; the rest stay lazy`, [...files.fetched].join(' '));
+// The Editor's :make links with /usr/lib/libc4ix.c4l, which the root
+// archive brings: let its background unpack (task 3) finish first
+typeBytes(vm, new TextEncoder().encode('wait 3\n'));
+check(until(() => consoleText().includes('[3] done (0)'), 3000), 'the root archive unpacks in the background');
 typeBytes(vm, new TextEncoder().encode('desktop\n'));
 check(until(() => consoleText().includes('desktop: running on the display')), 'desktop starts from the console');
 check(until(() => gui.w === SW && gui.h === SH && presents > 0), `it asks for ${SW}x${SH} and draws`);
@@ -213,6 +217,59 @@ clickText('Hex', 'last', -8, 5);
 check(until(() => has('2A')), 'switched to Hex it shows 2A');
 type('*2=');
 check(until(() => has('54')), '2A * 2 = 54 in hex');
+
+// ---- Editor -------------------------------------------------------------------------------
+// Printable keys go in with keyCode 0: this harness would otherwise make
+// '(' a Down arrow and '.' Delete (a browser sends their own keyCodes).
+const txt = s => { for (const ch of s) key(ch, 0, ch === '\n' ? 13 : 0); };
+const edLine = s => frame.some(t => t.s.trimEnd().endsWith(s));
+start('Editor');
+check(until(() => has('Untitled - Editor')), 'Start > Editor opens a new file in VIM mode', screen());
+txt('i');
+check(until(() => has('-- INSERT --')), 'i enters Insert mode');
+txt('int main() {\n    return 4;\n}');
+key('ESC');
+check(until(() => edLine('int main() {') && edLine('return 4;') && !has('-- INSERT --')), 'typing shows, keeping the indent, and Esc leaves Insert', screen());
+txt(':w /ram/t.c\n');
+check(until(() => has(/"\/ram\/t\.c" written, 3 lines/) && has('t.c - Editor')), ':w writes the file', screen());
+txt('2Gf4r7');
+check(until(() => edLine('    return 7;')), '2G f4 r7 changes the number in place', screen());
+txt('ggyyp');
+check(until(() => find(/int main\(\) \{\s*$/).length === 2), 'yyp copies a line', screen());
+txt('dd');
+check(until(() => find(/int main\(\) \{\s*$/).length === 1), 'dd deletes it');
+txt('u');
+check(until(() => find(/int main\(\) \{\s*$/).length === 2), 'u undoes that', screen());
+txt('dd');
+key('UP'); key('DOWN');
+txt('A');
+key('LEFT', 0, 37); txt('0');
+key('ESC');
+check(until(() => edLine('    return 70;')), 'arrow keys move in Insert mode', screen());
+txt(':make\n');
+check(until(() => has(/^Build: finished/), 4000), ':make builds it with c4sc and c4rlink', screen());
+txt('ggOint x = ;');
+key('ESC');
+txt(':make\n');
+check(until(() => has(/^Build: failed - 1 error/), 4000), 'a compile error fails the build and is listed', screen());
+check(until(() => has(/\(1 of 1\)/)), 'and the editor goes to it', screen());
+txt('dd');
+txt('jwciwexit');
+key('ESC');
+check(until(() => edLine('    exit 70;')), 'ciw changes a word', screen());
+txt('w.');
+check(until(() => edLine('    exit exit;')), '. repeats the change', screen());
+txt('/main\n');
+txt('Vjd');
+check(until(() => !edLine('int main() {') && !edLine('exit exit;') && edLine('}')), '/ finds, and V j d deletes the lines', screen());
+txt(':set novim\n');
+check(until(() => has(/^VIM mode off|^-- EDIT --/)), ':set novim makes a plain editor', screen());
+txt('abc');
+check(until(() => edLine('abc}')), 'that types at once', screen());
+key('ESC'); txt('set vim\n');
+check(until(() => !has(/^-- EDIT --/)), 'and Esc then set vim brings VIM back', screen());
+txt(':q!\n');
+check(until(() => !has(/t\.c \* - Editor|t\.c - Editor/)), ':q! closes the window');
 
 // ---- Task Manager ------------------------------------------------------------------------
 clickText(/^Command Prompt - task/);

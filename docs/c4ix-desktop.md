@@ -323,6 +323,44 @@ can redirect that into a RAM file, so the Forth route works already.
       animates, counts a click on its button, sees a typed key, and q
       gives the terminal back with its title.
 
+## Part four: an IDE (asked for 2026-10-19)
+
+The machine could compile inside itself (part three), and now rebuild
+everything it ships (`b4ke -C /usr/src/c4`, docs/c4ix-design.md). What
+it lacked was somewhere to edit and build in one place.
+
+- [x] **The Editor** (`src/c4ix/user/desktop/edit.c`, window kind
+      `K_EDIT`, Start > Editor, and Explorer for `.c .h .b4k .lisp .f
+      .js` files). Lines are separate allocations, so there is no
+      Notepad-style 65,000-byte limit; undo and redo are snapshots of the
+      text, 32 deep.
+- [x] **VIM mode**, on by default. Normal, Insert, Visual and Visual-line,
+      and the `:` / `?` command line. Motions with counts (`hjkl w b e W B
+      E 0 ^ $ gg G { } % f t F T ; ,`), operators `d c y > <` with any
+      motion or doubled, text objects `iw aw i( a( i{ a{ i" a"`, `x X D C
+      s S r J ~ p P u Ctrl-R . n N *`, and `:w :q :q! :wq :x :e :N :$
+      :s/a/b/ :%s/a/b/g :set nu|nonu|vim|novim`. `:set novim` is a plain
+      editor in which Esc opens the command line.
+- [x] **Arrow keys in every mode**, Insert included, with Home/End,
+      PgUp/PgDn, Ctrl+Home/End and Ctrl+Left/Right; Shift+arrows start a
+      Visual selection. Ctrl+S saves from any mode.
+- [x] **Build what is open.** `:make` (F5) saves, then runs b4ke over pipes
+      into a pane under the text, the way the Command Prompt runs its
+      shell. It uses the nearest `BUILD.B4K` at or above the file;
+      without one, a `.c` file gets a build file of its own
+      (`/ram/edit.b4k`: c4sc, then c4rlink with `/usr/lib/libc4ix.c4l`).
+      b4ke now echoes each command it runs (`+ c4sc ...`), so c4lc's
+      `line N:` errors, which name no file, are matched to the source the
+      command compiled. `FILE:N:` and c4cc's `N:` count too. The build
+      goes to the first error; F8 / Shift+F8 or `:cn` / `:cp` move
+      through them, and a double click in the pane jumps. `:run` (F6) runs
+      the result in a new Command Prompt: the lone file's image, or a
+      `BUILD.B4K`'s `SET RUN command`.
+- [x] Pinned by `test-desktop.mjs`: Insert and Esc, auto-indent, `:w`, `2G
+      f4 r7`, `yyp`, `dd`, `u`, arrows in Insert, `:make` building, a
+      compile error listed and gone to, `ciw` and `.`, `/` and `V j d`,
+      `:set novim` and back, and `:q!`.
+
 ### Found on the way, not fixed
 - `make test-c4th-os`: the C4DOS leg prints an empty prompt line ahead of
   c4th's output, so it differs from the reference at byte 1. Nothing it

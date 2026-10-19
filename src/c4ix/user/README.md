@@ -46,7 +46,7 @@ Run by `c4ix-sh` with the script as its argument.
 
 ## desktop/
 
-A Windows NT 4-style desktop, one C4IX task built from six modules and
+A Windows NT 4-style desktop, one C4IX task built from seven modules and
 linked with libc4ix (`make c4ix-desktop.c4r`; the 32-bit build comes from
 `build-images.sh`). It needs the libjs display: start C4IX in the libjs
 page and type `desktop`.
@@ -60,6 +60,7 @@ page and type `desktop`.
 | `files.c` | Explorer: folder tree and file list over the VFS; double-click runs a program in a new Command Prompt |
 | `taskmgr.c` | Task Manager: Applications, Processes (CPU share over the last second), Performance |
 | `apps.c` | Notepad, Calculator, About |
+| `edit.c` | Editor, the IDE: a VIM-mode editor (`:set novim` for a plain one; arrow keys in every mode) that builds what it edits. `:make`/F5 runs b4ke on the nearest `BUILD.B4K` above the file, or compiles a lone `.c` with c4sc and links it with libc4ix into `/ram`; errors are listed under the text and F8 goes to the next. `:run`/F6 runs the result. Explorer opens source files here |
 
 Kernel calls the desktop added (`SYS_AVAIL`, `SYS_CLOEXEC`, `SYS_INTR`)
 and the display registers it uses are described in

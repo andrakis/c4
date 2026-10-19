@@ -65,6 +65,10 @@ void d_icon(int kind, int x, int y) {
         gui_rect(x, y + 1, 16, 12, C_DARK); gui_recto(x, y + 1, 16, 12, C_SHADOW);
         gui_line(x + 2, y + 10, x + 6, y + 5, C_GREEN); gui_line(x + 6, y + 5, x + 9, y + 8, C_GREEN);
         gui_line(x + 9, y + 8, x + 14, y + 3, C_GREEN); gui_rect(x + 5, y + 13, 6, 2, C_SHADOW);
+    } else if (kind == K_EDIT) {
+        gui_rect(x + 1, y, 14, 16, C_WHITE); gui_recto(x + 1, y, 14, 16, C_SHADOW);
+        gui_text2(x + 2, y + 3, 0x008000, 8, F_MONO, 0, "{}", 2);
+        gui_rect(x + 3, y + 12, 10, 1, 0x4060c0);
     } else if (kind == K_NOTE) {
         gui_rect(x + 2, y, 12, 16, C_WHITE); gui_recto(x + 2, y, 12, 16, C_SHADOW);
         gui_rect(x + 4, y + 4, 8, 1, 0x4060c0); gui_rect(x + 4, y + 7, 8, 1, 0x4060c0);
@@ -163,6 +167,7 @@ void win_close(int i) {
     w = wins + i;
     if (!w->used) return;
     if (w->kind == K_TERM) term_close(w);
+    if (w->kind == K_EDIT) edit_close(w);
     w->used = 0;
     unlink_z(i);
     if (drag == i + 1) drag = 0;
@@ -217,6 +222,7 @@ static void answer(struct win *d, int yes) {
     win_raise(owner);
     if (o->kind == K_FILES) files_answer(o, action, yes);
     else if (o->kind == K_NOTE) note_answer(o, action, yes);
+    else if (o->kind == K_EDIT) edit_answer(o, action, yes);
     else if (o->kind == K_TASKS) tasks_answer(o, action, yes);
 }
 
@@ -279,6 +285,7 @@ static void app_draw(struct win *w, int ox, int oy, int cw, int ch, int focused)
     else if (k == K_FILES) files_draw(w, ox, oy, cw, ch, focused);
     else if (k == K_TASKS) tasks_draw(w, ox, oy, cw, ch, focused);
     else if (k == K_NOTE) note_draw(w, ox, oy, cw, ch, focused);
+    else if (k == K_EDIT) edit_draw(w, ox, oy, cw, ch, focused);
     else if (k == K_CALC) calc_draw(w, ox, oy, cw, ch, focused);
     else if (k == K_MSG || k == K_INPUT) dialog_draw(w, ox, oy, cw, ch);
     else about_draw(w, ox, oy, cw, ch, focused);
@@ -291,6 +298,7 @@ static void app_mouse(struct win *w, int e, int x, int y) {
     else if (k == K_FILES) files_mouse(w, e, x, y, cw, ch);
     else if (k == K_TASKS) tasks_mouse(w, e, x, y, cw, ch);
     else if (k == K_NOTE) note_mouse(w, e, x, y, cw, ch);
+    else if (k == K_EDIT) edit_mouse(w, e, x, y, cw, ch);
     else if (k == K_CALC) calc_mouse(w, e, x, y, cw, ch);
     else if ((k == K_MSG || k == K_INPUT) && e == E_DOWN) dialog_mouse(w, x, y, cw, ch);
 }
@@ -302,6 +310,7 @@ static void app_key(struct win *w, int code, int ch, int mods) {
     else if (k == K_FILES) files_key(w, code, ch, mods);
     else if (k == K_TASKS) tasks_key(w, code, ch, mods);
     else if (k == K_NOTE) note_key(w, code, ch, mods);
+    else if (k == K_EDIT) edit_key(w, code, ch, mods);
     else if (k == K_CALC) calc_key(w, code, ch, mods);
     else if (k == K_MSG || k == K_INPUT) dialog_key(w, code, ch, mods);
     else if (code == KEY_ENTER || code == KEY_ESC) win_close(win_index(w));
@@ -310,6 +319,7 @@ static void app_key(struct win *w, int code, int ch, int mods) {
 static void app_command(struct win *w, int menu, int item) {
     if (w->kind == K_FILES) files_command(w, menu, item);
     else if (w->kind == K_NOTE) note_command(w, menu, item);
+    else if (w->kind == K_EDIT) edit_command(w, menu, item);
 }
 
 // ---- drawing the scene -----------------------------------------------------------
@@ -610,6 +620,7 @@ static void launch(int kind) {
     else if (kind == K_FILES) files_open("/");
     else if (kind == K_TASKS) tasks_open();
     else if (kind == K_NOTE) note_open(0);
+    else if (kind == K_EDIT) edit_open(0);
     else if (kind == K_CALC) calc_open();
     else if (kind == K_ABOUT) about_open();
 }
@@ -827,6 +838,7 @@ int main(int argc, char **argv) {
     start_items[k] = "Command Prompt"; start_kinds[k] = K_TERM; ++k;
     start_items[k] = "Explorer"; start_kinds[k] = K_FILES; ++k;
     start_items[k] = "Notepad"; start_kinds[k] = K_NOTE; ++k;
+    start_items[k] = "Editor"; start_kinds[k] = K_EDIT; ++k;
     start_items[k] = "Calculator"; start_kinds[k] = K_CALC; ++k;
     start_items[k] = "Task Manager"; start_kinds[k] = K_TASKS; ++k;
     start_items[k] = "About C4IX"; start_kinds[k] = K_ABOUT; ++k;
@@ -854,6 +866,7 @@ int main(int argc, char **argv) {
         k = 0;
         while (k < MAXW) {
             if (wins[k].used && wins[k].kind == K_TERM) term_tick(wins + k);
+            if (wins[k].used && wins[k].kind == K_EDIT) edit_tick(wins + k);
             ++k;
         }
         // a tick a second for the windows that show live numbers

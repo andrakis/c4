@@ -5,24 +5,40 @@ source by c4lc, not run as the OpenRISC binary. The resulting `busybox.c4r`
 links `/lib/libc.c4s` and runs as an ordinary C4IX task, and `/bin` gets its
 applets.
 
-This file is the tracker. It records what is missing today, measured where
-that can be measured now and estimated where it needs Busybox's source. It
-also sets the order of the work: §7 lists the steps, each green before the
-next.
+This file is the tracker. It records what is missing today and sets the
+order of the work: §7 lists the steps, each green before the next. Each gap
+was measured against Busybox 1.37.0 built on helios with host gcc, in the
+configuration below (§2.1).
 
-Status (2026-10-20): **write-up done; nothing ported yet.** The Busybox source
-has not been fetched.
+Status (2026-10-20):
+- the write-up is done and checked against the source;
+- M7b, the compiler, has started.
+- The source is not vendored into the repository yet; that is M7e.
 
 ## 1. The target
 
-- **Busybox 1.37.0**, the current stable release, pinned by its sha256 when it
-  is fetched. GPLv2, like the rest of Busybox. The vendored tree keeps its
-  `LICENSE` and every file's own header.
-- **Configuration:** `make allnoconfig` plus a short list, generated on the
-  host and committed (§6). There is no fork, so it is a **NOMMU** build
-  (`CONFIG_NOMMU=y`, which sets `BB_MMU` to 0). That is the configuration
-  Busybox ships for uClinux, and the one its shells, daemons and `vfork`
-  paths are already written for.
+- **Busybox 1.37.0**, the current stable release, licensed GPLv2. The
+  vendored tree keeps its `LICENSE` and every file's own header.
+  - Tarball: `https://busybox.net/downloads/busybox-1.37.0.tar.bz2`,
+    2,565,764 bytes.
+  - sha256 `3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b837043a4`,
+    which matches the `.sha256` that busybox.net publishes beside it. That
+    file comes from the same server, so the check proves the copy is intact,
+    not that it is authentic. The GPG signature has not been checked.
+- **Configuration:** `make allnoconfig`, then these 27 options set to `y`
+  and `yes "" | make oldconfig`. The vendoring step commits the generated
+  `.config` (§6).
+  - `NOMMU`, `BUSYBOX`, `FEATURE_INSTALLER`
+  - `SH_IS_HUSH`, `HUSH`, `SHELL_HUSH`
+  - `HUSH_TICK`, `HUSH_IF`, `HUSH_LOOPS`, `HUSH_CASE`, `HUSH_ECHO`,
+    `HUSH_EXPORT`, `HUSH_SET`, `HUSH_UNSET`
+  - the applets `CAT`, `CP`, `ECHO`, `FALSE`, `HEAD`, `LS`, `MKDIR`, `MV`,
+    `RM`, `TAIL`, `TRUE`, `WC` and `GREP`.
+
+  There is no fork, so it is a **NOMMU** build: `CONFIG_NOMMU=y` sets
+  `BB_MMU` to 0. That is the configuration Busybox ships for uClinux, and its
+  shells, daemons and `vfork` paths are already written for it.
+  `FEATURE_BUFFERS_USE_MALLOC` comes with `allnoconfig`.
 - **Applets for the first install:** `sh` (hush; ash needs fork and is out),
   `echo`, `cat`, `ls`, `wc`, `true`, `false`, `mkdir`, `rm`, `cp`, `mv`,
   `head`, `tail` and `grep`.
@@ -62,6 +78,49 @@ c4fc must match c4lc byte for byte (`make test-c4fc`). So every compiler item
 below is done twice: in `src/c4sp/lisp/c4lc-*.lisp` and in `src/c4fc/*.f`. c4sc
 is c4lc compiled, so it comes along by itself.
 
+### 2.1 Checked against 1.37.0
+
+The configuration in §1 was built on helios with gcc 15.2, out of tree
+(`make O=…`). Then this was run:
+
+```
+python3 src/tests/bbport/bb-measure.py BUILD_DIR SRC_DIR
+```
+
+It reads the link map. What it found:
+
+- **What links:** 67 units, 25,028 source lines before `#if`, and 64 KB of
+  `-Os` x86-64 text. The stripped binary is 76 KB.
+  - `shell/hush.c` is half of it: 12,365 lines and 25 KB.
+  - Next come `libbb/xfuncs_printf.c`, `shell/shell_common.c`,
+    `coreutils/ls.c` and `findutils/grep.c`, at 2–3 KB each.
+- **What it imports:** 156 symbols, which become libc's list in §5.
+  - c4rlink links whole units; it does not drop unused functions the way
+    `--gc-sections` does. So every import of a linked unit must resolve, even
+    those of functions that never run. `xfuncs_printf.c`, for one, brings in
+    `socket`, `bind`, `listen`, `sendto` and `mmap`.
+- **How often each construct appears** in the 67 units. This sets the
+  priorities in §3:
+
+| construct | uses | most in |
+|---|---|---|
+| `goto` | 195 | hush 112, appletlib 11, mv 10 |
+| `(void)` parameter lists | 53, plus 57 in headers | everywhere |
+| `__VA_ARGS__` | 22, plus 1,195 in headers | the generated `autoconf.h` alone defines one `IF_X(...)` per option |
+| `defined(X)` | 22, plus 85 in headers | |
+| `sizeof(*p)`, `sizeof x` | 24 | hush 16 |
+| `static` locals | 19 | |
+| 2-D arrays | 19 | hush 13 |
+| `[i] =` designators | 18 | all in hush |
+| function-pointer declarators | 13, plus 36 in headers | signals, recursive_action, `applet_main[]` |
+| struct assignment | 9 | hush 6 |
+| `inline` | 7, plus 46 in headers | |
+| `alloca` | 5 | hush 2, getopt32 2, copyfd 1 |
+| `setjmp`/`longjmp` | 2 | `vfork_daemon_rexec.c`, which links because of `prctl`, so it must resolve |
+| `typedef enum` | 2 | hush |
+| bitfields, `.x =` designators, statement expressions, case ranges, `typeof`, compound literals, `for (int …)` | **0** | |
+
+  `asm` appears only in headers, as `barrier()`.
 ## 3. The compiler
 
 Priorities:
@@ -85,13 +144,14 @@ Priorities:
 | `inline_only` | `inline` / `static inline` | CFAIL | P0 | `platform.h`'s `ALWAYS_INLINE`, many small helpers in headers |
 | `attribute`, `attr_macro_away` | `__attribute__((…))` anywhere; `#define __attribute__(x)` | CFAIL: the lexer reserves the name, and the parser takes it in one position only | P0 | `NORETURN`, `FAST_FUNC`, `ALIGN1`, `PACKED`, `UNUSED_PARAM` on almost every prototype. Either parse it and ignore it everywhere a declaration allows it, or let the preprocessor redefine it. |
 | `restrict_` | `restrict` | CFAIL: read as a name | P1 | a few libbb prototypes |
-| `array2d`, `array2d_init` | `int g[3][4]`, `char t[][8] = {…}` | CFAIL | P1 | keyword tables, `ls`'s column arrays |
-| `bitfield` | `unsigned a : 3;` | CFAIL | P1 | a few structs. Read-modify-write on a word. |
-| `struct_copy` | `a = b` for structs | CFAIL: bad lvalue | P1 | `struct stat` copies in `ls`/`cp`. It becomes a `memcpy`. |
+| `array2d`, `array2d_init` | `int g[3][4]`, `char t[][8] = {…}` | CFAIL | P0 | 19 uses, 13 of them in hush |
+| `struct_copy` | `a = b` for structs | CFAIL: bad lvalue | P0 | 9 uses, 6 in hush. It becomes a `memcpy`. |
+| (no probe yet) | `alloca(n)` | not a builtin | P1 | 5 uses: hush, getopt32, copyfd. It can start as `malloc` in the `platform.h` block, a small leak per call, and become a real stack allocation later. |
+| `bitfield` | `unsigned a : 3;` | CFAIL | P2 | 0 uses in this configuration |
 | `struct_byval` | struct parameters and returns by value | CFAIL: "must be pointers" | P2 | rare. Patch it, or lower it to hidden pointers. |
-| `for_decl` | `for (int i = …)` | CFAIL | P1 | a handful of loops in newer code |
+| `for_decl` | `for (int i = …)` | CFAIL | P2 | 0 uses |
 | `vla` | `char b[n]` | CFAIL | P2 | `FEATURE_BUFFERS_USE_MALLOC=y` avoids most uses; the rest get patched |
-| `typeof_` | `typeof(x)` | CFAIL | P2 | a few macros |
+| `typeof_` | `typeof(x)` | CFAIL | P2 | 0 uses |
 | `long_long` | `long long` | parses; word-sized by design (M4) | — | With LFS off, `off_t` fits in a word. `%lld` already prints a word. |
 
 ### 3.2 Initializers
@@ -103,9 +163,9 @@ Priorities:
 | `struct_global_init`, `struct_arr_init_ints`, `struct_init_str`, `struct_init_fn`, `nested_struct_init` | struct and array-of-struct initializers with numbers, strings and function addresses | CFAIL: "struct globals cannot be initialized" | P0: every option, builtin and keyword table |
 | `global_addr_var`, `global_ptr_init` | `int *p = &x;` in a global | CFAIL: `&` is allowed on functions only | P1 |
 | `local_struct_init` | `struct pt p = {3, 4};` in a function | CFAIL | P1 |
-| `designated` | `.x = 1`, `[3] = 2` | CFAIL | P1 |
+| `designated` | `[3] = 2`; `.x = 1` | CFAIL | P0 for `[i] =` (18 uses, all in hush); P2 for `.x =` (0 uses) |
 | `extern_arr` | `extern const char t[];` without a size | CFAIL: "needs an initializer" | P0: `bb_msg_*`, `applet_names`, `bb_common_bufsiz1` are all declared this way |
-| `compound_lit` | `(struct pt){3, 4}` | CFAIL | P2 |
+| `compound_lit` | `(struct pt){3, 4}` | CFAIL | P2: 0 uses |
 
 These are one piece of work: a general constant initializer for data. Its
 values are integers, string addresses, function addresses and global
@@ -124,8 +184,8 @@ values.
 | `neg_array_assert`, `offsetof` | `sizeof` and `offsetof` inside constant expressions (array sizes) | CFAIL | P0: the `BUG_*_too_big` checks in every applet that has `struct globals` |
 | `func_name`, `line_macros` | `__func__`, `__LINE__`, `__FILE__` | CFAIL | P1: cheap |
 | `builtin_expect` | `__builtin_expect` | CFAIL | P2: `likely()`/`unlikely()` can be defined away in `platform.h` |
-| `statement_expr` | `({ … })` | CFAIL | P2 |
-| `case_range` | `case 'a' ... 'z':` | CFAIL | P2 |
+| `statement_expr` | `({ … })` | CFAIL | P2: 0 uses outside headers |
+| `case_range` | `case 'a' ... 'z':` | CFAIL | P2: 0 uses |
 
 Already right (52 probes):
 - unions, flexible array members, multi-declarators, `char`/`short`/unsigned
@@ -205,25 +265,52 @@ can be built on it.
 
 ## 5. libc
 
-`/lib/libc.c4s` has about 140 functions (`src/c4ix/libc/README.md`). libbb
-and the chosen applets need these as well. The list is from Busybox's
-headers and will be checked against the link's undefined symbols at M7e:
+`/lib/libc.c4s` has about 140 functions (`src/c4ix/libc/README.md`). The
+configured build imports 156 symbols (§2.1). 99 are not in `libc.h`:
 
-- **stdio and strings:**
-  - `vasprintf`/`asprintf`: libbb's message functions are built on them.
-  - `stpcpy`, `strchrnul`, `memrchr`, `mempcpy`, `strsep`, `strverscmp`.
-  - `strtoll`/`strtoull`, word-sized, like M4's `long long`.
-  - `strsignal`, `basename`/`dirname`, `realpath`.
-- **Process:**
-  - `vfork`, `execve`/`execv`/`execvp`, `waitpid` and its `W*` macros;
-  - `environ`, `getppid`, `_exit`;
-  - `signal`/`sigaction`/`sigprocmask` stubs;
-  - `getuid`/`geteuid`/`getgid`, all returning 0.
-- **Files:**
-  - `lseek`, `fstat`, `lstat`, `ftruncate`, `fchdir` (`ENOSYS`), `access`
-    (already there);
-  - `chmod` and the other no-ops in §4;
-  - `opendir` is already there, plus `fdopendir` if needed.
+- **24 are artifacts of glibc's headers,** and C4IX's headers never produce
+  them:
+  - the `_FORTIFY_SOURCE` `__*_chk` wrappers;
+  - C23's `__isoc23_strtol` and the rest;
+  - `__errno_location` and `__stack_chk_fail`.
+
+  Their plain names, however, are real needs:
+  - `vasprintf`, `sscanf`, `mempcpy`, `strtoll`, `strtoull`, which are
+    missing;
+  - `dprintf`, `memmove`, `vsnprintf`, which are already in libc.
+- **Five `*_unlocked` stdio names and `major`/`minor`** are macros over
+  libc's existing functions in the headers.
+- **The rest, about 75, are real.** These are implemented:
+  - **strings:** `stpcpy`, `strchrnul`, `strsep`, `strcasestr`, `putenv`,
+    `realpath`, `mkstemp`;
+  - **time:** `gettimeofday`, `localtime`, `mktime`, `strftime`;
+  - **process:**
+    - `vfork`, `execv`, `execve`, `execvp`, `wait`, `waitpid` and its `W*`
+      macros;
+    - `environ`, `getppid`, `setsid`, `raise`;
+  - **files:** `fstat`, `lstat`, `fcntl` (`F_GETFD`/`F_SETFD` over
+    `SYS_CLOEXEC`, and `F_DUPFD`), `link`, `utimes`, `poll` (pipes and the
+    console, over `SYS_AVAIL`);
+  - **patterns:** `fnmatch`, `glob`, `globfree`, `regcomp`, `regexec`,
+    `regerror` (below).
+- **Stubs**, which succeed or fail with an honest errno:
+  - **signals:** `signal`, `sigaction`, `sigprocmask`, `sigsuspend` and the
+    six `sig*set` functions. They record the handlers and never deliver.
+  - **identity:** `geteuid`, `getegid` (0); `setuid`, `setgid`, `seteuid`,
+    `setegid`, `chroot`.
+  - **metadata:** `chmod`, `chown`, `lchown`, `umask`, `mknod`,
+    `readlink`, `symlink`, `fchdir`.
+  - **terminal:** `ioctl`, `tcgetattr`, `tcsetattr`, `ttyname_r`.
+  - **resources:** `getrlimit`/`setrlimit`, `settimeofday`, `mallopt`,
+    `prctl`, `mmap`.
+  - **network:** `socket`, `bind`, `listen`, `sendto`.
+
+  None of these runs in the configured applets. They are there because
+  c4rlink links whole units.
+
+Not needed after all: `memrchr`, `strverscmp`, `strsignal`, and
+`basename`/`dirname` (libbb has its own `bb_basename`).
+
 - **Patterns:**
   - `fnmatch` and `glob`, for hush's globbing.
   - **`regcomp`/`regexec`**, for `grep`. This is the largest piece. The
@@ -236,16 +323,20 @@ headers and will be checked against the link's undefined symbols at M7e:
     `poll.h`, `paths.h`, `libgen.h`, `fnmatch.h`, `glob.h`, `regex.h`.
   - Each one declares only what exists. A use of anything else must fail at
     link time, not misbehave at run time.
-- **`setjmp`/`longjmp`:** not needed with NOFORK applets off, since libbb's
-  `die_jmp` is used only there. It is still wanted later. It needs a trap
-  that restores pc, sp and bp, so it is a kernel item too.
+- **`setjmp`/`longjmp`:** they must link, because `vfork_daemon_rexec.c` is
+  linked, and it is linked because of `prctl`. They need not work with
+  NOFORK applets off, since `die_jmp` is used only there.
+  - A stub that aborts with a message is enough for M7f.
+  - A real one is a trap that restores pc, sp and bp, so it is a kernel item
+    too.
 
 ## 6. The build
 
 - **Vendoring:** a script, `tools/bb-vendor.sh`, unpacks the pinned tarball
   and checks its sha256. It copies into `third_party/busybox/` only the files
-  the configuration compiles, plus `LICENSE`, `README` and `AUTHORS`, so a
-  15 MB tree is not committed for 14 applets.
+  the configuration compiles, plus `LICENSE`, `README` and `AUTHORS`. That is
+  the 67 `.c` files of §2.1 and the headers they include, so the 20 MB
+  unpacked tree is not committed for 14 applets.
   - The generated headers are committed beside them: `autoconf.h`,
     `applets.h`, `applet_tables.h`, `bbconfigopts.h`, `common_bufsiz.h`,
     `NUM_APPLETS.h` and `usage.h`. Building never runs Kconfig.
@@ -290,9 +381,10 @@ Each step lands with tests, and the next starts only when they are green.
    6. `goto`;
    7. enum declarations;
    8. `static` locals;
-   9. aggregate initializers and `extern T x[]`;
+   9. aggregate initializers, with `[i] =` designators, and `extern T x[]`;
    10. `inline` and `__attribute__`;
-   11. then the P1 items.
+   11. 2-D arrays and struct assignment;
+   12. then the P1 items.
 
    Each turns its probes PASS, and gets gcc-checked tests in
    `src/tests/c4lc_*.c` like M4's. `run.sh` joins `make test-c4lc` when it
@@ -308,11 +400,13 @@ Each step lands with tests, and the next starts only when they are green.
    `pictest` pins D2.
 3. **M7d, libc:** §5's list, each with a line in `libctest`. `regcomp` gets
    its own test against host `grep -E` on fixed inputs.
-4. **M7e, fetch and vendor** Busybox 1.37.0. **This is a download, so it
-   waits for the user's go-ahead.** Then:
-   - generate the configuration on helios with host gcc;
-   - commit `.config` and the generated headers;
-   - start the patch table.
+4. **M7e, vendor** Busybox 1.37.0.
+   - Fetched on helios on 2026-10-20 (`~/bbfetch`, outside the repository),
+     configured, built with gcc and measured (§2.1).
+   - What is left:
+     - `tools/bb-vendor.sh`;
+     - commit `.config` and the generated headers;
+     - start the patch table.
 5. **M7f, compile, link and run.** Do this with c4lc on helios first, under
    `node libjs/cli.js`, then in C4IX's shell. Fix what each applet hits, and
    diff every applet's output against host Busybox's on fixed inputs.
@@ -324,18 +418,18 @@ Each step lands with tests, and the next starts only when they are green.
 
 ## 8. Risks
 
-- **Image size.** C4IX caps an image at 4 MB (`C4R_BUF_MAX`, `loader.c`).
-  - The desktop is 4,500 lines and its image is 442 KB, libc4ix included:
-    about 100 bytes per line.
-  - The minimal configuration compiles perhaps 25–35 thousand lines of libbb
-    and applets. That is near the cap, before symbols.
-  - If it is over:
-    - size the loader's buffer from `stat` instead of a fixed 4 MB;
-    - strip the symbols a dynamic image does not need. Today `-s` is
-      ignored for one, because the loader resolves the image's imports from
-      its symbol table, but only the import records are needed;
-    - and let c4rlink drop unreferenced functions.
-  - Measure at M7f before choosing.
+- **Image size is not a risk after all.** C4IX caps an image at 4 MB
+  (`C4R_BUF_MAX`, `loader.c`).
+  - The measured build is 64 KB of x86-64 text in whole units (§2.1).
+  - `c4m.c` gives the ratio: it is 35.8 KB of x86-32 text from gcc, and a
+    113 KB `.c4r` from 32-bit c4lc `-O`, symbols included. That is about
+    3.2×.
+  - So `busybox.c4r` should be roughly 0.2–0.4 MB. The earlier estimate of
+    100 bytes per source line counted the desktop with libc4ix linked in.
+  - To be measured at M7f.
+  - The remedies stay noted in case: size the loader's buffer from `stat`,
+    strip the symbols a dynamic image does not need, and let c4rlink drop
+    unreferenced functions. The last would also remove most of §5's stubs.
 - **Compile time on the host** is a few minutes: c4lc compiles the 275 KB
   `c4sp.c` in about 9 s natively. Inside C4IX it is an hour-scale job.
 - **vfork is the one deep kernel change.** It touches the scheduler's

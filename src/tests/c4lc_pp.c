@@ -51,6 +51,25 @@ int nested() { return LONG_MACRO(ADD(1, 2)); }
 int CAT(fo, ur)() { return 4; }
 int PREFIXED(probe)() { return 11; }
 
+// `defined(X)` must not expand X first. With VERSION defined as 7, c4lc
+// asked whether `7` was defined, so this was always 0 (M7b; Busybox's
+// headers use the form 107 times).
+#if defined(VERSION) && defined (TWO) && !defined(NOT_DEFINED)
+int defined_paren() { return 1; }
+#else
+int defined_paren() { return 0; }
+#endif
+
+// Once an arm is taken, no later #elif or #else runs. c4lc's #else
+// used to run after `#if 1 / #elif 1`, which made one_arm defined twice.
+#if VERSION
+int one_arm() { return 1; }
+#elif VERSION
+int one_arm() { return 2; }
+#else
+int one_arm() { return 3; }
+#endif
+
 int main() {
     printf("guarded %d\n", guarded());
     printf("taken_if %d\n", taken_if());
@@ -61,5 +80,7 @@ int main() {
     printf("str-noexpand %s\n", STR(VERSION));
     printf("cat %d\n", CAT(fo, ur)());
     printf("paste %d\n", c4lc_probe());
+    printf("defined-paren %d\n", defined_paren());
+    printf("one-arm %d\n", one_arm());
     return 0;
 }

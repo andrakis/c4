@@ -7,3 +7,5 @@ xstr 7
 str-noexpand VERSION
 cat 4
 paste 11
+defined-paren 1
+one-arm 1

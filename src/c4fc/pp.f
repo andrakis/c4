@@ -18,10 +18,8 @@
 \ needs a token's text back (# and ##). Adding #warning is one row.
 \
 \ Deliberate divergences from c4lc's preprocessor, all in the direction
-\ of what C says, all documented in docs/c4fc-design.md:
-\   * a conditional level records whether a branch has been TAKEN, so
-\     #if 1 / #elif 1 / #else does not run the #else arm;
-\   * `defined(X)` protects X from expansion even when X is a macro;
+\ of what C says, all documented in docs/c4fc-design.md (c4lc caught up
+\ on TAKEN, defined(X) and the including file's directory in M7b):
 \   * a macro is painted blue while its own expansion is rescanned, so
 \     a self-referential #define terminates instead of looping;
 \   * a function-like macro name without a following '(' stands for

@@ -3064,6 +3064,10 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	# codegen a long way away. Both headers must arrive: 7 + 35.
 	./c4sp src/c4sp/lisp/c4lc.lisp -P -I $(TESTS) $(TESTS)/c4lc_ppinc.c .c4lc_b.c4r > /dev/null
 	./c4m load-c4r.c -- .c4lc_b.c4r > /dev/null; test $$? = 42
+	# And with no -I at all: a "..." include is found beside the file
+	# that includes it, as c4fc does, not in the working directory (M7b)
+	./c4sp src/c4sp/lisp/c4lc.lisp -P $(TESTS)/c4lc_ppinc.c .c4lc_b.c4r > /dev/null
+	./c4m load-c4r.c -- .c4lc_b.c4r > /dev/null; test $$? = 42
 	# Then the property that matters: preprocessing a real module
 	# with c4lc instead of gcc -E must produce the SAME OBJECT, byte
 	# for byte. If that holds, gcc is no longer in the pipeline.

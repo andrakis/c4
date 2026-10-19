@@ -423,6 +423,12 @@ The bar rises rung by rung and c4lc supplies it at every one.
       and the `c4.h` that is not in the root, and the only divergence
       any real file in this tree noticed.
 
+      *Since M7b (2026-10-20)* c4lc does the first, second and fourth
+      the same way, because Busybox needs them (docs/busybox-port.md).
+      Its `defined(X)` was always false for a defined X. Only the blue
+      paint remains c4fc's alone. c4lc still falls back to the current
+      directory after `-I`, where c4fc stops with an error.
+
       *Verified*, weakest bar first:
       - `src/tests/c4lc_pp.c`, the battery c4lc's own L9 test uses,
         **token for token identical to c4lc's preprocessor**. (That

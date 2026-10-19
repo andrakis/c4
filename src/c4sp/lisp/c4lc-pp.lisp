@@ -11,7 +11,8 @@
 ;; name as one Str token. A directive runs from a Hash to the end of
 ;; its LINE, which is why the splicing matters.
 ;;
-;; Supported: #include (both "..." and <...>, searched along -I),
+;; Supported: #include ("..." beside the including file, then along -I;
+;; <...> along -I only),
 ;; #define (object-like and function-like), #undef, #ifdef, #ifndef,
 ;; #if / #elif / #else / #endif with constant expressions, and the
 ;; `# 123 "file"` line markers gcc -E emits (skipped, so this can
@@ -29,6 +30,7 @@
 (define pp:macros nil)      ;; (NAME PARAMS BODY), PARAMS nil = object-like
 (define pp:paths nil)       ;; -I directories, searched in order
 (define pp:depth 0)         ;; include nesting, guards runaway recursion
+(define pp:curdir "")       ;; directory of the file being read, with its '/'
 (define pp:MAXDEPTH 24)
 (define pp:MAXEXPAND 64)    ;; rescan limit per token position
 
@@ -40,7 +42,9 @@
 ;; Is any level of the conditional stack skipping? Used by #else and
 ;; #elif to ask about their ENCLOSING levels, which is the difference
 ;; between "this branch was not taken" and "none of this is being read
-;; at all".
+;; at all". A level is false (reading), true (skipping, and no arm of
+;; this #if has been taken yet) or 'Done (skipping for good: an arm was
+;; taken, or an enclosing level is dead).
 (define pp:any-skip? (lambda (l)
 	(if (empty? l) false (if (head l) true (next pp:any-skip? (tail l))))))
 (define pp:rev (lambda (l acc)
@@ -140,6 +144,13 @@
 
 ;; ---- #include ----
 
+;; "src/c4ix/sys.c" -> "src/c4ix/"; "x.c" -> ""
+(define pp:dirname (lambda (p) (pp:dirname/2 p (- (length p) 1))))
+(define pp:dirname/2 (lambda (p i)
+	(if (< i 0) ""
+	(if (= (string:byte p i) 47) (string:substr p 0 (+ i 1))
+	(next pp:dirname/2 p (- i 1))))))
+
 (define pp:trypaths (lambda (name paths)
 	(if (empty? paths) false
 	(begin
@@ -147,22 +158,45 @@
 		(if (file:exists (file:path full)) full
 		(next pp:trypaths name (tail paths)))))))
 
-(define pp:resolve (lambda (name)
-	(if (file:exists (file:path name)) name
+;; Where an #include finds its file, in c4fc's order (PP-RESOLVE):
+;; an absolute name as it is; a "..." name beside the including file
+;; first; then the -I list. ANGLE is the <...> form, which skips the
+;; including file's directory.
+;;
+;; Last, the working directory. c4fc never looks there, but c4lc always
+;; did, and FIRST: so "x.h" from src/c4ix/sys.c found ./x.h before
+;; src/c4ix/x.h. Last it can only rescue a name nothing else finds.
+(define pp:resolve (lambda (name angle)
 	(begin
-		(define p (pp:trypaths name pp:paths))
-		(if p p (pp:die (+ "cannot find include: " name)))))))
+		(define local (if angle false (+ pp:curdir name)))
+		(if (if (> (length name) 0) (= (string:byte name 0) 47) false)
+			(if (file:exists (file:path name)) name
+				(pp:die (+ "cannot find include: " name)))
+		(if (if local (file:exists (file:path local)) false) local
+		(begin
+			(define p (pp:trypaths name pp:paths))
+			(if p p
+			(if (file:exists (file:path name)) name
+			(pp:die (+ "cannot find include: " name))))))))))
 
 ;; Lex a file and splice its tokens (minus the trailing Eof) in front
 ;; of what is left, so the result is preprocessed by the same walk.
-(define pp:include (lambda (name rest)
+;;
+;; Two PPDir markers bracket them: the included file's directory before
+;; and the includer's after, so pp:go knows which file it is reading when
+;; it reaches a nested "..." include. Their line, -1, is no real line, so
+;; a directive's pp:takeline always stops at one -- which also ends a
+;; header's last directive at the end of the header.
+(define pp:include (lambda (name angle rest)
 	(begin
 		(if (> pp:depth pp:MAXDEPTH) (pp:die "#include nested too deeply") nil)
-		(define path (pp:resolve name))
+		(define path (pp:resolve name angle))
 		(set! pp:depth (+ pp:depth 1))
 		(define toks (lex:file path))
 		(set! pp:depth (- pp:depth 1))
-		(pp:append (pp:dropeof toks nil) rest))))
+		(pp:cons (list 'PPDir (pp:dirname path) -1)
+			(pp:append (pp:dropeof toks nil)
+				(pp:cons (list 'PPDir pp:curdir -1) rest))))))
 
 (define pp:dropeof (lambda (toks acc)
 	(if (empty? toks) (pp:reverse acc)
@@ -286,6 +320,17 @@
 
 ;; ---- macro expansion ----
 
+;; Is the token being expanded the operand of `defined`? ACC holds what
+;; came before it, nearest first: `defined X` or `defined ( X`. Only the
+;; first was checked, so `#if defined(X)` expanded X before asking, and
+;; with `#define X 1` it asked whether `1` was defined: always false.
+(define pp:after-defined? (lambda (acc)
+	(if (empty? acc) false
+	(if (= (pp:val (head acc)) "defined") true
+	(if (= (pp:kind (head acc)) 'Lparen)
+		(if (empty? (tail acc)) false (= (pp:val (head (tail acc))) "defined"))
+	false)))))
+
 ;; Expand every macro in a token list (used for #if lines, where
 ;; there is no surrounding stream to push back onto).
 (define pp:expandall (lambda (toks acc)
@@ -297,8 +342,7 @@
 				(define m (pp:find (pp:val t) pp:macros))
 				;; `defined X` must not expand X
 				(if (if m (= (pp:val t) "defined") false) (set! m false) nil)
-				(if (if (empty? acc) false (= (pp:val (head acc)) "defined"))
-					(set! m false) nil)
+				(if (pp:after-defined? acc) (set! m false) nil)
 				(if m
 					(begin
 						(define r (pp:apply m (tail toks) (pp:line t)))
@@ -480,9 +524,9 @@
 
 ;; ---- the main walk ----
 ;;
-;; SKIP is the conditional stack: a list whose head is true when the
-;; branch being read should be dropped. Directives are still parsed
-;; while skipping, so nesting stays correct.
+;; SKIP is the conditional stack: a list whose head is true or 'Done
+;; when the branch being read should be dropped (pp:any-skip?).
+;; Directives are still parsed while skipping, so nesting stays correct.
 
 (define pp:directive (lambda (d rest skip)
 	(begin
@@ -499,24 +543,27 @@
 			(define skipping (if (empty? skip) false (head skip)))
 			;; conditionals are handled even inside a skipped branch
 			(if (= name "ifdef")
-				(list rest (pp:cons (if skipping true
+				(list rest (pp:cons (if skipping 'Done
 					(if (pp:defined? (pp:val (head body))) false true)) skip))
 			(if (= name "ifndef")
-				(list rest (pp:cons (if skipping true
+				(list rest (pp:cons (if skipping 'Done
 					(if (pp:defined? (pp:val (head body))) true false)) skip))
 			(if (= name "if")
-				(list rest (pp:cons (if skipping true
+				(list rest (pp:cons (if skipping 'Done
 					(if (pp:evalif body) false true)) skip))
 			(if (= name "elif")
 				(begin
 					(if (empty? skip) (pp:die "#elif without #if") nil)
-					;; only reconsider if this level was skipping AND
-					;; no earlier branch has been taken -- and NEVER if an
-					;; enclosing level is skipping, or this would start
-					;; reading a branch nested inside dropped text.
-					(list rest (cons
-						(if (pp:any-skip? (tail skip)) true
-						(if (head skip) (if (pp:evalif body) false true) true))
+					;; Reconsider only if no arm of this #if has been taken
+					;; yet (true), and NEVER if an enclosing level is
+					;; skipping, or this would start reading a branch nested
+					;; inside dropped text. An arm that was being read
+					;; (false) ends here, and nothing after it may run:
+					;; that is 'Done. It used to go back to plain true, so
+					;; `#if 1 / #elif 1 / #else` read the #else arm too.
+					(list rest (pp:cons
+						(if (pp:any-skip? (tail skip)) 'Done
+						(if (= (head skip) true) (if (pp:evalif body) false true) 'Done))
 						(tail skip))))
 			(if (= name "else")
 				(begin
@@ -540,9 +587,10 @@
 					;; raycast-dos32.c4r could not be built at all, which
 					;; took c4dos-c4ix32 with it, and with that the climb
 					;; disk the browser boots.
+					;; And it runs only if no arm before it did ('Done).
 					(list rest (pp:cons
-						(if (pp:any-skip? (tail skip)) true
-						(if (head skip) false true)) (tail skip))))
+						(if (pp:any-skip? (tail skip)) 'Done
+						(if (= (head skip) true) false 'Done)) (tail skip))))
 			(if (= name "endif")
 				(begin
 					(if (empty? skip) (pp:die "#endif without #if") nil)
@@ -556,7 +604,9 @@
 					(if (empty? ex) (pp:die "#include needs a file") nil)
 					(if (= (pp:kind (head ex)) 'Str) nil
 						(pp:die "#include needs \"file\" or <file>"))
-					(list (pp:include (pp:val (head ex)) rest) skip))
+					(define hn (head ex))
+					(define angle (if (= (length hn) 4) (= (index hn 3) 1) false))
+					(list (pp:include (pp:val hn) angle rest) skip))
 			(if (= name "") (list rest skip)          ;; gcc's `# 12 "f"` markers
 			(if (= name "pragma") (list rest skip)
 			(if (= name "error") (pp:die "#error")
@@ -567,6 +617,11 @@
 	(if (empty? toks) (pp:reverse acc)
 	(begin
 		(define t (head toks))
+		;; the file boundary markers pp:include puts in, live or dead
+		(if (= (pp:kind t) 'PPDir)
+			(begin
+				(set! pp:curdir (pp:val t))
+				(next pp:go (tail toks) skip acc))
 		(if (= (pp:kind t) 'Eof)
 			(begin
 				(if (empty? skip) nil (pp:die "unterminated #if"))
@@ -589,7 +644,7 @@
 						;; push the expansion back so it is rescanned
 						(next pp:go (pp:append (head r) (head (tail r))) skip acc))
 				(next pp:go (tail toks) skip (pp:cons t acc))))
-		(next pp:go (tail toks) skip (pp:cons t acc))))))))))
+		(next pp:go (tail toks) skip (pp:cons t acc)))))))))))
 
 ;; ---- entry points ----
 
@@ -650,6 +705,8 @@
 (define pp:file (lambda (path)
 	(begin
 		(set! lex:pp true)
+		;; (+ "" ...): a path from argv is not yet a string string:byte can read
+		(set! pp:curdir (pp:dirname (+ "" path)))
 		(define toks (lex:file path))
 		(pp:kwfix (pp:go toks nil nil) nil))))
 

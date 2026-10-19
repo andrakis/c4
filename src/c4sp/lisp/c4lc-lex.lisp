@@ -320,12 +320,14 @@
 				(next lex:go j line (lex:cons (list 'Hash 0 line) acc)))
 			(next lex:go (lex:skipline j) line acc))
 		(if (if lex:want-header (= c 60) false)
-			;; #include <name>: one token, not a stream of operators
+			;; #include <name>: one token, not a stream of operators. Its
+			;; fourth field, 1, tells the preprocessor it was <...>, which
+			;; is searched along -I only, never beside the including file.
 			(begin
 				(define e (lex:hdrend j))
 				(set! lex:want-header false)
 				(next lex:go (+ e 1) line (lex:cons
-					(list 'Str (string:substr lex:src j (- e j)) line) acc)))
+					(list 'Str (string:substr lex:src j (- e j)) line 1) acc)))
 		(if (lex:identstart? c)
 			(begin
 				(define e (lex:identend j))

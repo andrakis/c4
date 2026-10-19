@@ -65,7 +65,7 @@ for t in $CC_PROGS; do check $B/bin/$t.c4r $IMAGES/disk/$t.c4r size; done
 if [ -z "$differ" ]; then ok "c4cc's $same images are the disk's size"
 else bad "c4cc's images are the disk's size (differ:$differ)"; fi
 
-if echo "$out" | grep -qF "hello from a program compiled inside C4IX"; then ok "the rebuilt c4cc compiles a program that runs"
+if echo "$out" | grep -qE "^[0-9a-f]{8} [0-9]+ $B/bin/c4cc.c4r$" && echo "$out" | grep -qF "hello from a program compiled inside C4IX"; then ok "the rebuilt c4cc compiles a program that runs"
 else bad "the rebuilt c4cc compiles a program that runs"; fi
 if echo "$out" | grep -qE "b4ke: /usr/src/c4/src/c4ix/user: 0 ran, [0-9]+ up to date, 0 failed"; then
     ok "a second run finds everything up to date"

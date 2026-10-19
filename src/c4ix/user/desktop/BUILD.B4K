@@ -5,8 +5,9 @@ B4KE2
 # Every module includes desktop.h.
 SET ROOT /usr/src/c4
 SET OUT /ram/build
-# c4sc recurses deeply on a long function: 1 MB of stack (SYS_STACK)
-SET STACK 1048576
+# c4sc recurses deeply on a long source: edit.c, the Editor, overruns
+# even 1 MB, so the desktop gets 4 MB of stack per compile (SYS_STACK)
+SET STACK 4194304
 SET LC c4sc -c 400000 compile -O -c -I src/c4ix/include -I src/c4ix/user/desktop
 SET H src/c4ix/user/desktop/desktop.h src/c4ix/include/c4ix_user.h libjs/guest/gui.h
 CD $(ROOT)

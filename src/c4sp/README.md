@@ -61,6 +61,8 @@ Arguments after the file are read as Lisp values and bound to `argv`.
 | `-mfuse` | run c4opt's fuse pass ([fused-opcodes.md](../../docs/fused-opcodes.md)); the image does not run on plain c4. Implies `-O` |
 | `-minline` | inline small leaf functions ([inline-small-functions.md](../../docs/inline-small-functions.md)). Implies `-O` |
 | `-minline-why` | `-minline`, and report the decision for every function |
+| `-fno-builtin` | `open`, `read`, `printf`, `malloc` and the rest of c4cc's library names are ordinary functions, not opcodes, so a C library can define them ([C4IX's libc](../c4ix/libc/README.md)). c4fc has it too |
+| `-fpic` | reach all data through `__c4_dbase`, a base C4IX's loader keeps per task, so one copy of a shared library's code serves every task. With `-c`. c4lc only |
 
 `-R` is how the Makefile runs c4lc (`C4SPLC := ./c4sp -R`): c4lc uses no
 `call/cc`, and the recursive evaluator is 1.63x faster on the C4IX build. The

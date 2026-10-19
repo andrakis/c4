@@ -22,7 +22,7 @@ fail=0
 ok()  { echo "test-rebuild: $1 OK"; }
 bad() { echo "test-rebuild: $1 FAILED"; fail=1; }
 
-LC_PROGS="hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt gui vfsload b4ke tar gunzip crc32 desktop"
+LC_PROGS="hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt gui vfsload b4ke tar gunzip crc32 desktop libctest"
 CC_PROGS="c4cc c4rdump c4rlink cpp c4 c4m"
 {
     echo "wait 3"
@@ -32,6 +32,7 @@ CC_PROGS="c4cc c4rdump c4rlink cpp c4 c4m"
     echo "crc32 $B/c4ix.c4r"
     echo "crc32 $B/lib/libc4ix.c4l"
     echo "crc32 $B/lib/libc4ix.c4s"
+    echo "crc32 $B/lib/libc.c4s"
     echo "crc32 $B/lib/libarc.c4l"
     echo "$B/bin/c4cc.c4r -o /ram/h.c4r /usr/src/c4/src/c4ix/examples/hello.c"
     echo "/ram/h.c4r"
@@ -59,6 +60,7 @@ for u in $LC_PROGS; do check $B/bin/c4ix-$u.c4r $IMAGES/disk/c4ix-$u.c4r crc; do
 check $B/c4ix.c4r $IMAGES/c4ix32.c4r crc
 check $B/lib/libc4ix.c4l $IMAGES/libc4ix32.c4l crc
 check $B/lib/libc4ix.c4s $IMAGES/disk/c4ix-libc4ix.c4s crc
+check $B/lib/libc.c4s $IMAGES/disk/c4ix-libc.c4s crc
 check $B/lib/libarc.c4l $IMAGES/libarc32.c4l crc
 if [ -z "$differ" ]; then ok "c4lc's $same images are the disk's, byte for byte"
 else bad "c4lc's images are the disk's (differ:$differ)"; fi

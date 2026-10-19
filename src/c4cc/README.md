@@ -141,7 +141,7 @@ uninitialized globals in BSS. The loader accepts both.
 ### c4rlink
 
 ```
-c4rlink [-dvrs] [-o outfile] [--] file1.c4r [...fileN.c4r]
+c4rlink [-dvrs] [-l lib.c4s] [-o outfile] [--] file1.c4r [...fileN.c4r]
 ```
 
 | flag | effect |
@@ -149,6 +149,7 @@ c4rlink [-dvrs] [-o outfile] [--] file1.c4r [...fileN.c4r]
 | `-o outfile` | output (default `a.c4r`) |
 | `-r` | library mode: unresolved symbols are allowed (writes a `.c4l`) |
 | `-s` | strip: write no symbol table |
+| `-l lib.c4s` | link against a shared library: references to what it defines stay for C4IX's loader to resolve at spawn, and the image records that it needs `/lib/` + the library's base name |
 | `-v` / `-d` | verbose / debug |
 | `@file` | response file, as for c4cc |
 
@@ -158,6 +159,13 @@ merged by name: an extern resolves to the module that defines it, and if two
 modules define the same name the first wins and a warning is printed. Anything
 still unresolved is an error unless `-r` is given. The entry point is taken
 from the first module that has one.
+
+A shared library is an ordinary `-r` library (named `.c4s` by convention).
+What `-l` records is a static global named `__c4_needed` whose value is the
+data offset of the library's run-time path. It is a symbol rather than a new
+section because every reader of `.c4r` already skips symbols it has no use
+for. So a program linked with `-l` keeps its symbol table, and `-s` is
+ignored for one. `c4rdump` lists what an image needs.
 
 Objects come from `c4lc -c`, or from plain c4cc (a prototype with no body
 becomes a symbol reference). The multi-module images (C4IX, c4or1k, c4mp,

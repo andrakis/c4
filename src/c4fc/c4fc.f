@@ -4,14 +4,21 @@
 \ compiles to its opcode where the call would be, so `read(fd, b, n)` is
 \ three pushes and one instruction.
 : BUILTIN ( a u op -- )  c_builtin SWAP t_int 0 0 ST, ;
-: BUILTINS
+\ -fno-builtin: the library names are ordinary identifiers, so a C
+\ library can define them (c4lc's gen:nobuiltin). The machine's own
+\ primitives, from install_trap_handler on, stay builtins.
+VARIABLE NOBUILTIN   0 NOBUILTIN !
+: -fno-builtin ( -- )  1 NOBUILTIN ! ;
+: LIBC-BUILTINS
    S" open"   oOPEN BUILTIN   S" read"    oREAD BUILTIN
    S" close"  oCLOS BUILTIN   S" printf"  oPRTF BUILTIN
    S" malloc" oMALC BUILTIN   S" free"    oFREE BUILTIN
    S" memset" oMSET BUILTIN   S" memcmp"  oMCMP BUILTIN
    S" exit"   oEXIT BUILTIN   S" putchar" oPUTC BUILTIN
    S" puts"   oPUTS BUILTIN   S" realloc" oRALC BUILTIN
-   S" memcpy" oMCPY BUILTIN   S" stacktrace" oSTRC BUILTIN
+   S" memcpy" oMCPY BUILTIN   S" stacktrace" oSTRC BUILTIN ;
+: BUILTINS
+   NOBUILTIN @ 0= IF LIBC-BUILTINS THEN
    S" install_trap_handler" oITH BUILTIN
    S" __opcode" o_OPC BUILTIN  S" __builtin" o_BLT BUILTIN
    S" __c4_trap" o_TRP BUILTIN S" __c4_opcode" oOPCD BUILTIN

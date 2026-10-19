@@ -27,9 +27,12 @@ ARCHIVES = c4ix-root.tgz
 	bin/:
 		each($TOOLS):
 			$1: $1.c4r
+		# exercises libc (src/c4ix/libc/tests)
+		libctest: c4ix-libctest.c4r
 	# shared libraries: what a program linked with c4rlink -l loads
 	lib/:
 		libc4ix.c4s: c4ix-libc4ix.c4s
+		libc.c4s: c4ix-libc.c4s
 	each($BIN_ALL):
 		# c4ix-hello.c4r -> /bin/hello, and an unqualified alias at the
 		# root so "hello" works from the shell without the c4ix- prefix

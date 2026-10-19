@@ -18,6 +18,8 @@ B4KE2
 SET OUT /ram/build
 ECHO b4ke: C4IX's libraries
 B4KE src/c4ix/lib ROOT=$(DIR) OUT=$(OUT)
+ECHO b4ke: the C library
+B4KE src/c4ix/libc ROOT=$(DIR) OUT=$(OUT)
 ECHO b4ke: the C4IX kernel
 B4KE src/c4ix ROOT=$(DIR) OUT=$(OUT)
 ECHO b4ke: C4IX's userland

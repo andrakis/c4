@@ -296,6 +296,20 @@ if [ ! -f $OUT/c4ix32.c4r ] || \
     # boot starts, and both machines that read this disk run fused code.
     ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -mfuse -c -I src/c4ix/include src/c4ix/lib/archive.c .c4bb_ix_arc.c4o > /dev/null
     ./c4rlink32 -r .c4bb_ix_arc.c4o -o .c4bb_libarc32.c4l
+    # libc: C4IX's C library (src/c4ix/libc), the second shared library,
+    # /lib/libc.c4s. Built -fno-builtin, so printf, malloc and the rest
+    # are its own -- except opcodes.c, which is where the VM's opcodes
+    # are -- and with libc4ix's syscall layer linked in.
+    for m in string stdlib stdio unix; do
+        ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -fno-builtin -c -I src/c4ix/libc/include -I src/c4ix/libc src/c4ix/libc/$m.c .c4bb_ix_libc_$m.c4o > /dev/null
+    done
+    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c src/c4ix/libc/opcodes.c .c4bb_ix_libc_opcodes.c4o > /dev/null
+    ./c4rlink32 -r .c4bb_ix_libc_string.c4o .c4bb_ix_libc_stdlib.c4o .c4bb_ix_libc_stdio.c4o .c4bb_ix_libc_unix.c4o \
+        .c4bb_ix_libc_opcodes.c4o .c4bb_ix_lib.c4o -o .c4bb_lib/libc.c4s > /dev/null
+    cp .c4bb_lib/libc.c4s $DISK/c4ix-libc.c4s
+    # libctest exercises it (libjs/tests/test-libjs.sh compares its output)
+    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/libctest.c .c4bb_ix_u.c4o > /dev/null
+    ./c4rlink32 .c4bb_ix_u.c4o -l .c4bb_lib/libc.c4s -o $DISK/c4ix-libctest.c4r > /dev/null
     for u in $C4IX_USER; do
         ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix/include src/c4ix/user/$u.c .c4bb_ix_u.c4o > /dev/null
         # ls is the pilot for shared libraries: it loads libc4ix at run time
@@ -499,6 +513,10 @@ fi
 [ -f $OUT/libc4ix32.c4l ] && cp $OUT/libc4ix32.c4l $ROOT/usr/lib/libc4ix.c4l
 [ -f $OUT/libarc32.c4l ] && cp $OUT/libarc32.c4l $ROOT/usr/lib/libarc.c4l
 cp src/c4ix/include/*.h libjs/guest/gui.h $ROOT/usr/include/
+# libc's headers, for -fno-builtin -I /usr/include/libc
+mkdir -p $ROOT/usr/include/libc/sys
+cp src/c4ix/libc/include/*.h $ROOT/usr/include/libc/
+cp src/c4ix/libc/include/sys/*.h $ROOT/usr/include/libc/sys/
 tar --format=ustar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
     -C $ROOT -cf - usr | gzip -9n > $DISK/c4ix-root.tgz
 rm -rf $ROOT

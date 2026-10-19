@@ -228,11 +228,25 @@
 	("__c4_cas" CAS) ("__c4_xchg" XCHG) ("__c4_fadd" FADD)
 	("__c4_wait" CWAI) ("__c4_wake" CWAK) ("__c4_ipi" IPI)
 	("__c4_termraw" TRAW)))
+;; -fno-builtin (gen:nobuiltin): c4cc's library names are not opcodes but
+;; ordinary identifiers, so a C library can define them and its callers
+;; call them. Everything from install_trap_handler on stays a builtin:
+;; those are the machine's own primitives, and __c4_opcode reaches the
+;; opcodes these names stood for.
+(define gen:nobuiltin false)
+(define g:libcnames '("open" "read" "close" "printf" "malloc" "free" "memset"
+	"memcmp" "exit" "putchar" "puts" "realloc" "memcpy" "stacktrace"))
+(define g:inlist (lambda (n l)
+	(if (empty? l) false
+	(if (= (head l) n) true
+	(next g:inlist n (tail l))))))
 (define g:sysinit (lambda (l)
 	(if (empty? l) nil
 	(begin
-		(set! g:syms (g:cons
-			(list (head (head l)) 'sys g:INT (g:second (head l))) g:syms))
+		(if (if gen:nobuiltin (g:inlist (head (head l)) g:libcnames) false)
+			nil
+			(set! g:syms (g:cons
+				(list (head (head l)) 'sys g:INT (g:second (head l))) g:syms)))
 		(next g:sysinit (tail l))))))
 
 ;; ---- break/continue targets ----
@@ -1969,6 +1983,51 @@
 			i)
 			acc))))))
 
+;; ---- -fpic (gen:pic) ----
+;;
+;; Position-independent data, for a shared library whose code C4IX loads
+;; once and shares between tasks while each task keeps its own copy of
+;; the data (src/c4ix/loader.c). A reference to data -- a global, a
+;; string, a jump table, an extern global -- is normally an IMM of its
+;; absolute address. Here it becomes its offset in the data plus the data
+;; base, which the code reads from __c4_dbase: a word the loader points
+;; the code at, and the scheduler keeps holding the running task's data.
+;;   IMM off ; PSH ; IMM __c4_dbase ; LI ; ADD
+;; The IMM keeps its data relocation; the loader, seeing __c4_dbase,
+;; writes such relocations as offsets. Four instructions more per data
+;; reference, in exchange for one copy of the code however many tasks
+;; use it. Object mode only (-c), since a library is linked from objects.
+(define gen:pic false)
+
+;; the class (129 Fun, 131 Glo) of extern K, in id order
+(define g:extclass (lambda (k l)
+	(if (empty? l) 0
+	(if (= k 0) (index (head l) 3)
+	(next g:extclass (- k 1) (tail l))))))
+
+;; is I an IMM of a data address -- (data N), or an extern global?
+(define g:picref? (lambda (i exts)
+	(if (= 2 (length i))
+		(if (= (head i) 'IMM)
+			(if (= 'list (typeof (g:second i)))
+				(if (= 'data (head (g:second i))) true
+				(if (= 'extph (head (g:second i)))
+					(= 131 (g:extclass (g:second (g:second i)) exts))
+					false))
+				false)
+			false)
+		false)))
+
+(define g:picify (lambda (code db exts acc)
+	(if (empty? code) (g:reverse acc)
+	(begin
+		(define i (head code))
+		(if (g:picref? i exts)
+			(next g:picify (tail code) db exts
+				(g:cons '(ADD) (g:cons '(LI) (g:cons (list 'IMM (list 'extph db))
+					(g:cons '(PSH) (g:cons i acc))))))
+			(next g:picify (tail code) db exts (g:cons i acc)))))))
+
 ;; ---- module assembly ----
 
 ;; BSS finalize: bss-relative offsets become absolute data offsets once
@@ -2043,6 +2102,15 @@
 		(set! gen:bssextra (- (+ bssbase g:blen) g:dlen))
 		(define syms (g:symsection (g:resolvesyms (g:reverse g:syms) bssbase) 0 (list)))
 		(define code (g:resolvecode (g:reverse g:code) bssbase))
+		;; -fpic: every data reference relative to __c4_dbase, a new
+		;; extern global the loader supplies
+		(if (if gen:pic gen:objmode false)
+			(begin
+				(define db g:nexterns)
+				(set! g:externs (g:cons (list "__c4_dbase" g:INT nil 131 nil) g:externs))
+				(set! g:nexterns (+ g:nexterns 1))
+				(set! code (g:picify code db (g:reverse g:externs) (list))))
+			nil)
 		(if (> g:nexterns 0)
 			(begin
 				(define base (length syms))

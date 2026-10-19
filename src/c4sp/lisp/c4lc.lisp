@@ -24,6 +24,8 @@
 	(define InlRep false)      ;; -minline-why: T3's reasoning, per function
 	(define Pp false)          ;; -P: preprocess internally (L9)
 	(define Conf false)        ;; -conforming: real C escapes (L10)
+	(define NoBuiltin false)   ;; -fno-builtin: the library table is plain names
+	(define Pic false)         ;; -fpic: data through a per-task base (shared libraries)
 	(define Paths nil)
 	(define PreDefs nil)
 	(define Args argv)
@@ -82,6 +84,17 @@
 		;; deliberately. A program opts in, and then "\033[2J" works.
 		(if (= (+ "" (head Args)) "-conforming")
 			(begin (set! Conf true) (set! Args (tail Args)) (next flags))
+		;; -fno-builtin: open, read, printf, malloc and the rest of
+		;; c4cc's library table are ordinary names, called like any
+		;; function, so a C library can define them (C4IX's libc). The
+		;; __c4_* primitives stay builtins; __c4_opcode reaches the rest.
+		(if (= (+ "" (head Args)) "-fno-builtin")
+			(begin (set! NoBuiltin true) (set! Args (tail Args)) (next flags))
+		;; -fpic: data references relative to a base the loader and the
+		;; scheduler keep per task, so one copy of a shared library's
+		;; code serves every task (gen:pic). Needs -c.
+		(if (= (+ "" (head Args)) "-fpic")
+			(begin (set! Pic true) (set! Args (tail Args)) (next flags))
 		(if (= (+ "" (head Args)) "-P")
 			(begin (set! Pp true) (set! Args (tail Args)) (next flags))
 		(if (= (+ "" (head Args)) "-I")
@@ -96,7 +109,7 @@
 				(set! PreDefs (+ PreDefs (list (+ "" (index Args 1)))))
 				(set! Args (tail (tail Args)))
 				(next flags))
-		nil)))))))))))))
+		nil)))))))))))))))
 	(flags)
 	(if (< (length Args) 2) (error "usage: c4lc.lisp [-O] [-c] in.c out"))
 	(define In (head Args))
@@ -104,6 +117,8 @@
 	(set! lex:conforming Conf)
 	(set! gen:objmode Obj)
 	(set! gen:cisc Cisc)
+	(set! gen:nobuiltin NoBuiltin)
+	(set! gen:pic Pic)
 	(define Ast (parse:program
 		(if Pp
 			(begin

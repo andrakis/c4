@@ -177,4 +177,13 @@ if echo "$out" | grep -qF "Needs /lib/libc4ix.c4s" && echo "$out" | grep -qF "li
     ok "ls loads libc4ix as a shared library"
 else bad "ls loads libc4ix as a shared library"; echo "$out" | tail -8; fi
 
+# libc: libctest is linked with -l libc.c4s; what it prints, line by line,
+# is what libc's functions did (src/c4ix/libc/tests/libctest.txt)
+out=$(printf 'libctest -v -n 3 one two\nexit\n' | \
+      timeout 300 $LIBJS -c 600000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
+if echo "$out" | sed -n '/^printf: \[42/,/libctest: done/p' | cmp -s - src/c4ix/libc/tests/libctest.txt; then
+    ok "libc: libctest's output is the reference"
+else bad "libc: libctest's output is the reference"
+     echo "$out" | sed -n '/^printf: \[42/,/libctest: done/p' | diff - src/c4ix/libc/tests/libctest.txt | head -10; fi
+
 if [ $fail = 0 ]; then echo "test-libjs: OK"; else echo "test-libjs: FAILURES"; exit 1; fi

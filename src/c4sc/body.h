@@ -148,14 +148,14 @@ int sc_ast (int argc, char **argv) {
 // and file:write, which is why this mode is the one the byte-identity
 // test uses.
 //
-//   c4sc-host compile [-O] [-c] [-P] [-mcisc] [-mfuse] [-conforming]
+//   c4sc-host compile [-O] [-c] [-P] [-mcisc] [-mfuse] [-conforming] [-fno-builtin] [-fpic]
 //                     [-I dir] [-D name] in.c out.c4r
 int sc_compile (int argc, char **argv) {
 	int *paths, *predefs, *ptail, *dtail, *e, *ast, *m, *out, *r;
-	int  opt, obj, usepp, cisc, fuse, conf;
+	int  opt, obj, usepp, cisc, fuse, conf, nobuiltin, pic;
 	char *in, *outname;
 
-	opt = obj = usepp = cisc = fuse = conf = 0;
+	opt = obj = usepp = cisc = fuse = conf = nobuiltin = pic = 0;
 	paths = predefs = ptail = dtail = 0;
 	while (argc > 0 && **argv == '-') {
 		if      (!memcmp(*argv, "-O", 3)) opt = 1;
@@ -164,6 +164,8 @@ int sc_compile (int argc, char **argv) {
 		else if (!memcmp(*argv, "-mcisc", 7)) cisc = 1;
 		else if (!memcmp(*argv, "-mfuse", 7)) { fuse = 1; opt = 1; }
 		else if (!memcmp(*argv, "-conforming", 12)) conf = 1;
+		else if (!memcmp(*argv, "-fno-builtin", 13)) nobuiltin = 1;
+		else if (!memcmp(*argv, "-fpic", 6)) pic = 1;
 		else if (!memcmp(*argv, "-I", 3) && argc > 1) {
 			usepp = 1;   // -I implies -P, exactly as c4lc.lisp does
 			e = cons(mk_string(argv[1]), 0);
@@ -193,6 +195,8 @@ int sc_compile (int argc, char **argv) {
 	L_lex_58conforming = conf ? cell_true : cell_false;
 	L_gen_58objmode = obj ? cell_true : cell_false;
 	L_gen_58cisc = cisc ? cell_true : cell_false;
+	L_gen_58nobuiltin = nobuiltin ? cell_true : cell_false;
+	L_gen_58pic = pic ? cell_true : cell_false;
 
 	if (usepp) {
 		L_pp_58paths = paths;

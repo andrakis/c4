@@ -294,7 +294,7 @@
 		(if (= k 'Unsigned) (begin (p:advance) (next p:spec d q sg 1 sh lg ch it bt))
 		(if (= k 'Short) (begin (p:advance) (next p:spec d q sg un 1 lg ch it bt))
 		(if (= k 'Long) (begin (p:advance) (next p:spec d q sg un sh (+ lg 1) ch it bt))
-		(if (= k 'Char) (begin (p:advance) (next p:spec d q sg un sh lg 1 it bt))
+		(if (if (= k 'Char) true (= k 'Void)) (begin (p:advance) (next p:spec d q sg un sh lg 1 it bt))
 		(if (= k 'Int) (begin (p:advance) (next p:spec d q sg un sh lg ch 1 bt))
 		(if (if bare (if (= k 'Struct) true (= k 'Union)) false)
 			(begin
@@ -328,6 +328,7 @@
 		(define k (p:kind))
 		(if (= k 'Int) true
 		(if (= k 'Char) true
+		(if (= k 'Void) true
 		(if (= k 'Struct) true
 		(if (= k 'Union) true
 		(if (= k 'Const) true
@@ -338,7 +339,7 @@
 		(if (= k 'Long) true
 		(if (= k 'Id)
 			(if (p:assoc (p:value) p:typedefs) true false)
-		false))))))))))))))
+		false)))))))))))))))
 
 ;; consume the declarator's stars, each followed by its own qualifiers:
 ;; ty -> ty + 2 per star, and the mask q of the base moves up a level
@@ -928,11 +929,16 @@
 ;; ---- function parameters ----
 
 ;; returns (PARAMS VARIADIC): PARAMS = ((TYPE "name") ...)
+;;
+;; `(void)` is no parameters at all. A parameter may have no name, as in
+;; a prototype's `int f(int, char *)`; it gets one no source can spell.
 (define p:params (lambda (acc)
 	(begin
 		(define k (p:kind))
 		(if (= k 'Rparen)
 			(begin (p:advance) (list (p:reverse acc) false))
+		(if (if (= k 'Void) (if (empty? acc) (= (head (head (tail p:toks))) 'Rparen) false) false)
+			(begin (p:advance) (p:advance) (list (p:reverse acc) false))
 		(if (= k 'Dot)
 			(begin
 				(p:advance)
@@ -947,11 +953,14 @@
 			(define q p:sq)
 			(if (p:svalue? ty)
 				(p:die "struct parameters must be pointers") nil)
-			(if (= (p:kind) 'Id) nil (p:die "bad parameter declaration"))
-			(define n (p:value))
-			(p:advance)
+			(define named (= (p:kind) 'Id))
+			(if named nil
+				(if (if (= (p:kind) 'Comma) true (= (p:kind) 'Rparen)) nil
+					(p:die "bad parameter declaration")))
+			(define n (if named (p:value) (+ " param" (+ "" (length acc)))))
+			(if named (p:advance) nil)
 			(if (= (p:kind) 'Comma) (p:advance) nil)
-			(next p:params (p:cons (p:qnode (list ty n) q) acc))))))))
+			(next p:params (p:cons (p:qnode (list ty n) q) acc)))))))))
 
 ;; ---- local declarations ----
 

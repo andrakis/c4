@@ -9,3 +9,12 @@ cat 4
 paste 11
 defined-paren 1
 one-arm 1
+va-on 1
+va-sum 6
+gnu-none
+gnu 4 5
+gnu2-none
+gnu2 6
+strv x
+self 12
+self-va 708

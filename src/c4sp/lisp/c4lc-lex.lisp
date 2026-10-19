@@ -84,7 +84,10 @@
 	("static" Static) ("extern" Extern) ("__attribute__" Attribute)
 	("constructor" Constructor) ("destructor" Destructor)
 	("struct" Struct) ("union" Union) ("typedef" Typedef) ("do" Do)
-	("void" Char)))  ;; void IS char in c4, as in c4's own symbol seeding
+	;; void IS char in c4, as in c4's own symbol seeding. It has a kind
+	;; of its own only so that a parameter list can tell `(void)` from
+	;; `(char)`; the parser takes Void wherever it takes Char.
+	("void" Void)))
 
 ;; The M4 type words (docs/c4lc-design.md, "Integer types"). Kept in a
 ;; table of their own because the preprocessor must see them as plain

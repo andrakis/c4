@@ -64,6 +64,10 @@ KIND: Lbrace KIND: Rbrace KIND: Brak KIND: Rbrak
 KIND: Const  KIND: Volatile KIND: Signed KIND: Unsigned
 KIND: Short  KIND: Long
 KIND: NumU   KIND: NumUL
+\ M7b: void, which is char in c4, has a kind of its own only so that a
+\ parameter list can tell `(void)` from `(char)`. The parser takes Void
+\ wherever it takes Char. Appended, like the M4 kinds.
+KIND: Void
 
 \ -- the keyword table --------------------------------------------------
 \   KEYWORD <text> <kind>       one row per C keyword
@@ -98,7 +102,7 @@ KEYWORD destructor  Destructor
 KEYWORD struct  Struct      KEYWORD union   Union
 KEYWORD typedef Typedef     KEYWORD do      Do
 \ void IS char in c4, as in c4's own symbol seeding.
-KEYWORD void    Char
+KEYWORD void    Void
 KEYWORD const   Const       KEYWORD volatile Volatile
 KEYWORD signed  Signed      KEYWORD unsigned Unsigned
 KEYWORD short   Short       KEYWORD long    Long

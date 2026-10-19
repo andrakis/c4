@@ -12,7 +12,8 @@ configuration below (§2.1).
 
 Status (2026-10-20):
 - the write-up is done and checked against the source;
-- M7b, the compiler, has started.
+- M7b, the compiler, is under way. The preprocessor is done, and so are
+  `(void)` and unnamed parameters (§7).
 - The source is not vendored into the repository yet; that is M7e.
 
 ## 1. The target
@@ -70,7 +71,7 @@ c4lc runs as `-O -conforming -P -I src/c4ix/libc/include`:
 - `-conforming` turns on the `\x` and octal escapes. Without it, `'\x41'` is
   49, not 65.
 
-**Today 52 pass and 61 fail.** It is a tracker and not a `make` gate yet. It
+**52 passed when this was written; 58 pass after the first M7b steps (2026-10-20).** It is a tracker and not a `make` gate yet. It
 becomes one, in `make test-c4lc`, once it passes. The kernel and libc gaps
 come from reading `src/c4ix/sys.c`, `vfs.c`, `loader.c` and `src/c4ix/libc`.
 
@@ -136,7 +137,7 @@ Priorities:
 
 | probe | construct | today | P | why Busybox needs it |
 |---|---|---|---|---|
-| `void_params` | `int f(void)` | CFAIL: bad parameter declaration | P0 | It is the declaration of nearly every function in libbb. |
+| `void_params` | `int f(void)`; unnamed parameters, `int f(int, char *)` | **DONE** (M7b) | P0 | It is the declaration of nearly every function in libbb. |
 | `fnptr_decl`, `fnptr_param`, `fnptr_typedef`, `fn_returning_fnptr`, `cast_fnptr` | `int (*fp)(int)`, function-pointer parameters, typedefs and casts | CFAIL | P0 | applet mains, `recursive_action` callbacks, `qsort` comparators, hush's builtin table |
 | `applet_table`, `array_of_ptr_to_fn_in_struct_member_call` | a struct member that is a function pointer | CFAIL: bad struct member name | P0 | hush's `struct built_in_command`, libbb's `llist`/action structs |
 | `typedef_enum`, `enum_typedef`, `enum_var`, `enum_local_decl` | `typedef enum {…} t;`, `enum e v;` inside a function | CFAIL (a global `enum e g;` passes) | P0 | Option bitmasks (`OPT_x`), hush's parse states |
@@ -204,9 +205,12 @@ parsing work; code generation needs nothing new.
 
 | probe | construct | today | P |
 |---|---|---|---|
-| `if_defined`, `if_defined_only` | `#if defined(X)` | **DIFF: always false.** `defined X` without parentheses works. | P0: a silent miscompile, and the first fix |
-| `va_macro`, `ifdef_func_macro` | `#define F(...) __VA_ARGS__`, `args...`, `, ##args` | CFAIL: bad macro parameter | P0: the generated `autoconf.h` defines every `IF_FEATURE_X(...)` this way |
-| `include_quote` | `#include "x.h"` relative to the including file | CFAIL: only the working directory and `-I` are searched | P1: `-I` per directory works around it |
+| `if_defined`, `if_defined_only` | `#if defined(X)` | **DONE** (M7b). It was always false. | P0 |
+| (in `c4lc_pp.c`) | `#if 1` / `#elif 1` / `#else` | **DONE** (M7b). The `#else` arm ran as well. | P0: a silent miscompile |
+| `va_macro`, `ifdef_func_macro` | `#define F(...) __VA_ARGS__`, `args...`, `, ##args` | **DONE** (M7b) | P0: the generated `autoconf.h` defines every `IF_FEATURE_X(...)` this way |
+| (in `c4lc_pp.c`) | a macro that expands to a call of its own name | **DONE** (M7b), blue paint. It looped before. | P0: hush's `msg_and_die_if_script` |
+| `include_quote` | `#include "x.h"` relative to the including file | **DONE** (M7b) | P1 |
+| — | `#__VA_ARGS__` with commas | spaced as `a , b`, where gcc gives `a, b` | P2: both preprocessors join with single spaces |
 | `int_types_header`, `setjmp` | `<stdint.h>`, `<inttypes.h>`, `<setjmp.h>` from libc's headers | missing from `src/c4ix/libc/include` (`include/stdint.h` exists, from M4) | P0 for `stdint.h`, a libc item |
 
 Already right: `#pragma` (ignored), `#error`/`#warning` in skipped code,
@@ -373,9 +377,9 @@ Each step lands with tests, and the next starts only when they are green.
 
 1. **M7b, compiler (c4lc and c4fc, byte-identical).** The order follows the
    priority tables above:
-   1. `defined(X)`;
-   2. variadic macros;
-   3. `(void)` parameter lists;
+   1. ~~`defined(X)`~~: done, with `#elif` and quoted includes;
+   2. ~~variadic macros~~: done, with blue paint;
+   3. ~~`(void)` parameter lists~~: done, with unnamed parameters;
    4. `sizeof` on any expression and in constant expressions;
    5. function-pointer declarators;
    6. `goto`;

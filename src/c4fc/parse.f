@@ -149,7 +149,7 @@ VARIABLE CTY   1 CTY !
 
 DEFER EXPR                              \ ( lev -- node )
 
-: TYPE? TK Int = TK Char = OR TK Struct = OR TK Union = OR
+: TYPE? TK Int = TK Char = OR TK Void = OR TK Struct = OR TK Union = OR
    TK Const = OR TK Volatile = OR TK Signed = OR TK Unsigned = OR
    TK Short = OR TK Long = OR ;
 
@@ -191,7 +191,7 @@ DEFER EXPR                              \ ( lev -- node )
       TK Unsigned = IF 1 TO un TNEXT 1 ELSE
       TK Short    = IF 1 TO sh TNEXT 1 ELSE
       TK Long     = IF lg 1+ TO lg TNEXT 1 ELSE
-      TK Char     = IF 1 TO ch TNEXT 1 ELSE
+      TK Char = TK Void = OR IF 1 TO ch TNEXT 1 ELSE
       TK Int      = IF 1 TO it TNEXT 1 ELSE
       TK Struct = TK Union = OR st 0< AND
          sg un + sh + lg + ch + it + 0= AND IF
@@ -571,9 +571,14 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
 \ ... is not a special form: it is one more parameter, unnamed, and the
 \ CALL SITE is where the work happens. That is why int vsum(int n, ...)
 \ finds n at bp+3 and not bp+2.
+\
+\ `(void)` is no parameters at all. A parameter may have no name, as in
+\ a prototype's `int f(int, char *)`; it gets an empty one, which no
+\ lookup can find.
 : PARAMS ( -- n va ) {: | n base ct va -- n va :}
    Lparen WANT
    STN @ TO base   0 TO n   0 TO va
+   TK Void =  TP @ 1+ TOKS V@ t.kind @ Rparen = AND IF TNEXT THEN
    TK Rparen <> IF
       BEGIN
          TK Dot = IF
@@ -582,8 +587,11 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
             0
          ELSE
             PARSE-TYPE TO ct
-            TV TL c_loc 0 ct 0 0 ST,   DQ @ ST-LAST y.q !   n 1+ TO n
-            Id WANT
+            TK Id = IF TV TL ELSE S" " THEN
+            c_loc 0 ct 0 0 ST,   DQ @ ST-LAST y.q !   n 1+ TO n
+            TK Id = IF TNEXT ELSE
+               TK Comma <> TK Rparen <> AND IF Id WANT THEN
+            THEN
             TK Comma =
          THEN
       WHILE TNEXT REPEAT

@@ -439,6 +439,36 @@ build that found it):
 - **Inlining** (above) landed on 2026-09-07 with its own correctness
   tests.
 
+### M7b: the C Busybox needs (from 2026-10-20)
+
+The Busybox port (docs/busybox-port.md) measured what c4lc rejects or
+gets wrong, with 113 probes in `src/tests/bbport/` checked against gcc.
+Every item lands in c4lc and c4fc together, byte for byte, with gcc's
+output as the golden: `src/tests/c4lc_pp.c` for the preprocessor and
+`src/tests/c4lc_m7.c` for the language.
+
+- **Preprocessor, now c4fc's rules** (`81ca7e7` and the next commit):
+  - **`#if defined(X)`** was always false for a defined X. Expansion
+    protected a name only when the token just before it was `defined`; in
+    `defined(X)` that token is `(`.
+  - **`#if 1 / #elif 1 / #else`** ran the `#else` arm too. A level is now
+    false, true or `'Done`.
+  - **`#include "x.h"`** is found beside the including file, then along
+    `-I`. `<x.h>` searches `-I` only, and the working directory is the
+    last resort.
+  - **Blue paint:** a macro is not expanded inside its own expansion, so
+    hush's `#define msg_and_die_if_script(lineno, ...)
+    msg_and_die_if_script(__VA_ARGS__)` terminates.
+  - **A function-like name with no `(`** stands for itself instead of
+    being an error.
+- **Variadic macros:** `...` with `__VA_ARGS__`, GNU `name...`, and GNU
+  `, ## __VA_ARGS__`, which drops the comma when the variable part is
+  empty. Busybox's generated `autoconf.h` defines every
+  `IF_FEATURE_X(...)` this way.
+- **`(void)` parameter lists and unnamed parameters.** `void` has a token
+  kind of its own (`Void`) for this one purpose. The parser takes it
+  wherever it takes `char`, which is what `void` is in c4.
+
 ## 11. Measured results (2026-08-03)
 
 The three big images, compiled three ways. "c4opt" is the peephole

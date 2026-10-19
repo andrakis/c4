@@ -18,12 +18,11 @@
 \ needs a token's text back (# and ##). Adding #warning is one row.
 \
 \ Deliberate divergences from c4lc's preprocessor, all in the direction
-\ of what C says, all documented in docs/c4fc-design.md (c4lc caught up
-\ on TAKEN, defined(X) and the including file's directory in M7b):
-\   * a macro is painted blue while its own expansion is rescanned, so
-\     a self-referential #define terminates instead of looping;
-\   * a function-like macro name without a following '(' stands for
-\     itself rather than being an error.
+\ of what C says, all documented in docs/c4fc-design.md. In M7b c4lc
+\ caught up on all of them: TAKEN, defined(X), the including file's
+\ directory, the blue paint below, and a function-like macro name with
+\ no '(' after it standing for itself. Variadic macros (`...`,
+\ __VA_ARGS__, GNU `name...` and `, ## __VA_ARGS__`) came in together.
 
 \ -- small helpers ------------------------------------------------------
 
@@ -66,9 +65,11 @@ VARIABLE #PATHS   0 #PATHS !
 \ the same thing and expanded f() to the body with a stray "()" behind
 \ it the day the two were conflated.
 
+\ m.var is true for a variadic macro, whose last parameter is the
+\ variable part: __VA_ARGS__ for `...`, or the name of GNU `name...`.
 BEGIN-STRUCTURE MAC
    FIELD: m.name  FIELD: m.nlen  FIELD: m.hash
-   FIELD: m.params  FIELD: m.body  FIELD: m.busy
+   FIELD: m.params  FIELD: m.body  FIELD: m.busy  FIELD: m.var
 END-STRUCTURE
 
 CREATE MACROS VEC ALLOT
@@ -93,7 +94,7 @@ CREATE MACROS VEC ALLOT
    MAC ALLOT: TO m
    a u PP-STR m m.nlen ! m m.name !
    a u M-HASH m m.hash !
-   p m m.params !  b m m.body !  0 m m.busy !
+   p m m.params !  b m m.body !  0 m m.busy !  0 m m.var !
    m MACROS V, ;
 : MAC-DEFINED? ( a u -- f )  MAC-FIND 0<> ;
 
@@ -148,7 +149,7 @@ SPELL HashHash ##
 SPELL AddA +=    SPELL SubA -=    SPELL MulA *=    SPELL DivA /=
 SPELL ModA %=    SPELL ShlA <<=   SPELL ShrA >>=   SPELL AndA &=
 SPELL OrA |=     SPELL XorA ^=
-SPELL Int int    SPELL Char char  SPELL If if      SPELL Else else
+SPELL Int int    SPELL Char char  SPELL Void void  SPELL If if      SPELL Else else
 SPELL While while SPELL For for   SPELL Return return
 SPELL Sizeof sizeof   SPELL Struct struct   SPELL Union union
 SPELL Enum enum  SPELL Static static  SPELL Extern extern
@@ -332,7 +333,10 @@ DEFER PP-APPLY   ( t mac -- )
    r ;
 
 \ Collect comma-separated arguments up to the matching ')'. The '(' has
-\ already been taken off the stream.
+\ already been taken off the stream. ARG-LIM, when not -1, is how many
+\ arguments split off at commas before the rest is one: a variadic
+\ macro's variable part, commas and all.
+VARIABLE ARG-LIM   -1 ARG-LIM !
 : PP-ARGS ( -- args ) {: | args cur d t k -- args :}
    16 NEW-VEC TO args   16 NEW-VEC TO cur   0 TO d
    BEGIN
@@ -341,7 +345,8 @@ DEFER PP-APPLY   ( t mac -- )
       PP-POP TO t   t t.kind @ TO k
       k Eof = IF ." c4fc: unterminated macro arguments" CR ABORT THEN
       k Rparen = d 0= AND IF cur args V,  args EXIT THEN
-      k Comma = d 0= AND IF cur args V,  16 NEW-VEC TO cur
+      k Comma = d 0= AND  ARG-LIM @ -1 = args V# ARG-LIM @ < OR  AND
+      IF cur args V,  16 NEW-VEC TO cur
       ELSE
          k Lparen = IF d 1+ TO d THEN
          k Rparen = IF d 1- TO d THEN
@@ -357,9 +362,22 @@ DEFER PP-APPLY   ( t mac -- )
    t t.kind @ Id <> IF 0 EXIT THEN
    t t.val @ t t.len @ ps as PP-ARGFOR ;
 
+\ The variadic parameter of the macro PP-SUBST is filling, or 0.
+VARIABLE PP-VA   0 PP-VA !
+\ Is token T the name of that parameter?
+: VA-PARAM? ( t -- f ) {: t | p -- f :}
+   PP-VA @ 0= IF 0 EXIT THEN
+   t t.kind @ Id <> IF 0 EXIT THEN
+   PP-VA @ TO p
+   t t.val @ t t.len @  p t.val @ p t.len @ BYTES2= ;
+
 \ Replace parameters in BODY. An ordinary parameter takes the EXPANDED
 \ argument; an operand of # or ## takes the raw one, which is the whole
 \ reason STR(V) gives "V" while XSTR(V) gives V's value.
+\
+\ GNU `, ## __VA_ARGS__` is no paste: an empty variable part takes the
+\ comma with it, and otherwise the comma stays and the raw argument
+\ follows, as in gcc.
 : PP-SUBST ( body params args eargs -- v )
    {: body ps as eas | r i t nx sa lt rt pv -- r :}
    16 NEW-VEC TO r   0 TO i
@@ -374,12 +392,20 @@ DEFER PP-APPLY   ( t mac -- )
       ELSE
          i 1+ body V# < IF i 1+ body V@ t.kind @ HashHash = ELSE 0 THEN
          IF
+            t t.kind @ Comma =  i 2 + body V# < AND
+            IF i 2 + body V@ VA-PARAM? ELSE 0 THEN
+            IF
+               i 2 + body V@ ps as PARAM-OF TO pv
+               pv V# IF t r V,  pv V# 0 ?DO I pv V@ r V, LOOP THEN
+               i 3 + TO i
+            ELSE
             i 2 + body V# < IF
                t ps as PARAM-OF t LAST-OF TO lt
                i 2 + body V@  DUP ps as PARAM-OF SWAP FIRST-OF TO rt
                lt rt PP-PASTE TO pv  pv V# 0 ?DO I pv V@ r V, LOOP
                i 3 + TO i
             ELSE t r V,  i 1+ TO i THEN
+            THEN
          ELSE
             t ps eas PARAM-OF TO pv
             pv IF pv V# 0 ?DO I pv V@ r V, LOOP ELSE t r V, THEN
@@ -399,7 +425,7 @@ DEFER PP-APPLY   ( t mac -- )
       c r V,
    LOOP r ;
 
-: (APPLY) ( t mac -- ) {: t m | args eargs ex -- :}
+: (APPLY) ( t mac -- ) {: t m | args eargs ex ps -- :}
    m m.params @ 0= IF
       m m.body @ t RELINE TO ex
       m MARK PP-PUSH   ex PP-PUSHV   1 m m.busy !  EXIT THEN
@@ -407,9 +433,14 @@ DEFER PP-APPLY   ( t mac -- )
    PP# 0= IF t PP-EMIT EXIT THEN
    PP-TOP t.kind @ Lparen <> IF t PP-EMIT EXIT THEN
    PP-DROP
+   m m.params @ TO ps
+   m m.var @ IF ps V# 1- ELSE -1 THEN ARG-LIM !
    PP-ARGS TO args
+   -1 ARG-LIM !
    args EXPAND-ARGS TO eargs
-   m m.body @ m m.params @ args eargs PP-SUBST  t RELINE TO ex
+   m m.var @ IF ps V# 1- ps V@ ELSE 0 THEN PP-VA !
+   m m.body @ ps args eargs PP-SUBST  t RELINE TO ex
+   0 PP-VA !
    m MARK PP-PUSH   ex PP-PUSHV   1 m m.busy ! ;
 ' (APPLY) IS PP-APPLY
 
@@ -500,9 +531,29 @@ VARIABLE #DIR   0 #DIR !
 
 \ Function-like only when the '(' TOUCHED the name: "#define A (x)"
 \ defines A as the token sequence "(x)".
+\
+\ `...` lexes as three Dots. On its own it is the parameter __VA_ARGS__;
+\ after a name (GNU `args...`) it makes that name the variable part.
+\ Either way it must be last, and PP-PVAR says the macro is variadic.
+VARIABLE PP-PVAR
+: DOTS? ( v i -- f ) {: v i -- f :}           \ three Dots at v[i]?
+   i 2 + v V# < 0= IF 0 EXIT THEN
+   i v V@ t.kind @ Dot =  i 1+ v V@ t.kind @ Dot = AND  i 2 + v V@ t.kind @ Dot = AND ;
+: VA-TOK ( t -- t' ) {: t | n -- n :}         \ an Id __VA_ARGS__ at t's place
+   t TOK-COPY TO n
+   Id n t.kind !  S" __VA_ARGS__" PP-STR n t.len ! n t.val !  0 n t.adj !  n ;
 : PP-PARAMS ( v i -- params i' ) {: v i | ps t k -- ps i :}
-   16 NEW-VEC TO ps
+   16 NEW-VEC TO ps   0 PP-PVAR !
    BEGIN i v V# < WHILE
+      v i DOTS? IF
+         \ after a name: GNU `name...`; otherwise the parameter __VA_ARGS__
+         i 0> IF i 1- v V@ t.kind @ Id = ELSE 0 THEN 0=
+         IF i v V@ VA-TOK ps V, THEN
+         -1 PP-PVAR !   i 3 + TO i
+         i v V# < IF i v V@ t.kind @ Rparen = ELSE 0 THEN
+         0= IF ." c4fc: ... must end the macro parameter list" CR ABORT THEN
+         ps i 1+ EXIT
+      THEN
       i v V@ TO t   t t.kind @ TO k   i 1+ TO i
       k Rparen = IF ps i EXIT THEN
       k Comma = 0= IF
@@ -517,6 +568,7 @@ VARIABLE #DIR   0 #DIR !
    n t.adj @ IF
       v 2 PP-PARAMS TO i TO ps
       n t.val @ n t.len @ ps  v i V-TAIL MAC-DEF
+      PP-PVAR @  MACROS DUP V# 1- SWAP V@  m.var !
    ELSE
       n t.val @ n t.len @ 0  v 1 V-TAIL MAC-DEF
    THEN ;

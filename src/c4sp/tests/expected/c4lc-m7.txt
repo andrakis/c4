@@ -1,0 +1,3 @@
+void-params 7 5 yz
+void-ptr 0 1
+static-void 42

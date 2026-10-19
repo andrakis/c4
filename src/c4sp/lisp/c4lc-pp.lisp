@@ -23,11 +23,19 @@
 ;; macro-expanded before substitution except as an operand of # or ##.
 ;; Paste splices the two spellings and re-lexes the result (pp:paste).
 ;;
-;; Not supported: variadic macros (... and __VA_ARGS__).
+;; Variadic macros (M7b, 2026-10-20): `...` is the parameter
+;; __VA_ARGS__, GNU `name...` names it, and GNU `, ## __VA_ARGS__` drops
+;; the comma when the variable part is empty. A macro is painted blue
+;; while its own expansion is rescanned (an EndMac marker closes it), so
+;; a self-referential #define stands for itself instead of looping, and a
+;; function-like name with no '(' after it is just that name. Both are
+;; c4fc's rules (src/c4fc/pp.f), which c4lc now shares.
 
 (begin
 
-(define pp:macros nil)      ;; (NAME PARAMS BODY), PARAMS nil = object-like
+(define pp:macros nil)      ;; (NAME PARAMS BODY VARIADIC), PARAMS false = object-like
+(define pp:busy nil)        ;; names of macros whose expansion is being rescanned
+(define pp:vaname false)    ;; the variadic parameter of the macro pp:subst is filling
 (define pp:paths nil)       ;; -I directories, searched in order
 (define pp:depth 0)         ;; include nesting, guards runaway recursion
 (define pp:curdir "")       ;; directory of the file being read, with its '/'
@@ -68,10 +76,36 @@
 
 (define pp:defined? (lambda (n) (if (pp:find n pp:macros) true false)))
 
-(define pp:define! (lambda (n params body)
+(define pp:define! (lambda (n params body var)
 	(begin
 		(pp:undef! n)
-		(set! pp:macros (pp:cons (list n params body) pp:macros)))))
+		(set! pp:macros (pp:cons (list n params body var) pp:macros)))))
+
+;; ---- blue paint ----
+;;
+;; pp:apply sets a macro busy and puts an EndMac marker after its
+;; expansion; while busy, its name is not expanded again. The marker
+;; surfacing in the walk means the expansion has been rescanned.
+(define pp:busy? (lambda (n) (pp:busy?/2 n pp:busy)))
+(define pp:busy?/2 (lambda (n l)
+	(if (empty? l) false (if (= (head l) n) true (next pp:busy?/2 n (tail l))))))
+(define pp:unbusy! (lambda (n) (set! pp:busy (pp:unbusy/2 n pp:busy nil))))
+(define pp:unbusy/2 (lambda (n l acc)
+	(if (empty? l) (pp:reverse acc)
+	(if (= (head l) n) (pp:append (pp:reverse acc) (tail l))
+	(next pp:unbusy/2 n (tail l) (pp:cons (head l) acc))))))
+(define pp:endmac? (lambda (t) (= (pp:kind t) 'EndMac)))
+;; retire the markers at the front of a stream, as c4fc's PP-SETTLE does
+(define pp:settle (lambda (toks)
+	(if (empty? toks) toks
+	(if (pp:endmac? (head toks))
+		(begin (pp:unbusy! (pp:val (head toks))) (next pp:settle (tail toks)))
+	toks))))
+;; EXPANSION of macro NAME, painted: NAME is busy until the marker
+(define pp:painted (lambda (name expansion rest)
+	(begin
+		(set! pp:busy (pp:cons name pp:busy))
+		(list (pp:append expansion (list (list 'EndMac name -1))) rest))))
 
 (define pp:undef! (lambda (n)
 	(set! pp:macros (pp:undef/2 n pp:macros nil))))
@@ -128,19 +162,41 @@
 		(if (if (= (length nt) 4) (= (index nt 3) 1) false)
 			(begin
 				(define pr (pp:params (tail rest) nil))
-				(pp:define! n (head pr) (head (tail pr))))
-			(pp:define! n false rest)))))
+				(pp:define! n (head pr) (head (tail pr)) (head (tail (tail pr)))))
+			(pp:define! n false rest false)))))
 
-;; parameter list after '('; returns (PARAMS BODY)
+;; parameter list after '('; returns (PARAMS BODY VARIADIC). `...` lexes
+;; as three Dots. On its own it is the parameter __VA_ARGS__; after a
+;; name (GNU `args...`) it makes that name the variable part. Either way
+;; it must be last.
 (define pp:params (lambda (toks acc)
 	(if (empty? toks) (pp:die "unterminated macro parameter list")
-	(if (= (pp:kind (head toks)) 'Rparen)
-		(list (pp:reverse acc) (tail toks))
-	(if (= (pp:kind (head toks)) 'Comma)
-		(next pp:params (tail toks) acc)
-	(if (= (pp:kind (head toks)) 'Id)
-		(next pp:params (tail toks) (pp:cons (pp:val (head toks)) acc))
-	(pp:die "bad macro parameter")))))))
+	(begin
+		(define k (pp:kind (head toks)))
+		(if (= k 'Rparen)
+			(list (pp:reverse acc) (tail toks) false)
+		(if (= k 'Comma)
+			(next pp:params (tail toks) acc)
+		(if (pp:ellipsis? toks)
+			(pp:params/va (tail (tail (tail toks))) (pp:cons "__VA_ARGS__" acc))
+		(if (= k 'Id)
+			(if (pp:ellipsis? (tail toks))
+				(pp:params/va (tail (tail (tail (tail toks)))) (pp:cons (pp:val (head toks)) acc))
+			(next pp:params (tail toks) (pp:cons (pp:val (head toks)) acc)))
+		(pp:die "bad macro parameter")))))))))
+(define pp:ellipsis? (lambda (toks)
+	(if (empty? toks) false
+	(if (= (pp:kind (head toks)) 'Dot)
+		(if (empty? (tail toks)) false
+		(if (= (pp:kind (head (tail toks))) 'Dot)
+			(if (empty? (tail (tail toks))) false
+				(= (pp:kind (head (tail (tail toks)))) 'Dot))
+		false))
+	false))))
+(define pp:params/va (lambda (toks acc)
+	(if (if (empty? toks) false (= (pp:kind (head toks)) 'Rparen))
+		(list (pp:reverse acc) (tail toks) true)
+	(pp:die "... must end the macro parameter list"))))
 
 ;; ---- #include ----
 
@@ -337,39 +393,47 @@
 	(if (empty? toks) (pp:reverse acc)
 	(begin
 		(define t (head toks))
+		(if (pp:endmac? t)
+			(begin (pp:unbusy! (pp:val t)) (next pp:expandall (tail toks) acc))
 		(if (= (pp:kind t) 'Id)
 			(begin
 				(define m (pp:find (pp:val t) pp:macros))
 				;; `defined X` must not expand X
 				(if (if m (= (pp:val t) "defined") false) (set! m false) nil)
 				(if (pp:after-defined? acc) (set! m false) nil)
+				(if (if m (pp:busy? (pp:val t)) false) (set! m false) nil)
 				(if m
 					(begin
 						(define r (pp:apply m (tail toks) (pp:line t)))
 						(next pp:expandall (pp:append (head r) (head (tail r))) acc))
 				(next pp:expandall (tail toks) (pp:cons t acc))))
-		(next pp:expandall (tail toks) (pp:cons t acc)))))))
+		(next pp:expandall (tail toks) (pp:cons t acc))))))))
 
-;; Apply macro M at the head of REST. Returns (EXPANSION REMAINDER).
+;; Apply macro M at the head of REST. Returns (EXPANSION REMAINDER),
+;; the expansion painted (pp:painted) so its rescan cannot expand M.
 (define pp:apply (lambda (m rest ln)
 	(begin
 		(define params (head (tail m)))
 		(define body (head (tail (tail m))))
+		(define var (index m 3))
 		;; false = object-like. An empty LIST is a function-like macro
 		;; with no parameters -- "#define f() 0" is legal C, and
 		;; treating it as object-like expanded f() to the body with a
 		;; stray "()" left behind after it.
 		(if (= params false)
-			(list (pp:reline body ln) rest)
+			(pp:painted (head m) (pp:reline body ln) rest)
 		(begin
 			;; function-like: only expands when an argument list
-			;; follows, otherwise the name stands for itself
-			(if (if (empty? rest) true (= (pp:kind (head rest)) 'Lparen)) nil
-				(pp:die (+ "macro needs arguments: " (head m))))
-			(if (empty? rest)
-				(list (list (list 'Id (head m) ln)) rest)
+			;; follows, otherwise the name stands for itself (painted,
+			;; so the rescan leaves it alone). This used to be an error.
+			(define rest2 (pp:settle rest))
+			(if (if (empty? rest2) true (if (= (pp:kind (head rest2)) 'Lparen) false true))
+				(pp:painted (head m) (list (list 'Id (head m) ln)) rest2)
 			(begin
-				(define ar (pp:args (tail rest) nil nil 0))
+				;; a variadic macro's arguments stop splitting at commas
+				;; once the named parameters are filled
+				(define lim (if var (- (length params) 1) -1))
+				(define ar (pp:args (tail rest2) nil nil 0 lim))
 				(define args (head ar))
 				(define after (head (tail ar)))
 				;; Arguments are macro-expanded BEFORE substitution --
@@ -377,8 +441,10 @@
 				;; That distinction is the whole reason XSTR(V) gives
 				;; the value of V while STR(V) gives "V".
 				(define eargs (pp:expandargs args nil))
-				(list (pp:reline (pp:subst body params args eargs nil) ln)
-					after))))))))
+				(set! pp:vaname (if var (pp:lastof/2 params) false))
+				(define ex (pp:subst body params args eargs nil))
+				(set! pp:vaname false)
+				(pp:painted (head m) (pp:reline ex ln) after))))))))
 
 (define pp:expandargs (lambda (args acc)
 	(if (empty? args) (pp:reverse acc)
@@ -386,18 +452,22 @@
 		(pp:cons (pp:expandall (head args) nil) acc)))))
 
 ;; Collect comma-separated arguments up to the matching ')'.
-;; Returns (ARGS REST); each arg is a token list.
-(define pp:args (lambda (toks cur acc d)
+;; Returns (ARGS REST); each arg is a token list. LIM, when not -1, is
+;; how many arguments split off at commas before the rest is one (the
+;; variable part). A marker met on the way is retired, not collected.
+(define pp:args (lambda (toks cur acc d lim)
 	(if (empty? toks) (pp:die "unterminated macro arguments")
 	(begin
 		(define t (head toks))
 		(define k (pp:kind t))
+		(if (pp:endmac? t)
+			(begin (pp:unbusy! (pp:val t)) (next pp:args (tail toks) cur acc d lim))
 		(if (if (= k 'Rparen) (= d 0) false)
 			(list (pp:reverse (pp:cons (pp:reverse cur) acc)) (tail toks))
-		(if (if (= k 'Comma) (= d 0) false)
-			(next pp:args (tail toks) nil (pp:cons (pp:reverse cur) acc) d)
+		(if (if (= k 'Comma) (if (= d 0) (if (= lim -1) true (< (length acc) lim)) false) false)
+			(next pp:args (tail toks) nil (pp:cons (pp:reverse cur) acc) d lim)
 		(next pp:args (tail toks) (pp:cons t cur) acc
-			(if (= k 'Lparen) (+ d 1) (if (= k 'Rparen) (- d 1) d)))))))))
+			(if (= k 'Lparen) (+ d 1) (if (= k 'Rparen) (- d 1) d)) lim))))))))
 
 ;; ---- spelling tokens back into text ----
 ;;
@@ -479,12 +549,24 @@
 				(define rhs (tail (tail body)))
 				(if (empty? rhs)
 					(next pp:subst (tail body) params args eargs (pp:cons t acc))
+				;; GNU `, ## __VA_ARGS__`: no paste. An empty variable part takes
+				;; the comma with it; otherwise the comma stays and the raw
+				;; argument follows, as in gcc.
+				(if (if pp:vaname (if (= k 'Comma)
+						(if (= (pp:kind (head rhs)) 'Id) (= (pp:val (head rhs)) pp:vaname) false)
+						false) false)
+					(begin
+						(define va (pp:argfor pp:vaname params args))
+						(if (empty? va)
+							(next pp:subst (tail rhs) params args eargs acc)
+						(next pp:subst (tail rhs) params args eargs
+							(pp:revonto va (pp:cons t acc)))))
 				(begin
 					(define lt (pp:lastof (pp:one t params args) t))
 					(define rt (pp:firstof (pp:one (head rhs) params args)
 						(head rhs)))
 					(next pp:subst (tail rhs) params args eargs
-						(pp:revonto (pp:paste lt rt) acc)))))
+						(pp:revonto (pp:paste lt rt) acc))))))
 		(begin
 			;; ordinary parameter: the EXPANDED argument
 			(define a (if (= k 'Id) (pp:argfor (pp:val t) params eargs) false))
@@ -622,6 +704,11 @@
 			(begin
 				(set! pp:curdir (pp:val t))
 				(next pp:go (tail toks) skip acc))
+		;; the end of a macro's expansion: it may expand again
+		(if (pp:endmac? t)
+			(begin
+				(pp:unbusy! (pp:val t))
+				(next pp:go (tail toks) skip acc))
 		(if (= (pp:kind t) 'Eof)
 			(begin
 				(if (empty? skip) nil (pp:die "unterminated #if"))
@@ -637,20 +724,21 @@
 			(next pp:go (tail toks) skip acc)     ;; inside a dead branch
 		(if (= (pp:kind t) 'Id)
 			(begin
-				(define m (pp:find (pp:val t) pp:macros))
+				(define m (if (pp:busy? (pp:val t)) false (pp:find (pp:val t) pp:macros)))
 				(if m
 					(begin
 						(define r (pp:apply m (tail toks) (pp:line t)))
 						;; push the expansion back so it is rescanned
 						(next pp:go (pp:append (head r) (head (tail r))) skip acc))
 				(next pp:go (tail toks) skip (pp:cons t acc))))
-		(next pp:go (tail toks) skip (pp:cons t acc)))))))))))
+		(next pp:go (tail toks) skip (pp:cons t acc))))))))))))
 
 ;; ---- entry points ----
 
 (define pp:reset (lambda ()
 	(begin
 		(set! pp:macros nil)
+		(set! pp:busy nil)
 		(set! pp:depth 0)
 		(pp:builtins))))
 
@@ -667,14 +755,14 @@
 	(begin
 		(define eq (pp:eqpos spec 0))
 		(if (< eq 0)
-			(pp:define! spec false (list (list 'Num 1 0)))
+			(pp:define! spec false (list (list 'Num 1 0)) false)
 		(begin
 			(define n (string:substr spec 0 eq))
 			(define v (string:substr spec (+ eq 1) (- (length spec) (+ eq 1))))
 			;; without the lexer's Eof, which would otherwise sit inside
 			;; every expansion: `#if N == 1` read as `3 <Eof>` and stopped
 			;; (c4fc's PP-DEFINE always dropped it)
-			(pp:define! n false (pp:dropeof (lex:string v) nil)))))))
+			(pp:define! n false (pp:dropeof (lex:string v) nil) false))))))
 (define pp:predefines (lambda (l)
 	(if (empty? l) nil
 	(begin

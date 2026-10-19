@@ -70,6 +70,27 @@ int one_arm() { return 2; }
 int one_arm() { return 3; }
 #endif
 
+// Variadic macros (M7b): `...` and __VA_ARGS__, which Busybox's generated
+// autoconf.h uses for every IF_FEATURE_X(...), GNU `name...`, and GNU
+// `, ## __VA_ARGS__`, whose comma goes when the variable part is empty.
+#define IF_ON(...) __VA_ARGS__
+#define IF_OFF(...)
+#define SUM3(z, ...) sum3(__VA_ARGS__)
+#define GNU(fmt, args...) printf(fmt, ##args)
+#define GNU2(fmt, ...) printf(fmt, ## __VA_ARGS__)
+#define STRV(...) #__VA_ARGS__
+int sum3(int a, int b, int c) { return a + b + c; }
+IF_ON(int va_on() { return 1; })
+IF_OFF(int va_on() { return 2; })
+
+// Blue paint: a macro is not expanded again inside its own expansion,
+// so these stand for the functions of the same name instead of looping.
+// hush.c defines msg_and_die_if_script(lineno, ...) exactly this way.
+int twice(int x) { return 2 * x; }
+#define twice(x) (twice(x) + 0)
+int note(int line, int v) { return line * 100 + v; }
+#define note(line, ...) note(line, __VA_ARGS__)
+
 int main() {
     printf("guarded %d\n", guarded());
     printf("taken_if %d\n", taken_if());
@@ -82,5 +103,14 @@ int main() {
     printf("paste %d\n", c4lc_probe());
     printf("defined-paren %d\n", defined_paren());
     printf("one-arm %d\n", one_arm());
+    printf("va-on %d\n", va_on());
+    printf("va-sum %d\n", SUM3(0, 1, 2, 3));
+    GNU("gnu-none\n");
+    GNU("gnu %d %d\n", 4, 5);
+    GNU2("gnu2-none\n");
+    GNU2("gnu2 %d\n", 6);
+    printf("strv %s\n", STRV(x));
+    printf("self %d\n", twice(twice(3)));
+    printf("self-va %d\n", note(7, 8));
     return 0;
 }

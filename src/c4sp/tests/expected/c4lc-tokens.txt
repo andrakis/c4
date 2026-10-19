@@ -120,7 +120,7 @@ cr
 (Num 8 26)
 (Rbrak 0 26)
 (Semi 0 26)
-(Char 0 28)
+(Void 0 28)
 (Attribute 0 28)
 (Lparen 0 28)
 (Lparen 0 28)

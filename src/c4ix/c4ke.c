@@ -316,12 +316,14 @@ static int ck_privs_in(int p, struct task *caller) {
     return PRIV_USER;
 }
 
-// C4IX does not copy argv -- one address space, and the shell keeps
-// its own copies alive. C4KE's callers assume the kernel copies, and
-// they are right to: benchtop rewrites its OWN argv array between
-// spawns, and innerbench frees its argv while the spawned tasks are
-// still running. So copy, and let the task own it.
-static int ck_argv_copy(struct task *t, int argc, char **argv) {
+// Copy argv into memory the task owns, freed when it is reaped
+// (ck_task_free). C4KE's callers assume the kernel copies, and they
+// are right to: benchtop rewrites its OWN argv array between spawns,
+// and innerbench frees its argv while the spawned tasks are still
+// running. C4IX's own SYS_SPAWN copies too (sys.c): a parent may exit
+// before its child reads argv -- vfsload starting the root archive's
+// unpack in the background and leaving is exactly that.
+int ck_argv_copy(struct task *t, int argc, char **argv) {
     char **vec;
     char *blob, *p;
     int i, n, bytes;

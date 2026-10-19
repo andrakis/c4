@@ -266,7 +266,14 @@ static int sh_builtin(char **argv, int argc) {
         return 1;
     }
     if (!ustrcmp(argv[0], "jobs")) { sh_jobs(); return 1; }
-    if (!ustrcmp(argv[0], "wait")) { sh_waitall(); return 1; }
+    // "wait PID" waits for any task, not only this shell's jobs: the
+    // root archive unpacks in the background at boot, and vfsload
+    // names its task so a script can wait for the files.
+    if (!ustrcmp(argv[0], "wait")) {
+        if (argc > 1) uprintf("[%s] done (%d)\n", argv[1], uwait(sh_atoi(argv[1])));
+        else sh_waitall();
+        return 1;
+    }
     // `jobs` could show you a background task and nothing could stop
     // it. A job number is the useful handle -- "%1" the way a real
     // shell spells it -- with a raw pid accepted for anything the
@@ -276,6 +283,7 @@ static int sh_builtin(char **argv, int argc) {
         uprintf("c4ix-sh: cmd [args] [< in] [> out] [| cmd ...] [&]\n");
         uprintf("builtins: exit jobs wait kill cd pwd help\n");
         uprintf("  kill [-SIG] %%JOB | PID   default signal 15 (TERM)\n");
+        uprintf("  wait [PID]                every job, or task PID\n");
         return 1;
     }
     if (!ustrcmp(argv[0], "cd")) {

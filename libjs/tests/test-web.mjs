@@ -130,6 +130,17 @@ try {
     ok('Ctrl-C cancels it', await waitTerm('interrupt: cancelling task', 15000), (await term()).slice(-300));
     await tab.type('echo after-the-interrupt\n');
     ok('the shell still answers', await waitTerm('after-the-interrupt\n', 15000) || await waitTerm('after-the-interrupt', 1));
+    // The root archive unpacks in the background as task 3 (vfsload):
+    // the whole tree is one fetch, not one per file.
+    const t1 = Date.now();
+    await tab.type('wait 3\n');
+    ok('the root archive unpacks', await waitTerm('[3] done (0)', 120000), (await term()).slice(-300));
+    console.log(`  (unpacked ${((Date.now() - t1) / 1000).toFixed(1)}s after asking)`);
+    await tab.type('ls /usr/src/c4\n');
+    ok('its tree is there', await waitTerm('docs/', 15000) && await waitTerm('c4m.c', 1), (await term()).slice(-300));
+    const disk2 = await tab.eval('window.c4m.status.disk');
+    ok(`and it cost one fetch: ${disk2 && disk2.fetched} of ${disk2 && disk2.files} files so far`,
+       !!disk2 && disk2.fetched < 15, JSON.stringify(disk2));
     const busy = await tab.eval('window.c4m.status');
     console.log(`  (${busy.ips} inst/s at the last status, simulated ${Math.round(busy.simMs / 1000)}s)`);
     await shot('c4ix');

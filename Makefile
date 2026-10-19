@@ -2604,6 +2604,22 @@ libc4ix.c4l: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/lib/libc4ix.c $(C4IX_SRC)/
 	$(C4RLINK) -r .c4ix_lib.c4o -o libc4ix.c4l
 	rm -f .c4ix_lib.pp.c .c4ix_lib.c4o
 
+# libarc: gzip and tar (lib/archive.c), for the programs below that
+# unpack archives. The board disk's copy is built -mfuse by
+# build-images.sh; this one is plain, because native c4m lacks most of
+# the fused opcodes.
+libarc.c4l: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/lib/archive.c $(C4IX_SRC)/include/archive.h $(C4IX_SRC)/include/c4ix_user.h
+	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC)/include $(C4IX_SRC)/lib/archive.c .c4ix_arc.c4o > /dev/null
+	$(C4RLINK) -r .c4ix_arc.c4o -o libarc.c4l
+	rm -f .c4ix_arc.pp.c .c4ix_arc.c4o
+
+# tar and gunzip link libarc as well as libc4ix
+C4IX_ARC_PROGS := c4ix-tar.c4r c4ix-gunzip.c4r
+$(C4IX_ARC_PROGS): c4ix-%.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libarc.c4l libc4ix.c4l $(C4IX_SRC)/user/%.c
+	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC)/include $(C4IX_SRC)/user/$*.c .c4ix_a_$*.c4o > /dev/null
+	$(C4RLINK) .c4ix_a_$*.c4o libarc.c4l libc4ix.c4l -o $@
+	rm -f .c4ix_a_$*.pp.c .c4ix_a_$*.c4o
+
 # userland programs built against the library: all IO via syscalls
 # The desktop is several modules (docs/c4ix-desktop.md): each is compiled
 # on its own, then all are linked with libc4ix, like the kernel.
@@ -2642,7 +2658,8 @@ c4ix-%.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libc4ix.c4l $(C4IX_SRC)/user/%.c
 C4IX_PROGS := c4ix-hello.c4r c4ix-uhello.c4r c4ix-echo.c4r c4ix-wc.c4r \
               c4ix-cat.c4r c4ix-sh.c4r c4ix-ps.c4r c4ix-bench.c4r \
               c4ix-cycles.c4r c4ix-ls.c4r c4ix-mkdir.c4r c4ix-top.c4r \
-              c4ix-spin.c4r c4ix-fmt.c4r c4ix-gui.c4r c4ix-desktop.c4r
+              c4ix-spin.c4r c4ix-fmt.c4r c4ix-gui.c4r c4ix-desktop.c4r \
+              $(C4IX_ARC_PROGS)
 # The demonstrations are opt-in (--demo) and take their six images
 # positionally; `c4ix.c4r --help` documents the roles. With no
 # arguments at all the kernel boots to a shell, which is what

@@ -137,4 +137,15 @@ if echo "$out" | grep -qE '[4-9][0-9]/[4-9][0-9] entries loaded from c4ix\.vfs\.
     ok "c4ix-vfs manifest mostly loaded ($(echo "$out" | grep -oE '[0-9]+/[0-9]+ entries loaded'))"
 else bad "c4ix-vfs manifest mostly loaded"; echo "$out" | grep -E 'entries loaded|cannot open' | head -5; fi
 
+# The root archive (c4ix-root.tgz, build-images.sh) unpacks in the
+# background as task 3, which "wait 3" blocks on. Then a file deep in
+# the tree must have its real content, and the libraries must be there.
+out=$(printf 'wait 3\nls /usr/lib\ncat /usr/src/c4/src/c4ix/user/tar.c\nexit\n' | \
+      timeout 300 $LIBJS -c 2000000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
+if echo "$out" | grep -qF "unpacking c4ix-root.tgz in the background as task 3" &&
+   echo "$out" | grep -qF "[3] done (0)" && echo "$out" | grep -qF "libarc.c4l" &&
+   echo "$out" | grep -qF "list or extract a tar archive, gzipped or not"; then
+    ok "c4ix root archive unpacked"
+else bad "c4ix root archive unpacked"; echo "$out" | grep -E 'unpack|done|tar:|cannot' | head -5; fi
+
 if [ $fail = 0 ]; then echo "test-libjs: OK"; else echo "test-libjs: FAILURES"; exit 1; fi

@@ -547,6 +547,40 @@ int load_entries() {
     return ok;
 }
 
+// ---- archives ----
+//
+// ARCHIVES = NAME... in the manifest names tar archives (gzipped or
+// not) to unpack over / once the entries above exist. The root archive
+// is megabytes of sources and docs, and inflating it is seconds of
+// interpreted work -- too long to hold the first prompt for -- so each
+// is handed to c4ix-tar in the background and boot carries on. The
+// task id is printed: "wait ID" in the shell blocks until it is done.
+// One request fetches the whole archive, where the same files as
+// manifest entries would be a request each.
+void unpack_archives() {
+    int v, j, st[4], pid;
+    char *name;
+    char **targv;
+    v = var_lookup("ARCHIVES");
+    if (!v) return;
+    --v;
+    j = 0;
+    while (j < g_var_wordcount[v]) {
+        name = g_var_words[v * MAX_WORDS + j];
+        ++j;
+        if (size_of(name) < 0 && ustat(name, st) < 0) {
+            uprintf("vfsload: archive %s is not on this disk\n", name);
+            continue;
+        }
+        targv = (char **)ualloc(6 * sizeof(int));
+        targv[0] = "c4ix-tar.c4r"; targv[1] = "x"; targv[2] = "-C"; targv[3] = "/";
+        targv[4] = name; targv[5] = 0;
+        pid = spawn(targv[0], 5, targv);
+        if (pid < 0) uprintf("vfsload: cannot start c4ix-tar for %s\n", name);
+        else uprintf("vfsload: unpacking %s in the background as task %d\n", name, pid);
+    }
+}
+
 int main(int argc, char **argv) {
     char *manifest, *manifestName;
     int len, ok;
@@ -574,5 +608,6 @@ int main(int argc, char **argv) {
 
     ok = load_entries();
     uprintf("vfsload: %d/%d entries loaded from %s\n", ok, g_nentries, manifestName);
+    unpack_archives();
     return 0;
 }

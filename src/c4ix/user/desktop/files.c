@@ -8,7 +8,10 @@
 
 #include "desktop.h"
 
-enum { MAXE = 160, NAMEW = 24, MAXT = 64, TREE_W = 180, ROW_H = 17, TOOL_H = 30, STATUS_H = 20 };
+// NAMEW is the kernel's VN_NAME_MAX, TPW a tree path. Sized for the root
+// archive's tree (some 70 folders, 80 files in the largest), and to fit
+// ST_BYTES with room to spare.
+enum { MAXE = 400, NAMEW = 64, MAXT = 256, TPW = 128, MAXDEPTH = 10, TREE_W = 180, ROW_H = 17, TOOL_H = 30, STATUS_H = 20 };
 
 struct files {
     char path[128];
@@ -16,13 +19,13 @@ struct files {
     char name[MAXE * NAMEW];
     int isdir[MAXE], size[MAXE], prog[MAXE];
     int nt, tsel, ttop;                // the tree: folders, their depth, the one shown
-    char tpath[MAXT * 96];
+    char tpath[MAXT * TPW];
     int tdepth[MAXT];
     int pane;                          // 0 the list has the keyboard, 1 the tree
 };
 
 static struct files *F(struct win *w) { return (struct files *)w->st; }
-static char tbuf[160];
+static char tbuf[256];
 
 static char *menu_titles[3];
 static char *file_items[8];
@@ -87,17 +90,17 @@ static void load(struct files *f) {
 static void tree_walk(struct files *f, char *dir, int depth) {
     int i, r, me;
     char nm[NAMEW];
-    if (f->nt >= MAXT || depth > 6) return;
+    if (f->nt >= MAXT || depth > MAXDEPTH) return;
     me = f->nt;
-    ui_cpy(f->tpath + me * 96, dir);
+    ui_cpy(f->tpath + me * TPW, dir);
     f->tdepth[me] = depth;
     ++f->nt;
     i = 0;
     while (1) {
-        r = ureaddir(f->tpath + me * 96, i, nm);
+        r = ureaddir(f->tpath + me * TPW, i, nm);
         if (r < 0) break;
         if (r == 1 && f->nt < MAXT) {
-            join(tbuf, f->tpath + me * 96, nm);
+            join(tbuf, f->tpath + me * TPW, nm);
             tree_walk(f, tbuf, depth + 1);
         }
         ++i;
@@ -108,7 +111,7 @@ static void tree_load(struct files *f) {
     f->nt = 0;
     tree_walk(f, "/", 0);
     f->tsel = 0;
-    while (f->tsel < f->nt && !ui_eq(f->tpath + f->tsel * 96, f->path)) ++f->tsel;
+    while (f->tsel < f->nt && !ui_eq(f->tpath + f->tsel * TPW, f->path)) ++f->tsel;
     if (f->tsel >= f->nt) f->tsel = 0;
 }
 
@@ -219,9 +222,9 @@ void files_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
         tbuf[0] = 0;
         if (i == 0) ui_cpy(tbuf, "C4IX (/)");
         else {
-            lw = ui_len(f->tpath + i * 96);
-            while (lw > 0 && f->tpath[i * 96 + lw - 1] != '/') --lw;
-            ui_cpy(tbuf, f->tpath + i * 96 + lw);
+            lw = ui_len(f->tpath + i * TPW);
+            while (lw > 0 && f->tpath[i * TPW + lw - 1] != '/') --lw;
+            ui_cpy(tbuf, f->tpath + i * TPW + lw);
         }
         sel_bg = i == f->tsel;
         if (sel_bg) d_rect(lx + 17, y, ui_len(tbuf) * 6 + 6, ROW_H - 1, f->pane == 1 && focused ? C_SEL : C_FACE);
@@ -289,7 +292,7 @@ void files_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     if (ui_hit(x, y, 2, TOOL_H, TREE_W, th)) {
         f->pane = 1;
         row = f->ttop + (y - TOOL_H - 3) / ROW_H;
-        if (row >= 0 && row < f->nt && ev == E_DOWN) { f->tsel = row; ui_cpy(tbuf, f->tpath + row * 96); go(w, tbuf); f->pane = 1; }
+        if (row >= 0 && row < f->nt && ev == E_DOWN) { f->tsel = row; ui_cpy(tbuf, f->tpath + row * TPW); go(w, tbuf); f->pane = 1; }
         return;
     }
     t = ui_scroll_click(x, y, lx + lw - 18, TOOL_H + 20, lh - 2, f->n, rows, f->top);
@@ -312,8 +315,8 @@ void files_key(struct win *w, int code, int ch, int mods) {
     if (code == KEY_F5) { files_command(w, 1, 0); return; }
     if (code == KEY_BACK) { up(w); return; }
     if (f->pane == 1) {
-        if (code == KEY_UP && f->tsel > 0) { --f->tsel; ui_cpy(tbuf, f->tpath + f->tsel * 96); go(w, tbuf); f->pane = 1; }
-        else if (code == KEY_DOWN && f->tsel < f->nt - 1) { ++f->tsel; ui_cpy(tbuf, f->tpath + f->tsel * 96); go(w, tbuf); f->pane = 1; }
+        if (code == KEY_UP && f->tsel > 0) { --f->tsel; ui_cpy(tbuf, f->tpath + f->tsel * TPW); go(w, tbuf); f->pane = 1; }
+        else if (code == KEY_DOWN && f->tsel < f->nt - 1) { ++f->tsel; ui_cpy(tbuf, f->tpath + f->tsel * TPW); go(w, tbuf); f->pane = 1; }
         return;
     }
     if (code == KEY_UP && f->sel > 0) --f->sel;

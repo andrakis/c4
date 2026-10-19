@@ -16,7 +16,7 @@ C4IX shell finds a bare command name as `c4ix-NAME.c4r` or `NAME.c4r`.
 
 | file | what |
 |---|---|
-| `sh.c` | `c4ix-sh`, the shell: pipelines of any length, `<` and `>`, `&` jobs, builtins `exit jobs wait kill cd pwd help`. No fork: it points its own fd 0/1 at a stage, spawns, and restores them |
+| `sh.c` | `c4ix-sh`, the shell: pipelines of any length, `<` and `>`, `&` jobs, builtins `exit jobs wait kill cd pwd help` (`wait PID` waits for any task). No fork: it points its own fd 0/1 at a stage, spawns, and restores them |
 | `ls.c`, `cat.c`, `echo.c`, `wc.c`, `mkdir.c` | the usual; `cat` and `wc` read fd 0 when given no file |
 | `ps.c` | task table, one fixed-shape record per syscall |
 | `top.c` | samples the task table twice and reports what each task did in between |
@@ -27,7 +27,9 @@ C4IX shell finds a bare command name as `c4ix-NAME.c4r` or `NAME.c4r`.
 | `hello.c` | calls `printf` directly, no library: a trapped host opcode the kernel redirects. Built alone as `c4ix-hello.c4r` |
 | `uhello.c` | the same greeting through libc4ix only |
 | `gui.c` | runs `libjs/guest/gui-demo.c` as a C4IX task; prints `gui: not fitted` without the libjs display |
-| `vfsload.c` | `c4ix-vfsload`: fills the hierarchical VFS from `c4ix.vfs.txt` at boot (same manifest format as `src/c4ke/bin/vfsload.c`) |
+| `vfsload.c` | `c4ix-vfsload`: fills the hierarchical VFS from `c4ix.vfs.txt` at boot (same manifest format as `src/c4ke/bin/vfsload.c`), then starts `c4ix-tar` in the background on each archive the manifest's `ARCHIVES` names and prints its task id |
+| `tar.c` | `tar t[v] FILE`, `tar x[v] [-C DIR] FILE`: ustar or C4TAR1, gzipped or not (recognised by its magic). Links `libarc.c4l` too |
+| `gunzip.c` | `gunzip FILE.gz` writes `FILE`; `-c` writes to fd 1. The gzip CRC is checked before anything is written. Links `libarc.c4l` too |
 
 ## Shell scripts
 

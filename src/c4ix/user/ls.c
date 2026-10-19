@@ -5,7 +5,7 @@
 #include "c4ix_user.h"
 
 int main(int argc, char **argv) {
-    char name[32];
+    char name[64];             // VN_NAME_MAX
     char cwd[128];
     char *path;
     int i, kind, n;

@@ -255,6 +255,8 @@ cp src/c4ke/include/service.h $DISK/
 # the 32-bit c4rlink; userland links against libc4ix
 C4IX_MODS="boot console va host sl4b task sched vfs sys c4ke loader init"
 C4IX_USER="hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt gui"
+# userland that also links libarc (gzip and tar): the root archive's unpacker
+C4IX_ARC_USER="tar gunzip"
 # c4sp arena, in cells. 8000000 was a guess with no measurement behind
 # it, and at 21 bytes a cell (32-bit: gc.h/cell.h) that is ~168MB --
 # more than c4bb has (32MB default), so nothing built this way could
@@ -280,9 +282,18 @@ if [ ! -f $OUT/c4ix32.c4r ] || \
     ./c4rlink32 $objs -o $OUT/c4ix32.c4r
     ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix/include src/c4ix/lib/libc4ix.c .c4bb_ix_lib.c4o > /dev/null
     ./c4rlink32 -r .c4bb_ix_lib.c4o -o .c4bb_libc4ix32.c4l
+    # libarc: inflate, CRC-32 and tar, for vfsload's root archive. -mfuse
+    # like c4sp.c4r below: unpacking the archive is the one long job a
+    # boot starts, and both machines that read this disk run fused code.
+    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -mfuse -c -I src/c4ix/include src/c4ix/lib/archive.c .c4bb_ix_arc.c4o > /dev/null
+    ./c4rlink32 -r .c4bb_ix_arc.c4o -o .c4bb_libarc32.c4l
     for u in $C4IX_USER; do
         ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix/include src/c4ix/user/$u.c .c4bb_ix_u.c4o > /dev/null
         ./c4rlink32 .c4bb_ix_u.c4o .c4bb_libc4ix32.c4l -o $DISK/c4ix-$u.c4r > /dev/null
+    done
+    for u in $C4IX_ARC_USER; do
+        ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix/include src/c4ix/user/$u.c .c4bb_ix_u.c4o > /dev/null
+        ./c4rlink32 .c4bb_ix_u.c4o .c4bb_libarc32.c4l .c4bb_libc4ix32.c4l -o $DISK/c4ix-$u.c4r > /dev/null
     done
     # the desktop: several modules, linked together (docs/c4ix-desktop.md)
     dobjs=""
@@ -302,7 +313,11 @@ if [ ! -f $OUT/c4ix32.c4r ] || \
     # C4IX binary here, all of which face the same shared-disk risk).
     ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix/include src/c4ix/user/vfsload.c .c4bb_ix_u.c4o > /dev/null
     ./c4rlink32 .c4bb_ix_u.c4o .c4bb_libc4ix32.c4l -o $DISK/c4ix-vfsload.c4r > /dev/null
-    rm -f .c4bb_ix_*.c4o .c4bb_ix_*.pp.c .c4bb_libc4ix32.c4l
+    # the libraries are kept: the root archive ships them in /usr/lib,
+    # so a program can be linked inside the machine
+    mv .c4bb_libc4ix32.c4l $OUT/libc4ix32.c4l
+    mv .c4bb_libarc32.c4l $OUT/libarc32.c4l
+    rm -f .c4bb_ix_*.c4o .c4bb_ix_*.pp.c
 fi
 
 # the C4IX VFS manifest and the plain-text sources it references -
@@ -314,7 +329,7 @@ fi
 # two systems' vfsload runs would silently overwrite each other's
 # source copies.
 cp src/c4bb/fs/c4ix.vfs.txt $DISK/
-for n in $C4IX_USER; do
+for n in $C4IX_USER $C4IX_ARC_USER; do
     cp src/c4ix/user/$n.c $DISK/c4ix-$n.c
 done
 # the desktop's modules, one after another, as its one source file
@@ -437,6 +452,36 @@ fi
 if [ -f $DISK/config.sys ]; then
     (cd $DISK && ls -p | grep -v '/$' | grep -v '^manifest.json$' > c4dos.dir)
 fi
+
+# ---- the C4IX root archive -----------------------------------------
+# One gzipped tar of the repo's own sources and docs, unpacked over / by
+# C4IX's vfsload at boot (ARCHIVES in c4ix.vfs.txt, in the background).
+# The point is the request count: the web page fetches each disk file
+# separately, so a few hundred more files as manifest entries would be a
+# few hundred more round trips, where this is one. The tree is the repo
+# as git has it (text files only) under /usr/src/c4, the C4IX libraries
+# in /usr/lib, and the headers a program built inside links against in
+# /usr/include. Reproducible: fixed order, owner and times, gzip -n.
+ROOT=.c4bb_ix_root
+rm -rf $ROOT
+mkdir -p $ROOT/usr/src/c4 $ROOT/usr/lib $ROOT/usr/include
+if git rev-parse --git-dir > /dev/null 2>&1; then
+    git ls-files -- src docs include README.md LICENSE Makefile c4.c c4m.c c4m_float.c c4l.c load-c4r.c |
+        grep -v '^src/c4bb/images/\|^src/c4or1k/images/' |
+        while read -r f; do
+            [ -f "$f" ] && grep -Iq . "$f" 2>/dev/null || continue
+            mkdir -p "$ROOT/usr/src/c4/$(dirname "$f")"
+            cp "$f" "$ROOT/usr/src/c4/$f"
+        done
+else
+    echo "c4bb: not a git checkout, the root archive carries no sources" >&2
+fi
+[ -f $OUT/libc4ix32.c4l ] && cp $OUT/libc4ix32.c4l $ROOT/usr/lib/libc4ix.c4l
+[ -f $OUT/libarc32.c4l ] && cp $OUT/libarc32.c4l $ROOT/usr/lib/libarc.c4l
+cp src/c4ix/include/*.h libjs/guest/gui.h $ROOT/usr/include/
+tar --format=ustar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
+    -C $ROOT -cf - usr | gzip -9n > $DISK/c4ix-root.tgz
+rm -rf $ROOT
 
 # manifest for the web app's disk loader (recursive: some entries,
 # like src/c4ke/c4ke.c, are real subdirectories on purpose - see the

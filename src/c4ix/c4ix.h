@@ -119,7 +119,10 @@ enum {
     VN_CONSOLE = 1, VN_RAMFILE = 2, VN_HOSTFILE = 3, VN_PIPE = 4,
     VN_DIR = 5
 };
-enum { VN_NAME_MAX = 24, PATH_MAX = 96 };
+// 64: the root archive carries the repo's own tree, whose longest file
+// name is 26 characters (24 truncated them). Userland buffers that
+// receive a name from readdir must hold VN_NAME_MAX bytes.
+enum { VN_NAME_MAX = 64, PATH_MAX = 256 };
 // open() flags. The low two bits match the host's O_RDONLY/WRONLY/
 // RDWR so they can be passed straight through for host files.
 enum {
@@ -426,6 +429,7 @@ extern int loader_quiet;   // suppress "not an image" while probing paths
 
 int  ck_dispatch(int num, int *args);
 void ck_task_free(struct task *t);   // release compat state on reap
+int  ck_argv_copy(struct task *t, int argc, char **argv);   // the task owns a copy of argv
 int  ck_kill(int pid, int sig);      // queue a signal, or apply the default
 int  ck_has_handler(struct task *t, int sig);
 // Deliver one pending signal to the task about to resume, by building

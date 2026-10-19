@@ -510,6 +510,22 @@ loading or assigning a whole struct is an error.
   file of the same name. `include/window.h` lets a program in a desktop
   Command Prompt use that window as a canvas.
 
+- **The root archive** (branch c4ix-userland, 2026-10-19):
+  `c4ix-root.tgz`, a reproducible gzipped ustar of the repo's text files
+  (622 of them, 5.5 MB, 1.57 MB packed) plus `/usr/lib` and
+  `/usr/include`, built by `build-images.sh`. `ARCHIVES` in
+  `c4ix.vfs.txt` names it; vfsload starts `c4ix-tar x -C /` on it in the
+  background and prints the task id. On a lazy web disk that is one
+  request for all of it. libarc (`lib/archive.c`) is the inflater and
+  tar reader, built `-mfuse` for the disk: about 530M instructions for
+  the whole archive, 5.9 s under node. With it: `SYS_SPAWN` copies argv
+  into the child (`ck_argv_copy`, which the compatibility layer already
+  had), because vfsload exits before tar reads its arguments; RAM-file
+  and pipe reads and writes copy with `memcpy`, not a byte loop (about
+  a quarter of the unpack's cost); `VN_NAME_MAX` is 64 and `PATH_MAX` 256;
+  Explorer holds 400 entries a folder and 256 folders ten deep; the
+  shell's `wait` takes a task id.
+
 ## 6.1 Running it
 
     make run-c4ix        an interactive shell on c4m

@@ -490,8 +490,7 @@ int vfs_read(struct file *f, char *buf, int len) {
         n = vn->size - vn->rpos;
         if (n <= 0) { sched_unlock(); return 0; }   // caller checked readable
         if (n > len) n = len;
-        i = 0;
-        while (i < n) { buf[i] = vn->data[vn->rpos + i]; ++i; }
+        memcpy(buf, vn->data + vn->rpos, n);
         vn->rpos = vn->rpos + n;
         if (vn->rpos == vn->size) { vn->rpos = 0; vn->size = 0; }
         sched_unlock();
@@ -503,8 +502,7 @@ int vfs_read(struct file *f, char *buf, int len) {
     n = vn->size - f->pos;
     if (n <= 0) { sched_unlock(); return 0; }
     if (n > len) n = len;
-    i = 0;
-    while (i < n) { buf[i] = vn->data[f->pos + i]; ++i; }
+    memcpy(buf, vn->data + f->pos, n);
     f->pos = f->pos + n;
     sched_unlock();
     return n;
@@ -530,8 +528,7 @@ int vfs_write(struct file *f, char *buf, int len) {
         // growing forever under a steady producer.
         if (vn->rpos && vn->rpos == vn->size) { vn->rpos = 0; vn->size = 0; }
         if (!vn_grow(vn, vn->size + len)) { sched_unlock(); return -1; }
-        i = 0;
-        while (i < len) { vn->data[vn->size + i] = buf[i]; ++i; }
+        memcpy(vn->data + vn->size, buf, len);
         vn->size = vn->size + len;
         sched_unlock();
         return len;
@@ -542,8 +539,7 @@ int vfs_write(struct file *f, char *buf, int len) {
     if (vn->lazy) vfs_fill(vn);
     end = f->pos + len;
     if (!vn_grow(vn, end)) { sched_unlock(); return -1; }
-    i = 0;
-    while (i < len) { vn->data[f->pos + i] = buf[i]; ++i; }
+    memcpy(vn->data + f->pos, buf, len);
     f->pos = end;
     if (end > vn->size) vn->size = end;
     sched_unlock();

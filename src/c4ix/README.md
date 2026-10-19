@@ -21,6 +21,7 @@ build into `/ram`, and c4th, cpp and c4rdump are installed beside them
 |---|---|
 | `make c4ix.c4r` | the kernel: the twelve modules compiled in parallel by c4lc `-O` (its own preprocessor, no gcc), then `c4rlink` |
 | `make libc4ix.c4l` | the userland C library, as a c4rlink library |
+| `make libarc.c4l` | gzip (inflate, CRC-32) and tar, for `c4ix-tar.c4r` and `c4ix-gunzip.c4r`, which link it as well |
 | `make c4ix-NAME.c4r` | `user/NAME.c` compiled with c4lc and linked with `libc4ix.c4l` (e.g. `c4ix-sh.c4r`, `c4ix-ls.c4r`) |
 | `make c4ix-hello.c4r` | `user/hello.c` alone, no library: it calls `printf` directly |
 | `make c4ix-desktop.c4r` | the desktop's six modules linked with `libc4ix.c4l` |
@@ -57,7 +58,12 @@ reader, a shell and its script); the `demo-c4ix` target passes
 src/c4ix/user/test.sh`.
 
 With no arguments, init runs `c4ix-vfsload.c4r` to fill the filesystem
-from `c4ix.vfs.txt` (if present), then starts `c4ix-sh.c4r`. Its builtins
+from `c4ix.vfs.txt` (if present), then starts `c4ix-sh.c4r`. On the
+board and libjs disk the manifest also names `c4ix-root.tgz`, which
+vfsload hands to `c4ix-tar` in the background: the repo's sources and
+docs appear under `/usr/src/c4` a few seconds after the prompt (`wait 3`
+blocks until they have), the C4IX libraries in `/usr/lib`, and more
+headers in `/usr/include`. Its builtins
 are `exit jobs wait kill cd pwd help`; it has `<`, `>`, pipelines and `&`.
 `exit` or Ctrl-D shuts the kernel down.
 
@@ -105,6 +111,7 @@ target.
 | `include/c4ix_user.h` | the userland API (syscalls, `uprintf`, …) |
 | `include/window.h` | lets a program in a desktop Command Prompt use that window as a canvas |
 | `lib/libc4ix.c` | the userland library |
+| `lib/archive.c`, `include/archive.h` | libarc: an RFC 1951 inflater (puff-style, with a 9-bit lookup table), gzip with its CRC, and a ustar/C4TAR1 reader that makes directories as it goes |
 | [`user/`](user/README.md) | userland programs, shell scripts, and the desktop |
 | `examples/` | `hello.c`, `bounce.c` and `README.txt`: programs to compile inside C4IX (`c4cc -o /ram/hello.c4r /usr/src/examples/hello.c`) |
 | `tests/` | goldens for `test-c4ix`, `test-c4ix-fmt`, `test-c4ix-c4ke` |

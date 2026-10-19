@@ -25,6 +25,7 @@ node_modules/
 .c4mp_*.c4o
 u0.c4l
 libc4ix.c4l
+libarc.c4l
 .cx_*
 
 /c4rdump

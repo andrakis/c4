@@ -277,6 +277,9 @@ int sys_dispatch(int num, int *args) {
     if (num == SYS_EXIT)   { task_exit(args[0]); return 0; }
     if (num == SYS_SPAWN) {
         if (!(s = task_spawn((char *)args[0], args[1], args[2]))) return -1;
+        // the child gets its own argv: the parent's may be gone, or
+        // rewritten, by the time the child reads it
+        if (ck_argv_copy(s, args[1], (char **)args[2])) sched_forge_argv(s, s->argv_vec);
         return s->id;
     }
     if (num == SYS_WAIT) {

@@ -93,6 +93,12 @@ BEGIN-STRUCTURE SYMR
    \ Set the moment a function's name is used as a VALUE (parse.f's
    \ n_fnref). The inliner reads it; nothing else does.
    FIELD: y.atk
+   \ M4. The qualifier mask of a variable (types.f); a function's return
+   \ mask and its parameters' types and masks (arrays of y.nfix cells,
+   \ 0 when unknown), which the const checks read at a call; and the
+   \ value and type of a static const scalar, which is a constant.
+   FIELD: y.q    FIELD: y.rq   FIELD: y.pt   FIELD: y.pq
+   FIELD: y.cv   FIELD: y.cval FIELD: y.cty
 END-STRUCTURE
 VARIABLE VA-MAKE   0 VA-MAKE !          \ code index of __c4cc_make_va
 : SYM[] ( i -- a )  SYMR * SYMS @ + ;
@@ -360,6 +366,59 @@ VARIABLE EXTN   0 EXTN !
    o oGE  = IF a b >= 1 AND 1 EXIT THEN
    0 0 ;
 
+\ -- typed constants (M4) ------------------------------------------------
+\ The same arithmetic on constants that carry a type -- c4lc-parse.lisp's
+\ p:tfold, used by the constant expressions in parse.f and the tree pass
+\ alike. int is FOLD1 exactly. uint on a 64-bit host lives in [0, 2^32),
+\ where the signed operations are already right once the operands are
+\ cut into range and a result that can leave it is cut back. A whole
+\ unsigned word -- ulong, or uint on a 32-bit host -- compares with its
+\ sign bit flipped, divides by UDIV and shifts with RSHIFT, which is
+\ Forth's LOGICAL shift: the one c4's >> is not.
+VARIABLE FTY                             \ the type TFOLD's result has
+1 CELLS 8 * CONSTANT WBITS
+1 WBITS 1- LSHIFT CONSTANT WMIN
+1 CELLS 8 = CONSTANT W64?
+: (M32) ( -- m )  W64? IF 1 32 LSHIFT 1- ELSE -1 THEN ;
+(M32) CONSTANT M32
+: ULT ( a b -- f )  WMIN XOR SWAP WMIN XOR SWAP < ;
+: UDIV ( a b -- q ) {: a b | q -- q :}
+   b 0< IF a b ULT IF 0 ELSE 1 THEN EXIT THEN
+   a 0< 0= IF a b / EXIT THEN
+   a 1 RSHIFT b / 1 LSHIFT TO q
+   a q b * - b ULT IF q ELSE q 1+ THEN ;
+: UMOD ( a b -- r )  OVER OVER UDIV * - ;
+: CMPOP? ( op -- f ) {: o -- f :}
+   o oEQ = o oNE = OR o oLT = OR o oGT = OR o oLE = OR o oGE = OR ;
+: TFOLD ( a at b bt op -- v ok ) {: a at b bt o | r v ok -- v ok :}
+   o oSHL = o oSHR = OR IF at T-PROMOTE ELSE at bt T-UAC THEN TO r
+   o CMPOP? IF t_int ELSE r THEN FTY !
+   r t_int = IF a b o FOLD1 EXIT THEN
+   r t_uint = W64? AND IF
+      a M32 AND TO a
+      o oSHL = o oSHR = OR 0= IF b M32 AND TO b THEN
+      a b o FOLD1 TO ok TO v
+      o oADD = o oSUB = OR o oMUL = OR o oSHL = OR o oOR = OR o oXOR = OR
+      IF v M32 AND TO v THEN
+      v ok EXIT THEN
+   o oDIV = IF b 0= IF 0 0 EXIT THEN a b UDIV 1 EXIT THEN
+   o oMOD = IF b 0= IF 0 0 EXIT THEN a b UMOD 1 EXIT THEN
+   o oSHR = IF a b RSHIFT 1 EXIT THEN
+   o oLT = IF a b ULT 1 AND 1 EXIT THEN
+   o oGT = IF b a ULT 1 AND 1 EXIT THEN
+   o oLE = IF b a ULT 0= 1 AND 1 EXIT THEN
+   o oGE = IF a b ULT 0= 1 AND 1 EXIT THEN
+   a b o FOLD1 ;
+\ a value converted to an integer type, the way the generated code does
+: SEXT ( v n -- v' )  WBITS SWAP - TUCK LSHIFT SWAP ASHR ;
+: CONVVAL ( v t -- v' ) {: v t -- v' :}
+   t t_char = t t_schar = OR IF v 8 SEXT EXIT THEN
+   t t_uchar = IF v 255 AND EXIT THEN
+   t t_short = IF v 16 SEXT EXIT THEN
+   t t_ushort = IF v 65535 AND EXIT THEN
+   t t_uint = IF v M32 AND EXIT THEN
+   v ;
+
 \ -- data ---------------------------------------------------------------
 
 : D-ALIGN  DN @ 1 CELLS 1- + 1 CELLS 1- INVERT AND DN ! ;
@@ -493,6 +552,12 @@ CREATE WSCR 1 CELLS ALLOT
       y y.val @ FW
    LOOP
    OUT-FLUSH ;
+
+\ M4: the function being generated, for the const diagnostics, and its
+\ return type and mask, which a return converts to and checks against.
+\ A spliced body (inline.f) returns as its callee, so it swaps the two.
+VARIABLE FNA   VARIABLE FNU   0 FNU !
+VARIABLE RETT  1 RETT !  VARIABLE RETQ  0 RETQ !
 
 \ The counters that live beside the tables they index. They are here
 \ rather than in EMIT-INIT only because EMIT-INIT is defined before the

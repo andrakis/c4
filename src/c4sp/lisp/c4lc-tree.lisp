@@ -34,8 +34,14 @@
 (define t:nfold 0)     ;; folds performed
 (define t:ndrop 0)     ;; functions dropped
 
+;; a rebuilt node keeps its trailing qualifier mask (c4lc-parse.lisp)
+(define t:qn (lambda (node q) (if (= q nil) node (+ node (list q)))))
+
 (define t:num? (lambda (e)
 	(if (= 'list (typeof e)) (= (head e) 'num) false)))
+;; a literal's type: int unless it carries one (M4: a U suffix)
+(define t:nty (lambda (e) (if (= (index e 2) nil) 1 (index e 2))))
+(define t:mknum (lambda (v ty) (if (= ty 1) (list 'num v) (list 'num v ty))))
 
 ;; ---- T1: constant folding ----
 
@@ -44,24 +50,19 @@
 	(if (empty? l) (t:reverse acc)
 	(next t:fexprs (tail l) (t:cons (t:fexpr (head l)) acc)))))
 
-(define t:arith (lambda (op a b)
-	(if (= op 'add) (+ a b)
-	(if (= op 'sub) (- a b)
-	(if (= op 'mul) (* a b)
-	(if (= op 'div) (/ a b)
-	(if (= op 'mod) (- a (* (/ a b) b))
-	(if (= op 'shl) (bit:shl a b)
-	(if (= op 'shr) (bit:shr a b)
-	(if (= op 'band) (bit:and a b)
-	(if (= op 'bor) (bit:or a b)
-	(if (= op 'bxor) (bit:xor a b)
-	(if (= op 'eq) (if (= a b) 1 0)
-	(if (= op 'ne) (if (= a b) 0 1)
-	(if (= op 'lt) (if (< a b) 1 0)
-	(if (= op 'gt) (if (> a b) 1 0)
-	(if (= op 'le) (if (<= a b) 1 0)
-	(if (= op 'ge) (if (>= a b) 1 0)
-	'nofold))))))))))))))))))
+;; The arithmetic is c4lc-parse.lisp's p:tfold, the one the parser's
+;; constant expressions use, so a constant folds to the same number
+;; whichever of the two gets to it -- and to the number the VM would
+;; compute, unsigned operands included.
+
+;; sizeof a non-struct type, as c4lc-gen's g:tysize answers it
+(define t:tysize (lambda (ty)
+	(if (= ty 0) 1
+	(if (< ty 512) (sys:wordsize)
+	(if (> (- (- ty 512) (* 64 (/ (- ty 512) 64))) 0) (sys:wordsize)
+	(if (if (= ty 512) true (= ty 576)) 1
+	(if (if (= ty 640) true (= ty 704)) 2
+	(sys:wordsize))))))))
 
 (define t:binops '(add sub mul div mod shl shr band bor bxor
 	eq ne lt gt le ge))
@@ -81,7 +82,7 @@
 			(begin
 				(set! t:nfold (+ t:nfold 1))
 				;; word size follows the host, like c4lc-gen's g:WORD
-				(list 'num (if (= (t:second e) 0) 1 (sys:wordsize)))))
+				(list 'num (t:tysize (t:second e)))))
 		(if (= h 'call)
 			(t:cons 'call (t:cons (t:second e) (t:fexprs (tail (tail e)) (list))))
 		(if (= h 'comma) (t:cons 'comma (t:fexprs (tail e) (list)))
@@ -93,7 +94,7 @@
 		(if (= h 'lognot) (t:flognot e)
 		(if (= h 'bitnot) (t:fbitnot e)
 		(if (= h 'neg) (t:fneg e)
-		(if (= h 'cast) (list 'cast (t:second e) (t:fexpr (t:third e)))
+		(if (= h 'cast) (t:castnode (t:second e) (t:fexpr (t:third e)) (index e 3))
 		(if (= h 'index)
 			(list 'index (t:fexpr (t:second e)) (t:fexpr (t:third e)))
 		(if (= h 'deref) (list 'deref (t:fexpr (t:second e)))
@@ -107,6 +108,10 @@
 		(if (t:member? h t:binops) (t:fbinop e)
 		e))))))))))))))))))))))))))))
 
+;; a cast node, keeping its qualifier mask when it has one
+(define t:castnode (lambda (ty x q)
+	(if (= q nil) (list 'cast ty x) (list 'cast ty x q))))
+
 (define t:fbinop (lambda (e)
 	(begin
 		(define a (t:fexpr (t:second e)))
@@ -118,11 +123,11 @@
 					false)
 				(list (head e) a b)
 			(begin
-				(define v (t:arith (head e) (t:second a) (t:second b)))
+				(define v (p:tfold (head e) (t:second a) (t:nty a) (t:second b) (t:nty b)))
 				(if (= v 'nofold) (list (head e) a b)
 				(begin
 					(set! t:nfold (+ t:nfold 1))
-					(list 'num v)))))
+					(t:mknum v p:ft)))))
 		(list (head e) a b)))))
 
 (define t:fcond (lambda (e)
@@ -172,7 +177,8 @@
 		(if (t:num? a)
 			(begin
 				(set! t:nfold (+ t:nfold 1))
-				(list 'num (bit:xor (t:second a) -1)))
+				(define v (p:tfold 'bxor -1 1 (t:second a) (t:nty a)))
+				(t:mknum v p:ft))
 		(list 'bitnot a)))))
 
 (define t:fneg (lambda (e)
@@ -181,7 +187,8 @@
 		(if (t:num? a)
 			(begin
 				(set! t:nfold (+ t:nfold 1))
-				(list 'num (- 0 (t:second a))))
+				(define v (p:tfold 'sub 0 1 (t:second a) (t:nty a)))
+				(t:mknum v p:ft))
 		(list 'neg a)))))
 
 ;; ---- T1 statements ----
@@ -217,8 +224,8 @@
 		(define init (index d 4))
 		(next t:fdecls (tail ls) (t:cons
 			(if (if (= init nil) false (= (head init) 'einit))
-				(list 'local (t:second d) (t:third d) (index d 3)
-					(list 'einit (t:fexpr (t:second init))))
+				(t:qn (list 'local (t:second d) (t:third d) (index d 3)
+					(list 'einit (t:fexpr (t:second init)))) (index d 5))
 			d)
 			acc))))))
 (define t:fswitch (lambda (items acc)
@@ -275,9 +282,9 @@
 		(define d (head ds))
 		(next t:folddecls (tail ds) (t:cons
 			(if (= (head d) 'func)
-				(list 'func (t:second d) (t:third d) (index d 3)
+				(t:qn (list 'func (t:second d) (t:third d) (index d 3)
 					(index d 4) (index d 5) (index d 6)
-					(t:cons 'block (t:fstmts (tail (index d 7)) (list))))
+					(t:cons 'block (t:fstmts (tail (index d 7)) (list)))) (index d 8))
 			d)
 			acc))))))
 
@@ -418,6 +425,84 @@
 	(if (empty? l) acc
 	(next t:size/l (tail l) (+ acc (t:size (head l)))))))
 
+;; ---- volatile (M4) ----
+;;
+;; c4 emits one access per access the source asks for and caches
+;; nothing, and the folds above never drop an operand that is not a
+;; literal -- so the only pass that can lose or repeat a volatile access
+;; is the inliner, by substituting an argument's TEXT for a parameter
+;; that the body reads twice or not at all. The tree has names, not
+;; types, so it is told by name: every variable declared with a volatile
+;; anywhere in its type (or of a struct type with a volatile member) is
+;; an access with a side effect, in every scope. A name shared with an
+;; unrelated variable is only treated more carefully than it need be.
+(define t:VBITS 715827882)    ;; the volatile bit of pointer levels 0..14
+(define t:vnames (list))
+(define t:vstructs (list))
+(define t:sbase (lambda (ty)
+	(if (< ty 1024) ty (+ 1024 (* 64 (/ (- ty 1024) 64))))))
+(define t:vol? (lambda (ty q)
+	(if (if (= q nil) false (> (bit:and q t:VBITS) 0)) true
+	(t:member? (t:sbase ty) t:vstructs))))
+(define t:vnote (lambda (n ty q)
+	(if (t:vol? ty q) (set! t:vnames (t:cons n t:vnames)) nil)))
+(define t:vmembers (lambda (ms)
+	(if (empty? ms) false
+	(if (t:vol? (head (head ms)) (index (head ms) 3)) true
+	(next t:vmembers (tail ms))))))
+(define t:vparams (lambda (ps)
+	(if (empty? ps) nil
+	(begin
+		(t:vnote (t:second (head ps)) (head (head ps)) (index (head ps) 2))
+		(next t:vparams (tail ps))))))
+(define t:vlocals (lambda (ls)
+	(if (empty? ls) nil
+	(begin
+		(t:vnote (t:third (head ls)) (t:second (head ls)) (index (head ls) 5))
+		(next t:vlocals (tail ls))))))
+;; block-scoped declarations, at any depth
+(define t:vscan (lambda (x)
+	(if (= 'list (typeof x))
+		(if (empty? x) nil
+		(begin
+			(if (= (head x) 'declstmt) (t:vlocals (tail x)) nil)
+			(t:vscan/l (tail x))))
+	nil)))
+(define t:vscan/l (lambda (l)
+	(if (empty? l) nil
+	(if (= 'list (typeof l))
+		(begin (t:vscan (head l)) (next t:vscan/l (tail l)))
+	nil))))
+(define t:vcollect (lambda (ds)
+	(if (empty? ds) nil
+	(begin
+		(define d (head ds))
+		(define h (head d))
+		(if (= h 'structdef)
+			(if (t:vmembers (index d 4))
+				(set! t:vstructs (t:cons (index d 2) t:vstructs)) nil)
+		(if (= h 'global) (t:vnote (t:third d) (t:second d) (index d 6))
+		(if (= h 'func)
+			(begin
+				(t:vparams (index d 3))
+				(t:vlocals (tail (index d 6)))
+				(t:vscan (index d 7)))
+		nil)))
+		(next t:vcollect (tail ds))))))
+
+;; ---- conversions an inlined call must keep (M4) ----
+;;
+;; A call converts its arguments to the parameters' types and its value
+;; to the return type -- implicitly, because the callee's slots and its
+;; return statement do it. A splice has neither, so where the type is one
+;; that converts (the narrow integers and uint) the conversion is written
+;; out as a cast. char keeps c4's own behaviour.
+(define t:convty? (lambda (ty)
+	(if (= ty 512) true (if (= ty 576) true (if (= ty 640) true
+	(if (= ty 704) true (= ty 768)))))))
+(define t:cwrap (lambda (ty x) (if (t:convty? ty) (list 'cast ty x) x)))
+(define t:rty 1)    ;; the return type of the body being spliced (T4)
+
 ;; Anything that writes, calls, or steps a variable. A candidate's BODY
 ;; may be impure -- writing through a pointer is usually the whole point
 ;; of the function -- but an ARGUMENT may not be, because substitution
@@ -426,7 +511,8 @@
 (define t:pure? (lambda (e)
 	(if (= 'list (typeof e))
 		(if (t:member? (head e) t:impure) false
-		(next t:pure?/l (tail e)))
+		(if (if (= (head e) 'var) (t:member? (t:second e) t:vnames) false) false
+		(next t:pure?/l (tail e))))
 	true)))
 (define t:pure?/l (lambda (l)
 	(if (empty? l) true
@@ -445,7 +531,7 @@
 	(if (= 'list (typeof e))
 		(if (= (head e) 'num) true
 		(if (= (head e) 'str) true
-		(if (= (head e) 'var) true
+		(if (= (head e) 'var) (not (t:member? (t:second e) t:vnames))
 		false)))
 	false)))
 
@@ -498,7 +584,7 @@
 (define t:bind (lambda (ps as acc)
 	(if (empty? ps) (t:reverse acc)
 	(next t:bind (tail ps) (tail as)
-		(t:cons (list (t:second (head ps)) (head as)) acc)))))
+		(t:cons (list (t:second (head ps)) (t:cwrap (head (head ps)) (head as))) acc)))))
 
 ;; Simultaneous substitution. Sequential would be wrong: with
 ;; f(a,b){return a+b;} the call f(b,1) would substitute a->b first and
@@ -571,7 +657,9 @@
 		(begin
 			(define s (head ss))
 			(define h (head s))
-			(if (= h 'return) (t:candadd nm ps h (t:second s) acc)
+			(if (= h 'return)
+				(t:candadd nm ps h
+					(if (= (t:second s) nil) nil (t:cwrap (t:second d) (t:second s))) acc)
 			(if (= h 'expr)   (t:candadd nm ps h (t:second s) acc)
 			(t:why nm "body is not return/expr" acc)))))))))))))
 
@@ -792,8 +880,8 @@
 		(define init (index d 4))
 		(next t:idecls c (tail ls) (t:cons
 			(if (if (= init nil) false (= (head init) 'einit))
-				(list 'local (t:second d) (t:third d) (index d 3)
-					(list 'einit (t:iexpr c (t:second init))))
+				(t:qn (list 'local (t:second d) (t:third d) (index d 3)
+					(list 'einit (t:iexpr c (t:second init)))) (index d 5))
 			d)
 			acc))))))
 
@@ -834,9 +922,9 @@
 		(define d (head ds))
 		(next t:inlinedecls c taken (tail ds) (t:cons
 			(if (if (= (head d) 'func) (not (t:member? (t:third d) taken)) false)
-				(list 'func (t:second d) (t:third d) (index d 3)
+				(t:qn (list 'func (t:second d) (t:third d) (index d 3)
 					(index d 4) (index d 5) (index d 6)
-					(t:cons 'block (t:istmts c (tail (index d 7)) (list))))
+					(t:cons 'block (t:istmts c (tail (index d 7)) (list)))) (index d 8))
 			d)
 			acc))))))
 
@@ -939,7 +1027,8 @@
 			(t:cons (list nm (index d 3) (tail (index d 6)) ss
 						  (t:nret (index d 7))
 						  (t:splicable? d ss)
-						  (t:allvalued? (index d 7))) acc))))))))))))
+						  (t:allvalued? (index d 7))
+						  (t:second d)) acc))))))))))))
 
 (define t:cands4 (lambda (ds taken acc)
 	(if (empty? ds) acc
@@ -1017,7 +1106,7 @@
 		(next t:pbind (tail ps) (tail as) body
 			(t:cons (list n (if (t:needslocal? p (head as) body)
 								(list 'var (t:fresh n))
-							(head as)))
+							(t:cwrap (head p) (head as))))
 				acc))))))
 
 (define t:pdecls2 (lambda (ps as body acc)
@@ -1026,8 +1115,8 @@
 		(define p (head ps))
 		(next t:pdecls2 (tail ps) (tail as) body
 			(if (t:needslocal? p (head as) body)
-				(t:cons (list 'local (head p) (t:fresh (t:second p)) nil
-							  (list 'einit (head as)))
+				(t:cons (t:qn (list 'local (head p) (t:fresh (t:second p)) nil
+							  (list 'einit (head as))) (index p 2))
 					acc)
 			acc))))))
 
@@ -1048,9 +1137,9 @@
 (define t:pdecls (lambda (ps as acc)
 	(if (empty? ps) (t:reverse acc)
 	(next t:pdecls (tail ps) (tail as)
-		(t:cons (list 'local (head (head ps))
+		(t:cons (t:qn (list 'local (head (head ps))
 					  (t:fresh (t:second (head ps))) nil
-					  (list 'einit (head as)))
+					  (list 'einit (head as))) (index (head ps) 2))
 			acc)))))
 
 (define t:ldecls (lambda (ls b acc)
@@ -1058,9 +1147,10 @@
 	(begin
 		(define d (head ls))
 		(next t:ldecls (tail ls) b
-			(t:cons (list 'local (t:second d) (t:fresh (t:third d))
+			(t:cons (t:qn (list 'local (t:second d) (t:fresh (t:third d))
 						  (index d 3)
 						  (if (= (index d 4) nil) nil (t:substb b (index d 4))))
+						  (index d 5))
 				acc))))))
 
 ;; ---- T4b: bodies that return early ----------------------------------
@@ -1092,7 +1182,7 @@
 
 (define t:retjmp (lambda (s lhs id)
 	(begin
-		(define e (t:second s))
+		(define e (if (= (t:second s) nil) nil (t:cwrap t:rty (t:second s))))
 		(if (= lhs nil)
 			(if (= e nil) (list 'ijmp id)
 				(list 'block (list 'expr e) (list 'ijmp id)))
@@ -1150,7 +1240,7 @@
 ;; need: the value lands and the block ends
 (define t:retjmp2 (lambda (s lhs)
 	(begin
-		(define e (t:second s))
+		(define e (if (= (t:second s) nil) nil (t:cwrap t:rty (t:second s))))
 		(if (= lhs nil)
 			(if (= e nil) '(empty) (list 'expr e))
 		(list 'expr (list 'assign lhs e))))))
@@ -1168,6 +1258,7 @@
 		;; entry: 0 name 1 params 2 locals 3 stmts 4 nrets
 		;;        5 needs-no-exit-label  6 every-return-has-a-value
 		(define id (if (index e 5) 0 t:uid))
+		(set! t:rty (index e 7))
 		(set! t:n4 (+ t:n4 1))
 		(if (= id 0) nil (set! t:n4b (+ t:n4b 1)))
 		(if (t:member? (head e) t:inlined) nil
@@ -1237,6 +1328,9 @@
 		(set! t:uid 0)
 		(set! t:c4 (list))
 		(set! t:inlined (list))
+		(set! t:vnames (list))
+		(set! t:vstructs (list))
+		(t:vcollect (tail ast))
 		(define ds0 (t:folddecls (tail ast) (list)))
 		(define ds (if tree:inlining (t:folddecls (t:inline ds0) (list)) ds0))
 		(define table (t:funtable ds (list)))

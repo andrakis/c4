@@ -59,6 +59,14 @@ check raycast $IMAGES/disk/raycast.c4r 21x21 -s 7 -d -n 20 -g 80x22
 for t in bb_customop bb_preempt bb_pm bb_mbox gui-demo fb-demo; do
     check "$t" $IMAGES/$t.c4r
 done
+# M4's integer-types battery, built at 32 bits by c4sp32's c4lc: here the
+# oracle is not c4m32 but gcc -m32 itself, the golden test-c4lc uses --
+# unsigned compares, helpers for 16-bit loads and unsigned division, and
+# %hu/%lu through printf.js.
+./c4sp32 src/c4sp/lisp/c4lc.lisp src/tests/c4lc_m4.c .libjs_m4.c4r >/dev/null 2>&1
+if [ "$(timeout 300 $LIBJS .libjs_m4.c4r 2>/dev/null)" = "$(cat src/c4sp/tests/expected/c4lc-m4-32.txt)" ]
+then ok "c4lc_m4 (gcc -m32's answers)"; else bad "c4lc_m4 (gcc -m32's answers)"; fi
+rm -f .libjs_m4.c4r
 check64 factorial   $IMAGES/factorial.c4r   src/tests/factorial.c4r
 check64 test_malloc $IMAGES/test_malloc.c4r src/tests/test_malloc.c4r
 

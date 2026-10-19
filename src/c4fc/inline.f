@@ -179,13 +179,17 @@ VARIABLE INLMARKS
    IC-SN i IC[] @ TO n
    n 0 ?DO  f I + NEGATE  b I + ST[] y.val !  LOOP ;
 
-: INL-SPLICE ( n i -- ) {: n i | old base f -- :}
+: INL-SPLICE ( n i -- ) {: n i | old base f rt rq -- :}
    i INL-RESERVE TO f
    n i f INL-ARGS
    i f INL-BIND
    INLRET @ TO old   1 INLRET !
    INLM# @ TO base
+   \ a return in the body converts to the CALLEE's type, as the call would
+   RETT @ TO rt   RETQ @ TO rq
+   IC-FN i IC[] @ DUP y.ct @ RETT !  y.rq @ RETQ !
    IC-BODY i IC[] @ STMT
+   rt RETT !   rq RETQ !
    base INLM-RES
    old INLRET !
    1 NINLINE +! ;

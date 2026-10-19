@@ -1,0 +1,6 @@
+warning: return discards const qualifier (in function unconst)
+warning: initialization discards const qualifier (in function main)
+warning: assignment discards const qualifier (in function main)
+warning: passing argument 1 of takes discards const qualifier (in function main)
+warning: assignment discards const qualifier (in function main)
+warning: assignment discards const qualifier (in function main)

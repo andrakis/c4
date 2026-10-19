@@ -20,6 +20,20 @@
 ;; is char. ATTRS is c4cc's bitmask (constructor 1, destructor 2,
 ;; static 8, extern 0x10, variadic 0x20, array 0x40).
 ;;
+;; M4 (docs/c4lc-design.md, "Integer types"): a band of scalar types
+;; at 512 + 64k, k = uchar schar short ushort uint ulong, with the same
+;; +2 per pointer level. long is int; unsigned long is ulong.
+;;
+;; Qualifiers ride BESIDE the type, never in it: a mask with two bits
+;; per pointer level (bit 2k const, bit 2k+1 volatile, level 0 the
+;; object itself). Where a node carries one it is an extra trailing
+;; field, written only when it is not zero, so an unqualified program
+;; parses to exactly the tree it always did:
+;;   (global TYPE "x" SIZE ATTRS INIT Q)   (local TYPE "x" SIZE INIT Q)
+;;   ((PTYPE "p" Q) ...)   (cast TYPE E Q)   member (TYPE "m" ASIZE Q)
+;;   (func ... BODY RQ)    (proto ... ATTRS RQ PQS)   (typedefd "T" TYPE Q)
+;; and a literal with a U suffix is (num V TYPE).
+;;
 ;; Enum constants are substituted at use sites as (num N), as c4cc's
 ;; symbol table does; locals/params shadow them. Grammar mirrors
 ;; c4cc's parse()/stmt()/expr() except: 'for' is parsed CORRECTLY
@@ -81,6 +95,121 @@
 (define p:CHAR 0)
 (define p:INT 1)
 (define p:PTR 2)
+(define p:UCHAR 512)
+(define p:SCHAR 576)
+(define p:SHORT 640)
+(define p:USHORT 704)
+(define p:UINT 768)
+(define p:ULONG 832)
+(define p:WORD (sys:wordsize))
+(define p:BITS (* 8 p:WORD))
+;; the word's sign bit, and the low 32 bits a 64-bit host keeps a uint
+;; in (all ones on a 32-bit host, where uint IS the word)
+(define p:MIN (bit:shl 1 (- p:BITS 1)))
+(define p:M32 (if (= p:WORD 8) (- (bit:shl 1 32) 1) -1))
+
+;; ---- the type algebra shared with the tree pass ----
+;;
+;; The arithmetic types after promotion are int, uint and ulong, ranked
+;; in that order; everything narrower promotes to int. "Word-unsigned"
+;; is ulong, and uint on a 32-bit host where the two are the same word.
+(define p:promote (lambda (t)
+	(if (= t p:UINT) p:UINT (if (= t p:ULONG) p:ULONG p:INT))))
+(define p:uac (lambda (a b)
+	(begin
+		(define pa (p:promote a))
+		(define pb (p:promote b))
+		(if (if (= pa p:ULONG) true (= pb p:ULONG)) p:ULONG
+		(if (if (= pa p:UINT) true (= pb p:UINT)) p:UINT
+		p:INT)))))
+
+;; a value converted to an integer type, the way the generated code
+;; converts it
+(define p:sext (lambda (v n)
+	(bit:shr (bit:shl v (- p:BITS n)) (- p:BITS n))))
+(define p:convval (lambda (v t)
+	(if (if (= t p:CHAR) true (= t p:SCHAR)) (p:sext v 8)
+	(if (= t p:UCHAR) (bit:and v 255)
+	(if (= t p:SHORT) (p:sext v 16)
+	(if (= t p:USHORT) (bit:and v 65535)
+	(if (= t p:UINT) (bit:and v p:M32)
+	v)))))))
+
+;; unsigned order and division on a whole word
+(define p:ult (lambda (a b) (< (bit:xor a p:MIN) (bit:xor b p:MIN))))
+(define p:udiv (lambda (a b)
+	(if (< b 0) (if (p:ult a b) 0 1)
+	(if (>= a 0) (/ a b)
+	(begin
+		(define q (bit:shl (/ (bit:and (bit:shr a 1) (bit:xor p:MIN -1)) b) 1))
+		(if (p:ult (- a (* q b)) b) q (+ q 1)))))))
+(define p:umod (lambda (a b) (- a (* (p:udiv a b) b))))
+
+;; c4's arithmetic on two typed constants. Returns the value and leaves
+;; its type in p:ft; 'nofold for an operator it does not know. The
+;; signed branch is exactly what this file and the tree pass always
+;; did (truncating % and an ARITHMETIC >>), so a program with no
+;; unsigned in it folds to the same numbers it always has.
+(define p:ft 1)
+(define p:tfold (lambda (op a at b bt)
+	(begin
+		(define shift (if (= op 'shl) true (= op 'shr)))
+		(define r (if shift (p:promote at) (p:uac at bt)))
+		(define cmp (if (= op 'eq) true (if (= op 'ne) true (if (= op 'lt) true
+			(if (= op 'gt) true (if (= op 'le) true (= op 'ge)))))))
+		(set! p:ft (if cmp p:INT r))
+		(if (= r p:INT) (p:sarith op a b)
+		(if (if (= r p:UINT) (= p:WORD 8) false)
+			(p:narith op (bit:and a p:M32) (if shift b (bit:and b p:M32)))
+		(p:uarith op a b))))))
+(define p:sarith (lambda (op a b)
+	(if (= op 'add) (+ a b)
+	(if (= op 'sub) (- a b)
+	(if (= op 'mul) (* a b)
+	(if (= op 'div) (/ a b)
+	(if (= op 'mod) (- a (* (/ a b) b))
+	(if (= op 'shl) (bit:shl a b)
+	(if (= op 'shr) (bit:shr a b)
+	(if (= op 'band) (bit:and a b)
+	(if (= op 'bor) (bit:or a b)
+	(if (= op 'bxor) (bit:xor a b)
+	(if (= op 'eq) (if (= a b) 1 0)
+	(if (= op 'ne) (if (= a b) 0 1)
+	(if (= op 'lt) (if (< a b) 1 0)
+	(if (= op 'gt) (if (> a b) 1 0)
+	(if (= op 'le) (if (<= a b) 1 0)
+	(if (= op 'ge) (if (>= a b) 1 0)
+	'nofold))))))))))))))))))
+;; uint on a 64-bit host: both operands are in [0, 2^32), where the
+;; signed operations already give the unsigned answer; only what can
+;; leave that range is cut back into it
+(define p:narith (lambda (op a b)
+	(begin
+		(define v (p:sarith op a b))
+		(if (= v 'nofold) v
+		(if (if (= op 'add) true (if (= op 'sub) true (if (= op 'mul) true
+			(if (= op 'shl) true (if (= op 'bor) true (= op 'bxor))))))
+			(bit:and v p:M32)
+		v)))))
+;; a whole unsigned word
+(define p:uarith (lambda (op a b)
+	(if (= op 'div) (p:udiv a b)
+	(if (= op 'mod) (p:umod a b)
+	(if (= op 'shr)
+		(if (= b 0) a (bit:and (bit:shr a b) (bit:xor (bit:shl -1 (- p:BITS b)) -1)))
+	(if (= op 'lt) (if (p:ult a b) 1 0)
+	(if (= op 'gt) (if (p:ult b a) 1 0)
+	(if (= op 'le) (if (p:ult b a) 0 1)
+	(if (= op 'ge) (if (p:ult a b) 0 1)
+	(p:sarith op a b))))))))))
+
+;; the qualifier mask of a declarator after its stars, and of a base type
+;; after its specifiers (mailboxes, as lex:val is)
+(define p:bq 0)
+(define p:sq 0)
+;; two bits per level; the const bits of every level below the object's
+;; own, which is what dropping a const is about
+(define p:qnode (lambda (node q) (if (= q 0) node (+ node (list q)))))
 
 ;; struct types are encoded as 1024 + 64*id + 2*ptrlevel: 64 per
 ;; struct leaves 31 pointer levels, and ty >= 1024 tests structness.
@@ -128,35 +257,70 @@
 	(begin
 		(define bt (p:basetype nil))
 		(if (= bt nil) (p:die "bad struct member type") nil)
-		(next p:members/2 bt acc)))))
-(define p:members/2 (lambda (bt acc)
+		(next p:members/2 bt p:bq acc)))))
+(define p:members/2 (lambda (bt bq acc)
 	(begin
-		(define ty (p:stars bt))
+		(define ty (p:stars bt bq))
+		(define q p:sq)
 		(if (= (p:kind) 'Id) nil (p:die "bad struct member name"))
 		(define n (p:value))
 		(p:advance)
 		(define size (p:arraysize))
 		(define acc2 (p:cons
-			(list (if (= size nil) ty (+ ty p:PTR)) n size) acc))
+			(p:qnode (list (if (= size nil) ty (+ ty p:PTR)) n size)
+				(if (= size nil) q (bit:shl q 2)))
+			acc))
 		(if (= (p:kind) 'Comma)
-			(begin (p:advance) (next p:members/2 bt acc2))
+			(begin (p:advance) (next p:members/2 bt bq acc2))
 		(begin
 			(p:expect 'Semi "semicolon after struct member")
 			(next p:members acc2))))))
 
-;; optional base type: Int, Char, struct/union, or a typedef name;
-;; neither -> default d (nil marks "no type seen" for callers that
-;; must know)
-(define p:basetype (lambda (d)
-	(if (= (p:kind) 'Int) (begin (p:advance) p:INT)
-	(if (= (p:kind) 'Char) (begin (p:advance) p:CHAR)
-	(if (= (p:kind) 'Struct) (p:structtype)
-	(if (= (p:kind) 'Union) (p:structtype)
-	(if (= (p:kind) 'Id)
-		(begin
-			(define a (p:assoc (p:value) p:typedefs))
-			(if a (begin (p:advance) (p:second a)) d))
-	d)))))))
+;; optional base type: any run of the specifiers C allows -- const,
+;; volatile, signed, unsigned, short, long, int, char, a struct/union, or
+;; a typedef name (which only counts while no other type word has been
+;; seen, or `unsigned T;` could never declare a T). Nothing at all ->
+;; default d (nil marks "no type seen" for callers that must know). The
+;; qualifiers land in p:bq.
+(define p:basetype (lambda (d) (p:spec d 0 0 0 0 0 0 0 nil)))
+(define p:spec (lambda (d q sg un sh lg ch it bt)
+	(begin
+		(define k (p:kind))
+		(define bare (if (= bt nil)
+			(= 0 (+ sg (+ un (+ sh (+ lg (+ ch it)))))) false))
+		(if (= k 'Const) (begin (p:advance) (next p:spec d (bit:or q 1) sg un sh lg ch it bt))
+		(if (= k 'Volatile) (begin (p:advance) (next p:spec d (bit:or q 2) sg un sh lg ch it bt))
+		(if (= k 'Signed) (begin (p:advance) (next p:spec d q 1 un sh lg ch it bt))
+		(if (= k 'Unsigned) (begin (p:advance) (next p:spec d q sg 1 sh lg ch it bt))
+		(if (= k 'Short) (begin (p:advance) (next p:spec d q sg un 1 lg ch it bt))
+		(if (= k 'Long) (begin (p:advance) (next p:spec d q sg un sh (+ lg 1) ch it bt))
+		(if (= k 'Char) (begin (p:advance) (next p:spec d q sg un sh lg 1 it bt))
+		(if (= k 'Int) (begin (p:advance) (next p:spec d q sg un sh lg ch 1 bt))
+		(if (if bare (if (= k 'Struct) true (= k 'Union)) false)
+			(begin
+				(define st (p:structtype))
+				(next p:spec d q sg un sh lg ch it st))
+		(if (if bare (= k 'Id) false)
+			(begin
+				(define a (p:assoc (p:value) p:typedefs))
+				(if a
+					(begin
+						(p:advance)
+						(next p:spec d (bit:or q (index a 2)) sg un sh lg ch it (p:second a)))
+				(p:specdone d q sg un sh lg ch it bt)))
+		(p:specdone d q sg un sh lg ch it bt))))))))))))))
+(define p:specdone (lambda (d q sg un sh lg ch it bt)
+	(begin
+		(set! p:bq q)
+		(if (= bt nil)
+			(if (= ch 1) (if (= un 1) p:UCHAR (if (= sg 1) p:SCHAR p:CHAR))
+			(if (= sh 1) (if (= un 1) p:USHORT p:SHORT)
+			(if (> lg 0) (if (= un 1) p:ULONG p:INT)
+			(if (= un 1) p:UINT
+			(if (= sg 1) p:INT
+			(if (= it 1) p:INT
+			d))))))
+		bt))))
 
 ;; is the current token the start of a declaration?
 (define p:declstart? (lambda ()
@@ -166,14 +330,24 @@
 		(if (= k 'Char) true
 		(if (= k 'Struct) true
 		(if (= k 'Union) true
+		(if (= k 'Const) true
+		(if (= k 'Volatile) true
+		(if (= k 'Signed) true
+		(if (= k 'Unsigned) true
+		(if (= k 'Short) true
+		(if (= k 'Long) true
 		(if (= k 'Id)
 			(if (p:assoc (p:value) p:typedefs) true false)
-		false))))))))
+		false))))))))))))))
 
-;; consume Mul stars: ty -> ty + 2 each
-(define p:stars (lambda (ty)
-	(if (= (p:kind) 'Mul) (begin (p:advance) (next p:stars (+ ty p:PTR)))
-	ty)))
+;; consume the declarator's stars, each followed by its own qualifiers:
+;; ty -> ty + 2 per star, and the mask q of the base moves up a level
+;; per star. The declarator's mask is left in p:sq.
+(define p:stars (lambda (ty q)
+	(if (= (p:kind) 'Mul) (begin (p:advance) (next p:stars (+ ty p:PTR) (bit:shl q 2)))
+	(if (= (p:kind) 'Const) (begin (p:advance) (next p:stars ty (bit:or q 1)))
+	(if (= (p:kind) 'Volatile) (begin (p:advance) (next p:stars ty (bit:or q 2)))
+	(begin (set! p:sq q) ty))))))
 
 ;; ---- constants: an integer constant expression ----
 
@@ -186,79 +360,138 @@
 ;; order: | ^ & << >> + - * / % and the unary - + ~ !. The unary case
 ;; recurses, so "- -1" and "!!X" parse; the old hand-rolled single-flag
 ;; negation could not. ~x is written -x-1 rather than a bit:not, which
-;; c4sp does not have, and % uses the truncating form from t:arith
+;; c4sp does not have, and % uses the truncating form from p:sarith
 ;; (c4lc-tree.lisp) so the folded value matches what the VM computes.
+;;
+;; M4: every value carries its type (in the p:ct mailbox), and two are
+;; combined by p:tfold -- the same function the tree pass folds with --
+;; so `0xFFFFFFFFu >> 4` is a logical shift and `-1 < 1u` is false here
+;; exactly as it is at run time.
+(define p:ct 1)
+(define p:sconsts nil)    ;; (("NAME" VAL TYPE) ...): static const scalars
+
+;; a literal's value and type, from its token
+(define p:numtok (lambda ()
+	(begin
+		(define k (p:kind))
+		(define v (p:value))
+		(p:advance)
+		(set! p:ct
+			(if (= k 'NumUL) p:ULONG
+			(if (= k 'NumU)
+				(if (= p:WORD 8) (if (if (< v 0) true (> v p:M32)) p:ULONG p:UINT) p:UINT)
+			p:INT)))
+		v)))
+(define p:numtok? (lambda (k)
+	(if (= k 'Num) true (if (= k 'NumU) true (= k 'NumUL)))))
+
+;; a static const scalar named by the current token, or false
+(define p:sconst (lambda ()
+	(if (p:member? (p:value) p:locals) false
+		(p:assoc (p:value) p:sconsts))))
+
 (define p:constatom (lambda (what)
-	(if (= (p:kind) 'Sub)   (begin (p:advance) (- 0 (p:constatom what)))
+	(if (= (p:kind) 'Sub)
+		(begin (p:advance)
+			(define v (p:constatom what))
+			(define r (p:tfold 'sub 0 p:INT v p:ct))
+			(set! p:ct p:ft) r)
 	(if (= (p:kind) 'Add)   (begin (p:advance) (p:constatom what))
-	(if (= (p:kind) 'Tilde) (begin (p:advance) (- 0 (+ (p:constatom what) 1)))
-	(if (= (p:kind) 'Not)   (begin (p:advance) (if (= 0 (p:constatom what)) 1 0))
-	(if (= (p:kind) 'Num) (begin (define n (p:value)) (p:advance) n)
+	(if (= (p:kind) 'Tilde)
+		(begin (p:advance)
+			(define v (p:constatom what))
+			(define r (p:tfold 'bxor -1 p:INT v p:ct))
+			(set! p:ct p:ft) r)
+	(if (= (p:kind) 'Not)
+		(begin (p:advance)
+			(define v (p:constatom what))
+			(set! p:ct p:INT)
+			(if (= 0 v) 1 0))
+	(if (p:numtok? (p:kind)) (p:numtok)
 	(if (= (p:kind) 'Lparen)
 		(begin
 			(p:advance)
 			(define inner (p:const what))
+			(define it p:ct)
 			(p:expect 'Rparen ") in constant expression")
+			(set! p:ct it)
 			inner)
 	(if (= (p:kind) 'Id)
 		(begin
 			(define ev (p:enumval))
-			(if (= ev false) (p:die (+ what " must be an integer constant"))
-				(begin (p:advance) ev)))
+			(define sc (if (= ev false) (p:sconst) false))
+			(if (= ev false)
+				(if (= sc false) (p:die (+ what " must be an integer constant"))
+					(begin (p:advance) (set! p:ct (index sc 2)) (p:second sc)))
+				(begin (p:advance) (set! p:ct p:INT) ev)))
 	(p:die (+ what " must be an integer constant")))))))))))
 
+;; one binary step: l (of type lt) op the next operand
+(define p:cstep (lambda (op l lt r)
+	(begin
+		(define v (p:tfold op l lt r p:ct))
+		(set! p:ct p:ft)
+		v)))
+
 (define p:constmul (lambda (what)
-	(next p:constmul/2 what (p:constatom what))))
-(define p:constmul/2 (lambda (what l)
+	(begin (define v (p:constatom what)) (next p:constmul/2 what v p:ct))))
+(define p:constmul/2 (lambda (what l lt)
 	(if (= (p:kind) 'Mul)
-		(begin (p:advance) (next p:constmul/2 what (* l (p:constatom what))))
+		(begin (p:advance) (define r (p:constatom what))
+			(define v (p:cstep 'mul l lt r)) (next p:constmul/2 what v p:ct))
 	(if (= (p:kind) 'Div)
-		(begin (p:advance) (next p:constmul/2 what (/ l (p:constatom what))))
+		(begin (p:advance) (define r (p:constatom what))
+			(define v (p:cstep 'div l lt r)) (next p:constmul/2 what v p:ct))
 	(if (= (p:kind) 'Mod)
-		(begin
-			(p:advance)
-			(define r (p:constatom what))
-			(next p:constmul/2 what (- l (* (/ l r) r))))
-	l)))))
+		(begin (p:advance) (define r (p:constatom what))
+			(define v (p:cstep 'mod l lt r)) (next p:constmul/2 what v p:ct))
+	(begin (set! p:ct lt) l))))))
 
 (define p:constadd (lambda (what)
-	(next p:constadd/2 what (p:constmul what))))
-(define p:constadd/2 (lambda (what l)
+	(begin (define v (p:constmul what)) (next p:constadd/2 what v p:ct))))
+(define p:constadd/2 (lambda (what l lt)
 	(if (= (p:kind) 'Add)
-		(begin (p:advance) (next p:constadd/2 what (+ l (p:constmul what))))
+		(begin (p:advance) (define r (p:constmul what))
+			(define v (p:cstep 'add l lt r)) (next p:constadd/2 what v p:ct))
 	(if (= (p:kind) 'Sub)
-		(begin (p:advance) (next p:constadd/2 what (- l (p:constmul what))))
-	l))))
+		(begin (p:advance) (define r (p:constmul what))
+			(define v (p:cstep 'sub l lt r)) (next p:constadd/2 what v p:ct))
+	(begin (set! p:ct lt) l)))))
 
 (define p:constshift (lambda (what)
-	(next p:constshift/2 what (p:constadd what))))
-(define p:constshift/2 (lambda (what l)
+	(begin (define v (p:constadd what)) (next p:constshift/2 what v p:ct))))
+(define p:constshift/2 (lambda (what l lt)
 	(if (= (p:kind) 'Shl)
-		(begin (p:advance) (next p:constshift/2 what (bit:shl l (p:constadd what))))
+		(begin (p:advance) (define r (p:constadd what))
+			(define v (p:cstep 'shl l lt r)) (next p:constshift/2 what v p:ct))
 	(if (= (p:kind) 'Shr)
-		(begin (p:advance) (next p:constshift/2 what (bit:shr l (p:constadd what))))
-	l))))
+		(begin (p:advance) (define r (p:constadd what))
+			(define v (p:cstep 'shr l lt r)) (next p:constshift/2 what v p:ct))
+	(begin (set! p:ct lt) l)))))
 
 (define p:constand (lambda (what)
-	(next p:constand/2 what (p:constshift what))))
-(define p:constand/2 (lambda (what l)
+	(begin (define v (p:constshift what)) (next p:constand/2 what v p:ct))))
+(define p:constand/2 (lambda (what l lt)
 	(if (= (p:kind) 'And)
-		(begin (p:advance) (next p:constand/2 what (bit:and l (p:constshift what))))
-	l)))
+		(begin (p:advance) (define r (p:constshift what))
+			(define v (p:cstep 'band l lt r)) (next p:constand/2 what v p:ct))
+	(begin (set! p:ct lt) l))))
 
 (define p:constxor (lambda (what)
-	(next p:constxor/2 what (p:constand what))))
-(define p:constxor/2 (lambda (what l)
+	(begin (define v (p:constand what)) (next p:constxor/2 what v p:ct))))
+(define p:constxor/2 (lambda (what l lt)
 	(if (= (p:kind) 'Xor)
-		(begin (p:advance) (next p:constxor/2 what (bit:xor l (p:constand what))))
-	l)))
+		(begin (p:advance) (define r (p:constand what))
+			(define v (p:cstep 'bxor l lt r)) (next p:constxor/2 what v p:ct))
+	(begin (set! p:ct lt) l))))
 
 (define p:const (lambda (what)
-	(next p:const/2 what (p:constxor what))))
-(define p:const/2 (lambda (what l)
+	(begin (define v (p:constxor what)) (next p:const/2 what v p:ct))))
+(define p:const/2 (lambda (what l lt)
 	(if (= (p:kind) 'Or)
-		(begin (p:advance) (next p:const/2 what (bit:or l (p:constxor what))))
-	l)))
+		(begin (p:advance) (define r (p:constxor what))
+			(define v (p:cstep 'bor l lt r)) (next p:const/2 what v p:ct))
+	(begin (set! p:ct lt) l))))
 
 ;; ---- expressions ----
 
@@ -331,7 +564,8 @@
 					(p:advance)
 					(list 'sizeofa n))
 			(begin
-				(define ty (p:stars (p:basetype p:INT)))
+				(define bt (p:basetype p:INT))
+				(define ty (p:stars bt p:bq))
 				(list 'sizeof ty))))
 		(p:expect 'Rparen ") after sizeof")
 		r)))
@@ -344,9 +578,11 @@
 		(p:advance)
 		(if (p:declstart?)
 			(begin
-				(define ty (p:stars (p:basetype p:INT)))
+				(define bt (p:basetype p:INT))
+				(define ty (p:stars bt p:bq))
+				(define cq p:sq)
 				(p:expect 'Rparen "closing paren of cast")
-				(list 'cast ty (p:expr 21)))
+				(p:qnode (list 'cast ty (p:expr 21)) cq))
 		(begin
 			(define e1 (p:expr 1))
 			(define es (p:commalist (list e1)))
@@ -364,6 +600,10 @@
 	(begin
 		(define k (p:kind))
 		(if (= k 'Num) (begin (define n (p:value)) (p:advance) (list 'num n))
+		(if (p:numtok? k)
+			(begin
+				(define un (p:numtok))
+				(list 'num (if (= p:ct p:UINT) (bit:and un p:M32) un) p:ct))
 		(if (= k 'Str) (p:strlit)
 		(if (= k 'Sizeof) (p:sizeof)
 		(if (= k 'Id) (p:idexpr)
@@ -376,7 +616,7 @@
 		(if (= k 'Sub) (p:negexpr)
 		(if (= k 'Inc) (begin (p:advance) (list 'preinc (p:expr 21)))
 		(if (= k 'Dec) (begin (p:advance) (list 'predec (p:expr 21)))
-		(p:die "bad expression")))))))))))))))))
+		(p:die "bad expression"))))))))))))))))))
 
 ;; unary minus: fold a literal, as c4cc does
 (define p:negexpr (lambda ()
@@ -651,7 +891,7 @@
 	(if (> size 0) size
 	(if (= init nil) (p:die (+ what ": array [] needs an initializer"))
 	(if (= (head init) 'braces) (length (p:second init))
-	(if (if (= (head init) 'str) (= elem p:CHAR) false)
+	(if (if (= (head init) 'str) (p:bytety? elem) false)
 		(+ (length (p:second init)) 1)
 	(p:die (+ what ": cannot size array from this initializer")))))))))
 
@@ -702,14 +942,16 @@
 				(list (p:reverse acc) true))
 		(begin
 			(if (= k 'Static) (p:die "parameters cannot be marked static") nil)
-			(define ty (p:stars (p:basetype p:INT)))
+			(define bt (p:basetype p:INT))
+			(define ty (p:stars bt p:bq))
+			(define q p:sq)
 			(if (p:svalue? ty)
 				(p:die "struct parameters must be pointers") nil)
 			(if (= (p:kind) 'Id) nil (p:die "bad parameter declaration"))
 			(define n (p:value))
 			(p:advance)
 			(if (= (p:kind) 'Comma) (p:advance) nil)
-			(next p:params (p:cons (list ty n) acc))))))))
+			(next p:params (p:cons (p:qnode (list ty n) q) acc))))))))
 
 ;; ---- local declarations ----
 
@@ -718,18 +960,20 @@
 	(begin
 		(if (= (p:kind) 'Static) (p:die "static function variables not implemented") nil)
 		(define bt (p:basetype p:INT))
-		(next p:localline/2 bt (list)))))
-(define p:localline/2 (lambda (bt acc)
+		(next p:localline/2 bt p:bq (list)))))
+(define p:localline/2 (lambda (bt bq acc)
 	(if (= (p:kind) 'Semi)
 		(begin (p:advance) (p:reverse acc))
 	(begin
-		(define ty (p:stars bt))
+		(define ty (p:stars bt bq))
+		(define q p:sq)
 		(if (= (p:kind) 'Id) nil (p:die "bad local declaration"))
 		(define n (p:value))
 		(p:advance)
 		(define elem ty)
 		(define size (p:arraysize))
 		(define ty2 (if (= size nil) ty (+ ty p:PTR)))
+		(define q2 (if (= size nil) q (bit:shl q 2)))
 		;; scalars take a full (possibly non-constant) initializer
 		;; expression; arrays keep the constant forms
 		(define init
@@ -743,8 +987,8 @@
 		(define fsize (p:initsize size elem init "local"))
 		(set! p:locals (p:cons n p:locals))
 		(if (= (p:kind) 'Comma) (p:advance) nil)
-		(next p:localline/2 bt
-			(p:cons (list 'local ty2 n fsize init) acc))))))
+		(next p:localline/2 bt bq
+			(p:cons (p:qnode (list 'local ty2 n fsize init) q2) acc))))))
 
 ;; all locals at the top of a function body (declarations can also
 ;; appear anywhere in a block; those become declstmt nodes)
@@ -759,22 +1003,29 @@
 	(= 0 (- (- ty p:STRUCT0)
 		(* p:SSTEP (/ (- ty p:STRUCT0) p:SSTEP)))))))
 
+;; the one-byte element types: an array of them packs, and a string can
+;; initialize one
+(define p:bytety? (lambda (t)
+	(if (= t p:CHAR) true (if (= t p:UCHAR) true (= t p:SCHAR)))))
+
 ;; ---- top-level declarator list ----
 
-;; one declarator, base type bt, prefix attrs; returns a TOP node
-(define p:declarator (lambda (bt attr)
+;; one declarator, base type bt (qualifiers bq), prefix attrs; returns a
+;; TOP node
+(define p:declarator (lambda (bt bq attr)
 	(begin
-		(define ty (p:stars bt))
+		(define ty (p:stars bt bq))
+		(define q p:sq)
 		(define a2
 			(if (= (p:kind) 'Attribute) (+ attr (p:attribute)) attr))
 		(if (= (p:kind) 'Id) nil (p:die "bad global declaration"))
 		(define n (p:value))
 		(p:advance)
 		(if (= (p:kind) 'Lparen)
-			(p:function ty n a2)
-		(p:globalvar ty n a2)))))
+			(p:function ty n a2 q)
+		(p:globalvar ty n a2 q)))))
 
-(define p:function (lambda (ty n attr)
+(define p:function (lambda (ty n attr rq)
 	(begin
 		(p:advance)
 		(define pv (p:params (list)))
@@ -784,23 +1035,33 @@
 		(if (= (p:kind) 'Semi)
 			;; prototype: extern, parameter types only; the ';' stays
 			;; for the declarator loop (as in c4cc), so "int f(), g;"
-			;; keeps working
-			(list 'proto ty n (p:ptypes ps (list)) va (+ a2 16))
+			;; keeps working. The masks, when there are any, follow.
+			(begin
+				(define pq (p:pquals ps (list)))
+				(define pn (list 'proto ty n (p:ptypes ps (list)) va (+ a2 16)))
+				(if (if (= rq 0) (p:allzero? pq) false) pn
+					(+ pn (list rq pq))))
 		(begin
 			(p:expect 'Lbrace "function body")
 			(set! p:locals (p:paramnames ps (list)))
 			(define ls (p:localdecls (list)))
 			(define body (p:block/2 (list)))
 			(set! p:locals (list))
-			(list 'func ty n ps va a2 ls body))))))
+			(p:qnode (list 'func ty n ps va a2 ls body) rq))))))
 (define p:ptypes (lambda (ps acc)
 	(if (empty? ps) (p:reverse acc)
 	(next p:ptypes (tail ps) (p:cons (head (head ps)) acc)))))
+(define p:pquals (lambda (ps acc)
+	(if (empty? ps) (p:reverse acc)
+	(next p:pquals (tail ps)
+		(p:cons (if (= (index (head ps) 2) nil) 0 (index (head ps) 2)) acc)))))
+(define p:allzero? (lambda (l)
+	(if (empty? l) true (if (= (head l) 0) (next p:allzero? (tail l)) false))))
 (define p:paramnames (lambda (ps acc)
 	(if (empty? ps) acc
 	(next p:paramnames (tail ps) (p:cons (p:second (head ps)) acc)))))
 
-(define p:globalvar (lambda (ty n attr)
+(define p:globalvar (lambda (ty n attr q)
 	(begin
 		(define elem ty)
 		(define size (p:arraysize))
@@ -811,20 +1072,38 @@
 				(begin (p:advance) (p:init))
 			nil))
 		(define fsize (p:initsize size elem init "global"))
-		(list 'global ty2 n fsize a2 init))))
+		;; a static const scalar with a constant initializer is a
+		;; constant from here on, wherever C wants one (array sizes, case
+		;; labels, other initializers). It keeps its storage.
+		(if (if (= 8 (bit:and attr 8)) (if (= 1 (bit:and q 1))
+				(if (= size nil) (if (< ty p:STRUCT0)
+					(if (p:intty? ty) (if (= init nil) false (= (head init) 'num)) false)
+				false) false) false) false)
+			(set! p:sconsts (p:cons
+				(list n (p:convval (p:second init) ty) (p:promote ty)) p:sconsts))
+			nil)
+		(p:qnode (list 'global ty2 n fsize a2 init)
+			(if (= size nil) q (bit:shl q 2))))))
+
+;; an integer value type (not a pointer, not a struct)
+(define p:intty? (lambda (t)
+	(if (< t 2) true
+	(if (< t 512) false
+	(if (>= t p:STRUCT0) false
+	(= 0 (- (- t 512) (* 64 (/ (- t 512) 64)))))))))
 
 ;; the "while (tk != ';' && tk != '}')" declarator loop. A function
 ;; DEFINITION ends the line by itself: in c4cc its closing '}' is what
 ;; terminates the loop, and here p:block has already consumed it.
-(define p:declarators (lambda (bt attr acc)
+(define p:declarators (lambda (bt bq attr acc)
 	(if (if (= (p:kind) 'Semi) true (= (p:kind) 'Rbrace))
 		(begin (p:advance) acc)
 	(begin
-		(define d (p:declarator bt attr))
+		(define d (p:declarator bt bq attr))
 		(if (= (head d) 'func) (p:cons d acc)
 		(begin
 			(if (= (p:kind) 'Comma) (p:advance) nil)
-			(next p:declarators bt attr (p:cons d acc))))))))
+			(next p:declarators bt bq attr (p:cons d acc))))))))
 
 ;; ---- program ----
 
@@ -845,13 +1124,14 @@
 		(p:advance)
 		(define bt (p:basetype nil))
 		(if (= bt nil) (p:die "typedef needs a type") nil)
-		(define ty (p:stars bt))
+		(define ty (p:stars bt p:bq))
+		(define q p:sq)
 		(if (= (p:kind) 'Id) nil (p:die "typedef needs a name"))
 		(define n (p:value))
 		(p:advance)
 		(p:expect 'Semi "semicolon after typedef")
-		(set! p:typedefs (p:cons (list n ty) p:typedefs))
-		(list 'typedefd n ty))))
+		(set! p:typedefs (p:cons (list n ty q) p:typedefs))
+		(p:qnode (list 'typedefd n ty) q))))
 
 (define p:top (lambda (acc)
 	(if (= (p:kind) 'Eof) (p:reverse acc)
@@ -865,19 +1145,20 @@
 			(begin
 				(define ed (p:enumdecl))
 				;; any declarators after the enum share INT base type
-				(next p:top (p:declarators p:INT attr (p:cons ed acc))))
+				(next p:top (p:declarators p:INT 0 attr (p:cons ed acc))))
 		(if (= (p:kind) 'Typedef)
 			(begin
 				(define td (p:typedefdecl))
 				(next p:top (p:cons td (p:drain acc))))
 		(begin
 			(define bt (p:basetype p:INT))
-			(next p:top (p:declarators bt attr (p:drain acc))))))))))
+			(next p:top (p:declarators bt p:bq attr (p:drain acc))))))))))
 
 (define parse:program (lambda (tokens)
 	(begin
 		(set! p:toks tokens)
 		(set! p:enums (list))
+		(set! p:sconsts (list))
 		(set! p:locals (list))
 		(set! p:structs (list))
 		(set! p:nstructs 0)

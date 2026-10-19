@@ -189,7 +189,7 @@
 (define pp:eprimary (lambda ()
 	(begin
 		(define k (pp:epeek))
-		(if (= k 'Num) (pp:val (pp:enext))
+		(if (if (= k 'Num) true (if (= k 'NumU) true (= k 'NumUL))) (pp:val (pp:enext))
 		(if (= k 'Lparen)
 			(begin
 				(pp:enext)
@@ -385,7 +385,7 @@
 	(begin
 		(define k (pp:kind t))
 		(if (= k 'Id) (pp:val t)
-		(if (= k 'Num) (+ "" (pp:val t))
+		(if (if (= k 'Num) true (if (= k 'NumU) true (= k 'NumUL))) (+ "" (pp:val t))
 		(if (= k 'Str) (pp:val t)
 		(begin
 			(define o (pp:oplook k pp:optext))
@@ -607,7 +607,10 @@
 		(begin
 			(define n (string:substr spec 0 eq))
 			(define v (string:substr spec (+ eq 1) (- (length spec) (+ eq 1))))
-			(pp:define! n false (lex:string v)))))))
+			;; without the lexer's Eof, which would otherwise sit inside
+			;; every expansion: `#if N == 1` read as `3 <Eof>` and stopped
+			;; (c4fc's PP-DEFINE always dropped it)
+			(pp:define! n false (pp:dropeof (lex:string v) nil)))))))
 (define pp:predefines (lambda (l)
 	(if (empty? l) nil
 	(begin
@@ -619,11 +622,22 @@
 	(if (= (string:byte s i) 61) i
 	(next pp:eqpos s (+ i 1))))))
 
+;; The M4 type words lex as identifiers in -P mode so that a header can
+;; #define them (stddef.h does, to nothing). Whatever survives expansion
+;; becomes the keyword here, after the last macro has had its chance.
+(define pp:kwfix (lambda (toks acc)
+	(if (empty? toks) (pp:reverse acc)
+	(begin
+		(define t (head toks))
+		(define kw (if (= (pp:kind t) 'Id) (lex:kwlook lex:keywords2 (pp:val t)) false))
+		(next pp:kwfix (tail toks)
+			(pp:cons (if kw (list kw 0 (pp:line t)) t) acc))))))
+
 ;; Preprocess a file: returns a token list ready for parse:program.
 (define pp:file (lambda (path)
 	(begin
 		(set! lex:pp true)
 		(define toks (lex:file path))
-		(pp:go toks nil nil))))
+		(pp:kwfix (pp:go toks nil nil) nil))))
 
 )

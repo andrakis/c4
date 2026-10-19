@@ -1088,7 +1088,8 @@ test-c4sc-front: c4sc-host c4sp
 C4SC_BACK_DIFF := c4_jailbreak factorial hello multifun puts reverse \
                   test_basic test_continue test_coop_switch test_globals \
                   test_malloc test-order test-ptrs test_static test_switch \
-                  tests c4lc_l2 global test_gcscan test-oisc test_printf
+                  tests c4lc_l2 global test_gcscan test-oisc test_printf \
+                  c4lc_m4 c4lc_m4q c4lc_m4v
 test-c4sc-back: c4sc-host c4sp $(C4RLINK) $(C4M)
 	@fail=0; for b in $(C4SC_BACK_DIFF); do \
 	   f=$(TESTS)/$$b.c; \
@@ -1631,9 +1632,10 @@ C4FC_PP_SWEEP = $(patsubst %,src/c4ix/%.c:src/c4ix,$(C4IX_MODS)) \
 C4FC_GEN_SWEEP := hello multifun puts reverse test_basic test_continue \
                   test_coop_switch test_globals test-order test-ptrs \
                   test_static test_switch tests c4lc_l2 global \
-                  test_gcscan vararg2 test_vprintf c4_jailbreak
+                  test_gcscan vararg2 test_vprintf c4_jailbreak \
+                  c4lc_m4 c4lc_m4q c4lc_m4v
 
-test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c
+test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c $(C4RDUMP)
 	./c4th $(C4FC_LIB) src/c4fc/tests/dsl.f | cmp - src/c4fc/tests/expected/dsl.txt
 	$(C4M) load-c4r.c -- c4th.c4r $(C4FC_LIB) src/c4fc/tests/dsl.f | cmp - src/c4fc/tests/expected/dsl.txt
 	./c4th $(C4FC_LIB) -e ': GO 4194304 ARENA-INIT S" src/tests/c4lc_lex_sample.c" LEX-FILE DUMP-TOKENS ; GO' > .c4fc_lex.txt
@@ -1826,6 +1828,30 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c
 	cmp .c4fc_ix.c4r c4ix.c4r
 	$(C4M) load-c4r.c -- .c4fc_ix.c4r --demo 2>&1 | grep -q "shutdown complete"
 	@rm -f .c4fc_lc.c4o .c4fc_ix.c4r .c4fc_ix_*.c4o
+	# M4 qualifiers, c4fc's half. The const battery must draw from c4fc
+	# exactly the lines it draws from c4lc -- the same golden files
+	# test-c4lc holds c4lc to -- and the image must be c4lc's. A warning
+	# only prints with -o: c4th has no stderr, and on stdout it would be
+	# part of the image.
+	./c4th $(C4FC_ALL) -e ': GO S" .c4fc_fc.c4r" -o S" $(TESTS)/c4lc_m4q.c" C4FC ; GO' \
+	   | grep -E '^(error|warning):' | cmp - src/c4sp/tests/expected/c4lc-m4q-diag.txt
+	./c4sp src/c4sp/lisp/c4lc.lisp $(TESTS)/c4lc_m4q.c .c4fc_lc.c4r > /dev/null
+	cmp .c4fc_lc.c4r .c4fc_fc.c4r
+	@for c in 1 2 3 4 5 6 7 8 9; do \
+	   ./c4th $(C4FC_ALL) -e ": GO C4FC-INIT -P S\" CASE=$$c\" -D S\" .c4fc_fc.c4r\" -o S\" $(TESTS)/c4lc_m4e.c\" C4FC ; GO" 2>&1 \
+	     | grep -E '^(error|warning):'; \
+	 done | cmp - src/c4sp/tests/expected/c4lc-m4e-diag.txt
+	@echo "  m4 const: c4fc's diagnostics are c4lc's"
+	# ... and volatile under c4fc's own -O and -minline, whose inliner puts
+	# each argument in a slot once: every access to vcount survives.
+	@for m in "1 OPTIMIZE !" "-minline"; do \
+	   ./c4th $(C4FC_ALL) -e ": GO $$m S\" .c4fc_fc.c4r\" -o S\" $(TESTS)/c4lc_m4v.c\" C4FC ; GO" > /dev/null 2>&1; \
+	   sh src/c4sp/tests/m4-volatile.sh $(C4RDUMP) .c4fc_fc.c4r | grep -q "^vcount 8 " \
+	     || { echo "test-c4fc: a volatile access was lost or repeated ($$m)"; exit 1; }; \
+	   $(C4M) load-c4r.c -- .c4fc_fc.c4r | cmp -s - src/c4sp/tests/expected/c4lc-m4v.txt \
+	     || { echo "test-c4fc: c4lc_m4v.c ($$m) computes something else"; exit 1; }; \
+	 done
+	@echo "  m4 volatile: every access survives c4fc -O and -minline"
 	@rm -f .c4fc_lex.txt .c4fc_a.txt .c4fc_b.txt .c4fc_lc.c4r .c4fc_fc.c4r
 	@rm -f .c4fc_o0.c4r .c4fc_o1.c4r .c4fc_o2.c4r .c4fc_r0 .c4fc_r1 .c4fc_pp.c
 	@echo "test-c4fc: OK"
@@ -2252,7 +2278,7 @@ test-c4bb: c4bb-images $(C4M) $(TESTS_C4R)
 # libjs: c4m as a direct JavaScript interpreter (docs/libjs-design.md).
 # It runs the same 32-bit corpus c4bb does, so it needs no images of its
 # own; the suite diffs against native c4m32/c4m and boots both kernels.
-test-libjs: c4bb-images $(C4M) $(TESTS_C4R)
+test-libjs: c4bb-images $(C4M) $(TESTS_C4R) c4sp32
 	bash libjs/tests/test-libjs.sh
 
 # The page: http://localhost:8472/libjs/web/ (served from the repo root),
@@ -2815,7 +2841,8 @@ test-raycast: c4sp c4sp32 $(C4M) c4m32 $(TESTS)/raycast.c4r
 	@rm -f .raycast32.c4r
 	@echo "test-raycast: OK"
 
-test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.c4r
+test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.c4r \
+           c4sp32 c4m32 $(C4RDUMP)
 	./c4sp src/c4sp/lisp/c4lc-tokens.lisp src/tests/c4lc_lex_sample.c | cmp - src/c4sp/tests/expected/c4lc-tokens.txt
 	./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/c4lc-tokens.lisp src/tests/c4lc_lex_sample.c | cmp - src/c4sp/tests/expected/c4lc-tokens.txt
 	./c4sp src/c4sp/lisp/c4lc-tokens.lisp -count src/c4cc/c4cc.c | grep -q "^tokens [0-9]"
@@ -3046,6 +3073,49 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	./c4sp -R src/c4sp/lisp/c4lc.lisp src/tests/c4lc_l7.c .c4lc_rec.c4r > /dev/null
 	cmp .c4lc_cek.c4r .c4lc_rec.c4r
 	rm -f .c4lc_cek.c4r .c4lc_rec.c4r
+	# M4: signed, unsigned, short and long (docs/c4lc-design.md, "Integer
+	# types"). Two goldens, both gcc's: the 64-bit image against plain gcc
+	# and the 32-bit one -- c4sp32's c4lc, run by c4m32 -- against gcc
+	# -m32 on the same file. Wraparound, compares across the sign bit,
+	# division of values with the top bit set, logical shifts, packed
+	# 16-bit arrays, struct members, casts and the usual arithmetic
+	# conversions, plain, -O and -minline.
+	@for fl in "" "-O" "-minline"; do \
+	   ./c4sp src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_m4.c .c4lc_b.c4r > /dev/null || exit 1; \
+	   ./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-m4-64.txt || exit 1; \
+	   ./c4sp32 src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_m4.c .c4lc_b.c4r > /dev/null || exit 1; \
+	   ./c4m32 load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-m4-32.txt || exit 1; \
+	   echo "  m4 ok, gcc's answers at 32 and 64 bits: c4lc $$fl"; \
+	 done
+	# M4 qualifiers. const: every way of dropping a const without a cast
+	# warns and no other way does (c4lc_m4q.c, which then runs: a static
+	# const is a constant where C wants one), and each of nine writes is
+	# refused (c4lc_m4e.c, one per -D CASE). test-c4fc holds c4fc to the
+	# same two diagnostic files.
+	./c4sp src/c4sp/lisp/c4lc.lisp $(TESTS)/c4lc_m4q.c .c4lc_b.c4r \
+	   | grep -E '^(error|warning):' | cmp - src/c4sp/tests/expected/c4lc-m4q-diag.txt
+	./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-m4q.txt
+	@for c in 1 2 3 4 5 6 7 8 9; do \
+	   ./c4sp src/c4sp/lisp/c4lc.lisp -P -D CASE=$$c $(TESTS)/c4lc_m4e.c .c4lc_b.c4r 2>&1 \
+	     | grep -E '^(error|warning):'; \
+	 done | cmp - src/c4sp/tests/expected/c4lc-m4e-diag.txt
+	@echo "  m4 const: 6 warnings and 9 errors, as pinned"
+	# volatile: every access emitted exactly once, as c4rdump's patch
+	# listing counts them -- eight references to vcount plain, -O and
+	# -minline. ncount is used the same way and is not volatile, so
+	# -minline is free to splice peek(ncount) with the argument's text and
+	# read it twice: five references become six. That control is checked
+	# too, or a test that passed because nothing was inlined would pass.
+	@for spec in ":5" "-O:5" "-minline:6"; do \
+	   fl=$${spec%%:*}; nc=$${spec##*:}; \
+	   ./c4sp src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_m4v.c .c4lc_b.c4r > /dev/null || exit 1; \
+	   r=`sh src/c4sp/tests/m4-volatile.sh $(C4RDUMP) .c4lc_b.c4r`; \
+	   [ "$$r" = "vcount 8 ncount $$nc" ] \
+	     || { echo "test-c4lc: c4lc_m4v.c $$fl: $$r, want vcount 8 ncount $$nc"; exit 1; }; \
+	   ./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-m4v.txt || exit 1; \
+	   echo "  m4 volatile ok: c4lc $$fl ($$r)"; \
+	 done
+	rm -f .c4lc_b.c4r
 	@echo "test-c4lc: OK"
 
 # The C4KE RAM filesystem: opcode-level access, the self-hosting loop

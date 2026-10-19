@@ -58,6 +58,12 @@ KIND: AddA   KIND: SubA KIND: MulA  KIND: DivA KIND: ModA
 KIND: ShlA   KIND: ShrA KIND: AndA  KIND: OrA  KIND: XorA
 KIND: Semi   KIND: Comma KIND: Lparen KIND: Rparen
 KIND: Lbrace KIND: Rbrace KIND: Brak KIND: Rbrak
+\ M4: the integer type words and qualifiers, and the two literal kinds a
+\ U suffix makes (unsigned int, unsigned long). Appended, so every kind
+\ that was already here keeps its number.
+KIND: Const  KIND: Volatile KIND: Signed KIND: Unsigned
+KIND: Short  KIND: Long
+KIND: NumU   KIND: NumUL
 
 \ -- the keyword table --------------------------------------------------
 \   KEYWORD <text> <kind>       one row per C keyword
@@ -93,6 +99,9 @@ KEYWORD struct  Struct      KEYWORD union   Union
 KEYWORD typedef Typedef     KEYWORD do      Do
 \ void IS char in c4, as in c4's own symbol seeding.
 KEYWORD void    Char
+KEYWORD const   Const       KEYWORD volatile Volatile
+KEYWORD signed  Signed      KEYWORD unsigned Unsigned
+KEYWORD short   Short       KEYWORD long    Long
 
 : KW-FIND ( a u -- kind | -1 ) {: a u -- k :}
    #KW @ 0 ?DO
@@ -272,7 +281,19 @@ VARIABLE T-ADJ  0 T-ADJ !                 \ consumed by the next TOK,
    a u KW-FIND DUP 0< 0= IF 0 0 TOK, EXIT THEN
    DROP  Id a u TOK, ;
 
-: T-NUM   Num SCAN-NUMBER 0 TOK, ;
+\ u/U makes a literal unsigned and l/L (any number of them) widens it;
+\ only the unsigned part changes the token: NumU, or NumUL with an l.
+: SCAN-SUFFIX ( -- kind ) {: | u l -- k :}
+   0 TO u  0 TO l
+   BEGIN
+      CH 117 = CH 85 = OR IF 1 TO u 1 POS +! 1 ELSE
+      CH 108 = CH 76 = OR IF l 1+ TO l 1 POS +! 1 ELSE 0 THEN THEN
+   WHILE REPEAT
+   u 0= IF Num EXIT THEN
+   l 0= IF NumU ELSE NumUL THEN ;
+: T-NUM   SCAN-NUMBER SCAN-SUFFIX SWAP 0 TOK, ;
+\ every kind that carries a number in t.val
+: NUMK? ( k -- f )  DUP Num = OVER NumU = OR SWAP NumUL = OR ;
 
 : T-STR {: | end dst n -- :}
    1 POS +!
@@ -424,7 +445,7 @@ CREATE NBUF 24 ALLOT   VARIABLE NBP
    OB-RESET
    [CHAR] ( OB-C
    t t.kind @ KNAME OB-T  32 OB-C
-   t t.kind @ Num = IF t t.val @ OB-N ELSE
+   t t.kind @ NUMK? IF t t.val @ OB-N ELSE
    t t.kind @ Id  = IF t t.val @ t t.len @ OB-T ELSE
    t t.kind @ Str = IF t t.val @ t t.len @ OB-T ELSE
    48 OB-C THEN THEN THEN

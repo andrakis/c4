@@ -86,11 +86,35 @@
 	("struct" Struct) ("union" Union) ("typedef" Typedef) ("do" Do)
 	("void" Char)))  ;; void IS char in c4, as in c4's own symbol seeding
 
+;; The M4 type words (docs/c4lc-design.md, "Integer types"). Kept in a
+;; table of their own because the preprocessor must see them as plain
+;; identifiers: include/stddef.h says `#ifndef long` / `#define long int`
+;; and `#define unsigned`, and a keyword token cannot be a macro name.
+;; In -P mode they lex as Id and pp:kwfix turns the survivors back into
+;; keywords after expansion -- the order C's own phases put it in.
+(define lex:keywords2 '(
+	("const" Const) ("volatile" Volatile) ("signed" Signed)
+	("unsigned" Unsigned) ("short" Short) ("long" Long)))
+
 ;; keyword atom, or false
 (define lex:kwlook (lambda (kws name)
 	(if (empty? kws) false
 	(if (= (head (head kws)) name) (index (head kws) 1)
 	(next lex:kwlook (tail kws) name)))))
+
+;; Integer suffixes: u/U makes the literal unsigned, l/L (any number of
+;; them) widens it. Only the unsigned bit changes anything -- long is
+;; already a word -- so the result is 0 (int), 1 (unsigned int) or 2
+;; (unsigned long), left in the lex:sfx mailbox like lex:val.
+(define lex:sfx 0)
+(define lex:suffix (lambda (i u l)
+	(begin
+		(define c (lex:peek i))
+		(if (if (= c 117) true (= c 85)) (next lex:suffix (+ i 1) 1 l)
+		(if (if (= c 108) true (= c 76)) (next lex:suffix (+ i 1) u (+ l 1))
+		(begin
+			(set! lex:sfx (if (= u 0) 0 (if (= l 0) 1 2)))
+			i))))))
 
 ;; ---- scanners: each returns the index after the consumed text ----
 
@@ -306,7 +330,8 @@
 			(begin
 				(define e (lex:identend j))
 				(define name (string:substr lex:src i (- e i)))
-				(define kw (lex:kwlook lex:keywords name))
+				(define kw (if (lex:kwlook lex:keywords name) (lex:kwlook lex:keywords name)
+					(if lex:pp false (lex:kwlook lex:keywords2 name))))
 				;; arm the <...> header scan; cleared at end of line,
 				;; so it only bites on an actual #include line
 				(if lex:pp
@@ -325,9 +350,10 @@
 						(list 'Id name line))) acc)))
 		(if (lex:digit? c)
 			(begin
-				(define e (lex:number i c))
+				(define e (lex:suffix (lex:number i c) 0 0))
 				(next lex:go e line
-					(lex:cons (list 'Num lex:val line) acc)))
+					(lex:cons (list (if (= lex:sfx 0) 'Num (if (= lex:sfx 1) 'NumU 'NumUL))
+						lex:val line) acc)))
 		(if (= c 47)
 			(if (= (lex:peek j) 47)
 				(next lex:go (lex:skipline (+ j 1)) line acc)

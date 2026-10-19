@@ -163,7 +163,7 @@ SPELL Constructor constructor  SPELL Destructor destructor
    t t.kind @ TO k
    k Id  = IF t t.val @ t t.len @ EXIT THEN
    k Str = IF t t.val @ t t.len @ EXIT THEN
-   k Num = IF t t.val @ N>TEXT EXIT THEN
+   k NUMK? IF t t.val @ N>TEXT EXIT THEN
    k CELLS SPOFF + @ SPBUF +  k CELLS SPLEN + @ ;
 
 CREATE SPL 8192 ALLOT   VARIABLE SPLN
@@ -249,7 +249,7 @@ DEFER E-EXPR
    0 ;
 : E-PRIMARY ( -- v ) {: | k t v -- v :}
    E-KIND TO k
-   k Num = IF E-TOK t.val @ EXIT THEN
+   k NUMK? IF E-TOK t.val @ EXIT THEN
    k Lparen = IF 1 EPOS +! E-EXPR TO v  Rparen E-EAT  v EXIT THEN
    k Id = IF
       E-TOK TO t
@@ -701,7 +701,7 @@ DIRECTIVE  error   D-ERROR
       I TOKS V@ TO t
       OB-RESET
       t t.kind @ KNAME OB-T  32 OB-C
-      t t.kind @ Num = IF t t.val @ OB-N ELSE
+      t t.kind @ NUMK? IF t t.val @ OB-N ELSE
       t t.kind @ Id  = IF t t.val @ t t.len @ OB-T ELSE
       t t.kind @ Str = IF t t.val @ t t.len @ OB-T ELSE
       48 OB-C THEN THEN THEN

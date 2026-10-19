@@ -67,6 +67,7 @@ VARIABLE C4FC-READY   0 C4FC-READY !
    NSYM SYMR * ALLOCATE STAB !  0 STN !  0 NGLO !
    0 #STRUCTS !  0 #MEMS !  0 VA-MAKE !
    0 TP !
+   HELP-RESET
    BUILTINS ;
 
 : C4FC ( a u -- )                       \ compile that file, image to stdout

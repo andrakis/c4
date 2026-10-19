@@ -92,8 +92,9 @@ outright bugs, and each is listed in §5.1.
 
 Not goals (for now): structs, typedef, preprocessor beyond `#`-line
 skipping, floats beyond what c4cc does. (That was the starting target.
-Structs, unions, typedef and `do/while` arrived in L7, and the
-preprocessor in L9.)
+Structs, unions, typedef and `do/while` arrived in L7, the
+preprocessor in L9, and `signed`/`unsigned`/`short`/`long`/`const`/
+`volatile` in M4, §14.)
 
 ## 4. Pipeline
 
@@ -191,7 +192,8 @@ c4lc-parse.lisp):
            (index E E) (assign L R) (cond C T F) (add..lor L R)
 
 Types are integers exactly as c4cc: CHAR=0, INT=1, PTR levels +2 each;
-ATTRS is c4cc's bitmask. Enum constants substitute as (num N) at use
+ATTRS is c4cc's bitmask. (M4 added a band of types at 512, a typed
+literal `(num V TYPE)` and optional qualifier-mask fields; §14.) Enum constants substitute as (num N) at use
 sites, shadowed by locals/params, as c4cc's symbol table does. The
 grammar mirrors c4cc's parse()/stmt()/expr() with two deliberate
 differences: `for` is parsed CORRECTLY (c4cc's For branch never
@@ -520,3 +522,217 @@ Do not build these with c4cc: it has no structs, typedef or
 preprocessor, and its images are 18–27% larger (§11). Single-file
 images (`c4sp.c4r`, C4DOS) are compiled by c4lc in one step without
 `-c`.
+
+## 14. Integer types and qualifiers (M4, 2026-10)
+
+`signed`, `unsigned`, `short`, `long`, `const` and `volatile` are real,
+in c4lc and in c4fc, and the two still emit the same bytes (c4fc's side
+is in [c4fc-design.md](c4fc-design.md), "Integer types").
+
+### 14.1 The types
+
+| type | code (+2 per `*`) | `sizeof` | value range |
+|---|---|---|---|
+| `char`, `void` | 0 | 1 | signed 8-bit (`LC` sign-extends; `CHAR_MIN` is -128) |
+| `int`, `signed`, `long`, `long long` | 1 | word | the word, signed |
+| `unsigned char` | 512 | 1 | 0..255 |
+| `signed char` | 576 | 1 | -128..127, same representation as `char` |
+| `short` | 640 | 2 | -32768..32767 |
+| `unsigned short` | 704 | 2 | 0..65535 |
+| `unsigned`, `unsigned int` | 768 | word | 0..2^32-1 **at both word sizes** |
+| `unsigned long (long)` | 832 | word | the word, unsigned |
+| `struct` k | 1024 + 64k | layout | — |
+
+The band at 512 uses the struct rule — 64 apart, two per pointer level
+— so `g:plevel` is one formula for everything at or above 512, and the
+codes in a `.c4r` symbol record for the old types did not change.
+`long` is word-sized and `long long` is accepted as the same word: a
+real 64-bit `long long` on a 32-bit host is a later milestone. Any
+order of specifiers parses (`unsigned const short`, `long unsigned`),
+and a typedef name only counts as a type while no other type word has
+been seen, so `unsigned T;` declares a `T`.
+
+Storage did not change shape: every scalar still takes a whole word —
+a global, a local, a struct member — and a member is still word-aligned.
+Only ARRAYS of the new narrow types pack, one byte for `unsigned char`
+and `signed char` as for `char`, two for the shorts (`g:estride`). So
+`sizeof(short) == 2` and `sizeof(short[5]) == 10`, but a struct's size
+and its members' offsets are c4's, not gcc's.
+
+`unsigned int` is 32 bits on a 64-bit host too, because that is what
+code written for it (CRC32, inflate, hashes) assumes. Its values are
+kept in [0, 2^32) there: every load of one masks (`LI; PSH; IMM
+0xFFFFFFFF; AND`), and so does every cast, assignment, `++` and result
+that could leave the range. In that range the signed opcodes already
+give the unsigned answer, so a 64-bit host compares and divides a uint
+with the ordinary `LT`/`DIV`.
+
+### 14.2 What the generator emits
+
+`g:typeof` answers what an expression's type will be WITHOUT generating
+it. A binary operator needs that for its right operand before it emits
+its left one: once the left side is pushed, nothing in the VM can reach
+it to convert it. It mirrors `g:expr`'s typing exactly, c4's own quirks
+included (`char + 1` is a `char`; `?:` has its else-arm's type).
+
+- **Usual arithmetic conversions.** Everything narrower than a word
+  promotes to `int`; then `int < unsigned < unsigned long`. When neither
+  operand is unsigned the code is what it always was. Because c4's
+  `int` is a word and `unsigned` is 32 bits, the 32-bit C rule is
+  applied at both sizes: `-1 < 1u` is false, `u == -1` is true — what
+  gcc says for `int`. For `long` against `unsigned` LP64 gcc says long;
+  c4, whose `long` IS `int`, says unsigned (a documented deviation).
+- **Ordering** of a whole unsigned word (`unsigned long`, and
+  `unsigned` on a 32-bit host): both operands `XOR` the sign bit, then
+  the signed compare. `==` and `!=` need nothing.
+- **Division** of a whole unsigned word: a call to the `udiv`/`umod`
+  helper.
+- **`>>`** of a whole unsigned word: by a constant `k`, `SHR` then `AND
+  ~(-1 << (W-k))` (nothing for k = 0); by a variable, the `lsr` helper.
+  `<<` is the same opcode either way.
+- **Loads**: `unsigned char` is `LC; PSH; IMM 255; AND`; `short` and
+  `unsigned short` call `ld16s`/`ld16u`; a 64-bit host's `unsigned`
+  masks. **Stores**: the one-byte types `SC`, the shorts call `st16`,
+  everything else `SI`.
+- **Casts emit conversion code**: truncation to a narrow type (`AND`
+  for the unsigned ones, a shift up and an arithmetic shift down for
+  the signed), and the 32-bit mask for `unsigned` on a 64-bit host.
+  A source type that already fits emits nothing. This includes
+  `(char)`, which until M4 emitted nothing: it is the one change M4
+  makes to an image built from existing source, and it is a fix
+  (`(char)300` is 44). Measured over the corpus: the 272 images of
+  `src/tests/*.c` (plain, `-O`, `-minline`), C4KE, C4DOS and the twelve
+  C4IX objects are byte-identical to the pre-M4 compiler; the 17 that
+  differ all differ only because `include/stdio.h` casts with `(char)`,
+  and are identical again with that one conversion switched off.
+- **Assignment, `++`/`--`, `return`** convert to the target type for
+  the new narrow types and for `unsigned` on a 64-bit host, so the value
+  of `(s = 70000)` for a `short s` is 4464. `char` keeps c4's own rule —
+  `c = 300` stores 44 and has the value 300 — because changing it would
+  change every program there is. A post-increment stores the new value
+  unconverted and takes the step back off it, which is exact because
+  every load converts.
+- **`?:`** with an unsigned arm converts both arms to the usual
+  arithmetic type (otherwise it keeps c4's else-arm type). One
+  deviation: under `-O` a `?:` whose CONDITION is a constant folds to
+  the arm it keeps, which then has its own type — `1 ? -1 : 0u` is the
+  int -1 there and `4294967295u` without `-O`. The tree pass has names,
+  not types, so it cannot see the other arm's; c4fc folds the same way.
+
+The six helpers (`ld16s ld16u st16 udiv umod lsr`, `g:helpbody`) are
+emitted once each, after the last function and the prototype stubs,
+in that fixed order, and only if something called them. A call is
+`PSH; JSR label; ADJ n` to a label in the same unit: there is no symbol,
+nothing to link and nothing for the loader to know, so `-c` objects
+work unchanged. 16-bit loads go through a helper because computing two
+byte addresses from one address needs it twice, and this machine has no
+way to copy the top of the stack.
+
+### 14.3 Literals and constant folding
+
+`u`/`U` and `l`/`L` suffixes lex (`NumU`, `NumUL` tokens). `123u` is
+`unsigned`, or `unsigned long` if it does not fit 32 bits; any `l` with
+a `u` makes it `unsigned long`; `l` alone changes nothing. The AST node
+is `(num V TYPE)` — the third field only for an unsigned literal. A hex
+literal WITHOUT a suffix stays a signed `int` however large (C would
+make `0xFFFFFFFF` unsigned on a 32-bit `int`): doing that would change
+the meaning of existing c4 code, so write the `u`.
+
+`p:tfold` (c4lc-parse.lisp) is c4's arithmetic on typed constants, used
+by the parser's constant expressions (array sizes, case labels, enum
+values, initializers) AND by the tree pass, so a constant folds to the
+same number wherever it is folded. Its signed branch is exactly what
+both always did. The `>>` it folds is arithmetic for `int` and logical
+for unsigned — which also fixed c4fc's constant expressions, whose `>>`
+was Forth's logical `RSHIFT`.
+
+### 14.4 Qualifiers
+
+A qualifier mask rides BESIDE the type, never in it: two bits per
+pointer level, bit 2k `const` and bit 2k+1 `volatile`, level 0 the
+object itself. `const char *p` is const at level 1, `char * const p` at
+level 0, an array's elements one level up from the array. The AST
+carries it as an optional trailing field, written only when it is not
+zero, so a program without qualifiers parses to exactly the tree it
+always did (`c4lc-ast.txt` is unchanged):
+
+    (global TYPE "x" SIZE ATTRS INIT Q)   (local TYPE "x" SIZE INIT Q)
+    ((PTYPE "p" Q) ...)   (cast TYPE E Q)   member (TYPE "m" ASIZE Q)
+    (func ... BODY RQ)    (proto ... ATTRS RQ PQS)   (typedefd "T" TYPE Q)
+
+The symbol table carries it too (`g:symq`), and `g:qualof` computes an
+expression's mask the way `g:typeof` computes its type: `*` and `[]`
+shift down a level, `&` up, a member inherits its struct's level-0 bits
+(an array member hands them to its elements), a cast says its own.
+
+**const.** Errors, which stop the compile:
+
+    error: assignment of read-only location (in function f)
+    error: increment of read-only location (in function f)
+    error: decrement of read-only location (in function f)
+
+for a write to a const object, through a pointer to const, to a member
+of a const struct, or to an element of a const array. Warnings, when a
+const below level 0 is dropped without a cast:
+
+    warning: assignment discards const qualifier (in function f)
+    warning: initialization discards const qualifier (in function f)
+    warning: passing argument N of g discards const qualifier (in function f)
+    warning: return discards const qualifier (in function f)
+
+c4fc words them identically (test-c4fc holds it to the same golden
+files). Storage is unchanged — the VM has no read-only pages. A
+`static const` scalar with a constant initializer is a constant from
+there on wherever C wants one (`int t[N]`, `case N:`), converted to its
+type, and keeps its storage.
+
+**volatile.** Every read and write of a volatile object must be one
+access, in order. The generator emits one load or store per access the
+source asks for and caches nothing, so the audit is of what could merge
+or drop one later:
+
+- the tree folds combine LITERALS only and never drop an operand that
+  is not one — nothing to do;
+- the peephole passes fold `IMM`/`IMM` windows and delete only code
+  after `JMP`/`LEV` up to the next label — unreachable code — and the
+  fused forms (`LDL`, `LDG`, …) are still one access each;
+- `-minline` was the one real risk. T3 substitutes an argument's TEXT,
+  so a parameter read twice reads the argument twice and an unused one
+  drops it. The tree has names, not types, so it is told by name:
+  every variable declared with a volatile anywhere in its type, or of a
+  struct type with a volatile member, is an access with a side effect
+  (`t:vnames`). T3 then refuses such an argument (`t:pure?`), and T4
+  binds it to a local, evaluated once (`t:dupok?`).
+
+`src/tests/c4lc_m4v.c` pins it in `c4rdump`'s patch listing: eight
+references to a volatile global plain, `-O` and `-minline`, against a
+non-volatile control that `-minline` takes from five to six. A 16-bit
+volatile access is two byte accesses — the VM has no 16-bit operation.
+
+A spliced call also keeps the conversions the call made: an argument
+for an `unsigned char`/`signed char`/`short`/`unsigned short`/`unsigned`
+parameter, and a value returned as one, is wrapped in a cast (`t:cwrap`).
+
+### 14.5 The preprocessor
+
+The six new words lex as identifiers in `-P` mode and become keywords
+after expansion (`pp:kwfix`) — C's own phase order — because a header
+can `#define` them: `include/stddef.h` says `#define unsigned` (to
+nothing) and `#define long int` under `__c4cc__`. A program that wants
+the real `unsigned` therefore must not include stdio.h/stdlib.h, which
+pull in stddef.h (follow-up: guard those defines). `-D NAME=VALUE` no
+longer leaves the lexer's `Eof` inside the macro, which made `#if N ==
+1` misread.
+
+### 14.6 Tests (test-c4lc, test-c4fc, test-c4sc-back, test-libjs)
+
+- `src/tests/c4lc_m4.c` — the battery: wraparound, compares across the
+  sign bit, division of top-bit values, logical shifts, packed 16-bit
+  arrays, struct members, casts, the usual arithmetic conversions,
+  CRC32 and FNV-1a. Its goldens are gcc's: `c4lc-m4-64.txt` (`gcc`)
+  for the 64-bit image and `c4lc-m4-32.txt` (`gcc -m32`) for the one
+  `c4sp32` builds and `c4m32` and libjs run; plain, `-O`, `-minline`.
+- `src/tests/c4lc_m4q.c` (warnings, then it runs) and
+  `src/tests/c4lc_m4e.c` (nine refused writes, `-P -D CASE=n`).
+- `src/tests/c4lc_m4v.c` — volatile, above.
+- All three are in `C4FC_GEN_SWEEP` and `C4SC_BACK_DIFF`.

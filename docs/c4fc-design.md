@@ -214,6 +214,74 @@ the named file. Options are words run before it, inside a definition
 | `-minline` | inline small functions; implies optimization |
 | `1 CONFORMING !` | real C escape sequences, as c4lc's `-conforming` |
 
+## Integer types (M4, 2026-10)
+
+`signed`, `unsigned`, `short`, `long`, `const` and `volatile` arrived in
+both compilers at once, and c4fc emits c4lc's bytes for them. The
+language side — the types, what each operation compiles to, the six
+helpers, the qualifier rules and the exact diagnostics — is
+[c4lc-design.md](c4lc-design.md) §14; this is where each piece lives
+here.
+
+- **`lex.f`** has six keyword rows and two literal kinds, `NumU` and
+  `NumUL` (a `u` suffix, with or without an `l`). They are APPENDED to
+  the `KIND:` list, so no existing kind changed its number. `NUMK?` is
+  "this token carries a number", and the dumps print its value as c4lc
+  does.
+- **`types.f`** has the band — `t_uchar` 512, `t_schar` 576, `t_short`
+  640, `t_ushort` 704, `t_uint` 768, `t_ulong` 832 — and `T-BASE` is now
+  one rule from 512 up, structs included. `T-SIZE`, `T-PROMOTE`,
+  `T-UAC`, `T-UNSBIN?`, `T-SUMTY` are c4lc's `g:tysize`, `g:promote`,
+  `g:uac`, `g:unsbin?` and `g:sumty`. `MB-QUAL` holds each member's
+  qualifier mask.
+- **`emit.f`** has `TFOLD`, the typed constant fold (c4lc's
+  `p:tfold`), beside `FOLD1`, which is still what the peephole pass
+  folds with. `UDIV`/`ULT` are the unsigned word operations it needs;
+  `CONVVAL` converts a constant to a type. A symbol record gained `y.q`
+  (its mask), `y.rq`/`y.pt`/`y.pq` (a function's return mask and its
+  parameters' types and masks, for the const check at a call) and
+  `y.cv`/`y.cval`/`y.cty` (a `static const` scalar's value).
+- **`parse.f`**: `BASE-TYPE` reads any run of specifiers and leaves the
+  base qualifiers in `BQ`; a declarator sets `DQ` from it and `STARS`
+  moves `DQ` up a level per `*`, taking the qualifiers after each. The
+  constant expressions are typed (`CTY` beside the value, combined by
+  `CAPPLY` → `TFOLD`), which also fixed a real divergence: `>>` in a
+  constant was Forth's LOGICAL `RSHIFT` here and arithmetic in c4lc.
+  A scalar global's initializer is now written as a whole word, as c4lc
+  writes it — the low byte alone was the same thing only for a value
+  that was not negative.
+- **`ast.f`**: `n_num` carries its type (`>nty`; every literal is made
+  by `NUM-OF`), `n_cast` its mask (`>cq`), `n_member` the member's
+  (`>mq`), and a new generic `CQ` is an expression's mask, as `CT` is
+  its type.
+- **`gen.f`**: `LOAD,`, `STORE,`, `CONVERT,` and `SCONV,` by type; `UBIN`
+  for an operator with an unsigned operand; the six helpers (`H-LD16`,
+  `H-ST16`, `H-UDIV`, `H-UMOD`, `H-LSR`), called by `HCALL` as a branch
+  mark and laid down by `EMIT-HELPERS` after the last function, where
+  c4lc puts them; and the const checks. `CT n_bin` and `CT n_cond` now
+  follow c4lc's typing exactly (left operand's type for `+`/`-`, the
+  else arm's for `?:`), because a conversion is decided by it.
+- **`inline.f`**: a spliced body returns with its callee's type, so
+  `RETT`/`RETQ` are swapped for the splice. c4fc's inliner puts each
+  argument in a slot once, so it never had c4lc's volatile problem.
+
+**Warnings need `-o`.** c4th has no stderr, and an image written to
+stdout would carry the warning inside it, so a const warning prints only
+when the image goes to a file. Errors print and abort, which is safe
+either way: there is no image. Diagnostics are printed by the second
+pass only, so `-O`'s discovery pass does not print them twice.
+
+**Recursion depth.** Code generation recurses with the expression, and
+c4th has two stacks that bound it: the return stack (256 cells, checked
+— "return stack overflow") and the locals stack (512 cells, NOT checked:
+an overflow is a crash). The first draft of M4's binary operator was a
+dispatch word plus a worker with a locals frame, which made a level cost
+three return cells and a frame, and a 60-term unsigned expression
+crashed. `GEN n_bin` is now one word with no locals that keeps the node
+on the data stack, for both the unsigned and the old path: two return
+cells a level, as before M4, and no frame at all. A 110-term chain of
+either kind compiles to c4lc's bytes.
+
 ## Verification
 
 The bar rises rung by rung and c4lc supplies it at every one.

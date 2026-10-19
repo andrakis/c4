@@ -34,7 +34,7 @@ VARIABLE FUSE       0 FUSE !
 GENERIC: FOLD ( node -- node' )
 
 : NUM? ( n -- f )    >TAG n_num = ;
-: MKNUM ( v -- n )   n_num N1 ;
+: MKNUM ( v -- n )   t_int NUM-OF ;
 : EMPTY-STMT ( -- n ) n_empty 1 CELLS NEW ;
 
 VARIABLE NFOLD   0 NFOLD !
@@ -63,12 +63,14 @@ VARIABLE NFOLD   0 NFOLD !
 
 \ -- arithmetic ----------------------------------------------------------
 
+\ Typed (M4): TFOLD is FOLD1 for two ints, and the unsigned arithmetic
+\ when a U-suffixed literal is in it -- c4lc's p:tfold.
 :M FOLD n_bin {: n | a b v ok -- n :}
    n >lhs @ FOLD DUP n >lhs !  TO a
    n >rhs @ FOLD DUP n >rhs !  TO b
    a NUM? b NUM? AND IF
-      a >val @  b >val @  n >op @ FOLD1 TO ok TO v
-      ok IF FOLDED v MKNUM EXIT THEN
+      a >val @ a >nty @  b >val @ b >nty @  n >op @ TFOLD TO ok TO v
+      ok IF FOLDED v FTY @ NUM-OF EXIT THEN
    THEN
    n ;M
 
@@ -77,10 +79,12 @@ VARIABLE NFOLD   0 NFOLD !
    a NUM? IF FOLDED a >val @ 0= 1 AND MKNUM EXIT THEN  n ;M
 :M FOLD n_bnot {: n | a -- n :}
    n >opnd @ FOLD DUP n >opnd ! TO a
-   a NUM? IF FOLDED a >val @ -1 XOR MKNUM EXIT THEN  n ;M
+   a NUM? IF FOLDED -1 t_int a >val @ a >nty @ oXOR TFOLD DROP FTY @ NUM-OF EXIT THEN
+   n ;M
 :M FOLD n_neg  {: n | a -- n :}
    n >opnd @ FOLD DUP n >opnd ! TO a
-   a NUM? IF FOLDED 0 a >val @ - MKNUM EXIT THEN  n ;M
+   a NUM? IF FOLDED 0 t_int a >val @ a >nty @ oSUB TFOLD DROP FTY @ NUM-OF EXIT THEN
+   n ;M
 
 \ -- the ones that only descend ------------------------------------------
 
@@ -191,6 +195,11 @@ CREATE FN-LIVE FNMAX CELLS ALLOT
 CREATE FN-T    FNMAX CELLS ALLOT
 CREATE FN-N    FNMAX CELLS ALLOT
 CREATE FN-V    FNMAX CELLS ALLOT
+\ ...and, for the const checks (M4), its return mask and its parameters'
+\ types and masks (parse.f's PSIG arrays, which live in the arena)
+CREATE FN-RQ   FNMAX CELLS ALLOT
+CREATE FN-PT   FNMAX CELLS ALLOT
+CREATE FN-PQ   FNMAX CELLS ALLOT
 VARIABLE #FNS   0 #FNS !
 VARIABLE CURFN  -1 CURFN !              \ which function is being walked
 
@@ -218,9 +227,12 @@ VARIABLE NDROP     0 NDROP !
    a #FNS @ CELLS FN-A + !   u #FNS @ CELLS FN-U + !
    0 #FNS @ CELLS FN-LIVE + !
    1 #FNS @ CELLS FN-T + !  0 #FNS @ CELLS FN-N + !  0 #FNS @ CELLS FN-V + !
+   0 #FNS @ CELLS FN-RQ + !  0 #FNS @ CELLS FN-PT + !  0 #FNS @ CELLS FN-PQ + !
    #FNS @   1 #FNS +! ;
 : FN-SIG! ( i ct nfix va -- ) {: i ct n va -- :}
    ct i CELLS FN-T + !  n i CELLS FN-N + !  va i CELLS FN-V + ! ;
+: FN-SIG2! ( i rq pt pq -- ) {: i rq pt pq -- :}
+   rq i CELLS FN-RQ + !  pt i CELLS FN-PT + !  pq i CELLS FN-PQ + ! ;
 : REF, ( a u -- ) {: a u -- :}
    #REFS @ REFMAX < 0= IF ." c4fc: too many references" CR ABORT THEN
    CURFN @ #REFS @ CELLS REF-F + !

@@ -8,7 +8,8 @@
 \ implement GEN-ADDR, so "is this an lvalue" is answered by the method
 \ table rather than by a predicate somebody has to maintain.
 
-NODE: n_num    NFIELD: >val                    ;NODE
+\ A literal carries its type: int, or uint / ulong from a U suffix.
+NODE: n_num    NFIELD: >val  NFIELD: >nty      ;NODE
 \ A string literal carries its BYTES, not a data offset: the offset is
 \ handed out during emission, and a literal inside a branch the tree
 \ pass deletes must never be handed one at all.
@@ -46,7 +47,8 @@ NODE: n_postdec NFIELD: >opnd                  ;NODE
 \ address-producing expression and codegen never asks which spelling it
 \ came from.
 NODE: n_index  NFIELD: >lhs  NFIELD: >rhs      ;NODE
-NODE: n_member NFIELD: >lhs  NFIELD: >moff NFIELD: >mtype NFIELD: >magg ;NODE
+NODE: n_member NFIELD: >lhs  NFIELD: >moff NFIELD: >mtype NFIELD: >magg
+               NFIELD: >mq                                 ;NODE
 
 NODE: n_lor    NFIELD: >lhs  NFIELD: >rhs      ;NODE
 NODE: n_land   NFIELD: >lhs  NFIELD: >rhs      ;NODE
@@ -75,7 +77,7 @@ NODE: n_ret    NFIELD: >expr                   ;NODE
 \ A cast emits nothing and changes everything: (char *)p is the same
 \ address and a different type, and the type is what decides LC against
 \ LI, SC against SI, and whether p[i] scales by one or by eight.
-NODE: n_cast   NFIELD: >expr NFIELD: >ctype     ;NODE
+NODE: n_cast   NFIELD: >expr NFIELD: >ctype NFIELD: >cq ;NODE
 \ A function's name used as a value: its address. Not an lvalue, and no
 \ load follows it -- the same shape an array name has.
 NODE: n_fnref  NFIELD: >sym                    ;NODE
@@ -91,6 +93,10 @@ NODE: n_blk    NFIELD: >list NFIELD: >len      ;NODE
 
 \ Constructors for the one- and two-field shapes, which is most of them.
 : N1 ( v tag -- n )   2 CELLS NEW TUCK 1 CELLS + ! ;
+\ A literal of a given type -- every n_num is made here, because its
+\ type field has to exist even when it is int.
+: NUM-OF ( v ty -- n ) {: v ty | n -- n :}
+   n_num 3 CELLS NEW TO n   v n 1 CELLS + !   ty n 2 CELLS + !   n ;
 : N2 ( a b tag -- n ) 3 CELLS NEW {: a b n -- n :}
    a n 1 CELLS + !  b n 2 CELLS + !  n ;
 
@@ -98,6 +104,7 @@ GENERIC: GEN                            \ an expression, as a value
 GENERIC: GEN-ADDR                       \ an expression, as an address
 GENERIC: STMT                           \ a statement
 GENERIC: CT                             \ an expression's C type
+GENERIC: CQ                             \ ... and its qualifier mask (M4)
 
 \ char is 0, int is 1, and every * adds two -- c4's own encoding. The
 \ only question codegen asks of a type is "is it char", because that is

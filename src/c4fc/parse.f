@@ -27,7 +27,10 @@
    a y y.name !  u y y.nlen !  1 y y.type !  c y y.class !  v y y.val !
    ct y y.ct !  ag y y.agg !  sz y y.sz !
    0 y y.atk !
+   0 y y.q !  0 y y.rq !  0 y y.pt !  0 y y.pq !  0 y y.cv !
    1 STN +! ;
+\ the symbol just made
+: ST-LAST ( -- y )  STN @ 1- ST[] ;
 : ST-FIND ( a u -- sym|0 ) {: a u | y -- s :}    \ newest first: locals win
    STN @ 0 ?DO
       STN @ 1- I - ST[] TO y
@@ -72,6 +75,11 @@ Mul 12 oMUL INFIX   Div 12 oDIV INFIX  Mod 12 oMOD INFIX
 DEFER PARSE-TYPE                        \ members are declarations too, and
 DEFER BASE-TYPE                         \ sizeof appears inside constants
 DEFER STARS ( t -- t' )
+\ The qualifiers of the base type just parsed (BQ), and of a declarator
+\ after its stars (DQ): set DQ from BQ, call STARS, read DQ back.
+VARIABLE BQ   0 BQ !
+VARIABLE DQ   0 DQ !
+
 
 : NAME=? ( a1 u1 a2 u2 -- f ) {: a u b v -- f :}
    u v <> IF 0 EXIT THEN  a b u BYTES= ;
@@ -82,51 +90,55 @@ DEFER STARS ( t -- t' )
 \ applies the opcodes numerically instead of emitting them. C's
 \ comparisons yield 0 or 1 where Forth's yield 0 or -1, which is one AND.
 
+\
+\ M4: every value carries its type, in CTY, and two are combined by
+\ TFOLD (emit.f) -- the arithmetic the tree pass folds with and the one
+\ c4lc's p:tfold does -- so `0xFFFFFFFFu >> 4` is a logical shift here
+\ exactly as it is at run time, and a plain int >> is arithmetic, which
+\ it was in c4lc and was NOT here: this used Forth's RSHIFT.
 DEFER CEXPR
-: CAPPLY ( a b op -- v )
-   DUP oADD = IF DROP +      EXIT THEN
-   DUP oSUB = IF DROP -      EXIT THEN
-   DUP oMUL = IF DROP *      EXIT THEN
-   DUP oDIV = IF DROP /      EXIT THEN
-   DUP oMOD = IF DROP MOD    EXIT THEN
-   DUP oAND = IF DROP AND    EXIT THEN
-   DUP oOR  = IF DROP OR     EXIT THEN
-   DUP oXOR = IF DROP XOR    EXIT THEN
-   DUP oSHL = IF DROP LSHIFT EXIT THEN
-   DUP oSHR = IF DROP RSHIFT EXIT THEN
-   DUP oEQ  = IF DROP =  1 AND EXIT THEN
-   DUP oNE  = IF DROP <> 1 AND EXIT THEN
-   DUP oLT  = IF DROP <  1 AND EXIT THEN
-   DUP oGT  = IF DROP >  1 AND EXIT THEN
-   DUP oLE  = IF DROP <= 1 AND EXIT THEN
-   DUP oGE  = IF DROP >= 1 AND EXIT THEN
-   DROP ." c4fc: that operator is not allowed in a constant" CR ABORT ;
+VARIABLE CTY   1 CTY !
+: CAPPLY ( a at b bt op -- v ) {: a at b bt o | v ok -- v :}
+   a at b bt o TFOLD TO ok TO v
+   ok 0= IF ." c4fc: that operator is not allowed in a constant" CR ABORT THEN
+   FTY @ CTY !  v ;
 
-: CPRIMARY ( -- v ) {: | s -- v :}
-   TK Num    = IF TV TNEXT EXIT THEN
-   TK Sub    = IF TNEXT 13 CEXPR NEGATE EXIT THEN
+\ a literal's type: what a U suffix makes of it
+: LIT-TYPE ( v kind -- t ) {: v k -- t :}
+   k NumUL = IF t_ulong EXIT THEN
+   k NumU = IF
+      W64? IF v 0< v M32 > OR IF t_ulong EXIT THEN THEN
+      t_uint EXIT THEN
+   t_int ;
+
+: CPRIMARY ( -- v ) {: | s v -- v :}
+   TK NUMK?      IF TV TK LIT-TYPE CTY !  TV TNEXT EXIT THEN
+   TK Sub    = IF TNEXT 13 CEXPR TO v  0 t_int v CTY @ oSUB CAPPLY EXIT THEN
    TK Add    = IF TNEXT 13 CEXPR EXIT THEN
-   TK Not    = IF TNEXT 13 CEXPR 0= 1 AND EXIT THEN
-   TK Tilde  = IF TNEXT 13 CEXPR INVERT EXIT THEN
+   TK Not    = IF TNEXT 13 CEXPR 0= 1 AND t_int CTY ! EXIT THEN
+   TK Tilde  = IF TNEXT 13 CEXPR TO v  -1 t_int v CTY @ oXOR CAPPLY EXIT THEN
    TK Lparen = IF TNEXT 1 CEXPR Rparen WANT EXIT THEN
-   TK Sizeof = IF TNEXT Lparen WANT PARSE-TYPE T-SIZE Rparen WANT EXIT THEN
+   TK Sizeof = IF TNEXT Lparen WANT PARSE-TYPE T-SIZE Rparen WANT t_int CTY ! EXIT THEN
    TK Id = IF
       TV TL ST-FIND TO s
       s 0= IF ." c4fc: unknown name in a constant" CR ABORT THEN
+      \ a static const scalar with a constant initialiser is one too
+      s y.cv @ IF TNEXT s y.cty @ CTY !  s y.cval @ EXIT THEN
       s y.class @ c_const <> IF ." c4fc: not a constant" CR ABORT THEN
-      TNEXT s y.val @ EXIT
+      TNEXT t_int CTY !  s y.val @ EXIT
    THEN
    ." c4fc: " TOK@ .WHERE ." : a constant was expected" CR ABORT ;
 
-: (CEXPR) ( lev -- v ) {: lev | v i p -- v :}
-   CPRIMARY TO v
+: (CEXPR) ( lev -- v ) {: lev | v vt i p r -- v :}
+   CPRIMARY TO v   CTY @ TO vt
    BEGIN
       TK IN-FIND TO i
-      i 0< IF v EXIT THEN
+      i 0< IF vt CTY ! v EXIT THEN
       i CELLS INP + @ TO p
-      p lev < IF v EXIT THEN
+      p lev < IF vt CTY ! v EXIT THEN
       TNEXT
-      v  p 1+ CEXPR  i CELLS INO + @ CAPPLY TO v
+      p 1+ CEXPR TO r
+      v vt r CTY @ i CELLS INO + @ CAPPLY TO v   CTY @ TO vt
    AGAIN ;
 ' (CEXPR) IS CEXPR
 : CONST-EXPR ( -- v )  1 CEXPR ;
@@ -137,27 +149,29 @@ DEFER CEXPR
 
 DEFER EXPR                              \ ( lev -- node )
 
-: TYPE? TK Int = TK Char = OR TK Struct = OR TK Union = OR ;
+: TYPE? TK Int = TK Char = OR TK Struct = OR TK Union = OR
+   TK Const = OR TK Volatile = OR TK Signed = OR TK Unsigned = OR
+   TK Short = OR TK Long = OR ;
 
 \ Members are laid out one cell at a time: c4lc gives a char member a
 \ whole cell, which is visible the moment a struct starts with two of
 \ them -- { char a; char b; int c; } is twenty-four bytes and b is at
 \ eight, not one.
-: PARSE-MEMBERS ( k -- ) {: k | t a u off n ag mt et -- :}
+: PARSE-MEMBERS ( k -- ) {: k | t a u off n ag mt et bq q -- :}
    Lbrace WANT
    0 TO off
    BEGIN TK Rbrace <> WHILE
-      BASE-TYPE TO t
+      BASE-TYPE TO t   BQ @ TO bq
       BEGIN
-         t STARS TO mt
+         bq DQ !  t STARS TO mt   DQ @ TO q
          TV TO a  TL TO u  Id WANT
          1 TO n   0 TO ag
          TK Brak = IF
             TNEXT CONST-EXPR TO n Rbrak WANT
-            1 TO ag   mt DUP TO et 2 + TO mt
+            1 TO ag   mt DUP TO et 2 + TO mt   q 2 LSHIFT TO q
          THEN
          off 1 CELLS 1- + 1 CELLS 1- INVERT AND TO off
-         k a u mt off ag MEM,
+         k a u mt off ag MEM,   q MEM-Q!
          off n ag IF et ELSE mt THEN T-SIZE * + TO off
          TK Comma = WHILE TNEXT
       REPEAT
@@ -166,31 +180,53 @@ DEFER EXPR                              \ ( lev -- node )
    Rbrace WANT
    off 1 CELLS 1- + 1 CELLS 1- INVERT AND  k CELLS ST-SIZE + ! ;
 
-: (BASE-TYPE) ( -- t ) {: | t k a u -- t :}
-   TK Struct = TK Union = OR IF
-      TNEXT
-      0 TO a  0 TO u
-      TK Id = IF TV TO a  TL TO u  TNEXT THEN
-      a u ST-FINDS TO k
-      k 0< IF a u ST-NEW TO k THEN
-      TK Lbrace = IF k PARSE-MEMBERS THEN
-      k ST-TYPE TO t
-   ELSE
-      TK Char = IF t_char TO t ELSE
-      TK Int  = IF t_int  TO t ELSE
-         ." c4fc: " TOK@ .WHERE ." : a type was expected" CR ABORT
-      THEN THEN
-      TNEXT
-   THEN
-   t ;
+\ Any run of the specifiers C allows -- const, volatile, signed,
+\ unsigned, short, long, int, char, a struct or union -- in any order.
+: (BASE-TYPE) ( -- t ) {: | k a u q sg un sh lg ch it st -- t :}
+   0 TO q  0 TO sg  0 TO un  0 TO sh  0 TO lg  0 TO ch  0 TO it  -1 TO st
+   BEGIN
+      TK Const    = IF q 1 OR TO q  TNEXT 1 ELSE
+      TK Volatile = IF q 2 OR TO q  TNEXT 1 ELSE
+      TK Signed   = IF 1 TO sg TNEXT 1 ELSE
+      TK Unsigned = IF 1 TO un TNEXT 1 ELSE
+      TK Short    = IF 1 TO sh TNEXT 1 ELSE
+      TK Long     = IF lg 1+ TO lg TNEXT 1 ELSE
+      TK Char     = IF 1 TO ch TNEXT 1 ELSE
+      TK Int      = IF 1 TO it TNEXT 1 ELSE
+      TK Struct = TK Union = OR st 0< AND
+         sg un + sh + lg + ch + it + 0= AND IF
+         TNEXT
+         0 TO a  0 TO u
+         TK Id = IF TV TO a  TL TO u  TNEXT THEN
+         a u ST-FINDS TO k
+         k 0< IF a u ST-NEW TO k THEN
+         TK Lbrace = IF k PARSE-MEMBERS THEN
+         k ST-TYPE TO st  1
+      ELSE 0
+      THEN THEN THEN THEN THEN THEN THEN THEN THEN
+   WHILE REPEAT
+   q BQ !
+   st 0< 0= IF st EXIT THEN
+   ch IF un IF t_uchar ELSE sg IF t_schar ELSE t_char THEN THEN EXIT THEN
+   sh IF un IF t_ushort ELSE t_short THEN EXIT THEN
+   lg IF un IF t_ulong ELSE t_int THEN EXIT THEN
+   un IF t_uint EXIT THEN
+   sg it OR q OR IF t_int EXIT THEN
+   ." c4fc: " TOK@ .WHERE ." : a type was expected" CR ABORT ;
 ' (BASE-TYPE) IS BASE-TYPE
 \ Stars belong to the DECLARATOR, not to the base type: `int *a, *b;`
 \ is two pointers and `int *a, b;` is a pointer and an int. Parsing them
 \ with the base type made the second declarator inherit the first's, and
 \ nothing caught it until a real header wrote both forms.
-: (STARS) ( t -- t' )  BEGIN TK Mul = WHILE 2 + TNEXT REPEAT ;
+\ Each star moves DQ up a level, and its own const/volatile follow it.
+: (STARS) ( t -- t' )
+   BEGIN
+      TK Mul = IF 2 + DQ @ 2 LSHIFT DQ ! TNEXT 1 ELSE
+      TK Const = IF DQ @ 1 OR DQ ! TNEXT 1 ELSE
+      TK Volatile = IF DQ @ 2 OR DQ ! TNEXT 1 ELSE 0 THEN THEN THEN
+   WHILE REPEAT ;
 ' (STARS) IS STARS
-: (PARSE-TYPE) ( -- t )  BASE-TYPE STARS ;
+: (PARSE-TYPE) ( -- t )  BASE-TYPE  BQ @ DQ !  STARS ;
 ' (PARSE-TYPE) IS PARSE-TYPE
 : SKIP-TYPE PARSE-TYPE DROP ;
 
@@ -221,7 +257,10 @@ CREATE SLBUF 8192 ALLOT
    d n ;
 
 : PRIMARY ( -- node ) {: | s a u v k nd ct -- n :}
-   TK Num = IF TV TNEXT n_num N1 EXIT THEN
+   TK Num = IF TV TNEXT t_int NUM-OF EXIT THEN
+   TK NUMK? IF
+      TV TK LIT-TYPE TO ct
+      TV  ct t_uint = IF M32 AND THEN  ct NUM-OF  TNEXT EXIT THEN
    TK Str = IF STR-LIT n_str N2 EXIT THEN
    \ sizeof(type) folds to a constant, and so does sizeof(array): the
    \ operand is a NAME rather than a type exactly when it lexes as an
@@ -242,16 +281,16 @@ CREATE SLBUF 8192 ALLOT
          ELSE ." c4fc: undeclared " a u TYPE CR ABORT THEN
       THEN
          s y.sz @ 0= IF ." c4fc: sizeof needs an array: " a u TYPE CR ABORT THEN
-         s y.sz @  Rparen WANT  n_num N1 EXIT
+         s y.sz @  Rparen WANT  t_int NUM-OF EXIT
       THEN
-      PARSE-TYPE T-SIZE  Rparen WANT  n_num N1 EXIT
+      PARSE-TYPE T-SIZE  Rparen WANT  t_int NUM-OF EXIT
    THEN
    TK Lparen = IF
       TNEXT
       TYPE? IF
-         PARSE-TYPE TO ct   Rparen WANT   13 EXPR TO nd
-         n_cast 3 CELLS NEW TO v
-         nd v >expr !  ct v >ctype !  v EXIT THEN
+         PARSE-TYPE TO ct   DQ @ TO k   Rparen WANT   13 EXPR TO nd
+         n_cast 4 CELLS NEW TO v
+         nd v >expr !  ct v >ctype !  k v >cq !  v EXIT THEN
       1 EXPR TO nd
       TK Comma = IF
          16 CELLS ALLOT: TO v   nd v !  1 TO k
@@ -279,7 +318,7 @@ CREATE SLBUF 8192 ALLOT
          s nd >fn !  v nd >args !  k nd >argn !
          nd EXIT
       THEN
-      s y.class @ c_const = IF s y.val @ n_num N1 EXIT THEN
+      s y.class @ c_const = IF s y.val @ t_int NUM-OF EXIT THEN
       \ A function's name used as a value: its address escapes here, and
       \ this is the only place that can happen. Recording it HERE is why
       \ the inliner needs no walker to find address-taken functions --
@@ -302,11 +341,12 @@ CREATE SLBUF 8192 ALLOT
    TV TO a  TL TO u  Id WANT
    k a u MEM-FIND TO i
    i 0< IF ." c4fc: no such member: " a u TYPE CR ABORT THEN
-   n_member 5 CELLS NEW TO nd
+   n_member 6 CELLS NEW TO nd
    b nd >lhs !
    i CELLS MB-OFF  + @ nd >moff !
    i CELLS MB-TYPE + @ nd >mtype !
    i CELLS MB-AGG  + @ nd >magg !
+   i CELLS MB-QUAL + @ nd >mq !
    nd ;
 
 : POSTFIX ( -- node ) {: | n -- n :}
@@ -331,7 +371,7 @@ CREATE SLBUF 8192 ALLOT
    TK Not   = IF TNEXT 13 EXPR n_not   N1 EXIT THEN
    TK Tilde = IF TNEXT 13 EXPR n_bnot  N1 EXIT THEN
    TK Sub   = IF TNEXT
-                 TK Num = IF TV NEGATE TNEXT n_num N1 EXIT THEN
+                 TK Num = IF TV NEGATE TNEXT t_int NUM-OF EXIT THEN
                  13 EXPR n_neg N1 EXIT THEN
    TK Add   = IF TNEXT 13 EXPR EXIT THEN            \ unary plus is nothing
    TK Mul   = IF TNEXT 13 EXPR n_deref N1 EXIT THEN
@@ -375,18 +415,18 @@ DEFER STATEMENT                         \ blocks and statements nest
 \ its name stands for the address of the LOWEST one -- locals grow
 \ downwards, so int a[4] as the first local is slots 1..4 and a is
 \ LEA -4.
-: LOCAL-DECLS ( v -- ) {: v | ct dt t a u sz ag na iv ivn y nd nn -- :}
+: LOCAL-DECLS ( v -- ) {: v | ct dt t a u sz ag na iv ivn y nd nn bq q -- :}
    BEGIN TYPE? WHILE
-      BASE-TYPE TO ct
+      BASE-TYPE TO ct   BQ @ TO bq
       BEGIN
-         ct STARS TO dt
+         bq DQ !  ct STARS TO dt   DQ @ TO q
          TV TO a  TL TO u  Id WANT
          dt TO t   0 TO sz   0 TO ag   -1 TO na
          TK Brak = IF
             TNEXT
             TK Rbrak = IF -1 TO na ELSE CONST-EXPR TO na THEN
             Rbrak WANT
-            1 TO ag   dt 2 + TO t
+            1 TO ag   dt 2 + TO t   q 2 LSHIFT TO q
          ELSE
             dt T-STRUCT? IF dt T-SIZE TO sz THEN
          THEN
@@ -422,12 +462,15 @@ DEFER STATEMENT                         \ blocks and statements nest
             sz 1 CELLS 1- + 1 CELLS / NLOC +!
             a u c_loc NLOC @ NEGATE t 1 sz ST,
          THEN
+         q ST-LAST y.q !
          nd 0<> ivn 0<> OR IF
             STN @ 1- ST[] TO y
             n_linit 7 CELLS NEW TO nn
             nd nn >expr !  y nn >isym !  iv nn >ivals !  ivn nn >ivn !
             ag IF na ELSE -1 THEN nn >icount !
-            dt t_char = ag AND nn >ibyte !
+            \ how an element is stored: 1 a byte, 2 two bytes, 0 a word
+            ag IF dt T-BYTE? IF 1 ELSE dt T-HALF? IF 2 ELSE 0 THEN THEN
+            ELSE 0 THEN nn >ibyte !
             nn v V,
          THEN
          TK Comma = WHILE TNEXT
@@ -539,7 +582,7 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
             0
          ELSE
             PARSE-TYPE TO ct
-            TV TL c_loc 0 ct 0 0 ST,   n 1+ TO n
+            TV TL c_loc 0 ct 0 0 ST,   DQ @ ST-LAST y.q !   n 1+ TO n
             Id WANT
             TK Comma =
          THEN
@@ -553,6 +596,19 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
 \ Skip a function body at the TOKEN level -- no parse, so no string
 \ literal is allocated and no symbol is made. A dead function has to
 \ cost nothing at all, not merely emit nothing.
+\ The parameters' types and masks, as two arrays of n cells: what a call
+\ needs for the const check (M4), and what PREREGISTER carries across
+\ the two passes.
+: PSIG ( base n -- pt pq ) {: b n | pt pq -- pt pq :}
+   n 1 MAX CELLS ALLOT: TO pt   n 1 MAX CELLS ALLOT: TO pq
+   n 0 ?DO
+      b I + ST[] y.ct @  pt I CELLS + !
+      b I + ST[] y.q @   pq I CELLS + !
+   LOOP
+   pt pq ;
+: SIG! ( y rq pt pq -- ) {: y rq pt pq -- :}
+   rq y y.rq !  pt y y.pt !  pq y y.pq ! ;
+
 : SKIP-BODY ( -- ) {: | d -- :}
    0 TO d
    BEGIN
@@ -563,8 +619,8 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
       d 0=
    UNTIL ;
 
-: FUNCTION ( a u ct sc at -- )
-   {: a u ct sc at | base body y n va base0 fi entp inlsv sn bodytp -- :}
+: FUNCTION ( a u ct sc at rq -- )
+   {: a u ct sc at rq | base body y n va base0 fi entp inlsv sn bodytp pt pq -- :}
    STN @ TO base0
    a u ST-FIND TO y
    y 0= IF
@@ -574,12 +630,15 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
    STN @ TO base   0 NLOC !
    PARAMS TO va TO n
    va y y.va !   n va - y y.nfix !
+   base n va - PSIG TO pq TO pt
    \ Recorded from the PROTOTYPE as well as the definition: a variadic
    \ call site needs __c4cc_make_va, and a unit that only declares it --
    \ every C4IX module does -- still calls it.
    a u S" __c4cc_make_va" NAME=? IF y VA-MAKE ! THEN
    TK Semi = IF                              \ a prototype and nothing more
       TNEXT
+      \ a definition's signature wins over a prototype's, as in c4lc
+      y y.pt @ 0= IF y rq pt pq SIG! THEN
       COLLECT @ IF a u ct va PROTO, THEN
       OBJECT @ COLLECT @ 0= AND IF
          a u EXT-FIND TO fi
@@ -593,6 +652,7 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
          1 NDROP +!  SKIP-BODY  base0 STN !  EXIT THEN
    THEN
    CHERE y y.val !
+   y rq pt pq SIG!
    a u S" main" NAME=? IF CHERE ENTRY ! THEN
    \ 0x20 marks a variadic function, which is one byte and the last
    \ difference to fall out of the whole of F7.
@@ -606,6 +666,7 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
    COLLECT @ IF
       a u FN-DEF TO fi
       fi ct  n va -  va FN-SIG!
+      fi rq pt pq FN-SIG2!
       a u DG-DEF
       at 3 AND IF a u ROOT, THEN
       \ In object mode every non-static function is exported, so every
@@ -627,6 +688,7 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
    \ describes is a contract with code elsewhere, and a splice grows it.
    INLINING @ TO inlsv
    a u ATK? IF 0 INLINING ! THEN
+   a u FN-NAME!  ct rq FN-RET!
    body STMT
    inlsv INLINING !
    NLOC @ entp 1+ CELLS CODE @ + !
@@ -701,29 +763,33 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
 \ and then, because region 1 begins at zero.
 256 CONSTANT IVMAX
 CREATE IVAL IVMAX CELLS ALLOT
-: INIT-WRITE ( off elemtype n -- ) {: off et n -- :}
+: INIT-WRITE ( off elemtype n -- ) {: off et n | v -- :}
    n 0 ?DO
-      IVAL I CELLS + @
-      et t_char = IF off I + ID-C! ELSE off I CELLS + ID-! THEN
+      IVAL I CELLS + @ TO v
+      et T-BYTE? IF v off I + ID-C! ELSE
+      et T-HALF? IF
+         v 255 AND  off I 2* + ID-C!
+         v 8 RSHIFT 255 AND  off I 2* 1+ + ID-C!
+      ELSE v off I CELLS + ID-! THEN THEN
    LOOP ;
 
-: DECL {: | a u ct dt t n sz ag sc at y ivn off es fa fu fr fs fx fk -- :}
+: DECL {: | a u ct dt t n sz ag sc at y ivn off es fa fu fr fs fx fk bq q ce -- :}
    TK Enum = IF ENUM-DECL EXIT THEN
    STORAGE TO sc
    TYPE? 0= IF ." c4fc: a declaration was expected" CR ABORT THEN
-   BASE-TYPE TO ct
+   BASE-TYPE TO ct   BQ @ TO bq
    ATTRS TO at
    TK Semi = IF TNEXT EXIT THEN         \ a struct definition and nothing more
    BEGIN
-      ct STARS TO dt
+      bq DQ !  ct STARS TO dt   DQ @ TO q
       TV TO a  TL TO u  Id WANT
-      TK Lparen = IF a u dt sc 0 MAX at FUNCTION EXIT THEN
-      dt TO t   0 TO ag   1 CELLS TO sz   -1 TO n   0 TO ivn   dt TO es
+      TK Lparen = IF a u dt sc 0 MAX at q FUNCTION EXIT THEN
+      dt TO t   0 TO ag   1 CELLS TO sz   -1 TO n   0 TO ivn   dt TO es   0 TO ce
       TK Brak = IF
          TNEXT
          TK Rbrak = IF 0 TO n ELSE CONST-EXPR TO n THEN
          Rbrak WANT
-         dt 2 + TO t   1 TO ag
+         dt 2 + TO t   1 TO ag   q 2 LSHIFT TO q
       ELSE
          dt T-STRUCT? IF dt T-SIZE TO sz  1 TO ag THEN
       THEN
@@ -760,20 +826,27 @@ CREATE IVAL IVMAX CELLS ALLOT
             REPEAT
             Rbrace WANT
          ELSE
-            CONST-EXPR IVAL !  1 TO ivn
+            CONST-EXPR IVAL !  1 TO ivn  1 TO ce
          THEN THEN THEN
          ag IF
             n 1 < IF ivn TO n THEN
             n es T-SIZE * TO sz
          THEN
          sz ID-ALLOT TO off
-         off es ivn INIT-WRITE
+         \ a scalar is a whole word, as c4lc writes it: a negative char
+         \ or short is sign-extended through all of it
+         off  ag IF es ELSE t_int THEN  ivn INIT-WRITE
          fr 0< 0= IF off fr FNPAT, THEN
          fs 0< 0= IF off fs STRPAT, THEN
          \ an aggregate records its byte size whether or not it was
          \ initialised, because sizeof(name) is answered from it
          a u c_glo off t ag  ag IF sz ELSE 0 THEN  ST,   \ region 1: final
-         STN @ 1- ST[] TO y   1 y y.ini !  sc 0 MAX y y.sc !
+         STN @ 1- ST[] TO y   1 y y.ini !  sc 0 MAX y y.sc !   q y y.q !
+         \ a static const scalar with a constant initialiser is a
+         \ constant from here on (CPRIMARY); it keeps its storage
+         sc 8 = q 1 AND 0<> AND ag 0= AND ce AND dt T-ARITH? AND IF
+            1 y y.cv !  IVAL @ dt CONVVAL y y.cval !  dt T-PROMOTE y y.cty !
+         THEN
       ELSE
          ag IF n 1 < IF 1 TO n THEN n es T-SIZE * TO sz THEN
          \ `extern int x;` with no initialiser declares nothing here.
@@ -790,7 +863,7 @@ CREATE IVAL IVMAX CELLS ALLOT
             a u EXT-FIND TO fk
             fk 0< 0= a u ST-FIND 0= AND IF
                a u c_extg fk t ag sz ST,
-               STN @ 1- ST[] TO y   0 y y.sc !
+               STN @ 1- ST[] TO y   0 y y.sc !   q y y.q !
             THEN
             1 TO fx
          THEN
@@ -801,7 +874,7 @@ CREATE IVAL IVMAX CELLS ALLOT
             y IF y y.class @ c_glo <> IF 0 TO y THEN THEN
             y 0= IF
                a u c_glo NGLO @ t ag sz ST,
-               STN @ 1- ST[] TO y   sc 0 MAX y y.sc !
+               STN @ 1- ST[] TO y   sc 0 MAX y y.sc !   q y y.q !
                1 NGLO +!
             THEN
          THEN
@@ -821,6 +894,7 @@ CREATE IVAL IVMAX CELLS ALLOT
          I CELLS FN-T + @  0 0 ST,
          STN @ 1- ST[] TO y
          I CELLS FN-V + @ y y.va !   I CELLS FN-N + @ y y.nfix !
+         y  I CELLS FN-RQ + @  I CELLS FN-PT + @  I CELLS FN-PQ + @  SIG!
       THEN
    LOOP ;
 
@@ -857,6 +931,7 @@ CREATE GOFF GMAX CELLS ALLOT
 
 : PROGRAM
    BEGIN TK Eof <> WHILE DECL REPEAT
+   EMIT-HELPERS                         \ M4: after the last function, as c4lc
    FIX-FORWARDS
    PLACE-GLOBALS
    DB2 @ EMIT-TABPATS ;

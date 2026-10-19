@@ -718,11 +718,29 @@ parameter, and a value returned as one, is wrapped in a cast (`t:cwrap`).
 The six new words lex as identifiers in `-P` mode and become keywords
 after expansion (`pp:kwfix`) — C's own phase order — because a header
 can `#define` them: `include/stddef.h` says `#define unsigned` (to
-nothing) and `#define long int` under `__c4cc__`. A program that wants
-the real `unsigned` therefore must not include stdio.h/stdlib.h, which
-pull in stddef.h (follow-up: guard those defines). `-D NAME=VALUE` no
-longer leaves the lexer's `Eof` inside the macro, which made `#if N ==
-1` misread.
+nothing) and `#define long int` under `__c4cc__`, for c4cc.
+
+Those two defines are guarded by `#ifndef __c4_inttypes__`, and c4lc's
+preprocessor predefines `__c4_inttypes__=1` before any `-D`
+(`pp:builtins`, run when c4lc-pp.lisp loads); c4fc's `PP-RESET` does
+the same. So stdio.h, stdlib.h and stdarg.h, which pull in stddef.h, no
+longer take `unsigned` away — and `unsigned long` is `ulong`, not `int`.
+A `gcc -E` whose output goes to c4lc or c4fc stands in for that
+preprocessor and passes it too: `$(PREPROC_LC)` in the Makefile is
+`$(PREPROC) -D__c4_inttypes__=1`, used by every rule that pipes gcc -E
+into c4lc or c4fc (the c4lc -P / gcc -E object identity on vfs.c and
+test-c4fc's preprocessor and codegen sweeps among them). `$(PREPROC)`
+alone still feeds c4cc, and the c4cc-vs-c4lc runtime differentials,
+which compile the same text with both. c4dos's `cpp` does not define
+it (nor does build-images.sh's `$PREPROC`, which feeds c4cc32; its
+`$PREPROC_LC` feeds c4lc). Every image c4lc builds was checked
+byte-identical across the change: the sources it reaches use `long`,
+which was `int` before and is `int` now. c4sc.c4r is the exception by
+design — it is c4lc's preprocessor compiled, so it gains the builtin
+too.
+
+`-D NAME=VALUE` no longer leaves the lexer's `Eof` inside the macro,
+which made `#if N == 1` misread.
 
 ### 14.6 Tests (test-c4lc, test-c4fc, test-c4sc-back, test-libjs)
 
@@ -736,3 +754,12 @@ longer leaves the lexer's `Eof` inside the macro, which made `#if N ==
   `src/tests/c4lc_m4e.c` (nine refused writes, `-P -D CASE=n`).
 - `src/tests/c4lc_m4v.c` — volatile, above.
 - All three are in `C4FC_GEN_SWEEP` and `C4SC_BACK_DIFF`.
+- `src/tests/c4lc_m4std.c` — unsigned compares, division, shifts,
+  wraparound, `unsigned long` and a CRC32 in a file that includes
+  stdio.h and stdlib.h; golden `c4lc-m4std.txt` is gcc's and does not
+  depend on the word size. test-c4lc runs it through `$(PREPROC_LC)`
+  (c4lc's own preprocessor refuses stdarg.h's function-like macro named
+  without arguments) at 64 and 32 bits, plain and `-O`, and through
+  `c4lc -P -D STDDEF_ONLY` (stddef.h alone); test-c4fc compiles it with
+  c4fc's own `-P` and runs it, and `C4FC_GEN_SWEEP` holds that image to
+  c4lc's.

@@ -671,9 +671,6 @@ DIRECTIVE  error   D-ERROR
 
 \ -- entry points -------------------------------------------------------
 
-: PP-RESET ( -- )
-   MACROS 256 VEC-INIT  0 CDEPTH !  0 #INCL !  0 #PATHS !  0 SPLN ! ;
-
 \ -D NAME   or   -D NAME=VALUE
 : PP-DEFINE ( a u -- ) {: a u | e -- :}
    0 TO e
@@ -683,6 +680,14 @@ DIRECTIVE  error   D-ERROR
    ELSE
       a e 0  a e + 1+  u e - 1-  LEX-STR>V V-NOEOF MAC-DEF
    THEN ;
+
+\ What is defined before any -D, as c4lc-pp.lisp's pp:builtins.
+\ __c4_inttypes__: signed, unsigned, short and long are real types
+\ here (M4), so stddef.h must not #define them away as it does for
+\ c4cc. A gcc -E standing in for this passes it as -D (PREPROC_LC).
+: PP-RESET ( -- )
+   MACROS 256 VEC-INIT  0 CDEPTH !  0 #INCL !  0 #PATHS !  0 SPLN !
+   S" __c4_inttypes__=1" PP-DEFINE ;
 
 : PP-FILE ( a u -- )                      \ preprocess that file into TOKS
    1 PPMODE !

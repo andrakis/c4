@@ -39,6 +39,7 @@ detail behind it. Each doc is one of three kinds:
 | [task-memory.md](task-memory.md) | reference | What a C4KE task owns, and who gives it back |
 | [c4ix-design.md](c4ix-design.md) | reference | C4IX: why it exists, its modules, syscalls and milestones |
 | [c4ix-desktop.md](c4ix-desktop.md) | tracker (done) | The C4IX desktop on libjs |
+| [busybox-port.md](busybox-port.md) | tracker | Busybox compiled by c4lc for C4IX: the measured compiler, kernel and libc gaps, and the order of work |
 | [c4dos-design.md](c4dos-design.md) | reference | C4DOS: the trap-free DOS, its API table and floppies |
 | [climbing-the-ladder.md](climbing-the-ladder.md) | reference | The ladder by hand on the breadboard: C4DOS → C4KE → C4IX, each built by the one before |
 | [ladder-plan.md](ladder-plan.md) | history | The completed plan for the ladder: the DOS → C4KE hand-over and C4IX built in the machine |

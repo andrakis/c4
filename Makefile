@@ -48,6 +48,12 @@ NATIVE_TARGETS := c4 c4m c4cc
 # We also define the following symbols, which TODO needd to be narrowed down to a single
 # definition instead of the 4 we have.
 PREPROC   := gcc -E -Iinclude -I. -DC4CC=1 -D__c4__=1 -D__C4CC__=1 -D__c4cc__=1 -C
+# c4lc's and c4fc's own preprocessors predefine __c4_inttypes__ (they
+# have real unsigned/short/long, so stddef.h leaves those words alone).
+# A gcc -E whose output goes to c4lc or c4fc stands in for that
+# preprocessor and must say the same; one feeding c4cc must not.
+C4_INTTYPES := -D__c4_inttypes__=1
+PREPROC_LC  := $(PREPROC) $(C4_INTTYPES)
 # Our own preprocessor (src/c4dos/cpp.c), pinned byte-identical against
 # gcc -E over the whole corpus by src/c4dos/tests/test-cpp.sh. Used
 # wherever a build has to ANSWER a #if rather than skip it -- see the
@@ -593,7 +599,7 @@ $(C4DOS_DISK32): hello32.c4r raycast-dos32.c4r \
 # first because c4lc's own preprocessor hangs on u0.h -- a pre-existing
 # issue that reproduces at 64 bits too.
 vfsload.c4r: c4sp $(C4LC_LISP) $(BIN_D)/vfsload.c $(U0)
-	$(PREPROC) $(BIN_D)/vfsload.c > .vfsload_pp.c
+	$(PREPROC_LC) $(BIN_D)/vfsload.c > .vfsload_pp.c
 	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O .vfsload_pp.c $@ > /dev/null
 	@rm -f .vfsload_pp.c
 
@@ -1053,7 +1059,7 @@ test-c4sc-front: c4sc-host c4sp
 	@fail=0; for m in $(C4IX_MODS); do \
 	   f=$(C4IX_SRC)/$$m.c; \
 	   gcc -E -Iinclude -I. -I$(C4IX_SRC) -DC4CC=1 -D__c4__=1 -D__C4CC__=1 \
-	       -D__c4cc__=1 -C $$f > .c4sc_g.i 2>/dev/null || exit 1; \
+	       -D__c4cc__=1 $(C4_INTTYPES) -C $$f > .c4sc_g.i 2>/dev/null || exit 1; \
 	   ./c4sc-host -c 8000000 pptok .c4sc_g.i > .c4sc_a.txt 2>&1; \
 	   ./c4sc-host -c 8000000 pp -I include -I . -I $(C4IX_SRC) \
 	       -D C4CC=1 -D __c4__=1 -D __C4CC__=1 -D __c4cc__=1 -D __GNUC__=1 \
@@ -1068,7 +1074,7 @@ test-c4sc-front: c4sc-host c4sp
 	head -n -1 $(SRCS)/c4sp/tests/expected/c4lc-ast.txt | cmp - .c4sc_ast.txt
 	@fail=0; for m in $(C4IX_MODS); do \
 	   gcc -E -Iinclude -I. -I$(C4IX_SRC) -DC4CC=1 -D__c4__=1 -D__C4CC__=1 \
-	       -D__c4cc__=1 -C $(C4IX_SRC)/$$m.c > .c4sc_g.i 2>/dev/null; \
+	       -D__c4cc__=1 $(C4_INTTYPES) -C $(C4IX_SRC)/$$m.c > .c4sc_g.i 2>/dev/null; \
 	   a=`./c4sc-host -c 16000000 ast -check .c4sc_g.i 2>&1 | tail -1`; \
 	   b=`./c4sp -R -c 16000000 $(SRCS)/c4sp/lisp/c4lc-ast.lisp -check .c4sc_g.i 2>&1 | head -1`; \
 	   [ "$$a" = "$$b" ] || { echo "test-c4sc-front: parse differs on $$m"; fail=1; continue; }; \
@@ -1129,7 +1135,7 @@ test-c4sc-back: c4sc-host c4sp $(C4RLINK) $(C4M)
 C4SC_UNITS := opt lex pp parse c4r tree gen
 c4sc.c4r: c4sp $(C4LC_LISP) $(C4RLINK) $(C4SC_GEN) src/c4sc/c4sc-main.c \
           src/c4sc/body.h src/c4sc/host.h src/c4sc/scrt.h
-	$(PREPROC) -DC4SP_DOS=1 src/c4sc/c4sc-main.c > .c4sc_main.c
+	$(PREPROC_LC) -DC4SP_DOS=1 src/c4sc/c4sc-main.c > .c4sc_main.c
 	$(C4SPLC) $(SRCS)/c4sp/lisp/c4lc.lisp -O -c .c4sc_main.c .c4sc_o_main.c4o > /dev/null
 	@for u in $(C4SC_UNITS); do \
 	   echo "  unit: $$u"; \
@@ -1209,7 +1215,7 @@ test-c4sc-self: c4sc-self $(C4SC_GEN)
 # well, and that is the one the byte-identity check uses.
 c4sc32.c4r: c4sp32 c4rlink32 $(C4LC_LISP) $(C4SC_GEN) src/c4sc/c4sc-main.c \
             src/c4sc/body.h src/c4sc/host.h src/c4sc/scrt.h
-	$(PREPROC) -DC4SP_DOS=1 src/c4sc/c4sc-main.c > .c4sc32_main.c
+	$(PREPROC_LC) -DC4SP_DOS=1 src/c4sc/c4sc-main.c > .c4sc32_main.c
 	./c4sp32 -R -c 33554432 $(SRCS)/c4sp/lisp/c4lc.lisp -O -c .c4sc32_main.c .c4sc32_o_main.c4o > /dev/null
 	@for u in $(C4SC_UNITS); do \
 	   echo "  unit: $$u"; \
@@ -1633,7 +1639,7 @@ C4FC_GEN_SWEEP := hello multifun puts reverse test_basic test_continue \
                   test_coop_switch test_globals test-order test-ptrs \
                   test_static test_switch tests c4lc_l2 global \
                   test_gcscan vararg2 test_vprintf c4_jailbreak \
-                  c4lc_m4 c4lc_m4q c4lc_m4v
+                  c4lc_m4 c4lc_m4q c4lc_m4v c4lc_m4std
 
 test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c $(C4RDUMP)
 	./c4th $(C4FC_LIB) src/c4fc/tests/dsl.f | cmp - src/c4fc/tests/expected/dsl.txt
@@ -1709,7 +1715,7 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c $(C4RDUMP)
 	# passes.
 	@for spec in $(C4FC_PP_SWEEP); do \
 	   f=$${spec%%:*}; inc=$${spec##*:}; \
-	   gcc -E -Iinclude -I. -I$$inc -DC4CC=1 -D__c4__=1 -D__C4CC__=1 -D__c4cc__=1 -C $$f > .c4fc_pp.c 2>/dev/null || exit 1; \
+	   gcc -E -Iinclude -I. -I$$inc -DC4CC=1 -D__c4__=1 -D__C4CC__=1 -D__c4cc__=1 $(C4_INTTYPES) -C $$f > .c4fc_pp.c 2>/dev/null || exit 1; \
 	   ./c4th $(C4FC_LIB) src/c4fc/pp.f -e ": GO 200000000 ARENA-INIT S\" .c4fc_pp.c\" LEX-FILE DUMP-PPTOKENS ; GO" > .c4fc_a.txt 2>&1; \
 	   ./c4th $(C4FC_LIB) src/c4fc/pp.f -e ": GO 200000000 ARENA-INIT PP-RESET S\" include\" PP-PATH S\" .\" PP-PATH S\" $$inc\" PP-PATH S\" C4CC=1\" PP-DEFINE S\" __c4__=1\" PP-DEFINE S\" __C4CC__=1\" PP-DEFINE S\" __c4cc__=1\" PP-DEFINE S\" __GNUC__=1\" PP-DEFINE S\" $$f\" PP-FILE DUMP-PPTOKENS ; GO" > .c4fc_b.txt 2>&1; \
 	   cmp -s .c4fc_a.txt .c4fc_b.txt \
@@ -1732,7 +1738,7 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c $(C4RDUMP)
 	# of them a construct the spikes never wrote and every real header
 	# does.
 	@for t in $(C4FC_GEN_SWEEP); do \
-	   gcc -E -Iinclude -I. -DC4CC=1 -D__c4__=1 -D__C4CC__=1 -D__c4cc__=1 -C \
+	   gcc -E -Iinclude -I. -DC4CC=1 -D__c4__=1 -D__C4CC__=1 -D__c4cc__=1 $(C4_INTTYPES) -C \
 	      $(TESTS)/$$t.c > .c4fc_pp.c 2>/dev/null; \
 	   ./c4sp src/c4sp/lisp/c4lc.lisp .c4fc_pp.c .c4fc_lc.c4r >/dev/null 2>&1 \
 	     || { echo "test-c4fc: c4lc could not compile $$t"; exit 1; }; \
@@ -1751,7 +1757,7 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c $(C4RDUMP)
 	# BYTE-IDENTICAL to c4lc's, and the c4th that comes out passes the
 	# Forth-2012 CORE suite with the same transcript the pinned golden
 	# holds. The Forth compiles the C compiler that compiles the Forth.
-	$(PREPROC) -I src/c4th/include src/c4th/c4th.c > .c4fc_pp.c
+	$(PREPROC_LC) -I src/c4th/include src/c4th/c4th.c > .c4fc_pp.c
 	./c4sp src/c4sp/lisp/c4lc.lisp .c4fc_pp.c .c4fc_lc.c4r > /dev/null
 	./c4th $(C4FC_ALL) -e ': GO C4FC-INIT -P S" include" -I S" ." -I S" src/c4th/include" -I S" C4CC=1" -D S" __c4__=1" -D S" __C4CC__=1" -D S" __c4cc__=1" -D S" __GNUC__=1" -D S" src/c4th/c4th.c" C4FC ; GO' > .c4fc_fc.c4r
 	cmp .c4fc_lc.c4r .c4fc_fc.c4r
@@ -1769,7 +1775,7 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c $(C4RDUMP)
 	# c4lc side because c4lc's own preprocessor cannot read it -- a
 	# function-like macro named without an argument list is an error
 	# there and stands for itself here, which is what C says.
-	$(PREPROC) -I src/c4ke src/c4ke/c4ke.c > .c4fc_pp.c
+	$(PREPROC_LC) -I src/c4ke src/c4ke/c4ke.c > .c4fc_pp.c
 	./c4sp src/c4sp/lisp/c4lc.lisp -O .c4fc_pp.c .c4fc_lc.c4r > /dev/null
 	./c4th $(C4FC_ALL) -e ': GO 1 OPTIMIZE ! C4FC-INIT -P S" include" -I S" ." -I S" src/c4ke" -I S" C4CC=1" -D S" __c4__=1" -D S" __C4CC__=1" -D S" __c4cc__=1" -D S" src/c4ke/c4ke.c" C4FC ; GO' > .c4fc_fc.c4r
 	cmp .c4fc_lc.c4r .c4fc_fc.c4r
@@ -1852,6 +1858,13 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c $(C4RDUMP)
 	     || { echo "test-c4fc: c4lc_m4v.c ($$m) computes something else"; exit 1; }; \
 	 done
 	@echo "  m4 volatile: every access survives c4fc -O and -minline"
+	# ... and through the standard headers: stdio.h includes stddef.h,
+	# which takes unsigned and long away from c4cc but not from c4fc
+	# (__c4_inttypes__). C4FC_GEN_SWEEP pins the image to c4lc's; this
+	# pins what it computes to gcc's.
+	./c4th $(C4FC_ALL) -e ': GO C4FC-INIT -P S" include" -I S" ." -I S" C4CC=1" -D S" __c4__=1" -D S" __C4CC__=1" -D S" __c4cc__=1" -D S" $(TESTS)/c4lc_m4std.c" C4FC ; GO' > .c4fc_fc.c4r
+	$(C4M) load-c4r.c -- .c4fc_fc.c4r | cmp - src/c4sp/tests/expected/c4lc-m4std.txt
+	@echo "  m4 std headers: unsigned survives stdio.h under c4fc"
 	@rm -f .c4fc_lex.txt .c4fc_a.txt .c4fc_b.txt .c4fc_lc.c4r .c4fc_fc.c4r
 	@rm -f .c4fc_o0.c4r .c4fc_o1.c4r .c4fc_o2.c4r .c4fc_r0 .c4fc_r1 .c4fc_pp.c
 	@echo "test-c4fc: OK"
@@ -1934,7 +1947,7 @@ run-c4dos-c4fc: c4dos32.c4r $(C4DOS_FC_DISK)
 # c4lc's object -- see docs/c4fc-design.md. Not a routine test: it takes
 # five and a half minutes on the board.
 c4th32.c4r: c4sp32 $(C4LC_LISP) $(C4TH_SRCS)
-	$(PREPROC) -I src/c4th/include src/c4th/c4th.c > .c4th32_pp.c
+	$(PREPROC_LC) -I src/c4th/include src/c4th/c4th.c > .c4th32_pp.c
 	./c4sp32 -R src/c4sp/lisp/c4lc.lisp -O .c4th32_pp.c $@ > /dev/null
 	rm -f .c4th32_pp.c
 
@@ -1998,7 +2011,7 @@ c4sp: $(C4SP_SRCS)
 # and this is the c4sp that every hosted run uses -- under c4m, inside
 # C4KE, and on c4bb -- so it is the one whose size and speed are felt.
 c4sp.c4r: c4sp $(C4LC_LISP) $(C4SP_SRCS)
-	$(PREPROC) -DC4SP_DOS=1 src/c4sp/c4sp.c > .c4sp_lcpp.c
+	$(PREPROC_LC) -DC4SP_DOS=1 src/c4sp/c4sp.c > .c4sp_lcpp.c
 	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O .c4sp_lcpp.c c4sp.c4r > /dev/null
 	rm -f .c4sp_lcpp.c
 # c4sp test, three parts:
@@ -2132,15 +2145,15 @@ C4LC_LISP := src/c4sp/lisp/c4lc.lisp src/c4sp/lisp/c4lc-lex.lisp \
 # measurements. Not part of the default build -- swap them in by
 # copying over c4ke.c4r / c4sp.c4r / c4m.c4r.
 c4ke-lc.c4r: c4sp $(C4LC_LISP) $(SRCS)/c4ke/c4ke.c
-	$(PREPROC) $(SRCS)/c4ke/c4ke.c > .c4lc_klc.c
+	$(PREPROC_LC) $(SRCS)/c4ke/c4ke.c > .c4lc_klc.c
 	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O .c4lc_klc.c c4ke-lc.c4r
 	rm -f .c4lc_klc.c
 c4sp-lc.c4r: c4sp $(C4LC_LISP) $(C4SP_SRCS)
-	$(PREPROC) -DC4SP_DOS=1 src/c4sp/c4sp.c > .c4lc_klc.c
+	$(PREPROC_LC) -DC4SP_DOS=1 src/c4sp/c4sp.c > .c4lc_klc.c
 	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O .c4lc_klc.c c4sp-lc.c4r
 	rm -f .c4lc_klc.c
 c4m-lc.c4r: c4sp $(C4LC_LISP) c4m.c
-	$(PREPROC) c4m.c > .c4lc_klc.c
+	$(PREPROC_LC) c4m.c > .c4lc_klc.c
 	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O .c4lc_klc.c c4m-lc.c4r
 	rm -f .c4lc_klc.c
 
@@ -2154,7 +2167,7 @@ oisc4: $(OISC4)
 # OISC4 compiled by c4lc: runs nested under c4m, plain c4 (via c4l.c),
 # or oisc4 itself (OISC on OISC).
 oisc4-lc.c4r: c4sp $(C4LC_LISP) src/oisc4/oisc4.c
-	$(PREPROC) src/oisc4/oisc4.c > .c4lc_o4.c
+	$(PREPROC_LC) src/oisc4/oisc4.c > .c4lc_o4.c
 	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O .c4lc_o4.c oisc4-lc.c4r
 	rm -f .c4lc_o4.c
 test-oisc4: $(OISC4) $(C4M) c4.c4r c4sp.c4r $(TESTS_C4R)
@@ -2179,7 +2192,7 @@ c4sp32: $(C4SP_SRCS)
 # tools a system on that machine has to reach for, so they have to be
 # images the machine can load, not host binaries.
 c4sp32.c4r: c4sp32 $(C4LC_LISP) $(C4SP_SRCS)
-	$(PREPROC) -DC4SP_DOS=1 src/c4sp/c4sp.c > .c4sp32_lcpp.c
+	$(PREPROC_LC) -DC4SP_DOS=1 src/c4sp/c4sp.c > .c4sp32_lcpp.c
 	./c4sp32 -R src/c4sp/lisp/c4lc.lisp -O .c4sp32_lcpp.c c4sp32.c4r > /dev/null
 	rm -f .c4sp32_lcpp.c
 cpp32.c4r: c4cc32 include/c4dos.h $(SRCS)/c4dos/cpp.c
@@ -3025,7 +3038,7 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	# with c4lc instead of gcc -E must produce the SAME OBJECT, byte
 	# for byte. If that holds, gcc is no longer in the pipeline.
 	./c4sp src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix src/c4ix/vfs.c .c4lc_oa2.c4o > /dev/null
-	$(PREPROC) src/c4ix/vfs.c > .c4lc_pp.c
+	$(PREPROC_LC) src/c4ix/vfs.c > .c4lc_pp.c
 	./c4sp src/c4sp/lisp/c4lc.lisp -O -c .c4lc_pp.c .c4lc_ob2.c4o > /dev/null
 	cmp .c4lc_oa2.c4o .c4lc_ob2.c4o
 	rm -f .c4lc_oa2.c4o .c4lc_ob2.c4o
@@ -3033,7 +3046,7 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	# runs on, and the result must run the Lisp samples (call/cc
 	# exercises the CEK machine), the byte-level c4r roundtrip, and
 	# c4lc's own parser.
-	$(PREPROC) src/c4sp/c4sp.c > .c4lc_pp.c
+	$(PREPROC_LC) src/c4sp/c4sp.c > .c4lc_pp.c
 	./c4sp src/c4sp/lisp/c4lc.lisp -O .c4lc_pp.c .c4lc_sp.c4r > /dev/null
 	./c4m load-c4r.c -- .c4lc_sp.c4r src/c4sp/lisp/fac.lisp | grep -q "Factorial of 10 = 3628800"
 	./c4m load-c4r.c -- .c4lc_sp.c4r src/c4sp/lisp/truthy.lisp | cmp - src/c4sp/tests/expected/truthy.txt
@@ -3100,6 +3113,24 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	     | grep -E '^(error|warning):'; \
 	 done | cmp - src/c4sp/tests/expected/c4lc-m4e-diag.txt
 	@echo "  m4 const: 6 warnings and 9 errors, as pinned"
+	# M4 through the standard headers. stddef.h #defines unsigned away
+	# and long to int for c4cc; c4lc predefines __c4_inttypes__, which
+	# turns that off, and $(PREPROC_LC) says the same to gcc -E. stdio.h
+	# needs the gcc -E route (c4lc's preprocessor refuses stdarg.h's
+	# function-like macro named without arguments); -D STDDEF_ONLY swaps
+	# it for stddef.h alone, so c4lc's own -P is held to it as well.
+	$(PREPROC_LC) $(TESTS)/c4lc_m4std.c > .c4lc_pp.c
+	@for fl in "" "-O"; do \
+	   ./c4sp src/c4sp/lisp/c4lc.lisp $$fl .c4lc_pp.c .c4lc_b.c4r > /dev/null || exit 1; \
+	   ./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-m4std.txt || exit 1; \
+	   ./c4sp32 src/c4sp/lisp/c4lc.lisp $$fl .c4lc_pp.c .c4lc_b.c4r > /dev/null || exit 1; \
+	   ./c4m32 load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-m4std.txt || exit 1; \
+	 done
+	./c4sp src/c4sp/lisp/c4lc.lisp -P -I include -I . -D C4CC=1 -D __c4__=1 -D __C4CC__=1 -D __c4cc__=1 \
+	   -D STDDEF_ONLY $(TESTS)/c4lc_m4std.c .c4lc_b.c4r > /dev/null
+	./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-m4std.txt
+	@rm -f .c4lc_pp.c
+	@echo "  m4 std headers: unsigned survives stdio.h and stddef.h, at 32 and 64 bits"
 	# volatile: every access emitted exactly once, as c4rdump's patch
 	# listing counts them -- eight references to vcount plain, -O and
 	# -minline. ncount is used the same way and is not volatile, so

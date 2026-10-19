@@ -596,7 +596,16 @@
 (define pp:reset (lambda ()
 	(begin
 		(set! pp:macros nil)
-		(set! pp:depth 0))))
+		(set! pp:depth 0)
+		(pp:builtins))))
+
+;; What is defined before any -D. __c4_inttypes__: signed, unsigned,
+;; short and long are real types here (M4), so stddef.h must not
+;; #define them away the way it does for c4cc. c4fc's PP-RESET
+;; predefines the same; a gcc -E that stands in for this preprocessor
+;; passes it as -D (PREPROC_LC in the Makefile).
+(define pp:builtins (lambda ()
+	(pp:predefine "__c4_inttypes__=1")))
 
 ;; -D NAME or -D NAME=VALUE
 (define pp:predefine (lambda (spec)
@@ -632,6 +641,10 @@
 		(define kw (if (= (pp:kind t) 'Id) (lex:kwlook lex:keywords2 (pp:val t)) false))
 		(next pp:kwfix (tail toks)
 			(pp:cons (if kw (list kw 0 (pp:line t)) t) acc))))))
+
+;; Loading the module is the reset: both drivers (c4lc.lisp and
+;; c4lc-ppdump.lisp) load it once, then apply their -D flags.
+(pp:builtins)
 
 ;; Preprocess a file: returns a token list ready for parse:program.
 (define pp:file (lambda (path)

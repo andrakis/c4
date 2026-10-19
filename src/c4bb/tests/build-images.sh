@@ -7,6 +7,9 @@ CC=./c4cc32
 OUT=src/c4bb/images
 U0=include/u0.h
 PREPROC="gcc -E -Iinclude -I. -DC4CC=1 -D__c4__=1 -D__C4CC__=1 -D__c4cc__=1 -C"
+# ... and gcc -E standing in for c4lc's own preprocessor, which predefines
+# __c4_inttypes__ (real unsigned/long; stddef.h then leaves them alone)
+PREPROC_LC="$PREPROC -D__c4_inttypes__=1"
 # Our own preprocessor (src/c4dos/cpp.c), same flags. It is pinned
 # against gcc -E for byte-identical images over the whole corpus
 # (src/c4dos/tests/test-cpp.sh), so choosing it costs nothing and means
@@ -104,7 +107,7 @@ for dep in src/c4ke/c4ke.c load-c4r.c include/c4bb_mbox.h src/c4ke/extensions/*.
     [ "$dep" -nt $OUT/c4ke32.c4r ] && kernel_stale=1
 done
 if [ $kernel_stale = 1 ]; then
-    $PREPROC src/c4ke/c4ke.c > .c4bb_klc.c
+    $PREPROC_LC src/c4ke/c4ke.c > .c4bb_klc.c
     ./c4sp32 -c 64000000 src/c4sp/lisp/c4lc.lisp -O .c4bb_klc.c $OUT/c4ke32.c4r > /dev/null
     rm -f .c4bb_klc.c
 fi
@@ -128,7 +131,7 @@ done > /dev/null
 # top-of-function declarations). c4lc's own preprocessor hangs on
 # u0.h (a pre-existing issue, unrelated to word size - reproduces at
 # 64-bit too), so preprocess with gcc -E first, same as the kernel.
-$PREPROC $BIN/vfsload.c > .c4bb_vfsload_pp.c
+$PREPROC_LC $BIN/vfsload.c > .c4bb_vfsload_pp.c
 ./c4sp32 -c 16000000 src/c4sp/lisp/c4lc.lisp -O .c4bb_vfsload_pp.c $DISK/vfsload.c4r > /dev/null
 rm -f .c4bb_vfsload_pp.c
 

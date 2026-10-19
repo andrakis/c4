@@ -264,6 +264,10 @@ here.
 - **`inline.f`**: a spliced body returns with its callee's type, so
   `RETT`/`RETQ` are swapped for the splice. c4fc's inliner puts each
   argument in a slot once, so it never had c4lc's volatile problem.
+- **`pp.f`**: `PP-RESET` predefines `__c4_inttypes__=1`, as c4lc's
+  `pp:builtins` does, which switches off stddef.h's c4cc-only
+  `#define unsigned` and `#define long int` (c4lc-design.md §14.5).
+  The sweeps that compare against gcc -E pass it to gcc as well.
 
 **Warnings need `-o`.** c4th has no stderr, and an image written to
 stdout would carry the warning inside it, so a const warning prints only

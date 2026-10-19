@@ -1,13 +1,14 @@
 B4KE2
 # C4IX's C library, /lib/libc.c4s (include/libc.h has what is in it), and
 # libctest, which exercises it. The same commands as build-images.sh, so
-# the results are the disk's byte for byte. Needs ../lib/BUILD.B4K first:
-# libc carries libc4ix's syscall layer.
+# the results are the disk's byte for byte. libc carries libc4ix's syscall
+# layer, compiled -fpic here as libc is.
 SET ROOT /usr/src/c4
 SET OUT /ram/build
 SET STACK 1048576
 SET LC c4sc -c 400000 compile -O
-SET LCF $(LC) -fno-builtin -c -I src/c4ix/libc/include -I src/c4ix/libc
+# -fpic: one copy of libc's code serves every task (src/c4ix/loader.c)
+SET LCF $(LC) -fno-builtin -fpic -c -I src/c4ix/libc/include -I src/c4ix/libc
 SET H src/c4ix/libc/include/libc.h src/c4ix/libc/sys.h
 CD $(ROOT)
 MKDIR $(OUT)/libc
@@ -23,11 +24,18 @@ DEPS $(OUT)/libc/unix.c4o : src/c4ix/libc/unix.c $(H)
 RUN $(LCF) src/c4ix/libc/unix.c $(OUT)/libc/unix.c4o
 # the one file compiled without -fno-builtin: the VM's opcodes
 DEPS $(OUT)/libc/opcodes.c4o : src/c4ix/libc/opcodes.c
-RUN $(LC) -c src/c4ix/libc/opcodes.c $(OUT)/libc/opcodes.c4o
-SET OBJS $(OUT)/libc/string.c4o $(OUT)/libc/stdlib.c4o $(OUT)/libc/stdio.c4o $(OUT)/libc/unix.c4o $(OUT)/libc/opcodes.c4o $(OUT)/lib/libc4ix.c4o
+RUN $(LC) -fpic -c src/c4ix/libc/opcodes.c $(OUT)/libc/opcodes.c4o
+# libc4ix's syscall layer, again, -fpic
+DEPS $(OUT)/libc/libc4ix.c4o : src/c4ix/lib/libc4ix.c src/c4ix/include/c4ix_user.h
+RUN $(LC) -fpic -c -I src/c4ix/include src/c4ix/lib/libc4ix.c $(OUT)/libc/libc4ix.c4o
+SET OBJS $(OUT)/libc/string.c4o $(OUT)/libc/stdlib.c4o $(OUT)/libc/stdio.c4o $(OUT)/libc/unix.c4o $(OUT)/libc/opcodes.c4o $(OUT)/libc/libc4ix.c4o
 DEPS $(OUT)/lib/libc.c4s : $(OBJS)
 RUN c4rlink -r $(OBJS) -o $(OUT)/lib/libc.c4s
 DEPS $(OUT)/libc/libctest.c4o : src/c4ix/libc/tests/libctest.c $(H)
 RUN $(LC) -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/libctest.c $(OUT)/libc/libctest.c4o
 DEPS $(OUT)/bin/c4ix-libctest.c4r : $(OUT)/libc/libctest.c4o $(OUT)/lib/libc.c4s
 RUN c4rlink $(OUT)/libc/libctest.c4o -l $(OUT)/lib/libc.c4s -o $(OUT)/bin/c4ix-libctest.c4r
+DEPS $(OUT)/libc/pictest.c4o : src/c4ix/libc/tests/pictest.c $(H)
+RUN $(LC) -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/pictest.c $(OUT)/libc/pictest.c4o
+DEPS $(OUT)/bin/c4ix-pictest.c4r : $(OUT)/libc/pictest.c4o $(OUT)/lib/libc.c4s
+RUN c4rlink $(OUT)/libc/pictest.c4o -l $(OUT)/lib/libc.c4s -o $(OUT)/bin/c4ix-pictest.c4r

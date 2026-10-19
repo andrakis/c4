@@ -2665,14 +2665,15 @@ libc4ix.c4s: libc4ix.c4l
 	cp libc4ix.c4l $@
 
 # libc: C4IX's C library, a shared library (src/c4ix/libc). -fno-builtin
-# but for opcodes.c, and with libc4ix's syscall layer linked in.
+# but for opcodes.c, with libc4ix's syscall layer linked in, and -fpic
+# throughout, so C4IX loads its code once for every task.
 C4IX_LIBC := string stdlib stdio unix
 libc.c4s: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_LIBC:%=$(C4IX_SRC)/libc/%.c) $(C4IX_SRC)/libc/opcodes.c $(C4IX_SRC)/libc/include/libc.h $(C4IX_SRC)/libc/sys.h $(C4IX_SRC)/lib/libc4ix.c
 	for m in $(C4IX_LIBC); do \
-	  $(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -fno-builtin -c -I $(C4IX_SRC)/libc/include -I $(C4IX_SRC)/libc $(C4IX_SRC)/libc/$$m.c .c4ix_libc_$$m.c4o > /dev/null || exit 1; \
+	  $(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -fno-builtin -fpic -c -I $(C4IX_SRC)/libc/include -I $(C4IX_SRC)/libc $(C4IX_SRC)/libc/$$m.c .c4ix_libc_$$m.c4o > /dev/null || exit 1; \
 	done
-	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -c $(C4IX_SRC)/libc/opcodes.c .c4ix_libc_opcodes.c4o > /dev/null
-	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC)/include $(C4IX_SRC)/lib/libc4ix.c .c4ix_libc_u.c4o > /dev/null
+	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -fpic -c $(C4IX_SRC)/libc/opcodes.c .c4ix_libc_opcodes.c4o > /dev/null
+	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -fpic -c -I $(C4IX_SRC)/include $(C4IX_SRC)/lib/libc4ix.c .c4ix_libc_u.c4o > /dev/null
 	$(C4RLINK) -r $(C4IX_LIBC:%=.c4ix_libc_%.c4o) .c4ix_libc_opcodes.c4o .c4ix_libc_u.c4o -o $@
 	rm -f .c4ix_libc_*
 

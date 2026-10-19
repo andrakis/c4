@@ -186,4 +186,13 @@ if echo "$out" | sed -n '/^printf: \[42/,/libctest: done/p' | cmp -s - src/c4ix/
 else bad "libc: libctest's output is the reference"
      echo "$out" | sed -n '/^printf: \[42/,/libctest: done/p' | diff - src/c4ix/libc/tests/libctest.txt | head -10; fi
 
+# Shared code: libc is -fpic, so two programs at once run one copy of its
+# code, and each must still see its own errno, environment and stdout
+# buffer -- the scheduler repoints libc's data at every switch
+out=$(printf 'pictest A 15 > /ram/a &\npictest B 15 > /ram/b &\nwait\ncat /ram/a\ncat /ram/b\nexit\n' | \
+      timeout 300 $LIBJS -c 800000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
+if echo "$out" | grep -qx "A: ok" && echo "$out" | grep -qx "B: ok" && ! echo "$out" | grep -qF "crossed"; then
+    ok "two tasks share libc's code and keep their own data"
+else bad "two tasks share libc's code and keep their own data"; echo "$out" | grep -E 'ok|crossed|loader' | head -6; fi
+
 if [ $fail = 0 ]; then echo "test-libjs: OK"; else echo "test-libjs: FAILURES"; exit 1; fi

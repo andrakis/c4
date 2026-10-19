@@ -7,8 +7,10 @@ calls over C4IX's syscalls. [`include/libc.h`](include/libc.h) is the whole
 interface. `stdio.h`, `string.h` and the other standard names include it.
 
 It is a shared library, `/lib/libc.c4s`. C4IX's loader links it into a
-program at spawn (`src/c4ix/loader.c`), and every task gets its own copy of
-its data, so `errno` and the stdio buffers are per task.
+program at spawn (`src/c4ix/loader.c`). It is built `-fpic`, so its code is
+loaded once and shared by every task that uses it. Each task gets its own
+1.2 KB copy of its data, so `errno` and the stdio buffers are per task.
+`tests/pictest.c` checks that with two programs at once.
 
 ## Using it
 
@@ -35,6 +37,7 @@ same commands with `./c4sp32 ... src/c4sp/lisp/c4lc.lisp` and `-I src/c4ix/libc/
 | `unix.c` | `open` … `rename`, `stat`, `opendir`, `getopt`, `errno` and `strerror`, `time` |
 | `opcodes.c` | the VM's `MALC`, `FREE`, `MCPY`, `MSET` and `MCMP`, as `__libc_*`. The one file compiled without `-fno-builtin` |
 | `tests/libctest.c` | exercises all of the above; `tests/libctest.txt` is its output, compared by `make test-libjs` |
+| `tests/pictest.c` | two at once must keep their own libc data while sharing its code (`make test-libjs`) |
 | `BUILD.B4K` | rebuilds `libc.c4s` and `libctest` inside C4IX |
 
 ## Limits

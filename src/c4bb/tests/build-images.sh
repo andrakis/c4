@@ -299,17 +299,22 @@ if [ ! -f $OUT/c4ix32.c4r ] || \
     # libc: C4IX's C library (src/c4ix/libc), the second shared library,
     # /lib/libc.c4s. Built -fno-builtin, so printf, malloc and the rest
     # are its own -- except opcodes.c, which is where the VM's opcodes
-    # are -- and with libc4ix's syscall layer linked in.
+    # are -- and with libc4ix's syscall layer linked in. Built -fpic,
+    # all of it, so its code is loaded once and shared by every task.
     for m in string stdlib stdio unix; do
-        ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -fno-builtin -c -I src/c4ix/libc/include -I src/c4ix/libc src/c4ix/libc/$m.c .c4bb_ix_libc_$m.c4o > /dev/null
+        ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -fno-builtin -fpic -c -I src/c4ix/libc/include -I src/c4ix/libc src/c4ix/libc/$m.c .c4bb_ix_libc_$m.c4o > /dev/null
     done
-    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c src/c4ix/libc/opcodes.c .c4bb_ix_libc_opcodes.c4o > /dev/null
+    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -fpic -c src/c4ix/libc/opcodes.c .c4bb_ix_libc_opcodes.c4o > /dev/null
+    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -fpic -c -I src/c4ix/include src/c4ix/lib/libc4ix.c .c4bb_ix_libc_u.c4o > /dev/null
     ./c4rlink32 -r .c4bb_ix_libc_string.c4o .c4bb_ix_libc_stdlib.c4o .c4bb_ix_libc_stdio.c4o .c4bb_ix_libc_unix.c4o \
-        .c4bb_ix_libc_opcodes.c4o .c4bb_ix_lib.c4o -o .c4bb_lib/libc.c4s > /dev/null
+        .c4bb_ix_libc_opcodes.c4o .c4bb_ix_libc_u.c4o -o .c4bb_lib/libc.c4s > /dev/null
     cp .c4bb_lib/libc.c4s $DISK/c4ix-libc.c4s
     # libctest exercises it (libjs/tests/test-libjs.sh compares its output)
     ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/libctest.c .c4bb_ix_u.c4o > /dev/null
     ./c4rlink32 .c4bb_ix_u.c4o -l .c4bb_lib/libc.c4s -o $DISK/c4ix-libctest.c4r > /dev/null
+    # pictest: two at once must each keep their own libc data
+    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/pictest.c .c4bb_ix_u.c4o > /dev/null
+    ./c4rlink32 .c4bb_ix_u.c4o -l .c4bb_lib/libc.c4s -o $DISK/c4ix-pictest.c4r > /dev/null
     for u in $C4IX_USER; do
         ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix/include src/c4ix/user/$u.c .c4bb_ix_u.c4o > /dev/null
         # ls is the pilot for shared libraries: it loads libc4ix at run time

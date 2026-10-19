@@ -325,7 +325,7 @@ struct task {
     int  img_ncons;            //   before main, in its OWN context
     int  img_des;              // int * : destructors, run in reverse
     int  img_ndes;             //   after main returns
-    int  img_libs;             // int * : shared libraries' code and data, in pairs
+    int  img_libs;             // int * : shared libraries' code, data and slot, in threes
     int  img_nlibs;            //   (loader.c), freed with the task
     int  privs;                // PRIV_*
     int  nsyscalls;            // syscalls serviced, for the X2 report
@@ -497,12 +497,13 @@ struct c4r_image {
     int ncons;
     int des;                   // malloc'd int[ndes], absolute addresses
     int ndes;
-    int libs;                  // malloc'd int[2 * nlibs]: each library's code, then data
+    int libs;                  // malloc'd int[3 * nlibs]: each library's code (0 if shared), data, slot
     int nlibs;
 };
 
 int          c4r_load(char *path, struct c4r_image *img);
 void         c4r_unload(struct c4r_image *img);   // free all of it
+void         loader_switch(struct task *t);       // point -fpic libraries at t's data
 struct task *task_spawn(char *path, int argc, int argv);
 struct task *task_spawn_priv(char *path, int argc, int argv, int privs);
 

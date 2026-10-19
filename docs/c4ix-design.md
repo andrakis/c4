@@ -540,6 +540,40 @@ loading or assigning a whole struct is an error.
   later spawns get -- b4ke's `$(STACK)`, 1 MB for c4sc. The shell tries
   `/bin/NAME` before `c4ix-NAME.c4r`, so `INSTALL.B4K`'s copies win.
 
+- **Shared libraries and a libc** (branch c4ix-userland, 2026-10-19).
+  - *Linking:* `c4rlink -l LIB` links against a library without copying
+    it in. The output keeps those symbol references and records
+    `/lib/<base name>` in a static `__c4_needed` global (a symbol, so no
+    `.c4r` reader needs to change).
+  - *Loading:* C4IX's loader (`loader.c`) loads every library a program
+    needs, breadth first and each once. It resolves the symbol
+    references against the libraries' exports, and runs library
+    constructors before the program's. A missing library or symbol fails
+    the spawn by name.
+  - *D1 (any library):* each task gets its own copy of the library, code
+    and data.
+  - *D2 (`-fpic` libraries):* the code is loaded once and cached, and
+    each task gets only a copy of the data. c4lc's `-fpic` reaches every
+    datum as `IMM off; PSH; IMM __c4_dbase; LI; ADD`. `__c4_dbase` is a
+    word the loader gives the library, and the scheduler points it at
+    the incoming task's data at every switch (`loader_switch`).
+  - *Measured* on libc (18,088 code words, 1,236 bytes of data): per
+    task, libc costs 1.2 KB instead of about 73 KB.
+    - A first `libctest` run costs 3.42M cycles, against 3.35M with a
+      non-pic libc loaded whole.
+    - Later runs, from the cache, cost 3.15M, despite the four extra
+      instructions per data reference.
+    - Resolving `__c4_dbase` by id once per module, not by name per
+      patch, is what keeps the first load level.
+  - *Restriction:* a `-fpic` library may use other shared code's
+    functions, not its globals; the loader refuses otherwise.
+  - *Pins:* `pictest` runs two tasks at once, which must keep their own
+    `errno`, environment and stdout. With the switch disabled, task A
+    reads B's `TAG` by its third iteration.
+  - *libc:* `/lib/libc.c4s` (`src/c4ix/libc`) is the first `-fpic`
+    library, built with c4lc's new `-fno-builtin`. `ls` is linked
+    against the non-pic `/lib/libc4ix.c4s`.
+
 ## 6.1 Running it
 
     make run-c4ix        an interactive shell on c4m

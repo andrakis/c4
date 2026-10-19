@@ -18,10 +18,18 @@
 // the image, then every library it needs (and every library THOSE
 // need, each once), and resolves each module's symbol patches against
 // what the libraries export: their non-static functions and globals.
-// Each task gets its own copy of every library it uses, code and data,
-// freed with the task: correct and simple -- a library's globals, errno
-// and stdio buffers among them, belong to the task that uses them.
-// Library constructors run before the program's, deepest library first.
+// Each task gets its own copy of every library's DATA, freed with the
+// task -- a library's globals, errno and stdio buffers among them,
+// belong to the task that uses them. Its CODE is shared when the
+// library was compiled -fpic: c4lc then reaches every datum through
+// __c4_dbase, a word the loader gives that library and the scheduler
+// sets to the running task's copy of its data at every switch
+// (loader_switch). The first task to load such a library leaves its
+// relocated code in a cache, with the file as the template every later
+// task's data copy is made from, so the second task loads a library
+// without reading or relocating its code. A library built without
+// -fpic is loaded whole, code and all, for every task. Library
+// constructors run before the program's, deepest library first.
 //
 
 #include "c4ix.h"
@@ -47,7 +55,20 @@ struct c4r_mod {
     int *cons; int ncons;         // constructor offsets, in buf
     int *des; int ndes;           // destructor offsets, in buf
     char *path;                   // a library's run-time path, for messages
+    char *dtmpl;                  // the data as the file has it, in buf
+    int datalen, memsz;
+    int pic;                      // -fpic: refers to __c4_dbase
+    int shared;                   // its code is the cache's: neither relink nor free it
+    int *slot;                    // pic: the word that holds the task's data base
 };
+
+// -fpic libraries, loaded once: the first task's mod, kept, by path
+struct shlib {
+    char path[96];
+    struct c4r_mod *mod;
+    struct shlib *next;
+};
+static struct shlib *shlibs;
 
 static int loader_word(char *p) {
     return *(int *)p;
@@ -93,7 +114,24 @@ static void loader_systable(char *p, int nsyms, int database) {
     }
 }
 
+static void mod_data_relocate(struct c4r_mod *m, char *d);
+
+// does M's symbol table name NAME (defined or not)?
+static int mod_has(struct c4r_mod *m, char *name) {
+    char *p;
+    int i;
+    p = m->syms;
+    i = 0;
+    while (i < m->nsym) {
+        if (loader_nameis(sym_name(p), sym_namelen(p), name)) return 1;
+        p = sym_next(p);
+        ++i;
+    }
+    return 0;
+}
+
 static void mod_free(struct c4r_mod *m) {
+    if (m->shared) { if (m->data) free(m->data); m->data = 0; m->code = 0; m->buf = 0; return; }
     if (m->code) free(m->code);
     if (m->data) free(m->data);
     if (m->buf) free(m->buf);
@@ -196,23 +234,15 @@ static int mod_read(char *path, struct c4r_mod *m) {
     if (!(data = (char *)malloc(memsz + 8))) { free(code); free(buf); return 0; }
     memset(data, 0, memsz + 8);
     memcpy(data, p, datalen);
+    m->dtmpl = p;
     p = p + datalen;
 
     // patches: byte-offset address rewrites into the fresh segments;
-    // the symbol references among them wait for c4r_link
+    // the symbol references among them wait for link_modules
     p = p + sizeof(int);   // 'P' marker
     m->patches = p;
     m->npatch = patchlen;
-    i = 0;
-    while (i < patchlen) {
-        ptype = loader_word(p); paddr = loader_word(p + sizeof(int)); pvalu = loader_word(p + 2 * sizeof(int));
-        p = p + 3 * sizeof(int);
-        if (ptype == -1) code[paddr] = (int)(code + pvalu);
-        else if (ptype == -2) code[paddr] = (int)(data + pvalu);
-        else if (ptype == -3) *(int *)(data + paddr) = (int)(code + pvalu);
-        else if (ptype == -4) *(int *)(data + paddr) = (int)(data + pvalu);
-        ++i;
-    }
+    p = p + patchlen * 3 * sizeof(int);
 
     // Constructor and destructor lists ('c' and 'd' markers), then
     // the symbol section ('S'). They point INTO buf.
@@ -232,7 +262,48 @@ static int mod_read(char *path, struct c4r_mod *m) {
     m->code = code;
     m->data = data;
     m->entry = entry;
+    m->datalen = datalen;
+    m->memsz = memsz;
+    m->pic = mod_has(m, "__c4_dbase");
+
+    // relocate the code; under -fpic a code word that points into the
+    // data holds the OFFSET, since __c4_dbase supplies the base
+    p = m->patches;
+    i = 0;
+    while (i < patchlen) {
+        ptype = loader_word(p); paddr = loader_word(p + sizeof(int)); pvalu = loader_word(p + 2 * sizeof(int));
+        p = p + 3 * sizeof(int);
+        if (ptype == -1) code[paddr] = (int)(code + pvalu);
+        else if (ptype == -2) code[paddr] = m->pic ? pvalu : (int)(data + pvalu);
+        ++i;
+    }
+    mod_data_relocate(m, data);
     return 1;
+}
+
+// The data-resident patches, applied to a copy D of M's data.
+static void mod_data_relocate(struct c4r_mod *m, char *d) {
+    char *p;
+    int i, ptype, paddr, pvalu;
+    p = m->patches;
+    i = 0;
+    while (i < m->npatch) {
+        ptype = loader_word(p); paddr = loader_word(p + sizeof(int)); pvalu = loader_word(p + 2 * sizeof(int));
+        p = p + 3 * sizeof(int);
+        if (ptype == -3) *(int *)(d + paddr) = (int)(m->code + pvalu);
+        else if (ptype == -4) *(int *)(d + paddr) = (int)(d + pvalu);
+        ++i;
+    }
+}
+
+// A fresh copy of a cached library's data, for one more task.
+static char *mod_data_copy(struct c4r_mod *m) {
+    char *d;
+    if (!(d = (char *)malloc(m->memsz + 8))) return 0;
+    memset(d, 0, m->memsz + 8);
+    memcpy(d, m->dtmpl, m->datalen);
+    mod_data_relocate(m, d);
+    return d;
 }
 
 // The symbol with id ID in M (the linker writes ids in order, so it is
@@ -277,9 +348,18 @@ static int str_eq(char *a, char *b) {
 
 // Load every library the modules need, breadth first, each once.
 // Returns the module count, or 0 having said why.
+// the cached -fpic library with this run-time path, or 0
+static struct shlib *shlib_find(char *path) {
+    struct shlib *s;
+    s = shlibs;
+    while (s) { if (str_eq(s->path, path)) return s; s = s->next; }
+    return 0;
+}
+
 static int load_libraries(char *path, struct c4r_mod *mods) {
     int n, k, i, j, have;
     char *p, *lib;
+    struct shlib *sh;
     n = 1;
     k = 0;
     while (k < n) {
@@ -302,9 +382,16 @@ static int load_libraries(char *path, struct c4r_mod *mods) {
                     j = 0;
                     while (lib[j]) ++j;
                     while (j > 0 && lib[j - 1] != '/') --j;
-                    loader_quiet = loader_quiet + 1;
-                    have = mod_read(lib, mods + n) || mod_read(lib + j, mods + n);
-                    loader_quiet = loader_quiet - 1;
+                    if ((sh = shlib_find(lib))) {
+                        // shared code already loaded: only the data is new
+                        memcpy((char *)(mods + n), (char *)sh->mod, sizeof(struct c4r_mod));
+                        (mods + n)->shared = 1;
+                        have = ((mods + n)->data = mod_data_copy(sh->mod)) != 0;
+                    } else {
+                        loader_quiet = loader_quiet + 1;
+                        have = mod_read(lib, mods + n) || mod_read(lib + j, mods + n);
+                        loader_quiet = loader_quiet - 1;
+                    }
                     if (!have) {
                         kprintf("c4ix: loader: %s needs %s, which is not there\n", path, lib);
                         return 0;
@@ -321,17 +408,43 @@ static int load_libraries(char *path, struct c4r_mod *mods) {
     return n;
 }
 
+static int mod_is_data(struct c4r_mod *m, int addr);
+
+// the id of the symbol named NAME in M, or -1
+static int mod_symid(struct c4r_mod *m, char *name) {
+    char *p;
+    int i;
+    p = m->syms;
+    i = 0;
+    while (i < m->nsym) {
+        if (loader_nameis(sym_name(p), sym_namelen(p), name)) return loader_word(p);
+        p = sym_next(p);
+        ++i;
+    }
+    return -1;
+}
+
 // Resolve every module's symbol patches against what the libraries
 // export. Returns 1, or 0 having named what was missing.
 static int link_modules(char *path, struct c4r_mod *mods, int n) {
     struct c4r_mod *m;
     char *p, *s;
     char name[128];
-    int k, i, j, ptype, paddr, addr, bad, len;
+    int k, i, j, ptype, paddr, addr, bad, len, dbid;
     bad = 0;
     k = 0;
     while (k < n) {
         m = mods + k;
+        ++k;
+        if (m->shared) continue;            // linked once, when it was first loaded
+        if (m->pic && !m->slot) {
+            if (k == 1) { kprintf("c4ix: loader: %s: a program cannot be -fpic\n", path); return 0; }
+            m->slot = (int *)malloc(sizeof(int));
+            *m->slot = (int)m->data;
+        }
+        // __c4_dbase is most of a -fpic library's symbol references (one
+        // per function that touches data): find its id once, not per patch
+        dbid = m->pic ? mod_symid(m, "__c4_dbase") : -1;
         p = m->patches;
         i = 0;
         while (i < m->npatch) {
@@ -339,33 +452,55 @@ static int link_modules(char *path, struct c4r_mod *mods, int n) {
             p = p + 3 * sizeof(int);
             ++i;
             if (ptype < 0) continue;
+            if (ptype == dbid) { m->code[paddr] = (int)m->slot; continue; }
             if (!(s = mod_symbol(m, ptype))) {
-                kprintf("c4ix: loader: %s: a patch names symbol %d, which is not in its table\n", k ? m->path : path, ptype);
+                kprintf("c4ix: loader: %s: a patch names symbol %d, which is not in its table\n", k > 1 ? m->path : path, ptype);
                 bad = 1;
+                continue;
+            }
+            if (m->pic && loader_nameis(sym_name(s), sym_namelen(s), "__c4_dbase")) {
+                m->code[paddr] = (int)m->slot;
                 continue;
             }
             addr = 0;
             j = 1;
             while (j < n && !addr) {
-                if (j != k) addr = mod_export(mods + j, sym_name(s), sym_namelen(s));
+                if (j != k - 1) {
+                    addr = mod_export(mods + j, sym_name(s), sym_namelen(s));
+                    // shared code may only point at what every task shares
+                    if (addr && m->pic && (!(mods + j)->pic || mod_is_data(mods + j, addr))) {
+                        kprintf("c4ix: loader: %s is -fpic, but uses '%s' from %s, which is not shared code\n",
+                                m->path, "a global", (mods + j)->path);
+                        bad = 1;
+                    }
+                }
                 ++j;
             }
             if (!addr) {
+                // the name is not NUL-terminated in the file
+                len = sym_namelen(s) < 127 ? sym_namelen(s) : 127;
+                memcpy(name, sym_name(s), len);
+                name[len] = 0;
                 kprintf("c4ix: loader: %s needs '%s', which none of its libraries has\n",
-                        k ? m->path : path, sym_name(s));
+                        k > 1 ? m->path : path, name);
                 bad = 1;
                 continue;
             }
             m->code[paddr] = addr;
         }
-        ++k;
     }
     return !bad;
+}
+
+// is ADDR inside M's data?
+static int mod_is_data(struct c4r_mod *m, int addr) {
+    return addr >= (int)m->data && addr < (int)m->data + m->memsz + 8;
 }
 
 // Load and relocate, with any libraries. Returns 1 and fills img on success.
 int c4r_load(char *path, struct c4r_image *img) {
     struct c4r_mod *mods;
+    struct shlib *sh;
     int n, k, i, ncons, ndes, total;
     int *cons, *des, *libs;
 
@@ -414,12 +549,37 @@ int c4r_load(char *path, struct c4r_image *img) {
         --k;
     }
 
-    // the libraries' segments, for the task to free with its own
+    // a -fpic library loaded for the first time stays, code and file,
+    // for the next task that needs it
+    k = 1;
+    while (k < n) {
+        if ((mods + k)->pic && !(mods + k)->shared) {
+            sh = (struct shlib *)malloc(sizeof(struct shlib));
+            sh->mod = (struct c4r_mod *)malloc(sizeof(struct c4r_mod));
+            memcpy((char *)sh->mod, (char *)(mods + k), sizeof(struct c4r_mod));
+            sh->mod->data = 0;
+            i = 0;
+            while ((mods + k)->path[i] && i < 95) { sh->path[i] = (mods + k)->path[i]; ++i; }
+            sh->path[i] = 0;
+            sh->next = shlibs;
+            shlibs = sh;
+            (mods + k)->shared = 1;
+        }
+        ++k;
+    }
+
+    // the libraries, for the task: code to free (0 when shared), its own
+    // data, and the slot the scheduler points at that data (0 if none)
     libs = 0;
     if (n > 1) {
-        libs = (int *)malloc(2 * (n - 1) * sizeof(int));
+        libs = (int *)malloc(3 * (n - 1) * sizeof(int));
         k = 1;
-        while (k < n) { libs[2 * (k - 1)] = (int)(mods + k)->code; libs[2 * (k - 1) + 1] = (int)(mods + k)->data; ++k; }
+        while (k < n) {
+            libs[3 * (k - 1)] = (mods + k)->shared ? 0 : (int)(mods + k)->code;
+            libs[3 * (k - 1) + 1] = (int)(mods + k)->data;
+            libs[3 * (k - 1) + 2] = (int)(mods + k)->slot;
+            ++k;
+        }
     }
 
     img->code = (int)(mods + 0)->code;
@@ -432,9 +592,24 @@ int c4r_load(char *path, struct c4r_image *img) {
     img->libs = (int)libs;
     img->nlibs = n - 1;
     k = 0;
-    while (k < n) { free((mods + k)->buf); ++k; }
+    while (k < n) { if (!(mods + k)->shared) free((mods + k)->buf); ++k; }
     free(mods);
     return 1;
+}
+
+// The running task changes: point each shared library's __c4_dbase at
+// the incoming task's copy of its data. The scheduler calls this at
+// every switch; a task that uses no -fpic library costs one test.
+void loader_switch(struct task *t) {
+    int *l;
+    int k;
+    if (!t || !t->img_libs) return;
+    l = (int *)t->img_libs;
+    k = 0;
+    while (k < t->img_nlibs) {
+        if (l[3 * k + 2]) *(int *)l[3 * k + 2] = l[3 * k + 1];
+        ++k;
+    }
 }
 
 // Load an image and run it as a task. argv is passed through to the
@@ -479,8 +654,8 @@ void c4r_unload(struct c4r_image *img) {
     if (img->libs) {
         k = 0;
         while (k < img->nlibs) {
-            free((int *)((int *)img->libs)[2 * k]);
-            free((char *)((int *)img->libs)[2 * k + 1]);
+            if (((int *)img->libs)[3 * k]) free((int *)((int *)img->libs)[3 * k]);
+            free((char *)((int *)img->libs)[3 * k + 1]);
             ++k;
         }
         free((int *)img->libs);

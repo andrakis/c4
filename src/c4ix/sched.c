@@ -303,6 +303,7 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
         sched_lockdepth = n->lockdepth;
         n->state = TS_RUNNING;
         sched_cur = n;
+        loader_switch(n);
         ++sched_switches;
     } else if (t->state == TS_ZOMBIE) {
         // The task died and nothing else is runnable: with no context
@@ -480,6 +481,7 @@ static void coop_switch(struct task *next) {
     sched_lockdepth = next->lockdepth;
     next->state = TS_RUNNING;
     sched_cur = next;
+    loader_switch(next);
     ++sched_switches;
 }
 

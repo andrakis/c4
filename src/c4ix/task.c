@@ -154,8 +154,9 @@ static void task_destroy(struct task *t) {
     if (t->img_libs) {
         i = 0;
         while (i < t->img_nlibs) {
-            free((int *)((int *)t->img_libs)[2 * i]);
-            free((char *)((int *)t->img_libs)[2 * i + 1]);
+            // code is 0 for a shared (-fpic) library: the loader's cache keeps it
+            if (((int *)t->img_libs)[3 * i]) free((int *)((int *)t->img_libs)[3 * i]);
+            free((char *)((int *)t->img_libs)[3 * i + 1]);
             ++i;
         }
         free((int *)t->img_libs);

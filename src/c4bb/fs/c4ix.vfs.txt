@@ -29,6 +29,7 @@ ARCHIVES = c4ix-root.tgz
 			$1: $1.c4r
 		# exercises libc (src/c4ix/libc/tests)
 		libctest: c4ix-libctest.c4r
+		pictest: c4ix-pictest.c4r
 	# shared libraries: what a program linked with c4rlink -l loads
 	lib/:
 		libc4ix.c4s: c4ix-libc4ix.c4s

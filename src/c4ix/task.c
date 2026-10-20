@@ -219,9 +219,14 @@ void task_reap() {
 // memory. Userland only ever names a task by id, and an id that has
 // been reaped is answered from the ghost table above. So: if the
 // parent is userland, nobody is holding a pointer, and it is safe.
+//
+// A parent that is GONE holds nothing either -- and a zombie whose parent
+// exited first (c4ix-tar, which vfsload starts and does not wait for) was
+// otherwise never collected. Kernel code only holds its own children, and
+// a kernel parent is still there while it holds them.
 static int task_parent_is_user(struct task *t) {
     struct task *p;
-    if (!(p = task_get(t->parent))) return 0;
+    if (!(p = task_get(t->parent))) return 1;
     return p->privs == PRIV_USER;
 }
 

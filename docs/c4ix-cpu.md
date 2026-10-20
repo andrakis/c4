@@ -81,3 +81,16 @@ machine is 98% asleep.
 10. Plain c4 support removed.
 11. The desktop: no tick while minimised, a cheaper `gui_frame`, a row
     cache in the terminal, redrawing only what changed, and an event wait.
+
+## What each step did
+
+### 2. Orphan zombies
+
+`task_reap_orphans` sweeps a zombie only when its parent is a userland
+task: kernel code waits by pointer, so a kernel parent's children must be
+left for it. A parent that no longer exists was treated like a kernel
+one, though it holds nothing, and its zombie stayed forever. vfsload
+starts `c4ix-tar` to unpack the root archive and exits without waiting,
+so every boot left one. A missing parent now counts as userland.
+`libjs/tests/test-c4ix-zombie.mjs` boots without `wait`, lets the unpack
+finish, and checks that `ps` lists no zombie. Without the fix it fails.

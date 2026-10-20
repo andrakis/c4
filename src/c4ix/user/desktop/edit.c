@@ -30,11 +30,26 @@
 // :cn and :cp (F8, Shift+F8), or a double click, go to them. :run (F6)
 // runs what was built in a new Command Prompt: the .c file's image, or
 // the command a BUILD.B4K names with "SET RUN command".
+//
+// Files. A pane down the left is the disk as a tree, closed folders to
+// start with: a click opens or closes a folder, and opens a file in the
+// editor. Opening a file opens the folders on the way to it. Ctrl+B,
+// View > Files or :Ex shows and hides it.
+//
+// Colours. The text is coloured by what the file's name says it is: C and
+// headers, JavaScript, Lisp, Forth, shell scripts and Makefiles, and B4KE
+// build files. :syntax off (or View > Syntax Colouring) turns it off.
 
 #include "desktop.h"
 
 enum { ECW = 7, ECH = 15, EFONT = 12, UNDO_MAX = 32, BROWS = 8, BLOG_MAX = 300,
        ERR_MAX = 100, REC_MAX = 3000, KEY_F4 = 115, KEY_F6 = 117, KEY_F8 = 119 };
+// the file pane: its width, its header, a row; a node's flags; how many
+// entries of one folder it lists
+enum { FW = 180, FHDR = 20, FROW = 16, F_DIR = 1, F_OPEN = 2, F_KIDS = 400, FNAME = 64 };
+// the languages it colours, and the colours
+enum { L_TEXT = 0, L_C = 1, L_JS = 2, L_LISP = 3, L_FORTH = 4, L_SH = 5, L_B4K = 6, HL_MAX = 1024 };
+enum { HC_KW = 0x0000b0, HC_TYPE = 0x007878, HC_STR = 0xa01818, HC_COM = 0x2a8a2a, HC_NUM = 0x905000, HC_PRE = 0x8020a0 };
 enum { M_NORMAL = 0, M_INSERT = 1, M_VISUAL = 2, M_VLINE = 3, M_CMD = 4 };
 
 struct edit {
@@ -60,15 +75,20 @@ struct edit {
     char **epath; int *eline; int *elog; int en, ecur;
     char bdir[128]; char runcmd[160];
     int rows, cols, gw;                            // the view's size, as last drawn
+    char **fpath; int *fdepth; int *fflag;         // the file pane: a node's path, depth, F_ flags
+    int fn, fcap, ftop, fshown, ffollow;
+    int hver, nosyn;                               // a count of changes; colouring off
+    int hl_line, hl_ver, hl_lang, hl_state;        // the colouring state at the top, cached
 };
 
 static struct edit *E(struct win *w) { return (struct edit *)w->st; }
 static char sb[512];
-static char *edit_menu_titles[3];
+static char *edit_menu_titles[4];
 static char *edit_file_items[7];
 static char *edit_build_items[6];
+static char *edit_view_items[3];
 static char *edit_help_items[2];
-static char **edit_menu_items[3];
+static char **edit_menu_items[4];
 
 static int e_isspace(int c) { return c == ' ' || c == 9 || c == 10 || c == 13; }
 static int e_isword(int c) {
@@ -127,7 +147,7 @@ static void e_insline(struct edit *e, int at, char *s, int n) {
     e->len[at] = n;
     e->cap[at] = c;
     ++e->nl;
-    e->modified = 1; e->changed = 1;
+    e->modified = 1; e->changed = 1; ++e->hver;
 }
 
 static void e_delline(struct edit *e, int at) {
@@ -138,7 +158,7 @@ static void e_delline(struct edit *e, int at) {
     while (i < e->nl - 1) { e->ln[i] = e->ln[i + 1]; e->len[i] = e->len[i + 1]; e->cap[i] = e->cap[i + 1]; ++i; }
     --e->nl;
     if (e->nl == 0) e_insline(e, 0, "", 0);
-    e->modified = 1; e->changed = 1;
+    e->modified = 1; e->changed = 1; ++e->hver;
 }
 
 static void e_clear(struct edit *e) {
@@ -233,7 +253,7 @@ static void e_delrange(struct edit *e, int y0, int x0, int y1, int x1) {
     e->len[y0] = x0 + tail;
     k = y1;
     while (k > y0) { e_delline(e, y0 + 1); --k; }
-    e->modified = 1; e->changed = 1;
+    e->modified = 1; e->changed = 1; ++e->hver;
 }
 
 static int e_ry, e_rx;    // where e_instext left off
@@ -265,7 +285,7 @@ static void e_instext(struct edit *e, int y, int x, char *s, int n) {
     if (tail > 0) memcpy(e->ln[y] + e->len[y], t, tail);
     e->len[y] = e->len[y] + tail;
     free(t);
-    e->modified = 1; e->changed = 1;
+    e->modified = 1; e->changed = 1; ++e->hver;
 }
 
 static void e_inschar(struct edit *e, int c) {
@@ -326,6 +346,9 @@ static void e_undo(struct edit *e, int redo) {
 
 // ---- files ---------------------------------------------------------------------------
 
+static void f_reveal(struct edit *e, char *path);
+static void f_add(struct edit *e, char *path);
+
 static void e_retitle(struct win *w) {
     struct edit *e;
     int k;
@@ -361,6 +384,7 @@ static int e_load(struct edit *e, char *path) {
     e->modified = 0;
     while (e->un > 0) { --e->un; free(e->utext[e->un]); }
     e_redo_clear(e);
+    f_reveal(e, e->path);
     return 1;
 }
 
@@ -381,6 +405,8 @@ static int e_save(struct edit *e, char *path) {
     ui_cat(e->msg, "\" written, ");
     ui_num(e->msg + ui_len(e->msg), e->nl);
     ui_cat(e->msg, " lines");
+    f_add(e, e->path);
+    f_reveal(e, e->path);
     return 1;
 }
 
@@ -800,8 +826,13 @@ void edit_tick(struct win *w) {
 
 void edit_close(struct win *w) {
     struct edit *e;
+    int i;
     e = E(w);
     if (e->building) { ukill(e->pid, SIGTERM); uclose(e->out_r); uwait(e->pid); e->building = 0; }
+    i = 0;
+    while (i < e->fn) { free(e->fpath[i]); ++i; }
+    if (e->fpath) { free((char *)e->fpath); free((char *)e->fdepth); free((char *)e->fflag); }
+    e->fpath = 0; e->fn = 0;
 }
 
 // ---- changes -----------------------------------------------------------------------------
@@ -1153,6 +1184,9 @@ static void e_ex(struct win *w, char *c) {
         return;
     }
     if (ui_eq(c, "make")) { e_make(w); return; }
+    if (ui_eq(c, "Ex") || ui_eq(c, "Explore") || ui_eq(c, "Lex") || ui_eq(c, "files")) { e->fshown = !e->fshown; return; }
+    if (ui_eq(c, "syntax off") || ui_eq(c, "syn off")) { e->nosyn = 1; return; }
+    if (ui_eq(c, "syntax on") || ui_eq(c, "syn on")) { e->nosyn = 0; return; }
     if (ui_eq(c, "run") || (c[0] == 'r' && c[1] == 'u' && c[2] == 'n' && c[3] == ' ')) {
         if (c[3] == ' ') ui_cpy(e->runcmd, c + 4);
         if (!e->runcmd[0]) { e_say(e, "Nothing to run yet: :make first, or :run COMMAND"); return; }
@@ -1292,7 +1326,7 @@ static void e_normal_key(struct win *w, int code, int ch, int mods) {
             e_save_undo(e);
             while (n > 0 && e->cx < e->len[e->cy]) { e->ln[e->cy][e->cx] = ch; ++e->cx; --n; }
             --e->cx;
-            e->modified = 1; e->changed = 1;
+            e->modified = 1; e->changed = 1; ++e->hver;
             return;
         }
         if (r == 'i' || r == 'a') {
@@ -1397,7 +1431,7 @@ static void e_normal_key(struct win *w, int code, int ch, int mods) {
             if (r >= 'a' && r <= 'z') r = r - 32; else if (r >= 'A' && r <= 'Z') r = r + 32;
             e->ln[e->cy][e->cx] = r; ++e->cx;
         }
-        e->modified = 1; e->changed = 1;
+        e->modified = 1; e->changed = 1; ++e->hver;
         e_clamp(e);
         return;
     }
@@ -1428,6 +1462,8 @@ static void e_key(struct win *w, int code, int ch, int mods) {
     e->msg[0] = 0;
     // Ctrl+S saves, whatever the mode
     if ((mods & M_CTRL) && (code == 83 || ch == 's' || ch == 'S')) { e_save(e, e->path); e_retitle(w); return; }
+    // Ctrl+B: the file pane, as IDEs have it (VIM's page back is not here)
+    if ((mods & M_CTRL) && (code == 66 || ch == 'b' || ch == 'B')) { e->fshown = !e->fshown; return; }
     if (code == KEY_F5) { e_make(w); return; }
     if (code == KEY_F6) { e_ex(w, "run"); return; }
     if (code == KEY_F8) { e_goto_error(w, (mods & M_SHIFT) ? e->ecur - 1 : e->ecur + 1); return; }
@@ -1479,6 +1515,417 @@ static void e_key(struct win *w, int code, int ch, int mods) {
 
 void edit_key(struct win *w, int code, int ch, int mods) { e_key(w, code, ch, mods); }
 
+// ---- syntax colours ---------------------------------------------------------------------
+//
+// Each line is coloured on its own, character by character, into hlc; the
+// one thing carried from line to line is being inside a C comment. Where
+// that stands at the top of the view is kept, with the count of changes
+// it was worked out for, so scrolling down does not read the file again.
+
+static int hlc[HL_MAX];
+
+static int e_lang(char *p) {
+    if (ui_ends(p, ".c") || ui_ends(p, ".h")) return L_C;
+    if (ui_ends(p, ".js") || ui_ends(p, ".mjs")) return L_JS;
+    if (ui_ends(p, ".lisp") || ui_ends(p, ".scm") || ui_ends(p, ".el")) return L_LISP;
+    if (ui_ends(p, ".f") || ui_ends(p, ".fs") || ui_ends(p, ".fth") || ui_ends(p, ".4th")) return L_FORTH;
+    if (ui_ends(p, ".sh") || ui_ends(p, "Makefile") || ui_ends(p, ".mk")) return L_SH;
+    if (ui_ends(p, ".b4k") || ui_ends(p, ".B4K")) return L_B4K;
+    return L_TEXT;
+}
+
+// Is S[0..N) one of LIST's words? LIST has a space before each word and
+// after the last.
+static int e_inwords(char *s, int n, char *list) {
+    int i, k;
+    i = 0;
+    while (list[i]) {
+        if (list[i] == ' ' && list[i + 1]) {
+            k = 0;
+            while (k < n && list[i + 1 + k] == s[k]) ++k;
+            if (k == n && list[i + 1 + k] == ' ') return 1;
+        }
+        ++i;
+    }
+    return 0;
+}
+
+static void e_paint(int i, int j, int c) {
+    while (i < j && i < HL_MAX) { hlc[i] = c; ++i; }
+}
+static int e_hcol(int i) { return i < HL_MAX ? hlc[i] : C_DARK; }
+
+static char *c_kw = " if else while for do switch case default break continue return goto sizeof typedef struct union enum static extern const volatile register inline restrict ";
+static char *c_ty = " int char short long unsigned signed void float double ";
+static char *js_kw = " function var let const if else for while do return new class this null true false undefined import export from of in typeof instanceof await async break continue switch case default throw try catch finally delete yield ";
+static char *lisp_kw = " define lambda if begin let let* letrec set! cond else and or not quote next define-macro when unless do case ";
+static char *forth_kw = " IF ELSE THEN BEGIN WHILE REPEAT UNTIL AGAIN DO ?DO LOOP +LOOP LEAVE UNLOOP EXIT ; : VARIABLE CONSTANT VALUE CREATE DOES> RECURSE DEFER IS TO CASE OF ENDOF ENDCASE IMMEDIATE POSTPONE ['] [CHAR] LITERAL :NONAME {: :} :M ;M ";
+static char *sh_kw = " if then else elif fi for in do done while until case esac function return export local set exit break continue shift ";
+
+// a string from I (its quote) to its end, \ escapes skipped
+static int e_strend(char *s, int n, int i) {
+    int q;
+    q = s[i];
+    ++i;
+    while (i < n && s[i] != q) { if (s[i] == 92) ++i; ++i; }
+    return i < n ? i + 1 : n;
+}
+
+// C and JavaScript; ST 1 is inside /* */
+static int e_hl_c(char *s, int n, int st, int js) {
+    int i, j, c, nb;
+    i = 0; nb = 0;
+    while (i < n) {
+        c = s[i];
+        if (st == 1) {
+            j = i;
+            while (j < n && !(s[j] == '*' && j + 1 < n && s[j + 1] == '/')) ++j;
+            if (j < n) { j = j + 2; st = 0; }
+            e_paint(i, j, HC_COM); i = j;
+        } else if (c == '/' && i + 1 < n && s[i + 1] == '/') { e_paint(i, n, HC_COM); i = n; }
+        else if (c == '/' && i + 1 < n && s[i + 1] == '*') { e_paint(i, i + 2, HC_COM); i = i + 2; st = 1; }
+        else if (c == '"' || c == 39 || (js && c == '`')) { j = e_strend(s, n, i); e_paint(i, j, HC_STR); i = j; }
+        else if (!js && c == '#' && !nb) {
+            j = i + 1;
+            while (j < n && s[j] == ' ') ++j;
+            while (j < n && e_isword(s[j])) ++j;
+            e_paint(i, j, HC_PRE); i = j;
+        } else if (c >= '0' && c <= '9' && (i == 0 || !e_isword(s[i - 1]))) {
+            j = i;
+            while (j < n && (e_isword(s[j]) || s[j] == '.')) ++j;
+            e_paint(i, j, HC_NUM); i = j;
+        } else if (e_isword(c)) {
+            j = i;
+            while (j < n && e_isword(s[j])) ++j;
+            if (e_inwords(s + i, j - i, js ? js_kw : c_kw)) e_paint(i, j, HC_KW);
+            else if (!js && e_inwords(s + i, j - i, c_ty)) e_paint(i, j, HC_TYPE);
+            i = j;
+        } else ++i;
+        if (c != ' ' && c != 9) nb = 1;
+    }
+    return st;
+}
+
+static int e_lispword(int c) { return c > ' ' && c != '(' && c != ')' && c != '"' && c != ';' && c != 39; }
+static void e_hl_lisp(char *s, int n) {
+    int i, j, c;
+    i = 0;
+    while (i < n) {
+        c = s[i];
+        if (c == ';') { e_paint(i, n, HC_COM); i = n; }
+        else if (c == '"') { j = e_strend(s, n, i); e_paint(i, j, HC_STR); i = j; }
+        else if (e_lispword(c)) {
+            j = i;
+            while (j < n && e_lispword(s[j])) ++j;
+            if ((c >= '0' && c <= '9') || (c == '-' && j > i + 1 && s[i + 1] >= '0' && s[i + 1] <= '9') || c == '#')
+                e_paint(i, j, HC_NUM);
+            else if (e_inwords(s + i, j - i, lisp_kw)) e_paint(i, j, HC_KW);
+            i = j;
+        } else ++i;
+    }
+}
+
+// Forth: blank-separated words, case not mattering; \ and ( comment, S" ." C"
+// ABORT" take a string, and : the name it defines
+static void e_hl_forth(char *s, int n) {
+    int i, j, k, c, def;
+    char up[24];
+    i = 0; def = 0;
+    while (i < n) {
+        if (s[i] == ' ' || s[i] == 9) { ++i; }
+        else {
+            j = i;
+            while (j < n && s[j] != ' ' && s[j] != 9) ++j;
+            k = 0;
+            while (k < j - i && k < 23) { c = s[i + k]; up[k] = c >= 'a' && c <= 'z' ? c - 32 : c; ++k; }
+            if (j - i == 1 && s[i] == 92) { e_paint(i, n, HC_COM); j = n; }
+            else if (j - i == 1 && s[i] == '(') {
+                k = j; while (k < n && s[k] != ')') ++k;
+                if (k < n) ++k;
+                e_paint(i, k, HC_COM); j = k;
+            } else if (j - i <= 23 && j > i && s[j - 1] == '"' && (j - i == 2 || (j - i == 6 && up[0] == 'A'))) {
+                e_paint(i, j, HC_KW);
+                k = j + 1; while (k < n && s[k] != '"') ++k;
+                if (k < n) ++k;
+                e_paint(j, k, HC_STR); j = k;
+            } else if (def) { e_paint(i, j, HC_TYPE); def = 0; }
+            else if ((s[i] >= '0' && s[i] <= '9') || (s[i] == '-' && j > i + 1 && s[i + 1] >= '0' && s[i + 1] <= '9'))
+                e_paint(i, j, HC_NUM);
+            else if (j - i <= 23 && e_inwords(up, j - i, forth_kw)) {
+                e_paint(i, j, HC_KW);
+                if (j - i == 1 && s[i] == ':') def = 1;
+            }
+            i = j;
+        }
+    }
+}
+
+// shell, Makefiles and B4KE: # comments, quotes, $variables; a B4KE line's
+// first word, in capitals, is its directive
+static void e_hl_sh(char *s, int n, int b4k) {
+    int i, j, c, first;
+    i = 0; first = 1;
+    while (i < n) {
+        c = s[i];
+        if (c == '#' && (i == 0 || s[i - 1] == ' ' || s[i - 1] == 9)) { e_paint(i, n, HC_COM); i = n; }
+        else if (c == '"' || c == 39) { j = e_strend(s, n, i); e_paint(i, j, HC_STR); i = j; first = 0; }
+        else if (c == '$') {
+            j = i + 1;
+            if (j < n && (s[j] == '{' || s[j] == '(')) { c = s[j] == '{' ? '}' : ')'; while (j < n && s[j] != c) ++j; if (j < n) ++j; }
+            else { while (j < n && e_isword(s[j])) ++j; }
+            e_paint(i, j, HC_TYPE); i = j; first = 0;
+        } else if (e_isword(c)) {
+            j = i;
+            while (j < n && e_isword(s[j])) ++j;
+            if (b4k && first && c >= 'A' && c <= 'Z') e_paint(i, j, HC_KW);
+            else if (!b4k && e_inwords(s + i, j - i, sh_kw)) e_paint(i, j, HC_KW);
+            else if (c >= '0' && c <= '9') e_paint(i, j, HC_NUM);
+            i = j; first = 0;
+        } else { if (c != ' ' && c != 9) first = 0; ++i; }
+    }
+}
+
+// Colour line Y into hlc; ST is the state at its start, and the state at
+// its end comes back
+static int e_hl(struct edit *e, int y, int st, int lang) {
+    int n;
+    n = e->len[y];
+    e_paint(0, n, C_DARK);
+    if (lang == L_C || lang == L_JS) return e_hl_c(e->ln[y], n, st, lang == L_JS);
+    if (lang == L_LISP) e_hl_lisp(e->ln[y], n);
+    else if (lang == L_FORTH) e_hl_forth(e->ln[y], n);
+    else if (lang == L_SH || lang == L_B4K) e_hl_sh(e->ln[y], n, lang == L_B4K);
+    return 0;
+}
+
+// the state at the start of line LINE
+static int e_hlstate(struct edit *e, int line, int lang) {
+    int y, st;
+    if (lang != L_C && lang != L_JS) return 0;
+    y = 0; st = 0;
+    if (e->hl_ver == e->hver && e->hl_lang == lang && e->hl_line <= line) { y = e->hl_line; st = e->hl_state; }
+    while (y < line && y < e->nl) { st = e_hl(e, y, st, lang); ++y; }
+    e->hl_line = line; e->hl_state = st; e->hl_ver = e->hver; e->hl_lang = lang;
+    return st;
+}
+
+// ---- the file pane ---------------------------------------------------------------------
+
+static void f_reserve(struct edit *e, int need) {
+    char **np;
+    int *nd, *nf, m, i;
+    if (need <= e->fcap) return;
+    m = e->fcap ? e->fcap * 2 : 128;
+    while (m < need) m = m * 2;
+    np = (char **)ualloc(m * sizeof(int));
+    nd = (int *)ualloc(m * sizeof(int));
+    nf = (int *)ualloc(m * sizeof(int));
+    i = 0;
+    while (i < e->fn) { np[i] = e->fpath[i]; nd[i] = e->fdepth[i]; nf[i] = e->fflag[i]; ++i; }
+    if (e->fpath) { free((char *)e->fpath); free((char *)e->fdepth); free((char *)e->fflag); }
+    e->fpath = np; e->fdepth = nd; e->fflag = nf; e->fcap = m;
+}
+
+static void f_ins(struct edit *e, int at, char *path, int depth, int flag) {
+    int i;
+    f_reserve(e, e->fn + 1);
+    i = e->fn;
+    while (i > at) { e->fpath[i] = e->fpath[i - 1]; e->fdepth[i] = e->fdepth[i - 1]; e->fflag[i] = e->fflag[i - 1]; --i; }
+    e->fpath[at] = (char *)ualloc(ui_len(path) + 1);
+    ui_cpy(e->fpath[at], path);
+    e->fdepth[at] = depth;
+    e->fflag[at] = flag;
+    ++e->fn;
+}
+
+static void f_del(struct edit *e, int at) {
+    int i;
+    free(e->fpath[at]);
+    i = at;
+    while (i < e->fn - 1) { e->fpath[i] = e->fpath[i + 1]; e->fdepth[i] = e->fdepth[i + 1]; e->fflag[i] = e->fflag[i + 1]; ++i; }
+    --e->fn;
+}
+
+static void f_join(char *out, char *dir, char *nm) {
+    ui_cpy(out, dir);
+    if (!(dir[0] == '/' && dir[1] == 0)) ui_cat(out, "/");
+    ui_cat(out, nm);
+}
+static int f_before(char *a, char *b) {
+    while (*a && *a == *b) { ++a; ++b; }
+    return (*a & 255) < (*b & 255);
+}
+
+// Folder I's contents below it -- I -1 is the root, whose contents are
+// the top of the tree -- folders first, each lot by name.
+static void f_open_dir(struct edit *e, int i) {
+    char *dir, *names, nm[FNAME];
+    int *dirs, depth, n, k, j, r;
+    dir = i < 0 ? "/" : e->fpath[i];
+    depth = i < 0 ? 0 : e->fdepth[i] + 1;
+    names = (char *)ualloc(F_KIDS * FNAME);
+    dirs = (int *)ualloc(F_KIDS * sizeof(int));
+    n = 0; k = 0;
+    while (n < F_KIDS) {
+        r = ureaddir(dir, k, nm);
+        if (r < 0) break;
+        ui_cpy(names + n * FNAME, nm);
+        dirs[n] = r == 1;
+        ++n; ++k;
+    }
+    k = 1;
+    while (k < n) {
+        j = k;
+        while (j > 0 && (dirs[j] > dirs[j - 1] || (dirs[j] == dirs[j - 1] && f_before(names + j * FNAME, names + (j - 1) * FNAME)))) {
+            ui_cpy(nm, names + j * FNAME); ui_cpy(names + j * FNAME, names + (j - 1) * FNAME); ui_cpy(names + (j - 1) * FNAME, nm);
+            r = dirs[j]; dirs[j] = dirs[j - 1]; dirs[j - 1] = r;
+            --j;
+        }
+        ++k;
+    }
+    j = 0;
+    while (j < n) {
+        f_join(sb, dir, names + j * FNAME);
+        f_ins(e, i + 1 + j, sb, depth, dirs[j] ? F_DIR : 0);
+        ++j;
+    }
+    if (i >= 0) e->fflag[i] = e->fflag[i] | F_OPEN;
+    free(names); free((char *)dirs);
+}
+
+static void f_close_dir(struct edit *e, int i) {
+    while (i + 1 < e->fn && e->fdepth[i + 1] > e->fdepth[i]) f_del(e, i + 1);
+    e->fflag[i] = e->fflag[i] & F_DIR;
+}
+
+static int f_find(struct edit *e, char *p) {
+    int i;
+    i = 0;
+    while (i < e->fn) { if (ui_eq(e->fpath[i], p)) return i; ++i; }
+    return 0 - 1;
+}
+
+// open every folder above PATH, so that it is in the tree to be seen
+static void f_reveal(struct edit *e, char *path) {
+    char part[128];
+    int k, i;
+    if (!e->fpath || path[0] != '/') return;
+    k = 1;
+    while (path[k] && k < 127) {
+        if (path[k] == '/') {
+            memcpy(part, path, k); part[k] = 0;
+            i = f_find(e, part);
+            if (i >= 0 && (e->fflag[i] & F_DIR) && !(e->fflag[i] & F_OPEN)) f_open_dir(e, i);
+        }
+        ++k;
+    }
+    e->ffollow = 1;
+}
+
+// A file just written: into the tree, in its place among its folder's
+// files, if that folder is open and it is not there yet.
+static void f_add(struct edit *e, char *path) {
+    char dir[128];
+    int p, d, i, k;
+    if (!e->fpath || path[0] != '/' || f_find(e, path) >= 0) return;
+    k = ui_len(path);
+    while (k > 0 && path[k - 1] != '/') --k;
+    if (k <= 1) { p = 0 - 1; d = 0; }
+    else {
+        if (k > 127) return;
+        memcpy(dir, path, k - 1); dir[k - 1] = 0;
+        p = f_find(e, dir);
+        if (p < 0 || !(e->fflag[p] & F_OPEN)) return;
+        d = e->fdepth[p] + 1;
+    }
+    i = p + 1;
+    while (i < e->fn && e->fdepth[i] >= d) {
+        if (e->fdepth[i] == d && !(e->fflag[i] & F_DIR) && f_before(path + k, e->fpath[i] + k)) break;
+        ++i;
+    }
+    f_ins(e, i, path, d, 0);
+}
+
+static int f_rows(int ch) { return (ch - FHDR - 2) / FROW; }
+static void f_clamp(struct edit *e, int rows) {
+    if (e->ftop > e->fn - rows) e->ftop = e->fn - rows;
+    if (e->ftop < 0) e->ftop = 0;
+}
+// the pane is drawn only where the text keeps some room
+static int f_on(struct edit *e, int cw) { return e->fshown && e->fpath && cw >= FW + 200; }
+
+static void f_draw(struct edit *e, int ox, int oy, int ch) {
+    int rows, i, y, x, cur, k;
+    char *p;
+    rows = f_rows(ch);
+    cur = f_find(e, e->path);
+    if (e->ffollow && cur >= 0) {
+        if (cur < e->ftop) e->ftop = cur;
+        if (cur >= e->ftop + rows) e->ftop = cur - rows / 2;
+    }
+    e->ffollow = 0;
+    f_clamp(e, rows);
+    d_rect(ox, oy, FW, ch, 0xf4f4f4);
+    d_rect(ox, oy, FW, FHDR, C_FACE);
+    d_bevel(ox, oy, FW, FHDR, B_RAISED);
+    d_text(ox + 6, oy + 4, C_DARK, F_BOLD, "Files");
+    d_clip(ox, oy + FHDR, FW - (e->fn > rows ? 17 : 0), ch - FHDR);
+    i = e->ftop;
+    y = oy + FHDR + 2;
+    while (i < e->fn && i < e->ftop + rows) {
+        x = ox + 4 + e->fdepth[i] * 12;
+        if (i == cur) d_rect(ox, y, FW, FROW, 0xc8dcff);
+        if (e->fflag[i] & F_DIR) {
+            if (e->fflag[i] & F_OPEN) { d_line(x, y + 6, x + 4, y + 10, C_DARK); d_line(x + 4, y + 10, x + 8, y + 6, C_DARK); }
+            else { d_line(x + 2, y + 4, x + 6, y + 8, C_DARK); d_line(x + 6, y + 8, x + 2, y + 12, C_DARK); }
+            d_rect(x + 11, y + 3, 5, 2, 0xc8a000);
+            d_rect(x + 11, y + 5, 13, 8, 0xffd84a);
+        } else {
+            d_rect(x + 13, y + 2, 9, 12, C_WHITE);
+            d_recto(x + 13, y + 2, 9, 12, C_SHADOW);
+        }
+        p = e->fpath[i];
+        k = ui_len(p);
+        while (k > 0 && p[k - 1] != '/') --k;
+        d_text(x + 28, y + 2, C_DARK, F_SANS, p + k);
+        y = y + FROW;
+        ++i;
+    }
+    d_clip_end();
+    if (e->fn > rows) ui_scrollbar(ox + FW - 17, oy + FHDR, ch - FHDR, e->fn, rows, e->ftop);
+    d_rect(ox + FW, oy, 2, ch, C_SHADOW);
+}
+
+// a file picked in the pane: into the editor, unless that loses changes
+static void f_pick(struct win *w, int i) {
+    struct edit *e;
+    char p[128];
+    e = E(w);
+    if (ui_eq(e->fpath[i], e->path)) return;
+    if (e->modified) { e_say(e, "No write since last change: :w first, or :e! FILE"); return; }
+    ui_cpy(p, e->fpath[i]);
+    if (!e_load(e, p)) e_say(e, "Cannot open that file");
+    e_retitle(w);
+}
+
+static void f_mouse(struct win *w, int ev, int x, int y, int ch) {
+    struct edit *e;
+    int rows, t, i;
+    e = E(w);
+    rows = f_rows(ch);
+    if (ev == E_WHEEL) { e->ftop = e->ftop + y * 3; f_clamp(e, rows); return; }
+    if (ev != E_DOWN) return;
+    if (e->fn > rows) {
+        t = ui_scroll_click(x, y, FW - 17, FHDR, ch - FHDR, e->fn, rows, e->ftop);
+        if (t >= 0) { e->ftop = t; return; }
+    }
+    if (y < FHDR + 2 || x >= FW) return;
+    i = e->ftop + (y - FHDR - 2) / FROW;
+    if (i < 0 || i >= e->fn) return;
+    if (e->fflag[i] & F_DIR) { if (e->fflag[i] & F_OPEN) f_close_dir(e, i); else f_open_dir(e, i); }
+    else f_pick(w, i);
+}
+
 // ---- drawing ------------------------------------------------------------------------------
 
 static int e_selected(struct edit *e, int y, int x) {
@@ -1493,9 +1940,9 @@ static int e_selected(struct edit *e, int y, int x) {
     return 1;
 }
 
-void edit_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
+static void e_draw_text(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     struct edit *e;
-    int rows, cols, gw, y, line, x, n, sx, ph, sy, k, i, c, endsel;
+    int rows, cols, gw, y, line, x, n, sx, ph, sy, k, i, c, endsel, lang, st;
     char num[16];
     e = E(w);
     ph = e->bshown ? (BROWS + 1) * ECH + 4 : 0;
@@ -1515,6 +1962,8 @@ void edit_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     if (gw) d_rect(ox, oy, gw + 2, ch - ph - ECH - 4, 0xe8e8e8);
     line = e->top;
     y = oy + 3;
+    lang = e->nosyn ? L_TEXT : e_lang(e->path);
+    st = e_hlstate(e, e->top, lang);
     while (line < e->nl && line < e->top + rows) {
         if (gw) {
             ui_num(num, line + 1);
@@ -1533,7 +1982,16 @@ void edit_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
         }
         n = e->len[line] - e->left;
         if (n > cols) n = cols;
-        if (n > 0) d_textn(sx, y, C_DARK, EFONT, F_MONO, ECW, e->ln[line] + e->left, n);
+        // the colours for the whole line, which also say what the next starts in
+        st = e_hl(e, line, st, lang);
+        x = 0;
+        while (x < n) {
+            c = e_hcol(e->left + x);
+            k = x + 1;
+            while (k < n && e_hcol(e->left + k) == c) ++k;
+            d_textn(sx + x * ECW, y, c, EFONT, F_MONO, ECW, e->ln[line] + e->left + x, k - x);
+            x = k;
+        }
         // the cursor: a block in Normal, a bar in Insert
         if (focused && line == e->cy && e->mode != M_CMD) {
             x = sx + (e->cx - e->left) * ECW;
@@ -1597,19 +2055,26 @@ void edit_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     d_textn(ox + cw - 12 - k * ECW, sy + 2, C_DARK, EFONT, F_MONO, ECW, sb, k);
 }
 
-void edit_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
+// the view moved to T: the cursor comes along, as the redraw keeps it in view
+static void e_scrolled(struct edit *e, int t) {
+    e->top = t;
+    if (e->top > e->nl - e->rows) e->top = e->nl - e->rows;
+    if (e->top < 0) e->top = 0;
+    if (e->cy < e->top) e->cy = e->top;
+    if (e->cy >= e->top + e->rows) e->cy = e->top + e->rows - 1;
+    e_clamp(e);
+}
+
+static void e_mouse_text(struct win *w, int ev, int x, int y, int cw, int ch) {
     struct edit *e;
     int ph, top_of_pane, row, line, t;
     e = E(w);
     ph = e->bshown ? (BROWS + 1) * ECH + 4 : 0;
     top_of_pane = ch - ph - ECH - 4;
-    if (ev == E_WHEEL) {
-        e->top = e->top + y * 3;
-        if (e->top > e->nl - e->rows) e->top = e->nl - e->rows;
-        if (e->top < 0) e->top = 0;
-        if (e->cy < e->top) e->cy = e->top;
-        if (e->cy >= e->top + e->rows) e->cy = e->top + e->rows - 1;
-        e_clamp(e);
+    if (ev == E_WHEEL) { e_scrolled(e, e->top + y * 3); return; }
+    if (ev == E_MOVE) {
+        t = ui_scroll_drag(cw - 17, 0, y);
+        if (t >= 0) e_scrolled(e, t);
         return;
     }
     if (ev != E_DOWN && ev != E_DBL) return;
@@ -1625,7 +2090,7 @@ void edit_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     }
     if (y >= top_of_pane) return;
     t = ui_scroll_click(x, y, cw - 17, 0, top_of_pane, e->nl, e->rows, e->top);
-    if (t >= 0) { e->top = t; return; }
+    if (t >= 0) { e_scrolled(e, t); return; }
     line = e->top + (y - 3) / ECH;
     if (line >= e->nl) line = e->nl - 1;
     if (line < 0) line = 0;
@@ -1636,24 +2101,49 @@ void edit_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     e->want = e->cx;
 }
 
+// The file pane on the left when it is shown, the text beside it
+void edit_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
+    struct edit *e;
+    e = E(w);
+    if (!f_on(e, cw)) { e_draw_text(w, ox, oy, cw, ch, focused); return; }
+    f_draw(e, ox, oy, ch);
+    d_clip(ox + FW + 2, oy, cw - FW - 2, ch);
+    e_draw_text(w, ox + FW + 2, oy, cw - FW - 2, ch, focused);
+    d_clip_end();
+}
+
+void edit_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
+    struct edit *e;
+    int t;
+    e = E(w);
+    if (!f_on(e, cw)) { e_mouse_text(w, ev, x, y, cw, ch); return; }
+    if (ev == E_MOVE) {
+        t = ui_scroll_drag(FW - 17, FHDR, y);
+        if (t >= 0) { e->ftop = t; return; }
+    } else if (x < FW + 2) { f_mouse(w, ev, x, y, ch); return; }
+    e_mouse_text(w, ev, x - FW - 2, y, cw - FW - 2, ch);
+}
+
 // ---- the window -----------------------------------------------------------------------------
 
 int edit_open(char *path) {
     int i;
     struct win *w;
     struct edit *e;
-    i = win_open(K_EDIT, "Untitled - Editor", 640, 470);
+    i = win_open(K_EDIT, "Untitled - Editor", 760, 500);
     if (i < 0) return i;
     w = win_get(i);
     e = E(w);
-    edit_menu_titles[0] = "File"; edit_menu_titles[1] = "Build"; edit_menu_titles[2] = "Help";
+    edit_menu_titles[0] = "File"; edit_menu_titles[1] = "Build"; edit_menu_titles[2] = "View"; edit_menu_titles[3] = "Help";
     edit_file_items[0] = "New"; edit_file_items[1] = "Open..."; edit_file_items[2] = "Save";
     edit_file_items[3] = "Save As..."; edit_file_items[4] = "-"; edit_file_items[5] = "Close"; edit_file_items[6] = 0;
     edit_build_items[0] = "Build   F5"; edit_build_items[1] = "Run   F6"; edit_build_items[2] = "Next Error   F8";
     edit_build_items[3] = "Previous Error"; edit_build_items[4] = "Show Output   F4"; edit_build_items[5] = 0;
+    edit_view_items[0] = "Files   Ctrl+B"; edit_view_items[1] = "Syntax Colouring"; edit_view_items[2] = 0;
     edit_help_items[0] = "Keys"; edit_help_items[1] = 0;
-    edit_menu_items[0] = edit_file_items; edit_menu_items[1] = edit_build_items; edit_menu_items[2] = edit_help_items;
-    win_menus(w, 3, edit_menu_titles, edit_menu_items);
+    edit_menu_items[0] = edit_file_items; edit_menu_items[1] = edit_build_items;
+    edit_menu_items[2] = edit_view_items; edit_menu_items[3] = edit_help_items;
+    win_menus(w, 4, edit_menu_titles, edit_menu_items);
     e->utext = (char **)ualloc(UNDO_MAX * sizeof(int)); e->ulen = (int *)ualloc(UNDO_MAX * sizeof(int));
     e->ucy = (int *)ualloc(UNDO_MAX * sizeof(int)); e->ucx = (int *)ualloc(UNDO_MAX * sizeof(int));
     e->rtext = (char **)ualloc(UNDO_MAX * sizeof(int)); e->rlen = (int *)ualloc(UNDO_MAX * sizeof(int));
@@ -1665,7 +2155,12 @@ int edit_open(char *path) {
     e->eline = (int *)ualloc(ERR_MAX * sizeof(int));
     e->elog = (int *)ualloc(ERR_MAX * sizeof(int));
     e->vim = 1; e->nu = 1; e->mode = M_NORMAL; e->ecur = 0 - 1; e->bsel = 0 - 1;
+    e->hl_line = 0 - 1;
     e_insline(e, 0, "", 0);
+    // the file pane: the top of the disk, every folder closed
+    e->fshown = 1;
+    f_reserve(e, 64);
+    f_open_dir(e, 0 - 1);
     if (path && path[0]) {
         if (!e_load(e, path)) { ui_cpy(e->path, path); e_say(e, "New file"); }
     }
@@ -1700,8 +2195,13 @@ void edit_command(struct win *w, int menu, int item) {
         else if (item == 4) e->bshown = !e->bshown;
         return;
     }
+    if (menu == 2) {
+        if (item == 0) e->fshown = !e->fshown;
+        else if (item == 1) e->nosyn = !e->nosyn;
+        return;
+    }
     msgbox(w, "Editor keys",
-           "Esc for Normal mode, i to insert. hjkl or arrows move; w b e words; dd yy p; u undo; . repeat. :w save, :make or F5 build, F8 next error, F6 run, :set novim for a plain editor.",
+           "Esc for Normal mode, i to insert. hjkl or arrows move; w b e words; dd yy p; u undo; . repeat. :w save, :make or F5 build, F8 next error, F6 run, Ctrl+B the file pane, :syntax off, :set novim for a plain editor.",
            0, A_NONE);
 }
 

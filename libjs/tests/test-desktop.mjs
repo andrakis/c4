@@ -56,7 +56,7 @@ const pump = () => {
       const n = words[i + 8];
       let s = '';
       for (let k = 0; k < n; k++) s += String.fromCharCode((words[i + 9 + (k >> 2)] >>> ((k & 3) * 8)) & 0xff);
-      cur.push({ x: words[i + 2], y: words[i + 3], s });
+      cur.push({ x: words[i + 2], y: words[i + 3], s, rgb: words[i + 4], adv: words[i + 7] });
     }
     if (t === CMD.PRESENT) { frame = cur; rects = curRects; presents++; }
   }
@@ -68,6 +68,32 @@ const settle = () => { for (let i = 0; i < 20; i++) run(); return true; };
 const screen = () => frame.map(t => t.s).join('\n');
 const has = re => typeof re === 'string' ? frame.some(t => t.s.trimEnd() === re) : frame.some(t => re.test(t.s));
 const find = s => frame.filter(t => (typeof s === 'string' ? t.s.trimEnd() === s : s.test(t.s)));
+// Monospaced text as lines: the Editor colours a line in runs, one string
+// each, so a run that starts where the last ended joins it, and the cursor
+// drawn over a character is left out.
+const rows = () => {
+  const mono = frame.filter(t => t.adv > 0).sort((a, b) => a.y - b.y || a.x - b.x);
+  const out = [];
+  for (const t of mono) {
+    const p = out[out.length - 1];
+    if (p && p.y === t.y && p.adv === t.adv && t.x === p.x + p.s.length * p.adv) p.s += t.s;
+    else if (p && p.y === t.y && t.x >= p.x && t.x < p.x + p.s.length * p.adv) continue;
+    else out.push({ ...t });
+  }
+  return out;
+};
+// Drag a scroll bar's thumb, which sits at the top of its track: the
+// track is the 16-pixel-wide 0xe0e0e0 rectangle PICK chooses, the last
+// drawn of them (the topmost window's).
+const dragThumb = (pick, dy) => {
+  const bar = rects.filter(r => r.w === 16 && r.rgb === 0xe0e0e0).filter(pick).pop();
+  if (!bar) return false;
+  const x = bar.x + 8, y = bar.y + 20;
+  ev({ kind: 'move', x, y, buttons: 0 }); ev({ kind: 'down', x, y, button: 0 });
+  for (let k = 1; k <= 4; k++) ev({ kind: 'move', x, y: y + (dy * k) / 4, buttons: 1 });
+  ev({ kind: 'up', x, y: y + dy, button: 0 });
+  return true;
+};
 const ev = e => { gui.event(e); run(3e5); };
 const click = (x, y, button = 0) => { ev({ kind: 'move', x, y, buttons: 0 }); ev({ kind: 'down', x, y, button }); ev({ kind: 'up', x, y, button }); };
 // Click on a string on the screen. `pick` chooses among several (default:
@@ -120,7 +146,7 @@ check(until(() => consoleText().includes('desktop: running on the display')), 'd
 check(until(() => gui.w === SW && gui.h === SH && presents > 0), `it asks for ${SW}x${SH} and draws`);
 check(until(() => has(/c4ix:\/\$/), 800), 'a Command Prompt opens with a shell prompt', screen());
 check(has('Start') && has(/[0-9]{1,2}:[0-9]{2} [AP]M/), 'the taskbar has Start and a clock');
-check(['My Computer', 'Command Prompt', 'Notepad', 'Calculator', 'Task Manager'].every(has), 'the desktop icons are there');
+check(['My Computer', 'Command Prompt', 'Notepad', 'IDE', 'Calculator', 'Task Manager'].every(has), 'the desktop icons are there, the IDE among them');
 
 // ---- Command Prompt ----------------------------------------------------------------
 type('ps\n');
@@ -175,6 +201,9 @@ const inTree = all => {
   check(until(() => !inTree(find('C4IX (/)'))), 'the wheel scrolls the folder tree past its top', screen());
   for (let i = 0; i < 40; i++) ev({ kind: 'wheel', x: e.x + 60, y: e.y + 200, dy: -1 });
   check(until(() => !!inTree(find('C4IX (/)'))), 'and back', screen());
+  check(dragThumb(r => r.x < e.x + 200, 120) && until(() => !inTree(find('C4IX (/)'))), "dragging the tree's scroll thumb scrolls it", screen());
+  for (let i = 0; i < 40; i++) ev({ kind: 'wheel', x: e.x + 60, y: e.y + 200, dy: -1 });
+  until(() => !!inTree(find('C4IX (/)')));
 }
 key('TAB'); key('', 0, 36); key('', 0, 37);               // the tree; Home; Left
 check(until(() => !!inTree(find('C4IX (/)')) && !inTree(find('usr')) && !!inList(find('usr'))),
@@ -252,7 +281,7 @@ check(until(() => has('54')), '2A * 2 = 54 in hex');
 // Printable keys go in with keyCode 0: this harness would otherwise make
 // '(' a Down arrow and '.' Delete (a browser sends their own keyCodes).
 const txt = s => { for (const ch of s) key(ch, 0, ch === '\n' ? 13 : 0); };
-const edLine = s => frame.some(t => t.s.trimEnd().endsWith(s));
+const edLine = s => rows().some(t => t.s.trimEnd().endsWith(s));
 start('Editor');
 check(until(() => has('Untitled - Editor')), 'Start > Editor opens a new file in VIM mode', screen());
 txt('i');
@@ -265,11 +294,12 @@ check(until(() => has(/"\/ram\/t\.c" written, 3 lines/) && has('t.c - Editor')),
 txt('2Gf4r7');
 check(until(() => edLine('    return 7;')), '2G f4 r7 changes the number in place', screen());
 txt('ggyyp');
-check(until(() => find(/int main\(\) \{\s*$/).length === 2), 'yyp copies a line', screen());
+const mains = () => rows().filter(t => /int main\(\) \{\s*$/.test(t.s)).length;
+check(until(() => mains() === 2), 'yyp copies a line', screen());
 txt('dd');
-check(until(() => find(/int main\(\) \{\s*$/).length === 1), 'dd deletes it');
+check(until(() => mains() === 1), 'dd deletes it');
 txt('u');
-check(until(() => find(/int main\(\) \{\s*$/).length === 2), 'u undoes that', screen());
+check(until(() => mains() === 2), 'u undoes that', screen());
 txt('dd');
 key('UP'); key('DOWN');
 txt('A');
@@ -300,6 +330,45 @@ key('ESC'); txt('set vim\n');
 check(until(() => !has(/^-- EDIT --/)), 'and Esc then set vim brings VIM back', screen());
 txt(':q!\n');
 check(until(() => !has(/t\.c \* - Editor|t\.c - Editor/)), ':q! closes the window');
+
+// ---- the IDE: its desktop icon, its file pane, colours, its scroll bar -----------------------
+dbl('IDE');
+check(until(() => has('Untitled - Editor') && has('Files')), 'the IDE icon opens the Editor, with a file pane', screen());
+// The Editor window, by its title; what is drawn after the title in the
+// frame is that window's (it is on top), so other windows' text at the
+// same place does not count.
+const edTitle = () => frame.findIndex(t => / - Editor$/.test(t.s));
+const ed = () => { const i = edTitle(); return i >= 0 ? { x: frame[i].x - 27, y: frame[i].y - 7, i } : null; };
+const inPane = all => { const e = ed(); return e ? all.filter(t => frame.indexOf(t) > e.i && t.x > e.x && t.x < e.x + 184 && t.y > e.y + 60).pop() : undefined; };
+check(!!inPane(find('usr')) && !!inPane(find('bin')) && !inPane(find('src')), 'the pane lists the top of the disk, its folders closed', screen());
+clickText('usr', inPane);
+check(until(() => !!inPane(find('src'))), 'a click opens a folder', screen());
+clickText('src', inPane);
+check(until(() => !!inPane(find('examples'))), 'and one inside it');
+clickText('examples', inPane);
+check(until(() => !!inPane(find('hello.c'))), 'which lists its files', screen());
+clickText('hello.c', inPane);
+check(until(() => has('hello.c - Editor') && edLine('int main(int argc, char **argv) {')), 'a click on a file opens it in the editor', screen());
+check(frame.some(t => t.s === 'int' && t.rgb === 0x007878) && frame.some(t => t.s === 'return' && t.rgb === 0x0000b0) &&
+  frame.some(t => /^\/\/ hello\.c/.test(t.s) && t.rgb === 0x2a8a2a) && frame.some(t => /^"hello from/.test(t.s) && t.rgb === 0xa01818),
+  'a .c file is coloured: types, keywords, comments and strings', frame.filter(t => t.adv === 7).map(t => `${t.s}:${t.rgb.toString(16)}`).slice(0, 40).join(' '));
+txt(':syntax off\n');
+check(until(() => edLine('int main(int argc, char **argv) {') && !frame.some(t => t.s === 'int' && t.rgb === 0x007878)), ':syntax off draws it plain', screen());
+txt(':syntax on\n');
+key('b', 2, 66);
+check(until(() => !has('Files') && has('hello.c - Editor')), 'Ctrl+B hides the file pane', screen());
+key('b', 2, 66);
+check(until(() => has('Files') && !!inPane(find('hello.c'))), 'and shows it again, still open at the file', screen());
+txt(':e /usr/src/c4/src/c4ix/user/desktop/edit.c\n');
+check(until(() => has('edit.c - Editor') && !!inPane(find('edit.c'))), ':e opens a file, and the pane opens the folders to it', screen());
+{
+  const e = ed();
+  const firstLine = () => Math.min(...frame.filter(t => t.adv === 7 && /^\d+$/.test(t.s.trim()) && t.x > e.x + 184 && t.x < e.x + 250).map(t => +t.s.trim()));
+  check(firstLine() === 1 && dragThumb(r => r.x > e.x + 400, 150) && until(() => firstLine() > 100),
+    "dragging the editor's scroll thumb scrolls the text", `first line ${firstLine()}`);
+}
+txt(':q\n');
+check(until(() => !has('edit.c - Editor')), 'and :q closes it');
 
 // ---- Task Manager ------------------------------------------------------------------------
 clickText(/^Command Prompt - task/);

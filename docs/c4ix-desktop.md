@@ -361,6 +361,43 @@ it lacked was somewhere to edit and build in one place.
       compile error listed and gone to, `ciw` and `.`, `/` and `V j d`,
       `:set novim` and back, and `:q!`.
 
+## Part five: the IDE grows a file pane, and the desktop's scroll bars drag (asked for 2026-10-20)
+
+- [x] **Scroll bars drag.** Every bar on the desktop -- Notepad, the Editor,
+      both of Explorer's panes, Task Manager -- moves with its thumb.
+      `ui_scroll_click` starts a drag when the thumb is pressed;
+      `ui_scroll_drag(x, y, py)` answers each move with the top line for
+      the bar at x, y (a window may have two); `mouse_up` ends it. While a
+      drag is on, moves reach the window even outside it, and each one
+      redraws. A click on a bar now also brings the cursor or selection
+      along, as the wheel does, where it used to be scrolled straight back
+      to it by the next redraw (the Editor, Task Manager).
+- [x] **Explorer's tree** scrolls (a bar and the wheel) and its folders
+      collapse: a +/- box, a double click, Left/Right or -/+.
+- [x] **An IDE icon** on the desktop, beside Notepad: the Editor.
+- [x] **Explorer opens source in the IDE**: `.c` and `.h` already did; so
+      do shell scripts, Makefiles, assembly, Markdown, JSON, HTML, CSS,
+      Python and Forth's `.fs` now. Plain `.txt` stays Notepad's.
+- [x] **The Editor's file pane**: a tree of the disk down the left, its
+      folders closed to start with. A click opens or closes a folder, and
+      opens a file (not over unsaved changes). Opening a file, from the
+      pane, `:e`, a build error or Explorer, opens the folders on the way
+      to it and marks it; a file written with `:w` joins its folder's
+      list. Ctrl+B, View > Files or `:Ex` shows and hides it, and it gives
+      way when the window is too narrow for it and the text.
+- [x] **Syntax colours, by the file's name**: C and headers, JavaScript,
+      Lisp, Forth, shell scripts and Makefiles, and B4KE build files --
+      keywords, types, strings, comments, numbers and the preprocessor. A
+      line is coloured on its own; only being inside a C comment carries
+      over, and where that stands at the top of the view is kept with a
+      count of changes, so scrolling does not read the file from the top.
+      `:syntax off` / `on`, or View > Syntax Colouring.
+- [x] Pinned by `test-desktop.mjs`: the icon; the pane listing the root,
+      opening folders and a file; the colours of `hello.c`; `:syntax off`;
+      Ctrl+B both ways; `:e` opening the folders to a file; dragging the
+      Editor's thumb and Explorer's tree thumb. Not yet looked at in a
+      browser.
+
 ### Found on the way, not fixed
 - `make test-c4th-os`: the C4DOS leg prints an empty prompt line ahead of
   c4th's output, so it differs from the reference at byte 1. Nothing it

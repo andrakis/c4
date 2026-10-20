@@ -35,6 +35,20 @@ void d_textn(int x, int y, int rgb, int size, int font, int advance, char *s, in
     gui_text2(x, y, rgb, size, font, advance, s, n);
 }
 
+// Drawing narrowed to part of the window being drawn -- an app's pane --
+// and back to all of it. Never wider than the window's client area.
+static int clip_x, clip_y, clip_w, clip_h;
+void d_clip(int x, int y, int w, int h) {
+    int x1, y1;
+    x1 = x + w; y1 = y + h;
+    if (x < clip_x) x = clip_x;
+    if (y < clip_y) y = clip_y;
+    if (x1 > clip_x + clip_w) x1 = clip_x + clip_w;
+    if (y1 > clip_y + clip_h) y1 = clip_y + clip_h;
+    gui_clip(x, y, x1 > x ? x1 - x : 0, y1 > y ? y1 - y : 0);
+}
+void d_clip_end() { gui_clip(clip_x, clip_y, clip_w, clip_h); }
+
 // The Windows bevels: two pixels, light top-left, dark bottom-right (or
 // the other way round for a sunken one).
 void d_bevel(int x, int y, int w, int h, int style) {
@@ -453,7 +467,8 @@ static void draw_window(int i, int focused) {
         cap_button(bx - 34, by, 3);
     }
     if (w->nmenus) draw_menubar(w, focused);
-    gui_clip(client_x(w), client_y(w), client_w(w), client_h(w));
+    clip_x = client_x(w); clip_y = client_y(w); clip_w = client_w(w); clip_h = client_h(w);
+    gui_clip(clip_x, clip_y, clip_w, clip_h);
     app_draw(w, client_x(w), client_y(w), client_w(w), client_h(w), focused);
     gui_noclip();
     if (w->resizable && !w->max) {                 // the size grip
@@ -483,9 +498,9 @@ static void icon(int x, int y, char *label, int kind) {
     d_text(x + 24 - lw / 2, y + 36, C_LIGHT, F_SANS, label);
 }
 
-static char *icon_labels[5];
-static int icon_kinds[5];
-enum { N_ICONS = 5 };
+static char *icon_labels[6];
+static int icon_kinds[6];
+enum { N_ICONS = 6 };
 
 // The Start menu, NT 4 style: a banner down the left, then the tools.
 static char *start_items[12];
@@ -770,8 +785,11 @@ static void mouse_move(int x, int y) {
     k = win_focused();
     if (k >= 0) {
         w = wins + k;
-        if (ui_hit(x, y, client_x(w), client_y(w), client_w(w), client_h(w)))
+        // a thumb being dragged follows the pointer out of the window too
+        if (ui_scroll_active() || ui_hit(x, y, client_x(w), client_y(w), client_w(w), client_h(w))) {
             app_mouse(w, E_MOVE, x - client_x(w), y - client_y(w));
+            if (ui_scroll_active()) dirty = 1;          // the thumb moved: draw it there
+        }
     }
 }
 
@@ -779,6 +797,7 @@ static void mouse_up(int x, int y) {
     struct win *w;
     int k;
     drag = 0; sizing = 0;
+    ui_scroll_end();
     k = win_focused();
     if (k >= 0) { w = wins + k; app_mouse(w, E_UP, x - client_x(w), y - client_y(w)); }
 }
@@ -832,8 +851,9 @@ int main(int argc, char **argv) {
     icon_labels[0] = "My Computer"; icon_kinds[0] = 0;
     icon_labels[1] = "Command Prompt"; icon_kinds[1] = K_TERM;
     icon_labels[2] = "Notepad"; icon_kinds[2] = K_NOTE;
-    icon_labels[3] = "Calculator"; icon_kinds[3] = K_CALC;
-    icon_labels[4] = "Task Manager"; icon_kinds[4] = K_TASKS;
+    icon_labels[3] = "IDE"; icon_kinds[3] = K_EDIT;
+    icon_labels[4] = "Calculator"; icon_kinds[4] = K_CALC;
+    icon_labels[5] = "Task Manager"; icon_kinds[5] = K_TASKS;
     k = 0;
     start_items[k] = "Command Prompt"; start_kinds[k] = K_TERM; ++k;
     start_items[k] = "Explorer"; start_kinds[k] = K_FILES; ++k;

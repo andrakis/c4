@@ -174,6 +174,11 @@ void note_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
         n->caret = pos_of(n, n->top + (rows / 2), 0);
         return;
     }
+    if (ev == E_MOVE) {
+        t = ui_scroll_drag(cw - 18, 2, y);
+        if (t >= 0) { n->top = t; n->caret = pos_of(n, t, 0); }
+        return;
+    }
     if (ev != E_DOWN) return;
     t = ui_scroll_click(x, y, cw - 18, 2, ch - 4, lines(n), rows, n->top);
     if (t >= 0) { n->top = t; n->caret = pos_of(n, t, 0); return; }

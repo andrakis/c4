@@ -71,6 +71,8 @@ void d_text(int x, int y, int rgb, int font, char *s);
 void d_textn(int x, int y, int rgb, int size, int font, int advance, char *s, int n);
 void d_bevel(int x, int y, int w, int h, int style);
 void d_icon(int kind, int x, int y);
+void d_clip(int x, int y, int w, int h);  // narrower than the window, until d_clip_end
+void d_clip_end();
 
 // ---- wm.c: windows ----
 struct win *win_get(int i);
@@ -93,6 +95,9 @@ void ui_button(int x, int y, int w, int h, char *label, int pressed, int deflt);
 int  ui_hit(int px, int py, int x, int y, int w, int h);
 void ui_scrollbar(int x, int y, int h, int total, int visible, int top);
 int  ui_scroll_click(int px, int py, int x, int y, int h, int total, int visible, int top);
+int  ui_scroll_drag(int x, int y, int py);     // the top line while the bar at x,y is dragged, or -1
+int  ui_scroll_active();
+void ui_scroll_end();
 void ui_field(int x, int y, int w, char *text, int caret, int focused);
 void ui_tabs(int x, int y, char **labels, int n, int sel);
 int  ui_tab_hit(int px, int py, int x, int y, char **labels, int n);

@@ -84,6 +84,26 @@ void ui_scrollbar(int x, int y, int h, int total, int visible, int top) {
     d_bevel(x, ty, 16, th, B_RAISED);
 }
 
+// A drag of a scroll bar's thumb. ui_scroll_click starts one when it is
+// the thumb that is pressed; each move then asks ui_scroll_drag for the
+// top line, naming the bar by where it is (a window may have two); the
+// desktop ends it when the button comes up. The thumb keeps its place
+// under the pointer: a pixel of travel is (total - visible) / (track -
+// thumb) lines.
+static int sd_on, sd_x, sd_y, sd_y0, sd_top0, sd_range, sd_span;
+
+int ui_scroll_drag(int x, int y, int py) {
+    int top;
+    if (!sd_on || x != sd_x || y != sd_y) return 0 - 1;
+    top = sd_top0;
+    if (sd_span > 0) top = sd_top0 + ((py - sd_y0) * sd_range) / sd_span;
+    if (top > sd_range) top = sd_range;
+    if (top < 0) top = 0;
+    return top;
+}
+int ui_scroll_active() { return sd_on; }
+void ui_scroll_end() { sd_on = 0; }
+
 // The new top line for a click on the scroll bar, or -1 if it missed.
 int ui_scroll_click(int px, int py, int x, int y, int h, int total, int visible, int top) {
     int track, th, ty, max;
@@ -100,6 +120,7 @@ int ui_scroll_click(int px, int py, int x, int y, int h, int total, int visible,
         ty = y + 16 + ((track - th) * top) / (total - visible);
         if (py < ty) top = top - visible;
         else if (py >= ty + th) top = top + visible;
+        else { sd_on = 1; sd_x = x; sd_y = y; sd_y0 = py; sd_top0 = top; sd_range = total - visible; sd_span = track - th; }
     }
     if (top > max) top = max;
     if (top < 0) top = 0;

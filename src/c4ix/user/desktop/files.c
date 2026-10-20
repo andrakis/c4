@@ -8,7 +8,7 @@
 // and Rename go through the kernel's mkdir, unlink and rename.
 //
 // The tree scrolls on its own: a scroll bar (arrows, page clicks, a thumb
-// to drag) and the wheel. It follows the selection only when that moves,
+// to drag, as every bar on the desktop has: ui_scroll_drag) and the wheel. It follows the selection only when that moves,
 // not at every redraw, or the bar could never leave it. A folder with
 // folders in it has a +/- box: click it, double-click the row, or use
 // Left/Right or -/+ to collapse and expand. A collapsed folder stays
@@ -34,7 +34,6 @@ struct files {
     int tdepth[MAXT];
     char tflag[MAXT];                  // T_KIDS, T_COLL
     int tfollow;                       // scroll the tree to tsel at the next draw
-    int tdrag, tdragy, tdragtop;       // dragging the tree's thumb: from where
     int pane;                          // 0 the list has the keyboard, 1 the tree
 };
 
@@ -265,10 +264,15 @@ static char *type_of(char *name, int dir, int prog) {
     return "File";
 }
 
-// what opens in the Editor rather than Notepad
+// what opens in the Editor, the IDE, rather than Notepad: source of any
+// kind, build files, scripts; plain text documents stay Notepad's
 static int is_source(char *p) {
     return ui_ends(p, ".c") || ui_ends(p, ".h") || ui_ends(p, ".b4k") || ui_ends(p, ".B4K") ||
-           ui_ends(p, ".lisp") || ui_ends(p, ".f") || ui_ends(p, ".js") || ui_ends(p, ".mjs");
+           ui_ends(p, ".lisp") || ui_ends(p, ".scm") || ui_ends(p, ".f") || ui_ends(p, ".fs") ||
+           ui_ends(p, ".js") || ui_ends(p, ".mjs") || ui_ends(p, ".sh") || ui_ends(p, ".S") ||
+           ui_ends(p, ".s") || ui_ends(p, ".asm") || ui_ends(p, ".py") || ui_ends(p, ".json") ||
+           ui_ends(p, ".md") || ui_ends(p, ".html") || ui_ends(p, ".css") || ui_ends(p, ".mk") ||
+           ui_ends(p, "Makefile") || ui_ends(p, ".lst");
 }
 
 static void open_sel(struct win *w) {
@@ -414,7 +418,7 @@ void files_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
 
 void files_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     struct files *f;
-    int th, lx, lw, rows, row, t, lh, trows, nv, track, thumb, ty, node, bx;
+    int th, lx, lw, rows, row, t, lh, trows, nv, node, bx;
     f = F(w);
     th = ch - TOOL_H - STATUS_H - 2;
     lx = 2 + TREE_W + 4; lw = cw - TREE_W - 8;
@@ -422,14 +426,14 @@ void files_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     rows = (lh - 4) / ROW_H;
     trows = t_rows(ch);
     nv = t_shown(f);
-    track = th - 4 - 32;
-    thumb = nv > trows ? (track * trows) / nv : track;
-    if (thumb < 10) thumb = 10;
-    if (ev == E_UP) { f->tdrag = 0; return; }
     if (ev == E_MOVE) {
-        if (f->tdrag && nv > trows && track > thumb) {
-            f->ttop = f->tdragtop + ((y - f->tdragy) * (nv - trows)) / (track - thumb);
-            t_clamp(f, trows);
+        t = ui_scroll_drag(TSB_X, TOOL_H + 2, y);
+        if (t >= 0) { f->ttop = t; t_clamp(f, trows); return; }
+        t = ui_scroll_drag(lx + lw - 18, TOOL_H + 20, y);
+        if (t >= 0) {
+            f->top = t;
+            if (f->sel < f->top) f->sel = f->top;
+            if (f->sel >= f->top + rows) f->sel = f->top + rows - 1;
         }
         return;
     }
@@ -452,8 +456,6 @@ void files_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     if (nv > trows && ui_hit(x, y, TSB_X, TOOL_H + 2, 16, th - 4)) {
         if (ev != E_DOWN) return;
         t = ui_scroll_click(x, y, TSB_X, TOOL_H + 2, th - 4, nv, trows, f->ttop);
-        ty = TOOL_H + 2 + 16 + ((track - thumb) * f->ttop) / (nv - trows);
-        if (t == f->ttop && y >= ty && y < ty + thumb) { f->tdrag = 1; f->tdragy = y; f->tdragtop = f->ttop; }
         if (t >= 0) f->ttop = t;
         return;
     }

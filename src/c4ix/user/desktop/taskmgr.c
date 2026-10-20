@@ -283,6 +283,14 @@ void tasks_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
         t->sel = t->sel + y; if (t->sel < 0) t->sel = 0; if (t->sel >= t->n) t->sel = t->n - 1;
         return;
     }
+    rows = (ch - PAGE_Y - 60 - 26) / ROW_H;
+    if (ev == E_MOVE && t->tab == 1) {
+        r = ui_scroll_drag(cw - 26, PAGE_Y + 30, y);
+        if (r >= 0) t->top = r;
+        if (r >= 0 && t->sel < t->top) t->sel = t->top;
+        if (r >= 0 && t->sel >= t->top + rows) t->sel = t->top + rows - 1;
+        return;
+    }
     if (ev != E_DOWN && ev != E_DBL) return;
     k = ui_tab_hit(x, y, 8, TAB_Y, tabs, 3);
     if (k >= 0) { t->tab = k; return; }
@@ -299,7 +307,13 @@ void tasks_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     } else if (t->tab == 1) {
         rows = (ch - PAGE_Y - 60 - 26) / ROW_H;
         r = ui_scroll_click(x, y, cw - 26, PAGE_Y + 30, ch - PAGE_Y - 82, t->n, rows, t->top);
-        if (r >= 0) { t->top = r; return; }
+        // the selection comes along, or the redraw would scroll back to it
+        if (r >= 0) {
+            t->top = r;
+            if (t->sel < t->top) t->sel = t->top;
+            if (t->sel >= t->top + rows) t->sel = t->top + rows - 1;
+            return;
+        }
         if (ui_hit(x, y, 12, PAGE_Y + 31, cw - 40, rows * ROW_H)) {
             r = t->top + (y - PAGE_Y - 31) / ROW_H;
             if (r < t->n) t->sel = r;

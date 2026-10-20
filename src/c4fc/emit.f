@@ -99,6 +99,9 @@ BEGIN-STRUCTURE SYMR
    \ value and type of a static const scalar, which is a constant.
    FIELD: y.q    FIELD: y.rq   FIELD: y.pt   FIELD: y.pq
    FIELD: y.cv   FIELD: y.cval FIELD: y.cty
+   \ A global's forward record: `extern int x;` for an x the unit
+   \ defines further down. The definition takes its number over.
+   FIELD: y.fwd
 END-STRUCTURE
 VARIABLE VA-MAKE   0 VA-MAKE !          \ code index of __c4cc_make_va
 : SYM[] ( i -- a )  SYMR * SYMS @ + ;

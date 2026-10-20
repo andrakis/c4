@@ -26,7 +26,7 @@
    STN @ ST[] TO y
    a y y.name !  u y y.nlen !  1 y y.type !  c y y.class !  v y y.val !
    ct y y.ct !  ag y y.agg !  sz y y.sz !
-   0 y y.atk !
+   0 y y.atk !  0 y y.fwd !
    0 y y.q !  0 y y.rq !  0 y y.pt !  0 y y.pq !  0 y y.cv !
    1 STN +! ;
 \ the symbol just made
@@ -1345,7 +1345,10 @@ DEFER AGG-FILL ( ety cnt off v i -- i' )
          \ so that number now means this storage; the record retires, and
          \ the definition's symbol lands here, where c4lc puts it. They
          \ used to be two objects, and the code before the definition
-         \ read the wrong one.
+         \ read the wrong one. An initialised global is a definition the
+         \ discovery pass records too, so that an extern of it above is
+         \ not taken for another unit's.
+         COLLECT @ IF a u DG-DEF THEN
          a u ST-FIND TO y
          y IF y y.class @ c_glo = y y.ini @ 0= AND IF
             off  y y.val @ CELLS GOFF + !   c_gone y y.class !   0 y y.nlen !
@@ -1370,24 +1373,38 @@ DEFER AGG-FILL ( ety cnt off v i -- i' )
          \ `extern int x;` allocates nothing, whether or not it turns out
          \ to be an extern: if the unit defines x further down, that
          \ definition is what allocates it, and at its own position.
+         \ Until then x is a forward record, a global's number for the
+         \ code in between to name, which the definition takes over --
+         \ as c4lc, which allocates in a pre-pass that skips the extern.
          0 TO fx
-         OBJECT @ COLLECT @ 0= AND sc -1 = AND IF
-            a u EXT-FIND TO fk
-            fk 0< 0= a u ST-FIND 0= AND IF
-               a u c_extg fk t ag sz ST,
-               STN @ 1- ST[] TO y   0 y y.sc !   q y y.q !
+         COLLECT @ 0= sc -1 = AND IF
+            OBJECT @ TO fx
+            a u ST-FIND 0= IF
+               OBJECT @ IF a u EXT-FIND ELSE -1 THEN TO fk
+               fk 0< 0= IF
+                  a u c_extg fk t ag sz ST,
+                  STN @ 1- ST[] TO y   0 y y.sc !   q y y.q !
+               ELSE a u DG-DEFINED? IF
+                  a u c_glo NGLO @ t ag sz ST,
+                  STN @ 1- ST[] TO y   0 y y.ini !  0 y y.sc !   q y y.q !
+                  1 y y.fwd !   1 NGLO +!   1 TO fx
+               THEN THEN
             THEN
-            1 TO fx
          THEN
          \ extern int x; int x;  is one global, not two -- a repeated
-         \ declaration of a name already known is the same object.
+         \ declaration of a name already known is the same object. A
+         \ forward record retires, and its number moves here with the
+         \ name, where c4lc allocates x and lists its symbol.
          fx 0= IF
-            a u ST-FIND TO y
+            a u ST-FIND TO y   NGLO @ TO fk
             y IF y y.class @ c_glo <> IF 0 TO y THEN THEN
+            y IF y y.fwd @ IF
+               y y.val @ TO fk   c_gone y y.class !   0 y y.nlen !   0 TO y
+            THEN THEN
             y 0= IF
-               a u c_glo NGLO @ t ag sz ST,
+               a u c_glo fk t ag sz ST,
                STN @ 1- ST[] TO y   sc 0 MAX y y.sc !   q y y.q !
-               1 NGLO +!
+               fk NGLO @ = IF 1 NGLO +! THEN
             THEN
          THEN
       THEN

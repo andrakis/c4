@@ -1639,7 +1639,8 @@ C4FC_GEN_SWEEP := hello multifun puts reverse test_basic test_continue \
                   test_coop_switch test_globals test-order test-ptrs \
                   test_static test_switch tests c4lc_l2 global \
                   test_gcscan vararg2 test_vprintf c4_jailbreak \
-                  c4lc_m4 c4lc_m4q c4lc_m4v c4lc_m4std c4lc_m7 c4lc_ll
+                  c4lc_m4 c4lc_m4q c4lc_m4v c4lc_m4std c4lc_m7 c4lc_ll \
+                  c4lc_m7fwd
 
 test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c $(C4RDUMP)
 	./c4th $(C4FC_LIB) src/c4fc/tests/dsl.f | cmp - src/c4fc/tests/expected/dsl.txt
@@ -1866,14 +1867,15 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c $(C4RDUMP)
 	$(C4M) load-c4r.c -- .c4fc_fc.c4r | cmp - src/c4sp/tests/expected/c4lc-m4std.txt
 	@echo "  m4 std headers: unsigned survives stdio.h under c4fc"
 	# M7b: the objects of a unit whose data names another unit's functions
-	# (patch type -5) are c4lc's, byte for byte, plain and -O
-	@for u in a b; do \
-	   ./c4sp src/c4sp/lisp/c4lc.lisp -c $(TESTS)/c4lc_m7ext_$$u.c .c4fc_lc.c4r > /dev/null || exit 1; \
-	   ./c4th $(C4FC_ALL) -e ": GO C4FC-INIT -c S\" $(TESTS)/c4lc_m7ext_$$u.c\" C4FC ; GO" > .c4fc_fc.c4r 2>&1; \
-	   cmp -s .c4fc_lc.c4r .c4fc_fc.c4r || { echo "test-c4fc: c4lc_m7ext_$$u.c's object differs from c4lc's"; exit 1; }; \
-	   ./c4sp src/c4sp/lisp/c4lc.lisp -O -c $(TESTS)/c4lc_m7ext_$$u.c .c4fc_lc.c4r > /dev/null || exit 1; \
-	   ./c4th $(C4FC_ALL) -e ": GO 1 OPTIMIZE ! C4FC-INIT -c S\" $(TESTS)/c4lc_m7ext_$$u.c\" C4FC ; GO" > .c4fc_fc.c4r 2>&1; \
-	   cmp -s .c4fc_lc.c4r .c4fc_fc.c4r || { echo "test-c4fc: c4lc_m7ext_$$u.c's object differs from c4lc -O's"; exit 1; }; \
+	# (patch type -5) are c4lc's, byte for byte, plain and -O; and of one
+	# whose extern is defined further down (m7fwd), allocated there
+	@for u in m7ext_a m7ext_b m7fwd; do \
+	   ./c4sp src/c4sp/lisp/c4lc.lisp -c $(TESTS)/c4lc_$$u.c .c4fc_lc.c4r > /dev/null || exit 1; \
+	   ./c4th $(C4FC_ALL) -e ": GO C4FC-INIT -c S\" $(TESTS)/c4lc_$$u.c\" C4FC ; GO" > .c4fc_fc.c4r 2>&1; \
+	   cmp -s .c4fc_lc.c4r .c4fc_fc.c4r || { echo "test-c4fc: c4lc_$$u.c's object differs from c4lc's"; exit 1; }; \
+	   ./c4sp src/c4sp/lisp/c4lc.lisp -O -c $(TESTS)/c4lc_$$u.c .c4fc_lc.c4r > /dev/null || exit 1; \
+	   ./c4th $(C4FC_ALL) -e ": GO 1 OPTIMIZE ! C4FC-INIT -c S\" $(TESTS)/c4lc_$$u.c\" C4FC ; GO" > .c4fc_fc.c4r 2>&1; \
+	   cmp -s .c4fc_lc.c4r .c4fc_fc.c4r || { echo "test-c4fc: c4lc_$$u.c's object differs from c4lc -O's"; exit 1; }; \
 	 done
 	@echo "  m7 extern table: c4fc's objects are c4lc's (-c, plain and -O)"
 	@rm -f .c4fc_lex.txt .c4fc_a.txt .c4fc_b.txt .c4fc_lc.c4r .c4fc_fc.c4r

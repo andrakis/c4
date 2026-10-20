@@ -61,7 +61,7 @@ With no arguments, init runs `c4ix-vfsload.c4r` to fill the filesystem
 from `c4ix.vfs.txt` (if present), then starts `c4ix-sh.c4r`. On the
 board and libjs disk the manifest also names `c4ix-root.tgz`, which
 vfsload hands to `c4ix-tar` in the background: the repo's sources and
-docs appear under `/usr/src/c4` a few seconds after the prompt (`wait 3`
+docs appear under `/usr/src/c4` a few seconds after the prompt (`wait 4`
 blocks until they have), the C4IX libraries in `/usr/lib`, and more
 headers in `/usr/include`.
 

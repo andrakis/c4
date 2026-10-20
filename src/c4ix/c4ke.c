@@ -253,7 +253,7 @@ static void ck_export_fill(int *kti) {
         // BYTES USED, not the base address: the stack grows down from
         // the top of the allocation, so used = top - sp. sv_sp is only
         // current as of this task's last context switch, which is the
-        // same accuracy C4KE reports. The boot task runs on the VM's
+        // same accuracy C4KE reports. The kernel task runs on the VM's
         // own stack and has no allocation to measure.
         kte[CK_KTE_STACK] = t->stack
             ? (t->stack + t->stack_words * sizeof(int)) - t->sv_sp : 0;
@@ -587,9 +587,9 @@ int ck_dispatch(int num, int *args) {
     if (num == CK_KERN_TASK_RUNNING)   return ck_running(args[0]);
     if (num == CK_KERN_TASKS_RUNNING)  return ck_tasks_running();
 
-    // scheduling. The switch at the end of sched_trap IS the yield,
-    // so there is nothing to do but say a switch is possible.
-    if (num == CK_SCHEDULE)            return ck_tasks_running() > 1;
+    // scheduling. The switch at the end of sched_trap IS the yield, once
+    // the trap is told not to take its fast path straight back here.
+    if (num == CK_SCHEDULE)            { sched_yield(); return ck_tasks_running() > 1; }
 
     if (num == CK_TASK_EXIT)           { task_exit(args[0]); return 0; }
     // C4KE plants this on a task's stack so returning from main traps

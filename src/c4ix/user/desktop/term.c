@@ -410,6 +410,11 @@ void term_key(struct win *w, int code, int ch, int mods) {
     t = T(w);
     if (t->ended) return;
     if ((mods & M_CTRL) && (ch == 'c' || ch == 'C' || code == 67)) {
+        // What the program wrote before the interrupt shows first, as a
+        // tty's output queue would have it: drawn after the ^C, the last
+        // frame of a full-screen program (top) would clear it away.
+        term_tick(w);
+        if (t->ended) return;
         if (t->gfx) gfx_mode(w, t, 0);
         say(t, "^C\n");
         t->llen = 0;

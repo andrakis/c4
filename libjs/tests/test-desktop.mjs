@@ -139,9 +139,9 @@ check(until(() => consoleText().includes('c4ix:/$'), 2000), 'C4IX boots to its s
 check(/entries left on the host until first use/.test(consoleText()) && files.fetched.size < 12,
   `booting reads ${files.fetched.size} of ${index.length} disk files; the rest stay lazy`, [...files.fetched].join(' '));
 // The Editor's :make links with /usr/lib/libc4ix.c4l, which the root
-// archive brings: let its background unpack (task 3) finish first
-typeBytes(vm, new TextEncoder().encode('wait 3\n'));
-check(until(() => consoleText().includes('[3] done (0)'), 3000), 'the root archive unpacks in the background');
+// archive brings: let its background unpack (task 4) finish first
+typeBytes(vm, new TextEncoder().encode('wait 4\n'));
+check(until(() => consoleText().includes('[4] done (0)'), 3000), 'the root archive unpacks in the background');
 typeBytes(vm, new TextEncoder().encode('desktop\n'));
 check(until(() => consoleText().includes('desktop: running on the display')), 'desktop starts from the console');
 check(until(() => gui.w === SW && gui.h === SH && presents > 0), `it asks for ${SW}x${SH} and draws`);

@@ -66,7 +66,7 @@ const start = item => { click(20, SH - TASK_H + 12); until(() => has('Shut Down.
 const log = (...a) => console.log(...a);
 
 if (!until(() => consoleText().includes('c4ix:/$'), 2000)) { log('no boot'); process.exit(1); }
-if (MODE !== 'nowait') { typeBytes(vm, new TextEncoder().encode('wait 3\n')); until(() => consoleText().includes('[3] done (0)'), 3000); }
+if (MODE !== 'nowait') { typeBytes(vm, new TextEncoder().encode('wait 4\n')); until(() => consoleText().includes('[4] done (0)'), 3000); }
 if (MODE === 'conspin') { typeBytes(vm, new TextEncoder().encode((process.env.PROG || 'c4ix-spin.c4r 1000') + '\n')); for (let i = 0; i < 20; i++) run(); }
 if (MODE === 'shell' || MODE === 'nowait' || MODE === 'conspin') {
 } else {

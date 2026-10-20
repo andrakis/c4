@@ -22,12 +22,19 @@
 #include "c4ix.h"
 
 
-// Idle backoff, in microseconds: how long the boot task sleeps when
+// Idle backoff, in microseconds: how long the idle task sleeps when
 // every other task is parked waiting on the outside world.
 enum { IDLE_NAP_MIN = 100, IDLE_NAP_MAX = 20000 };
 
 struct task *sched_cur;
-static struct task *boot_task;
+// The context the machine booted in, which waits for the end once the
+// scheduler runs (sched_run), and the task that runs when nothing else
+// can (sched_idle). The idle task is never in the round-robin: sched_pick
+// gives it the machine only when no other task can have it, so a busy
+// task's syscalls do not each pass through it on the way back.
+static struct task *kernel_task;
+static struct task *idle_task;
+static int sched_idle(int argc, int argv);
 static int sched_on_c4m;
 static int sched_interval;   // preemption interval, 0 = cooperative only
 static int sched_lockdepth;
@@ -75,6 +82,7 @@ long long task_cycles(struct task *t) {
 // A task leaving the table takes its cycles to the reaped totals, so the
 // sum of everything ever run never goes backwards.
 void sched_retire(struct task *t) {
+    if (t == idle_task) idle_task = 0;   // shutdown: sched_pick must not fall back on it
     acct_fold(t);
     acct_gone_user = acct_gone_user + t->ucycles;
     acct_gone_kernel = acct_gone_kernel + t->kcycles;
@@ -107,13 +115,15 @@ int sched_cpustat(struct cpustat *h, struct cpustat_task *r, int max) {
     h->ntasks = n;
     h->ms = __time();
     h->napms = acct_napms;
-    h->idle = boot_task ? boot_task->id : -1;
+    h->idle = idle_task ? idle_task->id : -1;
     h->gone_user = acct_gone_user;
     h->gone_kernel = acct_gone_kernel;
     return n;
 }
 
 int sched_switches;          // context switches since boot
+static int sched_slice0;     // acct_in when the running task's slice began
+static int sched_resched;    // a service in this trap asked for a switch
 
 // Compiles to ENT 0 / LEV; entered at its LEV (sched_tramp) the
 // second LEV re-derives sp from the just-installed bp.
@@ -217,17 +227,21 @@ static int sched_waitdone(struct task *n) {
     return 1;
 }
 
-// Round-robin from t: the next runnable task, or t itself.
+// Round-robin from t: the next runnable task; else t itself, if it can
+// still run; else the idle task, which never takes a turn of its own.
 static struct task *sched_pick(struct task *t) {
     struct task *n;
     n = task_next(t);
     while (n != t) {
-        if (n->state == TS_READY) return n;
-        if (sched_waitdone(n)) return n;
+        if (n != idle_task) {
+            if (n->state == TS_READY) return n;
+            if (sched_waitdone(n)) return n;
+        }
         n = task_next(n);
     }
     sched_waitdone(t);   // t itself may be waiting on a finished task
-    return t;
+    if (t->state == TS_RUNNING || t->state == TS_READY || !idle_task) return t;
+    return idle_task;
 }
 
 // ---- the c4m backend: switching inside a trap handler ----
@@ -347,8 +361,25 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
         sys_restart = 0;
     }
 
+    // The fast path. A syscall, or an opcode emulated for a protected
+    // task, that left the task able to run and asked for no switch goes
+    // straight back to it while its slice lasts. Picking costs the same
+    // whether anything changed or not, and most syscalls change nothing:
+    // a task they wake waits at most the rest of a slice. The slice is
+    // kept here, in software, because c4m's cycle interrupt fires only
+    // when the counter is a multiple of the interval, and every multiple
+    // that falls inside the kernel is lost -- without this a task making
+    // a syscall at the wrong moments would never be preempted.
     t = sched_cur;
-    n = sched_pick(t);
+    if ((trap == C4IX_TRAP_ILLOP || trap == C4IX_TRAP_PM) && !sched_resched
+        && t->state == TS_RUNNING
+        && (!sched_interval || acct_in - sched_slice0 < sched_interval))
+        n = t;
+    else {
+        n = sched_pick(t);
+        sched_slice0 = acct_in;
+    }
+    sched_resched = 0;
     if (n != t) {
         t->sv = SV_REGS;
         t->sv_a = a; t->sv_bp = bp; t->sv_sp = sp; t->sv_pc = returnpc;
@@ -439,11 +470,12 @@ static struct task *sched_foreground() {
     struct task *t, *n;
     int guard;
 
-    // The session's top-level program: whatever a kernel task waits on.
+    // The session's top-level program: whatever a kernel task waits on
+    // -- other than the kernel itself, which waits on the idle task.
     t = 0;
     n = task_head;
     while (n) {
-        if (n->privs == PRIV_KERNEL && n->state == TS_WAITING) {
+        if (n != kernel_task && n->privs == PRIV_KERNEL && n->state == TS_WAITING) {
             if ((t = task_get(n->wait_for))) break;
         }
         n = n->next;
@@ -492,7 +524,7 @@ int sched_intr_below(struct task *root) {
     return 1;
 }
 
-// Kernel tasks are spared (killing init or boot ends everything). The
+// Kernel tasks are spared (killing init or kernel ends everything). The
 // victim becomes a zombie with a distinguishable status, so whoever
 // waits on it learns it was interrupted.
 static void sched_interrupt() {
@@ -564,8 +596,9 @@ void sched_yield() {
     struct task *n;
     if (!sched_cur) return;
     // Already inside the trap handler: it switches on the way out,
-    // which IS the yield. Raising another trap here would nest.
-    if (sched_intrap) return;
+    // which IS the yield -- once it knows not to take the fast path.
+    // Raising another trap here would nest.
+    if (sched_intrap) { sched_resched = 1; return; }
     if (sched_on_c4m) {
         __c4_trap(C4IX_TRAP_SOFT_IRQ, 0);
         return;
@@ -709,9 +742,16 @@ void sched_init(int interval) {
     sched_on_c4m = (host_type() == HOST_C4M);
     sched_tramp = (int)&trampoline + 2 * sizeof(int);   // past ENT 0: the LEV word
 
-    boot_task = task_adopt("boot");
-    boot_task->state = TS_RUNNING;
-    sched_cur = boot_task;
+    // The idle task first, so it is task 0, as NT's System Idle Process
+    // is; then the context we are running in becomes the kernel task.
+    if (!(idle_task = task_create("idle", (int)&sched_idle, 0, 0))) {
+        kputs("c4ix: panic: cannot create the idle task\n");
+        exit(-1);
+    }
+    kernel_task = task_adopt("kernel");
+    kernel_task->state = TS_RUNNING;
+    idle_task->parent = kernel_task->id;
+    sched_cur = kernel_task;
     acct_out = __c4_cycles();
 
     if (sched_on_c4m) {
@@ -750,9 +790,10 @@ void sched_stop() {
     sched_cur = 0;
 }
 
-// Run until only the boot task is left alive, then reap anything
-// nobody waited for.
-void sched_run() {
+// The idle task: what runs when nothing else can, which is to say
+// almost always on an idle desktop. It returns -- and the machine shuts
+// down -- once no task is left alive but the kernel, which waits on it.
+static int sched_idle(int argc, int argv) {
     struct task *t;
     int live, ready, nap, due, budget, ms;
 
@@ -763,7 +804,7 @@ void sched_run() {
         ready = 0;
         t = task_head;
         while (t) {
-            if (t != sched_cur && t->state != TS_ZOMBIE) {
+            if (t != sched_cur && t != kernel_task && t->state != TS_ZOMBIE) {
                 live = 1;
                 if (t->state != TS_BLOCKED && t->state != TS_WAITING
                     && t->state != TS_SLEEPING) ready = 1;
@@ -771,9 +812,9 @@ void sched_run() {
             t = t->next;
         }
         if (!live) break;
-        // Sweep zombies nobody is waiting on. This is the idle task,
-        // which is where C4KE reaps too, and it is the only thing that
-        // collects a child whose parent never waits -- innerbench
+        // Sweep zombies nobody is waiting on. This is where C4KE reaps
+        // too, and it is the only thing that collects a child whose
+        // parent never waits -- innerbench
         // spawns several benches and can only wait on one.
         task_reap_orphans();
         // Everything alive is parked on something that has not
@@ -807,6 +848,21 @@ void sched_run() {
         }
         sched_yield();
     }
+    return 0;
+}
+
+// The kernel task's part once everything is set up: wait for the idle
+// task, which ends when nothing else is alive, then reap anything nobody
+// waited for.
+void sched_run() {
+    struct task *t;
+    int live;
+
+    task_wait(idle_task);
+    // The idle task was released while it ran, so it waits on the reap
+    // list for a safe point -- and with nothing left there may not be
+    // another trap. Here, on the kernel's own stack, is one.
+    task_reap();
     live = 1;
     while (live) {
         live = 0;

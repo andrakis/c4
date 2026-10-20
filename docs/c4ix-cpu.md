@@ -174,3 +174,84 @@ counter reads and the adds cost about 44 cycles a trap. `sched_trap`
 grew from 174.6M to 197.0M cycles in 5 seconds, over about 505k traps.
 Spin's syscalls fell from 51,031 to 50,273 a second (−1.5%). Nothing
 else in the profile moved.
+
+### 5. A syscall fast path, a software time slice, and an idle task
+
+- **An idle task.** The idle loop is a kernel task of its own, `idle`,
+  made first so that it is task 0, as NT's System Idle Process is. The
+  context the machine booted in is now `kernel`, task 1. It waits on the
+  idle task, which returns when nothing else is alive. `sched_pick` never
+  gives the idle task a turn in the round-robin; it runs only when no
+  other task can. It used to be READY all the time, so every syscall of
+  a busy task went through it on the way back.
+- **Task ids move up by one.** The root archive's unpack is task 4, not
+  3, so the tests and the README say `wait 4`.
+- **The fast path.** A syscall or emulated opcode that leaves its task
+  able to run, and asks for no switch (`sched_yield` inside a trap sets
+  `sched_resched`), returns straight to the task while its slice lasts.
+  `CK_SCHEDULE` now yields, so a C4KE program that asks to be
+  rescheduled still is.
+- **The slice is kept in software.** c4m fires its cycle interrupt only
+  when the counter is a multiple of the interval, and a multiple that
+  falls inside the kernel is lost. A syscall-heavy task saw 68 of its
+  10,000 ticks a second. `sched_trap` starts a slice at every pick and
+  ends it on the syscall path once the interval has run.
+
+**The slice, measured on C4IX** (your decision 6). Syscalls a second,
+from `prof-c4ix` with the kernel built at each interval:
+
+| interval | conspin | spin under the desktop | frames in 5 s |
+|---|---|---|---|
+| 10,000 (C4KE's) | 185.0k | 140.2k | 111 |
+| 20,000 | 191.3k (+3.4%) | 147.6k (+5.2%) | 116 |
+| 50,000 | 195.9k (+5.9%) | 153.3k (+9.3%) | 118 |
+| 100,000 | 197.4k (+6.7%) | 154.9k (+10.4%) | 120 |
+
+It is now 50,000: most of the gain, and a task waiting behind another
+waits at most 0.5 ms at the browser's 100 MHz. Doubling it again buys
+1%.
+
+**Native c4m** (`make bench-c4ix`; both kernels built the same way):
+
+| | baseline | step 5 |
+|---|---|---|
+| syscall | 2,009 | 632 |
+| yield | 2,012 | 1,261 |
+| spawn+wait | 27,242 | 22,704 |
+| pi100 | 179,137 | 152,207 |
+| pi300 | 648,546 | 539,035 |
+| cycles to userland | 698,709 | 726,414 |
+
+Making the idle task costs 4% more cycles to userland.
+
+**libjs**, per 5 machine-seconds (`make prof-c4ix`):
+
+| situation | baseline | step 5 |
+|---|---|---|
+| shell | 0.29M cycles | 0.39M |
+| conspin | 51,031 syscalls/s, spin 2.6% | 195,848/s, spin 9.5% |
+| desk1 | 6.7M (1.3%), kernel 85.9% | 2.1M (0.4%), kernel 71.4% |
+| idle | 11.0M (2.2%), kernel 60.6% | 5.4M (1.1%), kernel 28.9% |
+| spin | user 24.3% | user 28.0% |
+
+top with spin at the console now gives the idle task 0 to 1% (it had
+65%), System 80% and spin 19%. Spin is bound by its own `SYS_CYCLES`
+syscalls, which step 9 removes. test-c4ix-cpu checks that a busy
+machine's usage is at least 95%.
+
+Found on the way:
+- **A leak at shutdown.** The idle task is released while it runs, so
+  it waits on the reap list for a safe point, and none came before
+  shutdown. The kernel now reaps after its wait.
+- **Ctrl-C at the console.** It finds the foreground job by descending
+  from a kernel task's wait. That walk now skips the kernel task, whose
+  wait is on the idle task.
+- **The desktop terminal's Ctrl-C.** It drains the program's pending
+  output before echoing `^C`, as a tty's output queue would. top, which
+  writes a whole screen without being switched out now, otherwise
+  cleared the `^C` with its last frame.
+- **The desktop's once-a-second tick** (Task Manager, the CPU meter) is
+  on machine time, which its numbers count and the desktop sleeps on.
+  It was on the host's clock: headless, an idle machine that naps covers
+  many seconds of its own in one of the host's, and Task Manager stopped
+  refreshing.

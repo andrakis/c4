@@ -316,7 +316,7 @@ struct task {
     int  sv_bp;                // SV_REGS: bp    SV_FRAME: saved bp value
     int  sv_sp;                // SV_REGS: sp    SV_FRAME: frame address
     int  sv_pc;                // SV_REGS: pc    SV_FRAME: saved pc value
-    int  stack;                // malloc'd stack base, 0 for the boot task
+    int  stack;                // malloc'd stack base, 0 for the kernel task
     int  stack_words;          // its size, C4IX_STACK_WORDS unless SYS_STACK asked
     int  spawn_stack;          // SYS_STACK: bytes for the tasks this one spawns, 0 default
     int  img_code;             // loaded .c4r segments to free on reap,

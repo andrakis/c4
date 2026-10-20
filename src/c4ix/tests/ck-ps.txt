@@ -6,7 +6,8 @@ c4ix: task N 'init' created, scheduling after N cycles
 Tasks: N total, N running, N waiting, N zombie, N free
 Usage: N% cpu, N% kernel, Nms idle, N.NM cyc/s
  PID PPID S P NI T% C% TIME CYCLES MEM CMD
- N N R K N N% N% N N.Nk N boot
+ N N R K N N% N% N N N idle
+ N N W K N N% N% N N.Nk N kernel
  N N W K N N% N% N N.Nk N init
  N N R U N N% N% N N.NM N ps.c4r
 total memory N

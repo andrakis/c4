@@ -18,7 +18,12 @@
 
 #include "c4ix.h"
 
-enum { PREEMPT_INTERVAL = 10000 };   // cycles between hard IRQs (c4m)
+// Cycles in a time slice: between hard IRQs (c4m), and the software slice
+// sched_trap keeps on the syscall path. Measured on C4IX (docs/c4ix-cpu.md,
+// step 5): against 10000, C4KE's, a syscall-bound task makes 6% more calls
+// and 9% more under the desktop, and 100000 adds only 1% more for twice
+// the wait. 0.5 ms at the browser's 100 MHz.
+enum { PREEMPT_INTERVAL = 50000 };
 
 int main(int argc, char **argv) {
     struct task *t;

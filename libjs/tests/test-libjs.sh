@@ -149,12 +149,12 @@ if echo "$out" | grep -qE '[4-9][0-9]/[4-9][0-9] entries loaded from c4ix\.vfs\.
 else bad "c4ix-vfs manifest mostly loaded"; echo "$out" | grep -E 'entries loaded|cannot open' | head -5; fi
 
 # The root archive (c4ix-root.tgz, build-images.sh) unpacks in the
-# background as task 3, which "wait 3" blocks on. Then a file deep in
+# background as task 4, which "wait 4" blocks on. Then a file deep in
 # the tree must have its real content, and the libraries must be there.
-out=$(printf 'wait 3\nls /usr/lib\ncat /usr/src/c4/src/c4ix/user/tar.c\nexit\n' | \
+out=$(printf 'wait 4\nls /usr/lib\ncat /usr/src/c4/src/c4ix/user/tar.c\nexit\n' | \
       timeout 300 $LIBJS -c 2000000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
-if echo "$out" | grep -qF "unpacking c4ix-root.tgz in the background as task 3" &&
-   echo "$out" | grep -qF "[3] done (0)" && echo "$out" | grep -qF "libarc.c4l" &&
+if echo "$out" | grep -qF "unpacking c4ix-root.tgz in the background as task 4" &&
+   echo "$out" | grep -qF "[4] done (0)" && echo "$out" | grep -qF "libarc.c4l" &&
    echo "$out" | grep -qF "list or extract a tar archive, gzipped or not"; then
     ok "c4ix root archive unpacked"
 else bad "c4ix root archive unpacked"; echo "$out" | grep -E 'unpack|done|tar:|cannot' | head -5; fi
@@ -162,7 +162,7 @@ else bad "c4ix root archive unpacked"; echo "$out" | grep -E 'unpack|done|tar:|c
 # b4ke inside C4IX: the libraries rebuilt from /usr/src/c4 must be the
 # ones the archive carries in /usr/lib, and a second run must do nothing.
 # (The whole tree is `make test-c4ix-rebuild`: minutes, so not here.)
-out=$(printf 'wait 3\nb4ke -C /usr/src/c4/src/c4ix/lib\ncrc32 /ram/build/lib/libc4ix.c4l /usr/lib/libc4ix.c4l\nb4ke -C /usr/src/c4/src/c4ix/lib\nexit\n' | \
+out=$(printf 'wait 4\nb4ke -C /usr/src/c4/src/c4ix/lib\ncrc32 /ram/build/lib/libc4ix.c4l /usr/lib/libc4ix.c4l\nb4ke -C /usr/src/c4/src/c4ix/lib\nexit\n' | \
       timeout 300 $LIBJS -m 64 -c 6000000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
 a=$(echo "$out" | grep -oE '^[0-9a-f]{8} [0-9]+ /ram/build/lib/libc4ix.c4l' | cut -d' ' -f1,2)
 b=$(echo "$out" | grep -oE '^[0-9a-f]{8} [0-9]+ /usr/lib/libc4ix.c4l' | cut -d' ' -f1,2)

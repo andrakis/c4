@@ -52,8 +52,8 @@ const valid = sc => sc.rows.length >= 3 && sc.sys !== null && [...sc.rows.map(r 
 
 check(until(() => text().includes('c4ix:/$'), 3000), 'C4IX boots to its shell');
 // the root archive's unpack first, which would otherwise be busy too
-type('wait 3\n');
-until(() => text().includes('[3] done'), 3000);
+type('wait 4\n');
+until(() => text().includes('[4] done'), 3000);
 
 // An idle machine is idle: the kernel naps, and the naps count.
 let screens = top(2);
@@ -76,5 +76,8 @@ screens.forEach((sc, k) => {
   check(valid(sc), `busy, screen ${k + 1}: every share is within 0..100, with a System line`, sc.s);
   check(sum(sc) === 100, `busy, screen ${k + 1}: the rows add up to 100 (${sum(sc)})`, sc.s);
   check(spin && spin.pct > 0, `busy, screen ${k + 1}: spin is there, and busy`, sc.s);
+  // the idle task runs only when nothing else can (step 5): it used to
+  // take every other turn, and two thirds of the machine with it
+  check(sc.usage >= 95, `busy, screen ${k + 1}: the machine is busy, not idling (usage ${sc.usage}%)`, sc.s);
 });
 process.exit(fail);

@@ -1061,9 +1061,13 @@ int main(int argc, char **argv) {
             if (wins[k].used && wins[k].kind == K_EDIT) edit_tick(wins + k);
             ++k;
         }
-        // a tick a second for the windows that show live numbers
-        if (now_ms() - last_tick >= 1000) {
-            last_tick = now_ms();
+        // a tick a second for the windows that show live numbers: a
+        // MACHINE second, which is what their numbers count (cpustat's ms)
+        // and what the desktop sleeps on. Host time runs at another rate
+        // whenever the machine is not paced to it -- headless, an idle
+        // machine covers many seconds of its own in one of the host's.
+        if (__time() - last_tick >= 1000) {
+            last_tick = __time();
             k = 0;
             while (k < MAXW) { if (wins[k].used && wins[k].kind == K_TASKS) tasks_tick(wins + k); ++k; }
             // the meter, every other tick, and a redraw only when it moved

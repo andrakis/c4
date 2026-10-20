@@ -25,7 +25,7 @@ bad() { echo "test-rebuild: $1 FAILED"; fail=1; }
 LC_PROGS="hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt gui vfsload b4ke tar gunzip crc32 desktop libctest pictest"
 CC_PROGS="c4cc c4rdump c4rlink cpp c4 c4m"
 {
-    echo "wait 3"
+    echo "wait 4"
     echo "b4ke -C /usr/src/c4"
     for u in $LC_PROGS; do echo "crc32 $B/bin/c4ix-$u.c4r"; done
     for t in $CC_PROGS; do echo "crc32 $B/bin/$t.c4r"; done

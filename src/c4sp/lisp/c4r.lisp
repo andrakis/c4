@@ -30,6 +30,8 @@
 ;;               relocates a data word to a code address, (ddata BYTEOFF
 ;;               DATAOFF) to a data address. Written after the
 ;;               code-resident patches, matching asm-c4r's canonical order.
+;;               In an object (M7b), (dsym BYTEOFF SYMID) is type -5: a data
+;;               word holding a symbol's address, which c4rlink resolves.
 ;;
 ;; Uses the c4sp byte builtins: string:word, string:byte, string:alloc,
 ;; string:word!, string:byte!, bit:and. All offsets in BYTES unless noted.
@@ -192,7 +194,10 @@
 			(if (= -4 (head (head Ps)))
 				(cons (list 'ddata (second (head Ps)) (third (head Ps)))
 					(c4r:data-patches (tail Ps)))
-				(c4r:data-patches (tail Ps)))))))
+			(if (= -5 (head (head Ps)))
+				(cons (list 'dsym (second (head Ps)) (third (head Ps)))
+					(c4r:data-patches (tail Ps)))
+				(c4r:data-patches (tail Ps))))))))
 
 (define c4r:read-words (lambda (F At N Acc)
 	(if (= 0 N) Acc
@@ -478,7 +483,7 @@
 (define c4r:emit-dpatches (lambda (DP Out At LT)
 	(if (empty? DP) Out (begin
 		(define P (head DP))
-		(string:word! Out At (if (= 'dcode (head P)) -3 -4))
+		(string:word! Out At (if (= 'dcode (head P)) -3 (if (= 'dsym (head P)) -5 -4)))
 		(string:word! Out (+ At W) (second P))
 		(string:word! Out (+ At (* 2 W))
 			(if (= 'dcode (head P)) (c4r:label LT (third P)) (third P)))

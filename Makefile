@@ -1865,6 +1865,17 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c $(C4RDUMP)
 	./c4th $(C4FC_ALL) -e ': GO C4FC-INIT -P S" include" -I S" ." -I S" C4CC=1" -D S" __c4__=1" -D S" __C4CC__=1" -D S" __c4cc__=1" -D S" $(TESTS)/c4lc_m4std.c" C4FC ; GO' > .c4fc_fc.c4r
 	$(C4M) load-c4r.c -- .c4fc_fc.c4r | cmp - src/c4sp/tests/expected/c4lc-m4std.txt
 	@echo "  m4 std headers: unsigned survives stdio.h under c4fc"
+	# M7b: the objects of a unit whose data names another unit's functions
+	# (patch type -5) are c4lc's, byte for byte, plain and -O
+	@for u in a b; do \
+	   ./c4sp src/c4sp/lisp/c4lc.lisp -c $(TESTS)/c4lc_m7ext_$$u.c .c4fc_lc.c4r > /dev/null || exit 1; \
+	   ./c4th $(C4FC_ALL) -e ": GO C4FC-INIT -c S\" $(TESTS)/c4lc_m7ext_$$u.c\" C4FC ; GO" > .c4fc_fc.c4r 2>&1; \
+	   cmp -s .c4fc_lc.c4r .c4fc_fc.c4r || { echo "test-c4fc: c4lc_m7ext_$$u.c's object differs from c4lc's"; exit 1; }; \
+	   ./c4sp src/c4sp/lisp/c4lc.lisp -O -c $(TESTS)/c4lc_m7ext_$$u.c .c4fc_lc.c4r > /dev/null || exit 1; \
+	   ./c4th $(C4FC_ALL) -e ": GO 1 OPTIMIZE ! C4FC-INIT -c S\" $(TESTS)/c4lc_m7ext_$$u.c\" C4FC ; GO" > .c4fc_fc.c4r 2>&1; \
+	   cmp -s .c4fc_lc.c4r .c4fc_fc.c4r || { echo "test-c4fc: c4lc_m7ext_$$u.c's object differs from c4lc -O's"; exit 1; }; \
+	 done
+	@echo "  m7 extern table: c4fc's objects are c4lc's (-c, plain and -O)"
 	@rm -f .c4fc_lex.txt .c4fc_a.txt .c4fc_b.txt .c4fc_lc.c4r .c4fc_fc.c4r
 	@rm -f .c4fc_o0.c4r .c4fc_o1.c4r .c4fc_o2.c4r .c4fc_r0 .c4fc_r1 .c4fc_pp.c
 	@echo "test-c4fc: OK"
@@ -2885,7 +2896,7 @@ test-raycast: c4sp c4sp32 $(C4M) c4m32 $(TESTS)/raycast.c4r
 	@echo "test-raycast: OK"
 
 test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.c4r \
-           c4sp32 c4m32 $(C4RDUMP)
+           c4sp32 c4m32 c4rlink32 $(C4RDUMP)
 	./c4sp src/c4sp/lisp/c4lc-tokens.lisp src/tests/c4lc_lex_sample.c | cmp - src/c4sp/tests/expected/c4lc-tokens.txt
 	./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/c4lc-tokens.lisp src/tests/c4lc_lex_sample.c | cmp - src/c4sp/tests/expected/c4lc-tokens.txt
 	./c4sp src/c4sp/lisp/c4lc-tokens.lisp -count src/c4cc/c4cc.c | grep -q "^tokens [0-9]"
@@ -3143,6 +3154,20 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	   ./c4m32 load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-m7.txt || exit 1; \
 	   echo "  m7 ok, gcc's answers at 32 and 64 bits: c4lc $$fl"; \
 	 done
+	# M7b: data words naming another unit's functions (patch type -5 in
+	# the object, which c4rlink resolves) -- an applet table like Busybox's
+	@for fl in "" "-O"; do \
+	   ./c4sp src/c4sp/lisp/c4lc.lisp $$fl -c $(TESTS)/c4lc_m7ext_a.c .c4lc_ea.c4o > /dev/null || exit 1; \
+	   ./c4sp src/c4sp/lisp/c4lc.lisp $$fl -c $(TESTS)/c4lc_m7ext_b.c .c4lc_eb.c4o > /dev/null || exit 1; \
+	   $(C4RLINK) .c4lc_ea.c4o .c4lc_eb.c4o -o .c4lc_e.c4r > /dev/null || exit 1; \
+	   ./c4m load-c4r.c -- .c4lc_e.c4r | cmp - src/c4sp/tests/expected/c4lc-m7ext.txt || exit 1; \
+	   ./c4sp32 src/c4sp/lisp/c4lc.lisp $$fl -c $(TESTS)/c4lc_m7ext_a.c .c4lc_ea.c4o > /dev/null || exit 1; \
+	   ./c4sp32 src/c4sp/lisp/c4lc.lisp $$fl -c $(TESTS)/c4lc_m7ext_b.c .c4lc_eb.c4o > /dev/null || exit 1; \
+	   ./c4rlink32 .c4lc_ea.c4o .c4lc_eb.c4o -o .c4lc_e.c4r > /dev/null || exit 1; \
+	   ./c4m32 load-c4r.c -- .c4lc_e.c4r | cmp - src/c4sp/tests/expected/c4lc-m7ext.txt || exit 1; \
+	   echo "  m7 extern table ok, linked at 32 and 64 bits: c4lc $$fl"; \
+	 done
+	@rm -f .c4lc_ea.c4o .c4lc_eb.c4o .c4lc_e.c4r
 	# M4 qualifiers. const: every way of dropping a const without a cast
 	# warns and no other way does (c4lc_m4q.c, which then runs: a static
 	# const is a constant where C wants one), and each of nine writes is

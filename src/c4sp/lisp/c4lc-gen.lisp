@@ -213,7 +213,8 @@
 		(string:byte! g:data (+ at i) (string:byte s i))
 		(next g:dstr/2 s (+ i 1) at)))))
 
-(define g:dpatches nil)   ;; (dcode BYTEOFF LABEL) / (ddata BYTEOFF VALOFF)
+(define g:dpatches nil)   ;; (dcode BYTEOFF LABEL) / (ddata BYTEOFF VALOFF) /
+                          ;; (dsym BYTEOFF K): extern K's address (M7b)
 
 ;; ---- symbol table ----
 ;; entries: (NAME 'sys TYPE OPATOM) | (NAME 'fun TYPE LABEL ARGC VARIADIC)
@@ -1744,11 +1745,10 @@
 			(if (if (= (head init) 'fnaddr) true (= (head init) 'name))
 				(begin
 					(define f (g:find (g:second init)))
-					(if (= (g:second f) 'fun) nil
+					(if (if (= (g:second f) 'fun) true (= (g:second f) 'ext)) nil
 						(g:die "& initializer requires a defined function"))
 					(define slot (g:dword 0))
-					(set! g:dpatches (g:cons
-						(list 'dcode slot (index f 3)) g:dpatches))
+					(set! g:dpatches (g:cons (g:fnpatch slot f) g:dpatches))
 					slot)
 			(g:die (+ "unsupported global initializer for " n)))))))
 		(set! g:syms (g:cons (list n 'glo ty at nil gattrs g:gq) g:syms)))))
@@ -1937,12 +1937,25 @@
 		(if (if (= h 'name) true (= h 'fnaddr))
 			(begin
 				(define f (g:find (g:second it)))
-				(if (if f (= (g:second f) 'fun) false) nil
-					(g:die (+ "an initializer can name only a function this unit defines: "
-						(g:second it))))
+				(if (if f (if (= (g:second f) 'fun) true (= (g:second f) 'ext)) false) nil
+					(g:die (+ "an initializer can name only a function: " (g:second it))))
 				(if (= g:imode 'put)
-					(set! g:dpatches (g:cons (list 'dcode off (index f 3)) g:dpatches)) nil))
+					(set! g:dpatches (g:cons (g:fnpatch off f) g:dpatches)) nil))
 		(g:die "unsupported initializer element")))))))
+;; a data word holding function F's address: a code patch for a function
+;; this unit defines, and for an extern one (-c) a symbol patch whose slot
+;; is in data (type -5), which c4rlink resolves when it links the unit
+;; that defines it -- Busybox's applet_main[] names every applet's main
+(define g:fnpatch (lambda (slot f)
+	(if (= (g:second f) 'ext) (list 'dsym slot (index f 3))
+	(list 'dcode slot (index f 3)))))
+(define g:remapdsym (lambda (ps base acc)
+	(if (empty? ps) (g:reverse acc)
+	(begin
+		(define p (head ps))
+		(next g:remapdsym (tail ps) base (g:cons
+			(if (= (head p) 'dsym) (list 'dsym (g:second p) (+ base (g:third p))) p)
+			acc))))))
 (define g:iput (lambda (ty off v)
 	(if (g:bytety? ty) (string:byte! g:data off (bit:and v 255))
 	(if (g:halfty? ty)
@@ -2351,7 +2364,8 @@
 			(begin
 				(define base (length syms))
 				(set! syms (+ syms (g:extsection (g:reverse g:externs) base (list))))
-				(set! code (g:remapext code base (list))))
+				(set! code (g:remapext code base (list)))
+				(set! g:dpatches (g:remapdsym g:dpatches base (list))))
 			nil)
 		(list 2 (* 8 g:WORD) (if m (list 'code (index m 3)) -1)
 			code

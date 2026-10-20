@@ -79,6 +79,13 @@ enum {
 };
 
 int cl_verbose, cl_debug, cl_libmode, cl_strip, cl_striptool;
+
+// A data word holding a symbol's address (M7b): ADDRESS is a byte offset
+// into data, VALUE the symbol's id. Only objects and libraries carry it --
+// c4lc and c4fc write one for an extern function an initializer names,
+// such as Busybox's applet_main[] -- and resolving it makes it DCODE or
+// DDATA, so no image a loader sees has one.
+enum { C4R_PTYPE_DSYM = -5 };
 // -l: per library, its loaded structure, its run-time path, and whether
 // anything was resolved against it. CL_LIBMAX of them, malloc'd: c4cc
 // has no global arrays.
@@ -294,7 +301,7 @@ static int merge_c4rs (int *master, int *c4rs, int count) {
 			// Code-resident patch addresses rebase by the code offset
 			// (words); data-resident ones (-3/-4) by the data offset
 			// (bytes)
-			if (pid == C4R_PTYPE_DCODE || pid == C4R_PTYPE_DDATA)
+			if (pid == C4R_PTYPE_DCODE || pid == C4R_PTYPE_DDATA || pid == C4R_PTYPE_DSYM)
 				dstPatch[C4R_PAT_ADDRESS] = offsetData + srcPatch[C4R_PAT_ADDRESS];
 			else
 				dstPatch[C4R_PAT_ADDRESS] = offsetCode + srcPatch[C4R_PAT_ADDRESS];
@@ -310,6 +317,16 @@ static int merge_c4rs (int *master, int *c4rs, int count) {
 			} else if (pid == C4R_PTYPE_DDATA) {
 				dstPatch[C4R_PAT_TYPE]  = pid;
 				dstPatch[C4R_PAT_VALUE] = offsetData + srcPatch[C4R_PAT_VALUE];
+			} else if (pid == C4R_PTYPE_DSYM) {
+				// the symbol id is in VALUE: remap it as a symbol type is
+				if (srcPatch[C4R_PAT_VALUE] < 0 || srcPatch[C4R_PAT_VALUE] >= cl[CL_REMAP_MAX] ||
+				    ((int *)cl[CL_REMAP])[srcPatch[C4R_PAT_VALUE]] < 0) {
+					printf("c4rlink: '%s' patch %d references unknown symbol id %d\n",
+					       (char *)cl[CL_FILE], i, srcPatch[C4R_PAT_VALUE]);
+					return 1;
+				}
+				dstPatch[C4R_PAT_TYPE]  = pid;
+				dstPatch[C4R_PAT_VALUE] = ((int *)cl[CL_REMAP])[srcPatch[C4R_PAT_VALUE]];
 			} else {
 				// Symbol reference: remap to the master table index.
 				// The value is resolved in a later pass.
@@ -361,7 +378,7 @@ static int canonicalize_patches (int *master) {
 	i = 0;
 	while (i < n) {
 		t = patch[C4R_PAT_TYPE];
-		if (t == C4R_PTYPE_DCODE || t == C4R_PTYPE_DDATA) {
+		if (t == C4R_PTYPE_DCODE || t == C4R_PTYPE_DDATA || t == C4R_PTYPE_DSYM) {
 			dst[C4R_PAT_TYPE] = t;
 			dst[C4R_PAT_ADDRESS] = patch[C4R_PAT_ADDRESS];
 			dst[C4R_PAT_VALUE] = patch[C4R_PAT_VALUE];
@@ -410,7 +427,7 @@ static void blank_patch_targets (int *master) {
 	i = 0;
 	while (i < n) {
 		t = patch[C4R_PAT_TYPE];
-		if (t == C4R_PTYPE_DCODE || t == C4R_PTYPE_DDATA) {
+		if (t == C4R_PTYPE_DCODE || t == C4R_PTYPE_DDATA || t == C4R_PTYPE_DSYM) {
 			if (data) *(int *)(data + patch[C4R_PAT_ADDRESS]) = 0;
 		} else {
 			if (code) code[patch[C4R_PAT_ADDRESS]] = 0;
@@ -492,7 +509,30 @@ static int resolve_patches (int *master) {
 	i = 0;
 	while (i < n) {
 		t = patch[C4R_PAT_TYPE];
-		if (t >= 0) {
+		if (t == C4R_PTYPE_DSYM) {
+			// a data word: DCODE or DDATA once the symbol is defined
+			sym = (int *)master[C4R_SYMBOLS] + (patch[C4R_PAT_VALUE] * C4R_SYMB__Sz);
+			if (!(sym[C4R_SYMB_ATTRS] & ATTR_EXTERN)) {
+				if (sym[C4R_SYMB_CLASS] == C4R_SCLASS_Fun) {
+					patch[C4R_PAT_TYPE]  = C4R_PTYPE_DCODE;
+					patch[C4R_PAT_VALUE] = sym[C4R_SYMB_VALUE];
+				} else if (sym[C4R_SYMB_CLASS] == C4R_SCLASS_Glo) {
+					patch[C4R_PAT_TYPE]  = C4R_PTYPE_DDATA;
+					patch[C4R_PAT_VALUE] = sym[C4R_SYMB_VALUE];
+				} else {
+					printf("c4rlink: symbol '%.*s' is not a function or global, cannot resolve\n",
+					       sym[C4R_SYMB_NAMELEN], (char *)sym[C4R_SYMB_NAME]);
+					++unresolved;
+				}
+			} else {
+				// a shared library's symbol in a data word would need the
+				// loader to patch data, which it does not yet
+				++unresolved;
+				if (!cl_libmode)
+					printf("c4rlink: undefined symbol '%.*s' (named in data)\n",
+					       sym[C4R_SYMB_NAMELEN], (char *)sym[C4R_SYMB_NAME]);
+			}
+		} else if (t >= 0) {
 			sym = (int *)master[C4R_SYMBOLS] + (t * C4R_SYMB__Sz);
 			if (!(sym[C4R_SYMB_ATTRS] & ATTR_EXTERN)) {
 				if (sym[C4R_SYMB_CLASS] == C4R_SCLASS_Fun) {

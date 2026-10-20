@@ -207,6 +207,9 @@ VARIABLE TABN   0 TABN !
 \ `char *s = "...";`: a region 1 slot holding the address of a string
 \ that is ALSO in region 1 -- see ID-STR, below for why.
 : STRPAT, ( slot off -- )    0 -4 (TABPAT) ;
+\ an object's data word holding extern K's address (M7b): type -5, the
+\ symbol id filled in by FIX-EXTERNS, resolved by c4rlink
+: SYMPAT, ( slot k -- )   -1000 SWAP -  0 -5 (TABPAT) ;
 \ The optimizer moves code, so a data word holding a CODE address has to
 \ be remapped when it does. It sets TAB-MAP; nothing else does, and the
 \ two paths are otherwise the same loop rather than two copies of it.
@@ -342,10 +345,13 @@ VARIABLE EXTN   0 EXTN !
 : EXT-TYPE ( k -- t )  -1000 SWAP - ;    \ the placeholder patch type
 : EXTREF, ( op k -- ) {: op k -- :}
    op OP,   k EXT-TYPE CHERE 0 PAT,   0 C, ;
+\ M7b: a DATA word holding extern K's address is patch type -5 with the
+\ placeholder in its VALUE, which becomes the symbol id here as well
 : FIX-EXTERNS ( base -- ) {: b | p -- :}
    PN @ 0 ?DO
       I 3 * CELLS PATCH @ + TO p
       p @ -1000 <= IF  b -1000 p @ - +  p !  0 p 2 CELLS + !  THEN
+      p @ -5 = p 2 CELLS + @ -1000 <= AND IF  b -1000 p 2 CELLS + @ - +  p 2 CELLS + !  THEN
    LOOP ;
 
 \ -- constant arithmetic ------------------------------------------------

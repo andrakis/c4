@@ -1050,8 +1050,13 @@ CREATE SQ SQ-MAX CELLS ALLOT   VARIABLE SQN   VARIABLE SQI
    k 2 = IF
       AMODE @ 0= IF EXIT THEN
       nd CELL+ @ nd 2 CELLS + @ ST-FIND TO y
+      y IF y y.class @ c_ext = IF  o y y.val @ SYMPAT,  EXIT THEN THEN
+      \ pass one of -O or -c makes its externs only at its end, and its
+      \ output is thrown away: a prototype stands in for now
+      COLLECT @ IF y IF y y.class @ c_fun = IF
+         nd CELL+ @ nd 2 CELLS + @ ROOT,  EXIT THEN THEN THEN
       y IF y y.class @ c_fun <> y y.val @ 0< OR IF 0 TO y THEN THEN
-      y 0= IF ." c4fc: an initializer can name only a function this unit defines: "
+      y 0= IF ." c4fc: an initializer can name only a function: "
          nd CELL+ @ nd 2 CELLS + @ TYPE CR ABORT THEN
       o y y.val @ FNPAT,
       COLLECT @ IF nd CELL+ @ nd 2 CELLS + @ ROOT, THEN   \ a table is what reaches it
@@ -1175,9 +1180,11 @@ DEFER AGG-FILL ( ety cnt off v i -- i' )
             TNEXT  TV TO fa  TL TO fu  Id WANT
             fa fu ST-FIND TO y
             y 0= IF ." c4fc: & initialiser needs a function name" CR ABORT THEN
+            y y.class @ c_ext = IF y y.val @ TO fk  -3 TO fr ELSE
+            COLLECT @ y y.class @ c_fun = AND y y.val @ 0< AND IF 0 TO fr ELSE   \ pass one
             y y.class @ c_fun <> y y.val @ 0< OR IF
                ." c4fc: & initialiser requires a defined function" CR ABORT THEN
-            y y.val @ TO fr
+            y y.val @ TO fr THEN THEN
             COLLECT @ IF fa fu ROOT, THEN   \ a global holding &fn is a root
             0 IVAL !  1 TO ivn
          ELSE
@@ -1196,9 +1203,11 @@ DEFER AGG-FILL ( ety cnt off v i -- i' )
             TV TO fa  TL TO fu  TNEXT
             fa fu ST-FIND TO y
             y 0= IF ." c4fc: an initialiser can name only a function" CR ABORT THEN
+            y y.class @ c_ext = IF y y.val @ TO fk  -3 TO fr ELSE
+            COLLECT @ y y.class @ c_fun = AND y y.val @ 0< AND IF 0 TO fr ELSE   \ pass one
             y y.class @ c_fun <> y y.val @ 0< OR IF
                ." c4fc: & initialiser requires a defined function" CR ABORT THEN
-            y y.val @ TO fr
+            y y.val @ TO fr THEN THEN
             COLLECT @ IF fa fu ROOT, THEN
             0 IVAL !  1 TO ivn
          ELSE TK Lbrace = IF
@@ -1231,6 +1240,7 @@ DEFER AGG-FILL ( ety cnt off v i -- i' )
          \ or short is sign-extended through all of it
          off  ag IF es ELSE t_int THEN  ivn INIT-WRITE
          fr 0< 0= IF off fr FNPAT, THEN
+         fr -3 = IF off fk SYMPAT, THEN             \ an extern function (-c)
          fs 0< 0= IF off fs STRPAT, THEN
          \ `extern T x[];` or `int x;` earlier, and this initialises it
          \ (M7b): the code already emitted names the old record's number,

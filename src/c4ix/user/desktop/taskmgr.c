@@ -47,14 +47,16 @@ static void sample(struct tasks *t) {
         ++t->n;
         ++i;
     }
-    // each task's cycles since the last sample, and the whole machine's
+    // each task's cycles since the last sample, and the whole machine's,
+    // in thousands: in cycles, times 100 for a percentage overflows 32
+    // bits once a task runs 21M in a sample, a fifth of a second
     total = 0; idle = 0;
     k = 0;
     while (k < t->n) {
-        d = t->lo[k];
         i = 0;
         while (i < t->n0 && t->pid0[i] != t->id[k]) ++i;
-        if (i < t->n0) d = (t->hi[k] - t->hi0[i]) * 1000000000 + (t->lo[k] - t->lo0[i]);
+        if (i < t->n0) d = (t->hi[k] - t->hi0[i]) * 1000000 + t->lo[k] / 1000 - t->lo0[i] / 1000;
+        else d = t->hi[k] * 1000000 + t->lo[k] / 1000;
         if (d < 0) d = 0;
         t->cpu[k] = d;
         total = total + d;
@@ -62,9 +64,14 @@ static void sample(struct tasks *t) {
         ++k;
     }
     k = 0;
-    while (k < t->n) { t->cpu[k] = total ? (t->cpu[k] * 100 + total / 2) / total : 0; ++k; }
+    while (k < t->n) {
+        t->cpu[k] = total ? (t->cpu[k] * 100 + total / 2) / total : 0;
+        if (t->cpu[k] > 100) t->cpu[k] = 100;
+        ++k;
+    }
     t->usage = total && t->sampled ? 100 - (idle * 100 + total / 2) / total : 0;
     if (t->usage < 0) t->usage = 0;
+    if (t->usage > 100) t->usage = 100;
     if (t->sampled) {
         if (t->nhist < HIST) { t->hist[t->nhist] = t->usage; ++t->nhist; }
         else { k = 0; while (k < HIST - 1) { t->hist[k] = t->hist[k + 1]; ++k; } t->hist[HIST - 1] = t->usage; }
@@ -105,7 +112,6 @@ static struct tasks *bar;
 int tasks_cpu_usage() {
     if (!bar) { bar = (struct tasks *)ualloc(sizeof(struct tasks)); memset(bar, 0, sizeof(struct tasks)); }
     sample(bar);
-    if (bar->usage > 100) return 100;
     return bar->usage;
 }
 

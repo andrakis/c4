@@ -48,6 +48,7 @@ node libjs/tests/test-shared.mjs || fail=1
 node libjs/tests/test-desktop.mjs || fail=1
 node libjs/tests/test-boot-desktop.mjs || fail=1
 node libjs/tests/test-c4ix-zombie.mjs || fail=1
+node libjs/tests/test-c4ix-cpu.mjs || fail=1
 
 # ---- programs, byte for byte against native -----------------------------
 for t in hello32 test_basic test_static test_vprintf tests \

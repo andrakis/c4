@@ -94,3 +94,16 @@ starts `c4ix-tar` to unpack the root archive and exits without waiting,
 so every boot left one. A missing parent now counts as userland.
 `libjs/tests/test-c4ix-zombie.mjs` boots without `wait`, lets the unpack
 finish, and checks that `ps` lists no zombie. Without the fix it fails.
+
+### 3. Percentages without overflow
+
+Task Manager and top worked out a task's share as `cycles * 100 /
+total`. A task that runs more than 21.47M cycles in a sample, a fifth of
+a second at 100 MHz, overflows 32 bits there: under load Task Manager
+showed "desktop -17" and "CPU Usage: 104%", and top showed -5 and -11.
+Both now do the arithmetic in thousands of cycles, which a word holds
+for 24 days at 100 MHz, and clamp to 0..100. top also took its first
+screen against nothing, so that screen showed totals since boot; it
+takes a baseline first now. `libjs/tests/test-c4ix-cpu.mjs` runs top
+with spin busy at 100 MHz; before the fix it reproduces the negative
+shares.

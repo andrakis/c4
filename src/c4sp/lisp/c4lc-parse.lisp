@@ -101,6 +101,10 @@
 (define p:USHORT 704)
 (define p:UINT 768)
 (define p:ULONG 832)
+;; long long on a 32-bit target (M8): two words; on a 64-bit target it is
+;; the word, int and unsigned long as before
+(define p:LL 896)
+(define p:ULL 960)
 (define p:WORD (sys:wordsize))
 (define p:BITS (* 8 p:WORD))
 ;; the word's sign bit, and the low 32 bits a 64-bit host keeps a uint
@@ -324,11 +328,13 @@
 		(if (= bt nil)
 			(if (= ch 1) (if (= un 1) p:UCHAR (if (= sg 1) p:SCHAR p:CHAR))
 			(if (= sh 1) (if (= un 1) p:USHORT p:SHORT)
+			(if (> lg 1)
+				(if (= p:WORD 4) (if (= un 1) p:ULL p:LL) (if (= un 1) p:ULONG p:INT))
 			(if (> lg 0) (if (= un 1) p:ULONG p:INT)
 			(if (= un 1) p:UINT
 			(if (= sg 1) p:INT
 			(if (= it 1) p:INT
-			d))))))
+			d)))))))
 		bt))))
 
 ;; is the current token the start of a declaration?
@@ -409,7 +415,8 @@
 	(if (> (- (- ty 512) (* 64 (/ (- ty 512) 64))) 0) p:WORD
 	(if (if (= ty 512) true (= ty 576)) 1
 	(if (if (= ty 640) true (= ty 704)) 2
-	p:WORD))))))))
+	(if (if (= ty 896) true (= ty 960)) 8
+	p:WORD)))))))))
 (define p:constsizeof (lambda (what)
 	(begin
 		(p:advance)
@@ -708,6 +715,7 @@
 	(begin
 		(define k (p:kind))
 		(if (= k 'Num) (begin (define n (p:value)) (p:advance) (list 'num n))
+		(if (p:lltok? k) (p:llnumtok)
 		(if (p:numtok? k)
 			(begin
 				(define un (p:numtok))
@@ -724,7 +732,15 @@
 		(if (= k 'Sub) (p:negexpr)
 		(if (= k 'Inc) (begin (p:advance) (list 'preinc (p:expr 21)))
 		(if (= k 'Dec) (begin (p:advance) (list 'predec (p:expr 21)))
-		(p:die "bad expression"))))))))))))))))))
+		(p:die "bad expression")))))))))))))))))))
+;; a literal too wide for a 32-bit word (c4lc-lex): (llnum LO HI TYPE)
+(define p:lltok? (lambda (k) (if (= k 'NumLL) true (= k 'NumULL))))
+(define p:llnumtok (lambda ()
+	(begin
+		(define k (p:kind))
+		(define v (p:value))
+		(p:advance)
+		(list 'llnum (head v) (p:second v) (if (= k 'NumULL) p:ULL p:LL)))))
 
 ;; unary minus: fold a literal, as c4cc does
 (define p:negexpr (lambda ()
@@ -1045,6 +1061,7 @@
 	(begin
 		(define k (p:kind))
 		(if (= k 'Lbrace) (p:braceinit)
+		(if (p:lltok? k) (p:llnumtok)
 		(if (if p:inlocal (p:exprleaf?) false) (list 'expr (p:expr 1))
 		(if (= k 'Str) (p:strlit)
 		(if (= k 'And)
@@ -1061,7 +1078,7 @@
 				(define fn (p:value))
 				(p:advance)
 				(list 'name fn))
-		(list 'num (p:const "initializer"))))))))))
+		(list 'num (p:const "initializer")))))))))))
 ;; A local's brace list (M7b): as a global's, but a leaf that is no
 ;; constant is (expr E), which c4lc-gen's g:localaggr stores when the
 ;; declaration runs. A leaf is an expression when it starts with &, or
@@ -1524,9 +1541,156 @@
 		(if (if (= d2 0) (= k 'Rparen) false) (list (tail toks) keep2)
 		(next p:attrgroup (tail toks) d2 keep2))))))
 
+;; The long long helpers (M8, c4lc-gen's g:llbinary and friends), for a
+;; unit on a 32-bit target that says `long long`: the parser reads them
+;; after the unit, and the generator compiles only the ones it called.
+;; A caller comes before what it calls, so a helper's own calls are seen
+;; before its turn.
+(define p:llsrc "
+static int *__c4ll_addr(int *d, int *a, int *b) {
+    return __c4ll_add(a, a, d);
+}
+static int *__c4ll_add(int *d, int *a, int *b) {
+    unsigned lo; int hi;
+    lo = (unsigned)a[0] + (unsigned)b[0];
+    hi = a[1] + b[1] + (lo < (unsigned)a[0]);
+    d[0] = lo; d[1] = hi;
+    return d;
+}
+static int *__c4ll_sub(int *d, int *a, int *b) {
+    unsigned lo; int hi;
+    lo = (unsigned)a[0] - (unsigned)b[0];
+    hi = a[1] - b[1] - ((unsigned)a[0] < (unsigned)b[0]);
+    d[0] = lo; d[1] = hi;
+    return d;
+}
+static int *__c4ll_mul(int *d, int *a, int *b) {
+    unsigned al, ah, bl, bh, p0, p1, p2, t, lo, hi;
+    al = (unsigned)a[0] & 65535; ah = (unsigned)a[0] >> 16;
+    bl = (unsigned)b[0] & 65535; bh = (unsigned)b[0] >> 16;
+    p0 = al * bl; p1 = al * bh; p2 = ah * bl;
+    hi = ah * bh + (p1 >> 16) + (p2 >> 16);
+    t = p0 + (p1 << 16); hi = hi + (t < p0);
+    lo = t + (p2 << 16); hi = hi + (lo < t);
+    hi = hi + (unsigned)a[0] * (unsigned)b[1] + (unsigned)a[1] * (unsigned)b[0];
+    d[0] = lo; d[1] = hi;
+    return d;
+}
+static int *__c4ll_and(int *d, int *a, int *b) { d[0] = a[0] & b[0]; d[1] = a[1] & b[1]; return d; }
+static int *__c4ll_or(int *d, int *a, int *b) { d[0] = a[0] | b[0]; d[1] = a[1] | b[1]; return d; }
+static int *__c4ll_xor(int *d, int *a, int *b) { d[0] = a[0] ^ b[0]; d[1] = a[1] ^ b[1]; return d; }
+static int *__c4ll_shl(int *a, int n) {
+    unsigned lo, hi;
+    n = n & 63; lo = a[0]; hi = a[1];
+    if (n >= 32) { hi = lo << (n - 32); lo = 0; }
+    else if (n > 0) { hi = (hi << n) | (lo >> (32 - n)); lo = lo << n; }
+    a[0] = lo; a[1] = hi;
+    return a;
+}
+static int *__c4ll_shr(int *a, int n) {
+    unsigned lo, hi;
+    n = n & 63; lo = a[0]; hi = a[1];
+    if (n >= 32) { lo = hi >> (n - 32); hi = 0; }
+    else if (n > 0) { lo = (lo >> n) | (hi << (32 - n)); hi = hi >> n; }
+    a[0] = lo; a[1] = hi;
+    return a;
+}
+static int *__c4ll_sar(int *a, int n) {
+    unsigned lo; int hi;
+    n = n & 63; lo = a[0]; hi = a[1];
+    if (n >= 32) { lo = hi >> (n - 32); hi = hi >> 31; }
+    else if (n > 0) { lo = (lo >> n) | ((unsigned)hi << (32 - n)); hi = hi >> n; }
+    a[0] = lo; a[1] = hi;
+    return a;
+}
+static int __c4ll_cmp(int *a, int *b) {
+    if (a[1] != b[1]) return a[1] < b[1] ? -1 : 1;
+    if (a[0] == b[0]) return 0;
+    return (unsigned)a[0] < (unsigned)b[0] ? -1 : 1;
+}
+static int __c4ll_ucmp(int *a, int *b) {
+    if (a[1] != b[1]) return (unsigned)a[1] < (unsigned)b[1] ? -1 : 1;
+    if (a[0] == b[0]) return 0;
+    return (unsigned)a[0] < (unsigned)b[0] ? -1 : 1;
+}
+static int __c4ll_nz(int *a) { return (a[0] | a[1]) != 0; }
+static int *__c4ll_div(int *d, int *a, int *b) {
+    int x[2], y[2], r[2], neg;
+    x[0] = a[0]; x[1] = a[1]; y[0] = b[0]; y[1] = b[1]; neg = 0;
+    if (x[1] < 0) { __c4ll_neg(x, x); neg = 1; }
+    if (y[1] < 0) { __c4ll_neg(y, y); neg = !neg; }
+    __c4ll_udivmod(d, r, x, y);
+    if (neg) __c4ll_neg(d, d);
+    return d;
+}
+static int *__c4ll_mod(int *d, int *a, int *b) {
+    int x[2], y[2], q[2], neg;
+    x[0] = a[0]; x[1] = a[1]; y[0] = b[0]; y[1] = b[1]; neg = x[1] < 0;
+    if (neg) __c4ll_neg(x, x);
+    if (y[1] < 0) __c4ll_neg(y, y);
+    __c4ll_udivmod(q, d, x, y);
+    if (neg) __c4ll_neg(d, d);
+    return d;
+}
+static int *__c4ll_udiv(int *d, int *a, int *b) { int r[2]; __c4ll_udivmod(d, r, a, b); return d; }
+static int *__c4ll_umod(int *d, int *a, int *b) { int q[2]; __c4ll_udivmod(q, d, a, b); return d; }
+static int __c4ll_udivmod(int *q, int *r, int *a, int *b) {
+    unsigned nl, nh, bl, bh, rl, rh, ql, qh, t;
+    int i;
+    nl = a[0]; nh = a[1]; bl = b[0]; bh = b[1];
+    if (nh == 0 && bh == 0) {
+        q[0] = nl / bl; q[1] = 0; r[0] = nl % bl; r[1] = 0;
+        return 0;
+    }
+    rl = 0; rh = 0; ql = 0; qh = 0; i = 0;
+    while (i < 64) {
+        rh = (rh << 1) | (rl >> 31);
+        rl = (rl << 1) | (nh >> 31);
+        nh = (nh << 1) | (nl >> 31);
+        nl = nl << 1;
+        qh = (qh << 1) | (ql >> 31);
+        ql = ql << 1;
+        if (rh > bh || (rh == bh && rl >= bl)) {
+            t = rl; rl = rl - bl; rh = rh - bh - (t < bl);
+            ql = ql | 1;
+        }
+        i = i + 1;
+    }
+    q[0] = ql; q[1] = qh; r[0] = rl; r[1] = rh;
+    return 0;
+}
+static int *__c4ll_neg(int *d, int *a) {
+    int lo, hi;
+    lo = 0 - a[0];
+    hi = ~a[1] + (a[0] == 0);
+    d[0] = lo; d[1] = hi;
+    return d;
+}
+")
+;; does the unit say `long long`, or write an LL literal?
+(define p:saysll? (lambda (ts)
+	(if (empty? ts) false
+	(if (p:lltok? (head (head ts))) true
+	(if (empty? (tail ts)) false
+	(if (if (= (head (head ts)) 'Long) (= (head (head (tail ts))) 'Long) false) true
+	(next p:saysll? (tail ts))))))))
+(define p:withll (lambda (tokens)
+	(if (if (= p:WORD 4) (p:saysll? tokens) false)
+		(begin
+			(define pp lex:pp)
+			(set! lex:pp false)
+			(define hs (lex:string p:llsrc))
+			(set! lex:pp pp)
+			(+ (p:droplast tokens (list)) hs))
+	tokens)))
+;; the tokens without their Eof
+(define p:droplast (lambda (ts acc)
+	(if (empty? (tail ts)) (p:reverse acc)
+	(next p:droplast (tail ts) (p:cons (head ts) acc)))))
+
 (define parse:program (lambda (tokens)
 	(begin
-		(set! p:toks (p:untag tokens (list)))
+		(set! p:toks (p:untag (p:withll tokens) (list)))
 		(set! p:enums (list))
 		(set! p:sconsts (list))
 		(set! p:locals (list))

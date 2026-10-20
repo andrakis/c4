@@ -1095,7 +1095,7 @@ C4SC_BACK_DIFF := c4_jailbreak factorial hello multifun puts reverse \
                   test_basic test_continue test_coop_switch test_globals \
                   test_malloc test-order test-ptrs test_static test_switch \
                   tests c4lc_l2 global test_gcscan test-oisc test_printf \
-                  c4lc_m4 c4lc_m4q c4lc_m4v c4lc_m7
+                  c4lc_m4 c4lc_m4q c4lc_m4v c4lc_m7 c4lc_ll
 test-c4sc-back: c4sc-host c4sp $(C4RLINK) $(C4M)
 	@fail=0; for b in $(C4SC_BACK_DIFF); do \
 	   f=$(TESTS)/$$b.c; \
@@ -1639,7 +1639,7 @@ C4FC_GEN_SWEEP := hello multifun puts reverse test_basic test_continue \
                   test_coop_switch test_globals test-order test-ptrs \
                   test_static test_switch tests c4lc_l2 global \
                   test_gcscan vararg2 test_vprintf c4_jailbreak \
-                  c4lc_m4 c4lc_m4q c4lc_m4v c4lc_m4std c4lc_m7
+                  c4lc_m4 c4lc_m4q c4lc_m4v c4lc_m4std c4lc_m7 c4lc_ll
 
 test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c $(C4RDUMP)
 	./c4th $(C4FC_LIB) src/c4fc/tests/dsl.f | cmp - src/c4fc/tests/expected/dsl.txt
@@ -3163,6 +3163,15 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	   ./c4sp32 src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_m7.c .c4lc_b.c4r > /dev/null || exit 1; \
 	   ./c4m32 load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-m7.txt || exit 1; \
 	   echo "  m7 ok, gcc's answers at 32 and 64 bits: c4lc $$fl"; \
+	 done
+	# M8: long long, two words on a 32-bit target (c4lc-design 14.7); the
+	# golden is gcc's, the same at both sizes
+	@for fl in "" "-O" "-minline"; do \
+	   ./c4sp src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_ll.c .c4lc_b.c4r > /dev/null || exit 1; \
+	   ./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-ll.txt || exit 1; \
+	   ./c4sp32 src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_ll.c .c4lc_b.c4r > /dev/null || exit 1; \
+	   ./c4m32 load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-ll.txt || exit 1; \
+	   echo "  ll ok, gcc's answers at 32 and 64 bits: c4lc $$fl"; \
 	 done
 	# M7b: data words naming another unit's functions (patch type -5 in
 	# the object, which c4rlink resolves) -- an applet table like Busybox's

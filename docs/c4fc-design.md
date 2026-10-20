@@ -216,6 +216,11 @@ the named file. Options are words run before it, inside a definition
 
 ## Integer types (M4, 2026-10)
 
+`long long` is the word on a 64-bit host, as in c4lc. On a 32-bit one c4lc
+makes it two words (c4lc-design.md 14.7); c4fc stops with "long long on a
+32-bit target needs c4lc" rather than give it 32 bits. Compound assignment
+(`+=` and the rest) is `L = L op R`, as in c4lc (M8).
+
 `signed`, `unsigned`, `short`, `long`, `const` and `volatile` arrived in
 both compilers at once, and c4fc emits c4lc's bytes for them. The
 language side — the types, what each operation compiles to, the six

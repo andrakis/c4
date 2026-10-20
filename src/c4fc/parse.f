@@ -72,6 +72,14 @@ Shl 10 oSHL INFIX   Shr 10 oSHR INFIX
 Add 11 oADD INFIX   Sub 11 oSUB INFIX
 Mul 12 oMUL INFIX   Div 12 oDIV INFIX  Mod 12 oMOD INFIX
 
+\ L op= R is L = L op R, the lvalue's tree in both places (c4lc-parse's
+\ p:compound): the binary operator an assignment operator stands for, or 0
+: COMPOUND-OF ( kind -- kind' | 0 ) {: k -- k' :}
+   k AddA = IF Add EXIT THEN  k SubA = IF Sub EXIT THEN  k MulA = IF Mul EXIT THEN
+   k DivA = IF Div EXIT THEN  k ModA = IF Mod EXIT THEN  k ShlA = IF Shl EXIT THEN
+   k ShrA = IF Shr EXIT THEN  k AndA = IF And EXIT THEN  k OrA = IF Or EXIT THEN
+   k XorA = IF Xor EXIT THEN  0 ;
+
 DEFER PARSE-TYPE                        \ members are declarations too, and
 DEFER BASE-TYPE                         \ sizeof appears inside constants
 DEFER STARS ( t -- t' )
@@ -350,6 +358,11 @@ DEFER EXPR                              \ ( lev -- node )
    st 0< 0= IF st EXIT THEN
    ch IF un IF t_uchar ELSE sg IF t_schar ELSE t_char THEN THEN EXIT THEN
    sh IF un IF t_ushort ELSE t_short THEN EXIT THEN
+   \ long long is the word on a 64-bit host, as in c4lc. On a 32-bit one
+   \ c4lc makes it two words (M8, c4lc-design 14.7); c4fc does not, and
+   \ says so rather than give a long long 32 bits.
+   lg 1 > 1 CELLS 4 = AND IF
+      ." c4fc: " TOK@ .WHERE ." : long long on a 32-bit target needs c4lc" CR ABORT THEN
    lg IF un IF t_ulong ELSE t_int THEN EXIT THEN
    un IF t_uint EXIT THEN
    sg it OR q OR IF t_int EXIT THEN
@@ -550,6 +563,11 @@ CREATE SLBUF 8192 ALLOT
    BEGIN
       TK Assign = lev 1 <= AND IF
          TNEXT  n 1 EXPR n_asgn N2 TO n
+      ELSE TK COMPOUND-OF TO q  q 0<> lev 1 <= AND IF
+         TNEXT  1 EXPR TO r
+         n_bin 4 CELLS NEW TO nd
+         n nd >lhs !  r nd >rhs !  q IN-FIND CELLS INO + @ nd >op !
+         n nd n_asgn N2 TO n
       ELSE TK Cond = lev 2 <= AND IF
          TNEXT  1 EXPR TO r  Colon WANT  2 EXPR TO q
          n_cond 4 CELLS NEW TO nd
@@ -568,7 +586,7 @@ CREATE SLBUF 8192 ALLOT
          n_bin 4 CELLS NEW TO nd
          n nd >lhs !  r nd >rhs !  i CELLS INO + @ nd >op !
          nd TO n
-      THEN THEN THEN THEN
+      THEN THEN THEN THEN THEN
    AGAIN ;
 ' (EXPR) IS EXPR
 

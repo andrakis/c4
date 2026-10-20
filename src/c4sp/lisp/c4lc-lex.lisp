@@ -110,6 +110,7 @@
 ;; already a word -- so the result is 0 (int), 1 (unsigned int) or 2
 ;; (unsigned long), left in the lex:sfx mailbox like lex:val.
 (define lex:sfx 0)
+(define lex:nl 0)       ;; how many l/L: two is long long
 (define lex:suffix (lambda (i u l)
 	(begin
 		(define c (lex:peek i))
@@ -117,7 +118,35 @@
 		(if (if (= c 108) true (= c 76)) (next lex:suffix (+ i 1) u (+ l 1))
 		(begin
 			(set! lex:sfx (if (= u 0) 0 (if (= l 0) 1 2)))
+			(set! lex:nl l)
 			i))))))
+
+;; A literal on a 32-bit host (M8) is read again in four 16-bit limbs, which
+;; a 32-bit word carries without overflow; one that says ll is a NumLL
+;; (NumULL with a u) whose value is (LO HI). Without the suffix a literal
+;; keeps c4's rule (14.3) however large: code written for the 64-bit word,
+;; 0x7FFFFFFFFFFFFFFF in c4sp's own float library, wraps to a word here.
+(define lex:wlo 0)
+(define lex:whi 0)
+(define lex:wide (lambda (i e base l0 l1 l2 l3)
+	(if (>= i e)
+		(begin
+			(set! lex:wlo (bit:or l0 (bit:shl l1 16)))
+			(set! lex:whi (bit:or l2 (bit:shl l3 16)))
+			(>= lex:nl 2))
+	(begin
+		(define x0 (+ (* l0 base) (lex:hexval (string:byte lex:src i))))
+		(define x1 (+ (* l1 base) (bit:shr x0 16)))
+		(define x2 (+ (* l2 base) (bit:shr x1 16)))
+		(define x3 (+ (* l3 base) (bit:shr x2 16)))
+		(next lex:wide (+ i 1) e base
+			(bit:and x0 65535) (bit:and x1 65535) (bit:and x2 65535) (bit:and x3 65535))))))
+(define lex:wide? (lambda (i c e)
+	(if (!= (sys:wordsize) 4) false
+	(if (!= c 48) (lex:wide i e 10 0 0 0 0)
+	(if (if (= (lex:peek (+ i 1)) 120) true (= (lex:peek (+ i 1)) 88))
+		(lex:wide (+ i 2) e 16 0 0 0 0)
+	(lex:wide (+ i 1) e 8 0 0 0 0))))))
 
 ;; ---- scanners: each returns the index after the consumed text ----
 
@@ -355,10 +384,14 @@
 						(list 'Id name line))) acc)))
 		(if (lex:digit? c)
 			(begin
-				(define e (lex:suffix (lex:number i c) 0 0))
+				(define e0 (lex:number i c))
+				(define e (lex:suffix e0 0 0))
 				(next lex:go e line
-					(lex:cons (list (if (= lex:sfx 0) 'Num (if (= lex:sfx 1) 'NumU 'NumUL))
-						lex:val line) acc)))
+					(lex:cons
+						(if (lex:wide? i c e0)
+							(list (if (= lex:sfx 0) 'NumLL 'NumULL) (list lex:wlo lex:whi) line)
+						(list (if (= lex:sfx 0) 'Num (if (= lex:sfx 1) 'NumU 'NumUL))
+							lex:val line)) acc)))
 		(if (= c 47)
 			(if (= (lex:peek j) 47)
 				(next lex:go (lex:skipline (+ j 1)) line acc)

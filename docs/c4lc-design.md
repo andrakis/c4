@@ -651,20 +651,22 @@ is in [c4fc-design.md](c4fc-design.md), "Integer types").
 | type | code (+2 per `*`) | `sizeof` | value range |
 |---|---|---|---|
 | `char`, `void` | 0 | 1 | signed 8-bit (`LC` sign-extends; `CHAR_MIN` is -128) |
-| `int`, `signed`, `long`, `long long` | 1 | word | the word, signed |
+| `int`, `signed`, `long` (and `long long` on a 64-bit target) | 1 | word | the word, signed |
 | `unsigned char` | 512 | 1 | 0..255 |
 | `signed char` | 576 | 1 | -128..127, same representation as `char` |
 | `short` | 640 | 2 | -32768..32767 |
 | `unsigned short` | 704 | 2 | 0..65535 |
 | `unsigned`, `unsigned int` | 768 | word | 0..2^32-1 **at both word sizes** |
-| `unsigned long (long)` | 832 | word | the word, unsigned |
+| `unsigned long` (and `unsigned long long` on a 64-bit target) | 832 | word | the word, unsigned |
+| `long long` on a 32-bit target (M8, 14.7) | 896 | 8 | signed 64-bit |
+| `unsigned long long` on a 32-bit target | 960 | 8 | 0..2^64-1 |
 | `struct` k | 1024 + 64k | layout | — |
 
 The band at 512 uses the struct rule — 64 apart, two per pointer level
 — so `g:plevel` is one formula for everything at or above 512, and the
 codes in a `.c4r` symbol record for the old types did not change.
-`long` is word-sized and `long long` is accepted as the same word: a
-real 64-bit `long long` on a 32-bit host is a later milestone. Any
+`long` is word-sized. `long long` is 64 bits at both sizes: the word on
+a 64-bit target, and two words on a 32-bit one (14.7). Any
 order of specifiers parses (`unsigned const short`, `long unsigned`),
 and a typedef name only counts as a type while no other type word has
 been seen, so `unsigned T;` declares a `T`.
@@ -880,3 +882,73 @@ which made `#if N == 1` misread.
   `c4lc -P -D STDDEF_ONLY` (stddef.h alone); test-c4fc compiles it with
   c4fc's own `-P` and runs it, and `C4FC_GEN_SWEEP` holds that image to
   c4lc's.
+
+### 14.7 `long long` on a 32-bit target (M8, 2026-10-20)
+
+On a 64-bit target `long long` is the word, as before, so nothing there
+changed. On a 32-bit target -- the browser's C4IX, `c4sp32`, and c4sc
+inside C4IX -- it is now two words, `long long` (896) and `unsigned long
+long` (960), the codes the parser makes only when `sys:wordsize` is 4.
+
+- **A value is an address.** The VM's one register holds a word, so a
+  long long is handled as a struct is: an expression of the type leaves
+  the ADDRESS of its eight bytes (low word first) in A. A variable, a
+  member, an element or `*p` is its own storage (`g:load!` emits
+  nothing); a computed value goes to a temporary in the frame
+  (`g:ltemp`), below the locals and block declarations, freed at the
+  end of the statement that made it (`g:stmt`). How many a function
+  needs is known only after its body, so its ENT is emitted as
+  `(ENT (frame ID WORDS))` and `g:resolvecode` adds the temporaries at
+  the end -- 0 for code without long long, whose bytes are unchanged
+  (all of C4IX's 92 objects compile identically).
+- **Stores** copy eight bytes with `MCPY`, which leaves the destination
+  in A, so an assignment's value is the stored one.
+- **Conversions.** A word becomes a long long where it is generated
+  (`g:llval`, `g:llinto`): its low half, and for its high half the sign
+  (an arithmetic `SHR` by 31) or 0 for the unsigned types and pointers.
+  A long long becomes a word with `LI`, its low half (`g:convert!`,
+  `g:sconv!`). An index, a shift count and a `switch` are words
+  (`g:iexpr`); a condition tests both halves (`g:texpr`, `__c4ll_nz`).
+- **Arithmetic** calls helpers written in C, `p:llsrc` in
+  c4lc-parse.lisp: add, sub, mul (16-bit limbs), and, or, xor, the three
+  shifts, signed and unsigned compares, div, mod, udiv, umod (shift and
+  subtract, with a one-word fast path when both high halves are 0), neg.
+  `~` is inline. The parser reads them after any unit that says `long
+  long`; they are static, registered when first called (`g:find`, kept
+  in `g:llsyms` outside the scopes), and generated only then -- each
+  helper's own calls come before its turn, so the order of `p:llsrc` is
+  callers first. -O's dead-function pass keeps them as roots.
+- **Calls.** A long long argument is two words, the high one pushed
+  first so the low one is at the lower address, the parameter's
+  (`g:params`, `g:pwords`: a function's ArgCount is in words). A long
+  long result comes back through a pointer to the caller's temporary,
+  pushed after the arguments: the callee's `return` copies through
+  `LEA 2`.
+- **Literals** with an `ll` suffix are read again in four 16-bit limbs
+  (`lex:wide`), since a 32-bit compiler cannot hold them in one number:
+  a `NumLL`/`NumULL` token, an `(llnum LO HI TYPE)` node, and the parser
+  adds the helpers for one as it does for the keyword. Without the
+  suffix a literal keeps 14.3's rule however large -- code written for
+  the 64-bit word (c4sp's float library has `0x7FFFFFFFFFFFFFFF`) wraps
+  to a word, as it always has.
+- **Inlining.** A long long parameter of an inlined call gets a cast
+  (`t:convty?`), so an int argument widens; a function returning long
+  long is never spliced (T4), since its result is a temporary the
+  splice's block would free.
+- **Not done:** `printf`'s `%lld` on a 32-bit host (a long long argument
+  is pushed as two words, which the runtimes do not read yet); a long
+  long constant expression (array sizes, `case`); a long long returned
+  through a function pointer. c4fc on a 32-bit host refuses `long long`
+  instead of giving it 32 bits; its parity with c4lc is held at 64 bits,
+  where long long is the word in both.
+- **Test:** `src/tests/c4lc_ll.c`, golden `c4lc-ll.txt` from gcc (the same
+  at 32 and 64 bits): literals and globals, every operator, unsigned
+  division and compares, shifts by constants and variables, widening and
+  narrowing, `++`/`--` and compound assignment, arguments and results,
+  recursion (20!), struct members, arrays, pointers, conditions. In
+  test-c4lc at both sizes, plain, `-O` and `-minline`, and in
+  `C4FC_GEN_SWEEP` and `C4SC_BACK_DIFF`.
+
+Found on the way: c4fc had no compound assignment (`+=` and the rest
+lexed, but its parser stopped at them). It now rewrites `L op= R` as
+`L = L op R`, as c4lc does, and produces the same bytes.

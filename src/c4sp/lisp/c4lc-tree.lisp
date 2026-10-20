@@ -62,7 +62,8 @@
 	(if (> (- (- ty 512) (* 64 (/ (- ty 512) 64))) 0) (sys:wordsize)
 	(if (if (= ty 512) true (= ty 576)) 1
 	(if (if (= ty 640) true (= ty 704)) 2
-	(sys:wordsize))))))))
+	(if (if (= ty 896) true (= ty 960)) 8
+	(sys:wordsize)))))))))
 
 (define t:binops '(add sub mul div mod shl shr band bor bxor
 	eq ne lt gt le ge))
@@ -383,8 +384,12 @@
 					(t:cons (t:third d) acc)
 				(if (= (t:third d) "main") (t:cons "main" acc)
 				(if (= (t:third d) "__c4cc_make_va") (t:cons (t:third d) acc)
+				;; the long long helpers: the generator calls them, the
+				;; tree never sees it; it compiles only the ones it calls
+				(if (if (> (length (t:third d)) 7) (= (string:substr (t:third d) 0 7) "__c4ll_") false)
+					(t:cons (t:third d) acc)
 				(if (> (bit:and (index d 5) 3) 0) (t:cons (t:third d) acc)
-				acc))))
+				acc)))))
 			(if (= h 'global)
 				(if (= (index d 5) nil) acc (t:initnames (index d 5) acc))
 			acc)))))))
@@ -546,7 +551,9 @@
 ;; out as a cast. char keeps c4's own behaviour.
 (define t:convty? (lambda (ty)
 	(if (= ty 512) true (if (= ty 576) true (if (= ty 640) true
-	(if (= ty 704) true (= ty 768)))))))
+	(if (= ty 704) true (if (= ty 768) true
+	;; a long long parameter (M8): an int argument must be widened
+	(if (= ty 896) true (= ty 960)))))))))
 (define t:cwrap (lambda (ty x) (if (t:convty? ty) (list 'cast ty x) x)))
 (define t:rty 1)    ;; the return type of the body being spliced (T4)
 
@@ -1059,7 +1066,9 @@
 	(begin
 		(define nm (t:third d))
 		(define ss (tail (index d 7)))
-		(if (index d 4) acc
+		;; a long long result is the address of a temporary, which a splice
+		;; would free with its block (M8)
+		(if (if (index d 4) true (if (= (t:second d) 896) true (= (t:second d) 960))) acc
 		(if (= nm "main") acc
 		(if (> (bit:and (index d 5) 3) 0) acc
 		(if (t:member? nm taken) acc

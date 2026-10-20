@@ -57,6 +57,11 @@
 (define g:USHORT 704)
 (define g:UINT 768)
 (define g:ULONG 832)
+;; long long on a 32-bit target (M8, section 14.7): two words. The parser
+;; makes these codes only there; on a 64-bit target long long is the word.
+(define g:LL 896)
+(define g:ULL 960)
+(define g:ll? (lambda (t) (if (= t g:LL) true (= t g:ULL))))
 (define g:BITS (* 8 g:WORD))
 (define g:W64 (= g:WORD 8))
 (define g:MIN (bit:shl 1 (- g:BITS 1)))
@@ -236,7 +241,14 @@
 (define g:find (lambda (n)
 	(begin
 		(define s (g:lookup n g:syms))
-		(if s s (g:die (+ "undefined identifier: " n))))))
+		(if s s
+		(begin
+			(define s2 (g:lookup n g:llsyms))
+			(if s2 s2
+			(begin
+				(define hd (g:lookup n g:llsrc))
+				(if hd (g:llreg (g:second hd))
+				(g:die (+ "undefined identifier: " n))))))))))
 
 ;; c4cc's full library table: keyword order maps onto opcodes OPEN..FLT
 (define g:syscalls '(
@@ -418,15 +430,17 @@
 ;; the usual arithmetic conversions: everything narrower than a word
 ;; promotes to int, and int < uint < ulong
 (define g:promote (lambda (t)
-	(if (= t g:UINT) g:UINT (if (= t g:ULONG) g:ULONG g:INT))))
-(define g:uns? (lambda (t) (if (= t g:UINT) true (= t g:ULONG))))
+	(if (= t g:UINT) g:UINT (if (= t g:ULONG) g:ULONG (if (g:ll? t) t g:INT)))))
+(define g:uns? (lambda (t) (if (= t g:UINT) true (if (= t g:ULONG) true (= t g:ULL)))))
 (define g:uac (lambda (a b)
 	(begin
 		(define pa (g:promote a))
 		(define pb (g:promote b))
+		(if (if (= pa g:ULL) true (= pb g:ULL)) g:ULL
+		(if (if (= pa g:LL) true (= pb g:LL)) g:LL
 		(if (if (= pa g:ULONG) true (= pb g:ULONG)) g:ULONG
 		(if (if (= pa g:UINT) true (= pb g:UINT)) g:UINT
-		g:INT)))))
+		g:INT)))))))
 ;; two arithmetic operands of which at least one is unsigned: the only
 ;; case that generates anything different from what c4 always has
 (define g:unsbin? (lambda (a b)
@@ -439,7 +453,8 @@
 ;; because its value is converted on the way back and a short that
 ;; carried 32768 would never be.
 (define g:sumty (lambda (t)
-	(if (if (>= t 512) (g:arith? t) false) g:INT t)))
+	(if (g:ll? t) t
+	(if (if (>= t 512) (g:arith? t) false) g:INT t))))
 
 ;; a := a & m
 (define g:mask! (lambda (m)
@@ -456,6 +471,12 @@
 ;; the conversion code for a value of type f now in A, to type t. Only
 ;; integer targets convert; and a source that already fits emits nothing.
 (define g:convert! (lambda (f t)
+	(if (g:ll? f)
+		(if (g:ll? t) nil
+		(begin (g:emit '(LI)) (g:convert! (if (= f g:ULL) g:UINT g:INT) t)))
+	(if (g:ll? t) (g:die "internal: a long long is made before its operand, not after")
+	(g:convert!/2 f t)))))
+(define g:convert!/2 (lambda (f t)
 	(if (g:arith? t)
 		(if (if (= t g:CHAR) true (= t g:SCHAR))
 			(if (if (= f g:CHAR) true (= f g:SCHAR)) nil (g:sext! 8))
@@ -476,6 +497,11 @@
 ;; rest -- because changing it would change every program there is; the
 ;; new types get C's.
 (define g:sconv! (lambda (f t)
+	(if (g:ll? f)
+		(if (g:ll? t) nil
+		(begin (g:emit '(LI)) (g:sconv! (if (= f g:ULL) g:UINT g:INT) t)))
+	(g:sconv!/2 f t))))
+(define g:sconv!/2 (lambda (f t)
 	(if (= t g:CHAR) nil
 	(if (= t g:INT) nil
 	(if (= t g:ULONG) nil
@@ -488,11 +514,13 @@
 	(if (= ty g:SHORT) (g:helpcall 'ld16s 1)
 	(if (= ty g:USHORT) (g:helpcall 'ld16u 1)
 	(if (if (= ty g:UINT) g:W64 false) (begin (g:emit '(LI)) (g:mask! g:M32))
-	(g:emit '(LI)))))))))
+	(if (g:ll? ty) nil
+	(g:emit '(LI))))))))))
 (define g:store! (lambda (ty)
+	(if (g:ll? ty) (g:llcopy)
 	(if (g:bytety? ty) (g:emit '(SC))
 	(if (g:halfty? ty) (g:helpcall 'st16 2)
-	(g:emit '(SI))))))
+	(g:emit '(SI)))))))
 
 ;; ---- struct types (L7) ----
 ;; encoding: 1024 + 64*id + 2*ptrlevel (see c4lc-parse.lisp)
@@ -524,9 +552,10 @@
 	(if (< ty 512) g:WORD
 	(if (g:isptr ty) g:WORD
 	(if (g:svalue? ty) (g:second (g:sinfo ty))
-	(if (g:bytety? ty) 1
-	(if (g:halfty? ty) 2
-	g:WORD))))))))
+		(if (g:bytety? ty) 1
+		(if (g:halfty? ty) 2
+		(if (g:ll? ty) 8
+		g:WORD)))))))))
 ;; sizeof an expression (M7b), worked out from its type without
 ;; evaluating it: a string literal is its bytes and the NUL, an array
 ;; member its whole storage, and everything else its type's size
@@ -649,7 +678,7 @@
 		(define t g:ty)
 		(if (g:isptr t) nil (g:die "pointer type expected"))
 		(g:emit '(PSH))
-		(g:expr (g:third e))
+		(g:iexpr (g:third e))
 		(if (> (g:elemsize t) 1)
 			(begin
 				(g:emit '(PSH))
@@ -735,6 +764,215 @@
 		(set! g:lastarray
 			(if (= (index m 3) nil) (g:svalue? (g:third m)) true)))))
 
+;; ---- long long on a 32-bit target (M8) ----
+;;
+;; A long long is two words, low first. Its value is its ADDRESS, as a
+;; struct's is: a variable, a member or an element is its own storage,
+;; and anything computed goes to a temporary in the frame, below the
+;; locals -- g:ltemp hands them out, and they live until the end of the
+;; statement that made them (g:stmt). The arithmetic the VM's one word
+;; cannot do calls helpers written in C (c4lc-parse's p:llsrc), which
+;; the parser adds to a unit that says `long long` and which are compiled
+;; only if called.
+(define g:tbase 0)      ;; the frame slot the temporaries start after
+(define g:tcur 0)       ;; temporary words in use
+(define g:tmax 0)       ;; ... at most, in this function
+(define g:frames (list))   ;; ((ID WORDS) ...): each function's temporaries
+(define g:fid 0)
+(define g:llsrc (list))    ;; ((NAME DECL) ...): helpers nobody has called yet
+(define g:llsyms (list))   ;; ... and the ones called, kept apart from g:syms's scopes
+(define g:framewords (lambda (id l)
+	(if (empty? l) 0
+	(if (= (head (head l)) id) (g:second (head l))
+	(next g:framewords id (tail l))))))
+(define g:llname? (lambda (n)
+	(if (> (length n) 7) (= (string:substr n 0 7) "__c4ll_") false)))
+(define g:llreg (lambda (d)
+	(begin
+		(set! g:llsyms (g:cons
+			(list (g:third d) 'fun (g:second d) (g:newlabel)
+				(g:pwords (index d 3) 0) (index d 4) (index d 5)
+				(g:nz (index d 8)) (g:ptys (index d 3) (list)) (g:pqs (index d 3) (list)))
+			g:llsyms))
+		(head g:llsyms))))
+;; a two-word temporary: the LEA offset of its low word
+(define g:ltemp (lambda ()
+	(begin
+		(set! g:tcur (+ g:tcur 2))
+		(if (> g:tcur g:tmax) (set! g:tmax g:tcur) nil)
+		(- g:loc (+ g:tbase g:tcur)))))
+;; [dst] on the stack, the source's address in A: copy the eight bytes;
+;; A is dst afterwards (MCPY's result)
+(define g:llcopy (lambda ()
+	(begin
+		(g:emit '(PSH)) (g:emit '(IMM 8)) (g:emit '(PSH)) (g:emit '(MCPY)) (g:emit '(ADJ 3)))))
+(define g:llcall (lambda (n words)
+	(begin
+		(g:emit (list 'JSR (g:funref (g:find n))))
+		(g:emit (list 'ADJ words)))))
+;; is an operator on these operands a long long one? A shift is when its
+;; left operand is; anything else when either arithmetic operand is
+(define g:llop? (lambda (shift lt rt)
+	(if (g:arith? lt)
+		(if shift (g:ll? (g:promote lt))
+		(if (g:arith? rt) (if (g:ll? lt) true (g:ll? rt)) false))
+	false)))
+(define g:llrty (lambda (shift lt rt) (if shift (g:promote lt) (g:uac lt rt))))
+;; a constant into a fresh temporary
+(define g:llconst (lambda (lo hi ty)
+	(begin
+		(define t (g:ltemp))
+		(g:emit (list 'LEA t)) (g:emit '(PSH)) (g:emit (list 'IMM lo)) (g:emit '(SI))
+		(g:emit (list 'LEA (+ t 1))) (g:emit '(PSH)) (g:emit (list 'IMM hi)) (g:emit '(SI))
+		(g:emit (list 'LEA t))
+		(set! g:ty ty))))
+;; e, as a long long, into the temporary at LEA offset TO: a long long is
+;; copied; a word is its low half, its high half its sign (0 for the
+;; unsigned types and pointers)
+(define g:llinto (lambda (e to)
+	(begin
+		(define et (g:typeof e))
+		(g:emit (list 'LEA to)) (g:emit '(PSH))
+		(if (g:ll? et)
+			(begin (g:expr e) (g:llcopy))
+		(begin
+			(g:iexpr e)
+			(define st g:ty)
+			(g:emit '(SI))
+			(g:emit (list 'LEA (+ to 1))) (g:emit '(PSH))
+			(if (if (g:arith? st) (g:uns? (g:promote st)) true)
+				(g:emit '(IMM 0))
+			(begin
+				(g:emit (list 'LEA to)) (g:emit '(LI))
+				(g:emit '(PSH)) (g:emit (list 'IMM (- g:BITS 1))) (g:emit '(SHR))))
+			(g:emit '(SI))))
+		(set! g:ty (if (g:ll? et) et (if (g:uns? (g:promote et)) g:ULL g:LL))))))
+;; e as a long long: A its address
+(define g:llval (lambda (e)
+	(if (g:ll? (g:typeof e)) (g:expr e)
+	(begin
+		(define t (g:ltemp))
+		(g:llinto e t)
+		(g:emit (list 'LEA t))))))
+;; e as one word: a long long's low half
+(define g:iexpr (lambda (e)
+	(begin
+		(g:expr e)
+		(if (g:ll? g:ty)
+			(begin (g:emit '(LI)) (set! g:ty (if (= g:ty g:ULL) g:UINT g:INT)))
+		nil))))
+;; e as a truth value: a long long is true when either half is
+(define g:texpr (lambda (e)
+	(begin
+		(g:expr e)
+		(if (g:ll? g:ty)
+			(begin (g:emit '(PSH)) (g:llcall "__c4ll_nz" 1) (set! g:ty g:INT))
+		nil))))
+;; two words onto the stack for a call, the high one first
+(define g:llpush (lambda (e)
+	(begin
+		(define t (g:ltemp))
+		(g:llinto e t)
+		(g:emit (list 'LEA (+ t 1))) (g:emit '(LI)) (g:emit '(PSH))
+		(g:emit (list 'LEA t)) (g:emit '(LI)) (g:emit '(PSH)))))
+(define g:llfns '((add "__c4ll_add") (sub "__c4ll_sub") (mul "__c4ll_mul")
+	(band "__c4ll_and") (bor "__c4ll_or") (bxor "__c4ll_xor")))
+;; l op r: l into a fresh temporary, which the helper overwrites
+(define g:llbinary (lambda (e opname rt)
+	(if (g:cmpop? opname) (g:llcompare e opname)
+	(if (if (= opname 'SHL) true (= opname 'SHR)) (g:llshift e opname rt)
+	(begin
+		(define t (g:ltemp))
+		(g:llinto (g:second e) t)
+		(define fn
+			(if (= opname 'DIV) (if (= rt g:ULL) "__c4ll_udiv" "__c4ll_div")
+			(if (= opname 'MOD) (if (= rt g:ULL) "__c4ll_umod" "__c4ll_mod")
+			(g:second (g:assoc/atom (head e) g:llfns)))))
+		(g:emit (list 'LEA t)) (g:emit '(PSH))
+		(g:emit (list 'LEA t)) (g:emit '(PSH))
+		(g:llval (g:third e))
+		(g:emit '(PSH))
+		(g:llcall fn 3)
+		(g:emit (list 'LEA t))
+		(set! g:ty rt))))))
+;; a comparison: the helper's -1, 0 or 1 against 0
+(define g:llcompare (lambda (e opname)
+	(begin
+		(define u (= (g:uac (g:typeof (g:second e)) (g:typeof (g:third e))) g:ULL))
+		(g:llval (g:second e)) (g:emit '(PSH))
+		(g:llval (g:third e)) (g:emit '(PSH))
+		(g:llcall (if u "__c4ll_ucmp" "__c4ll_cmp") 2)
+		(g:emit '(PSH)) (g:emit '(IMM 0)) (g:emit (list opname))
+		(set! g:ty g:INT))))
+;; a shift by a word, in place in a fresh temporary
+(define g:llshift (lambda (e opname rt)
+	(begin
+		(define t (g:ltemp))
+		(g:llinto (g:second e) t)
+		(g:emit (list 'LEA t)) (g:emit '(PSH))
+		(g:iexpr (g:third e)) (g:emit '(PSH))
+		(g:llcall (if (= opname 'SHL) "__c4ll_shl" (if (= rt g:ULL) "__c4ll_shr" "__c4ll_sar")) 2)
+		(g:emit (list 'LEA t))
+		(set! g:ty rt))))
+;; ~x: both halves, in place
+(define g:llnot (lambda (e)
+	(begin
+		(define t (g:ltemp))
+		(g:llinto (g:second e) t)
+		(define rt g:ty)
+		(g:emit (list 'LEA t)) (g:emit '(PSH)) (g:emit (list 'LEA t)) (g:emit '(LI))
+		(g:emit '(PSH)) (g:emit '(IMM -1)) (g:emit '(XOR)) (g:emit '(SI))
+		(g:emit (list 'LEA (+ t 1))) (g:emit '(PSH)) (g:emit (list 'LEA (+ t 1))) (g:emit '(LI))
+		(g:emit '(PSH)) (g:emit '(IMM -1)) (g:emit '(XOR)) (g:emit '(SI))
+		(g:emit (list 'LEA t))
+		(set! g:ty rt))))
+(define g:llneg (lambda (e)
+	(begin
+		(define t (g:ltemp))
+		(g:llinto (g:second e) t)
+		(define rt g:ty)
+		(g:emit (list 'LEA t)) (g:emit '(PSH)) (g:emit (list 'LEA t)) (g:emit '(PSH))
+		(g:llcall "__c4ll_neg" 2)
+		(g:emit (list 'LEA t))
+		(set! g:ty rt))))
+;; lv = rv
+(define g:llassign (lambda (lv rv)
+	(begin
+		(define t (g:lvtype lv))
+		(g:addr lv)
+		(if g:lastarray (g:die "bad lvalue in assignment") nil)
+		(g:wcheck lv "assignment")
+		(g:emit '(PSH))
+		(g:llval rv)
+		(g:llcopy)
+		(set! g:ty t))))
+;; ++ / --: the lvalue's address kept in a temporary; a post form copies
+;; the old value out first
+(define g:llincdec (lambda (lv up post)
+	(begin
+		(define t (g:lvtype lv))
+		(define s (g:ltemp))
+		(g:emit (list 'LEA s)) (g:emit '(PSH))
+		(g:addr lv)
+		(if g:lastarray (g:die "bad lvalue in increment") nil)
+		(g:wcheck lv (if up "increment" "decrement"))
+		(g:emit '(SI))
+		(define old (if post (g:ltemp) 0))
+		(if post
+			(begin
+				(g:emit (list 'LEA old)) (g:emit '(PSH))
+				(g:emit (list 'LEA s)) (g:emit '(LI))
+				(g:llcopy))
+		nil)
+		(g:llconst (if up 1 -1) (if up 0 -1) t)
+		(g:emit '(PSH))
+		(g:emit (list 'LEA s)) (g:emit '(LI)) (g:emit '(PSH))
+		(g:emit (list 'LEA s)) (g:emit '(LI)) (g:emit '(PSH))
+		;; stack: [&step, p, p]: the helper wants (d, a, b)
+		(g:llcall "__c4ll_addr" 3)
+		(if post (g:emit (list 'LEA old)) (begin (g:emit (list 'LEA s)) (g:emit '(LI))))
+		(set! g:ty t))))
+
 ;; ---- what an expression IS, without generating it (M4) ----
 ;;
 ;; The generator learns an operand's type by generating it, which is
@@ -758,11 +996,12 @@
 		(if (= h 'member) (g:third (g:member (g:typeof (g:second e)) (g:third e)))
 		(if (= h 'arrow) (g:third (g:member (- (g:typeof (g:second e)) g:PTR) (g:third e)))
 		g:INT))))))))
-(define g:unres (lambda (t) (if (g:uns? (g:promote t)) (g:promote t) g:INT)))
+(define g:unres (lambda (t) (if (g:uns? (g:promote t)) (g:promote t) (if (g:ll? t) t g:INT))))
 (define g:typeof (lambda (e)
 	(begin
 		(define h (head e))
 		(if (= h 'num) (if (= (index e 2) nil) g:INT (index e 2))
+		(if (= h 'llnum) (index e 3)
 		(if (= h 'str) g:PTR
 		(if (= h 'var) (g:third (g:find (g:second e)))
 		(if (= h 'call) (g:third (g:find (g:second e)))
@@ -779,8 +1018,20 @@
 		(if (= h 'cond) (g:condtype e)
 		(if (if (= h 'land) true (= h 'lor)) g:INT
 		(if (= h 'comma) (g:typeof (g:last (tail e)))
-		(g:bintype e)))))))))))))))))))))
+		(g:bintype e))))))))))))))))))))))
 (define g:bintype (lambda (e)
+	(begin
+		(define h (head e))
+		(define lt0 (g:typeof (g:second e)))
+		(define shf (if (= h 'shl) true (= h 'shr)))
+		(define rt0 (if shf g:INT (g:typeof (g:third e))))
+		(if (g:llop? shf lt0 rt0)
+			(if (if (= h 'eq) true (if (= h 'ne) true (if (= h 'lt) true
+					(if (= h 'gt) true (if (= h 'le) true (= h 'ge))))))
+				g:INT
+				(g:llrty shf lt0 rt0))
+			(g:bintype/2 e)))))
+(define g:bintype/2 (lambda (e)
 	(begin
 		(define h (head e))
 		(define lt (g:typeof (g:second e)))
@@ -805,7 +1056,8 @@
 	(begin
 		(define tt (g:typeof (g:third e)))
 		(define et (g:typeof (index e 3)))
-		(if (g:unsbin? tt et) (g:uac tt et) et))))
+		(if (g:llop? false tt et) (g:uac tt et)
+		(if (g:unsbin? tt et) (g:uac tt et) et)))))
 
 ;; ---- and what it is qualified with ----
 ;;
@@ -897,6 +1149,13 @@
 ;; is unsigned, the usual arithmetic conversions (g:ubinary)
 (define g:binary (lambda (e opname)
 	(begin
+		(define shf (if (= opname 'SHL) true (= opname 'SHR)))
+		(define lt0 (g:typeof (g:second e)))
+		(define rtl (if shf g:INT (g:typeof (g:third e))))
+		(if (g:llop? shf lt0 rtl) (g:llbinary e opname (g:llrty shf lt0 rtl))
+		(g:binary/1 e opname)))))
+(define g:binary/1 (lambda (e opname)
+	(begin
 		(define rt0 (g:typeof (g:third e)))
 		(g:expr (g:second e))
 		(define t g:ty)
@@ -923,7 +1182,7 @@
 			(if (if (if cmp true dm) (not (= (g:promote t) g:UINT)) false) (g:mask! g:M32) nil)
 			(if ord (g:xmin!) nil))
 		(g:emit '(PSH))
-		(g:expr (g:third e))
+		(g:iexpr (g:third e))
 		(define rt2 g:ty)
 		(if narrow
 			(begin
@@ -951,7 +1210,7 @@
 	(begin
 		(define es (if (g:isptr t) (g:elemsize t) 1))
 		(g:emit '(PSH))
-		(g:expr (g:third e))
+		(g:iexpr (g:third e))
 		(if (= opname 'ADD)
 			(begin
 				(if (> es 1)
@@ -1008,8 +1267,11 @@
 		(define cl (g:second s))
 		;; a known function's parameters (types, masks) for the const check
 		(define kf (if (= cl 'fun) true (= cl 'ext)))
-		(define t (g:pushargs (tail (tail e)) 0
+		(define t0 (g:pushargs (tail (tail e)) 0
 			(if kf (index s 8) nil) (if kf (index s 9) nil) n))
+		(define llr (if kf (g:ll? (g:third s)) false))
+		(define rtmp (if llr (g:ltemp) 0))
+		(define t t0)
 		(if (= cl 'sys) (g:emit (list (index s 3)))
 		(if (if (= cl 'fun) true (= cl 'ext))
 			(begin
@@ -1031,12 +1293,16 @@
 				(if (= t (index s 4)) nil
 					(print ";; c4lc WARNING: argument count mismatch in call to"
 						n "- expected" (index s 4) "given" t)))
+				(if llr
+					(begin (g:emit (list 'LEA rtmp)) (g:emit '(PSH)) (set! t (+ t 1)))
+				nil)
 				(g:emit (list 'JSR (g:funref s))))
 		(if (= cl 'glo) (g:emit (list 'JSRI (g:glooperand (index s 3))))
 		(if (= cl 'extg) (g:emit (list 'JSRI (list 'extph (index s 3))))
 		(if (= cl 'loc) (g:emit (list 'JSRS (- g:loc (index s 3))))
 		(g:die (+ "bad function call: " n)))))))
 		(if (> t 0) (g:emit (list 'ADJ t)) nil)
+		(if llr (g:emit (list 'LEA rtmp)) nil)
 		(set! g:ty (g:third s)))))
 ;; struct = struct (M7b): the bytes, by the VM's own memcpy -- what a
 ;; builtin memcpy(&L, &R, sizeof L) compiles to, so it needs no libc and
@@ -1076,7 +1342,16 @@
 (define g:pushargs (lambda (args t pts pqs fname)
 	(if (empty? args) t
 	(begin
-		(g:expr (head args))
+		(define pt (if (if (= pts nil) true (empty? pts)) nil (head pts)))
+		(define wide (if (= pt nil) (g:ll? (g:typeof (head args))) (g:ll? pt)))
+		(if wide (g:llpush (head args)) (g:pusharg args t pts pqs fname))
+		(next g:pushargs (tail args) (+ t (if wide 2 1))
+			(if (= pts nil) nil (if (empty? pts) pts (tail pts)))
+			(if (= pqs nil) nil (if (empty? pqs) pqs (tail pqs)))
+			fname)))))
+(define g:pusharg (lambda (args t pts pqs fname)
+	(begin
+		(g:iexpr (head args))
 		(if (if (= pts nil) false (empty? pts)) nil
 		(if (= pts nil) nil
 		(if (g:isptr (head pts))
@@ -1085,11 +1360,7 @@
 				(g:qwarn (+ "passing argument " (+ (+ "" (+ t 1)) (+ " of " fname))))
 			nil)
 		nil)))
-		(g:emit '(PSH))
-		(next g:pushargs (tail args) (+ t 1)
-			(if (= pts nil) nil (if (empty? pts) pts (tail pts)))
-			(if (= pqs nil) nil (if (empty? pqs) pqs (tail pqs)))
-			fname)))))
+		(g:emit '(PSH)))))
 
 (define g:comma (lambda (es)
 	(if (empty? (tail es)) (g:expr (head es))
@@ -1100,6 +1371,9 @@
 (define g:expr (lambda (e)
 	(begin
 		(define h (head e))
+		(if (if (= h 'num) (g:ll? (g:nz (index e 2))) false)
+			(g:llconst (g:second e) (if (< (g:second e) 0) -1 0) (index e 2))
+		(if (= h 'llnum) (g:llconst (g:second e) (g:third e) (index e 3))
 		(if (= h 'num)
 			(begin
 				(g:emit (list 'IMM (g:second e)))
@@ -1112,6 +1386,8 @@
 		(if (= h 'call) (g:call e)
 		(if (if (= h 'assign) (g:svalue? (g:lvtype (g:second e))) false)
 			(g:structassign (g:second e) (g:third e))
+		(if (if (= h 'assign) (g:ll? (g:lvtype (g:second e))) false)
+			(g:llassign (g:second e) (g:third e))
 		(if (= h 'assign)
 			(begin
 				(define lv (g:second e))
@@ -1147,11 +1423,16 @@
 				(set! g:ty (+ g:ty g:PTR)))
 		(if (= h 'lognot)
 			(begin
-				(g:expr (g:second e))
+				(g:texpr (g:second e))
 				(g:emit '(PSH))
 				(g:emit '(IMM 0))
 				(g:emit '(EQ))
 				(set! g:ty g:INT))
+		(if (if (= h 'bitnot) (g:ll? (g:typeof (g:second e))) false) (g:llnot e)
+		(if (if (= h 'neg) (g:ll? (g:typeof (g:second e))) false) (g:llneg e)
+		(if (if (g:incdec? h) (g:ll? (g:lvtype (g:second e))) false)
+			(g:llincdec (g:second e) (if (if (= h 'preinc) true (= h 'postinc)) true false)
+				(if (= h 'postinc) true (= h 'postdec)))
 		(if (= h 'bitnot)
 			(begin
 				(g:expr (g:second e))
@@ -1172,6 +1453,10 @@
 		(if (= h 'predec) (g:preincdec e 'SUB)
 		(if (= h 'postinc) (g:postincdec e 'ADD 'SUB)
 		(if (= h 'postdec) (g:postincdec e 'SUB 'ADD)
+		(if (if (= h 'cast) (g:ll? (g:second e)) false)
+			(begin
+				(g:llval (g:third e))
+				(set! g:ty (g:second e)))
 		(if (= h 'cast)
 			(begin
 				(g:expr (g:third e))
@@ -1211,25 +1496,25 @@
 		(if (= h 'cond) (g:condexpr e)
 		(if (= h 'land)
 			(begin
-				(g:expr (g:second e))
+				(g:texpr (g:second e))
 				(define l (g:newlabel))
 				(g:emit (list 'BZ (list 'code l)))
-				(g:expr (g:third e))
+				(g:texpr (g:third e))
 				(g:label! l)
 				(set! g:ty g:INT))
 		(if (= h 'lor)
 			(begin
-				(g:expr (g:second e))
+				(g:texpr (g:second e))
 				(define l2 (g:newlabel))
 				(g:emit (list 'BNZ (list 'code l2)))
-				(g:expr (g:third e))
+				(g:texpr (g:third e))
 				(g:label! l2)
 				(set! g:ty g:INT))
 		(if (= h 'comma) (g:comma (tail e))
-		(begin
-			(define b (g:assoc/atom h g:binops))
-			(if b (g:binary e (g:second b))
-			(g:die (+ "bad expression node: " (+ "" h)))))))))))))))))))))))))))))))))))
+			(begin
+				(define b (g:assoc/atom h g:binops))
+				(if b (g:binary e (g:second b))
+				(g:die (+ "bad expression node: " (+ "" h))))))))))))))))))))))))))))))))))))))))))
 
 (define g:varexpr (lambda (n)
 	(begin
@@ -1272,18 +1557,20 @@
 	(begin
 		(define tt (g:typeof (g:third e)))
 		(define et (g:typeof (index e 3)))
-		(define u (g:unsbin? tt et))
+		(define ll (g:llop? false tt et))
+		(define u (if ll false (g:unsbin? tt et)))
 		(define rt (g:uac tt et))
-		(g:expr (g:second e))
+		(g:texpr (g:second e))
 		(define l1 (g:newlabel))
 		(define l2 (g:newlabel))
 		(g:emit (list 'BZ (list 'code l1)))
-		(g:expr (g:third e))
+		(if ll (g:llval (g:third e)) (g:expr (g:third e)))
 		(if u (g:convert! g:ty rt) nil)
 		(g:emit (list 'JMP (list 'code l2)))
 		(g:label! l1)
-		(g:expr (index e 3))
+		(if ll (g:llval (index e 3)) (g:expr (index e 3)))
 		(if u (begin (g:convert! g:ty rt) (set! g:ty rt)) nil)
+		(if ll (set! g:ty rt) nil)
 		(g:label! l2))))
 
 ;; ---- statements ----
@@ -1315,6 +1602,11 @@
 
 (define g:stmt (lambda (s)
 	(begin
+		(define ts g:tcur)
+		(g:stmt/1 s)
+		(set! g:tcur ts))))
+(define g:stmt/1 (lambda (s)
+	(begin
 		(define h (head s))
 		(if (= h 'block)
 			(begin
@@ -1331,13 +1623,19 @@
 		(if (= h 'return)
 			(begin
 				(if (= (g:second s) nil) nil
+				(if (g:ll? g:curret)
+					;; through the caller's pointer, the last argument
+					(begin
+						(g:emit '(LEA 2)) (g:emit '(LI)) (g:emit '(PSH))
+						(g:llval (g:second s))
+						(g:llcopy))
 					(begin
 						(g:expr (g:second s))
 						(g:sconv! g:ty g:curret)
 						(if (g:isptr g:curret)
 							(if (g:dropped? g:curretq (g:qualof (g:second s)))
 								(g:qwarn "return") nil)
-						nil)))
+						nil))))
 				(g:emit '(LEV)))
 		(if (= h 'break)
 			(if (= g:brk nil) (g:die "break outside of loop or switch")
@@ -1368,7 +1666,7 @@
 
 (define g:ifstmt (lambda (s)
 	(begin
-		(g:expr (g:second s))
+		(g:texpr (g:second s))
 		(define l1 (g:newlabel))
 		(g:emit (list 'BZ (list 'code l1)))
 		(g:stmt (g:third s))
@@ -1390,7 +1688,7 @@
 		(set! g:brk lend)
 		(set! g:cont lc)
 		(g:label! lc)
-		(g:expr (g:second s))
+		(g:texpr (g:second s))
 		(g:emit (list 'BZ (list 'code lend)))
 		(g:stmt (g:third s))
 		(g:emit (list 'JMP (list 'code lc)))
@@ -1413,7 +1711,7 @@
 		(g:label! lc)
 		(if (= (g:third s) nil) nil
 		(begin
-			(g:expr (g:third s))
+			(g:texpr (g:third s))
 			(g:emit (list 'BZ (list 'code lend)))))
 		(g:stmt (index s 4))
 		(g:label! lstep)
@@ -1534,7 +1832,7 @@
 
 (define g:switchstmt (lambda (s)
 	(begin
-		(g:expr (g:second s))
+		(g:iexpr (g:second s))
 		(define ld (g:newlabel))
 		(define lend (g:newlabel))
 		(define ob g:brk)
@@ -1562,17 +1860,19 @@
 	(if (empty? decls) nil
 	(begin
 		(define d (head decls))
+		(if (if (= (head d) 'func) (g:llname? (g:third d)) false)
+			(set! g:llsrc (g:cons (list (g:third d) d) g:llsrc))
 		(if (= (head d) 'func)
 			(set! g:syms (g:cons
 				(list (g:third d) 'fun (g:second d) (g:newlabel)
 					;; ArgCount includes the variadic fake slot, as c4cc
-					(+ (length (index d 3)) (if (index d 4) 1 0))
+					(+ (g:pwords (index d 3) 0) (if (index d 4) 1 0))
 					(index d 4)
 					(index d 5)    ;; declaration attrs (static etc.)
 					;; M4: return mask, parameter types and masks
 					(g:nz (index d 8)) (g:ptys (index d 3) (list)) (g:pqs (index d 3) (list)))
 				g:syms))
-			nil)
+			nil))
 		(next g:prepass (tail decls))))))
 (define g:ptys (lambda (ps acc)
 	(if (empty? ps) (g:reverse acc)
@@ -1610,7 +1910,7 @@
 				(begin
 					(set! g:syms (g:cons
 						(list (g:third d) 'ext (g:second d) g:nexterns
-							(+ (length (index d 3)) (if (index d 4) 1 0))
+							(+ (g:pwords (index d 3) 0) (if (index d 4) 1 0))
 							(index d 4)
 							nil (g:nz (index d 6)) (index d 3) (index d 7))
 						g:syms))
@@ -1622,7 +1922,7 @@
 				(define l (g:newlabel))
 				(set! g:syms (g:cons
 					(list (g:third d) 'fun (g:second d) l
-						(+ (length (index d 3)) (if (index d 4) 1 0))
+						(+ (g:pwords (index d 3) 0) (if (index d 4) 1 0))
 						(index d 4)
 						16    ;; ATTR_EXTERN, as c4cc marks prototypes
 						(g:nz (index d 6)) (index d 3) (index d 7))
@@ -1768,7 +2068,17 @@
 	(begin
 		(define at
 			;; no initializer -> BSS (one word); otherwise placed in data
-			(if (= init nil) (g:balloc g:WORD)
+			(if (= init nil) (g:balloc (if (g:ll? ty) 8 g:WORD))
+			(if (if (= (head init) 'num) (g:ll? ty) false)
+				(begin
+					(define lo (g:dword (g:second init)))
+					(g:dword (if (< (g:second init) 0) -1 0))
+					lo)
+			(if (= (head init) 'llnum)
+				(begin
+					(define lo2 (g:dword (g:second init)))
+					(g:dword (g:third init))
+					lo2)
 			(if (= (head init) 'num) (g:dword (g:second init))
 			(if (= (head init) 'str)
 				(begin
@@ -1784,7 +2094,7 @@
 					(define slot (g:dword 0))
 					(set! g:dpatches (g:cons (g:addrpatch slot (g:second init) f) g:dpatches))
 					slot)
-			(g:die (+ "unsupported global initializer for " n)))))))
+			(g:die (+ "unsupported global initializer for " n)))))))))
 		(set! g:syms (g:cons (list n 'glo ty at nil gattrs g:gq) g:syms)))))
 
 ;; array storage: char arrays are s bytes, everything else s words;
@@ -1805,7 +2115,7 @@
 ;; Anything but plain numbers or a string, or any element that is a
 ;; struct, is g:globalaggr's (M7b).
 (define g:globalarrayinit (lambda (n ty s init gattrs elem bytewise bytes)
-	(if (if (= (head init) 'agg) true (g:svalue? elem))
+	(if (if (= (head init) 'agg) true (if (g:svalue? elem) true (g:ll? elem)))
 		(g:globalaggr n ty s init gattrs)
 	(g:globalarrayinit/2 n ty s init gattrs elem bytewise bytes))))
 (define g:globalarrayinit/2 (lambda (n ty s init gattrs elem bytewise bytes)
@@ -1965,6 +2275,12 @@
 (define g:iscalar/g (lambda (ty off it)
 	(begin
 		(define h (head it))
+		(if (= h 'llnum)
+			(if (= g:imode 'put)
+				(begin
+					(string:word! g:data off (g:second it))
+					(string:word! g:data (+ off g:WORD) (g:third it)))
+			nil)
 		(if (= h 'num) (if (= g:imode 'put) (g:iput ty off (g:second it)) nil)
 		(if (= h 'str)
 			(if (= g:imode 'str)
@@ -1979,7 +2295,7 @@
 					(g:die (+ "an initializer can name only a function or a global: " (g:second it))))
 				(if (= g:imode 'put)
 					(set! g:dpatches (g:cons (g:addrpatch off (g:second it) f) g:dpatches)) nil))
-		(g:die "unsupported initializer element")))))))
+		(g:die "unsupported initializer element"))))))))
 ;; a data word holding function F's address: a code patch for a function
 ;; this unit defines, and for an extern one (-c) a symbol patch whose slot
 ;; is in data (type -5), which c4rlink resolves when it links the unit
@@ -2021,12 +2337,16 @@
 			(if (= (head p) 'dsym) (list 'dsym (g:second p) (+ base (g:third p))) p)
 			acc))))))
 (define g:iput (lambda (ty off v)
+	(if (g:ll? ty)
+		(begin
+			(string:word! g:data off v)
+			(string:word! g:data (+ off g:WORD) (if (< v 0) -1 0)))
 	(if (g:bytety? ty) (string:byte! g:data off (bit:and v 255))
 	(if (g:halfty? ty)
 		(begin
 			(string:byte! g:data off (bit:and v 255))
 			(string:byte! g:data (+ off 1) (bit:and (bit:shr v 8) 255)))
-	(string:word! g:data off v)))))
+	(string:word! g:data off v))))))
 
 ;; ---- a local aggregate's initializer (M7b) ----
 ;;
@@ -2060,6 +2380,14 @@
 		(g:emit (list 'IMM off))
 		(g:emit '(ADD))))))
 (define g:lstore (lambda (ty off it)
+	(if (g:ll? ty)
+		(begin
+			(g:laddr off)
+			(g:emit '(PSH))
+			(g:llval (if (= (head it) 'expr) (g:second it) it))
+			(g:llcopy))
+	(g:lstore/2 ty off it))))
+(define g:lstore/2 (lambda (ty off it)
 	(begin
 		(define h (head it))
 		(g:laddr off)
@@ -2082,10 +2410,17 @@
 (define g:params (lambda (ps i)
 	(if (empty? ps) i
 	(begin
+		;; two words: the high one pushed first, so the low one is at
+		;; the lower address, which is the parameter's
+		(define w (if (g:ll? (head (head ps))) 2 1))
 		(set! g:syms (g:cons
-			(list (g:second (head ps)) 'loc (head (head ps)) i nil (g:nz (index (head ps) 2)))
+			(list (g:second (head ps)) 'loc (head (head ps)) (+ i (- w 1)) nil (g:nz (index (head ps) 2)))
 			g:syms))
-		(next g:params (tail ps) (+ i 1))))))
+		(next g:params (tail ps) (+ i w))))))
+;; the words a parameter list takes
+(define g:pwords (lambda (ps n)
+	(if (empty? ps) n
+	(next g:pwords (tail ps) (+ n (if (g:ll? (head (head ps))) 2 1))))))
 
 ;; local slots, c4cc's exact scheme: i += words consumed, the symbol's
 ;; Val is i AFTER the add, so LEA (loc - Val) is the LOWEST slot and
@@ -2096,7 +2431,7 @@
 		(define size (index d 3))
 		(define ty (g:second d))
 		(if (= size nil)
-			(if (g:svalue? ty) (/ (+ (g:tysize ty) g:WMASK) g:WORD) 1)
+			(if (g:svalue? ty) (/ (+ (g:tysize ty) g:WMASK) g:WORD) (if (g:ll? ty) 2 1))
 		(g:awords size (- ty g:PTR))))))
 ;; its sizeof value in bytes, nil for plain scalars
 (define g:lbytes (lambda (d)
@@ -2171,6 +2506,12 @@
 			;; scalar: a full initializer expression, stored as a
 			;; word (c4cc used SI even for char scalars; the narrow types
 			;; read their low bytes back, and a uint load masks)
+			(if (if (= (head init) 'einit) (g:ll? (g:second d)) false)
+				(begin
+					(g:emit (list 'LEA (- g:loc val)))
+					(g:emit '(PSH))
+					(g:llval (g:second init))
+					(g:llcopy))
 			(if (= (head init) 'einit)
 				(begin
 					(if (g:svalue? (g:second d))
@@ -2183,8 +2524,8 @@
 							(g:qwarn "initialization") nil)
 					nil)
 					(g:emit '(SI)))
-			(g:localaggr d val))
-		(if (= (head init) 'braces)
+			(g:localaggr d val)))
+		(if (if (= (head init) 'braces) (not (g:ll? (- (g:second d) g:PTR))) false)
 			(begin
 				(if (> (length (g:second init)) size)
 					(g:die (+ "too many initializers for " (g:third d))) nil)
@@ -2195,7 +2536,7 @@
 					(g:die (+ "string does not fit the array " (g:third d))) nil)
 				(g:linit/elems val (g:strbytes (g:second init) 0 (list))
 					size 0 true))
-		(if (= (head init) 'agg) (g:localaggr d val)
+		(if (if (= (head init) 'agg) true (= (head init) 'braces)) (g:localaggr d val)
 		(g:die (+ "unsupported array initializer for " (g:third d)))))))))))
 
 (define g:localinits (lambda (ls)
@@ -2232,7 +2573,7 @@
 		(g:label! lb)
 		(g:stmt (g:second s))
 		(g:label! lc)
-		(g:expr (g:third s))
+		(g:texpr (g:third s))
 		(g:emit (list 'BNZ (list 'code lb)))
 		(g:label! lend)
 		(set! g:brk ob)
@@ -2248,11 +2589,11 @@
 		(define attrs (index d 5))
 		(define ls (tail (index d 6)))
 		(define body (index d 7))
-		(define s (g:lookup n g:syms))
+		(define s (if (g:llname? n) (g:lookup n g:llsyms) (g:lookup n g:syms)))
 		(define oldsyms g:syms)
 		;; a variadic's ... occupies one unnamed slot (c4cc's fake
 		;; parameter), counted in argc so va_start's &LAST - 1 lands on it
-		(define argc (+ (g:params ps 0) (if (index d 4) 1 0)))
+		(define argc (+ (+ (g:params ps 0) (if (index d 4) 1 0)) (if (g:ll? (g:second d)) 1 0)))
 		(set! g:loc (+ argc 1))
 		(define fini (g:localdefs ls (+ argc 1)))
 		;; block-scoped declarations deeper in the body still need
@@ -2260,13 +2601,22 @@
 		(define extra (g:scanstmt body))
 		(set! g:lcur fini)
 		(g:label! (index s 3))
-		(g:emit (list 'ENT (+ (- fini g:loc) extra)))
+		;; the long long temporaries go below everything else, and how
+		;; many there are is known at the end: (frame ID WORDS) is
+		;; resolved then (g:resolvecode)
+		(set! g:tbase (+ fini extra))
+		(set! g:tcur 0)
+		(set! g:tmax 0)
+		(define fid g:fid)
+		(set! g:fid (+ g:fid 1))
+		(g:emit (list 'ENT (list 'frame fid (+ (- fini g:loc) extra))))
 		(g:localinits ls)
 		(set! g:ulabs (list))
 		(set! g:uplaced (list))
 		(set! g:uwanted (list))
 		(g:stmts (tail body))
 		(g:ucheck g:uwanted)
+		(set! g:frames (g:cons (list fid g:tmax) g:frames))
 		(if (= (head (head g:code)) 'LEV) nil (g:emit '(LEV)))
 		(set! g:syms oldsyms)
 		(if (= 1 (bit:and attrs 1))
@@ -2282,7 +2632,11 @@
 		(if (= h 'typedefd) nil        ;; parser-resolved
 		(if (= h 'structdef) nil       ;; g:datapass registered layouts
 		(if (= h 'global) nil          ;; g:datapass allocated storage
-		(if (= h 'func) (g:function d)
+		(if (= h 'func)
+			;; a long long helper only if something called it
+			(if (g:llname? (g:third d))
+				(if (g:lookup (g:third d) g:llsyms) (g:function d) nil)
+			(g:function d))
 		(g:die (+ "bad declaration node: " (+ "" h))))))))))))
 (define g:decls (lambda (l)
 	(if (empty? l) nil
@@ -2422,7 +2776,11 @@
 					(if (= 'list (typeof (second i))) (= 'bss (head (second i))) false)
 					false)
 				(list (head i) (list 'data (+ base (second (second i)))))
-				i)
+			(if (if (= 2 (length i))
+					(if (= 'list (typeof (second i))) (= 'frame (head (second i))) false)
+					false)
+				(list (head i) (+ (index (second i) 2) (g:framewords (second (second i)) g:frames)))
+				i))
 			(g:resolvecode (tail cs) base))))))
 
 (define gen:module (lambda (ast)
@@ -2447,6 +2805,12 @@
 		(set! g:externs (list))
 		(set! g:nexterns 0)
 		(set! g:helps (list))
+		(set! g:llsrc (list))
+		(set! g:llsyms (list))
+		(set! g:frames (list))
+		(set! g:fid 0)
+		(set! g:tcur 0)
+		(set! g:tmax 0)
 		(g:sysinit g:syscalls)
 		(g:prepass (tail ast))
 		(g:protopass (tail ast))

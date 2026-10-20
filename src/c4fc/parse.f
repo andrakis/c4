@@ -167,6 +167,37 @@ VARIABLE CTY   1 CTY !
    c ;
 ' C-COND IS CONST-EXPR
 
+\ -- function-pointer declarators (M7b) -----------------------------------
+\ `T (*name)(params)`, `T (*name[N])(params)`, nameless in a cast or a
+\ parameter. c4 calls through any word, so the declarator declares an
+\ int, or an array of them: c4lc-parse's p:fnptrdecl. The parameter list
+\ is skipped token by token there and here, so a struct first named in
+\ it gets an id in neither.
+: FNPTR? ( -- f )  TK Lparen =  TP @ 1+ TOKS V@ t.kind @ Mul = AND ;
+: SKIP-PARENS ( -- ) {: | d -- :}           \ a ( to its matching ), inclusive
+   0 TO d
+   BEGIN
+      TK Eof = IF ." c4fc: unterminated parameter list" CR ABORT THEN
+      TK Lparen = IF d 1+ TO d THEN
+      TK Rparen = IF d 1- TO d THEN
+      TNEXT
+      d 0=
+   UNTIL ;
+\ ( * [qualifiers] [NAME] [[N]] ) ( ... ): the name (0 0 when there is
+\ none) and the array size (-1 when it is no array, 0 for [])
+: FNPTR-DECL ( -- a u n ) {: | a u n -- a u n :}
+   TNEXT TNEXT
+   BEGIN TK Const = TK Volatile = OR WHILE TNEXT REPEAT
+   0 TO a  0 TO u  -1 TO n
+   TK Id = IF TV TO a  TL TO u  TNEXT THEN
+   TK Brak = IF
+      TNEXT  TK Rbrak = IF 0 TO n ELSE CONST-EXPR TO n THEN  Rbrak WANT
+   THEN
+   Rparen WANT
+   TK Lparen <> IF ." c4fc: the parameter list of a function pointer was expected" CR ABORT THEN
+   SKIP-PARENS
+   a u n ;
+
 \ -- nodes --------------------------------------------------------------
 
 \ -- expressions --------------------------------------------------------
@@ -183,18 +214,24 @@ DEFER EXPR                              \ ( lev -- node )
 \ whole cell, which is visible the moment a struct starts with two of
 \ them -- { char a; char b; int c; } is twenty-four bytes and b is at
 \ eight, not one.
-: PARSE-MEMBERS ( k -- ) {: k | t a u off n ag mt et bq q -- :}
+: PARSE-MEMBERS ( k -- ) {: k | t a u off n ag mt et bq q fn -- :}
    Lbrace WANT
    0 TO off
    BEGIN TK Rbrace <> WHILE
       BASE-TYPE TO t   BQ @ TO bq
       BEGIN
          bq DQ !  t STARS TO mt   DQ @ TO q
-         TV TO a  TL TO u  Id WANT
          1 TO n   0 TO ag
-         TK Brak = IF
-            TNEXT CONST-EXPR TO n Rbrak WANT
-            1 TO ag   mt DUP TO et 2 + TO mt   q 2 LSHIFT TO q
+         FNPTR? IF
+            FNPTR-DECL TO fn TO u TO a   t_int TO mt   0 TO q
+            a 0= IF ." c4fc: bad struct member name" CR ABORT THEN
+            fn 0< 0= IF fn TO n  1 TO ag  mt DUP TO et 2 + TO mt THEN
+         ELSE
+            TV TO a  TL TO u  Id WANT
+            TK Brak = IF
+               TNEXT CONST-EXPR TO n Rbrak WANT
+               1 TO ag   mt DUP TO et 2 + TO mt   q 2 LSHIFT TO q
+            THEN
          THEN
          off 1 CELLS 1- + 1 CELLS 1- INVERT AND TO off
          k a u mt off ag MEM,   q MEM-Q!   ag IF n et T-SIZE * MEM-ASZ! THEN
@@ -324,7 +361,9 @@ CREATE SLBUF 8192 ALLOT
    TK Lparen = IF
       TNEXT
       TYPE? IF
-         PARSE-TYPE TO ct   DQ @ TO k   Rparen WANT   13 EXPR TO nd
+         PARSE-TYPE TO ct   DQ @ TO k
+         FNPTR? IF FNPTR-DECL DROP 2DROP  t_int TO ct  0 TO k THEN
+         Rparen WANT   13 EXPR TO nd
          n_cast 4 CELLS NEW TO v
          nd v >expr !  ct v >ctype !  k v >cq !  v EXIT THEN
       1 EXPR TO nd
@@ -386,7 +425,7 @@ CREATE SLBUF 8192 ALLOT
    i CELLS MB-ASZ  + @ nd >masz !
    nd ;
 
-: POSTFIX ( -- node ) {: | n -- n :}
+: POSTFIX ( -- node ) {: | n k v nd -- n :}
    PRIMARY TO n
    BEGIN
       TK Brak = IF
@@ -397,8 +436,14 @@ CREATE SLBUF 8192 ALLOT
          TNEXT  n MEMBER TO n
       ELSE TK Inc = IF TNEXT n n_postinc N1 TO n
       ELSE TK Dec = IF TNEXT n n_postdec N1 TO n
+      ELSE TK Lparen = IF
+         \ a call through any expression (M7b); (*fp)(x) calls fp
+         TNEXT  ARGS TO k TO v
+         n @ n_deref = IF n >opnd @ TO n THEN
+         n_icall 4 CELLS NEW TO nd
+         n nd >fn !  v nd >args !  k nd >argn !  nd TO n
       ELSE n EXIT
-      THEN THEN THEN THEN THEN
+      THEN THEN THEN THEN THEN THEN
    AGAIN ;
 
 \ Unary operators bind tighter than any infix one, so each parses its
@@ -452,17 +497,24 @@ DEFER STATEMENT                         \ blocks and statements nest
 \ its name stands for the address of the LOWEST one -- locals grow
 \ downwards, so int a[4] as the first local is slots 1..4 and a is
 \ LEA -4.
-: LOCAL-DECLS ( v -- ) {: v | ct dt t a u sz ag na iv ivn y nd nn bq q -- :}
+: LOCAL-DECLS ( v -- ) {: v | ct dt t a u sz ag na iv ivn y nd nn bq q fn -- :}
    BEGIN TYPE? WHILE
       BASE-TYPE TO ct   BQ @ TO bq
       BEGIN
          bq DQ !  ct STARS TO dt   DQ @ TO q
-         TV TO a  TL TO u  Id WANT
+         FNPTR? IF
+            FNPTR-DECL TO fn TO u TO a   t_int TO dt   0 TO q
+            a 0= IF ." c4fc: bad local declaration" CR ABORT THEN
+         ELSE
+            TV TO a  TL TO u  Id WANT   -2 TO fn
+         THEN
          dt TO t   0 TO sz   0 TO ag   -1 TO na
-         TK Brak = IF
-            TNEXT
-            TK Rbrak = IF -1 TO na ELSE CONST-EXPR TO na THEN
-            Rbrak WANT
+         fn -2 = IF TK Brak = ELSE fn 0< 0= THEN IF
+            fn -2 = IF
+               TNEXT
+               TK Rbrak = IF -1 TO na ELSE CONST-EXPR TO na THEN
+               Rbrak WANT
+            ELSE fn TO na THEN
             1 TO ag   dt 2 + TO t   q 2 LSHIFT TO q
          ELSE
             dt T-STRUCT? IF dt T-SIZE TO sz THEN
@@ -612,7 +664,7 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
 \ `(void)` is no parameters at all. A parameter may have no name, as in
 \ a prototype's `int f(int, char *)`; it gets an empty one, which no
 \ lookup can find.
-: PARAMS ( -- n va ) {: | n base ct va -- n va :}
+: PARAMS ( -- n va ) {: | n base ct va a u -- n va :}
    Lparen WANT
    STN @ TO base   0 TO n   0 TO va
    TK Void =  TP @ 1+ TOKS V@ t.kind @ Rparen = AND IF TNEXT THEN
@@ -624,10 +676,15 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
             0
          ELSE
             PARSE-TYPE TO ct
+            FNPTR? IF
+               FNPTR-DECL DROP TO u TO a   t_int TO ct
+               a u c_loc 0 ct 0 0 ST,   0 ST-LAST y.q !   n 1+ TO n
+            ELSE
             TK Id = IF TV TL ELSE S" " THEN
             c_loc 0 ct 0 0 ST,   DQ @ ST-LAST y.q !   n 1+ TO n
             TK Id = IF TNEXT ELSE
                TK Comma <> TK Rparen <> AND IF Id WANT THEN
+            THEN
             THEN
             TK Comma =
          THEN
@@ -818,7 +875,7 @@ CREATE IVAL IVMAX CELLS ALLOT
       ELSE v off I CELLS + ID-! THEN THEN
    LOOP ;
 
-: DECL {: | a u ct dt t n sz ag sc at y ivn off es fa fu fr fs fx fk bq q ce -- :}
+: DECL {: | a u ct dt t n sz ag sc at y ivn off es fa fu fr fs fx fk bq q ce fn -- :}
    TK Enum = IF ENUM-DECL EXIT THEN
    STORAGE TO sc
    TYPE? 0= IF ." c4fc: a declaration was expected" CR ABORT THEN
@@ -827,13 +884,20 @@ CREATE IVAL IVMAX CELLS ALLOT
    TK Semi = IF TNEXT EXIT THEN         \ a struct definition and nothing more
    BEGIN
       bq DQ !  ct STARS TO dt   DQ @ TO q
-      TV TO a  TL TO u  Id WANT
-      TK Lparen = IF a u dt sc 0 MAX at q FUNCTION EXIT THEN
+      FNPTR? IF
+         FNPTR-DECL TO fn TO u TO a   t_int TO dt   0 TO q
+         a 0= IF ." c4fc: bad global declaration" CR ABORT THEN
+      ELSE
+         TV TO a  TL TO u  Id WANT   -2 TO fn
+         TK Lparen = IF a u dt sc 0 MAX at q FUNCTION EXIT THEN
+      THEN
       dt TO t   0 TO ag   1 CELLS TO sz   -1 TO n   0 TO ivn   dt TO es   0 TO ce
-      TK Brak = IF
-         TNEXT
-         TK Rbrak = IF 0 TO n ELSE CONST-EXPR TO n THEN
-         Rbrak WANT
+      fn -2 = IF TK Brak = ELSE fn 0< 0= THEN IF
+         fn -2 = IF
+            TNEXT
+            TK Rbrak = IF 0 TO n ELSE CONST-EXPR TO n THEN
+            Rbrak WANT
+         ELSE fn TO n THEN
          dt 2 + TO t   1 TO ag   q 2 LSHIFT TO q
       ELSE
          dt T-STRUCT? IF dt T-SIZE TO sz  1 TO ag THEN

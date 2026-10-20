@@ -8,3 +8,8 @@ sizeof-struct 1 1
 sizeof-expr 1 1 1
 const-sizeof 1 1
 const-ops 1 1 0 1 0 20
+fnptr 42 8 -5 12
+fnptr-member -7 -8 neg
+fnptr-array 6 -3 -9 -2
+fnptr-cast 20
+fnptr-sizeof 1

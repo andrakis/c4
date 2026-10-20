@@ -19,6 +19,10 @@ NODE: n_gvar   NFIELD: >sym                    ;NODE
 NODE: n_asgn   NFIELD: >lhs  NFIELD: >rhs      ;NODE
 NODE: n_bin    NFIELD: >lhs  NFIELD: >rhs  NFIELD: >op ;NODE
 NODE: n_call   NFIELD: >fn   NFIELD: >args NFIELD: >argn ;NODE
+\ A call through an expression (M7b): ops[i](x), s->fn(x), (*fp)(x).
+\ >fn holds the target EXPRESSION, not a symbol; the other two are
+\ n_call's, at n_call's offsets.
+NODE: n_icall  NFIELD: >fn   NFIELD: >args NFIELD: >argn ;NODE
 \ (a, b, c) -- the comma operator, and only inside parentheses, which is
 \ where C puts it everywhere it is not a separator. va_arg is written
 \ with one, so the whole of stdarg.h needs it.

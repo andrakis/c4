@@ -44,6 +44,30 @@ enum { E_ONE = sizeof(char) == 1 ? 1 : -1, E_AND = (3 > 2) && (1 || 0), E_LT = 2
        E_LE = 2 <= 2, E_NE = 5 != 5, E_COND = 0 ? 10 : 20 };
 struct BUG_check { char ok[sizeof(int) >= 4 ? 1 : -1]; };
 
+// function pointers (M7b): declarators for locals, globals, arrays,
+// parameters and struct members, and calls through any expression
+int twice(int x) { return 2 * x; }
+int negate(int x) { return -x; }
+int apply(int (*f)(int), int v) { return f(v); }
+struct op { char *name; int (*fn)(int); };
+int (*gops[2])(int);
+int (*gone)(int);
+int fnptrs(void) {
+    int (*fp)(int);
+    struct op o; struct op *po;
+    int (*lops[2])(int);
+    fp = twice;
+    o.name = "neg"; o.fn = negate; po = &o;
+    gops[0] = twice; gops[1] = negate; gone = negate;
+    lops[0] = negate; lops[1] = twice;
+    printf("fnptr %d %d %d %d\n", fp(21), (*fp)(4), apply(negate, 5), apply(fp, 6));
+    printf("fnptr-member %d %d %s\n", o.fn(7), po->fn(8), po->name);
+    printf("fnptr-array %d %d %d %d\n", gops[0](3), gops[1](3), lops[0](9), gone(2));
+    printf("fnptr-cast %d\n", ((int (*)(int))fp)(10));
+    printf("fnptr-sizeof %d\n", sizeof(fp) == sizeof(char *));
+    return 0;
+}
+
 int main(void) {
     nothing();
     printf("void-params %d %d %s\n", seven(), add(2, 3), pick("xyz", 1));
@@ -52,5 +76,6 @@ int main(void) {
     sizes(&grec);
     printf("const-sizeof %d %d\n", sizeof cbuf == 6, sizeof carr == 8 * sizeof(int));
     printf("const-ops %d %d %d %d %d %d\n", E_ONE, E_AND, E_LT, E_LE, E_NE, E_COND);
+    fnptrs();
     return 0;
 }

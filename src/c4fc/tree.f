@@ -98,6 +98,7 @@ VARIABLE NFOLD   0 NFOLD !
    n >args @ TO v
    n >argn @ 0 ?DO I CELLS v + @ FOLD  I CELLS v + ! LOOP ;
 :M FOLD n_call  {: n -- n :}  n FOLD-ARGS  n ;M
+:M FOLD n_icall {: n -- n :}  n FOLD-ARGS  n >fn @ FOLD n >fn !  n ;M
 :M FOLD n_comma {: n -- n :}  n FOLD-ARGS  n ;M
 
 \ -- control flow inside an expression ------------------------------------
@@ -308,6 +309,7 @@ GENERIC: REFS ( node -- )
 :M REFS n_linit   >expr @ REFS? ;M
 :M REFS n_comma   REFS-ARGS ;M
 :M REFS n_call  {: n -- :}  n >fn @ SYM-REF  n REFS-ARGS ;M
+:M REFS n_icall {: n -- :}  n >fn @ REFS  n REFS-ARGS ;M
 
 :M REFS n_cond   {: n -- :}
    n >cond @ REFS  n >body @ REFS  n >else @ REFS ;M

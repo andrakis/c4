@@ -736,6 +736,7 @@
 		(if (= h 'str) g:PTR
 		(if (= h 'var) (g:third (g:find (g:second e)))
 		(if (= h 'call) (g:third (g:find (g:second e)))
+		(if (= h 'calle) g:INT
 		(if (= h 'assign) (g:lvtype (g:second e))
 		(if (= h 'deref) (- (g:typeof (g:second e)) g:PTR)
 		(if (= h 'addr) (+ (g:lvtype (g:second e)) g:PTR)
@@ -748,7 +749,7 @@
 		(if (= h 'cond) (g:condtype e)
 		(if (if (= h 'land) true (= h 'lor)) g:INT
 		(if (= h 'comma) (g:typeof (g:last (tail e)))
-		(g:bintype e))))))))))))))))))))
+		(g:bintype e)))))))))))))))))))))
 (define g:bintype (lambda (e)
 	(begin
 		(define h (head e))
@@ -1007,6 +1008,21 @@
 		(g:die (+ "bad function call: " n)))))))
 		(if (> t 0) (g:emit (list 'ADJ t)) nil)
 		(set! g:ty (g:third s)))))
+;; a call through an expression (M7b): the arguments, then what JSR
+;; would have pushed -- the return address, here an IMM of the label
+;; after the jump -- then the target in A and JMPA to it. The callee
+;; finds the frame a JSR builds. The value is a word.
+(define g:callexpr (lambda (e)
+	(begin
+		(define t (g:pushargs (tail (tail e)) 0 nil nil "a call through a pointer"))
+		(define l (g:newlabel))
+		(g:emit (list 'IMM (list 'code l)))
+		(g:emit '(PSH))
+		(g:expr (g:second e))
+		(g:emit '(JMPA))
+		(g:label! l)
+		(if (> t 0) (g:emit (list 'ADJ t)) nil)
+		(set! g:ty g:INT))))
 (define g:pushargs (lambda (args t pts pqs fname)
 	(if (empty? args) t
 	(begin
@@ -1123,6 +1139,7 @@
 			(begin
 				(g:emit (list 'IMM (g:sizeofx (g:second e))))
 				(set! g:ty g:INT))
+		(if (= h 'calle) (g:callexpr e)
 		(if (= h 'index)
 			(if (if gen:cisc (g:cisc-eligible-index? e) false)
 				(g:indexload-cisc e)
@@ -1160,7 +1177,7 @@
 		(begin
 			(define b (g:assoc/atom h g:binops))
 			(if b (g:binary e (g:second b))
-			(g:die (+ "bad expression node: " (+ "" h)))))))))))))))))))))))))))))))))
+			(g:die (+ "bad expression node: " (+ "" h))))))))))))))))))))))))))))))))))
 
 (define g:varexpr (lambda (n)
 	(begin

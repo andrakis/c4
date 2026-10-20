@@ -260,12 +260,15 @@
 		(next p:members/2 bt p:bq acc)))))
 (define p:members/2 (lambda (bt bq acc)
 	(begin
-		(define ty (p:stars bt bq))
-		(define q p:sq)
-		(if (= (p:kind) 'Id) nil (p:die "bad struct member name"))
-		(define n (p:value))
-		(p:advance)
-		(define size (p:arraysize))
+		(define ty0 (p:stars bt bq))
+		(define fp (if (p:fnptr?) (p:fnptrdecl) false))
+		(define ty (if fp p:INT ty0))
+		(define q (if fp 0 p:sq))
+		(if fp (if (p:second fp) nil (if (head fp) nil (p:die "bad struct member name")))
+			(if (= (p:kind) 'Id) nil (p:die "bad struct member name")))
+		(define n (if fp (head fp) (p:value)))
+		(if fp nil (p:advance))
+		(define size (if fp (p:second fp) (p:arraysize)))
 		(define acc2 (p:cons
 			(p:qnode (list (if (= size nil) ty (+ ty p:PTR)) n size)
 				(if (= size nil) q (bit:shl q 2)))
@@ -675,8 +678,10 @@
 		(if (p:declstart?)
 			(begin
 				(define bt (p:basetype p:INT))
-				(define ty (p:stars bt p:bq))
-				(define cq p:sq)
+				(define ty0 (p:stars bt p:bq))
+				(define fp (if (p:fnptr?) (p:fnptrdecl) false))
+				(define ty (if fp p:INT ty0))
+				(define cq (if fp 0 p:sq))
 				(p:expect 'Rparen "closing paren of cast")
 				(p:qnode (list 'cast ty (p:expr 21)) cq))
 		(begin
@@ -745,7 +750,8 @@
 (define p:climb (lambda (lhs lev)
 	(begin
 		(define k (p:kind))
-		(define l (p:level k))
+		;; '(' after an expression is a call, binding as tightly as [ ]
+		(define l (if (= k 'Lparen) 23 (p:level k)))
 		(if (< l lev) lhs
 		(if (= k 'Assign)
 			(begin
@@ -757,6 +763,14 @@
 				(define t (p:expr 1))
 				(p:expect 'Colon "colon in conditional")
 				(next p:climb (list 'cond lhs t (p:expr 2)) lev))
+		;; a call through any expression (M7b): ops[i](x), s->fn(x),
+		;; (*fp)(x). A name followed by '(' never gets here: p:idexpr
+		;; made it a call. (*fp)(x) calls fp, as C says.
+		(if (= k 'Lparen)
+			(begin
+				(p:advance)
+				(define tgt (if (= (head lhs) 'deref) (p:second lhs) lhs))
+				(next p:climb (p:cons 'calle (p:cons tgt (p:args (list)))) lev))
 		(if (= k 'Inc)
 			(begin (p:advance) (next p:climb (list 'postinc lhs) lev))
 		(if (= k 'Dec)
@@ -797,7 +811,7 @@
 					(p:advance)
 					(next p:climb
 						(list (p:second b) lhs (p:expr (index b 2)))
-						lev)))))))))))))))))
+						lev))))))))))))))))))
 
 ;; ---- statements ----
 
@@ -936,6 +950,45 @@
 
 ;; optional [size]: returns nil (no array), N (elements), or 0 (from
 ;; the initializer)
+;; ---- function-pointer declarators (M7b) ----
+;;
+;; `T (*name)(params)`, `T (*name[N])(params)`, and with no name in a
+;; cast, a parameter or a sizeof. c4 calls through any word -- a
+;; function's value is its address, and an `int` holding one can be
+;; called -- so the declarator declares an int, or an array of them. The
+;; parameter list is skipped token by token (c4fc does the same), so a
+;; struct first named inside it is not given an id here and not in c4fc.
+(define p:fnptr? (lambda ()
+	(if (= (p:kind) 'Lparen) (= (head (head (tail p:toks))) 'Mul) false)))
+;; consumes `( * [qualifiers] [NAME] [[N]] ) ( ... )`; returns (NAME SIZE),
+;; NAME false when there is none and SIZE nil when it is no array
+(define p:fnptrdecl (lambda ()
+	(begin
+		(p:advance)
+		(p:advance)
+		(p:skipquals)
+		(define n (if (= (p:kind) 'Id) (p:value) false))
+		(if n (p:advance) nil)
+		(define size (p:arraysize))
+		(p:expect 'Rparen ") in a function pointer declarator")
+		(if (= (p:kind) 'Lparen) nil (p:die "parameter list of a function pointer expected"))
+		(p:skipparens 0)
+		(list n size))))
+(define p:skipquals (lambda ()
+	(if (if (= (p:kind) 'Const) true (= (p:kind) 'Volatile))
+		(begin (p:advance) (next p:skipquals))
+	nil)))
+;; from a '(' to its matching ')', inclusive
+(define p:skipparens (lambda (d)
+	(begin
+		(define k (p:kind))
+		(if (= k 'Eof) (p:die "unterminated parameter list")
+		(begin
+			(p:advance)
+			(if (= k 'Lparen) (next p:skipparens (+ d 1))
+			(if (= k 'Rparen) (if (= d 1) nil (next p:skipparens (- d 1)))
+			(next p:skipparens d))))))))
+
 (define p:arraysize (lambda ()
 	(if (= (p:kind) 'Brak)
 		(begin
@@ -1044,16 +1097,18 @@
 		(begin
 			(if (= k 'Static) (p:die "parameters cannot be marked static") nil)
 			(define bt (p:basetype p:INT))
-			(define ty (p:stars bt p:bq))
-			(define q p:sq)
+			(define ty0 (p:stars bt p:bq))
+			(define fp (if (p:fnptr?) (p:fnptrdecl) false))
+			(define ty (if fp p:INT ty0))
+			(define q (if fp 0 p:sq))
 			(if (p:svalue? ty)
 				(p:die "struct parameters must be pointers") nil)
-			(define named (= (p:kind) 'Id))
-			(if named nil
+			(define named (if fp (if (head fp) true false) (= (p:kind) 'Id)))
+			(if (if named true fp) nil
 				(if (if (= (p:kind) 'Comma) true (= (p:kind) 'Rparen)) nil
 					(p:die "bad parameter declaration")))
-			(define n (if named (p:value) (+ " param" (+ "" (length acc)))))
-			(if named (p:advance) nil)
+			(define n (if named (if fp (head fp) (p:value)) (+ " param" (+ "" (length acc)))))
+			(if (if named (if fp false true) false) (p:advance) nil)
 			(if (= (p:kind) 'Comma) (p:advance) nil)
 			(next p:params (p:cons (p:qnode (list ty n) q) acc)))))))))
 
@@ -1069,13 +1124,16 @@
 	(if (= (p:kind) 'Semi)
 		(begin (p:advance) (p:reverse acc))
 	(begin
-		(define ty (p:stars bt bq))
-		(define q p:sq)
-		(if (= (p:kind) 'Id) nil (p:die "bad local declaration"))
-		(define n (p:value))
-		(p:advance)
+		(define ty0 (p:stars bt bq))
+		(define fp (if (p:fnptr?) (p:fnptrdecl) false))
+		(define ty (if fp p:INT ty0))
+		(define q (if fp 0 p:sq))
+		(if fp (if (head fp) nil (p:die "bad local declaration"))
+			(if (= (p:kind) 'Id) nil (p:die "bad local declaration")))
+		(define n (if fp (head fp) (p:value)))
+		(if fp nil (p:advance))
 		(define elem ty)
-		(define size (p:arraysize))
+		(define size (if fp (p:second fp) (p:arraysize)))
 		(define ty2 (if (= size nil) ty (+ ty p:PTR)))
 		(define q2 (if (= size nil) q (bit:shl q 2)))
 		;; scalars take a full (possibly non-constant) initializer
@@ -1120,14 +1178,20 @@
 	(begin
 		(define ty (p:stars bt bq))
 		(define q p:sq)
-		(define a2
-			(if (= (p:kind) 'Attribute) (+ attr (p:attribute)) attr))
-		(if (= (p:kind) 'Id) nil (p:die "bad global declaration"))
-		(define n (p:value))
-		(p:advance)
-		(if (= (p:kind) 'Lparen)
-			(p:function ty n a2 q)
-		(p:globalvar ty n a2 q)))))
+		(if (p:fnptr?)
+			(begin
+				(define fp (p:fnptrdecl))
+				(if (head fp) nil (p:die "bad global declaration"))
+				(p:globalvar/2 p:INT (head fp) attr 0 (p:second fp)))
+		(begin
+			(define a2
+				(if (= (p:kind) 'Attribute) (+ attr (p:attribute)) attr))
+			(if (= (p:kind) 'Id) nil (p:die "bad global declaration"))
+			(define n (p:value))
+			(p:advance)
+			(if (= (p:kind) 'Lparen)
+				(p:function ty n a2 q)
+			(p:globalvar ty n a2 q)))))))
 
 (define p:function (lambda (ty n attr rq)
 	(begin
@@ -1165,10 +1229,11 @@
 	(if (empty? ps) acc
 	(next p:paramnames (tail ps) (p:cons (p:second (head ps)) acc)))))
 
-(define p:globalvar (lambda (ty n attr q)
+(define p:globalvar (lambda (ty n attr q) (p:globalvar/2 ty n attr q (p:arraysize))))
+;; SIZE already read: a function pointer's declarator holds its own
+(define p:globalvar/2 (lambda (ty n attr q size)
 	(begin
 		(define elem ty)
-		(define size (p:arraysize))
 		(define ty2 (if (= size nil) ty (+ ty p:PTR)))
 		(define a2 (if (= size nil) attr (+ attr 64)))
 		(define init
@@ -1228,11 +1293,14 @@
 		(p:advance)
 		(define bt (p:basetype nil))
 		(if (= bt nil) (p:die "typedef needs a type") nil)
-		(define ty (p:stars bt p:bq))
-		(define q p:sq)
-		(if (= (p:kind) 'Id) nil (p:die "typedef needs a name"))
-		(define n (p:value))
-		(p:advance)
+		(define ty0 (p:stars bt p:bq))
+		(define fp (if (p:fnptr?) (p:fnptrdecl) false))
+		(define ty (if fp p:INT ty0))
+		(define q (if fp 0 p:sq))
+		(if fp (if (head fp) nil (p:die "typedef needs a name"))
+			(if (= (p:kind) 'Id) nil (p:die "typedef needs a name")))
+		(define n (if fp (head fp) (p:value)))
+		(if fp nil (p:advance))
 		(p:expect 'Semi "semicolon after typedef")
 		(set! p:typedefs (p:cons (list n ty q) p:typedefs))
 		(p:qnode (list 'typedefd n ty) q))))

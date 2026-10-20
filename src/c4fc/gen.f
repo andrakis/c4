@@ -215,6 +215,7 @@ HELP-RESET
    n >op @ CMPOP? IF t_int EXIT THEN
    lt n >rhs @ CT T-UNSBIN? IF lt n >rhs @ CT T-UAC ELSE t_int THEN ;M
 :M CT n_call >fn @ y.ct @ ;M
+:M CT n_icall DROP t_int ;M
 :M CT n_asgn >lhs @ CT ;M
 
 \ The qualifier mask of an expression (c4lc's g:qualof): two bits a
@@ -225,6 +226,7 @@ HELP-RESET
 :M CQ n_var  >sym @ y.q @ ;M
 :M CQ n_gvar >sym @ y.q @ ;M
 :M CQ n_call >fn @ y.rq @ ;M
+:M CQ n_icall DROP 0 ;M
 :M CQ n_asgn >lhs @ CQ ;M
 
 \ -mcisc: LXI and SXI fold scale-add-load (or -store) into one opcode,
@@ -411,6 +413,18 @@ HELP-RESET
       EXIT
    THEN
    f CALL,
+   k ?DUP IF oADJ OP2, THEN ;M
+
+\ A call through an expression (M7b), as c4lc-gen's g:callexpr: the
+\ arguments, then what JSR would have pushed -- the return address, an
+\ IMM of the code just past the jump -- then the target in A and JMPA.
+\ The callee finds the frame a JSR builds.
+:M GEN n_icall {: n | k m -- :}
+   n >argn @ TO k
+   k 0 ?DO  n >args @ I CELLS + @ GEN  oPSH OP,  LOOP
+   oIMM BR, TO m   oPSH OP,
+   n >fn @ GEN   oJMPA OP,
+   m >RES
    k ?DUP IF oADJ OP2, THEN ;M
 
 \ A scalar takes SI even when it is a char, which is what c4cc did and

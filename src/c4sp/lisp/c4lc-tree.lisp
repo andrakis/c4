@@ -756,7 +756,7 @@
 
 (define t:hascall? (lambda (e)
 	(if (= 'list (typeof e))
-		(if (= (head e) 'call) true
+		(if (if (= (head e) 'call) true (= (head e) 'calle)) true
 		(next t:hascall?/l (tail e)))
 	false)))
 (define t:hascall?/l (lambda (l)

@@ -255,3 +255,54 @@ Found on the way:
   It was on the host's clock: headless, an idle machine that naps covers
   many seconds of its own in one of the host's, and Task Manager stopped
   refreshing.
+
+### 6. Event-driven waits, and counters for the living and the dead
+
+- **One death, `task_zombify(t, code)`.** It is used by a task's exit,
+  by Ctrl-C at the console and in a terminal, and by a signal's default
+  action. It wakes the task waiting on `t` there and then, delivering
+  the code into `wait_result` and `sv_a`, and that task reaps it. Before,
+  `sched_pick` asked every waiting task, on every pick, whether its
+  target had died yet (`sched_waitdone`, one `task_get` walk each). A
+  wait that starts after the death finds the zombie and reaps it at
+  once, so a zombie never has a waiter. The orphan reaper no longer
+  looks for one.
+- **Counters.** `sched_nlive` counts the tasks still to finish: all but
+  the kernel and idle tasks and the zombies, background jobs included.
+  The idle task returns, and the machine shuts down, when it reaches 0;
+  that replaces the idle loop's scan of the whole table on every pass.
+  `sched_nzombies` gates the orphan reaper. A task is counted in as it
+  joins the table, and counted out by `task_zombify` and
+  `sched_retire`.
+- **`sched_pick`** asks parked tasks only about what can wake them by
+  itself: the clock and pipe data. A task that has just died may be off
+  the list already, because its waiter reaped it, so the walk starts
+  from the head for a zombie and stops when it comes back round.
+
+Found on the way:
+- **`task_exit` outside the trap handler.** This is a task whose entry
+  returned, in `task_shim`, behind protected mode for a user task. It
+  now leaves its code in `sched_dying` and dies in the trap it raises
+  next. Releasing a task from its own context takes the scheduler lock,
+  and from protected mode that is a trap out of which the zombie is
+  never picked again. Its release stopped halfway, and the task stayed
+  on the list to be released a second time.
+- **The stack-overrun kill** set `trap = 0` afterwards, which is
+  `C4IX_TRAP_ILLOP`, so the dead task's trap was then serviced as a
+  syscall. It now passes `C4IX_TRAP_SOFT_IRQ`, which only switches.
+- **The idle backoff** no longer drops back to the floor. It did so when
+  a pass found a task ready, which since step 5 never happens. Dropping
+  back whenever anything else had run, which I tried first, doubled the
+  idle desktop's cycles in short naps.
+- **c4fc** does not yet accept a header's `extern` for a global used
+  before the unit defines it further down; c4lc does. `sched_nlive` and
+  `sched_nzombies` are defined above their first use, and the compiler
+  fix is a task of its own.
+
+| | step 5 | step 6 |
+|---|---|---|
+| yield (native c4m) | 1,261 | 977 |
+| spawn+wait (native) | 22,704 | 22,500 |
+| desk1, per 5 s | 2.13M cycles (0.4%) | 1.69M (0.3%) |
+| idle, per 5 s | 5.45M (1.1%) | 5.03M (1.0%) |
+| conspin syscalls/s | 195,848 | 195,575 |

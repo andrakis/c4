@@ -502,6 +502,9 @@ struct task *sched_current();
 int          sched_forge(struct task *t, int entry, int argc, int argv);
 int          sched_in_trap();  // servicing a trap: no re-entry allowed
 void         task_exit(int code);
+void         task_zombify(struct task *t, int code);  // every death: wakes its waiter
+extern int   sched_nlive;      // tasks still to finish (sched.c)
+extern int   sched_nzombies;
 int          task_wait(struct task *t);
 extern int   sched_switches;   // context switches since boot
 long long    task_cycles(struct task *t);  // everything it has run, both kinds

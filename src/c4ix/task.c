@@ -40,6 +40,7 @@ static struct task *task_alloc(char *name) {
 static void task_append(struct task *t) {
     sched_lock();
     ++nextid;
+    ++sched_nlive;
     if (task_tail) task_tail->next = t; else task_head = t;
     task_tail = t;
     ++ntasks;
@@ -207,9 +208,9 @@ void task_reap() {
 }
 
 // Release zombies nobody is waiting on. Called from the idle loop,
-// where the kernel is not standing on any task's stack. A task with a
-// waiter is left alone: that waiter is entitled to reap it and read
-// its exit code the ordinary way.
+// where the kernel is not standing on any task's stack. No zombie has a
+// waiter any more: task_zombify hands a dying task straight to the one
+// waiting on it, and a wait that comes later reaps the zombie at once.
 //
 // Only children of USER tasks are swept, and that restriction is not
 // caution -- it is the difference between working and a double free.
@@ -233,7 +234,7 @@ static int task_parent_is_user(struct task *t) {
 
 int task_reap_orphans() {
     struct task *t, *w;
-    int freed, waited;
+    int freed;
 
     freed = 0;
     sched_lock();
@@ -241,19 +242,11 @@ int task_reap_orphans() {
     while (t) {
         if (t->state == TS_ZOMBIE && t != sched_current()
             && task_parent_is_user(t)) {
-            waited = 0;
-            w = task_head;
-            while (w) {
-                if (w->state == TS_WAITING && w->wait_for == t->id) { waited = 1; w = 0; }
-                else w = w->next;
-            }
-            if (!waited) {
-                w = t->next;
-                task_release(t);
-                ++freed;
-                t = w;
-                continue;
-            }
+            w = t->next;
+            task_release(t);
+            ++freed;
+            t = w;
+            continue;
         }
         t = t->next;
     }

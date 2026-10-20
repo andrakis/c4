@@ -471,8 +471,7 @@ int ck_kill(int pid, int sig) {
     s = ck_sigtab(t, 0);
     if (!s || !s[sig * 3 + 2]) {
         if (!ck_default_kills(sig)) return 0;
-        t->exitcode = C4IX_EXIT_INTERRUPTED;
-        t->state = TS_ZOMBIE;
+        task_zombify(t, C4IX_EXIT_INTERRUPTED);
         return 0;
     }
 

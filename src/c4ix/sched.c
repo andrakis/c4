@@ -82,6 +82,8 @@ long long task_cycles(struct task *t) {
 // A task leaving the table takes its cycles to the reaped totals, so the
 // sum of everything ever run never goes backwards.
 void sched_retire(struct task *t) {
+    if (t->state == TS_ZOMBIE) --sched_nzombies;
+    else if (t != kernel_task && t != idle_task) --sched_nlive;
     if (t == idle_task) idle_task = 0;   // shutdown: sched_pick must not fall back on it
     acct_fold(t);
     acct_gone_user = acct_gone_user + t->ucycles;
@@ -124,6 +126,8 @@ int sched_cpustat(struct cpustat *h, struct cpustat_task *r, int max) {
 int sched_switches;          // context switches since boot
 static int sched_slice0;     // acct_in when the running task's slice began
 static int sched_resched;    // a service in this trap asked for a switch
+static int sched_dying;      // task_exit outside the handler: die in the next trap
+static int sched_dying_code;
 
 // Compiles to ENT 0 / LEV; entered at its LEV (sched_tramp) the
 // second LEV re-derives sp from the just-installed bp.
@@ -171,12 +175,9 @@ int sched_in_trap() {
 
 // ---- picking the next task ----
 
-// A TS_WAITING task becomes runnable once the task it waits on is a
-// zombie. Completing the wait here delivers the exit code twice
-// over: into wait_result for a kernel caller blocked in task_wait,
-// and into sv_a for a user task parked mid-syscall -- the switch
-// restores sv_a into the accumulator, which is exactly where the
-// SYS_WAIT opcode's result belongs.
+// What a parked task is waiting for, asked as sched_pick passes it. (A
+// TS_WAITING task is not asked: task_zombify wakes it when its target
+// dies, below.)
 // A TS_BLOCKED task is parked on a vnode -- an empty pipe. It wakes
 // when the data it wanted arrives, or when the last writer closes
 // and the emptiness becomes end-of-file instead.
@@ -211,37 +212,64 @@ int sched_sleep_due(int *pms) {
     return found;
 }
 
-static int sched_waitdone(struct task *n) {
+// ---- the living and the dead ----
+//
+// Both counted as they change, so that nothing scans the table to find
+// out. sched_nlive is the tasks still to finish: all but the kernel and
+// idle tasks and the zombies (background jobs too), and shutdown is when
+// it reaches 0. sched_nzombies says whether the orphan reaper has
+// anything to look for. task.c counts a task in as it joins the table;
+// task_zombify and sched_retire count them out.
+int sched_nlive;
+int sched_nzombies;
+
+// Every death comes through here: a task's exit, a Ctrl-C, a signal's
+// default action. Whoever waits on the task is woken now, with its code,
+// and reaps it -- the event sched_pick used to look for, on every pick,
+// by asking each waiting task whether its target had died yet. A task
+// that starts waiting later finds the zombie and reaps it itself.
+void task_zombify(struct task *t, int code) {
     struct task *w;
-    if (sched_unblocked(n)) return 1;
-    if (n->state != TS_WAITING) return 0;
-    if ((w = task_get(n->wait_for))) {
-        if (w->state != TS_ZOMBIE) return 0;
-        n->wait_result = w->exitcode;
-        task_release(w);
-    } else {
-        n->wait_result = -1;   // target vanished: nothing to reap
+    if (t->state == TS_ZOMBIE) return;
+    t->exitcode = code;
+    t->state = TS_ZOMBIE;
+    ++sched_nzombies;
+    if (t != kernel_task && t != idle_task) --sched_nlive;
+    w = task_head;
+    while (w) {
+        if (w->state == TS_WAITING && w->wait_for == t->id) {
+            // into wait_result for a kernel caller in task_wait, and into
+            // sv_a for a user task parked mid-syscall: the switch restores
+            // sv_a into the accumulator, where SYS_WAIT's result belongs
+            w->wait_result = code;
+            w->sv_a = code;
+            w->state = TS_READY;
+            task_release(t);
+            return;
+        }
+        w = w->next;
     }
-    n->sv_a = n->wait_result;
-    n->state = TS_READY;
-    return 1;
 }
 
-// Round-robin from t: the next runnable task; else t itself, if it can
+// Round-robin after t: the next runnable task; else t itself, if it can
 // still run; else the idle task, which never takes a turn of its own.
+// A task that has just died may be off the list already -- its waiter
+// reaped it -- so the walk starts from the head for a zombie, and stops
+// when it comes back round to where it started.
 static struct task *sched_pick(struct task *t) {
-    struct task *n;
-    n = task_next(t);
-    while (n != t) {
-        if (n != idle_task) {
+    struct task *n, *start;
+    start = (t->state == TS_ZOMBIE) ? task_head : task_next(t);
+    n = start;
+    while (n) {
+        if (n != t && n != idle_task) {
             if (n->state == TS_READY) return n;
-            if (sched_waitdone(n)) return n;
+            if (sched_unblocked(n)) return n;
         }
         n = task_next(n);
+        if (n == start) n = 0;
     }
-    sched_waitdone(t);   // t itself may be waiting on a finished task
-    if (t->state == TS_RUNNING || t->state == TS_READY || !idle_task) return t;
-    return idle_task;
+    if (t->state == TS_RUNNING || t->state == TS_READY || sched_unblocked(t)) return t;
+    return idle_task ? idle_task : t;
 }
 
 // ---- the c4m backend: switching inside a trap handler ----
@@ -317,7 +345,13 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
         kprintf("c4ix: task %d (%s) overran its %d-byte stack; killing it\n",
             sched_cur->id, sched_cur->name, sched_cur->stack_words * sizeof(int));
         task_exit(-1);
-        trap = 0;
+        trap = C4IX_TRAP_SOFT_IRQ;   // nothing left to service: just switch
+    }
+    // a task_exit from outside the handler (above) takes effect here
+    if (sched_dying && me) {
+        sched_dying = 0;
+        task_zombify(me, sched_dying_code);
+        trap = C4IX_TRAP_SOFT_IRQ;
     }
     if (trap == C4IX_TRAP_ILLOP) {
         if (param >= SYS_BASE && param < SYS_TOP) {
@@ -519,8 +553,7 @@ int sched_intr_below(struct task *root) {
     }
     if (t == root || t->state == TS_ZOMBIE || t->privs != PRIV_USER) return 0;
     if (ck_has_handler(t, CK_SIGINT)) { ck_kill(t->id, CK_SIGINT); return 1; }
-    t->exitcode = C4IX_EXIT_INTERRUPTED;
-    t->state = TS_ZOMBIE;
+    task_zombify(t, C4IX_EXIT_INTERRUPTED);
     return 1;
 }
 
@@ -547,8 +580,7 @@ static void sched_interrupt() {
         return;
     }
     kprintf("\nc4ix: interrupt: cancelling task %d '%s'\n", t->id, t->name);
-    t->exitcode = C4IX_EXIT_INTERRUPTED;
-    t->state = TS_ZOMBIE;
+    task_zombify(t, C4IX_EXIT_INTERRUPTED);
 }
 
 // ---- the plain-c4 backend: the LEV trick ----
@@ -658,19 +690,31 @@ static int task_shim(int entry, int argc, int argv) {
     return 0;   // unreachable
 }
 
+// Inside the trap handler a death is a state change, which the switch
+// on the way out acts on: someone else is picked, and the zombie never
+// comes back. Outside it -- a task whose entry returned, in task_shim --
+// the dying task is still running its own code on its own stack, a user
+// task behind protected mode, and that is no place to die from:
+// task_zombify releases the task to its waiter there and then, and the
+// release takes the scheduler lock, which from protected mode is itself
+// a trap, out of which the zombie is never picked again, half released.
+// So it leaves the code in sched_dying and dies in the trap it raises next.
+
 void task_exit(int code) {
-    sched_cur->exitcode = code;
-    sched_cur->state = TS_ZOMBIE;
-    // From inside the trap handler, marking the zombie is enough:
-    // the switch on the way out picks someone else and never comes
-    // back. Outside, spin on yield -- a zombie is never picked again.
-    if (sched_intrap) return;
+    if (sched_intrap || !sched_on_c4m) {
+        task_zombify(sched_cur, code);
+        if (sched_intrap) return;
+    } else {
+        sched_dying_code = code;
+        sched_dying = 1;
+    }
+    // a zombie is never picked again
     while (1) sched_yield();
 }
 
 // Block until t exits. No spinning: the caller parks in TS_WAITING
-// and sched_waitdone wakes it with the exit code once t is a zombie
-// (and has reaped t by then -- t must not be touched after waking).
+// and task_zombify wakes it with the exit code when t dies (and has
+// reaped t by then -- t must not be touched after waking).
 int task_wait(struct task *t) {
     struct task *me;
     int code;
@@ -751,6 +795,7 @@ void sched_init(int interval) {
     kernel_task = task_adopt("kernel");
     kernel_task->state = TS_RUNNING;
     idle_task->parent = kernel_task->id;
+    sched_nlive = 0;   // the two that are always there are not still to finish
     sched_cur = kernel_task;
     acct_out = __c4_cycles();
 
@@ -794,58 +839,44 @@ void sched_stop() {
 // almost always on an idle desktop. It returns -- and the machine shuts
 // down -- once no task is left alive but the kernel, which waits on it.
 static int sched_idle(int argc, int argv) {
-    struct task *t;
-    int live, ready, nap, due, budget, ms;
+    int nap, due, budget, ms;
 
     nap = 0;
-    live = 1;
-    while (live) {
-        live = 0;
-        ready = 0;
-        t = task_head;
-        while (t) {
-            if (t != sched_cur && t != kernel_task && t->state != TS_ZOMBIE) {
-                live = 1;
-                if (t->state != TS_BLOCKED && t->state != TS_WAITING
-                    && t->state != TS_SLEEPING) ready = 1;
-            }
-            t = t->next;
-        }
-        if (!live) break;
+    while (sched_nlive > 0) {
         // Sweep zombies nobody is waiting on. This is where C4KE reaps
         // too, and it is the only thing that collects a child whose
-        // parent never waits -- innerbench
-        // spawns several benches and can only wait on one.
-        task_reap_orphans();
-        // Everything alive is parked on something that has not
-        // arrived -- console input, usually. Nothing can make progress
-        // until the outside world does, and yielding in a tight loop
-        // would burn a core waiting for a keystroke. So back off the
-        // way c4sh does: double the nap up to a ceiling, and drop
-        // straight back to zero the moment there is work again. The
-        // ceiling is well inside human reaction time, so the prompt
-        // still feels immediate.
-        if (ready) nap = 0;
-        else {
-            nap = nap ? nap * 2 : IDLE_NAP_MIN;
-            if (nap > IDLE_NAP_MAX) nap = IDLE_NAP_MAX;
-            // A sleeping task has a deadline, so the backoff must not
-            // overshoot it: a 1ms sleep should not wait out a 20ms
-            // nap. Milliseconds in, microseconds out.
-            if (sched_sleep_due(&due)) {
-                budget = (due - __time()) * 1000;
-                if (budget < 0) budget = 0;
-                if (budget < nap) nap = budget;
-            }
-            // the counter stands still meanwhile: idle time in ms instead
-            ms = __time();
-            __c4_usleep(nap);
-            acct_napms = acct_napms + (__time() - ms);
-            // The cycle counter stood still while we slept, so the
-            // console's own rate limit has no way to know that real
-            // time passed. Tell it.
-            con_wake();
+        // parent never waits -- innerbench spawns several benches and
+        // can only wait on one.
+        if (sched_nzombies) task_reap_orphans();
+        // The idle task runs only when nothing else can: everything alive
+        // is parked on something that has not arrived -- console input,
+        // usually. Nothing can make progress until the outside world
+        // does, and yielding in a tight loop would burn a core waiting
+        // for a keystroke. So back off the way c4sh does: double the nap
+        // up to a ceiling, which is well inside human reaction time, so
+        // the prompt still feels immediate. (It used to drop back to the
+        // floor when a pass found a task ready, which since the idle task
+        // runs only when none is, it never does; and dropping back
+        // whenever anything else had run made a desktop that wakes every
+        // 15 ms cost twice the cycles, in short naps.)
+        nap = nap ? nap * 2 : IDLE_NAP_MIN;
+        if (nap > IDLE_NAP_MAX) nap = IDLE_NAP_MAX;
+        // A sleeping task has a deadline, so the backoff must not
+        // overshoot it: a 1ms sleep should not wait out a 20ms
+        // nap. Milliseconds in, microseconds out.
+        if (sched_sleep_due(&due)) {
+            budget = (due - __time()) * 1000;
+            if (budget < 0) budget = 0;
+            if (budget < nap) nap = budget;
         }
+        // the counter stands still meanwhile: idle time in ms instead
+        ms = __time();
+        __c4_usleep(nap);
+        acct_napms = acct_napms + (__time() - ms);
+        // The cycle counter stood still while we slept, so the
+        // console's own rate limit has no way to know that real
+        // time passed. Tell it.
+        con_wake();
         sched_yield();
     }
     return 0;

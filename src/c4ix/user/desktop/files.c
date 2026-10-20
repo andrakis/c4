@@ -35,6 +35,7 @@ struct files {
     char tflag[MAXT];                  // T_KIDS, T_COLL
     int tfollow;                       // scroll the tree to tsel at the next draw
     int pane;                          // 0 the list has the keyboard, 1 the tree
+    int tleft;                         // the tree scrolled across: 6-pixel steps
 };
 
 static struct files *F(struct win *w) { return (struct files *)w->st; }
@@ -195,7 +196,37 @@ static int t_at(struct files *f, int r) {
 }
 
 // the tree's rows, and its scroll bar's place, in client coordinates
-static int t_rows(int ch) { return (ch - TOOL_H - STATUS_H - 2 - 6) / ROW_H; }
+// The tree's widest row, in 6-pixel steps (a character of the sans font);
+// wider than the pane, it gets a bar across, which takes a row.
+static int t_maxw(struct files *f) {
+    int i, k, w, mx;
+    mx = 0; i = 0;
+    while (i < f->nt) {
+        if (i == 0) k = 8;
+        else {
+            k = ui_len(f->tpath + i * TPW);
+            w = k;
+            while (w > 0 && f->tpath[i * TPW + w - 1] != '/') --w;
+            k = k - w;
+        }
+        w = (18 + f->tdepth[i] * 14 + 26) / 6 + k + 1;
+        if (w > mx) mx = w;
+        i = t_next(f, i);
+    }
+    return mx;
+}
+enum { THB_X = 4, THB_W = TREE_W - 22 };
+static int t_hvis() { return THB_W / 6; }
+static int t_hbar(struct files *f) { return t_maxw(f) > t_hvis(); }
+static int t_rows(struct files *f, int ch) { return (ch - TOOL_H - STATUS_H - 2 - 6 - (t_hbar(f) ? 16 : 0)) / ROW_H; }
+static int t_hby(int ch) { return ch - STATUS_H - 2 - 18; }
+static void t_hclamp(struct files *f) {
+    int max;
+    max = t_maxw(f) - t_hvis();
+    if (max < 0) max = 0;
+    if (f->tleft > max) f->tleft = max;
+    if (f->tleft < 0) f->tleft = 0;
+}
 static int t_clamp(struct files *f, int rows) {
     int max;
     max = t_shown(f) - rows;
@@ -329,7 +360,7 @@ static void t_box(int x, int y, int coll) {
 
 void files_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     struct files *f;
-    int i, y, lx, lw, lh, rows, tx, th, trows, sel_bg, nv, r;
+    int i, y, lx, lw, lh, rows, tx, th, trows, sel_bg, nv, r, hb, dx;
     f = F(w);
     d_rect(ox, oy, cw, ch, C_FACE);
     // the toolbar: Up, and the address
@@ -342,8 +373,13 @@ void files_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     tx = ox + 2; th = ch - TOOL_H - STATUS_H - 2;
     d_rect(tx, oy + TOOL_H, TREE_W, th, C_WHITE);
     d_bevel(tx, oy + TOOL_H, TREE_W, th, B_SUNKEN);
-    trows = t_rows(ch);
+    trows = t_rows(f, ch);
     nv = t_shown(f);
+    hb = t_hbar(f);
+    t_hclamp(f);
+    dx = f->tleft * 6;
+    // the names and lines stay inside the tree, under its bars
+    d_clip(tx + 2, oy + TOOL_H + 2, TREE_W - 4 - (nv > trows ? 16 : 0), th - 4 - (hb ? 16 : 0));
     if (f->tfollow) {
         r = t_row(f, f->tsel);
         if (r >= 0 && r < f->ttop) f->ttop = r;
@@ -355,7 +391,7 @@ void files_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     r = 0;
     y = oy + TOOL_H + 3;
     while (i >= 0 && i < f->nt && r < trows) {
-        lx = tx + 18 + f->tdepth[i] * 14;
+        lx = tx + 18 + f->tdepth[i] * 14 - dx;
         if (f->tdepth[i] > 0) {
             d_rect(lx - 9, y + 8, 7, 1, C_SHADOW);
             d_rect(lx - 9, y - 2, 1, 10, C_SHADOW);
@@ -376,8 +412,9 @@ void files_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
         ++r;
         i = t_next(f, i);
     }
-    // after the names, so a long one runs under the bar, not over it
-    if (nv > trows) ui_scrollbar(ox + TSB_X, oy + TOOL_H + 2, th - 4, nv, trows, f->ttop);
+    d_clip_end();
+    if (nv > trows) ui_scrollbar(ox + TSB_X, oy + TOOL_H + 2, th - 4 - (hb ? 16 : 0), nv, trows, f->ttop);
+    if (hb) ui_hscrollbar(ox + THB_X, oy + t_hby(ch), THB_W, t_maxw(f), t_hvis(), f->tleft);
     // the list
     lx = tx + TREE_W + 4; lw = cw - TREE_W - 8;
     d_rect(lx, oy + TOOL_H, lw, th, C_WHITE);
@@ -424,11 +461,13 @@ void files_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     lx = 2 + TREE_W + 4; lw = cw - TREE_W - 8;
     lh = th - 22;
     rows = (lh - 4) / ROW_H;
-    trows = t_rows(ch);
+    trows = t_rows(f, ch);
     nv = t_shown(f);
     if (ev == E_MOVE) {
         t = ui_scroll_drag(TSB_X, TOOL_H + 2, y);
         if (t >= 0) { f->ttop = t; t_clamp(f, trows); return; }
+        t = ui_scroll_drag(THB_X, t_hby(ch), x);
+        if (t >= 0) { f->tleft = t; t_hclamp(f); return; }
         t = ui_scroll_drag(lx + lw - 18, TOOL_H + 20, y);
         if (t >= 0) {
             f->top = t;
@@ -453,17 +492,23 @@ void files_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     }
     if (ev != E_DOWN && ev != E_DBL) return;
     if (ui_hit(x, y, 4, 4, 26, 22)) { if (ev == E_DOWN) up(w); return; }
-    if (nv > trows && ui_hit(x, y, TSB_X, TOOL_H + 2, 16, th - 4)) {
+    if (nv > trows && ui_hit(x, y, TSB_X, TOOL_H + 2, 16, th - 4 - (t_hbar(f) ? 16 : 0))) {
         if (ev != E_DOWN) return;
-        t = ui_scroll_click(x, y, TSB_X, TOOL_H + 2, th - 4, nv, trows, f->ttop);
+        t = ui_scroll_click(x, y, TSB_X, TOOL_H + 2, th - 4 - (t_hbar(f) ? 16 : 0), nv, trows, f->ttop);
         if (t >= 0) f->ttop = t;
+        return;
+    }
+    if (t_hbar(f) && ui_hit(x, y, 2, t_hby(ch), TREE_W, 16)) {
+        if (ev != E_DOWN) return;
+        t = ui_hscroll_click(x, y, THB_X, t_hby(ch), THB_W, t_maxw(f), t_hvis(), f->tleft);
+        if (t >= 0) f->tleft = t;
         return;
     }
     if (ui_hit(x, y, 2, TOOL_H, TREE_W, th)) {
         f->pane = 1;
         node = t_at(f, f->ttop + (y - TOOL_H - 3) / ROW_H);
         if (node < 0) return;
-        bx = 2 + 18 + f->tdepth[node] * 14 - 13;
+        bx = 2 + 18 + f->tdepth[node] * 14 - 13 - f->tleft * 6;
         if (x >= bx - 2 && x < bx + 11 && (f->tflag[node] & T_KIDS)) { if (ev == E_DOWN) t_toggle(w, node); return; }
         if (ev == E_DOWN) t_select(w, node);
         else t_toggle(w, node);

@@ -71,7 +71,6 @@ static void sample(struct tasks *t) {
     }
     t->sampled = 1;
     if (t->sel >= t->n) t->sel = t->n - 1;
-    mark_dirty();
 }
 
 int tasks_open() {
@@ -86,10 +85,29 @@ int tasks_open() {
     S(w)->tab = 1;
     S(w)->uptime0 = __time();
     sample(S(w));
+    mark_dirty();
     return i;
 }
 
-void tasks_tick(struct win *w) { sample(S(w)); }
+int tasks_open_perf() {
+    int i;
+    i = tasks_open();
+    if (i >= 0) S(win_get(i))->tab = 2;
+    return i;
+}
+
+void tasks_tick(struct win *w) { sample(S(w)); mark_dirty(); }
+
+// The taskbar's CPU meter: the same sample as the Performance tab, kept
+// apart from any Task Manager window, so the two agree and neither
+// disturbs the other's deltas.
+static struct tasks *bar;
+int tasks_cpu_usage() {
+    if (!bar) { bar = (struct tasks *)ualloc(sizeof(struct tasks)); memset(bar, 0, sizeof(struct tasks)); }
+    sample(bar);
+    if (bar->usage > 100) return 100;
+    return bar->usage;
+}
 
 static char *state_name(int s) {
     if (s == TS_READY) return "Ready";
@@ -343,4 +361,5 @@ void tasks_answer(struct win *w, int action, int yes) {
     uintr(t->id[t->sel]);
     ukill(t->id[t->sel], SIGTERM);
     sample(t);
+    mark_dirty();
 }

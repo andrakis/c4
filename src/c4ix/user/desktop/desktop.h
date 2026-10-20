@@ -96,6 +96,9 @@ int  ui_hit(int px, int py, int x, int y, int w, int h);
 void ui_scrollbar(int x, int y, int h, int total, int visible, int top);
 int  ui_scroll_click(int px, int py, int x, int y, int h, int total, int visible, int top);
 int  ui_scroll_drag(int x, int y, int py);     // the top line while the bar at x,y is dragged, or -1
+void ui_hscrollbar(int x, int y, int w, int total, int visible, int left);
+int  ui_hscroll_click(int px, int py, int x, int y, int w, int total, int visible, int left);
+                                               // ... and a bar across: ui_scroll_drag(x, y, px)
 int  ui_scroll_active();
 void ui_scroll_end();
 void ui_field(int x, int y, int w, char *text, int caret, int focused);
@@ -129,6 +132,8 @@ void files_command(struct win *w, int menu, int item);
 void files_answer(struct win *w, int action, int yes);
 
 int  tasks_open();
+int  tasks_open_perf();           // Task Manager on its Performance tab
+int  tasks_cpu_usage();           // the machine's CPU use now, in percent (the taskbar's meter)
 void tasks_draw(struct win *w, int ox, int oy, int cw, int ch, int focused);
 void tasks_mouse(struct win *w, int ev, int x, int y, int cw, int ch);
 void tasks_key(struct win *w, int code, int ch, int mods);

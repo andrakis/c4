@@ -104,6 +104,51 @@ int ui_scroll_drag(int x, int y, int py) {
 int ui_scroll_active() { return sd_on; }
 void ui_scroll_end() { sd_on = 0; }
 
+// A bar across, for what is wider than its pane: the same parts turned
+// on their side. LEFT is the first column shown of TOTAL, VISIBLE at once.
+void ui_hscrollbar(int x, int y, int w, int total, int visible, int left) {
+    int track, tw, tx;
+    d_rect(x, y, w, 16, 0xe0e0e0);
+    d_rect(x, y, 16, 16, C_FACE); d_bevel(x, y, 16, 16, B_RAISED);
+    d_rect(x + w - 16, y, 16, 16, C_FACE); d_bevel(x + w - 16, y, 16, 16, B_RAISED);
+    d_line(x + 5, y + 8, x + 9, y + 4, C_DARK); d_line(x + 5, y + 8, x + 9, y + 12, C_DARK);
+    d_rect(x + 9, y + 4, 1, 9, C_DARK);
+    d_line(x + w - 6, y + 8, x + w - 10, y + 4, C_DARK); d_line(x + w - 6, y + 8, x + w - 10, y + 12, C_DARK);
+    d_rect(x + w - 11, y + 4, 1, 9, C_DARK);
+    track = w - 32;
+    if (total <= visible || track < 8) return;
+    tw = (track * visible) / total;
+    if (tw < 10) tw = 10;
+    tx = x + 16 + ((track - tw) * left) / (total - visible);
+    d_rect(tx, y, tw, 16, C_FACE);
+    d_bevel(tx, y, tw, 16, B_RAISED);
+}
+
+// The new first column for a click on a bar across, or -1 if it missed. A
+// press on the thumb starts a drag, which ui_scroll_drag then follows with
+// the pointer's x.
+int ui_hscroll_click(int px, int py, int x, int y, int w, int total, int visible, int left) {
+    int track, tw, tx, max;
+    if (!ui_hit(px, py, x, y, w, 16)) return 0 - 1;
+    max = total - visible;
+    if (max < 0) max = 0;
+    if (px < x + 16) left = left - 1;
+    else if (px >= x + w - 16) left = left + 1;
+    else {
+        track = w - 32;
+        if (total <= visible) return left;
+        tw = (track * visible) / total;
+        if (tw < 10) tw = 10;
+        tx = x + 16 + ((track - tw) * left) / (total - visible);
+        if (px < tx) left = left - visible;
+        else if (px >= tx + tw) left = left + visible;
+        else { sd_on = 1; sd_x = x; sd_y = y; sd_y0 = px; sd_top0 = left; sd_range = total - visible; sd_span = track - tw; }
+    }
+    if (left > max) left = max;
+    if (left < 0) left = 0;
+    return left;
+}
+
 // The new top line for a click on the scroll bar, or -1 if it missed.
 int ui_scroll_click(int px, int py, int x, int y, int h, int total, int visible, int top) {
     int track, th, ty, max;

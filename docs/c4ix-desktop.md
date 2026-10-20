@@ -392,11 +392,32 @@ it lacked was somewhere to edit and build in one place.
       over, and where that stands at the top of the view is kept with a
       count of changes, so scrolling does not read the file from the top.
       `:syntax off` / `on`, or View > Syntax Colouring.
+- [x] **Bars across** (`ui_hscrollbar`, `ui_hscroll_click`, dragged
+      through the same `ui_scroll_drag`): under the Editor's text, under
+      its file pane and Explorer's tree when a name is wider than them, and
+      under the build log. Across, the text follows the cursor only when
+      the cursor has moved, so the bar can be scrolled away from it.
+- [x] **Word wrap**: `:set wrap` / `:set nowrap`, View > Word Wrap. Long
+      lines fold onto the rows below; `j` and `k` still move by line, and
+      a click lands on the right column of a folded row.
+- [x] **The build pane** scrolls both ways and keeps its place when
+      scrolled up to read. While a build runs its header has **Cancel**
+      (also Build > Cancel Build, `:cancel`): what b4ke is running is
+      interrupted and ended first, then b4ke, and every one is waited
+      for, so a cancelled compiler neither runs on nor stays a zombie.
+      Closing the window mid-build does the same.
+- [x] **A CPU meter** beside the clock: Task Manager's number, from its
+      own sample every two seconds, redrawn only when it changes; a click
+      opens Task Manager on Performance. It inherits that number's model,
+      which counts the boot task as idle (see the CPU review plan).
 - [x] Pinned by `test-desktop.mjs`: the icon; the pane listing the root,
       opening folders and a file; the colours of `hello.c`; `:syntax off`;
       Ctrl+B both ways; `:e` opening the folders to a file; dragging the
-      Editor's thumb and Explorer's tree thumb. Not yet looked at in a
-      browser.
+      Editor's thumb and Explorer's tree thumb; the meter; a long line off
+      to the right, the bar across reaching its end, and `:set wrap`
+      folding it; `:make` under a `BUILD.B4K` cancelled from the pane,
+      with no c4sc or b4ke left in Task Manager; Explorer's tree scrolled
+      across. Not yet looked at in a browser.
 
 ### Found on the way, not fixed
 - `make test-c4th-os`: the C4DOS leg prints an empty prompt line ahead of

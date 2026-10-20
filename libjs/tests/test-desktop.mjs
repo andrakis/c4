@@ -146,6 +146,7 @@ check(until(() => consoleText().includes('desktop: running on the display')), 'd
 check(until(() => gui.w === SW && gui.h === SH && presents > 0), `it asks for ${SW}x${SH} and draws`);
 check(until(() => has(/c4ix:\/\$/), 800), 'a Command Prompt opens with a shell prompt', screen());
 check(has('Start') && has(/[0-9]{1,2}:[0-9]{2} [AP]M/), 'the taskbar has Start and a clock');
+check(until(() => has(/^CPU \d{1,3}%$/)), 'and a CPU meter beside the clock', screen());
 check(['My Computer', 'Command Prompt', 'Notepad', 'IDE', 'Calculator', 'Task Manager'].every(has), 'the desktop icons are there, the IDE among them');
 
 // ---- Command Prompt ----------------------------------------------------------------
@@ -204,6 +205,13 @@ const inTree = all => {
   check(dragThumb(r => r.x < e.x + 200, 120) && until(() => !inTree(find('C4IX (/)'))), "dragging the tree's scroll thumb scrolls it", screen());
   for (let i = 0; i < 40; i++) ev({ kind: 'wheel', x: e.x + 60, y: e.y + 200, dy: -1 });
   until(() => !!inTree(find('C4IX (/)')));
+  // the deepest folders are wider than the tree: a bar across, whose right
+  // arrow moves every name left
+  const hbar = rects.filter(r => r.h === 16 && r.w > 60 && r.rgb === 0xe0e0e0 && r.x < e.x + 200 && r.y > e.y + 60).pop();
+  const rootX = inTree(find('C4IX (/)')).x;
+  if (hbar) for (let i = 0; i < 3; i++) click(hbar.x + hbar.w - 8, hbar.y + 8);
+  check(!!hbar && until(() => !!inTree(find('C4IX (/)')) && inTree(find('C4IX (/)')).x < rootX), 'the tree scrolls across too', screen());
+  if (hbar) for (let i = 0; i < 3; i++) click(hbar.x + 8, hbar.y + 8);
 }
 key('TAB'); key('', 0, 36); key('', 0, 37);               // the tree; Home; Left
 check(until(() => !!inTree(find('C4IX (/)')) && !inTree(find('usr')) && !!inList(find('usr'))),
@@ -367,6 +375,28 @@ check(until(() => has('edit.c - Editor') && !!inPane(find('edit.c'))), ':e opens
   check(firstLine() === 1 && dragThumb(r => r.x > e.x + 400, 150) && until(() => firstLine() > 100),
     "dragging the editor's scroll thumb scrolls the text", `first line ${firstLine()}`);
 }
+// a long line: off to the right, then the bar across, then folded by wrap
+txt(':e /ram/long.txt\n');
+until(() => has('long.txt - Editor'));
+txt('i' + 'W'.repeat(110) + 'END');
+key('ESC'); txt('0');
+check(until(() => rows().some(t => /^W{40,}$/.test(t.s.trim())) && !edLine('WEND')), 'a long line shows its start, the rest off to the right', screen());
+{
+  const e = ed();
+  const hb = rects.filter(r => r.h === 16 && r.rgb === 0xe0e0e0 && r.x > e.x + 150 && r.w > 200).pop();
+  if (hb) for (let i = 0; i < 4; i++) click(hb.x + hb.w - 30, hb.y + 8);   // the track, right of the thumb: a page each
+  check(!!hb && until(() => edLine('WEND')), "the editor's bar across scrolls to the end of it", screen());
+}
+txt(':set wrap\n');
+check(until(() => edLine('WEND') && rows().filter(t => /^W{20,}/.test(t.s.trim())).length >= 2), ':set wrap folds it onto the next row', screen());
+txt(':set nowrap\n');
+txt(':e! /usr/src/c4/src/c4ix/user/desktop/edit.c\n');
+until(() => has('edit.c - Editor'));
+// a build that takes a while, cancelled from the pane's button
+txt(':make\n');
+check(until(() => has('Build: running') && has('Cancel'), 400), ':make on a file under a BUILD.B4K runs b4ke there', screen());
+clickText('Cancel');
+check(until(() => has('Build: cancelled') && !has('Build: running'), 400), 'Cancel stops the build', screen());
 txt(':q\n');
 check(until(() => !has('edit.c - Editor')), 'and :q closes it');
 
@@ -377,6 +407,7 @@ until(() => has(/spin: tick 1\//), 1500);
 key('ESC', 3, 27);                                             // Ctrl+Shift+Esc
 check(until(() => has('Task Manager') && has('Image Name')), 'Ctrl+Shift+Esc opens Task Manager on Processes', screen());
 check(until(() => has(/^(c4ix-)?desktop/) && has(/^(c4ix-spin\.c4r|spin) *$/) && has(/^CPU Usage: \d+%$/), 600), 'it lists the tasks, spin among them, with CPU usage', frame.filter(t => /c4ix|CPU|Image|boot|init|spin/.test(t.s)).map(t => t.s.trim()).join(' | '));
+check(!has(/^(c4sc|b4ke)(\.c4r)? *$/), 'the cancelled build left nothing behind', frame.filter(t => /c4sc|b4ke/.test(t.s)).map(t => t.s).join(' | '));
 clickText(/^(c4ix-spin\.c4r|spin) *$/);
 clickText('End Process');
 check(until(() => has(/End process (c4ix-)?spin/)), 'End Process asks first');

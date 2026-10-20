@@ -558,7 +558,12 @@ static int start_hit(int x, int y) {
 }
 
 static int n_buttons() { int k, n; n = 0; k = 0; while (k < MAXW) { if (wins[k].used && !is_dialog(wins + k)) ++n; ++k; } return n; }
-static int button_w() { int n, w; n = n_buttons(); if (!n) return 150; w = (SW - 64 - 84) / n - 4; return w > 150 ? 150 : w; }
+static int button_w() { int n, w; n = n_buttons(); if (!n) return 150; w = (SW - 64 - 154) / n - 4; return w > 150 ? 150 : w; }
+
+// The CPU meter beside the clock: Task Manager's number (tasks_cpu_usage),
+// taken every two seconds; a click opens Task Manager on Performance.
+enum { CPU_X = SW - 146, CPU_W = 66 };
+static int cpu_pct, cpu_n;
 
 static void draw_taskbar() {
     int k, i, bx, bw, secs, h, m, f;
@@ -588,6 +593,15 @@ static void draw_taskbar() {
         }
         ++i;
     }
+    gui_rect(CPU_X, SH - TASK_H + 4, CPU_W, 22, C_FACE);
+    d_bevel(CPU_X, SH - TASK_H + 4, CPU_W, 22, B_SUNKEN);
+    gui_rect(CPU_X + 5, SH - TASK_H + 8, 8, 14, 0x000000);
+    h = (cpu_pct * 14 + 50) / 100;
+    if (h > 0) gui_rect(CPU_X + 5, SH - TASK_H + 22 - h, 8, h, 0x00e000);
+    ui_cpy(tbuf, "CPU ");
+    ui_num(tbuf + 4, cpu_pct);
+    ui_cat(tbuf, "%");
+    d_text(CPU_X + 17, SH - TASK_H + 9, C_DARK, F_SANS, tbuf);
     gui_rect(SW - 76, SH - TASK_H + 4, 72, 22, C_FACE);
     d_bevel(SW - 76, SH - TASK_H + 4, 72, 22, B_SUNKEN);
     secs = gui_clock();
@@ -679,6 +693,7 @@ static void mouse_down(int x, int y, int button) {
     if (y >= SH - TASK_H) {
         if (modal() >= 0) return;
         if (ui_hit(x, y, 2, SH - TASK_H + 4, 56, 22)) { start_open = 1; start_hot = 0 - 1; dirty = 1; return; }
+        if (ui_hit(x, y, CPU_X, SH - TASK_H + 4, CPU_W, 22)) { tasks_open_perf(); dirty = 1; return; }
         bw = button_w();
         k = 0; i = 0;
         while (i < MAXW) {
@@ -894,6 +909,13 @@ int main(int argc, char **argv) {
             last_tick = now_ms();
             k = 0;
             while (k < MAXW) { if (wins[k].used && wins[k].kind == K_TASKS) tasks_tick(wins + k); ++k; }
+            // the meter, every other tick, and a redraw only when it moved
+            cpu_n = cpu_n + 1;
+            if (cpu_n >= 2) {
+                cpu_n = 0;
+                k = tasks_cpu_usage();
+                if (k != cpu_pct) { cpu_pct = k; dirty = 1; }
+            }
         }
         secs = gui_clock() / 60;
         if (secs != clock_min) { clock_min = secs; dirty = 1; }

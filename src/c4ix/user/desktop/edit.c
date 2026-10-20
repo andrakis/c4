@@ -31,6 +31,11 @@
 // runs what was built in a new Command Prompt: the .c file's image, or
 // the command a BUILD.B4K names with "SET RUN command".
 //
+// Long lines scroll across (a bar under the text), or, with :set wrap (View
+// > Word Wrap), fold onto the rows below; j and k still move by line. The
+// build pane scrolls both ways, and its Cancel button (or Build > Cancel)
+// stops a build: what b4ke is running first, then b4ke.
+//
 // Files. A pane down the left is the disk as a tree, closed folders to
 // start with: a click opens or closes a folder, and opens a file in the
 // editor. Opening a file opens the folders on the way to it. Ctrl+B,
@@ -79,14 +84,19 @@ struct edit {
     int fn, fcap, ftop, fshown, ffollow;
     int hver, nosyn;                               // a count of changes; colouring off
     int hl_line, hl_ver, hl_lang, hl_state;        // the colouring state at the top, cached
+    int wrap;                                      // long lines fold onto the rows below
+    int lcx, lcy;                                  // the cursor at the last draw: the view follows it when it moves
+    int tah, ph, hb, maxw;                         // the text area's height, the build pane's, a bar across, the longest line
+    int bleft, bmaxw, bcols, bcancel;              // the build pane across; a build being cancelled
+    int fleft;                                     // the file pane across, in 6-pixel steps
 };
 
 static struct edit *E(struct win *w) { return (struct edit *)w->st; }
 static char sb[512];
 static char *edit_menu_titles[4];
 static char *edit_file_items[7];
-static char *edit_build_items[6];
-static char *edit_view_items[3];
+static char *edit_build_items[7];
+static char *edit_view_items[4];
 static char *edit_help_items[2];
 static char **edit_menu_items[4];
 
@@ -647,13 +657,14 @@ static void e_logline(struct edit *e, char *s, int n) {
     e->blog[e->blogn][n] = 0;
     e_parse(e, e->blog[e->blogn], e->blogn);
     ++e->blogn;
-    if (e->blogn > BROWS) e->btop = e->blogn - BROWS;
+    // the end stays in view, unless the pane was scrolled up to read
+    if (e->blogn > BROWS && e->btop >= e->blogn - 1 - BROWS) e->btop = e->blogn - BROWS;
 }
 
 static void e_build_clear(struct edit *e) {
     while (e->blogn > 0) { --e->blogn; free(e->blog[e->blogn]); }
     while (e->en > 0) { --e->en; free(e->epath[e->en]); }
-    e->ecur = 0 - 1; e->btop = 0; e->bsel = 0 - 1; e->bpartn = 0; e->bctx[0] = 0;
+    e->ecur = 0 - 1; e->btop = 0; e->bsel = 0 - 1; e->bpartn = 0; e->bctx[0] = 0; e->bleft = 0;
 }
 
 // the directory of PATH, into OUT ("/" for a file at the root)
@@ -779,7 +790,7 @@ static void e_make(struct win *w) {
     if (e->pid < 0) { uclose(pout[0]); e_say(e, "Cannot start b4ke"); return; }
     e->out_r = pout[0];
     e_build_clear(e);
-    e->building = 1; e->bshown = 1;
+    e->building = 1; e->bshown = 1; e->bcancel = 0;
     ui_cpy(sb, "b4ke"); j = 1;
     while (j < k) { ui_cat(sb, " "); ui_cat(sb, argv[j]); ++j; }
     e_logline(e, sb, ui_len(sb));
@@ -814,6 +825,7 @@ void edit_tick(struct win *w) {
         e->bstatus = uwait(e->pid);
         e->building = 0;
         if (e->bstatus == 0) ui_cpy(e->msg, "Build finished");
+        else if (e->bcancel) ui_cpy(e->msg, "Build cancelled");
         else {
             ui_cpy(e->msg, "Build failed: ");
             ui_num(e->msg + ui_len(e->msg), e->en);
@@ -824,11 +836,41 @@ void edit_tick(struct win *w) {
     }
 }
 
+// Stop the build: what b4ke is running first -- a compiler it is waiting
+// on would run on without it, and nobody would wait for it -- then b4ke.
+// Every one is waited for, so none is left a zombie.
+static int binfo[32];
+static void e_stop_build(struct edit *e) {
+    int kids[8], nk, i;
+    if (!e->building) return;
+    nk = 0; i = 0;
+    while (nk < 8 && utaskinfo(i, binfo)) { if (binfo[1] == e->pid) { kids[nk] = binfo[0]; ++nk; } ++i; }
+    i = 0;
+    while (i < nk) { uintr(kids[i]); ukill(kids[i], SIGTERM); ++i; }
+    ukill(e->pid, SIGTERM);
+    uclose(e->out_r);
+    i = 0;
+    while (i < nk) { uwait(kids[i]); ++i; }
+    e->bstatus = uwait(e->pid);
+    e->building = 0;
+}
+static void e_cancel(struct win *w) {
+    struct edit *e;
+    e = E(w);
+    if (!e->building) { e_say(e, "No build is running"); return; }
+    e_stop_build(e);
+    e->bcancel = 1;
+    if (e->bpartn) { e_logline(e, e->bpart, e->bpartn); e->bpartn = 0; }
+    e_logline(e, "-- cancelled --", 15);
+    ui_cpy(e->msg, "Build cancelled");
+    mark_dirty();
+}
+
 void edit_close(struct win *w) {
     struct edit *e;
     int i;
     e = E(w);
-    if (e->building) { ukill(e->pid, SIGTERM); uclose(e->out_r); uwait(e->pid); e->building = 0; }
+    e_stop_build(e);
     i = 0;
     while (i < e->fn) { free(e->fpath[i]); ++i; }
     if (e->fpath) { free((char *)e->fpath); free((char *)e->fdepth); free((char *)e->fflag); }
@@ -1187,6 +1229,9 @@ static void e_ex(struct win *w, char *c) {
     if (ui_eq(c, "Ex") || ui_eq(c, "Explore") || ui_eq(c, "Lex") || ui_eq(c, "files")) { e->fshown = !e->fshown; return; }
     if (ui_eq(c, "syntax off") || ui_eq(c, "syn off")) { e->nosyn = 1; return; }
     if (ui_eq(c, "syntax on") || ui_eq(c, "syn on")) { e->nosyn = 0; return; }
+    if (ui_eq(c, "set wrap")) { e->wrap = 1; e->left = 0; return; }
+    if (ui_eq(c, "set nowrap")) { e->wrap = 0; return; }
+    if (ui_eq(c, "cancel")) { e_cancel(w); return; }
     if (ui_eq(c, "run") || (c[0] == 'r' && c[1] == 'u' && c[2] == 'n' && c[3] == ' ')) {
         if (c[3] == ' ') ui_cpy(e->runcmd, c + 4);
         if (!e->runcmd[0]) { e_say(e, "Nothing to run yet: :make first, or :run COMMAND"); return; }
@@ -1846,18 +1891,44 @@ static void f_add(struct edit *e, char *path) {
     f_ins(e, i, path, d, 0);
 }
 
-static int f_rows(int ch) { return (ch - FHDR - 2) / FROW; }
+// The pane's widest row, in 6-pixel steps; wider than the pane, it gets a
+// bar across, which takes a row.
+static int f_maxw(struct edit *e) {
+    int i, k, w, mx;
+    char *p;
+    mx = 0; i = 0;
+    while (i < e->fn) {
+        p = e->fpath[i];
+        k = ui_len(p);
+        w = k;
+        while (w > 0 && p[w - 1] != '/') --w;
+        w = (4 + e->fdepth[i] * 12 + 28) / 6 + (k - w) + 1;
+        if (w > mx) mx = w;
+        ++i;
+    }
+    return mx;
+}
+static int f_hvis() { return (FW - 17) / 6; }
+static int f_hbar(struct edit *e) { return f_maxw(e) > f_hvis(); }
+static int f_rows(struct edit *e, int ch) { return (ch - FHDR - 2 - (f_hbar(e) ? 16 : 0)) / FROW; }
 static void f_clamp(struct edit *e, int rows) {
+    int max;
     if (e->ftop > e->fn - rows) e->ftop = e->fn - rows;
     if (e->ftop < 0) e->ftop = 0;
+    max = f_maxw(e) - f_hvis();
+    if (max < 0) max = 0;
+    if (e->fleft > max) e->fleft = max;
+    if (e->fleft < 0) e->fleft = 0;
 }
 // the pane is drawn only where the text keeps some room
 static int f_on(struct edit *e, int cw) { return e->fshown && e->fpath && cw >= FW + 200; }
 
 static void f_draw(struct edit *e, int ox, int oy, int ch) {
-    int rows, i, y, x, cur, k;
+    int rows, i, y, x, cur, k, hb, vb, dx;
     char *p;
-    rows = f_rows(ch);
+    rows = f_rows(e, ch);
+    hb = f_hbar(e);
+    vb = e->fn > rows;
     cur = f_find(e, e->path);
     if (e->ffollow && cur >= 0) {
         if (cur < e->ftop) e->ftop = cur;
@@ -1865,15 +1936,16 @@ static void f_draw(struct edit *e, int ox, int oy, int ch) {
     }
     e->ffollow = 0;
     f_clamp(e, rows);
+    dx = e->fleft * 6;
     d_rect(ox, oy, FW, ch, 0xf4f4f4);
     d_rect(ox, oy, FW, FHDR, C_FACE);
     d_bevel(ox, oy, FW, FHDR, B_RAISED);
     d_text(ox + 6, oy + 4, C_DARK, F_BOLD, "Files");
-    d_clip(ox, oy + FHDR, FW - (e->fn > rows ? 17 : 0), ch - FHDR);
+    d_clip(ox, oy + FHDR, FW - (vb ? 17 : 0), ch - FHDR - (hb ? 16 : 0));
     i = e->ftop;
     y = oy + FHDR + 2;
     while (i < e->fn && i < e->ftop + rows) {
-        x = ox + 4 + e->fdepth[i] * 12;
+        x = ox + 4 + e->fdepth[i] * 12 - dx;
         if (i == cur) d_rect(ox, y, FW, FROW, 0xc8dcff);
         if (e->fflag[i] & F_DIR) {
             if (e->fflag[i] & F_OPEN) { d_line(x, y + 6, x + 4, y + 10, C_DARK); d_line(x + 4, y + 10, x + 8, y + 6, C_DARK); }
@@ -1892,7 +1964,8 @@ static void f_draw(struct edit *e, int ox, int oy, int ch) {
         ++i;
     }
     d_clip_end();
-    if (e->fn > rows) ui_scrollbar(ox + FW - 17, oy + FHDR, ch - FHDR, e->fn, rows, e->ftop);
+    if (vb) ui_scrollbar(ox + FW - 17, oy + FHDR, ch - FHDR - (hb ? 16 : 0), e->fn, rows, e->ftop);
+    if (hb) ui_hscrollbar(ox, oy + ch - 16, FW - 17, f_maxw(e), f_hvis(), e->fleft);
     d_rect(ox + FW, oy, 2, ch, C_SHADOW);
 }
 
@@ -1910,18 +1983,24 @@ static void f_pick(struct win *w, int i) {
 
 static void f_mouse(struct win *w, int ev, int x, int y, int ch) {
     struct edit *e;
-    int rows, t, i;
+    int rows, t, i, hb;
     e = E(w);
-    rows = f_rows(ch);
+    rows = f_rows(e, ch);
+    hb = f_hbar(e);
     if (ev == E_WHEEL) { e->ftop = e->ftop + y * 3; f_clamp(e, rows); return; }
     if (ev != E_DOWN) return;
-    if (e->fn > rows) {
-        t = ui_scroll_click(x, y, FW - 17, FHDR, ch - FHDR, e->fn, rows, e->ftop);
+    if (e->fn > rows && x >= FW - 17) {
+        t = ui_scroll_click(x, y, FW - 17, FHDR, ch - FHDR - (hb ? 16 : 0), e->fn, rows, e->ftop);
         if (t >= 0) { e->ftop = t; return; }
+    }
+    if (hb && y >= ch - 16) {
+        t = ui_hscroll_click(x, y, 0, ch - 16, FW - 17, f_maxw(e), f_hvis(), e->fleft);
+        if (t >= 0) e->fleft = t;
+        return;
     }
     if (y < FHDR + 2 || x >= FW) return;
     i = e->ftop + (y - FHDR - 2) / FROW;
-    if (i < 0 || i >= e->fn) return;
+    if (i < 0 || i >= e->fn || i >= e->ftop + rows) return;
     if (e->fflag[i] & F_DIR) { if (e->fflag[i] & F_OPEN) f_close_dir(e, i); else f_open_dir(e, i); }
     else f_pick(w, i);
 }
@@ -1940,95 +2019,160 @@ static int e_selected(struct edit *e, int y, int x) {
     return 1;
 }
 
+// Rows line Y takes when wrapped at COLS: one at least
+static int e_wh(struct edit *e, int y, int cols) {
+    int h;
+    h = (e->len[y] + cols - 1) / cols;
+    return h < 1 ? 1 : h;
+}
+// the wrapped row of line Y the cursor's column falls in
+static int e_wseg(struct edit *e, int y, int x, int cols) {
+    int s, h;
+    s = x / cols;
+    h = e_wh(e, y, cols);
+    return s < h ? s : h - 1;
+}
+
+enum { BHDR = ECH + 2, BLOG_H = BROWS * ECH + 2, BPANE = BHDR + BLOG_H + 16 };
+
 static void e_draw_text(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     struct edit *e;
-    int rows, cols, gw, y, line, x, n, sx, ph, sy, k, i, c, endsel, lang, st;
+    int rows, cols, gw, y, line, x, n, sx, ph, sy, k, i, c, endsel, lang, st, tah, hb, h, seg, a, cseg, r, used, l, by;
     char num[16];
     e = E(w);
-    ph = e->bshown ? (BROWS + 1) * ECH + 4 : 0;
+    ph = e->bshown ? BPANE : 0;
     sy = oy + ch - ECH - 4;                       // the status line
-    rows = (ch - 6 - ECH - 4 - ph) / ECH;
+    tah = ch - ECH - 4 - ph;                      // the text's area, its bars included
+    hb = !e->wrap;
+    rows = (tah - 6 - (hb ? 16 : 0)) / ECH;
     if (rows < 1) rows = 1;
     gw = e->nu ? 5 * ECW : 0;
-    cols = (cw - 8 - gw) / ECW;
+    cols = (cw - 8 - gw - 17) / ECW;
     if (cols < 1) cols = 1;
-    e->rows = rows; e->cols = cols; e->gw = gw;
+    e->rows = rows; e->cols = cols; e->gw = gw; e->tah = tah; e->ph = ph; e->hb = hb;
+    e->maxw = 0;
+    i = 0;
+    while (i < e->nl) { if (e->len[i] > e->maxw) e->maxw = e->len[i]; ++i; }
     if (e->cy < e->top) e->top = e->cy;
-    if (e->cy >= e->top + rows) e->top = e->cy - rows + 1;
-    if (e->cx < e->left) e->left = e->cx;
-    if (e->cx >= e->left + cols) e->left = e->cx - cols + 1;
+    if (!e->wrap) {
+        if (e->cy >= e->top + rows) e->top = e->cy - rows + 1;
+        // across, the view follows the cursor only when it has moved, so the
+        // bar can be scrolled away from it
+        if (e->cx != e->lcx || e->cy != e->lcy) {
+            if (e->cx < e->left) e->left = e->cx;
+            if (e->cx >= e->left + cols) e->left = e->cx - cols + 1;
+        }
+        if (e->left > e->maxw + 1 - cols) e->left = e->maxw + 1 - cols;
+        if (e->left < 0) e->left = 0;
+    } else {
+        e->left = 0;
+        // down: the rows from the top line to the cursor's must fit
+        while (e->top < e->cy) {
+            used = 0; l = e->top;
+            while (l < e->cy && used <= rows) { used = used + e_wh(e, l, cols); ++l; }
+            used = used + e_wseg(e, e->cy, e->cx, cols) + 1;
+            if (used <= rows) break;
+            ++e->top;
+        }
+    }
+    e->lcx = e->cx; e->lcy = e->cy;
 
-    d_rect(ox, oy, cw, ch - ph - ECH - 4, C_WHITE);
-    if (gw) d_rect(ox, oy, gw + 2, ch - ph - ECH - 4, 0xe8e8e8);
+    d_rect(ox, oy, cw, tah, C_WHITE);
+    if (gw) d_rect(ox, oy, gw + 2, tah, 0xe8e8e8);
     line = e->top;
+    r = 0;
     y = oy + 3;
     lang = e->nosyn ? L_TEXT : e_lang(e->path);
     st = e_hlstate(e, e->top, lang);
-    while (line < e->nl && line < e->top + rows) {
-        if (gw) {
-            ui_num(num, line + 1);
-            k = ui_len(num);
-            d_textn(ox + 2 + (4 - k) * ECW, y, C_SHADOW, EFONT, F_MONO, ECW, num, k);
-        }
-        sx = ox + 4 + gw;
-        // the selection behind the text
-        if (e->mode == M_VISUAL || e->mode == M_VLINE) {
-            x = e->left;
-            endsel = e->len[line] > e->left + cols ? e->left + cols : e->len[line];
-            while (x <= endsel) {
-                if (e_selected(e, line, x)) d_rect(sx + (x - e->left) * ECW, y, ECW, ECH, 0xa8c8ff);
-                ++x;
-            }
-        }
-        n = e->len[line] - e->left;
-        if (n > cols) n = cols;
+    sx = ox + 4 + gw;
+    while (line < e->nl && r < rows) {
         // the colours for the whole line, which also say what the next starts in
         st = e_hl(e, line, st, lang);
-        x = 0;
-        while (x < n) {
-            c = e_hcol(e->left + x);
-            k = x + 1;
-            while (k < n && e_hcol(e->left + k) == c) ++k;
-            d_textn(sx + x * ECW, y, c, EFONT, F_MONO, ECW, e->ln[line] + e->left + x, k - x);
-            x = k;
+        h = e->wrap ? e_wh(e, line, cols) : 1;
+        cseg = e->wrap ? e_wseg(e, line, e->cx, cols) : 0;
+        seg = 0;
+        while (seg < h && r < rows) {
+            a = e->wrap ? seg * cols : e->left;   // the first column this row shows
+            if (gw && seg == 0) {
+                ui_num(num, line + 1);
+                k = ui_len(num);
+                d_textn(ox + 2 + (4 - k) * ECW, y, C_SHADOW, EFONT, F_MONO, ECW, num, k);
+            }
+            // the selection behind the text
+            if (e->mode == M_VISUAL || e->mode == M_VLINE) {
+                x = a;
+                endsel = e->len[line] > a + cols ? a + cols : e->len[line];
+                while (x <= endsel && x < a + cols) {
+                    if (e_selected(e, line, x)) d_rect(sx + (x - a) * ECW, y, ECW, ECH, 0xa8c8ff);
+                    ++x;
+                }
+            }
+            n = e->len[line] - a;
+            if (n > cols) n = cols;
+            x = 0;
+            while (x < n) {
+                c = e_hcol(a + x);
+                k = x + 1;
+                while (k < n && e_hcol(a + k) == c) ++k;
+                d_textn(sx + x * ECW, y, c, EFONT, F_MONO, ECW, e->ln[line] + a + x, k - x);
+                x = k;
+            }
+            // the cursor: a block in Normal, a bar in Insert
+            if (focused && line == e->cy && seg == cseg && e->mode != M_CMD) {
+                x = sx + (e->cx - a) * ECW;
+                if (e->vim && e->mode != M_INSERT) {
+                    d_rect(x, y, ECW, ECH, C_DARK);
+                    c = e_char(e, line, e->cx);
+                    if (c != 10) { num[0] = c; d_textn(x, y, C_WHITE, EFONT, F_MONO, ECW, num, 1); }
+                } else d_rect(x, y, 2, ECH - 1, C_DARK);
+            }
+            y = y + ECH;
+            ++r; ++seg;
         }
-        // the cursor: a block in Normal, a bar in Insert
-        if (focused && line == e->cy && e->mode != M_CMD) {
-            x = sx + (e->cx - e->left) * ECW;
-            if (e->vim && e->mode != M_INSERT) {
-                d_rect(x, y, ECW, ECH, C_DARK);
-                c = e_char(e, line, e->cx);
-                if (c != 10) { num[0] = c; d_textn(x, y, C_WHITE, EFONT, F_MONO, ECW, num, 1); }
-            } else d_rect(x, y, 2, ECH - 1, C_DARK);
-        }
-        y = y + ECH;
         ++line;
     }
-    while (line < e->top + rows) { d_text(ox + 4 + gw, y, 0x6060c0, F_MONO, "~"); y = y + ECH; ++line; }
-    ui_scrollbar(ox + cw - 17, oy, ch - ph - ECH - 4, e->nl, rows, e->top);
+    while (r < rows) { d_text(sx, y, 0x6060c0, F_MONO, "~"); y = y + ECH; ++r; }
+    ui_scrollbar(ox + cw - 17, oy, tah - (hb ? 16 : 0), e->nl, rows, e->top);
+    if (hb) {
+        ui_hscrollbar(ox, oy + tah - 16, cw - 17, e->maxw + 1, cols, e->left);
+        d_rect(ox + cw - 17, oy + tah - 16, 17, 16, C_FACE);
+    }
 
-    // the build pane
+    // the build pane: a header with Cancel while it runs, the log, its bars
     if (e->bshown) {
-        y = oy + ch - ph - ECH - 4;
-        d_rect(ox, y, cw, ECH + 2, C_FACE);
-        d_bevel(ox, y, cw, ECH + 2, B_RAISED);
-        ui_cpy(sb, e->building ? "Build: running" : (e->blogn == 0 ? "Build" : (e->bstatus == 0 ? "Build: finished" : "Build: failed")));
+        y = oy + tah;
+        d_rect(ox, y, cw, BHDR, C_FACE);
+        d_bevel(ox, y, cw, BHDR, B_RAISED);
+        ui_cpy(sb, e->building ? "Build: running" : (e->blogn == 0 ? "Build" : (e->bcancel ? "Build: cancelled" : (e->bstatus == 0 ? "Build: finished" : "Build: failed"))));
         if (e->en) { ui_cat(sb, " - "); ui_num(sb + ui_len(sb), e->en); ui_cat(sb, e->en == 1 ? " error (F8)" : " errors (F8)"); }
         d_text(ox + 6, y + 2, C_DARK, F_SANS, sb);
-        y = y + ECH + 2;
-        d_rect(ox, y, cw, BROWS * ECH + 2, 0x101010);
+        if (e->building) ui_button(ox + cw - 72, y + 1, 66, BHDR - 2, "Cancel", 0, 0);
+        by = y + BHDR;
+        e->bcols = (cw - 8 - 17) / ECW;
+        if (e->bcols < 1) e->bcols = 1;
+        e->bmaxw = 0;
+        i = 0;
+        while (i < e->blogn) { k = ui_len(e->blog[i]); if (k > e->bmaxw) e->bmaxw = k; ++i; }
+        if (e->bleft > e->bmaxw - e->bcols) e->bleft = e->bmaxw - e->bcols;
+        if (e->bleft < 0) e->bleft = 0;
+        if (e->btop > e->blogn - BROWS) e->btop = e->blogn - BROWS;
+        if (e->btop < 0) e->btop = 0;
+        d_rect(ox, by, cw - 17, BLOG_H, 0x101010);
         i = e->btop;
         k = 0;
         while (k < BROWS && i < e->blogn) {
             c = 0xc0c0c0;
             n = 0;
             while (n < e->en) { if (e->elog[n] == i) { c = 0xff8080; n = e->en; } ++n; }
-            if (i == e->bsel) { d_rect(ox, y + 1 + k * ECH, cw, ECH, 0x304070); c = C_WHITE; }
-            n = ui_len(e->blog[i]);
-            if (n > (cw - 8) / ECW) n = (cw - 8) / ECW;
-            d_textn(ox + 4, y + 1 + k * ECH, c, EFONT, F_MONO, ECW, e->blog[i], n);
+            if (i == e->bsel) { d_rect(ox, by + 1 + k * ECH, cw - 17, ECH, 0x304070); c = C_WHITE; }
+            n = ui_len(e->blog[i]) - e->bleft;
+            if (n > e->bcols) n = e->bcols;
+            if (n > 0) d_textn(ox + 4, by + 1 + k * ECH, c, EFONT, F_MONO, ECW, e->blog[i] + e->bleft, n);
             ++k; ++i;
         }
+        ui_scrollbar(ox + cw - 17, by, BLOG_H, e->blogn, BROWS, e->btop);
+        ui_hscrollbar(ox, by + BLOG_H, cw - 17, e->bmaxw, e->bcols, e->bleft);
+        d_rect(ox + cw - 17, by + BLOG_H, 17, 16, C_FACE);
     }
 
     // the status line: the mode or the command being typed, then where we are
@@ -2065,21 +2209,45 @@ static void e_scrolled(struct edit *e, int t) {
     e_clamp(e);
 }
 
+// Where things are, in the text's own coordinates (as the last draw left
+// them): the text's bars, then the build pane's header, log and bars.
 static void e_mouse_text(struct win *w, int ev, int x, int y, int cw, int ch) {
     struct edit *e;
-    int ph, top_of_pane, row, line, t;
+    int row, line, t, by, r, l, h;
     e = E(w);
-    ph = e->bshown ? (BROWS + 1) * ECH + 4 : 0;
-    top_of_pane = ch - ph - ECH - 4;
+    by = e->tah + BHDR;                            // the build log's top
     if (ev == E_WHEEL) { e_scrolled(e, e->top + y * 3); return; }
     if (ev == E_MOVE) {
         t = ui_scroll_drag(cw - 17, 0, y);
-        if (t >= 0) e_scrolled(e, t);
+        if (t >= 0) { e_scrolled(e, t); return; }
+        t = ui_scroll_drag(0, e->tah - 16, x);
+        if (t >= 0) { e->left = t; return; }
+        t = ui_scroll_drag(cw - 17, by, y);
+        if (t >= 0) { e->btop = t; return; }
+        t = ui_scroll_drag(0, by + BLOG_H, x);
+        if (t >= 0) { e->bleft = t; return; }
         return;
     }
     if (ev != E_DOWN && ev != E_DBL) return;
-    if (e->bshown && y >= top_of_pane + ECH + 2 && y < top_of_pane + ph) {
-        row = e->btop + (y - top_of_pane - ECH - 3) / ECH;
+    if (e->bshown && y >= e->tah && y < e->tah + e->ph) {
+        if (ev != E_DOWN && y < by) return;
+        if (y < by) {
+            if (e->building && ui_hit(x, y, cw - 72, e->tah + 1, 66, BHDR - 2)) e_cancel(w);
+            return;
+        }
+        if (y >= by + BLOG_H) {
+            if (ev != E_DOWN) return;
+            t = ui_hscroll_click(x, y, 0, by + BLOG_H, cw - 17, e->bmaxw, e->bcols, e->bleft);
+            if (t >= 0) e->bleft = t;
+            return;
+        }
+        if (x >= cw - 17) {
+            if (ev != E_DOWN) return;
+            t = ui_scroll_click(x, y, cw - 17, by, BLOG_H, e->blogn, BROWS, e->btop);
+            if (t >= 0) e->btop = t;
+            return;
+        }
+        row = e->btop + (y - by - 1) / ECH;
         if (row < 0 || row >= e->blogn) return;
         e->bsel = row;
         if (ev == E_DBL) {
@@ -2088,15 +2256,32 @@ static void e_mouse_text(struct win *w, int ev, int x, int y, int cw, int ch) {
         }
         return;
     }
-    if (y >= top_of_pane) return;
-    t = ui_scroll_click(x, y, cw - 17, 0, top_of_pane, e->nl, e->rows, e->top);
+    if (y >= e->tah) return;
+    t = ui_scroll_click(x, y, cw - 17, 0, e->tah - (e->hb ? 16 : 0), e->nl, e->rows, e->top);
     if (t >= 0) { e_scrolled(e, t); return; }
-    line = e->top + (y - 3) / ECH;
-    if (line >= e->nl) line = e->nl - 1;
-    if (line < 0) line = 0;
+    if (e->hb && y >= e->tah - 16) {
+        t = ui_hscroll_click(x, y, 0, e->tah - 16, cw - 17, e->maxw + 1, e->cols, e->left);
+        if (t >= 0) e->left = t;
+        return;
+    }
     if (e->mode == M_VISUAL || e->mode == M_VLINE || e->mode == M_CMD) e->mode = M_NORMAL;
-    e->cy = line;
-    e->cx = e->left + (x - 4 - e->gw + ECW / 2) / ECW;
+    r = (y - 3) / ECH;
+    if (r < 0) r = 0;
+    if (!e->wrap) {
+        line = e->top + r;
+        if (line >= e->nl) line = e->nl - 1;
+        if (line < 0) line = 0;
+        e->cy = line;
+        e->cx = e->left + (x - 4 - e->gw + ECW / 2) / ECW;
+    } else {
+        // the row's line, and which of its wrapped rows
+        l = e->top;
+        while (l < e->nl - 1) { h = e_wh(e, l, e->cols); if (r < h) break; r = r - h; ++l; }
+        h = e_wh(e, l, e->cols);
+        if (r >= h) r = h - 1;
+        e->cy = l;
+        e->cx = r * e->cols + (x - 4 - e->gw + ECW / 2) / ECW;
+    }
     e_clamp(e);
     e->want = e->cx;
 }
@@ -2120,6 +2305,8 @@ void edit_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     if (ev == E_MOVE) {
         t = ui_scroll_drag(FW - 17, FHDR, y);
         if (t >= 0) { e->ftop = t; return; }
+        t = ui_scroll_drag(0, ch - 16, x);
+        if (t >= 0) { e->fleft = t; return; }
     } else if (x < FW + 2) { f_mouse(w, ev, x, y, ch); return; }
     e_mouse_text(w, ev, x - FW - 2, y, cw - FW - 2, ch);
 }
@@ -2138,8 +2325,10 @@ int edit_open(char *path) {
     edit_file_items[0] = "New"; edit_file_items[1] = "Open..."; edit_file_items[2] = "Save";
     edit_file_items[3] = "Save As..."; edit_file_items[4] = "-"; edit_file_items[5] = "Close"; edit_file_items[6] = 0;
     edit_build_items[0] = "Build   F5"; edit_build_items[1] = "Run   F6"; edit_build_items[2] = "Next Error   F8";
-    edit_build_items[3] = "Previous Error"; edit_build_items[4] = "Show Output   F4"; edit_build_items[5] = 0;
-    edit_view_items[0] = "Files   Ctrl+B"; edit_view_items[1] = "Syntax Colouring"; edit_view_items[2] = 0;
+    edit_build_items[3] = "Previous Error"; edit_build_items[4] = "Show Output   F4";
+    edit_build_items[5] = "Cancel Build"; edit_build_items[6] = 0;
+    edit_view_items[0] = "Files   Ctrl+B"; edit_view_items[1] = "Syntax Colouring";
+    edit_view_items[2] = "Word Wrap"; edit_view_items[3] = 0;
     edit_help_items[0] = "Keys"; edit_help_items[1] = 0;
     edit_menu_items[0] = edit_file_items; edit_menu_items[1] = edit_build_items;
     edit_menu_items[2] = edit_view_items; edit_menu_items[3] = edit_help_items;
@@ -2156,6 +2345,7 @@ int edit_open(char *path) {
     e->elog = (int *)ualloc(ERR_MAX * sizeof(int));
     e->vim = 1; e->nu = 1; e->mode = M_NORMAL; e->ecur = 0 - 1; e->bsel = 0 - 1;
     e->hl_line = 0 - 1;
+    e->lcx = 0 - 1; e->lcy = 0 - 1;
     e_insline(e, 0, "", 0);
     // the file pane: the top of the disk, every folder closed
     e->fshown = 1;
@@ -2193,11 +2383,13 @@ void edit_command(struct win *w, int menu, int item) {
         else if (item == 2) e_goto_error(w, e->ecur + 1);
         else if (item == 3) e_goto_error(w, e->ecur - 1);
         else if (item == 4) e->bshown = !e->bshown;
+        else if (item == 5) e_cancel(w);
         return;
     }
     if (menu == 2) {
         if (item == 0) e->fshown = !e->fshown;
         else if (item == 1) e->nosyn = !e->nosyn;
+        else if (item == 2) { e->wrap = !e->wrap; e->left = 0; }
         return;
     }
     msgbox(w, "Editor keys",

@@ -79,12 +79,15 @@ int *gc_root_true, *gc_root_false;
 int *gc_root_a, *gc_root_b, *gc_root_c;
 
 // The mark state for gc_ncells cells, or the end of the run (gc_addblock).
-void gc_markstate () {
-	if (!(gc_marks = malloc(gc_ncells)) ||
-	    !(gc_worklist = (int *)malloc(gc_ncells * sizeof(int)))) {
-		printf("c4sp: cannot allocate gc mark state for %d cells\n", gc_ncells);
-		exit(1);
+// The mark state for N cells, or 0 when there is not the memory for it.
+int gc_marksfor (int n) {
+	if (!(gc_marks = malloc(n))) return 0;
+	if (!(gc_worklist = (int *)malloc(n * sizeof(int)))) {
+		free(gc_marks);
+		gc_marks = 0;
+		return 0;
 	}
+	return 1;
 }
 
 // Add a block, thread its cells onto the free list, and resize the mark
@@ -112,10 +115,16 @@ int gc_addblock (int n) {
 	if (gc_worklist) free((char *)gc_worklist);
 	gc_marks = 0;
 	gc_worklist = 0;
-	if (!(base = malloc(n * CELL__Sz * sizeof(int)))) {
-		// no block: the arena stays as it was, and so must its mark state
-		if (gc_ncells == 0) return 1;
-		gc_markstate();
+	// The block, and the mark state for the arena with it. Without room
+	// for both the arena stays as it was -- with its own mark state, or
+	// the run cannot go on -- and the caller may ask for less (gc_collect).
+	base = (int *)malloc(n * CELL__Sz * sizeof(int));
+	if (!base || !gc_marksfor(gc_ncells + n)) {
+		if (base) free((char *)base);
+		if (gc_ncells && !gc_marksfor(gc_ncells)) {
+			printf("c4sp: cannot allocate gc mark state for %d cells\n", gc_ncells);
+			exit(1);
+		}
 		return 1;
 	}
 	memset(base, 0, n * CELL__Sz * sizeof(int));
@@ -134,8 +143,6 @@ int gc_addblock (int n) {
 	}
 	gc_ncells     = gc_ncells + n;
 	gc_free_count = gc_free_count + n;
-
-	gc_markstate();
 	return 0;
 }
 
@@ -363,7 +370,10 @@ void gc_collect () {
 	if (gc_free_count < gc_last_live * 3) {
 		i = gc_last_live * 4 - gc_ncells;
 		if (i < gc_ncells) i = gc_ncells;
-		gc_addblock(i);
+		// Where memory will not give that much -- c4sc inside C4IX's 64 MB
+		// machine -- half as much, and so on: more collections, but the run
+		// goes on, and stops only when not a cell is free.
+		while (i >= 256 && gc_addblock(i)) i = i / 2;
 	}
 
 	if (!gc_freelist) {

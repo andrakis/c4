@@ -78,6 +78,10 @@ NODE: n_cont                                   ;NODE
 NODE: n_empty                                  ;NODE
 
 NODE: n_ret    NFIELD: >expr                   ;NODE
+\ goto NAME; and NAME: STATEMENT (M7b). >body keeps n_if's offset, which
+\ is why the name's length comes after it; a goto has no body.
+NODE: n_goto    NFIELD: >lname NFIELD: >body NFIELD: >llen ;NODE
+NODE: n_labeled NFIELD: >lname NFIELD: >body NFIELD: >llen ;NODE
 \ A cast emits nothing and changes everything: (char *)p is the same
 \ address and a different type, and the type is what decides LC against
 \ LI, SC against SI, and whether p[i] scales by one or by eight.

@@ -427,6 +427,50 @@ HELP-RESET
    m >RES
    k ?DUP IF oADJ OP2, THEN ;M
 
+\ goto and labels (M7b), by name and per function, as c4lc-gen's g:ulab.
+\ A label's address is -1 until it is placed; a goto that gets there
+\ first leaves a branch mark, resolved when the label is placed. Placing
+\ a label tells LABEL@ about it, so a function ending on one gets the
+\ LEV that c4lc gives it.
+32 CONSTANT ULAB-MAX
+CREATE ULA ULAB-MAX CELLS ALLOT   CREATE ULU ULAB-MAX CELLS ALLOT
+CREATE ULADDR ULAB-MAX CELLS ALLOT
+VARIABLE ULN   0 ULN !
+256 CONSTANT UFWD-MAX
+CREATE UFL UFWD-MAX CELLS ALLOT   CREATE UFM UFWD-MAX CELLS ALLOT
+VARIABLE UFN   0 UFN !
+: ULAB-RESET ( -- )  0 ULN !  0 UFN ! ;
+: ULAB ( a u -- i ) {: a u -- i :}
+   ULN @ 0 ?DO
+      I CELLS ULU + @ u = IF
+         I CELLS ULA + @ a u BYTES= IF I UNLOOP EXIT THEN
+      THEN
+   LOOP
+   ULN @ ULAB-MAX < 0= IF ." c4fc: too many labels in one function" CR ABORT THEN
+   a ULN @ CELLS ULA + !  u ULN @ CELLS ULU + !  -1 ULN @ CELLS ULADDR + !
+   1 ULN +!  ULN @ 1- ;
+: ULAB-CHECK ( -- )
+   UFN @ 0 ?DO
+      I CELLS UFL + @ CELLS ULADDR + @ 0< IF
+         ." c4fc: goto to a label the function does not have: "
+         I CELLS UFL + @ DUP CELLS ULA + @ SWAP CELLS ULU + @ TYPE CR ABORT
+      THEN
+   LOOP ;
+:M STMT n_goto {: n | i t -- :}
+   n >lname @ n >llen @ ULAB TO i
+   i CELLS ULADDR + @ TO t
+   t 0< IF
+      UFN @ UFWD-MAX < 0= IF ." c4fc: too many gotos in one function" CR ABORT THEN
+      oJMP BR,  UFN @ CELLS UFM + !  i UFN @ CELLS UFL + !  1 UFN +!
+   ELSE oJMP t BACK, THEN ;M
+:M STMT n_labeled {: n | i -- :}
+   n >lname @ n >llen @ ULAB TO i
+   i CELLS ULADDR + @ 0< 0= IF
+      ." c4fc: duplicate label: " n >lname @ n >llen @ TYPE CR ABORT THEN
+   CHERE i CELLS ULADDR + !   CHERE LABEL@
+   UFN @ 0 ?DO  I CELLS UFL + @ i = IF I CELLS UFM + @ >RES THEN  LOOP
+   n >body @ STMT ;M
+
 \ A scalar takes SI even when it is a char, which is what c4cc did and
 \ what c4lc kept; an array is stored element by element, the elements
 \ past the initialiser list zeroed.

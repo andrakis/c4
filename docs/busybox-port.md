@@ -12,8 +12,12 @@ configuration below (§2.1).
 
 Status (2026-10-20):
 - the write-up is done and checked against the source;
-- M7b, the compiler, is under way. The preprocessor is done, and so are
-  `(void)` and unnamed parameters (§7).
+- M7b, the compiler, is under way (§7). Done so far:
+  - the preprocessor;
+  - `(void)` and unnamed parameters;
+  - `sizeof` of any expression and in constants;
+  - function-pointer declarators and calls through any expression;
+  - `goto`.
 - The source is not vendored into the repository yet; that is M7e.
 
 ## 1. The target
@@ -71,7 +75,8 @@ c4lc runs as `-O -conforming -P -I src/c4ix/libc/include`:
 - `-conforming` turns on the `\x` and octal escapes. Without it, `'\x41'` is
   49, not 65.
 
-**52 passed when this was written; 58 pass after the first M7b steps (2026-10-20).** It is a tracker and not a `make` gate yet. It
+**52 passed when this was written, and 69 pass after M7b's first six
+steps (2026-10-20).** It is a tracker and not a `make` gate yet. It
 becomes one, in `make test-c4lc`, once it passes. The kernel and libc gaps
 come from reading `src/c4ix/sys.c`, `vfs.c`, `loader.c` and `src/c4ix/libc`.
 
@@ -138,8 +143,9 @@ Priorities:
 | probe | construct | today | P | why Busybox needs it |
 |---|---|---|---|---|
 | `void_params` | `int f(void)`; unnamed parameters, `int f(int, char *)` | **DONE** (M7b) | P0 | It is the declaration of nearly every function in libbb. |
-| `fnptr_decl`, `fnptr_param`, `fnptr_typedef`, `fn_returning_fnptr`, `cast_fnptr` | `int (*fp)(int)`, function-pointer parameters, typedefs and casts | CFAIL | P0 | applet mains, `recursive_action` callbacks, `qsort` comparators, hush's builtin table |
-| `applet_table`, `array_of_ptr_to_fn_in_struct_member_call` | a struct member that is a function pointer | CFAIL: bad struct member name | P0 | hush's `struct built_in_command`, libbb's `llist`/action structs |
+| `fnptr_decl`, `fnptr_param`, `fnptr_typedef`, `cast_fnptr` | `int (*fp)(int)`, function-pointer parameters, typedefs and casts | **DONE** (M7b), with calls through any expression; `fnptr_typedef` now waits only on initializers | P0 | applet mains, `recursive_action` callbacks, `qsort` comparators, hush's builtin table |
+| `fn_returning_fnptr` | `int (*pick(void))(void)` | CFAIL | P2 | none in this configuration |
+| `applet_table`, `array_of_ptr_to_fn_in_struct_member_call` | a struct member that is a function pointer | **DONE** (M7b); both probes now wait only on aggregate initializers | P0 | hush's `struct built_in_command`, libbb's `llist`/action structs |
 | `typedef_enum`, `enum_typedef`, `enum_var`, `enum_local_decl` | `typedef enum {…} t;`, `enum e v;` inside a function | CFAIL (a global `enum e g;` passes) | P0 | Option bitmasks (`OPT_x`), hush's parse states |
 | `static_local` | a `static` local | CFAIL: "not implemented" | P0 | Common in libbb: buffers, one-time state |
 | `inline_only` | `inline` / `static inline` | CFAIL | P0 | `platform.h`'s `ALWAYS_INLINE`, many small helpers in headers |
@@ -179,10 +185,12 @@ values.
 
 | probe | construct | today | P |
 |---|---|---|---|
-| `goto`, `label_only` | labels and `goto` | CFAIL | P0: hush and libbb use `goto` for error exits throughout |
-| `sizeof_var`, `long_long` | `sizeof(scalar variable)` | CFAIL: "sizeof needs an array" (struct variables pass) | P0 |
-| `sizeof_expr`, `sizeof_deref`, `ptr_to_globals` | `sizeof x`, `sizeof(*p)`, `sizeof(G)` | CFAIL | P0: `xzalloc(sizeof(*p))` is libbb's idiom, and `G` is `(*ptr_to_globals)` |
-| `neg_array_assert`, `offsetof` | `sizeof` and `offsetof` inside constant expressions (array sizes) | CFAIL | P0: the `BUG_*_too_big` checks in every applet that has `struct globals` |
+| `goto`, `label_only` | labels and `goto` | **DONE** (M7b) | P0: hush and libbb use `goto` for error exits throughout |
+| `sizeof_var`, `long_long` | `sizeof(scalar variable)` | **DONE** (M7b) | P0 |
+| `sizeof_expr`, `sizeof_deref`, `ptr_to_globals` | `sizeof x`, `sizeof(*p)`, `sizeof(G)` | **DONE** (M7b) | P0: `xzalloc(sizeof(*p))` is libbb's idiom, and `G` is `(*ptr_to_globals)` |
+| (in `c4lc_m7.c`) | `sizeof(type)`, `sizeof("…")`, comparisons, `&&`, `\|\|` and `?:` in constant expressions | **DONE** (M7b) | P0: libbb.h's `char x[sizeof(off_t) == sizeof(uoff_t) ? 1 : -1]` |
+| `offsetof` | `offsetof(T, m)` | **DONE** (M7b) as an expression: libc.h defines it | P0 |
+| `neg_array_assert` | the size of a *struct* in a constant | CFAIL in c4lc, whose parser cannot lay out a struct; c4fc can | P2: no unit of this configuration does it |
 | `func_name`, `line_macros` | `__func__`, `__LINE__`, `__FILE__` | CFAIL | P1: cheap |
 | `builtin_expect` | `__builtin_expect` | CFAIL | P2: `likely()`/`unlikely()` can be defined away in `platform.h` |
 | `statement_expr` | `({ … })` | CFAIL | P2: 0 uses outside headers |
@@ -380,9 +388,11 @@ Each step lands with tests, and the next starts only when they are green.
    1. ~~`defined(X)`~~: done, with `#elif` and quoted includes;
    2. ~~variadic macros~~: done, with blue paint;
    3. ~~`(void)` parameter lists~~: done, with unnamed parameters;
-   4. `sizeof` on any expression and in constant expressions;
-   5. function-pointer declarators;
-   6. `goto`;
+   4. ~~`sizeof` on any expression and in constant expressions~~: done,
+      with comparisons, `&&`, `||` and `?:` in constants;
+   5. ~~function-pointer declarators~~: done, with calls through any
+      expression;
+   6. ~~`goto`~~: done;
    7. enum declarations;
    8. `static` locals;
    9. aggregate initializers, with `[i] =` designators, and `extern T x[]`;
@@ -393,6 +403,16 @@ Each step lands with tests, and the next starts only when they are green.
    Each turns its probes PASS, and gets gcc-checked tests in
    `src/tests/c4lc_*.c` like M4's. `run.sh` joins `make test-c4lc` when it
    reaches 113 of 113, or with the P2 probes listed as expected failures.
+
+   **c4fc** gets each item wherever its grammar reaches, and builds the
+   same image as c4lc, plain and `-O`, which is all `test-c4fc` holds it
+   to. Its `-minline` is a different inliner by design, and its images
+   differ for every file.
+
+   c4fc has no `typedef` at all, despite its README's old claim, so what
+   needs one is c4lc's alone for now. Its parser stops at `typedef` with
+   "a declaration was expected". Giving c4fc typedefs is a piece of work
+   of its own.
 2. **M7c, kernel:**
    1. `vfork`/`execve` with an environment;
    2. `lseek`;

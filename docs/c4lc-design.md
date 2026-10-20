@@ -468,6 +468,33 @@ output as the golden: `src/tests/c4lc_pp.c` for the preprocessor and
 - **`(void)` parameter lists and unnamed parameters.** `void` has a token
   kind of its own (`Void`) for this one purpose. The parser takes it
   wherever it takes `char`, which is what `void` is in c4.
+- **`sizeof` of any expression** (`2781e7a`):
+  - `sizeof x`, `sizeof(*p)`, `sizeof(G.buf)` and `sizeof("lit")`;
+  - `sizeof(T[n])` is `sizeof(T) * n`.
+  - The parser keeps `(sizeofa NAME)` for a name and makes
+    `(sizeofe E)` for anything else.
+  - The generator works the size out from the operand's type and never
+    evaluates it (`g:sizeofx`). A string is its bytes and the NUL, and an
+    array member is its storage.
+  - In constant expressions, `p:const` gains `sizeof(type)`,
+    `sizeof("lit")`, the comparisons, `&&`, `||` and `?:`. A struct's
+    size is not available there yet.
+- **Function pointers** (`c8b1bf0`):
+  - `T (*name[N])(params)` declares an `int` (or an array of them), since
+    c4 calls through any word. The parameter list is skipped.
+  - A call through any expression, `(calle TARGET ARGS…)`, compiles to
+    what a JSR would leave behind: the arguments, `IMM` of a return
+    label, `PSH`, the target in A, then `JMPA`. The return label is a
+    code patch, so the optimizers keep it.
+- **`goto` and labels**:
+  - `goto NAME;` and `NAME:` are recognised by their shape; `goto` is no
+    keyword.
+  - The labels are per function (`g:ulab`). A goto to a label that is
+    never placed is an error.
+  - In a function that has one, T1 drops no constant-condition branch,
+    since a goto may enter it. T3 and T4 never splice such a body.
+  - `g:scanstmt` counts the frame words declared inside a labelled
+    statement.
 
 ## 11. Measured results (2026-08-03)
 

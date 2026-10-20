@@ -591,7 +591,7 @@ DEFER STATEMENT                         \ blocks and statements nest
 CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
 : CASE-VALUE ( -- v )  CONST-EXPR ;
 
-: (STATEMENT) ( -- node ) {: | c b e i s nd lo hi -- n :}
+: (STATEMENT) ( -- node ) {: | c b e i s nd lo hi a u -- n :}
    TK Semi   = IF TNEXT n_empty 1 CELLS NEW EXIT THEN
    TK Lbrace = IF COMPOUND EXIT THEN
    TK If = IF
@@ -649,6 +649,22 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
    \ with nothing computed before it.
    TK Return   = IF
       TNEXT  TK Semi = IF 0 ELSE 1 EXPR THEN  Semi WANT n_ret N1 EXIT THEN
+   \ goto and labels (M7b). `goto` is no keyword, here or in c4lc, so
+   \ the statement is known by its shape: goto NAME ;  and  NAME :
+   \ A label just before the closing brace labels an empty statement.
+   TK Id = IF
+      TV TL S" goto" NAME=?  TP @ 1+ TOKS V@ t.kind @ Id = AND IF
+         TNEXT  TV TO a  TL TO u  TNEXT  Semi WANT   -1 FN-LABELS !
+         n_goto 4 CELLS NEW TO nd
+         a nd >lname !  0 nd >body !  u nd >llen !  nd EXIT
+      THEN
+      TP @ 1+ TOKS V@ t.kind @ Colon = IF
+         TV TO a  TL TO u  TNEXT TNEXT   -1 FN-LABELS !
+         TK Rbrace = IF n_empty 1 CELLS NEW ELSE STATEMENT THEN TO b
+         n_labeled 4 CELLS NEW TO nd
+         a nd >lname !  b nd >body !  u nd >llen !  nd EXIT
+      THEN
+   THEN
    1 EXPR Semi WANT n_expst N1 ;
 ' (STATEMENT) IS STATEMENT
 
@@ -762,6 +778,7 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
    at 1 AND IF CHERE CONSN @ CELLS CONS @ + !  1 CONSN +! THEN
    at 2 AND IF CHERE DESN  @ CELLS DESS @ + !  1 DESN  +! THEN
    TP @ TO bodytp                       \ for the inliner's size budget
+   0 FN-LABELS !
    BLOCK TO body                        \ parse first: ENT needs the count
    OPTIMIZE @ IF body FOLD TO body THEN
    \ Pass one of -O: who does this function reach, and is it a root?
@@ -791,7 +808,9 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
    INLINING @ TO inlsv
    a u ATK? IF 0 INLINING ! THEN
    a u FN-NAME!  ct rq FN-RET!
+   ULAB-RESET
    body STMT
+   ULAB-CHECK
    inlsv INLINING !
    NLOC @ entp 1+ CELLS CODE @ + !
    \ return emits its own LEV, so a function ending in one gets one LEV
@@ -815,6 +834,7 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
    a u S" main" NAME=? 0= AND
    TP @ bodytp - INLMAX @ <= AND
    sn 0> AND
+   FN-LABELS @ 0= AND                   \ a label spliced twice is placed twice
    IF
       y body base sn n va - IC,
       sn 0 ?DO  0 base I + ST[] y.nlen !  LOOP

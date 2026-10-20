@@ -200,6 +200,7 @@
 (define t:fstmt (lambda (s)
 	(begin
 		(define h (head s))
+		(if (= h 'labeled) (list 'labeled (t:second s) (t:fstmt (t:third s)))
 		(if (= h 'block) (t:cons 'block (t:fstmts (tail s) (list)))
 		(if (= h 'expr) (list 'expr (t:fexpr (t:second s)))
 		(if (= h 'if) (t:fif s)
@@ -215,7 +216,7 @@
 		(if (= h 'switch)
 			(t:cons 'switch (t:cons (t:fexpr (t:second s))
 				(t:fswitch (tail (tail s)) (list))))
-		s))))))))))))
+		s)))))))))))))
 ;; declaration initializer expressions fold too
 (define t:fdecls (lambda (ls acc)
 	(if (empty? ls) (t:reverse acc)
@@ -237,11 +238,27 @@
 			(if (= h 'case) it (if (= h 'default) it (t:fstmt it)))
 			acc))))))
 
+;; M7b: in a function with a label anywhere, a constant condition drops
+;; nothing -- a goto may enter the branch that looks dead. c4fc's FOLD
+;; keeps the same rule, through FN-LABELS.
+(define t:keeplabels false)
+(define t:haslabel? (lambda (e)
+	(if (= 'list (typeof e))
+		(if (if (= (head e) 'labeled) true (= (head e) 'goto)) true
+		(next t:haslabel?/l (tail e)))
+	false)))
+(define t:haslabel?/l (lambda (l)
+	(if (empty? l) false
+	(if (= 'list (typeof l))
+		(if (t:haslabel? (head l)) true
+		(next t:haslabel?/l (tail l)))
+	false))))
+
 ;; if with a constant condition keeps only the live branch
 (define t:fif (lambda (s)
 	(begin
 		(define c (t:fexpr (t:second s)))
-		(if (t:num? c)
+		(if (if (t:num? c) (if t:keeplabels false true) false)
 			(begin
 				(set! t:nfold (+ t:nfold 1))
 				(if (= (t:second c) 0)
@@ -255,7 +272,7 @@
 (define t:fwhile (lambda (s)
 	(begin
 		(define c (t:fexpr (t:second s)))
-		(if (if (t:num? c) (= (t:second c) 0) false)
+		(if (if (t:num? c) (if (= (t:second c) 0) (if t:keeplabels false true) false) false)
 			(begin
 				(set! t:nfold (+ t:nfold 1))
 				'(empty))
@@ -265,7 +282,7 @@
 	(begin
 		(define i (if (= (t:second s) nil) nil (t:fexpr (t:second s))))
 		(define c (if (= (t:third s) nil) nil (t:fexpr (t:third s))))
-		(if (if (t:num? c) (= (t:second c) 0) false)
+		(if (if (t:num? c) (if (= (t:second c) 0) (if t:keeplabels false true) false) false)
 			(begin
 				;; only the initializer's side effects remain
 				(set! t:nfold (+ t:nfold 1))
@@ -282,9 +299,11 @@
 		(define d (head ds))
 		(next t:folddecls (tail ds) (t:cons
 			(if (= (head d) 'func)
-				(t:qn (list 'func (t:second d) (t:third d) (index d 3)
-					(index d 4) (index d 5) (index d 6)
-					(t:cons 'block (t:fstmts (tail (index d 7)) (list)))) (index d 8))
+				(begin
+					(set! t:keeplabels (t:haslabel? (index d 7)))
+					(t:qn (list 'func (t:second d) (t:third d) (index d 3)
+						(index d 4) (index d 5) (index d 6)
+						(t:cons 'block (t:fstmts (tail (index d 7)) (list)))) (index d 8)))
 			d)
 			acc))))))
 
@@ -732,6 +751,7 @@
 	;; makes recursion impossible and keeps one pass from cascading, so
 	;; the pass has no fixpoint to reason about.
 	(if (= e nil) acc
+	(if (t:haslabel? e) (t:why nm "body has a label or a goto" acc)
 	(if (t:hassizeofa? e) (t:why nm "body has sizeof(identifier)" acc)
 	(if (t:hascall? e) (t:why nm "body calls something" acc)
 	(if (> (t:size e) t:inlinemax)
@@ -740,7 +760,7 @@
 		(if tree:inlinereport
 			(print ";;     YES:" nm "size" (t:size e) "- called" (t:ncalls nm))
 		nil)
-		(t:cons (list nm ps (if (= h 'return) 'value 'stmt) e) acc))))))))
+		(t:cons (list nm ps (if (= h 'return) 'value 'stmt) e) acc)))))))))
 
 (define t:hassizeofa? (lambda (e)
 	(if (= 'list (typeof e))
@@ -1017,6 +1037,8 @@
 		(if (t:member? nm taken) acc
 		(if (empty? ss) acc
 		(if (t:selfcalls? nm (index d 7)) (t:why nm "recursive" acc)
+		;; a label spliced twice would be placed twice (M7b)
+		(if (t:haslabel? (index d 7)) (t:why nm "body has a label or a goto" acc)
 		(if (> (t:size (index d 7)) t:inline4max)
 			(t:why nm (+ "body too big: " (+ "" (t:size (index d 7)))) acc)
 		(begin
@@ -1028,7 +1050,7 @@
 						  (t:nret (index d 7))
 						  (t:splicable? d ss)
 						  (t:allvalued? (index d 7))
-						  (t:second d)) acc))))))))))))
+						  (t:second d)) acc)))))))))))))
 
 (define t:cands4 (lambda (ds taken acc)
 	(if (empty? ds) acc

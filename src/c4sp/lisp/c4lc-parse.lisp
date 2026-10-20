@@ -830,12 +830,30 @@
 		(if (= k 'Lbrace) (p:block)
 		(if (= k 'Semi) (begin (p:advance) '(empty))
 		(if (= k 'Do) (p:dostmt)
+		;; goto and labels (M7b). `goto` is no keyword in this lexer or
+		;; c4fc's, so the statement is known by its shape: goto NAME ;
+		(if (if (= k 'Id) (if (= (p:value) "goto") (= (head (head (tail p:toks))) 'Id) false) false)
+			(begin
+				(p:advance)
+				(define gn (p:value))
+				(p:advance)
+				(p:expect 'Semi "semicolon after goto")
+				(list 'goto gn))
+		;; NAME : statement. A label just before the closing brace (C23
+		;; allows it, and Busybox writes `out: ; }` and `out: }` both)
+		;; labels an empty statement.
+		(if (if (= k 'Id) (= (head (head (tail p:toks))) 'Colon) false)
+			(begin
+				(define ln (p:value))
+				(p:advance)
+				(p:advance)
+				(list 'labeled ln (if (= (p:kind) 'Rbrace) '(empty) (p:stmt))))
 		(if (p:declstart?)
 			(p:cons 'declstmt (p:localline))
 		(begin
 			(define e (p:expr 1))
 			(p:expect 'Semi "semicolon")
-			(list 'expr e))))))))))))))))
+			(list 'expr e))))))))))))))))))
 
 (define p:dostmt (lambda ()
 	(begin

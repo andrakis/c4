@@ -87,6 +87,35 @@
 ;; which is exactly the shape `break` already has, so it reuses the
 ;; machinery `break` uses rather than inventing any.
 ;;
+;; goto's labels (M7b), by name and per function: the code label made
+;; on first mention, whether that is the goto or the label; the names
+;; placed so far; and the names some goto wants. g:function resets them
+;; and refuses a goto to a label the function never places.
+(define g:ulabs (list))
+(define g:uplaced (list))
+(define g:uwanted (list))
+(define g:ulab (lambda (n)
+	(begin
+		(define e (g:lookup n g:ulabs))
+		(if e (g:second e)
+		(begin
+			(define l (g:newlabel))
+			(set! g:ulabs (g:cons (list n l) g:ulabs))
+			l)))))
+(define g:uplace! (lambda (n)
+	(begin
+		(if (g:inlist? n g:uplaced) (g:die (+ "duplicate label: " n)) nil)
+		(set! g:uplaced (g:cons n g:uplaced))
+		(g:label! (g:ulab n)))))
+(define g:inlist? (lambda (x l)
+	(if (empty? l) false (if (= (head l) x) true (next g:inlist? x (tail l))))))
+(define g:ucheck (lambda (l)
+	(if (empty? l) nil
+	(begin
+		(if (g:inlist? (head l) g:uplaced) nil
+			(g:die (+ "goto to a label the function does not have: " (head l))))
+		(next g:ucheck (tail l))))))
+
 ;; The tree pass cannot name a generator label, so it names its own
 ;; SPLICE, and the mapping is made here on first mention -- which may be
 ;; the jump rather than the label, since the jump is always forward.
@@ -1250,7 +1279,8 @@
 		(if (= h 'dowhile) (g:scanstmt (g:second s))
 		(if (= h 'for) (g:scanstmt (index s 4))
 		(if (= h 'switch) (g:scanlist (tail (tail s)) 0)
-		0))))))))))
+		(if (= h 'labeled) (g:scanstmt (g:third s))
+		0)))))))))))
 (define g:scanlist (lambda (l n)
 	(if (empty? l) n
 	(next g:scanlist (tail l) (+ n (g:scanstmt (head l)))))))
@@ -1297,8 +1327,16 @@
 		(if (= h 'ijmp)
 			(g:emit (list 'JMP (list 'code (g:ilab (g:second s)))))
 		(if (= h 'ilabel) (g:label! (g:ilab (g:second s)))
+		(if (= h 'goto)
+			(begin
+				(set! g:uwanted (g:cons (g:second s) g:uwanted))
+				(g:emit (list 'JMP (list 'code (g:ulab (g:second s))))))
+		(if (= h 'labeled)
+			(begin
+				(g:uplace! (g:second s))
+				(g:stmt (g:third s)))
 		(if (= h 'switch) (g:switchstmt s)
-		(g:die (+ "bad statement node: " (+ "" h))))))))))))))))))))
+		(g:die (+ "bad statement node: " (+ "" h))))))))))))))))))))))
 (define g:stmts (lambda (l)
 	(if (empty? l) nil
 	(begin
@@ -1939,7 +1977,11 @@
 		(g:label! (index s 3))
 		(g:emit (list 'ENT (+ (- fini g:loc) extra)))
 		(g:localinits ls)
+		(set! g:ulabs (list))
+		(set! g:uplaced (list))
+		(set! g:uwanted (list))
 		(g:stmts (tail body))
+		(g:ucheck g:uwanted)
 		(if (= (head (head g:code)) 'LEV) nil (g:emit '(LEV)))
 		(set! g:syms oldsyms)
 		(if (= 1 (bit:and attrs 1))

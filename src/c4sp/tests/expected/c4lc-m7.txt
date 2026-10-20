@@ -13,3 +13,5 @@ fnptr-member -7 -8 neg
 fnptr-array 6 -3 -9 -2
 fnptr-cast 20
 fnptr-sizeof 1
+goto 10 100 23 7
+goto-end 5 1 5 3

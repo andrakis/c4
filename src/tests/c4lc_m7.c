@@ -68,6 +68,62 @@ int fnptrs(void) {
     return 0;
 }
 
+// goto and labels (M7b): backward, forward, out of nested loops, into a
+// branch -O must not drop, and labels before `;` and before `}`
+int gotos(int n) {
+    int i; int s;
+    i = 0; s = 0;
+again:
+    s = s + i;
+    i++;
+    if (i < n) goto again;
+    if (s > 100) goto big;
+    goto done;
+big:
+    s = 100;
+done:
+    return s;
+}
+int nested_out(void) {
+    int i; int j; int hit;
+    hit = -1;
+    for (i = 0; i < 5; i++)
+        for (j = 0; j < 5; j++)
+            if (i * j == 6) { hit = i * 10 + j; goto out; }
+out:
+    return hit;
+}
+int dead_branch(void) {
+    int r;
+    r = 1;
+    goto inside;
+    if (0) {
+inside:
+        r = 7;
+    }
+    return r;
+}
+int label_at_end(int x) {
+    if (x) goto end;
+    x = 5;
+end:
+    ;
+    return x;
+}
+void label_last(int *p) {
+    if (*p > 3) goto skip;
+    *p = 3;
+skip:
+}
+int labels(void) {
+    int a; int b;
+    a = 5; b = 1;
+    label_last(&a); label_last(&b);
+    printf("goto %d %d %d %d\n", gotos(5), gotos(20), nested_out(), dead_branch());
+    printf("goto-end %d %d %d %d\n", label_at_end(0), label_at_end(1), a, b);
+    return 0;
+}
+
 int main(void) {
     nothing();
     printf("void-params %d %d %s\n", seven(), add(2, 3), pick("xyz", 1));
@@ -77,5 +133,6 @@ int main(void) {
     printf("const-sizeof %d %d\n", sizeof cbuf == 6, sizeof carr == 8 * sizeof(int));
     printf("const-ops %d %d %d %d %d %d\n", E_ONE, E_AND, E_LT, E_LE, E_NE, E_COND);
     fnptrs();
+    labels();
     return 0;
 }

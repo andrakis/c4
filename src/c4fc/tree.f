@@ -58,6 +58,12 @@ VARIABLE NFOLD   0 NFOLD !
 :M FOLD n_case    ;M
 :M FOLD n_default ;M
 :M FOLD n_break   ;M
+:M FOLD n_goto    ;M
+:M FOLD n_labeled {: n -- n :}  n >body @ FOLD n >body !  n ;M
+\ M7b: set while a function with a label or a goto is parsed. Then a
+\ constant condition drops nothing, since a goto may enter the branch
+\ that looks dead; c4lc-tree's t:keeplabels is the same rule.
+VARIABLE FN-LABELS   0 FN-LABELS !
 :M FOLD n_cont    ;M
 :M FOLD n_empty   ;M
 
@@ -140,7 +146,7 @@ VARIABLE NFOLD   0 NFOLD !
 
 :M FOLD n_if {: n | c -- n :}
    n >cond @ FOLD DUP n >cond ! TO c
-   c NUM? IF
+   c NUM? FN-LABELS @ 0= AND IF
       FOLDED
       c >val @ IF n >body @ FOLD EXIT THEN
       n >else @ ?DUP IF FOLD ELSE EMPTY-STMT THEN EXIT THEN
@@ -152,7 +158,7 @@ VARIABLE NFOLD   0 NFOLD !
 \ it, so nothing outside can be left dangling.
 :M FOLD n_while {: n | c -- n :}
    n >cond @ FOLD DUP n >cond ! TO c
-   c NUM? c >val @ 0= AND IF FOLDED EMPTY-STMT EXIT THEN
+   c NUM? c >val @ 0= AND FN-LABELS @ 0= AND IF FOLDED EMPTY-STMT EXIT THEN
    n >body @ FOLD n >body !  n ;M
 
 \ do/while runs its body at least once, so only the parts fold.
@@ -163,7 +169,7 @@ VARIABLE NFOLD   0 NFOLD !
 :M FOLD n_for {: n | c i -- n :}
    n >init @ ?DUP IF FOLD DUP n >init ! THEN
    n >cond @ ?DUP IF FOLD DUP n >cond ! TO c ELSE 0 TO c THEN
-   c IF c NUM? c >val @ 0= AND IF
+   c IF c NUM? c >val @ 0= AND FN-LABELS @ 0= AND IF
       FOLDED
       n >init @ ?DUP IF n_expst N1 ELSE EMPTY-STMT THEN EXIT THEN THEN
    n >step @ ?DUP IF FOLD n >step ! THEN
@@ -280,6 +286,8 @@ GENERIC: REFS ( node -- )
 :M REFS n_case    DROP ;M
 :M REFS n_default DROP ;M
 :M REFS n_break   DROP ;M
+:M REFS n_goto    DROP ;M
+:M REFS n_labeled >body @ REFS ;M
 :M REFS n_cont    DROP ;M
 :M REFS n_empty   DROP ;M
 

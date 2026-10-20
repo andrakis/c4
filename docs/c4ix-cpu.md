@@ -344,3 +344,23 @@ Found on the way:
 
 Under conspin, the work in `sched_trap` itself is now about 300 cycles
 per syscall and `sys_dispatch` about 40.
+
+### 8. The idle loop naps straight to its next deadline
+
+A task reading the console waits for a keystroke, which comes with no
+deadline. While one does, the idle task keeps its backoff, doubling the
+nap from 100 µs to 20 ms. With nobody reading the console, nothing a
+task waits for can come from outside, and the nap goes straight to the
+next sleeper's deadline: one pass where the backoff took about seven to
+cover a desktop's 15 ms sleep. That nap is capped at 100 ms, so a Ctrl-C
+is still seen promptly on a host whose sleep a signal does not cut
+short.
+
+| per 5 s | step 7 | step 8 |
+|---|---|---|
+| desk1 | 1.69M cycles | 1.61M |
+| idle | 5.03M cycles | 4.94M |
+
+The gain is small because step 5 had already taken the idle task out of
+the busy path. What is left of an idle desktop is mostly the desktop
+itself, which step 11 is for.

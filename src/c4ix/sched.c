@@ -24,7 +24,11 @@
 
 // Idle backoff, in microseconds: how long the idle task sleeps when
 // every other task is parked waiting on the outside world.
-enum { IDLE_NAP_MIN = 100, IDLE_NAP_MAX = 20000 };
+// With nobody reading the console, nothing can come from outside that a
+// task is waiting for, and the idle task naps straight to the next
+// deadline -- but no longer than IDLE_NAP_LONG, so a Ctrl-C, or a host
+// whose sleep does not end early for one, is still seen promptly.
+enum { IDLE_NAP_MIN = 100, IDLE_NAP_MAX = 20000, IDLE_NAP_LONG = 100000 };
 
 struct task *sched_cur;
 // The context the machine booted in, which waits for the end once the
@@ -839,6 +843,17 @@ void sched_stop() {
 // The idle task: what runs when nothing else can, which is to say
 // almost always on an idle desktop. It returns -- and the machine shuts
 // down -- once no task is left alive but the kernel, which waits on it.
+// A task parked on console input: what a keystroke would wake.
+static int sched_console_reader() {
+    struct task *t;
+    t = task_head;
+    while (t) {
+        if (sched_reading_console(t)) return 1;
+        t = t->next;
+    }
+    return 0;
+}
+
 static int sched_idle(int argc, int argv) {
     int nap, due, budget, ms;
 
@@ -850,18 +865,22 @@ static int sched_idle(int argc, int argv) {
         // can only wait on one.
         if (sched_nzombies) task_reap_orphans();
         // The idle task runs only when nothing else can: everything alive
-        // is parked on something that has not arrived -- console input,
-        // usually. Nothing can make progress until the outside world
-        // does, and yielding in a tight loop would burn a core waiting
-        // for a keystroke. So back off the way c4sh does: double the nap
-        // up to a ceiling, which is well inside human reaction time, so
-        // the prompt still feels immediate. (It used to drop back to the
-        // floor when a pass found a task ready, which since the idle task
-        // runs only when none is, it never does; and dropping back
-        // whenever anything else had run made a desktop that wakes every
-        // 15 ms cost twice the cycles, in short naps.)
-        nap = nap ? nap * 2 : IDLE_NAP_MIN;
-        if (nap > IDLE_NAP_MAX) nap = IDLE_NAP_MAX;
+        // is parked on something that has not arrived, and nothing can
+        // make progress until the clock or the outside world moves.
+        //
+        // A task reading the console is waiting for a keystroke, which
+        // comes with no deadline to sleep to, so then the nap backs off
+        // the way c4sh does: double it up to a ceiling well inside human
+        // reaction time, so the prompt still feels immediate. (It used to
+        // drop back to the floor when a pass found a task ready, which
+        // since the idle task runs only when none is, it never does.)
+        // Nobody reading it, the next thing that can happen is a
+        // sleeper's deadline, and the nap goes straight there: one pass
+        // where the backoff took seven to cover a desktop's 15 ms sleep.
+        if (sched_console_reader()) {
+            nap = nap ? nap * 2 : IDLE_NAP_MIN;
+            if (nap > IDLE_NAP_MAX) nap = IDLE_NAP_MAX;
+        } else nap = IDLE_NAP_LONG;
         // A sleeping task has a deadline, so the backoff must not
         // overshoot it: a 1ms sleep should not wait out a 20ms
         // nap. Milliseconds in, microseconds out.

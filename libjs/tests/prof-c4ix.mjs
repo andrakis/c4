@@ -12,7 +12,7 @@
 //         conspin  `spin` running at the console (PROG= to run another)
 //         desk1    the desktop with its Command Prompt, idle
 //         idle     the desktop with four windows, idle
-//         spin     ... and spin running in the Command Prompt
+//         spin     ... and spin running in the Command Prompt (PROG= another)
 //   env   KERNEL= another kernel image   USERIMGS= images to break down
 //         CH= chunk size (cycles)   TOP= functions listed   SCREEN=1 the text
 //         on screen   TRACE=1 Task Manager's rows as they change
@@ -76,7 +76,7 @@ if (MODE === 'shell' || MODE === 'nowait' || MODE === 'conspin') {
   if (MODE !== 'desk1') { start('Task Manager'); start('Notepad'); start('Calculator'); }
   if (MODE === 'spin') {
     const t = find(/^Command Prompt - task/).filter(t => t.y < SH - TASK_H)[0]; if (t) click(t.x + 40, t.y + 3); else log('no prompt title');
-    type('c4ix-spin.c4r 1000\n'); settle();
+    type((process.env.PROG || 'c4ix-spin.c4r 1000') + '\n'); settle();
   }
   settle();
 }

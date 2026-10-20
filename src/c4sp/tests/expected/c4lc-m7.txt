@@ -15,3 +15,5 @@ fnptr-cast 20
 fnptr-sizeof 1
 goto 10 100 23 7
 goto-end 5 1 5 3
+enum 6 5 0 60 4 2
+enum-size 1 1

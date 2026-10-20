@@ -205,7 +205,7 @@ VARIABLE CTY   1 CTY !
 DEFER EXPR                              \ ( lev -- node )
 
 : KIND-TYPE? ( k -- f ) {: k -- f :}
-   k Int = k Char = OR k Void = OR k Struct = OR k Union = OR
+   k Int = k Char = OR k Void = OR k Struct = OR k Union = OR k Enum = OR
    k Const = OR k Volatile = OR k Signed = OR k Unsigned = OR
    k Short = OR k Long = OR ;
 : TYPE? ( -- f )  TK KIND-TYPE? ;
@@ -245,6 +245,23 @@ DEFER EXPR                              \ ( lev -- node )
 
 \ Any run of the specifiers C allows -- const, volatile, signed,
 \ unsigned, short, long, int, char, a struct or union -- in any order.
+\ enum [TAG] [{ A, B = 5, C }] as a type specifier (M7b): an int, whose
+\ constants the body defines -- c4lc-parse's p:enumspec.
+: ENUM-SPEC ( -- ) {: | a u v -- :}
+   Enum WANT
+   TK Id = IF TNEXT THEN                \ an optional tag, which c4 ignores
+   TK Lbrace = IF
+      TNEXT  0 TO v
+      BEGIN TK Rbrace <> WHILE
+         TV TO a  TL TO u  Id WANT
+         TK Assign = IF TNEXT CONST-EXPR TO v THEN
+         a u c_const v t_int 0 0 ST,
+         v 1+ TO v
+         TK Comma = IF TNEXT THEN
+      REPEAT
+      Rbrace WANT
+   THEN ;
+
 : (BASE-TYPE) ( -- t ) {: | k a u q sg un sh lg ch it st -- t :}
    0 TO q  0 TO sg  0 TO un  0 TO sh  0 TO lg  0 TO ch  0 TO it  -1 TO st
    BEGIN
@@ -265,8 +282,11 @@ DEFER EXPR                              \ ( lev -- node )
          k 0< IF a u ST-NEW TO k THEN
          TK Lbrace = IF k PARSE-MEMBERS THEN
          k ST-TYPE TO st  1
+      ELSE
+      TK Enum = st 0< AND
+         sg un + sh + lg + ch + it + 0= AND IF ENUM-SPEC  1 TO it  1
       ELSE 0
-      THEN THEN THEN THEN THEN THEN THEN THEN THEN
+      THEN THEN THEN THEN THEN THEN THEN THEN THEN THEN
    WHILE REPEAT
    q BQ !
    st 0< 0= IF st EXIT THEN
@@ -842,21 +862,6 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
    THEN
    base STN ! ;                         \ parameters and locals go out of scope
 
-\ enum { A, B = 5, C };  -- constants, folded to literals where used.
-: ENUM-DECL {: | a u v -- :}
-   Enum WANT
-   TK Id = IF TNEXT THEN                \ an optional tag, which c4 ignores
-   Lbrace WANT
-   0 TO v
-   BEGIN TK Rbrace <> WHILE
-      TV TO a  TL TO u  Id WANT
-      TK Assign = IF TNEXT CONST-EXPR TO v THEN
-      a u c_const v t_int 0 0 ST,
-      v 1+ TO v
-      TK Comma = IF TNEXT THEN
-   REPEAT
-   Rbrace WANT  Semi WANT ;
-
 \ static is attrs 8, and extern declares without defining. __attribute__
 \ ((constructor)) and ((destructor)) are 1 and 2, and also put the
 \ function's code index in the image's constructor or destructor list --
@@ -896,7 +901,6 @@ CREATE IVAL IVMAX CELLS ALLOT
    LOOP ;
 
 : DECL {: | a u ct dt t n sz ag sc at y ivn off es fa fu fr fs fx fk bq q ce fn -- :}
-   TK Enum = IF ENUM-DECL EXIT THEN
    STORAGE TO sc
    TYPE? 0= IF ." c4fc: a declaration was expected" CR ABORT THEN
    BASE-TYPE TO ct   BQ @ TO bq

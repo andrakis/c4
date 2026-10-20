@@ -303,6 +303,12 @@
 			(begin
 				(define st (p:structtype))
 				(next p:spec d q sg un sh lg ch it st))
+		;; enum [TAG] [{ ... }] is a type wherever one may be written
+		;; (M7b): an int, whose constants the body defines on the way
+		(if (if bare (= k 'Enum) false)
+			(begin
+				(p:enumspec)
+				(next p:spec d q sg un sh lg ch 1 bt))
 		(if (if bare (= k 'Id) false)
 			(begin
 				(define a (p:assoc (p:value) p:typedefs))
@@ -311,7 +317,7 @@
 						(p:advance)
 						(next p:spec d (bit:or q (index a 2)) sg un sh lg ch it (p:second a)))
 				(p:specdone d q sg un sh lg ch it bt)))
-		(p:specdone d q sg un sh lg ch it bt))))))))))))))
+		(p:specdone d q sg un sh lg ch it bt)))))))))))))))
 (define p:specdone (lambda (d q sg un sh lg ch it bt)
 	(begin
 		(set! p:bq q)
@@ -336,6 +342,7 @@
 		(if (= k 'Void) true
 		(if (= k 'Struct) true
 		(if (= k 'Union) true
+		(if (= k 'Enum) true
 		(if (= k 'Const) true
 		(if (= k 'Volatile) true
 		(if (= k 'Signed) true
@@ -344,7 +351,7 @@
 		(if (= k 'Long) true
 		(if (= k 'Id)
 			(if (p:assoc (p:second tok) p:typedefs) true false)
-		false)))))))))))))))
+		false))))))))))))))))
 
 ;; consume the declarator's stars, each followed by its own qualifiers:
 ;; ty -> ty + 2 per star, and the mask q of the base moves up a level
@@ -1073,6 +1080,13 @@
 				(p:advance)
 				(p:cons 'enum (p:enumbody 0 (list))))
 		(list 'enum)))))
+;; enum as a type specifier: the keyword, an optional tag, an optional
+;; body, whose constants p:enumbody defines
+(define p:enumspec (lambda ()
+	(begin
+		(p:advance)
+		(if (= (p:kind) 'Id) (p:advance) nil)
+		(if (= (p:kind) 'Lbrace) (begin (p:advance) (p:enumbody 0 (list))) nil))))
 (define p:enumbody (lambda (i acc)
 	(if (= (p:kind) 'Rbrace)
 		(begin (p:advance) (p:reverse acc))

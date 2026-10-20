@@ -124,6 +124,20 @@ int labels(void) {
     return 0;
 }
 
+// enum as a type anywhere (M7b): a global, a local, a member, a
+// parameter, a cast, sizeof, and an enum with a body inside a function
+enum colour { RED, GREEN = 5, BLUE };
+enum colour gcol;
+struct paint { enum colour c; int n; };
+int shade(enum colour c) { return c * 10; }
+int enums(void) {
+    enum colour c; struct paint p; enum { LOCAL_A = 3, LOCAL_B } lv;
+    c = BLUE; gcol = GREEN; p.c = RED; p.n = 1; lv = LOCAL_B;
+    printf("enum %d %d %d %d %d %d\n", c, gcol, p.c, shade(BLUE), lv, (int)(enum colour)2);
+    printf("enum-size %d %d\n", sizeof(enum colour) == sizeof(int), sizeof c == sizeof(int));
+    return 0;
+}
+
 int main(void) {
     nothing();
     printf("void-params %d %d %s\n", seven(), add(2, 3), pick("xyz", 1));
@@ -134,5 +148,6 @@ int main(void) {
     printf("const-ops %d %d %d %d %d %d\n", E_ONE, E_AND, E_LT, E_LE, E_NE, E_COND);
     fnptrs();
     labels();
+    enums();
     return 0;
 }

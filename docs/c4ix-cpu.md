@@ -364,3 +364,18 @@ short.
 The gain is small because step 5 had already taken the idle task out of
 the busy path. What is left of an idle desktop is mostly the desktop
 itself, which step 11 is for.
+
+### 9. `ucycles()` without a trap
+
+libc4ix's `ucycles()` was a syscall, `SYS_CYCLES`, the one a busy loop
+makes most, for what one instruction answers: the cycle opcode is
+allowed behind protected mode. It is now `__c4_cycles()`. `SYS_CYCLES`
+stays for programs already linked against it.
+
+With spin at the console, top gives spin 98% of the machine and System
+2%; at step 5 they were 19% and 80%.
+
+| per 5 s (`prof-c4ix`) | baseline | step 9 |
+|---|---|---|
+| conspin: kernel / user | 97.4% / 2.6% | 1.4% / 98.6% |
+| spin under the desktop: kernel / user | 75.7% / 24.3% | 1.8% / 98.2% |

@@ -70,7 +70,11 @@ int *ualloc(int bytes)                { return (int *)__c4ix_syscall(SYS_SBRK, b
 int udup(int fd)                      { return __c4ix_syscall(SYS_DUP, fd, 0, 0); }
 int udup2(int oldfd, int newfd)       { return __c4ix_syscall(SYS_DUP2, oldfd, newfd, 0); }
 int upipe(int *fds)                   { return __c4ix_syscall(SYS_PIPE, (int)fds, 0, 0); }
-int ucycles()                         { return __c4ix_syscall(SYS_CYCLES, 0, 0, 0); }
+// The cycle opcode is allowed behind protected mode, so this needs no
+// trap: it was a syscall, the commonest one a busy loop makes, at about
+// 400 cycles a call for what one instruction answers. SYS_CYCLES stays
+// for the programs already linked against it.
+int ucycles()                         { return __c4_cycles(); }
 int utaskinfo(int i, int *out)        { return __c4ix_syscall(SYS_TASKINFO, i, (int)out, 0); }
 int ucpustat(int *h, int *r, int max)  { return __c4ix_syscall(SYS_CPUSTAT, (int)h, (int)r, max); }
 int uchdir(char *path)                { return __c4ix_syscall(SYS_CHDIR, (int)path, 0, 0); }

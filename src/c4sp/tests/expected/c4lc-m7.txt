@@ -34,3 +34,5 @@ attr 25 8 2 113 xy 3
 scopy 5 hi -2 8 9
 scopy2 5 hi 3 gl 1 2
 func whoami funcname 9
+gaddr 5 7 3 q
+gtab 5 7 2 7 q 9

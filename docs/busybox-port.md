@@ -180,7 +180,7 @@ Priorities:
 | `designated` | `[3] = 2`; `.x = 1` | **DONE** (M7b), both | P0 for `[i] =` (18 uses, all in hush); P2 for `.x =` (0 uses) |
 | `extern_arr` | `extern const char t[];` without a size | **DONE** (M7b) | P0: `bb_msg_*`, `applet_names`, `bb_common_bufsiz1` are all declared this way |
 | `c4lc_m7ext_*.c` | the address of a function in **another unit** inside data | **DONE** (M7b): patch type -5 (`C4R_PTYPE_DSYM`, a data byte offset and a symbol id) in the object, which c4rlink resolves to -3 or -4. A shared library's symbol in data is an error until the C4IX loader patches data | P0 for the link: `applet_main[]` sits in appletlib.c and names mains defined in each applet's file |
-| `global_addr_var`, `global_ptr_init` | `int *p = &x;` in a global | CFAIL: an initializer may name only a function | P1 |
+| `global_addr_var`, `global_ptr_init` | `int *p = &x;` and `char *p = buf;` in a global, a table or a struct, also of another unit's data | **DONE** (M7b): a data-to-data patch, or type -5 for extern data | P1 |
 | `local_struct_init` | `struct pt p = {3, 4};` in a function | CFAIL: local aggregates take numbers only | P1 |
 | `compound_lit` | `(struct pt){3, 4}` | CFAIL | P2: 0 uses |
 

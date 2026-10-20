@@ -967,10 +967,6 @@ CREATE IVAL IVMAX CELLS ALLOT
       ELSE v off I CELLS + ID-! THEN THEN
    LOOP ;
 
-\ Where each uninitialised global lands, by its number; PLACE-GLOBALS fills
-\ it in, and DECL does for a declaration a later definition initialises.
-8192 CONSTANT GMAX
-CREATE GOFF GMAX CELLS ALLOT
 \ a record DECL has retired: no class anything walks, and no name
 7 CONSTANT c_gone
 
@@ -1024,6 +1020,27 @@ DEFER INIT-ITEM
    INIT-LEAF ;
 ' (INIT-ITEM) IS INIT-ITEM
 
+\ a data word at SLOT holding global Y's address (M7b), c4lc-gen's
+\ g:fnpatch: an extern's symbol, an initialised global's offset, or an
+\ uninitialised one's number, for PLACE-GLOBALS to place
+: GLOBAL-PAT ( slot y -- ) {: o y -- :}
+   y y.class @ c_extg = IF o y y.val @ SYMPAT, EXIT THEN
+   y y.ini @ IF o y y.val @ STRPAT, ELSE o y y.val @ GLOPAT, THEN ;
+: GLOBAL? ( y -- f )  y.class @ DUP c_glo = SWAP c_extg = OR ;
+\ a name in a scalar's initializer: -> fr fk gy, where fr is a function's
+\ code address (-1 none, -3 an extern's, then fk is its number) and gy a
+\ global's record (0 none)
+: INIT-ADDR ( a u -- fr fk gy ) {: a u | y -- fr fk gy :}
+   a u ST-FIND TO y
+   y 0= IF ." c4fc: an initialiser can name only a function or a global" CR ABORT THEN
+   y GLOBAL? IF -1 0 y EXIT THEN
+   COLLECT @ IF a u ROOT, THEN          \ a global holding &fn is a root
+   y y.class @ c_ext = IF -3 y y.val @ 0 EXIT THEN
+   COLLECT @ y y.class @ c_fun = AND y y.val @ 0< AND IF 0 0 0 EXIT THEN   \ pass one
+   y y.class @ c_fun <> y y.val @ 0< OR IF
+      ." c4fc: & initialiser requires a defined function or a global" CR ABORT THEN
+   y y.val @ 0 0 ;
+
 \ how many elements a brace list fills: designators move the index
 : AGG-COUNT ( node -- n ) {: nd | v i mx j e -- n :}
    nd CELL+ @ TO v   0 TO i   0 TO mx
@@ -1054,13 +1071,14 @@ CREATE SQ SQ-MAX CELLS ALLOT   VARIABLE SQN   VARIABLE SQI
    k 2 = IF
       AMODE @ 0= IF EXIT THEN
       nd CELL+ @ nd 2 CELLS + @ ST-FIND TO y
+      y IF y GLOBAL? IF  o y GLOBAL-PAT  EXIT THEN THEN
       y IF y y.class @ c_ext = IF  o y y.val @ SYMPAT,  EXIT THEN THEN
       \ pass one of -O or -c makes its externs only at its end, and its
       \ output is thrown away: a prototype stands in for now
       COLLECT @ IF y IF y y.class @ c_fun = IF
          nd CELL+ @ nd 2 CELLS + @ ROOT,  EXIT THEN THEN THEN
       y IF y y.class @ c_fun <> y y.val @ 0< OR IF 0 TO y THEN THEN
-      y 0= IF ." c4fc: an initializer can name only a function: "
+      y 0= IF ." c4fc: an initializer can name only a function or a global: "
          nd CELL+ @ nd 2 CELLS + @ TYPE CR ABORT THEN
       o y y.val @ FNPAT,
       COLLECT @ IF nd CELL+ @ nd 2 CELLS + @ ROOT, THEN   \ a table is what reaches it
@@ -1143,7 +1161,7 @@ DEFER AGG-FILL ( ety cnt off v i -- i' )
 \ a global's whole brace list, at OFF
 : AGG-TOP ( ety cnt off node -- )  CELL+ @ 0 -1 AGG-LIST DROP ;
 
-: DECL {: | a u ct dt t n sz ag sc at y ivn off es fa fu fr fs fx fk bq q ce fn ai sa su aet acn -- :}
+: DECL {: | a u ct dt t n sz ag sc at y ivn off es fa fu fr fs fx fk bq q ce fn ai sa su aet acn gy -- :}
    STORAGE TO sc
    TYPE? 0= IF ." c4fc: a declaration was expected" CR ABORT THEN
    BASE-TYPE TO ct   BQ @ TO bq
@@ -1176,20 +1194,13 @@ DEFER AGG-FILL ( ety cnt off v i -- i' )
          dt T-STRUCT? IF dt T-SIZE TO sz  1 TO ag THEN
       THEN
       \ the initialiser, if there is one
-      -1 TO fr   -1 TO fs   0 TO ai
+      -1 TO fr   -1 TO fs   0 TO ai   0 TO gy
       TK Assign = IF
          TNEXT
          ag TK Lbrace = AND IF INIT-BRACES TO ai ELSE   \ an array's or a struct's
-         TK And = IF                              \ int *fp = &fn;
+         TK And = IF                              \ int *fp = &fn;  int *p = &x;
             TNEXT  TV TO fa  TL TO fu  Id WANT
-            fa fu ST-FIND TO y
-            y 0= IF ." c4fc: & initialiser needs a function name" CR ABORT THEN
-            y y.class @ c_ext = IF y y.val @ TO fk  -3 TO fr ELSE
-            COLLECT @ y y.class @ c_fun = AND y y.val @ 0< AND IF 0 TO fr ELSE   \ pass one
-            y y.class @ c_fun <> y y.val @ 0< OR IF
-               ." c4fc: & initialiser requires a defined function" CR ABORT THEN
-            y y.val @ TO fr THEN THEN
-            COLLECT @ IF fa fu ROOT, THEN   \ a global holding &fn is a root
+            fa fu INIT-ADDR TO gy TO fk TO fr
             0 IVAL !  1 TO ivn
          ELSE
          TK Str = IF
@@ -1205,14 +1216,7 @@ DEFER AGG-FILL ( ety cnt off v i -- i' )
             THEN
          ELSE INIT-NAME? IF                       \ int (*fp)(int) = twice;
             TV TO fa  TL TO fu  TNEXT
-            fa fu ST-FIND TO y
-            y 0= IF ." c4fc: an initialiser can name only a function" CR ABORT THEN
-            y y.class @ c_ext = IF y y.val @ TO fk  -3 TO fr ELSE
-            COLLECT @ y y.class @ c_fun = AND y y.val @ 0< AND IF 0 TO fr ELSE   \ pass one
-            y y.class @ c_fun <> y y.val @ 0< OR IF
-               ." c4fc: & initialiser requires a defined function" CR ABORT THEN
-            y y.val @ TO fr THEN THEN
-            COLLECT @ IF fa fu ROOT, THEN
+            fa fu INIT-ADDR TO gy TO fk TO fr
             0 IVAL !  1 TO ivn
          ELSE TK Lbrace = IF
             TNEXT
@@ -1246,6 +1250,7 @@ DEFER AGG-FILL ( ety cnt off v i -- i' )
          fr 0< 0= IF off fr FNPAT, THEN
          fr -3 = IF off fk SYMPAT, THEN             \ an extern function (-c)
          fs 0< 0= IF off fs STRPAT, THEN
+         gy IF off gy GLOBAL-PAT THEN               \ a global's address
          \ `extern T x[];` or `int x;` earlier, and this initialises it
          \ (M7b): the code already emitted names the old record's number,
          \ so that number now means this storage; the record retires, and

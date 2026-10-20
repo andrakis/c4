@@ -523,6 +523,16 @@ output as the golden: `src/tests/c4lc_pp.c` for the preprocessor and
 - **Struct assignment**: `g:structassign` does both addresses, the size
   and `MCPY`, what a builtin `memcpy` call compiles to. The right side
   must be an lvalue.
+- **A global's address in an initializer**: `&x`, or an array's name,
+  wherever a function's address may go.
+  - The patch is `(dglo SLOT NAME)` until the end of the unit, when
+    `g:resolvedglo` makes it `(ddata SLOT OFF)` with the bss placed, or
+    `(dsym SLOT K)` for extern data, which `g:extdata` registers last.
+  - c4fc's `GLOBAL-PAT` does the same at once: `STRPAT,` for an
+    initialised global, `SYMPAT,` for extern data, and `GLOPAT,` (flag 4,
+    the value a global's number, mapped through `GOFF`) for the rest.
+  - `int x;` before `int x = 9;` is one object, at the definition, as in
+    c4fc: `g:laterinit?` skips the first.
 - **`__func__`, `__LINE__` and `__FILE__`**:
   - `__func__` (and GNU's `__FUNCTION__` and `__PRETTY_FUNCTION__`) is a
     string of the function's name, made by the parser.

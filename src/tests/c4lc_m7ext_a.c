@@ -9,10 +9,16 @@ struct applet applets[] = { { "cat", cat_main, 1 }, { "echo", echo_main, 2 } };
 int (*mains[])(int, char **) = { cat_main, echo_main };
 int (*first)(int, char **) = &cat_main;
 int (*second)(int, char **) = echo_main;
+// and another unit's globals: patch type -5 over a data symbol
+extern int shared_n;
+extern char shared_s[];
+int *pshared = &shared_n;
+char *sshared = shared_s;
 int main(void) {
     int i;
     for (i = 0; i < 2; i++)
         printf("%s %d %d %d\n", applets[i].name, applets[i].main(i, 0), mains[i](i + 5, 0), applets[i].flags);
     printf("first %d %d\n", first(9, 0), second(1, 0));
+    printf("shared %d %s\n", *pshared, sshared);
     return 0;
 }

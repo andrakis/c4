@@ -1659,10 +1659,22 @@
 			(if (= 16 (bit:and (index d 4) 16)) (= (index d 5) nil) false)
 			false))
 		(if (= (head d) 'structdef) (g:structdef d)
-		(if isglobal (if isext nil (g:global d))
+		(if isglobal (if isext nil
+			(if (if (= (index d 5) nil) (g:laterinit? (g:third d) (tail decls)) false) nil
+			(g:global d)))
 		nil))
 		(next g:datapass (tail decls)
 			(if isext (+ pending (list d)) pending))))))
+
+;; `int x;` before `int x = 9;` is one object, the definition's: the
+;; first allocates nothing (M7b; c4fc's DECL retires its record)
+(define g:laterinit? (lambda (n ds)
+	(if (empty? ds) false
+	(if (if (= (head (head ds)) 'global)
+			(if (= (g:third (head ds)) n) (if (= (index (head ds) 5) nil) false true) false)
+			false)
+		true
+	(next g:laterinit? n (tail ds))))))
 
 ;; register the leftover extern data declarations (skipping any name
 ;; the unit defined after all); ARR bytes follow g:globalarray's
@@ -1766,11 +1778,11 @@
 					slot)
 			(if (if (= (head init) 'fnaddr) true (= (head init) 'name))
 				(begin
-					(define f (g:find (g:second init)))
-					(if (if (= (g:second f) 'fun) true (= (g:second f) 'ext)) nil
-						(g:die "& initializer requires a defined function"))
+					(define f (g:lookup (g:second init) g:syms))
+					(if (if f (g:addressable? f) true) nil
+						(g:die "& initializer requires a defined function or a global"))
 					(define slot (g:dword 0))
-					(set! g:dpatches (g:cons (g:fnpatch slot f) g:dpatches))
+					(set! g:dpatches (g:cons (g:addrpatch slot (g:second init) f) g:dpatches))
 					slot)
 			(g:die (+ "unsupported global initializer for " n)))))))
 		(set! g:syms (g:cons (list n 'glo ty at nil gattrs g:gq) g:syms)))))
@@ -1958,19 +1970,45 @@
 				(set! g:istrs (tail g:istrs))))
 		(if (if (= h 'name) true (= h 'fnaddr))
 			(begin
-				(define f (g:find (g:second it)))
-				(if (if f (if (= (g:second f) 'fun) true (= (g:second f) 'ext)) false) nil
-					(g:die (+ "an initializer can name only a function: " (g:second it))))
+				(define f (g:lookup (g:second it) g:syms))
+				(if (if f (g:addressable? f) true) nil
+					(g:die (+ "an initializer can name only a function or a global: " (g:second it))))
 				(if (= g:imode 'put)
-					(set! g:dpatches (g:cons (g:fnpatch off f) g:dpatches)) nil))
+					(set! g:dpatches (g:cons (g:addrpatch off (g:second it) f) g:dpatches)) nil))
 		(g:die "unsupported initializer element")))))))
 ;; a data word holding function F's address: a code patch for a function
 ;; this unit defines, and for an extern one (-c) a symbol patch whose slot
 ;; is in data (type -5), which c4rlink resolves when it links the unit
-;; that defines it -- Busybox's applet_main[] names every applet's main
+;; that defines it -- Busybox's applet_main[] names every applet's main.
+;; A global's address (M7b) is (dglo SLOT NAME) until the end of the
+;; unit, when g:resolvedglo knows where the bss lands and which names are
+;; extern data -- g:extdata registers those last, so a name not known yet
+;; is one: a data-to-data patch for a global, and a symbol patch like an
+;; extern function's for extern data.
+(define g:addressable? (lambda (f)
+	(if (= (g:second f) 'fun) true (if (= (g:second f) 'ext) true
+	(if (= (g:second f) 'glo) true (= (g:second f) 'extg))))))
 (define g:fnpatch (lambda (slot f)
 	(if (= (g:second f) 'ext) (list 'dsym slot (index f 3))
 	(list 'dcode slot (index f 3)))))
+(define g:addrpatch (lambda (slot n f)
+	(if (if f (if (= (g:second f) 'fun) true (= (g:second f) 'ext)) false)
+		(g:fnpatch slot f)
+	(list 'dglo slot n))))
+(define g:resolvedglo (lambda (ps base acc)
+	(if (empty? ps) (g:reverse acc)
+	(begin
+		(define p (head ps))
+		(next g:resolvedglo (tail ps) base (g:cons
+			(if (= (head p) 'dglo) (g:resolvedglo/1 p base) p)
+			acc))))))
+(define g:resolvedglo/1 (lambda (p base)
+	(begin
+		(define s (g:lookup (g:third p) g:syms))
+		(if s nil (g:die (+ "an initializer names no function or global: " (g:third p))))
+		(define off (index s 3))
+		(if (= (g:second s) 'extg) (list 'dsym (g:second p) off)
+		(list 'ddata (g:second p) (if (g:bss? off) (+ base (g:bssoff off)) off))))))
 (define g:remapdsym (lambda (ps base acc)
 	(if (empty? ps) (g:reverse acc)
 	(begin
@@ -2373,6 +2411,7 @@
 		(set! gen:bssextra (- (+ bssbase g:blen) g:dlen))
 		(define syms (g:symsection (g:resolvesyms (g:reverse g:syms) bssbase) 0 (list)))
 		(define code (g:resolvecode (g:reverse g:code) bssbase))
+		(set! g:dpatches (g:resolvedglo g:dpatches bssbase (list)))
 		;; -fpic: every data reference relative to __c4_dbase, a new
 		;; extern global the loader supplies
 		(if (if gen:pic gen:objmode false)

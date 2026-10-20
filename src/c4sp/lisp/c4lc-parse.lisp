@@ -1038,7 +1038,8 @@
 ;; initializer, (desig I INIT) for `[I] = INIT` or (mdesig M INIT) for
 ;; `.M = INIT`, and a string concatenates as an expression's does. A
 ;; bare name that is no constant is (name F), which the generator wants
-;; to be a function -- the address in an applet or builtin table. The
+;; to be a function -- the address in an applet or builtin table -- or a
+;; global, an array's address; `&F` is (fnaddr F), either too. The
 ;; layout by type is c4lc-gen's g:globalaggr.
 (define p:init (lambda ()
 	(begin
@@ -1053,7 +1054,7 @@
 						(define n (p:value))
 						(p:advance)
 						(list 'fnaddr n))
-				(p:die "& initializer requires a function name")))
+				(p:die "& initializer requires a name")))
 		(if (p:initname?)
 			(begin
 				(define fn (p:value))

@@ -265,6 +265,29 @@ int funcname(void) {
     return 0;
 }
 
+// a global's address in an initializer (M7b): initialised and bss
+// globals, an array by its name, in a table and a struct, and a
+// tentative definition that a later one initialises
+int gav = 5;
+int gabss;
+int gaarr[3] = { 1, 2, 3 };
+char gabuf[8];
+int *pgav = &gav;
+int *pgabss = &gabss;
+int *pgaarr = gaarr;
+char *pgabuf = gabuf;
+int *gtab[] = { &gav, &gabss, gaarr };
+struct garef { int *p; char *s; } garef = { &gabss, gabuf };
+int laterdef;
+int *plater = &laterdef;
+int laterdef = 9;
+int globaddr(void) {
+    gabss = 7; gabuf[0] = 'q'; gabuf[1] = 0;
+    printf("gaddr %d %d %d %s\n", *pgav, *pgabss, pgaarr[2], pgabuf);
+    printf("gtab %d %d %d %d %s %d\n", *gtab[0], *gtab[1], gtab[2][1], *garef.p, garef.s, *plater);
+    return 0;
+}
+
 int main(void) {
     nothing();
     printf("void-params %d %d %s\n", seven(), add(2, 3), pick("xyz", 1));
@@ -283,5 +306,6 @@ int main(void) {
     attrs();
     scopy();
     funcname();
+    globaddr();
     return 0;
 }

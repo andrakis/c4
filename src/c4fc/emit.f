@@ -192,6 +192,12 @@ CREATE TABD TABMAX CELLS ALLOT
 CREATE TABC TABMAX CELLS ALLOT          \ the value
 CREATE TABB TABMAX CELLS ALLOT          \ 1 = the SLOT is in region 2
 CREATE TABT TABMAX CELLS ALLOT          \   2 = the VALUE is; +patch type
+                                        \   4 = the VALUE is a global's number
+\ Where each uninitialised global lands, by its number; parse.f's
+\ PLACE-GLOBALS fills it in, and DECL does for a declaration a later
+\ definition initialises.
+8192 CONSTANT GMAX
+CREATE GOFF GMAX CELLS ALLOT
 VARIABLE TABN   0 TABN !
 \ Everything a DATA word can refer to. All three live in one list and in
 \ the order they were met, because that is one list in c4lc and the
@@ -210,6 +216,9 @@ VARIABLE TABN   0 TABN !
 \ an object's data word holding extern K's address (M7b): type -5, the
 \ symbol id filled in by FIX-EXTERNS, resolved by c4rlink
 : SYMPAT, ( slot k -- )   -1000 SWAP -  0 -5 (TABPAT) ;
+\ `int *p = &x;` (M7b): a region 1 slot holding uninitialised global N's
+\ address, which is known once PLACE-GLOBALS has run
+: GLOPAT, ( slot n -- )   4 -4 (TABPAT) ;
 \ The optimizer moves code, so a data word holding a CODE address has to
 \ be remapped when it does. It sets TAB-MAP; nothing else does, and the
 \ two paths are otherwise the same loop rather than two copies of it.
@@ -220,7 +229,8 @@ DEFER TAB-MAP ( codeaddr -- codeaddr' )
    TABN @ 0 ?DO
       TABB I CELLS + @ TO f   TABT I CELLS + @ TO ty
       TABD I CELLS + @  f 1 AND IF b + THEN
-      TABC I CELLS + @  ty -3 = IF TAB-MAP ELSE f 2 AND IF b + THEN THEN
+      TABC I CELLS + @  ty -3 = IF TAB-MAP ELSE f 2 AND IF b + THEN
+         f 4 AND IF CELLS GOFF + @ THEN THEN
       ty  ROT ROT PAT,
    LOOP ;
 

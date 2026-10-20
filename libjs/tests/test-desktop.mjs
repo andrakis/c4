@@ -161,6 +161,36 @@ check(has(/^Command Prompt - task \d+/), 'with its own title back');
 start('Explorer');
 check(until(() => has('Exploring - /')), 'Start > Explorer opens at the root', screen());
 check(['bin', 'ram', 'usr'].every(has) && has('File Folder') && has('C4IX (/)'), 'it lists the root folders and shows the tree', screen());
+// The folder tree: the root archive's folders are more than its pane
+// shows. It scrolls (the wheel here), and a folder collapses and expands
+// (the keyboard, then its +/- box).
+const inTree = all => {
+  const e = explorer();
+  if (!e) return undefined;
+  return all.filter(t => t.x > e.x && t.x < e.x + 190 && t.y > e.y + 50 && t.y < e.y + 400).pop();
+};
+{
+  const e = explorer();
+  for (let i = 0; i < 40; i++) ev({ kind: 'wheel', x: e.x + 60, y: e.y + 200, dy: 1 });
+  check(until(() => !inTree(find('C4IX (/)'))), 'the wheel scrolls the folder tree past its top', screen());
+  for (let i = 0; i < 40; i++) ev({ kind: 'wheel', x: e.x + 60, y: e.y + 200, dy: -1 });
+  check(until(() => !!inTree(find('C4IX (/)'))), 'and back', screen());
+}
+key('TAB'); key('', 0, 36); key('', 0, 37);               // the tree; Home; Left
+check(until(() => !!inTree(find('C4IX (/)')) && !inTree(find('usr')) && !!inList(find('usr'))),
+  'Left collapses the root in the tree, and the list still shows it', screen());
+key('F5');
+check(until(() => !inTree(find('usr')) && has('Exploring - /')), 'it stays collapsed through a refresh', screen());
+key('', 0, 39);                                           // Right
+check(until(() => !!inTree(find('usr')) && !!inTree(find('src'))), 'Right expands it again', screen());
+{
+  const u = inTree(find('usr'));
+  click(u.x - 29, u.y + 6);                               // its +/- box, left of the icon
+  check(until(() => !!inTree(find('usr')) && !inTree(find('src'))), "clicking /usr's box collapses it", screen());
+  click(u.x - 29, u.y + 6);
+  check(until(() => !!inTree(find('src'))), 'and again expands it', screen());
+}
+key('TAB');                                               // the list has the keyboard again
 dbl('usr', inList);
 check(until(() => has('Exploring - /usr') && has('src')), 'double-clicking a folder opens it', screen());
 key('\b');

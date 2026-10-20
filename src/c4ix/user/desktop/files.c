@@ -6,6 +6,14 @@
 // Prompt, a source file opens in the Editor, anything else in Notepad.
 // New Folder, Delete (confirmed)
 // and Rename go through the kernel's mkdir, unlink and rename.
+//
+// The tree scrolls on its own: a scroll bar (arrows, page clicks, a thumb
+// to drag) and the wheel. It follows the selection only when that moves,
+// not at every redraw, or the bar could never leave it. A folder with
+// folders in it has a +/- box: click it, double-click the row, or use
+// Left/Right or -/+ to collapse and expand. A collapsed folder stays
+// collapsed through a reload (by the hash of its path), but the folders
+// above the one being shown always open.
 
 #include "desktop.h"
 
@@ -13,6 +21,8 @@
 // archive's tree (some 70 folders, 80 files in the largest), and to fit
 // ST_BYTES with room to spare.
 enum { MAXE = 400, NAMEW = 64, MAXT = 256, TPW = 128, MAXDEPTH = 10, TREE_W = 180, ROW_H = 17, TOOL_H = 30, STATUS_H = 20 };
+// a tree node's flags: it has folders under it, and it is collapsed
+enum { T_KIDS = 1, T_COLL = 2, MAXCOLL = 64 };
 
 struct files {
     char path[128];
@@ -22,6 +32,9 @@ struct files {
     int nt, tsel, ttop;                // the tree: folders, their depth, the one shown
     char tpath[MAXT * TPW];
     int tdepth[MAXT];
+    char tflag[MAXT];                  // T_KIDS, T_COLL
+    int tfollow;                       // scroll the tree to tsel at the next draw
+    int tdrag, tdragy, tdragtop;       // dragging the tree's thumb: from where
     int pane;                          // 0 the list has the keyboard, 1 the tree
 };
 
@@ -95,6 +108,7 @@ static void tree_walk(struct files *f, char *dir, int depth) {
     me = f->nt;
     ui_cpy(f->tpath + me * TPW, dir);
     f->tdepth[me] = depth;
+    f->tflag[me] = 0;
     ++f->nt;
     i = 0;
     while (1) {
@@ -106,15 +120,92 @@ static void tree_walk(struct files *f, char *dir, int depth) {
         }
         ++i;
     }
+    // a box only where a folder below was taken: not past MAXDEPTH or MAXT
+    if (f->nt > me + 1) f->tflag[me] = T_KIDS;
 }
 
+static int phash(char *s) {
+    int h;
+    h = 5381;
+    while (*s) { h = (h * 33 + (*s & 255)) & 0x7fffffff; ++s; }
+    return h;
+}
+
+// The tree again, from the disk. What was collapsed stays so, but every
+// folder above the one shown opens, so the selection can be seen.
 static void tree_load(struct files *f) {
+    int old[MAXCOLL], no, i, j, h, d;
+    no = 0;
+    i = 0;
+    while (i < f->nt) {
+        if ((f->tflag[i] & T_COLL) && no < MAXCOLL) { old[no] = phash(f->tpath + i * TPW); ++no; }
+        ++i;
+    }
     f->nt = 0;
     tree_walk(f, "/", 0);
+    i = 0;
+    while (i < f->nt && no) {
+        h = phash(f->tpath + i * TPW);
+        j = 0;
+        while (j < no && old[j] != h) ++j;
+        if (j < no) f->tflag[i] = f->tflag[i] | T_COLL;
+        ++i;
+    }
     f->tsel = 0;
     while (f->tsel < f->nt && !ui_eq(f->tpath + f->tsel * TPW, f->path)) ++f->tsel;
     if (f->tsel >= f->nt) f->tsel = 0;
+    d = f->tdepth[f->tsel];
+    i = f->tsel - 1;
+    while (i >= 0 && d > 0) {
+        if (f->tdepth[i] < d) { f->tflag[i] = f->tflag[i] & T_KIDS; d = f->tdepth[i]; }
+        --i;
+    }
+    f->tfollow = 1;
 }
+
+// The node shown after node I (itself shown): a collapsed one hides
+// everything deeper that follows it.
+static int t_next(struct files *f, int i) {
+    int d;
+    if (!(f->tflag[i] & T_COLL)) return i + 1;
+    d = f->tdepth[i];
+    ++i;
+    while (i < f->nt && f->tdepth[i] > d) ++i;
+    return i;
+}
+
+// how many nodes are shown, and the row node I is on (-1 if hidden)
+static int t_shown(struct files *f) {
+    int i, n;
+    i = 0; n = 0;
+    while (i < f->nt) { ++n; i = t_next(f, i); }
+    return n;
+}
+static int t_row(struct files *f, int node) {
+    int i, n;
+    i = 0; n = 0;
+    while (i < f->nt) { if (i == node) return n; ++n; i = t_next(f, i); }
+    return 0 - 1;
+}
+// the node on shown row R, or -1
+static int t_at(struct files *f, int r) {
+    int i;
+    i = 0;
+    while (i < f->nt && r > 0) { i = t_next(f, i); --r; }
+    return (r == 0 && i < f->nt) ? i : 0 - 1;
+}
+
+// the tree's rows, and its scroll bar's place, in client coordinates
+static int t_rows(int ch) { return (ch - TOOL_H - STATUS_H - 2 - 6) / ROW_H; }
+static int t_clamp(struct files *f, int rows) {
+    int max;
+    max = t_shown(f) - rows;
+    if (max < 0) max = 0;
+    if (f->ttop > max) f->ttop = max;
+    if (f->ttop < 0) f->ttop = 0;
+    return max;
+}
+enum { TSB_X = 2 + TREE_W - 18 };
 
 static void go(struct win *w, char *path) {
     struct files *f;
@@ -136,6 +227,30 @@ static void up(struct win *w) {
     while (k > 0 && f->path[k] != '/') --k;
     if (k == 0) f->path[1] = 0; else f->path[k] = 0;
     go(w, f->path);
+}
+
+// show tree node I's folder, keeping the keyboard in the tree
+static void t_select(struct win *w, int node) {
+    struct files *f;
+    f = F(w);
+    if (node < 0 || node >= f->nt) return;
+    ui_cpy(tbuf, f->tpath + node * TPW);
+    go(w, tbuf);
+    f->pane = 1;
+}
+
+// Collapse or expand node I. A selection it hides moves to it, as a
+// collapsed folder is where the selection was going to be seen.
+static void t_toggle(struct win *w, int i) {
+    struct files *f;
+    int d, j;
+    f = F(w);
+    if (i < 0 || i >= f->nt || !(f->tflag[i] & T_KIDS)) return;
+    f->tflag[i] = f->tflag[i] ^ T_COLL;
+    if (!(f->tflag[i] & T_COLL)) return;
+    d = f->tdepth[i];
+    j = i + 1;
+    while (j < f->nt && f->tdepth[j] > d) { if (j == f->tsel) { t_select(w, i); return; } ++j; }
 }
 
 static char *type_of(char *name, int dir, int prog) {
@@ -200,9 +315,17 @@ static void small_icon(int dir, int prog, int x, int y) {
 static int widths[3];
 static char *labels[3];
 
+// the +/- box on a folder with folders in it, centred where its lines meet
+static void t_box(int x, int y, int coll) {
+    d_rect(x, y, 9, 9, C_WHITE);
+    d_recto(x, y, 9, 9, C_SHADOW);
+    d_rect(x + 2, y + 4, 5, 1, C_DARK);
+    if (coll) d_rect(x + 4, y + 2, 1, 5, C_DARK);
+}
+
 void files_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     struct files *f;
-    int i, y, lx, lw, lh, rows, tx, th, trows, sel_bg;
+    int i, y, lx, lw, lh, rows, tx, th, trows, sel_bg, nv, r;
     f = F(w);
     d_rect(ox, oy, cw, ch, C_FACE);
     // the toolbar: Up, and the address
@@ -215,17 +338,25 @@ void files_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     tx = ox + 2; th = ch - TOOL_H - STATUS_H - 2;
     d_rect(tx, oy + TOOL_H, TREE_W, th, C_WHITE);
     d_bevel(tx, oy + TOOL_H, TREE_W, th, B_SUNKEN);
-    trows = (th - 6) / ROW_H;
-    if (f->tsel < f->ttop) f->ttop = f->tsel;
-    if (f->tsel >= f->ttop + trows) f->ttop = f->tsel - trows + 1;
-    i = f->ttop;
+    trows = t_rows(ch);
+    nv = t_shown(f);
+    if (f->tfollow) {
+        r = t_row(f, f->tsel);
+        if (r >= 0 && r < f->ttop) f->ttop = r;
+        if (r >= f->ttop + trows) f->ttop = r - trows + 1;
+        f->tfollow = 0;
+    }
+    t_clamp(f, trows);
+    i = t_at(f, f->ttop);
+    r = 0;
     y = oy + TOOL_H + 3;
-    while (i < f->nt && i < f->ttop + trows) {
-        lx = tx + 6 + f->tdepth[i] * 14;
+    while (i >= 0 && i < f->nt && r < trows) {
+        lx = tx + 18 + f->tdepth[i] * 14;
         if (f->tdepth[i] > 0) {
             d_rect(lx - 9, y + 8, 7, 1, C_SHADOW);
             d_rect(lx - 9, y - 2, 1, 10, C_SHADOW);
         }
+        if (f->tflag[i] & T_KIDS) t_box(lx - 13, y + 4, f->tflag[i] & T_COLL);
         small_icon(1, 0, lx, y + 1);
         tbuf[0] = 0;
         if (i == 0) ui_cpy(tbuf, "C4IX (/)");
@@ -238,8 +369,11 @@ void files_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
         if (sel_bg) d_rect(lx + 17, y, ui_len(tbuf) * 6 + 6, ROW_H - 1, f->pane == 1 && focused ? C_SEL : C_FACE);
         d_text(lx + 20, y + 2, sel_bg && f->pane == 1 && focused ? C_WHITE : C_DARK, F_SANS, tbuf);
         y = y + ROW_H;
-        ++i;
+        ++r;
+        i = t_next(f, i);
     }
+    // after the names, so a long one runs under the bar, not over it
+    if (nv > trows) ui_scrollbar(ox + TSB_X, oy + TOOL_H + 2, th - 4, nv, trows, f->ttop);
     // the list
     lx = tx + TREE_W + 4; lw = cw - TREE_W - 8;
     d_rect(lx, oy + TOOL_H, lw, th, C_WHITE);
@@ -280,12 +414,30 @@ void files_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
 
 void files_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     struct files *f;
-    int th, lx, lw, rows, row, t, lh;
+    int th, lx, lw, rows, row, t, lh, trows, nv, track, thumb, ty, node, bx;
     f = F(w);
     th = ch - TOOL_H - STATUS_H - 2;
     lx = 2 + TREE_W + 4; lw = cw - TREE_W - 8;
     lh = th - 22;
     rows = (lh - 4) / ROW_H;
+    trows = t_rows(ch);
+    nv = t_shown(f);
+    track = th - 4 - 32;
+    thumb = nv > trows ? (track * trows) / nv : track;
+    if (thumb < 10) thumb = 10;
+    if (ev == E_UP) { f->tdrag = 0; return; }
+    if (ev == E_MOVE) {
+        if (f->tdrag && nv > trows && track > thumb) {
+            f->ttop = f->tdragtop + ((y - f->tdragy) * (nv - trows)) / (track - thumb);
+            t_clamp(f, trows);
+        }
+        return;
+    }
+    if (ev == E_WHEEL && x < 2 + TREE_W) {
+        f->ttop = f->ttop + y * 3;
+        t_clamp(f, trows);
+        return;
+    }
     if (ev == E_WHEEL) {
         // y is the wheel's direction here
         f->top = f->top + y * 3;
@@ -297,10 +449,22 @@ void files_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     }
     if (ev != E_DOWN && ev != E_DBL) return;
     if (ui_hit(x, y, 4, 4, 26, 22)) { if (ev == E_DOWN) up(w); return; }
+    if (nv > trows && ui_hit(x, y, TSB_X, TOOL_H + 2, 16, th - 4)) {
+        if (ev != E_DOWN) return;
+        t = ui_scroll_click(x, y, TSB_X, TOOL_H + 2, th - 4, nv, trows, f->ttop);
+        ty = TOOL_H + 2 + 16 + ((track - thumb) * f->ttop) / (nv - trows);
+        if (t == f->ttop && y >= ty && y < ty + thumb) { f->tdrag = 1; f->tdragy = y; f->tdragtop = f->ttop; }
+        if (t >= 0) f->ttop = t;
+        return;
+    }
     if (ui_hit(x, y, 2, TOOL_H, TREE_W, th)) {
         f->pane = 1;
-        row = f->ttop + (y - TOOL_H - 3) / ROW_H;
-        if (row >= 0 && row < f->nt && ev == E_DOWN) { f->tsel = row; ui_cpy(tbuf, f->tpath + row * TPW); go(w, tbuf); f->pane = 1; }
+        node = t_at(f, f->ttop + (y - TOOL_H - 3) / ROW_H);
+        if (node < 0) return;
+        bx = 2 + 18 + f->tdepth[node] * 14 - 13;
+        if (x >= bx - 2 && x < bx + 11 && (f->tflag[node] & T_KIDS)) { if (ev == E_DOWN) t_toggle(w, node); return; }
+        if (ev == E_DOWN) t_select(w, node);
+        else t_toggle(w, node);
         return;
     }
     t = ui_scroll_click(x, y, lx + lw - 18, TOOL_H + 20, lh - 2, f->n, rows, f->top);
@@ -317,14 +481,32 @@ void files_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
 
 void files_key(struct win *w, int code, int ch, int mods) {
     struct files *f;
+    int r, i;
     f = F(w);
     if (code == KEY_TAB) { f->pane = !f->pane; return; }
     // these mean the same whichever pane has the keyboard
     if (code == KEY_F5) { files_command(w, 1, 0); return; }
     if (code == KEY_BACK) { up(w); return; }
     if (f->pane == 1) {
-        if (code == KEY_UP && f->tsel > 0) { --f->tsel; ui_cpy(tbuf, f->tpath + f->tsel * TPW); go(w, tbuf); f->pane = 1; }
-        else if (code == KEY_DOWN && f->tsel < f->nt - 1) { ++f->tsel; ui_cpy(tbuf, f->tpath + f->tsel * TPW); go(w, tbuf); f->pane = 1; }
+        r = t_row(f, f->tsel);
+        if (code == KEY_UP && r > 0) t_select(w, t_at(f, r - 1));
+        else if (code == KEY_DOWN && r >= 0 && r < t_shown(f) - 1) t_select(w, t_at(f, r + 1));
+        else if (code == KEY_HOME) t_select(w, 0);
+        else if (code == KEY_END) t_select(w, t_at(f, t_shown(f) - 1));
+        else if (code == KEY_LEFT || ch == '-') {
+            // collapse; on one already collapsed (or with none), its parent
+            if ((f->tflag[f->tsel] & T_KIDS) && !(f->tflag[f->tsel] & T_COLL)) t_toggle(w, f->tsel);
+            else if (code == KEY_LEFT && f->tsel > 0) {
+                i = f->tsel - 1;
+                while (i > 0 && f->tdepth[i] >= f->tdepth[f->tsel]) --i;
+                t_select(w, i);
+            }
+        }
+        else if (code == KEY_RIGHT || ch == '+') {
+            // expand; on one already open, its first folder
+            if (f->tflag[f->tsel] & T_COLL) t_toggle(w, f->tsel);
+            else if (code == KEY_RIGHT && (f->tflag[f->tsel] & T_KIDS) && f->tsel + 1 < f->nt) t_select(w, f->tsel + 1);
+        }
         return;
     }
     if (code == KEY_UP && f->sel > 0) --f->sel;

@@ -360,8 +360,13 @@ int init_main(int argc, int argv) {
         shargv[0] = "c4ix-sh.c4r";
         shargv[1] = 0;
         shargc = 1;
+        // The desktop in the background and top in front, not the other
+        // way round: the console's foreground job is the one its Ctrl-C
+        // stops, and a person at the console wants top gone and the prompt
+        // back -- not the desktop gone, with top still clearing the screen
+        // over every command they type.
         if (desktop) {
-            shargv[1] = "-e"; shargv[2] = "top &"; shargv[3] = "-e"; shargv[4] = "desktop"; shargv[5] = 0;
+            shargv[1] = "-e"; shargv[2] = "desktop &"; shargv[3] = "-e"; shargv[4] = "top"; shargv[5] = 0;
             shargc = 5;
         }
         if (!(a = task_spawn(shargv[0], shargc, (int)shargv))) {

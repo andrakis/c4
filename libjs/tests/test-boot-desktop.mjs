@@ -60,4 +60,15 @@ for (let i = 0; i < 30; i++) run();
 const before = presents;
 gui.event({ kind: 'resize', w: SW, h: SH });
 check(until(() => presents > before, 200), 'a resize from the page draws the scene again', `presents ${before} -> ${presents}`);
+// top is the console's foreground job, so Ctrl-C at the console stops
+// it and gives the prompt back; the desktop, in the background, carries on
+const n0 = out.length;
+vm.pendingSignal = 2;   // Ctrl-C, as keys.js keyDown raises it
+check(until(() => /c4ix:\/\$/.test(Buffer.from(out.slice(n0)).toString('latin1')), 300), 'Ctrl-C at the console stops top and the prompt comes back', Buffer.from(out.slice(n0)).toString('latin1').slice(-400));
+const n1 = out.length;
+typeBytes(vm, new TextEncoder().encode('echo still here\n'));
+check(until(() => Buffer.from(out.slice(n1)).toString('latin1').includes('still here\n'), 300), 'and the console shell runs commands', Buffer.from(out.slice(n1)).toString('latin1').slice(-400));
+const p0 = presents;
+gui.event({ kind: 'resize', w: SW, h: SH });
+check(until(() => presents > p0, 200), 'while the desktop keeps drawing');
 process.exit(fail);

@@ -422,10 +422,14 @@ it lacked was somewhere to edit and build in one place.
 ## Part six: the browser's boot, a first frame, Settings, a pointer (asked for 2026-10-20)
 
 - [x] **The web page boots with `--desktop`** (`libjs/web/app.js`). init
-      then starts the shell with `-e "top &" -e desktop`: the shell runs
-      each `-e` line first, as if typed at the prompt, so top runs on the
-      console and the desktop on the display, and the prompt comes back
-      when the desktop is shut down. `c4ix-sh -e CMD ...` is general.
+      then starts the shell with `-e "desktop &" -e top`: the shell runs
+      each `-e` line first, as if typed at the prompt, so the desktop runs
+      on the display and top on the console. top is the console's
+      foreground job, so Ctrl-C there stops it and gives the prompt back
+      while the desktop carries on. (It was `-e "top &" -e desktop` at
+      first, which left the console's Ctrl-C aimed at the desktop and top
+      clearing the screen over every command.) `c4ix-sh -e CMD ...` is
+      general.
 - [x] **The first frame stays.** The page learns the desktop's size by
       message and resizes (clearing) the canvas, while frames come through
       the ring: a first frame could land before the resize and be wiped,

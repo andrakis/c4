@@ -138,6 +138,22 @@ int enums(void) {
     return 0;
 }
 
+// static locals (M7b): a global named FUNCTION.NAME. Each keeps its value
+// between calls, two functions' `n` are two objects, and neither is the
+// global `n`. A function nothing calls takes its static with it under -O.
+int n = 1000;
+int bump(void) { static int n = 10; n = n + 1; return n; }
+int tally(int k) { static int n; static char tag[4] = "ab"; n = n + k; tag[2] = 'c'; return n * 100 + tag[2]; }
+char *greeting(void) { static char *s = "hi"; return s; }
+int never_called(void) { static int unused = 5; return unused; }
+int statics(void) {
+    int i; int last;
+    for (i = 0; i < 3; i++) last = bump();
+    tally(2);
+    printf("static %d %d %d %s\n", last, tally(5), n, greeting());
+    return 0;
+}
+
 int main(void) {
     nothing();
     printf("void-params %d %d %s\n", seven(), add(2, 3), pick("xyz", 1));
@@ -149,5 +165,6 @@ int main(void) {
     fnptrs();
     labels();
     enums();
+    statics();
     return 0;
 }

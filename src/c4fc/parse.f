@@ -167,6 +167,55 @@ VARIABLE CTY   1 CTY !
    c ;
 ' C-COND IS CONST-EXPR
 
+\ -- static locals (M7b) ---------------------------------------------------
+\ A static local is a global named FUNCTION.NAME, as c4lc-parse's
+\ p:statics names it: DECL declares it, under that name from the start
+\ (so it cannot merge with a global of the plain name), and SALIAS maps
+\ the plain name to it inside the function. The records are kept past
+\ the function's end by STATICS-KEEP, which FUNCTION calls where it used
+\ to drop the whole scope.
+DEFER DECL-D
+VARIABLE CURFN-A   VARIABLE CURFN-U       \ the function being parsed
+VARIABLE ST-MANGLE   0 ST-MANGLE !        \ DECL is declaring a static local
+VARIABLE FN-STATICS  0 FN-STATICS !
+32 CONSTANT SAL-MAX
+CREATE SALA SAL-MAX CELLS ALLOT   CREATE SALU SAL-MAX CELLS ALLOT
+CREATE SALMA SAL-MAX CELLS ALLOT  CREATE SALMU SAL-MAX CELLS ALLOT
+VARIABLE SALN   0 SALN !
+CREATE SLI SAL-MAX CELLS ALLOT   VARIABLE SLN   0 SLN !   \ their STN indices
+: STATICS-RESET ( a u -- )  CURFN-U ! CURFN-A !  0 SALN !  0 SLN !  0 FN-STATICS ! ;
+: SALIAS ( a u -- a' u' ) {: a u -- a u :}
+   SALN @ 0 ?DO
+      I CELLS SALU + @ u = IF
+         I CELLS SALA + @ a u BYTES= IF
+            I CELLS SALMA + @  I CELLS SALMU + @  UNLOOP EXIT THEN
+      THEN
+   LOOP a u ;
+: MANGLE ( a u -- a' u' ) {: a u | d n -- a u :}
+   SALN @ SAL-MAX < 0= IF ." c4fc: too many static locals in one function" CR ABORT THEN
+   CURFN-U @ 1+ u + TO n   n 1+ ALLOT: TO d
+   CURFN-A @ d CURFN-U @ MOVE   46 d CURFN-U @ + C!   a d CURFN-U @ + 1+ u MOVE
+   a SALN @ CELLS SALA + !   u SALN @ CELLS SALU + !
+   d SALN @ CELLS SALMA + !  n SALN @ CELLS SALMU + !   1 SALN +!
+   d n ;
+: STATIC-DECL ( -- ) {: | sb -- :}
+   STN @ TO sb
+   -1 ST-MANGLE !  DECL-D  0 ST-MANGLE !
+   STN @ sb ?DO
+      SLN @ SAL-MAX < 0= IF ." c4fc: too many static locals in one function" CR ABORT THEN
+      I SLN @ CELLS SLI + !  1 SLN +!
+   LOOP
+   -1 FN-STATICS ! ;
+\ The function's scope ends at BASE, but its static locals' records live
+\ on, after whatever was at BASE: c4lc declares them just before the
+\ function, and among globals that is the same place.
+: STATICS-KEEP ( base -- ) {: b | buf -- :}
+   SLN @ 0= IF b STN ! EXIT THEN
+   SLN @ SYMR * ALLOT: TO buf
+   SLN @ 0 ?DO  I CELLS SLI + @ ST[]  buf I SYMR * +  SYMR MOVE  LOOP
+   b STN !
+   SLN @ 0 ?DO  buf I SYMR * +  STN @ ST[]  SYMR MOVE  1 STN +!  LOOP ;
+
 \ -- function-pointer declarators (M7b) -----------------------------------
 \ `T (*name)(params)`, `T (*name[N])(params)`, nameless in a cast or a
 \ parameter. c4 calls through any word, so the declarator declares an
@@ -397,6 +446,7 @@ CREATE SLBUF 8192 ALLOT
    THEN
    TK Id = IF
       TV TO a  TL TO u  TNEXT
+      a u SALIAS TO u TO a                \ a static local's own global
       a u ST-FIND TO s
       \ The discovery pass runs before anything is known, and a call may
       \ come before the definition with no prototype anywhere -- which
@@ -518,7 +568,8 @@ DEFER STATEMENT                         \ blocks and statements nest
 \ downwards, so int a[4] as the first local is slots 1..4 and a is
 \ LEA -4.
 : LOCAL-DECLS ( v -- ) {: v | ct dt t a u sz ag na iv ivn y nd nn bq q fn -- :}
-   BEGIN TYPE? WHILE
+   BEGIN TYPE? TK Static = OR WHILE
+      TK Static = IF STATIC-DECL ELSE
       BASE-TYPE TO ct   BQ @ TO bq
       BEGIN
          bq DQ !  ct STARS TO dt   DQ @ TO q
@@ -585,6 +636,7 @@ DEFER STATEMENT                         \ blocks and statements nest
          TK Comma = WHILE TNEXT
       REPEAT
       Semi WANT
+      THEN
    REPEAT ;
 
 \ Every block takes declarations, not just a function's outermost one:
@@ -799,6 +851,7 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
    at 2 AND IF CHERE DESN  @ CELLS DESS @ + !  1 DESN  +! THEN
    TP @ TO bodytp                       \ for the inliner's size budget
    0 FN-LABELS !
+   a u STATICS-RESET
    BLOCK TO body                        \ parse first: ENT needs the count
    OPTIMIZE @ IF body FOLD TO body THEN
    \ Pass one of -O: who does this function reach, and is it a root?
@@ -855,12 +908,13 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
    TP @ bodytp - INLMAX @ <= AND
    sn 0> AND
    FN-LABELS @ 0= AND                   \ a label spliced twice is placed twice
+   FN-STATICS @ 0= AND                  \ a splice would retarget their records
    IF
       y body base sn n va - IC,
       sn 0 ?DO  0 base I + ST[] y.nlen !  LOOP
       EXIT
    THEN
-   base STN ! ;                         \ parameters and locals go out of scope
+   base STATICS-KEEP ;                  \ parameters and locals go out of scope
 
 \ static is attrs 8, and extern declares without defining. __attribute__
 \ ((constructor)) and ((destructor)) are 1 and 2, and also put the
@@ -913,7 +967,13 @@ CREATE IVAL IVMAX CELLS ALLOT
          a 0= IF ." c4fc: bad global declaration" CR ABORT THEN
       ELSE
          TV TO a  TL TO u  Id WANT   -2 TO fn
-         TK Lparen = IF a u dt sc 0 MAX at q FUNCTION EXIT THEN
+         ST-MANGLE @ 0= IF
+            TK Lparen = IF a u dt sc 0 MAX at q FUNCTION EXIT THEN
+         THEN
+      THEN
+      ST-MANGLE @ IF
+         TK Lparen = IF ." c4fc: a static local must be a variable" CR ABORT THEN
+         a u MANGLE TO u TO a
       THEN
       dt TO t   0 TO ag   1 CELLS TO sz   -1 TO n   0 TO ivn   dt TO es   0 TO ce
       fn -2 = IF TK Brak = ELSE fn 0< 0= THEN IF
@@ -1061,6 +1121,8 @@ CREATE GOFF GMAX CELLS ALLOT
          SYM,
       THEN
    LOOP ;
+
+' DECL IS DECL-D
 
 : PROGRAM
    BEGIN TK Eof <> WHILE DECL REPEAT

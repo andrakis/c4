@@ -394,13 +394,22 @@
 				(t:cons n live)
 				table)))))))
 
+;; the function a static local's global belongs to ("f.n" -> "f"), or
+;; false for any other name (M7b, c4lc-parse's p:statics)
+(define t:owner (lambda (n) (t:owner/2 n 0)))
+(define t:owner/2 (lambda (n i)
+	(if (>= i (length n)) false
+	(if (= (string:byte n i) 46) (string:substr n 0 i)
+	(next t:owner/2 n (+ i 1))))))
 (define t:dropdead (lambda (ds live acc)
 	(if (empty? ds) (t:reverse acc)
 	(begin
 		(define d (head ds))
 		(if (if (= (head d) 'func)
 				(not (t:member? (t:third d) live))
-				false)
+			(if (= (head d) 'global)
+				(if (t:owner (t:third d)) (not (t:member? (t:owner (t:third d)) live)) false)
+				false))
 			(begin
 				(set! t:ndrop (+ t:ndrop 1))
 				(next t:dropdead (tail ds) live acc))

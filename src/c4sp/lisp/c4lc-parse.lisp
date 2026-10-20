@@ -737,10 +737,11 @@
 				(list 'num (- 0 n)))
 		(list 'neg (p:expr 21))))))
 
-;; identifier: call, enum constant, or variable
+;; identifier: call, enum constant, or variable. A static local's name
+;; is its global's (p:srename).
 (define p:idexpr (lambda ()
 	(begin
-		(define n (p:value))
+		(define n (p:srename (p:value)))
 		(define ev (p:enumval))
 		(p:advance)
 		(if (= (p:kind) 'Lparen)
@@ -855,7 +856,7 @@
 				(p:advance)
 				(p:advance)
 				(list 'labeled ln (if (= (p:kind) 'Rbrace) '(empty) (p:stmt))))
-		(if (p:declstart?)
+		(if (if (p:declstart?) true (= k 'Static))
 			(p:cons 'declstmt (p:localline))
 		(begin
 			(define e (p:expr 1))
@@ -1144,14 +1145,51 @@
 			(if (= (p:kind) 'Comma) (p:advance) nil)
 			(next p:params (p:cons (p:qnode (list ty n) q) acc)))))))))
 
+;; ---- static locals (M7b) ----
+;;
+;; A static local is a global named FUNCTION.NAME -- no C identifier has a
+;; '.', so it can clash with nothing -- declared just before its function
+;; (p:hoist), so its data lands where c4fc's, declared in the body, does.
+;; Inside the function the plain name means it (p:srenames). T2 drops it
+;; with a dead function (c4lc-tree's t:dropdead).
+(define p:curfn "")
+(define p:srenames (list))
+(define p:srename (lambda (n)
+	(begin
+		(define r (p:assoc n p:srenames))
+		(if r (p:second r) n))))
+(define p:statics (lambda (bt bq)
+	(begin
+		(define d (p:declarator bt bq 8))
+		(if (= (head d) 'global) nil (p:die "a static local must be a variable"))
+		(define n (index d 2))
+		(define m (+ (+ p:curfn ".") n))
+		(set! p:srenames (p:cons (list n m) p:srenames))
+		(set! p:pending (p:cons
+			(+ (list (head d) (p:second d) m) (tail (tail (tail d)))) p:pending))
+		(if (= (p:kind) 'Comma) (begin (p:advance) (next p:statics bt bq))
+		(p:expect 'Semi "semicolon after a static declaration")))))
+;; a function and the static locals its body queued: they go first
+(define p:hoist (lambda (acc)
+	(if (empty? p:pending) acc
+	(if (empty? acc) acc
+	(if (= (head (head acc)) 'func) (p:cons (head acc) (p:drain (tail acc)))
+	acc)))))
+
 ;; ---- local declarations ----
 
-;; one "int|char decl, decl;" line; returns local nodes (order kept)
+;; one "int|char decl, decl;" line; returns local nodes (order kept).
+;; A static line returns none: its globals are queued (p:statics).
 (define p:localline (lambda ()
+	(if (= (p:kind) 'Static)
+		(begin
+			(p:advance)
+			(define sbt (p:basetype p:INT))
+			(p:statics sbt p:bq)
+			(list))
 	(begin
-		(if (= (p:kind) 'Static) (p:die "static function variables not implemented") nil)
 		(define bt (p:basetype p:INT))
-		(next p:localline/2 bt p:bq (list)))))
+		(next p:localline/2 bt p:bq (list))))))
 (define p:localline/2 (lambda (bt bq acc)
 	(if (= (p:kind) 'Semi)
 		(begin (p:advance) (p:reverse acc))
@@ -1241,12 +1279,15 @@
 				(define pn (list 'proto ty n (p:ptypes ps (list)) va (+ a2 16)))
 				(if (if (= rq 0) (p:allzero? pq) false) pn
 					(+ pn (list rq pq))))
-		(begin
-			(p:expect 'Lbrace "function body")
-			(set! p:locals (p:paramnames ps (list)))
-			(define ls (p:localdecls (list)))
-			(define body (p:block/2 (list)))
-			(set! p:locals (list))
+			(begin
+				(p:expect 'Lbrace "function body")
+				(set! p:locals (p:paramnames ps (list)))
+				(set! p:curfn n)
+				(set! p:srenames (list))
+				(define ls (p:localdecls (list)))
+				(define body (p:block/2 (list)))
+				(set! p:srenames (list))
+				(set! p:locals (list))
 			(p:qnode (list 'func ty n ps va a2 ls body) rq))))))
 (define p:ptypes (lambda (ps acc)
 	(if (empty? ps) (p:reverse acc)
@@ -1356,7 +1397,7 @@
 				(next p:top (p:cons td (p:drain acc))))
 		(begin
 			(define bt (p:basetype p:INT))
-			(next p:top (p:declarators bt p:bq attr (p:drain acc))))))))))
+			(next p:top (p:hoist (p:declarators bt p:bq attr (p:drain acc)))))))))))
 
 (define parse:program (lambda (tokens)
 	(begin

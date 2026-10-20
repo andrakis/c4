@@ -263,17 +263,26 @@ VARIABLE FWN   0 FWN !
    cv @ TO old
    av cv 1 GROW
    av @ old +   cv @ old -   0 FILL ;
-: ID-ALLOT ( n -- off ) {: n | off -- off :}
-   IDN @ 1 CELLS 1- + 1 CELLS 1- INVERT AND IDN !
+\ N bytes of region 1 where the last allocation ended, unaligned
+: ID-BYTES ( n -- off ) {: n | off -- off :}
    IDN @ TO off
    BEGIN off n + IMAX @ > WHILE IDATA IMAX DGROW REPEAT
    n IDN +!  off ;
+\ ... and a global's, which starts on a word
+: ID-ALLOT ( n -- off )
+   IDN @ 1 CELLS 1- + 1 CELLS 1- INVERT AND IDN !
+   ID-BYTES ;
 \ A string a GLOBAL INITIALISER needs is allocated here rather than with
 \ the other literals, because c4lc lays the data out in one pass over
 \ the declarations and the string is met while that global is: the
 \ pointer's own word comes AFTER the bytes it points at.
+\
+\ The bytes are not aligned: c4lc puts them where the last global ended,
+\ so after `char t[4] = "ab";` the string "hi" of `char *s = "hi";` sits
+\ in t's last four bytes and s at the next word. Aligning them moved s
+\ a word further on than c4lc puts it (found by M7b's static locals).
 : ID-STR, ( a u -- off ) {: a u | off -- off :}
-   u 1+ ID-ALLOT TO off
+   u 1+ ID-BYTES TO off
    a  IDATA @ off +  u MOVE
    off ;
 : ID-C! ( c off -- )  IDATA @ + C! ;

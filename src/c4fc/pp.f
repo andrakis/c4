@@ -295,6 +295,11 @@ DEFER PP-APPLY   ( t mac -- )
       THEN
    LOOP 0 ;
 
+\ __LINE__ and __FILE__ (M7b), unless a #define has taken the names: a
+\ name the walk is about to emit as itself goes through PP-BUILTIN, which
+\ makes those two a number and a string -- c4lc-pp's pp:builtin.
+DEFER PP-BUILTIN ( t -- t' )
+
 \ Expand every macro in a token list. Used for #if lines and for macro
 \ arguments, neither of which has a surrounding stream to push back onto,
 \ so it runs the same walk over a stream of its own.
@@ -320,7 +325,7 @@ DEFER PP-APPLY   ( t mac -- )
          ELSE
             t t.val @ t t.len @ MAC-FIND TO m
             m IF m m.busy @ IF 0 TO m THEN THEN
-            m IF t m PP-APPLY ELSE t PP-EMIT THEN
+            m IF t m PP-APPLY ELSE t PP-BUILTIN PP-EMIT THEN
          THEN
       ELSE t PP-EMIT THEN THEN
    REPEAT
@@ -598,6 +603,13 @@ VARIABLE CURFILE   0 CURFILE !
 \ line number names almost nothing.
 : FNAME@ ( serial -- a u ) {: s -- a u :}
    s FDIR-MAX < IF s CELLS FNAMEA + @  s CELLS FNAMEU + @ ELSE 0 0 THEN ;
+: (PP-BUILTIN) ( t -- t' ) {: t | n -- n :}
+   t t.val @ t t.len @ S" __LINE__" BYTES2= IF
+      t TOK-COPY TO n  Num n t.kind !  t t.line @ n t.val !  0 n t.len !  n EXIT THEN
+   t t.val @ t t.len @ S" __FILE__" BYTES2= IF
+      t t.file @ FNAME@ t STR-TOK EXIT THEN
+   t ;
+' (PP-BUILTIN) IS PP-BUILTIN
 : .WHERE ( t -- ) {: t | a u -- :}
    t t.file @ FNAME@ TO u TO a
    u IF a u TYPE ELSE ." (source)" THEN
@@ -702,7 +714,7 @@ DIRECTIVE  error   D-ERROR
       k Id = IF
          t t.val @ t t.len @ MAC-FIND TO m
          m IF m m.busy @ IF 0 TO m THEN THEN
-         m IF t m PP-APPLY ELSE t PP-EMIT THEN
+         m IF t m PP-APPLY ELSE t PP-BUILTIN PP-EMIT THEN
       ELSE t PP-EMIT THEN
       THEN THEN THEN THEN
    REPEAT ;

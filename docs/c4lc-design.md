@@ -523,6 +523,15 @@ output as the golden: `src/tests/c4lc_pp.c` for the preprocessor and
 - **Struct assignment**: `g:structassign` does both addresses, the size
   and `MCPY`, what a builtin `memcpy` call compiles to. The right side
   must be an lvalue.
+- **`__func__`, `__LINE__` and `__FILE__`**:
+  - `__func__` (and GNU's `__FUNCTION__` and `__PRETTY_FUNCTION__`) is a
+    string of the function's name, made by the parser.
+  - `__LINE__` and `__FILE__` are made by the preprocessor (`pp:builtin`)
+    when a name would be emitted as itself, so a `#define` of either
+    still wins. The file is the name it was opened by: a `PPDir` marker
+    now carries it next to the directory.
+  - A line number counts logical lines: a backslash-newline does not
+    advance it, in either compiler, so after one it is short of gcc's.
 
 ## 11. Measured results (2026-08-03)
 

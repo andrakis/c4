@@ -33,3 +33,4 @@ enum0 6 0 5 6 red
 attr 25 8 2 113 xy 3
 scopy 5 hi -2 8 9
 scopy2 5 hi 3 gl 1 2
+func whoami funcname 9

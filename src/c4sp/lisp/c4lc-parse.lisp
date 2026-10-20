@@ -738,8 +738,12 @@
 		(list 'neg (p:expr 21))))))
 
 ;; identifier: call, enum constant, or variable. A static local's name
-;; is its global's (p:srename).
+;; is its global's (p:srename). __func__ is the function's name (M7b).
+(define p:funcname? (lambda (n)
+	(if (= n "__func__") true (if (= n "__FUNCTION__") true (= n "__PRETTY_FUNCTION__")))))
 (define p:idexpr (lambda ()
+	(if (p:funcname? (p:value))
+		(begin (p:advance) (list 'str p:curfn))
 	(begin
 		(define n (p:srename (p:value)))
 		(define ev (p:enumval))
@@ -749,7 +753,7 @@
 				(p:advance)
 				(p:cons 'call (p:cons n (p:args (list)))))
 		(if (= ev false) (list 'var n)
-		(list 'num ev))))))
+		(list 'num ev)))))))
 
 ;; precedence climbing over a parsed left node
 (define p:expr (lambda (lev)

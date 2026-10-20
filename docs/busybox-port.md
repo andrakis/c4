@@ -216,7 +216,7 @@ Getting c4fc to the same bytes found three old c4fc bugs, now fixed:
 | (in `c4lc_m7.c`) | `sizeof(type)`, `sizeof("…")`, comparisons, `&&`, `\|\|` and `?:` in constant expressions | **DONE** (M7b) | P0: libbb.h's `char x[sizeof(off_t) == sizeof(uoff_t) ? 1 : -1]` |
 | `offsetof` | `offsetof(T, m)` | **DONE** (M7b) as an expression: libc.h defines it | P0 |
 | `neg_array_assert` | the size of a *struct* in a constant | CFAIL in c4lc, whose parser cannot lay out a struct; c4fc can | P2: no unit of this configuration does it |
-| `func_name`, `line_macros` | `__func__`, `__LINE__`, `__FILE__` | CFAIL | P1: cheap |
+| `func_name`, `line_macros` | `__func__`, `__LINE__`, `__FILE__` | **DONE** (M7b). Lines are logical: a backslash-newline does not advance them, so after one `__LINE__` is short of gcc's | P1 |
 | `builtin_expect` | `__builtin_expect` | CFAIL | P2: `likely()`/`unlikely()` can be defined away in `platform.h` |
 | `statement_expr` | `({ … })` | CFAIL | P2: 0 uses outside headers |
 | `case_range` | `case 'a' ... 'z':` | CFAIL | P2: 0 uses |

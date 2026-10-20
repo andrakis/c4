@@ -39,6 +39,7 @@
 (define pp:paths nil)       ;; -I directories, searched in order
 (define pp:depth 0)         ;; include nesting, guards runaway recursion
 (define pp:curdir "")       ;; directory of the file being read, with its '/'
+(define pp:curfile "")      ;; ... and its name, for __FILE__
 (define pp:MAXDEPTH 24)
 (define pp:MAXEXPAND 64)    ;; rescan limit per token position
 
@@ -250,9 +251,16 @@
 		(set! pp:depth (+ pp:depth 1))
 		(define toks (lex:file path))
 		(set! pp:depth (- pp:depth 1))
-		(pp:cons (list 'PPDir (pp:dirname path) -1)
+		(pp:cons (list 'PPDir (pp:dirname path) -1 path)
 			(pp:append (pp:dropeof toks nil)
-				(pp:cons (list 'PPDir pp:curdir -1) rest))))))
+				(pp:cons (list 'PPDir pp:curdir -1 pp:curfile) rest))))))
+
+;; __LINE__ and __FILE__ (M7b), unless a #define has taken the names: the
+;; token's line, and the name the file was opened by -- c4fc's PP-BUILTIN
+(define pp:builtin (lambda (t)
+	(if (= (pp:val t) "__LINE__") (list 'Num (pp:line t) (pp:line t))
+	(if (= (pp:val t) "__FILE__") (list 'Str pp:curfile (pp:line t))
+	t))))
 
 (define pp:dropeof (lambda (toks acc)
 	(if (empty? toks) (pp:reverse acc)
@@ -406,7 +414,7 @@
 					(begin
 						(define r (pp:apply m (tail toks) (pp:line t)))
 						(next pp:expandall (pp:append (head r) (head (tail r))) acc))
-				(next pp:expandall (tail toks) (pp:cons t acc))))
+				(next pp:expandall (tail toks) (pp:cons (pp:builtin t) acc))))
 		(next pp:expandall (tail toks) (pp:cons t acc))))))))
 
 ;; Apply macro M at the head of REST. Returns (EXPANSION REMAINDER),
@@ -703,6 +711,7 @@
 		(if (= (pp:kind t) 'PPDir)
 			(begin
 				(set! pp:curdir (pp:val t))
+				(set! pp:curfile (index t 3))
 				(next pp:go (tail toks) skip acc))
 		;; the end of a macro's expansion: it may expand again
 		(if (pp:endmac? t)
@@ -730,7 +739,7 @@
 						(define r (pp:apply m (tail toks) (pp:line t)))
 						;; push the expansion back so it is rescanned
 						(next pp:go (pp:append (head r) (head (tail r))) skip acc))
-				(next pp:go (tail toks) skip (pp:cons t acc))))
+				(next pp:go (tail toks) skip (pp:cons (pp:builtin t) acc))))
 		(next pp:go (tail toks) skip (pp:cons t acc))))))))))))
 
 ;; ---- entry points ----
@@ -795,6 +804,7 @@
 		(set! lex:pp true)
 		;; (+ "" ...): a path from argv is not yet a string string:byte can read
 		(set! pp:curdir (pp:dirname (+ "" path)))
+		(set! pp:curfile (+ "" path))
 		(define toks (lex:file path))
 		(pp:kwfix (pp:go toks nil nil) nil))))
 

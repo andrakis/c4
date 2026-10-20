@@ -455,6 +455,10 @@ CREATE SLBUF 8192 ALLOT
    THEN
    TK Id = IF
       TV TO a  TL TO u  TNEXT
+      \ __func__ (M7b): the function's name, a string, as c4lc's p:idexpr
+      a u S" __func__" NAME=?  a u S" __FUNCTION__" NAME=? OR
+      a u S" __PRETTY_FUNCTION__" NAME=? OR IF
+         CURFN-A @ CURFN-U @ n_str N2 EXIT THEN
       a u SALIAS TO u TO a                \ a static local's own global
       a u ST-FIND TO s
       \ The discovery pass runs before anything is known, and a call may

@@ -91,6 +91,15 @@ int twice(int x) { return 2 * x; }
 int note(int line, int v) { return line * 100 + v; }
 #define note(line, ...) note(line, __VA_ARGS__)
 
+// __LINE__ and __FILE__ (M7b): the line, also through a macro, where its
+// invocation is, and the name the file was opened by. Lines are logical:
+// a backslash-newline does not advance them, so after one __LINE__ is
+// short of gcc's -- which is why this compares two lines, not a number.
+#define HERE() __LINE__
+int line_a(void) { return __LINE__; }
+int line_b(void) { return HERE(); }
+char *file_name(void) { return __FILE__; }
+
 int main() {
     printf("guarded %d\n", guarded());
     printf("taken_if %d\n", taken_if());
@@ -112,5 +121,6 @@ int main() {
     printf("strv %s\n", STRV(x));
     printf("self %d\n", twice(twice(3)));
     printf("self-va %d\n", note(7, 8));
+    printf("line %d %d %s\n", line_b() - line_a(), line_a() > 0, file_name());
     return 0;
 }

@@ -258,6 +258,13 @@ int scopy(void) {
     return 0;
 }
 
+// __func__ (M7b): the enclosing function's name, as a string
+char *whoami(void) { return __func__; }
+int funcname(void) {
+    printf("func %s %s %d\n", whoami(), __func__, (int)sizeof(__func__));
+    return 0;
+}
+
 int main(void) {
     nothing();
     printf("void-params %d %d %s\n", seven(), add(2, 3), pick("xyz", 1));
@@ -275,5 +282,6 @@ int main(void) {
     enum0();
     attrs();
     scopy();
+    funcname();
     return 0;
 }

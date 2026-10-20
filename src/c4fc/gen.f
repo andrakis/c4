@@ -248,7 +248,16 @@ HELP-RESET
    t T-BAND0 < 0= IF 0 EXIT THEN        \ a band type needs a mask or a helper
    t t_char <> ;
 
+\ struct = struct (M7b): the bytes, by the VM's own memcpy -- what a
+\ builtin memcpy(&L, &R, sizeof L) compiles to, as c4lc-gen's
+\ g:structassign. The right side must be an lvalue, so it has GEN-ADDR.
+: STRUCT-ASGN ( n -- ) {: n -- :}
+   n >lhs @ GEN-ADDR   oPSH OP,
+   n >rhs @ GEN-ADDR   oPSH OP,
+   n >lhs @ CT T-SIZE oIMM OP2,   oPSH OP,
+   oMCPY OP,   3 oADJ OP2, ;
 :M GEN n_asgn {: n -- :}
+   n >lhs @ CT T-STRUCT? IF n STRUCT-ASGN EXIT THEN
    \ base and index both stay on the stack, unscaled, until the value is
    \ evaluated -- SXI wants all three, and computing the address first
    \ would need a slot to hold it across the right-hand side.

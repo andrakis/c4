@@ -513,6 +513,16 @@ output as the golden: `src/tests/c4lc_pp.c` for the preprocessor and
   - Brace elision, `[i] =` and `.m =` work, and a union takes one value.
   - T2's roots include every function named anywhere in an initializer.
   - `extern T x[];` declares without sizing.
+- **Another unit's function in data**: in an object, a data word holding
+  an extern function's address is `(dsym SLOT K)`, written as patch type
+  -5 (address a data offset, value the symbol id). c4rlink resolves it
+  to -3 or -4.
+- **`inline`, `restrict`, `__extension__` and `__attribute__`**:
+  `p:untag` drops them from the tokens before parsing. It keeps an
+  `__attribute__` that names constructor or destructor.
+- **Struct assignment**: `g:structassign` does both addresses, the size
+  and `MCPY`, what a builtin `memcpy` call compiles to. The right side
+  must be an lvalue.
 
 ## 11. Measured results (2026-08-03)
 

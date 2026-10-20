@@ -21,7 +21,11 @@ Status (2026-10-20):
   - `enum` as a type anywhere;
   - static locals;
   - aggregate initializers, with `[i] =` and `.m =` designators, and
-    `extern T x[]`.
+    `extern T x[]`;
+  - another unit's functions in data (patch type -5, which c4rlink
+    resolves);
+  - `inline`, `restrict` and `__attribute__`, dropped before parsing;
+  - struct assignment.
 - The source is not vendored into the repository yet; that is M7e.
 
 ## 1. The target
@@ -79,7 +83,7 @@ c4lc runs as `-O -conforming -P -I src/c4ix/libc/include`:
 - `-conforming` turns on the `\x` and octal escapes. Without it, `'\x41'` is
   49, not 65.
 
-**52 passed when this was written, and 86 pass after M7b's first nine
+**52 passed when this was written, and 90 pass after M7b's first twelve
 steps (2026-10-20).** It is a tracker and not a `make` gate yet. It
 becomes one, in `make test-c4lc`, once it passes. The kernel and libc gaps
 come from reading `src/c4ix/sys.c`, `vfs.c`, `loader.c` and `src/c4ix/libc`.
@@ -120,10 +124,10 @@ It reads the link map. What it found:
 | `defined(X)` | 22, plus 85 in headers | |
 | `sizeof(*p)`, `sizeof x` | 24 | hush 16 |
 | `static` locals | 19 | |
-| 2-D arrays | 19 | hush 13 |
+| 2-D arrays | **0 declarations.** The 19 the pattern found are `argv[i][j]`, indexing through a pointer to pointer, which c4 already does. | |
 | `[i] =` designators | 18 | all in hush |
 | function-pointer declarators | 13, plus 36 in headers | signals, recursive_action, `applet_main[]` |
-| struct assignment | 9 | hush 6 |
+| struct assignment | 3 | the pattern matched 9, of which 3 copy structs: libbb/time.c `*ptm = *lt;`, xfuncs.c `*newterm = *oldterm;`, hush `*ctx = *old;` |
 | `inline` | 7, plus 46 in headers | |
 | `alloca` | 5 | hush 2, getopt32 2, copyfd 1 |
 | `setjmp`/`longjmp` | 2 | `vfork_daemon_rexec.c`, which links because of `prctl`, so it must resolve |
@@ -152,11 +156,12 @@ Priorities:
 | `applet_table`, `array_of_ptr_to_fn_in_struct_member_call` | a struct member that is a function pointer | **DONE** (M7b); both probes now wait only on aggregate initializers | P0 | hush's `struct built_in_command`, libbb's `llist`/action structs |
 | `typedef_enum`, `enum_typedef`, `enum_var`, `enum_local_decl` | `typedef enum {…} t;`, `enum e v;` inside a function | **DONE** (M7b): `enum` is a type specifier anywhere | P0 | Option bitmasks (`OPT_x`), hush's parse states |
 | `static_local` | a `static` local | **DONE** (M7b): a global named `FUNCTION.NAME` | P0 | Common in libbb: buffers, one-time state |
-| `inline_only` | `inline` / `static inline` | CFAIL | P0 | `platform.h`'s `ALWAYS_INLINE`, many small helpers in headers |
-| `attribute`, `attr_macro_away` | `__attribute__((…))` anywhere; `#define __attribute__(x)` | CFAIL: the lexer reserves the name, and the parser takes it in one position only | P0 | `NORETURN`, `FAST_FUNC`, `ALIGN1`, `PACKED`, `UNUSED_PARAM` on almost every prototype. Either parse it and ignore it everywhere a declaration allows it, or let the preprocessor redefine it. |
-| `restrict_` | `restrict` | CFAIL: read as a name | P1 | a few libbb prototypes |
-| `array2d`, `array2d_init` | `int g[3][4]`, `char t[][8] = {…}` | CFAIL | P0 | 19 uses, 13 of them in hush |
-| `struct_copy` | `a = b` for structs | CFAIL: bad lvalue | P0 | 9 uses, 6 in hush. It becomes a `memcpy`. |
+| `inline_only` | `inline` / `static inline` | **DONE** (M7b): dropped before parsing | P0 | `platform.h`'s `ALWAYS_INLINE`, many small helpers in headers |
+| `attribute` | `__attribute__((…))` anywhere | **DONE** (M7b): every one but constructor and destructor is dropped before parsing (c4lc's `p:untag`, c4fc's `UNTAG`) | P0 | `NORETURN`, `FAST_FUNC`, `ALIGN1`, `PACKED`, `UNUSED_PARAM` on almost every prototype |
+| `attr_macro_away` | `#define __attribute__(x)` | CFAIL: the lexer reserves the name | P2: nothing needs it now that the filter drops them |
+| `restrict_` | `restrict`, `__restrict`, `__extension__` | **DONE** (M7b), with the same filter | P1 | a few libbb prototypes |
+| `array2d`, `array2d_init` | `int g[3][4]`, `char t[][8] = {…}` | CFAIL | P2 | no declaration in this configuration's units (§2.1) |
+| `struct_copy` | `a = b` for structs | **DONE** (M7b): an `MCPY` of the size, which needs no libc | P0 | libbb's `*ptm = *lt;`, hush's `*ctx = *old;` |
 | (no probe yet) | `alloca(n)` | not a builtin | P1 | 5 uses: hush, getopt32, copyfd. It can start as `malloc` in the `platform.h` block, a small leak per call, and become a real stack allocation later. |
 | `bitfield` | `unsigned a : 3;` | CFAIL | P2 | 0 uses in this configuration |
 | `struct_byval` | struct parameters and returns by value | CFAIL: "must be pointers" | P2 | rare. Patch it, or lower it to hidden pointers. |
@@ -174,7 +179,7 @@ Priorities:
 | `struct_global_init`, `struct_arr_init_ints`, `struct_init_str`, `struct_init_fn`, `nested_struct_init` | struct and array-of-struct initializers with numbers, strings and function addresses | **DONE** (M7b), with brace elision | P0: every option, builtin and keyword table |
 | `designated` | `[3] = 2`; `.x = 1` | **DONE** (M7b), both | P0 for `[i] =` (18 uses, all in hush); P2 for `.x =` (0 uses) |
 | `extern_arr` | `extern const char t[];` without a size | **DONE** (M7b) | P0: `bb_msg_*`, `applet_names`, `bb_common_bufsiz1` are all declared this way |
-| (none yet) | the address of a function in **another unit** inside data | not yet: needs a symbol patch whose slot is in data, which c4rlink must then resolve | P0 for the link: `applet_main[]` sits in appletlib.c and names mains defined in each applet's file |
+| `c4lc_m7ext_*.c` | the address of a function in **another unit** inside data | **DONE** (M7b): patch type -5 (`C4R_PTYPE_DSYM`, a data byte offset and a symbol id) in the object, which c4rlink resolves to -3 or -4. A shared library's symbol in data is an error until the C4IX loader patches data | P0 for the link: `applet_main[]` sits in appletlib.c and names mains defined in each applet's file |
 | `global_addr_var`, `global_ptr_init` | `int *p = &x;` in a global | CFAIL: an initializer may name only a function | P1 |
 | `local_struct_init` | `struct pt p = {3, 4};` in a function | CFAIL: local aggregates take numbers only | P1 |
 | `compound_lit` | `(struct pt){3, 4}` | CFAIL | P2: 0 uses |
@@ -418,9 +423,10 @@ Each step lands with tests, and the next starts only when they are green.
    9. ~~aggregate initializers, with `[i] =` designators, and `extern T
       x[]`~~: done, for functions the unit defines. Addresses of another
       unit's functions in data need a c4rlink change, next;
-   10. `inline` and `__attribute__`;
-   11. 2-D arrays and struct assignment;
-   12. then the P1 items.
+   10. ~~another unit's function in data~~: done, patch type -5;
+   11. ~~`inline` and `__attribute__`~~: done, dropped before parsing;
+   12. ~~struct assignment~~: done. 2-D arrays proved to be P2;
+   13. then the P1 items.
 
    Each turns its probes PASS, and gets gcc-checked tests in
    `src/tests/c4lc_*.c` like M4's. `run.sh` joins `make test-c4lc` when it

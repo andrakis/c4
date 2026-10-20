@@ -1450,9 +1450,41 @@
 			(define bt (p:basetype p:INT))
 			(next p:top (p:hoist (p:declarators bt p:bq attr (p:drain acc)))))))))))
 
+;; ---- what c4 has no use for (M7b) ----
+;;
+;; Before parsing, the tokens lose `inline`, `restrict` and `__extension__`
+;; in their spellings, and every __attribute__((...)) that names neither
+;; constructor nor destructor -- noreturn, unused, format, aligned,
+;; regparm and the rest of what Busybox's platform.h writes on nearly
+;; every prototype. They change nothing c4 does. The two that do stay
+;; where p:attribute reads them. c4fc's UNTAG is the same filter.
+(define p:dropids '("inline" "__inline" "__inline__" "restrict" "__restrict"
+	"__restrict__" "__extension__"))
+(define p:untag (lambda (toks acc)
+	(if (empty? toks) (p:reverse acc)
+	(begin
+		(define t (head toks))
+		(if (if (= (head t) 'Id) (p:member? (p:second t) p:dropids) false)
+			(next p:untag (tail toks) acc)
+		(if (= (head t) 'Attribute)
+			(begin
+				(define g (p:attrgroup (tail toks) 0 false))
+				(if (p:second g) (next p:untag (tail toks) (p:cons t acc))
+				(next p:untag (head g) acc)))
+		(next p:untag (tail toks) (p:cons t acc))))))))
+;; from the '(' after __attribute__ to its matching ')': (REST KEEP)
+(define p:attrgroup (lambda (toks d keep)
+	(if (empty? toks) (list toks keep)
+	(begin
+		(define k (head (head toks)))
+		(define d2 (if (= k 'Lparen) (+ d 1) (if (= k 'Rparen) (- d 1) d)))
+		(define keep2 (if keep true (if (= k 'Constructor) true (= k 'Destructor))))
+		(if (if (= d2 0) (= k 'Rparen) false) (list (tail toks) keep2)
+		(next p:attrgroup (tail toks) d2 keep2))))))
+
 (define parse:program (lambda (tokens)
 	(begin
-		(set! p:toks tokens)
+		(set! p:toks (p:untag tokens (list)))
 		(set! p:enums (list))
 		(set! p:sconsts (list))
 		(set! p:locals (list))

@@ -218,6 +218,46 @@ int enum0(void) {
     return 0;
 }
 
+// inline, restrict, __extension__ and __attribute__ (M7b): dropped
+// before parsing, as Busybox's platform.h writes them on nearly every
+// prototype; constructor and destructor still mean what they did
+static inline int sq(int x) { return x * x; }
+static __inline__ int cube(int x) { return x * sq(x); }
+static int noisy(int x) __attribute__((unused));
+static int __attribute__((noinline)) noisy(int x) { return x + 1; }
+int fmt(const char *f) __attribute__ ((nonnull (1), warn_unused_result));
+int fmt(const char *f) { return f[0]; }
+struct __attribute__((packed)) tight { char a; int b; } __attribute__((aligned(8)));
+int copy3(char *restrict d, const char *restrict s) { d[0] = s[0]; d[1] = s[1]; d[2] = 0; return 2; }
+__extension__ int ext_word;
+int attrs(void) {
+    char buf[4];
+    struct tight t;
+    t.a = 1; t.b = 2;
+    copy3(buf, "xy");
+    printf("attr %d %d %d %d %s %d\n", sq(5), cube(2), noisy(1), fmt("q"), buf, t.a + t.b);
+    return 0;
+}
+
+// struct assignment (M7b): a whole struct copied, as libbb's
+// `*ptm = *lt;` and hush's `*ctx = *old;` do -- variables, through
+// pointers, members, array elements, and a struct holding an array
+struct ctx { int depth; char name[6]; short flags; struct pt where; };
+struct ctx gctx = { 3, "gl", 7, { 1, 2 } };
+struct ctx ctxs[2];
+int scopy(void) {
+    struct ctx a; struct ctx b; struct ctx *pa; struct ctx *pb;
+    a.depth = 5; a.name[0] = 'h'; a.name[1] = 'i'; a.name[2] = 0; a.flags = -2; a.where.x = 8; a.where.y = 9;
+    b = a;
+    pa = &a; pb = &ctxs[1];
+    *pb = *pa;
+    ctxs[0] = gctx;
+    a.where = gctx.where;
+    printf("scopy %d %s %d %d %d\n", b.depth, b.name, b.flags, b.where.x, b.where.y);
+    printf("scopy2 %d %s %d %s %d %d\n", ctxs[1].depth, ctxs[1].name, ctxs[0].depth, ctxs[0].name, a.where.x, a.where.y);
+    return 0;
+}
+
 int main(void) {
     nothing();
     printf("void-params %d %d %s\n", seven(), add(2, 3), pick("xyz", 1));
@@ -233,5 +273,7 @@ int main(void) {
     aggs();
     externs();
     enum0();
+    attrs();
+    scopy();
     return 0;
 }

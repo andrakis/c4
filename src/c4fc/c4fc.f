@@ -77,9 +77,42 @@ VARIABLE C4FC-READY   0 C4FC-READY !
    HELP-RESET
    BUILTINS ;
 
+\ What c4 has no use for (M7b), as c4lc-parse's p:untag: `inline`,
+\ `restrict` and `__extension__` in their spellings, and every
+\ __attribute__((...)) that names neither constructor nor destructor.
+\ TOKS is compacted in place before anything parses it.
+: DROP-ID? ( t -- f ) {: t | a u -- f :}
+   t t.kind @ Id <> IF 0 EXIT THEN
+   t t.val @ TO a  t t.len @ TO u
+   a u S" inline" NAME=?  a u S" __inline" NAME=? OR  a u S" __inline__" NAME=? OR
+   a u S" restrict" NAME=? OR  a u S" __restrict" NAME=? OR
+   a u S" __restrict__" NAME=? OR  a u S" __extension__" NAME=? OR ;
+: UNTAG ( -- ) {: | i j n t e d keep k -- :}
+   0 TO i  0 TO j  TOKS V# TO n
+   BEGIN i n < WHILE
+      i TOKS V@ TO t
+      t DROP-ID? IF i 1+ TO i ELSE
+      t t.kind @ Attribute = IF
+         i 1+ TO e   0 TO d   0 TO keep
+         BEGIN
+            e n < IF
+               e TOKS V@ t.kind @ TO k
+               k Lparen = IF d 1+ TO d THEN
+               k Rparen = IF d 1- TO d THEN
+               k Constructor = k Destructor = OR IF -1 TO keep THEN
+               e 1+ TO e
+               d 0= k Rparen = AND
+            ELSE -1 THEN
+         UNTIL
+         keep IF t j TOKS V!  j 1+ TO j  i 1+ TO i ELSE e TO i THEN
+      ELSE t j TOKS V!  j 1+ TO j  i 1+ TO i THEN THEN
+   REPEAT
+   j TOKS v.len ! ;
+
 : C4FC ( a u -- )                       \ compile that file, image to stdout
    C4FC-READY @ 0= IF C4FC-INIT THEN
    PREPROCESS @ IF PP-FILE ELSE LEX-FILE THEN
+   UNTAG
    \ The discovery pass, which runs whatever the flags say. -O wants the
    \ call graph and -c wants to know which names this unit defines, but
    \ the plain compile wants something from it too: a call to a function

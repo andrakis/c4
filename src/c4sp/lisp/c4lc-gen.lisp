@@ -1038,6 +1038,26 @@
 		(g:die (+ "bad function call: " n)))))))
 		(if (> t 0) (g:emit (list 'ADJ t)) nil)
 		(set! g:ty (g:third s)))))
+;; struct = struct (M7b): the bytes, by the VM's own memcpy -- what a
+;; builtin memcpy(&L, &R, sizeof L) compiles to, so it needs no libc and
+;; works under -fno-builtin. The right side must be an lvalue: a struct
+;; returned by value is not c4's.
+(define g:structassign (lambda (lv rv)
+	(begin
+		(define sty (g:lvtype lv))
+		(define rh (head rv))
+		(if (if (= rh 'var) true (if (= rh 'deref) true (if (= rh 'member) true
+				(if (= rh 'arrow) true (= rh 'index)))))
+			nil (g:die "a struct assignment needs a struct lvalue on the right"))
+		(g:addr lv)
+		(g:emit '(PSH))
+		(g:addr rv)
+		(g:emit '(PSH))
+		(g:emit (list 'IMM (g:tysize sty)))
+		(g:emit '(PSH))
+		(g:emit '(MCPY))
+		(g:emit '(ADJ 3))
+		(set! g:ty sty))))
 ;; a call through an expression (M7b): the arguments, then what JSR
 ;; would have pushed -- the return address, here an IMM of the label
 ;; after the jump -- then the target in A and JMPA to it. The callee
@@ -1090,6 +1110,8 @@
 				(set! g:ty g:PTR))
 		(if (= h 'var) (g:varexpr (g:second e))
 		(if (= h 'call) (g:call e)
+		(if (if (= h 'assign) (g:svalue? (g:lvtype (g:second e))) false)
+			(g:structassign (g:second e) (g:third e))
 		(if (= h 'assign)
 			(begin
 				(define lv (g:second e))
@@ -1207,7 +1229,7 @@
 		(begin
 			(define b (g:assoc/atom h g:binops))
 			(if b (g:binary e (g:second b))
-			(g:die (+ "bad expression node: " (+ "" h))))))))))))))))))))))))))))))))))
+			(g:die (+ "bad expression node: " (+ "" h)))))))))))))))))))))))))))))))))))
 
 (define g:varexpr (lambda (n)
 	(begin

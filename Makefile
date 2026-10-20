@@ -2666,7 +2666,10 @@ libarc.c4l: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/lib/archive.c $(C4IX_SRC)/i
 # C4IX rebuilds everything it ships, inside itself, with b4ke and the
 # BUILD.B4K files the root archive carries (libjs/tests/test-rebuild.sh).
 # About nine minutes; not in test-libjs.
-test-c4ix-rebuild: c4bb-images
+# c4sc32-fused.c4r first: build-images.sh ships whatever copy of it is
+# there, and the machine's compiler has to be the one in the tree -- the
+# test compares what it builds with what c4lc built on the host.
+test-c4ix-rebuild: c4sc32-fused.c4r c4bb-images
 	bash libjs/tests/test-rebuild.sh
 
 # libc4ix as a shared library: the same image, loaded at run time by

@@ -491,6 +491,19 @@ fi
 # BUILD.B4K files run it (docs/c4sc-design.md). The c4ke-root disk below
 # carries the same image.
 [ -f c4sc32-fused.c4r ] && cp c4sc32-fused.c4r $DISK/c4sc.c4r
+# It is copied, not built (building it is expensive), so say when it is
+# older than the c4lc it is compiled from: C4IX would rebuild itself with
+# yesterday's compiler. `make c4sc32-fused.c4r`, or test-c4ix-rebuild,
+# brings it up to date.
+if [ -f c4sc32-fused.c4r ]; then
+    for src in src/c4sp/lisp/c4lc*.lisp src/c4sp/lisp/c4r.lisp src/c4sp/include/gc.h; do
+        if [ "$src" -nt c4sc32-fused.c4r ]; then
+            echo "c4bb: WARNING: c4sc32-fused.c4r is older than $src."
+            echo "c4bb:          It is COPIED here, not built -- run 'make c4sc32-fused.c4r'."
+            break
+        fi
+    done
+fi
 
 # ---- the C4IX root archive -----------------------------------------
 # One gzipped tar of the repo's own sources and docs, unpacked over / by

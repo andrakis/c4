@@ -78,16 +78,46 @@ int *gc_root_genv;
 int *gc_root_true, *gc_root_false;
 int *gc_root_a, *gc_root_b, *gc_root_c;
 
+// The mark state for gc_ncells cells, or the end of the run (gc_addblock).
+void gc_markstate () {
+	if (!(gc_marks = malloc(gc_ncells)) ||
+	    !(gc_worklist = (int *)malloc(gc_ncells * sizeof(int)))) {
+		printf("c4sp: cannot allocate gc mark state for %d cells\n", gc_ncells);
+		exit(1);
+	}
+}
+
 // Add a block, thread its cells onto the free list, and resize the mark
 // state. Returns 0 on success. The mark arrays carry nothing between
 // collections, so they are simply rebuilt rather than copied.
+//
+// They are given back BEFORE the block is asked for, and made again
+// after it. On a machine whose memory is all there is -- a C4IX task in a
+// 64 MB machine -- holding the old ones across the block's malloc is
+// what made the new ones fail: a block of the arena's size, then five
+// bytes a cell of mark state, with the old mark state still in the way
+// (desktop/wm.c, compiled by c4sc inside C4IX's own rebuild).
+//
+// Without its mark state the collector cannot run at all, and it would
+// mark through a null pointer -- with no MMU that is the kernel's own low
+// memory, and the machine panics a moment later. So failing to make it
+// is the end of the run, said plainly, not a return code.
 int gc_addblock (int n) {
 	int *c, *base;
 	int  i;
 
 	if (gc_nblocks >= GC_MAXBLOCKS) return 1;
 	if (n < 256) n = 256;
-	if (!(base = malloc(n * CELL__Sz * sizeof(int)))) return 1;
+	if (gc_marks)    free(gc_marks);
+	if (gc_worklist) free((char *)gc_worklist);
+	gc_marks = 0;
+	gc_worklist = 0;
+	if (!(base = malloc(n * CELL__Sz * sizeof(int)))) {
+		// no block: the arena stays as it was, and so must its mark state
+		if (gc_ncells == 0) return 1;
+		gc_markstate();
+		return 1;
+	}
 	memset(base, 0, n * CELL__Sz * sizeof(int));
 
 	gc_block[gc_nblocks]       = (int)base;
@@ -105,16 +135,7 @@ int gc_addblock (int n) {
 	gc_ncells     = gc_ncells + n;
 	gc_free_count = gc_free_count + n;
 
-	if (gc_marks)    free(gc_marks);
-	if (gc_worklist) free((char *)gc_worklist);
-	gc_marks = 0;
-	gc_worklist = 0;
-	if (!(gc_marks = malloc(gc_ncells)) ||
-	    !(gc_worklist = malloc(gc_ncells * sizeof(int)))) {
-		printf("c4sp: cannot allocate gc mark state\n");
-		return 1;
-	}
-
+	gc_markstate();
 	return 0;
 }
 

@@ -45,20 +45,44 @@ boot(vm, new Uint8Array(readFileSync(join(ROOT, 'c4ix32.c4r'))), ['c4ix32.c4r'])
 const consoleText = () => Buffer.from(out).toString('latin1');
 
 // The screen: every string of the last presented frame, with its position.
+//
+// A frame that begins with CLEAR is the whole scene. One that does not --
+// the desktop's damage redraw (docs/c4ix-cpu.md, step 11) -- paints over
+// part of the frame before, as the display does: a rectangle it fills,
+// inside its clip, covers what earlier frames put there, and a string it
+// draws outside its clip is not seen. Within one frame nothing covers
+// anything, as before: the tests look for text by what was drawn.
 let frame = [], cur = [], presents = 0, rects = [], curRects = [], pointer = 0;
+let gen = 0, clip = null, partial = false;
+const within = (r, x, y) => x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h;
+const cut = (a, b) => {
+  const x = Math.max(a.x, b.x), y = Math.max(a.y, b.y);
+  return { x, y, w: Math.min(a.x + a.w, b.x + b.w) - x, h: Math.min(a.y + a.h, b.y + b.h) - y };
+};
 const pump = () => {
   const words = gui.drain();
   for (let i = 0; words && i < words.length; i += words[i]) {
     const t = words[i + 1];
-    if (t === CMD.CLEAR) { cur = []; curRects = []; }
-    if (t === CMD.RECT) curRects.push({ x: words[i + 2], y: words[i + 3], w: words[i + 4], h: words[i + 5], rgb: words[i + 6] });
+    if (t === CMD.CLEAR) { cur = []; curRects = []; partial = false; }
+    if (t === CMD.CLIP) clip = { x: words[i + 2], y: words[i + 3], w: words[i + 4], h: words[i + 5] };
+    if (t === CMD.NOCLIP) clip = null;
+    if (t === CMD.RECT) {
+      const r = { x: words[i + 2], y: words[i + 3], w: words[i + 4], h: words[i + 5], rgb: words[i + 6], gen };
+      const v = clip ? cut(r, clip) : r;
+      if (partial && v.w > 0 && v.h > 0) {
+        cur = cur.filter(s => s.gen === gen || !within(v, s.x, s.y));
+        curRects = curRects.filter(q => q.gen === gen || !(within(v, q.x, q.y) && within(v, q.x + q.w - 1, q.y + q.h - 1)));
+      }
+      curRects.push(r);
+    }
     if (t === CMD.TEXT2) {
       const n = words[i + 8];
       let s = '';
       for (let k = 0; k < n; k++) s += String.fromCharCode((words[i + 9 + (k >> 2)] >>> ((k & 3) * 8)) & 0xff);
-      cur.push({ x: words[i + 2], y: words[i + 3], s, rgb: words[i + 4], adv: words[i + 7] });
+      if (!partial || !clip || within(clip, words[i + 2], words[i + 3]))
+        cur.push({ x: words[i + 2], y: words[i + 3], s, rgb: words[i + 4], adv: words[i + 7], gen });
     }
-    if (t === CMD.PRESENT) { frame = cur; rects = curRects; presents++; }
+    if (t === CMD.PRESENT) { frame = cur.slice(); rects = curRects.slice(); presents++; gen++; partial = true; }
     if (t === CMD.CURSOR) pointer = words[i + 2];
   }
 };

@@ -275,12 +275,25 @@ int sys_dispatch(int num, int *args) {
     // It completes on waking, so nothing re-executes.
     case SYS_SLEEP:
         if (!t || args[0] <= 0) return 0;
+        t->ev_wait = 0;
         if (!sched_in_trap()) {
             num = __time() + args[0];
             while (__time() - num < 0) sched_yield();
             return 0;
         }
         t->ck_wake = __time() + args[0];
+        t->state = TS_SLEEPING;
+        return 0;
+    // Sleep args[0] ms, or less: until an event lands in the GUI ring at
+    // args[1] (0: none), or with args[2] set, until a pipe the caller
+    // reads has data or reaches end of file. The desktop's loop, which
+    // used to wake every 15 ms to look (docs/c4ix-cpu.md, step 11).
+    case SYS_EVWAIT:
+        if (!t || !sched_in_trap()) return 0;
+        t->ev_ring = args[1];
+        t->ev_wait = (args[1] ? 1 : 0) | (args[2] ? 2 : 0);
+        if (sched_events(t)) { t->ev_wait = 0; return 1; }
+        t->ck_wake = __time() + (args[0] > 0 ? args[0] : 0);
         t->state = TS_SLEEPING;
         return 0;
     case SYS_GETPID:   return t ? t->id : -1;

@@ -67,6 +67,7 @@ int upipe(int *fds)                   { return __c4ix_syscall(SYS_PIPE, (int)fds
 int ucycles()                         { return __c4_cycles(); }
 int utaskinfo(int i, int *out)        { return __c4ix_syscall(SYS_TASKINFO, i, (int)out, 0); }
 int ucpustat(int *h, int *r, int max)  { return __c4ix_syscall(SYS_CPUSTAT, (int)h, (int)r, max); }
+int uevwait(int ms, int *ring, int p)  { return __c4ix_syscall(SYS_EVWAIT, ms, (int)ring, p); }
 int uchdir(char *path)                { return __c4ix_syscall(SYS_CHDIR, (int)path, 0, 0); }
 int umkdir(char *path)                { return __c4ix_syscall(SYS_MKDIR, (int)path, 0, 0); }
 int ugetcwd(char *buf, int len)       { return __c4ix_syscall(SYS_GETCWD, (int)buf, len, 0); }

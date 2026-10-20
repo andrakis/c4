@@ -140,6 +140,62 @@ void theme_set(int scheme, int bg) {
     dirty = 1;
 }
 
+// ---- damage ----
+//
+// A redraw is the whole scene when the scene changed -- input, a window
+// opened, moved or raised -- but most of what changes on its own is one
+// window's contents (a terminal's output, Task Manager's numbers) or the
+// taskbar's clock and meter. Those mark only their rectangle, and
+// redraw_part draws only what lies in it, front to back as the full
+// redraw does, clipped to it and with no clear: the display keeps the
+// rest of the last frame (docs/c4ix-cpu.md, step 11).
+static int dmg, dmg_x0, dmg_y0, dmg_x1, dmg_y1;
+static int part;                  // drawing only the damage (redraw_part)
+
+void mark_rect_dirty(int x, int y, int w, int h) {
+    if (dirty || w <= 0 || h <= 0) return;
+    if (x < 0) { w = w + x; x = 0; }
+    if (y < 0) { h = h + y; y = 0; }
+    if (x + w > SW) w = SW - x;
+    if (y + h > SH) h = SH - y;
+    if (w <= 0 || h <= 0) return;
+    if (!dmg) { dmg = 1; dmg_x0 = x; dmg_y0 = y; dmg_x1 = x + w; dmg_y1 = y + h; return; }
+    if (x < dmg_x0) dmg_x0 = x;
+    if (y < dmg_y0) dmg_y0 = y;
+    if (x + w > dmg_x1) dmg_x1 = x + w;
+    if (y + h > dmg_y1) dmg_y1 = y + h;
+}
+
+// A window's own contents changed; nothing else did.
+void mark_win_dirty(struct win *w) {
+    if (!w->min) mark_rect_dirty(w->x, w->y, w->w, w->h);
+}
+
+static int in_damage(int x, int y, int w, int h) {
+    return x < dmg_x1 && x + w > dmg_x0 && y < dmg_y1 && y + h > dmg_y0;
+}
+
+// Clipping, always inside the damage while redraw_part draws: the clip
+// a window sets for its title or its client area must not reach past
+// what is being redrawn, or it would draw over what is not.
+static void wclip(int x, int y, int w, int h) {
+    int x1, y1;
+    if (part) {
+        x1 = x + w; y1 = y + h;
+        if (x < dmg_x0) x = dmg_x0;
+        if (y < dmg_y0) y = dmg_y0;
+        if (x1 > dmg_x1) x1 = dmg_x1;
+        if (y1 > dmg_y1) y1 = dmg_y1;
+        w = x1 > x ? x1 - x : 0;
+        h = y1 > y ? y1 - y : 0;
+    }
+    gui_clip(x, y, w, h);
+}
+static void wnoclip() {
+    if (part) gui_clip(dmg_x0, dmg_y0, dmg_x1 - dmg_x0, dmg_y1 - dmg_y0);
+    else gui_noclip();
+}
+
 // Drawing narrowed to part of the window being drawn -- an app's pane --
 // and back to all of it. Never wider than the window's client area.
 static int clip_x, clip_y, clip_w, clip_h;
@@ -150,9 +206,9 @@ void d_clip(int x, int y, int w, int h) {
     if (y < clip_y) y = clip_y;
     if (x1 > clip_x + clip_w) x1 = clip_x + clip_w;
     if (y1 > clip_y + clip_h) y1 = clip_y + clip_h;
-    gui_clip(x, y, x1 > x ? x1 - x : 0, y1 > y ? y1 - y : 0);
+    wclip(x, y, x1 > x ? x1 - x : 0, y1 > y ? y1 - y : 0);
 }
-void d_clip_end() { gui_clip(clip_x, clip_y, clip_w, clip_h); }
+void d_clip_end() { wclip(clip_x, clip_y, clip_w, clip_h); }
 
 // The Windows bevels: two pixels, light top-left, dark bottom-right (or
 // the other way round for a sunken one).
@@ -571,9 +627,9 @@ static void draw_window(int i, int focused) {
     else gradient(w->x + BORDER, w->y + BORDER, w->w - 2 * BORDER, TITLE_H, C_ITITLE, C_ITITLE2);
     tx = w->x + BORDER + 3;
     if (!is_dialog(w)) { d_icon(w->kind, tx, w->y + BORDER + 1); tx = tx + 20; }
-    gui_clip(w->x + BORDER, w->y + BORDER, w->w - 2 * BORDER - 56, TITLE_H);
+    wclip(w->x + BORDER, w->y + BORDER, w->w - 2 * BORDER - 56, TITLE_H);
     d_text(tx, w->y + BORDER + 3, focused ? C_LIGHT : C_FACE, F_BOLD, w->title);
-    gui_noclip();
+    wnoclip();
     by = w->y + BORDER + 2;
     bx = w->x + w->w - BORDER - 2 - 16;
     cap_button(bx, by, 0);
@@ -583,9 +639,9 @@ static void draw_window(int i, int focused) {
     }
     if (w->nmenus) draw_menubar(w, focused);
     clip_x = client_x(w); clip_y = client_y(w); clip_w = client_w(w); clip_h = client_h(w);
-    gui_clip(clip_x, clip_y, clip_w, clip_h);
+    wclip(clip_x, clip_y, clip_w, clip_h);
     app_draw(w, client_x(w), client_y(w), client_w(w), client_h(w), focused);
-    gui_noclip();
+    wnoclip();
     if (w->resizable && !w->max) {                 // the size grip
         bx = w->x + w->w - BORDER - 12; by = w->y + w->h - BORDER - 12;
         gui_line(bx + 3, by + 11, bx + 11, by + 3, C_LIGHT); gui_line(bx + 4, by + 11, bx + 11, by + 4, C_SHADOW);
@@ -701,9 +757,9 @@ static void draw_taskbar() {
             gui_rect(bx, SH - TASK_H + 4, bw, 22, i == f ? 0xe0e0e0 : C_FACE);
             d_bevel(bx, SH - TASK_H + 4, bw, 22, i == f ? B_PRESSED : B_RAISED);
             d_icon(w->kind, bx + 4, SH - TASK_H + 7);
-            gui_clip(bx + 22, SH - TASK_H + 4, bw - 26, 22);
+            wclip(bx + 22, SH - TASK_H + 4, bw - 26, 22);
             d_text(bx + 24, SH - TASK_H + 9, C_DARK, i == f ? F_BOLD : F_SANS, w->title);
-            gui_noclip();
+            wnoclip();
             ++k;
         }
         ++i;
@@ -745,6 +801,36 @@ static void redraw() {
     if (start_open) draw_start();
     gui_show();
     dirty = 0;
+    dmg = 0;
+}
+
+// Only the damage (above): the desktop under it, the icons and windows
+// that reach into it, back to front, and the taskbar if it does. A menu
+// open is drawn over everything, so that is still the whole scene.
+static void redraw_part() {
+    int k, f, i;
+    if (menu_win || start_open) { redraw(); return; }
+    part = 1;
+    wnoclip();
+    gui_rect(dmg_x0, dmg_y0, dmg_x1 - dmg_x0, dmg_y1 - dmg_y0, C_DESK);
+    k = 0;
+    while (k < N_ICONS) {
+        // an icon's label is centred under it and can be wider than it
+        if (in_damage(0, 14 + k * 72, 80, 52)) icon(18, 14 + k * 72, icon_labels[k], icon_kinds[k]);
+        ++k;
+    }
+    f = win_focused();
+    k = 0;
+    while (k < nz) {
+        i = order[k];
+        if (!wins[i].min && in_damage(wins[i].x, wins[i].y, wins[i].w, wins[i].h)) draw_window(i, i == f);
+        ++k;
+    }
+    if (in_damage(0, SH - TASK_H, SW, TASK_H)) draw_taskbar();
+    gui_noclip();
+    gui_show();
+    part = 0;
+    dmg = 0;
 }
 
 // ---- actions --------------------------------------------------------------------------
@@ -1075,18 +1161,36 @@ int main(int argc, char **argv) {
             if (cpu_n >= 2) {
                 cpu_n = 0;
                 k = tasks_cpu_usage();
-                if (k != cpu_pct) { cpu_pct = k; dirty = 1; }
+                if (k != cpu_pct) { cpu_pct = k; mark_rect_dirty(0, SH - TASK_H, SW, TASK_H); }
             }
         }
         secs = gui_clock() / 60;
-        if (secs != clock_min) { clock_min = secs; dirty = 1; }
-        // A redraw is the whole scene. Input gets one at once; a program
-        // pouring out text (raycast, top) gets at most one every 25 ms --
-        // it can print far faster than a person can read. Machine time
-        // (__time), the clock the desktop sleeps on: host time runs at a
-        // different rate whenever the machine is not paced to it.
-        if (dirty && (input || __time() - last_draw >= 25)) { redraw(); last_draw = __time(); busy = 1; }
-        if (!busy) umsleep(dirty ? 5 : 15);
+        if (secs != clock_min) { clock_min = secs; mark_rect_dirty(0, SH - TASK_H, SW, TASK_H); }
+        // A redraw: the whole scene, or what is damaged (above). Input
+        // gets one at once; a program pouring out text (raycast, top) gets
+        // at most one every 25 ms -- it can print far faster than a person
+        // can read. Machine time (__time), the clock the desktop sleeps on:
+        // host time runs at a different rate whenever the machine is not
+        // paced to it.
+        if ((dirty || dmg) && (input || __time() - last_draw >= 25)) {
+            if (dirty) redraw(); else redraw_part();
+            last_draw = __time();
+            busy = 1;
+        }
+        // Nothing to do: sleep until there is. That is an event (a key, the
+        // mouse), output on a terminal's pipe, or the next thing due -- a
+        // redraw held back by the 25 ms above, Task Manager's tick -- and
+        // the kernel watches for the first two itself (SYS_EVWAIT), where
+        // this used to wake every 15 ms to look. While a redraw is held
+        // back the pipes are not watched: a program pouring out text would
+        // wake it at once, with nothing to do until the 25 ms are up.
+        if (!busy) {
+            if (dirty || dmg) k = 25 - (__time() - last_draw);
+            else k = 1000 - (__time() - last_tick);
+            if (!second_draw && k > 100) k = 100;   // the half-second first-frame redraw
+            if (k < 1) k = 1;
+            uevwait(k, gui_in, !(dirty || dmg));
+        }
     }
 
     k = 0;

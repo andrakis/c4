@@ -435,3 +435,58 @@ scanned the 2,000 cells of every terminal twice.
 | cycles | 4.94M (1.0%) | 3.59M (0.7%) |
 | `term_draw` | 1.31M | below the top 8 |
 | `gui_frame` + `gui_commit` | 0.97M | 0.90M |
+
+**(d) Redrawing only what changed** (wm.c). What changes on its own is
+usually one window's contents (a terminal's output, Task Manager's
+numbers, a build's output) or the taskbar's clock and CPU meter. Those
+now mark only their rectangle (`mark_win_dirty`, `mark_rect_dirty`).
+`redraw_part` then draws only what lies in it, with no clear, back to
+front as the full redraw does, all of it clipped to the damage:
+- the desktop under the damage;
+- the icons and windows that reach into it;
+- the taskbar if it does.
+
+Every clip a window sets for its title or client area is intersected
+with the damage (`wclip`, `wnoclip`). Input, and anything that changes
+the scene, still draws all of it, and so does a menu being open.
+
+The display keeps its back canvas between frames, so this is what
+`display.js` shows. The frame model in test-desktop.mjs and
+prof-c4ix.mjs, and display.js's text record for test-web, now paint the
+same way, as you approved. A frame that begins with CLEAR is the whole
+scene, as before. In one that does not, a rectangle it fills inside its
+clip covers what earlier frames put there, and a string drawn outside
+its clip is not seen. Within one frame nothing covers anything, as
+before.
+
+**(e) An event wait** (`SYS_EVWAIT`, 230, `uevwait`). The desktop's loop
+woke every 15 ms to poll its event ring and every terminal's pipe. It
+now sleeps until its next deadline: a redraw held back by the 25 ms
+limit, or Task Manager's tick. The kernel wakes it sooner, from
+`sched_unblocked`, when an event lands in its GUI ring (whose head the
+host moves) or, unless a redraw is being held back, when a pipe it reads
+has data or reaches end of file (`sched_events`). In the browser the
+worker resumes the machine at once on an event, so input is no slower.
+
+| per 5 s | step 10 | (a)-(c) | (d), (e) |
+|---|---|---|---|
+| desk1: the desktop and a Command Prompt | 1.61M cycles | | 0.22M (0.0%) |
+| idle: four windows | 4.94M (1.0%) | 3.59M (0.7%) | 2.20M (0.4%) |
+| raycast in a Command Prompt, frames shown | 16 | | 16 |
+| raycast -f 50 (after ac7f4a6), frames shown | 3 | | 96 |
+
+Against the baseline, an idle desktop with four windows went from 11.0M
+cycles per 5 s (2.2% of the machine, 60.6% of it kernel) to 2.20M (0.4%,
+9.1% kernel), and the desktop with only its Command Prompt from 6.7M to
+0.22M.
+
+raycast flat out still shows about three frames a second: it writes
+about 117 full-colour frames a second, and the desktop parses every byte
+of each before it can show one. With its frame cap (`-f 50`), which now
+sleeps only raycast (ac7f4a6), it shows about 19.
+
+Found on the way: init's ping/pong demo is meant to interleave by its
+yields alone, under a mask. The mask is each task's own (sched.c), and
+only init held it, so a preemption tick between a print and a yield
+reordered the 64-bit golden whenever cycle counts moved. ping and pong
+now hold their own.

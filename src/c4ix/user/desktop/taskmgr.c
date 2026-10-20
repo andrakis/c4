@@ -115,7 +115,7 @@ int tasks_open_perf() {
 // cost (docs/c4ix-cpu.md, step 11).
 void tasks_tick(struct win *w) {
     sample(S(w));
-    if (!w->min) mark_dirty();
+    mark_win_dirty(w);   // its own window, and nothing for a minimised one
 }
 
 // The taskbar's CPU meter: the same sample as the Performance tab, kept

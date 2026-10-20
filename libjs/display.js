@@ -19,6 +19,11 @@ const POINTERS = ['default', 'text', 'nwse-resize', 'pointer', 'move', 'wait', '
 import { RingReader, FbConsumer } from './shared.js';
 
 const css = rgb => '#' + ((rgb >>> 0) & 0xffffff).toString(16).padStart(6, '0');
+const inRect = (r, x, y) => x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h;
+const cutRect = (a, b) => {
+  const x = Math.max(a.x, b.x), y = Math.max(a.y, b.y);
+  return { x, y, w: Math.min(a.x + a.w, b.x + b.w) - x, h: Math.min(a.y + a.h, b.y + b.h) - y };
+};
 
 export class Display {
   constructor(canvas, send) {
@@ -182,7 +187,25 @@ export class Display {
   // For tests: with recordText on, shownText is every string the last
   // presented frame drew, as { x, y, s }. A canvas cannot be read back as
   // text, and this is the next best thing to reading the screen.
-  noteText(x, y, s) { if (this.recordText) this.texts.push({ x, y, s }); }
+  //
+  // A frame with no CLEAR (the C4IX desktop's damage redraw) paints over
+  // part of the one before, so the record does too: a rectangle it fills
+  // inside its clip covers earlier frames' strings there, and a string it
+  // draws outside its clip is not shown. Within a frame nothing covers
+  // anything, as before.
+  noteText(x, y, s) {
+    if (!this.recordText) return;
+    if (this.partial && this.clipRect && !inRect(this.clipRect, x, y)) return;
+    this.texts.push({ x, y, s, gen: this.textGen | 0 });
+  }
+  noteRect(x, y, w, h) {
+    if (!this.recordText || !this.partial) return;
+    let r = { x, y, w, h };
+    if (this.clipRect) r = cutRect(r, this.clipRect);
+    if (r.w <= 0 || r.h <= 0) return;
+    const g = this.textGen | 0;
+    this.texts = this.texts.filter(t => t.gen === g || !inRect(r, t.x, t.y));
+  }
 
   draw(words) {
     const c = this.ctx;
@@ -195,9 +218,12 @@ export class Display {
         case CMD.CLEAR:
           c.fillStyle = css(words[p]); c.fillRect(0, 0, this.width, this.height);
           this.texts = [];
+          this.partial = false;
           break;
         case CMD.RECT:
-          c.fillStyle = css(words[p + 4]); c.fillRect(words[p], words[p + 1], words[p + 2], words[p + 3]); break;
+          c.fillStyle = css(words[p + 4]); c.fillRect(words[p], words[p + 1], words[p + 2], words[p + 3]);
+          this.noteRect(words[p], words[p + 1], words[p + 2], words[p + 3]);
+          break;
         case CMD.RECTO:
           c.strokeStyle = css(words[p + 4]); c.lineWidth = 1;
           c.strokeRect(words[p] + 0.5, words[p + 1] + 0.5, words[p + 2] - 1, words[p + 3] - 1); break;
@@ -242,6 +268,8 @@ export class Display {
         case CMD.PRESENT:
           this.presentMode = true;
           this.present();
+          this.textGen = (this.textGen | 0) + 1;
+          this.partial = true;
           break;
         case CMD.SIZE:
           this.resize(Math.max(1, words[p]), Math.max(1, words[p + 1])); break;
@@ -274,6 +302,7 @@ export class Display {
           if (this.clipped) c.restore();
           c.save(); c.beginPath(); c.rect(words[p], words[p + 1], words[p + 2], words[p + 3]); c.clip();
           this.clipped = true;
+          this.clipRect = { x: words[p], y: words[p + 1], w: words[p + 2], h: words[p + 3] };
           break;
         case CMD.FB: {
           // A whole framebuffer, carried in the stream (the message path).
@@ -293,6 +322,7 @@ export class Display {
         }
         case CMD.NOCLIP:
           if (this.clipped) { c.restore(); this.clipped = false; }
+          this.clipRect = null;
           break;
       }
       i += len;

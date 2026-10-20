@@ -54,6 +54,14 @@ static char iobuf[IOBUF];
 static struct term *T(struct win *w) { return (struct term *)w->st; }
 static struct win *feeding;       // the window whose output feed() is reading
 
+// Output changed only the terminal it went to (wm.c's damage), when that
+// is the window being fed; anything else -- an echo, a say -- comes with
+// input, which draws the whole scene anyway.
+static void feed_dirty(struct term *t) {
+    if (feeding && T(feeding) == t) mark_win_dirty(feeding);
+    else mark_dirty();
+}
+
 // xterm's 256 colours: the 16 VGA ones, a 6x6x6 cube, 24 greys.
 static int level(int v) { if (!v) return 0; return 55 + 40 * v; }
 static void palette() {
@@ -232,7 +240,7 @@ static void apc(struct win *w, struct term *t) {
         memcpy(t->gshow, t->gcur, t->ncur * sizeof(int));
         t->nshow = t->ncur;
         t->ncur = 0;
-        mark_dirty();
+        feed_dirty(t);
         return;
     }
     // everything else is drawn later: into the list being built
@@ -306,7 +314,7 @@ static void feed(struct term *t, char *buf, int n) {
         else if (c == 9) { t->cx = (t->cx + 8) & ~7; if (t->cx >= COLS) t->cx = COLS - 1; }
         else if (c >= 32) putc_(t, c);
     }
-    mark_dirty();
+    feed_dirty(t);
 }
 
 static void echo(struct term *t, int c) { tmp[0] = c; feed(t, tmp, 1); }

@@ -43,14 +43,21 @@ const out = [];
 const vm = createMachine({ arenaMb: 64, mhz: 100, gui, drives: [{ files, writable: false, sink: null }], onByte: b => out.push(b) });
 vmref = vm; boot(vm, new Uint8Array(readFileSync(process.env.KERNEL || join(ROOT, "c4ix32.c4r"))), ['c4ix32.c4r']);
 const consoleText = () => Buffer.from(out).toString('latin1');
-let frame = [], cur = [], presents = 0;
+// The screen's strings, as test-desktop.mjs reads them: a frame without a
+// CLEAR (the desktop's damage redraw) paints over part of the one before.
+let frame = [], cur = [], presents = 0, gen = 0, clip = null, partial = false;
+const within = (r, x, y) => x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h;
 const pump = () => { const words = gui.drain();
   for (let i = 0; words && i < words.length; i += words[i]) { const t = words[i + 1];
-    if (t === CMD.CLEAR) cur = [];
+    if (t === CMD.CLEAR) { cur = []; partial = false; }
+    if (t === CMD.CLIP) clip = { x: words[i + 2], y: words[i + 3], w: words[i + 4], h: words[i + 5] };
+    if (t === CMD.NOCLIP) clip = null;
+    if (t === CMD.RECT && partial) { const r = { x: words[i + 2], y: words[i + 3], w: words[i + 4], h: words[i + 5] };
+      cur = cur.filter(s => s.gen === gen || !within(r, s.x, s.y) || (clip && !within(clip, s.x, s.y))); }
     if (t === CMD.TEXT2) { const n = words[i + 8]; let s = '';
       for (let k = 0; k < n; k++) s += String.fromCharCode((words[i + 9 + (k >> 2)] >>> ((k & 3) * 8)) & 0xff);
-      cur.push({ x: words[i + 2], y: words[i + 3], s }); }
-    if (t === CMD.PRESENT) { frame = cur; presents++; } } };
+      if (!partial || !clip || within(clip, words[i + 2], words[i + 3])) cur.push({ x: words[i + 2], y: words[i + 3], s, gen }); }
+    if (t === CMD.PRESENT) { frame = cur.slice(); presents++; gen++; partial = true; } } };
 const run = (c = 2e6) => { const r = vm.run(c); pump(); return r; };
 const until = (cond, budget = 400) => { for (let i = 0; i < budget; i++) { if (cond()) return true; if (run() === STOP.HALT) return cond(); } return cond(); };
 const settle = () => { for (let i = 0; i < 20; i++) run(); };

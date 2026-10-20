@@ -26,23 +26,35 @@ static int pp_rounds;
 
 static int ping_task(int argc, int argv) {
     int i;
+    // Masked, so the only switch is the yield: the mask is each task's
+    // own (sched.c), and init's does not reach this one -- unmasked, a
+    // preemption tick landing between the print and the yield reordered
+    // the lines, as code anywhere moved the cycle counts.
+    sched_lock();
     i = 0;
     while (i < argc) {
         kprintf("ping %d\n", i);
         sched_yield();
         ++i;
     }
+    sched_unlock();
     return 100 + argc;
 }
 
 static int pong_task(int argc, int argv) {
     int i;
+    // Masked, so the only switch is the yield: the mask is each task's
+    // own (sched.c), and init's does not reach this one -- unmasked, a
+    // preemption tick landing between the print and the yield reordered
+    // the lines, as code anywhere moved the cycle counts.
+    sched_lock();
     i = 0;
     while (i < argc) {
         kprintf("pong %d\n", i);
         sched_yield();
         ++i;
     }
+    sched_unlock();
     return 200 + argc;
 }
 

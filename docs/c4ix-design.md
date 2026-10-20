@@ -586,6 +586,11 @@ loading or assigning a whole struct is an error.
   the cooperative backend, the systable door and `host_type()`. A host
   without c4m's traps is refused at boot.
 
+- **`SYS_EVWAIT`** (230, 2026-10-21, docs/c4ix-cpu.md step 11): sleep
+  until a deadline, an event in a GUI ring, or data on a pipe the caller
+  reads. The desktop's loop waits on it, and redraws only damaged
+  regions.
+
 ## 6.1 Running it
 
     make run-c4ix        an interactive shell on c4m

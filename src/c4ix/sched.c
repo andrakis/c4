@@ -176,7 +176,8 @@ void sched_new_slice() {
 // compare the raw values -- the habit that survives a wrap.
 static int sched_unblocked(struct task *n) {
     if (n->state == TS_SLEEPING) {
-        if (__time() - n->ck_wake < 0) return 0;
+        if (__time() - n->ck_wake < 0 && !(n->ev_wait && sched_events(n))) return 0;
+        n->ev_wait = 0;
         n->state = TS_READY;
         return 1;
     }
@@ -184,6 +185,28 @@ static int sched_unblocked(struct task *n) {
     if (!vfs_readable(n->block_vn, n->block_pos)) return 0;
     n->state = TS_READY;
     return 1;
+}
+
+// What SYS_EVWAIT waits for besides the clock: an event in the task's GUI
+// ring, whose header is [capacity, head, tail] -- the host moves the head,
+// the task the tail -- or data, or end of file, on a pipe it reads.
+int sched_events(struct task *t) {
+    struct file *f;
+    int fd, *ring;
+    if (t->ev_wait & 1) {
+        ring = (int *)t->ev_ring;
+        if (ring && ring[1] != ring[2]) return 1;
+    }
+    if (t->ev_wait & 2) {
+        fd = 0;
+        while (fd < FD_MAX) {
+            f = (struct file *)t->fds[fd];
+            if (f && f->vn->type == VN_PIPE && (f->flags & 3) == C4IX_O_RDONLY
+                && (f->vn->size > f->vn->rpos || !f->vn->writers)) return 1;
+            ++fd;
+        }
+    }
+    return 0;
 }
 
 // The earliest deadline among sleeping tasks, or 0 if none. The idle

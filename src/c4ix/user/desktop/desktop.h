@@ -91,7 +91,9 @@ void win_title(struct win *w, char *s);
 void win_raise(int i);
 int  win_focused();
 void win_menus(struct win *w, int n, char **titles, char ***items);
-void mark_dirty();
+void mark_dirty();                    // the whole scene is to be drawn again
+void mark_win_dirty(struct win *w);   // only this window's contents changed
+void mark_rect_dirty(int x, int y, int w, int h);  // only this rectangle
 int  now_ms();
 void msgbox(struct win *owner, char *title, char *text, int yesno, int action);
 void inputbox(struct win *owner, char *title, char *prompt, char *initial, int action);

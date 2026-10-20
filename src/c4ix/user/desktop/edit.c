@@ -816,7 +816,7 @@ void edit_tick(struct win *w) {
             if (buf[i] != 10 && buf[i] != 13) e->bpart[e->bpartn++] = buf[i];
             ++i;
         }
-        mark_dirty();
+        mark_win_dirty(w);   // only the build pane moved
     }
     if (n < 0) {
         // every writer has gone: the build is over

@@ -72,7 +72,8 @@ enum {
     SYS_SLEEP = 220, SYS_AVAIL = 221, SYS_INTR = 222, SYS_CLOEXEC = 223,
     SYS_STAT = 224, SYS_UNLINK = 225, SYS_RENAME = 226, SYS_LAZYFILE = 227,
     SYS_STACK = 228, SYS_CPUSTAT = 229,
-    SYS_TOP = 230          // one past the last: sched_trap's range check
+    SYS_EVWAIT = 230,
+    SYS_TOP = 231          // one past the last: sched_trap's range check
 };
 // taskinfo fills, in order: id, parent, state, privs, nsyscalls,
 // ntraps, cycles, then the name packed into the remaining words.
@@ -348,6 +349,11 @@ struct task {
     int  uacc;                 // not yet in ucycles
     int  kacc;                 // not yet in kcycles
     int  ntraps;               // traps taken on its behalf
+    // SYS_EVWAIT: what besides the clock ends this task's sleep -- 1, an
+    // event in the GUI ring at ev_ring; 2, data or end of file on a pipe
+    // it reads (sched_events)
+    int  ev_wait;
+    int  ev_ring;
     // C4KE compatibility state (c4ke.c). Zero for every task that
     // never uses it -- sl4b_alloc memsets, so this costs nothing to
     // carry and nothing to initialise.
@@ -506,6 +512,7 @@ extern int   sched_intrap;
 extern struct task *task_reaplist;  // released while running, to be freed (task.c)
 void         task_exit(int code);
 void         task_zombify(struct task *t, int code);  // every death: wakes its waiter
+int          sched_events(struct task *t);  // SYS_EVWAIT: has what it waits for come?
 extern int   sched_nlive;      // tasks still to finish (sched.c)
 extern int   sched_nzombies;
 int          task_wait(struct task *t);

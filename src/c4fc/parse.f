@@ -575,12 +575,15 @@ CREATE SLBUF 8192 ALLOT
 \ -- statements ---------------------------------------------------------
 
 DEFER STATEMENT                         \ blocks and statements nest
+\ a local's brace list and its stores (M7b), with the global initializers
+DEFER LOCAL-BRACES ( ag na -- ai iv ivn na' )
+DEFER LOCAL-RECS ( ety cnt ai -- v )
 
 \ An array or a struct takes as many frame slots as it takes cells, and
 \ its name stands for the address of the LOWEST one -- locals grow
 \ downwards, so int a[4] as the first local is slots 1..4 and a is
 \ LEA -4.
-: LOCAL-DECLS ( v -- ) {: v | ct dt t a u sz ag na iv ivn y nd nn bq q fn -- :}
+: LOCAL-DECLS ( v -- ) {: v | ct dt t a u sz ag na iv ivn y nd nn bq q fn ai -- :}
    BEGIN TYPE? TK Static = OR WHILE
       TK Static = IF STATIC-DECL ELSE
       BASE-TYPE TO ct   BQ @ TO bq
@@ -604,10 +607,12 @@ DEFER STATEMENT                         \ blocks and statements nest
             dt T-STRUCT? IF dt T-SIZE TO sz THEN
          THEN
          \ the initialiser, which is CODE and belongs to the block
-         0 TO iv   0 TO ivn   0 TO nd
+         0 TO iv   0 TO ivn   0 TO nd   0 TO ai
          TK Assign = IF
             TNEXT
-            ag IF
+            TK Lbrace =  ag dt T-STRUCT? OR  AND IF
+               ag na LOCAL-BRACES TO na TO ivn TO iv TO ai
+            ELSE ag IF
                TK Str = IF
                   TL TO ivn   ivn CELLS ALLOT: TO iv
                   ivn 0 ?DO TV I + C@ iv I CELLS + ! LOOP
@@ -625,7 +630,7 @@ DEFER STATEMENT                         \ blocks and statements nest
                THEN
             ELSE
                1 EXPR TO nd
-            THEN
+            THEN THEN
          THEN
          ag IF  na 1 < IF 1 TO na THEN  na dt T-SIZE * TO sz  THEN
          sz 0= IF
@@ -636,6 +641,13 @@ DEFER STATEMENT                         \ blocks and statements nest
             a u c_loc NLOC @ NEGATE t 1 sz ST,
          THEN
          q ST-LAST y.q !
+         ai IF
+            STN @ 1- ST[] TO y
+            n_lagg 4 CELLS NEW TO nn
+            y nn >lsym !   sz nn >lbytes !
+            dt  ag IF na ELSE -1 THEN  ai LOCAL-RECS nn >lrecs !
+            nn v V,
+         THEN
          nd 0<> ivn 0<> OR IF
             STN @ 1- ST[] TO y
             n_linit 7 CELLS NEW TO nn
@@ -993,6 +1005,29 @@ CREATE IVAL IVMAX CELLS ALLOT
    TV TL ST-FIND TO y
    y 0= IF -1 EXIT THEN
    y y.class @ c_const = y y.cv @ OR 0= ;
+\ c4lc-parse's p:exprleaf?: in a local's brace list, a leaf that starts
+\ with &, or has a string, a type name, or a name no constant answers
+\ before the next , or }, is an expression; a string to start is a string
+VARIABLE LOCAL-INIT   0 LOCAL-INIT !
+: EXPR-LEAF? ( -- f ) {: | i k d y tk -- f :}
+   TK Str = IF 0 EXIT THEN
+   TK And = IF -1 EXIT THEN
+   TP @ TO i   0 TO d
+   BEGIN
+      i TOKS V@ TO tk   tk t.kind @ TO k
+      k Eof = IF 0 EXIT THEN
+      d 0=  k Comma = k Rbrace = OR k Semi = OR  AND IF 0 EXIT THEN
+      k Str = IF -1 EXIT THEN
+      k KIND-TYPE? IF -1 EXIT THEN
+      k Id = IF
+         tk t.val @ tk t.len @ ST-FIND TO y
+         y 0= IF -1 EXIT THEN
+         y y.class @ c_const = y y.cv @ OR 0= IF -1 EXIT THEN
+      THEN
+      k Lparen = k Brak = OR IF d 1+ TO d THEN
+      k Rparen = k Rbrak = OR IF d 1- TO d THEN
+      i 1+ TO i
+   AGAIN ;
 DEFER INIT-ITEM
 : INIT-BRACES ( -- node ) {: | v -- n :}
    Lbrace WANT   16 NEW-VEC TO v
@@ -1004,6 +1039,7 @@ DEFER INIT-ITEM
    3 v 0 0 INIT-NODE ;
 : INIT-LEAF ( -- node ) {: | a u -- n :}
    TK Lbrace = IF INIT-BRACES EXIT THEN
+   LOCAL-INIT @ IF EXPR-LEAF? IF 6 1 EXPR 0 0 INIT-NODE EXIT THEN THEN
    TK Str = IF STR-LIT TO u TO a  1 a u 0 INIT-NODE EXIT THEN
    TK And = IF
       TNEXT  TK Id <> IF ." c4fc: & initialiser requires a function name" CR ABORT THEN
@@ -1058,12 +1094,24 @@ CREATE SQ SQ-MAX CELLS ALLOT   VARIABLE SQN   VARIABLE SQI
    SQ SQN @ CELLS + !  1 SQN +! ;
 : SQ> ( -- off )  SQ SQI @ CELLS + @  1 SQI +! ;
 
+\ a local's stores (M7b): AMODE 2 records each value where it goes, as
+\ (offset type node value) -- an expression node, or 0 and a number --
+\ for gen.f's n_lagg to store when the declaration runs
+VARIABLE LREC
+: LREC, ( off ty node v -- ) {: o t nd v | r -- :}
+   4 CELLS ALLOT: TO r  o r !  t r CELL+ !  nd r 2 CELLS + !  v r 3 CELLS + !
+   r LREC @ V, ;
 : AGG-PUT ( v ty off -- ) {: v t o -- :}
    t T-BYTE? IF v o ID-C! EXIT THEN
    t T-HALF? IF v 255 AND o ID-C!  v 8 RSHIFT 255 AND o 1+ ID-C! EXIT THEN
    v o ID-! ;
 : AGG-SCALAR ( ty off node -- ) {: t o nd | k y -- :}
    nd @ TO k
+   AMODE @ 2 = IF
+      k 0 = IF  o t 0 nd CELL+ @ LREC,  EXIT THEN
+      k 1 = IF  o t  nd CELL+ @ nd 2 CELLS + @ n_str N2  0 LREC,  EXIT THEN
+      k 6 = IF  o t  nd CELL+ @  0 LREC,  EXIT THEN
+      ." c4fc: unsupported initializer element" CR ABORT THEN
    k 0 = IF AMODE @ IF nd CELL+ @ t o AGG-PUT THEN EXIT THEN
    k 1 = IF
       AMODE @ 0= IF nd CELL+ @ nd 2 CELLS + @ ID-STR, SQ,
@@ -1092,6 +1140,8 @@ CREATE SQ SQ-MAX CELLS ALLOT   VARIABLE SQN   VARIABLE SQI
    REPEAT ;
 : AGG-STRFILL ( cnt off node -- ) {: c o nd -- :}
    nd 2 CELLS + @ c > IF ." c4fc: a string does not fit its array" CR ABORT THEN
+   AMODE @ 2 = IF
+      nd 2 CELLS + @ 0 ?DO  o I + t_char 0 nd CELL+ @ I + C@ LREC,  LOOP EXIT THEN
    AMODE @ IF nd 2 CELLS + @ 0 ?DO nd CELL+ @ I + C@ o I + ID-C! LOOP THEN ;
 
 DEFER AGG-FILL ( ety cnt off v i -- i' )
@@ -1160,6 +1210,27 @@ DEFER AGG-FILL ( ety cnt off v i -- i' )
 ' (AGG-FILL) IS AGG-FILL
 \ a global's whole brace list, at OFF
 : AGG-TOP ( ety cnt off node -- )  CELL+ @ 0 -1 AGG-LIST DROP ;
+
+\ a local's brace list (M7b), c4lc-parse's p:linit. An array's list of
+\ plain numbers keeps the element-by-element stores it always had (iv
+\ ivn, and no tree); anything else is a tree for LOCAL-RECS
+: ALL-NUMS? ( node -- f ) {: nd | v f -- f :}
+   nd CELL+ @ TO v   -1 TO f
+   v V# 0 ?DO I v V@ @ IF 0 TO f THEN LOOP f ;
+: (LOCAL-BRACES) ( ag na -- ai iv ivn na' ) {: ag na | ai lv iv ivn -- ai iv ivn na :}
+   1 LOCAL-INIT !  INIT-BRACES TO ai  0 LOCAL-INIT !
+   ag IF ai ALL-NUMS? IF
+      ai CELL+ @ TO lv   lv V# TO ivn   ivn 1 MAX CELLS ALLOT: TO iv
+      ivn 0 ?DO I lv V@ CELL+ @ iv I CELLS + ! LOOP
+      na 0< IF ivn TO na THEN
+      0 iv ivn na EXIT THEN THEN
+   ag na 0< AND IF ai AGG-COUNT TO na THEN
+   ai 0 0 na ;
+' (LOCAL-BRACES) IS LOCAL-BRACES
+\ ... and its stores, walked as c4lc-gen's g:localaggr walks it
+: (LOCAL-RECS) ( ety cnt ai -- v )
+   16 NEW-VEC LREC !  2 AMODE !  0 SWAP AGG-TOP  0 AMODE !  LREC @ ;
+' (LOCAL-RECS) IS LOCAL-RECS
 
 : DECL {: | a u ct dt t n sz ag sc at y ivn off es fa fu fr fs fx fk bq q ce fn ai sa su aet acn gy -- :}
    STORAGE TO sc

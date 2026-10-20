@@ -1045,6 +1045,7 @@
 	(begin
 		(define k (p:kind))
 		(if (= k 'Lbrace) (p:braceinit)
+		(if (if p:inlocal (p:exprleaf?) false) (list 'expr (p:expr 1))
 		(if (= k 'Str) (p:strlit)
 		(if (= k 'And)
 			(begin
@@ -1060,7 +1061,40 @@
 				(define fn (p:value))
 				(p:advance)
 				(list 'name fn))
-		(list 'num (p:const "initializer")))))))))
+		(list 'num (p:const "initializer"))))))))))
+;; A local's brace list (M7b): as a global's, but a leaf that is no
+;; constant is (expr E), which c4lc-gen's g:localaggr stores when the
+;; declaration runs. A leaf is an expression when it starts with &, or
+;; when before the next , or } there is a string, a type name, or a name
+;; that is no enum or static const constant; a string to start is a
+;; string. c4fc's LOCAL-BRACES and EXPR-LEAF?.
+(define p:inlocal false)
+(define p:linit (lambda ()
+	(begin
+		(set! p:inlocal true)
+		(define r (p:braceinit))
+		(set! p:inlocal false)
+		r)))
+(define p:exprleaf? (lambda ()
+	(if (= (p:kind) 'Str) false
+	(if (= (p:kind) 'And) true
+	(p:exprleaf?/2 p:toks 0)))))
+(define p:exprleaf?/2 (lambda (ts d)
+	(begin
+		(define t (head ts))
+		(define k (head t))
+		(if (= k 'Eof) false
+		(if (if (= d 0) (if (= k 'Comma) true (if (= k 'Rbrace) true (= k 'Semi))) false) false
+		(if (= k 'Str) true
+		(if (p:declstart-tok? t) true
+		(if (if (= k 'Id) (= (p:constname? (p:second t)) false) false) true
+		(next p:exprleaf?/2 (tail ts)
+			(if (if (= k 'Lparen) true (= k 'Brak)) (+ d 1)
+			(if (if (= k 'Rparen) true (= k 'Rbrak)) (- d 1) d)))))))))))
+(define p:constname? (lambda (n)
+	(if (p:member? n p:locals) false
+	(if (p:assoc n p:enums) true
+	(if (p:assoc n p:sconsts) true false)))))
 ;; a name standing alone in an initializer that no constant answers
 (define p:initname? (lambda ()
 	(if (= (p:kind) 'Id)
@@ -1261,14 +1295,17 @@
 		(define ty2 (if (= size nil) ty (+ ty p:PTR)))
 		(define q2 (if (= size nil) q (bit:shl q 2)))
 		;; scalars take a full (possibly non-constant) initializer
-		;; expression; arrays keep the constant forms
+		;; expression; a brace list for an array or a struct takes
+		;; expressions too (M7b, p:linit); a string keeps its form
 		(define init
 			(if (= (p:kind) 'Assign)
 				(begin
 					(p:advance)
+					(if (if (= (p:kind) 'Lbrace) (if (= size nil) (p:svalue? ty) true) false)
+						(p:linit)
 					(if (= size nil)
 						(list 'einit (p:expr 1))
-					(p:init)))
+					(p:init))))
 			nil))
 		(define fsize (p:initsize size elem init "local"))
 		(set! p:locals (p:cons n p:locals))

@@ -1952,13 +1952,17 @@
 (define g:istrfill (lambda (cnt off s)
 	(begin
 		(if (> (length s) cnt) (g:die "a string does not fit its array") nil)
-		(if (= g:imode 'put) (g:istrfill/2 s 0 off) nil))))
+		(if (= g:imode 'put) (g:istrfill/2 s 0 off)
+		(if (= g:imode 'local) (g:lstrfill s 0 off) nil)))))
 (define g:istrfill/2 (lambda (s i off)
 	(if (>= i (length s)) nil
 	(begin
 		(string:byte! g:data (+ off i) (string:byte s i))
 		(next g:istrfill/2 s (+ i 1) off)))))
 (define g:iscalar (lambda (ty off it)
+	(if (= g:imode 'local) (g:lstore ty off it)
+	(g:iscalar/g ty off it))))
+(define g:iscalar/g (lambda (ty off it)
 	(begin
 		(define h (head it))
 		(if (= h 'num) (if (= g:imode 'put) (g:iput ty off (g:second it)) nil)
@@ -2023,6 +2027,55 @@
 			(string:byte! g:data off (bit:and v 255))
 			(string:byte! g:data (+ off 1) (bit:and (bit:shr v 8) 255)))
 	(string:word! g:data off v)))))
+
+;; ---- a local aggregate's initializer (M7b) ----
+;;
+;; The walk above in a third mode, 'local: the local is zeroed with MSET
+;; (memset's opcode, which needs no libc), then each value is stored at
+;; its offset as the declaration runs -- a number, a string's address, or
+;; any expression (p:linit's (expr E)). A word-aligned offset is LEA's
+;; own; any other is added to the base. c4fc's n_lagg is the same.
+(define g:lbase 0)
+(define g:localaggr (lambda (d val)
+	(begin
+		(define size (index d 3))
+		(define ty (g:second d))
+		(set! g:lbase (- g:loc val))
+		(g:emit (list 'LEA g:lbase))
+		(g:emit '(PSH))
+		(g:emit '(IMM 0))
+		(g:emit '(PSH))
+		(g:emit (list 'IMM (g:lbytes d)))
+		(g:emit '(PSH))
+		(g:emit '(MSET))
+		(g:emit '(ADJ 3))
+		(set! g:imode 'local)
+		(g:ifillagg (if (= size nil) ty (- ty g:PTR)) size 0 (g:items (index d 4)) true)
+		(set! g:imode 'put))))
+(define g:laddr (lambda (off)
+	(if (= 0 (bit:and off g:WMASK)) (g:emit (list 'LEA (+ g:lbase (/ off g:WORD))))
+	(begin
+		(g:emit (list 'LEA g:lbase))
+		(g:emit '(PSH))
+		(g:emit (list 'IMM off))
+		(g:emit '(ADD))))))
+(define g:lstore (lambda (ty off it)
+	(begin
+		(define h (head it))
+		(g:laddr off)
+		(g:emit '(PSH))
+		(if (= h 'num) (g:emit (list 'IMM (g:second it)))
+		(if (= h 'str) (g:expr it)
+		(if (= h 'expr) (g:expr (g:second it))
+		(g:die "unsupported initializer element"))))
+		(if (if (= h 'num) false (g:svalue? g:ty))
+			(g:die "a struct value in an initializer is not supported") nil)
+		(g:store! ty))))
+(define g:lstrfill (lambda (s i off)
+	(if (>= i (length s)) nil
+	(begin
+		(g:lstore g:CHAR (+ off i) (list 'num (string:byte s i)))
+		(next g:lstrfill s (+ i 1) off)))))
 
 ;; locals: params idx 0..argc-1, loc = argc+1, scalars idx loc+1...;
 ;; initializer stores re-run on every entry, emitted after ENT
@@ -2130,7 +2183,7 @@
 							(g:qwarn "initialization") nil)
 					nil)
 					(g:emit '(SI)))
-			(g:die "unsupported local initializer"))
+			(g:localaggr d val))
 		(if (= (head init) 'braces)
 			(begin
 				(if (> (length (g:second init)) size)
@@ -2142,7 +2195,8 @@
 					(g:die (+ "string does not fit the array " (g:third d))) nil)
 				(g:linit/elems val (g:strbytes (g:second init) 0 (list))
 					size 0 true))
-		(g:die (+ "unsupported array initializer for " (g:third d))))))))))
+		(if (= (head init) 'agg) (g:localaggr d val)
+		(g:die (+ "unsupported array initializer for " (g:third d)))))))))))
 
 (define g:localinits (lambda (ls)
 	(if (empty? ls) nil

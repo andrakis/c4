@@ -349,7 +349,18 @@
 			(if (= init nil) acc
 			(if (= (head init) 'fnaddr) (t:cons (t:second init) acc)
 			(if (= (head init) 'einit) (t:refs (t:second init) acc)
-			acc))))))))
+			(if (= (head init) 'agg) (t:aggrefs (t:second init) acc)
+			acc)))))))))
+;; ... and so can a local brace list's expressions (M7b)
+(define t:aggrefs (lambda (l acc)
+	(if (empty? l) acc
+	(next t:aggrefs (tail l) (t:aggref (head l) acc)))))
+(define t:aggref (lambda (it acc)
+	(if (= (head it) 'expr) (t:refs (t:second it) acc)
+	(if (= (head it) 'agg) (t:aggrefs (t:second it) acc)
+	(if (= (head it) 'desig) (t:aggref (t:third it) acc)
+	(if (= (head it) 'mdesig) (t:aggref (t:third it) acc)
+	acc))))))
 
 (define t:assoc (lambda (k l)
 	(if (empty? l) false

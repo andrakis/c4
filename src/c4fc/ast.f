@@ -96,6 +96,9 @@ NODE: n_fnref  NFIELD: >sym                    ;NODE
 \ how many values were actually supplied, the rest being zero.
 NODE: n_linit  NFIELD: >expr NFIELD: >isym NFIELD: >ivals
                NFIELD: >ivn  NFIELD: >icount NFIELD: >ibyte ;NODE
+\ A local array's or struct's brace list (M7b): the object is zeroed, then
+\ each of >lrecs -- (offset type node value), parse.f's LREC, -- stored.
+NODE: n_lagg   NFIELD: >lsym NFIELD: >lrecs NFIELD: >lbytes ;NODE
 NODE: n_expst  NFIELD: >expr                   ;NODE
 NODE: n_blk    NFIELD: >list NFIELD: >len      ;NODE
 

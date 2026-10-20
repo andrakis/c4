@@ -507,6 +507,27 @@ VARIABLE UFN   0 UFN !
       THEN THEN
    LOOP ;M
 
+\ c4lc-gen's g:localaggr: MSET zeroes the object, then each value goes to
+\ its offset -- LEA's own when it is word-aligned, else added to the base
+: LADDR, ( base off -- ) {: b o -- :}
+   o 1 CELLS 1- AND 0= IF b o 1 CELLS / + oLEA OP2, EXIT THEN
+   b oLEA OP2,  oPSH OP,  o oIMM OP2,  oADD OP, ;
+:M STMT n_lagg {: n | b v r e -- :}
+   n >lsym @ y.val @ TO b
+   b oLEA OP2,  oPSH OP,  0 oIMM OP2,  oPSH OP,  n >lbytes @ oIMM OP2,  oPSH OP,
+   oMSET OP,  3 oADJ OP2,
+   n >lrecs @ TO v
+   v V# 0 ?DO
+      I v V@ TO r
+      b r @ LADDR,  oPSH OP,
+      r 2 CELLS + @ TO e
+      e IF
+         e GEN
+         e CT T-STRUCT? IF ." c4fc: a struct value in an initializer is not supported" CR ABORT THEN
+      ELSE r 3 CELLS + @ oIMM OP2, THEN
+      r CELL+ @ STORE,
+   LOOP ;M
+
 :M STMT n_expst  >expr @ GEN ;M
 \ Inside a spliced body there is no frame to leave, so a return is a
 \ jump to the end of the splice rather than a LEV. The value is already

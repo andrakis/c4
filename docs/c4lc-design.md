@@ -533,6 +533,19 @@ output as the golden: `src/tests/c4lc_pp.c` for the preprocessor and
     the value a global's number, mapped through `GOFF`) for the rest.
   - `int x;` before `int x = 9;` is one object, at the definition, as in
     c4fc: `g:laterinit?` skips the first.
+- **A local array's or struct's brace list**:
+  - `p:linit` parses it as a global's, but a leaf that is no constant is
+    `(expr E)`. A leaf is an expression when it starts with `&`, or has a
+    string, a type name, or a name that no enum or static const answers
+    before the next `,` or `}`.
+  - An array's list of plain numbers keeps its element-by-element stores.
+    Anything else is `g:localaggr`'s: an `MSET` of the whole local, then
+    the global walk in a third mode, `'local`, storing each value at its
+    offset as the declaration runs.
+  - c4fc walks it at parse time into `(offset type node value)` records,
+    which its `n_lagg` node stores in the same order.
+  - T2 sees the calls in it (`t:aggrefs`, c4fc's `REFS n_lagg`); T1 folds
+    none of it.
 - **`__func__`, `__LINE__` and `__FILE__`**:
   - `__func__` (and GNU's `__FUNCTION__` and `__PRETTY_FUNCTION__`) is a
     string of the function's name, made by the parser.

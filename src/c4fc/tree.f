@@ -141,6 +141,8 @@ VARIABLE FN-LABELS   0 FN-LABELS !
    n >expr @ ?DUP IF FOLD n >expr ! THEN  n ;M
 :M FOLD n_linit {: n -- n :}
    n >expr @ ?DUP IF FOLD n >expr ! THEN  n ;M
+\ c4lc's T1 folds no brace list's expression
+:M FOLD n_lagg ;M
 :M FOLD n_switch {: n -- n :}
    n >cond @ FOLD n >cond !  n >body @ FOLD n >body !  n ;M
 
@@ -315,6 +317,9 @@ GENERIC: REFS ( node -- )
 :M REFS n_expst   >expr @ REFS ;M
 :M REFS n_ret     >expr @ REFS? ;M
 :M REFS n_linit   >expr @ REFS? ;M
+:M REFS n_lagg {: n | v -- :}
+   n >lrecs @ TO v
+   v V# 0 ?DO I v V@ 2 CELLS + @ REFS? LOOP ;M
 :M REFS n_comma   REFS-ARGS ;M
 :M REFS n_call  {: n -- :}  n >fn @ SYM-REF  n REFS-ARGS ;M
 :M REFS n_icall {: n -- :}  n >fn @ REFS  n REFS-ARGS ;M

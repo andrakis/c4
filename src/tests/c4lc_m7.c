@@ -288,6 +288,33 @@ int globaddr(void) {
     return 0;
 }
 
+// local aggregate initializers (M7b): expressions, strings, nesting,
+// designators, brace elision, a block's declaration, and lists of plain
+// numbers (the old element-by-element stores). lsum is called only from
+// an initializer, which -O's T2 has to see.
+struct lpt { int x; int y; };
+struct lrec { char tag; short s; char name[6]; char *p; struct lpt at; int n[3]; };
+int lsum(int a) { struct lpt p = { a, a + 1 }; return p.x * 10 + p.y; }
+int localagg(int k) {
+    struct lpt p = { 3, 4 };
+    struct lrec r = { 'r', -2, "ab", "ptr", { k, k * 2 }, { [2] = 9, [0] = lsum(1) } };
+    struct lrec r2 = { .p = "q", .n = { 5 } };
+    int a[4] = { k, k + 1 };
+    int b[3] = { 1, 2, 3 };
+    char c[5] = { 'h', 'i' };
+    char *w[] = { "one", "two", 0 };
+    struct lpt ps[2] = { { 1, 2 }, 3, 4 };
+    printf("lagg %d %d %d %d %s %s\n", p.x + p.y, r.tag, r.s, r.at.x + r.at.y, r.name, r.p);
+    printf("lagg2 %d %d %d %d %d %s\n", r.n[0], r.n[1], r.n[2], a[0] + a[1] + a[2] + a[3], b[2], c);
+    printf("lagg3 %s %s %d %d %d\n", w[0], w[1], w[2] == 0, ps[0].y + ps[1].x, ps[1].y);
+    printf("lagg4 %s %d %d %d\n", r2.p, r2.n[0], r2.tag, r2.at.y);
+    if (k) {
+        struct lpt q = { k, -k };
+        printf("lagg5 %d %d\n", q.x - q.y, (int)(sizeof(w) / sizeof(w[0])));
+    }
+    return 0;
+}
+
 int main(void) {
     nothing();
     printf("void-params %d %d %s\n", seven(), add(2, 3), pick("xyz", 1));
@@ -307,5 +334,6 @@ int main(void) {
     scopy();
     funcname();
     globaddr();
+    localagg(5);
     return 0;
 }

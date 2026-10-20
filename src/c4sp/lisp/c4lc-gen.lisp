@@ -1718,11 +1718,13 @@
 			(g:globalscalar n ty init gattrs)
 		(g:globalarray n ty size init gattrs))))))
 
-;; struct-valued global: zeroed storage, name evaluates to its address
+;; struct-valued global: zeroed storage, name evaluates to its address.
+;; With an initializer it is data, laid out by g:globalaggr (M7b).
 (define g:globalstruct (lambda (n ty init gattrs)
+	(if (= init nil) (g:globalstruct/bss n ty gattrs)
+	(g:globalaggr n ty nil init gattrs))))
+(define g:globalstruct/bss (lambda (n ty gattrs)
 	(begin
-		(if (= init nil) nil
-			(g:die (+ "struct globals cannot be initialized: " n)))
 		(define bytes (g:tysize ty))
 		;; a struct global is never initialized -> pure BSS
 		(set! g:syms (g:cons (list n 'glo ty (g:balloc bytes) bytes gattrs g:gq) g:syms)))))
@@ -1739,7 +1741,7 @@
 					(define slot (g:dword 0))
 					(set! g:dpatches (g:cons (list 'ddata slot soff) g:dpatches))
 					slot)
-			(if (= (head init) 'fnaddr)
+			(if (if (= (head init) 'fnaddr) true (= (head init) 'name))
 				(begin
 					(define f (g:find (g:second init)))
 					(if (= (g:second f) 'fun) nil
@@ -1766,7 +1768,13 @@
 
 ;; the initialized-array case (kept out of g:globalarray so its own BSS
 ;; branch stays a simple one-liner). Storage goes in the data segment.
+;; Anything but plain numbers or a string, or any element that is a
+;; struct, is g:globalaggr's (M7b).
 (define g:globalarrayinit (lambda (n ty s init gattrs elem bytewise bytes)
+	(if (if (= (head init) 'agg) true (g:svalue? elem))
+		(g:globalaggr n ty s init gattrs)
+	(g:globalarrayinit/2 n ty s init gattrs elem bytewise bytes))))
+(define g:globalarrayinit/2 (lambda (n ty s init gattrs elem bytewise bytes)
 	(begin
 		(g:dalign)
 		(define at g:dlen)
@@ -1792,6 +1800,156 @@
 		(string:byte! g:data g:dlen (string:byte str i))
 		(set! g:dlen (+ g:dlen 1))
 		(next g:dstrbytes str (+ i 1))))))
+
+;; ---- aggregate initializers (M7b) ----
+;;
+;; A global array or struct whose initializer is more than numbers: strings,
+;; function addresses, nested braces, structs, `[i] =` and `.m =`. The
+;; initializer is walked against the type twice, the same way both times:
+;;
+;;   'str: every string a POINTER takes goes into the data now, in order,
+;;         before the global -- as `char *s = "..."` has always put it;
+;;   'put: the global's bytes are reserved, zeroed, and each value written
+;;         at its offset; a string pointer and a function address become a
+;;         data patch where they lie, in the order they lie.
+;;
+;; A value is a byte, two bytes or a word by its type, as g:delems writes
+;; them. An aggregate met without braces takes its elements from the
+;; enclosing list (C's brace elision). c4fc's AGG-* words are the same.
+(define g:imode 'put)
+(define g:istrs (list))
+(define g:globalaggr (lambda (n ty cnt init gattrs)
+	(begin
+		(define ety (if (= cnt nil) ty (- ty g:PTR)))
+		(define bytes (if (= cnt nil) (g:tysize ty) (* cnt (g:estride ety))))
+		(define items (g:items init))
+		(set! g:imode 'str)
+		(set! g:istrs (list))
+		(g:ifillagg ety cnt 0 items true)
+		(set! g:istrs (g:reverse g:istrs))
+		(g:dalign)
+		(define at g:dlen)
+		(if (> (+ at bytes) g:DMAX) (g:die "data segment full") nil)
+		(g:dzero bytes)
+		(set! g:imode 'put)
+		(g:ifillagg ety cnt at items true)
+		(set! g:syms (g:cons (list n 'glo ty at bytes gattrs g:gq) g:syms)))))
+;; an initializer's items: a brace list's elements, or the one initializer
+(define g:items (lambda (it)
+	(if (= (head it) 'agg) (g:second it)
+	(if (= (head it) 'braces) (g:numitems (g:second it) (list))
+	(list it)))))
+(define g:numitems (lambda (l acc)
+	(if (empty? l) (g:reverse acc)
+	(next g:numitems (tail l) (g:cons (list 'num (head l)) acc)))))
+;; one object of element type ETY (an array of CNT of them when CNT is
+;; not nil) at OFF, from the cursor CUR; returns what is left of CUR
+(define g:ifill (lambda (ety cnt off cur)
+	(begin
+		(define it (head cur))
+		(define h (head it))
+		(define agg (if (= cnt nil) (g:svalue? ety) true))
+		(if (= agg false)
+			(begin (g:iscalar ety off (g:unwrap it)) (tail cur))
+		(if (if (= h 'agg) true (= h 'braces))
+			(begin (g:ifillagg ety cnt off (g:items it) true) (tail cur))
+		(if (if (= h 'str) (if (= cnt nil) false (g:bytety? ety)) false)
+			(begin (g:istrfill cnt off (g:second it)) (tail cur))
+		(g:ifillagg ety cnt off cur false)))))))
+;; `{ 5 }` for a scalar is 5
+(define g:unwrap (lambda (it)
+	(if (if (= (head it) 'agg) true (= (head it) 'braces))
+		(begin
+			(define l (g:items it))
+			(if (if (empty? l) false (empty? (tail l))) (g:unwrap (head l))
+			(g:die "too many initializers for a scalar")))
+	it)))
+;; an aggregate's elements from ITEMS; BRACED is false when they come
+;; from an enclosing list, which keeps what this one does not take
+(define g:ifillagg (lambda (ety cnt off items braced)
+	(if (= cnt nil) (g:ifillstruct ety off items braced)
+	(g:ifillarr ety cnt off items braced 0))))
+(define g:ifillarr (lambda (ety cnt off items braced idx)
+	(if (empty? items) items
+	(begin
+		(define it (head items))
+		(if (= (head it) 'desig)
+			(if braced
+				(next g:ifillarr ety cnt off (g:cons (g:third it) (tail items)) braced (g:second it))
+			items)
+		(if (>= idx cnt)
+			(if braced (g:die "too many initializers for an array") items)
+		(next g:ifillarr ety cnt off
+			(g:ifill ety nil (+ off (* idx (g:estride ety))) items)
+			braced (+ idx 1))))))))
+(define g:ifillstruct (lambda (sty off items braced)
+	(begin
+		(define ms (g:third (g:sinfo sty)))
+		(g:ifillst ms ms off items braced (g:union? ms)))))
+(define g:ifillst (lambda (all ms off items braced uni)
+	(if (empty? items) items
+	(begin
+		(define it (head items))
+		(if (= (head it) 'mdesig)
+			(if braced
+				(next g:ifillst all (g:memfrom all (g:second it)) off
+					(g:cons (g:third it) (tail items)) braced uni)
+			items)
+		(if (empty? ms)
+			(if braced (g:die "too many initializers for a struct") items)
+		(begin
+			(define m (head ms))       ;; (NAME OFF TYPE BYTES Q)
+			(define mty (index m 2))
+			(define rest
+				(if (if (g:isptr mty) (if (= (index m 3) nil) false true) false)
+					(g:ifill (- mty g:PTR) (/ (index m 3) (g:estride (- mty g:PTR)))
+						(+ off (g:second m)) items)
+				(g:ifill mty nil (+ off (g:second m)) items)))
+			(next g:ifillst all (if uni (list) (tail ms)) off rest braced uni))))))))
+;; a union lays every member at 0; it takes one initializer
+(define g:union? (lambda (ms)
+	(if (empty? ms) false (if (empty? (tail ms)) false (g:allzero? ms)))))
+(define g:allzero? (lambda (ms)
+	(if (empty? ms) true (if (= (g:second (head ms)) 0) (next g:allzero? (tail ms)) false))))
+(define g:memfrom (lambda (ms n)
+	(if (empty? ms) (g:die (+ "no such member in a designator: " n))
+	(if (= (head (head ms)) n) ms (next g:memfrom (tail ms) n)))))
+;; a char array's string: its bytes; the rest stays zero
+(define g:istrfill (lambda (cnt off s)
+	(begin
+		(if (> (length s) cnt) (g:die "a string does not fit its array") nil)
+		(if (= g:imode 'put) (g:istrfill/2 s 0 off) nil))))
+(define g:istrfill/2 (lambda (s i off)
+	(if (>= i (length s)) nil
+	(begin
+		(string:byte! g:data (+ off i) (string:byte s i))
+		(next g:istrfill/2 s (+ i 1) off)))))
+(define g:iscalar (lambda (ty off it)
+	(begin
+		(define h (head it))
+		(if (= h 'num) (if (= g:imode 'put) (g:iput ty off (g:second it)) nil)
+		(if (= h 'str)
+			(if (= g:imode 'str)
+				(set! g:istrs (g:cons (g:dstr (g:second it)) g:istrs))
+			(begin
+				(set! g:dpatches (g:cons (list 'ddata off (head g:istrs)) g:dpatches))
+				(set! g:istrs (tail g:istrs))))
+		(if (if (= h 'name) true (= h 'fnaddr))
+			(begin
+				(define f (g:find (g:second it)))
+				(if (if f (= (g:second f) 'fun) false) nil
+					(g:die (+ "an initializer can name only a function this unit defines: "
+						(g:second it))))
+				(if (= g:imode 'put)
+					(set! g:dpatches (g:cons (list 'dcode off (index f 3)) g:dpatches)) nil))
+		(g:die "unsupported initializer element")))))))
+(define g:iput (lambda (ty off v)
+	(if (g:bytety? ty) (string:byte! g:data off (bit:and v 255))
+	(if (g:halfty? ty)
+		(begin
+			(string:byte! g:data off (bit:and v 255))
+			(string:byte! g:data (+ off 1) (bit:and (bit:shr v 8) 255)))
+	(string:word! g:data off v)))))
 
 ;; locals: params idx 0..argc-1, loc = argc+1, scalars idx loc+1...;
 ;; initializer stores re-run on every entry, emitted after ENT

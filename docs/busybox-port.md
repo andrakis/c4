@@ -17,7 +17,11 @@ Status (2026-10-20):
   - `(void)` and unnamed parameters;
   - `sizeof` of any expression and in constants;
   - function-pointer declarators and calls through any expression;
-  - `goto`.
+  - `goto`;
+  - `enum` as a type anywhere;
+  - static locals;
+  - aggregate initializers, with `[i] =` and `.m =` designators, and
+    `extern T x[]`.
 - The source is not vendored into the repository yet; that is M7e.
 
 ## 1. The target
@@ -75,7 +79,7 @@ c4lc runs as `-O -conforming -P -I src/c4ix/libc/include`:
 - `-conforming` turns on the `\x` and octal escapes. Without it, `'\x41'` is
   49, not 65.
 
-**52 passed when this was written, and 69 pass after M7b's first six
+**52 passed when this was written, and 86 pass after M7b's first nine
 steps (2026-10-20).** It is a tracker and not a `make` gate yet. It
 becomes one, in `make test-c4lc`, once it passes. The kernel and libc gaps
 come from reading `src/c4ix/sys.c`, `vfs.c`, `loader.c` and `src/c4ix/libc`.
@@ -146,8 +150,8 @@ Priorities:
 | `fnptr_decl`, `fnptr_param`, `fnptr_typedef`, `cast_fnptr` | `int (*fp)(int)`, function-pointer parameters, typedefs and casts | **DONE** (M7b), with calls through any expression; `fnptr_typedef` now waits only on initializers | P0 | applet mains, `recursive_action` callbacks, `qsort` comparators, hush's builtin table |
 | `fn_returning_fnptr` | `int (*pick(void))(void)` | CFAIL | P2 | none in this configuration |
 | `applet_table`, `array_of_ptr_to_fn_in_struct_member_call` | a struct member that is a function pointer | **DONE** (M7b); both probes now wait only on aggregate initializers | P0 | hush's `struct built_in_command`, libbb's `llist`/action structs |
-| `typedef_enum`, `enum_typedef`, `enum_var`, `enum_local_decl` | `typedef enum {…} t;`, `enum e v;` inside a function | CFAIL (a global `enum e g;` passes) | P0 | Option bitmasks (`OPT_x`), hush's parse states |
-| `static_local` | a `static` local | CFAIL: "not implemented" | P0 | Common in libbb: buffers, one-time state |
+| `typedef_enum`, `enum_typedef`, `enum_var`, `enum_local_decl` | `typedef enum {…} t;`, `enum e v;` inside a function | **DONE** (M7b): `enum` is a type specifier anywhere | P0 | Option bitmasks (`OPT_x`), hush's parse states |
+| `static_local` | a `static` local | **DONE** (M7b): a global named `FUNCTION.NAME` | P0 | Common in libbb: buffers, one-time state |
 | `inline_only` | `inline` / `static inline` | CFAIL | P0 | `platform.h`'s `ALWAYS_INLINE`, many small helpers in headers |
 | `attribute`, `attr_macro_away` | `__attribute__((…))` anywhere; `#define __attribute__(x)` | CFAIL: the lexer reserves the name, and the parser takes it in one position only | P0 | `NORETURN`, `FAST_FUNC`, `ALIGN1`, `PACKED`, `UNUSED_PARAM` on almost every prototype. Either parse it and ignore it everywhere a declaration allows it, or let the preprocessor redefine it. |
 | `restrict_` | `restrict` | CFAIL: read as a name | P1 | a few libbb prototypes |
@@ -165,21 +169,37 @@ Priorities:
 
 | probe | construct | today | P |
 |---|---|---|---|
-| `strptr_arr`, `const_strptr_arr`, `const_arr` | `char *w[] = {"a", "b"}` | CFAIL: "must be an integer constant" (a single `char *g = "x"` passes) | P0 |
-| `fn_arr_int` | an array of function addresses | CFAIL | P0: the generated `applet_main[]` is exactly this |
-| `struct_global_init`, `struct_arr_init_ints`, `struct_init_str`, `struct_init_fn`, `nested_struct_init` | struct and array-of-struct initializers with numbers, strings and function addresses | CFAIL: "struct globals cannot be initialized" | P0: every option, builtin and keyword table |
-| `global_addr_var`, `global_ptr_init` | `int *p = &x;` in a global | CFAIL: `&` is allowed on functions only | P1 |
-| `local_struct_init` | `struct pt p = {3, 4};` in a function | CFAIL | P1 |
-| `designated` | `[3] = 2`; `.x = 1` | CFAIL | P0 for `[i] =` (18 uses, all in hush); P2 for `.x =` (0 uses) |
-| `extern_arr` | `extern const char t[];` without a size | CFAIL: "needs an initializer" | P0: `bb_msg_*`, `applet_names`, `bb_common_bufsiz1` are all declared this way |
+| `strptr_arr`, `const_strptr_arr`, `const_arr` | `char *w[] = {"a", "b"}` | **DONE** (M7b) | P0 |
+| `fn_arr_int` | an array of function addresses | **DONE** (M7b), for functions the unit defines | P0: the generated `applet_main[]` is exactly this |
+| `struct_global_init`, `struct_arr_init_ints`, `struct_init_str`, `struct_init_fn`, `nested_struct_init` | struct and array-of-struct initializers with numbers, strings and function addresses | **DONE** (M7b), with brace elision | P0: every option, builtin and keyword table |
+| `designated` | `[3] = 2`; `.x = 1` | **DONE** (M7b), both | P0 for `[i] =` (18 uses, all in hush); P2 for `.x =` (0 uses) |
+| `extern_arr` | `extern const char t[];` without a size | **DONE** (M7b) | P0: `bb_msg_*`, `applet_names`, `bb_common_bufsiz1` are all declared this way |
+| (none yet) | the address of a function in **another unit** inside data | not yet: needs a symbol patch whose slot is in data, which c4rlink must then resolve | P0 for the link: `applet_main[]` sits in appletlib.c and names mains defined in each applet's file |
+| `global_addr_var`, `global_ptr_init` | `int *p = &x;` in a global | CFAIL: an initializer may name only a function | P1 |
+| `local_struct_init` | `struct pt p = {3, 4};` in a function | CFAIL: local aggregates take numbers only | P1 |
 | `compound_lit` | `(struct pt){3, 4}` | CFAIL | P2: 0 uses |
 
-These are one piece of work: a general constant initializer for data. Its
-values are integers, string addresses, function addresses and global
-addresses, laid out by the type, and the image's existing `-2`/`-3`/`-4`
-patches relocate them. c4lc's data section already places strings and
-functions. What is missing is walking an aggregate type to lay out the
-values.
+These were one piece of work, done in M7b: a general constant initializer
+for data (c4lc-gen's `g:globalaggr`, c4fc's `AGG-*`).
+- The initializer is a tree of numbers, strings, function names, braces
+  and designators.
+- It is walked against the type twice. The first walk places every string
+  a pointer takes, before the global, as `char *s = "..."` always has.
+- The second walk writes each value at its offset in the zeroed storage.
+  A string pointer becomes a `-4` data-to-data patch where it lies, and a
+  function address a `-3` data-to-code patch.
+- A brace list of plain numbers keeps the old path, and its bytes are the
+  same either way.
+
+Getting c4fc to the same bytes found three old c4fc bugs, now fixed:
+- **Unions were laid out as structs:** `x.c` of `union { int i; char c; }`
+  was at 8, and `sizeof` was 16.
+- **`extern T x[];` made an object of its own.** A later initialised
+  definition made a second one, so code between the two read the wrong
+  one.
+- **String bytes were word-aligned:** a global initializer's string bytes
+  were aligned to a word, where c4lc packs them after the previous
+  global.
 
 ### 3.3 Expressions and statements
 
@@ -393,9 +413,11 @@ Each step lands with tests, and the next starts only when they are green.
    5. ~~function-pointer declarators~~: done, with calls through any
       expression;
    6. ~~`goto`~~: done;
-   7. enum declarations;
-   8. `static` locals;
-   9. aggregate initializers, with `[i] =` designators, and `extern T x[]`;
+   7. ~~enum declarations~~: done, `enum` anywhere a type goes;
+   8. ~~`static` locals~~: done;
+   9. ~~aggregate initializers, with `[i] =` designators, and `extern T
+      x[]`~~: done, for functions the unit defines. Addresses of another
+      unit's functions in data need a c4rlink change, next;
    10. `inline` and `__attribute__`;
    11. 2-D arrays and struct assignment;
    12. then the P1 items.

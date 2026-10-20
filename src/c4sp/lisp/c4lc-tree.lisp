@@ -375,11 +375,19 @@
 				(if (> (bit:and (index d 5) 3) 0) (t:cons (t:third d) acc)
 				acc))))
 			(if (= h 'global)
-				(if (= (index d 5) nil) acc
-				(if (= (head (index d 5)) 'fnaddr)
-					(t:cons (t:second (index d 5)) acc)
-				acc))
+				(if (= (index d 5) nil) acc (t:initnames (index d 5) acc))
 			acc)))))))
+;; every function an initializer names, nested ones too (M7b): an applet
+;; table is the only thing that reaches its mains
+(define t:initnames (lambda (it acc)
+	(begin
+		(define h (head it))
+		(if (if (= h 'fnaddr) true (= h 'name)) (t:cons (t:second it) acc)
+		(if (= h 'agg) (t:initnames/l (t:second it) acc)
+		(if (if (= h 'desig) true (= h 'mdesig)) (t:initnames (t:third it) acc)
+		acc))))))
+(define t:initnames/l (lambda (l acc)
+	(if (empty? l) acc (next t:initnames/l (tail l) (t:initnames (head l) acc)))))
 
 ;; closure over the reference table
 (define t:close (lambda (work live table)

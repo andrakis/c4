@@ -263,9 +263,14 @@ DEFER EXPR                              \ ( lev -- node )
 \ whole cell, which is visible the moment a struct starts with two of
 \ them -- { char a; char b; int c; } is twenty-four bytes and b is at
 \ eight, not one.
-: PARSE-MEMBERS ( k -- ) {: k | t a u off n ag mt et bq q fn -- :}
+\
+\ A UNION lays every member at 0 and is as big as its biggest, rounded up
+\ to a word, as c4lc-gen's g:slayout does it. It used to be laid out as
+\ a struct here, so x.c of `union { int i; char c; } x` was at 8 and
+\ sizeof was 16 (found by M7b's aggregate initializers).
+: PARSE-MEMBERS ( k isu -- ) {: k isu | t a u off n ag mt et bq q fn mx sz -- :}
    Lbrace WANT
-   0 TO off
+   0 TO off   0 TO mx
    BEGIN TK Rbrace <> WHILE
       BASE-TYPE TO t   BQ @ TO bq
       BEGIN
@@ -284,13 +289,16 @@ DEFER EXPR                              \ ( lev -- node )
          THEN
          off 1 CELLS 1- + 1 CELLS 1- INVERT AND TO off
          k a u mt off ag MEM,   q MEM-Q!   ag IF n et T-SIZE * MEM-ASZ! THEN
-         off n ag IF et ELSE mt THEN T-SIZE * + TO off
+         n ag IF et ELSE mt THEN T-SIZE * TO sz
+         isu IF
+            sz 1 CELLS 1- + 1 CELLS 1- INVERT AND  DUP mx > IF TO mx ELSE DROP THEN
+         ELSE off sz + TO off THEN
          TK Comma = WHILE TNEXT
       REPEAT
       Semi WANT
    REPEAT
    Rbrace WANT
-   off 1 CELLS 1- + 1 CELLS 1- INVERT AND  k CELLS ST-SIZE + ! ;
+   isu IF mx ELSE off 1 CELLS 1- + 1 CELLS 1- INVERT AND THEN  k CELLS ST-SIZE + ! ;
 
 \ Any run of the specifiers C allows -- const, volatile, signed,
 \ unsigned, short, long, int, char, a struct or union -- in any order.
@@ -311,7 +319,7 @@ DEFER EXPR                              \ ( lev -- node )
       Rbrace WANT
    THEN ;
 
-: (BASE-TYPE) ( -- t ) {: | k a u q sg un sh lg ch it st -- t :}
+: (BASE-TYPE) ( -- t ) {: | k a u q sg un sh lg ch it st isu -- t :}
    0 TO q  0 TO sg  0 TO un  0 TO sh  0 TO lg  0 TO ch  0 TO it  -1 TO st
    BEGIN
       TK Const    = IF q 1 OR TO q  TNEXT 1 ELSE
@@ -324,12 +332,13 @@ DEFER EXPR                              \ ( lev -- node )
       TK Int      = IF 1 TO it TNEXT 1 ELSE
       TK Struct = TK Union = OR st 0< AND
          sg un + sh + lg + ch + it + 0= AND IF
+         TK Union = TO isu
          TNEXT
          0 TO a  0 TO u
          TK Id = IF TV TO a  TL TO u  TNEXT THEN
          a u ST-FINDS TO k
          k 0< IF a u ST-NEW TO k THEN
-         TK Lbrace = IF k PARSE-MEMBERS THEN
+         TK Lbrace = IF k isu PARSE-MEMBERS THEN
          k ST-TYPE TO st  1
       ELSE
       TK Enum = st 0< AND
@@ -954,7 +963,178 @@ CREATE IVAL IVMAX CELLS ALLOT
       ELSE v off I CELLS + ID-! THEN THEN
    LOOP ;
 
-: DECL {: | a u ct dt t n sz ag sc at y ivn off es fa fu fr fs fx fk bq q ce fn -- :}
+\ Where each uninitialised global lands, by its number; PLACE-GLOBALS fills
+\ it in, and DECL does for a declaration a later definition initialises.
+8192 CONSTANT GMAX
+CREATE GOFF GMAX CELLS ALLOT
+\ a record DECL has retired: no class anything walks, and no name
+7 CONSTANT c_gone
+
+\ -- aggregate initializers (M7b) ------------------------------------------
+\ c4lc-gen's g:globalaggr, word for word. An initializer is first a tree:
+\   kind 0 a number (cell 1), 1 a string (address, length), 2 a name
+\   (address, length), 3 a brace list (a vector of nodes), 4 `[I] = X`
+\   (I, X), 5 `.M = X` (address, length, X)
+\ and then it is walked against the type twice, the same way both times:
+\ AMODE 0 puts every string a POINTER takes into region 1, in order,
+\ before the global -- as `char *s = "..."` always has -- and AMODE 1
+\ writes each value at its offset in the global's zeroed storage, a string
+\ pointer or a function address becoming a data patch where it lies. A
+\ value is a byte, two bytes or a word by its type, as INIT-WRITE writes
+\ them. An aggregate met without braces takes its elements from the
+\ enclosing list (C's brace elision).
+: INIT-NODE ( kind a b c -- node ) {: k a b c | n -- n :}
+   4 CELLS ALLOT: TO n  k n !  a n CELL+ !  b n 2 CELLS + !  c n 3 CELLS + !  n ;
+\ a name standing alone that no constant answers: a function, presumably
+: INIT-NAME? ( -- f ) {: | y nk -- f :}
+   TK Id <> IF 0 EXIT THEN
+   TP @ 1+ TOKS V@ t.kind @ TO nk
+   nk Comma = nk Rbrace = OR nk Semi = OR 0= IF 0 EXIT THEN
+   TV TL ST-FIND TO y
+   y 0= IF -1 EXIT THEN
+   y y.class @ c_const = y y.cv @ OR 0= ;
+DEFER INIT-ITEM
+: INIT-BRACES ( -- node ) {: | v -- n :}
+   Lbrace WANT   16 NEW-VEC TO v
+   BEGIN TK Rbrace <> WHILE
+      INIT-ITEM v V,
+      TK Comma = IF TNEXT THEN
+   REPEAT
+   Rbrace WANT
+   3 v 0 0 INIT-NODE ;
+: INIT-LEAF ( -- node ) {: | a u -- n :}
+   TK Lbrace = IF INIT-BRACES EXIT THEN
+   TK Str = IF STR-LIT TO u TO a  1 a u 0 INIT-NODE EXIT THEN
+   TK And = IF
+      TNEXT  TK Id <> IF ." c4fc: & initialiser requires a function name" CR ABORT THEN
+      TV TO a  TL TO u  TNEXT  2 a u 0 INIT-NODE EXIT THEN
+   INIT-NAME? IF TV TO a  TL TO u  TNEXT  2 a u 0 INIT-NODE EXIT THEN
+   0 CONST-EXPR 0 0 INIT-NODE ;
+: (INIT-ITEM) ( -- node ) {: | c a u -- n :}
+   TK Brak = IF
+      TNEXT CONST-EXPR TO c  Rbrak WANT  Assign WANT
+      4 c INIT-LEAF 0 INIT-NODE EXIT THEN
+   TK Dot =  TP @ 1+ TOKS V@ t.kind @ Id = AND IF
+      TNEXT  TV TO a  TL TO u  TNEXT  Assign WANT
+      5 a u INIT-LEAF INIT-NODE EXIT THEN
+   INIT-LEAF ;
+' (INIT-ITEM) IS INIT-ITEM
+
+\ how many elements a brace list fills: designators move the index
+: AGG-COUNT ( node -- n ) {: nd | v i mx j e -- n :}
+   nd CELL+ @ TO v   0 TO i   0 TO mx
+   v V# 0 ?DO
+      I v V@ TO e
+      e @ 4 = IF e CELL+ @ ELSE i THEN TO j
+      j 1+ TO i   i mx > IF i TO mx THEN
+   LOOP mx ;
+
+VARIABLE AMODE   0 AMODE !
+4096 CONSTANT SQ-MAX
+CREATE SQ SQ-MAX CELLS ALLOT   VARIABLE SQN   VARIABLE SQI
+: SQ, ( off -- )
+   SQN @ SQ-MAX < 0= IF ." c4fc: too many strings in one initializer" CR ABORT THEN
+   SQ SQN @ CELLS + !  1 SQN +! ;
+: SQ> ( -- off )  SQ SQI @ CELLS + @  1 SQI +! ;
+
+: AGG-PUT ( v ty off -- ) {: v t o -- :}
+   t T-BYTE? IF v o ID-C! EXIT THEN
+   t T-HALF? IF v 255 AND o ID-C!  v 8 RSHIFT 255 AND o 1+ ID-C! EXIT THEN
+   v o ID-! ;
+: AGG-SCALAR ( ty off node -- ) {: t o nd | k y -- :}
+   nd @ TO k
+   k 0 = IF AMODE @ IF nd CELL+ @ t o AGG-PUT THEN EXIT THEN
+   k 1 = IF
+      AMODE @ 0= IF nd CELL+ @ nd 2 CELLS + @ ID-STR, SQ,
+      ELSE o SQ> STRPAT, THEN EXIT THEN
+   k 2 = IF
+      AMODE @ 0= IF EXIT THEN
+      nd CELL+ @ nd 2 CELLS + @ ST-FIND TO y
+      y IF y y.class @ c_fun <> y y.val @ 0< OR IF 0 TO y THEN THEN
+      y 0= IF ." c4fc: an initializer can name only a function this unit defines: "
+         nd CELL+ @ nd 2 CELLS + @ TYPE CR ABORT THEN
+      o y y.val @ FNPAT,
+      COLLECT @ IF nd CELL+ @ nd 2 CELLS + @ ROOT, THEN   \ a table is what reaches it
+      EXIT THEN
+   ." c4fc: unsupported initializer element" CR ABORT ;
+\ `{ 5 }` for a scalar is 5
+: AGG-UNWRAP ( node -- node' )
+   BEGIN DUP @ 3 = WHILE
+      CELL+ @  DUP V# 1 <> IF ." c4fc: too many initializers for a scalar" CR ABORT THEN
+      0 SWAP V@
+   REPEAT ;
+: AGG-STRFILL ( cnt off node -- ) {: c o nd -- :}
+   nd 2 CELLS + @ c > IF ." c4fc: a string does not fit its array" CR ABORT THEN
+   AMODE @ IF nd 2 CELLS + @ 0 ?DO nd CELL+ @ I + C@ o I + ID-C! LOOP THEN ;
+
+DEFER AGG-FILL ( ety cnt off v i -- i' )
+\ an array's elements from V at I; BR is false when they come from an
+\ enclosing list, which keeps what this array does not take
+: AGG-ARR ( ety cnt off v i br -- i' ) {: et c o v i br | idx nd sv j -- i :}
+   0 TO idx
+   BEGIN i v V# < WHILE
+      i v V@ TO nd   0 TO sv
+      nd @ 4 = IF
+         br 0= IF i EXIT THEN
+         nd CELL+ @ TO idx   nd TO sv   nd 2 CELLS + @ i v V!
+      THEN
+      idx c < 0= IF
+         sv IF sv i v V! THEN
+         br IF ." c4fc: too many initializers for an array" CR ABORT THEN
+         i EXIT THEN
+      i TO j
+      et -1  o idx et T-SIZE * +  v i AGG-FILL TO i
+      sv IF sv j v V! THEN
+      idx 1+ TO idx
+   REPEAT i ;
+\ the member after J of struct K, or -1
+: NEXT-MEM ( k j -- j' ) {: k j -- j :}
+   #MEMS @ j 1+ ?DO I CELLS MB-OWNER + @ k = IF I UNLOOP EXIT THEN LOOP -1 ;
+\ a union lays every member at 0, and takes one initializer
+: UNION? ( k -- f ) {: k | m n -- f :}
+   0 TO n   k -1 NEXT-MEM TO m
+   BEGIN m 0< 0= WHILE
+      m CELLS MB-OFF + @ IF 0 EXIT THEN
+      n 1+ TO n   k m NEXT-MEM TO m
+   REPEAT n 1 > ;
+: AGG-STRUCT ( sty off v i br -- i' ) {: st o v i br | k m nd sv uni mt j -- i :}
+   st T-INDEX TO k   k -1 NEXT-MEM TO m   k UNION? TO uni
+   BEGIN i v V# < WHILE
+      i v V@ TO nd   0 TO sv
+      nd @ 5 = IF
+         br 0= IF i EXIT THEN
+         k nd CELL+ @ nd 2 CELLS + @ MEM-FIND TO m
+         m 0< IF ." c4fc: no such member in a designator: "
+            nd CELL+ @ nd 2 CELLS + @ TYPE CR ABORT THEN
+         nd TO sv   nd 3 CELLS + @ i v V!
+      THEN
+      m 0< IF
+         sv IF sv i v V! THEN
+         br IF ." c4fc: too many initializers for a struct" CR ABORT THEN
+         i EXIT THEN
+      m CELLS MB-TYPE + @ TO mt   i TO j
+      m CELLS MB-AGG + @ IF
+         mt T-DEREF  m CELLS MB-ASZ + @ mt T-DEREF T-SIZE /
+      ELSE mt -1 THEN
+      o m CELLS MB-OFF + @ +  v i AGG-FILL TO i
+      sv IF sv j v V! THEN
+      uni IF -1 ELSE k m NEXT-MEM THEN TO m
+   REPEAT i ;
+: AGG-LIST ( ety cnt off v i br -- i' ) {: et c o v i br -- i :}
+   c 0< IF et o v i br AGG-STRUCT ELSE et c o v i br AGG-ARR THEN ;
+\ one object of element type ETY (an array of CNT, or -1 for none) at
+\ OFF, from the node at I in V
+: (AGG-FILL) ( ety cnt off v i -- i' ) {: et c o v i | nd k -- i :}
+   i v V@ TO nd   nd @ TO k
+   c 0< et T-STRUCT? 0= AND IF  et o nd AGG-UNWRAP AGG-SCALAR  i 1+ EXIT THEN
+   k 3 = IF  et c o nd CELL+ @ 0 -1 AGG-LIST DROP  i 1+ EXIT THEN
+   k 1 = c 0< 0= AND et T-BYTE? AND IF  c o nd AGG-STRFILL  i 1+ EXIT THEN
+   et c o v i 0 AGG-LIST ;
+' (AGG-FILL) IS AGG-FILL
+\ a global's whole brace list, at OFF
+: AGG-TOP ( ety cnt off node -- )  CELL+ @ 0 -1 AGG-LIST DROP ;
+
+: DECL {: | a u ct dt t n sz ag sc at y ivn off es fa fu fr fs fx fk bq q ce fn ai sa su aet acn -- :}
    STORAGE TO sc
    TYPE? 0= IF ." c4fc: a declaration was expected" CR ABORT THEN
    BASE-TYPE TO ct   BQ @ TO bq
@@ -987,9 +1167,10 @@ CREATE IVAL IVMAX CELLS ALLOT
          dt T-STRUCT? IF dt T-SIZE TO sz  1 TO ag THEN
       THEN
       \ the initialiser, if there is one
-      -1 TO fr   -1 TO fs
+      -1 TO fr   -1 TO fs   0 TO ai
       TK Assign = IF
          TNEXT
+         ag TK Lbrace = AND IF INIT-BRACES TO ai ELSE   \ an array's or a struct's
          TK And = IF                              \ int *fp = &fn;
             TNEXT  TV TO fa  TL TO fu  Id WANT
             fa fu ST-FIND TO y
@@ -1001,16 +1182,25 @@ CREATE IVAL IVMAX CELLS ALLOT
             0 IVAL !  1 TO ivn
          ELSE
          TK Str = IF
+            STR-LIT TO su TO sa                   \ "a" "b" is one string
             ag IF
-               TV TL 1+ TO ivn                    \ the nul counts
-               ivn 0 ?DO TV I + C@ IVAL I CELLS + ! LOOP
+               su 1+ TO ivn                       \ the nul counts
+               su 0 ?DO sa I + C@ IVAL I CELLS + ! LOOP
                0 IVAL ivn 1- CELLS + !
             ELSE
                \ char *s = "..." is a POINTER: the bytes go to region 2
                \ and the global's own word is a data-to-data patch.
-               TV TL ID-STR, TO fs   0 IVAL !  1 TO ivn
+               sa su ID-STR, TO fs   0 IVAL !  1 TO ivn
             THEN
-            TNEXT
+         ELSE INIT-NAME? IF                       \ int (*fp)(int) = twice;
+            TV TO fa  TL TO fu  TNEXT
+            fa fu ST-FIND TO y
+            y 0= IF ." c4fc: an initialiser can name only a function" CR ABORT THEN
+            y y.class @ c_fun <> y y.val @ 0< OR IF
+               ." c4fc: & initialiser requires a defined function" CR ABORT THEN
+            y y.val @ TO fr
+            COLLECT @ IF fa fu ROOT, THEN
+            0 IVAL !  1 TO ivn
          ELSE TK Lbrace = IF
             TNEXT
             BEGIN TK Rbrace <> WHILE
@@ -1020,17 +1210,38 @@ CREATE IVAL IVMAX CELLS ALLOT
             Rbrace WANT
          ELSE
             CONST-EXPR IVAL !  1 TO ivn  1 TO ce
-         THEN THEN THEN
-         ag IF
-            n 1 < IF ivn TO n THEN
-            n es T-SIZE * TO sz
+         THEN THEN THEN THEN THEN
+         ai IF
+            \ M7b: the strings the pointers take first, then the storage,
+            \ then every value at its offset (c4lc-gen's g:globalaggr)
+            t dt <> IF  n 1 < IF ai AGG-COUNT TO n THEN  es TO aet  n TO acn  n es T-SIZE * TO sz
+            ELSE dt TO aet  -1 TO acn  dt T-SIZE TO sz THEN
+            0 AMODE !  0 SQN !   aet acn 0 ai AGG-TOP
+            sz ID-ALLOT TO off
+            1 AMODE !  0 SQI !   aet acn off ai AGG-TOP
+            0 TO ivn
+         ELSE
+            ag IF
+               n 1 < IF ivn TO n THEN
+               n es T-SIZE * TO sz
+            THEN
+            sz ID-ALLOT TO off
          THEN
-         sz ID-ALLOT TO off
          \ a scalar is a whole word, as c4lc writes it: a negative char
          \ or short is sign-extended through all of it
          off  ag IF es ELSE t_int THEN  ivn INIT-WRITE
          fr 0< 0= IF off fr FNPAT, THEN
          fs 0< 0= IF off fs STRPAT, THEN
+         \ `extern T x[];` or `int x;` earlier, and this initialises it
+         \ (M7b): the code already emitted names the old record's number,
+         \ so that number now means this storage; the record retires, and
+         \ the definition's symbol lands here, where c4lc puts it. They
+         \ used to be two objects, and the code before the definition
+         \ read the wrong one.
+         a u ST-FIND TO y
+         y IF y y.class @ c_glo = y y.ini @ 0= AND IF
+            off  y y.val @ CELLS GOFF + !   c_gone y y.class !   0 y y.nlen !
+         THEN THEN
          \ an aggregate records its byte size whether or not it was
          \ initialised, because sizeof(name) is answered from it
          a u c_glo off t ag  ag IF sz ELSE 0 THEN  ST,   \ region 1: final
@@ -1094,8 +1305,6 @@ CREATE IVAL IVMAX CELLS ALLOT
 \ Where the three data regions actually land. Region 1 was placed as it
 \ was declared; regions 2 and 3 are relative until now, so every patch
 \ that names one gets shifted here.
-8192 CONSTANT GMAX
-CREATE GOFF GMAX CELLS ALLOT
 : PLACE-GLOBALS {: | off y -- :}
    IDN @ ALIGNUP DB2 !
    DB2 @ DN @ ALIGNUP + DB3 !

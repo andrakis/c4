@@ -1026,16 +1026,21 @@
 			s)
 	nil)))
 
-;; initializer after '=': (num N) | (str S) | (fnaddr F) | (braces (N...))
+;; initializer after '=': (num N) | (str S) | (fnaddr F) | (name F) |
+;; (braces (N...)) | (agg ITEMS).
+;;
+;; M7b. A brace list of plain numbers keeps the (braces (N ...)) form that
+;; every existing user takes. Anything else is (agg ITEMS): an item is an
+;; initializer, (desig I INIT) for `[I] = INIT` or (mdesig M INIT) for
+;; `.M = INIT`, and a string concatenates as an expression's does. A
+;; bare name that is no constant is (name F), which the generator wants
+;; to be a function -- the address in an applet or builtin table. The
+;; layout by type is c4lc-gen's g:globalaggr.
 (define p:init (lambda ()
 	(begin
 		(define k (p:kind))
 		(if (= k 'Lbrace) (p:braceinit)
-		(if (= k 'Str)
-			(begin
-				(define s (p:value))
-				(p:advance)
-				(list 'str s))
+		(if (= k 'Str) (p:strlit)
 		(if (= k 'And)
 			(begin
 				(p:advance)
@@ -1045,18 +1050,61 @@
 						(p:advance)
 						(list 'fnaddr n))
 				(p:die "& initializer requires a function name")))
-		(list 'num (p:const "initializer"))))))))
+		(if (p:initname?)
+			(begin
+				(define fn (p:value))
+				(p:advance)
+				(list 'name fn))
+		(list 'num (p:const "initializer")))))))))
+;; a name standing alone in an initializer that no constant answers
+(define p:initname? (lambda ()
+	(if (= (p:kind) 'Id)
+		;; an enum constant's value may be 0, which is no test of truth
+		(if (= (p:enumval) false) (if (p:sconst) false
+		(begin
+			(define nk (head (head (tail p:toks))))
+			(if (= nk 'Comma) true (if (= nk 'Rbrace) true (= nk 'Semi))))))
+	false)))
 (define p:braceinit (lambda ()
 	(begin
 		(p:advance)
 		(next p:braceinit/2 (list)))))
 (define p:braceinit/2 (lambda (acc)
 	(if (= (p:kind) 'Rbrace)
-		(begin (p:advance) (list 'braces (p:reverse acc)))
+		(begin (p:advance) (p:bracelist (p:reverse acc)))
 	(begin
-		(define v (p:const "array initializer"))
+		(define v (p:initem))
 		(if (= (p:kind) 'Comma) (p:advance) nil)
 		(next p:braceinit/2 (p:cons v acc))))))
+(define p:initem (lambda ()
+	(if (= (p:kind) 'Brak)
+		(begin
+			(p:advance)
+			(define c (p:const "array designator"))
+			(p:expect 'Rbrak "] in a designator")
+			(p:expect 'Assign "= after a designator")
+			(list 'desig c (p:init)))
+	(if (if (= (p:kind) 'Dot) (= (head (head (tail p:toks))) 'Id) false)
+		(begin
+			(p:advance)
+			(define m (p:value))
+			(p:advance)
+			(p:expect 'Assign "= after a designator")
+			(list 'mdesig m (p:init)))
+	(p:init)))))
+(define p:bracelist (lambda (items)
+	(if (p:allnum? items) (list 'braces (p:nums items (list))) (list 'agg items))))
+(define p:allnum? (lambda (l)
+	(if (empty? l) true (if (= (head (head l)) 'num) (next p:allnum? (tail l)) false))))
+(define p:nums (lambda (l acc)
+	(if (empty? l) (p:reverse acc) (next p:nums (tail l) (p:cons (p:second (head l)) acc)))))
+;; how many elements an (agg ...) list fills: designators move the index
+(define p:aggcount (lambda (l i mx)
+	(if (empty? l) mx
+	(begin
+		(define it (head l))
+		(define j (if (= (head it) 'desig) (p:second it) i))
+		(next p:aggcount (tail l) (+ j 1) (if (> (+ j 1) mx) (+ j 1) mx))))))
 
 ;; resolve an array's element count from its initializer when [] was
 ;; given; also the implicit size of char t[] = "...". Returns the
@@ -1066,9 +1114,10 @@
 	(if (> size 0) size
 	(if (= init nil) (p:die (+ what ": array [] needs an initializer"))
 	(if (= (head init) 'braces) (length (p:second init))
+	(if (= (head init) 'agg) (p:aggcount (p:second init) 0 0)
 	(if (if (= (head init) 'str) (p:bytety? elem) false)
 		(+ (length (p:second init)) 1)
-	(p:die (+ what ": cannot size array from this initializer")))))))))
+	(p:die (+ what ": cannot size array from this initializer"))))))))))
 
 ;; ---- enum declaration ----
 
@@ -1313,7 +1362,9 @@
 			(if (= (p:kind) 'Assign)
 				(begin (p:advance) (p:init))
 			nil))
-		(define fsize (p:initsize size elem init "global"))
+		;; `extern T x[];` (M7b): a declaration, sized where x is defined
+		(define fsize (if (if (= init nil) (if (= size 0) (= 16 (bit:and attr 16)) false) false)
+			0 (p:initsize size elem init "global")))
 		;; a static const scalar with a constant initializer is a
 		;; constant from here on, wherever C wants one (array sizes, case
 		;; labels, other initializers). It keeps its storage.

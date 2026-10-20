@@ -495,6 +495,24 @@ output as the golden: `src/tests/c4lc_pp.c` for the preprocessor and
     since a goto may enter it. T3 and T4 never splice such a body.
   - `g:scanstmt` counts the frame words declared inside a labelled
     statement.
+- **`enum` anywhere a type goes** (`e0d26d3`): `p:spec` reads
+  `enum [TAG] [{…}]` as an `int` (`p:enumspec`).
+- **Static locals** (`2a0dc89`):
+  - A static local is a global named `FUNCTION.NAME`, which `p:statics`
+    declares. `p:hoist` puts it just before the function, and
+    `p:srenames` maps the plain name inside it.
+  - T2 drops it with a dead function.
+- **Aggregate initializers**:
+  - The parser builds `(agg ITEMS)`, whose items are `(num)`, `(str)`,
+    `(name F)`, `(fnaddr F)`, nested `(agg)`, `(desig I X)` and
+    `(mdesig M X)`. A list of plain numbers stays `(braces (N…))`.
+  - `g:globalaggr` walks it against the type twice: first placing the
+    strings pointers take, then writing values at their offsets in the
+    zeroed storage. String pointers and function addresses become data
+    patches.
+  - Brace elision, `[i] =` and `.m =` work, and a union takes one value.
+  - T2's roots include every function named anywhere in an initializer.
+  - `extern T x[];` declares without sizing.
 
 ## 11. Measured results (2026-08-03)
 

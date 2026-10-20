@@ -154,6 +154,70 @@ int statics(void) {
     return 0;
 }
 
+// aggregate initializers (M7b): an applet-style table of structs with
+// strings and function addresses, arrays of strings and of function
+// pointers, struct globals, nested structs and char-array members,
+// [i] = and .m = designators, brace elision, a union, and the old
+// plain-numbers path beside them
+int a_main(int c) { return 10 + c; }
+int b_main(int c) { return 20 + c; }
+struct applet { char *name; int (*main)(int); short flags; char tag; };
+static struct applet applets[] = {
+    { "a", a_main, 1, 'x' },
+    { "b", b_main, 2, 'y' },
+};
+char *words[] = { "one", "two", "three" };
+int (*mains[])(int) = { a_main, b_main };
+struct pt { int x; int y; } origin = { 3, 4 };
+struct pt pts[3] = { { 1, 2 }, [2] = { 5, 6 } };
+int sparse[6] = { [1] = 7, [4] = 9, 10 };
+struct box { char label[6]; struct pt corner; int w; } box1 = { "lid", { 7, 8 }, 9 };
+struct box box2 = { .w = 11, .label = "ab" };
+struct pt elided[2] = { 1, 2, 3, 4 };
+unsigned char bytes[] = { 1, 200, 3 };
+short halves[3] = { -1, 300 };
+union num { int i; char c; } u1 = { 65 };
+int aggs(void) {
+    int i; int s;
+    s = 0;
+    for (i = 0; i < 2; i++) s = s + applets[i].main(i) + applets[i].flags + applets[i].tag;
+    printf("agg-table %s %s %d %d\n", applets[0].name, applets[1].name, s,
+           (int)(sizeof(applets) / sizeof(applets[0])));
+    printf("agg-words %s %s %s %d\n", words[0], words[1], words[2],
+           (int)(sizeof(words) / sizeof(words[0])));
+    printf("agg-mains %d %d\n", mains[0](1), mains[1](2));
+    printf("agg-struct %d %d %d %d %d %d\n", origin.x, origin.y, pts[0].y, pts[1].x, pts[2].x, pts[2].y);
+    printf("agg-sparse %d %d %d %d %d %d\n", sparse[0], sparse[1], sparse[2], sparse[4], sparse[5],
+           (int)(sizeof(sparse) / sizeof(sparse[0])));
+    printf("agg-nested %s %d %d %d\n", box1.label, box1.corner.x, box1.corner.y, box1.w);
+    printf("agg-desig %s %d %d\n", box2.label, box2.corner.x, box2.w);
+    printf("agg-elided %d %d %d %d\n", elided[0].x, elided[0].y, elided[1].x, elided[1].y);
+    printf("agg-small %d %d %d %d %d\n", bytes[1], halves[0], halves[1], halves[2], u1.i & 255);
+    return 0;
+}
+
+// extern T x[] (M7b): declared without a size, used, then defined; and a
+// union read through its other member (c4fc laid unions out as structs)
+extern const char banner[];
+extern int table[];
+int ext_first(void) { return banner[1] + table[2]; }
+const char banner[] = "hey";
+int table[] = { 4, 5, 6 };
+int externs(void) {
+    printf("extern %d %s %d\n", ext_first(), banner, (int)(sizeof(table) / sizeof(table[0])));
+    printf("union %d %d\n", u1.c, sizeof(union num) == sizeof(int));
+    return 0;
+}
+
+// an enum constant whose value is 0, in a brace list (the first cut took
+// RED for a function name)
+int etab[3] = { BLUE, RED, GREEN };
+struct ecol { enum colour c; char *n; } ecols[] = { { RED, "red" }, { BLUE, "blue" } };
+int enum0(void) {
+    printf("enum0 %d %d %d %d %s\n", etab[0], etab[1], etab[2], ecols[1].c, ecols[0].n);
+    return 0;
+}
+
 int main(void) {
     nothing();
     printf("void-params %d %d %s\n", seven(), add(2, 3), pick("xyz", 1));
@@ -166,5 +230,8 @@ int main(void) {
     labels();
     enums();
     statics();
+    aggs();
+    externs();
+    enum0();
     return 0;
 }

@@ -2669,6 +2669,13 @@ libarc.c4l: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/lib/archive.c $(C4IX_SRC)/i
 # c4sc32-fused.c4r first: build-images.sh ships whatever copy of it is
 # there, and the machine's compiler has to be the one in the tree -- the
 # test compares what it builds with what c4lc built on the host.
+# Where C4IX's cycles go (docs/c4ix-cpu.md): the profiler in five fixed
+# situations, 5 machine-seconds each -- a measurement, not a test
+prof-c4ix: c4bb-images
+	@for m in shell conspin desk1 idle spin; do \
+	   echo "== $$m"; TOP=12 USERIMGS= node libjs/tests/prof-c4ix.mjs $$m 5 | grep -v '^traps' | head -18; \
+	 done
+
 test-c4ix-rebuild: c4sc32-fused.c4r c4bb-images
 	bash libjs/tests/test-rebuild.sh
 

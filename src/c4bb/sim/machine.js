@@ -21,7 +21,7 @@ export const REG_NAMES = ['PC', 'SP', 'BP', 'A', 'IR', 'OPR', 'MAR', 'MDR', 'B',
 export const OP = {};
 const OPERAND_NAMES = ['LEA', 'IMM', 'JMP', 'JSR', 'BZ', 'BNZ', 'ENT', 'ADJ', 'JSRI', 'JSRS',
                        'LDL', 'LDG', 'PSHL', 'PSHG', 'LEAP', 'IMMP', 'STL'];   // LIP, ADDL and POPA take none
-const PM_GATED_NAMES = ['OPEN', 'READ', 'CLOS', 'PRTF', 'MALC', 'FREE', 'EXIT', 'PUTC', 'PUTS', 'RALC', 'INFO'];
+const PM_GATED_NAMES = ['OPEN', 'READ', 'CLOS', 'PRTF', 'MALC', 'FREE', 'EXIT', 'PUTC', 'PUTS', 'RALC', 'USLP', 'INFO'];
 const OPERAND_OPS = new Set();
 export function rebuildOpcodeTables () {
   for (const k of Object.keys(OP)) delete OP[k];

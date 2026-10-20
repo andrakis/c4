@@ -69,6 +69,22 @@ screens.forEach((sc, k) => {
 // overflowed, and top showed negative and huge percentages.
 type('c4ix-spin.c4r 1000 > /ram/spin.txt &\n');
 for (let i = 0; i < 50; i++) vm.run(2e6);
+
+// A user task's __c4_usleep sleeps that task, not the machine: USLP
+// once ran on the host, and raycast's frame cap stopped spin and the
+// desktop with it. 40 frames 50 ms apart take two machine-seconds, and
+// with spin busy beside them the machine never naps through them.
+{
+  const n0 = out.length, ms0 = vm.dev.simMs(), s0 = vm.dev.sleepMs;
+  const c0 = vm.cycle - vm.skipped;
+  type('raycast.c4r 32x12 -d -n 40 -f 50 > /ram/rc.txt\n');
+  const done = until(() => /c4ix:\/\$/.test(text(n0)), 3000);
+  const ms = vm.dev.simMs() - ms0, slept = vm.dev.sleepMs - s0;
+  const busy = (vm.cycle - vm.skipped - c0) / (ms * 100000);
+  check(done && ms >= 2000, `usleep: raycast -f 50 runs its 40 frames over ${ms} ms`, text(n0));
+  check(slept < ms / 10 && busy > 0.9, `usleep: the machine slept ${slept} ms of them, busy ${(100 * busy).toFixed(0)}%`);
+}
+
 screens = top(3);
 check(screens.length === 3, 'top prints three screens with spin running', screens.map(s => s.s).join(''));
 screens.forEach((sc, k) => {

@@ -66,7 +66,7 @@ enum {
 // outright ("bad lvalue: num" -- assigning to a number), which is why a
 // protected-mode kernel could never be built by the compiler the board
 // uses.
-static int pm_OPEN, pm_READ, pm_CLOS, pm_PUTC, pm_PUTS, pm_PRTF, pm_MALC, pm_FREE, pm_RALC, pm_INFO, pm_STRC;
+static int pm_OPEN, pm_READ, pm_CLOS, pm_PUTC, pm_PUTS, pm_PRTF, pm_MALC, pm_FREE, pm_RALC, pm_USLP, pm_INFO, pm_STRC;
 
 // Local data
 static int *kernel_pm_thread;
@@ -128,6 +128,10 @@ static int pm_dispatch_run (int *t, int ins, int *sp, int *a, int *returnpc) {
 	} else if (ins == pm_INFO) {
 		// Provide more info
 		*a = __c4_info() | C4I_C4KE;
+	} else if (ins == pm_USLP) {
+		// c4m guards USLP now (C4IX parks just the caller); C4KE
+		// keeps sleeping the host, as it did before the guard.
+		*a = __c4_usleep(*sp);
 	} else {
 		return SCR_FAIL;
 	}
@@ -327,6 +331,7 @@ static int pm_start () {
 		pm_MALC = __opcode("MALC");
 		pm_FREE = __opcode("FREE");
 		pm_RALC = __opcode("RALC");
+		pm_USLP = __opcode("USLP");
 		pm_INFO = __opcode("INFO");
 		pm_STRC = __opcode("STRC");
 		if (kernel_verbosity >= VERB_MED) {

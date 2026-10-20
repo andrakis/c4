@@ -2855,7 +2855,16 @@ int c4m_main(int argc, char **argv)
 	else if (i == C4CY) a = cycle;
 	else if (i == SIGI) a = __c4_sigint();
     else if (i == TIME) a = c4_time();
-	else if (i == USLP) a = c4_usleep(*sp);
+	else if (i == USLP) {
+		// Guarded: run here it would stop the whole machine, every
+		// other task with it. The kernel sleeps just the caller.
+		if (mode == MODE_UNPROTECTED) a = c4_usleep(*sp);
+		else {
+			trap(TRAP_PM_VIOLATION, USLP, trap_handler, &sp, &bp, &pc, a, mode);
+			cycle_interrupt_interval = 0;
+			mode = MODE_UNPROTECTED;
+		}
+	}
     else if (i == ITH) { // install trap handler
 //		if (mode == MODE_UNPROTECTED) {
 			if (!*sp) {

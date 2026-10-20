@@ -353,6 +353,8 @@ export class Machine {
         this.a = 2;
         return STOP.BUDGET;
       case OP.USLP:
+        // guarded: it sleeps the whole machine, not just the caller
+        if (this.mode) return this.pmTrap(op);
         dev.write32(USLP_US, this.ld32(sp));
         this.a = 0;
         return STOP.SLEEP;

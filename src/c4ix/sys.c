@@ -555,6 +555,15 @@ void sys_pmviolation(int op, int *sp, int *returnpc, int *a) {
     // differently when C4I_C4 is set -- so the answer is what the machine
     // actually is, as the task sees it.
     case C4IX_OP_INFO: *a = task_info(); return;
+    // __c4_usleep(us): SYS_SLEEP's state change, in whole milliseconds
+    // rounded up. On the host it would stop every task, not this one.
+    case C4IX_OP_USLP:
+        *a = 0;
+        if (t && sp[0] > 0) {
+            t->ck_wake = __time() + (sp[0] + 999) / 1000;
+            t->state = TS_SLEEPING;
+        }
+        return;
     case C4IX_OP_MALC: *a = (int)malloc(sp[0]); return;
     case C4IX_OP_FREE: free((int *)sp[0]); *a = 0; return;
     case C4IX_OP_EXIT:

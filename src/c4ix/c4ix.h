@@ -50,6 +50,8 @@ enum {
     C4IX_OP_OPEN = 30, C4IX_OP_READ = 31, C4IX_OP_CLOS = 32,
     C4IX_OP_PRTF = 33, C4IX_OP_MALC = 34, C4IX_OP_FREE = 35,
     C4IX_OP_EXIT = 38, C4IX_OP_PUTC = 39, C4IX_OP_PUTS = 40,
+    // USLP sleeps the whole machine, so a task gets a sleep of its own
+    C4IX_OP_USLP = 56,
     // INFO is guarded too, and a C4KE program asks for it before it
     // does anything else -- u0's startup and ps both call __c4_info().
     C4IX_OP_INFO = 57

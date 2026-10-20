@@ -10,11 +10,11 @@
 #define __C4IX_H 1
 
 // ---- host detection (host.c) ----
-// __c4_info() bit values, mirroring c4m.c's C4I_* enum. A host with
-// no trap bits gets the cooperative, no-boundary path. (Plain c4 has
-// no INFO opcode at all -- the "returns 0" degraded signal was only
-// true while c4.c carried extended opcodes, reverted in 29d6f57 --
-// so C4IX reaches plain c4 only through c4m: c4 -> c4m.c -> C4IX.)
+// __c4_info() bit values, mirroring c4m.c's C4I_* enum. boot.c refuses
+// a host without C4IX_I_C4M. (Plain c4 has no INFO opcode at all -- the
+// "returns 0" degraded signal was only true while c4.c carried extended
+// opcodes, reverted in 29d6f57 -- so C4IX reaches plain c4 only through
+// c4m: c4 -> c4m.c -> C4IX.)
 enum {
     C4IX_I_C4   = 0x01,  // ultimately running under plain c4
     C4IX_I_C4M  = 0x02,  // running under c4m
@@ -23,7 +23,6 @@ enum {
     C4IX_I_FLT  = 0x40,  // floating point supported
     C4IX_I_PROT = 0x80   // protected mode available
 };
-enum { HOST_C4 = 0, HOST_C4M = 1 };
 
 // c4m trap machinery numbers (c4m.c enums), used by sched.c on the
 // c4m host only.
@@ -59,10 +58,8 @@ enum {
 
 // ---- the syscall interface (sys.c) ----
 // Userland reaches these through libc4ix (src/c4ix/lib/libc4ix.c),
-// never directly: on c4m a stub executes custom opcode SYS_* which
-// c4m does not know, raising TRAP_ILLOP into the kernel; on plain c4,
-// where no trap machinery exists, the stub calls the kernel's
-// dispatcher through the systable the loader injected.
+// never directly: a stub executes custom opcode SYS_* which c4m does
+// not know, raising TRAP_ILLOP into the kernel.
 enum {
     SYS_BASE = 200,
     SYS_WRITE = 200, SYS_READ = 201, SYS_OPEN = 202, SYS_CLOSE = 203,
@@ -213,7 +210,6 @@ void         fd_closeall(struct task *t);
 int   host_detect();
 int   host_info();
 int   task_info();   // host_info() as a task sees it: plus C4I_TRAPH
-int   host_type();
 int   host_has(int bit);
 char *host_name();
 
@@ -485,12 +481,9 @@ void ck_signal_deliver(struct task *t, int *pa, int *pbp, int *psp,
                        int *ppc, int mode, int interval);
 
 // ---- scheduler (sched.c) ----
-// One switch mechanism, two backends. On c4m every switch runs in a
-// trap handler (soft trap for yield, cycle interrupt for preemption)
-// that rewrites its own parameters; TLEV loads them into the VM
-// registers. On plain c4 there are no traps: yield rewrites its own
-// frame's (saved_bp, return_pc) pair and returns through a double
-// LEV -- see src/tests/test_coop_switch.c for the proof of concept.
+// Every switch runs in a trap handler (soft trap for yield, cycle
+// interrupt for preemption) that rewrites its own parameters; TLEV
+// loads them into the VM registers.
 void         sched_init(int interval);
 void         sched_run();
 int          sched_sleep_due(int *pms);   // earliest sleeper deadline, 0 if none

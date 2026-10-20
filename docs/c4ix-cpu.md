@@ -379,3 +379,28 @@ With spin at the console, top gives spin 98% of the machine and System
 |---|---|---|
 | conspin: kernel / user | 97.4% / 2.6% | 1.4% / 98.6% |
 | spin under the desktop: kernel / user | 75.7% / 24.3% | 1.8% / 98.2% |
+
+### 10. Plain c4 support removed
+
+C4IX had a second way to run, for a host with no traps: a cooperative
+switch through a trampoline LEV (`coop_switch`), and a second door into
+the kernel, a call through a table the loader wrote into every image
+(`__c4ix_systable`, `loader_systable`). No host reached it. Plain c4 has
+no INFO opcode, and its images need opcodes plain c4 lacks, so plain c4
+runs C4IX only through c4m.c, and then C4IX sees c4m.
+
+Gone: `sched_on_c4m` and every test of it, the trampoline,
+`coop_switch` and `sched_yield`'s cooperative branch, `host_type()` and
+`HOST_C4`/`HOST_C4M`, `loader_systable`, and libc4ix's `__c4ix_systable`
+and `uva_use_trap`; the gate always traps. init's preemption demo no
+longer has a "no preemption on this host" branch. A host without
+`C4IX_I_C4M` is refused at boot with a panic, instead of being run
+degraded.
+
+The `-c4ix-c4` targets stay as they were (your decision 5): they already
+run `./c4 c4m.c load-c4r.c -- c4ix.c4r`, where C4IX sees c4m, and
+`test-c4ix-c4` still matches the same golden. `src/tests/test_coop_switch.c`
+stays too, as a compiler test and as the record of the trick (C4DOS
+still uses it).
+
+Also: init's `--help` text described `--desktop` in the old order.

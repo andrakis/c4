@@ -254,8 +254,8 @@ static void init_usage() {
     kputs("  c4ix.c4r --demo c4ix-hello.c4r c4ix-uhello.c4r c4ix-echo.c4r \\\n");
     kputs("           c4ix-wc.c4r c4ix-sh.c4r src/c4ix/user/test.sh\n");
     kputs("\n");
-    kputs("  c4ix.c4r --desktop   the web page's boot: the shell runs \"top &\",\n");
-    kputs("                       then \"desktop\", as if they were typed\n");
+    kputs("  c4ix.c4r --desktop   the web page's boot: the shell runs \"desktop &\",\n");
+    kputs("                       then \"top\", as if they were typed\n");
 }
 
 // The guided tour. argc/av are shifted past --demo, so av[1] is the
@@ -267,7 +267,7 @@ static int init_demo(int argc, char **av) {
     kprintf("init: c4ix init v1 on %s\n", host_name());
 
     // act 1: cooperative round-robin, preemption masked for an exact
-    // interleaving pin on both hosts
+    // interleaving pin
     sched_lock();
     pp_rounds = 3;
     a = task_create("ping", (int)&ping_task, pp_rounds, 0);
@@ -278,18 +278,14 @@ static int init_demo(int argc, char **av) {
     kprintf("init: ping exited %d, pong exited %d\n", ra, rb);
     sched_unlock();
 
-    // act 2: preemption, where the host has a cycle interrupt
-    if (host_type() == HOST_C4M) {
-        a = task_create("busy_a", (int)&busy_a, 0, 0);
-        b = task_create("busy_b", (int)&busy_b, 0, 0);
-        ra = task_wait(a);
-        rb = task_wait(b);
-        kprintf("init: busy done %d %d, preempted %d %d\n",
-            busy_a_n == BUSY_SPIN, busy_b_n == BUSY_SPIN,
-            busy_a_saw > 0, busy_b_saw > 0);
-    } else {
-        kprintf("init: no preemption on this host, skipping busy demo\n");
-    }
+    // act 2: preemption, by the cycle interrupt
+    a = task_create("busy_a", (int)&busy_a, 0, 0);
+    b = task_create("busy_b", (int)&busy_b, 0, 0);
+    ra = task_wait(a);
+    rb = task_wait(b);
+    kprintf("init: busy done %d %d, preempted %d %d\n",
+        busy_a_n == BUSY_SPIN, busy_b_n == BUSY_SPIN,
+        busy_a_saw > 0, busy_b_saw > 0);
 
     // act 3: spawn programs from the host filesystem. Each runs as
     // userland -- behind protected mode where the host provides it --

@@ -582,6 +582,10 @@ loading or assigning a whole struct is an error.
   `include/cpustat.h`. Task Manager and top show System and System Idle
   Process rows, and the rows add up to 100%.
 
+- **Plain c4 support removed** (2026-10-21, docs/c4ix-cpu.md step 10):
+  the cooperative backend, the systable door and `host_type()`. A host
+  without c4m's traps is refused at boot.
+
 ## 6.1 Running it
 
     make run-c4ix        an interactive shell on c4m

@@ -94,26 +94,6 @@ static char *sym_name(char *p) { return p + 4 * sizeof(int) + 1; }
 static int sym_value(char *p) { return loader_word(p + 4 * sizeof(int) + 1 + sym_namelen(p)); }
 static char *sym_next(char *p) { return p + 5 * sizeof(int) + 1 + sym_namelen(p); }
 
-// Walk the symbol section looking for __c4ix_systable, a global the
-// image declares so the kernel can hand it the syscall entry point.
-// That is how userland reaches the kernel on plain c4, which has no
-// trap machinery: libc4ix calls through the slot instead of raising
-// an interrupt. On c4m the slot is still filled but libc4ix prefers
-// the real trap gateway, so protected mode does its job.
-static void loader_systable(char *p, int nsyms, int database) {
-    int i;
-    i = 0;
-    while (i < nsyms) {
-        if (loader_nameis(sym_name(p), sym_namelen(p), "__c4ix_systable")) {
-            if (sym_class(p) == SCLASS_GLO)      // Glo: value is a data offset
-                *(int *)(database + sym_value(p)) = (int)&sys_dispatch;
-            return;
-        }
-        p = sym_next(p);
-        ++i;
-    }
-}
-
 static void mod_data_relocate(struct c4r_mod *m, char *d);
 
 // does M's symbol table name NAME (defined or not)?
@@ -518,13 +498,6 @@ int c4r_load(char *path, struct c4r_image *img) {
         return 0;
     }
 
-    // Only where traps do not exist: on c4m userland must go through
-    // the real gateway so protected mode means something.
-    if (host_type() == HOST_C4) {
-        k = 0;
-        while (k < n) { loader_systable((mods + k)->syms, (mods + k)->nsym, (int)(mods + k)->data); ++k; }
-    }
-
     // Constructors and destructors, as absolute addresses for the task
     // to run itself: the deepest library first, the program last. The
     // destructors are run in reverse, so the program's go first.
@@ -613,9 +586,8 @@ void loader_switch(struct task *t) {
 }
 
 // Load an image and run it as a task. argv is passed through to the
-// image's main untouched. Spawned programs are userland: on c4m they
-// run behind the protected-mode boundary, on plain c4 (no such
-// hardware) the privilege level is recorded but unenforced.
+// image's main untouched. Spawned programs are userland, and run
+// behind the protected-mode boundary.
 struct task *task_spawn_priv(char *path, int argc, int argv, int privs) {
     struct c4r_image img;
     struct task *t;
@@ -640,7 +612,7 @@ struct task *task_spawn_priv(char *path, int argc, int argv, int privs) {
     t->img_ndes = img.ndes;
     t->img_libs = img.libs;
     t->img_nlibs = img.nlibs;
-    t->privs = (host_type() == HOST_C4M) ? privs : PRIV_KERNEL;
+    t->privs = privs;
     return t;
 }
 

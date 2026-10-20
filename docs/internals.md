@@ -1150,7 +1150,9 @@ the kernel design differs.
 * **Plain c4 gets a syscall layer too**, without any trap machinery:
   the loader writes `&sys_dispatch` into a `__c4ix_systable` global it
   finds in the image's symbol section, and the userland library calls
-  through it. Same dispatcher, same numbers, different door.
+  through it. Same dispatcher, same numbers, different door. (Removed
+  in 2026-10 with the rest of the plain-c4 path, which no host reached:
+  plain c4 runs C4IX only through c4m.c. docs/c4ix-cpu.md, step 10.)
 
 ### A c4m fix this uncovered: `TRAP_ILLOP` must drop to unprotected
 

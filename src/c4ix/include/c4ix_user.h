@@ -39,11 +39,6 @@ enum {
     O_CREATE = 256, O_TRUNCATE = 512
 };
 
-// The kernel fills this in at load time when the host has no trap
-// machinery (plain c4), so the stubs can call the dispatcher
-// directly. Zero means "use the trap gateway".
-extern int __c4ix_systable;
-
 // varargs, libc4ix's own copy (the kernel's lives in its own image)
 #define va_list int *
 #define va_arg(AP, TYPE)   (AP = AP + 1, *((TYPE *) (AP - 1)))

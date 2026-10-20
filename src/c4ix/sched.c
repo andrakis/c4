@@ -1,22 +1,21 @@
 //
-// C4IX scheduler: one switch mechanism, two backends.
+// C4IX scheduler.
 //
-// c4m backend: every switch runs inside a trap handler -- the soft
-// trap that sched_yield raises, or the cycle interrupt that gives
-// preemption. c4m's trap() builds the handler an ordinary frame
-// whose ARGUMENTS are the interrupted registers; assigning to those
-// parameters and returning (through TLEV) IS the context switch.
+// Every switch runs inside a trap handler -- the soft trap that
+// sched_yield raises, or the cycle interrupt that gives preemption.
+// c4m's trap() builds the handler an ordinary frame whose ARGUMENTS
+// are the interrupted registers; assigning to those parameters and
+// returning (through TLEV) IS the context switch.
 //
-// plain c4 backend: no traps exist. A frame's bp is the address of
-// a (saved_bp, return_pc) pair and LEV rebuilds sp from bp, so
-// coop_switch saves its own pair, plants the target's pair, and
-// returns through a trampoline whose second LEV makes sp consistent.
-// Proof of concept: src/tests/test_coop_switch.c (verified under
-// c4lc, plain and -O, on both hosts).
+// (There was a second backend, for plain c4, which has no traps: a
+// cooperative switch through a trampoline LEV. No host ever reached it
+// -- plain c4 runs C4IX only through c4m.c, so C4IX always sees c4m --
+// and it went, with the systable it needed, in docs/c4ix-cpu.md step 10.
+// src/tests/test_coop_switch.c still shows the trick.)
 //
-// Fresh tasks are forged SV_FRAME states that both backends can
-// resume: the fake pair sends control into task_shim, which calls
-// the real entry and turns its return value into task_exit.
+// Fresh tasks are forged SV_FRAME states: the fake pair sends control
+// into task_shim, which calls the real entry and turns its return
+// value into task_exit.
 //
 
 #include "c4ix.h"
@@ -39,10 +38,8 @@ struct task *sched_cur;
 static struct task *kernel_task;
 static struct task *idle_task;
 static int sched_idle(int argc, int argv);
-static int sched_on_c4m;
-static int sched_interval;   // preemption interval, 0 = cooperative only
+static int sched_interval;   // preemption interval, 0 = none
 static int sched_lockdepth;
-static int sched_tramp;      // address of the trampoline's LEV
 
 int sched_intrap;            // inside the trap handler: no re-entry (sched_in_trap)
 
@@ -133,11 +130,7 @@ static int sched_resched;    // a service in this trap asked for a switch
 static int sched_dying;      // task_exit outside the handler: die in the next trap
 static int sched_dying_code;
 
-// Compiles to ENT 0 / LEV; entered at its LEV (sched_tramp) the
-// second LEV re-derives sp from the just-installed bp.
-static int trampoline() { }
-
-// ---- preemption masking (c4m only; nestable) ----
+// ---- preemption masking (nestable) ----
 //
 // The depth belongs to the TASK, not to the machine. It has to: the
 // mask says "do not preempt me", and if it were global then a task
@@ -154,19 +147,15 @@ static int trampoline() { }
 // handler re-arms it on the way out, so the hardware half is skipped
 // there -- re-arming mid-handler would invite a nested interrupt.
 void sched_lock() {
-    if (sched_on_c4m && !sched_intrap) {
-        if (sched_lockdepth == 0 && sched_interval)
-            __c4_configure(C4IX_CONF_INTERVAL, 0);
-    }
+    if (!sched_intrap && sched_lockdepth == 0 && sched_interval)
+        __c4_configure(C4IX_CONF_INTERVAL, 0);
     ++sched_lockdepth;
 }
 
 void sched_unlock() {
     --sched_lockdepth;
-    if (sched_on_c4m && !sched_intrap) {
-        if (sched_lockdepth == 0 && sched_interval)
-            __c4_configure(C4IX_CONF_INTERVAL, sched_interval);
-    }
+    if (!sched_intrap && sched_lockdepth == 0 && sched_interval)
+        __c4_configure(C4IX_CONF_INTERVAL, sched_interval);
 }
 
 // The running task's slice starts again now: after a service that
@@ -588,61 +577,15 @@ static void sched_interrupt() {
     task_zombify(t, C4IX_EXIT_INTERRUPTED);
 }
 
-// ---- the plain-c4 backend: the LEV trick ----
-
-static void coop_switch(struct task *next) {
-    int *bp;     // FIRST local: &bp + 1 == this frame's bp
-    int *f;
-    struct task *old;
-
-    bp = (int *)(&bp + 1);
-    old = sched_cur;
-
-    // save the outgoing task: its frame address and the pair there
-    old->sv = SV_FRAME;
-    old->sv_sp = (int)bp;
-    old->sv_bp = *bp;
-    old->sv_pc = *(bp + 1);
-    if (old->state == TS_RUNNING) old->state = TS_READY;
-
-    // plant the incoming task's own pair back into its frame
-    f = (int *)next->sv_sp;
-    *f = next->sv_bp;
-    *(f + 1) = next->sv_pc;
-
-    // rewrite our own frame: LEV installs next's bp, the trampoline's
-    // LEV then rebuilds sp from it and pops the planted pair
-    *bp = (int)f;
-    *(bp + 1) = sched_tramp;
-
-    // no traps here, so a switch is the only edge there is to charge at
-    acct_in = __c4_cycles();
-    old->uacc = old->uacc + (acct_in - acct_out);
-    acct_out = acct_in;
-    old->lockdepth = sched_lockdepth;
-    sched_lockdepth = next->lockdepth;
-    next->state = TS_RUNNING;
-    sched_cur = next;
-    loader_switch(next);
-    ++sched_switches;
-}
-
 // ---- the common face ----
 
 void sched_yield() {
-    struct task *n;
     if (!sched_cur) return;
     // Already inside the trap handler: it switches on the way out,
     // which IS the yield -- once it knows not to take the fast path.
     // Raising another trap here would nest.
     if (sched_intrap) { sched_resched = 1; return; }
-    if (sched_on_c4m) {
-        __c4_trap(C4IX_TRAP_SOFT_IRQ, 0);
-        return;
-    }
-    n = sched_pick(sched_cur);
-    if (n != sched_cur) coop_switch(n);
-    task_reap();   // safe point: whatever died, we are not on it now
+    __c4_trap(C4IX_TRAP_SOFT_IRQ, 0);
 }
 
 // ---- task start and end ----
@@ -706,13 +649,12 @@ static int task_shim(int entry, int argc, int argv) {
 // So it leaves the code in sched_dying and dies in the trap it raises next.
 
 void task_exit(int code) {
-    if (sched_intrap || !sched_on_c4m) {
+    if (sched_intrap) {
         task_zombify(sched_cur, code);
-        if (sched_intrap) return;
-    } else {
-        sched_dying_code = code;
-        sched_dying = 1;
+        return;
     }
+    sched_dying_code = code;
+    sched_dying = 1;
     // a zombie is never picked again
     while (1) sched_yield();
 }
@@ -736,8 +678,8 @@ int task_wait(struct task *t) {
     return me->wait_result;
 }
 
-// Build the stack + fake frame that makes a never-run task resumable
-// by either backend. Layout (see test_coop_switch.c):
+// Build the stack + fake frame that makes a never-run task resumable:
+// sched_trap turns it into registers. Layout (see test_coop_switch.c):
 //   X[0] saved bp (junk; the entry's ENT overwrites X[1], not this)
 //   X[1] return pc -> task_shim
 //   X[2] where task_shim's own LEV would land -> task_lost
@@ -788,9 +730,6 @@ void sched_forge_argv(struct task *t, int argv) {
 // ---- lifecycle ----
 
 void sched_init(int interval) {
-    sched_on_c4m = (host_type() == HOST_C4M);
-    sched_tramp = (int)&trampoline + 2 * sizeof(int);   // past ENT 0: the LEV word
-
     // The idle task first, so it is task 0, as NT's System Idle Process
     // is; then the context we are running in becomes the kernel task.
     if (!(idle_task = task_create("idle", (int)&sched_idle, 0, 0))) {
@@ -804,27 +743,25 @@ void sched_init(int interval) {
     sched_cur = kernel_task;
     acct_out = __c4_cycles();
 
-    if (sched_on_c4m) {
-        install_trap_handler((int)&sched_trap);
-        // Ctrl-C arrives as a trap through the same handler.
-        __c4_signal(__c4_sigint(), (int)&sched_trap);
-        if (interval) {
-            // Ask c4m to treat the interrupt mask as part of the
-            // trapped context, restored by TLEV. That is what lets
-            // sched_trap set preemption for the incoming task through
-            // its `interval` parameter instead of arming the machine
-            // mid-switch -- and it also tells c4m that a zero interval
-            // means "masked", so signals are deferred to the next
-            // unmasked instruction rather than delivered into a
-            // handler that cannot accept them.
-            //
-            // Only meaningful with preemption: without it the interval
-            // is always zero and nothing would ever be delivered.
-            __c4_configure(C4IX_CONF_TRAP_RESTORES_INTERVAL, 1);
-            sched_interval = interval;
-            __c4_configure(C4IX_CONF_HANDLER, (int)&sched_trap);
-            __c4_configure(C4IX_CONF_INTERVAL, interval);
-        }
+    install_trap_handler((int)&sched_trap);
+    // Ctrl-C arrives as a trap through the same handler.
+    __c4_signal(__c4_sigint(), (int)&sched_trap);
+    if (interval) {
+        // Ask c4m to treat the interrupt mask as part of the
+        // trapped context, restored by TLEV. That is what lets
+        // sched_trap set preemption for the incoming task through
+        // its `interval` parameter instead of arming the machine
+        // mid-switch -- and it also tells c4m that a zero interval
+        // means "masked", so signals are deferred to the next
+        // unmasked instruction rather than delivered into a
+        // handler that cannot accept them.
+        //
+        // Only meaningful with preemption: without it the interval
+        // is always zero and nothing would ever be delivered.
+        __c4_configure(C4IX_CONF_TRAP_RESTORES_INTERVAL, 1);
+        sched_interval = interval;
+        __c4_configure(C4IX_CONF_HANDLER, (int)&sched_trap);
+        __c4_configure(C4IX_CONF_INTERVAL, interval);
     }
 }
 
@@ -832,17 +769,12 @@ void sched_init(int interval) {
 // the task list can be torn down. Without it the cycle interrupt
 // would fire after main returns, into a freed task list.
 void sched_stop() {
-    if (sched_on_c4m) {
-        __c4_configure(C4IX_CONF_INTERVAL, 0);
-        install_trap_handler(0);
-    }
+    __c4_configure(C4IX_CONF_INTERVAL, 0);
+    install_trap_handler(0);
     sched_interval = 0;
     sched_cur = 0;
 }
 
-// The idle task: what runs when nothing else can, which is to say
-// almost always on an idle desktop. It returns -- and the machine shuts
-// down -- once no task is left alive but the kernel, which waits on it.
 // A task parked on console input: what a keystroke would wake.
 static int sched_console_reader() {
     struct task *t;
@@ -854,6 +786,9 @@ static int sched_console_reader() {
     return 0;
 }
 
+// The idle task: what runs when nothing else can, which is to say
+// almost always on an idle desktop. It returns -- and the machine shuts
+// down -- once no task is left alive but the kernel, which waits on it.
 static int sched_idle(int argc, int argv) {
     int nap, due, budget, ms;
 

@@ -7,10 +7,9 @@
 // user tasks. C4IX images use C4CY, PUTC, JSRI and JSRS, which plain
 // c4 lacks, so plain c4 runs C4IX through c4m itself
 // (c4 -> c4m.c -> C4IX, `make test-c4ix-c4`) and C4IX still sees a c4m
-// host. The cooperative, no-boundary path host_detect() selects when
-// __c4_info() reports no traps is still here, but no supported host
-// reaches it. (Written at X2, when a degraded plain-c4 boot through the
-// c4l loader still worked; docs/c4ix-design.md 4.1.)
+// host. A host that is not c4m-compatible, with its trap machinery, is
+// refused at boot: the cooperative, no-boundary path there once was for
+// one was never reached, and went in docs/c4ix-cpu.md step 10.
 //
 // User tasks run behind protected mode, so their IO reaches the kernel
 // whether they ask through libc4ix or just call printf and get trapped.
@@ -32,13 +31,16 @@ int main(int argc, char **argv) {
     kprintf("C4IX booting, %d cycles spent loading the kernel image\n", __c4_cycles());
     info = host_detect();
     kprintf("c4ix: host %s, info 0x%x\n", host_name(), info);
-    kprintf("c4ix: protected mode %s, preemption %s\n",
-        host_has(C4IX_I_PROT) ? "on for user tasks" : "unavailable",
-        host_type() == HOST_C4M ? "on" : "unavailable (cooperative)");
+    if (!host_has(C4IX_I_C4M)) {
+        kputs("c4ix: panic: this host is not c4m: C4IX needs its traps and cycle interrupt\n");
+        return 1;
+    }
+    kprintf("c4ix: protected mode %s, preemption on\n",
+        host_has(C4IX_I_PROT) ? "on for user tasks" : "unavailable");
 
-    // The VFS first: adopting the boot task opens its console fds.
+    // The VFS first: adopting the kernel task opens its console fds.
     vfs_init();
-    sched_init(host_type() == HOST_C4M ? PREEMPT_INTERVAL : 0);
+    sched_init(PREEMPT_INTERVAL);
 
     if (!(t = task_create("init", (int)&init_main, argc, (int)argv))) {
         kputs("c4ix: panic: cannot create init task\n");

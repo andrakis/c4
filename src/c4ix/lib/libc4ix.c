@@ -2,12 +2,10 @@
 // libc4ix: the C4IX userland C library, linked into every user
 // program as a .c4l archive.
 //
-// Every service goes through one gate, __c4ix_syscall, which picks
-// its door once: on c4m it executes a custom opcode c4m does not
-// implement, raising TRAP_ILLOP into the kernel -- the real syscall
-// path, and the one that works from behind protected mode. On plain
-// c4, where no trap machinery exists, it calls the kernel dispatcher
-// through the systable slot the loader filled in at load time.
+// Every service goes through one gate, __c4ix_syscall, which executes
+// a custom opcode c4m does not implement, raising TRAP_ILLOP into the
+// kernel -- the syscall path, and the one that works from behind
+// protected mode.
 //
 // printf lives here as a formatter over write(fd). Userland never
 // executes PRTF; the kernel decides where fd 1 goes.
@@ -19,10 +17,8 @@
 
 #include "c4ix_user.h"
 
-int __c4ix_systable;      // filled by the kernel loader on plain c4
-
-// Am I running under C4DOS? Same trick as the systable above, one rung
-// down: C4DOS's loader scans every image for this symbol and writes
+// Am I running under C4DOS? C4DOS's loader scans every image for this
+// symbol and writes
 // its API table's address into it before it runs the constructors
 // (inject_api, src/c4dos/c4dos.c), so a non-zero here means DOS and
 // nothing else. Costs no opcode -- a plain global read -- which is the
@@ -32,29 +28,23 @@ int __c4ix_systable;      // filled by the kernel loader on plain c4
 // Magic is ('C'<<16)+('4'<<8)+'D', matching dos_present() in
 // include/c4dos.h and the copy in include/u0.h.
 int *__c4dos_api;         // patched by the C4DOS loader; 0 when not under DOS
-static int uva_use_trap;  // 1 = trap gateway, 0 = direct call
 static int uva_ready;     // library set up? see libc4ix_ready()
 
 static void libc4ix_ready();
 
 // ---- the gate ----
 
+// A custom opcode, which the VM does not know: it traps into the kernel.
+// (There was a second door, a call through a table the loader filled in
+// for plain c4, which has no traps; no host ever used it.)
 static int __c4ix_syscall(int num, int a, int b, int c) {
-    int args[3];
-    int f;
-
     if (!uva_ready) libc4ix_ready();
-    if (uva_use_trap) {
-        // __c4_opcode pushes left to right and OPCD reads the opcode
-        // number from *sp, so the arguments are listed in REVERSE --
-        // then sp[1] is the first argument, which is the shape
-        // sched_trap hands to sys_dispatch. (u0.h's wrappers do the
-        // same thing for the same reason.)
-        return __c4_opcode(c, b, a, num);
-    }
-    args[0] = a; args[1] = b; args[2] = c;
-    f = __c4ix_systable;
-    return f(num, args);
+    // __c4_opcode pushes left to right and OPCD reads the opcode
+    // number from *sp, so the arguments are listed in REVERSE --
+    // then sp[1] is the first argument, which is the shape
+    // sched_trap hands to sys_dispatch. (u0.h's wrappers do the
+    // same thing for the same reason.)
+    return __c4_opcode(c, b, a, num);
 }
 
 int write(int fd, char *buf, int len) { return __c4ix_syscall(SYS_WRITE, fd, (int)buf, len); }
@@ -495,13 +485,12 @@ int ufprintf(int fd, char *fmt, ...) {
 //
 // Setup happens ON DEMAND, not only from the constructor, because a
 // constructor cannot know it runs first. The program's OWN
-// constructors are in the same list as this one, and if one of them
-// makes a syscall before this has run, the gate reads uva_use_trap as
-// 0 and calls through __c4ix_systable -- which is 0 on c4m, because
-// the loader only injects it where traps do not exist. A call to
-// address zero, from the first line of a program, for want of an
+// constructors are in the same list as this one, and one of them can
+// make a syscall, or printf, before this has run -- for want of an
 // ordering guarantee the C4R format does not actually give us (the
-// priority field exists but load-c4r.c never reads it).
+// priority field exists but load-c4r.c never reads it). (It once also
+// picked the gate's door, and a call through an empty systable was a
+// call to address zero from the first line of a program.)
 //
 // So every entry point that needs the library checks. The constructor
 // stays, because doing it once up front is still cheaper than the
@@ -513,9 +502,6 @@ static void libc4ix_ready() {
     uva_stack = malloc(sizeof(int) * UVA_STACK);
     memset(uva_stack, 0, sizeof(int) * UVA_STACK);
     uva_vptr = 0;
-    // A host with no systable must have trap machinery; a host with
-    // one is plain c4, where traps do not exist.
-    uva_use_trap = !__c4ix_systable;
 }
 
 // Returns C4DOS_REFUSE to decline the program: C4DOS's run_program

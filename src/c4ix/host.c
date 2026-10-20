@@ -1,10 +1,10 @@
 //
 // C4IX host detection.
 //
-// One INFO opcode tells the kernel what it is standing on: plain c4
-// returns 0 (no traps, no cycle interrupt -- degraded cooperative
-// mode), c4m returns its C4I_* feature bits. Everything that must
-// differ between the two hosts asks this module instead of probing.
+// One INFO opcode tells the kernel what it is standing on: c4m returns
+// its C4I_* feature bits. (Plain c4 has no INFO at all; it runs C4IX
+// only through c4m.c, and then C4IX sees c4m.) Anything that depends on
+// a feature asks this module instead of probing.
 //
 
 #include "c4ix.h"
@@ -33,15 +33,11 @@ int task_info() {
     return host_info() | 0x400;
 }
 
-int host_type() {
-    return (host_info() & C4IX_I_C4M) ? HOST_C4M : HOST_C4;
-}
-
 int host_has(int bit) {
     return (host_info() & bit) == bit;
 }
 
+// The only host C4IX runs on (boot.c refuses any other).
 char *host_name() {
-    if (host_type() == HOST_C4M) return "c4m";
-    return "c4 (degraded)";
+    return host_has(C4IX_I_C4M) ? "c4m" : "not c4m";
 }

@@ -294,10 +294,11 @@ Found on the way:
   a pass found a task ready, which since step 5 never happens. Dropping
   back whenever anything else had run, which I tried first, doubled the
   idle desktop's cycles in short naps.
-- **c4fc** does not yet accept a header's `extern` for a global used
-  before the unit defines it further down; c4lc does. `sched_nlive` and
-  `sched_nzombies` are defined above their first use, and the compiler
-  fix is a task of its own.
+- **c4fc** did not accept a header's `extern` for a global used before
+  the unit defines it further down; c4lc does. For this step
+  `sched_nlive` and `sched_nzombies` were defined above their first use.
+  c84f593 fixed c4fc, and they are back beside `task_zombify` (in
+  9c9890a).
 
 | | step 5 | step 6 |
 |---|---|---|

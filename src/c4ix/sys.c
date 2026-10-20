@@ -133,6 +133,7 @@ int sys_taskinfo(int index, int *out) {
     struct task *t;
     char *dst;
     int i;
+    long long c;
 
     t = task_first();
     i = 0;
@@ -145,13 +146,12 @@ int sys_taskinfo(int index, int *out) {
     out[3] = t->privs;
     out[4] = t->nsyscalls;
     out[5] = t->ntraps;
-    // The running task's own total does not include the slice it is in
-    // the middle of, so add it -- otherwise ps always reports itself as
-    // having used nothing. Carried the same way the counter is kept.
-    out[6] = t->cycles + ((t == sched_current())
-        ? (__c4_cycles() - t->cycles_in) : 0);
-    out[7] = t->cycles_hi;
-    while (out[6] >= 1000000000) { out[6] = out[6] - 1000000000; ++out[7]; }
+    // Cycles, in the two words this record has always had: billions,
+    // and the rest. (The caller's own run up to this syscall is in it:
+    // the trap charged that on the way in.)
+    c = task_cycles(t);
+    out[7] = (int)(c / 1000000000);
+    out[6] = (int)(c - (long long)out[7] * 1000000000);
     dst = (char *)(out + 8);
     i = 0;
     while (i < TASK_NAME_MAX) { dst[i] = t->name[i]; ++i; }
@@ -224,6 +224,8 @@ int sys_dispatch(int num, int *args) {
     if (num == SYS_PIPE)   return sys_pipe((int *)args[0]);
     if (num == SYS_CYCLES) return __c4_cycles();
     if (num == SYS_TASKINFO) return sys_taskinfo(args[0], (int *)args[1]);
+    if (num == SYS_CPUSTAT)
+        return sched_cpustat((struct cpustat *)args[0], (struct cpustat_task *)args[1], args[2]);
     if (num == SYS_CHDIR)  return sys_chdir((char *)args[0]);
     if (num == SYS_MKDIR)  return sys_mkdir((char *)args[0]);
     if (num == SYS_GETCWD) return sys_getcwd((char *)args[0], args[1]);

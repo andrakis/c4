@@ -5,73 +5,79 @@
 // took over the last second (End Process). Performance: a CPU gauge and a
 // scrolling history.
 //
-// CPU use is measured in cycles: each second, how many cycles each task
-// ran against how many ran in all. The boot task is where the kernel
-// idles, so what it took is idle time, and CPU usage is the rest.
+// CPU use is cpustat.h's, the same as top's: each second, one snapshot of
+// the kernel's accounting, and the share of the machine each task took
+// since the last. As NT does it, the kernel's own work -- syscalls and
+// switches -- is the System row, not the program's, and the idle task and
+// the time the machine napped are System Idle Process; CPU usage is
+// everything but idle, and the rows add up to 100.
 
 #include "desktop.h"
+#include "cpustat.h"
 
-enum { MAXP = 32, HIST = 60, ROW_H = 16, TAB_Y = 6, PAGE_Y = 28 };
+enum { MAXP = CPU_MAXT + 2, HIST = 60, ROW_H = 16, TAB_Y = 6, PAGE_Y = 28, NAMEW = 24 };
 
 struct tasks {
     int tab, sel, top, asel;
-    int n;                                     // processes in the last sample
-    int id[MAXP], parent[MAXP], state[MAXP], privs[MAXP], sys[MAXP], cpu[MAXP];
-    int lo[MAXP], hi[MAXP];                    // cycles, in two words
-    char name[MAXP * 24];
-    int pid0[MAXP], lo0[MAXP], hi0[MAXP], n0;  // the sample before, for deltas
+    int n;                                     // rows: idle, System, then the tasks
+    int id[MAXP], state[MAXP], privs[MAXP], sys[MAXP], cpu[MAXP];
+    long long time[MAXP];                      // CPU Time, in cycles
+    char name[MAXP * NAMEW];
+    struct cpusample s[2];                     // this snapshot and the one before
+    int cur;                                   // which of s is the latest
     int usage, hist[HIST], nhist;
-    int total_lo, total_hi, sampled;
+    int sampled;
     int uptime0;
 };
 
 static struct tasks *S(struct win *w) { return (struct tasks *)w->st; }
 static char buf[160];
-static int info[32];
 static char *tabs[3];
+static int pct[CPU_MAXT];
+
+static int row(struct tasks *t, int id, char *name, int privs, int state, int sys, int cpu, long long time) {
+    int k;
+    k = t->n;
+    t->id[k] = id; t->privs[k] = privs; t->state[k] = state; t->sys[k] = sys; t->cpu[k] = cpu;
+    t->time[k] = time;
+    ui_cpy(t->name + k * NAMEW, name);
+    t->name[k * NAMEW + NAMEW - 1] = 0;
+    ++t->n;
+    return k;
+}
 
 static void sample(struct tasks *t) {
-    int i, k, d, total, idle;
-    // carry this sample's numbers into "before"
-    k = 0;
-    while (k < t->n) { t->pid0[k] = t->id[k]; t->lo0[k] = t->lo[k]; t->hi0[k] = t->hi[k]; ++k; }
-    t->n0 = t->n;
+    struct cpusample *a, *b;
+    struct cpustat_task *r;
+    int k, sys, nsys;
+    long long ktime;
+
+    a = &t->s[t->cur];
+    b = &t->s[1 - t->cur];
+    cpu_sample(b);
+    if (t->sampled) t->usage = cpu_shares(a, b, pct, &sys);
+    else { k = 0; while (k < CPU_MAXT) { pct[k] = 0; ++k; } sys = 0; t->usage = 0; }
+
+    // the idle task and System first, as NT lists them; System's time is
+    // all the kernel has spent on everyone, the reaped included
     t->n = 0;
-    i = 0;
-    while (t->n < MAXP && utaskinfo(i, info)) {
-        k = t->n;
-        t->id[k] = info[0]; t->parent[k] = info[1]; t->state[k] = info[2]; t->privs[k] = info[3];
-        t->sys[k] = info[4]; t->lo[k] = info[6]; t->hi[k] = info[7];
-        ui_cpy(t->name + k * 24, (char *)(info + 8));
-        t->name[k * 24 + 23] = 0;
-        ++t->n;
-        ++i;
-    }
-    // each task's cycles since the last sample, and the whole machine's,
-    // in thousands: in cycles, times 100 for a percentage overflows 32
-    // bits once a task runs 21M in a sample, a fifth of a second
-    total = 0; idle = 0;
+    k = cpu_find(b, b->h.idle);
+    if (k >= 0) { r = &b->t[k]; row(t, r->id, "System Idle Process", 0, r->state, r->nsyscalls, pct[k], r->user + r->kernel); }
+    ktime = b->h.gone_kernel;
+    nsys = 0;
     k = 0;
-    while (k < t->n) {
-        i = 0;
-        while (i < t->n0 && t->pid0[i] != t->id[k]) ++i;
-        if (i < t->n0) d = (t->hi[k] - t->hi0[i]) * 1000000 + t->lo[k] / 1000 - t->lo0[i] / 1000;
-        else d = t->hi[k] * 1000000 + t->lo[k] / 1000;
-        if (d < 0) d = 0;
-        t->cpu[k] = d;
-        total = total + d;
-        if (t->id[k] == 0) idle = d;
+    while (k < b->h.ntasks) {
+        if (b->t[k].id != b->h.idle) { ktime = ktime + b->t[k].kernel; nsys = nsys + b->t[k].nsyscalls; }
         ++k;
     }
+    row(t, -1, "System", 0, TS_RUNNING, nsys, sys, ktime);
     k = 0;
-    while (k < t->n) {
-        t->cpu[k] = total ? (t->cpu[k] * 100 + total / 2) / total : 0;
-        if (t->cpu[k] > 100) t->cpu[k] = 100;
+    while (k < b->h.ntasks) {
+        r = &b->t[k];
+        if (r->id != b->h.idle) row(t, r->id, r->name, r->privs, r->state, r->nsyscalls, pct[k], r->user);
         ++k;
     }
-    t->usage = total && t->sampled ? 100 - (idle * 100 + total / 2) / total : 0;
-    if (t->usage < 0) t->usage = 0;
-    if (t->usage > 100) t->usage = 100;
+    t->cur = 1 - t->cur;
     if (t->sampled) {
         if (t->nhist < HIST) { t->hist[t->nhist] = t->usage; ++t->nhist; }
         else { k = 0; while (k < HIST - 1) { t->hist[k] = t->hist[k + 1]; ++k; } t->hist[HIST - 1] = t->usage; }
@@ -178,13 +184,14 @@ static void draw_procs(struct tasks *t, int ox, int oy, int cw, int ch) {
         fg = k == t->sel ? C_WHITE : C_DARK;
         if (k == t->sel) d_rect(ox + 12, y - 1, cw - 26, ROW_H, C_SEL);
         x = ox + 14;
-        d_text(x, y + 1, fg, F_SANS, t->name + k * 24); x = x + widths[0];
-        ui_num(buf, t->id[k]); d_text(x + widths[1] - 8 - ui_len(buf) * 6, y + 1, fg, F_SANS, buf); x = x + widths[1];
+        d_text(x, y + 1, fg, F_SANS, t->name + k * NAMEW); x = x + widths[0];
+        buf[0] = 0; if (t->id[k] >= 0) ui_num(buf, t->id[k]);   // System has no PID
+        d_text(x + widths[1] - 8 - ui_len(buf) * 6, y + 1, fg, F_SANS, buf); x = x + widths[1];
         ui_num(buf, t->cpu[k]); if (ui_len(buf) < 2) { buf[1] = buf[0]; buf[0] = '0'; buf[2] = 0; }
         d_text(x + widths[2] - 8 - ui_len(buf) * 6, y + 1, fg, F_SANS, buf); x = x + widths[2];
-        // CPU time: millions of cycles, one decimal
-        if (t->hi[k]) { ui_num_commas(buf, t->hi[k] * 1000 + t->lo[k] / 1000000); ui_cat(buf, "M"); }
-        else { ui_num_commas(buf, t->lo[k] / 1000); ui_cat(buf, "k"); }
+        // CPU time: thousands of cycles, or millions once they pass a billion
+        if (t->time[k] >= 1000000000) { ui_num_commas(buf, (int)(t->time[k] / 1000000)); ui_cat(buf, "M"); }
+        else { ui_num_commas(buf, (int)(t->time[k] / 1000)); ui_cat(buf, "k"); }
         d_text(x + widths[3] - 8 - ui_len(buf) * 6, y + 1, fg, F_SANS, buf); x = x + widths[3];
         ui_num_commas(buf, t->sys[k]); d_text(x + widths[4] - 8 - ui_len(buf) * 6, y + 1, fg, F_SANS, buf); x = x + widths[4];
         d_text(x + 4, y + 1, fg, F_SANS, state_name(t->state[k]));
@@ -293,7 +300,7 @@ static void end_process(struct win *w) {
         return;
     }
     ui_cpy(buf, "End process ");
-    ui_cat(buf, t->name + t->sel * 24);
+    ui_cat(buf, t->name + t->sel * NAMEW);
     ui_cat(buf, "? Unsaved work in it will be lost.");
     msgbox(w, "Task Manager Warning", buf, 1, A_ENDPROC);
 }

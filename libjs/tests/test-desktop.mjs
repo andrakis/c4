@@ -416,6 +416,7 @@ until(() => has(/spin: tick 1\//), 1500);
 key('ESC', 3, 27);                                             // Ctrl+Shift+Esc
 check(until(() => has('Task Manager') && has('Image Name')), 'Ctrl+Shift+Esc opens Task Manager on Processes', screen());
 check(until(() => has(/^(c4ix-)?desktop/) && has(/^(c4ix-spin\.c4r|spin) *$/) && has(/^CPU Usage: \d+%$/), 600), 'it lists the tasks, spin among them, with CPU usage', frame.filter(t => /c4ix|CPU|Image|boot|init|spin/.test(t.s)).map(t => t.s.trim()).join(' | '));
+check(has('System Idle Process') && has(/^System *$/), 'and, as NT does, System Idle Process and System', frame.filter(t => /System/.test(t.s)).map(t => t.s.trim()).join(' | '));
 check(!has(/^(c4sc|b4ke)(\.c4r)? *$/), 'the cancelled build left nothing behind', frame.filter(t => /c4sc|b4ke/.test(t.s)).map(t => t.s).join(' | '));
 clickText(/^(c4ix-spin\.c4r|spin) *$/);
 clickText('End Process');

@@ -21,7 +21,7 @@ DEPS $(OUT)/desktop/term.c4o : src/c4ix/user/desktop/term.c $(H)
 RUN $(LC) src/c4ix/user/desktop/term.c $(OUT)/desktop/term.c4o
 DEPS $(OUT)/desktop/files.c4o : src/c4ix/user/desktop/files.c $(H)
 RUN $(LC) src/c4ix/user/desktop/files.c $(OUT)/desktop/files.c4o
-DEPS $(OUT)/desktop/taskmgr.c4o : src/c4ix/user/desktop/taskmgr.c $(H)
+DEPS $(OUT)/desktop/taskmgr.c4o : src/c4ix/user/desktop/taskmgr.c $(H) src/c4ix/include/cpustat.h
 RUN $(LC) src/c4ix/user/desktop/taskmgr.c $(OUT)/desktop/taskmgr.c4o
 DEPS $(OUT)/desktop/apps.c4o : src/c4ix/user/desktop/apps.c $(H)
 RUN $(LC) src/c4ix/user/desktop/apps.c $(OUT)/desktop/apps.c4o

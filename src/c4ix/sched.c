@@ -33,21 +33,85 @@ static int sched_interval;   // preemption interval, 0 = cooperative only
 static int sched_lockdepth;
 static int sched_tramp;      // address of the trampoline's LEV
 
-// Add a slice to a task's cycle count, carrying into the high word.
-//
-// cycles = cycles_hi * 1000000000 + cycles (c4ix.h). Decimal carry
-// rather than a 64-bit type this system does not have, so printing it
-// is two ordinary numbers and nothing here is ever wider than an int.
-// A negative delta means the VM's counter wrapped between samples,
-// which is not a slice anyone ran.
-static void sched_add_cycles(struct task *t, int d) {
-    int lo;
-    if (d < 0) return;
-    lo = t->cycles + d;
-    while (lo >= 1000000000) { lo = lo - 1000000000; ++t->cycles_hi; }
-    t->cycles = lo;
-}
 static int sched_intrap;     // inside the trap handler: no re-entry
+
+// ---- accounting ----
+//
+// Every cycle belongs to someone (docs/c4ix-cpu.md). From the end of one
+// trap to the start of the next, the running task ran its own code; from
+// the start of a trap to its end the kernel ran on behalf of the task that
+// trapped. So the handler reads the counter twice, and the two differences
+// are the whole of it: no per-switch stamps, and nothing the kernel does
+// goes to whichever task happened to be switched in afterwards.
+//
+// The idle loop's cycles are idle time, and so is the time it naps, during
+// which the counter stands still: that is counted in machine milliseconds,
+// so Task Manager can weigh the two together.
+//
+// The differences are words, and the VM's counter wraps -- a difference
+// is right modulo the word as long as it is less than half of it, and a
+// trap at least every preemption slice sees to that.
+static int acct_in;          // __c4_cycles() as this trap began
+static int acct_out;         // ... as the last one ended
+static int acct_napms;
+static long long acct_gone_user, acct_gone_kernel;
+
+// An accumulator past 2^30 (or, impossibly, negative) folds now, long
+// before it could overflow; -2^30 is that mask at either word size.
+enum { ACCT_FOLD_AT = -1073741824 };
+
+static void acct_fold(struct task *t) {
+    t->ucycles = t->ucycles + t->uacc;
+    t->kcycles = t->kcycles + t->kacc;
+    t->uacc = 0;
+    t->kacc = 0;
+}
+
+long long task_cycles(struct task *t) {
+    acct_fold(t);
+    return t->ucycles + t->kcycles;
+}
+
+// A task leaving the table takes its cycles to the reaped totals, so the
+// sum of everything ever run never goes backwards.
+void sched_retire(struct task *t) {
+    acct_fold(t);
+    acct_gone_user = acct_gone_user + t->ucycles;
+    acct_gone_kernel = acct_gone_kernel + t->kcycles;
+}
+
+// The snapshot behind Task Manager and top: one trap, so nothing runs
+// between the first record and the last.
+int sched_cpustat(struct cpustat *h, struct cpustat_task *r, int max) {
+    struct task *t;
+    struct cpustat_task *p;
+    int n, i;
+
+    n = 0;
+    t = task_head;
+    while (t && n < max) {
+        acct_fold(t);
+        p = &r[n];
+        p->id = t->id;
+        p->parent = t->parent;
+        p->state = t->state;
+        p->privs = t->privs;
+        p->nsyscalls = t->nsyscalls;
+        p->user = t->ucycles;
+        p->kernel = t->kcycles;
+        i = 0;
+        while (i < TASK_NAME_MAX) { p->name[i] = t->name[i]; ++i; }
+        ++n;
+        t = t->next;
+    }
+    h->ntasks = n;
+    h->ms = __time();
+    h->napms = acct_napms;
+    h->idle = boot_task ? boot_task->id : -1;
+    h->gone_user = acct_gone_user;
+    h->gone_kernel = acct_gone_kernel;
+    return n;
+}
 
 int sched_switches;          // context switches since boot
 
@@ -190,7 +254,7 @@ static struct task *sched_pick(struct task *t) {
 // a trap frame over the frame the other is parked on, and the machine
 // ends up spinning on a TLEV that returns to itself forever.
 static void sched_trap(int interval, int trap, int param, int mode, int a, int bp, int sp, int returnpc) {
-    struct task *t, *n;
+    struct task *t, *n, *me;
 
     // Re-entry guard. c4m disables the cycle interrupt when IT takes
     // a trap, but not when user code raises one (the syscall gateway
@@ -214,7 +278,14 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     // state changes the switch below acts on, rather than re-entering
     // the trap machinery.
     sched_intrap = 1;
-    if (sched_cur) ++sched_cur->ntraps;
+    // Until now the task's own code ran; from here, the kernel on its
+    // behalf (accounting, above). It is the one charged on the way out
+    // too, whoever that switches to.
+    acct_in = __c4_cycles();
+    if ((me = sched_cur)) {
+        ++me->ntraps;
+        me->uacc = me->uacc + (acct_in - acct_out);
+    }
 
     // no nested switches while kernel structures move
     __c4_configure(C4IX_CONF_INTERVAL, 0);
@@ -292,12 +363,6 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
             sp = n->sv_sp + 2 * sizeof(int);
             returnpc = n->sv_pc;
         }
-        // Charge the outgoing task for the slice it just ran, and
-        // start the incoming task's clock. This is the accounting ps
-        // and top report, and it is exact: the VM counter is the
-        // same one the scheduler runs on.
-        sched_add_cycles(t, __c4_cycles() - t->cycles_in);
-        n->cycles_in = __c4_cycles();
         // the mask travels with the task, not with the machine
         t->lockdepth = sched_lockdepth;
         sched_lockdepth = n->lockdepth;
@@ -337,6 +402,12 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     // handler returns through, while this frame keeps them -- which is
     // what runs the handler itself in the task's own mode.
     ck_signal_deliver(sched_cur, &a, &bp, &sp, &returnpc, mode, interval);
+
+    acct_out = __c4_cycles();
+    if (me) {
+        me->kacc = me->kacc + (acct_out - acct_in);
+        if ((me->uacc | me->kacc) & ACCT_FOLD_AT) acct_fold(me);
+    }
 
     // The flag stays set for the WHOLE handler, not just the service
     // call: everything below it -- task_release, the slab allocator,
@@ -475,8 +546,10 @@ static void coop_switch(struct task *next) {
     *bp = (int)f;
     *(bp + 1) = sched_tramp;
 
-    sched_add_cycles(old, __c4_cycles() - old->cycles_in);
-    next->cycles_in = __c4_cycles();
+    // no traps here, so a switch is the only edge there is to charge at
+    acct_in = __c4_cycles();
+    old->uacc = old->uacc + (acct_in - acct_out);
+    acct_out = acct_in;
     old->lockdepth = sched_lockdepth;
     sched_lockdepth = next->lockdepth;
     next->state = TS_RUNNING;
@@ -639,6 +712,7 @@ void sched_init(int interval) {
     boot_task = task_adopt("boot");
     boot_task->state = TS_RUNNING;
     sched_cur = boot_task;
+    acct_out = __c4_cycles();
 
     if (sched_on_c4m) {
         install_trap_handler((int)&sched_trap);
@@ -680,7 +754,7 @@ void sched_stop() {
 // nobody waited for.
 void sched_run() {
     struct task *t;
-    int live, ready, nap, due, budget;
+    int live, ready, nap, due, budget, ms;
 
     nap = 0;
     live = 1;
@@ -722,7 +796,10 @@ void sched_run() {
                 if (budget < 0) budget = 0;
                 if (budget < nap) nap = budget;
             }
+            // the counter stands still meanwhile: idle time in ms instead
+            ms = __time();
             __c4_usleep(nap);
+            acct_napms = acct_napms + (__time() - ms);
             // The cycle counter stood still while we slept, so the
             // console's own rate limit has no way to know that real
             // time passed. Tell it.

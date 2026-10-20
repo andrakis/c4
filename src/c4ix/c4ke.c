@@ -219,7 +219,8 @@ static int ck_privs_out(int p) {
 static void ck_export_fill(int *kti) {
     int *kte;
     struct task *t;
-    int n, cyc;
+    int n;
+    long long c;
 
     ck_calibrate();
     kte = kti + CK_KTI__Sz;
@@ -234,7 +235,7 @@ static void ck_export_fill(int *kti) {
         kte[CK_KTE_NAMELEN] = 0;
         while (t->name[kte[CK_KTE_NAMELEN]]) ++kte[CK_KTE_NAMELEN];
 
-        cyc = t->cycles + ((t == sched_current()) ? (__c4_cycles() - t->cycles_in) : 0);
+        c = task_cycles(t);
 
         kte[CK_KTE_STATE] = ck_state(t);
         kte[CK_KTE_WAITSTATE] = ck_wstate(t);
@@ -243,13 +244,11 @@ static void ck_export_fill(int *kti) {
         kte[CK_KTE_PRIORITY] = 0;
         kte[CK_KTE_PRIVS] = ck_privs_out(t->privs);
         kte[CK_KTE_NICE] = 0;
-        kte[CK_KTE_CYCLES] = cyc;
-        kte[CK_KTE_CYCLES_HI] = 0;
-        while (kte[CK_KTE_CYCLES] >= 1000000000) {
-            kte[CK_KTE_CYCLES] = kte[CK_KTE_CYCLES] - 1000000000;
-            ++kte[CK_KTE_CYCLES_HI];
-        }
-        kte[CK_KTE_TIMEMS] = cyc / ck_cpms;
+        // billions and the rest, as C4KE keeps them (the high word used
+        // to be dropped here, so a task past a billion cycles restarted)
+        kte[CK_KTE_CYCLES_HI] = (int)(c / 1000000000);
+        kte[CK_KTE_CYCLES] = (int)(c - (long long)kte[CK_KTE_CYCLES_HI] * 1000000000);
+        kte[CK_KTE_TIMEMS] = (int)(c / ck_cpms);
         kte[CK_KTE_TRAPS] = t->ntraps;
         // BYTES USED, not the base address: the stack grows down from
         // the top of the allocation, so used = top - sp. sv_sp is only
@@ -579,7 +578,7 @@ int ck_dispatch(int num, int *args) {
     if (num == CK_USER_PARENT)         return t ? t->parent : -1;
     if (num == CK_KERN_TASK_CURRENT_ID) return t ? t->id : -1;
     if (num == CK_TASK_CYCLES)
-        return t ? t->cycles + (__c4_cycles() - t->cycles_in) : 0;
+        return t ? (int)task_cycles(t) : 0;
     if (num == CK_C4INFO)              return task_info();
     if (num == CK_TIME)                return __time();
 

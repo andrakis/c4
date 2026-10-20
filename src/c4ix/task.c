@@ -178,6 +178,7 @@ void task_release(struct task *t) {
     task_remember(t);
     fd_closeall(t);
     task_unlink(t);
+    sched_retire(t);
     if (t == sched_current()) {
         t->next = task_reaplist;
         task_reaplist = t;

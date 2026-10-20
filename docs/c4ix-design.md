@@ -574,6 +574,14 @@ loading or assigning a whole struct is an error.
     library, built with c4lc's new `-fno-builtin`. `ls` is linked
     against the non-pic `/lib/libc4ix.c4s`.
 
+- **CPU accounting** (branch c4ix-userland, 2026-10-21): docs/c4ix-cpu.md.
+  The trap handler charges cycles to the task they were spent on, as its
+  own or as the kernel's on its behalf. The counts are 64-bit (`long
+  long`), and the idle loop's naps are counted in machine ms.
+  `SYS_CPUSTAT` (229) is one atomic snapshot, read through
+  `include/cpustat.h`. Task Manager and top show System and System Idle
+  Process rows, and the rows add up to 100%.
+
 ## 6.1 Running it
 
     make run-c4ix        an interactive shell on c4m

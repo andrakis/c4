@@ -107,3 +107,70 @@ screen against nothing, so that screen showed totals since boot; it
 takes a baseline first now. `libjs/tests/test-c4ix-cpu.mjs` runs top
 with spin busy at 100 MHz; before the fix it reproduces the negative
 shares.
+
+### 4. Accounting whose rows add up to 100%
+
+Cycles used to be charged at a context switch, to the task switched
+away from. A syscall's kernel time therefore went to whichever task
+happened to run before the next switch. The time the idle loop napped
+counted for nothing, so every percentage was a share of a small total;
+an idle desktop showed 45% busy.
+
+- **Per task, two counts.** `sched_trap` reads the cycle counter on the
+  way in and on the way out. Cycles since the last trap ended are the
+  task's own (`ucycles`). Cycles inside the handler are the kernel's on
+  its behalf (`kcycles`): its syscalls, its preemption ticks and its
+  switches.
+- **No 64-bit arithmetic per trap.** The totals are `long long`, but a
+  trap only adds into two int accumulators. These are folded into the
+  totals before they could overflow (2^30), and whenever the totals are
+  read.
+- **Naps count.** The idle loop adds the machine milliseconds it napped
+  to `acct_napms`. The counter stands still meanwhile, so this is the
+  one count in time rather than cycles.
+- **Reaped tasks are not lost.** A task leaving the table adds its
+  totals to `gone_user`/`gone_kernel`, so the sum never goes backwards.
+- **One snapshot.** `SYS_CPUSTAT` (229, `ucpustat`) copies out every
+  task's record and the header, all in one trap. Task Manager used to
+  build its sample from one `SYS_TASKINFO` call per task, which was
+  O(n^2) and not atomic.
+- **The shares** (`src/c4ix/include/cpustat.h`, shared by top and Task
+  Manager) are weighed by time. In an interval of `ms` milliseconds the
+  machine was awake for `ms - nap`, and that part is divided among the
+  rows by cycles; the naps are idle.
+  - A task's row is its own cycles.
+  - **System** is the kernel's cycles on behalf of every task but the
+    idle one.
+  - **System Idle Process** is the idle task's cycles plus the naps. It
+    is what the other rows leave, so a screen adds up to exactly 100.
+  - A task that ended during the interval is in the total but has no
+    row, as in NT.
+- `cpustat.h` is separate from `c4ix_user.h` because it is the only
+  userland code that needs `long long`.
+
+Found on the way: C4KE's task table (`ck_export_fill`) dropped the
+billions of a task's cycles, so its count restarted past a billion. It
+now takes both words from the 64-bit total.
+
+`test-c4ix-cpu.mjs` now checks that the rows add up to exactly 100, and
+that an idle machine is at least 95% idle (it is 100%). test-desktop
+checks that Task Manager has the two new rows.
+
+The accounting is honest, and so it shows the problem step 5 fixes. With
+spin running at the console, top gives:
+
+| row | share | cycles in the second |
+|---|---|---|
+| idle loop (`boot`) | 65% | 64.8M |
+| System | 30% | 30.3M |
+| spin | 5% | 5.0M |
+| CPU usage | 35% | |
+
+The idle loop is READY, so every one of spin's syscalls switches into
+it and back.
+
+**Cost.** Profiled against the baseline kernel on `conspin`, the two
+counter reads and the adds cost about 44 cycles a trap. `sched_trap`
+grew from 174.6M to 197.0M cycles in 5 seconds, over about 505k traps.
+Spin's syscalls fell from 51,031 to 50,273 a second (−1.5%). Nothing
+else in the profile moved.

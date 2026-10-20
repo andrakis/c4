@@ -72,8 +72,8 @@ enum {
     SYS_KILL = 219,
     SYS_SLEEP = 220, SYS_AVAIL = 221, SYS_INTR = 222, SYS_CLOEXEC = 223,
     SYS_STAT = 224, SYS_UNLINK = 225, SYS_RENAME = 226, SYS_LAZYFILE = 227,
-    SYS_STACK = 228,
-    SYS_TOP = 229          // one past the last: sched_trap's range check
+    SYS_STACK = 228, SYS_CPUSTAT = 229,
+    SYS_TOP = 230          // one past the last: sched_trap's range check
 };
 // taskinfo fills, in order: id, parent, state, privs, nsyscalls,
 // ntraps, cycles, then the name packed into the remaining words.
@@ -338,14 +338,17 @@ struct task {
     struct vnode *cwd;         // working directory, inherited on spawn
     int  lockdepth;            // preemption-mask depth, saved across switches
     int  parent;               // task id that spawned this one
-    // Cycles, in two words: cycles_hi * 1000000000 + cycles. One is not
-    // enough -- the VM's counter is 32 bits on a 32-bit machine and a
-    // single C4IX build passes 2^31 several times over, which used to
-    // print as a NEGATIVE number of cycles in ps. Decimal carry, so
-    // nothing here is ever wider than an int (sched_add_cycles).
-    int  cycles;               // VM cycles this task has been given, low
-    int  cycles_hi;            // ... and billions
-    int  cycles_in;            // counter value when it last started running
+    // Cycles (sched.c, "accounting"): what the task ran itself, outside
+    // the trap handler, and what the handler spent on its behalf -- its
+    // syscalls, preemption ticks and switches, which Task Manager shows
+    // as System. 64 bits, since one C4IX build passes 2^31 several times
+    // over. A trap adds into the int accumulators, and they are folded
+    // into the totals before they could overflow and whenever the
+    // totals are read, so the hot path does no long long arithmetic.
+    long long ucycles;
+    long long kcycles;
+    int  uacc;                 // not yet in ucycles
+    int  kacc;                 // not yet in kcycles
     int  ntraps;               // traps taken on its behalf
     // C4KE compatibility state (c4ke.c). Zero for every task that
     // never uses it -- sl4b_alloc memsets, so this costs nothing to
@@ -356,6 +359,24 @@ struct task {
     int  ck_wake;              // TS_SLEEPING: __time() value to wake at
     int  argv_vec;             // char ** owned by this task, 0 if not owned
     int  argv_data;            // char *  backing store for the above
+    char name[TASK_NAME_MAX];
+};
+
+// What SYS_CPUSTAT copies out (sched_cpustat): a header, then one record
+// per task, all taken in one trap so that every number describes the
+// same instant. Userland's copy is in c4ix_user.h.
+struct cpustat {
+    int ntasks;                // records that follow, at most the caller's max
+    int ms;                    // __time() when it was taken
+    int napms;                 // machine ms the idle loop has slept, since boot
+    int idle;                  // the idle task's id: its cycles are idle time
+    long long gone_user;       // the cycles of tasks already reaped
+    long long gone_kernel;
+};
+struct cpustat_task {
+    int id, parent, state, privs, nsyscalls;
+    long long user;            // cycles it ran outside the trap handler
+    long long kernel;          // cycles the handler spent on it
     char name[TASK_NAME_MAX];
 };
 
@@ -483,6 +504,9 @@ int          sched_in_trap();  // servicing a trap: no re-entry allowed
 void         task_exit(int code);
 int          task_wait(struct task *t);
 extern int   sched_switches;   // context switches since boot
+long long    task_cycles(struct task *t);  // everything it has run, both kinds
+void         sched_retire(struct task *t); // its cycles to the reaped total
+int          sched_cpustat(struct cpustat *h, struct cpustat_task *r, int max);
 
 // ---- .c4r loader (loader.c) ----
 // Constructor and destructor lists are copied out of the image buffer

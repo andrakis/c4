@@ -21,7 +21,7 @@ enum {
     SYS_KILL = 219, SYS_SLEEP = 220,
     SYS_AVAIL = 221, SYS_INTR = 222, SYS_CLOEXEC = 223,
     SYS_STAT = 224, SYS_UNLINK = 225, SYS_RENAME = 226, SYS_LAZYFILE = 227,
-    SYS_STACK = 228
+    SYS_STACK = 228, SYS_CPUSTAT = 229
 };
 // taskinfo record, in order: id, parent, state, privs, nsyscalls,
 // ntraps, cycles, then a 16-byte name
@@ -71,6 +71,7 @@ int  udup2(int oldfd, int newfd);
 int  upipe(int *fds);            // fds[0] read end, fds[1] write end
 int  ucycles();                  // VM cycles executed since boot
 int  utaskinfo(int index, int *out);   // 1 if that task slot exists
+int  ucpustat(int *hdr, int *recs, int max);  // cpustat.h: one snapshot of every task
 int  uchdir(char *path);
 int  umkdir(char *path);
 int  ugetcwd(char *buf, int len);

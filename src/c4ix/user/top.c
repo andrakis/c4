@@ -1,19 +1,23 @@
-// C4IX userland: top. Samples the task table twice and reports what
-// each task did BETWEEN the samples, which is the number that
-// actually answers "what is using the machine" -- a total since boot
-// mostly tells you which task is oldest.
+// C4IX userland: top. Takes a snapshot of the machine's accounting each
+// second and reports what each task did BETWEEN the snapshots, which is
+// the number that actually answers "what is using the machine" -- a
+// total since boot mostly tells you which task is oldest.
+//
+// The shares are cpustat.h's, the same as Task Manager's: each task's
+// own cycles, System for the kernel's work on everyone's behalf, and the
+// idle task for the rest, naps included -- so a screen adds up to 100.
 //
 // Runs until Ctrl-C, redrawing in place once a second, as top does;
 // `top N` stops after N screens. (It used to stop after three: it was
 // written before the console could be interrupted.)
 
 #include "c4ix_user.h"
+#include "cpustat.h"
 
-enum { MAX_TASKS = 32, SAMPLE_MS = 1000 };
+enum { SAMPLE_MS = 1000 };
 
-static int prev_id[MAX_TASKS];
-static int prev_hi[MAX_TASKS], prev_lo[MAX_TASKS];
-static int nprev;
+static struct cpusample samples[2];
+static int pct[CPU_MAXT];
 
 static char *top_state(int st) {
     if (st == TS_READY) return "ready";
@@ -23,51 +27,6 @@ static char *top_state(int st) {
     if (st == TS_BLOCKED) return "block";
     if (st == TS_SLEEPING) return "sleep";
     return "?";
-}
-
-// The thousands of cycles a task ran since the previous sample (all of
-// them, if it is new). Cycles come as two words, hi billions and lo
-// (sched.c); a delta in cycles overflows 32 bits at 2.1G, and times 100
-// for a percentage at 21M -- a fifth of a second -- so the arithmetic is
-// in kilocycles, which a 32-bit word holds for 24 days at 100 MHz.
-static int top_kdelta(int id, int hi, int lo) {
-    int i;
-    i = 0;
-    while (i < nprev && prev_id[i] != id) ++i;
-    if (i == nprev) return hi * 1000000 + lo / 1000;
-    return (hi - prev_hi[i]) * 1000000 + lo / 1000 - prev_lo[i] / 1000;
-}
-
-// one pass over the task table into snap; the number of tasks
-static int top_sample(int *snap) {
-    int info[TASKINFO_WORDS];
-    int i, j, n, base;
-    n = 0;
-    i = 0;
-    while (utaskinfo(i, info)) {
-        if (n < MAX_TASKS) {
-            base = n * TASKINFO_WORDS;
-            j = 0;
-            while (j < TASKINFO_WORDS) { snap[base + j] = info[j]; ++j; }
-            ++n;
-        }
-        ++i;
-    }
-    return n;
-}
-
-// this sample becomes the baseline for the next one
-static void top_keep(int *snap, int n) {
-    int i, base;
-    nprev = n;
-    i = 0;
-    while (i < n) {
-        base = i * TASKINFO_WORDS;
-        prev_id[i] = snap[base];
-        prev_lo[i] = snap[base + 6];
-        prev_hi[i] = snap[base + 7];
-        ++i;
-    }
 }
 
 // Let the machine run for a second between samples, asleep rather than
@@ -90,37 +49,37 @@ static int atoi_(char *s) {
     return n;
 }
 
+// thousands of cycles, as upadcycles2's billions and the rest
+static void top_kcycles(int k, int width) {
+    upadcycles2(k / 1000000, k % 1000000 * 1000, width);
+}
+
+// a long long count of cycles, the same way
+static void top_cycles(long long c, int width) {
+    int hi;
+    hi = (int)(c / 1000000000);
+    upadcycles2(hi, (int)(c - (long long)hi * 1000000000), width);
+}
+
 int main(int argc, char **argv) {
-    // One flat snapshot: sampling the table twice would let the
-    // tasks run in between, and the percentages would not add up.
-    int snap[MAX_TASKS * TASKINFO_WORDS];
-    int iters, it, i, n, delta, busy, pct, base;
+    struct cpusample *a, *b, *s;
+    struct cpustat_task *r;
+    int iters, it, k, sys, usage, ks, idle;
 
     iters = (argc > 1) ? atoi_(argv[1]) : 0;   // 0: until Ctrl-C
 
-    // a baseline first, or the first screen is totals since boot
-    top_keep(snap, top_sample(snap));
+    // a baseline first, or the first screen would be totals since boot
+    a = &samples[0];
+    b = &samples[1];
+    cpu_sample(a);
     it = 0;
     while (!iters || it < iters) {
         top_settle();
-
-        // one pass: copy the whole table, then work only from the
-        // copy, so every number printed belongs to the same instant
-        n = top_sample(snap);
-        busy = 0;
-        i = 0;
-        while (i < n) {
-            base = i * TASKINFO_WORDS;
-            delta = top_kdelta(snap[base], snap[base + 7], snap[base + 6]);
-            if (delta > 0) busy = busy + delta;
-            ++i;
-        }
-        if (!busy) busy = 1;
+        cpu_sample(b);
+        usage = cpu_shares(a, b, pct, &sys);
 
         top_home();
-        uprintf("top: %d tasks, ", n);
-        upadcycles2(busy / 1000000, busy % 1000000 * 1000, 0);
-        uprintf("cycles in the last second -- Ctrl-C to stop\n");
+        uprintf("top: %d tasks, CPU usage %d%% -- Ctrl-C to stop\n", b->h.ntasks, usage);
         upadhdr("ID", 4);
         upadhdr("PPID", 5);
         upadstr("STATE", 8);
@@ -130,25 +89,38 @@ int main(int argc, char **argv) {
         upadhdr("TOTAL", 11);
         uprintf(" NAME\n");
 
-        i = 0;
-        while (i < n) {
-            base = i * TASKINFO_WORDS;
-            delta = top_kdelta(snap[base], snap[base + 7], snap[base + 6]);
-            if (delta < 0) delta = 0;
-            pct = (delta * 100 + busy / 2) / busy;
-            if (pct > 100) pct = 100;
-            upadnum(snap[base], 4);
-            upadnum(snap[base + 1], 5);
-            upadstr(top_state(snap[base + 2]), 8);
-            upadstr(snap[base + 3] ? "user" : "kernel", 8);
-            upadnum(pct, 7);
-            upadcycles2(delta / 1000000, delta % 1000000 * 1000, 11);
-            upadcycles2(snap[base + 7], snap[base + 6], 11);
-            uprintf(" %s\n", (char *)(snap + base + 8));
-            ++i;
+        ks = 0;
+        idle = 0;
+        k = 0;
+        while (k < b->h.ntasks) {
+            r = &b->t[k];
+            upadnum(r->id, 4);
+            upadnum(r->parent, 5);
+            upadstr(top_state(r->state), 8);
+            upadstr(r->privs ? "user" : "kernel", 8);
+            upadnum(pct[k], 7);
+            if (r->id == b->h.idle) {
+                idle = 1;
+                top_kcycles(cpu_kdelta(a, b, k, 0) + cpu_kdelta(a, b, k, 1), 11);
+                top_cycles(r->user + r->kernel, 11);
+            } else {
+                ks = ks + cpu_kdelta(a, b, k, 1);
+                top_kcycles(cpu_kdelta(a, b, k, 0), 11);
+                top_cycles(r->user, 11);
+            }
+            uprintf(" %s\n", r->name);
+            ++k;
         }
+        // the kernel's work for all of them, as Task Manager shows it
+        upadstr("", 5 + 6 + 8 + 8);     // under CPU%
+        upadnum(sys, 7);
+        top_kcycles(ks, 11);
+        upadstr("", 12);
+        uprintf(" System\n");
+        if (!idle) uprintf("(no idle task in the snapshot)\n");
 
-        top_keep(snap, n);
+        // this sample becomes the baseline for the next one
+        s = a; a = b; b = s;
         ++it;
     }
     return 0;

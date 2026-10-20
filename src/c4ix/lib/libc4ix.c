@@ -72,6 +72,7 @@ int udup2(int oldfd, int newfd)       { return __c4ix_syscall(SYS_DUP2, oldfd, n
 int upipe(int *fds)                   { return __c4ix_syscall(SYS_PIPE, (int)fds, 0, 0); }
 int ucycles()                         { return __c4ix_syscall(SYS_CYCLES, 0, 0, 0); }
 int utaskinfo(int i, int *out)        { return __c4ix_syscall(SYS_TASKINFO, i, (int)out, 0); }
+int ucpustat(int *h, int *r, int max)  { return __c4ix_syscall(SYS_CPUSTAT, (int)h, (int)r, max); }
 int uchdir(char *path)                { return __c4ix_syscall(SYS_CHDIR, (int)path, 0, 0); }
 int umkdir(char *path)                { return __c4ix_syscall(SYS_MKDIR, (int)path, 0, 0); }
 int ugetcwd(char *buf, int len)       { return __c4ix_syscall(SYS_GETCWD, (int)buf, len, 0); }
@@ -195,7 +196,7 @@ int upadnum(int v, int width) {
 
 // Cycle counts get large fast, so scale them the way C4KE's ps does.
 //
-// The two-word form: hi counts BILLIONS (sched.c's sched_add_cycles),
+// The two-word form: hi counts BILLIONS (sys.c's sys_taskinfo),
 // so a value with a high word is already at least giga and is scaled
 // from there. Nothing here is wider than an int, which is the point --
 // one word overflowed at 2^31 and printed a negative number of cycles.

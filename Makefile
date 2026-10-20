@@ -2720,7 +2720,8 @@ $(C4IX_ARC_PROGS): c4ix-%.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libarc.c4l libc4ix.c
 # The desktop is several modules (docs/c4ix-desktop.md): each is compiled
 # on its own, then all are linked with libc4ix, like the kernel.
 C4IX_DESKTOP := wm ui term files taskmgr apps edit
-C4IX_DESKTOP_SRC := $(C4IX_DESKTOP:%=$(C4IX_SRC)/user/desktop/%.c) $(C4IX_SRC)/user/desktop/desktop.h libjs/guest/gui.h
+C4IX_DESKTOP_SRC := $(C4IX_DESKTOP:%=$(C4IX_SRC)/user/desktop/%.c) $(C4IX_SRC)/user/desktop/desktop.h libjs/guest/gui.h \
+                    $(C4IX_SRC)/include/cpustat.h
 c4ix-desktop.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libc4ix.c4l $(C4IX_DESKTOP_SRC)
 	for m in $(C4IX_DESKTOP); do \
 	  $(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC)/include -I $(C4IX_SRC)/user/desktop $(C4IX_SRC)/user/desktop/$$m.c .c4ix_d_$$m.c4o > /dev/null || exit 1; \
@@ -2732,6 +2733,8 @@ c4ix-%.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libc4ix.c4l $(C4IX_SRC)/user/%.c
 	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC)/include $(C4IX_SRC)/user/$*.c .c4ix_u.c4o > /dev/null
 	$(C4RLINK) .c4ix_u.c4o libc4ix.c4l -o $@
 	rm -f .c4ix_u.pp.c .c4ix_u.c4o
+# top reads the CPU accounting through cpustat.h, as Task Manager does
+c4ix-top.c4r: $(C4IX_SRC)/include/cpustat.h
 
 # X3 boot pins: the linked kernel boots natively on c4m (preemptive,
 # user tasks behind protected mode). It once also booted degraded on

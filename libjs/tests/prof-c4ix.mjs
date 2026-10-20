@@ -95,7 +95,7 @@ while (vm.dev.simMs() - ms0 < SECS * 1000) {
   const ran = (vm.cycle - cc) - (vm.skipped - kk);
   const f = fn(pc0); if (f === '(user code)') upc.set(pc0, (upc.get(pc0) || 0) + ran);
   prof.set(f, (prof.get(f) || 0) + ran);
-  if ((chunks & 1023) === 0) { const p0 = presents; pump(); if (process.env.TRACE && presents !== p0) { const tx = frame.map(t => t.s.trim()); const i = tx.indexOf("boot"); const u = tx.find(x => /^CPU Usage: /.test(x)); const key = tx.slice(i, i + 30).join(" ") + " | " + u; if (key !== globalThis.lastKey) { globalThis.lastKey = key; log("TM@" + (vm.dev.simMs() - ms0) + ": " + key); } } }
+  if ((chunks & 1023) === 0) { const p0 = presents; pump(); if (process.env.TRACE && presents !== p0) { const tx = frame.map(t => t.s.trim()); const i = tx.indexOf("System Idle Process"); const u = tx.find(x => /^CPU Usage: /.test(x)); const key = tx.slice(i, i + 30).join(" ") + " | " + u; if (key !== globalThis.lastKey) { globalThis.lastKey = key; log("TM@" + (vm.dev.simMs() - ms0) + ": " + key); } } }
   if (r === STOP.HALT) break;
 }
 pump();

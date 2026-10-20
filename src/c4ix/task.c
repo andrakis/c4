@@ -103,7 +103,7 @@ void task_unlink(struct task *t) {
     sched_unlock();
 }
 
-static struct task *task_reaplist;   // released, waiting to be freed
+struct task *task_reaplist;   // released, waiting to be freed (sched_trap checks it)
 
 // ---- reaping, and remembering what was reaped ----
 //

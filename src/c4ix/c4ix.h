@@ -495,12 +495,20 @@ int          sched_sleep_due(int *pms);   // earliest sleeper deadline, 0 if non
 void         sched_forge_argv(struct task *t, int argv);  // pre-start argv patch
 void         sched_stop();
 void         sched_yield();
+void         sched_new_slice();   // the running task's slice restarts
 int          sched_intr_below(struct task *root);   // a terminal's Ctrl-C
 void         sched_lock();     // disable preemption (nestable)
 void         sched_unlock();
-struct task *sched_current();
 int          sched_forge(struct task *t, int entry, int argc, int argv);
-int          sched_in_trap();  // servicing a trap: no re-entry allowed
+// The running task, and whether the trap handler is running (no
+// re-entry allowed). Read by every module on every syscall, so they are
+// macros over the globals rather than calls: -minline cannot inline
+// across modules.
+extern struct task *sched_cur;
+extern int   sched_intrap;
+#define sched_current() sched_cur
+#define sched_in_trap() sched_intrap
+extern struct task *task_reaplist;  // released while running, to be freed (task.c)
 void         task_exit(int code);
 void         task_zombify(struct task *t, int code);  // every death: wakes its waiter
 extern int   sched_nlive;      // tasks still to finish (sched.c)

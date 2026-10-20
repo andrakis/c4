@@ -209,41 +209,42 @@ int sys_readdir(char *path, int index, char *name) {
 //
 // args[0] is the first argument, args[1] the second, and so on.
 // Both doors normalize into that shape before calling.
+//
+// A switch: c4lc compiles one to a jump table, a fixed cost, where a
+// ladder of ifs cost six instructions a rung -- SYS_SLEEP, the desktop's
+// most frequent call, was the twenty-fourth.
 int sys_dispatch(int num, int *args) {
     struct task *t, *s;
     struct file *f;
 
     if ((t = sched_current())) ++t->nsyscalls;
 
-    if (num == SYS_WRITE)  return sys_write(args[0], (char *)args[1], args[2]);
-    if (num == SYS_READ)   return sys_read(args[0], (char *)args[1], args[2]);
-    if (num == SYS_OPEN)   return sys_open((char *)args[0], args[1]);
-    if (num == SYS_CLOSE)  return sys_close(args[0]);
-    if (num == SYS_DUP)    return sys_dup(args[0]);
-    if (num == SYS_DUP2)   return sys_dup2(args[0], args[1]);
-    if (num == SYS_PIPE)   return sys_pipe((int *)args[0]);
-    if (num == SYS_CYCLES) return __c4_cycles();
-    if (num == SYS_TASKINFO) return sys_taskinfo(args[0], (int *)args[1]);
-    if (num == SYS_CPUSTAT)
+    switch (num) {
+    case SYS_WRITE:    return sys_write(args[0], (char *)args[1], args[2]);
+    case SYS_READ:     return sys_read(args[0], (char *)args[1], args[2]);
+    case SYS_OPEN:     return sys_open((char *)args[0], args[1]);
+    case SYS_CLOSE:    return sys_close(args[0]);
+    case SYS_DUP:      return sys_dup(args[0]);
+    case SYS_DUP2:     return sys_dup2(args[0], args[1]);
+    case SYS_PIPE:     return sys_pipe((int *)args[0]);
+    case SYS_CYCLES:   return __c4_cycles();
+    case SYS_TASKINFO: return sys_taskinfo(args[0], (int *)args[1]);
+    case SYS_CPUSTAT:
         return sched_cpustat((struct cpustat *)args[0], (struct cpustat_task *)args[1], args[2]);
-    if (num == SYS_CHDIR)  return sys_chdir((char *)args[0]);
-    if (num == SYS_MKDIR)  return sys_mkdir((char *)args[0]);
-    if (num == SYS_GETCWD) return sys_getcwd((char *)args[0], args[1]);
-    if (num == SYS_READDIR) return sys_readdir((char *)args[0], args[1], (char *)args[2]);
+    case SYS_CHDIR:    return sys_chdir((char *)args[0]);
+    case SYS_MKDIR:    return sys_mkdir((char *)args[0]);
+    case SYS_GETCWD:   return sys_getcwd((char *)args[0], args[1]);
+    case SYS_READDIR:  return sys_readdir((char *)args[0], args[1], (char *)args[2]);
     // Signals are the compat layer's machinery, but they are useful to
     // C4IX's own shell too: `jobs` could list a background task and
     // nothing could stop it. A C4IX program installs no handlers, so
     // for one of those this is simply "cancel that job".
-    if (num == SYS_KILL)   return ck_kill(args[0], args[1]);
-    if (num == SYS_YIELD)  { sched_yield(); return 0; }
-    // Sleep for args[0] milliseconds. In a trap it is a state change, the
-    // same one C4KE's OP_USER_SLEEP makes (c4ke.c): park on the clock and
-    // let the scheduler run everyone else, and nap when nobody is ready.
-    // It completes on waking, so nothing re-executes.
+    case SYS_KILL:     return ck_kill(args[0], args[1]);
+    case SYS_YIELD:    sched_yield(); return 0;
     // Bytes waiting on fd, without ever blocking: the desktop reads every
     // terminal's pipe from one loop. 0 means empty with a writer still
     // there, -1 end of file (or a bad fd).
-    if (num == SYS_AVAIL) {
+    case SYS_AVAIL:
         if (!t || !(f = fd_get(t, args[0]))) return -1;
         if (f->vn->type == VN_PIPE) {
             if (f->vn->size > f->vn->rpos) return f->vn->size - f->vn->rpos;
@@ -252,26 +253,27 @@ int sys_dispatch(int num, int *args) {
         if (f->vn->type == VN_CONSOLE) return con_poll() ? 1 : 0;
         if (f->vn->type == VN_RAMFILE) return f->vn->size > f->pos ? f->vn->size - f->pos : -1;
         return 1;
-    }
-    if (num == SYS_INTR) return sched_intr_below(task_get(args[0]));
-    if (num == SYS_STAT)   return vfs_stat((char *)args[0], (int *)args[1]);
-    if (num == SYS_UNLINK) return vfs_unlink((char *)args[0]);
-    if (num == SYS_RENAME) return vfs_rename((char *)args[0], (char *)args[1]);
-    if (num == SYS_LAZYFILE) return vfs_lazyfile((char *)args[0], (char *)args[1], args[2]);
+    case SYS_INTR:     return sched_intr_below(task_get(args[0]));
+    case SYS_STAT:     return vfs_stat((char *)args[0], (int *)args[1]);
+    case SYS_UNLINK:   return vfs_unlink((char *)args[0]);
+    case SYS_RENAME:   return vfs_rename((char *)args[0], (char *)args[1]);
+    case SYS_LAZYFILE: return vfs_lazyfile((char *)args[0], (char *)args[1], args[2]);
     // The stack the caller's later spawns get, in bytes; 0 for the
     // default. A compiler on a big source wants more than the default
     // and every task paying for that would be most of the memory.
-    if (num == SYS_STACK) {
+    case SYS_STACK:
         if (!t || args[0] < 0 || args[0] > C4IX_STACK_MAX) return -1;
         t->spawn_stack = args[0];
         return 0;
-    }
-    if (num == SYS_CLOEXEC) {
+    case SYS_CLOEXEC:
         if (!t || !fd_get(t, args[0])) return -1;
         t->fdcloexec[args[0]] = args[1] ? 1 : 0;
         return 0;
-    }
-    if (num == SYS_SLEEP) {
+    // Sleep for args[0] milliseconds. In a trap it is a state change, the
+    // same one C4KE's OP_USER_SLEEP makes (c4ke.c): park on the clock and
+    // let the scheduler run everyone else, and nap when nobody is ready.
+    // It completes on waking, so nothing re-executes.
+    case SYS_SLEEP:
         if (!t || args[0] <= 0) return 0;
         if (!sched_in_trap()) {
             num = __time() + args[0];
@@ -281,11 +283,10 @@ int sys_dispatch(int num, int *args) {
         t->ck_wake = __time() + args[0];
         t->state = TS_SLEEPING;
         return 0;
-    }
-    if (num == SYS_GETPID) return t ? t->id : -1;
-    if (num == SYS_SBRK)   return (int)malloc(args[0]);
-    if (num == SYS_EXIT)   { task_exit(args[0]); return 0; }
-    if (num == SYS_SPAWN) {
+    case SYS_GETPID:   return t ? t->id : -1;
+    case SYS_SBRK:     return (int)malloc(args[0]);
+    case SYS_EXIT:     task_exit(args[0]); return 0;
+    case SYS_SPAWN:
         sched_next_stack_words = (t && t->spawn_stack) ? t->spawn_stack / sizeof(int) : 0;
         s = task_spawn((char *)args[0], args[1], args[2]);
         sched_next_stack_words = 0;
@@ -293,9 +294,14 @@ int sys_dispatch(int num, int *args) {
         // the child gets its own argv: the parent's may be gone, or
         // rewritten, by the time the child reads it
         if (ck_argv_copy(s, args[1], (char **)args[2])) sched_forge_argv(s, s->argv_vec);
+        // Loading the image is a long stay in the kernel, which the slice
+        // would count against the parent: a shell that spawns and then
+        // waits would reach its wait or not by where the slice happened
+        // to end, and a ps its child runs would see it either way. A
+        // fresh slice, and it always gets there.
+        sched_new_slice();
         return s->id;
-    }
-    if (num == SYS_WAIT) {
+    case SYS_WAIT:
         // The target may have been swept by the idle reaper before the
         // parent got round to waiting; its exit code outlives it.
         if (!(s = task_get(args[0]))) {
@@ -303,10 +309,10 @@ int sys_dispatch(int num, int *args) {
             return -1;
         }
         if (!sched_in_trap()) return task_wait(s);
-        // In trap context blocking is a state change, not a spin:
-        // park the caller and let sched_pick complete the wait when
-        // the target dies -- it writes the exit code into the saved
-        // accumulator, which is this syscall's return value.
+        // In trap context blocking is a state change, not a spin: park
+        // the caller, and task_zombify completes the wait when the target
+        // dies -- it writes the exit code into the saved accumulator,
+        // which is this syscall's return value.
         if (s->state == TS_ZOMBIE) {
             num = s->exitcode;
             task_release(s);
@@ -524,14 +530,14 @@ void sys_pmviolation(int op, int *sp, int *returnpc, int *a) {
 
     if ((t = sched_current())) ++t->nsyscalls;
 
-    if (op == C4IX_OP_PUTC)      { *a = sys_write(FD_STDOUT, (char *)sp, 1); return; }
-    if (op == C4IX_OP_PUTS) {
+    switch (op) {
+    case C4IX_OP_PUTC: *a = sys_write(FD_STDOUT, (char *)sp, 1); return;
+    case C4IX_OP_PUTS:
         i = 0;
         while (((char *)sp[0])[i]) ++i;
         *a = sys_write(FD_STDOUT, (char *)sp[0], i);
         return;
-    }
-    if (op == C4IX_OP_PRTF) {
+    case C4IX_OP_PRTF:
         // returnpc points at the ADJ that follows PRTF; its operand
         // is the pushed-argument count, format string included.
         argc = returnpc[1];
@@ -541,18 +547,17 @@ void sys_pmviolation(int op, int *sp, int *returnpc, int *a) {
         while (i < argc - 1) { args[i] = sp[argc - 2 - i]; ++i; }
         *a = sys_vprintf(FD_STDOUT, (char *)sp[argc - 1], args, argc - 1);
         return;
-    }
-    if (op == C4IX_OP_OPEN) { *a = sys_open((char *)sp[1], sp[0]); return; }
-    if (op == C4IX_OP_READ) { *a = sys_read(sp[2], (char *)sp[1], sp[0]); return; }
-    if (op == C4IX_OP_CLOS) { *a = sys_close(sp[0]); return; }
+    case C4IX_OP_OPEN: *a = sys_open((char *)sp[1], sp[0]); return;
+    case C4IX_OP_READ: *a = sys_read(sp[2], (char *)sp[1], sp[0]); return;
+    case C4IX_OP_CLOS: *a = sys_close(sp[0]); return;
     // Verbatim, not synthesized, but for C4I_TRAPH (host.c task_info).
     // Programs branch on these bits -- C4KE's ps patches its own code
     // differently when C4I_C4 is set -- so the answer is what the machine
     // actually is, as the task sees it.
-    if (op == C4IX_OP_INFO) { *a = task_info(); return; }
-    if (op == C4IX_OP_MALC) { *a = (int)malloc(sp[0]); return; }
-    if (op == C4IX_OP_FREE) { free((int *)sp[0]); *a = 0; return; }
-    if (op == C4IX_OP_EXIT) {
+    case C4IX_OP_INFO: *a = task_info(); return;
+    case C4IX_OP_MALC: *a = (int)malloc(sp[0]); return;
+    case C4IX_OP_FREE: free((int *)sp[0]); *a = 0; return;
+    case C4IX_OP_EXIT:
         kprintf("c4ix: task %d exited via EXIT opcode, status %d\n",
             t ? t->id : -1, sp[0]);
         task_exit(sp[0]);

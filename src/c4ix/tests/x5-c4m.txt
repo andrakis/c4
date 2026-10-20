@@ -55,7 +55,7 @@ test: process table
    0     1 ready   kernel   idle
    1     0 wait    kernel   kernel
    2     1 wait    kernel   init
-  12     2 ready   user     c4ix-sh.c4r
+  12     2 wait    user     c4ix-sh.c4r
   41    12 run     user     c4ix-ps.c4r
 5 tasks
 test: exit status of a pipeline tail

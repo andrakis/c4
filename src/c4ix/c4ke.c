@@ -564,6 +564,12 @@ void ck_task_free(struct task *t) {
 // STATE CHANGE here, not a jump. sched_trap ends in a scheduling
 // decision that acts on it, so none of C4KE's __c4_jmp gymnastics are
 // needed.
+//
+// Still a ladder of ifs, unlike sys_dispatch. As a switch, its jump table
+// in the kernel data segment was overwritten in some memory layouts
+// (benchtop under test-c4ix-c4ke, with the kernel image at a path of
+// seven or eight characters) -- a stray write the ladder, which reads no
+// data, never shows. docs/c4ix-cpu.md, step 7.
 int ck_dispatch(int num, int *args) {
     struct task *t;
 
@@ -641,9 +647,9 @@ int ck_dispatch(int num, int *args) {
 
     if (num == CK_USER_START_C4R)      return ck_start_c4r(t, args);
 
-    // Byte for byte the SYS_WAIT in-trap path: park and let the
-    // scheduler complete the wait, writing the exit code into sv_a --
-    // which is the accumulator this opcode returns in.
+    // Byte for byte the SYS_WAIT in-trap path: park, and task_zombify
+    // completes the wait, writing the exit code into sv_a -- which is
+    // the accumulator this opcode returns in.
     if (num == CK_AWAIT_PID) {
         struct task *s;
         int code;

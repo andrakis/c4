@@ -306,3 +306,41 @@ Found on the way:
 | desk1, per 5 s | 2.13M cycles (0.4%) | 1.69M (0.3%) |
 | idle, per 5 s | 5.45M (1.1%) | 5.03M (1.0%) |
 | conspin syscalls/s | 195,848 | 195,575 |
+
+### 7. The trap path trimmed; `switch` dispatch
+
+- **Dispatch by `switch`.** `sys_dispatch` and `sys_pmviolation` are
+  switches; c4lc compiles each to a jump table over dense numbers, at a
+  fixed cost. They had been ladders of ifs at six instructions a rung,
+  and `SYS_SLEEP`, the desktop's most frequent call, was the 24th. c4fc
+  gives the same objects.
+- **`ck_dispatch` stays a ladder, for now.** As a switch, its jump
+  table in the kernel data segment was overwritten in some layouts.
+  test-c4ix-c4ke's benchtop failed with the kernel image at a path of 7
+  or 8 characters ("OPCD does not support opcodes requiring arguments"),
+  and passed at 5, 6, 10 and 17; a kprintf hid it. Something writes
+  where it should not, and a ladder, which reads no data, does not show
+  it. Finding the write is a task of its own.
+- **Nothing to do costs nothing.** The reap list and pending signals
+  are tested in `sched_trap` before a call is made. Both are almost
+  always empty.
+- **Macros.** `sched_current()` and `sched_in_trap()` are macros over
+  the globals: every module reads them on every syscall, and `-minline`
+  cannot inline across modules.
+- **A fresh slice after a spawn.** Loading an image is a long stay in
+  the kernel, and it counted against the parent's slice. A shell that
+  spawns and then waits reached its wait, or did not, by where the
+  slice happened to end, and the `ps` its child ran saw it either way,
+  so the 64-bit golden changed with unrelated code. `SYS_SPAWN` now
+  starts the parent's slice again (`sched_new_slice`), and the shell is
+  always waiting.
+
+| | step 6 | step 7 |
+|---|---|---|
+| syscall (native c4m) | 633 | 411 |
+| yield (native) | 977 | 818 |
+| spawn+wait (native) | 22,500 | 21,798 |
+| conspin syscalls/s (libjs) | 195,575 | 249,889 |
+
+Under conspin, the work in `sched_trap` itself is now about 300 cycles
+per syscall and `sys_dispatch` about 40.

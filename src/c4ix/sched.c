@@ -40,7 +40,7 @@ static int sched_interval;   // preemption interval, 0 = cooperative only
 static int sched_lockdepth;
 static int sched_tramp;      // address of the trampoline's LEV
 
-static int sched_intrap;     // inside the trap handler: no re-entry
+int sched_intrap;            // inside the trap handler: no re-entry (sched_in_trap)
 
 // ---- accounting ----
 //
@@ -133,10 +133,6 @@ static int sched_dying_code;
 // second LEV re-derives sp from the just-installed bp.
 static int trampoline() { }
 
-struct task *sched_current() {
-    return sched_cur;
-}
-
 // ---- preemption masking (c4m only; nestable) ----
 //
 // The depth belongs to the TASK, not to the machine. It has to: the
@@ -169,8 +165,10 @@ void sched_unlock() {
     }
 }
 
-int sched_in_trap() {
-    return sched_intrap;
+// The running task's slice starts again now: after a service that
+// spent its slice in the kernel on the task's behalf (SYS_SPAWN).
+void sched_new_slice() {
+    sched_slice0 = __c4_cycles();
 }
 
 // ---- picking the next task ----
@@ -333,8 +331,9 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     __c4_configure(C4IX_CONF_INTERVAL, 0);
 
     // Safe point: we are on the trapped task's stack, so any corpse
-    // left over from an earlier exit can finally be freed.
-    task_reap();
+    // left over from an earlier exit can finally be freed. Usually
+    // there is none, and then not even the call.
+    if (task_reaplist) task_reap();
     // The stack guard. A task whose stack pointer is inside the guard,
     // or whose top guard word has been written, ran off the end of its
     // stack: kill it here, before what it wrote under the stack -- some
@@ -465,8 +464,10 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     // context, so the same code serves both. The mode and interval
     // just computed are handed over to be stored in the frame the
     // handler returns through, while this frame keeps them -- which is
-    // what runs the handler itself in the task's own mode.
-    ck_signal_deliver(sched_cur, &a, &bp, &sp, &returnpc, mode, interval);
+    // what runs the handler itself in the task's own mode. Almost no
+    // task has a signal waiting, and the count says so without a call.
+    if (sched_cur->ck_sigpend)
+        ck_signal_deliver(sched_cur, &a, &bp, &sp, &returnpc, mode, interval);
 
     acct_out = __c4_cycles();
     if (me) {

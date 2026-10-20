@@ -419,6 +419,42 @@ it lacked was somewhere to edit and build in one place.
       with no c4sc or b4ke left in Task Manager; Explorer's tree scrolled
       across. Not yet looked at in a browser.
 
+## Part six: the browser's boot, a first frame, Settings, a pointer (asked for 2026-10-20)
+
+- [x] **The web page boots with `--desktop`** (`libjs/web/app.js`). init
+      then starts the shell with `-e "top &" -e desktop`: the shell runs
+      each `-e` line first, as if typed at the prompt, so top runs on the
+      console and the desktop on the display, and the prompt comes back
+      when the desktop is shut down. `c4ix-sh -e CMD ...` is general.
+- [x] **The first frame stays.** The page learns the desktop's size by
+      message and resizes (clearing) the canvas, while frames come through
+      the ring: a first frame could land before the resize and be wiped,
+      leaving a black display until a click. `Display.resize` now tells
+      the guest (a resize event), the desktop asks for resize and focus
+      events and redraws on them, and it draws once more half a second
+      in.
+- [x] **Settings** (Start > Settings, `K_SETTINGS`, in `apps.c`): eight
+      colour schemes (Windows Standard, Slate, Rainy Day, Desert, Rose,
+      Spruce, Lilac, Storm) and a desktop colour (the scheme's, or one of
+      eight), applied at once beside a preview, kept in
+      `/etc/desktop.cfg` and read when the desktop starts -- so a choice
+      outlives Shut Down, not a reload of the page. The scheme's nine
+      colours (`C_DESK`, `C_FACE`, `C_LIGHT`, `C_SHADOW`, the two title
+      gradients and `C_SEL`) are variables now; text, white and the
+      green of the graphs stay constants.
+- [x] **A pointer.** The display was `cursor: crosshair`; it is the
+      host's arrow now, and the guest picks a shape with a new ring
+      command, `GUI_CURSOR` (`gui_cursor`, `GUI_PTR_*`: arrow, text beam,
+      resize, hand, move, wait, cross, none). It takes effect at once,
+      with no frame. The desktop shows a text beam over the Command
+      Prompt, Notepad's text and the Editor's text (`edit_pointer`), the
+      resize arrow on a size grip, and the arrow elsewhere.
+- [x] Pinned by `test-boot-desktop.mjs` (new, in `test-libjs`): `--desktop`
+      starts both, and a resize from the page draws the scene again; and
+      by `test-desktop.mjs`: Settings repaints in Slate, keeps it in
+      `/etc/desktop.cfg`, and Defaults restores it; the pointer over the
+      text and the taskbar.
+
 ### Found on the way, not fixed
 - `make test-c4th-os`: the C4DOS leg prints an empty prompt line ahead of
   c4th's output, so it differs from the reference at byte 1. Nothing it

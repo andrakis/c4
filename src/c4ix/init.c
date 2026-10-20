@@ -253,6 +253,9 @@ static void init_usage() {
     kputs("\n");
     kputs("  c4ix.c4r --demo c4ix-hello.c4r c4ix-uhello.c4r c4ix-echo.c4r \\\n");
     kputs("           c4ix-wc.c4r c4ix-sh.c4r src/c4ix/user/test.sh\n");
+    kputs("\n");
+    kputs("  c4ix.c4r --desktop   the web page's boot: the shell runs \"top &\",\n");
+    kputs("                       then \"desktop\", as if they were typed\n");
 }
 
 // The guided tour. argc/av are shifted past --demo, so av[1] is the
@@ -318,12 +321,13 @@ static int init_demo(int argc, char **av) {
 int init_main(int argc, int argv) {
     struct task *a, *v;
     char **av;
-    char *shargv[2];
+    char *shargv[6];
     char *vav[1];
-    int i;
+    int i, desktop, shargc;
 
     av = (char **)argv;
     i = 1;
+    desktop = 0;
 
     if (i < argc) {
         if (init_is(av[i], "-h") || init_is(av[i], "--help")) {
@@ -337,6 +341,10 @@ int init_main(int argc, int argv) {
         // now, so it means nothing -- but silently accepting it keeps
         // older command lines and older habits working.
         if (init_is(av[i], "-q")) ++i;
+        // --desktop (the browser's boot): the shell starts top in the
+        // background on the console, then the desktop on the display,
+        // as typing "top &" and "desktop" at the first prompt would
+        if (i < argc && init_is(av[i], "--desktop")) { desktop = 1; ++i; }
     }
 
     // Nothing left to run: the default, and the reason the default is
@@ -351,7 +359,12 @@ int init_main(int argc, int argv) {
 
         shargv[0] = "c4ix-sh.c4r";
         shargv[1] = 0;
-        if (!(a = task_spawn(shargv[0], 1, (int)shargv))) {
+        shargc = 1;
+        if (desktop) {
+            shargv[1] = "-e"; shargv[2] = "top &"; shargv[3] = "-e"; shargv[4] = "desktop"; shargv[5] = 0;
+            shargc = 5;
+        }
+        if (!(a = task_spawn(shargv[0], shargc, (int)shargv))) {
             kprintf("init: cannot start '%s'\n", shargv[0]);
             return 1;
         }

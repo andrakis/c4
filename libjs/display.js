@@ -14,6 +14,8 @@
 // transparency: 0 is opaque, 255 is fully transparent.
 
 import { CMD } from './gui-device.js';
+// GUI_PTR_* (libjs/guest/gui.h) as CSS cursors
+const POINTERS = ['default', 'text', 'nwse-resize', 'pointer', 'move', 'wait', 'crosshair', 'none'];
 import { RingReader, FbConsumer } from './shared.js';
 
 const css = rgb => '#' + ((rgb >>> 0) & 0xffffff).toString(16).padStart(6, '0');
@@ -53,6 +55,10 @@ export class Display {
     this.height = this.canvas.height = this.back.height = h;
     this.clipped = false;
     this.clear();
+    // The size arrives by message, the frames through the ring, so a
+    // first frame can come before this and be cleared by it: the guest is
+    // told (a resize event, if it asked for them) and draws again.
+    if (this.send) this.send({ kind: 'resize', w, h });
   }
 
   // The shared path (shared.js): commands come out of a ring in shared
@@ -110,7 +116,7 @@ export class Display {
       const keep = [];
       for (let i = 0; i < full; i += words[i]) {
         const t = words[i + 1];
-        if (t === CMD.SIZE || t === CMD.IMGDEF || t === CMD.CLIP || t === CMD.NOCLIP)
+        if (t === CMD.SIZE || t === CMD.IMGDEF || t === CMD.CLIP || t === CMD.NOCLIP || t === CMD.CURSOR)
           for (let k = 0; k < words[i]; k++) keep.push(words[i + k]);
       }
       if (keep.length) this.draw(Int32Array.from(keep));
@@ -239,6 +245,9 @@ export class Display {
           break;
         case CMD.SIZE:
           this.resize(Math.max(1, words[p]), Math.max(1, words[p + 1])); break;
+        case CMD.CURSOR:
+          // the pointer the guest wants here; it takes effect at once
+          this.canvas.style.cursor = POINTERS[words[p]] || 'default'; break;
         case CMD.IMGDEF: {
           const id = words[p], w = words[p + 1], h = words[p + 2];
           if (w <= 0 || h <= 0 || w * h > len - 5) break;

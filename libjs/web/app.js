@@ -16,7 +16,7 @@ import { C4M } from '../page.js';
 
 const IMAGES = '../../src/c4bb/images';
 const SYSTEMS = {
-  c4ix: { label: 'C4IX', image: `${IMAGES}/c4ix32.c4r`, disk: `${IMAGES}/disk`, argv: ['c4ix32.c4r'] },
+  c4ix: { label: 'C4IX', image: `${IMAGES}/c4ix32.c4r`, disk: `${IMAGES}/disk`, argv: ['c4ix32.c4r', '--desktop'] },
   c4ke: { label: 'C4KE', image: `${IMAGES}/c4ke32.c4r`, disk: `${IMAGES}/disk`, argv: ['c4ke32.c4r'] },
   'gui-demo': { label: 'GUI demo (bare machine)', image: `${IMAGES}/gui-demo.c4r`, disk: null, argv: ['gui-demo.c4r'] },
   // Computes every pixel itself, so it claims a faster clock than c4bb's 20 MHz.

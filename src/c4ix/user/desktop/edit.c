@@ -2286,6 +2286,19 @@ static void e_mouse_text(struct win *w, int ev, int x, int y, int cw, int ch) {
     e->want = e->cx;
 }
 
+// The pointer over the window: a text beam over the text, an arrow over
+// the pane, the bars and the build log (as the last draw laid them out)
+int edit_pointer(struct win *w, int x, int y, int cw, int ch) {
+    struct edit *e;
+    e = E(w);
+    if (f_on(e, cw)) {
+        if (x < FW + 2) return PTR_ARROW;
+        x = x - FW - 2; cw = cw - FW - 2;
+    }
+    if (y < e->tah - (e->hb ? 16 : 0) && x < cw - 17) return PTR_TEXT;
+    return PTR_ARROW;
+}
+
 // The file pane on the left when it is shown, the text beside it
 void edit_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     struct edit *e;

@@ -21,12 +21,20 @@ enum { SW = 800, SH = 600, TASK_H = 30, BORDER = 4, TITLE_H = 18, MENU_H = 20,
 
 // window kinds
 enum { K_TERM = 1, K_ABOUT = 2, K_FILES = 3, K_TASKS = 4, K_NOTE = 5, K_CALC = 6,
-       K_MSG = 7, K_INPUT = 8, K_EDIT = 9 };
+       K_MSG = 7, K_INPUT = 8, K_EDIT = 9, K_SETTINGS = 10 };
 
-// colours
-enum { C_DESK = 0x008080, C_FACE = 0xc0c0c0, C_LIGHT = 0xffffff, C_SHADOW = 0x808080,
-       C_DARK = 0x000000, C_TITLE = 0x000080, C_TITLE2 = 0x1084d0, C_ITITLE = 0x808080,
-       C_ITITLE2 = 0xb4b4b4, C_SEL = 0x000080, C_WHITE = 0xffffff, C_GREEN = 0x00ff00 };
+// colours: these never change...
+enum { C_DARK = 0x000000, C_WHITE = 0xffffff, C_GREEN = 0x00ff00 };
+// ... and these are the colour scheme's (Settings), defined in wm.c
+extern int C_DESK;
+extern int C_FACE;
+extern int C_LIGHT;
+extern int C_SHADOW;
+extern int C_TITLE;
+extern int C_TITLE2;
+extern int C_ITITLE;
+extern int C_ITITLE2;
+extern int C_SEL;
 
 // fonts: monospace, a UI face, and its bold
 enum { F_MONO = 0, F_SANS = 1, F_BOLD = 2 };
@@ -152,6 +160,22 @@ void calc_draw(struct win *w, int ox, int oy, int cw, int ch, int focused);
 void calc_mouse(struct win *w, int ev, int x, int y, int cw, int ch);
 void calc_key(struct win *w, int code, int ch, int mods);
 
+// ---- wm.c: colour schemes ----
+int  theme_count();
+char *theme_name(int i);
+int  theme_scheme();               // the scheme in use
+int  theme_bg();                   // the desktop's own colour, or -1 for the scheme's
+void theme_set(int scheme, int bg); // use, redraw, and remember them (/etc/desktop.cfg)
+int  theme_swatch(int i);          // the desktop colours Settings offers, 0..7
+
+int  settings_open();
+void settings_draw(struct win *w, int ox, int oy, int cw, int ch, int focused);
+void settings_mouse(struct win *w, int ev, int x, int y, int cw, int ch);
+void settings_key(struct win *w, int code, int ch, int mods);
+
+// pointer shapes, GUI_PTR_*'s numbers (gui.h is wm.c's alone)
+enum { PTR_ARROW = 0, PTR_TEXT = 1, PTR_RESIZE = 2 };
+int  edit_pointer(struct win *w, int x, int y, int cw, int ch);   // PTR_* for the pointer there
 int  edit_open(char *path);
 void edit_draw(struct win *w, int ox, int oy, int cw, int ch, int focused);
 void edit_mouse(struct win *w, int ev, int x, int y, int cw, int ch);

@@ -420,19 +420,34 @@ static void sh_prompt() {
 int main(int argc, char **argv) {
     char line[LINE_MAX];
     char *words[WORD_MAX];
-    int nw, len;
+    int nw, len, i, k;
 
     script_fd = STDIN;
     interactive = 1;
-    if (argc > 1) {
+    // -e CMD, as often as wanted: lines run first, as if typed at the
+    // prompt (init --desktop: "top &", then "desktop")
+    i = 1;
+    while (i + 1 < argc && !ustrcmp(argv[i], "-e")) i = i + 2;
+    if (i < argc) {
         interactive = 0;
-        if ((script_fd = uopen(argv[1], O_RD)) < 0) {
-            ufprintf(STDERR, "sh: cannot open %s\n", argv[1]);
+        if ((script_fd = uopen(argv[i], O_RD)) < 0) {
+            ufprintf(STDERR, "sh: cannot open %s\n", argv[i]);
             return 1;
         }
     }
     if (interactive)
         uprintf("c4ix-sh -- 'help' for builtins, 'exit' or end-of-file to leave\n");
+    i = 1;
+    while (i + 1 < argc && !ustrcmp(argv[i], "-e") && !sh_exiting) {
+        k = 0;
+        while (argv[i + 1][k] && k < LINE_MAX - 1) { line[k] = argv[i + 1][k]; ++k; }
+        line[k] = 0;
+        sh_prompt();
+        if (interactive) uprintf("%s\n", line);
+        nw = sh_split(line, words, WORD_MAX);
+        if (nw) sh_runline(words, nw);
+        i = i + 2;
+    }
 
     while (!sh_exiting) {
         sh_prompt();

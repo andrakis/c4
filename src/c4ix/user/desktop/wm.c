@@ -35,6 +35,111 @@ void d_textn(int x, int y, int rgb, int size, int font, int advance, char *s, in
     gui_text2(x, y, rgb, size, font, advance, s, n);
 }
 
+// ---- colour schemes ---------------------------------------------------------
+//
+// The colours a scheme sets are variables (desktop.h), so Settings can
+// change them while everything is open; the rest are constants. A scheme
+// is nine of them: desktop, face, light and shadow edges, the active and
+// inactive title gradients, and the selection.
+int C_DESK = 0x008080;
+int C_FACE = 0xc0c0c0;
+int C_LIGHT = 0xffffff;
+int C_SHADOW = 0x808080;
+int C_TITLE = 0x000080;
+int C_TITLE2 = 0x1084d0;
+int C_ITITLE = 0x808080;
+int C_ITITLE2 = 0xb4b4b4;
+int C_SEL = 0x000080;
+
+enum { N_THEMES = 8, T_COLS = 9 };
+static char *theme_names[N_THEMES];
+static int themes[N_THEMES * T_COLS];
+static int swatches[8];
+static int cur_scheme, cur_bg;
+
+static void theme_row(int i, char *name, int desk, int face, int light, int shadow,
+                      int t1, int t2, int it1, int it2) {
+    int *t;
+    theme_names[i] = name;
+    t = themes + i * T_COLS;
+    t[0] = desk; t[1] = face; t[2] = light; t[3] = shadow;
+    t[4] = t1; t[5] = t2; t[6] = it1; t[7] = it2; t[8] = t1;
+}
+static void theme_init() {
+    theme_row(0, "Windows Standard", 0x008080, 0xc0c0c0, 0xffffff, 0x808080, 0x000080, 0x1084d0, 0x808080, 0xb4b4b4);
+    theme_row(1, "Slate",            0x3a4e62, 0xb8c4cc, 0xeef3f6, 0x687884, 0x384c60, 0x7890a8, 0x808c98, 0xb0bcc8);
+    theme_row(2, "Rainy Day",        0x48586c, 0xb4bcc4, 0xeef2f6, 0x707880, 0x4c5c7c, 0x8898b8, 0x80888c, 0xb0b8c0);
+    theme_row(3, "Desert",           0xa08060, 0xd5ccbb, 0xf5f0e8, 0xa29275, 0x008080, 0x40b0b0, 0xa29275, 0xc8bca8);
+    theme_row(4, "Rose",             0x804050, 0xcfafb7, 0xf3e4e8, 0x9f6070, 0x9f6070, 0xd090a0, 0xa08890, 0xc8b0b8);
+    theme_row(5, "Spruce",           0x285040, 0xa2c8a9, 0xe2f2e6, 0x5e9a6a, 0x184830, 0x408048, 0x6a8a70, 0x9ab8a0);
+    theme_row(6, "Lilac",            0x504878, 0xaea8d9, 0xeae6f8, 0x6c64a8, 0x504888, 0x8880c8, 0x8880a0, 0xb4b0d0);
+    theme_row(7, "Storm",            0x202830, 0xa8a8a8, 0xe8e8e8, 0x606060, 0x303848, 0x607088, 0x707070, 0x989898);
+    swatches[0] = 0x008080; swatches[1] = 0x000040; swatches[2] = 0x000000; swatches[3] = 0x3a4a5a;
+    swatches[4] = 0x205030; swatches[5] = 0x502850; swatches[6] = 0xa09070; swatches[7] = 0x606060;
+    cur_scheme = 0; cur_bg = 0 - 1;
+}
+static void theme_apply() {
+    int *t;
+    t = themes + cur_scheme * T_COLS;
+    C_DESK = cur_bg >= 0 ? cur_bg : t[0];
+    C_FACE = t[1]; C_LIGHT = t[2]; C_SHADOW = t[3];
+    C_TITLE = t[4]; C_TITLE2 = t[5]; C_ITITLE = t[6]; C_ITITLE2 = t[7]; C_SEL = t[8];
+}
+int theme_count() { return N_THEMES; }
+char *theme_name(int i) { return i >= 0 && i < N_THEMES ? theme_names[i] : ""; }
+int theme_scheme() { return cur_scheme; }
+int theme_bg() { return cur_bg; }
+int theme_swatch(int i) { return i >= 0 && i < 8 ? swatches[i] : 0; }
+
+// /etc/desktop.cfg: "scheme N bg V", read when the desktop starts, so a
+// choice outlives Shut Down (not a reload of the page: the disk is RAM)
+static char cfg[64];
+static int cfg_num(char *s, int *v) {
+    int n, neg, k;
+    n = 0; neg = 0; k = 0;
+    if (s[0] == '-') { neg = 1; ++s; ++k; }
+    while (*s >= '0' && *s <= '9') { n = n * 10 + (*s - '0'); ++s; ++k; }
+    *v = neg ? 0 - n : n;
+    return k;
+}
+static void theme_load() {
+    int fd, n, i, v;
+    if ((fd = uopen("/etc/desktop.cfg", O_RD)) < 0) return;
+    n = uread(fd, cfg, 63);
+    uclose(fd);
+    if (n <= 0) return;
+    cfg[n] = 0;
+    i = 0;
+    while (i < n) {
+        if (cfg[i] == 's' && cfg[i + 1] == 'c' && cfg[i + 6] == ' ') {
+            cfg_num(cfg + i + 7, &v);
+            if (v >= 0 && v < N_THEMES) cur_scheme = v;
+        }
+        if (cfg[i] == 'b' && cfg[i + 1] == 'g' && cfg[i + 2] == ' ') { cfg_num(cfg + i + 3, &v); cur_bg = v; }
+        ++i;
+    }
+    theme_apply();
+}
+static void theme_save() {
+    int fd;
+    umkdir("/etc");
+    if ((fd = uopen("/etc/desktop.cfg", O_WR + O_CREATE + O_TRUNCATE)) < 0) return;
+    ui_cpy(cfg, "scheme ");
+    ui_num(cfg + ui_len(cfg), cur_scheme);
+    ui_cat(cfg, " bg ");
+    if (cur_bg < 0) ui_cat(cfg, "-1"); else ui_num(cfg + ui_len(cfg), cur_bg);
+    ui_cat(cfg, "\n");
+    write(fd, cfg, ui_len(cfg));
+    uclose(fd);
+}
+void theme_set(int scheme, int bg) {
+    if (scheme >= 0 && scheme < N_THEMES) cur_scheme = scheme;
+    cur_bg = bg;
+    theme_apply();
+    theme_save();
+    dirty = 1;
+}
+
 // Drawing narrowed to part of the window being drawn -- an app's pane --
 // and back to all of it. Never wider than the window's client area.
 static int clip_x, clip_y, clip_w, clip_h;
@@ -87,6 +192,13 @@ void d_icon(int kind, int x, int y) {
         gui_rect(x + 2, y, 12, 16, C_WHITE); gui_recto(x + 2, y, 12, 16, C_SHADOW);
         gui_rect(x + 4, y + 4, 8, 1, 0x4060c0); gui_rect(x + 4, y + 7, 8, 1, 0x4060c0);
         gui_rect(x + 4, y + 10, 6, 1, 0x4060c0);
+    } else if (kind == K_SETTINGS) {
+        // a gear: a disc with teeth, and a hole
+        gui_rect(x + 7, y, 3, 16, 0x707070); gui_rect(x, y + 7, 16, 3, 0x707070);
+        gui_line(x + 2, y + 2, x + 13, y + 13, 0x707070); gui_line(x + 13, y + 2, x + 2, y + 13, 0x707070);
+        gui_line(x + 3, y + 2, x + 14, y + 13, 0x707070); gui_line(x + 12, y + 2, x + 1, y + 13, 0x707070);
+        d_disc(x + 8, y + 8, 6, 0x909090);
+        d_disc(x + 8, y + 8, 2, C_FACE);
     } else if (kind == K_CALC) {
         gui_rect(x + 2, y, 12, 16, 0xa0a0a0); gui_recto(x + 2, y, 12, 16, C_DARK);
         gui_rect(x + 4, y + 2, 8, 4, 0xd0ffd0);
@@ -301,6 +413,7 @@ static void app_draw(struct win *w, int ox, int oy, int cw, int ch, int focused)
     else if (k == K_NOTE) note_draw(w, ox, oy, cw, ch, focused);
     else if (k == K_EDIT) edit_draw(w, ox, oy, cw, ch, focused);
     else if (k == K_CALC) calc_draw(w, ox, oy, cw, ch, focused);
+    else if (k == K_SETTINGS) settings_draw(w, ox, oy, cw, ch, focused);
     else if (k == K_MSG || k == K_INPUT) dialog_draw(w, ox, oy, cw, ch);
     else about_draw(w, ox, oy, cw, ch, focused);
 }
@@ -314,6 +427,7 @@ static void app_mouse(struct win *w, int e, int x, int y) {
     else if (k == K_NOTE) note_mouse(w, e, x, y, cw, ch);
     else if (k == K_EDIT) edit_mouse(w, e, x, y, cw, ch);
     else if (k == K_CALC) calc_mouse(w, e, x, y, cw, ch);
+    else if (k == K_SETTINGS) settings_mouse(w, e, x, y, cw, ch);
     else if ((k == K_MSG || k == K_INPUT) && e == E_DOWN) dialog_mouse(w, x, y, cw, ch);
 }
 
@@ -326,6 +440,7 @@ static void app_key(struct win *w, int code, int ch, int mods) {
     else if (k == K_NOTE) note_key(w, code, ch, mods);
     else if (k == K_EDIT) edit_key(w, code, ch, mods);
     else if (k == K_CALC) calc_key(w, code, ch, mods);
+    else if (k == K_SETTINGS) settings_key(w, code, ch, mods);
     else if (k == K_MSG || k == K_INPUT) dialog_key(w, code, ch, mods);
     else if (code == KEY_ENTER || code == KEY_ESC) win_close(win_index(w));
 }
@@ -503,8 +618,8 @@ static int icon_kinds[6];
 enum { N_ICONS = 6 };
 
 // The Start menu, NT 4 style: a banner down the left, then the tools.
-static char *start_items[12];
-static int start_kinds[12];
+static char *start_items[14];
+static int start_kinds[14];
 static int n_start;
 
 static int start_height() {
@@ -651,6 +766,7 @@ static void launch(int kind) {
     else if (kind == K_NOTE) note_open(0);
     else if (kind == K_EDIT) edit_open(0);
     else if (kind == K_CALC) calc_open();
+    else if (kind == K_SETTINGS) settings_open();
     else if (kind == K_ABOUT) about_open();
 }
 
@@ -774,9 +890,39 @@ static void mouse_down(int x, int y, int button) {
     } else { icon_k = k; icon_t = t; }
 }
 
+// ---- the pointer: the host's own, its shape chosen by what is under it ----
+static int ptr_shape;
+static int shape_at(int x, int y) {
+    struct win *w;
+    int k, cx, cy;
+    if (sizing) return GUI_PTR_RESIZE;
+    if (drag || start_open || menu_win || y >= SH - TASK_H) return GUI_PTR_ARROW;
+    k = nz - 1;
+    while (k >= 0) {
+        w = wins + order[k];
+        if (!w->min && ui_hit(x, y, w->x, w->y, w->w, w->h)) {
+            if (w->resizable && !w->max && x >= w->x + w->w - 16 && y >= w->y + w->h - 16) return GUI_PTR_RESIZE;
+            cx = x - client_x(w); cy = y - client_y(w);
+            if (cx < 0 || cy < 0 || cx >= client_w(w) || cy >= client_h(w)) return GUI_PTR_ARROW;
+            if (w->kind == K_TERM) return GUI_PTR_TEXT;
+            if (w->kind == K_NOTE) return cx < client_w(w) - 18 ? GUI_PTR_TEXT : GUI_PTR_ARROW;
+            if (w->kind == K_EDIT) return edit_pointer(w, cx, cy, client_w(w), client_h(w));
+            return GUI_PTR_ARROW;
+        }
+        --k;
+    }
+    return GUI_PTR_ARROW;
+}
+static void pointer(int x, int y) {
+    int s;
+    s = shape_at(x, y);
+    if (s != ptr_shape) { ptr_shape = s; gui_cursor(s); }
+}
+
 static void mouse_move(int x, int y) {
     struct win *w;
     int k;
+    pointer(x, y);
     if (drag) {
         w = wins + drag - 1;
         w->x = x - drag_dx; w->y = y - drag_dy;
@@ -813,6 +959,7 @@ static void mouse_up(int x, int y) {
     int k;
     drag = 0; sizing = 0;
     ui_scroll_end();
+    pointer(x, y);
     k = win_focused();
     if (k >= 0) { w = wins + k; app_mouse(w, E_UP, x - client_x(w), y - client_y(w)); }
 }
@@ -853,12 +1000,16 @@ static void shutdown_screen() {
 }
 
 int main(int argc, char **argv) {
-    int *region, k, busy, secs, clock_min, last_tick, last_draw, input;
+    int *region, k, busy, secs, clock_min, last_tick, last_draw, input, start_ms, second_draw;
 
     if (!gui_present()) { printf("desktop: not fitted\n"); return 0; }
     region = ualloc(65536);
     if (!gui_attach(region, 65536, SW, SH)) { printf("desktop: the display refused the ring\n"); return 1; }
-    gui_events(GUI_M_MOVE | GUI_M_BUTTONS | GUI_M_KEYS | GUI_M_WHEEL);
+    // GUI_M_WINDOW too: a resize or a focus change from the page means the
+    // canvas may have been cleared, and the scene is drawn again
+    gui_events(GUI_M_MOVE | GUI_M_BUTTONS | GUI_M_KEYS | GUI_M_WHEEL | GUI_M_WINDOW);
+    theme_init();
+    theme_load();
     wins = (struct win *)ualloc(MAXW * sizeof(struct win));
     memset(wins, 0, MAXW * sizeof(struct win));
     ev = ualloc(4 * sizeof(int));
@@ -876,6 +1027,7 @@ int main(int argc, char **argv) {
     start_items[k] = "Editor"; start_kinds[k] = K_EDIT; ++k;
     start_items[k] = "Calculator"; start_kinds[k] = K_CALC; ++k;
     start_items[k] = "Task Manager"; start_kinds[k] = K_TASKS; ++k;
+    start_items[k] = "Settings"; start_kinds[k] = K_SETTINGS; ++k;
     start_items[k] = "About C4IX"; start_kinds[k] = K_ABOUT; ++k;
     start_items[k] = "-"; start_kinds[k] = 0; ++k;
     start_items[k] = "Run..."; start_kinds[k] = 0 - 1; ++k;
@@ -888,6 +1040,7 @@ int main(int argc, char **argv) {
     term_open(0);
     running = 1; dirty = 1;
     clock_min = 0 - 1; last_tick = 0; last_draw = 0;
+    start_ms = now_ms(); second_draw = 0;
     while (running) {
         busy = 0; input = 0;
         while (gui_poll(ev)) {
@@ -897,7 +1050,11 @@ int main(int argc, char **argv) {
             else if (ev[0] == GUI_EV_MOVE) mouse_move(ev[1], ev[2]);
             else if (ev[0] == GUI_EV_KEYDOWN) key_down(ev[1], ev[2], ev[3]);
             else if (ev[0] == GUI_EV_WHEEL) wheel(ev[1], ev[2], ev[3]);
+            else if (ev[0] == GUI_EV_RESIZE || ev[0] == GUI_EV_FOCUS) dirty = 1;
         }
+        // the first frame, once more half a second in, in case the page was
+        // not yet showing the display when it came
+        if (!second_draw && now_ms() - start_ms >= 500) { second_draw = 1; dirty = 1; }
         k = 0;
         while (k < MAXW) {
             if (wins[k].used && wins[k].kind == K_TERM) term_tick(wins + k);

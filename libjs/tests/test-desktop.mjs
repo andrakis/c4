@@ -45,7 +45,7 @@ boot(vm, new Uint8Array(readFileSync(join(ROOT, 'c4ix32.c4r'))), ['c4ix32.c4r'])
 const consoleText = () => Buffer.from(out).toString('latin1');
 
 // The screen: every string of the last presented frame, with its position.
-let frame = [], cur = [], presents = 0, rects = [], curRects = [];
+let frame = [], cur = [], presents = 0, rects = [], curRects = [], pointer = 0;
 const pump = () => {
   const words = gui.drain();
   for (let i = 0; words && i < words.length; i += words[i]) {
@@ -59,6 +59,7 @@ const pump = () => {
       cur.push({ x: words[i + 2], y: words[i + 3], s, rgb: words[i + 4], adv: words[i + 7] });
     }
     if (t === CMD.PRESENT) { frame = cur; rects = curRects; presents++; }
+    if (t === CMD.CURSOR) pointer = words[i + 2];
   }
 };
 // run() returns early whenever the guest sleeps, so waiting is until()'s job
@@ -397,6 +398,14 @@ txt(':make\n');
 check(until(() => has('Build: running') && has('Cancel'), 400), ':make on a file under a BUILD.B4K runs b4ke there', screen());
 clickText('Cancel');
 check(until(() => has('Build: cancelled') && !has('Build: running'), 400), 'Cancel stops the build', screen());
+{
+  // the pointer: a text beam over the text, an arrow on the taskbar
+  const e = ed();
+  ev({ kind: 'move', x: e.x + 400, y: e.y + 150, buttons: 0 });
+  check(until(() => pointer === 1), 'the pointer is a text beam over the text', `pointer ${pointer}`);
+  ev({ kind: 'move', x: 400, y: SH - 10, buttons: 0 });
+  check(until(() => pointer === 0), 'and an arrow over the taskbar', `pointer ${pointer}`);
+}
 txt(':q\n');
 check(until(() => !has('edit.c - Editor')), 'and :q closes it');
 
@@ -417,6 +426,22 @@ clickText('Performance');
 check(until(() => has('CPU Usage History') && has('Totals')), 'the Performance tab shows the gauge and the history');
 clickText('Applications');
 check(until(() => has('Status') && find('Running').length >= 3), 'the Applications tab lists the windows');
+
+// ---- Settings ---------------------------------------------------------------------------------
+start('Settings');
+check(until(() => has('Color scheme') && has('Windows Standard') && has('Slate') && has('Defaults')), 'Start > Settings lists the colour schemes', screen());
+clickText('Slate');
+check(until(() => rects.some(r => r.rgb === 0xb8c4cc) && !rects.some(r => r.rgb === 0xc0c0c0 && r.w > 300)), 'choosing Slate repaints the desktop in it', screen());
+key('ESC');
+check(until(() => !has('Color scheme')), 'Esc closes Settings');
+clickText(/^Command Prompt - task/);
+type('cat /etc/desktop.cfg\n');
+check(until(() => has(/^scheme 1 bg -1/)), 'the choice is kept in /etc/desktop.cfg', screen());
+start('Settings');
+clickText('Defaults');
+check(until(() => rects.some(r => r.rgb === 0xc0c0c0 && r.w > 300) && !rects.some(r => r.rgb === 0xb8c4cc)), 'Defaults brings Windows Standard back', screen());
+key('ESC');
+until(() => !has('Color scheme'));
 
 // ---- Run --------------------------------------------------------------------------------------
 start('Run...');

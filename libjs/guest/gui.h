@@ -35,8 +35,11 @@ enum {
 enum {
 	GUI_CLEAR = 1, GUI_RECT = 2, GUI_RECTO = 3, GUI_LINE = 4, GUI_CIRCLE = 5, GUI_TEXT = 6,
 	GUI_PIXEL = 7, GUI_PRESENT = 8, GUI_SIZE = 9, GUI_IMGDEF = 10, GUI_IMG = 11,
-	GUI_CLIP = 12, GUI_NOCLIP = 13, GUI_TEXT2 = 14
+	GUI_CLIP = 12, GUI_NOCLIP = 13, GUI_TEXT2 = 14, GUI_CURSOR = 15
 };
+// pointers for gui_cursor: the host's own, so moving it draws nothing
+enum { GUI_PTR_ARROW = 0, GUI_PTR_TEXT = 1, GUI_PTR_RESIZE = 2, GUI_PTR_HAND = 3,
+       GUI_PTR_MOVE = 4, GUI_PTR_WAIT = 5, GUI_PTR_CROSS = 6, GUI_PTR_NONE = 7 };
 enum { GUI_MONO = 0, GUI_SANS = 1, GUI_SANS_BOLD = 2 };
 // events: ev[0] is the type, ev[1..3] its payload
 enum {
@@ -150,6 +153,7 @@ void gui_cmd5 (int type, int a, int b, int c, int d, int e) {
 }
 
 void gui_clear  (int rgb)                             { int *p; if ((p = gui_frame(GUI_CLEAR, 1))) { p[0] = rgb; gui_commit(); } }
+void gui_cursor (int shape)                           { int *p; if ((p = gui_frame(GUI_CURSOR, 1))) { p[0] = shape; gui_commit(); gui_flush(); } }
 void gui_rect   (int x, int y, int w, int h, int rgb) { gui_cmd5(GUI_RECT, x, y, w, h, rgb); }
 void gui_recto  (int x, int y, int w, int h, int rgb) { gui_cmd5(GUI_RECTO, x, y, w, h, rgb); }
 void gui_line   (int x0, int y0, int x1, int y1, int rgb) { gui_cmd5(GUI_LINE, x0, y0, x1, y1, rgb); }

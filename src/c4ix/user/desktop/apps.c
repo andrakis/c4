@@ -468,3 +468,87 @@ void about_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     d_text(ox + 68, oy + 92, C_DARK, F_SANS, "stdin and stdout are pipes the desktop holds.");
     d_text(ox + 68, oy + 116, C_SHADOW, F_SANS, "Enter or Esc closes this window.");
 }
+
+// ---- Settings: the colour scheme and the desktop's colour ---------------------------
+//
+// Display Properties, cut down: a list of schemes and a row of desktop
+// colours, each applied at once (theme_set, which also remembers them in
+// /etc/desktop.cfg), beside a preview drawn in the colours in use.
+
+static char *dflt_label;
+
+int settings_open() {
+    int k;
+    struct win *w;
+    k = 0;
+    while (k < MAXW) { w = win_get(k); if (w->used && w->kind == K_SETTINGS) { win_raise(k); return k; } ++k; }
+    dflt_label = "Defaults";
+    return win_open(K_SETTINGS, "Settings", 420, 330);
+}
+
+void settings_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
+    int i, x, y, sel, n;
+    d_rect(ox, oy, cw, ch, C_FACE);
+    // the schemes
+    n = theme_count();
+    ui_group(ox + 8, oy + 8, 180, 20 + n * 20, "Color scheme");
+    sel = theme_scheme();
+    i = 0;
+    while (i < n) { ui_radio(ox + 18, oy + 26 + i * 20, theme_name(i), i == sel); ++i; }
+    // the desktop: the scheme's own, or one of eight
+    y = oy + 36 + n * 20;
+    ui_group(ox + 8, y, 180, 74, "Desktop");
+    ui_radio(ox + 18, y + 16, "The scheme's", theme_bg() < 0);
+    i = 0;
+    while (i < 8) {
+        x = ox + 18 + i * 20;
+        d_rect(x, y + 40, 16, 16, theme_swatch(i));
+        d_recto(x - 1, y + 39, 18, 18, theme_bg() == theme_swatch(i) ? C_DARK : C_SHADOW);
+        if (theme_bg() == theme_swatch(i)) d_recto(x - 2, y + 38, 20, 20, C_DARK);
+        ++i;
+    }
+    // the preview: the desktop, an inactive window, an active one
+    x = ox + 200; y = oy + 14;
+    d_rect(x, y, cw - 210, 170, C_DESK);
+    d_bevel(x, y, cw - 210, 170, B_SUNKEN);
+    d_rect(x + 12, y + 14, 150, 70, C_FACE); d_bevel(x + 12, y + 14, 150, 70, B_RAISED);
+    d_rect(x + 15, y + 17, 144, 16, C_ITITLE);
+    d_text(x + 19, y + 19, C_FACE, F_BOLD, "Inactive Window");
+    d_rect(x + 28, y + 50, 170, 100, C_FACE); d_bevel(x + 28, y + 50, 170, 100, B_RAISED);
+    d_rect(x + 31, y + 53, 164, 16, C_TITLE);
+    d_text(x + 35, y + 55, C_LIGHT, F_BOLD, "Active Window");
+    d_rect(x + 36, y + 76, 150, 40, C_WHITE); d_bevel(x + 36, y + 76, 150, 40, B_SUNKEN);
+    d_text(x + 42, y + 80, C_DARK, F_SANS, "Normal");
+    d_rect(x + 40, y + 96, 60, 15, C_SEL);
+    d_text(x + 42, y + 97, C_WHITE, F_SANS, "Selected");
+    ui_button(x + 110, y + 122, 76, 22, "OK", 0, 1);
+    ui_button(ox + cw - 96, oy + ch - 34, 86, 24, dflt_label, 0, 0);
+}
+
+void settings_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
+    int n, i, sy;
+    if (ev != E_DOWN) return;
+    n = theme_count();
+    i = 0;
+    while (i < n) {
+        if (ui_hit(x, y, 14, 24 + i * 20, 170, 18)) { theme_set(i, theme_bg()); return; }
+        ++i;
+    }
+    sy = 36 + n * 20;
+    if (ui_hit(x, y, 14, sy + 14, 170, 18)) { theme_set(theme_scheme(), 0 - 1); return; }
+    i = 0;
+    while (i < 8) {
+        if (ui_hit(x, y, 16 + i * 20, sy + 38, 20, 20)) { theme_set(theme_scheme(), theme_swatch(i)); return; }
+        ++i;
+    }
+    if (ui_hit(x, y, cw - 96, ch - 34, 86, 24)) theme_set(0, 0 - 1);
+}
+
+// Up and Down walk the schemes; Esc or Enter closes
+void settings_key(struct win *w, int code, int ch, int mods) {
+    int s;
+    s = theme_scheme();
+    if (code == KEY_UP && s > 0) theme_set(s - 1, theme_bg());
+    else if (code == KEY_DOWN && s < theme_count() - 1) theme_set(s + 1, theme_bg());
+    else if (code == KEY_ESC || code == KEY_ENTER) win_close(win_index(w));
+}

@@ -20,6 +20,8 @@ enum { COLS = 80, ROWS = 25, CW = 8, CH = 16, FONT_PX = 14, LINE_MAX = 250, IOBU
 // graphics mode: the canvas (the grid's own area), a command buffer, and
 // the two display lists -- the one being built, and the one shown
 enum { GW = 640, GH = 400, APC_MAX = 300, GLIST = 6000 };
+// the row cache: what term_draw emits for each row, at most RUNMAX runs
+enum { RUNMAX = 24 };
 
 struct term {
     int pid, in_w, out_r, ended;
@@ -36,6 +38,13 @@ struct term {
     int ncur, nshow;
     int gcur[6000];               // GLIST words: [len, op, numbers..., text]
     int gshow[6000];
+    // The row cache (row_build): each row's background rectangles and
+    // runs of text, as [first column, columns, kind << 8 | colour] with
+    // kind 0 a rectangle and 1 text. rowok[r] is 0 until it is built, and
+    // again whenever a cell of the row changes; rowk[r] is its run count,
+    // or -1 for a row with more than RUNMAX, drawn from the cells.
+    int rowok[25], rowk[25];
+    int runs[1800];               // ROWS * RUNMAX * 3
 };
 
 static int pal[256];
@@ -69,15 +78,22 @@ static int cube_step(int c) { if (c < 48) return 0; if (c < 115) return 1; retur
 
 static void clear(struct term *t, int from, int to) {
     int k;
+    if (from >= to) return;
     k = from;
     while (k < to) { t->cell[k] = ' ' | (7 << 8) | (t->bg << 16); ++k; }
+    k = from / COLS;
+    while (k <= (to - 1) / COLS) { t->rowok[k] = 0; ++k; }
 }
 
+// A scroll moves the cache with the cells: the rows are the same rows.
 static void newline(struct term *t) {
     t->cx = 0; t->wrap = 0;
     ++t->cy;
     if (t->cy >= ROWS) {
         memcpy(t->cell, t->cell + COLS, (ROWS - 1) * COLS * sizeof(int));
+        memcpy(t->runs, t->runs + RUNMAX * 3, (ROWS - 1) * RUNMAX * 3 * sizeof(int));
+        memcpy(t->rowok, t->rowok + 1, (ROWS - 1) * sizeof(int));
+        memcpy(t->rowk, t->rowk + 1, (ROWS - 1) * sizeof(int));
         clear(t, (ROWS - 1) * COLS, ROWS * COLS);
         t->cy = ROWS - 1;
     }
@@ -94,6 +110,7 @@ static int attr(struct term *t) {
 static void putc_(struct term *t, int c) {
     if (t->wrap) newline(t);
     t->cell[t->cy * COLS + t->cx] = (c & 255) | attr(t);
+    t->rowok[t->cy] = 0;
     ++t->cx;
     if (t->cx >= COLS) { t->cx = COLS - 1; t->wrap = 1; }
 }
@@ -461,10 +478,82 @@ void term_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
 
 // The grid as runs: a rectangle per stretch of non-black background and a
 // line of text per stretch of one colour.
+// Work out row r's runs: its rectangles of background, and its stretches
+// of text in one colour that are not all blank -- what term_draw would
+// draw for it -- into the row cache. A row with more than RUNMAX gets
+// rowk -1 and is drawn from its cells every time.
+static void row_build(struct term *t, int r) {
+    int c, k, f, b, start, blank, *row, *run;
+    row = t->cell + r * COLS;
+    run = t->runs + r * RUNMAX * 3;
+    k = 0;
+    c = 0;
+    while (c < COLS) {
+        b = (row[c] >> 16) & 255;
+        start = c;
+        while (c < COLS && ((row[c] >> 16) & 255) == b) ++c;
+        if (b) {
+            if (k == RUNMAX) { t->rowk[r] = -1; t->rowok[r] = 1; return; }
+            run[3 * k] = start; run[3 * k + 1] = c - start; run[3 * k + 2] = b;
+            ++k;
+        }
+    }
+    c = 0;
+    while (c < COLS) {
+        f = (row[c] >> 8) & 255;
+        start = c;
+        blank = 1;
+        while (c < COLS && ((row[c] >> 8) & 255) == f) { if ((row[c] & 255) != ' ') blank = 0; ++c; }
+        if (!blank) {
+            if (k == RUNMAX) { t->rowk[r] = -1; t->rowok[r] = 1; return; }
+            run[3 * k] = start; run[3 * k + 1] = c - start; run[3 * k + 2] = (1 << 8) | f;
+            ++k;
+        }
+    }
+    t->rowk[r] = k;
+    t->rowok[r] = 1;
+}
+
+// n characters of row r from column c, into tmp
+static void row_text(struct term *t, int r, int c, int n) {
+    int i, *row;
+    row = t->cell + r * COLS + c;
+    i = 0;
+    while (i < n) { tmp[i] = row[i] & 255; ++i; }
+    tmp[n] = 0;
+}
+
+// A row from its cells, as term_draw always used to do it.
+static void row_scan(struct term *t, int r, int ox, int oy) {
+    int c, k, a, f, b, start, *row;
+    char *s;
+    row = t->cell + r * COLS;
+    c = 0;
+    while (c < COLS) {
+        b = (row[c] >> 16) & 255;
+        start = c;
+        while (c < COLS && ((row[c] >> 16) & 255) == b) ++c;
+        if (b) d_rect(ox + start * CW, oy + r * CH, (c - start) * CW, CH, pal[b]);
+    }
+    c = 0;
+    while (c < COLS) {
+        f = (row[c] >> 8) & 255;
+        start = c;
+        s = tmp;
+        while (c < COLS && ((row[c] >> 8) & 255) == f && c - start < 90) { *s = row[c] & 255; ++s; ++c; }
+        *s = 0;
+        k = 0; a = 0;
+        while (tmp[k]) { if (tmp[k] != ' ') a = 1; ++k; }
+        if (a) d_textn(ox + start * CW, oy + r * CH + 1, pal[f], FONT_PX, F_MONO, CW, tmp, c - start);
+    }
+}
+
+// The grid, a row at a time from the row cache: the scan of 2,000 cells
+// twice over was a third of what an idle desktop's redraw cost, for rows
+// that had not changed since the last one.
 void term_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     struct term *t;
-    int r, c, k, a, f, b, start, *row;
-    char *s;
+    int r, k, n, *run;
     t = T(w);
     d_rect(ox, oy, cw, ch, C_DARK);
     d_bevel(ox, oy, COLS * CW + 4, ROWS * CH + 4, B_SUNKEN);
@@ -472,24 +561,18 @@ void term_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     if (t->gfx) { gfx_draw(t, ox, oy); return; }
     r = 0;
     while (r < ROWS) {
-        row = t->cell + r * COLS;
-        c = 0;
-        while (c < COLS) {
-            b = (row[c] >> 16) & 255;
-            start = c;
-            while (c < COLS && ((row[c] >> 16) & 255) == b) ++c;
-            if (b) d_rect(ox + start * CW, oy + r * CH, (c - start) * CW, CH, pal[b]);
-        }
-        c = 0;
-        while (c < COLS) {
-            f = (row[c] >> 8) & 255;
-            start = c;
-            s = tmp;
-            while (c < COLS && ((row[c] >> 8) & 255) == f && c - start < 90) { *s = row[c] & 255; ++s; ++c; }
-            *s = 0;
-            k = 0; a = 0;
-            while (tmp[k]) { if (tmp[k] != ' ') a = 1; ++k; }
-            if (a) d_textn(ox + start * CW, oy + r * CH + 1, pal[f], FONT_PX, F_MONO, CW, tmp, c - start);
+        if (!t->rowok[r]) row_build(t, r);
+        n = t->rowk[r];
+        if (n < 0) row_scan(t, r, ox, oy);
+        run = t->runs + r * RUNMAX * 3;
+        k = 0;
+        while (k < n) {
+            if (run[2] >> 8) {
+                row_text(t, r, run[0], run[1]);
+                d_textn(ox + run[0] * CW, oy + r * CH + 1, pal[run[2] & 255], FONT_PX, F_MONO, CW, tmp, run[1]);
+            } else d_rect(ox + run[0] * CW, oy + r * CH, run[1] * CW, CH, pal[run[2]]);
+            run = run + 3;
+            ++k;
         }
         ++r;
     }

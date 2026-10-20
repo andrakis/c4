@@ -109,7 +109,14 @@ int tasks_open_perf() {
     return i;
 }
 
-void tasks_tick(struct win *w) { sample(S(w)); mark_dirty(); }
+// The sample is taken minimised too, so the history has no gap when the
+// window comes back; but a minimised window shows nothing, and redrawing
+// the whole scene every second for it was most of what an idle desktop
+// cost (docs/c4ix-cpu.md, step 11).
+void tasks_tick(struct win *w) {
+    sample(S(w));
+    if (!w->min) mark_dirty();
+}
 
 // The taskbar's CPU meter: the same sample as the Performance tab, kept
 // apart from any Task Manager window, so the two agree and neither

@@ -404,3 +404,34 @@ stays too, as a compiler test and as the record of the trick (C4DOS
 still uses it).
 
 Also: init's `--help` text described `--desktop` in the old order.
+
+### 11. The desktop
+
+At step 10 an idle desktop with four windows ran 4.94M cycles in 5
+seconds. 79% of that was the desktop, which redrew the whole scene once
+a second for Task Manager's tick, at about 770k cycles a redraw:
+`term_draw` 34%, `gui_frame` 21%, `gui_text2` 11%.
+
+**(a) Task Manager minimised** still takes its sample each second, so
+its history has no gap when the window comes back, but no longer redraws
+the scene for a window that shows nothing.
+
+**(b) A cheaper `gui_frame`** (libjs/guest/gui.h). Every command of every
+frame reserves its room in the ring there, a thousand for a redraw.
+`gui_at` now keeps where the head is in the ring as it moves, so the
+common case, room before the end, is one test without a `%`. That is
+about 126 cycles a command, from 158.
+
+**(c) A row cache in `term_draw`.** Each row's background rectangles and
+runs of text are worked out once and kept, as [column, columns, kind and
+colour], and worked out again only for a row whose cells changed: the
+single-cell put, `clear()` and the scroll, which moves the cache with
+the cells. A row with more than 24 runs is drawn from its cells, as
+before. What it draws is unchanged, command for command. Each redraw had
+scanned the 2,000 cells of every terminal twice.
+
+| idle desktop, 4 windows, per 5 s | step 10 | (a)-(c) |
+|---|---|---|
+| cycles | 4.94M (1.0%) | 3.59M (0.7%) |
+| `term_draw` | 1.31M | below the top 8 |
+| `gui_frame` + `gui_commit` | 0.97M | 0.90M |

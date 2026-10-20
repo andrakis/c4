@@ -62,6 +62,7 @@ int  gui_flen;
 int  gui_seq;
 int  gui_w;
 int  gui_h;
+int  gui_at;     // where the head is in the command ring (gui_frame)
 
 int gui_present () {
 	return (__c4_info() & C4I_GUI) != 0;
@@ -82,6 +83,7 @@ int gui_attach (int *region, int bytes, int w, int h) {
 	gui_in = region;
 	gui_out = (int *)((int)region + half);
 	gui_seq = 0;
+	gui_at = gui_out[0] ? gui_out[1] % gui_out[0] : 0;
 	gui_w = *(int *)GUI_W;
 	gui_h = *(int *)GUI_H;
 	return 1;
@@ -97,33 +99,35 @@ void gui_flush () { *(int *)GUI_BELL = 1; }
 
 // Room for a command with n payload words, or 0. A full ring is flushed
 // and tried again: the host empties it inside the bell's store.
+//
+// Every command of every frame comes through here -- a thousand for a
+// desktop redraw -- so the common case is kept short: gui_at is where
+// the head is in the ring (head % capacity), kept as the head moves, and
+// a command that fits before the end with room to spare is one test.
 int *gui_frame (int type, int n) {
-	int cap, head, tail, at, len, room, tries;
+	int cap, head, len, tries;
 	len = 3 + n;
 	cap = gui_out[0];
 	if (len > cap) return 0;
 	tries = 0;
 	while (tries < 3) {
-		head = gui_out[1]; tail = gui_out[2];
-		room = cap - (head - tail);
-		at = head % cap;
-		if (at + len > cap && room >= (cap - at) + len) {
-			gui_out[3 + at] = -1;              // skip to the start of the ring
-			head = head + (cap - at);
-			gui_out[1] = head;
-			at = 0;
-			room = cap - (head - tail);
-		}
-		if (at + len <= cap && room >= len) {
-			gui_f = gui_out + 3 + at;
+		head = gui_out[1];
+		if (gui_at + len <= cap && cap - (head - gui_out[2]) >= len) {
+			gui_f = gui_out + 3 + gui_at;
 			gui_f[1] = type;
 			gui_f[2] = gui_seq;
 			gui_seq = gui_seq + 1;
 			gui_flen = len;
 			return gui_f + 3;
 		}
-		*(int *)GUI_BELL = 1;
-		tries = tries + 1;
+		if (gui_at + len > cap && cap - (head - gui_out[2]) >= (cap - gui_at) + len) {
+			gui_out[3 + gui_at] = -1;          // skip to the start of the ring
+			gui_out[1] = head + (cap - gui_at);
+			gui_at = 0;
+		} else {
+			*(int *)GUI_BELL = 1;
+			tries = tries + 1;
+		}
 	}
 	return 0;
 }
@@ -132,6 +136,8 @@ int *gui_frame (int type, int n) {
 void gui_commit () {
 	gui_f[0] = gui_flen;
 	gui_out[1] = gui_out[1] + gui_flen;
+	gui_at = gui_at + gui_flen;
+	if (gui_at >= gui_out[0]) gui_at = gui_at - gui_out[0];
 }
 
 void gui_cmd0 (int type) {

@@ -83,8 +83,12 @@ c4lc runs as `-O -conforming -P -I src/c4ix/libc/include`:
 - `-conforming` turns on the `\x` and octal escapes. Without it, `'\x41'` is
   49, not 65.
 
-**52 passed when this was written, and 90 pass after M7b's first twelve
-steps (2026-10-20).** It is a tracker and not a `make` gate yet. It
+**52 passed when this was written, 90 after M7b's first twelve steps,
+and 97 after its P1 items (2026-10-20).** Every probe that still fails is
+P2, apart from two that wait on libc's headers (`int_types_header`,
+`setjmp`). `fn_arr_int` and `struct_init_fn` first kept a function in an
+`int`, c4's old idiom, which gcc 14 and later reject; they now use typed
+function pointers, as Busybox's tables do, so gcc can check them. It is a tracker and not a `make` gate yet. It
 becomes one, in `make test-c4lc`, once it passes. The kernel and libc gaps
 come from reading `src/c4ix/sys.c`, `vfs.c`, `loader.c` and `src/c4ix/libc`.
 
@@ -426,7 +430,10 @@ Each step lands with tests, and the next starts only when they are green.
    10. ~~another unit's function in data~~: done, patch type -5;
    11. ~~`inline` and `__attribute__`~~: done, dropped before parsing;
    12. ~~struct assignment~~: done. 2-D arrays proved to be P2;
-   13. then the P1 items.
+   13. ~~the P1 items~~: done -- `__func__`, `__LINE__` and `__FILE__`; a
+       global's address in an initializer, also another unit's data; and
+       local aggregate initializers. What the compiler still lacks is P2.
+       `alloca` is left to `platform.h` (§3.1).
 
    Each turns its probes PASS, and gets gcc-checked tests in
    `src/tests/c4lc_*.c` like M4's. `run.sh` joins `make test-c4lc` when it

@@ -97,6 +97,7 @@ VARIABLE DQ   0 DQ !
 \ exactly as it is at run time, and a plain int >> is arithmetic, which
 \ it was in c4lc and was NOT here: this used Forth's RSHIFT.
 DEFER CEXPR
+DEFER CONST-EXPR                        \ the whole thing, ?: and all
 VARIABLE CTY   1 CTY !
 : CAPPLY ( a at b bt op -- v ) {: a at b bt o | v ok -- v :}
    a at b bt o TFOLD TO ok TO v
@@ -117,8 +118,13 @@ VARIABLE CTY   1 CTY !
    TK Add    = IF TNEXT 13 CEXPR EXIT THEN
    TK Not    = IF TNEXT 13 CEXPR 0= 1 AND t_int CTY ! EXIT THEN
    TK Tilde  = IF TNEXT 13 CEXPR TO v  -1 t_int v CTY @ oXOR CAPPLY EXIT THEN
-   TK Lparen = IF TNEXT 1 CEXPR Rparen WANT EXIT THEN
-   TK Sizeof = IF TNEXT Lparen WANT PARSE-TYPE T-SIZE Rparen WANT t_int CTY ! EXIT THEN
+   TK Lparen = IF TNEXT CONST-EXPR Rparen WANT EXIT THEN
+   \ sizeof of a type, or of a string literal: its bytes and the NUL (M7b)
+   TK Sizeof = IF TNEXT Lparen WANT
+      TK Str = IF
+         0 TO v  BEGIN TK Str = WHILE v TL + TO v TNEXT REPEAT
+         Rparen WANT t_int CTY !  v 1+ EXIT THEN
+      PARSE-TYPE T-SIZE Rparen WANT t_int CTY ! EXIT THEN
    TK Id = IF
       TV TL ST-FIND TO s
       s 0= IF ." c4fc: unknown name in a constant" CR ABORT THEN
@@ -141,7 +147,25 @@ VARIABLE CTY   1 CTY !
       v vt r CTY @ i CELLS INO + @ CAPPLY TO v   CTY @ TO vt
    AGAIN ;
 ' (CEXPR) IS CEXPR
-: CONST-EXPR ( -- v )  1 CEXPR ;
+\ && and || (M7b), both sides always read: a constant has nothing to
+\ skip. Then ?: at the top, which libbb.h's compile-time checks need.
+: C-LAND ( -- v ) {: | v r -- v :}
+   5 CEXPR TO v
+   BEGIN TK Lan = WHILE
+      TNEXT 5 CEXPR TO r   v 0<> r 0<> AND 1 AND TO v   t_int CTY !
+   REPEAT v ;
+: C-LOR ( -- v ) {: | v r -- v :}
+   C-LAND TO v
+   BEGIN TK Lor = WHILE
+      TNEXT C-LAND TO r   v 0<> r 0<> OR 1 AND TO v   t_int CTY !
+   REPEAT v ;
+: C-COND ( -- v ) {: | c a at b bt -- v :}
+   C-LOR TO c
+   TK Cond = IF
+      TNEXT RECURSE TO a  CTY @ TO at  Colon WANT  RECURSE TO b  CTY @ TO bt
+      c IF at CTY ! a ELSE bt CTY ! b THEN EXIT THEN
+   c ;
+' C-COND IS CONST-EXPR
 
 \ -- nodes --------------------------------------------------------------
 
@@ -149,9 +173,11 @@ VARIABLE CTY   1 CTY !
 
 DEFER EXPR                              \ ( lev -- node )
 
-: TYPE? TK Int = TK Char = OR TK Void = OR TK Struct = OR TK Union = OR
-   TK Const = OR TK Volatile = OR TK Signed = OR TK Unsigned = OR
-   TK Short = OR TK Long = OR ;
+: KIND-TYPE? ( k -- f ) {: k -- f :}
+   k Int = k Char = OR k Void = OR k Struct = OR k Union = OR
+   k Const = OR k Volatile = OR k Signed = OR k Unsigned = OR
+   k Short = OR k Long = OR ;
+: TYPE? ( -- f )  TK KIND-TYPE? ;
 
 \ Members are laid out one cell at a time: c4lc gives a char member a
 \ whole cell, which is visible the moment a struct starts with two of
@@ -171,7 +197,7 @@ DEFER EXPR                              \ ( lev -- node )
             1 TO ag   mt DUP TO et 2 + TO mt   q 2 LSHIFT TO q
          THEN
          off 1 CELLS 1- + 1 CELLS 1- INVERT AND TO off
-         k a u mt off ag MEM,   q MEM-Q!
+         k a u mt off ag MEM,   q MEM-Q!   ag IF n et T-SIZE * MEM-ASZ! THEN
          off n ag IF et ELSE mt THEN T-SIZE * + TO off
          TK Comma = WHILE TNEXT
       REPEAT
@@ -256,34 +282,44 @@ CREATE SLBUF 8192 ALLOT
    n 1+ ALLOT: TO d   SLBUF d n MOVE
    d n ;
 
+\ What sizeof says of an expression: a string literal is its bytes and
+\ the NUL, a named array its storage, an array member its storage, and
+\ anything else its type's size -- c4lc-gen's g:sizeofx and sizeofa.
+: SIZEOF-NODE ( nd -- n ) {: nd | k s -- n :}
+   nd @ TO k
+   k n_str = IF nd >slen @ 1+ EXIT THEN
+   k n_var = k n_gvar = OR IF
+      nd >sym @ TO s
+      s y.agg @ IF s y.sz @ ELSE s y.ct @ T-SIZE THEN EXIT
+   THEN
+   k n_member = IF
+      nd >magg @ IF nd >masz @ ELSE nd >mtype @ T-SIZE THEN EXIT
+   THEN
+   nd CT T-SIZE ;
+
 : PRIMARY ( -- node ) {: | s a u v k nd ct -- n :}
    TK Num = IF TV TNEXT t_int NUM-OF EXIT THEN
    TK NUMK? IF
       TV TK LIT-TYPE TO ct
       TV  ct t_uint = IF M32 AND THEN  ct NUM-OF  TNEXT EXIT THEN
    TK Str = IF STR-LIT n_str N2 EXIT THEN
-   \ sizeof(type) folds to a constant, and so does sizeof(array): the
-   \ operand is a NAME rather than a type exactly when it lexes as an
-   \ identifier, and then it has to be an array, because that is the
-   \ only case where the answer is not the size of a machine word.
+   \ sizeof folds to a constant here, at parse time (M7b: of any
+   \ expression, c4lc's sizeofa and sizeofe). A type in parentheses is a
+   \ type; `sizeof(T[n])` is sizeof(T) * n, which is how Busybox writes
+   \ BUILD_BUG_ON. Anything else is a unary expression, parenthesized or
+   \ not, whose size SIZEOF-NODE reads off it without generating it.
    TK Sizeof = IF
-      TNEXT Lparen WANT
-      TK Id = IF
-         TV TO a  TL TO u  TNEXT
-         a u ST-FIND TO s
-         \ The discovery pass runs before anything is known, and a call may
-      \ come before the definition with no prototype anywhere -- which
-      \ is the very thing that pass exists to find out. Stand a
-      \ placeholder in and carry on; its output is thrown away.
-      s 0= IF
-         COLLECT @ IF
-            a u c_fun -1 t_int 0 0 ST,  STN @ 1- ST[] TO s
-         ELSE ." c4fc: undeclared " a u TYPE CR ABORT THEN
+      TNEXT
+      TK Lparen =  TP @ 1+ TOKS V@ t.kind @ KIND-TYPE? AND IF
+         TNEXT PARSE-TYPE T-SIZE t_int NUM-OF TO v
+         TK Brak = IF
+            TNEXT  1 EXPR TO nd  Rbrak WANT  Rparen WANT
+            n_bin 4 CELLS NEW TO s
+            v s >lhs !  nd s >rhs !  oMUL s >op !  s EXIT
+         THEN
+         Rparen WANT  v EXIT
       THEN
-         s y.sz @ 0= IF ." c4fc: sizeof needs an array: " a u TYPE CR ABORT THEN
-         s y.sz @  Rparen WANT  t_int NUM-OF EXIT
-      THEN
-      PARSE-TYPE T-SIZE  Rparen WANT  t_int NUM-OF EXIT
+      13 EXPR SIZEOF-NODE t_int NUM-OF EXIT
    THEN
    TK Lparen = IF
       TNEXT
@@ -341,12 +377,13 @@ CREATE SLBUF 8192 ALLOT
    TV TO a  TL TO u  Id WANT
    k a u MEM-FIND TO i
    i 0< IF ." c4fc: no such member: " a u TYPE CR ABORT THEN
-   n_member 6 CELLS NEW TO nd
+   n_member 7 CELLS NEW TO nd
    b nd >lhs !
    i CELLS MB-OFF  + @ nd >moff !
    i CELLS MB-TYPE + @ nd >mtype !
    i CELLS MB-AGG  + @ nd >magg !
    i CELLS MB-QUAL + @ nd >mq !
+   i CELLS MB-ASZ  + @ nd >masz !
    nd ;
 
 : POSTFIX ( -- node ) {: | n -- n :}

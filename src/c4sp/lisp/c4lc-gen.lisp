@@ -497,6 +497,22 @@
 	(if (g:bytety? ty) 1
 	(if (g:halfty? ty) 2
 	g:WORD))))))))
+;; sizeof an expression (M7b), worked out from its type without
+;; evaluating it: a string literal is its bytes and the NUL, an array
+;; member its whole storage, and everything else its type's size
+(define g:sizeofx (lambda (x)
+	(begin
+		(define h (head x))
+		(if (= h 'str) (+ (length (g:second x)) 1)
+		(if (= h 'member) (g:membsize (g:typeof (g:second x)) (g:third x))
+		(if (= h 'arrow) (g:membsize (- (g:typeof (g:second x)) g:PTR) (g:third x))
+		(g:tysize (g:typeof x))))))))
+;; a member record is (NAME OFF TYPE BYTES Q); BYTES is set for an array
+;; member (and a struct one, whose size it equals)
+(define g:membsize (lambda (sty n)
+	(begin
+		(define m (g:member sty n))
+		(if (= (index m 3) nil) (g:tysize (index m 2)) (index m 3)))))
 ;; size of what a pointer of type ty points at
 (define g:elemsize (lambda (ty) (g:tysize (- ty g:PTR))))
 ;; how far apart an array's elements of type ty are: one- and two-byte
@@ -727,7 +743,7 @@
 		(if (if (= h 'bitnot) true (= h 'neg)) (g:unres (g:typeof (g:second e)))
 		(if (g:incdec? h) (g:lvtype (g:second e))
 		(if (= h 'cast) (g:second e)
-		(if (if (= h 'sizeof) true (= h 'sizeofa)) g:INT
+		(if (if (= h 'sizeof) true (if (= h 'sizeofa) true (= h 'sizeofe))) g:INT
 		(if (if (= h 'index) true (if (= h 'member) true (= h 'arrow))) (g:lvtype e)
 		(if (= h 'cond) (g:condtype e)
 		(if (if (= h 'land) true (= h 'lor)) g:INT
@@ -1099,10 +1115,13 @@
 				(set! g:ty g:INT))
 		(if (= h 'sizeofa)
 			(begin
+				;; an array's storage; anything else, its type's size
 				(define sa (g:find (g:second e)))
-				(if (= (index sa 4) nil)
-					(g:die (+ "sizeof needs an array: " (g:second e))) nil)
-				(g:emit (list 'IMM (index sa 4)))
+				(g:emit (list 'IMM (if (= (index sa 4) nil) (g:tysize (g:third sa)) (index sa 4))))
+				(set! g:ty g:INT))
+		(if (= h 'sizeofe)
+			(begin
+				(g:emit (list 'IMM (g:sizeofx (g:second e))))
 				(set! g:ty g:INT))
 		(if (= h 'index)
 			(if (if gen:cisc (g:cisc-eligible-index? e) false)
@@ -1141,7 +1160,7 @@
 		(begin
 			(define b (g:assoc/atom h g:binops))
 			(if b (g:binary e (g:second b))
-			(g:die (+ "bad expression node: " (+ "" h))))))))))))))))))))))))))))))))
+			(g:die (+ "bad expression node: " (+ "" h)))))))))))))))))))))))))))))))))
 
 (define g:varexpr (lambda (n)
 	(begin

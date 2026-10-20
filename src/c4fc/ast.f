@@ -48,7 +48,7 @@ NODE: n_postdec NFIELD: >opnd                  ;NODE
 \ came from.
 NODE: n_index  NFIELD: >lhs  NFIELD: >rhs      ;NODE
 NODE: n_member NFIELD: >lhs  NFIELD: >moff NFIELD: >mtype NFIELD: >magg
-               NFIELD: >mq                                 ;NODE
+               NFIELD: >mq   NFIELD: >masz                 ;NODE
 
 NODE: n_lor    NFIELD: >lhs  NFIELD: >rhs      ;NODE
 NODE: n_land   NFIELD: >lhs  NFIELD: >rhs      ;NODE

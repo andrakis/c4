@@ -24,6 +24,8 @@
 #define __C4IX_LIBC_H 1
 
 #define NULL 0
+// a member's offset; an expression, not yet a constant c4lc can fold (M7b)
+#define offsetof(T, m) ((int)&((T *)0)->m)
 #define EOF (-1)
 #define BUFSIZ 1024
 #define FILENAME_MAX 256

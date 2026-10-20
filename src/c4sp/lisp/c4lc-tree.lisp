@@ -744,7 +744,7 @@
 
 (define t:hassizeofa? (lambda (e)
 	(if (= 'list (typeof e))
-		(if (= (head e) 'sizeofa) true
+		(if (if (= (head e) 'sizeofa) true (= (head e) 'sizeofe)) true
 		(next t:hassizeofa?/l (tail e)))
 	false)))
 (define t:hassizeofa?/l (lambda (l)

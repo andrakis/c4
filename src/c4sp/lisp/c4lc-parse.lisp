@@ -323,9 +323,11 @@
 		bt))))
 
 ;; is the current token the start of a declaration?
-(define p:declstart? (lambda ()
+(define p:declstart? (lambda () (p:declstart-tok? (head p:toks))))
+;; ... or any token, for a look ahead (sizeof's `(`)
+(define p:declstart-tok? (lambda (tok)
 	(begin
-		(define k (p:kind))
+		(define k (head tok))
 		(if (= k 'Int) true
 		(if (= k 'Char) true
 		(if (= k 'Void) true
@@ -338,7 +340,7 @@
 		(if (= k 'Short) true
 		(if (= k 'Long) true
 		(if (= k 'Id)
-			(if (p:assoc (p:value) p:typedefs) true false)
+			(if (p:assoc (p:second tok) p:typedefs) true false)
 		false)))))))))))))))
 
 ;; consume the declarator's stars, each followed by its own qualifiers:
@@ -386,6 +388,33 @@
 (define p:numtok? (lambda (k)
 	(if (= k 'Num) true (if (= k 'NumU) true (= k 'NumUL)))))
 
+;; sizeof inside a constant expression (M7b): of a type, or of a string
+;; literal. A struct's size needs the generator's layout, which a
+;; constant cannot wait for; c4fc's parser can answer it, c4lc's cannot
+;; yet. The rule is c4lc-tree's t:tysize, which is g:tysize's.
+(define p:ctysize (lambda (ty)
+	(if (= ty 0) 1
+	(if (p:svalue? ty) (p:die "sizeof a struct or union in a constant is not supported")
+	(if (< ty 512) p:WORD
+	(if (> (- (- ty 512) (* 64 (/ (- ty 512) 64))) 0) p:WORD
+	(if (if (= ty 512) true (= ty 576)) 1
+	(if (if (= ty 640) true (= ty 704)) 2
+	p:WORD))))))))
+(define p:constsizeof (lambda (what)
+	(begin
+		(p:advance)
+		(p:expect 'Lparen "( after sizeof")
+		(define v
+			(if (= (p:kind) 'Str) (+ (length (p:second (p:strlit))) 1)
+			(if (p:declstart?)
+				(begin
+					(define bt (p:basetype p:INT))
+					(p:ctysize (p:stars bt p:bq)))
+			(p:die (+ what ": sizeof of an expression is not a constant here")))))
+		(p:expect 'Rparen ") after sizeof")
+		(set! p:ct p:INT)
+		v)))
+
 ;; a static const scalar named by the current token, or false
 (define p:sconst (lambda ()
 	(if (p:member? (p:value) p:locals) false
@@ -409,6 +438,7 @@
 			(set! p:ct p:INT)
 			(if (= 0 v) 1 0))
 	(if (p:numtok? (p:kind)) (p:numtok)
+	(if (= (p:kind) 'Sizeof) (p:constsizeof what)
 	(if (= (p:kind) 'Lparen)
 		(begin
 			(p:advance)
@@ -425,7 +455,7 @@
 				(if (= sc false) (p:die (+ what " must be an integer constant"))
 					(begin (p:advance) (set! p:ct (index sc 2)) (p:second sc)))
 				(begin (p:advance) (set! p:ct p:INT) ev)))
-	(p:die (+ what " must be an integer constant")))))))))))
+	(p:die (+ what " must be an integer constant"))))))))))))
 
 ;; one binary step: l (of type lt) op the next operand
 (define p:cstep (lambda (op l lt r)
@@ -470,11 +500,31 @@
 			(define v (p:cstep 'shr l lt r)) (next p:constshift/2 what v p:ct))
 	(begin (set! p:ct lt) l)))))
 
+;; comparisons (M7b): C's order, relational above equality above &
+(define p:constrel (lambda (what)
+	(begin (define v (p:constshift what)) (next p:constrel/2 what v p:ct))))
+(define p:constrel/2 (lambda (what l lt)
+	(begin
+		(define op (p:assoc/atom (p:kind) '((Lt lt) (Gt gt) (Le le) (Ge ge))))
+		(if op
+			(begin (p:advance) (define r (p:constshift what))
+				(define v (p:cstep (p:second op) l lt r)) (next p:constrel/2 what v p:ct))
+		(begin (set! p:ct lt) l)))))
+(define p:consteq (lambda (what)
+	(begin (define v (p:constrel what)) (next p:consteq/2 what v p:ct))))
+(define p:consteq/2 (lambda (what l lt)
+	(begin
+		(define op (p:assoc/atom (p:kind) '((Eq eq) (Ne ne))))
+		(if op
+			(begin (p:advance) (define r (p:constrel what))
+				(define v (p:cstep (p:second op) l lt r)) (next p:consteq/2 what v p:ct))
+		(begin (set! p:ct lt) l)))))
+
 (define p:constand (lambda (what)
-	(begin (define v (p:constshift what)) (next p:constand/2 what v p:ct))))
+	(begin (define v (p:consteq what)) (next p:constand/2 what v p:ct))))
 (define p:constand/2 (lambda (what l lt)
 	(if (= (p:kind) 'And)
-		(begin (p:advance) (define r (p:constshift what))
+		(begin (p:advance) (define r (p:consteq what))
 			(define v (p:cstep 'band l lt r)) (next p:constand/2 what v p:ct))
 	(begin (set! p:ct lt) l))))
 
@@ -486,13 +536,48 @@
 			(define v (p:cstep 'bxor l lt r)) (next p:constxor/2 what v p:ct))
 	(begin (set! p:ct lt) l))))
 
-(define p:const (lambda (what)
-	(begin (define v (p:constxor what)) (next p:const/2 what v p:ct))))
-(define p:const/2 (lambda (what l lt)
+(define p:constbor (lambda (what)
+	(begin (define v (p:constxor what)) (next p:constbor/2 what v p:ct))))
+(define p:constbor/2 (lambda (what l lt)
 	(if (= (p:kind) 'Or)
 		(begin (p:advance) (define r (p:constxor what))
-			(define v (p:cstep 'bor l lt r)) (next p:const/2 what v p:ct))
+			(define v (p:cstep 'bor l lt r)) (next p:constbor/2 what v p:ct))
 	(begin (set! p:ct lt) l))))
+
+;; && and || (M7b), both sides always read: a constant has no side
+;; effects to skip, and folding cannot trap (p:sarith's / of 0 aside,
+;; which a well-formed constant does not reach)
+(define p:constland (lambda (what)
+	(begin (define v (p:constbor what)) (next p:constland/2 what v))))
+(define p:constland/2 (lambda (what l)
+	(if (= (p:kind) 'Lan)
+		(begin (p:advance) (define r (p:constbor what)) (set! p:ct p:INT)
+			(next p:constland/2 what (if (if (= l 0) false (if (= r 0) false true)) 1 0)))
+	l)))
+(define p:constlor (lambda (what)
+	(begin (define v (p:constland what)) (next p:constlor/2 what v))))
+(define p:constlor/2 (lambda (what l)
+	(if (= (p:kind) 'Lor)
+		(begin (p:advance) (define r (p:constland what)) (set! p:ct p:INT)
+			(next p:constlor/2 what (if (if (= l 0) (= r 0) false) 0 1)))
+	l)))
+
+;; the whole constant expression, with ?: at the top (M7b): Busybox's
+;; libbb.h sizes its compile-time checks as `cond ? 1 : -1`
+(define p:const (lambda (what)
+	(begin
+		(define c (p:constlor what))
+		(if (= (p:kind) 'Cond)
+			(begin
+				(p:advance)
+				(define a (p:const what))
+				(define at p:ct)
+				(p:expect 'Colon "colon in constant conditional")
+				(define b (p:const what))
+				(define bt p:ct)
+				(set! p:ct (if (= c 0) bt at))
+				(if (= c 0) b a))
+		c))))
 
 ;; ---- expressions ----
 
@@ -550,26 +635,36 @@
 		(if (= (p:kind) 'Comma) (p:advance) nil)
 		(next p:args (p:cons a acc))))))
 
-;; sizeof(...): type (including struct/union/typedef names) or an
-;; array identifier
+;; sizeof of a type in parentheses (struct/union/typedef names too), or
+;; of any unary expression, parenthesized or not (M7b). An identifier
+;; stays (sizeofa NAME): its array storage, or its type's size. Any other
+;; operand is (sizeofe E), which the generator types without evaluating.
+;;
+;; `sizeof(T[n])` is sizeof(T) * n: Busybox's BUILD_BUG_ON is written
+;; ((void)sizeof(char[1 - 2*!!(cond)])), in function bodies, where the
+;; product is an ordinary expression for -O to fold.
 (define p:sizeof (lambda ()
 	(begin
 		(p:advance)
-		(p:expect 'Lparen "( after sizeof")
-		(define r
-			(if (if (= (p:kind) 'Id)
-					(= (p:assoc (p:value) p:typedefs) false)
-					false)
-				(begin
-					(define n (p:value))
-					(p:advance)
-					(list 'sizeofa n))
+		(if (if (= (p:kind) 'Lparen) (p:declstart-tok? (head (tail p:toks))) false)
 			(begin
+				(p:advance)
 				(define bt (p:basetype p:INT))
 				(define ty (p:stars bt p:bq))
-				(list 'sizeof ty))))
-		(p:expect 'Rparen ") after sizeof")
-		r)))
+				(if (= (p:kind) 'Brak)
+					(begin
+						(p:advance)
+						(define n (p:expr 1))
+						(p:expect 'Rbrak "] in sizeof")
+						(p:expect 'Rparen ") after sizeof")
+						(list 'mul (list 'sizeof ty) n))
+				(begin
+					(p:expect 'Rparen ") after sizeof")
+					(list 'sizeof ty))))
+		(begin
+			(define e (p:expr 21))
+			(if (= (head e) 'var) (list 'sizeofa (p:second e))
+			(list 'sizeofe e)))))))
 
 ;; parenthesized: cast, or (expr[, expr...]). A cast begins with a
 ;; type keyword or a typedef name -- the registries disambiguate

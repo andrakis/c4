@@ -47,6 +47,7 @@ CREATE MB-TYPE  MMAX-MEM CELLS ALLOT
 CREATE MB-OFF   MMAX-MEM CELLS ALLOT
 CREATE MB-AGG   MMAX-MEM CELLS ALLOT     \ an array member is its own address
 CREATE MB-QUAL  MMAX-MEM CELLS ALLOT     \ its qualifier mask
+CREATE MB-ASZ   MMAX-MEM CELLS ALLOT     \ an array member's bytes, for sizeof (M7b)
 VARIABLE #MEMS   0 #MEMS !
 
 : T-BASE ( t -- b )
@@ -123,9 +124,12 @@ VARIABLE #MEMS   0 #MEMS !
    o #MEMS @ CELLS MB-OFF   + !
    ag #MEMS @ CELLS MB-AGG  + !
    0 #MEMS @ CELLS MB-QUAL  + !
+   0 #MEMS @ CELLS MB-ASZ   + !
    1 #MEMS +! ;
 \ the qualifier mask of the member MEM, just recorded
 : MEM-Q! ( q -- )  #MEMS @ 1- CELLS MB-QUAL + ! ;
+\ ... and its storage in bytes, when it is an array
+: MEM-ASZ! ( n -- )  #MEMS @ 1- CELLS MB-ASZ + ! ;
 : MEM-FIND ( struct a u -- i|-1 ) {: k a u -- i :}
    #MEMS @ 0 ?DO
       I CELLS MB-OWNER + @ k = IF

@@ -1,0 +1,46 @@
+# C4IX on the command line (`make run-c4ix`): the manifest vfsload reads
+# when c4ix.c4r boots under c4m from the repo root. The Makefile copies it
+# there as c4ix.vfs.txt. Same grammar as c4ix.vfs.txt, but the names are
+# the root's, not the shared disk's: the programs are built here as
+# c4ix-NAME.c4r, and the sources and headers are read where they are in
+# the tree. No ARCHIVES: c4ix-root.tgz exists only on the disk, so
+# /usr/src/c4 and /usr/lib are left to the browser's boot.
+
+BIN_ALL = hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt gui desktop tar gunzip crc32 b4ke
+# one .c each in src/c4ix/user; the desktop is a directory of them
+BIN_SRC = hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt gui tar gunzip crc32 b4ke
+# the toolchain, as the root's default build leaves it
+TOOLS = c4cc c4rlink c4rdump cpp c4sp c4th c4sc
+
+/: root
+	bin/:
+		each($TOOLS):
+			$1: $1.c4r
+		# exercises libc (src/c4ix/libc/tests)
+		libctest: c4ix-libctest.c4r
+	# shared libraries: what a program linked with c4rlink -l loads
+	lib/:
+		libc4ix.c4s: libc4ix.c4s
+		libc.c4s: libc.c4s
+	each($BIN_ALL):
+		# c4ix-hello.c4r -> /bin/hello, and an unqualified alias at the
+		# root so "hello" works from the shell
+		$1: ilink(/bin/$1)
+		bin/:
+			$1: c4ix-$1.c4r
+	usr/
+		src/
+			bin/
+				each($BIN_SRC): $1.c: src/c4ix/user/$1.c
+			# the programs to compile inside the machine
+			examples/:
+				README.txt: src/c4ix/examples/README.txt
+				hello.c: src/c4ix/examples/hello.c
+				bounce.c: src/c4ix/examples/bounce.c
+			include/:
+				c4ix.h: src/c4ix/c4ix.h
+				c4ix_user.h: src/c4ix/include/c4ix_user.h
+		# headers a program compiled here is built against
+		include/:
+			window.h: src/c4ix/include/window.h
+			c4ix_user.h: src/c4ix/include/c4ix_user.h

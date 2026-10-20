@@ -17,6 +17,7 @@ each system uses.
 | `c4ke.vfs.txt` | `images/disk` by [../tests/build-images.sh](../tests/build-images.sh) | C4KE on the shared disk: binaries plus a `.c` beside each. |
 | `c4ke-dev.vfs.txt` | appended to `c4ke.vfs.txt` on `images/c4ke-root` | The developer half: the toolchain that builds C4IX and C4IX's sources, under `/usr/src`. Kept separate so the shared disk's manifest stays small. |
 | `c4ix.vfs.txt` | `images/disk` | C4IX on the shared disk: `/bin` and the toolchain. |
+| `c4ix-cli.vfs.txt` | the repo root as `c4ix.vfs.txt`, by the Makefile (`make run-c4ix`) | C4IX booted by c4m from the root: the `c4ix-*.c4r` built there, the libraries, and the sources and headers where they are in the tree. No root archive. |
 | `c4ke-build.vfs.txt` | the C4DOS build floppy (`c4dos-build`, `c4dos-build32`) as `c4ke.vfs.txt`, by the Makefile | The floppy where C4DOS compiles C4KE: a userland and two source archives. |
 | `c4ke-climb.vfs.txt` | the climb disk (`c4dos-c4ix32`) as `c4ke.vfs.txt`, by the Makefile | A C4KE medium that `INSTALL` wrote: binaries plus source archives, no loose `.c` files. |
 | `c4ix-climb.vfs.txt` | the climb disk as `c4ix.vfs.txt`, by the Makefile | A C4IX medium that `kinstall` wrote: binaries plus `c4ix-src.tar`. |

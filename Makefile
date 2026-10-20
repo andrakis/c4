@@ -2853,9 +2853,16 @@ bench-c4ix: c4m c4ix.c4r $(C4IX_PROGS)
 # nothing to do: c4ix-sh with no script, so it reads fd 0 -- you.
 # `help` lists builtins; `exit` or Ctrl-D leaves, which shuts the
 # kernel down. `c4ix.c4r --help` lists the other modes.
-run-c4ix: c4m c4ix.c4r $(C4IX_PROGS)
+# Booted with no program, init runs vfsload, which reads ./c4ix.vfs.txt
+# from where c4m started: the command line's own manifest, copied from
+# src/c4bb/fs/c4ix-cli.vfs.txt, naming the files as they are here. With
+# none, the shell starts on an empty /.
+C4IX_CLI_FILES := c4ix.vfs.txt libc4ix.c4s libc.c4s c4ix-libctest.c4r
+c4ix.vfs.txt: $(SRCS)/c4bb/fs/c4ix-cli.vfs.txt
+	cp $< $@
+run-c4ix: c4m c4ix.c4r $(C4IX_PROGS) $(C4IX_CLI_FILES)
 	$(C4M) load-c4r.c -- c4ix.c4r
-run-c4ix-c4: c4 c4m c4ix.c4r $(C4IX_PROGS)
+run-c4ix-c4: c4 c4m c4ix.c4r $(C4IX_PROGS) $(C4IX_CLI_FILES)
 	$(C4) $(C4M).c load-c4r.c -- c4ix.c4r
 # The guided tour instead: every milestone's demonstration in order,
 # ending with the shell running the test script.

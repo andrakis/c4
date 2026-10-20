@@ -34,6 +34,9 @@ libc.c4s
 /c4rlink
 /c4sp
 
+# copied from src/c4bb/fs/c4ix-cli.vfs.txt by `make run-c4ix`
+/c4ix.vfs.txt
+
 # c4bb (the breadboard computer): 32-bit native toolchain builds, and
 # the whole images/ tree, which build-images.sh regenerates from
 # source (src/c4bb/fs/*.vfs.txt is the actual source and lives outside

@@ -178,7 +178,28 @@ int  theme_count();
 char *theme_name(int i);
 int  theme_scheme();               // the scheme in use
 int  theme_bg();                   // the desktop's own colour, or -1 for the scheme's
-void theme_set(int scheme, int bg); // use, redraw, and remember them (/etc/desktop.cfg)
+void theme_set(int scheme, int bg); // use, redraw, and remember them (/etc/desktop.cfg); the picture off
+void theme_set_wall(int on);        // the picture (wall.c) on or off, remembered too
+int  theme_wall();
+int  theme_saver();
+int  theme_wait();
+void theme_set_saver(int which, int wait);   // the screen saver and its minutes, remembered
+void saver_preview();                        // the chosen saver now (Settings)
+// savers.c: the screen savers
+enum { SAVER_MS = 33 };
+int  saver_count();
+char *saver_name(int i);
+int  saver_active();
+void saver_start(int which);
+void saver_frame();
+void saver_stop();
+int  saver_frames();
+// wall.c: the desktop's picture
+int  wall_load(char *path);
+int  wall_draw(int x, int y, int w, int h);   // 0: no picture, fill with C_DESK
+int  wall_shown();
+void d_imgdef(int id, int w, int h, int *px);
+void d_image(int id, int x, int y);
 int  theme_swatch(int i);          // the desktop colours Settings offers, 0..7
 
 int  settings_open();

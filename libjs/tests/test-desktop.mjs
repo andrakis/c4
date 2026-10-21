@@ -54,6 +54,8 @@ const consoleText = () => Buffer.from(out).toString('latin1');
 // anything, as before: the tests look for text by what was drawn.
 let frame = [], cur = [], presents = 0, rects = [], curRects = [], pointer = 0;
 let gen = 0, clip = null, partial = false;
+let imgdefs = 0, imgs = 0, curImgs = 0;
+const imgSize = new Map();
 const within = (r, x, y) => x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h;
 const cut = (a, b) => {
   const x = Math.max(a.x, b.x), y = Math.max(a.y, b.y);
@@ -63,11 +65,16 @@ const pump = () => {
   const words = gui.drain();
   for (let i = 0; words && i < words.length; i += words[i]) {
     const t = words[i + 1];
-    if (t === CMD.CLEAR) { cur = []; curRects = []; partial = false; }
+    if (t === CMD.CLEAR) { cur = []; curRects = []; partial = false; curImgs = 0; }
+    if (t === CMD.IMGDEF) { imgSize.set(words[i + 2], { w: words[i + 3], h: words[i + 4] }); imgdefs++; }
     if (t === CMD.CLIP) clip = { x: words[i + 2], y: words[i + 3], w: words[i + 4], h: words[i + 5] };
     if (t === CMD.NOCLIP) clip = null;
-    if (t === CMD.RECT) {
-      const r = { x: words[i + 2], y: words[i + 3], w: words[i + 4], h: words[i + 5], rgb: words[i + 6], gen };
+    // an image (the desktop's picture) covers what is under it, as a rectangle does
+    const z = t === CMD.IMG ? imgSize.get(words[i + 2]) : null;
+    if (t === CMD.RECT || z) {
+      const r = z ? { x: words[i + 3], y: words[i + 4], w: z.w, h: z.h, rgb: -1, gen }
+                  : { x: words[i + 2], y: words[i + 3], w: words[i + 4], h: words[i + 5], rgb: words[i + 6], gen };
+      if (z) curImgs++;
       const v = clip ? cut(r, clip) : r;
       if (partial && v.w > 0 && v.h > 0) {
         cur = cur.filter(s => s.gen === gen || !within(v, s.x, s.y));
@@ -82,7 +89,7 @@ const pump = () => {
       if (!partial || !clip || within(clip, words[i + 2], words[i + 3]))
         cur.push({ x: words[i + 2], y: words[i + 3], s, rgb: words[i + 4], adv: words[i + 7], gen });
     }
-    if (t === CMD.PRESENT) { frame = cur.slice(); rects = curRects.slice(); presents++; gen++; partial = true; }
+    if (t === CMD.PRESENT) { frame = cur.slice(); rects = curRects.slice(); imgs = curImgs; presents++; gen++; partial = true; }
     if (t === CMD.CURSOR) pointer = words[i + 2];
   }
 };
@@ -166,6 +173,16 @@ check(/entries left on the host until first use/.test(consoleText()) && files.fe
 // archive brings: let its background unpack (task 4) finish first
 typeBytes(vm, new TextEncoder().encode('wait 4\n'));
 check(until(() => consoleText().includes('[4] done (0)'), 3000), 'the root archive unpacks in the background');
+// No screen saver: headless, an idle machine covers its five minutes
+// within a long build (the savers are tried below, from Settings)
+{
+  const c0 = consoleText().length;
+  typeBytes(vm, new TextEncoder().encode('mkdir /etc\n'));
+  until(() => /c4ix:\/\$ ?$/.test(consoleText().slice(c0).trimEnd() + ' '));
+  const c1 = consoleText().length;
+  typeBytes(vm, new TextEncoder().encode('echo scheme 0 bg -1 wall 1 saver 0 wait 5 > /etc/desktop.cfg\n'));
+  until(() => /c4ix:\/\$ ?$/.test(consoleText().slice(c1).trimEnd() + ' '));
+}
 typeBytes(vm, new TextEncoder().encode('desktop\n'));
 check(until(() => consoleText().includes('desktop: running on the display')), 'desktop starts from the console');
 check(until(() => gui.w === SW && gui.h === SH && presents > 0), `it asks for ${SW}x${SH} and draws`);
@@ -595,6 +612,40 @@ check(until(() => rects.some(r => r.rgb === 0xc0c0c0 && r.w > 300) && !rects.som
 key('ESC');
 until(() => !has('Color scheme'));
 
+// ---- the picture, and the screen savers ------------------------------------------------------
+check(imgdefs === 64 && imgs >= 1, 'the desktop\'s picture went to the display once, as 64 tiles, and is drawn', `imgdefs ${imgdefs} imgs ${imgs}`);
+start('Settings');
+check(until(() => has('Picture: C4IX') && has('Screen saver') && has('Starfield') && has('Digital Rain') && has('5 min')),
+  'Settings has the picture and the screen savers', screen());
+clickText('The scheme\'s colour', 'last', -8, 5);
+check(until(() => imgs === 0), 'the scheme\'s colour turns the picture off', `imgs ${imgs}`);
+clickText('Picture: C4IX', 'last', -8, 5);
+check(until(() => imgs > 0), 'and Picture turns it back on', `imgs ${imgs}`);
+clickText('Polygons', 'last', -8, 5);
+clickText('-');
+check(until(() => has('4 min')), 'the wait goes down a minute', screen());
+clickText('Preview');
+{
+  const p = presents;
+  check(until(() => !has('Start') && presents > p + 10), 'Preview runs the screen saver over everything', screen());
+}
+key('a');
+check(until(() => has('Start') && has('Screen saver')), 'a key ends it and the desktop comes back as it was', screen());
+key('ESC');
+until(() => !has('Screen saver'));
+// a Command Prompt's title, not its taskbar button (drawn after the windows)
+clickText(/^Command Prompt - task/, 'first');
+type('cat /etc/desktop.cfg\n');
+check(until(() => has(/wall 1 saver 2 wait 4/), 800), 'the picture and the saver are kept in /etc/desktop.cfg',
+  frame.filter(t => /scheme|saver|cat /.test(t.s)).map(t => t.s.trimEnd()).join(' | '));
+// and no saver again, or the long waits below would start one over the clicks they make
+start('Settings');
+until(() => has('Screen saver'));
+clickText('(None)', 'last', -8, 5);
+check(until(() => frame.some(t => t.s.trimEnd() === '(None)')), 'and (None) turns the screen saver off');
+key('ESC');
+until(() => !has('Screen saver'));
+
 // ---- Run --------------------------------------------------------------------------------------
 start('Run...');
 check(until(() => has(/Type the name of a program/)), 'Start > Run asks for a program');
@@ -613,7 +664,7 @@ check(until(() => opened() === nopen + 10) && opened() > 8, 'ten more windows op
 
 // ---- Shut Down --------------------------------------------------------------------------------
 start('Shut Down...');
-check(until(() => consoleText().includes('desktop: shut down')), 'Shut Down ends the desktop');
+check(until(() => consoleText().includes('desktop: shut down'), 2000), 'Shut Down ends the desktop', consoleText().slice(-500) + ' / screen: ' + screen().slice(-400));
 typeBytes(vm, new TextEncoder().encode('ps\n'));
 check(until(() => /tasks,/.test(consoleText().split('desktop: shut down').pop())), 'and the console shell carries on');
 const psOut = consoleText().split('desktop: shut down').pop();

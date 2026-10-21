@@ -62,6 +62,8 @@ static char *theme_names[N_THEMES];
 static int themes[N_THEMES * T_COLS];
 static int swatches[8];
 static int cur_scheme, cur_bg;
+static int cur_wall;               // the picture (wall.c) under everything, or the colour
+static int cur_saver, cur_wait;    // the screen saver (savers.c, 0 none) and after how many minutes
 
 static void theme_row(int i, char *name, int desk, int face, int light, int shadow,
                       int t1, int t2, int it1, int it2) {
@@ -82,7 +84,7 @@ static void theme_init() {
     theme_row(7, "Storm",            0x202830, 0xa8a8a8, 0xe8e8e8, 0x606060, 0x303848, 0x607088, 0x707070, 0x989898);
     swatches[0] = 0x008080; swatches[1] = 0x000040; swatches[2] = 0x000000; swatches[3] = 0x3a4a5a;
     swatches[4] = 0x205030; swatches[5] = 0x502850; swatches[6] = 0xa09070; swatches[7] = 0x606060;
-    cur_scheme = 0; cur_bg = 0 - 1;
+    cur_scheme = 0; cur_bg = 0 - 1; cur_wall = 1; cur_saver = 1; cur_wait = 5;
 }
 static void theme_apply() {
     int *t;
@@ -95,11 +97,14 @@ int theme_count() { return N_THEMES; }
 char *theme_name(int i) { return i >= 0 && i < N_THEMES ? theme_names[i] : ""; }
 int theme_scheme() { return cur_scheme; }
 int theme_bg() { return cur_bg; }
+int theme_wall() { return cur_wall; }
+int theme_saver() { return cur_saver; }
+int theme_wait() { return cur_wait; }
 int theme_swatch(int i) { return i >= 0 && i < 8 ? swatches[i] : 0; }
 
-// /etc/desktop.cfg: "scheme N bg V", read when the desktop starts, so a
+// /etc/desktop.cfg: "scheme N bg V wall W saver S wait M", read when the desktop starts, so a
 // choice outlives Shut Down (not a reload of the page: the disk is RAM)
-static char cfg[64];
+static char cfg[96];
 static int cfg_num(char *s, int *v) {
     int n, neg, k;
     n = 0; neg = 0; k = 0;
@@ -111,7 +116,7 @@ static int cfg_num(char *s, int *v) {
 static void theme_load() {
     int fd, n, i, v;
     if ((fd = uopen("/etc/desktop.cfg", O_RD)) < 0) return;
-    n = uread(fd, cfg, 63);
+    n = uread(fd, cfg, 95);
     uclose(fd);
     if (n <= 0) return;
     cfg[n] = 0;
@@ -122,6 +127,9 @@ static void theme_load() {
             if (v >= 0 && v < N_THEMES) cur_scheme = v;
         }
         if (cfg[i] == 'b' && cfg[i + 1] == 'g' && cfg[i + 2] == ' ') { cfg_num(cfg + i + 3, &v); cur_bg = v; }
+        if (cfg[i] == 'w' && cfg[i + 1] == 'a' && cfg[i + 2] == 'l' && cfg[i + 4] == ' ') { cfg_num(cfg + i + 5, &v); cur_wall = v != 0; }
+        if (cfg[i] == 's' && cfg[i + 1] == 'a' && cfg[i + 5] == ' ') { cfg_num(cfg + i + 6, &v); if (v >= 0 && v < saver_count()) cur_saver = v; }
+        if (cfg[i] == 'w' && cfg[i + 1] == 'a' && cfg[i + 2] == 'i' && cfg[i + 4] == ' ') { cfg_num(cfg + i + 5, &v); if (v >= 1 && v <= 60) cur_wait = v; }
         ++i;
     }
     theme_apply();
@@ -134,6 +142,10 @@ static void theme_save() {
     ui_num(cfg + ui_len(cfg), cur_scheme);
     ui_cat(cfg, " bg ");
     if (cur_bg < 0) ui_cat(cfg, "-1"); else ui_num(cfg + ui_len(cfg), cur_bg);
+    ui_cat(cfg, cur_wall ? " wall 1 saver " : " wall 0 saver ");
+    ui_num(cfg + ui_len(cfg), cur_saver);
+    ui_cat(cfg, " wait ");
+    ui_num(cfg + ui_len(cfg), cur_wait);
     ui_cat(cfg, "\n");
     write(fd, cfg, ui_len(cfg));
     uclose(fd);
@@ -141,9 +153,31 @@ static void theme_save() {
 void theme_set(int scheme, int bg) {
     if (scheme >= 0 && scheme < N_THEMES) cur_scheme = scheme;
     cur_bg = bg;
+    cur_wall = 0;
     theme_apply();
     theme_save();
     dirty = 1;
+}
+// the picture on or off; the colour stays what it was
+void theme_set_wall(int on) {
+    cur_wall = on != 0;
+    theme_save();
+    dirty = 1;
+}
+// the screen saver (savers.c) and its wait, in minutes
+void theme_set_saver(int which, int wait) {
+    if (which >= 0 && which < saver_count()) cur_saver = which;
+    if (wait >= 1 && wait <= 60) cur_wait = wait;
+    theme_save();
+    dirty = 1;
+}
+
+// Settings' Preview: the saver now, past the click that asked for it
+static int saver_grace;
+void saver_preview() {
+    if (!cur_saver) return;
+    saver_start(cur_saver);
+    saver_grace = __time() + 400;
 }
 
 // ---- damage ----
@@ -691,6 +725,8 @@ static void icon(int x, int y, char *label, int kind) {
         else d_icon(kind, x + 16, y + 8);
     }
     lw = ui_len(label) * 6;
+    // over the picture, a shadow to read it by
+    if (wall_shown()) d_text(x + 25 - lw / 2, y + 37, 0x000000, F_SANS, label);
     d_text(x + 24 - lw / 2, y + 36, C_LIGHT, F_SANS, label);
 }
 
@@ -816,10 +852,15 @@ static void draw_taskbar() {
     d_text(SW - 64, SH - TASK_H + 9, C_DARK, F_SANS, tbuf);
 }
 
+// the picture (wall.c), on the display as tiles it keeps
+void d_imgdef(int id, int w, int h, int *px) { gui_imgdef(id, w, h, px); }
+void d_image(int id, int x, int y) { gui_image(id, x, y); }
+
 static void redraw() {
     int k;
     struct win *w, *f;
     gui_clear(C_DESK);
+    wall_draw(0, 0, SW, SH);
     k = 0;
     while (k < N_ICONS) { icon(18, 14 + k * 72, icon_labels[k], icon_kinds[k]); ++k; }
     f = focus();
@@ -845,7 +886,8 @@ static void redraw_part() {
     if (menu_win || start_open) { redraw(); return; }
     part = 1;
     wnoclip();
-    gui_rect(dmg_x0, dmg_y0, dmg_x1 - dmg_x0, dmg_y1 - dmg_y0, C_DESK);
+    if (!wall_draw(dmg_x0, dmg_y0, dmg_x1 - dmg_x0, dmg_y1 - dmg_y0))
+        gui_rect(dmg_x0, dmg_y0, dmg_x1 - dmg_x0, dmg_y1 - dmg_y0, C_DESK);
     k = 0;
     while (k < N_ICONS) {
         // an icon's label is centred under it and can be wider than it
@@ -1109,6 +1151,7 @@ static void shutdown_screen() {
 
 int main(int argc, char **argv) {
     int *region, k, busy, secs, clock_min, last_tick, last_draw, input, start_ms, second_draw;
+    int last_input, last_frame;
     struct win *w;
 
     if (!gui_present()) { printf("desktop: not fitted\n"); return 0; }
@@ -1119,6 +1162,7 @@ int main(int argc, char **argv) {
     gui_events(GUI_M_MOVE | GUI_M_BUTTONS | GUI_M_KEYS | GUI_M_WHEEL | GUI_M_WINDOW);
     theme_init();
     theme_load();
+    wall_load("/usr/share/splash/c4ix.c4p.gz");
     ev = ualloc(4 * sizeof(int));
 
     icon_labels[0] = "My Computer"; icon_kinds[0] = 0;
@@ -1148,11 +1192,23 @@ int main(int argc, char **argv) {
     running = 1; dirty = 1;
     clock_min = 0 - 1; last_tick = 0; last_draw = 0;
     start_ms = now_ms(); second_draw = 0;
+    last_input = __time(); last_frame = 0;
     while (running) {
         busy = 0; input = 0;
         sweep();
         while (gui_poll(ev)) {
             busy = 1; input = 1;
+            last_input = __time();
+            // a screen saver running: the first key or movement ends it, and
+            // goes no further (except while a Preview's click is let go)
+            if (saver_active()) {
+                if (__time() - saver_grace < 0) continue;
+                if (ev[0] == GUI_EV_RESIZE || ev[0] == GUI_EV_FOCUS) continue;
+                saver_stop();
+                gui_cursor(GUI_PTR_ARROW);
+                dirty = 1;
+                continue;
+            }
             if (ev[0] == GUI_EV_DOWN) mouse_down(ev[1], ev[2], ev[3]);
             else if (ev[0] == GUI_EV_UP) mouse_up(ev[1], ev[2]);
             else if (ev[0] == GUI_EV_MOVE) mouse_move(ev[1], ev[2]);
@@ -1194,6 +1250,23 @@ int main(int argc, char **argv) {
         // can read. Machine time (__time), the clock the desktop sleeps on:
         // host time runs at a different rate whenever the machine is not
         // paced to it.
+        // The screen saver: after cur_wait minutes with no input, and then
+        // a frame every SAVER_MS in place of the desktop's own drawing
+        if (!saver_active() && cur_saver && __time() - last_input >= cur_wait * 60000) {
+            saver_start(cur_saver);
+            gui_cursor(GUI_PTR_NONE);
+        }
+        if (saver_active()) {
+            if (__time() - last_frame >= SAVER_MS) {
+                saver_frame();
+                gui_show();
+                last_frame = __time();
+            }
+            k = SAVER_MS - (__time() - last_frame);
+            if (k < 1) k = 1;
+            uevwait(k, gui_in, 0);
+            continue;
+        }
         if ((dirty || dmg) && (input || __time() - last_draw >= 25)) {
             if (dirty) redraw(); else redraw_part();
             last_draw = __time();

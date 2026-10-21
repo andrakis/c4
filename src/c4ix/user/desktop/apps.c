@@ -278,6 +278,7 @@ void about_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
 // /etc/desktop.cfg), beside a preview drawn in the colours in use.
 
 static char *dflt_label;
+static char sbuf[16];
 
 int settings_open() {
     int k;
@@ -285,7 +286,7 @@ int settings_open() {
     w = win_first();
     while (w) { if (w->used && w->kind == K_SETTINGS) { win_raise(w->id); return w->id; } w = w->next; }
     dflt_label = "Defaults";
-    return win_open(K_SETTINGS, "Settings", 420, 330);
+    return win_open(K_SETTINGS, "Settings", 440, 380);
 }
 
 void settings_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
@@ -297,16 +298,18 @@ void settings_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     sel = theme_scheme();
     i = 0;
     while (i < n) { ui_radio(ox + 18, oy + 26 + i * 20, theme_name(i), i == sel); ++i; }
-    // the desktop: the scheme's own, or one of eight
+    // the desktop: the picture, the scheme's colour, or one of eight
     y = oy + 36 + n * 20;
-    ui_group(ox + 8, y, 180, 74, "Desktop");
-    ui_radio(ox + 18, y + 16, "The scheme's", theme_bg() < 0);
+    ui_group(ox + 8, y, 180, 94, "Desktop");
+    ui_radio(ox + 18, y + 16, "Picture: C4IX", theme_wall());
+    ui_radio(ox + 18, y + 36, "The scheme's colour", !theme_wall() && theme_bg() < 0);
     i = 0;
     while (i < 8) {
         x = ox + 18 + i * 20;
-        d_rect(x, y + 40, 16, 16, theme_swatch(i));
-        d_recto(x - 1, y + 39, 18, 18, theme_bg() == theme_swatch(i) ? C_DARK : C_SHADOW);
-        if (theme_bg() == theme_swatch(i)) d_recto(x - 2, y + 38, 20, 20, C_DARK);
+        sel = !theme_wall() && theme_bg() == theme_swatch(i);
+        d_rect(x, y + 60, 16, 16, theme_swatch(i));
+        d_recto(x - 1, y + 59, 18, 18, sel ? C_DARK : C_SHADOW);
+        if (sel) d_recto(x - 2, y + 58, 20, 20, C_DARK);
         ++i;
     }
     // the preview: the desktop, an inactive window, an active one
@@ -324,33 +327,58 @@ void settings_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     d_rect(x + 40, y + 96, 60, 15, C_SEL);
     d_text(x + 42, y + 97, C_WHITE, F_SANS, "Selected");
     ui_button(x + 110, y + 122, 76, 22, "OK", 0, 1);
-    ui_button(ox + cw - 96, oy + ch - 34, 86, 24, dflt_label, 0, 0);
+    // the screen saver: which, after how long, and a look at it now
+    x = ox + 200; y = oy + 192;
+    n = saver_count();
+    ui_group(x, y, cw - 210, 26 + n * 18, "Screen saver");
+    sel = theme_saver();
+    i = 0;
+    while (i < n) { ui_radio(x + 10, y + 16 + i * 18, saver_name(i), i == sel); ++i; }
+    ui_button(x + 130, y + 14, 70, 22, "Preview", 0, 0);
+    ui_num(sbuf, theme_wait());
+    ui_cat(sbuf, " min");
+    d_text(x + 130, y + 46, C_DARK, F_SANS, "Wait:");
+    ui_button(x + 130, y + 62, 22, 20, "-", 0, 0);
+    d_text(x + 156, y + 66, C_DARK, F_SANS, sbuf);
+    ui_button(x + 192, y + 62, 22, 20, "+", 0, 0);
+    ui_button(ox + 8, oy + ch - 34, 86, 24, dflt_label, 0, 0);
 }
 
 void settings_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
-    int n, i, sy;
+    int n, i, sy, k;
     if (ev != E_DOWN) return;
     n = theme_count();
     i = 0;
     while (i < n) {
-        if (ui_hit(x, y, 14, 24 + i * 20, 170, 18)) { theme_set(i, theme_bg()); return; }
+        if (ui_hit(x, y, 14, 24 + i * 20, 170, 18)) { k = theme_wall(); theme_set(i, theme_bg()); theme_set_wall(k); return; }
         ++i;
     }
     sy = 36 + n * 20;
-    if (ui_hit(x, y, 14, sy + 14, 170, 18)) { theme_set(theme_scheme(), 0 - 1); return; }
+    if (ui_hit(x, y, 14, sy + 14, 170, 18)) { theme_set_wall(1); return; }
+    if (ui_hit(x, y, 14, sy + 34, 170, 18)) { theme_set(theme_scheme(), 0 - 1); return; }
     i = 0;
     while (i < 8) {
-        if (ui_hit(x, y, 16 + i * 20, sy + 38, 20, 20)) { theme_set(theme_scheme(), theme_swatch(i)); return; }
+        if (ui_hit(x, y, 16 + i * 20, sy + 58, 20, 20)) { theme_set(theme_scheme(), theme_swatch(i)); return; }
         ++i;
     }
-    if (ui_hit(x, y, cw - 96, ch - 34, 86, 24)) theme_set(0, 0 - 1);
+    // the screen saver group (settings_draw)
+    i = 0;
+    while (i < saver_count()) {
+        if (ui_hit(x, y, 206, 206 + i * 18, 120, 16)) { theme_set_saver(i, theme_wait()); return; }
+        ++i;
+    }
+    if (ui_hit(x, y, 330, 206, 70, 22)) { saver_preview(); return; }
+    if (ui_hit(x, y, 330, 254, 22, 20)) { theme_set_saver(theme_saver(), theme_wait() - 1); return; }
+    if (ui_hit(x, y, 392, 254, 22, 20)) { theme_set_saver(theme_saver(), theme_wait() + 1); return; }
+    if (ui_hit(x, y, 8, ch - 34, 86, 24)) { theme_set(0, 0 - 1); theme_set_wall(1); }
 }
 
 // Up and Down walk the schemes; Esc or Enter closes
 void settings_key(struct win *w, int code, int ch, int mods) {
-    int s;
+    int s, w2;
     s = theme_scheme();
-    if (code == KEY_UP && s > 0) theme_set(s - 1, theme_bg());
-    else if (code == KEY_DOWN && s < theme_count() - 1) theme_set(s + 1, theme_bg());
+    w2 = theme_wall();
+    if (code == KEY_UP && s > 0) { theme_set(s - 1, theme_bg()); theme_set_wall(w2); }
+    else if (code == KEY_DOWN && s < theme_count() - 1) { theme_set(s + 1, theme_bg()); theme_set_wall(w2); }
     else if (code == KEY_ESC || code == KEY_ENTER) win_close(win_index(w));
 }

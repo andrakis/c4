@@ -557,3 +557,44 @@ it lacked was somewhere to edit and build in one place.
       logo up and animates; the desktop and top start only after the
       archive is unpacked; `cat /log/kernel` has the kernel's and vfsload's
       lines and not top's. Seen in a browser too (2026-10-21).
+
+## Part nine: the boot logo as the desktop's picture, and screen savers (asked for 2026-10-21)
+
+- [x] **The picture** (`wall.c`): the boot logo, stretched over the
+      desktop (it is made at the desktop's 800x600, so 1:1 today). The
+      desktop inflates it once at start, from the same file splash shows
+      (`/usr/share/splash/c4ix.c4p.gz`, so it links libarc now), and gives
+      the display 64 tiles of 100x75 (`gui_imgdef`: a tile has to fit the
+      command ring), which the display keeps. Every redraw of the
+      background then draws only the tiles it needs (`gui_image`), clipped
+      to the damage like everything else. Icon labels get a dark shadow
+      over it. Settings: "Picture: C4IX" (the default), or the scheme's
+      colour, or one of the eight; `/etc/desktop.cfg` gains `wall 0|1`.
+- [x] **Screen savers** (`savers.c`), after the user's RetroSavers (D3D
+      ports of the classics), redone in integer arithmetic with the
+      display's line, rectangle and text commands: Starfield, Polygons
+      (two shapes bouncing, trailing their last outlines), Beziers (a loop
+      of cubic curves with a fading trail), Marquee (a line of text
+      crawling across) and Digital Rain (columns of falling characters).
+      The names are generic ones. After the chosen number of minutes with
+      no input -- machine minutes, the clock the desktop sleeps on -- the
+      saver takes the whole display, a frame every 33 ms, with the pointer
+      hidden; the first key or movement ends it and the desktop is drawn
+      again as it was. Settings has a Screen saver group: which (or
+      None), the wait (1-60 minutes, default 5, Starfield), and Preview;
+      `/etc/desktop.cfg` gains `saver S wait M`. Defaults is the look
+      only: it leaves the saver as it is.
+- [x] Pinned by `test-desktop.mjs`: the picture goes to the display once
+      as 64 tiles and is drawn; the scheme's colour turns it off and
+      Picture back on; Preview runs a saver over everything and a key ends
+      it; the choices are kept in `/etc/desktop.cfg`. The test starts the
+      desktop with no saver chosen: headless, an idle machine covers five
+      minutes within one of its long builds.
+
+### Found on the way, not fixed
+
+- One more Command Prompt open (a Run of `cat`, say) before Shut Down,
+  late in test-desktop's long run, and the desktop exits without its
+  "desktop: shut down": the shell's prompt comes back, the line never
+  does. Shut Down straight after boot, or after the picture and saver
+  checks alone, is fine; so is the whole run without that window.

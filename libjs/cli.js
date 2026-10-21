@@ -22,6 +22,8 @@
 
 import { readFileSync, readdirSync, statSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { spawn } from 'node:child_process';
+import { constants } from 'node:os';
 import { createMachine, boot } from './boot.js';
 import { STOP } from './c4m.js';
 
@@ -188,4 +190,25 @@ async function main(argv) {
   return status & 0xff;
 }
 
-main(process.argv.slice(2)).then(s => process.exit(s), e => { console.error(e); process.exit(70); });
+// Node 26 can hang in process exit: about one run in twenty (more under
+// load) the main thread waits forever on a concurrent TurboFan job, after
+// the program has finished and its output is out. So the machine runs in
+// a child, which tells this process its status just before it exits; if
+// it has not gone a few seconds later, it is stuck there and is killed.
+// (--no-concurrent-recompilation avoids the hang too, at a third of the
+// speed.)
+if (process.send && process.env.LIBJS_CHILD) {
+  const done = s => process.send({ status: s }, () => process.exit(s));
+  main(process.argv.slice(2)).then(done, e => { console.error(e); done(70); });
+} else {
+  const child = spawn(process.execPath, [...process.execArgv, ...process.argv.slice(1)],
+    { stdio: ['inherit', 'inherit', 'inherit', 'ipc'], env: { ...process.env, LIBJS_CHILD: '1' } });
+  let status = null;
+  child.on('message', m => {
+    status = m.status;
+    setTimeout(() => child.kill('SIGKILL'), 3000).unref();
+  });
+  child.on('exit', (code, sig) => process.exit(status !== null ? status : code !== null ? code : 128 + (constants.signals[sig] || 9)));
+  // the child has the terminal's Ctrl-C to itself
+  process.on('SIGINT', () => {});
+}

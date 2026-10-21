@@ -61,6 +61,7 @@ const cut = (a, b) => {
   const x = Math.max(a.x, b.x), y = Math.max(a.y, b.y);
   return { x, y, w: Math.min(a.x + a.w, b.x + b.w) - x, h: Math.min(a.y + a.h, b.y + b.h) - y };
 };
+let rgbFrames = 0, rgbLast = null;
 const pump = () => {
   const words = gui.drain();
   for (let i = 0; words && i < words.length; i += words[i]) {
@@ -91,6 +92,15 @@ const pump = () => {
     }
     if (t === CMD.PRESENT) { frame = cur.slice(); rects = curRects.slice(); imgs = curImgs; presents++; gen++; partial = true; }
     if (t === CMD.CURSOR) pointer = words[i + 2];
+    // an 8-bit frame, made 32-bit by the device (GUI_BLIT8): count them,
+    // and keep the last one's size and a sum of its pixels
+    if (t === CMD.RGB) {
+      rgbFrames++;
+      const w = words[i + 4], h = words[i + 5];
+      let sum = 0;
+      for (let k = 0; k < w * h; k += 97) sum = (sum * 31 + words[i + 8 + k]) | 0;
+      rgbLast = { w, h, dw: words[i + 6], dh: words[i + 7], sum };
+    }
   }
 };
 // run() returns early whenever the guest sleeps, so waiting is until()'s job
@@ -658,6 +668,23 @@ clickText('(None)', 'last', -8, 5);
 check(until(() => frame.some(t => t.s.trimEnd() === '(None)')), 'and (None) turns the screen saver off');
 key('ESC');
 until(() => !has('Screen saver'));
+
+// ---- Wolfenstein 3D: a game in a Terminal, its frames 8-bit (GUI_BLIT8) -----------------------
+clickText(/^Terminal - task/, 'first');
+type('wolf3d\n');
+check(until(() => has(/Unpacking the shareware episode/), 1500), 'wolf3d unpacks the shareware episode the first time', screen());
+check(until(() => rgbFrames > 0 && has('Wolfenstein 3D'), 3000), 'and shows its frames in the window, which it titles',
+  `frames ${rgbFrames} ` + screen().slice(-300));
+check(rgbLast && rgbLast.w === 320 && rgbLast.h === 200 && rgbLast.dw === 640 && rgbLast.dh === 400,
+  '320x200 in 8 bits, scaled to the canvas', JSON.stringify(rgbLast));
+{
+  // the sign-on screen waits for a key; then the title, a new picture
+  const before = rgbLast.sum, n = rgbFrames;
+  key(' ', 0, 32);
+  check(until(() => rgbFrames > n + 2 && rgbLast.sum !== before, 1500), 'a key goes to the game, which moves on', `frames ${rgbFrames}`);
+}
+key('c', 2, 67);
+check(until(() => has(/^Terminal - task/), 800), 'Ctrl-C stops it, and the window is a Terminal again', screen().slice(-300));
 
 // ---- Run --------------------------------------------------------------------------------------
 start('Run...');

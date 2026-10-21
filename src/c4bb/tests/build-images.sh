@@ -393,6 +393,15 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     rm -f .c4bb_ix_*.c4o .c4bb_ix_*.pp.c
 fi
 
+# Wolfenstein 3D (src/wolf3d): make wolf3d-objs compiled it a unit at a
+# time, so it is linked here whether or not C4IX was rebuilt above, against
+# the libc kept from the last time it was. It goes on the disk beside
+# Apogee's shareware package, which it unpacks the first time it runs.
+if ls .wolf3d/*.c4o > /dev/null 2>&1 && [ -f $PB/lib/libc.c4s ]; then
+    ./c4rlink32 .wolf3d/*.c4o -l $PB/lib/libc.c4s -o $DISK/c4ix-wolf3d.c4r > /dev/null
+    cp src/wolf3d/data/1wolf14.zip $DISK/1wolf14.zip
+fi
+
 # the C4IX VFS manifest and the plain-text sources it references -
 # c4ix.vfs.txt is curated SOURCE (see src/c4bb/fs/), copied in like
 # c4ke.vfs.txt above, not regenerated with the rest of images/.
@@ -576,7 +585,7 @@ rm -rf $ROOT
 mkdir -p $ROOT/usr/lib $ROOT/usr/include
 if git rev-parse --git-dir > /dev/null 2>&1; then
     git ls-files -- src docs include libjs README.md LICENSE Makefile BUILD.B4K INSTALL.B4K c4.c c4m.c c4m_float.c c4l.c load-c4r.c |
-        grep -v '^src/c4bb/images/\|^src/c4or1k/images/' |
+        grep -v '^src/c4bb/images/\|^src/c4or1k/images/\|^src/wolf3d/' |
         while read -r f; do
             [ -f "$f" ] && grep -Iq . "$f" 2>/dev/null || continue
             mkdir -p "$ROOT/usr/$(dirname "$f")"

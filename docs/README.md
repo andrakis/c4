@@ -40,6 +40,7 @@ detail behind it. Each doc is one of three kinds:
 | [c4ix-design.md](c4ix-design.md) | reference | C4IX: why it exists, its modules, syscalls and milestones |
 | [c4ix-desktop.md](c4ix-desktop.md) | tracker (done) | The C4IX desktop on libjs |
 | [c4ix-cpu.md](c4ix-cpu.md) | tracker (done) | Where C4IX's cycles go: the profiler, CPU accounting, the idle task, and the eleven steps that made it cheaper |
+| [c4ix-wolf3d.md](c4ix-wolf3d.md) | design | Wolfenstein 3D in a desktop window: Wolf4SDL by c4lc, the shareware zip unpacked at first run, 8-bit frames through `GUI_BLIT8`, and how fast |
 | [busybox-port.md](busybox-port.md) | tracker | Busybox compiled by c4lc for C4IX: the measured compiler, kernel and libc gaps, and the order of work |
 | [c4dos-design.md](c4dos-design.md) | reference | C4DOS: the trap-free DOS, its API table and floppies |
 | [climbing-the-ladder.md](climbing-the-ladder.md) | reference | The ladder by hand on the breadboard: C4DOS → C4KE → C4IX, each built by the one before |
@@ -54,7 +55,7 @@ detail behind it. Each doc is one of three kinds:
 | [c4sp-design.md](c4sp-design.md) | reference | c4sp, the Lisp: cells, the collector, the CEK evaluator |
 | [c4lc-design.md](c4lc-design.md) | reference | c4lc, the C compiler in that Lisp, and how images are built (§13) |
 | [c4sc-design.md](c4sc-design.md) | tracker (done) | c4sc: c4lc's Lisp compiled to C |
-| [c4-float.md](c4-float.md) | tracker | `float` and `double`: softfp (F1) and c4lc (F2) done; libc, the Calculator and an FPU opcode to come |
+| [c4-float.md](c4-float.md) | tracker (done) | `float` and `double`: softfp (F1), c4lc (F2), the FPU opcode (F3), libc's printf, strtod and math.h (F4), the Calculator (F5), soft against hard (F6) |
 | [compiler-speed.md](compiler-speed.md) | tracker | Making the C4IX build fast. Tracks 0 and A1 are mostly done; track A2 (a hand port of c4lc to C) was overtaken by c4sc and is still open |
 | [inline-small-functions.md](inline-small-functions.md) | tracker | `-minline` in c4lc and c4fc (I6, the fixed point after inlining, is open) |
 | [c4th-design.md](c4th-design.md) | reference | c4th, Forth-2012 CORE, and its B-stages |

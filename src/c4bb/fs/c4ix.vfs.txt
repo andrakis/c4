@@ -65,3 +65,14 @@ ARCHIVES = c4ix-root.tgz
 		share/
 			splash/:
 				c4ix.c4p.gz: c4ix-splash.c4p.gz
+		# Wolfenstein 3D (src/wolf3d): the game, and Apogee's shareware
+		# package as it was distributed, which the game unpacks here the
+		# first time it runs
+		games/
+			wolf3d/:
+				wolf3d.c4r: c4ix-wolf3d.c4r
+				1wolf14.zip
+	# and by name, as the programs in /bin are
+	wolf3d: ilink(/usr/games/wolf3d/wolf3d.c4r)
+	bin/:
+		wolf3d: ilink(/usr/games/wolf3d/wolf3d.c4r)

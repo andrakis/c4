@@ -34,6 +34,11 @@ libc.c4s
 /c4rlink
 /c4sp
 
+# Wolfenstein 3D's objects (make wolf3d-objs), its gcc build, its test
+/.wolf3d/
+/.wolf3d_t/
+/wolf3d-host
+
 # copied from src/c4bb/fs/c4ix-cli.vfs.txt by `make run-c4ix`
 /c4ix.vfs.txt
 

@@ -653,3 +653,35 @@ describe what was done then. The code's own names (`K_NOTE`,
 - [x] Pinned by test-desktop.mjs: the desktop starts Flat; Look > Classic
       and back, seen in the taskbar's top line; Defaults brings Modern
       back. Seen in a browser (2026-10-22).
+
+## Part twelve: a game in a window (asked for 2026-10-21)
+
+Wolfenstein 3D ([c4ix-wolf3d.md](c4ix-wolf3d.md)) needed two things from
+the desktop that drawing commands and key presses could not give it.
+
+- [x] **8-bit framebuffers.** `window.h`'s `win_fb(pixels, w, h, pitch,
+      pal)` sends `f` with the pixels' address and a palette of 256
+      0x00RRGGBB words. The Terminal keeps it in the canvas's display list
+      like any other op and draws it with `GUI_BLIT8` (16), scaled to the
+      canvas.
+  - The host reads the bytes and the colours when the desktop rings the
+    bell, and puts 32-bit pixels in the command stream in their place (RGB,
+    102). The page draws them unsmoothed, inside any clip.
+  - Converting the pixels in the guest would cost it as much as drawing
+    the frame.
+- [x] **Flow control.** Once the desktop has drawn a frame that has one,
+      the program hears `f` (WIN_FRAME). Until then it draws its next frame
+      into other memory. `term_drawn`, after every redraw, sends it, so the
+      program never waits on the window and the window never shows a frame
+      half drawn.
+- [x] **Keys let go.** The page always sent key-up events, and the desktop
+      dropped them. A canvas now hears them as `K` (WIN_KEYUP), because a
+      game moves while a key is held.
+- [x] **Go > Wolfenstein 3D** runs `wolf3d` in a new Terminal. The first
+      time, the game unpacks the shareware episode there, and then the
+      window is its canvas.
+- [x] Pinned by test-desktop.mjs:
+  - `wolf3d` unpacks the episode and shows 320x200 8-bit frames scaled to
+    640x400;
+  - a key goes to the game, and its picture changes;
+  - Ctrl-C makes the window a Terminal again.

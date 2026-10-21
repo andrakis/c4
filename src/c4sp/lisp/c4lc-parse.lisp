@@ -723,6 +723,17 @@
 			(next p:commalist (p:cons (p:expr 1) acc)))
 	(p:reverse acc))))
 
+;; A full expression, the comma operator and all: what a statement, a
+;; for clause, a condition and a return value are. Inside parentheses
+;; p:parenexpr takes the commas itself, and an argument list or an
+;; initializer takes p:expr 1, which stops at one.
+(define p:fullexpr (lambda ()
+	(begin
+		(define e1 (p:expr 1))
+		(if (= (p:kind) 'Comma)
+			(p:cons 'comma (p:commalist (list e1)))
+		e1))))
+
 ;; primary / unary
 (define p:primary (lambda ()
 	(begin
@@ -894,7 +905,7 @@
 		(if (if (p:declstart?) true (= k 'Static))
 			(p:cons 'declstmt (p:localline))
 		(begin
-			(define e (p:expr 1))
+			(define e (p:fullexpr))
 			(p:expect 'Semi "semicolon")
 			(list 'expr e))))))))))))))))))
 
@@ -904,7 +915,7 @@
 		(define s (p:stmt))
 		(p:expect 'While "while after do body")
 		(p:expect 'Lparen "open paren after do-while")
-		(define c (p:expr 1))
+		(define c (p:fullexpr))
 		(p:expect 'Rparen "close paren after do-while condition")
 		(p:expect 'Semi "semicolon after do-while")
 		(list 'dowhile s c))))
@@ -922,7 +933,7 @@
 	(begin
 		(p:advance)
 		(p:expect 'Lparen "open paren after if")
-		(define c (p:expr 1))
+		(define c (p:fullexpr))
 		(p:expect 'Rparen "close paren after if condition")
 		(define t (p:stmt))
 		(if (= (p:kind) 'Else)
@@ -935,7 +946,7 @@
 	(begin
 		(p:advance)
 		(p:expect 'Lparen "open paren after while")
-		(define c (p:expr 1))
+		(define c (p:fullexpr))
 		(p:expect 'Rparen "close paren after while condition")
 		(list 'while c (p:stmt)))))
 
@@ -945,11 +956,11 @@
 	(begin
 		(p:advance)
 		(p:expect 'Lparen "open paren after for")
-		(define i (if (= (p:kind) 'Semi) nil (p:expr 1)))
+		(define i (if (= (p:kind) 'Semi) nil (p:fullexpr)))
 		(p:expect 'Semi "semicolon after for initializer")
-		(define c (if (= (p:kind) 'Semi) nil (p:expr 1)))
+		(define c (if (= (p:kind) 'Semi) nil (p:fullexpr)))
 		(p:expect 'Semi "semicolon after for condition")
-		(define s (if (= (p:kind) 'Rparen) nil (p:expr 1)))
+		(define s (if (= (p:kind) 'Rparen) nil (p:fullexpr)))
 		(p:expect 'Rparen "close paren after for")
 		(list 'for i c s (p:stmt)))))
 
@@ -959,7 +970,7 @@
 		(if (= (p:kind) 'Semi)
 			(begin (p:advance) (list 'return nil))
 		(begin
-			(define e (p:expr 1))
+			(define e (p:fullexpr))
 			(p:expect 'Semi "semicolon after return")
 			(list 'return e))))))
 
@@ -969,7 +980,7 @@
 	(begin
 		(p:advance)
 		(p:expect 'Lparen "open paren after switch")
-		(define c (p:expr 1))
+		(define c (p:fullexpr))
 		(p:expect 'Rparen "close paren after switch value")
 		(p:expect 'Lbrace "open brace after switch")
 		(p:cons 'switch (p:cons c (p:switchbody (list)))))))

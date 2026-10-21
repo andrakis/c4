@@ -706,38 +706,50 @@ DEFER LOCAL-RECS ( ety cnt ai -- v )
 CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
 : CASE-VALUE ( -- v )  CONST-EXPR ;
 
+\ A full expression, the comma operator and all: what a statement, a
+\ for clause, a condition and a return value are (c4lc's p:fullexpr).
+\ Inside parentheses the primary parser takes the commas itself.
+: FULLEXPR ( -- node ) {: | nd v k -- n :}
+   1 EXPR TO nd
+   TK Comma = IF
+      16 CELLS ALLOT: TO v   nd v !  1 TO k
+      BEGIN TK Comma = WHILE TNEXT  1 EXPR v k CELLS + !  k 1+ TO k REPEAT
+      n_comma 4 CELLS NEW TO nd
+      0 nd >fn !  v nd >args !  k nd >argn !
+   THEN  nd ;
+
 : (STATEMENT) ( -- node ) {: | c b e i s nd lo hi a u -- n :}
    TK Semi   = IF TNEXT n_empty 1 CELLS NEW EXIT THEN
    TK Lbrace = IF COMPOUND EXIT THEN
    TK If = IF
-      TNEXT Lparen WANT 1 EXPR TO c Rparen WANT
+      TNEXT Lparen WANT FULLEXPR TO c Rparen WANT
       STATEMENT TO b   0 TO e
       TK Else = IF TNEXT STATEMENT TO e THEN
       n_if 4 CELLS NEW TO nd
       c nd >cond !  b nd >body !  e nd >else !  nd EXIT
    THEN
    TK While = IF
-      TNEXT Lparen WANT 1 EXPR TO c Rparen WANT  STATEMENT TO b
+      TNEXT Lparen WANT FULLEXPR TO c Rparen WANT  STATEMENT TO b
       n_while 3 CELLS NEW TO nd
       c nd >cond !  b nd >body !  nd EXIT
    THEN
    TK Do = IF
       TNEXT STATEMENT TO b
-      While WANT Lparen WANT 1 EXPR TO c Rparen WANT Semi WANT
+      While WANT Lparen WANT FULLEXPR TO c Rparen WANT Semi WANT
       n_do 3 CELLS NEW TO nd
       c nd >cond !  b nd >body !  nd EXIT
    THEN
    TK For = IF
       TNEXT Lparen WANT
-      0 TO i   TK Semi   <> IF 1 EXPR TO i THEN  Semi WANT
-      0 TO c   TK Semi   <> IF 1 EXPR TO c THEN  Semi WANT
-      0 TO s   TK Rparen <> IF 1 EXPR TO s THEN  Rparen WANT
+      0 TO i   TK Semi   <> IF FULLEXPR TO i THEN  Semi WANT
+      0 TO c   TK Semi   <> IF FULLEXPR TO c THEN  Semi WANT
+      0 TO s   TK Rparen <> IF FULLEXPR TO s THEN  Rparen WANT
       STATEMENT TO b
       n_for 5 CELLS NEW TO nd
       c nd >cond !  b nd >body !  i nd >init !  s nd >step !  nd EXIT
    THEN
    TK Switch = IF
-      TNEXT Lparen WANT 1 EXPR TO c Rparen WANT
+      TNEXT Lparen WANT FULLEXPR TO c Rparen WANT
       CVN @ TO i
       STATEMENT TO b
       CVN @ i = IF ." c4fc: a switch with no cases" CR ABORT THEN
@@ -763,7 +775,7 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
    \ `return;` with no value is a void function leaving, and is a LEV
    \ with nothing computed before it.
    TK Return   = IF
-      TNEXT  TK Semi = IF 0 ELSE 1 EXPR THEN  Semi WANT n_ret N1 EXIT THEN
+      TNEXT  TK Semi = IF 0 ELSE FULLEXPR THEN  Semi WANT n_ret N1 EXIT THEN
    \ goto and labels (M7b). `goto` is no keyword, here or in c4lc, so
    \ the statement is known by its shape: goto NAME ;  and  NAME :
    \ A label just before the closing brace labels an empty statement.
@@ -780,7 +792,7 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
          a nd >lname !  b nd >body !  u nd >llen !  nd EXIT
       THEN
    THEN
-   1 EXPR Semi WANT n_expst N1 ;
+   FULLEXPR Semi WANT n_expst N1 ;
 ' (STATEMENT) IS STATEMENT
 
 

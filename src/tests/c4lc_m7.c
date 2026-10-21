@@ -315,6 +315,23 @@ int localagg(int k) {
     return 0;
 }
 
+// the comma operator outside parentheses too: statements, for clauses,
+// conditions and return values (Wolf4SDL writes all of them)
+int cm_n;
+int cm_bump(int v) { cm_n = cm_n * 10 + v; return v; }
+int commas(void) {
+    int i, j, s = 0, t;
+    for (i = 0, j = 10; i < j; i++, j--) s += i * j;
+    cm_bump(1), cm_bump(2);
+    if (cm_bump(3), cm_n > 100) cm_bump(4);
+    t = 0;
+    while (t++, t < 3) cm_bump(5);
+    do s++, t--; while (t > 7, t > 1);
+    switch (cm_bump(6), 2) { case 2: s += 1000; }
+    printf("commas %d %d %d %d %d\n", s, cm_n, i, j, t);
+    return cm_bump(7), cm_n % 1000;
+}
+
 int main(void) {
     nothing();
     printf("void-params %d %d %s\n", seven(), add(2, 3), pick("xyz", 1));
@@ -335,5 +352,6 @@ int main(void) {
     funcname();
     globaddr();
     localagg(5);
+    printf("commas-return %d\n", commas());
     return 0;
 }

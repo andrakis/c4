@@ -1998,7 +1998,8 @@ test-c4tui: $(C4M) c4tui-demo.c4r c4tui-demo32.c4r
 # the host's SSE, bit for bit, over two million random operand sets; then
 # c4lc builds it, at both word sizes, plain and -O, and it must get every
 # one of fpgen's vectors -- the host's own answers.
-test-c4fp: c4sp c4sp32 $(C4M) c4m32 $(C4LC_LISP) src/c4fp/softfp.c
+test-c4fp: c4sp c4sp32 $(C4M) c4m32 $(C4LC_LISP) src/c4fp/softfp.c src/c4fp/mkfpsrc.py
+	python3 src/c4fp/mkfpsrc.py --check
 	gcc -O2 -w -I src/c4fp -o .c4fp_host src/c4fp/tests/fphost.c -lm
 	./.c4fp_host 2000000
 	gcc -O2 -w -o .c4fp_gen src/c4fp/tests/fpgen.c -lm
@@ -3204,6 +3205,17 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	   ./c4sp32 src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_ll.c .c4lc_b.c4r > /dev/null || exit 1; \
 	   ./c4m32 load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-ll.txt || exit 1; \
 	   echo "  ll ok, gcc's answers at 32 and 64 bits: c4lc $$fl"; \
+	 done
+	# float and double (docs/c4-float.md): literals rounded at both ends of
+	# both formats, arithmetic, NaN and -0 compares, every conversion,
+	# globals, aggregates, structs, pointers, calls (through pointers too);
+	# the golden is gcc's, the same at both sizes, plain, -O and -minline
+	@for fl in "" "-O" "-minline"; do \
+	   ./c4sp src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_float.c .c4lc_b.c4r > /dev/null || exit 1; \
+	   ./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-float.txt || exit 1; \
+	   ./c4sp32 src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_float.c .c4lc_b.c4r > /dev/null || exit 1; \
+	   ./c4m32 load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-float.txt || exit 1; \
+	   echo "  float ok, gcc's answers at 32 and 64 bits: c4lc $$fl"; \
 	 done
 	# M7b: data words naming another unit's functions (patch type -5 in
 	# the object, which c4rlink resolves) -- an applet table like Busybox's

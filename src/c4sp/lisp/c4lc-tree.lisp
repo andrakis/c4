@@ -37,11 +37,20 @@
 ;; a rebuilt node keeps its trailing qualifier mask (c4lc-parse.lisp)
 (define t:qn (lambda (node q) (if (= q nil) node (+ node (list q)))))
 
+;; a float or double literal is bits, never folded as a number
+(define t:fpty? (lambda (t) (if (= t 1025024) true (= t 1025088))))
 (define t:num? (lambda (e)
-	(if (= 'list (typeof e)) (= (head e) 'num) false)))
+	(if (= 'list (typeof e)) (if (= (head e) 'num) (not (t:fpty? (index e 2))) false) false)))
 ;; a literal's type: int unless it carries one (M4: a U suffix)
 (define t:nty (lambda (e) (if (= (index e 2) nil) 1 (index e 2))))
 (define t:mknum (lambda (v ty) (if (= ty 1) (list 'num v) (list 'num v ty))))
+
+;; the long long and float helpers c4lc splices in (their names' prefixes)
+(define t:pfx? (lambda (n p)
+	(if (> (length n) (length p)) (= (string:substr n 0 (length p)) p) false)))
+(define t:helper? (lambda (n)
+	(if (t:pfx? n "__c4ll_") true (if (t:pfx? n "__c4f_") true
+	(if (t:pfx? n "__c4d_") true (t:pfx? n "__c4fp_"))))))
 
 ;; ---- T1: constant folding ----
 
@@ -62,7 +71,7 @@
 	(if (> (- (- ty 512) (* 64 (/ (- ty 512) 64))) 0) (sys:wordsize)
 	(if (if (= ty 512) true (= ty 576)) 1
 	(if (if (= ty 640) true (= ty 704)) 2
-	(if (if (= ty 896) true (= ty 960)) 8
+	(if (if (= ty 896) true (if (= ty 960) true (= ty 1025088))) 8
 	(sys:wordsize)))))))))
 
 (define t:binops '(add sub mul div mod shl shr band bor bxor
@@ -386,7 +395,7 @@
 				(if (= (t:third d) "__c4cc_make_va") (t:cons (t:third d) acc)
 				;; the long long helpers: the generator calls them, the
 				;; tree never sees it; it compiles only the ones it calls
-				(if (if (> (length (t:third d)) 7) (= (string:substr (t:third d) 0 7) "__c4ll_") false)
+				(if (t:helper? (t:third d))
 					(t:cons (t:third d) acc)
 				(if (> (bit:and (index d 5) 3) 0) (t:cons (t:third d) acc)
 				acc)))))
@@ -553,7 +562,7 @@
 	(if (= ty 512) true (if (= ty 576) true (if (= ty 640) true
 	(if (= ty 704) true (if (= ty 768) true
 	;; a long long parameter (M8): an int argument must be widened
-	(if (= ty 896) true (= ty 960)))))))))
+	(if (= ty 896) true (if (= ty 960) true (t:fpty? ty))))))))))
 (define t:cwrap (lambda (ty x) (if (t:convty? ty) (list 'cast ty x) x)))
 (define t:rty 1)    ;; the return type of the body being spliced (T4)
 
@@ -786,6 +795,8 @@
 	;; makes recursion impossible and keeps one pass from cascading, so
 	;; the pass has no fixpoint to reason about.
 	(if (= e nil) acc
+	;; a parameter whose address is taken has no argument to stand for it
+	(if (t:addrof? e (t:pnames ps (list))) (t:why nm "a parameter's address is taken" acc)
 	(if (t:haslabel? e) (t:why nm "body has a label or a goto" acc)
 	(if (t:hassizeofa? e) (t:why nm "body has sizeof(identifier)" acc)
 	(if (t:hascall? e) (t:why nm "body calls something" acc)
@@ -795,7 +806,25 @@
 		(if tree:inlinereport
 			(print ";;     YES:" nm "size" (t:size e) "- called" (t:ncalls nm))
 		nil)
-		(t:cons (list nm ps (if (= h 'return) 'value 'stmt) e) acc)))))))))
+		(t:cons (list nm ps (if (= h 'return) 'value 'stmt) e) acc))))))))))
+(define t:pnames (lambda (ps acc)
+	(if (empty? ps) acc (next t:pnames (tail ps) (t:cons (t:second (head ps)) acc)))))
+(define t:addrof? (lambda (e names)
+	(if (= 'list (typeof e))
+		(if (if (= (head e) 'addr)
+				(if (= 'list (typeof (t:second e)))
+					(if (= (head (t:second e)) 'var) (t:member? (t:second (t:second e)) names) false)
+				false)
+			false)
+			true
+		(next t:addrof?/l (tail e) names))
+	false)))
+(define t:addrof?/l (lambda (l names)
+	(if (empty? l) false
+	(if (= 'list (typeof l))
+		(if (t:addrof? (head l) names) true
+		(next t:addrof?/l (tail l) names))
+	false))))
 
 (define t:hassizeofa? (lambda (e)
 	(if (= 'list (typeof e))
@@ -1068,7 +1097,8 @@
 		(define ss (tail (index d 7)))
 		;; a long long result is the address of a temporary, which a splice
 		;; would free with its block (M8)
-		(if (if (index d 4) true (if (= (t:second d) 896) true (= (t:second d) 960))) acc
+		;; ... and a double's on a 32-bit target is the same
+		(if (if (index d 4) true (if (= (t:second d) 896) true (if (= (t:second d) 960) true (= (t:second d) 1025088)))) acc
 		(if (= nm "main") acc
 		(if (> (bit:and (index d 5) 3) 0) acc
 		(if (t:member? nm taken) acc
@@ -1377,6 +1407,12 @@
 ;; running at all here: a function whose every call site was inlined has
 ;; no callers left, and T2 then deletes the function itself. The two
 ;; passes compound, and that ordering is why T3 sits where it does.
+;; does the unit use floats? Then c4lc spliced softfp.c in, __c4f_add first among them
+(define t:hasfp? (lambda (ds)
+	(if (empty? ds) false
+	(if (if (= (head (head ds)) (quote func)) (= (t:third (head ds)) "__c4f_add") false) true
+	(next t:hasfp? (tail ds))))))
+
 (define tree:optimize (lambda (ast)
 	(begin
 		(set! t:nfold 0)
@@ -1391,7 +1427,11 @@
 		(set! t:vstructs (list))
 		(t:vcollect (tail ast))
 		(define ds0 (t:folddecls (tail ast) (list)))
-		(define ds (if tree:inlining (t:folddecls (t:inline ds0) (list)) ds0))
+		;; -minline leaves a unit with floats alone: a splice converts its
+		;; arguments and result only by type, and this pass does not know an
+		;; expression's -- an int argument for a double parameter would arrive
+		;; as its integer bits (docs/c4-float.md)
+		(define ds (if (if tree:inlining (not (t:hasfp? ds0)) false) (t:folddecls (t:inline ds0) (list)) ds0))
 		(define table (t:funtable ds (list)))
 		(define live (t:close (t:inlineroots ds (t:roots ds (list))) (list) table))
 		(define ds2 (t:dropdead ds live (list)))

@@ -84,6 +84,7 @@
 	("static" Static) ("extern" Extern) ("__attribute__" Attribute)
 	("constructor" Constructor) ("destructor" Destructor)
 	("struct" Struct) ("union" Union) ("typedef" Typedef) ("do" Do)
+	("float" Float) ("double" Double)
 	;; void IS char in c4, as in c4's own symbol seeding. It has a kind
 	;; of its own only so that a parameter list can tell `(void)` from
 	;; `(char)`; the parser takes Void wherever it takes Char.
@@ -330,6 +331,203 @@
 		(if (= c 46) 'Dot
 		false))))))))))))))))))))))))))
 
+;; ---- floating-point literals (docs/c4-float.md) ----
+;;
+;; 1.5, .5, 1., 1e-3, 2.5f: a decimal literal with a point or an
+;; exponent. It is a double unless it says f (float); l says double too.
+;; The lexer turns it into its IEEE bits here, correctly rounded (to
+;; nearest, ties to even, subnormals and all), so the parser and the
+;; generator only ever see bit patterns: FNumF is a float's word, FNumD
+;; a double's two 32-bit halves (LO HI). Hex floats are not read.
+;;
+;; The arithmetic is exact, on big integers held as lists of 16-bit
+;; limbs, lowest first -- a 32-bit c4sp has no wider number than its
+;; word, and this must give the same bits on both. The value is
+;; DIGITS * 10^E10 = A / B; scaled by 2^s until the quotient has P+2
+;; bits, it is divided one bit at a time, and the remainder is the
+;; sticky bit.
+
+(define lex:brev (lambda (l acc) (if (empty? l) acc (next lex:brev (tail l) (lex:cons (head l) acc)))))
+(define lex:blimb (lambda (a i)
+	(if (empty? a) 0 (if (= i 0) (head a) (next lex:blimb (tail a) (- i 1))))))
+;; a * m + c, with m and c small
+(define lex:bmul (lambda (a m c acc)
+	(if (empty? a) (lex:brev (if (= c 0) acc (lex:cons c acc)) (list))
+	(begin
+		(define x (+ (* (head a) m) c))
+		(next lex:bmul (tail a) m (bit:shr x 16) (lex:cons (bit:and x 65535) acc))))))
+(define lex:bpow10 (lambda (a n) (if (<= n 0) a (next lex:bpow10 (lex:bmul a 10 0 (list)) (- n 1)))))
+(define lex:bzeros (lambda (w a) (if (<= w 0) a (next lex:bzeros (- w 1) (lex:cons 0 a)))))
+(define lex:bshlb (lambda (a s c acc)
+	(if (empty? a) (lex:brev (if (= c 0) acc (lex:cons c acc)) (list))
+	(begin
+		(define x (bit:or (bit:shl (head a) s) c))
+		(next lex:bshlb (tail a) s (bit:shr x 16) (lex:cons (bit:and x 65535) acc))))))
+(define lex:bshl (lambda (a n)
+	(begin
+		(define w (/ n 16))
+		(lex:bzeros w (lex:bshlb a (- n (* w 16)) 0 (list))))))
+(define lex:bdrop (lambda (a w) (if (<= w 0) a (if (empty? a) a (next lex:bdrop (tail a) (- w 1))))))
+(define lex:bshrb (lambda (a s acc)
+	(if (empty? a) (lex:brev acc (list))
+	(begin
+		(define nx (if (empty? (tail a)) 0 (head (tail a))))
+		(next lex:bshrb (tail a) s
+			(lex:cons (bit:and (bit:or (bit:shr (head a) s) (bit:shl nx (- 16 s))) 65535) acc))))))
+(define lex:bshr (lambda (a n)
+	(begin
+		(define w (/ n 16))
+		(lex:bshrb (lex:bdrop a w) (- n (* w 16)) (list)))))
+(define lex:bits16 (lambda (x n) (if (= x 0) n (next lex:bits16 (bit:shr x 1) (+ n 1)))))
+(define lex:bbitlen (lambda (a) (lex:bbitlen/2 a 0 0)))
+(define lex:bbitlen/2 (lambda (a i best)
+	(if (empty? a) best
+	(next lex:bbitlen/2 (tail a) (+ i 1)
+		(if (= (head a) 0) best (+ (* i 16) (lex:bits16 (head a) 0)))))))
+(define lex:btake (lambda (a n acc)
+	(if (<= n 0) acc
+	(next lex:btake (if (empty? a) a (tail a)) (- n 1) (lex:cons (if (empty? a) 0 (head a)) acc)))))
+;; highest limb first, the same length
+(define lex:bcmpr (lambda (a b)
+	(if (empty? a) 0
+	(if (< (head a) (head b)) -1
+	(if (> (head a) (head b)) 1
+	(next lex:bcmpr (tail a) (tail b)))))))
+(define lex:bcmp (lambda (a b)
+	(begin
+		(define la (lex:bbitlen a))
+		(define lb (lex:bbitlen b))
+		(if (< la lb) -1
+		(if (> la lb) 1
+		(begin
+			(define n (/ (+ la 15) 16))
+			;; lex:btake leaves the limbs highest first
+			(lex:bcmpr (lex:btake a n (list)) (lex:btake b n (list)))))))))
+;; a - b, a >= b
+(define lex:bsub (lambda (a b brw acc)
+	(if (empty? a) (lex:brev acc (list))
+	(begin
+		(define x (- (- (head a) (if (empty? b) 0 (head b))) brw))
+		(next lex:bsub (tail a) (if (empty? b) b (tail b)) (if (< x 0) 1 0)
+			(lex:cons (if (< x 0) (+ x 65536) x) acc))))))
+(define lex:bbit (lambda (a k)
+	(bit:and (bit:shr (lex:blimb a (/ k 16)) (- k (* 16 (/ k 16)))) 1)))
+;; any bit set below bit k?
+(define lex:blow? (lambda (a k)
+	(if (<= k 0) false (!= (lex:bcmp (lex:bshl (lex:bshr a k) k) a) 0))))
+(define lex:bword (lambda (a i)
+	(bit:or (lex:blimb a (* 2 i)) (bit:shl (lex:blimb a (+ (* 2 i) 1)) 16))))
+(define lex:bdigits (lambda (s i acc)
+	(if (>= i (length s)) acc
+	(next lex:bdigits s (+ i 1) (lex:bmul acc 10 (- (string:byte s i) 48) (list))))))
+
+;; DIGITS * 10^E10 in a format of P significant bits, exponents EMIN..EMAX:
+;; (BIASEDEXP FRACTION), the fraction a big integer below 2^(P-1)
+(define lex:fpconv (lambda (ds e10 p emin emax)
+	(begin
+		(define m (lex:bdigits ds 0 (list 0)))
+		(define nd (length ds))
+		(if (= (lex:bbitlen m) 0) (list 0 (list 0))
+		;; far out of range either way: skip the huge powers of ten
+		(if (> (+ e10 nd) 400) (list (+ (* 2 emax) 1) (list 0))
+		(if (< (+ e10 nd) -400) (list 0 (list 0))
+		(begin
+			(define a (if (>= e10 0) (lex:bpow10 m e10) m))
+			(define b (if (>= e10 0) (list 1) (lex:bpow10 (list 1) (- 0 e10))))
+			(lex:fpscale a b (- (+ p 1) (- (lex:bbitlen a) (lex:bbitlen b))) p emin emax))))))))
+(define lex:fpscale (lambda (a b s p emin emax)
+	(begin
+		(define a2 (if (>= s 0) (lex:bshl a s) a))
+		(define b2 (if (>= s 0) b (lex:bshl b (- 0 s))))
+		(if (>= (lex:bcmp a2 (lex:bshl b2 (+ p 2))) 0) (next lex:fpscale a b (- s 1) p emin emax)
+		(if (< (lex:bcmp a2 (lex:bshl b2 (+ p 1))) 0) (next lex:fpscale a b (+ s 1) p emin emax)
+		(lex:fpdiv a2 b2 (+ p 1) (list 0) s p emin emax))))))
+;; the quotient, a bit at a time from bit I down
+(define lex:fpdiv (lambda (a b i q s p emin emax)
+	(if (< i 0) (lex:fpround q (> (lex:bbitlen a) 0) (- (+ p 1) s) p emin emax)
+	(begin
+		(define bi (lex:bshl b i))
+		(if (>= (lex:bcmp a bi) 0)
+			(next lex:fpdiv (lex:bsub a bi 0 (list)) b (- i 1) (lex:bmul q 2 1 (list)) s p emin emax)
+		(next lex:fpdiv a b (- i 1) (lex:bmul q 2 0 (list)) s p emin emax))))))
+;; Q has P+2 bits and the value is Q * 2^(E-P-1): round it into the format
+(define lex:fpround (lambda (q sticky e p emin emax)
+	(if (> e emax) (list (+ (* 2 emax) 1) (list 0))
+	(if (>= e emin)
+		(begin
+			(define keep (lex:bshr q 2))
+			(define up (if (= (lex:bbit q 1) 1)
+				(if (= (lex:bbit q 0) 1) true (if sticky true (= (lex:bbit keep 0) 1))) false))
+			(define k2 (if up (lex:bmul keep 1 1 (list)) keep))
+			(if (> (lex:bbitlen k2) p)
+				(if (>= e emax) (list (+ (* 2 emax) 1) (list 0))
+				(list (+ (+ e 1) emax) (list 0)))
+			(list (+ e emax) (lex:bsub k2 (lex:bshl (list 1) (- p 1)) 0 (list)))))
+	(begin
+		;; subnormal: the units are 2^(EMIN-P+1)
+		(define drop (+ 2 (- emin e)))
+		(define keep (lex:bshr q drop))
+		(define up (if (= (lex:bbit q (- drop 1)) 1)
+			(if (lex:blow? q (- drop 1)) true (if sticky true (= (lex:bbit keep 0) 1))) false))
+		(define k2 (if up (lex:bmul keep 1 1 (list)) keep))
+		(if (>= (lex:bbitlen k2) p) (list 1 (list 0))
+		(list 0 k2)))))))
+
+(define lex:fpbits32 (lambda (ds e10)
+	(begin
+		(define r (lex:fpconv ds e10 24 -126 127))
+		(bit:or (bit:shl (head r) 23) (lex:bword (index r 1) 0)))))
+;; (LO HI)
+(define lex:fpbits64 (lambda (ds e10)
+	(begin
+		(define r (lex:fpconv ds e10 53 -1022 1023))
+		(list (lex:bword (index r 1) 0)
+			(bit:or (bit:shl (head r) 20) (lex:bword (index r 1) 1))))))
+
+;; the scan: does a float literal start at i (a digit, or a point and a
+;; digit)? Its digits, power of ten and suffix go to the mailboxes below
+(define lex:fds "")
+(define lex:fe10 0)
+(define lex:ff false)
+(define lex:digend (lambda (i) (if (lex:digit? (lex:peek i)) (next lex:digend (+ i 1)) i)))
+(define lex:expat? (lambda (k)
+	(if (if (= (lex:peek k) 101) true (= (lex:peek k) 69))
+		(if (lex:digit? (lex:peek (+ k 1))) true
+		(if (if (= (lex:peek (+ k 1)) 43) true (= (lex:peek (+ k 1)) 45))
+			(lex:digit? (lex:peek (+ k 2))) false))
+	false)))
+(define lex:fpstart? (lambda (i c)
+	(if (= c 46) (lex:digit? (lex:peek (+ i 1)))
+	(if (if (= c 48) (if (= (lex:peek (+ i 1)) 120) true (= (lex:peek (+ i 1)) 88)) false) false
+	(begin
+		(define k (lex:digend i))
+		(if (= (lex:peek k) 46) true (lex:expat? k)))))))
+(define lex:fpscan (lambda (i)
+	(begin
+		(define k (lex:digend i))
+		(define ip (string:substr lex:src i (- k i)))
+		(define fs (if (= (lex:peek k) 46) (+ k 1) k))
+		(define fe (lex:digend fs))
+		(define fp (string:substr lex:src fs (- fe fs)))
+		(define x0 (if (lex:expat? fe) (+ fe 1) fe))
+		(define neg (= (lex:peek x0) 45))
+		(define x1 (if (if (= (lex:peek x0) 43) true neg) (+ x0 1) x0))
+		(define x2 (if (= x0 fe) x1 (lex:decimal x1 0)))
+		(define ev (if (= x0 fe) 0 (if neg (- 0 lex:val) lex:val)))
+		(define sc (lex:peek x2))
+		(set! lex:ff (if (= sc 102) true (= sc 70)))
+		(set! lex:fds (lex:fpstrip (+ ip fp) 0))
+		(set! lex:fe10 (- ev (length fp)))
+		(if (if lex:ff true (if (= sc 108) true (= sc 76))) (+ x2 1) x2))))
+;; the digits less their leading zeros ("0" stays a zero)
+(define lex:fpstrip (lambda (s i)
+	(if (>= i (length s)) "0"
+	(if (= (string:byte s i) 48) (next lex:fpstrip s (+ i 1))
+	(string:substr s i (- (length s) i))))))
+(define lex:fptoken (lambda (line)
+	(if lex:ff (list 'FNumF (lex:fpbits32 lex:fds lex:fe10) line)
+	(list 'FNumD (lex:fpbits64 lex:fds lex:fe10) line))))
+
 ;; ---- main loop ----
 
 (define lex:go (lambda (i line acc)
@@ -387,6 +585,10 @@
 						(if lex:pp
 							(list 'Id name line (if (lex:lparen? e) 1 0))
 						(list 'Id name line))) acc)))
+		(if (lex:fpstart? i c)
+			(begin
+				(define fend (lex:fpscan i))
+				(next lex:go fend line (lex:cons (lex:fptoken line) acc)))
 		(if (lex:digit? c)
 			(begin
 				(define e0 (lex:number i c))
@@ -428,7 +630,7 @@
 			(if k
 				(next lex:go (+ i lex:oplen) line
 					(lex:cons (list k 0 line) acc))
-			(next lex:go j line acc)))))))))))))))))  ;; unknown byte: skip, as c4cc
+			(next lex:go j line acc))))))))))))))))))  ;; unknown byte: skip, as c4cc
 
 ;; ---- entry points ----
 

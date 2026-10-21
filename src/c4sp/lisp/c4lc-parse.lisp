@@ -105,6 +105,12 @@
 ;; the word, int and unsigned long as before
 (define p:LL 896)
 (define p:ULL 960)
+;; float and double (docs/c4-float.md): a band of their own past any
+;; struct id the parser hands out (struct k is 1024 + 64k), with the
+;; same +2 per pointer level; c4lc-gen's g:FLOAT says what they are
+(define p:FLOAT 1025024)
+(define p:DOUBLE 1025088)
+(define p:SIGN32 (bit:shl 1 31))
 (define p:WORD (sys:wordsize))
 (define p:BITS (* 8 p:WORD))
 ;; the word's sign bit, and the low 32 bits a 64-bit host keeps a uint
@@ -303,6 +309,9 @@
 		(if (= k 'Long) (begin (p:advance) (next p:spec d q sg un sh (+ lg 1) ch it bt))
 		(if (if (= k 'Char) true (= k 'Void)) (begin (p:advance) (next p:spec d q sg un sh lg 1 it bt))
 		(if (= k 'Int) (begin (p:advance) (next p:spec d q sg un sh lg ch 1 bt))
+		;; long double is double
+		(if (= k 'Float) (begin (p:advance) (next p:spec d q sg un sh 0 ch it p:FLOAT))
+		(if (= k 'Double) (begin (p:advance) (next p:spec d q sg un sh 0 ch it p:DOUBLE))
 		(if (if bare (if (= k 'Struct) true (= k 'Union)) false)
 			(begin
 				(define st (p:structtype))
@@ -321,7 +330,7 @@
 						(p:advance)
 						(next p:spec d (bit:or q (index a 2)) sg un sh lg ch it (p:second a)))
 				(p:specdone d q sg un sh lg ch it bt)))
-		(p:specdone d q sg un sh lg ch it bt)))))))))))))))
+		(p:specdone d q sg un sh lg ch it bt)))))))))))))))))
 (define p:specdone (lambda (d q sg un sh lg ch it bt)
 	(begin
 		(set! p:bq q)
@@ -355,9 +364,11 @@
 		(if (= k 'Unsigned) true
 		(if (= k 'Short) true
 		(if (= k 'Long) true
+		(if (= k 'Float) true
+		(if (= k 'Double) true
 		(if (= k 'Id)
 			(if (p:assoc (p:second tok) p:typedefs) true false)
-		false))))))))))))))))
+		false))))))))))))))))))
 
 ;; consume the declarator's stars, each followed by its own qualifiers:
 ;; ty -> ty + 2 per star, and the mask q of the base moves up a level
@@ -366,7 +377,9 @@
 	(if (= (p:kind) 'Mul) (begin (p:advance) (next p:stars (+ ty p:PTR) (bit:shl q 2)))
 	(if (= (p:kind) 'Const) (begin (p:advance) (next p:stars ty (bit:or q 1)))
 	(if (= (p:kind) 'Volatile) (begin (p:advance) (next p:stars ty (bit:or q 2)))
-	(begin (set! p:sq q) ty))))))
+	(begin (set! p:sq q) (set! p:lastty ty) ty))))))
+;; the type p:stars made last: a function pointer declarator's return type
+(define p:lastty 1)
 
 ;; ---- constants: an integer constant expression ----
 
@@ -415,7 +428,7 @@
 	(if (> (- (- ty 512) (* 64 (/ (- ty 512) 64))) 0) p:WORD
 	(if (if (= ty 512) true (= ty 576)) 1
 	(if (if (= ty 640) true (= ty 704)) 2
-	(if (if (= ty 896) true (= ty 960)) 8
+	(if (if (= ty 896) true (if (= ty 960) true (= ty p:DOUBLE))) 8
 	p:WORD)))))))))
 (define p:constsizeof (lambda (what)
 	(begin
@@ -716,6 +729,7 @@
 		(define k (p:kind))
 		(if (= k 'Num) (begin (define n (p:value)) (p:advance) (list 'num n))
 		(if (p:lltok? k) (p:llnumtok)
+		(if (p:fptok? k) (p:fplit false)
 		(if (p:numtok? k)
 			(begin
 				(define un (p:numtok))
@@ -732,7 +746,7 @@
 		(if (= k 'Sub) (p:negexpr)
 		(if (= k 'Inc) (begin (p:advance) (list 'preinc (p:expr 21)))
 		(if (= k 'Dec) (begin (p:advance) (list 'predec (p:expr 21)))
-		(p:die "bad expression")))))))))))))))))))
+		(p:die "bad expression"))))))))))))))))))))
 ;; a literal too wide for a 32-bit word (c4lc-lex): (llnum LO HI TYPE)
 (define p:lltok? (lambda (k) (if (= k 'NumLL) true (= k 'NumULL))))
 (define p:llnumtok (lambda ()
@@ -751,7 +765,8 @@
 				(define n (p:value))
 				(p:advance)
 				(list 'num (- 0 n)))
-		(list 'neg (p:expr 21))))))
+		(if (p:fptok? (p:kind)) (p:fplit true)
+		(list 'neg (p:expr 21)))))))
 
 ;; identifier: call, enum constant, or variable. A static local's name
 ;; is its global's (p:srename). __func__ is the function's name (M7b).
@@ -1010,6 +1025,12 @@
 ;; NAME false when there is none and SIZE nil when it is no array
 (define p:fnptrdecl (lambda ()
 	(begin
+		;; a call through the pointer has no type but the word's, so a float
+		;; or double coming back would be read as an integer -- and a double
+		;; on a 32-bit target returns through a pointer the call never passes
+		(if (if (= p:lastty p:FLOAT) true (= p:lastty p:DOUBLE))
+			(p:die "a pointer to a function returning float or double is not supported yet (docs/c4-float.md)")
+			nil)
 		(p:advance)
 		(p:advance)
 		(p:skipquals)
@@ -1063,6 +1084,8 @@
 		(if (= k 'Lbrace) (p:braceinit)
 		(if (p:lltok? k) (p:llnumtok)
 		(if (if p:inlocal (p:exprleaf?) false) (list 'expr (p:expr 1))
+		(if (p:fptok? k) (p:fplit false)
+		(if (if (= k 'Sub) (p:fptok? (head (head (tail p:toks)))) false) (begin (p:advance) (p:fplit true))
 		(if (= k 'Str) (p:strlit)
 		(if (= k 'And)
 			(begin
@@ -1078,7 +1101,7 @@
 				(define fn (p:value))
 				(p:advance)
 				(list 'name fn))
-		(list 'num (p:const "initializer")))))))))))
+		(list 'num (p:const "initializer")))))))))))))
 ;; A local's brace list (M7b): as a global's, but a leaf that is no
 ;; constant is (expr E), which c4lc-gen's g:localaggr stores when the
 ;; declaration runs. A leaf is an expression when it starts with &, or
@@ -1102,7 +1125,7 @@
 		(define k (head t))
 		(if (= k 'Eof) false
 		(if (if (= d 0) (if (= k 'Comma) true (if (= k 'Rbrace) true (= k 'Semi))) false) false
-		(if (= k 'Str) true
+		(if (if (= k 'Str) true (p:fptok? k)) true
 		(if (p:declstart-tok? t) true
 		(if (if (= k 'Id) (= (p:constname? (p:second t)) false) false) true
 		(next p:exprleaf?/2 (tail ts)
@@ -1151,7 +1174,8 @@
 (define p:bracelist (lambda (items)
 	(if (p:allnum? items) (list 'braces (p:nums items (list))) (list 'agg items))))
 (define p:allnum? (lambda (l)
-	(if (empty? l) true (if (= (head (head l)) 'num) (next p:allnum? (tail l)) false))))
+	(if (empty? l) true
+	(if (if (= (head (head l)) 'num) (not (p:fpnum? (head l))) false) (next p:allnum? (tail l)) false))))
 (define p:nums (lambda (l acc)
 	(if (empty? l) (p:reverse acc) (next p:nums (tail l) (p:cons (p:second (head l)) acc)))))
 ;; how many elements an (agg ...) list fills: designators move the index
@@ -1340,8 +1364,9 @@
 ;; struct VALUE type: ty >= 1024 with pointer level 0
 (define p:svalue? (lambda (ty)
 	(if (< ty p:STRUCT0) false
+	(if (if (>= ty p:FLOAT) (< ty (+ p:DOUBLE 64)) false) false
 	(= 0 (- (- ty p:STRUCT0)
-		(* p:SSTEP (/ (- ty p:STRUCT0) p:SSTEP)))))))
+		(* p:SSTEP (/ (- ty p:STRUCT0) p:SSTEP))))))))
 
 ;; the one-byte element types: an array of them packs, and a string can
 ;; initialize one
@@ -1667,6 +1692,661 @@ static int *__c4ll_neg(int *d, int *a) {
     return d;
 }
 ")
+;; float and double literals (docs/c4-float.md): the lexer has their
+;; bits. A float is (num BITS FLOAT); a double (num BITS DOUBLE) on a
+;; 64-bit target and (llnum LO HI DOUBLE) on a 32-bit one, where it is
+;; carried as long long is. NEG flips the sign bit: -1.5 folds as -1
+;; does, so a global can be initialized with it.
+(define p:fptok? (lambda (k) (if (= k 'FNumF) true (= k 'FNumD))))
+(define p:fpnum? (lambda (n)
+	(if (= (length n) 3) (if (= (index n 2) p:FLOAT) true (= (index n 2) p:DOUBLE)) false)))
+(define p:fplit (lambda (neg)
+	(begin
+		(define k (p:kind))
+		(define v (p:value))
+		(p:advance)
+		(if (= k 'FNumF) (list 'num (if neg (bit:xor v p:SIGN32) v) p:FLOAT)
+		(begin
+			(define lo (head v))
+			(define hi (if neg (bit:xor (p:second v) p:SIGN32) (p:second v)))
+			(if (= p:WORD 8) (list 'num (bit:or (bit:shl hi 32) (bit:and lo p:M32)) p:DOUBLE)
+			(list 'llnum lo hi p:DOUBLE)))))))
+
+;; does the unit say float or double, or write a float literal? Then the
+;; helpers its float arithmetic calls are spliced after it (p:fpsrc), as
+;; the long long ones are -- and on a 32-bit target, since the helpers
+;; say long long, those come too.
+(define p:saysfp? (lambda (ts)
+	(if (empty? ts) false
+	(begin
+		(define k (head (head ts)))
+		(if (if (= k 'Float) true (if (= k 'Double) true (p:fptok? k))) true
+		(next p:saysfp? (tail ts)))))))
+(define p:withfp (lambda (tokens)
+	(if (p:saysfp? tokens)
+		(begin
+			(define pp lex:pp)
+			(set! lex:pp false)
+			(define hs (lex:string p:fpsrc))
+			(set! lex:pp pp)
+			(+ (p:droplast tokens (list)) hs))
+	tokens)))
+
+;; ---- p:fpsrc: generated from src/c4fp/softfp.c by src/c4fp/mkfpsrc.py ----
+;; What c4lc-gen calls for float and double (docs/c4-float.md): spliced
+;; after a unit that says float or double, callers first, all static.
+(define p:fpsrc "
+static unsigned int __c4d_to_f(unsigned long long a) {
+    int e;
+    unsigned int sign, f;
+    unsigned long long sig;
+    sign = (unsigned int)(a >> 63);
+    e = (int)(a >> 52) & 0x7FF; sig = a & 0x000FFFFFFFFFFFFFull;
+    if (e == 0x7FF) {
+        if (sig) return __c4f_pack(sign, 0xFF, 0x00400000 | (unsigned int)(sig >> 29));
+        return __c4f_pack(sign, 0xFF, 0);
+    }
+    f = (unsigned int)__c4fp_jam64(sig, 22);
+    if (!(e | f)) return __c4f_pack(sign, 0, 0);
+    return __c4f_round(sign, e - 0x381, f | 0x40000000);
+}
+static unsigned long long __c4f_to_d(unsigned int a) {
+    int e;
+    unsigned int sign, sig;
+    sign = a >> 31;
+    e = (a >> 23) & 0xFF; sig = a & 0x007FFFFF;
+    if (e == 0xFF) {
+        if (sig) return __c4d_pack(sign, 0x7FF, ((unsigned long long)sig << 29) | 0x0008000000000000ull);
+        return __c4d_pack(sign, 0x7FF, 0);
+    }
+    if (!e) {
+        if (!sig) return __c4d_pack(sign, 0, 0);
+        e = __c4f_normsub(&sig) - 1;
+    }
+    return __c4d_pack(sign, e + 0x380, (unsigned long long)sig << 29);
+}
+static unsigned int __c4d_to_u(unsigned long long a) {
+    unsigned long long v;
+    v = __c4d_to_ull(a);
+    if (v > 0xFFFFFFFF) return 0xFFFFFFFF;
+    return (unsigned int)v;
+}
+static int __c4d_to_i(unsigned long long a) {
+    long long v;
+    v = __c4d_to_ll(a);
+    if (sizeof(int) == 4 && (v < 0 - 2147483647 - 1 || v > 2147483647)) return 0 - 2147483647 - 1;
+    return (int)v;
+}
+static unsigned long long __c4d_to_ull(unsigned long long a) {
+    int e, sh;
+    unsigned long long m;
+    e = (int)(a >> 52) & 0x7FF;
+    m = (a & 0x000FFFFFFFFFFFFFull) | 0x0010000000000000ull;
+    sh = 0x433 - e;
+    if (sh >= 53) return 0;
+    if ((a >> 63) || sh < 0 - 11) return 0xFFFFFFFFFFFFFFFFull;
+    if (sh <= 0) return m << (0 - sh);
+    return m >> sh;
+}
+static long long __c4d_to_ll(unsigned long long a) {
+    int e, sh;
+    unsigned long long m;
+    e = (int)(a >> 52) & 0x7FF;
+    m = (a & 0x000FFFFFFFFFFFFFull) | 0x0010000000000000ull;
+    sh = 0x433 - e;
+    if (sh <= 0) {
+        if (sh < 0 - 10) return (long long)0x8000000000000000ull;
+        m = m << (0 - sh);
+    } else {
+        if (sh >= 53) return 0;
+        m = m >> sh;
+    }
+    if (a >> 63) return 0 - (long long)m;
+    return (long long)m;
+}
+static unsigned long long __c4d_from_u(unsigned int a) { return __c4d_from_ull_s((unsigned long long)a, 0); }
+static unsigned long long __c4d_from_i(int a) { return __c4d_from_ll((long long)a); }
+static unsigned long long __c4d_from_ll(long long a) {
+    if (a < 0) return __c4d_from_ull_s(0 - (unsigned long long)a, 1);
+    return __c4d_from_ull_s((unsigned long long)a, 0);
+}
+static unsigned long long __c4d_from_ull(unsigned long long a) { return __c4d_from_ull_s(a, 0); }
+static unsigned long long __c4d_from_ull_s(unsigned long long a, unsigned int sign) {
+    if (!a) return __c4d_pack(sign, 0, 0);
+    if (a >> 63) return __c4d_round(sign, 0x43D, __c4fp_jam64(a, 1));
+    return __c4d_normround(sign, 0x43C, a);
+}
+static unsigned long long __c4d_abs(unsigned long long a) { return a & 0x7FFFFFFFFFFFFFFFull; }
+static unsigned long long __c4d_neg(unsigned long long a) { return a ^ 0x8000000000000000ull; }
+static int __c4d_cmp(unsigned long long a, unsigned long long b) {
+    if (__c4d_isnan(a) || __c4d_isnan(b)) return 2;
+    if (!((a | b) & 0x7FFFFFFFFFFFFFFFull)) return 0;
+    if (a == b) return 0;
+    if ((a ^ b) >> 63) return (a >> 63) ? 0 - 1 : 1;
+    if ((a < b) ^ (unsigned int)(a >> 63)) return 0 - 1;
+    return 1;
+}
+static unsigned long long __c4d_sqrt(unsigned long long a) {
+    int ea, e, i, pos;
+    unsigned long long sa, rhi, rlo, rem, root, trial, pair;
+    ea = (int)(a >> 52) & 0x7FF; sa = a & 0x000FFFFFFFFFFFFFull;
+    if (ea == 0x7FF) {
+        if (sa) return a | 0x0008000000000000ull;
+        if (!(a >> 63)) return a;
+        return 0xFFF8000000000000ull;
+    }
+    if (a >> 63) {
+        if (!((unsigned long long)ea | sa)) return a;
+        return 0xFFF8000000000000ull;
+    }
+    if (!ea) { if (!sa) return a; ea = __c4d_normsub(&sa); }
+    e = ea - 0x3FF;
+    sa = sa | 0x0010000000000000ull;
+    if (e & 1) { rhi = sa >> 7; rlo = sa << 57; e = e - 1; }
+    else { rhi = sa >> 8; rlo = sa << 56; }
+    rem = 0; root = 0;
+    i = 54;
+    while (i >= 0) {
+        pos = 2 * i;
+        if (pos >= 64) pair = (rhi >> (pos - 64)) & 3;
+        else pair = (rlo >> pos) & 3;
+        rem = (rem << 2) | pair;
+        trial = (root << 2) | 1;
+        root = root << 1;
+        if (rem >= trial) { rem = rem - trial; root = root | 1; }
+        --i;
+    }
+    return __c4d_round(0, e / 2 + 0x3FE, (root << 8) | (rem != 0));
+}
+static unsigned long long __c4d_div(unsigned long long a, unsigned long long b) {
+    int ea, eb, ez, i;
+    unsigned int sign;
+    unsigned long long sa, sb, q;
+    sign = (unsigned int)((a ^ b) >> 63);
+    ea = (int)(a >> 52) & 0x7FF; sa = a & 0x000FFFFFFFFFFFFFull;
+    eb = (int)(b >> 52) & 0x7FF; sb = b & 0x000FFFFFFFFFFFFFull;
+    if (ea == 0x7FF) {
+        if (sa) return __c4d_nan2(a, b);
+        if (eb == 0x7FF) { if (sb) return __c4d_nan2(a, b); return 0xFFF8000000000000ull; }
+        return __c4d_pack(sign, 0x7FF, 0);
+    }
+    if (eb == 0x7FF) { if (sb) return __c4d_nan2(a, b); return __c4d_pack(sign, 0, 0); }
+    if (!eb) {
+        if (!sb) {
+            if (!((unsigned long long)ea | sa)) return 0xFFF8000000000000ull;
+            return __c4d_pack(sign, 0x7FF, 0);
+        }
+        eb = __c4d_normsub(&sb);
+    }
+    if (!ea) { if (!sa) return __c4d_pack(sign, 0, 0); ea = __c4d_normsub(&sa); }
+    ez = ea - eb + 0x3FE;
+    sa = sa | 0x0010000000000000ull;
+    sb = sb | 0x0010000000000000ull;
+    if (sa < sb) { ez = ez - 1; sa = sa << 1; }
+    q = 0;
+    i = 0;
+    while (i < 63) {
+        q = q << 1;
+        if (sa >= sb) { sa = sa - sb; q = q | 1; }
+        sa = sa << 1;
+        ++i;
+    }
+    return __c4d_round(sign, ez, q | (sa != 0));
+}
+static unsigned long long __c4d_mul(unsigned long long a, unsigned long long b) {
+    int ea, eb, ez;
+    unsigned int sign, a0, a1, b0, b1;
+    unsigned long long sa, sb, sz, mag, p00, p01, p10, p11, mid, hi, lo;
+    sign = (unsigned int)((a ^ b) >> 63);
+    ea = (int)(a >> 52) & 0x7FF; sa = a & 0x000FFFFFFFFFFFFFull;
+    eb = (int)(b >> 52) & 0x7FF; sb = b & 0x000FFFFFFFFFFFFFull;
+    if (ea == 0x7FF) {
+        if (sa || (eb == 0x7FF && sb)) return __c4d_nan2(a, b);
+        mag = (unsigned long long)eb | sb;
+        if (!mag) return 0xFFF8000000000000ull;
+        return __c4d_pack(sign, 0x7FF, 0);
+    }
+    if (eb == 0x7FF) {
+        if (sb) return __c4d_nan2(a, b);
+        mag = (unsigned long long)ea | sa;
+        if (!mag) return 0xFFF8000000000000ull;
+        return __c4d_pack(sign, 0x7FF, 0);
+    }
+    if (!ea) { if (!sa) return __c4d_pack(sign, 0, 0); ea = __c4d_normsub(&sa); }
+    if (!eb) { if (!sb) return __c4d_pack(sign, 0, 0); eb = __c4d_normsub(&sb); }
+    ez = ea + eb - 0x3FF;
+    sa = (sa | 0x0010000000000000ull) << 10;
+    sb = (sb | 0x0010000000000000ull) << 11;
+    a0 = (unsigned int)sa; a1 = (unsigned int)(sa >> 32);
+    b0 = (unsigned int)sb; b1 = (unsigned int)(sb >> 32);
+    p00 = (unsigned long long)a0 * b0;
+    p01 = (unsigned long long)a0 * b1;
+    p10 = (unsigned long long)a1 * b0;
+    p11 = (unsigned long long)a1 * b1;
+    mid = (p00 >> 32) + (unsigned int)p01 + (unsigned int)p10;
+    lo = (mid << 32) | (unsigned int)p00;
+    hi = p11 + (p01 >> 32) + (p10 >> 32) + (mid >> 32);
+    sz = hi | (lo != 0);
+    if (sz < 0x4000000000000000ull) { ez = ez - 1; sz = sz << 1; }
+    return __c4d_round(sign, ez, sz);
+}
+static int __c4d_normsub(unsigned long long *sig) {
+    int sh;
+    sh = __c4fp_clz64(*sig) - 11;
+    *sig = *sig << sh;
+    return 1 - sh;
+}
+static unsigned long long __c4d_sub(unsigned long long a, unsigned long long b) {
+    unsigned int sa;
+    sa = (unsigned int)(a >> 63);
+    if (sa != (unsigned int)(b >> 63)) return __c4d_add_mags(a, b, sa);
+    return __c4d_sub_mags(a, b, sa);
+}
+static unsigned long long __c4d_add(unsigned long long a, unsigned long long b) {
+    unsigned int sa;
+    sa = (unsigned int)(a >> 63);
+    if (sa != (unsigned int)(b >> 63)) return __c4d_sub_mags(a, b, sa);
+    return __c4d_add_mags(a, b, sa);
+}
+static unsigned long long __c4d_sub_mags(unsigned long long a, unsigned long long b, unsigned int sign) {
+    int ea, eb, ez, d, sh;
+    unsigned long long sa, sb, sz, diff;
+    ea = (int)(a >> 52) & 0x7FF; sa = a & 0x000FFFFFFFFFFFFFull;
+    eb = (int)(b >> 52) & 0x7FF; sb = b & 0x000FFFFFFFFFFFFFull;
+    d = ea - eb;
+    if (!d) {
+        if (ea == 0x7FF) { if (sa | sb) return __c4d_nan2(a, b); return 0xFFF8000000000000ull; }
+        if (sa == sb) return 0;
+        if (ea) ea = ea - 1;
+        if (sa < sb) { sign = sign ^ 1; diff = sb - sa; } else diff = sa - sb;
+        sh = __c4fp_clz64(diff) - 11;
+        ez = ea - sh;
+        if (ez < 0) { sh = ea; ez = 0; }
+        return __c4d_pack(sign, ez, diff << sh);
+    }
+    sa = sa << 10; sb = sb << 10;
+    if (d < 0) {
+        sign = sign ^ 1;
+        if (eb == 0x7FF) { if (sb) return __c4d_nan2(a, b); return __c4d_pack(sign, 0x7FF, 0); }
+        sa = sa + (ea ? 0x4000000000000000ull : sa);
+        sa = __c4fp_jam64(sa, 0 - d);
+        sb = sb | 0x4000000000000000ull;
+        ez = eb;
+        sz = sb - sa;
+    } else {
+        if (ea == 0x7FF) { if (sa) return __c4d_nan2(a, b); return a; }
+        sb = sb + (eb ? 0x4000000000000000ull : sb);
+        sb = __c4fp_jam64(sb, d);
+        sa = sa | 0x4000000000000000ull;
+        ez = ea;
+        sz = sa - sb;
+    }
+    return __c4d_normround(sign, ez - 1, sz);
+}
+static unsigned long long __c4d_add_mags(unsigned long long a, unsigned long long b, unsigned int sign) {
+    int ea, eb, ez, d;
+    unsigned long long sa, sb, sz;
+    ea = (int)(a >> 52) & 0x7FF; sa = a & 0x000FFFFFFFFFFFFFull;
+    eb = (int)(b >> 52) & 0x7FF; sb = b & 0x000FFFFFFFFFFFFFull;
+    d = ea - eb;
+    if (!d) {
+        if (!ea) return a + sb;
+        if (ea == 0x7FF) { if (sa | sb) return __c4d_nan2(a, b); return a; }
+        ez = ea;
+        sz = 0x0020000000000000ull + sa + sb;
+        sz = sz << 9;
+    } else {
+        sa = sa << 9; sb = sb << 9;
+        if (d < 0) {
+            if (eb == 0x7FF) { if (sb) return __c4d_nan2(a, b); return __c4d_pack(sign, 0x7FF, 0); }
+            ez = eb;
+            if (ea) sa = sa + 0x2000000000000000ull; else sa = sa << 1;
+            sa = __c4fp_jam64(sa, 0 - d);
+        } else {
+            if (ea == 0x7FF) { if (sa) return __c4d_nan2(a, b); return a; }
+            ez = ea;
+            if (eb) sb = sb + 0x2000000000000000ull; else sb = sb << 1;
+            sb = __c4fp_jam64(sb, d);
+        }
+        sz = 0x2000000000000000ull + sa + sb;
+        if (sz < 0x4000000000000000ull) { ez = ez - 1; sz = sz << 1; }
+    }
+    return __c4d_round(sign, ez, sz);
+}
+static unsigned long long __c4d_nan2(unsigned long long a, unsigned long long b) {
+    if (__c4d_isnan(a)) return a | 0x0008000000000000ull;
+    return b | 0x0008000000000000ull;
+}
+static int __c4d_isnan(unsigned long long a) { return (a & 0x7FFFFFFFFFFFFFFFull) > 0x7FF0000000000000ull; }
+static unsigned long long __c4d_normround(unsigned int sign, int exp, unsigned long long sig) {
+    int sh;
+    sh = __c4fp_clz64(sig) - 1;
+    exp = exp - sh;
+    if (sh >= 10 && (unsigned int)exp < 0x7FD)
+        return __c4d_pack(sign, sig ? exp : 0, sig << (sh - 10));
+    return __c4d_round(sign, exp, sig << sh);
+}
+static unsigned long long __c4d_round(unsigned int sign, int exp, unsigned long long sig) {
+    unsigned int rbits;
+    rbits = (unsigned int)sig & 0x3FF;
+    if ((unsigned int)exp >= 0x7FD) {
+        if (exp < 0) {
+            sig = __c4fp_jam64(sig, 0 - exp);
+            exp = 0;
+            rbits = (unsigned int)sig & 0x3FF;
+        } else if (exp > 0x7FD || sig + 0x200 >= 0x8000000000000000ull) {
+            return __c4d_pack(sign, 0x7FF, 0);
+        }
+    }
+    sig = (sig + 0x200) >> 10;
+    if (rbits == 0x200) sig = sig & ~(unsigned long long)1;
+    if (!sig) exp = 0;
+    return __c4d_pack(sign, exp, sig);
+}
+static unsigned long long __c4d_pack(unsigned int sign, int exp, unsigned long long sig) {
+    return ((unsigned long long)sign << 63) + ((unsigned long long)(unsigned int)exp << 52) + sig;
+}
+static unsigned int __c4f_to_u(unsigned int a) {
+    unsigned long long v;
+    v = __c4f_to_ull(a);
+    if (v > 0xFFFFFFFF) return 0xFFFFFFFF;
+    return (unsigned int)v;
+}
+static int __c4f_to_i(unsigned int a) {
+    long long v;
+    v = __c4f_to_ll(a);
+    if (sizeof(int) == 4 && (v < 0 - 2147483647 - 1 || v > 2147483647)) return 0 - 2147483647 - 1;
+    return (int)v;
+}
+static unsigned long long __c4f_to_ull(unsigned int a) {
+    int e, sh;
+    unsigned int sig;
+    unsigned long long m;
+    e = (a >> 23) & 0xFF; sig = a & 0x007FFFFF;
+    sh = 0xBE - e;
+    if (sh >= 64 || !(e | sig)) return 0;
+    if ((a >> 31) || sh < 0) return 0xFFFFFFFFFFFFFFFFull;
+    m = (unsigned long long)(sig | 0x00800000) << 40;
+    return m >> sh;
+}
+static long long __c4f_to_ll(unsigned int a) {
+    int e, sh;
+    unsigned int sig;
+    unsigned long long m;
+    e = (a >> 23) & 0xFF; sig = a & 0x007FFFFF;
+    sh = 0xBE - e;
+    if (sh <= 0) return (long long)0x8000000000000000ull;
+    if (sh >= 64) return 0;
+    m = (unsigned long long)(sig | 0x00800000) << 40;
+    m = m >> sh;
+    if (a >> 31) return 0 - (long long)m;
+    return (long long)m;
+}
+static unsigned int __c4f_from_u(unsigned int a) { return __c4f_from_ull_s((unsigned long long)a, 0); }
+static unsigned int __c4f_from_i(int a) { return __c4f_from_ll((long long)a); }
+static unsigned int __c4f_from_ll(long long a) {
+    if (a < 0) return __c4f_from_ull_s(0 - (unsigned long long)a, 1);
+    return __c4f_from_ull_s((unsigned long long)a, 0);
+}
+static unsigned int __c4f_from_ull(unsigned long long a) { return __c4f_from_ull_s(a, 0); }
+static unsigned int __c4f_from_ull_s(unsigned long long a, unsigned int sign) {
+    int sh;
+    unsigned int sig;
+    sh = __c4fp_clz64(a) - 40;
+    if (sh >= 0) {
+        if (!a) return __c4f_pack(sign, 0, 0);
+        return __c4f_pack(sign, 0x95 - sh, (unsigned int)a << sh);
+    }
+    sh = sh + 7;
+    if (sh < 0) sig = (unsigned int)__c4fp_jam64(a, 0 - sh);
+    else sig = (unsigned int)a << sh;
+    return __c4f_round(sign, 0x9C - sh, sig);
+}
+static unsigned int __c4f_abs(unsigned int a) { return a & 0x7FFFFFFF; }
+static unsigned int __c4f_neg(unsigned int a) { return a ^ 0x80000000; }
+static int __c4f_cmp(unsigned int a, unsigned int b) {
+    if (__c4f_isnan(a) || __c4f_isnan(b)) return 2;
+    if (!((a | b) & 0x7FFFFFFF)) return 0;
+    if (a == b) return 0;
+    if ((a ^ b) >> 31) return (a >> 31) ? 0 - 1 : 1;
+    if ((a < b) ^ (a >> 31)) return 0 - 1;
+    return 1;
+}
+static unsigned int __c4f_sqrt(unsigned int a) {
+    int ea, e, i;
+    unsigned int sa, rem, root, trial;
+    unsigned long long r;
+    ea = (a >> 23) & 0xFF; sa = a & 0x007FFFFF;
+    if (ea == 0xFF) {
+        if (sa) return a | 0x00400000;
+        if (!(a >> 31)) return a;
+        return 0xFFC00000;
+    }
+    if (a >> 31) {
+        if (!(ea | sa)) return a;
+        return 0xFFC00000;
+    }
+    if (!ea) { if (!sa) return a; ea = __c4f_normsub(&sa); }
+    e = ea - 0x7F;
+    sa = sa | 0x00800000;
+    if (e & 1) { r = (unsigned long long)sa << 28; e = e - 1; }
+    else r = (unsigned long long)sa << 27;
+    rem = 0; root = 0;
+    i = 25;
+    while (i >= 0) {
+        rem = (rem << 2) | ((unsigned int)(r >> (2 * i)) & 3);
+        trial = (root << 2) | 1;
+        root = root << 1;
+        if (rem >= trial) { rem = rem - trial; root = root | 1; }
+        --i;
+    }
+    return __c4f_round(0, e / 2 + 0x7E, (root << 5) | (rem != 0));
+}
+static unsigned int __c4f_div(unsigned int a, unsigned int b) {
+    int ea, eb, ez, i;
+    unsigned int sa, sb, q, sign;
+    sign = (a ^ b) >> 31;
+    ea = (a >> 23) & 0xFF; sa = a & 0x007FFFFF;
+    eb = (b >> 23) & 0xFF; sb = b & 0x007FFFFF;
+    if (ea == 0xFF) {
+        if (sa) return __c4f_nan2(a, b);
+        if (eb == 0xFF) { if (sb) return __c4f_nan2(a, b); return 0xFFC00000; }
+        return __c4f_pack(sign, 0xFF, 0);
+    }
+    if (eb == 0xFF) { if (sb) return __c4f_nan2(a, b); return __c4f_pack(sign, 0, 0); }
+    if (!eb) {
+        if (!sb) {
+            if (!(ea | sa)) return 0xFFC00000;
+            return __c4f_pack(sign, 0xFF, 0);
+        }
+        eb = __c4f_normsub(&sb);
+    }
+    if (!ea) { if (!sa) return __c4f_pack(sign, 0, 0); ea = __c4f_normsub(&sa); }
+    ez = ea - eb + 0x7E;
+    sa = sa | 0x00800000;
+    sb = sb | 0x00800000;
+    if (sa < sb) { ez = ez - 1; sa = sa << 1; }
+    q = 0;
+    i = 0;
+    while (i < 31) {
+        q = q << 1;
+        if (sa >= sb) { sa = sa - sb; q = q | 1; }
+        sa = sa << 1;
+        ++i;
+    }
+    return __c4f_round(sign, ez, q | (sa != 0));
+}
+static unsigned int __c4f_mul(unsigned int a, unsigned int b) {
+    int ea, eb, ez;
+    unsigned int sa, sb, sz, sign, mag;
+    unsigned long long p;
+    sign = (a ^ b) >> 31;
+    ea = (a >> 23) & 0xFF; sa = a & 0x007FFFFF;
+    eb = (b >> 23) & 0xFF; sb = b & 0x007FFFFF;
+    if (ea == 0xFF) {
+        if (sa || (eb == 0xFF && sb)) return __c4f_nan2(a, b);
+        mag = eb | sb;
+        if (!mag) return 0xFFC00000;
+        return __c4f_pack(sign, 0xFF, 0);
+    }
+    if (eb == 0xFF) {
+        if (sb) return __c4f_nan2(a, b);
+        mag = ea | sa;
+        if (!mag) return 0xFFC00000;
+        return __c4f_pack(sign, 0xFF, 0);
+    }
+    if (!ea) { if (!sa) return __c4f_pack(sign, 0, 0); ea = __c4f_normsub(&sa); }
+    if (!eb) { if (!sb) return __c4f_pack(sign, 0, 0); eb = __c4f_normsub(&sb); }
+    ez = ea + eb - 0x7F;
+    sa = (sa | 0x00800000) << 7;
+    sb = (sb | 0x00800000) << 8;
+    p = (unsigned long long)sa * sb;
+    sz = (unsigned int)(p >> 32) | ((unsigned int)p != 0);
+    if (sz < 0x40000000) { ez = ez - 1; sz = sz << 1; }
+    return __c4f_round(sign, ez, sz);
+}
+static int __c4f_normsub(unsigned int *sig) {
+    int sh;
+    sh = __c4fp_clz32(*sig) - 8;
+    *sig = *sig << sh;
+    return 1 - sh;
+}
+static unsigned int __c4f_sub(unsigned int a, unsigned int b) {
+    if ((a ^ b) >> 31) return __c4f_add_mags(a, b, a >> 31);
+    return __c4f_sub_mags(a, b, a >> 31);
+}
+static unsigned int __c4f_add(unsigned int a, unsigned int b) {
+    if ((a ^ b) >> 31) return __c4f_sub_mags(a, b, a >> 31);
+    return __c4f_add_mags(a, b, a >> 31);
+}
+static unsigned int __c4f_sub_mags(unsigned int a, unsigned int b, unsigned int sign) {
+    int ea, eb, ez, d, sh;
+    unsigned int sa, sb, sx, sy;
+    int diff;
+    ea = (a >> 23) & 0xFF; sa = a & 0x007FFFFF;
+    eb = (b >> 23) & 0xFF; sb = b & 0x007FFFFF;
+    d = ea - eb;
+    if (!d) {
+        if (ea == 0xFF) { if (sa | sb) return __c4f_nan2(a, b); return 0xFFC00000; }
+        diff = (int)sa - (int)sb;
+        if (!diff) return 0;
+        if (ea) ea = ea - 1;
+        if (diff < 0) { sign = sign ^ 1; diff = 0 - diff; }
+        sh = __c4fp_clz32((unsigned int)diff) - 8;
+        ez = ea - sh;
+        if (ez < 0) { sh = ea; ez = 0; }
+        return __c4f_pack(sign, ez, (unsigned int)diff << sh);
+    }
+    sa = sa << 7; sb = sb << 7;
+    if (d < 0) {
+        sign = sign ^ 1;
+        if (eb == 0xFF) { if (sb) return __c4f_nan2(a, b); return __c4f_pack(sign, 0xFF, 0); }
+        ez = eb - 1;
+        sx = sb | 0x40000000;
+        sy = sa + (ea ? 0x40000000 : sa);
+        d = 0 - d;
+    } else {
+        if (ea == 0xFF) { if (sa) return __c4f_nan2(a, b); return a; }
+        ez = ea - 1;
+        sx = sa | 0x40000000;
+        sy = sb + (eb ? 0x40000000 : sb);
+    }
+    return __c4f_normround(sign, ez, sx - __c4fp_jam32(sy, d));
+}
+static unsigned int __c4f_add_mags(unsigned int a, unsigned int b, unsigned int sign) {
+    int ea, eb, ez, d;
+    unsigned int sa, sb, sz;
+    ea = (a >> 23) & 0xFF; sa = a & 0x007FFFFF;
+    eb = (b >> 23) & 0xFF; sb = b & 0x007FFFFF;
+    d = ea - eb;
+    if (!d) {
+        if (!ea) return a + sb;
+        if (ea == 0xFF) { if (sa | sb) return __c4f_nan2(a, b); return a; }
+        ez = ea;
+        sz = 0x01000000 + sa + sb;
+        if (!(sz & 1) && ez < 0xFE) return __c4f_pack(sign, ez, sz >> 1);
+        sz = sz << 6;
+    } else {
+        sa = sa << 6; sb = sb << 6;
+        if (d < 0) {
+            if (eb == 0xFF) { if (sb) return __c4f_nan2(a, b); return __c4f_pack(sign, 0xFF, 0); }
+            ez = eb;
+            sa = sa + (ea ? 0x20000000 : sa);
+            sa = __c4fp_jam32(sa, 0 - d);
+        } else {
+            if (ea == 0xFF) { if (sa) return __c4f_nan2(a, b); return a; }
+            ez = ea;
+            sb = sb + (eb ? 0x20000000 : sb);
+            sb = __c4fp_jam32(sb, d);
+        }
+        sz = 0x20000000 + sa + sb;
+        if (sz < 0x40000000) { ez = ez - 1; sz = sz << 1; }
+    }
+    return __c4f_round(sign, ez, sz);
+}
+static unsigned int __c4f_nan2(unsigned int a, unsigned int b) {
+    if (__c4f_isnan(a)) return a | 0x00400000;
+    return b | 0x00400000;
+}
+static int __c4f_isnan(unsigned int a) { return (a & 0x7FFFFFFF) > 0x7F800000; }
+static unsigned int __c4f_normround(unsigned int sign, int exp, unsigned int sig) {
+    int sh;
+    sh = __c4fp_clz32(sig) - 1;
+    exp = exp - sh;
+    if (sh >= 7 && (unsigned int)exp < 0xFD)
+        return __c4f_pack(sign, sig ? exp : 0, sig << (sh - 7));
+    return __c4f_round(sign, exp, sig << sh);
+}
+static unsigned int __c4f_round(unsigned int sign, int exp, unsigned int sig) {
+    unsigned int rbits;
+    rbits = sig & 0x7F;
+    if ((unsigned int)exp >= 0xFD) {
+        if (exp < 0) {
+            sig = __c4fp_jam32(sig, 0 - exp);
+            exp = 0;
+            rbits = sig & 0x7F;
+        } else if (exp > 0xFD || sig + 0x40 >= 0x80000000) {
+            return __c4f_pack(sign, 0xFF, 0);
+        }
+    }
+    sig = (sig + 0x40) >> 7;
+    if (rbits == 0x40) sig = sig & ~1;
+    if (!sig) exp = 0;
+    return __c4f_pack(sign, exp, sig);
+}
+static unsigned int __c4f_pack(unsigned int sign, int exp, unsigned int sig) {
+    return (sign << 31) + ((unsigned int)exp << 23) + sig;
+}
+static unsigned long long __c4fp_jam64(unsigned long long a, int dist) {
+    if (dist <= 0) return a;
+    if (dist < 63) return (a >> dist) | ((a << (64 - dist)) != 0);
+    return a != 0;
+}
+static unsigned int __c4fp_jam32(unsigned int a, int dist) {
+    if (dist <= 0) return a;
+    if (dist < 31) return (a >> dist) | ((a << (32 - dist)) != 0);
+    return a != 0;
+}
+static int __c4fp_clz64(unsigned long long a) {
+    unsigned int hi;
+    hi = (unsigned int)(a >> 32);
+    if (hi) return __c4fp_clz32(hi);
+    return 32 + __c4fp_clz32((unsigned int)a);
+}
+static int __c4fp_clz32(unsigned int a) {
+    int n;
+    if (!a) return 32;
+    n = 0;
+    if (!(a & 0xFFFF0000)) { n = n + 16; a = a << 16; }
+    if (!(a & 0xFF000000)) { n = n + 8; a = a << 8; }
+    if (!(a & 0xF0000000)) { n = n + 4; a = a << 4; }
+    if (!(a & 0xC0000000)) { n = n + 2; a = a << 2; }
+    if (!(a & 0x80000000)) n = n + 1;
+    return n;
+}
+")
+;; ---- end of p:fpsrc ----
+
 ;; does the unit say `long long`, or write an LL literal?
 (define p:saysll? (lambda (ts)
 	(if (empty? ts) false
@@ -1690,7 +2370,7 @@ static int *__c4ll_neg(int *d, int *a) {
 
 (define parse:program (lambda (tokens)
 	(begin
-		(set! p:toks (p:untag (p:withll tokens) (list)))
+		(set! p:toks (p:untag (p:withll (p:withfp tokens)) (list)))
 		(set! p:enums (list))
 		(set! p:sconsts (list))
 		(set! p:locals (list))

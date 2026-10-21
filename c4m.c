@@ -1172,12 +1172,35 @@ int do_puts   (char *str) { return printf("%s", str); }
 #define c4_memcpy(d,s,n)   memcpy(d, s, n)
 #define c4_time_host()     c4m_time()
 #define c4_plain()         0 /* Plain C4 or compiled c4m natively? */
-#define c4_info()          (C4I_C4M | C4I_HRT | C4I_SIG | C4I_FLT | (pm_avail ? C4I_PROT : 0))
+#define c4_info()          (C4I_C4M | C4I_HRT | C4I_SIG | (has_float() ? C4I_FLT : 0) | (pm_avail ? C4I_PROT : 0))
 #define c4_usleep(usec)    usleep(usec)
+#if NATIVE
 #define has_float()        1
+#else
+// Built FOR the c4 VM by a compiler with a preprocessor -- cc (c4lc)
+// inside C4IX, or c4cc through ./cpp for the disk -- this c4m runs on
+// another one, and has float exactly when that machine does: it lends
+// the outer FLT (c4_float_instruction below).
+#define has_float()        ((__c4_info() & C4I_FLT) != 0)
+#endif
 #define do_float(sp)       c4_float_instruction(sp)
 #define do_putchar(c)      putchar(c)
 #define do_puts(s)         puts(s)
+#endif
+
+// c4m_float.c is the HOST's float, compiled beside a native c4m. A c4m
+// built for the c4 VM has no host and does not link it: its FLT is the
+// one the machine under it executes -- the same opcode, the same operands
+// (sp[0] the sub-op, then a and b), so the outer VM does the work. Before
+// this, such a build referenced c4_float_instruction and nothing defined
+// it: c4cc let the call dangle, and cc inside C4IX could not link c4m.
+//
+// A macro, not a function, and that is the point: plain c4 compiles the
+// body of every #if but skips every '#' line, and __c4_float is no
+// builtin of plain c4's -- a function here would stop `./c4 c4m.c`. A
+// #define is invisible to it, and do_float() is the only use.
+#if !C4_ONLY && !NATIVE
+#define c4_float_instruction(sp) __c4_float((sp)[2], (sp)[1], (sp)[0])
 #endif
 
 // The clock, for every build there is.

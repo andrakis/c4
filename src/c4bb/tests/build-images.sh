@@ -404,6 +404,11 @@ done
 cat src/c4ix/user/desktop/desktop.h src/c4ix/user/desktop/*.c > $DISK/c4ix-desktop.c
 cp src/c4ix/c4ix.h $DISK/c4ix.h
 cp src/c4ix/include/c4ix_user.h $DISK/c4ix_user.h
+# c4m as a C4IX program: c4m.c built the way cc builds it inside the
+# machine (a C4KE program, run through C4IX's compatibility layer). It
+# runs an image as c4m always has -- c4m load-c4r.c -- /usr/lib/c4ke.c4r --
+# and lends its guest the FLT of the machine under it.
+./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -P -I src/c4ix/include -I include -I . -D C4CC=1 -D __c4cc__=1 c4m.c $DISK/c4ix-c4m.c4r > /dev/null
 # what C4IX's own compilers are for (docs/c4ix-desktop.md, part three)
 cp src/c4ix/include/window.h $DISK/c4ix-window.h
 for f in README.txt hello.c bounce.c; do cp src/c4ix/examples/$f $DISK/c4ix-examples-$f; done

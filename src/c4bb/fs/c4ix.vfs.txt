@@ -11,7 +11,8 @@
 # vfsload itself is deliberately excluded: it's the boot-time loader
 # (built and named plainly as vfsload.c4r, not the c4ix-NAME.c4r
 # convention every other user program follows), not a typical app.
-BIN_ALL = hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt gui desktop tar gunzip crc32 b4ke cc
+# c4m is c4m.c built for C4IX (build-images.sh), not a src/c4ix/user program
+BIN_ALL = hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt gui desktop tar gunzip crc32 b4ke cc c4m
 # The toolchain (docs/c4ix-desktop.md, part three): C4KE programs, which
 # run here through the compatibility layer, and write what they build
 # through its OP_VFS_PUT. In /bin only, under their own names.
@@ -46,6 +47,9 @@ ARCHIVES = c4ix-root.tgz
 	# Forth), its include/ at /usr/include. These two headers are here
 	# from the start, before the archive is.
 	usr/
+		# C4KE's kernel, for c4m to boot: c4m load-c4r.c -- /usr/lib/c4ke.c4r
+		lib/:
+			c4ke.c4r
 		# headers a program compiled here is built against
 		include/:
 			window.h: c4ix-window.h

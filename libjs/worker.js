@@ -182,8 +182,29 @@ function tick() {
   schedule(0);
 }
 
+// A message for the machine (a key, a pointer move) while it waits for
+// the clock. Paced, the machine's time must not get ahead of the real
+// one, however many messages come:
+// - asleep (it napped, USLP), the nap is cut short at the real time --
+//   the guest has not read the clock since it napped, so to it the nap
+//   simply ended early, as an interrupt would end it -- and it runs now;
+// - ahead after work, it does not run early: the wait already armed
+//   ends within a slice, and the message is taken then.
+// Running at once and keeping the whole nap gave the guest a nap's worth
+// of time for every pointer move: top, the raycasters and Task Manager
+// all sped up while the mouse moved (5x, measured).
 function wake() {
   if (!vm || paused || halted) return;
+  if (!bootMsg.unpaced) {
+    const dev = vm.dev;
+    const ahead = dev.simMs() - (performance.now() - tRun - lostMs);
+    if (ahead > 0 && state === 'running') return;     // a wait is armed
+    if (ahead > 0 && state === 'sleeping') {
+      const cut = Math.min(Math.floor(ahead), dev.napMs);
+      dev.sleepMs -= cut;
+      dev.napMs -= cut;
+    }
+  }
   schedule(0);
 }
 

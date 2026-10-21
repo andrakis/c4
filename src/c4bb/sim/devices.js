@@ -170,6 +170,8 @@ export class Devices {
     this.rawKbd = 0;                  // open raw keyboards; a host UI
                                       // suppresses local echo while > 0
     this.sleepMs = 0;                 // accumulated USLP time
+    this.napMs = 0;                   // of which the last USLP's, which a
+                                      // host may cut short (libjs/worker.js)
     this.halted = false;
     this.status = 0;
     this.heapBase = 0;
@@ -454,7 +456,8 @@ export class Devices {
       case UART_TXLEN:  this.uartTxResult = this.uartWrite(val | 0); return;
       case USLP_US:
         // usleep(val): advance simulated time; also count sub-ms sleeps
-        this.sleepMs += Math.max(1, Math.floor(val / 1000));
+        this.napMs = Math.max(1, Math.floor(val / 1000));
+        this.sleepMs += this.napMs;
         return;
       case OPNAME: {
         // Written a pointer to a NUL/space-terminated name; look it up

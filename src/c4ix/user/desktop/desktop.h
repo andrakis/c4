@@ -41,6 +41,11 @@ enum { F_MONO = 0, F_SANS = 1, F_BOLD = 2 };
 
 // bevel styles
 enum { B_RAISED = 1, B_SUNKEN = 2, B_FIELD = 3, B_PRESSED = 4, B_ETCHED = 5 };
+// the look (Settings): flat outlines and solid title bars, or bevels and gradients
+enum { S_FLAT = 0, S_CLASSIC = 1 };
+extern int ui_style;
+void theme_set_style(int style);   // remembered in /etc/desktop.cfg, as the rest
+int  ui_mix(int a, int b, int t, int n);   // a colour T/N of the way from A to B
 
 // mouse events, in client coordinates
 enum { E_DOWN = 1, E_UP = 2, E_MOVE = 3, E_DBL = 4, E_WHEEL = 5 };

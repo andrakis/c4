@@ -57,13 +57,14 @@ int C_ITITLE = 0x808080;
 int C_ITITLE2 = 0xb4b4b4;
 int C_SEL = 0x000080;
 
-enum { N_THEMES = 8, T_COLS = 9 };
+enum { N_THEMES = 9, T_COLS = 9, T_MODERN = 8 };
 static char *theme_names[N_THEMES];
 static int themes[N_THEMES * T_COLS];
 static int swatches[8];
 static int cur_scheme, cur_bg;
 static int cur_wall;               // the picture (wall.c) under everything, or the colour
 static int cur_saver, cur_wait;    // the screen saver (savers.c, 0 none) and after how many minutes
+int ui_style;                      // S_FLAT or S_CLASSIC (desktop.h)
 
 static void theme_row(int i, char *name, int desk, int face, int light, int shadow,
                       int t1, int t2, int it1, int it2) {
@@ -81,10 +82,12 @@ static void theme_init() {
     theme_row(4, "Blush",             0x804050, 0xcfafb7, 0xf3e4e8, 0x9f6070, 0x9f6070, 0xd090a0, 0xa08890, 0xc8b0b8);
     theme_row(5, "Pine",           0x285040, 0xa2c8a9, 0xe2f2e6, 0x5e9a6a, 0x184830, 0x408048, 0x6a8a70, 0x9ab8a0);
     theme_row(6, "Lavender",            0x504878, 0xaea8d9, 0xeae6f8, 0x6c64a8, 0x504888, 0x8880c8, 0x8880a0, 0xb4b0d0);
+    // the flat look's own: cool greys, slate title bars, no gradient
+    theme_row(8, "Modern",           0x2e3440, 0xeceff4, 0xffffff, 0xa0a8b4, 0x3b4252, 0x3b4252, 0xd8dee9, 0xd8dee9);
     theme_row(7, "Thunder",            0x202830, 0xa8a8a8, 0xe8e8e8, 0x606060, 0x303848, 0x607088, 0x707070, 0x989898);
     swatches[0] = 0x008080; swatches[1] = 0x000040; swatches[2] = 0x000000; swatches[3] = 0x3a4a5a;
     swatches[4] = 0x205030; swatches[5] = 0x502850; swatches[6] = 0xa09070; swatches[7] = 0x606060;
-    cur_scheme = 0; cur_bg = 0 - 1; cur_wall = 1; cur_saver = 1; cur_wait = 5;
+    cur_scheme = T_MODERN; cur_bg = 0 - 1; cur_wall = 1; cur_saver = 1; cur_wait = 5; ui_style = S_FLAT;
 }
 static void theme_apply() {
     int *t;
@@ -104,7 +107,7 @@ int theme_swatch(int i) { return i >= 0 && i < 8 ? swatches[i] : 0; }
 
 // /etc/desktop.cfg: "scheme N bg V wall W saver S wait M", read when the desktop starts, so a
 // choice outlives Power Off (not a reload of the page: the disk is RAM)
-static char cfg[96];
+static char cfg[112];
 static int cfg_num(char *s, int *v) {
     int n, neg, k;
     n = 0; neg = 0; k = 0;
@@ -116,7 +119,7 @@ static int cfg_num(char *s, int *v) {
 static void theme_load() {
     int fd, n, i, v;
     if ((fd = uopen("/etc/desktop.cfg", O_RD)) < 0) return;
-    n = uread(fd, cfg, 95);
+    n = uread(fd, cfg, 111);
     uclose(fd);
     if (n <= 0) return;
     cfg[n] = 0;
@@ -129,6 +132,7 @@ static void theme_load() {
         if (cfg[i] == 'b' && cfg[i + 1] == 'g' && cfg[i + 2] == ' ') { cfg_num(cfg + i + 3, &v); cur_bg = v; }
         if (cfg[i] == 'w' && cfg[i + 1] == 'a' && cfg[i + 2] == 'l' && cfg[i + 4] == ' ') { cfg_num(cfg + i + 5, &v); cur_wall = v != 0; }
         if (cfg[i] == 's' && cfg[i + 1] == 'a' && cfg[i + 5] == ' ') { cfg_num(cfg + i + 6, &v); if (v >= 0 && v < saver_count()) cur_saver = v; }
+        if (cfg[i] == 's' && cfg[i + 1] == 't' && cfg[i + 5] == ' ') { cfg_num(cfg + i + 6, &v); ui_style = v == S_CLASSIC ? S_CLASSIC : S_FLAT; }
         if (cfg[i] == 'w' && cfg[i + 1] == 'a' && cfg[i + 2] == 'i' && cfg[i + 4] == ' ') { cfg_num(cfg + i + 5, &v); if (v >= 1 && v <= 60) cur_wait = v; }
         ++i;
     }
@@ -146,6 +150,7 @@ static void theme_save() {
     ui_num(cfg + ui_len(cfg), cur_saver);
     ui_cat(cfg, " wait ");
     ui_num(cfg + ui_len(cfg), cur_wait);
+    ui_cat(cfg, ui_style == S_CLASSIC ? " style 1" : " style 0");
     ui_cat(cfg, "\n");
     write(fd, cfg, ui_len(cfg));
     uclose(fd);
@@ -164,6 +169,12 @@ void theme_set_wall(int on) {
     theme_save();
     dirty = 1;
 }
+// the look: S_FLAT or S_CLASSIC, remembered
+void theme_set_style(int style) {
+    ui_style = style == S_CLASSIC ? S_CLASSIC : S_FLAT;
+    theme_save();
+    dirty = 1;
+}
 // the screen saver (savers.c) and its wait, in minutes
 void theme_set_saver(int which, int wait) {
     if (which >= 0 && which < saver_count()) cur_saver = which;
@@ -177,7 +188,7 @@ static int saver_grace;
 void saver_preview() {
     if (!cur_saver) return;
     saver_start(cur_saver);
-    saver_grace = __time() + 400;
+    saver_grace = __time() + 150;
 }
 
 // ---- damage ----
@@ -254,6 +265,11 @@ void d_clip_end() { wclip(clip_x, clip_y, clip_w, clip_h); }
 // the other way round for a sunken one).
 void d_bevel(int x, int y, int w, int h, int style) {
     int a, b, c, d;
+    // Flat: an outline, the accent's when pressed
+    if (ui_style == S_FLAT) {
+        if (w > 1 && h > 1) gui_recto(x, y, w - 1, h - 1, style == B_PRESSED ? C_TITLE : C_SHADOW);
+        return;
+    }
     if (style == B_ETCHED) {
         gui_recto(x, y, w - 1, h - 1, C_SHADOW);
         gui_recto(x + 1, y + 1, w - 1, h - 1, C_LIGHT);
@@ -570,7 +586,7 @@ static void app_command(struct win *w, int menu, int item) {
 
 // ---- drawing the scene -----------------------------------------------------------
 
-static int mix(int a, int b, int t, int n) {
+int ui_mix(int a, int b, int t, int n) {
     int r, g, bl;
     r = ((a >> 16) & 255) + ((((b >> 16) & 255) - ((a >> 16) & 255)) * t) / n;
     g = ((a >> 8) & 255) + ((((b >> 8) & 255) - ((a >> 8) & 255)) * t) / n;
@@ -580,27 +596,31 @@ static int mix(int a, int b, int t, int n) {
 
 static void gradient(int x, int y, int w, int h, int a, int b) {
     int i, n, bw;
+    if (ui_style == S_FLAT) { gui_rect(x, y, w, h, a); return; }
     n = 16; bw = (w + n - 1) / n;
     i = 0;
     while (i < n) {
-        if (i * bw < w) gui_rect(x + i * bw, y, (i + 1) * bw > w ? w - i * bw : bw, h, mix(a, b, i, n - 1));
+        if (i * bw < w) gui_rect(x + i * bw, y, (i + 1) * bw > w ? w - i * bw : bw, h, ui_mix(a, b, i, n - 1));
         ++i;
     }
 }
 
+static int cap_ink, cap_bg;           // flat: the glyph's colour and the bar's under it
 static void cap_button(int x, int y, int what) {
-    gui_rect(x, y, 16, 14, C_FACE);
-    d_bevel(x, y, 16, 14, B_RAISED);
+    int k;
+    k = C_DARK;
+    if (ui_style == S_FLAT) k = cap_ink;
+    else { gui_rect(x, y, 16, 14, C_FACE); d_bevel(x, y, 16, 14, B_RAISED); }
     if (what == 0) {                               // close: an X
-        gui_line(x + 4, y + 3, x + 10, y + 9, C_DARK); gui_line(x + 5, y + 3, x + 11, y + 9, C_DARK);
-        gui_line(x + 10, y + 3, x + 4, y + 9, C_DARK); gui_line(x + 11, y + 3, x + 5, y + 9, C_DARK);
+        gui_line(x + 4, y + 3, x + 10, y + 9, k); gui_line(x + 5, y + 3, x + 11, y + 9, k);
+        gui_line(x + 10, y + 3, x + 4, y + 9, k); gui_line(x + 11, y + 3, x + 5, y + 9, k);
     } else if (what == 1) {                        // maximise
-        gui_recto(x + 3, y + 2, 9, 9, C_DARK); gui_rect(x + 3, y + 3, 9, 1, C_DARK);
+        gui_recto(x + 3, y + 2, 9, 9, k); gui_rect(x + 3, y + 3, 9, 1, k);
     } else if (what == 2) {                        // restore
-        gui_recto(x + 5, y + 2, 7, 6, C_DARK); gui_rect(x + 5, y + 3, 7, 1, C_DARK);
-        gui_rect(x + 3, y + 5, 7, 6, C_FACE);
-        gui_recto(x + 3, y + 5, 7, 6, C_DARK); gui_rect(x + 3, y + 6, 7, 1, C_DARK);
-    } else gui_rect(x + 4, y + 9, 6, 2, C_DARK);  // minimise
+        gui_recto(x + 5, y + 2, 7, 6, k); gui_rect(x + 5, y + 3, 7, 1, k);
+        gui_rect(x + 3, y + 5, 7, 6, ui_style == S_FLAT ? cap_bg : C_FACE);
+        gui_recto(x + 3, y + 5, 7, 6, k); gui_rect(x + 3, y + 6, 7, 1, k);
+    } else gui_rect(x + 4, y + 9, 6, 2, k);        // minimise
 }
 
 static int is_dialog(struct win *w) { return w->kind == K_MSG || w->kind == K_INPUT; }
@@ -679,15 +699,25 @@ static int dropdown_hit(int px, int py) {
 }
 
 static void draw_window(struct win *w, int focused) {
-    int tx, bx, by;
+    int tx, bx, by, ink;
     gui_rect(w->x, w->y, w->w, w->h, C_FACE);
-    d_bevel(w->x, w->y, w->w, w->h, B_RAISED);
-    if (focused) gradient(w->x + BORDER, w->y + BORDER, w->w - 2 * BORDER, TITLE_H, C_TITLE, C_TITLE2);
-    else gradient(w->x + BORDER, w->y + BORDER, w->w - 2 * BORDER, TITLE_H, C_ITITLE, C_ITITLE2);
+    if (ui_style == S_FLAT) {
+        cap_bg = focused ? C_TITLE : C_ITITLE;
+        gui_rect(w->x, w->y, w->w, BORDER + TITLE_H, cap_bg);
+        gui_recto(w->x, w->y, w->w - 1, w->h - 1, focused ? C_TITLE : C_SHADOW);
+        // white on the dark bar, the scheme's dark on a light one
+        ink = (((cap_bg >> 16) & 255) + ((cap_bg >> 8) & 255) + (cap_bg & 255)) < 384 ? C_WHITE : 0x404850;
+        cap_ink = ink;
+    } else {
+        d_bevel(w->x, w->y, w->w, w->h, B_RAISED);
+        if (focused) gradient(w->x + BORDER, w->y + BORDER, w->w - 2 * BORDER, TITLE_H, C_TITLE, C_TITLE2);
+        else gradient(w->x + BORDER, w->y + BORDER, w->w - 2 * BORDER, TITLE_H, C_ITITLE, C_ITITLE2);
+        ink = focused ? C_LIGHT : C_FACE;
+    }
     tx = w->x + BORDER + 3;
     if (!is_dialog(w)) { d_icon(w->kind, tx, w->y + BORDER + 1); tx = tx + 20; }
     wclip(w->x + BORDER, w->y + BORDER, w->w - 2 * BORDER - 56, TITLE_H);
-    d_text(tx, w->y + BORDER + 3, focused ? C_LIGHT : C_FACE, F_BOLD, w->title);
+    d_text(tx, w->y + BORDER + 3, ink, F_BOLD, w->title);
     wnoclip();
     by = w->y + BORDER + 2;
     bx = w->x + w->w - BORDER - 2 - 16;
@@ -753,7 +783,7 @@ static void draw_start() {
     mx = 2; my = SH - TASK_H - mh;
     gui_rect(mx, my, mw, mh, C_FACE);
     d_bevel(mx, my, mw, mh, B_RAISED);
-    gui_rect(mx + 3, my + 3, 22, mh - 6, C_SHADOW);
+    gui_rect(mx + 3, my + 3, 22, mh - 6, ui_style == S_FLAT ? C_TITLE : C_SHADOW);
     c[1] = 0;
     banner = "C4IX";
     k = 0;
@@ -808,11 +838,14 @@ static void draw_taskbar() {
     char *p;
     struct win *w;
     gui_rect(0, SH - TASK_H, SW, TASK_H, C_FACE);
-    gui_rect(0, SH - TASK_H + 1, SW, 1, C_LIGHT);
-    gui_rect(2, SH - TASK_H + 4, 56, 22, C_FACE);
-    d_bevel(2, SH - TASK_H + 4, 56, 22, start_open ? B_PRESSED : B_RAISED);
-    gui_rect(8, SH - TASK_H + 9, 5, 5, 0xff2020); gui_rect(14, SH - TASK_H + 9, 5, 5, 0x20c020);
-    gui_rect(8, SH - TASK_H + 15, 5, 5, 0x2040ff); gui_rect(14, SH - TASK_H + 15, 5, 5, 0xffd020);
+    gui_rect(0, SH - TASK_H + (ui_style == S_FLAT ? 0 : 1), SW, 1, ui_style == S_FLAT ? C_SHADOW : C_LIGHT);
+    gui_rect(2, SH - TASK_H + 4, 56, 22, ui_style == S_FLAT && start_open ? C_LIGHT : C_FACE);
+    if (ui_style == S_CLASSIC || start_open) d_bevel(2, SH - TASK_H + 4, 56, 22, start_open ? B_PRESSED : B_RAISED);
+    // C4IX's mark: a cake (C4IX, C4KE -- cakes), its candle lit
+    k = SH - TASK_H + 4;
+    gui_rect(8, k + 13, 15, 6, 0x8b5a2b);
+    gui_rect(8, k + 10, 15, 3, 0xf0a0c8); gui_rect(10, k + 13, 2, 2, 0xf0a0c8); gui_rect(17, k + 13, 2, 3, 0xf0a0c8);
+    gui_rect(15, k + 4, 2, 6, 0xf4f4f4); gui_rect(15, k + 1, 2, 3, 0xffb020);
     d_text(28, SH - TASK_H + 9, C_DARK, F_BOLD, "Go");
     f = win_focused();
     bw = button_w();
@@ -821,8 +854,13 @@ static void draw_taskbar() {
         i = w->id;
         if (w->used && !is_dialog(w)) {
             bx = 64 + k * (bw + 4);
-            gui_rect(bx, SH - TASK_H + 4, bw, 22, i == f ? 0xe0e0e0 : C_FACE);
-            d_bevel(bx, SH - TASK_H + 4, bw, 22, i == f ? B_PRESSED : B_RAISED);
+            if (ui_style == S_FLAT) {
+                gui_rect(bx, SH - TASK_H + 4, bw, 22, i == f ? C_LIGHT : C_FACE);
+                if (i == f) gui_rect(bx, SH - TASK_H + 24, bw, 2, C_TITLE);
+            } else {
+                gui_rect(bx, SH - TASK_H + 4, bw, 22, i == f ? 0xe0e0e0 : C_FACE);
+                d_bevel(bx, SH - TASK_H + 4, bw, 22, i == f ? B_PRESSED : B_RAISED);
+            }
             d_icon(w->kind, bx + 4, SH - TASK_H + 7);
             wclip(bx + 22, SH - TASK_H + 4, bw - 26, 22);
             d_text(bx + 24, SH - TASK_H + 9, C_DARK, i == f ? F_BOLD : F_SANS, w->title);
@@ -832,7 +870,7 @@ static void draw_taskbar() {
         w = w->next;
     }
     gui_rect(CPU_X, SH - TASK_H + 4, CPU_W, 22, C_FACE);
-    d_bevel(CPU_X, SH - TASK_H + 4, CPU_W, 22, B_SUNKEN);
+    if (ui_style == S_CLASSIC) d_bevel(CPU_X, SH - TASK_H + 4, CPU_W, 22, B_SUNKEN);
     gui_rect(CPU_X + 5, SH - TASK_H + 8, 8, 14, 0x000000);
     h = (cpu_pct * 14 + 50) / 100;
     if (h > 0) gui_rect(CPU_X + 5, SH - TASK_H + 22 - h, 8, h, 0x00e000);
@@ -841,7 +879,7 @@ static void draw_taskbar() {
     ui_cat(tbuf, "%");
     d_text(CPU_X + 17, SH - TASK_H + 9, C_DARK, F_SANS, tbuf);
     gui_rect(SW - 76, SH - TASK_H + 4, 72, 22, C_FACE);
-    d_bevel(SW - 76, SH - TASK_H + 4, 72, 22, B_SUNKEN);
+    if (ui_style == S_CLASSIC) d_bevel(SW - 76, SH - TASK_H + 4, 72, 22, B_SUNKEN);
     secs = gui_clock();
     h = secs / 3600; m = (secs / 60) % 60;
     p = tbuf;
@@ -1161,6 +1199,7 @@ int main(int argc, char **argv) {
     // canvas may have been cleared, and the scene is drawn again
     gui_events(GUI_M_MOVE | GUI_M_BUTTONS | GUI_M_KEYS | GUI_M_WHEEL | GUI_M_WINDOW);
     theme_init();
+    theme_apply();                     // the default scheme, unless the file names one
     theme_load();
     wall_load("/usr/share/splash/c4ix.c4p.gz");
     ev = ualloc(4 * sizeof(int));

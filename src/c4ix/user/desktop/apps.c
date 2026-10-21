@@ -286,7 +286,7 @@ int settings_open() {
     w = win_first();
     while (w) { if (w->used && w->kind == K_SETTINGS) { win_raise(w->id); return w->id; } w = w->next; }
     dflt_label = "Defaults";
-    return win_open(K_SETTINGS, "Settings", 440, 380);
+    return win_open(K_SETTINGS, "Settings", 440, 430);
 }
 
 void settings_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
@@ -318,7 +318,9 @@ void settings_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     d_bevel(x, y, cw - 210, 170, B_SUNKEN);
     d_rect(x + 12, y + 14, 150, 70, C_FACE); d_bevel(x + 12, y + 14, 150, 70, B_RAISED);
     d_rect(x + 15, y + 17, 144, 16, C_ITITLE);
-    d_text(x + 19, y + 19, C_FACE, F_BOLD, "Inactive Window");
+    // its title in the scheme's dark when the bar is light, as the windows' (wm.c)
+    i = ((C_ITITLE >> 16) & 255) + ((C_ITITLE >> 8) & 255) + (C_ITITLE & 255);
+    d_text(x + 19, y + 19, ui_style == S_FLAT && i >= 384 ? 0x404850 : C_FACE, F_BOLD, "Inactive Window");
     d_rect(x + 28, y + 50, 170, 100, C_FACE); d_bevel(x + 28, y + 50, 170, 100, B_RAISED);
     d_rect(x + 31, y + 53, 164, 16, C_TITLE);
     d_text(x + 35, y + 55, C_LIGHT, F_BOLD, "Active Window");
@@ -341,6 +343,11 @@ void settings_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     ui_button(x + 130, y + 62, 22, 20, "-", 0, 0);
     d_text(x + 156, y + 66, C_DARK, F_SANS, sbuf);
     ui_button(x + 192, y + 62, 22, 20, "+", 0, 0);
+    // the look
+    y = oy + 192 + 26 + n * 18 + 8;
+    ui_group(x, y, cw - 210, 44, "Look");
+    ui_radio(x + 10, y + 18, "Flat", ui_style == S_FLAT);
+    ui_radio(x + 90, y + 18, "Classic", ui_style == S_CLASSIC);
     ui_button(ox + 8, oy + ch - 34, 86, 24, dflt_label, 0, 0);
 }
 
@@ -370,7 +377,11 @@ void settings_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     if (ui_hit(x, y, 330, 206, 70, 22)) { saver_preview(); return; }
     if (ui_hit(x, y, 330, 254, 22, 20)) { theme_set_saver(theme_saver(), theme_wait() - 1); return; }
     if (ui_hit(x, y, 392, 254, 22, 20)) { theme_set_saver(theme_saver(), theme_wait() + 1); return; }
-    if (ui_hit(x, y, 8, ch - 34, 86, 24)) { theme_set(0, 0 - 1); theme_set_wall(1); }
+    // the look group (settings_draw): under the savers
+    sy = 192 + 26 + saver_count() * 18 + 8 + 18;
+    if (ui_hit(x, y, 206, sy - 2, 70, 16)) { theme_set_style(S_FLAT); return; }
+    if (ui_hit(x, y, 286, sy - 2, 80, 16)) { theme_set_style(S_CLASSIC); return; }
+    if (ui_hit(x, y, 8, ch - 34, 86, 24)) { theme_set(theme_count() - 1, 0 - 1); theme_set_wall(1); theme_set_style(S_FLAT); }
 }
 
 // Up and Down walk the schemes; Esc or Enter closes

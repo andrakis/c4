@@ -622,3 +622,34 @@ It keeps the era's feel, but nothing it shows is Microsoft's any more:
 Earlier parts above keep the names they were written with where they
 describe what was done then. The code's own names (`K_NOTE`,
 `taskmgr.c`, the Editor's `:Explore`) are unchanged.
+
+## Part eleven: two looks, flat by default (asked for 2026-10-21)
+
+- [x] **Flat** (the default), after the open-source desktops rather than
+      Windows: 1-pixel outlines where there were two-pixel bevels; solid
+      title bars to the window's edges, their caption buttons bare glyphs
+      in the bar's text colour (white on a dark bar, the scheme's dark on
+      a light one); light buttons with an accent outline for the default;
+      tabs underlined in the accent; radio buttons filled with it; slim
+      scroll-bar thumbs on the track; a flat taskbar whose focused button
+      is underlined; the Go menu's banner in the accent. The accent is the
+      scheme's title colour.
+- [x] **Modern**, a ninth scheme, made for it: cool greys, slate title
+      bars, no gradient. It is the default, applied as the desktop starts
+      (the scheme's colours were only ever applied from /etc/desktop.cfg:
+      the default had been the compiled-in Classic Teal).
+- [x] **Classic**: the bevelled look the desktop had, with any scheme.
+- [x] Every window keeps its geometry in both, so nothing moves when the
+      look changes and no hit test differs. The routines that draw chrome
+      ask `ui_style` (`d_bevel`, the caption buttons, `draw_window`,
+      `draw_taskbar`, `draw_start`, and ui.c's buttons, scroll bars, tabs,
+      radios and headers); the applications draw through them.
+- [x] **Go's mark** is C4IX's own now in both looks: a little cake with
+      its candle lit, where the four coloured squares were.
+- [x] Settings has a Look group (Flat, Classic); `/etc/desktop.cfg` gains
+      `style 0|1`; Defaults is Modern, Flat and the picture. Preview's
+      grace for its own click is 150 ms (it was 400, long enough to swallow
+      the key test-desktop pressed to end the saver).
+- [x] Pinned by test-desktop.mjs: the desktop starts Flat; Look > Classic
+      and back, seen in the taskbar's top line; Defaults brings Modern
+      back. Seen in a browser (2026-10-22).

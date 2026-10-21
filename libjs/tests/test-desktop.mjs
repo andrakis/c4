@@ -608,9 +608,22 @@ type('cat /etc/desktop.cfg\n');
 check(until(() => has(/^scheme 1 bg -1/)), 'the choice is kept in /etc/desktop.cfg', screen());
 start('Settings');
 clickText('Defaults');
-check(until(() => rects.some(r => r.rgb === 0xc0c0c0 && r.w > 300) && !rects.some(r => r.rgb === 0xb8c4cc)), 'Defaults brings Classic Teal back', screen());
+check(until(() => rects.some(r => r.rgb === 0xeceff4 && r.w > 300) && !rects.some(r => r.rgb === 0xb8c4cc)), 'Defaults brings the Modern scheme back', screen());
 key('ESC');
 until(() => !has('Color scheme'));
+
+// ---- the look: Flat (the default) or Classic ----------------------------------------------------
+// Flat outlines the taskbar along its top in the shadow; Classic lights a line one down
+const taskLine = dy => rects.some(r => r.w === SW && r.h === 1 && r.y === SH - TASK_H + dy);
+check(taskLine(0) && !taskLine(1), 'the desktop starts in the Flat look', screen());
+start('Settings');
+until(() => has('Look'));
+clickText('Classic', 'last', -8, 5);
+check(until(() => taskLine(1)), 'Settings > Look > Classic bevels it', screen());
+clickText('Flat', 'last', -8, 5);
+check(until(() => taskLine(0) && !taskLine(1)), 'and Flat flattens it again', screen());
+key('ESC');
+until(() => !has('Look'));
 
 // ---- the picture, and the screen savers ------------------------------------------------------
 check(imgdefs === 64 && imgs >= 1, 'the desktop\'s picture went to the display once, as 64 tiles, and is drawn', `imgdefs ${imgdefs} imgs ${imgs}`);
@@ -627,7 +640,7 @@ check(until(() => has('4 min')), 'the wait goes down a minute', screen());
 clickText('Preview');
 {
   const p = presents;
-  check(until(() => !has('Go') && presents > p + 10), 'Preview runs the screen saver over everything', screen());
+  check(until(() => !has('Go') && presents > p + 15), 'Preview runs the screen saver over everything', screen());
 }
 key('a');
 check(until(() => has('Go') && has('Screen saver')), 'a key ends it and the desktop comes back as it was', screen());
@@ -636,7 +649,7 @@ until(() => !has('Screen saver'));
 // a Terminal's title, not its taskbar button (drawn after the windows)
 clickText(/^Terminal - task/, 'first');
 type('cat /etc/desktop.cfg\n');
-check(until(() => has(/wall 1 saver 2 wait 4/), 800), 'the picture and the saver are kept in /etc/desktop.cfg',
+check(until(() => has(/wall 1 saver 2 wait 4 style 0/), 800), 'the picture and the saver are kept in /etc/desktop.cfg',
   frame.filter(t => /scheme|saver|cat /.test(t.s)).map(t => t.s.trimEnd()).join(' | '));
 // and no saver again, or the long waits below would start one over the clicks they make
 start('Settings');

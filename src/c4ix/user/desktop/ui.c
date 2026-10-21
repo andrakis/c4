@@ -57,6 +57,15 @@ int ui_hit(int px, int py, int x, int y, int w, int h) {
 
 void ui_button(int x, int y, int w, int h, char *label, int pressed, int deflt) {
     int lw;
+    if (ui_style == S_FLAT) {
+        // a light face and an outline; the default's in the accent, two deep
+        d_rect(x, y, w, h, pressed ? ui_mix(C_FACE, C_SHADOW, 1, 3) : C_LIGHT);
+        d_bevel(x, y, w, h, B_RAISED);
+        if (deflt) { d_recto(x, y, w - 1, h - 1, C_TITLE); d_recto(x + 1, y + 1, w - 3, h - 3, C_TITLE); }
+        lw = ui_len(label) * 6;
+        d_text(x + (w - lw) / 2, y + (h - 12) / 2, C_DARK, F_SANS, label);
+        return;
+    }
     d_rect(x, y, w, h, C_FACE);
     if (deflt) { d_recto(x - 1, y - 1, w + 1, h + 1, C_DARK); }
     d_bevel(x, y, w, h, pressed ? B_PRESSED : B_RAISED);
@@ -69,8 +78,10 @@ void ui_button(int x, int y, int w, int h, char *label, int pressed, int deflt) 
 void ui_scrollbar(int x, int y, int h, int total, int visible, int top) {
     int track, th, ty;
     d_rect(x, y, 16, h, 0xe0e0e0);
-    d_rect(x, y, 16, 16, C_FACE); d_bevel(x, y, 16, 16, B_RAISED);
-    d_rect(x, y + h - 16, 16, 16, C_FACE); d_bevel(x, y + h - 16, 16, 16, B_RAISED);
+    if (ui_style == S_CLASSIC) {
+        d_rect(x, y, 16, 16, C_FACE); d_bevel(x, y, 16, 16, B_RAISED);
+        d_rect(x, y + h - 16, 16, 16, C_FACE); d_bevel(x, y + h - 16, 16, 16, B_RAISED);
+    }
     d_line(x + 8, y + 5, x + 4, y + 9, C_DARK); d_line(x + 8, y + 5, x + 12, y + 9, C_DARK);
     d_rect(x + 4, y + 9, 9, 1, C_DARK);
     d_line(x + 4, y + h - 10, x + 8, y + h - 6, C_DARK); d_line(x + 12, y + h - 10, x + 8, y + h - 6, C_DARK);
@@ -80,6 +91,7 @@ void ui_scrollbar(int x, int y, int h, int total, int visible, int top) {
     th = (track * visible) / total;
     if (th < 10) th = 10;
     ty = y + 16 + ((track - th) * top) / (total - visible);
+    if (ui_style == S_FLAT) { d_rect(x + 4, ty + 1, 8, th - 2, C_SHADOW); return; }
     d_rect(x, ty, 16, th, C_FACE);
     d_bevel(x, ty, 16, th, B_RAISED);
 }
@@ -109,8 +121,10 @@ void ui_scroll_end() { sd_on = 0; }
 void ui_hscrollbar(int x, int y, int w, int total, int visible, int left) {
     int track, tw, tx;
     d_rect(x, y, w, 16, 0xe0e0e0);
-    d_rect(x, y, 16, 16, C_FACE); d_bevel(x, y, 16, 16, B_RAISED);
-    d_rect(x + w - 16, y, 16, 16, C_FACE); d_bevel(x + w - 16, y, 16, 16, B_RAISED);
+    if (ui_style == S_CLASSIC) {
+        d_rect(x, y, 16, 16, C_FACE); d_bevel(x, y, 16, 16, B_RAISED);
+        d_rect(x + w - 16, y, 16, 16, C_FACE); d_bevel(x + w - 16, y, 16, 16, B_RAISED);
+    }
     d_line(x + 5, y + 8, x + 9, y + 4, C_DARK); d_line(x + 5, y + 8, x + 9, y + 12, C_DARK);
     d_rect(x + 9, y + 4, 1, 9, C_DARK);
     d_line(x + w - 6, y + 8, x + w - 10, y + 4, C_DARK); d_line(x + w - 6, y + 8, x + w - 10, y + 12, C_DARK);
@@ -120,6 +134,7 @@ void ui_hscrollbar(int x, int y, int w, int total, int visible, int left) {
     tw = (track * visible) / total;
     if (tw < 10) tw = 10;
     tx = x + 16 + ((track - tw) * left) / (total - visible);
+    if (ui_style == S_FLAT) { d_rect(tx + 1, y + 4, tw - 2, 8, C_SHADOW); return; }
     d_rect(tx, y, tw, 16, C_FACE);
     d_bevel(tx, y, tw, 16, B_RAISED);
 }
@@ -223,7 +238,11 @@ void ui_tabs(int x, int y, char **labels, int n, int sel) {
     k = 0;
     while (k < n) {
         tw = ui_len(labels[k]) * 7 + 16;
-        if (k == sel) {
+        if (ui_style == S_FLAT) {
+            d_rect(tx, y, tw, 22, k == sel ? C_LIGHT : C_FACE);
+            if (k == sel) d_rect(tx, y + 19, tw, 3, C_TITLE);
+            d_text(tx + 8, y + 5, C_DARK, k == sel ? F_BOLD : F_SANS, labels[k]);
+        } else if (k == sel) {
             d_rect(tx - 2, y, tw + 4, 22, C_FACE);
             d_rect(tx - 2, y, tw + 4, 1, C_LIGHT); d_rect(tx - 2, y, 1, 22, C_LIGHT);
             d_rect(tx + tw + 1, y + 1, 1, 21, C_DARK);
@@ -260,9 +279,9 @@ void ui_group(int x, int y, int w, int h, char *label) {
 }
 
 void ui_radio(int x, int y, char *label, int on) {
-    d_disc(x + 6, y + 6, 6, C_SHADOW);
+    d_disc(x + 6, y + 6, 6, ui_style == S_FLAT && on ? C_TITLE : C_SHADOW);
     d_disc(x + 6, y + 6, 5, C_WHITE);
-    if (on) d_disc(x + 6, y + 6, 2, C_DARK);
+    if (on) d_disc(x + 6, y + 6, ui_style == S_FLAT ? 3 : 2, ui_style == S_FLAT ? C_TITLE : C_DARK);
     d_text(x + 16, y, C_DARK, F_SANS, label);
 }
 
@@ -272,7 +291,8 @@ void ui_header(int x, int y, int *widths, char **labels, int n) {
     k = 0;
     while (k < n) {
         d_rect(x, y, widths[k], 18, C_FACE);
-        d_bevel(x, y, widths[k], 18, B_RAISED);
+        if (ui_style == S_FLAT) { d_rect(x, y + 17, widths[k], 1, C_SHADOW); d_rect(x + widths[k] - 1, y + 3, 1, 12, C_SHADOW); }
+        else d_bevel(x, y, widths[k], 18, B_RAISED);
         d_text(x + 5, y + 3, C_DARK, F_SANS, labels[k]);
         x = x + widths[k];
         ++k;

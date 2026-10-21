@@ -73,7 +73,7 @@
 // With plain c4:
 //  ./c4 c4m.c [-sSdpP] <first file.c> [file n.c, ...] [-- arguments...]
 // Example:
-//  c4 c4m.c classes.c classes_test.c -- test arguments
+//  c4 c4m.c src/c4ke/stdlib/classes.c src/c4ke/stdlib/classes_test.c -- test arguments
 //
 // Parameters:
 //  -s           Print the source and exit (memory leaks)
@@ -142,12 +142,15 @@
 //   + Used by C4KE in trap handlers.
 // - void __c4_adjust (int offset); Adjust the stack. Negative offset grows stack.
 // - int __opcode (char *name);     Request the integer value of an opcode.
-// - int __builtin (char *name);    Request the opcode for a builtin.
+// - int __builtin (char *name);    Reserved: meant to return the opcode for a
+//                                  builtin, but it is a stub that always
+//                                  returns -1 (see __builtin below). Use
+//                                  __opcode("NAME") instead.
 // - Adds JSRI: Jump to SubRoutine Indirect: 'int *f; int call_it(int a) { return f(a); }'
 // - Adds JSRS: Jump to SubRoutine on Stack: 'int call_it (int a, int *f){ return f(a); }' or
 //                                           'int call_it (int a) { int *f; f = (int *)&func; return f(a); }'
 // - Adds &function to get function address. Can be called if stored in an int*.
-//   See classes.c and classes_test.c for usage. // TODO: these files moved. Update locationj.
+//   See src/c4ke/stdlib/classes.c and classes_test.c for usage.
 // - Adds stacktrace() builtin
 // - Adds realloc() builtin
 // - Adds memcpy() builtin
@@ -191,6 +194,8 @@
 // preprocessor and skipped this line.
 #ifndef C4M_NO_U0
 #include <u0.h>
+// a guest's signals, through the kernel this c4m runs on (c4m_signal.h)
+#include <c4m_signal.h>
 #endif
 #endif
 
@@ -1216,6 +1221,7 @@ int has_float () { return 0; }
 int do_float  (int *sp) { return 0; }
 int do_putchar(char *c) { return printf("%c", c); }
 int do_puts   (char *str) { return printf("%s", str); }
+int *do_sigh  (int sig, int *handler) { return __c4_signal(sig, handler); }
 #else
 // When compiled natively, use whatever native functions we can.
 // TODO: native c4_malloc, etc disabled due to bad implementation.
@@ -1225,12 +1231,40 @@ int do_puts   (char *str) { return printf("%s", str); }
 #define c4_memcpy(d,s,n)   memcpy(d, s, n)
 #define c4_time_host()     c4m_time()
 #define c4_plain()         0 /* Plain C4 or compiled c4m natively? */
-#define c4_info()          (C4I_C4M | C4I_HRT | C4I_SIG | C4I_FLT | (pm_avail ? C4I_PROT : 0))
+#define c4_info()          (C4I_C4M | C4I_HRT | C4I_SIG | (has_float() ? C4I_FLT : 0) | (pm_avail ? C4I_PROT : 0))
 #define c4_usleep(usec)    usleep(usec)
+#if NATIVE
 #define has_float()        1
+#else
+// Built FOR the c4 VM by a compiler with a preprocessor -- cc (c4lc)
+// inside C4IX, or c4cc through ./cpp for the disk -- this c4m runs on
+// another one, and has float exactly when that machine does: it lends
+// the outer FLT (c4_float_instruction below).
+#define has_float()        ((__c4_info() & C4I_FLT) != 0)
+#endif
 #define do_float(sp)       c4_float_instruction(sp)
 #define do_putchar(c)      putchar(c)
 #define do_puts(s)         puts(s)
+#if !NATIVE && defined(__c4cc__) && !defined(C4M_NO_U0)
+#define do_sigh(sig, h)    c4m_guest_signal(sig, h)
+#else
+#define do_sigh(sig, h)    __c4_signal(sig, h)
+#endif
+#endif
+
+// c4m_float.c is the HOST's float, compiled beside a native c4m. A c4m
+// built for the c4 VM has no host and does not link it: its FLT is the
+// one the machine under it executes -- the same opcode, the same operands
+// (sp[0] the sub-op, then a and b), so the outer VM does the work. Before
+// this, such a build referenced c4_float_instruction and nothing defined
+// it: c4cc let the call dangle, and cc inside C4IX could not link c4m.
+//
+// A macro, not a function, and that is the point: plain c4 compiles the
+// body of every #if but skips every '#' line, and __c4_float is no
+// builtin of plain c4's -- a function here would stop `./c4 c4m.c`. A
+// #define is invisible to it, and do_float() is the only use.
+#if !C4_ONLY && !NATIVE
+#define c4_float_instruction(sp) __c4_float((sp)[2], (sp)[1], (sp)[0])
 #endif
 
 // The clock, for every build there is.
@@ -2917,7 +2951,17 @@ int c4m_main(int argc, char **argv)
 		//	mode = MODE_UNPROTECTED;
 		//}
 	}
-	else if (i == SIGH) a = (int)__c4_signal(sp[1], (int *)sp[0]);
+	else if (i == SIGH) {
+		// Guarded: run here it replaces the MACHINE's handler -- the
+		// kernel's own -- with an address in the task. The kernel
+		// gives the task a handler of its own instead.
+		if (mode == MODE_UNPROTECTED) a = (int)do_sigh(sp[1], (int *)sp[0]);
+		else {
+			trap(TRAP_PM_VIOLATION, SIGH, trap_handler, &sp, &bp, &pc, a, mode);
+			cycle_interrupt_interval = 0;
+			mode = MODE_UNPROTECTED;
+		}
+	}
 	else if (i == INFO) {
 		// Trap this under protected mode
 		if (mode == MODE_UNPROTECTED)

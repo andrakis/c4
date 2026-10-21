@@ -643,6 +643,15 @@ loading or assigning a whole struct is an error.
   pipe (C4KE's shell under c4m in a Terminal polls them), and a
   read on a non-blocking descriptor with nothing yet returns -1.
 
+- **`SIGH` guarded** (2026-10-22): `__c4_signal` sets the machine's
+  handler for a signal, which in C4IX is the kernel's own. A protected
+  task that ran it replaced that handler with an address of its own,
+  and the next Ctrl-C trapped into it, after the task had exited too.
+  c4m, c4mpg, libjs and the board now trap it in protected mode, as
+  they do USLP, and `sys_pmviolation` makes it the task's own handler
+  (`ck_signal`, as a C4KE program's `signal()` does); C4KE's PM
+  extension does the same. `libjs/tests/test-c4ix-sigh.mjs`.
+
 ## 6.1 Running it
 
     make run-c4ix        an interactive shell on c4m

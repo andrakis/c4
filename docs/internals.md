@@ -416,9 +416,9 @@ own numbering is untouched and the numbers below hold.
 | 51 | `C4CF` | `__c4_configure(CONF_*, v)` | set a `CONF_*` value, return the old one (table below) | `5b37f41` 2024-11-06 |
 | 52 | `C4CY` | `__c4_cycles` | the cycle counter | `5b37f41` 2024-11-06 |
 | 53 | `TIME` | `__time` | milliseconds (native clock; `/proc/uptime` under plain c4; 0 when neither answers, §4.7) | `5b37f41` 2024-11-06 |
-| 54 | `SIGH` | `__c4_signal(sig, handler)` | install a POSIX signal handler (native builds) | `5b37f41` 2024-11-06 |
+| 54 | `SIGH` | `__c4_signal(sig, handler)` | install the machine's handler for a signal (a POSIX one in native builds); raises `TRAP_PM_VIOLATION` in protected mode, where C4IX and C4KE give the task a handler of its own | `5b37f41` 2024-11-06 |
 | 55 | `SIGI` | `__c4_sigint` | the SIGINT number (0 under plain c4) | `5b37f41` 2024-11-06 |
-| 56 | `USLP` | `__c4_usleep` | sleep | `5b37f41` 2024-11-06 |
+| 56 | `USLP` | `__c4_usleep` | sleep; raises `TRAP_PM_VIOLATION` in protected mode, where C4IX sleeps just the task | `5b37f41` 2024-11-06 |
 | 57 | `INFO` | `__c4_info` | the `C4I_*` capability bits, plus `C4I_TRAPH` (0x400) when a handler is installed; raises `TRAP_PM_VIOLATION` in protected mode | `5b37f41` 2024-11-06 |
 | 58 | `OPSL` | `__c4_ops_list` | the opcode-name string (`"LEA ,IMM ,…"`, 5 bytes a name) | `5b37f41` 2024-11-06 |
 | 59 | `C4IV` | `__c4_invoke` | self-modifying stub rewritten to a `JMP` (§3.5) | `9ccd20f` 2026-01-25 |
@@ -457,7 +457,7 @@ above `INS_SIZE` (89) are the custom range: C4KE's start at `CO_BASE`
 | 3 | `TRAP_SIGNAL` | a POSIX signal (native builds only) | `5b37f41` 2024-11-06 |
 | 4 | `TRAP_SEGV` | nothing today: its only raise site in `c4m.c` is commented out | `5b37f41` 2024-11-06 |
 | 5 | `TRAP_OPV` | `OPCD` asked to run an opcode that takes an operand | `5b37f41` 2024-11-06 |
-| 6 | `TRAP_PM_VIOLATION` | a syscall (or `INFO`) in protected mode — see Part 7 | `9ccd20f` 2026-01-25 |
+| 6 | `TRAP_PM_VIOLATION` | a syscall (or `INFO`, `USLP`, `SIGH`) in protected mode — see Part 7 | `9ccd20f` 2026-01-25 |
 | 7 | `TRAP_DEBUG` | `DBG` | `9ccd20f` 2026-01-25 |
 | 8 | `TRAP_MPG_VIOLATION` | **reserved**: raised only by c4mpg (docs/c4mpg-design.md), never by plain c4m | `d9184c0` 2026-09-06 |
 

@@ -66,7 +66,7 @@ enum {
 // outright ("bad lvalue: num" -- assigning to a number), which is why a
 // protected-mode kernel could never be built by the compiler the board
 // uses.
-static int pm_OPEN, pm_READ, pm_CLOS, pm_PUTC, pm_PUTS, pm_PRTF, pm_MALC, pm_FREE, pm_RALC, pm_USLP, pm_INFO, pm_STRC;
+static int pm_OPEN, pm_READ, pm_CLOS, pm_PUTC, pm_PUTS, pm_PRTF, pm_MALC, pm_FREE, pm_RALC, pm_USLP, pm_INFO, pm_SIGH, pm_STRC;
 
 // Local data
 static int *kernel_pm_thread;
@@ -132,6 +132,17 @@ static int pm_dispatch_run (int *t, int ins, int *sp, int *a, int *returnpc) {
 		// c4m guards USLP now (C4IX parks just the caller); C4KE
 		// keeps sleeping the host, as it did before the guard.
 		*a = __c4_usleep(*sp);
+	} else if (ins == pm_SIGH) {
+		// c4m guards SIGH now: passed through, it replaced the machine's
+		// handler -- signal_forwarder -- with an address in this task.
+		// The task's own handler instead, as signal() sets it; both are
+		// entered through a trap frame (process_trap).
+		if (sp[1] < 1 || sp[1] >= SIGNAL_MAX) *a = 0;
+		else {
+			r = (int)kernel_task_sighandler(t, sp[1]);
+			*a = ((int *)r)[SIGH_ADDRESS];
+			((int *)r)[SIGH_ADDRESS] = *sp;
+		}
 	} else {
 		return SCR_FAIL;
 	}
@@ -333,6 +344,7 @@ static int pm_start () {
 		pm_RALC = __opcode("RALC");
 		pm_USLP = __opcode("USLP");
 		pm_INFO = __opcode("INFO");
+		pm_SIGH = __opcode("SIGH");
 		pm_STRC = __opcode("STRC");
 		if (kernel_verbosity >= VERB_MED) {
 			printf("c4ke: handled syscalls: OPEN(%d) READ(%d) CLOS(%d) ", pm_OPEN, pm_READ, pm_CLOS);

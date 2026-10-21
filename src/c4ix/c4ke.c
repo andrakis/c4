@@ -432,7 +432,7 @@ static int *ck_sigtab(struct task *t, int make) {
     return s;
 }
 
-static int ck_signal(struct task *t, int sig, int handler) {
+int ck_signal(struct task *t, int sig, int handler) {
     int *s;
     int old;
     if (!t || sig < 1 || sig >= CK_SIG_MAX) return 0;

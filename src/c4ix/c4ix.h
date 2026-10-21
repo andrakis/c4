@@ -50,6 +50,8 @@ enum {
     C4IX_OP_PRTF = 33, C4IX_OP_MALC = 34, C4IX_OP_FREE = 35,
     C4IX_OP_EXIT = 38, C4IX_OP_PUTC = 39, C4IX_OP_PUTS = 40,
     // USLP sleeps the whole machine, so a task gets a sleep of its own
+    // SIGH sets the machine's handler, the kernel's: a task gets its own
+    C4IX_OP_SIGH = 54,
     C4IX_OP_USLP = 56,
     // INFO is guarded too, and a C4KE program asks for it before it
     // does anything else -- u0's startup and ps both call __c4_info().
@@ -484,6 +486,7 @@ void ck_task_free(struct task *t);   // release compat state on reap
 int  ck_argv_copy(struct task *t, int argc, char **argv);   // the task owns a copy of argv
 int  ck_kill(int pid, int sig);      // queue a signal, or apply the default
 int  ck_has_handler(struct task *t, int sig);
+int  ck_signal(struct task *t, int sig, int handler);   // the old handler
 // Deliver one pending signal to the task about to resume, by building
 // it a trap frame by hand. MODE and INTERVAL are the context it would
 // otherwise have resumed with; they go into the frame so the handler's

@@ -608,6 +608,10 @@ void sys_pmviolation(int op, int *sp, int *returnpc, int *a) {
             t->state = TS_SLEEPING;
         }
         return;
+    // __c4_signal(sig, handler): the task's own handler, as a C4KE
+    // program's signal() sets it -- entered the same way, through a trap
+    // frame. On the machine it would replace the kernel's.
+    case C4IX_OP_SIGH: *a = ck_signal(t, sp[1], sp[0]); return;
     case C4IX_OP_MALC: *a = (int)malloc(sp[0]); return;
     case C4IX_OP_FREE: free((int *)sp[0]); *a = 0; return;
     case C4IX_OP_EXIT:

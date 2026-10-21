@@ -344,6 +344,8 @@ export class Machine {
         this.a = dev.read32(TIME_MS) | 0;
         return STOP.BUDGET;
       case OP.SIGH: {
+        // guarded: it sets the machine's handler, which is the kernel's
+        if (this.mode) return this.pmTrap(op);
         const sig = this.ld32(sp + 4), h = this.ld32(sp);
         this.a = this.signalHandlers.get(sig) | 0;
         this.signalHandlers.set(sig, h);

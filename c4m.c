@@ -2327,7 +2327,17 @@ int c4m_main(int argc, char **argv)
 		//	mode = MODE_UNPROTECTED;
 		//}
 	}
-	else if (i == SIGH) a = (int)do_sigh(sp[1], (int *)sp[0]);
+	else if (i == SIGH) {
+		// Guarded: run here it replaces the MACHINE's handler -- the
+		// kernel's own -- with an address in the task. The kernel
+		// gives the task a handler of its own instead.
+		if (mode == MODE_UNPROTECTED) a = (int)do_sigh(sp[1], (int *)sp[0]);
+		else {
+			trap(TRAP_PM_VIOLATION, SIGH, trap_handler, &sp, &bp, &pc, a, mode);
+			cycle_interrupt_interval = 0;
+			mode = MODE_UNPROTECTED;
+		}
+	}
 	else if (i == INFO) {
 		// Trap this under protected mode
 		if (mode == MODE_UNPROTECTED)

@@ -181,6 +181,8 @@ int          vfs_rename(char *path, char *newname);
 int          vfs_lazyfile(char *path, char *host, int size);
 int          vfs_fill(struct vnode *vn);         // read a lazy file's bytes in; 1 if it has them
 int          vfs_put(char *path, char *buf, int len);   // C4KE OP_VFS_PUT
+struct vnode *vfs_klog();                                // /log/kernel, held by the kernel
+void         vfs_logc(struct vnode *vn, int c, int max); // one byte on its end, up to MAX
 char        *vfs_getdata(char *path, int *plen);        // C4KE OP_VFS_GET
 int          vfs_nfiles();                              // C4KE OP_VFS_COUNT: files in the cwd
 char        *vfs_fname(int i);                          // C4KE OP_VFS_NAME
@@ -223,6 +225,9 @@ void con_wake();           // let the next poll reach the host again
 int con_poll();            // 1 if a console read would not block
 int con_read(char *buf, int len);
 int kputc(int c);
+void con_logopen();        // /log/kernel exists now: the console is logged to it
+void con_booted();         // boot is over: tasks' console output is no longer logged
+int con_putc_task(int c);  // a task's byte to the console
 int kputs(char *s);
 int kprintf(char *fmt, ...);
 

@@ -656,8 +656,9 @@ loading or assigning a whole struct is an error.
       --demo IMAGE...    run the built-in demonstrations
       -h, --help         print the usage and shut down
       -q                 accepted and ignored
-      --desktop          the web page's boot: the shell runs "desktop &",
-                         then "top", as if they were typed
+      --desktop          the web page's boot: the root archive unpacks first,
+                         with a loading screen, then the shell runs
+                         "desktop &" and "top", as if they were typed
 
 `init_usage()` in init.c is the authority; keep this section in step
 with it. **No arguments boots to a shell**, because that is what

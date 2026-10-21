@@ -12,14 +12,16 @@
 # (built and named plainly as vfsload.c4r, not the c4ix-NAME.c4r
 # convention every other user program follows), not a typical app.
 # c4m is c4m.c built for C4IX (build-images.sh), not a src/c4ix/user program
-BIN_ALL = hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt gui desktop tar gunzip crc32 b4ke cc c4m
+BIN_ALL = hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt gui desktop tar gunzip crc32 splash b4ke cc c4m
 # The toolchain (docs/c4ix-desktop.md, part three): C4KE programs, which
 # run here through the compatibility layer, and write what they build
 # through its OP_VFS_PUT. In /bin only, under their own names.
 # c4sc is the compiled c4lc, what the BUILD.B4K files under /usr run.
 TOOLS = c4cc c4rlink c4rdump cpp c4sp c4th c4sc
-# Unpacked over / after everything above, by c4ix-tar in the background
-# (vfsload prints the task; "wait ID" blocks on it): the repo's sources
+# Unpacked over / after everything above, by c4ix-tar: in the background
+# at the console's boot (vfsload prints the task; "wait ID" blocks on it),
+# and waited for, with splash on the display, at the desktop's (init
+# --desktop runs vfsload -w): the repo's sources
 # and docs under /usr, the C4IX libraries in /usr/lib, and more
 # headers in /usr/include. Built by build-images.sh.
 ARCHIVES = c4ix-root.tgz
@@ -54,3 +56,8 @@ ARCHIVES = c4ix-root.tgz
 		include/:
 			window.h: c4ix-window.h
 			c4ix_user.h
+		# the boot logo splash shows while the archive unpacks, so it
+		# cannot be in the archive (src/c4ix/art)
+		share/
+			splash/:
+				c4ix.c4p.gz: c4ix-splash.c4p.gz

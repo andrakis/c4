@@ -43,15 +43,33 @@ const out = [];
 const vm = createMachine({ arenaMb: 64, gui, drives: [{ files, writable: false, sink: null }], onByte: b => out.push(b) });
 boot(vm, new Uint8Array(readFileSync(join(ROOT, 'c4ix32.c4r'))), ['c4ix32.c4r', '--desktop']);
 const consoleText = () => Buffer.from(out).toString('latin1');
-let presents = 0;
+let presents = 0, flips = 0;
 const pump = () => {
   const words = gui.drain();
-  for (let i = 0; words && i < words.length; i += words[i]) if (words[i + 1] === CMD.PRESENT) presents++;
+  for (let i = 0; words && i < words.length; i += words[i]) {
+    if (words[i + 1] === CMD.PRESENT) presents++;
+    if (words[i + 1] === CMD.FB || words[i + 1] === CMD.FBREF) flips++;
+  }
 };
 const run = (cycles = 2e6) => { const r = vm.run(cycles); pump(); return r; };
 const until = (cond, budget = 1500) => { for (let i = 0; i < budget; i++) { if (cond()) return true; if (run() === STOP.HALT) return cond(); } return cond(); };
 
+// The root archive first, waited for, with the loading screen on the
+// display: splash flips the logo up, then animates its bar
+check(until(() => consoleText().includes('c4ix-root.tgz as task') && consoleText().includes('waiting for it')),
+  'init --desktop has vfsload wait for the root archive', consoleText().slice(-600));
+check(until(() => flips > 0 && gui.w === SW && gui.h === SH), 'the loading screen puts the logo on the display', consoleText().slice(-600));
+{
+  const p = presents;
+  check(until(() => presents > p + 5) && !consoleText().includes('c4ix-root.tgz unpacked'),
+    'and animates its bar while the archive unpacks', `presents ${p} -> ${presents}`);
+}
 check(until(() => consoleText().includes('desktop: running on the display')), 'init --desktop starts the desktop from the shell, with no typing', consoleText().slice(-600));
+{
+  const t = consoleText(), u = t.indexOf('vfsload: c4ix-root.tgz unpacked');
+  check(u >= 0 && u < t.indexOf('desktop: running on the display') && !/top: \d+ tasks/.test(t.slice(0, u)),
+    'and only once the archive is unpacked, as is top', t.slice(-600));
+}
 check(until(() => /top: \d+ tasks/.test(consoleText())), 'and top on the console beside it', consoleText().slice(-600));
 check(until(() => gui.w === SW && gui.h === SH && presents > 0), 'the desktop draws on the display');
 // the page clears the canvas when it learns the size (display.js resize),
@@ -71,4 +89,13 @@ check(until(() => Buffer.from(out.slice(n1)).toString('latin1').includes('still 
 const p0 = presents;
 gui.event({ kind: 'resize', w: SW, h: SH });
 check(until(() => presents > p0, 200), 'while the desktop keeps drawing');
+// /log/kernel: the kernel's lines and the boot's, not top's
+const n2 = out.length;
+typeBytes(vm, new TextEncoder().encode('cat /log/kernel\n'));
+{
+  const logged = () => Buffer.from(out.slice(n2)).toString('latin1');
+  check(until(() => logged().includes('vfsload: c4ix-root.tgz unpacked'), 300) && logged().includes('C4IX booting') &&
+    logged().includes('c4ix: task 2') && !/top: \d+ tasks/.test(logged()),
+    '/log/kernel has the boot messages, the kernel\'s and vfsload\'s, and not top\'s', logged().slice(-800));
+}
 process.exit(fail);

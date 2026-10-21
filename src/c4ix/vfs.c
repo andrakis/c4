@@ -61,6 +61,8 @@ static int vfs_nameeq(char *a, char *b) {
     return a[i] == b[i];
 }
 
+static int vn_grow(struct vnode *vn, int need);
+
 void vfs_init() {
     con_init();
     vn_cache = sl4b_cache_create("vnode", sizeof(struct vnode), 8);
@@ -83,6 +85,23 @@ void vfs_init() {
     // that in any Unix -- so this one is made here rather than
     // silently conjured on first use.
     vfs_mkdir("/tmp");
+    // /log/kernel: the console, logged (console.c)
+    con_logopen();
+}
+
+// /log/kernel, made at boot. The kernel holds a reference, so it cannot
+// be unlinked from under the console.
+struct vnode *vfs_klog() {
+    struct vnode *vn;
+    vfs_mkdir("/log");
+    if ((vn = vfs_ramfile("/log/kernel"))) ++vn->refs;
+    return vn;
+}
+
+void vfs_logc(struct vnode *vn, int c, int max) {
+    if (vn->size >= max || !vn_grow(vn, vn->size + 1)) return;
+    vn->data[vn->size] = c;
+    ++vn->size;
 }
 
 struct vnode *vfs_root() { return rootdir; }
@@ -529,7 +548,7 @@ int vfs_write(struct file *f, char *buf, int len) {
     vn = f->vn;
     if (vn->type == VN_CONSOLE) {
         i = 0;
-        while (i < len) { kputc(buf[i]); ++i; }
+        while (i < len) { con_putc_task(buf[i]); ++i; }
         sched_unlock();
         return len;
     }

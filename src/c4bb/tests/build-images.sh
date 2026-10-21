@@ -261,7 +261,7 @@ cp src/c4ke/include/service.h $DISK/
 C4IX_MODS="boot console va host sl4b task sched vfs sys c4ke loader init"
 C4IX_USER="hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt gui b4ke cc"
 # userland that also links libarc (gzip and tar): the root archive's unpacker
-C4IX_ARC_USER="tar gunzip crc32"
+C4IX_ARC_USER="tar gunzip crc32 splash"
 # c4sp arena, in cells. 8000000 was a guess with no measurement behind
 # it, and at 21 bytes a cell (32-bit: gc.h/cell.h) that is ~168MB --
 # more than c4bb has (32MB default), so nothing built this way could
@@ -402,6 +402,8 @@ fi
 # two systems' vfsload runs would silently overwrite each other's
 # source copies.
 cp src/c4bb/fs/c4ix.vfs.txt $DISK/
+# the boot logo, for splash (src/c4ix/art/mkc4p.py made it from Kiln's PNG)
+cp src/c4ix/art/c4ix.c4p.gz $DISK/c4ix-splash.c4p.gz
 for n in $C4IX_USER $C4IX_ARC_USER; do
     cp src/c4ix/user/$n.c $DISK/c4ix-$n.c
 done

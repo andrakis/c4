@@ -1,6 +1,6 @@
 B4KE2
 # C4IX's userland: each program is one module, compiled with c4sc and
-# linked with libc4ix -- and libarc too for tar, gunzip and crc32 --
+# linked with libc4ix -- and libarc too for tar, gunzip, crc32 and splash --
 # exactly as build-images.sh does it, so the images match the disk's.
 # Needs the libraries first (../lib/BUILD.B4K, or the top-level build).
 # Results are $(OUT)/bin/c4ix-NAME.c4r, the names the disk uses.
@@ -96,6 +96,10 @@ DEPS $(OUT)/user/gunzip.c4o : src/c4ix/user/gunzip.c $(U) src/c4ix/include/archi
 RUN $(LC) src/c4ix/user/gunzip.c $(OUT)/user/gunzip.c4o
 DEPS $(OUT)/bin/c4ix-gunzip.c4r : $(OUT)/user/gunzip.c4o $(LIBARC) $(LIBC)
 RUN c4rlink $(OUT)/user/gunzip.c4o $(LIBARC) $(LIBC) -o $(OUT)/bin/c4ix-gunzip.c4r
+DEPS $(OUT)/user/splash.c4o : src/c4ix/user/splash.c $(U) src/c4ix/include/archive.h libjs/guest/gui.h
+RUN $(LC) src/c4ix/user/splash.c $(OUT)/user/splash.c4o
+DEPS $(OUT)/bin/c4ix-splash.c4r : $(OUT)/user/splash.c4o $(LIBARC) $(LIBC)
+RUN c4rlink $(OUT)/user/splash.c4o $(LIBARC) $(LIBC) -o $(OUT)/bin/c4ix-splash.c4r
 DEPS $(OUT)/user/crc32.c4o : src/c4ix/user/crc32.c $(U) src/c4ix/include/archive.h
 RUN $(LC) src/c4ix/user/crc32.c $(OUT)/user/crc32.c4o
 DEPS $(OUT)/bin/c4ix-crc32.c4r : $(OUT)/user/crc32.c4o $(LIBARC) $(LIBC)

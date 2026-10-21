@@ -266,8 +266,9 @@ static void init_usage() {
     kputs("  c4ix.c4r --demo c4ix-hello.c4r c4ix-uhello.c4r c4ix-echo.c4r \\\n");
     kputs("           c4ix-wc.c4r c4ix-sh.c4r src/c4ix/user/test.sh\n");
     kputs("\n");
-    kputs("  c4ix.c4r --desktop   the web page's boot: the shell runs \"desktop &\",\n");
-    kputs("                       then \"top\", as if they were typed\n");
+    kputs("  c4ix.c4r --desktop   the web page's boot: the root archive unpacks first,\n");
+    kputs("                       with a loading screen, then the shell runs\n");
+    kputs("                       \"desktop &\" and \"top\", as if they were typed\n");
 }
 
 // The guided tour. argc/av are shifted past --demo, so av[1] is the
@@ -330,7 +331,7 @@ int init_main(int argc, int argv) {
     struct task *a, *v;
     char **av;
     char *shargv[6];
-    char *vav[1];
+    char *vav[3];
     int i, desktop, shargc;
 
     av = (char **)argv;
@@ -362,8 +363,14 @@ int init_main(int argc, int argv) {
         // disk) before the shell starts, so ls/cat show real content
         // from the first prompt. Not fatal if missing or it fails -
         // vfsload says why and the tree is simply left at defaults.
+        // --desktop: vfsload waits for the root archive too, with the
+        // loading screen on the display, so the desktop and top start
+        // on a whole filesystem (and the console's boot lines can be read)
         vav[0] = "c4ix-vfsload.c4r";
-        if ((v = task_spawn(vav[0], 1, (int)vav))) task_wait(v);
+        vav[1] = "-w";
+        vav[2] = 0;
+        if ((v = task_spawn(vav[0], desktop ? 2 : 1, (int)vav))) task_wait(v);
+        con_booted();
 
         shargv[0] = "c4ix-sh.c4r";
         shargv[1] = 0;
@@ -385,6 +392,7 @@ int init_main(int argc, int argv) {
         return 0;
     }
 
+    con_booted();
     if (!(a = task_spawn(av[i], argc - i, (int)(av + i)))) {
         kprintf("init: spawn of '%s' failed\n", av[i]);
         return 1;

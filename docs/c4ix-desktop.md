@@ -519,3 +519,41 @@ it lacked was somewhere to edit and build in one place.
 - `test-c4ke-mbox` (in `test-c4bb`) fails about one run in four with
   "Custom opcode not found: 1073741824" in the mbpair message. It fails
   as often with the C4KE source from before this work.
+
+## Part eight: the boot waits for its filesystem, with a loading screen (asked for 2026-10-21)
+
+- [x] **The archive first.** The browser's boot (`--desktop`) started the
+      desktop and top while c4ix-tar was still unpacking the root archive
+      in the background, so My Computer was missing files for several
+      seconds. Now init runs `vfsload -w`, which waits for the archive
+      before it returns: the desktop and top start on the whole
+      filesystem, and the console's boot lines stay up long enough to
+      read. The console's own boot (no arguments) still unpacks in the
+      background, with `wait 4` to block on it.
+- [x] **A loading screen** (`user/splash.c`, `/bin/splash`). While it
+      waits, vfsload runs `splash -p PID`: the boot logo full screen, and
+      along the bottom a band of colour that flows to the right, as the
+      late-nineties loading screens cycled their palettes. When the tar
+      task is gone it lets go of the display (`gui_detach`) and exits, and
+      the desktop takes the display. `splash` alone, from a shell, shows
+      it until a key or a click. With no display it says "not fitted".
+- [x] **The logo** (`src/c4ix/art/`): drawn by Kiln (project "C4IX",
+      Content/Boot Logo) from a description: "C4IX" in chrome with
+      frosting dripping off it, "Built upon Robert Swierczek's C4" under
+      it, and a cake made of circuit boards whose candle flame is a chip
+      (C4IX, C4KE: cakes). `boot-logo.png` is Kiln's 1200x900 original;
+      `mkc4p.py` scales it to 800x600 and dithers it to 256 colours, as a
+      gzipped "C4P8" image (155 KB) that splash inflates with libarc. Both
+      are committed, so building the disk needs no Pillow. It is a disk
+      file (`/usr/share/splash/c4ix.c4p.gz`, lazy like the rest), not in
+      the archive it is shown during.
+- [x] **`/log/kernel`.** Everything the console says while booting is
+      kept there: the kernel's lines, and the tasks' (vfsload, tar) until
+      init starts the shell. After that only the kernel's own lines are
+      added, or top's redraws would fill it. Lines from before the VFS
+      exists are held back and written when it does. It stops at 256 KB,
+      and the kernel holds it open, so it cannot be deleted.
+- [x] Pinned by `test-boot-desktop.mjs`: vfsload waits; splash puts the
+      logo up and animates; the desktop and top start only after the
+      archive is unpacked; `cat /log/kernel` has the kernel's and vfsload's
+      lines and not top's. Seen in a browser too (2026-10-21).

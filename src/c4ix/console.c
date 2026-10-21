@@ -50,6 +50,7 @@ static int  con_gate;           // cycle count of the last host read
 // below falls back to a blocking read on fd 0, which is what C4IX
 // did before. Losing responsiveness is better than losing input.
 void con_init() {
+    con_booting = 1;
     con_fd = open("/dev/stdin", CON_O_RDONLY | CON_O_NONBLOCK);
     con_len = 0;
     con_pos = 0;
@@ -108,8 +109,47 @@ int con_read(char *buf, int len) {
     return n;
 }
 
-int kputc(int c) {
+// /log/kernel: what the console said. The kernel's own lines always;
+// the tasks' only while booting (until init starts the shell), or top's
+// redraws would fill it within minutes. Lines from before the VFS exists
+// wait in con_pre. It stops at CON_LOG_MAX: a log, not a ring.
+enum { CON_PRE = 2048, CON_LOG_MAX = 262144 };
+static struct vnode *con_log;
+static char con_pre[CON_PRE];
+static int  con_npre;
+static int  con_booting;
+
+static void con_logc(int c) {
+    if (con_log) vfs_logc(con_log, c, CON_LOG_MAX);
+    else if (con_npre < CON_PRE) { con_pre[con_npre] = c; ++con_npre; }
+}
+static int con_out(int c) {
     putchar(c);
+    con_logc(c);
+    return c;
+}
+
+// The VFS is up: make /log/kernel and put what was said so far in it.
+void con_logopen() {
+    int i;
+    if (!(con_log = vfs_klog())) return;
+    i = 0;
+    while (i < con_npre) { vfs_logc(con_log, con_pre[i], CON_LOG_MAX); ++i; }
+    con_npre = 0;
+}
+
+// Boot is over: tasks' output is no longer logged.
+void con_booted() { con_booting = 0; }
+
+// A task's byte to the console (vfs_write)
+int con_putc_task(int c) {
+    putchar(c);
+    if (con_booting) con_logc(c);
+    return c;
+}
+
+int kputc(int c) {
+    con_out(c);
     return c;
 }
 
@@ -117,7 +157,7 @@ int kputs(char *s) {
     int n;
     n = 0;
     if (!s) s = "(null)";
-    while (*s) { putchar(*s); ++s; ++n; }
+    while (*s) { con_out(*s); ++s; ++n; }
     return n;
 }
 
@@ -132,14 +172,14 @@ static int kputnum(int v, int base) {
     digits = "0123456789abcdef";
     i = 0;
     n = 0;
-    if (v < 0) { putchar('-'); ++n; v = -v; }
+    if (v < 0) { con_out('-'); ++n; v = -v; }
     if (v == 0) { buf[i] = '0'; ++i; }
     while (v) {
         buf[i] = digits[v % base]; ++i;
         v = v / base;
     }
     n = n + i;
-    while (i) { --i; putchar(buf[i]); }
+    while (i) { --i; con_out(buf[i]); }
     return n;
 }
 
@@ -163,16 +203,16 @@ int kprintf(char *fmt, ...) {
     n = 0;
     while (*fmt) {
         c = *fmt; ++fmt;
-        if (c != '%') { putchar(c); ++n; }
-        else if (*fmt == 0) { putchar('%'); ++n; }
+        if (c != '%') { con_out(c); ++n; }
+        else if (*fmt == 0) { con_out('%'); ++n; }
         else {
             c = *fmt; ++fmt;
             if (c == 'd')      n = n + kputnum(va_arg(walk, int), 10);
             else if (c == 'x') n = n + kputnum(va_arg(walk, int), 16);
             else if (c == 's') n = n + kputs(va_arg(walk, char *));
-            else if (c == 'c') { putchar(va_arg(walk, int)); ++n; }
-            else if (c == '%') { putchar('%'); ++n; }
-            else { putchar('%'); putchar(c); n = n + 2; }
+            else if (c == 'c') { con_out(va_arg(walk, int)); ++n; }
+            else if (c == '%') { con_out('%'); ++n; }
+            else { con_out('%'); con_out(c); n = n + 2; }
         }
     }
     va_end(ap);

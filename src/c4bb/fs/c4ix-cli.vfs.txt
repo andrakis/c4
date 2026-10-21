@@ -6,9 +6,9 @@
 # the tree. No ARCHIVES: c4ix-root.tgz exists only on the disk, so
 # /usr/src/c4 and /usr/lib are left to the browser's boot.
 
-BIN_ALL = hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt gui desktop tar gunzip crc32 b4ke cc
+BIN_ALL = hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt gui desktop tar gunzip crc32 splash b4ke cc
 # one .c each in src/c4ix/user; the desktop is a directory of them
-BIN_SRC = hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt gui tar gunzip crc32 b4ke cc
+BIN_SRC = hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt gui tar gunzip crc32 splash b4ke cc
 # the toolchain, as the root's default build leaves it
 TOOLS = c4cc c4rlink c4rdump cpp c4sp c4th c4sc
 

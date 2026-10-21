@@ -552,15 +552,34 @@ int load_entries() {
 // ARCHIVES = NAME... in the manifest names tar archives (gzipped or
 // not) to unpack over / once the entries above exist. The root archive
 // is megabytes of sources and docs, and inflating it is seconds of
-// interpreted work -- too long to hold the first prompt for -- so each
-// is handed to c4ix-tar in the background and boot carries on. The
-// task id is printed: "wait ID" in the shell blocks until it is done.
+// interpreted work -- too long to hold the console's first prompt for --
+// so each is handed to c4ix-tar in the background and boot carries on.
+// The task id is printed: "wait ID" in the shell blocks until it is done.
 // One request fetches the whole archive, where the same files as
 // manifest entries would be a request each.
+//
+// With -w (the desktop's boot: init --desktop) vfsload waits for each
+// instead, while c4ix-splash shows the loading screen on the display
+// (it says "not fitted" and leaves where there is none), so the desktop
+// and top start on the whole filesystem.
+int g_wait;
+
+static char *itoa10(int v) {
+    char *b;
+    int i, n;
+    b = (char *)ualloc(16);
+    n = v; i = 1;
+    while (n >= 10) { n = n / 10; ++i; }
+    b[i] = 0;
+    while (i > 0) { --i; b[i] = '0' + v % 10; v = v / 10; }
+    return b;
+}
+
 void unpack_archives() {
-    int v, j, st[4], pid;
+    int v, j, st[4], pid, sp;
     char *name;
     char **targv;
+    char **sargv;
     v = var_lookup("ARCHIVES");
     if (!v) return;
     --v;
@@ -576,8 +595,15 @@ void unpack_archives() {
         targv[0] = "c4ix-tar.c4r"; targv[1] = "x"; targv[2] = "-C"; targv[3] = "/";
         targv[4] = name; targv[5] = 0;
         pid = spawn(targv[0], 5, targv);
-        if (pid < 0) uprintf("vfsload: cannot start c4ix-tar for %s\n", name);
-        else uprintf("vfsload: unpacking %s in the background as task %d\n", name, pid);
+        if (pid < 0) { uprintf("vfsload: cannot start c4ix-tar for %s\n", name); continue; }
+        if (!g_wait) { uprintf("vfsload: unpacking %s in the background as task %d\n", name, pid); continue; }
+        uprintf("vfsload: unpacking %s as task %d, and waiting for it\n", name, pid);
+        sargv = (char **)ualloc(4 * sizeof(int));
+        sargv[0] = "c4ix-splash.c4r"; sargv[1] = "-p"; sargv[2] = itoa10(pid); sargv[3] = 0;
+        sp = spawn(sargv[0], 3, sargv);
+        uwait(pid);
+        if (sp > 0) uwait(sp);
+        uprintf("vfsload: %s unpacked\n", name);
     }
 }
 
@@ -585,6 +611,8 @@ int main(int argc, char **argv) {
     char *manifest, *manifestName;
     int len, ok;
 
+    g_wait = (argc > 1 && !ustrcmp(argv[1], "-w"));
+    if (g_wait) { --argc; ++argv; }
     manifestName = (argc > 1) ? argv[1] : "c4ix.vfs.txt";
     manifest = read_whole_file(manifestName, &len);
     if (!manifest) {

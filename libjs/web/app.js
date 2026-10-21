@@ -5,6 +5,7 @@
 //   ?image=URL&disk=URL          any other image and disk instead
 //   ?mhz=N                       how fast the machine runs, paced (default 100)
 //   ?fast                        run as fast as the host can, unpaced
+//   ?fpu=0                       no FPU opcode: floats in software (F3, docs/c4-float.md)
 //   ?mem=MB                      arena size (default 64)
 //   ?shared=0                    use the message display path even when the page
 //                                is cross-origin isolated (serve.mjs --isolate)
@@ -64,6 +65,7 @@ const opts = {
   // program in the C4IX desktop managed a few frames a second.
   mhz: Number(params.get('mhz')) || sys.mhz || 100,
   unpaced: params.has('fast') || !!sys.unpaced,
+  fpu: params.get('fpu') !== '0',
   arenaMb: Number(params.get('mem')) || 64,
   shared: params.get('shared') !== '0',
 };

@@ -96,7 +96,7 @@ export class C4M {
     this.bootMsg = {
       type: 'boot', image: image.buffer.slice(image.byteOffset, image.byteOffset + image.byteLength),
       argv, disk: disk.map(([n, b]) => [n, b]), lazy, arenaMb: opts.arenaMb || 64,
-      mhz: opts.mhz || 20, unpaced: !!opts.unpaced, mbox: opts.mbox | 0,
+      mhz: opts.mhz || 20, unpaced: !!opts.unpaced, mbox: opts.mbox | 0, fpu: opts.fpu,
       gui: this.display ? { w: this.display.width, h: this.display.height } : (opts.gui || null),
       shared: this.shared || null,
     };

@@ -28,6 +28,7 @@ VARIABLE NOBUILTIN   0 NOBUILTIN !
    S" __c4_sigint" oSIGI BUILTIN     S" __c4_usleep" oUSLP BUILTIN
    S" __c4_info" oINFO BUILTIN S" __c4_ops_list" oOPSL BUILTIN
    S" __c4_invoke" oC4IV BUILTIN     S" __c4_float" oFLT BUILTIN
+   S" __c4_fpu" oFPU BUILTIN
    S" __c4_cpu_id" oCPUI BUILTIN     S" __c4_cpu_count" oCPUN BUILTIN
    S" __c4_cpu_start" oCPUS BUILTIN  S" __c4_cpu_halt" oCPUH BUILTIN
    S" __c4_cas" oCAS BUILTIN   S" __c4_xchg" oXCHG BUILTIN

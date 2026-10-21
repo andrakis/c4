@@ -13,8 +13,8 @@ Asked for 2026-10-21. The goal is IEEE single and double precision in the C99 co
 | F2 | `float` and `double` in c4lc (and so c4sc, and `cc` inside C4IX) | **done** |
 | F4 | C4IX libc: `printf` `%f %e %g`, `strtod`, `math.h` | **done** |
 | F5 | Calculator: single and double modes | **done** |
-| F3 | an FPU opcode in c4m, libjs and c4bb, which the helpers use when present | |
-| F6 | libjs checks; soft against hard, timed | |
+| F3 | an FPU opcode in c4m, libjs and c4bb, which the helpers use when present | **done** |
+| F6 | libjs checks; soft against hard, timed | **done** |
 
 **Decisions (2026-10-21):**
 - c4lc first; c4fc refuses `float` for now, as it refuses `long long` at 32 bits.
@@ -83,6 +83,96 @@ So it is plain C that compiles the same at either word size, and with gcc.
 - **No constant folding of float expressions.** A global's initializer is a literal, a negated literal, or an integer constant.
 - **c4fc refuses floats.** Its lexer reads `1.5` as three tokens and it has no `float` keyword. (Parity with c4lc is a later step.)
 - **On a 64-bit target** c4lc's `long long` is the word `int`. So `unsigned int + long long` follows the `int + unsigned` rule and is cut to 32 bits; gcc widens to 64. This is an existing integer-model limitation, not a float one.
+
+## F3: the FPU opcode
+
+The old DOS arrangement: one binary, software floating point, and an FPU
+used when the machine has one.
+
+- **The opcode** is `FPU`, 89, appended after the fused range and
+  mirrored in every opcode table (c4m, c4mpg, load-c4r, c4l, c4cc,
+  c4mp, oisc4, the c4bb sim and ROM names, c4r.lisp, c4fc). On the stack:
+  `sp[0]` the sub-op, `sp[1]` a, `sp[2]` b, `sp[3]` r. A float is its
+  bits in a word; a double is the address of its two words (the low one
+  first), so one opcode serves 32- and 64-bit machines, and a double
+  result is written where r points.
+- **Sub-ops**: float add, sub, mul, div, sqrt, cmp, from int, to int
+  (1-8); the same for double (17-24); float to double (25) and back
+  (26). The rest (long long and unsigned conversions, neg, abs) stay in
+  software.
+- **The info word** says `C4I_FPU` (0x10000) where there is one.
+- **The helpers** (src/c4fp/softfp.c, spliced by c4lc): each covered
+  helper is NAME_s, the software, and NAME, which asks `__c4fp_hw()` --
+  `__c4_info()` once per unit, cached in a static, since INFO traps under
+  C4IX -- and calls `__c4_fpu(r, b, a, op)`, c4lc's builtin for the
+  opcode, when it is set. Compiled code does not change: the same image
+  runs on a machine with or without one.
+- **Bit for bit.** The FPU's answers are the software's, NaNs and
+  conversions included, so nothing can tell the two paths apart but the
+  clock:
+  - native c4m and c4mpg run softfp.c itself, compiled by gcc
+    (c4m_float.c), rather than the host's float -- c4m32's x87 would
+    round twice;
+  - libjs and the c4bb sim share `src/c4bb/sim/fpu.js`: the host's IEEE
+    doubles (exact for + - * / and sqrt, and for floats when the double
+    result is rounded to single with `Math.fround`), with x86's NaN rules
+    and softfp's integer conversions written out;
+  - a c4m built for the c4 VM by c4lc (`/bin/c4m` in C4IX) lends the FPU
+    of the machine under it through `__c4_fpu`; built by c4cc, it has
+    none.
+- **Off switches**, for the software path and for timing: `c4m -F`,
+  `node libjs/cli.js --no-fpu`, `?fpu=0` on the page.
+- **FLT** (60, the old binary32-only opcode) is fixed while here: FTOI
+  returns an integer, not a float's bits, and 64-bit c4m no longer leaves
+  garbage in a result's upper half.
+- **Tests** (`make test-c4fp`): softfp's vectors through fpvm.c on c4m
+  with and without the FPU at both word sizes, and on libjs with and
+  without it; mathtest's output must be the same to the character on
+  every path.
+
+## F6: soft against hard
+
+`src/c4fp/tests/fpbench.c` (`make bench-c4fp`) runs three kernels:
+- **mandel**: single precision, the Mandelbrot set at 160 x 120, 64 deep;
+- **whet**: double, Whetstone's module 1 with a sqrt and a division a round;
+- **nbody**: double, five bodies, 2000 steps.
+
+The same image runs with the FPU and without (`c4m -F`, `libjs --no-fpu`).
+Its checksums are identical on every machine and path, so the two paths
+agree on these programs as they do on the test vectors. Measured
+2026-10-22 on helios.
+
+VM instructions, from `__c4_cycles` (libjs's are c4m32's exactly):
+
+| kernel | 64-bit, FPU | 64-bit, software | 32-bit, FPU | 32-bit, software |
+|---|---|---|---|---|
+| mandel | 107 M | 846 M (7.9x) | 76 M | 949 M (12.5x) |
+| whet | 18.8 M | 429 M (23x) | 38.4 M | 3271 M (85x) |
+| nbody | 26.7 M | 492 M (18x) | 48.8 M | 3929 M (80x) |
+
+Wall time:
+
+| machine | FPU | software | |
+|---|---|---|---|
+| native c4m, 64-bit | 0.64 s | 7.8 s | 12x |
+| native c4m32 | 0.73 s | 37.8 s | 52x |
+| libjs (node, unpaced) | 1.33 s | 48.9 s | 37x |
+
+- **Single precision gains least.** A float fits a word, so its software
+  is the cheapest.
+- **Double gains most on 32-bit machines,** where every double is a
+  pair of words and the software's 64-bit integer arithmetic is itself
+  helpers on helpers. Those are libjs and C4IX, which is 32-bit.
+- **libjs's own milliseconds** (what fpbench prints there) are the
+  machine's clock, paced at the CLI's 20 MHz, not the host's. Its
+  instruction counts are the comparison.
+- **libc's math.c** sees the same: tests/mathtest.c takes 0.8 s on
+  c4m32 with the FPU and 11.6 s without, and 1.4 s and 17.6 s on libjs.
+
+**libjs checks:** test-libjs boots C4IX with the FPU (the default), so
+the Calculator's Single and Double modes, libc's printf and math.c, and
+everything else that says float or double run on it there; test-c4fp
+runs the vectors through libjs both ways.
 
 ## F4: C4IX's libc
 

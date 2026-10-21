@@ -12,6 +12,7 @@
 
 import { FETCH, DISPATCH, ALU_OPS } from './ucode.js';
 import { OPNAMES, setOpnames } from './devices.js';
+import { fpu } from './fpu.js';
 
 export const R = { PC: 0, SP: 1, BP: 2, A: 3, IR: 4, OPR: 5, MAR: 6, MDR: 7, B: 8, T: 9, U: 10 };
 export const REG_NAMES = ['PC', 'SP', 'BP', 'A', 'IR', 'OPR', 'MAR', 'MDR', 'B', 'T', 'U'];
@@ -446,6 +447,13 @@ export class Machine {
         return this.jamTrap(7 /* TRAP_DEBUG */, 0, this.trapHandler, {});
       case 'C4IV': break;                    // native no-op (c4m.c:1832)
       case 'FLT': regs[R.A] = this.fltInstruction(sp); break;
+      case 'FPU': {                          // F3, src/c4bb/sim/fpu.js
+        if (!this.fpuMem) this.fpuMem = { ld32: x => this.arena.read32(x), st32: (x, v) => this.arena.write32(x, v) };
+        const v = this.dev.noFpu ? undefined : fpu(this.fpuMem, sp);
+        if (v === undefined) return this.jamTrap(0 /* TRAP_ILLOP */, 89, this.trapHandler, { unprot: true });
+        regs[R.A] = v | 0;
+        break;
+      }
     }
     return undefined;
   }
@@ -470,10 +478,7 @@ export class Machine {
       case 7: c = Math.cos(a); break;
       case 8: c = Math.tan(a); break;
       case 9: c = this.arena.read32(sp + 4); break;  // ITOF: int -> float
-      case 10: c = Math.trunc(a); break;             // FTOI: c4m stores the
-                                                     // truncated value back in
-                                                     // a float and returns its
-                                                     // BITS (c4m_float.c:52)
+      case 10: return Math.trunc(a) | 0;             // FTOI: an integer (c4m_float.c)
       default:
         this.printVm(`c4m fatal error: unsupported floating point instruction ${op}!\n`);
         c = 0;

@@ -65,14 +65,16 @@ const RUNGS = {
     who: 'C4DOS itself, mandel, raycast -- anything that times itself',
   },
   c4m: {
-    max: 'DBG', extra: [],
-    what: "c4m's own opcodes: JSRS, traps, signals, INFO and the rest",
+    // FPU (F3): every image with float or double in it carries the opcode
+    // in its helpers, which run it only where INFO says C4I_FPU
+    max: 'DBG', extra: ['FPU'],
+    what: "c4m's own opcodes: JSRS, traps, signals, INFO, the FPU and the rest",
     who: 'c4cc and c4rlink, C4KE and C4IX, and both userlands',
   },
   fused: {
     max: 'DBG',
     extra: ['LDL', 'LDG', 'PSHL', 'PSHG', 'LEAP', 'IMMP', 'LIP', 'ADDL',
-            'STL', 'POPA'],
+            'STL', 'POPA', 'FPU'],
     what: 'c4m plus the ten fused opcodes (docs/fused-opcodes.md)',
     who: 'images built through the fused backend',
   },

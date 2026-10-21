@@ -422,7 +422,7 @@ own numbering is untouched and the numbers below hold.
 | 57 | `INFO` | `__c4_info` | the `C4I_*` capability bits, plus `C4I_TRAPH` (0x400) when a handler is installed; raises `TRAP_PM_VIOLATION` in protected mode | `5b37f41` 2024-11-06 |
 | 58 | `OPSL` | `__c4_ops_list` | the opcode-name string (`"LEA ,IMM ,…"`, 5 bytes a name) | `5b37f41` 2024-11-06 |
 | 59 | `C4IV` | `__c4_invoke` | self-modifying stub rewritten to a `JMP` (§3.5) | `9ccd20f` 2026-01-25 |
-| 60 | `FLT` | `__c4_float` | float sub-ops (`c4m_float.c`, `FLTI_*`) in native c4m; under plain c4 raises `TRAP_ILLOP` so a handler may emulate it | `9ccd20f` 2026-01-25 |
+| 60 | `FLT` | `__c4_float` | float sub-ops (`c4m_float.c`, `FLTI_*`) in native c4m; under plain c4 raises `TRAP_ILLOP` so a handler may emulate it. FTOI returns an integer (it returned a float's bits until F3), and a result's upper word is zero on 64-bit c4m | `9ccd20f` 2026-01-25 |
 | 61 | `JSRI` | compiler: call through an `int *` global | `pc = **pc` | original c4m (`c980cab` 2022-08-26) |
 | 62 | `JSRS` | compiler: call through an `int *` local | `pc = *(bp + n)` | original c4m (`c980cab` 2022-08-26) |
 | 63 | `JMPA` | compiler: `switch` jumptables | `pc = a` | `5b37f41` 2024-11-06 |
@@ -435,6 +435,7 @@ own numbering is untouched and the numbers below hold.
 | 80–86 | `LDG PSHL PSHG LEAP IMMP LIP ADDL` | `c4lc -mfuse` | the compiler-shaped seven (docs/fused-opcodes.md) | **named only** in c4m, `bbb9ec3` 2026-08-24; executed by c4mp, oisc4, c4bb, libjs |
 | 87 | `STL` | `c4lc -mfuse`, c4th | `*(bp+n) = a` | `bbb9ec3` 2026-08-24 |
 | 88 | `POPA` | `c4lc -mfuse`, c4th | `a = *sp++` | `bbb9ec3` 2026-08-24 |
+| 89 | `FPU` | `__c4_fpu(r, b, a, op)` | IEEE single and double (F3, docs/c4-float.md): `sp[0]` the sub-op, `sp[1]` a, `sp[2]` b, `sp[3]` r; floats as bits, doubles by address. Announced by `C4I_FPU` (0x10000). c4m runs softfp.c compiled natively, libjs and the c4bb sim `src/c4bb/sim/fpu.js`; a c4m built for the VM by c4lc lends its host's; plain c4, c4cc builds, c4mp and oisc4 name it only and raise `TRAP_ILLOP` | F3 2026-10-22 |
 
 A **named-only** opcode is one c4m knows the name of but does not
 execute. With no trap handler installed it halts with "*NAME* (opcode

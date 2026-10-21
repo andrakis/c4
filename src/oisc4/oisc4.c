@@ -121,6 +121,8 @@ enum {
 	// inserted; the same numbers as c4m.c, c4l.c, load-c4r.c, c4mp.h,
 	// c4cc.c and c4r.lisp.
 	LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,
+	// F3: IEEE arithmetic (docs/c4-float.md) -- named, not run here
+	FPU ,
 	INS_MAX
 };
 
@@ -466,7 +468,9 @@ int vm_opcode_lookup (int nameoff) {
 	"CPUI,CPUN,CPUS,CPUH,"
 	"CAS ,XCHG,FADD,CWAI,CWAK,IPI ,"
 	"LXI ,SXI ,TRAW,"
-	"LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,";
+	"LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,"
+	// F3: IEEE arithmetic (docs/c4-float.md)
+	"FPU ,";
 	r = 0;
 	while (r < INS_MAX) {
 		a = name; b = ops + r * 5;

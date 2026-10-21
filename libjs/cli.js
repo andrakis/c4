@@ -44,6 +44,7 @@ function parseArgs(argv) {
     else if (f === '-i') o.interactive = true;
     else if (f === '-hz') o.mhz = parseFloat(argv[++i]);
     else if (f === '--fast') o.unpaced = true;
+    else if (f === '--no-fpu') o.fpu = false;
     else if (f === '--mbox') o.mbox = parseInt(argv[++i], 10);
     else if (f === '--') { i++; break; }
     else { console.error(`libjs: unknown option ${f}`); usage(); }
@@ -89,7 +90,7 @@ async function main(argv) {
   }));
 
   const machine = createMachine({
-    arenaMb: o.arenaMb, drives, mhz: o.mhz,
+    arenaMb: o.arenaMb, drives, mhz: o.mhz, fpu: o.fpu,
     onByte: b => { out.push(b); if (out.length >= 4096 || b === 10) flush(); },
   });
   const dev = machine.dev;

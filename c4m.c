@@ -56,6 +56,7 @@
 //  -S           Print source symbol listing
 //  -d           Enable debug output during execution
 //  -U           Disable protected mode
+//  -F           No FPU: the FPU opcode traps, and the info word says so
 //  -p           (Currently nonfunctional) Decrease pool size
 //  -P           (Currently nonfunctional)
 // TODO: Fix the above two parameters.
@@ -245,7 +246,8 @@ int *e, *le,  // current position in emitted code
     line,     // current line number
     src,      // print source and assembly flag
     debug,    // print executed instructions
-    pm_avail; // protected mode available? (disable with -U)
+    pm_avail, // protected mode available? (disable with -U)
+    fpu_avail; // the FPU opcode offered? (off with -F)
 // A special stack for traps
 // int *trap_stack, *trap_sp, *trap_bp;
 int time_altmode; // use alternate mode for reading time
@@ -293,6 +295,9 @@ enum {
 	C4I_C4MPG = 0x100,
 	C4I_C4KE = 0x200,  // C4KE is running -- ORed in by the kernel, not here
 	C4I_TRAPH = 0x400, // A custom trap handler is installed (safe to probe opcodes)
+	// The FPU opcode: IEEE single and double (F3, docs/c4-float.md).
+	// 0x800-0x8000 are c4bb's and libjs's devices.
+	C4I_FPU = 0x10000,
 };
 
 // Trap codes
@@ -390,6 +395,10 @@ enum {
 	// names at the same numbers, so the disassembler names one rather
 	// than printing "unknown", and so c4l can say what an image needs.
 	LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,
+	// IEEE arithmetic, single and double (F3, docs/c4-float.md): a sub-op
+	// and its operands on the stack, as FLT's -- c4lc's helpers use it
+	// when the info word has C4I_FPU
+	FPU ,
 	// End of instructions
 	INS_SIZE,
 };
@@ -418,7 +427,9 @@ void c4m_setup_opcodes () {
 	"LXI ,SXI ,TRAW,"
 	// fused -- docs/fused-opcodes.md. LDL, STL and POPA are implemented
 	// here; the other seven are c4mp's, and named only.
-	"LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,";
+	"LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,"
+	// F3
+	"FPU ,";
 }
 // One place decides which opcodes carry an operand word. Everything that
 // walks code -- the debug disassembler, OPCD's refusal -- asks here.
@@ -1163,6 +1174,8 @@ int c4_info  () {
 }
 int has_float () { return 0; }
 int do_float  (int *sp) { return 0; }
+int has_fpu   () { return 0; }
+int do_fpu    (int *sp) { return 0; }
 int do_putchar(char *c) { return printf("%c", c); }
 int do_puts   (char *str) { return printf("%s", str); }
 int *do_sigh  (int sig, int *handler) { return __c4_signal(sig, handler); }
@@ -1175,16 +1188,27 @@ int *do_sigh  (int sig, int *handler) { return __c4_signal(sig, handler); }
 #define c4_memcpy(d,s,n)   memcpy(d, s, n)
 #define c4_time_host()     c4m_time()
 #define c4_plain()         0 /* Plain C4 or compiled c4m natively? */
-#define c4_info()          (C4I_C4M | C4I_HRT | C4I_SIG | (has_float() ? C4I_FLT : 0) | (pm_avail ? C4I_PROT : 0))
+#define c4_info()          (C4I_C4M | C4I_HRT | C4I_SIG | (has_float() ? C4I_FLT : 0) | (pm_avail ? C4I_PROT : 0) | (has_fpu() ? C4I_FPU : 0))
 #define c4_usleep(usec)    usleep(usec)
 #if NATIVE
 #define has_float()        1
+#define has_fpu()          fpu_avail
+#define do_fpu(sp)         c4_fpu_instruction(sp)
 #else
 // Built FOR the c4 VM by a compiler with a preprocessor -- cc (c4lc)
 // inside C4IX, or c4cc through ./cpp for the disk -- this c4m runs on
 // another one, and has float exactly when that machine does: it lends
 // the outer FLT (c4_float_instruction below).
 #define has_float()        ((__c4_info() & C4I_FLT) != 0)
+// and the FPU likewise -- lent through __c4_fpu, which c4lc and c4fc
+// have (both predefine __c4_inttypes__) and c4cc has not
+#if defined(__c4_inttypes__)
+#define has_fpu()          (fpu_avail && (__c4_info() & C4I_FPU) != 0)
+#define do_fpu(sp)         __c4_fpu((sp)[3], (sp)[2], (sp)[1], (sp)[0])
+#else
+#define has_fpu()          0
+#define do_fpu(sp)         0
+#endif
 #endif
 #define do_float(sp)       c4_float_instruction(sp)
 #define do_putchar(c)      putchar(c)
@@ -1723,6 +1747,7 @@ int c4m_main(int argc, char **argv)
   // Start in unprotected mode with pm available
   mode = MODE_UNPROTECTED;
   pm_avail = 1;
+  fpu_avail = 1;
   // Setup invoke stub
   c4_invoke_stub();
 
@@ -1737,10 +1762,11 @@ int c4m_main(int argc, char **argv)
   if (argc > 0 && **argv == '-' && (*argv)[1] == 'S') { printsyms = 1; --argc; ++argv; }
   if (argc > 0 && **argv == '-' && (*argv)[1] == 'a') { time_altmode = 1; --argc; ++argv; }
   if (argc > 0 && **argv == '-' && (*argv)[1] == 'U') { pm_avail = 0; --argc; ++argv; }
+  if (argc > 0 && **argv == '-' && (*argv)[1] == 'F') { fpu_avail = 0; --argc; ++argv; }
   // TODO: these options broken
   if (argc > 0 && **argv == '-' && (*argv)[1] == 'p') { i = 1; while((*argv)[1 + i++]) poolsz = poolsz / 2; --argc; ++argv; }
   if (argc > 0 && **argv == '-' && (*argv)[1] == 'P') { i = 1; while((*argv)[1 + i++]) poolsz = poolsz * 2; --argc; ++argv; }
-  if (argc < 1) { printf("usage: c4_multiload [-v] [-s] [-d] [-p] [-P] file1 [files...] -- args ...\n"); return -1; }
+  if (argc < 1) { printf("usage: c4_multiload [-v] [-s] [-d] [-U] [-F] [-p] [-P] file1 [files...] -- args ...\n"); return -1; }
 
   if (verb) printf("c4m: init...\n");
   if (!(sym = _sym = malloc(poolsz))) { printf("could not malloc(%d) symbol area\n", poolsz); return -1; }
@@ -2404,6 +2430,9 @@ int c4m_main(int argc, char **argv)
 #if C4M_DOS
 		}
 #endif
+	} else if (i == FPU) {
+		if (has_fpu()) a = do_fpu(sp);
+		else trap(TRAP_ILLOP, FPU, trap_handler, &sp, &bp, &pc, a, mode);
 	} else if (i == FLT) {
 		if (has_float()) a = do_float(sp);
 		else {

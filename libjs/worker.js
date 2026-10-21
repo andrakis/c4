@@ -120,7 +120,7 @@ function start(msg) {
     : new Map((msg.disk || []).map(([n, b]) => [n, b instanceof Uint8Array ? b : new Uint8Array(b)]));
   const drives = [{ files, writable: false, sink: null }];
   vm = createMachine({
-    arenaMb: msg.arenaMb || 64, drives, mhz: msg.mhz || 20, gui,
+    arenaMb: msg.arenaMb || 64, drives, mhz: msg.mhz || 20, gui, fpu: msg.fpu,
     onByte: b => { out.push(b); if (out.length >= 4096) flush(); },
   });
   boot(vm, new Uint8Array(msg.image), msg.argv || ['image.c4r'], { mbox: msg.mbox | 0 });

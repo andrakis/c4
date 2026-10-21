@@ -140,7 +140,9 @@ int main (int argc, char **argv) {
     "CPUI,CPUN,CPUS,CPUH,"
     "CAS ,XCHG,FADD,CWAI,CWAK,IPI ,"
     "LXI ,SXI ,TRAW,"
-    "LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,";
+    "LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,"
+    // F3: IEEE arithmetic (docs/c4-float.md)
+    "FPU ,";
 
   if (!(buf = malloc(BUF_MAX))) { printf("c4l: out of memory\n"); return 1; }
   if ((fd = open(*argv, 0)) < 0) { printf("c4l: cannot open %s\n", *argv); return 1; }

@@ -19,6 +19,7 @@ import {
   C4I_C4M, C4I_HRT, C4I_SIG, C4I_FLT, C4I_PROT, C4I_TRAPH, C4I_PIT, C4I_MBOX,
 } from '../src/c4bb/sim/devices.js';
 import { TLEV_ADDR, OPNAMES_ROM } from '../src/c4bb/sim/arena.js';
+import { fpu, C4I_FPU } from '../src/c4bb/sim/fpu.js';
 import { format } from './printf.js';
 
 // Opcode numbers (c4m.c:339-390). Literal so the switch below compiles
@@ -33,7 +34,7 @@ export const OP = {
   _JMP: 49, _ADJ: 50, C4CF: 51, C4CY: 52, TIME: 53, SIGH: 54, SIGI: 55, USLP: 56, INFO: 57, OPSL: 58,
   C4IV: 59, FLT: 60, JSRI: 61, JSRS: 62, JMPA: 63, TLEV: 64, DBG: 65,
   // 66-78 are c4mp's: named, not implemented here
-  LDL: 79, LDG: 80, PSHL: 81, PSHG: 82, LEAP: 83, IMMP: 84, LIP: 85, ADDL: 86, STL: 87, POPA: 88,
+  LDL: 79, LDG: 80, PSHL: 81, PSHG: 82, LEAP: 83, IMMP: 84, LIP: 85, ADDL: 86, STL: 87, POPA: 88, FPU: 89,
 };
 export const INS_SIZE = 89;
 OPNAMES.match(/.{5}/g).forEach((n, i) => {
@@ -141,6 +142,7 @@ export class Machine {
 
   info() {
     return C4I_C4M | C4I_C4MJS | C4I_HRT | C4I_SIG | C4I_FLT | C4I_PROT | C4I_PIT |
+           (this.noFpu ? 0 : C4I_FPU) |
            (this.dev.mbox ? C4I_MBOX : 0) |
            (this.gui && this.gui.fitted ? C4I_GUI : 0) |
            (this.trapHandler ? C4I_TRAPH : 0);
@@ -374,6 +376,13 @@ export class Machine {
       case OP.FLT:
         this.a = this.flt(sp);
         return STOP.BUDGET;
+      case OP.FPU: {
+        // F3 (src/c4bb/sim/fpu.js); with the FPU switched off, unknown
+        // here like any opcode this machine lacks
+        const v = this.noFpu ? undefined : fpu(this, sp);
+        if (v !== undefined) { this.a = v | 0; return STOP.BUDGET; }
+        break;
+      }
       case OP.TLEV: {
         const bp = this.bp;
         const pc = this.ld32(bp + 8);
@@ -482,7 +491,7 @@ export class Machine {
       case 7: c = Math.cos(a); break;
       case 8: c = Math.tan(a); break;
       case 9: c = this.ld32(sp + 4); break;       // ITOF
-      case 10: c = Math.trunc(a); break;          // FTOI returns the float's bits
+      case 10: return Math.trunc(a) | 0;          // FTOI: an integer, not a float's bits
       default:
         this.emitString(`c4m fatal error: unsupported floating point instruction ${op}!\n`);
         c = 0;

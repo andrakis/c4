@@ -136,7 +136,9 @@ export let OPNAMES =
   'LXI ,SXI ,TRAW,' +
   // fused (79-88), docs/fused-opcodes.md. All ten are microcoded here
   // (hw/microcode.uc); c4m itself runs only LDL, STL and POPA.
-  'LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,';
+  'LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,' +
+  // F3 (89): IEEE arithmetic, src/c4bb/sim/fpu.js
+  'FPU ,';
 export const STOCK_OPNAMES = OPNAMES;
 export function setOpnames (names) { OPNAMES = names; }
 
@@ -408,6 +410,7 @@ export class Devices {
         // matters because under native c4m they are its own memory.
         // A cold path -- INFO is read once at boot.
         return C4I_C4M | C4I_HRT | C4I_SIG | C4I_FLT | C4I_PROT | C4I_PIT |
+               (this.noFpu ? 0 : 0x10000 /* C4I_FPU, fpu.js */) |
                (this.mbox ? C4I_MBOX : 0) |
                (this.arena && this.arena.writer ? C4I_WHOWROTE : 0) |
                (m && m.trapHandler ? C4I_TRAPH : 0);

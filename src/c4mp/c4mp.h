@@ -120,6 +120,8 @@ enum {
     // microcode anyway (docs/fused-opcodes.md, F7), as have oisc4 and
     // libjs.
     LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,
+    // F3: IEEE arithmetic (docs/c4-float.md) -- named, not run here
+    FPU ,
     INS_SIZE
 };
 

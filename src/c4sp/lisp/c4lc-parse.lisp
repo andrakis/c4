@@ -1737,6 +1737,10 @@ static int *__c4ll_neg(int *d, int *a) {
 ;; after a unit that says float or double, callers first, all static.
 (define p:fpsrc "
 static unsigned int __c4d_to_f(unsigned long long a) {
+    if (__c4fp_hw()) return __c4_fpu(0, 0, &a, 26);
+    return __c4d_to_f_s(a);
+}
+static unsigned int __c4d_to_f_s(unsigned long long a) {
     int e;
     unsigned int sign, f;
     unsigned long long sig;
@@ -1751,6 +1755,11 @@ static unsigned int __c4d_to_f(unsigned long long a) {
     return __c4f_round(sign, e - 0x381, f | 0x40000000);
 }
 static unsigned long long __c4f_to_d(unsigned int a) {
+    unsigned long long r;
+    if (__c4fp_hw()) { __c4_fpu(&r, 0, a, 25); return r; }
+    return __c4f_to_d_s(a);
+}
+static unsigned long long __c4f_to_d_s(unsigned int a) {
     int e;
     unsigned int sign, sig;
     sign = a >> 31;
@@ -1772,6 +1781,10 @@ static unsigned int __c4d_to_u(unsigned long long a) {
     return (unsigned int)v;
 }
 static int __c4d_to_i(unsigned long long a) {
+    if (__c4fp_hw()) return __c4_fpu(0, 0, &a, 24);
+    return __c4d_to_i_s(a);
+}
+static int __c4d_to_i_s(unsigned long long a) {
     long long v;
     v = __c4d_to_ll(a);
     if (sizeof(int) == 4 && (v < 0 - 2147483647 - 1 || v > 2147483647)) return 0 - 2147483647 - 1;
@@ -1805,7 +1818,12 @@ static long long __c4d_to_ll(unsigned long long a) {
     return (long long)m;
 }
 static unsigned long long __c4d_from_u(unsigned int a) { return __c4d_from_ull_s((unsigned long long)a, 0); }
-static unsigned long long __c4d_from_i(int a) { return __c4d_from_ll((long long)a); }
+static unsigned long long __c4d_from_i(int a) {
+    unsigned long long r;
+    if (__c4fp_hw()) { __c4_fpu(&r, 0, a, 23); return r; }
+    return __c4d_from_i_s(a);
+}
+static unsigned long long __c4d_from_i_s(int a) { return __c4d_from_ll((long long)a); }
 static unsigned long long __c4d_from_ll(long long a) {
     if (a < 0) return __c4d_from_ull_s(0 - (unsigned long long)a, 1);
     return __c4d_from_ull_s((unsigned long long)a, 0);
@@ -1819,6 +1837,10 @@ static unsigned long long __c4d_from_ull_s(unsigned long long a, unsigned int si
 static unsigned long long __c4d_abs(unsigned long long a) { return a & 0x7FFFFFFFFFFFFFFFull; }
 static unsigned long long __c4d_neg(unsigned long long a) { return a ^ 0x8000000000000000ull; }
 static int __c4d_cmp(unsigned long long a, unsigned long long b) {
+    if (__c4fp_hw()) return __c4_fpu(0, &b, &a, 22);
+    return __c4d_cmp_s(a, b);
+}
+static int __c4d_cmp_s(unsigned long long a, unsigned long long b) {
     if (__c4d_isnan(a) || __c4d_isnan(b)) return 2;
     if (!((a | b) & 0x7FFFFFFFFFFFFFFFull)) return 0;
     if (a == b) return 0;
@@ -1827,6 +1849,11 @@ static int __c4d_cmp(unsigned long long a, unsigned long long b) {
     return 1;
 }
 static unsigned long long __c4d_sqrt(unsigned long long a) {
+    unsigned long long r;
+    if (__c4fp_hw()) { __c4_fpu(&r, 0, &a, 21); return r; }
+    return __c4d_sqrt_s(a);
+}
+static unsigned long long __c4d_sqrt_s(unsigned long long a) {
     int ea, e, i, pos;
     unsigned long long sa, rhi, rlo, rem, root, trial, pair;
     ea = (int)(a >> 52) & 0x7FF; sa = a & 0x000FFFFFFFFFFFFFull;
@@ -1859,6 +1886,11 @@ static unsigned long long __c4d_sqrt(unsigned long long a) {
     return __c4d_round(0, e / 2 + 0x3FE, (root << 8) | (rem != 0));
 }
 static unsigned long long __c4d_div(unsigned long long a, unsigned long long b) {
+    unsigned long long r;
+    if (__c4fp_hw()) { __c4_fpu(&r, &b, &a, 20); return r; }
+    return __c4d_div_s(a, b);
+}
+static unsigned long long __c4d_div_s(unsigned long long a, unsigned long long b) {
     int ea, eb, ez, i;
     unsigned int sign;
     unsigned long long sa, sb, q;
@@ -1894,6 +1926,11 @@ static unsigned long long __c4d_div(unsigned long long a, unsigned long long b) 
     return __c4d_round(sign, ez, q | (sa != 0));
 }
 static unsigned long long __c4d_mul(unsigned long long a, unsigned long long b) {
+    unsigned long long r;
+    if (__c4fp_hw()) { __c4_fpu(&r, &b, &a, 19); return r; }
+    return __c4d_mul_s(a, b);
+}
+static unsigned long long __c4d_mul_s(unsigned long long a, unsigned long long b) {
     int ea, eb, ez;
     unsigned int sign, a0, a1, b0, b1;
     unsigned long long sa, sb, sz, mag, p00, p01, p10, p11, mid, hi, lo;
@@ -1937,12 +1974,22 @@ static int __c4d_normsub(unsigned long long *sig) {
     return 1 - sh;
 }
 static unsigned long long __c4d_sub(unsigned long long a, unsigned long long b) {
+    unsigned long long r;
+    if (__c4fp_hw()) { __c4_fpu(&r, &b, &a, 18); return r; }
+    return __c4d_sub_s(a, b);
+}
+static unsigned long long __c4d_sub_s(unsigned long long a, unsigned long long b) {
     unsigned int sa;
     sa = (unsigned int)(a >> 63);
     if (sa != (unsigned int)(b >> 63)) return __c4d_add_mags(a, b, sa);
     return __c4d_sub_mags(a, b, sa);
 }
 static unsigned long long __c4d_add(unsigned long long a, unsigned long long b) {
+    unsigned long long r;
+    if (__c4fp_hw()) { __c4_fpu(&r, &b, &a, 17); return r; }
+    return __c4d_add_s(a, b);
+}
+static unsigned long long __c4d_add_s(unsigned long long a, unsigned long long b) {
     unsigned int sa;
     sa = (unsigned int)(a >> 63);
     if (sa != (unsigned int)(b >> 63)) return __c4d_sub_mags(a, b, sa);
@@ -2053,6 +2100,10 @@ static unsigned int __c4f_to_u(unsigned int a) {
     return (unsigned int)v;
 }
 static int __c4f_to_i(unsigned int a) {
+    if (__c4fp_hw()) return __c4_fpu(0, 0, a, 8);
+    return __c4f_to_i_s(a);
+}
+static int __c4f_to_i_s(unsigned int a) {
     long long v;
     v = __c4f_to_ll(a);
     if (sizeof(int) == 4 && (v < 0 - 2147483647 - 1 || v > 2147483647)) return 0 - 2147483647 - 1;
@@ -2083,7 +2134,11 @@ static long long __c4f_to_ll(unsigned int a) {
     return (long long)m;
 }
 static unsigned int __c4f_from_u(unsigned int a) { return __c4f_from_ull_s((unsigned long long)a, 0); }
-static unsigned int __c4f_from_i(int a) { return __c4f_from_ll((long long)a); }
+static unsigned int __c4f_from_i(int a) {
+    if (__c4fp_hw()) return __c4_fpu(0, 0, a, 7);
+    return __c4f_from_i_s(a);
+}
+static unsigned int __c4f_from_i_s(int a) { return __c4f_from_ll((long long)a); }
 static unsigned int __c4f_from_ll(long long a) {
     if (a < 0) return __c4f_from_ull_s(0 - (unsigned long long)a, 1);
     return __c4f_from_ull_s((unsigned long long)a, 0);
@@ -2105,6 +2160,10 @@ static unsigned int __c4f_from_ull_s(unsigned long long a, unsigned int sign) {
 static unsigned int __c4f_abs(unsigned int a) { return a & 0x7FFFFFFF; }
 static unsigned int __c4f_neg(unsigned int a) { return a ^ 0x80000000; }
 static int __c4f_cmp(unsigned int a, unsigned int b) {
+    if (__c4fp_hw()) return __c4_fpu(0, b, a, 6);
+    return __c4f_cmp_s(a, b);
+}
+static int __c4f_cmp_s(unsigned int a, unsigned int b) {
     if (__c4f_isnan(a) || __c4f_isnan(b)) return 2;
     if (!((a | b) & 0x7FFFFFFF)) return 0;
     if (a == b) return 0;
@@ -2113,6 +2172,10 @@ static int __c4f_cmp(unsigned int a, unsigned int b) {
     return 1;
 }
 static unsigned int __c4f_sqrt(unsigned int a) {
+    if (__c4fp_hw()) return __c4_fpu(0, 0, a, 5);
+    return __c4f_sqrt_s(a);
+}
+static unsigned int __c4f_sqrt_s(unsigned int a) {
     int ea, e, i;
     unsigned int sa, rem, root, trial;
     unsigned long long r;
@@ -2143,6 +2206,10 @@ static unsigned int __c4f_sqrt(unsigned int a) {
     return __c4f_round(0, e / 2 + 0x7E, (root << 5) | (rem != 0));
 }
 static unsigned int __c4f_div(unsigned int a, unsigned int b) {
+    if (__c4fp_hw()) return __c4_fpu(0, b, a, 4);
+    return __c4f_div_s(a, b);
+}
+static unsigned int __c4f_div_s(unsigned int a, unsigned int b) {
     int ea, eb, ez, i;
     unsigned int sa, sb, q, sign;
     sign = (a ^ b) >> 31;
@@ -2177,6 +2244,10 @@ static unsigned int __c4f_div(unsigned int a, unsigned int b) {
     return __c4f_round(sign, ez, q | (sa != 0));
 }
 static unsigned int __c4f_mul(unsigned int a, unsigned int b) {
+    if (__c4fp_hw()) return __c4_fpu(0, b, a, 3);
+    return __c4f_mul_s(a, b);
+}
+static unsigned int __c4f_mul_s(unsigned int a, unsigned int b) {
     int ea, eb, ez;
     unsigned int sa, sb, sz, sign, mag;
     unsigned long long p;
@@ -2212,10 +2283,18 @@ static int __c4f_normsub(unsigned int *sig) {
     return 1 - sh;
 }
 static unsigned int __c4f_sub(unsigned int a, unsigned int b) {
+    if (__c4fp_hw()) return __c4_fpu(0, b, a, 2);
+    return __c4f_sub_s(a, b);
+}
+static unsigned int __c4f_sub_s(unsigned int a, unsigned int b) {
     if ((a ^ b) >> 31) return __c4f_add_mags(a, b, a >> 31);
     return __c4f_sub_mags(a, b, a >> 31);
 }
 static unsigned int __c4f_add(unsigned int a, unsigned int b) {
+    if (__c4fp_hw()) return __c4_fpu(0, b, a, 1);
+    return __c4f_add_s(a, b);
+}
+static unsigned int __c4f_add_s(unsigned int a, unsigned int b) {
     if ((a ^ b) >> 31) return __c4f_sub_mags(a, b, a >> 31);
     return __c4f_add_mags(a, b, a >> 31);
 }
@@ -2343,6 +2422,11 @@ static int __c4fp_clz32(unsigned int a) {
     if (!(a & 0xC0000000)) { n = n + 2; a = a << 2; }
     if (!(a & 0x80000000)) n = n + 1;
     return n;
+}
+static int __c4fp_hw() {
+    static int asked, has;
+    if (!asked) { has = (__c4_info() & 0x10000) != 0; asked = 1; }
+    return has;
 }
 ")
 ;; ---- end of p:fpsrc ----

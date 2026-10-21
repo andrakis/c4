@@ -266,6 +266,9 @@
 	("__time" TIME) ("__c4_signal" SIGH) ("__c4_sigint" SIGI)
 	("__c4_usleep" USLP) ("__c4_info" INFO) ("__c4_ops_list" OPSL)
 	("__c4_invoke" C4IV) ("__c4_float" FLT)
+	;; F3: __c4_fpu(r, b, a, op), what the float helpers call when the
+	;; machine has an FPU (src/c4fp/softfp.c)
+	("__c4_fpu" FPU)
 	;; c4mp's processor opcodes (66+). c4m does not have these; a
 	;; program that calls them must test __c4_info() & C4I_SMP first,
 	;; or it gets an illegal instruction there instead of an answer.

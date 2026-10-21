@@ -9,6 +9,8 @@
 #define C4M_FLOAT 1
 // Forward declaration
 int c4_float_instruction (int *sp);
+// The FPU opcode (F3): sp[0] the sub-op, sp[1] a, sp[2] b, sp[3] r
+int c4_fpu_instruction (int *sp);
 #endif
 
 enum {

@@ -119,7 +119,8 @@ void c4_vm_init() {
         "CPUI,CPUN,CPUS,CPUH,"
         "CAS ,XCHG,FADD,CWAI,CWAK,IPI ,"
         "LXI ,SXI ,TRAW,"
-        "LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,";
+        "LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,"
+        "FPU ,";
 }
 
 // One place decides which opcodes carry an operand word, the same rule

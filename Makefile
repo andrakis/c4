@@ -1039,7 +1039,7 @@ test-c4sc-lex: c4sc-host c4sp
 	head -n -1 $(SRCS)/c4sp/tests/expected/c4lc-tokens.txt | cmp - .c4sc_lex.txt
 	./c4sc-host tokens -conforming $(TESTS)/c4lc_lex_sample.c > .c4sc_lex.txt
 	head -n -1 $(SRCS)/c4sp/tests/expected/c4lc-tokens-conforming.txt | cmp - .c4sc_lex.txt
-	./c4sc-host tokens -count $(SRCS)/c4cc/c4cc.c | grep -q "^tokens 15125$$"
+	./c4sc-host tokens -count $(SRCS)/c4cc/c4cc.c | grep -q "^tokens 15126$$"
 	@fail=0; for f in $(C4SC_LEX_SWEEP); do \
 	   ./c4sp -R -c 33554432 $(SRCS)/c4sp/lisp/c4lc-tokens.lisp $$f > .c4sc_i.txt 2>&1; \
 	   head -n -1 .c4sc_i.txt > .c4sc_i2.txt; \
@@ -1149,7 +1149,7 @@ c4sc.c4r: c4sp $(C4LC_LISP) $(C4RLINK) $(C4SC_GEN) src/c4sc/c4sc-main.c \
 test-c4sc-image: c4sc.c4r c4sc-host $(C4M) c4sp
 	@# the image runs, and computes what the interpreter computes
 	$(C4M) load-c4r.c -- c4sc.c4r -c 4000000 tokens -count $(SRCS)/c4cc/c4cc.c \
-	  | grep -q "^tokens 15125$$"
+	  | grep -q "^tokens 15126$$"
 	@echo "  hosted lex: tokens 15125"
 	@# a real compile, hosted: the image it produces has to be the size
 	@# the native build produces. Bare c4m has no write syscall -- the
@@ -1649,7 +1649,7 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c $(C4RDUMP)
 	head -n -1 src/c4sp/tests/expected/c4lc-tokens.txt | cmp - .c4fc_lex.txt
 	./c4th $(C4FC_LIB) -e ': GO 4194304 ARENA-INIT 1 CONFORMING ! S" src/tests/c4lc_lex_sample.c" LEX-FILE DUMP-TOKENS ; GO' > .c4fc_lex.txt
 	head -n -1 src/c4sp/tests/expected/c4lc-tokens-conforming.txt | cmp - .c4fc_lex.txt
-	./c4th $(C4FC_LIB) -e ': GO 33554432 ARENA-INIT S" src/c4cc/c4cc.c" LEX-FILE COUNT-TOKENS ; GO' | grep -q "^tokens 15125$$"
+	./c4th $(C4FC_LIB) -e ': GO 33554432 ARENA-INIT S" src/c4cc/c4cc.c" LEX-FILE COUNT-TOKENS ; GO' | grep -q "^tokens 15126$$"
 	@for f in $(C4FC_LEX_SWEEP); do \
 	   ./c4sp src/c4sp/lisp/c4lc-tokens.lisp $$f > .c4fc_a.txt 2>&1; \
 	   ./c4th $(C4FC_LIB) -e ": GO 67108864 ARENA-INIT S\" $$f\" LEX-FILE DUMP-TOKENS ; GO" > .c4fc_b.txt 2>&1; \
@@ -2005,11 +2005,19 @@ test-c4fp: c4sp c4sp32 $(C4M) c4m32 $(C4LC_LISP) src/c4fp/softfp.c src/c4fp/mkfp
 	./.c4fp_host 2000000
 	gcc -O2 -w -o .c4fp_gen src/c4fp/tests/fpgen.c -lm
 	./.c4fp_gen 250 > .c4fp_vec.txt
+	@# each twice: the helpers on the FPU (F3) and, with -F, in software
 	@for fl in "" -O; do \
 	   ./c4sp src/c4sp/lisp/c4lc.lisp $$fl -P -I src/c4fp src/c4fp/tests/fpvm.c .c4fp_vm.c4r > /dev/null || exit 1; \
-	   $(C4M) load-c4r.c -- .c4fp_vm.c4r .c4fp_vec.txt | tail -1 | grep -q "cases, 0 wrong" || { echo "test-c4fp: 64-bit $$fl wrong"; exit 1; }; \
+	   for fpu in "" -F; do \
+	     $(C4M) $$fpu load-c4r.c -- .c4fp_vm.c4r .c4fp_vec.txt | tail -1 | grep -q "cases, 0 wrong" || { echo "test-c4fp: 64-bit $$fl $$fpu wrong"; exit 1; }; \
+	   done; \
 	   ./c4sp32 src/c4sp/lisp/c4lc.lisp $$fl -P -I src/c4fp src/c4fp/tests/fpvm.c .c4fp_vm.c4r > /dev/null || exit 1; \
-	   ./c4m32 load-c4r.c -- .c4fp_vm.c4r .c4fp_vec.txt | tail -1 | grep -q "cases, 0 wrong" || { echo "test-c4fp: 32-bit $$fl wrong"; exit 1; }; \
+	   for fpu in "" -F; do \
+	     ./c4m32 $$fpu load-c4r.c -- .c4fp_vm.c4r .c4fp_vec.txt | tail -1 | grep -q "cases, 0 wrong" || { echo "test-c4fp: 32-bit $$fl $$fpu wrong"; exit 1; }; \
+	   done; \
+	   for fpu in "" --no-fpu; do \
+	     node libjs/cli.js --fast $$fpu -d . .c4fp_vm.c4r .c4fp_vec.txt < /dev/null | grep -q "cases, 0 wrong" || { echo "test-c4fp: libjs $$fl $$fpu wrong"; exit 1; }; \
+	   done; \
 	done
 	rm -f .c4fp_host .c4fp_gen .c4fp_vec.txt .c4fp_vm.c4r
 	# C4IX libc's conversions (fp.c: printf's digits, strtod, strtof), which
@@ -2024,14 +2032,31 @@ test-c4fp: c4sp c4sp32 $(C4M) c4m32 $(C4LC_LISP) src/c4fp/softfp.c src/c4fp/mkfp
 	     ./c4sp src/c4sp/lisp/c4lc.lisp $$fl -P src/c4ix/libc/tests/$$t.c .c4fp_vm.c4r > /dev/null || exit 1; \
 	     $(C4M) load-c4r.c -- .c4fp_vm.c4r $$v > .c4fp_out.txt; \
 	     grep -q "cases, 0 wrong\|mathtest: OK" .c4fp_out.txt || { cat .c4fp_out.txt; echo "test-c4fp: $$t 64-bit $$fl wrong"; exit 1; }; \
+	     if [ $$t = mathtest ]; then \
+	       $(C4M) -F load-c4r.c -- .c4fp_vm.c4r $$v | cmp -s - .c4fp_out.txt || { echo "test-c4fp: mathtest 64-bit $$fl differs without the FPU"; exit 1; }; \
+	     fi; \
 	     ./c4sp32 src/c4sp/lisp/c4lc.lisp $$fl -P src/c4ix/libc/tests/$$t.c .c4fp_vm.c4r > /dev/null || exit 1; \
 	     ./c4m32 load-c4r.c -- .c4fp_vm.c4r $$v > .c4fp_out.txt; \
 	     grep -q "cases, 0 wrong\|mathtest: OK" .c4fp_out.txt || { cat .c4fp_out.txt; echo "test-c4fp: $$t 32-bit $$fl wrong"; exit 1; }; \
+	     if [ $$t = mathtest ]; then \
+	       ./c4m32 -F load-c4r.c -- .c4fp_vm.c4r $$v | cmp -s - .c4fp_out.txt || { echo "test-c4fp: mathtest 32-bit $$fl differs without the FPU"; exit 1; }; \
+	       node libjs/cli.js --fast -d . .c4fp_vm.c4r $$v < /dev/null | grep -v "^libjs:" | cmp -s - .c4fp_out.txt || { echo "test-c4fp: mathtest libjs $$fl differs"; exit 1; }; \
+	     fi; \
 	   done; \
 	done
 	rm -f .c4fp_gen .c4fp_mgen .c4fp_vec.txt .c4fp_mvec.txt .c4fp_vm.c4r .c4fp_out.txt
 	@echo "test-c4fp: OK"
 PHONY += test-c4fp
+
+# F6: the same float benchmark with the FPU opcode and without it, on
+# native c4m (64 and 32-bit) and libjs (docs/c4-float.md has the numbers)
+bench-c4fp: c4sp c4sp32 $(C4M) c4m32
+	./c4sp src/c4sp/lisp/c4lc.lisp -O src/c4fp/tests/fpbench.c .fpbench64.c4r > /dev/null
+	./c4sp32 src/c4sp/lisp/c4lc.lisp -O src/c4fp/tests/fpbench.c .fpbench32.c4r > /dev/null
+	@for f in "" -F; do echo "== c4m $$f"; $(C4M) $$f load-c4r.c -- .fpbench64.c4r; echo "== c4m32 $$f"; ./c4m32 $$f load-c4r.c -- .fpbench32.c4r; done
+	@for f in "" --no-fpu; do echo "== libjs $$f (its ms are the machine's clock)"; /usr/bin/time -f "   wall %es" node libjs/cli.js --fast $$f .fpbench32.c4r < /dev/null; done
+	rm -f .fpbench64.c4r .fpbench32.c4r
+PHONY += bench-c4fp
 
 # The fused opcodes (docs/fused-opcodes.md), end to end: take a real
 # image, run c4opt's fuse pass over it, and require that it behaves

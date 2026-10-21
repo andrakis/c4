@@ -45,6 +45,9 @@ export function createMachine(opts = {}) {
   });
   const bus = new Bus(arena, opts.gui || null);
   const machine = new Machine(arena, dev, bus, new Heap(0, 0));
+  // the FPU opcode (F3): on unless asked otherwise (fpu: false)
+  machine.noFpu = opts.fpu === false;
+  dev.noFpu = machine.noFpu;
   if (opts.gui) opts.gui.attach(machine);
   return machine;
 }

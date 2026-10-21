@@ -753,6 +753,8 @@ enum {
 	// inserted: the list index IS the opcode number and it is mirrored
 	// across c4m.c, c4l.c, c4mp.h, oisc4.c, c4cc.c and c4r.lisp.
 	LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,
+	// F3: IEEE arithmetic (docs/c4-float.md)
+	FPU ,
 	// End of instructions
 	INS_SIZE,
 };

@@ -73,7 +73,9 @@
 	;; instruction sequences a third of the instructions real workloads
 	;; execute are made of, emitted only under -mfuse. Appended, never
 	;; inserted.
-	LDL LDG PSHL PSHG LEAP IMMP LIP ADDL STL POPA))
+	LDL LDG PSHL PSHG LEAP IMMP LIP ADDL STL POPA
+	;; F3: IEEE arithmetic (docs/c4-float.md). Appended.
+	FPU))
 (define c4r:nops (length c4r:ops))
 
 ;; does opcode n take an operand word? LEA..ADJ are 0..7; JSRI 61 JSRS 62;

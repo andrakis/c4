@@ -100,6 +100,20 @@ int line_a(void) { return __LINE__; }
 int line_b(void) { return HERE(); }
 char *file_name(void) { return __FILE__; }
 
+// A keyword is a macro name like any other word: C picks keywords out
+// after expansion. src/tests/factorial.c says `#define int long long`.
+#define char int
+char kw_wide = 70000;
+#undef char
+#ifdef char
+int kw_undef(void) { return 1; }
+#else
+int kw_undef(void) { return 0; }
+#endif
+#define return return 1 +
+int kw_ret(void) { return 41; }
+#undef return
+
 int main() {
     printf("guarded %d\n", guarded());
     printf("taken_if %d\n", taken_if());
@@ -122,5 +136,7 @@ int main() {
     printf("self %d\n", twice(twice(3)));
     printf("self-va %d\n", note(7, 8));
     printf("line %d %d %s\n", line_b() - line_a(), line_a() > 0, file_name());
+    printf("kw %d %d %d\n", kw_wide, kw_undef(), kw_ret());
+    printf("str-kw %s\n", STR(int while));
     return 0;
 }

@@ -783,14 +783,18 @@
 	(if (= (string:byte s i) 61) i
 	(next pp:eqpos s (+ i 1))))))
 
-;; The M4 type words lex as identifiers in -P mode so that a header can
-;; #define them (stddef.h does, to nothing). Whatever survives expansion
-;; becomes the keyword here, after the last macro has had its chance.
+;; Every word lexes as an identifier in -P mode, keywords too, so that a
+;; program can #define one (stddef.h does `long`, factorial.c `int`).
+;; Whatever survives expansion becomes the keyword here, after the last
+;; macro has had its chance.
 (define pp:kwfix (lambda (toks acc)
 	(if (empty? toks) (pp:reverse acc)
 	(begin
 		(define t (head toks))
-		(define kw (if (= (pp:kind t) 'Id) (lex:kwlook lex:keywords2 (pp:val t)) false))
+		(define kw (if (= (pp:kind t) 'Id)
+			(if (lex:kwlook lex:keywords (pp:val t)) (lex:kwlook lex:keywords (pp:val t))
+				(lex:kwlook lex:keywords2 (pp:val t)))
+			false))
 		(next pp:kwfix (tail toks)
 			(pp:cons (if kw (list kw 0 (pp:line t)) t) acc))))))
 

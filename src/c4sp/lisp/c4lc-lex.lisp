@@ -90,11 +90,15 @@
 	("void" Void)))
 
 ;; The M4 type words (docs/c4lc-design.md, "Integer types"). Kept in a
-;; table of their own because the preprocessor must see them as plain
-;; identifiers: include/stddef.h says `#ifndef long` / `#define long int`
-;; and `#define unsigned`, and a keyword token cannot be a macro name.
-;; In -P mode they lex as Id and pp:kwfix turns the survivors back into
-;; keywords after expansion -- the order C's own phases put it in.
+;; table of their own because without -P they are keywords only when
+;; the program asks (lex:file's caller sets it up; see below).
+;;
+;; In -P mode EVERY word lexes as Id, these and lex:keywords alike, and
+;; pp:kwfix turns the survivors back into keywords after expansion --
+;; the order C's own phases put it in, and c4fc's (lex.f T-IDENT). A
+;; keyword is a macro name like any other word: include/stddef.h says
+;; `#ifndef long` / `#define long int`, src/tests/factorial.c says
+;; `#define int long long`, and `#x` of a keyword is its spelling.
 (define lex:keywords2 '(
 	("const" Const) ("volatile" Volatile) ("signed" Signed)
 	("unsigned" Unsigned) ("short" Short) ("long" Long)))
@@ -364,8 +368,9 @@
 			(begin
 				(define e (lex:identend j))
 				(define name (string:substr lex:src i (- e i)))
-				(define kw (if (lex:kwlook lex:keywords name) (lex:kwlook lex:keywords name)
-					(if lex:pp false (lex:kwlook lex:keywords2 name))))
+				(define kw (if lex:pp false
+					(if (lex:kwlook lex:keywords name) (lex:kwlook lex:keywords name)
+						(lex:kwlook lex:keywords2 name))))
 				;; arm the <...> header scan; cleared at end of line,
 				;; so it only bites on an actual #include line
 				(if lex:pp

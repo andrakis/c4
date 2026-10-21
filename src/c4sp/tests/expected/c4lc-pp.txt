@@ -19,3 +19,5 @@ strv x
 self 12
 self-va 708
 line 1 1 src/tests/c4lc_pp.c
+kw 70000 0 42
+str-kw int while

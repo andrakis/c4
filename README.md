@@ -137,7 +137,8 @@ Components
 - [c4cc](src/c4cc/): a C compiler to the relocatable [`.c4r`](src/c4cc/README.md) format, plus `c4rlink`, `c4rstrip` and `c4rdump`.
 - [cpp](src/c4dos/): a C preprocessor in c4, byte-for-byte with `gcc -E` on this tree.
 - [c4sp and c4lc](src/c4sp/): a Lisp written in c4, and an optimizing C compiler written in that Lisp. c4lc compiles most of the tree's images.
-- [c4sc](src/c4sc/): c4lc's Lisp compiled to C, so the compiler runs fast inside the machine.
+- [c4sc](src/c4sc/): c4lc's Lisp compiled to C, so the compiler runs fast inside the machine. C4IX's `cc` runs it.
+- [c4fp](src/c4fp/): IEEE `float` and `double` in software, which c4lc's floating point compiles to ([docs/c4-float.md](docs/c4-float.md)).
 - [c4th](src/c4th/): Forth-2012 CORE, with a self-hosting metacompiler.
 - [c4fc](src/c4fc/): a C99 compiler written in Forth. Its output is byte-identical to c4lc's.
 

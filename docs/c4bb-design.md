@@ -32,7 +32,7 @@ place of the microcode -- see [libjs-design.md](libjs-design.md) and
 
 ## Why it works: what the c4m "CPU" actually is
 
-The VM loop at c4m.c:1490 has architectural state of just `pc sp bp a`,
+The VM loop in c4m.c (`i = *pc++`) has architectural state of just `pc sp bp a`,
 a cycle counter, and a mode bit — no flags, no register file. Everything
 else is memory. The extensions that make kernels possible (ITH, the
 cycle-interval interrupt, the synthesized trap frame, TLEV) are, in
@@ -367,7 +367,9 @@ copies and deletes — it compiles nothing.
 
 - **`images/c4ke-root/`** — a C4KE root filesystem with its own
   toolchain: c4sp, c4rlink, c4cc, the 27 `.lisp` files c4lc is written
-  in, `u0.h`, and C4IX's sources under `src/c4ix/`. Derived by
+  in, `u0.h`, C4IX's sources under `src/c4ix/`, and the kit that builds
+them: b4ke, c4sc (the compiled c4lc), `c4ix.b4k`, `tar`, `save` and
+`c4ix-src.tar`. Derived by
   **subtraction** — copy the shared disk, delete the C4DOS and C4IX
   *binary* parts — because the manifest names ~106 entries and every
   one has to exist on the disk; a hand-written include list would drift
@@ -417,7 +419,7 @@ intact). A related firmware bug WAS found and fixed along the way:
 `fw_malc`/`fw_free` (`fw/fw.c`) mutate the shared `__fw_free` list
 across many ordinary instructions with no interrupt masking - fine
 under C4KE, which never preempts, but a real hazard under C4IX, which
-does (`PREEMPT_INTERVAL=10000`). That fix is real and kept, but
+does (`PREEMPT_INTERVAL=10000` then; 50000 now). That fix is real and kept, but
 doesn't fully close this window. Masking the cycle-interrupt-interval
 device register around vfsload's entire run (ordinary memory writes
 aren't protected-mode gated, so userland can do this the same way
@@ -430,8 +432,10 @@ iterations) corrupts a live stack slot with what looks like leftover
 heap/string bytes and locks PC at the TLEV ROM address permanently;
 root-caused as far as confirming the trap microcode itself is
 byte-parity-verified against native c4m (so not a c4bb VM bug) and
-that C4IX_STACK_WORDS=8192 rules out simple stack exhaustion, but not
-further. Both practical impacts are contained for now: vfsload fails
+that C4IX_STACK_WORDS=8192 (65536 now) rules out simple stack
+exhaustion, but not further. The board now names a TLEV that restores
+its own address instead of spinning on it silently
+(`src/c4bb/tests/test-tlev-wedge.mjs`). Both practical impacts are contained for now: vfsload fails
 gracefully (reports "N/M entries loaded" and continues; the c4bb test
 suite only requires most entries, not all), and `top` is simply not
 recommended for long unattended runs.
@@ -446,8 +450,8 @@ step/run modes the current microstep's signals light chips, bus and
 control stubs (with the live bus value); in turbo the board glows by
 value-change heat. Panels: registers, current microcode routine with
 step highlight, UART terminal with cooked-mode echo and line editing.
-Module declarations carry a `schem=` field reserved for zoom-in
-illustrative chip schematics (not yet drawn).
+Zoom-in illustrative chip schematics are not drawn, and no field in
+`board.hwd` reserves them yet.
 
 ## Verification
 

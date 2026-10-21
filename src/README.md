@@ -7,7 +7,7 @@ where its own README and design doc are. The top-level
 
 - [Machines](#machines): [c4m](#c4m-and-its-loaders), [c4mpg](#c4mpg), [c4mp](#c4mp), [oisc4](#oisc4), [c4bb](#c4bb), [libjs](#libjs), [c4or1k](#c4or1k)
 - [Operating systems](#operating-systems): [C4KE](#c4ke), [C4IX](#c4ix), [C4DOS](#c4dos)
-- [Toolchain](#toolchain): [c4cc and `.c4r`](#c4cc-and-the-c4r-format), [cpp](#cpp), [c4sp and c4lc](#c4sp-and-c4lc), [c4sc](#c4sc), [c4th](#c4th), [c4fc](#c4fc)
+- [Toolchain](#toolchain): [c4cc and `.c4r`](#c4cc-and-the-c4r-format), [cpp](#cpp), [c4sp and c4lc](#c4sp-and-c4lc), [c4sc](#c4sc), [c4fp](#c4fp), [c4th](#c4th), [c4fc](#c4fc)
 - [Libraries and programs](#libraries-and-programs): [c4sh](#c4sh), [c4tui](#c4tui), [include/](#include), [tests and benchmarks](#tests-and-benchmarks)
 - [Shelved](#shelved): [c4lm](#c4lm), [c4gpu](#c4gpu)
 - [Who compiles whom](#who-compiles-whom)
@@ -199,11 +199,13 @@ real shell.
 
 A compatibility layer runs C4KE's binaries unmodified. On the libjs display it
 has an NT-style desktop: windows, a taskbar, terminals, Explorer, Task Manager,
-Notepad, Calculator and Run. Compilers run inside it.
+Notepad, Calculator, Run and an IDE. Compilers run inside it (`cc` is c4lc,
+compiled), and it rebuilds itself from the repo its disk unpacks at `/usr`
+(`b4ke -C /usr`, into `/build`).
 
 **Run:** `make run-c4ix`, or `make run-c4ix-c4` under unmodified c4 → c4m.
 
-**Test:** `make test-c4ix`, `test-c4ix-c4ke`.
+**Test:** `make test-c4ix`, `test-c4ix-c4ke`, `test-c4ix-rebuild`.
 
 **Docs:** [docs/c4ix-design.md](../docs/c4ix-design.md),
 [docs/c4ix-desktop.md](../docs/c4ix-desktop.md).
@@ -280,7 +282,9 @@ evaluator with `call/cc`, and binary32 floats.
 **c4lc** is an optimizing C compiler written in that Lisp. It supports
 structs, typedef, its own preprocessor, separate compilation, tree passes and
 a peephole optimizer, and it has flags for the fused and CISC opcodes and for
-inlining. Its images are 18–27% smaller than c4cc's.
+inlining. It has the integer types, `long long` and, in software, `float` and
+`double` ([docs/c4-float.md](../docs/c4-float.md)). Its images are 18–27%
+smaller than c4cc's.
 
 c4lc compiles C4IX, C4DOS, c4mp, c4or1k, c4tui and the 32-bit c4th. The
 standard way to build an image is per-module `c4lc -c` into `.c4o` units,
@@ -299,7 +303,21 @@ then `c4rlink` (`-s` to strip).
 
 Transliterates c4lc's Lisp into C over c4sp's runtime, giving "c4lc,
 compiled". This cut the in-machine C4IX build on the breadboard from about
-31 minutes to about 4.5.
+31 minutes to about 4.5. Inside C4IX it is `/bin/c4sc`, which the
+BUILD.B4K files and `cc` run.
+
+### c4fp
+
+**Folder:** [c4fp/](c4fp/).
+
+IEEE binary32 and binary64 in software, correctly rounded, written in the C
+c4lc compiles. It is what c4lc's `float` and `double` compile to: c4lc
+splices the helpers a unit calls into that unit (`p:fpsrc`, generated from
+`softfp.c` by `mkfpsrc.py`).
+
+**Test:** `make test-c4fp`.
+
+**Docs:** [docs/c4-float.md](../docs/c4-float.md).
 
 **Build:** `make c4sc.c4r`.
 

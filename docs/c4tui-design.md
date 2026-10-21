@@ -15,8 +15,8 @@ C4DOS gives a program the nine stock-c4 builtins and nothing else:
 `open read close printf malloc free memset memcmp exit`. There is no
 `strlen`, no `memcpy`, no `realloc`, no termios, no `ioctl`, no way to
 ask how big the terminal is, and the C4DOS API table (`include/c4dos.h`)
-is fifteen slots of filesystem and memory with **no console call at
-all**. `puts` exists on c4m, c4mp and c4bb but not on plain c4.
+is sixteen slots of filesystem, memory and a clock with **no console
+call at all**. `puts` exists on c4m, c4mp and c4bb but not on plain c4.
 
 So the library supplies: the grid, the flush, the key decoder, and the
 four string helpers it needs. It does not supply a text buffer, an undo

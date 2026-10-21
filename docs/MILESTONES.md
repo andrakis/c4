@@ -193,6 +193,12 @@ and c4lc as a C4KE task, the compiled image lands in the kernel's
 RAM filesystem, and the kernel executes it straight from memory — "no
 write ever touches the host filesystem."
 
+**Since (to 2026-10-21):** the integer types and qualifiers (M4), what
+the C Busybox needs (M7b: `goto`, function pointers, aggregate
+initializers, variadic macros and more), `long long` in two words on a
+32-bit target (M8), and IEEE `float` and `double` in software (F2,
+`docs/c4-float.md`). `docs/c4lc-design.md` has each.
+
 ---
 
 ## C4IX — a second-generation OS, compiled by c4lc
@@ -263,6 +269,15 @@ preemption rate**, up from failures at the shipped rate before it.
 load the kernel image, 12,994 for kernel init, 18,859 to spawn and run
 the first user program — **343,468 cycles, power-on to userland.**
 A syscall or a full context switch each cost 1,237 cycles.
+
+**Since (to 2026-10-21):** C4IX was built on the breadboard by C4KE
+(the ladder, below), grew the desktop on libjs, and then a root archive
+that puts the repo at `/usr` with its build prebuilt in `/build`, a
+rebuild of everything it ships from inside itself (`b4ke -C /usr`),
+`cc`, shared libraries and a `-fpic` libc, CPU accounting with an idle
+task, and c4m as a C4IX program. The plain-c4 backends of X1 and X2
+were removed on 2026-10-21. The "Since X6" list in
+`docs/c4ix-design.md` names each change and its commit.
 
 ---
 

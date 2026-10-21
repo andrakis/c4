@@ -386,7 +386,7 @@ above precisely so they can be shown wrong.
 GPU is one more engine to lockstep. `make test-c4bb` diffs ~15 images
 byte-for-byte against native `c4m32`, including exact cycle-counter parity;
 the GPU port earns the same treatment, with each VM writing to its own output
-buffer so N runs can be diffed at once. `tools/lockstep.js` proves c4bb's step
+buffer so N runs can be diffed at once. `src/c4bb/tools/lockstep.js` proves c4bb's step
 and turbo engines stay register-identical at every instruction boundary — the
 GPU engine belongs in that harness, not in a separate one.
 

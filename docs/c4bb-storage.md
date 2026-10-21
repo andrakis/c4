@@ -1199,7 +1199,9 @@ byte-identical C4IX rebuild rather than riding along with a firmware
 change. `fw.c` is written flat instead — one condition per block, never
 a conditional inside another one's `#else` — which is clearer anyway,
 and cost one extra build flag (`FW_SEEONLY`) to say "has drives, has no
-loader" without nesting.
+loader" without nesting. *(Since fixed, 25498f0: `#else` and `#elif` now
+inherit an enclosing skip, `pp:any-skip?`; docs/c4lc-design.md, "Beyond
+L11". `fw.c` stays flat.)*
 
 ### Testing the browser on the machine that has one
 

@@ -118,7 +118,8 @@ binary can run under C4DOS, C4KE, or bare — the shim checks the slot.
 ## Files, writing, and the RAM disk
 
 c4/c4m have NO file-write primitive (READ only), and c4bb's disk
-controller is read-only too. Writing is therefore a DOS SERVICE: an
+controller was read-only too when this was written (it has drives with a
+write head now: "Drives, and one spelling for them", above). Writing is therefore a DOS SERVICE: an
 in-memory RAM disk (name → buffer table), DOS-style
 `DEVICE=RAMDISK.SYS SIZE=n` (default 1 MB, 64 slots).
 
@@ -144,9 +145,10 @@ through the invoke stub. `cpp` and `c4cc` both use it -- that is how
 `BUILD.BAT` gets a kernel onto the RAM disk with no write syscall
 anywhere in the machine.
 
-c4sp/c4lc deliberately stay out of this: they only ever run under C4KE,
-where the RAM filesystem is reached through custom opcodes instead, and
-a trap-free DOS has none to offer.
+c4sp, and so c4lc and c4sc, use the same table when it is there: their
+`file:write` goes to the RAM disk under C4DOS and to the ramfs (through
+C4KE's custom opcodes) under C4KE. That is how `IX.BAT` builds C4IX with
+c4sc at the DOS prompt.
 
 ### API versions
 
@@ -311,8 +313,9 @@ c4cc route and the Makefile ships the c4lc one.
 | `make c4dos-clock.c4r` | the same plus `TIME`, gated at runtime behind `DEVICE=CLOCK.SYS`. The dev loop. |
 | `make c4dos32.c4r` | 32-bit clock build: the image c4bb boots, and the one an embedder wants. Also built into `src/c4bb/images/` by `build-images.sh`. |
 
-C4DOS has no notion of a drive. It opens `config.sys`, `autoexec.bat`
-and `c4dos.dir` relative to the working directory, so "the disk" is
+C4DOS opens `config.sys`, `autoexec.bat` and `c4dos.dir` relative to
+the working directory (other drives are reached with `DEVICE=DRIVES.SYS`,
+above), so "the disk" is
 simply a directory you `cd` into (or hand to c4bb with `-d`). `make`
 assembles two, since a 32-bit machine will not load a 64-bit transient:
 `c4dos-disk/` for the native runs and `c4dos-disk32/` for c4bb. Both

@@ -254,7 +254,8 @@ Those ten opcodes live at 79-88. `c4mp` and `oisc4` execute all ten,
 `c4m` executes three, `c4opt`'s `fuse` pass emits them — and **c4bb has
 none of them, nor c4mp's 66-78 either** (`INS_SIZE` is 66). So the entire
 measured win is sitting on the other side of microcode that has not been
-written. `docs/fused-opcodes.md` costs it: no new circuitry, every fused
+written. *(Since written: c4bb runs all ten since M10, below; c4mp's 66-78
+still trap there.)* `docs/fused-opcodes.md` costs it: no new circuitry, every fused
 opcode being a concatenation of transfers the board already performs;
 about twelve microsteps for the base three (+4% of 319) and about
 thirty-four for the c4mp seven; and `turbo.js` gets it free because it
@@ -365,8 +366,8 @@ only way the sentence gets said. That is B4KE's reason to exist, it is
 demonstrable in-game, and it is the same wall DOS linkers hit and
 answered with response files.
 
-The kernel rung does not hit that wall, which is why C4KE builds today
-and C4IX does not. So the ladder's shape is forced and it is exactly the
+The kernel rung does not hit that wall, which is why C4KE built first
+and C4IX had to wait for a compiler with L7 on the machine (c4sc, below). So the ladder's shape is forced and it is exactly the
 one the narrative wants:
 
     C4DOS -> toolchain -> C4KE -> [B4KE + L7] -> C4IX
@@ -458,7 +459,7 @@ pins it, and pins the dry run touching nothing.
 **What is still missing for the real thing is L7, not B4KE.** The
 twelve-module C4IX build is this file with twelve `TARGET`/`RUN` pairs
 and a longer `LIST`. It will work the day a compiler on this machine can
-read `struct vnode {`.
+read `struct vnode {`. *(It does: `src/c4ke/bin/c4ix.b4k`, with c4sc.)*
 
 ## Walking it, on c4bb
 
@@ -633,8 +634,9 @@ load-from-memory path for C4KE's ramfs and nothing for DOS's.
 - **No change to c4fc.** Nothing measured here says c4fc is wrong; it says
   it is not a batch compiler for a 20 MHz machine.
 - **No new VM opcodes.** `docs/c4th-design.md` §8 already rules on that.
-- **No `-O` on the board.** `c4cc` does not optimize and the kernel does
-  not need it to boot; `c4opt` remains a host-side pass.
+- **No `-O` for the C4KE build.** `c4cc` does not optimize and the kernel
+  does not need it to boot. (C4IX's in-machine build does: c4sc runs c4lc's
+  `-O` passes.)
 - ~~**`vfsload` is missing from the floppy.**~~ **FIXED 2026-09-05**, along
   with the rest of the userland — see `docs/dos-rung-fixes.md` F2. Both
   build floppies now carry `vfsload.c4r` and a manifest shaped for what is
@@ -645,6 +647,7 @@ load-from-memory path for C4KE's ramfs and nothing for DOS's.
   by `src/c4bb/tests/build-images.sh`.
 - **The `.c4o` route is not on this disk.** c4rlink and object mode are
   c4fc's, and `c4cc` compiles the kernel whole in one pass, so there is
-  nothing to link. If the board ever wants separate compilation it is
+  nothing to link. *(The C4IX build is the `.c4o` route: c4sc `-c` and
+  c4rlink, on `c4dos-c4ix32`.)* If the board ever wants separate compilation it is
   `c4cc -c` that would have to grow it, not c4fc that would have to get
   faster.

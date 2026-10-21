@@ -144,34 +144,34 @@ export async function run(ctx) {
   };
   const start = async item => {
     await clickAt(20, 582);
-    await shownHas('/^Shut Down/');
+    await shownHas('/^Power Off/');
     await clickText(item);
     await sleep(300);
   };
-  ok('a Command Prompt shows the shell prompt', await shownHas('/c4ix:\\/\\$/', 60000));
+  ok('a Terminal shows the shell prompt', await shownHas('/c4ix:\\/\\$/', 60000));
   await clickAt(300, 200);
   await tab.type('ps\n');
   ok('ps typed on the display runs in that window', await shownHas('/c4ix-desktop/') && await shownHas('/tasks,/'));
   // top keeps going until Ctrl-C
   await tab.type('top\n');
-  ok('top starts in the Command Prompt', await shownHas('/Ctrl-C to stop/'));
+  ok('top starts in the Terminal', await shownHas('/Ctrl-C to stop/'));
   await sleep(4000);
   ok('and is still running four seconds later', await shownHas('/Ctrl-C to stop/', 2000));
   await tab.key('c', { ctrl: true });
   ok('Ctrl-C stops it', await shownHas('/\\^C/'));
-  // raycast, drawn in colour in the Command Prompt
+  // raycast, drawn in colour in the Terminal
   await tab.type('raycast.c4r 21x21 -s 7 -d -n 400 -g 80x25\n');
-  // colours inside the Command Prompt's text area only (the desktop around
+  // colours inside the Terminal's text area only (the desktop around
   // it has plenty of its own): the window is found by its title
   const termColours = `(() => {
-    const t = window.c4m.display.shownText.find(t => /^Command Prompt - task/.test(t.s) && t.y < 560);
+    const t = window.c4m.display.shownText.find(t => /^Terminal - task/.test(t.s) && t.y < 560);
     if (!t) return 0;
     const x0 = t.x - 27 + 8, y0 = t.y - 7 + 25;
     const c = document.getElementById('display'), d = c.getContext('2d').getImageData(x0, y0, 640, 400).data;
     const seen = new Set(); for (let i = 0; i < d.length; i += 4 * 13) seen.add((d[i] << 16) | (d[i + 1] << 8) | d[i + 2]);
     return seen.size; })()`;
   // raycast prints its frame rate on its status line once it is drawing
-  ok('raycast draws in the Command Prompt', await shownHas('/ f\\/s /', 60000));
+  ok('raycast draws in the Terminal', await shownHas('/ f\\/s /', 60000));
   ok('in colour', await tab.waitFor(`${termColours} > 12`, 10000), String(await tab.eval(termColours)) + ' colours');
   await sleep(500);
   await shot('raycast-in-desktop');
@@ -192,11 +192,11 @@ export async function run(ctx) {
   }
   // compile a windowed program inside the machine, then run it (docs/c4ix-desktop.md part three)
   // the window's title bar, not its taskbar button (which would minimise it)
-  await clickText('/^Command Prompt - task/', all => all.filter(t => t.y < 560).pop());
+  await clickText('/^Terminal - task/', all => all.filter(t => t.y < 560).pop());
   await tab.type('c4cc -o /tmp/bounce.c4r /usr/include/window.h /usr/src/c4ix/examples/bounce.c\n');
   ok('c4cc compiles bounce.c inside C4IX', await shownHas('/c4cc: wrote \\d+ bytes to ramfs:\\/tmp\\/bounce.c4r/', 60000), (await tab.eval(`${shown}.map(t => t.s).join(' | ')`)).slice(-600));
   await tab.type('/tmp/bounce.c4r\n');
-  ok('the program makes the Command Prompt its window', await shownHas('/^Bounce - compiled inside C4IX/', 30000) && await shownHas('/^Click me$/'));
+  ok('the program makes the Terminal its window', await shownHas('/^Bounce - compiled inside C4IX/', 30000) && await shownHas('/^Click me$/'));
   {
     const h1 = await tab.eval(canvasHash);
     await sleep(400);
@@ -211,38 +211,38 @@ export async function run(ctx) {
     await tab.type('q');
     ok('q ends it and the window is a terminal again', await shownHas('/bounce: \\d+ frames, 1 clicks/', 15000));
   }
-  // Explorer
-  await start('/^Explorer$/');
-  ok('Start > Explorer opens at the root', await shownHas('/^Exploring - \\/$/'));
+  // Files
+  await start('/^Files$/');
+  ok('Go > Files opens at the root', await shownHas('/^Files - \\/$/'));
   {
     const all = await tab.eval(`${shown}.filter(t => t.s.trim() === 'usr')`);
     const t = all[all.length - 1];
     if (t) { await clickAt(t.x + 5, t.y + 5); await clickAt(t.x + 5, t.y + 5); }
-    ok('double-clicking a folder opens it', await shownHas('/^Exploring - \\/usr$/'));
+    ok('double-clicking a folder opens it', await shownHas('/^Files - \\/usr$/'));
   }
   await shot('explorer');
-  // Notepad
-  await start('/^Notepad$/');
-  ok('Start > Notepad opens', await shownHas('/^Untitled - Notepad$/'));
+  // Text Editor
+  await start('/^Text Editor$/');
+  ok('Go > Text Editor opens', await shownHas('/^Untitled - Text Editor$/'));
   await tab.type('Hello from the C4IX desktop.\n');
-  ok('typing in Notepad shows', await shownHas('/Hello from the C4IX desktop/'));
+  ok('typing in Text Editor shows', await shownHas('/Hello from the C4IX desktop/'));
   // Calculator
   await start('/^Calculator$/');
-  ok('Start > Calculator opens', await shownHas('/^Hex$/'));
+  ok('Go > Calculator opens', await shownHas('/^Hex$/'));
   await tab.type('6*7=');
   ok('6 * 7 = 42', await shownHas('/^42$/'));
   await shot('notepad-calc');
-  // Task Manager (from the Start menu: in a browser on Windows, Ctrl+Shift+Esc is taken by Windows)
-  await start('/^Task Manager$/');
-  ok('Start > Task Manager lists the processes', await shownHas('/^Image Name$/') && await shownHas('/^c4ix-desktop/'));
+  // System Monitor (from the Go menu: in a browser, Ctrl+Shift+Esc may be the host's)
+  await start('/^System Monitor$/');
+  ok('Go > System Monitor lists the processes', await shownHas('/^Name$/') && await shownHas('/^c4ix-desktop/'));
   ok('with CPU usage', await shownHas('/^CPU Usage: \\d+%$/', 15000));
   await clickText('/^Performance$/');
   ok('the Performance tab shows the gauge and history', await shownHas('/^CPU Usage History$/'));
   await sleep(3000);
   await shot('taskmgr');
-  // Shut Down
-  await start('/^Shut Down/');
-  ok('Shut Down hands the console back', await waitTerm('desktop: shut down', 30000));
+  // Power Off
+  await start('/^Power Off/');
+  ok('Power Off hands the console back', await waitTerm('desktop: shut down', 30000));
   ok('no page errors', tab.errors.length === 0, tab.errors.join('\n       '));
 
   // ---- M4: a C4IX program ----------------------------------------------

@@ -1,15 +1,15 @@
-// taskmgr.c -- Task Manager, as Windows NT 4 lays it out. docs/c4ix-desktop.md.
+// taskmgr.c -- System Monitor: programs, tasks and load. docs/c4ix-desktop.md.
 //
-// Applications: the desktop's windows (End Task, Switch To, New Task).
+// Applications: the desktop's windows (Close, Show, New Task).
 // Processes: every C4IX task, from utaskinfo, with the CPU share each
-// took over the last second (End Process). Performance: a CPU gauge and a
+// took over the last second (Kill). Performance: a CPU gauge and a
 // scrolling history.
 //
 // CPU use is cpustat.h's, the same as top's: each second, one snapshot of
 // the kernel's accounting, and the share of the machine each task took
 // since the last. As NT does it, the kernel's own work -- syscalls and
 // switches -- is the System row, not the program's, and the idle task and
-// the time the machine napped are System Idle Process; CPU usage is
+// the time the machine napped are idle; CPU usage is
 // everything but idle, and the rows add up to 100.
 
 #include "desktop.h"
@@ -69,7 +69,7 @@ static void sample(struct tasks *t) {
     // the kernel's for System, a task's own for a task
     if (k >= 0) {
         r = &b->t[k];
-        row(t, r->id, "System Idle Process", 0, r->state, r->nsyscalls, pct[k],
+        row(t, r->id, "idle", 0, r->state, r->nsyscalls, pct[k],
             t->sampled ? cpu_kdelta(a, b, k, 0) + cpu_kdelta(a, b, k, 1) : 0, r->user + r->kernel);
     }
     ktime = b->h.gone_kernel;
@@ -104,10 +104,10 @@ static void sample(struct tasks *t) {
 int tasks_open() {
     int i, k;
     struct win *w;
-    // one Task Manager at a time: another request brings it forward
+    // one System Monitor at a time: another request brings it forward
     w = win_first();
     while (w) { if (w->used && w->kind == K_TASKS) { win_raise(w->id); return w->id; } w = w->next; }
-    i = win_open(K_TASKS, "Task Manager", 490, 440);
+    i = win_open(K_TASKS, "System Monitor", 490, 440);
     if (i < 0) return i;
     w = win_get(i);
     S(w)->tab = 1;
@@ -134,7 +134,7 @@ void tasks_tick(struct win *w) {
 }
 
 // The taskbar's CPU meter: the same sample as the Performance tab, kept
-// apart from any Task Manager window, so the two agree and neither
+// apart from any System Monitor window, so the two agree and neither
 // disturbs the other's deltas.
 static struct tasks *bar;
 int tasks_cpu_usage() {
@@ -193,9 +193,9 @@ static void draw_apps(struct win *me, struct tasks *t, int ox, int oy, int cw, i
         }
         w = w->next;
     }
-    ui_button(ox + cw - 300, oy + ch - 40, 90, 24, "End Task", 0, 0);
-    ui_button(ox + cw - 202, oy + ch - 40, 90, 24, "Switch To", 0, 0);
-    ui_button(ox + cw - 104, oy + ch - 40, 90, 24, "New Task...", 0, 0);
+    ui_button(ox + cw - 300, oy + ch - 40, 90, 24, "Close", 0, 0);
+    ui_button(ox + cw - 202, oy + ch - 40, 90, 24, "Show", 0, 0);
+    ui_button(ox + cw - 104, oy + ch - 40, 90, 24, "Run...", 0, 0);
 }
 
 static void draw_procs(struct tasks *t, int ox, int oy, int cw, int ch) {
@@ -203,7 +203,7 @@ static void draw_procs(struct tasks *t, int ox, int oy, int cw, int ch) {
     list_box(ox + 8, oy + PAGE_Y + 10, cw - 16, ch - PAGE_Y - 60);
     widths[0] = 120; widths[1] = 40; widths[2] = 36; widths[3] = 66; widths[4] = 74; widths[5] = 60;
     widths[6] = cw - 20 - 396;
-    labels[0] = "Image Name"; labels[1] = "PID"; labels[2] = "CPU"; labels[3] = "Interval";
+    labels[0] = "Name"; labels[1] = "PID"; labels[2] = "CPU"; labels[3] = "Interval";
     labels[4] = "CPU Time"; labels[5] = "Syscalls"; labels[6] = "State";
     ui_header(ox + 10, oy + PAGE_Y + 12, widths, labels, 7);
     rows = (ch - PAGE_Y - 60 - 26) / ROW_H;
@@ -232,7 +232,7 @@ static void draw_procs(struct tasks *t, int ox, int oy, int cw, int ch) {
         ++k;
     }
     ui_scrollbar(ox + cw - 26, oy + PAGE_Y + 30, ch - PAGE_Y - 82, t->n, rows, t->top);
-    ui_button(ox + cw - 104, oy + ch - 40, 90, 24, "End Process", 0, 0);
+    ui_button(ox + cw - 104, oy + ch - 40, 90, 24, "Kill", 0, 0);
 }
 
 // NT's gauge: green bars on black, lit from the bottom up to the usage.
@@ -281,9 +281,9 @@ static void draw_perf(struct tasks *t, int ox, int oy, int cw, int ch) {
     ui_group(ox + gw + 34, oy + PAGE_Y + 8, cw - gw - 42, 130, "CPU Usage History");
     graph(t, ox + gw + 42, oy + PAGE_Y + 24, cw - gw - 58, 106);
     ui_group(ox + 8, oy + PAGE_Y + 150, cw - 16, 90, "Totals");
-    d_text(ox + 20, oy + PAGE_Y + 170, C_DARK, F_SANS, "Processes");
+    d_text(ox + 20, oy + PAGE_Y + 170, C_DARK, F_SANS, "Tasks");
     ui_num(buf, t->n); d_text(ox + 150, oy + PAGE_Y + 170, C_DARK, F_SANS, buf);
-    d_text(ox + 20, oy + PAGE_Y + 188, C_DARK, F_SANS, "Windows open");
+    d_text(ox + 20, oy + PAGE_Y + 188, C_DARK, F_SANS, "Open windows");
     secs = 0; w = win_first(); while (w) { if (w->used) ++secs; w = w->next; }
     ui_num(buf, secs); d_text(ox + 150, oy + PAGE_Y + 188, C_DARK, F_SANS, buf);
     d_text(ox + 20, oy + PAGE_Y + 206, C_DARK, F_SANS, "Up for (machine seconds)");
@@ -293,7 +293,7 @@ static void draw_perf(struct tasks *t, int ox, int oy, int cw, int ch) {
 void tasks_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     struct tasks *t;
     t = S(w);
-    tabs[0] = "Applications"; tabs[1] = "Processes"; tabs[2] = "Performance";
+    tabs[0] = "Programs"; tabs[1] = "Tasks"; tabs[2] = "Load";
     d_rect(ox, oy, cw, ch, C_FACE);
     // the page, then the tabs over its top edge
     d_bevel(ox + 4, oy + PAGE_Y, cw - 8, ch - PAGE_Y - 26, B_RAISED);
@@ -328,13 +328,13 @@ static void end_process(struct win *w) {
     t = S(w);
     if (t->sel < 0 || t->sel >= t->n) return;
     if (t->privs[t->sel] == 0) {
-        msgbox(w, "Unable to Terminate Process", "This is a kernel task; ending it would stop the machine.", 0, A_NONE);
+        msgbox(w, "Cannot Kill", "This is a kernel task; ending it would stop the machine.", 0, A_NONE);
         return;
     }
-    ui_cpy(buf, "End process ");
+    ui_cpy(buf, "Kill task ");
     ui_cat(buf, t->name + t->sel * NAMEW);
     ui_cat(buf, "? Unsaved work in it will be lost.");
-    msgbox(w, "Task Manager Warning", buf, 1, A_ENDPROC);
+    msgbox(w, "System Monitor", buf, 1, A_ENDPROC);
 }
 
 void tasks_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
@@ -366,7 +366,7 @@ void tasks_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
         } else if (ui_hit(x, y, cw - 202, ch - 40, 90, 24)) {
             if ((k = app_window(t->asel)) >= 0) win_raise(k);
         } else if (ui_hit(x, y, cw - 104, ch - 40, 90, 24))
-            inputbox(0, "Create New Task", "Type the name of a program, and C4IX will run it:", "", A_RUN);
+            inputbox(0, "Run", "Program to run:", "", A_RUN);
     } else if (t->tab == 1) {
         rows = (ch - PAGE_Y - 60 - 26) / ROW_H;
         r = ui_scroll_click(x, y, cw - 26, PAGE_Y + 30, ch - PAGE_Y - 82, t->n, rows, t->top);

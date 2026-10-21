@@ -2,12 +2,12 @@
 //
 // The desktop is one C4IX task built from several modules:
 //   wm.c        the window manager: display, events, windows, taskbar,
-//               Start menu, menu bars, dialogs, and the drawing layer
+//               Go menu, menu bars, dialogs, and the drawing layer
 //   ui.c        widgets drawn through that layer
-//   term.c      Command Prompt: a terminal running c4ix-sh over pipes
-//   files.c     Explorer
-//   taskmgr.c   Task Manager
-//   apps.c      Notepad, Calculator, and the small windows (About)
+//   term.c      Terminal: a terminal running c4ix-sh over pipes
+//   files.c     Files
+//   taskmgr.c   System Monitor
+//   apps.c      Text Editor, Calculator, and the small windows (About)
 //   edit.c      Editor: the IDE, a VIM-mode editor that builds with b4ke
 //
 // Only wm.c includes gui.h and touches the display. Everything else draws
@@ -109,7 +109,7 @@ int  now_ms();
 void msgbox(struct win *owner, char *title, char *text, int yesno, int action);
 void inputbox(struct win *owner, char *title, char *prompt, char *initial, int action);
 char *dialog_text();              // the text an input dialog was answered with
-void run_command(char *cmd);      // a new Command Prompt running cmd
+void run_command(char *cmd);      // a new Terminal running cmd
 
 // ---- ui.c: widgets ----
 void ui_button(int x, int y, int w, int h, char *label, int pressed, int deflt);
@@ -153,7 +153,7 @@ void files_command(struct win *w, int menu, int item);
 void files_answer(struct win *w, int action, int yes);
 
 int  tasks_open();
-int  tasks_open_perf();           // Task Manager on its Performance tab
+int  tasks_open_perf();           // System Monitor on its Performance tab
 int  tasks_cpu_usage();           // the machine's CPU use now, in percent (the taskbar's meter)
 void tasks_draw(struct win *w, int ox, int oy, int cw, int ch, int focused);
 void tasks_mouse(struct win *w, int ev, int x, int y, int cw, int ch);

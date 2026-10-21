@@ -9,7 +9,7 @@ the evidence next to it.
 (docs/libjs-design.md) and draws a Windows 95-style desktop on it: a teal
 background, bevelled grey windows with navy title bars that can be
 dragged, focused, minimised, maximised and closed, and a taskbar with a
-Start menu, a button per window and a clock.
+Go menu, a button per window and a clock.
 
 The first application is a terminal. Each terminal window runs a real
 `c4ix-sh` as its own task, its stdin and stdout pipes that the desktop
@@ -61,7 +61,7 @@ which is what a character grid needs; 0 is the font's own spacing.
 - Windows are a z-ordered list (a linked list, as many as memory allows;
   part seven). Title bar drag moves, a click raises and
   focuses, the three caption buttons minimise, maximise/restore and close.
-- The taskbar has a Start button (menu: New Terminal, About, Shut Down),
+- The taskbar has a Start button (menu: New Terminal, About, Power Off),
   a button per window, and a clock.
 - A terminal window is 80x25 cells of 8x16 pixels (80x24 until the
   fixes of 2026-09-24), with 300 rows of scrollback. Closing it ends its
@@ -81,7 +81,7 @@ which is what a character grid needs; 0 is the font's own spacing.
 
 ### D2: the desktop shell
 - [x] Windows: draw, raise, focus, drag, minimise, maximise, close
-- [x] Taskbar: Start menu, window buttons, clock
+- [x] Taskbar: Go menu, window buttons, clock
 - [x] Headless test drives it with display events (`libjs/tests/test-desktop.mjs`,
       in `make test-libjs`)
 
@@ -90,9 +90,9 @@ which is what a character grid needs; 0 is the font's own spacing.
 - [x] Local line editing, Enter sends the line, Ctrl-C interrupts
 - [x] Headless test (2026-09-23): `ps` typed in a window runs in that
       window's shell and lands in that window; a second terminal from the
-      Start menu; `spin` there and Ctrl-C shows `^C` and stops it while the
+      Go menu; `spin` there and Ctrl-C shows `^C` and stops it while the
       first terminal still answers; dragging moves a window; closing one
-      removes it; Shut Down returns to the console, and no terminal shell
+      removes it; Power Off returns to the console, and no terminal shell
       outlives the desktop. C4IX's vfs pins widened to `[4-9]x/[4-9]x`
       entries (now 50/50) in test-libjs and test-c4bb.
 
@@ -101,7 +101,7 @@ which is what a character grid needs; 0 is the font's own spacing.
       the C4IX shell; the display becomes 800x600; a terminal shows the
       prompt; `ps` typed on the display runs in that window; Start opens its
       menu and New Terminal opens a second window; a window drags by its
-      title bar; its close button closes it; Shut Down hands the console
+      title bar; its close button closes it; Power Off hands the console
       back; no page errors. The strings drawn are read back through the
       display's opt-in text log (`display.recordText`).
 - [x] Screenshot checked by eye. At the user's request the desktop is
@@ -116,7 +116,7 @@ user program were silently not built. It now rebuilds when anything under
 
 ## Part two: NT-style tools (asked for 2026-09-23)
 
-Explorer, Task Manager, Notepad, Calculator and Run, in the Windows NT 4
+Explorer, System Monitor, Text Editor, Calculator and Run, in the Windows NT 4
 style, all inside the desktop process. The desktop becomes several
 modules linked together (`src/c4ix/user/desktop/`): C4IX's compiler is
 given a fixed memory budget per file, and one file holding all of this
@@ -134,19 +134,19 @@ tabs); a message box; resizable windows (drag the bottom-right corner).
 
 - **Explorer**: a folder tree next to a file list (Name, Size, Type), a
   menu bar, an address box with Up, a status bar. Double-click opens a
-  folder, runs a program in a new Command Prompt, or opens anything else
-  in Notepad. New Folder, Delete (confirmed), Rename.
-- **Task Manager** (Ctrl+Shift+Esc too): Applications (the desktop's
-  windows, End Task, Switch To), Processes (every task with PID, CPU %,
-  CPU time in cycles, syscalls and state, End Process), Performance (a
+  folder, runs a program in a new Terminal, or opens anything else
+  in Text Editor. New Folder, Delete (confirmed), Rename.
+- **System Monitor** (Ctrl+Shift+Esc too): Applications (the desktop's
+  windows, Close, Show), Processes (every task with PID, CPU %,
+  CPU time in cycles, syscalls and state, Kill), Performance (a
   CPU gauge and a scrolling history graph, totals).
-- **Notepad**: open, edit and save text files in C4IX's filesystem;
+- **Text Editor**: open, edit and save text files in C4IX's filesystem;
   keyboard editing, mouse placement, scroll bar and wheel.
 - **Calculator** (`calc.c`), in three modes:
   - Integer: 32-bit words in Hex, Dec, Oct or Bin, with + - * /, Mod, And, Or, Xor, Not, Lsh, Rsh.
   - Single and Double: IEEE floating point (docs/c4-float.md), each operation done in that precision with c4lc's `float` or `double`. The display shows the shortest decimal that reads back as the value, and a line under it the value's bits: 0.1 + 0.2 is 0.30000000000000004 in Double and 0.3 in Single. Keys: Sqrt, x^2, 1/x, Int, Abs, Pi, e, Exp (an exponent, as in `1e-7`), and the constants Max, Min (the smallest normal), Eps and Inf. On the keyboard `.` is the point, `e` Exp, `p` Pi and `r` Sqrt.
   - The conversions both ways are libc's `fp.c`, linked into the desktop, so they are exact.
-- **Run**: Start > Run... starts a program in a new Command Prompt.
+- **Run**: Go > Run... starts a program in a new Terminal.
 
 ### D5: kernel
 - [x] `SYS_STAT`, `SYS_UNLINK`, `SYS_RENAME`; libc4ix `ustat`, `uunlink`,
@@ -165,39 +165,39 @@ tabs); a message box; resizable windows (drag the bottom-right corner).
       headers, scroll bars, menu bars with drop-downs, text fields, tabs,
       group boxes, radio buttons; message and input boxes (modal);
       windows resize from their corner; title-bar double click maximises;
-      the NT 4 Start menu with its banner; five desktop icons
+      the NT 4 Go menu with its banner; five desktop icons
 - [x] test-desktop.mjs green
 
 ### D7: the tools
 - [x] Explorer: tree + list (Name, Size, Type), menus, address, Up,
       status bar; double-click opens folders, runs programs, opens text in
-      Notepad; New Folder, Delete (confirmed), Rename; F2, F5, Del,
+      Text Editor; New Folder, Delete (confirmed), Rename; F2, F5, Del,
       Backspace, Enter, arrows
-- [x] Task Manager: Applications (End Task, Switch To, New Task),
-      Processes (name, PID, CPU %, CPU time, syscalls, state; End Process,
+- [x] System Monitor: Applications (Close, Show, New Task),
+      Processes (name, PID, CPU %, CPU time, syscalls, state; Kill,
       confirmed; kernel tasks refused), Performance (gauge, 60 s history,
       totals); also Ctrl+Shift+Esc -- which in a browser on Windows is
-      taken by Windows itself, so the Start menu and the icon are the way
+      taken by Windows itself, so the Go menu and the icon are the way
       in there
-- [x] Notepad: open, edit, save (Ctrl+S, Save As), scroll bar, wheel,
+- [x] Text Editor: open, edit, save (Ctrl+S, Save As), scroll bar, wheel,
       modified mark in the title
 - [x] Calculator: 32-bit, Hex/Dec/Oct/Bin, + - * / Mod And Or Xor Not Lsh
-      Rsh, keyboard; Run (Start > Run..., and Task Manager's New Task)
+      Rsh, keyboard; Run (Go > Run..., and System Monitor's New Task)
 - [x] Headless (2026-09-23), 40 checks in `test-desktop.mjs`, twice green:
       Explorer browses, makes, renames and deletes a folder in /ram;
-      Notepad saves /ram/untitled.txt, Explorer lists it and reopens it in
-      Notepad with its text; Calculator 12+30=42, 2A in Hex, 2A*2=54;
-      Task Manager lists spin, ends it on confirmation, shows the
+      Text Editor saves /ram/untitled.txt, Explorer lists it and reopens it in
+      Text Editor with its text; Calculator 12+30=42, 2A in Hex, 2A*2=54;
+      System Monitor lists spin, ends it on confirmation, shows the
       Performance and Applications tabs; Run starts a command in a new
-      Command Prompt; Shut Down leaves no shell behind.
+      Terminal; Power Off leaves no shell behind.
       Found on the way: typing between two clicks no longer makes them a
       double click, and F5 and Backspace work in either Explorer pane.
 
 ### D8: in the browser
-- [x] CDP gate (3060 Ti, 2026-09-23): the desktop, `ps` in a Command Prompt,
-      Explorer opening /usr, Notepad typing, Calculator 6*7=42, Task Manager
-      processes with CPU usage and its Performance tab, Shut Down; no page
-      errors. Screenshots of Explorer, Notepad with Calculator, and Task
+- [x] CDP gate (3060 Ti, 2026-09-23): the desktop, `ps` in a Terminal,
+      Explorer opening /usr, Text Editor typing, Calculator 6*7=42, System Monitor
+      processes with CPU usage and its Performance tab, Power Off; no page
+      errors. Screenshots of Explorer, Text Editor with Calculator, and Task
       Manager checked by eye.
 
 Known: C4IX's boot loader race (docs/c4bb-design.md, "Known issue") now
@@ -211,7 +211,7 @@ an instrumented vfsload loads 50/50 -- and is not caused by this work.
       could be interrupted. It now runs until Ctrl-C, redrawing in place
       (ESC[2J ESC[H) once a machine-second and sleeping in between; `top N`
       still stops after N screens.
-- [x] **raycast in a Command Prompt had no colour and the desktop
+- [x] **raycast in a Terminal had no colour and the desktop
       flickered.** Four causes, all fixed:
   - the terminal kept 16 colours and dropped raycast's 256-colour codes;
     cells now hold xterm-256 indices (24-bit colours map to the nearest);
@@ -229,7 +229,7 @@ an instrumented vfsload loads 50/50 -- and is not caused by this work.
     headless test saw no redraw at all).
   The page's default pace also went from 20 to 100 MHz, the difference
   between raycast managing a few frames a second in the desktop and 80.
-  Headless: 30 distinct colours drawn in the Command Prompt; browser:
+  Headless: 30 distinct colours drawn in the Terminal; browser:
   raycast's status line and colour counted, screenshot checked.
   raycast still reads keys through `/dev/tty`, which is the page's
   terminal, not the window it draws in: `-d` (demo) runs it hands-free.
@@ -271,11 +271,11 @@ user wants to compile a test GUI application inside it and run it.
 
 ### E: Explorer runs programs
 - [x] C4IX's programs live in `/bin` without a `.c4r` suffix, so Explorer
-      showed them as plain files and opened them in Notepad. stat now
+      showed them as plain files and opened them in Text Editor. stat now
       says whether a file is a program: by its C4R signature, or for a
       lazy file by its host name, so a listing never fetches anything.
       Explorer shows these as "C4IX Program" with the program icon, and
-      double-click or File > Open runs one in a new Command Prompt.
+      double-click or File > Open runs one in a new Terminal.
       Headless: `/bin` lists them as programs and double-clicking `hello`
       runs it.
 
@@ -319,13 +319,13 @@ can redirect that into a RAM file, so the Forth route works already.
       the path now wins.
 - [x] **C4: compile a GUI program inside the machine and run it.** The
       desktop owns the display, so a program gets a window through its
-      Command Prompt: `include/window.h` writes drawing commands to
+      Terminal: `include/window.h` writes drawing commands to
       stdout as ESC _ G ... ESC \ sequences, and the window sends mouse
       and key events back on stdin. The window is the program's until it
       closes it, Ctrl-C stops it, or the shell prompts again. The header
       builds with c4cc (no preprocessor, structs or arrays) and with c4lc.
       Headless desktop test and browser gate on the 3060 Ti: c4cc
-      compiles bounce.c in a Command Prompt; it takes the window, titled,
+      compiles bounce.c in a Terminal; it takes the window, titled,
       animates, counts a click on its button, sees a typed key, and q
       gives the terminal back with its title.
 
@@ -336,9 +336,9 @@ everything it ships (`b4ke -C /usr/src/c4`, docs/c4ix-design.md). What
 it lacked was somewhere to edit and build in one place.
 
 - [x] **The Editor** (`src/c4ix/user/desktop/edit.c`, window kind
-      `K_EDIT`, Start > Editor, and Explorer for `.c .h .b4k .lisp .f
+      `K_EDIT`, Go > Editor, and Explorer for `.c .h .b4k .lisp .f
       .js` files). Lines are separate allocations, so there is no
-      Notepad-style 65,000-byte limit; undo and redo are snapshots of the
+      Text Editor-style 65,000-byte limit; undo and redo are snapshots of the
       text, 32 deep.
 - [x] **VIM mode**, on by default. Normal, Insert, Visual and Visual-line,
       and the `:` / `?` command line. Motions with counts (`hjkl w b e W B
@@ -351,7 +351,7 @@ it lacked was somewhere to edit and build in one place.
       PgUp/PgDn, Ctrl+Home/End and Ctrl+Left/Right; Shift+arrows start a
       Visual selection. Ctrl+S saves from any mode.
 - [x] **Build what is open.** `:make` (F5) saves, then runs b4ke over pipes
-      into a pane under the text, the way the Command Prompt runs its
+      into a pane under the text, the way the Terminal runs its
       shell. It uses the nearest `BUILD.B4K` at or above the file;
       without one, a `.c` file gets a build file of its own
       (`/ram/edit.b4k`: c4sc, then c4rlink with `/usr/lib/libc4ix.c4l`).
@@ -360,7 +360,7 @@ it lacked was somewhere to edit and build in one place.
       command compiled. `FILE:N:` and c4cc's `N:` count too. The build
       goes to the first error; F8 / Shift+F8 or `:cn` / `:cp` move
       through them, and a double click in the pane jumps. `:run` (F6) runs
-      the result in a new Command Prompt: the lone file's image, or a
+      the result in a new Terminal: the lone file's image, or a
       `BUILD.B4K`'s `SET RUN command`.
 - [x] Pinned by `test-desktop.mjs`: Insert and Esc, auto-indent, `:w`, `2G
       f4 r7`, `yyp`, `dd`, `u`, arrows in Insert, `:make` building, a
@@ -369,21 +369,21 @@ it lacked was somewhere to edit and build in one place.
 
 ## Part five: the IDE grows a file pane, and the desktop's scroll bars drag (asked for 2026-10-20)
 
-- [x] **Scroll bars drag.** Every bar on the desktop -- Notepad, the Editor,
-      both of Explorer's panes, Task Manager -- moves with its thumb.
+- [x] **Scroll bars drag.** Every bar on the desktop -- Text Editor, the Editor,
+      both of Explorer's panes, System Monitor -- moves with its thumb.
       `ui_scroll_click` starts a drag when the thumb is pressed;
       `ui_scroll_drag(x, y, py)` answers each move with the top line for
       the bar at x, y (a window may have two); `mouse_up` ends it. While a
       drag is on, moves reach the window even outside it, and each one
       redraws. A click on a bar now also brings the cursor or selection
       along, as the wheel does, where it used to be scrolled straight back
-      to it by the next redraw (the Editor, Task Manager).
+      to it by the next redraw (the Editor, System Monitor).
 - [x] **Explorer's tree** scrolls (a bar and the wheel) and its folders
       collapse: a +/- box, a double click, Left/Right or -/+.
-- [x] **An IDE icon** on the desktop, beside Notepad: the Editor.
+- [x] **An IDE icon** on the desktop, beside Text Editor: the Editor.
 - [x] **Explorer opens source in the IDE**: `.c` and `.h` already did; so
       do shell scripts, Makefiles, assembly, Markdown, JSON, HTML, CSS,
-      Python and Forth's `.fs` now. Plain `.txt` stays Notepad's.
+      Python and Forth's `.fs` now. Plain `.txt` stays Text Editor's.
 - [x] **The Editor's file pane**: a tree of the disk down the left, its
       folders closed to start with. A click opens or closes a folder, and
       opens a file (not over unsaved changes). Opening a file, from the
@@ -412,9 +412,9 @@ it lacked was somewhere to edit and build in one place.
       interrupted and ended first, then b4ke, and every one is waited
       for, so a cancelled compiler neither runs on nor stays a zombie.
       Closing the window mid-build does the same.
-- [x] **A CPU meter** beside the clock: Task Manager's number, from its
+- [x] **A CPU meter** beside the clock: System Monitor's number, from its
       own sample every two seconds, redrawn only when it changes; a click
-      opens Task Manager on Performance. It inherits that number's model,
+      opens System Monitor on Performance. It inherits that number's model,
       which counts the boot task as idle (see the CPU review plan).
 - [x] Pinned by `test-desktop.mjs`: the icon; the pane listing the root,
       opening folders and a file; the colours of `hello.c`; `:syntax off`;
@@ -422,7 +422,7 @@ it lacked was somewhere to edit and build in one place.
       Editor's thumb and Explorer's tree thumb; the meter; a long line off
       to the right, the bar across reaching its end, and `:set wrap`
       folding it; `:make` under a `BUILD.B4K` cancelled from the pane,
-      with no c4sc or b4ke left in Task Manager; Explorer's tree scrolled
+      with no c4sc or b4ke left in System Monitor; Explorer's tree scrolled
       across. Not yet looked at in a browser.
 
 ## Part six: the browser's boot, a first frame, Settings, a pointer (asked for 2026-10-20)
@@ -443,12 +443,12 @@ it lacked was somewhere to edit and build in one place.
       the guest (a resize event), the desktop asks for resize and focus
       events and redraws on them, and it draws once more half a second
       in.
-- [x] **Settings** (Start > Settings, `K_SETTINGS`, in `apps.c`): eight
-      colour schemes (Windows Standard, Slate, Rainy Day, Desert, Rose,
+- [x] **Settings** (Go > Settings, `K_SETTINGS`, in `apps.c`): eight
+      colour schemes (Classic Teal, Slate, Rainy Day, Desert, Rose,
       Spruce, Lilac, Storm) and a desktop colour (the scheme's, or one of
       eight), applied at once beside a preview, kept in
       `/etc/desktop.cfg` and read when the desktop starts -- so a choice
-      outlives Shut Down, not a reload of the page. The scheme's nine
+      outlives Power Off, not a reload of the page. The scheme's nine
       colours (`C_DESK`, `C_FACE`, `C_LIGHT`, `C_SHADOW`, the two title
       gradients and `C_SEL`) are variables now; text, white and the
       green of the graphs stay constants.
@@ -457,7 +457,7 @@ it lacked was somewhere to edit and build in one place.
       command, `GUI_CURSOR` (`gui_cursor`, `GUI_PTR_*`: arrow, text beam,
       resize, hand, move, wait, cross, none). It takes effect at once,
       with no frame. The desktop shows a text beam over the Command
-      Prompt, Notepad's text and the Editor's text (`edit_pointer`), the
+      Prompt, Text Editor's text and the Editor's text (`edit_pointer`), the
       resize arrow on a size grip, and the arrow elsewhere.
 - [x] Pinned by `test-boot-desktop.mjs` (new, in `test-libjs`): `--desktop`
       starts both, and a resize from the page draws the scene again; and
@@ -465,7 +465,7 @@ it lacked was somewhere to edit and build in one place.
       `/etc/desktop.cfg`, and Defaults restores it; the pointer over the
       text and the taskbar.
 
-## Part seven: the Command Prompt edits and scrolls, windows without a limit, builds that start built (asked for 2026-10-20)
+## Part seven: the Terminal edits and scrolls, windows without a limit, builds that start built (asked for 2026-10-20)
 
 - [x] **Line editing** (`term.c`). The line being typed is edited where
       it stands: Left/Right, Home/End (Ctrl-A/Ctrl-E), Backspace and
@@ -474,13 +474,13 @@ it lacked was somewhere to edit and build in one place.
       what was being typed. The terminal still sends the shell whole
       lines, so every program sees what it saw before.
 - [x] **The prompt is on the input line**: `c4ix-sh -p`, which the
-      Command Prompt passes. The console shell keeps its newline -- on the
+      Terminal passes. The console shell keeps its newline -- on the
       console, output is buffered until one -- but a pipe delivers every
       write at once, so the window does not need it.
 - [x] **Scrollback**: 300 rows in a ring beside the 80x25 screen, with a
       scroll bar, PgUp/PgDn and the wheel. Typing comes back to the
       bottom.
-- [x] **Task Manager's Interval column**, as top has: what each task ran
+- [x] **System Monitor's Interval column**, as top has: what each task ran
       in the last sample, in kilocycles (850k, 12.3M); the window is 490
       wide for it.
 - [x] **Windows are a linked list** (`desktop.h`, `wm.c`): MAXW's eight
@@ -524,7 +524,7 @@ it lacked was somewhere to edit and build in one place.
 
 - [x] **The archive first.** The browser's boot (`--desktop`) started the
       desktop and top while c4ix-tar was still unpacking the root archive
-      in the background, so My Computer was missing files for several
+      in the background, so Filesystem was missing files for several
       seconds. Now init runs `vfsload -w`, which waits for the archive
       before it returns: the desktop and top start on the whole
       filesystem, and the console's boot lines stay up long enough to
@@ -593,8 +593,32 @@ it lacked was somewhere to edit and build in one place.
 
 ### Found on the way, not fixed
 
-- One more Command Prompt open (a Run of `cat`, say) before Shut Down,
+- One more Terminal open (a Run of `cat`, say) before Power Off,
   late in test-desktop's long run, and the desktop exits without its
   "desktop: shut down": the shell's prompt comes back, the line never
-  does. Shut Down straight after boot, or after the picture and saver
+  does. Power Off straight after boot, or after the picture and saver
   checks alone, is fine; so is the whole run without that window.
+
+## Part ten: names of its own (asked for 2026-10-21)
+
+The desktop began as a homage to Windows 95 and NT 4, names and all.
+It keeps the era's feel, but nothing it shows is Microsoft's any more:
+
+| was | is |
+|---|---|
+| Start, Start menu | Go, Go menu |
+| Shut Down..., "It's now safe to turn off your computer." | Power Off..., "C4IX has stopped. You can close this page." |
+| Command Prompt | Terminal |
+| My Computer | Filesystem |
+| Explorer, "Exploring - /path" | Files, "Files - /path" |
+| Notepad | Text Editor |
+| Task Manager: Applications, Processes, Performance | System Monitor: Programs, Tasks, Load |
+| End Task, Switch To, New Task..., End Process | Close, Show, Run..., Kill |
+| Image Name, System Idle Process | Name, idle |
+| Windows Standard, Slate, Rainy Day, Desert, Rose, Spruce, Lilac, Storm | Classic Teal, Granite, Drizzle, Sandstone, Blush, Pine, Lavender, Thunder |
+| File Folder, Text Document, "N object(s)", Up One Level | Folder, Text, "N items", Up |
+| Confirm File Delete, "Are you sure you want to delete 'x'?" | Delete File, "Delete 'x'?" |
+
+Earlier parts above keep the names they were written with where they
+describe what was done then. The code's own names (`K_NOTE`,
+`taskmgr.c`, the Editor's `:Explore`) are unchanged.

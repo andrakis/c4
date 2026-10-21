@@ -509,7 +509,7 @@ loading or assigning a whole struct is an error.
   into `/ram`; c4th, cpp and c4rdump are on the disk beside them, with
   `/usr/src/examples`. The loader now prefers a RAM file to the host
   file of the same name. `include/window.h` lets a program in a desktop
-  Command Prompt use that window as a canvas.
+  Terminal use that window as a canvas.
 
 - **The root archive** (branch c4ix-userland, 2026-10-19):
   `c4ix-root.tgz`, a reproducible gzipped ustar of the repo's text files
@@ -623,7 +623,7 @@ loading or assigning a whole struct is an error.
   own or as the kernel's on its behalf. The counts are 64-bit (`long
   long`), and the idle loop's naps are counted in machine ms.
   `SYS_CPUSTAT` (229) is one atomic snapshot, read through
-  `include/cpustat.h`. Task Manager and top show System and System Idle
+  `include/cpustat.h`. System Monitor and top show System and System Idle
   Process rows, and the rows add up to 100%.
 
 - **Plain c4 support removed** (2026-10-21, docs/c4ix-cpu.md step 10):
@@ -640,7 +640,7 @@ loading or assigning a whole struct is an error.
   Prompt does it on Ctrl-C, so lines typed at a job that never read
   them are not run by the shell afterwards. In the same change,
   `/dev/stdin` and `/dev/tty` name a task's own stdin when that is a
-  pipe (C4KE's shell under c4m in a Command Prompt polls them), and a
+  pipe (C4KE's shell under c4m in a Terminal polls them), and a
   read on a non-blocking descriptor with nothing yet returns -1.
 
 ## 6.1 Running it

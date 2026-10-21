@@ -54,7 +54,7 @@ int sched_intrap;            // inside the trap handler: no re-entry (sched_in_t
 //
 // The idle loop's cycles are idle time, and so is the time it naps, during
 // which the counter stands still: that is counted in machine milliseconds,
-// so Task Manager can weigh the two together.
+// so System Monitor can weigh the two together.
 //
 // The differences are words, and the VM's counter wraps -- a difference
 // is right modulo the word as long as it is less than half of it, and a
@@ -91,7 +91,7 @@ void sched_retire(struct task *t) {
     acct_gone_kernel = acct_gone_kernel + t->kcycles;
 }
 
-// The snapshot behind Task Manager and top: one trap, so nothing runs
+// The snapshot behind System Monitor and top: one trap, so nothing runs
 // between the first record and the last.
 int sched_cpustat(struct cpustat *h, struct cpustat_task *r, int max) {
     struct task *t;
@@ -753,7 +753,7 @@ void sched_forge_argv(struct task *t, int argv) {
 // ---- lifecycle ----
 
 void sched_init(int interval) {
-    // The idle task first, so it is task 0, as NT's System Idle Process
+    // The idle task first, so it is task 0, as NT's idle
     // is; then the context we are running in becomes the kernel task.
     if (!(idle_task = task_create("idle", (int)&sched_idle, 0, 0))) {
         kputs("c4ix: panic: cannot create the idle task\n");

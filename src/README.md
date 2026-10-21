@@ -198,8 +198,8 @@ protected-mode traps, which gives file descriptors, pipes, redirection and a
 real shell.
 
 A compatibility layer runs C4KE's binaries unmodified. On the libjs display it
-has an NT-style desktop: windows, a taskbar, terminals, Explorer, Task Manager,
-Notepad, Calculator, Run and an IDE. Compilers run inside it (`cc` is c4lc,
+has an NT-style desktop: windows, a taskbar, terminals, Explorer, System Monitor,
+Text Editor, Calculator, Run and an IDE. Compilers run inside it (`cc` is c4lc,
 compiled), and it rebuilds itself from the repo its disk unpacks at `/usr`
 (`b4ke -C /usr`, into `/build`).
 

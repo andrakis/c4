@@ -7,7 +7,7 @@
 // SIGH straight to the machine under it -- the outer SIGH, which knows
 // nothing of tasks: it replaced the kernel's own handler with an address
 // that meant something only inside c4m's guest, and c4m itself had no
-// handler, so Ctrl-C in a Command Prompt ended c4m instead of reaching
+// handler, so Ctrl-C in a Terminal ended c4m instead of reaching
 // C4KE. Here the kernel c4m runs on is asked the C4KE way, u0's
 // signal(), for a handler of c4m's own that marks the signal pending;
 // c4m's loop then traps the guest with it, as native c4m does.

@@ -1,9 +1,9 @@
-// files.c -- Explorer. docs/c4ix-desktop.md.
+// files.c -- Files, the file manager. docs/c4ix-desktop.md.
 //
 // A folder tree beside a file list, over C4IX's VFS. Double-click opens:
 // a folder shows its contents, a program (a .c4r, or anything C4R
-// inside, which is how /bin's are named) runs in a new Command
-// Prompt, a source file opens in the Editor, anything else in Notepad.
+// inside, which is how /bin's are named) runs in a new
+// Terminal, a source file opens in the Editor, anything else in the Text Editor.
 // Object files and libraries (.c4o, .c4l, .c4s) are C4R inside too, but
 // only c4rlink and the loader use them: they say so rather than run.
 // New Folder, Delete (confirmed)
@@ -251,7 +251,7 @@ static void go(struct win *w, char *path) {
     f->sel = 0; f->top = 0;
     load(f);
     tree_load(f);
-    ui_cpy(tbuf, "Exploring - ");
+    ui_cpy(tbuf, "Files - ");
     ui_cat(tbuf, f->path);
     win_title(w, tbuf);
 }
@@ -291,22 +291,22 @@ static void t_toggle(struct win *w, int i) {
 }
 
 static char *type_of(char *name, int dir, int prog) {
-    if (dir) return "File Folder";
+    if (dir) return "Folder";
     if (prog) return "C4IX Program";
     if (ui_ends(name, ".c4o")) return "C4R Object";
     if (ui_ends(name, ".c4l")) return "C4R Library";
     if (ui_ends(name, ".c4s")) return "Shared Library";
     if (ui_ends(name, ".c")) return "C Source";
     if (ui_ends(name, ".h")) return "C Header";
-    if (ui_ends(name, ".txt")) return "Text Document";
+    if (ui_ends(name, ".txt")) return "Text";
     if (ui_ends(name, ".sh")) return "Shell Script";
     if (ui_ends(name, ".lisp")) return "Lisp Source";
     if (ui_ends(name, ".f")) return "Forth Source";
     return "File";
 }
 
-// what opens in the Editor, the IDE, rather than Notepad: source of any
-// kind, build files, scripts; plain text documents stay Notepad's
+// what opens in the Editor, the IDE, rather than the Text Editor: source of any
+// kind, build files, scripts; plain text documents stay the Text Editor's
 static int is_source(char *p) {
     return ui_ends(p, ".c") || ui_ends(p, ".h") || ui_ends(p, ".b4k") || ui_ends(p, ".B4K") ||
            ui_ends(p, ".lisp") || ui_ends(p, ".scm") || ui_ends(p, ".f") || ui_ends(p, ".fs") ||
@@ -331,14 +331,14 @@ static void open_sel(struct win *w) {
 int files_open(char *path) {
     int i;
     struct win *w;
-    i = win_open(K_FILES, "Exploring", 600, 420);
+    i = win_open(K_FILES, "Files", 600, 420);
     if (i < 0) return i;
     w = win_get(i);
     menu_titles[0] = "File"; menu_titles[1] = "View"; menu_titles[2] = "Go";
     file_items[0] = "Open"; file_items[1] = "New Folder"; file_items[2] = "Delete";
     file_items[3] = "Rename"; file_items[4] = "-"; file_items[5] = "Close"; file_items[6] = 0;
     view_items[0] = "Refresh"; view_items[1] = 0;
-    go_items[0] = "Up One Level"; go_items[1] = 0;
+    go_items[0] = "Up"; go_items[1] = 0;
     menu_items[0] = file_items; menu_items[1] = view_items; menu_items[2] = go_items;
     win_menus(w, 3, menu_titles, menu_items);
     go(w, path);
@@ -458,7 +458,7 @@ void files_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     d_rect(ox, oy + ch - STATUS_H, cw, STATUS_H, C_FACE);
     d_bevel(ox + 2, oy + ch - STATUS_H + 2, cw - 4, STATUS_H - 3, B_SUNKEN);
     ui_num(tbuf, f->n);
-    ui_cat(tbuf, f->n == 1 ? " object" : " object(s)");
+    ui_cat(tbuf, f->n == 1 ? " item" : " items");
     d_text(ox + 8, oy + ch - STATUS_H + 5, C_DARK, F_SANS, tbuf);
 }
 
@@ -587,10 +587,10 @@ void files_command(struct win *w, int menu, int item) {
         if (item == 0) open_sel(w);
         else if (item == 1) inputbox(w, "New Folder", "Name of the new folder:", "New Folder", A_NEWDIR);
         else if (item == 2 && f->n) {
-            ui_cpy(tbuf, "Are you sure you want to delete '");
+            ui_cpy(tbuf, "Delete '");
             ui_cat(tbuf, ename(f, f->sel));
             ui_cat(tbuf, "'?");
-            msgbox(w, f->isdir[f->sel] ? "Confirm Folder Delete" : "Confirm File Delete", tbuf, 1, A_DELETE);
+            msgbox(w, f->isdir[f->sel] ? "Delete Folder" : "Delete File", tbuf, 1, A_DELETE);
         }
         else if (item == 3 && f->n) inputbox(w, "Rename", "New name:", ename(f, f->sel), A_RENAME);
         else if (item == 5) win_close(win_index(w));

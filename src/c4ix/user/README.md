@@ -16,7 +16,7 @@ C4IX shell finds a bare command name as `c4ix-NAME.c4r` or `NAME.c4r`.
 
 | file | what |
 |---|---|
-| `sh.c` | `c4ix-sh`, the shell: pipelines of any length, `<` and `>`, `&` jobs, builtins `exit jobs wait kill cd pwd help` (`wait PID` waits for any task). No fork: it points its own fd 0/1 at a stage, spawns, and restores them. `-p` puts the prompt on the input line (the Command Prompt passes it); `-e CMD` runs a line first, as if typed |
+| `sh.c` | `c4ix-sh`, the shell: pipelines of any length, `<` and `>`, `&` jobs, builtins `exit jobs wait kill cd pwd help` (`wait PID` waits for any task). No fork: it points its own fd 0/1 at a stage, spawns, and restores them. `-p` puts the prompt on the input line (the Terminal passes it); `-e CMD` runs a line first, as if typed |
 | `ls.c`, `cat.c`, `echo.c`, `wc.c`, `mkdir.c` | the usual; `cat` and `wc` read fd 0 when given no file |
 | `ps.c` | task table, one fixed-shape record per syscall |
 | `top.c` | samples the task table twice and reports what each task did in between |
@@ -55,12 +55,12 @@ page and type `desktop`.
 | file | what |
 |---|---|
 | `desktop.h` | what the modules share: screen size (800x600), window kinds, colours, the `d_*` drawing layer |
-| `wm.c` | the window manager: the only module that touches the display (`libjs/guest/gui.h`); windows, taskbar with clock, Start menu (including Run…), menu bars, dialogs |
+| `wm.c` | the window manager: the only module that touches the display (`libjs/guest/gui.h`); windows, taskbar with clock, Go menu (including Run…), menu bars, dialogs |
 | `ui.c` | stateless widgets drawn through `wm.c` |
-| `term.c` | Command Prompt: a real `c4ix-sh -p` task on pipes, drawn through a VT100 subset, line-edited locally (Left/Right, Home/End, a 16-line history on Up/Down) with 300 rows of scrollback; Ctrl-C interrupts its foreground job |
-| `files.c` | Explorer: folder tree and file list over the VFS; double-click runs a program in a new Command Prompt |
-| `taskmgr.c` | Task Manager: Applications, Processes (CPU share over the last second, with System and System Idle Process rows, and an Interval column), Performance |
-| `apps.c` | Notepad, Calculator, About |
+| `term.c` | Terminal: a real `c4ix-sh -p` task on pipes, drawn through a VT100 subset, line-edited locally (Left/Right, Home/End, a 16-line history on Up/Down) with 300 rows of scrollback; Ctrl-C interrupts its foreground job |
+| `files.c` | Explorer: folder tree and file list over the VFS; double-click runs a program in a new Terminal |
+| `taskmgr.c` | System Monitor: Applications, Processes (CPU share over the last second, with System and idle rows, and an Interval column), Performance |
+| `apps.c` | Text Editor, Calculator, About |
 | `edit.c` | Editor, the IDE: a VIM-mode editor (`:set novim` for a plain one; arrow keys in every mode) that builds what it edits. `:make`/F5 runs b4ke on the nearest `BUILD.B4K` above the file that names it, or has `cc -O -l c4ix` build a `.c` none names into `/tmp/NAME.c4r`; errors are listed under the text and F8 goes to the next. `:run`/F6 runs the result. Explorer opens source files here |
 
 Kernel calls the desktop added (`SYS_AVAIL`, `SYS_CLOEXEC`, `SYS_INTR`)

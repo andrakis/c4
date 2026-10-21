@@ -2,7 +2,7 @@
 //
 // The only module that touches the display: it owns the rings, reads
 // mouse and keys, draws the desktop, the windows' frames, the taskbar,
-// the Start menu, menu bars and dialogs, and asks each window's tool to
+// the Go menu, menu bars and dialogs, and asks each window's tool to
 // draw its client area (clipped to it) and to handle what happens there.
 
 #include "desktop.h"
@@ -74,14 +74,14 @@ static void theme_row(int i, char *name, int desk, int face, int light, int shad
     t[4] = t1; t[5] = t2; t[6] = it1; t[7] = it2; t[8] = t1;
 }
 static void theme_init() {
-    theme_row(0, "Windows Standard", 0x008080, 0xc0c0c0, 0xffffff, 0x808080, 0x000080, 0x1084d0, 0x808080, 0xb4b4b4);
-    theme_row(1, "Slate",            0x3a4e62, 0xb8c4cc, 0xeef3f6, 0x687884, 0x384c60, 0x7890a8, 0x808c98, 0xb0bcc8);
-    theme_row(2, "Rainy Day",        0x48586c, 0xb4bcc4, 0xeef2f6, 0x707880, 0x4c5c7c, 0x8898b8, 0x80888c, 0xb0b8c0);
-    theme_row(3, "Desert",           0xa08060, 0xd5ccbb, 0xf5f0e8, 0xa29275, 0x008080, 0x40b0b0, 0xa29275, 0xc8bca8);
-    theme_row(4, "Rose",             0x804050, 0xcfafb7, 0xf3e4e8, 0x9f6070, 0x9f6070, 0xd090a0, 0xa08890, 0xc8b0b8);
-    theme_row(5, "Spruce",           0x285040, 0xa2c8a9, 0xe2f2e6, 0x5e9a6a, 0x184830, 0x408048, 0x6a8a70, 0x9ab8a0);
-    theme_row(6, "Lilac",            0x504878, 0xaea8d9, 0xeae6f8, 0x6c64a8, 0x504888, 0x8880c8, 0x8880a0, 0xb4b0d0);
-    theme_row(7, "Storm",            0x202830, 0xa8a8a8, 0xe8e8e8, 0x606060, 0x303848, 0x607088, 0x707070, 0x989898);
+    theme_row(0, "Classic Teal", 0x008080, 0xc0c0c0, 0xffffff, 0x808080, 0x000080, 0x1084d0, 0x808080, 0xb4b4b4);
+    theme_row(1, "Granite",            0x3a4e62, 0xb8c4cc, 0xeef3f6, 0x687884, 0x384c60, 0x7890a8, 0x808c98, 0xb0bcc8);
+    theme_row(2, "Drizzle",        0x48586c, 0xb4bcc4, 0xeef2f6, 0x707880, 0x4c5c7c, 0x8898b8, 0x80888c, 0xb0b8c0);
+    theme_row(3, "Sandstone",           0xa08060, 0xd5ccbb, 0xf5f0e8, 0xa29275, 0x008080, 0x40b0b0, 0xa29275, 0xc8bca8);
+    theme_row(4, "Blush",             0x804050, 0xcfafb7, 0xf3e4e8, 0x9f6070, 0x9f6070, 0xd090a0, 0xa08890, 0xc8b0b8);
+    theme_row(5, "Pine",           0x285040, 0xa2c8a9, 0xe2f2e6, 0x5e9a6a, 0x184830, 0x408048, 0x6a8a70, 0x9ab8a0);
+    theme_row(6, "Lavender",            0x504878, 0xaea8d9, 0xeae6f8, 0x6c64a8, 0x504888, 0x8880c8, 0x8880a0, 0xb4b0d0);
+    theme_row(7, "Thunder",            0x202830, 0xa8a8a8, 0xe8e8e8, 0x606060, 0x303848, 0x607088, 0x707070, 0x989898);
     swatches[0] = 0x008080; swatches[1] = 0x000040; swatches[2] = 0x000000; swatches[3] = 0x3a4a5a;
     swatches[4] = 0x205030; swatches[5] = 0x502850; swatches[6] = 0xa09070; swatches[7] = 0x606060;
     cur_scheme = 0; cur_bg = 0 - 1; cur_wall = 1; cur_saver = 1; cur_wait = 5;
@@ -103,7 +103,7 @@ int theme_wait() { return cur_wait; }
 int theme_swatch(int i) { return i >= 0 && i < 8 ? swatches[i] : 0; }
 
 // /etc/desktop.cfg: "scheme N bg V wall W saver S wait M", read when the desktop starts, so a
-// choice outlives Shut Down (not a reload of the page: the disk is RAM)
+// choice outlives Power Off (not a reload of the page: the disk is RAM)
 static char cfg[96];
 static int cfg_num(char *s, int *v) {
     int n, neg, k;
@@ -184,7 +184,7 @@ void saver_preview() {
 //
 // A redraw is the whole scene when the scene changed -- input, a window
 // opened, moved or raised -- but most of what changes on its own is one
-// window's contents (a terminal's output, Task Manager's numbers) or the
+// window's contents (a terminal's output, System Monitor's numbers) or the
 // taskbar's clock and meter. Those mark only their rectangle, and
 // redraw_part draws only what lies in it, front to back as the full
 // redraw does, clipped to it and with no clear: the display keeps the
@@ -250,7 +250,7 @@ void d_clip(int x, int y, int w, int h) {
 }
 void d_clip_end() { wclip(clip_x, clip_y, clip_w, clip_h); }
 
-// The Windows bevels: two pixels, light top-left, dark bottom-right (or
+// The bevels: two pixels, light top-left, dark bottom-right (or
 // the other way round for a sunken one).
 void d_bevel(int x, int y, int w, int h, int style) {
     int a, b, c, d;
@@ -710,7 +710,7 @@ static void draw_window(struct win *w, int focused) {
 
 static void icon(int x, int y, char *label, int kind) {
     int lw;
-    if (kind == 0) {                               // My Computer
+    if (kind == 0) {                               // Filesystem
         gui_rect(x + 10, y, 28, 20, C_FACE); d_bevel(x + 10, y, 28, 20, B_RAISED);
         gui_rect(x + 13, y + 3, 22, 14, 0x008080);
         gui_rect(x + 8, y + 22, 32, 8, C_FACE); d_bevel(x + 8, y + 22, 32, 8, B_RAISED);
@@ -734,7 +734,7 @@ static char *icon_labels[6];
 static int icon_kinds[6];
 enum { N_ICONS = 6 };
 
-// The Start menu, NT 4 style: a banner down the left, then the tools.
+// The Go menu: a banner down the left, then the tools.
 static char *start_items[14];
 static int start_kinds[14];
 static int n_start;
@@ -798,8 +798,8 @@ static int n_buttons() {
 }
 static int button_w() { int n, w; n = n_buttons(); if (!n) return 150; w = (SW - 64 - 154) / n - 4; return w > 150 ? 150 : w; }
 
-// The CPU meter beside the clock: Task Manager's number (tasks_cpu_usage),
-// taken every two seconds; a click opens Task Manager on Performance.
+// The CPU meter beside the clock: System Monitor's number (tasks_cpu_usage),
+// taken every two seconds; a click opens System Monitor on Performance.
 enum { CPU_X = SW - 146, CPU_W = 66 };
 static int cpu_pct, cpu_n;
 
@@ -813,7 +813,7 @@ static void draw_taskbar() {
     d_bevel(2, SH - TASK_H + 4, 56, 22, start_open ? B_PRESSED : B_RAISED);
     gui_rect(8, SH - TASK_H + 9, 5, 5, 0xff2020); gui_rect(14, SH - TASK_H + 9, 5, 5, 0x20c020);
     gui_rect(8, SH - TASK_H + 15, 5, 5, 0x2040ff); gui_rect(14, SH - TASK_H + 15, 5, 5, 0xffd020);
-    d_text(23, SH - TASK_H + 9, C_DARK, F_BOLD, "Start");
+    d_text(28, SH - TASK_H + 9, C_DARK, F_BOLD, "Go");
     f = win_focused();
     bw = button_w();
     k = 0; w = first;
@@ -934,7 +934,7 @@ static void start_pick(int k) {
     start_open = 0; dirty = 1;
     if (k < 0) return;
     if (start_kinds[k] > 0) launch(start_kinds[k]);
-    else if (start_kinds[k] == 0 - 1) inputbox(0, "Run", "Type the name of a program, and C4IX will run it:", "", A_RUN);
+    else if (start_kinds[k] == 0 - 1) inputbox(0, "Run", "Program to run:", "", A_RUN);
     else if (start_kinds[k] == 0 - 2) running = 0;
 }
 
@@ -1134,7 +1134,7 @@ static void key_down(int code, int ch, int mods) {
     struct win *f;
     // typing between two clicks makes them two clicks, not a double click
     down_win = 0; icon_k = 0 - 1;
-    // Ctrl+Shift+Esc: Task Manager, from anywhere
+    // Ctrl+Shift+Esc: System Monitor, from anywhere
     if (code == KEY_ESC && (mods & M_CTRL) && (mods & M_SHIFT)) { tasks_open(); return; }
     if (start_open && code == KEY_ESC) { start_open = 0; dirty = 1; return; }
     if (menu_win && code == KEY_ESC) { menu_win = 0; dirty = 1; return; }
@@ -1145,7 +1145,7 @@ static void key_down(int code, int ch, int mods) {
 
 static void shutdown_screen() {
     gui_clear(C_DARK);
-    gui_text2(SW / 2 - 200, SH / 2 - 20, 0xff8c1a, 22, F_BOLD, 0, "It's now safe to turn off your computer.", 0 - 1);
+    gui_text2(SW / 2 - 200, SH / 2 - 20, 0xff8c1a, 22, F_BOLD, 0, "C4IX has stopped. You can close this page.", 0 - 1);
     gui_show();
 }
 
@@ -1165,28 +1165,28 @@ int main(int argc, char **argv) {
     wall_load("/usr/share/splash/c4ix.c4p.gz");
     ev = ualloc(4 * sizeof(int));
 
-    icon_labels[0] = "My Computer"; icon_kinds[0] = 0;
-    icon_labels[1] = "Command Prompt"; icon_kinds[1] = K_TERM;
-    icon_labels[2] = "Notepad"; icon_kinds[2] = K_NOTE;
+    icon_labels[0] = "Filesystem"; icon_kinds[0] = 0;
+    icon_labels[1] = "Terminal"; icon_kinds[1] = K_TERM;
+    icon_labels[2] = "Text Editor"; icon_kinds[2] = K_NOTE;
     icon_labels[3] = "IDE"; icon_kinds[3] = K_EDIT;
     icon_labels[4] = "Calculator"; icon_kinds[4] = K_CALC;
-    icon_labels[5] = "Task Manager"; icon_kinds[5] = K_TASKS;
+    icon_labels[5] = "System Monitor"; icon_kinds[5] = K_TASKS;
     k = 0;
-    start_items[k] = "Command Prompt"; start_kinds[k] = K_TERM; ++k;
-    start_items[k] = "Explorer"; start_kinds[k] = K_FILES; ++k;
-    start_items[k] = "Notepad"; start_kinds[k] = K_NOTE; ++k;
+    start_items[k] = "Terminal"; start_kinds[k] = K_TERM; ++k;
+    start_items[k] = "Files"; start_kinds[k] = K_FILES; ++k;
+    start_items[k] = "Text Editor"; start_kinds[k] = K_NOTE; ++k;
     start_items[k] = "Editor"; start_kinds[k] = K_EDIT; ++k;
     start_items[k] = "Calculator"; start_kinds[k] = K_CALC; ++k;
-    start_items[k] = "Task Manager"; start_kinds[k] = K_TASKS; ++k;
+    start_items[k] = "System Monitor"; start_kinds[k] = K_TASKS; ++k;
     start_items[k] = "Settings"; start_kinds[k] = K_SETTINGS; ++k;
     start_items[k] = "About C4IX"; start_kinds[k] = K_ABOUT; ++k;
     start_items[k] = "-"; start_kinds[k] = 0; ++k;
     start_items[k] = "Run..."; start_kinds[k] = 0 - 1; ++k;
     start_items[k] = "-"; start_kinds[k] = 0; ++k;
-    start_items[k] = "Shut Down..."; start_kinds[k] = 0 - 2; ++k;
+    start_items[k] = "Power Off..."; start_kinds[k] = 0 - 2; ++k;
     n_start = k;
     icon_k = 0 - 1;
-    printf("desktop: running on the display. Start > Shut Down to come back here.\n");
+    printf("desktop: running on the display. Go > Power Off to come back here.\n");
 
     term_open(0);
     running = 1; dirty = 1;
@@ -1274,7 +1274,7 @@ int main(int argc, char **argv) {
         }
         // Nothing to do: sleep until there is. That is an event (a key, the
         // mouse), output on a terminal's pipe, or the next thing due -- a
-        // redraw held back by the 25 ms above, Task Manager's tick -- and
+        // redraw held back by the 25 ms above, System Monitor's tick -- and
         // the kernel watches for the first two itself (SYS_EVWAIT), where
         // this used to wake every 15 ms to look. While a redraw is held
         // back the pipes are not watched: a program pouring out text would

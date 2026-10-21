@@ -191,7 +191,7 @@ function tick() {
 // - ahead after work, it does not run early: the wait already armed
 //   ends within a slice, and the message is taken then.
 // Running at once and keeping the whole nap gave the guest a nap's worth
-// of time for every pointer move: top, the raycasters and Task Manager
+// of time for every pointer move: top, the raycasters and System Monitor
 // all sped up while the mouse moved (5x, measured).
 function wake() {
   if (!vm || paused || halted) return;

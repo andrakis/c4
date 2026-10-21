@@ -1,4 +1,4 @@
-// cpustat.h -- C4IX's CPU accounting, as top and Task Manager read it
+// cpustat.h -- C4IX's CPU accounting, as top and System Monitor read it
 // (docs/c4ix-cpu.md). Include after c4ix_user.h.
 //
 // ucpustat copies out one snapshot of every task, taken in one trap. A

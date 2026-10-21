@@ -1,7 +1,7 @@
 # C4IX's CPU: where the cycles go, and the work to cut them
 
 A review on 2026-10-20 found that C4IX's kernel took most of the cycles
-it ran, and that Task Manager's CPU figures were wrong. This document is
+it ran, and that System Monitor's CPU figures were wrong. This document is
 the work that followed, one step at a time, each measured against the
 baseline below. The plan and the decisions it needed were reviewed
 first.
@@ -26,15 +26,15 @@ Decisions taken:
 100 MHz, a 64 MB arena), and charges every few hundred cycles to the
 kernel function the pc was in, or to user code. Run directly, it takes
 `USERIMGS=` to break user code down by an image's functions, `TRACE=1`
-to log Task Manager's rows, and `SCREEN=1` for the screen's text.
+to log System Monitor's rows, and `SCREEN=1` for the screen's text.
 
 | situation | what runs |
 |---|---|
 | `shell` | the console shell at its prompt |
 | `conspin` | `spin` at the console |
-| `desk1` | the desktop and its Command Prompt, idle |
-| `idle` | the desktop with Command Prompt, Task Manager, Notepad and Calculator, idle |
-| `spin` | the same, with `spin` running in the Command Prompt |
+| `desk1` | the desktop and its Terminal, idle |
+| `idle` | the desktop with Terminal, System Monitor, Text Editor and Calculator, idle |
+| `spin` | the same, with `spin` running in the Terminal |
 
 ## Baseline (2026-10-21, at f15564b)
 
@@ -63,14 +63,14 @@ Native c4m, `c4ix-bench`:
 | pi100 | 173,346 |
 | pi300 | 625,526 |
 
-Task Manager, idle with four windows, says "CPU Usage 45%" while the
+System Monitor, idle with four windows, says "CPU Usage 45%" while the
 machine is 98% asleep.
 
 ## Steps
 
 1. The profiler and this baseline.
 2. Orphan zombies are reaped.
-3. Task Manager's and top's percentages, without overflow.
+3. System Monitor's and top's percentages, without overflow.
 4. An accounting model whose rows add up to 100%: System, System Idle,
    64-bit counters, one atomic snapshot.
 5. A syscall fast path with a software time slice, and an idle task.
@@ -97,9 +97,9 @@ finish, and checks that `ps` lists no zombie. Without the fix it fails.
 
 ### 3. Percentages without overflow
 
-Task Manager and top worked out a task's share as `cycles * 100 /
+System Monitor and top worked out a task's share as `cycles * 100 /
 total`. A task that runs more than 21.47M cycles in a sample, a fifth of
-a second at 100 MHz, overflows 32 bits there: under load Task Manager
+a second at 100 MHz, overflows 32 bits there: under load System Monitor
 showed "desktop -17" and "CPU Usage: 104%", and top showed -5 and -11.
 Both now do the arithmetic in thousands of cycles, which a word holds
 for 24 days at 100 MHz, and clamp to 0..100. top also took its first
@@ -131,7 +131,7 @@ an idle desktop showed 45% busy.
 - **Reaped tasks are not lost.** A task leaving the table adds its
   totals to `gone_user`/`gone_kernel`, so the sum never goes backwards.
 - **One snapshot.** `SYS_CPUSTAT` (229, `ucpustat`) copies out every
-  task's record and the header, all in one trap. Task Manager used to
+  task's record and the header, all in one trap. System Monitor used to
   build its sample from one `SYS_TASKINFO` call per task, which was
   O(n^2) and not atomic.
 - **The shares** (`src/c4ix/include/cpustat.h`, shared by top and Task
@@ -141,7 +141,7 @@ an idle desktop showed 45% busy.
   - A task's row is its own cycles.
   - **System** is the kernel's cycles on behalf of every task but the
     idle one.
-  - **System Idle Process** is the idle task's cycles plus the naps. It
+  - **idle** is the idle task's cycles plus the naps. It
     is what the other rows leave, so a screen adds up to exactly 100.
   - A task that ended during the interval is in the total but has no
     row, as in NT.
@@ -154,7 +154,7 @@ now takes both words from the 64-bit total.
 
 `test-c4ix-cpu.mjs` now checks that the rows add up to exactly 100, and
 that an idle machine is at least 95% idle (it is 100%). test-desktop
-checks that Task Manager has the two new rows.
+checks that System Monitor has the two new rows.
 
 The accounting is honest, and so it shows the problem step 5 fixes. With
 spin running at the console, top gives:
@@ -178,7 +178,7 @@ else in the profile moved.
 ### 5. A syscall fast path, a software time slice, and an idle task
 
 - **An idle task.** The idle loop is a kernel task of its own, `idle`,
-  made first so that it is task 0, as NT's System Idle Process is. The
+  made first so that it is task 0, as NT's idle is. The
   context the machine booted in is now `kernel`, task 1. It waits on the
   idle task, which returns when nothing else is alive. `sched_pick` never
   gives the idle task a turn in the round-robin; it runs only when no
@@ -250,10 +250,10 @@ Found on the way:
   output before echoing `^C`, as a tty's output queue would. top, which
   writes a whole screen without being switched out now, otherwise
   cleared the `^C` with its last frame.
-- **The desktop's once-a-second tick** (Task Manager, the CPU meter) is
+- **The desktop's once-a-second tick** (System Monitor, the CPU meter) is
   on machine time, which its numbers count and the desktop sleeps on.
   It was on the host's clock: headless, an idle machine that naps covers
-  many seconds of its own in one of the host's, and Task Manager stopped
+  many seconds of its own in one of the host's, and System Monitor stopped
   refreshing.
 
 ### 6. Event-driven waits, and counters for the living and the dead
@@ -410,10 +410,10 @@ Also: init's `--help` text described `--desktop` in the old order.
 
 At step 10 an idle desktop with four windows ran 4.94M cycles in 5
 seconds. 79% of that was the desktop, which redrew the whole scene once
-a second for Task Manager's tick, at about 770k cycles a redraw:
+a second for System Monitor's tick, at about 770k cycles a redraw:
 `term_draw` 34%, `gui_frame` 21%, `gui_text2` 11%.
 
-**(a) Task Manager minimised** still takes its sample each second, so
+**(a) System Monitor minimised** still takes its sample each second, so
 its history has no gap when the window comes back, but no longer redraws
 the scene for a window that shows nothing.
 
@@ -438,7 +438,7 @@ scanned the 2,000 cells of every terminal twice.
 | `gui_frame` + `gui_commit` | 0.97M | 0.90M |
 
 **(d) Redrawing only what changed** (wm.c). What changes on its own is
-usually one window's contents (a terminal's output, Task Manager's
+usually one window's contents (a terminal's output, System Monitor's
 numbers, a build's output) or the taskbar's clock and CPU meter. Those
 now mark only their rectangle (`mark_win_dirty`, `mark_rect_dirty`).
 `redraw_part` then draws only what lies in it, with no clear, back to
@@ -463,7 +463,7 @@ before.
 **(e) An event wait** (`SYS_EVWAIT`, 230, `uevwait`). The desktop's loop
 woke every 15 ms to poll its event ring and every terminal's pipe. It
 now sleeps until its next deadline: a redraw held back by the 25 ms
-limit, or Task Manager's tick. The kernel wakes it sooner, from
+limit, or System Monitor's tick. The kernel wakes it sooner, from
 `sched_unblocked`, when an event lands in its GUI ring (whose head the
 host moves) or, unless a redraw is being held back, when a pipe it reads
 has data or reaches end of file (`sched_events`). In the browser the
@@ -471,14 +471,14 @@ worker resumes the machine at once on an event, so input is no slower.
 
 | per 5 s | step 10 | (a)-(c) | (d), (e) |
 |---|---|---|---|
-| desk1: the desktop and a Command Prompt | 1.61M cycles | | 0.22M (0.0%) |
+| desk1: the desktop and a Terminal | 1.61M cycles | | 0.22M (0.0%) |
 | idle: four windows | 4.94M (1.0%) | 3.59M (0.7%) | 2.20M (0.4%) |
-| raycast in a Command Prompt, frames shown | 16 | | 16 |
+| raycast in a Terminal, frames shown | 16 | | 16 |
 | raycast -f 50 (after ac7f4a6), frames shown | 3 | | 96 |
 
 Against the baseline, an idle desktop with four windows went from 11.0M
 cycles per 5 s (2.2% of the machine, 60.6% of it kernel) to 2.20M (0.4%,
-9.1% kernel), and the desktop with only its Command Prompt from 6.7M to
+9.1% kernel), and the desktop with only its Terminal from 6.7M to
 0.22M.
 
 raycast flat out still shows about three frames a second: it writes

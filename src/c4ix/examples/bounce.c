@@ -1,7 +1,7 @@
 // bounce.c -- a first windowed program, to compile inside C4IX.
 // docs/c4ix-desktop.md, part three.
 //
-// In a Command Prompt on the desktop:
+// In a Terminal on the desktop:
 //
 //   c4cc -o /tmp/bounce.c4r /usr/include/window.h /usr/src/c4ix/examples/bounce.c
 //   /tmp/bounce.c4r
@@ -109,7 +109,7 @@ int main(int argc, char **argv) {
         // the frame
         win_clear(0x102030);
         win_rect(0, 0, WIN_W, 34, 0x000080);
-        win_text(10, 11, 0xffffff, 13, "Compiled inside C4IX by c4cc, drawing through its Command Prompt");
+        win_text(10, 11, 0xffffff, 13, "Compiled inside C4IX by c4cc, drawing through its Terminal");
         kind = 0;
         while (kind < ndots) { win_disc(dotx[kind], doty[kind], 5, dotc[kind]); kind = kind + 1; }
         win_disc(x + 4, y + 5, r, 0x000000);

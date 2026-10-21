@@ -30,7 +30,7 @@
 // src/c4ke/c4ke.c. -stack gives more.
 //
 // When the kernel stops a tool -- a stack overrun, a bad opcode -- it
-// says why on the console, and a Command Prompt is not the console: cc
+// says why on the console, and a Terminal is not the console: cc
 // finds that line in /log/kernel and says it too, rather than only that
 // the source did not compile.
 #include "c4ix_user.h"

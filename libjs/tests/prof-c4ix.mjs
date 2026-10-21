@@ -10,12 +10,12 @@
 //   MODE  shell    the console shell at its prompt
 //         nowait   the same, without waiting for the root archive
 //         conspin  `spin` running at the console (PROG= to run another)
-//         desk1    the desktop with its Command Prompt, idle
+//         desk1    the desktop with its Terminal, idle
 //         idle     the desktop with four windows, idle
-//         spin     ... and spin running in the Command Prompt (PROG= another)
+//         spin     ... and spin running in the Terminal (PROG= another)
 //   env   KERNEL= another kernel image   USERIMGS= images to break down
 //         CH= chunk size (cycles)   TOP= functions listed   SCREEN=1 the text
-//         on screen   TRACE=1 Task Manager's rows as they change
+//         on screen   TRACE=1 System Monitor's rows as they change
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createMachine, boot } from '../boot.js';
@@ -69,7 +69,7 @@ const clickText = s => { const all = find(s); if (!all.length) return false; con
 const key = (ch, mods = 0, code) => { const named = { '\n': 13, '\b': 8 }; const c = code ?? named[ch] ?? ch.toUpperCase().charCodeAt(0);
   ev({ kind: 'keydown', code: c, char: ch === '\n' ? 10 : ch.length === 1 && c !== 8 ? ch.charCodeAt(0) : 0, mods }); };
 const type = s => { for (const ch of s) key(ch); };
-const start = item => { click(20, SH - TASK_H + 12); until(() => has('Shut Down...')); const ok = clickText(item); settle(); return ok; };
+const start = item => { click(20, SH - TASK_H + 12); until(() => has('Power Off...')); const ok = clickText(item); settle(); return ok; };
 const log = (...a) => console.log(...a);
 
 if (!until(() => consoleText().includes('c4ix:/$'), 2000)) { log('no boot'); process.exit(1); }
@@ -80,9 +80,9 @@ if (MODE === 'shell' || MODE === 'nowait' || MODE === 'conspin') {
   typeBytes(vm, new TextEncoder().encode('desktop\n'));
   until(() => consoleText().includes('desktop: running on the display'));
   until(() => presents > 0 && has(/c4ix:\/\$/), 800);
-  if (MODE !== 'desk1') { start('Task Manager'); start('Notepad'); start('Calculator'); }
+  if (MODE !== 'desk1') { start('System Monitor'); start('Text Editor'); start('Calculator'); }
   if (MODE === 'spin') {
-    const t = find(/^Command Prompt - task/).filter(t => t.y < SH - TASK_H)[0]; if (t) click(t.x + 40, t.y + 3); else log('no prompt title');
+    const t = find(/^Terminal - task/).filter(t => t.y < SH - TASK_H)[0]; if (t) click(t.x + 40, t.y + 3); else log('no prompt title');
     type((process.env.PROG || 'c4ix-spin.c4r 1000') + '\n'); settle();
   }
   settle();
@@ -102,7 +102,7 @@ while (vm.dev.simMs() - ms0 < SECS * 1000) {
   const ran = (vm.cycle - cc) - (vm.skipped - kk);
   const f = fn(pc0); if (f === '(user code)') upc.set(pc0, (upc.get(pc0) || 0) + ran);
   prof.set(f, (prof.get(f) || 0) + ran);
-  if ((chunks & 1023) === 0) { const p0 = presents; pump(); if (process.env.TRACE && presents !== p0) { const tx = frame.map(t => t.s.trim()); const i = tx.indexOf("System Idle Process"); const u = tx.find(x => /^CPU Usage: /.test(x)); const key = tx.slice(i, i + 30).join(" ") + " | " + u; if (key !== globalThis.lastKey) { globalThis.lastKey = key; log("TM@" + (vm.dev.simMs() - ms0) + ": " + key); } } }
+  if ((chunks & 1023) === 0) { const p0 = presents; pump(); if (process.env.TRACE && presents !== p0) { const tx = frame.map(t => t.s.trim()); const i = tx.indexOf("idle"); const u = tx.find(x => /^CPU Usage: /.test(x)); const key = tx.slice(i, i + 30).join(" ") + " | " + u; if (key !== globalThis.lastKey) { globalThis.lastKey = key; log("TM@" + (vm.dev.simMs() - ms0) + ": " + key); } } }
   if (r === STOP.HALT) break;
 }
 pump();

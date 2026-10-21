@@ -28,7 +28,7 @@
 // compiles it with c4sc and links it with libc4ix into /tmp. Lines that
 // name a place -- "FILE:N:", c4lc's "line N:", c4cc's "N:" -- are errors:
 // :cn and :cp (F8, Shift+F8), or a double click, go to them. :run (F6)
-// runs what was built in a new Command Prompt: the .c file's image, or
+// runs what was built in a new Terminal: the .c file's image, or
 // the command a BUILD.B4K names with "SET RUN command".
 //
 // Long lines scroll across (a bar under the text), or, with :set wrap (View
@@ -810,7 +810,7 @@ static void e_make(struct win *w) {
         return;
     }
 
-    // b4ke on pipes, as the Command Prompt runs its shell (term.c): our
+    // b4ke on pipes, as the Terminal runs its shell (term.c): our
     // ends are close-on-spawn, its stdin is a pipe nobody writes
     if (upipe(pin) < 0) { e_say(e, "No pipe for the build"); return; }
     if (upipe(pout) < 0) { uclose(pin[0]); uclose(pin[1]); e_say(e, "No pipe for the build"); return; }

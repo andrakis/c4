@@ -3,7 +3,7 @@
 // the number that actually answers "what is using the machine" -- a
 // total since boot mostly tells you which task is oldest.
 //
-// The shares are cpustat.h's, the same as Task Manager's: each task's
+// The shares are cpustat.h's, the same as System Monitor's: each task's
 // own cycles, System for the kernel's work on everyone's behalf, and the
 // idle task for the rest, naps included -- so a screen adds up to 100.
 //
@@ -111,7 +111,7 @@ int main(int argc, char **argv) {
             uprintf(" %s\n", r->name);
             ++k;
         }
-        // the kernel's work for all of them, as Task Manager shows it
+        // the kernel's work for all of them, as System Monitor shows it
         upadstr("", 5 + 6 + 8 + 8);     // under CPU%
         upadnum(sys, 7);
         top_kcycles(ks, 11);

@@ -344,7 +344,7 @@ struct task {
     int  parent;               // task id that spawned this one
     // Cycles (sched.c, "accounting"): what the task ran itself, outside
     // the trap handler, and what the handler spent on its behalf -- its
-    // syscalls, preemption ticks and switches, which Task Manager shows
+    // syscalls, preemption ticks and switches, which System Monitor shows
     // as System. 64 bits, since one C4IX build passes 2^31 several times
     // over. A trap adds into the int accumulators, and they are folded
     // into the totals before they could overflow and whenever the

@@ -585,7 +585,7 @@ raycaster, against about 19M for c4bb's turbo engine on the same images. It shar
 and boots the 32-bit C4KE and C4IX images in Node or a browser Web
 Worker, with a terminal and a display the guest draws into. The same
 two days produced C4IX's desktop on that display: windows, a taskbar,
-terminals over pipes, Explorer, Task Manager, Notepad, Calculator, and
+terminals over pipes, Explorer, System Monitor, Text Editor, Calculator, and
 compilers running inside C4IX. M0–M4 are done, and M5 except its
 performance pass and media panel. `make test-libjs`;
 `docs/libjs-design.md`.

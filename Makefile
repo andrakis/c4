@@ -2777,7 +2777,7 @@ c4ix-%.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libc4ix.c4l $(C4IX_SRC)/user/%.c
 	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC)/include $(C4IX_SRC)/user/$*.c .c4ix_u.c4o > /dev/null
 	$(C4RLINK) .c4ix_u.c4o libc4ix.c4l -o $@
 	rm -f .c4ix_u.pp.c .c4ix_u.c4o
-# top reads the CPU accounting through cpustat.h, as Task Manager does
+# top reads the CPU accounting through cpustat.h, as System Monitor does
 c4ix-top.c4r: $(C4IX_SRC)/include/cpustat.h
 
 # X3 boot pins: the linked kernel boots natively on c4m (preemptive,

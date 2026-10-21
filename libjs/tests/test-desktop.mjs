@@ -151,11 +151,11 @@ const key = (ch, mods = 0, code) => {
   ev({ kind: 'keydown', code: c, char: ch === '\n' ? 10 : ch.length === 1 && c !== 8 ? ch.charCodeAt(0) : 0, mods });
 };
 const type = s => { for (const ch of s) key(ch); };
-const start = item => { click(20, SH - TASK_H + 12); until(() => has('Shut Down...')); const ok = clickText(item); settle(); return ok; };
-// Explorer's file list: right of its folder tree, inside its window. The
+const start = item => { click(20, SH - TASK_H + 12); until(() => has('Power Off...')); const ok = clickText(item); settle(); return ok; };
+// Files' file list: right of its folder tree, inside its window. The
 // window is found by its title (drawn 27 px in from the window's left, 7 down).
 const explorer = () => {
-  const t = frame.find(t => /^Exploring - /.test(t.s) && t.y < SH - TASK_H);
+  const t = frame.find(t => /^Files - /.test(t.s) && t.y < SH - TASK_H);
   return t ? { x: t.x - 27, y: t.y - 7 } : null;
 };
 const inList = all => {
@@ -186,18 +186,18 @@ check(until(() => consoleText().includes('[4] done (0)'), 3000), 'the root archi
 typeBytes(vm, new TextEncoder().encode('desktop\n'));
 check(until(() => consoleText().includes('desktop: running on the display')), 'desktop starts from the console');
 check(until(() => gui.w === SW && gui.h === SH && presents > 0), `it asks for ${SW}x${SH} and draws`);
-check(until(() => has(/c4ix:\/\$/), 800), 'a Command Prompt opens with a shell prompt', screen());
-check(has('Start') && has(/[0-9]{1,2}:[0-9]{2} [AP]M/), 'the taskbar has Start and a clock');
+check(until(() => has(/c4ix:\/\$/), 800), 'a Terminal opens with a shell prompt', screen());
+check(has('Go') && has(/[0-9]{1,2}:[0-9]{2} [AP]M/), 'the taskbar has Go and a clock');
 check(until(() => has(/^CPU \d{1,3}%$/)), 'and a CPU meter beside the clock', screen());
-check(['My Computer', 'Command Prompt', 'Notepad', 'IDE', 'Calculator', 'Task Manager'].every(has), 'the desktop icons are there, the IDE among them');
+check(['Filesystem', 'Terminal', 'Text Editor', 'IDE', 'Calculator', 'System Monitor'].every(has), 'the desktop icons are there, the IDE among them');
 
-// ---- Command Prompt ----------------------------------------------------------------
+// ---- Terminal ----------------------------------------------------------------
 type('ps\n');
 // the shell finds the desktop as /bin/desktop now (it tries /bin first)
-check(until(() => has(/ (c4ix-)?desktop/) && has(/tasks,/)), 'ps typed in the Command Prompt runs in its shell', screen());
+check(until(() => has(/ (c4ix-)?desktop/) && has(/tasks,/)), 'ps typed in the Terminal runs in its shell', screen());
 
-// ---- the Command Prompt's line editing, history and scrollback --------------------------
-// What is typed after the last prompt (the Command Prompt runs c4ix-sh -p: the prompt is on the input line).
+// ---- the Terminal's line editing, history and scrollback --------------------------
+// What is typed after the last prompt (the Terminal runs c4ix-sh -p: the prompt is on the input line).
 const inputLine = () => {
   const ps = frame.filter(t => /^c4ix:\S*\$/.test(t.s));
   if (!ps.length) return null;
@@ -226,7 +226,7 @@ type('e'); key('', 0, 35); type('!\n');                        // "e", End, "!",
 check(until(() => has('xyz!')), 'End goes back to the end, and Enter sends the whole line', screen());
 type('cat /usr/src/c4ix/user/top.c\n');
 until(() => has(/^\s*return 0;/) && inputLine() === '', 600);
-check(!has(/^\/\/ C4IX userland: top\./), 'a long file scrolls its first line off the Command Prompt', screen());
+check(!has(/^\/\/ C4IX userland: top\./), 'a long file scrolls its first line off the Terminal', screen());
 for (let i = 0; i < 8; i++) key('', 0, 33);                    // PgUp, to the start
 check(until(() => has(/^\/\/ C4IX userland: top\./)), 'and PgUp scrolls back to it', screen());
 key('', 0, 34);                                                // PgDn
@@ -235,7 +235,7 @@ check(until(() => has('back') && !has(/^\/\/ C4IX userland: top\./)), 'typing co
 
 // ---- top runs until Ctrl-C ----------------------------------------------------------------
 type('top\n');
-check(until(() => has(/Ctrl-C to stop/), 800), 'top starts in the Command Prompt', screen());
+check(until(() => has(/Ctrl-C to stop/), 800), 'top starts in the Terminal', screen());
 const t0 = vm.dev.simMs();
 until(() => vm.dev.simMs() - t0 > 5000, 3000);
 check(has(/Ctrl-C to stop/) && !frame.some(t => /^c4ix:\/\$/.test(t.s) && t.y > 300), 'and is still running five machine-seconds later', screen());
@@ -255,14 +255,14 @@ const tc = vm.dev.simMs();
 until(() => vm.dev.simMs() - tc > 1000, 2000);                // time enough for the shell to have run it
 check(has(/\^C/) && inputLine() === '' && !has(/libarc\.c4l/), 'Ctrl-C drops a line typed at the job, and the shell does not run it', screen());
 
-// ---- c4m boots C4KE in the Command Prompt, and C4KE reads what is typed there ------------------
+// ---- c4m boots C4KE in the Terminal, and C4KE reads what is typed there ------------------
 // C4KE's shell polls /dev/stdin, which C4IX gave it as the machine's console;
-// in a Command Prompt that is nobody's keyboard, and every command waited for ever
+// in a Terminal that is nobody's keyboard, and every command waited for ever
 key('l', 2, 76);
 type('cd /usr\n');
 until(() => has(/^c4ix:\/usr\$/));
 type('c4m load-c4r.c -- c4ke.c4r\n');
-check(until(() => has(/^c4sh>/), 20000), 'c4m boots C4KE to its shell in the Command Prompt, from /usr/c4ke.c4r', screen());
+check(until(() => has(/^c4sh>/), 20000), 'c4m boots C4KE to its shell in the Terminal, from /usr/c4ke.c4r', screen());
 type('echo from-c4ke\n');
 check(until(() => has('from-c4ke') && find(/^c4sh>/).length >= 2, 4000), 'a command typed there runs in C4KE and its prompt comes back', screen());
 // Ctrl-C goes to the job C4KE is running, through c4m, as on a host
@@ -278,9 +278,9 @@ check(until(() => has(/^c4ix:\/usr\$/) && inputLine() === '', 4000), '\\q leaves
 type('cd /\n');
 until(() => has(/^c4ix:\/\$/));
 
-// ---- raycast in the Command Prompt: 256 colours ---------------------------------------------
+// ---- raycast in the Terminal: 256 colours ---------------------------------------------
 type('raycast.c4r 15x15 -s 3 -d -n 30 -g 80x25\n');
-check(until(() => new Set(rects.map(r => r.rgb)).size > 8, 1500), `raycast draws in colour in the Command Prompt (${new Set(rects.map(r => r.rgb)).size} colours)`);
+check(until(() => new Set(rects.map(r => r.rgb)).size > 8, 1500), `raycast draws in colour in the Terminal (${new Set(rects.map(r => r.rgb)).size} colours)`);
 until(() => has(/^c4ix:\/\$/), 1500);
 key('l', 2, 76);                                               // Ctrl-L: a clean screen for what follows
 
@@ -289,7 +289,7 @@ type('c4cc -o /tmp/bounce.c4r /usr/include/window.h /usr/src/c4ix/examples/bounc
 check(until(() => has(/c4cc: wrote \d+ bytes to ramfs:\/tmp\/bounce.c4r/), 3000), 'c4cc compiles bounce.c inside C4IX', screen());
 type('/tmp/bounce.c4r\n');
 check(until(() => has(/Bounce - compiled inside C4IX/) && has('Click me') && has('Button clicks:'), 1500),
-  'the program makes its Command Prompt its window, titled and drawn', screen());
+  'the program makes its Terminal its window, titled and drawn', screen());
 const sameRow = (label, value) => { const l = find(label)[0]; return !!l && frame.some(t => t.s === value && Math.abs(t.y - l.y) < 3 && t.x > l.x); };
 clickText('Click me');
 check(until(() => sameRow('Button clicks:', '1'), 400), 'clicking its button counts', screen());
@@ -297,12 +297,12 @@ key('x');
 check(until(() => sameRow('Last key:', 'x'), 400), 'a key typed in the window reaches it');
 key('q');
 check(until(() => has(/bounce: \d+ frames, 1 clicks/) && !has('Click me'), 800), 'q ends it and the window is a terminal again', screen());
-check(has(/^Command Prompt - task \d+/), 'with its own title back');
+check(has(/^Terminal - task \d+/), 'with its own title back');
 
-// ---- Explorer ------------------------------------------------------------------------
-start('Explorer');
-check(until(() => has('Exploring - /')), 'Start > Explorer opens at the root', screen());
-check(['bin', 'tmp', 'usr', 'build'].every(has) && has('File Folder') && has('C4IX (/)'), 'it lists the root folders and shows the tree', screen());
+// ---- Files ---------------------------------------------------------------------------
+start('Files');
+check(until(() => has('Files - /')), 'Go > Files opens at the root', screen());
+check(['bin', 'tmp', 'usr', 'build'].every(has) && has('Folder') && has('C4IX (/)'), 'it lists the root folders and shows the tree', screen());
 // The folder tree: the root archive's folders are more than its pane
 // shows. It scrolls (the wheel here), and a folder collapses and expands
 // (the keyboard, then its +/- box).
@@ -332,7 +332,7 @@ key('TAB'); key('', 0, 36); key('', 0, 37);               // the tree; Home; Lef
 check(until(() => !!inTree(find('C4IX (/)')) && !inTree(find('usr')) && !!inList(find('usr'))),
   'Left collapses the root in the tree, and the list still shows it', screen());
 key('F5');
-check(until(() => !inTree(find('usr')) && has('Exploring - /')), 'it stays collapsed through a refresh', screen());
+check(until(() => !inTree(find('usr')) && has('Files - /')), 'it stays collapsed through a refresh', screen());
 key('', 0, 39);                                           // Right
 check(until(() => !!inTree(find('usr')) && !!inTree(find('src'))), 'Right expands it again', screen());
 {
@@ -344,21 +344,21 @@ check(until(() => !!inTree(find('usr')) && !!inTree(find('src'))), 'Right expand
 }
 key('TAB');                                               // the list has the keyboard again
 dbl('usr', inList);
-check(until(() => has('Exploring - /usr') && has('src')), 'double-clicking a folder opens it', screen());
+check(until(() => has('Files - /usr') && has('src')), 'double-clicking a folder opens it', screen());
 key('\b');
-check(until(() => has('Exploring - /')), 'Backspace goes up a level');
+check(until(() => has('Files - /')), 'Backspace goes up a level');
 dbl('bin', inList);
 // b4ke, because it sorts first: /bin holds more programs than the list
 // shows at once, and one off the bottom cannot be double-clicked
-check(until(() => has('Exploring - /bin') && !!inList(find('b4ke')) && find('C4IX Program').length >= 10),
+check(until(() => has('Files - /bin') && !!inList(find('b4ke')) && find('C4IX Program').length >= 10),
   '/bin lists its programs as C4IX Programs, with no .c4r in their names', screen());
 dbl('b4ke', inList);
-check(until(() => has(/b4ke: cannot read BUILD\.B4K/), 800), 'double-clicking one runs it in a Command Prompt', screen());
-clickText(/^Exploring/); key('\b');
-check(until(() => has('Exploring - /')), 'and back up to the root');
+check(until(() => has(/b4ke: cannot read BUILD\.B4K/), 800), 'double-clicking one runs it in a Terminal', screen());
+clickText(/^Files - /); key('\b');
+check(until(() => has('Files - /')), 'and back up to the root');
 // a library is C4R inside, but not a program: it says so rather than run
 dbl('lib', inList);
-check(until(() => has('Exploring - /lib') && !!inList(find('libc.c4s')) && has('Shared Library')),
+check(until(() => has('Files - /lib') && !!inList(find('libc.c4s')) && has('Shared Library')),
   '/lib lists its libraries as Shared Libraries', screen());
 dbl('libc.c4s', inList);
 check(until(() => has('Object files and libraries are linked into programs, not run.')),
@@ -366,9 +366,9 @@ check(until(() => has('Object files and libraries are linked into programs, not 
 key('\n');
 check(until(() => noDialog()) && !has(/missing|unresolved|cannot resolve/i), 'OK dismisses that, and nothing ran', screen());
 key('\b');
-check(until(() => has('Exploring - /')), 'and up to the root again');
+check(until(() => has('Files - /')), 'and up to the root again');
 dbl('tmp', inList);
-check(until(() => has('Exploring - /tmp')), 'into /tmp');
+check(until(() => has('Files - /tmp')), 'into /tmp');
 clickText('File'); settle(); clickText('New Folder');
 check(until(() => has('Name of the new folder:')), 'File > New Folder asks for a name', screen());
 key('\n');
@@ -381,29 +381,29 @@ type('docs'); key('\n');
 check(until(() => noDialog() && !!inList(find('docs')) && !inList(find('New Folder'))), 'and renames it', screen());
 clickText('docs', inList);
 key('DEL');
-check(until(() => has(/Are you sure you want to delete 'docs'/)), 'Delete asks first');
+check(until(() => has(/Delete 'docs'/)), 'Delete asks first');
 key('y');
 check(until(() => noDialog() && !inList(find('docs'))), 'and Yes deletes it');
 
-// ---- Notepad --------------------------------------------------------------------------
-start('Notepad');
-check(until(() => has('Untitled - Notepad')), 'Start > Notepad opens a new document');
+// ---- Text Editor --------------------------------------------------------------------------
+start('Text Editor');
+check(until(() => has('Untitled - Text Editor')), 'Go > Text Editor opens a new document');
 type('hello from c4ix\n'); type('second line');
-check(until(() => has('hello from c4ix') && has('second line') && has('Untitled * - Notepad')), 'typing shows, and the title marks it modified', screen());
+check(until(() => has('hello from c4ix') && has('second line') && has('Untitled * - Text Editor')), 'typing shows, and the title marks it modified', screen());
 key('s', 2, 83);
 check(until(() => has('Save as:')), 'Ctrl+S on a new file asks where');
 key('\n');
-check(until(() => has('untitled.txt - Notepad')), 'and saves it to /tmp/untitled.txt', screen());
-clickText(/^Exploring/); key('F5');
-check(until(() => !!inList(find('untitled.txt')) && has('Text Document')), 'Explorer lists the saved file after a refresh', screen());
-const notes = find('untitled.txt - Notepad').length;
+check(until(() => has('untitled.txt - Text Editor')), 'and saves it to /tmp/untitled.txt', screen());
+clickText(/^Files - /); key('F5');
+check(until(() => !!inList(find('untitled.txt')) && has('Text')), 'Files lists the saved file after a refresh', screen());
+const notes = find('untitled.txt - Text Editor').length;
 dbl('untitled.txt', inList);
-check(until(() => find('untitled.txt - Notepad').length > notes), 'double-clicking it opens it in Notepad');
+check(until(() => find('untitled.txt - Text Editor').length > notes), 'double-clicking it opens it in Text Editor');
 check(until(() => find('hello from c4ix').length >= 2), 'with what was saved in it');
 
 // ---- Calculator ------------------------------------------------------------------------
 start('Calculator');
-check(until(() => has('Calculator') && has('Hex') && has('Dec')), 'Start > Calculator opens');
+check(until(() => has('Calculator') && has('Hex') && has('Dec')), 'Go > Calculator opens');
 type('12+30=');
 check(until(() => has('42')), '12 + 30 = 42', screen().slice(-300));
 clickText('Hex', 'last', -8, 5);
@@ -448,7 +448,7 @@ clickText('Integer', 'last', -8, 5);
 const txt = s => { for (const ch of s) key(ch, 0, ch === '\n' ? 13 : 0); };
 const edLine = s => rows().some(t => t.s.trimEnd().endsWith(s));
 start('Editor');
-check(until(() => has('Untitled - Editor')), 'Start > Editor opens a new file in VIM mode', screen());
+check(until(() => has('Untitled - Editor')), 'Go > Editor opens a new file in VIM mode', screen());
 txt('i');
 check(until(() => has('-- INSERT --')), 'i enters Insert mode');
 txt('int main() {\n    return 4;\n}');
@@ -576,39 +576,39 @@ check(until(() => has(/^Build: finished/) && has(/^c4rlink: wrote \d+ bytes to r
 txt(':q\n');
 check(until(() => !has('edit.c - Editor')), 'and :q closes it');
 
-// ---- Task Manager ------------------------------------------------------------------------
-clickText(/^Command Prompt - task/);
+// ---- System Monitor ------------------------------------------------------------------------
+clickText(/^Terminal - task/);
 type('spin 5000\n');
 until(() => has(/spin: tick 1\//), 1500);
 key('ESC', 3, 27);                                             // Ctrl+Shift+Esc
-check(until(() => has('Task Manager') && has('Image Name')), 'Ctrl+Shift+Esc opens Task Manager on Processes', screen());
+check(until(() => has('System Monitor') && has('Name')), 'Ctrl+Shift+Esc opens System Monitor on Processes', screen());
 check(until(() => has(/^(c4ix-)?desktop/) && has(/^(c4ix-spin\.c4r|spin) *$/) && has(/^CPU Usage: \d+%$/), 600), 'it lists the tasks, spin among them, with CPU usage', frame.filter(t => /c4ix|CPU|Image|boot|init|spin/.test(t.s)).map(t => t.s.trim()).join(' | '));
-check(has('System Idle Process') && has(/^System *$/), 'and, as NT does, System Idle Process and System', frame.filter(t => /System/.test(t.s)).map(t => t.s.trim()).join(' | '));
+check(has('idle') && has(/^System *$/), 'and, as NT does, idle and System', frame.filter(t => /System/.test(t.s)).map(t => t.s.trim()).join(' | '));
 check(until(() => has('Interval') && frame.some(t => /^[0-9,]+\.[0-9]M$/.test(t.s.trim())), 600), 'its Interval column shows what a task ran in the last second, spin in millions', frame.filter(t => /[0-9]M$|[0-9]k$|Interval/.test(t.s)).map(t => t.s.trim()).join(' | '));
 check(!has(/^(c4sc|b4ke)(\.c4r)? *$/), 'the cancelled build left nothing behind', frame.filter(t => /c4sc|b4ke/.test(t.s)).map(t => t.s).join(' | '));
 clickText(/^(c4ix-spin\.c4r|spin) *$/);
-clickText('End Process');
-check(until(() => has(/End process (c4ix-)?spin/)), 'End Process asks first');
+clickText('Kill');
+check(until(() => has(/Kill task (c4ix-)?spin/)), 'Kill asks first');
 key('y');
 check(until(() => !has(/^(c4ix-spin\.c4r|spin) *$/), 600), 'and ends it', screen());
-clickText('Performance');
+clickText('Load');
 check(until(() => has('CPU Usage History') && has('Totals')), 'the Performance tab shows the gauge and the history');
-clickText('Applications');
+clickText('Programs');
 check(until(() => has('Status') && find('Running').length >= 3), 'the Applications tab lists the windows');
 
 // ---- Settings ---------------------------------------------------------------------------------
 start('Settings');
-check(until(() => has('Color scheme') && has('Windows Standard') && has('Slate') && has('Defaults')), 'Start > Settings lists the colour schemes', screen());
-clickText('Slate');
-check(until(() => rects.some(r => r.rgb === 0xb8c4cc) && !rects.some(r => r.rgb === 0xc0c0c0 && r.w > 300)), 'choosing Slate repaints the desktop in it', screen());
+check(until(() => has('Color scheme') && has('Classic Teal') && has('Granite') && has('Defaults')), 'Go > Settings lists the colour schemes', screen());
+clickText('Granite');
+check(until(() => rects.some(r => r.rgb === 0xb8c4cc) && !rects.some(r => r.rgb === 0xc0c0c0 && r.w > 300)), 'choosing Granite repaints the desktop in it', screen());
 key('ESC');
 check(until(() => !has('Color scheme')), 'Esc closes Settings');
-clickText(/^Command Prompt - task/);
+clickText(/^Terminal - task/);
 type('cat /etc/desktop.cfg\n');
 check(until(() => has(/^scheme 1 bg -1/)), 'the choice is kept in /etc/desktop.cfg', screen());
 start('Settings');
 clickText('Defaults');
-check(until(() => rects.some(r => r.rgb === 0xc0c0c0 && r.w > 300) && !rects.some(r => r.rgb === 0xb8c4cc)), 'Defaults brings Windows Standard back', screen());
+check(until(() => rects.some(r => r.rgb === 0xc0c0c0 && r.w > 300) && !rects.some(r => r.rgb === 0xb8c4cc)), 'Defaults brings Classic Teal back', screen());
 key('ESC');
 until(() => !has('Color scheme'));
 
@@ -627,14 +627,14 @@ check(until(() => has('4 min')), 'the wait goes down a minute', screen());
 clickText('Preview');
 {
   const p = presents;
-  check(until(() => !has('Start') && presents > p + 10), 'Preview runs the screen saver over everything', screen());
+  check(until(() => !has('Go') && presents > p + 10), 'Preview runs the screen saver over everything', screen());
 }
 key('a');
-check(until(() => has('Start') && has('Screen saver')), 'a key ends it and the desktop comes back as it was', screen());
+check(until(() => has('Go') && has('Screen saver')), 'a key ends it and the desktop comes back as it was', screen());
 key('ESC');
 until(() => !has('Screen saver'));
-// a Command Prompt's title, not its taskbar button (drawn after the windows)
-clickText(/^Command Prompt - task/, 'first');
+// a Terminal's title, not its taskbar button (drawn after the windows)
+clickText(/^Terminal - task/, 'first');
 type('cat /etc/desktop.cfg\n');
 check(until(() => has(/wall 1 saver 2 wait 4/), 800), 'the picture and the saver are kept in /etc/desktop.cfg',
   frame.filter(t => /scheme|saver|cat /.test(t.s)).map(t => t.s.trimEnd()).join(' | '));
@@ -648,13 +648,13 @@ until(() => !has('Screen saver'));
 
 // ---- Run --------------------------------------------------------------------------------------
 start('Run...');
-check(until(() => has(/Type the name of a program/)), 'Start > Run asks for a program');
+check(until(() => has(/Program to run/)), 'Go > Run asks for a program');
 type('echo from-run'); key('\n');
-check(until(() => has('from-run'), 800), 'and runs it in a new Command Prompt', screen());
+check(until(() => has('from-run'), 800), 'and runs it in a new Terminal', screen());
 
 // ---- as many windows as memory allows (there were 8 slots) --------------------------------------
-// Task Manager's Performance tab (the CPU meter opens it) counts the windows open
-const opened = () => { const l = frame.find(t => t.s.trim() === 'Windows open'); const v = l && frame.find(t => t.y === l.y && /^\d+$/.test(t.s.trim())); return v ? +v.s.trim() : 0; };
+// System Monitor's Performance tab (the CPU meter opens it) counts the windows open
+const opened = () => { const l = frame.find(t => t.s.trim() === 'Open windows'); const v = l && frame.find(t => t.y === l.y && /^\d+$/.test(t.s.trim())); return v ? +v.s.trim() : 0; };
 click(SW - 100, SH - TASK_H + 12);
 until(() => opened() > 0);
 const nopen = opened();
@@ -662,11 +662,11 @@ for (let i = 0; i < 10; i++) { start('Calculator'); until(() => has('Hex')); }
 click(SW - 100, SH - TASK_H + 12);
 check(until(() => opened() === nopen + 10) && opened() > 8, 'ten more windows open, more than the old eight', `${nopen} then ${opened()}`);
 
-// ---- Shut Down --------------------------------------------------------------------------------
-start('Shut Down...');
-check(until(() => consoleText().includes('desktop: shut down'), 2000), 'Shut Down ends the desktop', consoleText().slice(-500) + ' / screen: ' + screen().slice(-400));
+// ---- Power Off --------------------------------------------------------------------------------
+start('Power Off...');
+check(until(() => consoleText().includes('desktop: shut down'), 2000), 'Power Off ends the desktop', consoleText().slice(-500) + ' / screen: ' + screen().slice(-400));
 typeBytes(vm, new TextEncoder().encode('ps\n'));
 check(until(() => /tasks,/.test(consoleText().split('desktop: shut down').pop())), 'and the console shell carries on');
 const psOut = consoleText().split('desktop: shut down').pop();
-check(!/c4ix-sh.c4r[\s\S]*c4ix-sh.c4r/.test(psOut.replace(/^[\s\S]*?ID/, '')), 'no Command Prompt shell outlived the desktop', psOut);
+check(!/c4ix-sh.c4r[\s\S]*c4ix-sh.c4r/.test(psOut.replace(/^[\s\S]*?ID/, '')), 'no Terminal shell outlived the desktop', psOut);
 process.exit(fail);

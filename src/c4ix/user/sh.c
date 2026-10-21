@@ -412,7 +412,7 @@ static int sh_runline(char **w, int nw) {
 // "$ " would still be sitting in a buffer while the shell waited for
 // a key, and the session would look hung. c4sh does the same.
 //
-// The desktop's Command Prompt reads the shell through a pipe, where
+// The desktop's Terminal reads the shell through a pipe, where
 // every write arrives at once, so it passes -p and the prompt sits on
 // the input line: "c4ix:/$ ls".
 static void sh_prompt() {

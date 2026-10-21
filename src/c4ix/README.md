@@ -136,7 +136,7 @@ target.
 | `loader.c` | the `.c4r` loader; prefers a RAM file to the host file of the same name |
 | `init.c` | the first task and the kernel command line (`--demo`, `--help`) |
 | `include/c4ix_user.h` | the userland API (syscalls, `uprintf`, …) |
-| `include/window.h` | lets a program in a desktop Command Prompt use that window as a canvas |
+| `include/window.h` | lets a program in a desktop Terminal use that window as a canvas |
 | `lib/libc4ix.c` | the userland library |
 | `libc/` | [C4IX's C library](libc/README.md), the shared library `/lib/libc.c4s` |
 | `lib/archive.c`, `include/archive.h` | libarc: an RFC 1951 inflater (puff-style, with a 9-bit lookup table), gzip with its CRC, and a ustar/C4TAR1 reader that makes directories as it goes |

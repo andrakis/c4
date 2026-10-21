@@ -1,10 +1,10 @@
-// apps.c -- Notepad and About (the Calculator is calc.c). docs/c4ix-desktop.md.
+// apps.c -- Text Editor and About (the Calculator is calc.c). docs/c4ix-desktop.md.
 
 #include "desktop.h"
 
 static char buf[200];
 
-// ---- Notepad -------------------------------------------------------------------------
+// ---- Text Editor -------------------------------------------------------------------------
 //
 // The whole file in one buffer, edited in place. Lines are found by
 // scanning for newlines -- files here are small -- and drawn in a fixed-
@@ -36,7 +36,7 @@ static void note_retitle(struct win *w) {
         ui_cpy(buf, n->path + k);
     } else ui_cpy(buf, "Untitled");
     if (n->modified) ui_cat(buf, " *");
-    ui_cat(buf, " - Notepad");
+    ui_cat(buf, " - Text Editor");
     win_title(w, buf);
 }
 
@@ -69,18 +69,18 @@ static int note_save(struct note *n) {
 int note_open(char *path) {
     int i;
     struct win *w;
-    i = win_open(K_NOTE, "Untitled - Notepad", 560, 400);
+    i = win_open(K_NOTE, "Untitled - Text Editor", 560, 400);
     if (i < 0) return i;
     w = win_get(i);
     note_menu_titles[0] = "File"; note_menu_titles[1] = "Help";
     note_file_items[0] = "New"; note_file_items[1] = "Open..."; note_file_items[2] = "Save";
     note_file_items[3] = "Save As..."; note_file_items[4] = "-"; note_file_items[5] = "Exit"; note_file_items[6] = 0;
-    note_help_items[0] = "About Notepad"; note_help_items[1] = 0;
+    note_help_items[0] = "About Text Editor"; note_help_items[1] = 0;
     note_menu_items[0] = note_file_items; note_menu_items[1] = note_help_items;
     win_menus(w, 2, note_menu_titles, note_menu_items);
     if (path && !note_load(N(w), path)) {
         ui_cpy(N(w)->path, path);
-        msgbox(w, "Notepad", "Cannot open that file; starting a new one with its name.", 0, A_NONE);
+        msgbox(w, "Text Editor", "Cannot open that file; starting a new one with its name.", 0, A_NONE);
     }
     note_retitle(w);
     return i;
@@ -170,7 +170,7 @@ void note_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
         n->top = n->top + y * 3;
         if (n->top > lines(n) - rows) n->top = lines(n) - rows;
         if (n->top < 0) n->top = 0;
-        // keep the caret on screen, as Notepad does when it scrolls
+        // keep the caret on screen, as editors do when they scroll
         n->caret = pos_of(n, n->top + (rows / 2), 0);
         return;
     }
@@ -219,12 +219,12 @@ void note_key(struct win *w, int code, int ch, int mods) {
 void note_command(struct win *w, int menu, int item) {
     struct note *n;
     n = N(w);
-    if (menu == 1) { msgbox(w, "About Notepad", "Notepad for C4IX: edits text in the RAM filesystem.", 0, A_NONE); return; }
+    if (menu == 1) { msgbox(w, "About Text Editor", "Text Editor for C4IX: edits text in the RAM filesystem.", 0, A_NONE); return; }
     if (item == 0) { n->len = 0; n->text[0] = 0; n->caret = 0; n->top = 0; n->modified = 0; n->path[0] = 0; note_retitle(w); }
     else if (item == 1) inputbox(w, "Open", "File to open:", n->path[0] ? n->path : "/", A_OPEN);
     else if (item == 2) {
         if (!n->path[0]) inputbox(w, "Save As", "Save as:", "/tmp/untitled.txt", A_SAVEAS);
-        else if (!note_save(n)) msgbox(w, "Notepad", "Cannot save that file.", 0, A_NONE);
+        else if (!note_save(n)) msgbox(w, "Text Editor", "Cannot save that file.", 0, A_NONE);
         note_retitle(w);
     }
     else if (item == 3) inputbox(w, "Save As", "Save as:", n->path[0] ? n->path : "/tmp/untitled.txt", A_SAVEAS);
@@ -236,10 +236,10 @@ void note_answer(struct win *w, int action, int yes) {
     n = N(w);
     if (!yes) return;
     if (action == A_OPEN) {
-        if (!note_load(n, dialog_text())) msgbox(w, "Notepad", "Cannot open that file.", 0, A_NONE);
+        if (!note_load(n, dialog_text())) msgbox(w, "Text Editor", "Cannot open that file.", 0, A_NONE);
     } else if (action == A_SAVEAS) {
         ui_cpy(n->path, dialog_text());
-        if (!note_save(n)) msgbox(w, "Notepad", "Cannot save that file.", 0, A_NONE);
+        if (!note_save(n)) msgbox(w, "Text Editor", "Cannot save that file.", 0, A_NONE);
     }
     note_retitle(w);
 }
@@ -266,7 +266,7 @@ void about_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     d_text(ox + 68, oy + 16, C_DARK, F_BOLD, "C4IX Desktop");
     d_text(ox + 68, oy + 36, C_DARK, F_SANS, "Running on c4m.js: the c4m virtual machine in");
     d_text(ox + 68, oy + 52, C_DARK, F_SANS, "JavaScript, in a Web Worker.");
-    d_text(ox + 68, oy + 76, C_DARK, F_SANS, "Every Command Prompt is a real c4ix-sh task; its");
+    d_text(ox + 68, oy + 76, C_DARK, F_SANS, "Every Terminal is a real c4ix-sh task; its");
     d_text(ox + 68, oy + 92, C_DARK, F_SANS, "stdin and stdout are pipes the desktop holds.");
     d_text(ox + 68, oy + 116, C_SHADOW, F_SANS, "Enter or Esc closes this window.");
 }

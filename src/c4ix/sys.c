@@ -76,7 +76,7 @@ static int sys_same(char *a, char *b) {
 // without stopping the machine: c4sh, raycast and type open one
 // non-blocking and poll it. The host's answer is the machine's console,
 // which is right for a task whose stdin is the console. A task whose
-// stdin is a pipe -- anything run in a Command Prompt, c4m booting C4KE
+// stdin is a pipe -- anything run in a Terminal, c4m booting C4KE
 // there among them -- means that pipe: nobody types at the console for
 // it, and C4KE's shell would wait for ever. So for such a task they name
 // its own stdin, opened again read-only with the caller's O_NONBLOCK.

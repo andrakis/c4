@@ -1,4 +1,4 @@
-// term.c -- Command Prompt: a terminal running c4ix-sh over pipes.
+// term.c -- Terminal: a terminal running c4ix-sh over pipes.
 // docs/c4ix-desktop.md.
 //
 // The shell is a real task whose stdin and stdout are pipes this desktop
@@ -377,14 +377,14 @@ static int start(struct term *t) {
     return 1;
 }
 
-// A new Command Prompt; with cmd, that command is typed at its first
-// prompt (Run, and Explorer running a program).
+// A new Terminal; with cmd, that command is typed at its first
+// prompt (Run, and Files running a program).
 int term_open(char *cmd) {
     int i, k;
     struct win *w;
     struct term *t;
     palette();
-    i = win_open(K_TERM, "Command Prompt", COLS * CW + 2 * BORDER + 4 + SB_W, ROWS * CH + 2 * BORDER + TITLE_H + 5);
+    i = win_open(K_TERM, "Terminal", COLS * CW + 2 * BORDER + 4 + SB_W, ROWS * CH + 2 * BORDER + TITLE_H + 5);
     if (i < 0) return 0 - 1;
     w = win_get(i);
     w->resizable = 0;
@@ -395,8 +395,8 @@ int term_open(char *cmd) {
     t->fg = 7; t->cursor = 1;
     if (cmd) ui_cpy(t->pending, cmd);
     if (!start(t)) { say(t, "desktop: could not start a shell\n"); t->ended = 1; t->pid = 0 - 1; return i; }
-    // "Command Prompt - task N": the id ps shows for this window's shell
-    ui_cpy(tmp, "Command Prompt - task ");
+    // "Terminal - task N": the id ps shows for this window's shell
+    ui_cpy(tmp, "Terminal - task ");
     k = ui_len(tmp);
     ui_num(tmp + k, t->pid);
     win_title(w, tmp);

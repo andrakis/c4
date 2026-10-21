@@ -6,7 +6,7 @@ header is given to it as one more source file, ahead of the program.
 It writes what it builds anywhere in the filesystem; /tmp is the place
 for scratch, and /usr is the repo, sources and all.
 
-In a Command Prompt:
+In a Terminal:
 
   c4cc -o /tmp/hello.c4r /usr/src/c4ix/examples/hello.c
   /tmp/hello.c4r one two
@@ -14,7 +14,7 @@ In a Command Prompt:
   c4cc -o /tmp/bounce.c4r /usr/include/window.h /usr/src/c4ix/examples/bounce.c
   /tmp/bounce.c4r
 
-bounce makes its Command Prompt into a window of its own: see
+bounce makes its Terminal into a window of its own: see
 /usr/include/window.h for the calls. q or Esc ends it, and so does
 Ctrl-C.
 

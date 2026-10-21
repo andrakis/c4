@@ -1,11 +1,11 @@
 // window.h -- a window of your own, for a program run in the desktop.
 // docs/c4ix-desktop.md, part three.
 //
-// Run from a Command Prompt, a program that calls win_open() turns that
+// Run from a Terminal, a program that calls win_open() turns that
 // window into its canvas, WIN_W by WIN_H pixels: it draws with the calls
 // below and reads the mouse and keyboard with win_poll(). Everything
 // travels through the program's own stdout and stdin, as escape
-// sequences the Command Prompt understands, so there is nothing to
+// sequences the Terminal understands, so there is nothing to
 // attach to and nothing to clean up: when the program ends, the window
 // is a terminal again.
 //

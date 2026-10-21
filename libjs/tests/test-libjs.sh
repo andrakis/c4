@@ -159,11 +159,24 @@ if echo "$out" | grep -qF "unpacking c4ix-root.tgz in the background as task 4" 
     ok "c4ix root archive unpacked"
 else bad "c4ix root archive unpacked"; echo "$out" | grep -E 'unpack|done|tar:|cannot' | head -5; fi
 
-# b4ke inside C4IX: the libraries rebuilt from /usr/src/c4 must be the
-# ones the archive carries in /usr/lib, and a second run must do nothing.
-# (The whole tree is `make test-c4ix-rebuild`: minutes, so not here.)
-out=$(printf 'wait 4\nb4ke -C /usr/src/c4/src/c4ix/lib\ncrc32 /ram/build/lib/libc4ix.c4l /usr/lib/libc4ix.c4l\nb4ke -C /usr/src/c4/src/c4ix/lib\nexit\n' | \
+# b4ke inside C4IX. The root archive carries /ram/build already built,
+# so the whole tree is up to date at boot: nothing runs. A source written
+# again (an edit, as the IDE saves one) remakes what it feeds and no
+# more: its object and its program. Then -B rebuilds
+# the libraries from /usr/src/c4, and they must be the ones the archive
+# carries in /usr/lib; and a run after that must do nothing again.
+# (Rebuilding the whole tree is `make test-c4ix-rebuild`: minutes.)
+E=/usr/src/c4/src/c4ix/user/echo.c
+out=$(printf "wait 4\nb4ke -C /usr/src/c4\ncat $E > /ram/echo.c\ncat /ram/echo.c > $E\nb4ke -C /usr/src/c4/src/c4ix/user\n"'b4ke -B -C /usr/src/c4/src/c4ix/lib\ncrc32 /ram/build/lib/libc4ix.c4l /usr/lib/libc4ix.c4l\nb4ke -C /usr/src/c4/src/c4ix/lib\nexit\n' | \
       timeout 300 $LIBJS -m 64 -c 6000000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
+pre=$(echo "$out" | sed '/b4ke: all built/q')
+if echo "$pre" | grep -qF "b4ke: all built, in /ram/build" && ! echo "$pre" | grep -qE ": [1-9][0-9]* ran, " &&
+   echo "$pre" | grep -qE "c4ix/user: 0 ran, [0-9]+ up to date, 0 failed"; then
+    ok "the root archive's /ram/build is up to date: b4ke has nothing to do"
+else bad "the root archive's /ram/build is up to date: b4ke has nothing to do"; echo "$pre" | grep -E 'b4ke' | head -12; fi
+if echo "$out" | grep -qE "c4ix/user: 2 ran, [0-9]+ up to date, 0 failed"; then
+    ok "an edited source remakes only its object and its program"
+else bad "an edited source remakes only its object and its program"; echo "$out" | grep -E 'c4ix/user' | head -4; fi
 a=$(echo "$out" | grep -oE '^[0-9a-f]{8} [0-9]+ /ram/build/lib/libc4ix.c4l' | cut -d' ' -f1,2)
 b=$(echo "$out" | grep -oE '^[0-9a-f]{8} [0-9]+ /usr/lib/libc4ix.c4l' | cut -d' ' -f1,2)
 if [ -n "$a" ] && [ "$a" = "$b" ] && echo "$out" | grep -qF "c4ix/lib: 5 ran, 0 up to date, 0 failed" &&

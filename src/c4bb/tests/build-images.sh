@@ -182,7 +182,9 @@ $CC -o $DISK/c4.c4r c4.c > /dev/null
 # concatenates its inputs the way gcc -E does.
 $OURCPP -DC4M_DOS=1 -DC4M_NO_U0=1 include/c4dos.h c4m.c > .c4bb_c4m_pp.c
 $CC -o $DISK/c4m.c4r .c4bb_c4m_pp.c > /dev/null
-rm -f .c4bb_c4m_pp.c
+# kept: src/c4cc/BUILD.B4K makes the same file, and the root archive
+# ships what the BUILD.B4K files make (below)
+mv .c4bb_c4m_pp.c $OUT/c4m.pp.c
 # include/c4dos.h rides along as a source file (c4cc has no
 # preprocessor): c4cc reads its input through the DOS API when it is
 # running as a transient, so a source another tool just wrote to the
@@ -271,20 +273,34 @@ C4IX_ARC_USER="tar gunzip crc32"
 # floors were measured at 32 bits, and an unmeasured change there would
 # be the same guess with a smaller number.
 C4IX_CELLS=400000
+# What `b4ke -C /usr/src/c4` makes in /ram/build, laid out as the
+# BUILD.B4K files lay it out: each object and image below is kept there
+# as it is built (they are the same bytes; test-c4ix-rebuild checks the
+# images), and the root archive ships the tree, so a build inside C4IX
+# starts with everything up to date.
+PB=$OUT/build
+keep() { cp "$1" "$PB/$2"; }
 # Rebuilt when ANY of C4IX changed -- kernel, libc4ix, headers, user
 # programs -- or the display header its programs include. This used to
 # list four kernel files, so an edit to sys.c, vfs.c or a user program
 # was silently not built.
-if [ ! -f $OUT/c4ix32.c4r ] || \
+if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
    [ -n "$(find src/c4ix libjs/guest/gui.h -newer $OUT/c4ix32.c4r -type f -print -quit)" ]; then
+    rm -rf $PB
+    mkdir -p $PB/kernel $PB/lib $PB/libc $PB/user $PB/desktop $PB/bin
     objs=""
     for m in $C4IX_MODS; do
         ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix src/c4ix/$m.c .c4bb_ix_$m.c4o > /dev/null
         objs="$objs .c4bb_ix_$m.c4o"
+        keep .c4bb_ix_$m.c4o kernel/$m.c4o
     done
     ./c4rlink32 $objs -o $OUT/c4ix32.c4r
+    keep $OUT/c4ix32.c4r c4ix.c4r
     ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix/include src/c4ix/lib/libc4ix.c .c4bb_ix_lib.c4o > /dev/null
     ./c4rlink32 -r .c4bb_ix_lib.c4o -o .c4bb_libc4ix32.c4l
+    keep .c4bb_ix_lib.c4o lib/libc4ix.c4o
+    keep .c4bb_libc4ix32.c4l lib/libc4ix.c4l
+    keep .c4bb_libc4ix32.c4l lib/libc4ix.c4s
     # ... and as C4IX's first shared library, /lib/libc4ix.c4s: the same
     # image, which programs linked with -l load at run time. c4rlink
     # records /lib/ and the base name, so the copy it reads is named so.
@@ -296,6 +312,8 @@ if [ ! -f $OUT/c4ix32.c4r ] || \
     # boot starts, and both machines that read this disk run fused code.
     ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -mfuse -c -I src/c4ix/include src/c4ix/lib/archive.c .c4bb_ix_arc.c4o > /dev/null
     ./c4rlink32 -r .c4bb_ix_arc.c4o -o .c4bb_libarc32.c4l
+    keep .c4bb_ix_arc.c4o lib/libarc.c4o
+    keep .c4bb_libarc32.c4l lib/libarc.c4l
     # libc: C4IX's C library (src/c4ix/libc), the second shared library,
     # /lib/libc.c4s. Built -fno-builtin, so printf, malloc and the rest
     # are its own -- except opcodes.c, which is where the VM's opcodes
@@ -303,18 +321,26 @@ if [ ! -f $OUT/c4ix32.c4r ] || \
     # all of it, so its code is loaded once and shared by every task.
     for m in string stdlib stdio unix; do
         ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -fno-builtin -fpic -c -I src/c4ix/libc/include -I src/c4ix/libc src/c4ix/libc/$m.c .c4bb_ix_libc_$m.c4o > /dev/null
+        keep .c4bb_ix_libc_$m.c4o libc/$m.c4o
     done
     ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -fpic -c src/c4ix/libc/opcodes.c .c4bb_ix_libc_opcodes.c4o > /dev/null
     ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -fpic -c -I src/c4ix/include src/c4ix/lib/libc4ix.c .c4bb_ix_libc_u.c4o > /dev/null
     ./c4rlink32 -r .c4bb_ix_libc_string.c4o .c4bb_ix_libc_stdlib.c4o .c4bb_ix_libc_stdio.c4o .c4bb_ix_libc_unix.c4o \
         .c4bb_ix_libc_opcodes.c4o .c4bb_ix_libc_u.c4o -o .c4bb_lib/libc.c4s > /dev/null
+    keep .c4bb_ix_libc_opcodes.c4o libc/opcodes.c4o
+    keep .c4bb_ix_libc_u.c4o libc/libc4ix.c4o
+    keep .c4bb_lib/libc.c4s lib/libc.c4s
     cp .c4bb_lib/libc.c4s $DISK/c4ix-libc.c4s
     # libctest exercises it (libjs/tests/test-libjs.sh compares its output)
     ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/libctest.c .c4bb_ix_u.c4o > /dev/null
     ./c4rlink32 .c4bb_ix_u.c4o -l .c4bb_lib/libc.c4s -o $DISK/c4ix-libctest.c4r > /dev/null
+    keep .c4bb_ix_u.c4o libc/libctest.c4o
+    keep $DISK/c4ix-libctest.c4r bin/c4ix-libctest.c4r
     # pictest: two at once must each keep their own libc data
     ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/pictest.c .c4bb_ix_u.c4o > /dev/null
     ./c4rlink32 .c4bb_ix_u.c4o -l .c4bb_lib/libc.c4s -o $DISK/c4ix-pictest.c4r > /dev/null
+    keep .c4bb_ix_u.c4o libc/pictest.c4o
+    keep $DISK/c4ix-pictest.c4r bin/c4ix-pictest.c4r
     for u in $C4IX_USER; do
         ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix/include src/c4ix/user/$u.c .c4bb_ix_u.c4o > /dev/null
         # ls is the pilot for shared libraries: it loads libc4ix at run time
@@ -323,10 +349,14 @@ if [ ! -f $OUT/c4ix32.c4r ] || \
         else
             ./c4rlink32 .c4bb_ix_u.c4o .c4bb_libc4ix32.c4l -o $DISK/c4ix-$u.c4r > /dev/null
         fi
+        keep .c4bb_ix_u.c4o user/$u.c4o
+        keep $DISK/c4ix-$u.c4r bin/c4ix-$u.c4r
     done
     for u in $C4IX_ARC_USER; do
         ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix/include src/c4ix/user/$u.c .c4bb_ix_u.c4o > /dev/null
         ./c4rlink32 .c4bb_ix_u.c4o .c4bb_libarc32.c4l .c4bb_libc4ix32.c4l -o $DISK/c4ix-$u.c4r > /dev/null
+        keep .c4bb_ix_u.c4o user/$u.c4o
+        keep $DISK/c4ix-$u.c4r bin/c4ix-$u.c4r
     done
     # the desktop: several modules, linked together (docs/c4ix-desktop.md)
     dobjs=""
@@ -334,8 +364,10 @@ if [ ! -f $OUT/c4ix32.c4r ] || \
         ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix/include -I src/c4ix/user/desktop \
             src/c4ix/user/desktop/$m.c .c4bb_ix_d_$m.c4o > /dev/null
         dobjs="$dobjs .c4bb_ix_d_$m.c4o"
+        keep .c4bb_ix_d_$m.c4o desktop/$m.c4o
     done
     ./c4rlink32 $dobjs .c4bb_libc4ix32.c4l -o $DISK/c4ix-desktop.c4r > /dev/null
+    keep $DISK/c4ix-desktop.c4r bin/c4ix-desktop.c4r
     rm -f $dobjs .c4bb_ix_d_*.pp.c
     # the VFS loader: c4ix-vfsload.c4r, NOT plain vfsload.c4r - C4KE
     # has its own boot-time loader of the same name on this shared
@@ -346,6 +378,8 @@ if [ ! -f $OUT/c4ix32.c4r ] || \
     # C4IX binary here, all of which face the same shared-disk risk).
     ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix/include src/c4ix/user/vfsload.c .c4bb_ix_u.c4o > /dev/null
     ./c4rlink32 .c4bb_ix_u.c4o .c4bb_libc4ix32.c4l -o $DISK/c4ix-vfsload.c4r > /dev/null
+    keep .c4bb_ix_u.c4o user/vfsload.c4o
+    keep $DISK/c4ix-vfsload.c4r bin/c4ix-vfsload.c4r
     # the libraries are kept: the root archive ships them in /usr/lib,
     # so a program can be linked inside the machine
     mv .c4bb_libc4ix32.c4l $OUT/libc4ix32.c4l
@@ -514,6 +548,15 @@ fi
 # as git has it (text files only) under /usr/src/c4, the C4IX libraries
 # in /usr/lib, and the headers a program built inside links against in
 # /usr/include. Reproducible: fixed order, owner and times, gzip -n.
+#
+# At its end, /ram/build: what `b4ke -C /usr/src/c4` makes, already made
+# (PB above), so a build inside C4IX -- the IDE's, or b4ke's -- starts
+# with everything up to date and remakes only what was edited. Order is
+# what makes that true: a file's mtime is the RAM filesystem's clock
+# when it was written (vfs.c), and the archive is written in order, so
+# these come after every source, objects before the libraries made from
+# them, and libraries before what links them. (In the same archive, not
+# a second one: vfsload unpacks each archive in its own task, at once.)
 ROOT=.c4bb_ix_root
 rm -rf $ROOT
 mkdir -p $ROOT/usr/src/c4 $ROOT/usr/lib $ROOT/usr/include
@@ -535,8 +578,19 @@ cp src/c4ix/include/*.h libjs/guest/gui.h $ROOT/usr/include/
 mkdir -p $ROOT/usr/include/libc/sys
 cp src/c4ix/libc/include/*.h $ROOT/usr/include/libc/
 cp src/c4ix/libc/include/sys/*.h $ROOT/usr/include/libc/sys/
+mkdir -p $ROOT/ram/build/bin
+cp -r $PB/. $ROOT/ram/build/
+# src/c4cc/BUILD.B4K's: built by c4cc above, as they are inside C4IX
+for t in c4cc c4rdump c4rlink cpp c4 c4m; do cp $DISK/$t.c4r $ROOT/ram/build/bin/; done
+cp $OUT/c4m.pp.c $ROOT/ram/build/c4m.pp.c
+BUILT=$(cd $ROOT && {
+    find ram/build -name '*.c4o' -o -name '*.pp.c' | sort
+    echo ram/build/lib/libc4ix.c4l ram/build/lib/libc4ix.c4s ram/build/lib/libarc.c4l ram/build/lib/libc.c4s
+    find ram/build/bin -type f | sort
+    echo ram/build/c4ix.c4r
+})
 tar --format=ustar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
-    -C $ROOT -cf - usr | gzip -9n > $DISK/c4ix-root.tgz
+    -C $ROOT -cf - usr --no-recursion $BUILT | gzip -9n > $DISK/c4ix-root.tgz
 rm -rf $ROOT
 
 # manifest for the web app's disk loader (recursive: some entries,

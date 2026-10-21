@@ -454,7 +454,9 @@ check(until(() => edLine('WEND') && rows().filter(t => /^W{20,}/.test(t.s.trim()
 txt(':set nowrap\n');
 txt(':e! /usr/src/c4/src/c4ix/user/desktop/edit.c\n');
 until(() => has('edit.c - Editor'));
-// a build that takes a while, cancelled from the pane's button
+// a build that takes a while, cancelled from the pane's button. /ram/build
+// arrives built, so it is an edit that makes one: edit.c's object, again
+txt('Go// a change, so there is something to build'); key('ESC');
 txt(':make\n');
 check(until(() => has('Build: running') && has('Cancel'), 400), ':make on a file under a BUILD.B4K runs b4ke there', screen());
 clickText('Cancel');

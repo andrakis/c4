@@ -1,6 +1,7 @@
 #!/bin/bash
 # test-rebuild.sh - C4IX rebuilds what it ships, inside itself (`make
-# test-c4ix-rebuild`). Boots the libjs disk, runs `b4ke -C /usr/src/c4`
+# test-c4ix-rebuild`). Boots the libjs disk, runs `b4ke -B -C /usr/src/c4`
+# (-B: the root archive's /ram/build is already up to date)
 # -- the kernel, both libraries, every userland program, the desktop and
 # the c4cc-built toolchain -- then checks each result against the image
 # the host built:
@@ -26,7 +27,7 @@ LC_PROGS="hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt gui 
 CC_PROGS="c4cc c4rdump c4rlink cpp c4 c4m"
 {
     echo "wait 4"
-    echo "b4ke -C /usr/src/c4"
+    echo "b4ke -B -C /usr/src/c4"
     for u in $LC_PROGS; do echo "crc32 $B/bin/c4ix-$u.c4r"; done
     for t in $CC_PROGS; do echo "crc32 $B/bin/$t.c4r"; done
     echo "crc32 $B/c4ix.c4r"

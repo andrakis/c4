@@ -21,6 +21,7 @@ struct tasks {
     int tab, sel, top, asel;
     int n;                                     // rows: idle, System, then the tasks
     int id[MAXP], state[MAXP], privs[MAXP], sys[MAXP], cpu[MAXP];
+    int ival[MAXP];                            // Interval: thousands of cycles in the last sample
     long long time[MAXP];                      // CPU Time, in cycles
     char name[MAXP * NAMEW];
     struct cpusample s[2];                     // this snapshot and the one before
@@ -35,10 +36,11 @@ static char buf[160];
 static char *tabs[3];
 static int pct[CPU_MAXT];
 
-static int row(struct tasks *t, int id, char *name, int privs, int state, int sys, int cpu, long long time) {
+static int row(struct tasks *t, int id, char *name, int privs, int state, int sys, int cpu, int ival, long long time) {
     int k;
     k = t->n;
     t->id[k] = id; t->privs[k] = privs; t->state[k] = state; t->sys[k] = sys; t->cpu[k] = cpu;
+    t->ival[k] = ival;
     t->time[k] = time;
     ui_cpy(t->name + k * NAMEW, name);
     t->name[k * NAMEW + NAMEW - 1] = 0;
@@ -49,7 +51,7 @@ static int row(struct tasks *t, int id, char *name, int privs, int state, int sy
 static void sample(struct tasks *t) {
     struct cpusample *a, *b;
     struct cpustat_task *r;
-    int k, sys, nsys;
+    int k, sys, nsys, kival;
     long long ktime;
 
     a = &t->s[t->cur];
@@ -62,19 +64,32 @@ static void sample(struct tasks *t) {
     // all the kernel has spent on everyone, the reaped included
     t->n = 0;
     k = cpu_find(b, b->h.idle);
-    if (k >= 0) { r = &b->t[k]; row(t, r->id, "System Idle Process", 0, r->state, r->nsyscalls, pct[k], r->user + r->kernel); }
+    // Interval, as top has it: what each row ran in the last sample, in
+    // thousands of cycles -- the idle task's own cycles (not its naps),
+    // the kernel's for System, a task's own for a task
+    if (k >= 0) {
+        r = &b->t[k];
+        row(t, r->id, "System Idle Process", 0, r->state, r->nsyscalls, pct[k],
+            t->sampled ? cpu_kdelta(a, b, k, 0) + cpu_kdelta(a, b, k, 1) : 0, r->user + r->kernel);
+    }
     ktime = b->h.gone_kernel;
     nsys = 0;
+    kival = 0;
     k = 0;
     while (k < b->h.ntasks) {
-        if (b->t[k].id != b->h.idle) { ktime = ktime + b->t[k].kernel; nsys = nsys + b->t[k].nsyscalls; }
+        if (b->t[k].id != b->h.idle) {
+            ktime = ktime + b->t[k].kernel;
+            nsys = nsys + b->t[k].nsyscalls;
+            if (t->sampled) kival = kival + cpu_kdelta(a, b, k, 1);
+        }
         ++k;
     }
-    row(t, -1, "System", 0, TS_RUNNING, nsys, sys, ktime);
+    row(t, -1, "System", 0, TS_RUNNING, nsys, sys, kival, ktime);
     k = 0;
     while (k < b->h.ntasks) {
         r = &b->t[k];
-        if (r->id != b->h.idle) row(t, r->id, r->name, r->privs, r->state, r->nsyscalls, pct[k], r->user);
+        if (r->id != b->h.idle)
+            row(t, r->id, r->name, r->privs, r->state, r->nsyscalls, pct[k], t->sampled ? cpu_kdelta(a, b, k, 0) : 0, r->user);
         ++k;
     }
     t->cur = 1 - t->cur;
@@ -92,7 +107,7 @@ int tasks_open() {
     // one Task Manager at a time: another request brings it forward
     k = 0;
     while (k < MAXW) { w = win_get(k); if (w->used && w->kind == K_TASKS) { win_raise(k); return k; } ++k; }
-    i = win_open(K_TASKS, "Task Manager", 420, 440);
+    i = win_open(K_TASKS, "Task Manager", 490, 440);
     if (i < 0) return i;
     w = win_get(i);
     S(w)->tab = 1;
@@ -140,8 +155,17 @@ static char *state_name(int s) {
 
 // ---- drawing ----------------------------------------------------------------------
 
-static int widths[6];
-static char *labels[6];
+static int widths[7];
+static char *labels[7];
+
+// thousands of cycles, as Interval shows them: "850k", or "12.3M"
+static void kcycles(char *out, int kc) {
+    int n;
+    if (kc < 1000) { ui_num(out, kc); ui_cat(out, "k"); return; }
+    ui_num_commas(out, kc / 1000);
+    n = ui_len(out);
+    out[n] = '.'; out[n + 1] = '0' + (kc % 1000) / 100; out[n + 2] = 'M'; out[n + 3] = 0;
+}
 
 static void list_box(int x, int y, int w, int h) {
     d_rect(x, y, w, h, C_WHITE);
@@ -178,10 +202,11 @@ static void draw_apps(struct win *me, struct tasks *t, int ox, int oy, int cw, i
 static void draw_procs(struct tasks *t, int ox, int oy, int cw, int ch) {
     int k, y, x, rows, fg;
     list_box(ox + 8, oy + PAGE_Y + 10, cw - 16, ch - PAGE_Y - 60);
-    widths[0] = 120; widths[1] = 40; widths[2] = 36; widths[3] = 74; widths[4] = 60; widths[5] = cw - 20 - 330;
-    labels[0] = "Image Name"; labels[1] = "PID"; labels[2] = "CPU"; labels[3] = "CPU Time";
-    labels[4] = "Syscalls"; labels[5] = "State";
-    ui_header(ox + 10, oy + PAGE_Y + 12, widths, labels, 6);
+    widths[0] = 120; widths[1] = 40; widths[2] = 36; widths[3] = 66; widths[4] = 74; widths[5] = 60;
+    widths[6] = cw - 20 - 396;
+    labels[0] = "Image Name"; labels[1] = "PID"; labels[2] = "CPU"; labels[3] = "Interval";
+    labels[4] = "CPU Time"; labels[5] = "Syscalls"; labels[6] = "State";
+    ui_header(ox + 10, oy + PAGE_Y + 12, widths, labels, 7);
     rows = (ch - PAGE_Y - 60 - 26) / ROW_H;
     if (t->sel < t->top) t->top = t->sel;
     if (t->sel >= t->top + rows) t->top = t->sel - rows + 1;
@@ -196,11 +221,13 @@ static void draw_procs(struct tasks *t, int ox, int oy, int cw, int ch) {
         d_text(x + widths[1] - 8 - ui_len(buf) * 6, y + 1, fg, F_SANS, buf); x = x + widths[1];
         ui_num(buf, t->cpu[k]); if (ui_len(buf) < 2) { buf[1] = buf[0]; buf[0] = '0'; buf[2] = 0; }
         d_text(x + widths[2] - 8 - ui_len(buf) * 6, y + 1, fg, F_SANS, buf); x = x + widths[2];
+        kcycles(buf, t->ival[k]);
+        d_text(x + widths[3] - 8 - ui_len(buf) * 6, y + 1, fg, F_SANS, buf); x = x + widths[3];
         // CPU time: thousands of cycles, or millions once they pass a billion
         if (t->time[k] >= 1000000000) { ui_num_commas(buf, (int)(t->time[k] / 1000000)); ui_cat(buf, "M"); }
         else { ui_num_commas(buf, (int)(t->time[k] / 1000)); ui_cat(buf, "k"); }
-        d_text(x + widths[3] - 8 - ui_len(buf) * 6, y + 1, fg, F_SANS, buf); x = x + widths[3];
-        ui_num_commas(buf, t->sys[k]); d_text(x + widths[4] - 8 - ui_len(buf) * 6, y + 1, fg, F_SANS, buf); x = x + widths[4];
+        d_text(x + widths[4] - 8 - ui_len(buf) * 6, y + 1, fg, F_SANS, buf); x = x + widths[4];
+        ui_num_commas(buf, t->sys[k]); d_text(x + widths[5] - 8 - ui_len(buf) * 6, y + 1, fg, F_SANS, buf); x = x + widths[5];
         d_text(x + 4, y + 1, fg, F_SANS, state_name(t->state[k]));
         y = y + ROW_H;
         ++k;

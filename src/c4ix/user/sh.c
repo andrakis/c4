@@ -36,6 +36,7 @@ static int  rdlen;
 static int  rdpos;
 static int  script_fd;
 static int  interactive;   // reading fd 0 with no script: prompt
+static int  inline_prompt; // -p: the prompt stays on the input line
 
 // Returns the line length, or -1 at end of input.
 static int sh_getline(char *line, int max) {
@@ -410,23 +411,30 @@ static int sh_runline(char **w, int nw) {
 // reliably pushes output out is the newline itself -- so a trailing
 // "$ " would still be sitting in a buffer while the shell waited for
 // a key, and the session would look hung. c4sh does the same.
+//
+// The desktop's Command Prompt reads the shell through a pipe, where
+// every write arrives at once, so it passes -p and the prompt sits on
+// the input line: "c4ix:/$ ls".
 static void sh_prompt() {
     char cwd[128];
     if (!interactive) return;
-    if (ugetcwd(cwd, 128) > 0) uprintf("c4ix:%s$\n", cwd);
-    else uprintf("c4ix$\n");
+    if (ugetcwd(cwd, 128) > 0) uprintf(inline_prompt ? "c4ix:%s$ " : "c4ix:%s$\n", cwd);
+    else uprintf(inline_prompt ? "c4ix$ " : "c4ix$\n");
 }
 
 int main(int argc, char **argv) {
     char line[LINE_MAX];
     char *words[WORD_MAX];
-    int nw, len, i, k;
+    int nw, len, i, k, first;
 
     script_fd = STDIN;
     interactive = 1;
-    // -e CMD, as often as wanted: lines run first, as if typed at the
-    // prompt (init --desktop: "top &", then "desktop")
-    i = 1;
+    // -p first, for a prompt on the input line (above); then -e CMD, as
+    // often as wanted: lines run first, as if typed at the prompt
+    // (init --desktop: "desktop &", then "top")
+    first = 1;
+    if (first < argc && !ustrcmp(argv[first], "-p")) { inline_prompt = 1; ++first; }
+    i = first;
     while (i + 1 < argc && !ustrcmp(argv[i], "-e")) i = i + 2;
     if (i < argc) {
         interactive = 0;
@@ -437,7 +445,7 @@ int main(int argc, char **argv) {
     }
     if (interactive)
         uprintf("c4ix-sh -- 'help' for builtins, 'exit' or end-of-file to leave\n");
-    i = 1;
+    i = first;
     while (i + 1 < argc && !ustrcmp(argv[i], "-e") && !sh_exiting) {
         k = 0;
         while (argv[i + 1][k] && k < LINE_MAX - 1) { line[k] = argv[i + 1][k]; ++k; }

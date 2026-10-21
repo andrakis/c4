@@ -22,6 +22,9 @@ enum { COLS = 80, ROWS = 25, CW = 8, CH = 16, FONT_PX = 14, LINE_MAX = 250, IOBU
 enum { GW = 640, GH = 400, APC_MAX = 300, GLIST = 6000 };
 // the row cache: what term_draw emits for each row, at most RUNMAX runs
 enum { RUNMAX = 24 };
+// line editing's history (HIST_N lines), and the scrollback: SB_ROWS rows
+// that scrolled off the top, beside the grid with its scrollbar (SB_W)
+enum { HIST_N = 16, SB_ROWS = 300, SB_W = 16 };
 
 struct term {
     int pid, in_w, out_r, ended;
@@ -45,6 +48,20 @@ struct term {
     // or -1 for a row with more than RUNMAX, drawn from the cells.
     int rowok[25], rowk[25];
     int runs[1800];               // ROWS * RUNMAX * 3
+    // Line editing (term_key): the cursor's place in the line being
+    // typed, and where on the grid that line starts (erow may go above
+    // the top as the line scrolls). The history: hn lines, oldest first;
+    // hpos is the one shown, hn for the line being typed, kept in saved
+    // while the history is browsed.
+    int lpos, erow, ecol;
+    int hn, hpos, slen;
+    char hist[4096];              // HIST_N * 256
+    char saved[256];
+    // The scrollback: a ring of rows that scrolled off the top, sbn of
+    // them, the next going in at sbhead; view is how many rows back the
+    // window shows (0, the live grid). Allocated when the window opens.
+    int *sb;
+    int sbn, sbhead, view;
 };
 
 static int pal[256];
@@ -98,6 +115,14 @@ static void newline(struct term *t) {
     t->cx = 0; t->wrap = 0;
     ++t->cy;
     if (t->cy >= ROWS) {
+        if (t->sb) {
+            memcpy(t->sb + t->sbhead * COLS, t->cell, COLS * sizeof(int));
+            t->sbhead = (t->sbhead + 1) % SB_ROWS;
+            if (t->sbn < SB_ROWS) ++t->sbn;
+            // looking back: stay on the same rows while new ones arrive
+            if (t->view && t->view < t->sbn) ++t->view;
+        }
+        if (t->llen) --t->erow;
         memcpy(t->cell, t->cell + COLS, (ROWS - 1) * COLS * sizeof(int));
         memcpy(t->runs, t->runs + RUNMAX * 3, (ROWS - 1) * RUNMAX * 3 * sizeof(int));
         memcpy(t->rowok, t->rowok + 1, (ROWS - 1) * sizeof(int));
@@ -337,10 +362,11 @@ static int start(struct term *t) {
     udup2(pin[0], STDIN);
     udup2(pout[1], STDOUT);
     udup2(pout[1], STDERR);
-    argv = (char **)ualloc(2 * sizeof(char *));
+    argv = (char **)ualloc(3 * sizeof(char *));
     argv[0] = "c4ix-sh.c4r";
-    argv[1] = 0;
-    t->pid = spawn("c4ix-sh.c4r", 1, argv);
+    argv[1] = "-p";                                // the prompt on the input line
+    argv[2] = 0;
+    t->pid = spawn("c4ix-sh.c4r", 2, argv);
     udup2(s0, STDIN); udup2(s1, STDOUT); udup2(s2, STDERR);
     uclose(s0); uclose(s1); uclose(s2);
     uclose(pin[0]); uclose(pout[1]);
@@ -357,11 +383,12 @@ int term_open(char *cmd) {
     struct win *w;
     struct term *t;
     palette();
-    i = win_open(K_TERM, "Command Prompt", COLS * CW + 2 * BORDER + 4, ROWS * CH + 2 * BORDER + TITLE_H + 5);
+    i = win_open(K_TERM, "Command Prompt", COLS * CW + 2 * BORDER + 4 + SB_W, ROWS * CH + 2 * BORDER + TITLE_H + 5);
     if (i < 0) return 0 - 1;
     w = win_get(i);
     w->resizable = 0;
     t = T(w);
+    t->sb = (int *)ualloc(SB_ROWS * COLS * sizeof(int));
     clear(t, 0, ROWS * COLS);
     t->fg = 7; t->cursor = 1;
     if (cmd) ui_cpy(t->pending, cmd);
@@ -378,6 +405,7 @@ int term_open(char *cmd) {
 void term_close(struct win *w) {
     struct term *t;
     t = T(w);
+    if (t->sb) { free(t->sb); t->sb = 0; }
     if (t->ended) return;
     uintr(t->pid);
     ukill(t->pid, SIGTERM);
@@ -390,7 +418,7 @@ void term_close(struct win *w) {
 // Output waiting in the pipe; never blocks.
 void term_tick(struct win *w) {
     struct term *t;
-    int n, k, got;
+    int n, k, got, prompt;
     t = T(w);
     if (t->ended) return;
     feeding = w;
@@ -405,10 +433,12 @@ void term_tick(struct win *w) {
         got = got + n;
         {
             feed(t, iobuf, n);
+            // the shell's prompt ends "$ " (c4ix-sh -p) and is the last thing it writes
+            prompt = n >= 2 && iobuf[n - 2] == '$' && iobuf[n - 1] == ' ';
             // the shell's prompt is back: whatever made this a canvas has ended
-            if (t->gfx && n >= 2 && iobuf[n - 2] == '$' && iobuf[n - 1] == 10) gfx_mode(w, t, 0);
-            // the shell's prompt ends "$\n": time to type a waiting command
-            if (t->pending[0] && n >= 2 && iobuf[n - 2] == '$' && iobuf[n - 1] == 10) {
+            if (t->gfx && prompt) gfx_mode(w, t, 0);
+            // ... and time to type a waiting command
+            if (t->pending[0] && prompt) {
                 k = ui_len(t->pending);
                 say(t, t->pending);
                 t->pending[k] = 10;
@@ -429,9 +459,102 @@ void term_tick(struct win *w) {
     }
 }
 
-// A key typed here: cooked-mode line editing, as a tty does it.
+// ---- line editing -------------------------------------------------------------------
+//
+// Cooked mode, as a tty does it, with a line editor: the line is sent
+// to the shell only when Enter is pressed, and until then the cursor
+// keys move within it, Backspace and Delete take out a character there,
+// and Up and Down bring back earlier lines. The line is drawn straight
+// into the grid -- this terminal is its own tty -- from where it began.
+
+// Put the cursor at character i of the line being typed.
+static void ed_goto(struct term *t, int i) {
+    int k;
+    k = t->erow * COLS + t->ecol + i;
+    if (k < 0) k = 0;
+    if (k >= ROWS * COLS) { t->cy = ROWS - 1; t->cx = COLS - 1; t->wrap = 1; return; }
+    t->cy = k / COLS; t->cx = k % COLS; t->wrap = 0;
+}
+
+// Draw the line from character `from` to its end, then `extra` blanks
+// over what a longer line left there, and put the cursor back at lpos.
+static void ed_tail(struct term *t, int from, int extra) {
+    int i;
+    ed_goto(t, from);
+    i = from;
+    while (i < t->llen) { putc_(t, t->line[i]); ++i; }
+    while (extra > 0) { putc_(t, ' '); --extra; }
+    ed_goto(t, t->lpos);
+    mark_dirty();
+}
+
+// Show s (n characters) as the line, as Up and Down do.
+static void ed_replace(struct term *t, char *src, int n) {
+    int old, i;
+    old = t->llen;
+    i = 0;
+    while (i < n) { t->line[i] = src[i]; ++i; }
+    t->llen = n;
+    t->lpos = n;
+    ed_tail(t, 0, old > n ? old - n : 0);
+}
+
+// The line is done: remember it, unless it is empty or the last one again.
+static void ed_remember(struct term *t) {
+    int i, same;
+    char *h;
+    if (!t->llen) return;
+    if (t->hn) {
+        h = t->hist + (t->hn - 1) * 256;
+        same = 1;
+        i = 0;
+        while (i < t->llen && same) { if (h[i] != t->line[i]) same = 0; ++i; }
+        if (same && !h[t->llen]) return;
+    }
+    if (t->hn == HIST_N) {
+        memcpy(t->hist, t->hist + 256, (HIST_N - 1) * 256);
+        --t->hn;
+    }
+    h = t->hist + t->hn * 256;
+    i = 0;
+    while (i < t->llen) { h[i] = t->line[i]; ++i; }
+    h[i] = 0;
+    ++t->hn;
+}
+
+static void ed_history(struct term *t, int dir) {
+    char *h;
+    int n;
+    if (dir < 0) {
+        if (t->hpos <= 0) return;
+        if (t->hpos == t->hn) {                // leaving the line being typed: keep it
+            memcpy(t->saved, t->line, t->llen);
+            t->slen = t->llen;
+        }
+        --t->hpos;
+    } else {
+        if (t->hpos >= t->hn) return;
+        ++t->hpos;
+    }
+    if (t->hpos == t->hn) { ed_replace(t, t->saved, t->slen); return; }
+    h = t->hist + t->hpos * 256;
+    n = 0;
+    while (h[n]) ++n;
+    ed_replace(t, h, n);
+}
+
+// The scrollback: show `rows` rows further back (negative: forward).
+static void sb_scroll(struct term *t, int rows) {
+    t->view = t->view + rows;
+    if (t->view > t->sbn) t->view = t->sbn;
+    if (t->view < 0) t->view = 0;
+    mark_dirty();
+}
+
+// A key typed here.
 void term_key(struct win *w, int code, int ch, int mods) {
     struct term *t;
+    int i;
     t = T(w);
     if (t->ended) return;
     if ((mods & M_CTRL) && (ch == 'c' || ch == 'C' || code == 67)) {
@@ -441,41 +564,103 @@ void term_key(struct win *w, int code, int ch, int mods) {
         term_tick(w);
         if (t->ended) return;
         if (t->gfx) gfx_mode(w, t, 0);
+        t->view = 0;
+        if (t->llen) ed_goto(t, t->llen);
         say(t, "^C\n");
-        t->llen = 0;
+        t->llen = 0; t->lpos = 0; t->hpos = t->hn;
         // nothing running under the shell: an empty line brings a fresh prompt
         if (uintr(t->pid) <= 0) write(t->in_w, "\n", 1);
         return;
     }
     if ((mods & M_CTRL) && (ch == 'l' || ch == 'L' || code == 76)) {
         clear(t, 0, ROWS * COLS); t->cx = 0; t->cy = 0; mark_dirty();
+        if (t->llen) { t->erow = 0; t->ecol = 0; ed_tail(t, 0, 0); }
         return;
     }
     if (t->gfx) { event(t, 'k', code, ch, mods); return; }
-    if (mods & M_CTRL) return;
+    // the scrollback: PgUp and PgDn, a screen at a time
+    if (!ch && code == KEY_PGUP) { sb_scroll(t, ROWS - 1); return; }
+    if (!ch && code == KEY_PGDN) { sb_scroll(t, 1 - ROWS); return; }
+    // anything else is typing, which happens at the bottom
+    if (t->view) { t->view = 0; mark_dirty(); }
+    // a line starts where the cursor is when its first key comes
+    if (!t->llen) {
+        if (t->wrap) newline(t);
+        t->erow = t->cy; t->ecol = t->cx; t->lpos = 0;
+    }
+    if (mods & M_CTRL) {
+        if (ch == 'a' || ch == 'A' || code == 65) { t->lpos = 0; ed_goto(t, 0); mark_dirty(); }
+        else if (ch == 'e' || ch == 'E' || code == 69) { t->lpos = t->llen; ed_goto(t, t->llen); mark_dirty(); }
+        else if (ch == 'u' || ch == 'U' || code == 85) ed_replace(t, t->line, 0);
+        return;
+    }
     if (code == KEY_ENTER || ch == 10) {
+        ed_goto(t, t->llen);
+        ed_remember(t);
+        t->hpos = t->hn;
         t->line[t->llen] = 10;
         write(t->in_w, t->line, t->llen + 1);
-        t->llen = 0;
+        t->llen = 0; t->lpos = 0;
         echo(t, 10);
         return;
     }
+    if (!ch) {
+        if (code == KEY_LEFT) { if (t->lpos > 0) { --t->lpos; ed_goto(t, t->lpos); mark_dirty(); } return; }
+        if (code == KEY_RIGHT) { if (t->lpos < t->llen) { ++t->lpos; ed_goto(t, t->lpos); mark_dirty(); } return; }
+        if (code == KEY_HOME) { t->lpos = 0; ed_goto(t, 0); mark_dirty(); return; }
+        if (code == KEY_END) { t->lpos = t->llen; ed_goto(t, t->llen); mark_dirty(); return; }
+        if (code == KEY_UP) { ed_history(t, -1); return; }
+        if (code == KEY_DOWN) { ed_history(t, 1); return; }
+        if (code == KEY_DEL) {
+            if (t->lpos < t->llen) {
+                i = t->lpos;
+                while (i < t->llen - 1) { t->line[i] = t->line[i + 1]; ++i; }
+                --t->llen;
+                ed_tail(t, t->lpos, 1);
+            }
+            return;
+        }
+    }
     if (code == KEY_BACK) {
-        if (t->llen > 0) { --t->llen; echo(t, 8); echo(t, ' '); echo(t, 8); }
+        if (t->lpos > 0) {
+            i = t->lpos - 1;
+            while (i < t->llen - 1) { t->line[i] = t->line[i + 1]; ++i; }
+            --t->llen;
+            --t->lpos;
+            ed_tail(t, t->lpos, 1);
+        }
         return;
     }
     if (ch >= 32 && ch < 127 && t->llen < LINE_MAX) {
-        t->line[t->llen] = ch;
+        i = t->llen;
+        while (i > t->lpos) { t->line[i] = t->line[i - 1]; --i; }
+        t->line[t->lpos] = ch;
         ++t->llen;
-        echo(t, ch);
+        ++t->lpos;
+        ed_tail(t, t->lpos - 1, 0);
     }
 }
 
-// The mouse, for a program that made this window its canvas.
 void term_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     struct term *t;
+    int r, bx, bh;
     t = T(w);
-    if (t->ended || !t->gfx) return;
+    if (t->ended) return;
+    if (!t->gfx) {
+        // the scrollbar beside the grid: its top is the oldest row kept
+        bx = COLS * CW + 4; bh = ROWS * CH + 4;
+        if (ev == E_WHEEL) { sb_scroll(t, 0 - 3 * y); return; }
+        if (ev == E_MOVE) {
+            r = ui_scroll_drag(bx, 0, y);
+            if (r >= 0) { t->view = t->sbn - r; mark_dirty(); }
+            return;
+        }
+        if (ev == E_DOWN) {
+            r = ui_scroll_click(x, y, bx, 0, bh, t->sbn + ROWS, ROWS, t->sbn - t->view);
+            if (r >= 0) { t->view = t->sbn - r; if (t->view < 0) t->view = 0; if (t->view > t->sbn) t->view = t->sbn; mark_dirty(); }
+        }
+        return;
+    }
     x = x - 2; y = y - 2;                          // inside the sunken edge
     if (x < 0) x = 0; if (y < 0) y = 0;
     if (x >= GW) x = GW - 1; if (y >= GH) y = GH - 1;
@@ -531,11 +716,11 @@ static void row_text(struct term *t, int r, int c, int n) {
     tmp[n] = 0;
 }
 
-// A row from its cells, as term_draw always used to do it.
-static void row_scan(struct term *t, int r, int ox, int oy) {
-    int c, k, a, f, b, start, *row;
+// A row from its cells, as term_draw always used to do it, at screen
+// row r: the grid's own, or one from the scrollback.
+static void row_scan(int *row, int r, int ox, int oy) {
+    int c, k, a, f, b, start;
     char *s;
-    row = t->cell + r * COLS;
     c = 0;
     while (c < COLS) {
         b = (row[c] >> 16) & 255;
@@ -561,22 +746,31 @@ static void row_scan(struct term *t, int r, int ox, int oy) {
 // that had not changed since the last one.
 void term_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     struct term *t;
-    int r, k, n, *run;
+    int r, k, n, g, v, *run;
     t = T(w);
     d_rect(ox, oy, cw, ch, C_DARK);
     d_bevel(ox, oy, COLS * CW + 4, ROWS * CH + 4, B_SUNKEN);
     ox = ox + 2; oy = oy + 2;
     if (t->gfx) { gfx_draw(t, ox, oy); return; }
+    // Looking back, the top `view` rows come from the scrollback, the
+    // newest of them last; the grid's rows follow, lower by as many.
+    ui_scrollbar(ox - 2 + COLS * CW + 4, oy - 2, ROWS * CH + 4, t->sbn + ROWS, ROWS, t->sbn - t->view);
+    v = t->view;
     r = 0;
+    while (r < v && r < ROWS) {
+        row_scan(t->sb + ((t->sbhead - v + r + 2 * SB_ROWS) % SB_ROWS) * COLS, r, ox, oy);
+        ++r;
+    }
     while (r < ROWS) {
-        if (!t->rowok[r]) row_build(t, r);
-        n = t->rowk[r];
-        if (n < 0) row_scan(t, r, ox, oy);
-        run = t->runs + r * RUNMAX * 3;
+        g = r - v;
+        if (!t->rowok[g]) row_build(t, g);
+        n = t->rowk[g];
+        if (n < 0) row_scan(t->cell + g * COLS, r, ox, oy);
+        run = t->runs + g * RUNMAX * 3;
         k = 0;
         while (k < n) {
             if (run[2] >> 8) {
-                row_text(t, r, run[0], run[1]);
+                row_text(t, g, run[0], run[1]);
                 d_textn(ox + run[0] * CW, oy + r * CH + 1, pal[run[2] & 255], FONT_PX, F_MONO, CW, tmp, run[1]);
             } else d_rect(ox + run[0] * CW, oy + r * CH, run[1] * CW, CH, pal[run[2]]);
             run = run + 3;
@@ -584,6 +778,6 @@ void term_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
         }
         ++r;
     }
-    if (focused && t->cursor && !t->ended)
+    if (focused && t->cursor && !t->ended && !t->view)
         d_rect(ox + t->cx * CW, oy + t->cy * CH + CH - 3, CW, 2, pal[7]);
 }

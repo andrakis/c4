@@ -179,6 +179,43 @@ type('ps\n');
 // the shell finds the desktop as /bin/desktop now (it tries /bin first)
 check(until(() => has(/ (c4ix-)?desktop/) && has(/tasks,/)), 'ps typed in the Command Prompt runs in its shell', screen());
 
+// ---- the Command Prompt's line editing, history and scrollback --------------------------
+// What is typed after the last prompt (the Command Prompt runs c4ix-sh -p: the prompt is on the input line).
+const inputLine = () => {
+  const ps = frame.filter(t => /^c4ix:\S*\$/.test(t.s));
+  if (!ps.length) return null;
+  const y = Math.max(...ps.map(t => t.y)), x = ps[0].x;
+  const row = frame.filter(t => t.y === y && t.x >= x && t.x < x + 640).sort((a, b) => a.x - b.x).map(t => t.s).join('');
+  return row.replace(/^c4ix:\S*\$ ?/, '').trimEnd();
+};
+check(until(() => inputLine() === ''), 'the prompt sits on the input line', screen());
+type('echo one\n');
+until(() => has('one'));
+type('echo two\n');
+until(() => has('two') && inputLine() === '');
+key('', 0, 38); key('', 0, 38);                                // Up, Up
+check(until(() => inputLine() === 'echo one'), 'Up brings back the line before last', inputLine());
+key('', 0, 40);                                                // Down
+check(until(() => inputLine() === 'echo two'), 'and Down the last', inputLine());
+key('', 0, 40);                                                // Down: the empty line again
+check(until(() => inputLine() === ''), 'and Down past the newest gives an empty line', inputLine());
+type('echo xz');
+key('', 0, 37);                                                // Left
+type('y');
+check(until(() => inputLine() === 'echo xyz'), 'Left moves into the line, and a key goes in there', inputLine());
+key('', 0, 36); key('', 0, 46);                                // Home, Delete: the "e"
+check(until(() => inputLine() === 'cho xyz'), 'Home and Delete edit at the start of the line', inputLine());
+type('e'); key('', 0, 35); type('!\n');                        // "e", End, "!", Enter
+check(until(() => has('xyz!')), 'End goes back to the end, and Enter sends the whole line', screen());
+type('cat /usr/src/c4/src/c4ix/user/top.c\n');
+until(() => has(/^\s*return 0;/) && inputLine() === '', 600);
+check(!has(/^\/\/ C4IX userland: top\./), 'a long file scrolls its first line off the Command Prompt', screen());
+for (let i = 0; i < 8; i++) key('', 0, 33);                    // PgUp, to the start
+check(until(() => has(/^\/\/ C4IX userland: top\./)), 'and PgUp scrolls back to it', screen());
+key('', 0, 34);                                                // PgDn
+type('echo back\n');
+check(until(() => has('back') && !has(/^\/\/ C4IX userland: top\./)), 'typing comes back to the bottom', screen());
+
 // ---- top runs until Ctrl-C ----------------------------------------------------------------
 type('top\n');
 check(until(() => has(/Ctrl-C to stop/), 800), 'top starts in the Command Prompt', screen());
@@ -441,6 +478,7 @@ key('ESC', 3, 27);                                             // Ctrl+Shift+Esc
 check(until(() => has('Task Manager') && has('Image Name')), 'Ctrl+Shift+Esc opens Task Manager on Processes', screen());
 check(until(() => has(/^(c4ix-)?desktop/) && has(/^(c4ix-spin\.c4r|spin) *$/) && has(/^CPU Usage: \d+%$/), 600), 'it lists the tasks, spin among them, with CPU usage', frame.filter(t => /c4ix|CPU|Image|boot|init|spin/.test(t.s)).map(t => t.s.trim()).join(' | '));
 check(has('System Idle Process') && has(/^System *$/), 'and, as NT does, System Idle Process and System', frame.filter(t => /System/.test(t.s)).map(t => t.s.trim()).join(' | '));
+check(until(() => has('Interval') && frame.some(t => /^[0-9,]+\.[0-9]M$/.test(t.s.trim())), 600), 'its Interval column shows what a task ran in the last second, spin in millions', frame.filter(t => /[0-9]M$|[0-9]k$|Interval/.test(t.s)).map(t => t.s.trim()).join(' | '));
 check(!has(/^(c4sc|b4ke)(\.c4r)? *$/), 'the cancelled build left nothing behind', frame.filter(t => /c4sc|b4ke/.test(t.s)).map(t => t.s).join(' | '));
 clickText(/^(c4ix-spin\.c4r|spin) *$/);
 clickText('End Process');

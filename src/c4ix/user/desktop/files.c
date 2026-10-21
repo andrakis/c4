@@ -4,6 +4,8 @@
 // a folder shows its contents, a program (a .c4r, or anything C4R
 // inside, which is how /bin's are named) runs in a new Command
 // Prompt, a source file opens in the Editor, anything else in Notepad.
+// Object files and libraries (.c4o, .c4l, .c4s) are C4R inside too, but
+// only c4rlink and the loader use them: they say so rather than run.
 // New Folder, Delete (confirmed)
 // and Rename go through the kernel's mkdir, unlink and rename.
 //
@@ -60,6 +62,11 @@ static int before(char *a, char *b) {
     return (*a & 255) < (*b & 255);
 }
 
+// an object file or a library: linked into programs, never run itself
+static int is_linkable(char *p) {
+    return ui_ends(p, ".c4o") || ui_ends(p, ".c4l") || ui_ends(p, ".c4s");
+}
+
 // Read a directory: folders first, then files, each alphabetical.
 static void load(struct files *f) {
     int i, j, r, s, d, st[4];
@@ -74,7 +81,7 @@ static void load(struct files *f) {
         join(tbuf, f->path, nm);
         st[2] = 0;
         f->size[f->n] = (!r && ustat(tbuf, st) == 0) ? st[1] : 0;
-        f->prog[f->n] = !r && (st[2] || ui_ends(nm, ".c4r"));
+        f->prog[f->n] = !r && !is_linkable(nm) && (st[2] || ui_ends(nm, ".c4r"));
         ++f->n;
         ++i;
     }
@@ -286,6 +293,9 @@ static void t_toggle(struct win *w, int i) {
 static char *type_of(char *name, int dir, int prog) {
     if (dir) return "File Folder";
     if (prog) return "C4IX Program";
+    if (ui_ends(name, ".c4o")) return "C4R Object";
+    if (ui_ends(name, ".c4l")) return "C4R Library";
+    if (ui_ends(name, ".c4s")) return "Shared Library";
     if (ui_ends(name, ".c")) return "C Source";
     if (ui_ends(name, ".h")) return "C Header";
     if (ui_ends(name, ".txt")) return "Text Document";
@@ -313,6 +323,7 @@ static void open_sel(struct win *w) {
     join(tbuf, f->path, ename(f, f->sel));
     if (f->isdir[f->sel]) go(w, tbuf);
     else if (f->prog[f->sel]) run_command(tbuf);
+    else if (is_linkable(tbuf)) msgbox(w, "Cannot Run", "Object files and libraries are linked into programs, not run.", 0, A_NONE);
     else if (is_source(tbuf)) edit_open(tbuf);
     else note_open(tbuf);
 }

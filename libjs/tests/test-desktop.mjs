@@ -303,6 +303,17 @@ dbl('b4ke', inList);
 check(until(() => has(/b4ke: cannot read BUILD\.B4K/), 800), 'double-clicking one runs it in a Command Prompt', screen());
 clickText(/^Exploring/); key('\b');
 check(until(() => has('Exploring - /')), 'and back up to the root');
+// a library is C4R inside, but not a program: it says so rather than run
+dbl('lib', inList);
+check(until(() => has('Exploring - /lib') && !!inList(find('libc.c4s')) && has('Shared Library')),
+  '/lib lists its libraries as Shared Libraries', screen());
+dbl('libc.c4s', inList);
+check(until(() => has('Object files and libraries are linked into programs, not run.')),
+  'double-clicking one says it does not run, rather than running it', screen());
+key('\n');
+check(until(() => noDialog()) && !has(/missing|unresolved|cannot resolve/i), 'OK dismisses that, and nothing ran', screen());
+key('\b');
+check(until(() => has('Exploring - /')), 'and up to the root again');
 dbl('tmp', inList);
 check(until(() => has('Exploring - /tmp')), 'into /tmp');
 clickText('File'); settle(); clickText('New Folder');

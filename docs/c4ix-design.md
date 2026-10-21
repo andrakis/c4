@@ -540,6 +540,17 @@ loading or assigning a whole struct is an error.
   later spawns get -- b4ke's `$(STACK)`, 1 MB for c4sc. The shell tries
   `/bin/NAME` before `c4ix-NAME.c4r`, so `INSTALL.B4K`'s copies win.
 
+- **Already built** (2026-10-21): the root archive ends with `/ram/build`
+  as `b4ke -C /usr/src/c4` leaves it -- the host's own objects and images
+  from build-images.sh, the same bytes -- so b4ke (and the IDE, which runs
+  it) starts with all 86 steps up to date and an edit remakes only what it
+  feeds. It works because mtime is the RAM filesystem's write clock: the
+  archive puts those files after every source, objects before the
+  libraries made from them and libraries before what links them. They go
+  in the same archive because vfsload starts one task per archive, and
+  two would unpack at once. The archive grows from 1.9 MB to 2.6 MB and
+  its unpack from 5.3 to 8.2 machine-seconds (`wait 4`).
+
 - **Shared libraries and a libc** (branch c4ix-userland, 2026-10-19).
   - *Linking:* `c4rlink -l LIB` links against a library without copying
     it in. The output keeps those symbol references and records

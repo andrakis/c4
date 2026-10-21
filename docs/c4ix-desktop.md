@@ -459,6 +459,45 @@ it lacked was somewhere to edit and build in one place.
       `/etc/desktop.cfg`, and Defaults restores it; the pointer over the
       text and the taskbar.
 
+## Part seven: the Command Prompt edits and scrolls, windows without a limit, builds that start built (asked for 2026-10-20)
+
+- [x] **Line editing** (`term.c`). The line being typed is edited where
+      it stands: Left/Right, Home/End (Ctrl-A/Ctrl-E), Backspace and
+      Delete anywhere in it, Ctrl-U to clear it, Ctrl-L to draw it again.
+      Up/Down walk the last 16 lines sent; Down past the newest gives back
+      what was being typed. The terminal still sends the shell whole
+      lines, so every program sees what it saw before.
+- [x] **The prompt is on the input line**: `c4ix-sh -p`, which the
+      Command Prompt passes. The console shell keeps its newline -- on the
+      console, output is buffered until one -- but a pipe delivers every
+      write at once, so the window does not need it.
+- [x] **Scrollback**: 300 rows in a ring beside the 80x25 screen, with a
+      scroll bar, PgUp/PgDn and the wheel. Typing comes back to the
+      bottom.
+- [x] **Task Manager's Interval column**, as top has: what each task ran
+      in the last sample, in kilocycles (850k, 12.3M); the window is 490
+      wide for it.
+- [x] **Windows are a linked list** (`desktop.h`, `wm.c`): MAXW's eight
+      slots are gone, and there are as many windows as memory allows.
+      Each is its own allocation, on two lists through the same nodes:
+      the order they opened in (the taskbar's, `win_first()`/`next` for
+      the tools) and the z-order. Window numbers are never reused, so a
+      number kept for a closed window finds nothing; a closed window is
+      freed at the top of the next pass of the main loop, since whoever
+      closed it may still hold it.
+- [x] **`cc`** (`user/cc.c`): c4sc with c4lc's preprocessor, `/usr/include`
+      and a 1 MB stack, linking with c4rlink when given `-l` or several
+      sources. src/c4tui/demo.c takes 18 machine-seconds this way and 344
+      with `c4sp c4lc.lisp`, for the same image.
+- [x] **Builds start built**: the root archive carries `/ram/build`
+      (docs/c4ix-design.md, "Already built"), so the IDE's `:make` on a
+      file under `/usr/src/c4` compiles that file and links its program,
+      not the libraries first.
+- [x] Pinned by `test-desktop.mjs` (history, in-line edits, scrollback,
+      ten more windows than before) and `test-libjs.sh` (cc builds echo
+      the disk's, byte for byte; a fresh boot's b4ke has nothing to do; an
+      edited source remakes two steps).
+
 ### Found on the way, not fixed
 - `make test-c4th-os`: the C4DOS leg prints an empty prompt line ahead of
   c4th's output, so it differs from the reference at byte 1. Nothing it

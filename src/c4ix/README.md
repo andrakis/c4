@@ -73,6 +73,13 @@ and
     b4ke -C /usr/src/c4/src/c4ix/user     or any one directory
     b4ke -C /usr/src/c4 -f INSTALL.B4K    then /bin and /usr/lib get the results
 
+The archive carries `/ram/build` already built, as these files would
+build it, so the first run has nothing to do and an edit remakes only
+what it feeds (`-B` rebuilds everything regardless). For one program of
+your own, `cc` runs c4sc with c4lc's preprocessor and the stack it
+needs -- `cc -O -l c4ix -o /ram/prog.c4r prog.c` -- about twenty times
+faster than `c4sp c4lc.lisp` (src/c4ix/examples/README.txt).
+
 What c4lc builds comes out byte for byte the disk's; c4cc's images carry
 its own heap addresses in their symbol records, so they differ there and
 nowhere that runs. The whole tree is about 29G instructions (nine minutes

@@ -30,6 +30,7 @@ C4IX shell finds a bare command name as `c4ix-NAME.c4r` or `NAME.c4r`.
 | `vfsload.c` | `c4ix-vfsload`: fills the hierarchical VFS from `c4ix.vfs.txt` at boot (same manifest format as `src/c4ke/bin/vfsload.c`), then starts `c4ix-tar` in the background on each archive the manifest's `ARCHIVES` names and prints its task id |
 | `tar.c` | `tar t[v] FILE`, `tar x[v] [-C DIR] FILE`: ustar or C4TAR1, gzipped or not (recognised by its magic). Links `libarc.c4l` too |
 | `b4ke.c` | the build tool, native to C4IX: C4KE's B4KE1 files, plus B4KE2's `SET`/`$(NAME)`, `CD`, `MKDIR`, `DEPS` (rebuild only what is older than its sources), `COPY`, `RUN ... > FILE` and sub-builds (`B4KE DIR`). `b4ke -C /usr/src/c4` rebuilds everything C4IX ships |
+| `cc.c` | `cc [-O] [-c] [-l LIB] [-o OUT] [-I DIR] [-D NAME] FILE.c ...`: compiles with c4sc (c4lc, compiled) and c4lc's preprocessor, on the 1 MB stack c4sc needs; with more than one source or a `-l` (`c4ix`, `arc`, or a shared `/lib/NAME.c4s`) it links with c4rlink |
 | `crc32.c` | `crc32 FILE ...`: gzip's CRC-32 and the size, to check a build made inside the machine against the host's. Links `libarc.c4l` too |
 | `gunzip.c` | `gunzip FILE.gz` writes `FILE`; `-c` writes to fd 1. The gzip CRC is checked before anything is written. Links `libarc.c4l` too |
 

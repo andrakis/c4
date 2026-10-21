@@ -55,21 +55,41 @@ int sys_read(int fd, char *buf, int len) {
     t = sched_current();
     if (!(f = fd_get(t, fd))) return -1;
     while (!vfs_readable(f->vn, f->pos)) {
+        // non-blocking: nothing yet is -1 (EAGAIN), and the caller polls
+        if (f->flags & C4IX_O_NONBLOCK) return -1;
         if (sys_block(f->vn, f->pos)) return 0;   // trap path: restarting
         if (!(f = fd_get(t, fd))) return -1;      // table may have moved on
     }
     return vfs_read(f, buf, len);
 }
 
+static int sys_same(char *a, char *b) {
+    while (*a && *a == *b) { ++a; ++b; }
+    return *a == *b;
+}
+
 // RAM files first, host files second -- the same precedence C4KE's
 // loader uses, and the reason a program can be handed a "file" that
 // only ever existed in memory.
+//
+// /dev/stdin and /dev/tty are how a C4KE program reads its keyboard
+// without stopping the machine: c4sh, raycast and type open one
+// non-blocking and poll it. The host's answer is the machine's console,
+// which is right for a task whose stdin is the console. A task whose
+// stdin is a pipe -- anything run in a Command Prompt, c4m booting C4KE
+// there among them -- means that pipe: nobody types at the console for
+// it, and C4KE's shell would wait for ever. So for such a task they name
+// its own stdin, opened again read-only with the caller's O_NONBLOCK.
 int sys_open(char *path, int flags) {
     struct vnode *vn;
     struct task *t;
+    struct file *in;
     int h, fd;
 
     t = sched_current();
+    if ((sys_same(path, "/dev/stdin") || sys_same(path, "/dev/tty"))
+        && (in = fd_get(t, FD_STDIN)) && in->vn->type != VN_CONSOLE)
+        return fd_open_vnode(t, in->vn, C4IX_O_RDONLY | (flags & C4IX_O_NONBLOCK));
     if ((vn = vfs_lookup(path))) {
         if (flags & C4IX_O_TRUNC) { vn->size = 0; vn->lazy = 0; vfs_touch(vn); }   // the host bytes are not wanted
         return fd_open_vnode(t, vn, flags);
@@ -254,6 +274,17 @@ int sys_dispatch(int num, int *args) {
         if (f->vn->type == VN_RAMFILE) return f->vn->size > f->pos ? f->vn->size - f->pos : -1;
         return 1;
     case SYS_INTR:     return sched_intr_below(task_get(args[0]));
+    // Drop what a pipe holds unread, from either end: what a tty does with
+    // its input queue on Ctrl-C. The desktop's terminals do it, so lines
+    // typed at a program that never read them are not run by the shell
+    // once it is interrupted. The bytes dropped, or -1 for no pipe.
+    case SYS_DISCARD:
+        if (!t || !(f = fd_get(t, args[0])) || f->vn->type != VN_PIPE) return -1;
+        sched_lock();
+        num = f->vn->size - f->vn->rpos;
+        f->vn->size = 0; f->vn->rpos = 0;
+        sched_unlock();
+        return num;
     case SYS_STAT:     return vfs_stat((char *)args[0], (int *)args[1]);
     case SYS_UNLINK:   return vfs_unlink((char *)args[0]);
     case SYS_RENAME:   return vfs_rename((char *)args[0], (char *)args[1]);

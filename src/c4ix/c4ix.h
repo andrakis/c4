@@ -72,8 +72,8 @@ enum {
     SYS_SLEEP = 220, SYS_AVAIL = 221, SYS_INTR = 222, SYS_CLOEXEC = 223,
     SYS_STAT = 224, SYS_UNLINK = 225, SYS_RENAME = 226, SYS_LAZYFILE = 227,
     SYS_STACK = 228, SYS_CPUSTAT = 229,
-    SYS_EVWAIT = 230,
-    SYS_TOP = 231          // one past the last: sched_trap's range check
+    SYS_EVWAIT = 230, SYS_DISCARD = 231,
+    SYS_TOP = 232          // one past the last: sched_trap's range check
 };
 // taskinfo fills, in order: id, parent, state, privs, nsyscalls,
 // ntraps, cycles, then the name packed into the remaining words.

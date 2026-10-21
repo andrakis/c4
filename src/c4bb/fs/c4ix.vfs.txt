@@ -52,6 +52,10 @@ ARCHIVES = c4ix-root.tgz
 		# C4KE's kernel, for c4m to boot: c4m load-c4r.c -- /usr/lib/c4ke.c4r
 		lib/:
 			c4ke.c4r
+		# ... and at the top of the repo too, where `make` leaves it beside
+		# c4m.c and load-c4r.c, so cd /usr; c4m load-c4r.c -- c4ke.c4r
+		# works here as it does on the host
+		c4ke.c4r: ilink(/usr/lib/c4ke.c4r)
 		# headers a program compiled here is built against
 		include/:
 			window.h: c4ix-window.h

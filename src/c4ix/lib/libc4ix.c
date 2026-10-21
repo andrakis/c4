@@ -76,6 +76,7 @@ int ukill(int pid, int sig)           { return __c4ix_syscall(SYS_KILL, pid, sig
 int umsleep(int ms)                   { return __c4ix_syscall(SYS_SLEEP, ms, 0, 0); }
 int uavail(int fd)                    { return __c4ix_syscall(SYS_AVAIL, fd, 0, 0); }
 int uintr(int pid)                    { return __c4ix_syscall(SYS_INTR, pid, 0, 0); }
+int udiscard(int fd)                  { return __c4ix_syscall(SYS_DISCARD, fd, 0, 0); }
 int ucloexec(int fd, int on)          { return __c4ix_syscall(SYS_CLOEXEC, fd, on, 0); }
 int ustat(char *path, int *out)       { return __c4ix_syscall(SYS_STAT, (int)path, (int)out, 0); }
 int uunlink(char *path)               { return __c4ix_syscall(SYS_UNLINK, (int)path, 0, 0); }

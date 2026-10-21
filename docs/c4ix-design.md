@@ -635,6 +635,14 @@ loading or assigning a whole struct is an error.
   reads. The desktop's loop waits on it, and redraws only damaged
   regions.
 
+- **`SYS_DISCARD`** (231, 2026-10-21): drop what a pipe holds unread,
+  from either end, as a tty drops its input on Ctrl-C. A Command
+  Prompt does it on Ctrl-C, so lines typed at a job that never read
+  them are not run by the shell afterwards. In the same change,
+  `/dev/stdin` and `/dev/tty` name a task's own stdin when that is a
+  pipe (C4KE's shell under c4m in a Command Prompt polls them), and a
+  read on a non-blocking descriptor with nothing yet returns -1.
+
 ## 6.1 Running it
 
     make run-c4ix        an interactive shell on c4m

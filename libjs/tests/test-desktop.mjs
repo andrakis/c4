@@ -225,6 +225,42 @@ check(has(/Ctrl-C to stop/) && !frame.some(t => /^c4ix:\/\$/.test(t.s) && t.y > 
 key('c', 2, 67);
 check(until(() => has(/\^C/) && frame.filter(t => /^c4ix:\/\$/.test(t.s)).length >= 1), 'Ctrl-C stops it and the prompt comes back', screen());
 
+// ---- Ctrl-C drops what was typed at the job and not read --------------------------------------
+// as a tty flushes its input: before, the shell read the line next and ran it
+key('l', 2, 76);
+type('spin 1000\n');
+settle();
+type('ls /usr/lib\n');
+settle();
+key('c', 2, 67);
+until(() => has(/\^C/) && inputLine() === '', 800);
+const tc = vm.dev.simMs();
+until(() => vm.dev.simMs() - tc > 1000, 2000);                // time enough for the shell to have run it
+check(has(/\^C/) && inputLine() === '' && !has(/libarc\.c4l/), 'Ctrl-C drops a line typed at the job, and the shell does not run it', screen());
+
+// ---- c4m boots C4KE in the Command Prompt, and C4KE reads what is typed there ------------------
+// C4KE's shell polls /dev/stdin, which C4IX gave it as the machine's console;
+// in a Command Prompt that is nobody's keyboard, and every command waited for ever
+key('l', 2, 76);
+type('cd /usr\n');
+until(() => has(/^c4ix:\/usr\$/));
+type('c4m load-c4r.c -- c4ke.c4r\n');
+check(until(() => has(/^c4sh>/), 20000), 'c4m boots C4KE to its shell in the Command Prompt, from /usr/c4ke.c4r', screen());
+type('echo from-c4ke\n');
+check(until(() => has('from-c4ke') && find(/^c4sh>/).length >= 2, 4000), 'a command typed there runs in C4KE and its prompt comes back', screen());
+// Ctrl-C goes to the job C4KE is running, through c4m, as on a host
+// terminal; it used to end c4m itself
+key('l', 2, 76);
+type('spin\n');
+check(until(() => has(/^spin: running forever/), 4000), 'C4KE runs spin there', screen());
+key('c', 2, 67);
+check(until(() => has(/^spin: SIGINT/) && has(/^c4sh>/), 4000) && !has(/^c4ix:\/usr\$/),
+  'Ctrl-C reaches spin inside C4KE, and C4KE\'s shell carries on', screen());
+type('\\q\n');
+check(until(() => has(/^c4ix:\/usr\$/) && inputLine() === '', 4000), '\\q leaves C4KE for C4IX\'s shell', screen());
+type('cd /\n');
+until(() => has(/^c4ix:\/\$/));
+
 // ---- raycast in the Command Prompt: 256 colours ---------------------------------------------
 type('raycast.c4r 15x15 -s 3 -d -n 30 -g 80x25\n');
 check(until(() => new Set(rects.map(r => r.rgb)).size > 8, 1500), `raycast draws in colour in the Command Prompt (${new Set(rects.map(r => r.rgb)).size} colours)`);

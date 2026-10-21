@@ -45,7 +45,34 @@ const up = until(() => text(n0).includes('c4sh>'), 60000);
 check(up && text(n0).includes('Kernel ready') && /vfsload: (\d+)\/\1 entries loaded/.test(text(n0)),
   'c4m boots C4KE to its shell, its VFS loaded', text(n0));
 console.log(`  (C4KE up in ${((vm.dev.simMs() - t0) / 1000).toFixed(1)} machine-seconds)`);
+// C4KE's shell polls /dev/stdin: a command typed at it runs and comes back
+const inC4ke = (cmd, what) => {
+  const n = out.length;
+  type(cmd);
+  check(until(() => /from-c4ke/.test(text(n)) && /c4sh>/.test(text(n)), 20000), what, text(n));
+};
+inC4ke('echo from-c4ke', 'a command typed at C4KE\'s shell runs, and its prompt comes back');
 n0 = out.length;
 type('\\q');
 check(until(() => prompt(n0), 20000), '\\q leaves C4KE, and C4IX\'s prompt comes back', text(n0));
+
+// C4KE's kernel compiled inside C4IX: from /usr, as the repo builds it. c4sc
+// needs more than the 1 MB of stack cc used to give it (the kernel stopped
+// it, and cc said only that the source did not compile).
+n0 = out.length;
+type('cc -o /tmp/c4ke.c4r src/c4ke/c4ke.c');
+check(until(() => prompt(n0), 60000) && !/did not compile|overran/.test(text(n0)),
+  'cc compiles src/c4ke/c4ke.c inside C4IX', text(n0));
+n0 = out.length;
+type('c4m load-c4r.c -- /tmp/c4ke.c4r');
+check(until(() => text(n0).includes('c4sh>'), 60000) && text(n0).includes('Kernel ready'),
+  'c4m boots the C4KE compiled there to its shell', text(n0));
+inC4ke('echo from-c4ke', 'and runs a command there');
+n0 = out.length;
+type('\\q');
+check(until(() => prompt(n0), 20000), 'and \\q comes back again', text(n0));
+// the kernel at the top of the repo too, where the host's make leaves it
+n0 = out.length;
+type('ls /usr');
+check(until(() => prompt(n0), 2000) && /(^|\n)c4ke\.c4r\n/.test(text(n0)), '/usr/c4ke.c4r is there, beside c4m.c and load-c4r.c', text(n0));
 process.exit(fail);

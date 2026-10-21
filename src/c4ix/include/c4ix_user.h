@@ -21,7 +21,7 @@ enum {
     SYS_KILL = 219, SYS_SLEEP = 220,
     SYS_AVAIL = 221, SYS_INTR = 222, SYS_CLOEXEC = 223,
     SYS_STAT = 224, SYS_UNLINK = 225, SYS_RENAME = 226, SYS_LAZYFILE = 227,
-    SYS_STACK = 228, SYS_CPUSTAT = 229, SYS_EVWAIT = 230
+    SYS_STACK = 228, SYS_CPUSTAT = 229, SYS_EVWAIT = 230, SYS_DISCARD = 231
 };
 // taskinfo record, in order: id, parent, state, privs, nsyscalls,
 // ntraps, cycles, then a 16-byte name
@@ -79,6 +79,7 @@ int  ukill(int pid, int sig);   // SIGTERM/SIGINT/SIGKILL end a task
 int  umsleep(int ms);            // sleep; other tasks run meanwhile
 int  uavail(int fd);             // bytes waiting; 0 empty (never blocks), -1 end of file
 int  uintr(int pid);             // Ctrl-C for the job running under task pid
+int  udiscard(int fd);           // drop what a pipe holds unread, as a tty's input on Ctrl-C
 int  ucloexec(int fd, int on);   // 1: spawned children do not inherit fd
 int  ustat(char *path, int *out); // out[0] 1 dir, 2 file, 3 other; out[1] bytes; out[2] 1 program;
                                   // out[3] mtime, an order of changes (0 = still on the host); -1 none

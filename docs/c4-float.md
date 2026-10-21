@@ -116,3 +116,7 @@ Now such a build lends its guest the FLT of the machine under it: the same opcod
     c4m load-c4r.c -- /usr/lib/c4ke.c4r
 
 boots C4KE to its shell in about 8 machine-seconds; `\q` comes back. `libjs/tests/test-c4ix-c4m.mjs` (in test-libjs) pins it.
+
+The kernel is at `/usr/c4ke.c4r` too, where the host's `make` leaves it beside `c4m.c` and `load-c4r.c`, so `c4m load-c4r.c -- c4ke.c4r` from `/usr` works as it does on the host. `cc src/c4ke/c4ke.c` builds it inside C4IX (about 40 machine-seconds); c4sc needs more than the 1 MB of stack cc used to give it, so cc now gives 4 MB (`-stack` for more), and says what the kernel said when it stops a tool.
+
+In a Command Prompt, C4KE's shell used to wait for ever: it polls `/dev/stdin`, and C4IX opened the host's, the machine's console, which nobody in that window types at. A task whose stdin is a pipe now gets that pipe for `/dev/stdin` and `/dev/tty`, with `O_NONBLOCK` honoured (a read with nothing yet is -1). The lines that had waited in the pipe were what C4IX's shell ran after Ctrl-C (`top`, `raycast -f 50`); Ctrl-C now drops what the job had not read (`SYS_DISCARD`, 231), as a tty does. Ctrl-C there reaches C4KE's job, as on a host terminal: c4m used to hand its guest's `SIGH` to the machine under it, replacing C4IX's own handler, and had none itself, so C4IX cancelled c4m. Now `include/c4m_signal.h` keeps the guest's handler and asks the kernel underneath, through u0's `signal()`, for one of c4m's own that marks the signal pending. `libjs/tests/test-desktop.mjs` pins all three.

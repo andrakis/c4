@@ -5,7 +5,8 @@
 // holds. Its output is drawn through a VT100 subset; typing is edited
 // here a line at a time, as a tty in cooked mode does, and sent down the
 // pipe on Enter. Ctrl-C interrupts the job running under this window's
-// shell and nothing else.
+// shell and nothing else, and drops whatever was typed that it had not
+// read.
 //
 // A program may also make the window its canvas (include/window.h): it
 // writes drawing commands as escape sequences, ESC _ G ... ESC \, and
@@ -569,6 +570,10 @@ void term_key(struct win *w, int code, int ch, int mods) {
         if (t->llen) ed_goto(t, t->llen);
         say(t, "^C\n");
         t->llen = 0; t->lpos = 0; t->hpos = t->hn;
+        // Lines typed at the job and not read by it go with it, as a tty
+        // flushes its input on an interrupt: left in the pipe, the shell
+        // would read them next and run them as commands of its own.
+        udiscard(t->in_w);
         // nothing running under the shell: an empty line brings a fresh prompt
         if (uintr(t->pid) <= 0) write(t->in_w, "\n", 1);
         return;

@@ -170,6 +170,8 @@
 // preprocessor and skipped this line.
 #ifndef C4M_NO_U0
 #include <u0.h>
+// a guest's signals, through the kernel this c4m runs on (c4m_signal.h)
+#include <c4m_signal.h>
 #endif
 #endif
 
@@ -1163,6 +1165,7 @@ int has_float () { return 0; }
 int do_float  (int *sp) { return 0; }
 int do_putchar(char *c) { return printf("%c", c); }
 int do_puts   (char *str) { return printf("%s", str); }
+int *do_sigh  (int sig, int *handler) { return __c4_signal(sig, handler); }
 #else
 // When compiled natively, use whatever native functions we can.
 // TODO: native c4_malloc, etc disabled due to bad implementation.
@@ -1186,6 +1189,11 @@ int do_puts   (char *str) { return printf("%s", str); }
 #define do_float(sp)       c4_float_instruction(sp)
 #define do_putchar(c)      putchar(c)
 #define do_puts(s)         puts(s)
+#if !NATIVE && defined(__c4cc__) && !defined(C4M_NO_U0)
+#define do_sigh(sig, h)    c4m_guest_signal(sig, h)
+#else
+#define do_sigh(sig, h)    __c4_signal(sig, h)
+#endif
 #endif
 
 // c4m_float.c is the HOST's float, compiled beside a native c4m. A c4m
@@ -2319,7 +2327,7 @@ int c4m_main(int argc, char **argv)
 		//	mode = MODE_UNPROTECTED;
 		//}
 	}
-	else if (i == SIGH) a = (int)__c4_signal(sp[1], (int *)sp[0]);
+	else if (i == SIGH) a = (int)do_sigh(sp[1], (int *)sp[0]);
 	else if (i == INFO) {
 		// Trap this under protected mode
 		if (mode == MODE_UNPROTECTED)

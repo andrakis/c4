@@ -3,7 +3,7 @@
 // compiler interpreted, many times slower (docs/c4sc-design.md).
 //
 //   cc [-O] [-c] [-conforming] [-fno-builtin] [-fpic] [-mfuse] [-v]
-//      [-I dir] [-D name] [-l lib] [-o out] file.c...
+//      [-stack bytes] [-I dir] [-D name] [-l lib] [-o out] file.c...
 //
 // c4lc's own preprocessor is always on (-P). After any -I given it
 // searches /usr/include: C4IX's headers, and the repo's own beside them
@@ -25,11 +25,19 @@
 //                    (its callers are built -fno-builtin)
 //
 // -v prints each command before running it. c4sc recurses deeply on a
-// long function, so it runs on 1 MB of stack, as the BUILD.B4K files run
-// it.
+// long source, so it runs on 4 MB of stack, as the desktop's BUILD.B4K
+// runs it: 1 MB was enough for c4m.c but not for C4KE's kernel,
+// src/c4ke/c4ke.c. -stack gives more.
+//
+// When the kernel stops a tool -- a stack overrun, a bad opcode -- it
+// says why on the console, and a Command Prompt is not the console: cc
+// finds that line in /log/kernel and says it too, rather than only that
+// the source did not compile.
 #include "c4ix_user.h"
 
-enum { MAXA = 64, CC_STACK = 1048576 };
+enum { MAXA = 64, CC_STACK = 4194304 };
+
+static char *KLOG = "/log/kernel";
 
 static char *flags[MAXA];        // passed to c4sc as they are
 static int   nflags;
@@ -38,6 +46,7 @@ static int   nsrc;
 static char *libs[MAXA];
 static int   nlib;
 static int   verbose;
+static int   stack;               // bytes, for each tool cc runs
 
 static char *cat3(char *a, char *b, char *c) {
     char *p, *q;
@@ -70,9 +79,52 @@ static char *named(char *src, char *ext) {
     return p;
 }
 
+static int prefix(char *s, char *p) {
+    while (*p && *s == *p) { ++s; ++p; }
+    return !*p;
+}
+
+// What the kernel said about task pid in /log/kernel past its first
+// `from` bytes ("c4ix: task 8 (c4sc) overran its 1048576-byte stack;
+// killing it"), said again here: 0 if it said nothing, 2 if it was a
+// stack overrun, 1 for anything else. Only what was logged after the
+// tool started counts: an older line may be about another task.
+static int why(int pid, int from) {
+    int st[4], fd, n, k, id, said;
+    char *log, *p, *q;
+    if (from < 0 || ustat(KLOG, st) < 0 || st[1] <= from) return 0;
+    if (!(log = (char *)ualloc(st[1] + 1))) return 0;
+    if ((fd = uopen(KLOG, 0)) < 0) return 0;
+    k = 0;
+    while (k < st[1] && (n = uread(fd, log + k, st[1] - k)) > 0) k = k + n;
+    uclose(fd);
+    log[k] = 0;
+    said = 0;
+    p = log + from;
+    while (*p) {
+        q = p;
+        while (*q && *q != 10) ++q;
+        if (prefix(p, "c4ix: task ")) {
+            id = 0; n = 11;
+            while (p[n] >= '0' && p[n] <= '9') { id = id * 10 + p[n] - '0'; ++n; }
+            if (id == pid && p[n] == ' ') {
+                k = *q; *q = 0;
+                ufprintf(STDERR, "cc: the kernel said: %s\n", p + 6);   // less its "c4ix: "
+                *q = k;
+                said = 1;
+                while (p < q && !prefix(p, "overran")) ++p;
+                if (p < q) said = 2;
+            }
+        }
+        p = *q ? q + 1 : q;
+    }
+    return said;
+}
+
 // Runs a tool from /bin, as b4ke finds one, and answers its exit code.
 static int run(char *prog, int argc, char **argv) {
-    int pid, i;
+    int pid, i, code, from, st[4];
+    from = ustat(KLOG, st) < 0 ? -1 : st[1];   // the log so far: not about this run
     if (verbose) {
         i = 0;
         while (i < argc) { uprintf(i ? " %s" : "%s", argv[i]); ++i; }
@@ -82,7 +134,11 @@ static int run(char *prog, int argc, char **argv) {
     if (pid < 0) pid = spawn(cat3(prog, ".c4r", ""), argc, argv);
     if (pid < 0) pid = spawn(cat3("c4ix-", prog, ".c4r"), argc, argv);
     if (pid < 0) { ufprintf(STDERR, "cc: cannot run %s\n", prog); return 1; }
-    return uwait(pid);
+    code = uwait(pid);
+    // a tool the kernel stopped: say what it said
+    if (code < 0 && why(pid, from) == 2)
+        ufprintf(STDERR, "cc: %s ran on %d bytes of stack; -stack gives it more\n", prog, stack);
+    return code;
 }
 
 // c4sc compile ... src out, -c for an object.
@@ -113,7 +169,7 @@ static int compile(char *src, char *out, int obj) {
 
 static int usage() {
     ufprintf(STDERR, "usage: cc [-O] [-c] [-conforming] [-fno-builtin] [-fpic] [-mfuse] [-v]\n");
-    ufprintf(STDERR, "          [-I dir] [-D name] [-l lib] [-o out] file.c...\n");
+    ufprintf(STDERR, "          [-stack bytes] [-I dir] [-D name] [-l lib] [-o out] file.c...\n");
     return 2;
 }
 
@@ -134,6 +190,12 @@ int main(int argc, char **argv) {
         else if (a[0] == '-' && a[1] == 'l' && a[2] && nlib < MAXA) { libs[nlib] = a + 2; ++nlib; ++i; }
         else if (!ustrcmp(a, "-c")) { objonly = 1; ++i; }
         else if (!ustrcmp(a, "-v")) { verbose = 1; ++i; }
+        else if (!ustrcmp(a, "-stack") && i + 1 < argc) {
+            stack = 0; k = 0;
+            while (argv[i + 1][k] >= '0' && argv[i + 1][k] <= '9') { stack = stack * 10 + argv[i + 1][k] - '0'; ++k; }
+            if (!stack || argv[i + 1][k]) return usage();
+            i = i + 2;
+        }
         else if (!ustrcmp(a, "-P")) ++i;          // always on
         else if (a[0] == '-' && nflags < MAXA) { flags[nflags] = a; ++nflags; ++i; }
         else if (a[0] != '-' && nsrc < MAXA) { srcs[nsrc] = a; ++nsrc; ++i; }
@@ -144,7 +206,8 @@ int main(int argc, char **argv) {
 
     link = !objonly && (nsrc > 1 || nlib > 0);
     if (!out && !objonly) out = named(srcs[0], ".c4r");
-    ustack(CC_STACK);
+    if (!stack) stack = CC_STACK;
+    if (ustack(stack) < 0) { ufprintf(STDERR, "cc: -stack %d is more than a task may have\n", stack); return 2; }
 
     if (!link) {
         k = 0;

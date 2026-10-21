@@ -5,8 +5,13 @@
 //   cc [-O] [-c] [-conforming] [-fno-builtin] [-fpic] [-mfuse] [-v]
 //      [-I dir] [-D name] [-l lib] [-o out] file.c...
 //
-// c4lc's own preprocessor is always on (-P), with /usr/include on the
-// include path after any -I given. Without -o a program is NAME.c4r in
+// c4lc's own preprocessor is always on (-P). After any -I given it
+// searches /usr/include (C4IX's headers), then /usr/src/c4/include, the
+// repo's own: u0.h, c4dos.h and the C versions of stdio.h and the rest,
+// so the repo's programs (src/tests/mandel.c, ...) build as they are.
+// Those headers ask __c4cc__ / C4CC whether they are building for the
+// VM rather than natively, and cc always is, so both are defined -- as
+// the Makefile does when c4lc builds them. Without -o a program is NAME.c4r in
 // the working directory, NAME the first source's file name less .c; with
 // -c each source becomes its own NAME.c4o.
 //
@@ -84,7 +89,7 @@ static int run(char *prog, int argc, char **argv) {
 static int compile(char *src, char *out, int obj) {
     char **av;
     int n, i;
-    av = (char **)ualloc((nflags + 12) * sizeof(char *));
+    av = (char **)ualloc((nflags + 18) * sizeof(char *));
     n = 0;
     av[n] = "c4sc"; ++n;
     av[n] = "-c"; ++n;                // c4sp's heap, in cells: c4sc's, not cc's -c
@@ -95,6 +100,12 @@ static int compile(char *src, char *out, int obj) {
     while (i < nflags) { av[n] = flags[i]; ++n; ++i; }
     av[n] = "-I"; ++n;
     av[n] = "/usr/include"; ++n;
+    av[n] = "-I"; ++n;
+    av[n] = "/usr/src/c4/include"; ++n;
+    av[n] = "-D"; ++n;
+    av[n] = "C4CC=1"; ++n;
+    av[n] = "-D"; ++n;
+    av[n] = "__c4cc__=1"; ++n;
     if (obj) { av[n] = "-c"; ++n; }
     av[n] = src; ++n;
     av[n] = out; ++n;

@@ -186,9 +186,12 @@ else bad "b4ke rebuilds libc4ix inside C4IX, byte for byte"; echo "$out" | grep 
 
 # cc: c4sc (c4lc, compiled) with c4lc's preprocessor, and -l c4ix
 # linking in libc4ix -- the userland's own recipe, so echo built this
-# way is the disk's, byte for byte.
-out=$(printf 'wait 4\ncc -o /ram/hello2.c4r /usr/src/examples/hello.c\n/ram/hello2.c4r\ncc -O -l c4ix -o /ram/echo.c4r /usr/src/c4/src/c4ix/user/echo.c\n/ram/echo.c4r cc built it\ncrc32 /ram/echo.c4r /bin/echo\nexit\n' | \
-      timeout 300 $LIBJS -m 64 -c 4000000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
+# way is the disk's, byte for byte. And the repo's own programs, which
+# include u0.h and the repo's stdio.h: src/tests/mandel.c, as it is.
+out=$(printf 'wait 4\ncc -o /ram/hello2.c4r /usr/src/examples/hello.c\n/ram/hello2.c4r\ncc -O -l c4ix -o /ram/echo.c4r /usr/src/c4/src/c4ix/user/echo.c\n/ram/echo.c4r cc built it\ncrc32 /ram/echo.c4r /bin/echo\ncd /usr/src/c4/src/tests\ncc -O mandel.c\n./mandel.c4r\nexit\n' | \
+      timeout 300 $LIBJS -m 64 -c 8000000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
+if echo "$out" | grep -qE "^Mandelbrot rendered in [0-9]+ms"; then ok "cc builds src/tests/mandel.c with the repo's headers, and it runs"
+else bad "cc builds src/tests/mandel.c with the repo's headers, and it runs"; echo "$out" | grep -E 'mandel|cannot|cc:' | head -5; fi
 a=$(echo "$out" | grep -oE '^[0-9a-f]{8} [0-9]+ /ram/echo.c4r' | cut -d' ' -f1,2)
 b=$(echo "$out" | grep -oE '^[0-9a-f]{8} [0-9]+ /bin/echo' | cut -d' ' -f1,2)
 if echo "$out" | grep -qF "hello from a program compiled inside C4IX" && echo "$out" | grep -qxF "cc built it" &&

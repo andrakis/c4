@@ -677,23 +677,60 @@ static void e_dirname(char *path, char *out) {
     out[k - 1] = 0;
 }
 
-// the nearest BUILD.B4K at or above DIR: its directory into OUT, or 0
-static int e_find_build(char *dir, char *out) {
-    char p[160];
-    int k;
+static int e_namech(int c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'; }
+
+// Does the build file P name the file BASE (as a word: "mandel.c" but
+// not "mandel.c4o" or "xmandel.c")?
+static int e_names(char *p, char *base) {
+    char *t;
+    int fd, n, i, m, j, hit;
+    if ((fd = uopen(p, O_RD)) < 0) return 0;
+    t = (char *)ualloc(65537);
+    n = uread(fd, t, 65536);
+    uclose(fd);
+    if (n < 0) n = 0;
+    t[n] = 0;
+    m = ui_len(base);
+    hit = 0;
+    i = 0;
+    while (!hit && i + m <= n) {
+        j = 0;
+        while (j < m && t[i + j] == base[j]) ++j;
+        if (j == m && (i == 0 || !e_namech(t[i - 1])) && !e_namech(t[i + m]) && t[i + m] != '.') hit = 1;
+        ++i;
+    }
+    free(t);
+    return hit;
+}
+
+// The BUILD.B4K that builds PATH, looking up from DIR: its directory
+// into OUT. 2: the nearest one that names the file. 1: none does, and
+// OUT is the nearest there is -- /usr/src/c4's own builds the tree, not
+// src/tests/mandel.c, so a lone .c file is better built alone (e_make).
+// 0: there is none.
+static int e_find_build(char *dir, char *path, char *out) {
+    char p[160], near[128], *base;
+    int k, found;
+    base = path + ui_len(path);
+    while (base > path && base[0 - 1] != '/') --base;
     ui_cpy(out, dir);
+    found = 0;
     while (1) {
         ui_cpy(p, out);
         if (!(p[0] == '/' && p[1] == 0)) ui_cat(p, "/");
         ui_cat(p, "BUILD.B4K");
-        if (e_exists(p)) return 1;
-        if (out[0] == '/' && out[1] == 0) return 0;
+        if (e_exists(p)) {
+            if (e_names(p, base)) return 2;
+            if (!found) { ui_cpy(near, out); found = 1; }
+        }
+        if (out[0] == '/' && out[1] == 0) break;
         k = ui_len(out);
         while (k > 0 && out[k - 1] != '/') --k;
         if (k <= 1) { out[0] = '/'; out[1] = 0; }
         else out[k - 1] = 0;
     }
-    return 0;
+    if (found) ui_cpy(out, near);
+    return found;
 }
 
 // A BUILD.B4K may say what to run: "SET RUN command".
@@ -733,6 +770,7 @@ static void e_make(struct win *w) {
     char **argv;
     int pin[2], pout[2], s0, s1, s2, k, j, fd, n;
     char *bf;
+    int bk;
     e = E(w);
     if (e->building) { e_say(e, "A build is already running"); return; }
     if (!e->path[0]) { e_say(e, "Save the file first (:w FILE)"); return; }
@@ -741,23 +779,23 @@ static void e_make(struct win *w) {
     e_dirname(e->path, dir);
     argv = (char **)ualloc(8 * sizeof(int));
     argv[0] = "b4ke";
-    if (e_find_build(dir, e->bdir)) {
+    bk = e_find_build(dir, e->path, e->bdir);
+    if (bk == 2 || (bk == 1 && !ui_ends(e->path, ".c"))) {
         argv[1] = "-C"; argv[2] = e->bdir; argv[3] = 0;
         e_find_run(e, e->bdir);
         k = 3;
     } else if (ui_ends(e->path, ".c")) {
-        // a build file of its own: compile this one file, link it with libc4ix
+        // no build file names it: a build file of its own, which has cc
+        // compile this one file and link it with libc4ix
         k = ui_len(e->path);
         j = k;
         while (j > 0 && e->path[j - 1] != '/') --j;
         memcpy(name, e->path + j, k - j - 2);
         name[k - j - 2] = 0;
         bf = (char *)ualloc(1024);
-        ui_cpy(bf, "B4KE2\nSET STACK 1048576\nDEPS /ram/"); ui_cat(bf, name); ui_cat(bf, ".c4o : "); ui_cat(bf, e->path);
-        ui_cat(bf, "\nRUN c4sc -c 400000 compile -O -c -I /usr/include -I "); ui_cat(bf, dir); ui_cat(bf, " ");
-        ui_cat(bf, e->path); ui_cat(bf, " /ram/"); ui_cat(bf, name); ui_cat(bf, ".c4o\nDEPS /ram/"); ui_cat(bf, name);
-        ui_cat(bf, ".c4r : /ram/"); ui_cat(bf, name); ui_cat(bf, ".c4o\nRUN c4rlink /ram/"); ui_cat(bf, name);
-        ui_cat(bf, ".c4o /usr/lib/libc4ix.c4l -o /ram/"); ui_cat(bf, name); ui_cat(bf, ".c4r\n");
+        ui_cpy(bf, "B4KE2\nDEPS /ram/"); ui_cat(bf, name); ui_cat(bf, ".c4r : "); ui_cat(bf, e->path);
+        ui_cat(bf, "\nRUN cc -O -l c4ix -I "); ui_cat(bf, dir); ui_cat(bf, " -o /ram/"); ui_cat(bf, name);
+        ui_cat(bf, ".c4r "); ui_cat(bf, e->path); ui_cat(bf, "\n");
         n = ui_len(bf);
         fd = uopen("/ram/edit.b4k", O_WR + O_CREATE + O_TRUNCATE);
         if (fd < 0 || write(fd, bf, n) != n) { if (fd >= 0) uclose(fd); free(bf); e_say(e, "Cannot write /ram/edit.b4k"); return; }

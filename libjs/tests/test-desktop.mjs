@@ -461,6 +461,13 @@ txt(':make\n');
 check(until(() => has('Build: running') && has('Cancel'), 400), ':make on a file under a BUILD.B4K runs b4ke there', screen());
 clickText('Cancel');
 check(until(() => has('Build: cancelled') && !has('Build: running'), 400), 'Cancel stops the build', screen());
+// src/tests has no BUILD.B4K, and /usr/src/c4's builds the tree, not
+// mandel.c: so it is built alone, by cc, with the repo's headers
+txt(':e! /usr/src/c4/src/tests/mandel.c\n');
+until(() => has('mandel.c - Editor'));
+txt(':make\n');
+check(until(() => has(/^Build: finished/) && has(/^c4rlink: wrote \d+ bytes to ramfs:\/ram\/mandel\.c4r/), 4000),
+  ':make on a file no BUILD.B4K names builds it alone, with cc', frame.filter(t => /Build|mandel|cc|b4ke|c4lc|cannot|rror/.test(t.s)).map(t => t.s.trim()).join('\n'));
 {
   // the pointer: a text beam over the text, an arrow on the taskbar
   const e = ed();

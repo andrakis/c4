@@ -41,6 +41,14 @@ so the userland's programs build the same way:
   cc -O -conforming -I /usr/src/c4/src/c4tui -o /ram/demo.c4r /usr/src/c4/src/c4tui/demo.c
   /ram/demo.c4r
 
+The repos own programs build as they are: cc also searches the repos
+headers (/usr/src/c4/include: u0.h, and C versions of stdio.h and the
+rest), so
+
+  cd /usr/src/c4/src/tests
+  cc -O mandel.c
+  ./mandel.c4r
+
 -c leaves an object for c4rlink, and -v shows the commands cc runs.
 Interpreted, the same compiler is still there:
 

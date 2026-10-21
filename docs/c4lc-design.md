@@ -33,6 +33,11 @@ has gained three opt-in code-generation flags, `-mcisc`, `-mfuse` and
 L11"). c4lc now builds C4IX, C4DOS, `c4sp.c4r`, c4mp, c4or1k, c4tui and
 the 32-bit c4th. How an image is built from units is in §13.
 
+Since 2026-10: the integer types and qualifiers (M4, §14), what the C
+Busybox needs (M7b, §10), `long long` in two words on a 32-bit target
+(M8, §14.7), and `float` and `double` (docs/c4-float.md, which tracks
+that work and its limits).
+
 ## 1. Why
 
 c4cc inherits c4's architecture: one pass, no AST, code emitted while
@@ -93,8 +98,9 @@ outright bugs, and each is listed in §5.1.
 Not goals (for now): structs, typedef, preprocessor beyond `#`-line
 skipping, floats beyond what c4cc does. (That was the starting target.
 Structs, unions, typedef and `do/while` arrived in L7, the
-preprocessor in L9, and `signed`/`unsigned`/`short`/`long`/`const`/
-`volatile` in M4, §14.)
+preprocessor in L9, `signed`/`unsigned`/`short`/`long`/`const`/
+`volatile` in M4, §14, and `float` and `double`, in software, in F2 of
+the floating-point plan: docs/c4-float.md.)
 
 ## 4. Pipeline
 
@@ -412,7 +418,8 @@ own design doc:
   [inline-small-functions.md](inline-small-functions.md)): T3
   substitutes an expression body at its call sites, T4 splices a whole
   body in statement position, and T4b lets a body return early through
-  optimizer-only `ijmp`/`ilabel` nodes (the C dialect gains no `goto`).
+  optimizer-only `ijmp`/`ilabel` nodes (the C dialect gained no `goto`
+  for it; M7b added `goto` later, below).
   Budget 60 AST nodes. A function whose address is taken is never
   spliced or spliced into. Implies `-O`. `-minline-why` reports what the
   pass decided for every function.
@@ -837,7 +844,13 @@ parameter, and a value returned as one, is wrapped in a cast (`t:cwrap`).
 The six new words lex as identifiers in `-P` mode and become keywords
 after expansion (`pp:kwfix`) — C's own phase order — because a header
 can `#define` them: `include/stddef.h` says `#define unsigned` (to
-nothing) and `#define long int` under `__c4cc__`, for c4cc.
+nothing) and `#define long int` under `__c4cc__`, for c4cc. Since
+0f47b17 every keyword does the same: in `-P` mode every word lexes as
+an identifier, and `pp:kwfix` turns the survivors back into keywords
+from both tables (`lex:keywords`, `lex:keywords2`), as c4fc's lexer
+already did. So `#define int long long` (src/tests/factorial.c),
+`#undef`/`#ifdef` of a keyword and `#x` of one (its spelling, not 0)
+work; `src/tests/c4lc_pp.c` pins them against gcc.
 
 Those two defines are guarded by `#ifndef __c4_inttypes__`, and c4lc's
 preprocessor predefines `__c4_inttypes__=1` before any `-D`

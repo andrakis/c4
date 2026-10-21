@@ -115,8 +115,8 @@ implements the format walk itself, mirroring native c4m/glibc behavior:
 conversions without an `l` modifier see their low 32 bits, `%s` translates,
 `%p` prints the arena offset (the one visible output difference from c4m).
 `malloc`/`free`/`realloc` are a first-fit free list inside the arena —
-which also fixes c4m's broken `RALC` (docs/internals.md Part 3.6) for
-programs running under OISC. `__opcode("NAME")` (`_OPC`) does the real
+which gave programs running under OISC a working `RALC` before c4m had
+one (c4m's was fixed in `63e274a`, docs/internals.md Part 3.6). `__opcode("NAME")` (`_OPC`) does the real
 name-table lookup, same 4-char case-insensitive match as c4m.
 
 Two guards in the store path turn silent corruption into diagnostics:

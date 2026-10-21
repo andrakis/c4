@@ -25,7 +25,9 @@ Status (2026-10-20):
   - another unit's functions in data (patch type -5, which c4rlink
     resolves);
   - `inline`, `restrict` and `__attribute__`, dropped before parsing;
-  - struct assignment.
+  - struct assignment;
+  - the P1 items: `__func__`, `__LINE__` and `__FILE__`, a global's
+    address in an initializer, and local aggregate initializers (§7).
 - The source is not vendored into the repository yet; that is M7e.
 
 ## 1. The target
@@ -172,7 +174,7 @@ Priorities:
 | `for_decl` | `for (int i = …)` | CFAIL | P2 | 0 uses |
 | `vla` | `char b[n]` | CFAIL | P2 | `FEATURE_BUFFERS_USE_MALLOC=y` avoids most uses; the rest get patched |
 | `typeof_` | `typeof(x)` | CFAIL | P2 | 0 uses |
-| `long_long` | `long long` | parses; word-sized by design (M4) | — | With LFS off, `off_t` fits in a word. `%lld` already prints a word. |
+| `long_long` | `long long` | the word at 64 bits; two words on a 32-bit target since M8 (c4lc-design.md §14.7) | — | With LFS off, `off_t` fits in a word. `%lld` prints a word; on a 32-bit host it does not read a two-word argument yet. |
 
 ### 3.2 Initializers
 

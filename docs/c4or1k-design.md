@@ -58,7 +58,8 @@ edge worth calling out because it produced a real bug in M0, not a
 hypothetical one:
 
 **`int` is host-pointer-width (64-bit under the default c4sp/c4m), and
-there is no unsigned type.** The classic C sign-extension idiom
+there was no unsigned type** (c4lc has had one since M4,
+c4lc-design.md §14; `cpu.c` still uses `sext()`). The classic C sign-extension idiom
 `(v << (32 - bits)) >> (32 - bits)` relies on the left shift
 *truncating* at bit 31 — true on a real 32-bit register, false on
 c4lc's 64-bit `int`, where nothing is discarded and the shift-left/
@@ -73,7 +74,8 @@ that extracts a signed field from an instruction word must use it, not
 the shift trick.
 
 Other dialect notes from the toolchain investigation, relevant from M1
-onward: `>>` is arithmetic (signed) only — OR1000's `l.srl` (logical
+onward: `>>` on a signed `int` is arithmetic (it was the only kind
+then) — OR1000's `l.srl` (logical
 shift right) needs the same kind of explicit masking, not a shift
 trick. No multi-dimensional arrays — guest RAM and the SPR groups are
 flattened to 1-D, which is how jor1k indexes them internally anyway.
@@ -1629,8 +1631,9 @@ implementations, chosen by `native.h`'s `C4OR1K_NATIVE_FLOAT`:
     bit-reinterpret (the `#define int long` leaves `unsigned`/`float`
     genuinely 32-bit). Complete and exact: add/sub/mul/div/madd,
     itof/ftoi (floor, matching jor1k), and the six ordered compares.
-  * HOSTED: the c4lc dialect has no `float` type and the FLT opcode is
-    stubbed on several loaders, so the hosted path is a native-only
+  * HOSTED: the c4lc dialect had no `float` type when this landed (it
+    has `float` and `double` now, docs/c4-float.md, not yet wired in
+    here), and the FLT opcode is stubbed on several loaders, so the hosted path is a native-only
     stub that warns once and yields 0. It never fires on the tested
     hosted paths (basefs's shell and the m-checks use no FP); a hosted
     soft-float or verified `__c4_float` wiring is future work.

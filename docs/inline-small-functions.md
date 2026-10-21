@@ -38,7 +38,7 @@ compilers already mirror:
 |---|---|---|
 | T1 constant folding | `c4lc-tree.lisp` | `tree.f` |
 | T2 dead function elimination | `c4lc-tree.lisp` | `parse.f` |
-| **T3 inlining** | **`c4lc-tree.lisp`** | **`tree.f`** |
+| **T3 inlining** | **`c4lc-tree.lisp`** | **`inline.f`** |
 
 Before code generation there is no frame yet, so the code generator
 allocates the caller's slots for whatever T3 splices in and the whole
@@ -53,7 +53,8 @@ obvious one.
 
 `src/c4sc/c4tree_gen.c` is **generated** by c4sc from
 `src/c4sp/lisp/c4lc-tree.lisp` ("do not edit" is the first line), so the
-C-hosted compiler gets T3 by regeneration. Only two hand-written
+C-hosted compiler gets T3's code by regeneration, though c4sc's
+`compile` mode has no `-minline` to turn it on yet. Only two hand-written
 copies exist: the Lisp and the Forth.
 
 *(Naming note: `c4sc` is not a port of `c4fc`. c4fc is the C99 compiler
@@ -76,6 +77,9 @@ with a measurement.
 - its body is exactly one statement, either `(return E)` or `(expr E)`;
 - `E` contains no `call` — so it is a leaf, and one pass cannot cascade;
 - `E`'s node count is at or under the threshold.
+
+(Since float and double, c4lc also leaves a whole unit that uses them
+uninlined: `t:hasfp?`, docs/c4-float.md.)
 
 **A call site is inlinable when all of:**
 

@@ -41,7 +41,7 @@ c4sc-host pp [-I dir] [-D name] file.c                     # c4lc-ppdump.lisp
 c4sc-host pptok file.i
 c4sc-host ast [-check] file.c                              # c4lc-ast.lisp
 c4sc-host compile [-O] [-c] [-P] [-mcisc] [-mfuse] [-conforming]
-                  [-I dir] [-D name] in.c out.c4r          # c4lc.lisp
+                  [-fno-builtin] [-fpic] [-I dir] [-D name] in.c out.c4r          # c4lc.lisp
 ```
 
 `compile` is c4lc. For example, one C4IX module on the simulated board:
@@ -86,9 +86,12 @@ None of these is part of `make test`.
 - **Native**: `c4sc-host`, `c4sc-self`.
 - **Under c4m**: `c4sc.c4r` runs, but bare c4m cannot write files; the tests
   compare the size line printed before the write.
-- **c4bb**: `c4sc32-fused.c4r` is the compiler the in-machine C4IX build uses
-  (`src/c4bb/tests/build-images.sh`). It uses fused opcodes that c4m does not
-  have, so `c4sc32.c4r` is kept for c4m and for the byte check.
+- **c4bb**: `c4sc32-fused.c4r` is the compiler the in-machine C4IX build uses;
+  `src/c4bb/tests/build-images.sh` copies it onto the disk. It uses fused
+  opcodes that c4m does not have, so `c4sc32.c4r` is kept for c4m and for the
+  byte check.
+- **C4IX**: the same image is `/bin/c4sc`, which the BUILD.B4K files under
+  `/usr` run and `cc` (`src/c4ix/user/cc.c`) drives, on 1 MB of stack.
 
 ## Limits and known issues
 
@@ -102,8 +105,7 @@ None of these is part of `make test`.
 ## Docs
 
 - [c4sc-design.md](../../docs/c4sc-design.md): the survey, milestones M0–M8
-  and measurements. Its opening says "Nothing here is built yet"; that is out
-  of date, all of M0–M8 are ticked below it.
+  (all ticked) and measurements.
 - [compiler-on-the-board.md](../../docs/compiler-on-the-board.md): why the
   compiler's speed on c4bb matters.
 - [../c4sp/bench/README.md](../c4sp/bench/README.md): the M0 measurement that

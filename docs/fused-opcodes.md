@@ -383,11 +383,14 @@ running on the breadboard. F7 removed that obstacle; the remaining one is
 that c4m has three of the ten, so a default-fused image would no longer
 run under c4m. As of 2026-09-30 the default is still off: the Makefile
 passes `-mfuse` only to the targets that ask for it (the c4bb disk's
-`c4sp.c4r`, and the tests that check fused images).
+`c4sp.c4r` and `libarc`, `c4sc32-fused.c4r` -- the compiler on the
+`c4dos-c4ix32` floppy and in C4IX -- and the tests that check fused
+images).
 
 The unreferenced-label pass described above has not been written; the
 remaining ~6% is still on the table.
 
 **Userland is unfused.** The C4IX number above fuses only the kernel;
-the programs it runs are ordinary images. Fusing those too is a Makefile
+the programs it runs are ordinary images (on the board's disk, apart
+from the fused libarc that tar, gunzip and crc32 link). Fusing those too is a Makefile
 change once the default question is settled.

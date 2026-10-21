@@ -10,7 +10,8 @@ below). The options c4fc takes are listed under "The compiler".
 ## What this is, and what it is not
 
 `c4fc` is a C99 compiler with c4lc's coverage, written in c4th, emitting
-`.c4r`. The interesting half is not the compiler but the **vocabulary it
+`.c4r`. (One deliberate gap: c4lc has `float` and `double`, and c4fc
+refuses them for now; docs/c4-float.md.) The interesting half is not the compiler but the **vocabulary it
 is written in**: a compiler is the hardest thing to write in stock Forth
 and the easiest thing to write in a Forth shaped for it, and the
 difference between those two is about four hundred lines.
@@ -466,11 +467,13 @@ The bar rises rung by rung and c4lc supplies it at every one.
       as the oracle's is what lets every F2-F8 differential stay a
       straight byte comparison.
 
-      Two things neither compiler models, recorded so nobody hunts
+      Two things neither compiler modelled, recorded so nobody hunts
       them: a `#define` whose name is a **keyword** (`c4dos.c` has
-      `#define int long long`, and is built by gcc's cpp and c4cc for
-      that reason), and system headers -- `#include_next` and
-      `/usr/include` are not on the map for either.
+      `#define int long long`), and system headers -- `#include_next`
+      and `/usr/include` are not on the map for either. The first is
+      modelled by both now: PPMODE lexes every word as `Id` (below), and
+      since 0f47b17 c4lc's `pp:kwfix` does the same. (`c4dos.c` is built
+      by `./cpp` and c4lc.)
 - [x] **F4** Control flow, and everything that turned out to come with
       it. `if`/`else`, `while`, `for`, `do`/`while`, `break`,
       `continue`, `?:`, `switch`; the unary operators `! ~ - * &`,
@@ -853,8 +856,9 @@ guessed and nothing has to be tuned per input, which is the difference
 that matters on a machine that has to fit the compiler as well as the
 program.
 
-**`c4lc` cannot preprocess C4KE at all** -- a function-like macro named
-without an argument list is an error there and stands for itself here,
+**`c4lc` could not preprocess C4KE at all** when this was measured (M7b
+fixed it) -- a function-like macro named without an argument list was an
+error there and stands for itself here,
 which is what C says -- so the C4KE row above has gcc in c4lc's pipeline
 and nothing in c4fc's.
 
@@ -962,8 +966,9 @@ run-c4dos-c4fc` is the interactive version, where `CC` (the floppy's
 **C4IX.** c4th has been in C4IX's `/bin` since 2026-09-24 (`e427c9c`),
 and C4IX's shell can redirect stdout into a RAM file, so c4fc's default
 of writing the image to stdout works there in principle. The C4IX disk
-carries only `core.f` and `self.f` (for c4th's own compiler), not c4fc's
-sources, and no test runs c4fc inside C4IX. What is pinned instead is
+carries the whole repo at `/usr` now, so c4fc's sources are at
+`/usr/src/c4fc` and c4th's Forth at `/usr/src/c4th/forth`, but no test
+runs c4fc inside C4IX (whose scratch directory is `/tmp`). What is pinned instead is
 that c4fc, on a native c4th, compiles all twelve C4IX modules to objects
 that link to a `c4ix.c4r` byte-identical to c4lc's (`make test-c4fc`).
 
@@ -985,7 +990,8 @@ that link to a `c4ix.c4r` byte-identical to c4lc's (`make test-c4fc`).
    first is multi-word compilation with real calls, which B5d.5 sketched
    as the two-stacks-and-a-bridge and did not build.
 4. **Scope creep into real C99.** The target is c4lc's coverage, not the
-   standard's. Anything c4lc declines, c4fc declines identically, and
+   standard's. Anything c4lc declines, c4fc declines identically (the
+   one gap the other way is floating point, which c4fc refuses), and
    `docs/c4lc-design.md §5.1`'s deliberate-divergences section is the
    model for saying so.
 

@@ -49,6 +49,7 @@ lists them all.
 | c4sp / c4lc | a Lisp written in c4, and the optimizing C compiler written in it | [src/c4sp/README.md](../src/c4sp/README.md) |
 | c4sc | c4lc's Lisp transliterated to C, so the compiler runs fast in the machine | [src/c4sc/README.md](../src/c4sc/README.md) |
 | c4th / c4fc | Forth-2012 in c4, and a C compiler written in that Forth | [src/c4th/README.md](../src/c4th/README.md), [src/c4fc/README.md](../src/c4fc/README.md) |
+| c4fp | IEEE binary32 and binary64 in software, what c4lc's `float` and `double` compile to (Part 9) | [src/c4fp/README.md](../src/c4fp/README.md), [c4-float.md](c4-float.md) |
 
 ---
 
@@ -1186,7 +1187,10 @@ in the window before the handler masks it.
 This section describes C4IX as of X2–X3 in August 2026 and is kept as
 that record. C4IX has grown a good deal since — built inside C4KE on
 the machine that runs it, `SYS_SLEEP`, a lazy disk, compilers running
-inside it, and a Windows 95-style desktop with a terminal emulator.
+inside it, a Windows 95-style desktop with a terminal emulator, and
+since then a root archive it rebuilds itself from, shared libraries,
+CPU accounting and an idle task; the plain-c4 door described above is
+gone.
 The "Since X6" list at the end of section 6 of
 [c4ix-design.md](c4ix-design.md) names each change and its commit, and
 [c4ix-desktop.md](c4ix-desktop.md) is the desktop's design and tracker.
@@ -1338,6 +1342,13 @@ C4 has no float type, and `c4m`'s native `FLTI_*` instructions only work when
 c4m is compiled natively — under plain c4 the `FLT` opcode traps. So there was
 no way to do floating point in C4 code itself.
 
+(Since 2026-10, c4lc — and so c4sc and C4IX's `cc` — has real `float` and
+`double`: IEEE binary32 and binary64 in software, correctly rounded with
+subnormals, compiled to calls into `src/c4fp/softfp.c`. That is the route
+for new code; [c4-float.md](c4-float.md) tracks it. This part describes the
+older `c4_float.h` library, which needs no compiler support and still
+serves code that c4cc or plain c4 compiles.)
+
 [`include/c4_float.h`](../include/c4_float.h) implements IEEE-754 **binary32**
 entirely in integer arithmetic. A value is carried in an ordinary `int` as its
 32-bit bit pattern, which is the same representation `c4m_float.c` uses, so the
@@ -1430,3 +1441,8 @@ would make floating point work under plain c4 and give identical results on
 every host. Note that `include/c4m_float.h`'s 64-bit constants are currently
 wrong — they carry a `0xcf8ece20` prefix in the high word, left over from
 reinterpreting a 32-bit float through a 64-bit union.
+
+An FPU opcode that c4lc's soft-float helpers use when the host has one is
+step F3 of [c4-float.md](c4-float.md). A c4m built for the VM (as `/bin/c4m`
+in C4IX) already defines `c4_float_instruction` as a macro that lends its
+guest the outer machine's `FLT`.

@@ -9,7 +9,10 @@ Status 2026-09-30: **built.** M0–M8 are all ticked below (2026-08-27/28):
 c4sc compiles c4lc's Lisp to C, `c4sc.c4r` reaches a byte-identical fixed
 point compiling itself (M7), and on c4bb the twelve-module C4IX build
 takes ~4.6 minutes compiled against ~30 interpreted (M8). The C4DOS →
-C4KE → C4IX climb uses it (`c4sc32.c4r` on the `c4dos-c4ix32` floppy). One
+C4KE → C4IX climb uses it (`c4sc32-fused.c4r`, as `c4sc.c4r`, on the
+`c4dos-c4ix32` floppy), and so do C4IX's own BUILD.B4K files and its `cc`.
+Since it is c4lc compiled, it has c4lc's `float` and `double` too
+(docs/c4-float.md). One
 known gap: c4sc's `compile` mode has no `-minline` (the Lisp driver does),
 and its bootstrap fixed point has not been re-run since inlining landed
 in the tree pass ([inline-small-functions.md](inline-small-functions.md)

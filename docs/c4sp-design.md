@@ -382,13 +382,15 @@ perhaps 350–450 lines of flat, un-nested C4, which is a shape C4 handles well.
 
 ## 7. Builtins
 
-`T_PROC` holds an integer id, dispatched through one function. Two builds:
+`T_PROC` holds an integer id, dispatched through one function. Two builds
+were planned:
 
-* **c4m target** (default): `int *f; f(args)` — JSRI, ~3 instructions.
-* **plain c4 fallback**: an `if (id == B_ADD) ... else if` chain, selected by a
-  compile-time flag in the style the repo already uses for `NO_INLINE`.
+* **c4m target**: `int *f; f(args)` — JSRI, ~3 instructions. Not built
+  (compiler-speed.md, A1.3).
+* **plain c4 fallback**: an `if (id == B_ADD) ... else if` chain. This is the
+  one that exists, and the only dispatch (`src/c4sp/include/stdlib.h`).
 
-The fallback averages ~30 comparisons per builtin call, which is slow but keeps
+The chain averages ~30 comparisons per builtin call, which is slow but keeps
 c4sp runnable under unmodified c4 — worth preserving, given that is the point
 of the whole repo.
 

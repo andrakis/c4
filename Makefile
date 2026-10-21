@@ -1993,6 +1993,26 @@ test-c4tui: $(C4M) c4tui-demo.c4r c4tui-demo32.c4r
 	rm -f .c4tui_keys
 	@echo "test-c4tui: OK"
 
+# c4fp (src/c4fp): IEEE binary32 and binary64 in software, what c4lc's
+# float and double compile to. First gcc builds it and checks it against
+# the host's SSE, bit for bit, over two million random operand sets; then
+# c4lc builds it, at both word sizes, plain and -O, and it must get every
+# one of fpgen's vectors -- the host's own answers.
+test-c4fp: c4sp c4sp32 $(C4M) c4m32 $(C4LC_LISP) src/c4fp/softfp.c
+	gcc -O2 -w -I src/c4fp -o .c4fp_host src/c4fp/tests/fphost.c -lm
+	./.c4fp_host 2000000
+	gcc -O2 -w -o .c4fp_gen src/c4fp/tests/fpgen.c -lm
+	./.c4fp_gen 250 > .c4fp_vec.txt
+	@for fl in "" -O; do \
+	   ./c4sp src/c4sp/lisp/c4lc.lisp $$fl -P -I src/c4fp src/c4fp/tests/fpvm.c .c4fp_vm.c4r > /dev/null || exit 1; \
+	   $(C4M) load-c4r.c -- .c4fp_vm.c4r .c4fp_vec.txt | tail -1 | grep -q "cases, 0 wrong" || { echo "test-c4fp: 64-bit $$fl wrong"; exit 1; }; \
+	   ./c4sp32 src/c4sp/lisp/c4lc.lisp $$fl -P -I src/c4fp src/c4fp/tests/fpvm.c .c4fp_vm.c4r > /dev/null || exit 1; \
+	   ./c4m32 load-c4r.c -- .c4fp_vm.c4r .c4fp_vec.txt | tail -1 | grep -q "cases, 0 wrong" || { echo "test-c4fp: 32-bit $$fl wrong"; exit 1; }; \
+	done
+	rm -f .c4fp_host .c4fp_gen .c4fp_vec.txt .c4fp_vm.c4r
+	@echo "test-c4fp: OK"
+PHONY += test-c4fp
+
 # The fused opcodes (docs/fused-opcodes.md), end to end: take a real
 # image, run c4opt's fuse pass over it, and require that it behaves
 # identically on the hosts that have them -- and is REFUSED by the ones

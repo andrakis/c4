@@ -447,8 +447,8 @@ void calc_key(struct win *w, int code, int ch, int mods) {
 void about_open() {
     int i, k;
     struct win *w;
-    k = 0;
-    while (k < MAXW) { w = win_get(k); if (w->used && w->kind == K_ABOUT) { win_raise(k); return; } ++k; }
+    w = win_first();
+    while (w) { if (w->used && w->kind == K_ABOUT) { win_raise(w->id); return; } w = w->next; }
     i = win_open(K_ABOUT, "About C4IX", 440, 180);
     if (i < 0) return;
     w = win_get(i);
@@ -480,8 +480,8 @@ static char *dflt_label;
 int settings_open() {
     int k;
     struct win *w;
-    k = 0;
-    while (k < MAXW) { w = win_get(k); if (w->used && w->kind == K_SETTINGS) { win_raise(k); return k; } ++k; }
+    w = win_first();
+    while (w) { if (w->used && w->kind == K_SETTINGS) { win_raise(w->id); return w->id; } w = w->next; }
     dflt_label = "Defaults";
     return win_open(K_SETTINGS, "Settings", 420, 330);
 }

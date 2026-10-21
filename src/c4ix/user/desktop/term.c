@@ -389,6 +389,7 @@ int term_open(char *cmd) {
     w->resizable = 0;
     t = T(w);
     t->sb = (int *)ualloc(SB_ROWS * COLS * sizeof(int));
+    if (!t->sb) { t->ended = 1; win_close(i); return 0 - 1; }   // no memory left for it
     clear(t, 0, ROWS * COLS);
     t->fg = 7; t->cursor = 1;
     if (cmd) ui_cpy(t->pending, cmd);

@@ -512,6 +512,16 @@ check(until(() => has(/Type the name of a program/)), 'Start > Run asks for a pr
 type('echo from-run'); key('\n');
 check(until(() => has('from-run'), 800), 'and runs it in a new Command Prompt', screen());
 
+// ---- as many windows as memory allows (there were 8 slots) --------------------------------------
+// Task Manager's Performance tab (the CPU meter opens it) counts the windows open
+const opened = () => { const l = frame.find(t => t.s.trim() === 'Windows open'); const v = l && frame.find(t => t.y === l.y && /^\d+$/.test(t.s.trim())); return v ? +v.s.trim() : 0; };
+click(SW - 100, SH - TASK_H + 12);
+until(() => opened() > 0);
+const nopen = opened();
+for (let i = 0; i < 10; i++) { start('Calculator'); until(() => has('Hex')); }
+click(SW - 100, SH - TASK_H + 12);
+check(until(() => opened() === nopen + 10) && opened() > 8, 'ten more windows open, more than the old eight', `${nopen} then ${opened()}`);
+
 // ---- Shut Down --------------------------------------------------------------------------------
 start('Shut Down...');
 check(until(() => consoleText().includes('desktop: shut down')), 'Shut Down ends the desktop');

@@ -9,8 +9,14 @@
 #define printf uprintf
 #include "libjs/guest/gui.h"
 
-static struct win *wins;
-static int order[MAXW + 1], nz;          // z-order, bottom first
+// The windows (desktop.h): a list in the order they opened, which the
+// taskbar shows, and through the same nodes a z-order, bottom first. A
+// window closed is off the z-order at once and freed at the top of the
+// next pass of the main loop (sweep): whoever closed it, or is walking
+// the list, may still be holding it.
+static struct win *first;
+static struct win *zbot, *ztop;
+static int next_id;
 static int dirty, running;
 static int start_open, start_hot;
 static int drag, drag_dx, drag_dy;       // window index + 1 while dragging a title bar
@@ -268,8 +274,14 @@ void d_icon(int kind, int x, int y) {
 
 // ---- windows ---------------------------------------------------------------
 
-struct win *win_get(int i) { if (i < 0 || i >= MAXW) return 0; return wins + i; }
-int win_index(struct win *w) { int i; i = 0; while (i < MAXW) { if (wins + i == w) return i; ++i; } return 0 - 1; }
+struct win *win_get(int i) {
+    struct win *w;
+    w = first;
+    while (w) { if (w->id == i && w->used) return w; w = w->next; }
+    return 0;
+}
+int win_index(struct win *w) { return w ? w->id : 0 - 1; }
+struct win *win_first() { return first; }
 void mark_dirty() { dirty = 1; }
 int now_ms() { return gui_ticks(); }
 char *dialog_text() { return dtext; }
@@ -280,62 +292,80 @@ static int client_y(struct win *w) { return w->y + BORDER + TITLE_H + 1 + menu_h
 static int client_w(struct win *w) { return w->w - 2 * BORDER; }
 static int client_h(struct win *w) { return w->h - (client_y(w) - w->y) - BORDER; }
 
+static void z_unlink(struct win *w) {
+    if (w->below) w->below->above = w->above; else if (zbot == w) zbot = w->above;
+    if (w->above) w->above->below = w->below; else if (ztop == w) ztop = w->below;
+    w->above = 0; w->below = 0;
+}
+
 void win_raise(int i) {
-    int k, j;
-    k = 0;
-    while (k < nz && order[k] != i) ++k;
-    if (k == nz) { order[nz] = i; ++nz; dirty = 1; return; }
-    j = k;
-    while (j < nz - 1) { order[j] = order[j + 1]; ++j; }
-    order[nz - 1] = i;
-    wins[i].min = 0;
+    struct win *w;
+    if (!(w = win_get(i))) return;
+    if (ztop != w) {
+        z_unlink(w);
+        w->below = ztop;
+        if (ztop) ztop->above = w; else zbot = w;
+        ztop = w;
+    }
+    w->min = 0;
     dirty = 1;
 }
 
-static void unlink_z(int i) {
-    int k, j;
-    k = 0;
-    while (k < nz && order[k] != i) ++k;
-    if (k == nz) return;
-    j = k;
-    while (j < nz - 1) { order[j] = order[j + 1]; ++j; }
-    --nz;
+// The topmost window that is showing, or 0 -- and its number, or -1.
+static struct win *focus() {
+    struct win *w;
+    w = ztop;
+    while (w && w->min) w = w->below;
+    return w;
 }
-
-// The topmost window that is showing, or -1.
-int win_focused() {
-    int k;
-    k = nz - 1;
-    while (k >= 0) { if (!wins[order[k]].min) return order[k]; --k; }
-    return 0 - 1;
-}
+int win_focused() { return win_index(focus()); }
 
 // A dialog on top keeps the input to itself.
 static int modal() {
-    int f;
-    f = win_focused();
-    if (f >= 0 && (wins[f].kind == K_MSG || wins[f].kind == K_INPUT)) return f;
+    struct win *f;
+    f = focus();
+    if (f && (f->kind == K_MSG || f->kind == K_INPUT)) return f->id;
     return 0 - 1;
 }
 
+// The windows closed since the last pass, freed.
+static void sweep() {
+    struct win *w, *p, *n;
+    p = 0; w = first;
+    while (w) {
+        n = w->next;
+        if (!w->used) {
+            if (p) p->next = n; else first = n;
+            free(w->st); free(w);
+        } else p = w;
+        w = n;
+    }
+}
+
+// Opens a window, or answers -1 when there is no memory for one.
 int win_open(int kind, char *title, int w, int h) {
-    int i;
-    struct win *p;
-    i = 0;
-    while (i < MAXW && wins[i].used) ++i;
-    if (i == MAXW) return 0 - 1;
-    p = wins + i;
-    if (!p->st) p->st = (char *)ualloc(ST_BYTES);
+    int slot;
+    struct win *p, *q;
+    if (!(p = (struct win *)ualloc(sizeof(struct win)))) return 0 - 1;
+    memset(p, 0, sizeof(struct win));
+    if (!(p->st = (char *)ualloc(ST_BYTES))) { free(p); return 0 - 1; }
     memset(p->st, 0, ST_BYTES);
+    // it cascades from the first place no open window holds
+    slot = 0; q = first;
+    while (q) { if (q->used && q->slot == slot) { ++slot; q = first; } else q = q->next; }
+    p->slot = slot;
+    p->id = next_id; ++next_id;
+    if (!first) first = p;
+    else { q = first; while (q->next) q = q->next; q->next = p; }
     p->used = 1; p->kind = kind; p->min = 0; p->max = 0; p->resizable = 1;
     p->nmenus = 0; p->owner = 0 - 1; p->action = 0;
-    p->x = 100 + i * 24; p->y = 20 + i * 22;
+    p->x = 100 + (slot % 10) * 24 + (slot / 10) * 12; p->y = 20 + (slot % 10) * 22;
     if (p->x + w > SW) p->x = SW - w; if (p->x < 0) p->x = 0;
     if (p->y + h > SH - TASK_H) p->y = SH - TASK_H - h; if (p->y < 0) p->y = 0;
     p->w = w; p->h = h;
     ui_cpy(p->title, title);
-    win_raise(i);
-    return i;
+    win_raise(p->id);
+    return p->id;
 }
 
 void win_title(struct win *w, char *s) { ui_cpy(w->title, s); dirty = 1; }
@@ -346,12 +376,11 @@ void win_menus(struct win *w, int n, char **titles, char ***items) {
 
 void win_close(int i) {
     struct win *w;
-    w = wins + i;
-    if (!w->used) return;
+    if (!(w = win_get(i))) return;
     if (w->kind == K_TERM) term_close(w);
     if (w->kind == K_EDIT) edit_close(w);
     w->used = 0;
-    unlink_z(i);
+    z_unlink(w);
     if (drag == i + 1) drag = 0;
     if (sizing == i + 1) sizing = 0;
     if (menu_win == i + 1) menu_win = 0;
@@ -368,7 +397,7 @@ void msgbox(struct win *owner, char *title, char *text, int yesno, int action) {
     if (tw > 560) tw = 560;
     i = win_open(K_MSG, title, tw, 120);
     if (i < 0) return;
-    w = wins + i;
+    w = win_get(i);
     w->resizable = 0;
     w->x = (SW - tw) / 2; w->y = (SH - 120) / 2 - 40;
     w->owner = owner ? win_index(owner) : 0 - 1;
@@ -382,7 +411,7 @@ void inputbox(struct win *owner, char *title, char *prompt, char *initial, int a
     struct win *w;
     i = win_open(K_INPUT, title, 380, 130);
     if (i < 0) return;
-    w = wins + i;
+    w = win_get(i);
     w->resizable = 0;
     w->x = (SW - 380) / 2; w->y = (SH - 130) / 2 - 40;
     w->owner = owner ? win_index(owner) : 0 - 1;
@@ -398,9 +427,7 @@ static void answer(struct win *d, int yes) {
     owner = d->owner; action = d->action;
     win_close(win_index(d));
     if (action == A_RUN) { if (yes && dtext[0]) run_command(dtext); return; }
-    if (owner < 0) return;
-    o = wins + owner;
-    if (!o->used) return;
+    if (!(o = win_get(owner))) return;
     win_raise(owner);
     if (o->kind == K_FILES) files_answer(o, action, yes);
     else if (o->kind == K_NOTE) note_answer(o, action, yes);
@@ -574,7 +601,7 @@ static void draw_dropdown() {
     struct win *w;
     char **items;
     int n, x, y, k, iy, mw, mh;
-    w = wins + menu_win - 1;
+    if (!(w = win_get(menu_win - 1))) return;
     items = w->menu_items[menu_idx];
     n = count_items(items);
     x = menu_x(w, menu_idx);
@@ -601,7 +628,7 @@ static int dropdown_hit(int px, int py) {
     struct win *w;
     char **items;
     int n, x, y, k, iy;
-    w = wins + menu_win - 1;
+    if (!(w = win_get(menu_win - 1))) return 0 - 1;
     items = w->menu_items[menu_idx];
     n = count_items(items);
     x = menu_x(w, menu_idx);
@@ -617,10 +644,8 @@ static int dropdown_hit(int px, int py) {
     return 0 - 1;
 }
 
-static void draw_window(int i, int focused) {
-    struct win *w;
+static void draw_window(struct win *w, int focused) {
     int tx, bx, by;
-    w = wins + i;
     gui_rect(w->x, w->y, w->w, w->h, C_FACE);
     d_bevel(w->x, w->y, w->w, w->h, B_RAISED);
     if (focused) gradient(w->x + BORDER, w->y + BORDER, w->w - 2 * BORDER, TITLE_H, C_TITLE, C_TITLE2);
@@ -728,7 +753,13 @@ static int start_hit(int x, int y) {
     return 0 - 1;
 }
 
-static int n_buttons() { int k, n; n = 0; k = 0; while (k < MAXW) { if (wins[k].used && !is_dialog(wins + k)) ++n; ++k; } return n; }
+static int n_buttons() {
+    struct win *w;
+    int n;
+    n = 0; w = first;
+    while (w) { if (w->used && !is_dialog(w)) ++n; w = w->next; }
+    return n;
+}
 static int button_w() { int n, w; n = n_buttons(); if (!n) return 150; w = (SW - 64 - 154) / n - 4; return w > 150 ? 150 : w; }
 
 // The CPU meter beside the clock: Task Manager's number (tasks_cpu_usage),
@@ -749,9 +780,9 @@ static void draw_taskbar() {
     d_text(23, SH - TASK_H + 9, C_DARK, F_BOLD, "Start");
     f = win_focused();
     bw = button_w();
-    k = 0; i = 0;
-    while (i < MAXW) {
-        w = wins + i;
+    k = 0; w = first;
+    while (w) {
+        i = w->id;
         if (w->used && !is_dialog(w)) {
             bx = 64 + k * (bw + 4);
             gui_rect(bx, SH - TASK_H + 4, bw, 22, i == f ? 0xe0e0e0 : C_FACE);
@@ -762,7 +793,7 @@ static void draw_taskbar() {
             wnoclip();
             ++k;
         }
-        ++i;
+        w = w->next;
     }
     gui_rect(CPU_X, SH - TASK_H + 4, CPU_W, 22, C_FACE);
     d_bevel(CPU_X, SH - TASK_H + 4, CPU_W, 22, B_SUNKEN);
@@ -786,15 +817,16 @@ static void draw_taskbar() {
 }
 
 static void redraw() {
-    int k, f;
+    int k;
+    struct win *w, *f;
     gui_clear(C_DESK);
     k = 0;
     while (k < N_ICONS) { icon(18, 14 + k * 72, icon_labels[k], icon_kinds[k]); ++k; }
-    f = win_focused();
-    k = 0;
-    while (k < nz) {
-        if (!wins[order[k]].min) draw_window(order[k], order[k] == f);
-        ++k;
+    f = focus();
+    w = zbot;
+    while (w) {
+        if (!w->min) draw_window(w, w == f);
+        w = w->above;
     }
     if (menu_win) draw_dropdown();
     draw_taskbar();
@@ -808,7 +840,8 @@ static void redraw() {
 // that reach into it, back to front, and the taskbar if it does. A menu
 // open is drawn over everything, so that is still the whole scene.
 static void redraw_part() {
-    int k, f, i;
+    int k;
+    struct win *w, *f;
     if (menu_win || start_open) { redraw(); return; }
     part = 1;
     wnoclip();
@@ -819,12 +852,11 @@ static void redraw_part() {
         if (in_damage(0, 14 + k * 72, 80, 52)) icon(18, 14 + k * 72, icon_labels[k], icon_kinds[k]);
         ++k;
     }
-    f = win_focused();
-    k = 0;
-    while (k < nz) {
-        i = order[k];
-        if (!wins[i].min && in_damage(wins[i].x, wins[i].y, wins[i].w, wins[i].h)) draw_window(i, i == f);
-        ++k;
+    f = focus();
+    w = zbot;
+    while (w) {
+        if (!w->min && in_damage(w->x, w->y, w->w, w->h)) draw_window(w, w == f);
+        w = w->above;
     }
     if (in_damage(0, SH - TASK_H, SW, TASK_H)) draw_taskbar();
     gui_noclip();
@@ -875,10 +907,11 @@ static void mouse_down(int x, int y, int button) {
         return;
     }
     if (menu_win) {
-        w = wins + menu_win - 1;
+        w = win_get(menu_win - 1);
         k = dropdown_hit(x, y);
         i = menu_idx;
         menu_win = 0; dirty = 1;
+        if (!w) return;
         if (k >= 0) { app_command(w, i, k); return; }
         // a click on another title of the same bar opens that one instead
         if (y >= w->y + BORDER + TITLE_H + 1 && y < w->y + BORDER + TITLE_H + 1 + MENU_H) {
@@ -897,27 +930,25 @@ static void mouse_down(int x, int y, int button) {
         if (ui_hit(x, y, 2, SH - TASK_H + 4, 56, 22)) { start_open = 1; start_hot = 0 - 1; dirty = 1; return; }
         if (ui_hit(x, y, CPU_X, SH - TASK_H + 4, CPU_W, 22)) { tasks_open_perf(); dirty = 1; return; }
         bw = button_w();
-        k = 0; i = 0;
-        while (i < MAXW) {
-            w = wins + i;
+        k = 0; w = first;
+        while (w) {
             if (w->used && !is_dialog(w)) {
                 if (ui_hit(x, y, 64 + k * (bw + 4), SH - TASK_H + 4, bw, 22)) {
-                    if (i == win_focused() && !w->min) w->min = 1;
-                    else win_raise(i);
+                    if (w == focus()) w->min = 1;
+                    else win_raise(w->id);
                     dirty = 1;
                     return;
                 }
                 ++k;
             }
-            ++i;
+            w = w->next;
         }
         return;
     }
     // windows, topmost first; a dialog keeps the input to itself
-    k = nz - 1;
-    while (k >= 0) {
-        i = order[k];
-        w = wins + i;
+    w = ztop;
+    while (w) {
+        i = w->id;
         if (!w->min && ui_hit(x, y, w->x, w->y, w->w, w->h)) {
             if (modal() >= 0 && modal() != i) return;
             win_raise(i);
@@ -962,7 +993,7 @@ static void mouse_down(int x, int y, int button) {
             }
             return;
         }
-        --k;
+        w = w->below;
     }
     if (modal() >= 0) return;
     // the desktop icons: a double click opens
@@ -980,12 +1011,11 @@ static void mouse_down(int x, int y, int button) {
 static int ptr_shape;
 static int shape_at(int x, int y) {
     struct win *w;
-    int k, cx, cy;
+    int cx, cy;
     if (sizing) return GUI_PTR_RESIZE;
     if (drag || start_open || menu_win || y >= SH - TASK_H) return GUI_PTR_ARROW;
-    k = nz - 1;
-    while (k >= 0) {
-        w = wins + order[k];
+    w = ztop;
+    while (w) {
         if (!w->min && ui_hit(x, y, w->x, w->y, w->w, w->h)) {
             if (w->resizable && !w->max && x >= w->x + w->w - 16 && y >= w->y + w->h - 16) return GUI_PTR_RESIZE;
             cx = x - client_x(w); cy = y - client_y(w);
@@ -995,7 +1025,7 @@ static int shape_at(int x, int y) {
             if (w->kind == K_EDIT) return edit_pointer(w, cx, cy, client_w(w), client_h(w));
             return GUI_PTR_ARROW;
         }
-        --k;
+        w = w->below;
     }
     return GUI_PTR_ARROW;
 }
@@ -1009,8 +1039,7 @@ static void mouse_move(int x, int y) {
     struct win *w;
     int k;
     pointer(x, y);
-    if (drag) {
-        w = wins + drag - 1;
+    if (drag && (w = win_get(drag - 1))) {
         w->x = x - drag_dx; w->y = y - drag_dy;
         if (w->y < 0) w->y = 0;
         if (w->y > SH - TASK_H - TITLE_H) w->y = SH - TASK_H - TITLE_H;
@@ -1019,8 +1048,7 @@ static void mouse_move(int x, int y) {
         dirty = 1;
         return;
     }
-    if (sizing) {
-        w = wins + sizing - 1;
+    if (sizing && (w = win_get(sizing - 1))) {
         w->w = size_w0 + x - size_x0; w->h = size_h0 + y - size_y0;
         if (w->w < 220) w->w = 220;
         if (w->h < 140) w->h = 140;
@@ -1029,9 +1057,7 @@ static void mouse_move(int x, int y) {
     }
     if (start_open) { k = start_hit(x, y); if (k != start_hot) { start_hot = k; dirty = 1; } return; }
     if (menu_win) { k = dropdown_hit(x, y); if (k != menu_hot) { menu_hot = k; dirty = 1; } return; }
-    k = win_focused();
-    if (k >= 0) {
-        w = wins + k;
+    if ((w = focus())) {
         // a thumb being dragged follows the pointer out of the window too
         if (ui_scroll_active() || ui_hit(x, y, client_x(w), client_y(w), client_w(w), client_h(w))) {
             app_mouse(w, E_MOVE, x - client_x(w), y - client_y(w));
@@ -1046,36 +1072,32 @@ static void mouse_up(int x, int y) {
     drag = 0; sizing = 0;
     ui_scroll_end();
     pointer(x, y);
-    k = win_focused();
-    if (k >= 0) { w = wins + k; app_mouse(w, E_UP, x - client_x(w), y - client_y(w)); }
+    if ((w = focus())) app_mouse(w, E_UP, x - client_x(w), y - client_y(w));
 }
 
 static void wheel(int x, int y, int dy) {
-    int k, i;
     struct win *w;
-    k = nz - 1;
-    while (k >= 0) {
-        i = order[k]; w = wins + i;
+    w = ztop;
+    while (w) {
         if (!w->min && ui_hit(x, y, client_x(w), client_y(w), client_w(w), client_h(w))) {
             app_mouse(w, E_WHEEL, x - client_x(w), dy);
             dirty = 1;
             return;
         }
-        --k;
+        w = w->below;
     }
 }
 
 static void key_down(int code, int ch, int mods) {
-    int f;
+    struct win *f;
     // typing between two clicks makes them two clicks, not a double click
     down_win = 0; icon_k = 0 - 1;
     // Ctrl+Shift+Esc: Task Manager, from anywhere
     if (code == KEY_ESC && (mods & M_CTRL) && (mods & M_SHIFT)) { tasks_open(); return; }
     if (start_open && code == KEY_ESC) { start_open = 0; dirty = 1; return; }
     if (menu_win && code == KEY_ESC) { menu_win = 0; dirty = 1; return; }
-    f = win_focused();
-    if (f < 0) return;
-    app_key(wins + f, code, ch, mods);
+    if (!(f = focus())) return;
+    app_key(f, code, ch, mods);
     dirty = 1;
 }
 
@@ -1087,6 +1109,7 @@ static void shutdown_screen() {
 
 int main(int argc, char **argv) {
     int *region, k, busy, secs, clock_min, last_tick, last_draw, input, start_ms, second_draw;
+    struct win *w;
 
     if (!gui_present()) { printf("desktop: not fitted\n"); return 0; }
     region = ualloc(65536);
@@ -1096,8 +1119,6 @@ int main(int argc, char **argv) {
     gui_events(GUI_M_MOVE | GUI_M_BUTTONS | GUI_M_KEYS | GUI_M_WHEEL | GUI_M_WINDOW);
     theme_init();
     theme_load();
-    wins = (struct win *)ualloc(MAXW * sizeof(struct win));
-    memset(wins, 0, MAXW * sizeof(struct win));
     ev = ualloc(4 * sizeof(int));
 
     icon_labels[0] = "My Computer"; icon_kinds[0] = 0;
@@ -1120,7 +1141,7 @@ int main(int argc, char **argv) {
     start_items[k] = "-"; start_kinds[k] = 0; ++k;
     start_items[k] = "Shut Down..."; start_kinds[k] = 0 - 2; ++k;
     n_start = k;
-    nz = 0; icon_k = 0 - 1;
+    icon_k = 0 - 1;
     printf("desktop: running on the display. Start > Shut Down to come back here.\n");
 
     term_open(0);
@@ -1129,6 +1150,7 @@ int main(int argc, char **argv) {
     start_ms = now_ms(); second_draw = 0;
     while (running) {
         busy = 0; input = 0;
+        sweep();
         while (gui_poll(ev)) {
             busy = 1; input = 1;
             if (ev[0] == GUI_EV_DOWN) mouse_down(ev[1], ev[2], ev[3]);
@@ -1141,11 +1163,11 @@ int main(int argc, char **argv) {
         // the first frame, once more half a second in, in case the page was
         // not yet showing the display when it came
         if (!second_draw && now_ms() - start_ms >= 500) { second_draw = 1; dirty = 1; }
-        k = 0;
-        while (k < MAXW) {
-            if (wins[k].used && wins[k].kind == K_TERM) term_tick(wins + k);
-            if (wins[k].used && wins[k].kind == K_EDIT) edit_tick(wins + k);
-            ++k;
+        w = first;
+        while (w) {
+            if (w->used && w->kind == K_TERM) term_tick(w);
+            if (w->used && w->kind == K_EDIT) edit_tick(w);
+            w = w->next;
         }
         // a tick a second for the windows that show live numbers: a
         // MACHINE second, which is what their numbers count (cpustat's ms)
@@ -1154,8 +1176,8 @@ int main(int argc, char **argv) {
         // machine covers many seconds of its own in one of the host's.
         if (__time() - last_tick >= 1000) {
             last_tick = __time();
-            k = 0;
-            while (k < MAXW) { if (wins[k].used && wins[k].kind == K_TASKS) tasks_tick(wins + k); ++k; }
+            w = first;
+            while (w) { if (w->used && w->kind == K_TASKS) tasks_tick(w); w = w->next; }
             // the meter, every other tick, and a redraw only when it moved
             cpu_n = cpu_n + 1;
             if (cpu_n >= 2) {
@@ -1193,8 +1215,9 @@ int main(int argc, char **argv) {
         }
     }
 
-    k = 0;
-    while (k < MAXW) { if (wins[k].used) win_close(k); ++k; }
+    w = first;
+    while (w) { if (w->used) win_close(w->id); w = w->next; }
+    sweep();
     shutdown_screen();
     gui_detach();
     printf("desktop: shut down\n");

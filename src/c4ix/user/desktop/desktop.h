@@ -17,7 +17,7 @@
 #include "c4ix_user.h"
 
 enum { SW = 800, SH = 600, TASK_H = 30, BORDER = 4, TITLE_H = 18, MENU_H = 20,
-       MAXW = 8, ST_BYTES = 73728, SIGTERM = 15 };
+       ST_BYTES = 73728, SIGTERM = 15 };
 
 // window kinds
 enum { K_TERM = 1, K_ABOUT = 2, K_FILES = 3, K_TASKS = 4, K_NOTE = 5, K_CALC = 6,
@@ -55,7 +55,15 @@ enum { M_SHIFT = 1, M_CTRL = 2, M_ALT = 4 };
 enum { A_NONE = 0, A_DELETE = 1, A_RENAME = 2, A_NEWDIR = 3, A_OPEN = 4, A_SAVEAS = 5,
        A_RUN = 6, A_ENDPROC = 7 };
 
+// Each window is its own allocation, so there are as many as memory
+// allows. A window's number (win_open's answer, win_get's question) is
+// never reused, so a number kept for a window that has since closed
+// finds nothing.
 struct win {
+    int id;                       // its number
+    struct win *next;             // the next window, in the order they opened
+    struct win *above, *below;    // z-order (wm.c's)
+    int slot;                     // where it cascaded to when it opened
     int used, kind, x, y, w, h;
     int min, max, rx, ry, rw, rh;
     int resizable;
@@ -83,8 +91,11 @@ void d_clip(int x, int y, int w, int h);  // narrower than the window, until d_c
 void d_clip_end();
 
 // ---- wm.c: windows ----
-struct win *win_get(int i);
-int  win_index(struct win *w);
+struct win *win_get(int i);          // the window with this number, or 0
+int  win_index(struct win *w);       // ... and a window's number
+struct win *win_first();             // the windows in the order they opened:
+                                     //   w = win_first(); while (w) { ...; w = w->next; }
+                                     // a window closed meanwhile is still on it, with used 0
 int  win_open(int kind, char *title, int w, int h);
 void win_close(int i);
 void win_title(struct win *w, char *s);

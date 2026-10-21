@@ -105,8 +105,8 @@ int tasks_open() {
     int i, k;
     struct win *w;
     // one Task Manager at a time: another request brings it forward
-    k = 0;
-    while (k < MAXW) { w = win_get(k); if (w->used && w->kind == K_TASKS) { win_raise(k); return k; } ++k; }
+    w = win_first();
+    while (w) { if (w->used && w->kind == K_TASKS) { win_raise(w->id); return w->id; } w = w->next; }
     i = win_open(K_TASKS, "Task Manager", 490, 440);
     if (i < 0) return i;
     w = win_get(i);
@@ -181,9 +181,8 @@ static void draw_apps(struct win *me, struct tasks *t, int ox, int oy, int cw, i
     ui_header(ox + 10, oy + PAGE_Y + 12, widths, labels, 2);
     y = oy + PAGE_Y + 32;
     n = 0;
-    k = 0;
-    while (k < MAXW) {
-        w = win_get(k);
+    w = win_first();
+    while (w) {
         if (w->used && w->kind != K_MSG && w->kind != K_INPUT) {
             if (n == t->asel) d_rect(ox + 12, y - 1, cw - 26, ROW_H, C_SEL);
             d_icon(w->kind, ox + 14, y - 1);
@@ -192,7 +191,7 @@ static void draw_apps(struct win *me, struct tasks *t, int ox, int oy, int cw, i
             y = y + ROW_H + 2;
             ++n;
         }
-        ++k;
+        w = w->next;
     }
     ui_button(ox + cw - 300, oy + ch - 40, 90, 24, "End Task", 0, 0);
     ui_button(ox + cw - 202, oy + ch - 40, 90, 24, "Switch To", 0, 0);
@@ -285,7 +284,7 @@ static void draw_perf(struct tasks *t, int ox, int oy, int cw, int ch) {
     d_text(ox + 20, oy + PAGE_Y + 170, C_DARK, F_SANS, "Processes");
     ui_num(buf, t->n); d_text(ox + 150, oy + PAGE_Y + 170, C_DARK, F_SANS, buf);
     d_text(ox + 20, oy + PAGE_Y + 188, C_DARK, F_SANS, "Windows open");
-    secs = 0; k = 0; while (k < MAXW) { w = win_get(k); if (w->used) ++secs; ++k; }
+    secs = 0; w = win_first(); while (w) { if (w->used) ++secs; w = w->next; }
     ui_num(buf, secs); d_text(ox + 150, oy + PAGE_Y + 188, C_DARK, F_SANS, buf);
     d_text(ox + 20, oy + PAGE_Y + 206, C_DARK, F_SANS, "Up for (machine seconds)");
     ui_num_commas(buf, (__time() - t->uptime0) / 1000); d_text(ox + 180, oy + PAGE_Y + 206, C_DARK, F_SANS, buf);
@@ -312,15 +311,14 @@ void tasks_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
 
 // ---- input --------------------------------------------------------------------------
 
-// The n'th application window's index, or -1.
+// The n'th application window's number, or -1.
 static int app_window(int n) {
-    int k, i;
+    int i;
     struct win *w;
-    i = 0; k = 0;
-    while (k < MAXW) {
-        w = win_get(k);
-        if (w->used && w->kind != K_MSG && w->kind != K_INPUT) { if (i == n) return k; ++i; }
-        ++k;
+    i = 0; w = win_first();
+    while (w) {
+        if (w->used && w->kind != K_MSG && w->kind != K_INPUT) { if (i == n) return w->id; ++i; }
+        w = w->next;
     }
     return 0 - 1;
 }

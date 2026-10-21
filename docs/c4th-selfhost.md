@@ -136,10 +136,10 @@ The one thing that did need building is on the kernel's side.
 `src/c4ix/loader.c` read images from the host only, and **a program the
 machine produced itself cannot be on the host**: the VM has no write
 syscall, so nothing running under it can put a file there. The loader
-now falls back to the RAM filesystem, which makes
+now looks in the RAM filesystem first, which makes
 
-    c4th.c4r ... > /ram/prog.c4r
-    /ram/prog.c4r
+    c4th.c4r ... > /tmp/prog.c4r
+    /tmp/prog.c4r
 
 a whole compile-and-run loop with the shell's redirection standing in
 for the write syscall. `src/c4th/tests/c4ix.sh` does exactly that, and

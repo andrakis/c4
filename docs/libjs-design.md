@@ -7,7 +7,9 @@ Status, 2026-09-30: M0-M4 done, M5 done except the performance pass and the
 media panel (both left open on purpose, below). The display has grown a pixel
 framebuffer, display interrupts and a SharedArrayBuffer path since the
 decisions below were taken. The biggest program drawn on it is the C4IX
-desktop, tracked in [c4ix-desktop.md](c4ix-desktop.md).
+desktop, tracked in [c4ix-desktop.md](c4ix-desktop.md); since 2026-10-20 the
+page boots C4IX with `--desktop`, straight to the desktop with `top` on the
+console (`libjs/tests/test-boot-desktop.mjs`).
 
 ## Why
 
@@ -57,7 +59,7 @@ Out of scope for now: c4mp multiprocessing.
 | File | Role |
 |---|---|
 | `libjs/c4m.js` | `Machine`: the interpreter. No DOM, no Node. |
-| `libjs/bus.js` | Addresses below 0x1000: 0x100-0x1FF go to c4bb's `Devices`, 0x400-0x43F go to `GuiDevice`. |
+| `libjs/bus.js` | Addresses below 0x1000: 0x100-0x1FF go to c4bb's `Devices`, 0x400-0x47F go to `GuiDevice`. |
 | `libjs/heap.js` | The host-side allocator behind MALC/FREE/RALC, with a size side table. |
 | `libjs/printf.js` | A pure PRTF formatter. |
 | `libjs/boot.js` | `parseC4r`/`loadImage` (reused), argv, and a c4mp-style trampoline. |
@@ -88,7 +90,7 @@ Reused from `src/c4bb/sim/`: `arena.js`, `devices.js`, `loader.js`
   1. every 4096 cycles, the TLEV wedge check;
   2. the PIT, on the wall clock, raises HIRQ(1);
   3. the mailbox raises HIRQ(2);
-  4. the display raises HIRQ(3) (later);
+  4. the display raises HIRQ(3);
   5. the cycle interval raises HIRQ(0), except when the instruction at `pc` is TLEV;
   6. otherwise a pending signal is delivered, unless the kernel has opted
      into `TRAP_RESTORES_INTERVAL` and the interval is zero.
@@ -104,7 +106,8 @@ Reused from `src/c4bb/sim/`: `arena.js`, `devices.js`, `loader.js`
     spin would reach. With no interrupt armed the run stops with `input`
     and the host parks until a key arrives.
   - USLP stops with `sleep`, so the host can pace.
-  - STRC prints nothing, as on c4bb: a stack trace needs symbols.
+  - STRC prints a stack trace, naming each frame from the image's symbol
+    section (`boot.js` parseSymbols; below).
   - INFO includes `C4I_C4MJS` (0x8) and never `C4I_C4` (0x1). C4IV does
     nothing.
 - **The heap** keeps no headers in guest memory. Sizes live in a `Map`,
@@ -130,9 +133,9 @@ uses SharedArrayBuffer instead (`shared.js`, M5); `?shared=0` forces the
 message path.
 
 - **Page to worker**: `boot`, `key`, `input`, `signal`, `eof`, `gui`,
-  `pause`, `resume`, `reset`.
-- **Worker to page**: `stdout`, `echo`, `kbdmode`, `display`, `gui`,
-  `status`, `exit`, `error`, `log`.
+  `pause`, `resume`, `reset`, `peek`, `poke`.
+- **Worker to page**: `out`, `kbd`, `display`, `gui`, `status`, `exit`,
+  `error`, `reply` (the answer to a `peek` or `poke`).
 - **The run loop** runs a slice (about 1M instructions, capped near 8 ms),
   flushes output, then:
   - on `sleep`, waits the requested time;
@@ -154,7 +157,7 @@ before touching it.
 | 0x410 | RING | w | region base; 0 detaches |
 | 0x414 | BELL | w | 1 = flush, 2 = present. Read: events pending |
 | 0x418 | EVMASK | r/w | 1 move, 2 buttons, 4 keys, 8 resize/focus, 16 wheel |
-| 0x41C | IRQ | r/w | 0 = poll; 1 = HIRQ(3) when an event arrives (later) |
+| 0x41C | IRQ | r/w | 0 = poll; 1 = HIRQ(3) when an event arrives |
 | 0x420 | MOUSE | r | (x << 16) \| y |
 | 0x424 | BUTTONS | r | button bitmask |
 | 0x428 | TICKS | r | host milliseconds |
@@ -171,7 +174,7 @@ commands to the host.
 
 - **Commands** (colours are `0x00RRGGBB`): 1 CLEAR, 2 RECT, 3 RECTO, 4 LINE,
   5 CIRCLE, 6 TEXT, 7 PIXEL, 8 PRESENT, 9 SIZE, 10 IMGDEF, 11 IMG, 12 CLIP,
-  13 NOCLIP.
+  13 NOCLIP, 14 TEXT2, 15 CURSOR (`GUI_PTR_*`, the pointer's shape).
 - **Events**: 1 MOVE, 2 DOWN, 3 UP, 4 KEYDOWN, 5 KEYUP, 6 RESIZE, 7 FOCUS,
   8 WHEEL.
 
@@ -304,7 +307,7 @@ commands to the host.
       for this demo, 74M inst/s, about 29 frames a second, 30% of a core
 - [x] STRC names each frame from the image's symbol section
       (`boot.js` parseSymbols); pinned by `libjs-strc.c4r` in the suite
-- [ ] Media panel (c4bb's `store.js` and `drives.js`). Not done: C4IX writes
-      to its RAM filesystem, so nothing yet needs writable drives kept in the
-      browser. The worker already takes c4bb's drive list, so it is a page
+- [ ] Media panel (c4bb's `store.js` and `drives.js`). Not done: C4IX's
+      filesystem lives in memory, so nothing yet needs writable drives kept
+      in the browser. The worker already takes c4bb's drive list, so it is a page
       change when it is wanted.

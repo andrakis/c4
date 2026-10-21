@@ -52,15 +52,19 @@ Font 0 is monospace, 1 a sans-serif UI face, 2 its bold. A non-zero
 advance places each character exactly `advance` pixels after the last,
 which is what a character grid needs; 0 is the font's own spacing.
 
-**The desktop** (src/c4ix/user/desktop/, six modules linked with libc4ix -> c4ix-desktop.c4r; it was one file, `desktop.c`, until D6):
+**The desktop** (src/c4ix/user/desktop/, seven modules linked with libc4ix -> c4ix-desktop.c4r; it was one file, `desktop.c`, until D6, and `edit.c` joined in part four):
 - Asks for an 800x600 display (1024x768 was too small to read once the
-  page scaled it into its pane), attaches the rings, and redraws the whole
-  scene when something changed. Idle, it sleeps (`umsleep`).
-- Windows are a z-ordered list. Title bar drag moves, a click raises and
+  page scaled it into its pane), attaches the rings, and redraws what
+  changed: the whole scene, or only the damaged regions
+  (docs/c4ix-cpu.md, step 11). Idle, it waits on `SYS_EVWAIT` for a
+  deadline, an event or output on a terminal's pipe.
+- Windows are a z-ordered list (a linked list, as many as memory allows;
+  part seven). Title bar drag moves, a click raises and
   focuses, the three caption buttons minimise, maximise/restore and close.
 - The taskbar has a Start button (menu: New Terminal, About, Shut Down),
   a button per window, and a clock.
-- A terminal window is 80x24 cells of 8x16 pixels. Closing it ends its
+- A terminal window is 80x25 cells of 8x16 pixels (80x24 until the
+  fixes of 2026-09-24), with 300 rows of scrollback. Closing it ends its
   shell (SIGTERM) and the desktop reaps it.
 
 ## Tracker
@@ -496,7 +500,8 @@ it lacked was somewhere to edit and build in one place.
 - [x] **The repo is /usr, builds go to /build, no /ram**
       (docs/c4ix-design.md): one copy of each source, `<u0.h>` found in
       `/usr/include`, and `/tmp` for scratch. The IDE builds a `.c` file
-      that no BUILD.B4K names on its own, with cc, into `/build`.
+      that no BUILD.B4K names on its own, with cc, into `/tmp/NAME.c4r`
+      (its build file is `/tmp/edit.b4k`).
 - [x] Pinned by `test-desktop.mjs` (history, in-line edits, scrollback,
       ten more windows than before) and `test-libjs.sh` (cc builds echo
       the disk's, byte for byte; a fresh boot's b4ke has nothing to do; an

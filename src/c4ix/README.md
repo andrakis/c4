@@ -11,9 +11,12 @@ redirection, a hierarchical RAM filesystem and a shell with pipelines.
 It also runs C4KE's binaries unmodified, through a compatibility layer
 (`c4ke.c`) that answers C4KE's custom opcodes. With the libjs display
 fitted it runs a Windows-style desktop ([user/desktop](user/README.md)).
-Compilers run inside it: c4cc, c4rlink and c4lc (on c4sp) write what they
-build into `/tmp`, and c4th, cpp and c4rdump are installed beside them
-(on the disk image `make c4bb-images` builds; see `examples/README.txt`).
+Compilers run inside it: `cc` (c4lc compiled, as c4sc), c4cc, c4rlink and
+c4lc on c4sp write what they build anywhere in the tree (`/tmp` for
+scratch), and c4th, cpp and c4rdump are installed beside them (on the
+disk image `make c4bb-images` builds; see `examples/README.txt`). `/bin/c4m`
+is c4m itself, so `c4m load-c4r.c -- /usr/lib/c4ke.c4r` (from `/usr`)
+boots C4KE as a C4IX task (docs/c4-float.md).
 
 ## Build
 
@@ -24,7 +27,7 @@ build into `/tmp`, and c4th, cpp and c4rdump are installed beside them
 | `make libarc.c4l` | gzip (inflate, CRC-32) and tar, for `c4ix-tar.c4r` and `c4ix-gunzip.c4r`, which link it as well |
 | `make c4ix-NAME.c4r` | `user/NAME.c` compiled with c4lc and linked with `libc4ix.c4l` (e.g. `c4ix-sh.c4r`, `c4ix-ls.c4r`) |
 | `make c4ix-hello.c4r` | `user/hello.c` alone, no library: it calls `printf` directly |
-| `make c4ix-desktop.c4r` | the desktop's six modules linked with `libc4ix.c4l` |
+| `make c4ix-desktop.c4r` | the desktop's seven modules linked with `libc4ix.c4l` |
 | `make c4ix-src.tar` | the kernel sources as a C4TAR1 archive, for building C4IX inside C4KE |
 
 The 32-bit images the breadboard and libjs boot (`c4ix32.c4r` and the
@@ -49,6 +52,9 @@ The kernel's command line, from `c4ix.c4r --help`:
       -h, --help         print this and shut down
       -q                 accepted and ignored, so older command
                          lines keep working
+      ...
+      c4ix.c4r --desktop   the web page's boot: the shell runs "desktop &",
+                           then "top", as if they were typed
 
 `PROGRAM` is a host path and is not expanded; the shell expands a bare
 name to `c4ix-NAME.c4r` or `NAME.c4r`. `--demo` takes six images in fixed
@@ -83,9 +89,10 @@ faster than `c4sp c4lc.lisp` (src/c4ix/examples/README.txt).
 What c4lc builds comes out byte for byte the disk's; c4cc's images carry
 its own heap addresses in their symbol records, so they differ there and
 nowhere that runs. The whole tree is about 29G instructions (nine minutes
-under node). `make test-c4ix-rebuild` checks all of it. Its builtins
-are `exit jobs wait kill cd pwd help`; it has `<`, `>`, pipelines and `&`.
-`exit` or Ctrl-D shuts the kernel down.
+under node). `make test-c4ix-rebuild` checks all of it.
+
+The shell's builtins are `exit jobs wait kill cd pwd help`; it has `<`,
+`>`, pipelines and `&`. `exit` or Ctrl-D shuts the kernel down.
 
 The desktop needs the libjs display, so it runs in the browser or headless
 under libjs, not on a terminal:
@@ -121,8 +128,8 @@ target.
 | `va.c` | the one varargs area for the whole image |
 | `host.c` | host detection from one `__c4_info()` call; what tasks are told |
 | `sl4b.c` | SL4B, a slab allocator for fixed-size kernel objects |
-| `task.c` | the task list; 64 KB stacks |
-| `sched.c` | the scheduler: switches inside c4m trap handlers (preemptive via the cycle interrupt), with a cooperative fallback for a host without traps |
+| `task.c` | the task list; stacks of 64K words (256 KB on a 32-bit host), more when the spawner asks with `SYS_STACK` |
+| `sched.c` | the scheduler: switches inside c4m trap handlers (preemptive via the cycle interrupt), and the idle task |
 | `vfs.c` | vnodes, open file descriptions, per-task fd tables, pipes, directories |
 | `sys.c` | the syscall dispatcher: libc4ix's calls and trapped host opcodes both end here |
 | `c4ke.c` | the C4KE compatibility layer: answers `u0.h`'s custom opcodes, including the RAM-filesystem ones |
@@ -134,7 +141,7 @@ target.
 | `libc/` | [C4IX's C library](libc/README.md), the shared library `/lib/libc.c4s` |
 | `lib/archive.c`, `include/archive.h` | libarc: an RFC 1951 inflater (puff-style, with a 9-bit lookup table), gzip with its CRC, and a ustar/C4TAR1 reader that makes directories as it goes |
 | [`user/`](user/README.md) | userland programs, shell scripts, and the desktop |
-| `examples/` | `hello.c`, `bounce.c` and `README.txt`: programs to compile inside C4IX (`c4cc -o /tmp/hello.c4r /usr/src/c4ix/examples/hello.c`) |
+| `examples/` | `hello.c`, `bounce.c` and `README.txt`: programs to compile inside C4IX (`cc -o /tmp/hello.c4r /usr/src/c4ix/examples/hello.c`, or the same with `c4cc`) |
 | `tests/` | goldens for `test-c4ix`, `test-c4ix-fmt`, `test-c4ix-c4ke` |
 
 ## Hosts
@@ -145,10 +152,11 @@ target.
 - **Plain c4**: C4IX images use opcodes the base VM does not have (the
   Makefile names `C4CY`, `PUTC`, `JSRI`, `JSRS`), so the supported route is
   c4 → c4m.c → C4IX (`make run-c4ix-c4`, `make test-c4ix-c4`), where C4IX
-  sees a c4m host and behaves identically. The scheduler also has a
-  cooperative backend for a host whose `__c4_info()` reports no traps;
-  `init` then skips the preemption demo. On Windows, plain c4 has no
-  `/proc/uptime` clock; a natively built c4m does not have that problem.
+  sees a c4m host and behaves identically. A host whose `__c4_info()`
+  does not report c4m is refused at boot; the cooperative scheduler
+  once kept for one is gone (docs/c4ix-cpu.md, step 10). On Windows,
+  plain c4 has no `/proc/uptime` clock; a natively built c4m does not
+  have that problem.
 - **32-bit / c4bb**: `c4ix32.c4r` boots on the breadboard, with the drives
   and, via C4DOS and C4KE, the whole climb
   ([docs/climbing-the-ladder.md](../../docs/climbing-the-ladder.md)).
@@ -162,17 +170,14 @@ target.
 - A race not yet root-caused intermittently corrupts one entry when
   `c4ix-vfsload` fills the tree on c4bb, so `test-c4bb` only requires most
   entries to load (see `user/vfsload.c` and `src/c4bb/tests/test-c4bb.sh`).
-- The header comments of `boot.c` and `c4ix.h` predate the current build:
-  they describe a plain-c4 mode through the c4l loader and a `gcc -E` pass
-  before c4lc. The Makefile builds with c4lc's own preprocessor and names
-  c4 → c4m.c as the plain-c4 route.
 
 ## Docs
 
-- [docs/c4ix-design.md](../../docs/c4ix-design.md): the kernel's design
-  and milestones X0–X5. It has not been kept up to date since 2026-08-09;
-  later work (the desktop, compilers inside, the RAM-file loader
-  preference) is not in it.
+- [docs/c4ix-design.md](../../docs/c4ix-design.md): the kernel's design,
+  milestones X0–X5, and what has been built since (the root archive,
+  the rebuild inside, shared libc, the disk layout).
+- [docs/c4ix-cpu.md](../../docs/c4ix-cpu.md): where C4IX's cycles go,
+  and the eleven steps that made its accounting and scheduling cheaper.
 - [docs/c4ix-desktop.md](../../docs/c4ix-desktop.md): the desktop, its
   kernel additions and its tracker. Current.
 - [docs/internals.md](../../docs/internals.md) §7.4: what C4IX does with

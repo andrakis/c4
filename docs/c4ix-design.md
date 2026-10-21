@@ -8,13 +8,14 @@ that was dropped on 2026-08-04 -- see 4.1. Under plain c4, C4IX runs
 through c4m itself: c4 -> c4m.c -> C4IX, `make test-c4ix-c4`.)
 The name is the user's, from an earlier rewrite attempt.
 
-STATUS (2026-09-30): X0–X6 done, plus directories and the preemption
-fixes (section 6). Since this document was last brought up to date
-(2026-08-09) C4IX has been built on the machine that runs it (the
-ladder), gained a sleep syscall, `gui`, a Windows-style desktop
-(docs/c4ix-desktop.md), a lazy disk, and compilers that run inside it;
-"Since X6" at the end of section 6 lists them. `src/c4ix/README.md`
-has the current build, run and test targets.
+STATUS (2026-10-21): X0–X6 done, plus directories and the preemption
+fixes (section 6). Since X6 C4IX has been built on the machine that
+runs it (the ladder), gained a sleep syscall, `gui`, a Windows-style
+desktop (docs/c4ix-desktop.md), a lazy disk, compilers that run inside
+it, a root archive it rebuilds itself from, shared libraries and a
+libc, and CPU accounting; "Since X6" at the end of section 6 lists
+them. Sections 1–5 are the original design and keep its dates.
+`src/c4ix/README.md` has the current build, run and test targets.
 
 Everything here builds on docs/c4lc-design.md (the compiler) and
 docs/internals.md §6.5 (the c4l loading system).
@@ -113,11 +114,11 @@ loading or assigning a whole struct is an error.
   system under an unmodified interpreter, just slowly. C4LM is the
   project written for plain c4 directly; every kernel above it
   requires c4m.
-  The kernel still detects its host via `__c4_info()`, and the
-  cooperative/no-protected-mode paths still exist and still work --
-  but in the supported configuration they are not reached, because
-  c4m always reports itself. They are kept as the degradation story
-  rather than removed, and should be treated as untested.
+  The kernel still detects its host via `__c4_info()`. The
+  cooperative/no-protected-mode paths were kept for a while as the
+  degradation story, never reached because c4m always reports itself;
+  they were removed on 2026-10-21 ("Plain c4 support removed", end of
+  section 6), and a host that is not c4m is refused at boot.
 
 ### 4.2 Milestones
 
@@ -563,7 +564,25 @@ loading or assigning a whole struct is an error.
   `/build`. The whole tree is writable, so C4IX has no `/ram` -- that
   is C4KE's and C4DOS's -- and the kernel makes `/tmp` at boot for
   scratch files instead (init's demo, test.sh, cc's objects, the IDE's
-  one-file builds, which land in `/build/NAME.c4r`).
+  one-file builds, which land in `/tmp/NAME.c4r`).
+
+- **`cc`** (8b01e1a, 955bc82, 2026-10-21): `src/c4ix/user/cc.c` runs
+  c4sc with c4lc's preprocessor, `/usr/include` on the include path and
+  the 1 MB of stack c4sc needs, and links with c4rlink when given `-l`
+  or more than one source. It defines `C4CC` and `__c4cc__`, as the
+  Makefile does, so the repo's own programs (`/usr/src/tests/mandel.c`)
+  build as they are. src/c4tui/demo.c takes 18 machine-seconds with
+  it, against 344 with `c4sp c4lc.lisp`. The IDE's `:make` uses the
+  nearest BUILD.B4K that names the file, and has cc build a `.c` file
+  none names. Since c4lc has `float` and `double` (docs/c4-float.md),
+  so has cc.
+
+- **c4m inside C4IX** (409e8c0, 2026-10-21): `/bin/c4m` is c4m.c built
+  for the VM, lending its guest the outer machine's `FLT`, and the disk
+  carries C4KE's kernel as `/usr/lib/c4ke.c4r`, so `cd /usr; c4m
+  load-c4r.c -- /usr/lib/c4ke.c4r` boots C4KE to its shell as a C4IX
+  task, and `\q` comes back. docs/c4-float.md; pinned by
+  `libjs/tests/test-c4ix-c4m.mjs` in `make test-libjs`.
 
 - **Shared libraries and a libc** (branch c4ix-userland, 2026-10-19).
   - *Linking:* `c4rlink -l LIB` links against a library without copying
@@ -637,6 +656,8 @@ loading or assigning a whole struct is an error.
       --demo IMAGE...    run the built-in demonstrations
       -h, --help         print the usage and shut down
       -q                 accepted and ignored
+      --desktop          the web page's boot: the shell runs "desktop &",
+                         then "top", as if they were typed
 
 `init_usage()` in init.c is the authority; keep this section in step
 with it. **No arguments boots to a shell**, because that is what

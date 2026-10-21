@@ -70,7 +70,7 @@ way c4sp was (c4sp has been `-O2` too since 2026-08-23).
 
 **Hosts.** One `c4th.c4r` runs under c4m, c4mp, inside C4KE, inside
 **C4IX** (since 2026-09-24, `e427c9c`: it sits in `/bin` beside c4cc,
-c4lc and cpp, is driven by C4IX's shell, and compiles `self.f` inside the
+c4sc (the compiled c4lc) and cpp, is driven by C4IX's shell, and compiles `self.f` inside the
 kernel), and under **C4DOS** (`RUN c4th.c4r core.f ...`; `dos.f` writes to
 the RAM disk through the C4DOS API table). `make test-c4th-os` runs the
 same image on C4KE, C4DOS and C4IX against the native build. c4th is also
@@ -141,9 +141,10 @@ saved image is unrelocatable, which is the job the metacompiler earns its place
 doing (§8).
 
 Arenas grow with `realloc` once Track 0 of `docs/compiler-speed.md` lands. Until
-then they must be sized once at startup from flags: `RALC` compiles under c4m
-but its VM case is commented out (`c4m.c:1690`) and silently leaves the size
-argument in the accumulator.
+then they must be sized once at startup from flags: `RALC` compiled under c4m
+but its VM case was commented out and silently left the size argument in the
+accumulator. (c4m's `RALC` works since `63e274a`, 2026-08-23:
+docs/internals.md §3.6.)
 
 ## 6. Line budget
 
@@ -952,7 +953,8 @@ commit** if the answer is no.
       only, and a program the machine produced itself cannot BE on the
       host: nothing running under the VM can put a file there. It now
       looks in the RAM filesystem first, so
-      `c4th.c4r ... > /ram/prog.c4r` followed by `/ram/prog.c4r` is a
+      `c4th.c4r ... > /ram/prog.c4r` followed by `/ram/prog.c4r` (`/tmp`
+      today: C4IX has had no `/ram` since 2026-10-21) is a
       whole compile-and-run loop and the kernel can finally run
       something it made.
 

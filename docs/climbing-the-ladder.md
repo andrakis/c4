@@ -64,6 +64,11 @@ Driven by a script with sleeps in it (`-i` streams a pipe now), on a
 billions of cycles. Fixed the same day, f5c82a1: both kernels now keep
 cycles in two words, billions and the rest.)
 
+(The transcript is from August 2026. C4IX today has no `/ram`: the
+kernel makes `/tmp` at boot, so `ls` shows `tmp/`. And `ps` shows the
+idle task as 0 and the boot task as 1, `kernel` (docs/c4ix-cpu.md,
+step 5).)
+
 ## What each rung needs
 
 The reason this is a *ladder* and not a menu is that each rung needs
@@ -165,8 +170,9 @@ nothing about what executes: the cycle counts are the same either way.
 
 ## In the browser
 
-The same disk works: open `src/c4bb/web/index.html`, choose **c4dos32**,
-and type the same things. The page's arena is 128 MB.
+The same disk works: open `src/c4bb/web/index.html`, choose **(BIOS)**,
+which boots the climb disk (`c4dos32` boots the smaller recovery floppy,
+`src/c4bb/web/app.js`), and type the same things. The page's arena is 128 MB.
 
 ## Non-interactively
 

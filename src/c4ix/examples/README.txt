@@ -23,11 +23,28 @@ shell's redirection is where they are written:
   c4th /usr/src/forth/core.f /usr/src/forth/self.f /usr/src/forth/self1-c4r.f > /ram/self1.c4r
   /ram/self1.c4r
 
-c4sp runs c4lc, the optimising C compiler written in Lisp. It is slower
-to compile with than c4cc, and has a real preprocessor:
+cc compiles with c4lc, the optimising C compiler, which has a real
+preprocessor. It runs c4sc -- c4lc compiled to an image -- so it is
+many times faster than c4sp running c4lc's Lisp:
 
-  c4sp c4lc.lisp /usr/src/examples/hello.c /ram/hello2.c4r
+  cc -o /ram/hello2.c4r /usr/src/examples/hello.c
   /ram/hello2.c4r
+
+-O optimises, -I and -D go to the preprocessor (/usr/include is always
+searched), and -conforming reads escapes such as "\033" the way C
+does. -l c4ix links in C4IX's own calls, the ones c4ix_user.h declares,
+so the userland's programs build the same way:
+
+  cc -O -l c4ix -o /ram/echo.c4r /usr/src/c4/src/c4ix/user/echo.c
+  /ram/echo.c4r it works
+
+  cc -O -conforming -I /usr/src/c4/src/c4tui -o /ram/demo.c4r /usr/src/c4/src/c4tui/demo.c
+  /ram/demo.c4r
+
+-c leaves an object for c4rlink, and -v shows the commands cc runs.
+Interpreted, the same compiler is still there:
+
+  c4sp c4lc.lisp /usr/src/examples/hello.c /ram/hello3.c4r
 
 Also here: c4rlink (joins objects), c4rdump (shows what is in an image),
 cpp (a preprocessor: cpp file.c > /ram/file.i) and c4sp, the Lisp that

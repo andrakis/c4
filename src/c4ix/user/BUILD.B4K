@@ -84,6 +84,10 @@ DEPS $(OUT)/user/b4ke.c4o : src/c4ix/user/b4ke.c $(U)
 RUN $(LC) src/c4ix/user/b4ke.c $(OUT)/user/b4ke.c4o
 DEPS $(OUT)/bin/c4ix-b4ke.c4r : $(OUT)/user/b4ke.c4o $(LIBC)
 RUN c4rlink $(OUT)/user/b4ke.c4o $(LIBC) -o $(OUT)/bin/c4ix-b4ke.c4r
+DEPS $(OUT)/user/cc.c4o : src/c4ix/user/cc.c $(U)
+RUN $(LC) src/c4ix/user/cc.c $(OUT)/user/cc.c4o
+DEPS $(OUT)/bin/c4ix-cc.c4r : $(OUT)/user/cc.c4o $(LIBC)
+RUN c4rlink $(OUT)/user/cc.c4o $(LIBC) -o $(OUT)/bin/c4ix-cc.c4r
 DEPS $(OUT)/user/tar.c4o : src/c4ix/user/tar.c $(U) src/c4ix/include/archive.h
 RUN $(LC) src/c4ix/user/tar.c $(OUT)/user/tar.c4o
 DEPS $(OUT)/bin/c4ix-tar.c4r : $(OUT)/user/tar.c4o $(LIBARC) $(LIBC)

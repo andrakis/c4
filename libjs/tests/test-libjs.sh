@@ -171,6 +171,18 @@ if [ -n "$a" ] && [ "$a" = "$b" ] && echo "$out" | grep -qF "c4ix/lib: 5 ran, 0 
     ok "b4ke rebuilds libc4ix inside C4IX, byte for byte"
 else bad "b4ke rebuilds libc4ix inside C4IX, byte for byte"; echo "$out" | grep -E 'b4ke|crc32' | head -8; fi
 
+# cc: c4sc (c4lc, compiled) with c4lc's preprocessor, and -l c4ix
+# linking in libc4ix -- the userland's own recipe, so echo built this
+# way is the disk's, byte for byte.
+out=$(printf 'wait 4\ncc -o /ram/hello2.c4r /usr/src/examples/hello.c\n/ram/hello2.c4r\ncc -O -l c4ix -o /ram/echo.c4r /usr/src/c4/src/c4ix/user/echo.c\n/ram/echo.c4r cc built it\ncrc32 /ram/echo.c4r /bin/echo\nexit\n' | \
+      timeout 300 $LIBJS -m 64 -c 4000000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
+a=$(echo "$out" | grep -oE '^[0-9a-f]{8} [0-9]+ /ram/echo.c4r' | cut -d' ' -f1,2)
+b=$(echo "$out" | grep -oE '^[0-9a-f]{8} [0-9]+ /bin/echo' | cut -d' ' -f1,2)
+if echo "$out" | grep -qF "hello from a program compiled inside C4IX" && echo "$out" | grep -qxF "cc built it" &&
+   [ -n "$a" ] && [ "$a" = "$b" ]; then
+    ok "cc compiles inside C4IX, and links libc4ix"
+else bad "cc compiles inside C4IX, and links libc4ix"; echo "$out" | grep -E 'cc|c4lc|crc|hello' | head -8; fi
+
 # Shared libraries: ls is linked with -l libc4ix.c4s, so it runs only if
 # the loader finds /lib/libc4ix.c4s and resolves what it needs from it.
 out=$(printf 'c4rdump /bin/ls\nls /lib\nexit\n' | \

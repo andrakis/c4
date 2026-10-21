@@ -11,9 +11,16 @@
 // What is here is a working subset of C99 and POSIX, written for this
 // machine: stdio with buffered FILEs and a full printf, the string and
 // ctype functions, malloc with realloc, strtol, qsort, getenv, getopt,
-// opendir, and the file calls over C4IX's syscalls. What is not (yet):
-// floating point, locales, wide characters, setjmp, signal handlers,
-// and lseek (C4IX has no seek). docs/c4ix-design.md lists the gaps.
+// opendir, and the file calls over C4IX's syscalls, and printf's %f %e
+// %g. What is not (yet): locales, wide characters, setjmp, signal
+// handlers, and lseek (C4IX has no seek). docs/c4ix-design.md lists the
+// gaps.
+//
+// Floating point is math.h's: the math functions, and strtod, strtof and
+// atof too, which C puts in stdlib.h. A unit that says float or double
+// gets c4lc's float helpers spliced in, which costs every compile of it
+// time (half a second on the host, far more inside C4IX), so this header
+// says neither, and a unit that wants them includes math.h.
 //
 // Two departures a C programmer will notice. A function pointer is an
 // int here -- c4lc calls any variable -- so qsort and atexit take one.

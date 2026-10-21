@@ -1,10 +1,12 @@
 # src/c4ix/libc — C4IX's C library
 
 A C library for programs that run on C4IX: stdio with buffered `FILE`s and a
-full integer `printf`, the string and ctype functions, `malloc` with `realloc`,
+full `printf` (floating point too), the string and ctype functions, `malloc` with `realloc`,
 `strtol`, `qsort`, `getenv`/`setenv`, `getopt`, `opendir`, and the POSIX file
-calls over C4IX's syscalls. [`include/libc.h`](include/libc.h) is the whole
-interface. `stdio.h`, `string.h` and the other standard names include it.
+calls over C4IX's syscalls, and `<math.h>`. [`include/libc.h`](include/libc.h) is the
+interface, and `stdio.h`, `string.h` and the other standard names include
+it; [`include/math.h`](include/math.h) adds the floating-point part, with
+`strtod` and `atof` (docs/c4-float.md says why they are there).
 
 It is a shared library, `/lib/libc.c4s`. C4IX's loader links it into a
 program at spawn (`src/c4ix/loader.c`). It is built `-fpic`, so its code is
@@ -33,16 +35,19 @@ same commands with `./c4sp32 ... src/c4sp/lisp/c4lc.lisp` and `-I src/c4ix/libc/
 | `sys.h` | private: the libc4ix functions the library is built on |
 | `string.c` | string.h and ctype.h |
 | `stdlib.c` | `malloc` (a size word ahead of each block), `realloc`, `exit` and `atexit`, `strtol`, `qsort`, the environment, `rand` |
-| `stdio.c` | `FILE`s, `fopen` and the rest, and `printf` with flags, widths, precisions and every integer conversion |
+| `stdio.c` | `FILE`s, `fopen` and the rest, and `printf` with flags, widths, precisions and every conversion |
+| `fp.c` | `printf`'s `%f %e %g` digits and `strtod`/`strtof`/`atof`, exact both ways (glibc's answers) |
+| `math.c` | `<math.h>`, after fdlibm: within an ulp or two of glibc, the bit-exact ones exact |
 | `unix.c` | `open` … `rename`, `stat`, `opendir`, `getopt`, `errno` and `strerror`, `time` |
 | `opcodes.c` | the VM's `MALC`, `FREE`, `MCPY`, `MSET` and `MCMP`, as `__libc_*`. The one file compiled without `-fno-builtin` |
 | `tests/libctest.c` | exercises all of the above; `tests/libctest.txt` is its output, compared by `make test-libjs` |
+| `tests/fptest.c`, `tests/mathtest.c` | fp.c and math.c alone against glibc's vectors (`fpconvgen.c`, `mathgen.c`), in `make test-c4fp` |
 | `tests/pictest.c` | two at once must keep their own libc data while sharing its code (`make test-libjs`) |
 | `BUILD.B4K` | rebuilds `libc.c4s` and `libctest` inside C4IX |
 
 ## Limits
 
-- No floating point: `%f` and friends print `?`.
+- `%a` (hex float output) is not there; `strtod` reads hex floats.
 - No locales, wide characters, `setjmp`/`longjmp` or signal handlers.
 - No `lseek`: C4IX has no seek. `O_APPEND` works by reading the file in and
   writing it back.

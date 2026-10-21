@@ -11,8 +11,8 @@ Asked for 2026-10-21. The goal is IEEE single and double precision in the C99 co
 |---|---|---|
 | F1 | `src/c4fp/softfp.c`: binary32 and binary64 in software | **done** |
 | F2 | `float` and `double` in c4lc (and so c4sc, and `cc` inside C4IX) | **done** |
-| F4 | C4IX libc: `printf` `%f %e %g`, `strtod`, `math.h` | next |
-| F5 | Calculator: single and double modes | |
+| F4 | C4IX libc: `printf` `%f %e %g`, `strtod`, `math.h` | **done** |
+| F5 | Calculator: single and double modes | next |
 | F3 | an FPU opcode in c4m, libjs and c4bb, which the helpers use when present | |
 | F6 | libjs checks; soft against hard, timed | |
 
@@ -83,7 +83,26 @@ So it is plain C that compiles the same at either word size, and with gcc.
 - **No constant folding of float expressions.** A global's initializer is a literal, a negated literal, or an integer constant.
 - **c4fc refuses floats.** Its lexer reads `1.5` as three tokens and it has no `float` keyword. (Parity with c4lc is a later step.)
 - **On a 64-bit target** c4lc's `long long` is the word `int`. So `unsigned int + long long` follows the `int + unsigned` rule and is cut to 32 bits; gcc widens to 64. This is an existing integer-model limitation, not a float one.
-- **`printf("%f")`** is F4: C4IX's libc prints `?` for it today.
+
+## F4: C4IX's libc
+
+Two new units in `src/c4ix/libc`, in `/lib/libc.c4s`:
+
+- **`fp.c`: the conversions, exact both ways.** A double is m * 2^e, a whole number times a power of ten, and big integers carry it the whole way. So printf's `%f %F %e %E %g %G` digits are the true ones, rounded once to nearest with ties to even: glibc's answer, character for character, with every flag, width and precision. And `strtod`/`strtof` (and `atof`) return the nearest double or float to any decimal, with hex floats, `inf` and `nan`, and `ERANGE`.
+- **`math.c`: `<math.h>`, after fdlibm.**
+  - Exact: `sqrt` (softfp's), `floor ceil trunc round fmod modf frexp ldexp scalbn`.
+  - Within an ulp or two of glibc: `exp log log10 log2 log1p expm1 pow sin cos tan asin acos atan atan2 sinh cosh tanh cbrt hypot`.
+  - `pow` is e_pow.c. `sin`/`cos`/`tan` reduce past 2^20 pi/2 by Payne-Hanek, with the bits of 2/pi. `exp` uses a 32-entry table of 2^(j/32) as double pairs, and agrees with glibc in all but about one case in 200.
+  - The float versions (`sinf`, ...) are the double ones, rounded.
+
+**Headers.** `math.h` declares all of it, and `strtod`/`strtof`/`atof` too, which C puts in `stdlib.h`. A unit that says `float` or `double` gets c4lc's float helpers spliced in, which costs every compile half a second on the host and far more inside C4IX. So `libc.h`, and with it `stdlib.h`, says neither. `float.h` has the IEEE limits. stdio.c hands the double to fp.c as its two words, so it doesn't say `double` either.
+
+**Tests** (`make test-c4fp`, against glibc, at 32 and 64 bits, plain and `-O`):
+- `tests/fptest.c`: fpconvgen.c's printf/strtod/strtof vectors, all exact.
+- `tests/mathtest.c`: mathgen.c's libm vectors, each function within its ulp limit.
+- libctest (test-libjs): float lines too, against gcc's output.
+
+**Size.** math.c is the largest unit in libc (249 KB of object, -fpic), because every double operation is a helper call. c4sc needs 4 MB of stack for it inside C4IX (libc/BUILD.B4K).
 
 ## c4m inside C4IX (2026-10-21)
 

@@ -45,7 +45,10 @@ CC_PROGS="c4cc c4rdump c4rlink cpp c4 c4m"
 out=$(timeout 1500 $LIBJS -m 64 -d $IMAGES/disk $IMAGES/c4ix32.c4r < .rebuild.cmds 2>&1)
 rm -f .rebuild.cmds
 
-if echo "$out" | grep -qF "b4ke: all built, in /build"; then ok "b4ke -C /usr builds everything"
+# all built, and nothing failed or overran on the way (the second run
+# would say "all built" too, after making what the first did not)
+if echo "$out" | grep -qF "b4ke: all built, in /build" &&
+   ! echo "$out" | grep -qE " [1-9][0-9]* failed|overran|did not make"; then ok "b4ke -C /usr builds everything"
 else bad "b4ke -C /usr builds everything"; echo "$out" | grep -E 'failed|did not|cannot|overran' | head -10; fi
 
 # the host's CRC of the file a build output corresponds to

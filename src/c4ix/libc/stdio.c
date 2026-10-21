@@ -10,9 +10,10 @@
 // printf is the whole of C's integer and string formatting: flags
 // - + space 0 #, a width and a precision (either may be *), the length
 // modifiers hh h l ll z j t (all one word here), and the conversions
-// d i u o x X c s p n %. There is no floating point: %f %e %g print as
-// "?" with a warning-free shrug, because this machine has none worth
-// the name.
+// d i u o x X c s p n %, and f F e E g G, whose digits are fp.c's: the
+// exact ones, rounded once, as glibc prints them. stdio.c never says
+// double itself -- the value goes to fp.c as its two words -- so that
+// this unit does not need c4lc's float helpers.
 
 #include "sys.h"
 #include "libc.h"
@@ -243,6 +244,10 @@ static void sink_put(struct sink *k, int c) {
 
 static void sink_pad(struct sink *k, int c, int n) { while (n > 0) { sink_put(k, c); --n; } }
 
+// fp.c
+int __c4ix_fmtfpw(char *o, unsigned int hi, unsigned int lo, int conv, int prec, int alt, int plus, int space);
+extern int __c4ix_fpspecial;
+
 static char *conv_digits = "0123456789abcdef";
 static char *conv_DIGITS = "0123456789ABCDEF";
 
@@ -271,8 +276,27 @@ static void fmt_int(struct sink *k, unsigned int v, int neg, int base, int upper
     if (left) sink_pad(k, ' ', pad);
 }
 
+// one floating-point conversion: fp.c writes the sign and the number,
+// and the padding is done here -- zeros go after the sign, and never
+// pad an inf or a nan. The longest is %.1000f of 1e308: 1311 bytes.
+static char fmt_fpbuf[1400];
+static void fmt_fp(struct sink *k, unsigned int hi, unsigned int lo, int conv, int left, int zero,
+                   int plus, int space, int alt, int width, int prec) {
+    int n, i;
+    if (prec > 1000) prec = 1000;
+    n = __c4ix_fmtfpw(fmt_fpbuf, hi, lo, conv, prec, alt, plus, space);
+    if (__c4ix_fpspecial) zero = 0;
+    i = 0;
+    if (!left && !zero) sink_pad(k, ' ', width - n);
+    if (fmt_fpbuf[0] == '-' || fmt_fpbuf[0] == '+' || fmt_fpbuf[0] == ' ') { sink_put(k, fmt_fpbuf[0]); i = 1; }
+    if (!left && zero) sink_pad(k, '0', width - n);
+    while (i < n) { sink_put(k, fmt_fpbuf[i]); ++i; }
+    if (left) sink_pad(k, ' ', width - n);
+}
+
 static int fmt_core(struct sink *k, char *fmt, int *ap) {
     int left, zero, plus, space, alt, width, prec, c, v, n;
+    unsigned int hi, lo;
     char *s;
     while ((c = *fmt++)) {
         if (c != '%') { sink_put(k, c); continue; }
@@ -321,7 +345,12 @@ static int fmt_core(struct sink *k, char *fmt, int *ap) {
             if (left) sink_pad(k, ' ', width - n);
         } else if (c == 'n') *va_arg(ap, int *) = k->n;
         else if (c == '%') sink_put(k, '%');
-        else if (c == 'f' || c == 'e' || c == 'g' || c == 'E' || c == 'G' || c == 'F') { va_arg(ap, int); sink_put(k, '?'); }
+        else if (c == 'f' || c == 'e' || c == 'g' || c == 'E' || c == 'G' || c == 'F') {
+            // a double: two words on a 32-bit machine, the high one first
+            if (sizeof(int) == 4) { hi = va_arg(ap, unsigned int); lo = va_arg(ap, unsigned int); }
+            else { v = va_arg(ap, int); hi = (unsigned int)(v >> 32); lo = (unsigned int)v; }
+            fmt_fp(k, hi, lo, c, left, zero, plus, space, alt, width, prec);
+        }
         else if (c == 0) { --fmt; break; }
         else { sink_put(k, '%'); sink_put(k, c); }
     }

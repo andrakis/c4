@@ -1998,7 +1998,8 @@ test-c4tui: $(C4M) c4tui-demo.c4r c4tui-demo32.c4r
 # the host's SSE, bit for bit, over two million random operand sets; then
 # c4lc builds it, at both word sizes, plain and -O, and it must get every
 # one of fpgen's vectors -- the host's own answers.
-test-c4fp: c4sp c4sp32 $(C4M) c4m32 $(C4LC_LISP) src/c4fp/softfp.c src/c4fp/mkfpsrc.py
+test-c4fp: c4sp c4sp32 $(C4M) c4m32 $(C4LC_LISP) src/c4fp/softfp.c src/c4fp/mkfpsrc.py \
+           src/c4ix/libc/fp.c src/c4ix/libc/math.c
 	python3 src/c4fp/mkfpsrc.py --check
 	gcc -O2 -w -I src/c4fp -o .c4fp_host src/c4fp/tests/fphost.c -lm
 	./.c4fp_host 2000000
@@ -2011,6 +2012,24 @@ test-c4fp: c4sp c4sp32 $(C4M) c4m32 $(C4LC_LISP) src/c4fp/softfp.c src/c4fp/mkfp
 	   ./c4m32 load-c4r.c -- .c4fp_vm.c4r .c4fp_vec.txt | tail -1 | grep -q "cases, 0 wrong" || { echo "test-c4fp: 32-bit $$fl wrong"; exit 1; }; \
 	done
 	rm -f .c4fp_host .c4fp_gen .c4fp_vec.txt .c4fp_vm.c4r
+	# C4IX libc's conversions (fp.c: printf's digits, strtod, strtof), which
+	# must be glibc's exactly, and its math.c, within each function's ulps
+	gcc -O2 -w -o .c4fp_gen src/c4ix/libc/tests/fpconvgen.c
+	./.c4fp_gen 300 > .c4fp_vec.txt
+	gcc -O2 -w -o .c4fp_mgen src/c4ix/libc/tests/mathgen.c -lm
+	./.c4fp_mgen 400 > .c4fp_mvec.txt
+	@for fl in "" -O; do \
+	   for t in fptest mathtest; do \
+	     v=.c4fp_vec.txt; [ $$t = mathtest ] && v=.c4fp_mvec.txt; \
+	     ./c4sp src/c4sp/lisp/c4lc.lisp $$fl -P src/c4ix/libc/tests/$$t.c .c4fp_vm.c4r > /dev/null || exit 1; \
+	     $(C4M) load-c4r.c -- .c4fp_vm.c4r $$v > .c4fp_out.txt; \
+	     grep -q "cases, 0 wrong\|mathtest: OK" .c4fp_out.txt || { cat .c4fp_out.txt; echo "test-c4fp: $$t 64-bit $$fl wrong"; exit 1; }; \
+	     ./c4sp32 src/c4sp/lisp/c4lc.lisp $$fl -P src/c4ix/libc/tests/$$t.c .c4fp_vm.c4r > /dev/null || exit 1; \
+	     ./c4m32 load-c4r.c -- .c4fp_vm.c4r $$v > .c4fp_out.txt; \
+	     grep -q "cases, 0 wrong\|mathtest: OK" .c4fp_out.txt || { cat .c4fp_out.txt; echo "test-c4fp: $$t 32-bit $$fl wrong"; exit 1; }; \
+	   done; \
+	done
+	rm -f .c4fp_gen .c4fp_mgen .c4fp_vec.txt .c4fp_mvec.txt .c4fp_vm.c4r .c4fp_out.txt
 	@echo "test-c4fp: OK"
 PHONY += test-c4fp
 

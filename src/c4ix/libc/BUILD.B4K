@@ -5,7 +5,9 @@ B4KE2
 # layer, compiled -fpic here as libc is.
 SET ROOT /usr
 SET OUT /build
-SET STACK 1048576
+# c4sc recurses deeply on math.c's long expressions: 4 MB of stack, as the
+# desktop's (1 MB overruns)
+SET STACK 4194304
 SET LC c4sc -c 400000 compile -O
 # -fpic: one copy of libc's code serves every task (src/c4ix/loader.c)
 SET LCF $(LC) -fno-builtin -fpic -c -I src/c4ix/libc/include -I src/c4ix/libc
@@ -22,13 +24,18 @@ DEPS $(OUT)/libc/stdio.c4o : src/c4ix/libc/stdio.c $(H)
 RUN $(LCF) src/c4ix/libc/stdio.c $(OUT)/libc/stdio.c4o
 DEPS $(OUT)/libc/unix.c4o : src/c4ix/libc/unix.c $(H)
 RUN $(LCF) src/c4ix/libc/unix.c $(OUT)/libc/unix.c4o
+# the two units that say double, so carry c4lc's float helpers: slow
+DEPS $(OUT)/libc/fp.c4o : src/c4ix/libc/fp.c
+RUN $(LCF) src/c4ix/libc/fp.c $(OUT)/libc/fp.c4o
+DEPS $(OUT)/libc/math.c4o : src/c4ix/libc/math.c
+RUN $(LCF) src/c4ix/libc/math.c $(OUT)/libc/math.c4o
 # the one file compiled without -fno-builtin: the VM's opcodes
 DEPS $(OUT)/libc/opcodes.c4o : src/c4ix/libc/opcodes.c
 RUN $(LC) -fpic -c src/c4ix/libc/opcodes.c $(OUT)/libc/opcodes.c4o
 # libc4ix's syscall layer, again, -fpic
 DEPS $(OUT)/libc/libc4ix.c4o : src/c4ix/lib/libc4ix.c src/c4ix/include/c4ix_user.h
 RUN $(LC) -fpic -c -I src/c4ix/include src/c4ix/lib/libc4ix.c $(OUT)/libc/libc4ix.c4o
-SET OBJS $(OUT)/libc/string.c4o $(OUT)/libc/stdlib.c4o $(OUT)/libc/stdio.c4o $(OUT)/libc/unix.c4o $(OUT)/libc/opcodes.c4o $(OUT)/libc/libc4ix.c4o
+SET OBJS $(OUT)/libc/string.c4o $(OUT)/libc/stdlib.c4o $(OUT)/libc/stdio.c4o $(OUT)/libc/unix.c4o $(OUT)/libc/fp.c4o $(OUT)/libc/math.c4o $(OUT)/libc/opcodes.c4o $(OUT)/libc/libc4ix.c4o
 DEPS $(OUT)/lib/libc.c4s : $(OBJS)
 RUN c4rlink -r $(OBJS) -o $(OUT)/lib/libc.c4s
 DEPS $(OUT)/libc/libctest.c4o : src/c4ix/libc/tests/libctest.c $(H)

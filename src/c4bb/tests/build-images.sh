@@ -319,14 +319,15 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     # are its own -- except opcodes.c, which is where the VM's opcodes
     # are -- and with libc4ix's syscall layer linked in. Built -fpic,
     # all of it, so its code is loaded once and shared by every task.
-    for m in string stdlib stdio unix; do
+    # fp.c (printf's %f, strtod) and math.c are the units that say double.
+    for m in string stdlib stdio unix fp math; do
         ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -fno-builtin -fpic -c -I src/c4ix/libc/include -I src/c4ix/libc src/c4ix/libc/$m.c .c4bb_ix_libc_$m.c4o > /dev/null
         keep .c4bb_ix_libc_$m.c4o libc/$m.c4o
     done
     ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -fpic -c src/c4ix/libc/opcodes.c .c4bb_ix_libc_opcodes.c4o > /dev/null
     ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -fpic -c -I src/c4ix/include src/c4ix/lib/libc4ix.c .c4bb_ix_libc_u.c4o > /dev/null
     ./c4rlink32 -r .c4bb_ix_libc_string.c4o .c4bb_ix_libc_stdlib.c4o .c4bb_ix_libc_stdio.c4o .c4bb_ix_libc_unix.c4o \
-        .c4bb_ix_libc_opcodes.c4o .c4bb_ix_libc_u.c4o -o .c4bb_lib/libc.c4s > /dev/null
+        .c4bb_ix_libc_fp.c4o .c4bb_ix_libc_math.c4o .c4bb_ix_libc_opcodes.c4o .c4bb_ix_libc_u.c4o -o .c4bb_lib/libc.c4s > /dev/null
     keep .c4bb_ix_libc_opcodes.c4o libc/opcodes.c4o
     keep .c4bb_ix_libc_u.c4o libc/libc4ix.c4o
     keep .c4bb_lib/libc.c4s lib/libc.c4s

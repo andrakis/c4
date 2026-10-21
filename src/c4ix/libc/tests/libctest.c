@@ -12,6 +12,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <math.h>
 
 int by_value(int *a, int *b) { return *a - *b; }
 int by_name(char **a, char **b) { return strcmp(*a, *b); }
@@ -25,6 +26,7 @@ int main(int argc, char **argv) {
     DIR *d;
     struct dirent *e;
     int i, c, n, verbose, seen;
+    double x;
 
     // printf: flags, widths, precisions, bases
     printf("printf: [%d] [%5d] [%-5d|] [%05d] [%+d] [% d]\n", 42, 42, 42, 42, 42, 42);
@@ -33,6 +35,19 @@ int main(int argc, char **argv) {
     printf("printf: [%d] [%d] [%*d] [%.*s] [%%]\n", -2147483647 - 1, 0, 6, -7, 2, "precision");
     n = snprintf(buf, 8, "%s-%d", "overflowing", 123);
     printf("snprintf: \"%s\" wanted %d\n", buf, n);
+
+    // floating point: printf's conversions, strtod, math.h
+    printf("float: [%f] [%.2f] [%10.3f] [%-8.1f|] [%+.0f] [%08.2f]\n", 3.14159265358979, 2.675, -1.5, 0.25, 2.5, -3.14159);
+    printf("float: [%e] [%.3E] [%g] [%g] [%g] [%#g]\n", 123456.789, 0.000123456, 100000.0, 1000000.0, 0.0001, 1.0);
+    printf("float: [%f] [%F] [%5.1f] [%-6e|] [%G]\n", 1.0 / 0.0, -1.0 / 0.0, strtod("nan", 0), 0.0, 1e-10);
+    x = strtod("  -12.5e2xyz", &end);
+    printf("strtod: %g rest \"%s\" %g %.9g\n", x, end, atof("0x1p-3"), strtof("0.1", 0));
+    errno = 0;
+    x = strtod("1e400", 0);
+    printf("strtod: %f erange %d %.17g\n", x, errno == ERANGE, strtod("2.2250738585072011e-308", 0));
+    printf("math: %.17g %.17g %.17g %.17g\n", sqrt(2.0), sin(1.0), exp(1.0), log(10.0));
+    printf("math: %g %g %g %g %.17g %.17g\n", floor(-2.5), ceil(-2.5), round(2.5), fmod(7.5, 2), pow(2, 0.5), atan2(1, 1) * 4);
+    printf("math: %.17g %.17g %g %g\n", cos(1e22), tan(0.5), cbrt(-27.0), hypot(3, 4));
 
     // string.h
     strcpy(buf, "hello");

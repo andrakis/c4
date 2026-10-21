@@ -25,15 +25,18 @@
 //     r x,y,w,h,rgb  fill a rectangle  R x,y,w,h,rgb     outline one
 //     l x0,y0,x1,y1,rgb  a line        d x,y,r,rgb       a filled disc
 //     t x,y,rgb,size;text  text        p                 show the frame
+//     f addr,w,h,pitch,pal  an 8-bit framebuffer, scaled to the canvas
 //     q         be a terminal again
 //   window -> program   ESC E <kind> <a>,<b>,<c> newline
 //     s w,h,0 the canvas size   d x,y,button  u x,y,button
 //     m x,y,buttons             k keycode,char,mods
+//     K keycode,char,mods (let go)  f 0,0,0 (a framebuffer frame was drawn)
 
 enum {
     WIN_W = 640, WIN_H = 400,
     // win_poll's answers
     WIN_NONE = 0, WIN_DOWN = 1, WIN_UP = 2, WIN_MOVE = 3, WIN_KEY = 4, WIN_SIZE = 5,
+    WIN_KEYUP = 6, WIN_FRAME = 7,
     // key codes (browser keyCodes) and modifiers
     WIN_K_ESC = 27, WIN_K_ENTER = 13, WIN_K_LEFT = 37, WIN_K_UP = 38,
     WIN_K_RIGHT = 39, WIN_K_DOWN = 40, WIN_SHIFT = 1, WIN_CTRL = 2, WIN_ALT = 4,
@@ -108,6 +111,15 @@ void win_text(int x, int y, int rgb, int size, char *s) {
 // Show what was drawn since the last present, all at once.
 void win_present() { win_begin('p'); win_end(); win_flush(); }
 
+// An 8-bit frame: w x h bytes at pixels, pitch bytes a row, through the
+// 256 colours (0x00RRGGBB) at pal, scaled to fill the canvas; present to
+// show it. The window reads them when it draws, and then sends WIN_FRAME:
+// draw the next frame into them only after that, or into other memory.
+void win_fb(char *pixels, int w, int h, int pitch, int *pal) {
+    win_begin('f'); win_arg((int)pixels, 1); win_arg(w, 1); win_arg(h, 1);
+    win_arg(pitch, 1); win_arg((int)pal, 0); win_end();
+}
+
 // Sleep, letting the rest of the machine run.
 void win_sleep(int ms) { win_sys(220, ms, 0, 0); }                  // SYS_SLEEP
 
@@ -139,6 +151,8 @@ int win_poll(int *ev) {
         else if (k == 'm') kind = WIN_MOVE;
         else if (k == 'k') kind = WIN_KEY;
         else if (k == 's') kind = WIN_SIZE;
+        else if (k == 'K') kind = WIN_KEYUP;
+        else if (k == 'f') kind = WIN_FRAME;
         j = 3; k = 0;
         while (k < 3) {
             v = 0; neg = 0;

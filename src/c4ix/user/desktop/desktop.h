@@ -146,6 +146,8 @@ int  ui_field_key(char *text, int max, int *caret, int code, int ch, int mods);
 int  term_open(char *cmd);
 void term_draw(struct win *w, int ox, int oy, int cw, int ch, int focused);
 void term_key(struct win *w, int code, int ch, int mods);
+void term_keyup(struct win *w, int code, int ch, int mods);
+void term_drawn(struct win *w);
 void term_tick(struct win *w);
 void term_close(struct win *w);
 void term_mouse(struct win *w, int ev, int x, int y, int cw, int ch);
@@ -205,6 +207,8 @@ int  wall_draw(int x, int y, int w, int h);   // 0: no picture, fill with C_DESK
 int  wall_shown();
 void d_imgdef(int id, int w, int h, int *px);
 void d_image(int id, int x, int y);
+// w x h 8-bit pixels at src through 256 colours at pal, scaled to dw x dh
+void d_blit8(int x, int y, int w, int h, char *src, int pitch, int *pal, int dw, int dh);
 int  theme_swatch(int i);          // the desktop colours Settings offers, 0..7
 
 int  settings_open();

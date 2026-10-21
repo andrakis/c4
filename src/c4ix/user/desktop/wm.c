@@ -893,6 +893,9 @@ static void draw_taskbar() {
 // the picture (wall.c), on the display as tiles it keeps
 void d_imgdef(int id, int w, int h, int *px) { gui_imgdef(id, w, h, px); }
 void d_image(int id, int x, int y) { gui_image(id, x, y); }
+void d_blit8(int x, int y, int w, int h, char *src, int pitch, int *pal, int dw, int dh) {
+    gui_blit8(x, y, w, h, src, pitch, pal, dw, dh);
+}
 
 static void redraw() {
     int k;
@@ -1181,6 +1184,13 @@ static void key_down(int code, int ch, int mods) {
     dirty = 1;
 }
 
+// A key let go matters only to a canvas: a game holds keys down.
+static void key_up(int code, int ch, int mods) {
+    struct win *f;
+    if (!(f = focus())) return;
+    if (f->kind == K_TERM) term_keyup(f, code, ch, mods);
+}
+
 static void shutdown_screen() {
     gui_clear(C_DARK);
     gui_text2(SW / 2 - 200, SH / 2 - 20, 0xff8c1a, 22, F_BOLD, 0, "C4IX has stopped. You can close this page.", 0 - 1);
@@ -1252,6 +1262,7 @@ int main(int argc, char **argv) {
             else if (ev[0] == GUI_EV_UP) mouse_up(ev[1], ev[2]);
             else if (ev[0] == GUI_EV_MOVE) mouse_move(ev[1], ev[2]);
             else if (ev[0] == GUI_EV_KEYDOWN) key_down(ev[1], ev[2], ev[3]);
+            else if (ev[0] == GUI_EV_KEYUP) key_up(ev[1], ev[2], ev[3]);
             else if (ev[0] == GUI_EV_WHEEL) wheel(ev[1], ev[2], ev[3]);
             else if (ev[0] == GUI_EV_RESIZE || ev[0] == GUI_EV_FOCUS) dirty = 1;
         }
@@ -1309,6 +1320,9 @@ int main(int argc, char **argv) {
         if ((dirty || dmg) && (input || __time() - last_draw >= 25)) {
             if (dirty) redraw(); else redraw_part();
             last_draw = __time();
+            // the frames just shown have been read: their programs may draw again
+            w = first;
+            while (w) { if (w->used && w->kind == K_TERM) term_drawn(w); w = w->next; }
             busy = 1;
         }
         // Nothing to do: sleep until there is. That is an event (a key, the

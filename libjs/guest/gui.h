@@ -35,7 +35,7 @@ enum {
 enum {
 	GUI_CLEAR = 1, GUI_RECT = 2, GUI_RECTO = 3, GUI_LINE = 4, GUI_CIRCLE = 5, GUI_TEXT = 6,
 	GUI_PIXEL = 7, GUI_PRESENT = 8, GUI_SIZE = 9, GUI_IMGDEF = 10, GUI_IMG = 11,
-	GUI_CLIP = 12, GUI_NOCLIP = 13, GUI_TEXT2 = 14, GUI_CURSOR = 15
+	GUI_CLIP = 12, GUI_NOCLIP = 13, GUI_TEXT2 = 14, GUI_CURSOR = 15, GUI_BLIT8 = 16
 };
 // pointers for gui_cursor: the host's own, so moving it draws nothing
 enum { GUI_PTR_ARROW = 0, GUI_PTR_TEXT = 1, GUI_PTR_RESIZE = 2, GUI_PTR_HAND = 3,
@@ -217,6 +217,18 @@ void gui_imgdef (int id, int w, int h, int *pixels) {
 	gui_commit();
 }
 void gui_image (int id, int x, int y) { gui_cmd3(GUI_IMG, id, x, y); }
+
+// w x h 8-bit pixels at src, pitch bytes a row, through the 256 colours
+// (0x00RRGGBB) at pal, drawn at (x, y) scaled to dw x dh. The host reads
+// both when the bell next rings, and not after: draw the next frame into
+// them only once it has.
+void gui_blit8 (int x, int y, int w, int h, char *src, int pitch, int *pal, int dw, int dh) {
+	int *p;
+	if (!(p = gui_frame(GUI_BLIT8, 9))) return;
+	p[0] = x; p[1] = y; p[2] = w; p[3] = h; p[4] = (int)src; p[5] = pitch; p[6] = (int)pal;
+	p[7] = dw; p[8] = dh;
+	gui_commit();
+}
 
 // Show the frame drawn so far, all at once, and send it.
 void gui_show () {

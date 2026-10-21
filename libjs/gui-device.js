@@ -59,8 +59,12 @@ export const CMD = {
   SIZE: 9, IMGDEF: 10, IMG: 11, CLIP: 12, NOCLIP: 13,
   TEXT2: 14,            // [x, y, rgb, size, font, advance, n, chars]: 0 mono, 1 sans, 2 sans bold
   CURSOR: 15,           // [shape]: the pointer over the display, GUI_PTR_* -- no frame needed
+  BLIT8: 16,            // [x, y, w, h, src, pitch, pal, dw, dh]: w x h bytes at src (pitch a
+                        // row) through the 256 words 0x00RRGGBB at pal, drawn scaled to dw x dh.
+                        // The host reads both when the bell rings and sends RGB in its place
   FB: 100,              // host-made: [w, h, ...pixels], from FBFLIP
   FBREF: 101,           // host-made, shared path: [w, h]; the pixels are in the triple buffer (shared.js)
+  RGB: 102,             // host-made, from BLIT8: [x, y, w, h, dw, dh, ...w*h pixels 0x00RRGGBB]
 };
 export const EV = { MOVE: 1, DOWN: 2, UP: 3, KEYDOWN: 4, KEYUP: 5, RESIZE: 6, FOCUS: 7, WHEEL: 8 };
 const MASK = { [EV.MOVE]: 1, [EV.DOWN]: 2, [EV.UP]: 2, [EV.KEYDOWN]: 4, [EV.KEYUP]: 4,
@@ -158,6 +162,7 @@ export class GuiDevice {
     try { frames = this.mbox.drain(); }
     catch { this.mbox.layout(); return; }          // a corrupt ring: start it over
     for (const f of frames) {
+      if (f.type === CMD.BLIT8) { this.blit8(f.payload); continue; }
       if (this.queued + this.queue.length + 2 + f.payload.length > QUEUE_LIMIT) { this.lostCommands++; continue; }
       this.queue.push(2 + f.payload.length, f.type);
       for (let i = 0; i < f.payload.length; i++) this.queue.push(f.payload[i]);
@@ -240,6 +245,30 @@ export class GuiDevice {
     }
     this.chunks.push(c); this.queued += c.length;
     this.flips++;
+  }
+
+  // BLIT8: an 8-bit image and its palette, read from guest memory now --
+  // the guest may draw its next frame the moment the bell's store is done
+  // -- and queued as 32-bit pixels in the command stream, in order.
+  // A window's game or emulator draws in 8 bits; converting here costs
+  // the guest nothing.
+  blit8(p) {
+    const [x, y, w, h, src, pitch, pal, dw, dh] = p;
+    const a = this.arena;
+    if (w <= 0 || h <= 0 || w > 4096 || h > 4096 || pitch < w) return;
+    if (src < 0x1000 || src + (h - 1) * pitch + w > a.size || (pal & 3) || pal < 0x1000 || pal + 1024 > a.size) return;
+    const n = w * h;
+    if (this.queued + this.queue.length + 8 + n > QUEUE_LIMIT) { this.lostCommands++; return; }
+    const u8 = a.u8, colours = a.i32.subarray(pal >> 2, (pal >> 2) + 256);
+    const c = new Int32Array(8 + n);
+    c[0] = 8 + n; c[1] = CMD.RGB; c[2] = x; c[3] = y; c[4] = w; c[5] = h; c[6] = dw; c[7] = dh;
+    for (let j = 0, k = 8; j < h; j++) {
+      const row = src + j * pitch;
+      for (let i = 0; i < w; i++) c[k++] = colours[u8[row + i]];
+    }
+    this.seal();
+    this.chunks.push(c); this.queued += c.length;
+    this.commands++;
   }
 
   takeSizeRequest() {

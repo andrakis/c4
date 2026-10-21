@@ -14,6 +14,12 @@
 // the mouse and keys down its stdin instead of editing a line. The
 // window becomes a terminal again when the program says so, when Ctrl-C
 // stops it, or when the shell's prompt comes back.
+//
+// A canvas may show a framebuffer, the 'f' op: 8-bit pixels and a
+// palette in the program's own memory, which GUI_BLIT8 has the host read
+// and scale to the canvas. Once a frame with one has been drawn the
+// program hears 'f' back, and may draw the next; and it hears keys let
+// go ('K') as well as pressed, which a game needs.
 
 #include "desktop.h"
 
@@ -36,6 +42,7 @@ struct term {
     char pending[128];            // a command to type at the first prompt
     int cell[2000];               // ROWS * COLS: ch | fg << 8 | bg << 16, xterm-256 indices
     int gfx, buttons;             // a canvas now; mouse buttons held on it
+    int fpend;                    // a frame with a framebuffer presented, not yet drawn
     char title[48];               // the window's own title, while a program's shows
     int alen;
     char abuf[304];               // an ESC _ ... ESC \ command being read
@@ -231,7 +238,7 @@ static void gfx_mode(struct win *w, struct term *t, int on) {
     if (on && !t->gfx) ui_cpy(t->title, w->title);
     if (!on && t->gfx && t->title[0]) win_title(w, t->title);
     t->gfx = on;
-    t->ncur = 0; t->nshow = 0; t->buttons = 0;
+    t->ncur = 0; t->nshow = 0; t->buttons = 0; t->fpend = 0;
     mark_dirty();
 }
 
@@ -266,6 +273,12 @@ static void apc(struct win *w, struct term *t) {
         memcpy(t->gshow, t->gcur, t->ncur * sizeof(int));
         t->nshow = t->ncur;
         t->ncur = 0;
+        // a framebuffer in it: tell the program once it has been drawn
+        k = 0;
+        while (k < t->nshow && t->gshow[k] >= 2) {
+            if (t->gshow[k + 1] == 'f') t->fpend = 1;
+            k = k + t->gshow[k];
+        }
         feed_dirty(t);
         return;
     }
@@ -294,6 +307,7 @@ static void gfx_draw(struct term *t, int ox, int oy) {
         else if (op == 'l' && n >= 5) d_line(ox + g[2], oy + g[3], ox + g[4], oy + g[5], g[6]);
         else if (op == 'd' && n >= 4) d_disc(ox + g[2], oy + g[3], g[4], g[5]);
         else if (op == 't' && n >= 6) d_textn(ox + g[2], oy + g[3], g[4], g[5], F_SANS, 0, (char *)(g + 7), g[6]);
+        else if (op == 'f' && n >= 5) d_blit8(ox, oy, g[3], g[4], (char *)g[2], g[5], (int *)g[6], GW, GH);
         if (g[0] < 2) break;
         i = i + g[0];
     }
@@ -554,6 +568,23 @@ static void sb_scroll(struct term *t, int rows) {
 }
 
 // A key typed here.
+// A key let go: only a canvas hears it.
+void term_keyup(struct win *w, int code, int ch, int mods) {
+    struct term *t;
+    t = T(w);
+    if (t->ended || !t->gfx) return;
+    event(t, 'K', code, ch, mods);
+}
+
+// The desktop has drawn (wm.c): a framebuffer it showed has been read.
+void term_drawn(struct win *w) {
+    struct term *t;
+    t = T(w);
+    if (!t->fpend) return;
+    t->fpend = 0;
+    if (t->gfx && !t->ended) event(t, 'f', 0, 0, 0);
+}
+
 void term_key(struct win *w, int code, int ch, int mods) {
     struct term *t;
     int i;

@@ -320,6 +320,29 @@ export class Display {
           if (f.w > 0 && (f.h & 0xffff) > 0) this.blitPixels(f.pixels, f.w, f.h, f.gen);
           break;
         }
+        case CMD.RGB: {
+          // BLIT8's pixels, made 32-bit by the device: drawn at (x, y),
+          // scaled to dw x dh without smoothing, inside any clip
+          const x = words[p], y = words[p + 1], w = words[p + 2], h = words[p + 3];
+          const dw = words[p + 4], dh = words[p + 5];
+          if (w <= 0 || h <= 0 || w * h > len - 8) break;
+          if (!this.rgbCanvas || this.rgbCanvas.width !== w || this.rgbCanvas.height !== h) {
+            this.rgbCanvas = document.createElement('canvas');
+            this.rgbCanvas.width = w; this.rgbCanvas.height = h;
+            this.rgbImage = new ImageData(w, h);
+          }
+          const d = new Uint32Array(this.rgbImage.data.buffer);
+          for (let k = 0; k < w * h; k++) {
+            const v = words[p + 6 + k];
+            d[k] = 0xff000000 | ((v & 0xff) << 16) | (v & 0xff00) | ((v >> 16) & 0xff);
+          }
+          this.rgbCanvas.getContext('2d').putImageData(this.rgbImage, 0, 0);
+          const smooth = c.imageSmoothingEnabled;
+          c.imageSmoothingEnabled = false;
+          c.drawImage(this.rgbCanvas, x, y, dw > 0 ? dw : w, dh > 0 ? dh : h);
+          c.imageSmoothingEnabled = smooth;
+          break;
+        }
         case CMD.NOCLIP:
           if (this.clipped) { c.restore(); this.clipped = false; }
           this.clipRect = null;

@@ -52,7 +52,7 @@ Font 0 is monospace, 1 a sans-serif UI face, 2 its bold. A non-zero
 advance places each character exactly `advance` pixels after the last,
 which is what a character grid needs; 0 is the font's own spacing.
 
-**The desktop** (src/c4ix/user/desktop/, seven modules linked with libc4ix -> c4ix-desktop.c4r; it was one file, `desktop.c`, until D6, and `edit.c` joined in part four):
+**The desktop** (src/c4ix/user/desktop/, eight modules and libc's `fp.c`, linked with libc4ix -> c4ix-desktop.c4r; it was one file, `desktop.c`, until D6, `edit.c` joined in part four, and `calc.c` left `apps.c` with floating point):
 - Asks for an 800x600 display (1024x768 was too small to read once the
   page scaled it into its pane), attaches the rings, and redraws what
   changed: the whole scene, or only the damaged regions
@@ -142,8 +142,10 @@ tabs); a message box; resizable windows (drag the bottom-right corner).
   CPU gauge and a scrolling history graph, totals).
 - **Notepad**: open, edit and save text files in C4IX's filesystem;
   keyboard editing, mouse placement, scroll bar and wheel.
-- **Calculator**: 32-bit integers in Hex, Dec, Oct or Bin, with + - * /,
-  Mod, And, Or, Xor, Not, Lsh, Rsh.
+- **Calculator** (`calc.c`), in three modes:
+  - Integer: 32-bit words in Hex, Dec, Oct or Bin, with + - * /, Mod, And, Or, Xor, Not, Lsh, Rsh.
+  - Single and Double: IEEE floating point (docs/c4-float.md), each operation done in that precision with c4lc's `float` or `double`. The display shows the shortest decimal that reads back as the value, and a line under it the value's bits: 0.1 + 0.2 is 0.30000000000000004 in Double and 0.3 in Single. Keys: Sqrt, x^2, 1/x, Int, Abs, Pi, e, Exp (an exponent, as in `1e-7`), and the constants Max, Min (the smallest normal), Eps and Inf. On the keyboard `.` is the point, `e` Exp, `p` Pi and `r` Sqrt.
+  - The conversions both ways are libc's `fp.c`, linked into the desktop, so they are exact.
 - **Run**: Start > Run... starts a program in a new Command Prompt.
 
 ### D5: kernel

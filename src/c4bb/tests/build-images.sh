@@ -361,12 +361,16 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     done
     # the desktop: several modules, linked together (docs/c4ix-desktop.md)
     dobjs=""
-    for m in wm ui term files taskmgr apps edit; do
+    for m in wm ui term files taskmgr apps calc edit; do
         ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix/include -I src/c4ix/user/desktop \
             src/c4ix/user/desktop/$m.c .c4bb_ix_d_$m.c4o > /dev/null
         dobjs="$dobjs .c4bb_ix_d_$m.c4o"
         keep .c4bb_ix_d_$m.c4o desktop/$m.c4o
     done
+    # the Calculator's decimal conversions are libc's fp.c, linked in
+    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c src/c4ix/libc/fp.c .c4bb_ix_d_fp.c4o > /dev/null
+    dobjs="$dobjs .c4bb_ix_d_fp.c4o"
+    keep .c4bb_ix_d_fp.c4o desktop/fp.c4o
     ./c4rlink32 $dobjs .c4bb_libc4ix32.c4l -o $DISK/c4ix-desktop.c4r > /dev/null
     keep $DISK/c4ix-desktop.c4r bin/c4ix-desktop.c4r
     rm -f $dobjs .c4bb_ix_d_*.pp.c

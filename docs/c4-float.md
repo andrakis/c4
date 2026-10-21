@@ -12,7 +12,7 @@ Asked for 2026-10-21. The goal is IEEE single and double precision in the C99 co
 | F1 | `src/c4fp/softfp.c`: binary32 and binary64 in software | **done** |
 | F2 | `float` and `double` in c4lc (and so c4sc, and `cc` inside C4IX) | **done** |
 | F4 | C4IX libc: `printf` `%f %e %g`, `strtod`, `math.h` | **done** |
-| F5 | Calculator: single and double modes | next |
+| F5 | Calculator: single and double modes | **done** |
 | F3 | an FPU opcode in c4m, libjs and c4bb, which the helpers use when present | |
 | F6 | libjs checks; soft against hard, timed | |
 

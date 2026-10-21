@@ -1,5 +1,5 @@
 B4KE2
-# The desktop: seven modules linked with libc4ix (build-images.sh, `make
+# The desktop: eight modules and libc's fp.c, linked with libc4ix (build-images.sh, `make
 # c4ix-desktop.c4r`). wm.c and gui.c include libjs/guest/gui.h by its
 # path from the top of the tree, which is why this runs from $(ROOT).
 # Every module includes desktop.h.
@@ -25,9 +25,14 @@ DEPS $(OUT)/desktop/taskmgr.c4o : src/c4ix/user/desktop/taskmgr.c $(H) src/c4ix/
 RUN $(LC) src/c4ix/user/desktop/taskmgr.c $(OUT)/desktop/taskmgr.c4o
 DEPS $(OUT)/desktop/apps.c4o : src/c4ix/user/desktop/apps.c $(H)
 RUN $(LC) src/c4ix/user/desktop/apps.c $(OUT)/desktop/apps.c4o
+DEPS $(OUT)/desktop/calc.c4o : src/c4ix/user/desktop/calc.c $(H)
+RUN $(LC) src/c4ix/user/desktop/calc.c $(OUT)/desktop/calc.c4o
+# the Calculator's decimal conversions: libc's, which says double (slow)
+DEPS $(OUT)/desktop/fp.c4o : src/c4ix/libc/fp.c
+RUN $(LC) src/c4ix/libc/fp.c $(OUT)/desktop/fp.c4o
 DEPS $(OUT)/desktop/edit.c4o : src/c4ix/user/desktop/edit.c $(H)
 RUN $(LC) src/c4ix/user/desktop/edit.c $(OUT)/desktop/edit.c4o
-SET OBJS wm.c4o ui.c4o term.c4o files.c4o taskmgr.c4o apps.c4o edit.c4o
+SET OBJS wm.c4o ui.c4o term.c4o files.c4o taskmgr.c4o apps.c4o calc.c4o edit.c4o fp.c4o
 CD $(OUT)/desktop
 LIST desktop.objs $(OBJS) $(OUT)/lib/libc4ix.c4l
 DEPS $(OUT)/bin/c4ix-desktop.c4r : $(OBJS) $(OUT)/lib/libc4ix.c4l

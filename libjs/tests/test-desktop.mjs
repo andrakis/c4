@@ -357,6 +357,37 @@ clickText('Hex', 'last', -8, 5);
 check(until(() => has('2A')), 'switched to Hex it shows 2A');
 type('*2=');
 check(until(() => has('54')), '2A * 2 = 54 in hex');
+// Single and Double: IEEE arithmetic in that precision, the shortest
+// decimal that reads back, and the bits. Printable keys go in with
+// keyCode 0 here, or '.' would be Delete.
+const ftype = s => { for (const ch of s) key(ch, 0, ch === '=' ? 13 : 0); };
+clickText('Double', 'last', -8, 5);
+check(until(() => has('IEEE double, bits:')), 'Double mode shows the bits in place of the radix', screen().slice(-300));
+key('ESC'); ftype('0.1+0.2=');
+check(until(() => has('0.30000000000000004') && has('3FD33333 33333334')), '0.1 + 0.2 = 0.30000000000000004 in Double', screen().slice(-300));
+clickText('Single', 'last', -8, 5);
+check(until(() => has('IEEE single, bits:') && has('3E99999A')), 'switched to Single it is the float nearest, 0.3', screen().slice(-300));
+key('ESC'); ftype('16777216+1=');
+check(until(() => has('16777216') && has('4B800000')), '2^24 + 1 is 2^24 in Single', screen().slice(-300));
+clickText('Double', 'last', -8, 5);
+key('ESC'); ftype('16777216+1=');
+check(until(() => has('16777217')), 'and 16777217 in Double', screen().slice(-300));
+clickText('Single', 'last', -8, 5);
+key('ESC'); clickText('Max'); ftype('*2=');
+check(until(() => has('inf') && has('7F800000')), 'Max * 2 overflows to inf in Single', screen().slice(-300));
+clickText('Integer', 'last', -8, 5);
+check(until(() => has('Hex') && has('Dec') && !has('IEEE single, bits:')), 'and back to Integer', screen().slice(-300));
+clickText('Dec', 'last', -8, 5);
+key('ESC'); type('2+3==');
+check(until(() => has('8')), '= again repeats the last operation: 2 + 3 = = is 8', screen().slice(-300));
+type('=');
+check(until(() => has('11')), 'and again, 11', screen().slice(-300));
+type('10=');
+check(until(() => has('13')), 'a new number then = adds 3 to it', screen().slice(-300));
+clickText('Double', 'last', -8, 5);
+key('ESC'); ftype('10*0.5==');
+check(until(() => has('2.5')), 'in Double too: 10 * 0.5 = = is 2.5', screen().slice(-300));
+clickText('Integer', 'last', -8, 5);
 
 // ---- Editor -------------------------------------------------------------------------------
 // Printable keys go in with keyCode 0: this harness would otherwise make

@@ -354,8 +354,10 @@
 	(begin
 		(define l (pp:ecmp))
 		(next pp:eand/2 l))))
+;; && is 'Lan, as c4lc-lex.lisp names it (it was looked for as 'Land,
+;; which nothing makes, so `#if A && B` was A alone)
 (define pp:eand/2 (lambda (l)
-	(if (= (pp:epeek) 'Land)
+	(if (= (pp:epeek) 'Lan)
 		(begin
 			(pp:enext)
 			(define r (pp:ecmp))
@@ -489,7 +491,7 @@
 	(Arrow "->") (Assign "=") (Eq "==") (Ne "!=") (Lt "<") (Gt ">")
 	(Le "<=") (Ge ">=") (Add "+") (Sub "-") (Mul "*") (Div "/")
 	(Mod "%") (And "&") (Or "|") (Xor "^") (Not "!") (Tilde "~")
-	(Land "&&") (Lor "||") (Shl "<<") (Shr ">>") (Inc "++")
+	(Lan "&&") (Lor "||") (Shl "<<") (Shr ">>") (Inc "++")
 	(Dec "--") (Cond "?") (Colon ":")
 	(Int "int") (Char "char") (Void "void") (If "if") (Else "else")
 	(While "while") (For "for") (Return "return") (Sizeof "sizeof")

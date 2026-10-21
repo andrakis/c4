@@ -60,6 +60,17 @@ int defined_paren() { return 1; }
 int defined_paren() { return 0; }
 #endif
 
+// && decides on its right as well. c4lc's #if looked for && by another
+// name, so `A && B` was A alone and this took the first arm (found
+// porting Wolf4SDL, whose `!defined(_WIN32) && !defined(C4IX)` it was).
+#if defined(VERSION) && defined(NOT_DEFINED)
+int and_right() { return 0; }
+#elif defined(NOT_DEFINED) || VERSION
+int and_right() { return 1; }
+#else
+int and_right() { return 2; }
+#endif
+
 // Once an arm is taken, no later #elif or #else runs. c4lc's #else
 // used to run after `#if 1 / #elif 1`, which made one_arm defined twice.
 #if VERSION
@@ -138,5 +149,6 @@ int main() {
     printf("line %d %d %s\n", line_b() - line_a(), line_a() > 0, file_name());
     printf("kw %d %d %d\n", kw_wide, kw_undef(), kw_ret());
     printf("str-kw %s\n", STR(int while));
+    printf("and-right %d\n", and_right());
     return 0;
 }

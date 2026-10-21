@@ -139,7 +139,12 @@ if echo "$out" | grep -qF "C4KE boot-time filesystem loader"; then ok "c4ke-vfs 
 else bad "c4ke-vfs cat real content"; fi
 
 # ---- C4IX ----------------------------------------------------------------
-out=$(printf 'c4ix-ps.c4r\nexit\n' | timeout 300 $LIBJS -c 120000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
+# Each boot has the page's 64 MB arena (libjs/page.js), not the CLI's 32:
+# the root archive unpacks in the background as the commands run, and at
+# its peak holds the compressed archive, the whole tar and the files made
+# from it -- about 28 MB, which left 32 too little for a program that
+# loads a shared library meanwhile.
+out=$(printf 'c4ix-ps.c4r\nexit\n' | timeout 300 $LIBJS -m 64 -c 120000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
 for want in "C4IX booting" "protected mode on for user tasks, preemption on" \
             "c4ix-sh" "c4ix-ps.c4r" "tasks,"; do
     if echo "$out" | grep -qF "$want"; then ok "c4ix-boot '$want'"; else bad "c4ix-boot '$want'"; fi
@@ -154,7 +159,7 @@ else bad "c4ix-vfs manifest mostly loaded"; echo "$out" | grep -E 'entries loade
 # background as task 4, which "wait 4" blocks on. Then a file deep in
 # the tree must have its real content, and the libraries must be there.
 out=$(printf 'wait 4\nls /usr/lib\ncat /usr/src/c4ix/user/tar.c\nexit\n' | \
-      timeout 300 $LIBJS -c 2000000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
+      timeout 300 $LIBJS -m 64 -c 2000000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
 if echo "$out" | grep -qF "unpacking c4ix-root.tgz in the background as task 4" &&
    echo "$out" | grep -qF "[4] done (0)" && echo "$out" | grep -qF "libarc.c4l" &&
    echo "$out" | grep -qF "list or extract a tar archive, gzipped or not"; then
@@ -204,7 +209,7 @@ else bad "cc compiles inside C4IX, and links libc4ix"; echo "$out" | grep -E 'cc
 # Shared libraries: ls is linked with -l libc4ix.c4s, so it runs only if
 # the loader finds /lib/libc4ix.c4s and resolves what it needs from it.
 out=$(printf 'c4rdump /bin/ls\nls /lib\nexit\n' | \
-      timeout 300 $LIBJS -c 400000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
+      timeout 300 $LIBJS -m 64 -c 400000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
 if echo "$out" | grep -qF "Needs /lib/libc4ix.c4s" && echo "$out" | grep -qF "libc4ix.c4s" &&
    echo "$out" | grep -qE "symbol references to resolve"; then
     ok "ls loads libc4ix as a shared library"
@@ -213,7 +218,7 @@ else bad "ls loads libc4ix as a shared library"; echo "$out" | tail -8; fi
 # libc: libctest is linked with -l libc.c4s; what it prints, line by line,
 # is what libc's functions did (src/c4ix/libc/tests/libctest.txt)
 out=$(printf 'libctest -v -n 3 one two\nexit\n' | \
-      timeout 300 $LIBJS -c 600000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
+      timeout 300 $LIBJS -m 64 -c 600000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
 if echo "$out" | sed -n '/^printf: \[42/,/libctest: done/p' | cmp -s - src/c4ix/libc/tests/libctest.txt; then
     ok "libc: libctest's output is the reference"
 else bad "libc: libctest's output is the reference"
@@ -223,7 +228,7 @@ else bad "libc: libctest's output is the reference"
 # code, and each must still see its own errno, environment and stdout
 # buffer -- the scheduler repoints libc's data at every switch
 out=$(printf 'pictest A 15 > /tmp/a &\npictest B 15 > /tmp/b &\nwait\ncat /tmp/a\ncat /tmp/b\nexit\n' | \
-      timeout 300 $LIBJS -c 800000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
+      timeout 300 $LIBJS -m 64 -c 800000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
 if echo "$out" | grep -qx "A: ok" && echo "$out" | grep -qx "B: ok" && ! echo "$out" | grep -qF "crossed"; then
     ok "two tasks share libc's code and keep their own data"
 else bad "two tasks share libc's code and keep their own data"; echo "$out" | grep -E 'ok|crossed|loader' | head -6; fi

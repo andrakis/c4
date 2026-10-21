@@ -4,8 +4,8 @@ B4KE2
 # exactly as build-images.sh does it, so the images match the disk's.
 # Needs the libraries first (../lib/BUILD.B4K, or the top-level build).
 # Results are $(OUT)/bin/c4ix-NAME.c4r, the names the disk uses.
-SET ROOT /usr/src/c4
-SET OUT /ram/build
+SET ROOT /usr
+SET OUT /build
 # c4sc recurses deeply on a long function: 1 MB of stack (SYS_STACK)
 SET STACK 1048576
 SET LC c4sc -c 400000 compile -O -c -I src/c4ix/include

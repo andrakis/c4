@@ -6,8 +6,8 @@ B4KE2
 #
 # c4sc, c4sp and c4th are built by c4lc from gcc-preprocessed sources
 # on the host, and are not rebuilt here.
-SET ROOT /usr/src/c4
-SET OUT /ram/build
+SET ROOT /usr
+SET OUT /build
 SET CCSRC include/u0.h include/c4dos.h load-c4r.c src/c4cc/c4cc.c src/c4cc/asm-c4r.c
 SET CPPFLAGS -Iinclude -I. -DC4CC=1 -D__c4__=1 -D__C4CC__=1 -D__c4cc__=1
 CD $(ROOT)

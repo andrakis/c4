@@ -1,7 +1,7 @@
 // hello.c -- the smallest program to compile inside C4IX.
 //
-//   c4cc -o /ram/hello.c4r /usr/src/examples/hello.c
-//   /ram/hello.c4r
+//   c4cc -o /tmp/hello.c4r /usr/src/c4ix/examples/hello.c
+//   /tmp/hello.c4r
 //
 // printf here is the machine's own, which C4IX sends to this task's
 // standard output, so it lands wherever the shell pointed it.

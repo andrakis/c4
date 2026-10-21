@@ -15,11 +15,11 @@ BIN_ALL = hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt gui 
 # The toolchain (docs/c4ix-desktop.md, part three): C4KE programs, which
 # run here through the compatibility layer, and write what they build
 # through its OP_VFS_PUT. In /bin only, under their own names.
-# c4sc is the compiled c4lc, what the BUILD.B4K files under /usr/src/c4 run.
+# c4sc is the compiled c4lc, what the BUILD.B4K files under /usr run.
 TOOLS = c4cc c4rlink c4rdump cpp c4sp c4th c4sc
 # Unpacked over / after everything above, by c4ix-tar in the background
 # (vfsload prints the task; "wait ID" blocks on it): the repo's sources
-# and docs under /usr/src/c4, the C4IX libraries in /usr/lib, and more
+# and docs under /usr, the C4IX libraries in /usr/lib, and more
 # headers in /usr/include. Built by build-images.sh.
 ARCHIVES = c4ix-root.tgz
 
@@ -41,27 +41,11 @@ ARCHIVES = c4ix-root.tgz
 		$1: ilink(/bin/$1)
 		bin/:
 			$1: c4ix-$1.c4r
+	# /usr is the repo itself, unpacked from the archive below: its src/
+	# at /usr/src (the programs' sources, src/c4ix/examples, c4th's
+	# Forth), its include/ at /usr/include. These two headers are here
+	# from the start, before the archive is.
 	usr/
-		src/
-			bin/
-				# host filenames are prefixed c4ix-NAME.c: this disk is
-				# shared with C4KE, which has its own cat.c/ps.c/top.c
-				each($BIN_ALL): $1.c: c4ix-$1.c
-			# the programs to compile inside the machine (part three)
-			examples/:
-				README.txt: c4ix-examples-README.txt
-				hello.c: c4ix-examples-hello.c
-				bounce.c: c4ix-examples-bounce.c
-			# c4th's Forth: the core, and self.f, the part that writes images
-			forth/:
-				core.f: src/c4th/forth/core.f
-				self.f: src/c4th/forth/self.f
-				self1.f: src/c4th/tests/self1.f
-				self1-c4r.f: src/c4th/tests/self1-c4r.f
-				run-main.f: src/c4th/tests/run-main.f
-			include/:
-				c4ix.h
-				c4ix_user.h
 		# headers a program compiled here is built against
 		include/:
 			window.h: c4ix-window.h

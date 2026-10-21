@@ -489,10 +489,14 @@ it lacked was somewhere to edit and build in one place.
       and a 1 MB stack, linking with c4rlink when given `-l` or several
       sources. src/c4tui/demo.c takes 18 machine-seconds this way and 344
       with `c4sp c4lc.lisp`, for the same image.
-- [x] **Builds start built**: the root archive carries `/ram/build`
+- [x] **Builds start built**: the root archive carries `/build`
       (docs/c4ix-design.md, "Already built"), so the IDE's `:make` on a
-      file under `/usr/src/c4` compiles that file and links its program,
-      not the libraries first.
+      file under `/usr` compiles that file and links its program, not
+      the libraries first.
+- [x] **The repo is /usr, builds go to /build, no /ram**
+      (docs/c4ix-design.md): one copy of each source, `<u0.h>` found in
+      `/usr/include`, and `/tmp` for scratch. The IDE builds a `.c` file
+      that no BUILD.B4K names on its own, with cc, into `/build`.
 - [x] Pinned by `test-desktop.mjs` (history, in-line edits, scrollback,
       ten more windows than before) and `test-libjs.sh` (cc builds echo
       the disk's, byte for byte; a fresh boot's b4ke has nothing to do; an

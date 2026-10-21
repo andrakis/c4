@@ -67,23 +67,23 @@ int main(int argc, char **argv) {
     strcat(p, "n");
     printf("malloc: %s calloc %d\n", p, ((int *)calloc(4, sizeof(int)))[3]);
     free(p);
-    setenv("HOME", "/ram", 1);
+    setenv("HOME", "/tmp", 1);
     printf("env: HOME=%s NONE=%s\n", getenv("HOME"), getenv("NONE") ? "set" : "unset");
 
     // files
-    f = fopen("/ram/libctest.txt", "w");
+    f = fopen("/tmp/libctest.txt", "w");
     fprintf(f, "line %d\n", 1);
     fputs("line 2\n", f);
     fclose(f);
-    f = fopen("/ram/libctest.txt", "a");
+    f = fopen("/tmp/libctest.txt", "a");
     fprintf(f, "line %d\n", 3);
     fclose(f);
-    f = fopen("/ram/libctest.txt", "r");
+    f = fopen("/tmp/libctest.txt", "r");
     n = 0;
     while (fgets(buf, 64, f)) { buf[strlen(buf) - 1] = 0; printf("file: %s\n", buf); ++n; }
     printf("file: %d lines, eof %d\n", n, feof(f));
     fclose(f);
-    f = fopen("/ram/no/such/file", "r");
+    f = fopen("/tmp/no/such/file", "r");
     printf("errno: %s fopen %d: %s\n", f ? "opened?" : "null", errno == ENOENT, strerror(errno));
 
     // getopt
@@ -97,12 +97,12 @@ int main(int argc, char **argv) {
     printf("\n");
 
     // dirent
-    d = opendir("/ram");
+    d = opendir("/tmp");
     seen = 0;
     while ((e = readdir(d))) if (!strcmp(e->d_name, "libctest.txt")) seen = e->d_type == DT_REG;
     closedir(d);
     printf("dirent: libctest.txt %s\n", seen ? "found" : "missing");
-    unlink("/ram/libctest.txt");
+    unlink("/tmp/libctest.txt");
 
     printf("libctest: done\n");
     return 0;

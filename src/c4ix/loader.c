@@ -133,7 +133,7 @@ static int mod_read(char *path, struct c4r_mod *m) {
     // A RAM file by this path wins over the host. The comment below once
     // said the two could not name the same file, but a host is free to
     // answer a path it does not have -- c4bb's disk tries the bare file
-    // name when the full path misses -- so "/ram/hello.c4r", compiled a
+    // name when the full path misses -- so "/tmp/hello.c4r", compiled a
     // moment ago, ran the disk's own hello.c4r instead.
     vn = vfs_lookup(path);
     if (vn && vn->type != VN_RAMFILE) vn = 0;
@@ -157,7 +157,7 @@ static int mod_read(char *path, struct c4r_mod *m) {
         // so nothing running under it can put a file there. What a
         // compiler running as a task CAN do is write to standard output
         // and let the shell redirect that into a RAM file, so
-        // `c4th.c4r ... > /ram/prog.c4r` and then `/ram/prog.c4r` is
+        // `c4th.c4r ... > /tmp/prog.c4r` and then `/tmp/prog.c4r` is
         // the whole compile-and-run loop, and this is what joins the
         // two halves. Without it the kernel can only ever run programs
         // that were built somewhere else.

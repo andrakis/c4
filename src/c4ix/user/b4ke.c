@@ -237,7 +237,7 @@ static int b4_mtime(char *name) {
         // Not in the VFS. A relative name may still be a host file,
         // older than anything made here. An absolute one may not: the
         // board's disk answers a path it lacks with the file of the
-        // same base name, so /ram/build/bin/c4ix-ls.c4r would "exist"
+        // same base name, so /build/bin/c4ix-ls.c4r would "exist"
         // as the disk's own c4ix-ls.c4r.
         if (name[0] == '/') return 0 - 1;
         if ((st[0] = uopen(name, O_RD)) < 0) return 0 - 1;

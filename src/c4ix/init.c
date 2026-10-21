@@ -97,15 +97,15 @@ static void io_ramfile() {
     char buf[64];
     int fd, n;
 
-    if ((fd = sys_open("/ram/note", C4IX_O_WRONLY + C4IX_O_CREAT)) < 0) {
-        kputs("init: cannot create /ram/note\n");
+    if ((fd = sys_open("/tmp/note", C4IX_O_WRONLY + C4IX_O_CREAT)) < 0) {
+        kputs("init: cannot create /tmp/note\n");
         return;
     }
     sys_write(fd, "written to a ram file\n", 22);
     sys_close(fd);
 
-    if ((fd = sys_open("/ram/note", C4IX_O_RDONLY)) < 0) {
-        kputs("init: cannot reopen /ram/note\n");
+    if ((fd = sys_open("/tmp/note", C4IX_O_RDONLY)) < 0) {
+        kputs("init: cannot reopen /tmp/note\n");
         return;
     }
     n = sys_read(fd, buf, 64);
@@ -124,8 +124,8 @@ static void io_redirect(char *prog) {
     struct task *t;
     int fd, saved;
 
-    if ((fd = sys_open("/ram/out", C4IX_O_WRONLY + C4IX_O_CREAT + C4IX_O_TRUNC)) < 0) {
-        kputs("init: cannot create /ram/out\n");
+    if ((fd = sys_open("/tmp/out", C4IX_O_WRONLY + C4IX_O_CREAT + C4IX_O_TRUNC)) < 0) {
+        kputs("init: cannot create /tmp/out\n");
         return;
     }
     // Announce this BEFORE the redirection, not after. From here until
@@ -133,8 +133,8 @@ static void io_redirect(char *prog) {
     // if the caller's program list is short enough that something
     // interactive lands in this slot, the terminal falls silent with
     // no explanation and looks hung. It is not hung; the child is
-    // waiting to be typed at, and its prompt went into /ram/out.
-    kprintf("init: running '%s' with fd 1 redirected into /ram/out\n", prog);
+    // waiting to be typed at, and its prompt went into /tmp/out.
+    kprintf("init: running '%s' with fd 1 redirected into /tmp/out\n", prog);
     saved = sys_dup(FD_STDOUT);
     sys_dup2(fd, FD_STDOUT);
     t = task_spawn(prog, 1, 0);
@@ -144,13 +144,13 @@ static void io_redirect(char *prog) {
     if (!t) { kprintf("init: spawn of '%s' failed\n", prog); return; }
     task_wait(t);
 
-    kprintf("init: '%s' ran with fd 1 redirected; /ram/out holds %d bytes:\n",
-        prog, vfs_size("/ram/out"));
-    vfs_dump("/ram/out");
+    kprintf("init: '%s' ran with fd 1 redirected; /tmp/out holds %d bytes:\n",
+        prog, vfs_size("/tmp/out"));
+    vfs_dump("/tmp/out");
     // Without protected mode a raw printf never reaches the kernel,
     // so there is nothing to redirect. Saying so beats an empty file
     // that looks like a bug.
-    if (vfs_size("/ram/out") == 0)
+    if (vfs_size("/tmp/out") == 0)
         kputs("init: (empty: this host has no protected mode, so a raw printf bypasses fd 1)\n");
 }
 

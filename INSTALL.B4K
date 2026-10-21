@@ -4,7 +4,7 @@ B4KE2
 # /usr/lib. The RAM copies win until the next boot, which starts again
 # from the disk. The kernel is not installed -- a running kernel cannot
 # replace itself; $(OUT)/c4ix.c4r is there to boot.
-SET OUT /ram/build
+SET OUT /build
 COPY $(OUT)/bin/c4ix-hello.c4r /bin/hello
 COPY $(OUT)/bin/c4ix-uhello.c4r /bin/uhello
 COPY $(OUT)/bin/c4ix-echo.c4r /bin/echo

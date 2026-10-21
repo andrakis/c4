@@ -3,8 +3,8 @@ B4KE2
 # libctest, which exercises it. The same commands as build-images.sh, so
 # the results are the disk's byte for byte. libc carries libc4ix's syscall
 # layer, compiled -fpic here as libc is.
-SET ROOT /usr/src/c4
-SET OUT /ram/build
+SET ROOT /usr
+SET OUT /build
 SET STACK 1048576
 SET LC c4sc -c 400000 compile -O
 # -fpic: one copy of libc's code serves every task (src/c4ix/loader.c)

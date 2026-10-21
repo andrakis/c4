@@ -5,28 +5,28 @@
 echo hello from c4ix-sh
 
 # output redirection into a RAM file, then read it back
-echo one two three > /ram/words
-cat /ram/words
+echo one two three > /tmp/words
+cat /tmp/words
 
 # a pipeline, and a pipeline whose tail is redirected
-cat /ram/words | wc
-cat /ram/words | wc > /ram/count
-cat /ram/count
+cat /tmp/words | wc
+cat /tmp/words | wc > /tmp/count
+cat /tmp/count
 
 # input redirection
-wc < /ram/words
+wc < /tmp/words
 
 # a three-stage pipeline
-cat /ram/words | cat | wc
+cat /tmp/words | cat | wc
 
 # operators need no spaces around them
-cat /ram/words|wc
+cat /tmp/words|wc
 
 # a background job: started, listed, then reaped
-echo backgrounded > /ram/bg &
+echo backgrounded > /tmp/bg &
 jobs
 wait
-cat /ram/bg
+cat /tmp/bg
 
 # builtins that report rather than pretend
 cd /somewhere

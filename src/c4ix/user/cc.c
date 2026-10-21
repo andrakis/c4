@@ -6,9 +6,9 @@
 //      [-I dir] [-D name] [-l lib] [-o out] file.c...
 //
 // c4lc's own preprocessor is always on (-P). After any -I given it
-// searches /usr/include (C4IX's headers), then /usr/src/c4/include, the
-// repo's own: u0.h, c4dos.h and the C versions of stdio.h and the rest,
-// so the repo's programs (src/tests/mandel.c, ...) build as they are.
+// searches /usr/include: C4IX's headers, and the repo's own beside them
+// (u0.h, c4dos.h and the C versions of stdio.h and the rest), so the
+// repo's programs (/usr/src/tests/mandel.c, ...) build as they are.
 // Those headers ask __c4cc__ / C4CC whether they are building for the
 // VM rather than natively, and cc always is, so both are defined -- as
 // the Makefile does when c4lc builds them. Without -o a program is NAME.c4r in
@@ -18,7 +18,7 @@
 // One source and no -l is a whole program, written by c4sc as c4lc
 // writes one: a program that calls only c4's own library (printf, open,
 // malloc, ...) needs nothing more. More sources, or -l, are compiled to
-// objects in /ram and joined by c4rlink:
+// objects in /tmp and joined by c4rlink:
 //   -l c4ix          /usr/lib/libc4ix.c4l, linked in: C4IX's own calls
 //   -l arc           /usr/lib/libarc.c4l (tar, gzip, crc32)
 //   -l /lib/libc.c4s a shared library, loaded when the program starts
@@ -100,8 +100,6 @@ static int compile(char *src, char *out, int obj) {
     while (i < nflags) { av[n] = flags[i]; ++n; ++i; }
     av[n] = "-I"; ++n;
     av[n] = "/usr/include"; ++n;
-    av[n] = "-I"; ++n;
-    av[n] = "/usr/src/c4/include"; ++n;
     av[n] = "-D"; ++n;
     av[n] = "C4CC=1"; ++n;
     av[n] = "-D"; ++n;
@@ -159,12 +157,12 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    // objects in /ram, then c4rlink: objects, libraries, -o out
+    // objects in /tmp, then c4rlink: objects, libraries, -o out
     objs = (char **)ualloc(nsrc * sizeof(char *));
     code = 0;
     k = 0;
     while (k < nsrc && !code) {
-        objs[k] = cat3("/ram/.cc-", named(srcs[k], ".c4o"), "");
+        objs[k] = cat3("/tmp/.cc-", named(srcs[k], ".c4o"), "");
         if ((code = compile(srcs[k], objs[k], 1))) ufprintf(STDERR, "cc: %s did not compile\n", srcs[k]);
         ++k;
     }

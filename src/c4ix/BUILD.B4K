@@ -3,8 +3,8 @@ B4KE2
 # `make c4ix.c4r` build it. The result is $(OUT)/c4ix.c4r, a kernel the
 # page can boot (?image=) once something gets it off the RAM disk.
 # Every module includes c4ix.h, so a change there rebuilds them all.
-SET ROOT /usr/src/c4
-SET OUT /ram/build
+SET ROOT /usr
+SET OUT /build
 # c4sc recurses deeply on a long function: 1 MB of stack (SYS_STACK)
 SET STACK 1048576
 SET LC c4sc -c 400000 compile -O -c -I src/c4ix

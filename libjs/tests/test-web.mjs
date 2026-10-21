@@ -136,7 +136,7 @@ try {
     await tab.type('wait 4\n');
     ok('the root archive unpacks', await waitTerm('[4] done (0)', 120000), (await term()).slice(-300));
     console.log(`  (unpacked ${((Date.now() - t1) / 1000).toFixed(1)}s after asking)`);
-    await tab.type('ls /usr/src/c4\n');
+    await tab.type('ls /usr\n');
     ok('its tree is there', await waitTerm('docs/', 15000) && await waitTerm('c4m.c', 1), (await term()).slice(-300));
     const disk2 = await tab.eval('window.c4m.status.disk');
     ok(`and it cost one fetch: ${disk2 && disk2.fetched} of ${disk2 && disk2.files} files so far`,

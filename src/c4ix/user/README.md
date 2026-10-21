@@ -29,7 +29,7 @@ C4IX shell finds a bare command name as `c4ix-NAME.c4r` or `NAME.c4r`.
 | `gui.c` | runs `libjs/guest/gui-demo.c` as a C4IX task; prints `gui: not fitted` without the libjs display |
 | `vfsload.c` | `c4ix-vfsload`: fills the hierarchical VFS from `c4ix.vfs.txt` at boot (same manifest format as `src/c4ke/bin/vfsload.c`), then starts `c4ix-tar` in the background on each archive the manifest's `ARCHIVES` names and prints its task id |
 | `tar.c` | `tar t[v] FILE`, `tar x[v] [-C DIR] FILE`: ustar or C4TAR1, gzipped or not (recognised by its magic). Links `libarc.c4l` too |
-| `b4ke.c` | the build tool, native to C4IX: C4KE's B4KE1 files, plus B4KE2's `SET`/`$(NAME)`, `CD`, `MKDIR`, `DEPS` (rebuild only what is older than its sources), `COPY`, `RUN ... > FILE` and sub-builds (`B4KE DIR`). `b4ke -C /usr/src/c4` rebuilds everything C4IX ships |
+| `b4ke.c` | the build tool, native to C4IX: C4KE's B4KE1 files, plus B4KE2's `SET`/`$(NAME)`, `CD`, `MKDIR`, `DEPS` (rebuild only what is older than its sources), `COPY`, `RUN ... > FILE` and sub-builds (`B4KE DIR`). `b4ke -C /usr` rebuilds everything C4IX ships |
 | `cc.c` | `cc [-O] [-c] [-l LIB] [-o OUT] [-I DIR] [-D NAME] FILE.c ...`: compiles with c4sc (c4lc, compiled) and c4lc's preprocessor, on the 1 MB stack c4sc needs; with more than one source or a `-l` (`c4ix`, `arc`, or a shared `/lib/NAME.c4s`) it links with c4rlink |
 | `crc32.c` | `crc32 FILE ...`: gzip's CRC-32 and the size, to check a build made inside the machine against the host's. Links `libarc.c4l` too |
 | `gunzip.c` | `gunzip FILE.gz` writes `FILE`; `-c` writes to fd 1. The gzip CRC is checked before anything is written. Links `libarc.c4l` too |
@@ -61,7 +61,7 @@ page and type `desktop`.
 | `files.c` | Explorer: folder tree and file list over the VFS; double-click runs a program in a new Command Prompt |
 | `taskmgr.c` | Task Manager: Applications, Processes (CPU share over the last second), Performance |
 | `apps.c` | Notepad, Calculator, About |
-| `edit.c` | Editor, the IDE: a VIM-mode editor (`:set novim` for a plain one; arrow keys in every mode) that builds what it edits. `:make`/F5 runs b4ke on the nearest `BUILD.B4K` above the file, or compiles a lone `.c` with c4sc and links it with libc4ix into `/ram`; errors are listed under the text and F8 goes to the next. `:run`/F6 runs the result. Explorer opens source files here |
+| `edit.c` | Editor, the IDE: a VIM-mode editor (`:set novim` for a plain one; arrow keys in every mode) that builds what it edits. `:make`/F5 runs b4ke on the nearest `BUILD.B4K` above the file, or compiles a lone `.c` with c4sc and links it with libc4ix into `/tmp`; errors are listed under the text and F8 goes to the next. `:run`/F6 runs the result. Explorer opens source files here |
 
 Kernel calls the desktop added (`SYS_AVAIL`, `SYS_CLOEXEC`, `SYS_INTR`)
 and the display registers it uses are described in

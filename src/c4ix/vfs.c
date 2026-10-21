@@ -76,14 +76,13 @@ void vfs_init() {
     rootdir->parent = rootdir;        // ".." at the root is the root
     vfs_namecpy(rootdir->name, "/");
 
-    // /ram exists from boot. Before directories the RAM filesystem
-    // was a flat set of names and "/ram/out" was simply one of them;
-    // now that paths are resolved a component at a time, that name
-    // only works if /ram is a real directory. Intermediate
+    // /tmp exists from boot, for scratch files (init's demo, cc's
+    // objects, the IDE's one-file build). The whole tree is writable,
+    // so there is no /ram as C4KE and C4DOS have. Intermediate
     // directories are NOT created implicitly -- open() does not do
     // that in any Unix -- so this one is made here rather than
     // silently conjured on first use.
-    vfs_mkdir("/ram");
+    vfs_mkdir("/tmp");
 }
 
 struct vnode *vfs_root() { return rootdir; }

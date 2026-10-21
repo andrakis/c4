@@ -67,18 +67,18 @@
 # once ps emitted its heading as five writes instead of one. Both
 # pass now.
 
-echo alpha beta > /ram/t1
-cat /ram/t1
-wc < /ram/t1
-cat /ram/t1 | wc
-cat /ram/t1 | cat | cat | wc
-cat /ram/t1 | wc > /ram/t2
-cat /ram/t2
-echo x > /ram/t2
-wc < /ram/t2
+echo alpha beta > /tmp/t1
+cat /tmp/t1
+wc < /tmp/t1
+cat /tmp/t1 | wc
+cat /tmp/t1 | cat | cat | wc
+cat /tmp/t1 | wc > /tmp/t2
+cat /tmp/t2
+echo x > /tmp/t2
+wc < /tmp/t2
 ps
-echo deferred > /ram/t3 &
+echo deferred > /tmp/t3 &
 jobs
 wait
-cat /ram/t3
+cat /tmp/t3
 exit 0

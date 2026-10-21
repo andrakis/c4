@@ -193,9 +193,9 @@ export async function run(ctx) {
   // compile a windowed program inside the machine, then run it (docs/c4ix-desktop.md part three)
   // the window's title bar, not its taskbar button (which would minimise it)
   await clickText('/^Command Prompt - task/', all => all.filter(t => t.y < 560).pop());
-  await tab.type('c4cc -o /ram/bounce.c4r /usr/include/window.h /usr/src/examples/bounce.c\n');
-  ok('c4cc compiles bounce.c inside C4IX', await shownHas('/c4cc: wrote \\d+ bytes to ramfs:\\/ram\\/bounce.c4r/', 60000), (await tab.eval(`${shown}.map(t => t.s).join(' | ')`)).slice(-600));
-  await tab.type('/ram/bounce.c4r\n');
+  await tab.type('c4cc -o /tmp/bounce.c4r /usr/include/window.h /usr/src/c4ix/examples/bounce.c\n');
+  ok('c4cc compiles bounce.c inside C4IX', await shownHas('/c4cc: wrote \\d+ bytes to ramfs:\\/tmp\\/bounce.c4r/', 60000), (await tab.eval(`${shown}.map(t => t.s).join(' | ')`)).slice(-600));
+  await tab.type('/tmp/bounce.c4r\n');
   ok('the program makes the Command Prompt its window', await shownHas('/^Bounce - compiled inside C4IX/', 30000) && await shownHas('/^Click me$/'));
   {
     const h1 = await tab.eval(canvasHash);

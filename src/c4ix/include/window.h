@@ -12,8 +12,8 @@
 // Built by either compiler. c4cc has no preprocessor, so give it this
 // file ahead of the program:
 //
-//   c4cc -o /ram/demo.c4r /usr/include/window.h /usr/src/examples/bounce.c
-//   /ram/demo.c4r
+//   c4cc -o /tmp/demo.c4r /usr/include/window.h /usr/src/c4ix/examples/bounce.c
+//   /tmp/demo.c4r
 //
 // and c4lc programs may #include "window.h". The subset is c4cc's: no
 // structs, no global arrays, no #define; the only way out is the C4IX

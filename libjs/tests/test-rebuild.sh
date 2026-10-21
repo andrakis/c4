@@ -1,7 +1,7 @@
 #!/bin/bash
 # test-rebuild.sh - C4IX rebuilds what it ships, inside itself (`make
-# test-c4ix-rebuild`). Boots the libjs disk, runs `b4ke -B -C /usr/src/c4`
-# (-B: the root archive's /ram/build is already up to date)
+# test-c4ix-rebuild`). Boots the libjs disk, runs `b4ke -B -C /usr`
+# (-B: the root archive's /build is already up to date)
 # -- the kernel, both libraries, every userland program, the desktop and
 # the c4cc-built toolchain -- then checks each result against the image
 # the host built:
@@ -18,7 +18,7 @@ set -u
 cd "$(dirname "$0")/../.."
 IMAGES=src/c4bb/images
 LIBJS="node libjs/cli.js"
-B=/ram/build
+B=/build
 fail=0
 ok()  { echo "test-rebuild: $1 OK"; }
 bad() { echo "test-rebuild: $1 FAILED"; fail=1; }
@@ -27,7 +27,7 @@ LC_PROGS="hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt gui 
 CC_PROGS="c4cc c4rdump c4rlink cpp c4 c4m"
 {
     echo "wait 4"
-    echo "b4ke -B -C /usr/src/c4"
+    echo "b4ke -B -C /usr"
     for u in $LC_PROGS; do echo "crc32 $B/bin/c4ix-$u.c4r"; done
     for t in $CC_PROGS; do echo "crc32 $B/bin/$t.c4r"; done
     echo "crc32 $B/c4ix.c4r"
@@ -35,18 +35,18 @@ CC_PROGS="c4cc c4rdump c4rlink cpp c4 c4m"
     echo "crc32 $B/lib/libc4ix.c4s"
     echo "crc32 $B/lib/libc.c4s"
     echo "crc32 $B/lib/libarc.c4l"
-    echo "$B/bin/c4cc.c4r -o /ram/h.c4r /usr/src/c4/src/c4ix/examples/hello.c"
-    echo "/ram/h.c4r"
-    echo "b4ke -C /usr/src/c4"
-    echo "b4ke -C /usr/src/c4 -f INSTALL.B4K"
+    echo "$B/bin/c4cc.c4r -o /tmp/h.c4r /usr/src/c4ix/examples/hello.c"
+    echo "/tmp/h.c4r"
+    echo "b4ke -C /usr"
+    echo "b4ke -C /usr -f INSTALL.B4K"
     echo "echo installed-ls-runs | wc"
     echo "exit"
 } > .rebuild.cmds
 out=$(timeout 1500 $LIBJS -m 64 -d $IMAGES/disk $IMAGES/c4ix32.c4r < .rebuild.cmds 2>&1)
 rm -f .rebuild.cmds
 
-if echo "$out" | grep -qF "b4ke: all built, in /ram/build"; then ok "b4ke -C /usr/src/c4 builds everything"
-else bad "b4ke -C /usr/src/c4 builds everything"; echo "$out" | grep -E 'failed|did not|cannot|overran' | head -10; fi
+if echo "$out" | grep -qF "b4ke: all built, in /build"; then ok "b4ke -C /usr builds everything"
+else bad "b4ke -C /usr builds everything"; echo "$out" | grep -E 'failed|did not|cannot|overran' | head -10; fi
 
 # the host's CRC of the file a build output corresponds to
 host() { python3 -c 'import zlib,sys; d=open(sys.argv[1],"rb").read(); print("%08x %d" % (zlib.crc32(d) & 0xffffffff, len(d)))' "$1"; }
@@ -72,7 +72,7 @@ else bad "c4cc's images are the disk's size (differ:$differ)"; fi
 
 if echo "$out" | grep -qE "^[0-9a-f]{8} [0-9]+ $B/bin/c4cc.c4r$" && echo "$out" | grep -qF "hello from a program compiled inside C4IX"; then ok "the rebuilt c4cc compiles a program that runs"
 else bad "the rebuilt c4cc compiles a program that runs"; fi
-if echo "$out" | grep -qE "b4ke: /usr/src/c4/src/c4ix/user: 0 ran, [0-9]+ up to date, 0 failed"; then
+if echo "$out" | grep -qE "b4ke: /usr/src/c4ix/user: 0 ran, [0-9]+ up to date, 0 failed"; then
     ok "a second run finds everything up to date"
 else bad "a second run finds everything up to date"; echo "$out" | grep 'up to date' | tail -6; fi
 

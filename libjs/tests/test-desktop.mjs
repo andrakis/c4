@@ -207,7 +207,7 @@ key('', 0, 36); key('', 0, 46);                                // Home, Delete: 
 check(until(() => inputLine() === 'cho xyz'), 'Home and Delete edit at the start of the line', inputLine());
 type('e'); key('', 0, 35); type('!\n');                        // "e", End, "!", Enter
 check(until(() => has('xyz!')), 'End goes back to the end, and Enter sends the whole line', screen());
-type('cat /usr/src/c4/src/c4ix/user/top.c\n');
+type('cat /usr/src/c4ix/user/top.c\n');
 until(() => has(/^\s*return 0;/) && inputLine() === '', 600);
 check(!has(/^\/\/ C4IX userland: top\./), 'a long file scrolls its first line off the Command Prompt', screen());
 for (let i = 0; i < 8; i++) key('', 0, 33);                    // PgUp, to the start
@@ -232,9 +232,9 @@ until(() => has(/^c4ix:\/\$/), 1500);
 key('l', 2, 76);                                               // Ctrl-L: a clean screen for what follows
 
 // ---- compile a windowed program inside the machine, and run it ------------------------------
-type('c4cc -o /ram/bounce.c4r /usr/include/window.h /usr/src/examples/bounce.c\n');
-check(until(() => has(/c4cc: wrote \d+ bytes to ramfs:\/ram\/bounce.c4r/), 3000), 'c4cc compiles bounce.c inside C4IX', screen());
-type('/ram/bounce.c4r\n');
+type('c4cc -o /tmp/bounce.c4r /usr/include/window.h /usr/src/c4ix/examples/bounce.c\n');
+check(until(() => has(/c4cc: wrote \d+ bytes to ramfs:\/tmp\/bounce.c4r/), 3000), 'c4cc compiles bounce.c inside C4IX', screen());
+type('/tmp/bounce.c4r\n');
 check(until(() => has(/Bounce - compiled inside C4IX/) && has('Click me') && has('Button clicks:'), 1500),
   'the program makes its Command Prompt its window, titled and drawn', screen());
 const sameRow = (label, value) => { const l = find(label)[0]; return !!l && frame.some(t => t.s === value && Math.abs(t.y - l.y) < 3 && t.x > l.x); };
@@ -249,7 +249,7 @@ check(has(/^Command Prompt - task \d+/), 'with its own title back');
 // ---- Explorer ------------------------------------------------------------------------
 start('Explorer');
 check(until(() => has('Exploring - /')), 'Start > Explorer opens at the root', screen());
-check(['bin', 'ram', 'usr'].every(has) && has('File Folder') && has('C4IX (/)'), 'it lists the root folders and shows the tree', screen());
+check(['bin', 'tmp', 'usr', 'build'].every(has) && has('File Folder') && has('C4IX (/)'), 'it lists the root folders and shows the tree', screen());
 // The folder tree: the root archive's folders are more than its pane
 // shows. It scrolls (the wheel here), and a folder collapses and expands
 // (the keyboard, then its +/- box).
@@ -303,8 +303,8 @@ dbl('b4ke', inList);
 check(until(() => has(/b4ke: cannot read BUILD\.B4K/), 800), 'double-clicking one runs it in a Command Prompt', screen());
 clickText(/^Exploring/); key('\b');
 check(until(() => has('Exploring - /')), 'and back up to the root');
-dbl('ram', inList);
-check(until(() => has('Exploring - /ram')), 'into /ram');
+dbl('tmp', inList);
+check(until(() => has('Exploring - /tmp')), 'into /tmp');
 clickText('File'); settle(); clickText('New Folder');
 check(until(() => has('Name of the new folder:')), 'File > New Folder asks for a name', screen());
 key('\n');
@@ -329,7 +329,7 @@ check(until(() => has('hello from c4ix') && has('second line') && has('Untitled 
 key('s', 2, 83);
 check(until(() => has('Save as:')), 'Ctrl+S on a new file asks where');
 key('\n');
-check(until(() => has('untitled.txt - Notepad')), 'and saves it to /ram/untitled.txt', screen());
+check(until(() => has('untitled.txt - Notepad')), 'and saves it to /tmp/untitled.txt', screen());
 clickText(/^Exploring/); key('F5');
 check(until(() => !!inList(find('untitled.txt')) && has('Text Document')), 'Explorer lists the saved file after a refresh', screen());
 const notes = find('untitled.txt - Notepad').length;
@@ -359,8 +359,8 @@ check(until(() => has('-- INSERT --')), 'i enters Insert mode');
 txt('int main() {\n    return 4;\n}');
 key('ESC');
 check(until(() => edLine('int main() {') && edLine('return 4;') && !has('-- INSERT --')), 'typing shows, keeping the indent, and Esc leaves Insert', screen());
-txt(':w /ram/t.c\n');
-check(until(() => has(/"\/ram\/t\.c" written, 3 lines/) && has('t.c - Editor')), ':w writes the file', screen());
+txt(':w /tmp/t.c\n');
+check(until(() => has(/"\/tmp\/t\.c" written, 3 lines/) && has('t.c - Editor')), ':w writes the file', screen());
 txt('2Gf4r7');
 check(until(() => edLine('    return 7;')), '2G f4 r7 changes the number in place', screen());
 txt('ggyyp');
@@ -414,7 +414,9 @@ check(!!inPane(find('usr')) && !!inPane(find('bin')) && !inPane(find('src')), 't
 clickText('usr', inPane);
 check(until(() => !!inPane(find('src'))), 'a click opens a folder', screen());
 clickText('src', inPane);
-check(until(() => !!inPane(find('examples'))), 'and one inside it');
+check(until(() => !!inPane(find('c4ix'))), 'and one inside it');
+clickText('c4ix', inPane);
+until(() => !!inPane(find('examples')));
 clickText('examples', inPane);
 check(until(() => !!inPane(find('hello.c'))), 'which lists its files', screen());
 clickText('hello.c', inPane);
@@ -429,7 +431,7 @@ key('b', 2, 66);
 check(until(() => !has('Files') && has('hello.c - Editor')), 'Ctrl+B hides the file pane', screen());
 key('b', 2, 66);
 check(until(() => has('Files') && !!inPane(find('hello.c'))), 'and shows it again, still open at the file', screen());
-txt(':e /usr/src/c4/src/c4ix/user/desktop/edit.c\n');
+txt(':e /usr/src/c4ix/user/desktop/edit.c\n');
 check(until(() => has('edit.c - Editor') && !!inPane(find('edit.c'))), ':e opens a file, and the pane opens the folders to it', screen());
 {
   const e = ed();
@@ -438,7 +440,7 @@ check(until(() => has('edit.c - Editor') && !!inPane(find('edit.c'))), ':e opens
     "dragging the editor's scroll thumb scrolls the text", `first line ${firstLine()}`);
 }
 // a long line: off to the right, then the bar across, then folded by wrap
-txt(':e /ram/long.txt\n');
+txt(':e /tmp/long.txt\n');
 until(() => has('long.txt - Editor'));
 txt('i' + 'W'.repeat(110) + 'END');
 key('ESC'); txt('0');
@@ -452,21 +454,21 @@ check(until(() => rows().some(t => /^W{40,}$/.test(t.s.trim())) && !edLine('WEND
 txt(':set wrap\n');
 check(until(() => edLine('WEND') && rows().filter(t => /^W{20,}/.test(t.s.trim())).length >= 2), ':set wrap folds it onto the next row', screen());
 txt(':set nowrap\n');
-txt(':e! /usr/src/c4/src/c4ix/user/desktop/edit.c\n');
+txt(':e! /usr/src/c4ix/user/desktop/edit.c\n');
 until(() => has('edit.c - Editor'));
-// a build that takes a while, cancelled from the pane's button. /ram/build
+// a build that takes a while, cancelled from the pane's button. /build
 // arrives built, so it is an edit that makes one: edit.c's object, again
 txt('Go// a change, so there is something to build'); key('ESC');
 txt(':make\n');
 check(until(() => has('Build: running') && has('Cancel'), 400), ':make on a file under a BUILD.B4K runs b4ke there', screen());
 clickText('Cancel');
 check(until(() => has('Build: cancelled') && !has('Build: running'), 400), 'Cancel stops the build', screen());
-// src/tests has no BUILD.B4K, and /usr/src/c4's builds the tree, not
+// src/tests has no BUILD.B4K, and /usr's builds the tree, not
 // mandel.c: so it is built alone, by cc, with the repo's headers
-txt(':e! /usr/src/c4/src/tests/mandel.c\n');
+txt(':e! /usr/src/tests/mandel.c\n');
 until(() => has('mandel.c - Editor'));
 txt(':make\n');
-check(until(() => has(/^Build: finished/) && has(/^c4rlink: wrote \d+ bytes to ramfs:\/ram\/mandel\.c4r/), 4000),
+check(until(() => has(/^Build: finished/) && has(/^c4rlink: wrote \d+ bytes to ramfs:\/tmp\/mandel\.c4r/), 4000),
   ':make on a file no BUILD.B4K names builds it alone, with cc', frame.filter(t => /Build|mandel|cc|b4ke|c4lc|cannot|rror/.test(t.s)).map(t => t.s.trim()).join('\n'));
 {
   // the pointer: a text beam over the text, an arrow on the taskbar

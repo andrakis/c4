@@ -4,8 +4,8 @@ B4KE2
 # as build-images.sh, with c4sc (the compiled c4lc) for c4sp + c4lc.lisp.
 # libarc is -mfuse there, so it is here: the machines that read this
 # disk run all ten fused opcodes.
-SET ROOT /usr/src/c4
-SET OUT /ram/build
+SET ROOT /usr
+SET OUT /build
 # c4sc recurses deeply on a long function: 1 MB of stack (SYS_STACK)
 SET STACK 1048576
 SET LC c4sc -c 400000 compile -O

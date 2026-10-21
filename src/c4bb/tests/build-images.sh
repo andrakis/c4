@@ -273,7 +273,7 @@ C4IX_ARC_USER="tar gunzip crc32"
 # floors were measured at 32 bits, and an unmeasured change there would
 # be the same guess with a smaller number.
 C4IX_CELLS=400000
-# What `b4ke -C /usr/src/c4` makes in /ram/build, laid out as the
+# What `b4ke -C /usr` makes in /build, laid out as the
 # BUILD.B4K files lay it out: each object and image below is kept there
 # as it is built (they are the same bytes; test-c4ix-rebuild checks the
 # images), and the root archive ships the tree, so a build inside C4IX
@@ -521,7 +521,7 @@ if [ -f $DISK/config.sys ]; then
     (cd $DISK && ls -p | grep -v '/$' | grep -v '^manifest.json$' > c4dos.dir)
 fi
 
-# c4sc, the compiled c4lc, so C4IX can rebuild itself: /usr/src/c4's
+# c4sc, the compiled c4lc, so C4IX can rebuild itself: /usr's
 # BUILD.B4K files run it (docs/c4sc-design.md). The c4ke-root disk below
 # carries the same image.
 [ -f c4sc32-fused.c4r ] && cp c4sc32-fused.c4r $DISK/c4sc.c4r
@@ -540,16 +540,18 @@ if [ -f c4sc32-fused.c4r ]; then
 fi
 
 # ---- the C4IX root archive -----------------------------------------
-# One gzipped tar of the repo's own sources and docs, unpacked over / by
-# C4IX's vfsload at boot (ARCHIVES in c4ix.vfs.txt, in the background).
+# One gzipped tar of the repo itself, unpacked over / by C4IX's vfsload
+# at boot (ARCHIVES in c4ix.vfs.txt, in the background).
 # The point is the request count: the web page fetches each disk file
 # separately, so a few hundred more files as manifest entries would be a
-# few hundred more round trips, where this is one. The tree is the repo
-# as git has it (text files only) under /usr/src/c4, the C4IX libraries
-# in /usr/lib, and the headers a program built inside links against in
-# /usr/include. Reproducible: fixed order, owner and times, gzip -n.
+# few hundred more round trips, where this is one. /usr IS the repo as
+# git has it (text files only): its src/ is /usr/src, its include/ is
+# /usr/include -- beside C4IX's own headers, so a C4 program's
+# `#include <u0.h>` and a C4IX program's <c4ix_user.h> both just work --
+# and its docs, Makefile and BUILD.B4K are /usr's. The C4IX libraries
+# are in /usr/lib. Reproducible: fixed order, owner and times, gzip -n.
 #
-# At its end, /ram/build: what `b4ke -C /usr/src/c4` makes, already made
+# At its end, /build: what `b4ke -C /usr` makes, already made
 # (PB above), so a build inside C4IX -- the IDE's, or b4ke's -- starts
 # with everything up to date and remakes only what was edited. Order is
 # what makes that true: a file's mtime is the RAM filesystem's clock
@@ -559,14 +561,14 @@ fi
 # a second one: vfsload unpacks each archive in its own task, at once.)
 ROOT=.c4bb_ix_root
 rm -rf $ROOT
-mkdir -p $ROOT/usr/src/c4 $ROOT/usr/lib $ROOT/usr/include
+mkdir -p $ROOT/usr/lib $ROOT/usr/include
 if git rev-parse --git-dir > /dev/null 2>&1; then
     git ls-files -- src docs include libjs README.md LICENSE Makefile BUILD.B4K INSTALL.B4K c4.c c4m.c c4m_float.c c4l.c load-c4r.c |
         grep -v '^src/c4bb/images/\|^src/c4or1k/images/' |
         while read -r f; do
             [ -f "$f" ] && grep -Iq . "$f" 2>/dev/null || continue
-            mkdir -p "$ROOT/usr/src/c4/$(dirname "$f")"
-            cp "$f" "$ROOT/usr/src/c4/$f"
+            mkdir -p "$ROOT/usr/$(dirname "$f")"
+            cp "$f" "$ROOT/usr/$f"
         done
 else
     echo "c4bb: not a git checkout, the root archive carries no sources" >&2
@@ -578,16 +580,16 @@ cp src/c4ix/include/*.h libjs/guest/gui.h $ROOT/usr/include/
 mkdir -p $ROOT/usr/include/libc/sys
 cp src/c4ix/libc/include/*.h $ROOT/usr/include/libc/
 cp src/c4ix/libc/include/sys/*.h $ROOT/usr/include/libc/sys/
-mkdir -p $ROOT/ram/build/bin
-cp -r $PB/. $ROOT/ram/build/
+mkdir -p $ROOT/build/bin
+cp -r $PB/. $ROOT/build/
 # src/c4cc/BUILD.B4K's: built by c4cc above, as they are inside C4IX
-for t in c4cc c4rdump c4rlink cpp c4 c4m; do cp $DISK/$t.c4r $ROOT/ram/build/bin/; done
-cp $OUT/c4m.pp.c $ROOT/ram/build/c4m.pp.c
+for t in c4cc c4rdump c4rlink cpp c4 c4m; do cp $DISK/$t.c4r $ROOT/build/bin/; done
+cp $OUT/c4m.pp.c $ROOT/build/c4m.pp.c
 BUILT=$(cd $ROOT && {
-    find ram/build -name '*.c4o' -o -name '*.pp.c' | sort
-    echo ram/build/lib/libc4ix.c4l ram/build/lib/libc4ix.c4s ram/build/lib/libarc.c4l ram/build/lib/libc.c4s
-    find ram/build/bin -type f | sort
-    echo ram/build/c4ix.c4r
+    find build -name '*.c4o' -o -name '*.pp.c' | sort
+    echo build/lib/libc4ix.c4l build/lib/libc4ix.c4s build/lib/libarc.c4l build/lib/libc.c4s
+    find build/bin -type f | sort
+    echo build/c4ix.c4r
 })
 tar --format=ustar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
     -C $ROOT -cf - usr --no-recursion $BUILT | gzip -9n > $DISK/c4ix-root.tgz

@@ -67,7 +67,7 @@ screens.forEach((sc, k) => {
 
 // A busy one: before step 3 a task that ran 21M cycles in a second
 // overflowed, and top showed negative and huge percentages.
-type('c4ix-spin.c4r 1000 > /ram/spin.txt &\n');
+type('c4ix-spin.c4r 1000 > /tmp/spin.txt &\n');
 for (let i = 0; i < 50; i++) vm.run(2e6);
 
 // A user task's __c4_usleep sleeps that task, not the machine: USLP
@@ -77,7 +77,7 @@ for (let i = 0; i < 50; i++) vm.run(2e6);
 {
   const n0 = out.length, ms0 = vm.dev.simMs(), s0 = vm.dev.sleepMs;
   const c0 = vm.cycle - vm.skipped;
-  type('raycast.c4r 32x12 -d -n 40 -f 50 > /ram/rc.txt\n');
+  type('raycast.c4r 32x12 -d -n 40 -f 50 > /tmp/rc.txt\n');
   const done = until(() => /c4ix:\/\$/.test(text(n0)), 3000);
   const ms = vm.dev.simMs() - ms0, slept = vm.dev.sleepMs - s0;
   const busy = (vm.cycle - vm.skipped - c0) / (ms * 100000);

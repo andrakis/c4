@@ -540,8 +540,8 @@ loading or assigning a whole struct is an error.
   later spawns get -- b4ke's `$(STACK)`, 1 MB for c4sc. The shell tries
   `/bin/NAME` before `c4ix-NAME.c4r`, so `INSTALL.B4K`'s copies win.
 
-- **Already built** (2026-10-21): the root archive ends with `/ram/build`
-  as `b4ke -C /usr/src/c4` leaves it -- the host's own objects and images
+- **Already built** (2026-10-21): the root archive ends with `/build`
+  (then `/ram/build`) as `b4ke -C /usr` leaves it -- the host's own objects and images
   from build-images.sh, the same bytes -- so b4ke (and the IDE, which runs
   it) starts with all 86 steps up to date and an edit remakes only what it
   feeds. It works because mtime is the RAM filesystem's write clock: the
@@ -550,6 +550,20 @@ loading or assigning a whole struct is an error.
   in the same archive because vfsload starts one task per archive, and
   two would unpack at once. The archive grows from 1.9 MB to 2.6 MB and
   its unpack from 5.3 to 8.2 machine-seconds (`wait 4`).
+
+- **The repo is /usr; builds go to /build; no /ram** (2026-10-21). The
+  archive unpacked the repo at `/usr/src/c4`, while `/usr/include`,
+  `/usr/src/bin`, `/usr/src/examples` and `/usr/src/forth` held copies
+  of some of the same files, so the same source had two names and a C4
+  program's `#include <u0.h>` found nothing. Now `/usr` is the repo:
+  its `src/` is `/usr/src`, its `include/` is `/usr/include` beside
+  C4IX's own headers (no name is in both), and its docs, `Makefile` and
+  `BUILD.B4K` are `/usr`'s; the BUILD.B4K files' `ROOT` is `/usr`. The
+  manifest no longer makes the copies. `b4ke -C /usr` builds into
+  `/build`. The whole tree is writable, so C4IX has no `/ram` -- that
+  is C4KE's and C4DOS's -- and the kernel makes `/tmp` at boot for
+  scratch files instead (init's demo, test.sh, cc's objects, the IDE's
+  one-file builds, which land in `/build/NAME.c4r`).
 
 - **Shared libraries and a libc** (branch c4ix-userland, 2026-10-19).
   - *Linking:* `c4rlink -l LIB` links against a library without copying

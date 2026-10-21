@@ -12,7 +12,7 @@ It also runs C4KE's binaries unmodified, through a compatibility layer
 (`c4ke.c`) that answers C4KE's custom opcodes. With the libjs display
 fitted it runs a Windows-style desktop ([user/desktop](user/README.md)).
 Compilers run inside it: c4cc, c4rlink and c4lc (on c4sp) write what they
-build into `/ram`, and c4th, cpp and c4rdump are installed beside them
+build into `/tmp`, and c4th, cpp and c4rdump are installed beside them
 (on the disk image `make c4bb-images` builds; see `examples/README.txt`).
 
 ## Build
@@ -61,7 +61,7 @@ With no arguments, init runs `c4ix-vfsload.c4r` to fill the filesystem
 from `c4ix.vfs.txt` (if present), then starts `c4ix-sh.c4r`. On the
 board and libjs disk the manifest also names `c4ix-root.tgz`, which
 vfsload hands to `c4ix-tar` in the background: the repo's sources and
-docs appear under `/usr/src/c4` a few seconds after the prompt (`wait 4`
+docs appear under `/usr` a few seconds after the prompt (`wait 4`
 blocks until they have), the C4IX libraries in `/usr/lib`, and more
 headers in `/usr/include`.
 
@@ -69,15 +69,15 @@ That tree is enough to rebuild C4IX inside itself. `BUILD.B4K` files sit
 beside the sources, `b4ke` and `c4sc` (the compiled c4lc) are in `/bin`,
 and
 
-    b4ke -C /usr/src/c4                   the kernel, libraries, userland, desktop and toolchain, into /ram/build
-    b4ke -C /usr/src/c4/src/c4ix/user     or any one directory
-    b4ke -C /usr/src/c4 -f INSTALL.B4K    then /bin and /usr/lib get the results
+    b4ke -C /usr                   the kernel, libraries, userland, desktop and toolchain, into /build
+    b4ke -C /usr/src/c4ix/user     or any one directory
+    b4ke -C /usr -f INSTALL.B4K    then /bin and /usr/lib get the results
 
-The archive carries `/ram/build` already built, as these files would
+The archive carries `/build` already built, as these files would
 build it, so the first run has nothing to do and an edit remakes only
 what it feeds (`-B` rebuilds everything regardless). For one program of
 your own, `cc` runs c4sc with c4lc's preprocessor and the stack it
-needs -- `cc -O -l c4ix -o /ram/prog.c4r prog.c` -- about twenty times
+needs -- `cc -O -l c4ix -o /tmp/prog.c4r prog.c` -- about twenty times
 faster than `c4sp c4lc.lisp` (src/c4ix/examples/README.txt).
 
 What c4lc builds comes out byte for byte the disk's; c4cc's images carry
@@ -134,7 +134,7 @@ target.
 | `libc/` | [C4IX's C library](libc/README.md), the shared library `/lib/libc.c4s` |
 | `lib/archive.c`, `include/archive.h` | libarc: an RFC 1951 inflater (puff-style, with a 9-bit lookup table), gzip with its CRC, and a ustar/C4TAR1 reader that makes directories as it goes |
 | [`user/`](user/README.md) | userland programs, shell scripts, and the desktop |
-| `examples/` | `hello.c`, `bounce.c` and `README.txt`: programs to compile inside C4IX (`c4cc -o /ram/hello.c4r /usr/src/examples/hello.c`) |
+| `examples/` | `hello.c`, `bounce.c` and `README.txt`: programs to compile inside C4IX (`c4cc -o /tmp/hello.c4r /usr/src/c4ix/examples/hello.c`) |
 | `tests/` | goldens for `test-c4ix`, `test-c4ix-fmt`, `test-c4ix-c4ke` |
 
 ## Hosts

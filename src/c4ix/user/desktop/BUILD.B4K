@@ -3,8 +3,8 @@ B4KE2
 # c4ix-desktop.c4r`). wm.c and gui.c include libjs/guest/gui.h by its
 # path from the top of the tree, which is why this runs from $(ROOT).
 # Every module includes desktop.h.
-SET ROOT /usr/src/c4
-SET OUT /ram/build
+SET ROOT /usr
+SET OUT /build
 # c4sc recurses deeply on a long source: edit.c, the Editor, overruns
 # even 1 MB, so the desktop gets 4 MB of stack per compile (SYS_STACK)
 SET STACK 4194304

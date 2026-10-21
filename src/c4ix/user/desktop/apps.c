@@ -223,11 +223,11 @@ void note_command(struct win *w, int menu, int item) {
     if (item == 0) { n->len = 0; n->text[0] = 0; n->caret = 0; n->top = 0; n->modified = 0; n->path[0] = 0; note_retitle(w); }
     else if (item == 1) inputbox(w, "Open", "File to open:", n->path[0] ? n->path : "/", A_OPEN);
     else if (item == 2) {
-        if (!n->path[0]) inputbox(w, "Save As", "Save as:", "/ram/untitled.txt", A_SAVEAS);
+        if (!n->path[0]) inputbox(w, "Save As", "Save as:", "/tmp/untitled.txt", A_SAVEAS);
         else if (!note_save(n)) msgbox(w, "Notepad", "Cannot save that file.", 0, A_NONE);
         note_retitle(w);
     }
-    else if (item == 3) inputbox(w, "Save As", "Save as:", n->path[0] ? n->path : "/ram/untitled.txt", A_SAVEAS);
+    else if (item == 3) inputbox(w, "Save As", "Save as:", n->path[0] ? n->path : "/tmp/untitled.txt", A_SAVEAS);
     else if (item == 5) win_close(win_index(w));
 }
 

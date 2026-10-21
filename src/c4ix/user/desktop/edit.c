@@ -25,7 +25,7 @@
 // Building. :make (or F5) writes the file and runs b4ke over pipes into
 // the pane at the bottom: on the nearest BUILD.B4K above the file if
 // there is one, or else, for a .c file, a build file of its own that
-// compiles it with c4sc and links it with libc4ix into /ram. Lines that
+// compiles it with c4sc and links it with libc4ix into /tmp. Lines that
 // name a place -- "FILE:N:", c4lc's "line N:", c4cc's "N:" -- are errors:
 // :cn and :cp (F8, Shift+F8), or a double click, go to them. :run (F6)
 // runs what was built in a new Command Prompt: the .c file's image, or
@@ -575,7 +575,7 @@ static void e_resolve(struct edit *e, char *p, char *out) {
     out[k] = 0;
     ui_cat(out, p);
     if (e_exists(out)) return;
-    ui_cpy(out, "/usr/src/c4/"); ui_cat(out, p);
+    ui_cpy(out, "/usr/"); ui_cat(out, p);
     if (e_exists(out)) return;
     ui_cpy(out, p);
 }
@@ -705,7 +705,7 @@ static int e_names(char *p, char *base) {
 
 // The BUILD.B4K that builds PATH, looking up from DIR: its directory
 // into OUT. 2: the nearest one that names the file. 1: none does, and
-// OUT is the nearest there is -- /usr/src/c4's own builds the tree, not
+// OUT is the nearest there is -- /usr's own builds the tree, not
 // src/tests/mandel.c, so a lone .c file is better built alone (e_make).
 // 0: there is none.
 static int e_find_build(char *dir, char *path, char *out) {
@@ -793,17 +793,17 @@ static void e_make(struct win *w) {
         memcpy(name, e->path + j, k - j - 2);
         name[k - j - 2] = 0;
         bf = (char *)ualloc(1024);
-        ui_cpy(bf, "B4KE2\nDEPS /ram/"); ui_cat(bf, name); ui_cat(bf, ".c4r : "); ui_cat(bf, e->path);
-        ui_cat(bf, "\nRUN cc -O -l c4ix -I "); ui_cat(bf, dir); ui_cat(bf, " -o /ram/"); ui_cat(bf, name);
+        ui_cpy(bf, "B4KE2\nDEPS /tmp/"); ui_cat(bf, name); ui_cat(bf, ".c4r : "); ui_cat(bf, e->path);
+        ui_cat(bf, "\nRUN cc -O -l c4ix -I "); ui_cat(bf, dir); ui_cat(bf, " -o /tmp/"); ui_cat(bf, name);
         ui_cat(bf, ".c4r "); ui_cat(bf, e->path); ui_cat(bf, "\n");
         n = ui_len(bf);
-        fd = uopen("/ram/edit.b4k", O_WR + O_CREATE + O_TRUNCATE);
-        if (fd < 0 || write(fd, bf, n) != n) { if (fd >= 0) uclose(fd); free(bf); e_say(e, "Cannot write /ram/edit.b4k"); return; }
+        fd = uopen("/tmp/edit.b4k", O_WR + O_CREATE + O_TRUNCATE);
+        if (fd < 0 || write(fd, bf, n) != n) { if (fd >= 0) uclose(fd); free(bf); e_say(e, "Cannot write /tmp/edit.b4k"); return; }
         uclose(fd);
         free(bf);
         ui_cpy(e->bdir, dir);
-        argv[1] = "-C"; argv[2] = e->bdir; argv[3] = "-f"; argv[4] = "/ram/edit.b4k"; argv[5] = 0;
-        ui_cpy(e->runcmd, "/ram/"); ui_cat(e->runcmd, name); ui_cat(e->runcmd, ".c4r");
+        argv[1] = "-C"; argv[2] = e->bdir; argv[3] = "-f"; argv[4] = "/tmp/edit.b4k"; argv[5] = 0;
+        ui_cpy(e->runcmd, "/tmp/"); ui_cat(e->runcmd, name); ui_cat(e->runcmd, ".c4r");
         k = 5;
     } else {
         e_say(e, "Nothing to build: no BUILD.B4K above this file, and it is not a .c file");
@@ -2419,12 +2419,12 @@ void edit_command(struct win *w, int menu, int item) {
             if (e->modified) { msgbox(w, "Editor", "Save the changes first (:w), or :q! to drop them.", 0, A_NONE); return; }
             e_settext(e, "", 0); e->path[0] = 0; e->modified = 0; e->cy = 0; e->cx = 0; e_retitle(w);
         }
-        else if (item == 1) inputbox(w, "Open", "File to edit:", e->path[0] ? e->path : "/usr/src/c4/", A_OPEN);
+        else if (item == 1) inputbox(w, "Open", "File to edit:", e->path[0] ? e->path : "/usr/", A_OPEN);
         else if (item == 2) {
-            if (!e->path[0]) inputbox(w, "Save As", "Save as:", "/ram/untitled.c", A_SAVEAS);
+            if (!e->path[0]) inputbox(w, "Save As", "Save as:", "/tmp/untitled.c", A_SAVEAS);
             else { e_save(e, e->path); e_retitle(w); }
         }
-        else if (item == 3) inputbox(w, "Save As", "Save as:", e->path[0] ? e->path : "/ram/untitled.c", A_SAVEAS);
+        else if (item == 3) inputbox(w, "Save As", "Save as:", e->path[0] ? e->path : "/tmp/untitled.c", A_SAVEAS);
         else if (item == 5) win_close(win_index(w));
         return;
     }

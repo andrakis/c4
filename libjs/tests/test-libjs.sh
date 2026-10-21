@@ -151,7 +151,7 @@ else bad "c4ix-vfs manifest mostly loaded"; echo "$out" | grep -E 'entries loade
 # The root archive (c4ix-root.tgz, build-images.sh) unpacks in the
 # background as task 4, which "wait 4" blocks on. Then a file deep in
 # the tree must have its real content, and the libraries must be there.
-out=$(printf 'wait 4\nls /usr/lib\ncat /usr/src/c4/src/c4ix/user/tar.c\nexit\n' | \
+out=$(printf 'wait 4\nls /usr/lib\ncat /usr/src/c4ix/user/tar.c\nexit\n' | \
       timeout 300 $LIBJS -c 2000000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
 if echo "$out" | grep -qF "unpacking c4ix-root.tgz in the background as task 4" &&
    echo "$out" | grep -qF "[4] done (0)" && echo "$out" | grep -qF "libarc.c4l" &&
@@ -159,25 +159,25 @@ if echo "$out" | grep -qF "unpacking c4ix-root.tgz in the background as task 4" 
     ok "c4ix root archive unpacked"
 else bad "c4ix root archive unpacked"; echo "$out" | grep -E 'unpack|done|tar:|cannot' | head -5; fi
 
-# b4ke inside C4IX. The root archive carries /ram/build already built,
+# b4ke inside C4IX. The root archive carries /build already built,
 # so the whole tree is up to date at boot: nothing runs. A source written
 # again (an edit, as the IDE saves one) remakes what it feeds and no
 # more: its object and its program. Then -B rebuilds
-# the libraries from /usr/src/c4, and they must be the ones the archive
+# the libraries from /usr, and they must be the ones the archive
 # carries in /usr/lib; and a run after that must do nothing again.
 # (Rebuilding the whole tree is `make test-c4ix-rebuild`: minutes.)
-E=/usr/src/c4/src/c4ix/user/echo.c
-out=$(printf "wait 4\nb4ke -C /usr/src/c4\ncat $E > /ram/echo.c\ncat /ram/echo.c > $E\nb4ke -C /usr/src/c4/src/c4ix/user\n"'b4ke -B -C /usr/src/c4/src/c4ix/lib\ncrc32 /ram/build/lib/libc4ix.c4l /usr/lib/libc4ix.c4l\nb4ke -C /usr/src/c4/src/c4ix/lib\nexit\n' | \
+E=/usr/src/c4ix/user/echo.c
+out=$(printf "wait 4\nb4ke -C /usr\ncat $E > /tmp/echo.c\ncat /tmp/echo.c > $E\nb4ke -C /usr/src/c4ix/user\n"'b4ke -B -C /usr/src/c4ix/lib\ncrc32 /build/lib/libc4ix.c4l /usr/lib/libc4ix.c4l\nb4ke -C /usr/src/c4ix/lib\nexit\n' | \
       timeout 300 $LIBJS -m 64 -c 6000000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
 pre=$(echo "$out" | sed '/b4ke: all built/q')
-if echo "$pre" | grep -qF "b4ke: all built, in /ram/build" && ! echo "$pre" | grep -qE ": [1-9][0-9]* ran, " &&
+if echo "$pre" | grep -qF "b4ke: all built, in /build" && ! echo "$pre" | grep -qE ": [1-9][0-9]* ran, " &&
    echo "$pre" | grep -qE "c4ix/user: 0 ran, [0-9]+ up to date, 0 failed"; then
-    ok "the root archive's /ram/build is up to date: b4ke has nothing to do"
-else bad "the root archive's /ram/build is up to date: b4ke has nothing to do"; echo "$pre" | grep -E 'b4ke' | head -12; fi
+    ok "the root archive's /build is up to date: b4ke has nothing to do"
+else bad "the root archive's /build is up to date: b4ke has nothing to do"; echo "$pre" | grep -E 'b4ke' | head -12; fi
 if echo "$out" | grep -qE "c4ix/user: 2 ran, [0-9]+ up to date, 0 failed"; then
     ok "an edited source remakes only its object and its program"
 else bad "an edited source remakes only its object and its program"; echo "$out" | grep -E 'c4ix/user' | head -4; fi
-a=$(echo "$out" | grep -oE '^[0-9a-f]{8} [0-9]+ /ram/build/lib/libc4ix.c4l' | cut -d' ' -f1,2)
+a=$(echo "$out" | grep -oE '^[0-9a-f]{8} [0-9]+ /build/lib/libc4ix.c4l' | cut -d' ' -f1,2)
 b=$(echo "$out" | grep -oE '^[0-9a-f]{8} [0-9]+ /usr/lib/libc4ix.c4l' | cut -d' ' -f1,2)
 if [ -n "$a" ] && [ "$a" = "$b" ] && echo "$out" | grep -qF "c4ix/lib: 5 ran, 0 up to date, 0 failed" &&
    echo "$out" | grep -qF "c4ix/lib: 0 ran, 5 up to date, 0 failed"; then
@@ -188,11 +188,11 @@ else bad "b4ke rebuilds libc4ix inside C4IX, byte for byte"; echo "$out" | grep 
 # linking in libc4ix -- the userland's own recipe, so echo built this
 # way is the disk's, byte for byte. And the repo's own programs, which
 # include u0.h and the repo's stdio.h: src/tests/mandel.c, as it is.
-out=$(printf 'wait 4\ncc -o /ram/hello2.c4r /usr/src/examples/hello.c\n/ram/hello2.c4r\ncc -O -l c4ix -o /ram/echo.c4r /usr/src/c4/src/c4ix/user/echo.c\n/ram/echo.c4r cc built it\ncrc32 /ram/echo.c4r /bin/echo\ncd /usr/src/c4/src/tests\ncc -O mandel.c\n./mandel.c4r\nexit\n' | \
+out=$(printf 'wait 4\ncc -o /tmp/hello2.c4r /usr/src/c4ix/examples/hello.c\n/tmp/hello2.c4r\ncc -O -l c4ix -o /tmp/echo.c4r /usr/src/c4ix/user/echo.c\n/tmp/echo.c4r cc built it\ncrc32 /tmp/echo.c4r /bin/echo\ncd /usr/src/tests\ncc -O mandel.c\n./mandel.c4r\nexit\n' | \
       timeout 300 $LIBJS -m 64 -c 8000000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
 if echo "$out" | grep -qE "^Mandelbrot rendered in [0-9]+ms"; then ok "cc builds src/tests/mandel.c with the repo's headers, and it runs"
 else bad "cc builds src/tests/mandel.c with the repo's headers, and it runs"; echo "$out" | grep -E 'mandel|cannot|cc:' | head -5; fi
-a=$(echo "$out" | grep -oE '^[0-9a-f]{8} [0-9]+ /ram/echo.c4r' | cut -d' ' -f1,2)
+a=$(echo "$out" | grep -oE '^[0-9a-f]{8} [0-9]+ /tmp/echo.c4r' | cut -d' ' -f1,2)
 b=$(echo "$out" | grep -oE '^[0-9a-f]{8} [0-9]+ /bin/echo' | cut -d' ' -f1,2)
 if echo "$out" | grep -qF "hello from a program compiled inside C4IX" && echo "$out" | grep -qxF "cc built it" &&
    [ -n "$a" ] && [ "$a" = "$b" ]; then
@@ -220,7 +220,7 @@ else bad "libc: libctest's output is the reference"
 # Shared code: libc is -fpic, so two programs at once run one copy of its
 # code, and each must still see its own errno, environment and stdout
 # buffer -- the scheduler repoints libc's data at every switch
-out=$(printf 'pictest A 15 > /ram/a &\npictest B 15 > /ram/b &\nwait\ncat /ram/a\ncat /ram/b\nexit\n' | \
+out=$(printf 'pictest A 15 > /tmp/a &\npictest B 15 > /tmp/b &\nwait\ncat /tmp/a\ncat /tmp/b\nexit\n' | \
       timeout 300 $LIBJS -c 800000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
 if echo "$out" | grep -qx "A: ok" && echo "$out" | grep -qx "B: ok" && ! echo "$out" | grep -qF "crossed"; then
     ok "two tasks share libc's code and keep their own data"

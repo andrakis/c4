@@ -11,22 +11,22 @@
 # transcript that either matches the pin exactly or does not.
 
 echo test: files
-echo alpha beta > /ram/t1
-cat /ram/t1
-wc < /ram/t1
+echo alpha beta > /tmp/t1
+cat /tmp/t1
+wc < /tmp/t1
 
 echo test: pipes
-cat /ram/t1 | wc
-cat /ram/t1 | cat | cat | wc
+cat /tmp/t1 | wc
+cat /tmp/t1 | cat | cat | wc
 
 echo test: redirection
-cat /ram/t1 | wc > /ram/t2
-cat /ram/t2
+cat /tmp/t1 | wc > /tmp/t2
+cat /tmp/t2
 
 echo test: overwrite truncates
-echo x > /ram/t2
-cat /ram/t2
-wc < /ram/t2
+echo x > /tmp/t2
+cat /tmp/t2
+wc < /tmp/t2
 
 echo test: directories
 mkdir /d
@@ -46,7 +46,7 @@ echo test: process table
 ps -s
 
 echo test: exit status of a pipeline tail
-cat /ram/nonexistent
+cat /tmp/nonexistent
 echo after a failure the shell keeps going
 
 echo test: done

@@ -9,7 +9,7 @@
 // `fb-demo N` stops after N frames; q on the display quits. On a machine
 // without the display it prints "fb: not fitted" and exits.
 //
-//   ./c4cc32 -o fb-demo.c4r libjs/guest/gui.h libjs/guest/fb-demo.c
+//   ./c4cc32 -o fb-demo.c4r libjs/guest/gui.h libjs/guest/gui.c libjs/guest/fb-demo.c
 
 enum { FW = 320, FH = 240, RING = 32768 };
 enum { TRAP_HARD_IRQ = 1, CONF_CYCLE_INTERRUPT_HANDLER = 1 };

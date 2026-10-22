@@ -3,7 +3,7 @@
 //
 // In a Terminal on the desktop:
 //
-//   c4cc -o /tmp/bounce.c4r /usr/include/window.h /usr/src/c4ix/examples/bounce.c
+//   c4cc -o /tmp/bounce.c4r /usr/include/window.h /usr/include/window.c /usr/src/c4ix/examples/bounce.c
 //   /tmp/bounce.c4r
 //
 // The window becomes the program's: a ball bounces, the button counts

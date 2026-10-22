@@ -82,8 +82,8 @@ done
 $CC -o $OUT/bb_mbox.c4r include/c4bb_mbox.h src/c4bb/tests/src/bb_mbox.c > /dev/null
 # libjs's display demo (docs/libjs-design.md): prints "not fitted" on any
 # machine without the display, so it is safe in every corpus.
-$CC -o $OUT/gui-demo.c4r libjs/guest/gui.h libjs/guest/gui-demo.c > /dev/null
-$CC -o $OUT/fb-demo.c4r libjs/guest/gui.h libjs/guest/fb-demo.c > /dev/null
+$CC -o $OUT/gui-demo.c4r libjs/guest/gui.h libjs/guest/gui.c libjs/guest/gui-demo.c > /dev/null
+$CC -o $OUT/fb-demo.c4r libjs/guest/gui.h libjs/guest/gui.c libjs/guest/fb-demo.c > /dev/null
 $CC -o $OUT/libjs-strc.c4r libjs/tests/src/strc.c > /dev/null
 
 # these include real headers, so they go through the preprocessor
@@ -285,7 +285,7 @@ keep() { cp "$1" "$PB/$2"; }
 # list four kernel files, so an edit to sys.c, vfs.c or a user program
 # was silently not built.
 if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
-   [ -n "$(find src/c4ix libjs/guest/gui.h -newer $OUT/c4ix32.c4r -type f -print -quit)" ]; then
+   [ -n "$(find src/c4ix libjs/guest/gui.h libjs/guest/gui.c -newer $OUT/c4ix32.c4r -type f -print -quit)" ]; then
     rm -rf $PB
     mkdir -p $PB/kernel $PB/lib $PB/libc $PB/user $PB/desktop $PB/bin
     objs=""
@@ -300,13 +300,10 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     ./c4rlink32 -r .c4bb_ix_lib.c4o -o .c4bb_libc4ix32.c4l
     keep .c4bb_ix_lib.c4o lib/libc4ix.c4o
     keep .c4bb_libc4ix32.c4l lib/libc4ix.c4l
-    keep .c4bb_libc4ix32.c4l lib/libc4ix.c4s
     # ... and as C4IX's first shared library, /lib/libc4ix.c4s: the same
     # image, which programs linked with -l load at run time. c4rlink
     # records /lib/ and the base name, so the copy it reads is named so.
     mkdir -p .c4bb_lib
-    cp .c4bb_libc4ix32.c4l .c4bb_lib/libc4ix.c4s
-    cp .c4bb_libc4ix32.c4l $DISK/c4ix-libc4ix.c4s
     # libarc: inflate, CRC-32 and tar, for vfsload's root archive. -mfuse
     # like c4sp.c4r below: unpacking the archive is the one long job a
     # boot starts, and both machines that read this disk run fused code.
@@ -314,6 +311,25 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     ./c4rlink32 -r .c4bb_ix_arc.c4o -o .c4bb_libarc32.c4l
     keep .c4bb_ix_arc.c4o lib/libarc.c4o
     keep .c4bb_libarc32.c4l lib/libarc.c4l
+    # ... and C4IX's shared libraries, which its programs load (c4rlink -l):
+    # -fpic, so their code is loaded once and shared by every task. libc4ix
+    # has window.h's and cpustat.h's functions too, and libgui the
+    # display's (gui.h), so a program built -D C4IX_SHARED carries none of
+    # them itself (docs/c4ix-design.md, "Code out of the headers").
+    LCPIC="./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -fpic -c -D C4IX_SHARED -I src/c4ix/include"
+    $LCPIC src/c4ix/lib/libc4ix.c .c4bb_ix_s_libc4ix.c4o > /dev/null
+    $LCPIC src/c4ix/include/window.c .c4bb_ix_s_window.c4o > /dev/null
+    $LCPIC src/c4ix/include/cpustat.c .c4bb_ix_s_cpustat.c4o > /dev/null
+    ./c4rlink32 -r .c4bb_ix_s_libc4ix.c4o .c4bb_ix_s_window.c4o .c4bb_ix_s_cpustat.c4o -o .c4bb_lib/libc4ix.c4s > /dev/null
+    $LCPIC -mfuse src/c4ix/lib/archive.c .c4bb_ix_s_arc.c4o > /dev/null
+    ./c4rlink32 -r .c4bb_ix_s_arc.c4o -o .c4bb_lib/libarc.c4s > /dev/null
+    $LCPIC -I libjs/guest libjs/guest/gui.c .c4bb_ix_s_gui.c4o > /dev/null
+    ./c4rlink32 -r .c4bb_ix_s_gui.c4o -o .c4bb_lib/libgui.c4s > /dev/null
+    for m in libc4ix window cpustat arc gui; do keep .c4bb_ix_s_$m.c4o lib/shared-$m.c4o; done
+    for m in libc4ix libarc libgui; do
+        keep .c4bb_lib/$m.c4s lib/$m.c4s
+        cp .c4bb_lib/$m.c4s $DISK/c4ix-$m.c4s
+    done
     # libc: C4IX's C library (src/c4ix/libc), the second shared library,
     # /lib/libc.c4s. Built -fno-builtin, so printf, malloc and the rest
     # are its own -- except opcodes.c, which is where the VM's opcodes
@@ -343,26 +359,33 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     keep .c4bb_ix_u.c4o libc/pictest.c4o
     keep $DISK/c4ix-pictest.c4r bin/c4ix-pictest.c4r
     for u in $C4IX_USER; do
-        ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix/include src/c4ix/user/$u.c .c4bb_ix_u.c4o > /dev/null
-        # ls is the pilot for shared libraries: it loads libc4ix at run time
-        if [ $u = ls ]; then
-            ./c4rlink32 .c4bb_ix_u.c4o -l .c4bb_lib/libc4ix.c4s -o $DISK/c4ix-$u.c4r > /dev/null
+        ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -D C4IX_SHARED -I src/c4ix/include src/c4ix/user/$u.c .c4bb_ix_u.c4o > /dev/null
+        # each loads libc4ix at run time; gui, the display's demo, libgui too
+        if [ $u = gui ]; then
+            ./c4rlink32 .c4bb_ix_u.c4o -l .c4bb_lib/libgui.c4s -l .c4bb_lib/libc4ix.c4s -o $DISK/c4ix-$u.c4r > /dev/null
         else
-            ./c4rlink32 .c4bb_ix_u.c4o .c4bb_libc4ix32.c4l -o $DISK/c4ix-$u.c4r > /dev/null
+            ./c4rlink32 .c4bb_ix_u.c4o -l .c4bb_lib/libc4ix.c4s -o $DISK/c4ix-$u.c4r > /dev/null
         fi
         keep .c4bb_ix_u.c4o user/$u.c4o
         keep $DISK/c4ix-$u.c4r bin/c4ix-$u.c4r
     done
     for u in $C4IX_ARC_USER; do
-        ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix/include src/c4ix/user/$u.c .c4bb_ix_u.c4o > /dev/null
-        ./c4rlink32 .c4bb_ix_u.c4o .c4bb_libarc32.c4l .c4bb_libc4ix32.c4l -o $DISK/c4ix-$u.c4r > /dev/null
+        # splash runs while the boot unpacks the root archive, before
+        # anything else may have been: it carries its libraries itself
+        if [ $u = splash ]; then
+            ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix/include src/c4ix/user/$u.c .c4bb_ix_u.c4o > /dev/null
+            ./c4rlink32 .c4bb_ix_u.c4o .c4bb_libarc32.c4l .c4bb_libc4ix32.c4l -o $DISK/c4ix-$u.c4r > /dev/null
+        else
+            ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -D C4IX_SHARED -I src/c4ix/include src/c4ix/user/$u.c .c4bb_ix_u.c4o > /dev/null
+            ./c4rlink32 .c4bb_ix_u.c4o -l .c4bb_lib/libarc.c4s -l .c4bb_lib/libc4ix.c4s -o $DISK/c4ix-$u.c4r > /dev/null
+        fi
         keep .c4bb_ix_u.c4o user/$u.c4o
         keep $DISK/c4ix-$u.c4r bin/c4ix-$u.c4r
     done
     # the desktop: several modules, linked together (docs/c4ix-desktop.md)
     dobjs=""
     for m in wm ui term files taskmgr apps calc edit wall savers; do
-        ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix/include -I src/c4ix/user/desktop \
+        ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -D C4IX_SHARED -I src/c4ix/include -I src/c4ix/user/desktop \
             src/c4ix/user/desktop/$m.c .c4bb_ix_d_$m.c4o > /dev/null
         dobjs="$dobjs .c4bb_ix_d_$m.c4o"
         keep .c4bb_ix_d_$m.c4o desktop/$m.c4o
@@ -371,7 +394,7 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c src/c4ix/libc/fp.c .c4bb_ix_d_fp.c4o > /dev/null
     dobjs="$dobjs .c4bb_ix_d_fp.c4o"
     keep .c4bb_ix_d_fp.c4o desktop/fp.c4o
-    ./c4rlink32 $dobjs .c4bb_libarc32.c4l .c4bb_libc4ix32.c4l -o $DISK/c4ix-desktop.c4r > /dev/null
+    ./c4rlink32 $dobjs -l .c4bb_lib/libgui.c4s -l .c4bb_lib/libarc.c4s -l .c4bb_lib/libc4ix.c4s -o $DISK/c4ix-desktop.c4r > /dev/null
     keep $DISK/c4ix-desktop.c4r bin/c4ix-desktop.c4r
     rm -f $dobjs .c4bb_ix_d_*.pp.c
     # the VFS loader: c4ix-vfsload.c4r, NOT plain vfsload.c4r - C4KE
@@ -596,7 +619,7 @@ else
 fi
 [ -f $OUT/libc4ix32.c4l ] && cp $OUT/libc4ix32.c4l $ROOT/usr/lib/libc4ix.c4l
 [ -f $OUT/libarc32.c4l ] && cp $OUT/libarc32.c4l $ROOT/usr/lib/libarc.c4l
-cp src/c4ix/include/*.h libjs/guest/gui.h $ROOT/usr/include/
+cp src/c4ix/include/*.h src/c4ix/include/*.c libjs/guest/gui.h libjs/guest/gui.c $ROOT/usr/include/
 # libc's headers, for -fno-builtin -I /usr/include/libc
 mkdir -p $ROOT/usr/include/libc/sys
 cp src/c4ix/libc/include/*.h $ROOT/usr/include/libc/
@@ -608,7 +631,7 @@ for t in c4cc c4rdump c4rlink cpp c4 c4m; do cp $DISK/$t.c4r $ROOT/build/bin/; d
 cp $OUT/c4m.pp.c $ROOT/build/c4m.pp.c
 BUILT=$(cd $ROOT && {
     find build -name '*.c4o' -o -name '*.pp.c' | sort
-    echo build/lib/libc4ix.c4l build/lib/libc4ix.c4s build/lib/libarc.c4l build/lib/libc.c4s
+    echo build/lib/libc4ix.c4l build/lib/libc4ix.c4s build/lib/libarc.c4l build/lib/libarc.c4s build/lib/libgui.c4s build/lib/libc.c4s
     find build/bin -type f | sort
     echo build/c4ix.c4r
 })

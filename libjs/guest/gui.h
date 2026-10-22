@@ -11,10 +11,13 @@
 // without the display (native c4m, c4bb) the registers at 0x400 are
 // ordinary memory, so a program must say "not fitted" and stop there.
 //
-// c4cc has no #include: pass this file as a source ahead of the program,
-// as build-images.sh does for c4bb_mbox.h. c4lc can #include it. Written
-// in the subset both accept: locals at the top of each function, literal
-// enum values.
+// The functions are in gui.c, beside this file, which this includes
+// unless C4IX_SHARED is defined: then a program links C4IX's shared
+// library, /lib/libgui.c4s, instead (c4rlink -l), and carries no copy of
+// its own. c4cc has no #include: pass this file and gui.c as sources ahead
+// of the program, as build-images.sh does. Written in the subset both
+// compilers accept: locals at the top of each function, literal enum
+// values.
 //
 //   int *region;
 //   if (!gui_present()) { printf("not fitted\n"); return 0; }
@@ -23,6 +26,9 @@
 //   gui_clear(0x000000); gui_rect(10, 10, 50, 50, 0xff2d95);
 //   gui_text(10, 70, 0xffffff, 16, "hello"); gui_show();
 //   while (gui_poll(ev)) ...
+
+#ifndef __C4_GUI_H
+#define __C4_GUI_H 1
 
 enum {
 	GUI_CAPS = 0x400, GUI_W = 0x404, GUI_H = 0x408, GUI_RINGLEN = 0x40c, GUI_RING = 0x410,
@@ -55,240 +61,53 @@ enum {
 // event mask bits for gui_events()
 enum { GUI_M_MOVE = 1, GUI_M_BUTTONS = 2, GUI_M_KEYS = 4, GUI_M_WINDOW = 8, GUI_M_WHEEL = 16 };
 
-int *gui_in;     // events: the host writes, we read
-int *gui_out;    // commands: we write, the host reads
-int *gui_f;      // the frame being written
-int  gui_flen;
-int  gui_seq;
-int  gui_w;
-int  gui_h;
-int  gui_at;     // where the head is in the command ring (gui_frame)
-
-int gui_present () {
-	return (__c4_info() & C4I_GUI) != 0;
-}
-
-// Hand the display a region of our memory for its rings and ask for a
-// size. bytes should be a multiple of 8 and at least 1024. 1 on success.
-int gui_attach (int *region, int bytes, int w, int h) {
-	int half;
-	if (!gui_present()) return 0;
-	bytes = bytes & ~7;
-	half = bytes / 2;
-	*(int *)GUI_W = w;
-	*(int *)GUI_H = h;
-	*(int *)GUI_RINGLEN = bytes;
-	*(int *)GUI_RING = (int)region;
-	if (*(int *)GUI_RING != (int)region) return 0;
-	gui_in = region;
-	gui_out = (int *)((int)region + half);
-	gui_seq = 0;
-	gui_at = gui_out[0] ? gui_out[1] % gui_out[0] : 0;
-	gui_w = *(int *)GUI_W;
-	gui_h = *(int *)GUI_H;
-	return 1;
-}
-
-void gui_detach () { *(int *)GUI_RING = 0; }
-
-// Which events to deliver (GUI_M_*). Moves are off until asked for.
-void gui_events (int mask) { *(int *)GUI_EVMASK = mask; }
-
-// Send what has been written so far. The host takes it on the spot.
-void gui_flush () { *(int *)GUI_BELL = 1; }
-
-// Room for a command with n payload words, or 0. A full ring is flushed
-// and tried again: the host empties it inside the bell's store.
-//
-// Every command of every frame comes through here -- a thousand for a
-// desktop redraw -- so the common case is kept short: gui_at is where
-// the head is in the ring (head % capacity), kept as the head moves, and
-// a command that fits before the end with room to spare is one test.
-int *gui_frame (int type, int n) {
-	int cap, head, len, tries;
-	len = 3 + n;
-	cap = gui_out[0];
-	if (len > cap) return 0;
-	tries = 0;
-	while (tries < 3) {
-		head = gui_out[1];
-		if (gui_at + len <= cap && cap - (head - gui_out[2]) >= len) {
-			gui_f = gui_out + 3 + gui_at;
-			gui_f[1] = type;
-			gui_f[2] = gui_seq;
-			gui_seq = gui_seq + 1;
-			gui_flen = len;
-			return gui_f + 3;
-		}
-		if (gui_at + len > cap && cap - (head - gui_out[2]) >= (cap - gui_at) + len) {
-			gui_out[3 + gui_at] = -1;          // skip to the start of the ring
-			gui_out[1] = head + (cap - gui_at);
-			gui_at = 0;
-		} else {
-			*(int *)GUI_BELL = 1;
-			tries = tries + 1;
-		}
-	}
-	return 0;
-}
-
-// The frame is whole: its length goes in last, then the head moves.
-void gui_commit () {
-	gui_f[0] = gui_flen;
-	gui_out[1] = gui_out[1] + gui_flen;
-	gui_at = gui_at + gui_flen;
-	if (gui_at >= gui_out[0]) gui_at = gui_at - gui_out[0];
-}
-
-void gui_cmd0 (int type) {
-	if (gui_frame(type, 0)) gui_commit();
-}
-
-void gui_cmd3 (int type, int a, int b, int c) {
-	int *p;
-	if (!(p = gui_frame(type, 3))) return;
-	p[0] = a; p[1] = b; p[2] = c;
-	gui_commit();
-}
-
-void gui_cmd5 (int type, int a, int b, int c, int d, int e) {
-	int *p;
-	if (!(p = gui_frame(type, 5))) return;
-	p[0] = a; p[1] = b; p[2] = c; p[3] = d; p[4] = e;
-	gui_commit();
-}
-
-void gui_clear  (int rgb)                             { int *p; if ((p = gui_frame(GUI_CLEAR, 1))) { p[0] = rgb; gui_commit(); } }
-void gui_cursor (int shape)                           { int *p; if ((p = gui_frame(GUI_CURSOR, 1))) { p[0] = shape; gui_commit(); gui_flush(); } }
-void gui_rect   (int x, int y, int w, int h, int rgb) { gui_cmd5(GUI_RECT, x, y, w, h, rgb); }
-void gui_recto  (int x, int y, int w, int h, int rgb) { gui_cmd5(GUI_RECTO, x, y, w, h, rgb); }
-void gui_line   (int x0, int y0, int x1, int y1, int rgb) { gui_cmd5(GUI_LINE, x0, y0, x1, y1, rgb); }
-void gui_circle (int x, int y, int r, int rgb, int fill)  { gui_cmd5(GUI_CIRCLE, x, y, r, rgb, fill); }
-void gui_disc   (int x, int y, int r, int rgb)        { gui_cmd5(GUI_CIRCLE, x, y, r, rgb, 1); }
-void gui_pixel  (int x, int y, int rgb)               { gui_cmd3(GUI_PIXEL, x, y, rgb); }
-void gui_clip   (int x, int y, int w, int h)          { int *p; if ((p = gui_frame(GUI_CLIP, 4))) { p[0] = x; p[1] = y; p[2] = w; p[3] = h; gui_commit(); } }
-void gui_noclip ()                                    { gui_cmd0(GUI_NOCLIP); }
-void gui_size   (int w, int h)                        { int *p; if ((p = gui_frame(GUI_SIZE, 2))) { p[0] = w; p[1] = h; gui_commit(); } }
-
-// Text at (x, y), top-left, size in pixels. Characters travel four to a
-// word, lowest byte first.
-void gui_text (int x, int y, int rgb, int size, char *s) {
-	int n, i, *p;
-	n = 0;
-	while (s[n]) n = n + 1;
-	if (!(p = gui_frame(GUI_TEXT, 5 + (n + 3) / 4))) return;
-	p[0] = x; p[1] = y; p[2] = rgb; p[3] = size; p[4] = n;
-	i = 0;
-	while (i < (n + 3) / 4) { p[5 + i] = 0; i = i + 1; }
-	i = 0;
-	while (i < n) {
-		p[5 + i / 4] = p[5 + i / 4] | ((s[i] & 255) << ((i % 4) * 8));
-		i = i + 1;
-	}
-	gui_commit();
-}
-
-// Text in a face (GUI_MONO, GUI_SANS, GUI_SANS_BOLD). advance > 0 puts
-// each character exactly that many pixels after the last -- a character
-// grid; 0 uses the face's own spacing. n characters of s (n < 0: all).
-void gui_text2 (int x, int y, int rgb, int size, int font, int advance, char *s, int n) {
-	int i, *p;
-	if (n < 0) { n = 0; while (s[n]) n = n + 1; }
-	if (!(p = gui_frame(GUI_TEXT2, 7 + (n + 3) / 4))) return;
-	p[0] = x; p[1] = y; p[2] = rgb; p[3] = size; p[4] = font; p[5] = advance; p[6] = n;
-	i = 0;
-	while (i < (n + 3) / 4) { p[7 + i] = 0; i = i + 1; }
-	i = 0;
-	while (i < n) {
-		p[7 + i / 4] = p[7 + i / 4] | ((s[i] & 255) << ((i % 4) * 8));
-		i = i + 1;
-	}
-	gui_commit();
-}
-
-// An image the host keeps under `id` for gui_image: w*h pixels of
-// 0x00RRGGBB, where a top byte of 255 is fully transparent.
-void gui_imgdef (int id, int w, int h, int *pixels) {
-	int i, *p;
-	if (!(p = gui_frame(GUI_IMGDEF, 3 + w * h))) return;
-	p[0] = id; p[1] = w; p[2] = h;
-	i = 0;
-	while (i < w * h) { p[3 + i] = pixels[i]; i = i + 1; }
-	gui_commit();
-}
-void gui_image (int id, int x, int y) { gui_cmd3(GUI_IMG, id, x, y); }
-
-// w x h 8-bit pixels at src, pitch bytes a row, through the 256 colours
-// (0x00RRGGBB) at pal, drawn at (x, y) scaled to dw x dh. The host reads
-// both when the bell next rings, and not after: draw the next frame into
-// them only once it has.
-void gui_blit8 (int x, int y, int w, int h, char *src, int pitch, int *pal, int dw, int dh) {
-	int *p;
-	if (!(p = gui_frame(GUI_BLIT8, 9))) return;
-	p[0] = x; p[1] = y; p[2] = w; p[3] = h; p[4] = (int)src; p[5] = pitch; p[6] = (int)pal;
-	p[7] = dw; p[8] = dh;
-	gui_commit();
-}
-
-// Show the frame drawn so far, all at once, and send it.
-void gui_show () {
-	gui_cmd0(GUI_PRESENT);
-	*(int *)GUI_BELL = 2;
-}
-
-// The next event into ev[0..3]; 1 if there was one.
-int gui_poll (int *ev) {
-	int cap, head, tail, at, *f, n, i;
-	cap = gui_in[0]; head = gui_in[1]; tail = gui_in[2];
-	if (head == tail) return 0;
-	at = tail % cap;
-	if (gui_in[3 + at] == -1) {
-		tail = tail + (cap - at);
-		gui_in[2] = tail;
-		if (head == tail) return 0;
-		at = 0;
-	}
-	f = gui_in + 3 + at;
-	ev[0] = f[1];
-	ev[1] = 0; ev[2] = 0; ev[3] = 0;
-	n = f[0] - 3;
-	if (n > 3) n = 3;
-	i = 0;
-	while (i < n) { ev[1 + i] = f[3 + i]; i = i + 1; }
-	gui_in[2] = gui_in[2] + f[0];
-	return 1;
-}
-
-// The pixel framebuffer: w*h words of 0x00RRGGBB in our own memory,
-// pitch bytes from row to row (0 means w * 4). gui_flip copies it to the
-// display, scaled to fill it, and shows it; draw on top with the
-// commands above and gui_show again if you want an overlay.
-void gui_fb (int *pixels, int pitch) {
-	*(int *)GUI_FBMODE = 0;
-	*(int *)GUI_FBPITCH = pitch;
-	*(int *)GUI_FB = (int)pixels;
-}
-// Column-major pixels: column x is h consecutive words at
-// pixels + x * h, so a program that draws in columns can fill each one
-// with memcpy. gui_flip(w, h) as usual; the display turns it upright.
-void gui_fb_columns (int *pixels) {
-	*(int *)GUI_FBMODE = 1;
-	*(int *)GUI_FBPITCH = 0;
-	*(int *)GUI_FB = (int)pixels;
-}
-void gui_flip (int w, int h) {
-	*(int *)GUI_BELL = 1;                    // commands before the frame stay before it
-	*(int *)GUI_FBFLIP = (w << 16) | h;
-}
-
-// Ask for HARD_IRQ(3) through the cycle handler whenever an event
-// arrives (1), or go back to polling (0). A program that wants this
-// installs a handler with __c4_configure(1, &handler) first.
+// how gui_irq raises HARD_IRQ(3), and the functions (gui.c)
 enum { HIRQ_GUI = 3 };
-void gui_irq (int on) { *(int *)GUI_IRQ = on; }
+int gui_present ();
+int gui_attach (int *region, int bytes, int w, int h);
+void gui_detach ();
+void gui_events (int mask);
+void gui_flush ();
+int *gui_frame (int type, int n);
+void gui_commit ();
+void gui_cmd0 (int type);
+void gui_cmd3 (int type, int a, int b, int c);
+void gui_cmd5 (int type, int a, int b, int c, int d, int e);
+void gui_clear (int rgb);
+void gui_cursor (int shape);
+void gui_rect (int x, int y, int w, int h, int rgb);
+void gui_recto (int x, int y, int w, int h, int rgb);
+void gui_line (int x0, int y0, int x1, int y1, int rgb);
+void gui_circle (int x, int y, int r, int rgb, int fill);
+void gui_disc (int x, int y, int r, int rgb);
+void gui_pixel (int x, int y, int rgb);
+void gui_clip (int x, int y, int w, int h);
+void gui_noclip ();
+void gui_size (int w, int h);
+void gui_text (int x, int y, int rgb, int size, char *s);
+void gui_text2 (int x, int y, int rgb, int size, int font, int advance, char *s, int n);
+void gui_imgdef (int id, int w, int h, int *pixels);
+void gui_image (int id, int x, int y);
+void gui_blit8 (int x, int y, int w, int h, char *src, int pitch, int *pal, int dw, int dh);
+void gui_show ();
+int gui_poll (int *ev);
+void gui_fb (int *pixels, int pitch);
+void gui_fb_columns (int *pixels);
+void gui_flip (int w, int h);
+void gui_irq (int on);
+int gui_mouse_x ();
+int gui_mouse_y ();
+int gui_buttons ();
+int gui_ticks ();
+int gui_clock ();
 
-int gui_mouse_x () { return *(int *)GUI_MOUSE >> 16; }
-int gui_mouse_y () { return *(int *)GUI_MOUSE & 65535; }
-int gui_buttons () { return *(int *)GUI_BUTTONS; }
-int gui_ticks ()   { return *(int *)GUI_TICKS; }
-int gui_clock ()   { return *(int *)GUI_CLOCK; }   // local seconds since midnight
+// the size the display gave, and the events ring (for uevwait)
+int  gui_width ();
+int  gui_height ();
+int *gui_events_ring ();
+
+#ifndef C4IX_SHARED
+#include "gui.c"
+#endif
+
+#endif // __C4_GUI_H

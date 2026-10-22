@@ -9,7 +9,7 @@
 // memory there, so it must not touch them.
 //
 // Built with libjs/guest/gui.h passed as a source ahead of this file:
-//   ./c4cc32 -o gui-demo.c4r libjs/guest/gui.h libjs/guest/gui-demo.c
+//   ./c4cc32 -o gui-demo.c4r libjs/guest/gui.h libjs/guest/gui.c libjs/guest/gui-demo.c
 
 enum { W = 640, H = 480, RING = 65536, MARKS = 32 };
 
@@ -43,7 +43,7 @@ int main (int argc, char **argv) {
 
 	limit = 0;
 	if (argc > 1) { s = argv[1]; while (*s) { limit = limit * 10 + (*s - '0'); s = s + 1; } }
-	printf("gui: fitted, %dx%d. Click the display, move, type; q there quits.\n", gui_w, gui_h);
+	printf("gui: fitted, %dx%d. Click the display, move, type; q there quits.\n", gui_width(), gui_height());
 
 	x = 40; y = 60; dx = 3; dy = 2;
 	frame = 0; running = 1; marks = 0; keys = 0; clicks = 0;
@@ -66,15 +66,15 @@ int main (int argc, char **argv) {
 		}
 
 		x = x + dx; y = y + dy;
-		if (x < 0 || x + 60 > gui_w) { dx = 0 - dx; x = x + dx + dx; }
-		if (y < 40 || y + 60 > gui_h) { dy = 0 - dy; y = y + dy + dy; }
+		if (x < 0 || x + 60 > gui_width()) { dx = 0 - dx; x = x + dx + dx; }
+		if (y < 40 || y + 60 > gui_height()) { dy = 0 - dy; y = y + dy + dy; }
 
 		gui_clear(0x0d0b1e);
 		gx = 0;
-		while (gx < gui_w) { gui_line(gx, 40, gx, gui_h, 0x1a1633); gx = gx + 40; }
+		while (gx < gui_width()) { gui_line(gx, 40, gx, gui_height(), 0x1a1633); gx = gx + 40; }
 		gx = 40;
-		while (gx < gui_h) { gui_line(0, gx, gui_w, gx, 0x1a1633); gx = gx + 40; }
-		gui_rect(0, 0, gui_w, 36, 0x14102a);
+		while (gx < gui_height()) { gui_line(0, gx, gui_width(), gx, 0x1a1633); gx = gx + 40; }
+		gui_rect(0, 0, gui_width(), 36, 0x14102a);
 		gui_text(12, 10, 0xff2d95, 16, "c4m.js display");
 		gui_text(200, 12, 0x8a83b6, 13, "frame");
 		gui_text(250, 12, 0xc8c2e8, 13, num(frame));

@@ -615,8 +615,9 @@ loading or assigning a whole struct is an error.
     `errno`, environment and stdout. With the switch disabled, task A
     reads B's `TAG` by its third iteration.
   - *libc:* `/lib/libc.c4s` (`src/c4ix/libc`) is the first `-fpic`
-    library, built with c4lc's new `-fno-builtin`. `ls` is linked
-    against the non-pic `/lib/libc4ix.c4s`.
+    library, built with c4lc's new `-fno-builtin`. `ls` was linked
+    against a non-pic `/lib/libc4ix.c4s`; since "code out of the headers"
+    below, every program but two loads `-fpic` libraries.
 
 - **CPU accounting** (branch c4ix-userland, 2026-10-21): docs/c4ix-cpu.md.
   The trap handler charges cycles to the task they were spent on, as its
@@ -651,6 +652,59 @@ loading or assigning a whole struct is an error.
   they do USLP, and `sys_pmviolation` makes it the task's own handler
   (`ck_signal`, as a C4KE program's `signal()` does); C4KE's PM
   extension does the same. `libjs/tests/test-c4ix-sigh.mjs`.
+
+- **Code out of the headers** (2026-10-22, asked for: "header files often
+  have entire libraries worth of code in them").
+  - *Where the code went.* The three headers of C4IX's own that held
+    functions now hold their declarations only:
+    - `libjs/guest/gui.h` (the display, 40 functions) has its code in
+      `gui.c`;
+    - `src/c4ix/include/window.h` (a Terminal's canvas) has its code in
+      `window.c`;
+    - `cpustat.h` has its code in `cpustat.c`.
+    Each `.c` lies beside its header, and the header includes it unless
+    `C4IX_SHARED` is defined. A program built as before therefore still
+    builds: `cc prog.c` with `#include "window.h"` works unchanged. c4cc
+    has no `#include`, so it is given the `.c` as well, as it is given
+    the header (`c4cc gui.h gui.c gui-demo.c`). `/usr/include` has both.
+  - *The shared libraries.* They are built `-fpic`, so their code is
+    loaded once for every task:
+    - `/lib/libc4ix.c4s` is `libc4ix.c` with `window.c` and `cpustat.c`.
+      It used to be the static library's image under another name.
+    - `/lib/libarc.c4s` is libarc (inflate, CRC-32, tar).
+    - `/lib/libgui.c4s` is the display.
+  - *The programs.* C4IX's programs are compiled `-D C4IX_SHARED` and
+    linked `-l` against those libraries (build-images.sh, and the
+    BUILD.B4K files that rebuild them inside the machine). The exceptions
+    carry their libraries themselves:
+    - `vfsload` runs before there is a `/lib`;
+    - `splash` runs while the boot unpacks the root archive.
+    `gui.h`'s globals are `gui.c`'s own. A program asks for them with
+    `gui_width()`, `gui_height()` and `gui_events_ring()`.
+  - *What it saved:*
+
+    | program | before | after |
+    |---|---|---|
+    | `tar` | 59,666 bytes | 4,669 |
+    | `crc32` | 58,893 | 3,896 |
+    | `cat` | 25,504 | 2,501 |
+    | `b4ke` | 58,876 | 35,873 |
+    | `cc` | 45,606 | 22,603 |
+    | the desktop | 911,844 | 836,799 |
+
+    The root archive went from 2.90 MB to 2.82 MB compressed.
+  - *Not moved:* the repository's own `include/` (`u0.h`, `c4ke.h`, the
+    C `stdio.h` and the rest, also in C4IX's `/usr/include`) is for
+    programs that run on C4KE or bare c4m, which load no libraries. Code
+    in those headers is the only way they can share it.
+  - *Memory.* A cached library keeps its file for as long as the machine
+    runs, as the template of each task's copy of its data, and the loader
+    read every image into a 4 MB buffer. With every program loading
+    libraries, those buffers were a third of the heap. An image's buffer
+    is now its own size: a RAM file is copied, and a host file, whose
+    size the host does not say, is counted in 64 KB chunks and then read
+    into a buffer that size. The heap in use once the boot has unpacked
+    the root archive went from 24.6 MB to 16.6 MB.
 
 ## 6.1 Running it
 

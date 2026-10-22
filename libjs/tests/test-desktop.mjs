@@ -295,7 +295,7 @@ until(() => has(/^c4ix:\/\$/), 1500);
 key('l', 2, 76);                                               // Ctrl-L: a clean screen for what follows
 
 // ---- compile a windowed program inside the machine, and run it ------------------------------
-type('c4cc -o /tmp/bounce.c4r /usr/include/window.h /usr/src/c4ix/examples/bounce.c\n');
+type('c4cc -o /tmp/bounce.c4r /usr/include/window.h /usr/include/window.c /usr/src/c4ix/examples/bounce.c\n');
 check(until(() => has(/c4cc: wrote \d+ bytes to ramfs:\/tmp\/bounce.c4r/), 3000), 'c4cc compiles bounce.c inside C4IX', screen());
 type('/tmp/bounce.c4r\n');
 check(until(() => has(/Bounce - compiled inside C4IX/) && has('Click me') && has('Button clicks:'), 1500),

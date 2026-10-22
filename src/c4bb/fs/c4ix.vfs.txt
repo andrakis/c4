@@ -37,6 +37,8 @@ ARCHIVES = c4ix-root.tgz
 	lib/:
 		libc4ix.c4s: c4ix-libc4ix.c4s
 		libc.c4s: c4ix-libc.c4s
+		libarc.c4s: c4ix-libarc.c4s
+		libgui.c4s: c4ix-libgui.c4s
 	each($BIN_ALL):
 		# c4ix-hello.c4r -> /bin/hello, and an unqualified alias at the
 		# root so "hello" works from the shell without the c4ix- prefix

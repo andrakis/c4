@@ -1316,7 +1316,7 @@ int main(int argc, char **argv) {
             }
             k = SAVER_MS - (__time() - last_frame);
             if (k < 1) k = 1;
-            uevwait(k, gui_in, 0);
+            uevwait(k, gui_events_ring(), 0);
             continue;
         }
         if ((dirty || dmg) && (input || __time() - last_draw >= 25)) {
@@ -1339,7 +1339,7 @@ int main(int argc, char **argv) {
             else k = 1000 - (__time() - last_tick);
             if (!second_draw && k > 100) k = 100;   // the half-second first-frame redraw
             if (k < 1) k = 1;
-            uevwait(k, gui_in, !(dirty || dmg));
+            uevwait(k, gui_events_ring(), !(dirty || dmg));
         }
     }
 

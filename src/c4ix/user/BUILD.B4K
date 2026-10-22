@@ -8,99 +8,105 @@ SET ROOT /usr
 SET OUT /build
 # c4sc recurses deeply on a long function: 1 MB of stack (SYS_STACK)
 SET STACK 1048576
-SET LC c4sc -c 400000 compile -O -c -I src/c4ix/include
+# built -D C4IX_SHARED and linked with -l against C4IX's shared
+# libraries -- but vfsload, which runs before there is a /lib, and splash,
+# which runs while the boot unpacks the root archive, carry their own
+SET LC c4sc -c 400000 compile -O -c -D C4IX_SHARED -I src/c4ix/include
+SET LCS c4sc -c 400000 compile -O -c -I src/c4ix/include
 SET U src/c4ix/include/c4ix_user.h
-SET LIBC $(OUT)/lib/libc4ix.c4l
-SET LIBARC $(OUT)/lib/libarc.c4l
+SET LIBC $(OUT)/lib/libc4ix.c4s
+SET LIBARC $(OUT)/lib/libarc.c4s
+SET LIBGUI $(OUT)/lib/libgui.c4s
+SET LIBCS $(OUT)/lib/libc4ix.c4l
+SET LIBARCS $(OUT)/lib/libarc.c4l
 CD $(ROOT)
 MKDIR $(OUT)/user
 MKDIR $(OUT)/bin
 DEPS $(OUT)/user/hello.c4o : src/c4ix/user/hello.c $(U)
 RUN $(LC) src/c4ix/user/hello.c $(OUT)/user/hello.c4o
 DEPS $(OUT)/bin/c4ix-hello.c4r : $(OUT)/user/hello.c4o $(LIBC)
-RUN c4rlink $(OUT)/user/hello.c4o $(LIBC) -o $(OUT)/bin/c4ix-hello.c4r
+RUN c4rlink $(OUT)/user/hello.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-hello.c4r
 DEPS $(OUT)/user/uhello.c4o : src/c4ix/user/uhello.c $(U)
 RUN $(LC) src/c4ix/user/uhello.c $(OUT)/user/uhello.c4o
 DEPS $(OUT)/bin/c4ix-uhello.c4r : $(OUT)/user/uhello.c4o $(LIBC)
-RUN c4rlink $(OUT)/user/uhello.c4o $(LIBC) -o $(OUT)/bin/c4ix-uhello.c4r
+RUN c4rlink $(OUT)/user/uhello.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-uhello.c4r
 DEPS $(OUT)/user/echo.c4o : src/c4ix/user/echo.c $(U)
 RUN $(LC) src/c4ix/user/echo.c $(OUT)/user/echo.c4o
 DEPS $(OUT)/bin/c4ix-echo.c4r : $(OUT)/user/echo.c4o $(LIBC)
-RUN c4rlink $(OUT)/user/echo.c4o $(LIBC) -o $(OUT)/bin/c4ix-echo.c4r
+RUN c4rlink $(OUT)/user/echo.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-echo.c4r
 DEPS $(OUT)/user/wc.c4o : src/c4ix/user/wc.c $(U)
 RUN $(LC) src/c4ix/user/wc.c $(OUT)/user/wc.c4o
 DEPS $(OUT)/bin/c4ix-wc.c4r : $(OUT)/user/wc.c4o $(LIBC)
-RUN c4rlink $(OUT)/user/wc.c4o $(LIBC) -o $(OUT)/bin/c4ix-wc.c4r
+RUN c4rlink $(OUT)/user/wc.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-wc.c4r
 DEPS $(OUT)/user/cat.c4o : src/c4ix/user/cat.c $(U)
 RUN $(LC) src/c4ix/user/cat.c $(OUT)/user/cat.c4o
 DEPS $(OUT)/bin/c4ix-cat.c4r : $(OUT)/user/cat.c4o $(LIBC)
-RUN c4rlink $(OUT)/user/cat.c4o $(LIBC) -o $(OUT)/bin/c4ix-cat.c4r
+RUN c4rlink $(OUT)/user/cat.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-cat.c4r
 DEPS $(OUT)/user/sh.c4o : src/c4ix/user/sh.c $(U)
 RUN $(LC) src/c4ix/user/sh.c $(OUT)/user/sh.c4o
 DEPS $(OUT)/bin/c4ix-sh.c4r : $(OUT)/user/sh.c4o $(LIBC)
-RUN c4rlink $(OUT)/user/sh.c4o $(LIBC) -o $(OUT)/bin/c4ix-sh.c4r
+RUN c4rlink $(OUT)/user/sh.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-sh.c4r
 DEPS $(OUT)/user/ps.c4o : src/c4ix/user/ps.c $(U)
 RUN $(LC) src/c4ix/user/ps.c $(OUT)/user/ps.c4o
 DEPS $(OUT)/bin/c4ix-ps.c4r : $(OUT)/user/ps.c4o $(LIBC)
-RUN c4rlink $(OUT)/user/ps.c4o $(LIBC) -o $(OUT)/bin/c4ix-ps.c4r
+RUN c4rlink $(OUT)/user/ps.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-ps.c4r
 DEPS $(OUT)/user/bench.c4o : src/c4ix/user/bench.c $(U)
 RUN $(LC) src/c4ix/user/bench.c $(OUT)/user/bench.c4o
 DEPS $(OUT)/bin/c4ix-bench.c4r : $(OUT)/user/bench.c4o $(LIBC)
-RUN c4rlink $(OUT)/user/bench.c4o $(LIBC) -o $(OUT)/bin/c4ix-bench.c4r
+RUN c4rlink $(OUT)/user/bench.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-bench.c4r
 DEPS $(OUT)/user/cycles.c4o : src/c4ix/user/cycles.c $(U)
 RUN $(LC) src/c4ix/user/cycles.c $(OUT)/user/cycles.c4o
 DEPS $(OUT)/bin/c4ix-cycles.c4r : $(OUT)/user/cycles.c4o $(LIBC)
-RUN c4rlink $(OUT)/user/cycles.c4o $(LIBC) -o $(OUT)/bin/c4ix-cycles.c4r
+RUN c4rlink $(OUT)/user/cycles.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-cycles.c4r
 DEPS $(OUT)/user/ls.c4o : src/c4ix/user/ls.c $(U)
 RUN $(LC) src/c4ix/user/ls.c $(OUT)/user/ls.c4o
-# ls is the pilot for shared libraries: it loads /lib/libc4ix.c4s at run time
-DEPS $(OUT)/bin/c4ix-ls.c4r : $(OUT)/user/ls.c4o $(OUT)/lib/libc4ix.c4s
-RUN c4rlink $(OUT)/user/ls.c4o -l $(OUT)/lib/libc4ix.c4s -o $(OUT)/bin/c4ix-ls.c4r
+DEPS $(OUT)/bin/c4ix-ls.c4r : $(OUT)/user/ls.c4o $(LIBC)
+RUN c4rlink $(OUT)/user/ls.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-ls.c4r
 DEPS $(OUT)/user/mkdir.c4o : src/c4ix/user/mkdir.c $(U)
 RUN $(LC) src/c4ix/user/mkdir.c $(OUT)/user/mkdir.c4o
 DEPS $(OUT)/bin/c4ix-mkdir.c4r : $(OUT)/user/mkdir.c4o $(LIBC)
-RUN c4rlink $(OUT)/user/mkdir.c4o $(LIBC) -o $(OUT)/bin/c4ix-mkdir.c4r
+RUN c4rlink $(OUT)/user/mkdir.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-mkdir.c4r
 DEPS $(OUT)/user/top.c4o : src/c4ix/user/top.c $(U) src/c4ix/include/cpustat.h
 RUN $(LC) src/c4ix/user/top.c $(OUT)/user/top.c4o
 DEPS $(OUT)/bin/c4ix-top.c4r : $(OUT)/user/top.c4o $(LIBC)
-RUN c4rlink $(OUT)/user/top.c4o $(LIBC) -o $(OUT)/bin/c4ix-top.c4r
+RUN c4rlink $(OUT)/user/top.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-top.c4r
 DEPS $(OUT)/user/spin.c4o : src/c4ix/user/spin.c $(U)
 RUN $(LC) src/c4ix/user/spin.c $(OUT)/user/spin.c4o
 DEPS $(OUT)/bin/c4ix-spin.c4r : $(OUT)/user/spin.c4o $(LIBC)
-RUN c4rlink $(OUT)/user/spin.c4o $(LIBC) -o $(OUT)/bin/c4ix-spin.c4r
+RUN c4rlink $(OUT)/user/spin.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-spin.c4r
 DEPS $(OUT)/user/fmt.c4o : src/c4ix/user/fmt.c $(U)
 RUN $(LC) src/c4ix/user/fmt.c $(OUT)/user/fmt.c4o
 DEPS $(OUT)/bin/c4ix-fmt.c4r : $(OUT)/user/fmt.c4o $(LIBC)
-RUN c4rlink $(OUT)/user/fmt.c4o $(LIBC) -o $(OUT)/bin/c4ix-fmt.c4r
+RUN c4rlink $(OUT)/user/fmt.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-fmt.c4r
 DEPS $(OUT)/user/gui.c4o : src/c4ix/user/gui.c $(U)
 RUN $(LC) src/c4ix/user/gui.c $(OUT)/user/gui.c4o
-DEPS $(OUT)/bin/c4ix-gui.c4r : $(OUT)/user/gui.c4o $(LIBC)
-RUN c4rlink $(OUT)/user/gui.c4o $(LIBC) -o $(OUT)/bin/c4ix-gui.c4r
+DEPS $(OUT)/bin/c4ix-gui.c4r : $(OUT)/user/gui.c4o $(LIBGUI) $(LIBC)
+RUN c4rlink $(OUT)/user/gui.c4o -l $(LIBGUI) -l $(LIBC) -o $(OUT)/bin/c4ix-gui.c4r
 DEPS $(OUT)/user/vfsload.c4o : src/c4ix/user/vfsload.c $(U)
-RUN $(LC) src/c4ix/user/vfsload.c $(OUT)/user/vfsload.c4o
-DEPS $(OUT)/bin/c4ix-vfsload.c4r : $(OUT)/user/vfsload.c4o $(LIBC)
-RUN c4rlink $(OUT)/user/vfsload.c4o $(LIBC) -o $(OUT)/bin/c4ix-vfsload.c4r
+RUN $(LCS) src/c4ix/user/vfsload.c $(OUT)/user/vfsload.c4o
+DEPS $(OUT)/bin/c4ix-vfsload.c4r : $(OUT)/user/vfsload.c4o $(LIBCS)
+RUN c4rlink $(OUT)/user/vfsload.c4o $(LIBCS) -o $(OUT)/bin/c4ix-vfsload.c4r
 DEPS $(OUT)/user/b4ke.c4o : src/c4ix/user/b4ke.c $(U)
 RUN $(LC) src/c4ix/user/b4ke.c $(OUT)/user/b4ke.c4o
 DEPS $(OUT)/bin/c4ix-b4ke.c4r : $(OUT)/user/b4ke.c4o $(LIBC)
-RUN c4rlink $(OUT)/user/b4ke.c4o $(LIBC) -o $(OUT)/bin/c4ix-b4ke.c4r
+RUN c4rlink $(OUT)/user/b4ke.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-b4ke.c4r
 DEPS $(OUT)/user/cc.c4o : src/c4ix/user/cc.c $(U)
 RUN $(LC) src/c4ix/user/cc.c $(OUT)/user/cc.c4o
 DEPS $(OUT)/bin/c4ix-cc.c4r : $(OUT)/user/cc.c4o $(LIBC)
-RUN c4rlink $(OUT)/user/cc.c4o $(LIBC) -o $(OUT)/bin/c4ix-cc.c4r
+RUN c4rlink $(OUT)/user/cc.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-cc.c4r
 DEPS $(OUT)/user/tar.c4o : src/c4ix/user/tar.c $(U) src/c4ix/include/archive.h
 RUN $(LC) src/c4ix/user/tar.c $(OUT)/user/tar.c4o
 DEPS $(OUT)/bin/c4ix-tar.c4r : $(OUT)/user/tar.c4o $(LIBARC) $(LIBC)
-RUN c4rlink $(OUT)/user/tar.c4o $(LIBARC) $(LIBC) -o $(OUT)/bin/c4ix-tar.c4r
+RUN c4rlink $(OUT)/user/tar.c4o -l $(LIBARC) -l $(LIBC) -o $(OUT)/bin/c4ix-tar.c4r
 DEPS $(OUT)/user/gunzip.c4o : src/c4ix/user/gunzip.c $(U) src/c4ix/include/archive.h
 RUN $(LC) src/c4ix/user/gunzip.c $(OUT)/user/gunzip.c4o
 DEPS $(OUT)/bin/c4ix-gunzip.c4r : $(OUT)/user/gunzip.c4o $(LIBARC) $(LIBC)
-RUN c4rlink $(OUT)/user/gunzip.c4o $(LIBARC) $(LIBC) -o $(OUT)/bin/c4ix-gunzip.c4r
+RUN c4rlink $(OUT)/user/gunzip.c4o -l $(LIBARC) -l $(LIBC) -o $(OUT)/bin/c4ix-gunzip.c4r
 DEPS $(OUT)/user/splash.c4o : src/c4ix/user/splash.c $(U) src/c4ix/include/archive.h libjs/guest/gui.h
-RUN $(LC) src/c4ix/user/splash.c $(OUT)/user/splash.c4o
-DEPS $(OUT)/bin/c4ix-splash.c4r : $(OUT)/user/splash.c4o $(LIBARC) $(LIBC)
-RUN c4rlink $(OUT)/user/splash.c4o $(LIBARC) $(LIBC) -o $(OUT)/bin/c4ix-splash.c4r
+RUN $(LCS) src/c4ix/user/splash.c $(OUT)/user/splash.c4o
+DEPS $(OUT)/bin/c4ix-splash.c4r : $(OUT)/user/splash.c4o $(LIBARCS) $(LIBCS)
+RUN c4rlink $(OUT)/user/splash.c4o $(LIBARCS) $(LIBCS) -o $(OUT)/bin/c4ix-splash.c4r
 DEPS $(OUT)/user/crc32.c4o : src/c4ix/user/crc32.c $(U) src/c4ix/include/archive.h
 RUN $(LC) src/c4ix/user/crc32.c $(OUT)/user/crc32.c4o
 DEPS $(OUT)/bin/c4ix-crc32.c4r : $(OUT)/user/crc32.c4o $(LIBARC) $(LIBC)
-RUN c4rlink $(OUT)/user/crc32.c4o $(LIBARC) $(LIBC) -o $(OUT)/bin/c4ix-crc32.c4r
+RUN c4rlink $(OUT)/user/crc32.c4o -l $(LIBARC) -l $(LIBC) -o $(OUT)/bin/c4ix-crc32.c4r

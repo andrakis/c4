@@ -1,5 +1,5 @@
 B4KE2
-# The desktop: ten modules and libc's fp.c, linked with libarc and libc4ix (build-images.sh, `make
+# The desktop: ten modules and libc's fp.c, which load libgui, libarc and libc4ix (build-images.sh, `make
 # c4ix-desktop.c4r`). wm.c and gui.c include libjs/guest/gui.h by its
 # path from the top of the tree, which is why this runs from $(ROOT).
 # Every module includes desktop.h.
@@ -8,7 +8,7 @@ SET OUT /build
 # c4sc recurses deeply on a long source: edit.c, the Editor, overruns
 # even 1 MB, so the desktop gets 4 MB of stack per compile (SYS_STACK)
 SET STACK 4194304
-SET LC c4sc -c 400000 compile -O -c -I src/c4ix/include -I src/c4ix/user/desktop
+SET LC c4sc -c 400000 compile -O -c -D C4IX_SHARED -I src/c4ix/include -I src/c4ix/user/desktop
 SET H src/c4ix/user/desktop/desktop.h src/c4ix/include/c4ix_user.h libjs/guest/gui.h
 CD $(ROOT)
 MKDIR $(OUT)/desktop
@@ -38,6 +38,6 @@ DEPS $(OUT)/desktop/edit.c4o : src/c4ix/user/desktop/edit.c $(H)
 RUN $(LC) src/c4ix/user/desktop/edit.c $(OUT)/desktop/edit.c4o
 SET OBJS wm.c4o ui.c4o term.c4o files.c4o taskmgr.c4o apps.c4o calc.c4o edit.c4o wall.c4o savers.c4o fp.c4o
 CD $(OUT)/desktop
-LIST desktop.objs $(OBJS) $(OUT)/lib/libarc.c4l $(OUT)/lib/libc4ix.c4l
-DEPS $(OUT)/bin/c4ix-desktop.c4r : $(OBJS) $(OUT)/lib/libarc.c4l $(OUT)/lib/libc4ix.c4l
+LIST desktop.objs $(OBJS) -l $(OUT)/lib/libgui.c4s -l $(OUT)/lib/libarc.c4s -l $(OUT)/lib/libc4ix.c4s
+DEPS $(OUT)/bin/c4ix-desktop.c4r : $(OBJS) $(OUT)/lib/libgui.c4s $(OUT)/lib/libarc.c4s $(OUT)/lib/libc4ix.c4s
 RUN c4rlink @desktop.objs -o $(OUT)/bin/c4ix-desktop.c4r

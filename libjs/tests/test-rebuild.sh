@@ -35,6 +35,8 @@ CC_PROGS="c4cc c4rdump c4rlink cpp c4 c4m"
     echo "crc32 $B/lib/libc4ix.c4s"
     echo "crc32 $B/lib/libc.c4s"
     echo "crc32 $B/lib/libarc.c4l"
+    echo "crc32 $B/lib/libarc.c4s"
+    echo "crc32 $B/lib/libgui.c4s"
     echo "$B/bin/c4cc.c4r -o /tmp/h.c4r /usr/src/c4ix/examples/hello.c"
     echo "/tmp/h.c4r"
     echo "b4ke -C /usr"
@@ -66,6 +68,8 @@ check $B/lib/libc4ix.c4l $IMAGES/libc4ix32.c4l crc
 check $B/lib/libc4ix.c4s $IMAGES/disk/c4ix-libc4ix.c4s crc
 check $B/lib/libc.c4s $IMAGES/disk/c4ix-libc.c4s crc
 check $B/lib/libarc.c4l $IMAGES/libarc32.c4l crc
+check $B/lib/libarc.c4s $IMAGES/disk/c4ix-libarc.c4s crc
+check $B/lib/libgui.c4s $IMAGES/disk/c4ix-libgui.c4s crc
 if [ -z "$differ" ]; then ok "c4lc's $same images are the disk's, byte for byte"
 else bad "c4lc's images are the disk's (differ:$differ)"; fi
 same=0; differ=""

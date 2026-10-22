@@ -15,10 +15,28 @@ DEPS $(OUT)/lib/libc4ix.c4o : src/c4ix/lib/libc4ix.c src/c4ix/include/c4ix_user.
 RUN $(LC) -c -I src/c4ix/include src/c4ix/lib/libc4ix.c $(OUT)/lib/libc4ix.c4o
 DEPS $(OUT)/lib/libc4ix.c4l : $(OUT)/lib/libc4ix.c4o
 RUN c4rlink -r $(OUT)/lib/libc4ix.c4o -o $(OUT)/lib/libc4ix.c4l
-# the same library, shared: loaded at run time by programs linked with -l
-DEPS $(OUT)/lib/libc4ix.c4s : $(OUT)/lib/libc4ix.c4o
-RUN c4rlink -r $(OUT)/lib/libc4ix.c4o -o $(OUT)/lib/libc4ix.c4s
 DEPS $(OUT)/lib/libarc.c4o : src/c4ix/lib/archive.c src/c4ix/include/archive.h src/c4ix/include/c4ix_user.h
 RUN $(LC) -mfuse -c -I src/c4ix/include src/c4ix/lib/archive.c $(OUT)/lib/libarc.c4o
 DEPS $(OUT)/lib/libarc.c4l : $(OUT)/lib/libarc.c4o
 RUN c4rlink -r $(OUT)/lib/libarc.c4o -o $(OUT)/lib/libarc.c4l
+# The shared libraries, loaded at run time by the programs linked with -l:
+# -fpic, so one copy of their code serves every task. libc4ix has
+# window.h's and cpustat.h's functions as well, and libgui the display's
+# (gui.h); a program built -D C4IX_SHARED carries none of them itself.
+SET LCPIC $(LC) -fpic -c -D C4IX_SHARED -I src/c4ix/include
+DEPS $(OUT)/lib/shared-libc4ix.c4o : src/c4ix/lib/libc4ix.c src/c4ix/include/c4ix_user.h
+RUN $(LCPIC) src/c4ix/lib/libc4ix.c $(OUT)/lib/shared-libc4ix.c4o
+DEPS $(OUT)/lib/shared-window.c4o : src/c4ix/include/window.c src/c4ix/include/window.h
+RUN $(LCPIC) src/c4ix/include/window.c $(OUT)/lib/shared-window.c4o
+DEPS $(OUT)/lib/shared-cpustat.c4o : src/c4ix/include/cpustat.c src/c4ix/include/cpustat.h src/c4ix/include/c4ix_user.h
+RUN $(LCPIC) src/c4ix/include/cpustat.c $(OUT)/lib/shared-cpustat.c4o
+DEPS $(OUT)/lib/libc4ix.c4s : $(OUT)/lib/shared-libc4ix.c4o $(OUT)/lib/shared-window.c4o $(OUT)/lib/shared-cpustat.c4o
+RUN c4rlink -r $(OUT)/lib/shared-libc4ix.c4o $(OUT)/lib/shared-window.c4o $(OUT)/lib/shared-cpustat.c4o -o $(OUT)/lib/libc4ix.c4s
+DEPS $(OUT)/lib/shared-arc.c4o : src/c4ix/lib/archive.c src/c4ix/include/archive.h src/c4ix/include/c4ix_user.h
+RUN $(LCPIC) -mfuse src/c4ix/lib/archive.c $(OUT)/lib/shared-arc.c4o
+DEPS $(OUT)/lib/libarc.c4s : $(OUT)/lib/shared-arc.c4o
+RUN c4rlink -r $(OUT)/lib/shared-arc.c4o -o $(OUT)/lib/libarc.c4s
+DEPS $(OUT)/lib/shared-gui.c4o : libjs/guest/gui.c libjs/guest/gui.h
+RUN $(LCPIC) -I libjs/guest libjs/guest/gui.c $(OUT)/lib/shared-gui.c4o
+DEPS $(OUT)/lib/libgui.c4s : $(OUT)/lib/shared-gui.c4o
+RUN c4rlink -r $(OUT)/lib/shared-gui.c4o -o $(OUT)/lib/libgui.c4s

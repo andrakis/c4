@@ -35,4 +35,6 @@ COPY $(OUT)/lib/libc4ix.c4s /lib/libc4ix.c4s
 COPY $(OUT)/lib/libc.c4s /lib/libc.c4s
 COPY $(OUT)/bin/c4ix-libctest.c4r /bin/libctest
 COPY $(OUT)/lib/libarc.c4l /usr/lib/libarc.c4l
+COPY $(OUT)/lib/libarc.c4s /lib/libarc.c4s
+COPY $(OUT)/lib/libgui.c4s /lib/libgui.c4s
 ECHO b4ke: installed in /bin and /usr/lib

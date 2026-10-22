@@ -243,7 +243,9 @@
 			ty)))))
 
 ;; struct S / union U [{ members }] -- returns the value type; a body
-;; queues a (structdef NAME ISUNION MEMBERS) node on p:pending
+;; queues a (structdef NAME TYPE ISUNION MEMBERS SIZE LAYOUT) node on
+;; p:pending. The layout is worked out here (M9), so a constant can say
+;; sizeof of a struct, and c4lc-gen's g:structdef takes it as it is.
 (define p:structtype (lambda ()
 	(begin
 		(define isu (= (p:kind) 'Union))
@@ -256,11 +258,121 @@
 		(if (= (p:kind) 'Lbrace)
 			(begin
 				(p:advance)
+				(define ms (p:members (list)))
+				(define lay (p:slayout ms isu 0 0 1 (list)))
+				(define recs (p:reverse (p:second lay)))
+				(set! p:slayouts (p:cons (list ty (head lay) recs (index lay 2)) p:slayouts))
 				(set! p:pending (p:cons
-					(list 'structdef n ty isu (p:members (list)))
+					(list 'structdef n ty isu ms (head lay) recs)
 					p:pending)))
 			nil)
 		ty)))
+
+;; ---- layout (M9) ----
+;;
+;; A struct's size and its members' offsets, from the member list: C's
+;; rule, as gcc lays a struct out. Each member starts at a multiple of its
+;; own alignment -- 1 for the one-byte types, 2 for the shorts, the word
+;; for the word-sized ones, min(8, word) for long long and double (as
+;; i386's gcc does at 32 bits), a row's element's, a struct's own -- and
+;; a struct is as aligned as its most aligned member, its size rounded up
+;; to that. Records are c4lc-gen's: (NAME OFF TYPE BYTES Q), BYTES set for
+;; an array or a struct member. (Until M9 every member took whole words.)
+(define p:third (lambda (l) (index l 2)))
+(define p:slayouts nil)   ;; ((TYPE SIZE RECORDS ALIGN) ...)
+(define p:WMASK (- p:WORD 1))
+(define p:slay (lambda (ty)
+	(begin
+		(define a (p:assoc ty p:slayouts))
+		(if a a (p:die "a struct or union used before its definition")))))
+;; the storage size of a value of type ty: c4lc-gen's g:tysize
+(define p:tysize (lambda (ty)
+	(if (p:svalue? ty) (p:second (p:slay ty))
+	(p:ctysize ty))))
+;; how far apart an array's elements are: c4lc-gen's g:estride. A row
+;; or a struct is exactly its size, which its alignment already rounds
+(define p:estride (lambda (ty)
+	(begin
+		(define s (p:tysize ty))
+		(if (if (p:rowty? ty) true (p:svalue? ty)) s
+		(if (< s p:WORD) s (* p:WORD (/ (+ s p:WMASK) p:WORD)))))))
+;; the alignment of a value of type ty
+(define p:talign (lambda (ty)
+	(begin
+		(define r (p:assoc ty p:rows))
+		(if r (p:talign (p:second r))
+		(if (p:svalue? ty) (index (p:slay ty) 3)
+		(begin
+			(define s (p:ctysize ty))
+			(if (< s p:WORD) s p:WORD)))))))
+;; #pragma pack(n) caps a member's alignment at n, and with it its
+;; struct's: p:pack is the n in force, 0 for none. A struct keeps the
+;; alignment it was laid out with.
+(define p:pack 0)
+(define p:packs nil)      ;; what pack(push) saved
+(define p:palign (lambda (a) (if (= p:pack 0) a (if (< p:pack a) p:pack a))))
+;; pack(n), pack(), pack(push[, n]) and pack(pop), as gcc takes them,
+;; between declarations: a PragmaPack token and the line's parenthesized
+;; arguments, from the lexer or the preprocessor
+(define p:packargs (lambda (acc)
+	(if (= (p:kind) 'Rparen) (begin (p:advance) (p:reverse acc))
+	(if (= (p:kind) 'Eof) (p:die "unterminated #pragma pack")
+	(begin
+		(define k (p:kind))
+		(define v (p:value))
+		(p:advance)
+		(if (= k 'Comma) (next p:packargs acc)
+		(next p:packargs (p:cons v acc))))))))
+(define p:pragmapack (lambda ()
+	(begin
+		(p:advance)
+		(p:expect 'Lparen "( after #pragma pack")
+		(define as (p:packargs (list)))
+		(define a0 (if (empty? as) "" (+ "" (head as))))
+		(if (empty? as) (set! p:pack 0)
+		(if (= a0 "push")
+			(begin
+				(set! p:packs (p:cons p:pack p:packs))
+				(if (empty? (tail as)) nil (set! p:pack (p:second as))))
+		(if (= a0 "pop")
+			(if (empty? p:packs) (set! p:pack 0)
+			(begin
+				(set! p:pack (head p:packs))
+				(set! p:packs (tail p:packs))))
+		(set! p:pack (head as))))))))
+;; n rounded up to a multiple of a
+(define p:alignup (lambda (n a) (* a (/ (+ n (- a 1)) a))))
+;; returns (SIZE REVRECORDS ALIGN)
+(define p:slayout (lambda (ms isu off mx al acc)
+	(if (empty? ms)
+		(list (p:alignup (if isu mx off) al) acc al)
+	(begin
+		(define m (head ms))           ;; (TYPE NAME ASIZE [Q])
+		(define mty (head m))
+		(define asz (p:third m))
+		(define ety (if (= asz nil) mty (- mty p:PTR)))
+		(define a (p:palign (p:talign ety)))
+		(define at (if isu 0 (p:alignup off a)))
+		(define bytes
+			(if (= asz nil)
+				(if (p:svalue? mty) (p:tysize mty) nil)
+			(* asz (p:estride ety))))
+		(define msize (if (= asz nil) (p:tysize mty) bytes))
+		(define q (index m 3))
+		(next p:slayout (tail ms) isu
+			(if isu off (+ at msize))
+			(if (> msize mx) msize mx)
+			(if (> a al) a al)
+			(p:cons (list (p:second m) at mty bytes (if (= q nil) 0 q)) acc))))))
+;; the record of member n of struct type ty
+(define p:smember (lambda (ty n)
+	(begin
+		(define r (p:findrec n (index (p:slay ty) 2)))
+		(if r r (p:die (+ "no such member: " n))))))
+(define p:findrec (lambda (n l)
+	(if (empty? l) false
+	(if (= (head (head l)) n) (head l)
+	(next p:findrec n (tail l))))))
 (define p:members (lambda (acc)
 	(if (= (p:kind) 'Rbrace)
 		(begin (p:advance) (p:reverse acc))
@@ -280,7 +392,7 @@
 		(if fp nil (p:advance))
 		(define size (if fp (p:second fp) (p:arraysize)))
 		(define acc2 (p:cons
-			(p:qnode (list (if (= size nil) ty (+ ty p:PTR)) n size)
+			(p:qnode (list (if (= size nil) ty (+ (p:elemty ty) p:PTR)) n size)
 				(if (= size nil) q (bit:shl q 2)))
 			acc))
 		(if (= (p:kind) 'Comma)
@@ -417,13 +529,13 @@
 (define p:numtok? (lambda (k)
 	(if (= k 'Num) true (if (= k 'NumU) true (= k 'NumUL)))))
 
-;; sizeof inside a constant expression (M7b): of a type, or of a string
-;; literal. A struct's size needs the generator's layout, which a
-;; constant cannot wait for; c4fc's parser can answer it, c4lc's cannot
-;; yet. The rule is c4lc-tree's t:tysize, which is g:tysize's.
+;; sizeof inside a constant expression (M7b): of a type, of a string
+;; literal, and (M9) of an expression over globals -- sizeof(table) /
+;; sizeof(table[0]) -- worked out from their types as c4lc-gen's
+;; g:sizeofx does. The rule is c4lc-tree's t:tysize, which is g:tysize's.
 (define p:ctysize (lambda (ty)
 	(if (= ty 0) 1
-	(if (p:svalue? ty) (p:die "sizeof a struct or union in a constant is not supported")
+	(if (if (p:svalue? ty) true (p:rowty? ty)) (p:second (p:slay ty))
 	(if (< ty 512) p:WORD
 	(if (> (- (- ty 512) (* 64 (/ (- ty 512) 64))) 0) p:WORD
 	(if (if (= ty 512) true (= ty 576)) 1
@@ -433,17 +545,56 @@
 (define p:constsizeof (lambda (what)
 	(begin
 		(p:advance)
-		(p:expect 'Lparen "( after sizeof")
 		(define v
-			(if (= (p:kind) 'Str) (+ (length (p:second (p:strlit))) 1)
-			(if (p:declstart?)
+			(if (if (= (p:kind) 'Lparen) (p:declstart-tok? (head (tail p:toks))) false)
 				(begin
+					(p:advance)
 					(define bt (p:basetype p:INT))
-					(p:ctysize (p:stars bt p:bq)))
-			(p:die (+ what ": sizeof of an expression is not a constant here")))))
-		(p:expect 'Rparen ") after sizeof")
+					(define tv (p:ctysize (p:stars bt p:bq)))
+					(p:expect 'Rparen ") after sizeof")
+					tv)
+			(p:csizeofx (p:expr 21) what)))
 		(set! p:ct p:INT)
 		v)))
+;; the globals so far, for sizeof in a constant: ((NAME TYPE SIZE) ...),
+;; TYPE as declared (an array's is its element's plus a pointer level)
+;; and SIZE its elements, or nil for a scalar
+(define p:gvars nil)
+(define p:gvar (lambda (n what)
+	(begin
+		(define g (if (p:member? n p:locals) false (p:assoc n p:gvars)))
+		(if g g (p:die (+ what (+ ": sizeof of " (+ n " is not a constant here"))))))))
+;; the size of what expression e names, without evaluating it
+(define p:csizeofx (lambda (e what)
+	(begin
+		(define h (head e))
+		(if (= h 'str) (+ (length (p:second e)) 1)
+		(if (= h 'var)
+			(begin
+				(define g (p:gvar (p:second e) what))
+				(if (= (p:third g) nil) (p:tysize (p:second g))
+				(if (= (p:third g) 0) (p:die (+ what (+ ": the size of " (+ (p:second e) " is not known here"))))
+				(* (p:third g) (p:estride (- (p:second g) p:PTR))))))
+		(if (if (= h 'member) true (= h 'arrow))
+			(begin
+				(define r (p:membrec e what))
+				(if (= (index r 3) nil) (p:tysize (p:third r)) (index r 3)))
+		(p:tysize (p:ctyof e what))))))))
+;; the record of the member a member or arrow node names
+(define p:membrec (lambda (e what)
+	(begin
+		(define bt (p:ctyof (p:second e) what))
+		(p:smember (if (= (head e) 'arrow) (- bt p:PTR) bt) (p:third e)))))
+;; the type of expression e, for sizeof
+(define p:ctyof (lambda (e what)
+	(begin
+		(define h (head e))
+		(if (= h 'var) (p:second (p:gvar (p:second e) what))
+		(if (if (= h 'index) true (= h 'deref)) (- (p:ctyof (p:second e) what) p:PTR)
+		(if (if (= h 'member) true (= h 'arrow)) (p:third (p:membrec e what))
+		(if (= h 'cast) (p:second e)
+		(if (= h 'str) p:PTR
+		(p:die (+ what ": sizeof of this expression is not a constant here"))))))))))
 
 ;; a static const scalar named by the current token, or false
 (define p:sconst (lambda ()
@@ -902,12 +1053,13 @@
 				(p:advance)
 				(p:advance)
 				(list 'labeled ln (if (= (p:kind) 'Rbrace) '(empty) (p:stmt))))
+		(if (= k 'Typedef) (begin (p:typedefdecl) '(empty))
 		(if (if (p:declstart?) true (= k 'Static))
 			(p:cons 'declstmt (p:localline))
 		(begin
 			(define e (p:fullexpr))
 			(p:expect 'Semi "semicolon")
-			(list 'expr e))))))))))))))))))
+			(list 'expr e)))))))))))))))))))
 
 (define p:dostmt (lambda ()
 	(begin
@@ -1048,6 +1200,7 @@
 		(define n (if (= (p:kind) 'Id) (p:value) false))
 		(if n (p:advance) nil)
 		(define size (p:arraysize))
+		(set! p:inner nil)
 		(p:expect 'Rparen ") in a function pointer declarator")
 		(if (= (p:kind) 'Lparen) nil (p:die "parameter list of a function pointer expected"))
 		(p:skipparens 0)
@@ -1075,8 +1228,60 @@
 				(if (= (p:kind) 'Rbrak) 0
 				(p:const "array size")))
 			(p:expect 'Rbrak "] after array size")
+			(set! p:inner (p:innerdims (list)))
 			s)
 	nil)))
+
+;; ---- arrays of arrays (M9) ----
+;;
+;; T a[N][M] is an array of N elements of a ROW type: M elements of T, of
+;; exactly M times T's stride. A row is a type of its own in the struct
+;; band, with no members. p:arraysize returns N and leaves the dimensions
+;; after it in p:inner; p:elemty makes the element type of them, which
+;; every declarator that took an array size uses in place of T. A row
+;; queues a structdef node, (structdef "@row" TYPE false () SIZE () ELEM
+;; COUNT), for the generator, which lets a row stand for the address of
+;; its first element wherever its value is used.
+(define p:inner nil)
+(define p:innerdims (lambda (acc)
+	(if (= (p:kind) 'Brak)
+		(begin
+			(p:advance)
+			(define s (p:const "array size"))
+			(p:expect 'Rbrak "] after array size")
+			(next p:innerdims (p:cons s acc)))
+	(p:reverse acc))))
+(define p:elemty (lambda (ty)
+	(begin
+		(define ds p:inner)
+		(set! p:inner nil)
+		(p:rowwrap ty (p:reverse ds)))))
+(define p:rowwrap (lambda (ty ds)
+	(if (empty? ds) ty (next p:rowwrap (p:rowtype ty (head ds)) (tail ds)))))
+(define p:rows nil)   ;; ((TYPE ELEM COUNT) ...)
+(define p:rowtype (lambda (elem n)
+	(begin
+		(define r (p:findrow elem n p:rows))
+		(if r (head r)
+		(begin
+			(define ty (+ p:STRUCT0 (* p:SSTEP p:nstructs)))
+			(set! p:nstructs (+ p:nstructs 1))
+			(define size (* n (p:estride elem)))
+			(set! p:rows (p:cons (list ty elem n) p:rows))
+			(set! p:slayouts (p:cons (list ty size (list) (p:talign elem)) p:slayouts))
+			(set! p:pending (p:cons
+				(list 'structdef "@row" ty false (list) size (list) elem n) p:pending))
+			ty)))))
+(define p:findrow (lambda (elem n l)
+	(if (empty? l) false
+	(if (if (= (p:second (head l)) elem) (= (index (head l) 2) n) false) (head l)
+	(next p:findrow elem n (tail l))))))
+(define p:rowty? (lambda (ty) (if (p:assoc ty p:rows) true false)))
+;; the scalars one element of type ty holds, for brace elision
+(define p:scalars (lambda (ty)
+	(begin
+		(define r (p:assoc ty p:rows))
+		(if r (* (index r 2) (p:scalars (p:second r))) 1))))
 
 ;; initializer after '=': (num N) | (str S) | (fnaddr F) | (name F) |
 ;; (braces (N...)) | (agg ITEMS).
@@ -1204,7 +1409,10 @@
 	(if (= size nil) nil
 	(if (> size 0) size
 	(if (= init nil) (p:die (+ what ": array [] needs an initializer"))
-	(if (= (head init) 'braces) (length (p:second init))
+	(if (= (head init) 'braces)
+		(begin
+			(define k (p:scalars elem))
+			(/ (+ (length (p:second init)) (- k 1)) k))
 	(if (= (head init) 'agg) (p:aggcount (p:second init) 0 0)
 	(if (if (= (head init) 'str) (p:bytety? elem) false)
 		(+ (length (p:second init)) 1)
@@ -1272,16 +1480,17 @@
 			(define bt (p:basetype p:INT))
 			(define ty0 (p:stars bt p:bq))
 			(define fp (if (p:fnptr?) (p:fnptrdecl) false))
-			(define ty (if fp p:INT ty0))
-			(define q (if fp 0 p:sq))
-			(if (p:svalue? ty)
-				(p:die "struct parameters must be pointers") nil)
+			(define ty1 (if fp p:INT ty0))
+			(define q1 (if fp 0 p:sq))
 			(define named (if fp (if (head fp) true false) (= (p:kind) 'Id)))
-			(if (if named true fp) nil
-				(if (if (= (p:kind) 'Comma) true (= (p:kind) 'Rparen)) nil
-					(p:die "bad parameter declaration")))
 			(define n (if named (if fp (head fp) (p:value)) (+ " param" (+ "" (length acc)))))
 			(if (if named (if fp false true) false) (p:advance) nil)
+			;; T name[] or T name[N]: C's parameter is a pointer to T
+			(define asz (if fp nil (p:arraysize)))
+			(define ty (if (= asz nil) ty1 (+ (p:elemty ty1) p:PTR)))
+			(define q (if (= asz nil) q1 (bit:shl q1 2)))
+			(if (if (= (p:kind) 'Comma) true (= (p:kind) 'Rparen)) nil
+				(p:die "bad parameter declaration"))
 			(if (= (p:kind) 'Comma) (p:advance) nil)
 			(next p:params (p:cons (p:qnode (list ty n) q) acc)))))))))
 
@@ -1304,6 +1513,9 @@
 		(if (= (head d) 'global) nil (p:die "a static local must be a variable"))
 		(define n (index d 2))
 		(define m (+ (+ p:curfn ".") n))
+		(if (if (empty? p:dyninits) false (= (head (head p:dyninits)) n))
+			(set! p:dyninits (p:cons (list m (p:second (head p:dyninits)) (index (head p:dyninits) 2)) (tail p:dyninits)))
+			nil)
 		(set! p:srenames (p:cons (list n m) p:srenames))
 		(set! p:pending (p:cons
 			(+ (list (head d) (p:second d) m) (tail (tail (tail d)))) p:pending))
@@ -1342,9 +1554,9 @@
 			(if (= (p:kind) 'Id) nil (p:die "bad local declaration")))
 		(define n (if fp (head fp) (p:value)))
 		(if fp nil (p:advance))
-		(define elem ty)
 		(define size (if fp (p:second fp) (p:arraysize)))
-		(define ty2 (if (= size nil) ty (+ ty p:PTR)))
+		(define elem (if (= size nil) ty (p:elemty ty)))
+		(define ty2 (if (= size nil) ty (+ elem p:PTR)))
 		(define q2 (if (= size nil) q (bit:shl q 2)))
 		;; scalars take a full (possibly non-constant) initializer
 		;; expression; a brace list for an array or a struct takes
@@ -1355,9 +1567,11 @@
 					(p:advance)
 					(if (if (= (p:kind) 'Lbrace) (if (= size nil) (p:svalue? ty) true) false)
 						(p:linit)
+					(if (if (= (p:kind) 'Lbrace) (= size nil) false)
+						(p:scalarbraces)
 					(if (= size nil)
 						(list 'einit (p:expr 1))
-					(p:init))))
+					(p:init)))))
 			nil))
 		(define fsize (p:initsize size elem init "local"))
 		(set! p:locals (p:cons n p:locals))
@@ -1365,19 +1579,44 @@
 		(next p:localline/2 bt bq
 			(p:cons (p:qnode (list 'local ty2 n fsize init) q2) acc))))))
 
+;; a scalar local's initializer in braces, `= { E }` (C allows them, and
+;; a trailing comma): the expression alone
+(define p:scalarbraces (lambda ()
+	(begin
+		(p:advance)
+		(define e (p:expr 1))
+		(if (= (p:kind) 'Comma) (p:advance) nil)
+		(p:expect 'Rbrace "} after a scalar's initializer")
+		(list 'einit e))))
+;; ... and a scalar global's: the one item of its brace list
+(define p:unbrace (lambda (init)
+	(if (= init nil) nil
+	(if (= (head init) 'braces)
+		(if (= (length (p:second init)) 1) (list 'num (head (p:second init)))
+			(p:die "too many initializers for a scalar"))
+	(if (= (head init) 'agg)
+		(if (= (length (p:second init)) 1) (head (p:second init))
+			(p:die "too many initializers for a scalar"))
+	init)))))
+
 ;; all locals at the top of a function body (declarations can also
-;; appear anywhere in a block; those become declstmt nodes)
+;; appear anywhere in a block; those become declstmt nodes). A typedef
+;; there names its type for the rest of the function (p:function puts
+;; the file's typedefs back after the body).
 (define p:localdecls (lambda (acc)
+	(if (= (p:kind) 'Typedef)
+		(begin (p:typedefdecl) (next p:localdecls acc))
 	(if (if (p:declstart?) true (= (p:kind) 'Static))
 		(next p:localdecls (+ acc (p:localline)))
-	(p:cons 'locals acc))))
+	(p:cons 'locals acc)))))
 
 ;; struct VALUE type: ty >= 1024 with pointer level 0
 (define p:svalue? (lambda (ty)
 	(if (< ty p:STRUCT0) false
+	(if (p:rowty? ty) false
 	(if (if (>= ty p:FLOAT) (< ty (+ p:DOUBLE 64)) false) false
 	(= 0 (- (- ty p:STRUCT0)
-		(* p:SSTEP (/ (- ty p:STRUCT0) p:SSTEP))))))))
+		(* p:SSTEP (/ (- ty p:STRUCT0) p:SSTEP)))))))))
 
 ;; the one-byte element types: an array of them packs, and a string can
 ;; initialize one
@@ -1414,10 +1653,12 @@
 		(define ps (head pv))
 		(define va (p:second pv))
 		(define a2 (if va (+ attr 32) attr))
-		(if (= (p:kind) 'Semi)
-			;; prototype: extern, parameter types only; the ';' stays
-			;; for the declarator loop (as in c4cc), so "int f(), g;"
-			;; keeps working. The masks, when there are any, follow.
+		(if (if (= (p:kind) 'Semi) true (= (p:kind) 'Comma))
+			;; prototype: extern, parameter types only; the ';' (or the
+			;; ',' before the next declarator, as in `void A(void),
+			;; B(void);`) stays for the declarator loop, as in c4cc, so
+			;; "int f(), g;" keeps working. The masks, when there are
+			;; any, follow.
 			(begin
 				(define pq (p:pquals ps (list)))
 				(define pn (list 'proto ty n (p:ptypes ps (list)) va (+ a2 16)))
@@ -1428,8 +1669,10 @@
 				(set! p:locals (p:paramnames ps (list)))
 				(set! p:curfn n)
 				(set! p:srenames (list))
+				(define tds p:typedefs)
 				(define ls (p:localdecls (list)))
 				(define body (p:block/2 (list)))
+				(set! p:typedefs tds)
 				(set! p:srenames (list))
 				(set! p:locals (list))
 			(p:qnode (list 'func ty n ps va a2 ls body) rq))))))
@@ -1446,17 +1689,28 @@
 	(if (empty? ps) acc
 	(next p:paramnames (tail ps) (p:cons (p:second (head ps)) acc)))))
 
-(define p:globalvar (lambda (ty n attr q) (p:globalvar/2 ty n attr q (p:arraysize))))
+(define p:globalvar (lambda (ty n attr q)
+	(begin
+		(define size (p:arraysize))
+		(p:globalvar/2 (if (= size nil) ty (p:elemty ty)) n attr q size))))
 ;; SIZE already read: a function pointer's declarator holds its own
 (define p:globalvar/2 (lambda (ty n attr q size)
 	(begin
 		(define elem ty)
 		(define ty2 (if (= size nil) ty (+ ty p:PTR)))
 		(define a2 (if (= size nil) attr (+ attr 64)))
-		(define init
+		(define init0
 			(if (= (p:kind) 'Assign)
-				(begin (p:advance) (p:init))
+				(begin
+					(p:advance)
+					(if (if (= size nil) (if (p:svalue? ty) false (p:dyninit?)) false)
+						(begin
+							(set! p:dyninits (p:cons (list n (p:expr 1) ty) p:dyninits))
+							nil)
+					(p:init)))
 			nil))
+		;; a scalar's initializer may be in braces
+		(define init (if (if (= size nil) (not (p:svalue? ty)) false) (p:unbrace init0) init0))
 		;; `extern T x[];` (M7b): a declaration, sized where x is defined
 		(define fsize (if (if (= init nil) (if (= size 0) (= 16 (bit:and attr 16)) false) false)
 			0 (p:initsize size elem init "global")))
@@ -1470,8 +1724,111 @@
 			(set! p:sconsts (p:cons
 				(list n (p:convval (p:second init) ty) (p:promote ty)) p:sconsts))
 			nil)
+		(set! p:gvars (p:cons (list n ty2 fsize) p:gvars))
 		(p:qnode (list 'global ty2 n fsize a2 init)
 			(if (= size nil) q (bit:shl q 2))))))
+
+;; ---- initializers computed at start-up (M9) ----
+;;
+;; C lets a global's initializer be any constant expression, which gcc
+;; folds -- floating point, and an address plus an offset. c4lc folds
+;; neither: a float constant is its bits, and the address of another
+;; unit's global is a patch that carries no offset. So a scalar global
+;; whose initializer is not a form p:init takes is set by a constructor
+;; instead: `const float radtoint = (float)(FINEANGLES/2/PI);` and
+;; `fixed *costable = sintable+(ANGLES/4);` are stored before main runs,
+;; by __c4lc_init, a static function the parser writes after the unit.
+;; Nothing can tell, short of another constructor reading the global first.
+(define p:dyninits nil)   ;; ((NAME EXPR TYPE) ...), the last first
+;; is the initializer at hand one that p:init cannot take? Not when it is
+;; a string, &NAME, a NAME alone, a float literal alone, or a constant
+;; expression -- one with no string, float, &, type name or name that is
+;; no constant up to the next , or ; (a sizeof's operand aside: c4lc-
+;; parse's p:constsizeof answers sizeof of a global)
+(define p:endtok? (lambda (k) (if (= k 'Comma) true (= k 'Semi))))
+(define p:dyninit? (lambda ()
+	(begin
+		(define k (p:kind))
+		(define k2 (head (head (tail p:toks))))
+		(if (= k 'Str) false
+		(if (= k 'And) false
+		(if (= k 'Lbrace) false
+		(if (if (= k 'Id) (p:endtok? k2) false) false
+		(if (if (p:fptok? k) (p:endtok? k2) false) false
+		(if (if (= k 'Sub) (if (p:fptok? k2) (p:endtok? (head (head (tail (tail p:toks))))) false) false) false
+		(p:dynscan p:toks 0))))))))))
+(define p:dynscan (lambda (ts d)
+	(begin
+		(define t (head ts))
+		(define k (head t))
+		(if (= k 'Eof) false
+		(if (if (= d 0) (p:endtok? k) false) false
+		(if (= k 'Sizeof)
+			(next p:dynscan
+				(if (= (head (head (tail ts))) 'Lparen) (p:skipgroup (tail ts) 0)
+				(p:skipunary (tail ts)))
+				d)
+		(if (if (= k 'Str) true (if (p:fptok? k) true (= k 'And))) true
+		(if (p:declstart-tok? t) true
+		(if (if (= k 'Id) (= (p:constname? (p:second t)) false) false) true
+		(next p:dynscan (tail ts)
+			(if (if (= k 'Lparen) true (= k 'Brak)) (+ d 1)
+			(if (if (= k 'Rparen) true (= k 'Rbrak)) (- d 1) d))))))))))))
+;; the tokens after `*p`, `name`, `a[i].m` -- sizeof's operand unparenthesized
+(define p:skipunary (lambda (ts)
+	(begin
+		(define k (head (head ts)))
+		(if (if (= k 'Mul) true (= k 'And)) (next p:skipunary (tail ts))
+		(if (= k 'Id) (p:skippost (tail ts))
+		ts)))))
+(define p:skippost (lambda (ts)
+	(begin
+		(define k (head (head ts)))
+		(if (= k 'Brak) (next p:skippost (p:skipbrak (tail ts) 1))
+		(if (if (= k 'Dot) true (= k 'Arrow)) (next p:skippost (tail (tail ts)))
+		ts)))))
+(define p:skipbrak (lambda (ts d)
+	(begin
+		(define k (head (head ts)))
+		(if (= k 'Eof) ts
+		(if (if (= k 'Rbrak) (= d 1) false) (tail ts)
+		(next p:skipbrak (tail ts) (if (= k 'Brak) (+ d 1) (if (= k 'Rbrak) (- d 1) d))))))))
+;; the tokens after a parenthesized group: ts starts at its (
+(define p:skipgroup (lambda (ts d)
+	(begin
+		(define k (head (head ts)))
+		(define d2 (if (= k 'Lparen) (+ d 1) (if (= k 'Rparen) (- d 1) d)))
+		(if (= k 'Eof) ts
+		(if (if (= k 'Rparen) (= d2 0) false) (tail ts)
+		(next p:skipgroup (tail ts) d2))))))
+;; It goes after the unit and before the long long and float helpers
+;; appended to it (p:withll, p:withfp): c4lc-gen compiles a helper only
+;; when something before it has called it.
+(define p:insdyn (lambda (ds acc fn)
+	(if (empty? ds) (+ (p:reverse acc) fn)
+	(if (p:helper? (head ds)) (+ (+ (p:reverse acc) fn) ds)
+	(next p:insdyn (tail ds) (p:cons (head ds) acc) fn)))))
+(define p:hpre? (lambda (n pre)
+	(if (> (length n) (length pre)) (= (string:substr n 0 (length pre)) pre) false)))
+(define p:helper? (lambda (d)
+	(if (= (head d) 'func)
+		(if (p:hpre? (index d 2) "__c4ll_") true
+		(if (p:hpre? (index d 2) "__c4f_") true
+		(if (p:hpre? (index d 2) "__c4d_") true
+		(p:hpre? (index d 2) "__c4fp_"))))
+	false)))
+;; the constructor, when the unit needs one
+(define p:dynfunc (lambda ()
+	(if (empty? p:dyninits) (list)
+	(list (list 'func p:INT "__c4lc_init" (list) false 9 (list 'locals)
+		(p:cons 'block (p:dynstmts (p:reverse p:dyninits) (list))))))))
+(define p:dynstmts (lambda (l acc)
+	(if (empty? l) (p:reverse acc)
+	(next p:dynstmts (tail l)
+		;; *(T *)&NAME = EXPR: a const global is still set, once
+		(p:cons (list 'expr (list 'assign
+			(list 'deref (list 'cast (+ (index (head l) 2) p:PTR) (list 'addr (list 'var (head (head l))))))
+			(p:second (head l)))) acc)))))
 
 ;; an integer value type (not a pointer, not a struct)
 (define p:intty? (lambda (t)
@@ -1525,7 +1882,8 @@
 		(p:qnode (list 'typedefd n ty) q))))
 
 (define p:top (lambda (acc)
-	(if (= (p:kind) 'Eof) (p:reverse acc)
+	(if (= (p:kind) 'Eof) (p:insdyn (p:reverse (p:drain acc)) (list) (p:dynfunc))
+	(if (= (p:kind) 'PragmaPack) (begin (p:pragmapack) (next p:top acc))
 	(begin
 		(define attr 0)
 		(if (= (p:kind) 'Static)
@@ -1543,7 +1901,7 @@
 				(next p:top (p:cons td (p:drain acc))))
 		(begin
 			(define bt (p:basetype p:INT))
-			(next p:top (p:hoist (p:declarators bt p:bq attr (p:drain acc)))))))))))
+			(next p:top (p:hoist (p:declarators bt p:bq attr (p:drain acc))))))))))))
 
 ;; ---- what c4 has no use for (M7b) ----
 ;;
@@ -2470,6 +2828,13 @@ static int __c4fp_hw() {
 		(set! p:sconsts (list))
 		(set! p:locals (list))
 		(set! p:structs (list))
+		(set! p:slayouts (list))
+		(set! p:gvars (list))
+		(set! p:rows (list))
+		(set! p:inner nil)
+		(set! p:dyninits (list))
+		(set! p:pack 0)
+		(set! p:packs (list))
 		(set! p:nstructs 0)
 		(set! p:typedefs (list))
 		(set! p:pending (list))

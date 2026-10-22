@@ -541,9 +541,19 @@
 (define g:sid (lambda (ty) (/ (- ty g:STRUCT0) g:SSTEP)))
 (define g:sptrlevel (lambda (ty)
 	(- (- ty g:STRUCT0) (* g:SSTEP (g:sid ty)))))
-;; struct VALUE type (pointer level 0)?
+;; struct VALUE type (pointer level 0)? A row is not one
 (define g:svalue? (lambda (ty)
-	(if (< ty g:STRUCT0) false (if (g:fpband? ty) false (= 0 (g:sptrlevel ty))))))
+	(if (< ty g:STRUCT0) false (if (g:fpband? ty) false
+	(if (= 0 (g:sptrlevel ty)) (not (g:rowty? ty)) false)))))
+;; arrays of arrays (M9, c4lc-parse's p:rowtype): a row is a struct-band
+;; type with no members, COUNT elements of ELEM. Used as a value it is
+;; the address of its first element: it decays to ELEM's pointer.
+(define g:rows nil)   ;; ((TYPE ELEM COUNT) ...)
+(define g:rowty? (lambda (ty)
+	(if (< ty g:STRUCT0) false (if (g:lookup ty g:rows) true false))))
+(define g:rowelem (lambda (ty) (g:second (g:lookup ty g:rows))))
+(define g:rowcount (lambda (ty) (g:third (g:lookup ty g:rows))))
+(define g:decay (lambda (ty) (if (g:rowty? ty) (+ (g:rowelem ty) g:PTR) ty)))
 ;; pointer of any flavour?
 (define g:isptr (lambda (ty) (> (g:plevel ty) 0)))
 
@@ -561,7 +571,7 @@
 	(if (= ty g:CHAR) 1
 	(if (< ty 512) g:WORD
 	(if (g:isptr ty) g:WORD
-	(if (g:svalue? ty) (g:second (g:sinfo ty))
+	(if (if (g:svalue? ty) true (g:rowty? ty)) (g:second (g:sinfo ty))
 		(if (g:bytety? ty) 1
 		(if (g:halfty? ty) 2
 		(if (if (g:ll? ty) true (= ty g:DOUBLE)) 8
@@ -573,9 +583,11 @@
 	(begin
 		(define h (head x))
 		(if (= h 'str) (+ (length (g:second x)) 1)
+		;; an element or what a pointer points at, before a row decays
+		(if (if (= h 'index) true (= h 'deref)) (g:tysize (g:lvtype x))
 		(if (= h 'member) (g:membsize (g:typeof (g:second x)) (g:third x))
 		(if (= h 'arrow) (g:membsize (- (g:typeof (g:second x)) g:PTR) (g:third x))
-		(g:tysize (g:typeof x))))))))
+		(g:tysize (g:typeof x)))))))))
 ;; a member record is (NAME OFF TYPE BYTES Q); BYTES is set for an array
 ;; member (and a struct one, whose size it equals)
 (define g:membsize (lambda (sty n)
@@ -589,7 +601,9 @@
 (define g:estride (lambda (ty)
 	(begin
 		(define s (g:tysize ty))
-		(if (< s g:WORD) s (* g:WORD (/ (+ s g:WMASK) g:WORD))))))
+		;; a row or a struct is its size, which its alignment rounds (M9)
+		(if (if (g:rowty? ty) true (g:svalue? ty)) s
+		(if (< s g:WORD) s (* g:WORD (/ (+ s g:WMASK) g:WORD)))))))
 (define g:awords (lambda (n ty) (/ (+ (* n (g:estride ty)) g:WMASK) g:WORD)))
 
 ;; member lookup: (NAME OFF TYPE BYTES Q) in struct-value type ty
@@ -599,19 +613,24 @@
 		(define m (g:lookup n (g:third (g:sinfo ty))))
 		(if m m (g:die (+ "no such member: " n))))))
 
-;; struct/union layout from a (structdef NAME TYPE ISUNION MEMBERS)
-;; node -- the parser bakes its assigned type id into the node, since
-;; ids are handed out on FIRST MENTION (possibly a forward pointer
-;; reference), not at definition. Every member starts word-aligned;
-;; char arrays pack (n+7)/8 words.
+;; struct/union layout from a (structdef NAME TYPE ISUNION MEMBERS SIZE
+;; LAYOUT) node -- the parser bakes its assigned type id into the node,
+;; since ids are handed out on FIRST MENTION (possibly a forward pointer
+;; reference), not at definition, and lays it out (c4lc-parse's
+;; p:slayout, C's rule, M9). g:slayout is the word-per-member rule it
+;; replaced, for a node without a layout.
 (define g:structdef (lambda (d)
 	(begin
 		(define ty (g:third d))
 		(define isu (index d 3))
-		(define ms (g:slayout (index d 4) isu 0 0 (list)))
+		;; the parser's layout (M9), when it made one
+		(define ms (if (= (index d 5) nil) (g:slayout (index d 4) isu 0 0 (list))
+			(list (index d 5) (g:reverse (index d 6)))))
 		(set! g:structs (g:cons
 			(list (g:sid ty) (head ms) (g:reverse (g:second ms)))
-			g:structs)))))
+			g:structs))
+		(if (= (index d 7) nil) nil
+			(set! g:rows (g:cons (list ty (index d 7) (index d 8)) g:rows))))))
 ;; returns (SIZE REVMEMBERS)
 (define g:slayout (lambda (ms isu off mx acc)
 	(if (empty? ms)
@@ -1311,14 +1330,14 @@
 		(if (= h 'call) (g:third (g:find (g:second e)))
 		(if (= h 'calle) g:INT
 		(if (= h 'assign) (g:lvtype (g:second e))
-		(if (= h 'deref) (- (g:typeof (g:second e)) g:PTR)
+		(if (= h 'deref) (g:decay (- (g:typeof (g:second e)) g:PTR))
 		(if (= h 'addr) (+ (g:lvtype (g:second e)) g:PTR)
 		(if (= h 'lognot) g:INT
 		(if (if (= h 'bitnot) true (= h 'neg)) (g:unres (g:typeof (g:second e)))
 		(if (g:incdec? h) (g:lvtype (g:second e))
 		(if (= h 'cast) (g:second e)
 		(if (if (= h 'sizeof) true (if (= h 'sizeofa) true (= h 'sizeofe))) g:INT
-		(if (if (= h 'index) true (if (= h 'member) true (= h 'arrow))) (g:lvtype e)
+		(if (if (= h 'index) true (if (= h 'member) true (= h 'arrow))) (g:decay (g:lvtype e))
 		(if (= h 'cond) (g:condtype e)
 		(if (if (= h 'land) true (= h 'lor)) g:INT
 		(if (= h 'comma) (g:typeof (g:last (tail e)))
@@ -1612,6 +1631,34 @@
 		(if (> t 0) (g:emit (list 'ADJ t)) nil)
 		(if llr (g:emit (list 'LEA rtmp)) nil)
 		(set! g:ty (g:third s)))))
+;; A struct passed by value (M9): its words, the last pushed first, so
+;; the first lands at the lowest address -- the parameter's -- as a long
+;; long's do. Its address waits in a temporary while they go, and the
+;; callee has a copy of its own to change.
+(define g:structpush (lambda (a ty fname)
+	(begin
+		(define rh (head a))
+		(if (if (= rh 'var) true (if (= rh 'deref) true (if (= rh 'member) true
+				(if (= rh 'arrow) true (= rh 'index)))))
+			nil (g:die (+ "a struct passed by value needs a struct lvalue, in a call to " fname)))
+		(if (= (g:typeof a) ty) nil (g:die (+ "passing the wrong struct to " fname)))
+		;; the temporary is free again once the words are pushed
+		(define ts g:tcur)
+		(define tmp (g:ltemp))
+		(g:emit (list 'LEA tmp)) (g:emit '(PSH))
+		(g:addr a)
+		(g:emit '(SI))
+		(g:structpush/2 tmp (- (g:pw ty) 1))
+		(set! g:tcur ts))))
+(define g:structpush/2 (lambda (tmp j)
+	(if (< j 0) nil
+	(begin
+		(g:emit (list 'LEA tmp)) (g:emit '(LI))
+		(if (> j 0)
+			(begin (g:emit '(PSH)) (g:emit (list 'IMM (* j g:WORD))) (g:emit '(ADD)))
+			nil)
+		(g:emit '(LI)) (g:emit '(PSH))
+		(next g:structpush/2 tmp (- j 1))))))
 ;; struct = struct (M7b): the bytes, by the VM's own memcpy -- what a
 ;; builtin memcpy(&L, &R, sizeof L) compiles to, so it needs no libc and
 ;; works under -fno-builtin. The right side must be an lvalue: a struct
@@ -1660,8 +1707,13 @@
 			(g:fparg (head args) pt)))
 			(head args)))
 		(define wide (if (= pt nil) (g:ll? (g:typeof a)) (g:ll? pt)))
-		(if wide (g:llpush a) (g:pusharg (g:cons a (tail args)) t pts pqs fname))
-		(next g:pushargs (tail args) (+ t (if wide 2 1))
+		;; a struct by value: the parameter's type, or as written
+		(define sty (if (= pt nil) (g:typeof a) pt))
+		(define byval (if wide false (g:svalue? sty)))
+		(if wide (g:llpush a)
+		(if byval (g:structpush (head args) sty fname)
+		(g:pusharg (g:cons a (tail args)) t pts pqs fname)))
+		(next g:pushargs (tail args) (+ t (if wide 2 (if byval (g:pw sty) 1)))
 			(if (= pts nil) nil (if (empty? pts) pts (tail pts)))
 			(if (= pqs nil) nil (if (empty? pqs) pqs (tail pqs)))
 			fname)))))
@@ -1734,7 +1786,9 @@
 				(set! g:ty (- g:ty g:PTR))
 				(if (g:svalue? g:ty)
 					(set! g:lastarray true)   ;; *structptr is an address
-				(g:load! g:ty)))
+				(if (g:rowty? g:ty)
+					(begin (set! g:ty (g:decay g:ty)) (set! g:lastarray true))
+				(g:load! g:ty))))
 		(if (= h 'addr)
 			(begin
 				(g:addr (g:second e))
@@ -1802,7 +1856,11 @@
 					(g:indexaddr e)
 					(if (g:svalue? g:ty)
 						(set! g:lastarray true)   ;; struct element: address
-					(g:load! g:ty))))
+					(if (g:rowty? g:ty)
+						(begin                    ;; a row: its first element's address
+							(set! g:ty (g:decay g:ty))
+							(set! g:lastarray true))
+					(g:load! g:ty)))))
 		(if (= h 'member)
 			(begin
 				(g:memberaddr e false)
@@ -2173,6 +2231,13 @@
 
 ;; ---- declarations ----
 
+;; struct layouts first of all: a parameter passed by value takes its
+;; struct's words, which the function passes below must count (M9)
+(define g:structpass (lambda (decls)
+	(if (empty? decls) nil
+	(begin
+		(if (= (head (head decls)) 'structdef) (g:structdef (head decls)) nil)
+		(next g:structpass (tail decls))))))
 ;; pre-pass: register every defined function so forward calls resolve
 (define g:prepass (lambda (decls)
 	(if (empty? decls) nil
@@ -2278,7 +2343,7 @@
 		(define isext (if isglobal
 			(if (= 16 (bit:and (index d 4) 16)) (= (index d 5) nil) false)
 			false))
-		(if (= (head d) 'structdef) (g:structdef d)
+		(if (= (head d) 'structdef) nil      ;; g:structpass did it
 		(if isglobal (if isext nil
 			(if (if (= (index d 5) nil) (g:laterinit? (g:third d) (tail decls)) false) nil
 			(g:global d)))
@@ -2318,7 +2383,10 @@
 				(set! g:externs (g:cons
 					(list n ty nil 131 arrbytes) g:externs))
 				(set! g:nexterns (+ g:nexterns 1)))
-			(g:die (+ "extern data has no definition (whole-program): " n))))
+			;; whole-program: nothing defines it, and nothing may use it --
+			;; a name no symbol answers is an error where it is used. Only
+			;; declaring it is fine, as in C (CASSERT's array, M9)
+			nil))
 		(next g:extdata (tail ds))))))
 
 ;; write N zero bytes at the current data cursor
@@ -2436,7 +2504,8 @@
 ;; Anything but plain numbers or a string, or any element that is a
 ;; struct, is g:globalaggr's (M7b).
 (define g:globalarrayinit (lambda (n ty s init gattrs elem bytewise bytes)
-	(if (if (= (head init) 'agg) true (if (g:svalue? elem) true (if (g:ll? elem) true (g:fp? elem))))
+	(if (if (= (head init) 'agg) true (if (g:svalue? elem) true (if (g:ll? elem) true
+			(if (g:rowty? elem) true (g:fp? elem)))))
 		(g:globalaggr n ty s init gattrs)
 	(g:globalarrayinit/2 n ty s init gattrs elem bytewise bytes))))
 (define g:globalarrayinit/2 (lambda (n ty s init gattrs elem bytewise bytes)
@@ -2510,6 +2579,10 @@
 ;; one object of element type ETY (an array of CNT of them when CNT is
 ;; not nil) at OFF, from the cursor CUR; returns what is left of CUR
 (define g:ifill (lambda (ety cnt off cur)
+	(if (if (= cnt nil) (g:rowty? ety) false)
+		(next g:ifill (g:rowelem ety) (g:rowcount ety) off cur)
+	(g:ifill/2 ety cnt off cur))))
+(define g:ifill/2 (lambda (ety cnt off cur)
 	(begin
 		(define it (head cur))
 		(define h (head it))
@@ -2728,22 +2801,31 @@
 		(g:lstore g:CHAR (+ off i) (list 'num (string:byte s i)))
 		(next g:lstrfill s (+ i 1) off)))))
 
+;; the words one parameter of type ty takes: two for a long long, a
+;; struct's own size for a struct passed by value, else one
+(define g:pw (lambda (ty)
+	(if (g:ll? ty) 2
+	(if (g:svalue? ty) (/ (+ (g:tysize ty) g:WMASK) g:WORD)
+	1))))
 ;; locals: params idx 0..argc-1, loc = argc+1, scalars idx loc+1...;
 ;; initializer stores re-run on every entry, emitted after ENT
 (define g:params (lambda (ps i)
 	(if (empty? ps) i
 	(begin
-		;; two words: the high one pushed first, so the low one is at
-		;; the lower address, which is the parameter's
-		(define w (if (g:ll? (head (head ps))) 2 1))
+		;; several words: the last pushed first, so the first is at the
+		;; lowest address, which is the parameter's
+		(define w (g:pw (head (head ps))))
 		(set! g:syms (g:cons
-			(list (g:second (head ps)) 'loc (head (head ps)) (+ i (- w 1)) nil (g:nz (index (head ps) 2)))
+			;; a struct's is its storage, as a local struct's is
+			(list (g:second (head ps)) 'loc (head (head ps)) (+ i (- w 1))
+				(if (g:svalue? (head (head ps))) (g:tysize (head (head ps))) nil)
+				(g:nz (index (head ps) 2)))
 			g:syms))
 		(next g:params (tail ps) (+ i w))))))
 ;; the words a parameter list takes
 (define g:pwords (lambda (ps n)
 	(if (empty? ps) n
-	(next g:pwords (tail ps) (+ n (if (g:ll? (head (head ps))) 2 1))))))
+	(next g:pwords (tail ps) (+ n (g:pw (head (head ps))))))))
 
 ;; local slots, c4cc's exact scheme: i += words consumed, the symbol's
 ;; Val is i AFTER the add, so LEA (loc - Val) is the LOWEST slot and
@@ -2848,7 +2930,8 @@
 					nil)
 					(g:emit '(SI)))
 			(g:localaggr d val)))
-		(if (if (= (head init) 'braces) (not (g:ll? (- (g:second d) g:PTR))) false)
+		(if (if (= (head init) 'braces)
+				(not (if (g:ll? (- (g:second d) g:PTR)) true (g:rowty? (- (g:second d) g:PTR)))) false)
 			(begin
 				(if (> (length (g:second init)) size)
 					(g:die (+ "too many initializers for " (g:third d))) nil)
@@ -3131,11 +3214,13 @@
 		(set! g:llsrc (list))
 		(set! g:llsyms (list))
 		(set! g:fpon false)
+		(set! g:rows (list))
 		(set! g:frames (list))
 		(set! g:fid 0)
 		(set! g:tcur 0)
 		(set! g:tmax 0)
 		(g:sysinit g:syscalls)
+		(g:structpass (tail ast))
 		(g:prepass (tail ast))
 		(g:protopass (tail ast))
 		(g:datapass (tail ast) (list))

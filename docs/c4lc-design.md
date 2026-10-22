@@ -35,8 +35,9 @@ the 32-bit c4th. How an image is built from units is in §13.
 
 Since 2026-10: the integer types and qualifiers (M4, §14), what the C
 Busybox needs (M7b, §10), `long long` in two words on a 32-bit target
-(M8, §14.7), and `float` and `double` (docs/c4-float.md, which tracks
-that work and its limits).
+(M8, §14.7), `float` and `double` (docs/c4-float.md, which tracks
+that work and its limits), and what Wolfenstein 3D needed: arrays of
+arrays, C's struct layout, a struct by value and the rest (M9, §14.8).
 
 ## 1. Why
 
@@ -678,12 +679,12 @@ order of specifiers parses (`unsigned const short`, `long unsigned`),
 and a typedef name only counts as a type while no other type word has
 been seen, so `unsigned T;` declares a `T`.
 
-Storage did not change shape: every scalar still takes a whole word —
-a global, a local, a struct member — and a member is still word-aligned.
-Only ARRAYS of the new narrow types pack, one byte for `unsigned char`
-and `signed char` as for `char`, two for the shorts (`g:estride`). So
-`sizeof(short) == 2` and `sizeof(short[5]) == 10`, but a struct's size
-and its members' offsets are c4's, not gcc's.
+Storage did not change shape for scalars: a global or a local still
+takes a whole word. ARRAYS of the new narrow types pack, one byte for
+`unsigned char` and `signed char` as for `char`, two for the shorts
+(`g:estride`), so `sizeof(short) == 2` and `sizeof(short[5]) == 10`.
+Struct members took whole words too until M9; since then a struct is
+laid out by C's rule, as gcc lays it out (14.8).
 
 `unsigned int` is 32 bits on a 64-bit host too, because that is what
 code written for it (CRC32, inflate, hashes) assumes. Its values are
@@ -965,3 +966,96 @@ long` (960), the codes the parser makes only when `sys:wordsize` is 4.
 Found on the way: c4fc had no compound assignment (`+=` and the rest
 lexed, but its parser stopped at them). It now rewrites `L op= R` as
 `L = L op R`, as c4lc does, and produces the same bytes.
+
+### 14.8 What Wolfenstein 3D needed (M9, 2026-10-22)
+
+The Wolf3D port (docs/c4ix-wolf3d.md) wrote around what c4lc lacked:
+2-D arrays flattened by hand, file headers read a byte at a time, a
+struct passed by pointer, and so on. These are now c4lc's, and c4fc's
+where c4fc can follow, byte for byte, and the port is back to Wolf4SDL's
+own source.
+
+- **Several function declarators in one declaration**, `void A(void),
+  B(void);`: a prototype ends at a comma as at a semicolon.
+- **Array parameters**: `char *argv[]` and `int v[10]` are pointers, and
+  `int m[][4]` is a pointer to a row (below).
+- **Braces around a scalar's initializer**, `int y = { 7 };` and `const
+  char *h = { "a" "b" };`, local or global.
+- **A typedef inside a function** (c4lc only: c4fc has no typedef). It
+  names its type to the end of the function; p:function puts the file's
+  typedefs back after the body. A struct it defines is hoisted before the
+  function, as a static local's global is.
+- **A struct passed by value.** A parameter takes the struct's words
+  (`g:pw`), the first at the lowest address, as a long long's do. The
+  caller keeps the struct's address in a two-word temporary and pushes
+  its words from the last (`g:structpush`); the temporary is free again
+  once they are pushed. The callee's copy is its own storage (the symbol
+  carries its bytes, as a local struct's does), so changing it changes
+  nothing of the caller's. A function with a struct parameter is never
+  spliced (T3, T4: `t:sparams?`), since a splice would hand it the
+  caller's struct. The argument must be an lvalue of the parameter's
+  struct type. Struct layouts now go first of all (`g:structpass`): the
+  function passes count parameter words from them.
+- **sizeof of an expression in a constant**: `sizeof(table) /
+  sizeof(table[0])`, `sizeof(*menu)`, `sizeof x.member`, `sizeof msg`, in
+  an array size, a case label or an initializer, over GLOBALS (c4fc's
+  parser answers it for locals too). The parser now lays out a struct as
+  it reads it (`p:slayout`) and keeps every global's type and size
+  (`p:gvars`); `p:csizeofx` works the size out from the expression's type,
+  as `g:sizeofx` does, without generating anything. The generator takes
+  the parser's layout (`g:structdef`). In whole-program mode an extern
+  array no unit defines and nothing uses -- Wolf3D's `CASSERT` -- is no
+  longer an error; using it still is. (c4fc gives such an extern storage
+  there, so the two differ on it.)
+- **Arrays of arrays.** `T a[N][M]` is an array of N ROWS: a row is a
+  type of its own in the struct band, M elements of T and exactly M times
+  T's stride, with no members (`p:rowtype`). `p:arraysize` reads every
+  dimension and `p:elemty` makes the element type of those after the
+  first, innermost first, reusing a row already made. A row travels to
+  the generator as a `structdef` node with two more fields, ELEM and
+  COUNT. Used as a value, a row is the address of its first element: an
+  index or a `*` that comes to a row decays it (`g:decay`) instead of
+  loading, and `g:typeof` says so, so `a[i][j]`, `&a[i][j]`, `a[i] + 1`
+  and passing `a[i]` all follow from the one-dimensional rules. `sizeof`
+  of an index or a `*` is taken before the decay, so `sizeof(a[i])` is the
+  row's. Initializers walk a row as an array of its elements: nested
+  braces, strings for char rows, and a flat list (`int m[][2] = {1, 2, 3,
+  4}`, whose row count `p:initsize` divides out). Globals, statics,
+  locals, externs, struct members and parameters all take them.
+- **Initializers computed at start-up** (c4lc only). C lets a global's
+  initializer be any constant expression, and gcc folds floating point
+  and an address plus an offset. c4lc folds neither: a float constant is
+  its bits, and another unit's global is a patch that carries no offset.
+  So a scalar global whose initializer is none of the forms `p:init`
+  takes (`p:dyninit?`: not a string, `&NAME`, a lone NAME or float
+  literal, or an integer constant expression) is set by `__c4lc_init`, a
+  static constructor the parser writes after the unit, before the long
+  long and float helpers so that the ones it calls are compiled. It
+  stores through `*(T *)&NAME`, so a `const` global is set too. Wolf3D's
+  `const float radtoint = (float)(FINEANGLES/2/PI);` and `fixed *costable =
+  sintable+(ANGLES/4);` are two. Nothing can tell, short of another
+  constructor reading the global first.
+- **C's struct layout.** A member starts at a multiple of its own
+  alignment -- 1 for the one-byte types, 2 for the shorts, the word for
+  the word-sized ones, min(8, word) for long long and double (as i386's
+  gcc has it), a row's element's, a struct's own -- and a struct is as
+  aligned as its most aligned member, its size rounded up to that. An
+  array of structs steps by the struct's size (`g:estride`). So a struct
+  laid over a file's bytes -- a map header, a font, a sprite -- matches
+  them as it does under gcc, at both word sizes. The rule is `p:slayout`;
+  every image in the repo was rebuilt with it.
+- **`#pragma pack`**: `pack(n)`, `pack()`, `pack(push[, n])` and
+  `pack(pop)`, as gcc takes them, between declarations. A member's
+  alignment is capped at n (`p:palign`), and so its struct's, which the
+  struct keeps wherever it is used later. Wolf4SDL's `wl_def.h` sets
+  `pack(1)` for every struct after it, the file headers among them. The
+  preprocessor passes the line on as a `PragmaPack` token and its
+  arguments; with no `-P` the lexer does the same with what gcc -E left,
+  and `p:pragmapack` settles push and pop. Every other pragma is still
+  dropped.
+- **Tests**: `src/tests/c4lc_m9.c` (c4lc and c4fc) and
+  `src/tests/c4lc_m9lc.c` (c4lc only), goldens `c4lc-m9.txt` and
+  `c4lc-m9lc.txt` from gcc, the same at 32 and 64 bits: sizes are printed
+  in units of `long`, the word to both, or past a multiple of it. In test-c4lc at both sizes,
+  plain, `-O` and `-minline`; `c4lc_m9` is in `C4FC_GEN_SWEEP`, both in
+  `C4SC_BACK_DIFF`.

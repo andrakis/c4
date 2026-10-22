@@ -292,6 +292,38 @@ on the data stack, for both the unsigned and the old path: two return
 cells a level, as before M4, and no frame at all. A 110-term chain of
 either kind compiles to c4lc's bytes.
 
+## What Wolfenstein 3D needed (M9, 2026-10-22)
+
+c4lc-design.md 14.8 has the language side; c4fc follows c4lc in all of
+it but the two things it has no basis for -- a typedef inside a function
+and an initializer computed at start-up, which needs floats -- and emits
+the same bytes.
+
+- **`parse.f`**: a prototype that ends at a comma leaves it to DECL
+  (`PROTO-MORE`); an array parameter is a pointer; a scalar's initializer
+  may be in braces; `sizeof` of an expression in a constant goes through
+  `SIZEOF-NODE`, as it does in an expression (`CSIZEOF-EXPR`,
+  `CSIZEOF-UNARY`). `PARAMS` gives a struct passed by value its words,
+  and its slot is its lowest one (`PWORDS-OF`).
+- **`gen.f`**: `STRUCT-PUSH` pushes a struct argument's words through a
+  two-word temporary past the locals (`TCUR`, `TMAX`), and the ENT grows
+  by the most a push used, as c4lc's `g:structpush` and `g:ltemp`. A call
+  adjusts by WORDS; a function's `y.nfixw` says how many its fixed
+  parameters take.
+- **Rows** (`types.f`): `ST-ROWE` and `ST-ROWN` beside `ST-SIZE`; `T-ROW?`
+  is a struct-band type with a count, `T-STRUCT?` is no longer true of
+  one, and `DECAY` makes a row its element's pointer. `MORE-DIMS` reads
+  the dimensions after the first and makes the rows at the moment c4lc's
+  `p:elemty` does, so the type numbers in the symbol records are c4lc's.
+  An index or a `*` that comes to a row does not load; `(AGG-FILL)` walks
+  a row as an array.
+- **Layout**: `PARSE-MEMBERS` places each member at its own alignment
+  (`T-ALIGN`, `ALIGN-UP`) and records the struct's in `ST-ALIGN`.
+- **`#pragma pack`**: `pp.f`'s `D-PRAGMA` settles push and pop itself
+  and leaves a `Pack` token holding the packing in force; `PROGRAM` sets
+  `PACK-NOW` from it, and `PACKED` caps each member's alignment. c4lc
+  settles them in its parser instead; the bytes are the same.
+
 ## Verification
 
 The bar rises rung by rung and c4lc supplies it at every one.

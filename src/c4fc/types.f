@@ -37,6 +37,13 @@
 CREATE ST-NAME  SMAX-STRUCT CELLS ALLOT
 CREATE ST-NLEN  SMAX-STRUCT CELLS ALLOT
 CREATE ST-SIZE  SMAX-STRUCT CELLS ALLOT
+\ M9. A row -- what T a[N][M] is an array of -- is a struct-band type with
+\ no members: COUNT elements of ELEM, c4lc-parse's p:rowtype. Its count
+\ is never 0, which is what tells it from a struct.
+\ M9: a struct's alignment, its most aligned member's (a row's, its element's)
+CREATE ST-ALIGN SMAX-STRUCT CELLS ALLOT
+CREATE ST-ROWE  SMAX-STRUCT CELLS ALLOT
+CREATE ST-ROWN  SMAX-STRUCT CELLS ALLOT
 VARIABLE #STRUCTS   0 #STRUCTS !
 
 512 CONSTANT MMAX-MEM
@@ -55,8 +62,16 @@ VARIABLE #MEMS   0 #MEMS !
    T-BAND0 - T-STRIDE / T-STRIDE * T-BAND0 + ;
 : T-STARS ( t -- n )  DUP T-BASE - 2 / ;
 : T-PTR?  ( t -- f )  T-STARS 0> ;
-: T-STRUCT? ( t -- f ) DUP T-STRUCT0 >= SWAP T-STARS 0= AND ;
 : T-INDEX ( t -- k )  T-BASE T-STRUCT0 - T-STRIDE / ;
+: T-ROW? ( t -- f )
+   DUP T-STRUCT0 >= OVER T-STARS 0= AND IF T-INDEX CELLS ST-ROWN + @ 0<> ELSE DROP 0 THEN ;
+\ a struct or union value; a row is not one
+: T-STRUCT? ( t -- f )
+   DUP T-STRUCT0 >= OVER T-STARS 0= AND IF T-ROW? 0= ELSE DROP 0 THEN ;
+: ROW-ELEM  ( t -- t' )  T-INDEX CELLS ST-ROWE + @ ;
+: ROW-COUNT ( t -- n )   T-INDEX CELLS ST-ROWN + @ ;
+\ a row used as a value is the address of its first element
+: DECAY ( t -- t' )  DUP T-ROW? IF ROW-ELEM 2 + THEN ;
 : T-DEREF ( t -- t' ) 2 - ;
 : T-ADDR  ( t -- t' ) 2 + ;
 \ an integer VALUE type: no star, no struct
@@ -111,9 +126,28 @@ VARIABLE #MEMS   0 #MEMS !
    #STRUCTS @ TO k
    k SMAX-STRUCT < 0= IF ." c4fc: too many structs" CR ABORT THEN
    a k CELLS ST-NAME + !  u k CELLS ST-NLEN + !  0 k CELLS ST-SIZE + !
+   0 k CELLS ST-ROWN + !  0 k CELLS ST-ROWE + !  1 k CELLS ST-ALIGN + !
    1 #STRUCTS +!
    k ;
 : ST-TYPE ( k -- t )  T-STRIDE * T-STRUCT0 + ;
+\ the alignment of a value of type t: c4lc-parse's p:talign
+: T-ALIGN ( t -- a )
+   BEGIN DUP T-ROW? WHILE ROW-ELEM REPEAT
+   DUP T-STRUCT? IF T-INDEX CELLS ST-ALIGN + @ EXIT THEN
+   T-SIZE 1 CELLS MIN ;
+: ALIGN-UP ( n a -- n' )  DUP >R 1- + R@ / R> * ;
+\ the row of N elements of ELEM: the one there is, or a new one
+: ROW-TYPE ( elem n -- t ) {: e n | k -- t :}
+   #STRUCTS @ 0 ?DO
+      I CELLS ST-ROWN + @ n =  I CELLS ST-ROWE + @ e = AND IF I ST-TYPE UNLOOP EXIT THEN
+   LOOP
+   S" @row" ST-NEW TO k
+   e k CELLS ST-ROWE + !   n k CELLS ST-ROWN + !
+   e T-SIZE n * k CELLS ST-SIZE + !   e T-ALIGN k CELLS ST-ALIGN + !
+   k ST-TYPE ;
+\ the scalars one element of type t holds, for brace elision
+: T-SCALARS ( t -- n )
+   1 SWAP  BEGIN DUP T-ROW? WHILE  DUP ROW-COUNT ROT * SWAP ROW-ELEM  REPEAT  DROP ;
 
 : MEM, ( struct a u type off agg -- ) {: k a u t o ag -- :}
    #MEMS @ MMAX-MEM < 0= IF ." c4fc: too many struct members" CR ABORT THEN

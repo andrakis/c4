@@ -10,8 +10,8 @@
 //   - long and unsigned long are a word on both (gcc is ILP32 / LP64)
 //   - nothing mixes long with unsigned int, where LP64 gcc converts to long
 //     and c4 -- whose long IS int -- converts to unsigned int
-//   - no sizeof of int, unsigned, long or a struct: c4 gives every scalar
-//     a word and every struct member a word
+//   - no sizeof of int, unsigned or long, or of a struct of them: c4 gives
+//     every one of them a word
 //
 // It is in c4fc's subset as well (no typedef, no compound assignment,
 // declarations at the top of a block), because C4FC_GEN_SWEEP and

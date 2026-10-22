@@ -349,8 +349,9 @@ HELP-RESET
 :M GEN n_index {: n -- :}
    n CISC-INDEX? IF
       n >lhs @ GEN  oPSH OP,  n >rhs @ GEN  oLXI OP, EXIT THEN
-   n GEN-ADDR  n CT LOAD, ;M
-:M CT  n_index  >lhs @ CT T-DEREF ;M
+   n GEN-ADDR  n >lhs @ CT T-DEREF  DUP T-ROW? IF DROP ELSE LOAD, THEN ;M
+\ a row's value is its first element's address (M9)
+:M CT  n_index  >lhs @ CT T-DEREF DECAY ;M
 :M CQ  n_index  >lhs @ CQ 2 RSHIFT ;M
 
 :M GEN-ADDR n_member {: n -- :}
@@ -396,20 +397,55 @@ HELP-RESET
    f y.class @ c_extg    = IF oJSRI f y.val @ EXTREF, EXIT THEN
    f JSRF, ;
 
-:M GEN n_call {: n | f k i -- :}
+\ A struct passed by value (M9), as c4lc-gen's g:structpush: its words,
+\ the last pushed first, so the first lands at the parameter's address.
+\ Its address waits in a two-word temporary just past the locals, free
+\ again once the words are pushed; the function's ENT grows by the most
+\ any push needed (TMAX). Returns the words pushed.
+VARIABLE TCUR   0 TCUR !
+VARIABLE TMAX   0 TMAX !
+: STRUCT-PUSH ( node t -- w ) {: a t | d w j -- w :}
+   TCUR @   2 TCUR +!   TCUR @ TMAX @ MAX TMAX !
+   NLOC @ TCUR @ + NEGATE TO d
+   d oLEA OP2,  oPSH OP,  a GEN-ADDR  oSI OP,
+   t T-SIZE 1 CELLS 1- + 1 CELLS / TO w
+   w 1- TO j
+   BEGIN j 0< 0= WHILE
+      d oLEA OP2,  oLI OP,
+      j IF  oPSH OP,  j CELLS oIMM OP2,  oADD OP,  THEN
+      oLI OP,  oPSH OP,
+      j 1- TO j
+   REPEAT
+   TCUR !
+   w ;
+\ the type argument i is passed as: its parameter's, when f says, or its own
+: ARG-TYPE ( arg i f -- t ) {: a i f -- t :}
+   f IF f y.pt @ IF i f y.nfix @ < IF f y.pt @ i CELLS + @ EXIT THEN THEN THEN
+   a CT ;
+\ argument i of a call to f (0: through a pointer): pushed, and the words it took
+: PUSH-ARG ( arg i f -- w ) {: a i f | t -- w :}
+   a i f ARG-TYPE TO t
+   t T-STRUCT? IF
+      a CT t <> IF ." c4fc: passing the wrong struct in a call" CR ABORT THEN
+      a t STRUCT-PUSH EXIT
+   THEN
+   a GEN  f IF a i f ARGCHECK THEN
+   oPSH OP,  1 ;
+
+:M GEN n_call {: n | f k i w -- :}
    \ The splice replaces the call entirely -- arguments into the
    \ callee's parameter slots, then its body generated in place. The
    \ value arrives the same way it would have: in A.
    n INL-TRY TO i
    i 0< 0= IF  n i INL-SPLICE  EXIT THEN
    n >fn @ TO f
-   n >argn @ TO k
+   n >argn @ TO k   0 TO w
    k 0 ?DO
-      n >args @ I CELLS + @ DUP GEN  I f ARGCHECK
-      oPSH OP,
+      n >args @ I CELLS + @  I f PUSH-ARG  w + TO w
    LOOP
+   w TO k                                \ words, from here on
    f y.va @ IF
-      k f y.nfix @ - TO k                \ how many were extra
+      k f y.nfixw @ - TO k               \ how many were extra
       k oIMM OP2,  oPSH OP,
       VA-MAKE @ 0= IF
          ." c4fc: a variadic call needs __c4cc_make_va -- include stdarg.h"
@@ -418,7 +454,7 @@ HELP-RESET
       k 1+ oADJ OP2,
       oPSH OP,
       f CALL,
-      f y.nfix @ 1+ oADJ OP2,
+      f y.nfixw @ 1+ oADJ OP2,
       EXIT
    THEN
    f CALL,
@@ -428,9 +464,10 @@ HELP-RESET
 \ arguments, then what JSR would have pushed -- the return address, an
 \ IMM of the code just past the jump -- then the target in A and JMPA.
 \ The callee finds the frame a JSR builds.
-:M GEN n_icall {: n | k m -- :}
-   n >argn @ TO k
-   k 0 ?DO  n >args @ I CELLS + @ GEN  oPSH OP,  LOOP
+:M GEN n_icall {: n | k m w -- :}
+   n >argn @ TO k   0 TO w
+   k 0 ?DO  n >args @ I CELLS + @  I 0 PUSH-ARG  w + TO w  LOOP
+   w TO k
    oIMM BR, TO m   oPSH OP,
    n >fn @ GEN   oJMPA OP,
    m >RES
@@ -560,14 +597,15 @@ VARIABLE UFN   0 UFN !
 \ A pointer's VALUE is the address it points at, so dereferencing for an
 \ address is the operand's value and nothing else.
 :M GEN-ADDR n_deref  >opnd @ GEN ;M
-:M GEN      n_deref {: n -- :}  n >opnd @ GEN  n CT LOAD, ;M
+:M GEN      n_deref {: n -- :}
+   n >opnd @ GEN  n >opnd @ CT 2 -  DUP T-ROW? IF DROP ELSE LOAD, THEN ;M
 :M GEN      n_addr   >opnd @ GEN-ADDR ;M
 
 :M CT n_not   DROP t_int ;M
 :M CT n_bnot  >opnd @ CT T-UNRES ;M
 :M CT n_neg   >opnd @ CT T-UNRES ;M
 :M CT n_addr  >opnd @ CT 2 + ;M
-:M CT n_deref >opnd @ CT 2 - ;M
+:M CT n_deref >opnd @ CT 2 - DECAY ;M
 :M CQ n_not   DROP 0 ;M
 :M CQ n_bnot  DROP 0 ;M
 :M CQ n_neg   DROP 0 ;M

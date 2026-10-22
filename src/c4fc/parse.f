@@ -120,6 +120,10 @@ VARIABLE CTY   1 CTY !
       t_uint EXIT THEN
    t_int ;
 
+\ sizeof in a constant: of a type, or (M9) SIZEOF-NODE of what EXPR
+\ makes of an expression, all defined further down
+DEFER CSIZEOF-EXPR ( -- n )
+DEFER CSIZEOF-UNARY ( -- n )
 : CPRIMARY ( -- v ) {: | s v -- v :}
    TK NUMK?      IF TV TK LIT-TYPE CTY !  TV TNEXT EXIT THEN
    TK Sub    = IF TNEXT 13 CEXPR TO v  0 t_int v CTY @ oSUB CAPPLY EXIT THEN
@@ -128,11 +132,13 @@ VARIABLE CTY   1 CTY !
    TK Tilde  = IF TNEXT 13 CEXPR TO v  -1 t_int v CTY @ oXOR CAPPLY EXIT THEN
    TK Lparen = IF TNEXT CONST-EXPR Rparen WANT EXIT THEN
    \ sizeof of a type, or of a string literal: its bytes and the NUL (M7b)
-   TK Sizeof = IF TNEXT Lparen WANT
+   TK Sizeof = IF TNEXT
+      TK Lparen <> IF CSIZEOF-UNARY t_int CTY ! EXIT THEN   \ sizeof NAME
+      Lparen WANT
       TK Str = IF
          0 TO v  BEGIN TK Str = WHILE v TL + TO v TNEXT REPEAT
          Rparen WANT t_int CTY !  v 1+ EXIT THEN
-      PARSE-TYPE T-SIZE Rparen WANT t_int CTY ! EXIT THEN
+      CSIZEOF-EXPR Rparen WANT t_int CTY ! EXIT THEN
    TK Id = IF
       TV TL ST-FIND TO s
       s 0= IF ." c4fc: unknown name in a constant" CR ABORT THEN
@@ -184,6 +190,7 @@ VARIABLE CTY   1 CTY !
 \ to drop the whole scope.
 DEFER DECL-D
 VARIABLE CURFN-A   VARIABLE CURFN-U       \ the function being parsed
+VARIABLE PROTO-MORE   0 PROTO-MORE !     \ FUNCTION left a prototype's comma for DECL
 VARIABLE ST-MANGLE   0 ST-MANGLE !        \ DECL is declaring a static local
 VARIABLE FN-STATICS  0 FN-STATICS !
 32 CONSTANT SAL-MAX
@@ -276,9 +283,26 @@ DEFER EXPR                              \ ( lev -- node )
 \ to a word, as c4lc-gen's g:slayout does it. It used to be laid out as
 \ a struct here, so x.c of `union { int i; char c; } x` was at 8 and
 \ sizeof was 16 (found by M7b's aggregate initializers).
-: PARSE-MEMBERS ( k isu -- ) {: k isu | t a u off n ag mt et bq q fn mx sz -- :}
+\ T a[N][M]...: the dimensions after the first, made the element type's
+\ rows, the innermost first -- c4lc-parse's p:elemty, at the same point
+CREATE DIMBUF 16 CELLS ALLOT
+VARIABLE LB-ELEM   0 LB-ELEM !          \ the element type LOCAL-BRACES fills
+: MORE-DIMS ( t -- t' ) {: t | n -- t :}
+   0 TO n
+   BEGIN TK Brak = WHILE
+      TNEXT CONST-EXPR DIMBUF n CELLS + !  n 1+ TO n  Rbrak WANT
+   REPEAT
+   BEGIN n 0> WHILE  n 1- TO n  t DIMBUF n CELLS + @ ROW-TYPE TO t  REPEAT
+   t ;
+\ C's layout (M9, c4lc-parse's p:slayout): each member at a multiple of its
+\ own alignment, the struct as aligned as its most aligned member.
+\ #pragma pack(n) caps a member's alignment at n (PACK-NOW, 0 for none,
+\ from the preprocessor's Pack tokens), and with it the struct's.
+VARIABLE PACK-NOW   0 PACK-NOW !
+: PACKED ( a -- a' )  PACK-NOW @ ?DUP IF MIN THEN ;
+: PARSE-MEMBERS ( k isu -- ) {: k isu | t a u off n ag mt et bq q fn mx sz al ma -- :}
    Lbrace WANT
-   0 TO off   0 TO mx
+   0 TO off   0 TO mx   1 TO al
    BEGIN TK Rbrace <> WHILE
       BASE-TYPE TO t   BQ @ TO bq
       BEGIN
@@ -291,22 +315,25 @@ DEFER EXPR                              \ ( lev -- node )
          ELSE
             TV TO a  TL TO u  Id WANT
             TK Brak = IF
-               TNEXT CONST-EXPR TO n Rbrak WANT
+               TNEXT CONST-EXPR TO n Rbrak WANT   mt MORE-DIMS TO mt
                1 TO ag   mt DUP TO et 2 + TO mt   q 2 LSHIFT TO q
             THEN
          THEN
-         off 1 CELLS 1- + 1 CELLS 1- INVERT AND TO off
+         ag IF et ELSE mt THEN T-ALIGN PACKED TO ma
+         ma al MAX TO al
+         isu IF 0 ELSE off ma ALIGN-UP THEN TO off
          k a u mt off ag MEM,   q MEM-Q!   ag IF n et T-SIZE * MEM-ASZ! THEN
          n ag IF et ELSE mt THEN T-SIZE * TO sz
          isu IF
-            sz 1 CELLS 1- + 1 CELLS 1- INVERT AND  DUP mx > IF TO mx ELSE DROP THEN
+            sz mx MAX TO mx
          ELSE off sz + TO off THEN
          TK Comma = WHILE TNEXT
       REPEAT
       Semi WANT
    REPEAT
    Rbrace WANT
-   isu IF mx ELSE off 1 CELLS 1- + 1 CELLS 1- INVERT AND THEN  k CELLS ST-SIZE + ! ;
+   isu IF mx ELSE off THEN al ALIGN-UP  k CELLS ST-SIZE + !
+   al k CELLS ST-ALIGN + ! ;
 
 \ Any run of the specifiers C allows -- const, volatile, signed,
 \ unsigned, short, long, int, char, a struct or union -- in any order.
@@ -423,6 +450,8 @@ CREATE SLBUF 8192 ALLOT
    k n_member = IF
       nd >magg @ IF nd >masz @ ELSE nd >mtype @ T-SIZE THEN EXIT
    THEN
+   k n_index = IF nd >lhs @ CT T-DEREF T-SIZE EXIT THEN
+   k n_deref = IF nd >opnd @ CT T-DEREF T-SIZE EXIT THEN
    nd CT T-SIZE ;
 
 : PRIMARY ( -- node ) {: | s a u v k nd ct -- n :}
@@ -601,6 +630,11 @@ DEFER LOCAL-RECS ( ety cnt ai -- v )
 \ its name stands for the address of the LOWEST one -- locals grow
 \ downwards, so int a[4] as the first local is slots 1..4 and a is
 \ LEA -4.
+: (CSIZEOF-EXPR) ( -- n )  TYPE? IF PARSE-TYPE T-SIZE ELSE 1 EXPR SIZEOF-NODE THEN ;
+' (CSIZEOF-EXPR) IS CSIZEOF-EXPR
+: (CSIZEOF-UNARY) ( -- n )  UNARY SIZEOF-NODE ;
+' (CSIZEOF-UNARY) IS CSIZEOF-UNARY
+
 : LOCAL-DECLS ( v -- ) {: v | ct dt t a u sz ag na iv ivn y nd nn bq q fn ai -- :}
    BEGIN TYPE? TK Static = OR WHILE
       TK Static = IF STATIC-DECL ELSE
@@ -618,7 +652,7 @@ DEFER LOCAL-RECS ( ety cnt ai -- v )
             fn -2 = IF
                TNEXT
                TK Rbrak = IF -1 TO na ELSE CONST-EXPR TO na THEN
-               Rbrak WANT
+               Rbrak WANT   dt MORE-DIMS TO dt
             ELSE fn TO na THEN
             1 TO ag   dt 2 + TO t   q 2 LSHIFT TO q
          ELSE
@@ -629,7 +663,7 @@ DEFER LOCAL-RECS ( ety cnt ai -- v )
          TK Assign = IF
             TNEXT
             TK Lbrace =  ag dt T-STRUCT? OR  AND IF
-               ag na LOCAL-BRACES TO na TO ivn TO iv TO ai
+               dt LB-ELEM !  ag na LOCAL-BRACES TO na TO ivn TO iv TO ai
             ELSE ag IF
                TK Str = IF
                   TL TO ivn   ivn CELLS ALLOT: TO iv
@@ -647,7 +681,10 @@ DEFER LOCAL-RECS ( ety cnt ai -- v )
                   na 0< IF ivn TO na THEN
                THEN
             ELSE
-               1 EXPR TO nd
+               TK Lbrace = IF
+                  TNEXT  1 EXPR TO nd
+                  TK Comma = IF TNEXT THEN  Rbrace WANT
+               ELSE 1 EXPR TO nd THEN
             THEN THEN
          THEN
          ag IF  na 1 < IF 1 TO na THEN  na dt T-SIZE * TO sz  THEN
@@ -807,7 +844,12 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
 \ `(void)` is no parameters at all. A parameter may have no name, as in
 \ a prototype's `int f(int, char *)`; it gets an empty one, which no
 \ lookup can find.
-: PARAMS ( -- n va ) {: | n base ct va a u -- n va :}
+\ the words a parameter of type t takes: a struct's own size, rounded
+\ up to words, for one passed by value (M9); else one
+: PWORDS-OF ( t -- w )
+   DUP T-STRUCT? IF T-SIZE 1 CELLS 1- + 1 CELLS / ELSE DROP 1 THEN ;
+VARIABLE PWORDS   0 PWORDS !            \ what PARAMS's fixed parameters take
+: PARAMS ( -- n va ) {: | n base ct va a u w s y -- n va :}
    Lparen WANT
    STN @ TO base   0 TO n   0 TO va
    TK Void =  TP @ 1+ TOKS V@ t.kind @ Rparen = AND IF TNEXT THEN
@@ -825,18 +867,40 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
             ELSE
             TK Id = IF TV TL ELSE S" " THEN
             c_loc 0 ct 0 0 ST,   DQ @ ST-LAST y.q !   n 1+ TO n
-            TK Id = IF TNEXT ELSE
-               TK Comma <> TK Rparen <> AND IF Id WANT THEN
+            TK Id = IF TNEXT THEN
+            \ T name[] or T name[N]: C's parameter is a pointer to T
+            TK Brak = IF
+               TNEXT  TK Rbrak <> IF CONST-EXPR DROP THEN  Rbrak WANT
+               ST-LAST y.ct @ MORE-DIMS 2 + ST-LAST y.ct !
+               ST-LAST y.q @ 2 LSHIFT ST-LAST y.q !
             THEN
+            \ a struct passed by value is its own storage, as a local one is
+            ST-LAST y.ct @ T-STRUCT? IF
+               1 ST-LAST y.agg !  ST-LAST y.ct @ T-SIZE ST-LAST y.sz ! THEN
+            TK Comma <> TK Rparen <> AND IF Id WANT THEN
             THEN
             TK Comma =
          THEN
       WHILE TNEXT REPEAT
    THEN
    Rparen WANT
-   \ c4 puts the LAST argument at bp+2, so the kth of n sits at bp+(n+2-k)
-   n va - 0 ?DO  n 2 + I 1+ -  base I + ST[] y.val !  LOOP
+   \ c4 puts the LAST argument at bp+2. A parameter takes words -- one, or
+   \ a struct's own -- and its slot is its lowest: the kth sits at
+   \ bp + (words + va + 2) - (the words up to and including it)
+   0 TO w
+   n va - 0 ?DO  base I + ST[] y.ct @ PWORDS-OF w + TO w  LOOP
+   w PWORDS !
+   0 TO s
+   n va - 0 ?DO
+      base I + ST[] TO y
+      y y.ct @ PWORDS-OF s + TO s
+      w va + 2 + s -  y y.val !
+   LOOP
    n va ;
+\ does a parameter list pass a struct by value? Then a splice would hand
+\ the callee the caller's own struct to change (c4lc-tree's t:sparams?)
+: STRUCT-PARAMS? ( base n -- f ) {: b n -- f :}
+   n 0 ?DO  b I + ST[] y.ct @ T-STRUCT? IF -1 UNLOOP EXIT THEN  LOOP  0 ;
 
 \ Skip a function body at the TOKEN level -- no parse, so no string
 \ literal is allocated and no symbol is made. A dead function has to
@@ -874,14 +938,15 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
    THEN
    STN @ TO base   0 NLOC !
    PARAMS TO va TO n
-   va y y.va !   n va - y y.nfix !
+   va y y.va !   n va - y y.nfix !   PWORDS @ y y.nfixw !
    base n va - PSIG TO pq TO pt
    \ Recorded from the PROTOTYPE as well as the definition: a variadic
    \ call site needs __c4cc_make_va, and a unit that only declares it --
    \ every C4IX module does -- still calls it.
    a u S" __c4cc_make_va" NAME=? IF y VA-MAKE ! THEN
-   TK Semi = IF                              \ a prototype and nothing more
-      TNEXT
+   TK Semi = TK Comma = OR IF                \ a prototype and nothing more
+      \ `void A(void), B(void);`: the comma is DECL's, for the next one
+      TK Semi = IF TNEXT ELSE 1 PROTO-MORE ! THEN
       \ a definition's signature wins over a prototype's, as in c4lc
       y y.pt @ 0= IF y rq pt pq SIG! THEN
       COLLECT @ IF a u ct va PROTO, THEN
@@ -929,6 +994,7 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
    \ its operand is patched afterwards rather than guessed at up front.
    \ OP2, lays down [op][operand], so the operand is the next word.
    CHERE TO entp
+   0 TCUR !  0 TMAX !
    NLOC @ oENT OP2,
    \ A function whose address is taken must not be spliced INTO: C4KE
    \ reads its ENT operand and jumps past it, so the frame that operand
@@ -940,7 +1006,7 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
    body STMT
    ULAB-CHECK
    inlsv INLINING !
-   NLOC @ entp 1+ CELLS CODE @ + !
+   NLOC @ TMAX @ +  entp 1+ CELLS CODE @ + !
    \ return emits its own LEV, so a function ending in one gets one LEV
    \ -- unless a branch lands here, in which case the LEV that is here
    \ belongs to the arm that took it and the other arm needs its own.
@@ -961,6 +1027,7 @@ CREATE CVAL CVMAX CELLS ALLOT   VARIABLE CVN   0 CVN !
    a u ATK? 0= AND
    a u S" main" NAME=? 0= AND
    TP @ bodytp - INLMAX @ <= AND
+   base n va - STRUCT-PARAMS? 0= AND
    sn 0> AND
    FN-LABELS @ 0= AND                   \ a label spliced twice is placed twice
    FN-STATICS @ 0= AND                  \ a splice would retarget their records
@@ -1232,6 +1299,7 @@ DEFER AGG-FILL ( ety cnt off v i -- i' )
 \ one object of element type ETY (an array of CNT, or -1 for none) at
 \ OFF, from the node at I in V
 : (AGG-FILL) ( ety cnt off v i -- i' ) {: et c o v i | nd k -- i :}
+   c 0< et T-ROW? AND IF  et ROW-ELEM et ROW-COUNT o v i AGG-FILL EXIT THEN
    i v V@ TO nd   nd @ TO k
    c 0< et T-STRUCT? 0= AND IF  et o nd AGG-UNWRAP AGG-SCALAR  i 1+ EXIT THEN
    k 3 = IF  et c o nd CELL+ @ 0 -1 AGG-LIST DROP  i 1+ EXIT THEN
@@ -1247,14 +1315,20 @@ DEFER AGG-FILL ( ety cnt off v i -- i' )
 : ALL-NUMS? ( node -- f ) {: nd | v f -- f :}
    nd CELL+ @ TO v   -1 TO f
    v V# 0 ?DO I v V@ @ IF 0 TO f THEN LOOP f ;
+\ how many elements of type ET a brace list fills: a flat list of numbers
+\ for an array of rows fills rows (c4lc-parse's p:initsize)
+: ROWS-COUNT ( et node -- n ) {: et ai | k -- n :}
+   et T-ROW? ai ALL-NUMS? AND IF
+      et T-SCALARS TO k   ai CELL+ @ V# k 1- + k / EXIT THEN
+   ai AGG-COUNT ;
 : (LOCAL-BRACES) ( ag na -- ai iv ivn na' ) {: ag na | ai lv iv ivn -- ai iv ivn na :}
    1 LOCAL-INIT !  INIT-BRACES TO ai  0 LOCAL-INIT !
-   ag IF ai ALL-NUMS? IF
+   ag LB-ELEM @ T-ROW? 0= AND IF ai ALL-NUMS? IF
       ai CELL+ @ TO lv   lv V# TO ivn   ivn 1 MAX CELLS ALLOT: TO iv
       ivn 0 ?DO I lv V@ CELL+ @ iv I CELLS + ! LOOP
       na 0< IF ivn TO na THEN
       0 iv ivn na EXIT THEN THEN
-   ag na 0< AND IF ai AGG-COUNT TO na THEN
+   ag na 0< AND IF LB-ELEM @ ai ROWS-COUNT TO na THEN
    ai 0 0 na ;
 ' (LOCAL-BRACES) IS LOCAL-BRACES
 \ ... and its stores, walked as c4lc-gen's g:localaggr walks it
@@ -1262,23 +1336,28 @@ DEFER AGG-FILL ( ety cnt off v i -- i' )
    16 NEW-VEC LREC !  2 AMODE !  0 SWAP AGG-TOP  0 AMODE !  LREC @ ;
 ' (LOCAL-RECS) IS LOCAL-RECS
 
-: DECL {: | a u ct dt t n sz ag sc at y ivn off es fa fu fr fs fx fk bq q ce fn ai sa su aet acn gy -- :}
+: DECL {: | a u ct dt t n sz ag sc at y ivn off es fa fu fr fs fx fk bq q ce fn ai sa su aet acn gy pm sbr -- :}
    STORAGE TO sc
    TYPE? 0= IF ." c4fc: a declaration was expected" CR ABORT THEN
    BASE-TYPE TO ct   BQ @ TO bq
    ATTRS TO at
    TK Semi = IF TNEXT EXIT THEN         \ a struct definition and nothing more
    BEGIN
-      bq DQ !  ct STARS TO dt   DQ @ TO q
+      bq DQ !  ct STARS TO dt   DQ @ TO q   0 TO pm
       FNPTR? IF
          FNPTR-DECL TO fn TO u TO a   t_int TO dt   0 TO q
          a 0= IF ." c4fc: bad global declaration" CR ABORT THEN
       ELSE
          TV TO a  TL TO u  Id WANT   -2 TO fn
          ST-MANGLE @ 0= IF
-            TK Lparen = IF a u dt sc 0 MAX at q FUNCTION EXIT THEN
+            TK Lparen = IF
+               a u dt sc 0 MAX at q FUNCTION
+               PROTO-MORE @ 0= IF EXIT THEN
+               0 PROTO-MORE !  1 TO pm
+            THEN
          THEN
       THEN
+      pm 0= IF
       ST-MANGLE @ IF
          TK Lparen = IF ." c4fc: a static local must be a variable" CR ABORT THEN
          a u MANGLE TO u TO a
@@ -1288,16 +1367,18 @@ DEFER AGG-FILL ( ety cnt off v i -- i' )
          fn -2 = IF
             TNEXT
             TK Rbrak = IF 0 TO n ELSE CONST-EXPR TO n THEN
-            Rbrak WANT
+            Rbrak WANT   dt MORE-DIMS DUP TO dt TO es
          ELSE fn TO n THEN
          dt 2 + TO t   1 TO ag   q 2 LSHIFT TO q
       ELSE
          dt T-STRUCT? IF dt T-SIZE TO sz  1 TO ag THEN
       THEN
       \ the initialiser, if there is one
-      -1 TO fr   -1 TO fs   0 TO ai   0 TO gy
+      -1 TO fr   -1 TO fs   0 TO ai   0 TO gy   0 TO sbr
       TK Assign = IF
          TNEXT
+         \ a scalar's string in braces, `char *s = { "..." };`: the string
+         ag 0=  TK Lbrace = AND  TP @ 1+ TOKS V@ t.kind @ Str = AND IF TNEXT 1 TO sbr THEN
          ag TK Lbrace = AND IF INIT-BRACES TO ai ELSE   \ an array's or a struct's
          TK And = IF                              \ int *fp = &fn;  int *p = &x;
             TNEXT  TV TO fa  TL TO fu  Id WANT
@@ -1329,10 +1410,11 @@ DEFER AGG-FILL ( ety cnt off v i -- i' )
          ELSE
             CONST-EXPR IVAL !  1 TO ivn  1 TO ce
          THEN THEN THEN THEN THEN
+         sbr IF  TK Comma = IF TNEXT THEN  Rbrace WANT  THEN
          ai IF
             \ M7b: the strings the pointers take first, then the storage,
             \ then every value at its offset (c4lc-gen's g:globalaggr)
-            t dt <> IF  n 1 < IF ai AGG-COUNT TO n THEN  es TO aet  n TO acn  n es T-SIZE * TO sz
+            t dt <> IF  n 1 < IF es ai ROWS-COUNT TO n THEN  es TO aet  n TO acn  n es T-SIZE * TO sz
             ELSE dt TO aet  -1 TO acn  dt T-SIZE TO sz THEN
             0 AMODE !  0 SQN !   aet acn 0 ai AGG-TOP
             sz ID-ALLOT TO off
@@ -1420,6 +1502,7 @@ DEFER AGG-FILL ( ety cnt off v i -- i' )
             THEN
          THEN
       THEN
+      THEN                              \ pm: a prototype, nothing more to do
       TK Comma = WHILE TNEXT
    REPEAT
    Semi WANT ;
@@ -1471,7 +1554,10 @@ DEFER AGG-FILL ( ety cnt off v i -- i' )
 ' DECL IS DECL-D
 
 : PROGRAM
-   BEGIN TK Eof <> WHILE DECL REPEAT
+   0 PACK-NOW !
+   BEGIN TK Eof <> WHILE
+      TK Pack = IF TV PACK-NOW ! TNEXT ELSE DECL THEN   \ a #pragma pack line
+   REPEAT
    EMIT-HELPERS                         \ M4: after the last function, as c4lc
    FIX-FORWARDS
    PLACE-GLOBALS

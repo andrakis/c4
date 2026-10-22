@@ -68,6 +68,9 @@ KIND: NumU   KIND: NumUL
 \ parameter list can tell `(void)` from `(char)`. The parser takes Void
 \ wherever it takes Char. Appended, like the M4 kinds.
 KIND: Void
+\ M9: what a #pragma pack line leaves for the parser, its t.val the
+\ packing in force (pp.f's D-PRAGMA). Appended, like the others.
+KIND: Pack
 
 \ -- the keyword table --------------------------------------------------
 \   KEYWORD <text> <kind>       one row per C keyword

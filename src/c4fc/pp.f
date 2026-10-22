@@ -502,6 +502,36 @@ VARIABLE #DIR   0 #DIR !
 : PP-EVALIF ( v -- f )
    EXPANDV ETOKS !  0 EPOS !  E-EXPR 0<> ;
 : D-NOP ( v -- )  DROP ;
+
+\ #pragma pack(n), pack(), pack(push[, n]) and pack(pop), as gcc takes
+\ them (M9). The parser lays structs out, so the value in force goes to
+\ it as a Pack token where the line was; push and pop are settled here,
+\ as c4lc-pp's pp:pragma does. Every other pragma is dropped.
+VARIABLE PP-PACK   0 PP-PACK !
+64 CONSTANT PACKS-MAX
+CREATE PACKS PACKS-MAX CELLS ALLOT   VARIABLE #PACKS   0 #PACKS !
+: PACK-ARG? ( t -- f )  t.kind @ DUP Id = SWAP NUMK? OR ;
+: D-PRAGMA ( v -- ) {: v | t n a0 a1 q -- :}
+   0 TO n
+   v V# 0= IF EXIT THEN
+   0 v V@ TO t
+   t t.kind @ Id <> IF EXIT THEN
+   t PP-SPELL S" pack" BYTES2= 0= IF EXIT THEN
+   v V# 1 ?DO
+      I v V@ DUP PACK-ARG? IF
+         n 0= IF TO a0 ELSE n 1 = IF TO a1 ELSE DROP THEN THEN  n 1+ TO n
+      ELSE DROP THEN
+   LOOP
+   n 0= IF 0 PP-PACK ! ELSE
+   a0 PP-SPELL S" push" BYTES2= IF
+      #PACKS @ PACKS-MAX >= IF ." c4fc: #pragma pack nested too deep" CR ABORT THEN
+      PP-PACK @ #PACKS @ CELLS PACKS + !  1 #PACKS +!
+      n 1 > IF a1 t.val @ PP-PACK ! THEN
+   ELSE a0 PP-SPELL S" pop" BYTES2= IF
+      #PACKS @ IF -1 #PACKS +!  #PACKS @ CELLS PACKS + @ ELSE 0 THEN PP-PACK !
+   ELSE a0 t.val @ PP-PACK ! THEN THEN THEN
+   t TOK-COPY TO q   Pack q t.kind !  PP-PACK @ q t.val !  0 q t.len !
+   q PP-EMIT ;
 : D-ERROR ( v -- )  DROP ." c4fc: #error" CR ABORT ;
 
 : D-IFDEF ( v -- ) {: v | c -- :}
@@ -666,7 +696,7 @@ CDIRECTIVE endif   D-ENDIF
 DIRECTIVE  define  D-DEFINE
 DIRECTIVE  undef   D-UNDEF
 DIRECTIVE  include D-INCLUDE
-DIRECTIVE  pragma  D-NOP
+DIRECTIVE  pragma  D-PRAGMA
 DIRECTIVE  line    D-NOP
 DIRECTIVE  warning D-NOP
 DIRECTIVE  error   D-ERROR
@@ -749,6 +779,7 @@ DIRECTIVE  error   D-ERROR
 \ c4cc. A gcc -E standing in for this passes it as -D (PREPROC_LC).
 : PP-RESET ( -- )
    MACROS 256 VEC-INIT  0 CDEPTH !  0 #INCL !  0 #PATHS !  0 SPLN !
+   0 PP-PACK !  0 #PACKS !
    S" __c4_inttypes__=1" PP-DEFINE ;
 
 : PP-FILE ( a u -- )                      \ preprocess that file into TOKS

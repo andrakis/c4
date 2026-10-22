@@ -855,6 +855,10 @@ $(C4DOS_IX_DISK): c4dos32.c4r dostar32.c4r cpp32.c4r c4cc32.c4r dosload32.c4r \
 	@# shell has something to run. c4ix-vfsload is what init spawns
 	@# before the shell, so without it C4IX boots to a bare tree.
 	@cp src/c4bb/images/disk/c4ix-*.c4r $(C4DOS_IX_DISK)/ 2>/dev/null || true
+	@# And the shared library they are linked against: every one of
+	@# them but hello names /lib/libc4ix.c4s, which the loader links at
+	@# spawn, so without it init cannot even start the shell.
+	@cp src/c4bb/images/disk/c4ix-libc4ix.c4s $(C4DOS_IX_DISK)/ 2>/dev/null || true
 	@cp $(SRCS)/c4bb/fs/c4ix-climb.vfs.txt $(C4DOS_IX_DISK)/c4ix.vfs.txt
 	@# vfsload is what gives a booted C4KE a source tree rather than a
 	@# bare root. It needs c4lc (real block scoping, not c4cc's), so it

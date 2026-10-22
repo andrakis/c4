@@ -110,7 +110,7 @@ used when the machine has one.
 - **Bit for bit.** The FPU's answers are the software's, NaNs and
   conversions included, so nothing can tell the two paths apart but the
   clock:
-  - native c4m and c4mpg run softfp.c itself, compiled by gcc
+  - native c4m, c4mpg and c4mp run softfp.c itself, compiled by gcc
     (c4m_float.c), rather than the host's float -- c4m32's x87 would
     round twice;
   - libjs and the c4bb sim share `src/c4bb/sim/fpu.js`: the host's IEEE
@@ -119,9 +119,9 @@ used when the machine has one.
     and softfp's integer conversions written out;
   - a c4m built for the c4 VM by c4lc (`/bin/c4m` in C4IX) lends the FPU
     of the machine under it through `__c4_fpu`; built by c4cc, it has
-    none.
+    none. c4mp.c4r does the same.
 - **Off switches**, for the software path and for timing: `c4m -F`,
-  `node libjs/cli.js --no-fpu`, `?fpu=0` on the page.
+  `c4mp -F`, `node libjs/cli.js --no-fpu`, `?fpu=0` on the page.
 - **FLT** (60, the old binary32-only opcode) is fixed while here: FTOI
   returns an integer, not a float's bits, and 64-bit c4m no longer leaves
   garbage in a result's upper half.

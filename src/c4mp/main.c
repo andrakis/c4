@@ -35,6 +35,7 @@ static void usage() {
     printf("  -p KB    stack size per CPU in KB (default %d)\n", C4MP_STACK_SZ / 1024);
     printf("  -q N     instructions per slice (default %d with -cpus, otherwise unbroken)\n", C4MP_QUANTUM);
     printf("  -cpus N  number of processors (default 1)\n");
+    printf("  -F       no FPU: opcode 89 traps, C4I_FPU is clear\n");
     printf("  --       end of options\n");
 }
 
@@ -67,6 +68,7 @@ int main(int argc, char **argv) {
         if (opt == '-') { --argc; ++argv; break; }
         else if (opt == 'd') c4mp_debug = 1;
         else if (opt == 'v') verbose = 1;
+        else if (opt == 'F') c4mp_fpu = 0;
         else if (opt == 'q') {
             --argc; ++argv;
             if (argc <= 0) { printf("c4mp: -q needs a slice length\n"); return -1; }

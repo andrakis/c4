@@ -45,6 +45,7 @@ documents describe parts of it: [docs/fused-opcodes.md](../../docs/fused-opcodes
 | `-p KB` | Stack size per CPU in KB (default 256). |
 | `-q N` | Instructions per slice (default 1000 with `-cpus`, otherwise unbroken). |
 | `-cpus N` | Number of processors (default 1). |
+| `-F` | No FPU: clear `C4I_FPU` and trap opcode 89, as c4m's `-F` does. |
 | `--` | End of options. |
 
     ./c4mp src/tests/hello.c4r
@@ -132,11 +133,16 @@ each replacing a two- or three-instruction sequence. c4opt's `-mfuse` pass
 emits them. c4mp runs all ten; c4m runs `LDL`, `STL` and `POPA` and halts on
 the other seven. See [docs/fused-opcodes.md](../../docs/fused-opcodes.md).
 
-**FPU (89).** c4m runs it ([docs/c4-float.md](../../docs/c4-float.md)); c4mp
-names it and does not. `INFO` leaves `C4I_FPU` (0x10000) clear, so a c4lc
-image's float helpers take their software path, which is the same
-`src/c4fp/softfp.c` c4m's FPU runs natively: same bits, slower. An image
-that issues `FPU` anyway gets `TRAP_ILLOP`, as on c4m with `-F`.
+**FPU (89).** IEEE arithmetic ([docs/c4-float.md](../../docs/c4-float.md)),
+run as c4m runs it. Native, it calls `c4_fpu_instruction` in `c4m_float.c`,
+which is `src/c4fp/softfp.c` compiled for the host. Hosted, it passes the
+four operands to the host's own `__c4_fpu`; the double forms take pointers,
+and guest, c4mp and host share one address space. `INFO` reports `C4I_FPU`
+(0x10000) natively, and hosted only when the host does, so a c4lc image's
+float helpers use the opcode exactly when it will run. With `-F`, or on a
+host without one, the bit is clear, the helpers take their software path
+(same bits, slower), and an image that issues `FPU` anyway gets `TRAP_ILLOP`,
+as on c4m with `-F`.
 
 ## Test
 
@@ -191,7 +197,7 @@ it) and `make test-c4th`, and the host for c4or1k's `c4or1k-boot-mp`,
 | Host | Notes |
 |---|---|
 | Native `./c4mp` | Full: floats (`FLT`), signals, the host clock, termios for `TRAW`. |
-| c4m, via `c4mp.c4r` | SMP simulated inside c4m. `FLT` traps as an illegal opcode (the host's float call would need a host address). `TRAW` returns 0. `INFO` reports only what the host can do. Host signals are not forwarded to the guest. |
+| c4m, via `c4mp.c4r` | SMP simulated inside c4m. `FLT` traps as an illegal opcode (the host's float call would need a host address); `FPU` goes to the host's. `TRAW` returns 0. `INFO` reports only what the host can do. Host signals are not forwarded to the guest. |
 | c4mp, via `c4mp.c4r` | Works; the test suite nests it two deep. |
 
 Images are loaded only if their word size matches the machine, so the native
@@ -200,7 +206,6 @@ Images are loaded only if their word size matches the machine, so the native
 ## Limits and known issues
 
 - Pass 2 (real host threads, real atomics) does not exist; see above.
-- `FPU` (89) is not run; see above. Floats still work, in software.
 - `RALC` traps as an illegal opcode, as in c4m, where realloc has never been
   implemented.
 - `STRC` prints a frame walk without names; the loader discards the image's

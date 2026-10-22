@@ -435,7 +435,7 @@ own numbering is untouched and the numbers below hold.
 | 80–86 | `LDG PSHL PSHG LEAP IMMP LIP ADDL` | `c4lc -mfuse` | the compiler-shaped seven (docs/fused-opcodes.md) | **named only** in c4m, `bbb9ec3` 2026-08-24; executed by c4mp, oisc4, c4bb, libjs |
 | 87 | `STL` | `c4lc -mfuse`, c4th | `*(bp+n) = a` | `bbb9ec3` 2026-08-24 |
 | 88 | `POPA` | `c4lc -mfuse`, c4th | `a = *sp++` | `bbb9ec3` 2026-08-24 |
-| 89 | `FPU` | `__c4_fpu(r, b, a, op)` | IEEE single and double (F3, docs/c4-float.md): `sp[0]` the sub-op, `sp[1]` a, `sp[2]` b, `sp[3]` r; floats as bits, doubles by address. Announced by `C4I_FPU` (0x10000). c4m runs softfp.c compiled natively, libjs and the c4bb sim `src/c4bb/sim/fpu.js`; a c4m built for the VM by c4lc lends its host's; plain c4, c4cc builds, c4mp and oisc4 name it only and raise `TRAP_ILLOP` | F3 2026-10-22 |
+| 89 | `FPU` | `__c4_fpu(r, b, a, op)` | IEEE single and double (F3, docs/c4-float.md): `sp[0]` the sub-op, `sp[1]` a, `sp[2]` b, `sp[3]` r; floats as bits, doubles by address. Announced by `C4I_FPU` (0x10000). c4m and c4mp run softfp.c compiled natively, libjs and the c4bb sim `src/c4bb/sim/fpu.js`; a c4m or c4mp built for the VM by c4lc lends its host's; plain c4, c4cc builds and oisc4 name it only and raise `TRAP_ILLOP` | F3 2026-10-22 |
 
 A **named-only** opcode is one c4m knows the name of but does not
 execute. With no trap handler installed it halts with "*NAME* (opcode

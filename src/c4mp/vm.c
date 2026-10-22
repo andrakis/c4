@@ -37,6 +37,7 @@
 #include "c4mp.h"
 
 int c4mp_debug;
+int c4mp_fpu;
 
 // ---- raw terminal mode (TRAW opcode, M18) ---------------------------
 // c4or1k needs fd 0 in raw mode so a typed Ctrl+C is delivered to the
@@ -105,6 +106,7 @@ static int *signal_handlers;
 
 void c4_vm_init() {
     c4_tlev_word = TLEV;
+    c4mp_fpu = 1;
     c4_opcodes =
         "LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,"
         "OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,"
@@ -161,6 +163,16 @@ static int c4_opnum(char *name) {
     return -1;
 }
 
+// Whether FPU runs: c4m's has_fpu. Hosted, it is the host's FPU that
+// does the work, so the host has to have one.
+static int c4mp_has_fpu() {
+#ifdef __c4cc__
+    return c4mp_fpu && (__c4_info() & C4I_FPU) != 0;
+#else
+    return c4mp_fpu;
+#endif
+}
+
 static int c4mp_info() {
 #ifdef __c4cc__
     // Hosted: every timer, signal and float call below goes through
@@ -168,9 +180,10 @@ static int c4mp_info() {
     // what c4mp would like to claim. C4I_C4 propagates for the same
     // reason -- if the host is ultimately plain c4, so are we.
     return (__c4_info() & (C4I_C4 | C4I_HRT | C4I_SIG | C4I_FLT))
-           | C4I_C4M | C4I_PROT | C4I_SMP;
+           | C4I_C4M | C4I_PROT | C4I_SMP | (c4mp_has_fpu() ? C4I_FPU : 0);
 #else
-    return C4I_C4M | C4I_HRT | C4I_SIG | C4I_FLT | C4I_PROT | C4I_SMP;
+    return C4I_C4M | C4I_HRT | C4I_SIG | C4I_FLT | C4I_PROT | C4I_SMP
+           | (c4mp_has_fpu() ? C4I_FPU : 0);
 #endif
 }
 
@@ -619,6 +632,24 @@ int c4_run(struct c4_cpu * RESTRICT c, int quantum) {
             c4_trap(TRAP_ILLOP, FLT, traph, &sp, &bp, &pc, a, mode, ival);
 #else
             a = c4_float_instruction(sp);
+#endif
+            break;
+        case FPU:
+            // F3: __c4_fpu(r, b, a, op), so op is on top. Unguarded,
+            // as in c4m: it is arithmetic, and the double forms touch
+            // only memory the guest already addresses. Hosted, the
+            // operands go to the host's FPU as they are -- those
+            // pointers are host addresses too.
+            // Without one it is an illegal opcode like any other, and
+            // the handler runs privileged, as default: does below.
+            if (!c4mp_has_fpu()) {
+                c4_trap(TRAP_ILLOP, FPU, traph, &sp, &bp, &pc, a, mode, ival);
+                mode = MODE_UNPROTECTED;
+            } else
+#ifdef __c4cc__
+                a = __c4_fpu(sp[3], sp[2], sp[1], sp[0]);
+#else
+                a = c4_fpu_instruction(sp);
 #endif
             break;
 

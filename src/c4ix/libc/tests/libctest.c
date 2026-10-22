@@ -37,6 +37,7 @@ int main(int argc, char **argv) {
     printf("printf: [%x] [%X] [%#x] [%o] [%#o] [%u]\n", 255, 255, 255, 8, 8, 4000000000u);
     printf("printf: [%s] [%10s] [%-10s|] [%.3s] [%c%c]\n", "c4ix", "right", "left", "truncate", 'o', 'k');
     printf("printf: [%d] [%d] [%*d] [%.*s] [%%]\n", -2147483647 - 1, 0, 6, -7, 2, "precision");
+    printf("printf: [%p] [%12p] [%-8p|] [%012p] [%.6p] [%p]\n", (char *)0xabcd0000, (char *)0x1234, (char *)0x1234, (char *)0x1234, (char *)0x1234, (char *)0);
     n = snprintf(buf, 8, "%s-%d", "overflowing", 123);
     printf("snprintf: \"%s\" wanted %d\n", buf, n);
 

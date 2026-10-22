@@ -97,8 +97,11 @@ export function format(fmt, args, str) {
         break;
       }
       case 112: {                                        // p
+        // glibc's: %#x, so the 0 flag and a precision pad after the
+        // 0x, but (nil) for a null pointer
         const p = next() >>> 0;
-        body = p ? [48, 120, ...digits(p, 16, false, -1)] : enc('(nil)');
+        if (p) { prefix = [48, 120]; body = digits(p, 16, false, prec); numeric = true; }
+        else body = enc('(nil)');
         break;
       }
       case 102: case 70: case 101: case 69: case 103: case 71: {  // f F e E g G

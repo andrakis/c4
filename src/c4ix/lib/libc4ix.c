@@ -316,14 +316,15 @@ static void upadch(int c, int n) {
 
 // Digits of V in BASE, most significant first, into BUF; returns the
 // length. Base 16 is UNSIGNED -- C4 has no unsigned type, so the
-// shift is masked back to 60 bits rather than sign-extending.
+// shift's top nibble is masked off rather than sign-extending: 28 bits
+// of a word on a 32-bit machine, 60 on a 64-bit one.
 static int udigits(char *buf, int v, int base) {
     char tmp[72];
     char *ds;
     int n, i, mask;
 
     ds = "0123456789abcdef";
-    mask = (1 << 60) - 1;
+    mask = ~(15 << (sizeof(int) * 8 - 4));
     n = 0;
     if (!v) { tmp[0] = '0'; n = 1; }
     while (v) {
@@ -338,7 +339,8 @@ static int udigits(char *buf, int v, int base) {
 
 // Flags '-' and '0' ('+', ' ', '#' accepted and ignored), a width or
 // '*', a precision or '.*', the length modifiers l/ll/h/z (every
-// integer here is one machine word), and d i u x X c s %.
+// integer here is one machine word), and d i u x X c s p %. %p is
+// glibc's, as c4m's PRTF prints it: %#x of the pointer, or (nil).
 //
 // This is deliberately the SAME parser as the kernel's sys_vprintf,
 // which services printf for programs that never heard of C4IX. A
@@ -354,7 +356,7 @@ static int udigits(char *buf, int v, int base) {
 static int uformat(int fd, char *fmt, int *walk) {
     char num[80];
     char *s;
-    int n, c, v, width, prec, left, zero, len, neg, i, base, upper;
+    int n, c, v, width, prec, left, zero, len, neg, pre, i, base, upper;
 
     ufmt_fd = fd;
     n = 0;
@@ -411,7 +413,7 @@ static int uformat(int fd, char *fmt, int *walk) {
         }
 
         if (c != 'd' && c != 'i' && c != 'u' && c != 'x' && c != 'X'
-            && c != 'c' && c != 's') {
+            && c != 'c' && c != 's' && c != 'p') {
             uputb('%'); uputb(c); n = n + 2;
             continue;
         }
@@ -424,9 +426,13 @@ static int uformat(int fd, char *fmt, int *walk) {
             continue;
         }
 
-        if (c == 's') {
-            s = va_arg(walk, char *);
+        v = va_arg(walk, int);
+
+        // a null %p is a string, and its precision means nothing
+        if (c == 's' || (c == 'p' && !v)) {
+            s = (c == 's') ? (char *)v : "(nil)";
             if (!s) s = "(null)";
+            if (c == 'p') prec = -1;
             len = 0;
             while (s[len] && (prec < 0 || len < prec)) ++len;
             if (!left) { upadch(' ', width - len); if (width > len) n = n + width - len; }
@@ -436,11 +442,12 @@ static int uformat(int fd, char *fmt, int *walk) {
             continue;
         }
 
-        v = va_arg(walk, int);
+        // integers, and %p as %#x
         upper = (c == 'X');
-        base = (c == 'x' || c == 'X') ? 16 : 10;
+        base = (c == 'x' || c == 'X' || c == 'p') ? 16 : 10;
         neg = 0;
         if (base == 10 && v < 0) { neg = 1; v = -v; }
+        pre = neg ? 1 : (c == 'p') ? 2 : 0;     // the '-' or the 0x
         len = udigits(num, v, base);
         if (upper) {
             i = 0;
@@ -460,13 +467,14 @@ static int uformat(int fd, char *fmt, int *walk) {
                 ++len;
             }
         }
-        i = len + neg;
+        i = len + pre;
         if (!left && !zero) { upadch(' ', width - i); if (width > i) n = n + width - i; }
         if (neg) { uputb('-'); ++n; }
+        if (c == 'p') { uputb('0'); uputb('x'); n = n + 2; }
         if (!left && zero) { upadch('0', width - i); if (width > i) n = n + width - i; }
         i = 0;
         while (i < len) { uputb(num[i]); ++i; ++n; }
-        if (left) { upadch(' ', width - len - neg); if (width > len + neg) n = n + width - len - neg; }
+        if (left) { upadch(' ', width - len - pre); if (width > len + pre) n = n + width - len - pre; }
     }
     uflush();
     return n;

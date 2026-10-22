@@ -89,6 +89,15 @@ int main(int argc, char **argv) {
     uprintf("u|[%s][%8s][%-8s]\n", "hi", "hi", "hi");
     printf("p|[%s][%8s][%-8s]\n", "hi", "hi", "hi");
 
+    // %p as glibc prints it, which is what c4m's PRTF hands it to:
+    // %#x of the pointer -- unsigned, so an address above 0x80000000
+    // on a 32-bit machine -- or (nil). load-c4r.c's stack traces use it.
+    uprintf("u|[%p][%12p][%-12p]\n", (char *)0xabcd0000, (char *)0x1234, (char *)0x1234);
+    printf("p|[%p][%12p][%-12p]\n", (char *)0xabcd0000, (char *)0x1234, (char *)0x1234);
+
+    uprintf("u|[%012p][%.10p][%p][%7p]\n", (char *)0x1234, (char *)0x1234, (char *)0, (char *)0);
+    printf("p|[%012p][%.10p][%p][%7p]\n", (char *)0x1234, (char *)0x1234, (char *)0, (char *)0);
+
     // An unknown conversion prints verbatim and consumes NOTHING, so
     // the argument after it still lands where it should.
     uprintf("u|[%q][%d]\n", 9);

@@ -185,7 +185,26 @@ static int kputnum(int v, int base) {
     return n;
 }
 
-// %d %x %s %c %%. Anything else prints verbatim. Returns characters
+// A pointer, as glibc's %p prints it and c4m's PRTF with it: 0x and
+// its hex digits, unsigned, or (nil). The shift's top nibble is masked
+// off so a pointer above 0x80000000 does not sign-extend forever.
+static int kputptr(int v) {
+    char buf[24];
+    char *digits;
+    int i, n, mask;
+
+    if (!v) return kputs("(nil)");
+    digits = "0123456789abcdef";
+    mask = ~(15 << (sizeof(int) * 8 - 4));
+    i = 0;
+    while (v) { buf[i] = digits[v & 15]; ++i; v = (v >> 4) & mask; }
+    con_out('0'); con_out('x');
+    n = i + 2;
+    while (i) { --i; con_out(buf[i]); }
+    return n;
+}
+
+// %d %x %p %s %c %%. Anything else prints verbatim. Returns characters
 // written, printf-style.
 //
 // va_end must see ap exactly where va_start left it -- it re-reads
@@ -211,6 +230,7 @@ int kprintf(char *fmt, ...) {
             c = *fmt; ++fmt;
             if (c == 'd')      n = n + kputnum(va_arg(walk, int), 10);
             else if (c == 'x') n = n + kputnum(va_arg(walk, int), 16);
+            else if (c == 'p') n = n + kputptr(va_arg(walk, int));
             else if (c == 's') n = n + kputs(va_arg(walk, char *));
             else if (c == 'c') { con_out(va_arg(walk, int)); ++n; }
             else if (c == '%') { con_out('%'); ++n; }

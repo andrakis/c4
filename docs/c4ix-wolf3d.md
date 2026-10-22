@@ -2,8 +2,9 @@
 
 id Software's Wolfenstein 3D runs in a C4IX desktop window. It is
 Wolf4SDL's C, compiled by c4lc against C4IX's libc. Go > Wolfenstein 3D
-starts it, as does `wolf3d` at a shell prompt. The source, and what was
-changed in it, is [src/wolf3d](../src/wolf3d/README.md).
+starts it, as does `wolf3d` at a shell prompt. All of it works: the
+display, the keyboard, the music and sounds, and the game. The source,
+and what was changed in it, is [src/wolf3d](../src/wolf3d/README.md).
 
 ## Playing
 
@@ -19,8 +20,10 @@ The keys are the original's:
 | 1-4 | knife, pistol, machine gun, chain gun |
 | Esc | the menu |
 
-The game runs in a Terminal window, which it makes its canvas. Ctrl-C
-there stops it, as it stops any program.
+The game is played from the keyboard; the original's mouse control is
+not wired up yet (`plat.h` passes key events only). It runs in a Terminal
+window, which it makes its canvas. Ctrl-C there stops it, as it stops any
+program.
 
 The music, the AdLib effects and the digitized sounds play through
 libjs's sound card. In the browser they start with the first key or click,

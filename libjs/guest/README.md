@@ -26,8 +26,8 @@ c4lc can `#include` it; `src/c4ix/user/gui.c` and the C4IX desktop
 in the subset both compilers accept: locals at the top of each function,
 literal enum values.
 
-Run the demos at http://localhost:8472/libjs/web/?system=gui-demo or
-`?system=fb-demo` after `make serve-libjs`.
+Run the demos at http://localhost:8472/libjs/web/?system=gui-demo,
+`?system=fb-demo` or `?system=snd-demo` after `make serve-libjs`.
 
 ## The contract
 

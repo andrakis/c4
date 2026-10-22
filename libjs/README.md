@@ -2,8 +2,9 @@
 
 A direct interpreter for the c4m virtual machine, written the way `c4m.c`'s
 dispatch loop is: one `switch` over an `Int32Array`. It boots the 32-bit
-C4KE and C4IX images in Node or in a browser Web Worker, with a terminal and
-a display device that a guest program draws into.
+C4KE and C4IX images in Node or in a browser Web Worker, with a terminal, a
+display device that a guest program draws into, and a sound card (an AdLib
+OPL, eight channels of 8-bit samples and the PC speaker).
 
 It shares its memory map, device registers, `.c4r` loader, disk controller,
 keyboard, clocks and mailbox with the c4bb breadboard computer
@@ -23,7 +24,7 @@ builds:
 
 From the repo root:
 
-    node libjs/cli.js [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [-hz MHz] [--fast] [--mbox BYTES] program.c4r [args...]
+    node libjs/cli.js [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [-hz MHz] [--fast] [--mbox BYTES] [--wav FILE] program.c4r [args...]
 
 | Flag | Meaning |
 |---|---|
@@ -36,6 +37,7 @@ From the repo root:
 | `-hz MHz` | How fast the machine claims to be (default 20). |
 | `--fast` | Interactive runs go as fast as the host can instead of pacing to the clock. |
 | `--mbox N` | Fit a mailbox of N bytes (c4bb's `MBOX_*` registers). |
+| `--wav FILE` | Fit a sound card and write what it played to FILE, 44.1 kHz 16-bit stereo, on the machine's own clock, so the same session makes the same file. Without it there is no card and programs run silent. |
 
 The flags are c4bb's `cli.js` flags, so a test can swap one runner for the
 other. Examples:
@@ -52,14 +54,16 @@ then open http://localhost:8472/libjs/web/. The server serves the repo root,
 because the Worker imports `src/c4bb/sim/` and the page loads images from
 `src/c4bb/images/`. `--isolate` adds the COOP/COEP headers, which make the
 page cross-origin isolated so the display can use shared memory
-(`shared.js`); without them it falls back to posting messages.
+(`shared.js`); without them it falls back to posting messages. The page
+always has the sound card; a browser lets it play only after the first key
+or click.
 `LIBJS_PORT=NNNN` moves it.
 
 URL parameters (from `web/app.js`):
 
 | Parameter | Meaning |
 |---|---|
-| `?system=c4ix\|c4ke\|gui-demo\|fb-demo\|raycast` | Which machine to boot (default `c4ix`). The last three are bare programs on the display. |
+| `?system=c4ix\|c4ke\|gui-demo\|fb-demo\|snd-demo\|raycast` | Which machine to boot (default `c4ix`). The last four are bare programs on the display or the sound card. |
 | `?image=URL&disk=URL` | Any other image and disk. |
 | `?mhz=N` | Paced speed (default 100). |
 | `?fast` | Unpaced. |
@@ -83,12 +87,15 @@ Neither is in `make test`.
 | File | What it is |
 |---|---|
 | `c4m.js` | `Machine`, the interpreter: registers, the dispatch loop, traps, syscalls. No DOM, no Node. |
-| `bus.js` | Addresses below 0x1000: 0x100–0x1FF go to c4bb's `Devices`, 0x400 up to the display. |
+| `bus.js` | Addresses below 0x1000: 0x100–0x1FF go to c4bb's `Devices`, 0x400–0x47F to the display, 0x480–0x4FF to the sound card. |
 | `heap.js` | The host-side allocator behind MALC/FREE/RALC, with a size side table as native c4m keeps. |
 | `printf.js` | PRTF: glibc's format rules over 32-bit words. |
 | `boot.js` | Builds the machine, loads an image with c4bb's loader, and starts `main` through a c4mp-style trampoline. |
 | `gui-device.js` | The display registers and its two rings (c4bb's mailbox format), host side. |
 | `shared.js` | The display's SharedArrayBuffer path, used when the page is cross-origin isolated. |
+| `snd-device.js` | The sound card's registers: each write becomes an event with a time on it. |
+| `snd-mix.js`, `snd-worklet.js` | The mixer that turns those events into samples, in the page's AudioWorklet or for `cli.js --wav`. |
+| `opl.js`, `opl-tables.js` | The AdLib's OPL2/OPL3: DOSBox's dbopl, ported line by line (GPL v2 or later). |
 | `keys.js` | What a keypress means to the machine, cooked or raw. Copied from `src/c4bb/web/app.js`, which cannot be imported. |
 | `worker.js` | The Web Worker: arena, devices, machine, run loop, messages. |
 | `page.js` | The main-thread API, `C4M.boot(...)`. |
@@ -96,7 +103,7 @@ Neither is in `make test`.
 | `cli.js` | The Node runner. |
 | `serve.mjs` | A static server for the repo root, with optional COOP/COEP headers. |
 | `web/` | The page: terminal on the left, display on the right. |
-| [guest/](guest/README.md) | `gui.h`, the display API for guest C, and two demos. |
+| [guest/](guest/README.md) | `gui.h` and `snd.h`, the display and sound card APIs for guest C, and their demos. |
 | `tests/` | `test-libjs.sh`, the unit tests, the CDP gate (`cdp.mjs`, `test-web.mjs`, `test-web-gui.mjs`), and `src/strc.c`. |
 | `package.json` | Marks the directory as ES modules. |
 

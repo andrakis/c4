@@ -8,7 +8,7 @@ where its own README and design doc are. The top-level
 - [Machines](#machines): [c4m](#c4m-and-its-loaders), [c4mpg](#c4mpg), [c4mp](#c4mp), [oisc4](#oisc4), [c4bb](#c4bb), [libjs](#libjs), [c4or1k](#c4or1k)
 - [Operating systems](#operating-systems): [C4KE](#c4ke), [C4IX](#c4ix), [C4DOS](#c4dos)
 - [Toolchain](#toolchain): [c4cc and `.c4r`](#c4cc-and-the-c4r-format), [cpp](#cpp), [c4sp and c4lc](#c4sp-and-c4lc), [c4sc](#c4sc), [c4fp](#c4fp), [c4th](#c4th), [c4fc](#c4fc)
-- [Libraries and programs](#libraries-and-programs): [c4sh](#c4sh), [c4tui](#c4tui), [include/](#include), [tests and benchmarks](#tests-and-benchmarks)
+- [Libraries and programs](#libraries-and-programs): [c4sh](#c4sh), [c4tui](#c4tui), [wolf3d](#wolf3d), [include/](#include), [tests and benchmarks](#tests-and-benchmarks)
 - [Shelved](#shelved): [c4lm](#c4lm), [c4gpu](#c4gpu)
 - [Who compiles whom](#who-compiles-whom)
 
@@ -372,6 +372,22 @@ per frame.
 **Test:** `make test-c4tui`.
 
 **Docs:** [docs/c4tui-design.md](../docs/c4tui-design.md).
+
+### wolf3d
+
+**Folder:** [wolf3d/](wolf3d/).
+
+Wolfenstein 3D (Wolf4SDL) compiled by c4lc for C4IX's libc, played in a
+desktop window with its music and sounds through libjs's sound card. The
+shareware zip ships unmodified on the disk and is unpacked on the first
+run. Keyboard only, for now.
+
+**Build:** `make wolf3d-objs` (`build-images.sh` links it onto the disk),
+`make wolf3d-host` (gcc).
+
+**Test:** `make test-wolf3d`.
+
+**Docs:** [docs/c4ix-wolf3d.md](../docs/c4ix-wolf3d.md).
 
 ### include
 

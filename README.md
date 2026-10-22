@@ -146,6 +146,7 @@ Components
 
 - [c4sh](src/c4sh/): C4KE's shell.
 - [c4tui](src/c4tui/): a character-cell UI library.
+- [wolf3d](src/wolf3d/): Wolfenstein 3D on C4IX, compiled by c4lc, with sound, in a desktop window.
 - [include/](include/): the headers every build shares, including `u0.h`, the C4KE user runtime.
 - [src/tests](src/tests/) and [src/bench](src/bench/): the test corpus and benchmarks.
 

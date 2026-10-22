@@ -67,7 +67,8 @@ check(got.length === 20 && got.every((f, i) => f.type === 356 + i && f.payload[0
 mb.send(0, []); dev.raiseMbox();
 check(runUntil(() => out.includes('mbecho: done, 22 frames'), 20e6), 'mbecho exited on the type-0 frame having echoed 22');
 dev.pushInput('mbpair.c4r\n');
-check(runUntil(() => out.includes('mbpair: got type 7 from pid'), 60e6), 'mbpair: the parent received the child\'s message');
+// the whole line: the check below reads it, and it may still be arriving
+check(runUntil(() => /mbpair: got type 7 from pid [^\n]*\n/.test(out), 60e6), 'mbpair: the parent received the child\'s message');
 const m = out.match(/mbpair: got type 7 from pid (\d+) \((\d+) words\): 10 20 30/);
 check(!!m && m[2] === '3', `message contents: ${m ? m[0] : out.split('\n').filter((l) => l.startsWith('mbpair')).join(' | ')}`);
 

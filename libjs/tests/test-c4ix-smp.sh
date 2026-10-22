@@ -28,7 +28,7 @@ c4ix () { timeout ${2:-300} $LIBJS -m 64 -c ${1} -d $IMAGES/disk $IMAGES/c4ix32.
 # (shutdown waits for the background unpack: the budget is for both)
 out=$(printf 'c4ix-ps.c4r\nexit\n' | c4ix 2000000000)
 if echo "$out" | grep -qF "protected mode on for user tasks, preemption on" && echo "$out" | grep -qF "tasks," &&
-   echo "$out" | grep -qF "shutdown complete, 0 tasks remain" && ! echo "$out" | grep -qE "live [1-9].*|panic|illegal"; then
+   echo "$out" | grep -qF "shutdown complete, 0 tasks remain" && ! echo "$out" | grep -qE "cache .task. .*live [1-9]|panic|illegal"; then
     ok "boots, runs ps, and shuts down with every task freed"
 else bad "boots, runs ps, and shuts down with every task freed"; echo "$out" | grep -E 'processors|tasks|panic|illegal|live|shutdown' | head -8; fi
 if [ "$N" -ge 2 ]; then

@@ -546,8 +546,9 @@ int sys_dispatch(int num, int *args) {
 // Supported: flags '-' and '0' (and '+', ' ', '#' accepted and
 // ignored), a width or '*', a precision or '.*', the length
 // modifiers l/ll/h/z (every integer here is one word), and the
-// conversions d i u x X c s %. libc4ix's uformat is the same parser
-// for userland -- keep the two in step.
+// conversions d i u x X c s p %. %p is glibc's, which is what c4m's
+// PRTF prints: %#x of the pointer, or (nil). libc4ix's uformat is the
+// same parser for userland -- keep the two in step.
 //
 // Output is buffered into one write: through the fd layer this may
 // be a pipe or a RAM file, and byte-at-a-time would be absurd.
@@ -576,14 +577,16 @@ static void pf_pad(int c, int n) {
 
 // Digits of V in BASE, most significant first, into BUF; returns the
 // length. Base 16 is treated as UNSIGNED: C4 has no unsigned type, so
-// the shift is masked back down to 60 bits rather than sign-extending.
+// the shift's top nibble is masked off rather than sign-extending --
+// 28 bits of a word on a 32-bit machine, 60 on a 64-bit one. (%p of a
+// pointer above 0x80000000 is the case that needs it.)
 static int pf_digits(char *buf, int v, int base) {
     char tmp[72];
     char *ds;
     int n, i, mask;
 
     ds = "0123456789abcdef";
-    mask = (1 << 60) - 1;
+    mask = ~(15 << (sizeof(int) * 8 - 4));
     n = 0;
     if (!v) { tmp[0] = '0'; n = 1; }
     while (v) {
@@ -599,7 +602,7 @@ static int pf_digits(char *buf, int v, int base) {
 static int sys_vprintf(int fd, char *fmt, int *argv, int argc) {
     char num[80];
     char *s;
-    int c, v, used, width, prec, left, zero, len, neg, i, base, upper;
+    int c, v, used, width, prec, left, zero, len, neg, pre, i, base, upper;
 
     pf_fd = fd;
     pf_n = 0;
@@ -663,7 +666,7 @@ static int sys_vprintf(int fd, char *fmt, int *argv, int argc) {
         // Anything unrecognised prints verbatim AND CONSUMES NOTHING,
         // which keeps the remaining arguments aligned.
         if (c != 'd' && c != 'i' && c != 'u' && c != 'x' && c != 'X'
-            && c != 'c' && c != 's') {
+            && c != 'c' && c != 's' && c != 'p') {
             pf_ch('%'); pf_ch(c);
             continue;
         }
@@ -677,9 +680,11 @@ static int sys_vprintf(int fd, char *fmt, int *argv, int argc) {
             continue;
         }
 
-        if (c == 's') {
-            s = (char *)v;
+        // a null %p is a string, and its precision means nothing
+        if (c == 's' || (c == 'p' && !v)) {
+            s = (c == 's') ? (char *)v : "(nil)";
             if (!s) s = "(null)";
+            if (c == 'p') prec = -1;
             len = 0;
             while (s[len] && (prec < 0 || len < prec)) ++len;
             if (!left) pf_pad(' ', width - len);
@@ -689,11 +694,12 @@ static int sys_vprintf(int fd, char *fmt, int *argv, int argc) {
             continue;
         }
 
-        // integers
+        // integers, and %p as %#x
         upper = (c == 'X');
-        base = (c == 'x' || c == 'X') ? 16 : 10;
+        base = (c == 'x' || c == 'X' || c == 'p') ? 16 : 10;
         neg = 0;
         if (base == 10 && v < 0) { neg = 1; v = -v; }
+        pre = neg ? 1 : (c == 'p') ? 2 : 0;     // the '-' or the 0x
         len = pf_digits(num, v, base);
         if (upper) {
             i = 0;
@@ -705,13 +711,14 @@ static int sys_vprintf(int fd, char *fmt, int *argv, int argc) {
         // an explicit precision is a minimum digit count, and it
         // overrides zero padding (C's rule)
         if (prec >= 0) { zero = 0; while (len < prec) { i = len; while (i) { num[i] = num[i - 1]; --i; } num[0] = '0'; ++len; } }
-        i = len + neg;
+        i = len + pre;
         if (!left && !zero) pf_pad(' ', width - i);
         if (neg) pf_ch('-');
+        if (c == 'p') { pf_ch('0'); pf_ch('x'); }
         if (!left && zero) pf_pad('0', width - i);
         i = 0;
         while (i < len) { pf_ch(num[i]); ++i; }
-        if (left) pf_pad(' ', width - len - neg);
+        if (left) pf_pad(' ', width - len - pre);
     }
 
     pf_flush();

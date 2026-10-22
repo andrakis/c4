@@ -329,7 +329,17 @@ static int fmt_core(struct sink *k, char *fmt, int *ap) {
         } else if (c == 'u') fmt_int(k, va_arg(ap, unsigned int), 0, 10, 0, left, zero, 0, 0, 0, width, prec);
         else if (c == 'x' || c == 'X') fmt_int(k, va_arg(ap, unsigned int), 0, 16, c == 'X', left, zero, 0, 0, alt, width, prec);
         else if (c == 'o') fmt_int(k, va_arg(ap, unsigned int), 0, 8, 0, left, zero, 0, 0, alt, width, prec);
-        else if (c == 'p') { sink_put(k, '0'); sink_put(k, 'x'); fmt_int(k, va_arg(ap, unsigned int), 0, 16, 0, left, zero, 0, 0, 0, width > 2 ? width - 2 : 0, prec); }
+        else if (c == 'p') {
+            // glibc's: %#x of the pointer, or (nil) -- what c4m's PRTF prints
+            v = va_arg(ap, int);
+            if (v) fmt_int(k, v, 0, 16, 0, left, zero, 0, 0, 1, width, prec);
+            else {
+                s = "(nil)";
+                if (!left) sink_pad(k, ' ', width - 5);
+                while (*s) { sink_put(k, *s); ++s; }
+                if (left) sink_pad(k, ' ', width - 5);
+            }
+        }
         else if (c == 'c') {
             v = va_arg(ap, int);
             if (!left) sink_pad(k, ' ', width - 1);

@@ -92,6 +92,12 @@ VARIABLE DQ   0 DQ !
 : NAME=? ( a1 u1 a2 u2 -- f ) {: a u b v -- f :}
    u v <> IF 0 EXIT THEN  a b u BYTES= ;
 
+\ does a token of kind k start a type? (here for a cast in a constant)
+: KIND-TYPE? ( k -- f ) {: k -- f :}
+   k Int = k Char = OR k Void = OR k Struct = OR k Union = OR k Enum = OR
+   k Const = OR k Volatile = OR k Signed = OR k Unsigned = OR
+   k Short = OR k Long = OR ;
+
 \ -- constant expressions ------------------------------------------------
 \ enum bodies and initialisers need values, not code, and they need the
 \ same precedence the code path uses -- so this walks the same table and
@@ -130,6 +136,15 @@ DEFER CSIZEOF-UNARY ( -- n )
    TK Add    = IF TNEXT 13 CEXPR EXIT THEN
    TK Not    = IF TNEXT 13 CEXPR 0= 1 AND t_int CTY ! EXIT THEN
    TK Tilde  = IF TNEXT 13 CEXPR TO v  -1 t_int v CTY @ oXOR CAPPLY EXIT THEN
+   \ a cast (docs/ports-feasibility.md §8, step 4): the operand converted
+   \ as the generated code converts it, c4lc-parse's p:constcast. A
+   \ pointer type keeps the value.
+   TK Lparen =  TP @ 1+ TOKS V@ t.kind @ KIND-TYPE? AND IF
+      TNEXT PARSE-TYPE TO s  Rparen WANT
+      13 CEXPR TO v
+      s T-STRUCT? IF ." c4fc: " TOK@ .WHERE ." : a constant was expected" CR ABORT THEN
+      s T-ARITH? IF s CTY !  v s CONVVAL EXIT THEN
+      t_int CTY !  v EXIT THEN
    TK Lparen = IF TNEXT CONST-EXPR Rparen WANT EXIT THEN
    \ sizeof of a type, or of a string literal: its bytes and the NUL (M7b)
    TK Sizeof = IF TNEXT
@@ -221,6 +236,41 @@ CREATE SLI SAL-MAX CELLS ALLOT   VARIABLE SLN   0 SLN !   \ their STN indices
       I SLN @ CELLS SLI + !  1 SLN +!
    LOOP
    -1 FN-STATICS ! ;
+\ `extern int forwardmove[2];` and `void V_MarkRect(int, int, int, int);`
+\ in a block (docs/ports-feasibility.md §8, step 1): DECL declares them,
+\ and they are kept past the function's end with its static locals,
+\ which is where c4lc puts them (p:blockexterns). A prototype's FUNCTION
+\ starts a frame count of its own, so the block's is kept aside.
+: BLOCK-EXTERN ( -- ) {: | sb nl -- :}
+   STN @ TO sb   NLOC @ TO nl
+   DECL-D
+   nl NLOC !
+   STN @ sb ?DO
+      SLN @ SAL-MAX < 0= IF ." c4fc: too many static locals in one function" CR ABORT THEN
+      I SLN @ CELLS SLI + !  1 SLN +!
+   LOOP
+   -1 FN-STATICS ! ;
+\ does the declaration at hand declare a function, `T *name(...)`, before
+\ any initializer? Then it is a prototype line, BLOCK-EXTERN's. A line
+\ that declares a local beside one is refused: c4lc takes it, c4fc not yet.
+: PROTO-LINE? ( -- f ) {: | i k d init pr lo pk -- f :}
+   TP @ TO i   0 TO d   0 TO init   0 TO pr   0 TO lo   0 TO pk
+   BEGIN
+      k TO pk   i TOKS V@ t.kind @ TO k
+      k Eof = d 0= k Semi = AND OR IF
+         pr lo AND IF ." c4fc: a prototype and a local in one declaration" CR ABORT THEN
+         pr EXIT THEN
+      d 0= k Assign = AND IF -1 TO init THEN
+      d 0= k Comma = AND IF 0 TO init THEN
+      \ a struct's, a union's or an enum's tag names no declarator
+      d 0= init 0= AND k Id = AND  pk Struct = pk Union = OR pk Enum = OR 0= AND IF
+         i 1+ TOKS V@ t.kind @ Lparen = IF -1 TO pr ELSE -1 TO lo THEN THEN
+      \ a function pointer's name is a local's
+      d 0= init 0= AND k Lparen = AND IF i 1+ TOKS V@ t.kind @ Mul = IF -1 TO lo THEN THEN
+      k Lparen = k Brak = OR k Lbrace = OR IF d 1+ TO d THEN
+      k Rparen = k Rbrak = OR k Rbrace = OR IF d 1- TO d THEN
+      i 1+ TO i
+   AGAIN ;
 \ The function's scope ends at BASE, but its static locals' records live
 \ on, after whatever was at BASE: c4lc declares them just before the
 \ function, and among globals that is the same place.
@@ -268,10 +318,6 @@ CREATE SLI SAL-MAX CELLS ALLOT   VARIABLE SLN   0 SLN !   \ their STN indices
 
 DEFER EXPR                              \ ( lev -- node )
 
-: KIND-TYPE? ( k -- f ) {: k -- f :}
-   k Int = k Char = OR k Void = OR k Struct = OR k Union = OR k Enum = OR
-   k Const = OR k Volatile = OR k Signed = OR k Unsigned = OR
-   k Short = OR k Long = OR ;
 : TYPE? ( -- f )  TK KIND-TYPE? ;
 
 \ Members are laid out one cell at a time: c4lc gives a char member a
@@ -636,8 +682,9 @@ DEFER LOCAL-RECS ( ety cnt ai -- v )
 ' (CSIZEOF-UNARY) IS CSIZEOF-UNARY
 
 : LOCAL-DECLS ( v -- ) {: v | ct dt t a u sz ag na iv ivn y nd nn bq q fn ai -- :}
-   BEGIN TYPE? TK Static = OR WHILE
+   BEGIN TYPE? TK Static = OR TK Extern = OR WHILE
       TK Static = IF STATIC-DECL ELSE
+      TK Extern = PROTO-LINE? OR IF BLOCK-EXTERN ELSE
       BASE-TYPE TO ct   BQ @ TO bq
       BEGIN
          bq DQ !  ct STARS TO dt   DQ @ TO q
@@ -716,7 +763,7 @@ DEFER LOCAL-RECS ( ety cnt ai -- v )
          TK Comma = WHILE TNEXT
       REPEAT
       Semi WANT
-      THEN
+      THEN THEN
    REPEAT ;
 
 \ Every block takes declarations, not just a function's outermost one:
@@ -1134,13 +1181,65 @@ DEFER INIT-ITEM
    REPEAT
    Rbrace WANT
    3 v 0 0 INIT-NODE ;
+\ -- addresses in a global's brace list (docs/ports-feasibility.md §8,
+\ step 4), what c4lc-parse's p:foldinit folds: casts in front of a string,
+\ an address or a name, `&a[k]...` and a row `a[k]` of an array of
+\ arrays. The address is node kind 7, a name and a byte offset.
+: CAST-AT? ( i -- f )
+   DUP TOKS V@ t.kind @ Lparen =  SWAP 1+ TOKS V@ t.kind @ KIND-TYPE? AND ;
+: CAST-END ( i -- i' ) {: i | d k -- i :}       \ past a cast's )
+   0 TO d
+   BEGIN
+      i TOKS V@ t.kind @ TO k
+      k Lparen = IF d 1+ TO d THEN   k Rparen = IF d 1- TO d THEN
+      i 1+ TO i
+      d 0=  k Eof = OR
+   UNTIL i ;
+\ is token I a name no constant answers?
+: NONCONST-AT? ( i -- f ) {: i | t y -- f :}
+   i TOKS V@ TO t
+   t t.kind @ Id <> IF 0 EXIT THEN
+   t t.val @ t t.len @ ST-FIND TO y
+   y 0= IF -1 EXIT THEN
+   y y.class @ c_const = y y.cv @ OR 0= ;
+\ `[k]...` after global A U: the byte offset and what it ends on, which
+\ must be a row unless the element's address was asked for (AMP)
+: ADDR-INDEX ( a u amp -- node ) {: a u amp | y et off k -- n :}
+   a u ST-FIND TO y
+   y 0= IF ." c4fc: an initializer can name only a function or a global: " a u TYPE CR ABORT THEN
+   y y.class @ DUP c_glo = SWAP c_extg = OR  y y.agg @ 0<> AND 0= IF ." c4fc: initializer element is not a constant" CR ABORT THEN
+   y y.ct @ T-DEREF TO et   0 TO off   -1 TO k
+   BEGIN TK Brak = WHILE
+      k 0< 0= IF
+         et T-ROW? 0= IF ." c4fc: initializer element is not a constant" CR ABORT THEN
+         et ROW-ELEM TO et THEN
+      TNEXT CONST-EXPR TO k  Rbrak WANT
+      k et T-SIZE * off + TO off
+   REPEAT
+   amp 0= et T-ROW? 0= AND IF ." c4fc: initializer element is not a constant" CR ABORT THEN
+   7 a u off INIT-NODE ;
+: ADDR-LEAF ( -- node ) {: | a u amp -- n :}
+   BEGIN TP @ CAST-AT? WHILE TP @ CAST-END TP ! REPEAT
+   TK Str = IF STR-LIT TO u TO a  1 a u 0 INIT-NODE EXIT THEN
+   0 TO amp   TK And = IF TNEXT -1 TO amp THEN
+   TK Id <> IF ." c4fc: & initialiser requires a function name" CR ABORT THEN
+   TV TO a  TL TO u  TNEXT
+   TK Brak = IF a u amp ADDR-INDEX EXIT THEN
+   2 a u 0 INIT-NODE ;
+\ a leaf for ADDR-LEAF: casts and then a string, an &, or a name that is
+\ no constant; or a name that is no constant, indexed
+: ADDR-LEAF? ( -- f ) {: | i c k -- f :}
+   TP @ TO i   0 TO c
+   BEGIN i CAST-AT? WHILE i CAST-END TO i  -1 TO c REPEAT
+   i TOKS V@ t.kind @ TO k
+   c IF  k Str = k And = OR i NONCONST-AT? OR EXIT THEN
+   i NONCONST-AT? i 1+ TOKS V@ t.kind @ Brak = AND ;
 : INIT-LEAF ( -- node ) {: | a u -- n :}
    TK Lbrace = IF INIT-BRACES EXIT THEN
    LOCAL-INIT @ IF EXPR-LEAF? IF 6 1 EXPR 0 0 INIT-NODE EXIT THEN THEN
+   ADDR-LEAF? IF ADDR-LEAF EXIT THEN
    TK Str = IF STR-LIT TO u TO a  1 a u 0 INIT-NODE EXIT THEN
-   TK And = IF
-      TNEXT  TK Id <> IF ." c4fc: & initialiser requires a function name" CR ABORT THEN
-      TV TO a  TL TO u  TNEXT  2 a u 0 INIT-NODE EXIT THEN
+   TK And = IF ADDR-LEAF EXIT THEN
    INIT-NAME? IF TV TO a  TL TO u  TNEXT  2 a u 0 INIT-NODE EXIT THEN
    0 CONST-EXPR 0 0 INIT-NODE ;
 : (INIT-ITEM) ( -- node ) {: | c a u -- n :}
@@ -1159,6 +1258,11 @@ DEFER INIT-ITEM
 : GLOBAL-PAT ( slot y -- ) {: o y -- :}
    y y.class @ c_extg = IF o y y.val @ SYMPAT, EXIT THEN
    y y.ini @ IF o y y.val @ STRPAT, ELSE o y y.val @ GLOPAT, THEN ;
+\ ... plus an offset (step 4): it rides in the patch, and for extern data
+\ in the word itself, which c4rlink adds to the symbol's address
+: GLOBAL-PAT+ ( slot y off -- ) {: o y k -- :}
+   y y.class @ c_extg = IF  k IF k o ID-! THEN  o y GLOBAL-PAT EXIT THEN
+   k TAB-OFF !  o y GLOBAL-PAT ;
 : GLOBAL? ( y -- f )  y.class @ DUP c_glo = SWAP c_extg = OR ;
 \ a name in a scalar's initializer: -> fr fk gy, where fr is a function's
 \ code address (-1 none, -3 an extern's, then fk is its number) and gy a
@@ -1209,6 +1313,12 @@ VARIABLE LREC
       k 1 = IF  o t  nd CELL+ @ nd 2 CELLS + @ n_str N2  0 LREC,  EXIT THEN
       k 6 = IF  o t  nd CELL+ @  0 LREC,  EXIT THEN
       ." c4fc: unsupported initializer element" CR ABORT THEN
+   k 7 = IF
+      AMODE @ 0= IF EXIT THEN
+      nd CELL+ @ nd 2 CELLS + @ ST-FIND TO y
+      y 0= IF ." c4fc: an initializer can name only a function or a global: "
+         nd CELL+ @ nd 2 CELLS + @ TYPE CR ABORT THEN
+      o y nd 3 CELLS + @ GLOBAL-PAT+  EXIT THEN
    k 0 = IF AMODE @ IF nd CELL+ @ t o AGG-PUT THEN EXIT THEN
    k 1 = IF
       AMODE @ 0= IF nd CELL+ @ nd 2 CELLS + @ ID-STR, SQ,

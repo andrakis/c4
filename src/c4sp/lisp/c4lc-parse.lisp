@@ -620,6 +620,8 @@
 			(if (= 0 v) 1 0))
 	(if (p:numtok? (p:kind)) (p:numtok)
 	(if (= (p:kind) 'Sizeof) (p:constsizeof what)
+	(if (if (= (p:kind) 'Lparen) (p:declstart-tok? (head (tail p:toks))) false)
+		(p:constcast what)
 	(if (= (p:kind) 'Lparen)
 		(begin
 			(p:advance)
@@ -636,7 +638,23 @@
 				(if (= sc false) (p:die (+ what " must be an integer constant"))
 					(begin (p:advance) (set! p:ct (index sc 2)) (p:second sc)))
 				(begin (p:advance) (set! p:ct p:INT) ev)))
-	(p:die (+ what " must be an integer constant"))))))))))))
+	(p:die (+ what " must be an integer constant")))))))))))))
+
+;; a cast in a constant, `case (Uint32)KMOD_SHIFT << 16:` (step 4 of
+;; docs/ports-feasibility.md §8): the operand converted as the generated
+;; code converts it. A pointer type keeps the value, as the word it is.
+(define p:constcast (lambda (what)
+	(begin
+		(p:advance)
+		(define bt (p:basetype p:INT))
+		(define ty0 (p:stars bt p:bq))
+		(define ty (if (p:fnptr?) (begin (p:fnptrdecl) p:INT) ty0))
+		(p:expect 'Rparen ") after a cast")
+		(define v (p:constatom what))
+		(if (if (p:svalue? ty) true (if (= ty p:FLOAT) true (= ty p:DOUBLE)))
+			(p:die (+ what " must be an integer constant")) nil)
+		(set! p:ct (if (p:intty? ty) (if (= ty p:ULL) p:ULONG (if (= ty p:LL) p:INT ty)) p:INT))
+		(if (p:intty? ty) (p:convval v ty) v))))
 
 ;; one binary step: l (of type lt) op the next operand
 (define p:cstep (lambda (op l lt r)
@@ -1054,7 +1072,7 @@
 				(p:advance)
 				(list 'labeled ln (if (= (p:kind) 'Rbrace) '(empty) (p:stmt))))
 		(if (= k 'Typedef) (begin (p:typedefdecl) '(empty))
-		(if (if (p:declstart?) true (= k 'Static))
+		(if (if (p:declstart?) true (if (= k 'Static) true (= k 'Extern)))
 			(p:cons 'declstmt (p:localline))
 		(begin
 			(define e (p:fullexpr))
@@ -1300,6 +1318,7 @@
 		(if (= k 'Lbrace) (p:braceinit)
 		(if (p:lltok? k) (p:llnumtok)
 		(if (if p:inlocal (p:exprleaf?) false) (list 'expr (p:expr 1))
+		(if (if p:inlocal false (p:foldleaf?)) (p:foldinit)
 		(if (p:fptok? k) (p:fplit false)
 		(if (if (= k 'Sub) (p:fptok? (head (head (tail p:toks)))) false) (begin (p:advance) (p:fplit true))
 		(if (= k 'Str) (p:strlit)
@@ -1317,7 +1336,7 @@
 				(define fn (p:value))
 				(p:advance)
 				(list 'name fn))
-		(list 'num (p:const "initializer")))))))))))))
+		(list 'num (p:const "initializer"))))))))))))))
 ;; A local's brace list (M7b): as a global's, but a leaf that is no
 ;; constant is (expr E), which c4lc-gen's g:localaggr stores when the
 ;; declaration runs. A leaf is an expression when it starts with &, or
@@ -1531,7 +1550,8 @@
 ;; ---- local declarations ----
 
 ;; one "int|char decl, decl;" line; returns local nodes (order kept).
-;; A static line returns none: its globals are queued (p:statics).
+;; A static line returns none: its globals are queued (p:statics). So
+;; does an extern line, and a function's prototype among the locals.
 (define p:localline (lambda ()
 	(if (= (p:kind) 'Static)
 		(begin
@@ -1539,14 +1559,49 @@
 			(define sbt (p:basetype p:INT))
 			(p:statics sbt p:bq)
 			(list))
+	(if (= (p:kind) 'Extern)
+		(begin
+			(p:advance)
+			(define ebt (p:basetype p:INT))
+			(p:blockexterns ebt p:bq)
+			(list))
 	(begin
 		(define bt (p:basetype p:INT))
-		(next p:localline/2 bt p:bq (list))))))
+		(next p:localline/2 bt p:bq (list)))))))
+;; ---- declarations of globals inside a block ----
+;;
+;; `extern int forwardmove[2];` and `void V_MarkRect(int, int, int, int);`
+;; in a function body (Doom writes both) declare what the file scope
+;; declares: they go just before the function, as a static local's global
+;; does (p:hoist). A wider scope than C gives them is harmless -- they
+;; allocate nothing. c4fc's LOCAL-DECLS declares them in its file scope.
+(define p:blockexterns (lambda (bt bq)
+	(begin
+		(define d (p:declarator bt bq 16))
+		(if (= (head d) 'func) (p:die "a function cannot be defined inside a block") nil)
+		(set! p:pending (p:cons d p:pending))
+		(if (= (p:kind) 'Comma) (begin (p:advance) (next p:blockexterns bt bq))
+		(p:expect 'Semi "semicolon after an extern declaration")))))
 (define p:localline/2 (lambda (bt bq acc)
 	(if (= (p:kind) 'Semi)
 		(begin (p:advance) (p:reverse acc))
 	(begin
 		(define ty0 (p:stars bt bq))
+		(if (if (= (p:kind) 'Id) (= (head (head (tail p:toks))) 'Lparen) false)
+			(next p:localproto ty0 bt bq acc)
+			(next p:localline/3 ty0 bt bq acc))))))
+;; a prototype among the locals, `T name(params);`: queued as
+;; p:blockexterns queues one
+(define p:localproto (lambda (ty bt bq acc)
+	(begin
+		(define pq p:sq)
+		(define pn (p:value))
+		(p:advance)
+		(set! p:pending (p:cons (p:function ty pn 0 pq) p:pending))
+		(if (= (p:kind) 'Comma) (p:advance) nil)
+		(next p:localline/2 bt bq acc))))
+(define p:localline/3 (lambda (ty0 bt bq acc)
+	(begin
 		(define fp (if (p:fnptr?) (p:fnptrdecl) false))
 		(define ty (if fp p:INT ty0))
 		(define q (if fp 0 p:sq))
@@ -1577,7 +1632,7 @@
 		(set! p:locals (p:cons n p:locals))
 		(if (= (p:kind) 'Comma) (p:advance) nil)
 		(next p:localline/2 bt bq
-			(p:cons (p:qnode (list 'local ty2 n fsize init) q2) acc))))))
+			(p:cons (p:qnode (list 'local ty2 n fsize init) q2) acc)))))
 
 ;; a scalar local's initializer in braces, `= { E }` (C allows them, and
 ;; a trailing comma): the expression alone
@@ -1606,7 +1661,7 @@
 (define p:localdecls (lambda (acc)
 	(if (= (p:kind) 'Typedef)
 		(begin (p:typedefdecl) (next p:localdecls acc))
-	(if (if (p:declstart?) true (= (p:kind) 'Static))
+	(if (if (p:declstart?) true (if (= (p:kind) 'Static) true (= (p:kind) 'Extern)))
 		(next p:localdecls (+ acc (p:localline)))
 	(p:cons 'locals acc)))))
 
@@ -1699,6 +1754,8 @@
 		(define elem ty)
 		(define ty2 (if (= size nil) ty (+ ty p:PTR)))
 		(define a2 (if (= size nil) attr (+ attr 64)))
+		;; the global its own initializer may name: &S_sfx[sfx_pistol]
+		(set! p:curgv (list n ty2 size))
 		(define init0
 			(if (= (p:kind) 'Assign)
 				(begin
@@ -1709,6 +1766,7 @@
 							nil)
 					(p:init)))
 			nil))
+		(set! p:curgv false)
 		;; a scalar's initializer may be in braces
 		(define init (if (if (= size nil) (not (p:svalue? ty)) false) (p:unbrace init0) init0))
 		;; `extern T x[];` (M7b): a declaration, sized where x is defined
@@ -1741,7 +1799,7 @@
 ;; Nothing can tell, short of another constructor reading the global first.
 (define p:dyninits nil)   ;; ((NAME EXPR TYPE) ...), the last first
 ;; is the initializer at hand one that p:init cannot take? Not when it is
-;; a string, &NAME, a NAME alone, a float literal alone, or a constant
+;; a string, &NAME alone, a NAME alone, a float literal alone, or a constant
 ;; expression -- one with no string, float, &, type name or name that is
 ;; no constant up to the next , or ; (a sizeof's operand aside: c4lc-
 ;; parse's p:constsizeof answers sizeof of a global)
@@ -1751,7 +1809,9 @@
 		(define k (p:kind))
 		(define k2 (head (head (tail p:toks))))
 		(if (= k 'Str) false
-		(if (= k 'And) false
+		;; &a[k] is a + k, set at start-up (Doom's `boolean *mousebuttons =
+		;; &mousearray[1];`)
+		(if (= k 'And) (if (= k2 'Id) (if (p:endtok? (head (head (tail (tail p:toks))))) false true) true)
 		(if (= k 'Lbrace) false
 		(if (if (= k 'Id) (p:endtok? k2) false) false
 		(if (if (p:fptok? k) (p:endtok? k2) false) false
@@ -1905,26 +1965,39 @@
 
 ;; ---- what c4 has no use for (M7b) ----
 ;;
-;; Before parsing, the tokens lose `inline`, `restrict` and `__extension__`
-;; in their spellings, and every __attribute__((...)) that names neither
+;; Before parsing, the tokens lose `inline`, `restrict`, `__extension__`
+;; and `register` in their spellings, and every __attribute__((...)) that names neither
 ;; constructor nor destructor -- noreturn, unused, format, aligned,
 ;; regparm and the rest of what Busybox's platform.h writes on nearly
 ;; every prototype. They change nothing c4 does. The two that do stay
 ;; where p:attribute reads them. c4fc's UNTAG is the same filter.
+;; `register` alone before a declarator's name, Doom's `register
+;; outcode1 = 0;`, is the int C89 made of it.
 (define p:dropids '("inline" "__inline" "__inline__" "restrict" "__restrict"
-	"__restrict__" "__extension__"))
+	"__restrict__" "__extension__" "register"))
 (define p:untag (lambda (toks acc)
 	(if (empty? toks) (p:reverse acc)
 	(begin
 		(define t (head toks))
 		(if (if (= (head t) 'Id) (p:member? (p:second t) p:dropids) false)
-			(next p:untag (tail toks) acc)
+			(if (p:implicitint? t (tail toks))
+				(next p:untag (tail toks) (p:cons (+ (list 'Int 0) (tail (tail t))) acc))
+			(next p:untag (tail toks) acc))
 		(if (= (head t) 'Attribute)
 			(begin
 				(define g (p:attrgroup (tail toks) 0 false))
 				(if (p:second g) (next p:untag (tail toks) (p:cons t acc))
 				(next p:untag (head g) acc)))
 		(next p:untag (tail toks) (p:cons t acc))))))))
+;; `register NAME` and then = , ; [ or ): NAME's type is int
+(define p:implicitint? (lambda (t rest)
+	(if (= (p:second t) "register")
+		(if (if (empty? rest) false (if (= (head (head rest)) 'Id) (not (empty? (tail rest))) false))
+			(p:member?/atom (head (head (tail rest))) '(Assign Comma Semi Brak Rparen))
+		false)
+	false)))
+(define p:member?/atom (lambda (x l)
+	(if (empty? l) false (if (= (head l) x) true (next p:member?/atom x (tail l))))))
 ;; from the '(' after __attribute__ to its matching ')': (REST KEEP)
 (define p:attrgroup (lambda (toks d keep)
 	(if (empty? toks) (list toks keep)
@@ -2080,6 +2153,374 @@ static int *__c4ll_neg(int *d, int *a) {
 			(define hi (if neg (bit:xor (p:second v) p:SIGN32) (p:second v)))
 			(if (= p:WORD 8) (list 'num (bit:or (bit:shl hi 32) (bit:and lo p:M32)) p:DOUBLE)
 			(list 'llnum lo hi p:DOUBLE)))))))
+
+;; ---- constant initializers, folded (docs/ports-feasibility.md §8, 4-5) ----
+;;
+;; An element of a global's brace list that p:init's own forms do not
+;; cover -- a cast, an address plus an offset (`&S_sfx[sfx_pistol]`, a
+;; row `seq[0]`, `(int *)&x`, `(int)"str"`), or floating point (`{ -.867
+;; * R, -.5 * R }`) -- is parsed as an expression and folded here, as gcc
+;; folds it:
+;;   - integers by p:tfold, as p:const folds them;
+;;   - floating point exactly, as a rational over lex's big integers,
+;;     rounded to float or double after every operation as C rounds;
+;;   - an address as a global's name and a byte offset, which becomes a
+;;     data patch that carries the offset (c4lc-gen's g:addrpatchk).
+;; A value is
+;;   (int V T)              an integer of type T
+;;   (flt SIGN NUM DEN T)   (-1)^SIGN * NUM/DEN, a float or a double
+;;   (adr NAME OFF PT)      NAME's address plus OFF bytes, of type PT
+;;   (sad STR OFF PT)       a string literal's, likewise
+;; and p:foldinit makes it an initializer: (num V), (fval FLT), (name N),
+;; (gaddr N OFF), (str S) or (sadr S OFF). c4lc-gen converts an fval to
+;; the type of what it initializes (g:fpinit).
+(define p:curgv false)    ;; (NAME TYPE SIZE) of the global being initialized
+(define p:ilend? (lambda (k) (if (= k 'Comma) true (if (= k 'Rbrace) true (= k 'Semi)))))
+(define p:foldleaf? (lambda ()
+	(begin
+		(define k (p:kind))
+		(define k2 (head (head (tail p:toks))))
+		(define k3 (if (p:ilend? k2) 'Comma (head (head (tail (tail p:toks))))))
+		(if (= k 'Lbrace) false
+		;; a string, or strings p:strlit joins; "abc" + 1 is folded
+		(if (if (= k 'Str) (if (= k2 'Str) true (p:ilend? k2)) false) false
+		(if (if (= k 'Id) (p:ilend? k2) false) false
+		(if (if (p:fptok? k) (p:ilend? k2) false) false
+		(if (if (= k 'Sub) (if (p:fptok? k2) (p:ilend? k3) false) false) false
+		(if (if (= k 'And) (if (= k2 'Id) (p:ilend? k3) false) false) false
+		(if (= k 'Str) true
+		(p:foldscan p:toks 0)))))))))))
+;; up to the element's end: a string, a float, an &, a type name or a name
+;; that is no constant (a sizeof's operand aside, as in p:dynscan)
+(define p:foldscan (lambda (ts d)
+	(begin
+		(define t (head ts))
+		(define k (head t))
+		(if (= k 'Eof) false
+		(if (if (= d 0) (p:ilend? k) false) false
+		(if (= k 'Sizeof)
+			(next p:foldscan
+				(if (= (head (head (tail ts))) 'Lparen) (p:skipgroup (tail ts) 0)
+				(p:skipunary (tail ts)))
+				d)
+		(if (if (= k 'Str) true (if (p:fptok? k) true (= k 'And))) true
+		(if (p:declstart-tok? t) true
+		(if (if (= k 'Id) (= (p:constname? (p:second t)) false) false) true
+		(next p:foldscan (tail ts)
+			(if (if (= k 'Lparen) true (= k 'Brak)) (+ d 1)
+			(if (if (= k 'Rparen) true (= k 'Rbrak)) (- d 1) d))))))))))))
+(define p:foldinit (lambda ()
+	(begin
+		(define v (p:cfold (p:expr 1)))
+		(define h (head v))
+		(if (= h 'int) (list 'num (p:second v))
+		(if (= h 'flt) (list 'fval v)
+		(if (= h 'adr)
+			(if (= (p:third v) 0) (list 'name (p:second v)) (list 'gaddr (p:second v) (p:third v)))
+		(if (= (p:third v) 0) (list 'str (p:second v)) (list 'sadr (p:second v) (p:third v)))))))))
+
+(define p:cfdie (lambda () (p:die "initializer element is not a constant")))
+(define p:cfold (lambda (e)
+	(begin
+		(define h (head e))
+		(if (= h 'num) (p:cfnum e)
+		(if (= h 'llnum) (p:cfllnum e)
+		(if (= h 'str) (list 'sad (p:second e) 0 p:PTR)
+		(if (= h 'var) (p:cfvar (p:second e))
+		(if (= h 'addr) (p:cflv (p:second e))
+		(if (if (= h 'index) true (if (= h 'member) true (= h 'arrow))) (p:cfdecay e)
+		(if (= h 'cast) (p:cfcast (p:second e) (p:cfold (p:third e)))
+		(if (= h 'neg) (p:cfneg (p:cfold (p:second e)))
+		(if (= h 'cond)
+			(if (p:cftrue? (p:cfold (p:second e))) (p:cfold (p:third e)) (p:cfold (index e 3)))
+		(if (= h 'lognot) (list 'int (if (p:cftrue? (p:cfold (p:second e))) 0 1) p:INT)
+		(if (= h 'bitnot) (p:cfbin 'bxor (list 'int -1 p:INT) (p:cfold (p:second e)))
+		(if (= h 'land)
+			(list 'int (if (p:cftrue? (p:cfold (p:second e))) (if (p:cftrue? (p:cfold (p:third e))) 1 0) 0) p:INT)
+		(if (= h 'lor)
+			(list 'int (if (p:cftrue? (p:cfold (p:second e))) 1 (if (p:cftrue? (p:cfold (p:third e))) 1 0)) p:INT)
+		(if (= h 'sizeof) (list 'int (p:ctysize (p:second e)) p:INT)
+		(if (= h 'sizeofa) (list 'int (p:csizeofx (list 'var (p:second e)) "initializer") p:INT)
+		(if (= h 'sizeofe) (list 'int (p:csizeofx (p:second e) "initializer") p:INT)
+		(if (p:assoc/atom h p:cfops) (p:cfbin h (p:cfold (p:second e)) (p:cfold (p:third e)))
+		(p:cfdie)))))))))))))))))))))
+(define p:cfops '((add) (sub) (mul) (div) (mod) (shl) (shr) (band) (bor) (bxor)
+	(eq) (ne) (lt) (gt) (le) (ge)))
+;; a literal: an integer, or a float's or a double's bits
+(define p:cfnum (lambda (e)
+	(begin
+		(define t (if (= (length e) 3) (index e 2) p:INT))
+		(if (= t p:FLOAT) (p:w32rat (p:second e))
+		(if (= t p:DOUBLE)
+			(p:w64rat (bit:and (p:second e) p:M32) (bit:and (bit:shr (p:second e) 32) p:M32))
+		(list 'int (p:second e) t))))))
+(define p:cfllnum (lambda (e)
+	(if (= (index e 3) p:DOUBLE) (p:w64rat (p:second e) (p:third e))
+	;; a long long constant on a 32-bit target: only one a word holds
+	(if (= (p:third e) (if (< (p:second e) 0) -1 0)) (list 'int (p:second e) p:INT)
+	(p:die "a long long constant is too wide for an initializer here")))))
+;; a global, by name: the one being initialized, or one declared before
+(define p:cfgv (lambda (n)
+	(if (if p:curgv (= (head p:curgv) n) false) p:curgv
+	(if (p:member? n p:locals) false
+	(p:assoc n p:gvars)))))
+;; a name's value: a static const's, or an array's address. A name that
+;; is no global's is taken for a function, which c4lc-gen checks.
+(define p:cfvar (lambda (n)
+	(begin
+		(define sc (if (p:member? n p:locals) false (p:assoc n p:sconsts)))
+		(define g (if sc false (p:cfgv n)))
+		(if sc (list 'int (p:second sc) (index sc 2))
+		(if (= g false) (list 'adr n 0 p:INT)
+		(if (= (index g 2) nil) (p:cfdie)
+		(list 'adr n 0 (p:second g))))))))
+;; the address of an lvalue
+(define p:cflv (lambda (x)
+	(begin
+		(define h (head x))
+		(if (= h 'var)
+			(begin
+				(define g (p:cfgv (p:second x)))
+				(if (= g false) (list 'adr (p:second x) 0 p:INT)
+				(list 'adr (p:second x) 0 (if (= (index g 2) nil) (+ (p:second g) p:PTR) (p:second g)))))
+		(if (= h 'index) (p:cfbin 'add (p:cfold (p:second x)) (p:cfold (p:third x)))
+		(if (if (= h 'member) true (= h 'arrow))
+			(begin
+				(define b (if (= h 'member) (p:cflv (p:second x)) (p:cfold (p:second x))))
+				(if (if (= (head b) 'adr) (p:ptrty? (index b 3)) false) nil (p:cfdie))
+				(define r (p:smember (- (index b 3) p:PTR) (p:third x)))
+				(list 'adr (p:second b) (+ (p:third b) (p:second r))
+					(if (p:arrmem? r) (p:third r) (+ (p:third r) p:PTR))))
+		(if (= h 'deref) (p:cfold (p:second x))
+		(if (= h 'str) (list 'sad (p:second x) 0 p:PTR)
+		(p:cfdie)))))))))
+;; an array member's record: its type is its element's pointer, and it
+;; has bytes of its own (a struct member has them too)
+(define p:arrmem? (lambda (r)
+	(if (= (index r 3) nil) false (p:ptrty? (p:third r)))))
+;; an element or a member used as a value: only an array decays to a
+;; constant, its address -- a row of an array of arrays, or an array member
+(define p:cfdecay (lambda (e)
+	(begin
+		(define a (p:cflv e))
+		(if (= (head a) 'adr) nil (p:cfdie))
+		(if (= (head e) 'index)
+			(begin
+				(define row (p:assoc (- (index a 3) p:PTR) p:rows))
+				(if row (list 'adr (p:second a) (p:third a) (+ (p:second row) p:PTR)) (p:cfdie)))
+		(begin
+			(define b (if (= (head e) 'member) (p:cflv (p:second e)) (p:cfold (p:second e))))
+			(if (p:arrmem? (p:smember (- (index b 3) p:PTR) (p:third e))) a (p:cfdie)))))))
+(define p:ptrty? (lambda (t)
+	(if (< t 512) (>= t 2) (> (- (- t 512) (* 64 (/ (- t 512) 64))) 0))))
+(define p:fpty? (lambda (t) (if (= t p:FLOAT) true (= t p:DOUBLE))))
+(define p:cftrue? (lambda (v)
+	(if (= (head v) 'int) (!= (p:second v) 0)
+	(if (= (head v) 'flt) (> (lex:bbitlen (index v 2)) 0)
+	true))))
+;; (T) v
+(define p:cfcast (lambda (t v)
+	(begin
+		(define h (head v))
+		(if (p:fpty? t)
+			(if (= h 'int) (p:ratround (p:int2rat (p:second v) (index v 2)) t)
+			(if (= h 'flt) (p:ratround v t)
+			(p:cfdie)))
+		(if (p:svalue? t) (p:cfdie)
+		(if (if (= h 'adr) true (= h 'sad)) (list h (p:second v) (p:third v) t)
+		(if (= h 'flt)
+			(if (p:ptrty? t) (p:cfdie) (list 'int (p:convval (p:rat2int v) t) t))
+		(list 'int (if (p:intty? t) (p:convval (p:second v) t) (p:second v)) t))))))))
+(define p:cfneg (lambda (v)
+	(if (= (head v) 'flt) (list 'flt (- 1 (p:second v)) (index v 2) (index v 3) (index v 4))
+	(p:cfbin 'sub (list 'int 0 p:INT) v))))
+;; how far apart the things a pointer of type pt points at are: an integer
+;; holding an address (a cast made it one) counts bytes
+(define p:cfstride (lambda (pt)
+	(if (p:ptrty? pt) (p:estride (- pt p:PTR)) 1)))
+(define p:cfbin (lambda (op a b)
+	(begin
+		(define ha (head a))
+		(define hb (head b))
+		(define aa (if (= ha 'adr) true (= ha 'sad)))
+		(define ba (if (= hb 'adr) true (= hb 'sad)))
+		(if (if aa (= hb 'int) false)
+			(if (= op 'add) (list ha (p:second a) (+ (p:third a) (* (p:second b) (p:cfstride (index a 3)))) (index a 3))
+			(if (= op 'sub) (list ha (p:second a) (- (p:third a) (* (p:second b) (p:cfstride (index a 3)))) (index a 3))
+			(p:cfdie)))
+		(if (if ba (= ha 'int) false)
+			(if (= op 'add) (p:cfbin 'add b a) (p:cfdie))
+		(if (if aa true ba) (p:cfdie)
+		(if (if (= ha 'flt) true (= hb 'flt)) (p:cfflt op a b)
+		(begin
+			(define v (p:tfold op (p:second a) (index a 2) (p:second b) (index b 2)))
+			(if (= v 'nofold) (p:cfdie) nil)
+			(list 'int v p:ft)))))))))
+;; floating point: the usual arithmetic conversions, the exact operation,
+;; then the rounding to the result's type
+(define p:cfflt (lambda (op a b)
+	(begin
+		(define t (if (if (= (head a) 'flt) (= (index a 4) p:DOUBLE) false) p:DOUBLE
+			(if (if (= (head b) 'flt) (= (index b 4) p:DOUBLE) false) p:DOUBLE p:FLOAT)))
+		(define x (p:cfcast t a))
+		(define y (p:cfcast t b))
+		(if (= op 'add) (p:ratround (p:ratadd x y) t)
+		(if (= op 'sub) (p:ratround (p:ratadd x (p:cfneg y)) t)
+		(if (= op 'mul) (p:ratround (p:ratmul x y) t)
+		(if (= op 'div) (p:ratround (p:ratdiv x y) t)
+		(begin
+			(define c (p:ratcmp x y))
+			(define r
+				(if (= op 'eq) (= c 0) (if (= op 'ne) (!= c 0) (if (= op 'lt) (< c 0)
+				(if (= op 'gt) (> c 0) (if (= op 'le) (<= c 0) (if (= op 'ge) (>= c 0) (p:cfdie))))))))
+			(list 'int (if r 1 0) p:INT)))))))))
+
+;; ---- exact rationals over lex's big integers (16-bit limbs, lowest first) ----
+(define p:bzero? (lambda (a) (= (lex:bbitlen a) 0)))
+(define p:badd (lambda (a b c acc)
+	(if (if (empty? a) (empty? b) false) (lex:brev (if (= c 0) acc (p:cons c acc)) (list))
+	(begin
+		(define x (+ (+ (if (empty? a) 0 (head a)) (if (empty? b) 0 (head b))) c))
+		(next p:badd (if (empty? a) a (tail a)) (if (empty? b) b (tail b))
+			(bit:shr x 16) (p:cons (bit:and x 65535) acc))))))
+(define p:bmulb (lambda (a b i acc)
+	(if (empty? b) acc
+	(next p:bmulb a (tail b) (+ i 16)
+		(p:badd acc (lex:bshl (lex:bmul a (head b) 0 (list)) i) 0 (list))))))
+(define p:bmul (lambda (a b) (p:bmulb a b 0 (list 0))))
+(define p:bpow2 (lambda (n) (lex:bshl (list 1) n)))
+;; the quotient of a by b, both big, rounded toward zero
+(define p:bdiv (lambda (a b)
+	(next p:bdiv/2 a b (- (lex:bbitlen a) (lex:bbitlen b)) (list 0))))
+(define p:bdiv/2 (lambda (a b i q)
+	(if (< i 0) q
+	(begin
+		(define bi (lex:bshl b i))
+		(if (>= (lex:bcmp a bi) 0)
+			(next p:bdiv/2 (lex:bsub a bi 0 (list)) b (- i 1) (lex:bmul q 2 1 (list)))
+		(next p:bdiv/2 a b (- i 1) (lex:bmul q 2 0 (list))))))))
+;; a word's limbs, as the unsigned number its bits are
+(define p:wlimbs (lambda (v i acc)
+	(if (>= i p:BITS) (lex:brev acc (list))
+	(next p:wlimbs v (+ i 16) (p:cons (bit:and (bit:shr v i) 65535) acc)))))
+;; ... and back: the low word of a big number
+(define p:limbsw (lambda (a i acc)
+	(if (if (empty? a) true (>= i p:BITS)) acc
+	(next p:limbsw (tail a) (+ i 16) (bit:or acc (bit:shl (head a) i))))))
+(define p:unsigned? (lambda (t)
+	(begin
+		(define pt (p:promote t))
+		(if (= pt p:UINT) true (if (= pt p:ULONG) true (= t p:ULL))))))
+;; integer v of type t, exactly
+(define p:int2rat (lambda (v t)
+	(if (if (< v 0) (not (p:unsigned? t)) false)
+		(list 'flt 1 (lex:bmul (p:wlimbs (bit:xor v -1) 0 (list)) 1 1 (list)) (list 1) p:DOUBLE)
+	(list 'flt 0 (p:wlimbs v 0 (list)) (list 1) p:DOUBLE))))
+;; toward zero, to the word
+(define p:rat2int (lambda (r)
+	(begin
+		(define m (p:limbsw (p:bdiv (index r 2) (index r 3)) 0 0))
+		(if (= (p:second r) 1) (- 0 m) m))))
+(define p:ratmul (lambda (x y)
+	(list 'flt (bit:xor (p:second x) (p:second y))
+		(p:bmul (index x 2) (index y 2)) (p:bmul (index x 3) (index y 3)) (index x 4))))
+(define p:ratdiv (lambda (x y)
+	(begin
+		(if (p:bzero? (index y 2)) (p:die "division by zero in a constant") nil)
+		(list 'flt (bit:xor (p:second x) (p:second y))
+			(p:bmul (index x 2) (index y 3)) (p:bmul (index x 3) (index y 2)) (index x 4)))))
+(define p:ratadd (lambda (x y)
+	(begin
+		(define a (p:bmul (index x 2) (index y 3)))
+		(define b (p:bmul (index y 2) (index x 3)))
+		(define d (p:bmul (index x 3) (index y 3)))
+		(if (= (p:second x) (p:second y)) (list 'flt (p:second x) (p:badd a b 0 (list)) d (index x 4))
+		(begin
+			(define c (lex:bcmp a b))
+			(if (= c 0) (list 'flt 0 (list 0) (list 1) (index x 4))
+			(if (> c 0) (list 'flt (p:second x) (lex:bsub a b 0 (list)) d (index x 4))
+			(list 'flt (p:second y) (lex:bsub b a 0 (list)) d (index x 4)))))))))
+;; the sign of x - y
+(define p:ratcmp (lambda (x y)
+	(begin
+		(define r (p:ratadd x (p:cfneg y)))
+		(if (p:bzero? (index r 2)) 0 (if (= (p:second r) 1) -1 1)))))
+;; a format's significand bits and exponent range
+(define p:fmt (lambda (t) (if (= t p:FLOAT) (list 24 -126 127) (list 53 -1022 1023))))
+;; the rounding of r to type t: (BIASEDEXP FRACTION), lex:fpconv's answer
+(define p:ratbits (lambda (r t)
+	(begin
+		(define f (p:fmt t))
+		(define p (head f))
+		(define a (index r 2))
+		(define b (index r 3))
+		(if (p:bzero? a) (list 0 (list 0))
+		(begin
+			(define e (lex:fpscale a b (- (+ p 1) (- (lex:bbitlen a) (lex:bbitlen b))) p (p:second f) (index f 2)))
+			(if (= (head e) (+ (* 2 (index f 2)) 1))
+				(p:die "a floating constant is out of range") nil)
+			e)))))
+;; r rounded to type t, still a rational: the bits' own value
+(define p:ratround (lambda (r t)
+	(begin
+		(define f (p:fmt t))
+		(define p (head f))
+		(define e (p:ratbits r t))
+		(define be (head e))
+		(define m (if (= be 0) (p:second e) (p:badd (p:second e) (p:bpow2 (- p 1)) 0 (list))))
+		(define x (if (= be 0) (- (+ (p:second f) 1) p) (- (+ (- be (index f 2)) 1) p)))
+		(if (>= x 0) (list 'flt (p:second r) (lex:bshl m x) (list 1) t)
+		(list 'flt (p:second r) m (p:bpow2 (- 0 x)) t)))))
+;; the bits of r rounded to a float: a word; to a double: (LO HI)
+(define p:rat32 (lambda (r)
+	(begin
+		(define e (p:ratbits r p:FLOAT))
+		(bit:or (if (= (p:second r) 1) p:SIGN32 0)
+			(bit:or (bit:shl (head e) 23) (lex:bword (p:second e) 0))))))
+(define p:rat64 (lambda (r)
+	(begin
+		(define e (p:ratbits r p:DOUBLE))
+		(list (lex:bword (p:second e) 0)
+			(bit:or (if (= (p:second r) 1) p:SIGN32 0)
+				(bit:or (bit:shl (head e) 20) (lex:bword (p:second e) 1)))))))
+;; ... and a float's or a double's bits as a rational
+(define p:pow2rat (lambda (s m x t)
+	(if (>= x 0) (list 'flt s (lex:bshl m x) (list 1) t)
+	(list 'flt s m (p:bpow2 (- 0 x)) t))))
+(define p:w32rat (lambda (w)
+	(begin
+		(define s (if (= 0 (bit:and w p:SIGN32)) 0 1))
+		(define be (bit:and (bit:shr w 23) 255))
+		(define fr (bit:and w 8388607))
+		(define m (list (bit:and fr 65535) (bit:shr fr 16)))
+		(if (= be 255) (p:die "an infinite or NaN float in a constant") nil)
+		(if (= be 0) (p:pow2rat s m -149 p:FLOAT)
+		(p:pow2rat s (p:badd m (p:bpow2 23) 0 (list)) (- be 150) p:FLOAT)))))
+(define p:w64rat (lambda (lo hi)
+	(begin
+		(define s (if (= 0 (bit:and hi p:SIGN32)) 0 1))
+		(define be (bit:and (bit:shr hi 20) 2047))
+		(define m (list (bit:and lo 65535) (bit:and (bit:shr lo 16) 65535)
+			(bit:and hi 65535) (bit:and (bit:shr hi 16) 15)))
+		(if (= be 2047) (p:die "an infinite or NaN double in a constant") nil)
+		(if (= be 0) (p:pow2rat s m -1074 p:DOUBLE)
+		(p:pow2rat s (p:badd m (p:bpow2 52) 0 (list)) (- be 1075) p:DOUBLE)))))
+;; a float or double literal's value: (num BITS FLOAT), (num BITS DOUBLE)
+;; on a 64-bit target, (llnum LO HI DOUBLE) on a 32-bit one
+(define p:litrat (lambda (it)
+	(if (= (head it) 'llnum) (p:w64rat (p:second it) (p:third it))
+	(p:cfnum it))))
+;; an initializer for an object of type t from a folded float (c4lc-gen's
+;; g:fpinit): its bits, or the integer C's conversion makes of it
+(define p:fvalinit (lambda (r t)
+	(if (= t p:FLOAT) (list 'num (p:rat32 r) p:FLOAT)
+	(if (= t p:DOUBLE)
+		(begin
+			(define d (p:rat64 r))
+			(if (= p:WORD 8) (list 'num (bit:or (bit:shl (p:second d) 32) (bit:and (head d) p:M32)) p:DOUBLE)
+			(list 'llnum (head d) (p:second d) p:DOUBLE)))
+	(if (p:intty? t) (list 'num (p:convval (p:rat2int r) t))
+	(p:die "a floating constant initializing a pointer or a struct"))))))
 
 ;; does the unit say float or double, or write a float literal? Then the
 ;; helpers its float arithmetic calls are spliced after it (p:fpsrc), as

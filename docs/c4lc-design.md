@@ -1059,3 +1059,75 @@ own source.
   in units of `long`, the word to both, or past a multiple of it. In test-c4lc at both sizes,
   plain, `-O` and `-minline`; `c4lc_m9` is in `C4FC_GEN_SWEEP`, both in
   `C4SC_BACK_DIFF`.
+
+### 14.9 What Doom needed (M10, 2026-10-23)
+
+docs/ports-feasibility.md measured what linuxdoom-1.10 needs from c4lc,
+and its §8 put the fixes in order. Steps 1-5 are these, and with them
+c4lc compiles all 59 of Doom's units as they stand, and the platform
+stub. `doomprobe.c` (Doom's idioms, in the session notes' scan tools)
+prints what gcc `-m32` prints, without its rewrites, plain, `-O` and
+`-minline`. c4fc follows where its grammar reaches, byte for byte.
+
+- **`register`** goes with `inline` (`p:dropids`). Alone before a name,
+  as am_map.c's `register outcode1 = 0;`, it is C89's int: `register`
+  followed by a name and then `=`, `,`, `;`, `[` or `)` becomes an `int`
+  token (`p:implicitint?`).
+- **Declarations of globals inside a block**: `extern int
+  forwardmove[2];` and `void V_MarkRect(int, int, int, int);` in a
+  function body. They are queued as a static local's global is and go
+  just before the function (`p:blockexterns`, `p:localproto`), so their
+  scope is wider than C gives them, which costs nothing: they allocate
+  nothing. A prototype may share a line with locals.
+- **Sparse switches.** A switch whose cases span `g:SWRANGE` (4096) or
+  more -- or so much that the span wraps a 32-bit host's word, INT_MIN to
+  INT_MAX -- is a chain of compares in the order the cases are written,
+  not a jump table (`g:swchain`): `PSH; IMM c1; XOR; BZ case1`, then
+  `PSH; IMM c1^c2; XOR; BZ case2` and so on, and a JMP to the default or
+  the end. a holds the value XORed with the case at hand, zero on a
+  match, so no branch leaves anything on the stack. st_stuff.c's
+  `case AM_MSGENTERED:` is `('a'<<24)+('m'<<16)` plus a little. A dense
+  switch keeps its table, byte for byte.
+- **`&a[k]` as a scalar global's initializer**, `boolean *mousebuttons =
+  &mousearray[1];`, is set at start-up as `a + k` is (14.8): `p:dyninit?`
+  now passes anything after `&` but a lone name.
+- **Casts in a constant expression**: `case (Uint32)KEY | (Uint32)MOD
+  << 16:`, an enum value, an array size. `p:constcast` converts the
+  operand as the generated code would (`p:convval`); a pointer type keeps
+  the value.
+- **Constants folded in a global's brace list.** An element that none of
+  `p:init`'s forms takes -- a cast, an address plus an offset, floating
+  point -- is parsed as an expression and folded (`p:foldleaf?`,
+  `p:cfold`), as gcc folds it:
+  - integers by `p:tfold`, as `p:const` folds them;
+  - an address as a global's name and a byte offset: `&S_sfx[sfx_pistol]`
+    (a table naming its own element: `p:curgv` is the global being
+    initialized), a row `seq[0]` of an array of arrays, `&a[k][j]`,
+    `hold.arr`, `&s.m`, `a + k`, `(int *)&x`, `(long)"str"`, `"abc" + 1`.
+    It is `(gaddr NAME OFF)` or `(sadr STR OFF)`, and the generator's data
+    patch carries the offset: a `dglo` patch gains a fourth field. For
+    another unit's data the patch is a symbol's (type -5), which has no
+    room for one, so the offset is left in the data word and c4rlink adds
+    it when it resolves the symbol (zero, as before, for the symbol
+    itself);
+  - floating point exactly: a value is a rational over the lexer's big
+    integers (`lex:bmul` and the rest, with `p:badd`, `p:bmul`, `p:bdiv`),
+    and after every operation it is rounded to float or double as C
+    rounds, through the lexer's own `lex:fpscale` (`p:ratround`). So
+    `-.867*R` for an int member is what gcc makes of it, and `0.1f + 0.2f`
+    has a float's bits. The result is `(fval FLT)`, which `g:fpinit`
+    converts to the member's type: a float's or a double's bits, or the
+    integer C's conversion makes of it.
+  A scalar global's initializer still goes through `p:dyninit?` to
+  start-up when it is more than `p:init` takes; only a lone float literal
+  of the other type, `float mouse_acceleration = 2.0;`, or one
+  initializing an integer, is now converted at compile time rather than
+  refused (`p:fvalinit`, `p:litrat`).
+- **Tests**: `src/tests/c4lc_m10.c` (c4lc and c4fc) and
+  `src/tests/c4lc_m10lc.c` (c4lc only: typedefs, floats, start-up),
+  goldens `c4lc-m10.txt` and `c4lc-m10lc.txt` from gcc (`-std=gnu89`, for
+  the implicit int), the same at 32 and 64 bits; in test-c4lc at both
+  sizes, plain, `-O` and `-minline`. `c4lc_m10` is in `C4FC_GEN_SWEEP`,
+  both in `C4SC_BACK_DIFF`.
+  `c4lc_m7ext_a.c` gained `&shared_s[1]` over another unit's array,
+  linked by c4rlink at both sizes.

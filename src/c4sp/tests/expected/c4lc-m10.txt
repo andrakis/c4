@@ -1,0 +1,19 @@
+register 3 996 2108
+block 101158
+sparse 1 2 3
+sparse 4 4 5 6
+sparse 11 12 10
+casts 1 2 3 0
+casts 255 -16
+casts 2
+defaults mouse 3 3
+defaults sndserver sndserver sndserver
+defaults big 1 44
+defaults neg 3 255
+sfx none 0 - -1
+sfx pistol 64 - -1
+sfx chgun 64 pistol 1
+sfx shotgn 64 pistol 1
+cheat i 100 -1
+cheat k 102 2097
+cheat x 255 -1

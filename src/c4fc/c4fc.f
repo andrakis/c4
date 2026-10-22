@@ -79,7 +79,7 @@ VARIABLE C4FC-READY   0 C4FC-READY !
    BUILTINS ;
 
 \ What c4 has no use for (M7b), as c4lc-parse's p:untag: `inline`,
-\ `restrict` and `__extension__` in their spellings, and every
+\ `restrict`, `__extension__` and `register` in their spellings, and every
 \ __attribute__((...)) that names neither constructor nor destructor.
 \ TOKS is compacted in place before anything parses it.
 : DROP-ID? ( t -- f ) {: t | a u -- f :}
@@ -87,12 +87,25 @@ VARIABLE C4FC-READY   0 C4FC-READY !
    t t.val @ TO a  t t.len @ TO u
    a u S" inline" NAME=?  a u S" __inline" NAME=? OR  a u S" __inline__" NAME=? OR
    a u S" restrict" NAME=? OR  a u S" __restrict" NAME=? OR
-   a u S" __restrict__" NAME=? OR  a u S" __extension__" NAME=? OR ;
+   a u S" __restrict__" NAME=? OR  a u S" __extension__" NAME=? OR
+   a u S" register" NAME=? OR ;
+\ `register NAME` and then = , ; [ or ): NAME's type is int, and the
+\ token becomes `int` (c4lc-parse's p:implicitint?)
+: IMPLICIT-INT? ( i -- f ) {: i | t k -- f :}
+   i TOKS V@ TO t
+   t t.val @ t t.len @ S" register" NAME=? 0= IF 0 EXIT THEN
+   i 2 + TOKS V# < 0= IF 0 EXIT THEN
+   i 1+ TOKS V@ t.kind @ Id <> IF 0 EXIT THEN
+   i 2 + TOKS V@ t.kind @ TO k
+   k Assign = k Comma = OR k Semi = OR k Brak = OR k Rparen = OR ;
 : UNTAG ( -- ) {: | i j n t e d keep k -- :}
    0 TO i  0 TO j  TOKS V# TO n
    BEGIN i n < WHILE
       i TOKS V@ TO t
-      t DROP-ID? IF i 1+ TO i ELSE
+      t DROP-ID? IF
+         i IMPLICIT-INT? IF Int t t.kind !  t j TOKS V!  j 1+ TO j THEN
+         i 1+ TO i
+      ELSE
       t t.kind @ Attribute = IF
          i 1+ TO e   0 TO d   0 TO keep
          BEGIN

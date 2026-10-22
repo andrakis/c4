@@ -324,6 +324,32 @@ the same bytes.
   `PACK-NOW` from it, and `PACKED` caps each member's alignment. c4lc
   settles them in its parser instead; the bytes are the same.
 
+## What Doom needed (M10, 2026-10-23)
+
+c4lc-design.md 14.9 has the language side. c4fc follows c4lc in all of it
+but what needs a typedef, a float or an initializer computed at start-up
+(`&a[k]` as a scalar global's), and emits the same bytes.
+
+- **`c4fc.f`**: `UNTAG` drops `register`, or makes it an `int` token
+  before a name and `=`, `,`, `;`, `[` or `)` (`IMPLICIT-INT?`).
+- **`parse.f`**: an `extern` line, or a line of prototypes
+  (`PROTO-LINE?`), in a block goes to DECL (`BLOCK-EXTERN`), and its
+  records are kept past the function's end with its static locals, where
+  c4lc hoists them. The block's frame count is kept aside, since a
+  prototype's `FUNCTION` starts one of its own. A line that mixes a
+  prototype and a local is refused; c4lc takes it. `CPRIMARY` takes a
+  cast in a constant, converting as `CONVVAL` does.
+- **`gen.f`**: a switch whose cases span `SWRANGE` (4096) or more is
+  c4lc's chain of compares (`w.cv`, `w.ca`, in the order the cases are
+  written), not a table.
+- **Addresses in a global's brace list**: casts in front of a string, an
+  `&` or a name (`ADDR-LEAF?`, `CAST-AT?`), and `&a[k]...` or a row `a[k]`
+  (`ADDR-INDEX`), node kind 7: a name and a byte offset. `GLOBAL-PAT+`
+  writes the patch: the offset rides in `TABX`, set through `TAB-OFF`
+  and added when `EMIT-TABPATS` resolves the value, or for another
+  unit's data in the word itself, for c4rlink. c4lc folds more than this
+  (`p + k`, members, a string plus k); c4fc does not yet.
+
 ## Verification
 
 The bar rises rung by rung and c4lc supplies it at every one.

@@ -9,6 +9,8 @@ ordinary memory, so a program calls `gui_present()` first and stops with
 |---|---|
 | `gui.h` | The guest API. Register and command numbers, then the functions. |
 | `gui-demo.c` | A bouncing box, a ring following the mouse, clicks and keys echoed. `gui-demo N` stops after N frames; `q` on the display quits. |
+| `snd.h`, `snd.c` | The sound card's API: the AdLib, eight channels of 8-bit samples, the PC speaker. |
+| `snd-demo.c` | A scale on the AdLib, a chord and a sample. `node libjs/cli.js --wav demo.wav src/c4bb/images/snd-demo.c4r` writes what it played. |
 | `fb-demo.c` | The pixel framebuffer: every pixel of a 320x240 frame computed by the guest, with text on top. Takes events by interrupt (`gui_irq(1)` and a cycle handler) instead of polling. |
 
 ## Building

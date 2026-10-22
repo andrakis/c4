@@ -59,11 +59,15 @@ Out of scope for now: c4mp multiprocessing.
 | File | Role |
 |---|---|
 | `libjs/c4m.js` | `Machine`: the interpreter. No DOM, no Node. |
-| `libjs/bus.js` | Addresses below 0x1000: 0x100-0x1FF go to c4bb's `Devices`, 0x400-0x47F go to `GuiDevice`. |
+| `libjs/bus.js` | Addresses below 0x1000: 0x100-0x1FF go to c4bb's `Devices`, 0x400-0x47F to `GuiDevice`, 0x480-0x4FF to `SoundDevice`. |
 | `libjs/heap.js` | The host-side allocator behind MALC/FREE/RALC, with a size side table. |
 | `libjs/printf.js` | A pure PRTF formatter. |
 | `libjs/boot.js` | `parseC4r`/`loadImage` (reused), argv, and a c4mp-style trampoline. |
 | `libjs/gui-device.js` | The display registers and the two rings, host side. |
+| `libjs/snd-device.js` | The sound card's registers: what the guest writes, as timed events. |
+| `libjs/snd-mix.js` | The events made into samples: the OPL, eight sample channels and the speaker, mixed to stereo. Shared by the worklet and `cli.js --wav`. |
+| `libjs/snd-worklet.js` | The mixer in the page's AudioWorklet (on the page's own thread where there is none). |
+| `libjs/opl.js`, `opl-tables.js` | The AdLib: DOSBox's dbopl, ported to JavaScript (GNU GPL v2 or later), with its tables as its C++ makes them. |
 | `libjs/keys.js` | Cooked and raw keyboard handling, copied from `src/c4bb/web/app.js`. |
 | `libjs/worker.js` | The Worker: arena, devices, machine, run loop, messages. |
 | `libjs/page.js` | The main-thread API, `C4M.boot(...)`. |
@@ -74,6 +78,7 @@ Out of scope for now: c4mp multiprocessing.
 | `libjs/web/` | The page: terminal left, canvas right. |
 | `libjs/guest/gui.h`, `gui-demo.c` | The guest C API and the standalone demo. |
 | `libjs/guest/fb-demo.c` | The framebuffer demo: 320x240, every pixel computed by the guest, events by interrupt. |
+| `libjs/guest/snd.h`, `snd.c`, `snd-demo.c` | The sound card's guest API, and a tune on the bare machine. |
 | `libjs/tests/` | The differential suite, unit tests, the GUI test and the CDP gate. |
 | `src/c4ix/user/gui.c` | `c4ix-gui.c4r`. |
 
@@ -135,8 +140,9 @@ message path.
 
 - **Page to worker**: `boot`, `key`, `input`, `signal`, `eof`, `gui`,
   `pause`, `resume`, `reset`, `peek`, `poke`.
-- **Worker to page**: `out`, `kbd`, `display`, `gui`, `status`, `exit`,
-  `error`, `reply` (the answer to a `peek` or `poke`).
+- **Worker to page**: `out`, `kbd`, `display`, `gui`, `snd` (the sound
+  card's events, when `boot` asked for one with `snd: true`), `status`,
+  `exit`, `error`, `reply` (the answer to a `peek` or `poke`).
 - **The run loop** runs a slice (about 1M instructions, capped near 8 ms),
   flushes output, then:
   - on `sleep`, waits the requested time;
@@ -178,6 +184,65 @@ commands to the host.
   13 NOCLIP, 14 TEXT2, 15 CURSOR (`GUI_PTR_*`, the pointer's shape).
 - **Events**: 1 MOVE, 2 DOWN, 3 UP, 4 KEYDOWN, 5 KEYUP, 6 RESIZE, 7 FOCUS,
   8 WHEEL.
+
+## The sound card
+
+It sits at **0x0480-0x04FF**, beside the display, and guests check
+`__c4_info() & C4I_SND` (0x8000) before touching it. It is an AdLib (an
+OPL2, with the OPL3's second bank), eight channels of unsigned 8-bit
+samples, and the PC speaker: what a DOS game expects to find.
+
+| Address | Register | Access | Meaning |
+|---|---|---|---|
+| 0x480 | CAPS | r | bit0 OPL, bit1 samples, bit2 speaker, bit3 OPL3 |
+| 0x484 | OPL | w | (reg << 8) \| val; reg 0x100 and up is the OPL3's second bank |
+| 0x488 | WAIT | w | the stream moves n CLOCK units on |
+| 0x48C | AHEAD | r | microseconds the stream is ahead of now |
+| 0x490 | CLOCK | r/w | WAIT's units per second (default 1000000) |
+| 0x494-0x4A0 | PCM_ADDR, LEN, RATE, VOL | r/w | the next sample: where, how long, at what rate; VOL is left \| (right << 8) |
+| 0x4A4 | PCM_PLAY | w | play it on that channel, now; the bytes are copied now |
+| 0x4A8 | PCM_STOP | w | that channel, or -1 for all |
+| 0x4AC | PCM_SETVOL | w | PCM_VOL becomes that channel's volume, as it plays |
+| 0x4B0 | PCM_BUSY | r | a bit for each channel still playing |
+| 0x4B4 | SPK | w | the PIT divisor of the speaker's tone; 0 is quiet |
+| 0x4B8 | RESET | w | everything quiet, the OPL zeroed |
+
+- **The machine makes no samples.** Each write becomes an event with a
+  time on it, and whoever listens mixes them (`snd-mix.js`). An
+  interpreter that made 44,100 FM samples a second would have little
+  time left for the game.
+- **The stream.** An OPL write is stamped with the stream's time, which
+  WAIT moves on. A player writes the way a sound card's interrupt would:
+  some registers, wait a tick, more registers. Each write then plays when
+  it says, however unevenly the program got round to it. The program keeps
+  the stream ahead of now by reading AHEAD and making more while it is
+  short, and a stream that falls behind is brought up to now. Samples,
+  the speaker and the rest are stamped now.
+- **Two clocks.** Now is the machine's own clock in `cli.js`, so a session
+  makes the same file every time. In the Worker it is the page's real
+  clock: the AudioContext plays in real time whether or not the machine
+  keeps up, and the stream has to stay ahead of what the listener hears.
+- **The page.** Each slice's events go to the page (`snd`) and on to an
+  AudioWorklet (`snd-worklet.js`), which plays them 60 ms after the
+  Worker's clock said they happened. When the two clocks drift more than
+  50 ms apart (a hidden tab, a stalled machine), the worklet starts again
+  from the next batch rather than bunching up what was late. A page that
+  is not a secure context (plain http from another host, as the LAN
+  address is) has no AudioWorklet, and there the same mixer runs on the
+  page's thread in a ScriptProcessorNode, 120 ms behind. A browser
+  keeps an AudioContext silent until the page is used, so the first key or
+  click starts it. Until then the OPL's registers are kept and sent with
+  every note off, so music already playing comes in with its instruments.
+  `?snd=0` leaves the card out.
+- **`cli.js --wav FILE`** fits the card and writes everything it played
+  to FILE at 44.1 kHz. Without `--wav` there is no card, so every test that
+  runs a game runs it silent, as before.
+- **The OPL** is `opl.js`, DOSBox's dbopl (the emulator Wolf4SDL uses),
+  ported line by line. The tables dbopl makes with `sin` and `pow` are
+  `opl-tables.js`, as its own C++ makes them, so no browser's `Math`
+  changes a bit. `test-libjs` builds the C++ (`libjs/tests/src/oplref`),
+  renders random register streams through both, and requires the same
+  samples. It renders about 20 times faster than real time.
 
 ## Tracker
 
@@ -308,6 +373,12 @@ commands to the host.
       for this demo, 74M inst/s, about 29 frames a second, 30% of a core
 - [x] STRC names each frame from the image's symbol section
       (`boot.js` parseSymbols); pinned by `libjs-strc.c4r` in the suite
+- [x] Sound card (2026-10-22): the AdLib, eight sample channels and the
+      speaker at 0x480, as timed events mixed by an AudioWorklet
+      ("The sound card"). `snd-demo.c4r` plays a tune; `cli.js --wav`
+      writes a session's sound to a file; `opl.js` makes dbopl's samples
+      bit for bit (`test-libjs`). Wolfenstein 3D plays its music, AdLib
+      effects and digitized sounds through it
 - [ ] Media panel (c4bb's `store.js` and `drives.js`). Not done: C4IX's
       filesystem lives in memory, so nothing yet needs writable drives kept
       in the browser. The worker already takes c4bb's drive list, so it is a page

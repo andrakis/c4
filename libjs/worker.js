@@ -6,7 +6,8 @@
 // static server; nothing here needs cross-origin isolation.
 //
 // Page -> worker
-//   boot    { image: ArrayBuffer, argv, disk: [[name, ArrayBuffer]], arenaMb, mhz, unpaced, gui, shared }
+//   boot    { image: ArrayBuffer, argv, disk: [[name, ArrayBuffer]], arenaMb, mhz, unpaced, gui, snd, shared }
+//           snd: true fits the sound card (snd-device.js)
 //           shared: { ring, fb } SharedArrayBuffers from shared.js, when the page is isolated
 //   key     { key, ctrlKey, altKey, metaKey }     a keydown on the terminal
 //   input   { bytes: Uint8Array }                 typed programmatically
@@ -20,6 +21,7 @@
 //   out     { bytes }         console output, and the echo of what was typed
 //   kbd     { raw }           a program opened or closed /dev/tty
 //   display { frames }        draw commands (gui-device.js); not used on the shared path
+//   snd     { events, now }   the sound card's events, and its clock when sent (snd-device.js)
 //   status  { ... }           about four times a second
 //   exit    { status, cycles }
 //   reply   { id, ... }       for peek and poke
@@ -29,6 +31,7 @@ import { createMachine, boot } from './boot.js';
 import { STOP } from './c4m.js';
 import { keyDown, typeBytes } from './keys.js';
 import { GuiDevice } from './gui-device.js';
+import { SoundDevice } from './snd-device.js';
 import { RingWriter, FbProducer } from './shared.js';
 
 // A disk read on demand. The page sends an index of [name, size] and a
@@ -62,7 +65,7 @@ class LazyFiles extends Map {
   *keys() { const seen = new Set(super.keys()); yield* seen; for (const k of this.sizes.keys()) if (!seen.has(k)) yield k; }
 }
 
-let vm = null, bootMsg = null, gui = null, ring = null, ringStalls = 0, handoffMs = 0;
+let vm = null, bootMsg = null, gui = null, snd = null, ring = null, ringStalls = 0, handoffMs = 0;
 // One producer per shared framebuffer for the Worker's whole life: which
 // slot is ours is state the page's side depends on, and a reset must not
 // forget it.
@@ -108,11 +111,25 @@ function flushDisplay() {
   if (req) postMessage({ type: 'gui', w: req.w, h: req.h });
 }
 
+// The sound card's events, for the page's AudioWorklet. Its clock is
+// this one, real time: the audio plays in real time whether or not the
+// machine keeps up, so the stream is kept ahead of the clock the audio
+// goes by (snd-device.js).
+function flushSound() {
+  if (!snd) return;
+  const events = snd.drain();
+  if (!events) return;
+  const transfer = [];
+  for (const e of events) if (e[5] instanceof Uint8Array) transfer.push(e[5].buffer);
+  postMessage({ type: 'snd', events, now: performance.now() * 1000 }, transfer);
+}
+
 function start(msg) {
   bootMsg = msg;
   ring = msg.gui && msg.shared ? new RingWriter(msg.shared.ring) : null;
   if (ring && fbSab !== msg.shared.fb) { fbSab = msg.shared.fb; fbProducer = new FbProducer(fbSab); }
   gui = msg.gui ? new GuiDevice({ ...msg.gui, fbShared: ring ? fbProducer : null }) : null;
+  snd = msg.snd ? new SoundDevice({ now: () => performance.now() * 1000 }) : null;
   ringStalls = 0;
   // Files arrive as Uint8Arrays or bare ArrayBuffers; the disk
   // controller wants bytes it can index.
@@ -120,7 +137,7 @@ function start(msg) {
     : new Map((msg.disk || []).map(([n, b]) => [n, b instanceof Uint8Array ? b : new Uint8Array(b)]));
   const drives = [{ files, writable: false, sink: null }];
   vm = createMachine({
-    arenaMb: msg.arenaMb || 64, drives, mhz: msg.mhz || 20, gui, fpu: msg.fpu,
+    arenaMb: msg.arenaMb || 64, drives, mhz: msg.mhz || 20, gui, snd, fpu: msg.fpu,
     onByte: b => { out.push(b); if (out.length >= 4096) flush(); },
   });
   boot(vm, new Uint8Array(msg.image), msg.argv || ['image.c4r'], { mbox: msg.mbox | 0 });
@@ -154,6 +171,7 @@ function tick() {
   flush();
   const td = performance.now();
   flushDisplay();
+  flushSound();
   handoffMs += performance.now() - td;
   if (dev.rawKbd !== lastRaw) { lastRaw = dev.rawKbd; postMessage({ type: 'kbd', raw: lastRaw > 0 }); }
 
@@ -227,6 +245,7 @@ function postStatus(force) {
     runMs: Math.round(busyMs),
     disk: lazyStats(),
     gui: gui ? { ...gui.stats(), shared: !!ring, ringStalls, handoffMs: Math.round(handoffMs) } : null,
+    snd: snd ? snd.stats() : null,
   });
   lastStatus = { t: now, cycle: ran, busy: busyMs };
 }

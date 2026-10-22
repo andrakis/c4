@@ -20,7 +20,12 @@ The keys are the original's:
 | Esc | the menu |
 
 The game runs in a Terminal window, which it makes its canvas. Ctrl-C
-there stops it, as it stops any program. There is no sound yet.
+there stops it, as it stops any program.
+
+The music, the AdLib effects and the digitized sounds play through
+libjs's sound card. In the browser they start with the first key or click,
+because a browser keeps a page silent until it is used. The PC speaker's
+sounds (the menu's "PC Speaker" choice) are silent.
 
 The config file and saved games go beside the game in
 `/usr/games/wolf3d`, as they did on DOS. Like everything else in C4IX
@@ -87,6 +92,24 @@ Wolf4SDL uses as its own.
 `c4file.c` reads a file whole when it is opened for reading, so `fseek`
 and `ftell` are arithmetic. A file opened for writing (the config, a
 saved game) is gathered in memory and written at `fclose`.
+
+**Sound.** `c4sdl.c`'s mixer calls go to libjs's sound card
+(`libjs/guest/snd.h`, docs/libjs-design.md "The sound card") through
+`plat_snd_*`.
+- **The music** is Wolf4SDL's own player, `SDL_IMFMusicPlayer`, which
+  SDL_mixer would call from its audio thread for each buffer. Here the
+  game's loop calls it -- from the event pump, `SDL_Delay` and each
+  frame -- until the card's stream is 100 ms ahead. Its OPL writes go to
+  the card, and `YM3812UpdateOne`, which made the samples, only moves the
+  stream on. So the music keeps its time however unevenly the game runs.
+- **The digitized sounds** are the game's own 8-bit samples at 7,042 Hz,
+  where the page file keeps them; the card plays them at that rate.
+  `SD_PrepareSound` used to convert each to 44.1 kHz in floating point.
+- **Channels.** Which are still playing is the card's to say, so
+  `Mix_ChannelFinished`'s callback runs when one is seen to have stopped,
+  and when a sound is halted or replaced, as SDL_mixer runs it.
+- A timedemo is silent, so its frames stay the gcc build's, unless
+  `--sound` asks for sound too.
 
 **Time.** `SDL_GetTicks` is C4IX's machine clock (`clock()`), and
 `SDL_Delay` is `SYS_SLEEP`. The game paces itself to 70 Hz tics, as
@@ -169,6 +192,10 @@ timedemo: demo 2: 733 frames, checksum 1c7166d3
 timedemo: demo 3: 695 frames, checksum 73562491
 ```
 
+`wolf3d --sound --timedemo 1` plays the demo with its sound, and
+`node libjs/cli.js --wav FILE` writes it out. The music then keeps the
+machine's time, not the demo's virtual time, so the two drift apart.
+
 ## How fast
 
 The timedemo's machine time inside C4IX, at the page's 100 MHz. The
@@ -193,9 +220,9 @@ Five changes made it 2.8 times faster. The profile came from
 2. **`FixedMul` in 32-bit pieces.** The original multiplies in `int64_t`,
    which c4lc does at 32 bits through helper calls. The two give the same
    bits on 200M random and edge cases.
-3. **No sound conversion without a device.** At start-up, `id_sd.c`
-   converted every digitized sound to 44.1 kHz in floating point, for a
-   mixer that is not there. That was about 1.1G instructions.
+3. **No sound conversion.** At start-up, `id_sd.c` converted every
+   digitized sound to 44.1 kHz in floating point. That was about 1.1G
+   instructions. The sound card plays them as they are.
 4. **The timedemo's checksum** reads the frame a word at a time, not a
    byte.
 5. **`int`s in the scalers** (`ScalePost`, `ScaleLine`, the shape

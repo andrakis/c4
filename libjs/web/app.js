@@ -1,9 +1,10 @@
 // app.js - the c4m.js page: pick a system, boot it, wire the panes.
 //
 // URL parameters:
-//   ?system=c4ix|c4ke|gui-demo|fb-demo|raycast   which machine to boot (default c4ix)
+//   ?system=c4ix|c4ke|gui-demo|fb-demo|snd-demo|raycast   which machine to boot (default c4ix)
 //   ?image=URL&disk=URL          any other image and disk instead
 //   ?mhz=N                       how fast the machine runs, paced (default 100)
+//   ?snd=0                       no sound card
 //   ?fast                        run as fast as the host can, unpaced
 //   ?fpu=0                       no FPU opcode: floats in software (F3, docs/c4-float.md)
 //   ?mem=MB                      arena size (default 64)
@@ -22,6 +23,7 @@ const SYSTEMS = {
   'gui-demo': { label: 'GUI demo (bare machine)', image: `${IMAGES}/gui-demo.c4r`, disk: null, argv: ['gui-demo.c4r'] },
   // Computes every pixel itself, so it claims a faster clock than c4bb's 20 MHz.
   'fb-demo': { label: 'Framebuffer demo (bare machine)', image: `${IMAGES}/fb-demo.c4r`, disk: null, argv: ['fb-demo.c4r'], mhz: 100 },
+  'snd-demo': { label: 'Sound card demo (bare machine)', image: `${IMAGES}/snd-demo.c4r`, disk: null, argv: ['snd-demo.c4r'] },
   // The raycaster drawing 640x480 on the display, as fast as the host can:
   // unpaced, so the frame rate is the machine's and the display path's.
   raycast: { label: 'Raycast 640x480 (bare machine)', image: `${IMAGES}/disk/raycast.c4r`, disk: null,
@@ -68,6 +70,7 @@ const opts = {
   fpu: params.get('fpu') !== '0',
   arenaMb: Number(params.get('mem')) || 64,
   shared: params.get('shared') !== '0',
+  snd: params.get('snd') !== '0',
 };
 const vm = new C4M(opts);
 window.c4m = vm;

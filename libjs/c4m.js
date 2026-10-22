@@ -54,8 +54,9 @@ export const TRAP = { ILLOP: 0, HARD_IRQ: 1, SOFT_IRQ: 2, SIGNAL: 3, SEGV: 4, OP
 const TRAP_OFFSET = 15;                 // words of slack above a trap frame (c4m.c:221)
 
 // Capability bits beyond c4bb's. C4I_C4MJS is reserved in c4m.c:277 for
-// exactly this host. C4I_GUI announces the display device (gui-device.js).
-export const C4I_C4MJS = 0x8, C4I_GUI = 0x4000;
+// exactly this host. C4I_GUI announces the display device (gui-device.js),
+// C4I_SND the sound card (snd-device.js).
+export const C4I_C4MJS = 0x8, C4I_GUI = 0x4000, C4I_SND = 0x8000;
 
 // Why run() stopped.
 export const STOP = { BUDGET: 0, HALT: 1, INPUT: 2, SLEEP: 3 };
@@ -70,6 +71,7 @@ export class Machine {
     this.bus = bus;
     this.heap = heap;
     this.gui = bus.gui || null;
+    this.snd = bus.snd || null;
     dev.machine = this;
     arena.io = dev;
     this.i32 = arena.i32;
@@ -145,6 +147,7 @@ export class Machine {
            (this.noFpu ? 0 : C4I_FPU) |
            (this.dev.mbox ? C4I_MBOX : 0) |
            (this.gui && this.gui.fitted ? C4I_GUI : 0) |
+           (this.snd && this.snd.fitted ? C4I_SND : 0) |
            (this.trapHandler ? C4I_TRAPH : 0);
   }
 

@@ -84,6 +84,8 @@ $CC -o $OUT/bb_mbox.c4r include/c4bb_mbox.h src/c4bb/tests/src/bb_mbox.c > /dev/
 # machine without the display, so it is safe in every corpus.
 $CC -o $OUT/gui-demo.c4r libjs/guest/gui.h libjs/guest/gui.c libjs/guest/gui-demo.c > /dev/null
 $CC -o $OUT/fb-demo.c4r libjs/guest/gui.h libjs/guest/gui.c libjs/guest/fb-demo.c > /dev/null
+# and its sound card's: "no sound card" without one
+$CC -o $OUT/snd-demo.c4r libjs/guest/snd.h libjs/guest/snd.c libjs/guest/snd-demo.c > /dev/null
 $CC -o $OUT/libjs-strc.c4r libjs/tests/src/strc.c > /dev/null
 
 # these include real headers, so they go through the preprocessor
@@ -285,7 +287,7 @@ keep() { cp "$1" "$PB/$2"; }
 # list four kernel files, so an edit to sys.c, vfs.c or a user program
 # was silently not built.
 if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
-   [ -n "$(find src/c4ix libjs/guest/gui.h libjs/guest/gui.c -newer $OUT/c4ix32.c4r -type f -print -quit)" ]; then
+   [ -n "$(find src/c4ix libjs/guest/gui.h libjs/guest/gui.c libjs/guest/snd.h libjs/guest/snd.c -newer $OUT/c4ix32.c4r -type f -print -quit)" ]; then
     rm -rf $PB
     mkdir -p $PB/kernel $PB/lib $PB/libc $PB/user $PB/desktop $PB/bin
     objs=""
@@ -314,7 +316,8 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     # ... and C4IX's shared libraries, which its programs load (c4rlink -l):
     # -fpic, so their code is loaded once and shared by every task. libc4ix
     # has window.h's and cpustat.h's functions too, and libgui the
-    # display's (gui.h), so a program built -D C4IX_SHARED carries none of
+    # display's (gui.h) and the sound card's (snd.h), so a program built
+    # -D C4IX_SHARED carries none of
     # them itself (docs/c4ix-design.md, "Code out of the headers").
     LCPIC="./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -fpic -c -D C4IX_SHARED -I src/c4ix/include"
     $LCPIC src/c4ix/lib/libc4ix.c .c4bb_ix_s_libc4ix.c4o > /dev/null
@@ -324,8 +327,9 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     $LCPIC -mfuse src/c4ix/lib/archive.c .c4bb_ix_s_arc.c4o > /dev/null
     ./c4rlink32 -r .c4bb_ix_s_arc.c4o -o .c4bb_lib/libarc.c4s > /dev/null
     $LCPIC -I libjs/guest libjs/guest/gui.c .c4bb_ix_s_gui.c4o > /dev/null
-    ./c4rlink32 -r .c4bb_ix_s_gui.c4o -o .c4bb_lib/libgui.c4s > /dev/null
-    for m in libc4ix window cpustat arc gui; do keep .c4bb_ix_s_$m.c4o lib/shared-$m.c4o; done
+    $LCPIC -I libjs/guest libjs/guest/snd.c .c4bb_ix_s_snd.c4o > /dev/null
+    ./c4rlink32 -r .c4bb_ix_s_gui.c4o .c4bb_ix_s_snd.c4o -o .c4bb_lib/libgui.c4s > /dev/null
+    for m in libc4ix window cpustat arc gui snd; do keep .c4bb_ix_s_$m.c4o lib/shared-$m.c4o; done
     for m in libc4ix libarc libgui; do
         keep .c4bb_lib/$m.c4s lib/$m.c4s
         cp .c4bb_lib/$m.c4s $DISK/c4ix-$m.c4s
@@ -619,7 +623,7 @@ else
 fi
 [ -f $OUT/libc4ix32.c4l ] && cp $OUT/libc4ix32.c4l $ROOT/usr/lib/libc4ix.c4l
 [ -f $OUT/libarc32.c4l ] && cp $OUT/libarc32.c4l $ROOT/usr/lib/libarc.c4l
-cp src/c4ix/include/*.h src/c4ix/include/*.c libjs/guest/gui.h libjs/guest/gui.c $ROOT/usr/include/
+cp src/c4ix/include/*.h src/c4ix/include/*.c libjs/guest/gui.h libjs/guest/gui.c libjs/guest/snd.h libjs/guest/snd.c $ROOT/usr/include/
 # libc's headers, for -fno-builtin -I /usr/include/libc
 mkdir -p $ROOT/usr/include/libc/sys
 cp src/c4ix/libc/include/*.h $ROOT/usr/include/libc/

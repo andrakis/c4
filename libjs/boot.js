@@ -35,6 +35,7 @@ import { Heap } from './heap.js';
 //   onByte    console sink, one byte at a time
 //   mhz       how fast the machine claims to be; TIME is cycles / (mhz * 1000)
 //   gui       a GuiDevice to fit, or null
+//   snd       a SoundDevice (snd-device.js) to fit, or null
 export function createMachine(opts = {}) {
   const arena = new Arena((opts.arenaMb || 32) * 1024 * 1024);
   const dev = new Devices(arena, {
@@ -43,12 +44,13 @@ export function createMachine(opts = {}) {
     cyclesPerMs: opts.mhz ? Math.max(1, Math.round(opts.mhz * 1000)) : CYCLES_PER_MS,
     hostNow: opts.hostNow,
   });
-  const bus = new Bus(arena, opts.gui || null);
+  const bus = new Bus(arena, opts.gui || null, opts.snd || null);
   const machine = new Machine(arena, dev, bus, new Heap(0, 0));
   // the FPU opcode (F3): on unless asked otherwise (fpu: false)
   machine.noFpu = opts.fpu === false;
   dev.noFpu = machine.noFpu;
   if (opts.gui) opts.gui.attach(machine);
+  if (opts.snd) opts.snd.attach(machine);
   return machine;
 }
 

@@ -2,7 +2,7 @@
 // cli.js - run a .c4r on the libjs c4m from the command line.
 //
 //   node libjs/cli.js [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i]
-//                     [-hz MHz] [--fast] [--mbox BYTES] program.c4r [args...]
+//                     [-hz MHz] [--fast] [--mbox BYTES] [--wav FILE] program.c4r [args...]
 //
 //   -m MB        arena size in megabytes (default 32)
 //   -c cycles    cycle budget (default unlimited); running out is status 9
@@ -14,6 +14,10 @@
 //   --fast       interactive runs go as fast as the host can instead of
 //                pacing to the machine's own clock
 //   --mbox N     fit a mailbox of N bytes (c4bb's MBOX_* registers)
+//   --wav FILE   fit a sound card (snd-device.js) and write what it played,
+//                on the machine's own clock, to FILE: 44.1 kHz 16-bit stereo.
+//                The same session makes the same file. Without it there is
+//                no sound card, and programs run silent
 //
 // The flags are c4bb's (src/c4bb/sim/cli.js), so a test can swap one
 // runner for the other. Piped stdin without -i is fed to the keyboard up
@@ -26,9 +30,11 @@ import { spawn } from 'node:child_process';
 import { constants } from 'node:os';
 import { createMachine, boot } from './boot.js';
 import { STOP } from './c4m.js';
+import { SoundDevice } from './snd-device.js';
+import { renderWav } from './snd-mix.js';
 
 function usage() {
-  console.error('usage: cli.js [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [-hz MHz] [--fast] [--mbox BYTES] program.c4r [args...]');
+  console.error('usage: cli.js [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [-hz MHz] [--fast] [--mbox BYTES] [--wav FILE] program.c4r [args...]');
   process.exit(1);
 }
 
@@ -48,6 +54,7 @@ function parseArgs(argv) {
     else if (f === '--fast') o.unpaced = true;
     else if (f === '--no-fpu') o.fpu = false;
     else if (f === '--mbox') o.mbox = parseInt(argv[++i], 10);
+    else if (f === '--wav') o.wav = argv[++i];
     else if (f === '--') { i++; break; }
     else { console.error(`libjs: unknown option ${f}`); usage(); }
     i++;
@@ -91,8 +98,10 @@ async function main(argv) {
     } : null,
   }));
 
+  const snd = o.wav ? new SoundDevice() : null;
+  const played = [];
   const machine = createMachine({
-    arenaMb: o.arenaMb, drives, mhz: o.mhz, fpu: o.fpu,
+    arenaMb: o.arenaMb, drives, mhz: o.mhz, fpu: o.fpu, snd,
     onByte: b => { out.push(b); if (out.length >= 4096 || b === 10) flush(); },
   });
   const dev = machine.dev;
@@ -147,6 +156,7 @@ async function main(argv) {
     const slice = o.interactive && !o.unpaced ? dev.cyclesPerMs * 16 : 50e6;
     const r = machine.run(Math.min(left, slice));
     flush();
+    if (snd) { const e = snd.drain(); if (e) for (const x of e) played.push(x); }
     if (r === STOP.HALT) { status = dev.status; break; }
     if (r === STOP.INPUT) {
       if (!o.interactive) {
@@ -181,11 +191,17 @@ async function main(argv) {
   }
   flush();
   if (process.stdin.isTTY && o.interactive) process.stdin.setRawMode(false);
+  if (snd) {
+    const e = snd.drain();
+    if (e) for (const x of e) played.push(x);
+    writeFileSync(o.wav, renderWav(played, 44100, Math.max(snd.now(), snd.cursor)));
+  }
   if (o.stats) {
     const dt = (Date.now() - t0) / 1000;
     const ran = machine.cycle - machine.skipped;
     console.error(`libjs: ${ran} cycles in ${dt.toFixed(2)}s (${Math.round(ran / dt / 1000)}k inst/s), ` +
       `${machine.missedTraps} missed traps, status ${status}`);
+    if (snd) { const st = snd.stats(); console.error(`libjs: sound: ${st.writes} OPL writes, ${st.plays} samples played`); }
   }
   return status & 0xff;
 }

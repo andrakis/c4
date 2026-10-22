@@ -2351,9 +2351,10 @@ WOLF_UNITS := arc explode c4sdl c4file plat-c4ix wolfinst id_ca id_in id_pm id_s
               wl_inter wl_main wl_menu wl_play wl_scale wl_state wl_text wl_utils
 WOLF_HDRS  := $(wildcard $(WOLF)/*.h $(WOLF)/*.inc $(WOLF)/sdl/*.h $(WOLF)/c4inc/*.h) \
               $(wildcard src/c4ix/libc/include/*.h src/c4ix/libc/include/sys/*.h) \
-              src/c4ix/include/window.h src/c4ix/include/archive.h
+              src/c4ix/include/window.h src/c4ix/include/archive.h \
+              libjs/guest/snd.h libjs/guest/snd.c
 WOLF_CC    := ./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O -mfuse -fno-builtin -c -D C4IX \
-              -I src/c4ix/libc/include -I src/c4ix/include -I src/c4ix/user \
+              -I src/c4ix/libc/include -I src/c4ix/include -I src/c4ix/user -I libjs/guest \
               -I $(WOLF)/c4inc -I $(WOLF)/sdl -I $(WOLF)
 wolf3d-objs: $(WOLF_UNITS:%=.wolf3d/%.c4o)
 .wolf3d/%.c4o: $(WOLF)/%.c $(WOLF_HDRS) $(C4LC_LISP) | c4sp32

@@ -186,8 +186,8 @@ if echo "$out" | grep -qE "c4ix/user: 2 ran, [0-9]+ up to date, 0 failed"; then
 else bad "an edited source remakes only its object and its program"; echo "$out" | grep -E 'c4ix/user' | head -4; fi
 a=$(echo "$out" | grep -oE '^[0-9a-f]{8} [0-9]+ /build/lib/libc4ix.c4l' | cut -d' ' -f1,2)
 b=$(echo "$out" | grep -oE '^[0-9a-f]{8} [0-9]+ /usr/lib/libc4ix.c4l' | cut -d' ' -f1,2)
-if [ -n "$a" ] && [ "$a" = "$b" ] && echo "$out" | grep -qF "c4ix/lib: 12 ran, 0 up to date, 0 failed" &&
-   echo "$out" | grep -qF "c4ix/lib: 0 ran, 12 up to date, 0 failed"; then
+if [ -n "$a" ] && [ "$a" = "$b" ] && echo "$out" | grep -qF "c4ix/lib: 13 ran, 0 up to date, 0 failed" &&
+   echo "$out" | grep -qF "c4ix/lib: 0 ran, 13 up to date, 0 failed"; then
     ok "b4ke rebuilds libc4ix inside C4IX, byte for byte"
 else bad "b4ke rebuilds libc4ix inside C4IX, byte for byte"; echo "$out" | grep -E 'b4ke|crc32' | head -8; fi
 
@@ -232,5 +232,39 @@ out=$(printf 'pictest A 15 > /tmp/a &\npictest B 15 > /tmp/b &\nwait\ncat /tmp/a
 if echo "$out" | grep -qx "A: ok" && echo "$out" | grep -qx "B: ok" && ! echo "$out" | grep -qF "crossed"; then
     ok "two tasks share libc's code and keep their own data"
 else bad "two tasks share libc's code and keep their own data"; echo "$out" | grep -E 'ok|crossed|loader' | head -6; fi
+
+# The sound card (snd-device.js). Its AdLib, opl.js, is DOSBox's dbopl
+# ported line for line, so the C++ (libjs/tests/src/oplref) renders random
+# register streams and opl.js must make the same samples, bit for bit: at
+# three rates, as an OPL2 and as an OPL3. And its tables are the C++'s.
+if command -v g++ > /dev/null 2>&1; then
+    T=$(mktemp -d)
+    g++ -O2 -w -I libjs/tests/src/oplref -o $T/oplref libjs/tests/src/oplref/oplref.cpp
+    same=1
+    for c in "48000 48000 12345 0" "48000 48000 12345 1" "44100 96000 7 0" "49716 96000 99 1"; do
+        $T/oplref $c > $T/ref.raw
+        node libjs/tests/src/opl-stream.mjs $c > $T/js.raw
+        cmp -s $T/ref.raw $T/js.raw || { same=0; echo "  opl.js differs: $c"; }
+    done
+    $T/oplref -t > $T/tables.txt
+    python3 -I libjs/tests/src/oplref/mktables.py $T/tables.txt $T/opl-tables.js
+    cmp -s $T/opl-tables.js libjs/opl-tables.js || { same=0; echo "  libjs/opl-tables.js is not oplref -t's"; }
+    rm -rf $T
+    if [ $same = 1 ]; then ok "opl.js makes dbopl's samples, bit for bit"
+    else bad "opl.js makes dbopl's samples, bit for bit"; fi
+else echo "test-libjs: no g++, so opl.js is not compared with dbopl"; fi
+
+# snd-demo on the bare machine, its sound written to a file: the same file
+# every time (the machine's clock), sound where the tune and the sample
+# are, and quiet once the last note has died away
+T=$(mktemp -d)
+out=$($LIBJS -s --wav $T/a.wav $IMAGES/snd-demo.c4r 2>&1)
+$LIBJS --wav $T/b.wav $IMAGES/snd-demo.c4r > /dev/null 2>&1
+lev=$(node libjs/tests/src/wav-levels.mjs $T/a.wav 0.05 0.5 1.7 3.3)
+if echo "$out" | grep -qF "snd-demo: 8 notes" && echo "$out" | grep -qE "sound: [0-9]+ OPL writes, 1 samples played" &&
+   cmp -s $T/a.wav $T/b.wav && [ "$lev" = "loud loud loud quiet" ]; then
+    ok "snd-demo plays, the same every time"
+else bad "snd-demo plays, the same every time"; echo "$out" | tail -3; echo "levels: $lev"; fi
+rm -rf $T
 
 if [ $fail = 0 ]; then echo "test-libjs: OK"; else echo "test-libjs: FAILURES"; exit 1; fi

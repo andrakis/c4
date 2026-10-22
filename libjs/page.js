@@ -7,6 +7,7 @@
 //     argv:  ['c4ix32.c4r'],
 //     terminal: document.getElementById('terminal'),   // optional
 //     display:  document.getElementById('display'),    // optional <canvas>
+//     snd:      true,                                   // optional: a sound card, played here
 //   });
 //   vm.on('out', bytes => ...);   vm.on('status', s => ...);   vm.on('exit', e => ...)
 //   vm.write('ps\n');  vm.signal(2);  vm.pause();  vm.resume();  vm.reset();
@@ -57,6 +58,88 @@ async function fetchIndex(dir) {
   } catch { return null; }
 }
 
+// The sound card's events (snd-device.js), played by an AudioWorklet
+// (snd-worklet.js, which mixes them with snd-mix.js). A page that is not
+// a secure context -- plain http from another host -- has no
+// AudioWorklet, and there the same mixer runs on this thread, in a
+// ScriptProcessorNode, a little further behind. A browser starts an
+// AudioContext suspended until the page is used, so the first key or
+// click resumes it. Until it runs nothing is sent, but the OPL's
+// registers are kept, and sent when it starts with every note off, so
+// music that was already playing comes in with its instruments.
+class SoundOut {
+  constructor() {
+    this.ctx = null; this.failed = false; this.how = null;
+    this.send = null;                     // a batch to the mixer, once there is one
+    this.ask = null;                      // the mixer's stats
+    this.shadow = new Map();
+  }
+
+  start() {
+    if (this.ctx || this.failed) return;
+    try { this.ctx = new AudioContext({ latencyHint: 'interactive' }); }
+    catch { this.failed = true; return; }
+    const resume = () => { if (this.ctx.state !== 'running') this.ctx.resume().catch(() => {}); };
+    for (const ev of ['keydown', 'pointerdown']) addEventListener(ev, resume, { capture: true });
+    if (!this.ctx.audioWorklet) { this.here(); return; }
+    this.ctx.audioWorklet.addModule(new URL('./snd-worklet.js', import.meta.url)).then(() => {
+      const node = new AudioWorkletNode(this.ctx, 'c4-sound', { numberOfInputs: 0, outputChannelCount: [2] });
+      node.connect(this.ctx.destination);
+      this.how = 'worklet';
+      this.send = (m, transfer) => node.port.postMessage(m, transfer);
+      this.ask = () => new Promise(res => {
+        node.port.onmessage = e => res(e.data);
+        node.port.postMessage({ stats: 1 });
+      });
+    }, () => this.here());
+  }
+
+  // the mixer on this thread
+  here() {
+    import('./snd-mix.js').then(({ SoundMixer }) => {
+      const mix = new SoundMixer(this.ctx.sampleRate, { latency: 0.12, slack: 0.08 });
+      const sp = this.ctx.createScriptProcessor(2048, 0, 2);
+      sp.onaudioprocess = e => {
+        const out = e.outputBuffer;
+        mix.render(out.getChannelData(0), out.getChannelData(1), out.length);
+      };
+      sp.connect(this.ctx.destination);
+      this.how = 'main thread';
+      this.send = m => { if (m.events) mix.push(m.events, m.now); };
+      this.ask = () => Promise.resolve({ frame: mix.frame, resyncs: mix.resyncs, queued: mix.queue.length - mix.head });
+    }, () => { this.failed = true; });
+  }
+
+  play(events, now) {
+    this.start();
+    if (!this.send || this.ctx.state !== 'running') {
+      for (const e of events) {
+        if (e[0] === 1) this.shadow.set(e[2], e[3]);
+        else if (e[0] === 6) this.shadow.clear();
+      }
+      return;
+    }
+    if (this.shadow.size) {
+      const regs = [];
+      for (const [reg, val] of this.shadow) {
+        const r = reg & 0xff;
+        regs.push([1, now, reg, r >= 0xb0 && r <= 0xb8 ? val & ~0x20 : r === 0xbd ? val & ~0x1f : val]);
+      }
+      this.shadow.clear();
+      events = regs.concat(events);
+    }
+    const transfer = [];
+    for (const e of events) if (e[5] instanceof Uint8Array) transfer.push(e[5].buffer);
+    this.send({ events, now }, transfer);
+  }
+
+  // what the mixer has played -- { frame, resyncs, queued, state, how } -- or null
+  async stats() {
+    if (!this.ask) return null;
+    return { ...(await this.ask()), state: this.ctx.state, how: this.how };
+  }
+}
+
 export class C4M {
   static async boot(opts) {
     const vm = new C4M(opts);
@@ -72,6 +155,7 @@ export class C4M {
     this.status = { state: 'loading' };
     this.raw = false;
     this.exited = null;
+    this.sound = opts.snd ? new SoundOut() : null;
     this.worker.onmessage = e => this.receive(e.data);
     this.worker.onerror = e => this.emit('error', { message: e.message || 'worker failed to start' });
     if (opts.terminal) this.attachTerminal(opts.terminal);
@@ -98,6 +182,7 @@ export class C4M {
       argv, disk: disk.map(([n, b]) => [n, b]), lazy, arenaMb: opts.arenaMb || 64,
       mhz: opts.mhz || 20, unpaced: !!opts.unpaced, mbox: opts.mbox | 0, fpu: opts.fpu,
       gui: this.display ? { w: this.display.width, h: this.display.height } : (opts.gui || null),
+      snd: !!this.sound,
       shared: this.shared || null,
     };
     this.worker.postMessage(this.bootMsg);
@@ -116,6 +201,7 @@ export class C4M {
       case 'status': this.status = m; this.emit('status', m); break;
       case 'kbd': this.raw = m.raw; this.emit('kbd', m); break;
       case 'display': this.emit('display', m.frames); break;
+      case 'snd': if (this.sound) this.sound.play(m.events, m.now); break;
       case 'gui': this.emit('resize', m); break;
       case 'exit': this.exited = m; this.emit('exit', m); break;
       case 'error': this.emit('error', m); break;

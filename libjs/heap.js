@@ -11,7 +11,9 @@
 //   - blocks of 16..4096 bytes come from per-size-class free stacks;
 //   - larger blocks come from a first-fit list of free ranges, sorted
 //     by address and coalesced on free;
-//   - anything else is carved from a bump pointer.
+//   - anything else is carved from a bump pointer;
+//   - and once that is at the end, a small block is carved from a free
+//     range too.
 // Every block is 8-byte aligned. Fresh memory reads as zero because the
 // arena is zero-filled; recycled memory is not cleared (glibc does not
 // clear it either, and c4m.c:1055 notes programs only rely on the
@@ -59,9 +61,14 @@ export class Heap {
       addr = this.takeLarge(span);
     }
     if (!addr) {
-      if (this.brk + span > this.end) return 0;
-      addr = this.brk;
-      this.brk += span;
+      if (this.brk + span <= this.end) { addr = this.brk; this.brk += span; }
+      // The bump pointer is at the end, but a free range may still have
+      // room for a small block. Without this a heap with megabytes free
+      // in its ranges refused a hundred bytes once its top was reached:
+      // a full b4ke build inside C4IX did, in 64 MB, and the first block
+      // b4ke could not have was its next file name.
+      else if (span <= SMALL_MAX) addr = this.takeLarge(span);
+      if (!addr) return 0;
     }
     this.sizes.set(addr, n);
     this.spans.set(addr, span);

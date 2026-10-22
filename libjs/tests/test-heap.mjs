@@ -70,6 +70,14 @@ const big1 = h4.alloc(8000), big2 = h4.alloc(8000);
 check(h4.alloc(16) !== 0, 'spacer');
 h4.free(big1); h4.free(big2);
 check(h4.alloc(16000) === big1, 'freed large neighbours coalesce');
+// The top reached, a small block still comes out of a freed large one.
+const h5 = new Heap(base, base + 64 * 1024);
+const fill = [];
+for (let p; (p = h5.alloc(8000)); ) fill.push(p);
+while (h5.alloc(16)) ;
+h5.free(fill[1]);
+const s5 = h5.alloc(100);
+check(s5 >= fill[1] && s5 < fill[1] + 8000, 'a small block from a free range once the top is reached');
 
 console.log(fail ? 'test-heap: FAILED' : 'test-heap: OK');
 process.exit(fail);

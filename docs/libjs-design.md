@@ -112,7 +112,8 @@ Reused from `src/c4bb/sim/`: `arena.js`, `devices.js`, `loader.js`
     nothing.
 - **The heap** keeps no headers in guest memory. Sizes live in a `Map`,
   small blocks come from size classes, large ones from a first-fit list with
-  coalescing. RALC follows `c4m.c:1381-1398`.
+  coalescing, and once the bump pointer is at the end a small block is cut
+  from a free range too. RALC follows `c4m.c:1381-1398`.
 - **printf** takes its argument count from the operand of the ADJ that
   follows it; more than 7 arguments prints "Too many arguments to printf!" and
   exits -1. The `l`, `ll`, `h` and `z` modifiers are ignored: one word per

@@ -322,13 +322,17 @@ Found on the way:
   fixed cost. They had been ladders of ifs at six instructions a rung,
   and `SYS_SLEEP`, the desktop's most frequent call, was the 24th. c4fc
   gives the same objects.
-- **`ck_dispatch` stays a ladder, for now.** As a switch, its jump
-  table in the kernel data segment was overwritten in some layouts.
-  test-c4ix-c4ke's benchtop failed with the kernel image at a path of 7
-  or 8 characters ("OPCD does not support opcodes requiring arguments"),
-  and passed at 5, 6, 10 and 17; a kprintf hid it. Something writes
-  where it should not, and a ladder, which reads no data, does not show
-  it. Finding the write is a task of its own.
+- **`ck_dispatch` stayed a ladder at first.** As a switch, test-c4ix-c4ke's
+  benchtop failed with the kernel image at a path of 7 or 8 characters
+  ("OPCD does not support opcodes requiring arguments"), and passed at 5,
+  6, 10 and 17; a kprintf hid it. It looked like a stray write over the
+  jump table, but in a failing run the table was intact. An instruction
+  trace showed benchtop running before its u0 constructor, with every
+  `OP_*` still 0. `task_spawn_priv` put the task on the run list before
+  giving it its constructors, and init was preempted in between. The
+  path length, the kprintf and the switch all moved where init's slice
+  ended. The spawn has been under `sched_lock` since M7c (a3d4fc0), and
+  `ck_dispatch` is now a switch too.
 - **Nothing to do costs nothing.** The reap list and pending signals
   are tested in `sched_trap` before a call is made. Both are almost
   always empty.

@@ -77,11 +77,23 @@ static int b4_streq(char *a, char *b) {
     return *a == *b;
 }
 
+// Memory, or stop: an allocation that failed and was written through
+// anyway lands at address 0, under the kernel's own trap vector, and
+// takes every task down with it.
+static int *b4_alloc(int bytes) {
+    int *p;
+    if (!(p = ualloc(bytes))) {
+        ufprintf(STDERR, "b4ke: out of memory\n");
+        uexit(1);
+    }
+    return p;
+}
+
 static char *b4_dup(char *s) {
     char *r;
     int n;
     n = ustrlen(s);
-    r = (char *)ualloc(n + 1);
+    r = (char *)b4_alloc(n + 1);
     memcpy(r, s, n + 1);
     return r;
 }
@@ -90,7 +102,7 @@ static char *b4_cat3(char *a, char *b, char *c) {
     char *r;
     int na, nb, nc;
     na = ustrlen(a); nb = ustrlen(b); nc = ustrlen(c);
-    r = (char *)ualloc(na + nb + nc + 1);
+    r = (char *)b4_alloc(na + nb + nc + 1);
     memcpy(r, a, na);
     memcpy(r + na, b, nb);
     memcpy(r + na + nb, c, nc + 1);
@@ -202,11 +214,11 @@ static char *b4_slurp(char *name, int *plen) {
     char *buf, *nb;
     if ((fd = uopen(name, O_RD)) < 0) return 0;
     cap = (ustat(name, st) == 0 && st[1] > 0) ? st[1] + 1 : 4096;
-    buf = (char *)ualloc(cap + 1);
+    buf = (char *)b4_alloc(cap + 1);
     got = 0;
     while (1) {
         if (got == cap) {
-            nb = (char *)ualloc(cap * 2 + 1);
+            nb = (char *)b4_alloc(cap * 2 + 1);
             memcpy(nb, buf, got);
             free(buf);
             buf = nb;
@@ -274,7 +286,7 @@ static int b4_list(char **w, int n) {
     len = 0;
     i = 2;
     while (i < n) { len = len + ustrlen(w[i]) + 1; ++i; }
-    buf = (char *)ualloc(len + 1);
+    buf = (char *)b4_alloc(len + 1);
     p = buf;
     i = 2;
     while (i < n) { s = w[i]; while (*s) *p++ = *s++; *p++ = 10; ++i; }
@@ -404,7 +416,7 @@ static int b4_run(char **w, int n) {
 static int b4_sub(char **w, int n) {
     char **av;
     int ac, i, pid, code;
-    av = (char **)ualloc((n + b4_nover + 8) * sizeof(int));
+    av = (char **)b4_alloc((n + b4_nover + 8) * sizeof(int));
     ac = 0;
     av[ac++] = "b4ke";
     av[ac++] = "-C";
@@ -438,7 +450,7 @@ static int b4_step(char **w, int n) {
         len = 0;
         i = 2;
         while (i < n) { len = len + ustrlen(w[i]) + 1; ++i; }
-        val = (char *)ualloc(len + 1);
+        val = (char *)b4_alloc(len + 1);
         p = val;
         i = 2;
         while (i < n) {
@@ -471,7 +483,7 @@ static int b4_step(char **w, int n) {
     if (b4_streq(w[0], "DEPS")) {
         if (n < 3 || !b4_streq(w[2], ":")) return b4_err("DEPS wants NAME : SOURCES", 0);
         b4_target = b4_dup(w[1]);
-        b4_deps = (char **)ualloc((n + 1) * sizeof(int));
+        b4_deps = (char **)b4_alloc((n + 1) * sizeof(int));
         b4_ndeps = 0;
         i = 3;
         while (i < n) b4_deps[b4_ndeps++] = b4_dup(w[i++]);
@@ -513,7 +525,7 @@ int main(int argc, char **argv) {
 
     b4_file = "BUILD.B4K";
     dir = 0;
-    b4_over = (char **)ualloc((argc + 1) * sizeof(int));
+    b4_over = (char **)b4_alloc((argc + 1) * sizeof(int));
     b4_nover = 0;
     i = 1;
     while (i < argc) {
@@ -534,8 +546,8 @@ int main(int argc, char **argv) {
         ufprintf(STDERR, "b4ke: cannot read %s in %s\n", b4_file, b4_dir);
         return 1;
     }
-    line = (char *)ualloc(B4_LINE);
-    words = (char **)ualloc(B4_ARGS * sizeof(int));
+    line = (char *)b4_alloc(B4_LINE);
+    words = (char **)b4_alloc(B4_ARGS * sizeof(int));
 
     p = text;
     ok = 1;

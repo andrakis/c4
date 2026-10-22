@@ -123,13 +123,13 @@ static void mod_free(struct c4r_mod *m) {
 static int mod_read(char *path, struct c4r_mod *m) {
     char *buf, *p, *data;
     int *code;
-    int fd, n, total;
+    int fd, n, total, got;
     int entry, codelen, datalen, patchlen, symlen, conslen, deslen, memsz;
     int i, ptype, paddr, pvalu;
     struct vnode *vn;
 
     memset((char *)m, 0, sizeof(struct c4r_mod));
-    if (!(buf = (char *)malloc(C4R_BUF_MAX))) return 0;
+    buf = 0;
     // A RAM file by this path wins over the host. The comment below once
     // said the two could not name the same file, but a host is free to
     // answer a path it does not have -- c4bb's disk tries the bare file
@@ -138,18 +138,38 @@ static int mod_read(char *path, struct c4r_mod *m) {
     vn = vfs_lookup(path);
     if (vn && vn->type != VN_RAMFILE) vn = 0;
     if (!vn && (fd = open(path, 0)) >= 0) {
+        // The host says nothing of a file's size, so it is read twice:
+        // a chunk at a time to count it, then into a buffer just that
+        // size. A cached -fpic library keeps its file for as long as the
+        // machine runs, as the template of every task's copy of its
+        // data, and the 4 MB buffer each load used to keep was a third of
+        // the heap. Reading into 4 MB and copying out was no better: the
+        // copy, made while the 4 MB was held, landed past it, and a full
+        // build left a heap of 4 MB holes too cut up to load the next
+        // program into, until b4ke's allocations failed.
+        if (!(buf = (char *)malloc(65536))) { close(fd); return 0; }
         total = 0;
-        // never past the buffer: a host file of any size can be named
-        while (total < C4R_BUF_MAX &&
-               (n = read(fd, buf + total, C4R_BUF_MAX - total < 65536 ? C4R_BUF_MAX - total : 65536)) > 0)
-            total = total + n;
+        // never far past the limit: a host file of any size can be named
+        while (total <= C4R_BUF_MAX && (n = read(fd, buf, 65536)) > 0) total = total + n;
         close(fd);
+        free(buf);
+        buf = 0;
+        if (total > C4R_BUF_MAX) {
+            kprintf("c4ix: loader: %s is over the %d-byte limit\n", path, C4R_BUF_MAX);
+            return 0;
+        }
+        if (total <= 0 || !(buf = (char *)malloc(total + 16))) return 0;
+        if ((fd = open(path, 0)) < 0) { free(buf); return 0; }
+        got = 0;
+        while (got < total && (n = read(fd, buf + got, total - got < 65536 ? total - got : 65536)) > 0)
+            got = got + n;
+        close(fd);
+        total = got;
     } else {
         if (!vn) {
             // Silent: callers try several candidate names (the shell
             // resolves "wc" against three), so a miss is routine and
             // the caller is the one that knows when to complain.
-            free(buf);
             return 0;
         }
         // The RAM filesystem -- and this is not a convenience. A program the machine produced
@@ -166,9 +186,9 @@ static int mod_read(char *path, struct c4r_mod *m) {
         if (total > C4R_BUF_MAX) {
             kprintf("c4ix: loader: %s is %d bytes, over the %d limit\n",
                     path, total, C4R_BUF_MAX);
-            free(buf);
             return 0;
         }
+        if (!(buf = (char *)malloc(total + 16))) return 0;
         memcpy(buf, vn->data, total);
     }
     if (total < 13) {

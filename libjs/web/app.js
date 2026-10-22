@@ -1,7 +1,9 @@
 // app.js - the c4m.js page: pick a system, boot it, wire the panes.
 //
 // URL parameters:
-//   ?system=c4ix|c4ke|gui-demo|fb-demo|snd-demo|raycast   which machine to boot (default c4ix)
+//   ?system=NAME                 which machine to boot (default c4ix): c4ix, c4ke,
+//                                c4dos, wolf3d, wolf3d-c4ix, gui-demo, fb-demo,
+//                                snd-demo, raycast -- SYSTEMS below
 //   ?image=URL&disk=URL          any other image and disk instead
 //   ?mhz=N                       how fast the machine runs, paced (default 100)
 //   ?snd=0                       no sound card
@@ -24,6 +26,17 @@ const IMAGES = '../../src/c4bb/images';
 const SYSTEMS = {
   c4ix: { label: 'C4IX', image: `${IMAGES}/c4ix32.c4r`, disk: `${IMAGES}/disk`, argv: ['c4ix32.c4r', '--desktop'], persist: 'c4ix' },
   c4ke: { label: 'C4KE', image: `${IMAGES}/c4ke32.c4r`, disk: `${IMAGES}/disk`, argv: ['c4ke32.c4r'] },
+  // C4DOS on Wolfenstein 3D's disk (build-images.sh): the game unpacked,
+  // beside C4DOS's own files, so WOLF3D at the A> prompt plays it.
+  c4dos: { label: 'C4DOS', image: `${IMAGES}/c4dos32.c4r`, disk: `${IMAGES}/wolf3d`, argv: ['c4dos32.c4r'], mhz: 400 },
+  // Wolfenstein 3D with no operating system under it (src/wolf3d/plat-bare.c),
+  // and on C4IX drawing on the display itself rather than in a window
+  // (wolf3d --direct, like raycast -G). The game times itself against the
+  // machine's clock, so these are paced, at a clock it can keep up with.
+  wolf3d: { label: 'Wolfenstein 3D (bare machine)', image: `${IMAGES}/wolf3d/wolf3d.c4r`, disk: `${IMAGES}/wolf3d`,
+            argv: ['wolf3d.c4r'], mhz: 400 },
+  'wolf3d-c4ix': { label: 'Wolfenstein 3D (C4IX, direct)', image: `${IMAGES}/c4ix32.c4r`, disk: `${IMAGES}/disk`,
+                   argv: ['c4ix32.c4r', '-e', 'persist -d 60 &', '-e', 'wolf3d --direct'], persist: 'c4ix', mhz: 400 },
   'gui-demo': { label: 'GUI demo (bare machine)', image: `${IMAGES}/gui-demo.c4r`, disk: null, argv: ['gui-demo.c4r'] },
   // Computes every pixel itself, so it claims a faster clock than c4bb's 20 MHz.
   'fb-demo': { label: 'Framebuffer demo (bare machine)', image: `${IMAGES}/fb-demo.c4r`, disk: null, argv: ['fb-demo.c4r'], mhz: 100 },

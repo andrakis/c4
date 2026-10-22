@@ -269,6 +269,8 @@ static void init_usage() {
     kputs("  c4ix.c4r --desktop   the web page's boot: the root archive unpacks first,\n");
     kputs("                       with a loading screen, then the shell runs\n");
     kputs("                       \"desktop &\" and \"top\", as if they were typed\n");
+    kputs("  c4ix.c4r -e CMD      the shell runs CMD first, as if it were typed (up\n");
+    kputs("                       to four, after --desktop's own if both are given)\n");
 }
 
 // The guided tour. argc/av are shifted past --demo, so av[1] is the
@@ -330,13 +332,15 @@ static int init_demo(int argc, char **av) {
 int init_main(int argc, int argv) {
     struct task *a, *v;
     char **av;
-    char *shargv[8];
+    char *shargv[16];
     char *vav[3];
-    int i, desktop, shargc;
+    char *cmds[4];
+    int i, desktop, shargc, ncmd, k;
 
     av = (char **)argv;
     i = 1;
     desktop = 0;
+    ncmd = 0;
 
     if (i < argc) {
         if (init_is(av[i], "-h") || init_is(av[i], "--help")) {
@@ -354,6 +358,9 @@ int init_main(int argc, int argv) {
         // background on the console, then the desktop on the display,
         // as typing "top &" and "desktop" at the first prompt would
         if (i < argc && init_is(av[i], "--desktop")) { desktop = 1; ++i; }
+        // -e CMD: the shell runs CMD as if it were typed (the web page's
+        // "Wolfenstein 3D on C4IX" boots the console with -e "wolf3d --direct")
+        while (i + 1 < argc && ncmd < 4 && init_is(av[i], "-e")) { cmds[ncmd++] = av[i + 1]; i += 2; }
     }
 
     // Nothing left to run: the default, and the reason the default is
@@ -387,6 +394,8 @@ int init_main(int argc, int argv) {
             shargv[3] = "-e"; shargv[4] = "desktop &"; shargv[5] = "-e"; shargv[6] = "top"; shargv[7] = 0;
             shargc = 7;
         }
+        for (k = 0; k < ncmd; ++k) { shargv[shargc++] = "-e"; shargv[shargc++] = cmds[k]; }
+        shargv[shargc] = 0;
         if (!(a = task_spawn(shargv[0], shargc, (int)shargv))) {
             kprintf("init: cannot start '%s'\n", shargv[0]);
             return 1;

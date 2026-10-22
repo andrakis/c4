@@ -63,7 +63,7 @@ URL parameters (from `web/app.js`):
 
 | Parameter | Meaning |
 |---|---|
-| `?system=c4ix\|c4ke\|gui-demo\|fb-demo\|snd-demo\|raycast` | Which machine to boot (default `c4ix`). The last four are bare programs on the display or the sound card. |
+| `?system=c4ix\|c4ke\|c4dos\|wolf3d\|wolf3d-c4ix\|gui-demo\|fb-demo\|snd-demo\|raycast` | Which machine to boot (default `c4ix`). `c4dos` is C4DOS on Wolfenstein 3D's disk; `wolf3d` is the game on the bare machine, and `wolf3d-c4ix` on C4IX's whole display (docs/c4ix-wolf3d.md). The last four are bare programs on the display or the sound card. |
 | `?image=URL&disk=URL` | Any other image and disk. |
 | `?mhz=N` | Paced speed (default 100). |
 | `?fast` | Unpaced. |

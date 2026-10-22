@@ -36,6 +36,7 @@ libc.c4s
 
 # Wolfenstein 3D's objects (make wolf3d-objs), its gcc build, its test
 /.wolf3d/
+/.wolf3d-bare/
 /.wolf3d_t/
 /wolf3d-host
 

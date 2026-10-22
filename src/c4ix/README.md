@@ -55,6 +55,8 @@ The kernel's command line, from `c4ix.c4r --help`:
       ...
       c4ix.c4r --desktop   the web page's boot: the shell runs "desktop &",
                            then "top", as if they were typed
+      c4ix.c4r -e CMD      the shell runs CMD first, as if it were typed
+                           (up to four; the page's wolf3d-c4ix uses it)
 
 `PROGRAM` is a host path and is not expanded; the shell expands a bare
 name to `c4ix-NAME.c4r` or `NAME.c4r`. `--demo` takes six images in fixed

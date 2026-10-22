@@ -157,7 +157,7 @@ The table is 32 words, zeroed at boot. Slot 5 is the version.
 | slot | v1 | | slot | v2 / v3 |
 |---|---|---|---|---|
 | 0 | magic `C4D` | | 9 | `count()` → RAM disk entries |
-| 1 | `dos_exit` (reserved, always 0) | | 10 | `entname(i)` → `char *` |
+| 1 | `dos_exit(status)`, from `main` down | | 10 | `entname(i)` → `char *` |
 | 2 | `create(name)` | | 11 | `entsize(i)` → bytes |
 | 3 | `write(h, buf, len)` | | 12 | `entdata(i)` → `char *` |
 | 4 | `close(h)` | | 13 | `trim()` → scratch bytes released |
@@ -165,6 +165,13 @@ The table is 32 words, zeroed at boot. Slot 5 is the version.
 | 6 | `open(name)` | | 15 | **v3** `time()` → ms since power-on |
 | 7 | `read(h, buf, len)` | | | |
 | 8 | `close(h)` | | | |
+
+Slot 1 was always 0 until 2026-10; since then it is `dos_exit`, which
+returns to the prompt from any depth through `run_trans`'s trampoline.
+It is called directly, so only a program for a machine with indirect
+calls uses it -- libc's `bare.c` (Wolfenstein 3D). `include/c4dos.h`
+keeps to the invoke stub and still returns from `main`, and a
+constructor cannot call it, so `C4DOS_REFUSE` stays the way to decline.
 
 Slots 2 and 9–12 are advertised only when `DEVICE=RAMDISK.SYS` was
 installed, and slot 15 only when `DEVICE=CLOCK.SYS` was, so a caller

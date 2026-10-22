@@ -6,6 +6,9 @@ starts it, as does `wolf3d` at a shell prompt. All of it works: the
 display, the keyboard, the music and sounds, and the game. The source,
 and what was changed in it, is [src/wolf3d](../src/wolf3d/README.md).
 
+It also runs without the desktop: on C4IX's whole display, under C4DOS,
+and on the bare machine ("Without the desktop", below).
+
 ## Playing
 
 The keys are the original's:
@@ -35,6 +38,30 @@ The config file and saved games go beside the game in
 between visits, with the game's unpacked data, like every other change
 to C4IX's files (docs/c4ix-design.md, "Persistence"), so only the first
 visit unpacks the zip.
+
+## Without the desktop
+
+The web page's system list has three more ways to play it:
+
+| `?system=` | what boots | the game |
+|---|---|---|
+| `wolf3d-c4ix` | C4IX's console, which runs `wolf3d --direct` (init's `-e`) | on the whole display, as `raycast -G` draws; the first run unpacks the zip, as above, and it is kept |
+| `c4dos` | C4DOS, on the `images/wolf3d` disk | type `WOLF3D` at the `A>` prompt; Quit comes back to it |
+| `wolf3d` | the game itself, with no operating system | at once; Quit halts the machine |
+
+The C4DOS and bare builds are the same game objects linked whole with
+libc and with libc's `bare.c`, which puts the C library's file calls on
+the machine's own opcodes. Under C4DOS it asks DOS for the files DOS has
+(the API table, docs/c4dos-design.md), and its `exit` is DOS's
+`dos_exit`, which returns to the prompt from however deep the game is.
+Neither can write a drive, so the game's data comes unpacked on their
+disk, beside Apogee's zip. Under C4DOS the config and saved games go to
+DOS's RAM disk; on the bare machine nowhere. Neither keeps them between
+visits.
+
+These three entries run at 400 MHz, paced. The game times itself against
+the machine's clock, so a faster clock than the page's 100 only gives it
+room; `?mhz=` changes it.
 
 ## The first run
 
@@ -183,6 +210,14 @@ with `-j2`, and `c4bb-images` depends on it. `build-images.sh` then
 links the objects against C4IX's libc and puts the game and the zip on
 the disk.
 
+`make wolf3d-bare-objs` builds what the bare machine and C4DOS link
+instead of C4IX's libc: `plat-bare.c`, and libc's units without `-fpic`,
+with `bare.c` and `bareu.c`. `build-images.sh` links them with the same
+objects, less `plat-c4ix.c`, as `images/wolf3d/wolf3d.c4r`, and makes
+that directory a disk: the zip, the game's files unpacked from it (by
+`tools/unshr.c` on the host), C4DOS's `CONFIG.SYS` and `AUTOEXEC.BAT`,
+and the indexes the page and C4DOS read.
+
 The sources stay out of C4IX's root archive, which every boot unpacks.
 Rebuilding the game inside the machine would take hours, and they would
 make that unpacking longer for nothing.
@@ -197,7 +232,10 @@ plays demo 0 twice:
 - built by gcc on the host (`make wolf3d-host`);
 - built by c4lc, inside C4IX on libjs, after unpacking the zip.
 
-Both must print the same 1,214 frames and checksum. The host prints:
+Then it plays it on the bare machine and under C4DOS, from the
+`images/wolf3d` disk, the two at once; C4DOS must then be back at its
+prompt. All four must print the same 1,214 frames and checksum. The
+host prints:
 
 ```
 timedemo: demo 0: 1214 frames, checksum d7358845

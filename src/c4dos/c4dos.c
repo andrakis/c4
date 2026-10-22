@@ -251,9 +251,13 @@ int learn_trampoline () {
   return 0;
 }
 
-// The transient-facing API. Slot 0 of the table handed to programs
+// The transient-facing API. Slot 1 of the table handed to programs
 // via __c4dos_api. A transient's exit() calls this instead of the
-// EXIT opcode (which would halt the machine).
+// EXIT opcode (which would halt the machine), from however deep it is:
+// the trampoline below returns from run_trans, not from this call.
+// The call is an indirect one, so only a program built for a machine
+// that has them can make it -- libc's bare.c does; include/c4dos.h,
+// which keeps to the invoke stub, still returns from main.
 int dos_exit (int status) {
   int *bp;
   if (!g_in_trans) {
@@ -623,22 +627,19 @@ int run_trans (int entry, int argc, char **argv) {
   return r;
 }
 
-// The API table: [0] magic 'C4D', [1] dos_exit's invoke address...
-// which plain c4 cannot take (&function is a c4m feature). The table
-// instead holds the STUB SLOT protocol: [1] = the address of a
-// one-word cell the shim writes a target INDEX into, [2..] reserved.
-// M0 keeps it minimal: transients built with include/c4dos.h call
-// dos_exit through api[1] as a code address on machines that allow
-// indirect calls, and everything else just returns from main.
+// The API table: [0] magic 'C4D', [1] dos_exit, [2..] the rest (see
+// include/c4dos.h for the slots). Each is a code address: a transient
+// built with include/c4dos.h reaches it through the invoke stub, one
+// on a machine with indirect calls calls it directly.
 int *g_api;
 
 enum { C4DOS_REFUSE = 1127037010 };   // 'C','4','D','R'
 
 // A constructor returning EXACTLY C4DOS_REFUSE aborts the program.
 // There is no other way for a transient to decline: exit() is the EXIT
-// opcode, which halts the whole machine, and g_api[1] (dos_exit) is
-// permanently 0 -- returning from main is the only clean way out, and
-// a constructor cannot do that. u0.h uses this to say "requires C4KE"
+// opcode, which halts the whole machine, and g_api[1] (dos_exit) may
+// only be called while main runs -- run_trans is the frame it returns
+// through, and a constructor runs before there is one. u0.h uses this to say "requires C4KE"
 // instead of trap-storming through 38 opcode requests at a kernel that
 // is not here; libc4ix.c says the same for C4IX.
 //
@@ -1244,7 +1245,7 @@ int main (int argc, char **argv) {
   if (!(g_api = malloc(C4DOS_API_SLOTS * sizeof(int)))) { printf("c4dos: out of memory\n"); return 1; }
   memset(g_api, 0, C4DOS_API_SLOTS * sizeof(int));
   g_api[0] = ('C' << 16) + ('4' << 8) + 'D';   // magic
-  g_api[1] = 0;                                // dos_exit entry: see c4dos.h
+  g_api[1] = (int)&dos_exit;                   // from main and below only
   g_api[2] = 0;                                // filled after CONFIG.SYS
   g_api[3] = (int)&dos_api_write;
   g_api[4] = (int)&dos_api_close;

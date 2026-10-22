@@ -442,6 +442,35 @@ if ls .wolf3d/*.c4o > /dev/null 2>&1 && [ -f $PB/lib/libc.c4s ]; then
     cp src/wolf3d/data/1wolf14.zip $DISK/1wolf14.zip
 fi
 
+# ... and with no C4IX under it: the bare machine, and C4DOS (plat-bare.c,
+# libc's bare.c; make wolf3d-bare-objs). The same game objects, but for
+# the C4IX platform, linked whole with libc. Its disk, $OUT/wolf3d, has
+# the game's files unpacked, since neither the bare machine nor DOS can
+# write to a drive -- beside Apogee's package they come from, unmodified,
+# as its VENDOR.DOC asks -- and C4DOS's own files, so it boots C4DOS too.
+WOLFDISK=$OUT/wolf3d
+if ls .wolf3d-bare/*.c4o > /dev/null 2>&1 && ls .wolf3d/*.c4o > /dev/null 2>&1; then
+    rm -rf $WOLFDISK
+    mkdir -p $WOLFDISK
+    ./c4rlink32 $(ls .wolf3d/*.c4o | grep -v '/plat-c4ix.c4o$') .wolf3d-bare/*.c4o -o $WOLFDISK/wolf3d.c4r > /dev/null
+    cp src/wolf3d/data/1wolf14.zip $WOLFDISK/
+    python3 -I -c "import zipfile, sys; zipfile.ZipFile(sys.argv[1]).extract('W3DSW14.SHR', sys.argv[2])" \
+        src/wolf3d/data/1wolf14.zip $WOLFDISK
+    gcc -O2 -o .wolf3d-bare/unshr src/wolf3d/tools/unshr.c
+    .wolf3d-bare/unshr $WOLFDISK/W3DSW14.SHR $WOLFDISK > /dev/null
+    rm -f $WOLFDISK/W3DSW14.SHR $WOLFDISK/*.exe
+    cp $DISK/config.sys $WOLFDISK/config.sys
+    printf '@ECHO OFF\nECHO Welcome to C4DOS\nVER\nECHO Wolfenstein 3D is on this disk: type WOLF3D to play.\n' > $WOLFDISK/autoexec.bat
+    (cd $WOLFDISK && ls -p | grep -v '/$' | grep -v '^manifest.json$' > c4dos.dir)
+    (cd $WOLFDISK && find . -type f -not -name manifest.json | sed 's|^\./||') | \
+        awk 'BEGIN{printf "["} NR>1{printf ","} {printf "\"%s\"", $0} END{print "]"}' > $WOLFDISK/manifest.json
+    # and lazy for the web page, as $DISK is below: a file is fetched the
+    # first time the machine opens it, so the package's zip costs nothing
+    (cd $WOLFDISK && find . -type f -not -name manifest.json -not -name index.json -printf '%s %P\n' | sort -k2) | \
+        awk 'BEGIN{printf "["} NR>1{printf ","} {n=$0; sub(/^[0-9]+ /,"",n); printf "[\"%s\",%s]", n, $1} END{print "]"}' \
+        > $WOLFDISK/index.json
+fi
+
 # the C4IX VFS manifest and the plain-text sources it references -
 # c4ix.vfs.txt is curated SOURCE (see src/c4bb/fs/), copied in like
 # c4ke.vfs.txt above, not regenerated with the rest of images/.

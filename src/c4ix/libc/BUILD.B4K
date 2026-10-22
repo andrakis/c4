@@ -46,3 +46,7 @@ DEPS $(OUT)/libc/pictest.c4o : src/c4ix/libc/tests/pictest.c $(H)
 RUN $(LC) -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/pictest.c $(OUT)/libc/pictest.c4o
 DEPS $(OUT)/bin/c4ix-pictest.c4r : $(OUT)/libc/pictest.c4o $(OUT)/lib/libc.c4s
 RUN c4rlink $(OUT)/libc/pictest.c4o -l $(OUT)/lib/libc.c4s -o $(OUT)/bin/c4ix-pictest.c4r
+DEPS $(OUT)/libc/unixtest.c4o : src/c4ix/libc/tests/unixtest.c $(H)
+RUN $(LC) -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/unixtest.c $(OUT)/libc/unixtest.c4o
+DEPS $(OUT)/bin/c4ix-unixtest.c4r : $(OUT)/libc/unixtest.c4o $(OUT)/lib/libc.c4s
+RUN c4rlink $(OUT)/libc/unixtest.c4o -l $(OUT)/lib/libc.c4s -o $(OUT)/bin/c4ix-unixtest.c4r

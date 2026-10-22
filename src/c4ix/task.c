@@ -65,11 +65,83 @@ struct task *task_create(char *name, int entry, int argc, int argv) {
         fd_clone(t, parent);
         t->cwd = parent->cwd;      // children start where the parent is
         t->parent = parent->id;
+        // and with its environment, as execve last gave it
+        if (parent->env_vec) task_strvec((char **)parent->env_vec, -1, &t->env_vec, &t->env_data);
     }
     else fd_init_console(t);
     task_append(t);
     sched_unlock();
     return t;
+}
+
+// The vfork child (sched_vfork). Its stack is its own: the parent's frames
+// below the one that called vfork must survive the child's calls, which
+// is the one thing a stack machine's vfork cannot share (sched.c).
+struct task *task_vchild(struct task *p) {
+    struct task *t;
+    if (!(t = task_alloc(p->name))) return 0;
+    t->state = TS_READY;
+    if (!sched_forge(t, 0, 0, 0)) {
+        sl4b_free(task_cache, (char *)t);
+        return 0;
+    }
+    sched_lock();
+    fd_clone_all(t, p);
+    t->cwd = p->cwd;
+    t->parent = p->id;
+    t->privs = p->privs;
+    t->spawn_stack = p->spawn_stack;
+    t->img_libs = p->img_libs;
+    t->img_nlibs = p->img_nlibs;
+    t->vfparent = p;
+    if (p->env_vec) task_strvec((char **)p->env_vec, -1, &t->env_vec, &t->env_data);
+    task_append(t);
+    sched_unlock();
+    return t;
+}
+
+// Its execve or its exit: the parent's memory is the parent's again,
+// and the parent goes on from its vfork, which returns the child's id
+// (already in its saved accumulator).
+void task_unborrow(struct task *t) {
+    struct task *p;
+    if (!(p = t->vfparent)) return;
+    t->vfparent = 0;
+    t->img_libs = 0;
+    t->img_nlibs = 0;
+    if (p->state == TS_VFORK && p->wait_for == t->id) p->state = TS_READY;
+}
+
+int task_strvec(char **v, int n, int *pvec, int *pdata) {
+    char **vec;
+    char *blob, *p;
+    int i, k, bytes;
+
+    *pvec = 0;
+    *pdata = 0;
+    if (!v) return 0;
+    if (n < 0) { n = 0; while (v[n]) ++n; }
+    bytes = 1;
+    i = 0;
+    while (i < n) {
+        if (v[i]) { k = 0; while (v[i][k]) ++k; bytes = bytes + k + 1; }
+        else bytes = bytes + 1;
+        ++i;
+    }
+    if (!(vec = (char **)malloc((n + 1) * sizeof(int)))) return -1;
+    if (!(blob = (char *)malloc(bytes))) { free((int *)vec); return -1; }
+    p = blob;
+    i = 0;
+    while (i < n) {
+        vec[i] = p;
+        if (v[i]) { k = 0; while (v[i][k]) { *p = v[i][k]; ++p; ++k; } }
+        *p = 0; ++p;
+        ++i;
+    }
+    vec[n] = 0;
+    *pvec = (int)vec;
+    *pdata = (int)blob;
+    return n;
 }
 
 // Turn the currently running context (boot) into a task: no forged
@@ -120,15 +192,38 @@ struct task *task_reaplist;   // released, waiting to be freed (sched_trap check
 // been swept: task_get returns nothing and the wait yields -1 instead
 // of the exit code. This table closes it -- the last few exit statuses
 // outlive their tasks, so a late wait still gets the right answer.
+//
+// A ghost the sweep made also keeps its parent, for a waitpid(-1) that
+// comes later; one collected by a wait does not (-1), so it is not
+// handed out twice.
 enum { TASK_GHOSTS = 32 };
 static int ghost_id[TASK_GHOSTS];
 static int ghost_code[TASK_GHOSTS];
+static int ghost_parent[TASK_GHOSTS];
+static int ghost_sig[TASK_GHOSTS];
 static int ghost_next;
 
 static void task_remember(struct task *t) {
     ghost_id[ghost_next] = t->id;
     ghost_code[ghost_next] = t->exitcode;
+    ghost_parent[ghost_next] = -1;
+    ghost_sig[ghost_next] = t->killsig;
     ghost_next = (ghost_next + 1) % TASK_GHOSTS;
+}
+
+int task_ghost_child(int parent, int pid, int *pcode, int *psig) {
+    int i;
+    i = 0;
+    while (i < TASK_GHOSTS) {
+        if (ghost_parent[i] == parent && ghost_id[i] && (pid == -1 || ghost_id[i] == pid)) {
+            ghost_parent[i] = -1;
+            *pcode = ghost_code[i];
+            *psig = ghost_sig[i];
+            return ghost_id[i];
+        }
+        ++i;
+    }
+    return 0;
 }
 
 // 1 if ID was a task we reaped, with its exit code out through PCODE.
@@ -171,9 +266,13 @@ int task_ghost(int id, int *pcode) {
 // host write into freed memory.
 enum { UBLOCK_WORDS = 4, UBLOCK_MAGIC = 0x55424c4b };
 
+// A vfork child allocates for its parent: the heap is part of the memory
+// it borrows, and libc's allocator, in the shared library data, carves
+// up what it gets for both of them.
 int task_ualloc(struct task *t, int bytes) {
     int *h;
     if (!t || t->privs != PRIV_USER) return (int)malloc(bytes);
+    while (t->vfparent) t = t->vfparent;
     if (bytes < 0 || !(h = (int *)malloc(bytes + UBLOCK_WORDS * sizeof(int)))) return 0;
     sched_lock();
     h[0] = t->ublocks;
@@ -220,10 +319,22 @@ static void task_ufree_all(struct task *t) {
 // Free what a task owns. Only ever called for a task nobody is
 // standing on -- see task_release.
 static void task_destroy(struct task *t) {
-    int i;
     ck_task_free(t);
-    task_ufree_all(t);
+    task_drop_image(t);
     if (t->stack) free((int *)t->stack);
+    if (t->env_vec) free((int *)t->env_vec);
+    if (t->env_data) free((char *)t->env_data);
+    sl4b_free(task_cache, (char *)t);
+}
+
+// Its image, its libraries' code and data and its heap: what a task
+// gives up to execve, and with everything else when it is reaped. A
+// vfork child that has neither exec'd nor exited is borrowing all of it
+// and owns none of it.
+void task_drop_image(struct task *t) {
+    int i;
+    task_unborrow(t);
+    task_ufree_all(t);
     if (t->img_code) free((int *)t->img_code);
     if (t->img_data) free((char *)t->img_data);
     if (t->img_cons) free((int *)t->img_cons);
@@ -238,7 +349,11 @@ static void task_destroy(struct task *t) {
         }
         free((int *)t->img_libs);
     }
-    sl4b_free(task_cache, (char *)t);
+    t->img_code = 0; t->img_data = 0;
+    t->img_cons = 0; t->img_ncons = 0;
+    t->img_des = 0; t->img_ndes = 0;
+    t->img_libs = 0; t->img_nlibs = 0;
+    t->img_bytes = 0;
 }
 
 // Detach a task and free it -- unless it is the one currently
@@ -302,15 +417,20 @@ void task_reap() {
 // exited first (c4ix-tar, which vfsload starts and does not wait for) was
 // otherwise never collected. Kernel code only holds its own children, and
 // a kernel parent is still there while it holds them.
+//
+// A parent that waits the POSIX way (vfork, waitpid) is left its zombies:
+// its waitpid(-1) has to find them, as a Unix parent's does, and one that
+// never waits leaves them until it exits, as there too. A zombie swept
+// before its parent first asked leaves a ghost with its parent's id.
 static int task_parent_is_user(struct task *t) {
     struct task *p;
     if (!(p = task_get(t->parent))) return 1;
-    return p->privs == PRIV_USER;
+    return p->privs == PRIV_USER && !p->posix;
 }
 
 int task_reap_orphans() {
     struct task *t, *w;
-    int freed;
+    int freed, parent;
 
     freed = 0;
     sched_lock();
@@ -319,7 +439,9 @@ int task_reap_orphans() {
         if (t->state == TS_ZOMBIE && t != sched_current()
             && task_parent_is_user(t)) {
             w = t->next;
+            parent = t->parent;
             task_release(t);
+            ghost_parent[(ghost_next + TASK_GHOSTS - 1) % TASK_GHOSTS] = parent;
             ++freed;
             t = w;
             continue;

@@ -12,6 +12,9 @@
 #include <errno.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
 #include <math.h>
 
 int by_value(int *a, int *b) { return *a - *b; }
@@ -25,7 +28,8 @@ int main(int argc, char **argv) {
     FILE *f;
     DIR *d;
     struct dirent *e;
-    int i, c, n, verbose, seen;
+    int i, c, n, verbose, seen, fd, pid;
+    struct stat sb;
     double x;
 
     // printf: flags, widths, precisions, bases
@@ -118,6 +122,32 @@ int main(int argc, char **argv) {
     closedir(d);
     printf("dirent: libctest.txt %s\n", seen ? "found" : "missing");
     unlink("/tmp/libctest.txt");
+
+    // the POSIX calls the kernel gained for Busybox (M7c; unixtest has
+    // the rest)
+    fd = open("/tmp/libctest.u", O_RDWR | O_CREAT | O_TRUNC, 420);
+    write(fd, "hello world", 11);
+    n = lseek(fd, 6, SEEK_SET);
+    read(fd, buf, 5);
+    buf[5] = 0;
+    fstat(fd, &sb);
+    printf("unix: lseek %d %s fstat %d %o nlink %d", n, buf, sb.st_size, sb.st_mode, sb.st_nlink);
+    ftruncate(fd, 5);
+    fstat(fd, &sb);
+    close(fd);
+    printf(" ftruncate %d", sb.st_size);
+    link("/tmp/libctest.u", "/tmp/libctest.v");
+    stat("/tmp/libctest.u", &sb);
+    printf(" link nlink %d", sb.st_nlink);
+    unlink("/tmp/libctest.u");
+    stat("/tmp/libctest.v", &sb);
+    printf(" %d", sb.st_nlink);
+    unlink("/tmp/libctest.v");
+    printf(" excl %d\n", open("/tmp", O_WRONLY | O_CREAT | O_EXCL, 420) < 0 && errno == EEXIST);
+    fflush(stdout);
+    if (!(pid = vfork())) _exit(7);
+    printf("unix: vfork child %d waitpid status %d", pid > 0, waitpid(pid, &n, 0) == pid ? WEXITSTATUS(n) : -1);
+    printf(" again %d\n", waitpid(pid, &n, WNOHANG));
 
     printf("libctest: done\n");
     return 0;

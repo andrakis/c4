@@ -171,6 +171,7 @@ static char *state_name(int s) {
     if (s == TS_WAITING) return "Waiting";
     if (s == TS_BLOCKED) return "Blocked";
     if (s == TS_SLEEPING) return "Sleeping";
+    if (s == TS_VFORK) return "Vforked";
     return "?";
 }
 

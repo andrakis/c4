@@ -632,7 +632,13 @@ struct task *task_spawn_priv(char *path, int argc, int argv, int privs) {
     name = path;
     i = 0;
     while (path[i]) { if (path[i] == '/') name = path + i + 1; ++i; }
+    // task_create puts the task on the run list, so until it has its
+    // image and its privilege nothing may run: a kernel caller (init) can
+    // be preempted here, and the child then ran unprotected, every printf
+    // the host's own instead of a syscall
+    sched_lock();
     if (!(t = task_create(name, img.entry, argc, argv))) {
+        sched_unlock();
         c4r_unload(&img);
         return 0;
     }
@@ -646,6 +652,7 @@ struct task *task_spawn_priv(char *path, int argc, int argv, int privs) {
     t->img_nlibs = img.nlibs;
     t->img_bytes = img.bytes;
     t->privs = privs;
+    sched_unlock();
     return t;
 }
 

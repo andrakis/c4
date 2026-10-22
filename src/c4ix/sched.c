@@ -144,6 +144,8 @@ int sched_cpustat(struct cpustat *h, struct cpustat_task *r, int max) {
 }
 
 int sched_switches;          // context switches since boot
+int sched_reload;            // SYS_EXECVE: resume the running task from its forged frame
+int sched_stale_stack;       // SYS_EXECVE: the old stack, freed at the next trap
 static int sched_slice0;     // acct_in when the running task's slice began
 static int sched_resched;    // a service in this trap asked for a switch
 static int sched_dying;      // task_exit outside the handler: die in the next trap
@@ -261,16 +263,32 @@ int sched_nzombies;
 // and reaps it -- the event sched_pick used to look for, on every pick,
 // by asking each waiting task whether its target had died yet. A task
 // that starts waiting later finds the zombie and reaps it itself.
+//
+// A waitpid waiter (wait_posix) is only woken: its syscall runs again and
+// reaps whichever child it finds, so waiting for any child (-1) works too.
+//
+// A vfork child's death gives its parent its memory back; a vfork
+// parent's takes the child with it, since what it was running in goes.
 void task_zombify(struct task *t, int code) {
     struct task *w;
+    int was;
     if (t->state == TS_ZOMBIE) return;
+    was = t->state;
     t->exitcode = code;
     t->state = TS_ZOMBIE;
     ++sched_nzombies;
     if (t != kernel_task && t != idle_task) --sched_nlive;
+    task_unborrow(t);
+    if (was == TS_VFORK && (w = task_get(t->wait_for)) && w->vfparent == t) task_zombify(w, code);
     w = task_head;
     while (w) {
-        if (w->state == TS_WAITING && w->wait_for == t->id) {
+        if (w->state == TS_WAITING && w->wait_posix &&
+            (w->wait_for == t->id || (w->wait_for == -1 && t->parent == w->id))) {
+            w->wait_posix = 0;
+            w->state = TS_READY;
+            return;
+        }
+        if (w->state == TS_WAITING && w->wait_for == t->id && !w->wait_posix) {
             // into wait_result for a kernel caller in task_wait, and into
             // sv_a for a user task parked mid-syscall: the switch restores
             // sv_a into the accumulator, where SYS_WAIT's result belongs
@@ -330,6 +348,7 @@ static struct task *sched_pick(struct task *t) {
 // ends up spinning on a TLEV that returns to itself forever.
 static void sched_trap(int interval, int trap, int param, int mode, int a, int bp, int sp, int returnpc) {
     struct task *t, *n, *me;
+    int reload;
 
     // Re-entry guard. c4m disables the cycle interrupt when IT takes
     // a trap, but not when user code raises one (the syscall gateway
@@ -369,6 +388,8 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     // left over from an earlier exit can finally be freed. Usually
     // there is none, and then not even the call.
     if (task_reaplist) task_reap();
+    // the stack an execve left, which its handler was standing on
+    if (sched_stale_stack) { free((int *)sched_stale_stack); sched_stale_stack = 0; }
     // The stack guard. A task whose stack pointer is inside the guard,
     // or whose top guard word has been written, ran off the end of its
     // stack: kill it here, before what it wrote under the stack -- some
@@ -392,7 +413,9 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
             // OPCD leaves the syscall number at *sp with the
             // arguments above it. Cast BEFORE the offset: sp is an
             // int parameter, so "sp + 1" would step one byte.
-            a = sys_dispatch(param, (int *)sp + 1);
+            // vfork needs the trap's frame pointer, so it is served here
+            if (param == SYS_VFORK) a = sched_vfork(bp);
+            else a = sys_dispatch(param, (int *)sp + 1);
         } else if (param >= CK_BASE && param < CK_TOP) {
             // A C4KE program. Same door, same argument shape --
             // C4KE's ABI puts the opcode at sp[0] too.
@@ -448,9 +471,16 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
         sched_slice0 = acct_in;
     }
     sched_resched = 0;
-    if (n != t) {
-        t->sv = SV_REGS;
-        t->sv_a = a; t->sv_bp = bp; t->sv_sp = sp; t->sv_pc = returnpc;
+    // An execve forged the running task a new context: it is resumed
+    // from that even if it is picked again, and the trap's registers,
+    // the old image's, are not saved over it.
+    reload = sched_reload;
+    sched_reload = 0;
+    if (n != t || reload) {
+        if (!reload) {
+            t->sv = SV_REGS;
+            t->sv_a = a; t->sv_bp = bp; t->sv_sp = sp; t->sv_pc = returnpc;
+        }
         if (t->state == TS_RUNNING) t->state = TS_READY;
         if (n->sv == SV_REGS) {
             a = n->sv_a; bp = n->sv_bp; sp = n->sv_sp; returnpc = n->sv_pc;
@@ -536,6 +566,21 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
 // front. C4KE asks its programs to declare themselves instead
 // (c4ke_set_focus), which is why the compat layer accepts that call
 // and ignores it -- this answer is derived, and cannot go stale.
+// Whom a parked task is waiting on: its vfork child, the task its wait
+// names, or for a waitpid(-1) its newest child still alive.
+static struct task *sched_waitee(struct task *t) {
+    struct task *n, *c;
+    if (t->state != TS_WAITING && t->state != TS_VFORK) return 0;
+    if (t->wait_for != -1) return task_get(t->wait_for);
+    c = 0;
+    n = task_head;
+    while (n) {
+        if (n->parent == t->id && n->state != TS_ZOMBIE) c = n;
+        n = n->next;
+    }
+    return c;
+}
+
 static struct task *sched_foreground() {
     struct task *t, *n;
     int guard;
@@ -554,8 +599,8 @@ static struct task *sched_foreground() {
     // Then inwards, one job at a time. The guard is paranoia about a
     // wait cycle, which should be impossible.
     guard = 0;
-    while (t->state == TS_WAITING && guard < 32) {
-        if (!(n = task_get(t->wait_for))) break;
+    while (guard < 32) {
+        if (!(n = sched_waitee(t))) break;
         t = n;
         ++guard;
     }
@@ -582,13 +627,14 @@ int sched_intr_below(struct task *root) {
     if (!root) return -1;
     t = root;
     guard = 0;
-    while (t->state == TS_WAITING && guard < 32) {
-        if (!(n = task_get(t->wait_for))) break;
+    while (guard < 32) {
+        if (!(n = sched_waitee(t))) break;
         t = n;
         ++guard;
     }
     if (t == root || t->state == TS_ZOMBIE || t->privs != PRIV_USER) return 0;
     if (ck_has_handler(t, CK_SIGINT)) { ck_kill(t->id, CK_SIGINT); return 1; }
+    t->killsig = CK_SIGINT;
     task_zombify(t, C4IX_EXIT_INTERRUPTED);
     return 1;
 }
@@ -616,6 +662,7 @@ static void sched_interrupt() {
         return;
     }
     kprintf("\nc4ix: interrupt: cancelling task %d '%s'\n", t->id, t->name);
+    t->killsig = CK_SIGINT;
     task_zombify(t, C4IX_EXIT_INTERRUPTED);
 }
 
@@ -723,6 +770,7 @@ int task_wait(struct task *t) {
     }
     me = sched_cur;
     me->wait_for = t->id;
+    me->wait_posix = 0;
     me->state = TS_WAITING;
     while (me->state == TS_WAITING) sched_yield();
     return me->wait_result;
@@ -762,6 +810,58 @@ int sched_forge(struct task *t, int entry, int argc, int argv) {
     t->sv_bp = 0;
     t->sv_pc = (int)&task_shim;
     return 1;
+}
+
+// ---- vfork ----
+//
+// The child borrows the parent's image, library data and heap until it
+// execs or exits, and the parent waits in TS_VFORK meanwhile: one address
+// space, as on any machine without an MMU. What it cannot borrow is the
+// parent's stack. On a register machine the child runs on it, below the
+// frame that called vfork, and that frame's state is in registers the
+// kernel saved. Here the stack IS the registers: the caller F of vfork
+// has its expression temporaries pushed below its locals -- in `pid =
+// vfork()`, the address of pid -- and the child's first call would write
+// its own frame over them, and over vfork's return address.
+//
+// So the child gets a stack of its own, and the trap returns it from
+// vfork straight into F: pc is vfork's return address, bp is F's frame,
+// in the parent's stack, so F's locals are the parent's own -- which is
+// what vfork promises, and what Busybox's spawn() uses, a child's
+// failed = errno that the parent reads -- and sp is in the new stack,
+// over a copy of everything between vfork's frame and F's, its
+// temporaries among it. A function the child calls builds its frame
+// there, and the parent's stack below F is never touched.
+//
+// BP is the frame of the function that executed SYS_VFORK, libc's vfork:
+// it must call nothing, so that its caller is F. The usual rule then
+// holds as it does everywhere: the child must not return from F, which
+// would put it back on the parent's stack, and must leave by execve or
+// _exit.
+int sched_vfork(int bp) {
+    struct task *p, *c;
+    int *w;
+    int n, top;
+
+    p = sched_cur;
+    ++p->nsyscalls;
+    if (p->privs != PRIV_USER) return -1;
+    w = (int *)bp;
+    // [w + 2, F's bp): what F had pushed when it called, and its locals
+    n = w[0] - (bp + 2 * sizeof(int));
+    if (n < 0 || n > C4IX_STACK_WORDS * sizeof(int) / 2) return -1;
+    if (!(c = task_vchild(p))) return -1;
+    top = c->stack + (c->stack_words - 8) * sizeof(int);   // sched_forge's slack
+    c->sv = SV_REGS;
+    c->sv_a = 0;
+    c->sv_bp = w[0];
+    c->sv_pc = w[1];
+    c->sv_sp = top - n;
+    memcpy((char *)c->sv_sp, (char *)(bp + 2 * sizeof(int)), n);
+    p->posix = 1;
+    p->wait_for = c->id;
+    p->state = TS_VFORK;
+    return c->id;
 }
 
 // Point a not-yet-started task's argv somewhere else. The forged frame

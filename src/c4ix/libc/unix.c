@@ -3,9 +3,7 @@
 // time. libc.h has the interface.
 //
 // C4IX's own flag values are the ones libc.h gives O_CREAT and the rest,
-// so open() passes them straight through -- except O_APPEND, which C4IX
-// does not have: with no lseek either, a file opened for appending is
-// read in and written back, so what was there stays in front.
+// O_APPEND and O_EXCL included, so open() passes them straight through.
 
 #include "sys.h"
 #include "libc.h"
@@ -24,6 +22,7 @@ char *strerror(int e) {
         err_text[ESRCH] = "No such process";
         err_text[EINTR] = "Interrupted system call";
         err_text[EIO] = "Input/output error";
+        err_text[ENOEXEC] = "Exec format error";
         err_text[EBADF] = "Bad file descriptor";
         err_text[ECHILD] = "No child processes";
         err_text[EAGAIN] = "Resource temporarily unavailable";
@@ -50,37 +49,67 @@ char *strerror(int e) {
 static int fail(int e) { errno = e; return -1; }
 
 int open(char *path, int flags, ...) {
-    int fd, st[4], n, k, wfd;
-    char *old;
-    if (flags & O_EXCL) {
-        if ((flags & O_CREAT) && ustat(path, st) == 0) return fail(EEXIST);
-    }
-    if (!(flags & O_APPEND)) {
-        fd = uopen(path, flags & (O_ACCMODE | O_CREAT | O_TRUNC | O_NONBLOCK));
-        if (fd < 0) return fail(ustat(path, st) == 0 ? EACCES : ENOENT);
-        return fd;
-    }
-    // O_APPEND: keep what is there, and write after it
-    old = 0; n = 0;
-    if (!(flags & O_TRUNC) && ustat(path, st) == 0 && st[0] == 2 && st[1] > 0) {
-        if ((k = uopen(path, O_RDONLY)) >= 0) {
-            old = malloc(st[1]);
-            n = uread(k, old, st[1]);
-            uclose(k);
-            if (n < 0) n = 0;
-        }
-    }
-    wfd = uopen(path, (flags & (O_ACCMODE | O_NONBLOCK)) | O_CREAT | O_TRUNC);
-    if (wfd < 0) { if (old) free(old); return fail(ENOENT); }
-    if (n > 0) write(wfd, old, n);
-    if (old) free(old);
-    return wfd;
+    int fd, st[4];
+    fd = uopen(path, flags & (O_ACCMODE | O_CREAT | O_TRUNC | O_NONBLOCK | O_APPEND | O_EXCL));
+    if (fd >= 0) return fd;
+    if (ustat(path, st) == 0) return fail((flags & O_EXCL) && (flags & O_CREAT) ? EEXIST : EACCES);
+    return fail(ENOENT);
 }
 
 int creat(char *path, int mode) { return open(path, O_WRONLY | O_CREAT | O_TRUNC, mode); }
 int close(int fd) { return uclose(fd) < 0 ? fail(EBADF) : 0; }
 int read(int fd, char *buf, int n) { int r; r = uread(fd, buf, n); return r < 0 ? fail(EBADF) : r; }
-int lseek(int fd, int off, int whence) { return fail(ESPIPE); }
+
+// A RAM file seeks; anything else is a pipe, the console or a host file
+int lseek(int fd, int off, int whence) {
+    int r, st[ST_WORDS];
+    if ((r = ulseek(fd, off, whence)) >= 0) return r;
+    if (ufstat(fd, st, ST_WORDS) < 0) return fail(EBADF);
+    return fail(st[ST_TYPE] == 2 ? EINVAL : ESPIPE);
+}
+
+int link(char *path, char *newpath) {
+    int st[4];
+    if (ulink(path, newpath) == 0) return 0;
+    if (ustat(path, st) < 0) return fail(ENOENT);
+    if (st[0] == 1) return fail(EPERM);
+    return fail(ustat(newpath, st) == 0 ? EEXIST : ENOENT);
+}
+
+int ftruncate(int fd, int len) {
+    if (len < 0) return fail(EINVAL);
+    return uftruncate(fd, len) < 0 ? fail(EINVAL) : 0;
+}
+
+int truncate(char *path, int len) {
+    int fd, r;
+    if ((fd = open(path, O_WRONLY)) < 0) return -1;
+    r = ftruncate(fd, len);
+    uclose(fd);
+    return r;
+}
+
+// ---- processes ----
+
+int execve(char *path, char **argv, char **envp) {
+    int st[4];
+    uexecve(path, argv, envp);
+    // it returns only when it failed
+    return fail(ustat(path, st) == 0 ? ENOEXEC : ENOENT);
+}
+
+int execv(char *path, char **argv) { return execve(path, argv, __libc_envp()); }
+
+// The kernel's exit code and signal, as POSIX encodes them in a status
+int waitpid(int pid, int *status, int options) {
+    int r, st[2];
+    st[0] = 0; st[1] = 0;
+    if ((r = uwaitpid(pid, st, options & WNOHANG)) < 0) return fail(ECHILD);
+    if (r > 0 && status) *status = st[1] ? st[1] & 127 : (st[0] & 255) << 8;
+    return r;
+}
+
+int wait(int *status) { return waitpid(-1, status, 0); }
 int dup(int fd) { int r; r = udup(fd); return r < 0 ? fail(EBADF) : r; }
 int dup2(int fd, int to) { int r; r = udup2(fd, to); return r < 0 ? fail(EBADF) : r; }
 int pipe(int *fds) { return upipe(fds) < 0 ? fail(EMFILE) : 0; }
@@ -127,13 +156,34 @@ int access(char *path, int mode) {
     return ustat(path, st) == 0 ? 0 : fail(ENOENT);
 }
 
+// the kernel's record (ST_*) as a struct stat
+static void stat_fill(struct stat *s, int *st) {
+    memset((char *)s, 0, sizeof(struct stat));
+    s->st_mode = st[ST_MODE];
+    s->st_size = st[ST_SIZE];
+    s->st_mtime = st[ST_MTIME];
+    s->st_atime = st[ST_MTIME];
+    s->st_ctime = st[ST_MTIME];
+    s->st_nlink = st[ST_NLINK];
+    s->st_ino = st[ST_INO];
+    s->st_dev = st[ST_DEV];
+    s->st_blksize = 512;
+    s->st_blocks = (st[ST_SIZE] + 511) / 512;
+}
+
 int stat(char *path, struct stat *s) {
-    int st[4];
-    if (ustat(path, st) < 0) return fail(ENOENT);
-    s->st_mode = st[0] == 1 ? S_IFDIR | 493 : st[0] == 2 ? S_IFREG | (st[2] ? 493 : 420) : S_IFCHR | 438;
-    s->st_size = st[1];
-    s->st_mtime = st[3];
-    s->st_nlink = 1;
+    int st[ST_WORDS];
+    if (ustat2(path, st, ST_WORDS) < 0) return fail(ENOENT);
+    stat_fill(s, st);
+    return 0;
+}
+
+int lstat(char *path, struct stat *s) { return stat(path, s); }
+
+int fstat(int fd, struct stat *s) {
+    int st[ST_WORDS];
+    if (ufstat(fd, st, ST_WORDS) < 0) return fail(EBADF);
+    stat_fill(s, st);
     return 0;
 }
 

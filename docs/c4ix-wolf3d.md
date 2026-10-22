@@ -93,7 +93,8 @@ desktop used to drop them, and now passes them to a canvas Terminal as
 `plat-c4ix.c` maps the browser's key codes to SDL scancodes, which
 Wolf4SDL uses as its own.
 
-**Files.** C4IX has no seek, and Wolf4SDL `fseek`s through its data.
+**Files.** C4IX had no seek when this port was made (`lseek` came with
+Busybox's M7c), and Wolf4SDL `fseek`s through its data.
 `c4file.c` reads a file whole when it is opened for reading, so `fseek`
 and `ftell` are arithmetic. A file opened for writing (the config, a
 saved game) is gathered in memory and written at `fclose`.

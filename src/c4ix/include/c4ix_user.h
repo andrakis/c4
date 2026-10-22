@@ -21,8 +21,14 @@ enum {
     SYS_KILL = 219, SYS_SLEEP = 220,
     SYS_AVAIL = 221, SYS_INTR = 222, SYS_CLOEXEC = 223,
     SYS_STAT = 224, SYS_UNLINK = 225, SYS_RENAME = 226, SYS_LAZYFILE = 227,
-    SYS_STACK = 228, SYS_CPUSTAT = 229, SYS_EVWAIT = 230, SYS_DISCARD = 231
+    SYS_STACK = 228, SYS_CPUSTAT = 229, SYS_EVWAIT = 230, SYS_DISCARD = 231,
+    SYS_VFORK = 232, SYS_EXECVE = 233, SYS_WAITPID = 234, SYS_LSEEK = 235,
+    SYS_FSTAT = 236, SYS_LINK = 237, SYS_FTRUNCATE = 238, SYS_ENVIRON = 239
 };
+// What ustat2 and ufstat fill, a word each (the kernel's ST_* record)
+enum { ST_TYPE = 0, ST_SIZE = 1, ST_PROG = 2, ST_MTIME = 3, ST_INO = 4,
+       ST_NLINK = 5, ST_MODE = 6, ST_DEV = 7, ST_WORDS = 8 };
+enum { UWNOHANG = 1 };
 // taskinfo record, in order: id, parent, state, privs, nsyscalls,
 // ntraps, cycles, then a 16-byte name
 // One task's worth of what utaskinfo reports: eight integers, then the
@@ -31,7 +37,7 @@ enum {
 // was two words short on a 32-bit host and utaskinfo wrote past the
 // caller's array.
 enum { TASKINFO_WORDS = 24 };
-enum { TS_READY = 1, TS_RUNNING = 2, TS_ZOMBIE = 3, TS_WAITING = 4, TS_BLOCKED = 5, TS_SLEEPING = 6 };
+enum { TS_READY = 1, TS_RUNNING = 2, TS_ZOMBIE = 3, TS_WAITING = 4, TS_BLOCKED = 5, TS_SLEEPING = 6, TS_VFORK = 7 };
 enum { STDIN = 0, STDOUT = 1, STDERR = 2 };
 // open() flags; the low two bits match the host's.
 enum {
@@ -87,6 +93,19 @@ int  uunlink(char *path);         // remove a file, or an empty directory
 int  urename(char *path, char *newname);  // a new name in the same directory
 int  ulazyfile(char *path, char *host, int size); // a RAM file read from the host on first use
 int  ustack(int bytes);           // stack size for tasks this one spawns from now on; 0 the default
+// The POSIX process and file calls (docs/busybox-port.md §4). vfork's
+// child shares this task's memory and must leave by uexecve or uexit,
+// never by returning from the function that called vfork; the parent
+// waits until it has.
+int  vfork();
+int  uexecve(char *path, char **argv, char **envp);   // -1 if it would not load
+int  uwaitpid(int pid, int *st, int opts);  // st[0] exit code, st[1] signal; 0 none yet with UWNOHANG
+int  ulseek(int fd, int off, int whence);  // RAM files only; the new position
+int  ustat2(char *path, int *out, int n);  // the first n words of ST_*
+int  ufstat(int fd, int *out, int n);
+int  ulink(char *path, char *newpath);     // a second name for a file
+int  uftruncate(int fd, int len);
+char **uenviron();                         // the environment uexecve gave this task, or 0
 int *ualloc(int bytes);
 int  getpid();
 

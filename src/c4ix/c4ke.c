@@ -201,7 +201,7 @@ static int ck_state(struct task *t) {
 
 static int ck_wstate(struct task *t) {
     if (t->state == TS_SLEEPING) return CK_WSTATE_TIME;
-    if (t->state == TS_WAITING) return CK_WSTATE_PID;
+    if (t->state == TS_WAITING || t->state == TS_VFORK) return CK_WSTATE_PID;
     // ps prints 'S' for this one: parked inside a syscall, which is
     // exactly what a blocked read is.
     if (t->state == TS_BLOCKED) return CK_WSTATE_SYSCALL;
@@ -471,6 +471,7 @@ int ck_kill(int pid, int sig) {
     s = ck_sigtab(t, 0);
     if (!s || !s[sig * 3 + 2]) {
         if (!ck_default_kills(sig)) return 0;
+        t->killsig = sig;
         task_zombify(t, C4IX_EXIT_INTERRUPTED);
         return 0;
     }
@@ -549,9 +550,16 @@ void ck_signal_deliver(struct task *t, int *pa, int *pbp, int *psp,
 }
 
 void ck_task_free(struct task *t) {
-    if (t->ck_sigh) { free((int *)t->ck_sigh); t->ck_sigh = 0; }
+    ck_exec_reset(t);
     if (t->argv_vec) { free((int *)t->argv_vec); t->argv_vec = 0; }
     if (t->argv_data) { free((char *)t->argv_data); t->argv_data = 0; }
+}
+
+// A new image: the handlers, and the signals waiting for them, were the
+// old one's, so the dispositions go back to their defaults, as execve's do.
+void ck_exec_reset(struct task *t) {
+    if (t->ck_sigh) { free((int *)t->ck_sigh); t->ck_sigh = 0; }
+    t->ck_sigpend = 0;
 }
 
 // ---- the dispatcher ----
@@ -666,6 +674,7 @@ int ck_dispatch(int num, int *args) {
             return code;
         }
         t->wait_for = s->id;
+        t->wait_posix = 0;
         t->state = TS_WAITING;
         return 0;
     }

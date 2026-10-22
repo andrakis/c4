@@ -83,8 +83,25 @@ enum {
     SYS_STAT = 224, SYS_UNLINK = 225, SYS_RENAME = 226, SYS_LAZYFILE = 227,
     SYS_STACK = 228, SYS_CPUSTAT = 229,
     SYS_EVWAIT = 230, SYS_DISCARD = 231,
-    SYS_TOP = 232          // one past the last: sched_trap's range check
+    // POSIX's process and file calls, for Busybox (docs/busybox-port.md §4)
+    SYS_VFORK = 232, SYS_EXECVE = 233, SYS_WAITPID = 234, SYS_LSEEK = 235,
+    SYS_FSTAT = 236, SYS_LINK = 237, SYS_FTRUNCATE = 238, SYS_ENVIRON = 239,
+    SYS_TOP = 240          // one past the last: sched_trap's range check
 };
+// What SYS_STAT and SYS_FSTAT write, a word each, as many as the caller
+// asks for: SYS_STAT's callers from before M7c ask for none, which is
+// the first four.
+enum {
+    ST_TYPE = 0,           // 1 directory, 2 RAM file, 3 anything else
+    ST_SIZE = 1, ST_PROG = 2, ST_MTIME = 3,
+    ST_INO = 4,            // the vnode's number: two names of one file share it
+    ST_NLINK = 5,          // its names (SYS_LINK)
+    ST_MODE = 6,           // made up: 0755 for directories and programs, 0644 for the rest
+    ST_DEV = 7,            // 1 for the RAM filesystem, 2 for a host file, 0 for the console or a pipe
+    ST_WORDS = 8
+};
+// SYS_WAITPID: options, and the two words it writes (exit code, signal)
+enum { C4IX_WNOHANG = 1 };
 // taskinfo fills, in order: id, parent, state, privs, nsyscalls,
 // ntraps, cycles, then the name packed into the remaining words.
 // One task's worth of what utaskinfo reports: eight integers, then the
@@ -126,9 +143,12 @@ extern int sys_restart;
 // position -- while two separate opens of the same file get
 // independent positions. Spawned tasks inherit the table, which is
 // what makes redirection work: set fd 1 up, spawn, restore.
+// VN_LINK is a second name for a RAM file (SYS_LINK): an entry in a
+// directory that holds no bytes, only the file it names. A path that
+// ends at one resolves to its file; the file keeps its first name.
 enum {
     VN_CONSOLE = 1, VN_RAMFILE = 2, VN_HOSTFILE = 3, VN_PIPE = 4,
-    VN_DIR = 5
+    VN_DIR = 5, VN_LINK = 6
 };
 // 64: the root archive carries the repo's own tree, whose longest file
 // name is 26 characters (24 truncated them). Userland buffers that
@@ -143,7 +163,10 @@ enum {
     // it, and sys_open has to pass the bit through: a read on a
     // blocking host fd calls the host read() directly (vfs.c) and
     // stops the WHOLE VM, not just the caller.
-    C4IX_O_NONBLOCK = 2048
+    C4IX_O_NONBLOCK = 2048,
+    // every write lands at the end; and with O_CREAT, fail if it exists.
+    // libc's values (libc.h), so its open() passes them straight through.
+    C4IX_O_APPEND = 4096, C4IX_O_EXCL = 8192
 };
 
 struct vnode {
@@ -168,6 +191,14 @@ struct vnode {
     // than a time (vfs_touch): b4ke compares two, nothing else does. A
     // file still on the host is 0, older than anything made here.
     int mtime;
+    int ino;                    // its number, for stat: one per vnode, never reused
+    // Links (SYS_LINK). A VN_LINK entry's target is its file, and lnext
+    // the file's next link. A file's links is its first link and nlinks
+    // how many it has, so stat's nlink is one more.
+    struct vnode *target;
+    struct vnode *links;
+    struct vnode *lnext;
+    int nlinks;
 };
 
 struct file {
@@ -184,8 +215,11 @@ void         vfs_init();
 struct vnode *vfs_lookup(char *path);
 struct vnode *vfs_ramfile(char *path);   // find or create the file
 struct vnode *vfs_mkdir(char *path);
-int          vfs_stat(char *path, int *out);     // out[0] 1 dir, 2 file, 3 other; out[1] bytes; out[2] program; out[3] mtime
+int          vfs_stat(char *path, int *out, int n);   // the first N ST_* words; -1 if no such path
+void         vn_stat(struct vnode *vn, int *out, int n);   // the same, of an open file's vnode
 void         vfs_touch(struct vnode *vn);        // it changed: give it the next mtime
+int          vfs_link(char *path, char *newpath);   // a second name for a RAM file
+int          vfs_truncate(struct vnode *vn, int len);  // a RAM file cut, or grown with zeros, to LEN
 int          vfs_unlink(char *path);
 int          vfs_rename(char *path, char *newname);
 int          vfs_lazyfile(char *path, char *host, int size);
@@ -218,7 +252,9 @@ int          fd_close(struct task *t, int fd);
 int          fd_dup2(struct task *t, int oldfd, int newfd);
 void         fd_init_console(struct task *t);
 void         fd_clone(struct task *dst, struct task *src);
+void         fd_clone_all(struct task *dst, struct task *src);   // vfork: close-on-exec fds too
 void         fd_closeall(struct task *t);
+void         fd_close_on_exec(struct task *t);
 
 int   host_detect();
 int   host_info();
@@ -301,9 +337,11 @@ extern int sched_next_stack_words;
 // TS_WAITING = blocked on another task (wait); TS_BLOCKED = blocked
 // on a vnode (an empty pipe); TS_SLEEPING = blocked on the clock.
 // All three are woken by the scheduler when their condition clears.
+// TS_VFORK = a vfork parent, parked until its child (wait_for) execs or
+// exits, because until then the child is using its memory.
 enum {
     TS_READY = 1, TS_RUNNING = 2, TS_ZOMBIE = 3,
-    TS_WAITING = 4, TS_BLOCKED = 5, TS_SLEEPING = 6
+    TS_WAITING = 4, TS_BLOCKED = 5, TS_SLEEPING = 6, TS_VFORK = 7
 };
 // Privilege level. PRIV_USER tasks resume in c4m's protected mode:
 // host syscall opcodes trap to the kernel instead of executing, so
@@ -380,6 +418,17 @@ struct task {
     int  argv_vec;             // char ** owned by this task, 0 if not owned
     int  argv_data;            // char *  backing store for the above
     int  ublocks;              // int * : its SYS_SBRK / malloc blocks (task_ualloc), freed with it
+    // The environment SYS_EXECVE gave it, "NAME=VALUE" strings ending in
+    // 0, the kernel's copy (SYS_ENVIRON); a spawned child gets a copy.
+    int  env_vec;
+    int  env_data;
+    // vfork (sched_vfork). A child's vfparent is the parent whose image,
+    // library data and heap it borrows until it execs or exits: its
+    // img_libs are the parent's, and nothing of them is its to free.
+    struct task *vfparent;
+    int  wait_posix;           // TS_WAITING in SYS_WAITPID: woken to run it again
+    int  posix;                // has used vfork or waitpid: its zombies wait for it
+    int  killsig;              // the signal that killed it, 0 if it exited
     char name[TASK_NAME_MAX];
 };
 
@@ -411,11 +460,24 @@ extern int task_last_syscalls;   // syscalls made by the last reaped task
 
 struct task *task_create(char *name, int entry, int argc, int argv);
 struct task *task_adopt(char *name);
+// A vfork child of P: a stack of its own, P's descriptors (close-on-exec
+// ones too), directory, environment and libraries. Its registers are
+// sched_vfork's to set.
+struct task *task_vchild(struct task *p);
 void         task_unlink(struct task *t);
 void         task_release(struct task *t);
 void         task_reap();      // free tasks released while they ran
 int          task_reap_orphans();          // zombies nobody waits on
 int          task_ghost(int id, int *pcode);  // exit code of a reaped task
+// A child of PARENT (PID, or any for -1) that the idle sweep reaped
+// before PARENT's waitpid came: its id, code and signal, collected once
+int          task_ghost_child(int parent, int pid, int *pcode, int *psig);
+// Copy N strings (N < 0: up to a null pointer) into one block of
+// kernel memory: *PVEC the vector, null-terminated, *PDATA the bytes.
+// The count, or -1 out of memory.
+int          task_strvec(char **v, int n, int *pvec, int *pdata);
+void         task_drop_image(struct task *t);   // execve: free its image, libraries and heap
+void         task_unborrow(struct task *t);     // a vfork child is done with its parent's memory
 struct task *task_get(int id);
 struct task *task_first();
 struct task *task_next(struct task *t);
@@ -503,6 +565,7 @@ extern int loader_quiet;   // suppress "not an image" while probing paths
 int  ck_dispatch(int num, int *args);
 void ck_task_free(struct task *t);   // release compat state on reap
 int  ck_argv_copy(struct task *t, int argc, char **argv);   // the task owns a copy of argv
+void ck_exec_reset(struct task *t);  // execve: its handlers were the old image's
 int  ck_kill(int pid, int sig);      // queue a signal, or apply the default
 int  ck_has_handler(struct task *t, int sig);
 int  ck_signal(struct task *t, int sig, int handler);   // the old handler
@@ -528,6 +591,15 @@ int          sched_intr_below(struct task *root);   // a terminal's Ctrl-C
 void         sched_lock();     // disable preemption (nestable)
 void         sched_unlock();
 int          sched_forge(struct task *t, int entry, int argc, int argv);
+// SYS_VFORK, from the trap handler, which has the registers (bp is the
+// frame of the function that executed the syscall: the child returns
+// from it). The child's id, or -1.
+int          sched_vfork(int bp);
+// SYS_EXECVE replaced the running task's context: the trap returns into
+// the forged one, and the old stack, still under the handler, is freed
+// at the next trap.
+extern int   sched_reload;
+extern int   sched_stale_stack;
 // The running task, and whether the trap handler is running (no
 // re-entry allowed). Read by every module on every syscall, so they are
 // macros over the globals rather than calls: -minline cannot inline

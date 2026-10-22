@@ -164,14 +164,35 @@ char *bsearch(char *key, char *base, int n, int size, int cmp) {
     return 0;
 }
 
-// ---- the environment: this task's own, empty at start (C4IX passes none) ----
+// ---- the environment: this task's own, starting as execve gave it ----
+//
+// The kernel keeps what execve passed (SYS_ENVIRON); it is read in the
+// first time anything here is asked. A task spawned rather than exec'd
+// starts with its spawner's.
 
 static char **env_names;
 static char **env_values;
 static int env_n;
+static int env_ready;
+static char **env_vec;      // __libc_envp's last answer, freed at the next
+
+static void env_import() {
+    char **e, *eq, *name;
+    env_ready = 1;
+    if (!(e = uenviron())) return;
+    while (*e) {
+        if ((eq = strchr(*e, '='))) {
+            name = strndup(*e, eq - *e);
+            setenv(name, eq + 1, 1);
+            free(name);
+        }
+        ++e;
+    }
+}
 
 static int env_find(char *name) {
     int i;
+    if (!env_ready) env_import();
     i = 0;
     while (i < env_n) { if (!strcmp(env_names[i], name)) return i; ++i; }
     return -1;
@@ -183,9 +204,33 @@ char *getenv(char *name) {
     return env_values[i];
 }
 
+// NAME=VALUE for each, ending in 0: what execv hands execve
+char **__libc_envp() {
+    int i;
+    if (!env_ready) env_import();
+    if (env_vec) {
+        i = 0;
+        while (env_vec[i]) { free(env_vec[i]); ++i; }
+        free((char *)env_vec);
+    }
+    if (!(env_vec = (char **)malloc((env_n + 1) * sizeof(int)))) return 0;
+    i = 0;
+    while (i < env_n) {
+        if ((env_vec[i] = malloc(strlen(env_names[i]) + strlen(env_values[i]) + 2))) {
+            strcpy(env_vec[i], env_names[i]);
+            strcat(env_vec[i], "=");
+            strcat(env_vec[i], env_values[i]);
+        } else break;
+        ++i;
+    }
+    env_vec[i] = 0;
+    return env_vec;
+}
+
 int setenv(char *name, char *value, int overwrite) {
     int i;
     if (!name || !*name || strchr(name, '=')) { errno = EINVAL; return -1; }
+    if (!env_ready) env_import();
     if (!env_names) {
         env_names = (char **)malloc(64 * sizeof(int));
         env_values = (char **)malloc(64 * sizeof(int));

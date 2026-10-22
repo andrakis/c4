@@ -362,6 +362,11 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     ./c4rlink32 .c4bb_ix_u.c4o -l .c4bb_lib/libc.c4s -o $DISK/c4ix-pictest.c4r > /dev/null
     keep .c4bb_ix_u.c4o libc/pictest.c4o
     keep $DISK/c4ix-pictest.c4r bin/c4ix-pictest.c4r
+    # unixtest: lseek, fstat, links, waitpid, vfork and execve (M7c)
+    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/unixtest.c .c4bb_ix_u.c4o > /dev/null
+    ./c4rlink32 .c4bb_ix_u.c4o -l .c4bb_lib/libc.c4s -o $DISK/c4ix-unixtest.c4r > /dev/null
+    keep .c4bb_ix_u.c4o libc/unixtest.c4o
+    keep $DISK/c4ix-unixtest.c4r bin/c4ix-unixtest.c4r
     for u in $C4IX_USER; do
         ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -D C4IX_SHARED -I src/c4ix/include src/c4ix/user/$u.c .c4bb_ix_u.c4o > /dev/null
         # each loads libc4ix at run time; gui, the display's demo, libgui too

@@ -36,6 +36,7 @@ static struct sl4b_cache *vn_cache;
 static struct sl4b_cache *file_cache;
 static struct vnode *rootdir;      // "/" -- the RAM filesystem's root
 static struct vnode *console;      // the one console vnode
+static int vfs_ino;                // the last vnode number given out (stat's st_ino)
 
 static void vfs_namecpy(char *dst, char *src) {
     int i;
@@ -77,6 +78,9 @@ void vfs_init() {
     rootdir->refs = 1;
     rootdir->parent = rootdir;        // ".." at the root is the root
     vfs_namecpy(rootdir->name, "/");
+    console->ino = 1;
+    rootdir->ino = 2;
+    vfs_ino = 2;
 
     // /tmp exists from boot, for scratch files (init's demo, cc's
     // objects, the IDE's one-file build). The whole tree is writable,
@@ -146,10 +150,23 @@ static struct vnode *vfs_child(struct vnode *dir, char *name, int len) {
 
 static struct vnode *vn_alloc(int type);
 
+// What a directory entry names: a link's file, or the entry itself.
+static struct vnode *vn_res(struct vnode *vn) {
+    if (vn && vn->type == VN_LINK) return vn->target;
+    return vn;
+}
+
+static struct vnode *vfs_walk2(char *path, int create, int mkdir);
+
 // Walk PATH. When CREATE is set the final component is made as a
 // file (or as a directory when MKDIR is set); intermediate
-// components must already exist either way.
+// components must already exist either way. A link at the end is
+// followed to its file; vfs_walk2 is the walk that stops at the entry.
 static struct vnode *vfs_walk(char *path, int create, int mkdir) {
+    return vn_res(vfs_walk2(path, create, mkdir));
+}
+
+static struct vnode *vfs_walk2(char *path, int create, int mkdir) {
     struct vnode *dir;
     struct vnode *vn;
     int i, start, len;
@@ -195,6 +212,8 @@ static struct vnode *vn_alloc(int type) {
     if (!(vn = (struct vnode *)sl4b_alloc(vn_cache))) return 0;
     vn->type = type;
     vn->refs = 0;
+    vfs_ino = vfs_ino + 1;
+    vn->ino = vfs_ino;
     vfs_touch(vn);
     return vn;
 }
@@ -313,17 +332,87 @@ static int vn_is_program(struct vnode *vn) {
     return vn->size >= 13 && vn->data[0] == 'C' && vn->data[1] == '4' && vn->data[2] == 'R';
 }
 
-// out[0] 1 dir, 2 file, 3 other; out[1] bytes; out[2] 1 for a program
-int vfs_stat(char *path, int *out) {
+// The first N words of the ST_* record (c4ix.h): out[0] 1 dir, 2 file,
+// 3 other; out[1] bytes; out[2] 1 for a program; out[3] mtime; then the
+// number, the names, a mode and a device. N is 4 for the callers from
+// before there were more. The modes are made up -- there are no owners
+// or permissions -- but say what ls and cp need: directories and
+// programs are 0755, files 0644, the console and pipes 0666.
+void vn_stat(struct vnode *vn, int *out, int n) {
+    int st[ST_WORDS];
+    int i;
+    st[ST_TYPE] = vn->type == VN_DIR ? 1 : (vn->type == VN_RAMFILE ? 2 : 3);
+    st[ST_SIZE] = vn->type == VN_RAMFILE ? vn->size : 0;
+    st[ST_PROG] = vn_is_program(vn);
+    st[ST_MTIME] = vn->mtime;
+    st[ST_INO] = vn->ino;
+    st[ST_NLINK] = 1 + vn->nlinks;
+    st[ST_MODE] = vn->type == VN_DIR ? 16877 : vn->type == VN_RAMFILE ? (st[ST_PROG] ? 33261 : 33188)
+                : vn->type == VN_PIPE ? 4534 : 8630;   // S_IFDIR|0755, S_IFREG|0755 or 0644, S_IFIFO|0666, S_IFCHR|0666
+    st[ST_DEV] = (vn->type == VN_RAMFILE || vn->type == VN_DIR) ? 1 : vn->type == VN_HOSTFILE ? 2 : 0;
+    if (n <= 0) n = 4;
+    if (n > ST_WORDS) n = ST_WORDS;
+    i = 0;
+    while (i < n) { out[i] = st[i]; ++i; }
+}
+
+int vfs_stat(char *path, int *out, int n) {
     struct vnode *vn;
     sched_lock();
     if (!(vn = vfs_walk(path, 0, 0))) { sched_unlock(); return -1; }
-    out[0] = vn->type == VN_DIR ? 1 : (vn->type == VN_RAMFILE ? 2 : 3);
-    out[1] = vn->type == VN_RAMFILE ? vn->size : 0;
-    out[2] = vn_is_program(vn);
-    out[3] = vn->mtime;
+    vn_stat(vn, out, n);
     sched_unlock();
     return 0;
+}
+
+// ---- links and truncation ----
+
+// A second name, NEWPATH, for the RAM file PATH: a VN_LINK entry in
+// NEWPATH's directory. Only files: a directory with two parents would
+// make ".." mean two things. NEWPATH must not exist.
+int vfs_link(char *path, char *newpath) {
+    struct vnode *vn, *l;
+    sched_lock();
+    if (!(vn = vfs_walk(path, 0, 0)) || vn->type != VN_RAMFILE || vfs_walk2(newpath, 0, 0)) {
+        sched_unlock();
+        return -1;
+    }
+    if (!(l = vfs_walk2(newpath, 1, 0))) { sched_unlock(); return -1; }   // its directory is not there
+    l->type = VN_LINK;
+    l->target = vn;
+    l->lnext = vn->links;
+    vn->links = l;
+    ++vn->nlinks;
+    sched_unlock();
+    return 0;
+}
+
+// LEN bytes: what was past it goes, and a file grown gets zeros
+int vfs_truncate(struct vnode *vn, int len) {
+    if (!vn || vn->type != VN_RAMFILE || len < 0) return -1;
+    sched_lock();
+    if (vn->lazy) vfs_fill(vn);
+    if (len > vn->size) {
+        if (!vn_grow(vn, len)) { sched_unlock(); return -1; }
+        memset(vn->data + vn->size, 0, len - vn->size);
+    }
+    vn->size = len;
+    vfs_touch(vn);
+    sched_unlock();
+    return 0;
+}
+
+// Take VN out of its directory's list
+static void vn_detach(struct vnode *vn) {
+    struct vnode *p, *q;
+    p = vn->parent;
+    if (p->child == vn) p->child = vn->next;
+    else {
+        q = p->child;
+        while (q && q->next != vn) q = q->next;
+        if (q) q->next = vn->next;
+    }
+    vn->next = 0;
 }
 
 // ---- C4KE's kernel RAM filesystem, over this one ----
@@ -371,7 +460,7 @@ static struct vnode *vfs_nth_file(int i) {
     struct vnode *vn;
     vn = vfs_cwd()->child;
     while (vn) {
-        if (vn->type == VN_RAMFILE) { if (!i) return vn; --i; }
+        if (vn_res(vn)->type == VN_RAMFILE) { if (!i) return vn; --i; }
         vn = vn->next;
     }
     return 0;
@@ -382,7 +471,7 @@ int vfs_nfiles() {
     int n;
     n = 0;
     vn = vfs_cwd()->child;
-    while (vn) { if (vn->type == VN_RAMFILE) ++n; vn = vn->next; }
+    while (vn) { if (vn_res(vn)->type == VN_RAMFILE) ++n; vn = vn->next; }
     return n;
 }
 
@@ -396,22 +485,49 @@ char *vfs_fname(int i) {
 // file must not be open. A removed file's storage is freed; a removed
 // directory's vnode is not, because some task may still have it as its
 // working directory -- it lives on, detached, and costs one small struct.
+//
+// A name of a file that has others (SYS_LINK) goes, and the file stays.
+// A link entry is simply dropped. The file's own entry, its first name,
+// is the vnode itself, so the file moves into its first link's place and
+// takes that link's name; open descriptors, which point at the vnode,
+// never notice.
 int vfs_unlink(char *path) {
-    struct vnode *vn, *p, *q;
+    struct vnode *vn, *l;
     sched_lock();
-    vn = vfs_walk(path, 0, 0);
-    if (!vn || vn == rootdir || !vn->parent || vn->refs > 0 ||
+    vn = vfs_walk2(path, 0, 0);
+    if (!vn || vn == rootdir || !vn->parent ||
         (vn->type == VN_DIR && vn->child) ||
-        (vn->type != VN_DIR && vn->type != VN_RAMFILE)) { sched_unlock(); return -1; }
-    p = vn->parent;
-    if (p->child == vn) p->child = vn->next;
-    else {
-        q = p->child;
-        while (q && q->next != vn) q = q->next;
-        if (!q) { sched_unlock(); return -1; }
-        q->next = vn->next;
+        (vn->type != VN_DIR && vn->type != VN_RAMFILE && vn->type != VN_LINK)) { sched_unlock(); return -1; }
+    if (vn->type == VN_LINK) {
+        vn_detach(vn);
+        l = vn->target;
+        if (l->links == vn) l->links = vn->lnext;
+        else {
+            l = l->links;
+            while (l->lnext != vn) l = l->lnext;
+            l->lnext = vn->lnext;
+        }
+        --vn->target->nlinks;
+        sl4b_free(vn_cache, (char *)vn);
+        sched_unlock();
+        return 0;
     }
-    vn->next = 0;
+    if (vn->nlinks) {
+        l = vn->links;
+        vn->links = l->lnext;
+        --vn->nlinks;
+        vn_detach(vn);
+        vn_detach(l);
+        vfs_namecpy(vn->name, l->name);
+        vn->parent = l->parent;
+        vn->next = vn->parent->child;
+        vn->parent->child = vn;
+        sl4b_free(vn_cache, (char *)l);
+        sched_unlock();
+        return 0;
+    }
+    if (vn->refs > 0) { sched_unlock(); return -1; }
+    vn_detach(vn);
     if (vn->type == VN_RAMFILE) {
         if (vn->data) free(vn->data);
         if (vn->hostname) free(vn->hostname);
@@ -431,7 +547,7 @@ int vfs_rename(char *path, char *newname) {
     if (!n || n >= VN_NAME_MAX) return -1;
     if (newname[0] == '.' && (n == 1 || (n == 2 && newname[1] == '.'))) return -1;
     sched_lock();
-    vn = vfs_walk(path, 0, 0);
+    vn = vfs_walk2(path, 0, 0);   // a link is renamed, not its file
     if (!vn || vn == rootdir || !vn->parent || vfs_child(vn->parent, newname, n)) { sched_unlock(); return -1; }
     vfs_namecpy(vn->name, newname);
     sched_unlock();
@@ -468,7 +584,7 @@ int vfs_direntry(struct vnode *dir, int index, char *name, int *isdir) {
     while (vn) {
         if (i == index) {
             vfs_namecpy(name, vn->name);
-            *isdir = vfs_isdir(vn);
+            *isdir = vfs_isdir(vn_res(vn));
             sched_unlock();
             return 1;
         }
@@ -567,10 +683,13 @@ int vfs_write(struct file *f, char *buf, int len) {
     }
 
     // RAM file: write at the description's position, extending as
-    // needed (a gap left by seeking past the end stays zeroed).
+    // needed, or at the end for O_APPEND.
     if (vn->lazy) vfs_fill(vn);
+    if (f->flags & C4IX_O_APPEND) f->pos = vn->size;
     end = f->pos + len;
     if (!vn_grow(vn, end)) { sched_unlock(); return -1; }
+    // past the end (lseek): the gap reads as zeros, whatever a truncate left in the buffer
+    if (f->pos > vn->size) memset(vn->data + vn->size, 0, f->pos - vn->size);
     memcpy(vn->data + f->pos, buf, len);
     vfs_touch(vn);
     f->pos = end;
@@ -702,6 +821,35 @@ void fd_clone(struct task *dst, struct task *src) {
             ++f->refs;
             dst->fds[fd] = (int)f;
         }
+        ++fd;
+    }
+    sched_unlock();
+}
+
+// vfork: the child has every descriptor the parent has, close-on-exec
+// ones too, and with the same marks; its execve closes them.
+void fd_clone_all(struct task *dst, struct task *src) {
+    struct file *f;
+    int fd;
+    sched_lock();
+    fd = 0;
+    while (fd < FD_MAX) {
+        if ((f = fd_get(src, fd))) {
+            ++f->refs;
+            dst->fds[fd] = (int)f;
+            dst->fdcloexec[fd] = src->fdcloexec[fd];
+        }
+        ++fd;
+    }
+    sched_unlock();
+}
+
+void fd_close_on_exec(struct task *t) {
+    int fd;
+    sched_lock();
+    fd = 0;
+    while (fd < FD_MAX) {
+        if (t->fds[fd] && t->fdcloexec[fd]) fd_close(t, fd);
         ++fd;
     }
     sched_unlock();

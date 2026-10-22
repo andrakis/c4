@@ -11,10 +11,10 @@
 // What is here is a working subset of C99 and POSIX, written for this
 // machine: stdio with buffered FILEs and a full printf, the string and
 // ctype functions, malloc with realloc, strtol, qsort, getenv, getopt,
-// opendir, and the file calls over C4IX's syscalls, and printf's %f %e
-// %g. What is not (yet): locales, wide characters, setjmp, signal
-// handlers, and lseek (C4IX has no seek). docs/c4ix-design.md lists the
-// gaps.
+// opendir, and the file calls over C4IX's syscalls (lseek, fstat, link
+// and truncate among them), vfork, execve and waitpid, and printf's %f
+// %e %g. What is not (yet): locales, wide characters, setjmp and signal
+// handlers. docs/c4ix-design.md lists the gaps.
 //
 // Floating point is math.h's: the math functions, and strtod, strtof and
 // atof too, which C puts in stdlib.h. A unit that says float or double
@@ -60,7 +60,7 @@ enum {
     EPERM = 1, ENOENT = 2, ESRCH = 3, EINTR = 4, EIO = 5, EBADF = 9, ECHILD = 10,
     EAGAIN = 11, ENOMEM = 12, EACCES = 13, EEXIST = 17, ENOTDIR = 20, EISDIR = 21,
     EINVAL = 22, EMFILE = 24, ENOSPC = 28, ESPIPE = 29, EROFS = 30, EPIPE = 32,
-    ERANGE = 34, ENOSYS = 38, ENOTEMPTY = 39
+    ERANGE = 34, ENOSYS = 38, ENOTEMPTY = 39, ENOEXEC = 8
 };
 char *strerror(int e);
 void perror(char *s);
@@ -91,18 +91,54 @@ int  access(char *path, int mode);
 unsigned int sleep(unsigned int s);
 int  usleep(int us);
 void _exit(int code);
+int  link(char *path, char *newpath);
+int  truncate(char *path, int len);
+int  ftruncate(int fd, int len);
 
-// stat: what C4IX can say about a file
+// ---- processes: vfork and exec, as a machine without an MMU has them ----
+// vfork's child shares the parent's memory until it calls execve or
+// _exit -- never exit, whose atexit and stdio flushing are the parent's
+// -- and must not return from the function that called vfork. The
+// parent waits until it has.
+int  vfork();
+int  execve(char *path, char **argv, char **envp);
+int  execv(char *path, char **argv);      // with this task's environment
+int  waitpid(int pid, int *status, int options);
+int  wait(int *status);
+enum { WNOHANG = 1, WUNTRACED = 2 };
+#define WEXITSTATUS(s) (((s) >> 8) & 255)
+#define WTERMSIG(s)    ((s) & 127)
+#define WIFEXITED(s)   (WTERMSIG(s) == 0)
+#define WIFSIGNALED(s) (WTERMSIG(s) != 0)
+#define WIFSTOPPED(s)  0
+
+// stat: what C4IX can say about a file. The first four are where they
+// always were. Modes are made up, the VFS having none: 0755 for
+// directories and programs, 0644 for files; uid and gid are 0.
 struct stat {
     int st_mode;
     int st_size;
     int st_mtime;
     int st_nlink;
+    int st_ino;         // the same for two names of one file (link)
+    int st_dev;         // 1, the RAM filesystem; 2, a host file; 0, the console or a pipe
+    int st_uid;
+    int st_gid;
+    int st_rdev;
+    int st_atime;
+    int st_ctime;
+    int st_blksize;
+    int st_blocks;      // 512-byte blocks
 };
-enum { S_IFMT = 61440, S_IFDIR = 16384, S_IFREG = 32768, S_IFCHR = 8192, S_IXUSR = 64 };
-#define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
-#define S_ISREG(m) (((m) & S_IFMT) == S_IFREG)
+enum { S_IFMT = 61440, S_IFDIR = 16384, S_IFREG = 32768, S_IFCHR = 8192, S_IFIFO = 4096,
+       S_IXUSR = 64 };
+#define S_ISDIR(m)  (((m) & S_IFMT) == S_IFDIR)
+#define S_ISREG(m)  (((m) & S_IFMT) == S_IFREG)
+#define S_ISCHR(m)  (((m) & S_IFMT) == S_IFCHR)
+#define S_ISFIFO(m) (((m) & S_IFMT) == S_IFIFO)
 int  stat(char *path, struct stat *st);
+int  lstat(char *path, struct stat *st);   // stat: there are no symbolic links
+int  fstat(int fd, struct stat *st);
 
 // ---- string ----
 int   strlen(char *s);

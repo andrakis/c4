@@ -794,6 +794,76 @@ loading or assigning a whole struct is an error.
     ring lies in a block it frees. (A ring in a program's static data, as
     `raycast` has, is still the program's own business.)
 
+- **POSIX processes and files, for Busybox** (2026-10-22, M7c of
+  docs/busybox-port.md). Eight syscalls, 232–239, with libc's wrappers;
+  `src/c4ix/libc/tests/unixtest.c` tests them all in `make test-libjs`.
+  - *`SYS_VFORK`* (`sched_vfork`). The child borrows the parent's image,
+    library data and heap; the parent parks in `TS_VFORK` until the child
+    execs or exits, and then its vfork returns the child's id. The child's
+    `SYS_SBRK` and `malloc` allocate for the parent, since libc's allocator
+    lives in the data they share.
+    - *Not the parent's stack.* On a register machine a vfork child runs on
+      the parent's stack, below the frame that called vfork. On this stack
+      machine that frame's caller F keeps its expression temporaries
+      there -- in `pid = vfork()`, the address of `pid` -- and the child's
+      first call would overwrite them and vfork's return address. So the
+      child gets a stack of its own, and the trap returns it from vfork
+      straight into F: pc is vfork's return address, bp is F's frame in the
+      parent's stack, and sp is in the new stack, over a copy of what lay
+      between vfork's frame and F's. F's locals are therefore the parent's
+      own, as vfork promises (Busybox's `spawn()` reads a `failed = errno`
+      the child wrote), and nothing the child calls touches the parent's
+      stack.
+    - libc's `vfork` must therefore execute the syscall itself, through no
+      helper (it is libc4ix's, `__c4_opcode` direct). The usual rules
+      hold: the child leaves by `execve` or `_exit` and never returns from
+      F.
+    - A vfork child gets every descriptor, close-on-exec ones too.
+      Killing the parent kills the child, whose memory it was.
+  - *`SYS_EXECVE(path, argv, envp)`*. The image loads first, and argv and
+    envp are copied, so a failure is -1 with nothing changed. Then the
+    task drops its image, libraries, heap and signal handlers, closes its
+    close-on-exec descriptors, and keeps its id, descriptors and
+    directory. The trap resumes it from a freshly forged frame
+    (`sched_reload`) rather than from its trap registers, and the old
+    stack, which the handler is standing on, is freed at the next trap.
+  - *`SYS_ENVIRON`*. The kernel keeps the environment execve passed
+    (`env_vec`), and a spawned task gets a copy of its spawner's. libc's
+    `getenv` reads it in on first use.
+  - *`SYS_WAITPID(pid, st, options)`*: a child, or any child (-1), with
+    `WNOHANG`; `st` gets the exit code and the signal that killed it
+    (`killsig`, now kept for `kill` and Ctrl-C). A blocking waitpid parks
+    and runs again when a child dies, so -1 needs no bookkeeping: the
+    waiter is woken, not handed a child. A task that has used vfork or
+    waitpid (`posix`) is left its zombies by the idle sweep, and a child
+    swept before its parent asked leaves a ghost with the parent's id.
+    Ctrl-C follows a `TS_VFORK` parent, or a waitpid(-1), to the newest
+    live child.
+  - *`SYS_LSEEK`* moves a RAM file's position, past the end too (the gap
+    reads as zeros); anything else is -1, libc's `ESPIPE`.
+  - *`SYS_FSTAT`*, and *`SYS_STAT`*'s third argument: how many words of
+    the `ST_*` record (c4ix.h) to write, 0 for the four there always
+    were. Added: the vnode's number (`ino`), its link count, a made-up
+    mode (0755 for directories and programs, 0644 for files) and a
+    device. libc's `struct stat` keeps its first four members where they
+    were.
+  - *`SYS_LINK`*: a second name, a `VN_LINK` entry in a directory that
+    points at the file. A path that ends at one resolves to the file.
+    Unlinking a file's own name while it has links moves the vnode into
+    its first link's place, under that name, so open descriptors never
+    notice. Only files: a directory with two parents would give `..` two
+    meanings. `persist` keeps each name as a file of its own.
+  - *`SYS_FTRUNCATE(fd, len)`*, and libc's `truncate` over it; and real
+    `O_APPEND` and `O_EXCL` in `sys_open`, where libc used to read a file
+    in and write it back to append.
+  - *A spawn race, found on the way.* `task_spawn_priv` put the task on
+    the run list (`task_create`) before giving it its image and its
+    privilege. A kernel caller, init, can be preempted there, and then the
+    child ran as a kernel task, unprotected, its printf the host's own:
+    x5-c4m.txt's hello said "after 0 syscalls", once the kernel's code
+    had shifted the preemption points onto that window. The setup now
+    runs under `sched_lock`.
+
 ## 6.1 Running it
 
     make run-c4ix        an interactive shell on c4m

@@ -10,9 +10,13 @@ order of the work: §7 lists the steps, each green before the next. Each gap
 was measured against Busybox 1.37.0 built on helios with host gcc, in the
 configuration below (§2.1).
 
-Status (2026-10-20):
+Status (2026-10-22):
 - the write-up is done and checked against the source;
-- M7b, the compiler, is under way (§7). Done so far:
+- M7c, the kernel, is done (§4, §7): `vfork` and `execve` with an
+  environment, `waitpid`, `lseek`, `fstat` and a fuller `stat`,
+  `O_APPEND` and `O_EXCL`, `link` and `ftruncate`, with libc's wrappers.
+  `src/c4ix/libc/tests/unixtest.c` tests them in `make test-libjs`;
+- M7b, the compiler, is done (§7):
   - the preprocessor;
   - `(void)` and unnamed parameters;
   - `sizeof` of any expression and in constants;
@@ -258,24 +262,26 @@ nested function-like macros, `#` and `##`, and line continuations.
 
 ## 4. The kernel
 
-C4IX has 29 syscalls (`src/c4ix/include/c4ix_user.h`). Busybox's NOMMU build
-needs these as well:
+C4IX had 29 syscalls (`src/c4ix/include/c4ix_user.h`) when this was
+written, and 32 by M7c. Busybox's NOMMU build needs these as well. M7c
+added eight, `SYS_VFORK` to `SYS_ENVIRON` (232–239), for the rows marked
+done; docs/c4ix-design.md §6 has the design:
 
-| need | today | plan |
+| need | before M7c | now |
 |---|---|---|
-| **`vfork` + `execve`** | `SYS_SPAWN(path, argc, argv)` only; no way to run code in the child between creating it and starting the program | §4.1. P0: hush runs every pipeline and redirection through this pattern, and re-execs itself for subshells |
-| **an environment for children** | none; libc's starts empty | `execve`'s `envp`, copied into the child the way `SYS_SPAWN` copies argv; libc's `environ` points at it. P0: `export` |
-| **`lseek`** | the open file has a `pos`, but there is no syscall; libc returns `ESPIPE` | `SYS_LSEEK` for RAM files and lazy disk files. P0: `tail`, `head -c`, `cp`'s holes |
-| **`fstat` and a fuller `stat`** | `stat(path)` gives type, size, program flag and mtime | `SYS_FSTAT`, plus `st_ino` (the vnode's index) and `st_dev`, so `cp a a` and `mv` across a directory can tell whether it is the same file. Modes are made up: 0755 for directories and programs, 0644 otherwise; uid/gid are 0; nlink is 1. P0 |
-| **`O_APPEND`, `O_EXCL`** | libc emulates `O_APPEND` by rewriting the file | Real flags in `sys_open`. P1 |
-| **`waitpid` with `WNOHANG` and a status** | `SYS_WAIT` blocks and returns the exit code | Add a no-wait flag; libc encodes `(code & 255) << 8` and a signal number for `kill`ed tasks. P0 for hush |
-| **`getppid`** | the parent is in `SYS_TASKINFO`'s record | libc only. P1 |
-| **links** | none | `SYS_LINK`, a second name for the same vnode, so `busybox --install` can make `/bin/ls`. §5 |
+| **`vfork` + `execve`** | `SYS_SPAWN(path, argc, argv)` only; no way to run code in the child between creating it and starting the program | **DONE**, §4.1. P0: hush runs every pipeline and redirection through this pattern, and re-execs itself for subshells |
+| **an environment for children** | none; libc's starts empty | **DONE**: `execve`'s `envp` is copied into the task the way `SYS_SPAWN` copies argv, a spawned child gets its spawner's, and libc's `getenv` reads it in (`SYS_ENVIRON`). libc's `environ` is M7d's. P0: `export` |
+| **`lseek`** | the open file has a `pos`, but there is no syscall; libc returns `ESPIPE` | **DONE**: `SYS_LSEEK` for RAM files and lazy disk files, past the end too. P0: `tail`, `head -c`, `cp`'s holes |
+| **`fstat` and a fuller `stat`** | `stat(path)` gives type, size, program flag and mtime | **DONE**: `SYS_FSTAT`, and `SYS_STAT` writes as many words as asked: `st_ino` (the vnode's number), `st_dev`, `st_nlink` and a mode, made up: 0755 for directories and programs, 0644 otherwise; uid/gid are 0. P0 |
+| **`O_APPEND`, `O_EXCL`** | libc emulates `O_APPEND` by rewriting the file | **DONE**: real flags in `sys_open`. P1 |
+| **`waitpid` with `WNOHANG` and a status** | `SYS_WAIT` blocks and returns the exit code | **DONE**: `SYS_WAITPID`, a child or any, with `WNOHANG`; libc encodes `(code & 255) << 8`, or the signal number for a `kill`ed task. P0 for hush |
+| **`getppid`** | the parent is in `SYS_TASKINFO`'s record | libc only (M7d). P1 |
+| **links** | none | **DONE**: `SYS_LINK`, a second name for the same vnode, so `busybox --install` can make `/bin/ls`. §5 |
 | **signals** | `SYS_KILL` cancels a task; there are no handlers | `signal`/`sigaction`/`sigprocmask` as libc stubs that record handlers and never deliver. With job control and interactive hush off, nothing waits on a signal. P1 |
 | **termios, `ioctl(TIOCGWINSZ)`** | none | stubs: `ENOTTY` and an 80×25 terminal. P2 with line editing off |
 | `chmod`, `fchmod`, `chown`, `umask`, `utime` | none | succeed and do nothing (the VFS has no owners or modes), except `utime`, which can set the vnode's mtime. P1 (`cp -p`) |
 | `readlink`, `symlink`, `lstat` | none | `lstat` is `stat`; `readlink` fails with `EINVAL`; `symlink` fails with `EPERM`. P1 |
-| `ftruncate`, `rmdir` | `O_TRUNC`; `rmdir` is `unlink` | `SYS_TRUNCATE`; make `unlink` refuse a non-empty directory. P1 |
+| `ftruncate`, `rmdir` | `O_TRUNC`; `rmdir` is `unlink` | **DONE**: `SYS_FTRUNCATE(fd, len)`, and libc's `truncate` over it. `unlink` already refused a non-empty directory. P1 |
 | 16 fds per task (`FD_MAX`) | | Enough for the first install; hush keeps a few saved fds per redirection. Watch. |
 
 ### 4.1 vfork and exec
@@ -283,21 +289,35 @@ needs these as well:
 On a machine without an MMU, `vfork` means the child borrows the parent's
 memory and stack until it calls `execve` or `_exit`, and the parent waits
 until it does. C4IX already runs every task in one address space, so this is
-the natural model:
+the natural model. As built in M7c (`sched_vfork`, `sys_execve`):
 
 - `SYS_VFORK` makes a task that shares the parent's image, heap and library
-  data, and gets a copy of the fd table. Its first context is the parent's
-  saved registers at the trap, with 0 in the accumulator. The parent is
-  parked in a new state until the child execs or exits. Then the parent
-  returns the child's id.
-- The child runs on the parent's stack, below the `vfork` frame. That is
-  allowed, because a vfork child must not return from the function that
-  called `vfork`. This is the usual rule, and Busybox's NOMMU code keeps it.
+  data, and gets a copy of the fd table, close-on-exec descriptors too.
+  The parent is parked in `TS_VFORK` until the child execs or exits. Then
+  the parent's vfork returns the child's id. The child's allocations are
+  the parent's, since libc's allocator lives in the data they share.
+- **Not the parent's stack, after all.** The plan was for the child to run
+  on the parent's stack, below the `vfork` frame, as on a register
+  machine. On this stack machine the caller F keeps its expression
+  temporaries there: in `pid = vfork()`, the address of `pid` was pushed
+  before the call. The child's first call would overwrite them, and
+  `vfork`'s return address. So the child gets a stack of its own, and the
+  trap returns it from `vfork` straight into F: pc is `vfork`'s return
+  address, bp is F's frame in the parent's stack, and sp is in the new
+  stack, over a copy of what lay between `vfork`'s frame and F's. F's
+  locals are still the parent's own, which Busybox's `spawn()` relies on
+  (the child's `failed = errno`), and the parent's stack below F is never
+  touched.
+- So libc's `vfork` executes the syscall itself, through no helper: the
+  kernel takes the frame that executed it to be `vfork`'s. The usual rule
+  holds, and Busybox's NOMMU code keeps it: the child must not return from
+  the function that called `vfork`.
 - `SYS_EXECVE(path, argv, envp)` loads a new image for the calling task: a
   fresh stack, the same fds minus close-on-exec, and the same id. If the
-  task was a vfork child, it then releases the parent.
-- The task marks its image as borrowed, so a child's `_exit` frees nothing
-  of the parent's.
+  task was a vfork child, it then releases the parent. A failed exec
+  changes nothing.
+- The child's image is borrowed, so its `_exit` frees nothing of the
+  parent's. A parent killed meanwhile takes the child with it.
 
 Libraries under D2 need nothing new. A vfork child shares the parent's libc
 data, which is what vfork means, and `loader_switch` already repoints it
@@ -450,15 +470,19 @@ Each step lands with tests, and the next starts only when they are green.
    needs one is c4lc's alone for now. Its parser stops at `typedef` with
    "a declaration was expected". Giving c4fc typedefs is a piece of work
    of its own.
-2. **M7c, kernel:**
-   1. `vfork`/`execve` with an environment;
-   2. `lseek`;
-   3. `fstat` and the fuller stat;
-   4. `waitpid`;
-   5. `O_APPEND`/`O_EXCL`, `link`, `truncate`.
+2. **M7c, kernel:** done (2026-10-22).
+   1. ~~`vfork`/`execve` with an environment~~: done, with a stack of the
+      child's own (§4.1);
+   2. ~~`lseek`~~: done;
+   3. ~~`fstat` and the fuller stat~~: done;
+   4. ~~`waitpid`~~: done;
+   5. ~~`O_APPEND`/`O_EXCL`, `link`, `truncate`~~: done.
 
-   Each gets a C4IX test program in the `test-libjs` legs, the way
-   `pictest` pins D2.
+   `unixtest` (`src/c4ix/libc/tests/unixtest.c`) is the C4IX test program
+   in the `test-libjs` legs, the way `pictest` pins D2: its output is
+   `unixtest.txt`, line by line. It includes the risk §8 names, a vfork
+   child that writes to a redirected fd and then execs. libctest has a
+   line for each wrapper.
 3. **M7d, libc:** §5's list, each with a line in `libctest`. `regcomp` gets
    its own test against host `grep -E` on fixed inputs.
 4. **M7e, vendor** Busybox 1.37.0.
@@ -493,10 +517,10 @@ Each step lands with tests, and the next starts only when they are green.
     unreferenced functions. The last would also remove most of §5's stubs.
 - **Compile time on the host** is a few minutes: c4lc compiles the 275 KB
   `c4sp.c` in about 9 s natively. Inside C4IX it is an hour-scale job.
-- **vfork is the one deep kernel change.** It touches the scheduler's
-  trap-context path, the same place `sched_trap` and `coop_switch` already
-  meet, and the stack guard's assumptions. Its tests must include a vfork
-  child that writes to a redirected fd and then execs.
+- **vfork was the one deep kernel change.** It touched the scheduler's
+  trap-context path, and the stack turned out to be the hard part
+  (§4.1). Its tests include a vfork child that writes to a redirected fd
+  and then execs, and one that calls deep before it exits.
 - **c4fc parity doubles the compiler work.** The byte-identity rule stays,
   since it is what has kept three compilers honest. If it ever blocks
   progress, the fallback is to land a feature in c4lc first and in c4fc

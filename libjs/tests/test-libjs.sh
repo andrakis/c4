@@ -233,6 +233,18 @@ if echo "$out" | grep -qx "A: ok" && echo "$out" | grep -qx "B: ok" && ! echo "$
     ok "two tasks share libc's code and keep their own data"
 else bad "two tasks share libc's code and keep their own data"; echo "$out" | grep -E 'ok|crossed|loader' | head -6; fi
 
+# The POSIX calls Busybox needs (M7c, docs/busybox-port.md §4): lseek,
+# fstat and stat, O_APPEND and O_EXCL, link and truncate, waitpid, and
+# vfork with execve and an environment -- among them a vfork child that
+# redirects its stdout, writes, and execs. What unixtest prints, line by
+# line, is src/c4ix/libc/tests/unixtest.txt.
+out=$(printf 'unixtest\nexit\n' | \
+      timeout 300 $LIBJS -m 64 -c 1000000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
+if echo "$out" | sed -n '/^lseek: set/,/unixtest: done/p' | cmp -s - src/c4ix/libc/tests/unixtest.txt; then
+    ok "unixtest: vfork, execve, waitpid, lseek, fstat, links and truncate"
+else bad "unixtest: vfork, execve, waitpid, lseek, fstat, links and truncate"
+     echo "$out" | sed -n '/^lseek: set/,/unixtest: done/p' | diff - src/c4ix/libc/tests/unixtest.txt | head -10; fi
+
 # The sound card (snd-device.js). Its AdLib, opl.js, is DOSBox's dbopl
 # ported line for line, so the C++ (libjs/tests/src/oplref) renders random
 # register streams and opl.js must make the same samples, bit for bit: at

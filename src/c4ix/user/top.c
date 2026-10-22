@@ -26,6 +26,7 @@ static char *top_state(int st) {
     if (st == TS_WAITING) return "wait";
     if (st == TS_BLOCKED) return "block";
     if (st == TS_SLEEPING) return "sleep";
+    if (st == TS_VFORK) return "vfork";
     return "?";
 }
 

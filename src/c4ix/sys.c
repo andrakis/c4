@@ -90,6 +90,12 @@ int sys_open(char *path, int flags) {
     if ((sys_same(path, "/dev/stdin") || sys_same(path, "/dev/tty"))
         && (in = fd_get(t, FD_STDIN)) && in->vn->type != VN_CONSOLE)
         return fd_open_vnode(t, in->vn, C4IX_O_RDONLY | (flags & C4IX_O_NONBLOCK));
+    // O_CREAT with O_EXCL: only a file made now. One trap, so nothing can
+    // make it between the look and the create.
+    if ((flags & C4IX_O_EXCL) && (flags & C4IX_O_CREAT)) {
+        if (vfs_lookup(path)) return -1;
+        if ((h = open(path, 0)) >= 0) { close(h); return -1; }
+    }
     if ((vn = vfs_lookup(path))) {
         if (flags & C4IX_O_TRUNC) { vn->size = 0; vn->lazy = 0; vfs_touch(vn); }   // the host bytes are not wanted
         return fd_open_vnode(t, vn, flags);
@@ -225,6 +231,122 @@ int sys_readdir(char *path, int index, char *name) {
     return isdir;
 }
 
+// ---- execve and waitpid ----
+
+// Replace the calling task's program: PATH's image, with ARGV and ENVP
+// copied into the kernel, a fresh stack, the same id, descriptors and
+// directory (less the close-on-exec ones), and the default signal
+// handling. The trap then returns into the new image's task_shim, not
+// to the caller (sched_reload). A vfork child that execs gives its
+// parent its memory back. -1, with nothing changed, if the image will
+// not load.
+//
+// Everything the call names is the old image's memory, or the vfork
+// parent's, so it is all copied, and the task renamed, before any of
+// that is freed. The old stack is the one this handler runs on, so it
+// goes at the next trap.
+static int sys_execve(char *path, char **argv, char **envp) {
+    struct c4r_image img;
+    struct task *t;
+    char *name;
+    int argc, av, ad, ev, ed, ostack, ok, i;
+
+    t = sched_current();
+    if (!t || !sched_in_trap() || t->privs != PRIV_USER) return -1;
+    if (!c4r_load(path, &img)) return -1;
+    if ((argc = task_strvec(argv, -1, &av, &ad)) < 0) { c4r_unload(&img); return -1; }
+    if (task_strvec(envp, -1, &ev, &ed) < 0) {
+        if (av) { free((int *)av); free((char *)ad); }
+        c4r_unload(&img);
+        return -1;
+    }
+    // A vfork child's stack is its parent's choice for its children; any
+    // other task keeps the size it has
+    ostack = t->stack;
+    if (t->vfparent) sched_next_stack_words = t->spawn_stack ? t->spawn_stack / sizeof(int) : 0;
+    else sched_next_stack_words = t->stack_words;
+    ok = sched_forge(t, img.entry, argc, av);
+    sched_next_stack_words = 0;
+    if (!ok) {
+        if (av) { free((int *)av); free((char *)ad); }
+        if (ev) { free((int *)ev); free((char *)ed); }
+        c4r_unload(&img);
+        return -1;
+    }
+    name = path;
+    i = 0;
+    while (path[i]) { if (path[i] == '/') name = path + i + 1; ++i; }
+    i = 0;
+    while (name[i] && i < TASK_NAME_MAX - 1) { t->name[i] = name[i]; ++i; }
+    t->name[i] = 0;
+
+    task_drop_image(t);
+    ck_exec_reset(t);
+    if (t->argv_vec) free((int *)t->argv_vec);
+    if (t->argv_data) free((char *)t->argv_data);
+    if (t->env_vec) free((int *)t->env_vec);
+    if (t->env_data) free((char *)t->env_data);
+    t->argv_vec = av; t->argv_data = ad;
+    t->env_vec = ev; t->env_data = ed;
+    fd_close_on_exec(t);
+    t->entry = img.entry;
+    t->img_code = img.code;
+    t->img_data = img.data;
+    t->img_cons = img.cons;
+    t->img_ncons = img.ncons;
+    t->img_des = img.des;
+    t->img_ndes = img.ndes;
+    t->img_libs = img.libs;
+    t->img_nlibs = img.nlibs;
+    t->img_bytes = img.bytes;
+    if (ostack) sched_stale_stack = ostack;
+    sched_reload = 1;
+    sched_new_slice();
+    return 0;
+}
+
+// waitpid(PID, ST, OPTIONS): a child that has exited, PID or (-1) any,
+// is reaped, and its id returned with ST[0] its exit code and ST[1] the
+// signal that killed it (0 if none). With C4IX_WNOHANG, 0 while none
+// has; -1 if the caller has no such child. Otherwise the caller parks
+// until one exits, and runs the call again then (task_zombify wakes it
+// without reaping, and sys_restart re-executes the syscall). There are
+// no process groups, so 0 and below -1 mean any child.
+static int sys_waitpid(int pid, int *st, int opts) {
+    struct task *t, *c;
+    int any, id, code, sig;
+
+    if (!(t = sched_current())) return -1;
+    t->posix = 1;
+    if (pid < -1 || pid == 0) pid = -1;
+    any = 0;
+    c = task_head;
+    while (c) {
+        if (c->parent == t->id && c != t && (pid == -1 || c->id == pid)) {
+            if (c->state == TS_ZOMBIE) {
+                if (st) { st[0] = c->exitcode; st[1] = c->killsig; }
+                id = c->id;
+                task_release(c);
+                return id;
+            }
+            any = 1;
+        }
+        c = c->next;
+    }
+    // reaped by the idle sweep before this parent asked
+    if ((id = task_ghost_child(t->id, pid, &code, &sig))) {
+        if (st) { st[0] = code; st[1] = sig; }
+        return id;
+    }
+    if (!any) return -1;
+    if ((opts & C4IX_WNOHANG) || !sched_in_trap()) return 0;
+    t->wait_for = pid;
+    t->wait_posix = 1;
+    t->state = TS_WAITING;
+    sys_restart = 1;
+    return 0;
+}
+
 // ---- the dispatcher ----
 //
 // args[0] is the first argument, args[1] the second, and so on.
@@ -285,7 +407,38 @@ int sys_dispatch(int num, int *args) {
         f->vn->size = 0; f->vn->rpos = 0;
         sched_unlock();
         return num;
-    case SYS_STAT:     return vfs_stat((char *)args[0], (int *)args[1]);
+    // the first args[2] words of the ST_* record; 0 asks for the four
+    // there were before M7c
+    case SYS_STAT:     return vfs_stat((char *)args[0], (int *)args[1], args[2]);
+    case SYS_FSTAT:
+        if (!t || !(f = fd_get(t, args[0]))) return -1;
+        vn_stat(f->vn, (int *)args[1], args[2]);
+        return 0;
+    // Only a RAM file has a position to move: a pipe, the console and a
+    // host file (the host has no seek) are -1, libc's ESPIPE. Past the
+    // end is allowed, and a write there leaves zeros in the gap.
+    case SYS_LSEEK:
+        if (!t || !(f = fd_get(t, args[0])) || f->vn->type != VN_RAMFILE) return -1;
+        if (args[2] == 0) num = args[1];
+        else if (args[2] == 1) num = f->pos + args[1];
+        else if (args[2] == 2) num = f->vn->size + args[1];
+        else return -1;
+        if (num < 0) return -1;
+        f->pos = num;
+        return num;
+    case SYS_FTRUNCATE:
+        if (!t || !(f = fd_get(t, args[0])) || (f->flags & 3) == C4IX_O_RDONLY) return -1;
+        return vfs_truncate(f->vn, args[1]);
+    case SYS_LINK:     return vfs_link((char *)args[0], (char *)args[1]);
+    // The environment execve gave the caller, NAME=VALUE strings ending
+    // in a null pointer, or 0 for none: the kernel's copy, which libc
+    // reads its own from
+    case SYS_ENVIRON:  return t ? t->env_vec : 0;
+    case SYS_EXECVE:   return sys_execve((char *)args[0], (char **)args[1], (char **)args[2]);
+    case SYS_WAITPID:  return sys_waitpid(args[0], (int *)args[1], args[2]);
+    // sched_trap services it: it needs the trap's registers. Outside a
+    // trap there are none.
+    case SYS_VFORK:    return -1;
     case SYS_UNLINK:   return vfs_unlink((char *)args[0]);
     case SYS_RENAME:   return vfs_rename((char *)args[0], (char *)args[1]);
     case SYS_LAZYFILE: return vfs_lazyfile((char *)args[0], (char *)args[1], args[2]);
@@ -364,6 +517,7 @@ int sys_dispatch(int num, int *args) {
             return num;
         }
         t->wait_for = s->id;
+        t->wait_posix = 0;
         t->state = TS_WAITING;
         return 0;
     }

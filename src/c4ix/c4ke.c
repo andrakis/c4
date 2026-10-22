@@ -573,63 +573,63 @@ void ck_exec_reset(struct task *t) {
 // decision that acts on it, so none of C4KE's __c4_jmp gymnastics are
 // needed.
 //
-// Still a ladder of ifs, unlike sys_dispatch. As a switch, its jump table
-// in the kernel data segment was overwritten in some memory layouts
-// (benchtop under test-c4ix-c4ke, with the kernel image at a path of
-// seven or eight characters) -- a stray write the ladder, which reads no
-// data, never shows. docs/c4ix-cpu.md, step 7.
+// A switch, as sys_dispatch is: the CK_* numbers are dense, so c4lc
+// makes it a jump table. It was kept a ladder of ifs for a while, because
+// benchtop failed with the switch at some kernel-image path lengths. The
+// table was never written: the change of timing let init be preempted in
+// task_spawn_priv, and benchtop ran before it had its constructors
+// (docs/c4ix-cpu.md, step 7).
 int ck_dispatch(int num, int *args) {
-    struct task *t;
+    struct task *t, *s;
+    int code;
 
     t = sched_current();
     if (t) ++t->nsyscalls;
 
-    if (num == CK_REQUEST_SYMBOL) return ck_symbol((char *)args[0]);
+    switch (num) {
+    case CK_REQUEST_SYMBOL: return ck_symbol((char *)args[0]);
 
     // identity and accounting
-    if (num == CK_USER_PID)            return t ? t->id : -1;
-    if (num == CK_USER_PARENT)         return t ? t->parent : -1;
-    if (num == CK_KERN_TASK_CURRENT_ID) return t ? t->id : -1;
-    if (num == CK_TASK_CYCLES)
-        return t ? (int)task_cycles(t) : 0;
-    if (num == CK_C4INFO)              return task_info();
-    if (num == CK_TIME)                return __time();
+    case CK_USER_PID:            return t ? t->id : -1;
+    case CK_USER_PARENT:         return t ? t->parent : -1;
+    case CK_KERN_TASK_CURRENT_ID: return t ? t->id : -1;
+    case CK_TASK_CYCLES:         return t ? (int)task_cycles(t) : 0;
+    case CK_C4INFO:              return task_info();
+    case CK_TIME:                return __time();
 
     // the task table, as far as this stage goes
-    if (num == CK_KERN_TASK_COUNT)     return task_count();
-    if (num == CK_KERN_TASK_RUNNING)   return ck_running(args[0]);
-    if (num == CK_KERN_TASKS_RUNNING)  return ck_tasks_running();
+    case CK_KERN_TASK_COUNT:     return task_count();
+    case CK_KERN_TASK_RUNNING:   return ck_running(args[0]);
+    case CK_KERN_TASKS_RUNNING:  return ck_tasks_running();
 
     // scheduling. The switch at the end of sched_trap IS the yield, once
     // the trap is told not to take its fast path straight back here.
-    if (num == CK_SCHEDULE)            { sched_yield(); return ck_tasks_running() > 1; }
+    case CK_SCHEDULE:            sched_yield(); return ck_tasks_running() > 1;
 
-    if (num == CK_TASK_EXIT)           { task_exit(args[0]); return 0; }
+    case CK_TASK_EXIT:           task_exit(args[0]); return 0;
     // C4KE plants this on a task's stack so returning from main traps
     // here; C4IX uses task_shim instead, so it should never execute.
     // It still has to resolve, and behaving like exit is the honest
     // thing for it to do if it ever does.
-    if (num == CK_TASK_FINISH)         { task_exit(0); return 0; }
+    case CK_TASK_FINISH:         task_exit(0); return 0;
 
-    if (num == CK_CURRENTTASK_UPDATE_NAME) {
+    case CK_CURRENTTASK_UPDATE_NAME:
         if (t) ck_namecpy(t, (char *)args[0]);
         return 0;
-    }
 
-    if (num == CK_KERN_REQUEST_EXCLUSIVE) return ck_exclusive(t, 1);
-    if (num == CK_KERN_RELEASE_EXCLUSIVE) return ck_exclusive(t, 0);
+    case CK_KERN_REQUEST_EXCLUSIVE: return ck_exclusive(t, 1);
+    case CK_KERN_RELEASE_EXCLUSIVE: return ck_exclusive(t, 0);
 
-    if (num == CK_DEBUG_KERNELSTATE)   { ck_kernelstate(); return 0; }
+    case CK_DEBUG_KERNELSTATE:   ck_kernelstate(); return 0;
 
     // C4IX derives the foreground job from the wait chain rather than
     // being told, so this is accepted and ignored. See sched.c.
-    if (num == CK_TASK_FOCUS)          return 0;
+    case CK_TASK_FOCUS:          return 0;
 
     // C4KE's own halt does nothing either.
-    if (num == CK_HALT) {
+    case CK_HALT:
         kprintf("c4ix: c4ke: task %d requested halt (ignored)\n", t ? t->id : -1);
         return 0;
-    }
 
     // Sleep is a STATE CHANGE, not a spin: park on the clock and let
     // the scheduling decision at the end of sched_trap pick someone
@@ -642,25 +642,23 @@ int ck_dispatch(int num, int *args) {
     // picks the right clock for its host (a plain system call when
     // native, the /proc/uptime reader only under plain c4) and
     // degrades cleanly through any nesting depth.
-    if (num == CK_USER_SLEEP || num == CK_AWAIT_MESSAGE) {
+    case CK_USER_SLEEP:
+    case CK_AWAIT_MESSAGE:
         if (!t) return 0;
         if (args[0] <= 0) return 0;
         t->ck_wake = __time() + args[0];
         t->state = TS_SLEEPING;
         return 0;
-    }
 
-    if (num == CK_USER_SIGNAL)         return ck_signal(t, args[0], args[1]);
-    if (num == CK_USER_KILL)           return ck_kill(args[0], args[1]);
+    case CK_USER_SIGNAL:         return ck_signal(t, args[0], args[1]);
+    case CK_USER_KILL:           return ck_kill(args[0], args[1]);
 
-    if (num == CK_USER_START_C4R)      return ck_start_c4r(t, args);
+    case CK_USER_START_C4R:      return ck_start_c4r(t, args);
 
     // Byte for byte the SYS_WAIT in-trap path: park, and task_zombify
     // completes the wait, writing the exit code into sv_a -- which is
     // the accumulator this opcode returns in.
-    if (num == CK_AWAIT_PID) {
-        struct task *s;
-        int code;
+    case CK_AWAIT_PID:
         if (!t) return -1;
         if (!(s = task_get(args[0]))) {
             // Swept by the idle reaper before we asked; its status
@@ -677,19 +675,18 @@ int ck_dispatch(int num, int *args) {
         t->wait_posix = 0;
         t->state = TS_WAITING;
         return 0;
-    }
+
     // the kernel RAM filesystem (vfs.c): C4KE's argument order, name first
-    if (num == CK_VFS_PUT)             return vfs_put((char *)args[0], (char *)args[1], args[2]);
-    if (num == CK_VFS_GET)             return (int)vfs_getdata((char *)args[0], (int *)args[1]);
-    if (num == CK_VFS_UNLINK)          return vfs_unlink((char *)args[0]);
-    if (num == CK_VFS_COUNT)           return vfs_nfiles();
-    if (num == CK_VFS_NAME)            return (int)vfs_fname(args[0]);
-    if (num == CK_KERN_TASKS_EXPORT)   return ck_export();
-    if (num == CK_KERN_TASKS_EXPORT_UPDATE) {
+    case CK_VFS_PUT:             return vfs_put((char *)args[0], (char *)args[1], args[2]);
+    case CK_VFS_GET:             return (int)vfs_getdata((char *)args[0], (int *)args[1]);
+    case CK_VFS_UNLINK:          return vfs_unlink((char *)args[0]);
+    case CK_VFS_COUNT:           return vfs_nfiles();
+    case CK_VFS_NAME:            return (int)vfs_fname(args[0]);
+    case CK_KERN_TASKS_EXPORT:   return ck_export();
+    case CK_KERN_TASKS_EXPORT_UPDATE:
         if (args[0]) ck_export_fill((int *)args[0]);
         return 0;
-    }
-    if (num == CK_KERN_TASKS_EXPORT_FREE) {
+    case CK_KERN_TASKS_EXPORT_FREE:
         ck_export_free((int *)args[0]);
         return 0;
     }

@@ -120,7 +120,8 @@ enum {
     // microcode anyway (docs/fused-opcodes.md, F7), as have oisc4 and
     // libjs.
     LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,
-    // F3: IEEE arithmetic (docs/c4-float.md) -- named, not run here
+    // F3: IEEE arithmetic (docs/c4-float.md), run as c4m runs it:
+    // natively by c4_fpu_instruction, hosted by the host's own FPU
     FPU ,
     INS_SIZE
 };
@@ -169,7 +170,8 @@ enum {
     C4I_SMP   = 0x100,
     C4I_CISC  = 0x200,   // reserved; INFO never reports it, even though
                          // c4mp executes LXI/SXI (test for c4mp by C4I_SMP)
-    C4I_TRAPH = 0x400
+    C4I_TRAPH = 0x400,
+    C4I_FPU   = 0x10000  // c4m's: opcode FPU runs (cleared by -F)
 };
 
 // ---- one processor ----
@@ -249,6 +251,7 @@ int  c4_cpu_ipi(int id);
 
 // ---- vm.c ----
 extern int c4mp_debug;      // -d: trace every instruction
+extern int c4mp_fpu;        // run FPU; -F clears it, as c4m's -F does
 void c4_vm_init();          // must run before the first c4_run
 int  c4_run(struct c4_cpu * RESTRICT c, int quantum);
 char *c4_opname(int op);    // five bytes wide, print with %.4s

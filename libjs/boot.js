@@ -24,7 +24,8 @@
 import { parseC4r, loadImage } from '../src/c4bb/sim/loader.js';
 import { Arena, MEM_BASE, TLEV_ADDR, OPNAMES_ROM } from '../src/c4bb/sim/arena.js';
 import { Devices, OPNAMES, HEAP_BASE, HEAP_END, CYCLES_PER_MS } from '../src/c4bb/sim/devices.js';
-import { OP, Machine } from './c4m.js';
+import { OP, Machine, CPU_HALT_ADDR } from './c4m.js';
+import { Smp } from './smp.js';
 import { Bus } from './bus.js';
 import { Heap } from './heap.js';
 
@@ -36,6 +37,9 @@ import { Heap } from './heap.js';
 //   mhz       how fast the machine claims to be; TIME is cycles / (mhz * 1000)
 //   gui       a GuiDevice to fit, or null
 //   snd       a SoundDevice (snd-device.js) to fit, or null
+//   cpus      processors (smp.js): c4mp's instruction set, simulated, with
+//             quantum instructions each in turn (default 1000). Without it,
+//             one CPU and no processor opcodes, as before
 export function createMachine(opts = {}) {
   const arena = new Arena((opts.arenaMb || 32) * 1024 * 1024);
   const dev = new Devices(arena, {
@@ -49,6 +53,8 @@ export function createMachine(opts = {}) {
   // the FPU opcode (F3): on unless asked otherwise (fpu: false)
   machine.noFpu = opts.fpu === false;
   dev.noFpu = machine.noFpu;
+  if (opts.cpus) new Smp(machine, opts.cpus | 0, opts.quantum | 0,
+    () => { const m = new Machine(arena, dev, bus, machine.heap); m.noFpu = machine.noFpu; return m; });
   if (opts.gui) opts.gui.attach(machine);
   if (opts.snd) opts.snd.attach(machine);
   return machine;
@@ -56,6 +62,7 @@ export function createMachine(opts = {}) {
 
 export function initRom(arena) {
   arena.i32[TLEV_ADDR >> 2] = OP.TLEV;
+  arena.i32[CPU_HALT_ADDR >> 2] = OP.CPUH;
   arena.writeBytes(OPNAMES_ROM, new TextEncoder().encode(OPNAMES));
 }
 

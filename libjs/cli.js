@@ -14,6 +14,9 @@
 //   --fast       interactive runs go as fast as the host can instead of
 //                pacing to the machine's own clock
 //   --mbox N     fit a mailbox of N bytes (c4bb's MBOX_* registers)
+//   --cpus N     N processors (smp.js, c4mp's instruction set), simulated:
+//                each runs -q instructions in turn (default 1000)
+//   -q N         instructions a CPU runs before the next one's turn
 //   --wav FILE   fit a sound card (snd-device.js) and write what it played,
 //                on the machine's own clock, to FILE: 44.1 kHz 16-bit stereo.
 //                The same session makes the same file. Without it there is
@@ -55,6 +58,8 @@ function parseArgs(argv) {
     else if (f === '--no-fpu') o.fpu = false;
     else if (f === '--mbox') o.mbox = parseInt(argv[++i], 10);
     else if (f === '--wav') o.wav = argv[++i];
+    else if (f === '--cpus') o.cpus = parseInt(argv[++i], 10);
+    else if (f === '-q') o.quantum = parseInt(argv[++i], 10);
     else if (f === '--') { i++; break; }
     else { console.error(`libjs: unknown option ${f}`); usage(); }
     i++;
@@ -101,7 +106,7 @@ async function main(argv) {
   const snd = o.wav ? new SoundDevice() : null;
   const played = [];
   const machine = createMachine({
-    arenaMb: o.arenaMb, drives, mhz: o.mhz, fpu: o.fpu, snd,
+    arenaMb: o.arenaMb, drives, mhz: o.mhz, fpu: o.fpu, snd, cpus: o.cpus, quantum: o.quantum,
     onByte: b => { out.push(b); if (out.length >= 4096 || b === 10) flush(); },
   });
   const dev = machine.dev;
@@ -143,11 +148,13 @@ async function main(argv) {
   const t0 = Date.now();
   const limit = o.maxCycles;
   let status, parkedMs = 0;
+  // the machine's time: with several CPUs, the round robin's, not CPU 0's
+  const clock = () => (machine.smp ? machine.smp.cycle : machine.cycle);
   for (;;) {
-    const left = limit - machine.cycle;
+    const left = limit - clock();
     if (left <= 0) {
       flush();
-      console.error(`libjs: stopped at cycle budget (${machine.cycle} cycles)`);
+      console.error(`libjs: stopped at cycle budget (${clock()} cycles)`);
       status = 9;
       break;
     }

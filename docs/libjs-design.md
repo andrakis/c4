@@ -255,6 +255,37 @@ samples, and the PC speaker: what a DOS game expects to find.
   renders random register streams through both, and requires the same
   samples. It renders about 20 times faster than real time.
 
+## Processors
+
+`cli.js --cpus N` (and the page's `?cpus=N`) gives the machine N
+processors: c4mp's instruction set (`src/c4mp/README.md`), simulated
+(`smp.js`, docs/c4ix-smp.md S1).
+
+- **Each CPU is a `Machine`**, with its own registers, cycle count, trap
+  handler, interval and mode, over the same arena, devices and heap. CPU
+  0's `run` hands over to `Smp.run`, which runs each runnable CPU for a
+  quantum (`-q`, default 1,000) in CPU order, as c4mp's `c4_smp_run`
+  does. The interleaving is c4mp's quantum for quantum: c4mp's `smp0` and
+  `smp1` guests print its pinned transcripts, cycle counts included.
+- **Opcodes 66-75:** `CPUI`, `CPUN`, `CPUS`, `CPUH`, `CAS`, `XCHG`,
+  `FADD`, `CWAI`, `CWAK`, `IPI`. They are unguarded in protected mode, as
+  in c4mp. An instruction cannot be split, so the atomics are plain
+  read-modify-writes. `IPI` arrives as `HARD_IRQ` with c4mp's sub-code 1,
+  after the tick and regardless of the preemption mask; the PIT's
+  sub-code is 1 too, and no SMP guest runs the PIT.
+- **Halting:** `EXIT` on CPU 0 ends the machine. On another CPU, `EXIT`
+  or `CPUH` halts that processor only. Nothing runnable with some CPU
+  parked is a deadlock: each CPU is named with the word it waits on, and
+  the machine exits 255.
+- **Time** is the machine's: the round robin advances it by the most any
+  CPU ran in each round (`devices.js` `timeSource`), and `TIME` and the
+  pacing go by it. `C4CY` is each CPU's own count.
+- **The CPU-local window**, 0x800-0x8FF: 64 words of each CPU's own,
+  through `ld32`/`st32`. It is for what must differ by CPU at one
+  address, such as a shared library's data slot (docs/c4ix-smp.md, 3.4).
+- **`C4I_SMP` (0x100)** is in `INFO` only when the machine was given
+  CPUs, even one. Without `--cpus` nothing changes.
+
 ## Tracker
 
 ### Before M0

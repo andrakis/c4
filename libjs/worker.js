@@ -9,6 +9,7 @@
 //   boot    { image: ArrayBuffer, argv, disk: [[name, ArrayBuffer]], arenaMb, mhz, unpaced, gui, snd, shared }
 //           snd: true fits the sound card (snd-device.js)
 //           persist: { files: [[name, Uint8Array]] } fits a writable drive 1, kept by the page
+//           cpus, quantum: that many processors, simulated (smp.js)
 //           shared: { ring, fb } SharedArrayBuffers from shared.js, when the page is isolated
 //   key     { key, ctrlKey, altKey, metaKey }     a keydown on the terminal
 //   input   { bytes: Uint8Array }                 typed programmatically
@@ -152,6 +153,7 @@ function start(msg) {
   }
   vm = createMachine({
     arenaMb: msg.arenaMb || 64, drives, mhz: msg.mhz || 20, gui, snd, fpu: msg.fpu,
+    cpus: msg.cpus | 0, quantum: msg.quantum | 0,
     onByte: b => { out.push(b); if (out.length >= 4096) flush(); },
   });
   boot(vm, new Uint8Array(msg.image), msg.argv || ['image.c4r'], { mbox: msg.mbox | 0 });

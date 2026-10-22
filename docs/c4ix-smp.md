@@ -173,7 +173,7 @@ they run in parallel under a BKL.
 
 | | What | Proved by |
 |---|---|---|
-| S1 | libjs simulated engine: opcodes 66-75, per-CPU IRQs and IPIs, the CPU-local window, `C4I_SMP`; `cli.js --cpus N` | c4mp's `smp0`, `smp1` and `deadlock` guests (32-bit builds), totals and deadlock report as c4mp's |
+| S1 (done) | libjs simulated engine: opcodes 66-75, per-CPU IRQs and IPIs, the CPU-local window, `C4I_SMP`; `cli.js --cpus N` | c4mp's `smp0`, `smp1` and `deadlock` guests (32-bit builds), totals and deadlock report as c4mp's |
 | S2 | libjs parallel engine: workers, `SharedArrayBuffer` arena, `Atomics`, the forwarding block; Node and the page | the same guests with `--parallel`; a two-CPU spin test that runs both halves at full speed; the page when isolated |
 | S3 | C4IX SMP kernel: AP boot, BKL, per-CPU state, scheduler, library slots in the window | the whole C4IX suite on the simulated engine at 1, 2 and 4 CPUs; two `spin`s at once on the parallel engine, each at full speed |
 | S4 | Show and use it: per-CPU load in `top` and System Monitor, `b4ke -j` | test-desktop; a parallel rebuild measured against a serial one |
@@ -181,6 +181,19 @@ they run in parallel under a BKL.
 
 At one CPU nothing changes: the same images, the same timings, and the
 same tests.
+
+### S1, done (2026-10-22)
+
+`libjs/smp.js`, opcodes 66-75 in `c4m.js`, the window, and `--cpus`/`-q`
+in `cli.js` (`?cpus=N` in the page). c4mp's `smp0` and `smp1` give
+exactly c4mp's output:
+- at 1, 2, 4 and 8 CPUs;
+- at quanta 1, 7 and 1,000;
+- with the same cycle counts.
+
+The deadlock report names every CPU and exits 255, as c4mp does.
+test-libjs pins all of it against c4mp's own transcripts, and checks
+the CPU-local window.
 
 ## 6. Risks
 

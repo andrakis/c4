@@ -5,6 +5,7 @@
 //   ?image=URL&disk=URL          any other image and disk instead
 //   ?mhz=N                       how fast the machine runs, paced (default 100)
 //   ?snd=0                       no sound card
+//   ?cpus=N                      N processors, simulated (smp.js, docs/c4ix-smp.md)
 //   ?persist=0 | reset           C4IX's files are not kept between visits / are forgotten first
 //   ?fast                        run as fast as the host can, unpaced
 //   ?fpu=0                       no FPU opcode: floats in software (F3, docs/c4-float.md)
@@ -72,6 +73,7 @@ const opts = {
   arenaMb: Number(params.get('mem')) || 64,
   shared: params.get('shared') !== '0',
   snd: params.get('snd') !== '0',
+  cpus: Number(params.get('cpus')) || 0,
   persist: params.get('persist') === '0' ? null : sys.persist || null,
   persistReset: params.get('persist') === 'reset',
 };

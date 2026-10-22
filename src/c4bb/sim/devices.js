@@ -388,7 +388,10 @@ export class Devices {
   }
 
   simMs() {
-    const cyc = this.machine ? this.machine.cycle : 0;
+    // with several CPUs (libjs's smp.js), the machine's time, not the
+    // running CPU's own count
+    const src = this.timeSource || this.machine;
+    const cyc = src ? src.cycle : 0;
     return (Math.floor(cyc / this.cyclesPerMs) + this.sleepMs) | 0;
   }
 

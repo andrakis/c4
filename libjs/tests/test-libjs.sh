@@ -299,4 +299,23 @@ else bad "persist keeps a session's changes on drive 1 for the next"
      echo "$out" | grep -E "persist|sync|rm:" | head -4; echo "$out2" | grep -E "persist|kept|kdir|README" | head -6; fi
 rm -rf $T
 
+# Processors (smp.js, docs/c4ix-smp.md S1): c4mp's own guests, built for
+# 32 bits, print what c4mp prints -- its pinned transcripts, cycle counts
+# and all -- since the round robin is c4mp's, quantum for quantum. The
+# deadlock is diagnosed and exits 255, as c4mp's does. And the CPU-local
+# window: each CPU sees its own words at 0x800.
+for g in smp0 smp1; do
+    if $LIBJS --cpus 4 $IMAGES/c4mp-$g.c4r 2>&1 | cmp -s - src/c4mp/tests/$g-4cpu.txt; then
+        ok "--cpus 4 runs c4mp's $g as c4mp does"
+    else bad "--cpus 4 runs c4mp's $g as c4mp does"; $LIBJS --cpus 4 $IMAGES/c4mp-$g.c4r 2>&1 | diff - src/c4mp/tests/$g-4cpu.txt | head -6; fi
+done
+out=$($LIBJS --cpus 4 $IMAGES/c4mp-deadlock.c4r 2>&1); st=$?
+if [ $st = 255 ] && echo "$out" | grep -qF "deadlock: every processor is parked and none can be woken" &&
+   [ "$(echo "$out" | grep -c "waiting on 0x")" = 4 ]; then ok "a deadlock is diagnosed, each CPU named"
+else bad "a deadlock is diagnosed, each CPU named"; echo "$out" | tail -6; fi
+out=$($LIBJS --cpus 2 $IMAGES/libjs-smpwin.c4r 2>&1)
+if echo "$out" | grep -qx "smpwin: cpu 1 saw 111, cpu 0 sees 1 and 9" && $LIBJS $IMAGES/libjs-smpwin.c4r 2>&1 | grep -qx "smpwin: no SMP"; then
+    ok "each CPU sees its own words in the CPU-local window"
+else bad "each CPU sees its own words in the CPU-local window"; echo "$out" | tail -3; fi
+
 if [ $fail = 0 ]; then echo "test-libjs: OK"; else echo "test-libjs: FAILURES"; exit 1; fi

@@ -33,7 +33,9 @@ export const OP = {
   PUTC: 39, PUTS: 40, RALC: 41, MCPY: 42, STRC: 43, ITH: 44, _OPC: 45, _BLT: 46, _TRP: 47, OPCD: 48,
   _JMP: 49, _ADJ: 50, C4CF: 51, C4CY: 52, TIME: 53, SIGH: 54, SIGI: 55, USLP: 56, INFO: 57, OPSL: 58,
   C4IV: 59, FLT: 60, JSRI: 61, JSRS: 62, JMPA: 63, TLEV: 64, DBG: 65,
-  // 66-78 are c4mp's: named, not implemented here
+  // 66-75 are c4mp's processor opcodes, run when the machine has CPUs
+  // (smp.js); 76-78 (LXI, SXI, TRAW) are c4mp's alone
+  CPUI: 66, CPUN: 67, CPUS: 68, CPUH: 69, CAS: 70, XCHG: 71, FADD: 72, CWAI: 73, CWAK: 74, IPI: 75,
   LDL: 79, LDG: 80, PSHL: 81, PSHG: 82, LEAP: 83, IMMP: 84, LIP: 85, ADDL: 86, STL: 87, POPA: 88, FPU: 89,
 };
 export const INS_SIZE = 89;
@@ -57,10 +59,24 @@ const TRAP_OFFSET = 15;                 // words of slack above a trap frame (c4
 // exactly this host. C4I_GUI announces the display device (gui-device.js),
 // C4I_SND the sound card (snd-device.js).
 export const C4I_C4MJS = 0x8, C4I_GUI = 0x4000, C4I_SND = 0x8000;
+// c4mp's: the processor opcodes and the CPU-local window are there. The
+// count is __c4_cpu_count()'s to say. (c4m.c gives 0x100 to its memory
+// protection guard too, which libjs never runs.)
+export const C4I_SMP = 0x100;
 
 // Why run() stopped.
-export const STOP = { BUDGET: 0, HALT: 1, INPUT: 2, SLEEP: 3 };
-export const STOP_NAMES = ['budget', 'halt', 'input', 'sleep'];
+// PARK and CPUHALT are one processor's, never the machine's (smp.js).
+export const STOP = { BUDGET: 0, HALT: 1, INPUT: 2, SLEEP: 3, PARK: 4, CPUHALT: 5 };
+export const STOP_NAMES = ['budget', 'halt', 'input', 'sleep', 'park', 'cpuhalt'];
+
+// SMP (smp.js, c4mp's instruction set): where a started CPU's entry
+// function returns -- a CPUH word in the ROM -- and the CPU-local window,
+// 64 words each processor sees its own of (docs/c4ix-smp.md, 3.4)
+export const CPU_HALT_ADDR = 0x18;
+export const LOCAL_BASE = 0x800, LOCAL_END = 0x900;
+// HARD_IRQ's sub-code for an inter-processor interrupt: c4mp's HIRQ_IPI.
+// The PIT's tick is 1 too; no SMP guest runs the PIT.
+const HIRQ_IPI = 1;
 
 export class Machine {
   // arena: src/c4bb/sim/arena.js Arena; dev: src/c4bb/sim/devices.js
@@ -105,21 +121,25 @@ export class Machine {
   ld32(x) {
     x = x | 0;
     if ((x & 3) === 0 && x >= 0x1000) return this.i32[x >> 2] | 0;
+    if (this.smp && x >= LOCAL_BASE && x < LOCAL_END && (x & 3) === 0) return this.local[(x - LOCAL_BASE) >> 2] | 0;
     return this.bus.read32(x) | 0;
   }
   st32(x, v) {
     x = x | 0;
     if ((x & 3) === 0 && x >= 0x1000) { this.i32[x >> 2] = v; return; }
+    if (this.smp && x >= LOCAL_BASE && x < LOCAL_END && (x & 3) === 0) { this.local[(x - LOCAL_BASE) >> 2] = v; return; }
     this.bus.write32(x, v | 0);
   }
   ld8(x) {
     x = x | 0;
     if (x >= 0x1000) return (this.u8[x] << 24) >> 24;
+    if (this.smp && x >= LOCAL_BASE && x < LOCAL_END) return (this.localU8[x - LOCAL_BASE] << 24) >> 24;
     return this.bus.read8s(x);
   }
   st8(x, v) {
     x = x | 0;
     if (x >= 0x1000) { this.u8[x] = v; return; }
+    if (this.smp && x >= LOCAL_BASE && x < LOCAL_END) { this.localU8[x - LOCAL_BASE] = v; return; }
     this.bus.write8(x, v & 0xff);
   }
   cstring(addr, max = 1 << 20) {
@@ -148,6 +168,7 @@ export class Machine {
            (this.dev.mbox ? C4I_MBOX : 0) |
            (this.gui && this.gui.fitted ? C4I_GUI : 0) |
            (this.snd && this.snd.fitted ? C4I_SND : 0) |
+           (this.smp ? C4I_SMP : 0) |
            (this.trapHandler ? C4I_TRAPH : 0);
   }
 
@@ -208,10 +229,62 @@ export class Machine {
     return STOP.BUDGET;
   }
 
+  // EXIT. With CPUs, only CPU 0's ends the machine, as main returning
+  // ends a program; another's halts that processor (c4mp's rule).
   halt(status) {
+    if (this.smp && this.cpuId !== 0) {
+      this.cpuState = 'halt';
+      this.cpuStatus = status | 0;
+      return STOP.CPUHALT;
+    }
     this.dev.halted = true;
     this.dev.status = status | 0;
     return STOP.HALT;
+  }
+
+  // c4mp's processor opcodes (66-75), when the machine has CPUs. Their
+  // arguments are on the stack as a syscall's are, the last pushed on
+  // top; c4lc emits the ADJ after. Unguarded in protected mode, as c4mp
+  // has them. In the simulated engine an instruction cannot be split,
+  // so the atomics are plain read-modify-writes.
+  smpOp(op) {
+    const sp = this.sp, smp = this.smp;
+    switch (op) {
+      case OP.CPUI: this.a = this.cpuId; return STOP.BUDGET;
+      case OP.CPUN: this.a = smp.n; return STOP.BUDGET;
+      case OP.CPUS: this.a = smp.start(this.ld32(sp + 8), this.ld32(sp + 4), this.ld32(sp)); return STOP.BUDGET;
+      case OP.CPUH: this.cpuState = 'halt'; return STOP.CPUHALT;
+      case OP.CAS: {
+        const t = this.ld32(sp + 8), v = this.ld32(t);
+        if (v === this.ld32(sp + 4)) this.st32(t, this.ld32(sp));
+        this.a = v;
+        return STOP.BUDGET;
+      }
+      case OP.XCHG: {
+        const t = this.ld32(sp + 4), v = this.ld32(t);
+        this.st32(t, this.ld32(sp));
+        this.a = v;
+        return STOP.BUDGET;
+      }
+      case OP.FADD: {
+        const t = this.ld32(sp + 4), v = this.ld32(t);
+        this.st32(t, (v + this.ld32(sp)) | 0);
+        this.a = v;
+        return STOP.BUDGET;
+      }
+      case OP.CWAI: {
+        // park while *addr is still val: 1 if it already is not, 0 once woken
+        const t = this.ld32(sp + 4), val = this.ld32(sp);
+        if (!t || this.ld32(t) !== val) { this.a = 1; return STOP.BUDGET; }
+        this.a = 0;
+        this.waitAddr = t; this.waitVal = val;
+        this.cpuState = 'wait';
+        return STOP.PARK;
+      }
+      case OP.CWAK: this.a = smp.wake(this.ld32(sp + 4), this.ld32(sp)); return STOP.BUDGET;
+      case OP.IPI: this.a = smp.ipi(this.ld32(sp)); return STOP.BUDGET;
+    }
+    return STOP.BUDGET;
   }
 
   // ---------------------------------------------------------------
@@ -219,6 +292,7 @@ export class Machine {
   // BUDGET means carry on.
   sys(op) {
     const dev = this.dev, sp = this.sp;
+    if (op >= OP.CPUI && op <= OP.IPI && this.smp) return this.smpOp(op);
     switch (op) {
       case OP.OPEN:
         if (this.mode) return this.pmTrap(op);
@@ -506,13 +580,15 @@ export class Machine {
   // Anything that makes the per-instruction boundary check necessary.
   needChecks() {
     const dev = this.dev;
-    return !!(this.cycleInterval || dev.pitMs || this.pendingSignal || dev.mboxIrq ||
+    return !!(this.cycleInterval || dev.pitMs || this.pendingSignal || dev.mboxIrq || this.ipiPending ||
               (this.gui && this.gui.irqPending()));
   }
 
   // ---------------------------------------------------------------
   // Run up to maxCycles cycles. Returns a STOP code.
   run(maxCycles) {
+    // with CPUs, the boot CPU's run is the round robin's (smp.js)
+    if (this.smp && !this.smp.running) return this.smp.run(maxCycles);
     const dev = this.dev, i32 = this.i32, u8 = this.u8;
     if (dev.halted) return STOP.HALT;
     let pc = this.pc | 0, sp = this.sp | 0, bp = this.bp | 0, a = this.a | 0;
@@ -556,6 +632,13 @@ export class Machine {
             fired = true;
             this.pc = pc; this.sp = sp; this.bp = bp; this.a = a; this.cycle = cycle;
             this.hirq(0);
+          } else if (this.ipiPending && i32[pc >> 2] !== OP.TLEV) {
+            // another CPU's interrupt (c4mp's order: after the tick).
+            // Not held back by the preemption mask: it is a peer asking.
+            this.ipiPending = 0;
+            fired = true;
+            this.pc = pc; this.sp = sp; this.bp = bp; this.a = a; this.cycle = cycle;
+            this.hirq(HIRQ_IPI);
           } else if (this.pendingSignal && !(this.trapRestoresInterval && !interval)) {
             fired = true;
             this.pc = pc; this.sp = sp; this.bp = bp; this.a = a; this.cycle = cycle;

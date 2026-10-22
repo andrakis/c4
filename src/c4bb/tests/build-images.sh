@@ -275,6 +275,12 @@ C4IX_ARC_USER="tar gunzip crc32 splash persist"
 # floors were measured at 32 bits, and an unmeasured change there would
 # be the same guess with a smaller number.
 C4IX_CELLS=400000
+# c4mp's SMP guests, and the CPU-local window's, as 32-bit images for
+# libjs's processors (cli.js --cpus, docs/c4ix-smp.md); test-libjs runs them
+for g in smp0 smp1 deadlock; do
+    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O src/c4mp/guest/$g.c $OUT/c4mp-$g.c4r > /dev/null
+done
+./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O libjs/tests/src/smpwin.c $OUT/libjs-smpwin.c4r > /dev/null
 # What `b4ke -C /usr` makes in /build, laid out as the
 # BUILD.B4K files lay it out: each object and image below is kept there
 # as it is built (they are the same bytes; test-c4ix-rebuild checks the

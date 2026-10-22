@@ -2926,7 +2926,12 @@ int c4m_main(int argc, char **argv)
 		}
 	}
     else if (i == ITH) { // install trap handler
-//		if (mode == MODE_UNPROTECTED) {
+		// Guarded: the trap handler is the MACHINE's -- the kernel's. A
+		// protected task that set it took every trap of every task, and
+		// a kernel run as a program (C4KE started from C4IX's shell) did
+		// exactly that. The kernel decides: C4IX kills the task, C4KE's
+		// PM extension hands the machine over.
+		if (mode == MODE_UNPROTECTED) {
 			if (!*sp) {
 				// Remove trap handler
 				a = (int)trap_handler;
@@ -2943,12 +2948,12 @@ int c4m_main(int argc, char **argv)
 				mpg_handler = *sp;
 //<<< c4mpg
 			}
-//		} else {
-//			trap(TRAP_PM_VIOLATION, ITH, trap_handler, &sp, &bp, &pc, a, mode);
-//			// Disable cycle interrupt and set unprotected mode
-//			cycle_interrupt_interval = 0;
-//			mode = MODE_UNPROTECTED;
-//		}
+		} else {
+			trap(TRAP_PM_VIOLATION, ITH, trap_handler, &sp, &bp, &pc, a, mode);
+			// Disable cycle interrupt and set unprotected mode
+			cycle_interrupt_interval = 0;
+			mode = MODE_UNPROTECTED;
+		}
 	} else if (i == C4CF) { // Configure system: __c4_configure(CONF_*, value)
 		// TODO: this should be priveleged, but C4KE is using it in mode 1 (protected)
 		//printf("(c4: C4CF %d in mode %d\n", sp[1], mode);

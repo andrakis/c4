@@ -52,6 +52,17 @@ export function hasOperand(i) {
          (i >= OP.LDL && i <= OP.IMMP) || i === OP.STL;
 }
 
+// The ROM a guest never stores to (src/c4bb/sim/arena.js): below 0x20
+// the null guard and the TLEV, constructor-return and CPUH words; and
+// the opcode-name ROM. c4bb's firmware latches at 0x20-0x3F are RAM.
+// Does the range of n bytes at x touch it?
+const ROM_LOW_END = 0x20;
+function isRom(x, n) {
+  const lo = x | 0, hi = lo + n;
+  return (lo < ROM_LOW_END && hi > 0) ||
+         (lo < OPNAMES_ROM + OPNAMES.length && hi > OPNAMES_ROM);
+}
+
 export const TRAP = { ILLOP: 0, HARD_IRQ: 1, SOFT_IRQ: 2, SIGNAL: 3, SEGV: 4, OPV: 5, PM_VIOLATION: 6, DEBUG: 7 };
 const TRAP_OFFSET = 15;                 // words of slack above a trap frame (c4m.c:221)
 
@@ -131,6 +142,7 @@ export class Machine {
     x = x | 0;
     if ((x & 3) === 0 && x >= 0x1000) { this.i32[x >> 2] = v; return; }
     if (this.smp && x >= LOCAL_BASE && x < LOCAL_END && (x & 3) === 0) { this.local[(x - LOCAL_BASE) >> 2] = v; return; }
+    if (isRom(x, 4)) { this.romStore(x, v); return; }
     this.bus.write32(x, v | 0);
   }
   ld8(x) {
@@ -143,7 +155,46 @@ export class Machine {
     x = x | 0;
     if (x >= 0x1000) { this.u8[x] = v; return; }
     if (this.smp && x >= LOCAL_BASE && x < LOCAL_END) { this.localU8[x - LOCAL_BASE] = v; return; }
+    if (isRom(x, 1)) { this.romStore(x, v & 0xff); return; }
     this.bus.write8(x, v & 0xff);
+  }
+
+  // A store into the ROM words: dropped, and the first one named on the
+  // console. Every trap in every task returns through the TLEV word, so
+  // one wild store there ends the whole machine.
+  romStore(x, v) {
+    this.romStores = (this.romStores | 0) + 1;
+    const dev = this.dev;
+    if (dev.romReported) return;
+    dev.romReported = true;
+    const hex = n => '0x' + ((n >>> 0).toString(16).toUpperCase().padStart(8, '0'));
+    const pc = this.pc - 4;
+    this.emitString(`libjs: store of ${hex(v)} to ROM ${hex(x)} at pc ${hex(pc)} dropped` +
+      ` (bp ${hex(this.bp)}, sp ${hex(this.sp)}, mode ${this.mode}, cycle ${this.cycle}).` +
+      ' Later ones are dropped silently.\n');
+  }
+
+  // READ into a buffer over the ROM. The disk controller writes the
+  // arena itself, so the ROM is put back afterwards.
+  romRead(len) {
+    const u8 = this.u8, end = OPNAMES_ROM + OPNAMES.length;
+    const saved = u8.slice(0, end);
+    const r = this.dev.diskRead(len) | 0;
+    for (let x = 0; x < end; x++) {
+      if (x === ROM_LOW_END) x = OPNAMES_ROM;
+      if (u8[x] !== saved[x]) { this.romStore(x, u8[x]); u8[x] = saved[x]; }
+    }
+    return r;
+  }
+
+  // Bytes into memory from the host side of an opcode (MCPY), a range
+  // that may cover the ROM: store each through st8's check.
+  stBytes(d, src, n) {
+    const u8 = this.u8;
+    for (let k = 0; k < n; k++) {
+      const x = (d + k) | 0;
+      if (isRom(x, 1)) this.romStore(x, src(k)); else u8[x] = src(k);
+    }
   }
   cstring(addr, max = 1 << 20) {
     const u8 = this.u8;
@@ -308,7 +359,8 @@ export class Machine {
         if (this.mode) return this.pmTrap(op);
         dev.diskFd = this.ld32(sp + 8);
         dev.diskAddr = this.ld32(sp + 4);
-        const r = dev.diskRead(this.ld32(sp)) | 0;
+        const r = isRom(dev.diskAddr, this.ld32(sp)) ? this.romRead(this.ld32(sp))
+                                                     : dev.diskRead(this.ld32(sp)) | 0;
         if (r === -2) return this.blockedRead();
         this.a = r;
         return STOP.BUDGET;
@@ -375,7 +427,8 @@ export class Machine {
           // Forward, byte by byte, when the ranges overlap that way --
           // what c4bb's microcode and a naive memcpy do. Otherwise a
           // block copy.
-          if (d > s && d < s + n) for (let k = 0; k < n; k++) u8[d + k] = u8[s + k];
+          if (isRom(d, n)) this.stBytes(d, k => u8[s + k], n);
+          else if (d > s && d < s + n) for (let k = 0; k < n; k++) u8[d + k] = u8[s + k];
           else u8.copyWithin(d, s, s + n);
         }
         this.a = d;
@@ -402,6 +455,8 @@ export class Machine {
         this.stacktrace();
         return STOP.BUDGET;
       case OP.ITH: {
+        // guarded: the trap handler is the machine's, the kernel's
+        if (this.mode) return this.pmTrap(op);
         const old = this.trapHandler;
         this.trapHandler = this.ld32(sp);
         this.a = old;

@@ -75,4 +75,29 @@ check(until(() => prompt(n0), 20000), 'and \\q comes back again', text(n0));
 n0 = out.length;
 type('ls /usr');
 check(until(() => prompt(n0), 2000) && /(^|\n)c4ke\.c4r\n/.test(text(n0)), '/usr/c4ke.c4r is there, beside c4m.c and load-c4r.c', text(n0));
+
+// A kernel run as a program. C4KE's c4ke.c4r started from C4IX's shell
+// called ITH, took the machine's trap handler from C4IX, and its own
+// allocations then failed into its early trap handler: under c4m, which
+// runs its guests on raw addresses, it wrote 0 and then text over the
+// TLEV word at 0x10, and every task on the machine died ("illegal opcode
+// 541148492", the bytes "LLA "). ITH traps in protected mode now, and
+// C4IX kills the task -- here, and one level down: C4IX booted by C4KE
+// under c4m. libjs drops a store to the ROM words besides (test-rom.mjs).
+const refused = /tried to install the machine's trap handler/;
+const romOk = () => vm.arena.i32[0x10 >> 2] === 64 && !(vm.romStores | 0);   // TLEV
+n0 = out.length;
+type('c4ke');
+check(until(() => prompt(n0), 20000) && refused.test(text(n0)) && romOk(),
+  'c4ke started from C4IX\'s shell is refused, and the machine runs on', text(n0));
+n0 = out.length;
+type('c4m load-c4r.c -- c4ke');
+check(until(() => text(n0).includes('c4sh>'), 60000), 'c4m boots C4KE again', text(n0));
+n0 = out.length;
+type('c4ix');
+check(until(() => prompt(n0), 60000), 'C4KE boots C4IX to its shell', text(n0));
+n0 = out.length;
+type('c4ke');
+check(until(() => prompt(n0), 20000) && refused.test(text(n0)) && romOk(),
+  'and c4ke there is refused too, with nothing written over the ROM', text(n0));
 process.exit(fail);

@@ -7,8 +7,9 @@
 # unpack, cc inside C4IX (mandel.c; echo built byte for byte as the
 # disk's), two compiles at once, libc, two tasks sharing libc's code
 # (its data slot is in the CPU-local window), and unixtest's vfork,
-# execve and waitpid. Every task id is N - 1 higher than on one CPU:
-# each other CPU's idle task comes before init.
+# execve and waitpid. And S4's: ps and top's CPU columns, and b4ke -j
+# rebuilding the libraries byte for byte. Every task id is N - 1 higher
+# than on one CPU: each other CPU's idle task comes before init.
 #
 # Run from the repo root, after make c4bb-images. `make test-c4ix-smp`
 # runs it at 1, 2 and 4 CPUs and at 2 on threads.
@@ -23,7 +24,7 @@ TAG="test-c4ix-smp($N${2:+ parallel})"
 fail=0
 ok ()  { echo "$TAG: $1 OK"; }
 bad () { echo "$TAG: $1 FAIL"; fail=1; }
-c4ix () { timeout ${2:-300} $LIBJS -m 64 -c ${1} -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null; }
+c4ix () { timeout ${2:-300} $LIBJS -m ${3:-64} -c ${1} -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null; }
 
 # (shutdown waits for the background unpack: the budget is for both)
 out=$(printf 'c4ix-ps.c4r\nexit\n' | c4ix 2000000000)
@@ -73,6 +74,30 @@ out=$(printf 'pictest A 15 > /tmp/a &\npictest B 15 > /tmp/b &\npictest C 15 > /
 if echo "$out" | grep -qx "A: ok" && echo "$out" | grep -qx "B: ok" && echo "$out" | grep -qx "C: ok" && ! echo "$out" | grep -qF "crossed"; then
     ok "three tasks share libc's code and keep their own data"
 else bad "three tasks share libc's code and keep their own data"; echo "$out" | grep -E 'ok|crossed|loader' | head -6; fi
+
+# S4: ps and top say which CPU runs each task, and top each CPU's load;
+# on one CPU, the columns there always were
+out=$(printf 'ps\ntop 1\nexit\n' | c4ix 1000000000)
+if [ "$N" -ge 2 ]; then
+    if echo "$out" | grep -qE '^  ID  PPID STATE    CPU PRIV' && echo "$out" | grep -qE "^$N CPUs: cpu0 [0-9]+% cpu1 [0-9]+%"; then
+        ok "ps and top show the CPUs"
+    else bad "ps and top show the CPUs"; echo "$out" | grep -E 'ID|CPUs' | head -4; fi
+else
+    if echo "$out" | grep -qE '^  ID  PPID STATE   PRIV' && ! echo "$out" | grep -qE 'CPUs:'; then
+        ok "ps and top: one CPU, no CPU column"
+    else bad "ps and top: one CPU, no CPU column"; echo "$out" | grep -E 'ID|CPUs' | head -4; fi
+fi
+
+# b4ke -j: the libraries rebuilt with steps at once are the disk's, byte for byte.
+# 128 MB: N compilers at once, beside the unpacked root archive, take more than 64.
+out=$(printf "wait $U\nb4ke -B -j $((N > 1 ? N : 2)) -C /usr/src/c4ix/lib\ncrc32 /build/lib/libc4ix.c4l /usr/lib/libc4ix.c4l /build/lib/libarc.c4l /usr/lib/libarc.c4l\nexit\n" | c4ix 40000000000 900 128)
+a=$(echo "$out" | grep -oE '^[0-9a-f]{8} [0-9]+ /build/lib/libc4ix.c4l' | cut -d' ' -f1,2)
+b=$(echo "$out" | grep -oE '^[0-9a-f]{8} [0-9]+ /usr/lib/libc4ix.c4l' | cut -d' ' -f1,2)
+c=$(echo "$out" | grep -oE '^[0-9a-f]{8} [0-9]+ /build/lib/libarc.c4l' | cut -d' ' -f1,2)
+d=$(echo "$out" | grep -oE '^[0-9a-f]{8} [0-9]+ /usr/lib/libarc.c4l' | cut -d' ' -f1,2)
+if echo "$out" | grep -qF "c4ix/lib: 13 ran, 0 up to date, 0 failed" && [ -n "$a" ] && [ "$a" = "$b" ] && [ -n "$c" ] && [ "$c" = "$d" ]; then
+    ok "b4ke -j rebuilds the libraries, byte for byte"
+else bad "b4ke -j rebuilds the libraries, byte for byte"; echo "$out" | grep -E 'b4ke|crc|failed' | head -8; fi
 
 out=$(printf 'unixtest\nexit\n' | c4ix 1000000000)
 if echo "$out" | sed -n '/^lseek: set/,/unixtest: done/p' | cmp -s - src/c4ix/libc/tests/unixtest.txt; then

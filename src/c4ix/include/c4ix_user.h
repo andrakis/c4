@@ -35,8 +35,9 @@ enum { UWNOHANG = 1 };
 // name as TASK_NAME_MAX bytes. Sized generously and in WORDS, because
 // how many words sixteen bytes is depends on the machine -- at 9 this
 // was two words short on a 32-bit host and utaskinfo wrote past the
-// caller's array.
-enum { TASKINFO_WORDS = 24 };
+// caller's array. Past the name, at TI_CPU, the CPU running the task (-1
+// none) and at TI_NCPU the machine's CPUs (docs/c4ix-smp.md S4).
+enum { TASKINFO_WORDS = 24, TI_CPU = 20, TI_NCPU = 21 };
 enum { TS_READY = 1, TS_RUNNING = 2, TS_ZOMBIE = 3, TS_WAITING = 4, TS_BLOCKED = 5, TS_SLEEPING = 6, TS_VFORK = 7 };
 enum { STDIN = 0, STDOUT = 1, STDERR = 2 };
 // open() flags; the low two bits match the host's.

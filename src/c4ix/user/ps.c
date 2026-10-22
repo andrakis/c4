@@ -19,19 +19,23 @@ static char *ps_state(int st) {
 
 int main(int argc, char **argv) {
     int info[TASKINFO_WORDS];
-    int i, total, total_hi, stable;
+    int i, total, total_hi, stable, smp;
 
     // -s omits the counters. They are exact and useful, but they
     // shift with every change to the kernel, so a test that pins
     // ps output needs a column set that does not.
     stable = 0;
     if (argc > 1) { if (argv[1][0] == '-') { if (argv[1][1] == 's') stable = 1; } }
+    // On several CPUs, which one runs each task (docs/c4ix-smp.md S4);
+    // on one, the columns there have always been
+    smp = utaskinfo(0, info) && info[TI_NCPU] > 1;
 
     // Headings go through the same widths as the values below, so
     // the two cannot drift apart.
     upadhdr("ID", 4);
     upadhdr("PPID", 5);
     upadstr("STATE", 8);
+    if (smp) upadhdr("CPU", 4);
     upadstr("PRIV", 8);
     if (!stable) {
         upadhdr("SYSCALLS", 8);
@@ -46,6 +50,7 @@ int main(int argc, char **argv) {
         upadnum(info[0], 4);
         upadnum(info[1], 5);
         upadstr(ps_state(info[2]), 8);
+        if (smp) { if (info[TI_CPU] >= 0) upadnum(info[TI_CPU], 4); else upadhdr("-", 4); }
         upadstr(info[3] ? "user" : "kernel", 8);
         if (!stable) {
             upadnum(info[4], 8);

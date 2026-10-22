@@ -116,7 +116,9 @@ enum { C4IX_WNOHANG = 1 };
 // how many words sixteen bytes is depends on the machine -- at 9 this
 // was two words short on a 32-bit host and utaskinfo wrote past the
 // caller's array.
-enum { TASKINFO_WORDS = 24 };
+// Past the name, at TI_CPU, the CPU running the task (-1 none), and at
+// TI_NCPU how many the machine has (docs/c4ix-smp.md S4).
+enum { TASKINFO_WORDS = 24, TI_CPU = 20, TI_NCPU = 21 };
 enum { FD_STDIN = 0, FD_STDOUT = 1, FD_STDERR = 2, FD_MAX = 16 };
 
 int  sys_dispatch(int num, int *args);   // args[0]=first, args[1]=second...
@@ -458,12 +460,22 @@ struct cpustat {
     long long gone_kernel;
     int heap;                  // the machine's heap, bytes; 0 if the host does not say
     int heapused;              // ... and the bytes of it in use
+    // Processors (docs/c4ix-smp.md S4): how many, 1 unless SMP; and for
+    // each, its idle task's id, the machine ms it has parked or napped,
+    // and its cycles since boot -- busy, every task but its idle task's
+    // and the kernel's work for them, and idle, its idle task's
+    int ncpu;
+    int idles[CPU_MAX];
+    int cnap[CPU_MAX];
+    long long cbusy[CPU_MAX];
+    long long cidle[CPU_MAX];
 };
 struct cpustat_task {
     int id, parent, state, privs, nsyscalls;
     long long user;            // cycles it ran outside the trap handler
     long long kernel;          // cycles the handler spent on it
     int mem;                   // bytes it holds: image, stack, library data, allocations
+    int cpu;                   // the CPU running it, -1 if none is
     char name[TASK_NAME_MAX];
 };
 
@@ -634,6 +646,7 @@ extern struct cpu *cpu_self;
 extern int smp_ncpu;           // processors in use: 1 unless the host has SMP
 void sched_early();            // cpu_self, before anything locks (boot.c)
 int  task_busy(struct task *t);   // some CPU may be on its stack: not to be freed yet
+int  task_cpu(struct task *t);    // the CPU running it, -1 if none is
 int  smp_slot_alloc();         // a library's data slot in the window, 0 if none is left
 // SYS_EXECVE replaced the running task's context: the trap returns into
 // the forged one, and the old stack, still under the handler, is freed

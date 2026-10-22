@@ -7,12 +7,14 @@
 // target only when one of its sources is newer, so editing one file and
 // running b4ke again rebuilds what depends on it and nothing else.
 //
-//   b4ke [-f FILE] [-C DIR] [-n] [-k] [-B] [NAME=VALUE ...]
+//   b4ke [-f FILE] [-C DIR] [-n] [-k] [-B] [-j N] [NAME=VALUE ...]
 //     -f FILE    build file (default BUILD.B4K)
 //     -C DIR     change to DIR first; FILE is read from there
 //     -n         say what would run, run nothing
 //     -k         keep going after a failed step
 //     -B         rebuild everything: ignore TARGET and DEPS
+//     -j N       up to N steps at once, where they do not depend on each
+//                other (below, "-j"); on several CPUs, at the same time
 //     NAME=VALUE set NAME, overriding the file's own SET
 //
 // The format, one verb per line:
@@ -348,10 +350,209 @@ static int b4_spawn(char *prog, int argc, char **argv) {
     return pid;
 }
 
+// ---- -j: steps at once ----
+//
+// With -j N, a RUN is queued rather than run, and up to N run at once
+// (docs/c4ix-smp.md S4: on several CPUs, at the same time). A queued step
+// starts once no step before it that is still to finish makes a file it
+// names -- among its DEPS sources or its words -- or names the file it
+// makes; and its up-to-date test is made then, against the files as the
+// steps before it left them. So the order of the file is the order of
+// what depends on what, and only independent steps overlap: two compiles,
+// but never a compile and the link that reads its object. A RUN with no
+// TARGET or DEPS says nothing of what it makes, so it waits for every
+// step before it and every step after it waits for it. The other verbs
+// wait for everything queued (b4_drain): they read and write files, and
+// CD would move the names the queued steps are judged by.
+
+struct b4_job {
+    char **argv;               // the RUN's words, its own copies: argv[0] is "RUN"
+    int argc;
+    char *out;                 // > FILE, or 0
+    char *target;              // TARGET or DEPS name, or 0
+    char **deps;
+    int ndeps;
+    int stack;                 // $(STACK) as it was when the line was read
+    int line;
+    int pid;                   // 0 while queued
+    int before;                // the target's mtime as it started
+};
+
+enum { B4_JOBS = 512 };
+static int b4_jobs = 1;      // -j N
+static char *b4_jstr;        // ... as given, for sub-builds
+static struct b4_job *b4_q[B4_JOBS];
+static int b4_nq;            // queued and running, in the file's order
+static int b4_nrun;
+static int b4_stop;          // a step failed, and no -k: start nothing more
+
+static int b4_names(struct b4_job *j, char *name) {
+    int i;
+    if (j->target && b4_streq(j->target, name)) return 1;
+    i = 0;
+    while (i < j->ndeps) { if (b4_streq(j->deps[i], name)) return 1; ++i; }
+    i = 1;
+    while (i < j->argc) { if (b4_streq(j->argv[i], name)) return 1; ++i; }
+    return 0;
+}
+
+// May queue entry k start? Nothing before it still to finish may make
+// what it uses, or use what it makes; a step that says nothing waits for,
+// and holds up, everything.
+static int b4_ready(int k) {
+    struct b4_job *j, *e;
+    int i;
+    j = b4_q[k];
+    i = 0;
+    while (i < k) {
+        e = b4_q[i];
+        if (!e->target || !j->target) return 0;
+        if (b4_names(j, e->target) || b4_names(e, j->target)) return 0;
+        if (e->out && b4_names(j, e->out)) return 0;
+        ++i;
+    }
+    return 1;
+}
+
+static void b4_free_job(struct b4_job *j) {
+    int i;
+    i = 0;
+    while (i < j->argc) { free(j->argv[i]); ++i; }
+    free((char *)j->argv);
+    free((char *)j);
+}
+
+static void b4_dequeue(int k) {
+    while (k + 1 < b4_nq) { b4_q[k] = b4_q[k + 1]; ++k; }
+    --b4_nq;
+}
+
+// Start queue entry k: or skip it, up to date
+static void b4_start(int k) {
+    struct b4_job *j;
+    int fd, saved, i;
+    j = b4_q[k];
+    b4_target = j->target; b4_deps = j->deps; b4_ndeps = j->ndeps;
+    i = b4_uptodate();
+    b4_target = 0; b4_ndeps = 0;
+    if (i) { ++b4_skipped; b4_dequeue(k); b4_free_job(j); return; }
+    j->before = j->target ? b4_mtime(j->target) : 0;
+    uprintf("+");
+    i = 1;
+    while (i < j->argc) uprintf(" %s", j->argv[i++]);
+    if (j->out) uprintf(" > %s", j->out);
+    uprintf("\n");
+    fd = 0 - 1; saved = 0 - 1;
+    if (j->out) {
+        if ((fd = uopen(j->out, O_WR + O_CREATE + O_TRUNCATE)) < 0) {
+            ++b4_failed; b4_line = j->line; b4_err("cannot write ", j->out);
+            if (!b4_keep) b4_stop = 1;
+            b4_dequeue(k); b4_free_job(j);
+            return;
+        }
+        saved = udup(STDOUT);
+        udup2(fd, STDOUT);
+    }
+    ustack(j->stack);
+    j->pid = b4_spawn(j->argv[1], j->argc - 1, j->argv + 1);
+    if (j->out) { udup2(saved, STDOUT); uclose(saved); uclose(fd); }
+    if (j->pid < 0) {
+        ++b4_failed; b4_line = j->line; b4_err("cannot start ", j->argv[1]);
+        if (!b4_keep) b4_stop = 1;
+        b4_dequeue(k); b4_free_job(j);
+        return;
+    }
+    ++b4_nrun;
+}
+
+// A running step ended: judge it as b4_run does
+static void b4_reap() {
+    struct b4_job *j;
+    int st[2], pid, k, after;
+    pid = uwaitpid(0 - 1, st, 0);
+    k = 0;
+    while (k < b4_nq && b4_q[k]->pid != pid) ++k;
+    if (k == b4_nq) { if (pid < 0) b4_nrun = 0; return; }   // not ours
+    j = b4_q[k];
+    --b4_nrun;
+    ++b4_ran;
+    b4_line = j->line;
+    if (j->target) {
+        after = b4_mtime(j->target);
+        if (after < 0 || after <= j->before) {
+            ++b4_failed;
+            ufprintf(STDERR, "b4ke: %s:%d: %s did not make %s\n", b4_file, j->line, j->argv[1], j->target);
+            if (!b4_keep) b4_stop = 1;
+        }
+    } else if (st[0] != 0) {
+        ++b4_failed;
+        ufprintf(STDERR, "b4ke: %s:%d: %s exited %d\n", b4_file, j->line, j->argv[1], st[0]);
+        if (!b4_keep) b4_stop = 1;
+    }
+    b4_dequeue(k);
+    b4_free_job(j);
+}
+
+// Start what may start; then, with ALL, wait until nothing is queued or
+// running, and without it until there is room for another step.
+static void b4_pump(int all) {
+    int k, started;
+    for (;;) {
+        started = 1;
+        while (started && !b4_stop && b4_nrun < b4_jobs) {
+            started = 0;
+            k = 0;
+            while (k < b4_nq && b4_nrun < b4_jobs) {
+                if (!b4_q[k]->pid && b4_ready(k)) { b4_start(k); started = 1; break; }
+                ++k;
+            }
+        }
+        if (b4_stop) {
+            // a failure: what has not started never will
+            k = 0;
+            while (k < b4_nq) { if (!b4_q[k]->pid) { b4_free_job(b4_q[k]); b4_dequeue(k); } else ++k; }
+        }
+        if (!b4_nq) return;
+        if (!all && b4_nrun < b4_jobs && b4_nq < B4_JOBS) return;
+        if (!b4_nrun) return;     // cannot happen: the first entry is always ready
+        b4_reap();
+    }
+}
+
+static void b4_drain() {
+    if (b4_jobs > 1) b4_pump(1);
+}
+
+// RUN, with -j: queued, with its own copies of everything it needs
+static int b4_queue(char **w, int n) {
+    struct b4_job *j;
+    int i;
+    j = (struct b4_job *)b4_alloc(sizeof(struct b4_job));
+    j->out = 0;
+    if (n >= 4 && b4_streq(w[n - 2], ">")) { j->out = b4_dup(w[n - 1]); n = n - 2; }
+    j->argv = (char **)b4_alloc((n + 1) * sizeof(int));
+    i = 0;
+    while (i < n) { j->argv[i] = b4_dup(w[i]); ++i; }
+    j->argv[n] = 0;
+    j->argc = n;
+    j->target = b4_target;
+    j->deps = b4_deps;
+    j->ndeps = b4_ndeps;
+    b4_target = 0; b4_ndeps = 0;
+    i = b4_find("STACK", 5);
+    j->stack = i >= 0 ? b4_atoi(b4_vval[i]) : 0;
+    j->line = b4_line;
+    j->pid = 0;
+    b4_q[b4_nq++] = j;
+    b4_pump(0);
+    return !b4_stop;
+}
+
 static int b4_run(char **w, int n) {
     int pid, code, before, after, fd, saved, i;
     char *out;
 
+    if (b4_jobs > 1 && !b4_dry) return b4_queue(w, n);
     if (b4_uptodate()) {
         ++b4_skipped;
         b4_target = 0; b4_ndeps = 0;
@@ -416,11 +617,12 @@ static int b4_run(char **w, int n) {
 static int b4_sub(char **w, int n) {
     char **av;
     int ac, i, pid, code;
-    av = (char **)b4_alloc((n + b4_nover + 8) * sizeof(int));
+    av = (char **)b4_alloc((n + b4_nover + 10) * sizeof(int));
     ac = 0;
     av[ac++] = "b4ke";
     av[ac++] = "-C";
     av[ac++] = w[1];
+    if (b4_jobs > 1) { av[ac++] = "-j"; av[ac++] = b4_jstr; }
     if (b4_dry) av[ac++] = "-n";
     if (b4_keep) av[ac++] = "-k";
     if (b4_all) av[ac++] = "-B";
@@ -437,6 +639,13 @@ static int b4_sub(char **w, int n) {
 
 static int b4_step(char **w, int n) {
     int i;
+    // what reads or writes files, or moves where names are, waits for
+    // the steps queued before it (-j)
+    if (b4_streq(w[0], "CD") || b4_streq(w[0], "MKDIR") || b4_streq(w[0], "LIST") ||
+        b4_streq(w[0], "COPY") || b4_streq(w[0], "B4KE")) {
+        b4_drain();
+        if (b4_stop) return 0;
+    }
     if (b4_streq(w[0], "ECHO")) {
         i = 1;
         while (i < n) { uprintf("%s", w[i]); ++i; if (i < n) uprintf(" "); }
@@ -513,7 +722,7 @@ static int b4_step(char **w, int n) {
 }
 
 static int usage() {
-    ufprintf(STDERR, "usage: b4ke [-f FILE] [-C DIR] [-n] [-k] [-B] [NAME=VALUE ...]\n");
+    ufprintf(STDERR, "usage: b4ke [-f FILE] [-C DIR] [-n] [-k] [-B] [-j N] [NAME=VALUE ...]\n");
     return 2;
 }
 
@@ -534,6 +743,12 @@ int main(int argc, char **argv) {
         else if (b4_streq(argv[i], "-n")) b4_dry = 1;
         else if (b4_streq(argv[i], "-k")) b4_keep = 1;
         else if (b4_streq(argv[i], "-B")) b4_all = 1;
+        else if (b4_streq(argv[i], "-j") && i + 1 < argc) {
+            ++i;
+            b4_jstr = argv[i];
+            b4_jobs = b4_atoi(argv[i]);
+            if (b4_jobs < 1) b4_jobs = 1;
+        }
         else if (b4_assign(argv[i], 1)) b4_over[b4_nover++] = argv[i];
         else return usage();
         ++i;
@@ -577,6 +792,7 @@ int main(int argc, char **argv) {
         if (!n) continue;
         if (!b4_step(words, n)) ok = 0;
     }
+    b4_drain();
 
     uprintf("b4ke: %s: %d ran, %d up to date, %d failed\n", b4_dir, b4_ran, b4_skipped, b4_failed);
     return b4_failed ? 1 : 0;

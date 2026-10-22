@@ -136,12 +136,27 @@ int task_busy(struct task *t) {
     return t->oncpu != 0;
 }
 
+// what ps and top say a task runs on
+int task_cpu(struct task *t) {
+    if (t->state != TS_RUNNING) return 0 - 1;
+    if (smp_ncpu < 2) return 0;
+    return t->oncpu - 1;
+}
+
 // A shared library's __c4_dbase slot, one word of the window: every CPU
 // points it at the data of the task it runs (loader_switch)
 int smp_slot_alloc() {
     if (smp_slots >= CPU_SLOTS) return 0;
     ++smp_slots;
     return CPU_WINDOW + (CPU_SLOT0 + smp_slots - 1) * sizeof(int);
+}
+
+// Some CPU other than this one runs its idle task
+static int smp_anyidle() {
+    int k;
+    k = 0;
+    while (k < smp_ncpu) { if (k != cpu_self->id && smp_idle[k]) return 1; ++k; }
+    return 0;
 }
 
 // Work some idle CPU could do: an IPI to as many as there are tasks
@@ -202,6 +217,50 @@ static int sched_ready_here() {
 // trap at least every preemption slice sees to that.
 // (acct_in and acct_out, the two readings, are each CPU's: struct cpu)
 static int acct_napms;
+// And by CPU (docs/c4ix-smp.md S4): the cycles each ran, busy (every
+// task but its idle task) or idle, and the machine ms it parked, which
+// for CPU 0 are acct_napms. Added to with the tasks' own, under the
+// kernel lock; a parked CPU adds its own ms.
+static long long acct_cbusy[CPU_MAX];
+static long long acct_cidle[CPU_MAX];
+static int acct_cnap[CPU_MAX];
+
+static void acct_cpu(struct task *t, int d) {
+    if (t->cpuidle) acct_cidle[cpu_self->id] = acct_cidle[cpu_self->id] + d;
+    else acct_cbusy[cpu_self->id] = acct_cbusy[cpu_self->id] + d;
+}
+
+// Under SMP an idle CPU's park or nap ends when it is woken, which is an
+// IPI: its trap switches to the work at once, before the idle loop's next
+// line, so the park is closed in the trap, or by that line if it comes
+// first. (Closed by the loop alone, it was charged the time the CPU then
+// spent running tasks too.) A park still going is the snapshot's to count
+// as far as it has got -- a CPU can park for many seconds -- so where each
+// stands is here, where every CPU can read it, not in the CPU's window.
+static int acct_parked[CPU_MAX];
+static int acct_parked_at[CPU_MAX];
+
+static void acct_park() {
+    acct_parked_at[cpu_self->id] = __time();
+    acct_parked[cpu_self->id] = 1;
+}
+static void acct_unpark() {
+    int d, k;
+    k = cpu_self->id;
+    if (!acct_parked[k]) return;
+    acct_parked[k] = 0;
+    d = __time() - acct_parked_at[k];
+    if (k) acct_cnap[k] = acct_cnap[k] + d;
+    else acct_napms = acct_napms + d;
+}
+
+// CPU k's parked ms since boot, the park it is in included
+static int acct_napped(int k) {
+    int n;
+    n = k ? acct_cnap[k] : acct_napms;
+    if (smp_ncpu > 1 && acct_parked[k]) n = n + (__time() - acct_parked_at[k]);
+    return n;
+}
 static long long acct_gone_user, acct_gone_kernel;
 
 // An accumulator past 2^30 (or, impossibly, negative) folds now, long
@@ -262,6 +321,7 @@ int sched_cpustat(struct cpustat *h, struct cpustat_task *r, int max) {
         p->user = t->ucycles;
         p->kernel = t->kcycles;
         p->mem = task_mem(t);
+        p->cpu = task_cpu(t);
         i = 0;
         while (i < TASK_NAME_MAX) { p->name[i] = t->name[i]; ++i; }
         ++n;
@@ -280,6 +340,19 @@ int sched_cpustat(struct cpustat *h, struct cpustat_task *r, int max) {
         h->heap = *(int *)C4IX_HEAP_END - *(int *)C4IX_HEAP_BASE;
         h->heapused = *(int *)C4IX_HEAP_USED;
     }
+    // the processors, CPU 0's naps as its parking
+    h->ncpu = smp_ncpu > 1 ? smp_ncpu : 1;
+    i = 0;
+    while (i < CPU_MAX) {
+        h->idles[i] = 0 - 1;
+        h->cnap[i] = acct_napped(i);
+        h->cbusy[i] = acct_cbusy[i];
+        h->cidle[i] = acct_cidle[i];
+        ++i;
+    }
+    h->idles[0] = h->idle;
+    i = 1;
+    while (i < h->ncpu) { if (smp_idle_t[i]) h->idles[i] = smp_idle_t[i]->id; ++i; }
     return n;
 }
 
@@ -530,6 +603,7 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
         __c4_configure(C4IX_CONF_INTERVAL, 0);
         bkl_take();
         smp_settle();
+        acct_unpark();
         // Killed by another CPU while it ran here: nothing of it is to be
         // served, only switched away from
         if (sched_cur && sched_cur->state == TS_ZOMBIE) trap = C4IX_TRAP_SOFT_IRQ;
@@ -537,6 +611,7 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     if ((me = sched_cur)) {
         ++me->ntraps;
         me->uacc = me->uacc + (acct_in - acct_out);
+        acct_cpu(me, acct_in - acct_out);
     }
 
     // no nested switches while kernel structures move
@@ -631,6 +706,15 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
         n = t;
     else {
         n = sched_pick(t);
+        // Several CPUs: a task preempted while another CPU idles keeps
+        // this one, and what is ready goes to the idle one (smp_kick).
+        // Switched out here, it could not: it would be this CPU's until its
+        // next trap, which would switch the two back, and so on, one CPU
+        // taking turns between them while the other parked. (Preempted: its
+        // slice ran out, at the cycle interrupt or in a syscall; not a yield.)
+        if (smp_ncpu > 1 && n != t && t->state == TS_RUNNING && !t->cpuidle && n->privs == PRIV_USER &&
+            (trap == C4IX_TRAP_HARD_IRQ || ((trap == C4IX_TRAP_ILLOP || trap == C4IX_TRAP_PM) && !sched_resched)) &&
+            smp_anyidle()) n = t;
         sched_slice0 = acct_in;
     }
     sched_resched = 0;
@@ -706,6 +790,7 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     acct_out = __c4_cycles();
     if (me) {
         me->kacc = me->kacc + (acct_out - acct_in);
+        acct_cpu(me, acct_out - acct_in);
         if ((me->uacc | me->kacc) & ACCT_FOLD_AT) acct_fold(me);
     }
 
@@ -1091,7 +1176,12 @@ static void smp_ap() {
         if (!r) smp_idle[k] = 1;
         sched_unlock();
         if (r) sched_yield();
-        else __c4_wait((int)&smp_park[k], 0);
+        else {
+            // parked: idle time that counts no cycles, as CPU 0's naps
+            acct_park();
+            __c4_wait((int)&smp_park[k], 0);
+            acct_unpark();
+        }
     }
     __c4_fadd((int)&smp_halted, 1);
     __c4_wake((int)&smp_halted, 0);
@@ -1288,8 +1378,12 @@ static int sched_idle(int argc, int argv) {
         if (smp_ncpu > 1) sched_unlock();
         // the counter stands still meanwhile: idle time in ms instead
         ms = __time();
-        if (!ready) __c4_usleep(nap);
-        acct_napms = acct_napms + (__time() - ms);
+        if (smp_ncpu > 1) {
+            if (!ready) { acct_park(); __c4_usleep(nap); acct_unpark(); }
+        } else {
+            __c4_usleep(nap);
+            acct_napms = acct_napms + (__time() - ms);
+        }
         // The cycle counter stood still while we slept, so the
         // console's own rate limit has no way to know that real
         // time passed. Tell it.

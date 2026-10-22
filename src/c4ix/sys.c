@@ -181,6 +181,8 @@ int sys_taskinfo(int index, int *out) {
     dst = (char *)(out + 8);
     i = 0;
     while (i < TASK_NAME_MAX) { dst[i] = t->name[i]; ++i; }
+    out[TI_CPU] = task_cpu(t);
+    out[TI_NCPU] = smp_ncpu > 1 ? smp_ncpu : 1;
     return 1;
 }
 

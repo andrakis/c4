@@ -16,11 +16,16 @@
 // switches -- is the System row, not the program's, and the idle task and
 // the time the machine napped are idle; CPU usage is
 // everything but idle, and the rows add up to 100.
+//
+// With several CPUs (docs/c4ix-smp.md S4) the machine is all of them, as
+// in NT: the usage is their average, the idle row is every CPU's idle
+// task together, and Load draws a history for each CPU.
 
 #include "desktop.h"
 #include "cpustat.h"
 
-enum { MAXP = CPU_MAXT + 2, HIST = 60, ROW_H = 16, TAB_Y = 6, PAGE_Y = 28, NAMEW = 24 };
+enum { MAXP = CPU_MAXT + 2, HIST = 60, ROW_H = 16, TAB_Y = 6, PAGE_Y = 28, NAMEW = 24,
+       CPU_SHOW = 8 };          // histories drawn, at most
 
 struct tasks {
     int tab, sel, top, asel;
@@ -34,6 +39,7 @@ struct tasks {
     struct cpusample s[2];                     // this snapshot and the one before
     int cur;                                   // which of s is the latest
     int usage, hist[HIST], nhist;
+    int ncpu, chist[CPU_SHOW * HIST];          // several CPUs: each one's load, HIST apiece
     int mhist[HIST], nmhist;                   // the heap's use, percent, each sample
     int sampled;
     int uptime0;
@@ -60,27 +66,36 @@ static int row(struct tasks *t, int id, char *name, int privs, int state, int sy
 static void sample(struct tasks *t) {
     struct cpusample *a, *b;
     struct cpustat_task *r;
-    int k, sys, nsys, kival, tmem;
-    long long ktime;
+    int k, sys, nsys, kival, tmem, ip, iv, c;
+    long long ktime, it;
 
     a = &t->s[t->cur];
     b = &t->s[1 - t->cur];
     cpu_sample(b);
     if (t->sampled) t->usage = cpu_shares(a, b, pct, &sys);
     else { k = 0; while (k < CPU_MAXT) { pct[k] = 0; ++k; } sys = 0; t->usage = 0; }
+    t->ncpu = b->h.ncpu;
 
     // the idle task and System first, as NT lists them; System's time is
     // all the kernel has spent on everyone, the reaped included
     t->n = 0;
-    k = cpu_find(b, b->h.idle);
     // Interval, as top has it: what each row ran in the last sample, in
     // thousands of cycles -- the idle task's own cycles (not its naps),
-    // the kernel's for System, a task's own for a task
-    if (k >= 0) {
-        r = &b->t[k];
-        row(t, r->id, "idle", 0, r->state, r->nsyscalls, pct[k],
-            t->sampled ? cpu_kdelta(a, b, k, 0) + cpu_kdelta(a, b, k, 1) : 0, r->user + r->kernel, 0 - 1);
+    // the kernel's for System, a task's own for a task. Several CPUs'
+    // idle tasks are one row.
+    ip = 0; iv = 0; it = 0;
+    k = 0;
+    while (k < b->h.ntasks) {
+        if (cpu_isidle(b, b->t[k].id)) {
+            r = &b->t[k];
+            ip = ip + pct[k];
+            if (t->sampled) iv = iv + cpu_kdelta(a, b, k, 0) + cpu_kdelta(a, b, k, 1);
+            it = it + r->user + r->kernel;
+        }
+        ++k;
     }
+    k = cpu_find(b, b->h.idle);
+    if (k >= 0) row(t, b->h.idle, "idle", 0, b->t[k].state, b->t[k].nsyscalls, ip, iv, it, 0 - 1);
     t->heap = b->h.heap;
     t->heapused = b->h.heapused;
     tmem = 0;
@@ -91,7 +106,7 @@ static void sample(struct tasks *t) {
     kival = 0;
     k = 0;
     while (k < b->h.ntasks) {
-        if (b->t[k].id != b->h.idle) {
+        if (!cpu_isidle(b, b->t[k].id)) {
             ktime = ktime + b->t[k].kernel;
             nsys = nsys + b->t[k].nsyscalls;
             if (t->sampled) kival = kival + cpu_kdelta(a, b, k, 1);
@@ -104,12 +119,24 @@ static void sample(struct tasks *t) {
     k = 0;
     while (k < b->h.ntasks) {
         r = &b->t[k];
-        if (r->id != b->h.idle)
+        if (!cpu_isidle(b, r->id))
             row(t, r->id, r->name, r->privs, r->state, r->nsyscalls, pct[k], t->sampled ? cpu_kdelta(a, b, k, 0) : 0, r->user, r->mem);
         ++k;
     }
     t->cur = 1 - t->cur;
     if (t->sampled) {
+        // each CPU's history moves with the machine's, a sample at a time
+        c = 0;
+        while (c < t->ncpu && c < CPU_SHOW) {
+            ip = cpu_load(a, b, c);
+            if (t->nhist < HIST) t->chist[c * HIST + t->nhist] = ip;
+            else {
+                k = 0;
+                while (k < HIST - 1) { t->chist[c * HIST + k] = t->chist[c * HIST + k + 1]; ++k; }
+                t->chist[c * HIST + HIST - 1] = ip;
+            }
+            ++c;
+        }
         if (t->nhist < HIST) { t->hist[t->nhist] = t->usage; ++t->nhist; }
         else { k = 0; while (k < HIST - 1) { t->hist[k] = t->hist[k + 1]; ++k; } t->hist[HIST - 1] = t->usage; }
     }
@@ -333,13 +360,27 @@ static void memory(struct tasks *t, int x, int y, int w, int h) {
 }
 
 static void draw_perf(struct tasks *t, int ox, int oy, int cw, int ch) {
-    int gw, secs, k;
+    int gw, secs, k, n, hw, hx;
     struct win *w;
     gw = 90;
     ui_group(ox + 8, oy + PAGE_Y + 8, gw + 16, 130, "CPU Usage");
     gauge(ox + 16, oy + PAGE_Y + 24, gw, 106, t->usage);
-    ui_group(ox + gw + 34, oy + PAGE_Y + 8, cw - gw - 42, 130, "CPU Usage History");
-    graph(t->hist, t->nhist, ox + gw + 42, oy + PAGE_Y + 24, cw - gw - 58, 106);
+    // one history for the machine, or one for each CPU, side by side
+    n = t->ncpu > CPU_SHOW ? CPU_SHOW : t->ncpu;
+    if (n > 1) {
+        ui_num(buf, t->ncpu); ui_cat(buf, " CPUs: Usage History");
+        ui_group(ox + gw + 34, oy + PAGE_Y + 8, cw - gw - 42, 130, buf);
+        hw = (cw - gw - 58 - (n - 1) * 6) / n;
+        k = 0;
+        while (k < n) {
+            hx = ox + gw + 42 + k * (hw + 6);
+            graph(t->chist + k * HIST, t->nhist, hx, oy + PAGE_Y + 24, hw, 106);
+            ++k;
+        }
+    } else {
+        ui_group(ox + gw + 34, oy + PAGE_Y + 8, cw - gw - 42, 130, "CPU Usage History");
+        graph(t->hist, t->nhist, ox + gw + 42, oy + PAGE_Y + 24, cw - gw - 58, 106);
+    }
     ui_group(ox + 8, oy + PAGE_Y + 150, (cw - 24) / 2, 90, "Totals");
     d_text(ox + 20, oy + PAGE_Y + 170, C_DARK, F_SANS, "Tasks");
     ui_num(buf, t->n); d_text(ox + 150, oy + PAGE_Y + 170, C_DARK, F_SANS, buf);

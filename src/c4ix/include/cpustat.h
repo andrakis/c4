@@ -16,7 +16,7 @@
 #ifndef __C4IX_CPUSTAT_H
 #define __C4IX_CPUSTAT_H 1
 
-enum { CPUSTAT_NAME = 16, CPU_MAXT = 32 };
+enum { CPUSTAT_NAME = 16, CPU_MAXT = 32, CPUSTAT_CPUS = 16 };
 
 // the kernel's struct cpustat and struct cpustat_task (c4ix.h)
 struct cpustat {
@@ -28,12 +28,21 @@ struct cpustat {
     long long gone_kernel;
     int heap;                  // the machine's heap in bytes, and how much of it is
     int heapused;              // in use; both 0 where the host does not say
+    // Processors (docs/c4ix-smp.md S4): how many, 1 unless SMP; and each
+    // one's idle task, the ms it parked or napped, and its cycles, busy
+    // (every task but its idle task, with the kernel's work) and idle
+    int ncpu;
+    int idles[CPUSTAT_CPUS];
+    int cnap[CPUSTAT_CPUS];
+    long long cbusy[CPUSTAT_CPUS];
+    long long cidle[CPUSTAT_CPUS];
 };
 struct cpustat_task {
     int id, parent, state, privs, nsyscalls;
     long long user;
     long long kernel;
     int mem;                   // bytes it holds: image, stack, library data, allocations
+    int cpu;                   // the CPU running it, -1 if none is
     char name[CPUSTAT_NAME];
 };
 
@@ -47,6 +56,8 @@ int cpu_find(struct cpusample *s, int id);
 int cpu_kdelta(struct cpusample *a, struct cpusample *b, int k, int kernel);
 int cpu_pct(int c, int all, int busy, int ms);
 int cpu_shares(struct cpusample *a, struct cpusample *b, int *pct, int *sys);
+int cpu_load(struct cpusample *a, struct cpusample *b, int c);
+int cpu_isidle(struct cpusample *s, int id);
 
 #ifndef C4IX_SHARED
 #include "cpustat.c"

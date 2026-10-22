@@ -65,7 +65,7 @@ static void top_cycles(long long c, int width) {
 int main(int argc, char **argv) {
     struct cpusample *a, *b, *s;
     struct cpustat_task *r;
-    int iters, it, k, sys, usage, ks, idle;
+    int iters, it, k, sys, usage, ks, idle, smp;
 
     iters = (argc > 1) ? atoi_(argv[1]) : 0;   // 0: until Ctrl-C
 
@@ -81,9 +81,18 @@ int main(int argc, char **argv) {
 
         top_home();
         uprintf("top: %d tasks, CPU usage %d%% -- Ctrl-C to stop\n", b->h.ntasks, usage);
+        // several CPUs: each one's load, and which runs each task
+        smp = b->h.ncpu > 1;
+        if (smp) {
+            uprintf("%d CPUs:", b->h.ncpu);
+            k = 0;
+            while (k < b->h.ncpu && k < CPUSTAT_CPUS) { uprintf(" cpu%d %d%%", k, cpu_load(a, b, k)); ++k; }
+            uprintf("\n");
+        }
         upadhdr("ID", 4);
         upadhdr("PPID", 5);
         upadstr("STATE", 8);
+        if (smp) upadhdr("CPU", 4);
         upadstr("PRIV", 8);
         upadhdr("CPU%", 7);
         upadhdr("INTERVAL", 11);
@@ -98,9 +107,10 @@ int main(int argc, char **argv) {
             upadnum(r->id, 4);
             upadnum(r->parent, 5);
             upadstr(top_state(r->state), 8);
+            if (smp) { if (r->cpu >= 0) upadnum(r->cpu, 4); else upadhdr("-", 4); }
             upadstr(r->privs ? "user" : "kernel", 8);
             upadnum(pct[k], 7);
-            if (r->id == b->h.idle) {
+            if (cpu_isidle(b, r->id)) {
                 idle = 1;
                 top_kcycles(cpu_kdelta(a, b, k, 0) + cpu_kdelta(a, b, k, 1), 11);
                 top_cycles(r->user + r->kernel, 11);
@@ -113,7 +123,7 @@ int main(int argc, char **argv) {
             ++k;
         }
         // the kernel's work for all of them, as System Monitor shows it
-        upadstr("", 5 + 6 + 8 + 8);     // under CPU%
+        upadstr("", 5 + 6 + 8 + 8 + (smp ? 5 : 0));     // under CPU%
         upadnum(sys, 7);
         top_kcycles(ks, 11);
         upadstr("", 12);

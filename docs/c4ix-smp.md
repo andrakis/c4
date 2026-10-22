@@ -176,7 +176,7 @@ they run in parallel under a BKL.
 | S1 (done) | libjs simulated engine: opcodes 66-75, per-CPU IRQs and IPIs, the CPU-local window, `C4I_SMP`; `cli.js --cpus N` | c4mp's `smp0`, `smp1` and `deadlock` guests (32-bit builds), totals and deadlock report as c4mp's |
 | S2 (done) | libjs parallel engine: workers, `SharedArrayBuffer` arena, `Atomics`, the forwarding block; Node and the page | the same guests with `--parallel`; a two-CPU spin test that runs both halves at full speed; the page when isolated |
 | S3 (done) | C4IX SMP kernel: AP boot, BKL, per-CPU state, scheduler, library slots in the window | test-libjs's C4IX checks on the simulated engine at 1, 2 and 4 CPUs and on threads (`make test-c4ix-smp`); compiles at once on the parallel engine, four in half the time of four on one CPU |
-| S4 | Show and use it: per-CPU load in `top` and System Monitor, `b4ke -j` | test-desktop; a parallel rebuild measured against a serial one |
+| S4 (done) | Show and use it: per-CPU load in `top` and System Monitor, `b4ke -j` | test-c4ix-smp's checks; a parallel rebuild measured against a serial one |
 | later | Finer kernel locks; a shared-memory heap; c4mp pass 2 (native threads) and the window there | profiles; test-c4mp |
 
 At one CPU nothing changes: the same images, the same timings, and the
@@ -327,6 +327,55 @@ One compile is slower on a CPU other than 0. Its 7,100 mallocs and
 5,900 frees each go to CPU 0's heap (3.2), and its syscalls take the lock.
 A heap in shared memory, and finer locks, are what "later" in the table
 above is for.
+
+### S4, done (2026-10-23)
+
+**The accounting is per CPU** (sched.c, cpustat.h). The snapshot has the
+CPUs: how many, each one's idle task, its busy and idle cycles, and the
+ms it parked. It also has, for each task, the CPU running it.
+
+- **Busy and idle** are counted at every trap, with the task's own
+  cycles: a task's cycles are busy, its CPU's idle task's are idle.
+- **A park or nap** is closed in the trap of the IPI that ends it, or by
+  the idle loop's next line, whichever comes first. A park still going
+  counts as far as it has got. (Closed by the loop alone, a park was
+  charged the time its CPU then spent on the work it was woken for.)
+- **On several CPUs the machine is all of them**, as in NT. A task that
+  keeps one CPU of two busy has 50%. The usage is the CPUs' average, and
+  each CPU's idle task has what that CPU left (`cpu_shares`). Each CPU's
+  load (`cpu_load`) is its busy cycles of all it ran, over the part of the
+  interval it was awake.
+- On one CPU every number is what it was.
+
+**What shows it:**
+- `ps` and `top` gain a CPU column, and `top` a line of each CPU's load
+  ("2 CPUs: cpu0 100% cpu1 100%"). On one CPU their columns are the ones
+  there have always been, so the pinned outputs hold.
+- System Monitor's idle row is every idle task together. Load draws a
+  history for each CPU, up to eight, beside the machine's gauge. The
+  taskbar's meter is the machine's average.
+
+**`b4ke -j N`** runs up to N steps at once. A `RUN` is queued. It starts
+once no step before it that is still to finish makes a file it names,
+among its `DEPS` sources or its words, or names the file it makes. Its
+up-to-date test is made then, against the files as those steps left them.
+A `RUN` with no target waits for everything before it and holds up
+everything after it. The other verbs wait for the queue. Sub-builds get
+the same `-j`.
+
+**A scheduling fix with it.** A task preempted while another CPU idles
+keeps its CPU, and the ready task goes to the idle one. Before, a CPU
+took turns between two tasks: the waiting one was always the task it had
+just switched out, whose `oncpu` mark barred the other CPU from it. The
+other CPU parked while both tasks waited for one.
+
+`b4ke -B -C /usr/src/c4ix/lib` inside C4IX, on 2 CPUs on threads, rebuilds
+13 steps: 72.6 s, and 42.0 s with `-j 2`. Its libraries are the disk's,
+byte for byte. N compilers at once need memory for N, about 3 MB each.
+Four of them beside the unpacked root archive overran the page's 64 MB.
+
+`make test-c4ix-smp` checks `ps` and `top`'s columns and `b4ke -j`, at
+each CPU count.
 
 ## 6. Risks
 

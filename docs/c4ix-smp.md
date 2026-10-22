@@ -175,7 +175,7 @@ they run in parallel under a BKL.
 |---|---|---|
 | S1 (done) | libjs simulated engine: opcodes 66-75, per-CPU IRQs and IPIs, the CPU-local window, `C4I_SMP`; `cli.js --cpus N` | c4mp's `smp0`, `smp1` and `deadlock` guests (32-bit builds), totals and deadlock report as c4mp's |
 | S2 (done) | libjs parallel engine: workers, `SharedArrayBuffer` arena, `Atomics`, the forwarding block; Node and the page | the same guests with `--parallel`; a two-CPU spin test that runs both halves at full speed; the page when isolated |
-| S3 | C4IX SMP kernel: AP boot, BKL, per-CPU state, scheduler, library slots in the window | the whole C4IX suite on the simulated engine at 1, 2 and 4 CPUs; two `spin`s at once on the parallel engine, each at full speed |
+| S3 (done) | C4IX SMP kernel: AP boot, BKL, per-CPU state, scheduler, library slots in the window | test-libjs's C4IX checks on the simulated engine at 1, 2 and 4 CPUs and on threads (`make test-c4ix-smp`); compiles at once on the parallel engine, four in half the time of four on one CPU |
 | S4 | Show and use it: per-CPU load in `top` and System Monitor, `b4ke -j` | test-desktop; a parallel rebuild measured against a serial one |
 | later | Finer kernel locks; a shared-memory heap; c4mp pass 2 (native threads) and the window there | profiles; test-c4mp |
 
@@ -237,13 +237,96 @@ seconds:
 |---|---|---|---|
 | simulated (`--cpus N`) | 2.3 | 4.0 | 7.7 |
 | parallel (`--cpus N --parallel`) | | 2.1 | 2.5 |
-| the page, unpaced, 4 CPUs (headless Chromium) | | | 12.6 simulated, 5.6 parallel |
+| the page, unpaced, 4 CPUs (Chrome, `https://`) | | | 11.5 simulated, 5.0 parallel |
 
 test-libjs runs `smp0`, `smp1`, the deadlock, the window and `spinmp`
 with `--parallel`, and checks their answers. Their cycle counts are not
 pinned, since the host interleaves the threads. C4IX boots to its shell
 on `?cpus=2&parallel` as it does on one CPU. It starts no other CPU
 until S3.
+
+### S3, done (2026-10-22)
+
+C4IX runs on every CPU the host gives it, when the host is libjs with
+`--cpus N` (or `?cpus=N`): `C4I_SMP` and `C4I_C4MJS` both, since only
+libjs has the window. Anywhere else, `--cpus 1` included, nothing
+changes. On 2 CPUs `ps` shows two user tasks `run` at once.
+
+- **Per-CPU state.** What was the scheduler's own state is `struct cpu`
+  (c4ix.h): the running task, the trap flag, the mask depth, the
+  accounting readings, the slice, and execve's and task_exit's
+  hand-offs. `cpu_self` points at it, at an ordinary struct on one CPU
+  and at the window, 0x800, under SMP. `sched_cur` and `sched_intrap` are
+  macros over it, so no module changed for it but sched.c.
+- **The kernel lock** (`bkl_take`, `bkl_drop`): a `CAS` spinlock that
+  parks in `CWAI` after 64 spins, nested per CPU.
+  - The trap handler holds it from entry to exit.
+  - `sched_lock` takes it outside the handler, after masking.
+  - A kernel task holds it the whole time it runs, since kernel tasks
+    call the kernel directly. So init's loader and the C4KE layer's
+    kernel callers are one CPU's at a time, as they were.
+  - User tasks run without it, at once.
+- **Where tasks run.** Kernel tasks run on CPU 0 only. Each other CPU has
+  an idle task of its own, `idle1`, `idle2` and so on. They come before
+  init in the list, so every task id is N - 1 higher than on one CPU.
+- **On a CPU.** `oncpu` marks the CPU that may still be on a task's
+  stack. That is the CPU running it, or the CPU that switched it out,
+  which stays on the task's stack until its trap returns. Until that
+  CPU's next trap, or its idle loop's next look (`smp_settle`), no other
+  CPU resumes the task and nothing frees it (`task_busy`, in
+  task_release, task_reap and the orphan sweep). A task killed while it
+  runs elsewhere, by a Ctrl-C on CPU 0 say, is switched away from at its
+  CPU's next trap, unserved.
+- **Idle and wake.** CPU 0's idle task naps as before, under the lock
+  while it looks at the kernel. The others park in `CWAI`. A trap that
+  leaves ready work while some CPU idles sends that CPU an `IPI`
+  (`smp_kick`), and the IPI arrives as a cycle interrupt. An IPI while
+  a CPU holds the mask changes nothing, so an idle loop looks again under
+  the lock before it parks.
+- **Libraries.** A `-fpic` library's data slot is a word of the window
+  (`smp_slot_alloc`, words 24 to 63), so each CPU points it at the data
+  of the task it runs.
+- **Boot and shutdown.** `sched_init` starts the others on a 64 KB stack
+  each (`smp_ap`). At shutdown the kernel task lets the lock go, masked,
+  and waits for each to halt.
+
+The engines changed with it:
+- `USLP` sleeps the CPU that executes it on the simulated engine too, not
+  the machine, while another CPU can run. Otherwise CPU 0's idle naps
+  stopped every other CPU.
+- On the parallel engine, CPU 0's nap is real time while others run. An
+  IPI ends it early. CPU 0 waits blocked in `Atomics.wait`, a few ms at
+  a time, so the other CPUs' requests are answered at once: an awaited
+  wake cost a third of a millisecond each.
+- A CPU other than 0 read unaligned words as 0 (ap.js's bus), which broke
+  every C4R header such a CPU loaded. Its bus is now arena.js's, as CPU 0's
+  is.
+
+`make test-c4ix-smp` runs test-libjs's C4IX checks that say whether the
+kernel holds together with several CPUs in it (libjs/tests/test-c4ix-smp.sh),
+at 1, 2 and 4 CPUs simulated and 2 on threads:
+- boot, `ps` and a clean shutdown;
+- the root archive's unpack;
+- `cc` inside C4IX, `echo` byte for byte as the disk's;
+- two compiles at once;
+- libctest;
+- three tasks sharing libc's code;
+- unixtest's vfork, execve and waitpid.
+
+`spin` cannot show the speed-up: it counts its CPU's cycles, which pass
+whoever runs. A compile can. `cc -O mandel.c` inside C4IX, times on helios
+past boot and the root archive's unpack, in seconds:
+
+| | 1 CPU | 2 CPUs, threads | 4 CPUs, threads |
+|---|---|---|---|
+| one compile | 6.5 | 8.2 | |
+| two at once | 14.5 | 9.9 | |
+| four at once | 27.3 | | 14.0 |
+
+One compile is slower on a CPU other than 0. Its 7,100 mallocs and
+5,900 frees each go to CPU 0's heap (3.2), and its syscalls take the lock.
+A heap in shared memory, and finer locks, are what "later" in the table
+above is for.
 
 ## 6. Risks
 

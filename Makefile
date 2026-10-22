@@ -2421,6 +2421,15 @@ test-c4bb: c4bb-images $(C4M) $(TESTS_C4R)
 test-libjs: c4bb-images $(C4M) $(TESTS_C4R) c4sp32
 	bash libjs/tests/test-libjs.sh
 
+# C4IX on several processors (docs/c4ix-smp.md S3): test-libjs's C4IX
+# checks that say whether the kernel holds together with several CPUs in
+# it, at 1, 2 and 4 CPUs on the simulated engine and at 2 on threads.
+test-c4ix-smp: c4bb-images c4sp32
+	bash libjs/tests/test-c4ix-smp.sh 1
+	bash libjs/tests/test-c4ix-smp.sh 2
+	bash libjs/tests/test-c4ix-smp.sh 4
+	bash libjs/tests/test-c4ix-smp.sh 2 --parallel
+
 # The page: http://localhost:8472/libjs/web/ (served from the repo root),
 # cross-origin isolated so the display takes the shared-memory path.
 LIBJS_PORT ?= 8472
@@ -3477,7 +3486,7 @@ c4rs: pre
 
 # Marking the below rules as PHONY using singular .PHONY rule
 PHONY  = pre all clean-c4rs clean
-PHONY += test-libjs serve-libjs test-libjs-web test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
+PHONY += test-libjs test-c4ix-smp serve-libjs test-libjs-web test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
 PHONY += run-c4dos-build32 test-c4dos-build32 run-c4dos-c4ix32 test-c4dos-c4ix32 test-c4cc-for test-respfile test-b4ke test-c4bb-storage test-c4bb-baseops test-c4bb-rungs test-c4bb-install test-c4bb-climb test-c4bb-web test-c4bb-firmware
 PHONY += test-c4sc test-c4sc-run test-c4sc-lex test-c4sc-front test-c4sc-back
 PHONY += test-c4sc-image test-c4sc-self test-c4sc-board

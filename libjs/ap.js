@@ -89,26 +89,30 @@ class ApMachine extends Machine {
   }
 }
 
-// Device registers are CPU 0's; everything else below 0x1000 (the ROM,
-// the trap word) is the shared arena's
+// Device registers are CPU 0's (bus.js and arena.js's ranges); everything
+// else is the shared arena's, as on CPU 0's bus: unaligned words, the low
+// memory below 0x1000 (the ROM, the trap word), and the ends of the arena,
+// read and written by arena.js, whose io is off here. (Reading unaligned
+// words as 0, as this once did, broke every C4R header a CPU other than 0
+// read: the loader's words start at byte 13.)
 class ApBus {
   constructor(arena) { this.arena = arena; this.m = null; }
   dev(addr) { return (addr >= 0x100 && addr < 0x200) || (addr >= 0x400 && addr < 0x500); }
   read32(addr) {
     addr = addr >>> 0;
     if (this.dev(addr)) { const r = this.m.ask(KIND.RD32, 0, addr & ~3, 0); return r === STOP.HALT ? 0 : r.ra | 0; }
-    return (addr & 3) ? 0 : this.arena.i32[addr >> 2] | 0;
+    return this.arena.read32(addr) | 0;
   }
   write32(addr, val) {
     addr = addr >>> 0;
     if (this.dev(addr)) { this.m.ask(KIND.WR32, 0, addr & ~3, val); return; }
-    if (!(addr & 3) && addr >= 0x20) this.arena.i32[addr >> 2] = val;
+    this.arena.write32(addr, val | 0);
   }
-  read8s(addr) { return (this.arena.u8[addr >>> 0] << 24) >> 24; }
+  read8s(addr) { return this.arena.read8s(addr); }
   write8(addr, val) {
     addr = addr >>> 0;
     if (this.dev(addr)) { this.m.ask(KIND.WR8, 0, addr, val & 0xff); return; }
-    if (addr >= 0x20) this.arena.u8[addr] = val;
+    this.arena.write8(addr, val);
   }
 }
 

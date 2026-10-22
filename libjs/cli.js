@@ -173,6 +173,19 @@ async function main(argv) {
     flush();
     if (par && !dev.halted) {
       par.service();
+      // CPU 0 naps while the others work: for real, until an IPI. The
+      // machine's clock gets only what it slept.
+      if (r === STOP.SLEEP && par.othersRunning()) {
+        const nap = dev.napMs;
+        let slept = 0;
+        while (slept < nap && !par.ipiFor0() && !dev.halted) {
+          slept += par.sleepSync(nap - slept);
+          flush();
+          await new Promise(res => setImmediate(res));   // stdin, timers
+        }
+        if (slept < nap) dev.sleepMs -= nap - slept;
+        continue;
+      }
       if (r === STOP.PARK || r === STOP.CPUHALT || machine.cpuState !== 'run') {
         if (machine.cpuState === 'halt' && par.othersDone()) { status = machine.cpuStatus; break; }
         // parked with every other CPU parked or halted, three seconds running: nothing can wake them

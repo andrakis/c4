@@ -138,7 +138,12 @@ function flushSound() {
 let par = null, parStuck = 0;
 // While CPU 0 is not running -- paced, parked, or waiting for a key --
 // the other CPUs' requests are answered as soon as they ask
-function watchPar() { if (par && !halted) par.watch(watchPar); }
+// An IPI for CPU 0 ends its nap, as a message for the machine does.
+function watchPar() {
+  if (!par || halted) return;
+  if (state === 'sleeping' && par.ipiFor0()) wake();
+  par.watch(watchPar);
+}
 
 function start(msg) {
   if (par) { par.shutdown(); par = null; }
@@ -180,6 +185,7 @@ function start(msg) {
 
 function tick() {
   if (!vm || paused || halted) return;
+  if (parWaiting()) return;
   const now = performance.now();
   if (parked) { lostMs += now - parkedAt; parked = false; }
   const dev = vm.dev;
@@ -247,10 +253,33 @@ function tick() {
     // TIME (cycles / MHz plus time slept), so a simulated second should
     // take a real one.
     const ahead = dev.simMs() - (performance.now() - tRun - lostMs);
+    if (ahead > 2 && par && par.othersRunning()) {
+      parWaitUntil = performance.now() + Math.min(ahead, 100);
+      schedule(0);
+      return;
+    }
     if (ahead > 2) { schedule(Math.min(ahead, 100)); return; }
     if (ahead < -1000) lostMs += -ahead - 1000;   // hopelessly behind: stop trying to catch up
+  } else if (par && r === STOP.SLEEP && par.othersRunning()) {
+    // unpaced, CPU 0 still naps while the others work, until an IPI
+    parWaitUntil = performance.now() + Math.min(dev.napMs, 100);
   }
   schedule(0);
+}
+
+// CPU 0 waits while the other CPUs work -- paced to the clock, or napping
+// unpaced -- blocked in Atomics.wait, a few ms at a time, so their
+// requests are answered at once (par.js sleepSync); between turns the
+// worker takes its messages. An IPI ends the wait, and a nap with it.
+let parWaitUntil = 0;
+function parWaiting() {
+  if (!parWaitUntil) return false;
+  const left = parWaitUntil - performance.now();
+  if (left <= 0 || !par || !par.othersRunning()) { parWaitUntil = 0; return false; }
+  if (par.ipiFor0()) { parWaitUntil = 0; wake(); return true; }
+  par.sleepSync(left, 8);
+  schedule(0);
+  return true;
 }
 
 // A message for the machine (a key, a pointer move) while it waits for
@@ -276,6 +305,7 @@ function wake() {
       dev.napMs -= cut;
     }
   }
+  parWaitUntil = 0;
   schedule(0);
 }
 

@@ -31,6 +31,11 @@ enum { C4IX_GUI_RING = 0x410 };
 // The heap's extent and use (c4bb's HEAP_BASE and HEAP_END, libjs's
 // HEAP_USED, src/c4bb/sim/devices.js), for the CPU snapshot.
 enum { C4IX_HEAP_BASE = 0x144, C4IX_HEAP_END = 0x148, C4IX_HEAP_USED = 0x1c0, C4IX_I_C4MJS = 8 };
+// Processors (docs/c4ix-smp.md S3): c4mp's C4I_SMP, which libjs reports
+// with --cpus. Only libjs has the CPU-local window C4IX needs, 0x800 to
+// 0x8FF, where each CPU sees 64 words of its own: its struct cpu at the
+// bottom, the shared libraries' data slots above it (loader.c).
+enum { C4IX_I_SMP = 0x100, CPU_MAX = 16, CPU_WINDOW = 0x800, CPU_SLOT0 = 24, CPU_SLOTS = 40 };
 
 // c4m trap machinery numbers (c4m.c enums), used by sched.c on the
 // c4m host only.
@@ -429,6 +434,13 @@ struct task {
     int  wait_posix;           // TS_WAITING in SYS_WAITPID: woken to run it again
     int  posix;                // has used vfork or waitpid: its zombies wait for it
     int  killsig;              // the signal that killed it, 0 if it exited
+    // Processors (sched.c). oncpu is 1 + the CPU that may still be on its
+    // stack: the one running it, or the one that switched it out until
+    // that CPU has left the trap it did it in. Until then no other CPU
+    // resumes it and nothing frees it. cpuidle is 1 + the CPU whose idle
+    // task it is, 0 for every other task.
+    int  oncpu;
+    int  cpuidle;
     char name[TASK_NAME_MAX];
 };
 
@@ -595,17 +607,42 @@ int          sched_forge(struct task *t, int entry, int argc, int argv);
 // frame of the function that executed the syscall: the child returns
 // from it). The child's id, or -1.
 int          sched_vfork(int bp);
+// What each processor keeps for itself (docs/c4ix-smp.md S3). cpu_self
+// points at it: at an ordinary struct on one CPU, and at the CPU-local
+// window under SMP, the same address on every CPU, through which each
+// sees its own copy. It fits below CPU_SLOT0.
+struct cpu {
+    struct task *cur;          // the running task (sched_current)
+    int intrap;                // inside the trap handler: no re-entry (sched_in_trap)
+    int lockdepth;             // the running task's preemption mask (sched_lock)
+    int id;                    // __c4_cpu_id(), 0 on one CPU
+    int resched;               // a service in this trap asked for a switch
+    int dying;                 // task_exit outside the handler: die in the next trap
+    int dying_code;
+    int acct_in;               // __c4_cycles() as this trap began
+    int acct_out;              // ... as the last one ended
+    int slice0;                // acct_in when the running task's slice began
+    int reload;                // SYS_EXECVE: resume the running task from its forged frame
+    int stale_stack;           // SYS_EXECVE: the old stack, freed at this CPU's next trap
+    struct task *prev;         // switched out here; its oncpu is cleared once this CPU is off its stack
+    struct task *idle;         // this CPU's idle task
+    int bkl_task;              // the running task holds the kernel lock (a kernel task)
+};
+extern struct cpu *cpu_self;
+extern int smp_ncpu;           // processors in use: 1 unless the host has SMP
+void sched_early();            // cpu_self, before anything locks (boot.c)
+int  task_busy(struct task *t);   // some CPU may be on its stack: not to be freed yet
+int  smp_slot_alloc();         // a library's data slot in the window, 0 if none is left
 // SYS_EXECVE replaced the running task's context: the trap returns into
 // the forged one, and the old stack, still under the handler, is freed
 // at the next trap.
-extern int   sched_reload;
-extern int   sched_stale_stack;
+#define sched_reload (cpu_self->reload)
+#define sched_stale_stack (cpu_self->stale_stack)
 // The running task, and whether the trap handler is running (no
 // re-entry allowed). Read by every module on every syscall, so they are
-// macros over the globals rather than calls: -minline cannot inline
-// across modules.
-extern struct task *sched_cur;
-extern int   sched_intrap;
+// macros rather than calls: -minline cannot inline across modules.
+#define sched_cur (cpu_self->cur)
+#define sched_intrap (cpu_self->intrap)
 #define sched_current() sched_cur
 #define sched_in_trap() sched_intrap
 extern struct task *task_reaplist;  // released while running, to be freed (task.c)

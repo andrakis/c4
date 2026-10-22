@@ -132,6 +132,7 @@ export class ParCore {
     Atomics.store(ctl, word(id, K.IPI), 1);
     const wa = Atomics.load(ctl, word(id, K.WAITADDR));
     if (wa) Atomics.notify(this.ai32, wa >> 2);
+    Atomics.notify(ctl, word(id, K.SLEEP));      // a USLP ends early, as on smp.js
     if (id === 0) this.ring();
     return 1;
   }
@@ -240,6 +241,34 @@ export class ParHost extends ParCore {
       Atomics.store(ctl, b + K.REQ, R.DONE);
       Atomics.notify(ctl, b + K.REQ);
     }
+  }
+
+  // Some other CPU is running, not parked
+  othersRunning() {
+    for (let k = 1; k < this.n; k++) if (this.state(k) === S.RUN) return true;
+    return false;
+  }
+
+  // An IPI waits for CPU 0
+  ipiFor0() { return Atomics.load(this.ctl, word(0, K.IPI)) !== 0; }
+
+  // CPU 0 napped (USLP) while other CPUs run: the nap is real time, ended
+  // early by an IPI, and the others' requests are answered meanwhile --
+  // blocking, in Atomics.wait, which Node's main thread and a page's
+  // worker both allow. An awaited wake costs a trip through the event
+  // loop, a third of a millisecond: a compile on CPU 1 asks CPU 0 for
+  // 13,000 mallocs and frees, and took 4 s longer for it. At most MOST
+  // ms at a time, so the host's own events are not kept waiting. The ms
+  // it lasted.
+  sleepSync(ms, most = 10) {
+    const ctl = this.ctl, t0 = Date.now(), end = Math.min(ms, most);
+    for (;;) {
+      const left = end - (Date.now() - t0);
+      if (left <= 0 || this.ipiFor0() || Atomics.load(ctl, C.HALT)) break;
+      Atomics.wait(ctl, C.DOOR, this.seenDoor, left);
+      this.service();
+    }
+    return Date.now() - t0;
   }
 
   // Every other CPU halted or never started (so CPU 0 halting ends it)

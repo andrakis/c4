@@ -28,6 +28,7 @@ int main(int argc, char **argv) {
     struct task *t;
     int info;
 
+    sched_early();
     kprintf("C4IX booting, %d cycles spent loading the kernel image\n", __c4_cycles());
     info = host_detect();
     kprintf("c4ix: host %s, info 0x%x\n", host_name(), info);

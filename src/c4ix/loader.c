@@ -441,7 +441,14 @@ static int link_modules(char *path, struct c4r_mod *mods, int n) {
         if (m->shared) continue;            // linked once, when it was first loaded
         if (m->pic && !m->slot) {
             if (k == 1) { kprintf("c4ix: loader: %s: a program cannot be -fpic\n", path); return 0; }
-            m->slot = (int *)malloc(sizeof(int));
+            // Under SMP the slot is a word of the CPU-local window: two
+            // CPUs run two tasks' copies of the library's data at once
+            if (smp_ncpu > 1) {
+                if (!(m->slot = (int *)smp_slot_alloc())) {
+                    kprintf("c4ix: loader: %s: no slot left for another shared library\n", m->path);
+                    return 0;
+                }
+            } else m->slot = (int *)malloc(sizeof(int));
             *m->slot = (int)m->data;
         }
         // __c4_dbase is most of a -fpic library's symbol references (one

@@ -280,6 +280,10 @@ processors: c4mp's instruction set (`src/c4mp/README.md`), simulated
 - **Time** is the machine's: the round robin advances it by the most any
   CPU ran in each round (`devices.js` `timeSource`), and `TIME` and the
   pacing go by it. `C4CY` is each CPU's own count.
+- **`USLP` sleeps one CPU** while another can run: it is `sleep` until
+  the machine's time reaches the end of its nap, or an `IPI` comes. Only
+  when no CPU can run does the machine nap, to the first sleeper's end.
+  (C4IX's CPU 0 naps in its idle task while tasks run elsewhere.)
 - **The CPU-local window**, 0x800-0x8FF: 64 words of each CPU's own,
   through `ld32`/`st32`. It is for what must differ by CPU at one
   address, such as a shared library's data slot (docs/c4ix-smp.md, 3.4).
@@ -293,10 +297,16 @@ processors: c4mp's instruction set (`src/c4mp/README.md`), simulated
   cli.js's main thread. It keeps the devices, the heap and the console.
 - **Every other CPU** is a worker running an `ApMachine` on the shared
   arena. What it cannot do itself, it asks CPU 0 through its request
-  slot: the host syscalls, and device registers.
+  slot: the host syscalls, and device registers. Everything else of
+  memory it reads and writes as CPU 0 does, through arena.js: unaligned
+  words, low memory, the arena's ends.
 - **The atomics** are `Atomics`. `CWAI` blocks a worker in
   `Atomics.wait`. On CPU 0 it parks the loop, which waits in
   `Atomics.waitAsync`, so the page and the console stay live.
+- **CPU 0's nap** (`USLP`) while other CPUs run is real time, ended early
+  by an `IPI`. CPU 0 spends it blocked in `Atomics.wait` on its doorbell,
+  a few ms at a time (`sleepSync`), and answers each request at once.
+  Between turns the host takes its own events.
 - **The guests' answers** are the same as on the simulated engine. The
   interleaving, and so the cycle counts, are the host's.
 

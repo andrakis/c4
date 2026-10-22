@@ -371,7 +371,7 @@ void task_release(struct task *t) {
     fd_closeall(t);
     task_unlink(t);
     sched_retire(t);
-    if (t == sched_current()) {
+    if (task_busy(t)) {
         t->next = task_reaplist;
         task_reaplist = t;
         sched_unlock();
@@ -391,7 +391,7 @@ void task_reap() {
     while (task_reaplist) {
         t = task_reaplist;
         task_reaplist = t->next;
-        if (t == sched_current()) { t->next = keep; keep = t; }
+        if (task_busy(t)) { t->next = keep; keep = t; }
         else task_destroy(t);
     }
     task_reaplist = keep;
@@ -436,7 +436,7 @@ int task_reap_orphans() {
     sched_lock();
     t = task_head;
     while (t) {
-        if (t->state == TS_ZOMBIE && t != sched_current()
+        if (t->state == TS_ZOMBIE && !task_busy(t)
             && task_parent_is_user(t)) {
             w = t->next;
             parent = t->parent;

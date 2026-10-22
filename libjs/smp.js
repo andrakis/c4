@@ -20,6 +20,11 @@
 // any CPU ran in each round, which is what TIME and the pacing go by
 // (devices.js timeSource). Each CPU's own count is what C4CY gives it.
 //
+// USLP sleeps the CPU that executes it, not the machine, while another
+// CPU can run: it is 'sleep' until the machine's time reaches the end of
+// its nap, or an IPI comes. Only when no CPU can run does the machine
+// nap, to the earliest of those ends, and every sleeper wakes with it.
+//
 // The parallel engine (S2) runs the same opcodes on one worker per CPU.
 
 import { OP, STOP, CPU_HALT_ADDR } from './c4m.js';
@@ -54,7 +59,7 @@ export class Smp {
   start(id, entry, stacktop) {
     if (id < 0 || id >= this.n) return 0;
     const m = this.machines[id];
-    if (m.cpuState === 'run' || m.cpuState === 'wait') return 0;
+    if (m.cpuState === 'run' || m.cpuState === 'wait' || m.cpuState === 'sleep') return 0;
     if (!entry || !stacktop) return 0;
     const symbols = m.symbols;
     m.reset();
@@ -84,13 +89,15 @@ export class Smp {
     return woken;
   }
 
-  // __c4_ipi(id): HIRQ_IPI on that CPU; a parked one is woken to take it
+  // __c4_ipi(id): HIRQ_IPI on that CPU; a parked or sleeping one is
+  // woken to take it
   ipi(id) {
     if (id < 0 || id >= this.n) return 0;
     const m = this.machines[id];
     if (m.cpuState === 'halt' || m.cpuState === 'off') return 0;
     m.ipiPending = 1;
     if (m.cpuState === 'wait') { m.waitAddr = 0; m.waitVal = 0; m.cpuState = 'run'; }
+    if (m.cpuState === 'sleep') m.cpuState = 'run';
     return 1;
   }
 
@@ -102,8 +109,12 @@ export class Smp {
     this.running = true;
     try {
       while (this.cycle < end) {
-        let ran = 0, waiting = 0, inputs = 0, most = 0, sleep = false;
+        let ran = 0, waiting = 0, inputs = 0, most = 0, sleep = false, sleepers = 0;
         for (const m of this.machines) {
+          if (m.cpuState === 'sleep') {
+            if (dev.simMs() - m.wakeAt < 0) { sleepers++; continue; }
+            m.cpuState = 'run';
+          }
           if (m.cpuState === 'wait') { waiting++; continue; }
           if (m.cpuState !== 'run') continue;
           ran++;
@@ -113,10 +124,32 @@ export class Smp {
           if (m.cycle - before > most) most = m.cycle - before;
           if (dev.halted) { this.cycle += Math.max(most, 1); return STOP.HALT; }
           if (r === STOP.INPUT) inputs++;
-          else if (r === STOP.SLEEP) sleep = true;
+          else if (r === STOP.SLEEP) {
+            if (this.machines.some(o => o !== m && o.cpuState === 'run')) {
+              // another CPU can use the time: this one sleeps alone, and
+              // the machine's clock keeps going by the others' cycles
+              const nap = dev.napMs;
+              dev.sleepMs -= nap;
+              dev.napMs = 0;
+              m.wakeAt = dev.simMs() + nap;
+              m.cpuState = 'sleep';
+              sleepers++;
+            } else sleep = true;
+          }
         }
         this.cycle += Math.max(most, ran ? 1 : 0);
         if (!ran) {
+          if (sleepers) {
+            // no CPU can run: the machine naps to the first sleeper's end
+            const now = dev.simMs();
+            let first = Infinity;
+            for (const m of this.machines) if (m.cpuState === 'sleep') { first = Math.min(first, m.wakeAt); m.cpuState = 'run'; }
+            const nap = Math.max(1, first - now);
+            dev.sleepMs += nap;
+            dev.napMs = nap;
+            stop = STOP.SLEEP;
+            break;
+          }
           if (waiting) { this.deadlock(); return STOP.HALT; }
           // every CPU halted without CPU 0 exiting: its status stands
           dev.halted = true;
@@ -142,6 +175,7 @@ export class Smp {
       if (m.cpuState === 'off') s += 'off';
       else if (m.cpuState === 'run') s += 'running';
       else if (m.cpuState === 'wait') s += `waiting on ${hex(m.waitAddr)} for it to stop being ${m.waitVal}`;
+      else if (m.cpuState === 'sleep') s += 'asleep';
       else s += `halted, status ${m.cpuStatus}`;
       s += `, pc ${hex(m.pc)}, ${m.cycle} cycles\n`;
     });

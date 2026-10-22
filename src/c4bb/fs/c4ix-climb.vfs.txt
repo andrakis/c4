@@ -23,6 +23,12 @@
 BIN_ALL = hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt
 
 /: root
+	# the shared library every program above but hello is linked
+	# against: the loader links /lib/libc4ix.c4s at spawn. The others
+	# c4ix.vfs.txt maps (libc, libarc, libgui) serve programs a climb
+	# medium does not name.
+	lib/:
+		libc4ix.c4s: c4ix-libc4ix.c4s
 	each($BIN_ALL):
 		# c4ix-hello.c4r -> /bin/hello, and an unqualified alias at the
 		# root so "hello" works from the shell without the prefix or

@@ -1246,8 +1246,9 @@
 		(if (if (= h 'llnum) (= (index it 3) ty) false) it
 		(if (if (= h 'num) (not (g:fp? (g:nz (index it 2)))) false)
 			(g:fpint (g:second it) ty)
+		;; a float constant initializing a double, or a double a float
 		(if (if (= h 'num) (g:fp? (g:nz (index it 2))) (= h 'llnum))
-			(g:die "a float constant initializing a double, or a double a float: write it with the object's own type")
+			(p:fvalinit (p:litrat it) ty)
 		(g:die "a float or double object needs a constant initializer"))))))))
 ;; integer v as a literal of float type ty, rounded as the lexer rounds
 (define g:fpint (lambda (v ty)
@@ -1281,13 +1282,15 @@
 (define g:fplit? (lambda (it)
 	(if (= (head it) 'llnum) (= (index it 3) g:DOUBLE)
 	(if (= (head it) 'num) (g:fp? (g:nz (index it 2))) false))))
-;; a global's initializer: made of the object's float type, or refused
-;; as a float initializing an integer
+;; a global's initializer: made of the object's float type, and a float
+;; constant initializing an integer converted to it, as C converts. A
+;; folded one (fval, c4lc-parse's p:foldinit) is made the object's type.
 (define g:fpinit (lambda (it ty)
 	(if (= it nil) nil
+	(if (= (head it) 'fval) (p:fvalinit (g:second it) ty)
 	(if (g:fp? ty) (g:fpconst it ty)
-	(if (g:fplit? it) (g:die "a float or double constant initializing an integer: cast it")
-	it)))))
+	(if (g:fplit? it) (p:fvalinit (p:litrat it) ty)
+	it))))))
 ;; a local aggregate's float element, stored when the declaration runs
 (define g:fplstore (lambda (ty off it)
 	(begin
@@ -2170,8 +2173,30 @@
 	(begin
 		(define mn (g:swmin cases (head (head cases))))
 		(define range (- (g:swmax cases (head (head cases))) mn))
-		(if (>= range g:SWRANGE)
-			(g:die (+ "switch range " range " too sparse for a jump table")) nil)
+		;; a span past the word (INT_MIN to INT_MAX on a 32-bit host) wraps
+		;; below zero, and is sparse too
+		(if (if (< range 0) true (>= range g:SWRANGE)) (g:swchain cases 0 (if (= def nil) lend def))
+		(g:swtabled cases def lend mn range))))))
+;; a switch whose cases span g:SWRANGE or more: compares, in the order the
+;; cases are written. a holds the value, and stays the value XORed with
+;; the case at hand -- zero when it matches -- so nothing is pushed that a
+;; branch would have to drop:
+;;
+;;     PSH; IMM c1;       XOR; BZ case1
+;;     PSH; IMM c1 ^ c2;  XOR; BZ case2      a = value ^ c2
+;;     ...
+;;     JMP default-or-end
+(define g:swchain (lambda (cases prev defloc)
+	(if (empty? cases) (g:emit (list 'JMP (list 'code defloc)))
+	(begin
+		(define v (head (head cases)))
+		(g:emit '(PSH))
+		(g:emit (list 'IMM (bit:xor v prev)))
+		(g:emit '(XOR))
+		(g:emit (list 'BZ (list 'code (g:second (head cases)))))
+		(next g:swchain (tail cases) v defloc)))))
+(define g:swtabled (lambda (cases def lend mn range)
+	(begin
 		(g:dalign)
 		(define tbl g:dlen)
 		(g:swtable cases def lend mn 0 range tbl)
@@ -2204,7 +2229,7 @@
 		(g:emit (list 'JMP (list 'code defloc)))
 		(g:label! lo1)
 		(g:emit '(ADJ 1))
-		(g:emit (list 'JMP (list 'code defloc)))))))
+		(g:emit (list 'JMP (list 'code defloc))))))
 
 (define g:switchstmt (lambda (s)
 	(begin
@@ -2690,7 +2715,23 @@
 					(g:die (+ "an initializer can name only a function or a global: " (g:second it))))
 				(if (= g:imode 'put)
 					(set! g:dpatches (g:cons (g:addrpatch off (g:second it) f) g:dpatches)) nil))
-		(g:die "unsupported initializer element"))))))))
+		;; a global's address plus an offset, &a[k] (p:foldinit): a data
+		;; patch carrying the offset
+		(if (= h 'gaddr)
+			(begin
+				(define gf (g:lookup (g:second it) g:syms))
+				(if (if gf (if (= (g:second gf) 'fun) true (= (g:second gf) 'ext)) false)
+					(g:die (+ "an offset from a function's address: " (g:second it))) nil)
+				(if (= g:imode 'put)
+					(set! g:dpatches (g:cons (list 'dglo off (g:second it) (g:third it)) g:dpatches)) nil))
+		;; a string's address plus an offset
+		(if (= h 'sadr)
+			(if (= g:imode 'str)
+				(set! g:istrs (g:cons (g:dstr (g:second it)) g:istrs))
+			(begin
+				(set! g:dpatches (g:cons (list 'ddata off (+ (head g:istrs) (g:third it))) g:dpatches))
+				(set! g:istrs (tail g:istrs))))
+		(g:die "unsupported initializer element"))))))))))
 ;; a data word holding function F's address: a code patch for a function
 ;; this unit defines, and for an extern one (-c) a symbol patch whose slot
 ;; is in data (type -5), which c4rlink resolves when it links the unit
@@ -2722,8 +2763,14 @@
 		(define s (g:lookup (g:third p) g:syms))
 		(if s nil (g:die (+ "an initializer names no function or global: " (g:third p))))
 		(define off (index s 3))
-		(if (= (g:second s) 'extg) (list 'dsym (g:second p) off)
-		(list 'ddata (g:second p) (if (g:bss? off) (+ base (g:bssoff off)) off))))))
+		;; &a[k]: the offset rides in the patch, and for extern data in the
+		;; word itself, which c4rlink adds to the symbol's address
+		(define k (if (> (length p) 3) (index p 3) 0))
+		(if (= (g:second s) 'extg)
+			(begin
+				(if (= k 0) nil (string:word! g:data (g:second p) k))
+				(list 'dsym (g:second p) off))
+		(list 'ddata (g:second p) (+ k (if (g:bss? off) (+ base (g:bssoff off)) off)))))))
 (define g:remapdsym (lambda (ps base acc)
 	(if (empty? ps) (g:reverse acc)
 	(begin

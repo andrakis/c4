@@ -207,13 +207,18 @@ CREATE TABT TABMAX CELLS ALLOT          \   2 = the VALUE is; +patch type
 8192 CONSTANT GMAX
 CREATE GOFF GMAX CELLS ALLOT
 VARIABLE TABN   0 TABN !
+\ What the next patch adds to its value: `&S_sfx[sfx_pistol]` is S_sfx's
+\ address and a byte offset (docs/ports-feasibility.md §8, step 4)
+CREATE TABX TABMAX CELLS ALLOT
+VARIABLE TAB-OFF   0 TAB-OFF !
 \ Everything a DATA word can refer to. All three live in one list and in
 \ the order they were met, because that is one list in c4lc and the
 \ order is visible in the image.
 : (TABPAT) ( slot value flags type -- )
    TABN @ TABMAX < 0= IF ." c4fc: too many data patches" CR ABORT THEN
    TABT TABN @ CELLS + !   TABB TABN @ CELLS + !
-   TABC TABN @ CELLS + !   TABD TABN @ CELLS + !   1 TABN +! ;
+   TABC TABN @ CELLS + !   TABD TABN @ CELLS + !
+   TAB-OFF @ TABX TABN @ CELLS + !  0 TAB-OFF !   1 TABN +! ;
 \ a switch jump table: a region 2 slot holding a code address
 : TABPAT, ( slot code -- )   DUP LABEL@  1 -3 (TABPAT) ;
 \ `int *fp = &fn;`: a region 1 slot holding a code address
@@ -238,7 +243,7 @@ DEFER TAB-MAP ( codeaddr -- codeaddr' )
       TABB I CELLS + @ TO f   TABT I CELLS + @ TO ty
       TABD I CELLS + @  f 1 AND IF b + THEN
       TABC I CELLS + @  ty -3 = IF TAB-MAP ELSE f 2 AND IF b + THEN
-         f 4 AND IF CELLS GOFF + @ THEN THEN
+         f 4 AND IF CELLS GOFF + @ THEN  TABX I CELLS + @ + THEN
       ty  ROT ROT PAT,
    LOOP ;
 

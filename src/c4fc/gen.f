@@ -751,28 +751,54 @@ CREATE CNTM MMAX CELLS ALLOT   VARIABLE CNTN   0 CNTN !
 
 BEGIN-STRUCTURE SWC
    FIELD: w.tab  FIELD: w.lo  FIELD: w.hi  FIELD: w.def  FIELD: w.ent
+   FIELD: w.cv   FIELD: w.ca
 END-STRUCTURE
 VARIABLE CURSW   0 CURSW !
+
+\ A switch whose cases are 4096 or more apart -- or so far apart that the
+\ difference wraps -- is a chain of compares instead (docs/ports-
+\ feasibility.md §8, step 2), c4lc-gen's g:swchain. a holds the value
+\ XORed with the case at hand, zero when it matches, so nothing is pushed
+\ that a branch would have to drop:
+\
+\    PSH IMM c1      XOR BZ case1
+\    PSH IMM c1^c2   XOR BZ case2
+\    ...
+\    JMP default     -- or the end
+\
+\ w.cv and w.ca hold its cases' values and addresses, in the order written.
+4096 CONSTANT SWRANGE
 
 :M STMT n_case {: n | w i -- :}
    CURSW @ TO w
    w 0= IF ." c4fc: case outside a switch" CR ABORT THEN
-   n >val @ w w.lo @ - TO i
-   i 0< i w w.hi @ w w.lo @ - > OR IF
-      ." c4fc: case " n >val @ .N ." is outside its switch's range " CR ABORT THEN
-   CHERE  w w.ent @  i CELLS +  ! ;M
+   w w.cv @ IF
+      n >val @ w w.cv @ V,   CHERE w w.ca @ V,
+   ELSE
+      n >val @ w w.lo @ - TO i
+      i 0< i w w.hi @ w w.lo @ - > OR IF
+         ." c4fc: case " n >val @ .N ." is outside its switch's range " CR ABORT THEN
+      CHERE  w w.ent @  i CELLS +  !
+   THEN ;M
 :M STMT n_default {: n | w -- :}
    CURSW @ TO w
    w 0= IF ." c4fc: default outside a switch" CR ABORT THEN
    CHERE w w.def ! ;M
 
-:M STMT n_switch {: n | w save m e bb m1 m2 m3 m4 end def k -- :}
+:M STMT n_switch {: n | w save m e bb m1 m2 m3 m4 end def k sp prev -- :}
    CURSW @ TO save
    SWC ALLOT: TO w
-   n >lo @ w w.lo !  n >hi @ w w.hi !  -1 w w.def !
-   n >hi @ n >lo @ - 1+ TO k
-   k CELLS ALLOT: w w.ent !
-   k 0 ?DO -1 w w.ent @ I CELLS + ! LOOP
+   n >lo @ w w.lo !  n >hi @ w w.hi !  -1 w w.def !  0 w w.cv !
+   n >hi @ n >lo @ - TO k
+   k 0<  k SWRANGE >= OR TO sp
+   sp IF
+      VEC ALLOT: w w.cv !   w w.cv @ 16 VEC-INIT
+      VEC ALLOT: w w.ca !   w w.ca @ 16 VEC-INIT
+   ELSE
+      k 1+ TO k
+      k CELLS ALLOT: w w.ent !
+      k 0 ?DO -1 w w.ent @ I CELLS + ! LOOP
+   THEN
    w CURSW !
    BRKN @ TO bb
    n >cond @ GEN
@@ -780,6 +806,18 @@ VARIABLE CURSW   0 CURSW !
    n >body @ STMT
    oJMP BR, TO e                        \ the last case falls out here
    m >RES
+   sp IF
+      0 TO prev
+      w w.cv @ V# 0 ?DO
+         oPSH OP,   I w w.cv @ V@ prev XOR oIMM OP2,   oXOR OP,
+         oBZ  I w w.ca @ V@  BACK,
+         I w w.cv @ V@ TO prev
+      LOOP
+      w w.def @ 0< IF oJMP BR, TO m3 ELSE oJMP w w.def @ BACK, THEN
+      CHERE TO end
+      e >RES
+      w w.def @ 0< IF m3 end RESTO THEN
+   ELSE
    \ The table is allocated HERE, after the body and before the dispatch
    \ code, which is where c4lc puts it: a string literal inside the
    \ switch gets the lower address.
@@ -805,5 +843,6 @@ VARIABLE CURSW   0 CURSW !
       w w.ent @ I CELLS + @ DUP 0< IF DROP def THEN
       TABPAT,
    LOOP
+   THEN
    BRKN @ bb ?DO BRKM I CELLS + @ end RESTO LOOP   bb BRKN !
    save CURSW ! ;M

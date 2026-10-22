@@ -84,7 +84,8 @@ int cl_verbose, cl_debug, cl_libmode, cl_strip, cl_striptool;
 // into data, VALUE the symbol's id. Only objects and libraries carry it --
 // c4lc and c4fc write one for an extern function an initializer names,
 // such as Busybox's applet_main[] -- and resolving it makes it DCODE or
-// DDATA, so no image a loader sees has one.
+// DDATA, so no image a loader sees has one. For data, the word holds an
+// offset to add, Doom's &S_sfx[sfx_pistol] (zero for the symbol itself).
 enum { C4R_PTYPE_DSYM = -5 };
 // -l: per library, its loaded structure, its run-time path, and whether
 // anything was resolved against it. CL_LIBMAX of them, malloc'd: c4cc
@@ -517,8 +518,11 @@ static int resolve_patches (int *master) {
 					patch[C4R_PAT_TYPE]  = C4R_PTYPE_DCODE;
 					patch[C4R_PAT_VALUE] = sym[C4R_SYMB_VALUE];
 				} else if (sym[C4R_SYMB_CLASS] == C4R_SCLASS_Glo) {
+					// &a[k] (docs/ports-feasibility.md 8, step 4): the
+					// compiler leaves the offset in the word itself
 					patch[C4R_PAT_TYPE]  = C4R_PTYPE_DDATA;
-					patch[C4R_PAT_VALUE] = sym[C4R_SYMB_VALUE];
+					patch[C4R_PAT_VALUE] = sym[C4R_SYMB_VALUE] +
+						*(int *)((char *)master[C4R_DATA] + patch[C4R_PAT_ADDRESS]);
 				} else {
 					printf("c4rlink: symbol '%.*s' is not a function or global, cannot resolve\n",
 					       sym[C4R_SYMB_NAMELEN], (char *)sym[C4R_SYMB_NAME]);

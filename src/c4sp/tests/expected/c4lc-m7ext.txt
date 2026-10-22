@@ -2,3 +2,4 @@ cat 100 105 1
 echo 201 206 2
 first 109 201
 shared 42 far
+offset ar r

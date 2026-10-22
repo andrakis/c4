@@ -14,10 +14,14 @@ The rules for these ports:
 - Quake is out for now.
 
 Status (2026-10-23): measured, nothing ported.
-- **c4lc** compiles 50 of linuxdoom's 59 units as they stand. The first
+- **c4lc** compiled 50 of linuxdoom's 59 units as they stood. The first
   five steps of §8, small and medium fixes, make it compile all of Doom.
   Twelve steps, none of them large, cover Doom, OpenTyrian and Rise of
   the Triad.
+- **Steps 1–5 are done** (M10, c4lc-design.md 14.9): c4lc compiles all
+  59 units and the platform stub as they stand, and `doomprobe.c` without
+  its rewrites prints what gcc `-m32` prints, on `c4m32`, plain, `-O` and
+  `-minline`. c4fc took steps 1, 2 and most of 4.
 - **c4fc** compiles none of them, because it has no `typedef` (§4.1).
 - **OpenTyrian** needs the C99 that c4lc lacks: declarations in `for`,
   struct values and compound literals.
@@ -362,26 +366,36 @@ and step 12 Rise of the Triad. Each step lands as M7b's did:
 - a gcc-checked test in `src/tests/c4lc_*.c`;
 - c4fc where its grammar reaches.
 
-| step | what | for | size | c4fc |
-|---|---|---|---|---|
-| 1 | `register`; declarations inside a block | Doom, ROTT, dg | S | S |
-| 2 | sparse `switch`: compares, or a binary search, past the density limit | all four | S–M | S–M |
-| 3 | `&a[k]` as a global's initializer | Doom, dg | S | with start-up initializers (§4.2) |
-| 4 | casts and address-plus-offset in aggregate initializers; casts in constant expressions (`case`) | Doom, ROTT, Tyrian | M | M |
-| 5 | float arithmetic folded in constant initializers, converted to the target type (`float f = 2.0;` too) | Doom, dg, Tyrian | M | after floats |
-| 6 | typedefs of array types, pointers to arrays (`T (*p)[N]`) | dg, Tyrian, ROTT | M | after typedef |
-| 7 | bitfields | dg (one struct) | M | M |
-| 8 | declarations in `for` | Tyrian | S–M | S–M, with mixed declarations |
-| 9 | struct values: returned and used, copy-initialized, compound literals | Tyrian | M | M |
-| 10 | `sizeof` of a local array in a constant | Tyrian | S | — |
-| 11 | small ones: an exact-fit string, a pointer to a pointer to a function, an opaque struct pointer compared with 0 | ROTT | S | S |
-| 12 | `int + pointer`; K&R definitions | ROTT | S, S–M | S |
+| step | what | for | size | c4fc | done |
+|---|---|---|---|---|---|
+| 1 | `register`; declarations inside a block | Doom, ROTT, dg | S | S | c4lc and c4fc |
+| 2 | sparse `switch`: compares, or a binary search, past the density limit | all four | S–M | S–M | c4lc and c4fc: compares |
+| 3 | `&a[k]` as a global's initializer | Doom, dg | S | with start-up initializers (§4.2) | c4lc, at start-up |
+| 4 | casts and address-plus-offset in aggregate initializers; casts in constant expressions (`case`) | Doom, ROTT, Tyrian | M | M | c4lc; c4fc but `a + k`, members and a string plus k |
+| 5 | float arithmetic folded in constant initializers, converted to the target type (`float f = 2.0;` too) | Doom, dg, Tyrian | M | after floats | c4lc, folded exactly |
+| 6 | typedefs of array types, pointers to arrays (`T (*p)[N]`) | dg, Tyrian, ROTT | M | after typedef | |
+| 7 | bitfields | dg (one struct) | M | M | |
+| 8 | declarations in `for` | Tyrian | S–M | S–M, with mixed declarations | |
+| 9 | struct values: returned and used, copy-initialized, compound literals | Tyrian | M | M | |
+| 10 | `sizeof` of a local array in a constant | Tyrian | S | — | |
+| 11 | small ones: an exact-fit string, a pointer to a pointer to a function, an opaque struct pointer compared with 0 | ROTT | S | S | |
+| 12 | `int + pointer`; K&R definitions | ROTT | S, S–M | S | |
 
 Each fix is small, and none needs a new pass. Steps 4 and 9 are the
 largest:
 - step 4 may need c4rlink to carry an offset in a data patch;
 - step 9 follows the temporaries that long long values already use
   (c4lc-design 14.7).
+
+Steps 1–5 landed as M10 (c4lc-design 14.9, c4fc-design "What Doom
+needed"; tests `c4lc_m10.c` and `c4lc_m10lc.c`):
+- `register` alone before a name is C89's int, am_map.c's `register
+  outcode1 = 0;`, which the scan's rewrite had hidden.
+- Step 4's data patch carries its offset; for another unit's data the
+  offset is left in the data word, and c4rlink adds it.
+- Step 5 folds at compile time, exactly: rationals over the lexer's big
+  integers, rounded after each operation as C rounds. A scalar global
+  with more than a literal still goes to start-up (14.8), as before.
 
 c4fc's own items (§4.2) come before its column: typedef, floats, mixed
 declarations and start-up initializers.

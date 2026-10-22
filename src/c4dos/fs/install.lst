@@ -77,6 +77,8 @@ c4ix.lst
 c4ix-vfsload.c4r
 c4ix-sh.c4r
 c4ix.vfs.txt
+# what the shell and everything after it is linked against (/lib)
+c4ix-libc4ix.c4s
 c4ix-ls.c4r
 c4ix-cat.c4r
 c4ix-ps.c4r

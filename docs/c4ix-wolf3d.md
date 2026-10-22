@@ -135,18 +135,27 @@ are fixed:
   twenty. That is not the compiler, but every test of a compiled program
   runs through it.
 
-The rest is rewritten in the source. Each change is marked `c4sdl:`.
-- 2-D arrays are flattened, because c4lc has none.
-- Structs are passed by pointer.
-- Typedefs move to file scope.
-- Float and `sizeof` initializers of globals move into code.
+The port first wrote around the rest, marking each change `c4sdl:`:
+- 2-D arrays were flattened by hand;
+- structs were passed by pointer;
+- typedefs moved to file scope;
+- float and `sizeof` initializers of globals moved into code;
+- array parameters, braces around a scalar initializer and several
+  declarators in one declaration were rewritten.
 
-One of these is c4lc's ABI rather than a missing feature: **every struct
-member gets a word of its own**, `char` and `short` included. Data laid
-out as it is in the files therefore cannot be read through a struct, as
-Wolf4SDL does with fonts, sprites, the map headers, the picture table and
-the huffman dictionary. Those are read a byte at a time (`C4_W16` and the
-`FONT_*` and `SHAPE_*` macros in `wl_def.h`).
+One of these was c4lc's ABI rather than a missing feature: every struct
+member got a word of its own, `char` and `short` included. Data laid out
+as it is in the files could not be read through a struct, as Wolf4SDL
+does with fonts, sprites, the map headers, the picture table and the
+huffman dictionary, so those were read a byte at a time.
+
+All of this is c4lc's now, and c4fc's where it can follow
+(docs/c4lc-design.md 14.8, "What Wolfenstein 3D needed"). A struct is
+laid out by C's rule, as gcc lays it out, and `#pragma pack(1)`, which
+`wl_def.h` sets for every struct after it, packs them as it does under
+gcc. The game's code is Wolf4SDL's
+again outside the port itself, and the timedemo's checksums did not
+change.
 
 Three things are noted for later, and none of them is in the game's way:
 
@@ -158,13 +167,12 @@ Three things are noted for later, and none of them is in the game's way:
   how the manifest's sizes work, but the error it gives is
   "needs ''".
 
-Wolf4SDL had two bugs of its own, both fixed:
+Wolf4SDL had a bug of its own, fixed:
 
 - `itoa` and `ltoa` sized their output by the `strlen` of the caller's
   uninitialized buffer, so the status bar's digits depended on whatever
   the stack held. valgrind found it, because the frames were not the same
   from run to run.
-- A `sizeof` was taken of a row pointer, after flattening.
 
 ## Building it
 

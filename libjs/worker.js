@@ -16,6 +16,7 @@
 //   eof     {}                                    Ctrl-D
 //   gui     { kind, ... }                         a display event (gui-device.js)
 //   pause / resume / reset
+//   reset-files                                   drive 1 emptied, then reset; answered with files-reset
 //   peek    { id, addr, len }                     read guest memory
 //   poke    { id, addr, bytes }                   write guest memory
 // Worker -> page
@@ -24,6 +25,7 @@
 //   display { frames }        draw commands (gui-device.js); not used on the shared path
 //   snd     { events, now }   the sound card's events, and its clock when sent (snd-device.js)
 //   persist { name, bytes }   a file the machine closed on drive 1, for the page to keep
+//   files-reset {}            drive 1 is empty and the machine is booting again
 //   status  { ... }           about four times a second
 //   exit    { status, cycles }
 //   reply   { id, ... }       for peek and poke
@@ -276,6 +278,11 @@ self.onmessage = e => {
     switch (m.type) {
       case 'boot': start(m); break;
       case 'reset': if (bootMsg) start(bootMsg); break;
+      case 'reset-files':
+        if (persistDrive) persistDrive.files = new Map();
+        if (bootMsg) start(bootMsg);
+        postMessage({ type: 'files-reset' });
+        break;
       case 'key': if (vm) { echo(keyDown(vm, m).echo); wake(); } break;
       case 'input': if (vm) { echo(typeBytes(vm, m.bytes)); wake(); } break;
       case 'signal': if (vm) { vm.pendingSignal = m.sig | 0 || 2; wake(); } break;

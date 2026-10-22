@@ -12,6 +12,7 @@
 //   });
 //   vm.on('out', bytes => ...);   vm.on('status', s => ...);   vm.on('exit', e => ...)
 //   vm.write('ps\n');  vm.signal(2);  vm.pause();  vm.resume();  vm.reset();
+//   await vm.resetFiles()       // forget drive 1 (opts.persist), and boot again
 //   await vm.peek(addr, len);  await vm.poke(addr, bytes)
 //
 // The machine runs in a Worker (worker.js); everything here is messages.
@@ -219,12 +220,17 @@ export class C4M {
       case 'display': this.emit('display', m.frames); break;
       case 'snd': if (this.sound) this.sound.play(m.events, m.now); break;
       case 'persist':
-        if (this.store) this.store.backend.putFile(this.persistName, m.name, m.bytes).then(
+        // dropped while a Reset Files is under way: the old machine's
+        if (this.store && !this.persistHold) this.store.backend.putFile(this.persistName, m.name, m.bytes).then(
           () => this.emit('persist', { name: m.name, bytes: m.bytes.length }), () => {});
         break;
       case 'gui': this.emit('resize', m); break;
       case 'exit': this.exited = m; this.emit('exit', m); break;
       case 'error': this.emit('error', m); break;
+      case 'files-reset':
+        this.persistHold = false;
+        if (this.filesReset) { const r = this.filesReset; this.filesReset = null; r(true); }
+        break;
       case 'reply': {
         const r = this.replies.get(m.id);
         if (r) { this.replies.delete(m.id); r(m); }
@@ -258,6 +264,20 @@ export class C4M {
     if (this.term) this.term.clear();
     if (this.display) { this.display.discard(); this.display.clear(); }
     this.worker.postMessage({ type: 'reset' });
+  }
+  // Forget what drive 1 kept -- every change C4IX saved to its files --
+  // and boot again from the disk as it ships. IndexedDB is emptied first;
+  // then the worker empties the drive and boots in one step, so nothing
+  // the old machine does can follow it. A file it sent before that is
+  // dropped here (persistHold) until the worker says the new one is up.
+  async resetFiles() {
+    if (!this.store) return false;
+    this.persistHold = true;
+    await this.store.erase(this.persistName);
+    this.exited = null;
+    if (this.term) this.term.clear();
+    if (this.display) { this.display.discard(); this.display.clear(); }
+    return new Promise(res => { this.filesReset = res; this.worker.postMessage({ type: 'reset-files' }); });
   }
   terminate() { this.worker.terminate(); }
 

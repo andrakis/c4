@@ -161,6 +161,15 @@ try {
 
 $('reset').addEventListener('click', () => { vm.reset(); term.focus(); });
 $('ctrlc').addEventListener('click', () => { vm.signal(2); term.focus(); });
+// Reset Files: only where the page keeps C4IX's files (?persist=0 has none)
+const filesBtn = $('resetfiles');
+if (vm.store) filesBtn.style.display = '';
+filesBtn.addEventListener('click', async () => {
+  if (!confirm("Forget every change kept to C4IX's files -- what was saved, made and deleted -- " +
+               'and boot again from the disk as it ships?')) return;
+  await vm.resetFiles();
+  term.focus();
+});
 const pauseBtn = $('pause');
 let paused = false;
 pauseBtn.addEventListener('click', () => {

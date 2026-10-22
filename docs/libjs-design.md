@@ -149,7 +149,11 @@ message path.
   `src/c4bb/web/store.js`, as one medium) and passes back at the next
   boot. C4IX keeps its changed files there (docs/c4ix-design.md,
   "Persistence"). The C4IX page uses `c4ix`. `?persist=0` gives no drive,
-  and `?persist=reset` forgets what was kept first.
+  and `?persist=reset` forgets what was kept first. The page's **Reset
+  Files** button (`vm.resetFiles()`) forgets it and boots again: IndexedDB
+  is emptied, then the worker empties drive 1 and boots in one step
+  (`reset-files`, answered by `files-reset`), and a file the old machine
+  sent in between is dropped rather than kept.
 - **The run loop** runs a slice (about 1M instructions, capped near 8 ms),
   flushes output, then:
   - on `sleep`, waits the requested time;

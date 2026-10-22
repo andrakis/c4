@@ -23,8 +23,17 @@ enum {
     SYS_STAT = 224, SYS_UNLINK = 225, SYS_RENAME = 226, SYS_LAZYFILE = 227,
     SYS_STACK = 228, SYS_CPUSTAT = 229, SYS_EVWAIT = 230, SYS_DISCARD = 231,
     SYS_VFORK = 232, SYS_EXECVE = 233, SYS_WAITPID = 234, SYS_LSEEK = 235,
-    SYS_FSTAT = 236, SYS_LINK = 237, SYS_FTRUNCATE = 238, SYS_ENVIRON = 239
+    SYS_FSTAT = 236, SYS_LINK = 237, SYS_FTRUNCATE = 238, SYS_ENVIRON = 239,
+    SYS_DISPLAY = 240
 };
+// libjs's display, taken from the desktop and given back (include/display.h)
+#ifndef __C4IX_DISPLAY_H
+#define __C4IX_DISPLAY_H 1
+enum { DISP_TAKE = 0, DISP_STATE = 1, DISP_YIELD = 2, DISP_GIVE = 3, DISP_YIELDS = 1 };
+int  udisplay(int op, int flags);
+int  udisplay_take(int flags);
+void udisplay_give();
+#endif
 // What ustat2 and ufstat fill, a word each (the kernel's ST_* record)
 enum { ST_TYPE = 0, ST_SIZE = 1, ST_PROG = 2, ST_MTIME = 3, ST_INO = 4,
        ST_NLINK = 5, ST_MODE = 6, ST_DEV = 7, ST_WORDS = 8 };

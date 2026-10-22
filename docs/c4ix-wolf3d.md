@@ -1,13 +1,15 @@
 # Wolfenstein 3D on C4IX
 
-id Software's Wolfenstein 3D runs in a C4IX desktop window. It is
+id Software's Wolfenstein 3D runs on C4IX's whole display. The desktop
+gives way to it until it ends, as Windows did for a DOS game. It is
 Wolf4SDL's C, compiled by c4lc against C4IX's libc. Go > Wolfenstein 3D
-starts it, as does `wolf3d` at a shell prompt. All of it works: the
+starts it, as does `wolf3d` at a shell prompt; `wolf3d --window` plays
+in the Terminal window instead. All of it works: the
 display, the keyboard, the music and sounds, and the game. The source,
 and what was changed in it, is [src/wolf3d](../src/wolf3d/README.md).
 
-It also runs without the desktop: on C4IX's whole display, under C4DOS,
-and on the bare machine ("Without the desktop", below).
+It also runs without the desktop: from C4IX's console, under C4DOS, and
+on the bare machine ("Without the desktop", below).
 
 ## Playing
 
@@ -23,10 +25,18 @@ The keys are the original's:
 | 1-4 | knife, pistol, machine gun, chain gun |
 | Esc | the menu |
 
-The game is played from the keyboard; the original's mouse control is
-not wired up yet (`plat.h` passes key events only). It runs in a Terminal
-window, which it makes its canvas. Ctrl-C there stops it, as it stops any
-program.
+The game is played from the keyboard. The original's mouse control is
+not wired up yet (`plat.h` passes key events only).
+
+It takes the whole display from the desktop (`include/display.h`,
+docs/c4ix-desktop.md part thirteen). The desktop draws nothing until the
+game ends, and then draws itself again. Every key is the game's, so Quit
+on its menu is the way out. A stuck game can be killed from the page's
+console, which gives the desktop the display back.
+
+With `--window`, the game runs in its Terminal window and makes it its
+canvas. Every frame then goes through the desktop, which is slower. Ctrl-C
+there stops it, as it stops any program.
 
 The music, the AdLib effects and the digitized sounds play through
 libjs's sound card. In the browser they start with the first key or click,
@@ -45,7 +55,7 @@ The web page's system list has three more ways to play it:
 
 | `?system=` | what boots | the game |
 |---|---|---|
-| `wolf3d-c4ix` | C4IX's console, which runs `wolf3d --direct` (init's `-e`) | on the whole display, as `raycast -G` draws; the first run unpacks the zip, as above, and it is kept |
+| `wolf3d-c4ix` | C4IX's console, which runs `wolf3d` (init's `-e`) | on the whole display, as `raycast -G` draws; the first run unpacks the zip, as above, and it is kept |
 | `c4dos` | C4DOS, on the `images/wolf3d` disk | type `WOLF3D` at the `A>` prompt; Quit comes back to it |
 | `wolf3d` | the game itself, with no operating system | at once; Quit halts the machine |
 

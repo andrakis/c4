@@ -354,6 +354,87 @@ static int sys_waitpid(int pid, int *st, int opts) {
 // args[0] is the first argument, args[1] the second, and so on.
 // Both doors normalize into that shape before calling.
 //
+// ---- The display, taken and given back ------------------------------------
+//
+// libjs's display (libjs/guest/gui.h) serves one ring at a time: the
+// program that writes ATTACH last has it, and nothing in the machine stops
+// a second one doing so while the first still draws. So a program that
+// wants the whole display asks here first (include/display.h), and the
+// kernel keeps who has it -- the way Windows 3 to 98 let a DOS game have
+// the whole screen, the desktop waiting until it was done.
+//
+// The holder may agree to give way (DISP_YIELDS): the desktop does. A
+// program that asks then waits, asking again, while the holder is told
+// (DISP_STATE answers 1) and woken; at its next turn it yields, and runs
+// on without drawing. It has the display back when the new holder gives
+// it up or dies (task_zombify), and DISP_STATE answers 0 again. A holder
+// that has not given way after DISP_GRACE is passed over, so a stuck
+// desktop cannot keep a game off the screen; one that did not agree to
+// give way is never asked, and a second program is told no. One level
+// deep: the desktop under a game, never a game under a game.
+enum { DISP_GRACE = 1000 };
+static int disp_holder, disp_hyields;               // who has it; gives way?
+static int disp_prev, disp_pyields;                 // who gave way to it
+static int disp_want, disp_wyields, disp_want_at;   // who asks, and since when
+
+// A holder asleep on the clock or its event ring looks now
+static void disp_nudge(int id) {
+    struct task *w;
+    if ((w = task_get(id)) && w->state == TS_SLEEPING) w->ck_wake = __time();
+}
+
+static void disp_pass() {
+    disp_prev = disp_holder; disp_pyields = disp_hyields;
+    disp_holder = disp_want; disp_hyields = disp_wyields;
+    disp_want = 0;
+}
+
+// A task gives the display up, or dies having it, waiting under a game
+// for it, or asking for it
+void sys_display_drop(int id) {
+    if (!id) return;
+    if (disp_want == id) disp_want = 0;
+    if (disp_prev == id) disp_prev = 0;
+    if (disp_holder == id) {
+        disp_holder = disp_prev; disp_hyields = disp_pyields;
+        disp_prev = 0;
+        if (disp_holder) disp_nudge(disp_holder);
+    }
+}
+
+// TAKE: 1 it is the caller's, 0 ask again soon, -1 no. STATE: 0 the
+// caller has it, 1 it has it and another asks, 2 it has not. YIELD: 1 it
+// passed to the one asking. GIVE: it goes back to who gave way, if anyone.
+static int sys_display(struct task *t, int op, int flags) {
+    int me;
+    if (!t) return -1;
+    me = t->id;
+    if (op == DISP_TAKE) {
+        if (!disp_holder || disp_holder == me) {
+            disp_holder = me; disp_hyields = flags & DISP_YIELDS;
+            if (disp_want == me) disp_want = 0;
+            return 1;
+        }
+        if (!disp_hyields || disp_prev) return -1;
+        if (disp_want && disp_want != me) return -1;
+        if (disp_want != me) { disp_want = me; disp_wyields = flags & DISP_YIELDS; disp_want_at = __time(); }
+        if (__time() - disp_want_at >= DISP_GRACE) { disp_pass(); return 1; }
+        disp_nudge(disp_holder);
+        return 0;
+    }
+    if (op == DISP_STATE) {
+        if (disp_holder != me) return 2;
+        return disp_want ? 1 : 0;
+    }
+    if (op == DISP_YIELD) {
+        if (disp_holder != me || !disp_want) return 0;
+        disp_pass();
+        return 1;
+    }
+    if (op == DISP_GIVE) { sys_display_drop(me); return 0; }
+    return -1;
+}
+
 // A switch: c4lc compiles one to a jump table, a fixed cost, where a
 // ladder of ifs cost six instructions a rung -- SYS_SLEEP, the desktop's
 // most frequent call, was the twenty-fourth.
@@ -482,6 +563,7 @@ int sys_dispatch(int num, int *args) {
         t->ck_wake = __time() + (args[0] > 0 ? args[0] : 0);
         t->state = TS_SLEEPING;
         return 0;
+    case SYS_DISPLAY:  return sys_display(t, args[0], args[1]);
     case SYS_GETPID:   return t ? t->id : -1;
     // Freed with the task if it does not free it itself (task.c)
     case SYS_SBRK:     return task_ualloc(t, args[0]);

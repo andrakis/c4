@@ -68,6 +68,16 @@ int ucycles()                         { return __c4_cycles(); }
 int utaskinfo(int i, int *out)        { return __c4ix_syscall(SYS_TASKINFO, i, (int)out, 0); }
 int ucpustat(int *h, int *r, int max)  { return __c4ix_syscall(SYS_CPUSTAT, (int)h, (int)r, max); }
 int uevwait(int ms, int *ring, int p)  { return __c4ix_syscall(SYS_EVWAIT, ms, (int)ring, p); }
+// libjs's display, kept by the kernel (include/display.h): asking again
+// every 10 ms while the desktop gives way, which the kernel stops waiting
+// for after a second
+int udisplay(int op, int flags)       { return __c4ix_syscall(SYS_DISPLAY, op, flags, 0); }
+int udisplay_take(int flags) {
+    int r;
+    while (!(r = udisplay(DISP_TAKE, flags))) umsleep(10);
+    return r > 0;
+}
+void udisplay_give()                  { udisplay(DISP_GIVE, 0); }
 int uchdir(char *path)                { return __c4ix_syscall(SYS_CHDIR, (int)path, 0, 0); }
 int umkdir(char *path)                { return __c4ix_syscall(SYS_MKDIR, (int)path, 0, 0); }
 int ugetcwd(char *buf, int len)       { return __c4ix_syscall(SYS_GETCWD, (int)buf, len, 0); }

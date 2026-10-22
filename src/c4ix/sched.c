@@ -507,6 +507,7 @@ void task_zombify(struct task *t, int code) {
     ++sched_nzombies;
     if (t != kernel_task && !t->cpuidle) --sched_nlive;
     task_unborrow(t);
+    sys_display_drop(t->id);      // the desktop has the display back
     if (was == TS_VFORK && (w = task_get(t->wait_for)) && w->vfparent == t) task_zombify(w, code);
     w = task_head;
     while (w) {

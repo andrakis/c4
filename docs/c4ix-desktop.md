@@ -700,3 +700,68 @@ the desktop that drawing commands and key presses could not give it.
     640x400;
   - a key goes to the game, and its picture changes;
   - Ctrl-C makes the window a Terminal again.
+
+## Part thirteen: a game on the whole display (asked for 2026-10-23)
+
+A game in a Terminal window draws through the desktop. Every frame goes
+over the window's pipe, and the desktop puts it on the display. Even at
+400 MHz, Wolfenstein 3D was not satisfying to play that way, and
+`wolf3d --direct`, drawing on the display itself, ran much better. But
+the display serves one ring at a time. A program that attached its own
+under the desktop fought it for the screen, and when the program ended
+the display was left pointing at its freed ring. The desktop never had it
+back.
+
+Windows 3 to 98 had the answer: a DOS game took the whole screen, and the
+desktop waited until it was done. C4IX does the same.
+
+- [x] **The kernel keeps who has the display** (`SYS_DISPLAY`, 240;
+      src/c4ix/sys.c, "The display"; `include/display.h`).
+  - A program asks with `udisplay_take()` before it attaches, and gives
+    the display back with `udisplay_give()` after it detaches.
+  - The desktop takes the display at its start, with `DISP_YIELDS`: it
+    agrees to give way.
+  - When a program asks, the kernel wakes the desktop and tells it
+    (`DISP_STATE` is 1). The program keeps asking every 10 ms.
+  - The desktop yields between frames, and the display passes to the
+    program.
+  - A desktop that has not yielded after a second is passed over, so a
+    stuck one cannot keep a game off the screen.
+  - Only one level: a second program asking while a game has the display
+    is told no.
+- [x] **The desktop stands aside.** While a game has the display, the
+      desktop draws nothing and reads no events, since the keys go to the
+      game. It still reads its terminals' pipes, so the programs in its
+      windows run on unseen. A program that draws into its window waits
+      for the frame to be shown, as it always has.
+- [x] **And comes back.** The game gives the display up, or dies and
+      `task_zombify` gives it up for the game. The desktop then attaches
+      its ring again, puts the pointer back and draws the whole scene. A
+      Terminal shows whatever its program printed in the meantime.
+- [x] **Wolfenstein 3D takes the display by default.** That covers
+      `wolf3d` and Go > Wolfenstein 3D. `wolf3d --window` plays in the
+      Terminal window, as before. A game that finds the display held by a
+      program that does not give way plays in the window instead.
+- [x] **`gui`, the display's demo, asks too.** Its source,
+      libjs/guest/gui-demo.c, is shared with c4cc, which has no
+      preprocessor, so src/c4ix/user/gui.c wraps its attach and detach
+      in the take and the give.
+- [x] Pinned by test-desktop.mjs: `gui 40` in a Terminal has the display
+      at 640x480 and presents its own frames. When it ends, the desktop
+      has the display back at 800x600, with the Terminal showing
+      `gui: done after 40 frames`. Checked in the browser too: `wolf3d`
+      from a Terminal plays on the whole display, and quitting from its
+      menu brings the desktop back.
+
+### Not done
+
+- **No way back but the game's own.** While a game has the display,
+  every key is the game's, so Ctrl-C cannot reach its Terminal. A game
+  ends from its menu. A stuck one has to be killed from the page's
+  console: Ctrl-C there stops top, and `kill` takes the game's id from
+  `ps`. Its death gives the desktop the display back. Windows' Alt-Tab,
+  which put the game in the background and brought it back later, would
+  need the game to give way as the desktop does.
+- **`raycast -G` does not ask.** It is one image for the bare machine and
+  C4IX, so it cannot make a C4IX system call. Run under the desktop, it
+  still fights it.

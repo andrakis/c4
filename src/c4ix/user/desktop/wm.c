@@ -1218,12 +1218,15 @@ static void shutdown_screen() {
 
 int main(int argc, char **argv) {
     int *region, k, busy, secs, clock_min, last_tick, last_draw, input, start_ms, second_draw;
-    int last_input, last_frame;
+    int last_input, last_frame, aside;
     struct win *w;
 
     if (!gui_present()) { printf("desktop: not fitted\n"); return 0; }
+    // the display, from the kernel, giving way to a game that asks for it
+    // (include/display.h, and "aside" below)
+    if (!udisplay_take(DISP_YIELDS)) { printf("desktop: a program has the display\n"); return 1; }
     region = ualloc(65536);
-    if (!gui_attach(region, 65536, SW, SH)) { printf("desktop: the display refused the ring\n"); return 1; }
+    if (!gui_attach(region, 65536, SW, SH)) { printf("desktop: the display refused the ring\n"); udisplay_give(); return 1; }
     // GUI_M_WINDOW too: a resize or a focus change from the page means the
     // canvas may have been cleared, and the scene is drawn again
     gui_events(GUI_M_MOVE | GUI_M_BUTTONS | GUI_M_KEYS | GUI_M_WHEEL | GUI_M_WINDOW);
@@ -1262,8 +1265,35 @@ int main(int argc, char **argv) {
     clock_min = 0 - 1; last_tick = 0; last_draw = 0;
     start_ms = now_ms(); second_draw = 0;
     last_input = __time(); last_frame = 0;
+    aside = 0;
     while (running) {
         busy = 0; input = 0;
+        // A game asks for the whole display (wolf3d, include/display.h): give
+        // way, between frames, and stand aside until it has gone -- reading
+        // the terminals' pipes, so their programs run on, but drawing
+        // nothing and reading no events, which go to the game. Then the
+        // display again, and the whole scene drawn on it.
+        if (!aside && udisplay(DISP_STATE, 0) == 1 && udisplay(DISP_YIELD, 0)) aside = 1;
+        if (aside) {
+            if (udisplay(DISP_STATE, 0) == 2) {
+                sweep();
+                w = first;
+                while (w) {
+                    if (w->used && w->kind == K_TERM) term_tick(w);
+                    if (w->used && w->kind == K_EDIT) edit_tick(w);
+                    w = w->next;
+                }
+                uevwait(100, 0, 1);
+                continue;
+            }
+            aside = 0;
+            gui_attach(region, 65536, SW, SH);
+            gui_events(GUI_M_MOVE | GUI_M_BUTTONS | GUI_M_KEYS | GUI_M_WHEEL | GUI_M_WINDOW);
+            gui_cursor(saver_active() ? GUI_PTR_NONE : GUI_PTR_ARROW);
+            wm_mods = 0;
+            last_input = __time();
+            dirty = 1;
+        }
         sweep();
         while (gui_poll(ev)) {
             busy = 1; input = 1;
@@ -1370,6 +1400,7 @@ int main(int argc, char **argv) {
     save_files();
     shutdown_screen();
     gui_detach();
+    udisplay_give();
     printf("desktop: shut down\n");
     return 0;
 }

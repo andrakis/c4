@@ -636,6 +636,11 @@ loading or assigning a whole struct is an error.
   reads. The desktop's loop waits on it, and redraws only damaged
   regions.
 
+- **`SYS_DISPLAY`** (240, 2026-10-23, docs/c4ix-desktop.md part
+  thirteen): who has libjs's display. The desktop holds it and gives way
+  to a program that asks (`include/display.h`). It has the display back
+  when that program gives it up or dies.
+
 - **`SYS_DISCARD`** (231, 2026-10-21): drop what a pipe holds unread,
   from either end, as a tty drops its input on Ctrl-C. A Command
   Prompt does it on Ctrl-C, so lines typed at a job that never read

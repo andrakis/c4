@@ -699,8 +699,9 @@ key('ESC');
 until(() => !has('Screen saver'));
 
 // ---- Wolfenstein 3D: a game in a Terminal, its frames 8-bit (GUI_BLIT8) -----------------------
+// (--window: by itself it takes the whole display, as gui does below)
 clickText(/^Terminal - task/, 'first');
-type('wolf3d\n');
+type('wolf3d --window\n');
 check(until(() => has(/Unpacking the shareware episode/), 1500), 'wolf3d unpacks the shareware episode the first time', screen());
 check(until(() => rgbFrames > 0 && has('Wolfenstein 3D'), 3000), 'and shows its frames in the window, which it titles',
   `frames ${rgbFrames} ` + screen().slice(-300));
@@ -714,6 +715,21 @@ check(rgbLast && rgbLast.w === 320 && rgbLast.h === 200 && rgbLast.dw === 640 &&
 }
 key('c', 2, 67);
 check(until(() => has(/^Terminal - task/), 800), 'Ctrl-C stops it, and the window is a Terminal again', screen().slice(-300));
+
+// ---- the whole display: a program asks, the desktop gives way, and has it back ----------------
+// (include/display.h) gui, the display's demo, for 40 frames: the display is
+// its own, at its size, and once it ends the desktop draws everything again,
+// its Terminal showing what the demo printed meanwhile
+clickText(/^Terminal - task/, 'first');
+type('gui 40\n');
+{
+  // the demo's text is GUI_TEXT, which the screen here does not read: its frames are counted
+  const ok = until(() => gui.w === 640 && gui.h === 480, 1500), p = presents;
+  check(ok && until(() => presents >= p + 10 || gui.w !== 640, 1500) && presents >= p + 10,
+    'a program on the whole display: the desktop gives way', `${gui.w}x${gui.h}, ${presents - p} frames`);
+}
+check(until(() => gui.w === SW && has(/^Terminal - task/) && has(/gui: done after 40 frames/), 1500),
+  'and has it back when the program ends, and draws it all again', `${gui.w}x${gui.h} ` + screen().slice(-300));
 
 // ---- Run --------------------------------------------------------------------------------------
 start('Run...');

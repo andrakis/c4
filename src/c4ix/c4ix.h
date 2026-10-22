@@ -95,8 +95,12 @@ enum {
     // POSIX's process and file calls, for Busybox (docs/busybox-port.md §4)
     SYS_VFORK = 232, SYS_EXECVE = 233, SYS_WAITPID = 234, SYS_LSEEK = 235,
     SYS_FSTAT = 236, SYS_LINK = 237, SYS_FTRUNCATE = 238, SYS_ENVIRON = 239,
-    SYS_TOP = 240          // one past the last: sched_trap's range check
+    // libjs's display, taken and given back (sys.c, "The display")
+    SYS_DISPLAY = 240,
+    SYS_TOP = 241          // one past the last: sched_trap's range check
 };
+// SYS_DISPLAY's operations, and TAKE's flag (include/display.h)
+enum { DISP_TAKE = 0, DISP_STATE = 1, DISP_YIELD = 2, DISP_GIVE = 3, DISP_YIELDS = 1 };
 // What SYS_STAT and SYS_FSTAT write, a word each, as many as the caller
 // asks for: SYS_STAT's callers from before M7c ask for none, which is
 // the first four.
@@ -137,6 +141,7 @@ int  sys_mkdir(char *path);
 int  sys_getcwd(char *buf, int len);
 int  sys_readdir(char *path, int index, char *name);  // <0 end, else isdir
 void sys_pmviolation(int op, int *sp, int *returnpc, int *a);
+void sys_display_drop(int id);
 
 // Set when a syscall could not complete because the calling task had
 // to block. The trap handler rewinds the saved pc by one word so the

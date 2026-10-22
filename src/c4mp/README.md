@@ -132,6 +132,12 @@ each replacing a two- or three-instruction sequence. c4opt's `-mfuse` pass
 emits them. c4mp runs all ten; c4m runs `LDL`, `STL` and `POPA` and halts on
 the other seven. See [docs/fused-opcodes.md](../../docs/fused-opcodes.md).
 
+**FPU (89).** c4m runs it ([docs/c4-float.md](../../docs/c4-float.md)); c4mp
+names it and does not. `INFO` leaves `C4I_FPU` (0x10000) clear, so a c4lc
+image's float helpers take their software path, which is the same
+`src/c4fp/softfp.c` c4m's FPU runs natively: same bits, slower. An image
+that issues `FPU` anyway gets `TRAP_ILLOP`, as on c4m with `-F`.
+
 ## Test
 
     make test-c4mp
@@ -140,8 +146,11 @@ Not in `make test`: it runs every test image through two VMs, and some
 through three. [test-c4mp.sh](test-c4mp.sh) checks, in order:
 
 1. **Equivalence.** Every `src/tests/*.c4r` image gives the same output and
-   exit status under `./c4m load-c4r.c` and `./c4mp` (addresses and
-   millisecond timings masked).
+   exit status under `./c4m load-c4r.c` and `./c4mp` (addresses,
+   millisecond timings and raycast's `f/s` figure masked). An image that
+   needs arguments to be deterministic gets them from `args_for`: raycast
+   seeds its maze from the clock unless given `-s`, so it runs with
+   test-raycast's `RAYCAST_ARGS`.
 2. **Hosted.** A subset under `./c4m load-c4r.c -- c4mp.c4r` matches c4m.
 3. **Nesting.** c4mp → c4mp.c4r → hello, and one level deeper.
 4. **Slicing.** `-q 1`, `2`, `7` and `1000` give the same output and cycle
@@ -191,6 +200,7 @@ Images are loaded only if their word size matches the machine, so the native
 ## Limits and known issues
 
 - Pass 2 (real host threads, real atomics) does not exist; see above.
+- `FPU` (89) is not run; see above. Floats still work, in software.
 - `RALC` traps as an illegal opcode, as in c4m, where realloc has never been
   implemented.
 - `STRC` prints a frame walk without names; the loader discards the image's

@@ -17,6 +17,7 @@
 # Masked, and why each is a measurement rather than behaviour:
 #   * hex addresses -- both VMs malloc their own segments
 #   * NNNms         -- elapsed time belongs to the host clock
+#   * f/s NNNNN     -- raycast's frame rate, the same clock again
 #   * the VM's own name in its diagnostics
 #
 # stdbuf -oL is not cosmetic. Two of these images deliberately run off
@@ -40,7 +41,20 @@ trap 'rm -rf "$TMP"' EXIT
 # machine's /tmp the first time this ran uncapped. Comparing a 300KB
 # prefix plus the exit status is the whole check for those; every test
 # that terminates on its own is far below the cap and compared in full.
-mask() { sed -E 's/0x[0-9A-Fa-f]+/0xA/g; s/[0-9]+ms/Nms/g; s/^c4mp:/c4m:/' | head -c 300000; }
+mask() { sed -E 's/0x[0-9A-Fa-f]+/0xA/g; s/[0-9]+ms/Nms/g; s,f/s [ 0-9]{5},f/s XXXXX,g; s/^c4mp:/c4m:/' | head -c 300000; }
+
+# Arguments for the images that need some to be a function of their
+# input. raycast seeds its maze from the clock XOR the cycle counter
+# unless given -s, so without these neither VM even agreed with itself
+# from one run to the next, and the raycast comparison was a coin toss
+# that looked like a VM difference. These are test-raycast's own
+# (RAYCAST_ARGS in the Makefile), whose output is pinned in
+# raycast.golden.txt.
+args_for() {
+    case "$1" in
+        raycast) echo "21x21 -s 7 -d -n 20 -g 80x22" ;;
+    esac
+}
 
 fail=0
 
@@ -49,10 +63,11 @@ for f in $TESTS/*.c4r; do
     b=$(basename "$f" .c4r)
     # runs forever by design; there is nothing to compare
     [ "$b" = "test_infiniteloop" ] && continue
+    args=$(args_for "$b")
 
-    timeout 60 stdbuf -oL $C4M load-c4r.c -- "$f" </dev/null 2>&1 | mask > "$TMP/a"
+    timeout 60 stdbuf -oL $C4M load-c4r.c -- "$f" $args </dev/null 2>&1 | mask > "$TMP/a"
     ra=${PIPESTATUS[0]}
-    timeout 60 stdbuf -oL $C4MP            "$f" </dev/null 2>&1 | mask > "$TMP/b"
+    timeout 60 stdbuf -oL $C4MP            "$f" $args </dev/null 2>&1 | mask > "$TMP/b"
     rb=${PIPESTATUS[0]}
 
     if ! cmp -s "$TMP/a" "$TMP/b"; then

@@ -1192,6 +1192,19 @@ static void key_up(int code, int ch, int mods) {
     if (f->kind == K_TERM) term_keyup(f, code, ch, mods);
 }
 
+// What changed since boot, kept (persist save) before the machine stops:
+// the page keeps it, and the next boot lays it back. Where there is no
+// drive to keep it on, persist says so on the console and nothing waits.
+static void save_files() {
+    char *av[3];
+    int pid;
+    gui_clear(C_DARK);
+    gui_text2(SW / 2 - 120, SH / 2 - 20, 0xffffff, 22, F_BOLD, 0, "Saving your files...", 0 - 1);
+    gui_show();
+    av[0] = "persist"; av[1] = "save"; av[2] = 0;
+    if ((pid = spawn("/bin/persist", 2, av)) > 0) uwait(pid);
+}
+
 static void shutdown_screen() {
     gui_clear(C_DARK);
     gui_text2(SW / 2 - 200, SH / 2 - 20, 0xff8c1a, 22, F_BOLD, 0, "C4IX has stopped. You can close this page.", 0 - 1);
@@ -1346,6 +1359,7 @@ int main(int argc, char **argv) {
     w = first;
     while (w) { if (w->used) win_close(w->id); w = w->next; }
     sweep();
+    save_files();
     shutdown_screen();
     gui_detach();
     printf("desktop: shut down\n");

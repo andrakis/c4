@@ -706,6 +706,41 @@ loading or assigning a whole struct is an error.
     into a buffer that size. The heap in use once the boot has unpacked
     the root archive went from 24.6 MB to 16.6 MB.
 
+- **Persistence** (2026-10-22, asked for: "browser storage persistence for
+  filesystem changes"). C4IX's files are RAM, and every boot starts from
+  the disk and the root archive. What changed now lasts, where the host
+  gives the machine somewhere to keep it: host drive 1. In the browser
+  that is IndexedDB, kept by the page; on the command line it is the
+  directory `cli.js -w` names.
+  - *`persist`* (`src/c4ix/user/persist.c`) does all of it, in userland:
+    - `persist boot` is now the boot's unpacking task (vfsload runs it
+      where it ran `c4ix-tar`, so it is still task 4). It unpacks the
+      archives, writes every path there is to `/var/persist/base`, then
+      lays the last session's saved changes over the tree;
+    - `persist save`, or `sync`, writes the changes to the drive;
+    - `persist status` lists them, and `persist forget` saves nothing, so
+      the next boot starts clean;
+    - `persist -d SECS` saves every SECS seconds while things change. The
+      desktop's boot runs it every minute, and Power Off saves before the
+      machine stops.
+  - *What a change is.* The stamp on `/var/persist/base` (the VFS's order
+    of changes, `ustat` out[3]) is the epoch. A path not in the base list,
+    or stamped after the epoch, has changed. A path in the list that is
+    gone was deleted. The saved changes are laid over the tree after the
+    list is made, so the next save counts them as changes again and keeps
+    them. `/tmp`, `/log` and `/var/persist` are never kept.
+  - *What is kept* is one ustar archive, `1:c4ix-persist.tar`: the changed
+    files in the order they were changed, so that b4ke still sees an
+    object as newer than its source, then `var/persist/whiteouts`, the
+    deleted paths, which the next boot deletes again. It is streamed to
+    the drive through c4bb's disk write registers (`DISK_WNAME` and the
+    rest, 0x178-0x184), a 64 KB chunk at a time. The host replaces the
+    file only when it is closed, so a save cut short leaves the last one.
+    The registers are announced only by libjs (`C4I_C4MJS`), and `persist`
+    does nothing on any other host.
+  - *The shell* gained `rm` and `mv`, over the `uunlink` and `urename`
+    syscalls that Files and the IDE already used.
+
 ## 6.1 Running it
 
     make run-c4ix        an interactive shell on c4m

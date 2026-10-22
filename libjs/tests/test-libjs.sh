@@ -267,4 +267,24 @@ if echo "$out" | grep -qF "snd-demo: 8 notes" && echo "$out" | grep -qE "sound: 
 else bad "snd-demo plays, the same every time"; echo "$out" | tail -3; echo "levels: $lev"; fi
 rm -rf $T
 
+# Persistence (src/c4ix/user/persist.c): drive 1 keeps what changed. One
+# session writes a file, makes a directory, deletes a file the root
+# archive brought and syncs; the next, on the same drive, finds all three
+# as they were left. A third, after persist forget, starts clean.
+T=$(mktemp -d)
+out=$(printf 'wait 4\necho kept > /usr/kept.txt\nmkdir /usr/kdir\nrm /usr/README.md\nsync\nexit\n' | \
+      timeout 300 $LIBJS -m 64 -c 3000000000 -d $IMAGES/disk -w $T $IMAGES/c4ix32.c4r 2>/dev/null)
+out2=$(printf 'wait 4\ncat /usr/kept.txt\nls /usr\npersist forget\nexit\n' | \
+      timeout 300 $LIBJS -m 64 -c 3000000000 -d $IMAGES/disk -w $T $IMAGES/c4ix32.c4r 2>/dev/null)
+out3=$(printf 'wait 4\nls /usr\nexit\n' | \
+      timeout 300 $LIBJS -m 64 -c 3000000000 -d $IMAGES/disk -w $T $IMAGES/c4ix32.c4r 2>/dev/null)
+if echo "$out" | grep -qE "persist: [0-9]+ changes and 1 deletions kept" && [ -s $T/c4ix-persist.tar ] &&
+   echo "$out2" | grep -qE "persist: [0-9]+ files kept from the last session, 1 deleted" &&
+   echo "$out2" | grep -qx "kept" && echo "$out2" | grep -qx "kdir/" && ! echo "$out2" | grep -qx "README.md" &&
+   echo "$out3" | grep -qx "README.md" && ! echo "$out3" | grep -qx "kdir/"; then
+    ok "persist keeps a session's changes on drive 1 for the next"
+else bad "persist keeps a session's changes on drive 1 for the next"
+     echo "$out" | grep -E "persist|sync|rm:" | head -4; echo "$out2" | grep -E "persist|kept|kdir|README" | head -6; fi
+rm -rf $T
+
 if [ $fail = 0 ]; then echo "test-libjs: OK"; else echo "test-libjs: FAILURES"; exit 1; fi

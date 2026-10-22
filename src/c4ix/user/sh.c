@@ -293,7 +293,7 @@ static int sh_builtin(char **argv, int argc) {
     if (!ustrcmp(argv[0], "kill")) { sh_kill(argv, argc); return 1; }
     if (!ustrcmp(argv[0], "help")) {
         uprintf("c4ix-sh: cmd [args] [< in] [> out] [| cmd ...] [&]\n");
-        uprintf("builtins: exit jobs wait kill cd pwd help\n");
+        uprintf("builtins: exit jobs wait kill cd pwd rm mv help\n");
         uprintf("  kill [-SIG] %%JOB | PID   default signal 15 (TERM)\n");
         uprintf("  wait [PID]                every job, or task PID\n");
         return 1;
@@ -302,6 +302,21 @@ static int sh_builtin(char **argv, int argc) {
         char *dir;
         dir = (argc > 1) ? argv[1] : "/";
         if (uchdir(dir) < 0) uprintf("cd: no such directory: %s\n", dir);
+        return 1;
+    }
+    // the syscalls Files and the IDE use, for the console too
+    if (!ustrcmp(argv[0], "rm")) {
+        int k;
+        k = 1;
+        while (k < argc) {
+            if (uunlink(argv[k]) < 0) uprintf("rm: cannot remove %s\n", argv[k]);
+            ++k;
+        }
+        return 1;
+    }
+    if (!ustrcmp(argv[0], "mv")) {
+        if (argc != 3) uprintf("usage: mv PATH NEWNAME (in the same directory)\n");
+        else if (urename(argv[1], argv[2]) < 0) uprintf("mv: cannot rename %s\n", argv[1]);
         return 1;
     }
     if (!ustrcmp(argv[0], "pwd")) {

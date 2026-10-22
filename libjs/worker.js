@@ -8,6 +8,7 @@
 // Page -> worker
 //   boot    { image: ArrayBuffer, argv, disk: [[name, ArrayBuffer]], arenaMb, mhz, unpaced, gui, snd, shared }
 //           snd: true fits the sound card (snd-device.js)
+//           persist: { files: [[name, Uint8Array]] } fits a writable drive 1, kept by the page
 //           shared: { ring, fb } SharedArrayBuffers from shared.js, when the page is isolated
 //   key     { key, ctrlKey, altKey, metaKey }     a keydown on the terminal
 //   input   { bytes: Uint8Array }                 typed programmatically
@@ -22,6 +23,7 @@
 //   kbd     { raw }           a program opened or closed /dev/tty
 //   display { frames }        draw commands (gui-device.js); not used on the shared path
 //   snd     { events, now }   the sound card's events, and its clock when sent (snd-device.js)
+//   persist { name, bytes }   a file the machine closed on drive 1, for the page to keep
 //   status  { ... }           about four times a second
 //   exit    { status, cycles }
 //   reply   { id, ... }       for peek and poke
@@ -65,6 +67,9 @@ class LazyFiles extends Map {
   *keys() { const seen = new Set(super.keys()); yield* seen; for (const k of this.sizes.keys()) if (!seen.has(k)) yield k; }
 }
 
+// Drive 1, when the page keeps one: made once, so a reset boots with what
+// the machine last wrote there, not what the page had at load.
+let persistDrive = null;
 let vm = null, bootMsg = null, gui = null, snd = null, ring = null, ringStalls = 0, handoffMs = 0;
 // One producer per shared framebuffer for the Worker's whole life: which
 // slot is ours is state the page's side depends on, and a reset must not
@@ -136,6 +141,13 @@ function start(msg) {
   const files = msg.lazy ? new LazyFiles(msg.lazy.base, msg.lazy.index)
     : new Map((msg.disk || []).map(([n, b]) => [n, b instanceof Uint8Array ? b : new Uint8Array(b)]));
   const drives = [{ files, writable: false, sink: null }];
+  if (msg.persist) {
+    if (!persistDrive) persistDrive = {
+      files: new Map(msg.persist.files), writable: true,
+      sink: (name, bytes) => { const b = bytes.slice(); postMessage({ type: 'persist', name, bytes: b }, [b.buffer]); },
+    };
+    drives.push(persistDrive);
+  }
   vm = createMachine({
     arenaMb: msg.arenaMb || 64, drives, mhz: msg.mhz || 20, gui, snd, fpu: msg.fpu,
     onByte: b => { out.push(b); if (out.length >= 4096) flush(); },

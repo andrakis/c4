@@ -8,6 +8,7 @@
 //     terminal: document.getElementById('terminal'),   // optional
 //     display:  document.getElementById('display'),    // optional <canvas>
 //     snd:      true,                                   // optional: a sound card, played here
+//     persist:  'c4ix',                                 // optional: drive 1, kept in IndexedDB under this name
 //   });
 //   vm.on('out', bytes => ...);   vm.on('status', s => ...);   vm.on('exit', e => ...)
 //   vm.write('ps\n');  vm.signal(2);  vm.pause();  vm.resume();  vm.reset();
@@ -20,6 +21,7 @@
 import { Terminal } from '../src/c4bb/web/panels.js';
 import { Display } from './display.js';
 import { makeShared } from './shared.js';
+import { MediaStore, indexedDbBackend } from '../src/c4bb/web/store.js';
 
 async function fetchBytes(url) {
   const r = await fetch(url);
@@ -171,6 +173,19 @@ export class C4M {
       lazy = { base: new URL(opts.disk + '/', location.href).href, index: lazy };
     } else if (opts.disk) disk = await fetchDisk(opts.disk, (n, of) => this.emit('loading', { n, of }));
     const argv = opts.argv || [String(opts.image).split('/').pop()];
+    // Drive 1: what the machine keeps there (C4IX's persist) is kept in
+    // IndexedDB as c4bb's media are (src/c4bb/web/store.js), and given
+    // back at the next boot. opts.persistReset forgets it first. A page
+    // with no IndexedDB (some private windows) simply has no drive 1.
+    let persist = null;
+    if (opts.persist) {
+      try {
+        this.store = this.store || new MediaStore(indexedDbBackend());
+        if (opts.persistReset) await this.store.erase(opts.persist);
+        persist = { files: [...(await this.store.load(opts.persist))] };
+        this.persistName = opts.persist;
+      } catch { persist = null; }
+    }
     // The shared display path, when the page is cross-origin isolated and
     // has a display; opts.shared === false asks for the message path.
     if (this.display && opts.shared !== false && globalThis.crossOriginIsolated && !this.shared) {
@@ -183,6 +198,7 @@ export class C4M {
       mhz: opts.mhz || 20, unpaced: !!opts.unpaced, mbox: opts.mbox | 0, fpu: opts.fpu,
       gui: this.display ? { w: this.display.width, h: this.display.height } : (opts.gui || null),
       snd: !!this.sound,
+      persist,
       shared: this.shared || null,
     };
     this.worker.postMessage(this.bootMsg);
@@ -202,6 +218,10 @@ export class C4M {
       case 'kbd': this.raw = m.raw; this.emit('kbd', m); break;
       case 'display': this.emit('display', m.frames); break;
       case 'snd': if (this.sound) this.sound.play(m.events, m.now); break;
+      case 'persist':
+        if (this.store) this.store.backend.putFile(this.persistName, m.name, m.bytes).then(
+          () => this.emit('persist', { name: m.name, bytes: m.bytes.length }), () => {});
+        break;
       case 'gui': this.emit('resize', m); break;
       case 'exit': this.exited = m; this.emit('exit', m); break;
       case 'error': this.emit('error', m); break;

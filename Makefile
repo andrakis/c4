@@ -2825,8 +2825,8 @@ c4ix-ls.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libc4ix.c4s $(C4IX_SRC)/user/ls.c
 	$(C4RLINK) .c4ix_ls.c4o -l libc4ix.c4s -o $@
 	rm -f .c4ix_ls.pp.c .c4ix_ls.c4o
 
-# tar, gunzip, crc32 and splash link libarc as well as libc4ix
-C4IX_ARC_PROGS := c4ix-tar.c4r c4ix-gunzip.c4r c4ix-crc32.c4r c4ix-splash.c4r
+# tar, gunzip, crc32, splash and persist link libarc as well as libc4ix
+C4IX_ARC_PROGS := c4ix-tar.c4r c4ix-gunzip.c4r c4ix-crc32.c4r c4ix-splash.c4r c4ix-persist.c4r
 $(C4IX_ARC_PROGS): c4ix-%.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libarc.c4l libc4ix.c4l $(C4IX_SRC)/user/%.c
 	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC)/include $(C4IX_SRC)/user/$*.c .c4ix_a_$*.c4o > /dev/null
 	$(C4RLINK) .c4ix_a_$*.c4o libarc.c4l libc4ix.c4l -o $@

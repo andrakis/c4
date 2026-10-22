@@ -330,7 +330,7 @@ static int init_demo(int argc, char **av) {
 int init_main(int argc, int argv) {
     struct task *a, *v;
     char **av;
-    char *shargv[6];
+    char *shargv[8];
     char *vav[3];
     int i, desktop, shargc;
 
@@ -380,9 +380,12 @@ int init_main(int argc, int argv) {
         // stops, and a person at the console wants top gone and the prompt
         // back -- not the desktop gone, with top still clearing the screen
         // over every command they type.
+        // And persist keeps what changes, every minute, where the page
+        // gave it a drive to keep it on (persist.c says nothing if not).
         if (desktop) {
-            shargv[1] = "-e"; shargv[2] = "desktop &"; shargv[3] = "-e"; shargv[4] = "top"; shargv[5] = 0;
-            shargc = 5;
+            shargv[1] = "-e"; shargv[2] = "persist -d 60 &";
+            shargv[3] = "-e"; shargv[4] = "desktop &"; shargv[5] = "-e"; shargv[6] = "top"; shargv[7] = 0;
+            shargc = 7;
         }
         if (!(a = task_spawn(shargv[0], shargc, (int)shargv))) {
             kprintf("init: cannot start '%s'\n", shargv[0]);

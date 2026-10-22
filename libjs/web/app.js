@@ -5,6 +5,7 @@
 //   ?image=URL&disk=URL          any other image and disk instead
 //   ?mhz=N                       how fast the machine runs, paced (default 100)
 //   ?snd=0                       no sound card
+//   ?persist=0 | reset           C4IX's files are not kept between visits / are forgotten first
 //   ?fast                        run as fast as the host can, unpaced
 //   ?fpu=0                       no FPU opcode: floats in software (F3, docs/c4-float.md)
 //   ?mem=MB                      arena size (default 64)
@@ -18,7 +19,7 @@ import { C4M } from '../page.js';
 
 const IMAGES = '../../src/c4bb/images';
 const SYSTEMS = {
-  c4ix: { label: 'C4IX', image: `${IMAGES}/c4ix32.c4r`, disk: `${IMAGES}/disk`, argv: ['c4ix32.c4r', '--desktop'] },
+  c4ix: { label: 'C4IX', image: `${IMAGES}/c4ix32.c4r`, disk: `${IMAGES}/disk`, argv: ['c4ix32.c4r', '--desktop'], persist: 'c4ix' },
   c4ke: { label: 'C4KE', image: `${IMAGES}/c4ke32.c4r`, disk: `${IMAGES}/disk`, argv: ['c4ke32.c4r'] },
   'gui-demo': { label: 'GUI demo (bare machine)', image: `${IMAGES}/gui-demo.c4r`, disk: null, argv: ['gui-demo.c4r'] },
   // Computes every pixel itself, so it claims a faster clock than c4bb's 20 MHz.
@@ -71,6 +72,8 @@ const opts = {
   arenaMb: Number(params.get('mem')) || 64,
   shared: params.get('shared') !== '0',
   snd: params.get('snd') !== '0',
+  persist: params.get('persist') === '0' ? null : sys.persist || null,
+  persistReset: params.get('persist') === 'reset',
 };
 const vm = new C4M(opts);
 window.c4m = vm;

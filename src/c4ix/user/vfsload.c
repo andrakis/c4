@@ -553,7 +553,9 @@ int load_entries() {
 // not) to unpack over / once the entries above exist. The root archive
 // is megabytes of sources and docs, and inflating it is seconds of
 // interpreted work -- too long to hold the console's first prompt for --
-// so each is handed to c4ix-tar in the background and boot carries on.
+// so they are handed to c4ix-persist in the background and boot carries
+// on. It unpacks each in turn, then lays over them what the last
+// session saved, where there is a drive that keeps it (persist.c).
 // The task id is printed: "wait ID" in the shell blocks until it is done.
 // One request fetches the whole archive, where the same files as
 // manifest entries would be a request each.
@@ -576,13 +578,18 @@ static char *itoa10(int v) {
 }
 
 void unpack_archives() {
-    int v, j, st[4], pid, sp;
+    int v, j, n, st[4], pid, sp;
     char *name;
     char **targv;
     char **sargv;
     v = var_lookup("ARCHIVES");
     if (!v) return;
     --v;
+    // one task for them all, as the last session's changes go over the
+    // last of them
+    targv = (char **)ualloc((g_var_wordcount[v] + 3) * sizeof(int));
+    targv[0] = "c4ix-persist.c4r"; targv[1] = "boot";
+    n = 2;
     j = 0;
     while (j < g_var_wordcount[v]) {
         name = g_var_words[v * MAX_WORDS + j];
@@ -591,20 +598,22 @@ void unpack_archives() {
             uprintf("vfsload: archive %s is not on this disk\n", name);
             continue;
         }
-        targv = (char **)ualloc(6 * sizeof(int));
-        targv[0] = "c4ix-tar.c4r"; targv[1] = "x"; targv[2] = "-C"; targv[3] = "/";
-        targv[4] = name; targv[5] = 0;
-        pid = spawn(targv[0], 5, targv);
-        if (pid < 0) { uprintf("vfsload: cannot start c4ix-tar for %s\n", name); continue; }
-        if (!g_wait) { uprintf("vfsload: unpacking %s in the background as task %d\n", name, pid); continue; }
-        uprintf("vfsload: unpacking %s as task %d, and waiting for it\n", name, pid);
-        sargv = (char **)ualloc(4 * sizeof(int));
-        sargv[0] = "c4ix-splash.c4r"; sargv[1] = "-p"; sargv[2] = itoa10(pid); sargv[3] = 0;
-        sp = spawn(sargv[0], 3, sargv);
-        uwait(pid);
-        if (sp > 0) uwait(sp);
-        uprintf("vfsload: %s unpacked\n", name);
+        targv[n] = name;
+        ++n;
     }
+    if (n == 2) return;
+    targv[n] = 0;
+    name = targv[2];
+    pid = spawn(targv[0], n, targv);
+    if (pid < 0) { uprintf("vfsload: cannot start c4ix-persist for %s\n", name); return; }
+    if (!g_wait) { uprintf("vfsload: unpacking %s in the background as task %d\n", name, pid); return; }
+    uprintf("vfsload: unpacking %s as task %d, and waiting for it\n", name, pid);
+    sargv = (char **)ualloc(4 * sizeof(int));
+    sargv[0] = "c4ix-splash.c4r"; sargv[1] = "-p"; sargv[2] = itoa10(pid); sargv[3] = 0;
+    sp = spawn(sargv[0], 3, sargv);
+    uwait(pid);
+    if (sp > 0) uwait(sp);
+    uprintf("vfsload: %s unpacked\n", name);
 }
 
 int main(int argc, char **argv) {

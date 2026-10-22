@@ -28,8 +28,10 @@ because a browser keeps a page silent until it is used. The PC speaker's
 sounds (the menu's "PC Speaker" choice) are silent.
 
 The config file and saved games go beside the game in
-`/usr/games/wolf3d`, as they did on DOS. Like everything else in C4IX
-they last until the page is reloaded.
+`/usr/games/wolf3d`, as they did on DOS. In the browser they are kept
+between visits, with the game's unpacked data, like every other change
+to C4IX's files (docs/c4ix-design.md, "Persistence"), so only the first
+visit unpacks the zip.
 
 ## The first run
 

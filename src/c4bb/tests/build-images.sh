@@ -263,7 +263,7 @@ cp src/c4ke/include/service.h $DISK/
 C4IX_MODS="boot console va host sl4b task sched vfs sys c4ke loader init"
 C4IX_USER="hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt gui b4ke cc"
 # userland that also links libarc (gzip and tar): the root archive's unpacker
-C4IX_ARC_USER="tar gunzip crc32 splash"
+C4IX_ARC_USER="tar gunzip crc32 splash persist"
 # c4sp arena, in cells. 8000000 was a guess with no measurement behind
 # it, and at 21 bytes a cell (32-bit: gc.h/cell.h) that is ~168MB --
 # more than c4bb has (32MB default), so nothing built this way could

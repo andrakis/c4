@@ -110,3 +110,7 @@ DEPS $(OUT)/user/crc32.c4o : src/c4ix/user/crc32.c $(U) src/c4ix/include/archive
 RUN $(LC) src/c4ix/user/crc32.c $(OUT)/user/crc32.c4o
 DEPS $(OUT)/bin/c4ix-crc32.c4r : $(OUT)/user/crc32.c4o $(LIBARC) $(LIBC)
 RUN c4rlink $(OUT)/user/crc32.c4o -l $(LIBARC) -l $(LIBC) -o $(OUT)/bin/c4ix-crc32.c4r
+DEPS $(OUT)/user/persist.c4o : src/c4ix/user/persist.c $(U) src/c4ix/include/archive.h
+RUN $(LC) src/c4ix/user/persist.c $(OUT)/user/persist.c4o
+DEPS $(OUT)/bin/c4ix-persist.c4r : $(OUT)/user/persist.c4o $(LIBARC) $(LIBC)
+RUN c4rlink $(OUT)/user/persist.c4o -l $(LIBARC) -l $(LIBC) -o $(OUT)/bin/c4ix-persist.c4r

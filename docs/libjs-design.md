@@ -141,8 +141,15 @@ message path.
 - **Page to worker**: `boot`, `key`, `input`, `signal`, `eof`, `gui`,
   `pause`, `resume`, `reset`, `peek`, `poke`.
 - **Worker to page**: `out`, `kbd`, `display`, `gui`, `snd` (the sound
-  card's events, when `boot` asked for one with `snd: true`), `status`,
-  `exit`, `error`, `reply` (the answer to a `peek` or `poke`).
+  card's events, when `boot` asked for one with `snd: true`), `persist`
+  (a file closed on drive 1), `status`, `exit`, `error`, `reply` (the
+  answer to a `peek` or `poke`).
+- **Drive 1.** `C4M.boot({ persist: NAME })` gives the machine a writable
+  host drive 1, whose files the page keeps in IndexedDB under NAME (c4bb's
+  `src/c4bb/web/store.js`, as one medium) and passes back at the next
+  boot. C4IX keeps its changed files there (docs/c4ix-design.md,
+  "Persistence"). The C4IX page uses `c4ix`. `?persist=0` gives no drive,
+  and `?persist=reset` forgets what was kept first.
 - **The run loop** runs a slice (about 1M instructions, capped near 8 ms),
   flushes output, then:
   - on `sleep`, waits the requested time;

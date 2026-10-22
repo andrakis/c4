@@ -42,6 +42,7 @@ detail behind it. Each doc is one of three kinds:
 | [c4ix-cpu.md](c4ix-cpu.md) | tracker (done) | Where C4IX's cycles go: the profiler, CPU accounting, the idle task, and the eleven steps that made it cheaper |
 | [c4ix-wolf3d.md](c4ix-wolf3d.md) | design | Wolfenstein 3D in a desktop window: Wolf4SDL by c4lc, the shareware zip unpacked at first run, 8-bit frames through `GUI_BLIT8`, sound through libjs's sound card, and how fast |
 | [c4ix-smp.md](c4ix-smp.md) | plan | Multiprocessing: libjs running several CPUs (simulated, and on workers sharing memory with `Atomics`), a CPU-local window for shared libraries' data, and C4IX on them under one kernel lock |
+| [c4-explorer.md](c4-explorer.md) | plan | Source maps in C4R, Code Explorer (C source beside the VM code it became), windowed programs on the C4IX desktop with the IDE as one, and Wolfenstein 3D as an optional repository |
 | [busybox-port.md](busybox-port.md) | tracker | Busybox compiled by c4lc for C4IX: the measured compiler, kernel and libc gaps, and the order of work |
 | [c4dos-design.md](c4dos-design.md) | reference | C4DOS: the trap-free DOS, its API table and floppies |
 | [climbing-the-ladder.md](climbing-the-ladder.md) | reference | The ladder by hand on the breadboard: C4DOS → C4KE → C4IX, each built by the one before |

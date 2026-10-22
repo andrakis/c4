@@ -2,8 +2,13 @@
 //
 // Applications: the desktop's windows (Close, Show, New Task).
 // Processes: every C4IX task, from utaskinfo, with the CPU share each
-// took over the last second (Kill). Performance: a CPU gauge and a
-// scrolling history.
+// took over the last second and the memory it holds (Kill). Performance:
+// a CPU gauge and a scrolling history, and the memory in use and free.
+//
+// Memory is the snapshot's too: a task's image, stack, library data and
+// what it allocated, and the machine's heap as the host counts it. What
+// no task holds -- the files, which are RAM, the shared libraries' code,
+// the kernel's own tables -- is System's.
 //
 // CPU use is cpustat.h's, the same as top's: each second, one snapshot of
 // the kernel's accounting, and the share of the machine each task took
@@ -22,11 +27,14 @@ struct tasks {
     int n;                                     // rows: idle, System, then the tasks
     int id[MAXP], state[MAXP], privs[MAXP], sys[MAXP], cpu[MAXP];
     int ival[MAXP];                            // Interval: thousands of cycles in the last sample
+    int mem[MAXP];                             // bytes held; -1 for the idle row, which shows none
+    int heap, heapused;                        // the heap, when the host says (else 0)
     long long time[MAXP];                      // CPU Time, in cycles
     char name[MAXP * NAMEW];
     struct cpusample s[2];                     // this snapshot and the one before
     int cur;                                   // which of s is the latest
     int usage, hist[HIST], nhist;
+    int mhist[HIST], nmhist;                   // the heap's use, percent, each sample
     int sampled;
     int uptime0;
 };
@@ -36,11 +44,12 @@ static char buf[160];
 static char *tabs[3];
 static int pct[CPU_MAXT];
 
-static int row(struct tasks *t, int id, char *name, int privs, int state, int sys, int cpu, int ival, long long time) {
+static int row(struct tasks *t, int id, char *name, int privs, int state, int sys, int cpu, int ival, long long time, int mem) {
     int k;
     k = t->n;
     t->id[k] = id; t->privs[k] = privs; t->state[k] = state; t->sys[k] = sys; t->cpu[k] = cpu;
     t->ival[k] = ival;
+    t->mem[k] = mem;
     t->time[k] = time;
     ui_cpy(t->name + k * NAMEW, name);
     t->name[k * NAMEW + NAMEW - 1] = 0;
@@ -51,7 +60,7 @@ static int row(struct tasks *t, int id, char *name, int privs, int state, int sy
 static void sample(struct tasks *t) {
     struct cpusample *a, *b;
     struct cpustat_task *r;
-    int k, sys, nsys, kival;
+    int k, sys, nsys, kival, tmem;
     long long ktime;
 
     a = &t->s[t->cur];
@@ -70,8 +79,13 @@ static void sample(struct tasks *t) {
     if (k >= 0) {
         r = &b->t[k];
         row(t, r->id, "idle", 0, r->state, r->nsyscalls, pct[k],
-            t->sampled ? cpu_kdelta(a, b, k, 0) + cpu_kdelta(a, b, k, 1) : 0, r->user + r->kernel);
+            t->sampled ? cpu_kdelta(a, b, k, 0) + cpu_kdelta(a, b, k, 1) : 0, r->user + r->kernel, 0 - 1);
     }
+    t->heap = b->h.heap;
+    t->heapused = b->h.heapused;
+    tmem = 0;
+    k = 0;
+    while (k < b->h.ntasks) { tmem = tmem + b->t[k].mem; ++k; }
     ktime = b->h.gone_kernel;
     nsys = 0;
     kival = 0;
@@ -84,18 +98,25 @@ static void sample(struct tasks *t) {
         }
         ++k;
     }
-    row(t, -1, "System", 0, TS_RUNNING, nsys, sys, kival, ktime);
+    // System holds what no task does, where the heap's use is known
+    row(t, -1, "System", 0, TS_RUNNING, nsys, sys, kival, ktime,
+        t->heapused > tmem ? t->heapused - tmem : 0 - 1);
     k = 0;
     while (k < b->h.ntasks) {
         r = &b->t[k];
         if (r->id != b->h.idle)
-            row(t, r->id, r->name, r->privs, r->state, r->nsyscalls, pct[k], t->sampled ? cpu_kdelta(a, b, k, 0) : 0, r->user);
+            row(t, r->id, r->name, r->privs, r->state, r->nsyscalls, pct[k], t->sampled ? cpu_kdelta(a, b, k, 0) : 0, r->user, r->mem);
         ++k;
     }
     t->cur = 1 - t->cur;
     if (t->sampled) {
         if (t->nhist < HIST) { t->hist[t->nhist] = t->usage; ++t->nhist; }
         else { k = 0; while (k < HIST - 1) { t->hist[k] = t->hist[k + 1]; ++k; } t->hist[HIST - 1] = t->usage; }
+    }
+    if (t->heap > 0) {
+        k = (int)(((long long)t->heapused * 100) / t->heap);
+        if (t->nmhist < HIST) { t->mhist[t->nmhist] = k; ++t->nmhist; }
+        else { sys = 0; while (sys < HIST - 1) { t->mhist[sys] = t->mhist[sys + 1]; ++sys; } t->mhist[HIST - 1] = k; }
     }
     t->sampled = 1;
     if (t->sel >= t->n) t->sel = t->n - 1;
@@ -107,7 +128,7 @@ int tasks_open() {
     // one System Monitor at a time: another request brings it forward
     w = win_first();
     while (w) { if (w->used && w->kind == K_TASKS) { win_raise(w->id); return w->id; } w = w->next; }
-    i = win_open(K_TASKS, "System Monitor", 490, 440);
+    i = win_open(K_TASKS, "System Monitor", 570, 440);   // room for Memory
     if (i < 0) return i;
     w = win_get(i);
     S(w)->tab = 1;
@@ -155,8 +176,26 @@ static char *state_name(int s) {
 
 // ---- drawing ----------------------------------------------------------------------
 
-static int widths[7];
-static char *labels[7];
+static int widths[8];
+static char *labels[8];
+
+// bytes as the Memory column shows them: "348 K", or "12.4 M"
+static void kbytes(char *out, int b) {
+    int k, n;
+    k = (b + 1023) / 1024;
+    if (k < 10000) { ui_num_commas(out, k); ui_cat(out, " K"); return; }
+    ui_num_commas(out, k / 1024);
+    n = ui_len(out);
+    out[n] = '.'; out[n + 1] = '0' + ((k % 1024) * 10) / 1024; out[n + 2] = ' '; out[n + 3] = 'M'; out[n + 4] = 0;
+}
+// megabytes to one place, for the totals: "16.6"
+static void mbytes(char *out, int b) {
+    int n, tenths;
+    tenths = (int)(((long long)b * 10 + 524288) / 1048576);
+    ui_num_commas(out, tenths / 10);
+    n = ui_len(out);
+    out[n] = '.'; out[n + 1] = '0' + tenths % 10; out[n + 2] = 0;
+}
 
 // thousands of cycles, as Interval shows them: "850k", or "12.3M"
 static void kcycles(char *out, int kc) {
@@ -201,11 +240,11 @@ static void draw_apps(struct win *me, struct tasks *t, int ox, int oy, int cw, i
 static void draw_procs(struct tasks *t, int ox, int oy, int cw, int ch) {
     int k, y, x, rows, fg;
     list_box(ox + 8, oy + PAGE_Y + 10, cw - 16, ch - PAGE_Y - 60);
-    widths[0] = 120; widths[1] = 40; widths[2] = 36; widths[3] = 66; widths[4] = 74; widths[5] = 60;
-    widths[6] = cw - 20 - 396;
+    widths[0] = 120; widths[1] = 40; widths[2] = 36; widths[3] = 66; widths[4] = 74; widths[5] = 70;
+    widths[6] = 60; widths[7] = cw - 20 - 466;
     labels[0] = "Name"; labels[1] = "PID"; labels[2] = "CPU"; labels[3] = "Interval";
-    labels[4] = "CPU Time"; labels[5] = "Syscalls"; labels[6] = "State";
-    ui_header(ox + 10, oy + PAGE_Y + 12, widths, labels, 7);
+    labels[4] = "CPU Time"; labels[5] = "Memory"; labels[6] = "Syscalls"; labels[7] = "State";
+    ui_header(ox + 10, oy + PAGE_Y + 12, widths, labels, 8);
     rows = (ch - PAGE_Y - 60 - 26) / ROW_H;
     if (t->sel < t->top) t->top = t->sel;
     if (t->sel >= t->top + rows) t->top = t->sel - rows + 1;
@@ -226,7 +265,9 @@ static void draw_procs(struct tasks *t, int ox, int oy, int cw, int ch) {
         if (t->time[k] >= 1000000000) { ui_num_commas(buf, (int)(t->time[k] / 1000000)); ui_cat(buf, "M"); }
         else { ui_num_commas(buf, (int)(t->time[k] / 1000)); ui_cat(buf, "k"); }
         d_text(x + widths[4] - 8 - ui_len(buf) * 6, y + 1, fg, F_SANS, buf); x = x + widths[4];
-        ui_num_commas(buf, t->sys[k]); d_text(x + widths[5] - 8 - ui_len(buf) * 6, y + 1, fg, F_SANS, buf); x = x + widths[5];
+        buf[0] = 0; if (t->mem[k] >= 0) kbytes(buf, t->mem[k]);
+        d_text(x + widths[5] - 8 - ui_len(buf) * 6, y + 1, fg, F_SANS, buf); x = x + widths[5];
+        ui_num_commas(buf, t->sys[k]); d_text(x + widths[6] - 8 - ui_len(buf) * 6, y + 1, fg, F_SANS, buf); x = x + widths[6];
         d_text(x + 4, y + 1, fg, F_SANS, state_name(t->state[k]));
         y = y + ROW_H;
         ++k;
@@ -252,24 +293,42 @@ static void gauge(int x, int y, int w, int h, int pct) {
     d_text(x + w / 2 - ui_len(buf) * 3, y + h - 15, C_GREEN, F_SANS, buf);
 }
 
-static void graph(struct tasks *t, int x, int y, int w, int h) {
+// a minute of percentages, newest at the right: CPU use, or memory's
+static void graph(int *hist, int nhist, int x, int y, int w, int h) {
     int k, gx, px, py, qx, qy;
     d_rect(x, y, w, h, C_DARK);
     k = 1;
     while (k < 5) { d_rect(x, y + (h * k) / 5, w, 1, 0x006000); ++k; }
-    gx = (t->nhist * 12) % 12;
+    gx = (nhist * 12) % 12;
     k = w - 1 - gx;
     while (k > 0) { d_rect(x + k, y, 1, h, 0x006000); k = k - 12; }
-    if (t->nhist < 2) return;
+    if (nhist < 2) return;
     k = 1;
-    while (k < t->nhist) {
-        px = x + w - 1 - (t->nhist - k) * (w - 2) / (HIST - 1);
-        qx = x + w - 1 - (t->nhist - 1 - k) * (w - 2) / (HIST - 1);
-        py = y + h - 2 - (t->hist[k - 1] * (h - 4)) / 100;
-        qy = y + h - 2 - (t->hist[k] * (h - 4)) / 100;
+    while (k < nhist) {
+        px = x + w - 1 - (nhist - k) * (w - 2) / (HIST - 1);
+        qx = x + w - 1 - (nhist - 1 - k) * (w - 2) / (HIST - 1);
+        py = y + h - 2 - (hist[k - 1] * (h - 4)) / 100;
+        qy = y + h - 2 - (hist[k] * (h - 4)) / 100;
         d_line(px, py, qx, qy, C_GREEN);
         ++k;
     }
+}
+
+// The heap: a bar of what is in use, and the figures. A host that does
+// not say how big its heap is (native c4m) gets "not known".
+static void memory(struct tasks *t, int x, int y, int w, int h) {
+    int fill;
+    ui_group(x, y, w, h, "Memory");
+    if (t->heap <= 0) { d_text(x + 12, y + 20, C_DARK, F_SANS, "not known on this host"); return; }
+    d_rect(x + 12, y + 20, w - 24, 12, C_DARK);
+    fill = (int)(((long long)(w - 26) * t->heapused) / t->heap);
+    d_rect(x + 13, y + 21, fill, 10, C_GREEN);
+    d_text(x + 12, y + 40, C_DARK, F_SANS, "In use (MB)");
+    mbytes(buf, t->heapused); d_text(x + w - 16 - ui_len(buf) * 6, y + 40, C_DARK, F_SANS, buf);
+    d_text(x + 12, y + 56, C_DARK, F_SANS, "Free (MB)");
+    mbytes(buf, t->heap - t->heapused); d_text(x + w - 16 - ui_len(buf) * 6, y + 56, C_DARK, F_SANS, buf);
+    d_text(x + 12, y + 72, C_DARK, F_SANS, "Total (MB)");
+    mbytes(buf, t->heap); d_text(x + w - 16 - ui_len(buf) * 6, y + 72, C_DARK, F_SANS, buf);
 }
 
 static void draw_perf(struct tasks *t, int ox, int oy, int cw, int ch) {
@@ -279,8 +338,8 @@ static void draw_perf(struct tasks *t, int ox, int oy, int cw, int ch) {
     ui_group(ox + 8, oy + PAGE_Y + 8, gw + 16, 130, "CPU Usage");
     gauge(ox + 16, oy + PAGE_Y + 24, gw, 106, t->usage);
     ui_group(ox + gw + 34, oy + PAGE_Y + 8, cw - gw - 42, 130, "CPU Usage History");
-    graph(t, ox + gw + 42, oy + PAGE_Y + 24, cw - gw - 58, 106);
-    ui_group(ox + 8, oy + PAGE_Y + 150, cw - 16, 90, "Totals");
+    graph(t->hist, t->nhist, ox + gw + 42, oy + PAGE_Y + 24, cw - gw - 58, 106);
+    ui_group(ox + 8, oy + PAGE_Y + 150, (cw - 24) / 2, 90, "Totals");
     d_text(ox + 20, oy + PAGE_Y + 170, C_DARK, F_SANS, "Tasks");
     ui_num(buf, t->n); d_text(ox + 150, oy + PAGE_Y + 170, C_DARK, F_SANS, buf);
     d_text(ox + 20, oy + PAGE_Y + 188, C_DARK, F_SANS, "Open windows");
@@ -288,6 +347,12 @@ static void draw_perf(struct tasks *t, int ox, int oy, int cw, int ch) {
     ui_num(buf, secs); d_text(ox + 150, oy + PAGE_Y + 188, C_DARK, F_SANS, buf);
     d_text(ox + 20, oy + PAGE_Y + 206, C_DARK, F_SANS, "Up for (machine seconds)");
     ui_num_commas(buf, (__time() - t->uptime0) / 1000); d_text(ox + 180, oy + PAGE_Y + 206, C_DARK, F_SANS, buf);
+    memory(t, ox + 16 + (cw - 24) / 2, oy + PAGE_Y + 150, (cw - 24) / 2, 90);
+    // the page ends at ch: what is under the totals, if there is room
+    if (t->heap > 0 && ch - PAGE_Y > 320) {
+        ui_group(ox + 8, oy + PAGE_Y + 250, cw - 16, ch - PAGE_Y - 258, "Memory Usage History");
+        graph(t->mhist, t->nmhist, ox + 16, oy + PAGE_Y + 266, cw - 32, ch - PAGE_Y - 282);
+    }
 }
 
 void tasks_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
@@ -307,6 +372,11 @@ void tasks_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     d_text(ox + 8, oy + ch - 18, C_DARK, F_SANS, buf);
     ui_cpy(buf, "CPU Usage: "); ui_num(buf + ui_len(buf), t->usage); ui_cat(buf, "%");
     d_text(ox + 130, oy + ch - 18, C_DARK, F_SANS, buf);
+    if (t->heap > 0) {
+        ui_cpy(buf, "Memory: "); mbytes(buf + ui_len(buf), t->heapused);
+        ui_cat(buf, " MB of "); mbytes(buf + ui_len(buf), t->heap); ui_cat(buf, " MB");
+        d_text(ox + 250, oy + ch - 18, C_DARK, F_SANS, buf);
+    }
 }
 
 // ---- input --------------------------------------------------------------------------

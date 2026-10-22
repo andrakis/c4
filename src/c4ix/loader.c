@@ -58,6 +58,7 @@ struct c4r_mod {
     char *dtmpl;                  // the data as the file has it, in buf
     int datalen, memsz;
     int pic;                      // -fpic: refers to __c4_dbase
+    int codelen;                  // code words
     int shared;                   // its code is the cache's: neither relink nor free it
     int *slot;                    // pic: the word that holds the task's data base
 };
@@ -262,6 +263,7 @@ static int mod_read(char *path, struct c4r_mod *m) {
     m->code = code;
     m->data = data;
     m->entry = entry;
+    m->codelen = codelen;
     m->datalen = datalen;
     m->memsz = memsz;
     m->pic = mod_has(m, "__c4_dbase");
@@ -584,6 +586,16 @@ int c4r_load(char *path, struct c4r_image *img) {
     img->ndes = ndes;
     img->libs = (int)libs;
     img->nlibs = n - 1;
+    // What the task holds, as the heap counts it: each segment, the lists
+    // and its share of the libraries -- their data; shared code is the
+    // cache's, every task's at once
+    img->bytes = (ncons + ndes + 3 * (n - 1)) * sizeof(int);
+    k = 0;
+    while (k < n) {
+        if (!(mods + k)->shared) img->bytes = img->bytes + ((mods + k)->codelen + 1) * sizeof(int);
+        img->bytes = img->bytes + (mods + k)->memsz + 8;
+        ++k;
+    }
     k = 0;
     while (k < n) { if (!(mods + k)->shared) free((mods + k)->buf); ++k; }
     free(mods);
@@ -632,6 +644,7 @@ struct task *task_spawn_priv(char *path, int argc, int argv, int privs) {
     t->img_ndes = img.ndes;
     t->img_libs = img.libs;
     t->img_nlibs = img.nlibs;
+    t->img_bytes = img.bytes;
     t->privs = privs;
     return t;
 }

@@ -138,8 +138,18 @@ tabs); a message box; resizable windows (drag the bottom-right corner).
   in Text Editor. New Folder, Delete (confirmed), Rename.
 - **System Monitor** (Ctrl+Shift+Esc too): Applications (the desktop's
   windows, Close, Show), Processes (every task with PID, CPU %,
-  CPU time in cycles, syscalls and state, Kill), Performance (a
-  CPU gauge and a scrolling history graph, totals).
+  CPU time in cycles, the memory it holds, syscalls and state, Kill),
+  Performance (a CPU gauge and a scrolling history graph, totals, and
+  the memory in use, free and in all, with its own history). The status
+  bar says the memory in use on every page.
+  - A task's memory is its image (code, data, the constructor and
+    destructor lists), its stack, its copies of the shared libraries'
+    data, and what it allocated (`ualloc`, or `malloc` behind protected
+    mode). The System row holds the rest of what is in use: the files,
+    which are RAM, the shared libraries' code, and the kernel's own.
+  - The heap's size and use come from the host. libjs counts its heap
+    (`HEAP_USED`, docs/c4bb-design.md); on native c4m the totals say
+    "not known on this host".
 - **Text Editor**: open, edit and save text files in C4IX's filesystem;
   keyboard editing, mouse placement, scroll bar and wheel.
 - **Calculator** (`calc.c`), in three modes:

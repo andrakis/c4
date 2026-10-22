@@ -28,6 +28,9 @@ enum {
 // writes events, into a task's memory. task.c reads it, and clears it
 // when the memory goes with a task that never detached.
 enum { C4IX_GUI_RING = 0x410 };
+// The heap's extent and use (c4bb's HEAP_BASE and HEAP_END, libjs's
+// HEAP_USED, src/c4bb/sim/devices.js), for the CPU snapshot.
+enum { C4IX_HEAP_BASE = 0x144, C4IX_HEAP_END = 0x148, C4IX_HEAP_USED = 0x1c0, C4IX_I_C4MJS = 8 };
 
 // c4m trap machinery numbers (c4m.c enums), used by sched.c on the
 // c4m host only.
@@ -329,6 +332,7 @@ struct task {
     int  sv_pc;                // SV_REGS: pc    SV_FRAME: saved pc value
     int  stack;                // malloc'd stack base, 0 for the kernel task
     int  stack_words;          // its size, C4IX_STACK_WORDS unless SYS_STACK asked
+    int  img_bytes;            // what its image took to load: code, data, lists, library data
     int  spawn_stack;          // SYS_STACK: bytes for the tasks this one spawns, 0 default
     int  img_code;             // loaded .c4r segments to free on reap,
     int  img_data;             //   0 for kernel-code tasks
@@ -389,11 +393,14 @@ struct cpustat {
     int idle;                  // the idle task's id: its cycles are idle time
     long long gone_user;       // the cycles of tasks already reaped
     long long gone_kernel;
+    int heap;                  // the machine's heap, bytes; 0 if the host does not say
+    int heapused;              // ... and the bytes of it in use
 };
 struct cpustat_task {
     int id, parent, state, privs, nsyscalls;
     long long user;            // cycles it ran outside the trap handler
     long long kernel;          // cycles the handler spent on it
+    int mem;                   // bytes it holds: image, stack, library data, allocations
     char name[TASK_NAME_MAX];
 };
 
@@ -556,6 +563,7 @@ struct c4r_image {
     int ndes;
     int libs;                  // malloc'd int[3 * nlibs]: each library's code (0 if shared), data, slot
     int nlibs;
+    int bytes;                 // all of the above, as the heap counts it (shared code not)
 };
 
 int          c4r_load(char *path, struct c4r_image *img);

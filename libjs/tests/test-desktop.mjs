@@ -593,6 +593,7 @@ until(() => has(/spin: tick 1\//), 1500);
 key('ESC', 3, 27);                                             // Ctrl+Shift+Esc
 check(until(() => has('System Monitor') && has('Name')), 'Ctrl+Shift+Esc opens System Monitor on Processes', screen());
 check(until(() => has(/^(c4ix-)?desktop/) && has(/^(c4ix-spin\.c4r|spin) *$/) && has(/^CPU Usage: \d+%$/), 600), 'it lists the tasks, spin among them, with CPU usage', frame.filter(t => /c4ix|CPU|Image|boot|init|spin/.test(t.s)).map(t => t.s.trim()).join(' | '));
+check(until(() => has('Memory') && has(/^[\d,]+ K$/)), 'each task shows the memory it holds');
 check(has('idle') && has(/^System *$/), 'and, as NT does, idle and System', frame.filter(t => /System/.test(t.s)).map(t => t.s.trim()).join(' | '));
 check(until(() => has('Interval') && frame.some(t => /^[0-9,]+\.[0-9]M$/.test(t.s.trim())), 600), 'its Interval column shows what a task ran in the last second, spin in millions', frame.filter(t => /[0-9]M$|[0-9]k$|Interval/.test(t.s)).map(t => t.s.trim()).join(' | '));
 check(!has(/^(c4sc|b4ke)(\.c4r)? *$/), 'the cancelled build left nothing behind', frame.filter(t => /c4sc|b4ke/.test(t.s)).map(t => t.s).join(' | '));
@@ -603,6 +604,10 @@ key('y');
 check(until(() => !has(/^(c4ix-spin\.c4r|spin) *$/), 600), 'and ends it', screen());
 clickText('Load');
 check(until(() => has('CPU Usage History') && has('Totals')), 'the Performance tab shows the gauge and the history');
+// and the memory: the heap's use, free and size, and its history; the
+// status bar says it on every page
+check(until(() => has('Memory Usage History') && has('In use (MB)') && has('Free (MB)') && has(/^Memory: [\d.]+ MB of [\d.]+ MB$/)),
+      'it shows the memory in use and free', frame.filter(t => /Memory|MB/.test(t.s)).map(t => t.s.trim()).join(' | '));
 clickText('Programs');
 check(until(() => has('Status') && find('Running').length >= 3), 'the Applications tab lists the windows');
 

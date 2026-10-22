@@ -134,6 +134,13 @@ an idle desktop showed 45% busy.
   task's record and the header, all in one trap. System Monitor used to
   build its sample from one `SYS_TASKINFO` call per task, which was
   O(n^2) and not atomic.
+  - Memory too (2026-10-22): each record's `mem` is the bytes the task
+    holds -- its image (`c4r_load`'s count, in `img_bytes`), its stack,
+    and its allocations, summed from its `ublocks` list with their
+    headers. The header's `heap` and `heapused` are the machine heap's
+    size and use, read from `HEAP_BASE`/`HEAP_END` and libjs's
+    `HEAP_USED`, and 0 where the host does not announce them
+    (`C4I_C4MJS`). System Monitor shows both.
 - **The shares** (`src/c4ix/include/cpustat.h`, shared by top and Task
   Manager) are weighed by time. In an interval of `ms` milliseconds the
   machine was awake for `ms - nap`, and that part is divided among the

@@ -87,6 +87,10 @@ export const UART_TXLEN  = 0x1b0;  // w: emit N bytes from it -> N written
 export const MBOX_BASE = 0x1b4;    // r: region base address (0 = not fitted)
 export const MBOX_LEN  = 0x1b8;    // r: region length in bytes
 export const MBOX_BELL = 0x1bc;    // w: guest->host doorbell (value to onDoorbell)
+// The heap's bytes in use: what MALC and RALC have handed out and FREE
+// has not had back, where the host keeps the heap (libjs's heap.js). 0
+// where it does not. Announced by C4I_C4MJS, never probed.
+export const HEAP_USED = 0x1c0;    // r
                                    // r: host->guest interrupts pending, read-to-clear
 
 // c4_info() capability bits (c4m.c:206)
@@ -400,6 +404,7 @@ export class Devices {
       case OPNAME:     return this.opnameResult | 0;
       case HEAP_BASE:  return this.heapBase | 0;
       case HEAP_END:   return this.heapEnd | 0;
+      case HEAP_USED:  return this.machine && this.machine.heap ? this.machine.heap.used | 0 : 0;
       case INFO_REG: {
         // mirrors native c4_info() | TRAPH (c4m.c:1033, 1814)
         const m = this.machine;

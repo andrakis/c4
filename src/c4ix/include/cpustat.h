@@ -1,7 +1,8 @@
 // cpustat.h -- C4IX's CPU accounting, as top and System Monitor read it
 // (docs/c4ix-cpu.md). Include after c4ix_user.h.
 //
-// ucpustat copies out one snapshot of every task, taken in one trap. A
+// ucpustat copies out one snapshot of every task, taken in one trap,
+// with the bytes each holds and the machine heap's size and use. A
 // task's cycles are two counts: `user`, what it ran itself, and `kernel`,
 // what the kernel spent on its syscalls and switches -- which is shown as
 // System, not against the program. The idle task's cycles are idle time,
@@ -25,11 +26,14 @@ struct cpustat {
     int idle;                  // the idle task's id
     long long gone_user;       // cycles of tasks already reaped
     long long gone_kernel;
+    int heap;                  // the machine's heap in bytes, and how much of it is
+    int heapused;              // in use; both 0 where the host does not say
 };
 struct cpustat_task {
     int id, parent, state, privs, nsyscalls;
     long long user;
     long long kernel;
+    int mem;                   // bytes it holds: image, stack, library data, allocations
     char name[CPUSTAT_NAME];
 };
 

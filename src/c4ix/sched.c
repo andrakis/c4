@@ -93,6 +93,17 @@ void sched_retire(struct task *t) {
 
 // The snapshot behind System Monitor and top: one trap, so nothing runs
 // between the first record and the last.
+// The bytes a task holds: its image, its stack, and what it allocated
+// (its ublocks, each with its header, task.c)
+static int task_mem(struct task *t) {
+    int b, *u;
+    b = t->img_bytes;
+    if (t->stack) b = b + t->stack_words * sizeof(int);
+    u = (int *)t->ublocks;
+    while (u) { b = b + u[2] + 4 * sizeof(int); u = (int *)u[0]; }
+    return b;
+}
+
 int sched_cpustat(struct cpustat *h, struct cpustat_task *r, int max) {
     struct task *t;
     struct cpustat_task *p;
@@ -110,6 +121,7 @@ int sched_cpustat(struct cpustat *h, struct cpustat_task *r, int max) {
         p->nsyscalls = t->nsyscalls;
         p->user = t->ucycles;
         p->kernel = t->kcycles;
+        p->mem = task_mem(t);
         i = 0;
         while (i < TASK_NAME_MAX) { p->name[i] = t->name[i]; ++i; }
         ++n;
@@ -121,6 +133,13 @@ int sched_cpustat(struct cpustat *h, struct cpustat_task *r, int max) {
     h->idle = idle_task ? idle_task->id : -1;
     h->gone_user = acct_gone_user;
     h->gone_kernel = acct_gone_kernel;
+    // the heap, where the host says (libjs: ANNOUNCED, so never probed)
+    h->heap = 0;
+    h->heapused = 0;
+    if (host_has(C4IX_I_C4MJS)) {
+        h->heap = *(int *)C4IX_HEAP_END - *(int *)C4IX_HEAP_BASE;
+        h->heapused = *(int *)C4IX_HEAP_USED;
+    }
     return n;
 }
 

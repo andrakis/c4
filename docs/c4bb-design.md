@@ -104,6 +104,9 @@ unchanged by `make test-c4ix`).
                 C4I_MBOX 0x2000 announces it)
     0x1BC MBOX_BELL    write: guest->host doorbell; read: host->guest
                 interrupts pending (read-to-clear)
+    0x1C0 HEAP_USED    read: the heap's bytes in use, where the host keeps
+                the heap (libjs's heap.js); 0 otherwise. libjs only
+                (C4I_C4MJS); C4IX's System Monitor shows it
 
 This list is the original set plus the UART block write and the mailbox.
 The registers added for storage and clocks since -- the drive selector,

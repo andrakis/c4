@@ -700,10 +700,19 @@
 					(define angle (if (= (length hn) 4) (= (index hn 3) 1) false))
 					(list (pp:include (pp:val hn) angle rest) skip))
 			(if (= name "") (list rest skip)          ;; gcc's `# 12 "f"` markers
-			(if (= name "pragma") (list rest skip)
+			(if (= name "pragma") (list (pp:pragma body rest) skip)
 			(if (= name "error") (pp:die "#error")
 			(if (= name "line") (list rest skip)
 			(pp:die (+ "unknown directive: #" name)))))))))))))))))))))
+
+;; #pragma pack(...) goes on to the parser as a PragmaPack token and the
+;; rest of its line, as the lexer leaves it in a source gcc -E has been
+;; through (p:pragmapack, M9). Every other pragma is dropped.
+(define pp:pragma (lambda (body rest)
+	(if (empty? body) rest
+	(if (= (+ "" (pp:val (head body))) "pack")
+		(pp:cons (list 'PragmaPack 0 (pp:line (head body))) (pp:append (tail body) rest))
+	rest))))
 
 (define pp:go (lambda (toks skip acc)
 	(if (empty? toks) (pp:reverse acc)

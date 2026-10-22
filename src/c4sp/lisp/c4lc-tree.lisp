@@ -855,7 +855,7 @@
 	(begin
 		(define d (head ds))
 		(next t:cands (tail ds) taken
-			(if (= (head d) 'func) (t:cand d taken acc) acc))))))
+			(if (= (head d) 'func) (if (t:sparams? (index d 3)) acc (t:cand d taken acc)) acc))))))
 
 ;; ---- the rewrite ----
 
@@ -1124,7 +1124,16 @@
 	(begin
 		(define d (head ds))
 		(next t:cands4 (tail ds) taken
-			(if (= (head d) 'func) (t:cand4 d taken acc) acc))))))
+			(if (= (head d) 'func) (if (t:sparams? (index d 3)) acc (t:cand4 d taken acc)) acc))))))
+;; a struct passed by value (M9): the callee changes a copy, and a splice
+;; would hand it the caller's own struct to change
+(define t:sparams? (lambda (ps)
+	(if (empty? ps) false
+	(begin
+		(define ty (head (head ps)))
+		(if (if (>= ty 1024) (if (< ty 1025024) (= 0 (- (- ty 1024) (* 64 (/ (- ty 1024) 64)))) false) false)
+			true
+		(next t:sparams? (tail ps)))))))
 
 ;; ---- renaming ----
 

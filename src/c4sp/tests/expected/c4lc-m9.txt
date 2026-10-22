@@ -1,0 +1,19 @@
+decls 2 6
+argv 294
+braces 41 braced 5
+byvalue 10 10 10
+byvalue 7577 3
+byvalue 5 4 12
+sizeof 3 17 6 51
+rows 32 264 43 12
+rows gamma be 24 8
+rows 6 6 3 9
+rows slot3 16 g 7
+rows 123 12 4 6
+rows ab c 30
+layout 3 3 4 8 7
+layout 1 2 2 1
+layout 5 5 13 8 four ef
+layout 303 8 9 7
+pack 3 1 4 3 4
+pack 256 770 2 1

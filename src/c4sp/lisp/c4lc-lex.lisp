@@ -174,6 +174,25 @@
 	(if (= (string:byte lex:src i) 62) i
 	(next lex:hdrend (+ i 1))))))
 
+;; #pragma pack with lex:pp off is not skipped: it becomes a PragmaPack
+;; token, and the rest of its line, `(push, 2)` and all, lexes as usual
+;; for p:pragmapack. lex:pragmapack is the index after `pragma pack`, or
+;; false.
+(define lex:blanks (lambda (i)
+	(if (>= i lex:len) i
+	(if (if (= (string:byte lex:src i) 32) true (= (string:byte lex:src i) 9))
+		(next lex:blanks (+ i 1))
+	i))))
+(define lex:word (lambda (i w)
+	(begin
+		(define s (lex:blanks i))
+		(define e (lex:identend s))
+		(if (= (+ "" (string:substr lex:src s (- e s))) w) e false))))
+(define lex:pragmapack (lambda (i)
+	(begin
+		(define a (lex:word i "pragma"))
+		(if a (lex:word a "pack") false))))
+
 (define lex:skipline (lambda (i)
 	(if (>= i lex:len) i
 	(if (= (string:byte lex:src i) 10) i
@@ -552,7 +571,10 @@
 				(if (lex:hash2? j)
 					(next lex:go (+ j 1) line (lex:cons (list 'HashHash 0 line) acc))
 				(next lex:go j line (lex:cons (list 'Hash 0 line) acc)))
-			(next lex:go (lex:skipline j) line acc))
+			(begin
+				(define pk (lex:pragmapack j))
+				(if pk (next lex:go pk line (lex:cons (list 'PragmaPack 0 line) acc))
+				(next lex:go (lex:skipline j) line acc))))
 		(if (if lex:want-header (= c 60) false)
 			;; #include <name>: one token, not a stream of operators. Its
 			;; fourth field, 1, tells the preprocessor it was <...>, which

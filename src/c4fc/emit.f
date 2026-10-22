@@ -104,6 +104,9 @@ BEGIN-STRUCTURE SYMR
    \ A global's forward record: `extern int x;` for an x the unit
    \ defines further down. The definition takes its number over.
    FIELD: y.fwd
+   \ M9. The words a function's fixed parameters take: a struct passed
+   \ by value takes its own size (y.nfix counts the parameters)
+   FIELD: y.nfixw
 END-STRUCTURE
 VARIABLE VA-MAKE   0 VA-MAKE !          \ code index of __c4cc_make_va
 : SYM[] ( i -- a )  SYMR * SYMS @ + ;

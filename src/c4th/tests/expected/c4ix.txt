@@ -1,7 +1,7 @@
 C4IX booting, N cycles spent loading the kernel image
 c4ix: host c4m, info 0xHH
 c4ix: protected mode on for user tasks, preemption on
-c4ix: task 1 'init' created, scheduling after N cycles
+c4ix: task 2 'init' created, scheduling after N cycles
 c4th: the selftest
 3628800 
 c4th: selftest ok

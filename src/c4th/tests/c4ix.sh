@@ -15,23 +15,24 @@ echo c4th: interpreting a program
 c4th.c4r src/c4th/forth/core.f src/c4th/tests/self1.f src/c4th/tests/run-main.f
 
 echo c4th: compiling that program, and running what it built
-c4th.c4r src/c4th/forth/core.f src/c4th/forth/self.f src/c4th/tests/self1-c4r.f > /ram/self1.c4r
-wc < /ram/self1.c4r
-/ram/self1.c4r
+c4th.c4r src/c4th/forth/core.f src/c4th/forth/self.f src/c4th/tests/self1-c4r.f > /tmp/self1.c4r
+wc < /tmp/self1.c4r
+/tmp/self1.c4r
 
-# The fixed point, inside the kernel. c4th compiles self.f into a RAM
-# file; that image is then a compiler, and it compiles self.f again.
+# The fixed point, inside the kernel. c4th compiles self.f into a file
+# in /tmp, which like every C4IX file is RAM; that image is then a
+# compiler, and it compiles self.f again.
 # Nothing here touches the host filesystem except to READ source: the
 # VM has no write syscall, and the shell's redirection is standing in
 # for one.
 echo c4th: compiling the compiler
-c4th.c4r src/c4th/forth/core.f src/c4th/forth/self.f src/c4th/tests/run-main.f > /ram/gen.c4r
-wc < /ram/gen.c4r
+c4th.c4r src/c4th/forth/core.f src/c4th/forth/self.f src/c4th/tests/run-main.f > /tmp/gen.c4r
+wc < /tmp/gen.c4r
 
 echo c4th: and the compiler it built, compiling itself
-/ram/gen.c4r > /ram/gen2.c4r
-wc < /ram/gen2.c4r
+/tmp/gen.c4r > /tmp/gen2.c4r
+wc < /tmp/gen2.c4r
 
 echo c4th: the second image follows
-cat /ram/gen2.c4r
+cat /tmp/gen2.c4r
 exit 0

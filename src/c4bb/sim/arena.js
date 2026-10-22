@@ -74,6 +74,7 @@ export class Arena {
     addr = addr >>> 0;
     let end = addr;
     while (end < addr + max && this.u8[end]) end++;
-    return new TextDecoder('latin1').decode(this.u8.subarray(addr, end));
+    // a copy: a browser decodes no view of a SharedArrayBuffer
+    return new TextDecoder('latin1').decode(this.u8.slice(addr, end));
   }
 }

@@ -17,6 +17,7 @@
 //   --cpus N     N processors (smp.js, c4mp's instruction set), simulated:
 //                each runs -q instructions in turn (default 1000)
 //   -q N         instructions a CPU runs before the next one's turn
+//   --parallel   ... each CPU on a thread of its own (par.js), for real
 //   --wav FILE   fit a sound card (snd-device.js) and write what it played,
 //                on the machine's own clock, to FILE: 44.1 kHz 16-bit stereo.
 //                The same session makes the same file. Without it there is
@@ -32,6 +33,7 @@ import { join, dirname } from 'node:path';
 import { spawn } from 'node:child_process';
 import { constants } from 'node:os';
 import { createMachine, boot } from './boot.js';
+import { Worker } from 'node:worker_threads';
 import { STOP } from './c4m.js';
 import { SoundDevice } from './snd-device.js';
 import { renderWav } from './snd-mix.js';
@@ -60,6 +62,7 @@ function parseArgs(argv) {
     else if (f === '--wav') o.wav = argv[++i];
     else if (f === '--cpus') o.cpus = parseInt(argv[++i], 10);
     else if (f === '-q') o.quantum = parseInt(argv[++i], 10);
+    else if (f === '--parallel') o.parallel = true;
     else if (f === '--') { i++; break; }
     else { console.error(`libjs: unknown option ${f}`); usage(); }
     i++;
@@ -107,6 +110,7 @@ async function main(argv) {
   const played = [];
   const machine = createMachine({
     arenaMb: o.arenaMb, drives, mhz: o.mhz, fpu: o.fpu, snd, cpus: o.cpus, quantum: o.quantum,
+    parallel: o.parallel, spawn: url => new Worker(url),
     onByte: b => { out.push(b); if (out.length >= 4096 || b === 10) flush(); },
   });
   const dev = machine.dev;
@@ -150,6 +154,10 @@ async function main(argv) {
   let status, parkedMs = 0;
   // the machine's time: with several CPUs, the round robin's, not CPU 0's
   const clock = () => (machine.smp ? machine.smp.cycle : machine.cycle);
+  // the parallel engine (par.js): CPU 0 answers the others between runs,
+  // and waits for them, without blocking, when it is parked or halted
+  const par = machine.smp && machine.smp.parallel ? machine.smp : null;
+  let stuck = 0;
   for (;;) {
     const left = limit - clock();
     if (left <= 0) {
@@ -163,6 +171,19 @@ async function main(argv) {
     const slice = o.interactive && !o.unpaced ? dev.cyclesPerMs * 16 : 50e6;
     const r = machine.run(Math.min(left, slice));
     flush();
+    if (par && !dev.halted) {
+      par.service();
+      if (r === STOP.PARK || r === STOP.CPUHALT || machine.cpuState !== 'run') {
+        if (machine.cpuState === 'halt' && par.othersDone()) { status = machine.cpuStatus; break; }
+        // parked with every other CPU parked or halted, three seconds running: nothing can wake them
+        stuck = par.allParked() ? stuck + 1 : 0;
+        if (stuck >= 3) { par.deadlock(); flush(); status = dev.status; break; }
+        await par.parkWait(1000);
+        flush();
+        continue;
+      }
+      stuck = 0;
+    }
     if (snd) { const e = snd.drain(); if (e) for (const x of e) played.push(x); }
     if (r === STOP.HALT) { status = dev.status; break; }
     if (r === STOP.INPUT) {
@@ -197,6 +218,7 @@ async function main(argv) {
     }
   }
   flush();
+  if (par) par.shutdown();
   if (process.stdin.isTTY && o.interactive) process.stdin.setRawMode(false);
   if (snd) {
     const e = snd.drain();

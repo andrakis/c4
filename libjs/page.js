@@ -198,6 +198,8 @@ export class C4M {
       argv, disk: disk.map(([n, b]) => [n, b]), lazy, arenaMb: opts.arenaMb || 64,
       mhz: opts.mhz || 20, unpaced: !!opts.unpaced, mbox: opts.mbox | 0, fpu: opts.fpu,
       cpus: opts.cpus | 0, quantum: opts.quantum | 0,
+      // threads need SharedArrayBuffer: a cross-origin isolated page
+      parallel: !!opts.parallel && !!globalThis.crossOriginIsolated,
       gui: this.display ? { w: this.display.width, h: this.display.height } : (opts.gui || null),
       snd: !!this.sound,
       persist,

@@ -318,4 +318,24 @@ if echo "$out" | grep -qx "smpwin: cpu 1 saw 111, cpu 0 sees 1 and 9" && $LIBJS 
     ok "each CPU sees its own words in the CPU-local window"
 else bad "each CPU sees its own words in the CPU-local window"; echo "$out" | tail -3; fi
 
+# The parallel engine (par.js, ap.js, docs/c4ix-smp.md S2): each CPU on a
+# thread of its own, over a SharedArrayBuffer. The interleaving is the
+# host's, so the cycle counts are not c4mp's; the answers are.
+out=$($LIBJS --cpus 4 --parallel $IMAGES/c4mp-smp0.c4r 2>&1)
+if echo "$out" | grep -qx "smp0: total 48000 across 4 cpu(s), expected 48000"; then ok "--parallel: smp0's counters add up"
+else bad "--parallel: smp0's counters add up"; echo "$out" | tail -3; fi
+out=$($LIBJS --cpus 4 --parallel $IMAGES/c4mp-smp1.c4r 2>&1)
+if echo "$out" | grep -qx "smp1: all OK"; then ok "--parallel: smp1's atomics, parking and IPIs"
+else bad "--parallel: smp1's atomics, parking and IPIs"; echo "$out" | tail -4; fi
+out=$($LIBJS --cpus 4 --parallel $IMAGES/c4mp-deadlock.c4r 2>&1); st=$?
+if [ $st = 255 ] && echo "$out" | grep -qF "deadlock: every processor is parked and none can be woken" &&
+   [ "$(echo "$out" | grep -c "waiting on 0x")" = 4 ]; then ok "--parallel: a deadlock is diagnosed, each CPU named"
+else bad "--parallel: a deadlock is diagnosed, each CPU named"; echo "$out" | tail -6; fi
+out=$($LIBJS --cpus 2 --parallel $IMAGES/libjs-smpwin.c4r 2>&1)
+if echo "$out" | grep -qx "smpwin: cpu 1 saw 111, cpu 0 sees 1 and 9"; then ok "--parallel: the CPU-local window"
+else bad "--parallel: the CPU-local window"; echo "$out" | tail -3; fi
+out=$($LIBJS --cpus 4 --parallel $IMAGES/libjs-spinmp.c4r 2>&1)
+if echo "$out" | grep -qx "spinmp: 4 cpus each summed 70000000"; then ok "--parallel: four CPUs work at once"
+else bad "--parallel: four CPUs work at once"; echo "$out" | tail -3; fi
+
 if [ $fail = 0 ]; then echo "test-libjs: OK"; else echo "test-libjs: FAILURES"; exit 1; fi

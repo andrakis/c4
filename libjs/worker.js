@@ -10,6 +10,8 @@
 //           snd: true fits the sound card (snd-device.js)
 //           persist: { files: [[name, Uint8Array]] } fits a writable drive 1, kept by the page
 //           cpus, quantum: that many processors, simulated (smp.js)
+//           parallel: ... each on a worker of its own (par.js), when the page is
+//           cross-origin isolated; simulated otherwise
 //           shared: { ring, fb } SharedArrayBuffers from shared.js, when the page is isolated
 //   key     { key, ctrlKey, altKey, metaKey }     a keydown on the terminal
 //   input   { bytes: Uint8Array }                 typed programmatically
@@ -132,7 +134,15 @@ function flushSound() {
   postMessage({ type: 'snd', events, now: performance.now() * 1000 }, transfer);
 }
 
+// the parallel engine's host side (par.js), when there is one
+let par = null, parStuck = 0;
+// While CPU 0 is not running -- paced, parked, or waiting for a key --
+// the other CPUs' requests are answered as soon as they ask
+function watchPar() { if (par && !halted) par.watch(watchPar); }
+
 function start(msg) {
+  if (par) { par.shutdown(); par = null; }
+  parStuck = 0;
   bootMsg = msg;
   ring = msg.gui && msg.shared ? new RingWriter(msg.shared.ring) : null;
   if (ring && fbSab !== msg.shared.fb) { fbSab = msg.shared.fb; fbProducer = new FbProducer(fbSab); }
@@ -154,9 +164,12 @@ function start(msg) {
   vm = createMachine({
     arenaMb: msg.arenaMb || 64, drives, mhz: msg.mhz || 20, gui, snd, fpu: msg.fpu,
     cpus: msg.cpus | 0, quantum: msg.quantum | 0,
+    parallel: !!msg.parallel, spawn: url => new Worker(url, { type: 'module' }),
     onByte: b => { out.push(b); if (out.length >= 4096) flush(); },
   });
   boot(vm, new Uint8Array(msg.image), msg.argv || ['image.c4r'], { mbox: msg.mbox | 0 });
+  par = vm.smp && vm.smp.parallel ? vm.smp : null;
+  watchPar();
   paused = false; halted = false; parked = false;
   tRun = performance.now(); lostMs = 0; busyMs = 0;
   lastStatus = { t: tRun, cycle: 0, busy: 0 };
@@ -185,6 +198,29 @@ function tick() {
   }
   busyMs += performance.now() - t;
   flush();
+  if (par && !dev.halted && r !== STOP.HALT) {
+    par.service();
+    if (r === STOP.PARK || r === STOP.CPUHALT || vm.cpuState !== 'run') {
+      flushDisplay(); flushSound();
+      // every CPU parked or halted for three seconds, none asking: nothing can wake them
+      parStuck = par.allParked() ? parStuck + 1 : 0;
+      if (parStuck >= 12) { par.deadlock(); flush(); }
+      else if (vm.cpuState === 'halt' && par.othersDone()) { dev.halted = true; dev.status = vm.cpuStatus; }
+      if (dev.halted) {
+        halted = true; state = 'halted';
+        postStatus(true);
+        postMessage({ type: 'exit', status: dev.status, cycles: vm.cycle });
+        par.shutdown();
+        return;
+      }
+      // CPU 0 waits for its word, an IPI or another CPU; the page stays live
+      state = 'parked';
+      const g = gen;
+      par.parkWait(250).then(() => { if (g === gen) schedule(0); });
+      return;
+    }
+    parStuck = 0;
+  }
   const td = performance.now();
   flushDisplay();
   flushSound();
@@ -192,6 +228,7 @@ function tick() {
   if (dev.rawKbd !== lastRaw) { lastRaw = dev.rawKbd; postMessage({ type: 'kbd', raw: lastRaw > 0 }); }
 
   if (r === STOP.HALT) {
+    if (par) par.shutdown();
     halted = true; state = 'halted';
     postStatus(true);
     postMessage({ type: 'exit', status: dev.status, cycles: vm.cycle });

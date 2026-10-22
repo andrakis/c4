@@ -174,7 +174,7 @@ they run in parallel under a BKL.
 | | What | Proved by |
 |---|---|---|
 | S1 (done) | libjs simulated engine: opcodes 66-75, per-CPU IRQs and IPIs, the CPU-local window, `C4I_SMP`; `cli.js --cpus N` | c4mp's `smp0`, `smp1` and `deadlock` guests (32-bit builds), totals and deadlock report as c4mp's |
-| S2 | libjs parallel engine: workers, `SharedArrayBuffer` arena, `Atomics`, the forwarding block; Node and the page | the same guests with `--parallel`; a two-CPU spin test that runs both halves at full speed; the page when isolated |
+| S2 (done) | libjs parallel engine: workers, `SharedArrayBuffer` arena, `Atomics`, the forwarding block; Node and the page | the same guests with `--parallel`; a two-CPU spin test that runs both halves at full speed; the page when isolated |
 | S3 | C4IX SMP kernel: AP boot, BKL, per-CPU state, scheduler, library slots in the window | the whole C4IX suite on the simulated engine at 1, 2 and 4 CPUs; two `spin`s at once on the parallel engine, each at full speed |
 | S4 | Show and use it: per-CPU load in `top` and System Monitor, `b4ke -j` | test-desktop; a parallel rebuild measured against a serial one |
 | later | Finer kernel locks; a shared-memory heap; c4mp pass 2 (native threads) and the window there | profiles; test-c4mp |
@@ -194,6 +194,56 @@ exactly c4mp's output:
 The deadlock report names every CPU and exits 255, as c4mp does.
 test-libjs pins all of it against c4mp's own transcripts, and checks
 the CPU-local window.
+
+### S2, done (2026-10-22)
+
+`libjs/par.js` (the control block, the opcodes on `Atomics`, CPU 0's
+side) and `libjs/ap.js` (every other CPU, in a worker of its own). It is
+`cli.js --cpus N --parallel` in Node (`worker_threads`), and
+`?cpus=N&parallel` in a page that is cross-origin isolated.
+
+- **The arena** is a `SharedArrayBuffer`, and a second one holds the
+  control block: the machine's halt flag, a doorbell, the machine's time
+  in milliseconds, and 24 words per CPU (state, entry and stack, IPI,
+  the word it waits on, a request slot, cycles).
+- **The opcodes** map one to one: `CAS`, `XCHG` and `FADD` to
+  `Atomics.compareExchange`, `exchange` and `add`; `CWAI` and `CWAK` to
+  `Atomics.wait` and `notify` on the guest's own word. CPU 0 cannot
+  block, since it runs the devices, so its `CWAI` returns to its loop,
+  which waits with `Atomics.waitAsync` on its word and the doorbell.
+- **Forwarding**, as in 3.2: another CPU's host syscalls and device
+  registers go to CPU 0 through its request slot, and it rings the
+  doorbell. CPU 0 answers between slices of 16,384 cycles, and whenever
+  it is parked or idle. The other CPUs run slices of 65,536 cycles and
+  check for an IPI or the machine's end between them. Checking on every
+  instruction halved the speed.
+- **A deadlock** is reported as on the simulated engine, with the same
+  text, after three seconds in which every CPU is parked, none is asking
+  anything, and nothing has woken them. The machine exits 255.
+- **Strings leave the machine as copies.** A browser's `TextDecoder`
+  refuses a view of a `SharedArrayBuffer`, and a view posted to the page
+  would share the arena rather than copy it.
+- **Without isolation** (no `SharedArrayBuffer`), `?parallel` falls back
+  to the simulated engine. A page is isolated only when it is served
+  with COOP and COEP (`serve.mjs --isolate`) **and** from a secure
+  origin: `https://`, or `http://localhost`. `http://192.168.1.202:PORT`
+  from another computer is not isolated, whatever the headers.
+
+`spinmp` (libjs/tests/src/spinmp.c) gives each CPU the same 20 million
+iterations. Times are on helios (6 cores, load average about 2.5), in
+seconds:
+
+| | 1 CPU | 2 CPUs | 4 CPUs |
+|---|---|---|---|
+| simulated (`--cpus N`) | 2.3 | 4.0 | 7.7 |
+| parallel (`--cpus N --parallel`) | | 2.1 | 2.5 |
+| the page, unpaced, 4 CPUs (headless Chromium) | | | 12.6 simulated, 5.6 parallel |
+
+test-libjs runs `smp0`, `smp1`, the deadlock, the window and `spinmp`
+with `--parallel`, and checks their answers. Their cycle counts are not
+pinned, since the host interleaves the threads. C4IX boots to its shell
+on `?cpus=2&parallel` as it does on one CPU. It starts no other CPU
+until S3.
 
 ## 6. Risks
 

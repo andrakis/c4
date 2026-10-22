@@ -26,6 +26,7 @@ import { Arena, MEM_BASE, TLEV_ADDR, OPNAMES_ROM } from '../src/c4bb/sim/arena.j
 import { Devices, OPNAMES, HEAP_BASE, HEAP_END, CYCLES_PER_MS } from '../src/c4bb/sim/devices.js';
 import { OP, Machine, CPU_HALT_ADDR } from './c4m.js';
 import { Smp } from './smp.js';
+import { ParHost } from './par.js';
 import { Bus } from './bus.js';
 import { Heap } from './heap.js';
 
@@ -40,8 +41,14 @@ import { Heap } from './heap.js';
 //   cpus      processors (smp.js): c4mp's instruction set, simulated, with
 //             quantum instructions each in turn (default 1000). Without it,
 //             one CPU and no processor opcodes, as before
+//   parallel  ... on threads instead (par.js): a worker per CPU, made by
+//             spawn(url), on an arena in a SharedArrayBuffer. Where there
+//             is no SharedArrayBuffer (a page not cross-origin isolated),
+//             the simulated engine
 export function createMachine(opts = {}) {
-  const arena = new Arena((opts.arenaMb || 32) * 1024 * 1024);
+  const bytes = (opts.arenaMb || 32) * 1024 * 1024;
+  const par = opts.cpus > 1 && opts.parallel && opts.spawn && typeof SharedArrayBuffer !== 'undefined';
+  const arena = new Arena(par ? new SharedArrayBuffer(bytes) : bytes);
   const dev = new Devices(arena, {
     drives: opts.drives,
     onByte: opts.onByte,
@@ -53,7 +60,8 @@ export function createMachine(opts = {}) {
   // the FPU opcode (F3): on unless asked otherwise (fpu: false)
   machine.noFpu = opts.fpu === false;
   dev.noFpu = machine.noFpu;
-  if (opts.cpus) new Smp(machine, opts.cpus | 0, opts.quantum | 0,
+  if (par) new ParHost(machine, opts.cpus | 0, opts.spawn);
+  else if (opts.cpus) new Smp(machine, opts.cpus | 0, opts.quantum | 0,
     () => { const m = new Machine(arena, dev, bus, machine.heap); m.noFpu = machine.noFpu; return m; });
   if (opts.gui) opts.gui.attach(machine);
   if (opts.snd) opts.snd.attach(machine);

@@ -286,6 +286,20 @@ processors: c4mp's instruction set (`src/c4mp/README.md`), simulated
 - **`C4I_SMP` (0x100)** is in `INFO` only when the machine was given
   CPUs, even one. Without `--cpus` nothing changes.
 
+`--parallel` (`?parallel`) puts each CPU on a thread of its own instead
+(`par.js`, `ap.js`, docs/c4ix-smp.md S2). The engine needs a
+`SharedArrayBuffer`; without one, the simulated engine runs.
+- **CPU 0** stays where the machine always ran: the page's worker, or
+  cli.js's main thread. It keeps the devices, the heap and the console.
+- **Every other CPU** is a worker running an `ApMachine` on the shared
+  arena. What it cannot do itself, it asks CPU 0 through its request
+  slot: the host syscalls, and device registers.
+- **The atomics** are `Atomics`. `CWAI` blocks a worker in
+  `Atomics.wait`. On CPU 0 it parks the loop, which waits in
+  `Atomics.waitAsync`, so the page and the console stay live.
+- **The guests' answers** are the same as on the simulated engine. The
+  interleaving, and so the cycle counts, are the host's.
+
 ## Tracker
 
 ### Before M0

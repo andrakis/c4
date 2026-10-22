@@ -92,6 +92,9 @@ export class Machine {
     arena.io = dev;
     this.i32 = arena.i32;
     this.u8 = arena.u8;
+    // On the parallel engine the arena is a SharedArrayBuffer: what leaves
+    // the machine (strings to print, to decode) is copied, not a view
+    this.sharedMem = typeof SharedArrayBuffer !== 'undefined' && arena.u8.buffer instanceof SharedArrayBuffer;
     this.reset();
   }
 
@@ -148,7 +151,7 @@ export class Machine {
     let end = addr;
     const lim = Math.min(u8.length, addr + max);
     while (end < lim && u8[end]) end++;
-    return u8.subarray(addr, end);
+    return this.sharedMem ? u8.slice(addr, end) : u8.subarray(addr, end);
   }
 
   // Bytes to the console, in order with everything else the UART sends.
@@ -249,6 +252,8 @@ export class Machine {
   // so the atomics are plain read-modify-writes.
   smpOp(op) {
     const sp = this.sp, smp = this.smp;
+    // the parallel engine (par.js): real threads, real Atomics
+    if (smp.parallel) return smp.op(this, op);
     switch (op) {
       case OP.CPUI: this.a = this.cpuId; return STOP.BUDGET;
       case OP.CPUN: this.a = smp.n; return STOP.BUDGET;

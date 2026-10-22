@@ -281,6 +281,8 @@ for g in smp0 smp1 deadlock; do
     ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O src/c4mp/guest/$g.c $OUT/c4mp-$g.c4r > /dev/null
 done
 ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O libjs/tests/src/smpwin.c $OUT/libjs-smpwin.c4r > /dev/null
+# the same work on every CPU, for the parallel engine (cli.js --parallel)
+./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O libjs/tests/src/spinmp.c $OUT/libjs-spinmp.c4r > /dev/null
 # What `b4ke -C /usr` makes in /build, laid out as the
 # BUILD.B4K files lay it out: each object and image below is kept there
 # as it is built (they are the same bytes; test-c4ix-rebuild checks the

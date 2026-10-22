@@ -42,8 +42,10 @@ Decisions taken (the user, 2026-10-22):
 - **The name is "Code Explorer"**, `/bin/explore`, for now.
 - **An explorer outside the VM** is wanted at some point; when is not
   decided (E4).
-- **The game's repository is `~/git/c4-wolf3d`**, a fork of the Bitbucket
-  project it came from. The old worktree `~/git/c4-wolf` is removed once
+- **The game's repository is `~/git/c4-wolf3d`**, cloned from the
+  Bitbucket project it came from, with its own remote on GitHub,
+  `git@github.com:andrakis/c4-Wolf3D.git`. Nothing goes back to
+  Bitbucket. The old worktree `~/git/c4-wolf` is removed once
   it is checked again. `make wolf3d-fetch` downloads the shareware data
   instead of a repository carrying it.
 
@@ -648,11 +650,13 @@ out:
   include large clean-ups: VH and VL merged, `id_vl` renamed, map and
   window code reworked and partly undone.
 
-**The new repository, `~/git/c4-wolf3d`**, is a fork of the
-Bitbucket repository with its whole history:
-1. **Clone it** with Bitbucket as `upstream`. Forking on Bitbucket itself
-   needs the user's account, so the user does that on the site; the fork
-   then becomes `origin`. Nothing is pushed until the user says so.
+**The new repository, `~/git/c4-wolf3d`**, carries the Bitbucket
+repository's whole history, but its home is GitHub:
+1. **Clone it from Bitbucket, then point it at GitHub.** Bitbucket stays
+   as `upstream`, only to fetch from. `origin` is the user's new and
+   empty `git@github.com:andrakis/c4-Wolf3D.git`, which helios can
+   reach (checked 2026-10-22). There is no fork on Bitbucket. Nothing
+   is pushed until the user says so.
 2. **A branch `c4ix` from `10186e4`**, the commit the port really
    starts from. Its first commit is `dc8b250`'s README lines, so that
    every file the port did not touch is byte-identical to what c4 has.
@@ -692,8 +696,9 @@ Bitbucket repository with its whole history:
 - `make wolf3d-fetch` does two things (decided), into `ext/`, which git
   ignores:
   - it clones the game's repository into `ext/wolf3d`, from
-    `WOLF3D_REPO`. That defaults to the copy beside c4 (`../c4-wolf3d`),
-    and becomes the user's fork once there is one;
+    `WOLF3D_REPO`. That defaults to the copy beside c4 (`../c4-wolf3d`)
+    when there is one, and otherwise to the GitHub repository, over
+    https so that no key is needed;
   - it **downloads the shareware data**, `1wolf14.zip`, into
     `ext/wolf3d-data/`, and refuses it unless its SHA-256 is
     `cb2a2ef7ecef14152c65ff93cc3b84fbd3e8eb0c5c1de41a6fc8cdef559451a8`.
@@ -770,7 +775,7 @@ targets are marked *new*.
 | | what | tests |
 |---|---|---|
 | **G0** | **Retire `~/git/c4-wolf`.** Check again that it is clean and merged, then remove the worktree and the merged branch `c4lc-full`. | `git worktree list` no longer shows it; `git branch --contains 178bb38` still shows `c4ix-userland`. |
-| **G1** | **The repository**, `~/git/c4-wolf3d`: a clone of Bitbucket's wolf4sdl (`upstream`), branch `c4ix` from `10186e4`, then `dc8b250`'s README lines, then the port as a series of commits, `c4.mk` and the doc. Never pushed. | At the last commit, the new tree equals `src/wolf3d/` file for file, except the zip. The host build and `--timedemo 1` pass at every commit from the platform layer on (a script walks the history). |
+| **G1** | **The repository**, `~/git/c4-wolf3d`: a clone of Bitbucket's wolf4sdl (`upstream`) with `origin` on GitHub, branch `c4ix` from `10186e4`, then `dc8b250`'s README lines, then the port as a series of commits, `c4.mk` and the doc. Never pushed. | At the last commit, the new tree equals `src/wolf3d/` file for file, except the zip. The host build and `--timedemo 1` pass at every commit from the platform layer on (a script walks the history). |
 | **G2** | **c4 uses it when it is there.** `make wolf3d-fetch` (the clone, and the zip from a mirror, checked by SHA-256), `ext/wolf3d`, the Makefile including `c4.mk`, build-images.sh's copy to `/usr/src/wolf3d` and its apps line. Needs W2 for the apps file; until then wm.c's entry is shown only if the game is on the disk. | `test-wolf3d` and test-desktop.mjs's game checks, with the game fetched, give the same results as before; with `ext/wolf3d` absent, `make test-libjs` passes and says the game's checks were skipped; a zip with one byte changed is refused. |
 | **G3** | **c4 stops carrying it.** Remove `src/wolf3d/`; docs/c4ix-wolf3d.md becomes a pointer. | As G2, both ways, on a fresh clone of c4. |
 
@@ -837,13 +842,13 @@ All answered on 2026-10-22, and written into the sections above:
 | Q6 | IDE processes? | one IDE, many windows (4.2) |
 | Q7 | an explorer outside the VM? | yes, at some point; not scheduled (E4) |
 | Q8 | the name? | "Code Explorer", `/bin/explore`, for now |
-| Q9 | the game's repository? | `~/git/c4-wolf3d`, a fork of bitbucket.org/ks-presto/wolf4sdl; `~/git/c4-wolf` removed (5, G0, G1) |
+| Q9 | the game's repository? | `~/git/c4-wolf3d`, cloned from bitbucket.org/ks-presto/wolf4sdl, its remote `github.com:andrakis/c4-Wolf3D`; `~/git/c4-wolf` removed (5, G0, G1) |
 | Q10 | the shareware zip? | downloaded by `make wolf3d-fetch` and checked by SHA-256 (5, G2) |
 
 Left for when the work starts:
-- **The fork on Bitbucket** is made by the user, on the site, under their
-  account. Until then `~/git/c4-wolf3d` is a local clone with `upstream`
-  only.
+- **Pushing `c4ix` to GitHub** waits for the user's word, as every push
+  does. Whether `c4ix` is the GitHub repository's default branch is
+  decided then.
 - **The mirrors for the zip** are found and recorded in G2. Each must
   serve the exact file, by its SHA-256.
 

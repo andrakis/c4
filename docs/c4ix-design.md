@@ -653,6 +653,20 @@ loading or assigning a whole struct is an error.
   (`ck_signal`, as a C4KE program's `signal()` does); C4KE's PM
   extension does the same. `libjs/tests/test-c4ix-sigh.mjs`.
 
+- **`ITH` guarded** (2026-10-22): `install_trap_handler` sets the
+  machine's trap handler, C4IX's own. `c4ke` typed at C4IX's shell
+  started C4KE's kernel as a protected task, and its first act took
+  that handler: every trap of every task went to C4KE's early handler,
+  which serviced none of them. Under c4m, which runs its guests on raw
+  addresses, C4KE then cleared and wrote text through its failed
+  allocations into the TLEV word at 0x10, and the whole machine died
+  ("illegal opcode 541148492", the bytes "LLA "). c4m, c4mpg, libjs and
+  the board now trap ITH in protected mode, and `sys_pmviolation` kills
+  the task, saying why. C4KE's PM extension hands the machine over, as
+  the unguarded opcode did. libjs also drops guest stores to its ROM
+  words (0x00-0x1F and the opcode names) and names the first on the
+  console. `libjs/tests/test-rom.mjs`, `test-c4ix-c4m.mjs`.
+
 - **Code out of the headers** (2026-10-22, asked for: "header files often
   have entire libraries worth of code in them").
   - *Where the code went.* The three headers of C4IX's own that held

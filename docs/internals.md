@@ -406,7 +406,7 @@ own numbering is untouched and the numbers below hold.
 | 41 | `RALC` | `realloc` | guest realloc via the size table | `74652ff` 2023-05-17 (in `c4_multiload.c`); its VM case was commented out and it fell through to `TRAP_ILLOP` until `63e274a` 2026-08-23 (§3.6) |
 | 42 | `MCPY` | `memcpy` | copy bytes | `74652ff` 2023-05-17; off-by-one at both ends fixed `9d4c591` 2026-08-05 |
 | 43 | `STRC` | `stacktrace` | print a stack trace from the symbol table | `e05052e` 2022-08-26 |
-| 44 | `ITH` | `install_trap_handler` | install the trap handler, return the old one | `5b37f41` 2024-11-06 |
+| 44 | `ITH` | `install_trap_handler` | install the trap handler, return the old one; raises `TRAP_PM_VIOLATION` in protected mode, where C4IX kills the task and C4KE hands the machine over | `5b37f41` 2024-11-06 |
 | 45 | `_OPC` | `__opcode` | opcode number by name (`"LEV"` → 8) | `5b37f41` 2024-11-06 |
 | 46 | `_BLT` | `__builtin` | **named only**: no VM case, so it halts (no handler) or raises `TRAP_ILLOP`; the host-side `__builtin()` stub returns −1 (§3.6) | `5b37f41` 2024-11-06 |
 | 47 | `_TRP` | `__c4_trap(type, param)` | raise any trap from code (does not mask the cycle interrupt) | `5b37f41` 2024-11-06 |
@@ -458,7 +458,7 @@ above `INS_SIZE` (89) are the custom range: C4KE's start at `CO_BASE`
 | 3 | `TRAP_SIGNAL` | a POSIX signal (native builds only) | `5b37f41` 2024-11-06 |
 | 4 | `TRAP_SEGV` | nothing today: its only raise site in `c4m.c` is commented out | `5b37f41` 2024-11-06 |
 | 5 | `TRAP_OPV` | `OPCD` asked to run an opcode that takes an operand | `5b37f41` 2024-11-06 |
-| 6 | `TRAP_PM_VIOLATION` | a syscall (or `INFO`, `USLP`, `SIGH`) in protected mode — see Part 7 | `9ccd20f` 2026-01-25 |
+| 6 | `TRAP_PM_VIOLATION` | a syscall (or `INFO`, `USLP`, `SIGH`, `ITH`) in protected mode — see Part 7 | `9ccd20f` 2026-01-25 |
 | 7 | `TRAP_DEBUG` | `DBG` | `9ccd20f` 2026-01-25 |
 | 8 | `TRAP_MPG_VIOLATION` | **reserved**: raised only by c4mpg (docs/c4mpg-design.md), never by plain c4m | `d9184c0` 2026-09-06 |
 

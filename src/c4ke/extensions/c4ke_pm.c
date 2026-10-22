@@ -66,7 +66,7 @@ enum {
 // outright ("bad lvalue: num" -- assigning to a number), which is why a
 // protected-mode kernel could never be built by the compiler the board
 // uses.
-static int pm_OPEN, pm_READ, pm_CLOS, pm_PUTC, pm_PUTS, pm_PRTF, pm_MALC, pm_FREE, pm_RALC, pm_USLP, pm_INFO, pm_SIGH, pm_STRC;
+static int pm_OPEN, pm_READ, pm_CLOS, pm_PUTC, pm_PUTS, pm_PRTF, pm_MALC, pm_FREE, pm_RALC, pm_USLP, pm_INFO, pm_SIGH, pm_ITH, pm_STRC;
 
 // Local data
 static int *kernel_pm_thread;
@@ -143,6 +143,12 @@ static int pm_dispatch_run (int *t, int ins, int *sp, int *a, int *returnpc) {
 			*a = ((int *)r)[SIGH_ADDRESS];
 			((int *)r)[SIGH_ADDRESS] = *sp;
 		}
+	} else if (ins == pm_ITH) {
+		// c4m guards ITH now: the trap handler is the machine's, this
+		// kernel's. A task that asks for it gets it, as it did before the
+		// guard -- C4IX started from c4sh takes the machine this way, and
+		// C4KE stops hearing traps from then on.
+		*a = (int)install_trap_handler((int *)*sp);
 	} else {
 		return SCR_FAIL;
 	}
@@ -270,7 +276,7 @@ static void pm_syscall_handler (int trap, int ins, int mode, int a, int *bp, int
 	// A compiler allocates thousands of times per module, so this is the
 	// difference between protected mode being usable and not.
 	//if (kernel_is_slow || kernel_task_current[TASK_EXCLUSIVE]) {
-	if (ins == pm_MALC || ins == pm_FREE || ins == pm_RALC ||
+	if (ins == pm_MALC || ins == pm_FREE || ins == pm_RALC || ins == pm_ITH ||
 	    kernel_task_current[TASK_EXCLUSIVE]) {
 	// TODO: servicing reads immediately due to how slow load-c4r is.
 	// if (ins == READ || kernel_task_current[TASK_EXCLUSIVE]) {
@@ -345,6 +351,7 @@ static int pm_start () {
 		pm_USLP = __opcode("USLP");
 		pm_INFO = __opcode("INFO");
 		pm_SIGH = __opcode("SIGH");
+		pm_ITH  = __opcode("ITH");
 		pm_STRC = __opcode("STRC");
 		if (kernel_verbosity >= VERB_MED) {
 			printf("c4ke: handled syscalls: OPEN(%d) READ(%d) CLOS(%d) ", pm_OPEN, pm_READ, pm_CLOS);

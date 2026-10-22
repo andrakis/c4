@@ -115,6 +115,14 @@ Reused from `src/c4bb/sim/`: `arena.js`, `devices.js`, `loader.js`
     section (`boot.js` parseSymbols; below).
   - INFO includes `C4I_C4MJS` (0x8) and never `C4I_C4` (0x1). C4IV does
     nothing.
+- **The ROM words are read-only to a guest**: 0x00-0x1F (the null guard,
+  TLEV at 0x10, the constructor-return word, CPUH at 0x18) and the
+  opcode-name ROM at 0x200. A store there from SI, SC, MSET, MCPY or a
+  READ is dropped, `romStores` counts it, and the first one is named on
+  the console with its value and pc. Every trap returns through TLEV, so
+  one wild store there used to end every task on the machine. c4bb's
+  firmware latches at 0x20-0x3F stay RAM. Stack pushes and STL are not
+  checked. `tests/test-rom.mjs`.
 - **The heap** keeps no headers in guest memory. Sizes live in a `Map`,
   small blocks come from size classes, large ones from a first-fit list with
   coalescing, and once the bump pointer is at the end a small block is cut
@@ -129,7 +137,7 @@ Reused from `src/c4bb/sim/`: `arena.js`, `devices.js`, `loader.js`
 
 Known deviations from native c4m: division by zero gives 0 instead of SIGFPE;
 the seven fused opcodes c4m lacks are implemented; FREE of an unknown pointer
-is ignored.
+is ignored; stores to the ROM words are dropped.
 
 ## Worker protocol
 

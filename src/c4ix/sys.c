@@ -771,6 +771,17 @@ void sys_pmviolation(int op, int *sp, int *returnpc, int *a) {
     // free(), and what they do not free goes with the task (task.c).
     case C4IX_OP_MALC: *a = task_ualloc(t, sp[0]); return;
     case C4IX_OP_FREE: task_ufree(sp[0]); *a = 0; return;
+    // install_trap_handler: every trap of every task would go to this
+    // one. Only a kernel does that -- C4KE's c4ke.c4r started as a
+    // program, say, which then took the machine and wrote through its
+    // own failed allocations. It goes as any forbidden opcode does,
+    // saying why.
+    case C4IX_OP_ITH:
+        kprintf("c4ix: task %d tried to install the machine's trap handler"
+            " (a kernel run as a program? boot it with c4m), killing it\n",
+            t ? t->id : -1);
+        task_exit(-1);
+        return;
     case C4IX_OP_EXIT:
         kprintf("c4ix: task %d exited via EXIT opcode, status %d\n",
             t ? t->id : -1, sp[0]);

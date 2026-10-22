@@ -57,6 +57,8 @@ enum {
     C4IX_OP_OPEN = 30, C4IX_OP_READ = 31, C4IX_OP_CLOS = 32,
     C4IX_OP_PRTF = 33, C4IX_OP_MALC = 34, C4IX_OP_FREE = 35,
     C4IX_OP_EXIT = 38, C4IX_OP_PUTC = 39, C4IX_OP_PUTS = 40,
+    // ITH would take the machine's trap handler, the kernel's: refused
+    C4IX_OP_ITH = 44,
     // USLP sleeps the whole machine, so a task gets a sleep of its own
     // SIGH sets the machine's handler, the kernel's: a task gets its own
     C4IX_OP_SIGH = 54,

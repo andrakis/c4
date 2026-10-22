@@ -302,10 +302,14 @@ processors: c4mp's instruction set (`src/c4mp/README.md`), simulated
 (`par.js`, `ap.js`, docs/c4ix-smp.md S2). The engine needs a
 `SharedArrayBuffer`; without one, the simulated engine runs.
 - **CPU 0** stays where the machine always ran: the page's worker, or
-  cli.js's main thread. It keeps the devices, the heap and the console.
+  cli.js's main thread. It keeps the devices and the console.
+- **The heap is every CPU's** (`sheap.js`): heap.js's rules, with its
+  books in a SharedArrayBuffer of their own and a spinlock, so `MALC`,
+  `FREE` and `RALC` run on the CPU that executes them (docs/c4ix-smp.md,
+  after S4).
 - **Every other CPU** is a worker running an `ApMachine` on the shared
   arena. What it cannot do itself, it asks CPU 0 through its request
-  slot: the host syscalls, and device registers. Everything else of
+  slot: the host syscalls but the heap's, and device registers. Everything else of
   memory it reads and writes as CPU 0 does, through arena.js: unaligned
   words, low memory, the arena's ends.
 - **The atomics** are `Atomics`. `CWAI` blocks a worker in

@@ -9,6 +9,12 @@
 // New Folder, Delete (confirmed)
 // and Rename go through the kernel's mkdir, unlink and rename.
 //
+// Several items can be selected, as in Explorer: Ctrl-click adds or
+// removes one, Shift-click (or Shift with the arrows) takes the range from
+// the last one clicked, Ctrl+A takes them all. Delete takes what is
+// selected, and a folder with all that is in it, files first and then the
+// folders as they empty -- after saying so.
+//
 // The tree scrolls on its own: a scroll bar (arrows, page clicks, a thumb
 // to drag, as every bar on the desktop has: ui_scroll_drag) and the wheel. It follows the selection only when that moves,
 // not at every redraw, or the bar could never leave it. A folder with
@@ -38,9 +44,12 @@ struct files {
     int tfollow;                       // scroll the tree to tsel at the next draw
     int pane;                          // 0 the list has the keyboard, 1 the tree
     int tleft;                         // the tree scrolled across: 6-pixel steps
+    char mark[MAXE];                   // the selected items (sel is the one with the focus)
+    int anchor;                        // where a Shift-click's range starts
 };
 
 static struct files *F(struct win *w) { return (struct files *)w->st; }
+static void mark_only(struct files *f, int i);
 static char tbuf[256];
 
 static char *menu_titles[3];
@@ -104,6 +113,59 @@ static void load(struct files *f) {
     if (f->sel >= f->n) f->sel = f->n - 1;
     if (f->sel < 0) f->sel = 0;
     if (f->top > f->sel) f->top = f->sel;
+    mark_only(f, f->sel);
+}
+
+// ---- the selection ----
+
+// just item I
+static void mark_only(struct files *f, int i) {
+    int k;
+    k = 0;
+    while (k < MAXE) { f->mark[k] = 0; ++k; }
+    if (i >= 0 && i < f->n) f->mark[i] = 1;
+    f->anchor = i;
+}
+
+// the range from the anchor to I
+static void mark_range(struct files *f, int i) {
+    int k, a, b;
+    a = f->anchor < i ? f->anchor : i;
+    b = f->anchor < i ? i : f->anchor;
+    k = 0;
+    while (k < f->n) { f->mark[k] = k >= a && k <= b; ++k; }
+}
+
+static int nmarked(struct files *f) {
+    int k, n;
+    n = 0;
+    k = 0;
+    while (k < f->n) { if (f->mark[k]) ++n; ++k; }
+    return n;
+}
+
+// The focus moved to I, by a key: Shift takes the range, else just I
+static void move_to(struct files *f, int i, int mods) {
+    f->sel = i;
+    if (mods & M_SHIFT) mark_range(f, i);
+    else mark_only(f, i);
+}
+
+// A folder and all in it: files first, then the folders as they empty.
+// How many could not be removed.
+static int del_tree(char *dir) {
+    char name[NAMEW], sub[256];
+    int i, r, bad, n;
+    bad = 0;
+    i = 0;
+    while ((r = ureaddir(dir, i, name)) >= 0) {
+        if (ui_len(dir) + ui_len(name) + 2 > 256) { ++bad; ++i; continue; }
+        join(sub, dir, name);
+        n = r == 1 ? del_tree(sub) : uunlink(sub) < 0;
+        if (n) { bad = bad + n; ++i; }      // what stayed keeps index i
+    }
+    if (uunlink(dir) < 0) ++bad;
+    return bad;
 }
 
 // Every folder, depth first, for the tree. DIR is copied in first thing,
@@ -441,7 +503,7 @@ void files_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     y = oy + TOOL_H + 22;
     while (i < f->n && i < f->top + rows) {
         small_icon(f->isdir[i], f->prog[i], lx + 6, y + 1);
-        sel_bg = i == f->sel;
+        sel_bg = f->mark[i];
         if (sel_bg) d_rect(lx + 23, y, ui_len(ename(f, i)) * 6 + 6, ROW_H - 1, f->pane == 0 && focused ? C_SEL : C_FACE);
         d_text(lx + 26, y + 2, sel_bg && f->pane == 0 && focused ? C_WHITE : C_DARK, F_SANS, ename(f, i));
         if (!f->isdir[i]) {
@@ -459,6 +521,7 @@ void files_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     d_bevel(ox + 2, oy + ch - STATUS_H + 2, cw - 4, STATUS_H - 3, B_SUNKEN);
     ui_num(tbuf, f->n);
     ui_cat(tbuf, f->n == 1 ? " item" : " items");
+    if ((i = nmarked(f)) > 1) { ui_cat(tbuf, ", "); ui_num(tbuf + ui_len(tbuf), i); ui_cat(tbuf, " selected"); }
     d_text(ox + 8, oy + ch - STATUS_H + 5, C_DARK, F_SANS, tbuf);
 }
 
@@ -532,7 +595,10 @@ void files_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
         row = f->top + (y - TOOL_H - 22) / ROW_H;
         if (row >= 0 && row < f->n) {
             f->sel = row;
-            if (ev == E_DBL) open_sel(w);
+            if (ev == E_DBL) { mark_only(f, row); open_sel(w); }
+            else if (wm_mods & M_CTRL) { f->mark[row] = !f->mark[row]; f->anchor = row; }
+            else if (wm_mods & M_SHIFT) mark_range(f, row);
+            else mark_only(f, row);
         }
     }
 }
@@ -567,12 +633,16 @@ void files_key(struct win *w, int code, int ch, int mods) {
         }
         return;
     }
-    if (code == KEY_UP && f->sel > 0) --f->sel;
-    else if (code == KEY_DOWN && f->sel < f->n - 1) ++f->sel;
-    else if (code == KEY_HOME) f->sel = 0;
-    else if (code == KEY_END) f->sel = f->n - 1;
-    else if (code == KEY_PGUP) { f->sel = f->sel - 10; if (f->sel < 0) f->sel = 0; }
-    else if (code == KEY_PGDN) { f->sel = f->sel + 10; if (f->sel >= f->n) f->sel = f->n - 1; }
+    if (code == KEY_UP && f->sel > 0) move_to(f, f->sel - 1, mods);
+    else if (code == KEY_DOWN && f->sel < f->n - 1) move_to(f, f->sel + 1, mods);
+    else if (code == KEY_HOME) move_to(f, 0, mods);
+    else if (code == KEY_END) move_to(f, f->n - 1, mods);
+    else if (code == KEY_PGUP) move_to(f, f->sel - 10 < 0 ? 0 : f->sel - 10, mods);
+    else if (code == KEY_PGDN) move_to(f, f->sel + 10 >= f->n ? f->n - 1 : f->sel + 10, mods);
+    else if ((mods & M_CTRL) && (code == 'A' || ch == 1 || ch == 'a')) {
+        i = 0;
+        while (i < f->n) { f->mark[i] = 1; ++i; }
+    }
     else if (code == KEY_ENTER) open_sel(w);
     else if (code == KEY_BACK) up(w);
     else if (code == KEY_DEL) files_command(w, 0, 2);
@@ -582,15 +652,33 @@ void files_key(struct win *w, int code, int ch, int mods) {
 
 void files_command(struct win *w, int menu, int item) {
     struct files *f;
+    char path[256], name[NAMEW];
+    int n, i, dirs;
     f = F(w);
     if (menu == 0) {
         if (item == 0) open_sel(w);
         else if (item == 1) inputbox(w, "New Folder", "Name of the new folder:", "New Folder", A_NEWDIR);
         else if (item == 2 && f->n) {
-            ui_cpy(tbuf, "Delete '");
-            ui_cat(tbuf, ename(f, f->sel));
-            ui_cat(tbuf, "'?");
-            msgbox(w, f->isdir[f->sel] ? "Delete Folder" : "Delete File", tbuf, 1, A_DELETE);
+            if (!nmarked(f)) mark_only(f, f->sel);
+            n = nmarked(f);
+            dirs = 0;
+            i = 0;
+            while (i < f->n) { if (f->mark[i] && f->isdir[i]) ++dirs; ++i; }
+            if (n > 1) {
+                ui_cpy(tbuf, "Delete these ");
+                ui_num(tbuf + ui_len(tbuf), n);
+                ui_cat(tbuf, dirs ? " items, and all in the folders among them?" : " items?");
+                msgbox(w, "Delete Items", tbuf, 1, A_DELETE);
+            } else {
+                i = 0;
+                while (!f->mark[i]) ++i;
+                ui_cpy(tbuf, "Delete '");
+                ui_cat(tbuf, ename(f, i));
+                // a folder with something in it goes with all of it: say so
+                join(path, f->path, ename(f, i));
+                ui_cat(tbuf, f->isdir[i] && ureaddir(path, 0, name) >= 0 ? "' and all in it?" : "'?");
+                msgbox(w, f->isdir[i] ? "Delete Folder" : "Delete File", tbuf, 1, A_DELETE);
+            }
         }
         else if (item == 3 && f->n) inputbox(w, "Rename", "New name:", ename(f, f->sel), A_RENAME);
         else if (item == 5) win_close(win_index(w));
@@ -600,13 +688,27 @@ void files_command(struct win *w, int menu, int item) {
 
 void files_answer(struct win *w, int action, int yes) {
     struct files *f;
-    char path[160];
+    char path[256];
+    int i, bad;
     f = F(w);
     if (!yes) return;
     if (action == A_DELETE && f->n) {
-        join(path, f->path, ename(f, f->sel));
-        if (uunlink(path) < 0)
-            msgbox(w, "Error Deleting", f->isdir[f->sel] ? "Cannot delete: the folder is not empty." : "Cannot delete: the file is in use or is part of the disk.", 0, A_NONE);
+        // every item selected, a folder with all in it
+        bad = 0;
+        i = 0;
+        while (i < f->n) {
+            if (f->mark[i]) {
+                join(path, f->path, ename(f, i));
+                if (f->isdir[i]) bad = bad + del_tree(path);
+                else if (uunlink(path) < 0) ++bad;
+            }
+            ++i;
+        }
+        if (bad) {
+            ui_num(tbuf, bad);
+            ui_cat(tbuf, bad == 1 ? " item could not be deleted: in use, or part of the disk." : " items could not be deleted: in use, or part of the disk.");
+            msgbox(w, "Error Deleting", tbuf, 0, A_NONE);
+        }
         load(f); tree_load(f);
     } else if (action == A_RENAME && f->n) {
         join(path, f->path, ename(f, f->sel));

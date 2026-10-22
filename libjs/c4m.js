@@ -74,6 +74,9 @@ export const C4I_C4MJS = 0x8, C4I_GUI = 0x4000, C4I_SND = 0x8000;
 // count is __c4_cpu_count()'s to say. (c4m.c gives 0x100 to its memory
 // protection guard too, which libjs never runs.)
 export const C4I_SMP = 0x100;
+// ... and they run at once, a thread each (par.js), rather than taking
+// turns on one (smp.js). Free in c4m.c's list, which ends at C4I_FPU.
+export const C4I_PAR = 0x20000;
 
 // Why run() stopped.
 // PARK and CPUHALT are one processor's, never the machine's (smp.js).
@@ -223,6 +226,7 @@ export class Machine {
            (this.gui && this.gui.fitted ? C4I_GUI : 0) |
            (this.snd && this.snd.fitted ? C4I_SND : 0) |
            (this.smp ? C4I_SMP : 0) |
+           (this.smp && this.smp.parallel ? C4I_PAR : 0) |
            (this.trapHandler ? C4I_TRAPH : 0);
   }
 

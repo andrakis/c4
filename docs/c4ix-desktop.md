@@ -135,7 +135,12 @@ tabs); a message box; resizable windows (drag the bottom-right corner).
 - **Explorer**: a folder tree next to a file list (Name, Size, Type), a
   menu bar, an address box with Up, a status bar. Double-click opens a
   folder, runs a program in a new Terminal, or opens anything else
-  in Text Editor. New Folder, Delete (confirmed), Rename.
+  in Text Editor. New Folder, Delete (confirmed), Rename. Several items
+  can be selected: Ctrl-click adds or removes one, Shift-click or
+  Shift with the arrows takes a range, Ctrl+A takes them all. Delete
+  takes everything selected, a folder with all that is in it. (A click
+  carries no modifiers from the page, but Ctrl and Shift are keys the
+  page sends: the desktop keeps them, `wm_mods`.)
 - **System Monitor** (Ctrl+Shift+Esc too): Applications (the desktop's
   windows, Close, Show), Processes (every task with PID, CPU %,
   CPU time in cycles, the memory it holds, syscalls and state, Kill),

@@ -29,6 +29,7 @@ import { Smp } from './smp.js';
 import { ParHost } from './par.js';
 import { Bus } from './bus.js';
 import { Heap } from './heap.js';
+import { SharedHeap } from './sheap.js';
 
 // The whole machine, empty. Both hosts (cli.js, worker.js) build it
 // here so they cannot drift apart.
@@ -42,9 +43,10 @@ import { Heap } from './heap.js';
 //             quantum instructions each in turn (default 1000). Without it,
 //             one CPU and no processor opcodes, as before
 //   parallel  ... on threads instead (par.js): a worker per CPU, made by
-//             spawn(url), on an arena in a SharedArrayBuffer. Where there
-//             is no SharedArrayBuffer (a page not cross-origin isolated),
-//             the simulated engine
+//             spawn(url), on an arena in a SharedArrayBuffer, with a heap
+//             whose books are shared too (sheap.js). Where there is no
+//             SharedArrayBuffer (a page not cross-origin isolated), the
+//             simulated engine
 export function createMachine(opts = {}) {
   const bytes = (opts.arenaMb || 32) * 1024 * 1024;
   const par = opts.cpus > 1 && opts.parallel && opts.spawn && typeof SharedArrayBuffer !== 'undefined';
@@ -56,7 +58,8 @@ export function createMachine(opts = {}) {
     hostNow: opts.hostNow,
   });
   const bus = new Bus(arena, opts.gui || null, opts.snd || null);
-  const machine = new Machine(arena, dev, bus, new Heap(0, 0));
+  // on threads, a heap every CPU's thread allocates from itself (sheap.js)
+  const machine = new Machine(arena, dev, bus, par ? new SharedHeap(arena, null) : new Heap(0, 0));
   // the FPU opcode (F3): on unless asked otherwise (fpu: false)
   machine.noFpu = opts.fpu === false;
   dev.noFpu = machine.noFpu;

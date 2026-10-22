@@ -5,17 +5,19 @@
 // It runs its Machine on the shared arena, flat out, while its state is
 // RUN; parks in Atomics.wait on the guest's word for CWAI; sleeps in
 // Atomics.wait for USLP; and waits on its state word while it is off or
-// halted, until a CPUS starts it again. What reaches the devices, the
-// heap or the console it asks CPU 0 for, through its request slot.
+// halted, until a CPUS starts it again. What reaches the devices or the
+// console it asks CPU 0 for, through its request slot. The heap it uses
+// itself: its books are shared (sheap.js).
 
 import { Arena } from '../src/c4bb/sim/arena.js';
 import { OP, STOP, Machine } from './c4m.js';
 import { C, K, S, R, KIND, ParCore } from './par.js';
+import { SharedHeap } from './sheap.js';
 
 const word = (k, f) => C.CPU0 + k * C.STRIDE + f;
 
-// the opcodes whose work is CPU 0's: the devices, the heap, the console
-const ASK = new Set([OP.OPEN, OP.READ, OP.CLOS, OP.PRTF, OP.MALC, OP.FREE, OP.RALC,
+// the opcodes whose work is CPU 0's: the devices, the console
+const ASK = new Set([OP.OPEN, OP.READ, OP.CLOS, OP.PRTF,
   OP.PUTC, OP.PUTS, OP.STRC, OP._OPC, OP.DBG]);
 // guarded in protected mode, as on CPU 0 (c4m.js sys): a protected task's
 // gets the local trap, never CPU 0's service
@@ -127,6 +129,7 @@ function main(msg) {
   arena.io = null;                    // device registers go through ApBus, to CPU 0
   bus.m = m;
   m.noFpu = msg.noFpu;
+  m.heap = new SharedHeap(arena, msg.heap);
   m.smp = core;
   m.cpuId = id;
   m.cpuState = 'off';

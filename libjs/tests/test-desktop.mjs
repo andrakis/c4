@@ -394,6 +394,30 @@ key('DEL');
 check(until(() => has(/Delete 'docs'/)), 'Delete asks first');
 key('y');
 check(until(() => noDialog() && !inList(find('docs'))), 'and Yes deletes it');
+// Several at once, and a folder with something in it: Ctrl-click takes a
+// second item (Ctrl is a key the page sends, wm_mods), and Delete takes
+// both, and what is inside
+const newdir = name => {
+  clickText('File'); settle(); clickText('New Folder');
+  until(() => has('Name of the new folder:'));
+  for (let i = 0; i < 12; i++) key('\b');
+  type(name); key('\n');
+  return until(() => noDialog() && !!inList(find(name)));
+};
+check(newdir('aa') && newdir('bb'), 'two new folders', screen());
+dbl('aa', inList);
+check(until(() => has('Files - /tmp/aa')) && newdir('inner'), 'and one inside the first', screen());
+key('\b');
+check(until(() => has('Files - /tmp')), 'back in /tmp');
+clickText('aa', inList);
+ev({ kind: 'keydown', code: 17, char: 0, mods: 2 });
+clickText('bb', inList);
+ev({ kind: 'keyup', code: 17, char: 0, mods: 0 });
+check(until(() => has(/2 selected/)), 'Ctrl-click selects a second item', screen());
+key('DEL');
+check(until(() => has(/Delete these 2 items/)), 'Delete asks about both', screen());
+key('y');
+check(until(() => noDialog() && !inList(find('aa')) && !inList(find('bb'))), 'and Yes deletes both, the folder inside too', screen());
 
 // ---- Text Editor --------------------------------------------------------------------------
 start('Text Editor');

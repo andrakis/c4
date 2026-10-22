@@ -177,7 +177,7 @@ they run in parallel under a BKL.
 | S2 (done) | libjs parallel engine: workers, `SharedArrayBuffer` arena, `Atomics`, the forwarding block; Node and the page | the same guests with `--parallel`; a two-CPU spin test that runs both halves at full speed; the page when isolated |
 | S3 (done) | C4IX SMP kernel: AP boot, BKL, per-CPU state, scheduler, library slots in the window | test-libjs's C4IX checks on the simulated engine at 1, 2 and 4 CPUs and on threads (`make test-c4ix-smp`); compiles at once on the parallel engine, four in half the time of four on one CPU |
 | S4 (done) | Show and use it: per-CPU load in `top` and System Monitor, `b4ke -j` | test-c4ix-smp's checks; a parallel rebuild measured against a serial one |
-| later | Finer kernel locks; a shared-memory heap; c4mp pass 2 (native threads) and the window there | profiles; test-c4mp |
+| later | A shared-memory heap (done) and finer kernel locks (memory, done; more where profiles say); c4mp pass 2 (native threads) and the window there | test-sheap; compiles measured; test-c4mp |
 
 At one CPU nothing changes: the same images, the same timings, and the
 same tests.
@@ -376,6 +376,66 @@ Four of them beside the unpacked root archive overran the page's 64 MB.
 
 `make test-c4ix-smp` checks `ps` and `top`'s columns and `b4ke -j`, at
 each CPU count.
+
+### After S4 (2026-10-23): a shared heap, and a lock the memory skips
+
+From "later" in the table: the heap and the first of the finer locks.
+
+**The heap is every CPU's** (libjs/sheap.js), on the parallel engine.
+Its rules are heap.js's, and its books are a SharedArrayBuffer apart from
+the arena:
+- **a byte for every 16 bytes** says what block starts there, so freeing
+  a stray pointer still changes nothing;
+- **a word for every 4096 bytes** holds the span of a large block;
+- **the free ranges** are kept in a sorted array.
+
+Together they come to about 7% of the arena. Every thread allocates under
+one spinlock, instead of asking CPU 0 through the event loop for every
+`malloc`.
+
+The one thing in the arena is a free small block's link to the next on
+its class's list. A guest that writes to memory it has freed can break
+that link, but every link is checked against the books before it is
+followed, so a broken list is dropped and never handed out. The
+simulated engine, and one CPU, keep heap.js. test-sheap.mjs runs four
+threads at once against it.
+
+**Memory skips the kernel lock.** A protected program's `malloc` and
+`free` (its PM traps) touch only the heap and the program's own list of
+blocks. That list now has a lock of its own (task.c, `umem_lock`). A trap
+that is only that, and leaves its task running with its slice left and
+nothing pending, takes `sched_trap`'s light path (`sched_light`) without
+the kernel lock. In one compile on 4 CPUs, 11,564 of 11,793 such traps
+did.
+
+For it, a task's cycle accumulators are its own CPU's: snapshots and
+`ps` read them and fold nothing. Locks are now one kind: `klock_take`
+and `klock_drop`, nested per CPU, which spin and then park. The kernel
+lock is one of them.
+
+`cc -O mandel.c` inside C4IX, in seconds past boot, against S3's
+figures:
+
+| | S3 | now |
+|---|---|---|
+| one compile, 2 CPUs on threads (1 CPU: 7.3) | 8.2 | 7.0 |
+| four at once, 4 CPUs on threads (1 CPU: 27.3) | 14.0 | 11.3 |
+
+A compile on a CPU other than 0 now runs as fast as on one CPU. Four at
+once are held back by the host, not the kernel: on helios (6 cores,
+shared), four separate one-CPU machines compiling at once take 13.7 s
+for what one alone does in 7.3.
+
+**The rest:**
+- **The boot says what the machine is:** its memory and layout ("64 MB:
+  the kernel below 0x31000, the heap to 0x3eff000"), and its processors,
+  each with only its window of its own, running "a thread each, all at
+  once" or "simulated, taking turns on one thread". libjs reports the
+  parallel engine as `C4I_PAR` (0x20000).
+- **System Monitor's Tasks tab** has a CPU column on several CPUs.
+- **For a rebuild from clean:** the shell expands `*` and `?` in a word's
+  last part, `rm -r` takes a tree, `ls` takes several names, and Files
+  selects and deletes several items, folders whole (docs/c4ix-desktop.md).
 
 ## 6. Risks
 

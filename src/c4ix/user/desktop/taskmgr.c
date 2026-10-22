@@ -31,6 +31,7 @@ struct tasks {
     int tab, sel, top, asel;
     int n;                                     // rows: idle, System, then the tasks
     int id[MAXP], state[MAXP], privs[MAXP], sys[MAXP], cpu[MAXP];
+    int on[MAXP];                              // the CPU running it, -1 none (several CPUs)
     int ival[MAXP];                            // Interval: thousands of cycles in the last sample
     int mem[MAXP];                             // bytes held; -1 for the idle row, which shows none
     int heap, heapused;                        // the heap, when the host says (else 0)
@@ -54,6 +55,7 @@ static int row(struct tasks *t, int id, char *name, int privs, int state, int sy
     int k;
     k = t->n;
     t->id[k] = id; t->privs[k] = privs; t->state[k] = state; t->sys[k] = sys; t->cpu[k] = cpu;
+    t->on[k] = 0 - 1;
     t->ival[k] = ival;
     t->mem[k] = mem;
     t->time[k] = time;
@@ -119,8 +121,10 @@ static void sample(struct tasks *t) {
     k = 0;
     while (k < b->h.ntasks) {
         r = &b->t[k];
-        if (!cpu_isidle(b, r->id))
-            row(t, r->id, r->name, r->privs, r->state, r->nsyscalls, pct[k], t->sampled ? cpu_kdelta(a, b, k, 0) : 0, r->user, r->mem);
+        if (!cpu_isidle(b, r->id)) {
+            c = row(t, r->id, r->name, r->privs, r->state, r->nsyscalls, pct[k], t->sampled ? cpu_kdelta(a, b, k, 0) : 0, r->user, r->mem);
+            t->on[c] = r->cpu;
+        }
         ++k;
     }
     t->cur = 1 - t->cur;
@@ -150,12 +154,13 @@ static void sample(struct tasks *t) {
 }
 
 int tasks_open() {
-    int i, k;
+    int i, k, info[TASKINFO_WORDS];
     struct win *w;
     // one System Monitor at a time: another request brings it forward
     w = win_first();
     while (w) { if (w->used && w->kind == K_TASKS) { win_raise(w->id); return w->id; } w = w->next; }
-    i = win_open(K_TASKS, "System Monitor", 570, 440);   // room for Memory
+    // room for Memory; and on several CPUs, for the CPU column
+    i = win_open(K_TASKS, "System Monitor", utaskinfo(0, info) && info[TI_NCPU] > 1 ? 600 : 570, 440);
     if (i < 0) return i;
     w = win_get(i);
     S(w)->tab = 1;
@@ -204,8 +209,8 @@ static char *state_name(int s) {
 
 // ---- drawing ----------------------------------------------------------------------
 
-static int widths[8];
-static char *labels[8];
+static int widths[9];
+static char *labels[9];
 
 // bytes as the Memory column shows them: "348 K", or "12.4 M"
 static void kbytes(char *out, int b) {
@@ -265,14 +270,23 @@ static void draw_apps(struct win *me, struct tasks *t, int ox, int oy, int cw, i
     ui_button(ox + cw - 104, oy + ch - 40, 90, 24, "Run...", 0, 0);
 }
 
+// The Tasks columns. On several CPUs one more, after PID: the CPU running
+// each task (docs/c4ix-smp.md S4), and the share becomes "CPU %" beside it.
 static void draw_procs(struct tasks *t, int ox, int oy, int cw, int ch) {
-    int k, y, x, rows, fg;
+    int k, y, x, rows, fg, smp, c;
     list_box(ox + 8, oy + PAGE_Y + 10, cw - 16, ch - PAGE_Y - 60);
-    widths[0] = 120; widths[1] = 40; widths[2] = 36; widths[3] = 66; widths[4] = 74; widths[5] = 70;
-    widths[6] = 60; widths[7] = cw - 20 - 466;
-    labels[0] = "Name"; labels[1] = "PID"; labels[2] = "CPU"; labels[3] = "Interval";
-    labels[4] = "CPU Time"; labels[5] = "Memory"; labels[6] = "Syscalls"; labels[7] = "State";
-    ui_header(ox + 10, oy + PAGE_Y + 12, widths, labels, 8);
+    smp = t->ncpu > 1;
+    c = 0;
+    widths[c] = smp ? 110 : 120; labels[c++] = "Name";
+    widths[c] = 40; labels[c++] = "PID";
+    if (smp) { widths[c] = 30; labels[c++] = "CPU"; }
+    widths[c] = smp ? 40 : 36; labels[c++] = smp ? "CPU %" : "CPU";
+    widths[c] = 66; labels[c++] = "Interval";
+    widths[c] = 74; labels[c++] = "CPU Time";
+    widths[c] = 70; labels[c++] = "Memory";
+    widths[c] = 60; labels[c++] = "Syscalls";
+    widths[c] = cw - 20 - (smp ? 490 : 466); labels[c++] = "State";
+    ui_header(ox + 10, oy + PAGE_Y + 12, widths, labels, c);
     rows = (ch - PAGE_Y - 60 - 26) / ROW_H;
     if (t->sel < t->top) t->top = t->sel;
     if (t->sel >= t->top + rows) t->top = t->sel - rows + 1;
@@ -282,20 +296,25 @@ static void draw_procs(struct tasks *t, int ox, int oy, int cw, int ch) {
         fg = k == t->sel ? C_WHITE : C_DARK;
         if (k == t->sel) d_rect(ox + 12, y - 1, cw - 26, ROW_H, C_SEL);
         x = ox + 14;
-        d_text(x, y + 1, fg, F_SANS, t->name + k * NAMEW); x = x + widths[0];
+        c = 0;
+        d_text(x, y + 1, fg, F_SANS, t->name + k * NAMEW); x = x + widths[c++];
         buf[0] = 0; if (t->id[k] >= 0) ui_num(buf, t->id[k]);   // System has no PID
-        d_text(x + widths[1] - 8 - ui_len(buf) * 6, y + 1, fg, F_SANS, buf); x = x + widths[1];
+        d_text(x + widths[c] - 8 - ui_len(buf) * 6, y + 1, fg, F_SANS, buf); x = x + widths[c++];
+        if (smp) {
+            buf[0] = 0; if (t->on[k] >= 0) ui_num(buf, t->on[k]);   // running nowhere: blank
+            d_text(x + widths[c] - 8 - ui_len(buf) * 6, y + 1, fg, F_SANS, buf); x = x + widths[c++];
+        }
         ui_num(buf, t->cpu[k]); if (ui_len(buf) < 2) { buf[1] = buf[0]; buf[0] = '0'; buf[2] = 0; }
-        d_text(x + widths[2] - 8 - ui_len(buf) * 6, y + 1, fg, F_SANS, buf); x = x + widths[2];
+        d_text(x + widths[c] - 8 - ui_len(buf) * 6, y + 1, fg, F_SANS, buf); x = x + widths[c++];
         kcycles(buf, t->ival[k]);
-        d_text(x + widths[3] - 8 - ui_len(buf) * 6, y + 1, fg, F_SANS, buf); x = x + widths[3];
+        d_text(x + widths[c] - 8 - ui_len(buf) * 6, y + 1, fg, F_SANS, buf); x = x + widths[c++];
         // CPU time: thousands of cycles, or millions once they pass a billion
         if (t->time[k] >= 1000000000) { ui_num_commas(buf, (int)(t->time[k] / 1000000)); ui_cat(buf, "M"); }
         else { ui_num_commas(buf, (int)(t->time[k] / 1000)); ui_cat(buf, "k"); }
-        d_text(x + widths[4] - 8 - ui_len(buf) * 6, y + 1, fg, F_SANS, buf); x = x + widths[4];
+        d_text(x + widths[c] - 8 - ui_len(buf) * 6, y + 1, fg, F_SANS, buf); x = x + widths[c++];
         buf[0] = 0; if (t->mem[k] >= 0) kbytes(buf, t->mem[k]);
-        d_text(x + widths[5] - 8 - ui_len(buf) * 6, y + 1, fg, F_SANS, buf); x = x + widths[5];
-        ui_num_commas(buf, t->sys[k]); d_text(x + widths[6] - 8 - ui_len(buf) * 6, y + 1, fg, F_SANS, buf); x = x + widths[6];
+        d_text(x + widths[c] - 8 - ui_len(buf) * 6, y + 1, fg, F_SANS, buf); x = x + widths[c++];
+        ui_num_commas(buf, t->sys[k]); d_text(x + widths[c] - 8 - ui_len(buf) * 6, y + 1, fg, F_SANS, buf); x = x + widths[c++];
         d_text(x + 4, y + 1, fg, F_SANS, state_name(t->state[k]));
         y = y + ROW_H;
         ++k;

@@ -19,13 +19,15 @@
 //   cmd < in > out  -- redirection
 //   a | b | c       -- pipelines of any length
 //   cmd &           -- background, reported by `jobs`, reaped by `wait`
-//   builtins        -- exit, jobs, wait, cd, help
+//   *.c, a?.txt     -- wildcards in a word's last component (sh_glob)
+//   builtins        -- exit, jobs, wait, cd, pwd, rm [-r] [-f], mv, help
 //
 
 #include "c4ix_user.h"
 
-enum { LINE_MAX = 256, WORD_MAX = 32, ARG_MAX = 16, JOB_MAX = 8 };
-enum { RDBUF = 512 };
+// ARG_MAX is an expanded line's words: rm /build/bin/* is a few dozen
+enum { LINE_MAX = 256, WORD_MAX = 32, ARG_MAX = 512, JOB_MAX = 8 };
+enum { RDBUF = 512, GLOB_POOL = 32768, NAME_MAX = 64, PATHW = 256 };
 
 // ---- buffered line input ----
 //
@@ -111,6 +113,141 @@ static int sh_split(char *line, char **words, int max) {
         if (sh_special(c) && n < max) { words[n] = sh_optoken(c); ++n; }
     }
     return n;
+}
+
+// ---- wildcards ----
+//
+// A word with * (any run of characters) or ? (any one) in its last
+// component becomes the names in that directory it matches, sorted, as
+// sh does it: rm /build/bin/*, cat *.txt. A name starting with '.' is
+// matched only by a pattern that does too. No match leaves the word as
+// written, so a command can say what it could not find. The directory
+// part is taken as it is: /usr/*/x is not expanded. The names live in a
+// pool kept for the line; a background job copies its own (sh_dup_argv).
+static char *glob_pool;
+static int glob_used;
+
+static int sh_wild(char *w) {
+    while (*w) { if (*w == '*' || *w == '?') return 1; ++w; }
+    return 0;
+}
+
+static int sh_match(char *p, char *s) {
+    if (!*p) return !*s;
+    if (*p == '*') {
+        while (1) {
+            if (sh_match(p + 1, s)) return 1;
+            if (!*s) return 0;
+            ++s;
+        }
+    }
+    if (!*s) return 0;
+    if (*p == '?' || *p == *s) return sh_match(p + 1, s + 1);
+    return 0;
+}
+
+// Expand WORD into argv from K, up to MAX. Returns how many it added.
+static int sh_glob(char *word, char **argv, int k, int max) {
+    char dir[PATHW], name[NAME_MAX];
+    char *pat, *s, *t;
+    int i, slash, start, need, j;
+
+    slash = 0 - 1;
+    i = 0;
+    while (word[i]) { if (word[i] == '/') slash = i; ++i; }
+    if (slash >= PATHW - 1) return 0;
+    pat = word + slash + 1;
+    if (slash < 0) { dir[0] = '.'; dir[1] = 0; }
+    else if (slash == 0) { dir[0] = '/'; dir[1] = 0; }
+    else { i = 0; while (i < slash) { dir[i] = word[i]; ++i; } dir[i] = 0; }
+    if (sh_wild(dir)) return 0;
+    if (!glob_pool && !(glob_pool = (char *)ualloc(GLOB_POOL))) return 0;
+    start = k;
+    i = 0;
+    while (k < max && ureaddir(dir, i, name) >= 0) {
+        ++i;
+        if (name[0] == '.' && pat[0] != '.') continue;
+        if (!sh_match(pat, name)) continue;
+        need = slash + 1 + ustrlen(name) + 1;
+        if (glob_used + need > GLOB_POOL) { uprintf("sh: too many names for %s\n", word); break; }
+        s = glob_pool + glob_used;
+        j = 0;
+        while (j <= slash) { s[j] = word[j]; ++j; }
+        ustrcpy(s + j, name);
+        glob_used = glob_used + need;
+        argv[k] = s;
+        ++k;
+    }
+    // sorted, as the names would be listed
+    i = start + 1;
+    while (i < k) {
+        j = i;
+        while (j > start && ustrcmp(argv[j], argv[j - 1]) < 0) {
+            t = argv[j]; argv[j] = argv[j - 1]; argv[j - 1] = t;
+            --j;
+        }
+        ++i;
+    }
+    return k - start;
+}
+
+// ---- rm ----
+//
+// rm [-r] [-f] PATH...: -r takes a directory and everything in it, files
+// first and then the directories as they empty; -f says nothing of what
+// it could not remove. Without -r an empty directory still goes, as the
+// kernel's unlink allows.
+
+// DIR's contents, then DIR. How many could not be removed.
+static int sh_rmtree(char *dir, int quiet) {
+    char name[NAME_MAX], sub[PATHW];
+    int i, r, bad, n;
+    bad = 0;
+    i = 0;
+    while ((r = ureaddir(dir, i, name)) >= 0) {
+        n = ustrlen(dir);
+        if (n + ustrlen(name) + 2 > PATHW) { ++bad; ++i; continue; }
+        ustrcpy(sub, dir);
+        if (!(n == 1 && dir[0] == '/')) { sub[n] = '/'; sub[n + 1] = 0; }
+        ustrcpy(sub + ustrlen(sub), name);
+        if (r == 1) n = sh_rmtree(sub, quiet);
+        else {
+            n = uunlink(sub) < 0;
+            if (n && !quiet) uprintf("rm: cannot remove %s\n", sub);
+        }
+        // what went no longer takes index i; what stayed does
+        if (n) { bad = bad + n; ++i; }
+    }
+    if (uunlink(dir) < 0) {
+        if (!bad && !quiet) uprintf("rm: cannot remove %s\n", dir);
+        ++bad;
+    }
+    return bad;
+}
+
+static void sh_rm(char **argv, int argc) {
+    int k, j, rec, quiet, st[4];
+    rec = 0; quiet = 0;
+    k = 1;
+    while (k < argc && argv[k][0] == '-' && argv[k][1]) {
+        j = 1;
+        while (argv[k][j]) {
+            if (argv[k][j] == 'r' || argv[k][j] == 'R') rec = 1;
+            else if (argv[k][j] == 'f') quiet = 1;
+            else { uprintf("usage: rm [-r] [-f] PATH...\n"); return; }
+            ++j;
+        }
+        ++k;
+    }
+    if (k == argc && !quiet) uprintf("usage: rm [-r] [-f] PATH...\n");
+    while (k < argc) {
+        if (rec && ustat(argv[k], st) == 0 && st[0] == 1) sh_rmtree(argv[k], quiet);
+        else if (uunlink(argv[k]) < 0 && !quiet) {
+            if (ustat(argv[k], st) == 0 && st[0] == 1) uprintf("rm: %s is a directory with things in it: rm -r\n", argv[k]);
+            else uprintf("rm: cannot remove %s\n", argv[k]);
+        }
+        ++k;
+    }
 }
 
 // ---- command resolution ----
@@ -300,6 +437,8 @@ static int sh_builtin(char **argv, int argc) {
         uprintf("builtins: exit jobs wait kill cd pwd rm mv help\n");
         uprintf("  kill [-SIG] %%JOB | PID   default signal 15 (TERM)\n");
         uprintf("  wait [PID]                every job, or task PID\n");
+        uprintf("  rm [-r] [-f] PATH...      -r: a directory and all in it\n");
+        uprintf("wildcards: * and ? in a word's last part, as in rm /build/bin/*\n");
         return 1;
     }
     if (!ustrcmp(argv[0], "cd")) {
@@ -309,15 +448,7 @@ static int sh_builtin(char **argv, int argc) {
         return 1;
     }
     // the syscalls Files and the IDE use, for the console too
-    if (!ustrcmp(argv[0], "rm")) {
-        int k;
-        k = 1;
-        while (k < argc) {
-            if (uunlink(argv[k]) < 0) uprintf("rm: cannot remove %s\n", argv[k]);
-            ++k;
-        }
-        return 1;
-    }
+    if (!ustrcmp(argv[0], "rm")) { sh_rm(argv, argc); return 1; }
     if (!ustrcmp(argv[0], "mv")) {
         if (argc != 3) uprintf("usage: mv PATH NEWNAME (in the same directory)\n");
         else if (urename(argv[1], argv[2]) < 0) uprintf("mv: cannot rename %s\n", argv[1]);
@@ -339,7 +470,7 @@ static int sh_runline(char **w, int nw) {
     char **spawned;
     char *infile, *outfile;
     char *cand;
-    int i, argc, background, hasnext, pid, fd, st, form;
+    int i, k, argc, background, hasnext, pid, fd, st, form;
     int prev_read, saved0, saved1;
     int p[2];
     int pids[ARG_MAX];
@@ -350,6 +481,7 @@ static int sh_runline(char **w, int nw) {
         if (w[nw - 1] == tok_amp) { background = 1; --nw; }
     }
     if (!nw) return 0;
+    glob_used = 0;          // the last line's names are copied where they were kept
 
     prev_read = -1;
     npids = 0;
@@ -362,7 +494,11 @@ static int sh_runline(char **w, int nw) {
         while (i < nw && w[i] != tok_pipe) {
             if (w[i] == tok_in) { ++i; if (i < nw) infile = w[i]; }
             else if (w[i] == tok_out) { ++i; if (i < nw) outfile = w[i]; }
-            else if (argc < ARG_MAX - 1) { argv[argc] = w[i]; ++argc; }
+            else if (argc < ARG_MAX - 1) {
+                k = sh_wild(w[i]) ? sh_glob(w[i], argv, argc, ARG_MAX - 1) : 0;
+                if (k) argc = argc + k;
+                else { argv[argc] = w[i]; ++argc; }
+            }
             ++i;
         }
         argv[argc] = 0;

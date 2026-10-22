@@ -55,6 +55,7 @@ enum { KEY_BACK = 8, KEY_TAB = 9, KEY_ENTER = 13, KEY_ESC = 27, KEY_PGUP = 33, K
        KEY_END = 35, KEY_HOME = 36, KEY_LEFT = 37, KEY_UP = 38, KEY_RIGHT = 39, KEY_DOWN = 40,
        KEY_DEL = 46, KEY_F2 = 113, KEY_F5 = 116 };
 enum { M_SHIFT = 1, M_CTRL = 2, M_ALT = 4 };
+extern int wm_mods;      // the modifiers held now, for a click (wm.c)
 
 // dialog results reach the window that asked through app_answer()
 enum { A_NONE = 0, A_DELETE = 1, A_RENAME = 2, A_NEWDIR = 3, A_OPEN = 4, A_SAVEAS = 5,

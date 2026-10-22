@@ -264,7 +264,24 @@ int task_ghost(int id, int *pcode) {
 // writes events into a ring the task attached and should have detached
 // on its way out -- task_ufree_all detaches it instead of letting the
 // host write into freed memory.
+//
+// The lists have a lock of their own (docs/c4ix-smp.md, finer locks): a
+// program's malloc and free come here from sched_trap's light path,
+// without the kernel lock, on whichever CPU runs it. Everything that
+// walks or changes a list holds umem_lock while it does.
 enum { UBLOCK_WORDS = 4, UBLOCK_MAGIC = 0x55424c4b };
+static int umem_lock[2];
+
+// What a task holds in blocks, headers included (sched.c's task_mem)
+int task_umem(struct task *t) {
+    int b, *u;
+    b = 0;
+    klock_take(umem_lock);
+    u = (int *)t->ublocks;
+    while (u) { b = b + u[2] + UBLOCK_WORDS * sizeof(int); u = (int *)u[0]; }
+    klock_drop(umem_lock);
+    return b;
+}
 
 // A vfork child allocates for its parent: the heap is part of the memory
 // it borrows, and libc's allocator, in the shared library data, carves
@@ -275,12 +292,14 @@ int task_ualloc(struct task *t, int bytes) {
     while (t->vfparent) t = t->vfparent;
     if (bytes < 0 || !(h = (int *)malloc(bytes + UBLOCK_WORDS * sizeof(int)))) return 0;
     sched_lock();
+    klock_take(umem_lock);
     h[0] = t->ublocks;
     h[1] = (int)&t->ublocks;
     h[2] = bytes;
     h[3] = UBLOCK_MAGIC;
     if (h[0]) ((int *)h[0])[1] = (int)h;
     t->ublocks = (int)h;
+    klock_drop(umem_lock);
     sched_unlock();
     return (int)(h + UBLOCK_WORDS);
 }
@@ -291,9 +310,13 @@ void task_ufree(int p) {
     h = (int *)p - UBLOCK_WORDS;
     if (h[3] != UBLOCK_MAGIC) { free((int *)p); return; }
     sched_lock();
+    klock_take(umem_lock);
+    // looked at again under the lock: another CPU may have freed it
+    if (h[3] != UBLOCK_MAGIC) { klock_drop(umem_lock); sched_unlock(); return; }
     *(int *)h[1] = h[0];
     if (h[0]) ((int *)h[0])[1] = h[1];
     h[3] = 0;
+    klock_drop(umem_lock);
     sched_unlock();
     free(h);
 }
@@ -302,7 +325,9 @@ static void task_ufree_all(struct task *t) {
     int *h, *n;
     int ring;
     ring = host_has(C4IX_I_GUI) ? *(int *)C4IX_GUI_RING : 0;
+    klock_take(umem_lock);
     h = (int *)t->ublocks;
+    t->ublocks = 0;
     while (h) {
         n = (int *)h[0];
         if (ring && ring >= (int)(h + UBLOCK_WORDS) && ring < (int)(h + UBLOCK_WORDS) + h[2]) {
@@ -313,7 +338,7 @@ static void task_ufree_all(struct task *t) {
         free(h);
         h = n;
     }
-    t->ublocks = 0;
+    klock_drop(umem_lock);
 }
 
 // Free what a task owns. Only ever called for a task nobody is

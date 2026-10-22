@@ -39,6 +39,7 @@ static struct task *kernel_task;
 static struct task *idle_task;
 static int sched_idle(int argc, int argv);
 static int sched_unblocked(struct task *n);
+static void sched_banner();
 static int sched_interval;   // preemption interval, 0 = none
 
 // ---- processors (docs/c4ix-smp.md S3) ----
@@ -81,9 +82,7 @@ static struct task *smp_idle_t[CPU_MAX];   // ... and that idle task
 static int smp_stopping;             // shutdown: the other CPUs halt
 static int smp_halted;               // ... and count themselves out
 static int smp_slots;                // library slots given out (loader.c)
-static int bkl_owner;                // 1 + the CPU holding the kernel lock, 0 if none
-static int bkl_depth;                // its holds, nested
-// Spins before a CPU parks on the lock: a hold is usually a syscall's
+// Spins before a CPU parks on a lock: a hold is usually a syscall's
 // worth, much less than a park and a wake.
 enum { BKL_SPIN = 64, SMP_STACK_BYTES = 65536 };
 
@@ -91,24 +90,37 @@ void sched_early() {
     cpu_self = &cpu_boot;
 }
 
-static void bkl_take() {
+// ---- locks ----
+//
+// A kernel lock is two words: 1 + the CPU holding it (0 if none), and
+// its holds, nested, so a CPU can take one it has. A CPU spins a little
+// on one held elsewhere, then parks in CWAI until the holder lets go.
+// On one CPU there is nothing to lock against, and these do nothing.
+void klock_take(int *lk) {
     int me, o, spin;
     if (smp_ncpu < 2) return;
     me = cpu_self->id + 1;
-    if (bkl_owner == me) { ++bkl_depth; return; }
+    if (lk[0] == me) { ++lk[1]; return; }
     spin = 0;
-    while ((o = __c4_cas((int)&bkl_owner, 0, me))) {
-        if (++spin > BKL_SPIN) { __c4_wait((int)&bkl_owner, o); spin = 0; }
+    while ((o = __c4_cas((int)lk, 0, me))) {
+        if (++spin > BKL_SPIN) { __c4_wait((int)lk, o); spin = 0; }
     }
-    bkl_depth = 1;
+    lk[1] = 1;
 }
 
-static void bkl_drop() {
+void klock_drop(int *lk) {
     if (smp_ncpu < 2) return;
-    if (--bkl_depth) return;
-    __c4_xchg((int)&bkl_owner, 0);
-    __c4_wake((int)&bkl_owner, 1);
+    if (--lk[1]) return;
+    __c4_xchg((int)lk, 0);
+    __c4_wake((int)lk, 1);
 }
+
+// The big one, the KERNEL LOCK: everything in the kernel but what has a
+// lock of its own -- so far, the tasks' memory (task.c, umem_lock), which
+// a program's malloc and free reach without it (sched_trap's light path).
+static int bkl[2];
+static void bkl_take() { klock_take(bkl); }
+static void bkl_drop() { klock_drop(bkl); }
 
 // Whether this CPU may run N: not while another CPU is on its stack,
 // an idle task only on its own CPU, and a kernel task only on CPU 0.
@@ -274,9 +286,11 @@ static void acct_fold(struct task *t) {
     t->kacc = 0;
 }
 
+// Read, not folded: under SMP the CPU running a task adds to its
+// accumulators without the kernel lock (sched_trap's light path), so only
+// that CPU folds them, and a task that has stopped.
 long long task_cycles(struct task *t) {
-    acct_fold(t);
-    return t->ucycles + t->kcycles;
+    return t->ucycles + t->uacc + t->kcycles + t->kacc;
 }
 
 // A task leaving the table takes its cycles to the reaped totals, so the
@@ -295,12 +309,10 @@ void sched_retire(struct task *t) {
 // The bytes a task holds: its image, its stack, and what it allocated
 // (its ublocks, each with its header, task.c)
 static int task_mem(struct task *t) {
-    int b, *u;
+    int b;
     b = t->img_bytes;
     if (t->stack) b = b + t->stack_words * sizeof(int);
-    u = (int *)t->ublocks;
-    while (u) { b = b + u[2] + 4 * sizeof(int); u = (int *)u[0]; }
-    return b;
+    return b + task_umem(t);
 }
 
 int sched_cpustat(struct cpustat *h, struct cpustat_task *r, int max) {
@@ -311,15 +323,14 @@ int sched_cpustat(struct cpustat *h, struct cpustat_task *r, int max) {
     n = 0;
     t = task_head;
     while (t && n < max) {
-        acct_fold(t);
         p = &r[n];
         p->id = t->id;
         p->parent = t->parent;
         p->state = t->state;
         p->privs = t->privs;
         p->nsyscalls = t->nsyscalls;
-        p->user = t->ucycles;
-        p->kernel = t->kcycles;
+        p->user = t->ucycles + t->uacc;       // read, not folded (task_cycles)
+        p->kernel = t->kcycles + t->kacc;
         p->mem = task_mem(t);
         p->cpu = task_cpu(t);
         i = 0;
@@ -566,6 +577,24 @@ static struct task *sched_pick(struct task *t) {
 // task's stale ones. The two contexts trade places, one then rebuilds
 // a trap frame over the frame the other is parked on, and the machine
 // ends up spinning on a TLEV that returns to itself forever.
+// Under SMP, may this trap be served without the kernel lock? A protected
+// program's malloc or free -- a compile makes thousands -- touches only
+// the heap, whose books are the host's and every thread's (libjs sheap.js),
+// and the program's own list of blocks, under its own lock (task.c,
+// umem_lock). So it may, as long as nothing else is to be done in this
+// trap: the task runs on with its slice left, nothing is pending for it,
+// and this CPU has nothing to settle. Everything else takes the lock, and
+// does what the light path leaves for later -- the reaping, the stack
+// guard -- at the next trap.
+static int sched_light(int trap, int param) {
+    struct task *t;
+    t = sched_cur;
+    return trap == C4IX_TRAP_PM && (param == C4IX_OP_MALC || param == C4IX_OP_FREE) &&
+        t && t->state == TS_RUNNING && t->privs == PRIV_USER && !t->ck_sigpend &&
+        !sched_dying && !sched_resched && !sched_reload && !cpu_self->prev &&
+        (!sched_interval || acct_in - sched_slice0 < sched_interval);
+}
+
 static void sched_trap(int interval, int trap, int param, int mode, int a, int bp, int sp, int returnpc) {
     struct task *t, *n, *me;
     int reload, hold;
@@ -598,9 +627,26 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     acct_in = __c4_cycles();
     if (smp_ncpu > 1) {
         // The kernel is one CPU's at a time; then this CPU is off the
-        // stack of the task it last switched out. (The accounting waits
-        // for the lock: a snapshot folds these words from another CPU.)
+        // stack of the task it last switched out. (A task's accumulators
+        // are its CPU's alone: a snapshot reads them, folds nothing.)
         __c4_configure(C4IX_CONF_INTERVAL, 0);
+        // The light path: a program's malloc or free that leaves it
+        // running is served without the kernel lock (sched_light)
+        if (sched_light(trap, param)) {
+            me = sched_cur;
+            ++me->ntraps;
+            me->uacc = me->uacc + (acct_in - acct_out);
+            acct_cpu(me, acct_in - acct_out);
+            sys_pmviolation(param, (int *)sp, (int *)returnpc, &a);
+            acct_out = __c4_cycles();
+            me->kacc = me->kacc + (acct_out - acct_in);
+            acct_cpu(me, acct_out - acct_in);
+            if ((me->uacc | me->kacc) & ACCT_FOLD_AT) acct_fold(me);
+            mode = C4IX_MODE_PROTECTED;
+            interval = (sched_interval && sched_lockdepth == 0) ? sched_interval : 0;
+            sched_intrap = 0;
+            return;
+        }
         bkl_take();
         smp_settle();
         acct_unpark();
@@ -1276,7 +1322,27 @@ void sched_init(int interval) {
         __c4_cpu_start(k, (int)&smp_ap, smp_stack[k] + SMP_STACK_BYTES);
         ++k;
     }
-    if (smp_ncpu > 1) kprintf("c4ix: %d processors\n", smp_ncpu);
+    sched_banner();
+}
+
+// What the machine is, said once at boot, where libjs says it: the
+// memory and its layout, and the processors -- which share all of it and
+// the one heap, each with nothing of its own but its window (and, past
+// CPU 0, its idle task's stack, from the heap).
+static void sched_banner() {
+    int hb, he, mb;
+    if (host_has(C4IX_I_C4MJS)) {
+        hb = *(int *)C4IX_HEAP_BASE;
+        he = *(int *)C4IX_HEAP_END;
+        // the heap ends a megabyte below the top, under the boot stack
+        mb = (he + 2 * 1048576 - 1) / 1048576;
+        kprintf("c4ix: %d MB of memory: the kernel below 0x%x, the heap to 0x%x (%d KB), the boot stack above\n",
+            mb, hb, he, (he - hb) / 1024);
+    }
+    if (smp_ncpu > 1)
+        kprintf("c4ix: %d processors, %s; they share all memory and the heap, each with a %d-byte window of its own at 0x%x\n",
+            smp_ncpu, host_has(C4IX_I_PAR) ? "a thread each, all at once" : "simulated, taking turns on one thread",
+            256, CPU_WINDOW);
 }
 
 // Shutdown, from the kernel task: the other CPUs halt. Each takes the

@@ -36,6 +36,8 @@ enum { C4IX_HEAP_BASE = 0x144, C4IX_HEAP_END = 0x148, C4IX_HEAP_USED = 0x1c0, C4
 // 0x8FF, where each CPU sees 64 words of its own: its struct cpu at the
 // bottom, the shared libraries' data slots above it (loader.c).
 enum { C4IX_I_SMP = 0x100, CPU_MAX = 16, CPU_WINDOW = 0x800, CPU_SLOT0 = 24, CPU_SLOTS = 40 };
+// libjs's: the CPUs run at once, a thread each, not in turns on one
+enum { C4IX_I_PAR = 0x20000 };
 
 // c4m trap machinery numbers (c4m.c enums), used by sched.c on the
 // c4m host only.
@@ -515,6 +517,7 @@ void         task_shutdown();
 // or plainly frees a pointer that is not such a block.
 int          task_ualloc(struct task *t, int bytes);
 void         task_ufree(int p);
+int          task_umem(struct task *t);   // the bytes of its blocks, headers too
 
 // ---- C4KE compatibility (c4ke.c) ----
 //
@@ -648,6 +651,9 @@ void sched_early();            // cpu_self, before anything locks (boot.c)
 int  task_busy(struct task *t);   // some CPU may be on its stack: not to be freed yet
 int  task_cpu(struct task *t);    // the CPU running it, -1 if none is
 int  smp_slot_alloc();         // a library's data slot in the window, 0 if none is left
+// A lock: { 1 + the CPU holding it, its holds }, nested per CPU (sched.c)
+void klock_take(int *lk);
+void klock_drop(int *lk);
 // SYS_EXECVE replaced the running task's context: the trap returns into
 // the forged one, and the old stack, still under the handler, is freed
 // at the next trap.

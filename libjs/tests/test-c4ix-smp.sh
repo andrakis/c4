@@ -8,8 +8,10 @@
 # disk's), two compiles at once, libc, two tasks sharing libc's code
 # (its data slot is in the CPU-local window), and unixtest's vfork,
 # execve and waitpid. And S4's: ps and top's CPU columns, and b4ke -j
-# rebuilding the libraries byte for byte. Every task id is N - 1 higher
-# than on one CPU: each other CPU's idle task comes before init.
+# rebuilding the libraries byte for byte. And what came after: the boot's
+# account of memory and processors, and the shell's wildcards and rm -r.
+# Every task id is N - 1 higher than on one CPU: each other CPU's idle
+# task comes before init.
 #
 # Run from the repo root, after make c4bb-images. `make test-c4ix-smp`
 # runs it at 1, 2 and 4 CPUs and at 2 on threads.
@@ -32,11 +34,25 @@ if echo "$out" | grep -qF "protected mode on for user tasks, preemption on" && e
    echo "$out" | grep -qF "shutdown complete, 0 tasks remain" && ! echo "$out" | grep -qE "cache .task. .*live [1-9]|panic|illegal"; then
     ok "boots, runs ps, and shuts down with every task freed"
 else bad "boots, runs ps, and shuts down with every task freed"; echo "$out" | grep -E 'processors|tasks|panic|illegal|live|shutdown' | head -8; fi
+if echo "$out" | grep -qE '^c4ix: 64 MB of memory: the kernel below 0x[0-9a-f]+, the heap to 0x[0-9a-f]+ \([0-9]+ KB\)'; then
+    ok "the boot says the memory and its layout"
+else bad "the boot says the memory and its layout"; echo "$out" | grep -E 'memory' | head -3; fi
 if [ "$N" -ge 2 ]; then
-    if echo "$out" | grep -qxF "c4ix: $N processors" && [ "$(echo "$out" | grep -cE ' idle[0-9]+$')" = $((N - 1)) ]; then
-        ok "starts $N processors, an idle task each"
-    else bad "starts $N processors, an idle task each"; echo "$out" | grep -E 'processors|idle' | head -6; fi
+    if [ -n "$2" ]; then how="a thread each, all at once"; else how="simulated, taking turns on one thread"; fi
+    if echo "$out" | grep -qF "c4ix: $N processors, $how; they share all memory and the heap" &&
+       [ "$(echo "$out" | grep -cE ' idle[0-9]+$')" = $((N - 1)) ]; then
+        ok "starts $N processors, an idle task each, and says how they run"
+    else bad "starts $N processors, an idle task each, and says how they run"; echo "$out" | grep -E 'processors|idle' | head -6; fi
 fi
+
+# The shell's wildcards, and rm -r: what a rebuild from clean needs
+out=$(printf 'mkdir /tmp/g\nmkdir /tmp/g/sub\necho a > /tmp/g/a.txt\necho b > /tmp/g/b.txt\necho c > /tmp/g/c.c\necho d > /tmp/g/sub/d.txt\necho /tmp/g/*.txt /tmp/g/?.c /tmp/g/*.none\nrm /tmp/g/*.txt\nls /tmp/g\nrm /tmp/g\nrm -r /tmp/g\nls /tmp\nexit\n' | c4ix 400000000)
+if echo "$out" | grep -qxF "/tmp/g/a.txt /tmp/g/b.txt /tmp/g/c.c /tmp/g/*.none" &&
+   echo "$out" | grep -qxF "rm: /tmp/g is a directory with things in it: rm -r" &&
+   echo "$out" | grep -qxF "(/tmp is empty)" && echo "$out" | grep -qx "c.c" && echo "$out" | grep -qx "sub/" &&
+   ! echo "$out" | grep -qxE "a.txt|b.txt"; then
+    ok "wildcards expand, sorted; rm takes them, and rm -r a tree"
+else bad "wildcards expand, sorted; rm takes them, and rm -r a tree"; echo "$out" | grep -E 'tmp|rm|txt' | head -8; fi
 
 out=$(printf "wait $U\nls /usr/lib\ncat /usr/src/c4ix/user/tar.c\nexit\n" | c4ix 2000000000)
 if echo "$out" | grep -qF "unpacking c4ix-root.tgz in the background as task $U" &&

@@ -1172,6 +1172,11 @@ static void wheel(int x, int y, int dy) {
     }
 }
 
+// Shift, Ctrl and Alt as the last key event left them. The display's
+// clicks carry no modifiers, but its keys do, and Shift and Ctrl are keys
+// too: so a click reads them here (Files' Ctrl- and Shift-click).
+int wm_mods;
+
 static void key_down(int code, int ch, int mods) {
     struct win *f;
     // typing between two clicks makes them two clicks, not a double click
@@ -1276,10 +1281,13 @@ int main(int argc, char **argv) {
             if (ev[0] == GUI_EV_DOWN) mouse_down(ev[1], ev[2], ev[3]);
             else if (ev[0] == GUI_EV_UP) mouse_up(ev[1], ev[2]);
             else if (ev[0] == GUI_EV_MOVE) mouse_move(ev[1], ev[2]);
-            else if (ev[0] == GUI_EV_KEYDOWN) key_down(ev[1], ev[2], ev[3]);
-            else if (ev[0] == GUI_EV_KEYUP) key_up(ev[1], ev[2], ev[3]);
+            else if (ev[0] == GUI_EV_KEYDOWN) { wm_mods = ev[3]; key_down(ev[1], ev[2], ev[3]); }
+            else if (ev[0] == GUI_EV_KEYUP) { wm_mods = ev[3]; key_up(ev[1], ev[2], ev[3]); }
             else if (ev[0] == GUI_EV_WHEEL) wheel(ev[1], ev[2], ev[3]);
-            else if (ev[0] == GUI_EV_RESIZE || ev[0] == GUI_EV_FOCUS) dirty = 1;
+            else if (ev[0] == GUI_EV_RESIZE || ev[0] == GUI_EV_FOCUS) {
+                if (ev[0] == GUI_EV_FOCUS && !ev[1]) wm_mods = 0;   // let go of elsewhere
+                dirty = 1;
+            }
         }
         // the first frame, once more half a second in, in case the page was
         // not yet showing the display when it came

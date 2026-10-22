@@ -14,10 +14,12 @@
 //     pending IPI, the word it waits on, the machine's time, and a
 //     request slot per CPU.
 //
-// CPU 0 owns everything that is not memory: the devices, the heap
-// (heap.js keeps its books in JavaScript, which no other thread can
-// see) and the console. Another CPU that runs an opcode reaching those
-// -- OPEN, READ, PRTF, MALC and the rest -- or touches a device register
+// The heap is every CPU's too: its books are a third SharedArrayBuffer
+// (sheap.js), and MALC, FREE and RALC run on the CPU that executes them.
+//
+// CPU 0 owns everything else that is not memory: the devices and the
+// console. Another CPU that runs an opcode reaching those -- OPEN, READ,
+// PRTF and the rest -- or touches a device register
 // writes the request into its slot, rings CPU 0's doorbell and waits.
 // CPU 0 answers between slices of 16K cycles (ParHost.run) and, when it
 // is not running, as soon as the doorbell rings
@@ -178,7 +180,7 @@ export class ParHost extends ParCore {
       this.shadows[k] = s;
       const w = spawn(new URL('./ap.js', import.meta.url));
       w.postMessage({
-        type: 'init', arena: m0.arena.buf, ctl: ctl.buffer, id: k, n,
+        type: 'init', arena: m0.arena.buf, ctl: ctl.buffer, heap: m0.heap.books, id: k, n,
         info: m0.info(), cyclesPerMs: m0.dev.cyclesPerMs, noFpu: !!m0.noFpu,
       });
       this.workers.push(w);

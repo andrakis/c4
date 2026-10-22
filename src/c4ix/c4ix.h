@@ -21,8 +21,13 @@ enum {
     C4IX_I_HRT  = 0x10,  // high resolution timer
     C4IX_I_SIG  = 0x20,  // signals supported
     C4IX_I_FLT  = 0x40,  // floating point supported
-    C4IX_I_PROT = 0x80   // protected mode available
+    C4IX_I_PROT = 0x80,  // protected mode available
+    C4IX_I_GUI  = 0x4000 // libjs's display is fitted (libjs/guest/gui.h)
 };
+// The display's ring register (libjs/gui-device.js): where the host
+// writes events, into a task's memory. task.c reads it, and clears it
+// when the memory goes with a task that never detached.
+enum { C4IX_GUI_RING = 0x410 };
 
 // c4m trap machinery numbers (c4m.c enums), used by sched.c on the
 // c4m host only.
@@ -370,6 +375,7 @@ struct task {
     int  ck_wake;              // TS_SLEEPING: __time() value to wake at
     int  argv_vec;             // char ** owned by this task, 0 if not owned
     int  argv_data;            // char *  backing store for the above
+    int  ublocks;              // int * : its SYS_SBRK / malloc blocks (task_ualloc), freed with it
     char name[TASK_NAME_MAX];
 };
 
@@ -408,6 +414,12 @@ struct task *task_first();
 struct task *task_next(struct task *t);
 int          task_count();
 void         task_shutdown();
+// A userland task's memory (SYS_SBRK, and malloc behind protected mode):
+// kernel malloc blocks, each on its task's ublocks list behind a header,
+// and all freed with the task (task_destroy). task_ufree takes back one,
+// or plainly frees a pointer that is not such a block.
+int          task_ualloc(struct task *t, int bytes);
+void         task_ufree(int p);
 
 // ---- C4KE compatibility (c4ke.c) ----
 //

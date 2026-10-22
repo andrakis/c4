@@ -741,6 +741,59 @@ loading or assigning a whole struct is an error.
   - *The shell* gained `rm` and `mv`, over the `uunlink` and `urename`
     syscalls that Files and the IDE already used.
 
+- **A task's memory goes with it** (2026-10-22). `SYS_SBRK` (libc4ix's
+  `ualloc`) was a bare kernel `malloc`, and so was `malloc` behind
+  protected mode (`C4IX_OP_MALC`). Whatever a program did not free stayed
+  allocated after it exited, and most programs free very little. A
+  `b4ke -C /usr` build inside C4IX climbed towards the top of the 64 MB
+  arena. The table shows the heap left in use by each further run of a
+  command from the shell (32-bit image under libjs: `machine.heap.used`
+  after `wait 4`, from the second run on, so caches already filled are
+  not counted):
+
+    | command | before | after |
+    |---|---|---|
+    | `cc -o /tmp/h hello.c` | 5,264,890 bytes | 0 |
+    | `crc32 /bin/desktop` | 1,567 | 0 |
+    | `ls /usr/src` | 536 | 0 |
+    | `/tmp/h` | 15 | 0 |
+
+    The boot itself keeps 220 KB less, from what `vfsload` and the
+    unpack left behind. The last few bytes were the shell's own: it kept
+    a copy of every command's argv, from before `SYS_SPAWN` gave the child
+    a kernel copy. Now only a background job keeps its copy, and `wait`
+    frees it.
+  - *Most of cc's 5 MB was not SBRK.* It was c4sc, which cc runs: its
+    4 MB stack, its code and data, and its argv, which `task_destroy`
+    asked to free on every run and which were never freed. A user task
+    whose `main` returns dies in `task_shim`, in its own context:
+    `task_exit` yields until the trap handler takes it, and `sched_yield`
+    raised that trap with `__c4_trap`. That opcode does not drop
+    protected mode, on c4m or on libjs, so the handler ran protected. When
+    cc exits, that handler reaps c4sc, which died a moment earlier. Every
+    `free` in `task_destroy` then became a nested trap, and the re-entry
+    guard at the top of `sched_trap` drops nested traps. A user task now
+    yields through the syscall gate (`SYS_YIELD`), whose trap is
+    unprotected. The first `cc` after boot now leaves 2.1 MB in use,
+    the loader's caches, where it left 7.4 MB.
+  - *How.* `task_ualloc` (task.c) puts a four-word header in front of
+    each block: next, a back link to the word that points at the block,
+    the size, and a magic number. That links the block onto the task's
+    `ublocks` list. `free()` behind protected mode is `task_ufree`, which
+    unlinks the block. A pointer without the magic is freed as before.
+    `task_destroy` frees whatever is left on the list, next to the image
+    and library data.
+  - *Only protected tasks.* An unprotected task runs `FREE` on the host
+    itself, which would be handed the block's middle, so its `ualloc` is
+    still a plain `malloc` that it keeps.
+  - *Nothing else holds a task's memory.* A child's argv is the kernel's
+    copy (`ck_argv_copy`). Pipes, files and the console copy what is
+    written to them. The exception is libjs's display, whose host writes
+    events into the ring the task attached. A task killed while it is
+    attached never detaches, so `task_destroy` clears `GUI_RING` when the
+    ring lies in a block it frees. (A ring in a program's static data, as
+    `raycast` has, is still the program's own business.)
+
 ## 6.1 Running it
 
     make run-c4ix        an interactive shell on c4m

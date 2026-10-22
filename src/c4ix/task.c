@@ -142,11 +142,87 @@ int task_ghost(int id, int *pcode) {
     return 0;
 }
 
+// ---- a task's own memory ----
+//
+// SYS_SBRK (libc4ix's ualloc) and malloc behind protected mode (sys.c's
+// C4IX_OP_MALC) are kernel malloc. They used to be nothing more, so what
+// a program did not free outlived it: every run of crc32 or cc left its
+// tables behind, and a b4ke build inside C4IX climbed towards the top of
+// the arena. Each block now carries a header that puts it on its task's
+// list, and task_destroy frees the list.
+//
+//   h[0] next block's header        h[2] bytes asked for
+//   h[1] address of the word that   h[3] UBLOCK_MAGIC, so a free can
+//        points here (&t->ublocks        tell its blocks from anything
+//        or the previous h[0])           else (0 once freed)
+//
+// The back link is to a WORD, not a block, so a block unlinks without
+// knowing whose it is. Four words keep the caller's pointer as aligned as
+// malloc's.
+//
+// Only a protected task's blocks are listed. An unprotected one executes
+// FREE on the host itself, which would be handed h + 4 rather than h.
+//
+// A program cannot pass its memory on: a child's argv is the kernel's
+// copy (ck_argv_copy), and pipes, files and the console copy what is
+// written. The one thing that keeps a pointer is libjs's display, which
+// writes events into a ring the task attached and should have detached
+// on its way out -- task_ufree_all detaches it instead of letting the
+// host write into freed memory.
+enum { UBLOCK_WORDS = 4, UBLOCK_MAGIC = 0x55424c4b };
+
+int task_ualloc(struct task *t, int bytes) {
+    int *h;
+    if (!t || t->privs != PRIV_USER) return (int)malloc(bytes);
+    if (bytes < 0 || !(h = (int *)malloc(bytes + UBLOCK_WORDS * sizeof(int)))) return 0;
+    sched_lock();
+    h[0] = t->ublocks;
+    h[1] = (int)&t->ublocks;
+    h[2] = bytes;
+    h[3] = UBLOCK_MAGIC;
+    if (h[0]) ((int *)h[0])[1] = (int)h;
+    t->ublocks = (int)h;
+    sched_unlock();
+    return (int)(h + UBLOCK_WORDS);
+}
+
+void task_ufree(int p) {
+    int *h;
+    if (!p) return;
+    h = (int *)p - UBLOCK_WORDS;
+    if (h[3] != UBLOCK_MAGIC) { free((int *)p); return; }
+    sched_lock();
+    *(int *)h[1] = h[0];
+    if (h[0]) ((int *)h[0])[1] = h[1];
+    h[3] = 0;
+    sched_unlock();
+    free(h);
+}
+
+static void task_ufree_all(struct task *t) {
+    int *h, *n;
+    int ring;
+    ring = host_has(C4IX_I_GUI) ? *(int *)C4IX_GUI_RING : 0;
+    h = (int *)t->ublocks;
+    while (h) {
+        n = (int *)h[0];
+        if (ring && ring >= (int)(h + UBLOCK_WORDS) && ring < (int)(h + UBLOCK_WORDS) + h[2]) {
+            *(int *)C4IX_GUI_RING = 0;
+            ring = 0;
+        }
+        h[3] = 0;
+        free(h);
+        h = n;
+    }
+    t->ublocks = 0;
+}
+
 // Free what a task owns. Only ever called for a task nobody is
 // standing on -- see task_release.
 static void task_destroy(struct task *t) {
     int i;
     ck_task_free(t);
+    task_ufree_all(t);
     if (t->stack) free((int *)t->stack);
     if (t->img_code) free((int *)t->img_code);
     if (t->img_data) free((char *)t->img_data);

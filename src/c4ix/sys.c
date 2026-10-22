@@ -328,7 +328,8 @@ int sys_dispatch(int num, int *args) {
         t->state = TS_SLEEPING;
         return 0;
     case SYS_GETPID:   return t ? t->id : -1;
-    case SYS_SBRK:     return (int)malloc(args[0]);
+    // Freed with the task if it does not free it itself (task.c)
+    case SYS_SBRK:     return task_ualloc(t, args[0]);
     case SYS_EXIT:     task_exit(args[0]); return 0;
     case SYS_SPAWN:
         sched_next_stack_words = (t && t->spawn_stack) ? t->spawn_stack / sizeof(int) : 0;
@@ -612,8 +613,10 @@ void sys_pmviolation(int op, int *sp, int *returnpc, int *a) {
     // program's signal() sets it -- entered the same way, through a trap
     // frame. On the machine it would replace the kernel's.
     case C4IX_OP_SIGH: *a = ck_signal(t, sp[1], sp[0]); return;
-    case C4IX_OP_MALC: *a = (int)malloc(sp[0]); return;
-    case C4IX_OP_FREE: free((int *)sp[0]); *a = 0; return;
+    // The same blocks as SYS_SBRK: programs free ualloc'd memory with
+    // free(), and what they do not free goes with the task (task.c).
+    case C4IX_OP_MALC: *a = task_ualloc(t, sp[0]); return;
+    case C4IX_OP_FREE: task_ufree(sp[0]); *a = 0; return;
     case C4IX_OP_EXIT:
         kprintf("c4ix: task %d exited via EXIT opcode, status %d\n",
             t ? t->id : -1, sp[0]);

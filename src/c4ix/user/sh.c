@@ -183,9 +183,10 @@ static int sh_atoi(char *s) {
     return neg ? -n : n;
 }
 
-// Children read their argv out of the parent's memory, so a
-// backgrounded command must not have its argv reused by the next
-// line. Every spawn therefore gets its own copy.
+// A copy of one command's argv, out of the line buffer the next line
+// reuses. The child gets the kernel's own copy at spawn (sys.c), so only
+// a background job keeps this one, as its name in the job list; the rest
+// are freed once spawned, or the shell would keep every line it ran.
 static char **sh_dup_argv(char **argv, int argc) {
     char **out;
     char *blob;
@@ -210,14 +211,16 @@ static char **sh_dup_argv(char **argv, int argc) {
 
 static int  job_pid[JOB_MAX];
 static char *job_name[JOB_MAX];
+static char **job_argv[JOB_MAX];   // sh_dup_argv's block, freed with the job
 static int  njobs;
 
-static void sh_addjob(int pid, char *name) {
-    if (njobs >= JOB_MAX) { uprintf("sh: too many jobs\n"); return; }
+static void sh_addjob(int pid, char **av) {
+    if (njobs >= JOB_MAX) { uprintf("sh: too many jobs\n"); free(av); return; }
     job_pid[njobs] = pid;
-    job_name[njobs] = name;
+    job_name[njobs] = av[0];
+    job_argv[njobs] = av;
     ++njobs;
-    uprintf("[%d] started %d %s\n", njobs, pid, name);
+    uprintf("[%d] started %d %s\n", njobs, pid, av[0]);
 }
 
 static void sh_jobs() {
@@ -260,6 +263,7 @@ static void sh_waitall() {
     while (i < njobs) {
         st = uwait(job_pid[i]);
         uprintf("[%d] %s done (%d)\n", i + 1, job_name[i], st);
+        free(job_argv[i]);
         ++i;
     }
     njobs = 0;
@@ -407,9 +411,9 @@ static int sh_runline(char **w, int nw) {
         if (hasnext) { uclose(p[1]); prev_read = p[0]; }
         else prev_read = -1;
 
-        if (pid < 0) { uprintf("sh: cannot run %s\n", argv[0]); return 1; }
-        if (background) sh_addjob(pid, spawned[0]);
-        else { pids[npids] = pid; ++npids; }
+        if (pid < 0) { uprintf("sh: cannot run %s\n", argv[0]); free(spawned); return 1; }
+        if (background) sh_addjob(pid, spawned);
+        else { pids[npids] = pid; ++npids; free(spawned); }
     }
 
     // Foreground: wait for every stage; the last one gives the status.

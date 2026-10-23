@@ -2468,7 +2468,8 @@ ROTT_UNITS := cin_actr cin_efct cin_evnt cin_glob cin_main cin_util dosutil \
               rt_in rt_main rt_map rt_menu rt_msg rt_net rt_playr rt_rand \
               rt_scale rt_sound rt_spbal rt_sqrt rt_stat rt_state rt_str \
               rt_swift rt_ted rt_util rt_view rt_vid rt_err scriplib w_wad \
-              watcom z_zone byteordr winrott c4sdl rott-sum rott-snd
+              watcom z_zone byteordr winrott c4sdl rott-sum rott-snd \
+              midi al_midi gmtimbre ll_man usrhooks
 ROTT_HDRS  := $(wildcard $(ROTT)/*.h $(ROTT)/c4/*.h) \
               $(wildcard src/c4ix/libc/include/*.h src/c4ix/libc/include/sys/*.h) \
               src/c4ix/include/display.h libjs/guest/gui.h libjs/guest/gui.c

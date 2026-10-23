@@ -442,17 +442,30 @@ if ls .wolf3d/*.c4o > /dev/null 2>&1 && [ -f $PB/lib/libc.c4s ]; then
     cp src/wolf3d/data/1wolf14.zip $DISK/1wolf14.zip
 fi
 
-# ... and with no C4IX under it: the bare machine, and C4DOS (plat-bare.c,
-# libc's bare.c; make wolf3d-bare-objs). The same game objects, but for
-# the C4IX platform, linked whole with libc. Its disk, $OUT/wolf3d, has
-# the game's files unpacked, since neither the bare machine nor DOS can
-# write to a drive -- beside Apogee's package they come from, unmodified,
-# as its VENDOR.DOC asks -- and C4DOS's own files, so it boots C4DOS too.
-WOLFDISK=$OUT/wolf3d
+# Doom (src/doom): make doom-objs compiled it, and it is linked the same
+# way, with the shareware WAD beside it (c4ix.vfs.txt: /usr/games/doom)
+if ls .doom/*.c4o > /dev/null 2>&1 && [ -f $PB/lib/libc.c4s ]; then
+    ./c4rlink32 .doom/*.c4o .doom/plat/dg-c4ix.c4o -l $PB/lib/libc.c4s -o $DISK/c4ix-doom.c4r > /dev/null
+    cp src/doom/data/doom1.wad $DISK/doom1.wad
+fi
+
+# ... and with no C4IX under them: the bare machine, and C4DOS (libc's
+# bare.c; make wolf3d-bare-objs). The same game objects, but for the C4IX
+# platform's (plat-bare.c, dg-bare.c), linked whole with libc. Their disk,
+# $OUT/games, has the games' files unpacked, since neither the bare
+# machine nor DOS can write to a drive -- Wolf3D's beside Apogee's package
+# they come from, unmodified, as its VENDOR.DOC asks -- and C4DOS's own
+# files, so it boots C4DOS too.
+WOLFDISK=$OUT/games
+rm -rf $OUT/wolf3d
 if ls .wolf3d-bare/*.c4o > /dev/null 2>&1 && ls .wolf3d/*.c4o > /dev/null 2>&1; then
     rm -rf $WOLFDISK
     mkdir -p $WOLFDISK
     ./c4rlink32 $(ls .wolf3d/*.c4o | grep -v '/plat-c4ix.c4o$') .wolf3d-bare/*.c4o -o $WOLFDISK/wolf3d.c4r > /dev/null
+    if ls .doom/*.c4o > /dev/null 2>&1; then
+        ./c4rlink32 .doom/*.c4o .doom/plat/dg-bare.c4o .wolf3d-bare/libc-*.c4o -o $WOLFDISK/doom.c4r > /dev/null
+        cp src/doom/data/doom1.wad $WOLFDISK/
+    fi
     cp src/wolf3d/data/1wolf14.zip $WOLFDISK/
     python3 -I -c "import zipfile, sys; zipfile.ZipFile(sys.argv[1]).extract('W3DSW14.SHR', sys.argv[2])" \
         src/wolf3d/data/1wolf14.zip $WOLFDISK
@@ -460,7 +473,7 @@ if ls .wolf3d-bare/*.c4o > /dev/null 2>&1 && ls .wolf3d/*.c4o > /dev/null 2>&1; 
     .wolf3d-bare/unshr $WOLFDISK/W3DSW14.SHR $WOLFDISK > /dev/null
     rm -f $WOLFDISK/W3DSW14.SHR $WOLFDISK/*.exe
     cp $DISK/config.sys $WOLFDISK/config.sys
-    printf '@ECHO OFF\nECHO Welcome to C4DOS\nVER\nECHO Wolfenstein 3D is on this disk: type WOLF3D to play.\n' > $WOLFDISK/autoexec.bat
+    printf '@ECHO OFF\nECHO Welcome to C4DOS\nVER\nECHO Wolfenstein 3D and Doom are on this disk: type WOLF3D or DOOM to play.\n' > $WOLFDISK/autoexec.bat
     (cd $WOLFDISK && ls -p | grep -v '/$' | grep -v '^manifest.json$' > c4dos.dir)
     (cd $WOLFDISK && find . -type f -not -name manifest.json | sed 's|^\./||') | \
         awk 'BEGIN{printf "["} NR>1{printf ","} {printf "\"%s\"", $0} END{print "]"}' > $WOLFDISK/manifest.json
@@ -654,7 +667,7 @@ rm -rf $ROOT
 mkdir -p $ROOT/usr/lib $ROOT/usr/include
 if git rev-parse --git-dir > /dev/null 2>&1; then
     git ls-files -- src docs include libjs README.md LICENSE Makefile BUILD.B4K INSTALL.B4K c4.c c4m.c c4m_float.c c4l.c load-c4r.c |
-        grep -v '^src/c4bb/images/\|^src/c4or1k/images/\|^src/wolf3d/' |
+        grep -v '^src/c4bb/images/\|^src/c4or1k/images/\|^src/wolf3d/\|^src/doom/' |
         while read -r f; do
             [ -f "$f" ] && grep -Iq . "$f" 2>/dev/null || continue
             mkdir -p "$ROOT/usr/$(dirname "$f")"

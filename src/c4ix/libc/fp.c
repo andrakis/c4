@@ -497,3 +497,15 @@ float strtof(char *s, char **end) {
     return *(float *)&w;
 }
 double atof(char *s) { return strtod(s, 0); }
+
+// scanf's %f (stdio.c, which never says double itself): the number at the
+// start of TEXT into *DST, a double or a float; 0 if there is none
+int __c4ix_scanfp(char *text, int *dst, int isdouble) {
+    char *end;
+    double d;
+    d = strtod(text, &end);
+    if (end == text) return 0;
+    if (isdouble) *(double *)dst = d;
+    else *(float *)dst = (float)d;
+    return 1;
+}

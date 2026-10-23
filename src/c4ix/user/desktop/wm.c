@@ -978,6 +978,7 @@ static void start_pick(int k) {
     else if (start_kinds[k] == 0 - 1) inputbox(0, "Run", "Program to run:", "", A_RUN);
     else if (start_kinds[k] == 0 - 2) running = 0;
     else if (start_kinds[k] == 0 - 3) run_command("wolf3d");
+    else if (start_kinds[k] == 0 - 4) run_command("doom");
 }
 
 static void mouse_down(int x, int y, int button) {
@@ -1253,6 +1254,7 @@ int main(int argc, char **argv) {
     start_items[k] = "About C4IX"; start_kinds[k] = K_ABOUT; ++k;
     start_items[k] = "-"; start_kinds[k] = 0; ++k;
     start_items[k] = "Wolfenstein 3D"; start_kinds[k] = 0 - 3; ++k;
+    start_items[k] = "Doom"; start_kinds[k] = 0 - 4; ++k;
     start_items[k] = "Run..."; start_kinds[k] = 0 - 1; ++k;
     start_items[k] = "-"; start_kinds[k] = 0; ++k;
     start_items[k] = "Power Off..."; start_kinds[k] = 0 - 2; ++k;

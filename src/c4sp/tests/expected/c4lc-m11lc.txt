@@ -1,0 +1,8 @@
+sizes 20 24 4 44
+sizeof local 20, member 20
+sums ac14d542 e2388502 185c35c2 4e7fc782 849fb742
+member after 9 -3
+copied same
+offsets 2 22 42
+grid 23 356
+pairs 2 -1 3

@@ -2,7 +2,7 @@
 //
 // URL parameters:
 //   ?system=NAME                 which machine to boot (default c4ix): c4ix, c4ke,
-//                                c4dos, wolf3d, wolf3d-c4ix, gui-demo, fb-demo,
+//                                c4dos, wolf3d, wolf3d-c4ix, doom, gui-demo, fb-demo,
 //                                snd-demo, raycast -- SYSTEMS below
 //   ?image=URL&disk=URL          any other image and disk instead
 //   ?mhz=N                       how fast the machine runs, paced (default 100)
@@ -12,6 +12,9 @@
 //                                page is cross-origin isolated (serve.mjs --isolate)
 //   ?persist=0 | reset           C4IX's files are not kept between visits / are forgotten first
 //   ?fast                        run as fast as the host can, unpaced
+//   ?realtime=0                  when the host cannot keep up, the machine's clock
+//                                slows with it, rather than keeping the wall's
+//                                (worker.js: a game then plays in slow motion)
 //   ?fpu=0                       no FPU opcode: floats in software (F3, docs/c4-float.md)
 //   ?mem=MB                      arena size (default 64)
 //   ?shared=0                    use the message display path even when the page
@@ -26,15 +29,18 @@ const IMAGES = '../../src/c4bb/images';
 const SYSTEMS = {
   c4ix: { label: 'C4IX', image: `${IMAGES}/c4ix32.c4r`, disk: `${IMAGES}/disk`, argv: ['c4ix32.c4r', '--desktop'], persist: 'c4ix' },
   c4ke: { label: 'C4KE', image: `${IMAGES}/c4ke32.c4r`, disk: `${IMAGES}/disk`, argv: ['c4ke32.c4r'] },
-  // C4DOS on Wolfenstein 3D's disk (build-images.sh): the game unpacked,
-  // beside C4DOS's own files, so WOLF3D at the A> prompt plays it.
-  c4dos: { label: 'C4DOS', image: `${IMAGES}/c4dos32.c4r`, disk: `${IMAGES}/wolf3d`, argv: ['c4dos32.c4r'], mhz: 400 },
+  // C4DOS on the games' disk (build-images.sh): Wolfenstein 3D unpacked
+  // and Doom, beside C4DOS's own files, so WOLF3D or DOOM at the A> prompt
+  // plays them.
+  c4dos: { label: 'C4DOS', image: `${IMAGES}/c4dos32.c4r`, disk: `${IMAGES}/games`, argv: ['c4dos32.c4r'], mhz: 400 },
   // Wolfenstein 3D with no operating system under it (src/wolf3d/plat-bare.c),
   // and on C4IX drawing on the display itself rather than in a window
   // (wolf3d --direct, like raycast -G). The game times itself against the
   // machine's clock, so these are paced, at a clock it can keep up with.
-  wolf3d: { label: 'Wolfenstein 3D (bare machine)', image: `${IMAGES}/wolf3d/wolf3d.c4r`, disk: `${IMAGES}/wolf3d`,
+  wolf3d: { label: 'Wolfenstein 3D (bare machine)', image: `${IMAGES}/games/wolf3d.c4r`, disk: `${IMAGES}/games`,
             argv: ['wolf3d.c4r'], mhz: 400 },
+  doom: { label: 'Doom (bare machine)', image: `${IMAGES}/games/doom.c4r`, disk: `${IMAGES}/games`,
+          argv: ['doom.c4r'], mhz: 400 },
   'wolf3d-c4ix': { label: 'Wolfenstein 3D (C4IX, direct)', image: `${IMAGES}/c4ix32.c4r`, disk: `${IMAGES}/disk`,
                    argv: ['c4ix32.c4r', '-e', 'persist -d 60 &', '-e', 'wolf3d --direct'], persist: 'c4ix', mhz: 400 },
   'gui-demo': { label: 'GUI demo (bare machine)', image: `${IMAGES}/gui-demo.c4r`, disk: null, argv: ['gui-demo.c4r'] },
@@ -84,6 +90,7 @@ const opts = {
   // program in the C4IX desktop managed a few frames a second.
   mhz: Number(params.get('mhz')) || sys.mhz || 100,
   unpaced: params.has('fast') || !!sys.unpaced,
+  realtime: params.get('realtime') !== '0',
   fpu: params.get('fpu') !== '0',
   arenaMb: Number(params.get('mem')) || 64,
   shared: params.get('shared') !== '0',

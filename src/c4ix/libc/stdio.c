@@ -7,6 +7,14 @@
 // is line-buffered), at fflush and fclose, and at exit. stderr is not
 // buffered at all. Input reads a buffer's worth at a time.
 //
+// fseek and ftell move a FILE over lseek, dropping what it had read ahead
+// or writing out what it had waiting; fread takes what the buffer holds
+// and reads the rest straight into the caller's memory.
+//
+// scanf, sscanf and fscanf read C's conversions: d i u o x X p n c s and
+// [set], with a width, * to read without storing and h hh l ll lengths,
+// and f e g a, whose number fp.c reads (strtod).
+//
 // printf is the whole of C's integer and string formatting: flags
 // - + space 0 #, a width and a precision (either may be *), the length
 // modifiers hh h l ll z j t (all one word here), and the conversions
@@ -170,12 +178,301 @@ int getline(char **line, int *cap, FILE *f) {
 }
 
 int fread(char *p, int size, int n, FILE *f) {
-    int total, got, c;
+    int total, got, k, c;
     if (size <= 0 || n <= 0) return 0;
     total = size * n;
     got = 0;
-    while (got < total && (c = fgetc(f)) != EOF) p[got++] = c;
+    if (f->ungot >= 0 && got < total) { p[got++] = f->ungot; f->ungot = -1; }
+    while (got < total) {
+        // what the buffer holds, then a large read straight into p, or
+        // the buffer filled again by fgetc for a small one
+        if (f->pos < f->len) {
+            k = f->len - f->pos;
+            if (k > total - got) k = total - got;
+            memcpy(p + got, f->buf + f->pos, k);
+            f->pos = f->pos + k;
+            got = got + k;
+            continue;
+        }
+        if (!(f->flags & __F_READ) || (f->flags & __F_EOF)) break;
+        if (total - got >= BUFSIZ && f != stdin) {
+            k = uread(f->fd, p + got, total - got);
+            if (k <= 0) { f->flags = f->flags | (k < 0 ? __F_ERR | __F_EOF : __F_EOF); break; }
+            got = got + k;
+            continue;
+        }
+        if ((c = fgetc(f)) == EOF) break;
+        p[got++] = c;
+    }
     return got / size;
+}
+
+// The descriptor's place, less what was read ahead, or plus what waits
+long ftell(FILE *f) {
+    int at;
+    if ((at = lseek(f->fd, 0, SEEK_CUR)) < 0) return -1;
+    if (f->flags & __F_WRITE && f->pos > 0 && !(f->flags & __F_READ && f->len > 0)) return at + f->pos;
+    at = at - (f->len - f->pos);
+    if (f->ungot >= 0) at = at - 1;
+    return at;
+}
+
+int fseek(FILE *f, long off, int whence) {
+    if (f->flags & __F_WRITE && fflush(f) == EOF) return -1;
+    if (whence == SEEK_CUR) {
+        off = off - (f->len - f->pos);
+        if (f->ungot >= 0) off = off - 1;
+    }
+    if (lseek(f->fd, off, whence) < 0) return -1;
+    f->pos = 0;
+    f->len = 0;
+    f->ungot = -1;
+    f->flags = f->flags & ~__F_EOF;
+    return 0;
+}
+
+void rewind(FILE *f) {
+    fseek(f, 0, SEEK_SET);
+    f->flags = f->flags & ~__F_ERR;
+}
+
+// ---- scanf ----
+
+// Where scanned text comes from: a FILE, or a string; and how much of it
+// was taken (%n)
+struct src {
+    FILE *f;
+    char *s;
+    int n;
+};
+
+static int src_get(struct src *r) {
+    int c;
+    if (r->f) c = fgetc(r->f);
+    else if (*r->s) c = *r->s++ & 255;
+    else c = EOF;
+    if (c != EOF) r->n = r->n + 1;
+    return c;
+}
+
+static void src_unget(struct src *r, int c) {
+    if (c == EOF) return;
+    r->n = r->n - 1;
+    if (r->f) ungetc(c, r->f);
+    else r->s = r->s - 1;
+}
+
+static int scan_space(int c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v'; }
+
+static int scan_digit(int c, int base) {
+    int d;
+    if (c >= '0' && c <= '9') d = c - '0';
+    else if (c >= 'a' && c <= 'z') d = c - 'a' + 10;
+    else if (c >= 'A' && c <= 'Z') d = c - 'A' + 10;
+    else return -1;
+    return d < base ? d : -1;
+}
+
+// fp.c: the float or double in TEXT, stored at DST; 0 if there is none
+int __c4ix_scanfp(char *text, int *dst, int isdouble);
+
+// size: 0 int, 1 short (h), 2 char (hh), 3 long long (ll)
+static void scan_store(int *dst, int size, unsigned int v) {
+    if (size == 1) *(short *)dst = v;
+    else if (size == 2) *(char *)dst = v;
+    else if (size == 3) { dst[0] = v; dst[1] = (int)v < 0 ? -1 : 0; }
+    else *dst = v;
+}
+
+static int scan_core(struct src *r, char *fmt, int *ap) {
+    int done, c, skip, width, size, conv, base, neg, digits, d, k, inv, lo, hi;
+    unsigned int v;
+    char *p, *q;
+    char set[256];
+    char text[80];
+    done = 0;
+    while (*fmt) {
+        if (scan_space(*fmt & 255)) {
+            while (scan_space(*fmt & 255)) ++fmt;
+            while (scan_space(c = src_get(r))) ;
+            src_unget(r, c);
+            continue;
+        }
+        if (*fmt != '%' || fmt[1] == '%') {
+            if (*fmt == '%') {
+                ++fmt;
+                while (scan_space(c = src_get(r))) ;
+            } else c = src_get(r);
+            if (c != (*fmt & 255)) {
+                src_unget(r, c);
+                return c == EOF && done == 0 ? EOF : done;
+            }
+            ++fmt;
+            continue;
+        }
+        ++fmt;
+        skip = 0;
+        if (*fmt == '*') { skip = 1; ++fmt; }
+        width = 0;
+        while (*fmt >= '0' && *fmt <= '9') { width = width * 10 + (*fmt - '0'); ++fmt; }
+        size = 0;
+        if (*fmt == 'h') { ++fmt; size = 1; if (*fmt == 'h') { ++fmt; size = 2; } }
+        else if (*fmt == 'l') { ++fmt; size = 4; if (*fmt == 'l') { ++fmt; size = 3; } }
+        else if (*fmt == 'L' || *fmt == 'q') { ++fmt; size = 3; }
+        else if (*fmt == 'z' || *fmt == 'j' || *fmt == 't') ++fmt;
+        conv = *fmt++;
+        if (conv == 'n') {
+            if (!skip) scan_store(va_arg(ap, int *), size == 4 ? 0 : size, r->n);
+            continue;
+        }
+        if (conv != 'c' && conv != '[') {
+            while (scan_space(c = src_get(r))) ;
+            src_unget(r, c);
+        }
+        if (conv == 'c') {
+            if (!width) width = 1;
+            p = skip ? 0 : va_arg(ap, char *);
+            k = 0;
+            while (k < width && (c = src_get(r)) != EOF) { if (p) p[k] = c; ++k; }
+            if (k < width) return done == 0 ? EOF : done;
+            if (!skip) ++done;
+            continue;
+        }
+        if (conv == 's' || conv == '[') {
+            if (conv == '[') {
+                inv = 0;
+                if (*fmt == '^') { inv = 1; ++fmt; }
+                k = 0;
+                while (k < 256) { set[k] = inv; ++k; }
+                if (*fmt == ']') { set[']'] = !inv; ++fmt; }
+                while (*fmt && *fmt != ']') {
+                    lo = *fmt & 255;
+                    if (fmt[1] == '-' && fmt[2] && fmt[2] != ']') {
+                        hi = fmt[2] & 255;
+                        while (lo <= hi) { set[lo] = !inv; ++lo; }
+                        fmt = fmt + 3;
+                    } else { set[lo] = !inv; ++fmt; }
+                }
+                if (*fmt == ']') ++fmt;
+            }
+            p = skip ? 0 : va_arg(ap, char *);
+            k = 0;
+            while (!width || k < width) {
+                c = src_get(r);
+                if (c == EOF) break;
+                if (conv == 's' ? scan_space(c) : !set[c]) { src_unget(r, c); break; }
+                if (p) p[k] = c;
+                ++k;
+            }
+            if (k == 0) return c == EOF && done == 0 ? EOF : done;
+            if (p) p[k] = 0;
+            if (!skip) ++done;
+            continue;
+        }
+        if (conv == 'f' || conv == 'e' || conv == 'g' || conv == 'a' ||
+            conv == 'E' || conv == 'G' || conv == 'F' || conv == 'A') {
+            // the longest run that can be part of a number; strtod decides
+            k = 0;
+            if (!width || width > 78) width = 78;
+            while (k < width) {
+                c = src_get(r);
+                if (c == EOF) break;
+                if (!((c >= '0' && c <= '9') || c == '.' || c == '+' || c == '-' ||
+                      c == 'e' || c == 'E' || c == 'x' || c == 'X' || c == 'p' || c == 'P' ||
+                      (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') ||
+                      c == 'i' || c == 'n' || c == 't' || c == 'y' || c == 'I' || c == 'N' ||
+                      c == 'T' || c == 'Y')) { src_unget(r, c); break; }
+                text[k] = c;
+                ++k;
+            }
+            text[k] = 0;
+            if (k == 0) return c == EOF && done == 0 ? EOF : done;
+            q = skip ? 0 : va_arg(ap, char *);
+            if (!__c4ix_scanfp(text, (int *)(q ? q : text), size == 4 || size == 3)) return done;
+            if (!skip) ++done;
+            continue;
+        }
+        // the integers
+        base = 10;
+        if (conv == 'o') base = 8;
+        else if (conv == 'x' || conv == 'X' || conv == 'p') base = 16;
+        else if (conv == 'i') base = 0;
+        else if (conv != 'd' && conv != 'u') return done;
+        if (!width) width = 0x7fffffff;
+        k = 0;
+        neg = 0;
+        v = 0;
+        digits = 0;
+        c = src_get(r);
+        if ((c == '-' || c == '+') && k < width) { neg = c == '-'; ++k; c = src_get(r); }
+        if ((base == 0 || base == 16) && c == '0' && k < width) {
+            ++k;
+            c = src_get(r);
+            if ((c == 'x' || c == 'X') && k < width) { base = 16; ++k; c = src_get(r); }
+            else {
+                if (base == 0) base = 8;
+                digits = 1;             // the 0 was a digit
+            }
+        } else if (base == 0) base = 10;
+        while (k < width && (d = scan_digit(c, base)) >= 0) {
+            v = v * base + d;
+            ++digits;
+            ++k;
+            c = src_get(r);
+        }
+        src_unget(r, c);
+        if (!digits) return c == EOF && done == 0 ? EOF : done;
+        if (neg) v = -v;
+        if (!skip) { scan_store(va_arg(ap, int *), size == 4 ? 0 : size, v); ++done; }
+    }
+    return done;
+}
+
+int vfscanf(FILE *f, char *fmt, int *ap) {
+    struct src r;
+    r.f = f; r.s = 0; r.n = 0;
+    return scan_core(&r, fmt, ap);
+}
+
+int vsscanf(char *s, char *fmt, int *ap) {
+    struct src r;
+    r.f = 0; r.s = s; r.n = 0;
+    return scan_core(&r, fmt, ap);
+}
+
+int vscanf(char *fmt, int *ap) { return vfscanf(stdin, fmt, ap); }
+
+int sscanf(char *s, char *fmt, ...) {
+    va_list ap;
+    va_list walk;
+    int n;
+    va_start(ap, fmt);
+    walk = ap;
+    n = vsscanf(s, fmt, walk);
+    va_end(ap);
+    return n;
+}
+
+int fscanf(FILE *f, char *fmt, ...) {
+    va_list ap;
+    va_list walk;
+    int n;
+    va_start(ap, fmt);
+    walk = ap;
+    n = vfscanf(f, fmt, walk);
+    va_end(ap);
+    return n;
+}
+
+int scanf(char *fmt, ...) {
+    va_list ap;
+    va_list walk;
+    int n;
+    va_start(ap, fmt);
+    walk = ap;
+    n = vfscanf(stdin, fmt, walk);
+    va_end(ap);
+    return n;
 }
 
 int feof(FILE *f) { return (f->flags & __F_EOF) != 0; }

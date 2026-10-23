@@ -56,7 +56,7 @@ The web page's system list has three more ways to play it:
 | `?system=` | what boots | the game |
 |---|---|---|
 | `wolf3d-c4ix` | C4IX's console, which runs `wolf3d` (init's `-e`) | on the whole display, as `raycast -G` draws; the first run unpacks the zip, as above, and it is kept |
-| `c4dos` | C4DOS, on the `images/wolf3d` disk | type `WOLF3D` at the `A>` prompt; Quit comes back to it |
+| `c4dos` | C4DOS, on the `images/games` disk | type `WOLF3D` at the `A>` prompt; Quit comes back to it |
 | `wolf3d` | the game itself, with no operating system | at once; Quit halts the machine |
 
 The C4DOS and bare builds are the same game objects linked whole with
@@ -223,7 +223,7 @@ the disk.
 `make wolf3d-bare-objs` builds what the bare machine and C4DOS link
 instead of C4IX's libc: `plat-bare.c`, and libc's units without `-fpic`,
 with `bare.c` and `bareu.c`. `build-images.sh` links them with the same
-objects, less `plat-c4ix.c`, as `images/wolf3d/wolf3d.c4r`, and makes
+objects, less `plat-c4ix.c`, as `images/games/wolf3d.c4r`, and makes
 that directory a disk: the zip, the game's files unpacked from it (by
 `tools/unshr.c` on the host), C4DOS's `CONFIG.SYS` and `AUTOEXEC.BAT`,
 and the indexes the page and C4DOS read.
@@ -243,7 +243,7 @@ plays demo 0 twice:
 - built by c4lc, inside C4IX on libjs, after unpacking the zip.
 
 Then it plays it on the bare machine and under C4DOS, from the
-`images/wolf3d` disk, the two at once; C4DOS must then be back at its
+`images/games` disk, the two at once; C4DOS must then be back at its
 prompt. All four must print the same 1,214 frames and checksum. The
 host prints:
 

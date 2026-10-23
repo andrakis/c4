@@ -390,7 +390,7 @@
 			(if (= (p:kind) 'Id) nil (p:die "bad struct member name")))
 		(define n (if fp (head fp) (p:value)))
 		(if fp nil (p:advance))
-		(define size (if fp (p:second fp) (p:arraysize)))
+		(define size (if fp (p:second fp) (p:arraysize/t ty)))
 		(define acc2 (p:cons
 			(p:qnode (list (if (= size nil) ty (+ (p:elemty ty) p:PTR)) n size)
 				(if (= size nil) q (bit:shl q 2)))
@@ -1270,10 +1270,33 @@
 			(next p:innerdims (p:cons s acc)))
 	(p:reverse acc))))
 (define p:elemty (lambda (ty)
+	(if p:rowelem
+		(begin
+			(define e p:rowelem)
+			(set! p:rowelem nil)
+			e)
 	(begin
 		(define ds p:inner)
 		(set! p:inner nil)
-		(p:rowwrap ty (p:reverse ds)))))
+		(p:rowwrap ty (p:reverse ds))))))
+
+;; ... and a declarator of an array typedef's type, a row (ports-feasibility
+;; §8 step 6), with no brackets of its own: `digest_t d;` is the row's
+;; element `d[N]`, laid out, indexed and passed as that array is. The size
+;; is the row's count, and p:elemty gives the row's element.
+(define p:rowelem nil)
+(define p:arraysize/t (lambda (ty)
+	(begin
+		(define s (p:arraysize))
+		(if (= s nil)
+			(begin
+				(define r (p:assoc ty p:rows))
+				(if r
+					(begin
+						(set! p:rowelem (p:second r))
+						(index r 2))
+					nil))
+			s))))
 (define p:rowwrap (lambda (ty ds)
 	(if (empty? ds) ty (next p:rowwrap (p:rowtype ty (head ds)) (tail ds)))))
 (define p:rows nil)   ;; ((TYPE ELEM COUNT) ...)
@@ -1504,8 +1527,9 @@
 			(define named (if fp (if (head fp) true false) (= (p:kind) 'Id)))
 			(define n (if named (if fp (head fp) (p:value)) (+ " param" (+ "" (length acc)))))
 			(if (if named (if fp false true) false) (p:advance) nil)
-			;; T name[] or T name[N]: C's parameter is a pointer to T
-			(define asz (if fp nil (p:arraysize)))
+			;; T name[] or T name[N]: C's parameter is a pointer to T; and
+			;; so is one of an array typedef's type (p:arraysize/t)
+			(define asz (if fp nil (p:arraysize/t ty1)))
 			(define ty (if (= asz nil) ty1 (+ (p:elemty ty1) p:PTR)))
 			(define q (if (= asz nil) q1 (bit:shl q1 2)))
 			(if (if (= (p:kind) 'Comma) true (= (p:kind) 'Rparen)) nil
@@ -1609,7 +1633,7 @@
 			(if (= (p:kind) 'Id) nil (p:die "bad local declaration")))
 		(define n (if fp (head fp) (p:value)))
 		(if fp nil (p:advance))
-		(define size (if fp (p:second fp) (p:arraysize)))
+		(define size (if fp (p:second fp) (p:arraysize/t ty)))
 		(define elem (if (= size nil) ty (p:elemty ty)))
 		(define ty2 (if (= size nil) ty (+ elem p:PTR)))
 		(define q2 (if (= size nil) q (bit:shl q 2)))
@@ -1746,7 +1770,7 @@
 
 (define p:globalvar (lambda (ty n attr q)
 	(begin
-		(define size (p:arraysize))
+		(define size (p:arraysize/t ty))
 		(p:globalvar/2 (if (= size nil) ty (p:elemty ty)) n attr q size))))
 ;; SIZE already read: a function pointer's declarator holds its own
 (define p:globalvar/2 (lambda (ty n attr q size)
@@ -1937,9 +1961,17 @@
 			(if (= (p:kind) 'Id) nil (p:die "typedef needs a name")))
 		(define n (if fp (head fp) (p:value)))
 		(if fp nil (p:advance))
+		;; typedef T NAME[N] (ports-feasibility §8 step 6): an array type
+		;; is a row (M9), N elements of T, which stands for the address of
+		;; its first element wherever its value is used, as an array does.
+		;; sha1.h's `typedef byte sha1_digest_t[20];`
+		(define asz (if fp nil (p:arraysize)))
+		(if (= asz 0) (p:die "typedef of an array needs its size") nil)
+		(define ty2 (if (= asz nil) ty (p:rowtype (p:elemty ty) asz)))
+		(define q2 (if (= asz nil) q 0))
 		(p:expect 'Semi "semicolon after typedef")
-		(set! p:typedefs (p:cons (list n ty q) p:typedefs))
-		(p:qnode (list 'typedefd n ty) q))))
+		(set! p:typedefs (p:cons (list n ty2 q2) p:typedefs))
+		(p:qnode (list 'typedefd n ty2) q2))))
 
 (define p:top (lambda (acc)
 	(if (= (p:kind) 'Eof) (p:insdyn (p:reverse (p:drain acc)) (list) (p:dynfunc))

@@ -259,7 +259,14 @@ function tick() {
       return;
     }
     if (ahead > 2) { schedule(Math.min(ahead, 100)); return; }
-    if (ahead < -1000) lostMs += -ahead - 1000;   // hopelessly behind: stop trying to catch up
+    // Behind. With realtime (the page's default), the machine's clock is
+    // the wall's: TIME moves on by what the CPU could not get done, so a
+    // host slower than the MHz asked for gives the guest fewer cycles a
+    // second, not a slower second -- a game drops frames rather than
+    // playing in slow motion, and the sound card's stream (its time is
+    // TIME's) keeps up. Without it, the machine's own second stretches.
+    if (bootMsg.realtime && ahead < -20) dev.sleepMs += -ahead;
+    else if (ahead < -1000) lostMs += -ahead - 1000;   // hopelessly behind: stop trying to catch up
   } else if (par && r === STOP.SLEEP && par.othersRunning()) {
     // unpaced, CPU 0 still naps while the others work, until an IPI
     parWaitUntil = performance.now() + Math.min(dev.napMs, 100);

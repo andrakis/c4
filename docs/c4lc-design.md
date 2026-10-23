@@ -1131,3 +1131,25 @@ prints what gcc `-m32` prints, without its rewrites, plain, `-O` and
   both in `C4SC_BACK_DIFF`.
   `c4lc_m7ext_a.c` gained `&shared_s[1]` over another unit's array,
   linked by c4rlink at both sizes.
+
+### 14.10 A typedef of an array type (M11, 2026-10-23)
+
+Step 6 of docs/ports-feasibility.md §8, for doomgeneric's `sha1.h`,
+`typedef byte sha1_digest_t[20];`. c4lc only: c4fc has no typedef.
+
+- `typedef T NAME[N]` (and `[N][M]`) names a **row** (14.8): N elements of
+  T, of N times T's stride, which stands for the address of its first
+  element wherever its value is used. That is C's array, and `sizeof` of
+  the type is the row's size.
+- A declarator of a row's type with no brackets of its own -- a global, a
+  local, a member -- is laid out as the array it is: `digest_t d;` is
+  `byte d[20];`. `p:arraysize/t` reports the row's count, and `p:elemty`
+  then gives its element, so every site that took `T name[N]` takes it.
+  With brackets of its own, `digest_t ds[3];`, it is an array of rows, as
+  `byte ds[3][20]` is.
+- A parameter of a row's type is a pointer to its element, as `T p[N]`'s
+  is. A pointer to one, `digest_t *p`, steps a row at a time.
+- Tests: `c4lc_m11lc.c` (globals, an extern, struct members, parameters,
+  `sizeof`, a 2-D typedef, a pointer to one, `memcpy` over one), gcc's
+  golden, the same at 32 and 64 bits; in test-c4lc at both sizes, plain,
+  `-O` and `-minline`, and in `C4SC_BACK_DIFF`.

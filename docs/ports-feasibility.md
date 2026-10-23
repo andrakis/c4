@@ -13,7 +13,10 @@ The rules for these ports:
 - memory is not a concern (`?mem=64` raises libjs's arena);
 - Quake is out for now.
 
-Status (2026-10-23): measured, nothing ported.
+Status (2026-10-23): **Doom is ported** (src/doom/README.md): doomgeneric,
+on C4IX's whole display, under C4DOS and on the bare machine, its demos'
+frames the same as gcc's. Step 6 is done (M11); doomgeneric's one
+bitfield struct is written as bytes instead (step 7).
 - **c4lc** compiled 50 of linuxdoom's 59 units as they stood. The first
   five steps of §8, small and medium fixes, make it compile all of Doom.
   Twelve steps, none of them large, cover Doom, OpenTyrian and Rise of
@@ -373,7 +376,7 @@ and step 12 Rise of the Triad. Each step lands as M7b's did:
 | 3 | `&a[k]` as a global's initializer | Doom, dg | S | with start-up initializers (§4.2) | c4lc, at start-up |
 | 4 | casts and address-plus-offset in aggregate initializers; casts in constant expressions (`case`) | Doom, ROTT, Tyrian | M | M | c4lc; c4fc but `a + k`, members and a string plus k |
 | 5 | float arithmetic folded in constant initializers, converted to the target type (`float f = 2.0;` too) | Doom, dg, Tyrian | M | after floats | c4lc, folded exactly |
-| 6 | typedefs of array types, pointers to arrays (`T (*p)[N]`) | dg, Tyrian, ROTT | M | after typedef | |
+| 6 | typedefs of array types, pointers to arrays (`T (*p)[N]`) | dg, Tyrian, ROTT | M | after typedef | c4lc (M11, c4lc-design 14.10) |
 | 7 | bitfields | dg (one struct) | M | M | |
 | 8 | declarations in `for` | Tyrian | S–M | S–M, with mixed declarations | |
 | 9 | struct values: returned and used, copy-initialized, compound literals | Tyrian | M | M | |

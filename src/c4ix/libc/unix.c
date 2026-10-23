@@ -114,6 +114,7 @@ int dup(int fd) { int r; r = udup(fd); return r < 0 ? fail(EBADF) : r; }
 int dup2(int fd, int to) { int r; r = udup2(fd, to); return r < 0 ? fail(EBADF) : r; }
 int pipe(int *fds) { return upipe(fds) < 0 ? fail(EMFILE) : 0; }
 int unlink(char *path) { return uunlink(path) < 0 ? fail(ENOENT) : 0; }
+int remove(char *path) { return unlink(path); }
 int rmdir(char *path) { return uunlink(path) < 0 ? fail(ENOTEMPTY) : 0; }
 int mkdir(char *path, int mode) {
     int st[4];

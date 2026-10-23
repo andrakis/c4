@@ -76,10 +76,16 @@ ARCHIVES = c4ix-root.tgz
 			wolf3d/:
 				wolf3d.c4r: c4ix-wolf3d.c4r
 				1wolf14.zip
+			# Doom (src/doom): the game and id's shareware WAD
+			doom/:
+				doom.c4r: c4ix-doom.c4r
+				doom1.wad
 	# and by name, as the programs in /bin are
 	wolf3d: ilink(/usr/games/wolf3d/wolf3d.c4r)
+	doom: ilink(/usr/games/doom/doom.c4r)
 	# sync is persist save (src/c4ix/user/persist.c)
 	sync: ilink(/bin/persist)
 	bin/:
 		wolf3d: ilink(/usr/games/wolf3d/wolf3d.c4r)
+		doom: ilink(/usr/games/doom/doom.c4r)
 		sync: ilink(/bin/persist)

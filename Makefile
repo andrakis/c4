@@ -1100,7 +1100,7 @@ C4SC_BACK_DIFF := c4_jailbreak factorial hello multifun puts reverse \
                   test_malloc test-order test-ptrs test_static test_switch \
                   tests c4lc_l2 global test_gcscan test-oisc test_printf \
                   c4lc_m4 c4lc_m4q c4lc_m4v c4lc_m7 c4lc_ll c4lc_m9 c4lc_m9lc \
-                  c4lc_m10 c4lc_m10lc
+                  c4lc_m10 c4lc_m10lc c4lc_m11lc
 test-c4sc-back: c4sc-host c4sp $(C4RLINK) $(C4M)
 	@fail=0; for b in $(C4SC_BACK_DIFF); do \
 	   f=$(TESTS)/$$b.c; \
@@ -2343,7 +2343,7 @@ c4bb-32bit: c4cc32 c4m32 c4sp32 c4rlink32
 # target builds what it uses.
 # ./cpp is a hard prerequisite now, not just for C4DOS: the shared
 # disk's c4m.c4r goes through it (build-images.sh).
-c4bb-images: c4bb-32bit $(C4LC_LISP) c4th32.c4r cpp wolf3d-objs wolf3d-bare-objs
+c4bb-images: c4bb-32bit $(C4LC_LISP) c4th32.c4r cpp wolf3d-objs wolf3d-bare-objs doom-objs
 	bash src/c4bb/tests/build-images.sh
 
 # WOLFENSTEIN 3D (src/wolf3d, docs/c4ix-wolf3d.md): Wolf4SDL in c4lc's C,
@@ -2390,6 +2390,76 @@ wolf3d-bare-objs: .wolf3d-bare/plat-bare.c4o $(WOLF_LIBC:%=.wolf3d-bare/libc-%.c
 	$(WOLF_LIBCC) -fno-builtin $< $@ > /dev/null
 PHONY += wolf3d-bare-objs
 
+# Doom (src/doom/README.md): doomgeneric's units with c4lc, the same
+# objects for C4IX, the bare machine and C4DOS, but for the two that say
+# whether the display has to be asked for (dg-c4ix.c, dg-bare.c, in
+# .doom/plat). build-images.sh links them: against C4IX's libc, and whole
+# with the bare libc of wolf3d-bare-objs.
+DOOM       := src/doom
+DOOM_PLAT  := dg-host dg-c4ix dg-bare
+DOOM_UNITS := $(filter-out $(DOOM_PLAT),$(patsubst $(DOOM)/%.c,%,$(wildcard $(DOOM)/*.c)))
+DOOM_HDRS  := $(wildcard $(DOOM)/*.h $(DOOM)/c4inc/*.h) \
+              $(wildcard src/c4ix/libc/include/*.h src/c4ix/libc/include/sys/*.h) \
+              src/c4ix/include/display.h libjs/guest/gui.h libjs/guest/gui.c \
+              libjs/guest/snd.h libjs/guest/snd.c
+DOOM_CC    := ./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O -mfuse -fno-builtin -c \
+              -D C4DOOM -D FEATURE_SOUND -I $(DOOM)/c4inc -I src/c4ix/libc/include \
+              -I src/c4ix/include -I libjs/guest -I $(DOOM)
+doom-objs: $(DOOM_UNITS:%=.doom/%.c4o) .doom/plat/dg-c4ix.c4o .doom/plat/dg-bare.c4o
+.doom/%.c4o: $(DOOM)/%.c $(DOOM_HDRS) $(C4LC_LISP) | c4sp32
+	@mkdir -p .doom/plat
+	$(DOOM_CC) $< $@ > /dev/null
+.doom/plat/%.c4o: $(DOOM)/%.c $(DOOM_HDRS) $(C4LC_LISP) | c4sp32
+	@mkdir -p .doom/plat
+	$(DOOM_CC) $< $@ > /dev/null
+PHONY += doom-objs
+
+# ... and by gcc for the host, with no display and no sound (dg-host.c):
+# the reference test-doom holds the c4lc build to. 32-bit, as the c4lc
+# build is; the 64-bit build plays demo1 differently.
+DOOM_HOST_SRCS := $(filter-out $(DOOM)/dg-gui.c $(DOOM)/dg-snd.c $(DOOM)/dg-c4ix.c $(DOOM)/dg-bare.c, \
+                  $(wildcard $(DOOM)/*.c))
+doom-host: $(DOOM_HOST_SRCS) $(wildcard $(DOOM)/*.h)
+	gcc -m32 -O2 -std=gnu99 -w -DC4DOOM -DNORMALUNIX -DLINUX -D_DEFAULT_SOURCE -I$(DOOM) -o $@ $(DOOM_HOST_SRCS) -lm
+
+# test-libc-bare: libc's scanf, fseek and fread (src/c4ix/libc/tests/
+# scantest.c) on the bare machine, against gcc's build of the same.
+test-libc-bare: wolf3d-bare-objs $(C4LC_LISP) | c4sp32
+	@rm -rf .libc_t && mkdir -p .libc_t && cp src/c4ix/libc/tests/scantest.c .libc_t/
+	@./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O -fno-builtin -c -I src/c4ix/libc/include .libc_t/scantest.c .libc_t/scantest.c4o > /dev/null
+	@./c4rlink32 .libc_t/scantest.c4o .wolf3d-bare/libc-*.c4o -o .libc_t/scantest.c4r > /dev/null
+	@gcc -m32 -w -o .libc_t/scantest-host .libc_t/scantest.c
+	@cd .libc_t && ./scantest-host scantest.c > host.txt && node ../libjs/cli.js -m 64 -d . scantest.c4r scantest.c > c4.txt
+	@cmp -s .libc_t/host.txt .libc_t/c4.txt || { echo "test-libc-bare: differs from gcc's:"; diff .libc_t/c4.txt .libc_t/host.txt; exit 1; }
+	@rm -rf .libc_t
+	@echo "test-libc-bare: OK"
+PHONY += test-libc-bare
+
+# test-doom: demo3 in Doom's -timedemo, which plays a tic a frame and here
+# on a virtual clock (dg-sum.c), built by gcc and by c4lc -- on the bare
+# machine, under C4DOS and inside C4IX -- must show the same 2173 frames.
+# The second and third together, as they share nothing. demo1 and demo2
+# match too (src/doom/README.md); demo3 is the shortest. About five
+# minutes, nearly all of it on c4m.
+test-doom: doom-host c4bb-images test-libc-bare
+	@rm -rf .doom_t && mkdir -p .doom_t
+	@cd .doom_t && cp ../src/doom/data/doom1.wad . && ../doom-host -iwad doom1.wad -timedemo demo3 -nosound 2>/dev/null \
+	   | grep '^timedemo' > host.txt
+	@cat .doom_t/host.txt
+	@cd src/c4bb/images/games && { timeout 1500 node ../../../../libjs/cli.js -m 64 -d . doom.c4r -timedemo demo3 -nosound \
+	     > ../../../../.doom_t/bare.out 2>/dev/null & \
+	   printf 'doom -timedemo demo3 -nosound\nver\n' | timeout 1500 node ../../../../libjs/cli.js -m 64 -d . ../c4dos32.c4r \
+	     > ../../../../.doom_t/dos.out 2>/dev/null; wait; }
+	@printf 'doom -timedemo demo3 -nosound\nexit\n' | timeout 1500 node libjs/cli.js -m 64 -d src/c4bb/images/disk src/c4bb/images/c4ix32.c4r \
+	   2>/dev/null > .doom_t/c4ix.out
+	@for w in bare dos c4ix; do grep '^timedemo' .doom_t/$$w.out | cmp -s .doom_t/host.txt - \
+	   || { echo "test-doom: $$w's frames differ:"; tail -5 .doom_t/$$w.out; exit 1; }; done
+	@grep -A1 '^timedemo' .doom_t/dos.out | grep -q '^A>C4DOS version' \
+	   || { echo "test-doom: C4DOS did not come back to its prompt:"; tail -5 .doom_t/dos.out; exit 1; }
+	@rm -rf .doom_t
+	@echo "test-doom: OK"
+PHONY += test-doom
+
 # The same game built by gcc for the host, with no window: the reference
 # the C4IX build is held to (test-wolf3d).
 WOLF_HOST_SRCS := $(filter-out $(WOLF)/plat-c4ix.c $(WOLF)/plat-gui.c $(WOLF)/wolfinst.c $(WOLF)/explode.c $(WOLF)/arc.c, \
@@ -2416,7 +2486,7 @@ test-wolf3d: wolf3d-host c4bb-images
 	@cat .wolf3d_t/host.txt
 	@test -s .wolf3d_t/host.txt && cmp -s .wolf3d_t/host.txt .wolf3d_t/c4ix.txt \
 	   || { echo "test-wolf3d: C4IX's frames differ:"; cat .wolf3d_t/c4ix.txt; exit 1; }
-	@cd src/c4bb/images/wolf3d && { timeout 900 node ../../../../libjs/cli.js -m 64 -d . wolf3d.c4r --timedemo 1 \
+	@cd src/c4bb/images/games && { timeout 900 node ../../../../libjs/cli.js -m 64 -d . wolf3d.c4r --timedemo 1 \
 	     > ../../../../.wolf3d_t/bare.out 2>/dev/null & \
 	   printf 'wolf3d --timedemo 1\nver\n' | timeout 900 node ../../../../libjs/cli.js -m 64 -d . ../c4dos32.c4r \
 	     > ../../../../.wolf3d_t/dos.out 2>/dev/null; wait; }
@@ -3350,7 +3420,7 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	# addresses plus offsets in constants (c4lc_m10.c, c4fc too); &a[k]
 	# set at start-up and floating point folded (c4lc_m10lc.c, c4lc
 	# only). gcc's goldens, the same at both sizes.
-	@for t in m9 m9lc m10 m10lc; do for fl in "" "-O" "-minline"; do \
+	@for t in m9 m9lc m10 m10lc m11lc; do for fl in "" "-O" "-minline"; do \
 	   ./c4sp src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_$$t.c .c4lc_b.c4r > /dev/null || exit 1; \
 	   ./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-$$t.txt || exit 1; \
 	   ./c4sp32 src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_$$t.c .c4lc_b.c4r > /dev/null || exit 1; \

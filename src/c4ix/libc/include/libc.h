@@ -39,6 +39,14 @@
 #define PATH_MAX 256
 #define INT_MAX 2147483647
 #define INT_MIN (-2147483647 - 1)
+#define SHRT_MAX 32767
+#define SHRT_MIN (-32768)
+#define USHRT_MAX 65535
+#define SCHAR_MAX 127
+#define SCHAR_MIN (-128)
+#define UCHAR_MAX 255
+#define CHAR_MAX 127
+#define CHAR_MIN (-128)
 #define CHAR_BIT 8
 #define RAND_MAX 32767
 #define EXIT_SUCCESS 0
@@ -80,6 +88,7 @@ int  dup(int fd);
 int  dup2(int fd, int to);
 int  pipe(int *fds);
 int  unlink(char *path);
+int  remove(char *path);
 int  rmdir(char *path);
 int  mkdir(char *path, int mode);
 int  rename(char *from, char *to);
@@ -192,6 +201,7 @@ char *bsearch(char *key, char *base, int n, int size, int cmp);
 char *getenv(char *name);
 int   setenv(char *name, char *value, int overwrite);
 int   unsetenv(char *name);
+int   system(char *cmd);
 int   rand();
 void  srand(unsigned int seed);
 
@@ -232,6 +242,15 @@ int   fileno(FILE *f);
 int   setvbuf(FILE *f, char *buf, int mode, int size);
 enum { _IOFBF = 0, _IOLBF = 1, _IONBF = 2 };
 int   getline(char **line, int *cap, FILE *f);
+long  ftell(FILE *f);
+int   fseek(FILE *f, long off, int whence);
+void  rewind(FILE *f);
+int   sscanf(char *s, char *fmt, ...);
+int   fscanf(FILE *f, char *fmt, ...);
+int   scanf(char *fmt, ...);
+int   vsscanf(char *s, char *fmt, int *ap);
+int   vfscanf(FILE *f, char *fmt, int *ap);
+int   vscanf(char *fmt, int *ap);
 
 int printf(char *fmt, ...);
 int fprintf(FILE *f, char *fmt, ...);

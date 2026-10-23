@@ -1,7 +1,7 @@
 # src/c4ix/libc — C4IX's C library
 
-A C library for programs that run on C4IX: stdio with buffered `FILE`s and a
-full `printf` (floating point too), the string and ctype functions, `malloc` with `realloc`,
+A C library for programs that run on C4IX: stdio with buffered `FILE`s, a
+full `printf` (floating point too), `scanf` and `fseek`, the string and ctype functions, `malloc` with `realloc`,
 `strtol`, `qsort`, `getenv`/`setenv`, `getopt`, `opendir`, the POSIX file
 calls over C4IX's syscalls (`lseek`, `fstat`, `link` and `truncate` among
 them), `vfork`, `execve` and `waitpid`, and `<math.h>`. [`include/libc.h`](include/libc.h) is the
@@ -36,7 +36,7 @@ same commands with `./c4sp32 ... src/c4sp/lisp/c4lc.lisp` and `-I src/c4ix/libc/
 | `sys.h` | private: the libc4ix functions the library is built on |
 | `string.c` | string.h and ctype.h |
 | `stdlib.c` | `malloc` (a size word ahead of each block), `realloc`, `exit` and `atexit`, `strtol`, `qsort`, the environment (read in from the kernel's copy, which `execve` set), `rand` |
-| `stdio.c` | `FILE`s, `fopen` and the rest, and `printf` with flags, widths, precisions and every conversion |
+| `stdio.c` | `FILE`s, `fopen` and the rest, `fseek`/`ftell`/`rewind`, `fread` straight into the caller's memory for large reads, `printf` with flags, widths, precisions and every conversion, and `scanf`/`sscanf`/`fscanf`: `d i u o x X p n c s [set] f e g a`, widths, `*`, `h hh l ll` |
 | `fp.c` | `printf`'s `%f %e %g` digits and `strtod`/`strtof`/`atof`, exact both ways (glibc's answers) |
 | `math.c` | `<math.h>`, after fdlibm: within an ulp or two of glibc, the bit-exact ones exact |
 | `unix.c` | `open` … `rename`, `lseek`, `stat` and `fstat`, `link`, `truncate`, `execve` and `waitpid`, `opendir`, `getopt`, `errno` and `strerror`, `time`. `vfork` is libc4ix's, since it must execute the syscall itself (`src/c4ix/sched.c`) |
@@ -62,7 +62,9 @@ c4rlink prog.c4o string.c4o stdlib.c4o stdio.c4o unix.c4o fp.c4o math.c4o \
 
 (`make wolf3d-bare-objs` builds them, in `.wolf3d-bare/libc-*.c4o`.)
 Files are the machine's: `open` and `read` on the host's directory, and
-writing only to the console. Under C4DOS -- the loader fills in
+writing only to the console. A file opened for reading is read whole into
+memory when it opens, so `lseek` works on it, which the machine itself
+cannot do (Doom reads its WAD a lump at a time). Under C4DOS -- the loader fills in
 `__c4dos_api` -- `bare.c` asks DOS first: `open` of a DOS file, `create`
 and `write` on its RAM disk, and `exit` through `dos_exit`, back to the
 prompt. Directories, `lseek`, pipes and `execve` are not there, and fail.
@@ -70,6 +72,10 @@ prompt. Directories, `lseek`, pipes and `execve` are not there, and fail.
 ## Limits
 
 - `%a` (hex float output) is not there; `strtod` reads hex floats.
+- `system` runs nothing: `system(0)` says there is no shell, and anything
+  else fails with `ENOSYS`.
+- `fseek` on a stream C4IX cannot seek (a pipe, the console, a host
+  file) fails and keeps what it had read ahead.
 - No locales, wide characters, `setjmp`/`longjmp` or signal handlers.
 - `lseek` moves in RAM files only: a pipe, the console and a host file
   are `ESPIPE`.

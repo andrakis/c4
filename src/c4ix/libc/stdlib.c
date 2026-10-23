@@ -262,6 +262,14 @@ int unsetenv(char *name) {
 
 static unsigned int rand_next = 1;
 
+// No shell takes a command line from a program here yet: system(0) says
+// there is none, and anything else fails
+int system(char *cmd) {
+    if (!cmd) return 0;
+    errno = ENOSYS;
+    return -1;
+}
+
 int rand() {
     rand_next = rand_next * 1103515245 + 12345;
     return (int)((rand_next / 65536) % 32768);

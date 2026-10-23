@@ -39,6 +39,11 @@ libc.c4s
 /.wolf3d-bare/
 /.wolf3d_t/
 /wolf3d-host
+# Doom's objects (make doom-objs), its gcc build, its test
+/.doom/
+/.doom_t/
+/.libc_t/
+/doom-host
 
 # copied from src/c4bb/fs/c4ix-cli.vfs.txt by `make run-c4ix`
 /c4ix.vfs.txt

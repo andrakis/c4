@@ -24,7 +24,7 @@ enum {
     SYS_STACK = 228, SYS_CPUSTAT = 229, SYS_EVWAIT = 230, SYS_DISCARD = 231,
     SYS_VFORK = 232, SYS_EXECVE = 233, SYS_WAITPID = 234, SYS_LSEEK = 235,
     SYS_FSTAT = 236, SYS_LINK = 237, SYS_FTRUNCATE = 238, SYS_ENVIRON = 239,
-    SYS_DISPLAY = 240, SYS_AFFINITY = 242
+    SYS_DISPLAY = 240, SYS_AFFINITY = 242, SYS_NICE = 243
 };
 // libjs's display, taken from the desktop and given back (include/display.h)
 #ifndef __C4IX_DISPLAY_H
@@ -86,6 +86,11 @@ int  ucpustat(int *hdr, int *recs, int max);  // cpustat.h: one snapshot of ever
 // the CPUs task ID (0: this one) may run on, bit k for CPU k, 0 for any;
 // MASK < 0 only asks. The mask it had, or -1 for no such task.
 int  uaffinity(int id, int mask);
+// task ID's (0: this one) priority, -10 the most favoured to 10, 0 for
+// most; NICE outside that only asks. Its nice before, or UNICE_NONE for
+// no such task. Wolf3D, Doom and Tyrian ask for -5.
+enum { UNICE_ASK = 99, UNICE_NONE = -100 };
+int  unice(int id, int nice);
 // Sleep ms milliseconds, or less: until an event lands in the GUI ring at
 // ring (0: none), or, with pipes set, data or end of file on a pipe this
 // task reads. 1 if one already had.

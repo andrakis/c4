@@ -442,11 +442,13 @@ static int sched_unblocked(struct task *n) {
         if (__time() - n->ck_wake < 0 && !(n->ev_wait && sched_events(n))) return 0;
         n->ev_wait = 0;
         n->state = TS_READY;
+        n->woke = 1;
         return 1;
     }
     if (n->state != TS_BLOCKED) return 0;
     if (!vfs_readable(n->block_vn, n->block_pos)) return 0;
     n->state = TS_READY;
+    n->woke = 1;
     return 1;
 }
 
@@ -529,6 +531,7 @@ void task_zombify(struct task *t, int code) {
             (w->wait_for == t->id || (w->wait_for == -1 && t->parent == w->id))) {
             w->wait_posix = 0;
             w->state = TS_READY;
+            w->woke = 1;
             return;
         }
         if (w->state == TS_WAITING && w->wait_for == t->id && !w->wait_posix) {
@@ -538,6 +541,7 @@ void task_zombify(struct task *t, int code) {
             w->wait_result = code;
             w->sv_a = code;
             w->state = TS_READY;
+            w->woke = 1;
             task_release(t);
             return;
         }
@@ -593,6 +597,57 @@ static struct task *sched_pick(struct task *t) {
 // task's stale ones. The two contexts trade places, one then rebuilds
 // a trap frame over the frame the other is parked on, and the machine
 // ends up spinning on a TLEV that returns to itself forever.
+// ---- priority: nice ----
+//
+// A task's nice is -10, the most favoured, to 10; 0 for most, and when
+// every task has 0 -- until something sets one -- scheduling is the round
+// robin it always was. A favoured task is served sooner and longer, but
+// never to the exclusion of the rest, which a game drawing in a window
+// needs as much as anyone, since the desktop draws it:
+// - sooner: when it wakes, from a sleep or a wait, it preempts a less
+//   favoured task at once, instead of waiting out that task's slice;
+// - longer: a turn of 1 - nice slices in a row, where the others' is one.
+// The turns still go round, so a favoured task that never sleeps cannot
+// starve the others; a task with a positive nice is only ever preempted
+// by a woken task with a lower one. A child starts with its parent's.
+static int sched_niced;          // some task has had a nice set
+
+// the cycles a task runs before its turn passes
+static int sched_turn(struct task *t) {
+    return t->nice < 0 ? sched_interval * (1 - t->nice) : sched_interval;
+}
+
+// A task that has woken and is more favoured than T, this CPU's to run:
+// the most favoured, or 0
+static struct task *sched_waker(struct task *t) {
+    struct task *n, *best;
+    best = 0;
+    n = task_head;
+    while (n) {
+        if (n != t && !n->cpuidle && n->nice < t->nice && (!best || n->nice < best->nice) &&
+            sched_mine(n) && (n->state == TS_READY || sched_unblocked(n)) && n->woke) best = n;
+        n = n->next;
+    }
+    return best;
+}
+
+// SYS_NICE: task ID's nice; one outside -10..10 only asks. The one it had,
+// or -100: no such task, or one that is not a program's.
+int sched_nice(int id, int nice) {
+    struct task *t;
+    int old;
+    sched_lock();
+    t = task_get(id);
+    if (!t || t->cpuidle || t->privs == PRIV_KERNEL) { sched_unlock(); return 0 - 100; }
+    old = t->nice;
+    if (nice >= 0 - 10 && nice <= 10) {
+        t->nice = nice;
+        if (nice) sched_niced = 1;
+    }
+    sched_unlock();
+    return old;
+}
+
 // Under SMP, may this trap be served without the kernel lock? A protected
 // program's malloc or free -- a compile makes thousands -- touches only
 // the heap, whose books are the host's and every thread's (libjs sheap.js),
@@ -608,11 +663,11 @@ static int sched_light(int trap, int param) {
     return trap == C4IX_TRAP_PM && (param == C4IX_OP_MALC || param == C4IX_OP_FREE) &&
         t && t->state == TS_RUNNING && t->privs == PRIV_USER && !t->ck_sigpend &&
         !sched_dying && !sched_resched && !sched_reload && !cpu_self->prev &&
-        (!sched_interval || acct_in - sched_slice0 < sched_interval);
+        (!sched_interval || acct_in - sched_slice0 < sched_turn(t));
 }
 
 static void sched_trap(int interval, int trap, int param, int mode, int a, int bp, int sp, int returnpc) {
-    struct task *t, *n, *me;
+    struct task *t, *n, *me, *fv;
     int reload, hold;
 
     // Re-entry guard. c4m disables the cycle interrupt when IT takes
@@ -757,14 +812,25 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     // that falls inside the kernel is lost -- without this a task making
     // a syscall at the wrong moments would never be preempted.
     t = sched_cur;
-    if ((trap == C4IX_TRAP_ILLOP || trap == C4IX_TRAP_PM) && !sched_resched
+    // a favoured task that has woken goes first (nice, above)
+    fv = (sched_niced && sched_lockdepth == 0 && t->state == TS_RUNNING && !t->cpuidle)
+        ? sched_waker(t) : 0;
+    if (fv) {
+        n = fv;
+        sched_slice0 = acct_in;
+    }
+    else if ((trap == C4IX_TRAP_ILLOP || trap == C4IX_TRAP_PM) && !sched_resched
         && t->state == TS_RUNNING && (t->cpuidle || sched_mine(t))
-        && (!sched_interval || acct_in - sched_slice0 < sched_interval))
+        && (!sched_interval || acct_in - sched_slice0 < sched_turn(t)))
         n = t;
     // An IPI arrives whatever the mask: a task that masked preemption (an
     // idle loop under sched_lock, a C4KE program's exclusive section)
     // keeps the CPU. What it was sent for is found when the mask lifts.
     else if (trap == C4IX_TRAP_HARD_IRQ && sched_lockdepth > 0 && t->state == TS_RUNNING)
+        n = t;
+    // a favoured task's turn is several slices
+    else if (trap == C4IX_TRAP_HARD_IRQ && t->nice < 0 && t->state == TS_RUNNING && !sched_resched &&
+             sched_mine(t) && acct_in - sched_slice0 < sched_turn(t))
         n = t;
     else {
         n = sched_pick(t);
@@ -806,6 +872,7 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
         t->lockdepth = sched_lockdepth;
         sched_lockdepth = n->lockdepth;
         n->state = TS_RUNNING;
+        n->woke = 0;
         sched_cur = n;
         if (smp_ncpu > 1) {
             // this CPU stays on t's stack until the trap returns

@@ -565,6 +565,7 @@ int sys_dispatch(int num, int *args) {
         return 0;
     case SYS_DISPLAY:  return sys_display(t, args[0], args[1]);
     case SYS_AFFINITY: return sched_affinity(args[0] ? args[0] : (t ? t->id : 0), args[1]);
+    case SYS_NICE:     return sched_nice(args[0] ? args[0] : (t ? t->id : 0), args[1]);
     case SYS_GETPID:   return t ? t->id : -1;
     // Freed with the task if it does not free it itself (task.c)
     case SYS_SBRK:     return task_ualloc(t, args[0]);

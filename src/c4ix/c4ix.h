@@ -99,7 +99,9 @@ enum {
     SYS_DISPLAY = 240,
     // the CPUs a task may run on (sched.c, sched_affinity)
     SYS_AFFINITY = 242,
-    SYS_TOP = 243          // one past the last: sched_trap's range check
+    // a task's priority (sched.c, sched_nice)
+    SYS_NICE = 243,
+    SYS_TOP = 244          // one past the last: sched_trap's range check
 };
 // SYS_DISPLAY's operations, and TAKE's flag (include/display.h)
 enum { DISP_TAKE = 0, DISP_STATE = 1, DISP_YIELD = 2, DISP_GIVE = 3, DISP_YIELDS = 1 };
@@ -457,6 +459,11 @@ struct task {
     int  oncpu;
     int  cpuidle;
     int  cpumask;
+    // Priority (sched.c, "nice"): -10, most favoured, to 10, 0 for most.
+    // woke is set when a sleep or a wait ends, and cleared when the task
+    // next runs: only then may it preempt a less favoured one.
+    int  nice;
+    int  woke;
     char name[TASK_NAME_MAX];
 };
 
@@ -518,6 +525,7 @@ void         task_drop_image(struct task *t);   // execve: free its image, libra
 void         task_unborrow(struct task *t);     // a vfork child is done with its parent's memory
 struct task *task_get(int id);
 int sched_affinity(int id, int mask);
+int sched_nice(int id, int nice);
 struct task *task_first();
 struct task *task_next(struct task *t);
 int          task_count();

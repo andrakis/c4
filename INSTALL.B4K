@@ -19,6 +19,7 @@ COPY $(OUT)/bin/c4ix-mkdir.c4r /bin/mkdir
 COPY $(OUT)/bin/c4ix-top.c4r /bin/top
 COPY $(OUT)/bin/c4ix-spin.c4r /bin/spin
 COPY $(OUT)/bin/c4ix-pin.c4r /bin/pin
+COPY $(OUT)/bin/c4ix-nice.c4r /bin/nice
 COPY $(OUT)/bin/c4ix-fmt.c4r /bin/fmt
 COPY $(OUT)/bin/c4ix-gui.c4r /bin/gui
 COPY $(OUT)/bin/c4ix-b4ke.c4r /bin/b4ke

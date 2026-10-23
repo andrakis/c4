@@ -95,6 +95,7 @@ int ulazyfile(char *p, char *h, int n) { return __c4ix_syscall(SYS_LAZYFILE, (in
 int ustack(int bytes)                 { return __c4ix_syscall(SYS_STACK, bytes, 0, 0); }
 
 int uaffinity(int id, int mask)       { return __c4ix_syscall(SYS_AFFINITY, id, mask, 0); }
+int unice(int id, int nice)           { return __c4ix_syscall(SYS_NICE, id, nice, 0); }
 
 int spawn(char *path, int argc, char **argv) {
     return __c4ix_syscall(SYS_SPAWN, (int)path, argc, (int)argv);

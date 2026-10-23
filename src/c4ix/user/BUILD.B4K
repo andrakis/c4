@@ -78,6 +78,10 @@ DEPS $(OUT)/user/pin.c4o : src/c4ix/user/pin.c $(U)
 RUN $(LC) src/c4ix/user/pin.c $(OUT)/user/pin.c4o
 DEPS $(OUT)/bin/c4ix-pin.c4r : $(OUT)/user/pin.c4o $(LIBC)
 RUN c4rlink $(OUT)/user/pin.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-pin.c4r
+DEPS $(OUT)/user/nice.c4o : src/c4ix/user/nice.c $(U)
+RUN $(LC) src/c4ix/user/nice.c $(OUT)/user/nice.c4o
+DEPS $(OUT)/bin/c4ix-nice.c4r : $(OUT)/user/nice.c4o $(LIBC)
+RUN c4rlink $(OUT)/user/nice.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-nice.c4r
 DEPS $(OUT)/user/fmt.c4o : src/c4ix/user/fmt.c $(U)
 RUN $(LC) src/c4ix/user/fmt.c $(OUT)/user/fmt.c4o
 DEPS $(OUT)/bin/c4ix-fmt.c4r : $(OUT)/user/fmt.c4o $(LIBC)

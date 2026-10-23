@@ -478,7 +478,9 @@ game, and run something like this in each:
 - `pin 3 tyrian --window`
 
 `top` and System Monitor then show each game on its own CPU, and the
-desktop on CPU 0. test-c4ix-smp.sh checks that a pinned program runs
+desktop on CPU 0. The games ask for a nice of -5 themselves
+(c4ix-design.md 4.4), so on a CPU they share with something else they are
+still served first. test-c4ix-smp.sh checks that a pinned program runs
 where it was put.
 
 ## 6. Risks

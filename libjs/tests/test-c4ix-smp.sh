@@ -104,11 +104,23 @@ else
     else bad "ps and top: one CPU, no CPU column"; echo "$out" | grep -E 'ID|CPUs' | head -4; fi
 fi
 
+# nice: on one CPU a favoured program (nice -3: a turn of four slices)
+# gets several times the cycles of a plain one beside it
+if [ "$N" -eq 1 ]; then
+    out=$(printf "wait $U\nspin 300 &\nnice -n -3 spin 300 &\nps\nps\nps\nps\nps\nps\nexit\n" | c4ix 2500000000)
+    cyc() { echo "$out" | grep -E "^ +$1 +[0-9]+ .* spin$" | tail -1 |
+            awk '{v=$(NF-1); m=1; if (v ~ /k$/) m=1e3; if (v ~ /M$/) m=1e6; if (v ~ /G$/) m=1e9; sub(/[kMG]$/,"",v); printf "%d", v*m}'; }
+    a=$(cyc 6); b=$(cyc 9)
+    if [ -n "$a" ] && [ -n "$b" ] && [ "$b" -gt $((a * 3)) ]; then
+        ok "nice: a favoured program gets more of the CPU"
+    else bad "nice: a favoured program gets more of the CPU"; echo "$out" | grep -E 'spin|nice' | tail -4; fi
+fi
+
 # pin: a program put on the last CPU runs there, and pin says what it can.
 # ps is pinned to CPU 0, or on two CPUs it would be on spin's while it looks
 if [ "$N" -ge 2 ]; then
     L=$((N - 1))
-    out=$(printf "pin $L spin 8 &\npin 0 ps\npin 0 ps\npin 0 ps\npin 0 ps\npin 7x echo no\nexit\n" | c4ix 1500000000)
+    out=$(printf "wait $U\npin $L spin 8 &\npin 0 ps\npin 0 ps\npin 0 ps\npin 0 ps\npin 7x echo no\nexit\n" | c4ix 1500000000)
     runs=$(echo "$out" | grep -E "^ +[0-9]+ +[0-9]+ run +[0-9]+ user .* spin$")
     if [ -n "$runs" ] && ! echo "$runs" | grep -qvE " run +$L user " &&
        echo "$out" | grep -qF "usage: pin CPUS COMMAND"; then

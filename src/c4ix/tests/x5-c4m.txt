@@ -64,7 +64,7 @@ cat: cannot open /tmp/nonexistent
 after a failure the shell keeps going
 test: done
 init: shell exited 0 after 419 syscalls
-sl4b: cache 'task' objsize 704 perslab 16 slabs 1 allocs 46 frees 46 live 0
+sl4b: cache 'task' objsize 720 perslab 16 slabs 1 allocs 46 frees 46 live 0
 sl4b: cache 'file' objsize 32 perslab 16 slabs 1 allocs 36 frees 36 live 0
 sl4b: cache 'vnode' objsize 216 perslab 8 slabs 2 allocs 19 frees 7 live 12
 c4ix: shutdown complete, 0 tasks remain

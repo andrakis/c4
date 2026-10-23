@@ -156,6 +156,36 @@ loading or assigning a whole struct is an error.
   the idle-task discovery dance (C4IX will pass the idle address
   explicitly instead), RAM-FS opcode interface if kexts are wanted.
 
+### 4.4 Priority: nice (2026-10-23)
+
+Scheduling was a plain round robin: equal slices, and a task that woke
+from a sleep waited for whatever ran to finish its slice. Under C4DOS or
+on the bare machine a game has the machine to itself; inside C4IX, top,
+the shell and persist each took whole turns from it. So a task now has a
+**nice**, -10 (most favoured) to 10, and 0 for most. While every task has
+0 the scheduling is exactly the round robin it was.
+
+A favoured task is served **sooner**: when it wakes, from a sleep, a pipe
+or a wait, it preempts a less favoured task at the next trap. It does not
+wait out that task's slice (sched.c, `sched_waker`). It is also served
+**longer**: a turn of 1 - nice slices in a row (`sched_turn`).
+
+The turns still go round, so a favoured task that never sleeps cannot
+starve the rest. That matters most for a game in a window, because the
+desktop is what draws it. Strict priority was rejected for exactly that
+reason. A positive nice is the other way: such a task is preempted by
+any less nice task that wakes.
+
+Children start with their parent's nice. `SYS_NICE` (243, `unice` in
+libc4ix) sets and reads it. `nice` is the command:
+- `nice -n -5 cc big.c` runs a command at a given nice, and Unix's
+  `nice -5`/`nice --5` spellings work too;
+- `nice -p PID [N]` reads or changes a running task's.
+
+Wolf3D, Doom and Tyrian ask for -5 themselves on C4IX. On one CPU, a
+spinner at -3 beside one at 0 gets 4.6 times the cycles
+(test-c4ix-smp.sh checks for more than three).
+
 ## 5. Testing
 
 - L7: gcc differential on every language feature (c4cc cannot compile

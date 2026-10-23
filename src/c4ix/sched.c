@@ -122,8 +122,18 @@ static int bkl[2];
 static void bkl_take() { klock_take(bkl); }
 static void bkl_drop() { klock_drop(bkl); }
 
+// Whether N may run on CPU K by its mask (pin, SYS_AFFINITY). A mask
+// naming no CPU this machine has is no mask at all.
+static int sched_allows(struct task *n, int k) {
+    int m;
+    if (!n->cpumask) return 1;
+    m = n->cpumask & ((1 << smp_ncpu) - 1);
+    return !m || (m & (1 << k)) != 0;
+}
+
 // Whether this CPU may run N: not while another CPU is on its stack,
-// an idle task only on its own CPU, and a kernel task only on CPU 0.
+// an idle task only on its own CPU, a kernel task only on CPU 0, and a
+// pinned task only on its CPUs.
 static int sched_mine(struct task *n) {
     int me;
     if (smp_ncpu < 2) return 1;
@@ -131,7 +141,7 @@ static int sched_mine(struct task *n) {
     if (n->oncpu && n->oncpu != me) return 0;
     if (n->cpuidle) return n->cpuidle == me;
     if (n->privs == PRIV_KERNEL) return me == 1;
-    return 1;
+    return sched_allows(n, me - 1);
 }
 
 // This CPU is off the stack of the task it last switched out. Under the
@@ -163,39 +173,43 @@ int smp_slot_alloc() {
     return CPU_WINDOW + (CPU_SLOT0 + smp_slots - 1) * sizeof(int);
 }
 
-// Some CPU other than this one runs its idle task
-static int smp_anyidle() {
+// An idle CPU other than this one that N may run on, the highest, or -1
+static int smp_idlefor(struct task *n) {
     int k;
-    k = 0;
-    while (k < smp_ncpu) { if (k != cpu_self->id && smp_idle[k]) return 1; ++k; }
-    return 0;
+    k = smp_ncpu - 1;
+    while (k >= 0) {
+        if (k != cpu_self->id && smp_idle[k] && sched_allows(n, k)) return k;
+        --k;
+    }
+    return 0 - 1;
 }
 
-// Work some idle CPU could do: an IPI to as many as there are tasks
-// ready for them. Kernel tasks are CPU 0's. Under the lock, at the end
-// of every trap; only when some CPU is idle does it look.
+// Work some idle CPU could do: an IPI to one for each task ready, among
+// the CPUs it may run on. Kernel tasks are CPU 0's. Under the lock, at
+// the end of every trap; only when some CPU is idle does it look.
 static void smp_kick() {
     struct task *n;
-    int k, me, ready, kern, idle;
+    int k, me, kern, idle;
     me = cpu_self->id;
     idle = 0;
     k = 0;
     while (k < smp_ncpu) { if (k != me && smp_idle[k]) ++idle; ++k; }
     if (!idle) return;
-    ready = 0;
     kern = 0;
     n = task_head;
-    while (n) {
-        if (!n->cpuidle && !n->oncpu && (n->state == TS_READY || sched_unblocked(n))) {
-            if (n->privs == PRIV_KERNEL) kern = 1; else ++ready;
-        }
+    while (n && !kern) {
+        if (n->privs == PRIV_KERNEL && !n->cpuidle && !n->oncpu &&
+            (n->state == TS_READY || sched_unblocked(n))) kern = 1;
         n = n->next;
     }
-    if (kern && me != 0 && smp_idle[0]) { __c4_ipi(0); smp_idle[0] = 0; }
-    k = smp_ncpu - 1;
-    while (k >= 0 && ready > 0) {
-        if (k != me && smp_idle[k]) { __c4_ipi(k); smp_idle[k] = 0; --ready; }
-        --k;
+    if (kern && me != 0 && smp_idle[0]) { __c4_ipi(0); smp_idle[0] = 0; --idle; }
+    n = task_head;
+    while (n && idle > 0) {
+        if (n->privs != PRIV_KERNEL && !n->cpuidle && !n->oncpu &&
+            (n->state == TS_READY || sched_unblocked(n)) && (k = smp_idlefor(n)) >= 0) {
+            __c4_ipi(k); smp_idle[k] = 0; --idle;
+        }
+        n = n->next;
     }
 }
 
@@ -551,7 +565,8 @@ static struct task *sched_pick(struct task *t) {
         n = task_next(n);
         if (n == start) n = 0;
     }
-    if (t->state == TS_RUNNING || t->state == TS_READY || sched_unblocked(t)) return t;
+    if ((t->state == TS_RUNNING || t->state == TS_READY || sched_unblocked(t)) &&
+        (t == idle || t->cpuidle || sched_mine(t))) return t;
     return idle ? idle : t;
 }
 
@@ -743,7 +758,7 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     // a syscall at the wrong moments would never be preempted.
     t = sched_cur;
     if ((trap == C4IX_TRAP_ILLOP || trap == C4IX_TRAP_PM) && !sched_resched
-        && t->state == TS_RUNNING
+        && t->state == TS_RUNNING && (t->cpuidle || sched_mine(t))
         && (!sched_interval || acct_in - sched_slice0 < sched_interval))
         n = t;
     // An IPI arrives whatever the mask: a task that masked preemption (an
@@ -760,8 +775,9 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
         // taking turns between them while the other parked. (Preempted: its
         // slice ran out, at the cycle interrupt or in a syscall; not a yield.)
         if (smp_ncpu > 1 && n != t && t->state == TS_RUNNING && !t->cpuidle && n->privs == PRIV_USER &&
+            sched_mine(t) &&
             (trap == C4IX_TRAP_HARD_IRQ || ((trap == C4IX_TRAP_ILLOP || trap == C4IX_TRAP_PM) && !sched_resched)) &&
-            smp_anyidle()) n = t;
+            smp_idlefor(n) >= 0) n = t;
         sched_slice0 = acct_in;
     }
     sched_resched = 0;
@@ -979,6 +995,26 @@ static void sched_interrupt() {
 }
 
 // ---- the common face ----
+
+// SYS_AFFINITY: the CPUs task ID may run on, bit k for CPU k, 0 for any;
+// MASK < 0 only asks. Its mask before, or -1: no such task, or one that
+// is not a program's (kernel tasks are CPU 0's, idle tasks their own
+// CPU's). A task running where it may no longer goes at its next trap --
+// at once, if it is the caller.
+int sched_affinity(int id, int mask) {
+    struct task *t;
+    int old;
+    sched_lock();
+    t = task_get(id);
+    if (!t || t->cpuidle || t->privs == PRIV_KERNEL) { sched_unlock(); return 0 - 1; }
+    old = t->cpumask;
+    if (mask >= 0) {
+        t->cpumask = mask;
+        if (t == sched_cur) sched_resched = 1;
+    }
+    sched_unlock();
+    return old;
+}
 
 void sched_yield() {
     if (!sched_cur) return;

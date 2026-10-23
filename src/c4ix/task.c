@@ -90,6 +90,7 @@ struct task *task_vchild(struct task *p) {
     t->cwd = p->cwd;
     t->parent = p->id;
     t->privs = p->privs;
+    t->cpumask = p->cpumask;
     t->spawn_stack = p->spawn_stack;
     t->img_libs = p->img_libs;
     t->img_nlibs = p->img_nlibs;

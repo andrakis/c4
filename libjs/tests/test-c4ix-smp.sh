@@ -104,6 +104,18 @@ else
     else bad "ps and top: one CPU, no CPU column"; echo "$out" | grep -E 'ID|CPUs' | head -4; fi
 fi
 
+# pin: a program put on the last CPU runs there, and pin says what it can.
+# ps is pinned to CPU 0, or on two CPUs it would be on spin's while it looks
+if [ "$N" -ge 2 ]; then
+    L=$((N - 1))
+    out=$(printf "pin $L spin 8 &\npin 0 ps\npin 0 ps\npin 0 ps\npin 0 ps\npin 7x echo no\nexit\n" | c4ix 1500000000)
+    runs=$(echo "$out" | grep -E "^ +[0-9]+ +[0-9]+ run +[0-9]+ user .* spin$")
+    if [ -n "$runs" ] && ! echo "$runs" | grep -qvE " run +$L user " &&
+       echo "$out" | grep -qF "usage: pin CPUS COMMAND"; then
+        ok "pin puts a program on a CPU"
+    else bad "pin puts a program on a CPU"; echo "$out" | grep -E 'spin|pin' | head -6; fi
+fi
+
 # b4ke -j: the libraries rebuilt with steps at once are the disk's, byte for byte.
 # 128 MB: N compilers at once, beside the unpacked root archive, take more than 64.
 out=$(printf "wait $U\nb4ke -B -j $((N > 1 ? N : 2)) -C /usr/src/c4ix/lib\ncrc32 /build/lib/libc4ix.c4l /usr/lib/libc4ix.c4l /build/lib/libarc.c4l /usr/lib/libarc.c4l\nexit\n" | c4ix 40000000000 900 128)

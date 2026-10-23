@@ -437,6 +437,50 @@ for what one alone does in 7.3.
   last part, `rm -r` takes a tree, `ls` takes several names, and Files
   selects and deletes several items, folders whole (docs/c4ix-desktop.md).
 
+### After S4 (2026-10-23): pinning a program to CPUs
+
+A task may be limited to some of the CPUs: `cpumask` in its `struct
+task`, bit k for CPU k, and 0, the default, for any. `SYS_AFFINITY`
+(242, `uaffinity` in libc4ix) sets and reads it. A child starts with its
+parent's mask, through spawn and vfork both, and keeps it through
+execve. A mask that names no CPU the machine has is no mask at all.
+
+The scheduler honours it in four places in sched.c:
+- `sched_mine`: a CPU picks only tasks it may run.
+- `sched_pick` and the trap: the running task is not kept where it may no
+  longer run. Re-pinning the caller takes effect at once; another task
+  moves at its next trap, within one slice.
+- `smp_kick`: an idle CPU is woken for a ready task only if the task may
+  run there.
+- The rule that keeps a preempted task while another CPU idles applies
+  only when the task replacing it could go to that idle CPU. Otherwise a
+  task pinned here would wait behind it.
+
+Kernel tasks stay on CPU 0 and idle tasks on their own CPU; neither can
+be pinned.
+
+`pin` is the command:
+
+```
+pin 2 doom -window          # Doom in this Terminal's window, on CPU 2
+pin 1,3 cc -O big.c         # a compile on CPU 1 or 3
+pin -p 15 0-1               # task 15 to CPU 0 or 1, as it runs
+pin -p 15                   # where task 15 may run
+```
+
+It sets its own mask, starts the command (found as the shell finds it)
+and waits for it, so `pin CPUS cmd &` works as a background job.
+
+To show it off, start the desktop on `?cpus=4`, open a Terminal per
+game, and run something like this in each:
+- `pin 1 wolf3d --window`
+- `pin 2 doom -window`
+- `pin 3 tyrian --window`
+
+`top` and System Monitor then show each game on its own CPU, and the
+desktop on CPU 0. test-c4ix-smp.sh checks that a pinned program runs
+where it was put.
+
 ## 6. Risks
 
 - **Isolation.** The parallel engine needs COOP/COEP. `serve.mjs --isolate`

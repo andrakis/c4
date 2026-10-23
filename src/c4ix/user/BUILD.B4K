@@ -74,6 +74,10 @@ DEPS $(OUT)/user/spin.c4o : src/c4ix/user/spin.c $(U)
 RUN $(LC) src/c4ix/user/spin.c $(OUT)/user/spin.c4o
 DEPS $(OUT)/bin/c4ix-spin.c4r : $(OUT)/user/spin.c4o $(LIBC)
 RUN c4rlink $(OUT)/user/spin.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-spin.c4r
+DEPS $(OUT)/user/pin.c4o : src/c4ix/user/pin.c $(U)
+RUN $(LC) src/c4ix/user/pin.c $(OUT)/user/pin.c4o
+DEPS $(OUT)/bin/c4ix-pin.c4r : $(OUT)/user/pin.c4o $(LIBC)
+RUN c4rlink $(OUT)/user/pin.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-pin.c4r
 DEPS $(OUT)/user/fmt.c4o : src/c4ix/user/fmt.c $(U)
 RUN $(LC) src/c4ix/user/fmt.c $(OUT)/user/fmt.c4o
 DEPS $(OUT)/bin/c4ix-fmt.c4r : $(OUT)/user/fmt.c4o $(LIBC)

@@ -97,7 +97,9 @@ enum {
     SYS_FSTAT = 236, SYS_LINK = 237, SYS_FTRUNCATE = 238, SYS_ENVIRON = 239,
     // libjs's display, taken and given back (sys.c, "The display")
     SYS_DISPLAY = 240,
-    SYS_TOP = 241          // one past the last: sched_trap's range check
+    // the CPUs a task may run on (sched.c, sched_affinity)
+    SYS_AFFINITY = 242,
+    SYS_TOP = 243          // one past the last: sched_trap's range check
 };
 // SYS_DISPLAY's operations, and TAKE's flag (include/display.h)
 enum { DISP_TAKE = 0, DISP_STATE = 1, DISP_YIELD = 2, DISP_GIVE = 3, DISP_YIELDS = 1 };
@@ -449,9 +451,12 @@ struct task {
     // stack: the one running it, or the one that switched it out until
     // that CPU has left the trap it did it in. Until then no other CPU
     // resumes it and nothing frees it. cpuidle is 1 + the CPU whose idle
-    // task it is, 0 for every other task.
+    // task it is, 0 for every other task. cpumask is the CPUs it may
+    // run on, bit k for CPU k, 0 for any (pin, SYS_AFFINITY); a child
+    // starts with its parent's.
     int  oncpu;
     int  cpuidle;
+    int  cpumask;
     char name[TASK_NAME_MAX];
 };
 
@@ -512,6 +517,7 @@ int          task_strvec(char **v, int n, int *pvec, int *pdata);
 void         task_drop_image(struct task *t);   // execve: free its image, libraries and heap
 void         task_unborrow(struct task *t);     // a vfork child is done with its parent's memory
 struct task *task_get(int id);
+int sched_affinity(int id, int mask);
 struct task *task_first();
 struct task *task_next(struct task *t);
 int          task_count();

@@ -659,6 +659,8 @@ struct task *task_spawn_priv(char *path, int argc, int argv, int privs) {
     t->img_nlibs = img.nlibs;
     t->img_bytes = img.bytes;
     t->privs = privs;
+    // the CPUs it may run on are its parent's (pin)
+    if (sched_cur && !sched_cur->cpuidle) t->cpumask = sched_cur->cpumask;
     sched_unlock();
     return t;
 }

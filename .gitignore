@@ -99,3 +99,5 @@ c4or1k-native
 
 # machine-specific proxy domain for the browser gates (src/c4bb/tools/proxy-domain.mjs)
 .proxy-domain
+# ROTT's private headers (_rt_draw.h, ...) are source, not scratch
+!/src/rott/_*.h

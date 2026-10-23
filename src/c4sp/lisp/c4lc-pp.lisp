@@ -258,7 +258,7 @@
 ;; __LINE__ and __FILE__ (M7b), unless a #define has taken the names: the
 ;; token's line, and the name the file was opened by -- c4fc's PP-BUILTIN
 (define pp:builtin (lambda (t)
-	(if (= (pp:val t) "__LINE__") (list 'Num (pp:line t) (pp:line t))
+	(if (= (pp:val t) "__LINE__") (list 'Num (lex:line-of (pp:line t)) (pp:line t))
 	(if (= (pp:val t) "__FILE__") (list 'Str pp:curfile (pp:line t))
 	t))))
 
@@ -699,11 +699,35 @@
 					(define hn (head ex))
 					(define angle (if (= (length hn) 4) (= (index hn 3) 1) false))
 					(list (pp:include (pp:val hn) angle rest) skip))
-			(if (= name "") (list rest skip)          ;; gcc's `# 12 "f"` markers
+			;; gcc's `# 12 "f"` markers, and #line: honoured under -g, where
+			;; locations are what the source map is made of
+			(if (= name "")
+				(list (if (if lex:locs (= (pp:kind t) 'Num) false)
+					(pp:remark (pp:line t) (pp:val t) body rest) rest) skip)
 			(if (= name "pragma") (list (pp:pragma body rest) skip)
 			(if (= name "error") (pp:die "#error")
-			(if (= name "line") (list rest skip)
+			(if (= name "line")
+				(list (if (if lex:locs (if (empty? body) false (= (pp:kind (head body)) 'Num)) false)
+					(pp:remark (pp:line t) (pp:val (head body)) (tail body) rest) rest) skip)
 			(pp:die (+ "unknown directive: #" name)))))))))))))))))))))
+
+;; A marker at location D says the next line is line N of FILE (a Str
+;; token, or the same file): this file's tokens that follow, up to the
+;; PPDir that ends it, move by that much.
+(define pp:remark (lambda (d n ftoks rest)
+	(begin
+		(define f (if (if (empty? ftoks) false (= (pp:kind (head ftoks)) 'Str))
+			(lex:markfile (+ "" (pp:val (head ftoks))))
+			(lex:file-of d)))
+		(pp:relines rest (- (+ (* f lex:LOCF) n) (+ (lex:line-of d) 1)) nil))))
+(define pp:relines (lambda (toks delta acc)
+	(if (if (empty? toks) true (= (pp:kind (head toks)) 'PPDir))
+		(pp:append (pp:reverse acc) toks)
+	(begin
+		(define t (head toks))
+		(next pp:relines (tail toks) delta
+			(pp:cons (+ (list (pp:kind t) (pp:val t) (+ delta (lex:line-of (pp:line t))))
+				(tail (tail (tail t)))) acc))))))
 
 ;; #pragma pack(...) goes on to the parser as a PragmaPack token and the
 ;; rest of its line, as the lexer leaves it in a source gcc -E has been

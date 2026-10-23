@@ -540,7 +540,9 @@ int c4r_load (char *path, int *api) {
   if (!scratch_need()) return 0;
   if ((fd = dos_open(path)) < 0) return 0;
   total = 0;
-  while ((n = dos_read(fd, g_scratch + total, 65536)) > 0) total = total + n;
+  // bounded by the scratch: a file of any size can be named
+  while (total < BUF_MAX && (n = dos_read(fd, g_scratch + total, BUF_MAX - total < 65536 ? BUF_MAX - total : 65536)) > 0)
+    total = total + n;
   dos_close(fd);
   if (total < 13) { printf("c4dos: %s is not a program\n", path); return 0; }
 
@@ -974,7 +976,8 @@ int cmd_copy (char *src, char *dst) {
   if (!scratch_need()) return 1;
   if ((fd = dos_open(src)) < 0) { printf("file not found: %s\n", src); return 1; }
   total = 0;
-  while ((n = dos_read(fd, g_scratch + total, 4096)) > 0) total = total + n;
+  while (total < BUF_MAX && (n = dos_read(fd, g_scratch + total, BUF_MAX - total < 4096 ? BUF_MAX - total : 4096)) > 0)
+    total = total + n;
   dos_close(fd);
   if ((slot = ram_create(dst, total)) < 0) return 1;
   ram_write(slot, g_scratch, total);
@@ -1103,7 +1106,8 @@ int run_batch (char *path, int depth) {
   if (!scratch_need()) return 1;
   if ((fd = dos_open(path)) < 0) return 1;
   total = 0;
-  while ((n = dos_read(fd, g_scratch + total, 4096)) > 0) total = total + n;
+  while (total < BUF_MAX && (n = dos_read(fd, g_scratch + total, BUF_MAX - total < 4096 ? BUF_MAX - total : 4096)) > 0)
+    total = total + n;
   dos_close(fd);
   if (!(buf = malloc(total + 1))) { printf("c4dos: out of memory\n"); return 1; }
   n = 0;
@@ -1143,7 +1147,8 @@ int read_config () {
   if (!scratch_need()) return 0;
   if ((fd = dos_open("config.sys")) < 0) return 0;
   total = 0;
-  while ((n = dos_read(fd, g_scratch + total, 4096)) > 0) total = total + n;
+  while (total < BUF_MAX && (n = dos_read(fd, g_scratch + total, BUF_MAX - total < 4096 ? BUF_MAX - total : 4096)) > 0)
+    total = total + n;
   dos_close(fd);
   if (!(buf = malloc(total + 1))) return 0;
   n = 0;

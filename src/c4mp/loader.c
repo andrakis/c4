@@ -46,7 +46,16 @@ int c4r_load(char *path, struct c4r_image *img) {
         return 0;
     }
     total = 0;
-    while ((n = read(fd, buf + total, 65536)) > 0) total = total + n;
+    // bounded: a source map makes an image longer than its code says
+    while (total < C4R_BUF_MAX &&
+           (n = read(fd, buf + total, C4R_BUF_MAX - total < 65536 ? C4R_BUF_MAX - total : 65536)) > 0)
+        total = total + n;
+    if (total >= C4R_BUF_MAX && read(fd, &n, 1) > 0) {
+        printf("c4mp: %s is over the %d-byte limit\n", path, C4R_BUF_MAX);
+        close(fd);
+        free(buf);
+        return 0;
+    }
     close(fd);
     if (total < 13) {
         printf("c4mp: %s is too short to be a .c4r\n", path);

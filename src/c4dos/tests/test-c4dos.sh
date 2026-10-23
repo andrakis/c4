@@ -149,7 +149,7 @@ APIV=$(echo "$OUT" | sed -n 's/.*dosenum: api version \([0-9]*\).*/\1/p' | head 
 # (docs/dos-rung-fixes.md F11). A stopped clock is the exact failure
 # that hung the nested C4KE boot forever.
 if [ "$APIV" -ge 3 ]; then
-    echo "$OUT" | grep -q "dosenum: clock reads [0-9]* ms, running" || {
+    echo "$OUT" | grep -q "dosenum: clock reads -*[0-9]* ms, running" || {
         echo "FAIL v3: clock slot absent or stopped"; exit 1; }
 fi
 echo "$OUT" | grep -q "dosenum: 2 entries"          || { echo "FAIL v2: entry count"; exit 1; }

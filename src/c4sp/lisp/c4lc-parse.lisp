@@ -72,8 +72,26 @@
 (define p:advance (lambda ()
 	(if (tail p:toks) (set! p:toks (tail p:toks)) nil)))
 
+;; A token's line is a location (c4lc-lex.lisp): in the file compiled,
+;; "line N" as always; in another file, which only -g numbers, its name
+;; and line, as gcc says it.
 (define p:die (lambda (msg)
-	(error (+ "c4lc: line " (p:line) ": " msg))))
+	(begin
+		(define loc (p:line))
+		(define f (lex:file-of loc))
+		(error (if (if (> f 0) (< f (length lex:files)) false)
+			(+ "c4lc: " (head (index lex:files f)) ":" (lex:line-of loc) ": " msg)
+			(+ "c4lc: line " (lex:line-of loc) ": " msg))))))
+
+;; ---- -g: where each statement and function came from ----
+;;
+;; Under -g every statement is (line LOC STMT), which the
+;; generator turns into a line item ahead of the statement's code, and
+;; each function's entry and closing brace are in p:fnlocs, (NAME ENTRY
+;; CLOSE). Without -g the tree is exactly what it was.
+(define p:lines false)
+(define p:fnlocs (list))
+(define p:rbrace 0)          ;; the location of the last '}' a block ended at
 
 (define p:expect (lambda (k what)
 	(if (= (p:kind) k) (p:advance) (p:die (+ "expected " what)))))
@@ -1075,6 +1093,13 @@
 ;; ---- statements ----
 
 (define p:stmt (lambda ()
+	(if p:lines
+		(begin
+			;; a block too: `for (int i = 0; ...)` is one, made here
+			(define loc (p:line))
+			(list 'line loc (p:stmt/0)))
+	(p:stmt/0))))
+(define p:stmt/0 (lambda ()
 	(begin
 		(define k (p:kind))
 		(if (= k 'If) (p:ifstmt)
@@ -1132,7 +1157,7 @@
 		(next p:block/2 (list)))))
 (define p:block/2 (lambda (acc)
 	(if (= (p:kind) 'Rbrace)
-		(begin (p:advance) (p:cons 'block (p:reverse acc)))
+		(begin (set! p:rbrace (p:line)) (p:advance) (p:cons 'block (p:reverse acc)))
 	(next p:block/2 (p:cons (p:stmt) acc)))))
 
 (define p:ifstmt (lambda ()
@@ -1821,6 +1846,7 @@
 	(next p:krset (tail ps) n ty (p:cons (head ps) acc))))))
 (define p:function (lambda (ty n attr rq)
 	(begin
+		(define entry (p:line))           ;; the '(' after the name: the name's line
 		(p:advance)
 		(define pv (p:params (list)))
 		(define ps (p:krdecls (head pv)))
@@ -1847,6 +1873,7 @@
 				(define tds p:typedefs)
 				(define ls (p:localdecls (list)))
 				(define body (p:block/2 (list)))
+				(if p:lines (set! p:fnlocs (p:cons (list n entry p:rbrace) p:fnlocs)) nil)
 				(set! p:infn false)
 				(set! p:typedefs tds)
 				(set! p:srenames (list))
@@ -2667,12 +2694,17 @@ static int *__c4ll_neg(int *d, int *a) {
 		(define k (head (head ts)))
 		(if (if (= k 'Float) true (if (= k 'Double) true (p:fptok? k))) true
 		(next p:saysfp? (tail ts)))))))
+;; under -g the C the compiler brings with it is a file of its own, with
+;; no size and no CRC, so its rows say where they came from rather than
+;; land on lines of the unit
+(define p:helperbase (lambda (name)
+	(if lex:locs (* lex:LOCF (lex:fileno name nil)) 0)))
 (define p:withfp (lambda (tokens)
 	(if (p:saysfp? tokens)
 		(begin
 			(define pp lex:pp)
 			(set! lex:pp false)
-			(define hs (lex:string p:fpsrc))
+			(define hs (lex:string-at p:fpsrc (p:helperbase "<c4lc softfp>")))
 			(set! lex:pp pp)
 			(+ (p:droplast tokens (list)) hs))
 	tokens)))
@@ -3388,7 +3420,7 @@ static int __c4fp_hw() {
 		(begin
 			(define pp lex:pp)
 			(set! lex:pp false)
-			(define hs (lex:string p:llsrc))
+			(define hs (lex:string-at p:llsrc (p:helperbase "<c4lc long long>")))
 			(set! lex:pp pp)
 			(+ (p:droplast tokens (list)) hs))
 	tokens)))

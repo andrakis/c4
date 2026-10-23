@@ -45,6 +45,29 @@
 
 (define opt:is-label (lambda (I) (= 'label (head I))))
 
+;; c4lc -g's zero-size items (track S): (line LOC) starts a source-map
+;; row, (func NAME LOC) a function. Every window steps over them, so a
+;; pass sees exactly the instructions it sees without -g and the code
+;; comes out the same; what a rewrite consumes, its items follow. dead
+;; keeps them. A row then describes what follows it, whatever a pass did.
+(define opt:meta? (lambda (I)
+	(if (= 'line (head I)) true (= 'func (head I)))))
+;; the first N instructions of Code, past the items (for matching)
+(define opt:reals (lambda (Code N)
+	(if (if (= 0 N) true (empty? Code)) (list)
+	(if (opt:meta? (head Code)) (next opt:reals (tail Code) N)
+	(cons (head Code) (opt:reals (tail Code) (- N 1)))))))
+;; (ITEMS REST): Code with its first N instructions gone, and the items
+;; among them, in order
+(define opt:skip (lambda (Code N) (next opt:skip/3 Code N (list))))
+(define opt:skip/3 (lambda (Code N Items)
+	(if (if (= 0 N) true (empty? Code)) (list (reverse Items) Code)
+	(if (opt:meta? (head Code)) (next opt:skip/3 (tail Code) N (cons (head Code) Items))
+	(next opt:skip/3 (tail Code) (- N 1) Items)))))
+;; Acc (reversed output) with Items after what it already holds
+(define opt:onto (lambda (Items Acc)
+	(if (empty? Items) Acc (next opt:onto (tail Items) (cons (head Items) Acc)))))
+
 ;; the code-label id a JMP/BZ/BNZ targets, or nil
 (define opt:jump-target (lambda (I)
 	(if (= 2 (length I))
@@ -95,15 +118,15 @@
 (define opt:fold (lambda (Code) (next opt:fold/2 Code (list))))
 (define opt:fold/2 (lambda (Code Acc) (begin
 	(if (empty? Code) (reverse Acc) (begin
-		(define F (opt:fold-try (head Code) (tail Code)))
+		(define F (opt:fold-try (head Code) (opt:reals (tail Code) 3)))
 		(if (= nil F)
 			(next opt:fold/2 (tail Code) (cons (head Code) Acc))
 			(begin
 				(set! opt:n-fold (+ 3 opt:n-fold))
 				;; push the folded IMM back onto the input: it may fold
 				;; again with what follows
-				(next opt:fold/2
-					(cons F (tail (tail (tail (tail Code))))) Acc)))))
+				(define D (opt:skip (tail Code) 3))
+				(next opt:fold/2 (cons F (+ (head D) (second D))) Acc)))))
 )))
 
 ;; PSH; IMM 8; MUL -> PSH; IMM 3; SHL (every pointer subscript emits this)
@@ -117,13 +140,14 @@
 (define opt:shl (lambda (Code) (next opt:shl/2 Code (list))))
 (define opt:shl/2 (lambda (Code Acc)
 	(if (empty? Code) (reverse Acc)
-		(if (opt:shl-try (head Code) (tail Code))
+		(if (opt:shl-try (head Code) (opt:reals (tail Code) 2))
 			(begin
 				(set! opt:n-shl (+ 1 opt:n-shl))
 				;; Acc is reversed: PSH, then IMM 3, then SHL
-				(next opt:shl/2 (tail (tail (tail Code)))
-					(cons (list 'SHL)
-						(cons (list 'IMM 3) (cons (head Code) Acc)))))
+				(define D (opt:skip (tail Code) 2))
+				(next opt:shl/2 (second D)
+					(opt:onto (head D) (cons (list 'SHL)
+						(cons (list 'IMM 3) (cons (head Code) Acc))))))
 			(next opt:shl/2 (tail Code) (cons (head Code) Acc))))))
 
 ;; ADJ 0 does nothing (emitted for every zero-argument call).
@@ -160,7 +184,8 @@
 		(if (opt:is-label (head Code))
 			(if (= T (second (head Code))) true
 				(next opt:label-follows T (tail Code)))
-			false))))
+			(if (opt:meta? (head Code)) (next opt:label-follows T (tail Code))
+			false)))))
 
 ;; jump threading: a jump to a label whose only content is JMP L2 can go
 ;; to L2 directly. The label -> forwarded-target map is a word array
@@ -184,7 +209,7 @@
 ;; the JMP target directly after a label (skipping further labels)
 (define opt:thread-following (lambda (Code)
 	(if (empty? Code) nil
-		(if (opt:is-label (head Code))
+		(if (if (opt:is-label (head Code)) true (opt:meta? (head Code)))
 			(next opt:thread-following (tail Code))
 			(if (opt:is (head Code) 'JMP) (opt:jump-target (head Code)) nil)))))
 (define opt:thread/2 (lambda (Code Acc FT) (begin
@@ -253,14 +278,19 @@
 (define opt:tail-entmap (lambda (Code EM)
 	(if (empty? Code) nil (begin
 		(if (opt:is-label (head Code))
-			(if (not (empty? (tail Code)))
-				(if (opt:plain (second Code) 'ENT)
-					(string:word! EM (* W (second (head Code)))
-						(+ 1 (second (second Code)))))))
+			(begin
+				(define N (opt:reals (tail Code) 1))
+				(if (not (empty? N))
+					(if (opt:plain (head N) 'ENT)
+						(string:word! EM (* W (second (head Code)))
+							(+ 1 (second (head N))))))))
 		(next opt:tail-entmap (tail Code) EM)))))
 
 ;; is this instruction pair a transformable tail call to label F?
-(define opt:tail-site (lambda (I R EM SM BAN)
+(define opt:tail-site (lambda (I R0 EM SM BAN)
+	(if (not (opt:is I 'JSR)) nil
+		(opt:tail-site/r I (opt:reals R0 1) EM SM BAN))))
+(define opt:tail-site/r (lambda (I R EM SM BAN)
 	(if (not (opt:is I 'JSR)) nil
 	(if (empty? R) nil
 	(if (not (= 1 (length (head R)))) nil
@@ -283,7 +313,10 @@
 		(next opt:tail-mark (tail Code) EM SM BAN NextId))))))
 
 ;; does the walk transform here? Only sites whose callee got a skip label.
-(define opt:tail-go (lambda (I R SM)
+(define opt:tail-go (lambda (I R0 SM)
+	(if (not (opt:is I 'JSR)) nil
+		(opt:tail-go/r I (opt:reals R0 1) SM))))
+(define opt:tail-go/r (lambda (I R SM)
 	(if (not (opt:is I 'JSR)) nil
 	(if (empty? R) nil
 	(if (not (= 1 (length (head R)))) nil
@@ -303,10 +336,12 @@
 			;; transform: consume JSR and LEV, emit ADJ (m-k); JMP skip
 			(begin
 				(set! opt:n-tail (+ 1 opt:n-tail))
-				(next opt:tail/2 (tail (tail Code))
-					(cons (list 'JMP (list 'code (- (string:word SM (* W F)) 1)))
-						(cons (list 'ADJ (- (- CurM 1) (- (string:word EM (* W F)) 1)))
-							Acc))
+				(define D (opt:skip (tail Code) 1))
+				(next opt:tail/2 (second D)
+					(opt:onto (head D)
+						(cons (list 'JMP (list 'code (- (string:word SM (* W F)) 1)))
+							(cons (list 'ADJ (- (- CurM 1) (- (string:word EM (* W F)) 1)))
+								Acc)))
 					EM SM CurM Pending))
 			(begin
 				(if (opt:is-label I)
@@ -332,13 +367,18 @@
 		(if (opt:is-label I) (set! Dropping false))
 		(if (= 'word (head I)) (set! Dropping false))
 		(if (= 'cword (head I)) (set! Dropping false))
+		;; -g's items are kept and leave Dropping as it is: a dead
+		;; statement's row then starts where the live code does, and a
+		;; later one at the same place wins (c4r:encode)
+		(if (opt:meta? I)
+			(next opt:dead/2 (tail Code) (cons I Acc) Dropping)
 		(if Dropping
 			(begin
 				(set! opt:n-dead (+ 1 opt:n-dead))
 				(next opt:dead/2 (tail Code) Acc true))
 			(next opt:dead/2 (tail Code) (cons I Acc)
 				(if (opt:is I 'JMP) true
-					(if (opt:is I 'LEV) true (opt:is I 'JMPA)))))))
+					(if (opt:is I 'LEV) true (opt:is I 'JMPA))))))))
 )))
 
 ;; ---- fuse: the fused opcodes (docs/fused-opcodes.md) ----------------
@@ -392,13 +432,15 @@
 (define opt:fuse/2 (lambda (Code Acc)
 	(if (empty? Code) (reverse Acc)
 		(begin
-			(define T (opt:fuse-try (head Code) (tail Code)))
+			(define T (opt:fuse-try (head Code) (opt:reals (tail Code) 2)))
 			(if (= false T)
 				(next opt:fuse/2 (tail Code) (cons (head Code) Acc))
 				(begin
 					(set! opt:n-fuse (+ 1 opt:n-fuse))
-					(next opt:fuse/2 (opt:drop Code (second T))
-						(cons (head T) Acc))))))))
+					;; the fused instruction takes its first part's row
+					(define D (opt:skip Code (second T)))
+					(next opt:fuse/2 (second D)
+						(opt:onto (head D) (cons (head T) Acc)))))))))
 
 ;; ---- the pipeline ----
 
@@ -410,7 +452,7 @@
 (define opt:count/2 (lambda (Code N)
 	(if (empty? Code) N
 		(next opt:count/2 (tail Code)
-			(if (opt:is-label (head Code)) N (+ N 1))))))
+			(if (if (opt:is-label (head Code)) true (opt:meta? (head Code))) N (+ N 1))))))
 
 ;; Optimize a decoded module to a fixpoint (bounded); returns the new
 ;; module and prints per-pass statistics.
@@ -436,8 +478,11 @@
 			(print ";;   fold" opt:n-fold " mul->shl" opt:n-shl " adj0" opt:n-adj0
 				" jmp-next" opt:n-jmpnext " threaded" opt:n-thread " dead" opt:n-dead
 				" tail" opt:n-tail " fused" opt:n-fuse)
+			;; the trailer's chunks that describe the code as it was
+			;; (upper-case tags: a source map) cannot follow it here
 			(list (head M) (second M) (third M) Code (index M 4)
-				(index M 5) (index M 6) (index M 7) (index M 8)))
+				(index M 5) (index M 6) (index M 7) (index M 8)
+				(c4r:code-safe (if (> (length M) 9) (index M 9) (list)))))
 		(begin
 			(set! Code (opt:passes Code (index M 5)))
 			(next c4opt:optloop M Code Before (opt:count-instrs Code) N (+ Rounds 1)))))))

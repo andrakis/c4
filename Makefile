@@ -3287,14 +3287,15 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/c4lc-ast.lisp src/tests/c4lc_lex_sample.c | cmp - src/c4sp/tests/expected/c4lc-ast.txt
 	# L1: every c4cc-compilable test source parses. genfloat.c and
 	# test_illins.c are excluded because c4cc itself rejects them (c4lc
-	# fails at the same constructs); c4lc_pp.c is excluded because it
-	# is the L9 preprocessor test and is only meaningful with -P (this
+	# fails at the same constructs); c4lc_pp.c and srcmap_probe.c (test-srcmap's,
+	# which includes its header) are excluded because they are only
+	# meaningful with -P, c4lc_pp.c being the L9 preprocessor test (this
 	# sweep deliberately runs without it); the vararg tests go through
 	# the preprocessor, exactly as c4cc receives them.
 	for f in src/tests/*.c; do \
 		case $$f in \
 		*/genfloat.c|*/test_illins.c) continue;; \
-		*/c4lc_pp.c) continue;; \
+		*/c4lc_pp.c|*/srcmap_probe.c) continue;; \
 		*/oldtest_vararg*.c|*/oldvararg3.c|*/test_vprintf.c|*/vararg*.c) \
 			$(PREPROC) $$f > .c4lc_pp.c 2>/dev/null; \
 			./c4sp src/c4sp/lisp/c4lc-ast.lisp -check .c4lc_pp.c | grep -q "^parse ok" || exit 1;; \
@@ -3798,6 +3799,56 @@ test-c4rstrip: c4rstrip c4rstrip.c4r $(C4M) $(C4RDUMP) $(C4RLINK) hello.c4r fact
 	cmp .strip_c.txt .strip_d.txt
 	@rm -f .strip_*
 	@echo "test-c4rstrip: OK"
+
+# Source maps, track S (docs/c4-explorer.md 2, 6).
+# S0, the extension trailer with no compiler writing it: a source map made
+# by hand (c4r-mapfixture.lisp), on a 64-bit and a 32-bit image. c4rdump
+# -l reads it back; c4r-roundtrip is exact on it; every loader with a
+# command line runs it as it runs the image without (C4IX's and C4DOS's
+# parse by offsets and never look past S); c4opt keeps the lower-case
+# chunk and drops the map; c4rstrip drops the trailer; a damaged image is
+# refused, not crashed on.
+SRCMAP_LOADERS64 = "$(C4M) load-c4r.c --" "./c4 c4l.c" "./c4mp" "$(OISC4)"
+SRCMAP_LOADERS32 = "./c4m32 load-c4r.c --" "node libjs/cli.js" "node src/c4bb/sim/cli.js"
+test-srcmap: c4sp c4sp32 c4 c4m c4m32 c4mp $(OISC4) $(C4RDUMP) $(C4RLINK) c4rstrip hello.c4r hello32.c4r
+	./c4sp src/c4sp/lisp/c4r-mapfixture.lisp hello.c4r .srcmap_f64.c4r > /dev/null
+	./c4sp32 src/c4sp/lisp/c4r-mapfixture.lisp hello32.c4r .srcmap_f32.c4r > /dev/null
+	$(C4RDUMP) -l .srcmap_f64.c4r | diff src/c4sp/tests/expected/srcmap-fixture.txt -
+	./c4sp src/c4sp/lisp/c4r-roundtrip.lisp .srcmap_f64.c4r | grep -q "roundtrip identical"
+	./c4sp32 src/c4sp/lisp/c4r-roundtrip.lisp .srcmap_f32.c4r | grep -q "roundtrip identical"
+	@for l in $(SRCMAP_LOADERS64); do \
+	   $$l hello.c4r 2>&1 | grep -v -e '^lc4r:' -e '^exit(' > .srcmap_a.txt; \
+	   $$l .srcmap_f64.c4r 2>&1 | grep -v -e '^lc4r:' -e '^exit(' > .srcmap_b.txt; \
+	   cmp -s .srcmap_a.txt .srcmap_b.txt && grep -q yello .srcmap_b.txt \
+	     || { echo "test-srcmap: $$l runs the mapped image differently"; diff .srcmap_a.txt .srcmap_b.txt; exit 1; }; \
+	 done
+	@for l in $(SRCMAP_LOADERS32); do \
+	   $$l hello32.c4r 2>&1 | grep -v -e '^lc4r:' -e '^exit(' > .srcmap_a.txt; \
+	   $$l .srcmap_f32.c4r 2>&1 | grep -v -e '^lc4r:' -e '^exit(' > .srcmap_b.txt; \
+	   cmp -s .srcmap_a.txt .srcmap_b.txt && grep -q yello .srcmap_b.txt \
+	     || { echo "test-srcmap: $$l runs the mapped image differently"; diff .srcmap_a.txt .srcmap_b.txt; exit 1; }; \
+	 done
+	./c4sp src/c4sp/lisp/c4opt-run.lisp .srcmap_f64.c4r .srcmap_opt.c4r > /dev/null
+	$(C4RDUMP) -l .srcmap_opt.c4r | grep -q "No source map"
+	grep -q "a chunk c4opt keeps" .srcmap_opt.c4r
+	./c4rstrip -o .srcmap_s1.c4r .srcmap_f64.c4r > /dev/null
+	./c4rstrip -o .srcmap_s2.c4r hello.c4r > /dev/null
+	cmp .srcmap_s1.c4r .srcmap_s2.c4r
+	head -c 60 hello.c4r > .srcmap_cut.c4r
+	$(C4RDUMP) .srcmap_cut.c4r | grep -q "not a complete C4R image"
+	$(C4RLINK) -o .srcmap_x.c4r .srcmap_cut.c4r | grep -q "not a complete C4R image"
+	@# S1, c4lc -g: the probes map is pinned -- a headers function at the
+	@# headers lines, a macros code at its use, a fors step on the fors
+	@# line, an inlined call at the call -- and it prints __LINE__ counted
+	@# past a backslash-newline. Then the invariant over the corpus: -g
+	@# changes no byte of an image, only adds the trailer.
+	./c4sp -c 400000 src/c4sp/lisp/c4lc.lisp -g -O -minline -P -I src/tests src/tests/srcmap_probe.c .srcmap_probe.c4r > /dev/null
+	$(C4RDUMP) -l .srcmap_probe.c4r | diff src/c4sp/tests/expected/srcmap-probe.txt -
+	$(C4M) load-c4r.c -- .srcmap_probe.c4r 2>&1 | grep -qx "66 28 27"
+	bash src/c4sp/tests/srcmap-invariant.sh
+	@rm -f .srcmap_*
+	@echo "test-srcmap: OK"
+PHONY += test-srcmap
 
 #
 # Rules to build C4R files

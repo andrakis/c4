@@ -26,6 +26,7 @@
 	(define Conf false)        ;; -conforming: real C escapes (L10)
 	(define NoBuiltin false)   ;; -fno-builtin: the library table is plain names
 	(define Pic false)         ;; -fpic: data through a per-task base (shared libraries)
+	(define Lines false)       ;; -g: a source map (docs/c4-explorer.md, track S); -g0 none
 	(define Paths nil)
 	(define PreDefs nil)
 	(define Args argv)
@@ -95,6 +96,14 @@
 		;; code serves every task (gen:pic). Needs -c.
 		(if (= (+ "" (head Args)) "-fpic")
 			(begin (set! Pic true) (set! Args (tail Args)) (next flags))
+		;; -g: the image carries a source map, rows saying which file and
+		;; line each run of code came from, and the code is exactly what
+		;; it is without (the map is a trailer after the symbols). -g0 is
+		;; the default until every compiler makes maps (S6).
+		(if (= (+ "" (head Args)) "-g")
+			(begin (set! Lines true) (set! Args (tail Args)) (next flags))
+		(if (= (+ "" (head Args)) "-g0")
+			(begin (set! Lines false) (set! Args (tail Args)) (next flags))
 		(if (= (+ "" (head Args)) "-P")
 			(begin (set! Pp true) (set! Args (tail Args)) (next flags))
 		(if (= (+ "" (head Args)) "-I")
@@ -109,7 +118,7 @@
 				(set! PreDefs (+ PreDefs (list (+ "" (index Args 1)))))
 				(set! Args (tail (tail Args)))
 				(next flags))
-		nil)))))))))))))))
+		nil)))))))))))))))))
 	(flags)
 	(if (< (length Args) 2) (error "usage: c4lc.lisp [-O] [-c] in.c out"))
 	(define In (head Args))
@@ -119,6 +128,8 @@
 	(set! gen:cisc Cisc)
 	(set! gen:nobuiltin NoBuiltin)
 	(set! gen:pic Pic)
+	(set! lex:locs Lines)
+	(set! p:lines Lines)
 	(define Ast (parse:program
 		(if Pp
 			(begin
@@ -152,8 +163,10 @@
 	;; object's MEMSZ when merging, so objects carry it too.
 	(set! c4r:v3 true)
 	(set! c4r:bss-extra gen:bssextra)
+	(if Lines (set! c4r:srcfiles lex:files) nil)
 	(define Out (c4r:encode M))
 	(set! c4r:bss-extra 0)
+	(set! c4r:srcfiles (list))
 	(if (file:write OutName Out)
 		(print ";; c4lc:" In "-" (length Out) "bytes -" OutName)
 		(error "c4lc: write failed")))

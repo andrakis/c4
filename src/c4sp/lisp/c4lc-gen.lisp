@@ -81,6 +81,18 @@
 (define g:ty 0)           ;; c4cc's ty: type of the value in the accumulator
 
 (define g:emit (lambda (i) (set! g:code (g:cons i g:code))))
+;; the last instruction emitted, past -g's zero-size line and func items
+(define g:lastreal (lambda (c)
+	(if (empty? c) (list 'none)
+	(if (if (= (head (head c)) 'line) true (= (head (head c)) 'func))
+		(next g:lastreal (tail c))
+	(head c)))))
+;; -g: the location of the statement being generated, and a loop's
+;; code after its body -- a for's step, the jump back -- on the loop's
+;; own line rather than the body's last
+(define g:lineloc 0)
+(define g:loopline (lambda (loc)
+	(if p:lines (g:emit (list 'line loc)) nil)))
 (define g:newlabel (lambda ()
 	(begin
 		(define l g:nlabel)
@@ -340,9 +352,18 @@
 		(if e (g:helpbody (head hs) (g:second e)) nil)
 		(next g:emithelpers (tail hs))))))
 ;; One parameter sits at bp+2; of two, the first is at bp+3.
+;; -g: a body the compiler made, with no source: an entry in the map's
+;; function table, <ld16s> and the like, and a row of line 0
+(define g:madebody (lambda (name)
+	(if p:lines
+		(begin
+			(g:emit (list 'func name 0))
+			(g:emit (list 'line 0)))
+	nil)))
 (define g:helpbody (lambda (h l)
 	(begin
 		(define maxpos (bit:xor g:MIN -1))
+		(g:madebody (+ "<" (+ "" h) ">"))
 		(g:label! l)
 		(if (= h 'ld16s)
 			(g:emitl (list '(ENT 0)
@@ -2023,6 +2044,7 @@
 (define g:scanstmt (lambda (s)
 	(begin
 		(define h (head s))
+		(if (= h 'line) (g:scanstmt (g:third s))
 		(if (= h 'declstmt) (g:scandecls (tail s) 0)
 		(if (= h 'block) (g:scanlist (tail s) 0)
 		(if (= h 'if)
@@ -2033,7 +2055,7 @@
 		(if (= h 'for) (g:scanstmt (index s 4))
 		(if (= h 'switch) (g:scanlist (tail (tail s)) 0)
 		(if (= h 'labeled) (g:scanstmt (g:third s))
-		0)))))))))))
+		0))))))))))))
 (define g:scanlist (lambda (l n)
 	(if (empty? l) n
 	(next g:scanlist (tail l) (+ n (g:scanstmt (head l)))))))
@@ -2051,6 +2073,13 @@
 (define g:stmt/1 (lambda (s)
 	(begin
 		(define h (head s))
+		;; -g: a line item, the zero-size mark the source map's rows are
+		;; made from (c4r:encode), then the statement
+		(if (= h 'line)
+			(begin
+				(g:emit (list 'line (g:second s)))
+				(set! g:lineloc (g:second s))
+				(g:stmt (g:third s)))
 		(if (= h 'block)
 			(begin
 				;; block scope: declarations inside vanish at the brace
@@ -2106,7 +2135,7 @@
 				(g:uplace! (g:second s))
 				(g:stmt (g:third s)))
 		(if (= h 'switch) (g:switchstmt s)
-		(g:die (+ "bad statement node: " (+ "" h))))))))))))))))))))))
+		(g:die (+ "bad statement node: " (+ "" h)))))))))))))))))))))))
 (define g:stmts (lambda (l)
 	(if (empty? l) nil
 	(begin
@@ -2139,7 +2168,9 @@
 		(g:label! lc)
 		(g:texpr (g:second s))
 		(g:emit (list 'BZ (list 'code lend)))
+		(define here g:lineloc)
 		(g:stmt (g:third s))
+		(g:loopline here)
 		(g:emit (list 'JMP (list 'code lc)))
 		(g:label! lend)
 		(set! g:brk ob)
@@ -2162,7 +2193,9 @@
 		(begin
 			(g:texpr (g:third s))
 			(g:emit (list 'BZ (list 'code lend)))))
+		(define here g:lineloc)
 		(g:stmt (index s 4))
+		(g:loopline here)
 		(g:label! lstep)
 		(if (= (index s 3) nil) nil (g:expr (index s 3)))
 		(g:emit (list 'JMP (list 'code lc)))
@@ -2413,6 +2446,7 @@
 (define g:emitstubs (lambda (ls)
 	(if (empty? ls) nil
 	(begin
+		(g:madebody "<stub>")
 		(g:label! (head ls))
 		(g:emit '(ENT 0))
 		(g:emit '(IMM 255))
@@ -3144,6 +3178,15 @@
 		;; their frame words reserved by ENT; a pre-scan counts them
 		(define extra (g:scanstmt body))
 		(set! g:lcur fini)
+		;; -g: the function's entry in the map's function table and its
+		;; first row, at the line of its name; both size 0, ahead of the
+		;; label so they start where the function does
+		(define fl (if p:lines (p:assoc n p:fnlocs) false))
+		(if fl
+			(begin
+				(g:emit (list 'func n (g:second fl)))
+				(g:emit (list 'line (g:second fl))))
+			nil)
 		(g:label! (index s 3))
 		;; the long long temporaries go below everything else, and how
 		;; many there are is known at the end: (frame ID WORDS) is
@@ -3161,7 +3204,11 @@
 		(g:stmts (tail body))
 		(g:ucheck g:uwanted)
 		(set! g:frames (g:cons (list fid g:tmax) g:frames))
-		(if (= (head (head g:code)) 'LEV) nil (g:emit '(LEV)))
+		;; the exit falling off the end is the closing brace's (-g)
+		(if (= (head (g:lastreal g:code)) 'LEV) nil
+			(begin
+				(if fl (g:emit (list 'line (g:third fl))) nil)
+				(g:emit '(LEV))))
 		(set! g:syms oldsyms)
 		(if (= 1 (bit:and attrs 1))
 			(set! g:cons* (g:cons (list 'code (index s 3)) g:cons*)) nil)

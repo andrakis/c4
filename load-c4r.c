@@ -40,7 +40,11 @@ enum { C4R__Supported_Version = 3 };
 
 enum {
 	C4ROPT_NONE,
-	C4ROPT_SYMBOLS
+	C4ROPT_SYMBOLS,
+	// The source map, out of the extension trailer that follows the
+	// symbols (docs/c4-explorer.md 2.1): with SYMBOLS only, since the
+	// trailer is found by walking them.
+	C4ROPT_SRCMAP = 2
 };
 
 #ifndef FILE_OPEN_MODE
@@ -139,6 +143,8 @@ enum {
 	C4R_CONSTRUCTORS,
 	C4R_DESTRUCTORS,
 	C4R_LOADCOMPLETE,
+	C4R_SRCMAP,         // char *: the SMAP chunk's payload (C4ROPT_SRCMAP), or 0
+	C4R_SRCMAPLEN,      // its length in bytes
 	C4R__Sz
 };
 
@@ -310,6 +316,36 @@ int *c4r_create_empty () {
 	c4r[C4R_CONSTRUCTORS] = 0;
 	c4r[C4R_DESTRUCTORS]  = 0;
 	return c4r;
+}
+
+// The extension trailer (docs/c4-explorer.md 2.1): after S, a word 'X',
+// then chunks of a tag word (four ASCII bytes, low first), a length word
+// and that many bytes padded to a word, up to a 0 tag. The source map
+// (SMAP) is kept in C4R_SRCMAP; any other chunk is skipped. No trailer,
+// or a damaged one, leaves the image as loaded: nothing a loader needs
+// is in it.
+void c4r_read_trailer (int fd, int *c4r, char *buffer, int wordbytes) {
+	int tag, len, pad;
+	char *p;
+	memset(buffer, 0, wordbytes);
+	if (c4r_src_read(fd, buffer, wordbytes) < wordbytes || *buffer != 'X') return;
+	while (1) {
+		memset(buffer, 0, wordbytes);
+		if (c4r_src_read(fd, buffer, wordbytes) < wordbytes) return;
+		if (!(tag = *(int *)buffer)) return;
+		memset(buffer, 0, wordbytes);
+		if (c4r_src_read(fd, buffer, wordbytes) < wordbytes) return;
+		len = *(int *)buffer;
+		if (len < 0 || len > 16777216) return;
+		if (!(p = malloc(len + 1))) return;
+		if (len && c4r_src_read(fd, p, len) < len) { free(p); return; }
+		pad = (wordbytes - len % wordbytes) % wordbytes;
+		if (pad) c4r_src_read(fd, buffer, pad);
+		if (tag == c4r__charword('S', 'M', 'A', 'P') && !c4r[C4R_SRCMAP]) {
+			c4r[C4R_SRCMAP] = (int)p;
+			c4r[C4R_SRCMAPLEN] = len;
+		} else free(p);
+	}
 }
 
 int *c4r_load_opt_real (char *file, int options) {
@@ -600,6 +636,7 @@ int *c4r_load_opt_real (char *file, int options) {
 						target = target + C4R_SYMB__Sz;
 					}
 					if (c4r_debug) printf("lc4r: loaded %d symbols, now at position 0x%x\n", i, c4r_readoffset);
+					if (options & C4ROPT_SRCMAP) c4r_read_trailer(fd, c4r, buffer, wordbytes);
 				}
 				c4r[C4R_SYMBOLS] = (int)symbols;
 
@@ -686,6 +723,7 @@ void c4r_free (int *c4r) {
 		free((int *)c4r[C4R_PATCHES]); c4r[C4R_PATCHES] = 0;
 	}
 	if (c4r[C4R_CONSTRUCTORS]) { free((int *)c4r[C4R_CONSTRUCTORS]); c4r[C4R_CONSTRUCTORS] = 0; }
+	if (c4r[C4R_SRCMAP]) { free((char *)c4r[C4R_SRCMAP]); c4r[C4R_SRCMAP] = 0; }
 	if (c4r[C4R_DESTRUCTORS]) {
 		if (c4r_debug) printf("lc4r: freeing destructors @ 0x%X\n", c4r[C4R_CONSTRUCTORS]);
 		free((int *)c4r[C4R_DESTRUCTORS]); c4r[C4R_DESTRUCTORS] = 0;

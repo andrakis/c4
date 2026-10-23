@@ -32,6 +32,9 @@
 ;;               code-resident patches, matching asm-c4r's canonical order.
 ;;               In an object (M7b), (dsym BYTEOFF SYMID) is type -5: a data
 ;;               word holding a symbol's address, which c4rlink resolves.
+;;     chunks:   the extension trailer's chunks, (TAG PAYLOAD) with TAG a
+;;               four-letter string (docs/c4-explorer.md 2.1). Optional: a
+;;               module with nine elements has none.
 ;;
 ;; Uses the c4sp byte builtins: string:word, string:byte, string:alloc,
 ;; string:word!, string:byte!, bit:and. All offsets in BYTES unless noted.
@@ -171,8 +174,192 @@
 		(c4r:label-syms Syms)
 		(c4r:label-offsets Cons)
 		(c4r:label-offsets Des)
-		DPatches)
+		DPatches
+		(c4r:read-trailer F (+ SymsAt (c4r:syms-size Syms 0))))
 )))
+
+;; ---- the extension trailer (docs/c4-explorer.md 2.1) ----
+;;
+;; After S: a word 'X', then chunks of a tag word (four ASCII bytes, low
+;; first), a length word and that many bytes padded to a word, up to a 0
+;; tag. No trailer is no chunks.
+(define c4r:read-trailer (lambda (F At)
+	(if (> (+ At W) (length F)) (list)
+	(if (not (= 88 (string:byte F At))) (list)
+	(reverse (c4r:read-chunks F (+ At W) (list)))))))
+(define c4r:read-chunks (lambda (F At Acc)
+	(if (> (+ At W) (length F)) Acc
+	(if (= 0 (string:word F At)) Acc
+	(begin
+		(define Len (string:word F (+ At W)))
+		(next c4r:read-chunks F (+ At (* 2 W) (c4r:padded Len))
+			(cons (list (string:substr F At 4) (string:substr F (+ At (* 2 W)) Len)) Acc)))))))
+(define c4r:padded (lambda (N) (* W (/ (+ N (- W 1)) W))))
+
+;; A tag's fourth letter says what a tool that changes the code may do
+;; with the chunk: upper case, drop it (it describes the code as it was);
+;; lower case, keep it. c4opt does this to an image it optimises.
+(define c4r:code-safe (lambda (Chunks)
+	(if (empty? Chunks) (list)
+	(begin
+		(define C (string:byte (head (head Chunks)) 3))
+		(if (if (>= C 65) (<= C 90) false)
+			(c4r:code-safe (tail Chunks))
+			(cons (head Chunks) (c4r:code-safe (tail Chunks))))))))
+
+;; ---- SMAP, the source map (docs/c4-explorer.md 2.2) ----
+;;
+;; Made from the code's zero-size items: (line LOC) starts a row, (func
+;; NAME LOC) a function. A location is file * 2^20 + line, the file
+;; numbered as in c4r:srcfiles. Rows: where two start at one place the
+;; later wins, a row that says what the one before said goes, and so
+;; does one at the end of the code. Files: only those something points
+;; at, renumbered in order.
+(define c4r:LOCF 1048576)
+(define c4r:smap (lambda (Code Codelen)
+	(begin
+		(define Got (c4r:smap-collect Code 0 (list) (list)))
+		(define Rows (c4r:smap-dedup (c4r:smap-later (head Got) (list)) -1 (list)))
+		(define Rows2 (c4r:smap-before Rows Codelen (list)))
+		(define Funcs (second Got))
+		(define NF (length c4r:srcfiles))
+		;; file number -> new number + 1, 0 = unused
+		(define Map (string:alloc (* W (+ NF 1))))
+		(c4r:smap-mark Rows2 Map NF)
+		(c4r:smap-mark Funcs Map NF)
+		(define Used (c4r:smap-number Map 0 NF 0))
+		(define B (list))
+		(set! B (cons 1 (cons 1 B)))                  ;; version 1; files carry a CRC
+		(set! B (c4r:uleb Used B))
+		(set! B (c4r:smap-files c4r:srcfiles Map 0 B))
+		(set! B (c4r:uleb (length Funcs) B))
+		(set! B (c4r:smap-funcs Funcs Map Codelen 0 B))
+		(set! B (c4r:uleb (length Rows2) B))
+		(set! B (c4r:smap-rows Rows2 Map 0 0 0 B))
+		(c4r:bytes (reverse B)))))
+
+;; ((POS LOC) ...) and ((POS NAME LOC) ...), in code order
+(define c4r:smap-collect (lambda (Code Pos Rows Funcs)
+	(if (empty? Code) (list (reverse Rows) (reverse Funcs))
+	(begin
+		(define I (head Code))
+		(define H (head I))
+		(if (= 'line H) (set! Rows (cons (list Pos (second I)) Rows))
+		(if (= 'func H) (set! Funcs (cons (list Pos (second I) (third I)) Funcs)) nil))
+		(next c4r:smap-collect (tail Code)
+			(if (= 'label H) Pos (+ Pos (c4r:size I))) Rows Funcs)))))
+;; of rows at one place, the last
+(define c4r:smap-later (lambda (Rows Acc)
+	(if (empty? Rows) (reverse Acc)
+	(if (if (empty? (tail Rows)) false (= (head (head Rows)) (head (head (tail Rows)))))
+		(next c4r:smap-later (tail Rows) Acc)
+	(next c4r:smap-later (tail Rows) (cons (head Rows) Acc))))))
+;; a row that says what the one before it said
+(define c4r:smap-dedup (lambda (Rows Prev Acc)
+	(if (empty? Rows) (reverse Acc)
+	(if (= (second (head Rows)) Prev) (next c4r:smap-dedup (tail Rows) Prev Acc)
+	(next c4r:smap-dedup (tail Rows) (second (head Rows)) (cons (head Rows) Acc))))))
+(define c4r:smap-before (lambda (Rows End Acc)
+	(if (empty? Rows) (reverse Acc)
+	(if (>= (head (head Rows)) End) (reverse Acc)
+	(next c4r:smap-before (tail Rows) End (cons (head Rows) Acc))))))
+
+(define c4r:smap-file (lambda (Loc) (bit:shr Loc 20)))
+(define c4r:smap-line (lambda (Loc) (bit:and Loc 1048575)))
+(define c4r:smap-mark (lambda (L Map NF)
+	(if (empty? L) Map
+	(begin
+		(define F (c4r:smap-file (index (head L) (- (length (head L)) 1))))
+		(if (< F NF) (string:word! Map (* W F) 1) nil)
+		(next c4r:smap-mark (tail L) Map NF)))))
+(define c4r:smap-number (lambda (Map F NF N)
+	(if (>= F NF) N
+	(if (= 0 (string:word Map (* W F))) (next c4r:smap-number Map (+ F 1) NF N)
+	(begin
+		(string:word! Map (* W F) (+ N 1))
+		(next c4r:smap-number Map (+ F 1) NF (+ N 1)))))))
+(define c4r:smap-new (lambda (Map Loc)
+	(begin
+		(define F (c4r:smap-file Loc))
+		(if (< F (/ (length Map) W)) (- (string:word Map (* W F)) 1) 0))))
+
+(define c4r:smap-files (lambda (Fs Map F B)
+	(if (empty? Fs) B
+	(begin
+		(if (= 0 (string:word Map (* W F))) nil
+			(begin
+				(define P (head (head Fs)))
+				(set! B (c4r:uleb (length P) B))
+				(set! B (c4r:push-string P 0 B))
+				(set! B (c4r:uleb (second (head Fs)) B))
+				(set! B (c4r:push-word32 (third (head Fs)) B))))
+		(next c4r:smap-files (tail Fs) Map (+ F 1) B)))))
+(define c4r:smap-funcs (lambda (Fs Map End Prev B)
+	(if (empty? Fs) B
+	(begin
+		(define F (head Fs))
+		(define Start (head F))
+		(define Next (if (empty? (tail Fs)) End (head (head (tail Fs)))))
+		(define Name (+ "" (second F)))
+		(set! B (c4r:uleb (- Start Prev) B))
+		(set! B (c4r:uleb (- Next Start) B))
+		(set! B (c4r:uleb (length Name) B))
+		(set! B (c4r:push-string Name 0 B))
+		(set! B (c4r:uleb (c4r:smap-new Map (third F)) B))
+		(set! B (c4r:uleb (c4r:smap-line (third F)) B))
+		(next c4r:smap-funcs (tail Fs) Map End Start B)))))
+(define c4r:smap-rows (lambda (Rs Map PrevOff PrevFile PrevLine B)
+	(if (empty? Rs) B
+	(begin
+		(define R (head Rs))
+		(define File (c4r:smap-new Map (second R)))
+		(define Line (c4r:smap-line (second R)))
+		(define New (if (= File PrevFile) 0 1))
+		(set! B (c4r:uleb (+ (* 2 (- (head R) PrevOff)) New) B))
+		(if (= New 1) (set! B (c4r:uleb File B)) nil)
+		(set! B (c4r:sleb (- Line PrevLine) B))
+		(next c4r:smap-rows (tail Rs) Map (head R) File Line B)))))
+
+;; LEB128 onto a reversed byte list
+(define c4r:uleb (lambda (V B)
+	(if (< V 128) (cons V B)
+	(next c4r:uleb (bit:shr V 7) (cons (+ 128 (bit:and V 127)) B)))))
+(define c4r:sleb (lambda (V B)
+	(begin
+		(define Byte (bit:and V 127))
+		(define Rest (bit:shr V 7))                 ;; arithmetic
+		(if (if (= Rest 0) (= 0 (bit:and Byte 64)) (if (= Rest -1) (= 64 (bit:and Byte 64)) false))
+			(cons Byte B)
+		(next c4r:sleb Rest (cons (+ 128 Byte) B))))))
+(define c4r:push-string (lambda (S I B)
+	(if (>= I (length S)) B
+	(next c4r:push-string S (+ I 1) (cons (string:byte S I) B)))))
+(define c4r:push-word32 (lambda (V B)
+	(cons (bit:and (bit:shr V 24) 255) (cons (bit:and (bit:shr V 16) 255)
+		(cons (bit:and (bit:shr V 8) 255) (cons (bit:and V 255) B))))))
+(define c4r:bytes (lambda (L) (c4r:poke L (string:alloc (length L)) 0)))
+(define c4r:poke (lambda (L S I)
+	(if (empty? L) S
+	(begin (string:byte! S I (head L)) (next c4r:poke (tail L) S (+ I 1))))))
+
+(define c4r:trailer-size (lambda (Chunks N)
+	(if (empty? Chunks) N
+	(next c4r:trailer-size (tail Chunks)
+		(+ N (* 2 W) (c4r:padded (length (second (head Chunks)))))))))
+
+(define c4r:emit-trailer (lambda (Chunks Out At)
+	(begin
+		(string:byte! Out At 88)                   ;; X
+		(next c4r:emit-chunks Chunks Out (+ At W)))))
+(define c4r:emit-chunks (lambda (Chunks Out At)
+	(if (empty? Chunks) Out                         ;; the 0 tag: string:alloc zeroed it
+	(begin
+		(define C (head Chunks))
+		(c4r:copy-string (head C) Out At 0)
+		(string:word! Out (+ At W) (length (second C)))
+		(c4r:copy-string (second C) Out (+ At (* 2 W)) 0)
+		(next c4r:emit-chunks (tail Chunks) Out
+			(+ At (* 2 W) (c4r:padded (length (second C)))))))))
 
 (define c4r:read-patches (lambda (F At N Acc)
 	(if (= 0 N) Acc
@@ -336,6 +523,15 @@
 ;; later encode without BSS is unaffected.
 (define c4r:bss-extra 0)
 
+;; chunks the next encode appends to the module's own (test-srcmap's
+;; fixture). Reset by whoever sets it, as c4r:bss-extra is.
+(define c4r:extra-chunks (list))
+
+;; The compiler's source files, (PATH SIZE CRC) by file number, when it
+;; compiled with -g: then encode makes a source map of the code's line
+;; and func items (c4lc.lisp sets it, and resets it).
+(define c4r:srcfiles (list))
+
 ;; stored length = full length minus the trailing run of zero bytes.
 (define c4r:stored-len (lambda (Data n)
 	(if (= n 0) 0
@@ -376,6 +572,12 @@
 	(define Conslen (length Cons))
 	(define Deslen (length Des))
 	(define Symslen (length Syms))
+	;; the trailer's chunks: the module's own (a decoded image's), then
+	;; whatever this encode adds
+	(define Chunks (+ (if (> (length M) 9) (index M 9) (list))
+		(+ (if (empty? c4r:srcfiles) (list) (list (list "SMAP" (c4r:smap Code Codelen))))
+			c4r:extra-chunks)))
+	(define TrailerLen (if (empty? Chunks) 0 (+ W (c4r:trailer-size Chunks 0) W)))
 
 	;; total file size (only the STORED data bytes are written)
 	(define Total (+ 13 (* 7 W)
@@ -384,7 +586,8 @@
 		W (* Patchlen (* 3 W))
 		W (* Conslen W)
 		W (* Deslen W)
-		W (c4r:syms-size Syms 0)))
+		W (c4r:syms-size Syms 0)
+		TrailerLen))
 	(define Out (string:alloc Total))
 
 	;; header
@@ -425,6 +628,8 @@
 	(c4r:emit-words (c4r:resolve-offsets Cons LT) Out ConsAt)
 	(c4r:emit-words (c4r:resolve-offsets Des LT) Out DesAt)
 	(c4r:emit-syms Syms Out SymsAt LT)
+	(if (empty? Chunks) nil
+		(c4r:emit-trailer Chunks Out (+ SymsAt (c4r:syms-size Syms 0))))
 	Out
 )))
 
@@ -445,12 +650,18 @@
 		(define H (head I))
 		(if (= 'label H)
 			(string:word! LT (* W (second I)) Pos)
-			(if (= 'word H)
-				(set! Pos (+ Pos 1))
-				(if (= 'cword H)
-					(set! Pos (+ Pos 1))
-					(set! Pos (+ Pos (length I)))))) ;; (OP) 1 word, (OP operand) 2
+			(set! Pos (+ Pos (c4r:size I))))
 		(next c4r:place (tail Code) LT Pos)))))
+;; an item's words: (OP) 1, (OP operand) 2, a raw or patched word 1, and
+;; -g's (line LOC) and (func NAME LOC) none
+(define c4r:size (lambda (I)
+	(begin
+		(define H (head I))
+		(if (= 'word H) 1
+		(if (= 'cword H) 1
+		(if (= 'line H) 0
+		(if (= 'func H) 0
+		(length I))))))))
 
 (define c4r:is-ref (lambda (Op)
 	(if (= 'list (typeof Op))
@@ -503,7 +714,7 @@
 	(if (empty? Code) Pos (begin
 		(define I (head Code))
 		(define H (head I))
-		(if (= 'label H) nil
+		(if (if (= 'label H) true (if (= 'line H) true (= 'func H))) nil
 		(if (= 'word H) (begin
 			(string:word! Out (+ At (* Pos W)) (second I))
 			(set! Pos (+ Pos 1)))

@@ -159,6 +159,10 @@ OPER [   Brak   OPER ]   Rbrak  OPER .   Dot
 \ -- the source ---------------------------------------------------------
 
 VARIABLE SRC   VARIABLE SLEN   VARIABLE POS   VARIABLE LINE
+\ backslash-newlines in the current logical line: a splice keeps LINE,
+\ so a multi-line #define stays one line for the preprocessor, and the
+\ newline that ends the logical line counts them (c4lc-lex.lisp's too)
+VARIABLE SPLICES
 VARIABLE CONFORMING   0 CONFORMING !
 
 \ Preprocessor mode. In it '#' and '##' become tokens instead of a
@@ -356,8 +360,8 @@ VARIABLE T-ADJ  0 T-ADJ !                 \ consumed by the next TOK,
 
 : LEX-STEP {: | c -- :}
    CH TO c
-   c 92 = POS @ 1+ PEEK 10 = AND IF 2 POS +! EXIT THEN   \ splice
-   c 10 = IF 1 POS +! 1 LINE +! 0 WANT-HDR ! EXIT THEN
+   c 92 = POS @ 1+ PEEK 10 = AND IF 2 POS +! 1 SPLICES +! EXIT THEN   \ splice
+   c 10 = IF 1 POS +! SPLICES @ 1+ LINE +! 0 SPLICES ! 0 WANT-HDR ! EXIT THEN
    c 33 < IF 1 POS +! EXIT THEN
    c 35 = IF T-HASH EXIT THEN
    WANT-HDR @ c 60 = AND IF T-HEADER EXIT THEN
@@ -401,7 +405,7 @@ VARIABLE #FILES  0 #FILES !
    dst n ;
 
 : LEX-BUF ( addr len v -- ) {: addr len v -- :}
-   addr SRC !  len SLEN !  0 POS !  1 LINE !  0 WANT-HDR !  0 T-ADJ !
+   addr SRC !  len SLEN !  0 POS !  1 LINE !  0 SPLICES !  0 WANT-HDR !  0 T-ADJ !
    v LEXV !  1 #FILES +!  #FILES @ LEXF !
    BEGIN AT-END? 0= WHILE LEX-STEP REPEAT
    Eof 0 0 TOK, ;

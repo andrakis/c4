@@ -210,6 +210,8 @@
 (define t:fstmt (lambda (s)
 	(begin
 		(define h (head s))
+		;; -g's (line LOC STMT): the statement folds as it would bare
+		(if (= h 'line) (list 'line (t:second s) (t:fstmt (t:third s)))
 		(if (= h 'labeled) (list 'labeled (t:second s) (t:fstmt (t:third s)))
 		(if (= h 'block) (t:cons 'block (t:fstmts (tail s) (list)))
 		(if (= h 'expr) (list 'expr (t:fexpr (t:second s)))
@@ -226,7 +228,20 @@
 		(if (= h 'switch)
 			(t:cons 'switch (t:cons (t:fexpr (t:second s))
 				(t:fswitch (tail (tail s)) (list))))
-		s)))))))))))))
+		s))))))))))))))
+
+;; -g's line nodes taken out: the tree as -g0 has it. T3 and T4 judge and
+;; splice these copies, so what they inline, and why, does not change
+;; with -g; spliced code then has the call's line.
+(define t:unline (lambda (x)
+	(if (= 'list (typeof x))
+		(if (empty? x) x
+		(if (= (head x) 'line) (t:unline (t:third x))
+		(t:unline/l x (list))))
+	x)))
+(define t:unline/l (lambda (l acc)
+	(if (empty? l) (t:reverse acc)
+	(next t:unline/l (tail l) (t:cons (t:unline (head l)) acc)))))
 ;; declaration initializer expressions fold too
 (define t:fdecls (lambda (ls acc)
 	(if (empty? ls) (t:reverse acc)
@@ -909,6 +924,7 @@
 (define t:istmt (lambda (c s)
 	(begin
 		(define h (head s))
+		(if (= h 'line) (list 'line (t:second s) (t:istmt c (t:third s)))
 		(if (= h 'block) (t:cons 'block (t:istmts c (tail s) (list)))
 		(if (= h 'expr)
 			;; T4 first: it replaces the whole statement with a block,
@@ -939,7 +955,7 @@
 		(if (= h 'switch)
 			(t:cons 'switch (t:cons (t:iexpr c (t:second s))
 				(t:iswitch c (tail (tail s)) (list))))
-		s))))))))))))
+		s)))))))))))))
 
 ;; A void candidate splices in HERE and nowhere else: statement position
 ;; is the only place its body was ever a legal thing to write.
@@ -1017,8 +1033,9 @@
 		(set! t:calls (list))
 		(if tree:inlinereport (t:censusall ds) nil)
 		(define taken (t:takenall ds (list)))
-		(define c (t:cands ds taken (list)))
-		(set! t:c4 (t:cands4 ds taken (list)))
+		(define plain (if p:lines (t:unline ds) ds))
+		(define c (t:cands plain taken (list)))
+		(set! t:c4 (t:cands4 plain taken (list)))
 		(if (if (empty? c) (empty? t:c4) false) ds
 			(t:inlinedecls c taken ds (list))))))
 

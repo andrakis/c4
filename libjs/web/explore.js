@@ -102,7 +102,9 @@ function openBytes(bytes, path, then) {
     const main = a.byName.get('main');
     go(main ? { kind: 'func', obj: main[0] } : a.funcs.length ? { kind: 'func', obj: a.funcs.find(f => !f.made) || a.funcs[0] } : null);
   }
-  if (S.srcDirs) scanSources();
+  // with a source map the rows say where the code came from; the scan
+  // by name is for an image without one
+  if (S.srcDirs && !(a.img.smap && a.img.smap.rows.length)) scanSources();
 }
 
 function summary() {
@@ -252,7 +254,11 @@ function renderCode(f, at) {
     const lb = f.labels.get(ins.off);
     const row = rows ? rowAt(rows, ins.off) : null;
     const band = row ? ` style="border-left-color:${bandColour(row.line)}" data-line="${row.file}:${row.line}"` : '';
-    if (row && row !== prevRow && row.line) h += `<div class="fnhead dim">${esc(S.a.img.smap.files[row.file].path)}:${row.line}</div>`;
+    if (row && row !== prevRow && row.line) {
+      const fm = S.a.img.smap.files[row.file];
+      h += `<div class="fnhead" data-key="${row.file}:${row.line}" title="${esc(fm ? fm.path : '?')}:${row.line}">` +
+        `<span class="dim">${esc(fm ? fm.path.slice(fm.path.lastIndexOf('/') + 1) : '?')}:${row.line}</span></div>`;
+    }
     prevRow = row;
     h += `<div class="ins band${ins.filler ? ' word' : ''}" data-off="${ins.off}"${band}>` +
       `<span class="o">${hex(ins.off)}</span><span class="lb">${lb ? lb + ':' : ''}</span>` +
@@ -573,6 +579,11 @@ function renderSource(f) {
   }
   if (!S.src && !m) { side.innerHTML = '<p class="note">scanning&hellip;</p>'; return; }
   if (!f) { side.innerHTML = '<p class="note">choose a function</p>'; return; }
+  if (m && m.rows.length) { showMapped(f); return; }
+  byName(f);
+}
+function byName(f) {
+  const side = $('side');
   const cands = (S.src && S.src.defs.get(f.name)) || [];
   if (!cands.length) {
     side.innerHTML = `<p class="note">${f.made ? 'This body has no symbol: the compiler made it (a helper, or a stub), or its symbol was stripped.'
@@ -607,6 +618,108 @@ function showFile(def, f, cands) {
   linkNames();
 }
 function side_html(h) { $('side').innerHTML = h; }
+
+// ---- line by line, from the image's source map ----
+//
+// The function's rows say which lines its code came from. The file is
+// fetched from the server by the path the compiler was given (relative
+// to the repository when the build ran there), and its size and CRC are
+// checked against the map's, so a source changed since is said to be.
+const CRC = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; }
+  return b => { let c = 0xffffffff; for (let i = 0; i < b.length; i++) c = t[(c ^ b[i]) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+})();
+const srcCache = new Map();
+async function loadSrc(path) {
+  if (srcCache.has(path)) return srcCache.get(path);
+  let file = null;
+  try {
+    const r = await fetch(new URL(path, ROOT));
+    const ct = r.headers.get('content-type') || '';
+    if (r.ok && !ct.includes('html')) {
+      const bytes = new Uint8Array(await r.arrayBuffer());
+      file = { path, text: new TextDecoder('latin1').decode(bytes), html: null, size: bytes.length, crc: CRC(bytes) };
+    }
+  } catch { /* not served */ }
+  srcCache.set(path, file);
+  return file;
+}
+
+async function showMapped(f) {
+  const m = S.a.img.smap;
+  const rows = (rowsOf(f) || []).filter(r => r.line > 0 && r.off >= f.start && r.off < f.end);
+  const fe = m.funcs.find(x => x.start === f.start);
+  let fi = fe && fe.line > 0 ? fe.file : null;
+  if (fi === null || !rows.some(r => r.file === fi)) {
+    const count = new Map();
+    for (const r of rows) count.set(r.file, (count.get(r.file) || 0) + 1);
+    fi = count.size ? [...count].sort((a, b) => b[1] - a[1])[0][0] : null;
+  }
+  if (fi === null) {
+    side_html(`<p class="note">${esc(f.name)} has no source lines in the map: the compiler made it${fe ? '' : ', or it came from an object without a map'}.</p>`);
+    return;
+  }
+  const meta = m.files[fi];
+  side_html(`<p class="note">reading ${esc(meta.path)}&hellip;</p>`);
+  const file = await loadSrc(meta.path);
+  if (!S.sel || S.sel.obj !== f || S.sideTab !== 'source') return;   // moved on meanwhile
+  if (!file) {
+    side_html(`<p class="note">The map says <b>${esc(meta.path)}</b>, which the server does not have` +
+      ' (a path relative to where the compiler ran, or a file of the compiler\'s own).</p>');
+    return;
+  }
+  if (!file.html) file.html = highlight(file.text);
+  // every line of this file with a row anywhere in the image, and this
+  // function's own
+  const anyRow = new Map();
+  m.rows.forEach((r, i) => { if (r.file === fi && r.line > 0 && !anyRow.has(r.line)) anyRow.set(r.line, r.off); });
+  const mine = new Set(rows.filter(r => r.file === fi).map(r => r.line));
+  const lo = Math.min(...mine), hi = Math.max(...mine);
+  const stale = (meta.size && file.size !== meta.size) || (m.flags & 1 && meta.crc !== null && meta.crc !== file.crc);
+  const lines = file.html.split('\n');
+  side_html(`<div class="srchead"><b>${esc(meta.path)}</b>:${lo}-${hi}` +
+    (stale ? ' &middot; <span style="color:var(--pink)">changed since it was compiled: the lines may not match</span>' : ' &middot; as compiled') +
+    '</div><div class="src">' + lines.map((l, i) => {
+      const n = i + 1, has = anyRow.has(n);
+      const cls = mine.has(n) ? ' in' : '';
+      const band = mine.has(n) ? ` style="box-shadow:3px 0 0 ${bandColour(n)} inset"` : '';
+      return `<div class="ln${cls}" id="L${n}"${band}><span class="no${has ? ' has' : ''}"${has ? ` data-srcline="${fi}:${n}" title="the code from this line"` : ''}>${n}</span><span>${l || ' '}</span></div>`;
+    }).join('') + '</div>');
+  S.shown = { fi, path: meta.path };
+  const el = document.getElementById('L' + (fe && fe.file === fi ? fe.line : lo));
+  if (el) el.scrollIntoView({ block: 'start' });
+  linkNames();
+  // the code pane's row headings get the line itself, as objdump -S
+  const src = file.text.split('\n');
+  for (const h of $('code').querySelectorAll(`.fnhead[data-key^="${fi}:"]`)) {
+    const n = +h.dataset.key.split(':')[1];
+    h.innerHTML = `<span class="dim">${n}</span>  ${esc((src[n - 1] || '').trim())}`;
+  }
+  if (S.sel.line) markLine(S.sel.line, $('code').querySelectorAll(`.ins[data-line="${S.sel.line}"]`));
+}
+
+// a source line clicked: its instructions, in this function or the one
+// they are in
+function gotoLine(key) {
+  const [fi, line] = key.split(':').map(Number);
+  const m = S.a.img.smap;
+  const here = $('code').querySelectorAll(`.ins[data-line="${key}"]`);
+  if (here.length) { markLine(key, here); return; }
+  const r = m.rows.find(x => x.file === fi && x.line === line);
+  if (r) go({ kind: 'func', obj: S.a.funcOf(r.off), at: r.off, line: key });
+}
+function markLine(key, els, scroll = true) {
+  for (const x of $('code').querySelectorAll('.ins.hl')) x.classList.remove('hl');
+  for (const x of els) x.classList.add('hl');
+  if (scroll && els.length) els[0].scrollIntoView({ block: 'center' });
+  for (const x of $('side').querySelectorAll('.ln.cur')) x.classList.remove('cur');
+  const [fi, line] = key.split(':').map(Number);
+  if (S.shown && S.shown.fi === fi) {
+    const el = document.getElementById('L' + line);
+    if (el) { el.classList.add('cur'); el.scrollIntoView({ block: 'nearest' }); }
+  }
+}
 
 // Names in the source that are functions in the image become links
 function linkNames() {
@@ -679,6 +792,8 @@ function gotoText(t) {
 }
 
 document.addEventListener('click', e => {
+  const sl = e.target.closest('[data-srcline]');
+  if (sl && S.a) { gotoLine(sl.dataset.srcline); return; }
   const el = e.target.closest('[data-fn],[data-gl],[data-at],[data-def],.row,[data-tab]');
   if (!el || !S.a) return;
   if (el.dataset.tab) {
@@ -709,10 +824,10 @@ document.addEventListener('click', e => {
 $('code').addEventListener('click', e => {
   const ins = e.target.closest('.ins');
   if (!ins || e.target.closest('a')) return;
-  for (const x of $('code').querySelectorAll('.ins.hl')) x.classList.remove('hl');
   const key = ins.dataset.line;
-  if (key) for (const x of $('code').querySelectorAll(`.ins[data-line="${key}"]`)) x.classList.add('hl');
-  else ins.classList.add('hl');
+  if (key) { markLine(key, $('code').querySelectorAll(`.ins[data-line="${key}"]`), false); return; }
+  for (const x of $('code').querySelectorAll('.ins.hl')) x.classList.remove('hl');
+  ins.classList.add('hl');
 });
 
 $('images').addEventListener('change', e => { if (e.target.value) openPath(e.target.value); });

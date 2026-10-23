@@ -147,7 +147,10 @@ int main (int argc, char **argv) {
   if (!(buf = malloc(BUF_MAX))) { printf("c4l: out of memory\n"); return 1; }
   if ((fd = open(*argv, 0)) < 0) { printf("c4l: cannot open %s\n", *argv); return 1; }
   total = 0;
-  while ((n = read(fd, buf + total, 65536)) > 0) total = total + n;
+  // bounded: a source map makes an image longer than its code says
+  while (total < BUF_MAX && (n = read(fd, buf + total, BUF_MAX - total < 65536 ? BUF_MAX - total : 65536)) > 0)
+    total = total + n;
+  if (total >= BUF_MAX && read(fd, &n, 1) > 0) { printf("c4l: %s is over the %d-byte limit\n", *argv, BUF_MAX); return 1; }
   close(fd);
   if (total < 13) { printf("c4l: %s is not a .c4r\n", *argv); return 1; }
 

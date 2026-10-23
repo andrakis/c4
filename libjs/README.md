@@ -90,10 +90,22 @@ this computer, does as well).
   when the source is found, and anything still to link (in a `.c4o` or
   `.c4l`) by its symbol. Fused opcodes are green, the machine's
   syscalls pink.
-- **Its source**, matched by name: each `.c` in the directories named
-  (guessed from the image; the guess is kept per image) is scanned for
-  function definitions, and the function's lines are marked. Names in
-  the source that are functions in the image link back to them.
+- **Its source, line by line**, when the image has a source map (c4lc
+  `-g`; docs/c4lc-design.md 15). The rows say which file and line each
+  run of code came from:
+  - the code pane heads each run with its line, as objdump `-S` does,
+    and colours it;
+  - the source pane marks every line that has code;
+  - clicking a line marks its instructions, in this function or the one
+    they are in, and clicking an instruction marks its line;
+  - the file comes from the server by the path the compiler was given,
+    and is checked against the map's size and CRC, so a source changed
+    since is said to be.
+- **Its source, by name**, when there is no map: each `.c` in the
+  directories named (guessed from the image; the guess is kept per
+  image) is scanned for function definitions, and the function's lines
+  are marked. Names in the source that are functions in the image link
+  back to them.
 - **Refs**: who calls it, or takes its address, and from where; what it
   calls; the globals it uses; its instructions by opcode.
 - **Data**: a global's bytes, the pointers in it (patched at load), and
@@ -103,11 +115,9 @@ this computer, does as well).
   The URL keeps the image and function (`#img=…&fn=…`), and Alt+Left and
   Alt+Right go back and forward.
 
-Matching source by name is a stopgap: line by line needs a source map
-in the image, track S's `SMAP` chunk (docs/c4-explorer.md 2), which no
-compiler writes yet. `c4r.js` already reads one (its test builds one),
-and the code pane bands its instructions by row when an image has it;
-the source pane follows the rows once S1 gives the page real ones.
+For now only c4lc writes maps, and only with `-g`. c4rlink drops them
+until it learns to merge them (S2), so a linked program has none, but
+an object (`.c4o`) or a program c4lc compiles whole has its rows.
 
 ## Test
 

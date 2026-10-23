@@ -1242,3 +1242,98 @@ c4lc only.
 - Tests: `c4lc_m13lc.c`, with gcc's golden (C89, for the K&R
   definitions), the same at 32 and 64 bits. It runs in test-c4lc at both
   sizes, plain, `-O` and `-minline`, and in `C4SC_BACK_DIFF`.
+
+## 15. Source maps: `-g` (track S, S0-S1, 2026-10-24)
+
+docs/c4-explorer.md §2 is the design. This section records what c4lc does.
+
+**The format** is an extension trailer after the S segment. It is the
+word `X`, then chunks. Each chunk is a tag of four letters, a length, and
+the payload padded to a word. The trailer ends with a 0 tag. The source
+map is the `SMAP` chunk: files with their size and CRC-32, functions, and
+rows. Every loader stops at S, so a mapped image runs as it would without
+the trailer. `load-c4r.c` reads the map with `C4ROPT_SRCMAP`, `c4rdump
+-l` prints it, and `libjs/c4r.js` reads it for the explorer. `c4r.lisp`
+decodes and encodes chunks. c4opt keeps a chunk with a lower-case fourth
+letter and drops an upper-case one, such as `SMAP`, because code it
+rewrites no longer matches the map. c4rlink and c4rstrip write no
+trailer, so they drop the map until S2 teaches c4rlink to merge maps.
+
+**The invariant.** `-g` changes no byte of an image: the `-g` file is the
+`-g0` file with the trailer after it. `src/c4sp/tests/srcmap-invariant.sh`
+holds 182 pairs to that rule. They are every `src/tests` program c4lc
+compiles, plainly, with `-O`, and with `-O -mfuse -minline`, plus C4IX's
+kernel modules preprocessed by c4lc. `-g0` is the default until every
+compiler makes maps (S6).
+
+**How the lines get there.**
+- **Locations.** A token's line is a location: `file × 2^20 + line`.
+  File 0 is the file compiled. Only `-g` numbers the other files, so
+  without it a location is the line it always was, and every error and
+  golden is unchanged. Under `-g`:
+  - an error in another file names it, as in `c4lc: errh/b.h:2: ...`;
+  - gcc's `# N "file"` markers and `#line` move the locations of the
+    lines after them (the lexer for gcc -E input, `pp:remark` under
+    `-P`);
+  - the C the compiler brings with it (softfp, the long long helpers) is
+    a file of its own.
+- **Backslash-newlines** are now counted, in c4lc and c4fc both
+  (`lex:splice`, `SPLICES`). A splice still keeps the line, so a
+  multi-line `#define` stays one line for the preprocessor. The newline
+  that ends the logical line counts the spliced lines too. Before this,
+  every line after a continuation was one short, and `__LINE__` was
+  wrong with it.
+- **Statements.** Under `-g`, `p:stmt` wraps each statement in `(line
+  LOC STMT)`, and `p:fnlocs` keeps each function's name and closing-brace
+  locations.
+  - T1 folds through the wrapper.
+  - T3 and T4 judge and splice copies with the wrappers taken out
+    (`t:unline`), so what they inline does not change. Spliced code has
+    the call's line, not the callee's.
+- **Line items.** The generator emits `(line LOC)` before a statement's
+  code, and `(func NAME LOC)` and `(line LOC)` before a function's label.
+  - A loop's code after its body, a `for`'s step and the jump back, goes
+    on the loop's line.
+  - The exit at the closing brace goes on the brace's line.
+  - Bodies the compiler makes, such as `<ld16s>` and `<stub>`, have line 0.
+- **c4opt** steps over the items in every window (`opt:reals`,
+  `opt:skip`). A rewrite's items follow what it put in, and `dead` keeps
+  them. So the passes make the same decisions, and a row describes the
+  code that follows it. The instruction count that decides the fixpoint
+  leaves the items out.
+- **`c4r:encode`** gives items size 0 and makes the map (`c4r:smap`).
+  Where two rows start at one place, the later wins. A row that repeats
+  the one before is dropped, and so is one at the end of the code. Only
+  files that something points at are listed.
+
+**Measured** on `src/rott/rt_actor.c` (319 KB, the largest unit here;
+wolf3d is not fetched), compiled `-O -mfuse` by c4sp32:
+
+| | `-g0` | `-g` |
+|---|---|---|
+| time | 91.8 s | 89.9 s (no cost the clock can see, CRC included) |
+| object | 386,784 bytes | 398,948 bytes (+3.1%) |
+| map | | 12,147 bytes: 1 file, 172 functions, 4,307 rows, 2.82 bytes a row |
+
+**Tests**, in `make test-srcmap`:
+- S0's fixture, a map made by hand (`c4r-mapfixture.lisp`):
+  - c4rdump `-l` reads it back, and c4r-roundtrip is exact on it;
+  - it runs the same in c4m, c4l, c4mp, oisc4, c4m32, libjs and the c4bb
+    simulator;
+  - c4opt keeps the lower-case chunk and drops the map;
+  - c4rstrip drops the trailer;
+  - a damaged image is refused, not crashed on.
+- S1's probe, `src/tests/srcmap_probe.c` with its header, compiled `-g -O
+  -minline`:
+  - its pinned map has the header's function at the header's lines, a
+    macro's code at its use, a `for`'s step on the `for`'s line, and an
+    inlined call at the call;
+  - it prints `__LINE__` counted past a backslash-newline;
+  - then the invariant.
+
+**Still to come**:
+- S2: c4rlink merges the maps of the objects it links, so a linked
+  program such as ROTT keeps its rows;
+- S3: c4sc and `cc -g`;
+- S4 and S5: c4fc and c4cc;
+- S6: maps on by default.

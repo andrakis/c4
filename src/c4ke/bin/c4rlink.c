@@ -746,6 +746,13 @@ static int *cl_load (char *name) {
 	}
 #endif
 	if (!loaded) loaded = c4r_load_opt(name, C4ROPT_SYMBOLS);
+	// A damaged or future image loads partway, and linking what is
+	// there would crash or write nonsense
+	if (loaded && !loaded[C4R_LOADCOMPLETE]) {
+		printf("c4rlink: '%s' is not a complete C4R image\n", name);
+		c4r_free(loaded);
+		loaded = 0;
+	}
 	return loaded;
 }
 

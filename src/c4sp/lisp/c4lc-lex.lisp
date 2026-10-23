@@ -32,7 +32,8 @@
 ;; lines are skipped whole. On, '#' becomes a token, a backslash at
 ;; end of line splices the next line WITHOUT advancing the line
 ;; counter (so a multi-line #define stays one logical line, which is
-;; how the preprocessor finds where a directive ends), and the header
+;; how the preprocessor finds where a directive ends) until the logical
+;; line ends, when the spliced lines are counted too, and the header
 ;; name in #include <...> comes back as one token instead of a dozen.
 (define lex:pp false)
 (define lex:want-header false)
@@ -192,6 +193,90 @@
 	(begin
 		(define a (lex:word i "pragma"))
 		(if a (lex:word a "pack") false))))
+
+;; ---- locations (track S, docs/c4-explorer.md 2.3) ----
+;;
+;; A token's LINE is a location: its file's number times 2^20, plus its
+;; line. File 0 is the file the compiler was given, so without -g, where
+;; nothing numbers the others, a location is the line it always was.
+;; Under -g (lex:locs) every file lexed gets a number, with its size and
+;; CRC-32 for the source map, and gcc's `# N "file"` and `#line` markers
+;; set the location in a source gcc -E has been through.
+(define lex:LOCF 1048576)
+(define lex:locs false)
+(define lex:files (list))    ;; (PATH SIZE CRC) by file number, under -g
+(define lex:splice 0)        ;; backslash-newlines in the current logical line
+(define lex:line-of (lambda (loc) (bit:and loc 1048575)))
+(define lex:file-of (lambda (loc) (bit:shr loc 20)))
+
+;; the file's number, given it a new one the first time
+(define lex:fileno (lambda (path src) (lex:fileno/2 path src lex:files 0)))
+(define lex:fileno/2 (lambda (path src l i)
+	(if (empty? l)
+		(begin
+			(set! lex:files (+ lex:files (list (list path
+				(if (= src nil) 0 (length src)) (if (= src nil) 0 (lex:crc src))))))
+			i)
+	(if (= (head (head l)) path) i
+	(next lex:fileno/2 path src (tail l) (+ i 1))))))
+
+;; IEEE CRC-32 (gzip's, libarc's) of the bytes the compiler read, so a
+;; reader can tell a source that changed since from the one compiled.
+;; Masked to 32 bits, so a 64-bit c4sp computes what a 32-bit one does.
+(define lex:M32 (bit:or (bit:shl 65535 16) 65535))
+(define lex:crctab false)
+(define lex:crcbit (lambda (c k)
+	(if (= k 0) c
+	(next lex:crcbit
+		(if (= 1 (bit:and c 1))
+			(bit:xor (bit:or (bit:shl 60856 16) 33568) (bit:and (bit:shr c 1) 2147483647))
+			(bit:and (bit:shr c 1) 2147483647))
+		(- k 1)))))
+(define lex:crcfill (lambda (t n)
+	(if (= n 256) t
+	(begin
+		(string:word! t (* (sys:wordsize) n) (lex:crcbit n 8))
+		(next lex:crcfill t (+ n 1))))))
+(define lex:crc (lambda (s)
+	(begin
+		(if lex:crctab nil (set! lex:crctab (lex:crcfill (string:alloc (* 256 (sys:wordsize))) 0)))
+		(bit:and lex:M32 (bit:xor lex:M32 (lex:crc/2 s 0 (length s) lex:M32 (sys:wordsize)))))))
+(define lex:crc/2 (lambda (s i n c w)
+	(if (>= i n) c
+	(next lex:crc/2 s (+ i 1) n
+		(bit:and lex:M32
+			(bit:xor (string:word lex:crctab (* w (bit:and (bit:xor c (string:byte s i)) 255)))
+				(bit:and (bit:shr c 8) 16777215)))
+		w))))
+
+;; `# N "file"` (gcc -E) or `#line N "file"`, from just after the '#':
+;; the location of the line before the next one, which the newline that
+;; ends this one then advances. Anything else leaves LINE as it is.
+(define lex:digits (lambda (i v)
+	(if (if (< i lex:len) (lex:digit? (string:byte lex:src i)) false)
+		(next lex:digits (+ i 1) (+ (* v 10) (- (string:byte lex:src i) 48)))
+	(list i v))))
+(define lex:marker (lambda (j line)
+	(begin
+		(define a (lex:blanks j))
+		(define lw (lex:word a "line"))
+		(define b (if lw (lex:blanks lw) a))
+		(define d (lex:digits b 0))
+		(if (= (head d) b) line
+		(begin
+			(define q (lex:blanks (head d)))
+			(define f (if (if (< q lex:len) (= (string:byte lex:src q) 34) false)
+				(lex:markfile (string:substr lex:src (+ q 1) (- (lex:strend (+ q 1) 34) (+ q 1))))
+				(lex:file-of line)))
+			(+ (* f lex:LOCF) (- (index d 1) 1)))))))
+;; a marker's file: its size and CRC when it is there to read (gcc's
+;; "<built-in>" is not); lex:src is the file being lexed, so it is kept
+(define lex:markfile (lambda (name)
+	(begin
+		(define s lex:src) (define n lex:len)
+		(define r (lex:fileno name (if (file:exists (file:path name)) (file:read (file:path name)) nil)))
+		(set! lex:src s) (set! lex:len n)
+		r)))
 
 (define lex:skipline (lambda (i)
 	(if (>= i lex:len) i
@@ -556,12 +641,18 @@
 		(define c (string:byte lex:src i))
 		(define j (+ i 1))
 		(if (if (= c 92) (lex:eol? j) false)
-			;; backslash-newline: splice, same logical line
-			(next lex:go (+ j 1) line acc)
+			;; backslash-newline: splice, same logical line -- which is how
+			;; the preprocessor finds where a directive ends -- and counted,
+			;; so the line after it is the line it is (and __LINE__ too)
+			(begin
+				(set! lex:splice (+ lex:splice 1))
+				(next lex:go (+ j 1) line acc))
 		(if (= c 10)
 			(begin
 				(set! lex:want-header false)
-				(next lex:go j (+ line 1) acc))
+				(define sp lex:splice)
+				(set! lex:splice 0)
+				(next lex:go j (+ line (+ 1 sp)) acc))
 		(if (<= c 32) (next lex:go j line acc)
 		(if (= c 35)
 			(if lex:pp
@@ -574,7 +665,7 @@
 			(begin
 				(define pk (lex:pragmapack j))
 				(if pk (next lex:go pk line (lex:cons (list 'PragmaPack 0 line) acc))
-				(next lex:go (lex:skipline j) line acc))))
+				(next lex:go (lex:skipline j) (if lex:locs (lex:marker j line) line) acc))))
 		(if (if lex:want-header (= c 60) false)
 			;; #include <name>: one token, not a stream of operators. Its
 			;; fourth field, 1, tells the preprocessor it was <...>, which
@@ -656,13 +747,19 @@
 
 ;; ---- entry points ----
 
-(define lex:string (lambda (src)
+(define lex:string (lambda (src) (lex:string-at src 0)))
+;; BASE: the location of the line before the first (file * 2^20)
+(define lex:string-at (lambda (src base)
 	(begin
 		(set! lex:src src)
 		(set! lex:len (length src))
-		(lex:go 0 1 (list)))))
+		(set! lex:splice 0)
+		(lex:go 0 (+ base 1) (list)))))
 
+;; under -g a file's locations carry its number
 (define lex:file (lambda (path)
-	(lex:string (file:read (file:path path)))))
+	(begin
+		(define src (file:read (file:path path)))
+		(lex:string-at src (if lex:locs (* lex:LOCF (lex:fileno (+ "" path) src)) 0)))))
 
 )

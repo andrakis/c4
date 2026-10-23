@@ -15,7 +15,8 @@
 
 import { CMD } from './gui-device.js';
 // GUI_PTR_* (libjs/guest/gui.h) as CSS cursors
-const POINTERS = ['default', 'text', 'nwse-resize', 'pointer', 'move', 'wait', 'crosshair', 'none'];
+const POINTERS = ['default', 'text', 'nwse-resize', 'pointer', 'move', 'wait', 'crosshair', 'none', 'none'];
+const PTR_LOCK = 8;
 import { RingReader, FbConsumer } from './shared.js';
 
 const css = rgb => '#' + ((rgb >>> 0) & 0xffffff).toString(16).padStart(6, '0');
@@ -274,8 +275,14 @@ export class Display {
         case CMD.SIZE:
           this.resize(Math.max(1, words[p]), Math.max(1, words[p + 1])); break;
         case CMD.CURSOR:
-          // the pointer the guest wants here; it takes effect at once
-          this.canvas.style.cursor = POINTERS[words[p]] || 'default'; break;
+          // the pointer the guest wants here; it takes effect at once.
+          // GUI_PTR_LOCK: the mouse locked to the display from the next
+          // click on it (browsers lock it only for one), until Esc
+          this.canvas.style.cursor = POINTERS[words[p]] || 'default';
+          this.lockWanted = words[p] === PTR_LOCK;
+          this.canvas.title = this.lockWanted ? 'Click to capture the mouse; Esc releases it' : '';
+          if (!this.lockWanted && document.pointerLockElement === this.canvas) document.exitPointerLock();
+          break;
         case CMD.IMGDEF: {
           const id = words[p], w = words[p + 1], h = words[p + 2];
           if (w <= 0 || h <= 0 || w * h > len - 5) break;
@@ -366,17 +373,50 @@ export class Display {
     };
     let move = null;
     const flushMove = () => { if (move) { this.send(move); move = null; } };
+    // Locked (GUI_PTR_LOCK), the pointer is the display's own: it moves by
+    // the mouse's motion, scaled as the canvas is, and stays inside; each
+    // move carries the motion too (dx, dy), coalesced like the moves
+    this.locked = false;
+    let lx = 0, ly = 0, fx = 0, fy = 0;
+    document.addEventListener('pointerlockchange', () => {
+      const was = this.locked;
+      this.locked = document.pointerLockElement === cv;
+      if (this.locked && !was) { lx = this.lastX | 0; ly = this.lastY | 0; fx = fy = 0; }
+    });
+    const lockedAt = e => {
+      const r = cv.getBoundingClientRect();
+      fx += e.movementX * this.width / Math.max(1, r.width);
+      fy += e.movementY * this.height / Math.max(1, r.height);
+      const dx = Math.trunc(fx), dy = Math.trunc(fy);
+      fx -= dx; fy -= dy;
+      lx = Math.min(this.width - 1, Math.max(0, lx + dx));
+      ly = Math.min(this.height - 1, Math.max(0, ly + dy));
+      return { x: lx, y: ly, dx, dy };
+    };
     cv.addEventListener('pointermove', e => {
       const first = !move;
-      move = { kind: 'move', ...at(e), buttons: e.buttons | 0 };
+      if (this.locked) {
+        const p = lockedAt(e);
+        const sx = move && move.locked ? move.dx : 0, sy = move && move.locked ? move.dy : 0;
+        move = { kind: 'move', x: p.x, y: p.y, dx: sx + p.dx, dy: sy + p.dy, locked: 1, buttons: e.buttons | 0 };
+      } else {
+        const p = at(e);
+        this.lastX = p.x; this.lastY = p.y;
+        move = { kind: 'move', ...p, buttons: e.buttons | 0 };
+      }
       if (first) requestAnimationFrame(flushMove);
     });
+    const where = e => this.locked ? { x: lx, y: ly } : at(e);
     cv.addEventListener('pointerdown', e => {
       cv.focus();
+      if (this.lockWanted && !this.locked && cv.requestPointerLock) {
+        const r = cv.requestPointerLock();
+        if (r && r.catch) r.catch(() => {});
+      }
       flushMove();
-      this.send({ kind: 'down', ...at(e), button: e.button | 0 });
+      this.send({ kind: 'down', ...where(e), button: e.button | 0 });
     });
-    cv.addEventListener('pointerup', e => { flushMove(); this.send({ kind: 'up', ...at(e), button: e.button | 0 }); });
+    cv.addEventListener('pointerup', e => { flushMove(); this.send({ kind: 'up', ...where(e), button: e.button | 0 }); });
     cv.addEventListener('wheel', e => {
       this.send({ kind: 'wheel', ...at(e), dy: Math.sign(e.deltaY) | 0 });
       e.preventDefault();

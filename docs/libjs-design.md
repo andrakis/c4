@@ -182,7 +182,7 @@ before touching it.
 | 0x40C | RINGLEN | w | region length in bytes; write before RING |
 | 0x410 | RING | w | region base; 0 detaches |
 | 0x414 | BELL | w | 1 = flush, 2 = present. Read: events pending |
-| 0x418 | EVMASK | r/w | 1 move, 2 buttons, 4 keys, 8 resize/focus, 16 wheel |
+| 0x418 | EVMASK | r/w | 1 move, 2 buttons, 4 keys, 8 resize/focus, 16 wheel, 32 relative motion |
 | 0x41C | IRQ | r/w | 0 = poll; 1 = HIRQ(3) when an event arrives |
 | 0x420 | MOUSE | r | (x << 16) \| y |
 | 0x424 | BUTTONS | r | button bitmask |
@@ -202,7 +202,19 @@ commands to the host.
   5 CIRCLE, 6 TEXT, 7 PIXEL, 8 PRESENT, 9 SIZE, 10 IMGDEF, 11 IMG, 12 CLIP,
   13 NOCLIP, 14 TEXT2, 15 CURSOR (`GUI_PTR_*`, the pointer's shape).
 - **Events**: 1 MOVE, 2 DOWN, 3 UP, 4 KEYDOWN, 5 KEYUP, 6 RESIZE, 7 FOCUS,
-  8 WHEEL.
+  8 WHEEL, 9 REL.
+- **The mouse locked to the display.** The pointer shape `GUI_PTR_LOCK`
+  (8) asks for it. The page then hides the pointer, and the next click on
+  the display takes the browser's Pointer Lock, which only a click may
+  start; Esc lets it go, as browsers require. While it is locked:
+  - the pointer moves by the mouse's motion and stays inside the
+    display, so DOWN, UP and MOVE carry a position as before;
+  - a guest whose mask has 32 (`GUI_M_REL`) gets REL (dx, dy, buttons)
+    instead of MOVE: the motion itself, which the display's edge does not
+    stop.
+
+  Any other shape releases it. Tyrian asks for it, so the mouse that
+  steers its ship cannot wander off the display.
 
 ## The sound card
 

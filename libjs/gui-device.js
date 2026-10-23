@@ -15,7 +15,8 @@
 //   0x40C RINGLEN  w    region length in bytes; write before RING
 //   0x410 RING     w    region base; lays out both rings. 0 detaches.
 //   0x414 BELL     w    1 = flush, 2 = present. r: 1 when events are waiting
-//   0x418 EVMASK   r/w  1 move, 2 buttons, 4 keys, 8 resize/focus, 16 wheel
+//   0x418 EVMASK   r/w  1 move, 2 buttons, 4 keys, 8 resize/focus, 16 wheel,
+//                       32 relative motion while the mouse is locked
 //   0x41C IRQ      r/w  1 = raise HARD_IRQ(3) through the cycle handler on an event
 //   0x420 MOUSE    r    (x << 16) | y
 //   0x424 BUTTONS  r    button bitmask
@@ -66,9 +67,9 @@ export const CMD = {
   FBREF: 101,           // host-made, shared path: [w, h]; the pixels are in the triple buffer (shared.js)
   RGB: 102,             // host-made, from BLIT8: [x, y, w, h, dw, dh, ...w*h pixels 0x00RRGGBB]
 };
-export const EV = { MOVE: 1, DOWN: 2, UP: 3, KEYDOWN: 4, KEYUP: 5, RESIZE: 6, FOCUS: 7, WHEEL: 8 };
+export const EV = { MOVE: 1, DOWN: 2, UP: 3, KEYDOWN: 4, KEYUP: 5, RESIZE: 6, FOCUS: 7, WHEEL: 8, REL: 9 };
 const MASK = { [EV.MOVE]: 1, [EV.DOWN]: 2, [EV.UP]: 2, [EV.KEYDOWN]: 4, [EV.KEYUP]: 4,
-               [EV.RESIZE]: 8, [EV.FOCUS]: 8, [EV.WHEEL]: 16 };
+               [EV.RESIZE]: 8, [EV.FOCUS]: 8, [EV.WHEEL]: 16, [EV.REL]: 32 };
 const QUEUE_LIMIT = 8 << 20;             // words of undelivered commands before dropping
 
 export class GuiDevice {
@@ -277,12 +278,17 @@ export class GuiDevice {
     return r;
   }
 
-  // An event from the page: { kind, x, y, button, buttons, code, char, mods, w, h, dy, focus }
+  // An event from the page: { kind, x, y, button, buttons, code, char, mods, w, h, dy, focus,
+  // dx } -- a locked mouse's move carries dx and dy too: GUI_EV_REL for a
+  // guest that asked for it, the move (x, y inside the display) for the rest
   event(m) {
     const x = m.x | 0, y = m.y | 0;
     let type, payload;
     switch (m.kind) {
-      case 'move':    type = EV.MOVE;    payload = [x, y, m.buttons | 0]; break;
+      case 'move':
+        if (m.locked && (this.evmask & MASK[EV.REL])) { type = EV.REL; payload = [m.dx | 0, m.dy | 0, m.buttons | 0]; }
+        else { type = EV.MOVE; payload = [x, y, m.buttons | 0]; }
+        break;
       case 'down':    type = EV.DOWN;    payload = [x, y, m.button | 0]; break;
       case 'up':      type = EV.UP;      payload = [x, y, m.button | 0]; break;
       case 'keydown': type = EV.KEYDOWN; payload = [m.code | 0, m.char | 0, m.mods | 0]; break;
@@ -292,8 +298,8 @@ export class GuiDevice {
       case 'wheel':   type = EV.WHEEL;   payload = [x, y, m.dy | 0]; break;
       default: return;
     }
-    if (type <= EV.UP || type === EV.WHEEL) { this.mouseX = x; this.mouseY = y; }
-    if (type === EV.MOVE) this.buttons = m.buttons | 0;
+    if (type <= EV.UP || type === EV.WHEEL || type === EV.REL) { this.mouseX = x; this.mouseY = y; }
+    if (type === EV.MOVE || type === EV.REL) this.buttons = m.buttons | 0;
     if (type === EV.DOWN) this.buttons |= 1 << (m.button | 0);
     if (type === EV.UP) this.buttons &= ~(1 << (m.button | 0));
     if (!this.mbox || !(this.evmask & MASK[type])) return;

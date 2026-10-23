@@ -44,8 +44,14 @@ enum {
 	GUI_CLIP = 12, GUI_NOCLIP = 13, GUI_TEXT2 = 14, GUI_CURSOR = 15, GUI_BLIT8 = 16
 };
 // pointers for gui_cursor: the host's own, so moving it draws nothing
+// GUI_PTR_LOCK: none, and the mouse locked to the display (the browser's
+// Pointer Lock) from the next click on it until Esc: for a game steered by
+// the mouse, which must not leave the display. Locked, a move is the
+// pointer kept inside the display; with GUI_M_REL it is GUI_EV_REL instead,
+// the motion itself, which the display's edges do not stop.
 enum { GUI_PTR_ARROW = 0, GUI_PTR_TEXT = 1, GUI_PTR_RESIZE = 2, GUI_PTR_HAND = 3,
-       GUI_PTR_MOVE = 4, GUI_PTR_WAIT = 5, GUI_PTR_CROSS = 6, GUI_PTR_NONE = 7 };
+       GUI_PTR_MOVE = 4, GUI_PTR_WAIT = 5, GUI_PTR_CROSS = 6, GUI_PTR_NONE = 7,
+       GUI_PTR_LOCK = 8 };
 enum { GUI_MONO = 0, GUI_SANS = 1, GUI_SANS_BOLD = 2 };
 // events: ev[0] is the type, ev[1..3] its payload
 enum {
@@ -56,10 +62,12 @@ enum {
 	GUI_EV_KEYUP = 5,    // keycode, character, modifiers
 	GUI_EV_RESIZE = 6,   // width, height
 	GUI_EV_FOCUS = 7,    // 1 gained, 0 lost
-	GUI_EV_WHEEL = 8     // x, y, direction
+	GUI_EV_WHEEL = 8,    // x, y, direction
+	GUI_EV_REL = 9       // dx, dy, buttons: the mouse locked (GUI_PTR_LOCK, GUI_M_REL)
 };
 // event mask bits for gui_events()
-enum { GUI_M_MOVE = 1, GUI_M_BUTTONS = 2, GUI_M_KEYS = 4, GUI_M_WINDOW = 8, GUI_M_WHEEL = 16 };
+enum { GUI_M_MOVE = 1, GUI_M_BUTTONS = 2, GUI_M_KEYS = 4, GUI_M_WINDOW = 8, GUI_M_WHEEL = 16,
+       GUI_M_REL = 32 };
 
 // how gui_irq raises HARD_IRQ(3), and the functions (gui.c)
 enum { HIRQ_GUI = 3 };

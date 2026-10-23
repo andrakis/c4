@@ -20,6 +20,8 @@
 //   ?shared=0                    use the message display path even when the page
 //                                is cross-origin isolated (serve.mjs --isolate)
 //
+// The Configuration button shows them all as a form (CONFIG below).
+//
 // The running machine is window.c4m (page.js's C4M), so the console or a
 // test can drive it: c4m.write('ps\n'), c4m.status, await c4m.peek(a, n).
 
@@ -104,6 +106,113 @@ const opts = {
   persist: params.get('persist') === '0' ? null : sys.persist || null,
   persistReset: params.get('persist') === 'reset',
 };
+// Configuration: the URL's parameters (above) as a form. OK writes the ones
+// that differ from their defaults into the URL, keeps any it does not know,
+// and so boots the machine again with them. A text box takes any value and
+// suggests the usual ones.
+const CONFIG = [
+  { key: 'system', label: 'System', kind: 'select', def: 'c4ix',
+    options: Object.entries(SYSTEMS).map(([k, s]) => [k, s.label]) },
+  { key: 'mhz', label: 'Speed (MHz)', kind: 'text', options: ['20', '50', '100', '200', '400', '800'],
+    help: `paced to this clock; empty is the system's own (${sys.mhz || 100})` },
+  { key: 'cpus', label: 'Processors', kind: 'text', options: ['1', '2', '4', '8'],
+    help: 'empty or 1 is one; more are simulated, taking turns' },
+  { key: 'parallel', label: 'A thread each', kind: 'flag',
+    help: 'several processors at once, each on a worker (needs the page cross-origin isolated)' },
+  { key: 'mem', label: 'Memory (MB)', kind: 'text', options: ['32', '64', '128', '256'],
+    help: 'the arena; empty is 64' },
+  { key: 'snd', label: 'Sound card', kind: 'onoff', def: true },
+  { key: 'fpu', label: 'FPU', kind: 'onoff', def: true, help: 'off: floats in software' },
+  { key: 'realtime', label: 'Keep the wall clock', kind: 'onoff', def: true,
+    help: 'off: when the host cannot keep up, the machine slows down instead of dropping frames' },
+  { key: 'fast', label: 'Unpaced', kind: 'flag', help: 'as fast as the host can, whatever the MHz' },
+  { key: 'shared', label: 'Shared display path', kind: 'onoff', def: true,
+    help: 'off: the message path even when the page is cross-origin isolated' },
+  { key: 'persist', label: "C4IX's files", kind: 'select', def: '',
+    options: [['', 'kept between visits'], ['0', 'not kept'], ['reset', 'forgotten, then kept']] },
+  { key: 'image', label: 'Image URL', kind: 'text', options: [], help: 'any other image instead of the system' },
+  { key: 'disk', label: 'Disk URL', kind: 'text', options: [], help: 'its disk (a directory with an index.json)' },
+];
+
+const cfgDialog = $('config');
+const cfgFields = $('config-fields');
+const cfgInputs = {};
+for (const c of CONFIG) {
+  const id = `cfg-${c.key}`;
+  const label = document.createElement('label');
+  label.htmlFor = id;
+  label.textContent = c.label;
+  let input;
+  if (c.kind === 'select') {
+    input = document.createElement('select');
+    for (const [v, t] of c.options) input.add(new Option(t, v));
+  } else if (c.kind === 'flag' || c.kind === 'onoff') {
+    input = document.createElement('input');
+    input.type = 'checkbox';
+  } else {
+    input = document.createElement('input');
+    input.type = 'text';
+    input.autocomplete = 'off';
+    input.spellcheck = false;
+    if (c.options.length) {
+      const list = document.createElement('datalist');
+      list.id = `${id}-list`;
+      for (const v of c.options) list.append(new Option(v));
+      cfgFields.append(list);
+      input.setAttribute('list', list.id);
+    }
+  }
+  input.id = id;
+  cfgInputs[c.key] = input;
+  cfgFields.append(label, input);
+  if (c.help) {
+    const help = document.createElement('div');
+    help.className = 'help';
+    help.textContent = c.help;
+    cfgFields.append(help);
+  }
+}
+
+// the form from a URL's parameters
+function cfgLoad(p) {
+  for (const c of CONFIG) {
+    const input = cfgInputs[c.key];
+    if (c.kind === 'flag') input.checked = p.has(c.key);
+    else if (c.kind === 'onoff') input.checked = p.get(c.key) !== '0';
+    else if (c.kind === 'select') input.value = p.get(c.key) ?? c.def;
+    else input.value = p.get(c.key) ?? '';
+  }
+  if (p.get('image')) cfgInputs.system.value = which;
+}
+
+// the URL's parameters from the form: the defaults left out, others kept
+function cfgParams() {
+  const p = new URLSearchParams(location.search);
+  for (const c of CONFIG) {
+    const input = cfgInputs[c.key];
+    p.delete(c.key);
+    if (c.kind === 'flag') { if (input.checked) p.set(c.key, ''); }
+    else if (c.kind === 'onoff') { if (!input.checked) p.set(c.key, '0'); }
+    else if (c.kind === 'select') { if (input.value !== c.def) p.set(c.key, input.value); }
+    else if (input.value.trim() !== '') p.set(c.key, input.value.trim());
+  }
+  // a flag is there or not: ?fast, not ?fast=
+  return p.toString().replace(/=(&|$)/g, '$1');
+}
+
+$('configure').addEventListener('click', () => {
+  cfgLoad(new URLSearchParams(location.search));
+  cfgDialog.showModal();
+});
+$('config-cancel').addEventListener('click', () => cfgDialog.close());
+$('config-defaults').addEventListener('click', () => cfgLoad(new URLSearchParams()));
+$('config-form').addEventListener('submit', e => {
+  e.preventDefault();
+  const q = cfgParams();
+  cfgDialog.close();
+  if (q !== location.search.replace(/^\?/, '')) location.search = q;
+});
+
 const vm = new C4M(opts);
 window.c4m = vm;
 

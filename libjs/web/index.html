@@ -17,6 +17,7 @@
   <button id="ctrlc" title="send Ctrl-C (SIGINT)">Ctrl-C</button>
   <button id="resetfiles" style="display: none"
           title="forget every change kept to C4IX's files, and boot again from the disk as it ships">Reset Files</button>
+  <button id="configure" title="the machine's settings: they are the page's URL, and take effect on OK">Configuration</button>
   <span id="status">loading&hellip;</span>
 </header>
 <main id="panes">
@@ -36,6 +37,19 @@
     <div id="display-wrap"><canvas id="display" width="640" height="480"></canvas></div>
   </section>
 </main>
+<dialog id="config">
+  <form method="dialog" id="config-form">
+    <h2>Configuration</h2>
+    <p class="dim">The machine's settings, which are the page's URL. OK boots it again with them.</p>
+    <div id="config-fields"></div>
+    <div class="config-buttons">
+      <button type="button" id="config-defaults" title="every setting back to its default">Defaults</button>
+      <span class="grow"></span>
+      <button type="button" id="config-cancel">Cancel</button>
+      <button type="submit" id="config-ok" class="primary">OK</button>
+    </div>
+  </form>
+</dialog>
 <script type="module" src="app.js"></script>
 </body>
 </html>

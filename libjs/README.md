@@ -59,7 +59,7 @@ always has the sound card; a browser lets it play only after the first key
 or click.
 `LIBJS_PORT=NNNN` moves it.
 
-URL parameters (from `web/app.js`):
+URL parameters (from `web/app.js`). The page's Configuration button shows them as a form, and OK reloads the page with the ones changed:
 
 | Parameter | Meaning |
 |---|---|

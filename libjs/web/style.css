@@ -96,3 +96,34 @@ body {
   #splitter { display: none; }
   #status { margin-left: 0; width: 100%; }
 }
+
+/* Configuration: the URL's parameters as a form (app.js, CONFIG) */
+#config {
+  background: var(--panel); color: var(--text); border: 1px solid var(--edge);
+  border-radius: 8px; padding: 16px 20px; width: min(560px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px); overflow: auto;
+}
+#config::backdrop { background: rgba(6, 5, 18, 0.7); }
+#config h2 { margin: 0 0 4px; color: var(--pink); font-size: 15px; }
+#config p { margin: 0 0 12px; }
+#config-fields { display: grid; grid-template-columns: max-content 1fr; gap: 8px 12px; align-items: center; }
+#config-fields label { color: var(--text); }
+#config-fields .help { grid-column: 2; color: var(--dim); font-size: 12px; margin-top: -4px; }
+#config input[type=text], #config select {
+  background: var(--chip); color: var(--text); border: 1px solid var(--edge);
+  border-radius: 4px; padding: 4px 8px; font: inherit; width: 100%;
+}
+#config input[type=checkbox] { justify-self: start; accent-color: var(--pink); }
+#config input:focus, #config select:focus { outline: none; border-color: var(--cyan); }
+.config-buttons { display: flex; gap: 8px; margin-top: 16px; }
+.config-buttons .grow { flex: 1; }
+#config button {
+  background: var(--chip); color: var(--text); border: 1px solid var(--edge);
+  border-radius: 4px; padding: 4px 12px; font: inherit; cursor: pointer;
+}
+#config button:hover { border-color: var(--cyan); color: var(--cyan); }
+#config button.primary { border-color: var(--pink); color: var(--pink); }
+@media (max-width: 480px) {
+  #config-fields { grid-template-columns: 1fr; }
+  #config-fields .help { grid-column: 1; }
+}

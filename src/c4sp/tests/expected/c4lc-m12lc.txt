@@ -1,0 +1,13 @@
+for 346 100
+init 3 6 / 3 6 / 7 8
+assign 5 10
+member 12 10
+arg 4 8
+twice 8 16
+fib 55 110
+box 4 8 5 10, lo 4 8
+reader e 5 0 / 0 1
+arr 6
+loop 20
+convert 440 4 40
+sizeof 5

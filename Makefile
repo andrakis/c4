@@ -1100,7 +1100,7 @@ C4SC_BACK_DIFF := c4_jailbreak factorial hello multifun puts reverse \
                   test_malloc test-order test-ptrs test_static test_switch \
                   tests c4lc_l2 global test_gcscan test-oisc test_printf \
                   c4lc_m4 c4lc_m4q c4lc_m4v c4lc_m7 c4lc_ll c4lc_m9 c4lc_m9lc \
-                  c4lc_m10 c4lc_m10lc c4lc_m11lc
+                  c4lc_m10 c4lc_m10lc c4lc_m11lc c4lc_m12lc
 test-c4sc-back: c4sc-host c4sp $(C4RLINK) $(C4M)
 	@fail=0; for b in $(C4SC_BACK_DIFF); do \
 	   f=$(TESTS)/$$b.c; \
@@ -2343,7 +2343,7 @@ c4bb-32bit: c4cc32 c4m32 c4sp32 c4rlink32
 # target builds what it uses.
 # ./cpp is a hard prerequisite now, not just for C4DOS: the shared
 # disk's c4m.c4r goes through it (build-images.sh).
-c4bb-images: c4bb-32bit $(C4LC_LISP) c4th32.c4r cpp wolf3d-objs wolf3d-bare-objs doom-objs
+c4bb-images: c4bb-32bit $(C4LC_LISP) c4th32.c4r cpp wolf3d-objs wolf3d-bare-objs doom-objs tyrian-objs
 	bash src/c4bb/tests/build-images.sh
 
 # WOLFENSTEIN 3D (src/wolf3d, docs/c4ix-wolf3d.md): Wolf4SDL in c4lc's C,
@@ -2402,7 +2402,7 @@ DOOM_HDRS  := $(wildcard $(DOOM)/*.h $(DOOM)/c4inc/*.h) \
               $(wildcard src/c4ix/libc/include/*.h src/c4ix/libc/include/sys/*.h) \
               src/c4ix/include/display.h libjs/guest/gui.h libjs/guest/gui.c \
               libjs/guest/snd.h libjs/guest/snd.c
-DOOM_CC    := ./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O -mfuse -fno-builtin -c \
+DOOM_CC    := ./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O -mfuse -fno-builtin -c -conforming \
               -D C4DOOM -D FEATURE_SOUND -I $(DOOM)/c4inc -I src/c4ix/libc/include \
               -I src/c4ix/include -I libjs/guest -I $(DOOM)
 doom-objs: $(DOOM_UNITS:%=.doom/%.c4o) .doom/plat/dg-c4ix.c4o .doom/plat/dg-bare.c4o
@@ -2421,6 +2421,39 @@ DOOM_HOST_SRCS := $(filter-out $(DOOM)/dg-gui.c $(DOOM)/dg-snd.c $(DOOM)/dg-c4ix
                   $(wildcard $(DOOM)/*.c))
 doom-host: $(DOOM_HOST_SRCS) $(wildcard $(DOOM)/*.h)
 	gcc -m32 -O2 -std=gnu99 -w -DC4DOOM -DNORMALUNIX -DLINUX -D_DEFAULT_SOURCE -I$(DOOM) -o $@ $(DOOM_HOST_SRCS) -lm
+
+# OpenTyrian (src/opentyrian/README.md): its units with c4lc, the same
+# objects for C4IX, the bare machine and C4DOS but for the platform's
+# (tyr-c4ix.c, tyr-bare.c, in .tyrian/plat), linked by build-images.sh as
+# Doom's are. video-c4.c and loudness-c4.c stand in for upstream's
+# video*.c, loudness.c and opl.c, which are not built. The game's data is
+# not in the repository (src/opentyrian/data/README.md).
+TYR        := src/opentyrian
+TYR_PLAT   := tyr-host tyr-c4ix tyr-bare
+TYR_SKIP   := video video_scale video_scale_hqNx loudness opl
+TYR_UNITS  := $(filter-out $(TYR_PLAT) $(TYR_SKIP),$(patsubst $(TYR)/%.c,%,$(wildcard $(TYR)/*.c)))
+TYR_HDRS   := $(wildcard $(TYR)/*.h $(TYR)/c4/*.h) \
+              $(wildcard src/c4ix/libc/include/*.h src/c4ix/libc/include/sys/*.h) \
+              src/c4ix/include/display.h libjs/guest/gui.h libjs/guest/gui.c \
+              libjs/guest/snd.h libjs/guest/snd.c
+TYR_CC     := ./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O -mfuse -fno-builtin -c -conforming \
+              -D C4TYR -I $(TYR)/c4 -I src/c4ix/libc/include -I src/c4ix/include \
+              -I libjs/guest -I $(TYR)
+tyrian-objs: $(TYR_UNITS:%=.tyrian/%.c4o) .tyrian/plat/tyr-c4ix.c4o .tyrian/plat/tyr-bare.c4o
+.tyrian/%.c4o: $(TYR)/%.c $(TYR_HDRS) $(C4LC_LISP) | c4sp32
+	@mkdir -p .tyrian/plat
+	$(TYR_CC) $< $@ > /dev/null
+.tyrian/plat/%.c4o: $(TYR)/%.c $(TYR_HDRS) $(C4LC_LISP) | c4sp32
+	@mkdir -p .tyrian/plat
+	$(TYR_CC) $< $@ > /dev/null
+PHONY += tyrian-objs
+
+# ... and by gcc for the host, with no display and no sound (tyr-host.c),
+# the reference test-tyrian holds the c4lc build to; 32-bit, as that is
+TYR_HOST_SRCS := $(filter-out $(TYR_SKIP:%=$(TYR)/%.c) $(TYR)/tyr-c4ix.c $(TYR)/tyr-bare.c, \
+                 $(wildcard $(TYR)/*.c))
+tyrian-host: $(TYR_HOST_SRCS) $(TYR_HDRS)
+	gcc -m32 -O2 -std=gnu99 -w -Wno-error=implicit-function-declaration -DC4TYR -I$(TYR)/c4 -I$(TYR) -Ilibjs/guest -o $@ $(TYR_HOST_SRCS) -lm
 
 # test-libc-bare: libc's scanf, fseek and fread (src/c4ix/libc/tests/
 # scantest.c) on the bare machine, against gcc's build of the same.
@@ -2459,6 +2492,32 @@ test-doom: doom-host c4bb-images test-libc-bare
 	@rm -rf .doom_t
 	@echo "test-doom: OK"
 PHONY += test-doom
+
+# test-tyrian: OpenTyrian's demo 4 (--timedemo, tyrian-sum.c: every frame
+# shown and its palette, on a virtual clock), built by gcc and by c4lc --
+# on the bare machine, under C4DOS and inside C4IX -- must show the same
+# frames. -x: not the Christmas edition, which the date would choose.
+# Only where Tyrian's data is (src/opentyrian/data/README.md); skipped,
+# and saying so, where it is not.
+TYR_DEMO := 4
+test-tyrian: tyrian-host c4bb-images
+	@if [ ! -f src/c4bb/images/games/tyrian/data/tyrian1.lvl ]; then \
+	   echo "test-tyrian: skipped, no Tyrian data (src/opentyrian/data/README.md)"; exit 0; fi; \
+	 rm -rf .tyr_t && mkdir -p .tyr_t && \
+	 ./tyrian-host -t src/c4bb/images/games/tyrian/data --timedemo $(TYR_DEMO) -s -x -j 2>/dev/null \
+	   | grep '^timedemo' > .tyr_t/host.txt && cat .tyr_t/host.txt && \
+	 ( cd src/c4bb/images/games && { timeout 2400 node ../../../../libjs/cli.js -m 64 -d . tyrian.c4r --timedemo $(TYR_DEMO) -s -x -j \
+	     > ../../../../.tyr_t/bare.out 2>/dev/null & \
+	   printf 'tyrian --timedemo $(TYR_DEMO) -s -x -j\nver\n' | timeout 2400 node ../../../../libjs/cli.js -m 64 -d . ../c4dos32.c4r \
+	     > ../../../../.tyr_t/dos.out 2>/dev/null; wait; } ) && \
+	 printf 'tyrian --timedemo $(TYR_DEMO) -s -x -j\nexit\n' | timeout 2400 node libjs/cli.js -m 64 -d src/c4bb/images/disk src/c4bb/images/c4ix32.c4r \
+	   2>/dev/null > .tyr_t/c4ix.out && \
+	 for w in bare dos c4ix; do grep '^timedemo' .tyr_t/$$w.out | cmp -s .tyr_t/host.txt - \
+	   || { echo "test-tyrian: $$w's frames differ:"; tail -5 .tyr_t/$$w.out; exit 1; }; done && \
+	 { grep -A1 '^timedemo' .tyr_t/dos.out | grep -q '^A>C4DOS version' \
+	   || { echo "test-tyrian: C4DOS did not come back to its prompt:"; tail -5 .tyr_t/dos.out; exit 1; }; } && \
+	 rm -rf .tyr_t && echo "test-tyrian: OK"
+PHONY += test-tyrian
 
 # The same game built by gcc for the host, with no window: the reference
 # the C4IX build is held to (test-wolf3d).
@@ -3420,7 +3479,7 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	# addresses plus offsets in constants (c4lc_m10.c, c4fc too); &a[k]
 	# set at start-up and floating point folded (c4lc_m10lc.c, c4lc
 	# only). gcc's goldens, the same at both sizes.
-	@for t in m9 m9lc m10 m10lc m11lc; do for fl in "" "-O" "-minline"; do \
+	@for t in m9 m9lc m10 m10lc m11lc m12lc; do for fl in "" "-O" "-minline"; do \
 	   ./c4sp src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_$$t.c .c4lc_b.c4r > /dev/null || exit 1; \
 	   ./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-$$t.txt || exit 1; \
 	   ./c4sp32 src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_$$t.c .c4lc_b.c4r > /dev/null || exit 1; \

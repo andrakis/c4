@@ -13,6 +13,8 @@
 // comment in sys.c). ilink(path) entries are resolved the same way:
 // after every real file has loaded, read the target back through the
 // VFS (now populated) and write a second copy under the alias name.
+// C4IX only: a directory line can say hostdir(PREFIX), and holds every
+// host file the sizes table lists under that prefix (load_hostdirs).
 //
 // Run once at boot by init.c before the shell starts.
 
@@ -407,6 +409,17 @@ void handle_each(char *keyExpr, char *valuePattern, int indent, char *pathPrefix
     }
 }
 
+// hostdir(PREFIX) as a directory line's value: every host file the
+// sizes table lists as PREFIX + NAME, NAME with no '/' in it, is the lazy
+// file NAME in that directory (load_hostdirs). A game's data that cannot
+// be shipped goes on the disk only where it is there to copy, so the
+// manifest cannot name its files -- and OpenTyrian's newsh#.shp and
+// shapes).dat could not be written in it anyway.
+enum { MAX_HOSTDIRS = 8 };
+char *g_hostdir_path[MAX_HOSTDIRS];
+char *g_hostdir_prefix[MAX_HOSTDIRS];
+int g_nhostdirs;
+
 void process_line(char *pathPrefix) {
     char *line, *rawKey, *rawVal, *key, *value;
     int indent, c;
@@ -430,6 +443,11 @@ void process_line(char *pathPrefix) {
         // root always exists; every other directory is created right
         // as it's encountered, so its parent is always already there
         if (ustrcmp(path, "/")) umkdir(path);
+        if (starts_with(rawVal, "hostdir(") && ends_with(rawVal, ")") && g_nhostdirs < MAX_HOSTDIRS) {
+            g_hostdir_path[g_nhostdirs] = path;
+            g_hostdir_prefix[g_nhostdirs] = str_dup_n(rawVal + 8, ustrlen(rawVal) - 9);
+            ++g_nhostdirs;
+        }
         parse_block(indent, path);
         return;
     }
@@ -501,6 +519,40 @@ char *host_of(char *path) {
         ++i;
     }
     return 0;
+}
+
+int has_slash(char *s) {
+    while (*s) { if (*s == '/') return 1; ++s; }
+    return 0;
+}
+
+// the hostdir(PREFIX) directories' files; how many were made
+int load_hostdirs() {
+    int h, i, j, n, v, ok;
+    char *pfx, *host;
+
+    ok = 0;
+    if (!g_sizes) return 0;
+    h = 0;
+    while (h < g_nhostdirs) {
+        pfx = g_hostdir_prefix[h];
+        n = ustrlen(pfx);
+        i = 0;
+        while (i < g_sizes_len) {
+            v = 0;
+            while (i < g_sizes_len && g_sizes[i] >= '0' && g_sizes[i] <= '9') { v = v * 10 + (g_sizes[i] - '0'); ++i; }
+            if (i < g_sizes_len && g_sizes[i] == ' ') ++i;
+            j = i;
+            while (j < g_sizes_len && g_sizes[j] != 10) ++j;
+            if (j - i > n && !memcmp(g_sizes + i, pfx, n)) {
+                host = str_dup_n(g_sizes + i, j - i);
+                if (!has_slash(host + n) && ulazyfile(str_cat(g_hostdir_path[h], host + n), host, v) == 0) ++ok;
+            }
+            i = j + 1;
+        }
+        ++h;
+    }
+    return ok;
 }
 
 int load_entries() {
@@ -645,6 +697,7 @@ int main(int argc, char **argv) {
 
     ok = load_entries();
     uprintf("vfsload: %d/%d entries loaded from %s\n", ok, g_nentries, manifestName);
+    if (g_nhostdirs) uprintf("vfsload: %d more left on the host in hostdir() directories\n", load_hostdirs());
     unpack_archives();
     return 0;
 }

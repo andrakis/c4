@@ -560,9 +560,14 @@
 ;; TYPE as declared (an array's is its element's plus a pointer level)
 ;; and SIZE its elements, or nil for a scalar
 (define p:gvars nil)
+;; ... and the current function's locals, in the same form (M12): a local
+;; array's size is as constant as a global's, `menuParents[sizeof(menus) /
+;; sizeof *(menus)]`
+(define p:lvars (list))
 (define p:gvar (lambda (n what)
 	(begin
-		(define g (if (p:member? n p:locals) false (p:assoc n p:gvars)))
+		(define lv (p:assoc n p:lvars))
+		(define g (if lv lv (if (p:member? n p:locals) false (p:assoc n p:gvars))))
 		(if g g (p:die (+ what (+ ": sizeof of " (+ n " is not a constant here"))))))))
 ;; the size of what expression e names, without evaluating it
 (define p:csizeofx (lambda (e what)
@@ -878,8 +883,12 @@
 				(define fp (if (p:fnptr?) (p:fnptrdecl) false))
 				(define ty (if fp p:INT ty0))
 				(define cq (if fp 0 p:sq))
+				;; (T[N]){ ... }: a compound literal of an array type
+				(define asz (if fp nil (p:arraysize)))
 				(p:expect 'Rparen "closing paren of cast")
-				(p:qnode (list 'cast ty (p:expr 21)) cq))
+				(if (if (= asz nil) (= (p:kind) 'Lbrace) true)
+					(p:cmpdlit ty asz)
+				(p:qnode (list 'cast ty (p:expr 21)) cq)))
 		(begin
 			(define e1 (p:expr 1))
 			(define es (p:commalist (list e1)))
@@ -891,6 +900,32 @@
 			(p:advance)
 			(next p:commalist (p:cons (p:expr 1) acc)))
 	(p:reverse acc))))
+
+;; ---- compound literals (M12) ----
+;;
+;; (T){ ... } and (T[N]){ ... }: an object of type T made where the
+;; expression is. It is a hidden local of the function, $clN, declared
+;; with the others; the expression initializes it from its brace list each
+;; time it is reached (g:cmpd), and its value is the local's -- a struct's
+;; or an array's address, as a named one's would be. A function that makes
+;; one is never inlined (attribute 128): the inliner renames the names it
+;; knows, and this is one it does not. OpenTyrian writes seven, five of
+;; them as `return (MemReader){ data, size, false };`.
+(define p:hiddens (list))
+(define p:ncl 0)
+(define p:infn false)
+(define p:cmpdlit (lambda (ty asz)
+	(begin
+		(if p:infn nil (p:die "a compound literal outside a function is not supported"))
+		(if (= (p:kind) 'Lbrace) nil (p:die "a brace list after the type of a compound literal"))
+		(define n (+ "$cl" (+ "" p:ncl)))
+		(set! p:ncl (+ p:ncl 1))
+		(define elem (if (= asz nil) ty (p:elemty ty)))
+		(define ty2 (if (= asz nil) ty (+ elem p:PTR)))
+		(define init (p:linit))
+		(define fsize (p:initsize asz elem init "compound literal"))
+		(set! p:hiddens (p:cons (list 'local ty2 n fsize nil) p:hiddens))
+		(list 'cmpd n ty2 fsize init))))
 
 ;; A full expression, the comma operator and all: what a statement, a
 ;; for clause, a condition and a return value are. Inside parentheses
@@ -1126,8 +1161,19 @@
 	(begin
 		(p:advance)
 		(p:expect 'Lparen "open paren after for")
-		(define i (if (= (p:kind) 'Semi) nil (p:fullexpr)))
-		(p:expect 'Semi "semicolon after for initializer")
+		;; for (int i = 0; ...) (M12): C99's declaration, scoped to the
+		;; loop -- a block around it, holding the declaration and a for
+		;; with no initializer. Its ';' is the declaration's own.
+		(if (p:declstart?)
+			(begin
+				(define d (p:cons 'declstmt (p:localline)))
+				(list 'block d (p:forstmt/2 nil)))
+		(begin
+			(define i (if (= (p:kind) 'Semi) nil (p:fullexpr)))
+			(p:expect 'Semi "semicolon after for initializer")
+			(p:forstmt/2 i))))))
+(define p:forstmt/2 (lambda (i)
+	(begin
 		(define c (if (= (p:kind) 'Semi) nil (p:fullexpr)))
 		(p:expect 'Semi "semicolon after for condition")
 		(define s (if (= (p:kind) 'Rparen) nil (p:fullexpr)))
@@ -1556,6 +1602,9 @@
 		(if (= (head d) 'global) nil (p:die "a static local must be a variable"))
 		(define n (index d 2))
 		(define m (+ (+ p:curfn ".") n))
+		;; its size for sizeof in a constant, under the name it now has (M12)
+		(define ge (p:assoc n p:gvars))
+		(if ge (set! p:gvars (p:cons (list m (p:second ge) (p:third ge)) p:gvars)) nil)
 		(if (if (empty? p:dyninits) false (= (head (head p:dyninits)) n))
 			(set! p:dyninits (p:cons (list m (p:second (head p:dyninits)) (index (head p:dyninits) 2)) (tail p:dyninits)))
 			nil)
@@ -1611,9 +1660,20 @@
 		(begin (p:advance) (p:reverse acc))
 	(begin
 		(define ty0 (p:stars bt bq))
+		(p:unparen)
 		(if (if (= (p:kind) 'Id) (= (head (head (tail p:toks))) 'Lparen) false)
 			(next p:localproto ty0 bt bq acc)
 			(next p:localline/3 ty0 bt bq acc))))))
+;; `T (name)`: a declarator's name in parentheses, as a macro writes its
+;; parameter (M12; OpenTyrian's foreach_option_i_value declares
+;; `unsigned int (i)` and `const char *(string_value)`). The parentheses
+;; go, and the name is read as usual.
+(define p:unparen (lambda ()
+	(if (if (= (p:kind) 'Lparen)
+			(if (= (head (head (tail p:toks))) 'Id) (= (head (head (tail (tail p:toks)))) 'Rparen) false)
+			false)
+		(set! p:toks (p:cons (head (tail p:toks)) (tail (tail (tail p:toks)))))
+		nil)))
 ;; a prototype among the locals, `T name(params);`: queued as
 ;; p:blockexterns queues one
 (define p:localproto (lambda (ty bt bq acc)
@@ -1651,9 +1711,9 @@
 					(if (= size nil)
 						(list 'einit (p:expr 1))
 					(p:init)))))
-			nil))
-		(define fsize (p:initsize size elem init "local"))
+			nil))		(define fsize (p:initsize size elem init "local"))
 		(set! p:locals (p:cons n p:locals))
+		(set! p:lvars (p:cons (list n ty2 fsize) p:lvars))
 		(if (= (p:kind) 'Comma) (p:advance) nil)
 		(next p:localline/2 bt bq
 			(p:cons (p:qnode (list 'local ty2 n fsize init) q2) acc)))))
@@ -1744,17 +1804,26 @@
 				(if (if (= rq 0) (p:allzero? pq) false) pn
 					(+ pn (list rq pq))))
 			(begin
-				(p:expect 'Lbrace "function body")
-				(set! p:locals (p:paramnames ps (list)))
+				(p:expect 'Lbrace "function body")				(set! p:locals (p:paramnames ps (list)))
+				(set! p:lvars (list))
 				(set! p:curfn n)
 				(set! p:srenames (list))
+				(set! p:hiddens (list))
+				(set! p:infn true)
 				(define tds p:typedefs)
 				(define ls (p:localdecls (list)))
 				(define body (p:block/2 (list)))
+				(set! p:infn false)
 				(set! p:typedefs tds)
 				(set! p:srenames (list))
 				(set! p:locals (list))
-			(p:qnode (list 'func ty n ps va a2 ls body) rq))))))
+				(set! p:lvars (list))
+				;; compound literals' hidden locals go with the others, and
+				;; keep the function from the inliner (attribute 128)
+				(define ls2 (if (empty? p:hiddens) ls (+ ls (p:reverse p:hiddens))))
+				(define a3 (if (empty? p:hiddens) a2 (bit:or a2 128)))
+				(set! p:hiddens (list))
+			(p:qnode (list 'func ty n ps va a3 ls2 body) rq))))))
 (define p:ptypes (lambda (ps acc)
 	(if (empty? ps) (p:reverse acc)
 	(next p:ptypes (tail ps) (p:cons (head (head ps)) acc)))))

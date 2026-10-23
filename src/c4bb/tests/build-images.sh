@@ -449,6 +449,19 @@ if ls .doom/*.c4o > /dev/null 2>&1 && [ -f $PB/lib/libc.c4s ]; then
     cp src/doom/data/doom1.wad $DISK/doom1.wad
 fi
 
+# OpenTyrian (src/opentyrian): make tyrian-objs compiled it, linked the
+# same way. Tyrian 2.1's data may not be passed on, so it is not in the
+# repository: where its zip is (src/opentyrian/data/README.md), the files
+# the game reads go in the disk's tyrian/, which C4IX shows as
+# /usr/games/tyrian/data (c4ix.vfs.txt, hostdir); where it is not, the
+# game says so when it starts.
+TYRIAN_ZIP=${TYRIAN_ZIP:-src/opentyrian/data/tyrian21.zip}
+rm -rf $DISK/tyrian
+if ls .tyrian/*.c4o > /dev/null 2>&1 && [ -f $PB/lib/libc.c4s ]; then
+    ./c4rlink32 .tyrian/*.c4o .tyrian/plat/tyr-c4ix.c4o -l $PB/lib/libc.c4s -o $DISK/c4ix-tyrian.c4r > /dev/null
+    if [ -f "$TYRIAN_ZIP" ]; then python3 -I src/opentyrian/tools/tyrdata.py "$TYRIAN_ZIP" $DISK/tyrian > /dev/null; fi
+fi
+
 # ... and with no C4IX under them: the bare machine, and C4DOS (libc's
 # bare.c; make wolf3d-bare-objs). The same game objects, but for the C4IX
 # platform's (plat-bare.c, dg-bare.c), linked whole with libc. Their disk,
@@ -466,6 +479,11 @@ if ls .wolf3d-bare/*.c4o > /dev/null 2>&1 && ls .wolf3d/*.c4o > /dev/null 2>&1; 
         ./c4rlink32 .doom/*.c4o .doom/plat/dg-bare.c4o .wolf3d-bare/libc-*.c4o -o $WOLFDISK/doom.c4r > /dev/null
         cp src/doom/data/doom1.wad $WOLFDISK/
     fi
+    # OpenTyrian, its data in tyrian/data where there is any (above)
+    if ls .tyrian/*.c4o > /dev/null 2>&1; then
+        ./c4rlink32 .tyrian/*.c4o .tyrian/plat/tyr-bare.c4o .wolf3d-bare/libc-*.c4o -o $WOLFDISK/tyrian.c4r > /dev/null
+        if [ -f "$TYRIAN_ZIP" ]; then python3 -I src/opentyrian/tools/tyrdata.py "$TYRIAN_ZIP" $WOLFDISK/tyrian/data > /dev/null; fi
+    fi
     cp src/wolf3d/data/1wolf14.zip $WOLFDISK/
     python3 -I -c "import zipfile, sys; zipfile.ZipFile(sys.argv[1]).extract('W3DSW14.SHR', sys.argv[2])" \
         src/wolf3d/data/1wolf14.zip $WOLFDISK
@@ -473,7 +491,7 @@ if ls .wolf3d-bare/*.c4o > /dev/null 2>&1 && ls .wolf3d/*.c4o > /dev/null 2>&1; 
     .wolf3d-bare/unshr $WOLFDISK/W3DSW14.SHR $WOLFDISK > /dev/null
     rm -f $WOLFDISK/W3DSW14.SHR $WOLFDISK/*.exe
     cp $DISK/config.sys $WOLFDISK/config.sys
-    printf '@ECHO OFF\nECHO Welcome to C4DOS\nVER\nECHO Wolfenstein 3D and Doom are on this disk: type WOLF3D or DOOM to play.\n' > $WOLFDISK/autoexec.bat
+    printf '@ECHO OFF\nECHO Welcome to C4DOS\nVER\nECHO Wolfenstein 3D, Doom and Tyrian are on this disk: type WOLF3D, DOOM or TYRIAN to play.\n' > $WOLFDISK/autoexec.bat
     (cd $WOLFDISK && ls -p | grep -v '/$' | grep -v '^manifest.json$' > c4dos.dir)
     (cd $WOLFDISK && find . -type f -not -name manifest.json | sed 's|^\./||') | \
         awk 'BEGIN{printf "["} NR>1{printf ","} {printf "\"%s\"", $0} END{print "]"}' > $WOLFDISK/manifest.json
@@ -667,7 +685,7 @@ rm -rf $ROOT
 mkdir -p $ROOT/usr/lib $ROOT/usr/include
 if git rev-parse --git-dir > /dev/null 2>&1; then
     git ls-files -- src docs include libjs README.md LICENSE Makefile BUILD.B4K INSTALL.B4K c4.c c4m.c c4m_float.c c4l.c load-c4r.c |
-        grep -v '^src/c4bb/images/\|^src/c4or1k/images/\|^src/wolf3d/\|^src/doom/' |
+        grep -v '^src/c4bb/images/\|^src/c4or1k/images/\|^src/wolf3d/\|^src/doom/\|^src/opentyrian/' |
         while read -r f; do
             [ -f "$f" ] && grep -Iq . "$f" 2>/dev/null || continue
             mkdir -p "$ROOT/usr/$(dirname "$f")"

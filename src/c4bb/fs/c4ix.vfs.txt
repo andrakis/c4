@@ -80,12 +80,21 @@ ARCHIVES = c4ix-root.tgz
 			doom/:
 				doom.c4r: c4ix-doom.c4r
 				doom1.wad
+			# OpenTyrian (src/opentyrian): the game, and Tyrian 2.1's
+			# data -- which may not be passed on, so it is on the disk
+			# only where build-images.sh found it to copy: whatever is
+			# in the disk's tyrian/, lazy (hostdir, vfsload.c)
+			tyrian/:
+				tyrian.c4r: c4ix-tyrian.c4r
+				data/: hostdir(tyrian/)
 	# and by name, as the programs in /bin are
 	wolf3d: ilink(/usr/games/wolf3d/wolf3d.c4r)
 	doom: ilink(/usr/games/doom/doom.c4r)
+	tyrian: ilink(/usr/games/tyrian/tyrian.c4r)
 	# sync is persist save (src/c4ix/user/persist.c)
 	sync: ilink(/bin/persist)
 	bin/:
 		wolf3d: ilink(/usr/games/wolf3d/wolf3d.c4r)
 		doom: ilink(/usr/games/doom/doom.c4r)
+		tyrian: ilink(/usr/games/tyrian/tyrian.c4r)
 		sync: ilink(/bin/persist)

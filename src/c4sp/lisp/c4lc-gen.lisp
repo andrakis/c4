@@ -666,7 +666,7 @@
 (define g:addr (lambda (e)
 	(begin
 		(define h (head e))
-		(if (= h 'var) (g:varaddr (g:second e))
+		(if (if (= h 'var) true (= h 'cmpd)) (if (= h 'var) (g:varaddr (g:second e)) (g:cmpdaddr e))
 		(if (= h 'deref)
 			(begin
 				(g:expr (g:second e))
@@ -835,6 +835,70 @@
 			g:llsyms))
 		(head g:llsyms))))
 ;; a two-word temporary: the LEA offset of its low word
+;; a function's value that comes back through its caller's pointer, the
+;; last argument: a long long's, and a struct's (M12)
+(define g:sret? (lambda (ty) (if (g:ll? ty) true (g:svalue? ty))))
+;; a temporary of n words, for a struct a call returns
+(define g:ltempw (lambda (n)
+	(begin
+		(set! g:tcur (+ g:tcur n))
+		(if (> g:tcur g:tmax) (set! g:tmax g:tcur) nil)
+		(- g:loc (+ g:tbase g:tcur)))))
+;; the address of struct value e, of type ty, in A (M12): a struct lvalue's
+;; own; a call's, its caller's temporary; a compound literal's, its hidden
+;; local's
+(define g:sval (lambda (e ty what)
+	(begin
+		(define h (head e))
+		(if (= (g:typeof e) ty) nil (g:die (+ "the wrong struct in " what)))
+		(if (if (= h 'var) true (if (= h 'deref) true (if (= h 'member) true
+				(if (= h 'arrow) true (= h 'index)))))
+			(g:addr e)
+			(g:expr e))
+		(set! g:lastarray false))))
+;; The type of &E, E of type t: a pointer to t -- but &A, A an array of a
+;; row's shape (a typedef's, M11), is a pointer to that row (M12), as C's
+;; &A points at the whole array. OpenTyrian's JE_gammaCorrect(&colors),
+;; colors a Palette, SDL_Color[256], indexes (*colorBuffer)[x]; a pointer
+;; to a pointer would read the palette's first bytes as an address.
+(define g:addrty (lambda (e t)
+	(begin
+		(define r (g:arrrow e))
+		(if r (+ r g:PTR) (+ t g:PTR)))))
+;; the row an array variable's storage is, or false
+(define g:arrrow (lambda (e)
+	(if (= (head e) 'var)
+		(begin
+			(define s (g:find (g:second e)))
+			(define cl (g:second s))
+			(define arr (if (if (= cl 'glo) true (if (= cl 'loc) true (= cl 'extg))) (index s 4) nil))
+			(if (if (= arr nil) true (not (g:isptr (g:third s)))) false
+			(begin
+				(define el (- (g:third s) g:PTR))
+				(define es (g:tysize el))
+				(if (if (> es 0) (= 0 (- arr (* es (/ arr es)))) false)
+					(g:rowof el (/ arr es) g:rows)
+				false))))
+	false)))
+(define g:rowof (lambda (el n l)
+	(if (empty? l) false
+	(if (if (= (g:second (head l)) el) (= (g:third (head l)) n) false) (head (head l))
+	(next g:rowof el n (tail l))))))
+;; a compound literal (M12): its hidden local initialized here, from its
+;; brace list, each time it is reached; its value is the local's, and so is
+;; its address
+(define g:cmpdinit (lambda (e)
+	(begin
+		(define s (g:find (g:second e)))
+		(g:eminit (list 'local (index e 2) (g:second e) (index e 3) (index e 4)) (index s 3)))))
+(define g:cmpd (lambda (e)
+	(begin
+		(g:cmpdinit e)
+		(g:varexpr (g:second e)))))
+(define g:cmpdaddr (lambda (e)
+	(begin
+		(g:cmpdinit e)
+		(g:varaddr (g:second e)))))
 (define g:ltemp (lambda ()
 	(begin
 		(set! g:tcur (+ g:tcur 2))
@@ -1316,7 +1380,7 @@
 (define g:lvtype (lambda (e)
 	(begin
 		(define h (head e))
-		(if (= h 'var) (g:third (g:find (g:second e)))
+		(if (if (= h 'var) true (= h 'cmpd)) (if (= h 'var) (g:third (g:find (g:second e))) (index e 2))
 		(if (= h 'deref) (- (g:typeof (g:second e)) g:PTR)
 		(if (= h 'index) (- (g:typeof (g:second e)) g:PTR)
 		(if (= h 'member) (g:third (g:member (g:typeof (g:second e)) (g:third e)))
@@ -1330,11 +1394,11 @@
 		(if (= h 'llnum) (index e 3)
 		(if (= h 'str) g:PTR
 		(if (= h 'var) (g:vartype (g:find (g:second e)))
-		(if (= h 'call) (g:third (g:find (g:second e)))
+		(if (if (= h 'call) true (= h 'cmpd)) (if (= h 'call) (g:third (g:find (g:second e))) (index e 2))
 		(if (= h 'calle) g:INT
 		(if (= h 'assign) (g:lvtype (g:second e))
 		(if (= h 'deref) (g:decay (- (g:typeof (g:second e)) g:PTR))
-		(if (= h 'addr) (+ (g:lvtype (g:second e)) g:PTR)
+		(if (= h 'addr) (g:addrty (g:second e) (g:lvtype (g:second e)))
 		(if (= h 'lognot) g:INT
 		(if (if (= h 'bitnot) true (= h 'neg)) (g:unres (g:typeof (g:second e)))
 		(if (g:incdec? h) (g:lvtype (g:second e))
@@ -1598,9 +1662,8 @@
 		(define t0 (g:pushargs (tail (tail e)) 0
 			(if kf (index s 8) nil) (if kf (index s 9) nil)
 			;; a call through a variable holding a pointer: its arguments as written
-			(if (if (= cl (quote loc)) true (if (= cl (quote glo)) true (= cl (quote extg)))) "a call through a pointer" n)))
-		(define llr (if kf (g:ll? (g:third s)) false))
-		(define rtmp (if llr (g:ltemp) 0))
+			(if (if (= cl (quote loc)) true (if (= cl (quote glo)) true (= cl (quote extg)))) "a call through a pointer" n)))		(define llr (if kf (g:sret? (g:third s)) false))
+		(define rtmp (if llr (if (g:ll? (g:third s)) (g:ltemp) (g:ltempw (g:pw (g:third s)))) 0))
 		(define t t0)
 		(if (= cl 'sys) (g:emit (list (index s 3)))
 		(if (if (= cl 'fun) true (= cl 'ext))
@@ -1639,17 +1702,11 @@
 ;; long's do. Its address waits in a temporary while they go, and the
 ;; callee has a copy of its own to change.
 (define g:structpush (lambda (a ty fname)
-	(begin
-		(define rh (head a))
-		(if (if (= rh 'var) true (if (= rh 'deref) true (if (= rh 'member) true
-				(if (= rh 'arrow) true (= rh 'index)))))
-			nil (g:die (+ "a struct passed by value needs a struct lvalue, in a call to " fname)))
-		(if (= (g:typeof a) ty) nil (g:die (+ "passing the wrong struct to " fname)))
+	(begin		(if (= (g:typeof a) ty) nil (g:die (+ "passing the wrong struct to " fname)))
 		;; the temporary is free again once the words are pushed
 		(define ts g:tcur)
-		(define tmp (g:ltemp))
-		(g:emit (list 'LEA tmp)) (g:emit '(PSH))
-		(g:addr a)
+		(define tmp (g:ltemp))		(g:emit (list 'LEA tmp)) (g:emit '(PSH))
+		(g:sval a ty (+ "a call to " fname))
 		(g:emit '(SI))
 		(g:structpush/2 tmp (- (g:pw ty) 1))
 		(set! g:tcur ts))))
@@ -1667,15 +1724,10 @@
 ;; works under -fno-builtin. The right side must be an lvalue: a struct
 ;; returned by value is not c4's.
 (define g:structassign (lambda (lv rv)
-	(begin
-		(define sty (g:lvtype lv))
-		(define rh (head rv))
-		(if (if (= rh 'var) true (if (= rh 'deref) true (if (= rh 'member) true
-				(if (= rh 'arrow) true (= rh 'index)))))
-			nil (g:die "a struct assignment needs a struct lvalue on the right"))
+	(begin		(define sty (g:lvtype lv))
 		(g:addr lv)
 		(g:emit '(PSH))
-		(g:addr rv)
+		(g:sval rv sty "an assignment")
 		(g:emit '(PSH))
 		(g:emit (list 'IMM (g:tysize sty)))
 		(g:emit '(PSH))
@@ -1756,7 +1808,7 @@
 				(g:emit (list 'IMM (list 'data (g:dstr (g:second e)))))
 				(set! g:ty g:PTR))
 		(if (= h 'var) (g:varexpr (g:second e))
-		(if (= h 'call) (g:call e)
+		(if (if (= h 'call) true (= h 'cmpd)) (if (= h 'call) (g:call e) (g:cmpd e))
 		(if (if (= h 'assign) (g:svalue? (g:lvtype (g:second e))) false)
 			(g:structassign (g:second e) (g:third e))
 		(if (if (= h 'assign) (g:ll? (g:lvtype (g:second e))) false)
@@ -1791,11 +1843,10 @@
 					(set! g:lastarray true)   ;; *structptr is an address
 				(if (g:rowty? g:ty)
 					(begin (set! g:ty (g:decay g:ty)) (set! g:lastarray true))
-				(g:load! g:ty))))
-		(if (= h 'addr)
+				(g:load! g:ty))))		(if (= h 'addr)
 			(begin
 				(g:addr (g:second e))
-				(set! g:ty (+ g:ty g:PTR)))
+				(set! g:ty (g:addrty (g:second e) g:ty)))
 		(if (= h 'lognot)
 			(begin
 				(g:texpr (g:second e))
@@ -2001,18 +2052,24 @@
 		(if (= h 'for) (g:forstmt s)
 		(if (= h 'return)
 			(begin
-				(if (= (g:second s) nil) nil
+				(if (= (g:second s) nil) nil				(if (g:sret? g:curret)
 				(if (g:ll? g:curret)
 					;; through the caller's pointer, the last argument
 					(begin
 						(g:emit '(LEA 2)) (g:emit '(LI)) (g:emit '(PSH))
 						(g:llval (g:second s))
 						(g:llcopy))
+					;; a struct, the same way (M12): its bytes copied there,
+					;; and the pointer left in A, MCPY's result
+					(begin
+						(g:emit '(LEA 2)) (g:emit '(LI)) (g:emit '(PSH))
+						(g:sval (g:second s) g:curret "a return")
+						(g:emit '(PSH)) (g:emit (list 'IMM (g:tysize g:curret))) (g:emit '(PSH))
+						(g:emit '(MCPY)) (g:emit '(ADJ 3))))
 					(begin
 						(g:expr (g:second s))
 						(g:sconv! g:ty g:curret)
-						(if (g:isptr g:curret)
-							(if (g:dropped? g:curretq (g:qualof (g:second s)))
+						(if (g:isptr g:curret)							(if (g:dropped? g:curretq (g:qualof (g:second s)))
 								(g:qwarn "return") nil)
 						nil))))
 				(g:emit '(LEV)))
@@ -2943,17 +3000,35 @@
 	(if (>= i (length str)) (g:reverse acc)
 	(next g:strbytes str (+ i 1) (g:cons (string:byte str i) acc)))))
 
+;; A scalar local's initializer with a float or double on one side, and
+;; not both of one type, is converted as an assignment converts: to an
+;; integer through a cast, to a float by (fpinit E), which eminit emits
+;; with fpval. Anything else is left alone.
+(define g:fpinit/conv (lambda (init ty size)
+	(if (if (= init nil) true (if (not (= size nil)) true (not (= (head init) 'einit)))) init
+	(begin
+		(define et (g:typeof (g:second init)))
+		(if (= et ty) init
+		(if (g:fp? ty) (list 'fpinit (g:second init))
+		(if (g:fp? et) (list 'einit (list 'cast ty (g:second init)))
+		init)))))))
+
 ;; emit the initializer of local node d whose frame slot is val
 (define g:eminit (lambda (d val)
 	(begin
-		(define init (index d 4))
+		(define init (g:fpinit/conv (index d 4) (g:second d) (index d 3)))
 		(define size (index d 3))
 		(define bytewise
 			(if (= size nil) false
 			(if (g:bytety? (- (g:second d) g:PTR)) true
 			(if (g:halfty? (- (g:second d) g:PTR)) 2
-			false))))
-		(if (= init nil) nil
+			false))))		(if (= init nil) nil
+		(if (= (head init) 'fpinit)
+			(begin
+				(g:emit (list 'LEA (- g:loc val)))
+				(g:emit '(PSH))
+				(g:fpval (g:second init) (g:second d))
+				(g:store! (g:second d)))
 		(if (= size nil)
 			;; scalar: a full initializer expression, stored as a
 			;; word (c4cc used SI even for char scalars; the narrow types
@@ -2963,11 +3038,16 @@
 					(g:emit (list 'LEA (- g:loc val)))
 					(g:emit '(PSH))
 					(g:llval (g:second init))
-					(g:llcopy))
-			(if (= (head init) 'einit)
+					(g:llcopy))			(if (= (head init) 'einit)
+				(if (g:svalue? (g:second d))
+					;; from a struct value (M12): its bytes
+					(begin
+						(g:emit (list 'LEA (- g:loc val)))
+						(g:emit '(PSH))
+						(g:sval (g:second init) (g:second d) "an initializer")
+						(g:emit '(PSH)) (g:emit (list 'IMM (g:tysize (g:second d)))) (g:emit '(PSH))
+						(g:emit '(MCPY)) (g:emit '(ADJ 3)))
 				(begin
-					(if (g:svalue? (g:second d))
-						(g:die "cannot initialize a struct by value") nil)
 					(g:emit (list 'LEA (- g:loc val)))
 					(g:emit '(PSH))
 					(g:expr (g:second init))
@@ -2975,7 +3055,7 @@
 						(if (g:dropped? (g:nz (index d 5)) (g:qualof (g:second init)))
 							(g:qwarn "initialization") nil)
 					nil)
-					(g:emit '(SI)))
+					(g:emit '(SI))))
 			(g:localaggr d val)))
 		(if (if (= (head init) 'braces)
 				(not (if (g:ll? (- (g:second d) g:PTR)) true (g:rowty? (- (g:second d) g:PTR)))) false)
@@ -2989,8 +3069,7 @@
 					(g:die (+ "string does not fit the array " (g:third d))) nil)
 				(g:linit/elems val (g:strbytes (g:second init) 0 (list))
 					size 0 true))
-		(if (if (= (head init) 'agg) true (= (head init) 'braces)) (g:localaggr d val)
-		(g:die (+ "unsupported array initializer for " (g:third d)))))))))))
+		(if (if (= (head init) 'agg) true (= (head init) 'braces)) (g:localaggr d val)		(g:die (+ "unsupported array initializer for " (g:third d))))))))))))
 
 (define g:localinits (lambda (ls)
 	(if (empty? ls) nil
@@ -3046,7 +3125,7 @@
 		(define oldsyms g:syms)
 		;; a variadic's ... occupies one unnamed slot (c4cc's fake
 		;; parameter), counted in argc so va_start's &LAST - 1 lands on it
-		(define argc (+ (+ (g:params ps 0) (if (index d 4) 1 0)) (if (g:ll? (g:second d)) 1 0)))
+		(define argc (+ (+ (g:params ps 0) (if (index d 4) 1 0)) (if (g:sret? (g:second d)) 1 0)))
 		(set! g:loc (+ argc 1))
 		(define fini (g:localdefs ls (+ argc 1)))
 		;; block-scoped declarations deeper in the body still need

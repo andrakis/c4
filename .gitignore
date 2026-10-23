@@ -44,6 +44,10 @@ libc.c4s
 /.doom_t/
 /.libc_t/
 /doom-host
+# OpenTyrian's objects (make tyrian-objs), its gcc build, its test
+/.tyrian/
+/.tyr_t/
+/tyrian-host
 
 # copied from src/c4bb/fs/c4ix-cli.vfs.txt by `make run-c4ix`
 /c4ix.vfs.txt

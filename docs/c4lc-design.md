@@ -875,6 +875,17 @@ too.
 `-D NAME=VALUE` no longer leaves the lexer's `Eof` inside the macro,
 which made `#if N == 1` misread.
 
+`#if` arithmetic is one word, signed, and suffixes are dropped, where C
+asks for `intmax_t`, at least 64 bits, and unsigned where a `u` says so.
+On a 32-bit target `#if 4294967295u >= 1` is false, and a test such as
+`UINTPTR_MAX >= UINT64_MAX` cannot tell 32 bits from 64. OpenTyrian's
+`swar.h` makes exactly that test, and its port settles it by hand
+(src/opentyrian/README.md).
+
+c4lc runs its preprocessor with `-P`, or with `-I` or `-D`, which imply
+it. Otherwise the source is taken as already preprocessed, as `gcc -E`
+output is.
+
 ### 14.6 Tests (test-c4lc, test-c4fc, test-c4sc-back, test-libjs)
 
 - `src/tests/c4lc_m4.c` — the battery: wraparound, compares across the
@@ -1153,3 +1164,56 @@ Step 6 of docs/ports-feasibility.md §8, for doomgeneric's `sha1.h`,
   `sizeof`, a 2-D typedef, a pointer to one, `memcpy` over one), gcc's
   golden, the same at 32 and 64 bits; in test-c4lc at both sizes, plain,
   `-O` and `-minline`, and in `C4SC_BACK_DIFF`.
+
+### 14.11 What OpenTyrian needed (M12, 2026-10-23)
+
+Steps 8-10 of docs/ports-feasibility.md §8, and what OpenTyrian then
+turned up. c4lc only: c4fc has no typedef, so most of this cannot be
+written there.
+
+- **Declarations in `for`.** `for (int i = 0, j = 2; ...)` (`p:forstmt`)
+  is the loop wrapped in a block that starts with a `declstmt`. The names
+  are scoped to the loop, an outer `i` is shadowed and comes back after
+  it, and loops can nest.
+- **Structs returned by value.** A function that returns a struct takes
+  a hidden last argument: where to put it (`g:sret?`). This is how
+  `long long` is returned (14.7).
+  - The caller passes a temporary of its own frame (`g:ltempw`), so each
+    call, a recursive one too, has its own.
+  - `return E;` copies E there with `MCPY`.
+  - The value can initialize, be assigned, be a member access
+    (`mk(6).b`), be an argument to a struct parameter, or be returned
+    again (`g:sval`).
+  - A struct initializer can also be a struct expression: a variable, a
+    member, a call.
+- **Compound literals.** `(T) { ... }` is a hidden local, `$clN`, which
+  is initialized where the literal is, each time it is reached, and then
+  is an lvalue (`p:cmpdlit`, the `cmpd` node). A function that has one
+  is never inlined (attribute bit 128, `t:noinline?`): its frame is not
+  the caller's. OpenTyrian's `MemReader` returns a struct literal, and
+  its `demo.c` passes an array literal.
+- **`sizeof` of a local array in an array size**, `int parents[sizeof
+  menus / sizeof *menus]` (`p:lvars`). `sizeof` of a static local
+  reaches it through its renamed global, `FN.NAME`.
+- **A parenthesized declarator**, `unsigned int (i)` (`p:unparen`).
+- **`&A`, A an array of a row's shape (a typedef's, 14.10),** is a
+  pointer to that row, as C's `&A` points at the whole array
+  (`g:addrty`, `g:arrrow`). OpenTyrian's `JE_gammaCorrect(&colors)`,
+  `colors` a `Palette`, `SDL_Color[256]`, indexes `(*colorBuffer)[x]`.
+  As a pointer to a pointer, that read the palette's first bytes as an
+  address.
+- **A scalar local's initializer with a float on one side converts**, as
+  an assignment's value does (`g:fpinit/conv`). Before this,
+  `int t = c * r;` with `r` a float, and `float f = i;`, stored the other
+  type's bits. OpenTyrian's `JE_gammaCorrect_func` is the first of those,
+  and its palettes faded to white. A global's initializer was already
+  right: it is folded (`p:fvalinit`).
+- **Lexer quirks.** c4cc's escapes (section 5, L10) are kept unless `-conforming`
+  is given. OpenTyrian is built with it, because a `switch` on `'\n'`
+  and `10` was a duplicate case.
+- Tests: `c4lc_m12lc.c`. It covers the `for` forms, struct values in
+  every position above, recursion, compound literals (one in a loop, made
+  afresh each time), `sizeof` of a local, and initializers that convert.
+  `c4lc_m11lc.c` covers `&A` of a typedef'd array. Both have gcc's
+  goldens, the same at 32 and 64 bits. They run in test-c4lc at both
+  sizes, plain, `-O` and `-minline`.

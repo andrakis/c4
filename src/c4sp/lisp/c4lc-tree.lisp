@@ -855,7 +855,7 @@
 	(begin
 		(define d (head ds))
 		(next t:cands (tail ds) taken
-			(if (= (head d) 'func) (if (t:sparams? (index d 3)) acc (t:cand d taken acc)) acc))))))
+			(if (= (head d) 'func) (if (t:noinline? d) acc (t:cand d taken acc)) acc))))))
 
 ;; ---- the rewrite ----
 
@@ -1124,7 +1124,18 @@
 	(begin
 		(define d (head ds))
 		(next t:cands4 (tail ds) taken
-			(if (= (head d) 'func) (if (t:sparams? (index d 3)) acc (t:cand4 d taken acc)) acc))))))
+			(if (= (head d) 'func) (if (t:noinline? d) acc (t:cand4 d taken acc)) acc))))))
+;; Never inlined or spliced: a function with a struct parameter (M9: the
+;; callee changes a copy, and a splice would hand it the caller's own
+;; struct to change); one that returns a struct, through its caller's
+;; pointer (M12); one that makes a compound literal (attribute 128, M12),
+;; whose hidden local the renaming does not know
+(define t:noinline? (lambda (d)
+	(if (t:sparams? (index d 3)) true
+	(if (t:svty? (t:second d)) true
+	(= 128 (bit:and (index d 5) 128))))))
+(define t:svty? (lambda (ty)
+	(if (>= ty 1024) (if (< ty 1025024) (= 0 (- (- ty 1024) (* 64 (/ (- ty 1024) 64)))) false) false)))
 ;; a struct passed by value (M9): the callee changes a copy, and a splice
 ;; would hand it the caller's own struct to change
 (define t:sparams? (lambda (ps)

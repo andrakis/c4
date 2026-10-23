@@ -2,8 +2,9 @@
 // c4lc takes (c4fc has no typedef): a typedef of an array type. doomgeneric's
 // sha1.h, `typedef byte sha1_digest_t[20];`, used as a global, an extern,
 // a struct member, a parameter and in sizeof; and the same of a 2-D array,
-// and a pointer to one. The golden (src/c4sp/tests/expected/c4lc-m11lc.txt)
-// is gcc's, the same at 32 and 64 bits.
+// a pointer to one, and &A of one (M12). The golden
+// (src/c4sp/tests/expected/c4lc-m11lc.txt) is gcc's, the same at 32 and
+// 64 bits.
 
 typedef unsigned char byte;
 typedef byte digest_t[20];
@@ -37,6 +38,13 @@ static unsigned sum(digest_t d) {
     return s;
 }
 
+// &A for A of an array type is a pointer to the whole array (M12):
+// OpenTyrian's JE_gammaCorrect(Palette *colorBuffer), called with &colors
+static void bump(digest_t *d) {
+    int i;
+    for (i = 0; i < 20; i++) (*d)[i] = (byte) ((*d)[i] + 1);
+}
+
 static int gsum(grid_t g) {
     int r, c, s = 0;
     for (r = 0; r < 3; r++)
@@ -67,6 +75,9 @@ int main() {
            sum(conns[1].wad), sum(conns[1].deh));
     printf("member after %d %d\n", conns[1].id, conns[1].tail);
 
+    bump(&gd);
+    bump(&local);
+    printf("bumped %08x %08x\n", sum(gd), sum(local));
     memcpy(local, gd, sizeof(digest_t));
     printf("copied %s\n", memcmp(local, gd, sizeof(local)) == 0 ? "same" : "differs");
     printf("offsets %d %d %d\n", (int) ((char *) conns[1].wad - (char *) &conns[1]),

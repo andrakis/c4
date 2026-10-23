@@ -260,6 +260,52 @@ int getopt(int argc, char **argv, char *opts) {
 
 // ---- time: C4IX knows how long it has been up, not the date ----
 
+// The calendar from seconds since 1970, by days: Howard Hinnant's
+// civil_from_days, which needs nothing but integer division
+static struct tm the_tm;
+struct tm *gmtime(time_t *t) {
+    int s, days, z, era, doe, yoe, doy, mp, y;
+    s = *t;
+    days = s / 86400;
+    s = s % 86400;
+    if (s < 0) { s = s + 86400; days = days - 1; }
+    the_tm.tm_hour = s / 3600;
+    the_tm.tm_min = s / 60 % 60;
+    the_tm.tm_sec = s % 60;
+    the_tm.tm_wday = (days % 7 + 11) % 7;           // 1970-01-01 was a Thursday
+    z = days + 719468;
+    era = (z >= 0 ? z : z - 146096) / 146097;
+    doe = z - era * 146097;
+    yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    y = yoe + era * 400;
+    doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    mp = (5 * doy + 2) / 153;
+    the_tm.tm_mday = doy - (153 * mp + 2) / 5 + 1;
+    the_tm.tm_mon = mp < 10 ? mp + 2 : mp - 10;
+    if (the_tm.tm_mon <= 1) y = y + 1;
+    the_tm.tm_year = y - 1900;
+    // day of the year: days since this year's 1 January
+    z = (y - 1) * 365 + (y - 1) / 4 - (y - 1) / 100 + (y - 1) / 400;   // days to it from year 0's
+    the_tm.tm_yday = (days + 719162) - z;
+    the_tm.tm_isdst = 0;
+    return &the_tm;
+}
+struct tm *localtime(time_t *t) { return gmtime(t); }
+
+// ... and back: days from civil
+time_t mktime(struct tm *tm) {
+    int y, m, era, yoe, doy, doe, days;
+    y = tm->tm_year + 1900;
+    m = tm->tm_mon + 1;
+    if (m <= 2) y = y - 1;
+    era = (y >= 0 ? y : y - 399) / 400;
+    yoe = y - era * 400;
+    doy = (153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + tm->tm_mday - 1;
+    doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    days = era * 146097 + doe - 719468;
+    return days * 86400 + tm->tm_hour * 3600 + tm->tm_min * 60 + tm->tm_sec;
+}
+
 time_t time(time_t *t) {
     int s;
     s = __time() / 1000;

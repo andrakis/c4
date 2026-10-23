@@ -16,7 +16,10 @@ The rules for these ports:
 Status (2026-10-23): **Doom is ported** (src/doom/README.md): doomgeneric,
 on C4IX's whole display, under C4DOS and on the bare machine, its demos'
 frames the same as gcc's. Step 6 is done (M11); doomgeneric's one
-bitfield struct is written as bytes instead (step 7).
+bitfield struct is written as bytes instead (step 7). **OpenTyrian is
+ported** too (src/opentyrian/README.md), the same three ways, with steps
+8-10 done (M12, c4lc-design.md 14.11). Its data, Tyrian 2.1, may not be
+passed on, so it is on the disks only where its zip was there to copy.
 - **c4lc** compiled 50 of linuxdoom's 59 units as they stood. The first
   five steps of §8, small and medium fixes, make it compile all of Doom.
   Twelve steps, none of them large, cover Doom, OpenTyrian and Rise of
@@ -378,9 +381,9 @@ and step 12 Rise of the Triad. Each step lands as M7b's did:
 | 5 | float arithmetic folded in constant initializers, converted to the target type (`float f = 2.0;` too) | Doom, dg, Tyrian | M | after floats | c4lc, folded exactly |
 | 6 | typedefs of array types, pointers to arrays (`T (*p)[N]`) | dg, Tyrian, ROTT | M | after typedef | c4lc (M11, c4lc-design 14.10) |
 | 7 | bitfields | dg (one struct) | M | M | |
-| 8 | declarations in `for` | Tyrian | S–M | S–M, with mixed declarations | |
-| 9 | struct values: returned and used, copy-initialized, compound literals | Tyrian | M | M | |
-| 10 | `sizeof` of a local array in a constant | Tyrian | S | — | |
+| 8 | declarations in `for` | Tyrian | S–M | S–M, with mixed declarations | c4lc (M12, c4lc-design 14.11) |
+| 9 | struct values: returned and used, copy-initialized, compound literals | Tyrian | M | M | c4lc (M12) |
+| 10 | `sizeof` of a local array in a constant | Tyrian | S | — | c4lc (M12) |
 | 11 | small ones: an exact-fit string, a pointer to a pointer to a function, an opaque struct pointer compared with 0 | ROTT | S | S | |
 | 12 | `int + pointer`; K&R definitions | ROTT | S, S–M | S | |
 

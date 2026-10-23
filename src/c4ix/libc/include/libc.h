@@ -284,6 +284,15 @@ int closedir(DIR *d);
 
 // ---- time ----
 time_t time(time_t *t);
+// the calendar, in UTC: C4IX keeps no time zone, so localtime is gmtime
+struct tm {
+    int tm_sec, tm_min, tm_hour;        // 0-60, 0-59, 0-23
+    int tm_mday, tm_mon, tm_year;       // 1-31, 0-11, years since 1900
+    int tm_wday, tm_yday, tm_isdst;     // 0-6 from Sunday, 0-365, 0
+};
+struct tm *gmtime(time_t *t);
+struct tm *localtime(time_t *t);
+time_t mktime(struct tm *tm);
 int clock();
 enum { CLOCKS_PER_SEC = 1000 };
 

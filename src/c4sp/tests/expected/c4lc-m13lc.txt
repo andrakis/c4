@@ -1,0 +1,5 @@
+knr 18 134 709
+intptr 42 43 2
+pfp 20 30 20
+exact 13 ? t d 4
+local ho 5

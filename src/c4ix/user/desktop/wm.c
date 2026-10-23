@@ -765,8 +765,8 @@ static int icon_kinds[6];
 enum { N_ICONS = 6 };
 
 // The Go menu: a banner down the left, then the tools.
-static char *start_items[16];
-static int start_kinds[16];
+static char *start_items[18];
+static int start_kinds[18];
 static int n_start;
 
 static int start_height() {
@@ -980,6 +980,7 @@ static void start_pick(int k) {
     else if (start_kinds[k] == 0 - 3) run_command("wolf3d");
     else if (start_kinds[k] == 0 - 4) run_command("doom");
     else if (start_kinds[k] == 0 - 5) run_command("tyrian");
+    else if (start_kinds[k] == 0 - 6) run_command("rott");
 }
 
 static void mouse_down(int x, int y, int button) {
@@ -1257,6 +1258,7 @@ int main(int argc, char **argv) {
     start_items[k] = "Wolfenstein 3D"; start_kinds[k] = 0 - 3; ++k;
     start_items[k] = "Doom"; start_kinds[k] = 0 - 4; ++k;
     start_items[k] = "Tyrian"; start_kinds[k] = 0 - 5; ++k;
+    start_items[k] = "Rise of the Triad"; start_kinds[k] = 0 - 6; ++k;
     start_items[k] = "Run..."; start_kinds[k] = 0 - 1; ++k;
     start_items[k] = "-"; start_kinds[k] = 0; ++k;
     start_items[k] = "Power Off..."; start_kinds[k] = 0 - 2; ++k;

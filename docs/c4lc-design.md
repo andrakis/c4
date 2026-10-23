@@ -1217,3 +1217,28 @@ written there.
   `c4lc_m11lc.c` covers `&A` of a typedef'd array. Both have gcc's
   goldens, the same at 32 and 64 bits. They run in test-c4lc at both
   sizes, plain, `-O` and `-minline`.
+
+### 14.12 What Rise of the Triad needed (M13, 2026-10-24)
+
+Steps 11 and 12 of docs/ports-feasibility.md §8, for icculus.org's port.
+c4lc only.
+
+- **K&R definitions**, `int CompareHeights(s1p,s2p) visobj_t **s1p,**s2p;`
+  (`p:krdecls`). The declarations between `)` and `{` give the parameters
+  they name their types; one no declaration names stays an int, as C89
+  has it. `T name[]` there is a pointer to T, as in a prototype.
+- **`int + pointer`** is the pointer's (`g:bintype/2`) and is generated as
+  `pointer + int` (`g:binary`). Rise of the Triad writes
+  `*(dest+bufferofs) = pixel;` with `dest` the int.
+- **A pointer to a function pointer**, `T (**pf)(args)` (`p:fnstars`,
+  `p:fnty`): each `*` after the first adds a pointer to the word a function
+  pointer is. A call through `(*pf)(x)` calls what `pf` points at. The
+  parser used to drop the `*` of `(*fp)(x)` whatever `fp` was; the
+  generator now drops it only where the operand is not a pointer
+  (`g:calltgt`).
+- **A string that fills its array exactly**, `char SaveName[13] =
+  "rottgam?.rot\0";`. Its NUL is dropped, as C says, instead of "string
+  does not fit".
+- Tests: `c4lc_m13lc.c`, with gcc's golden (C89, for the K&R
+  definitions), the same at 32 and 64 bits. It runs in test-c4lc at both
+  sizes, plain, `-O` and `-minline`, and in `C4SC_BACK_DIFF`.

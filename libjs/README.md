@@ -63,7 +63,7 @@ URL parameters (from `web/app.js`). The page's Configuration button shows them a
 
 | Parameter | Meaning |
 |---|---|
-| `?system=c4ix\|c4ke\|c4dos\|wolf3d\|wolf3d-c4ix\|doom\|tyrian\|gui-demo\|fb-demo\|snd-demo\|raycast` | Which machine to boot (default `c4ix`). `c4dos` is C4DOS on the games' disk, with Wolfenstein 3D, Doom and Tyrian; `wolf3d`, `doom` and `tyrian` are those games on the bare machine, and `wolf3d-c4ix` Wolfenstein 3D on C4IX's whole display (docs/c4ix-wolf3d.md, src/doom/README.md, src/opentyrian/README.md; Tyrian's data only where it was there to copy). The last four are bare programs on the display or the sound card. |
+| `?system=c4ix\|c4ke\|c4dos\|wolf3d\|wolf3d-c4ix\|doom\|tyrian\|rott\|gui-demo\|fb-demo\|snd-demo\|raycast` | Which machine to boot (default `c4ix`). `c4dos` is C4DOS on the games' disk, with Wolfenstein 3D, Doom, Tyrian and Rise of the Triad; `wolf3d`, `doom`, `tyrian` and `rott` are those games on the bare machine, and `wolf3d-c4ix` Wolfenstein 3D on C4IX's whole display (docs/c4ix-wolf3d.md, src/doom/README.md, src/opentyrian/README.md, src/rott/README.md; Tyrian's data only where it was there to copy). The last four are bare programs on the display or the sound card. |
 | `?image=URL&disk=URL` | Any other image and disk. |
 | `?mhz=N` | Paced speed (default 100). |
 | `?fast` | Unpaced. |

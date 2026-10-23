@@ -48,6 +48,10 @@ libc.c4s
 /.tyrian/
 /.tyr_t/
 /tyrian-host
+# Rise of the Triad's objects (make rott-objs), its gcc build, its test
+/.rott/
+/.rott_t/
+/rott-host
 
 # copied from src/c4bb/fs/c4ix-cli.vfs.txt by `make run-c4ix`
 /c4ix.vfs.txt

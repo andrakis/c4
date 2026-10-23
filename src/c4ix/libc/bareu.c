@@ -11,7 +11,12 @@
 // c4lc gathers a variadic call's arguments with __c4cc_make_va, on a stack
 // of its own, and va_end gives them back (__c4ix_uva_adj). A stack per
 // program: on the bare machine and under C4DOS there is one task.
-enum { UVA_STACK = 128 };
+enum { UVA_STACK = 1024 };
+// A variadic function that never calls va_end -- Rise of the Triad's
+// SoftError is one, its body compiled out -- leaves its arguments on the
+// stack, and the stack grew past its end into whatever the heap put after
+// it (the game's zone). So a list that would not fit starts again at the
+// bottom: one left behind is overwritten, never written past.
 static int *uva_stack;
 static int  uva_vptr;
 static int *uva_m_ptr;
@@ -24,6 +29,7 @@ int *__c4cc_make_va(int count) {
     if (!uva_stack) uva_stack = (int *)malloc(sizeof(int) * UVA_STACK);
     uva_m_n   = count;
     uva_m_arg = &count + count;
+    if (uva_vptr < 0 || uva_vptr + count + 1 > UVA_STACK) uva_vptr = 0;
     uva_m_ptr = &uva_stack[uva_vptr];
 
     uva_stack[uva_vptr] = count; ++uva_vptr;
@@ -36,6 +42,7 @@ int *__c4cc_make_va(int count) {
 
 void __c4ix_uva_adj(int n) {
     uva_vptr = uva_vptr - n;
+    if (uva_vptr < 0) uva_vptr = 0;
 }
 
 // ---- what archive.c asks of libc4ix ----

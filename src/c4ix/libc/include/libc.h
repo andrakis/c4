@@ -96,6 +96,12 @@ int  chdir(char *path);
 char *getcwd(char *buf, int n);
 int  getpid();
 int  isatty(int fd);
+// the modes access takes; C4IX answers whether the file is there,
+// whatever is asked
+#define F_OK 0
+#define X_OK 1
+#define W_OK 2
+#define R_OK 4
 int  access(char *path, int mode);
 unsigned int sleep(unsigned int s);
 int  usleep(int us);
@@ -140,7 +146,9 @@ struct stat {
     int st_blocks;      // 512-byte blocks
 };
 enum { S_IFMT = 61440, S_IFDIR = 16384, S_IFREG = 32768, S_IFCHR = 8192, S_IFIFO = 4096,
-       S_IXUSR = 64 };
+       S_IXUSR = 64, S_IWUSR = 128, S_IRUSR = 256,
+       // the old names, which code from DOS days uses
+       S_IWRITE = 128, S_IREAD = 256 };
 #define S_ISDIR(m)  (((m) & S_IFMT) == S_IFDIR)
 #define S_ISREG(m)  (((m) & S_IFMT) == S_IFREG)
 #define S_ISCHR(m)  (((m) & S_IFMT) == S_IFCHR)

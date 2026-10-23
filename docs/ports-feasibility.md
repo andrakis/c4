@@ -20,6 +20,9 @@ bitfield struct is written as bytes instead (step 7). **OpenTyrian is
 ported** too (src/opentyrian/README.md), the same three ways, with steps
 8-10 done (M12, c4lc-design.md 14.11). Its data, Tyrian 2.1, may not be
 passed on, so it is on the disks only where its zip was there to copy.
+**Rise of the Triad is ported** (src/rott/README.md), icculus.org's port,
+the same three ways, with steps 11 and 12 done (M13, c4lc-design.md
+14.12). Its sound is still to come.
 - **c4lc** compiled 50 of linuxdoom's 59 units as they stood. The first
   five steps of §8, small and medium fixes, make it compile all of Doom.
   Twelve steps, none of them large, cover Doom, OpenTyrian and Rise of
@@ -384,8 +387,8 @@ and step 12 Rise of the Triad. Each step lands as M7b's did:
 | 8 | declarations in `for` | Tyrian | S–M | S–M, with mixed declarations | c4lc (M12, c4lc-design 14.11) |
 | 9 | struct values: returned and used, copy-initialized, compound literals | Tyrian | M | M | c4lc (M12) |
 | 10 | `sizeof` of a local array in a constant | Tyrian | S | — | c4lc (M12) |
-| 11 | small ones: an exact-fit string, a pointer to a pointer to a function, an opaque struct pointer compared with 0 | ROTT | S | S | |
-| 12 | `int + pointer`; K&R definitions | ROTT | S, S–M | S | |
+| 11 | small ones: an exact-fit string, a pointer to a pointer to a function, an opaque struct pointer compared with 0 | ROTT | S | S | c4lc (M13, c4lc-design 14.12); the opaque pointer is the shim's (dukemusc.c is not built) |
+| 12 | `int + pointer`; K&R definitions | ROTT | S, S–M | S | c4lc (M13) |
 
 Each fix is small, and none needs a new pass. Steps 4 and 9 are the
 largest:

@@ -455,6 +455,15 @@ fi
 # the game reads go in the disk's tyrian/, which C4IX shows as
 # /usr/games/tyrian/data (c4ix.vfs.txt, hostdir); where it is not, the
 # game says so when it starts.
+# Rise of the Triad (src/rott): make rott-objs compiled it, linked the same
+# way, with the shareware episode's files beside it, out of Apogee's
+# package as it ships (src/rott/data, tools/rottdata.py; c4ix.vfs.txt:
+# /usr/games/rott)
+if ls .rott/*.c4o > /dev/null 2>&1 && [ -f $PB/lib/libc.c4s ]; then
+    ./c4rlink32 .rott/*.c4o .rott/plat/rott-c4ix.c4o -l $PB/lib/libc.c4s -o $DISK/c4ix-rott.c4r > /dev/null
+    python3 -I src/rott/tools/rottdata.py src/rott/data/1rott13.zip $DISK > /dev/null
+fi
+
 TYRIAN_ZIP=${TYRIAN_ZIP:-src/opentyrian/data/tyrian21.zip}
 rm -rf $DISK/tyrian
 if ls .tyrian/*.c4o > /dev/null 2>&1 && [ -f $PB/lib/libc.c4s ]; then
@@ -479,6 +488,11 @@ if ls .wolf3d-bare/*.c4o > /dev/null 2>&1 && ls .wolf3d/*.c4o > /dev/null 2>&1; 
         ./c4rlink32 .doom/*.c4o .doom/plat/dg-bare.c4o .wolf3d-bare/libc-*.c4o -o $WOLFDISK/doom.c4r > /dev/null
         cp src/doom/data/doom1.wad $WOLFDISK/
     fi
+    # Rise of the Triad, the shareware episode beside it
+    if ls .rott/*.c4o > /dev/null 2>&1; then
+        ./c4rlink32 .rott/*.c4o .rott/plat/rott-bare.c4o .wolf3d-bare/libc-*.c4o -o $WOLFDISK/rott.c4r > /dev/null
+        python3 -I src/rott/tools/rottdata.py src/rott/data/1rott13.zip $WOLFDISK > /dev/null
+    fi
     # OpenTyrian, its data in tyrian/data where there is any (above)
     if ls .tyrian/*.c4o > /dev/null 2>&1; then
         ./c4rlink32 .tyrian/*.c4o .tyrian/plat/tyr-bare.c4o .wolf3d-bare/libc-*.c4o -o $WOLFDISK/tyrian.c4r > /dev/null
@@ -491,7 +505,7 @@ if ls .wolf3d-bare/*.c4o > /dev/null 2>&1 && ls .wolf3d/*.c4o > /dev/null 2>&1; 
     .wolf3d-bare/unshr $WOLFDISK/W3DSW14.SHR $WOLFDISK > /dev/null
     rm -f $WOLFDISK/W3DSW14.SHR $WOLFDISK/*.exe
     cp $DISK/config.sys $WOLFDISK/config.sys
-    printf '@ECHO OFF\nECHO Welcome to C4DOS\nVER\nECHO Wolfenstein 3D, Doom and Tyrian are on this disk: type WOLF3D, DOOM or TYRIAN to play.\n' > $WOLFDISK/autoexec.bat
+    printf '@ECHO OFF\nECHO Welcome to C4DOS\nVER\nECHO Wolfenstein 3D, Doom, Tyrian and Rise of the Triad are on this disk:\nECHO type WOLF3D, DOOM, TYRIAN or ROTT to play.\n' > $WOLFDISK/autoexec.bat
     (cd $WOLFDISK && ls -p | grep -v '/$' | grep -v '^manifest.json$' > c4dos.dir)
     (cd $WOLFDISK && find . -type f -not -name manifest.json | sed 's|^\./||') | \
         awk 'BEGIN{printf "["} NR>1{printf ","} {printf "\"%s\"", $0} END{print "]"}' > $WOLFDISK/manifest.json
@@ -685,7 +699,7 @@ rm -rf $ROOT
 mkdir -p $ROOT/usr/lib $ROOT/usr/include
 if git rev-parse --git-dir > /dev/null 2>&1; then
     git ls-files -- src docs include libjs README.md LICENSE Makefile BUILD.B4K INSTALL.B4K c4.c c4m.c c4m_float.c c4l.c load-c4r.c |
-        grep -v '^src/c4bb/images/\|^src/c4or1k/images/\|^src/wolf3d/\|^src/doom/\|^src/opentyrian/' |
+        grep -v '^src/c4bb/images/\|^src/c4or1k/images/\|^src/wolf3d/\|^src/doom/\|^src/opentyrian/\|^src/rott/' |
         while read -r f; do
             [ -f "$f" ] && grep -Iq . "$f" 2>/dev/null || continue
             mkdir -p "$ROOT/usr/$(dirname "$f")"

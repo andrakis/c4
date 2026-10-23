@@ -87,14 +87,29 @@ ARCHIVES = c4ix-root.tgz
 			tyrian/:
 				tyrian.c4r: c4ix-tyrian.c4r
 				data/: hostdir(tyrian/)
+			# Rise of the Triad (src/rott): the game and Apogee's
+			# shareware episode, out of its package as it ships
+			rott/:
+				rott.c4r: c4ix-rott.c4r
+				HUNTBGIN.WAD
+				HUNTBGIN.RTL
+				HUNTBGIN.RTC
+				REMOTE1.RTS
+				DEMO1_3.DMO
+				DEMO2_3.DMO
+				DEMO3_3.DMO
+				DEMO4_3.DMO
+				VENDOR.DOC
 	# and by name, as the programs in /bin are
 	wolf3d: ilink(/usr/games/wolf3d/wolf3d.c4r)
 	doom: ilink(/usr/games/doom/doom.c4r)
 	tyrian: ilink(/usr/games/tyrian/tyrian.c4r)
+	rott: ilink(/usr/games/rott/rott.c4r)
 	# sync is persist save (src/c4ix/user/persist.c)
 	sync: ilink(/bin/persist)
 	bin/:
 		wolf3d: ilink(/usr/games/wolf3d/wolf3d.c4r)
 		doom: ilink(/usr/games/doom/doom.c4r)
 		tyrian: ilink(/usr/games/tyrian/tyrian.c4r)
+		rott: ilink(/usr/games/rott/rott.c4r)
 		sync: ilink(/bin/persist)

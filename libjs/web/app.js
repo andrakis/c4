@@ -2,7 +2,7 @@
 //
 // URL parameters:
 //   ?system=NAME                 which machine to boot (default c4ix): c4ix, c4ke,
-//                                c4dos, wolf3d, wolf3d-c4ix, doom, tyrian, gui-demo, fb-demo,
+//                                c4dos, wolf3d, wolf3d-c4ix, doom, tyrian, rott, gui-demo, fb-demo,
 //                                snd-demo, raycast -- SYSTEMS below
 //   ?image=URL&disk=URL          any other image and disk instead
 //   ?mhz=N                       how fast the machine runs, paced (default 100)
@@ -32,7 +32,7 @@ const SYSTEMS = {
   c4ix: { label: 'C4IX', image: `${IMAGES}/c4ix32.c4r`, disk: `${IMAGES}/disk`, argv: ['c4ix32.c4r', '--desktop'], persist: 'c4ix' },
   c4ke: { label: 'C4KE', image: `${IMAGES}/c4ke32.c4r`, disk: `${IMAGES}/disk`, argv: ['c4ke32.c4r'] },
   // C4DOS on the games' disk (build-images.sh): Wolfenstein 3D unpacked
-  // Doom and Tyrian, beside C4DOS's own files, so WOLF3D, DOOM or TYRIAN at the A> prompt
+  // Doom, Tyrian and Rise of the Triad, beside C4DOS's own files, so WOLF3D, DOOM, TYRIAN or ROTT at the A> prompt
   // plays them.
   c4dos: { label: 'C4DOS', image: `${IMAGES}/c4dos32.c4r`, disk: `${IMAGES}/games`, argv: ['c4dos32.c4r'], mhz: 400 },
   // Wolfenstein 3D with no operating system under it (src/wolf3d/plat-bare.c),
@@ -47,6 +47,9 @@ const SYSTEMS = {
   // the disk (src/opentyrian/data/README.md)
   tyrian: { label: 'Tyrian (bare machine)', image: `${IMAGES}/games/tyrian.c4r`, disk: `${IMAGES}/games`,
             argv: ['tyrian.c4r'], mhz: 400 },
+  // Rise of the Triad (src/rott), the shareware episode
+  rott: { label: 'Rise of the Triad (bare machine)', image: `${IMAGES}/games/rott.c4r`, disk: `${IMAGES}/games`,
+          argv: ['rott.c4r'], mhz: 400 },
   'wolf3d-c4ix': { label: 'Wolfenstein 3D (C4IX, direct)', image: `${IMAGES}/c4ix32.c4r`, disk: `${IMAGES}/disk`,
                    argv: ['c4ix32.c4r', '-e', 'persist -d 60 &', '-e', 'wolf3d --direct'], persist: 'c4ix', mhz: 400 },
   'gui-demo': { label: 'GUI demo (bare machine)', image: `${IMAGES}/gui-demo.c4r`, disk: null, argv: ['gui-demo.c4r'] },

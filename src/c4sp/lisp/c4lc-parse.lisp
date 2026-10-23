@@ -384,7 +384,7 @@
 	(begin
 		(define ty0 (p:stars bt bq))
 		(define fp (if (p:fnptr?) (p:fnptrdecl) false))
-		(define ty (if fp p:INT ty0))
+		(define ty (if fp p:fnty ty0))
 		(define q (if fp 0 p:sq))
 		(if fp (if (p:second fp) nil (if (head fp) nil (p:die "bad struct member name")))
 			(if (= (p:kind) 'Id) nil (p:die "bad struct member name")))
@@ -653,7 +653,7 @@
 		(p:advance)
 		(define bt (p:basetype p:INT))
 		(define ty0 (p:stars bt p:bq))
-		(define ty (if (p:fnptr?) (begin (p:fnptrdecl) p:INT) ty0))
+		(define ty (if (p:fnptr?) (begin (p:fnptrdecl) p:fnty) ty0))
 		(p:expect 'Rparen ") after a cast")
 		(define v (p:constatom what))
 		(if (if (p:svalue? ty) true (if (= ty p:FLOAT) true (= ty p:DOUBLE)))
@@ -881,7 +881,7 @@
 				(define bt (p:basetype p:INT))
 				(define ty0 (p:stars bt p:bq))
 				(define fp (if (p:fnptr?) (p:fnptrdecl) false))
-				(define ty (if fp p:INT ty0))
+				(define ty (if fp p:fnty ty0))
 				(define cq (if fp 0 p:sq))
 				;; (T[N]){ ... }: a compound literal of an array type
 				(define asz (if fp nil (p:arraysize)))
@@ -1023,11 +1023,12 @@
 				(next p:climb (list 'cond lhs t (p:expr 2)) lev))
 		;; a call through any expression (M7b): ops[i](x), s->fn(x),
 		;; (*fp)(x). A name followed by '(' never gets here: p:idexpr
-		;; made it a call. (*fp)(x) calls fp, as C says.
+		;; made it a call. (*fp)(x) calls fp, as C says -- which the
+		;; generator sees to, knowing whether fp is a pointer to one (M13)
 		(if (= k 'Lparen)
 			(begin
 				(p:advance)
-				(define tgt (if (= (head lhs) 'deref) (p:second lhs) lhs))
+				(define tgt lhs)
 				(next p:climb (p:cons 'calle (p:cons tgt (p:args (list)))) lev))
 		(if (= k 'Inc)
 			(begin (p:advance) (next p:climb (list 'postinc lhs) lev))
@@ -1246,6 +1247,12 @@
 ;; called -- so the declarator declares an int, or an array of them. The
 ;; parameter list is skipped token by token (c4fc does the same), so a
 ;; struct first named inside it is not given an id here and not in c4fc.
+;; A function pointer declarator's type: a word, as every function pointer
+;; is here, and a pointer to one for each further * (M13): Rise of the
+;; Triad's movement_status (**movement_function)(objtype*,int,int,int);
+(define p:fnty 1)
+(define p:fnstars (lambda (t)
+	(if (= (p:kind) 'Mul) (begin (p:advance) (next p:fnstars (+ t p:PTR))) t)))
 (define p:fnptr? (lambda ()
 	(if (= (p:kind) 'Lparen) (= (head (head (tail p:toks))) 'Mul) false)))
 ;; consumes `( * [qualifiers] [NAME] [[N]] ) ( ... )`; returns (NAME SIZE),
@@ -1257,9 +1264,9 @@
 		;; on a 32-bit target returns through a pointer the call never passes
 		(if (if (= p:lastty p:FLOAT) true (= p:lastty p:DOUBLE))
 			(p:die "a pointer to a function returning float or double is not supported yet (docs/c4-float.md)")
-			nil)
+			nil)		(p:advance)
 		(p:advance)
-		(p:advance)
+		(set! p:fnty (p:fnstars p:INT))
 		(p:skipquals)
 		(define n (if (= (p:kind) 'Id) (p:value) false))
 		(if n (p:advance) nil)
@@ -1568,7 +1575,7 @@
 			(define bt (p:basetype p:INT))
 			(define ty0 (p:stars bt p:bq))
 			(define fp (if (p:fnptr?) (p:fnptrdecl) false))
-			(define ty1 (if fp p:INT ty0))
+			(define ty1 (if fp p:fnty ty0))
 			(define q1 (if fp 0 p:sq))
 			(define named (if fp (if (head fp) true false) (= (p:kind) 'Id)))
 			(define n (if named (if fp (head fp) (p:value)) (+ " param" (+ "" (length acc)))))
@@ -1687,7 +1694,7 @@
 (define p:localline/3 (lambda (ty0 bt bq acc)
 	(begin
 		(define fp (if (p:fnptr?) (p:fnptrdecl) false))
-		(define ty (if fp p:INT ty0))
+		(define ty (if fp p:fnty ty0))
 		(define q (if fp 0 p:sq))
 		(if fp (if (head fp) nil (p:die "bad local declaration"))
 			(if (= (p:kind) 'Id) nil (p:die "bad local declaration")))
@@ -1774,7 +1781,7 @@
 			(begin
 				(define fp (p:fnptrdecl))
 				(if (head fp) nil (p:die "bad global declaration"))
-				(p:globalvar/2 p:INT (head fp) attr 0 (p:second fp)))
+				(p:globalvar/2 p:fnty (head fp) attr 0 (p:second fp)))
 		(begin
 			(define a2
 				(if (= (p:kind) 'Attribute) (+ attr (p:attribute)) attr))
@@ -1785,11 +1792,38 @@
 				(p:function ty n a2 q)
 			(p:globalvar ty n a2 q)))))))
 
+;; K&R parameter declarations (M13), between a definition's ) and its {:
+;; int f(a, b) char *a; int b; { ... }, which Rise of the Triad's qsort
+;; comparisons are. p:params took each name as an int; each declaration
+;; gives the one it names its type, and one no declaration names stays
+;; int, as C89 has it.
+(define p:krdecls (lambda (ps)
+	(if (if (= (p:kind) 'Lbrace) true (if (= (p:kind) 'Semi) true (= (p:kind) 'Comma))) ps
+	(begin
+		(define bt (p:basetype p:INT))
+		(next p:krdecls (p:krnames ps bt))))))
+(define p:krnames (lambda (ps bt)
+	(begin
+		(define ty0 (p:stars bt p:bq))
+		(if (= (p:kind) 'Id) nil (p:die "bad parameter declaration"))
+		(define n (p:value))
+		(p:advance)
+		;; T name[] is a pointer to T, as in a prototype's parameters
+		(define asz (p:arraysize/t ty0))
+		(define ty (if (= asz nil) ty0 (+ (p:elemty ty0) p:PTR)))
+		(define ps2 (p:krset ps n ty (list)))
+		(if (= (p:kind) 'Comma) (begin (p:advance) (next p:krnames ps2 bt))
+		(begin (p:expect 'Semi "semicolon after a parameter declaration") ps2)))))
+(define p:krset (lambda (ps n ty acc)
+	(if (empty? ps) (p:die (+ "a declaration of no parameter: " n))
+	(if (= (p:second (head ps)) n)
+		(+ (p:reverse acc) (p:cons (list ty n) (tail ps)))
+	(next p:krset (tail ps) n ty (p:cons (head ps) acc))))))
 (define p:function (lambda (ty n attr rq)
 	(begin
 		(p:advance)
 		(define pv (p:params (list)))
-		(define ps (head pv))
+		(define ps (p:krdecls (head pv)))
 		(define va (p:second pv))
 		(define a2 (if va (+ attr 32) attr))
 		(if (if (= (p:kind) 'Semi) true (= (p:kind) 'Comma))
@@ -2024,7 +2058,7 @@
 		(if (= bt nil) (p:die "typedef needs a type") nil)
 		(define ty0 (p:stars bt p:bq))
 		(define fp (if (p:fnptr?) (p:fnptrdecl) false))
-		(define ty (if fp p:INT ty0))
+		(define ty (if fp p:fnty ty0))
 		(define q (if fp 0 p:sq))
 		(if fp (if (head fp) nil (p:die "typedef needs a name"))
 			(if (= (p:kind) 'Id) nil (p:die "typedef needs a name")))

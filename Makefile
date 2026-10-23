@@ -1100,7 +1100,7 @@ C4SC_BACK_DIFF := c4_jailbreak factorial hello multifun puts reverse \
                   test_malloc test-order test-ptrs test_static test_switch \
                   tests c4lc_l2 global test_gcscan test-oisc test_printf \
                   c4lc_m4 c4lc_m4q c4lc_m4v c4lc_m7 c4lc_ll c4lc_m9 c4lc_m9lc \
-                  c4lc_m10 c4lc_m10lc c4lc_m11lc c4lc_m12lc
+                  c4lc_m10 c4lc_m10lc c4lc_m11lc c4lc_m12lc c4lc_m13lc
 test-c4sc-back: c4sc-host c4sp $(C4RLINK) $(C4M)
 	@fail=0; for b in $(C4SC_BACK_DIFF); do \
 	   f=$(TESTS)/$$b.c; \
@@ -2343,7 +2343,7 @@ c4bb-32bit: c4cc32 c4m32 c4sp32 c4rlink32
 # target builds what it uses.
 # ./cpp is a hard prerequisite now, not just for C4DOS: the shared
 # disk's c4m.c4r goes through it (build-images.sh).
-c4bb-images: c4bb-32bit $(C4LC_LISP) c4th32.c4r cpp wolf3d-objs wolf3d-bare-objs doom-objs tyrian-objs
+c4bb-images: c4bb-32bit $(C4LC_LISP) c4th32.c4r cpp wolf3d-objs wolf3d-bare-objs doom-objs tyrian-objs rott-objs
 	bash src/c4bb/tests/build-images.sh
 
 # WOLFENSTEIN 3D (src/wolf3d, docs/c4ix-wolf3d.md): Wolf4SDL in c4lc's C,
@@ -2455,6 +2455,47 @@ TYR_HOST_SRCS := $(filter-out $(TYR_SKIP:%=$(TYR)/%.c) $(TYR)/tyr-c4ix.c $(TYR)/
 tyrian-host: $(TYR_HOST_SRCS) $(TYR_HDRS)
 	gcc -m32 -O2 -std=gnu99 -w -Wno-error=implicit-function-declaration -DC4TYR -I$(TYR)/c4 -I$(TYR) -Ilibjs/guest -o $@ $(TYR_HOST_SRCS) -lm
 
+# Rise of the Triad (src/rott/README.md): icculus.org's port, its units
+# with c4lc, the same objects for C4IX, the bare machine and C4DOS but for
+# the platform's (rott-c4ix.c, rott-bare.c, in .rott/plat), linked by
+# build-images.sh as Doom's are. rott-snd.c stands in for its SDL_mixer
+# sound (fx_man.c, dukemusc.c), which is not built; nor are the units its
+# own Makefile leaves out.
+ROTT       := src/rott
+ROTT_UNITS := cin_actr cin_efct cin_evnt cin_glob cin_main cin_util dosutil \
+              engine isr modexlib rt_actor rt_battl rt_build rt_cfg rt_crc \
+              rt_com rt_debug rt_dmand rt_door rt_draw rt_floor rt_game \
+              rt_in rt_main rt_map rt_menu rt_msg rt_net rt_playr rt_rand \
+              rt_scale rt_sound rt_spbal rt_sqrt rt_stat rt_state rt_str \
+              rt_swift rt_ted rt_util rt_view rt_vid rt_err scriplib w_wad \
+              watcom z_zone byteordr winrott c4sdl rott-sum rott-snd
+ROTT_HDRS  := $(wildcard $(ROTT)/*.h $(ROTT)/c4/*.h) \
+              $(wildcard src/c4ix/libc/include/*.h src/c4ix/libc/include/sys/*.h) \
+              src/c4ix/include/display.h libjs/guest/gui.h libjs/guest/gui.c
+ROTT_DEFS  := -D C4ROTT -D PLATFORM_UNIX=1 -D USE_SDL=1 -D SHAREWARE=1 -D SUPERROTT=0 -D SITELICENSE=0
+ROTT_CC    := ./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O -mfuse -fno-builtin -c -conforming \
+              $(ROTT_DEFS) -I $(ROTT)/c4 -I src/c4ix/libc/include -I src/c4ix/include \
+              -I libjs/guest -I $(ROTT)
+rott-objs: $(ROTT_UNITS:%=.rott/%.c4o) .rott/plat/rott-c4ix.c4o .rott/plat/rott-bare.c4o
+.rott/%.c4o: $(ROTT)/%.c $(ROTT_HDRS) $(C4LC_LISP) | c4sp32
+	@mkdir -p .rott/plat
+	$(ROTT_CC) $< $@ > /dev/null
+.rott/plat/%.c4o: $(ROTT)/%.c $(ROTT_HDRS) $(C4LC_LISP) | c4sp32
+	@mkdir -p .rott/plat
+	$(ROTT_CC) $< $@ > /dev/null
+PHONY += rott-objs
+
+# ... and by gcc for the host, with no display and no sound (rott-host.c),
+# the reference test-rott holds them to: 32-bit as they are, and with SSE's
+# arithmetic, which is IEEE's as c4's is -- the x87's extra precision
+# plays the demos differently at -O0 and -O2
+ROTT_HOST_SRCS := $(ROTT_UNITS:%=$(ROTT)/%.c) $(ROTT)/rott-host.c
+rott-host: $(ROTT_HOST_SRCS) $(ROTT_HDRS)
+	gcc -m32 -O2 -std=gnu89 -w -fno-strict-aliasing -msse2 -mfpmath=sse \
+	    -Wno-error=implicit-function-declaration -Wno-error=implicit-int \
+	    -Wno-error=incompatible-pointer-types -Wno-error=int-conversion \
+	    $(ROTT_DEFS) -I$(ROTT)/c4 -I$(ROTT) -Ilibjs/guest -o $@ $(ROTT_HOST_SRCS) -lm
+
 # test-libc-bare: libc's scanf, fseek and fread (src/c4ix/libc/tests/
 # scantest.c) on the bare machine, against gcc's build of the same.
 test-libc-bare: wolf3d-bare-objs $(C4LC_LISP) | c4sp32
@@ -2518,6 +2559,31 @@ test-tyrian: tyrian-host c4bb-images
 	   || { echo "test-tyrian: C4DOS did not come back to its prompt:"; tail -5 .tyr_t/dos.out; exit 1; }; } && \
 	 rm -rf .tyr_t && echo "test-tyrian: OK"
 PHONY += test-tyrian
+
+# test-rott: the shareware's demo 4 (--timedemo, rott-sum.c: every frame
+# shown and its palette, on a virtual clock), built by gcc and by c4lc --
+# on the bare machine, under C4DOS and inside C4IX -- must show the same
+# frames. The gcc build runs where it may write its config, beside links
+# to the data.
+ROTT_DEMO := 4
+test-rott: rott-host c4bb-images
+	@rm -rf .rott_t && mkdir -p .rott_t && \
+	 for f in src/c4bb/images/games/*.WAD src/c4bb/images/games/*.RT? src/c4bb/images/games/*.DMO src/c4bb/images/games/VENDOR.DOC; do \
+	   ln -s ../$$f .rott_t/; done && \
+	 ( cd .rott_t && ../rott-host --timedemo $(ROTT_DEMO) NOSOUND 2>/dev/null | grep '^timedemo' > host.txt ) && \
+	 cat .rott_t/host.txt && \
+	 ( cd src/c4bb/images/games && { timeout 1500 node ../../../../libjs/cli.js -m 64 -d . rott.c4r --timedemo $(ROTT_DEMO) NOSOUND \
+	     > ../../../../.rott_t/bare.out 2>/dev/null & \
+	   printf 'rott --timedemo $(ROTT_DEMO) NOSOUND\nver\n' | timeout 1500 node ../../../../libjs/cli.js -m 64 -d . ../c4dos32.c4r \
+	     > ../../../../.rott_t/dos.out 2>/dev/null; wait; } ) && \
+	 printf 'rott --timedemo $(ROTT_DEMO) NOSOUND\nexit\n' | timeout 1500 node libjs/cli.js -m 64 -d src/c4bb/images/disk src/c4bb/images/c4ix32.c4r \
+	   2>/dev/null > .rott_t/c4ix.out && \
+	 for w in bare dos c4ix; do grep '^timedemo' .rott_t/$$w.out | cmp -s .rott_t/host.txt - \
+	   || { echo "test-rott: $$w's frames differ:"; tail -5 .rott_t/$$w.out; exit 1; }; done && \
+	 { grep -A1 '^timedemo' .rott_t/dos.out | grep -q '^A>C4DOS version' \
+	   || { echo "test-rott: C4DOS did not come back to its prompt:"; tail -5 .rott_t/dos.out; exit 1; }; } && \
+	 rm -rf .rott_t && echo "test-rott: OK"
+PHONY += test-rott
 
 # The same game built by gcc for the host, with no window: the reference
 # the C4IX build is held to (test-wolf3d).
@@ -3479,7 +3545,7 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	# addresses plus offsets in constants (c4lc_m10.c, c4fc too); &a[k]
 	# set at start-up and floating point folded (c4lc_m10lc.c, c4lc
 	# only). gcc's goldens, the same at both sizes.
-	@for t in m9 m9lc m10 m10lc m11lc m12lc; do for fl in "" "-O" "-minline"; do \
+	@for t in m9 m9lc m10 m10lc m11lc m12lc m13lc; do for fl in "" "-O" "-minline"; do \
 	   ./c4sp src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_$$t.c .c4lc_b.c4r > /dev/null || exit 1; \
 	   ./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-$$t.txt || exit 1; \
 	   ./c4sp32 src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_$$t.c .c4lc_b.c4r > /dev/null || exit 1; \

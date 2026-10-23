@@ -1426,6 +1426,10 @@
 	(begin
 		(define h (head e))
 		(define lt (g:typeof (g:second e)))
+		;; int + pointer is the pointer's (M13): Rise of the Triad's
+		;; *(dest+bufferofs), dest an int
+		(if (if (= h 'add) (if (g:isptr lt) false (g:isptr (g:typeof (g:third e)))) false)
+			(g:typeof (g:third e))
 		(if (if (= h 'add) true (= h 'sub))
 			(if (g:isptr lt)
 				(if (= h 'add) lt
@@ -1442,7 +1446,7 @@
 						(if (= h 'gt) true (if (= h 'le) true (= h 'ge)))))))
 					false)
 				(g:uac lt rt2)
-			g:INT)))))))
+			g:INT))))))))
 (define g:condtype (lambda (e)
 	(begin
 		(define tt (g:typeof (g:third e)))
@@ -1540,12 +1544,15 @@
 ;; binary operator with c4cc's pointer scaling -- and, when an operand
 ;; is unsigned, the usual arithmetic conversions (g:ubinary)
 (define g:binary (lambda (e opname)
+	;; int + pointer as pointer + int (M13): the pointer's arithmetic
+	(if (if (= opname 'ADD) (if (g:isptr (g:typeof (g:second e))) false (g:isptr (g:typeof (g:third e)))) false)
+		(g:binary (list (head e) (g:third e) (g:second e)) opname)
 	(begin
 		(define shf (if (= opname 'SHL) true (= opname 'SHR)))
 		(define lt0 (g:typeof (g:second e)))
 		(define rtl (if shf g:INT (g:typeof (g:third e))))
 		(if (g:llop? shf lt0 rtl) (g:llbinary e opname (g:llrty shf lt0 rtl))
-		(g:binary/1 e opname)))))
+		(g:binary/1 e opname))))))
 (define g:binary/1 (lambda (e opname)
 	(begin
 		(define rt0 (g:typeof (g:third e)))
@@ -1734,6 +1741,12 @@
 		(g:emit '(MCPY))
 		(g:emit '(ADJ 3))
 		(set! g:ty sty))))
+;; (*fp)(x) calls fp, a function pointer being a word here; but (*pf)(x),
+;; pf a pointer to one (M13), calls what pf points at
+(define g:calltgt (lambda (e)
+	(if (= (head e) 'deref)
+		(if (g:isptr (g:typeof (g:second e))) e (next g:calltgt (g:second e)))
+	e)))
 ;; a call through an expression (M7b): the arguments, then what JSR
 ;; would have pushed -- the return address, here an IMM of the label
 ;; after the jump -- then the target in A and JMPA to it. The callee
@@ -1744,7 +1757,7 @@
 		(define l (g:newlabel))
 		(g:emit (list 'IMM (list 'code l)))
 		(g:emit '(PSH))
-		(g:expr (g:second e))
+		(g:expr (g:calltgt (g:second e)))
 		(g:emit '(JMPA))
 		(g:label! l)
 		(if (> t 0) (g:emit (list 'ADJ t)) nil)
@@ -2603,8 +2616,8 @@
 					(g:die (+ "too many initializers for " n)) nil)
 				(g:delems (g:second init) s bytewise))
 		(if (if (= (head init) 'str) (= bytewise true) false)
-			(begin
-				(if (< s (+ (length (g:second init)) 1))
+			(begin				;; C drops the NUL of a string that fills the array exactly (M13)
+				(if (< s (length (g:second init)))
 					(g:die (+ "string does not fit the array " n)) nil)
 				(g:dstrbytes (g:second init) 0)
 				(g:dzero (- s (length (g:second init)))))
@@ -3064,8 +3077,7 @@
 					(g:die (+ "too many initializers for " (g:third d))) nil)
 				(g:linit/elems val (g:second init) size 0 bytewise))
 		(if (if (= (head init) 'str) (= bytewise true) false)
-			(begin
-				(if (< size (+ (length (g:second init)) 1))
+			(begin				(if (< size (length (g:second init)))
 					(g:die (+ "string does not fit the array " (g:third d))) nil)
 				(g:linit/elems val (g:strbytes (g:second init) 0 (list))
 					size 0 true))

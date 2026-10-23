@@ -74,13 +74,48 @@ URL parameters (from `web/app.js`). The page's Configuration button shows them a
 The running machine is `window.c4m` on the page, so the console or a test
 can drive it (`c4m.write('ps\n')`).
 
+## The Code Explorer
+
+`/libjs/web/explore.html`, from the same server: any image, object or
+library in the repository (the list is every one under
+`src/c4bb/images`; a path, or a file dropped on the page or opened from
+this computer, does as well).
+
+- **Functions, globals and strings**, filtered by a regex. A body with
+  no symbol (a static, a helper the compiler made) is listed by where it
+  starts, `<code@0x…>`. A string is any the code takes the address of.
+- **The code** of the one chosen, with every operand named: calls and
+  `&function` link to the function, branches to labels, data to the
+  global (and offset) or the string literal, `[bp+n]` to the parameter
+  when the source is found, and anything still to link (in a `.c4o` or
+  `.c4l`) by its symbol. Fused opcodes are green, the machine's
+  syscalls pink.
+- **Its source**, matched by name: each `.c` in the directories named
+  (guessed from the image; the guess is kept per image) is scanned for
+  function definitions, and the function's lines are marked. Names in
+  the source that are functions in the image link back to them.
+- **Refs**: who calls it, or takes its address, and from where; what it
+  calls; the globals it uses; its instructions by opcode.
+- **Data**: a global's bytes, the pointers in it (patched at load), and
+  who uses it.
+- **Go to** a name, a code word (`0x1f4`), or a machine address
+  (`@0x1a3f0`, against the image's base: 0x1000 on the bare machine).
+  The URL keeps the image and function (`#img=…&fn=…`), and Alt+Left and
+  Alt+Right go back and forward.
+
+Matching source by name is a stopgap: line by line needs a source map
+in the image, track S's `SMAP` chunk (docs/c4-explorer.md 2), which no
+compiler writes yet. `c4r.js` already reads one (its test builds one),
+and the code pane bands its instructions by row when an image has it;
+the source pane follows the rows once S1 gives the page real ones.
+
 ## Test
 
 Neither is in `make test`.
 
 | Target | What it checks |
 |---|---|
-| `make test-libjs` | Unit tests (printf, heap, display, shared memory, desktop), then every corpus image byte for byte against native `c4m32` (or 64-bit `c4m` where `c4m32` cannot be trusted), the fused-opcode differential, STRC with symbol names, exit status, the PIT, and C4KE and C4IX booting with grep assertions. Builds `c4bb-images` first. |
+| `make test-libjs` | Unit tests (printf, heap, display, shared memory, desktop, the explorer's `c4r.js` over every image), then every corpus image byte for byte against native `c4m32` (or 64-bit `c4m` where `c4m32` cannot be trusted), the fused-opcode differential, STRC with symbol names, exit status, the PIT, and C4KE and C4IX booting with grep assertions. Builds `c4bb-images` first. |
 | `make test-libjs-web` | The page in the user's own Chrome over raw CDP (`LIBJS_CDP`, else ports 9224 then 9222), then the display legs with `--gui`. It never launches a browser; if none answers it says so. |
 
 ## Layout
@@ -102,8 +137,9 @@ Neither is in `make test`.
 | `page.js` | The main-thread API, `C4M.boot(...)`. |
 | `display.js` | Replays command frames onto the canvas; turns DOM events into event frames. |
 | `cli.js` | The Node runner. |
-| `serve.mjs` | A static server for the repo root, with optional COOP/COEP headers. |
-| `web/` | The page: terminal on the left, display on the right. |
+| `c4r.js` | The Code Explorer's reader: a C4R image, object or library at either word size, every segment and symbol, decoded with the machine's own opcode table, operands resolved, cross-references both ways. |
+| `serve.mjs` | A static server for the repo root, with optional COOP/COEP headers, and a directory's listing as JSON with `?ls`. |
+| `web/` | The page: terminal on the left, display on the right. `explore.html`, the Code Explorer. |
 | [guest/](guest/README.md) | `gui.h` and `snd.h`, the display and sound card APIs for guest C, and their demos. |
 | `tests/` | `test-libjs.sh`, the unit tests, the CDP gate (`cdp.mjs`, `test-web.mjs`, `test-web-gui.mjs`), and `src/strc.c`. |
 | `package.json` | Marks the directory as ES modules. |

@@ -42,6 +42,7 @@ check64 () {
 
 # ---- pure units ---------------------------------------------------------
 node libjs/tests/test-printf.mjs || fail=1
+node libjs/tests/test-c4r.mjs    || fail=1
 node libjs/tests/test-heap.mjs   || fail=1
 node libjs/tests/test-sheap.mjs  || fail=1
 node libjs/tests/test-gui.mjs    || fail=1

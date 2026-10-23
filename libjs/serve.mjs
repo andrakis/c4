@@ -11,9 +11,12 @@
 // available). With them the display takes the shared-memory path
 // (shared.js: a command ring and a framebuffer triple buffer); without
 // them it posts messages.
+//
+// A directory asked for with ?ls is its listing, as JSON: [{name, dir,
+// size}]. The Code Explorer (explore.html) finds images and sources so.
 
 import { createServer } from 'node:http';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { networkInterfaces } from 'node:os';
 import { proxyUrl } from '../src/c4bb/tools/proxy-domain.mjs';
@@ -35,7 +38,20 @@ export function makeServer(root = ROOT, isolate = ISOLATE) {
     let p = join(root, normalize(decodeURIComponent(req.url.split('?')[0])));
     if (!p.startsWith(root)) { res.writeHead(403); res.end(); return; }
     try {
-      if ((await stat(p)).isDirectory()) p = join(p, 'index.html');
+      if ((await stat(p)).isDirectory()) {
+        if (new URLSearchParams(req.url.split("?")[1] || "").has("ls")) {
+          const ents = await readdir(p, { withFileTypes: true });
+          const list = await Promise.all(ents.filter(e => !e.name.startsWith('.')).map(async e => ({
+            name: e.name, dir: e.isDirectory(),
+            size: e.isDirectory() ? 0 : (await stat(join(p, e.name)).catch(() => ({ size: 0 }))).size,
+          })));
+          list.sort((x, y) => x.name.localeCompare(y.name));
+          res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+          res.end(JSON.stringify(list));
+          return;
+        }
+        p = join(p, 'index.html');
+      }
       const body = await readFile(p);
       const h = { 'content-type': TYPES[extname(p)] || 'application/octet-stream', 'cache-control': 'no-store' };
       if (isolate) {

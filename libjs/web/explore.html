@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>c4 Code Explorer</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="explore.css">
+</head>
+<body>
+<header id="bar">
+  <span id="brand">c4<span class="dim"> explorer</span></span>
+  <label>image
+    <select id="images"><option value="">loading&hellip;</option></select>
+  </label>
+  <input id="path" type="text" spellcheck="false" placeholder="src/c4bb/images/&hellip;.c4r"
+         title="a path under the repository, as the server serves it; Enter opens it">
+  <label class="button" title="a .c4r, .c4o or .c4l from this computer (or drop one on the page)">open file&hellip;
+    <input id="file" type="file" accept=".c4r,.c4o,.c4l" hidden>
+  </label>
+  <input id="goto" type="text" spellcheck="false" placeholder="go to: name, 0x1f4 (word), @0x1a3f0 (address)"
+         title="a function or global by name; a code word offset; or a machine address after @, from the image base below">
+  <label title="where the image's code starts in the machine, for @addresses (the bare machine loads at 0x1000)">base
+    <input id="base" type="text" spellcheck="false" value="0x1000" size="8">
+  </label>
+  <a href="index.html" class="dim" title="the machine">c4m.js</a>
+  <span id="status">&nbsp;</span>
+</header>
+<div id="summary" class="dim"></div>
+<main id="xpanes">
+  <section class="pane" id="list-pane">
+    <div class="pane-head">
+      <div class="tabs" id="list-tabs">
+        <button data-tab="funcs" class="active">functions</button>
+        <button data-tab="globals">globals</button>
+        <button data-tab="strings">strings</button>
+      </div>
+    </div>
+    <div class="tools">
+      <input id="filter" type="text" spellcheck="false" placeholder="filter (regex)">
+      <select id="sort" title="order">
+        <option value="addr">by address</option>
+        <option value="name">by name</option>
+        <option value="size">by size</option>
+      </select>
+    </div>
+    <div id="list" class="scroll" tabindex="0"></div>
+    <div id="list-count" class="foot dim"></div>
+  </section>
+  <section class="pane" id="code-pane">
+    <div class="pane-head">
+      <h2>code</h2>
+      <button id="back" title="back (Alt+Left)">&larr;</button>
+      <button id="fwd" title="forward (Alt+Right)">&rarr;</button>
+      <span id="code-title"></span>
+      <span id="code-info" class="pill"></span>
+    </div>
+    <div id="code" class="scroll" tabindex="0"></div>
+  </section>
+  <section class="pane" id="side-pane">
+    <div class="pane-head">
+      <div class="tabs" id="side-tabs">
+        <button data-tab="source" class="active">source</button>
+        <button data-tab="refs">refs</button>
+        <button data-tab="data">data</button>
+      </div>
+    </div>
+    <div class="tools" id="src-tools">
+      <input id="srcdirs" type="text" spellcheck="false" placeholder="source directories, space-separated"
+             title="where the image's C came from; each .c in them is scanned for function definitions">
+      <button id="srcload" title="scan these directories">scan</button>
+    </div>
+    <div id="side" class="scroll"></div>
+  </section>
+</main>
+<script type="module" src="explore.js"></script>
+</body>
+</html>

@@ -2,10 +2,11 @@
 
 Status: written 2026-10-24 against `smp` at 6295e18, and revised the
 same day with the user's answers (section 8). **G0 and G1 are built**
-(branches `grin-g0` and `grin-g1`, merged here on 2026-10-24).
-Sections 3.2 and 3.3 say what G0 built where it differs from the first
-draft, and 3.4 shows the window kit's API as G1 built it. The rest is
-plan.
+(branches `grin-g0` and `grin-g1`, merged here on 2026-10-24), and
+**G2 is built** (branch `grin-g2`, 2026-10-24). Sections 3.2 and 3.3
+say what G0 built where it differs from the first draft, 3.4 shows the
+window kit's API as G1 built it, and 3.9 and the G2 milestone say what
+G2 built. The rest is plan.
 
 `grin` is to C4DOS what Windows 3.x was to MS-DOS: a program started
 from `AUTOEXEC.BAT` that takes over the screen and gives you windows, a
@@ -448,7 +449,7 @@ a kit that both shells build on.
 | `ui.c` | widgets | `ui.c`, as is |
 | `wmcore.c` | window list, z-order, focus, modality, drag, resize, menus and drop-downs, timers, and class dispatch | `wm.c`, minus the shell |
 | `dialog.c` | message, input and file boxes (G1 split them from `wmcore.c`, to keep each module small for c4sc) | `wm.c` / new |
-| `look95.c`, `look31.c` | window chrome: the desktop's Classic and Flat looks, and the new Windows 3.1 one (control-menu box, arrow buttons, thick border, centred title, icons for minimised windows) | `wm.c` / new |
+| `look95.c`, `look31.c` | window chrome: the desktop's Classic and Flat looks, and the new Windows 3.1 one (control-menu box, arrow buttons, thick border, centred title, icons for minimised windows, G2's `wk_min_icons`) | `wm.c` / new |
 | `textgrid.c` | VT100 grid, scrollback, line editor, row cache, with no pipes | `term.c` |
 | `savers.c` | screen savers | as is |
 | `calc.c`, `notepad.c`, `clock.c` | the accessories, as classes | `calc.c`, `apps.c` / new |
@@ -642,6 +643,26 @@ grin. `build-images.sh` gains a libjs set, `libjs/images/dos/`:
 nothing refers to it. c4bb's own disks are untouched. The headless test
 boots the same directory.
 
+**As built in G2.** `build-images.sh` makes `libjs/images/dos` (ignored,
+like every built disk) after its C4DOS step, when grin's objects are
+there (`make grin-objs`, which `c4bb-images` now builds):
+
+- `c4dos32.c4r`, and `grin.c4r` linked from `.grin/*.c4o` with the bare
+  libc, as the games are;
+- the games and their data, hard-linked from the games disk (copied
+  where links fail), so the disk costs no space twice;
+- `CONFIG.SYS`: CLOCK, RAMDISK (16 MB), CONSOLE FLUSH, DRIVES and HEAP.
+  `HOME=B:` comes with G4 and `REDIR.SYS TAP` with G5;
+- `AUTOEXEC.BAT`: the welcome, `VER`, the games on the disk, a line
+  saying File > Exit grin comes back to A>, and `GRIN` last;
+- `c4dos.dir`, `manifest.json` and `index.json`, as the games disk has.
+
+`?system=c4dos` boots it (`app.js`). The four bare-machine game systems
+still boot `src/c4bb/images/games`: they move with G4, which gives each
+its own store. The games disk's `CONFIG.SYS` is now made from
+`src/c4dos/fs/CONFIG.SYS` rather than copied from the shared disk, which
+in a fresh tree is not there yet at that point (G1's note).
+
 ## 4. The first applications
 
 - **Program Manager** (built in) is the shell window. In G4 it shows one
@@ -762,6 +783,70 @@ disk the page boots has `DEVICE=HEAP.SYS`.
   - Exit grin returns to `A>`, and `VER` answers there.
 - **Browser:** the page boots straight into grin. Switch the
   resolution, then exit to `A>`.
+
+*Done, branch `grin-g2` (2026-10-24).* What was built:
+
+- **`src/grin/`**, linked into `grin.c4r` with the kit's `draw`, `ui`,
+  `wmcore`, `dialog`, `look95`, `look31` and `savers` (`make grin-objs`;
+  the kit is compiled as the desktop compiles it, grin's own files with
+  `-fno-builtin` so that their files go through libc and `bare.c`):
+  - `grin.c`: the start (no display: "grin: this machine has no
+    display, so grin cannot run here." and status 1), the loop (the
+    desktop's, with `__c4_usleep` for the nap), the desktop's colour and
+    pattern, Ctrl+Esc and a double click on the desktop for the Task
+    List, `GRIN.INI`, the screen saver, and the kit's host functions
+    (`wk_alloc` from libc's `malloc`; files with `open`/`read`/`write`,
+    so C4DOS's RAM disk; `wk_readdir` lists nothing until G4). Exit
+    closes every window, leaves "grin has ended" on the display, lets it
+    go (`gui_detach`) and returns 0 to the batch file.
+  - `progman.c`: the placeholder Program Manager: the Main group with
+    Control Panel in it, File > Exit grin... and Help > About. Exit asks
+    "This will end your grin session." with OK and Cancel; closing
+    Program Manager asks the same.
+  - `tasklist.c`: the Task List, a dialog-chrome window (modal, as 3.1's
+    was): the windows that are not dialogs, Switch To, End Task
+    (`wk_ask_close`), Cancel, Cascade, Tile and Arrange Icons. Cascade
+    and Tile take maximised windows out of it and leave the icons' row
+    clear. Keys: Up, Down, Enter, Esc.
+  - `control.c`: Control Panel with Colors, Desktop and Display items.
+    Each opens a dialog of radio buttons with OK and Cancel: Display
+    (640 x 480, 800 x 600, applied at once through `wk_screen`), Colors
+    (the kit's nine schemes), Desktop (five 8x8 patterns, tiled as a
+    64x64 image, and the screen saver with its delay and a Test button).
+  - `shell.h`, what they share. (`grin.h` stays the name of G3's
+    application header.)
+- **`GRIN.INI`**: `[grin]` then `width=`, `height=`, `scheme=`,
+  `pattern=`, `saver=`, `wait=`, one a line. Read at start (RAM disk,
+  then the disk), written on every change. On the RAM disk it lasts
+  until power-off: exit grin and `GRIN` again keeps the choices, a
+  reload does not, until G4's `HOME=B:`.
+- **The kit** (compatible: the C4IX desktop does not ask for icons, and
+  test-desktop is unchanged):
+  - `wk_min_icons(on)`: minimised windows are drawn by `look31.c` as
+    32x32 icons with their titles under them (broken onto two lines at
+    the space nearest the middle when long), in places along the bottom
+    of the area, under the windows. A click opens the control menu over
+    the icon; a double click or the menu's Restore brings the window back
+    as it was (maximised or not), and Maximize brings it back maximised.
+  - `wk_minimize(w)`, `wk_arrange_icons()`; `struct win` gains `islot`.
+  - `WK_OKCANCEL` message boxes (OK and Cancel; Y and N stay Yes/No's).
+  - The control menu's Restore and Maximize bring back a minimised window.
+- **Tests:** `libjs/tests/test-grin.mjs` (`make test-grin`, and in
+  `test-libjs.sh`), 41 checks; `libjs/tests/web-grin.mjs`, the browser
+  check, run by hand against a Chrome over CDP.
+
+Deviations and findings:
+
+- **Ctrl+Esc does not reach the page on Windows**: the system takes it
+  for the Start menu before the browser sees it. The double click on the
+  desktop is the way there; the browser check sends Ctrl+Esc through CDP.
+- The headless test has to answer a `gui_size` as the page does
+  (`display.js` sends a resize event back, which is what sets `GUI_W`).
+- **C4DOS's `ECHO` prints at most 14 words** (`ARGVMAX` 16 in
+  `parse_line`); the rest of the line is dropped silently. AUTOEXEC.BAT's
+  lines are kept short. Not fixed here.
+- The games stay on `src/c4bb/images/games` for the bare-machine
+  systems; only `?system=c4dos` moved (3.9).
 
 **G3: applications**
 

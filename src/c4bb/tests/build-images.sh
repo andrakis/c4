@@ -318,7 +318,7 @@ keep() { cp "$1" "$PB/$2"; }
 # list four kernel files, so an edit to sys.c, vfs.c or a user program
 # was silently not built.
 if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
-   [ -n "$(find src/c4ix libjs/guest/gui.h libjs/guest/gui.c libjs/guest/snd.h libjs/guest/snd.c $(ls .img_g 2>/dev/null) -newer $OUT/c4ix32.c4r -type f -print -quit)" ]; then
+   [ -n "$(find src/c4ix src/winkit libjs/guest/gui.h libjs/guest/gui.c libjs/guest/snd.h libjs/guest/snd.c $(ls .img_g 2>/dev/null) -newer $OUT/c4ix32.c4r -type f -print -quit)" ]; then
     say "C4IX, compiled $G (c4lc)"
     rm -rf $PB
     mkdir -p $PB/kernel $PB/lib $PB/libc $PB/user $PB/desktop $PB/bin
@@ -438,10 +438,13 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     # the desktop: several modules, linked together (docs/c4ix-desktop.md)
     dobjs=""
     step "C4IX's desktop:"
-    for m in wm ui term files taskmgr apps calc edit wall savers; do
+    # (the C4IX shell's own, then the window kit's, src/winkit, which grin shares)
+    for m in shell tools host term files taskmgr apps edit wall draw ui wmcore dialog look95 look31 textgrid savers calc notepad clock; do
         item $m
+        src=src/c4ix/user/desktop/$m.c
+        [ -f $src ] || src=src/winkit/$m.c
         ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -c -D C4IX_SHARED -I src/c4ix/include -I src/c4ix/user/desktop \
-            src/c4ix/user/desktop/$m.c .c4bb_ix_d_$m.c4o > /dev/null
+            -I src/winkit $src .c4bb_ix_d_$m.c4o > /dev/null
         dobjs="$dobjs .c4bb_ix_d_$m.c4o"
         keep .c4bb_ix_d_$m.c4o desktop/$m.c4o
     done
@@ -590,7 +593,8 @@ for n in $C4IX_USER $C4IX_ARC_USER; do
     cp src/c4ix/user/$n.c $DISK/c4ix-$n.c
 done
 # the desktop's modules, one after another, as its one source file
-cat src/c4ix/user/desktop/desktop.h src/c4ix/user/desktop/*.c > $DISK/c4ix-desktop.c
+cat src/winkit/winkit.h src/winkit/wkwin.h src/winkit/textgrid.h src/c4ix/user/desktop/desktop.h \
+    src/c4ix/user/desktop/*.c src/winkit/*.c > $DISK/c4ix-desktop.c
 cp src/c4ix/c4ix.h $DISK/c4ix.h
 cp src/c4ix/include/c4ix_user.h $DISK/c4ix_user.h
 # c4m as a C4IX program: c4m.c built the way cc builds it inside the

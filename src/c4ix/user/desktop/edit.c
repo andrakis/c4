@@ -93,12 +93,11 @@ struct edit {
 
 static struct edit *E(struct win *w) { return (struct edit *)w->st; }
 static char sb[512];
-static char *edit_menu_titles[4];
+static struct wk_menu edit_menus[4];
 static char *edit_file_items[7];
 static char *edit_build_items[7];
 static char *edit_view_items[4];
 static char *edit_help_items[2];
-static char **edit_menu_items[4];
 
 static int e_isspace(int c) { return c == ' ' || c == 9 || c == 10 || c == 13; }
 static int e_isword(int c) {
@@ -2368,11 +2367,11 @@ int edit_open(char *path) {
     int i;
     struct win *w;
     struct edit *e;
-    i = win_open(K_EDIT, "Untitled - Editor", 760, 500);
+    i = win_open(K_EDIT, "Untitled - Editor", 760, 500, sizeof(struct edit));
     if (i < 0) return i;
     w = win_get(i);
     e = E(w);
-    edit_menu_titles[0] = "File"; edit_menu_titles[1] = "Build"; edit_menu_titles[2] = "View"; edit_menu_titles[3] = "Help";
+    edit_menus[0].title = "File"; edit_menus[1].title = "Build"; edit_menus[2].title = "View"; edit_menus[3].title = "Help";
     edit_file_items[0] = "New"; edit_file_items[1] = "Open..."; edit_file_items[2] = "Save";
     edit_file_items[3] = "Save As..."; edit_file_items[4] = "-"; edit_file_items[5] = "Close"; edit_file_items[6] = 0;
     edit_build_items[0] = "Build   F5"; edit_build_items[1] = "Run   F6"; edit_build_items[2] = "Next Error   F8";
@@ -2381,9 +2380,9 @@ int edit_open(char *path) {
     edit_view_items[0] = "Files   Ctrl+B"; edit_view_items[1] = "Syntax Colouring";
     edit_view_items[2] = "Word Wrap"; edit_view_items[3] = 0;
     edit_help_items[0] = "Keys"; edit_help_items[1] = 0;
-    edit_menu_items[0] = edit_file_items; edit_menu_items[1] = edit_build_items;
-    edit_menu_items[2] = edit_view_items; edit_menu_items[3] = edit_help_items;
-    win_menus(w, 4, edit_menu_titles, edit_menu_items);
+    edit_menus[0].items = edit_file_items; edit_menus[1].items = edit_build_items;
+    edit_menus[2].items = edit_view_items; edit_menus[3].items = edit_help_items;
+    wk_menu(i, edit_menus, 4);
     e->utext = (char **)ualloc(UNDO_MAX * sizeof(int)); e->ulen = (int *)ualloc(UNDO_MAX * sizeof(int));
     e->ucy = (int *)ualloc(UNDO_MAX * sizeof(int)); e->ucx = (int *)ualloc(UNDO_MAX * sizeof(int));
     e->rtext = (char **)ualloc(UNDO_MAX * sizeof(int)); e->rlen = (int *)ualloc(UNDO_MAX * sizeof(int));

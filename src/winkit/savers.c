@@ -15,10 +15,10 @@
 //   Marquee       a line of text crawls across at a random height
 //   Digital Rain  columns of falling characters, bright at the head, fading behind
 //
-// wm.c runs them: saver_start, then saver_frame every SAVER_MS, then
+// The shell runs them: saver_start, then saver_frame every SAVER_MS, then
 // saver_stop on input (and a full redraw of the desktop).
 
-#include "desktop.h"
+#include "winkit.h"
 
 enum { N_SAVERS = 6 };       // 0 is None
 
@@ -74,14 +74,14 @@ static void star_spawn(int i, int anywhere) {
 static void star_start() { int i; i = 0; while (i < N_STARS) { star_spawn(i, 1); ++i; } }
 static void star_frame() {
     int i, sx, sy, d, sz, br;
-    d_rect(0, 0, SW, SH, 0);
+    d_rect(0, 0, wk.sw, wk.sh, 0);
     i = 0;
     while (i < N_STARS) {
         st_z[i] = st_z[i] - 12;                       // speed 5: across the field in ~2.5 s at 30 fps
         if (st_z[i] <= 20) { star_spawn(i, 0); ++i; continue; }
-        sx = SW / 2 + st_x[i] * (SW / 2) / st_z[i];
-        sy = SH / 2 + st_y[i] * (SW / 2) / st_z[i];
-        if (sx < 0 - 4 || sy < 0 - 4 || sx > SW + 4 || sy > SH + 4) { star_spawn(i, 0); ++i; continue; }
+        sx = wk.sw / 2 + st_x[i] * (wk.sw / 2) / st_z[i];
+        sy = wk.sh / 2 + st_y[i] * (wk.sw / 2) / st_z[i];
+        if (sx < 0 - 4 || sy < 0 - 4 || sx > wk.sw + 4 || sy > wk.sh + 4) { star_spawn(i, 0); ++i; continue; }
         d = 1024 - st_z[i];                           // 0 far, 1024 near
         sz = 1 + 3 * d / 1024 * d / 1024;
         br = 90 + 165 * d / 1024;
@@ -106,9 +106,9 @@ static void poly_start() {
     int i, sp;
     i = 0;
     while (i < 2 * P_V) {
-        pg_x[i] = rnd_range(0, SW - 1) * 16;
-        pg_y[i] = rnd_range(0, SH - 1) * 16;
-        sp = rnd_range(48, 144) * SH / 480;           // 3..9 pixels, in sixteenths
+        pg_x[i] = rnd_range(0, wk.sw - 1) * 16;
+        pg_y[i] = rnd_range(0, wk.sh - 1) * 16;
+        sp = rnd_range(48, 144) * wk.sh / 480;           // 3..9 pixels, in sixteenths
         pg_vx[i] = (rnd() & 1 ? sp : 0 - sp) * rnd_range(60, 100) / 100;
         pg_vy[i] = (rnd() & 1 ? sp : 0 - sp) * rnd_range(60, 100) / 100;
         ++i;
@@ -126,8 +126,8 @@ static void poly_frame() {
         v = 0;
         while (v < P_V) {
             k = s * P_V + v;
-            bounce(&pg_x[k], &pg_vx[k], (SW - 1) * 16);
-            bounce(&pg_y[k], &pg_vy[k], (SH - 1) * 16);
+            bounce(&pg_x[k], &pg_vx[k], (wk.sw - 1) * 16);
+            bounce(&pg_y[k], &pg_vy[k], (wk.sh - 1) * 16);
             pg_tx[(s * P_TRAIL + slot) * P_V + v] = pg_x[k] / 16;
             pg_ty[(s * P_TRAIL + slot) * P_V + v] = pg_y[k] / 16;
             ++v;
@@ -137,7 +137,7 @@ static void poly_frame() {
         ++s;
     }
     ++pg_n;
-    d_rect(0, 0, SW, SH, 0);
+    d_rect(0, 0, wk.sw, wk.sh, 0);
     s = 0;
     while (s < 2) {
         t = 0;
@@ -166,9 +166,9 @@ static void bez_start() {
     int i, sp;
     i = 0;
     while (i < BZ_N * 3) {
-        bz_x[i] = rnd_range(0, SW - 1) * 16;
-        bz_y[i] = rnd_range(0, SH - 1) * 16;
-        sp = rnd_range(32, 112) * SH / 480;
+        bz_x[i] = rnd_range(0, wk.sw - 1) * 16;
+        bz_y[i] = rnd_range(0, wk.sh - 1) * 16;
+        sp = rnd_range(32, 112) * wk.sh / 480;
         bz_vx[i] = (rnd() & 1 ? sp : 0 - sp) * rnd_range(50, 100) / 100;
         bz_vy[i] = (rnd() & 1 ? sp : 0 - sp) * rnd_range(50, 100) / 100;
         ++i;
@@ -179,7 +179,7 @@ static void bez_start() {
 static void bez_frame() {
     int i, k, t, it, b0, b1, b2, b3, p0, p1, p2, p3, slot, base, a, c, age, r, g, bl, cnt;
     i = 0;
-    while (i < BZ_N * 3) { bounce(&bz_x[i], &bz_vx[i], (SW - 1) * 16); bounce(&bz_y[i], &bz_vy[i], (SH - 1) * 16); ++i; }
+    while (i < BZ_N * 3) { bounce(&bz_x[i], &bz_vx[i], (wk.sw - 1) * 16); bounce(&bz_y[i], &bz_vy[i], (wk.sh - 1) * 16); ++i; }
     slot = bz_n % BZ_TRAIL;
     base = slot * BZ_PTS;
     i = 0;
@@ -199,7 +199,7 @@ static void bez_frame() {
     bz_hue = bz_hue + 12;
     bz_c[slot] = hue_rgb(bz_hue, 255);
     ++bz_n;
-    d_rect(0, 0, SW, SH, 0);
+    d_rect(0, 0, wk.sw, wk.sh, 0);
     cnt = bz_n < BZ_TRAIL ? bz_n : BZ_TRAIL;
     age = 0;
     while (age < cnt) {
@@ -224,10 +224,10 @@ static void bez_frame() {
 // ---- Marquee ----
 static int mq_x, mq_y, mq_hue;
 static char *mq_text;
-static void mq_place() { mq_x = SW; mq_y = rnd_range(40, SH - 100); }
+static void mq_place() { mq_x = wk.sw; mq_y = rnd_range(40, wk.sh - 100); }
 static void mq_start() { mq_text = "C4IX -- built upon Robert Swierczek's C4"; mq_place(); mq_hue = rnd_range(0, 1535); }
 static void mq_frame() {
-    d_rect(0, 0, SW, SH, 0);
+    d_rect(0, 0, wk.sw, wk.sh, 0);
     d_textn(mq_x, mq_y, hue_rgb(mq_hue, 255), 48, F_BOLD, 0, mq_text, 0 - 1);
     mq_x = mq_x - 6;
     mq_hue = mq_hue + 4;
@@ -239,14 +239,17 @@ static void mq_frame() {
 // A column every CW pixels; each has a head falling a row a frame (or two),
 // drawn bright, the cell above it green, and the cell its tail has left
 // cleared -- so a frame draws three cells a column, not the screen.
-enum { CW = 14, CH = 16, R_COLS = SW / CW, R_ROWS = SH / CH };
-static int rn_head[R_COLS], rn_len[R_COLS], rn_wait[R_COLS], rn_speed[R_COLS];
+enum { CW = 14, CH = 16, R_MAXCOLS = WK_MAX_W / CW };
+static int R_COLS, R_ROWS;              // the screen's, when the rain starts
+static int rn_head[R_MAXCOLS], rn_len[R_MAXCOLS], rn_wait[R_MAXCOLS], rn_speed[R_MAXCOLS];
 static char rn_ch[2];
 static char *rn_glyphs;
 static void rain_start() {
     int c;
     rn_glyphs = "0123456789ABCDEFabcdef<>=+*#$%&@!?:;{}[]|/\\~^C4IX";
-    d_rect(0, 0, SW, SH, 0);
+    R_COLS = wk.sw / CW; R_ROWS = wk.sh / CH;
+    if (R_COLS > R_MAXCOLS) R_COLS = R_MAXCOLS;
+    d_rect(0, 0, wk.sw, wk.sh, 0);
     c = 0;
     while (c < R_COLS) {
         rn_head[c] = 0 - rnd_range(0, R_ROWS);
@@ -292,7 +295,7 @@ void saver_start(int which) {
     if (!rnd_s) rnd_s = __time() | 1;
     saver_cur = which;
     saver_t = 0;
-    d_rect(0, 0, SW, SH, 0);
+    d_rect(0, 0, wk.sw, wk.sh, 0);
     if (which == 1) star_start();
     else if (which == 2) poly_start();
     else if (which == 3) bez_start();

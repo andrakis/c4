@@ -1,22 +1,27 @@
 B4KE2
-# The desktop: ten modules and libc's fp.c, which load libgui, libarc and libc4ix (build-images.sh, `make
-# c4ix-desktop.c4r`). wm.c and gui.c include libjs/guest/gui.h by its
+# The desktop: the C4IX shell's modules and the window kit's (src/winkit,
+# which grin shares), and libc's fp.c, which load libgui, libarc and
+# libc4ix (build-images.sh, `make c4ix-desktop.c4r`). The kit's draw.c,
+# wmcore.c and its looks, and the shell, include libjs/guest/gui.h by its
 # path from the top of the tree, which is why this runs from $(ROOT).
-# Every module includes desktop.h.
+# Every module includes winkit.h; the shell's include desktop.h too.
 SET ROOT /usr
 SET OUT /build
 # c4sc recurses deeply on a long source: edit.c, the Editor, overruns
 # even 1 MB, so the desktop gets 4 MB of stack per compile (SYS_STACK)
 SET STACK 4194304
-SET LC c4sc -c 400000 compile -O -c -D C4IX_SHARED -I src/c4ix/include -I src/c4ix/user/desktop
-SET H src/c4ix/user/desktop/desktop.h src/c4ix/include/c4ix_user.h libjs/guest/gui.h
+SET LC c4sc -c 400000 compile -O -c -D C4IX_SHARED -I src/c4ix/include -I src/c4ix/user/desktop -I src/winkit
+SET KH src/winkit/winkit.h src/winkit/wkwin.h src/winkit/wkgui.h src/winkit/textgrid.h libjs/guest/gui.h
+SET H src/c4ix/user/desktop/desktop.h src/c4ix/include/c4ix_user.h $(KH)
 CD $(ROOT)
 MKDIR $(OUT)/desktop
 MKDIR $(OUT)/bin
-DEPS $(OUT)/desktop/wm.c4o : src/c4ix/user/desktop/wm.c $(H)
-RUN $(LC) src/c4ix/user/desktop/wm.c $(OUT)/desktop/wm.c4o
-DEPS $(OUT)/desktop/ui.c4o : src/c4ix/user/desktop/ui.c $(H)
-RUN $(LC) src/c4ix/user/desktop/ui.c $(OUT)/desktop/ui.c4o
+DEPS $(OUT)/desktop/shell.c4o : src/c4ix/user/desktop/shell.c $(H)
+RUN $(LC) src/c4ix/user/desktop/shell.c $(OUT)/desktop/shell.c4o
+DEPS $(OUT)/desktop/tools.c4o : src/c4ix/user/desktop/tools.c $(H)
+RUN $(LC) src/c4ix/user/desktop/tools.c $(OUT)/desktop/tools.c4o
+DEPS $(OUT)/desktop/host.c4o : src/c4ix/user/desktop/host.c $(H)
+RUN $(LC) src/c4ix/user/desktop/host.c $(OUT)/desktop/host.c4o
 DEPS $(OUT)/desktop/term.c4o : src/c4ix/user/desktop/term.c $(H)
 RUN $(LC) src/c4ix/user/desktop/term.c $(OUT)/desktop/term.c4o
 DEPS $(OUT)/desktop/files.c4o : src/c4ix/user/desktop/files.c $(H)
@@ -25,18 +30,37 @@ DEPS $(OUT)/desktop/taskmgr.c4o : src/c4ix/user/desktop/taskmgr.c $(H) src/c4ix/
 RUN $(LC) src/c4ix/user/desktop/taskmgr.c $(OUT)/desktop/taskmgr.c4o
 DEPS $(OUT)/desktop/apps.c4o : src/c4ix/user/desktop/apps.c $(H)
 RUN $(LC) src/c4ix/user/desktop/apps.c $(OUT)/desktop/apps.c4o
-DEPS $(OUT)/desktop/calc.c4o : src/c4ix/user/desktop/calc.c $(H)
-RUN $(LC) src/c4ix/user/desktop/calc.c $(OUT)/desktop/calc.c4o
+DEPS $(OUT)/desktop/edit.c4o : src/c4ix/user/desktop/edit.c $(H)
+RUN $(LC) src/c4ix/user/desktop/edit.c $(OUT)/desktop/edit.c4o
+DEPS $(OUT)/desktop/wall.c4o : src/c4ix/user/desktop/wall.c $(H) src/c4ix/include/archive.h
+RUN $(LC) src/c4ix/user/desktop/wall.c $(OUT)/desktop/wall.c4o
+# the window kit
+DEPS $(OUT)/desktop/draw.c4o : src/winkit/draw.c $(KH)
+RUN $(LC) src/winkit/draw.c $(OUT)/desktop/draw.c4o
+DEPS $(OUT)/desktop/ui.c4o : src/winkit/ui.c $(KH)
+RUN $(LC) src/winkit/ui.c $(OUT)/desktop/ui.c4o
+DEPS $(OUT)/desktop/wmcore.c4o : src/winkit/wmcore.c $(KH)
+RUN $(LC) src/winkit/wmcore.c $(OUT)/desktop/wmcore.c4o
+DEPS $(OUT)/desktop/dialog.c4o : src/winkit/dialog.c $(KH)
+RUN $(LC) src/winkit/dialog.c $(OUT)/desktop/dialog.c4o
+DEPS $(OUT)/desktop/look95.c4o : src/winkit/look95.c $(KH)
+RUN $(LC) src/winkit/look95.c $(OUT)/desktop/look95.c4o
+DEPS $(OUT)/desktop/look31.c4o : src/winkit/look31.c $(KH)
+RUN $(LC) src/winkit/look31.c $(OUT)/desktop/look31.c4o
+DEPS $(OUT)/desktop/textgrid.c4o : src/winkit/textgrid.c $(KH)
+RUN $(LC) src/winkit/textgrid.c $(OUT)/desktop/textgrid.c4o
+DEPS $(OUT)/desktop/savers.c4o : src/winkit/savers.c $(KH)
+RUN $(LC) src/winkit/savers.c $(OUT)/desktop/savers.c4o
+DEPS $(OUT)/desktop/calc.c4o : src/winkit/calc.c $(KH)
+RUN $(LC) src/winkit/calc.c $(OUT)/desktop/calc.c4o
+DEPS $(OUT)/desktop/notepad.c4o : src/winkit/notepad.c $(KH)
+RUN $(LC) src/winkit/notepad.c $(OUT)/desktop/notepad.c4o
+DEPS $(OUT)/desktop/clock.c4o : src/winkit/clock.c $(KH)
+RUN $(LC) src/winkit/clock.c $(OUT)/desktop/clock.c4o
 # the Calculator's decimal conversions: libc's, which says double (slow)
 DEPS $(OUT)/desktop/fp.c4o : src/c4ix/libc/fp.c
 RUN $(LC) src/c4ix/libc/fp.c $(OUT)/desktop/fp.c4o
-DEPS $(OUT)/desktop/wall.c4o : src/c4ix/user/desktop/wall.c $(H) src/c4ix/include/archive.h
-RUN $(LC) src/c4ix/user/desktop/wall.c $(OUT)/desktop/wall.c4o
-DEPS $(OUT)/desktop/savers.c4o : src/c4ix/user/desktop/savers.c $(H)
-RUN $(LC) src/c4ix/user/desktop/savers.c $(OUT)/desktop/savers.c4o
-DEPS $(OUT)/desktop/edit.c4o : src/c4ix/user/desktop/edit.c $(H)
-RUN $(LC) src/c4ix/user/desktop/edit.c $(OUT)/desktop/edit.c4o
-SET OBJS wm.c4o ui.c4o term.c4o files.c4o taskmgr.c4o apps.c4o calc.c4o edit.c4o wall.c4o savers.c4o fp.c4o
+SET OBJS shell.c4o tools.c4o host.c4o term.c4o files.c4o taskmgr.c4o apps.c4o edit.c4o wall.c4o draw.c4o ui.c4o wmcore.c4o dialog.c4o look95.c4o look31.c4o textgrid.c4o savers.c4o calc.c4o notepad.c4o clock.c4o fp.c4o
 CD $(OUT)/desktop
 LIST desktop.objs $(OBJS) -l $(OUT)/lib/libgui.c4s -l $(OUT)/lib/libarc.c4s -l $(OUT)/lib/libc4ix.c4s
 DEPS $(OUT)/bin/c4ix-desktop.c4r : $(OBJS) $(OUT)/lib/libgui.c4s $(OUT)/lib/libarc.c4s $(OUT)/lib/libc4ix.c4s

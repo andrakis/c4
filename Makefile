@@ -3110,18 +3110,24 @@ $(C4IX_ARC_PROGS): c4ix-%.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libarc.c4l libc4ix.c
 
 # userland programs built against the library: all IO via syscalls
 # The desktop is several modules (docs/c4ix-desktop.md): each is compiled
-# on its own, then all are linked with libc4ix, like the kernel.
-C4IX_DESKTOP := wm ui term files taskmgr apps calc edit wall savers
-C4IX_DESKTOP_SRC := $(C4IX_DESKTOP:%=$(C4IX_SRC)/user/desktop/%.c) $(C4IX_SRC)/user/desktop/desktop.h libjs/guest/gui.h \
-                    $(C4IX_SRC)/include/cpustat.h $(C4IX_SRC)/libc/fp.c
+# on its own, then all are linked with libc4ix, like the kernel. WINKIT's
+# are the window kit's (src/winkit), which grin shares.
+C4IX_DESKTOP := shell tools host term files taskmgr apps edit wall
+WINKIT := draw ui wmcore dialog look95 look31 textgrid savers calc notepad clock
+C4IX_DESKTOP_SRC := $(C4IX_DESKTOP:%=$(C4IX_SRC)/user/desktop/%.c) $(C4IX_SRC)/user/desktop/*.h libjs/guest/gui.h \
+                    $(WINKIT:%=src/winkit/%.c) $(wildcard src/winkit/*.h) $(C4IX_SRC)/include/cpustat.h $(C4IX_SRC)/libc/fp.c
+C4IX_DESKTOP_LC = $(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC)/include -I $(C4IX_SRC)/user/desktop -I src/winkit
 c4ix-desktop.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libarc.c4l libc4ix.c4l $(C4IX_DESKTOP_SRC)
 	for m in $(C4IX_DESKTOP); do \
-	  $(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC)/include -I $(C4IX_SRC)/user/desktop $(C4IX_SRC)/user/desktop/$$m.c .c4ix_d_$$m.c4o > /dev/null || exit 1; \
+	  $(C4IX_DESKTOP_LC) $(C4IX_SRC)/user/desktop/$$m.c .c4ix_d_$$m.c4o > /dev/null || exit 1; \
+	done
+	for m in $(WINKIT); do \
+	  $(C4IX_DESKTOP_LC) src/winkit/$$m.c .c4ix_d_$$m.c4o > /dev/null || exit 1; \
 	done
 	# the Calculator's decimal conversions are libc's fp.c
 	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -c $(C4IX_SRC)/libc/fp.c .c4ix_d_fp.c4o > /dev/null
-	$(C4RLINK) $(C4IX_DESKTOP:%=.c4ix_d_%.c4o) .c4ix_d_fp.c4o libarc.c4l libc4ix.c4l -o $@
-	rm -f $(C4IX_DESKTOP:%=.c4ix_d_%.c4o) .c4ix_d_fp.c4o .c4ix_d_*.pp.c
+	$(C4RLINK) $(C4IX_DESKTOP:%=.c4ix_d_%.c4o) $(WINKIT:%=.c4ix_d_%.c4o) .c4ix_d_fp.c4o libarc.c4l libc4ix.c4l -o $@
+	rm -f $(C4IX_DESKTOP:%=.c4ix_d_%.c4o) $(WINKIT:%=.c4ix_d_%.c4o) .c4ix_d_fp.c4o .c4ix_d_*.pp.c
 
 c4ix-%.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libc4ix.c4l $(C4IX_SRC)/user/%.c
 	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC)/include $(C4IX_SRC)/user/$*.c .c4ix_u.c4o > /dev/null

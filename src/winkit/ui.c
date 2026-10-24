@@ -1,10 +1,10 @@
-// ui.c -- widgets, drawn through wm.c's d_* layer. docs/c4ix-desktop.md.
+// ui.c -- the window kit's widgets, drawn through d_* (draw.c). docs/c4ix-desktop.md.
 //
 // Stateless: each call draws one thing, or answers whether a point hit
 // it. The tools keep their own state (selection, scroll position, which
 // field has the caret) and pass it in.
 
-#include "desktop.h"
+#include "winkit.h"
 
 // ---- strings ----------------------------------------------------------------
 
@@ -12,6 +12,41 @@ int ui_len(char *s) { int n; n = 0; while (s[n]) ++n; return n; }
 void ui_cpy(char *d, char *s) { while (*s) { *d = *s; ++d; ++s; } *d = 0; }
 void ui_cat(char *d, char *s) { while (*d) ++d; ui_cpy(d, s); }
 int ui_eq(char *a, char *b) { while (*a && *a == *b) { ++a; ++b; } return *a == *b; }
+// Bounded copies, for every path and name kept in a fixed buffer: at
+// most n - 1 bytes and a 0, and 1 if all of it fit. A caller refuses
+// what did not fit, rather than keep it cut short. (d and s may be the
+// same buffer.)
+int ui_ncpy(char *d, char *s, int n) {
+    int k;
+    if (n <= 0) return 0;
+    k = 0;
+    while (s[k] && k < n - 1) { d[k] = s[k]; ++k; }
+    d[k] = 0;
+    return !s[k];
+}
+int ui_ncat(char *d, char *s, int n) {
+    int k;
+    k = ui_len(d);
+    return ui_ncpy(d + k, s, n - k);
+}
+// dir and name joined by one '/', into out (which may be dir)
+int ui_join(char *out, char *dir, char *name, int n) {
+    int k;
+    if (out != dir && !ui_ncpy(out, dir, n)) return 0;
+    k = ui_len(out);
+    if (k > 0 && out[k - 1] != '/') {
+        if (k + 1 >= n) return 0;
+        out[k] = '/'; out[k + 1] = 0;
+    }
+    return ui_ncat(out, name, n);
+}
+char *ui_base(char *p) {
+    int k;
+    k = ui_len(p);
+    while (k > 0 && p[k - 1] != '/') --k;
+    return p + k;
+}
+
 int ui_ends(char *s, char *suffix) {
     int n, m;
     n = ui_len(s); m = ui_len(suffix);
@@ -20,7 +55,7 @@ int ui_ends(char *s, char *suffix) {
 }
 
 char *ui_num(char *buf, int v) {
-    char t[16];
+    char t[24];
     int n, neg, k;
     neg = v < 0;
     if (neg) v = 0 - v;
@@ -34,7 +69,7 @@ char *ui_num(char *buf, int v) {
 }
 
 char *ui_num_commas(char *buf, int v) {
-    char t[20];
+    char t[32];
     int n, k, i;
     ui_num(t, v);
     n = ui_len(t);
@@ -78,7 +113,7 @@ void ui_button(int x, int y, int w, int h, char *label, int pressed, int deflt) 
 void ui_scrollbar(int x, int y, int h, int total, int visible, int top) {
     int track, th, ty;
     d_rect(x, y, 16, h, 0xe0e0e0);
-    if (ui_style == S_CLASSIC) {
+    if (ui_style != S_FLAT) {
         d_rect(x, y, 16, 16, C_FACE); d_bevel(x, y, 16, 16, B_RAISED);
         d_rect(x, y + h - 16, 16, 16, C_FACE); d_bevel(x, y + h - 16, 16, 16, B_RAISED);
     }
@@ -121,7 +156,7 @@ void ui_scroll_end() { sd_on = 0; }
 void ui_hscrollbar(int x, int y, int w, int total, int visible, int left) {
     int track, tw, tx;
     d_rect(x, y, w, 16, 0xe0e0e0);
-    if (ui_style == S_CLASSIC) {
+    if (ui_style != S_FLAT) {
         d_rect(x, y, 16, 16, C_FACE); d_bevel(x, y, 16, 16, B_RAISED);
         d_rect(x + w - 16, y, 16, 16, C_FACE); d_bevel(x + w - 16, y, 16, 16, B_RAISED);
     }
@@ -199,6 +234,19 @@ void ui_field(int x, int y, int w, char *text, int caret, int focused) {
     if (caret > show) first = caret - show;
     d_textn(x + 4, y + 5, C_DARK, 12, F_MONO, 7, text + first, n - first > show ? show : n - first);
     if (focused) d_rect(x + 4 + (caret - first) * 7, y + 4, 1, 14, C_DARK);
+}
+
+// Where a click at px puts the caret in a field drawn as above.
+int ui_field_hit(int px, int x, int w, char *text, int caret) {
+    int n, first, show, c;
+    n = ui_len(text);
+    show = (w - 10) / 7;
+    first = 0;
+    if (caret > show) first = caret - show;
+    c = first + (px - x - 4) / 7;
+    if (c > n) c = n;
+    if (c < 0) c = 0;
+    return c;
 }
 
 // Editing keys for a field's text; returns 1 if the text changed.

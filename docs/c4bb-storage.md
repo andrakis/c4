@@ -701,6 +701,23 @@ every turn.
 Not a hypothetical: with the phase-preserving line taken back out, the
 second pass delivers no ticks at all.
 
+Holding. A kept deadline can fall due while the timer is masked -- a
+handler that runs past it on a slow host, or across a GC pause -- and
+then it fires the moment it is re-armed. C4KE re-arms in
+`critical_path_end`, a few instructions before the handler's TLEV, and
+by then it has already set `kernel_task_current` to the task it is
+switching to. A tick in those few instructions saved the half-finished
+handler, on the old task's stack, as the new task's context; the new task
+woke into a TLEV that restored its own frame, over and over, and only the
+next tick ever got the machine out of it. `test-c4ke-mbox` hung that way
+on helios most runs: the shell, after `mbecho`, never read another line.
+No kernel can close that window -- there is no store that unmasks and
+returns at once -- so the board does: the PIT and the mailbox interrupt
+are held from a trap jam to the TLEV that ends the handler
+(`machine.js irqHold`). `test-c4ke-mbox.mjs --slow-clock` runs the
+PIT on the cycle counter at a tenth of `CYCLES_PER_MS` and hangs every
+time without the hold.
+
 ### What a faster kernel found: the reaper was on the wrong clock
 
 `test-task-mem` failed the moment C4KE stopped burning cycles on the

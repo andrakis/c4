@@ -134,6 +134,7 @@ export class Turbo {
     }
     this.jsopNames = new Set([...machine.ucode.ops].filter(([, e]) => e.jsop).map(([n]) => n));
     this.opcdNum = OP.OPCD;
+    this.tlevNum = OP.TLEV;
     this.trapFn = compileRoutine(steps, machine.trapStart);
   }
 
@@ -177,6 +178,7 @@ export class Turbo {
             break;
           }
           const fn = opFns[ir];
+          if (ir === this.tlevNum) m.tlevDispatched();   // as machine.decode
           if (fn) {
             const ret = fn(m, ar, r);
             if (ret === 1) { fromOpcd = (ir === this.opcdNum); continue; }

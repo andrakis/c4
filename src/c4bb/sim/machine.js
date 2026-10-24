@@ -83,6 +83,10 @@ export class Machine {
     this.signalHandlers = new Map();
     this.pendingSignal = 0;
     this.tt = 0; this.tp = 0; this.hnd = 0;   // trap jam latches
+    // Trap handlers in progress: +1 at each jam that enters a handler,
+    // -1 at each TLEV. The board's own interrupts (the PIT, the
+    // mailbox) are held while it is non-zero -- see boundaryChecks.
+    this.irqHold = 0;
     this.onEvent = null;              // fn(event) for the renderer
     this.onLog = opts.onLog || (s => process.stderr.write(s));
     this.uPerOp = null;               // filled lazily for stats
@@ -113,6 +117,7 @@ export class Machine {
     this.signalHandlers = new Map();
     this.pendingSignal = 0;
     this.tt = 0; this.tp = 0; this.hnd = 0;
+    this.irqHold = 0;
   }
 
   // The trap jam: latch type/parameter/handler and redirect the
@@ -137,7 +142,15 @@ export class Machine {
     this.tt = type | 0;
     this.tp = param | 0;
     this.hnd = handler | 0;
+    this.irqHold++;
     return this.trapStart;
+  }
+
+  // The TLEV that ends a handler: called as it is dispatched, by both
+  // engines. The boundary after it is the first the board's interrupts
+  // may take again.
+  tlevDispatched() {
+    if (this.irqHold > 0) this.irqHold--;
   }
 
   // Instruction-boundary interrupt checks (c4m.c:1501-1531). Returns
@@ -204,7 +217,25 @@ export class Machine {
     // The host clock is only consulted every 4096 cycles: asking it on
     // every instruction boundary costs more than the interrupt saves,
     // and 4096 cycles is a fifth of a millisecond at 20 MHz.
-    if (this.dev.pitMs && (this.cycle & 4095) === 0 &&
+    //
+    // Neither the PIT nor the mailbox interrupts a trap handler: both
+    // are held from the jam to the TLEV that ends it (irqHold), and a
+    // tick that falls due meanwhile comes at the first check after
+    // that TLEV, the deadline kept. c4m's own cycle interrupt is
+    // masked by the jam and can be re-armed BY the TLEV
+    // (CONF_TRAP_RESTORES_INTERVAL); these two had no such thing. A
+    // kernel masks the PIT for its critical path by writing 0 and
+    // re-arms it with a store -- which, done before the TLEV, left a
+    // few instructions in which an overdue tick (the handler ran past
+    // the deadline: a slow host, a GC pause) jammed a second trap
+    // into the first. C4KE has already switched kernel_task_current by
+    // then, so the nested tick saved the half-finished handler, on the
+    // old task's stack, as the NEW task's context, and that task woke
+    // into a TLEV that restored its own frame: forever, the PIT the
+    // only thing breaking in. test-c4ke-mbox hung exactly so, on
+    // hosts slower than CYCLES_PER_MS. The mailbox interrupt was
+    // never masked at all, and could land anywhere in a handler.
+    if (this.dev.pitMs && (this.cycle & 4095) === 0 && !this.irqHold &&
         this.arena.read32(this.regs[R.PC]) !== OP.TLEV) {
       const now = this.dev.hostNow();
       if (now >= this.dev.pitNext) {
@@ -218,7 +249,7 @@ export class Machine {
     // through the cycle handler like the PIT, with its own parameter so
     // the kernel can tell a frame from a tick. Edge: the jam clears it.
     // No handler -> nothing to jam; the count stays for a polling guest.
-    if (this.dev.mboxIrq && this.cycleHandler &&
+    if (this.dev.mboxIrq && this.cycleHandler && !this.irqHold &&
         this.arena.read32(this.regs[R.PC]) !== OP.TLEV) {
       this.dev.mboxIrq = 0;
       const t = this.jamTrap(1 /* HARD_IRQ */, 2 /* HIRQ_MBOX */, this.cycleHandler,
@@ -392,6 +423,7 @@ export class Machine {
                             { zeroInterval: true, unprot: true });
       }
       const t = this.dispatchTab[ir];
+      if (ir === OP.TLEV) this.tlevDispatched();
       if (t >= 0) return t;
     }
     // Unknown or unimplemented opcode: TRAP_ILLOP (c4m.c:1858). The

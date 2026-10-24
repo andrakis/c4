@@ -264,7 +264,11 @@ node src/c4bb/tests/test-mbox.mjs || fail=1
 # ---- the mailbox under C4KE ---------------------------------------------
 # A task bound to the host (mbecho) echoes frames through OP_MBOX_*, idling
 # in the kernel between them; two tasks (mbpair) message each other.
+# Then the same on a PIT ten times slower than the board assumes, the same
+# every run: ticks fall due inside C4KE's handlers, which the board must hold
+# until the handler's TLEV (machine.js irqHold).
 node src/c4bb/tests/test-c4ke-mbox.mjs || fail=1
+node src/c4bb/tests/test-c4ke-mbox.mjs --slow-clock || fail=1
 
 # ---- the programmable interrupt timer -------------------------------
 # The cycle interrupt fires every N instructions, which is a different

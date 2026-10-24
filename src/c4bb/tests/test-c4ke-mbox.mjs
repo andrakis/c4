@@ -2,19 +2,29 @@
 // mailbox fitted, start mbecho from the shell, feed frames from the host (with
 // the interrupt), pin the echoes; then mbpair: two tasks, one message.
 // Run from the repo root.
+//
+// --slow-clock: the PIT's clock is the cycle counter at a tenth of
+// CYCLES_PER_MS -- a host ten times slower than the board assumes, the
+// same on every run. There C4KE's handlers outlast the 10 ms tick, so ticks
+// come due inside them; before machine.js held the PIT until the handler's
+// TLEV, one landing between C4KE's re-arm and that TLEV wrecked the task it
+// had just switched to, and the shell hung after mbecho (helios, at ~12000
+// cycles/ms, did it by wall clock most runs).
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { Arena, CONS_RET } from '../sim/arena.js';
-import { Devices } from '../sim/devices.js';
+import { Devices, CYCLES_PER_MS } from '../sim/devices.js';
 import { Machine, R } from '../sim/machine.js';
 import { Turbo } from '../sim/turbo.js';
 import { assemble } from '../sim/ucode.js';
 import { boot } from '../sim/loader.js';
 import { HostMailbox } from '../sim/mbox.js';
 
+const slow = process.argv.includes('--slow-clock');
+const name = slow ? 'test-c4ke-mbox (slow clock)' : 'test-c4ke-mbox';
 let fails = 0;
-const check = (ok, what) => { console.log(`${ok ? 'test-c4ke-mbox: OK  ' : 'test-c4ke-mbox: FAIL'} ${what}`); if (!ok) fails++; };
+const check = (ok, what) => { console.log(`${name}: ${ok ? 'OK  ' : 'FAIL'} ${what}`); if (!ok) fails++; };
 
 const uc = assemble(readFileSync('src/c4bb/hw/microcode.uc', 'utf8'));
 const fw = new Uint8Array(readFileSync('src/c4bb/fw/fw.c4r'));
@@ -26,8 +36,11 @@ walk('src/c4bb/images/disk', '');
 let out = '';
 const bells = [];
 const arena = new Arena(32 * 1024 * 1024);
-const dev = new Devices(arena, { onByte: (b) => { out += String.fromCharCode(b); }, files, onDoorbell: (v) => bells.push(v) });
+let cycles = () => 0;                 // the machine does not exist yet
+const dev = new Devices(arena, { onByte: (b) => { out += String.fromCharCode(b); }, files, onDoorbell: (v) => bells.push(v),
+                                 ...(slow ? { hostNow: () => Math.floor(cycles() / (CYCLES_PER_MS / 10)) } : {}) });
 const machine = new Machine(arena, uc, dev, { onLog: () => {} });
+cycles = () => machine.cycle;
 const { mbox } = boot(machine, fw, kernel, ['c4ke32.c4r'], { mbox: 64 * 1024 });
 const turbo = new Turbo(machine);
 const mb = new HostMailbox(arena, mbox);
@@ -66,6 +79,10 @@ check(got.length === 20 && got.every((f, i) => f.type === 356 + i && f.payload[0
 // stop mbecho, then the pair
 mb.send(0, []); dev.raiseMbox();
 check(runUntil(() => out.includes('mbecho: done, 22 frames'), 20e6), 'mbecho exited on the type-0 frame having echoed 22');
+// A second's idle at the prompt (more, on the slow clock): the shell polls
+// stdin through sleeps, so every tick of it is a switch in and out of a
+// handler. The hang was a shell that never read the next line.
+runUntil(() => false, 20e6);
 dev.pushInput('mbpair.c4r\n');
 // the whole line: the check below reads it, and it may still be arriving
 check(runUntil(() => /mbpair: got type 7 from pid [^\n]*\n/.test(out), 60e6), 'mbpair: the parent received the child\'s message');

@@ -144,8 +144,9 @@ reads and writes the rings straight through the arena typed array; the
 guest with loads and stores. A guest write to `MBOX_BELL` reaches the
 host's `onDoorbell(value)`; the host's `raiseMbox()` jams a
 `HARD_IRQ` with parameter `2` (HIRQ_MBOX) through the cycle handler at
-the next boundary -- the PIT's path with its own parameter -- or, for a
-guest with no handler, counts up in `MBOX_BELL` until read.
+the next boundary outside a trap handler -- the PIT's path with its own
+parameter -- or, for a guest with no handler, counts up in `MBOX_BELL`
+until read.
 Header for guests: `include/c4bb_mbox.h` (board only, after the INFO check).
 
 `UART_TXADDR`/`UART_TXLEN` are the same shape as the disk write head and
@@ -268,6 +269,14 @@ CONF_TRAP_RESTORES_INTERVAL). Wrinkles that matter, all mirrored:
   first instruction; a dispatch trap gives the handler a fresh cycle
   (boundaryChecks returns the increment on boundary jams);
 - TLEV is uninterruptible (`*pc != TLEV` guard before fetch).
+- the board's own interrupts, which c4m does not have -- the PIT and the
+  mailbox -- are held from a jam that enters a handler to the TLEV that
+  ends it (`machine.js irqHold`, counted so nested traps work); a tick
+  that falls due meanwhile comes after the TLEV, its deadline kept. The
+  cycle interrupt needs no hold: the jam masks it, and TRESTORE lets the
+  TLEV itself re-arm it. A kernel re-arming the PIT before its TLEV has
+  no such atomic way, and before the hold an overdue tick could land in
+  between (see c4bb-storage.md, "What the kernel taught the hardware").
 
 Verified byte-for-byte against native c4m32 by three purpose-built
 tests (custom opcodes/re-entrant traps, preemption with both re-arm

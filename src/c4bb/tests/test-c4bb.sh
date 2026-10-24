@@ -278,11 +278,13 @@ node src/c4bb/tests/test-c4ke-mbox.mjs --slow-clock || fail=1
 # The second pass is the one that matters to a kernel: it masks and
 # unmasks the timer on every pass of its wait loop, thousands of times
 # per period, the way C4KE does around every critical path. A mask that
-# restarted the countdown would deliver no ticks at all.
+# restarted the countdown would deliver no ticks at all. The third: a
+# tick that falls due inside a handler -- masked, overrun, re-armed --
+# waits for its TLEV (machine.js irqHold).
 pit_out=$(timeout 120 $C4BB -m 8 $IMAGES/bb_pit.c4r 2>&1)
 pit_ok=$(echo "$pit_out" | grep -c "real time")
-if [ "$pit_ok" = 2 ]; then
-    echo "test-c4bb: pit OK (free running and masked every pass)"
+if [ "$pit_ok" = 2 ] && echo "$pit_out" | grep -q "pit: held"; then
+    echo "test-c4bb: pit OK (free running, masked every pass, held in a handler)"
 else
     echo "test-c4bb: pit FAILED"; echo "$pit_out" | tail -4; fail=1
 fi

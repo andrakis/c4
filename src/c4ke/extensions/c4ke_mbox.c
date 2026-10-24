@@ -3,8 +3,9 @@
 //
 // Host side (c4bb's MBOX_* device, docs/c4bb-design.md "The mailbox"): two
 // rings in RAM. The first task to receive or await host frames becomes their
-// owner; frames stay in the host ring until that task takes them, so the
-// scheduler can see them waiting (kernel_task_find_real, WSTATE_MESSAGE).
+// owner, until it exits (kernel_task_finish lets go); frames stay in the host
+// ring until that task takes them, so the scheduler can see them waiting
+// (kernel_task_find_real, WSTATE_MESSAGE).
 //
 // Task side: every task may have an inbox, a ring of [len][type][sender]
 // [payload...] frames allocated on first delivery and freed with the task

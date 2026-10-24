@@ -534,6 +534,11 @@ it lacked was somewhere to edit and build in one place.
 - `test-c4ke-mbox` (in `test-c4bb`) fails about one run in four with
   "Custom opcode not found: 1073741824" in the mbpair message. It fails
   as often with the C4KE source from before this work.
+  *Fixed 2026-10-24:* a PIT tick delivered between C4KE's re-arm of the
+  PIT and its handler's TLEV, after it had switched tasks; it hit hosts
+  slower than `CYCLES_PER_MS`. c4bb (6295e18) and libjs hold the PIT and
+  the mailbox inside a handler now (docs/c4bb-storage.md, "What the
+  kernel taught the hardware").
 
 ## Part eight: the boot waits for its filesystem, with a loading screen (asked for 2026-10-21)
 

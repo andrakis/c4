@@ -527,4 +527,5 @@ Each step lands with tests, and the next starts only when they are green.
   right after, never more than one feature apart.
 - **`test-c4ke-mbox`** fails about one run in two on this branch and on a
   disk without it. It is C4KE's own flake (`docs/c4ix-desktop.md`), and
-  unrelated to this work.
+  unrelated to this work. *Fixed 2026-10-24:* a PIT tick between C4KE's
+  re-arm and its TLEV; c4bb and libjs hold the PIT inside a handler now.

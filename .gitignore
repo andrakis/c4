@@ -40,8 +40,10 @@ libc.c4s
 # Wolfenstein 3D's objects (make wolf3d-objs), its gcc build, its test
 /.wolf3d/
 /.wolf3d-bare/
+/.wolf3d6/
 /.wolf3d_t/
 /wolf3d-host
+/wolf3d6-host
 # Doom's objects (make doom-objs), its gcc build, its test
 /.doom/
 /.doom_t/

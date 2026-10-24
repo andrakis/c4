@@ -28,6 +28,7 @@ struct win {
     int nmenus;
     int owner, action;            // a dialog: which window asked, and what for
     int tid[WK_TIMERS], tms[WK_TIMERS], tnext[WK_TIMERS];   // timers: id, period, when due
+    int islot;                    // minimised as an icon (wk_min_icons): its place, 1 up; 0 none yet
 };
 
 struct win *win_get(int i);       // the window with this number, or 0
@@ -66,6 +67,14 @@ void wk_gradient(int x, int y, int w, int h, int a, int b);
 int  wk_ink(int bg);              // white on a dark bar, the scheme's dark on a light one
 int  wk_menu_x(struct win *w, int k);   // where menu k of a menu bar starts on the screen
 int  wk_menu_w(struct win *w, int k);
+// minimised windows as icons along the bottom of the area (look31.c),
+// when the shell asked for them (wk_min_icons)
+extern int wk_icons_on;
+extern int wk_icon_sel;           // the icon last clicked: its label is highlighted
+void wk_icon_place(struct win *w);              // the first free place, as it is minimised
+void wk_icon_xy(struct win *w, int *x, int *y); // where its picture is
+struct win *wk_icon_hit(int x, int y);          // the icon there, or 0
+void wk_icons_draw();             // the icons in the damage, under the windows
 
 // ---- dialog.c, for wmcore.c ----
 void wk_dialog_answer(struct win *d, int yes);   // close a dialog with this answer

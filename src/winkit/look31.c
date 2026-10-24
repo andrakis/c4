@@ -9,6 +9,9 @@
 // A dialog has the box alone, and a frame in the title's colour. The
 // measures are the other looks', so a window's client area is the same
 // size whichever look draws it.
+//
+// It also draws minimised windows as icons along the bottom of the
+// screen, for a shell that asks (wk_min_icons; below).
 
 #include "wkwin.h"
 #include "wkgui.h"
@@ -130,3 +133,123 @@ static int hit31(struct win *w, int x, int y) {
 }
 
 struct wk_look look_win31 = { .frame = frame31, .menubar = menubar31, .hit = hit31, .title_centred = 1 };
+
+// ---- minimised windows as icons ------------------------------------------------
+//
+// Windows 3.1 kept a minimised window on the desktop as an icon: a
+// picture with the window's title under it, in a row along the bottom of
+// the screen filled from the left, under the windows (one can cover an
+// icon). A click opens the window's control menu over the icon, a double
+// click restores it. A shell asks for this (wk_min_icons, grin does);
+// otherwise minimising only hides a window, as in the C4IX desktop,
+// whose taskbar brings it back. Each icon keeps the place it was given
+// when its window was minimised, the first one free, until Arrange Icons
+// packs them again.
+
+enum { SLOT_W = 76, SLOT_H = 64, PIC = 32 };
+int wk_icons_on;
+int wk_icon_sel;
+
+void wk_min_icons(int on) { wk_icons_on = on != 0; wk_full = 1; }
+
+static int per_row() { int n; n = wk.aw / SLOT_W; return n > 0 ? n : 1; }
+
+// place s (0 up): its picture's corner. The rows go up from the bottom.
+static void slot_xy(int s, int *x, int *y) {
+    *x = wk.ax + (s % per_row()) * SLOT_W + (SLOT_W - PIC) / 2;
+    *y = wk.ay + wk.ah - (s / per_row() + 1) * SLOT_H + 4;
+}
+
+void wk_icon_place(struct win *w) {
+    struct win *q;
+    int s;
+    s = 1;
+    q = win_first();
+    while (q) {
+        if (q != w && q->used && q->min && q->islot == s) { ++s; q = win_first(); }
+        else q = q->next;
+    }
+    w->islot = s;
+}
+
+void wk_arrange_icons() {
+    struct win *q;
+    int s;
+    s = 1;
+    q = win_first();
+    while (q) { if (q->used && q->min) { q->islot = s; ++s; } q = q->next; }
+    wk_full = 1;
+}
+
+void wk_icon_xy(struct win *w, int *x, int *y) {
+    if (!w->islot) wk_icon_place(w);
+    slot_xy(w->islot - 1, x, y);
+}
+
+struct win *wk_icon_hit(int px, int py) {
+    struct win *w;
+    int x, y;
+    if (!wk_icons_on) return 0;
+    w = win_first();
+    while (w) {
+        if (w->used && w->min) {
+            wk_icon_xy(w, &x, &y);
+            if (ui_hit(px, py, x - (SLOT_W - PIC) / 2, y, SLOT_W, SLOT_H - 4)) return w;
+        }
+        w = w->next;
+    }
+    return 0;
+}
+
+// the picture: a little window in the title's colour, with its kind's icon in it
+static void icon_picture(struct win *w, int x, int y) {
+    gui_rect(x, y + 2, PIC, PIC - 4, C_WHITE);
+    gui_recto(x, y + 2, PIC - 1, PIC - 5, C_DARK);
+    gui_rect(x + 1, y + 3, PIC - 2, 5, C_TITLE);
+    gui_rect(x + 1, y + 8, PIC - 2, 1, C_DARK);
+    d_icon(w->kind, x + 8, y + 11);
+}
+
+static void label_line(int cx, int y, char *s, int n, int sel) {
+    int lw;
+    lw = n * 6 + 4;
+    gui_rect(cx - lw / 2, y - 1, lw, 13, sel ? C_SEL : C_DESK);    // over a pattern too
+    d_textn(cx - lw / 2 + 2, y, sel ? C_WHITE : wk_ink(C_DESK), 11, F_SANS, 0, s, n);
+}
+
+// the title under it: on one line if it fits the place, else on two,
+// broken at the space nearest its middle (its width a guess, as the title bar's)
+static void icon_label(struct win *w, int x, int y, int sel) {
+    char *t;
+    int n, k, brk, d, bd, cx;
+    t = w->title; n = ui_len(t);
+    cx = x + PIC / 2;
+    brk = 0 - 1;
+    if (n * 6 > SLOT_W - 4) {
+        bd = n; k = 1;
+        while (k < n) {
+            if (t[k] == ' ') { d = k - n / 2; if (d < 0) d = 0 - d; if (d < bd) { bd = d; brk = k; } }
+            ++k;
+        }
+    }
+    if (brk < 0) { label_line(cx, y + PIC + 2, t, n, sel); return; }
+    label_line(cx, y + PIC + 2, t, brk, sel);
+    label_line(cx, y + PIC + 15, t + brk + 1, n - brk - 1, sel);
+}
+
+void wk_icons_draw() {
+    struct win *w;
+    int x, y;
+    if (!wk_icons_on) return;
+    w = win_first();
+    while (w) {
+        if (w->used && w->min) {
+            wk_icon_xy(w, &x, &y);
+            if (wk_in_damage(x - (SLOT_W - PIC) / 2, y, SLOT_W, SLOT_H)) {
+                icon_picture(w, x, y);
+                icon_label(w, x, y, w->id == wk_icon_sel);
+            }
+        }
+        w = w->next;
+    }
+}

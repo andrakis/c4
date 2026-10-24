@@ -90,8 +90,8 @@ static void msg_draw(int w, int cw, int ch, int focused) {
     }
     if (g->buttons) {
         bx = cw / 2 - 84;
-        ui_button(bx, ch - 34, 76, 24, "Yes", 0, 1);
-        ui_button(bx + 92, ch - 34, 76, 24, "No", 0, 0);
+        ui_button(bx, ch - 34, 76, 24, g->buttons == WK_OKCANCEL ? "OK" : "Yes", 0, 1);
+        ui_button(bx + 92, ch - 34, 76, 24, g->buttons == WK_OKCANCEL ? "Cancel" : "No", 0, 0);
     } else ui_button(cw / 2 - 38, ch - 34, 76, 24, "OK", 0, 1);
 }
 
@@ -116,8 +116,8 @@ static void msg_key(int w, int down, int code, int ch, int mods) {
     g = (struct dlg *)d->st;
     if (code == KEY_ESC) { wk_dialog_answer(d, 0); return; }
     if (code == KEY_ENTER) { wk_dialog_answer(d, 1); return; }
-    if (g->buttons && (ch == 'y' || ch == 'Y')) wk_dialog_answer(d, 1);
-    else if (g->buttons && (ch == 'n' || ch == 'N')) wk_dialog_answer(d, 0);
+    if (g->buttons == WK_YESNO && (ch == 'y' || ch == 'Y')) wk_dialog_answer(d, 1);
+    else if (g->buttons == WK_YESNO && (ch == 'n' || ch == 'N')) wk_dialog_answer(d, 0);
 }
 
 struct wk_class wk_msg_class = { .kind = ICON_MSG, .draw = msg_draw, .mouse = msg_mouse, .key = msg_key };

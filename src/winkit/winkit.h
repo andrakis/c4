@@ -121,7 +121,7 @@ enum { WK_FIXED = 1,                  // not resizable
        WK_DIALOG = 2,                 // a dialog's chrome (no icon, no minimise); modal
        WK_CENTER = 4 };               // centred on the screen, a little high
 // message box buttons, and what an answer's result means
-enum { WK_OK = 0, WK_YESNO = 1 };
+enum { WK_OK = 0, WK_YESNO = 1, WK_OKCANCEL = 2 };
 enum { WK_NO = 0, WK_YES = 1 };       // also Cancel and OK
 
 // ---- windows ----------------------------------------------------------------
@@ -235,6 +235,10 @@ void wk_repoint();                    // the display's pointer is an arrow again
 void wk_screen(int w, int h);         // ask for a new screen size (gui_size) and relayout
 void wk_set_area(int x, int y, int w, int h);
 void wk_close_all();                  // every window, at once (shutting down)
+void wk_min_icons(int on);            // minimised windows as icons along the bottom of the
+                                      // area (Windows 3.1's), not only hidden
+void wk_minimize(int w);
+void wk_arrange_icons();              // the icons packed along the bottom again, in order
 void wk_dirty_rect(int x, int y, int w, int h);   // screen coordinates
 int  wk_in_damage(int x, int y, int w, int h);    // while drawing: 1 if this is being redrawn
 void wk_clip_screen(int x, int y, int w, int h);  // the shell's own clip, inside the damage

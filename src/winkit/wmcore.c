@@ -314,8 +314,28 @@ static char **drop_items(struct win *w) {
     if (menu_idx < 0) return w->dialog ? sys_dlg_items : sys_items;
     return w->menus[menu_idx].items;
 }
-static int drop_x(struct win *w) { return menu_idx < 0 ? w->x + BORDER : wk_menu_x(w, menu_idx); }
+static int drop_h(char **items) {
+    int k, mh;
+    mh = 6;
+    k = 0; while (items[k]) { if (items[k][0] == '-') mh = mh + 8; else mh = mh + 20; ++k; }
+    return mh;
+}
+// A minimised window's control menu opens over its icon.
+static int drop_x(struct win *w) {
+    int x, y;
+    if (menu_idx < 0 && w->min && wk_icons_on) {
+        wk_icon_xy(w, &x, &y);
+        return x + DROP_W > wk.sw ? wk.sw - DROP_W : x;
+    }
+    return menu_idx < 0 ? w->x + BORDER : wk_menu_x(w, menu_idx);
+}
 static int drop_y(struct win *w) {
+    int x, y;
+    if (menu_idx < 0 && w->min && wk_icons_on) {
+        wk_icon_xy(w, &x, &y);
+        y = y - drop_h(drop_items(w));
+        return y < 0 ? 0 : y;
+    }
     return menu_idx < 0 ? w->y + BORDER + TITLE_H + 1 : w->y + BORDER + TITLE_H + 1 + MENU_H;
 }
 
@@ -327,8 +347,7 @@ static void draw_dropdown() {
     items = drop_items(w);
     n = count_items(items);
     x = drop_x(w); y = drop_y(w);
-    mh = 6;
-    k = 0; while (k < n) { if (items[k][0] == '-') mh = mh + 8; else mh = mh + 20; ++k; }
+    mh = drop_h(items);
     gui_rect(x, y, DROP_W, mh, C_FACE);
     d_bevel(x, y, DROP_W, mh, B_RAISED);
     iy = y + 3;
@@ -374,11 +393,22 @@ static void toggle_max(struct win *w) {
     wk_full = 1;
 }
 
+static void minimise(struct win *w) {
+    w->min = 1;
+    if (wk_icons_on) { wk_icon_place(w); wk_icon_sel = w->id; }
+    wk_full = 1;
+}
+void wk_minimize(int i) { struct win *w; if ((w = win_get(i)) && !w->dialog) minimise(w); }
+
+// (a minimised window's menu is its icon's: Restore brings it back as it
+// was, maximised or not, and Maximize brings it back maximised)
 static void sys_command(struct win *w, int k) {
     if (w->dialog || k == SYS_CLOSE) { wk_ask_close(w->id); return; }
+    if (w->min && k == SYS_RESTORE) { wk_raise(w->id); return; }
+    if (w->min && k == SYS_MAX) wk_raise(w->id);
     if (k == SYS_RESTORE && w->max) toggle_max(w);
     else if (k == SYS_MAX && !w->max) toggle_max(w);
-    else if (k == SYS_MIN) { w->min = 1; wk_full = 1; }
+    else if (k == SYS_MIN && !w->min) minimise(w);
 }
 
 // ---- drawing the scene --------------------------------------------------------------
@@ -419,6 +449,7 @@ static void redraw() {
     wk_origin(0, 0);
     gui_clear(C_DESK);
     if (shell && shell->desktop) shell->desktop(0, 0, wk.sw, wk.sh);
+    wk_icons_draw();
     draw_windows();
     if (menu_win) draw_dropdown();
     if (shell && shell->front) shell->front();
@@ -437,6 +468,7 @@ static void redraw_part() {
     wk_noclip();
     if (shell && shell->desktop) shell->desktop(wk_dmg_x0, wk_dmg_y0, wk_dmg_x1 - wk_dmg_x0, wk_dmg_y1 - wk_dmg_y0);
     else gui_rect(wk_dmg_x0, wk_dmg_y0, wk_dmg_x1 - wk_dmg_x0, wk_dmg_y1 - wk_dmg_y0, C_DESK);
+    wk_icons_draw();
     draw_windows();
     if (shell && shell->front) shell->front();
     gui_noclip();
@@ -532,6 +564,11 @@ static void mouse_down(int x, int y, int button) {
             else if (w->cls->command) w->cls->command(w->id, WK_CMD(i, k));
             return;
         }
+        // the icon whose menu this is, clicked again soon after: a double click restores it
+        if (i < 0 && w->min && wk_icon_hit(x, y) == w) {
+            if (down_win == w->id && wk_now() - down_t < 500) { down_win = 0; wk_raise(w->id); }
+            return;
+        }
         // a click on another title of the same bar opens that one instead
         if (i >= 0 && y >= w->y + BORDER + TITLE_H + 1 && y < w->y + BORDER + TITLE_H + 1 + MENU_H) {
             m = 0;
@@ -556,7 +593,7 @@ static void mouse_down(int x, int y, int button) {
             t = wk_now();
             if (ht == HT_CLOSE) { wk_ask_close(i); return; }
             if (ht == HT_MAX) { toggle_max(w); return; }
-            if (ht == HT_MIN) { w->min = 1; wk_full = 1; return; }
+            if (ht == HT_MIN) { minimise(w); return; }
             if (ht == HT_SYSMENU) {
                 // the control-menu box: a double click closes, a click opens its menu
                 if (down_win == i && t - down_t < 500) { down_win = 0; wk_ask_close(i); return; }
@@ -598,6 +635,17 @@ static void mouse_down(int x, int y, int button) {
         w = w->below;
     }
     if (wk_modal()) return;
+    // an icon (wk_min_icons): a click opens its window's control menu over
+    // it, a double click restores the window
+    if ((w = wk_icon_hit(x, y))) {
+        t = wk_now();
+        wk_icon_sel = w->id;
+        wk_full = 1;
+        if (down_win == w->id && t - down_t < 500) { down_win = 0; wk_raise(w->id); return; }
+        down_win = w->id; down_t = t;
+        menu_win = w->id; menu_idx = 0 - 1; menu_hot = 0 - 1;
+        return;
+    }
     if (shell && shell->mouse_desk) shell->mouse_desk(E_DOWN, x, y, button);
 }
 

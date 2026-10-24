@@ -125,8 +125,11 @@ $C4M32 $IMAGES/test_exit.c4r >/dev/null 2>&1; s2=$?
 if [ "$s1" = "$s2" ]; then ok "exit-status ($s1)"; else bad "exit-status ($s1 vs $s2)"; fi
 
 # ---- the programmable interrupt timer -------------------------------------
+# The third pass: a tick due inside a handler waits for its TLEV
+# (c4m.js irqHold, as c4bb's).
 pit_out=$(timeout 120 $LIBJS -m 8 $IMAGES/bb_pit.c4r 2>&1)
-if [ "$(echo "$pit_out" | grep -c "real time")" = 2 ]; then ok "pit (free running and masked every pass)"
+if [ "$(echo "$pit_out" | grep -c "real time")" = 2 ] && echo "$pit_out" | grep -q "pit: held"; then
+    ok "pit (free running, masked every pass, held in a handler)"
 else bad "pit"; echo "$pit_out" | tail -4; fi
 
 # ---- C4KE ----------------------------------------------------------------

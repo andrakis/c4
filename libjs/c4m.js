@@ -136,6 +136,10 @@ export class Machine {
     // c4bb's trap-jam latches, read through device registers. A direct
     // interpreter has no jam, so they stay zero.
     this.tt = 0; this.tp = 0; this.hnd = 0; this.jmode = 0; this.jinterval = 0;
+    // Trap handlers in progress: +1 at each trap that enters one, -1 at
+    // each TLEV. The PIT and the mailbox are held while it is non-zero,
+    // as by c4bb's irqHold (machine.js) -- see boundary().
+    this.irqHold = 0;
   }
 
   // ---------------------------------------------------------------
@@ -267,6 +271,7 @@ export class Machine {
     sp -= this.ld32(handler + 4) * 4;           // the handler's ENT operand
     this.sp = sp;
     this.pc = handler + 8;                      // past ENT n
+    this.irqHold++;
     return true;
   }
 
@@ -532,6 +537,7 @@ export class Machine {
         break;
       }
       case OP.TLEV: {
+        if (this.irqHold > 0) this.irqHold--;   // the handler ends: see boundary()
         const bp = this.bp;
         const pc = this.ld32(bp + 8);
         if (pc === this.pc - 4) return this.tlevWedge(pc);
@@ -661,15 +667,28 @@ export class Machine {
   // not shape the loop's code. Returns the cycle they are next due at
   // (0: the next instruction); bFired says whether one was taken, and
   // bNextIrq is the next tick.
+  //
+  // Neither the PIT nor the mailbox interrupts a trap handler: both are
+  // held from the trap to the TLEV that ends it (irqHold), and a tick
+  // due meanwhile comes at the first look after that TLEV, the deadline
+  // kept. It is c4bb's rule (machine.js boundaryChecks): C4KE masks the
+  // PIT for its critical path and re-arms it with a store a few
+  // instructions before its TLEV, when kernel_task_current already names
+  // the next task, so an overdue tick in between saved the half-finished
+  // handler as that task's context, and the task looped on its TLEV for
+  // ever. The gui IRQ and IPIs are not held: no kernel masks and re-arms
+  // them that way, and C4IX waits for a kernel lock inside its trap
+  // handler (CWAI, sched.c klock_take), which must not wait behind them.
   boundary(cycle, nextIrq) {
     const dev = this.dev, i32 = this.i32;
     const tlev = i32[this.pc >> 2] === OP.TLEV;   // TLEV is never interrupted
+    const held = tlev || this.irqHold > 0;        // ... nor, by the PIT or the mailbox, a handler
     let interval = this.cycleInterval | 0;
     let fired = true;
-    if (dev.pitMs && (cycle & 4095) === 0 && !tlev && dev.hostNow() >= dev.pitNext) {
+    if (dev.pitMs && (cycle & 4095) === 0 && !held && dev.hostNow() >= dev.pitNext) {
       dev.pitNext = dev.hostNow() + dev.pitMs;
       this.hirq(1);
-    } else if (dev.mboxIrq && this.cycleHandler && !tlev) {
+    } else if (dev.mboxIrq && this.cycleHandler && !held) {
       dev.mboxIrq = 0;
       this.hirq(2);
     } else if (this.gui && this.cycleHandler && this.gui.irqPending() && !tlev) {
@@ -698,9 +717,12 @@ export class Machine {
       return 0;
     }
     this.bNextIrq = nextIrq;
-    if ((dev.mboxIrq && this.cycleHandler) || this.ipiPending || this.pendingSignal ||
+    // Pending but held back (a TLEV, a mask): look again. A mailbox
+    // interrupt held for a handler need not: the TLEV that ends the hold
+    // goes through sys(), after which run() looks at once.
+    if ((dev.mboxIrq && this.cycleHandler && !this.irqHold) || this.ipiPending || this.pendingSignal ||
         (this.gui && this.cycleHandler && this.gui.irqPending()))
-      return 0;                  // pending but held back (a TLEV, a mask): look again
+      return 0;
     let next = Infinity;
     if (interval > 0) next = nextIrq;
     if (dev.pitMs) {

@@ -67,7 +67,7 @@ Tick a box only when the file's links resolve and every make target it names pas
 - [x] found on the way: the c4dos-c4fc floppy carried 64-bit c4rlink/dostar/dosload for a 32-bit DOS; it carries the 32-bit builds now
 - [x] found on the way: test-c4th-os's C4DOS leg failed at byte 1 -- DOS's bare `A>` prompt line; the filter drops it now
 - [x] found on the way: `c4rdump -c` segfaulted on c4lc images (it skipped word 0, which c4lc uses, then read operands as opcodes off the end of the name table); it starts at an ENT, reads the fused opcodes' operands and bounds-checks
-- [ ] still open: test-c4ke-mbox fails about one run in four (its "kernel shut down cleanly" check; mbpair prints "Custom opcode not found: 1073741824")
+- [x] test-c4ke-mbox failed about one run in four (its "kernel shut down cleanly" check; mbpair prints "Custom opcode not found: 1073741824"): a PIT tick between C4KE's re-arm and its TLEV, fixed 2026-10-24 in c4bb (6295e18) and libjs
 
 ## D1 — c4m: the extended interpreter
 Today: README "C4M?" section; internals Part 3 (§3.1–3.6); docs/fused-opcodes.md.

@@ -313,7 +313,7 @@ attached (`c4m.c4r:calloc()+0x6064 / main()+0x30`) instead of the previous
 `could not find function entry`. Diagnostics that were being eaten now print:
 `task 33 OVERRAN ITS STACK: 44 of 262144 bytes, guard broken` — 44 bytes used
 and the guard broken is not an overrun, it is a wild write, and it was invisible
-before.
+before. (2026-10-24: that does not follow. The 44 was SP when the kernel looked, at exit, not how deep the stack went; a recursion that runs off the bottom and comes back between checks reports the same, and the climb's case was exactly that. The report tells the two apart now: [task-memory.md](task-memory.md) M1.)
 
 **How much of that is proof, exactly.** The bug itself is not in question: an
 unchecked out-of-bounds read feeding an indirect jump is wrong on inspection,

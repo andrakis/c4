@@ -134,6 +134,36 @@ sampled at each switch — not exact, but enough to size a stack by, and
 printed per task at `-v 100`) and `TASK_STACK_BROKEN` (so the message
 appears once, not once per switch).
 
+**What that `U` was not (2026-10-24).** `U` was `SP` at the moment of the
+check, and the check runs at a switch or at exit, so it is not how deep
+the stack went. `44 of 262144 bytes, guard broken` was read as a stray
+write more than once ([dos-rung-fixes.md](dos-rung-fixes.md),
+[next-session.md](next-session.md)). When `make test-c4bb-climb` failed
+with exactly that line, it was c4sc recursing 4,671 frames deep in c4lc's
+`g:resolvecode` on `sched.c`, running through the guard and 125 KB on
+into the shell's code, and coming back before any switch saw it.
+`g:resolvecode` loops now. The report says what the guard and the stack
+actually show:
+
+    c4ke: task 6 (overrun.c4r) OVERRAN ITS STACK of 262144 bytes: 10 of 64 guard words broken.
+    c4ke:   its stack is used to the bottom: it ran off it (a recursion deeper than the stack, most likely)
+    c4ke:   found as it exited, with 44 bytes in use then -- which is not how deep it went.
+    c4ke: the heap below 0x71cac is no longer trustworthy.
+
+or, for one word written into the guard from `main`,
+
+    c4ke: task 6 (overrun.c4r stray) OVERRAN ITS STACK of 262144 bytes: 1 of 64 guard words broken.
+    c4ke:   its stack was never used below 392 bytes: a stray write from elsewhere, most likely
+
+A stack is zeroed when its task starts, so the lowest word that is not
+zero is the task's true high-water mark, between checks or not
+(`kernel_stack_peak`). A stack used to within a guard's length of its
+bottom ran off it. A guard broken under a stack that never got near it
+was hit by something else. The `-v 100` line at exit ("used at most")
+reads the same high-water mark now, not `TASK_STACK_LOW`.
+`src/c4ke/bin/overrun.c` breaks its own guard both ways, and test-c4bb.sh
+checks that the report tells them apart and that the shell survives both.
+
 `src/c4bb/fw/fw.c` gained the other half of the diagnosis: an allocation
 that fails now says how much heap was actually left.
 

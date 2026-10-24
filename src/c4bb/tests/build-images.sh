@@ -478,103 +478,48 @@ else
     say "C4IX is up to date"
 fi
 
-# Wolfenstein 3D (src/wolf3d): make wolf3d-objs compiled it a unit at a
-# time, so it is linked here whether or not C4IX was rebuilt above, against
-# the libc kept from the last time it was. It goes on the disk beside
-# Apogee's shareware package, which it unpacks the first time it runs.
-if ls .wolf3d/*.c4o > /dev/null 2>&1 && [ -f $PB/lib/libc.c4s ]; then
-    say "linking Wolfenstein 3D for C4IX"
-    ./c4rlink32 .wolf3d/*.c4o -l $PB/lib/libc.c4s -o $DISK/c4ix-wolf3d.c4r > /dev/null
-    cp src/wolf3d/data/1wolf14.zip $DISK/1wolf14.zip
-fi
+# The games (games/README.md): each one checked out links itself for C4IX
+# here, from the objects its c4.mk made, against the libc kept from the
+# last time C4IX was built, and puts its data on the disk
+# (games/NAME/c4-images.sh).
+GAMES=$(for g in games/*/c4-images.sh; do if [ -f "$g" ]; then dirname "$g"; fi; done)
+for g in $GAMES; do . $g/c4-images.sh c4ix; done
 
-# Doom (src/doom): make doom-objs compiled it, and it is linked the same
-# way, with the shareware WAD beside it (c4ix.vfs.txt: /usr/games/doom)
-if ls .doom/*.c4o > /dev/null 2>&1 && [ -f $PB/lib/libc.c4s ]; then
-    say "linking Doom for C4IX"
-    ./c4rlink32 .doom/*.c4o .doom/plat/dg-c4ix.c4o -l $PB/lib/libc.c4s -o $DISK/c4ix-doom.c4r > /dev/null
-    cp src/doom/data/doom1.wad $DISK/doom1.wad
-fi
-
-# OpenTyrian (src/opentyrian): make tyrian-objs compiled it, linked the
-# same way. Tyrian 2.1's data may not be passed on, so it is not in the
-# repository: where its zip is (src/opentyrian/data/README.md), the files
-# the game reads go in the disk's tyrian/, which C4IX shows as
-# /usr/games/tyrian/data (c4ix.vfs.txt, hostdir); where it is not, the
-# game says so when it starts.
-# Rise of the Triad (src/rott): make rott-objs compiled it, linked the same
-# way, with the shareware episode's files beside it, out of Apogee's
-# package as it ships (src/rott/data, tools/rottdata.py; c4ix.vfs.txt:
-# /usr/games/rott)
-if ls .rott/*.c4o > /dev/null 2>&1 && [ -f $PB/lib/libc.c4s ]; then
-    say "linking Rise of the Triad for C4IX, and unpacking its shareware episode"
-    ./c4rlink32 .rott/*.c4o .rott/plat/rott-c4ix.c4o -l $PB/lib/libc.c4s -o $DISK/c4ix-rott.c4r > /dev/null
-    python3 -I src/rott/tools/rottdata.py src/rott/data/1rott13.zip $DISK > /dev/null
-fi
-
-TYRIAN_ZIP=${TYRIAN_ZIP:-src/opentyrian/data/tyrian21.zip}
-rm -rf $DISK/tyrian
-if ls .tyrian/*.c4o > /dev/null 2>&1 && [ -f $PB/lib/libc.c4s ]; then
-    say "linking OpenTyrian for C4IX"
-    ./c4rlink32 .tyrian/*.c4o .tyrian/plat/tyr-c4ix.c4o -l $PB/lib/libc.c4s -o $DISK/c4ix-tyrian.c4r > /dev/null
-    if [ -f "$TYRIAN_ZIP" ]; then python3 -I src/opentyrian/tools/tyrdata.py "$TYRIAN_ZIP" $DISK/tyrian > /dev/null; fi
-fi
-
-# ... and with no C4IX under them: the bare machine, and C4DOS (libc's
-# bare.c; make wolf3d-bare-objs). The same game objects, but for the C4IX
+# ... and with no C4IX under them: the bare machine, and C4DOS (c4's bare
+# libc, make libc-bare-objs). The same game objects, but for the C4IX
 # platform's (plat-bare.c, dg-bare.c), linked whole with libc. Their disk,
 # $OUT/games, has the games' files unpacked, since neither the bare
-# machine nor DOS can write to a drive -- Wolf3D's beside Apogee's package
-# they come from, unmodified, as its VENDOR.DOC asks -- and C4DOS's own
-# files, so it boots C4DOS too.
-WOLFDISK=$OUT/games
-rm -rf $OUT/wolf3d
-if ls .wolf3d-bare/*.c4o > /dev/null 2>&1 && ls .wolf3d/*.c4o > /dev/null 2>&1; then
-    rm -rf $WOLFDISK
-    mkdir -p $WOLFDISK
+# machine nor DOS can write to a drive, and C4DOS's own files, so it boots
+# C4DOS too.
+GAMESDISK=$OUT/games
+GAMES_ON_DISK=
+rm -rf $OUT/wolf3d $GAMESDISK
+if [ -n "$GAMES" ] && ls .libc-bare/*.c4o > /dev/null 2>&1; then
+    mkdir -p $GAMESDISK
     step "linking the games for the bare machine and C4DOS:"
-    item wolf3d
-    ./c4rlink32 $(ls .wolf3d/*.c4o | grep -v '/plat-c4ix.c4o$') .wolf3d-bare/*.c4o -o $WOLFDISK/wolf3d.c4r > /dev/null
-    if ls .doom/*.c4o > /dev/null 2>&1; then
-        item doom
-        ./c4rlink32 .doom/*.c4o .doom/plat/dg-bare.c4o .wolf3d-bare/libc-*.c4o -o $WOLFDISK/doom.c4r > /dev/null
-        cp src/doom/data/doom1.wad $WOLFDISK/
-    fi
-    # Rise of the Triad, the shareware episode beside it
-    if ls .rott/*.c4o > /dev/null 2>&1; then
-        item rott
-        ./c4rlink32 .rott/*.c4o .rott/plat/rott-bare.c4o .wolf3d-bare/libc-*.c4o -o $WOLFDISK/rott.c4r > /dev/null
-        python3 -I src/rott/tools/rottdata.py src/rott/data/1rott13.zip $WOLFDISK > /dev/null
-    fi
-    # OpenTyrian, its data in tyrian/data where there is any (above)
-    if ls .tyrian/*.c4o > /dev/null 2>&1; then
-        item tyrian
-        ./c4rlink32 .tyrian/*.c4o .tyrian/plat/tyr-bare.c4o .wolf3d-bare/libc-*.c4o -o $WOLFDISK/tyrian.c4r > /dev/null
-        if [ -f "$TYRIAN_ZIP" ]; then python3 -I src/opentyrian/tools/tyrdata.py "$TYRIAN_ZIP" $WOLFDISK/tyrian/data > /dev/null; fi
-    fi
+    for g in $GAMES; do . $g/c4-images.sh bare; done
     echo
-    say "the games disk: Wolfenstein 3D's data, C4DOS's files, the indexes"
-    cp src/wolf3d/data/1wolf14.zip $WOLFDISK/
-    python3 -I -c "import zipfile, sys; zipfile.ZipFile(sys.argv[1]).extract('W3DSW14.SHR', sys.argv[2])" \
-        src/wolf3d/data/1wolf14.zip $WOLFDISK
-    gcc -O2 -o .wolf3d-bare/unshr src/wolf3d/tools/unshr.c
-    .wolf3d-bare/unshr $WOLFDISK/W3DSW14.SHR $WOLFDISK > /dev/null
-    rm -f $WOLFDISK/W3DSW14.SHR $WOLFDISK/*.exe
-    cp $DISK/config.sys $WOLFDISK/config.sys
+fi
+if [ -n "$GAMES_ON_DISK" ]; then
+    say "the games disk: their data, C4DOS's files, the indexes"
+    cp $DISK/config.sys $GAMESDISK/config.sys
     # The page runs C4DOS on libjs, whose heap keeps generations, so on
     # this disk a game's memory goes back when it quits (DEVICE=HEAP.SYS,
     # docs/c4dos-design.md "Memory"). Without the line Doom left 14 MB
     # behind each time it ran.
-    echo 'DEVICE=HEAP.SYS' >> $WOLFDISK/config.sys
-    printf '@ECHO OFF\nECHO Welcome to C4DOS\nVER\nECHO Wolfenstein 3D, Doom, Tyrian and Rise of the Triad are on this disk:\nECHO type WOLF3D, DOOM, TYRIAN or ROTT to play.\n' > $WOLFDISK/autoexec.bat
-    (cd $WOLFDISK && ls -p | grep -v '/$' | grep -v '^manifest.json$' > c4dos.dir)
-    (cd $WOLFDISK && find . -type f -not -name manifest.json | sed 's|^\./||') | \
-        awk 'BEGIN{printf "["} NR>1{printf ","} {printf "\"%s\"", $0} END{print "]"}' > $WOLFDISK/manifest.json
+    echo 'DEVICE=HEAP.SYS' >> $GAMESDISK/config.sys
+    list=$(echo $GAMES_ON_DISK | sed 's/ /, /g')
+    printf '@ECHO OFF\nECHO Welcome to C4DOS\nVER\nECHO These games are on this disk: type %s to play.\n' "$list" > $GAMESDISK/autoexec.bat
+    (cd $GAMESDISK && ls -p | grep -v '/$' | grep -v '^manifest.json$' > c4dos.dir)
+    (cd $GAMESDISK && find . -type f -not -name manifest.json | sed 's|^\./||') | \
+        awk 'BEGIN{printf "["} NR>1{printf ","} {printf "\"%s\"", $0} END{print "]"}' > $GAMESDISK/manifest.json
     # and lazy for the web page, as $DISK is below: a file is fetched the
-    # first time the machine opens it, so the package's zip costs nothing
-    (cd $WOLFDISK && find . -type f -not -name manifest.json -not -name index.json -printf '%s %P\n' | sort -k2) | \
+    # first time the machine opens it, so a package's zip costs nothing
+    (cd $GAMESDISK && find . -type f -not -name manifest.json -not -name index.json -printf '%s %P\n' | sort -k2) | \
         awk 'BEGIN{printf "["} NR>1{printf ","} {n=$0; sub(/^[0-9]+ /,"",n); printf "[\"%s\",%s]", n, $1} END{print "]"}' \
-        > $WOLFDISK/index.json
+        > $GAMESDISK/index.json
+else
+    rm -rf $GAMESDISK
 fi
 
 # the C4IX VFS manifest and the plain-text sources it references -
@@ -586,7 +531,9 @@ fi
 # two systems' vfsload runs would silently overwrite each other's
 # source copies.
 say "C4IX's sources on the disk, and c4m as a C4IX program (c4lc)"
-cp src/c4bb/fs/c4ix.vfs.txt $DISK/
+# with the block of each game that is on the disk (games/NAME/c4ix.vfs.txt)
+python3 -I src/c4bb/tests/vfs-games.py src/c4bb/fs/c4ix.vfs.txt $DISK/c4ix.vfs.txt \
+    $(for g in $GAMES; do if [ -f $DISK/c4ix-$(basename $g).c4r ]; then echo $g; fi; done)
 # the boot logo, for splash (src/c4ix/art/mkc4p.py made it from Kiln's PNG)
 cp src/c4ix/art/c4ix.c4p.gz $DISK/c4ix-splash.c4p.gz
 for n in $C4IX_USER $C4IX_ARC_USER; do
@@ -765,7 +712,7 @@ rm -rf $ROOT
 mkdir -p $ROOT/usr/lib $ROOT/usr/include
 if git rev-parse --git-dir > /dev/null 2>&1; then
     git ls-files -- src docs include libjs README.md LICENSE Makefile BUILD.B4K INSTALL.B4K c4.c c4m.c c4m_float.c c4l.c load-c4r.c |
-        grep -v '^src/c4bb/images/\|^src/c4or1k/images/\|^src/wolf3d/\|^src/doom/\|^src/opentyrian/\|^src/rott/' |
+        grep -v '^src/c4bb/images/\|^src/c4or1k/images/' |
         while read -r f; do
             [ -f "$f" ] && grep -Iq . "$f" 2>/dev/null || continue
             mkdir -p "$ROOT/usr/$(dirname "$f")"

@@ -199,7 +199,7 @@ u    nrows
 
 - **Files.** A file's path is stored as the compiler was given it, after
   `-I` resolution, normalised (no `./`, no `a/../`). The repository's
-  builds give repo-relative paths (`src/wolf3d/wl_draw.c`). C4IX has the
+  builds give repo-relative paths (`games/wolf3d/wl_draw.c`). C4IX has the
   repository at `/usr`, so a reader looks for a relative path under the
   image's own directory, then `/usr`, then the search roots it is given.
   The size and CRC let the explorer say "this source has changed since
@@ -629,7 +629,7 @@ inside the desktop.
 
 ## 5. Wolfenstein 3D as a repository of its own (track G)
 
-Today the port lives in `src/wolf3d/`. It arrived in c4's history as a
+Today the port lives in `games/wolf3d/`. It arrived in c4's history as a
 few large commits (`0125961` and the four after it): there is no record
 there of what was changed in Wolf4SDL and why. The user wants it moved
 out:
@@ -661,7 +661,7 @@ repository's whole history, but its home is GitHub:
    starts from. Its first commit is `dc8b250`'s README lines, so that
    every file the port did not touch is byte-identical to what c4 has.
 3. **Then the port, one change to a commit, in the order it makes
-   sense.** `src/wolf3d/` is diffed against that commit, and the hunks
+   sense.** `games/wolf3d/` is diffed against that commit, and the hunks
    are sorted by the list in its README, each one marked `c4sdl:` in the
    source:
    - what C4IX does not build is removed (the MAME OPL emulator, the
@@ -712,7 +712,7 @@ repository's whole history, but its home is GitHub:
   `test-wolf3d` says it was skipped, and passes.
 - When the game is there, build-images.sh does three things:
   - links it as today, and puts the downloaded zip on the disk;
-  - copies its sources to `/usr/src/wolf3d`;
+  - copies its sources to `/usr/games/wolf3d`;
   - adds its line to `/etc/desktop.apps`.
 
   Lazy disk files cost nothing until they are opened. Without the game,
@@ -721,7 +721,7 @@ repository's whole history, but its home is GitHub:
   file replaces it (W2).
 - test-desktop.mjs's wolf3d checks run only when the game is on the
   disk.
-- `src/wolf3d/` is removed in one commit that names the new repository,
+- `games/wolf3d/` is removed in one commit that names the new repository,
   and the zip leaves c4 with it. docs/c4ix-wolf3d.md becomes a short
   pointer.
 - **The old worktree `~/git/c4-wolf` goes** (decided, G0). It is a
@@ -775,9 +775,9 @@ targets are marked *new*.
 | | what | tests |
 |---|---|---|
 | **G0** | **Retire `~/git/c4-wolf`.** Check again that it is clean and merged, then remove the worktree and the merged branch `c4lc-full`. | `git worktree list` no longer shows it; `git branch --contains 178bb38` still shows `c4ix-userland`. |
-| **G1** | **The repository**, `~/git/c4-wolf3d`: a clone of Bitbucket's wolf4sdl (`upstream`) with `origin` on GitHub, branch `c4ix` from `10186e4`, then `dc8b250`'s README lines, then the port as a series of commits, `c4.mk` and the doc. Never pushed. | At the last commit, the new tree equals `src/wolf3d/` file for file, except the zip. The host build and `--timedemo 1` pass at every commit from the platform layer on (a script walks the history). |
-| **G2** | **c4 uses it when it is there.** `make wolf3d-fetch` (the clone, and the zip from a mirror, checked by SHA-256), `ext/wolf3d`, the Makefile including `c4.mk`, build-images.sh's copy to `/usr/src/wolf3d` and its apps line. Needs W2 for the apps file; until then wm.c's entry is shown only if the game is on the disk. | `test-wolf3d` and test-desktop.mjs's game checks, with the game fetched, give the same results as before; with `ext/wolf3d` absent, `make test-libjs` passes and says the game's checks were skipped; a zip with one byte changed is refused. |
-| **G3** | **c4 stops carrying it.** Remove `src/wolf3d/`; docs/c4ix-wolf3d.md becomes a pointer. | As G2, both ways, on a fresh clone of c4. |
+| **G1** | **The repository**, `~/git/c4-wolf3d`: a clone of Bitbucket's wolf4sdl (`upstream`) with `origin` on GitHub, branch `c4ix` from `10186e4`, then `dc8b250`'s README lines, then the port as a series of commits, `c4.mk` and the doc. Never pushed. | At the last commit, the new tree equals `games/wolf3d/` file for file, except the zip. The host build and `--timedemo 1` pass at every commit from the platform layer on (a script walks the history). |
+| **G2** | **c4 uses it when it is there.** `make wolf3d-fetch` (the clone, and the zip from a mirror, checked by SHA-256), `ext/wolf3d`, the Makefile including `c4.mk`, build-images.sh's copy to `/usr/games/wolf3d` and its apps line. Needs W2 for the apps file; until then wm.c's entry is shown only if the game is on the disk. | `test-wolf3d` and test-desktop.mjs's game checks, with the game fetched, give the same results as before; with `ext/wolf3d` absent, `make test-libjs` passes and says the game's checks were skipped; a zip with one byte changed is refused. |
+| **G3** | **c4 stops carrying it.** Remove `games/wolf3d/`; docs/c4ix-wolf3d.md becomes a pointer. | As G2, both ways, on a fresh clone of c4. |
 
 ### Track E: the explorer
 
@@ -836,7 +836,7 @@ All answered on 2026-10-22, and written into the sections above:
 |---|---|---|
 | Q1 | bump the version byte? | no: the trailer announces itself (2.1) |
 | Q2 | maps by default? | on everywhere, kernels and libraries too; C4SK strips (2.3, 2.4, S6) |
-| Q3 | wolf3d's source in C4IX? | the game becomes an optional repository; when fetched, its source goes in `/usr/src/wolf3d` (5, track G) |
+| Q3 | wolf3d's source in C4IX? | the game becomes an optional repository; when fetched, its source goes in `/usr/games/wolf3d` (5, track G) |
 | Q4 | a CRC per source file? | yes (2.2) |
 | Q5 | protocol on fds 3 and 4? | yes (4.1) |
 | Q6 | IDE processes? | one IDE, many windows (4.2) |

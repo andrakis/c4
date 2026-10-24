@@ -1144,25 +1144,28 @@ static void process_trap_handler (int trap, int ins, int mode, int a, int *bp, i
 #endif
 // Takes two extra arguments that are pushed onto the stack.
 
-// Cause a trap on a task.
-// NOTE: Cannot be done if the task is currently executing.
+// Cause a trap on a task: 1 if the frame was built, 0 if it could not be.
 // Works the same as c4m's trap function, writing temporary values to the stack
 // to be popped by TLEV to return to the previous code position.
 //
-static void process_trap (int *task, int type, int parameter, int *handler) {
+// It works on the registers in the task's slots, so it is called only
+// where those are the task's real ones: by kernel_before_switch, whose
+// callers all save the outgoing task's registers to its slots first and
+// load the incoming task's from its slots after. That holds when the
+// task about to run is the one that was running, too -- the scheduler
+// picks it again when nothing else can run -- and that is when a busy
+// task gets its Ctrl-C. This used to refuse the current task outright,
+// and kernel_before_switch counted the signal delivered anyway: spin
+// under C4KE, nested in c4m inside C4IX, lost its SIGINT and ran on.
+static int process_trap (int *task, int type, int parameter, int *handler) {
 	int *temp, i;
 	int *sp, *bp, *pc, mode, a;
-
-	if (kernel_task_current == task) {
-		printf("c4ke: process_trap() BUG current task would be modified!\n");
-		return;
-	}
 
 	// Copy the segfault fix from c4m
 	if (!handler) {
 		printf("c4ke: process_trap() BUG handler not set!\n");
-		printf("c4ke: Trap type %d, offending instruction at 0x%X, sp=0x%X\n", type, pc - 1, sp);
-		return;
+		printf("c4ke: Trap type %d, task %d\n", type, task[TASK_ID]);
+		return 0;
 	}
 
 	sp = (int *)task[TASK_REG_SP];
@@ -1206,6 +1209,7 @@ static void process_trap (int *task, int type, int parameter, int *handler) {
 	task[TASK_REG_SP] = (int)sp;
 	task[TASK_REG_BP] = (int)bp;
 	task[TASK_REG_PC] = (int)(handler + 2); // +2 to skip ENT x
+	return 1;
 }
 
 //
@@ -1999,11 +2003,13 @@ static void kernel_before_switch (int *task) {
 		// Find lowest signal id
 		while (i < SIGNAL_MAX) {
 			if (sigh[SIGH_PENDING]) {
-				process_trap(task, TRAP_SIGNAL, i, (int *)sigh[SIGH_ADDRESS]);
+				// delivered once its frame is built; otherwise it stays pending
+				if (process_trap(task, TRAP_SIGNAL, i, (int *)sigh[SIGH_ADDRESS])) {
+					--sigh[SIGH_PENDING];
+					--task[TASK_SIGPENDING];
+				}
 				// TODO: use process_trap_handler and forward the signal nicer
 				//process_trap2(task, TRAP_SIGNAL, i, (int *)&process_trap_handler, sigh(SIGH_ADDRESS), i);
-				--sigh[SIGH_PENDING];
-				--task[TASK_SIGPENDING];
 				// break loop
 				i = SIGNAL_MAX;
 			}
@@ -2091,6 +2097,13 @@ static void trap_schedule_in_trap (int trap, int ins, int mode, int a, int *bp, 
 		//c4r_print_stacktrace(kernel_c4r, (int *)kernel_task_current[TASK_C4R], 0, 0);
 		//c4r_print_stacktrace(kernel_c4r, (int *)kernel_task_current[TASK_C4R], bp, returnpc);
 
+	// The outgoing task's registers to its slots first, as every switch
+	// does before kernel_before_switch: a signal for the task that runs
+	// next is built in its slots, and that may be this one
+	kernel_task_current[TASK_REG_A]  = (int)a;
+	kernel_task_current[TASK_REG_BP] = (int)bp;
+	kernel_task_current[TASK_REG_SP] = (int)sp;
+	kernel_task_current[TASK_REG_PC] = (int)returnpc;
 	if (!trap_schedule_in_trap_next) {
 		if ((trap_schedule_in_trap_next = kernel_task_find())) {
 			// TODO: not used on idle task, any reason to? not yet
@@ -2108,10 +2121,6 @@ static void trap_schedule_in_trap (int trap, int ins, int mode, int a, int *bp, 
 	}
 
 	// printf("(c4ke: trap_schedule_in_trap found task: 0x%lx, isidle=%d)\n", trap_schedule_in_trap_next, trap_schedule_in_trap_next == kernel_task_idle);
-	kernel_task_current[TASK_REG_A]  = (int)a;
-	kernel_task_current[TASK_REG_BP] = (int)bp;
-	kernel_task_current[TASK_REG_SP] = (int)sp;
-	kernel_task_current[TASK_REG_PC] = (int)returnpc;
 	// Load new state
 	if (kernel_pm_support)
 		mode = (trap_schedule_in_trap_next[TASK_PRIVS] == PRIV_KERNEL || trap_schedule_in_trap_next[TASK_LOADING]) ? MODE_UNPROTECTED : MODE_PROTECTED;

@@ -218,7 +218,19 @@ side) and `libjs/ap.js` (every other CPU, in a worker of its own). It is
   it, so a game on CPU 0 stalled once a second beside `top` on CPU 1.)
 - **Forwarding**, as in 3.2: another CPU's host syscalls and device
   registers go to CPU 0 through its request slot, and it rings the
-  doorbell. CPU 0 answers between slices of 16,384 cycles, and whenever
+  doorbell. Writes that need no answer and read no guest memory are
+  **posted** instead (par.js `POSTED`: the sound card's OPL, WAIT, PCM
+  settings, STOP, SETVOL, speaker and RESET).
+  - The CPU queues them in a ring of its own and carries on.
+  - CPU 0 applies a CPU's queue in order, before it answers that CPU's
+    next request and between its own slices.
+  - The CPU rings the doorbell at the end of each slice it posted in, and
+    before it sleeps.
+  - Music is thousands of OPL writes a second, and as round trips they made
+    a game on CPU 1 slower than on CPU 0. Doom's demo3 on two CPUs (Node,
+    with the display and card) took 63.0 s there against 53.5 s on CPU 0;
+    posted, 54.6 s against 55.2 s, and 12k requests instead of 135k
+    (2026-10-24). CPU 0 answers between slices of 16,384 cycles, and whenever
   it is parked or idle. The other CPUs run slices of 65,536 cycles and
   check for an IPI or the machine's end between them. Checking on every
   instruction halved the speed.

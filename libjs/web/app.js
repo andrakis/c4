@@ -35,7 +35,7 @@ const SYSTEMS = {
   // Doom, Tyrian and Rise of the Triad, beside C4DOS's own files, so WOLF3D, DOOM, TYRIAN or ROTT at the A> prompt
   // plays them.
   c4dos: { label: 'C4DOS', image: `${IMAGES}/c4dos32.c4r`, disk: `${IMAGES}/games`, argv: ['c4dos32.c4r'], mhz: 400 },
-  // Wolfenstein 3D with no operating system under it (src/wolf3d/plat-bare.c),
+  // Wolfenstein 3D with no operating system under it (games/wolf3d/plat-bare.c),
   // and on C4IX drawing on the display itself rather than in a window
   // (wolf3d --direct, like raycast -G). The game times itself against the
   // machine's clock, so these are paced, at a clock it can keep up with.
@@ -43,11 +43,11 @@ const SYSTEMS = {
             argv: ['wolf3d.c4r'], mhz: 400 },
   doom: { label: 'Doom (bare machine)', image: `${IMAGES}/games/doom.c4r`, disk: `${IMAGES}/games`,
           argv: ['doom.c4r'], mhz: 400 },
-  // OpenTyrian (src/opentyrian), where Tyrian's data was there to put on
-  // the disk (src/opentyrian/data/README.md)
+  // OpenTyrian (games/tyrian), where Tyrian's data was there to put on
+  // the disk (games/tyrian/data/README.md)
   tyrian: { label: 'Tyrian (bare machine)', image: `${IMAGES}/games/tyrian.c4r`, disk: `${IMAGES}/games`,
             argv: ['tyrian.c4r'], mhz: 400 },
-  // Rise of the Triad (src/rott), the shareware episode
+  // Rise of the Triad (games/rott), the shareware episode
   rott: { label: 'Rise of the Triad (bare machine)', image: `${IMAGES}/games/rott.c4r`, disk: `${IMAGES}/games`,
           argv: ['rott.c4r'], mhz: 400 },
   'wolf3d-c4ix': { label: 'Wolfenstein 3D (C4IX, direct)', image: `${IMAGES}/c4ix32.c4r`, disk: `${IMAGES}/disk`,

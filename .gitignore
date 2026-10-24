@@ -34,6 +34,9 @@ libc.c4s
 /c4rlink
 /c4sp
 
+# the bare machine's libc (make libc-bare-objs), which the games link there
+/.libc-bare/
+# the games (games/README.md): their objects, gcc builds and tests
 # Wolfenstein 3D's objects (make wolf3d-objs), its gcc build, its test
 /.wolf3d/
 /.wolf3d-bare/
@@ -101,6 +104,4 @@ c4or1k-native
 
 # machine-specific proxy domain for the browser gates (src/c4bb/tools/proxy-domain.mjs)
 .proxy-domain
-# ROTT's private headers (_rt_draw.h, ...) are source, not scratch
-!/src/rott/_*.h
 .c4dos_heap_t/

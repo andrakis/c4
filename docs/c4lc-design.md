@@ -880,7 +880,7 @@ asks for `intmax_t`, at least 64 bits, and unsigned where a `u` says so.
 On a 32-bit target `#if 4294967295u >= 1` is false, and a test such as
 `UINTPTR_MAX >= UINT64_MAX` cannot tell 32 bits from 64. OpenTyrian's
 `swar.h` makes exactly that test, and its port settles it by hand
-(src/opentyrian/README.md).
+(games/tyrian/README.md).
 
 c4lc runs its preprocessor with `-P`, or with `-I` or `-D`, which imply
 it. Otherwise the source is taken as already preprocessed, as `gcc -E`
@@ -1306,7 +1306,7 @@ compiler makes maps (S6).
   the one before is dropped, and so is one at the end of the code. Only
   files that something points at are listed.
 
-**Measured** on `src/rott/rt_actor.c` (319 KB, the largest unit here;
+**Measured** on `games/rott/rt_actor.c` (319 KB, the largest unit here;
 wolf3d is not fetched), compiled `-O -mfuse` by c4sp32:
 
 | | `-g0` | `-g` |

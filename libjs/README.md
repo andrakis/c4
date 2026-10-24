@@ -90,6 +90,12 @@ this computer, does as well).
   when the source is found, and anything still to link (in a `.c4o` or
   `.c4l`) by its symbol. Fused opcodes are green, the machine's
   syscalls pink.
+- **What an instruction does**, on hovering its mnemonic, as Compiler
+  Explorer explains an x86 one (`web/opdoc.js`). The tooltip names its
+  operand, if it has one, and says whether memory is read or written
+  through a pointer. A fused opcode is explained as the instructions it
+  stands for. `tests/test-opdoc.mjs` checks every opcode against the
+  machine's table.
 - **Its source, line by line**, when the image has a source map (c4lc
   `-g`; docs/c4lc-design.md 15). The rows say which file and line each
   run of code came from:

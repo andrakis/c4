@@ -109,3 +109,18 @@ body.drop::after {
   #xpanes { grid-template-columns: 1fr; grid-auto-rows: minmax(320px, 60vh); overflow-y: auto; }
   #path, #goto { width: 100%; }
 }
+
+/* an instruction's explanation, on hovering its mnemonic (opdoc.js) */
+.ins .op[data-op] { cursor: help; }
+#optip {
+  display: none; position: fixed; z-index: 20; max-width: 440px;
+  background: var(--panel); color: var(--text); border: 1px solid var(--edge);
+  border-left: 3px solid var(--cyan); border-radius: 4px; padding: 6px 10px;
+  font-size: 12px; line-height: 1.45; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5); pointer-events: none;
+}
+#optip p { margin: 0 0 4px; }
+#optip p:last-child { margin-bottom: 0; }
+#optip ul { margin: 2px 0 4px; padding-left: 16px; }
+#optip b { color: var(--cyan); font-weight: bold; }
+#optip i { color: var(--yellow); }
+#optip code { color: var(--green); }

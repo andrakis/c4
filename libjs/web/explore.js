@@ -11,6 +11,7 @@
 
 import { readC4r, analyse, opName, hex, PATCH, SCLASS } from '../c4r.js';
 import { OP } from '../c4m.js';
+import { opDoc } from './opdoc.js';
 
 const ROOT = new URL('../../', location.href);
 const $ = id => document.getElementById(id);
@@ -262,7 +263,7 @@ function renderCode(f, at) {
     prevRow = row;
     h += `<div class="ins band${ins.filler ? ' word' : ''}" data-off="${ins.off}"${band}>` +
       `<span class="o">${hex(ins.off)}</span><span class="lb">${lb ? lb + ':' : ''}</span>` +
-      `<span class="op${opClass(ins.op)}">${esc(ins.name)}</span><span class="a">${operand(ins, f)}</span></div>`;
+      `<span class="op${opClass(ins.op)}"${ins.filler ? '' : ` data-op="${ins.op}"`}>${esc(ins.name)}</span><span class="a">${operand(ins, f)}</span></div>`;
   }
   $('code').innerHTML = h || '<p class="note">no instructions</p>';
   if (at !== undefined) flash(at); else $('code').scrollTop = 0;
@@ -829,6 +830,25 @@ $('code').addEventListener('click', e => {
   for (const x of $('code').querySelectorAll('.ins.hl')) x.classList.remove('hl');
   ins.classList.add('hl');
 });
+
+// hovering a mnemonic explains the instruction (opdoc.js), as Compiler
+// Explorer explains an x86 one
+const tip = document.createElement('div');
+tip.id = 'optip';
+tip.setAttribute('role', 'tooltip');
+document.body.appendChild(tip);
+$('code').addEventListener('mouseover', e => {
+  const el = e.target.closest('.op[data-op]');
+  if (!el) return;
+  tip.innerHTML = opDoc(+el.dataset.op, el.textContent);
+  tip.style.display = 'block';
+  const r = el.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
+  const x = Math.max(8, Math.min(r.left, innerWidth - w - 8));
+  tip.style.left = x + 'px';
+  tip.style.top = (r.bottom + 6 + h < innerHeight ? r.bottom + 6 : Math.max(8, r.top - h - 6)) + 'px';
+});
+$('code').addEventListener('mouseout', e => { if (e.target.closest('.op[data-op]')) tip.style.display = 'none'; });
+$('code').addEventListener('scroll', () => { tip.style.display = 'none'; });
 
 $('images').addEventListener('change', e => { if (e.target.value) openPath(e.target.value); });
 $('path').addEventListener('keydown', e => { if (e.key === 'Enter') openPath($('path').value.trim()); });

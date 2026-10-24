@@ -199,13 +199,13 @@
 ;; A tag's fourth letter says what a tool that changes the code may do
 ;; with the chunk: upper case, drop it (it describes the code as it was);
 ;; lower case, keep it. c4opt does this to an image it optimises.
-(define c4r:code-safe (lambda (Chunks)
-	(if (empty? Chunks) (list)
+(define c4r:code-safe (lambda (Chunks) (next c4r:code-safe/2 Chunks (list))))
+(define c4r:code-safe/2 (lambda (Chunks Acc)
+	(if (empty? Chunks) (reverse Acc)
 	(begin
 		(define C (string:byte (head (head Chunks)) 3))
-		(if (if (>= C 65) (<= C 90) false)
-			(c4r:code-safe (tail Chunks))
-			(cons (head Chunks) (c4r:code-safe (tail Chunks))))))))
+		(next c4r:code-safe/2 (tail Chunks)
+			(if (if (>= C 65) (<= C 90) false) Acc (cons (head Chunks) Acc)))))))
 
 ;; ---- SMAP, the source map (docs/c4-explorer.md 2.2) ----
 ;;
@@ -297,10 +297,11 @@
 				(set! B (c4r:uleb (second (head Fs)) B))
 				(set! B (c4r:push-word32 (third (head Fs)) B))))
 		(next c4r:smap-files (tail Fs) Map (+ F 1) B)))))
-(define c4r:smap-named (lambda (Fs)
-	(if (empty? Fs) (list)
-	(if (= false (second (head Fs))) (c4r:smap-named (tail Fs))
-	(cons (head Fs) (c4r:smap-named (tail Fs)))))))
+(define c4r:smap-named (lambda (Fs) (next c4r:smap-named/2 Fs (list))))
+(define c4r:smap-named/2 (lambda (Fs Acc)
+	(if (empty? Fs) (reverse Acc)
+	(next c4r:smap-named/2 (tail Fs)
+		(if (= false (second (head Fs))) Acc (cons (head Fs) Acc))))))
 (define c4r:smap-funcs (lambda (Fs Map End Prev B)
 	(if (empty? Fs) B
 	(if (= false (second (head Fs))) (next c4r:smap-funcs (tail Fs) Map End Prev B)
@@ -497,23 +498,28 @@
 
 ;; split the patch list: code-resident (-1, -2, symbols) drive the
 ;; instruction walk; data-resident (-3, -4) ride along as module data
-(define c4r:code-patches (lambda (Ps)
-	(if (empty? Ps) (list)
-		(if (< (head (head Ps)) -2)
-			(c4r:code-patches (tail Ps))
-			(cons (head Ps) (c4r:code-patches (tail Ps)))))))
-(define c4r:data-patches (lambda (Ps)
-	(if (empty? Ps) (list)
-		(if (= -3 (head (head Ps)))
-			(cons (list 'dcode (second (head Ps)) (third (head Ps)))
-				(c4r:data-patches (tail Ps)))
+;; These and the other whole-image walks below loop (next, into an
+;; accumulator, reversed at the end) rather than recurse. A recursion
+;; here is a stack frame per patch, symbol or function: c4sc's opt mode
+;; on c4ix32.c4r was 3,618 frames deep in c4r:data-patches, 145 KB, more
+;; than half of a C4KE task's stack. c4lc's g:resolvecode, the same
+;; shape over a module's code, is what overran it (c4lc-gen.lisp).
+(define c4r:code-patches (lambda (Ps) (next c4r:code-patches/2 Ps (list))))
+(define c4r:code-patches/2 (lambda (Ps Acc)
+	(if (empty? Ps) (reverse Acc)
+		(next c4r:code-patches/2 (tail Ps)
+			(if (< (head (head Ps)) -2) Acc (cons (head Ps) Acc))))))
+(define c4r:data-patches (lambda (Ps) (next c4r:data-patches/2 Ps (list))))
+(define c4r:data-patches/2 (lambda (Ps Acc)
+	(if (empty? Ps) (reverse Acc)
+		(next c4r:data-patches/2 (tail Ps)
+			(if (= -3 (head (head Ps)))
+				(cons (list 'dcode (second (head Ps)) (third (head Ps))) Acc)
 			(if (= -4 (head (head Ps)))
-				(cons (list 'ddata (second (head Ps)) (third (head Ps)))
-					(c4r:data-patches (tail Ps)))
+				(cons (list 'ddata (second (head Ps)) (third (head Ps))) Acc)
 			(if (= -5 (head (head Ps)))
-				(cons (list 'dsym (second (head Ps)) (third (head Ps)))
-					(c4r:data-patches (tail Ps)))
-				(c4r:data-patches (tail Ps))))))))
+				(cons (list 'dsym (second (head Ps)) (third (head Ps))) Acc)
+				Acc)))))))
 
 (define c4r:read-words (lambda (F At N Acc)
 	(if (= 0 N) Acc
@@ -556,17 +562,19 @@
 		(next c4r:mark-sym-labels (tail Syms) Labels)))))
 
 ;; rewrite symbol values / constructor lists as (code N) label references
-(define c4r:label-syms (lambda (Syms)
-	(if (empty? Syms) (list)
-		(cons (c4r:label-sym (head Syms)) (c4r:label-syms (tail Syms))))))
+(define c4r:label-syms (lambda (Syms) (next c4r:label-syms/2 Syms (list))))
+(define c4r:label-syms/2 (lambda (Syms Acc)
+	(if (empty? Syms) (reverse Acc)
+		(next c4r:label-syms/2 (tail Syms) (cons (c4r:label-sym (head Syms)) Acc)))))
 (define c4r:label-sym (lambda (S)
 	(if (c4r:sym-defined S)
 		(list (head S) (second S) (third S) (index S 3) (index S 4)
 			(list 'code (index S 5)))
 		S)))
-(define c4r:label-offsets (lambda (Offs)
-	(if (empty? Offs) (list)
-		(cons (list 'code (head Offs)) (c4r:label-offsets (tail Offs))))))
+(define c4r:label-offsets (lambda (Offs) (next c4r:label-offsets/2 Offs (list))))
+(define c4r:label-offsets/2 (lambda (Offs Acc)
+	(if (empty? Offs) (reverse Acc)
+		(next c4r:label-offsets/2 (tail Offs) (cons (list 'code (head Offs)) Acc)))))
 
 ;; The decoder walk. Pos is a word offset; Patches is the not-yet-consumed
 ;; patch list, ascending by address (asm-c4r emits them in code order).
@@ -813,10 +821,11 @@
 		(string:byte! Out (+ At I) (string:byte Src I))
 		(next c4r:copy-string Src Out At (+ I 1))))))
 
-(define c4r:resolve-offsets (lambda (Refs LT)
-	(if (empty? Refs) (list)
-		(cons (c4r:label LT (second (head Refs)))
-			(c4r:resolve-offsets (tail Refs) LT)))))
+(define c4r:resolve-offsets (lambda (Refs LT) (next c4r:resolve-offsets/2 Refs LT (list))))
+(define c4r:resolve-offsets/2 (lambda (Refs LT Acc)
+	(if (empty? Refs) (reverse Acc)
+		(next c4r:resolve-offsets/2 (tail Refs) LT
+			(cons (c4r:label LT (second (head Refs))) Acc)))))
 
 ;; data-resident patches, after the code-resident ones. dcode targets are
 ;; labels so the optimizer can move code without breaking jump tables.

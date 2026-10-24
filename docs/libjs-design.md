@@ -135,6 +135,26 @@ Reused from `src/c4bb/sim/`: `arena.js`, `devices.js`, `loader.js`
   assembles a trampoline after the image: constructors, `main(argc, argv)`,
   destructors, EXIT.
 
+- **Speed** is V8's to give, and `run()` is written for it (2026-10-24).
+  - The dispatch is never a loop. OPCD used to go round the switch again
+    with the opcode from the stack. C4IX's syscalls are all OPCDs, and
+    that one live inner loop made V8 compile every case worse. Any C4IX
+    program ran 1.7 times slower for it, and so did a bare one run after
+    C4IX in the same process. Now a syscall or custom opcode falls through
+    to `default`, and one of the switch's own goes to `opcd()`.
+  - The boundary checks are `boundary()`, out of the loop. They are due
+    only at the next tick or PIT look (`nextChk`), and one compare per
+    instruction (`cycle > lim`) covers both them and the slice's end.
+    Anything that can make a check pending sooner runs through a path
+    that resets `lim`.
+  - ROTT's demo 4 (3.5e9 cycles) under C4IX in Node went from 27 s to
+    17.5 s; the bare game takes 14 s. In Chrome on the desktop at 400 MHz,
+    from 73-87M inst/s to 133M; the bare game runs at 156M.
+  - `--trace-deopt` and the experiment of running the bare game after
+    C4IX in one process found it. Perf on helios has only cpu-clock (a
+    Hyper-V guest has no PMU), and it put the time on the loop head,
+    which was not where it went.
+
 Known deviations from native c4m: division by zero gives 0 instead of SIGFPE;
 the seven fused opcodes c4m lacks are implemented; FREE of an unknown pointer
 is ignored; stores to the ROM words are dropped.
@@ -421,6 +441,8 @@ processors: c4mp's instruction set (`src/c4mp/README.md`), simulated
 - [ ] Performance pass. Not done, not needed yet: 106-190M inst/s in Node
       and 74M in the browser for the framebuffer demo, which is paced to the
       clock it claims. Revisit if a guest is CPU-bound in the browser.
+      2026-10-24: the games are, under C4IX. Its 1.7x penalty is gone (the
+      interpreter's Speed, above).
 - [x] SharedArrayBuffer display path (`shared.js`, asked for 2026-09-23).
       When the page is cross-origin isolated (`make serve-libjs` and the gate
       send COOP/COEP; the code-server proxy passes them through), commands go

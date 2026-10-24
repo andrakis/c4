@@ -63,6 +63,12 @@ function isRom(x, n) {
          (lo < OPNAMES_ROM + OPNAMES.length && hi > OPNAMES_ROM);
 }
 
+// run()'s own opcodes that OPCD can run, which have no operand: opcd().
+function isPlainOp(i) {
+  return (i >= OP.LEV && i <= OP.MOD) || i === OP._JMP || i === OP._ADJ || i === OP.C4CY ||
+         i === OP.JMPA || i === OP.LIP || i === OP.ADDL || i === OP.POPA;
+}
+
 export const TRAP = { ILLOP: 0, HARD_IRQ: 1, SOFT_IRQ: 2, SIGNAL: 3, SEGV: 4, OPV: 5, PM_VIOLATION: 6, DEBUG: 7 };
 const TRAP_OFFSET = 15;                 // words of slack above a trap frame (c4m.c:221)
 
@@ -120,6 +126,7 @@ export class Machine {
     this.trapHandler = 0;
     this.cycleInterval = 0;
     this.cycleHandler = 0;
+    this.bFired = false; this.bNextIrq = 0;   // boundary()'s results
     this.trapRestoresInterval = 0;
     this.signalHandlers = new Map();
     this.pendingSignal = 0;
@@ -648,6 +655,112 @@ export class Machine {
               (this.gui && this.gui.irqPending()));
   }
 
+  // The instruction-boundary checks, in c4bb's order (machine.js:189-242),
+  // with the registers in their fields. They are out of run()'s loop so
+  // that their calls, which C4IX takes and a bare program does not, do
+  // not shape the loop's code. Returns the cycle they are next due at
+  // (0: the next instruction); bFired says whether one was taken, and
+  // bNextIrq is the next tick.
+  boundary(cycle, nextIrq) {
+    const dev = this.dev, i32 = this.i32;
+    const tlev = i32[this.pc >> 2] === OP.TLEV;   // TLEV is never interrupted
+    let interval = this.cycleInterval | 0;
+    let fired = true;
+    if (dev.pitMs && (cycle & 4095) === 0 && !tlev && dev.hostNow() >= dev.pitNext) {
+      dev.pitNext = dev.hostNow() + dev.pitMs;
+      this.hirq(1);
+    } else if (dev.mboxIrq && this.cycleHandler && !tlev) {
+      dev.mboxIrq = 0;
+      this.hirq(2);
+    } else if (this.gui && this.cycleHandler && this.gui.irqPending() && !tlev) {
+      this.gui.irqTaken();
+      this.hirq(3);
+    } else {
+      let irq = false;
+      if (interval > 0 && cycle >= nextIrq) {
+        nextIrq = (Math.floor(cycle / interval) + 1) * interval;
+        irq = !tlev;
+      }
+      if (irq) this.hirq(0);
+      else if (this.ipiPending && !tlev) {
+        // another CPU's interrupt (c4mp's order: after the tick).
+        // Not held back by the preemption mask: it is a peer asking.
+        this.ipiPending = 0;
+        this.hirq(HIRQ_IPI);
+      } else if (this.pendingSignal && !(this.trapRestoresInterval && !interval)) {
+        this.deliverSignal();
+      } else fired = false;
+    }
+    this.bFired = fired;
+    if (fired) {
+      interval = this.cycleInterval | 0;
+      this.bNextIrq = interval > 0 ? (Math.floor(cycle / interval) + 1) * interval : 0;
+      return 0;
+    }
+    this.bNextIrq = nextIrq;
+    if ((dev.mboxIrq && this.cycleHandler) || this.ipiPending || this.pendingSignal ||
+        (this.gui && this.cycleHandler && this.gui.irqPending()))
+      return 0;                  // pending but held back (a TLEV, a mask): look again
+    let next = Infinity;
+    if (interval > 0) next = nextIrq;
+    if (dev.pitMs) {
+      const pit = (Math.floor(cycle / 4096) + 1) * 4096;
+      if (pit < next) next = pit;
+    }
+    return next;
+  }
+
+  // OPCD of one of run()'s own opcodes without an operand (isPlainOp),
+  // on the register fields. The opcode stays on the stack, under what
+  // it pushes, as it does for a syscall. Rare: C4IX's OPCDs are
+  // syscalls.
+  opcd(op) {
+    const i32 = this.i32;
+    let sp = this.sp, a = this.a, x = 0;
+    switch (op) {
+      case OP.LEV: {
+        const bp = this.bp;
+        this.bp = i32[bp >> 2]; this.pc = i32[(bp >> 2) + 1]; sp = bp + 8;
+        break;
+      }
+      case OP.LI: a = this.ld32(a); break;
+      case OP.LC: a = this.ld8(a); break;
+      case OP.SI: x = i32[sp >> 2]; sp += 4; this.st32(x, a); break;
+      case OP.SC: x = i32[sp >> 2]; sp += 4; this.st8(x, a); a = (a << 24) >> 24; break;
+      case OP.PSH: sp -= 4; i32[sp >> 2] = a; break;
+      case OP.LIP: a = this.ld32(a); sp -= 4; i32[sp >> 2] = a; break;
+      case OP.ADDL: x = (i32[sp >> 2] + a) | 0; sp += 4; a = this.ld32(x); break;
+      case OP.POPA: a = i32[sp >> 2]; sp += 4; break;
+      case OP.JMPA: this.pc = a; break;
+      case OP._JMP: this.pc = i32[sp >> 2]; sp += 4; break;
+      case OP._ADJ: sp = (sp + (i32[sp >> 2] << 2)) | 0; break;
+      case OP.C4CY: a = this.cycle | 0; break;
+      default: {
+        // OR .. MOD: the second operand is a, the first is popped
+        const t = i32[sp >> 2]; sp += 4;
+        switch (op) {
+          case OP.OR: a = t | a; break;
+          case OP.XOR: a = t ^ a; break;
+          case OP.AND: a = t & a; break;
+          case OP.EQ: a = t === a ? 1 : 0; break;
+          case OP.NE: a = t !== a ? 1 : 0; break;
+          case OP.LT: a = t < a ? 1 : 0; break;
+          case OP.GT: a = t > a ? 1 : 0; break;
+          case OP.LE: a = t <= a ? 1 : 0; break;
+          case OP.GE: a = t >= a ? 1 : 0; break;
+          case OP.SHL: a = t << a; break;
+          case OP.SHR: a = t >> a; break;
+          case OP.ADD: a = (t + a) | 0; break;
+          case OP.SUB: a = (t - a) | 0; break;
+          case OP.MUL: a = Math.imul(t, a); break;
+          case OP.DIV: a = a === 0 ? 0 : (t / a) | 0; break;
+          case OP.MOD: a = a === 0 ? 0 : (t % a) | 0; break;
+        }
+      }
+    }
+    this.sp = sp; this.a = a;
+  }
+
   // ---------------------------------------------------------------
   // Run up to maxCycles cycles. Returns a STOP code.
   run(maxCycles) {
@@ -661,66 +774,39 @@ export class Machine {
     let interval = this.cycleInterval | 0;
     let nextIrq = interval > 0 ? (Math.floor(cycle / interval) + 1) * interval : 0;
     let chk = this.needChecks();
+    // The checks are due at the next tick or PIT look, not at every
+    // instruction: within a slice nothing else can become pending
+    // except on a path that calls needChecks() again, which zeroes
+    // this. Host events (keys, the display's, an IPI) land between
+    // slices. 0: look at the next instruction.
+    let nextChk = 0;
+    // An instruction up to lim needs neither the checks nor a look at
+    // end: one compare per instruction. lim is the smaller of end and
+    // nextChk - 1; -1 makes the next instruction look at both.
+    let lim = -1;
     let stop = STOP.BUDGET;
     let op = 0, x = 0;
 
-    loop: while (cycle < end) {
-      ++cycle;
-
-      if (chk) {
-        // Instruction-boundary checks, in c4bb's order (machine.js:189-242).
-        let fired = false;
-        if (dev.pitMs && (cycle & 4095) === 0 && i32[pc >> 2] !== OP.TLEV &&
-            dev.hostNow() >= dev.pitNext) {
-          dev.pitNext = dev.hostNow() + dev.pitMs;
-          fired = true;
+    loop: for (;;) {
+      if (++cycle > lim) {
+        if (cycle > end) { --cycle; break; }
+        if (chk && cycle >= nextChk) {
           this.pc = pc; this.sp = sp; this.bp = bp; this.a = a; this.cycle = cycle;
-          this.hirq(1);
-        } else if (dev.mboxIrq && this.cycleHandler && i32[pc >> 2] !== OP.TLEV) {
-          dev.mboxIrq = 0;
-          fired = true;
-          this.pc = pc; this.sp = sp; this.bp = bp; this.a = a; this.cycle = cycle;
-          this.hirq(2);
-        } else if (this.gui && this.cycleHandler && this.gui.irqPending() && i32[pc >> 2] !== OP.TLEV) {
-          this.gui.irqTaken();
-          fired = true;
-          this.pc = pc; this.sp = sp; this.bp = bp; this.a = a; this.cycle = cycle;
-          this.hirq(3);
-        } else {
-          let irq = false;
-          if (interval > 0 && cycle >= nextIrq) {
-            nextIrq = (Math.floor(cycle / interval) + 1) * interval;
-            irq = i32[pc >> 2] !== OP.TLEV;        // TLEV is never interrupted
-          }
-          if (irq) {
-            fired = true;
-            this.pc = pc; this.sp = sp; this.bp = bp; this.a = a; this.cycle = cycle;
-            this.hirq(0);
-          } else if (this.ipiPending && i32[pc >> 2] !== OP.TLEV) {
-            // another CPU's interrupt (c4mp's order: after the tick).
-            // Not held back by the preemption mask: it is a peer asking.
-            this.ipiPending = 0;
-            fired = true;
-            this.pc = pc; this.sp = sp; this.bp = bp; this.a = a; this.cycle = cycle;
-            this.hirq(HIRQ_IPI);
-          } else if (this.pendingSignal && !(this.trapRestoresInterval && !interval)) {
-            fired = true;
-            this.pc = pc; this.sp = sp; this.bp = bp; this.a = a; this.cycle = cycle;
-            this.deliverSignal();
+          nextChk = this.boundary(cycle, nextIrq);
+          nextIrq = this.bNextIrq;
+          if (this.bFired) {
+            pc = this.pc; sp = this.sp; bp = this.bp; a = this.a;
+            interval = this.cycleInterval | 0;
+            chk = this.needChecks();
           }
         }
-        if (fired) {
-          pc = this.pc; sp = this.sp; bp = this.bp; a = this.a;
-          interval = this.cycleInterval | 0;
-          nextIrq = interval > 0 ? (Math.floor(cycle / interval) + 1) * interval : 0;
-          chk = this.needChecks();
-        }
+        lim = chk && nextChk - 1 < end ? nextChk - 1 : end;
       }
 
       op = i32[pc >> 2];
       pc += 4;
 
-      dispatch: for (;;) {
+      {                          // the dispatch: never a loop (OPCD, below)
         switch (op) {
           case 0:  /* LEA */ a = (bp + (i32[pc >> 2] << 2)) | 0; pc += 4; break;
           case 1:  /* IMM */ a = i32[pc >> 2]; pc += 4; break;
@@ -742,7 +828,7 @@ export class Machine {
               if (dev.halted) { stop = STOP.HALT; break loop; }
               interval = this.cycleInterval | 0;
               nextIrq = interval > 0 ? (Math.floor(cycle / interval) + 1) * interval : 0;
-              chk = this.needChecks();
+              chk = this.needChecks(); nextChk = 0; lim = -1;
             }
             break;
           case 12: /* SC  */
@@ -754,7 +840,7 @@ export class Machine {
               if (dev.halted) { stop = STOP.HALT; break loop; }
               interval = this.cycleInterval | 0;
               nextIrq = interval > 0 ? (Math.floor(cycle / interval) + 1) * interval : 0;
-              chk = this.needChecks();
+              chk = this.needChecks(); nextChk = 0; lim = -1;
             }
             a = (a << 24) >> 24;
             break;
@@ -801,6 +887,11 @@ export class Machine {
             // Run the opcode on top of the stack. The ones that carry an
             // operand would read it from the caller's code, so they are
             // refused with a (usually missed) OPV and a harmless C4CY.
+            // A syscall or a custom opcode goes on to default, below,
+            // and one of this switch's own to opcd(). Never round the
+            // switch again: a loop about it makes V8 compile every case
+            // worse, and C4IX's syscalls are all OPCDs. Its programs ran
+            // 1.7 times slower for it.
             op = i32[sp >> 2];
             if (hasOperand(op)) {
               const nm = i => OPNAMES.slice(i * 5, i * 5 + 4);
@@ -810,10 +901,21 @@ export class Machine {
               this.cycleInterval = 0; this.mode = 0;
               pc = this.pc; sp = this.sp; bp = this.bp; a = this.a;
               interval = 0; nextIrq = 0;
-              chk = this.needChecks();
-              op = OP.C4CY;
+              chk = this.needChecks(); nextChk = 0; lim = -1;
+              a = cycle | 0;                        // C4CY
+              break;
             }
-            continue dispatch;
+            if (isPlainOp(op)) {
+              this.pc = pc; this.sp = sp; this.bp = bp; this.a = a; this.cycle = cycle;
+              this.opcd(op);
+              pc = this.pc; sp = this.sp; bp = this.bp; a = this.a;
+              if (dev.halted) { stop = STOP.HALT; break loop; }
+              interval = this.cycleInterval | 0;
+              nextIrq = interval > 0 ? (Math.floor(cycle / interval) + 1) * interval : 0;
+              chk = this.needChecks(); nextChk = 0; lim = -1;
+              break;
+            }
+            // falls through
 
           default: {
             // Everything else: syscalls, traps, TLEV, custom opcodes.
@@ -823,12 +925,11 @@ export class Machine {
             cycle = this.cycle;
             interval = this.cycleInterval | 0;
             nextIrq = interval > 0 ? (Math.floor(cycle / interval) + 1) * interval : 0;
-            chk = this.needChecks();
+            chk = this.needChecks(); nextChk = 0; lim = -1;
             if (s !== STOP.BUDGET) { stop = s; break loop; }
             if (dev.halted) { stop = STOP.HALT; break loop; }
           }
         }
-        break;
       }
     }
 

@@ -439,7 +439,7 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     dobjs=""
     step "C4IX's desktop:"
     # (the C4IX shell's own, then the window kit's, src/winkit, which grin shares)
-    for m in shell tools host term files taskmgr apps edit wall draw ui wmcore dialog look95 textgrid savers calc notepad clock; do
+    for m in shell tools host term files taskmgr apps edit wall draw ui wmcore dialog look95 look31 textgrid savers calc notepad clock; do
         item $m
         src=src/c4ix/user/desktop/$m.c
         [ -f $src ] || src=src/winkit/$m.c

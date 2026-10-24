@@ -60,7 +60,7 @@ struct wk_look {
     void (*grip)(struct win *w);                       // drawn over the client area's corner
     int  title_centred;
 };
-extern struct wk_look look_flat, look_classic;
+extern struct wk_look look_flat, look_classic, look_win31;
 struct wk_look *wk_look();        // the one in use (wk.style)
 void wk_gradient(int x, int y, int w, int h, int a, int b);
 int  wk_ink(int bg);              // white on a dark bar, the scheme's dark on a light one

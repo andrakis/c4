@@ -110,7 +110,7 @@ int  theme_wall();
 int  theme_saver();
 int  theme_wait();
 void theme_set_saver(int which, int wait);   // the screen saver and its minutes
-void theme_set_style(int style);   // S_FLAT or S_CLASSIC
+void theme_set_style(int style);   // S_FLAT, S_CLASSIC or S_WIN31
 void saver_preview();              // the chosen saver now (Settings)
 int  theme_swatch(int i);          // the desktop colours Settings offers, 0..7
 

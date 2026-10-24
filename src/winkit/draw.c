@@ -145,7 +145,7 @@ void d_blit8(int x, int y, int w, int h, char *src, int pitch, int *pal, int dw,
 
 // The bevels: two pixels, light top-left, dark bottom-right (or the other
 // way round for a sunken one). Flat draws an outline, the accent's when
-// pressed; Classic bevels.
+// pressed; Classic and Windows 3.1 bevel.
 void d_bevel(int x, int y, int w, int h, int style) {
     int a, b, c, d;
     x = x + ox; y = y + oy;

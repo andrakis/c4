@@ -107,6 +107,7 @@ void settings_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     ui_group(x, y, cw - 210, 44, "Look");
     ui_radio(x + 10, y + 18, "Flat", ui_style == S_FLAT);
     ui_radio(x + 70, y + 18, "Classic", ui_style == S_CLASSIC);
+    ui_radio(x + 140, y + 18, "Windows 3.1", ui_style == S_WIN31);
     ui_button(ox + 8, oy + ch - 34, 86, 24, dflt_label, 0, 0);
 }
 
@@ -140,6 +141,7 @@ void settings_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     sy = 192 + 26 + saver_count() * 18 + 8 + 18;
     if (ui_hit(x, y, 206, sy - 2, 60, 16)) { theme_set_style(S_FLAT); return; }
     if (ui_hit(x, y, 266, sy - 2, 66, 16)) { theme_set_style(S_CLASSIC); return; }
+    if (ui_hit(x, y, 336, sy - 2, 90, 16)) { theme_set_style(S_WIN31); return; }
     if (ui_hit(x, y, 8, ch - 34, 86, 24)) { theme_set(theme_count() - 1, 0 - 1); theme_set_wall(1); theme_set_style(S_FLAT); }
 }
 

@@ -384,6 +384,7 @@ static void sys_command(struct win *w, int k) {
 // ---- drawing the scene --------------------------------------------------------------
 
 struct wk_look *wk_look() {
+    if (wk.style == S_WIN31) return &look_win31;
     if (wk.style == S_CLASSIC) return &look_classic;
     return &look_flat;
 }

@@ -10,6 +10,7 @@
 //               events, and each window's class called for what is its
 //   dialog.c    message, input and file boxes
 //   look95.c    window chrome: the Flat and Classic looks
+//   look31.c    window chrome: the Windows 3.1 look
 //   textgrid.c  a VT100 text grid, its scrollback and line editor (textgrid.h)
 //   savers.c    screen savers
 //   calc.c, notepad.c, clock.c   the accessories, each a class
@@ -43,7 +44,7 @@ enum { BORDER = 4, TITLE_H = 18, MENU_H = 20 };
 struct wk_env {
     int sw, sh;                       // the screen now (gui_size, GUI_EV_RESIZE)
     int ax, ay, aw, ah;               // where windows go: the screen less a taskbar
-    int style;                        // the look: S_FLAT or S_CLASSIC
+    int style;                        // the look: S_FLAT, S_CLASSIC, S_WIN31
     int mods;                         // Shift, Ctrl, Alt as the last key left them
     int desk, face, light, shadow;    // the scheme's colours (Settings)
     int title, title2, ititle, ititle2, sel;
@@ -63,8 +64,9 @@ enum { C_DARK = 0x000000, C_WHITE = 0xffffff, C_GREEN = 0x00ff00 };
 #define C_ITITLE2 (wk.ititle2)
 #define C_SEL     (wk.sel)
 
-// the looks: flat outlines and solid title bars, or bevels and gradients
-enum { S_FLAT = 0, S_CLASSIC = 1, N_STYLES = 2 };
+// the looks: flat outlines and solid title bars, bevels and gradients,
+// or Windows 3.1's chrome (with Classic's bevels)
+enum { S_FLAT = 0, S_CLASSIC = 1, S_WIN31 = 2, N_STYLES = 3 };
 #define ui_style (wk.style)
 
 // fonts: monospace, a UI face, and its bold

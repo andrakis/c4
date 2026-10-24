@@ -1,7 +1,7 @@
 // test-c4ke-mbox.mjs - the mailbox under C4KE on c4bb: boot the kernel with a
 // mailbox fitted, start mbecho from the shell, feed frames from the host (with
-// the interrupt), pin the echoes; then mbpair: two tasks, one message.
-// Run from the repo root.
+// the interrupt), pin the echoes; then mbpair: two tasks, one message; then a
+// second binder. Run from the repo root.
 //
 // --slow-clock: the PIT's clock is the cycle counter at a tenth of
 // CYCLES_PER_MS -- a host ten times slower than the board assumes, the
@@ -10,6 +10,11 @@
 // TLEV, one landing between C4KE's re-arm and that TLEV wrecked the task it
 // had just switched to, and the shell hung after mbecho (helios, at ~12000
 // cycles/ms, did it by wall clock most runs).
+//
+// --libjs: the same on libjs (libjs/c4m.js), the page's interpreter, with
+// the board's devices. Its window was narrower (only one of its 4096-cycle
+// looks at the clock falling between the re-arm and the TLEV), too narrow
+// for the slow clock to hit; bb_pit's third pass catches it instead.
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -20,14 +25,15 @@ import { Turbo } from '../sim/turbo.js';
 import { assemble } from '../sim/ucode.js';
 import { boot } from '../sim/loader.js';
 import { HostMailbox } from '../sim/mbox.js';
+import { createMachine, boot as bootLibjs } from '../../../libjs/boot.js';
+import { STOP } from '../../../libjs/c4m.js';
 
 const slow = process.argv.includes('--slow-clock');
-const name = slow ? 'test-c4ke-mbox (slow clock)' : 'test-c4ke-mbox';
+const libjs = process.argv.includes('--libjs');
+const name = 'test-c4ke-mbox' + (libjs ? ' (libjs)' : '') + (slow ? ' (slow clock)' : '');
 let fails = 0;
 const check = (ok, what) => { console.log(`${name}: ${ok ? 'OK  ' : 'FAIL'} ${what}`); if (!ok) fails++; };
 
-const uc = assemble(readFileSync('src/c4bb/hw/microcode.uc', 'utf8'));
-const fw = new Uint8Array(readFileSync('src/c4bb/fw/fw.c4r'));
 const kernel = new Uint8Array(readFileSync('src/c4bb/images/c4ke32.c4r'));
 const files = new Map();
 const walk = (dir, prefix) => { for (const n of readdirSync(dir)) { const p = join(dir, n); if (statSync(p).isDirectory()) walk(p, prefix + n + '/'); else files.set(prefix + n, new Uint8Array(readFileSync(p))); } };
@@ -35,21 +41,36 @@ walk('src/c4bb/images/disk', '');
 
 let out = '';
 const bells = [];
-const arena = new Arena(32 * 1024 * 1024);
 let cycles = () => 0;                 // the machine does not exist yet
-const dev = new Devices(arena, { onByte: (b) => { out += String.fromCharCode(b); }, files, onDoorbell: (v) => bells.push(v),
-                                 ...(slow ? { hostNow: () => Math.floor(cycles() / (CYCLES_PER_MS / 10)) } : {}) });
-const machine = new Machine(arena, uc, dev, { onLog: () => {} });
+const onByte = (b) => { out += String.fromCharCode(b); };
+const hostNow = slow ? { hostNow: () => Math.floor(cycles() / (CYCLES_PER_MS / 10)) } : {};
+
+// The engine: the machine, its devices, and one slice of running it, which
+// says whether the machine is still going.
+let machine, dev, mbox, slice;
+if (libjs) {
+  machine = createMachine({ drives: [{ files, writable: false }], onByte, ...hostNow });
+  dev = machine.dev;
+  dev.onDoorbell = (v) => bells.push(v);
+  ({ mbox } = bootLibjs(machine, kernel, ['c4ke32.c4r'], { mbox: 64 * 1024 }));
+  slice = () => machine.run(20000) !== STOP.HALT;
+} else {
+  const uc = assemble(readFileSync('src/c4bb/hw/microcode.uc', 'utf8'));
+  const fw = new Uint8Array(readFileSync('src/c4bb/fw/fw.c4r'));
+  const arena = new Arena(32 * 1024 * 1024);
+  dev = new Devices(arena, { onByte, files, onDoorbell: (v) => bells.push(v), ...hostNow });
+  machine = new Machine(arena, uc, dev, { onLog: () => {} });
+  ({ mbox } = boot(machine, fw, kernel, ['c4ke32.c4r'], { mbox: 64 * 1024 }));
+  const turbo = new Turbo(machine);
+  slice = () => { turbo.run(20000, CONS_RET); return machine.regs[R.PC] !== CONS_RET; };
+}
 cycles = () => machine.cycle;
-const { mbox } = boot(machine, fw, kernel, ['c4ke32.c4r'], { mbox: 64 * 1024 });
-const turbo = new Turbo(machine);
-const mb = new HostMailbox(arena, mbox);
+const mb = new HostMailbox(machine.arena, mbox);
 
 function runUntil(pred, budget) {
   const start = machine.cycle;
   while (machine.cycle - start < budget && !dev.halted) {
-    turbo.run(20000, CONS_RET);
-    if (machine.regs[R.PC] === CONS_RET) break;
+    if (!slice()) break;
     if (pred()) return true;
   }
   return pred();
@@ -88,6 +109,26 @@ dev.pushInput('mbpair.c4r\n');
 check(runUntil(() => /mbpair: got type 7 from pid [^\n]*\n/.test(out), 60e6), 'mbpair: the parent received the child\'s message');
 const m = out.match(/mbpair: got type 7 from pid (\d+) \((\d+) words\): 10 20 30/);
 check(!!m && m[2] === '3', `message contents: ${m ? m[0] : out.split('\n').filter((l) => l.startsWith('mbpair')).join(' | ')}`);
+
+// A second binder, in another task slot. The host mailbox's owner is the
+// first task to receive or await; it must be let go when that task exits.
+// spin, in the background, takes the lowest free slot -- the one mbecho
+// and then mbpair's parent had -- so the new mbecho gets another. Before
+// the owner was cleared, it stayed the old slot's address: spin's now, so
+// mbecho never got a frame.
+runUntil(() => /c4sh> ?$/.test(out), 20e6);
+dev.pushInput('spin.c4r &\n');
+check(runUntil(() => out.includes('spin: running forever'), 20e6), 'spin started in the background');
+runUntil(() => /c4sh> ?$/.test(out), 20e6);
+dev.pushInput('mbecho.c4r\n');
+check(runUntil(() => out.split('mbecho: bound').length > 2, 20e6), 'a second mbecho started');
+mb.send(5, [41]); dev.raiseMbox();
+check(runUntil(() => mb.pending() >= 3 + 1, 20e6), 'the second mbecho owns the host mailbox: it answered a frame');
+got = mb.drain();
+check(got.length === 1 && got[0].type === 261 && got[0].payload[0] === 42,
+      `second echo: ${got.map((f) => `${f.type}[${Array.from(f.payload)}]`).join(' ')}`);
+mb.send(0, []); dev.raiseMbox();
+check(runUntil(() => out.includes('mbecho: done, 1 frames'), 20e6), 'the second mbecho exited');
 
 dev.pushInput('\\q\n');
 runUntil(() => dev.halted || out.includes('clean shutdown'), 20e6);

@@ -15,14 +15,16 @@
 // The report is structure, not timings: ticks delivered, and that they
 // arrived spread out in real time rather than all at once. Exact
 // spacing depends on how fast the host is and is not a property of the
-// machine.
+// machine. The third pass is about the machine: a tick that falls due
+// inside a handler waits for the handler's TLEV.
 enum { CONF_CYCLE_INTERRUPT_INTERVAL, CONF_CYCLE_INTERRUPT_HANDLER };
 enum { TRAP_HARD_IRQ = 1 };
 enum { DEV_RTC = 0x19c, DEV_PIT = 0x1a0 };
-enum { PERIOD = 100, WANT = 4 };
+enum { PERIOD = 100, WANT = 4, HELD_PERIOD = 20 };
 
 int ticks, first_ms, last_ms;
 int spins;      // where the unmasked busywork below goes, so it stays
+int held_ticks, nested, in_handler;
 
 int rtc () { return *(int *)DEV_RTC; }
 
@@ -64,6 +66,45 @@ int collect (int mask, int guard) {
     return ticks;
 }
 
+// The third pass's handler. On its first tick it does what C4KE does on
+// a slow host: masks the PIT, runs past the deadline, re-arms it -- now
+// overdue -- and carries on before returning, for many of the machine's
+// 4096-cycle looks at the clock. The tick must wait for the TLEV. Before
+// c4bb and libjs held the PIT inside a handler it came at once, a trap
+// inside the trap: the window in which C4KE, having already switched
+// tasks, saved the half-finished handler as the next task's context.
+void tick_held (int trap, int ins, int mode, int a, int *bp, int *sp, int *returnpc) {
+    int t, j;
+
+    ++held_ticks;
+    if (in_handler) ++nested;
+    in_handler = 1;
+    if (held_ticks == 1) {
+        *(int *)DEV_PIT = 0;
+        t = rtc();
+        while (rtc() < t + 3 * HELD_PERIOD) ++spins;
+        *(int *)DEV_PIT = HELD_PERIOD;
+        j = 0;
+        while (++j < 20000) spins = spins + j;
+    }
+    in_handler = 0;
+}
+
+int held (int guard) {
+    held_ticks = nested = 0;
+    __c4_configure(CONF_CYCLE_INTERRUPT_HANDLER, (int)&tick_held);
+    *(int *)DEV_PIT = HELD_PERIOD;
+    while (held_ticks < 2 && --guard) ;
+    *(int *)DEV_PIT = 0;
+    if (held_ticks < 2) { printf("pit: FAILED, held got only %d of 2 ticks
+", held_ticks); return 1; }
+    if (nested) { printf("pit: FAILED, %d tick(s) interrupted the handler
+", nested); return 1; }
+    printf("pit: held -- the overdue tick waited for the handler's TLEV
+");
+    return 0;
+}
+
 int report (char *what, int got) {
     int span;
 
@@ -103,6 +144,8 @@ int main () {
     // bug. So mask and unmask far faster than the period, and require
     // the same ticks in the same real time anyway.
     bad = bad + report("masked every pass", collect(1, 500000));
+
+    bad = bad + held(200000000);
 
     return bad;
 }

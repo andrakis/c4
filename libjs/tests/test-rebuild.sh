@@ -7,7 +7,9 @@
 # the host built:
 #
 #   - everything c4lc builds (through c4sc) must be byte for byte the
-#     disk's: the kernel, the libraries, every c4ix-*.c4r;
+#     disk's: the kernel, the libraries, every c4ix-*.c4r. The disk's
+#     carry source maps, which cc does not write yet (track S, S3), so
+#     they are compared up to the end of S (c4r-body.py);
 #   - c4cc's images write its own heap addresses into their symbol
 #     records, so they only have to be the same SIZE as the host's --
 #     and the rebuilt c4cc has to compile a program that runs.
@@ -53,8 +55,8 @@ if echo "$out" | grep -qF "b4ke: all built, in /build" &&
    ! echo "$out" | grep -qE " [1-9][0-9]* failed|overran|did not make"; then ok "b4ke -C /usr builds everything"
 else bad "b4ke -C /usr builds everything"; echo "$out" | grep -E 'failed|did not|cannot|overran' | head -10; fi
 
-# the host's CRC of the file a build output corresponds to
-host() { python3 -c 'import zlib,sys; d=open(sys.argv[1],"rb").read(); print("%08x %d" % (zlib.crc32(d) & 0xffffffff, len(d)))' "$1"; }
+# the host's CRC of the file a build output corresponds to, without its map
+host() { python3 -I libjs/tests/c4r-body.py "$1"; }
 same=0; differ=""
 check() {   # check NAME-IN-MACHINE HOST-FILE MODE(crc|size)
     got=$(echo "$out" | grep -E "^[0-9a-f]{8} [0-9]+ $1\$" | head -1 | cut -d' ' -f1,2)

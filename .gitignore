@@ -52,6 +52,8 @@ libc.c4s
 /.rott/
 /.rott_t/
 /rott-host
+# the -g or -g0 the images were compiled with (make .img_g)
+/.img_g
 
 # copied from src/c4bb/fs/c4ix-cli.vfs.txt by `make run-c4ix`
 /c4ix.vfs.txt

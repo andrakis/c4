@@ -2343,8 +2343,22 @@ c4bb-32bit: c4cc32 c4m32 c4sp32 c4rlink32
 # target builds what it uses.
 # ./cpp is a hard prerequisite now, not just for C4DOS: the shared
 # disk's c4m.c4r goes through it (build-images.sh).
-c4bb-images: c4bb-32bit $(C4LC_LISP) c4th32.c4r cpp wolf3d-objs wolf3d-bare-objs doom-objs tyrian-objs rott-objs
-	bash src/c4bb/tests/build-images.sh
+c4bb-images: c4bb-32bit $(C4LC_LISP) .img_g c4th32.c4r cpp wolf3d-objs wolf3d-bare-objs doom-objs tyrian-objs rott-objs
+	IMG_G=$(IMG_G) bash src/c4bb/tests/build-images.sh
+
+# Source maps in the images (docs/c4-explorer.md, track S): the games
+# below and C4IX (build-images.sh) are compiled -g, so that the Code
+# Explorer shows the programs it lists line by line. S6 makes -g every
+# compiler's default; until then the images get it here. A map changes
+# no byte of the code, only adds a trailer. `make IMG_G=-g0` builds them
+# without.
+IMG_G := -g
+# .img_g holds IMG_G, and is written again only when that changes, so a
+# change remakes every object compiled with it
+.img_g: FORCE
+	@[ "$$(cat $@ 2>/dev/null)" = "$(IMG_G)" ] || echo "$(IMG_G)" > $@
+FORCE:
+PHONY += FORCE
 
 # WOLFENSTEIN 3D (src/wolf3d, docs/c4ix-wolf3d.md): Wolf4SDL in c4lc's C,
 # for C4IX's libc. A unit to an object, made here so that only what
@@ -2358,11 +2372,11 @@ WOLF_HDRS  := $(wildcard $(WOLF)/*.h $(WOLF)/*.inc $(WOLF)/sdl/*.h $(WOLF)/c4inc
               $(wildcard src/c4ix/libc/include/*.h src/c4ix/libc/include/sys/*.h) \
               src/c4ix/include/window.h src/c4ix/include/archive.h \
               libjs/guest/snd.h libjs/guest/snd.c
-WOLF_CC    := ./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O -mfuse -fno-builtin -c -D C4IX \
+WOLF_CC    := ./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O $(IMG_G) -mfuse -fno-builtin -c -D C4IX \
               -I src/c4ix/libc/include -I src/c4ix/include -I src/c4ix/user -I libjs/guest \
               -I $(WOLF)/c4inc -I $(WOLF)/sdl -I $(WOLF)
 wolf3d-objs: $(WOLF_UNITS:%=.wolf3d/%.c4o)
-.wolf3d/%.c4o: $(WOLF)/%.c $(WOLF_HDRS) $(C4LC_LISP) | c4sp32
+.wolf3d/%.c4o: $(WOLF)/%.c $(WOLF_HDRS) $(C4LC_LISP) .img_g | c4sp32
 	@mkdir -p .wolf3d
 	$(WOLF_CC) $< $@ > /dev/null
 # arc.c is libarc's archive.c, built against libc
@@ -2376,16 +2390,16 @@ PHONY += wolf3d-objs
 # opcodes.c and bare.c are compiled without -fno-builtin: there, open,
 # read, malloc and the rest are the opcodes.
 WOLF_LIBC  := string stdlib stdio unix fp math bareu
-WOLF_LIBCC := ./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix/libc/include -I src/c4ix/libc
+WOLF_LIBCC := ./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O $(IMG_G) -c -I src/c4ix/libc/include -I src/c4ix/libc
 wolf3d-bare-objs: .wolf3d-bare/plat-bare.c4o $(WOLF_LIBC:%=.wolf3d-bare/libc-%.c4o) \
                   .wolf3d-bare/libc-opcodes.c4o .wolf3d-bare/libc-bare.c4o
-.wolf3d-bare/plat-bare.c4o: $(WOLF)/plat-bare.c $(WOLF_HDRS) $(C4LC_LISP) | c4sp32
+.wolf3d-bare/plat-bare.c4o: $(WOLF)/plat-bare.c $(WOLF_HDRS) $(C4LC_LISP) .img_g | c4sp32
 	@mkdir -p .wolf3d-bare
 	$(WOLF_CC) $< $@ > /dev/null
-.wolf3d-bare/libc-opcodes.c4o .wolf3d-bare/libc-bare.c4o: .wolf3d-bare/libc-%.c4o: src/c4ix/libc/%.c $(C4LC_LISP) | c4sp32
+.wolf3d-bare/libc-opcodes.c4o .wolf3d-bare/libc-bare.c4o: .wolf3d-bare/libc-%.c4o: src/c4ix/libc/%.c $(C4LC_LISP) .img_g | c4sp32
 	@mkdir -p .wolf3d-bare
 	$(WOLF_LIBCC) $< $@ > /dev/null
-.wolf3d-bare/libc-%.c4o: src/c4ix/libc/%.c $(wildcard src/c4ix/libc/*.h src/c4ix/libc/include/*.h) $(C4LC_LISP) | c4sp32
+.wolf3d-bare/libc-%.c4o: src/c4ix/libc/%.c $(wildcard src/c4ix/libc/*.h src/c4ix/libc/include/*.h) $(C4LC_LISP) .img_g | c4sp32
 	@mkdir -p .wolf3d-bare
 	$(WOLF_LIBCC) -fno-builtin $< $@ > /dev/null
 PHONY += wolf3d-bare-objs
@@ -2402,14 +2416,14 @@ DOOM_HDRS  := $(wildcard $(DOOM)/*.h $(DOOM)/c4inc/*.h) \
               $(wildcard src/c4ix/libc/include/*.h src/c4ix/libc/include/sys/*.h) \
               src/c4ix/include/display.h libjs/guest/gui.h libjs/guest/gui.c \
               libjs/guest/snd.h libjs/guest/snd.c
-DOOM_CC    := ./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O -mfuse -fno-builtin -c -conforming \
+DOOM_CC    := ./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O $(IMG_G) -mfuse -fno-builtin -c -conforming \
               -D C4DOOM -D FEATURE_SOUND -I $(DOOM)/c4inc -I src/c4ix/libc/include \
               -I src/c4ix/include -I libjs/guest -I $(DOOM)
 doom-objs: $(DOOM_UNITS:%=.doom/%.c4o) .doom/plat/dg-c4ix.c4o .doom/plat/dg-bare.c4o
-.doom/%.c4o: $(DOOM)/%.c $(DOOM_HDRS) $(C4LC_LISP) | c4sp32
+.doom/%.c4o: $(DOOM)/%.c $(DOOM_HDRS) $(C4LC_LISP) .img_g | c4sp32
 	@mkdir -p .doom/plat
 	$(DOOM_CC) $< $@ > /dev/null
-.doom/plat/%.c4o: $(DOOM)/%.c $(DOOM_HDRS) $(C4LC_LISP) | c4sp32
+.doom/plat/%.c4o: $(DOOM)/%.c $(DOOM_HDRS) $(C4LC_LISP) .img_g | c4sp32
 	@mkdir -p .doom/plat
 	$(DOOM_CC) $< $@ > /dev/null
 PHONY += doom-objs
@@ -2436,14 +2450,14 @@ TYR_HDRS   := $(wildcard $(TYR)/*.h $(TYR)/c4/*.h) \
               $(wildcard src/c4ix/libc/include/*.h src/c4ix/libc/include/sys/*.h) \
               src/c4ix/include/display.h libjs/guest/gui.h libjs/guest/gui.c \
               libjs/guest/snd.h libjs/guest/snd.c
-TYR_CC     := ./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O -mfuse -fno-builtin -c -conforming \
+TYR_CC     := ./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O $(IMG_G) -mfuse -fno-builtin -c -conforming \
               -D C4TYR -I $(TYR)/c4 -I src/c4ix/libc/include -I src/c4ix/include \
               -I libjs/guest -I $(TYR)
 tyrian-objs: $(TYR_UNITS:%=.tyrian/%.c4o) .tyrian/plat/tyr-c4ix.c4o .tyrian/plat/tyr-bare.c4o
-.tyrian/%.c4o: $(TYR)/%.c $(TYR_HDRS) $(C4LC_LISP) | c4sp32
+.tyrian/%.c4o: $(TYR)/%.c $(TYR_HDRS) $(C4LC_LISP) .img_g | c4sp32
 	@mkdir -p .tyrian/plat
 	$(TYR_CC) $< $@ > /dev/null
-.tyrian/plat/%.c4o: $(TYR)/%.c $(TYR_HDRS) $(C4LC_LISP) | c4sp32
+.tyrian/plat/%.c4o: $(TYR)/%.c $(TYR_HDRS) $(C4LC_LISP) .img_g | c4sp32
 	@mkdir -p .tyrian/plat
 	$(TYR_CC) $< $@ > /dev/null
 PHONY += tyrian-objs
@@ -2474,14 +2488,14 @@ ROTT_HDRS  := $(wildcard $(ROTT)/*.h $(ROTT)/c4/*.h) \
               $(wildcard src/c4ix/libc/include/*.h src/c4ix/libc/include/sys/*.h) \
               src/c4ix/include/display.h libjs/guest/gui.h libjs/guest/gui.c
 ROTT_DEFS  := -D C4ROTT -D PLATFORM_UNIX=1 -D USE_SDL=1 -D SHAREWARE=1 -D SUPERROTT=0 -D SITELICENSE=0
-ROTT_CC    := ./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O -mfuse -fno-builtin -c -conforming \
+ROTT_CC    := ./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O $(IMG_G) -mfuse -fno-builtin -c -conforming \
               $(ROTT_DEFS) -I $(ROTT)/c4 -I src/c4ix/libc/include -I src/c4ix/include \
               -I libjs/guest -I $(ROTT)
 rott-objs: $(ROTT_UNITS:%=.rott/%.c4o) .rott/plat/rott-c4ix.c4o .rott/plat/rott-bare.c4o
-.rott/%.c4o: $(ROTT)/%.c $(ROTT_HDRS) $(C4LC_LISP) | c4sp32
+.rott/%.c4o: $(ROTT)/%.c $(ROTT_HDRS) $(C4LC_LISP) .img_g | c4sp32
 	@mkdir -p .rott/plat
 	$(ROTT_CC) $< $@ > /dev/null
-.rott/plat/%.c4o: $(ROTT)/%.c $(ROTT_HDRS) $(C4LC_LISP) | c4sp32
+.rott/plat/%.c4o: $(ROTT)/%.c $(ROTT_HDRS) $(C4LC_LISP) .img_g | c4sp32
 	@mkdir -p .rott/plat
 	$(ROTT_CC) $< $@ > /dev/null
 PHONY += rott-objs

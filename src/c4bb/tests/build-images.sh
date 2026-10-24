@@ -275,6 +275,12 @@ C4IX_ARC_USER="tar gunzip crc32 splash persist"
 # floors were measured at 32 bits, and an unmeasured change there would
 # be the same guess with a smaller number.
 C4IX_CELLS=400000
+# Source maps (docs/c4-explorer.md, track S): C4IX is compiled -g, so
+# that its kernel, libraries and programs carry maps for the Code
+# Explorer. A map changes no byte of an image, only adds a trailer. The
+# Makefile passes IMG_G (`make IMG_G=-g0` builds without), and writes it
+# to .img_g, so a change to it rebuilds C4IX below.
+G=${IMG_G--g}
 # c4mp's SMP guests, and the CPU-local window's, as 32-bit images for
 # libjs's processors (cli.js --cpus, docs/c4ix-smp.md); test-libjs runs them
 for g in smp0 smp1 deadlock; do
@@ -291,22 +297,22 @@ done
 PB=$OUT/build
 keep() { cp "$1" "$PB/$2"; }
 # Rebuilt when ANY of C4IX changed -- kernel, libc4ix, headers, user
-# programs -- or the display header its programs include. This used to
+# programs -- or the display header its programs include, or IMG_G. This used to
 # list four kernel files, so an edit to sys.c, vfs.c or a user program
 # was silently not built.
 if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
-   [ -n "$(find src/c4ix libjs/guest/gui.h libjs/guest/gui.c libjs/guest/snd.h libjs/guest/snd.c -newer $OUT/c4ix32.c4r -type f -print -quit)" ]; then
+   [ -n "$(find src/c4ix libjs/guest/gui.h libjs/guest/gui.c libjs/guest/snd.h libjs/guest/snd.c $(ls .img_g 2>/dev/null) -newer $OUT/c4ix32.c4r -type f -print -quit)" ]; then
     rm -rf $PB
     mkdir -p $PB/kernel $PB/lib $PB/libc $PB/user $PB/desktop $PB/bin
     objs=""
     for m in $C4IX_MODS; do
-        ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix src/c4ix/$m.c .c4bb_ix_$m.c4o > /dev/null
+        ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -c -I src/c4ix src/c4ix/$m.c .c4bb_ix_$m.c4o > /dev/null
         objs="$objs .c4bb_ix_$m.c4o"
         keep .c4bb_ix_$m.c4o kernel/$m.c4o
     done
     ./c4rlink32 $objs -o $OUT/c4ix32.c4r
     keep $OUT/c4ix32.c4r c4ix.c4r
-    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix/include src/c4ix/lib/libc4ix.c .c4bb_ix_lib.c4o > /dev/null
+    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -c -I src/c4ix/include src/c4ix/lib/libc4ix.c .c4bb_ix_lib.c4o > /dev/null
     ./c4rlink32 -r .c4bb_ix_lib.c4o -o .c4bb_libc4ix32.c4l
     keep .c4bb_ix_lib.c4o lib/libc4ix.c4o
     keep .c4bb_libc4ix32.c4l lib/libc4ix.c4l
@@ -317,7 +323,7 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     # libarc: inflate, CRC-32 and tar, for vfsload's root archive. -mfuse
     # like c4sp.c4r below: unpacking the archive is the one long job a
     # boot starts, and both machines that read this disk run fused code.
-    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -mfuse -c -I src/c4ix/include src/c4ix/lib/archive.c .c4bb_ix_arc.c4o > /dev/null
+    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -mfuse -c -I src/c4ix/include src/c4ix/lib/archive.c .c4bb_ix_arc.c4o > /dev/null
     ./c4rlink32 -r .c4bb_ix_arc.c4o -o .c4bb_libarc32.c4l
     keep .c4bb_ix_arc.c4o lib/libarc.c4o
     keep .c4bb_libarc32.c4l lib/libarc.c4l
@@ -327,7 +333,7 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     # display's (gui.h) and the sound card's (snd.h), so a program built
     # -D C4IX_SHARED carries none of
     # them itself (docs/c4ix-design.md, "Code out of the headers").
-    LCPIC="./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -fpic -c -D C4IX_SHARED -I src/c4ix/include"
+    LCPIC="./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -fpic -c -D C4IX_SHARED -I src/c4ix/include"
     $LCPIC src/c4ix/lib/libc4ix.c .c4bb_ix_s_libc4ix.c4o > /dev/null
     $LCPIC src/c4ix/include/window.c .c4bb_ix_s_window.c4o > /dev/null
     $LCPIC src/c4ix/include/cpustat.c .c4bb_ix_s_cpustat.c4o > /dev/null
@@ -349,11 +355,11 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     # all of it, so its code is loaded once and shared by every task.
     # fp.c (printf's %f, strtod) and math.c are the units that say double.
     for m in string stdlib stdio unix fp math; do
-        ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -fno-builtin -fpic -c -I src/c4ix/libc/include -I src/c4ix/libc src/c4ix/libc/$m.c .c4bb_ix_libc_$m.c4o > /dev/null
+        ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -fno-builtin -fpic -c -I src/c4ix/libc/include -I src/c4ix/libc src/c4ix/libc/$m.c .c4bb_ix_libc_$m.c4o > /dev/null
         keep .c4bb_ix_libc_$m.c4o libc/$m.c4o
     done
-    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -fpic -c src/c4ix/libc/opcodes.c .c4bb_ix_libc_opcodes.c4o > /dev/null
-    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -fpic -c -I src/c4ix/include src/c4ix/lib/libc4ix.c .c4bb_ix_libc_u.c4o > /dev/null
+    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -fpic -c src/c4ix/libc/opcodes.c .c4bb_ix_libc_opcodes.c4o > /dev/null
+    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -fpic -c -I src/c4ix/include src/c4ix/lib/libc4ix.c .c4bb_ix_libc_u.c4o > /dev/null
     ./c4rlink32 -r .c4bb_ix_libc_string.c4o .c4bb_ix_libc_stdlib.c4o .c4bb_ix_libc_stdio.c4o .c4bb_ix_libc_unix.c4o \
         .c4bb_ix_libc_fp.c4o .c4bb_ix_libc_math.c4o .c4bb_ix_libc_opcodes.c4o .c4bb_ix_libc_u.c4o -o .c4bb_lib/libc.c4s > /dev/null
     keep .c4bb_ix_libc_opcodes.c4o libc/opcodes.c4o
@@ -361,22 +367,22 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     keep .c4bb_lib/libc.c4s lib/libc.c4s
     cp .c4bb_lib/libc.c4s $DISK/c4ix-libc.c4s
     # libctest exercises it (libjs/tests/test-libjs.sh compares its output)
-    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/libctest.c .c4bb_ix_u.c4o > /dev/null
+    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/libctest.c .c4bb_ix_u.c4o > /dev/null
     ./c4rlink32 .c4bb_ix_u.c4o -l .c4bb_lib/libc.c4s -o $DISK/c4ix-libctest.c4r > /dev/null
     keep .c4bb_ix_u.c4o libc/libctest.c4o
     keep $DISK/c4ix-libctest.c4r bin/c4ix-libctest.c4r
     # pictest: two at once must each keep their own libc data
-    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/pictest.c .c4bb_ix_u.c4o > /dev/null
+    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/pictest.c .c4bb_ix_u.c4o > /dev/null
     ./c4rlink32 .c4bb_ix_u.c4o -l .c4bb_lib/libc.c4s -o $DISK/c4ix-pictest.c4r > /dev/null
     keep .c4bb_ix_u.c4o libc/pictest.c4o
     keep $DISK/c4ix-pictest.c4r bin/c4ix-pictest.c4r
     # unixtest: lseek, fstat, links, waitpid, vfork and execve (M7c)
-    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/unixtest.c .c4bb_ix_u.c4o > /dev/null
+    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/unixtest.c .c4bb_ix_u.c4o > /dev/null
     ./c4rlink32 .c4bb_ix_u.c4o -l .c4bb_lib/libc.c4s -o $DISK/c4ix-unixtest.c4r > /dev/null
     keep .c4bb_ix_u.c4o libc/unixtest.c4o
     keep $DISK/c4ix-unixtest.c4r bin/c4ix-unixtest.c4r
     for u in $C4IX_USER; do
-        ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -D C4IX_SHARED -I src/c4ix/include src/c4ix/user/$u.c .c4bb_ix_u.c4o > /dev/null
+        ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -c -D C4IX_SHARED -I src/c4ix/include src/c4ix/user/$u.c .c4bb_ix_u.c4o > /dev/null
         # each loads libc4ix at run time; gui, the display's demo, libgui too
         if [ $u = gui ]; then
             ./c4rlink32 .c4bb_ix_u.c4o -l .c4bb_lib/libgui.c4s -l .c4bb_lib/libc4ix.c4s -o $DISK/c4ix-$u.c4r > /dev/null
@@ -390,10 +396,10 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
         # splash runs while the boot unpacks the root archive, before
         # anything else may have been: it carries its libraries itself
         if [ $u = splash ]; then
-            ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix/include src/c4ix/user/$u.c .c4bb_ix_u.c4o > /dev/null
+            ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -c -I src/c4ix/include src/c4ix/user/$u.c .c4bb_ix_u.c4o > /dev/null
             ./c4rlink32 .c4bb_ix_u.c4o .c4bb_libarc32.c4l .c4bb_libc4ix32.c4l -o $DISK/c4ix-$u.c4r > /dev/null
         else
-            ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -D C4IX_SHARED -I src/c4ix/include src/c4ix/user/$u.c .c4bb_ix_u.c4o > /dev/null
+            ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -c -D C4IX_SHARED -I src/c4ix/include src/c4ix/user/$u.c .c4bb_ix_u.c4o > /dev/null
             ./c4rlink32 .c4bb_ix_u.c4o -l .c4bb_lib/libarc.c4s -l .c4bb_lib/libc4ix.c4s -o $DISK/c4ix-$u.c4r > /dev/null
         fi
         keep .c4bb_ix_u.c4o user/$u.c4o
@@ -402,13 +408,13 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     # the desktop: several modules, linked together (docs/c4ix-desktop.md)
     dobjs=""
     for m in wm ui term files taskmgr apps calc edit wall savers; do
-        ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -D C4IX_SHARED -I src/c4ix/include -I src/c4ix/user/desktop \
+        ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -c -D C4IX_SHARED -I src/c4ix/include -I src/c4ix/user/desktop \
             src/c4ix/user/desktop/$m.c .c4bb_ix_d_$m.c4o > /dev/null
         dobjs="$dobjs .c4bb_ix_d_$m.c4o"
         keep .c4bb_ix_d_$m.c4o desktop/$m.c4o
     done
     # the Calculator's decimal conversions are libc's fp.c, linked in
-    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c src/c4ix/libc/fp.c .c4bb_ix_d_fp.c4o > /dev/null
+    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -c src/c4ix/libc/fp.c .c4bb_ix_d_fp.c4o > /dev/null
     dobjs="$dobjs .c4bb_ix_d_fp.c4o"
     keep .c4bb_ix_d_fp.c4o desktop/fp.c4o
     ./c4rlink32 $dobjs -l .c4bb_lib/libgui.c4s -l .c4bb_lib/libarc.c4s -l .c4bb_lib/libc4ix.c4s -o $DISK/c4ix-desktop.c4r > /dev/null
@@ -421,7 +427,7 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     # C4IX's build ran second, so C4KE started running C4IX's loader
     # under itself - "c4ix-" keeps it consistent with every other
     # C4IX binary here, all of which face the same shared-disk risk).
-    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix/include src/c4ix/user/vfsload.c .c4bb_ix_u.c4o > /dev/null
+    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -c -I src/c4ix/include src/c4ix/user/vfsload.c .c4bb_ix_u.c4o > /dev/null
     ./c4rlink32 .c4bb_ix_u.c4o .c4bb_libc4ix32.c4l -o $DISK/c4ix-vfsload.c4r > /dev/null
     keep .c4bb_ix_u.c4o user/vfsload.c4o
     keep $DISK/c4ix-vfsload.c4r bin/c4ix-vfsload.c4r
@@ -538,7 +544,7 @@ cp src/c4ix/include/c4ix_user.h $DISK/c4ix_user.h
 # machine (a C4KE program, run through C4IX's compatibility layer). It
 # runs an image as c4m always has -- c4m load-c4r.c -- /usr/lib/c4ke.c4r --
 # and lends its guest the FLT of the machine under it.
-./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -P -I src/c4ix/include -I include -I . -D C4CC=1 -D __c4cc__=1 c4m.c $DISK/c4ix-c4m.c4r > /dev/null
+./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -P -I src/c4ix/include -I include -I . -D C4CC=1 -D __c4cc__=1 c4m.c $DISK/c4ix-c4m.c4r > /dev/null
 # what C4IX's own compilers are for (docs/c4ix-desktop.md, part three)
 cp src/c4ix/include/window.h $DISK/c4ix-window.h
 for f in README.txt hello.c bounce.c; do cp src/c4ix/examples/$f $DISK/c4ix-examples-$f; done

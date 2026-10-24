@@ -1336,6 +1336,19 @@ now keeps it only up to the end of S (`mod_trim`). The libc built `-g`
 is 588,514 bytes, and its cached copy 577,330, which is the size of the
 libc built `-g0`.
 
+**The images the explorer lists (S2).** They are built `-g`, ahead of
+S6's default, so that the Code Explorer shows them line by line. These
+are the games (wolf3d, doom, tyrian and rott, for C4IX and the bare
+machine) and all of C4IX: kernel, libraries, libc, userland, desktop.
+- The Makefile's `IMG_G` (`-g`) goes to the games' compilers and to
+  build-images.sh. `make IMG_G=-g0` builds the images without maps.
+- `.img_g` holds its value, so a change remakes what it compiled.
+- C4IX's own `cc` writes no map until S3. So the tests that hold a build
+  inside C4IX to the host's image (test-libjs, test-c4ix-smp,
+  test-c4ix-rebuild) compare up to the end of S
+  (`libjs/tests/c4r-body.py`), which is every byte a loader reads.
+- test-libjs checks that the images have maps.
+
 **c4opt-run (S2).** `c4r:smap-carry` puts a decoded image's map back
 into its code as the generator's items, ahead of what is at each offset,
 and its files into `c4r:srcfiles`. The passes step over the items as

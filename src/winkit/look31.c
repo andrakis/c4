@@ -11,7 +11,7 @@
 // size whichever look draws it.
 
 #include "wkwin.h"
-#include "libjs/guest/gui.h"
+#include "wkgui.h"
 
 enum { BOX = TITLE_H, NOTCH = TITLE_H + BORDER };
 

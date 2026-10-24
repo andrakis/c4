@@ -9,13 +9,13 @@
 
 #include "desktop.h"
 #define printf uprintf
-#include "libjs/guest/gui.h"
+#include "wkgui.h"
 
 enum { START_W = 200, N_ICONS = 6 };
 static int running;
 static int start_open, start_hot;
 static int icon_t, icon_k;
-static int cpu_pct, cpu_n;
+static int cpu_shown, cpu_n;
 static char tbuf[128];
 
 // ---- Settings' choices -------------------------------------------------------
@@ -302,10 +302,10 @@ static void draw_taskbar() {
     gui_rect(cpu_x(), ty + 4, CPU_W, 22, C_FACE);
     if (ui_style != S_FLAT) d_bevel(cpu_x(), ty + 4, CPU_W, 22, B_SUNKEN);
     gui_rect(cpu_x() + 5, ty + 8, 8, 14, 0x000000);
-    h = (cpu_pct * 14 + 50) / 100;
+    h = (cpu_shown * 14 + 50) / 100;
     if (h > 0) gui_rect(cpu_x() + 5, ty + 22 - h, 8, h, 0x00e000);
     ui_cpy(tbuf, "CPU ");
-    ui_num(tbuf + 4, cpu_pct);
+    ui_num(tbuf + 4, cpu_shown);
     ui_cat(tbuf, "%");
     d_text(cpu_x() + 17, ty + 9, C_DARK, F_SANS, tbuf);
     gui_rect(wk.sw - 76, ty + 4, 72, 22, C_FACE);
@@ -519,7 +519,7 @@ int main(int argc, char **argv) {
             if (cpu_n >= 2) {
                 cpu_n = 0;
                 k = tasks_cpu_usage();
-                if (k != cpu_pct) { cpu_pct = k; wk_dirty_rect(0, wk.sh - TASK_H, wk.sw, TASK_H); }
+                if (k != cpu_shown) { cpu_shown = k; wk_dirty_rect(0, wk.sh - TASK_H, wk.sw, TASK_H); }
             }
         }
         secs = gui_clock() / 60;

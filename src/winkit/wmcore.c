@@ -8,7 +8,7 @@
 // draws what lies under and over the windows (struct wk_shell).
 
 #include "wkwin.h"
-#include "libjs/guest/gui.h"
+#include "wkgui.h"
 
 static struct wk_shell *shell;
 static struct win *first;

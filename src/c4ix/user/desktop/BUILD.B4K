@@ -11,7 +11,7 @@ SET OUT /build
 # even 1 MB, so the desktop gets 4 MB of stack per compile (SYS_STACK)
 SET STACK 4194304
 SET LC c4sc -c 400000 compile -O -c -D C4IX_SHARED -I src/c4ix/include -I src/c4ix/user/desktop -I src/winkit
-SET KH src/winkit/winkit.h src/winkit/wkwin.h src/winkit/textgrid.h libjs/guest/gui.h
+SET KH src/winkit/winkit.h src/winkit/wkwin.h src/winkit/wkgui.h src/winkit/textgrid.h libjs/guest/gui.h
 SET H src/c4ix/user/desktop/desktop.h src/c4ix/include/c4ix_user.h $(KH)
 CD $(ROOT)
 MKDIR $(OUT)/desktop

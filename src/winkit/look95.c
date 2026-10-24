@@ -6,7 +6,7 @@
 // layout and draws it with outlines and solid colours.
 
 #include "wkwin.h"
-#include "libjs/guest/gui.h"
+#include "wkgui.h"
 
 void wk_gradient(int x, int y, int w, int h, int a, int b) {
     int i, n, bw;

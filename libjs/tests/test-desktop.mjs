@@ -15,7 +15,9 @@ import { GuiDevice, CMD } from '../gui-device.js';
 import { typeBytes } from '../keys.js';
 
 const ROOT = new URL('../../src/c4bb/images/', import.meta.url).pathname;
-const SW = 800, SH = 600, TASK_H = 30;
+// the screen's size: the desktop's own, until the test tells it another
+let SW = 800, SH = 600;
+const TASK_H = 30;
 let fail = 0;
 const check = (cond, what, extra = '') => {
   console.log(`test-desktop: ${what} ${cond ? 'OK' : 'FAILED'}${!cond && extra ? '\n  ' + String(extra).slice(0, 1500) : ''}`);
@@ -747,6 +749,54 @@ for (let i = 0; i < 10; i++) { start('Calculator'); until(() => has('Hex')); }
 click(SW - 100, SH - TASK_H + 12);
 check(until(() => opened() === nopen + 10) && opened() > 8, 'ten more windows open, more than the old eight', `${nopen} then ${opened()}`);
 
+// ---- the screen's size, at run time: 640x480 and back (the window kit's relayout) ---------------
+// The page resizes the display, as it does when a size a program asked
+// for comes back (GUI_EV_RESIZE): a maximised window fills the new screen,
+// the rest are pulled back onto it, the taskbar runs along its new bottom
+// and the picture is stretched to it again.
+const filling = (w, h) => rects.some(r => r.x === 0 && r.y === 0 && r.w === w && r.h === h);
+start('Files');
+until(() => has('Files - /'));
+dbl('Files - /', all => all.filter(t => t.y < SH - TASK_H).pop());
+check(until(() => filling(SW, SH - TASK_H)), 'a double click on its title maximises Files', screen());
+{
+  const defs = imgdefs;
+  gui.event({ kind: 'resize', w: 640, h: 480 }); SW = 640; SH = 480;
+  run(3e5);
+  check(until(() => taskLine(0) && filling(640, 450)), 'told 640x480, the taskbar moves to its bottom and the maximised window fills what is above it', screen().slice(-400));
+  check(frame.every(t => t.x >= 0 && t.x < SW && t.y >= 0 && t.y < SH), 'every window is pulled back onto the screen',
+    frame.filter(t => t.x >= SW || t.y >= SH || t.x < 0 || t.y < 0).map(t => `${t.s}@${t.x},${t.y}`).join(' | '));
+  check(imgdefs === defs + 64, 'and the picture is stretched to it again', `imgdefs ${defs} then ${imgdefs}`);
+}
+start('Calculator');
+check(until(() => has('Hex')) && find('Power Off...').length === 0, 'the Go menu opens from the new taskbar, and Calculator from it');
+type('123*456=');
+check(until(() => has('56088')), 'which still works there: 123 * 456 = 56088', screen().slice(-300));
+gui.event({ kind: 'resize', w: 800, h: 600 }); SW = 800; SH = 600;
+run(3e5);
+check(until(() => taskLine(0) && filling(800, 570) && !filling(640, 450)), 'back at 800x600, the taskbar and the maximised window follow', screen().slice(-400));
+
+// ---- the Windows 3.1 look (look31.c), from Settings, kept across a restart ---------------------
+// The control-menu box is a white bar 11 by 3 on the title bar's left;
+// the title is centred between it and the minimise and maximise buttons.
+const sysbox = () => rects.some(r => r.w === 11 && r.h === 3 && r.rgb === 0xffffff);
+check(!sysbox(), 'the Flat look has no control-menu box');
+start('Settings');
+until(() => has('Look'));
+clickText('Windows 3.1', 'last', -8, 5);
+check(until(() => sysbox()), 'Settings > Look > Windows 3.1 draws the control-menu box', screen());
+{
+  const r = rects.filter(q => q.w === 440 && q.h === 430).pop();
+  const t = r && frame.filter(s => s.s.trimEnd() === 'Settings' && s.y > r.y && s.y < r.y + 22).pop();
+  const off = r && t ? Math.round(t.x + 'Settings'.length * 7 / 2 - (r.x + r.w / 2)) : 999;
+  check(Math.abs(off) <= 20, `and a title centred in its bar (${off} px from the middle; the Flat look's is ${27 + 28 - 220})`, JSON.stringify({ r, t }));
+}
+key('ESC');
+until(() => !has('Look'));
+clickText(/^Terminal - task/, 'first');
+type('cat /etc/desktop.cfg\n');
+check(until(() => has(/wait \d+ style 2/), 800), 'the look is kept in /etc/desktop.cfg', frame.filter(t => /scheme/.test(t.s)).map(t => t.s.trimEnd()).join(' | '));
+
 // ---- Power Off --------------------------------------------------------------------------------
 start('Power Off...');
 check(until(() => consoleText().includes('desktop: shut down'), 2000), 'Power Off ends the desktop', consoleText().slice(-500) + ' / screen: ' + screen().slice(-400));
@@ -754,4 +804,11 @@ typeBytes(vm, new TextEncoder().encode('ps\n'));
 check(until(() => /tasks,/.test(consoleText().split('desktop: shut down').pop())), 'and the console shell carries on');
 const psOut = consoleText().split('desktop: shut down').pop();
 check(!/c4ix-sh.c4r[\s\S]*c4ix-sh.c4r/.test(psOut.replace(/^[\s\S]*?ID/, '')), 'no Terminal shell outlived the desktop', psOut);
+
+// ---- the desktop again: in the look it was left in --------------------------------------------
+typeBytes(vm, new TextEncoder().encode('desktop\n'));
+check(until(() => /desktop: running on the display/.test(consoleText().split('desktop: shut down').pop())), 'the desktop starts again');
+check(until(() => has(/^Terminal - task/) && sysbox(), 800), 'in the Windows 3.1 look, as it was left', screen());
+start('Power Off...');
+check(until(() => consoleText().split('desktop: shut down').length > 2, 2000), 'and Power Off ends it again');
 process.exit(fail);

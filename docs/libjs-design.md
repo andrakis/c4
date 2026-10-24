@@ -99,6 +99,15 @@ Reused from `src/c4bb/sim/`: `arena.js`, `devices.js`, `loader.js`
   5. the cycle interval raises HIRQ(0), except when the instruction at `pc` is TLEV;
   6. otherwise a pending signal is delivered, unless the kernel has opted
      into `TRAP_RESTORES_INTERVAL` and the interval is zero.
+
+  The PIT and the mailbox are also held from a trap that enters a handler
+  to the TLEV that ends it (`irqHold`, counted for nested traps), as on
+  c4bb (`machine.js irqHold`, docs/c4bb-design.md). A tick due meanwhile
+  comes after the TLEV, its deadline kept. Without the hold, a tick could
+  land between C4KE's re-arm of the PIT and its TLEV, after it had
+  switched tasks, and leave the next task looping on its TLEV.
+  `bb_pit.c`'s third pass checks it. The display IRQ and IPIs are not
+  held: C4IX waits for a kernel lock in CWAI inside its trap handler.
 - **The trap frame** is `c4m.c:1445-1516` byte for byte. TLEV is
   `c4m.c:2209-2236`. A trap with no handler is silent and continues.
 - **Opcodes**: all 89 names.

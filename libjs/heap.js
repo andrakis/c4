@@ -18,6 +18,15 @@
 // arena is zero-filled; recycled memory is not cleared (glibc does not
 // clear it either, and c4m.c:1055 notes programs only rely on the
 // never-recycled case).
+//
+// Generations (HEAP_GEN, HEAP_RELEASE in src/c4bb/sim/devices.js). Each
+// block remembers the generation that was current when it was allocated,
+// and release(g) frees every live block of generation g at once. C4DOS
+// gives each program a generation of its own and releases it when the
+// program ends (DEVICE=HEAP.SYS, docs/c4dos-design.md), so what a game
+// allocated and never freed goes back with it. Generation 0 is the one
+// the machine boots in: it is never tracked, so a guest that never
+// writes HEAP_GEN costs nothing here, and it cannot be released.
 
 const SMALL_MAX = 4096;
 
@@ -44,6 +53,51 @@ export class Heap {
     this.used = 0;                    // bytes requested and not freed
     this.peak = 0;
     this.count = 0;                   // live blocks
+    this.gen = 0;                     // the generation new blocks get
+    this.gens = new Map();            // addr -> generation, for gen != 0 only
+    this.byGen = new Map();           // generation -> Set of its live blocks
+    this.released = 0;                // bytes the last release() freed
+  }
+
+  tag(addr, g) {
+    if (!g) return;
+    this.gens.set(addr, g);
+    let set = this.byGen.get(g);
+    if (!set) this.byGen.set(g, set = new Set());
+    set.add(addr);
+  }
+
+  untag(addr) {
+    const g = this.gens.get(addr);
+    if (g === undefined) return 0;
+    this.gens.delete(addr);
+    const set = this.byGen.get(g);
+    set.delete(addr);
+    if (!set.size) this.byGen.delete(g);
+    return g;
+  }
+
+  // Free every live block of generation g; returns the bytes freed (and
+  // keeps them in this.released). Generation 0 is refused.
+  release(g) {
+    g = g | 0;
+    this.released = 0;
+    const set = g ? this.byGen.get(g) : undefined;
+    if (!set) return 0;
+    const before = this.used;
+    for (const p of [...set]) this.free(p);
+    this.byGen.delete(g);
+    this.released = before - this.used;
+    return this.released;
+  }
+
+  // The bytes generation g holds now.
+  genUsed(g) {
+    const set = this.byGen.get(g | 0);
+    if (!set) return 0;
+    let n = 0;
+    for (const p of set) n += this.sizes.get(p);
+    return n;
   }
 
   // A block of n bytes, or 0 when the region is exhausted. n <= 0 gives
@@ -72,6 +126,7 @@ export class Heap {
     }
     this.sizes.set(addr, n);
     this.spans.set(addr, span);
+    if (this.gen) this.tag(addr, this.gen);
     this.used += n;
     this.count++;
     if (this.used > this.peak) this.peak = this.used;
@@ -102,6 +157,7 @@ export class Heap {
     this.count--;
     this.sizes.delete(p);
     this.spans.delete(p);
+    if (this.gens.size) this.untag(p);
     if (span <= SMALL_MAX) {
       let stack = this.small.get(span);
       if (!stack) this.small.set(span, stack = []);
@@ -157,8 +213,12 @@ export class Heap {
       this.sizes.set(p, n);
       return p;
     }
+    // A block that moves stays in the generation it was allocated in:
+    // whoever grows it, it is still its owner's.
+    const g = this.gens.get(p) || 0;
     const q = this.alloc(n);
     if (!q) return 0;
+    if (g !== this.gen) { this.untag(q); this.tag(q, g); }
     u8.copyWithin(q, p, p + Math.min(old, n));
     this.free(p);
     return q;

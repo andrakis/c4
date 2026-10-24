@@ -558,6 +558,11 @@ if ls .wolf3d-bare/*.c4o > /dev/null 2>&1 && ls .wolf3d/*.c4o > /dev/null 2>&1; 
     .wolf3d-bare/unshr $WOLFDISK/W3DSW14.SHR $WOLFDISK > /dev/null
     rm -f $WOLFDISK/W3DSW14.SHR $WOLFDISK/*.exe
     cp $DISK/config.sys $WOLFDISK/config.sys
+    # The page runs C4DOS on libjs, whose heap keeps generations, so on
+    # this disk a game's memory goes back when it quits (DEVICE=HEAP.SYS,
+    # docs/c4dos-design.md "Memory"). Without the line Doom left 14 MB
+    # behind each time it ran.
+    echo 'DEVICE=HEAP.SYS' >> $WOLFDISK/config.sys
     printf '@ECHO OFF\nECHO Welcome to C4DOS\nVER\nECHO Wolfenstein 3D, Doom, Tyrian and Rise of the Triad are on this disk:\nECHO type WOLF3D, DOOM, TYRIAN or ROTT to play.\n' > $WOLFDISK/autoexec.bat
     (cd $WOLFDISK && ls -p | grep -v '/$' | grep -v '^manifest.json$' > c4dos.dir)
     (cd $WOLFDISK && find . -type f -not -name manifest.json | sed 's|^\./||') | \

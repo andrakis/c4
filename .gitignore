@@ -103,3 +103,4 @@ c4or1k-native
 .proxy-domain
 # ROTT's private headers (_rt_draw.h, ...) are source, not scratch
 !/src/rott/_*.h
+.c4dos_heap_t/

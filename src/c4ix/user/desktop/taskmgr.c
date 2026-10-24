@@ -160,7 +160,7 @@ int tasks_open() {
     w = win_first();
     while (w) { if (w->used && w->kind == K_TASKS) { win_raise(w->id); return w->id; } w = w->next; }
     // room for Memory; and on several CPUs, for the CPU column
-    i = win_open(K_TASKS, "System Monitor", utaskinfo(0, info) && info[TI_NCPU] > 1 ? 600 : 570, 440);
+    i = win_open(K_TASKS, "System Monitor", utaskinfo(0, info) && info[TI_NCPU] > 1 ? 600 : 570, 440, sizeof(struct tasks));
     if (i < 0) return i;
     w = win_get(i);
     S(w)->tab = 1;

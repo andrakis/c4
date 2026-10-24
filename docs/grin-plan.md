@@ -1,8 +1,8 @@
 # grin: a graphical interface for C4DOS (plan)
 
-Status: plan only. Written 2026-10-24 against `smp` at 6295e18, and
-revised the same day with the user's answers (section 8). Nothing here
-is built yet.
+Status: plan. Written 2026-10-24 against `smp` at 6295e18, and
+revised the same day with the user's answers (section 8). G1, the
+window kit, is built (branch `grin-g1`); 3.4 shows its API as built.
 
 `grin` is to C4DOS what Windows 3.x was to MS-DOS: a program started
 from `AUTOEXEC.BAT` that takes over the screen and gives you windows, a
@@ -272,44 +272,84 @@ Tests pin both directions:
 
 A grin application is written against the **window kit** (3.5), the
 same functions the C4IX desktop's tools call. Each window kind is a
-class:
+class. This is `src/winkit/winkit.h` as G1 built it; the shape is the
+first draft's, with what building it on the desktop asked for added
+(marked *G1*, and explained after the listing):
 
 ```c
-// winkit.h -- what a window's code sees (sketch; names may change)
+// winkit.h -- what a window's code sees
 struct wk_class {
   int  size;                        // bytes of per-window state, zeroed
                                     // (set at run time: c4lc has no
                                     // sizeof(struct) in a constant)
+  int  kind;                        // G1: the shell's number for it, and its icon
+  int  pointer_shape;               // G1: PTR_* over the client area, unless pointer says
   void (*open)(int w, char *arg);
   void (*draw)(int w, int cw, int ch, int focused);   // client coordinates
-  void (*mouse)(int w, int ev, int x, int y, int button);
+  void (*mouse)(int w, int ev, int x, int y, int button);   // E_WHEEL: button is the steps
   void (*key)(int w, int down, int code, int ch, int mods);
-  void (*command)(int w, int id);                     // menu item / accelerator
+  void (*command)(int w, int id);                     // menu item: WK_CMD(menu, item)
   void (*timer)(int w, int id);
   void (*answer)(int w, int dialog, int result);      // a dialog closed
   int  (*close)(int w);                               // 0 vetoes ("Save changes?")
   void (*destroy)(int w);
   int  (*pointer)(int w, int x, int y);               // cursor shape there
+  void (*idle)(int w);              // G1: every pass of the loop (a pipe to read)
+  void (*drawn)(int w);             // G1: a frame with it in has been shown
 };
+struct wk_menu { char *title; char **items; };        // items end in 0, "-" a separator
 
-// windows: handles are small ints that are never reused, not pointers
+// windows: handles are small ints (1 up) that are never reused, not pointers
 int   wk_open(struct wk_class *c, char *title, int w, int h, int flags, char *arg);
-void  wk_close(int w);
+                                    // flags: WK_FIXED, WK_DIALOG, WK_CENTER
+void  wk_close(int w);              // at once
+void  wk_ask_close(int w);          // G1: as the close box does, so close may veto
 void *wk_state(int w);
 void  wk_title(int w, char *s);
 void  wk_invalidate(int w, int x, int y, int ww, int hh);   // ww = 0: all of it
 void  wk_menu(int w, struct wk_menu *m, int n);
 int   wk_timer(int w, int id, int ms);                     // ms = 0 stops it
-void  wk_msgbox(int owner, int dialog, char *title, char *text, int buttons);
+void  wk_raise(int w); int wk_focus(); void wk_size(int w, int *cw, int *ch);   // G1, and
+int   wk_find(struct wk_class *c); int wk_next(int w); int wk_alive(int w);   // a few more
+void  wk_msgbox(int owner, int dialog, char *title, char *text, int buttons);   // WK_OK, WK_YESNO
 void  wk_inputbox(int owner, int dialog, char *title, char *prompt, char *buf, int max);
 void  wk_filebox(int owner, int dialog, int save, char *pattern, char *buf, int max);
 int   wk_clip_set(char *s, int n);  char *wk_clip_get(int *n);
-// drawing, only inside draw(): client-relative and clipped (today's d_*)
+int   wk_now(); int wk_clock();     // G1: machine ms; the host's time of day
+// drawing, only inside draw(): client-relative and clipped
 void  d_rect(...); d_recto(...); d_line(...); d_disc(...); d_text(...); d_textn(...);
-void  d_bevel(...); d_icon(...); d_blit8(...);
-// widgets: ui.c, stateless, so the window owns the state (today's ui_*)
+void  d_bevel(...); d_icon(...); d_blit8(...); d_clip(...); d_clip_end();
+// widgets: ui.c, stateless, so the window owns the state
 int   ui_button(...); ui_field(...); ui_field_key(...); ui_scrollbar(...); ...
+int   ui_ncpy(char *d, char *s, int n); ui_join(...); ...   // G1: bounded strings (B3)
+// G1: the screen, the look, the modifiers and the colour scheme, in one struct
+struct wk_env { int sw, sh, ax, ay, aw, ah, style, mods, desk, face, ...; };
+extern struct wk_env wk;            // C_FACE is (wk.face), ui_style (wk.style)
+// G1: what the host gives the kit: memory and files
+char *wk_alloc(int n); void wk_free(char *p);
+int   wk_fopen(char *path, int write); wk_fread(...); wk_fwrite(...); wk_fclose(...);
+int   wk_readdir(char *dir, int i, char *name);
 ```
+
+What G1 added, and why:
+
+- **`kind`, `pointer_shape`, `idle`, `drawn`.** The desktop's tools
+  needed them: a Terminal reads its pipe every pass and tells a canvas
+  program when its frame has been shown, and every window has a 16x16
+  icon on its title bar and taskbar button. Unset, they cost nothing.
+- **`wk_ask_close`.** `close` can veto only if something asks first; the
+  close box, the control menu and Notepad's File > Exit ask, `wk_close`
+  does not.
+- **`struct wk_env wk`.** The colours change with the scheme and the
+  screen with Control Panel, so they cannot be constants an application
+  copies. Keeping them in one struct lets `import.c` reach them through
+  one pointer: `#define wk (*wk_import_env)` before including
+  `winkit.h` turns its `extern struct wk_env wk;` into a pointer, and
+  every `C_FACE` into a load through it.
+- **The host's functions.** Notepad reads and writes files and the file
+  box lists folders, and the kit must not know whether that is
+  libc4ix or C4DOS's libc. The shell provides them (the desktop's
+  `host.c`); `import.c` can forward them like the rest.
 
 `grin.h` adds what only grin has, such as `grin_exec(cmdline, how)`
 (deferred, see the rules below) and the game-window calls (3.6).
@@ -379,7 +419,8 @@ a kit that both shells build on.
 | `winkit.h` | the API above, the colours, event and `KEY_*` names | `desktop.h` |
 | `draw.c` | the `d_*` layer over gui.h: client origin and clip, damage tracking, schemes | `wm.c` |
 | `ui.c` | widgets | `ui.c`, as is |
-| `wmcore.c` | window list, z-order, focus, modality, drag, resize, menus and drop-downs, message, input and file boxes, timers, and class dispatch | `wm.c`, minus the shell |
+| `wmcore.c` | window list, z-order, focus, modality, drag, resize, menus and drop-downs, timers, and class dispatch | `wm.c`, minus the shell |
+| `dialog.c` | message, input and file boxes (G1 split them from `wmcore.c`, to keep each module small for c4sc) | `wm.c` / new |
 | `look95.c`, `look31.c` | window chrome: the desktop's Classic and Flat looks, and the new Windows 3.1 one (control-menu box, arrow buttons, thick border, centred title, icons for minimised windows) | `wm.c` / new |
 | `textgrid.c` | VT100 grid, scrollback, line editor, row cache, with no pipes | `term.c` |
 | `savers.c` | screen savers | as is |

@@ -52,7 +52,7 @@ Font 0 is monospace, 1 a sans-serif UI face, 2 its bold. A non-zero
 advance places each character exactly `advance` pixels after the last,
 which is what a character grid needs; 0 is the font's own spacing.
 
-**The desktop** (src/c4ix/user/desktop/, eight modules and libc's `fp.c`, linked with libc4ix -> c4ix-desktop.c4r; it was one file, `desktop.c`, until D6, `edit.c` joined in part four, and `calc.c` left `apps.c` with floating point):
+**The desktop** (src/c4ix/user/desktop/, nine modules of its own over the window kit's eleven in src/winkit, and libc's `fp.c`, linked with libc4ix -> c4ix-desktop.c4r; it was one file, `desktop.c`, until D6, `edit.c` joined in part four, `calc.c` left `apps.c` with floating point, and the window kit, which grin shares, left `wm.c`, `term.c` and `apps.c` in part fourteen):
 - Asks for an 800x600 display (1024x768 was too small to read once the
   page scaled it into its pane), attaches the rings, and redraws what
   changed: the whole scene, or only the damaged regions
@@ -770,3 +770,4 @@ desktop waited until it was done. C4IX does the same.
 - **`raycast -G` does not ask.** It is one image for the bare machine and
   C4IX, so it cannot make a C4IX system call. Run under the desktop, it
   still fights it.
+

@@ -1,0 +1,20 @@
+[submodule "wolf3d"]
+	path = games/wolf3d
+	url = git@github.com:andrakis/c4-Wolf3D.git
+	branch = c4
+	update = none
+[submodule "doom"]
+	path = games/doom
+	url = git@github.com:andrakis/c4-Doom.git
+	branch = c4
+	update = none
+[submodule "tyrian"]
+	path = games/tyrian
+	url = git@github.com:andrakis/c4-Tyrian.git
+	branch = c4
+	update = none
+[submodule "rott"]
+	path = games/rott
+	url = git@github.com:andrakis/c4-ROTT.git
+	branch = c4
+	update = none

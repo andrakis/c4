@@ -69,47 +69,14 @@ ARCHIVES = c4ix-root.tgz
 		share/
 			splash/:
 				c4ix.c4p.gz: c4ix-splash.c4p.gz
-		# Wolfenstein 3D (src/wolf3d): the game, and Apogee's shareware
-		# package as it was distributed, which the game unpacks here the
-		# first time it runs
+		# the games that are on the disk, each its own block
+		# (games/NAME/c4ix.vfs.txt, src/c4bb/tests/vfs-games.py)
 		games/
-			wolf3d/:
-				wolf3d.c4r: c4ix-wolf3d.c4r
-				1wolf14.zip
-			# Doom (src/doom): the game and id's shareware WAD
-			doom/:
-				doom.c4r: c4ix-doom.c4r
-				doom1.wad
-			# OpenTyrian (src/opentyrian): the game, and Tyrian 2.1's
-			# data -- which may not be passed on, so it is on the disk
-			# only where build-images.sh found it to copy: whatever is
-			# in the disk's tyrian/, lazy (hostdir, vfsload.c)
-			tyrian/:
-				tyrian.c4r: c4ix-tyrian.c4r
-				data/: hostdir(tyrian/)
-			# Rise of the Triad (src/rott): the game and Apogee's
-			# shareware episode, out of its package as it ships
-			rott/:
-				rott.c4r: c4ix-rott.c4r
-				HUNTBGIN.WAD
-				HUNTBGIN.RTL
-				HUNTBGIN.RTC
-				REMOTE1.RTS
-				DEMO1_3.DMO
-				DEMO2_3.DMO
-				DEMO3_3.DMO
-				DEMO4_3.DMO
-				VENDOR.DOC
+			#@games
 	# and by name, as the programs in /bin are
-	wolf3d: ilink(/usr/games/wolf3d/wolf3d.c4r)
-	doom: ilink(/usr/games/doom/doom.c4r)
-	tyrian: ilink(/usr/games/tyrian/tyrian.c4r)
-	rott: ilink(/usr/games/rott/rott.c4r)
+	#@game-names
 	# sync is persist save (src/c4ix/user/persist.c)
 	sync: ilink(/bin/persist)
 	bin/:
-		wolf3d: ilink(/usr/games/wolf3d/wolf3d.c4r)
-		doom: ilink(/usr/games/doom/doom.c4r)
-		tyrian: ilink(/usr/games/tyrian/tyrian.c4r)
-		rott: ilink(/usr/games/rott/rott.c4r)
+		#@game-names
 		sync: ilink(/bin/persist)

@@ -132,7 +132,7 @@ function summary() {
 function guessSources(path, a) {
   const n = path.slice(path.lastIndexOf('/') + 1).replace(/\.c4[rol]$/, '').replace(/32$/, '');
   const libc = 'src/c4ix/libc/';
-  const games = { rott: 'src/rott/', doom: 'src/doom/', wolf3d: 'src/wolf3d/', tyrian: 'src/opentyrian/' };
+  const games = { rott: 'games/rott/', doom: 'games/doom/', wolf3d: 'games/wolf3d/', tyrian: 'games/tyrian/' };
   for (const [g, d] of Object.entries(games))
     if (n === g || n === 'c4ix-' + g) return n.startsWith('c4ix-') ? `${d} src/c4ix/lib/` : `${d} ${libc}`;
   if (n === 'c4ix') return 'src/c4ix/ src/c4ix/libc/';

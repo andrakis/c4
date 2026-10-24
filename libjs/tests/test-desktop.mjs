@@ -700,21 +700,25 @@ until(() => !has('Screen saver'));
 
 // ---- Wolfenstein 3D: a game in a Terminal, its frames 8-bit (GUI_BLIT8) -----------------------
 // (--window: by itself it takes the whole display, as gui does below)
-clickText(/^Terminal - task/, 'first');
-type('wolf3d --window\n');
-check(until(() => has(/Unpacking the shareware episode/), 1500), 'wolf3d unpacks the shareware episode the first time', screen());
-check(until(() => rgbFrames > 0 && has('Wolfenstein 3D'), 3000), 'and shows its frames in the window, which it titles',
-  `frames ${rgbFrames} ` + screen().slice(-300));
-check(rgbLast && rgbLast.w === 320 && rgbLast.h === 200 && rgbLast.dw === 640 && rgbLast.dh === 400,
-  '320x200 in 8 bits, scaled to the canvas', JSON.stringify(rgbLast));
-{
-  // the sign-on screen waits for a key; then the title, a new picture
-  const before = rgbLast.sum, n = rgbFrames;
-  key(' ', 0, 32);
-  check(until(() => rgbFrames > n + 2 && rgbLast.sum !== before, 1500), 'a key goes to the game, which moves on', `frames ${rgbFrames}`);
-}
-key('c', 2, 67);
-check(until(() => has(/^Terminal - task/), 800), 'Ctrl-C stops it, and the window is a Terminal again', screen().slice(-300));
+// Only where the game is on the disk: it is an optional submodule
+// (games/README.md), and C4IX's manifest lists it when it is there.
+if (/^\s*wolf3d: ilink/m.test(readFileSync(join(ROOT, 'disk/c4ix.vfs.txt'), 'utf8'))) {
+  clickText(/^Terminal - task/, 'first');
+  type('wolf3d --window\n');
+  check(until(() => has(/Unpacking the shareware episode/), 1500), 'wolf3d unpacks the shareware episode the first time', screen());
+  check(until(() => rgbFrames > 0 && has('Wolfenstein 3D'), 3000), 'and shows its frames in the window, which it titles',
+    `frames ${rgbFrames} ` + screen().slice(-300));
+  check(rgbLast && rgbLast.w === 320 && rgbLast.h === 200 && rgbLast.dw === 640 && rgbLast.dh === 400,
+    '320x200 in 8 bits, scaled to the canvas', JSON.stringify(rgbLast));
+  {
+    // the sign-on screen waits for a key; then the title, a new picture
+    const before = rgbLast.sum, n = rgbFrames;
+    key(' ', 0, 32);
+    check(until(() => rgbFrames > n + 2 && rgbLast.sum !== before, 1500), 'a key goes to the game, which moves on', `frames ${rgbFrames}`);
+  }
+  key('c', 2, 67);
+  check(until(() => has(/^Terminal - task/), 800), 'Ctrl-C stops it, and the window is a Terminal again', screen().slice(-300));
+} else console.log('test-desktop: Wolfenstein 3D is not on the disk (games/README.md): its checks skipped');
 
 // ---- the whole display: a program asks, the desktop gives way, and has it back ----------------
 // (include/display.h) gui, the display's demo, for 40 frames: the display is

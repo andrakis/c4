@@ -13,14 +13,14 @@ The rules for these ports:
 - memory is not a concern (`?mem=64` raises libjs's arena);
 - Quake is out for now.
 
-Status (2026-10-23): **Doom is ported** (src/doom/README.md): doomgeneric,
+Status (2026-10-23): **Doom is ported** (games/doom/README.md): doomgeneric,
 on C4IX's whole display, under C4DOS and on the bare machine, its demos'
 frames the same as gcc's. Step 6 is done (M11); doomgeneric's one
 bitfield struct is written as bytes instead (step 7). **OpenTyrian is
-ported** too (src/opentyrian/README.md), the same three ways, with steps
+ported** too (games/tyrian/README.md), the same three ways, with steps
 8-10 done (M12, c4lc-design.md 14.11). Its data, Tyrian 2.1, may not be
 passed on, so it is on the disks only where its zip was there to copy.
-**Rise of the Triad is ported** (src/rott/README.md), icculus.org's port,
+**Rise of the Triad is ported** (games/rott/README.md), icculus.org's port,
 the same three ways, with steps 11 and 12 done (M13, c4lc-design.md
 14.12). Its sound is still to come.
 - **c4lc** compiled 50 of linuxdoom's 59 units as they stood. The first
@@ -64,8 +64,8 @@ The pipeline is the one test-c4fc's `C4FC_GEN_SWEEP` and test-c4lc use:
   that C4IX on libjs is.
 - **c4fc** is `c4th $(C4FC_ALL)` with `-c`.
 
-As src/wolf3d did, stubs stand in for what is not the game:
-- SDL 2 for OpenTyrian is src/wolf3d's `sdl/SDL.h`, grown by what
+As games/wolf3d did, stubs stand in for what is not the game:
+- SDL 2 for OpenTyrian is games/wolf3d's `sdl/SDL.h`, grown by what
   OpenTyrian calls.
 - SDL 1.2 and SDL_mixer for ROTT are a new stub of the same kind.
 - Doom's X11, OSS and socket files (`i_video.c`, `i_sound.c`, `i_net.c`)

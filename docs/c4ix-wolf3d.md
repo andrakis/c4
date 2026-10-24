@@ -6,7 +6,7 @@ Wolf4SDL's C, compiled by c4lc against C4IX's libc. Go > Wolfenstein 3D
 starts it, as does `wolf3d` at a shell prompt; `wolf3d --window` plays
 in the Terminal window instead. All of it works: the
 display, the keyboard, the music and sounds, and the game. The source,
-and what was changed in it, is [src/wolf3d](../src/wolf3d/README.md).
+and what was changed in it, is [games/wolf3d](../games/wolf3d/README.md).
 
 It also runs without the desktop: from C4IX's console, under C4DOS, and
 on the bare machine ("Without the desktop", below).

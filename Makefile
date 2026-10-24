@@ -2343,7 +2343,7 @@ c4bb-32bit: c4cc32 c4m32 c4sp32 c4rlink32
 # target builds what it uses.
 # ./cpp is a hard prerequisite now, not just for C4DOS: the shared
 # disk's c4m.c4r goes through it (build-images.sh).
-c4bb-images: c4bb-32bit $(C4LC_LISP) .img_g c4th32.c4r cpp wolf3d-objs wolf3d-bare-objs doom-objs tyrian-objs rott-objs
+c4bb-images: c4bb-32bit $(C4LC_LISP) .img_g c4th32.c4r cpp
 	IMG_G=$(IMG_G) bash src/c4bb/tests/build-images.sh
 
 # Source maps in the images (docs/c4-explorer.md, track S): the games
@@ -2360,285 +2360,49 @@ IMG_G := -g
 FORCE:
 PHONY += FORCE
 
-# WOLFENSTEIN 3D (src/wolf3d, docs/c4ix-wolf3d.md): Wolf4SDL in c4lc's C,
-# for C4IX's libc. A unit to an object, made here so that only what
-# changed is compiled again -- the whole game is minutes of c4sp32, and
-# -j helps -- and linked by build-images.sh against the libc it builds.
-WOLF       := src/wolf3d
-WOLF_UNITS := arc explode c4sdl c4file plat-c4ix plat-gui wolfinst id_ca id_in id_pm id_sd id_us \
-              id_vh id_vl signon wl_act1 wl_act2 wl_agent wl_debug wl_draw wl_game \
-              wl_inter wl_main wl_menu wl_play wl_scale wl_state wl_text wl_utils
-WOLF_HDRS  := $(wildcard $(WOLF)/*.h $(WOLF)/*.inc $(WOLF)/sdl/*.h $(WOLF)/c4inc/*.h) \
-              $(wildcard src/c4ix/libc/include/*.h src/c4ix/libc/include/sys/*.h) \
-              src/c4ix/include/window.h src/c4ix/include/archive.h \
-              libjs/guest/snd.h libjs/guest/snd.c
-WOLF_CC    := ./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O $(IMG_G) -mfuse -fno-builtin -c -D C4IX \
-              -I src/c4ix/libc/include -I src/c4ix/include -I src/c4ix/user -I libjs/guest \
-              -I $(WOLF)/c4inc -I $(WOLF)/sdl -I $(WOLF)
-wolf3d-objs: $(WOLF_UNITS:%=.wolf3d/%.c4o)
-.wolf3d/%.c4o: $(WOLF)/%.c $(WOLF_HDRS) $(C4LC_LISP) .img_g | c4sp32
-	@mkdir -p .wolf3d
-	$(WOLF_CC) $< $@ > /dev/null
-# arc.c is libarc's archive.c, built against libc
-.wolf3d/arc.c4o: src/c4ix/lib/archive.c
-PHONY += wolf3d-objs
+# THE GAMES (games/README.md): Wolfenstein 3D, Doom, OpenTyrian and Rise
+# of the Triad live in repositories of their own, each an optional
+# submodule at games/NAME. Each one checked out brings its c4.mk -- its
+# rules, objects, data and test -- included here, and c4bb-images builds
+# its objects (build-images.sh then links it, with its c4-images.sh). A
+# game that is not here is not built, and its test says it was skipped.
+GAME_OBJS  :=
+GAME_TESTS :=
+include $(wildcard games/*/c4.mk)
+GAMES_ALL  := wolf3d doom tyrian rott
+c4bb-images: libc-bare-objs $(GAME_OBJS)
+$(filter-out $(GAME_TESTS),$(GAMES_ALL:%=test-%)):
+	@echo "$@: skipped, games/$(@:test-%=%) is not here (games/README.md)"
+PHONY += $(GAMES_ALL:%=test-%)
 
-# ... and for the bare machine and C4DOS (src/wolf3d/README.md, "Where it
-# runs"): the same game objects, with plat-bare.c for plat-c4ix.c, linked
-# by build-images.sh with libc built without -fpic and its system layer
-# over the machine's own opcodes (src/c4ix/libc/bare.c) for libc4ix's.
-# opcodes.c and bare.c are compiled without -fno-builtin: there, open,
-# read, malloc and the rest are the opcodes.
-WOLF_LIBC  := string stdlib stdio unix fp math bareu
-WOLF_LIBCC := ./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O $(IMG_G) -c -I src/c4ix/libc/include -I src/c4ix/libc
-wolf3d-bare-objs: .wolf3d-bare/plat-bare.c4o $(WOLF_LIBC:%=.wolf3d-bare/libc-%.c4o) \
-                  .wolf3d-bare/libc-opcodes.c4o .wolf3d-bare/libc-bare.c4o
-.wolf3d-bare/plat-bare.c4o: $(WOLF)/plat-bare.c $(WOLF_HDRS) $(C4LC_LISP) .img_g | c4sp32
-	@mkdir -p .wolf3d-bare
-	$(WOLF_CC) $< $@ > /dev/null
-.wolf3d-bare/libc-opcodes.c4o .wolf3d-bare/libc-bare.c4o: .wolf3d-bare/libc-%.c4o: src/c4ix/libc/%.c $(C4LC_LISP) .img_g | c4sp32
-	@mkdir -p .wolf3d-bare
-	$(WOLF_LIBCC) $< $@ > /dev/null
-.wolf3d-bare/libc-%.c4o: src/c4ix/libc/%.c $(wildcard src/c4ix/libc/*.h src/c4ix/libc/include/*.h) $(C4LC_LISP) .img_g | c4sp32
-	@mkdir -p .wolf3d-bare
-	$(WOLF_LIBCC) -fno-builtin $< $@ > /dev/null
-PHONY += wolf3d-bare-objs
-
-# Doom (src/doom/README.md): doomgeneric's units with c4lc, the same
-# objects for C4IX, the bare machine and C4DOS, but for the two that say
-# whether the display has to be asked for (dg-c4ix.c, dg-bare.c, in
-# .doom/plat). build-images.sh links them: against C4IX's libc, and whole
-# with the bare libc of wolf3d-bare-objs.
-DOOM       := src/doom
-DOOM_PLAT  := dg-host dg-c4ix dg-bare
-DOOM_UNITS := $(filter-out $(DOOM_PLAT),$(patsubst $(DOOM)/%.c,%,$(wildcard $(DOOM)/*.c)))
-DOOM_HDRS  := $(wildcard $(DOOM)/*.h $(DOOM)/c4inc/*.h) \
-              $(wildcard src/c4ix/libc/include/*.h src/c4ix/libc/include/sys/*.h) \
-              src/c4ix/include/display.h libjs/guest/gui.h libjs/guest/gui.c \
-              libjs/guest/snd.h libjs/guest/snd.c
-DOOM_CC    := ./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O $(IMG_G) -mfuse -fno-builtin -c -conforming \
-              -D C4DOOM -D FEATURE_SOUND -I $(DOOM)/c4inc -I src/c4ix/libc/include \
-              -I src/c4ix/include -I libjs/guest -I $(DOOM)
-doom-objs: $(DOOM_UNITS:%=.doom/%.c4o) .doom/plat/dg-c4ix.c4o .doom/plat/dg-bare.c4o
-.doom/%.c4o: $(DOOM)/%.c $(DOOM_HDRS) $(C4LC_LISP) .img_g | c4sp32
-	@mkdir -p .doom/plat
-	$(DOOM_CC) $< $@ > /dev/null
-.doom/plat/%.c4o: $(DOOM)/%.c $(DOOM_HDRS) $(C4LC_LISP) .img_g | c4sp32
-	@mkdir -p .doom/plat
-	$(DOOM_CC) $< $@ > /dev/null
-PHONY += doom-objs
-
-# ... and by gcc for the host, with no display and no sound (dg-host.c):
-# the reference test-doom holds the c4lc build to. 32-bit, as the c4lc
-# build is; the 64-bit build plays demo1 differently.
-DOOM_HOST_SRCS := $(filter-out $(DOOM)/dg-gui.c $(DOOM)/dg-snd.c $(DOOM)/dg-c4ix.c $(DOOM)/dg-bare.c, \
-                  $(wildcard $(DOOM)/*.c))
-doom-host: $(DOOM_HOST_SRCS) $(wildcard $(DOOM)/*.h)
-	gcc -m32 -O2 -std=gnu99 -w -DC4DOOM -DNORMALUNIX -DLINUX -D_DEFAULT_SOURCE -I$(DOOM) -o $@ $(DOOM_HOST_SRCS) -lm
-
-# OpenTyrian (src/opentyrian/README.md): its units with c4lc, the same
-# objects for C4IX, the bare machine and C4DOS but for the platform's
-# (tyr-c4ix.c, tyr-bare.c, in .tyrian/plat), linked by build-images.sh as
-# Doom's are. video-c4.c and loudness-c4.c stand in for upstream's
-# video*.c, loudness.c and opl.c, which are not built. The game's data is
-# not in the repository (src/opentyrian/data/README.md).
-TYR        := src/opentyrian
-TYR_PLAT   := tyr-host tyr-c4ix tyr-bare
-TYR_SKIP   := video video_scale video_scale_hqNx loudness opl
-TYR_UNITS  := $(filter-out $(TYR_PLAT) $(TYR_SKIP),$(patsubst $(TYR)/%.c,%,$(wildcard $(TYR)/*.c)))
-TYR_HDRS   := $(wildcard $(TYR)/*.h $(TYR)/c4/*.h) \
-              $(wildcard src/c4ix/libc/include/*.h src/c4ix/libc/include/sys/*.h) \
-              src/c4ix/include/display.h libjs/guest/gui.h libjs/guest/gui.c \
-              libjs/guest/snd.h libjs/guest/snd.c
-TYR_CC     := ./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O $(IMG_G) -mfuse -fno-builtin -c -conforming \
-              -D C4TYR -I $(TYR)/c4 -I src/c4ix/libc/include -I src/c4ix/include \
-              -I libjs/guest -I $(TYR)
-tyrian-objs: $(TYR_UNITS:%=.tyrian/%.c4o) .tyrian/plat/tyr-c4ix.c4o .tyrian/plat/tyr-bare.c4o
-.tyrian/%.c4o: $(TYR)/%.c $(TYR_HDRS) $(C4LC_LISP) .img_g | c4sp32
-	@mkdir -p .tyrian/plat
-	$(TYR_CC) $< $@ > /dev/null
-.tyrian/plat/%.c4o: $(TYR)/%.c $(TYR_HDRS) $(C4LC_LISP) .img_g | c4sp32
-	@mkdir -p .tyrian/plat
-	$(TYR_CC) $< $@ > /dev/null
-PHONY += tyrian-objs
-
-# ... and by gcc for the host, with no display and no sound (tyr-host.c),
-# the reference test-tyrian holds the c4lc build to; 32-bit, as that is
-TYR_HOST_SRCS := $(filter-out $(TYR_SKIP:%=$(TYR)/%.c) $(TYR)/tyr-c4ix.c $(TYR)/tyr-bare.c, \
-                 $(wildcard $(TYR)/*.c))
-tyrian-host: $(TYR_HOST_SRCS) $(TYR_HDRS)
-	gcc -m32 -O2 -std=gnu99 -w -Wno-error=implicit-function-declaration -DC4TYR -I$(TYR)/c4 -I$(TYR) -Ilibjs/guest -o $@ $(TYR_HOST_SRCS) -lm
-
-# Rise of the Triad (src/rott/README.md): icculus.org's port, its units
-# with c4lc, the same objects for C4IX, the bare machine and C4DOS but for
-# the platform's (rott-c4ix.c, rott-bare.c, in .rott/plat), linked by
-# build-images.sh as Doom's are. rott-snd.c stands in for its SDL_mixer
-# sound (fx_man.c, dukemusc.c), which is not built; nor are the units its
-# own Makefile leaves out.
-ROTT       := src/rott
-ROTT_UNITS := cin_actr cin_efct cin_evnt cin_glob cin_main cin_util dosutil \
-              engine isr modexlib rt_actor rt_battl rt_build rt_cfg rt_crc \
-              rt_com rt_debug rt_dmand rt_door rt_draw rt_floor rt_game \
-              rt_in rt_main rt_map rt_menu rt_msg rt_net rt_playr rt_rand \
-              rt_scale rt_sound rt_spbal rt_sqrt rt_stat rt_state rt_str \
-              rt_swift rt_ted rt_util rt_view rt_vid rt_err scriplib w_wad \
-              watcom z_zone byteordr winrott c4sdl rott-sum rott-snd \
-              midi al_midi gmtimbre ll_man usrhooks
-ROTT_HDRS  := $(wildcard $(ROTT)/*.h $(ROTT)/c4/*.h) \
-              $(wildcard src/c4ix/libc/include/*.h src/c4ix/libc/include/sys/*.h) \
-              src/c4ix/include/display.h libjs/guest/gui.h libjs/guest/gui.c
-ROTT_DEFS  := -D C4ROTT -D PLATFORM_UNIX=1 -D USE_SDL=1 -D SHAREWARE=1 -D SUPERROTT=0 -D SITELICENSE=0
-ROTT_CC    := ./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O $(IMG_G) -mfuse -fno-builtin -c -conforming \
-              $(ROTT_DEFS) -I $(ROTT)/c4 -I src/c4ix/libc/include -I src/c4ix/include \
-              -I libjs/guest -I $(ROTT)
-rott-objs: $(ROTT_UNITS:%=.rott/%.c4o) .rott/plat/rott-c4ix.c4o .rott/plat/rott-bare.c4o
-.rott/%.c4o: $(ROTT)/%.c $(ROTT_HDRS) $(C4LC_LISP) .img_g | c4sp32
-	@mkdir -p .rott/plat
-	$(ROTT_CC) $< $@ > /dev/null
-.rott/plat/%.c4o: $(ROTT)/%.c $(ROTT_HDRS) $(C4LC_LISP) .img_g | c4sp32
-	@mkdir -p .rott/plat
-	$(ROTT_CC) $< $@ > /dev/null
-PHONY += rott-objs
-
-# ... and by gcc for the host, with no display and no sound (rott-host.c),
-# the reference test-rott holds them to: 32-bit as they are, and with SSE's
-# arithmetic, which is IEEE's as c4's is -- the x87's extra precision
-# plays the demos differently at -O0 and -O2
-ROTT_HOST_SRCS := $(ROTT_UNITS:%=$(ROTT)/%.c) $(ROTT)/rott-host.c
-rott-host: $(ROTT_HOST_SRCS) $(ROTT_HDRS)
-	gcc -m32 -O2 -std=gnu89 -w -fno-strict-aliasing -msse2 -mfpmath=sse \
-	    -Wno-error=implicit-function-declaration -Wno-error=implicit-int \
-	    -Wno-error=incompatible-pointer-types -Wno-error=int-conversion \
-	    $(ROTT_DEFS) -I$(ROTT)/c4 -I$(ROTT) -Ilibjs/guest -o $@ $(ROTT_HOST_SRCS) -lm
+# The bare machine's libc, for the games on the bare machine and under
+# C4DOS and for test-libc-bare: libc built without -fpic, and its system
+# layer over the machine's own opcodes (src/c4ix/libc/bare.c) for
+# libc4ix's. opcodes.c and bare.c are compiled without -fno-builtin:
+# there, open, read, malloc and the rest are the opcodes.
+LIBC_BARE   := string stdlib stdio unix fp math bareu
+LIBC_BARECC := ./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O $(IMG_G) -c -I src/c4ix/libc/include -I src/c4ix/libc
+libc-bare-objs: $(LIBC_BARE:%=.libc-bare/libc-%.c4o) .libc-bare/libc-opcodes.c4o .libc-bare/libc-bare.c4o
+.libc-bare/libc-opcodes.c4o .libc-bare/libc-bare.c4o: .libc-bare/libc-%.c4o: src/c4ix/libc/%.c $(C4LC_LISP) .img_g | c4sp32
+	@mkdir -p .libc-bare
+	$(LIBC_BARECC) $< $@ > /dev/null
+.libc-bare/libc-%.c4o: src/c4ix/libc/%.c $(wildcard src/c4ix/libc/*.h src/c4ix/libc/include/*.h) $(C4LC_LISP) .img_g | c4sp32
+	@mkdir -p .libc-bare
+	$(LIBC_BARECC) -fno-builtin $< $@ > /dev/null
+PHONY += libc-bare-objs
 
 # test-libc-bare: libc's scanf, fseek and fread (src/c4ix/libc/tests/
 # scantest.c) on the bare machine, against gcc's build of the same.
-test-libc-bare: wolf3d-bare-objs $(C4LC_LISP) | c4sp32
+test-libc-bare: libc-bare-objs $(C4LC_LISP) | c4sp32
 	@rm -rf .libc_t && mkdir -p .libc_t && cp src/c4ix/libc/tests/scantest.c .libc_t/
 	@./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O -fno-builtin -c -I src/c4ix/libc/include .libc_t/scantest.c .libc_t/scantest.c4o > /dev/null
-	@./c4rlink32 .libc_t/scantest.c4o .wolf3d-bare/libc-*.c4o -o .libc_t/scantest.c4r > /dev/null
+	@./c4rlink32 .libc_t/scantest.c4o .libc-bare/libc-*.c4o -o .libc_t/scantest.c4r > /dev/null
 	@gcc -m32 -w -o .libc_t/scantest-host .libc_t/scantest.c
 	@cd .libc_t && ./scantest-host scantest.c > host.txt && node ../libjs/cli.js -m 64 -d . scantest.c4r scantest.c > c4.txt
 	@cmp -s .libc_t/host.txt .libc_t/c4.txt || { echo "test-libc-bare: differs from gcc's:"; diff .libc_t/c4.txt .libc_t/host.txt; exit 1; }
 	@rm -rf .libc_t
 	@echo "test-libc-bare: OK"
 PHONY += test-libc-bare
-
-# test-doom: demo3 in Doom's -timedemo, which plays a tic a frame and here
-# on a virtual clock (dg-sum.c), built by gcc and by c4lc -- on the bare
-# machine, under C4DOS and inside C4IX -- must show the same 2173 frames.
-# The second and third together, as they share nothing. demo1 and demo2
-# match too (src/doom/README.md); demo3 is the shortest. About five
-# minutes, nearly all of it on c4m.
-test-doom: doom-host c4bb-images test-libc-bare
-	@rm -rf .doom_t && mkdir -p .doom_t
-	@cd .doom_t && cp ../src/doom/data/doom1.wad . && ../doom-host -iwad doom1.wad -timedemo demo3 -nosound 2>/dev/null \
-	   | grep '^timedemo' > host.txt
-	@cat .doom_t/host.txt
-	@cd src/c4bb/images/games && { timeout 1500 node ../../../../libjs/cli.js -m 64 -d . doom.c4r -timedemo demo3 -nosound \
-	     > ../../../../.doom_t/bare.out 2>/dev/null & \
-	   printf 'doom -timedemo demo3 -nosound\nver\n' | timeout 1500 node ../../../../libjs/cli.js -m 64 -d . ../c4dos32.c4r \
-	     > ../../../../.doom_t/dos.out 2>/dev/null; wait; }
-	@printf 'doom -timedemo demo3 -nosound\nexit\n' | timeout 1500 node libjs/cli.js -m 64 -d src/c4bb/images/disk src/c4bb/images/c4ix32.c4r \
-	   2>/dev/null > .doom_t/c4ix.out
-	@for w in bare dos c4ix; do grep '^timedemo' .doom_t/$$w.out | cmp -s .doom_t/host.txt - \
-	   || { echo "test-doom: $$w's frames differ:"; tail -5 .doom_t/$$w.out; exit 1; }; done
-	@grep -A1 '^timedemo' .doom_t/dos.out | grep -q '^A>C4DOS version' \
-	   || { echo "test-doom: C4DOS did not come back to its prompt:"; tail -5 .doom_t/dos.out; exit 1; }
-	@rm -rf .doom_t
-	@echo "test-doom: OK"
-PHONY += test-doom
-
-# test-tyrian: OpenTyrian's demo 4 (--timedemo, tyrian-sum.c: every frame
-# shown and its palette, on a virtual clock), built by gcc and by c4lc --
-# on the bare machine, under C4DOS and inside C4IX -- must show the same
-# frames. -x: not the Christmas edition, which the date would choose.
-# Only where Tyrian's data is (src/opentyrian/data/README.md); skipped,
-# and saying so, where it is not.
-TYR_DEMO := 4
-test-tyrian: tyrian-host c4bb-images
-	@if [ ! -f src/c4bb/images/games/tyrian/data/tyrian1.lvl ]; then \
-	   echo "test-tyrian: skipped, no Tyrian data (src/opentyrian/data/README.md)"; exit 0; fi; \
-	 rm -rf .tyr_t && mkdir -p .tyr_t && \
-	 ./tyrian-host -t src/c4bb/images/games/tyrian/data --timedemo $(TYR_DEMO) -s -x -j 2>/dev/null \
-	   | grep '^timedemo' > .tyr_t/host.txt && cat .tyr_t/host.txt && \
-	 ( cd src/c4bb/images/games && { timeout 2400 node ../../../../libjs/cli.js -m 64 -d . tyrian.c4r --timedemo $(TYR_DEMO) -s -x -j \
-	     > ../../../../.tyr_t/bare.out 2>/dev/null & \
-	   printf 'tyrian --timedemo $(TYR_DEMO) -s -x -j\nver\n' | timeout 2400 node ../../../../libjs/cli.js -m 64 -d . ../c4dos32.c4r \
-	     > ../../../../.tyr_t/dos.out 2>/dev/null; wait; } ) && \
-	 printf 'tyrian --timedemo $(TYR_DEMO) -s -x -j\nexit\n' | timeout 2400 node libjs/cli.js -m 64 -d src/c4bb/images/disk src/c4bb/images/c4ix32.c4r \
-	   2>/dev/null > .tyr_t/c4ix.out && \
-	 for w in bare dos c4ix; do grep '^timedemo' .tyr_t/$$w.out | cmp -s .tyr_t/host.txt - \
-	   || { echo "test-tyrian: $$w's frames differ:"; tail -5 .tyr_t/$$w.out; exit 1; }; done && \
-	 { grep -A1 '^timedemo' .tyr_t/dos.out | grep -q '^A>C4DOS version' \
-	   || { echo "test-tyrian: C4DOS did not come back to its prompt:"; tail -5 .tyr_t/dos.out; exit 1; }; } && \
-	 rm -rf .tyr_t && echo "test-tyrian: OK"
-PHONY += test-tyrian
-
-# test-rott: the shareware's demo 4 (--timedemo, rott-sum.c: every frame
-# shown and its palette, on a virtual clock), built by gcc and by c4lc --
-# on the bare machine, under C4DOS and inside C4IX -- must show the same
-# frames. The gcc build runs where it may write its config, beside links
-# to the data.
-ROTT_DEMO := 4
-test-rott: rott-host c4bb-images
-	@rm -rf .rott_t && mkdir -p .rott_t && \
-	 for f in src/c4bb/images/games/*.WAD src/c4bb/images/games/*.RT? src/c4bb/images/games/*.DMO src/c4bb/images/games/VENDOR.DOC; do \
-	   ln -s ../$$f .rott_t/; done && \
-	 ( cd .rott_t && ../rott-host --timedemo $(ROTT_DEMO) NOSOUND 2>/dev/null | grep '^timedemo' > host.txt ) && \
-	 cat .rott_t/host.txt && \
-	 ( cd src/c4bb/images/games && { timeout 1500 node ../../../../libjs/cli.js -m 64 -d . rott.c4r --timedemo $(ROTT_DEMO) NOSOUND \
-	     > ../../../../.rott_t/bare.out 2>/dev/null & \
-	   printf 'rott --timedemo $(ROTT_DEMO) NOSOUND\nver\n' | timeout 1500 node ../../../../libjs/cli.js -m 64 -d . ../c4dos32.c4r \
-	     > ../../../../.rott_t/dos.out 2>/dev/null; wait; } ) && \
-	 printf 'rott --timedemo $(ROTT_DEMO) NOSOUND\nexit\n' | timeout 1500 node libjs/cli.js -m 64 -d src/c4bb/images/disk src/c4bb/images/c4ix32.c4r \
-	   2>/dev/null > .rott_t/c4ix.out && \
-	 for w in bare dos c4ix; do grep '^timedemo' .rott_t/$$w.out | cmp -s .rott_t/host.txt - \
-	   || { echo "test-rott: $$w's frames differ:"; tail -5 .rott_t/$$w.out; exit 1; }; done && \
-	 { grep -A1 '^timedemo' .rott_t/dos.out | grep -q '^A>C4DOS version' \
-	   || { echo "test-rott: C4DOS did not come back to its prompt:"; tail -5 .rott_t/dos.out; exit 1; }; } && \
-	 rm -rf .rott_t && echo "test-rott: OK"
-PHONY += test-rott
-
-# The same game built by gcc for the host, with no window: the reference
-# the C4IX build is held to (test-wolf3d).
-WOLF_HOST_SRCS := $(filter-out $(WOLF)/plat-c4ix.c $(WOLF)/plat-gui.c $(WOLF)/wolfinst.c $(WOLF)/explode.c $(WOLF)/arc.c, \
-                  $(WOLF_UNITS:%=$(WOLF)/%.c)) $(WOLF)/plat-host.c
-wolf3d-host: $(WOLF_HOST_SRCS) $(wildcard $(WOLF)/*.h $(WOLF)/sdl/*.h)
-	gcc -O2 -std=gnu99 -w -Werror-implicit-function-declaration -I$(WOLF)/sdl -I$(WOLF) -o $@ $(WOLF_HOST_SRCS) -lm
-
-# test-wolf3d: demo 0 in virtual time, built both ways, must show the same
-# 1214 frames. Inside C4IX the game first unpacks 1wolf14.zip from the
-# disk, so that is tested too; on the host tools/unshr.c does it. Then the
-# same demo on the bare machine and under C4DOS (plat-bare.c, libc's
-# bare.c), from build-images.sh's wolf3d disk -- the two together, as
-# they share nothing -- and C4DOS must be back at its prompt after the
-# game exits, to run VER. About six minutes, nearly all of it the runs
-# on c4m.
-test-wolf3d: wolf3d-host c4bb-images
-	@rm -rf .wolf3d_t && mkdir -p .wolf3d_t
-	@python3 -I -c "import zipfile, sys; zipfile.ZipFile(sys.argv[1]).extract('W3DSW14.SHR', sys.argv[2])" $(WOLF)/data/1wolf14.zip .wolf3d_t
-	@gcc -O2 -o .wolf3d_t/unshr $(WOLF)/tools/unshr.c
-	@cd .wolf3d_t && ./unshr W3DSW14.SHR . > /dev/null
-	@cd .wolf3d_t && ../wolf3d-host --timedemo 1 2>/dev/null | grep '^timedemo' | sed 's/, [0-9]* ms$$//' > host.txt
-	@printf 'wolf3d --timedemo 1\nexit\n' | timeout 900 node libjs/cli.js -m 64 -d src/c4bb/images/disk src/c4bb/images/c4ix32.c4r 2>/dev/null \
-	   | grep '^timedemo' | sed 's/, [0-9]* ms$$//' > .wolf3d_t/c4ix.txt
-	@cat .wolf3d_t/host.txt
-	@test -s .wolf3d_t/host.txt && cmp -s .wolf3d_t/host.txt .wolf3d_t/c4ix.txt \
-	   || { echo "test-wolf3d: C4IX's frames differ:"; cat .wolf3d_t/c4ix.txt; exit 1; }
-	@cd src/c4bb/images/games && { timeout 900 node ../../../../libjs/cli.js -m 64 -d . wolf3d.c4r --timedemo 1 \
-	     > ../../../../.wolf3d_t/bare.out 2>/dev/null & \
-	   printf 'wolf3d --timedemo 1\nver\n' | timeout 900 node ../../../../libjs/cli.js -m 64 -d . ../c4dos32.c4r \
-	     > ../../../../.wolf3d_t/dos.out 2>/dev/null; wait; }
-	@grep '^timedemo' .wolf3d_t/bare.out | sed 's/, [0-9]* ms$$//' | cmp -s .wolf3d_t/host.txt - \
-	   || { echo "test-wolf3d: the bare machine's frames differ:"; tail -5 .wolf3d_t/bare.out; exit 1; }
-	@grep '^timedemo' .wolf3d_t/dos.out | sed 's/, [0-9]* ms$$//' | cmp -s .wolf3d_t/host.txt - \
-	   || { echo "test-wolf3d: C4DOS's frames differ:"; tail -5 .wolf3d_t/dos.out; exit 1; }
-	@grep -A1 '^timedemo' .wolf3d_t/dos.out | grep -q '^A>C4DOS version' \
-	   || { echo "test-wolf3d: C4DOS did not come back to its prompt:"; tail -5 .wolf3d_t/dos.out; exit 1; }
-	@rm -rf .wolf3d_t
-	@echo "test-wolf3d: OK"
-PHONY += test-wolf3d
 
 # EVERYTHING THE BROWSER LOADS, in the right order. One target, because
 # "rebuild the images" is not the whole job and the missing half is

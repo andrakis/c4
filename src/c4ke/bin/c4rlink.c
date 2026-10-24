@@ -58,6 +58,14 @@
 // symbol rather than a new section because every reader of .c4r in
 // this repo already skips symbols it has no use for; so a dynamic
 // image keeps its symbol table, and -s is refused for one.
+//
+// Source maps (docs/c4-explorer.md 2.4): an object compiled with -g
+// carries an SMAP chunk after S, which says what file and line each run
+// of its code came from. The linked image gets one map that is the
+// objects' maps, rebased (link_srcmap). -s drops it with the symbols;
+// -g0 drops only the map, for a dynamic image, which keeps its symbols.
+// When no object has a map, no trailer is written, and the image is the
+// same bytes as before maps.
 
 #define NO_ASMC4R_MAIN 1
 // Also includes c4cc.c, which includes load-c4r.c
@@ -78,7 +86,7 @@ enum {
 	CL__Sz
 };
 
-int cl_verbose, cl_debug, cl_libmode, cl_strip, cl_striptool;
+int cl_verbose, cl_debug, cl_libmode, cl_strip, cl_striptool, cl_nomap;
 
 // A data word holding a symbol's address (M7b): ADDRESS is a byte offset
 // into data, VALUE the symbol's id. Only objects and libraries carry it --
@@ -103,11 +111,12 @@ static void show_help (char *spec) {
 	       "     --            End arguments\n", spec, spec);
 	else
 	printf("%s: Link multiple .c4r files into one\n"
-	       "%s: [-dvrs] [-l lib.c4s] [-o outfile] [--] file1.c4r [...fileN.c4r]\n"
+	       "%s: [-dvrs] [-g0] [-l lib.c4s] [-o outfile] [--] file1.c4r [...fileN.c4r]\n"
 	       "     -d            Turn on debug mode\n"
 	       "     -v            Turn on verbose mode\n"
 	       "     -r            Library mode: allow unresolved symbols\n"
-	       "     -s            Strip: write no symbol table (release builds)\n"
+	       "     -s            Strip: write no symbol table and no source map\n"
+		       "     -g0           Write no source map, but keep the symbols\n"
 	       "     -l lib.c4s    Link against a shared library: load it at run time\n"
 	       "     -o outfile    Write to outfile (default: a.c4r)\n"
 	       "     --            End arguments\n", spec, spec);
@@ -567,6 +576,252 @@ static int resolve_patches (int *master) {
 	return unresolved;
 }
 
+// ---- The source map ----
+//
+// An SMAP payload (docs/c4-explorer.md 2.2, c4r.lisp's c4r:smap) is
+// bytes with unsigned and signed LEB128 numbers: a version (1) and flags
+// (bit 0: each file has a CRC-32), the files (path, size, CRC), the
+// functions (start as a delta from the one before, length in words,
+// name, file, line) and the rows (code delta << 1 | a new file follows,
+// the file, a signed line delta). A row covers the code up to the next.
+
+// A byte buffer that grows: SB_BYTES (char *), the bytes in it, its room
+enum { SB_BYTES, SB_LEN, SB_CAP, SB__Sz };
+int cl_oom;      // a buffer could not grow: the map is dropped
+
+static int *sb_new () {
+	int *sb;
+	if (!(sb = malloc(sizeof(int) * SB__Sz))) { cl_oom = 1; return 0; }
+	sb[SB_CAP] = 256;
+	sb[SB_LEN] = 0;
+	if (!(sb[SB_BYTES] = (int)malloc(sb[SB_CAP]))) { cl_oom = 1; free(sb); return 0; }
+	return sb;
+}
+static void sb_free (int *sb) {
+	if (!sb) return;
+	if (sb[SB_BYTES]) free((char *)sb[SB_BYTES]);
+	free(sb);
+}
+static void sb_put (int *sb, int c) {
+	char *b;
+	if (!sb || cl_oom) return;
+	if (sb[SB_LEN] >= sb[SB_CAP]) {
+		if (!(b = malloc(sb[SB_CAP] * 2))) { cl_oom = 1; return; }
+		memcpy(b, (char *)sb[SB_BYTES], sb[SB_LEN]);
+		free((char *)sb[SB_BYTES]);
+		sb[SB_BYTES] = (int)b;
+		sb[SB_CAP] = sb[SB_CAP] * 2;
+	}
+	b = (char *)sb[SB_BYTES];
+	b[sb[SB_LEN]] = c;
+	sb[SB_LEN] = sb[SB_LEN] + 1;
+}
+static void sb_mem (int *sb, char *p, int n) {
+	int i;
+	i = 0;
+	while (i < n) { sb_put(sb, p[i]); ++i; }
+}
+static void sb_u (int *sb, int v) {
+	while (v >= 128) { sb_put(sb, 128 + (v & 127)); v = v >> 7; }
+	sb_put(sb, v);
+}
+// (v - b) / 128 is exact, so this needs no arithmetic shift
+static void sb_s (int *sb, int v) {
+	int b, more;
+	more = 1;
+	while (more) {
+		b = v & 127;
+		v = (v - b) / 128;
+		if ((v == 0 && !(b & 64)) || (v == -1 && (b & 64))) more = 0;
+		else b = b + 128;
+		sb_put(sb, b);
+	}
+}
+
+// Reading a map: cl_mat is the cursor, as c4rdump's c4rd_at is
+int cl_mat;
+static int cl_mu (char *p) {
+	int v, s, c;
+	c = p[cl_mat++] & 255;
+	v = c & 127; s = 7;
+	while (c & 128) { c = p[cl_mat++] & 255; v = v | ((c & 127) << s); s = s + 7; }
+	return v;
+}
+static int cl_ms (char *p) {
+	int v, s, c;
+	c = p[cl_mat++] & 255;
+	v = c & 127; s = 7;
+	while (c & 128) { c = p[cl_mat++] & 255; v = v | ((c & 127) << s); s = s + 7; }
+	if ((c & 64) && s < sizeof(int) * 8) v = v | (-1 << s);
+	return v;
+}
+
+// The merged rows, and the row before the next: offset, file, line
+int cl_roff, cl_rfile, cl_rline, cl_nrows;
+static void cl_row (int *rows, int off, int file, int line) {
+	if (file == cl_rfile) sb_u(rows, (off - cl_roff) * 2);
+	else { sb_u(rows, (off - cl_roff) * 2 + 1); sb_u(rows, file); }
+	sb_s(rows, line - cl_rline);
+	cl_roff = off; cl_rfile = file; cl_rline = line;
+	++cl_nrows;
+}
+
+// A module's map, if it is one this reads: version 1
+static char *cl_map (int *c4r) {
+	char *p;
+	p = (char *)c4r[C4R_SRCMAP];
+	if (!p || c4r[C4R_SRCMAPLEN] < 3 || (p[0] & 255) != 1) return 0;
+	return p;
+}
+
+// The merged file table: per file its path (in a module's map), the
+// path's length, the size and the CRC's four bytes (or 0)
+enum { MF_PATH, MF_PLEN, MF_SIZE, MF_CRC, MF__Sz };
+
+// Merge the modules' maps into master[C4R_SRCMAP], as linking merges
+// their code: modules in command-line order, each at CL_OFFSET_CODE.
+// - Files are unioned by path; a module's file numbers go through FM.
+// - Function starts and row offsets move by the module's code offset.
+// - A module with no map has one row of line 0 at its start, so that the
+//   module before does not seem to cover its code; so does a module
+//   whose first row is past its start.
+// Nothing is made when no module has a map. Returns 0, or 1 when out of
+// memory (the image is then written without a map).
+static int link_srcmap (int *master, int *c4rs, int count) {
+	int *cl, *c4r, *hdr, *files, *fm, *funcs, *rows, *out;
+	int  k, i, j, n, nf, len, flags, crcs, maxfiles, nfiles, nfuncs, have;
+	int  base, codelen, start, fstart, pl, size, off, file, line, x, first;
+	char *p, *path, *crc, *q;
+
+	have = 0; maxfiles = 0;
+	cl = c4rs; k = 0;
+	while (k < count) {
+		c4r = (int *)cl[CL_STRUCT];
+		if ((p = cl_map(c4r))) {
+			have = 1;
+			cl_mat = 2;
+			maxfiles = maxfiles + cl_mu(p);
+		} else if (c4r[C4R_SRCMAP])
+			printf("c4rlink: warning: '%s' has a source map of a version this does not know; it is left out\n",
+			       (char *)cl[CL_FILE]);
+		cl = cl + CL__Sz; ++k;
+	}
+	if (!have) return 0;
+
+	cl_oom = 0;
+	files = malloc(sizeof(int) * MF__Sz * (maxfiles + 1));
+	fm = malloc(sizeof(int) * (maxfiles + 1));
+	funcs = sb_new();
+	rows = sb_new();
+	if (!files || !fm) cl_oom = 1;
+	nfiles = 0; nfuncs = 0; crcs = 1;
+	cl_roff = 0; cl_rfile = 0; cl_rline = 0; cl_nrows = 0;
+	fstart = 0;
+
+	cl = c4rs; k = 0;
+	while (k < count && !cl_oom) {
+		c4r = (int *)cl[CL_STRUCT];
+		hdr = (int *)cl[CL_HEADER];
+		base = cl[CL_OFFSET_CODE];
+		codelen = hdr[C4R_HDR_CODELEN];
+		p = cl_map(c4r);
+		len = c4r[C4R_SRCMAPLEN];
+		if (!p) {
+			if (codelen) cl_row(rows, base, cl_rfile, 0);
+		} else {
+			flags = p[1] & 255;
+			if (!(flags & 1)) crcs = 0;
+			cl_mat = 2;
+			// files: the first module to name a path gives its size and CRC
+			nf = cl_mu(p);
+			i = 0;
+			while (i < nf && cl_mat < len) {
+				pl = cl_mu(p); path = p + cl_mat; cl_mat = cl_mat + pl;
+				size = cl_mu(p);
+				crc = 0;
+				if (flags & 1) { crc = p + cl_mat; cl_mat = cl_mat + 4; }
+				j = 0;
+				while (j < nfiles && !(files[j * MF__Sz + MF_PLEN] == pl &&
+				                       !memcmp((char *)files[j * MF__Sz + MF_PATH], path, pl))) ++j;
+				if (j == nfiles) {
+					files[j * MF__Sz + MF_PATH] = (int)path;
+					files[j * MF__Sz + MF_PLEN] = pl;
+					files[j * MF__Sz + MF_SIZE] = size;
+					files[j * MF__Sz + MF_CRC]  = (int)crc;
+					++nfiles;
+				} else {
+					q = (char *)files[j * MF__Sz + MF_CRC];
+					if (files[j * MF__Sz + MF_SIZE] != size || (q && crc && memcmp(q, crc, 4)))
+						printf("c4rlink: warning: '%s' was compiled from another %.*s than the objects before it\n",
+						       (char *)cl[CL_FILE], pl, path);
+				}
+				fm[i] = j;
+				++i;
+			}
+			// functions
+			n = cl_mu(p);
+			i = 0; start = 0;
+			while (i < n && cl_mat < len) {
+				start = start + cl_mu(p);
+				sb_u(funcs, base + start - fstart);
+				fstart = base + start;
+				sb_u(funcs, cl_mu(p));                  // length in words
+				pl = cl_mu(p);
+				sb_u(funcs, pl);
+				sb_mem(funcs, p + cl_mat, pl);
+				cl_mat = cl_mat + pl;
+				file = cl_mu(p);
+				sb_u(funcs, file < nf ? fm[file] : 0);
+				sb_u(funcs, cl_mu(p));                  // line
+				++nfuncs; ++i;
+			}
+			// rows
+			n = cl_mu(p);
+			i = 0; off = 0; file = 0; line = 0; first = 1;
+			while (i < n && cl_mat < len) {
+				x = cl_mu(p);
+				off = off + (x >> 1);
+				if (x & 1) file = cl_mu(p);
+				line = line + cl_ms(p);
+				if (first && off > 0 && codelen) cl_row(rows, base, cl_rfile, 0);
+				first = 0;
+				if (off < codelen) cl_row(rows, base + off, file < nf ? fm[file] : 0, line);
+				++i;
+			}
+			if (first && codelen) cl_row(rows, base, cl_rfile, 0);
+			if (cl_mat > len)
+				printf("c4rlink: warning: '%s' has a damaged source map\n", (char *)cl[CL_FILE]);
+		}
+		cl = cl + CL__Sz; ++k;
+	}
+
+	out = sb_new();
+	sb_put(out, 1);                                     // version
+	sb_put(out, crcs);                                  // flags
+	sb_u(out, nfiles);
+	j = 0;
+	while (j < nfiles && files) {
+		sb_u(out, files[j * MF__Sz + MF_PLEN]);
+		sb_mem(out, (char *)files[j * MF__Sz + MF_PATH], files[j * MF__Sz + MF_PLEN]);
+		sb_u(out, files[j * MF__Sz + MF_SIZE]);
+		if (crcs) sb_mem(out, (char *)files[j * MF__Sz + MF_CRC], 4);
+		++j;
+	}
+	sb_u(out, nfuncs);
+	if (funcs) sb_mem(out, (char *)funcs[SB_BYTES], funcs[SB_LEN]);
+	sb_u(out, cl_nrows);
+	if (rows) sb_mem(out, (char *)rows[SB_BYTES], rows[SB_LEN]);
+	if (files) free(files);
+	if (fm) free(fm);
+	sb_free(funcs);
+	sb_free(rows);
+	if (cl_oom) { sb_free(out); return 1; }
+	master[C4R_SRCMAP] = out[SB_BYTES];
+	master[C4R_SRCMAPLEN] = out[SB_LEN];
+	free(out);
+	return 0;
+}
+
 // Serialize a c4r structure to a file. Layout must match c4r_load_opt_real
 // in load-c4r.c. Returns 0 on success.
 static int c4r_write (int *c4r, char *file) {
@@ -684,6 +939,18 @@ static int c4r_write (int *c4r, char *file) {
 		sym = sym + C4R_SYMB__Sz;
 		++i;
 	}
+	// The extension trailer (docs/c4-explorer.md 2.1): 'X', the SMAP
+	// chunk's tag, length and payload padded to a word, then a 0 tag.
+	// link_srcmap made the map, or there is none and nothing follows S.
+	if (c4r[C4R_SRCMAP]) {
+		writechecked(fd, "X\0\0\0\0\0\0\0", sizeof(int));
+		tmp = c4r__charword('S', 'M', 'A', 'P'); writechecked(fd, &tmp, sizeof(int));
+		n = c4r[C4R_SRCMAPLEN];                writechecked(fd, &n, sizeof(int));
+		writechecked(fd, (char *)c4r[C4R_SRCMAP], n);
+		n = (sizeof(int) - n % sizeof(int)) % sizeof(int);
+		if (n) writechecked(fd, "\0\0\0\0\0\0\0\0", n);
+		tmp = 0;                               writechecked(fd, &tmp, sizeof(int));
+	}
 
 	if (asmc4r_use_mem) {
 		// Clear the flag FIRST: it is a global shared with c4cc's writer
@@ -716,8 +983,11 @@ static int c4r_write (int *c4r, char *file) {
 static int *cl_load (char *name) {
 	int  *loaded;
 	char *vfsbuf;    // kernel RAM filesystem contents, when there are any
-	int   vfslen, vfsget;
+	int   vfslen, vfsget, opts;
 	loaded = 0;
+	// the source map too, except for c4rstrip, which drops it
+	opts = C4ROPT_SYMBOLS | C4ROPT_SRCMAP;
+	if (cl_striptool) opts = C4ROPT_SYMBOLS;
 #if !NATIVE
 	// Resolved by name, the way asm-c4r.c resolves OP_VFS_PUT,
 	// rather than through u0.h -- c4rlink's own build does not
@@ -732,7 +1002,7 @@ static int *cl_load (char *name) {
 	if (vfsget > 128)
 		vfsbuf = (char *)__c4_opcode(&vfslen, name, vfsget);
 	if (vfsbuf)
-		loaded = c4r_load_mem(name, vfsbuf, vfslen, C4ROPT_SYMBOLS);
+		loaded = c4r_load_mem(name, vfsbuf, vfslen, opts);
 	// And the same thing one rung down. Under C4DOS the objects
 	// a compiler just wrote are on the RAM disk, which a
 	// transient's own open() cannot see -- the identical
@@ -741,11 +1011,11 @@ static int *cl_load (char *name) {
 	if (!loaded && dos_readable()) {
 		if (!(vfsbuf = malloc(CL_DOSMAX))) return 0;
 		if ((vfslen = dos_slurp(name, vfsbuf, CL_DOSMAX)) > 0)
-			loaded = c4r_load_mem(name, vfsbuf, vfslen, C4ROPT_SYMBOLS);
+			loaded = c4r_load_mem(name, vfsbuf, vfslen, opts);
 		if (!loaded) free(vfsbuf);
 	}
 #endif
-	if (!loaded) loaded = c4r_load_opt(name, C4ROPT_SYMBOLS);
+	if (!loaded) loaded = c4r_load_opt(name, opts);
 	// A damaged or future image loads partway, and linking what is
 	// there would crash or write nonsense
 	if (loaded && !loaded[C4R_LOADCOMPLETE]) {
@@ -775,7 +1045,7 @@ int main (int argc, char **argv) {
 	outfile = "a.c4r";
 	c4r_alloc = 256; // should be enough for everyone
 	c4r_pos = 0;
-	cl_debug = cl_verbose = cl_libmode = cl_strip = 0;
+	cl_debug = cl_verbose = cl_libmode = cl_strip = cl_nomap = 0;
 	// The strip tool is this program under another name (argv[0] ends in
 	// "c4rstrip", with or without .c4r): one input, strip on.
 	cl_striptool = 0;
@@ -821,6 +1091,11 @@ int main (int argc, char **argv) {
 				else if (*arg == 'v') cl_verbose = 1;
 				else if (*arg == 'r') cl_libmode = 1;
 				else if (*arg == 's') cl_strip = 1;
+				else if (*arg == 'g') {
+					// -g0: no source map; -g, the default, keeps it
+					cl_nomap = 0;
+					if (arg[1] == '0') { cl_nomap = 1; ++arg; }
+				}
 				else if (*arg == 'l') {
 					endopt = 1;
 					--argc; ++argv;
@@ -981,6 +1256,10 @@ int main (int argc, char **argv) {
 			while (k < cl_nlibs) { if (cl_libs[k * CLL__Sz + CLL_USED]) { cl_strip = 0; k = cl_nlibs; } ++k; }
 			if (!cl_strip) printf("%s: warning: -s ignored: a program that uses a shared library keeps its symbols\n", spec);
 		}
+		// the objects' source maps, unless -s or -g0 dropped them (or
+		// c4rstrip, which is -s)
+		if (!cl_strip && !cl_nomap && link_srcmap(master, c4rs, c4r_pos))
+			printf("%s: warning: out of memory for the source map; the image has none\n", spec);
 		blank_patch_targets(master);
 		dstored = hdr[C4R_HDR_MEMSZ];
 		dbytes = (char *)master[C4R_DATA];

@@ -3,7 +3,8 @@
 ;;   c4sp c4opt-run.lisp [-mfuse] in.c4r [out.c4r]
 ;;
 ;; Decodes, runs the c4opt passes to a fixpoint, prints what happened,
-;; and (native only) writes the optimized image.
+;; and (native only) writes the optimized image. A source map (an SMAP
+;; chunk, docs/c4-explorer.md 2.3) comes out describing the new code.
 ;;
 ;; -mfuse additionally runs the fuse pass (docs/fused-opcodes.md), which
 ;; is how an image from ANY compiler -- c4cc's included -- gets the fused
@@ -19,7 +20,8 @@
 	(if (empty? argv) (error "usage: c4opt-run.lisp [-mfuse] in.c4r [out.c4r]"))
 	(define In (head argv))
 	(define Orig (file:read (file:path In)))
-	(define M (c4r:decode Orig))
+	;; its source map, if it has one, rides through the passes as items
+	(define M (c4r:smap-carry (c4r:decode Orig)))
 	(define M2 (c4opt:optimize M))
 	(define Out (c4r:encode M2))
 	(print ";; c4opt:" In "-" (length Orig) "->" (length Out) "bytes")

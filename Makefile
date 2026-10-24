@@ -3288,15 +3288,16 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/c4lc-ast.lisp src/tests/c4lc_lex_sample.c | cmp - src/c4sp/tests/expected/c4lc-ast.txt
 	# L1: every c4cc-compilable test source parses. genfloat.c and
 	# test_illins.c are excluded because c4cc itself rejects them (c4lc
-	# fails at the same constructs); c4lc_pp.c and srcmap_probe.c (test-srcmap's,
-	# which includes its header) are excluded because they are only
+	# fails at the same constructs); c4lc_pp.c, srcmap_probe.c and
+	# srcmap_link.c (test-srcmap's, which include a header) are excluded
+	# because they are only
 	# meaningful with -P, c4lc_pp.c being the L9 preprocessor test (this
 	# sweep deliberately runs without it); the vararg tests go through
 	# the preprocessor, exactly as c4cc receives them.
 	for f in src/tests/*.c; do \
 		case $$f in \
 		*/genfloat.c|*/test_illins.c) continue;; \
-		*/c4lc_pp.c|*/srcmap_probe.c) continue;; \
+		*/c4lc_pp.c|*/srcmap_probe.c|*/srcmap_link.c) continue;; \
 		*/oldtest_vararg*.c|*/oldvararg3.c|*/test_vprintf.c|*/vararg*.c) \
 			$(PREPROC) $$f > .c4lc_pp.c 2>/dev/null; \
 			./c4sp src/c4sp/lisp/c4lc-ast.lisp -check .c4lc_pp.c | grep -q "^parse ok" || exit 1;; \
@@ -3807,11 +3808,11 @@ test-c4rstrip: c4rstrip c4rstrip.c4r $(C4M) $(C4RDUMP) $(C4RLINK) hello.c4r fact
 # -l reads it back; c4r-roundtrip is exact on it; every loader with a
 # command line runs it as it runs the image without (C4IX's and C4DOS's
 # parse by offsets and never look past S); c4opt keeps the lower-case
-# chunk and drops the map; c4rstrip drops the trailer; a damaged image is
-# refused, not crashed on.
+# chunk, and carries the map through its passes (S2); c4rstrip drops the
+# trailer; a damaged image is refused, not crashed on.
 SRCMAP_LOADERS64 = "$(C4M) load-c4r.c --" "./c4 c4l.c" "./c4mp" "$(OISC4)"
 SRCMAP_LOADERS32 = "./c4m32 load-c4r.c --" "node libjs/cli.js" "node src/c4bb/sim/cli.js"
-test-srcmap: c4sp c4sp32 c4 c4m c4m32 c4mp $(OISC4) $(C4RDUMP) $(C4RLINK) c4rstrip hello.c4r hello32.c4r
+test-srcmap: c4sp c4sp32 c4 c4m c4m32 c4mp $(OISC4) $(C4RDUMP) $(C4RLINK) $(C4R_C4RLINK) c4rlink32 $(BIN_D)/b4ke.c4r $(C4KE_C4R) c4rstrip hello.c4r hello32.c4r
 	./c4sp src/c4sp/lisp/c4r-mapfixture.lisp hello.c4r .srcmap_f64.c4r > /dev/null
 	./c4sp32 src/c4sp/lisp/c4r-mapfixture.lisp hello32.c4r .srcmap_f32.c4r > /dev/null
 	$(C4RDUMP) -l .srcmap_f64.c4r | diff src/c4sp/tests/expected/srcmap-fixture.txt -
@@ -3830,7 +3831,7 @@ test-srcmap: c4sp c4sp32 c4 c4m c4m32 c4mp $(OISC4) $(C4RDUMP) $(C4RLINK) c4rstr
 	     || { echo "test-srcmap: $$l runs the mapped image differently"; diff .srcmap_a.txt .srcmap_b.txt; exit 1; }; \
 	 done
 	./c4sp src/c4sp/lisp/c4opt-run.lisp .srcmap_f64.c4r .srcmap_opt.c4r > /dev/null
-	$(C4RDUMP) -l .srcmap_opt.c4r | grep -q "No source map"
+	$(C4RDUMP) -l .srcmap_opt.c4r | grep -q "main, file 0 line 3"
 	grep -q "a chunk c4opt keeps" .srcmap_opt.c4r
 	./c4rstrip -o .srcmap_s1.c4r .srcmap_f64.c4r > /dev/null
 	./c4rstrip -o .srcmap_s2.c4r hello.c4r > /dev/null
@@ -3847,6 +3848,10 @@ test-srcmap: c4sp c4sp32 c4 c4m c4m32 c4mp $(OISC4) $(C4RDUMP) $(C4RLINK) c4rstr
 	$(C4RDUMP) -l .srcmap_probe.c4r | diff src/c4sp/tests/expected/srcmap-probe.txt -
 	$(C4M) load-c4r.c -- .srcmap_probe.c4r 2>&1 | grep -qx "66 28 27"
 	bash src/c4sp/tests/srcmap-invariant.sh
+	@# S2: c4rlink merges the objects' maps, rebased, and c4opt-run
+	@# carries a map through its passes (the script says how each is
+	@# checked).
+	bash src/c4sp/tests/srcmap-link.sh
 	@rm -f .srcmap_*
 	@echo "test-srcmap: OK"
 PHONY += test-srcmap

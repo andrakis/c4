@@ -213,15 +213,18 @@
 ;; NAME LOC) a function. A location is file * 2^20 + line, the file
 ;; numbered as in c4r:srcfiles. Rows: where two start at one place the
 ;; later wins, a row that says what the one before said goes, and so
-;; does one at the end of the code. Files: only those something points
-;; at, renumbered in order.
+;; does one at the end of the code. A function runs to the next one, or
+;; to a (func false 0) before it: the end of one that c4r:smap-carry read
+;; out of a map, where code with no function follows it (a linked object
+;; that had no map). Files: only those something points at, renumbered
+;; in order.
 (define c4r:LOCF 1048576)
 (define c4r:smap (lambda (Code Codelen)
 	(begin
 		(define Got (c4r:smap-collect Code 0 (list) (list)))
 		(define Rows (c4r:smap-dedup (c4r:smap-later (head Got) (list)) -1 (list)))
 		(define Rows2 (c4r:smap-before Rows Codelen (list)))
-		(define Funcs (second Got))
+		(define Funcs (c4r:smap-named (second Got)))
 		(define NF (length c4r:srcfiles))
 		;; file number -> new number + 1, 0 = unused
 		(define Map (string:alloc (* W (+ NF 1))))
@@ -233,7 +236,7 @@
 		(set! B (c4r:uleb Used B))
 		(set! B (c4r:smap-files c4r:srcfiles Map 0 B))
 		(set! B (c4r:uleb (length Funcs) B))
-		(set! B (c4r:smap-funcs Funcs Map Codelen 0 B))
+		(set! B (c4r:smap-funcs (second Got) Map Codelen 0 B))
 		(set! B (c4r:uleb (length Rows2) B))
 		(set! B (c4r:smap-rows Rows2 Map 0 0 0 B))
 		(c4r:bytes (reverse B)))))
@@ -294,8 +297,13 @@
 				(set! B (c4r:uleb (second (head Fs)) B))
 				(set! B (c4r:push-word32 (third (head Fs)) B))))
 		(next c4r:smap-files (tail Fs) Map (+ F 1) B)))))
+(define c4r:smap-named (lambda (Fs)
+	(if (empty? Fs) (list)
+	(if (= false (second (head Fs))) (c4r:smap-named (tail Fs))
+	(cons (head Fs) (c4r:smap-named (tail Fs)))))))
 (define c4r:smap-funcs (lambda (Fs Map End Prev B)
 	(if (empty? Fs) B
+	(if (= false (second (head Fs))) (next c4r:smap-funcs (tail Fs) Map End Prev B)
 	(begin
 		(define F (head Fs))
 		(define Start (head F))
@@ -307,7 +315,7 @@
 		(set! B (c4r:push-string Name 0 B))
 		(set! B (c4r:uleb (c4r:smap-new Map (third F)) B))
 		(set! B (c4r:uleb (c4r:smap-line (third F)) B))
-		(next c4r:smap-funcs (tail Fs) Map End Start B)))))
+		(next c4r:smap-funcs (tail Fs) Map End Start B))))))
 (define c4r:smap-rows (lambda (Rs Map PrevOff PrevFile PrevLine B)
 	(if (empty? Rs) B
 	(begin
@@ -341,6 +349,125 @@
 (define c4r:poke (lambda (L S I)
 	(if (empty? L) S
 	(begin (string:byte! S I (head L)) (next c4r:poke (tail L) S (+ I 1))))))
+
+;; ---- SMAP back into items, for a tool that changes an image's code ----
+;;
+;; c4opt-run optimises a finished image, whose map would otherwise be
+;; dropped with the code it describes. c4r:smap-carry puts the map back
+;; into the decoded code as the items c4lc's generator makes, (func NAME
+;; LOC) and (line LOC), ahead of whatever is at their offset, labels
+;; included, as the generator puts a function's. Its files go in
+;; c4r:srcfiles. The passes then step over the items as they do over
+;; c4lc's, and c4r:encode writes the map of the code as it comes out. A
+;; map is used only if it is version 1 with CRCs, as every compiler here
+;; writes; M comes back as it was without one.
+(define c4r:smap-carry (lambda (M)
+	(begin
+		(define P (c4r:chunk (if (> (length M) 9) (index M 9) (list)) "SMAP"))
+		(define D (if (= P false) false (c4r:smap-decode P)))
+		(if (= D false) M
+		(begin
+			(set! c4r:srcfiles (head D))
+			(+ (list (head M) (second M) (third M)
+				(c4r:smap-items (index M 3) 0 (second D) (third D) (list)))
+				(tail (tail (tail (tail M))))))))))
+(define c4r:chunk (lambda (Chunks Tag)
+	(if (empty? Chunks) false
+	(if (= (head (head Chunks)) Tag) (second (head Chunks))
+	(next c4r:chunk (tail Chunks) Tag)))))
+
+;; (FILES FUNCS ROWS): ((PATH SIZE CRC) ...), ((POS NAME LOC) ...) and
+;; ((POS LOC) ...), as c4r:smap reads them out of the items; or false.
+;; Where a function ends before the next starts, (END false 0) follows it.
+(define c4r:mat 0)
+(define c4r:smap-decode (lambda (S)
+	(if (< (length S) 3) false
+	(if (not (= 1 (string:byte S 0))) false
+	(if (= 0 (bit:and 1 (string:byte S 1))) false
+	(begin
+		(set! c4r:mat 2)
+		(define Files (c4r:smd-files S (c4r:mu S) (list)))
+		(define Funcs (c4r:smd-ends (c4r:smd-funcs S (c4r:mu S) 0 (list)) (list)))
+		(define Rows (c4r:smd-rows S (c4r:mu S) 0 0 0 (list)))
+		(list Files Funcs Rows)))))))
+(define c4r:smd-files (lambda (S N Acc)
+	(if (if (= N 0) true (>= c4r:mat (length S))) (reverse Acc)
+	(begin
+		(define L (c4r:mu S))
+		(define P (string:substr S c4r:mat L))
+		(set! c4r:mat (+ c4r:mat L))
+		(define Size (c4r:mu S))
+		(define Crc (c4r:word32 S c4r:mat))
+		(set! c4r:mat (+ c4r:mat 4))
+		(next c4r:smd-files S (- N 1) (cons (list P Size Crc) Acc))))))
+(define c4r:smd-funcs (lambda (S N Start Acc)
+	(if (if (= N 0) true (>= c4r:mat (length S))) (reverse Acc)
+	(begin
+		(define Pos (+ Start (c4r:mu S)))
+		(define Words (c4r:mu S))
+		(define L (c4r:mu S))
+		(define Name (string:substr S c4r:mat L))
+		(set! c4r:mat (+ c4r:mat L))
+		(define F (c4r:mu S))
+		(define Line (c4r:mu S))
+		(next c4r:smd-funcs S (- N 1) Pos (cons (list Pos Name (+ (* F c4r:LOCF) Line) (+ Pos Words)) Acc))))))
+;; (POS NAME LOC END) -> (POS NAME LOC), and (END false 0) where END is
+;; short of the next start (always after the last: an end at the end of
+;; the code is dropped with the items there)
+(define c4r:smd-ends (lambda (Fs Acc)
+	(if (empty? Fs) (reverse Acc)
+	(begin
+		(define F (head Fs))
+		(define Item (list (head F) (second F) (third F)))
+		(if (if (empty? (tail Fs)) false (>= (index F 3) (head (head (tail Fs)))))
+			(next c4r:smd-ends (tail Fs) (cons Item Acc))
+			(next c4r:smd-ends (tail Fs) (cons (list (index F 3) false 0) (cons Item Acc))))))))
+(define c4r:smd-rows (lambda (S N Off F Line Acc)
+	(if (if (= N 0) true (>= c4r:mat (length S))) (reverse Acc)
+	(begin
+		(define X (c4r:mu S))
+		(define Off2 (+ Off (bit:shr X 1)))
+		(define F2 (if (= 1 (bit:and X 1)) (c4r:mu S) F))
+		(define Line2 (+ Line (c4r:ms S)))
+		(next c4r:smd-rows S (- N 1) Off2 F2 Line2
+			(cons (list Off2 (+ (* F2 c4r:LOCF) Line2)) Acc))))))
+;; LEB128 at c4r:mat, which moves past it
+(define c4r:mu (lambda (S) (next c4r:mu/3 S 0 1)))
+(define c4r:mu/3 (lambda (S V M)
+	(begin
+		(define C (string:byte S c4r:mat))
+		(set! c4r:mat (+ c4r:mat 1))
+		(define V2 (+ V (* (bit:and C 127) M)))
+		(if (= 0 (bit:and C 128)) V2 (next c4r:mu/3 S V2 (* M 128))))))
+(define c4r:ms (lambda (S) (next c4r:ms/3 S 0 1)))
+(define c4r:ms/3 (lambda (S V M)
+	(begin
+		(define C (string:byte S c4r:mat))
+		(set! c4r:mat (+ c4r:mat 1))
+		(define V2 (+ V (* (bit:and C 127) M)))
+		(if (= 0 (bit:and C 128))
+			(if (= 0 (bit:and C 64)) V2 (- V2 (* M 128)))
+			(next c4r:ms/3 S V2 (* M 128))))))
+(define c4r:word32 (lambda (S At)
+	(bit:or (string:byte S At)
+		(bit:or (bit:shl (string:byte S (+ At 1)) 8)
+			(bit:or (bit:shl (string:byte S (+ At 2)) 16) (bit:shl (string:byte S (+ At 3)) 24))))))
+
+;; Code with the items at their offsets. A row that a damaged map put
+;; inside an instruction goes before the next one; anything at the end of
+;; the code or past it is dropped, as encode would drop it.
+(define c4r:smap-items (lambda (Code Pos Funcs Rows Acc)
+	(if (empty? Code) (reverse Acc)
+	(if (if (empty? Rows) false (< (head (head Rows)) Pos))
+		(next c4r:smap-items Code Pos Funcs (tail Rows) (cons (list 'line (second (head Rows))) Acc))
+	(if (if (empty? Funcs) false (<= (head (head Funcs)) Pos))
+		(next c4r:smap-items Code Pos (tail Funcs) Rows
+			(cons (list 'func (second (head Funcs)) (third (head Funcs))) Acc))
+	(if (if (empty? Rows) false (= (head (head Rows)) Pos))
+		(next c4r:smap-items Code Pos Funcs (tail Rows) (cons (list 'line (second (head Rows))) Acc))
+	(next c4r:smap-items (tail Code)
+		(if (= 'label (head (head Code))) Pos (+ Pos (c4r:size (head Code))))
+		Funcs Rows (cons (head Code) Acc))))))))
 
 (define c4r:trailer-size (lambda (Chunks N)
 	(if (empty? Chunks) N

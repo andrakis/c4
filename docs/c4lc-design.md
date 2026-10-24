@@ -1243,7 +1243,7 @@ c4lc only.
   definitions), the same at 32 and 64 bits. It runs in test-c4lc at both
   sizes, plain, `-O` and `-minline`, and in `C4SC_BACK_DIFF`.
 
-## 15. Source maps: `-g` (track S, S0-S1, 2026-10-24)
+## 15. Source maps: `-g` (track S, S0-S2, 2026-10-24)
 
 docs/c4-explorer.md §2 is the design. This section records what c4lc does.
 
@@ -1256,8 +1256,8 @@ the trailer. `load-c4r.c` reads the map with `C4ROPT_SRCMAP`, `c4rdump
 -l` prints it, and `libjs/c4r.js` reads it for the explorer. `c4r.lisp`
 decodes and encodes chunks. c4opt keeps a chunk with a lower-case fourth
 letter and drops an upper-case one, such as `SMAP`, because code it
-rewrites no longer matches the map. c4rlink and c4rstrip write no
-trailer, so they drop the map until S2 teaches c4rlink to merge maps.
+rewrites no longer matches the map. c4opt-run carries the map instead
+(S2, below). c4rstrip writes no trailer.
 
 **The invariant.** `-g` changes no byte of an image: the `-g` file is the
 `-g0` file with the trailer after it. `src/c4sp/tests/srcmap-invariant.sh`
@@ -1315,12 +1315,42 @@ wolf3d is not fetched), compiled `-O -mfuse` by c4sp32:
 | object | 386,784 bytes | 398,948 bytes (+3.1%) |
 | map | | 12,147 bytes: 1 file, 172 functions, 4,307 rows, 2.82 bytes a row |
 
+**Linking (S2).** c4rlink reads each object's map (`C4ROPT_SRCMAP`) and
+writes one for the image, after S (`link_srcmap`, `c4r_write`). Linking
+concatenates code in command-line order and drops nothing, so the merged
+map is the objects' maps, rebased:
+- the file tables are unioned by path. The first object to name a path
+  gives its size and CRC, and an object that names it with others gets a
+  warning;
+- function starts and row offsets move by the object's code offset;
+- the rows follow in object order. An object without a map gets one row
+  of line 0 at its start, so that the row before does not claim its code.
+  So does an object whose first row is past its start.
+
+`-s` drops the map with the symbols. `-g0` drops only the map, for a
+dynamic image, which keeps its symbols. When no object has a map, the
+image is the bytes it was before maps. c4rstrip drops the map.
+
+C4IX's loader keeps a `-fpic` library's file for every later task, and
+now keeps it only up to the end of S (`mod_trim`). The libc built `-g`
+is 588,514 bytes, and its cached copy 577,330, which is the size of the
+libc built `-g0`.
+
+**c4opt-run (S2).** `c4r:smap-carry` puts a decoded image's map back
+into its code as the generator's items, ahead of what is at each offset,
+and its files into `c4r:srcfiles`. The passes step over the items as
+they do over c4lc's, and the encode makes the map of the new code. A
+function that ends before the next one starts gets a `(func false 0)`
+item at its end. `c4r:smap` ends the function before it there, so the
+code of an object linked without a map is not counted in the function
+before it.
+
 **Tests**, in `make test-srcmap`:
 - S0's fixture, a map made by hand (`c4r-mapfixture.lisp`):
   - c4rdump `-l` reads it back, and c4r-roundtrip is exact on it;
   - it runs the same in c4m, c4l, c4mp, oisc4, c4m32, libjs and the c4bb
     simulator;
-  - c4opt keeps the lower-case chunk and drops the map;
+  - c4opt keeps the lower-case chunk and carries the map;
   - c4rstrip drops the trailer;
   - a damaged image is refused, not crashed on.
 - S1's probe, `src/tests/srcmap_probe.c` with its header, compiled `-g -O
@@ -1330,10 +1360,24 @@ wolf3d is not fetched), compiled `-O -mfuse` by c4sp32:
     inlined call at the call;
   - it prints `__LINE__` counted past a backslash-newline;
   - then the invariant.
+- S2's `src/c4sp/tests/srcmap-link.sh`:
+  - srcmap_probe.c and srcmap_link.c are compiled `-g -c`, with
+    test_link_b.c compiled `-g0` between them, and linked. The map must
+    be the one the script works out from each object's `c4rdump -l`. It
+    must have srcmap_probe.h, which both include, once, and a line-0 row
+    where test_link_b starts;
+  - c4cc's build of c4rlink, run by B4KE under C4KE, writes an image of
+    the same size, and the image runs;
+  - a 32-bit link writes the same map bytes;
+  - `-s` and `-g0` write no map, and `-g0` is the image linked from
+    `-g0` objects;
+  - c4opt-run on images compiled `-g`, and on the linked image, writes
+    the code it writes for the same image without a map. Every row of its
+    map is at an instruction and names a line the image's map had. The
+    functions keep their names, and the line-0 row of the object without
+    a map stays outside every function.
 
 **Still to come**:
-- S2: c4rlink merges the maps of the objects it links, so a linked
-  program such as ROTT keeps its rows;
 - S3: c4sc and `cc -g`;
 - S4 and S5: c4fc and c4cc;
 - S6: maps on by default.

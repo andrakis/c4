@@ -61,6 +61,7 @@ struct c4r_mod {
     int codelen;                  // code words
     int shared;                   // its code is the cache's: neither relink nor free it
     int *slot;                    // pic: the word that holds the task's data base
+    int buflen;                   // bytes in buf: the file as read
 };
 
 // -fpic libraries, loaded once: the first task's mod, kept, by path
@@ -260,6 +261,7 @@ static int mod_read(char *path, struct c4r_mod *m) {
     m->nsym = symlen;
 
     m->buf = buf;
+    m->buflen = total;
     m->code = code;
     m->data = data;
     m->entry = entry;
@@ -506,6 +508,31 @@ static int mod_is_data(struct c4r_mod *m, int addr) {
     return addr >= (int)m->data && addr < (int)m->data + m->memsz + 8;
 }
 
+// A cached library keeps its file for as long as the machine runs, and
+// reads it only up to the end of S. What can follow is the extension
+// trailer (docs/c4-explorer.md 2.1), a source map that no loader reads
+// and that can be as large as the rest: the part before it is copied
+// out, and the whole file freed.
+static void mod_trim(struct c4r_mod *m) {
+    char *p, *nb, *ob;
+    int i, keep;
+    p = m->syms;
+    i = 0;
+    while (i < m->nsym) { p = sym_next(p); ++i; }
+    ob = m->buf;
+    keep = p - ob;
+    if (keep >= m->buflen || !(nb = (char *)malloc(keep + 16))) return;
+    memcpy(nb, ob, keep);
+    m->dtmpl = nb + (m->dtmpl - ob);
+    m->patches = nb + (m->patches - ob);
+    m->cons = (int *)(nb + ((char *)m->cons - ob));
+    m->des = (int *)(nb + ((char *)m->des - ob));
+    m->syms = nb + (m->syms - ob);
+    m->buf = nb;
+    m->buflen = keep;
+    free(ob);
+}
+
 // Load and relocate, with any libraries. Returns 1 and fills img on success.
 int c4r_load(char *path, struct c4r_image *img) {
     struct c4r_mod *mods;
@@ -560,6 +587,7 @@ int c4r_load(char *path, struct c4r_image *img) {
             sh->mod = (struct c4r_mod *)malloc(sizeof(struct c4r_mod));
             memcpy((char *)sh->mod, (char *)(mods + k), sizeof(struct c4r_mod));
             sh->mod->data = 0;
+            mod_trim(sh->mod);
             i = 0;
             while ((mods + k)->path[i] && i < 95) { sh->path[i] = (mods + k)->path[i]; ++i; }
             sh->path[i] = 0;

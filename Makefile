@@ -2387,7 +2387,7 @@ GAME_OBJS  :=
 GAME_TESTS :=
 include $(wildcard games/*/c4.mk)
 GAMES_ALL  := wolf3d doom tyrian rott
-c4bb-images: libc-bare-objs $(GAME_OBJS)
+c4bb-images: libc-bare-objs grin-objs $(GAME_OBJS)
 $(filter-out $(GAME_TESTS),$(GAMES_ALL:%=test-%)):
 	@echo "$@: skipped, games/$(@:test-%=%) is not here (games/README.md)"
 PHONY += $(GAMES_ALL:%=test-%)
@@ -2407,6 +2407,29 @@ libc-bare-objs: $(LIBC_BARE:%=.libc-bare/libc-%.c4o) .libc-bare/libc-opcodes.c4o
 	@mkdir -p .libc-bare
 	$(LIBC_BARECC) -fno-builtin $< $@ > /dev/null
 PHONY += libc-bare-objs
+
+# grin (src/grin, docs/grin-plan.md): C4DOS's graphical shell, a C4DOS
+# program built by c4lc at 32 bits and linked whole with the bare libc
+# above, as the games are, and the window kit (src/winkit) that the C4IX
+# desktop shares. The kit's modules are compiled without -fno-builtin, as
+# the desktop's are; grin's own with it, so that its files go through
+# libc and bare.c to C4DOS. build-images.sh links it onto the page's
+# C4DOS disk, libjs/images/dos, which boots into it. test-grin drives it.
+GRIN       := grin progman tasklist control
+GRIN_KIT   := draw ui wmcore dialog look95 look31 savers
+GRIN_HDRS  := $(wildcard src/grin/*.h src/winkit/*.h) libjs/guest/gui.h libjs/guest/gui.c
+GRIN_CC    := ./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O $(IMG_G) -c -I src/winkit -I .
+grin-objs: $(GRIN:%=.grin/%.c4o) $(GRIN_KIT:%=.grin/wk-%.c4o)
+.grin/wk-%.c4o: src/winkit/%.c $(GRIN_HDRS) $(C4LC_LISP) .img_g | c4sp32
+	@mkdir -p .grin
+	$(GRIN_CC) $< $@ > /dev/null
+.grin/%.c4o: src/grin/%.c $(GRIN_HDRS) $(wildcard src/c4ix/libc/include/*.h) $(C4LC_LISP) .img_g | c4sp32
+	@mkdir -p .grin
+	$(GRIN_CC) -fno-builtin -I src/c4ix/libc/include $< $@ > /dev/null
+PHONY += grin-objs
+test-grin: c4bb-images
+	node libjs/tests/test-grin.mjs
+PHONY += test-grin
 
 # test-libc-bare: libc's scanf, fseek and fread (src/c4ix/libc/tests/
 # scantest.c) on the bare machine, against gcc's build of the same.

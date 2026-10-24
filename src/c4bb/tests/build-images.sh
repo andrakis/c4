@@ -502,7 +502,10 @@ if [ -n "$GAMES" ] && ls .libc-bare/*.c4o > /dev/null 2>&1; then
 fi
 if [ -n "$GAMES_ON_DISK" ]; then
     say "the games disk: their data, C4DOS's files, the indexes"
-    cp $DISK/config.sys $GAMESDISK/config.sys
+    # (C4DOS's own CONFIG.SYS, made as the C4DOS step below makes the
+    # shared disk's, which in a fresh tree is not there yet)
+    sed 's/SIZE=[0-9]*/SIZE=16777216/' src/c4dos/fs/CONFIG.SYS > $GAMESDISK/config.sys
+    printf 'DEVICE=CONSOLE.SYS FLUSH\nDEVICE=DRIVES.SYS\n' >> $GAMESDISK/config.sys
     # The page runs C4DOS on libjs, whose heap keeps generations, so on
     # this disk a game's memory goes back when it quits (DEVICE=HEAP.SYS,
     # docs/c4dos-design.md "Memory"). Without the line Doom left 14 MB
@@ -666,6 +669,46 @@ fi
 # Generated here, after every other copy.
 if [ -f $DISK/config.sys ]; then
     (cd $DISK && ls -p | grep -v '/$' | grep -v '^manifest.json$' > c4dos.dir)
+fi
+
+# ---- the page's C4DOS disk: libjs/images/dos -------------------------------
+# What ?system=c4dos boots (docs/grin-plan.md 3.9): C4DOS, starting grin,
+# its graphical shell, from AUTOEXEC.BAT (File > Exit grin comes back to
+# A>, where GRIN starts it again), and the games with their data, linked
+# from the games disk where the filesystem allows. CONFIG.SYS is its own:
+# HEAP.SYS, because libjs's heap keeps generations and a game's memory
+# goes back when it quits. DRIVES.SYS HOME=B: (G4) and REDIR.SYS TAP (G5)
+# join it in later milestones. grin is linked whole with the bare libc,
+# as the games are, from the objects make grin-objs compiled.
+LJDOS=libjs/images/dos
+rm -rf $LJDOS
+if ls .grin/*.c4o > /dev/null 2>&1 && ls .libc-bare/*.c4o > /dev/null 2>&1 && [ -f $OUT/c4dos32.c4r ]; then
+    say "the page's C4DOS disk, booting into grin: $LJDOS"
+    mkdir -p $LJDOS
+    ./c4rlink32 .grin/*.c4o .libc-bare/libc-*.c4o -o $LJDOS/grin.c4r > /dev/null
+    cp $OUT/c4dos32.c4r $LJDOS/
+    if [ -d $GAMESDISK ]; then
+        (cd $GAMESDISK && find . -type f ! -name config.sys ! -name autoexec.bat ! -name c4dos.dir \
+            ! -name manifest.json ! -name index.json | sed 's|^\./||') | while read f; do
+            mkdir -p "$LJDOS/$(dirname "$f")"
+            ln "$GAMESDISK/$f" "$LJDOS/$f" 2> /dev/null || cp "$GAMESDISK/$f" "$LJDOS/$f"
+        done
+    fi
+    sed 's/SIZE=[0-9]*/SIZE=16777216/' src/c4dos/fs/CONFIG.SYS > $LJDOS/config.sys
+    printf 'DEVICE=CONSOLE.SYS FLUSH\nDEVICE=DRIVES.SYS\nDEVICE=HEAP.SYS\n' >> $LJDOS/config.sys
+    list=$(echo $GAMES_ON_DISK | sed 's/ /, /g')
+    {
+        printf '@ECHO OFF\nECHO Welcome to C4DOS\nVER\n'
+        if [ -n "$list" ]; then printf 'ECHO The games on this disk: %s.\n' "$list"; fi
+        # (C4DOS splits a line into at most 15 words, so ECHO says 14)
+        printf 'ECHO Starting grin: its File menu has Exit grin, back to A>.\nGRIN\n'
+    } > $LJDOS/autoexec.bat
+    (cd $LJDOS && ls -p | grep -v '/$' | grep -v '^manifest.json$' > c4dos.dir)
+    (cd $LJDOS && find . -type f -not -name manifest.json | sed 's|^\./||') | \
+        awk 'BEGIN{printf "["} NR>1{printf ","} {printf "\"%s\"", $0} END{print "]"}' > $LJDOS/manifest.json
+    (cd $LJDOS && find . -type f -not -name manifest.json -not -name index.json -printf '%s %P\n' | sort -k2) | \
+        awk 'BEGIN{printf "["} NR>1{printf ","} {n=$0; sub(/^[0-9]+ /,"",n); printf "[\"%s\",%s]", n, $1} END{print "]"}' \
+        > $LJDOS/index.json
 fi
 
 # c4sc, the compiled c4lc, so C4IX can rebuild itself: /usr's

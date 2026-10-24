@@ -28,13 +28,15 @@
 import { C4M } from '../page.js';
 
 const IMAGES = '../../src/c4bb/images';
+const LJIMAGES = '../images';          // the page's own disks (build-images.sh)
 const SYSTEMS = {
   c4ix: { label: 'C4IX', image: `${IMAGES}/c4ix32.c4r`, disk: `${IMAGES}/disk`, argv: ['c4ix32.c4r', '--desktop'], persist: 'c4ix' },
   c4ke: { label: 'C4KE', image: `${IMAGES}/c4ke32.c4r`, disk: `${IMAGES}/disk`, argv: ['c4ke32.c4r'] },
-  // C4DOS on the games' disk (build-images.sh): Wolfenstein 3D unpacked
-  // Doom, Tyrian and Rise of the Triad, beside C4DOS's own files, so WOLF3D, DOOM, TYRIAN or ROTT at the A> prompt
-  // plays them.
-  c4dos: { label: 'C4DOS', image: `${IMAGES}/c4dos32.c4r`, disk: `${IMAGES}/games`, argv: ['c4dos32.c4r'], mhz: 400 },
+  // C4DOS on the page's own disk (build-images.sh, libjs/images/dos):
+  // its AUTOEXEC.BAT starts grin, the graphical shell (docs/grin-plan.md),
+  // whose File > Exit grin comes back to A>. The games are on it too, so
+  // WOLF3D, DOOM, TYRIAN or ROTT at the prompt plays them.
+  c4dos: { label: 'C4DOS', image: `${LJIMAGES}/dos/c4dos32.c4r`, disk: `${LJIMAGES}/dos`, argv: ['c4dos32.c4r'], mhz: 400 },
   // Wolfenstein 3D with no operating system under it (games/wolf3d/plat-bare.c),
   // and on C4IX drawing on the display itself rather than in a window
   // (wolf3d --direct, like raycast -G). The game times itself against the

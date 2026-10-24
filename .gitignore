@@ -105,3 +105,6 @@ c4or1k-native
 # machine-specific proxy domain for the browser gates (src/c4bb/tools/proxy-domain.mjs)
 .proxy-domain
 .c4dos_heap_t/
+# grin's objects (make grin-objs), and the page's own disks (build-images.sh)
+.grin/
+libjs/images/

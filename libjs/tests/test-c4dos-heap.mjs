@@ -3,8 +3,8 @@
 // keys each time, as a person would (docs/grin-plan.md G0).
 //
 // Boots c4dos32.c4r on the games disk (src/c4bb/images/games) as the web
-// page does, with a display fitted, and a CONFIG.SYS of its own that
-// adds DEVICE=HEAP.SYS. Each round types DOOM, waits for frames, presses
+// page does, with a display fitted, and its CONFIG.SYS, which has
+// DEVICE=HEAP.SYS (build-images.sh puts it there). Each round types DOOM, waits for frames, presses
 // F10 and then Y, and waits for the prompt. HEAP_USED is read at the
 // prompt after every round: from the second round on it must stay
 // within 1% of the first's.
@@ -58,7 +58,10 @@ class LazyDisk extends Map {
 }
 const files = new LazyDisk(index);
 const FS = new URL('../../src/c4dos/fs/', import.meta.url).pathname;
-const config = readFileSync(haveGames ? join(disk, 'config.sys') : join(FS, 'CONFIG.SYS'), 'latin1').replace(/\r?\n?$/, '\n') +
+// (the games disk has the line already; it is taken out and put back so
+// that --noheap can leave it out)
+const config = readFileSync(haveGames ? join(disk, 'config.sys') : join(FS, 'CONFIG.SYS'), 'latin1')
+  .replace(/^DEVICE=HEAP\.SYS.*$\n?/gim, '').replace(/\r?\n?$/, '\n') +
   (haveGames ? '' : 'DEVICE=CONSOLE.SYS FLUSH\n') + (noheap ? '' : 'DEVICE=HEAP.SYS\n');
 files.set('config.sys', new TextEncoder().encode(config));
 if (!haveGames) files.set('autoexec.bat', new TextEncoder().encode('@ECHO OFF\nECHO no games disk\n'));
@@ -121,6 +124,14 @@ if (files.has('dosexec.c4r') && !noheap) {
   check(o.includes('left 4096 KB behind') && memUsed() === used1, 'a child that leaves 4 MB behind gives it all back', o);
   o = cmd('TYPE kid.txt');
   check(o.includes('made by a child'), 'kid.txt survives its child, and the next one', o);
+  // slots 26 and 27: a megabyte allocated in a loaded image's generation
+  // goes with the image, while the program that loaded it runs on
+  o = cmd('dosexec gen');
+  const inUse = [...o.matchAll(/(\d+) in use/g)].map(m => +m[1]);
+  check(o.includes("setgen gave back mine, and the image's came back") && o.includes('newer than mine') &&
+        inUse.length === 2 && inUse[0] - inUse[1] >= 1048576,
+    'gen and setgen put memory in a loaded image\'s generation', o);
+  check(memUsed() === used1, 'and all of it is back at the prompt');
 }
 
 const used = [];

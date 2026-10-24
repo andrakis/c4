@@ -70,7 +70,7 @@ cp src/tests/hello.c4r $T/fs/hello.c4r
 ./c4cc -o $T/fs/dosres.c4r include/c4dos.h src/tests/dosres.c > /dev/null
 
 # The v4 session, and what it must say. Every leg runs the same one.
-V4_SCRIPT='dosexec deep 3\nECHO prompt answers\ndosexec resident\ndosexec catch\ndosexec file\nTYPE kid.txt\ndosexec unlink\ndosexec read\na line for the program\nECHO after read\ndosexec sink\nEXIT\n'
+V4_SCRIPT='dosexec deep 3\nECHO prompt answers\ndosexec resident\ndosexec catch\ndosexec file\nTYPE kid.txt\ndosexec unlink\ndosexec read\na line for the program\nECHO after read\ndosexec sink\ndosexec gen\nEXIT\n'
 check_v4 () { # leg, output
   for want in \
       'dosexec: level 0 exits with 3 from three calls down' \
@@ -97,7 +97,8 @@ check_v4 () { # leg, output
       'dosexec: conwrite works' \
       'after read' \
       "dosexec: the sink got 'into the sink', ctx 77" \
-      'dosexec: and the console is back'; do
+      'dosexec: and the console is back' \
+      'dosexec: no generations (setgen -1)'; do
     echo "$2" | grep -qF "$want" || { echo "FAIL $1 v4: no '$want'"; echo "$2" | tail -30; exit 1; }
   done
   # the file a child wrote is there for TYPE at the prompt too

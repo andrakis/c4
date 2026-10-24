@@ -7,7 +7,7 @@
 // with c4cc and with c4lc:
 //   ./c4cc -o dosexec.c4r include/c4dos.h src/tests/dosexec.c
 // Usage:  RUN dosexec.c4r deep N | resident | catch | file | unlink |
-//                         read | sink | leak KB
+//                         read | sink | leak KB | gen
 
 int streq (char *a, char *b) {
   while (*a && *a == *b) { ++a; ++b; }
@@ -162,6 +162,34 @@ int leak (int kb) {
   return 0;
 }
 
+// "dosexec gen": slots 26 and 27. With HEAP.SYS a loaded image has a
+// generation of its own, newer than ours, and a megabyte allocated in
+// it goes when it is unloaded; without, gen is 0 and setgen -1.
+int gens () {
+  int mine, h, hg, old;
+  char *p;
+  mine = dos_gen(0);
+  if (!mine) {
+    printf("dosexec: no generations (setgen %d)\n", dos_setgen(5));
+    return 0;
+  }
+  if (!(h = dos_load("dosres.c4r"))) { printf("dosexec: gen: load failed\n"); return 1; }
+  hg = dos_gen(h);
+  old = dos_setgen(hg);
+  p = malloc(1048576);
+  p[0] = 1;
+  printf("dosexec: setgen gave back %s, and %s\n", old == mine ? "mine" : "another",
+         dos_setgen(old) == hg ? "the image's came back" : "something else came back");
+  printf("dosexec: the image's generation is %s\n", hg > mine ? "newer than mine" : "not newer");
+  // the megabyte is the image's, so it goes with the image, not with us
+  printf("dosexec: before the unload\n");
+  dos_exec("MEM");
+  dos_unload(h);
+  printf("dosexec: after the unload\n");
+  dos_exec("MEM");
+  return 0;
+}
+
 int num (char *s) {
   int n;
   n = 0;
@@ -174,7 +202,7 @@ int main (int argc, char **argv) {
     printf("dosexec: needs C4DOS API v4 (have %d)\n", dos_version());
     return 1;
   }
-  if (argc < 2) { printf("usage: dosexec deep N|resident|catch|file|unlink|read|sink|leak KB\n"); return 1; }
+  if (argc < 2) { printf("usage: dosexec deep N|resident|catch|file|unlink|read|sink|leak KB|gen\n"); return 1; }
   if (streq(argv[1], "deep")) return deep(argc > 2 ? num(argv[2]) : 3);
   if (streq(argv[1], "resident")) return resident();
   if (streq(argv[1], "catch")) return catcher();
@@ -184,6 +212,7 @@ int main (int argc, char **argv) {
   if (streq(argv[1], "read")) return reader();
   if (streq(argv[1], "sink")) return sinker();
   if (streq(argv[1], "leak")) return leak(argc > 2 ? num(argv[2]) : 1024);
+  if (streq(argv[1], "gen")) return gens();
   printf("dosexec: what is %s?\n", argv[1]);
   return 1;
 }

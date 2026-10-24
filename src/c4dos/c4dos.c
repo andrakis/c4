@@ -1302,12 +1302,33 @@ int dos_api_load (char *path) { return img_load(path); }
 int dos_api_start (int h, int argc, char **argv) { return img_start(h, argc, argv); }
 int dos_api_unload (int h) { return img_unload(h); }
 // fn(arg) under a run frame: an exit() inside it comes back here, as
-// its status. *exited (when exited is not 0) says whether it did.
+// its status. *exited (when exited is not 0) says whether it did. It
+// runs in the caller's generation; a shell calling into an image it
+// loaded switches to that image's first (26 and 27).
 int dos_api_catch (int fn, int arg, int *exited) {
   int r;
   r = frame_call(fn, 1, arg, 0);
   if (exited) *exited = g_last_exited;
   return r;
+}
+// Generations for a shell, which runs code of several images and has to
+// say whose memory a call allocates (docs/grin-plan.md 3.3). gen(h) is
+// image h's generation, or with h = 0 that of the image DOS last
+// started, which is the caller when it asks from its own main; 0 when
+// HEAP.SYS is not in. setgen(g) makes g current and returns the
+// previous one; -1 when HEAP.SYS is not in.
+int dos_api_gen (int h) {
+  if (!g_heapgen) return 0;
+  if (!h) h = g_cur_img;
+  if (!h || img_find(h) < 0) return 0;
+  return ((int *)h)[H_GEN];
+}
+int dos_api_setgen (int g) {
+  int old;
+  if (!g_heapgen) return 0 - 1;
+  old = gen_get();
+  gen_set(g);
+  return old;
 }
 
 // ---- API v2: enumeration, and handing memory back ------------------------
@@ -1719,7 +1740,9 @@ int main (int argc, char **argv) {
   g_api[14] = (int)&dos_api_release;
   // v4: the console, and running programs. None needs a device; 18
   // (unlink) waits for the RAM disk, below, and 25 is the shell's to
-  // fill (grin's window kit table), 0 until one does.
+  // fill (grin's window kit table), 0 until one does. 26 and 27 answer
+  // 0 and -1 without HEAP.SYS rather than being absent, so a shell can
+  // call them unconditionally.
   g_api[16] = (int)&dos_api_conwrite;
   g_api[17] = (int)&dos_api_conread;
   g_api[19] = (int)&dos_api_exec;
@@ -1729,6 +1752,8 @@ int main (int argc, char **argv) {
   g_api[23] = (int)&dos_api_catch;
   g_api[24] = (int)&dos_api_sink;
   g_api[25] = 0;
+  g_api[26] = (int)&dos_api_gen;
+  g_api[27] = (int)&dos_api_setgen;
   g_sink_w = 0;
   g_sink_r = 0;
   g_sink_ctx = 0;

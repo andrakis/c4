@@ -318,7 +318,9 @@ enum {
   C4DOS_SLOT_UNLOAD   = 22, // unload(h) -> 0: destructors, image and heap freed; -1
   C4DOS_SLOT_CATCH    = 23, // catch(fn, arg, &exited) -> fn(arg), or exit()'s status
   C4DOS_SLOT_SINK     = 24, // sink(write, read, ctx): console to f(ctx, buf, n); 0 = DOS's
-  C4DOS_SLOT_SHELL    = 25  // data, not code: the shell's table (grin's), or 0
+  C4DOS_SLOT_SHELL    = 25, // data, not code: the shell's table (grin's), or 0
+  C4DOS_SLOT_GEN      = 26, // gen(h) -> h's heap generation (0: the running image's); 0 without HEAP.SYS
+  C4DOS_SLOT_SETGEN   = 27  // setgen(g) -> the previous generation; -1 without HEAP.SYS
 };
 
 int dos_v4 (int slot) {
@@ -366,4 +368,14 @@ int dos_sink (int *w, int *r, int ctx) {
 int *dos_shell () {
   if (dos_version() < C4DOS_API_V4) return 0;
   return (int *)__c4dos_api[C4DOS_SLOT_SHELL];
+}
+// Heap generations (DEVICE=HEAP.SYS), for a shell that runs code of
+// several images and must say whose memory a call allocates.
+int dos_gen (int h) {
+  if (!dos_v4(C4DOS_SLOT_GEN) || !__c4dos_arm()) return 0;
+  return __c4dos_call1((int *)__c4dos_api[C4DOS_SLOT_GEN], h);
+}
+int dos_setgen (int g) {
+  if (!dos_v4(C4DOS_SLOT_SETGEN) || !__c4dos_arm()) return 0 - 1;
+  return __c4dos_call1((int *)__c4dos_api[C4DOS_SLOT_SETGEN], g);
 }

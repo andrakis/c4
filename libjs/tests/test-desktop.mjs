@@ -793,9 +793,6 @@ check(until(() => sysbox()), 'Settings > Look > Windows 3.1 draws the control-me
 }
 key('ESC');
 until(() => !has('Look'));
-clickText(/^Terminal - task/, 'first');
-type('cat /etc/desktop.cfg\n');
-check(until(() => has(/wait \d+ style 2/), 800), 'the look is kept in /etc/desktop.cfg', frame.filter(t => /scheme/.test(t.s)).map(t => t.s.trimEnd()).join(' | '));
 
 // ---- Power Off --------------------------------------------------------------------------------
 start('Power Off...');
@@ -806,6 +803,11 @@ const psOut = consoleText().split('desktop: shut down').pop();
 check(!/c4ix-sh.c4r[\s\S]*c4ix-sh.c4r/.test(psOut.replace(/^[\s\S]*?ID/, '')), 'no Terminal shell outlived the desktop', psOut);
 
 // ---- the desktop again: in the look it was left in --------------------------------------------
+{
+  const c0 = consoleText().length;
+  typeBytes(vm, new TextEncoder().encode('cat /etc/desktop.cfg\n'));
+  check(until(() => / style 2\b/.test(consoleText().slice(c0))), 'the look is kept in /etc/desktop.cfg', consoleText().slice(c0));
+}
 typeBytes(vm, new TextEncoder().encode('desktop\n'));
 check(until(() => /desktop: running on the display/.test(consoleText().split('desktop: shut down').pop())), 'the desktop starts again');
 check(until(() => has(/^Terminal - task/) && sysbox(), 800), 'in the Windows 3.1 look, as it was left', screen());

@@ -22,6 +22,11 @@ if [ ! -x ./cpp ]; then
     exit 1
 fi
 mkdir -p $OUT
+# Progress: a line a stage, so a build says what it is doing. A long
+# loop's stage is one line, with each item named as it is done.
+say () { echo "c4bb: $*"; }
+step () { printf 'c4bb: %s' "$*"; }
+item () { printf ' %s' "$*"; }
 
 # firmware: built with c4lc (the nicer compiler; real preprocessor).
 # c4lc emits for its host's word size, so the 32-bit c4sp gives 32-bit
@@ -43,11 +48,14 @@ fwbuild () {                                  # fwbuild <out> <flags...>
     ./c4sp32 -c 64000000 src/c4sp/lisp/c4lc.lisp -O "$@" \
         src/c4bb/fw/fw.c src/c4bb/fw/$out.c4r > /dev/null
 }
-fwbuild fw-hello  -D FW_STAGE=0
-fwbuild fw-ram    -D FW_STAGE=1 -D FW_RAM=1
-fwbuild fw-drives -D FW_STAGE=2 -D FW_RAM=1 -D FW_DRIVES=1 -D FW_SEEONLY=1
-fwbuild fw        -D FW_STAGE=3 -D FW_RAM=1 -D FW_DRIVES=1 -D FW_BOOT=1
+step "the firmware:"
+item fw-hello; fwbuild fw-hello  -D FW_STAGE=0
+item fw-ram; fwbuild fw-ram    -D FW_STAGE=1 -D FW_RAM=1
+item fw-drives; fwbuild fw-drives -D FW_STAGE=2 -D FW_RAM=1 -D FW_DRIVES=1 -D FW_SEEONLY=1
+item fw; fwbuild fw        -D FW_STAGE=3 -D FW_RAM=1 -D FW_DRIVES=1 -D FW_BOOT=1
+echo
 
+say "the test corpus (c4cc32), and the fused-opcode tests"
 # hello links without u0 (Makefile:860)
 $CC -o $OUT/hello32.c4r src/tests/hello.c > /dev/null
 
@@ -73,6 +81,7 @@ cp c4th32.c4r $FUSEDISK/c4th32.c4r
 # twin step for step between the two engines.
 ./c4sp32 src/c4sp/lisp/c4opt-run.lisp -mfuse $OUT/factorial.c4r $OUT/factorial-fused.c4r > /dev/null
 
+say "c4bb's trap tests, and libjs's demos"
 # c4bb's own trap-machinery tests (src/tests/test_customop predates
 # TLEV/DBG and uses colliding opcode numbers, so it cannot be used)
 for t in bb_customop bb_preempt bb_pm bb_pit bb_whowrote; do
@@ -109,11 +118,15 @@ for dep in src/c4ke/c4ke.c load-c4r.c include/c4bb_mbox.h src/c4ke/extensions/*.
     [ "$dep" -nt $OUT/c4ke32.c4r ] && kernel_stale=1
 done
 if [ $kernel_stale = 1 ]; then
+    say "C4KE's kernel (c4lc)"
     $PREPROC_LC src/c4ke/c4ke.c > .c4bb_klc.c
     ./c4sp32 -c 64000000 src/c4sp/lisp/c4lc.lisp -O .c4bb_klc.c $OUT/c4ke32.c4r > /dev/null
     rm -f .c4bb_klc.c
+else
+    say "C4KE's kernel is up to date"
 fi
 
+say "C4KE's userland (c4cc32)"
 # userland (c4cc32, same recipes as the Makefile's bin rules)
 BIN=src/c4ke/bin
 $CC -o $DISK/init.c4r  $U0 $BIN/ps.c $BIN/eshell.c src/c4ke/services/init.c > /dev/null
@@ -123,12 +136,13 @@ $CC -o $DISK/c4ke.vfs.c4r $U0 src/c4ke/include/service.h src/c4ke/services/c4ke.
 for t in ls ps cat echo kill spin c4le type xxd badop; do
     $CC -o $DISK/$t.c4r $U0 $BIN/$t.c > /dev/null
 done
-$CC -o $DISK/top.c4r $U0 $BIN/ps.c $BIN/top.c
+$CC -o $DISK/top.c4r $U0 $BIN/ps.c $BIN/top.c > /dev/null
 # the mailbox from a task: bound to the host, and task to task
 for t in mbecho mbpair; do
     $CC -o $DISK/$t.c4r $U0 include/c4ke_mbox.h $BIN/$t.c > /dev/null
 done > /dev/null
 
+say "C4KE's vfsload and raycast (c4lc)"
 # vfsload: built with c4lc (needs real block scoping, not just c4cc's
 # top-of-function declarations). c4lc's own preprocessor hangs on
 # u0.h (a pre-existing issue, unrelated to word size - reproduces at
@@ -144,6 +158,7 @@ rm -f .c4bb_vfsload_pp.c
 ./c4sp32 -c 16000000 src/c4sp/lisp/c4lc.lisp -O -conforming -D RC_KE=1 \
     src/tests/raycast.c $DISK/raycast.c4r > /dev/null
 
+say "c4, c4m, c4cc, c4rdump and c4rlink (c4cc32), and the benchmarks"
 # the self-hosted core (c4, c4m, c4cc) and the C4R toolchain, same
 # recipes as the Makefile's native (64-bit) rules, just via c4cc32
 #
@@ -208,6 +223,7 @@ for t in tests factorial multifun test-order test-ptrs test_continue \
     cp $OUT/$t.c4r $DISK/$t.c4r 2>/dev/null || true
 done
 
+say "the C4KE disk's sources and manifest"
 # ---- the VFS manifest itself, and the plain-text sources it names --
 # c4ke.vfs.txt is curated SOURCE (see src/c4bb/fs/), not a build
 # artifact, so it is copied in rather than regenerated - unlike the
@@ -281,6 +297,7 @@ C4IX_CELLS=400000
 # Makefile passes IMG_G (`make IMG_G=-g0` builds without), and writes it
 # to .img_g, so a change to it rebuilds C4IX below.
 G=${IMG_G--g}
+say "c4mp's SMP guests"
 # c4mp's SMP guests, and the CPU-local window's, as 32-bit images for
 # libjs's processors (cli.js --cpus, docs/c4ix-smp.md); test-libjs runs them
 for g in smp0 smp1 deadlock; do
@@ -302,16 +319,21 @@ keep() { cp "$1" "$PB/$2"; }
 # was silently not built.
 if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
    [ -n "$(find src/c4ix libjs/guest/gui.h libjs/guest/gui.c libjs/guest/snd.h libjs/guest/snd.c $(ls .img_g 2>/dev/null) -newer $OUT/c4ix32.c4r -type f -print -quit)" ]; then
+    say "C4IX, compiled $G (c4lc)"
     rm -rf $PB
     mkdir -p $PB/kernel $PB/lib $PB/libc $PB/user $PB/desktop $PB/bin
     objs=""
+    step "C4IX's kernel:"
     for m in $C4IX_MODS; do
+        item $m
         ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -c -I src/c4ix src/c4ix/$m.c .c4bb_ix_$m.c4o > /dev/null
         objs="$objs .c4bb_ix_$m.c4o"
         keep .c4bb_ix_$m.c4o kernel/$m.c4o
     done
+    echo
     ./c4rlink32 $objs -o $OUT/c4ix32.c4r
     keep $OUT/c4ix32.c4r c4ix.c4r
+    say "C4IX's libraries: libc4ix and libarc, static and shared, and libgui"
     ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -c -I src/c4ix/include src/c4ix/lib/libc4ix.c .c4bb_ix_lib.c4o > /dev/null
     ./c4rlink32 -r .c4bb_ix_lib.c4o -o .c4bb_libc4ix32.c4l
     keep .c4bb_ix_lib.c4o lib/libc4ix.c4o
@@ -354,7 +376,9 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     # are -- and with libc4ix's syscall layer linked in. Built -fpic,
     # all of it, so its code is loaded once and shared by every task.
     # fp.c (printf's %f, strtod) and math.c are the units that say double.
+    step "C4IX's libc:"
     for m in string stdlib stdio unix fp math; do
+        item $m
         ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -fno-builtin -fpic -c -I src/c4ix/libc/include -I src/c4ix/libc src/c4ix/libc/$m.c .c4bb_ix_libc_$m.c4o > /dev/null
         keep .c4bb_ix_libc_$m.c4o libc/$m.c4o
     done
@@ -362,10 +386,12 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -fpic -c -I src/c4ix/include src/c4ix/lib/libc4ix.c .c4bb_ix_libc_u.c4o > /dev/null
     ./c4rlink32 -r .c4bb_ix_libc_string.c4o .c4bb_ix_libc_stdlib.c4o .c4bb_ix_libc_stdio.c4o .c4bb_ix_libc_unix.c4o \
         .c4bb_ix_libc_fp.c4o .c4bb_ix_libc_math.c4o .c4bb_ix_libc_opcodes.c4o .c4bb_ix_libc_u.c4o -o .c4bb_lib/libc.c4s > /dev/null
+    echo
     keep .c4bb_ix_libc_opcodes.c4o libc/opcodes.c4o
     keep .c4bb_ix_libc_u.c4o libc/libc4ix.c4o
     keep .c4bb_lib/libc.c4s lib/libc.c4s
     cp .c4bb_lib/libc.c4s $DISK/c4ix-libc.c4s
+    say "libc's tests: libctest, pictest, unixtest"
     # libctest exercises it (libjs/tests/test-libjs.sh compares its output)
     ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/libctest.c .c4bb_ix_u.c4o > /dev/null
     ./c4rlink32 .c4bb_ix_u.c4o -l .c4bb_lib/libc.c4s -o $DISK/c4ix-libctest.c4r > /dev/null
@@ -381,7 +407,9 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     ./c4rlink32 .c4bb_ix_u.c4o -l .c4bb_lib/libc.c4s -o $DISK/c4ix-unixtest.c4r > /dev/null
     keep .c4bb_ix_u.c4o libc/unixtest.c4o
     keep $DISK/c4ix-unixtest.c4r bin/c4ix-unixtest.c4r
+    step "C4IX's programs:"
     for u in $C4IX_USER; do
+        item $u
         ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -c -D C4IX_SHARED -I src/c4ix/include src/c4ix/user/$u.c .c4bb_ix_u.c4o > /dev/null
         # each loads libc4ix at run time; gui, the display's demo, libgui too
         if [ $u = gui ]; then
@@ -393,6 +421,7 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
         keep $DISK/c4ix-$u.c4r bin/c4ix-$u.c4r
     done
     for u in $C4IX_ARC_USER; do
+        item $u
         # splash runs while the boot unpacks the root archive, before
         # anything else may have been: it carries its libraries itself
         if [ $u = splash ]; then
@@ -405,9 +434,12 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
         keep .c4bb_ix_u.c4o user/$u.c4o
         keep $DISK/c4ix-$u.c4r bin/c4ix-$u.c4r
     done
+    echo
     # the desktop: several modules, linked together (docs/c4ix-desktop.md)
     dobjs=""
+    step "C4IX's desktop:"
     for m in wm ui term files taskmgr apps calc edit wall savers; do
+        item $m
         ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -c -D C4IX_SHARED -I src/c4ix/include -I src/c4ix/user/desktop \
             src/c4ix/user/desktop/$m.c .c4bb_ix_d_$m.c4o > /dev/null
         dobjs="$dobjs .c4bb_ix_d_$m.c4o"
@@ -416,6 +448,7 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     # the Calculator's decimal conversions are libc's fp.c, linked in
     ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -c src/c4ix/libc/fp.c .c4bb_ix_d_fp.c4o > /dev/null
     dobjs="$dobjs .c4bb_ix_d_fp.c4o"
+    echo
     keep .c4bb_ix_d_fp.c4o desktop/fp.c4o
     ./c4rlink32 $dobjs -l .c4bb_lib/libgui.c4s -l .c4bb_lib/libarc.c4s -l .c4bb_lib/libc4ix.c4s -o $DISK/c4ix-desktop.c4r > /dev/null
     keep $DISK/c4ix-desktop.c4r bin/c4ix-desktop.c4r
@@ -427,6 +460,7 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     # C4IX's build ran second, so C4KE started running C4IX's loader
     # under itself - "c4ix-" keeps it consistent with every other
     # C4IX binary here, all of which face the same shared-disk risk).
+    say "C4IX's vfsload"
     ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -c -I src/c4ix/include src/c4ix/user/vfsload.c .c4bb_ix_u.c4o > /dev/null
     ./c4rlink32 .c4bb_ix_u.c4o .c4bb_libc4ix32.c4l -o $DISK/c4ix-vfsload.c4r > /dev/null
     keep .c4bb_ix_u.c4o user/vfsload.c4o
@@ -437,6 +471,8 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     rm -rf .c4bb_lib
     mv .c4bb_libarc32.c4l $OUT/libarc32.c4l
     rm -f .c4bb_ix_*.c4o .c4bb_ix_*.pp.c
+else
+    say "C4IX is up to date"
 fi
 
 # Wolfenstein 3D (src/wolf3d): make wolf3d-objs compiled it a unit at a
@@ -444,6 +480,7 @@ fi
 # the libc kept from the last time it was. It goes on the disk beside
 # Apogee's shareware package, which it unpacks the first time it runs.
 if ls .wolf3d/*.c4o > /dev/null 2>&1 && [ -f $PB/lib/libc.c4s ]; then
+    say "linking Wolfenstein 3D for C4IX"
     ./c4rlink32 .wolf3d/*.c4o -l $PB/lib/libc.c4s -o $DISK/c4ix-wolf3d.c4r > /dev/null
     cp src/wolf3d/data/1wolf14.zip $DISK/1wolf14.zip
 fi
@@ -451,6 +488,7 @@ fi
 # Doom (src/doom): make doom-objs compiled it, and it is linked the same
 # way, with the shareware WAD beside it (c4ix.vfs.txt: /usr/games/doom)
 if ls .doom/*.c4o > /dev/null 2>&1 && [ -f $PB/lib/libc.c4s ]; then
+    say "linking Doom for C4IX"
     ./c4rlink32 .doom/*.c4o .doom/plat/dg-c4ix.c4o -l $PB/lib/libc.c4s -o $DISK/c4ix-doom.c4r > /dev/null
     cp src/doom/data/doom1.wad $DISK/doom1.wad
 fi
@@ -466,6 +504,7 @@ fi
 # package as it ships (src/rott/data, tools/rottdata.py; c4ix.vfs.txt:
 # /usr/games/rott)
 if ls .rott/*.c4o > /dev/null 2>&1 && [ -f $PB/lib/libc.c4s ]; then
+    say "linking Rise of the Triad for C4IX, and unpacking its shareware episode"
     ./c4rlink32 .rott/*.c4o .rott/plat/rott-c4ix.c4o -l $PB/lib/libc.c4s -o $DISK/c4ix-rott.c4r > /dev/null
     python3 -I src/rott/tools/rottdata.py src/rott/data/1rott13.zip $DISK > /dev/null
 fi
@@ -473,6 +512,7 @@ fi
 TYRIAN_ZIP=${TYRIAN_ZIP:-src/opentyrian/data/tyrian21.zip}
 rm -rf $DISK/tyrian
 if ls .tyrian/*.c4o > /dev/null 2>&1 && [ -f $PB/lib/libc.c4s ]; then
+    say "linking OpenTyrian for C4IX"
     ./c4rlink32 .tyrian/*.c4o .tyrian/plat/tyr-c4ix.c4o -l $PB/lib/libc.c4s -o $DISK/c4ix-tyrian.c4r > /dev/null
     if [ -f "$TYRIAN_ZIP" ]; then python3 -I src/opentyrian/tools/tyrdata.py "$TYRIAN_ZIP" $DISK/tyrian > /dev/null; fi
 fi
@@ -489,21 +529,28 @@ rm -rf $OUT/wolf3d
 if ls .wolf3d-bare/*.c4o > /dev/null 2>&1 && ls .wolf3d/*.c4o > /dev/null 2>&1; then
     rm -rf $WOLFDISK
     mkdir -p $WOLFDISK
+    step "linking the games for the bare machine and C4DOS:"
+    item wolf3d
     ./c4rlink32 $(ls .wolf3d/*.c4o | grep -v '/plat-c4ix.c4o$') .wolf3d-bare/*.c4o -o $WOLFDISK/wolf3d.c4r > /dev/null
     if ls .doom/*.c4o > /dev/null 2>&1; then
+        item doom
         ./c4rlink32 .doom/*.c4o .doom/plat/dg-bare.c4o .wolf3d-bare/libc-*.c4o -o $WOLFDISK/doom.c4r > /dev/null
         cp src/doom/data/doom1.wad $WOLFDISK/
     fi
     # Rise of the Triad, the shareware episode beside it
     if ls .rott/*.c4o > /dev/null 2>&1; then
+        item rott
         ./c4rlink32 .rott/*.c4o .rott/plat/rott-bare.c4o .wolf3d-bare/libc-*.c4o -o $WOLFDISK/rott.c4r > /dev/null
         python3 -I src/rott/tools/rottdata.py src/rott/data/1rott13.zip $WOLFDISK > /dev/null
     fi
     # OpenTyrian, its data in tyrian/data where there is any (above)
     if ls .tyrian/*.c4o > /dev/null 2>&1; then
+        item tyrian
         ./c4rlink32 .tyrian/*.c4o .tyrian/plat/tyr-bare.c4o .wolf3d-bare/libc-*.c4o -o $WOLFDISK/tyrian.c4r > /dev/null
         if [ -f "$TYRIAN_ZIP" ]; then python3 -I src/opentyrian/tools/tyrdata.py "$TYRIAN_ZIP" $WOLFDISK/tyrian/data > /dev/null; fi
     fi
+    echo
+    say "the games disk: Wolfenstein 3D's data, C4DOS's files, the indexes"
     cp src/wolf3d/data/1wolf14.zip $WOLFDISK/
     python3 -I -c "import zipfile, sys; zipfile.ZipFile(sys.argv[1]).extract('W3DSW14.SHR', sys.argv[2])" \
         src/wolf3d/data/1wolf14.zip $WOLFDISK
@@ -530,6 +577,7 @@ fi
 # "cat.c"/"ps.c"/"top.c" etc of their own - without the prefix the
 # two systems' vfsload runs would silently overwrite each other's
 # source copies.
+say "C4IX's sources on the disk, and c4m as a C4IX program (c4lc)"
 cp src/c4bb/fs/c4ix.vfs.txt $DISK/
 # the boot logo, for splash (src/c4ix/art/mkc4p.py made it from Kiln's PNG)
 cp src/c4ix/art/c4ix.c4p.gz $DISK/c4ix-splash.c4p.gz
@@ -570,6 +618,7 @@ cp src/c4th/tests/self1.f src/c4th/tests/self1-c4r.f src/c4th/tests/run-main.f $
 # ramfs (custom opcodes a trap-free DOS does not offer), which is
 # correct: they are the C4KE rung's tools, used to build C4IX.
 # docs/ladder-plan.md tracked the whole climb.
+say "the ladder: c4sp (c4lc -O -mfuse), cpp, dostar, dosload and the build kit"
 cp $OUT/c4ke32.c4r $DISK/c4ke.c4r
 cp $OUT/c4ix32.c4r $DISK/c4ix.c4r
 
@@ -638,6 +687,7 @@ cp src/c4dos/fs/BUILD.BAT $DISK/build.bat
 # image. c4dos.dir is generated last, below, because it has to list
 # whatever actually ended up here.
 if [ -x ./cpp ]; then
+    say "C4DOS"
     ./cpp -DC4DOS_CLOCK=1 src/c4dos/c4dos.c > .c4bb_dos_pp.c
     $CC -o $OUT/c4dos32.c4r .c4bb_dos_pp.c > /dev/null
     rm -f .c4bb_dos_pp.c
@@ -700,6 +750,7 @@ fi
 # these come after every source, objects before the libraries made from
 # them, and libraries before what links them. (In the same archive, not
 # a second one: vfsload unpacks each archive in its own task, at once.)
+say "the C4IX root archive, c4ix-root.tgz"
 ROOT=.c4bb_ix_root
 rm -rf $ROOT
 mkdir -p $ROOT/usr/lib $ROOT/usr/include
@@ -736,6 +787,7 @@ tar --format=ustar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
     -C $ROOT -cf - usr --no-recursion $BUILT | gzip -9n > $DISK/c4ix-root.tgz
 rm -rf $ROOT
 
+say "the disk's manifest, sizes and index"
 # manifest for the web app's disk loader (recursive: some entries,
 # like src/c4ke/c4ke.c, are real subdirectories on purpose - see the
 # innerbench comment above)
@@ -772,6 +824,7 @@ mv $DISK/c4ix.sizes.tmp $DISK/c4ix.sizes
 # and rebuilds the kernel should not carry C4IX's userland, and a C4KE
 # root filesystem carrying its own compiler should not have to share a
 # manifest with C4DOS's config.sys.
+say "the derived disks: dos-recovery, climb, c4ke-root"
 DOSDISK=$OUT/dos-recovery
 ROOTDISK=$OUT/c4ke-root
 rm -rf $DOSDISK $ROOTDISK

@@ -5,6 +5,8 @@
 //                                c4dos, wolf3d, wolf3d-c4ix, doom, tyrian, rott, gui-demo, fb-demo,
 //                                snd-demo, raycast -- SYSTEMS below
 //   ?image=URL&disk=URL          any other image and disk instead
+//   ?args=A+B                    more arguments for the system's program, after its
+//                                own: ?system=wolf3d&args=--secrets+--nodeath
 //   ?mhz=N                       how fast the machine runs, paced (default 100)
 //   ?snd=0                       no sound card
 //   ?cpus=N                      N processors, simulated (smp.js, docs/c4ix-smp.md)
@@ -90,8 +92,10 @@ function fmtRate(ips) {
   return ips >= 1e6 ? (ips / 1e6).toFixed(1) + 'M' : ips >= 1e3 ? (ips / 1e3).toFixed(0) + 'k' : String(ips);
 }
 
+const extraArgs = (params.get('args') || '').split(/\s+/).filter(Boolean);
 const opts = {
   ...sys,
+  argv: sys.argv.concat(extraArgs),
   terminal: term,
   display: canvas,
   // 100 MHz: the interpreter manages well over that on a desktop, an idle
@@ -133,6 +137,8 @@ const CONFIG = [
     help: 'off: the message path even when the page is cross-origin isolated' },
   { key: 'persist', label: "C4IX's files", kind: 'select', def: '',
     options: [['', 'kept between visits'], ['0', 'not kept'], ['reset', 'forgotten, then kept']] },
+  { key: 'args', label: 'Arguments', kind: 'text', options: [],
+    help: "more for the system's program, after its own (wolf3d: --secrets --nodeath)" },
   { key: 'image', label: 'Image URL', kind: 'text', options: [], help: 'any other image instead of the system' },
   { key: 'disk', label: 'Disk URL', kind: 'text', options: [], help: 'its disk (a directory with an index.json)' },
 ];

@@ -1,8 +1,9 @@
 # grin: a graphical interface for C4DOS (plan)
 
-Status: plan only. Written 2026-10-24 against `smp` at 6295e18, and
-revised the same day with the user's answers (section 8). Nothing here
-is built yet.
+Status: written 2026-10-24 against `smp` at 6295e18, and revised the
+same day with the user's answers (section 8). **G0 is built** (branch
+`grin-g0`, 2026-10-24); sections 3.2 and 3.3 now say what was built
+where it differs from the first draft. The rest is plan.
 
 `grin` is to C4DOS what Windows 3.x was to MS-DOS: a program started
 from `AUTOEXEC.BAT` that takes over the screen and gives you windows, a
@@ -139,8 +140,9 @@ The facts that shaped the design were read from the code, not assumed.
 - **Saves.** Saves and config go through `bare.c`'s `uopen` for writing,
   which only DOS's RAM disk takes. On the bare machine they fail.
 - **Memory.** Doom takes about 15 MB and ROTT about 17 MB, and **nothing
-  frees a program's heap when it exits**. C4DOS frees only the image's
-  code and data. This is inferred from the code and measured in G0.
+  freed a program's heap when it exited**. C4DOS freed only the image's
+  code and data. Measured in G0: each run of Doom at `A>` left
+  14,853,107 bytes behind. `HEAP.SYS` (3.3) fixes it.
 
 **The C4IX desktop** (`src/c4ix/user/desktop/`, 8,500 lines)
 
@@ -195,38 +197,47 @@ Then:
 
 ### 3.2 C4DOS services (API v4)
 
-**Re-entrant RUN.** `run_program` keeps what it loaded in locals:
+**Re-entrant RUN** (built in G0; `docs/c4dos-design.md` "Run frames").
 
-- the constructor and destructor tables are copied out of the scratch;
-- `run_trans` saves and restores `g_run_bp` and `g_in_trans` around the
-  call;
-- each command line is parsed into a buffer of its own per depth.
+- Every call DOS makes into a program's code -- constructors, `main`,
+  destructors, and `catch` -- goes through a run frame
+  (`frame_call`/`frame_enter`), which keeps the outer frame's `g_run_bp`
+  and `g_in_trans` in its locals, so `dos_exit` returns into the
+  innermost. The status rides home in a global, not in A: the trampoline
+  tail may hold an `IMM`.
+- A load is a handle owning the code, data, its own copies of the
+  constructor and destructor tables, its heap generation and its parent.
+  RUN is load + start + unload. Unload takes the images an image left
+  loaded with it, and refuses one whose code is still on the stack.
+- Each command line is parsed into a buffer of its own per exec.
 
-`dos_exit` already returns into the innermost `run_trans` frame, so
-with that state saved, nesting is correct. All of this is plain c4, so
-the clockless build still runs under unmodified `c4` (`make test-c4dos`
-pins it).
+All of this is plain c4, so the clockless build still runs under
+unmodified `c4` (`make test-c4dos` pins it, v4 scenarios included).
 
-**New slots** (the version word becomes 4). Each is gated on the
-version, and on the device line it needs, the way slots 9-15 are today.
+**New slots** (the version word is 4). Each is gated on the version,
+and on the device line it needs, the way slots 9-15 are. As built:
 
 | slot | call | for |
 |---|---|---|
 | 16 | `conwrite(buf, n)` | console output, through the current sink (3.7) |
-| 17 | `conread(buf, n)` | console input, a line at a time, through the current sink |
-| 18 | `unlink(name)` | delete on the RAM disk or a writable drive |
-| 19 | `exec(cmdline)` | run one command line exactly as the prompt would, with builtins, batch files, `.c4r` and redirection; returns its status |
-| 20 | `load(path)` | load an image and run its constructors without calling `main`; returns a handle |
-| 21 | `start(h, argc, argv)` | call `main` under a run frame; returns its status (`GRIN_RESIDENT` keeps the image) |
-| 22 | `unload(h)` | run the destructors, free the image, release its heap (3.3) |
-| 23 | `catch(fn, arg)` | call `fn(arg)` under a run frame, so an `exit()` inside it returns here |
-| 24 | `sink(write, read, ctx)` | point the console at functions of the caller's; 0 restores DOS's own |
+| 17 | `conread(buf, n)` | console input, at most a line, through the current sink. DOS's own input buffer, so a line typed ahead of a program is the program's |
+| 18 | `unlink(name)` | delete on the RAM disk (only with RAMDISK.SYS; writable drives come with `HOME=`, G4) |
+| 19 | `exec(cmdline)` | run one command line exactly as the prompt would, with builtins, batch files and `.c4r` (redirection with REDIR.SYS, G5); returns its status. `EXIT` inside an exec ends the exec, not DOS: a DOS Prompt window checks for `EXIT` itself |
+| 20 | `load(path)` | load an image and run its constructors without calling `main`; returns a handle, 0 on failure or refusal |
+| 21 | `start(h, argc, argv)` | call `main` under a run frame, in the image's generation; returns its status. The image stays loaded whatever it returns: keeping it is the caller's decision (`GRIN_RESIDENT` is grin's convention, G3) |
+| 22 | `unload(h)` | run the destructors, free the image, release its generation (3.3); also unloads images it left loaded; -1 for a dead handle or one still running |
+| 23 | `catch(fn, arg, exited)` | call `fn(arg)` under a run frame, so an `exit()` inside it returns here, as its status; `*exited` (if `exited` is not 0) says which happened. **Changed from the draft's `catch(fn, arg)`**: without the flag grin could not tell an application that exited from one that returned. Runs in the caller's generation |
+| 24 | `sink(write, read, ctx)` | point the console at the caller's `write(ctx, buf, n)` and `read(ctx, buf, n)`; 0 for either gives that direction back to DOS |
 | 25 | *data*: the shell | a pointer that grin writes and clears: the window kit's table (3.4) |
+| 26 | `gen(h)` | **added in G0**: image `h`'s heap generation, or with `h` = 0 the caller's own (the image DOS last started); 0 without HEAP.SYS |
+| 27 | `setgen(g)` | **added in G0**: make generation `g` current; returns the previous one, -1 without HEAP.SYS |
 
-`include/c4dos.h` documents every slot. Slots 19-24 are only for
-c4lc-built callers with indirect calls, as slot 1 is for `bare.c`.
-The invoke stub in `c4dos.h` stays for c4cc programs, which use only
-slots 0-18.
+`include/c4dos.h` documents and wraps every slot, through the invoke
+stub. **Changed from the draft**, which kept c4cc programs to slots
+0-18: the stub calls DOS's functions as ordinary calls, so it serves
+every slot, `dos_exit` included, and `src/tests/dosexec.c`, a c4cc
+program, exercises 16-27 under unmodified `c4`. c4lc-built callers
+(grin, `bare.c`) call through the table directly.
 
 ### 3.3 Memory: heap generations
 
@@ -239,26 +250,40 @@ records the generation that was current when it was allocated. Two
 registers sit next to `HEAP_USED` (0x1c0) in `src/c4bb/sim/devices.js`,
 which libjs shares:
 
-- `HEAP_GEN` (r/w): the current generation;
-- `HEAP_RELEASE` (w): free every block of the generation written.
+- `HEAP_GEN` (0x1c4, r/w): the current generation;
+- `HEAP_RELEASE` (0x1c8, w): free every block of the generation
+  written; read, the bytes the last release freed.
 
-0x1c4 and 0x1c8 look free, to be confirmed in G0.
+Both were confirmed free in G0. Generation 0 is the boot one: the heap
+never tracks it and refuses to release it. Where the host keeps no heap
+with generations (c4bb, whose heap is its firmware's; `sheap.js`, the
+parallel engine's), `HEAP_GEN` reads 0 whatever was written.
 
 **C4DOS.** `DEVICE=HEAP.SYS` announces them. The announcement is a
 config line because reading `INFO` would put DOS above the base rung,
-and under native c4m these addresses are ordinary memory. With the line:
+and under native c4m these addresses are ordinary memory. DOS then
+checks that `HEAP_GEN` reads back what it wrote, and on c4bb says the
+machine keeps no generations. With the line:
 
-- `load` gives each image a fresh generation;
+- `load` gives each image a fresh generation, and its code and data are
+  allocated in it; its constructors, `main` and destructors run in it;
 - `unload` (and the end of every RUN) writes `HEAP_RELEASE` for it;
 - **every DOS API entry that allocates** (`create` and `write` growing a
   RAM-disk file, `scratch_need`, `load`, `exec`) switches to DOS's own
   generation and back. Otherwise a RAM-disk file created by a child
   would be freed with the child.
+- `MEM` reports the heap's free and used bytes.
 
-**grin.** It follows the same rule. Every window-kit entry point
-brackets itself with `gen_enter()`/`gen_leave()`, and so does the loop
-pump that a DOS program runs (3.6). A window or dialog that grin opens
-while a game runs therefore belongs to grin.
+**grin.** It follows the same rule, through slots 26 and 27 (added in
+G0: the draft had `gen_enter()`/`gen_leave()` with nothing for them to
+call). grin learns its own generation with `gen(0)` in `main`, and an
+application's with `gen(h)` after loading it. Every window-kit entry
+point does `old = setgen(grin's)` ... `setgen(old)`, and so does the
+loop pump that a DOS program runs (3.6). Every call into an application
+does `setgen(the application's)` around its `catch`, because `catch`
+runs in the caller's generation. A window or dialog that grin opens
+while a game runs therefore belongs to grin, and what an application's
+callback allocates goes when the application is unloaded.
 
 Tests pin both directions:
 
@@ -629,7 +654,11 @@ back with `display.recordText`, and a screenshot is checked by eye.
 Until the branch is merged, the page is served from the branch's own
 worktree.
 
-**G0: C4DOS services and heap generations**
+**G0: C4DOS services and heap generations** -- done, branch `grin-g0`
+(2026-10-24). `make test-c4dos` (every leg runs `src/tests/dosexec.c`)
+and `make test-c4dos-heap` (libjs, HEAP.SYS, Doom five times: 0 bytes
+of growth, against 14.8 MB a round without the line) pin it. The games
+disk the page boots has `DEVICE=HEAP.SYS`.
 
 - **Machine:** heap generations in `heap.js`, plus `HEAP_GEN` and
   `HEAP_RELEASE` in `devices.js`. `test-heap.mjs` is extended.

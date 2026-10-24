@@ -53,10 +53,29 @@ export const KIND = { OP: 1, RD32: 2, WR32: 3, WR8: 4 };           // what is as
 export const MAXCPU = 32;
 const word = (k, f) => C.CPU0 + k * C.STRIDE + f;
 
+// Posted writes: the device registers whose writes need no answer and
+// read no guest memory -- the sound card's OPL, WAIT, its PCM settings,
+// STOP, SETVOL, the speaker and RESET (snd-device.js). Another CPU queues
+// them for CPU 0 and carries on, where every other device access asks and
+// waits. CPU 0 applies a CPU's queue, in order, before it answers that
+// CPU's next request, and between its own slices. A game's music is
+// thousands of OPL writes a second, and each one a round trip made a game
+// on CPU 1 slower than on CPU 0: Doom's demo3 under C4IX, on two CPUs, with
+// the display and the card, took 63.0 s there against 53.5 s (cli-like,
+// in Node), with 119k of its 135k requests these writes. PCM_PLAY copies
+// the samples, and the display's BELL and FBFLIP read the frame, so they
+// still ask.
+export const POSTED = new Set([0x484, 0x488, 0x490, 0x494, 0x498, 0x49c, 0x4a0, 0x4a8, 0x4ac, 0x4b4, 0x4b8]);
+// Each CPU's queue, in a SharedArrayBuffer of its own: its head (CPU 0's,
+// the next to apply), its tail (the CPU's, the next free), then PQLEN
+// entries of two words, (8-bit << 16) | addr and the value.
+export const PQLEN = 1024;
+export const PQSTRIDE = 2 + 2 * PQLEN;
+
 // What the parallel opcodes do, on whichever thread runs them. m is the
 // running CPU's Machine; ctl the control block; i32 the arena's.
 export class ParCore {
-  constructor(ctl, i32, n) { this.ctl = ctl; this.ai32 = i32; this.n = n; this.parallel = true; this.running = true; }
+  constructor(ctl, i32, n, pq) { this.ctl = ctl; this.ai32 = i32; this.n = n; this.pq = pq; this.parallel = true; this.running = true; }
 
   state(k) { return Atomics.load(this.ctl, word(k, K.STATE)); }
 
@@ -166,7 +185,7 @@ export class ParHost extends ParCore {
   constructor(m0, n, spawn) {
     n = Math.max(1, Math.min(MAXCPU, n | 0));
     const ctl = new Int32Array(new SharedArrayBuffer((C.CPU0 + MAXCPU * C.STRIDE) * 4));
-    super(ctl, m0.i32, n);
+    super(ctl, m0.i32, n, new Int32Array(new SharedArrayBuffer(n * PQSTRIDE * 4)));
     this.running = false;           // m0.run comes here first (c4m.js), then slices
     this.m0 = m0;
     this.dev = m0.dev;
@@ -189,7 +208,7 @@ export class ParHost extends ParCore {
       this.shadows[k] = s;
       const w = spawn(new URL('./ap.js', import.meta.url));
       w.postMessage({
-        type: 'init', arena: m0.arena.buf, ctl: ctl.buffer, heap: m0.heap.books, id: k, n,
+        type: 'init', arena: m0.arena.buf, ctl: ctl.buffer, pq: this.pq.buffer, heap: m0.heap.books, id: k, n,
         info: m0.info(), cyclesPerMs: m0.dev.cyclesPerMs, noFpu: !!m0.noFpu,
       });
       this.workers.push(w);
@@ -220,10 +239,28 @@ export class ParHost extends ParCore {
     return m0.dev.halted ? STOP.HALT : r;
   }
 
-  // between CPU 0's slices: answer anyone waiting, then its own IPI
+  // between CPU 0's slices: answer anyone waiting, and apply what was
+  // posted, then its own IPI
   poll(m) {
     if (Atomics.load(this.ctl, C.DOOR) !== this.seenDoor) this.service();
+    else for (let k = 1; k < this.n; k++) this.applyPosted(k);
     return super.poll(m);
+  }
+
+  // CPU k's posted writes, in the order it made them
+  applyPosted(k) {
+    const q = this.pq, b = k * PQSTRIDE, t = Atomics.load(q, b + 1);
+    let h = Atomics.load(q, b);
+    if (h === t) return;
+    const bus = this.m0.bus;
+    while (h !== t) {
+      const e = b + 2 + 2 * (h & (PQLEN - 1)), a = q[e], v = q[e + 1];
+      if (a & 0x10000) bus.write8(a & 0xffff, v);
+      else bus.write32(a, v);
+      h = (h + 1) | 0;
+    }
+    Atomics.store(q, b, h);
+    Atomics.notify(q, b);               // a CPU waiting for room
   }
 
   // Every request waiting, answered; and the time published
@@ -233,6 +270,7 @@ export class ParHost extends ParCore {
     Atomics.store(ctl, C.TIMEMS, this.dev.simMs());
     for (let k = 1; k < this.n; k++) {
       const b = word(k, 0);
+      this.applyPosted(k);              // before its request: they came first
       if (Atomics.load(ctl, b + K.REQ) !== R.ASK) continue;
       const kind = ctl[b + K.KIND];
       let ra = 0, rstop = STOP.BUDGET;

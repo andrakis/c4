@@ -350,7 +350,9 @@ processors: c4mp's instruction set (`src/c4mp/README.md`), simulated
   after S4).
 - **Every other CPU** is a worker running an `ApMachine` on the shared
   arena. What it cannot do itself, it asks CPU 0 through its request
-  slot: the host syscalls but the heap's, and device registers. Everything else of
+  slot: the host syscalls but the heap's, and device registers. The sound
+  card's writes that need no answer it posts instead, to a queue of its
+  own that CPU 0 applies in order (par.js `POSTED`, docs/c4ix-smp.md). Everything else of
   memory it reads and writes as CPU 0 does, through arena.js: unaligned
   words, low memory, the arena's ends.
 - **The atomics** are `Atomics`. `CWAI` blocks a worker in

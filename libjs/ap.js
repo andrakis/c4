@@ -11,7 +11,7 @@
 
 import { Arena } from '../src/c4bb/sim/arena.js';
 import { OP, STOP, Machine } from './c4m.js';
-import { C, K, S, R, KIND, ParCore } from './par.js';
+import { C, K, S, R, KIND, ParCore, POSTED, PQLEN, PQSTRIDE } from './par.js';
 import { SharedHeap } from './sheap.js';
 
 const word = (k, f) => C.CPU0 + k * C.STRIDE + f;
@@ -41,8 +41,29 @@ class ApMachine extends Machine {
     super(arena, dev, bus, null);
     this.fixedInfo = info;
     this.core = core;
+    this.posted = 0;                    // writes posted since CPU 0 was last told
   }
   info() { return this.fixedInfo; }
+
+  // A posted write (par.js POSTED): queued for CPU 0, which applies it
+  // before it answers this CPU's next question. A full queue waits for room.
+  post(addr, val, w8) {
+    const q = this.core.pq, b = this.cpuId * PQSTRIDE, t = q[b + 1];
+    for (;;) {
+      const h = Atomics.load(q, b);
+      if (((t - h) | 0) < PQLEN) break;
+      this.core.ring();
+      Atomics.wait(q, b, h, 5);
+      if (Atomics.load(this.core.ctl, C.HALT)) return;
+    }
+    const e = b + 2 + 2 * (t & (PQLEN - 1));
+    q[e] = addr | (w8 ? 0x10000 : 0);
+    q[e + 1] = val;
+    Atomics.store(q, b + 1, (t + 1) | 0);
+    this.posted = 1;
+  }
+  // CPU 0 told there are posted writes to apply, if it may be asleep
+  flushPosted() { if (this.posted) { this.posted = 0; this.core.ring(); } }
 
   // one question for CPU 0, and wait for its answer
   ask(kind, op, addr, val) {
@@ -73,6 +94,7 @@ class ApMachine extends Machine {
     if (op === OP.TIME) { this.a = this.dev.simMs(); return STOP.BUDGET; }
     if (op === OP.USLP) {
       // this CPU sleeps; the others carry on
+      this.flushPosted();
       const ms = Math.max(1, Math.floor(this.ld32(this.sp) / 1000));
       Atomics.wait(this.core.ctl, word(this.cpuId, K.SLEEP), 0, ms);
       this.a = 0;
@@ -108,13 +130,21 @@ class ApBus {
   }
   write32(addr, val) {
     addr = addr >>> 0;
-    if (this.dev(addr)) { this.m.ask(KIND.WR32, 0, addr & ~3, val); return; }
+    if (this.dev(addr)) {
+      if (POSTED.has(addr & ~3)) { this.m.post(addr & ~3, val | 0, 0); return; }
+      this.m.ask(KIND.WR32, 0, addr & ~3, val);
+      return;
+    }
     this.arena.write32(addr, val | 0);
   }
   read8s(addr) { return this.arena.read8s(addr); }
   write8(addr, val) {
     addr = addr >>> 0;
-    if (this.dev(addr)) { this.m.ask(KIND.WR8, 0, addr, val & 0xff); return; }
+    if (this.dev(addr)) {
+      if (POSTED.has(addr & ~3)) { this.m.post(addr, val & 0xff, 1); return; }
+      this.m.ask(KIND.WR8, 0, addr, val & 0xff);
+      return;
+    }
     this.arena.write8(addr, val);
   }
 }
@@ -123,7 +153,7 @@ function main(msg) {
   const arena = new Arena(msg.arena);
   const ctl = new Int32Array(msg.ctl);
   const id = msg.id;
-  const core = new ParCore(ctl, arena.i32, msg.n);
+  const core = new ParCore(ctl, arena.i32, msg.n, new Int32Array(msg.pq));
   const dev = new ApDev(ctl, msg.cyclesPerMs);
   const bus = new ApBus(arena);
   const m = new ApMachine(arena, dev, bus, msg.info, core);
@@ -159,6 +189,7 @@ function main(msg) {
       // a slice, then an IPI or the machine's end looked for: not inside
       // the instruction loop, which would run it at half speed
       const r = m.run(65536);
+      m.flushPosted();
       core.poll(m);
       Atomics.store(ctl, word(id, K.CYCLES), m.cycle | 0);
       if (dev.halted || Atomics.load(ctl, C.HALT)) return;

@@ -35,7 +35,8 @@ enum { C4DOS_MAGIC = 4404292 };
 
 // API table slots. Slots 0-8 are v1; 9-14 are v2 and MUST be gated on
 // dos_version() >= 2, because a v1 DOS allocated a 16-word table and
-// filled only the first nine -- the rest was uninitialised heap.
+// filled only the first nine -- the rest was uninitialised heap. 15 is
+// v3 (the clock) and 16-25 are v4 (below); the table is 32 words.
 enum {
   C4DOS_SLOT_MAGIC   = 0,
   C4DOS_SLOT_EXIT    = 1,   // dos_exit(status): return to the prompt
@@ -285,4 +286,84 @@ int dos_release () {
   if (!__c4dos_api[C4DOS_SLOT_RELEASE]) return 0;
   if (!__c4dos_arm()) return 0;
   return __c4dos_call0((int *)__c4dos_api[C4DOS_SLOT_RELEASE]);
+}
+
+// ---- slot 1: exit ---------------------------------------------------------
+//
+// Back to whoever ran us, from any depth, with a status: DOS's prompt,
+// or the program that exec'd or started us, or the caller of a catch.
+// It does not return. Under no DOS it returns -1, and the caller had
+// better return from main itself.
+int dos_exit (int status) {
+  if (!dos_present()) return 0 - 1;
+  if (!__c4dos_api[C4DOS_SLOT_EXIT]) return 0 - 1;
+  if (!__c4dos_arm()) return 0 - 1;
+  return __c4dos_call1((int *)__c4dos_api[C4DOS_SLOT_EXIT], status);
+}
+
+// ---- v4: the console, running programs, deleting files ------------------
+//
+// What a shell needs to be one without a loader of its own (grin,
+// docs/grin-plan.md 3.2), and what lets DOS decide where a program's
+// console goes. Gated, like everything from slot 9 up, on the version
+// word AND the slot; 18 is there only with a RAM disk.
+enum { C4DOS_API_V4 = 4 };
+enum {
+  C4DOS_SLOT_CONWRITE = 16, // conwrite(buf, n) -> n: console output
+  C4DOS_SLOT_CONREAD  = 17, // conread(buf, n) -> bytes, at most a line; 0 at end
+  C4DOS_SLOT_UNLINK   = 18, // unlink(name) -> 0, or -1
+  C4DOS_SLOT_EXEC     = 19, // exec(cmdline) -> its status, as the prompt runs it
+  C4DOS_SLOT_LOAD     = 20, // load(path) -> handle, constructors run; 0 on failure
+  C4DOS_SLOT_START    = 21, // start(h, argc, argv) -> main's status; h stays loaded
+  C4DOS_SLOT_UNLOAD   = 22, // unload(h) -> 0: destructors, image and heap freed; -1
+  C4DOS_SLOT_CATCH    = 23, // catch(fn, arg, &exited) -> fn(arg), or exit()'s status
+  C4DOS_SLOT_SINK     = 24, // sink(write, read, ctx): console to f(ctx, buf, n); 0 = DOS's
+  C4DOS_SLOT_SHELL    = 25  // data, not code: the shell's table (grin's), or 0
+};
+
+int dos_v4 (int slot) {
+  if (dos_version() < C4DOS_API_V4) return 0;
+  return __c4dos_api[slot] != 0;
+}
+
+int dos_conwrite (char *buf, int n) {
+  if (!dos_v4(C4DOS_SLOT_CONWRITE) || !__c4dos_arm()) return 0 - 1;
+  return __c4dos_call2((int *)__c4dos_api[C4DOS_SLOT_CONWRITE], (int)buf, n);
+}
+int dos_conread (char *buf, int n) {
+  if (!dos_v4(C4DOS_SLOT_CONREAD) || !__c4dos_arm()) return 0 - 1;
+  return __c4dos_call2((int *)__c4dos_api[C4DOS_SLOT_CONREAD], (int)buf, n);
+}
+int dos_unlink (char *name) {
+  if (!dos_v4(C4DOS_SLOT_UNLINK) || !__c4dos_arm()) return 0 - 1;
+  return __c4dos_call1((int *)__c4dos_api[C4DOS_SLOT_UNLINK], (int)name);
+}
+int dos_exec (char *cmdline) {
+  if (!dos_v4(C4DOS_SLOT_EXEC) || !__c4dos_arm()) return 0 - 1;
+  return __c4dos_call1((int *)__c4dos_api[C4DOS_SLOT_EXEC], (int)cmdline);
+}
+int dos_load (char *path) {
+  if (!dos_v4(C4DOS_SLOT_LOAD) || !__c4dos_arm()) return 0;
+  return __c4dos_call1((int *)__c4dos_api[C4DOS_SLOT_LOAD], (int)path);
+}
+int dos_start (int h, int argc, char **argv) {
+  if (!dos_v4(C4DOS_SLOT_START) || !__c4dos_arm()) return 0 - 1;
+  return __c4dos_call3((int *)__c4dos_api[C4DOS_SLOT_START], h, argc, (int)argv);
+}
+int dos_unload (int h) {
+  if (!dos_v4(C4DOS_SLOT_UNLOAD) || !__c4dos_arm()) return 0 - 1;
+  return __c4dos_call1((int *)__c4dos_api[C4DOS_SLOT_UNLOAD], h);
+}
+// fn is a function's address (&f); exited may be 0
+int dos_catch (int *fn, int arg, int *exited) {
+  if (!dos_v4(C4DOS_SLOT_CATCH) || !__c4dos_arm()) return 0 - 1;
+  return __c4dos_call3((int *)__c4dos_api[C4DOS_SLOT_CATCH], (int)fn, arg, (int)exited);
+}
+int dos_sink (int *w, int *r, int ctx) {
+  if (!dos_v4(C4DOS_SLOT_SINK) || !__c4dos_arm()) return 0 - 1;
+  return __c4dos_call3((int *)__c4dos_api[C4DOS_SLOT_SINK], (int)w, (int)r, ctx);
+}
+int *dos_shell () {
+  if (dos_version() < C4DOS_API_V4) return 0;
+  return (int *)__c4dos_api[C4DOS_SLOT_SHELL];
 }

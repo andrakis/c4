@@ -12,6 +12,12 @@
 #      transient) compiles and runs hello.c INSIDE the simulated
 #      computer, then hands the prompt back.
 #
+# API v4 (re-entrant RUN: exec, load/start/unload, catch, unlink, the
+# console slots and the sink) is checked on the native leg, the tower and
+# c4bb alike, by src/tests/dosexec.c: the same scenarios, the same
+# answers, wherever DOS runs. HEAP.SYS needs libjs's heap and is
+# test-c4dos-heap's (libjs/tests/test-c4dos-heap.mjs).
+#
 # Run from the repo root: bash src/c4dos/tests/test-c4dos.sh
 
 set -e
@@ -51,7 +57,7 @@ cp src/c4dos/fs/AUTOEXEC.BAT $T/fs/autoexec.bat
 # Real spellings, not shouted: dir_resolve opens the name it finds in
 # this listing, so an entry of HELLO.C4R would name a file that is not
 # there and defeat the very lookup it exists to serve.
-printf 'config.sys\nautoexec.bat\nc4dos.dir\nhello.c4r\nraycast.c4r\ndosenum.c4r\n' > $T/fs/c4dos.dir
+printf 'config.sys\nautoexec.bat\nc4dos.dir\nhello.c4r\nraycast.c4r\ndosenum.c4r\ndosexec.c4r\ndosres.c4r\n' > $T/fs/c4dos.dir
 cp src/tests/hello.c4r $T/fs/hello.c4r
 # dosenum is the v2 API's pin: the only thing here that ENUMERATES the
 # RAM disk rather than naming a file. The kernel extension that seeds
@@ -59,6 +65,49 @@ cp src/tests/hello.c4r $T/fs/hello.c4r
 # has a working table under it.
 ./c4cc -o $T/fs/dosenum.c4r include/c4dos.h src/tests/dosenum.c > /dev/null
 [ "$HAVE_RAYCAST" = 1 ] && cp $T/raycast.c4r $T/fs/raycast.c4r
+# dosexec and dosres are API v4's: a program that runs programs.
+./c4cc -o $T/fs/dosexec.c4r include/c4dos.h src/tests/dosexec.c > /dev/null
+./c4cc -o $T/fs/dosres.c4r include/c4dos.h src/tests/dosres.c > /dev/null
+
+# The v4 session, and what it must say. Every leg runs the same one.
+V4_SCRIPT='dosexec deep 3\nECHO prompt answers\ndosexec resident\ndosexec catch\ndosexec file\nTYPE kid.txt\ndosexec unlink\ndosexec read\na line for the program\nECHO after read\ndosexec sink\nEXIT\n'
+check_v4 () { # leg, output
+  for want in \
+      'dosexec: level 0 exits with 3 from three calls down' \
+      'dosexec: level 1: child returned 3' \
+      'dosexec: level 2: child returned 13' \
+      'dosexec: level 3: child returned 23' \
+      'prompt answers' \
+      'dosexec: load gave a handle' \
+      'dosres: main call 1, the constructor said 42' \
+      'dosexec: first start returned 1' \
+      'dosres: main call 2, the constructor said 42' \
+      'dosexec: second start (it exits) returned 52' \
+      'dosres: destructor, after 2 call(s)' \
+      'dosexec: unload returned 0' \
+      'dosexec: unload again returned -1' \
+      'dosexec: start after unload returned -1' \
+      'dosexec: catch of an exit gave 42, exited 1' \
+      'dosexec: catch of a return gave 6, exited 0' \
+      'dosexec: kid.txt after the child: 16 bytes: made by a child' \
+      'dosexec: unlink gone.txt: 0' \
+      'dosexec: open after unlink: -1' \
+      'dosexec: unlink again: -1' \
+      'dosexec: conread 23 bytes: a line for the program' \
+      'dosexec: conwrite works' \
+      'after read' \
+      "dosexec: the sink got 'into the sink', ctx 77" \
+      'dosexec: and the console is back'; do
+    echo "$2" | grep -qF "$want" || { echo "FAIL $1 v4: no '$want'"; echo "$2" | tail -30; exit 1; }
+  done
+  # the file a child wrote is there for TYPE at the prompt too
+  [ "$(echo "$2" | grep -c 'made by a child$')" -ge 2 ] || { echo "FAIL $1 v4: TYPE kid.txt"; exit 1; }
+  # nothing ran after dos_exit, and the line typed ahead was the
+  # program's, not a command
+  if echo "$2" | grep -q 'dos_exit returned'; then echo "FAIL $1 v4: dos_exit returned"; exit 1; fi
+  if echo "$2" | grep -q 'bad command or file name: a'; then echo "FAIL $1 v4: conread missed its line"; exit 1; fi
+  return 0
+}
 
 R="$PWD"
 run_native () { # image, script on stdin
@@ -167,6 +216,16 @@ echo "$OUT" | grep -q "yello"                         || { echo "FAIL v2: RUN af
 echo "$OUT" | grep -q "DEVICE=RAMDISK.SYS"            || { echo "FAIL v2: TYPE after trim"; exit 1; }
 echo "test-c4dos: API v2 enumeration and memory hand-back OK"
 
+# ---- leg 2g: API v4 ---------------------------------------------------
+# RUN is re-entrant: exec three deep with an exit() from three calls
+# down at the bottom, a resident image loaded once and started twice,
+# catch around an exit, a file a child wrote outliving it, and the
+# console through DOS. This is the c4cc build of DOS; test-c4dos-heap
+# runs the same against the c4lc -O one.
+OUT=$(run_native c4dos-clock.c4r "$V4_SCRIPT")
+check_v4 native "$OUT"
+echo "test-c4dos: API v4 (exec, load/start/unload, catch, unlink, console, sink) OK"
+
 # ---- leg 2f: the ladder ---------------------------------------------
 # The claim this whole system exists to support: C4DOS builds C4KE.
 # dostar unpacks the sources onto the RAM disk, cpp preprocesses the
@@ -230,6 +289,10 @@ OUT=$( cd $T/fs && printf 'RUN hello.c4r\nEXIT\n' | "$R/c4" "$R/c4l.c" "$R/$T/c4
 echo "$OUT" | grep -q "yello"                    || { echo "FAIL tower: plain c4 could not run DOS+hello"; exit 1; }
 echo "$OUT" | grep -q "system halted"            || { echo "FAIL tower: no clean halt"; exit 1; }
 echo "test-c4dos: the tower holds (plain c4 -> c4l -> C4DOS -> hello)"
+# and re-entrant RUN needs nothing above EXIT either
+OUT=$( cd $T/fs && printf "$V4_SCRIPT" | "$R/c4" "$R/c4l.c" "$R/$T/c4dos.c4r" 2>&1 )
+check_v4 tower "$OUT"
+echo "test-c4dos: the tower runs API v4 too (programs running programs, on plain c4)"
 
 # ---- leg 4: THE MACHINE (c4bb) --------------------------------------
 if [ -x ./c4cc32 ] && command -v node > /dev/null; then
@@ -246,6 +309,18 @@ if [ -x ./c4cc32 ] && command -v node > /dev/null; then
   # the nesting really ran: c4.c4r's own exit chatter appears mid-session
   echo "$OUT" | grep -q "exit(0) cycle"          || { echo "FAIL c4bb: no evidence c4.c4r ran hello.c"; exit 1; }
   echo "test-c4dos: the machine boots DOS, and c4-inside-DOS-inside-c4bb runs hello.c"
+  # API v4 on the board, 32-bit, and HEAP.SYS turned down: c4bb's heap
+  # is its firmware's and keeps no generations
+  mkdir -p $T/fs32
+  cp $T/fs/config.sys $T/fs/autoexec.bat $T/fs32/
+  echo 'DEVICE=HEAP.SYS' >> $T/fs32/config.sys
+  ./c4cc32 -o $T/fs32/dosexec.c4r include/c4dos.h src/tests/dosexec.c > /dev/null
+  ./c4cc32 -o $T/fs32/dosres.c4r include/c4dos.h src/tests/dosres.c > /dev/null
+  (cd $T/fs32 && ls > c4dos.dir)
+  OUT=$(printf "$V4_SCRIPT" | node src/c4bb/sim/cli.js -c 900000000 -d $T/fs32 $T/c4dos32.c4r 2>&1)
+  echo "$OUT" | grep -q "HEAP.SYS: this machine's heap keeps no generations" || { echo "FAIL c4bb: HEAP.SYS should be refused"; exit 1; }
+  check_v4 c4bb "$OUT"
+  echo "test-c4dos: API v4 on c4bb, and HEAP.SYS declined there"
 else
   echo "test-c4dos: SKIP c4bb leg (need c4cc32 + node; run 'make c4bb-32bit')"
 fi

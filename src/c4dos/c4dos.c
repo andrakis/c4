@@ -21,11 +21,12 @@
 //   - the loader is src/c4ix/loader.c's parser (v3 MEMSZ-aware),
 //     de-structed into parallel globals for the plain-c4 dialect.
 //   - exit() for transients is the double-LEV trampoline proven in
-//     src/tests/test_coop_switch.c: run_trans() saves its own frame
+//     src/tests/test_coop_switch.c: frame_enter() saves its own frame
 //     address; dos_exit() points its frame pair at it and returns
-//     through the trampoline tail, landing exactly as if run_trans
-//     had returned. LEV never touches A, so the status rides back as
-//     the ordinary return value. No sp/bp registers were harmed.
+//     through the trampoline tail, landing exactly as if frame_enter
+//     had returned. Frames nest (API v4 exec, start, catch), and the
+//     status rides back in a global, not A. No sp/bp registers were
+//     harmed.
 //   - transients find dos_exit via the __c4dos_api symbol-injection
 //     pattern (src/c4ix/loader.c loader_systable): the loader scans
 //     the image's symbols and writes the API table address into it.
@@ -84,8 +85,12 @@ enum { VER_MAJOR = 0, VER_MINOR = 1 };
 
 int *c4l_stub_slot;      // operand slot of the rewritten invoke stub
 int g_tramp_pc;          // the trampoline tail: ADJ/LEV, learned at boot
-int g_run_bp;            // run_trans's frame address while a transient runs
-int g_in_trans;          // a transient is running (dos_exit sanity check)
+int g_run_bp;            // the innermost run frame's address (frame_enter)
+int g_in_trans;          // a run frame is open (dos_exit sanity check)
+int g_exited;            // the frame being left was left through dos_exit...
+int g_exit_status;       // ...with this status
+int g_last_exited;       // what frame_call found, for its caller
+int g_depth;             // run frames open, 0 at the prompt
 
 char *g_line;            // the command line buffer
 char **g_argv;           // parsed argument vector
@@ -155,7 +160,48 @@ int drv_num (char *s) {
   return 0 - 1;
 }
 
-// loaded-image registers (the plain-c4 "struct")
+// ---- heap generations (DEVICE=HEAP.SYS) ----------------------------
+//
+// Nothing frees what a program allocated and never gave back, so before
+// this a game that took 15 MB left most of it behind every time it ran,
+// and "play, quit, play another" ran out after a few rounds. The heap
+// can now tag each block with a generation and free a whole generation
+// with one store (libjs's heap.js; HEAP_GEN and HEAP_RELEASE, beside
+// HEAP_USED in src/c4bb/sim/devices.js). DOS gives each program a
+// generation of its own and releases it when the program is unloaded.
+//
+// The rule that makes it safe: DOS's own memory is generation 0, which
+// the heap never releases, and every API entry that allocates on DOS's
+// behalf -- a RAM-disk file a child creates or grows, the scratch, a
+// loaded image's handle, an exec's command line -- switches to it for
+// the allocation and back (gen_dos/gen_set). Otherwise a file written by
+// a child would be freed with the child.
+//
+// ANNOUNCED, never probed, like the drives: these are device registers
+// on libjs and ordinary memory under native c4m. And once announced,
+// checked: a machine with the registers but no heap behind them (c4bb,
+// whose heap is its firmware's) reads HEAP_GEN back as 0, and DOS then
+// says so and carries on without.
+enum { BB_HEAP_BASE = 0x144, BB_HEAP_END = 0x148, BB_HEAP_USED = 0x1c0,
+       BB_HEAP_GEN = 0x1c4, BB_HEAP_RELEASE = 0x1c8 };
+
+int g_heapgen;           // CONFIG.SYS said DEVICE=HEAP.SYS, and it answered
+int g_gen_next;          // the last generation handed out
+
+int gen_get () { if (!g_heapgen) return 0; return *(int *)BB_HEAP_GEN; }
+int gen_set (int g) { if (g_heapgen) *(int *)BB_HEAP_GEN = g; return 0; }
+// switch to DOS's own generation; returns the one to go back to
+int gen_dos () {
+  int old;
+  if (!g_heapgen) return 0;
+  old = *(int *)BB_HEAP_GEN;
+  *(int *)BB_HEAP_GEN = 0;
+  return old;
+}
+int gen_release (int g) { if (g_heapgen && g) *(int *)BB_HEAP_RELEASE = g; return 0; }
+
+// loaded-image registers (the plain-c4 "struct"), filled by c4r_load and
+// copied straight into a handle (img_load) before anything else can run
 int *img_code; char *img_data; int img_entry; int *img_cons; int img_ncons;
 int *img_des; int img_ndes;
 
@@ -190,8 +236,11 @@ int starts_ci (char *s, char *prefix) {
 // re-allocated if it went away. Returns 0 only when memory is gone,
 // which every caller already had to handle.
 char *scratch_need () {
+  int g;
   if (!g_scratch) {
+    g = gen_dos();       // DOS's, whoever's call brought it back
     if (!(g_scratch = malloc(BUF_MAX))) printf("c4dos: out of memory\n");
+    gen_set(g);
   }
   return g_scratch;
 }
@@ -233,6 +282,7 @@ int stub () {
 int invoke0 (int *code) { *c4l_stub_slot = (int)code; return stub(0); }
 int invoke1 (int *code, int a) { *c4l_stub_slot = (int)code; return stub(a); }
 int invoke2 (int *code, int a, int b) { *c4l_stub_slot = (int)code; return stub(a, b); }
+int invoke3 (int *code, int a, int b, int c) { *c4l_stub_slot = (int)code; return stub(a, b, c); }
 
 // ---- the trampoline (test_coop_switch.c's mechanism) ---------------------
 // tramp_mark records its raw return pc: the instruction after the JSR
@@ -254,10 +304,14 @@ int learn_trampoline () {
 // The transient-facing API. Slot 1 of the table handed to programs
 // via __c4dos_api. A transient's exit() calls this instead of the
 // EXIT opcode (which would halt the machine), from however deep it is:
-// the trampoline below returns from run_trans, not from this call.
-// The call is an indirect one, so only a program built for a machine
-// that has them can make it -- libc's bare.c does; include/c4dos.h,
-// which keeps to the invoke stub, still returns from main.
+// the trampoline below returns from the innermost run frame
+// (frame_enter), not from this call. libc's bare.c calls it directly;
+// include/c4dos.h's dos_exit() reaches it through the invoke stub.
+//
+// The status rides home in g_exit_status, not in A. The trampoline tail
+// is whatever follows the JSR in learn_trampoline, and learn_trampoline's
+// `return 0` may well put an IMM 0 there. Nothing read the status while
+// the prompt was the only caller; exec, start and catch do.
 int dos_exit (int status) {
   int *bp;
   if (!g_in_trans) {
@@ -265,10 +319,54 @@ int dos_exit (int status) {
     exit(1);
   }
   g_in_trans = 0;
+  g_exited = 1;
+  g_exit_status = status;
   bp = (int *)(&bp + 1);
-  *bp = g_run_bp;          // after our LEV: bp = run_trans's frame...
+  *bp = g_run_bp;          // after our LEV: bp = frame_enter's frame...
   *(bp + 1) = g_tramp_pc;  // ...pc = the trampoline tail (ADJ/LEV)
-  return status;           // LEV; A carries the status home
+  return status;
+}
+
+// ---- run frames ----------------------------------------------------------
+// Every call DOS makes into a program's code -- its constructors, main,
+// its destructors, and whatever a caller hands to slot 23 (catch) -- goes
+// through a run frame, so an exit() anywhere below lands back here.
+// Frames nest: a program can exec another, which can exec a third, and
+// each exit() returns to the innermost. That is all re-entrancy needed
+// from the trampoline: frame_call keeps the outer frame's g_run_bp and
+// g_in_trans in its own locals while the inner one is open.
+//
+// frame_enter records its own frame and makes the call. On a normal
+// return it returns what the callee did; through dos_exit it returns
+// as if it had, with A unspecified -- frame_call, its caller, reads
+// g_exited to tell which happened.
+int frame_enter (int code, int n, int a, int b) {
+  int *bp;
+  bp = (int *)(&bp + 1);
+  g_run_bp = (int)bp;
+  g_in_trans = 1;
+  if (n == 2) return invoke2((int *)code, a, b);
+  return invoke1((int *)code, a);
+}
+
+// Call code(a) (n == 1) or code(a, b) (n == 2) under a run frame. Returns
+// its value, or the exit() status if it left that way; g_last_exited says
+// which.
+int frame_call (int code, int n, int a, int b) {
+  int old_bp, old_in, r, ex;
+  old_bp = g_run_bp;
+  old_in = g_in_trans;
+  ++g_depth;
+  g_exited = 0;
+  r = frame_enter(code, n, a, b);
+  ex = g_exited;
+  g_exited = 0;
+  if (ex) r = g_exit_status;
+  --g_depth;
+  g_run_bp = old_bp;
+  g_in_trans = old_in;
+  g_last_exited = ex;
+  return r;
 }
 
 // ---- the loader (src/c4ix/loader.c's parser, v3 MEMSZ-aware) -------------
@@ -406,6 +504,39 @@ int ram_write (int slot, char *buf, int n) {
   return n;
 }
 
+// Delete `name` from the RAM disk; 0, or -1 if it is not there. Later
+// files move down a slot, so the listing keeps no holes (count/entname
+// enumerate by index). Read handles follow their files; a WRITE handle
+// is the slot number itself, so a file still being written when an
+// earlier one is deleted would be written into its neighbour. Nothing
+// does that today: every writer here creates, writes and closes in one
+// go.
+int ram_unlink (char *name) {
+  int slot, i;
+  if (!g_ramdisk) return 0 - 1;
+  if (ram_name(name)) name = ram_name(name);
+  if ((slot = ram_find(name)) < 0) return 0 - 1;
+  g_ram_used = g_ram_used - g_ram_cap[slot];
+  if (g_ram_data[slot]) free((char *)g_ram_data[slot]);
+  free((char *)g_ram_name[slot]);
+  i = 0;
+  while (i < RAMHANDLE) {
+    if (g_rh_slot[i] == slot) g_rh_slot[i] = 0 - 1;
+    else if (g_rh_slot[i] > slot) g_rh_slot[i] = g_rh_slot[i] - 1;
+    ++i;
+  }
+  i = slot;
+  while (i + 1 < g_ram_n) {
+    g_ram_name[i] = g_ram_name[i + 1];
+    g_ram_data[i] = g_ram_data[i + 1];
+    g_ram_len[i] = g_ram_len[i + 1];
+    g_ram_cap[i] = g_ram_cap[i + 1];
+    ++i;
+  }
+  --g_ram_n;
+  return 0;
+}
+
 // open a RAM file for reading; returns a pseudo-fd or -1
 int ram_open (char *name) {
   int slot, h;
@@ -530,10 +661,13 @@ int dos_close (int fd) {
   return 0;
 }
 
-int c4r_load (char *path, int *api) {
+// The image's code and data are allocated in generation `gen`, the
+// program's own, so that releasing it takes them too; the scratch, which
+// is DOS's, is not.
+int c4r_load (char *path, int *api, int gen) {
   char *p, *data;
   int *code, *cons, *des;
-  int fd, n, total;
+  int fd, n, total, g;
   int entry, codelen, datalen, patchlen, symlen, conslen, deslen, memsz;
   int i, ptype, paddr, pvalu;
 
@@ -570,14 +704,20 @@ int c4r_load (char *path, int *api) {
 
   // code: copy out of the shared scratch into an exact allocation
   p = p + sizeof(int);   // 'C' marker
-  if (!(code = malloc(codelen * sizeof(int)))) { printf("c4dos: out of memory\n"); return 0; }
+  g = gen_get();
+  gen_set(gen);
+  code = malloc(codelen * sizeof(int));
+  data = 0;
+  if (code) data = malloc(memsz + sizeof(int));
+  gen_set(g);
+  if (!code) { printf("c4dos: out of memory\n"); return 0; }
+  if (!data) { free(code); printf("c4dos: out of memory\n"); return 0; }
   i = 0;
   while (i < codelen) { code[i] = wordat(p + i * sizeof(int)); ++i; }
   p = p + codelen * sizeof(int);
 
-  // data: allocate MEMSZ (BSS tail zeroed), copy DATALEN
+  // data: MEMSZ, allocated above (BSS tail zeroed), copy DATALEN
   p = p + sizeof(int);   // 'D' marker
-  if (!(data = malloc(memsz + sizeof(int)))) { free(code); printf("c4dos: out of memory\n"); return 0; }
   memset(data, 0, memsz + sizeof(int));
   i = 0;
   while (i < datalen) { data[i] = p[i]; ++i; }
@@ -609,24 +749,11 @@ int c4r_load (char *path, int *api) {
   img_code = code;
   img_data = data;
   img_entry = (int)(code + entry);
-  img_cons = cons;      // point into g_scratch: run them BEFORE the next load
+  img_cons = cons;      // point into g_scratch: img_load copies them out
   img_ncons = conslen;
   img_des = des;
   img_ndes = deslen;
   return 1;
-}
-
-// Save our own frame address, then hand control to the transient.
-// Either main returns normally (its LEV walks back to us through the
-// invoke stub) or dos_exit trampolines - both land here, status in A.
-int run_trans (int entry, int argc, char **argv) {
-  int *bp, r;
-  bp = (int *)(&bp + 1);
-  g_run_bp = (int)bp;
-  g_in_trans = 1;
-  r = invoke2((int *)entry, argc, (int)argv);
-  g_in_trans = 0;
-  return r;
 }
 
 // The API table: [0] magic 'C4D', [1] dos_exit, [2..] the rest (see
@@ -638,10 +765,9 @@ int *g_api;
 enum { C4DOS_REFUSE = 1127037010 };   // 'C','4','D','R'
 
 // A constructor returning EXACTLY C4DOS_REFUSE aborts the program.
-// There is no other way for a transient to decline: exit() is the EXIT
-// opcode, which halts the whole machine, and g_api[1] (dos_exit) may
-// only be called while main runs -- run_trans is the frame it returns
-// through, and a constructor runs before there is one. u0.h uses this to say "requires C4KE"
+// It was the only way for a transient to decline: exit() is the EXIT
+// opcode, which halts the whole machine, and g_api[1] (dos_exit) had no
+// frame to return through before main ran. u0.h uses this to say "requires C4KE"
 // instead of trap-storming through 38 opcode requests at a kernel that
 // is not here; libc4ix.c says the same for C4IX.
 //
@@ -655,23 +781,176 @@ enum { C4DOS_REFUSE = 1127037010 };   // 'C','4','D','R'
 // 1127037010 is 'C','4','D','R' -- "DOS, refuse" -- written out
 // because plain c4 cannot fold that in an enum. Kept in step with
 // include/c4dos.h, include/u0.h and src/c4ix/lib/libc4ix.c.
-int run_program (char *path, int argc, char **argv) {
-  int r, i;
-  if (!c4r_load(path, g_api)) return -1;
+//
+// An exit() in a constructor is a refusal too. Constructors run under a
+// run frame like everything else, so it returns here rather than to
+// whichever program loaded this one.
+
+// ---- loaded images (API v4 load, start, unload) --------------------------
+// RUN used to keep what it loaded in the img_* globals and the scratch,
+// so a program could not run another. Now each load is a HANDLE, a block
+// of words (the plain-c4 struct) that owns its code, data, its own copies
+// of the constructor and destructor tables, and its heap generation.
+// RUN is load + start + unload; slots 20-22 offer the three apart, so a
+// shell can keep an image loaded after its main returns (grin's
+// applications, docs/grin-plan.md 3.4).
+enum { H_CODE, H_DATA, H_ENTRY, H_CONS, H_NCONS, H_DES, H_NDES, H_GEN,
+       H_PARENT, H_RUN, H_WORDS };
+enum { IMGMAX = 32 };
+
+int *g_imgs;             // the live handles, 0 = a free entry
+int g_cur_img;           // the image whose code DOS last called into, 0 = none
+int g_refused;           // why the last img_load returned 0: a refusal
+
+int img_find (int h) {
+  int i;
   i = 0;
-  while (i < img_ncons) {
-    if ((r = invoke1(img_code + img_cons[i], 0)) == C4DOS_REFUSE) {
-      free(img_code);
-      free(img_data);
-      return r;
+  while (i < IMGMAX) {
+    if (g_imgs[i] == h) return i;
+    ++i;
+  }
+  return 0 - 1;
+}
+
+// n words of a table that points into the scratch, in a block of their
+// own (one word more, so an empty table is a block too); 0 when memory
+// is gone
+int *words_copy (int *src, int n) {
+  int *d; int i;
+  if (!(d = malloc((n + 1) * sizeof(int)))) return 0;
+  i = 0;
+  while (i < n) { d[i] = src[i]; ++i; }
+  return d;
+}
+
+// Give everything back, generation and all. DOS's generation must be
+// current: the handle and the tables are DOS's.
+int img_free (int *p) {
+  int i;
+  free((char *)p[H_CODE]);
+  free((char *)p[H_DATA]);
+  if (p[H_CONS]) free((char *)p[H_CONS]);
+  if (p[H_DES]) free((char *)p[H_DES]);
+  gen_release(p[H_GEN]);
+  if ((i = img_find((int)p)) >= 0) g_imgs[i] = 0;
+  free((char *)p);
+  return 0;
+}
+
+// Call one of the image's own functions (a constructor or destructor,
+// at word offset `off` in its code) with the image's generation current.
+int img_call (int *p, int off) {
+  int old, oldimg, r;
+  old = gen_get();
+  oldimg = g_cur_img;
+  gen_set(p[H_GEN]);
+  g_cur_img = (int)p;
+  ++p[H_RUN];
+  r = frame_call((int)((int *)p[H_CODE] + off), 1, 0, 0);
+  --p[H_RUN];
+  g_cur_img = oldimg;
+  gen_set(old);
+  return r;
+}
+
+// Load an image and run its constructors. Returns a handle, or 0 (and
+// g_refused set when a constructor declined).
+int img_load (char *path) {
+  int *p; int g, slot, i, r;
+  g_refused = 0;
+  g = gen_dos();
+  p = 0;
+  if ((slot = img_find(0)) < 0) printf("c4dos: %d programs loaded, no room for another\n", IMGMAX);
+  else if (!(p = malloc(H_WORDS * sizeof(int)))) printf("c4dos: out of memory\n");
+  if (p) {
+    memset(p, 0, H_WORDS * sizeof(int));
+    if (g_heapgen) p[H_GEN] = ++g_gen_next;
+    if (!c4r_load(path, g_api, p[H_GEN])) {
+      gen_release(p[H_GEN]);
+      free((char *)p);
+      p = 0;
+    }
+  }
+  if (p) {
+    p[H_CODE] = (int)img_code;
+    p[H_DATA] = (int)img_data;
+    p[H_ENTRY] = img_entry;
+    p[H_NCONS] = img_ncons;
+    p[H_NDES] = img_ndes;
+    p[H_CONS] = (int)words_copy(img_cons, img_ncons);
+    p[H_DES] = (int)words_copy(img_des, img_ndes);
+    p[H_PARENT] = g_cur_img;
+    g_imgs[slot] = (int)p;
+    if (!p[H_CONS] || !p[H_DES]) {
+      printf("c4dos: out of memory\n");
+      img_free(p);
+      p = 0;
+    }
+  }
+  gen_set(g);
+  if (!p) return 0;
+  i = 0;
+  while (i < p[H_NCONS]) {
+    r = img_call(p, ((int *)p[H_CONS])[i]);
+    if (r == C4DOS_REFUSE || g_last_exited) {
+      g = gen_dos();
+      img_free(p);
+      gen_set(g);
+      g_refused = 1;
+      return 0;
     }
     ++i;
   }
-  r = run_trans(img_entry, argc, argv);
+  return (int)p;
+}
+
+// Call main(argc, argv) under a run frame, in the image's generation.
+// Returns its status; the image stays loaded.
+int img_start (int h, int argc, char **argv) {
+  int *p; int old, oldimg, r;
+  if (!h || img_find(h) < 0) return 0 - 1;
+  p = (int *)h;
+  old = gen_get();
+  oldimg = g_cur_img;
+  gen_set(p[H_GEN]);
+  g_cur_img = h;
+  ++p[H_RUN];
+  r = frame_call(p[H_ENTRY], 2, argc, (int)argv);
+  --p[H_RUN];
+  g_cur_img = oldimg;
+  gen_set(old);
+  return r;
+}
+
+// Run the destructors, then free the image and release its generation.
+// Images it loaded and left loaded go first. An image whose code is
+// still running -- below us on the stack -- is refused (-1).
+int img_unload (int h) {
+  int *p; int i, g;
+  if (!h || img_find(h) < 0) return 0 - 1;
+  p = (int *)h;
+  if (p[H_RUN]) return 0 - 1;
   i = 0;
-  while (i < img_ndes) { invoke0(img_code + img_des[i]); ++i; }
-  free(img_code);
-  free(img_data);
+  while (i < IMGMAX) {
+    if (g_imgs[i] && ((int *)g_imgs[i])[H_PARENT] == h) img_unload(g_imgs[i]);
+    ++i;
+  }
+  i = 0;
+  while (i < p[H_NDES]) { img_call(p, ((int *)p[H_DES])[i]); ++i; }
+  g = gen_dos();
+  img_free(p);
+  gen_set(g);
+  return 0;
+}
+
+int run_program (char *path, int argc, char **argv) {
+  int h, r;
+  if (!(h = img_load(path))) {
+    if (g_refused) return C4DOS_REFUSE;
+    return 0 - 1;
+  }
+  r = img_start(h, argc, argv);
+  img_unload(h);
   return r;
 }
 
@@ -717,6 +996,85 @@ int get_line () {
     }
   }
   return 1;
+}
+
+// ---- the console (API v4 slots 16, 17 and 24) ----------------------------
+// A program linked with libc's bare.c writes fd 1 and 2 and reads fd 0
+// through these, so DOS decides where its console goes: the real one, or
+// a sink a shell installed (grin's DOS Prompt windows), and in time a
+// redirect file (REDIR.SYS, a later milestone). c4cc programs print with
+// PRTF and never come here.
+int g_sink_w;            // write(ctx, buf, n), or 0 for the console
+int g_sink_r;            // read(ctx, buf, n), or 0 for the console
+int g_sink_ctx;
+
+// n bytes to the real console. %.*s a run at a time, which every printf
+// in the family takes (c4bb's firmware formatter does too), and a NUL,
+// which would end a run, on its own.
+int con_put (char *buf, int n) {
+  int i, j;
+  i = 0;
+  while (i < n) {
+    j = i;
+    while (j < n && buf[j]) ++j;
+    if (j > i) printf("%.*s", j - i, buf + i);
+    if (j < n) { printf("%c", 0); ++j; }
+    i = j;
+  }
+  return n;
+}
+
+// Up to n bytes of the real console, a line at a time: what is buffered
+// up to and including the next newline, waiting for one if need be; at
+// end of input whatever is left, and then 0. The same buffer the prompt
+// reads, so a line typed ahead of a program is the program's -- before,
+// a program reading fd 0 itself missed whatever DOS had already read.
+int con_get (char *buf, int n) {
+  int i, k, got;
+  if (n <= 0) return 0;
+  got = 0 - 1;
+  while (got < 0) {
+    i = g_inpos;
+    while (i < g_inlen && g_inbuf[i] != 10) ++i;
+    if (i < g_inlen) got = i + 1 - g_inpos;
+    else {
+      k = g_inlen - g_inpos;
+      i = 0;
+      while (i < k) { g_inbuf[i] = g_inbuf[g_inpos + i]; ++i; }
+      g_inlen = k;
+      g_inpos = 0;
+      if (g_inlen >= INBUFMAX) got = g_inlen;     // a line longer than the buffer
+      else {
+        k = read(0, g_inbuf + g_inlen, INBUFMAX - g_inlen);
+        if (k <= 0) got = g_inlen;                // end of input
+        else g_inlen = g_inlen + k;
+      }
+    }
+  }
+  if (got > n) got = n;
+  i = 0;
+  while (i < got) { buf[i] = g_inbuf[g_inpos + i]; ++i; }
+  g_inpos = g_inpos + got;
+  return got;
+}
+
+int dos_api_conwrite (char *buf, int n) {
+  if (n <= 0) return 0;
+  if (g_sink_w) return invoke3((int *)g_sink_w, g_sink_ctx, (int)buf, n);
+  return con_put(buf, n);
+}
+int dos_api_conread (char *buf, int n) {
+  if (g_sink_r) return invoke3((int *)g_sink_r, g_sink_ctx, (int)buf, n);
+  return con_get(buf, n);
+}
+// Point the console at a caller's functions; 0 for either gives that
+// direction back to DOS. They are called as f(ctx, buf, n) and return
+// what write() and read() would.
+int dos_api_sink (int w, int r, int ctx) {
+  g_sink_w = w;
+  g_sink_r = r;
+  g_sink_ctx = ctx;
+  return 0;
 }
 
 // Wait for the user before the next screenful. get_line() is exactly
@@ -861,9 +1219,21 @@ int cmd_time () {
 }
 
 int cmd_mem () {
+  int used, total, i, n;
   // no meminfo primitive; report what DOS knows it holds
   printf("resident: C4DOS shell, %d byte scratch, %d byte line buffer\n",
          BUF_MAX, LINEMAX);
+  // ...unless HEAP.SYS said where the heap's books are. The machine
+  // that has the generation registers has these three beside them.
+  if (g_heapgen) {
+    used = *(int *)BB_HEAP_USED;
+    total = *(int *)BB_HEAP_END - *(int *)BB_HEAP_BASE;
+    n = 0;
+    i = 0;
+    while (i < IMGMAX) { if (g_imgs[i]) ++n; ++i; }
+    printf("heap: %d bytes free of %d, %d in use\n", total - used, total, used);
+    printf("programs loaded: %d\n", n);
+  }
   return 0;
 }
 
@@ -899,17 +1269,46 @@ int is_program_name (char *s) {
 // A transient reaches these by address, out of the table the loader
 // wrote into its __c4dos_api global. They are ordinary functions; the
 // only unusual thing is who calls them.
+// The two that allocate do it in DOS's generation (HEAP.SYS): the file
+// is DOS's, and outlives the program that wrote it.
 int dos_api_create (char *name) {
+  int g, r;
   if (!g_ramdisk) return 0 - 1;
-  return ram_create(name, 4096);
+  g = gen_dos();
+  r = ram_create(name, 4096);
+  gen_set(g);
+  return r;
 }
-int dos_api_write (int slot, char *buf, int len) { return ram_write(slot, buf, len); }
+int dos_api_write (int slot, char *buf, int len) {
+  int g, r;
+  g = gen_dos();
+  r = ram_write(slot, buf, len);
+  gen_set(g);
+  return r;
+}
 int dos_api_close (int slot) { return 0; }
 // The read half: DOS's own opener, which checks RAM before disk, made
 // available to a transient whose own open() only ever sees the host.
 int dos_api_open (char *name) { return dos_open(name); }
 int dos_api_read (int fd, char *buf, int len) { return dos_read(fd, buf, len); }
 int dos_api_rclose (int fd) { return dos_close(fd); }
+
+// ---- API v4: running programs, and deleting files -------------------------
+// Slots 19-23 are what a shell needs to be one without a loader of its
+// own (docs/grin-plan.md 3.2). exec is further down, after the batch
+// runner it may need.
+int dos_api_unlink (char *name) { return ram_unlink(name); }
+int dos_api_load (char *path) { return img_load(path); }
+int dos_api_start (int h, int argc, char **argv) { return img_start(h, argc, argv); }
+int dos_api_unload (int h) { return img_unload(h); }
+// fn(arg) under a run frame: an exit() inside it comes back here, as
+// its status. *exited (when exited is not 0) says whether it did.
+int dos_api_catch (int fn, int arg, int *exited) {
+  int r;
+  r = frame_call(fn, 1, arg, 0);
+  if (exited) *exited = g_last_exited;
+  return r;
+}
 
 // ---- API v2: enumeration, and handing memory back ------------------------
 // v1 could create, write, open and read a file BY NAME. That is enough
@@ -1142,6 +1541,47 @@ int run_batch (char *path, int depth) {
   return 0;
 }
 
+// v4 slot 19: one command line, exactly as the prompt would run it --
+// builtins, a .c4r, a batch file -- from inside a program. Returns its
+// status. The line is parsed into a buffer of its own, so the caller's
+// own command line (its argv points into it) is untouched, and the
+// prompt's is put back afterwards. EXIT inside it ends the exec, not
+// DOS: a caller that wants EXIT to mean something checks the line
+// itself.
+int dos_api_exec (char *cmd) {
+  char *oline, *line;
+  char **oargv, **argv;
+  int g, r, n, oquit;
+  g = gen_dos();
+  line = malloc(LINEMAX);
+  argv = (char **)malloc(ARGVMAX * sizeof(char *));
+  if (!line || !argv) {
+    printf("c4dos: out of memory\n");
+    if (line) free(line);
+    if (argv) free((char *)argv);
+    gen_set(g);
+    return 0 - 1;
+  }
+  n = 0;
+  while (cmd[n] && n < LINEMAX - 1) { line[n] = cmd[n]; ++n; }
+  line[n] = 0;
+  oline = g_line;
+  oargv = g_argv;
+  oquit = g_quit;
+  g_line = line;
+  g_argv = argv;
+  g_quit = 0;
+  r = dispatch(parse_line());
+  if (g_batreq) { g_batreq = 0; r = run_batch(g_batbuf, 1); }
+  g_line = oline;
+  g_argv = oargv;
+  g_quit = oquit;
+  free(line);
+  free((char *)argv);
+  gen_set(g);
+  return r;
+}
+
 int read_config () {
   char *buf, *p, *e; int fd, n, total;
   if (!scratch_need()) return 0;
@@ -1209,6 +1649,18 @@ int read_config () {
       g_drives = 1;
       printf("drive device installed, %d drive(s)\n", drv_count());
     }
+    // Heap generations (see gen_dos). The registers answer before DOS
+    // relies on them: written 1, HEAP_GEN must read back 1.
+    if (starts_ci(p, "DEVICE=HEAP.SYS")) {
+      *(int *)BB_HEAP_GEN = 1;
+      if (*(int *)BB_HEAP_GEN == 1) {
+        *(int *)BB_HEAP_GEN = 0;
+        g_heapgen = 1;
+        printf("heap device installed, each program's memory is freed when it ends\n");
+      } else {
+        printf("DEVICE=HEAP.SYS: this machine's heap keeps no generations\n");
+      }
+    }
     // FILES=, SHELL=, other DEVICE= lines: reserved, ignored
     p = *e ? e + 1 : e;
   }
@@ -1243,6 +1695,10 @@ int main (int argc, char **argv) {
   g_inlen = 0;
   g_inpos = 0;
   if (!(g_argv = malloc(ARGVMAX * sizeof(char *)))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!(g_imgs = malloc(IMGMAX * sizeof(int)))) { printf("c4dos: out of memory\n"); return 1; }
+  memset(g_imgs, 0, IMGMAX * sizeof(int));
+  g_cur_img = 0;
+  g_depth = 0;
   // 32 slots, ZEROED. The v1 table allocated 16 and filled 9, so slots
   // 9-15 were whatever the heap had in them -- a transient that read
   // one got a plausible-looking address and jumped to it. Room to grow
@@ -1254,13 +1710,30 @@ int main (int argc, char **argv) {
   g_api[2] = 0;                                // filled after CONFIG.SYS
   g_api[3] = (int)&dos_api_write;
   g_api[4] = (int)&dos_api_close;
-  g_api[5] = 3;                                // API version
+  g_api[5] = 4;                                // API version
   g_api[6] = (int)&dos_api_open;
   g_api[7] = (int)&dos_api_read;
   g_api[8] = (int)&dos_api_rclose;
   // v2 slots 13/14 are about DOS's own memory and do not need a disk.
   g_api[13] = (int)&dos_api_trim;
   g_api[14] = (int)&dos_api_release;
+  // v4: the console, and running programs. None needs a device; 18
+  // (unlink) waits for the RAM disk, below, and 25 is the shell's to
+  // fill (grin's window kit table), 0 until one does.
+  g_api[16] = (int)&dos_api_conwrite;
+  g_api[17] = (int)&dos_api_conread;
+  g_api[19] = (int)&dos_api_exec;
+  g_api[20] = (int)&dos_api_load;
+  g_api[21] = (int)&dos_api_start;
+  g_api[22] = (int)&dos_api_unload;
+  g_api[23] = (int)&dos_api_catch;
+  g_api[24] = (int)&dos_api_sink;
+  g_api[25] = 0;
+  g_sink_w = 0;
+  g_sink_r = 0;
+  g_sink_ctx = 0;
+  g_heapgen = 0;
+  g_gen_next = 0;
   g_echo = 1;
   g_clock = 0;
   g_quit = 0;
@@ -1282,6 +1755,7 @@ int main (int argc, char **argv) {
     g_api[10] = (int)&dos_api_entname;
     g_api[11] = (int)&dos_api_entsize;
     g_api[12] = (int)&dos_api_entdata;
+    g_api[18] = (int)&dos_api_unlink;
   }
 #if C4DOS_CLOCK
   // Same rule for the clock: offered only when the hardware was

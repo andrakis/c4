@@ -805,8 +805,8 @@ kit, `src/winkit/` (winkit.h has the API), and rebuilt the desktop on it.
       stays; the choice is `style 2` in desktop.cfg; Flat stays the
       default.
 - [x] The review's B3 (bounded paths), B5, B6, B7, B8 and B10 are not
-      carried over (see the commit). The picture is no longer kept whole
-      in memory once its tiles are on the display.
+      carried over (see the commit). The picture's gzipped file, which
+      the desktop used to keep beside the inflated picture, is freed.
 - [x] test-desktop.mjs: the old checks unchanged and green, and new ones
       for 640x480 and back and for the 3.1 look across a restart.
 

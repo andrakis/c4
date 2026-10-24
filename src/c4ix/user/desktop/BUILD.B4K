@@ -8,15 +8,15 @@ SET OUT /build
 # c4sc recurses deeply on a long source: edit.c, the Editor, overruns
 # even 1 MB, so the desktop gets 4 MB of stack per compile (SYS_STACK)
 SET STACK 4194304
-SET LC c4sc -c 400000 compile -O -c -D C4IX_SHARED -I src/c4ix/include -I src/c4ix/user/desktop
+SET LC c4sc -c 400000 compile -O -c -D C4IX_SHARED -I src/c4ix/include -I src/c4ix/user/desktop -I src/winkit
 SET H src/c4ix/user/desktop/desktop.h src/c4ix/include/c4ix_user.h libjs/guest/gui.h
 CD $(ROOT)
 MKDIR $(OUT)/desktop
 MKDIR $(OUT)/bin
 DEPS $(OUT)/desktop/wm.c4o : src/c4ix/user/desktop/wm.c $(H)
 RUN $(LC) src/c4ix/user/desktop/wm.c $(OUT)/desktop/wm.c4o
-DEPS $(OUT)/desktop/ui.c4o : src/c4ix/user/desktop/ui.c $(H)
-RUN $(LC) src/c4ix/user/desktop/ui.c $(OUT)/desktop/ui.c4o
+DEPS $(OUT)/desktop/ui.c4o : src/winkit/ui.c $(H)
+RUN $(LC) src/winkit/ui.c $(OUT)/desktop/ui.c4o
 DEPS $(OUT)/desktop/term.c4o : src/c4ix/user/desktop/term.c $(H)
 RUN $(LC) src/c4ix/user/desktop/term.c $(OUT)/desktop/term.c4o
 DEPS $(OUT)/desktop/files.c4o : src/c4ix/user/desktop/files.c $(H)
@@ -25,15 +25,15 @@ DEPS $(OUT)/desktop/taskmgr.c4o : src/c4ix/user/desktop/taskmgr.c $(H) src/c4ix/
 RUN $(LC) src/c4ix/user/desktop/taskmgr.c $(OUT)/desktop/taskmgr.c4o
 DEPS $(OUT)/desktop/apps.c4o : src/c4ix/user/desktop/apps.c $(H)
 RUN $(LC) src/c4ix/user/desktop/apps.c $(OUT)/desktop/apps.c4o
-DEPS $(OUT)/desktop/calc.c4o : src/c4ix/user/desktop/calc.c $(H)
-RUN $(LC) src/c4ix/user/desktop/calc.c $(OUT)/desktop/calc.c4o
+DEPS $(OUT)/desktop/calc.c4o : src/winkit/calc.c $(H)
+RUN $(LC) src/winkit/calc.c $(OUT)/desktop/calc.c4o
 # the Calculator's decimal conversions: libc's, which says double (slow)
 DEPS $(OUT)/desktop/fp.c4o : src/c4ix/libc/fp.c
 RUN $(LC) src/c4ix/libc/fp.c $(OUT)/desktop/fp.c4o
 DEPS $(OUT)/desktop/wall.c4o : src/c4ix/user/desktop/wall.c $(H) src/c4ix/include/archive.h
 RUN $(LC) src/c4ix/user/desktop/wall.c $(OUT)/desktop/wall.c4o
-DEPS $(OUT)/desktop/savers.c4o : src/c4ix/user/desktop/savers.c $(H)
-RUN $(LC) src/c4ix/user/desktop/savers.c $(OUT)/desktop/savers.c4o
+DEPS $(OUT)/desktop/savers.c4o : src/winkit/savers.c $(H)
+RUN $(LC) src/winkit/savers.c $(OUT)/desktop/savers.c4o
 DEPS $(OUT)/desktop/edit.c4o : src/c4ix/user/desktop/edit.c $(H)
 RUN $(LC) src/c4ix/user/desktop/edit.c $(OUT)/desktop/edit.c4o
 SET OBJS wm.c4o ui.c4o term.c4o files.c4o taskmgr.c4o apps.c4o calc.c4o edit.c4o wall.c4o savers.c4o fp.c4o

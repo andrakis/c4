@@ -438,10 +438,13 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     # the desktop: several modules, linked together (docs/c4ix-desktop.md)
     dobjs=""
     step "C4IX's desktop:"
+    # (the window kit's modules, src/winkit, are ui savers calc)
     for m in wm ui term files taskmgr apps calc edit wall savers; do
         item $m
+        src=src/c4ix/user/desktop/$m.c
+        [ -f $src ] || src=src/winkit/$m.c
         ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -c -D C4IX_SHARED -I src/c4ix/include -I src/c4ix/user/desktop \
-            src/c4ix/user/desktop/$m.c .c4bb_ix_d_$m.c4o > /dev/null
+            -I src/winkit $src .c4bb_ix_d_$m.c4o > /dev/null
         dobjs="$dobjs .c4bb_ix_d_$m.c4o"
         keep .c4bb_ix_d_$m.c4o desktop/$m.c4o
     done
@@ -585,7 +588,7 @@ for n in $C4IX_USER $C4IX_ARC_USER; do
     cp src/c4ix/user/$n.c $DISK/c4ix-$n.c
 done
 # the desktop's modules, one after another, as its one source file
-cat src/c4ix/user/desktop/desktop.h src/c4ix/user/desktop/*.c > $DISK/c4ix-desktop.c
+cat src/c4ix/user/desktop/desktop.h src/c4ix/user/desktop/*.c src/winkit/*.c > $DISK/c4ix-desktop.c
 cp src/c4ix/c4ix.h $DISK/c4ix.h
 cp src/c4ix/include/c4ix_user.h $DISK/c4ix_user.h
 # c4m as a C4IX program: c4m.c built the way cc builds it inside the

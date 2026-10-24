@@ -1036,7 +1036,9 @@ the kernel boots into a system with nothing to run, and the four C4IX
 images the climb disk used to carry were not the right four. It carries
 all fifteen now, which is 417 KB, and `c4ix-climb.vfs.txt` describes
 that shape the way `c4ke-climb.vfs.txt` describes the rung below:
-**28/28**, no `cannot open` on the way up.
+**28/28**, no `cannot open` on the way up. (29/29 since 9aa6c24, which
+added `/lib/libc4ix.c4s`: every C4IX program on the disk but hello is
+linked against it.)
 
 ### The test had to watch, not count
 

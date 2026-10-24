@@ -37,9 +37,11 @@ prompt back when you exit it.
   `DEVICE=REDIR.SYS`. It works at the plain `A>` prompt as well as in
   grin.
 - **Persistence.** Files saved under C4DOS go to a writable drive that
-  the page keeps in the browser. The bare-machine game pages use the
-  same store, so a game's saves and settings survive a reload whether
-  it ran under C4DOS or on its own.
+  the page keeps in the browser. Each bare-machine game page gets the
+  same, so a game's saves and settings survive a reload whether it ran
+  under C4DOS or on its own. Every system has a store of its own, so a
+  later system such as the ladder (C4DOS, then C4KE, then C4IX, each
+  built by the one before) can have its own as well.
 - **One body of GUI code, shared with the C4IX desktop.** The drawing
   layer, widgets, window manager core, the looks, and the Calculator,
   Notepad, Clock and terminal grid are written once and built into both.
@@ -520,11 +522,17 @@ roads, and both have to be redirected.
 The page's existing drive-1 store does the keeping. What is new is that
 C4DOS and `bare.c` write to it.
 
-**The page.** `?system=c4dos` and the four bare-machine game systems
-boot with `persist: 'dos'`, one IndexedDB store for all of them. A save
-made in Doom on the bare machine is then on B: when C4DOS boots, and
-the other way round. `?persist=0`, `?persist=reset` and Reset Files
-work as they do for C4IX.
+**The page.** Every system persists in an IndexedDB store of its own,
+named in its `SYSTEMS` entry, as C4IX's is `c4ix`. `?system=c4dos`
+uses `c4dos`, and each bare-machine game uses its own name (`doom`,
+`wolf3d`, `tyrian`, `rott`). The user ruled out one shared store: the
+planned ladder system, which boots C4DOS, builds and boots C4KE, then
+builds and boots C4IX, needs persistence separate from the others.
+That system gets its own store, `ladder`, when it is added. A game's
+saves made under C4DOS live on C4DOS's B:, and those made on the bare
+machine live in the game's own store. `?persist=0`, `?persist=reset`
+and Reset Files work as they do for C4IX, on the current system's store
+only.
 
 **C4DOS.** `DEVICE=DRIVES.SYS HOME=B:` names a home drive.
 
@@ -651,8 +659,15 @@ worktree.
   the looks, run-time screen size, and the review's bugs fixed on the
   way.
 - The desktop is rebuilt on the kit, by both c4lc and `BUILD.B4K`.
+- The desktop's Settings gains the Windows 3.1 look (the window chrome
+  from `look31.c`) beside Flat and Classic. The taskbar stays, and
+  saving goes to `desktop.cfg` like the other looks. The default does
+  not change.
 - **Headless tests:**
-  - `test-desktop.mjs` stays green, with no visible change.
+  - `test-desktop.mjs` stays green, with no visible change under the
+    default look.
+  - Settings > Windows 3.1: a window's control-menu box and centred
+    title are drawn. The choice survives a restart of the desktop.
   - The desktop is told to resize to 640x480 and back, and stays
     usable.
   - The in-C4IX build (`make test-c4dos-c4ix32` and the desktop's
@@ -696,15 +711,18 @@ worktree.
 
 - `DRIVES.SYS HOME=`, with writes, `unlink` and `c4dos.dir` upkeep.
 - `bare.c` writes to drive 1 on the bare machine.
-- The page's `persist: 'dos'` on C4DOS and the game systems.
+- A store per system on the page: `c4dos`, and `doom`, `wolf3d`,
+  `tyrian`, `rott` for the bare-machine games.
 - Program Manager, File Manager and Notepad.
 - **Headless tests:**
   - Notepad saves `NOTE.TXT`, and File Manager lists it on B:.
   - Boot again with the persist map that came back: the file is still
     there, and so is the resolution chosen in Control Panel.
   - Delete removes it.
-  - Doom on the bare machine saves a game. Boot C4DOS with the same map,
-    and `DIR B:` shows the save.
+  - Doom on the bare machine saves a game, and the save is there when
+    Doom boots again with the map that came back. Doom under C4DOS
+    saves to B:, and its save is not in the bare game's map: the stores
+    are kept apart.
   - Program Manager's items launch the right things.
 - **Browser:**
   - Save a note and reload the page: it is still there.
@@ -836,15 +854,12 @@ worktree.
 7. File redirection in C4DOS, opt-in through a `DEVICE=` line, so that
    DOS Prompt windows work in grin, cooperatively.
 8. The command is `GRIN`.
+9. One persistence store per system, not one shared store. The planned
+   ladder system needs a store of its own (3.8).
+10. The device lines are `HEAP.SYS`, `REDIR.SYS` (with `TAP`) and
+    `DRIVES.SYS HOME=B:`.
+11. The C4IX desktop also offers the Windows 3.1 look, as an option in
+    its Settings (G1).
+12. G0 and G1 run in parallel.
 
-**Still open** (the plan's choice is given; say if you want another):
-
-1. **One store for all the DOS pages** (`dos`), so that saves are
-   shared between the bare-machine games and C4DOS. The alternative is
-   one store per page.
-2. **Device-line names:** `HEAP.SYS`, `REDIR.SYS` (with `TAP`) and
-   `DRIVES.SYS HOME=B:`.
-3. **The C4IX desktop's looks.** Should the desktop also offer the 3.1
-   look in its Settings, since the kit will have it?
-4. **Order:** G0 and G1 in parallel sessions as soon as this plan is
-   approved, with G1 timed around the desktop work.
+Nothing is open.

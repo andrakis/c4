@@ -345,8 +345,20 @@ processors: c4mp's instruction set (`src/c4mp/README.md`), simulated
   memory it reads and writes as CPU 0 does, through arena.js: unaligned
   words, low memory, the arena's ends.
 - **The atomics** are `Atomics`. `CWAI` blocks a worker in
-  `Atomics.wait`. On CPU 0 it parks the loop, which waits in
-  `Atomics.waitAsync`, so the page and the console stay live.
+  `Atomics.wait`. On CPU 0 it parks the loop, which waits blocked on the
+  doorbell a few ms at a time (`parkSync`), answering each request as it
+  comes, and takes the page's messages between. A `CWAK` for CPU 0's word
+  rings the doorbell (`K.WOKE`).
+  - It waited in `Atomics.waitAsync` before 2026-10-24, and each request
+    then waited a trip through the event loop. CPU 0 parks on C4IX's
+    kernel lock whenever another CPU holds it, and `top` on CPU 1 held it
+    for every byte it printed, each a `PUTC` request. Doom on CPU 0
+    stalled once a second, the page showing `parked` and 40M inst/s.
+  - ROTT's demo 4 on two CPUs beside `top`, in Node: 25-143 s before,
+    against 16 s alone.
+  - Now it takes 17 s either way. C4IX also writes a task's console
+    output a run at a time (`con_write_task`, one `PRTF` of up to 256
+    bytes), so `top` asks 17k times where it asked 140k.
 - **CPU 0's nap** (`USLP`) while other CPUs run is real time, ended early
   by an `IPI`. CPU 0 spends it blocked in `Atomics.wait` on its doorbell,
   a few ms at a time (`sleepSync`), and answers each request at once.

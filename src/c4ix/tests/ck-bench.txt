@@ -2,7 +2,7 @@ C4IX booting, N cycles spent loading the kernel image
 c4ix: host c4m, info Nx1Nf2
 c4ix: protected mode on for user tasks, preemption on
 c4ix: task N 'init' created, scheduling after N cycles
-Benchmark complete: N.Nm score
+Benchmark complete: N.N score
  N.Nm cycles over N.N s (Nms real time)
 sl4b: cache 'task' objsize N perslab N slabs N allocs N frees N live N
 sl4b: cache 'file' objsize N perslab N slabs N allocs N frees N live N

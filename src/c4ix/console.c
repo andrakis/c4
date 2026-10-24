@@ -2,10 +2,10 @@
 // C4IX console: kputc, kputs, kprintf, and console input.
 //
 // All kernel output funnels through kputc, which uses only the PUTC
-// opcode -- implemented by c4m and plain c4 alike. Nothing in C4IX
-// ever calls the host's printf; when syscalls arrive (X2), userland
-// printf becomes a library over write(fd) and this stays the
-// kernel-side sink.
+// opcode -- implemented by c4m and plain c4 alike. A task's output
+// (con_write_task) goes a run of bytes at a time through the host's
+// printf("%s"), as one PRTF; nothing else in C4IX calls it. Userland
+// printf is a library over write(fd), and this is the kernel-side sink.
 //
 // Input does not go through fd 0. A read on fd 0 blocks the HOST,
 // which means it blocks the whole virtual machine: every task stops
@@ -143,11 +143,26 @@ void con_logopen() {
 // Boot is over: tasks' output is no longer logged.
 void con_booted() { con_booting = 0; }
 
-// A task's byte to the console (vfs_write)
-int con_putc_task(int c) {
-    putchar(c);
-    if (con_booting) con_logc(c);
-    return c;
+// A task's bytes to the console (vfs_write): up to CON_RUN at a time as
+// one host printf("%s"), where putchar is one host call a byte. Under
+// libjs's parallel CPUs a host call another CPU makes is a request to
+// CPU 0, made holding the kernel lock: top on CPU 1 drew its screen a
+// byte a request, and a game on CPU 0, which needs the lock for every
+// syscall, stalled once a second. A NUL, which would end the string,
+// goes by putchar.
+enum { CON_RUN = 256 };
+void con_write_task(char *buf, int len) {
+    char run[CON_RUN + 1];
+    int i, n;
+
+    i = 0;
+    while (i < len) {
+        n = 0;
+        while (i < len && n < CON_RUN && buf[i]) { run[n] = buf[i]; ++n; ++i; }
+        if (n) { run[n] = 0; printf("%s", run); }
+        if (i < len && !buf[i]) { putchar(0); ++i; }
+    }
+    if (con_booting) { i = 0; while (i < len) { con_logc(buf[i]); ++i; } }
 }
 
 int kputc(int c) {

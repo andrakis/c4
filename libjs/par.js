@@ -26,10 +26,10 @@
 // (Atomics.waitAsync). Its answer is what the opcode would have done on
 // CPU 0, run by a shadow Machine with the asking CPU's registers.
 //
-// CPU 0 cannot block its thread -- the page's messages and the other
-// CPUs' requests arrive there -- so its CWAI parks the way a blocked
-// read does: run() returns STOP.PARK and the host waits, asynchronously,
-// for the word, an IPI or a request (parkWait).
+// CPU 0 cannot block its thread for long -- the page's messages arrive
+// there -- so its CWAI parks the way a blocked read does: run() returns
+// STOP.PARK, and the host waits for the word, a CWAK, an IPI or a request
+// a few ms at a time, answering requests as they come (parkSync).
 
 import { OP, STOP, Machine } from './c4m.js';
 
@@ -44,6 +44,8 @@ export const K = {              // offsets within a CPU's words
   STATE: 0, ENTRY: 1, STACK: 2, IPI: 3, WAITADDR: 4,
   REQ: 5, KIND: 6, OP: 7, SP: 8, A: 9, ADDR: 10, VAL: 11, RA: 12, RSTOP: 13, CYCLES: 14, SLEEP: 15,
   WAITVAL: 16, PC: 17,          // where it parked, for a deadlock's report
+  WOKE: 18,                     // CPU 0's: a CWAK for the word it waits on (parkSync)
+  RPC: 19,                      // the asker's pc: PRTF's argument count is the ADJ after it
 };
 export const S = { OFF: 0, RUN: 1, WAIT: 2, HALT: 3 };             // a CPU's state
 export const R = { IDLE: 0, ASK: 1, DONE: 2 };                     // a request slot's
@@ -95,6 +97,7 @@ export class ParCore {
         m.a = 0;
         m.waitAddr = t; m.waitVal = val;
         m.cpuState = 'wait';
+        Atomics.store(ctl, word(m.cpuId, K.WOKE), 0);
         Atomics.store(ctl, word(m.cpuId, K.WAITVAL), val);
         Atomics.store(ctl, word(m.cpuId, K.PC), m.pc);
         Atomics.store(ctl, word(m.cpuId, K.CYCLES), m.cycle | 0);
@@ -105,6 +108,12 @@ export class ParCore {
       case OP.CWAK: {
         const t = m.ld32(sp + 4), n = m.ld32(sp);
         m.a = t && aligned(t) ? Atomics.notify(i32, t >> 2, n > 0 ? n : undefined) : 0;
+        // CPU 0 waits on its doorbell, not on the word (parkSync)
+        if (t && m.cpuId !== 0 && Atomics.load(ctl, word(0, K.WAITADDR)) === t) {
+          Atomics.store(ctl, word(0, K.WOKE), 1);
+          this.ring();
+          if (!m.a) m.a = 1;
+        }
         return STOP.BUDGET;
       }
       case OP.IPI: m.a = this.ipi(m.ld32(sp)); return STOP.BUDGET;
@@ -229,7 +238,7 @@ export class ParHost extends ParCore {
       let ra = 0, rstop = STOP.BUDGET;
       if (kind === KIND.OP) {
         const s = this.shadows[k];
-        s.sp = ctl[b + K.SP]; s.a = ctl[b + K.A]; s.mode = 0; s.pc = 0x10; s.cycleInterval = 0;
+        s.sp = ctl[b + K.SP]; s.a = ctl[b + K.A]; s.mode = 0; s.pc = ctl[b + K.RPC]; s.cycleInterval = 0;
         s.symbols = this.m0.symbols;
         this.dev.machine = s;
         rstop = s.sys(ctl[b + K.OP]);
@@ -279,25 +288,38 @@ export class ParHost extends ParCore {
     return true;
   }
 
-  // CPU 0 parked (CWAI) or halted (CPUH): resolves when it should look
-  // again -- its word changed or was notified, an IPI came, or another
-  // CPU asked something (answered here) or halted. At most ms.
-  async parkWait(ms = 1000) {
-    const m0 = this.m0, ctl = this.ctl, t0 = Date.now();
-    const waits = [Atomics.waitAsync(ctl, C.DOOR, this.seenDoor, ms).value];
-    if (m0.cpuState === 'wait') waits.push(Atomics.waitAsync(this.ai32, m0.waitAddr >> 2, m0.waitVal, ms).value);
-    await Promise.race(waits.map(v => (v instanceof Promise ? v : Promise.resolve(v))));
+  // CPU 0 parked (CWAI) or halted (CPUH): wait until it should look
+  // again -- its word changed or was CWAKed, an IPI came, or the machine
+  // stopped -- answering the others' requests as they ask, at most MS ms,
+  // so the host's own events are not kept waiting: the caller yields and
+  // comes back. It blocks, in Atomics.wait on the doorbell, as sleepSync
+  // does, because an awaited wait answered each request a trip through
+  // the event loop late. CPU 0 parks on the kernel lock whenever another
+  // CPU holds it, and top on CPU 1 holds it for every byte it prints,
+  // each a request: a game on CPU 0 stalled once a second. (ROTT's demo 4
+  // under C4IX on two CPUs, cli.js: 16 s alone, 25-143 s beside top.)
+  parkSync(ms = 10) {
+    const m0 = this.m0, ctl = this.ctl, i32 = this.ai32, t0 = Date.now(), wk = word(0, K.WOKE);
+    const woken = () => Atomics.load(ctl, wk) !== 0 || Atomics.load(ctl, word(0, K.IPI)) !== 0 ||
+      Atomics.load(ctl, C.HALT) !== 0 ||
+      (m0.cpuState === 'wait' && Atomics.load(i32, m0.waitAddr >> 2) !== m0.waitVal);
+    let w = false;
+    for (;;) {
+      this.service();
+      if ((w = woken())) break;
+      const left = ms - (Date.now() - t0);
+      if (left <= 0) break;
+      Atomics.wait(ctl, C.DOOR, this.seenDoor, left);
+    }
     this.idleCycles += (Date.now() - t0) * this.dev.cyclesPerMs;
-    this.service();
+    Atomics.store(ctl, wk, 0);
     super.poll(m0);
-    if (m0.cpuState === 'wait') {
-      // woken: by its word, a CWAK, an IPI, or a spurious wake -- CWAI's
-      // caller re-tests, as on c4mp
-      if (m0.ipiPending || Atomics.load(this.ai32, m0.waitAddr >> 2) !== m0.waitVal || Date.now() - t0 < ms) {
-        m0.cpuState = 'run';
-        Atomics.store(ctl, word(0, K.WAITADDR), 0);
-        Atomics.store(ctl, word(0, K.STATE), S.RUN);
-      }
+    if (m0.cpuState === 'wait' && w) {
+      // CWAI's caller re-tests, as on c4mp, so a wake that was not for
+      // this word costs only a look
+      m0.cpuState = 'run';
+      Atomics.store(ctl, word(0, K.WAITADDR), 0);
+      Atomics.store(ctl, word(0, K.STATE), S.RUN);
     }
   }
 

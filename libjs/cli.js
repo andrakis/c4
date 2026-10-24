@@ -189,10 +189,12 @@ async function main(argv) {
       if (r === STOP.PARK || r === STOP.CPUHALT || machine.cpuState !== 'run') {
         if (machine.cpuState === 'halt' && par.othersDone()) { status = machine.cpuStatus; break; }
         // parked with every other CPU parked or halted, three seconds running: nothing can wake them
-        stuck = par.allParked() ? stuck + 1 : 0;
-        if (stuck >= 3) { par.deadlock(); flush(); status = dev.status; break; }
-        await par.parkWait(1000);
+        const now = Date.now();
+        stuck = par.allParked() ? stuck || now : 0;
+        if (stuck && now - stuck >= 3000) { par.deadlock(); flush(); status = dev.status; break; }
+        par.parkSync(10);
         flush();
+        await new Promise(res => setImmediate(res));   // stdin, timers
         continue;
       }
       stuck = 0;

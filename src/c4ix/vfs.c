@@ -663,8 +663,7 @@ int vfs_write(struct file *f, char *buf, int len) {
     sched_lock();
     vn = f->vn;
     if (vn->type == VN_CONSOLE) {
-        i = 0;
-        while (i < len) { con_putc_task(buf[i]); ++i; }
+        con_write_task(buf, len);
         sched_unlock();
         return len;
     }

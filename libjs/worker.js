@@ -135,7 +135,7 @@ function flushSound() {
 }
 
 // the parallel engine's host side (par.js), when there is one
-let par = null, parStuck = 0;
+let par = null, parStuck = 0;     // since when every CPU has been parked, or 0
 // While CPU 0 is not running -- paced, parked, or waiting for a key --
 // the other CPUs' requests are answered as soon as they ask
 // An IPI for CPU 0 ends its nap, as a message for the machine does.
@@ -209,8 +209,9 @@ function tick() {
     if (r === STOP.PARK || r === STOP.CPUHALT || vm.cpuState !== 'run') {
       flushDisplay(); flushSound();
       // every CPU parked or halted for three seconds, none asking: nothing can wake them
-      parStuck = par.allParked() ? parStuck + 1 : 0;
-      if (parStuck >= 12) { par.deadlock(); flush(); }
+      const now = performance.now();
+      parStuck = par.allParked() ? parStuck || now : 0;
+      if (parStuck && now - parStuck >= 3000) { par.deadlock(); flush(); }
       else if (vm.cpuState === 'halt' && par.othersDone()) { dev.halted = true; dev.status = vm.cpuStatus; }
       if (dev.halted) {
         halted = true; state = 'halted';
@@ -219,10 +220,11 @@ function tick() {
         par.shutdown();
         return;
       }
-      // CPU 0 waits for its word, an IPI or another CPU; the page stays live
+      // CPU 0 waits for its word, an IPI or another CPU, a few ms at a
+      // time, so the page's messages are taken between
       state = 'parked';
-      const g = gen;
-      par.parkWait(250).then(() => { if (g === gen) schedule(0); });
+      par.parkSync(8);
+      schedule(0);
       return;
     }
     parStuck = 0;

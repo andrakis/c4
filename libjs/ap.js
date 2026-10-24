@@ -48,6 +48,7 @@ class ApMachine extends Machine {
   ask(kind, op, addr, val) {
     const ctl = this.core.ctl, b = word(this.cpuId, 0);
     ctl[b + K.KIND] = kind; ctl[b + K.OP] = op; ctl[b + K.SP] = this.sp; ctl[b + K.A] = this.a;
+    ctl[b + K.RPC] = this.pc;
     ctl[b + K.ADDR] = addr | 0; ctl[b + K.VAL] = val | 0;
     Atomics.store(ctl, b + K.REQ, R.ASK);
     this.core.ring();

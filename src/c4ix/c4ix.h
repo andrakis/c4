@@ -293,7 +293,7 @@ int con_read(char *buf, int len);
 int kputc(int c);
 void con_logopen();        // /log/kernel exists now: the console is logged to it
 void con_booted();         // boot is over: tasks' console output is no longer logged
-int con_putc_task(int c);  // a task's byte to the console
+void con_write_task(char *buf, int len);  // a task's bytes to the console
 int kputs(char *s);
 int kprintf(char *fmt, ...);
 

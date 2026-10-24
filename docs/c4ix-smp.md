@@ -209,8 +209,13 @@ side) and `libjs/ap.js` (every other CPU, in a worker of its own). It is
 - **The opcodes** map one to one: `CAS`, `XCHG` and `FADD` to
   `Atomics.compareExchange`, `exchange` and `add`; `CWAI` and `CWAK` to
   `Atomics.wait` and `notify` on the guest's own word. CPU 0 cannot
-  block, since it runs the devices, so its `CWAI` returns to its loop,
-  which waits with `Atomics.waitAsync` on its word and the doorbell.
+  block for long, since it runs the devices, so its `CWAI` returns to its
+  loop. The loop waits blocked on the doorbell a few ms at a time
+  (`parkSync`) and answers each request as it comes. A `CWAK` for CPU 0's
+  word rings the doorbell too. (2026-10-24: it used to wait with
+  `Atomics.waitAsync`, and each request then waited a trip through the
+  event loop. CPU 0 parks on the kernel lock whenever another CPU holds
+  it, so a game on CPU 0 stalled once a second beside `top` on CPU 1.)
 - **Forwarding**, as in 3.2: another CPU's host syscalls and device
   registers go to CPU 0 through its request slot, and it rings the
   doorbell. CPU 0 answers between slices of 16,384 cycles, and whenever

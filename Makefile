@@ -3192,10 +3192,13 @@ test-c4ix-c4: c4 c4m c4ix.c4r $(C4IX_PROGS)
 # layout is pinned exactly by test-c4ix-fmt instead, which is the test
 # that exists to catch formatter regressions.
 #
+# A benchmark's score loses its unit too: it is how fast the run went,
+# and innerbench's sits at 1.0m, where k and m meet.
+#
 # spin and benchtop never exit by design, so they are smoke-tested
 # under a timeout rather than pinned.
 C4KE_MASK := sed -E -e 's/^[0-9]+/N/' -e 's/([^A-Za-z])[0-9]+/\1N/g' \
-                    -e 's/[[:space:]]+/ /g' -e 's/ $$//'
+                    -e 's/[[:space:]]+/ /g' -e 's/ $$//' -e 's/N\.N[kmM] score/N.N score/'
 
 test-c4ix-c4ke: c4m c4ix.c4r pre
 	$(C4M) load-c4r.c -- c4ix.c4r ps.c4r | $(C4KE_MASK) | cmp - $(C4IX_SRC)/tests/ck-ps.txt

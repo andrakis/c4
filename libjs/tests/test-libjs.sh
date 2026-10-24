@@ -64,6 +64,7 @@ node libjs/tests/test-shared.mjs || fail=1
 node libjs/tests/test-desktop.mjs || fail=1
 node libjs/tests/test-boot-desktop.mjs || fail=1
 node libjs/tests/test-c4dos-heap.mjs || fail=1   # C4DOS HEAP.SYS: Doom five times at A>
+node libjs/tests/test-grin.mjs || fail=1         # grin, C4DOS's graphical shell, on the page's DOS disk
 node libjs/tests/test-c4ix-zombie.mjs || fail=1
 node libjs/tests/test-c4ix-cpu.mjs || fail=1
 node libjs/tests/test-c4ix-c4m.mjs || fail=1

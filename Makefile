@@ -1321,6 +1321,23 @@ test-ladder: cpp $(C4) $(C4M) $(C4CC) c4sp
 test-c4dos: cpp $(C4) $(C4M) $(C4CC) $(TESTS)/hello.c4r
 	bash src/c4dos/tests/test-c4dos.sh
 
+# C4DOS's DEVICE=HEAP.SYS on libjs, whose heap keeps generations
+# (docs/c4dos-design.md "Memory"): API v4's scenarios against the c4lc -O
+# image, with c4lc -O transients, then Doom run five times at the
+# prompt, quit with keys each time, HEAP_USED within 1% throughout. Doom
+# is the games disk's (make c4bb-images); without one only the first half
+# runs.
+C4DOS_HEAP_T := .c4dos_heap_t
+test-c4dos-heap: c4dos32.c4r c4sp32 $(C4LC_LISP) include/c4dos.h src/tests/dosexec.c src/tests/dosres.c
+	@mkdir -p $(C4DOS_HEAP_T)
+	@for t in dosexec dosres; do \
+	   cat include/c4dos.h src/tests/$$t.c > $(C4DOS_HEAP_T)/$$t.c; \
+	   ./c4sp32 -c 64000000 src/c4sp/lisp/c4lc.lisp -O $(C4DOS_HEAP_T)/$$t.c $(C4DOS_HEAP_T)/$$t.c4r > /dev/null || exit 1; \
+	   rm -f $(C4DOS_HEAP_T)/$$t.c; \
+	 done
+	node libjs/tests/test-c4dos-heap.mjs --image c4dos32.c4r --extra $(C4DOS_HEAP_T)
+PHONY += test-c4dos-heap
+
 # c4sp, the Lisp interpreter (docs/c4sp-design.md)
 C4SP_SRCS := src/c4sp/c4sp.c src/c4sp/include/cell.h src/c4sp/include/gc.h \
              src/c4sp/include/cells.h src/c4sp/include/atoms.h \

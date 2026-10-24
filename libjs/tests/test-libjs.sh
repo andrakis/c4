@@ -133,6 +133,12 @@ if [ "$(echo "$pit_out" | grep -c "real time")" = 2 ] && echo "$pit_out" | grep 
 else bad "pit"; echo "$pit_out" | tail -4; fi
 
 # ---- C4KE ----------------------------------------------------------------
+# The mailbox under C4KE, c4bb's test on this machine: host frames, inboxes,
+# and a second task binding the host mailbox after the first exits.
+if timeout 600 node src/c4bb/tests/test-c4ke-mbox.mjs --libjs > /tmp/libjs-mbox.$$ 2>&1; then ok "c4ke-mbox"
+else bad "c4ke-mbox"; grep -v "OK  " /tmp/libjs-mbox.$$ | tail -12; fi
+rm -f /tmp/libjs-mbox.$$
+
 # Grep assertions, as c4bb does: interleavings differ from native.
 c4ke () { printf "$1" | timeout 300 $LIBJS -c "${2:-60000000}" -d $IMAGES/disk $IMAGES/c4ke32.c4r 2>/dev/null; }
 out=$(c4ke 'hello.c4r\n\\q\n')

@@ -744,7 +744,9 @@ scheduler to notice the frame. The device is announced by `C4I_MBOX`
 addresses are ordinary memory, so `mb_init` returns 0 without the bit.
 
 *The kernel side.* The first task to receive or await host frames
-becomes their **owner** (`mbx_host_owner`). Frames stay in the host
+becomes their **owner** (`mbx_host_owner`) until it exits:
+`kernel_task_finish` lets go, and the next task to receive or await
+binds. Frames stay in the host
 ring until that task takes them, so the scheduler can see them waiting.
 Every task can also have an **inbox**: a ring of the same shape,
 1024 words, allocated on first delivery into `TASK_MBOX` and freed with
@@ -787,12 +789,14 @@ programs from `src/c4ke/bin/`: `mbecho.c` binds to the host mailbox and
 echoes every frame (type | 256, each payload word + 1; a type-0 frame
 ends it) while idling in the kernel between frames, pinned at 22 frames;
 `mbpair.c` starts a copy of itself as a child, which sends its parent
-three words with `msg_send`. **Known flaky:** it fails about one run in
-four (docs/c4ix-desktop.md, "Found on the way, not fixed"): the
-recorded symptom is C4KE's "Custom opcode not found: 1073741824" in the
-mbpair output, and the test check that trips is "kernel shut down
-cleanly". It fails as often with the C4KE source from before the
-desktop work; the cause is not yet known.
+three words with `msg_send`; then a second `mbecho`, in another task
+slot, must own the host mailbox once the first has exited. `--libjs`
+runs it all on libjs (`test-libjs.sh`). It used to fail on slow hosts
+(docs/c4ix-desktop.md, "Found on the way, not fixed"). The cause was a
+PIT tick delivered between C4KE's re-arm of the PIT and its handler's
+TLEV, and the boards now hold the PIT inside a handler: c4bb since
+6295e18, libjs since the commit after it (docs/c4bb-storage.md, "What
+the kernel taught the hardware"). `--slow-clock` reproduces it on c4bb.
 
 ### Scheduling on the wall clock (2574376, 2026-08-28)
 

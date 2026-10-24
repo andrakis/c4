@@ -2047,6 +2047,11 @@ static void kernel_task_finish (int *task) {
 	if (s & STATE_RUNNING) --kernel_tasks_running;
 	if (s & STATE_WAITING) --kernel_tasks_waiting;
 	if (s & STATE_TRAPPED) --kernel_tasks_trapped;
+	// The host mailbox goes with the task bound to it (extensions/
+	// c4ke_mbox.c): mbx_host_owner is a slot's address, so left set it
+	// handed the host's frames to whatever task next took the slot, and
+	// until then no other task could bind.
+	if (task == mbx_host_owner) mbx_host_owner = 0;
 	s = internal_task_slot(task);
 	if (kernel_max_slot == s) {
 		--kernel_max_slot;

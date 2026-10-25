@@ -975,7 +975,7 @@ test-c4sc: c4sp $(C4LC_LISP) $(C4SC_GEN) src/c4sc/scrt.h
 	   n=$${u%%:*}; f=$${u##*:}; \
 	   echo "  $$f.lisp $$(wc -l < $(SRCS)/c4sp/lisp/$$f.lisp) -> $$(wc -l < src/c4sc/c4$${n}_gen.c) lines"; \
 	 done
-	@rm -f .c4sc_*.c4o
+	@rm -f $(C4SC_UNITS:%=.c4sc_%.c4o)
 
 # M2: the compiled c4opt has to produce the SAME IMAGES as the
 # interpreted one. c4sc-host is c4opt-run.lisp with exactly one
@@ -1012,21 +1012,21 @@ C4SC_CORPUS := factorial.c4r $(C4R_C4CC) $(C4KE_C4R) $(TESTS)/tests.c4r \
 test-c4sc-run: c4sc-host c4sp $(C4SC_CORPUS)
 	@fail=0; for img in $(C4SC_CORPUS); do \
 	   b=$$(basename $$img); \
-	   ./c4sp -R -c 16000000 $(SRCS)/c4sp/lisp/c4opt-run.lisp $$img .c4sc_i.c4r > .c4sc_i.log 2>&1; \
-	   ./c4sc-host $$img .c4sc_c.c4r > .c4sc_c.log 2>&1; \
-	   cmp -s .c4sc_i.c4r .c4sc_c.c4r || { echo "test-c4sc-run: $$b IMAGE DIFFERS"; fail=1; continue; }; \
-	   grep -E '^;; c4opt: [0-9]|^;;   fold' .c4sc_i.log > .c4sc_i.n; \
-	   grep -E '^;; c4opt: [0-9]|^;;   fold' .c4sc_c.log > .c4sc_c.n; \
-	   cmp -s .c4sc_i.n .c4sc_c.n \
+	   ./c4sp -R -c 16000000 $(SRCS)/c4sp/lisp/c4opt-run.lisp $$img .c4sc_run_i.c4r > .c4sc_run_i.log 2>&1; \
+	   ./c4sc-host $$img .c4sc_run_c.c4r > .c4sc_run_c.log 2>&1; \
+	   cmp -s .c4sc_run_i.c4r .c4sc_run_c.c4r || { echo "test-c4sc-run: $$b IMAGE DIFFERS"; fail=1; continue; }; \
+	   grep -E '^;; c4opt: [0-9]|^;;   fold' .c4sc_run_i.log > .c4sc_run_i.n; \
+	   grep -E '^;; c4opt: [0-9]|^;;   fold' .c4sc_run_c.log > .c4sc_run_c.n; \
+	   cmp -s .c4sc_run_i.n .c4sc_run_c.n \
 	     || { echo "test-c4sc-run: $$b COUNTERS DIFFER"; fail=1; continue; }; \
 	   echo "  ok: $$b (image and pass counts identical)"; \
 	 done; \
 	 [ $$fail = 0 ] || exit 1
 	@# and the fuse pass, which rewrites a third of the instructions
-	./c4sp -R -c 16000000 $(SRCS)/c4sp/lisp/c4opt-run.lisp -mfuse factorial.c4r .c4sc_i.c4r > /dev/null
-	./c4sc-host -mfuse factorial.c4r .c4sc_c.c4r > /dev/null
-	cmp .c4sc_i.c4r .c4sc_c.c4r
-	@rm -f .c4sc_i.c4r .c4sc_c.c4r .c4sc_i.log .c4sc_c.log .c4sc_i.n .c4sc_c.n
+	./c4sp -R -c 16000000 $(SRCS)/c4sp/lisp/c4opt-run.lisp -mfuse factorial.c4r .c4sc_run_i.c4r > /dev/null
+	./c4sc-host -mfuse factorial.c4r .c4sc_run_c.c4r > /dev/null
+	cmp .c4sc_run_i.c4r .c4sc_run_c.c4r
+	@rm -f .c4sc_run_i.c4r .c4sc_run_c.c4r .c4sc_run_i.log .c4sc_run_c.log .c4sc_run_i.n .c4sc_run_c.n
 	@echo "test-c4sc-run: OK"
 
 # M3: the lexer. The bar is the token DUMP, not the count -- the count
@@ -1105,27 +1105,27 @@ test-c4sc-back: c4sc-host c4sp $(C4RLINK) $(C4M)
 	@fail=0; for b in $(C4SC_BACK_DIFF); do \
 	   f=$(TESTS)/$$b.c; \
 	   for fl in "" "-O"; do \
-	     ./c4sp -R -c 16000000 $(SRCS)/c4sp/lisp/c4lc.lisp $$fl $$f .c4sc_i.c4r >/dev/null 2>&1; \
-	     ./c4sc-host -c 16000000 compile $$fl $$f .c4sc_c.c4r >/dev/null 2>&1; \
-	     cmp -s .c4sc_i.c4r .c4sc_c.c4r \
+	     ./c4sp -R -c 16000000 $(SRCS)/c4sp/lisp/c4lc.lisp $$fl $$f .c4sc_back_i.c4r >/dev/null 2>&1; \
+	     ./c4sc-host -c 16000000 compile $$fl $$f .c4sc_back_c.c4r >/dev/null 2>&1; \
+	     cmp -s .c4sc_back_i.c4r .c4sc_back_c.c4r \
 	       || { echo "test-c4sc-back: $$b $$fl DIFFERS"; fail=1; }; \
 	   done; \
 	 done; [ $$fail = 0 ] || exit 1
 	@echo "  corpus ok: $(words $(C4SC_BACK_DIFF)) programs, plain and -O, byte-identical"
 	@fail=0; for m in $(C4IX_MODS); do \
 	   ./c4sp -R -c 33554432 $(SRCS)/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC) \
-	       $(C4IX_SRC)/$$m.c .c4sc_i.c4o >/dev/null 2>&1; \
+	       $(C4IX_SRC)/$$m.c .c4sc_back_i.c4o >/dev/null 2>&1; \
 	   ./c4sc-host -c 33554432 compile -O -c -I $(C4IX_SRC) \
-	       $(C4IX_SRC)/$$m.c .c4sc_$$m.c4o >/dev/null 2>&1; \
-	   cmp -s .c4sc_i.c4o .c4sc_$$m.c4o \
+	       $(C4IX_SRC)/$$m.c .c4sc_back_$$m.c4o >/dev/null 2>&1; \
+	   cmp -s .c4sc_back_i.c4o .c4sc_back_$$m.c4o \
 	     || { echo "test-c4sc-back: $$m.c4o DIFFERS"; fail=1; continue; }; \
-	   echo "  obj ok: $$m ($$(wc -c < .c4sc_$$m.c4o) bytes)"; \
+	   echo "  obj ok: $$m ($$(wc -c < .c4sc_back_$$m.c4o) bytes)"; \
 	 done; [ $$fail = 0 ] || exit 1
-	$(C4RLINK) $(patsubst %,.c4sc_%.c4o,$(C4IX_MODS)) -o .c4sc_ix.c4r
+	$(C4RLINK) $(C4IX_MODS:%=.c4sc_back_%.c4o) -o .c4sc_back_ix.c4r
 	$(MAKE) c4ix.c4r
-	cmp .c4sc_ix.c4r c4ix.c4r
-	$(C4M) load-c4r.c -- .c4sc_ix.c4r --demo 2>&1 | grep -q "shutdown complete"
-	@rm -f .c4sc_i.c4r .c4sc_c.c4r .c4sc_i.c4o .c4sc_*.c4o .c4sc_ix.c4r
+	cmp .c4sc_back_ix.c4r c4ix.c4r
+	$(C4M) load-c4r.c -- .c4sc_back_ix.c4r --demo 2>&1 | grep -q "shutdown complete"
+	@rm -f .c4sc_back_i.c4r .c4sc_back_c.c4r .c4sc_back_i.c4o $(C4IX_MODS:%=.c4sc_back_%.c4o) .c4sc_back_ix.c4r
 	@echo "test-c4sc-back: OK -- the kernel it built is the committed one, and it boots"
 
 # Long operator chains. A + a + ... + a typed its left operand twice per
@@ -1142,16 +1142,16 @@ test-c4sc-chain: c4sc-host c4sp $(C4M)
 	   for (i = 1; i < 200; i++) printf "a + ("; printf "a"; \
 	   for (i = 1; i < 200; i++) printf ")"; printf ");\n\treturn 0;\n}\n" }' > .c4sc_chain.c
 	@for fl in "" "-O"; do \
-	   timeout 30 ./c4sc-host -c 16000000 compile $$fl .c4sc_chain.c .c4sc_c.c4r >/dev/null \
+	   timeout 30 ./c4sc-host -c 16000000 compile $$fl .c4sc_chain.c .c4sc_chain_c.c4r >/dev/null \
 	     || { echo "test-c4sc-chain: c4sc-host $$fl did not finish"; exit 1; }; \
-	   timeout 60 ./c4sp -R -c 16000000 $(SRCS)/c4sp/lisp/c4lc.lisp $$fl .c4sc_chain.c .c4sc_i.c4r >/dev/null \
+	   timeout 60 ./c4sp -R -c 16000000 $(SRCS)/c4sp/lisp/c4lc.lisp $$fl .c4sc_chain.c .c4sc_chain_i.c4r >/dev/null \
 	     || { echo "test-c4sc-chain: c4lc $$fl did not finish"; exit 1; }; \
-	   cmp -s .c4sc_i.c4r .c4sc_c.c4r \
+	   cmp -s .c4sc_chain_i.c4r .c4sc_chain_c.c4r \
 	     || { echo "test-c4sc-chain: $$fl DIFFERS from the interpreted c4lc"; exit 1; }; \
-	   $(C4M) load-c4r.c -- .c4sc_c.c4r | grep -qx "2000 2000 200" \
+	   $(C4M) load-c4r.c -- .c4sc_chain_c.c4r | grep -qx "2000 2000 200" \
 	     || { echo "test-c4sc-chain: $$fl prints the wrong sums"; exit 1; }; \
 	 done
-	@rm -f .c4sc_chain.c .c4sc_c.c4r .c4sc_i.c4r
+	@rm -f .c4sc_chain.c .c4sc_chain_c.c4r .c4sc_chain_i.c4r
 	@echo "test-c4sc-chain: OK -- 2000-term chains compile in linear time, plain and -O"
 
 # M6: the compiler as an IMAGE. The seven generated units and the driver
@@ -1623,11 +1623,11 @@ test-c4th-os: c4th c4th.c4r $(C4M) c4ix.c4r c4ix-sh.c4r c4ke.c4r c4dos-clock.c4r
 	$(C4M) load-c4r.c -- c4ix.c4r c4ix-sh.c4r src/c4th/tests/c4ix.sh > .c4th_ix.out
 	head -c `grep -abo -m1 C4R .c4th_ix.out | head -1 | cut -d: -f1` .c4th_ix.out \
 		| $(C4TH_IX_MASK) | cmp - src/c4th/tests/expected/c4ix.txt
-	./c4th src/c4th/forth/core.f src/c4th/forth/self.f -e 'MAIN' > .c4th_gen1.c4r
+	./c4th src/c4th/forth/core.f src/c4th/forth/self.f -e 'MAIN' > .c4th_os_gen1.c4r
 	tail -c +`expr \`grep -abo -m1 C4R .c4th_ix.out | head -1 | cut -d: -f1\` + 1` .c4th_ix.out \
-		| head -c `stat -c %s .c4th_gen1.c4r` | cmp - .c4th_gen1.c4r
+		| head -c `stat -c %s .c4th_os_gen1.c4r` | cmp - .c4th_os_gen1.c4r
 	grep -q "shutdown complete" .c4th_ix.out
-	rm -f .c4th_os_ref .c4th_ix.out .c4th_gen1.c4r
+	rm -f .c4th_os_ref .c4th_ix.out .c4th_os_gen1.c4r
 	@echo "test-c4th-os: OK"
 
 # c4fc: the C99 compiler in Forth, and the DSL it is written in.
@@ -2275,13 +2275,13 @@ c4ke-lc.c4r: c4sp $(C4LC_LISP) $(SRCS)/c4ke/c4ke.c
 	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O .c4lc_klc.c c4ke-lc.c4r
 	rm -f .c4lc_klc.c
 c4sp-lc.c4r: c4sp $(C4LC_LISP) $(C4SP_SRCS)
-	$(PREPROC_LC) -DC4SP_DOS=1 src/c4sp/c4sp.c > .c4lc_klc.c
-	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O .c4lc_klc.c c4sp-lc.c4r
-	rm -f .c4lc_klc.c
+	$(PREPROC_LC) -DC4SP_DOS=1 src/c4sp/c4sp.c > .c4lc_slc.c
+	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O .c4lc_slc.c c4sp-lc.c4r
+	rm -f .c4lc_slc.c
 c4m-lc.c4r: c4sp $(C4LC_LISP) c4m.c
-	$(PREPROC_LC) c4m.c > .c4lc_klc.c
-	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O .c4lc_klc.c c4m-lc.c4r
-	rm -f .c4lc_klc.c
+	$(PREPROC_LC) c4m.c > .c4lc_mlc.c
+	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O .c4lc_mlc.c c4m-lc.c4r
+	rm -f .c4lc_mlc.c
 
 # OISC4: the One Instruction Set Computer (docs/oisc4-design.md).
 # Runs .c4r images on a single-instruction VM; verified bit-identical
@@ -2643,7 +2643,9 @@ C4OR1K_HDRS := $(C4OR1K_SRC)/cpu.h $(C4OR1K_SRC)/mem.h $(C4OR1K_SRC)/jit.h $(C4O
 c4or1k.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4OR1K_HDRS) $(patsubst %,$(C4OR1K_SRC)/%.c,$(C4OR1K_MODS))
 	$(call c4lc_compile_par,-O,$(C4OR1K_MODS),$(C4OR1K_SRC),.c4or1k_)
 	$(C4RLINK) $(patsubst %,.c4or1k_%.c4o,$(C4OR1K_MODS)) -o c4or1k.c4r
-	rm -f .c4or1k_*.c4o
+	@# its own objects only: .c4or1k_* also matches the -cisc and -jit
+	@# images', which c4or1k-m1-check builds beside this one under -j
+	rm -f $(C4OR1K_MODS:%=.c4or1k_%.c4o)
 # M12: -mcisc build, emitting c4mp's LXI/SXI fused array-element
 # opcodes wherever c4lc-gen.lisp finds a plain var[idx] with an
 # 8-byte-element (int/pointer) array -- cpu.c's r[]/group0[]/
@@ -2653,7 +2655,7 @@ c4or1k.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4OR1K_HDRS) $(patsubst %,$(C4OR1K_SR
 c4or1k-cisc.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4OR1K_HDRS) $(patsubst %,$(C4OR1K_SRC)/%.c,$(C4OR1K_MODS))
 	$(call c4lc_compile_par,-mcisc -O,$(C4OR1K_MODS),$(C4OR1K_SRC),.c4or1k_cisc_)
 	$(C4RLINK) $(patsubst %,.c4or1k_cisc_%.c4o,$(C4OR1K_MODS)) -o c4or1k-cisc.c4r
-	rm -f .c4or1k_cisc_*.c4o
+	rm -f $(C4OR1K_MODS:%=.c4or1k_cisc_%.c4o)
 # M13: the JIT-enabled build (see C4OR1K_JIT_MODS above and jit.h's
 # status note: correct and fully verified, but off by default and
 # net-slower at current coverage -- run with `-jit` as the last
@@ -2661,7 +2663,7 @@ c4or1k-cisc.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4OR1K_HDRS) $(patsubst %,$(C4OR
 c4or1k-jit.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4OR1K_HDRS) $(C4OR1K_SRC)/jit.h $(patsubst %,$(C4OR1K_SRC)/%.c,$(C4OR1K_JIT_MODS))
 	$(call c4lc_compile_par,-O -D C4OR1K_JIT=1,$(C4OR1K_JIT_MODS),$(C4OR1K_SRC),.c4or1k_jit_)
 	$(C4RLINK) $(patsubst %,.c4or1k_jit_%.c4o,$(C4OR1K_JIT_MODS)) -o c4or1k-jit.c4r
-	rm -f .c4or1k_jit_*.c4o
+	rm -f $(C4OR1K_JIT_MODS:%=.c4or1k_jit_%.c4o)
 # M1's cross-checked test program (tests/m1_test.s -> .bin via
 # tools/asm.py) run through the real decoder.
 src/c4or1k/tests/m1_test.bin: src/c4or1k/tests/m1_test.s src/c4or1k/tools/asm.py
@@ -2673,14 +2675,14 @@ c4or1k-m1: c4m c4or1k.c4r src/c4or1k/tests/m1_test.bin
 # RAM window every test result is written into must match exactly.
 # (No process substitution: plain sh, not bash, runs make recipes here.)
 c4or1k-m1-check: c4m c4or1k.c4r c4or1k-jit.c4r c4or1k-native src/c4or1k/tests/m1_test.bin
-	./c4m load-c4r.c -- c4or1k.c4r src/c4or1k/tests/m1_test.bin | grep -v '^c4or1k:' | grep -v 'guest instructions/sec' > .c4or1k_check_c.txt
-	node src/c4or1k/tools/or1k-oracle.js src/c4or1k/tests/m1_test.bin | grep -v '^c4or1k-oracle:' > .c4or1k_check_js.txt
-	diff .c4or1k_check_c.txt .c4or1k_check_js.txt && echo "c4or1k-m1-check: OK (bit-for-bit match against jor1k)"
-	./c4m load-c4r.c -- c4or1k-jit.c4r src/c4or1k/tests/m1_test.bin -jit | grep -v '^c4or1k:' | grep -v 'guest instructions/sec' > .c4or1k_check_c.txt
-	diff .c4or1k_check_c.txt .c4or1k_check_js.txt && echo "c4or1k-m1-check: OK (bit-for-bit match against jor1k, -jit)"
-	./c4or1k-native src/c4or1k/tests/m1_test.bin | grep -v '^c4or1k:' | grep -v 'guest instructions/sec' > .c4or1k_check_c.txt
-	diff .c4or1k_check_c.txt .c4or1k_check_js.txt && echo "c4or1k-m1-check: OK (bit-for-bit match against jor1k, native)"
-	rm -f .c4or1k_check_c.txt .c4or1k_check_js.txt
+	./c4m load-c4r.c -- c4or1k.c4r src/c4or1k/tests/m1_test.bin | grep -v '^c4or1k:' | grep -v 'guest instructions/sec' > .c4or1k_m1_c.txt
+	node src/c4or1k/tools/or1k-oracle.js src/c4or1k/tests/m1_test.bin | grep -v '^c4or1k-oracle:' > .c4or1k_m1_js.txt
+	diff .c4or1k_m1_c.txt .c4or1k_m1_js.txt && echo "c4or1k-m1-check: OK (bit-for-bit match against jor1k)"
+	./c4m load-c4r.c -- c4or1k-jit.c4r src/c4or1k/tests/m1_test.bin -jit | grep -v '^c4or1k:' | grep -v 'guest instructions/sec' > .c4or1k_m1_c.txt
+	diff .c4or1k_m1_c.txt .c4or1k_m1_js.txt && echo "c4or1k-m1-check: OK (bit-for-bit match against jor1k, -jit)"
+	./c4or1k-native src/c4or1k/tests/m1_test.bin | grep -v '^c4or1k:' | grep -v 'guest instructions/sec' > .c4or1k_m1_c.txt
+	diff .c4or1k_m1_c.txt .c4or1k_m1_js.txt && echo "c4or1k-m1-check: OK (bit-for-bit match against jor1k, native)"
+	rm -f .c4or1k_m1_c.txt .c4or1k_m1_js.txt
 # M2's cross-checked test program: SPRs, SR flags, EXCEPT_SYSCALL/
 # EXCEPT_TRAP/EXCEPT_DTLBMISS delivery, l.rfe.
 src/c4or1k/tests/m2_test.bin: src/c4or1k/tests/m2_test.s src/c4or1k/tools/asm.py
@@ -2688,14 +2690,14 @@ src/c4or1k/tests/m2_test.bin: src/c4or1k/tests/m2_test.s src/c4or1k/tools/asm.py
 c4or1k-m2: c4m c4or1k.c4r src/c4or1k/tests/m2_test.bin
 	./c4m load-c4r.c -- c4or1k.c4r src/c4or1k/tests/m2_test.bin
 c4or1k-m2-check: c4m c4or1k.c4r c4or1k-jit.c4r c4or1k-native src/c4or1k/tests/m2_test.bin
-	./c4m load-c4r.c -- c4or1k.c4r src/c4or1k/tests/m2_test.bin | grep -v '^c4or1k:' | grep -v 'guest instructions/sec' > .c4or1k_check_c.txt
-	node src/c4or1k/tools/or1k-oracle.js src/c4or1k/tests/m2_test.bin | grep -v '^c4or1k-oracle:' > .c4or1k_check_js.txt
-	diff .c4or1k_check_c.txt .c4or1k_check_js.txt && echo "c4or1k-m2-check: OK (bit-for-bit match against jor1k)"
-	./c4m load-c4r.c -- c4or1k-jit.c4r src/c4or1k/tests/m2_test.bin -jit | grep -v '^c4or1k:' | grep -v 'guest instructions/sec' > .c4or1k_check_c.txt
-	diff .c4or1k_check_c.txt .c4or1k_check_js.txt && echo "c4or1k-m2-check: OK (bit-for-bit match against jor1k, -jit)"
-	./c4or1k-native src/c4or1k/tests/m2_test.bin | grep -v '^c4or1k:' | grep -v 'guest instructions/sec' > .c4or1k_check_c.txt
-	diff .c4or1k_check_c.txt .c4or1k_check_js.txt && echo "c4or1k-m2-check: OK (bit-for-bit match against jor1k, native)"
-	rm -f .c4or1k_check_c.txt .c4or1k_check_js.txt
+	./c4m load-c4r.c -- c4or1k.c4r src/c4or1k/tests/m2_test.bin | grep -v '^c4or1k:' | grep -v 'guest instructions/sec' > .c4or1k_m2_c.txt
+	node src/c4or1k/tools/or1k-oracle.js src/c4or1k/tests/m2_test.bin | grep -v '^c4or1k-oracle:' > .c4or1k_m2_js.txt
+	diff .c4or1k_m2_c.txt .c4or1k_m2_js.txt && echo "c4or1k-m2-check: OK (bit-for-bit match against jor1k)"
+	./c4m load-c4r.c -- c4or1k-jit.c4r src/c4or1k/tests/m2_test.bin -jit | grep -v '^c4or1k:' | grep -v 'guest instructions/sec' > .c4or1k_m2_c.txt
+	diff .c4or1k_m2_c.txt .c4or1k_m2_js.txt && echo "c4or1k-m2-check: OK (bit-for-bit match against jor1k, -jit)"
+	./c4or1k-native src/c4or1k/tests/m2_test.bin | grep -v '^c4or1k:' | grep -v 'guest instructions/sec' > .c4or1k_m2_c.txt
+	diff .c4or1k_m2_c.txt .c4or1k_m2_js.txt && echo "c4or1k-m2-check: OK (bit-for-bit match against jor1k, native)"
+	rm -f .c4or1k_m2_c.txt .c4or1k_m2_js.txt
 # M3: UART + console I/O. tests/m3_echo.s polls LSR and echoes every
 # received byte back out through TXBUF, halting on Ctrl-D (0x04).
 # c4or1k-m3 is the interactive form (real terminal, via
@@ -2706,19 +2708,19 @@ src/c4or1k/tests/m3_echo.bin: src/c4or1k/tests/m3_echo.s src/c4or1k/tools/asm.py
 c4or1k-m3: c4m c4or1k.c4r src/c4or1k/tests/m3_echo.bin
 	./src/c4or1k/run-c4or1k.sh c4or1k.c4r src/c4or1k/tests/m3_echo.bin -r
 c4or1k-m3-check: c4m c4or1k.c4r src/c4or1k/tests/m3_echo.bin
-	printf 'hello, c4or1k\004' > .c4or1k_check_in.txt
-	./src/c4or1k/run-c4or1k.sh c4or1k.c4r src/c4or1k/tests/m3_echo.bin -r < .c4or1k_check_in.txt > .c4or1k_check_out.txt
-	diff .c4or1k_check_in.txt .c4or1k_check_out.txt && echo "c4or1k-m3-check: OK (echoed byte-for-byte, including Ctrl-D)"
-	rm -f .c4or1k_check_in.txt .c4or1k_check_out.txt
+	printf 'hello, c4or1k\004' > .c4or1k_m3_in.txt
+	./src/c4or1k/run-c4or1k.sh c4or1k.c4r src/c4or1k/tests/m3_echo.bin -r < .c4or1k_m3_in.txt > .c4or1k_m3_out.txt
+	diff .c4or1k_m3_in.txt .c4or1k_m3_out.txt && echo "c4or1k-m3-check: OK (echoed byte-for-byte, including Ctrl-D)"
+	rm -f .c4or1k_m3_in.txt .c4or1k_m3_out.txt
 # Same echo test, but interrupt-driven (EXCEPT_INT via PICMR/PICSR/
 # SR_IEE) instead of polled -- exercises the whole M2+M3 IRQ pipeline.
 src/c4or1k/tests/m3_echo_int.bin: src/c4or1k/tests/m3_echo_int.s src/c4or1k/tools/asm.py
 	python3 src/c4or1k/tools/asm.py src/c4or1k/tests/m3_echo_int.s bin > src/c4or1k/tests/m3_echo_int.bin
 c4or1k-m3-int-check: c4m c4or1k.c4r src/c4or1k/tests/m3_echo_int.bin
-	printf 'hello, c4or1k\004' > .c4or1k_check_in.txt
-	./src/c4or1k/run-c4or1k.sh c4or1k.c4r src/c4or1k/tests/m3_echo_int.bin -r < .c4or1k_check_in.txt > .c4or1k_check_out.txt
-	diff .c4or1k_check_in.txt .c4or1k_check_out.txt && echo "c4or1k-m3-int-check: OK (interrupt-driven echo, byte-for-byte)"
-	rm -f .c4or1k_check_in.txt .c4or1k_check_out.txt
+	printf 'hello, c4or1k\004' > .c4or1k_m3int_in.txt
+	./src/c4or1k/run-c4or1k.sh c4or1k.c4r src/c4or1k/tests/m3_echo_int.bin -r < .c4or1k_m3int_in.txt > .c4or1k_m3int_out.txt
+	diff .c4or1k_m3int_in.txt .c4or1k_m3int_out.txt && echo "c4or1k-m3-int-check: OK (interrupt-driven echo, byte-for-byte)"
+	rm -f .c4or1k_m3int_in.txt .c4or1k_m3int_out.txt
 # M4: boot loader. VMLINUX is jorconsole's already-decompressed image
 # (see boot.h); -b MAXSTEPS bounds a boot attempt by instruction
 # count, since there's no panic detection yet to stop on its own. The
@@ -2818,7 +2820,7 @@ c4mp.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4MP_SRC)/c4mp.h $(patsubst %,$(C4MP_SR
 			$(C4MP_SRC)/$$m.c .c4mp_$$m.c4o > /dev/null || exit 1; \
 	done
 	$(C4RLINK) $(patsubst %,.c4mp_%.c4o,$(C4MP_MODS)) -o c4mp.c4r
-	rm -f .c4mp_*.c4o
+	rm -f $(C4MP_MODS:%=.c4mp_%.c4o)
 # The stage-2 guest: starts every processor the machine offers and
 # proves they interleave. Compiled by c4lc because it calls the
 # processor opcodes, which c4cc does not know.

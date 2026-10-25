@@ -1,4 +1,5 @@
-// calc.c -- Calculator. docs/c4ix-desktop.md.
+// calc.c -- Calculator, a window kit class. docs/c4ix-desktop.md,
+// docs/grin-plan.md 4.
 //
 // A programmer's calculator in three modes. Integer: 32-bit words shown
 // in Hex, Dec, Oct or Bin, with the bitwise operators. Single and Double:
@@ -9,12 +10,10 @@
 // 0.30000000000000004 in Double and 0.3 in Single; Max * 2 is inf.
 //
 // The decimal conversions are libc's fp.c (src/c4ix/libc), linked into
-// the desktop: exact both ways.
+// the shell: exact both ways. (fp.c sets errno, which the shell owns.)
 
-#include "desktop.h"
+#include "winkit.h"
 
-// fp.c's; it sets errno on overflow, and the desktop has no libc to own one
-int errno;
 int __c4ix_fmtfp(char *o, double x, int conv, int prec, int alt, int plus, int space);
 double strtod(char *s, char **end);
 float strtof(char *s, char **end);
@@ -33,46 +32,36 @@ struct calc {
     char bits[24];
 };
 
-static struct calc *C(struct win *w) { return (struct calc *)w->st; }
+static struct calc *C(int w) { return (struct calc *)wk_state(w); }
 static char buf[64];
 
 // the key grids: 6 columns, 5 rows
-static char *keys[30];
-static char *fkeys[30];
-static int calc_ready;
-
-static void calc_keys() {
-    int k;
-    if (calc_ready) return;
-    calc_ready = 1;
-    k = 0;
-    keys[k] = "D"; ++k; keys[k] = "E"; ++k; keys[k] = "F"; ++k; keys[k] = "Mod"; ++k; keys[k] = "And"; ++k; keys[k] = "Not"; ++k;
-    keys[k] = "A"; ++k; keys[k] = "B"; ++k; keys[k] = "C"; ++k; keys[k] = "/"; ++k; keys[k] = "Or"; ++k; keys[k] = "Xor"; ++k;
-    keys[k] = "7"; ++k; keys[k] = "8"; ++k; keys[k] = "9"; ++k; keys[k] = "*"; ++k; keys[k] = "Lsh"; ++k; keys[k] = "Rsh"; ++k;
-    keys[k] = "4"; ++k; keys[k] = "5"; ++k; keys[k] = "6"; ++k; keys[k] = "-"; ++k; keys[k] = "+/-"; ++k; keys[k] = "Back"; ++k;
-    keys[k] = "1"; ++k; keys[k] = "2"; ++k; keys[k] = "3"; ++k; keys[k] = "+"; ++k; keys[k] = "0"; ++k; keys[k] = "="; ++k;
-    k = 0;
-    fkeys[k] = "Sqrt"; ++k; fkeys[k] = "x^2"; ++k; fkeys[k] = "1/x"; ++k; fkeys[k] = "Int"; ++k; fkeys[k] = "Pi"; ++k; fkeys[k] = "e"; ++k;
-    fkeys[k] = "Exp"; ++k; fkeys[k] = "Max"; ++k; fkeys[k] = "Eps"; ++k; fkeys[k] = "/"; ++k; fkeys[k] = "Min"; ++k; fkeys[k] = "Inf"; ++k;
-    fkeys[k] = "7"; ++k; fkeys[k] = "8"; ++k; fkeys[k] = "9"; ++k; fkeys[k] = "*"; ++k; fkeys[k] = "."; ++k; fkeys[k] = "Abs"; ++k;
-    fkeys[k] = "4"; ++k; fkeys[k] = "5"; ++k; fkeys[k] = "6"; ++k; fkeys[k] = "-"; ++k; fkeys[k] = "+/-"; ++k; fkeys[k] = "Back"; ++k;
-    fkeys[k] = "1"; ++k; fkeys[k] = "2"; ++k; fkeys[k] = "3"; ++k; fkeys[k] = "+"; ++k; fkeys[k] = "0"; ++k; fkeys[k] = "="; ++k;
-}
+static char *keys[30] = {
+    "D", "E", "F", "Mod", "And", "Not",
+    "A", "B", "C", "/", "Or", "Xor",
+    "7", "8", "9", "*", "Lsh", "Rsh",
+    "4", "5", "6", "-", "+/-", "Back",
+    "1", "2", "3", "+", "0", "="
+};
+static char *fkeys[30] = {
+    "Sqrt", "x^2", "1/x", "Int", "Pi", "e",
+    "Exp", "Max", "Eps", "/", "Min", "Inf",
+    "7", "8", "9", "*", ".", "Abs",
+    "4", "5", "6", "-", "+/-", "Back",
+    "1", "2", "3", "+", "0", "="
+};
 
 static void refresh(struct calc *c);
 
-int calc_open() {
-    int i;
-    struct win *w;
-    calc_keys();
-    i = win_open(K_CALC, "Calculator", 360, 332);
-    if (i < 0) return i;
-    w = win_get(i);
-    w->resizable = 0;
+static void calc_open_hook(int w, char *arg) {
     C(w)->radix = 10;
     C(w)->fresh = 1;
     refresh(C(w));
-    return i;
+}
+
+int calc_open() {
+    calc_class.size = sizeof(struct calc);
+    return wk_open(&calc_class, "Calculator", 360, 332, WK_FIXED, 0);
 }
 
 // ---- Integer -----------------------------------------------------------------------
@@ -396,55 +385,52 @@ static void press(struct calc *c, char *key) {
 // ---- drawing and input -------------------------------------------------------------
 
 enum { KW = 50, KH = 30, KX = 12, KY = 128 };
-static char *radix_names[4];
-static int radix_values[4];
-static char *mode_names[3];
+static char *radix_names[4] = { "Hex", "Dec", "Oct", "Bin" };
+static int radix_values[4] = { 16, 10, 8, 2 };
+static char *mode_names[3] = { "Integer", "Single", "Double" };
 
-void calc_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
+static void calc_draw(int w, int cw, int ch, int focused) {
     struct calc *c;
     int k, x, y;
     char **ks;
     c = C(w);
-    calc_keys();
-    radix_names[0] = "Hex"; radix_names[1] = "Dec"; radix_names[2] = "Oct"; radix_names[3] = "Bin";
-    radix_values[0] = 16; radix_values[1] = 10; radix_values[2] = 8; radix_values[3] = 2;
-    mode_names[0] = "Integer"; mode_names[1] = "Single"; mode_names[2] = "Double";
-    d_rect(ox, oy, cw, ch, C_FACE);
+    d_rect(0, 0, cw, ch, C_FACE);
     // the display: right-aligned in a sunken white field
-    d_rect(ox + 10, oy + 10, cw - 20, 24, C_WHITE);
-    d_bevel(ox + 10, oy + 10, cw - 20, 24, B_SUNKEN);
-    d_textn(ox + cw - 16 - ui_len(c->disp) * 8, oy + 15, C_DARK, 14, F_MONO, 8, c->disp, 0 - 1);
+    d_rect(10, 10, cw - 20, 24, C_WHITE);
+    d_bevel(10, 10, cw - 20, 24, B_SUNKEN);
+    d_textn(cw - 16 - ui_len(c->disp) * 8, 15, C_DARK, 14, F_MONO, 8, c->disp, 0 - 1);
     // the radix, or the bits of a float
-    ui_group(ox + 10, oy + 40, 214, 44, "");
+    ui_group(10, 40, 214, 44, "");
     if (c->mode == M_INT) {
         k = 0;
-        while (k < 4) { ui_radio(ox + 20 + k * 50, oy + 60, radix_names[k], c->radix == radix_values[k]); ++k; }
+        while (k < 4) { ui_radio(20 + k * 50, 60, radix_names[k], c->radix == radix_values[k]); ++k; }
     } else {
-        d_text(ox + 20, oy + 50, C_SHADOW, F_SANS, c->mode == M_SINGLE ? "IEEE single, bits:" : "IEEE double, bits:");
-        d_textn(ox + 20, oy + 66, C_DARK, 12, F_MONO, 7, c->bits, 0 - 1);
+        d_text(20, 50, C_SHADOW, F_SANS, c->mode == M_SINGLE ? "IEEE single, bits:" : "IEEE double, bits:");
+        d_textn(20, 66, C_DARK, 12, F_MONO, 7, c->bits, 0 - 1);
     }
-    ui_button(ox + cw - 118, oy + 50, 50, 28, "CE", 0, 0);
-    ui_button(ox + cw - 62, oy + 50, 50, 28, "C", 0, 0);
+    ui_button(cw - 118, 50, 50, 28, "CE", 0, 0);
+    ui_button(cw - 62, 50, 50, 28, "C", 0, 0);
     // the mode
-    ui_group(ox + 10, oy + 88, cw - 20, 32, "");
+    ui_group(10, 88, cw - 20, 32, "");
     k = 0;
-    while (k < 3) { ui_radio(ox + 20 + k * 90, oy + 100, mode_names[k], c->mode == k); ++k; }
+    while (k < 3) { ui_radio(20 + k * 90, 100, mode_names[k], c->mode == k); ++k; }
     ks = c->mode == M_INT ? keys : fkeys;
     k = 0;
     while (k < 30) {
-        x = ox + KX + (k % 6) * (KW + 6);
-        y = oy + KY + (k / 6) * (KH + 6);
+        x = KX + (k % 6) * (KW + 6);
+        y = KY + (k / 6) * (KH + 6);
         ui_button(x, y, KW, KH, ks[k], 0, 0);
         ++k;
     }
-    if (c->op) { buf[0] = c->op == '<' ? 'L' : c->op == '>' ? 'R' : c->op; buf[1] = 0; d_text(ox + 14, oy + 16, C_SHADOW, F_SANS, buf); }
+    if (c->op) { buf[0] = c->op == '<' ? 'L' : c->op == '>' ? 'R' : c->op; buf[1] = 0; d_text(14, 16, C_SHADOW, F_SANS, buf); }
 }
 
-void calc_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
+static void calc_mouse(int w, int ev, int x, int y, int b) {
     struct calc *c;
-    int k;
+    int k, cw, ch;
     c = C(w);
     if (ev != E_DOWN) return;
+    wk_size(w, &cw, &ch);
     k = 0;
     while (k < 4 && c->mode == M_INT) {
         if (ui_hit(x, y, 20 + k * 50, 58, 46, 16)) { c->radix = radix_values[k]; refresh(c); return; }
@@ -467,9 +453,10 @@ void calc_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     }
 }
 
-void calc_key(struct win *w, int code, int ch, int mods) {
+static void calc_key(int w, int down, int code, int ch, int mods) {
     struct calc *c;
     char k[2];
+    if (!down) return;
     c = C(w);
     k[1] = 0;
     if (c->mode != M_INT) {
@@ -493,3 +480,7 @@ void calc_key(struct win *w, int code, int ch, int mods) {
     if (code == KEY_ESC) { press(c, "C"); return; }
     if (code == KEY_DEL) { press(c, "CE"); return; }
 }
+
+struct wk_class calc_class = {
+    .kind = ICON_CALC, .open = calc_open_hook, .draw = calc_draw, .mouse = calc_mouse, .key = calc_key
+};

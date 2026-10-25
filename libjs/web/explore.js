@@ -136,7 +136,7 @@ function guessSources(path, a) {
   for (const [g, d] of Object.entries(games))
     if (n === g || n === 'c4ix-' + g) return n.startsWith('c4ix-') ? `${d} src/c4ix/lib/` : `${d} ${libc}`;
   if (n === 'c4ix') return 'src/c4ix/ src/c4ix/libc/';
-  if (n === 'c4ix-desktop') return 'src/c4ix/user/desktop/ src/c4ix/lib/';
+  if (n === 'c4ix-desktop') return 'src/c4ix/user/desktop/ src/winkit/ src/c4ix/lib/';
   if (n.startsWith('c4ix-')) return 'src/c4ix/user/ src/c4ix/lib/';
   if (n === 'c4dos') return 'src/c4dos/';
   if (n === 'c4ke') return 'src/c4ke/';

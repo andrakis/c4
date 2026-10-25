@@ -56,7 +56,7 @@ The web page's system list has three more ways to play it:
 | `?system=` | what boots | the game |
 |---|---|---|
 | `wolf3d-c4ix` | C4IX's console, which runs `wolf3d` (init's `-e`) | on the whole display, as `raycast -G` draws; the first run unpacks the zip, as above, and it is kept |
-| `c4dos` | C4DOS, on the `images/games` disk | type `WOLF3D` at the `A>` prompt; Quit comes back to it |
+| `c4dos` | C4DOS, on the page's own disk (`libjs/images/dos`), which starts grin (docs/grin-plan.md) | File > Exit grin in Program Manager, then type `WOLF3D` at the `A>` prompt; Quit comes back to it |
 | `wolf3d` | the game itself, with no operating system | at once; Quit halts the machine |
 
 The C4DOS and bare builds are the same game objects linked whole with

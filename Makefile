@@ -1347,6 +1347,23 @@ test-ladder: cpp $(C4) $(C4M) $(C4CC) c4sp
 test-c4dos: cpp $(C4) $(C4M) $(C4CC) $(TESTS)/hello.c4r
 	bash src/c4dos/tests/test-c4dos.sh
 
+# C4DOS's DEVICE=HEAP.SYS on libjs, whose heap keeps generations
+# (docs/c4dos-design.md "Memory"): API v4's scenarios against the c4lc -O
+# image, with c4lc -O transients, then Doom run five times at the
+# prompt, quit with keys each time, HEAP_USED within 1% throughout. Doom
+# is the games disk's (make c4bb-images); without one only the first half
+# runs.
+C4DOS_HEAP_T := .c4dos_heap_t
+test-c4dos-heap: c4dos32.c4r c4sp32 $(C4LC_LISP) include/c4dos.h src/tests/dosexec.c src/tests/dosres.c
+	@mkdir -p $(C4DOS_HEAP_T)
+	@for t in dosexec dosres; do \
+	   cat include/c4dos.h src/tests/$$t.c > $(C4DOS_HEAP_T)/$$t.c; \
+	   ./c4sp32 -c 64000000 src/c4sp/lisp/c4lc.lisp -O $(C4DOS_HEAP_T)/$$t.c $(C4DOS_HEAP_T)/$$t.c4r > /dev/null || exit 1; \
+	   rm -f $(C4DOS_HEAP_T)/$$t.c; \
+	 done
+	node libjs/tests/test-c4dos-heap.mjs --image c4dos32.c4r --extra $(C4DOS_HEAP_T)
+PHONY += test-c4dos-heap
+
 # c4sp, the Lisp interpreter (docs/c4sp-design.md)
 C4SP_SRCS := src/c4sp/c4sp.c src/c4sp/include/cell.h src/c4sp/include/gc.h \
              src/c4sp/include/cells.h src/c4sp/include/atoms.h \
@@ -2396,7 +2413,7 @@ GAME_OBJS  :=
 GAME_TESTS :=
 include $(wildcard games/*/c4.mk)
 GAMES_ALL  := wolf3d doom tyrian rott
-c4bb-images: libc-bare-objs $(GAME_OBJS)
+c4bb-images: libc-bare-objs grin-objs $(GAME_OBJS)
 $(filter-out $(GAME_TESTS),$(GAMES_ALL:%=test-%)):
 	@echo "$@: skipped, games/$(@:test-%=%) is not here (games/README.md)"
 PHONY += $(GAMES_ALL:%=test-%)
@@ -2416,6 +2433,29 @@ libc-bare-objs: $(LIBC_BARE:%=.libc-bare/libc-%.c4o) .libc-bare/libc-opcodes.c4o
 	@mkdir -p .libc-bare
 	$(LIBC_BARECC) -fno-builtin $< $@ > /dev/null
 PHONY += libc-bare-objs
+
+# grin (src/grin, docs/grin-plan.md): C4DOS's graphical shell, a C4DOS
+# program built by c4lc at 32 bits and linked whole with the bare libc
+# above, as the games are, and the window kit (src/winkit) that the C4IX
+# desktop shares. The kit's modules are compiled without -fno-builtin, as
+# the desktop's are; grin's own with it, so that its files go through
+# libc and bare.c to C4DOS. build-images.sh links it onto the page's
+# C4DOS disk, libjs/images/dos, which boots into it. test-grin drives it.
+GRIN       := grin progman tasklist control
+GRIN_KIT   := draw ui wmcore dialog look95 look31 savers
+GRIN_HDRS  := $(wildcard src/grin/*.h src/winkit/*.h) libjs/guest/gui.h libjs/guest/gui.c
+GRIN_CC    := ./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O $(IMG_G) -c -I src/winkit -I .
+grin-objs: $(GRIN:%=.grin/%.c4o) $(GRIN_KIT:%=.grin/wk-%.c4o)
+.grin/wk-%.c4o: src/winkit/%.c $(GRIN_HDRS) $(C4LC_LISP) .img_g | c4sp32
+	@mkdir -p .grin
+	$(GRIN_CC) $< $@ > /dev/null
+.grin/%.c4o: src/grin/%.c $(GRIN_HDRS) $(wildcard src/c4ix/libc/include/*.h) $(C4LC_LISP) .img_g | c4sp32
+	@mkdir -p .grin
+	$(GRIN_CC) -fno-builtin -I src/c4ix/libc/include $< $@ > /dev/null
+PHONY += grin-objs
+test-grin: c4bb-images
+	node libjs/tests/test-grin.mjs
+PHONY += test-grin
 
 # test-libc-bare: libc's scanf, fseek and fread (src/c4ix/libc/tests/
 # scantest.c) on the bare machine, against gcc's build of the same.
@@ -2883,18 +2923,24 @@ $(C4IX_ARC_PROGS): c4ix-%.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libarc.c4l libc4ix.c
 
 # userland programs built against the library: all IO via syscalls
 # The desktop is several modules (docs/c4ix-desktop.md): each is compiled
-# on its own, then all are linked with libc4ix, like the kernel.
-C4IX_DESKTOP := wm ui term files taskmgr apps calc edit wall savers
-C4IX_DESKTOP_SRC := $(C4IX_DESKTOP:%=$(C4IX_SRC)/user/desktop/%.c) $(C4IX_SRC)/user/desktop/desktop.h libjs/guest/gui.h \
-                    $(C4IX_SRC)/include/cpustat.h $(C4IX_SRC)/libc/fp.c
+# on its own, then all are linked with libc4ix, like the kernel. WINKIT's
+# are the window kit's (src/winkit), which grin shares.
+C4IX_DESKTOP := shell tools host term files taskmgr apps edit wall
+WINKIT := draw ui wmcore dialog look95 look31 textgrid savers calc notepad clock
+C4IX_DESKTOP_SRC := $(C4IX_DESKTOP:%=$(C4IX_SRC)/user/desktop/%.c) $(C4IX_SRC)/user/desktop/*.h libjs/guest/gui.h \
+                    $(WINKIT:%=src/winkit/%.c) $(wildcard src/winkit/*.h) $(C4IX_SRC)/include/cpustat.h $(C4IX_SRC)/libc/fp.c
+C4IX_DESKTOP_LC = $(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC)/include -I $(C4IX_SRC)/user/desktop -I src/winkit
 c4ix-desktop.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libarc.c4l libc4ix.c4l $(C4IX_DESKTOP_SRC)
 	for m in $(C4IX_DESKTOP); do \
-	  $(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC)/include -I $(C4IX_SRC)/user/desktop $(C4IX_SRC)/user/desktop/$$m.c .c4ix_d_$$m.c4o > /dev/null || exit 1; \
+	  $(C4IX_DESKTOP_LC) $(C4IX_SRC)/user/desktop/$$m.c .c4ix_d_$$m.c4o > /dev/null || exit 1; \
+	done
+	for m in $(WINKIT); do \
+	  $(C4IX_DESKTOP_LC) src/winkit/$$m.c .c4ix_d_$$m.c4o > /dev/null || exit 1; \
 	done
 	# the Calculator's decimal conversions are libc's fp.c
 	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -c $(C4IX_SRC)/libc/fp.c .c4ix_d_fp.c4o > /dev/null
-	$(C4RLINK) $(C4IX_DESKTOP:%=.c4ix_d_%.c4o) .c4ix_d_fp.c4o libarc.c4l libc4ix.c4l -o $@
-	rm -f $(C4IX_DESKTOP:%=.c4ix_d_%.c4o) .c4ix_d_fp.c4o .c4ix_d_*.pp.c
+	$(C4RLINK) $(C4IX_DESKTOP:%=.c4ix_d_%.c4o) $(WINKIT:%=.c4ix_d_%.c4o) .c4ix_d_fp.c4o libarc.c4l libc4ix.c4l -o $@
+	rm -f $(C4IX_DESKTOP:%=.c4ix_d_%.c4o) $(WINKIT:%=.c4ix_d_%.c4o) .c4ix_d_fp.c4o .c4ix_d_*.pp.c
 
 c4ix-%.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libc4ix.c4l $(C4IX_SRC)/user/%.c
 	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC)/include $(C4IX_SRC)/user/$*.c .c4ix_u.c4o > /dev/null

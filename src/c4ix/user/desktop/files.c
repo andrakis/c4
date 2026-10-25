@@ -52,11 +52,10 @@ static struct files *F(struct win *w) { return (struct files *)w->st; }
 static void mark_only(struct files *f, int i);
 static char tbuf[256];
 
-static char *menu_titles[3];
+static struct wk_menu menus[3];
 static char *file_items[8];
 static char *view_items[3];
 static char *go_items[2];
-static char **menu_items[3];
 
 static char *ename(struct files *f, int i) { return f->name + i * NAMEW; }
 
@@ -393,16 +392,16 @@ static void open_sel(struct win *w) {
 int files_open(char *path) {
     int i;
     struct win *w;
-    i = win_open(K_FILES, "Files", 600, 420);
+    i = win_open(K_FILES, "Files", 600, 420, sizeof(struct files));
     if (i < 0) return i;
     w = win_get(i);
-    menu_titles[0] = "File"; menu_titles[1] = "View"; menu_titles[2] = "Go";
+    menus[0].title = "File"; menus[1].title = "View"; menus[2].title = "Go";
     file_items[0] = "Open"; file_items[1] = "New Folder"; file_items[2] = "Delete";
     file_items[3] = "Rename"; file_items[4] = "-"; file_items[5] = "Close"; file_items[6] = 0;
     view_items[0] = "Refresh"; view_items[1] = 0;
     go_items[0] = "Up"; go_items[1] = 0;
-    menu_items[0] = file_items; menu_items[1] = view_items; menu_items[2] = go_items;
-    win_menus(w, 3, menu_titles, menu_items);
+    menus[0].items = file_items; menus[1].items = view_items; menus[2].items = go_items;
+    wk_menu(i, menus, 3);
     go(w, path);
     return i;
 }

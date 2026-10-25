@@ -107,6 +107,12 @@ unchanged by `make test-c4ix`).
     0x1C0 HEAP_USED    read: the heap's bytes in use, where the host keeps
                 the heap (libjs's heap.js); 0 otherwise. libjs only
                 (C4I_C4MJS); C4IX's System Monitor shows it
+    0x1C4 HEAP_GEN     read/write: the heap generation new blocks get
+                (libjs's heap.js; 0 where the host keeps no heap with
+                generations, whatever was written)
+    0x1C8 HEAP_RELEASE write: free every block of that generation (0 is
+                refused); read: bytes the last release freed. C4DOS's
+                DEVICE=HEAP.SYS uses both (docs/c4dos-design.md)
 
 This list is the original set plus the UART block write and the mailbox.
 The registers added for storage and clocks since -- the drive selector,

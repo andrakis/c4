@@ -91,7 +91,16 @@ export const MBOX_BELL = 0x1bc;    // w: guest->host doorbell (value to onDoorbe
 // has not had back, where the host keeps the heap (libjs's heap.js). 0
 // where it does not. Announced by C4I_C4MJS, never probed.
 export const HEAP_USED = 0x1c0;    // r
-                                   // r: host->guest interrupts pending, read-to-clear
+// Heap generations (libjs's heap.js): every block remembers the generation
+// that was current when it was allocated, and one write frees a whole
+// generation. C4DOS's DEVICE=HEAP.SYS gives each program its own and
+// releases it when the program ends. Generation 0 is the one the machine
+// boots in and cannot be released. Where the host keeps no heap, or one
+// without generations, HEAP_GEN reads 0 whatever was written, which is how
+// a guest that was told about them can still tell they are not there.
+export const HEAP_GEN     = 0x1c4;  // r/w: the generation new blocks get
+export const HEAP_RELEASE = 0x1c8;  // w: free every block of generation N
+                                    // r: bytes the last release freed
 
 // c4_info() capability bits (c4m.c:206)
 export const C4I_WHOWROTE = 0x1000;   // the provenance port is fitted
@@ -395,6 +404,13 @@ export class Devices {
     return (Math.floor(cyc / this.cyclesPerMs) + this.sleepMs) | 0;
   }
 
+  // the machine's heap, if it keeps generations (heap.js does; sheap.js,
+  // the parallel engine's, does not yet)
+  genHeap() {
+    const h = this.machine && this.machine.heap;
+    return h && typeof h.release === 'function' ? h : null;
+  }
+
   read32(addr) {
     switch (addr) {
       case UART_RX:    return this.rxFifo.length ? this.rxFifo.shift() : -1;
@@ -408,6 +424,8 @@ export class Devices {
       case HEAP_BASE:  return this.heapBase | 0;
       case HEAP_END:   return this.heapEnd | 0;
       case HEAP_USED:  return this.machine && this.machine.heap ? this.machine.heap.used | 0 : 0;
+      case HEAP_GEN:     return this.genHeap() ? this.machine.heap.gen | 0 : 0;
+      case HEAP_RELEASE: return this.genHeap() ? this.machine.heap.released | 0 : 0;
       case INFO_REG: {
         // mirrors native c4_info() | TRAPH (c4m.c:1033, 1814)
         const m = this.machine;
@@ -558,6 +576,8 @@ export class Devices {
         return;
       case HEAP_BASE: this.heapBase = val | 0; return;
       case HEAP_END:  this.heapEnd = val | 0;  return;
+      case HEAP_GEN:     if (this.genHeap()) this.machine.heap.gen = val | 0; return;
+      case HEAP_RELEASE: if (this.genHeap()) this.machine.heap.release(val | 0); return;
       case MBOX_BELL: if (this.onDoorbell) this.onDoorbell(val | 0); return;
       case TRAPH_REG:    this.machine.trapHandler = val | 0; return;
       case INTERVAL_REG: this.machine.cycleInterval = val | 0; return;

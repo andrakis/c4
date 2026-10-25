@@ -26,7 +26,8 @@ int *__c4dos_api;        // the loader's, under C4DOS; 0 on the bare machine
 
 enum {
     DOS_MAGIC_SLOT = 0, DOS_EXIT = 1, DOS_CREATE = 2, DOS_WRITE = 3, DOS_CLOSE = 4,
-    DOS_OPEN = 6, DOS_READ = 7, DOS_RCLOSE = 8, DOS_MAGIC = 4404292,   // include/c4dos.h's
+    DOS_VERSION = 5, DOS_OPEN = 6, DOS_READ = 7, DOS_RCLOSE = 8,
+    DOS_CONWRITE = 16, DOS_CONREAD = 17, DOS_MAGIC = 4404292,          // include/c4dos.h's
     FD_MAX = 32,
     F_MEM = 1, F_DOSW = 3
 };
@@ -52,6 +53,12 @@ static int dos3(int slot, int a, int b, int c) {
     if (!__c4dos_api[slot]) return 0 - 1;
     f = (int (*)(int, int, int))__c4dos_api[slot];
     return f(a, b, c);
+}
+// DOS v4's console slot (a function's address), or 0 when the console is
+// the machine's own
+static int dos_con(int slot) {
+    if (!dos() || __c4dos_api[DOS_VERSION] < 4) return 0;
+    return __c4dos_api[slot];
 }
 
 static int fd_new(int kind, int h) {
@@ -110,9 +117,17 @@ int uopen(char *path, int flags) {
     return fd;
 }
 
+// The console, fd 0 to 2: under DOS v4 it is DOS's (slots 16 and 17), so
+// DOS decides where it goes -- the screen, or a window of a shell's --
+// and a line typed ahead of the program is the program's. Elsewhere it
+// is the machine's own, READ and PUTC.
 int uread(int fd, char *buf, int len) {
     int n;
-    if (fd == 0) return read(0, buf, len);
+    int (*con)(char *, int);
+    if (fd == 0) {
+        if ((con = (int (*)(char *, int))dos_con(DOS_CONREAD))) return con(buf, len);
+        return read(0, buf, len);
+    }
     if (fd < 3 || fd >= FD_MAX || fd_kind[fd] != F_MEM) return 0 - 1;
     n = fd_len[fd] - fd_pos[fd];
     if (n > len) n = len;
@@ -136,7 +151,9 @@ int ulseek(int fd, int off, int whence) {
 
 int write(int fd, char *buf, int len) {
     int i;
+    int (*con)(char *, int);
     if (fd == 1 || fd == 2) {
+        if ((con = (int (*)(char *, int))dos_con(DOS_CONWRITE))) return con(buf, len);
         i = 0;
         while (i < len) { putchar(buf[i] & 255); ++i; }
         return len;

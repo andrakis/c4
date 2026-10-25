@@ -318,7 +318,7 @@ keep() { cp "$1" "$PB/$2"; }
 # list four kernel files, so an edit to sys.c, vfs.c or a user program
 # was silently not built.
 if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
-   [ -n "$(find src/c4ix libjs/guest/gui.h libjs/guest/gui.c libjs/guest/snd.h libjs/guest/snd.c $(ls .img_g 2>/dev/null) -newer $OUT/c4ix32.c4r -type f -print -quit)" ]; then
+   [ -n "$(find src/c4ix src/winkit libjs/guest/gui.h libjs/guest/gui.c libjs/guest/snd.h libjs/guest/snd.c $(ls .img_g 2>/dev/null) -newer $OUT/c4ix32.c4r -type f -print -quit)" ]; then
     say "C4IX, compiled $G (c4lc)"
     rm -rf $PB
     mkdir -p $PB/kernel $PB/lib $PB/libc $PB/user $PB/desktop $PB/bin
@@ -438,10 +438,13 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     # the desktop: several modules, linked together (docs/c4ix-desktop.md)
     dobjs=""
     step "C4IX's desktop:"
-    for m in wm ui term files taskmgr apps calc edit wall savers; do
+    # (the C4IX shell's own, then the window kit's, src/winkit, which grin shares)
+    for m in shell tools host term files taskmgr apps edit wall draw ui wmcore dialog look95 look31 textgrid savers calc notepad clock; do
         item $m
+        src=src/c4ix/user/desktop/$m.c
+        [ -f $src ] || src=src/winkit/$m.c
         ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -c -D C4IX_SHARED -I src/c4ix/include -I src/c4ix/user/desktop \
-            src/c4ix/user/desktop/$m.c .c4bb_ix_d_$m.c4o > /dev/null
+            -I src/winkit $src .c4bb_ix_d_$m.c4o > /dev/null
         dobjs="$dobjs .c4bb_ix_d_$m.c4o"
         keep .c4bb_ix_d_$m.c4o desktop/$m.c4o
     done
@@ -499,7 +502,15 @@ if [ -n "$GAMES" ] && ls .libc-bare/*.c4o > /dev/null 2>&1; then
 fi
 if [ -n "$GAMES_ON_DISK" ]; then
     say "the games disk: their data, C4DOS's files, the indexes"
-    cp $DISK/config.sys $GAMESDISK/config.sys
+    # (C4DOS's own CONFIG.SYS, made as the C4DOS step below makes the
+    # shared disk's, which in a fresh tree is not there yet)
+    sed 's/SIZE=[0-9]*/SIZE=16777216/' src/c4dos/fs/CONFIG.SYS > $GAMESDISK/config.sys
+    printf 'DEVICE=CONSOLE.SYS FLUSH\nDEVICE=DRIVES.SYS\n' >> $GAMESDISK/config.sys
+    # The page runs C4DOS on libjs, whose heap keeps generations, so on
+    # this disk a game's memory goes back when it quits (DEVICE=HEAP.SYS,
+    # docs/c4dos-design.md "Memory"). Without the line Doom left 14 MB
+    # behind each time it ran.
+    echo 'DEVICE=HEAP.SYS' >> $GAMESDISK/config.sys
     list=$(echo $GAMES_ON_DISK | sed 's/ /, /g')
     printf '@ECHO OFF\nECHO Welcome to C4DOS\nVER\nECHO These games are on this disk: type %s to play.\n' "$list" > $GAMESDISK/autoexec.bat
     (cd $GAMESDISK && ls -p | grep -v '/$' | grep -v '^manifest.json$' > c4dos.dir)
@@ -532,7 +543,8 @@ for n in $C4IX_USER $C4IX_ARC_USER; do
     cp src/c4ix/user/$n.c $DISK/c4ix-$n.c
 done
 # the desktop's modules, one after another, as its one source file
-cat src/c4ix/user/desktop/desktop.h src/c4ix/user/desktop/*.c > $DISK/c4ix-desktop.c
+cat src/winkit/winkit.h src/winkit/wkwin.h src/winkit/textgrid.h src/c4ix/user/desktop/desktop.h \
+    src/c4ix/user/desktop/*.c src/winkit/*.c > $DISK/c4ix-desktop.c
 cp src/c4ix/c4ix.h $DISK/c4ix.h
 cp src/c4ix/include/c4ix_user.h $DISK/c4ix_user.h
 # c4m as a C4IX program: c4m.c built the way cc builds it inside the
@@ -657,6 +669,46 @@ fi
 # Generated here, after every other copy.
 if [ -f $DISK/config.sys ]; then
     (cd $DISK && ls -p | grep -v '/$' | grep -v '^manifest.json$' > c4dos.dir)
+fi
+
+# ---- the page's C4DOS disk: libjs/images/dos -------------------------------
+# What ?system=c4dos boots (docs/grin-plan.md 3.9): C4DOS, starting grin,
+# its graphical shell, from AUTOEXEC.BAT (File > Exit grin comes back to
+# A>, where GRIN starts it again), and the games with their data, linked
+# from the games disk where the filesystem allows. CONFIG.SYS is its own:
+# HEAP.SYS, because libjs's heap keeps generations and a game's memory
+# goes back when it quits. DRIVES.SYS HOME=B: (G4) and REDIR.SYS TAP (G5)
+# join it in later milestones. grin is linked whole with the bare libc,
+# as the games are, from the objects make grin-objs compiled.
+LJDOS=libjs/images/dos
+rm -rf $LJDOS
+if ls .grin/*.c4o > /dev/null 2>&1 && ls .libc-bare/*.c4o > /dev/null 2>&1 && [ -f $OUT/c4dos32.c4r ]; then
+    say "the page's C4DOS disk, booting into grin: $LJDOS"
+    mkdir -p $LJDOS
+    ./c4rlink32 .grin/*.c4o .libc-bare/libc-*.c4o -o $LJDOS/grin.c4r > /dev/null
+    cp $OUT/c4dos32.c4r $LJDOS/
+    if [ -d $GAMESDISK ]; then
+        (cd $GAMESDISK && find . -type f ! -name config.sys ! -name autoexec.bat ! -name c4dos.dir \
+            ! -name manifest.json ! -name index.json | sed 's|^\./||') | while read f; do
+            mkdir -p "$LJDOS/$(dirname "$f")"
+            ln "$GAMESDISK/$f" "$LJDOS/$f" 2> /dev/null || cp "$GAMESDISK/$f" "$LJDOS/$f"
+        done
+    fi
+    sed 's/SIZE=[0-9]*/SIZE=16777216/' src/c4dos/fs/CONFIG.SYS > $LJDOS/config.sys
+    printf 'DEVICE=CONSOLE.SYS FLUSH\nDEVICE=DRIVES.SYS\nDEVICE=HEAP.SYS\n' >> $LJDOS/config.sys
+    list=$(echo $GAMES_ON_DISK | sed 's/ /, /g')
+    {
+        printf '@ECHO OFF\nECHO Welcome to C4DOS\nVER\n'
+        if [ -n "$list" ]; then printf 'ECHO The games on this disk: %s.\n' "$list"; fi
+        # (C4DOS splits a line into at most 15 words, so ECHO says 14)
+        printf 'ECHO Starting grin: its File menu has Exit grin, back to A>.\nGRIN\n'
+    } > $LJDOS/autoexec.bat
+    (cd $LJDOS && ls -p | grep -v '/$' | grep -v '^manifest.json$' > c4dos.dir)
+    (cd $LJDOS && find . -type f -not -name manifest.json | sed 's|^\./||') | \
+        awk 'BEGIN{printf "["} NR>1{printf ","} {printf "\"%s\"", $0} END{print "]"}' > $LJDOS/manifest.json
+    (cd $LJDOS && find . -type f -not -name manifest.json -not -name index.json -printf '%s %P\n' | sort -k2) | \
+        awk 'BEGIN{printf "["} NR>1{printf ","} {n=$0; sub(/^[0-9]+ /,"",n); printf "[\"%s\",%s]", n, $1} END{print "]"}' \
+        > $LJDOS/index.json
 fi
 
 # c4sc, the compiled c4lc, so C4IX can rebuild itself: /usr's

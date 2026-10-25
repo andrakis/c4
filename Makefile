@@ -2474,6 +2474,12 @@ PHONY += grin-apps
 test-grin: c4bb-images
 	node libjs/tests/test-grin.mjs
 PHONY += test-grin
+# test-persist: the saves that outlast the page (docs/grin-plan.md 3.8):
+# Doom on the bare machine saves to drive 1 and loads it back on the next
+# boot; Doom under C4DOS saves to B: (HOME=B:), and the stores stay apart
+test-persist: c4bb-images
+	node libjs/tests/test-persist.mjs
+PHONY += test-persist
 
 # test-libc-bare: libc's scanf, fseek and fread (src/c4ix/libc/tests/
 # scantest.c) on the bare machine, against gcc's build of the same.

@@ -16,7 +16,7 @@
 
 import {
   OPNAMES, UART_TX, TIME_MS, USLP_US, DISK_CLOSE,
-  C4I_C4M, C4I_HRT, C4I_SIG, C4I_FLT, C4I_PROT, C4I_TRAPH, C4I_PIT, C4I_MBOX,
+  C4I_C4M, C4I_HRT, C4I_SIG, C4I_FLT, C4I_PROT, C4I_TRAPH, C4I_PIT, C4I_MBOX, C4I_DRV,
 } from '../src/c4bb/sim/devices.js';
 import { TLEV_ADDR, OPNAMES_ROM } from '../src/c4bb/sim/arena.js';
 import { fpu, C4I_FPU } from '../src/c4bb/sim/fpu.js';
@@ -231,7 +231,7 @@ export class Machine {
   }
 
   info() {
-    return C4I_C4M | C4I_C4MJS | C4I_HRT | C4I_SIG | C4I_FLT | C4I_PROT | C4I_PIT |
+    return C4I_C4M | C4I_C4MJS | C4I_HRT | C4I_SIG | C4I_FLT | C4I_PROT | C4I_PIT | C4I_DRV |
            (this.noFpu ? 0 : C4I_FPU) |
            (this.dev.mbox ? C4I_MBOX : 0) |
            (this.gui && this.gui.fitted ? C4I_GUI : 0) |

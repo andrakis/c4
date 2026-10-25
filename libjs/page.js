@@ -224,8 +224,10 @@ export class C4M {
       case 'snd': if (this.sound) this.sound.play(m.events, m.now); break;
       case 'persist':
         // dropped while a Reset Files is under way: the old machine's
-        if (this.store && !this.persistHold) this.store.backend.putFile(this.persistName, m.name, m.bytes).then(
-          () => this.emit('persist', { name: m.name, bytes: m.bytes.length }), () => {});
+        // (bytes null: the machine deleted it)
+        if (this.store && !this.persistHold) (m.bytes ? this.store.backend.putFile(this.persistName, m.name, m.bytes)
+          : this.store.backend.deleteFile(this.persistName, m.name)).then(
+          () => this.emit('persist', { name: m.name, bytes: m.bytes ? m.bytes.length : -1 }), () => {});
         break;
       case 'gui': this.emit('resize', m); break;
       case 'exit': this.exited = m; this.emit('exit', m); break;

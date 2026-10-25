@@ -101,6 +101,13 @@ export const HEAP_USED = 0x1c0;    // r
 export const HEAP_GEN     = 0x1c4;  // r/w: the generation new blocks get
 export const HEAP_RELEASE = 0x1c8;  // w: free every block of generation N
                                     // r: bytes the last release freed
+// The write head's last register: a file taken off a writable drive.
+// Written the address of a name ("1:name", or a name on the selected
+// drive, as DISK_WNAME takes it); reads back 0, or -1 when the drive
+// cannot be written or has no such file. C4DOS's unlink (slot 18) and
+// bare.c's use it on a drive the page keeps, so a delete reaches the
+// page's store as a save does (the drive's `remove`).
+export const DISK_UNLINK = 0x1cc;   // w: name address -> r: 0, or -1
 
 // c4_info() capability bits (c4m.c:206)
 export const C4I_WHOWROTE = 0x1000;   // the provenance port is fitted
@@ -114,7 +121,13 @@ export const C4I_C4M = 0x2, C4I_HRT = 0x10, C4I_SIG = 0x20,
              C4I_PIT = 0x800,
 // The mailbox is fitted (MBOX_BASE/LEN/BELL). Same rule as the PIT: a
 // guest asks INFO first and never pokes 0x1b4 on a machine without it.
-             C4I_MBOX = 0x2000;
+             C4I_MBOX = 0x2000,
+// The drive registers are fitted: DISK_DRIVE, DISK_W* and DISK_COUNT to
+// DISK_RO, and DISK_UNLINK. A program with no operating system under it
+// (libc's bare.c) asks here before it writes a file to drive 1, since
+// under native c4m those addresses are its own memory. (0x20000 is
+// libjs's C4I_PAR.)
+             C4I_DRV = 0x40000;
 
 // How fast the machine thinks it is. This was 1000 -- a 1 MHz machine --
 // while the simulator actually executes fifteen to twenty million
@@ -355,6 +368,22 @@ export class Devices {
     return n;
   }
 
+  // Take a file off a writable drive: out of what the machine sees at
+  // once, and off the host's copy through the drive's `remove` when it
+  // has one (the page's store, the CLI's directory). A drive with a sink
+  // and no remove forgets the file for this session only.
+  diskUnlink (nameAddr) {
+    const name = this.arena.cstring(nameAddr >>> 0, 256);
+    const { drv, rest } = this.resolveDrive(name);
+    const media = this.drives[drv];
+    if (!media || !media.writable || !media.sink) return -1;
+    const clean = rest.startsWith('./') ? rest.slice(2) : rest;
+    if (!media.files.has(clean)) return -1;
+    media.files.delete(clean);
+    if (media.remove) { try { media.remove(clean); } catch { return -1; } }
+    return 0;
+  }
+
   // The UART's block write: N bytes from the TXADDR latch, in order.
   //
   // Every byte goes through the same onByte sink one at a time and bumps
@@ -435,7 +464,7 @@ export class Devices {
         // here and stays away from those addresses otherwise, which
         // matters because under native c4m they are its own memory.
         // A cold path -- INFO is read once at boot.
-        return C4I_C4M | C4I_HRT | C4I_SIG | C4I_FLT | C4I_PROT | C4I_PIT |
+        return C4I_C4M | C4I_HRT | C4I_SIG | C4I_FLT | C4I_PROT | C4I_PIT | C4I_DRV |
                (this.noFpu ? 0 : 0x10000 /* C4I_FPU, fpu.js */) |
                (this.mbox ? C4I_MBOX : 0) |
                (this.arena && this.arena.writer ? C4I_WHOWROTE : 0) |
@@ -464,6 +493,7 @@ export class Devices {
       case DISK_WNAME:   return this.diskResult | 0;
       case DISK_WLEN:    return this.diskResult | 0;
       case DISK_WCLOSE:  return this.diskResult | 0;
+      case DISK_UNLINK:  return this.diskResult | 0;
       case MBOX_BASE:    return this.mbox ? this.mbox.base | 0 : 0;
       case MBOX_LEN:     return this.mbox ? this.mbox.len | 0 : 0;
       case MBOX_BELL: {  const n = this.mboxIrq | 0; this.mboxIrq = 0; return n; }
@@ -542,6 +572,7 @@ export class Devices {
       case DISK_WADDR:  this.diskAddr = val | 0; return;
       case DISK_WLEN:   this.diskResult = this.diskWrite(val | 0); return;
       case DISK_WCLOSE: this.diskResult = this.diskWClose(val | 0); return;
+      case DISK_UNLINK: this.diskResult = this.diskUnlink(val); return;
       case DISK_EJECT: {
         const m = this.drives[val | 0];
         if (m) { m.files = new Map(); m.ejected = true; }

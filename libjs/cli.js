@@ -28,7 +28,7 @@
 // front with end-of-file set, which is how scripted OS sessions run:
 //   printf 'ps\nexit\n' | node libjs/cli.js -d src/c4bb/images/disk src/c4bb/images/c4ix32.c4r
 
-import { readFileSync, readdirSync, statSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { spawn } from 'node:child_process';
 import { constants } from 'node:os';
@@ -104,6 +104,7 @@ async function main(argv) {
       mkdirSync(dirname(full), { recursive: true });
       writeFileSync(full, bytes);
     } : null,
+    remove: d.writable ? name => rmSync(join(d.dir, name), { force: true }) : null,
   }));
 
   const snd = o.wav ? new SoundDevice() : null;

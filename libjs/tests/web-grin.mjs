@@ -1,7 +1,9 @@
-// web-grin.mjs - grin's browser check (docs/grin-plan.md G2): the page
-// boots straight into grin; Control Panel's Display switches it to
+// web-grin.mjs - grin's browser check (docs/grin-plan.md G2, G3): the
+// page boots straight into grin; Control Panel's Display switches it to
 // 800x600 and back; File > Exit grin comes back to A>, where VER answers.
-// Screenshots at both sizes. Over CDP, in a tab of its own in one of the
+// Then GRIN again, and its applications: Clock and Calculator side by
+// side (Program Manager minimised, the Task List's Tile), at 640x480 and
+// at 800x600. Screenshots at both sizes, each time. Over CDP, in a tab of its own in one of the
 // user's Chromes (cdp.mjs), against a page served from this tree:
 //
 //   node libjs/serve.mjs 8479 &
@@ -106,6 +108,63 @@ try {
   await tab.type('VER\n');
   ok('VER answers', await tab.waitFor(`document.getElementById("terminal").innerText.split('C4DOS version').length > 2`, 15000), (await term()).slice(-300));
   await shot('grin-exited');
+
+  // ---- G3: Clock and Calculator, side by side, at both sizes ----------------------
+  await tab.type('GRIN\n');
+  ok('GRIN again', await shownHas('Accessories', 30000));
+  await clickAt(620, 300);
+  const taskList = async () => { await tab.key('Escape', { ctrl: true }); return shownHas('Switch To'); };
+  const inTasks = async title => {
+    const tl = (await find('Switch To'))[0];
+    return (await find(title)).filter(t => tl && t.y < tl.y && t.y > tl.y - 180 && t.x > tl.x - 40 && t.x < tl.x + 280).pop();
+  };
+  const task = async (title, button) => {
+    await taskList();
+    const row = await inTasks(title);
+    if (row) await clickAt(row.x + 5, row.y + 5);
+    await clickText(button);
+    await sleep(300);
+  };
+  // Program Manager to the front (its title), then an item
+  const item = async s => { await clickText('Program Manager'); return clickText(s, true); };
+  // Program Manager to an icon, by its control menu (the box is 13 px left of
+  // its File menu and 18 up), and the rest tiled
+  const sideBySide = async () => {
+    const f = (await find('File'))[0];
+    if (f) { await clickAt(f.x - 14 + 4 + 9, f.y - 27 + 4 + 9); await clickText('Minimize'); }
+    await sleep(300);
+    await taskList();
+    await clickText('Tile');
+    await sleep(1500);
+  };
+  await item('Clock');
+  ok('Accessories > Clock opens Clock (clock.c4r)', await shownHas('Settings'));
+  await item('Calculator');
+  ok('Accessories > Calculator opens Calculator (calc.c4r)', await shownHas('Hex') && await shownHas('Dec'));
+  await sideBySide();
+  ok('Clock and Calculator, tiled, at 640x480', await shownHas('Settings') && await shownHas('Hex') && !(await find('File')).length);
+  await shot('grin-g3-640x480');
+  // 800x600: Control Panel's Display, from Program Manager brought back
+  await task('Program Manager', 'Switch To');
+  await item('Control Panel');
+  await clickText('Display', true);
+  await shownHas('800 x 600');
+  await clickText('800 x 600');
+  await clickText('OK');
+  ok('Display > 800 x 600', await tab.waitFor("document.getElementById('display').width === 800", 15000));
+  await sleep(500);
+  await task('Control Panel', 'End Task');
+  await sideBySide();
+  ok('Clock and Calculator, tiled, at 800x600', await shownHas('Settings') && await shownHas('Hex') && !(await find('File')).length);
+  await shot('grin-g3-800x600');
+  // and back to 640x480, so that GRIN.INI is as it was
+  await task('Program Manager', 'Switch To');
+  await item('Control Panel');
+  await clickText('Display', true);
+  await shownHas('640 x 480');
+  await clickText('640 x 480');
+  await clickText('OK');
+  ok('... and back to 640 x 480', await tab.waitFor("document.getElementById('display').width === 640", 15000));
   ok('no page errors', tab.errors.length === 0, tab.errors.join('\n  '));
 } finally {
   await tab.close();

@@ -1,5 +1,5 @@
 // test-grin.mjs - grin, C4DOS's graphical shell, headless
-// (docs/grin-plan.md, G2).
+// (docs/grin-plan.md, G2 and G3).
 //
 // Boots C4DOS on the page's own disk (libjs/images/dos, build-images.sh)
 // with a display fitted, as ?system=c4dos does. Its AUTOEXEC.BAT ends
@@ -7,7 +7,10 @@
 // as a person would, with clicks and keys on the display, finding things
 // by the text drawn on them (as test-desktop.mjs does): the Task List,
 // minimising to an icon and back, Control Panel's Display at 800x600 and
-// back, and File > Exit grin, which returns to A>.
+// back, and File > Exit grin, which returns to A>. Then grin's
+// applications: two Clocks ticking and closed one at a time, with the
+// heap back where it was; Calculator's 12*12=; a DOS program refused by
+// File > Run; and EXITKEY, whose exit() from a key callback unloads it.
 //
 //   node libjs/tests/test-grin.mjs
 
@@ -269,6 +272,130 @@ const f0 = presents;
 vm.dev.pushInput('GRIN\n');
 check(until(() => presents > f0 && has('Program Manager'), 3000) && gui.w === 640, 'GRIN at A> starts it again');
 check(rects.some(r => r.rgb === 0x384c60), 'with the scheme GRIN.INI keeps');
+
+// ---- applications (G3): Clock, Calculator, and one that exits ------------------------
+// grin's applications are programs of their own (clock.c4r, calc.c4r),
+// loaded by DOS, kept while they have a window, and unloaded with their
+// memory when the last one goes. The windows are found by their first
+// menu ("Settings" for a Clock) and closed with the Task List's End Task.
+const inPm = all => { const p = win('File'); return p ? all.filter(t => within(p, t.x, t.y) && t.y > p.y + 40).pop() : undefined; };
+// Program Manager to the front first (a click on its title bar), then a
+// double click on the item
+const startItem = s => {
+  const p = win('File');
+  if (p) { click(p.x + 40, p.y + BORDER + 9); settle(); }
+  return dbl(s, inPm);
+};
+const figures = () => find(/^\d\d:\d\d:\d\d$/);
+const taskList = () => { key(27, 0, 2); return until(() => has('Switch To') && has('End Task')); };
+// a row of the Task List's list: in its column, which starts a little left
+// of its Switch To button's label (a window behind it, redrawn as a Clock
+// ticks, may put a title of the same text into the frame after the rows)
+const inTasks = t => { const tl = at('Switch To'); return tl && t.y < tl.y && t.y > tl.y - 180 && t.x > tl.x - 40 && t.x < tl.x; };
+const switchTo = title => {
+  if (!taskList()) return false;
+  const row = find(title).filter(inTasks)[0];
+  if (row) { click(row.x + 5, row.y + 5); settle(); }
+  clickText('Switch To');
+  return until(() => !has('Switch To'));
+};
+const endTask = title => {
+  if (!taskList()) return false;
+  const row = find(title).filter(inTasks)[0];
+  if (!row) { key(27); return false; }
+  click(row.x + 5, row.y + 5); settle();
+  clickText('End Task');
+  return until(() => !has('Switch To'));
+};
+const running = () => {
+  clickText('Help'); until(() => has('About grin...'));
+  clickText('About grin...');
+  until(() => find(/running: \d+/).length > 0);
+  const m = (at(/running: \d+/) || { s: '' }).s.match(/running: (\d+)/);
+  clickText('OK'); until(() => !find(/running: \d+/).length);
+  return m ? +m[1] : -1;
+};
+// every clock showing figures shows new ones (the seconds moved on)
+const tick = n => {
+  const a = figures(), t0 = Date.now();
+  if (a.length !== n) return false;
+  const moved = () => {
+    const b = figures();
+    return b.length === n && a.every(o => b.some(t => t.x === o.x && t.y === o.y && t.s !== o.s));
+  };
+  // the Clocks read the host's time of day, so this waits in the host's time
+  while (!moved() && !halted && Date.now() - t0 < 5000) run();
+  return moved();
+};
+const digital = () => { clickText('Settings'); until(() => has('Digital')); clickText('Digital'); settle(); };
+
+settle();
+const heap0 = vm.heap.used;
+check(has('Accessories') && !!inPm(find('Clock')) && !!inPm(find('Calculator')), 'Program Manager has the Accessories group: Clock and Calculator');
+startItem('Clock');
+check(until(() => has('Settings')), 'Accessories > Clock opens a Clock (clock.c4r)');
+digital();
+check(until(() => figures().length === 1), 'Settings > Digital shows the time in figures', JSON.stringify(frame.map(t => t.s)));
+startItem('Clock');
+check(until(() => find('Settings').length === 2), 'a second launch opens a second Clock');
+digital();
+// side by side: the Task List's Tile
+taskList(); clickText('Tile'); settle(); until(() => !has('Switch To'));
+check(until(() => figures().length === 2), 'tiled, both Clocks show their figures', JSON.stringify(frame.map(t => [t.s, t.x, t.y])));
+check(running() === 1, 'Help > About: one application running, the second Clock on the same image');
+check(tick(2), 'both Clocks tick', JSON.stringify(figures()));
+endTask('Clock');
+check(until(() => figures().length === 1), 'End Task closes one Clock');
+check(tick(1), '... and the other ticks on', JSON.stringify(figures()));
+check(running() === 1, '... on the image still loaded');
+endTask('Clock');
+check(until(() => !figures().length && !has('Settings')), 'End Task closes the other');
+settle();
+check(running() === 0, 'with its last window gone, Clock is unloaded');
+check(Math.abs(vm.heap.used - heap0) < 512, `HEAP_USED is back where it started (${heap0} -> ${vm.heap.used})`);
+
+// Calculator: the C4IX desktop's, as calc.c4r
+startItem('Calculator');
+check(until(() => has('Hex') && has('Dec') && has('Bin')), 'Accessories > Calculator opens the desktop\'s Calculator (calc.c4r)');
+for (const [code, ch, mods] of [[49, '1'], [50, '2'], [56, '*', 1], [49, '1'], [50, '2'], [187, '=']]) key(code, ch.charCodeAt(0), mods || 0);
+check(until(() => has('144')), 'typing 12*12= into it shows 144', JSON.stringify(frame.map(t => t.s)));
+endTask('Calculator');
+check(until(() => !has('Hex')), 'End Task closes it');
+
+// File > Run...: a program that is not an application is refused
+const runCmd = cmd => {
+  clickText('File'); until(() => has('Run...'));
+  clickText('Run...');
+  if (!until(() => has('Command Line:'))) return false;
+  for (const c of cmd) key(c.charCodeAt(0), c.charCodeAt(0));
+  key(13);
+  return true;
+};
+const heap1 = vm.heap.used;
+runCmd('DOOM');
+check(until(() => find(/DOOM is not a grin application/).length > 0, 3000), 'File > Run... DOOM: "DOOM is not a grin application"');
+clickText('OK'); settle();
+check(running() === 0, '... and it is not kept loaded');
+// an application that calls exit() from its key callback
+runCmd('EXITKEY');
+check(until(() => has('A key here calls exit(3).')), 'File > Run... EXITKEY starts the test application');
+check(running() === 1, '... which is loaded');
+// (About raised Program Manager over it: the Task List's Switch To brings it back)
+switchTo('Exit Test');
+check(lastIndex('A key here calls exit(3).') > lastIndex('File'), 'Switch To brings it to the front');
+key(65, 97);
+check(until(() => !has('A key here calls exit(3).') && !has('Exit Test')), 'a key in it calls exit(): its window is closed');
+settle();
+check(running() === 0, '... and it is unloaded');
+check(Math.abs(vm.heap.used - heap1) < 512, `... with its memory (HEAP_USED ${heap1} -> ${vm.heap.used})`);
+startItem('Clock');
+check(until(() => has('Settings')), 'grin carries on: Clock starts again');
+endTask('Clock');
+check(until(() => !has('Settings')) && has('Program Manager'), '... and closes');
+
+// a Clock left open when the session ends goes with it
+startItem('Clock');
+check(until(() => has('Settings')), 'a Clock is open as the session ends');
 p0 = prompts();
 // Program Manager's control menu: Close asks the same
 pm = win('File');
@@ -278,6 +405,9 @@ clickText('Close');
 until(() => has('This will end your grin session.'));
 clickText('OK');
 check(until(() => prompts() > p0 && !gui.stats().attached, 3000), 'Close on Program Manager\'s control menu ends the session too');
+const mem = typed('MEM');
+check(/programs loaded: 0/.test(mem), 'at A>, MEM: no program is left loaded, the Clock unloaded with grin', mem);
+check(/Clock is a grin application/.test(typed('CLOCK')), 'and CLOCK at A> says it needs grin: grin took its table back');
 
 console.log(fail ? 'test-grin: FAILED' : 'test-grin: OK');
 process.exit(fail);

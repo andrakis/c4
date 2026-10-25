@@ -737,6 +737,20 @@ type('gui 40\n');
 check(until(() => gui.w === SW && has(/^Terminal - task/) && has(/gui: done after 40 frames/), 1500),
   'and has it back when the program ends, and draws it all again', `${gui.w}x${gui.h} ` + screen().slice(-300));
 
+// ---- the games in the Go menu: each where it is on the disk ------------------------------------
+// (games/README.md: optional submodules; C4IX's manifest lists the ones there)
+{
+  const vfs = readFileSync(join(ROOT, 'disk/c4ix.vfs.txt'), 'utf8');
+  const games = [['wolf3d', 'Wolfenstein 3D'], ['doom', 'Doom'], ['tyrian', 'Tyrian'], ['rott', 'Rise of the Triad']];
+  click(20, SH - TASK_H + 12);
+  until(() => has('Power Off...'));
+  const wrong = games.filter(([g, label]) => new RegExp(`^\\s*${g}: ilink`, 'm').test(vfs) !== frame.some(t => t.s.trimEnd() === label));
+  check(wrong.length === 0, 'the Go menu lists the games that are on the disk, and only those',
+    wrong.map(([g]) => g).join(' ') || 'all as the manifest says');
+  key('ESC');
+  until(() => !has('Power Off...'));
+}
+
 // ---- Run --------------------------------------------------------------------------------------
 start('Run...');
 check(until(() => has(/Program to run/)), 'Go > Run asks for a program');

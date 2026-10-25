@@ -182,6 +182,33 @@ static struct go_item start_items[] = {
 };
 static int n_start;
 
+// The games are optional (games/README.md in c4): each one's entry is in
+// the menu only where its program is on the disk -- until programs list
+// themselves in /etc/desktop.apps (docs/c4-explorer.md, W2)
+static char *game_path(int kind) {
+    if (kind == GO_WOLF) return "/usr/games/wolf3d/wolf3d.c4r";
+    if (kind == GO_DOOM) return "/usr/games/doom/doom.c4r";
+    if (kind == GO_TYRIAN) return "/usr/games/tyrian/tyrian.c4r";
+    if (kind == GO_ROTT) return "/usr/games/rott/rott.c4r";
+    return 0;
+}
+static void start_games() {
+    int k, n, st[8];
+    char *p;
+    k = 0;
+    n = 0;
+    while (k < n_start) {
+        p = game_path(start_items[k].kind);
+        if (!p || ustat(p, st) == 0) {
+            start_items[n].label = start_items[k].label;
+            start_items[n].kind = start_items[k].kind;
+            ++n;
+        }
+        ++k;
+    }
+    n_start = n;
+}
+
 static int start_height() {
     int k, h;
     h = 6; k = 0;
@@ -445,6 +472,7 @@ int main(int argc, char **argv) {
     // canvas may have been cleared, and the scene is drawn again
     gui_events(EVENTS);
     n_start = sizeof(start_items) / sizeof(start_items[0]);
+    start_games();
     theme_init();
     theme_apply();                     // the default scheme, unless the file names one
     theme_load();

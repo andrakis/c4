@@ -322,6 +322,25 @@ if [ -x ./c4cc32 ] && command -v node > /dev/null; then
   echo "$OUT" | grep -q "HEAP.SYS: this machine's heap keeps no generations" || { echo "FAIL c4bb: HEAP.SYS should be refused"; exit 1; }
   check_v4 c4bb "$OUT"
   echo "test-c4dos: API v4 on c4bb, and HEAP.SYS declined there"
+  # DEVICE=DRIVES.SYS HOME=B: with a drive B: that can be written (the
+  # CLI's -w): the same session, so every file the v4 scenarios write
+  # goes to B: and the unlink scenario deletes from it; then COPY onto
+  # B:, DIR B:, a RAM copy over it, and DEL taking the RAM copy first
+  mkdir -p $T/fs32h $T/home
+  cp $T/fs32/* $T/fs32h/
+  echo 'DEVICE=DRIVES.SYS HOME=B:' >> $T/fs32h/config.sys
+  (cd $T/fs32h && ls > c4dos.dir)
+  OUT=$(printf "${V4_SCRIPT%EXIT\\n}COPY config.sys NOTE.TXT\nDIR B:\nTYPE b:note.txt\nCOPY NOTE.TXT RAM:\nDEL NOTE.TXT\nTYPE NOTE.TXT\nDEL NOTE.TXT\nTYPE NOTE.TXT\nDIR B:\nEXIT\n" \
+        | node src/c4bb/sim/cli.js -c 900000000 -d $T/fs32h -w $T/home $T/c4dos32.c4r 2>&1)
+  echo "$OUT" | grep -q "files are written to B:" || { echo "FAIL c4bb HOME=B:: CONFIG.SYS"; echo "$OUT" | head; exit 1; }
+  check_v4 c4bb-home "$OUT"
+  [ -f $T/home/kid.txt ] && grep -qx 'kid.txt' $T/home/c4dos.dir || { echo "FAIL c4bb HOME=B:: kid.txt not on B: and in its c4dos.dir"; exit 1; }
+  [ ! -e $T/home/gone.txt ] && ! grep -q 'gone.txt' $T/home/c4dos.dir || { echo "FAIL c4bb HOME=B:: unlink left gone.txt on B:"; exit 1; }
+  echo "$OUT" | grep -q "config.sys -> NOTE.TXT"  || { echo "FAIL c4bb HOME=B:: COPY"; exit 1; }
+  [ "$(echo "$OUT" | grep -c 'DEVICE=DRIVES.SYS HOME=B:')" -ge 2 ] || { echo "FAIL c4bb HOME=B:: TYPE b:note.txt and NOTE.TXT under its RAM copy"; echo "$OUT" | tail -20; exit 1; }
+  echo "$OUT" | grep -q "file not found: NOTE.TXT" || { echo "FAIL c4bb HOME=B:: two DELs should take both copies"; echo "$OUT" | tail -20; exit 1; }
+  [ ! -e $T/home/NOTE.TXT ] && ! grep -q 'NOTE.TXT' $T/home/c4dos.dir || { echo "FAIL c4bb HOME=B:: DEL left NOTE.TXT on B:"; exit 1; }
+  echo "test-c4dos: HOME=B: on c4bb: files on B:, its c4dos.dir kept, COPY, DIR B: and DEL"
 else
   echo "test-c4dos: SKIP c4bb leg (need c4cc32 + node; run 'make c4bb-32bit')"
 fi

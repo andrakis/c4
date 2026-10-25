@@ -74,6 +74,8 @@ enum { DIRMAX   = 16384 };   // c4dos.dir, slurped for name resolution
 enum { RAMFILES  = 64 };     // RAM disk slots
 enum { RAMHANDLE = 8 };      // RAM files open at once
 enum { RAMFD     = 1000 };   // pseudo-fd base, above any host descriptor
+enum { WHANDLE   = 16 };     // files open for writing at once
+enum { WFD       = 2000 };   // write handles start here (create's answers)
 enum { RAMSIZE   = 1048576 };// default RAM disk budget, SIZE= overrides
 enum { C4DOS_API_SLOTS = 32 }; // API table words (include/c4dos.h agrees)
 enum { ARGVMAX  = 16 };
@@ -119,6 +121,16 @@ int *g_ram_len;          // bytes held per slot
 int *g_ram_cap;          // bytes allocated per slot
 int *g_rh_slot;          // open handle -> slot, -1 free
 int *g_rh_pos;           // open handle -> read position
+// Files open for WRITING: create's handle is WFD + an entry here, which
+// says where the file is going -- a RAM-disk slot, or a drive's write
+// head -- so the handle means the same file whatever happens to the
+// RAM disk's slots meanwhile (an unlink moves them down).
+enum { WH_FREE = 0, WH_RAM = 1, WH_DRV = 2 };
+int *g_wh_kind;          // WH_*
+int *g_wh_ref;           // the RAM slot (-1: deleted while open), or the drive's fd
+int *g_wh_drv;           // the drive, for WH_DRV
+int *g_wh_name;          // char*: its name there, for that drive's c4dos.dir
+int *g_wh_img;           // the program that created it (closed when it goes)
 char *g_inbuf;           // console byte stream: one read() may carry
 int g_inlen; int g_inpos; // many lines (a pipe) or one (a cooked tty),
                           // so lines are extracted here, never assumed.
@@ -130,6 +142,7 @@ int g_clock;             // CONFIG.SYS said DEVICE=CLOCK.SYS
 int g_conflush;          // CONFIG.SYS said DEVICE=CONSOLE.SYS FLUSH
 int g_drives;            // CONFIG.SYS said DEVICE=DRIVES.SYS
 int g_drive;             // the drive the prompt is on, 0 = A:
+int g_home;              // DRIVES.SYS HOME=: where files are written, or -1
 int g_quit;              // EXIT was typed
 
 // ---- drives ---------------------------------------------------------
@@ -143,6 +156,10 @@ int g_quit;              // EXIT was typed
 // and the console. Without that line C4DOS behaves as it always has,
 // one drive called A: and no way to leave it.
 enum { BB_DRIVE = 0x13c, BB_COUNT = 0x188 };
+// ... and its write head (include/c4bb.h, docs/c4bb-storage.md): the
+// same registers bbsave and install drive, and DISK_UNLINK beside them
+enum { BB_FD = 0x124, BB_WNAME = 0x178, BB_WADDR = 0x17c, BB_WLEN = 0x180,
+       BB_WCLOSE = 0x184, BB_RO = 0x18c, BB_UNLINK = 0x1cc };
 
 int drv_count ()       { if (!g_drives) return 1; return *(int *)BB_COUNT; }
 void drv_select (int n) { if (g_drives) *(int *)BB_DRIVE = n; }
@@ -159,6 +176,58 @@ int drv_num (char *s) {
   if (c >= 'a' && c <= 'z') return c - 'a';
   return 0 - 1;
 }
+
+// The drive a file name starts with ("B:NOTE.TXT"), or -1. A letter and
+// a colon, nothing longer: "RAM:" is not a drive.
+int drv_prefix (char *s) {
+  int c;
+  if (!s[0] || s[1] != ':') return 0 - 1;
+  c = s[0];
+  if (c >= 'A' && c <= 'Z') return c - 'A';
+  if (c >= 'a' && c <= 'z') return c - 'a';
+  return 0 - 1;
+}
+
+// Is drive n there, and can it be written? DISK_RO speaks for the
+// selected drive, so this selects n to ask and puts the selection back.
+int drv_writable (int n) {
+  int old, ro;
+  if (!g_drives || n < 0 || n >= drv_count()) return 0;
+  old = *(int *)BB_DRIVE;
+  *(int *)BB_DRIVE = n;
+  ro = *(int *)BB_RO;
+  *(int *)BB_DRIVE = old;
+  return !ro;
+}
+
+// "X:" and a name, which is how the registers are told the drive (the
+// machine's resolveDrive), in g_wname; 0 when it does not fit
+char *g_wname;
+char *drv_path (int n, char *name) {
+  int i;
+  g_wname[0] = drv_letter(n);
+  g_wname[1] = ':';
+  i = 0;
+  while (name[i]) {
+    if (i + 3 >= LINEMAX) return 0;
+    g_wname[i + 2] = name[i];
+    ++i;
+  }
+  g_wname[i + 2] = 0;
+  return g_wname;
+}
+
+// The write head itself. A file is on the medium only once it is closed,
+// in one piece.
+int bb_create (char *path) { *(int *)BB_WNAME = (int)path; return *(int *)BB_WNAME; }
+int bb_write (int fd, char *buf, int n) {
+  *(int *)BB_FD = fd;
+  *(int *)BB_WADDR = (int)buf;
+  *(int *)BB_WLEN = n;
+  return *(int *)BB_WLEN;
+}
+int bb_close (int fd) { *(int *)BB_WCLOSE = fd; return *(int *)BB_WCLOSE; }
+int bb_unlink (char *path) { *(int *)BB_UNLINK = (int)path; return *(int *)BB_UNLINK; }
 
 // ---- heap generations (DEVICE=HEAP.SYS) ----------------------------
 //
@@ -506,11 +575,9 @@ int ram_write (int slot, char *buf, int n) {
 
 // Delete `name` from the RAM disk; 0, or -1 if it is not there. Later
 // files move down a slot, so the listing keeps no holes (count/entname
-// enumerate by index). Read handles follow their files; a WRITE handle
-// is the slot number itself, so a file still being written when an
-// earlier one is deleted would be written into its neighbour. Nothing
-// does that today: every writer here creates, writes and closes in one
-// go.
+// enumerate by index). Open handles follow their files, read and write
+// alike; a handle on the file deleted reads nothing more, and what is
+// written to it goes nowhere.
 int ram_unlink (char *name) {
   int slot, i;
   if (!g_ramdisk) return 0 - 1;
@@ -523,6 +590,12 @@ int ram_unlink (char *name) {
   while (i < RAMHANDLE) {
     if (g_rh_slot[i] == slot) g_rh_slot[i] = 0 - 1;
     else if (g_rh_slot[i] > slot) g_rh_slot[i] = g_rh_slot[i] - 1;
+    ++i;
+  }
+  i = 0;
+  while (i < WHANDLE) {
+    if (g_wh_kind[i] == WH_RAM && g_wh_ref[i] == slot) g_wh_ref[i] = 0 - 1;
+    else if (g_wh_kind[i] == WH_RAM && g_wh_ref[i] > slot) g_wh_ref[i] = g_wh_ref[i] - 1;
     ++i;
   }
   i = slot;
@@ -574,12 +647,14 @@ int line_eq_ci (char *p, char *s) {
   return !*p || *p == 10 || *p == 13;
 }
 
-// c4dos.dir into g_dirbuf; returns its length, 0 if there is no listing
-int dir_slurp () {
+// A listing into g_dirbuf ("c4dos.dir", the selected drive's, or
+// "B:c4dos.dir"); returns its length, 0 if there is no listing
+int dir_slurp_path (char *path) {
   int fd, n, total, going;
   // The raw open, deliberately: this is the resolver, and routing it
   // through dos_open would recurse straight back into itself.
-  if ((fd = open("c4dos.dir", 0)) < 0) return 0;
+  g_dirbuf[0] = 0;
+  if ((fd = open(path, 0)) < 0) return 0;
   total = 0;
   going = 1;
   while (going) {
@@ -594,10 +669,21 @@ int dir_slurp () {
   return total;
 }
 
-// the real spelling of `name` according to the listing, or 0
-char *dir_resolve (char *name) {
+char *g_dname;           // "X:c4dos.dir"
+char *dir_name (int n) {
+  char *s, *d;
+  g_dname[0] = drv_letter(n);
+  g_dname[1] = ':';
+  s = "c4dos.dir";
+  d = g_dname + 2;
+  while (*s) { *d = *s; ++d; ++s; }
+  *d = 0;
+  return g_dname;
+}
+
+// the real spelling of `name` according to the listing just slurped, or 0
+char *dir_find (char *name) {
   char *p, *q;
-  if (!dir_slurp()) return 0;
   p = g_dirbuf;
   while (*p) {
     if (line_eq_ci(p, name)) {
@@ -612,19 +698,93 @@ char *dir_resolve (char *name) {
   return 0;
 }
 
-// open for reading, case-insensitively. Every file this system opens
-// goes through here.
-int dos_open (char *path) {
+// ... in the selected drive's listing, and in drive n's
+char *dir_resolve (char *name) {
+  if (!dir_slurp_path("c4dos.dir")) return 0;
+  return dir_find(name);
+}
+char *dir_resolve_on (int n, char *name) {
+  if (!dir_slurp_path(dir_name(n))) return 0;
+  return dir_find(name);
+}
+
+// ---- keeping a drive's listing ----------------------------------------
+// DIR, and grin's File Manager, list a drive by its c4dos.dir, so a file
+// DOS writes to a drive is added to the drive's listing when it is
+// closed, and taken out when it is deleted; a drive that had no listing
+// gets one. The listing is written as any file is, through the write
+// head, whole.
+
+// g_dirbuf's first len bytes as drive n's c4dos.dir: 0, or -1
+int dir_put (int n, int len) {
+  int fd, r;
+  if ((fd = bb_create(dir_name(n))) < 0) return 0 - 1;
+  r = 0;
+  if (len > 0 && bb_write(fd, g_dirbuf, len) != len) r = 0 - 1;
+  if (bb_close(fd) < 0) r = 0 - 1;
+  return r;
+}
+
+int dir_add (int n, char *name) {
+  int len, i;
+  if (cieq(name, "c4dos.dir")) return 0;
+  len = dir_slurp_path(dir_name(n));
+  if (dir_find(name)) return 0;
+  if (len + xlen(name) + 2 >= DIRMAX) return 0 - 1;
+  if (len > 0 && g_dirbuf[len - 1] != 10) { g_dirbuf[len] = 10; ++len; }
+  i = 0;
+  while (name[i]) { g_dirbuf[len] = name[i]; ++len; ++i; }
+  g_dirbuf[len] = 10; ++len;
+  g_dirbuf[len] = 0;
+  return dir_put(n, len);
+}
+
+int dir_drop (int n, char *name) {
+  int len, out;
+  char *p;
+  if (!(len = dir_slurp_path(dir_name(n)))) return 0;
+  p = g_dirbuf;
+  out = 0;
+  while (*p) {
+    if (line_eq_ci(p, name)) {
+      while (*p && *p != 10) ++p;
+      if (*p) ++p;
+    } else {
+      while (*p && *p != 10) { g_dirbuf[out] = *p; ++out; ++p; }
+      if (*p) { g_dirbuf[out] = 10; ++out; ++p; }
+    }
+  }
+  g_dirbuf[out] = 0;
+  return dir_put(n, out);
+}
+
+// Drive n's file, case-insensitively; -1 if it is not there
+int drv_open (int n, char *path) {
   int fd;
+  char *real;
+  if (!drv_path(n, path)) return 0 - 1;
+  if ((fd = open(g_wname, 0)) >= 0) return fd;
+  if ((real = dir_resolve_on(n, path)) && drv_path(n, real)) return open(g_wname, 0);
+  return 0 - 1;
+}
+
+// open for reading, case-insensitively. Every file this system opens
+// goes through here. A name with a drive ("B:NOTE.TXT") is that drive's
+// file. Any other is looked for in the RAM disk, then on the home drive
+// (HOME=, where files are written), then on the drive the prompt is on.
+int dos_open (char *path) {
+  int fd, n;
   char *real;
   // "./name" IS "name". c4ke.c says #include "./load-c4r.c", and a
   // name that came out of an archive is stored plainly -- c4bb's own
   // disk controller strips the prefix for the same reason.
   if (path[0] == '.' && path[1] == '/') path = path + 2;
   if ((real = ram_name(path))) return ram_open(real);
+  if (g_drives && (n = drv_prefix(path)) >= 0) return drv_open(n, path + 2);
   // RAM first, disk second -- the same precedence C4KE's loader uses,
   // and the reason a tool can rewrite a file that shipped read-only.
   if ((fd = ram_open(path)) >= 0) return fd;
+  if (g_home >= 0 && g_home != g_drive && (fd = drv_open(g_home, path)) >= 0) return fd;
   if ((fd = open(path, 0)) >= 0) return fd;
   if ((real = dir_resolve(path))) {
     if ((fd = ram_open(real)) >= 0) return fd;
@@ -659,6 +819,124 @@ int dos_close (int fd) {
   h = fd - RAMFD;
   if (h >= 0 && h < RAMHANDLE) g_rh_slot[h] = 0 - 1;
   return 0;
+}
+
+// ---- writing a file ------------------------------------------------------
+// Where a new file goes (slot 2, create; COPY):
+//   - "RAM:name": the RAM disk;
+//   - "B:name": drive B:, if it can be written, else the RAM disk;
+//   - a plain name: the home drive (DRIVES.SYS HOME=) if there is one and
+//     it can be written, else the RAM disk.
+// Without HOME= -- the build floppies -- a plain name goes to the RAM
+// disk, as it always did. A file written to a drive is on it, and in its
+// c4dos.dir, once it is closed; one written to the RAM disk is there at
+// once. A plain name written to the home drive takes the RAM disk's copy
+// of that name away, if there was one, so that the file read next is
+// the one just written.
+
+int g_cur_img;           // (the loader's, below) the program running, 0 = none
+
+int wh_new (int kind, int ref, int drv, char *name) {
+  int h, i;
+  char *d;
+  h = 0;
+  while (h < WHANDLE && g_wh_kind[h]) ++h;
+  if (h == WHANDLE) { printf("c4dos: %d files open for writing, no room for another\n", WHANDLE); return 0 - 1; }
+  g_wh_kind[h] = kind;
+  g_wh_ref[h] = ref;
+  g_wh_drv[h] = drv;
+  g_wh_img[h] = g_cur_img;
+  d = (char *)g_wh_name[h];
+  i = 0;
+  while (name[i] && i < LINEMAX - 1) { d[i] = name[i]; ++i; }
+  d[i] = 0;
+  return WFD + h;
+}
+
+// the entry a handle names, or -1
+int wh_get (int handle) {
+  int h;
+  h = handle - WFD;
+  if (h < 0 || h >= WHANDLE || !g_wh_kind[h]) return 0 - 1;
+  return h;
+}
+
+// create or truncate a file for writing; its handle, or -1
+int file_create (char *name) {
+  int n, fd, slot, plain;
+  char *rest;
+  if (name[0] == '.' && name[1] == '/') name = name + 2;
+  rest = name;
+  plain = 0;
+  n = 0 - 1;
+  if (ram_name(name)) rest = ram_name(name);
+  else if (g_drives && (n = drv_prefix(name)) >= 0) rest = name + 2;
+  else { n = g_home; plain = 1; }
+  if (n >= 0 && *rest && drv_writable(n) && drv_path(n, rest)) {
+    if ((fd = bb_create(g_wname)) < 0) return 0 - 1;
+    if (plain && ram_find(rest) >= 0) ram_unlink(rest);
+    if ((slot = wh_new(WH_DRV, fd, n, rest)) < 0) bb_close(fd);
+    return slot;
+  }
+  if ((slot = ram_create(rest, 4096)) < 0) return 0 - 1;
+  return wh_new(WH_RAM, slot, 0 - 1, rest);
+}
+
+int file_write (int handle, char *buf, int n) {
+  int h;
+  if ((h = wh_get(handle)) < 0) return 0;
+  if (g_wh_kind[h] == WH_DRV) return bb_write(g_wh_ref[h], buf, n);
+  if (g_wh_ref[h] < 0) return n;     // deleted while open: written nowhere
+  return ram_write(g_wh_ref[h], buf, n);
+}
+
+// 0, or -1 when the drive would not take it
+int file_close (int handle) {
+  int h, r;
+  if ((h = wh_get(handle)) < 0) return 0 - 1;
+  r = 0;
+  if (g_wh_kind[h] == WH_DRV) {
+    if (bb_close(g_wh_ref[h]) < 0) r = 0 - 1;
+    else dir_add(g_wh_drv[h], (char *)g_wh_name[h]);
+  }
+  g_wh_kind[h] = WH_FREE;
+  return r;
+}
+
+// a program that ends with files still open for writing: closed for it,
+// so what it wrote is kept and the entries come back
+int file_close_img (int img) {
+  int h;
+  h = 0;
+  while (h < WHANDLE) {
+    if (g_wh_kind[h] && g_wh_img[h] == img) file_close(WFD + h);
+    ++h;
+  }
+  return 0;
+}
+
+// Delete a file: "RAM:name" from the RAM disk, "B:name" from drive B:, a
+// plain name from the RAM disk if it is there, else from the home drive.
+// 0, or -1 if there was no such file or the drive cannot be written.
+int drv_unlink (int n, char *name) {
+  char *real;
+  if (!drv_writable(n) || !drv_path(n, name)) return 0 - 1;
+  if (bb_unlink(g_wname) < 0) {
+    if (!(real = dir_resolve_on(n, name)) || !drv_path(n, real) || bb_unlink(g_wname) < 0) return 0 - 1;
+    name = real;
+  }
+  dir_drop(n, name);
+  return 0;
+}
+
+int file_unlink (char *name) {
+  int n;
+  if (name[0] == '.' && name[1] == '/') name = name + 2;
+  if (ram_name(name)) return ram_unlink(name);
+  if (g_drives && (n = drv_prefix(name)) >= 0) return drv_unlink(n, name + 2);
+  if (ram_unlink(name) == 0) return 0;
+  if (g_home >= 0) return drv_unlink(g_home, name);
+  return 0 - 1;
 }
 
 // The image's code and data are allocated in generation `gen`, the
@@ -799,7 +1077,7 @@ enum { H_CODE, H_DATA, H_ENTRY, H_CONS, H_NCONS, H_DES, H_NDES, H_GEN,
 enum { IMGMAX = 32 };
 
 int *g_imgs;             // the live handles, 0 = a free entry
-int g_cur_img;           // the image whose code DOS last called into, 0 = none
+                         // (g_cur_img, above: the image whose code DOS last called into)
 int g_refused;           // why the last img_load returned 0: a refusal
 
 int img_find (int h) {
@@ -937,6 +1215,7 @@ int img_unload (int h) {
   }
   i = 0;
   while (i < p[H_NDES]) { img_call(p, ((int *)p[H_DES])[i]); ++i; }
+  file_close_img(h);
   g = gen_dos();
   img_free(p);
   gen_set(g);
@@ -1128,8 +1407,14 @@ int cmd_ver () {
 // gives us), so DIR reads the disk's manifest file - the same move
 // the c4bb web app makes with manifest.json. An honest limitation:
 // early machines listed what the label said.
-int cmd_dir (int page) {
-  int i;
+int cmd_dir (char *drive, int page) {
+  int i, n;
+  // DIR B: lists B:'s c4dos.dir, and only that
+  if (drive && g_drives && (n = drv_num(drive)) >= 0) {
+    if (n >= drv_count()) { printf("no drive %c: - this machine has %d\n", drv_letter(n), drv_count()); return 1; }
+    if (!type_file(dir_name(n), page)) printf("no c4dos.dir on %c: - nothing has been written there\n", drv_letter(n));
+    return 0;
+  }
   if (!type_file("c4dos.dir", page))
     printf("no c4dos.dir on this disk - the raw disk has no directory service\n");
   if (g_ramdisk) {
@@ -1273,20 +1558,19 @@ int is_program_name (char *s) {
 // is DOS's, and outlives the program that wrote it.
 int dos_api_create (char *name) {
   int g, r;
-  if (!g_ramdisk) return 0 - 1;
   g = gen_dos();
-  r = ram_create(name, 4096);
+  r = file_create(name);
   gen_set(g);
   return r;
 }
-int dos_api_write (int slot, char *buf, int len) {
+int dos_api_write (int h, char *buf, int len) {
   int g, r;
   g = gen_dos();
-  r = ram_write(slot, buf, len);
+  r = file_write(h, buf, len);
   gen_set(g);
   return r;
 }
-int dos_api_close (int slot) { return 0; }
+int dos_api_close (int h) { return file_close(h); }
 // The read half: DOS's own opener, which checks RAM before disk, made
 // available to a transient whose own open() only ever sees the host.
 int dos_api_open (char *name) { return dos_open(name); }
@@ -1297,7 +1581,10 @@ int dos_api_rclose (int fd) { return dos_close(fd); }
 // Slots 19-23 are what a shell needs to be one without a loader of its
 // own (docs/grin-plan.md 3.2). exec is further down, after the batch
 // runner it may need.
-int dos_api_unlink (char *name) { return ram_unlink(name); }
+int dos_api_unlink (char *name) { return file_unlink(name); }
+// v5: where files go, and how many drives there are (grin's File Manager)
+int dos_api_home () { return g_home; }
+int dos_api_drives () { return drv_count(); }
 int dos_api_load (char *path) { return img_load(path); }
 int dos_api_start (int h, int argc, char **argv) { return img_start(h, argc, argv); }
 int dos_api_unload (int h) { return img_unload(h); }
@@ -1388,19 +1675,33 @@ int dos_api_release () {
 // COPY src dst -- the one builtin that WRITES, and the demonstration
 // that the RAM disk works. There is no '>' redirection on this system
 // by decision (docs/c4dos-design.md); a tool that wants to produce a
-// file does it directly, and this is the smallest thing that does.
+// file does it directly, and this is the smallest thing that does. dst
+// goes where create puts it (file_create): B:NAME onto B:, a plain name
+// onto the home drive or the RAM disk. A bare drive, "COPY X B:", keeps
+// the name.
+char *g_copybuf;         // a bare drive and the source's name
 int cmd_copy (char *src, char *dst) {
-  int fd, n, total, slot;
+  int fd, n, total, h, i, k;
   if (!src || !dst || !*src || !*dst) { printf("usage: COPY src dst\n"); return 1; }
-  if (!g_ramdisk) { printf("no ramdisk - add DEVICE=RAMDISK.SYS to CONFIG.SYS\n"); return 1; }
+  if (!g_ramdisk && g_home < 0 && drv_prefix(dst) < 0) { printf("no ramdisk - add DEVICE=RAMDISK.SYS to CONFIG.SYS\n"); return 1; }
+  if (drv_num(dst) >= 0 || cieq(dst, "RAM:")) {
+    k = 0;
+    while (dst[k]) { g_copybuf[k] = dst[k]; ++k; }
+    i = xlen(src);
+    while (i > 0 && src[i - 1] != ':' && src[i - 1] != '/') --i;
+    while (src[i] && k < LINEMAX - 1) { g_copybuf[k] = src[i]; ++k; ++i; }
+    g_copybuf[k] = 0;
+    dst = g_copybuf;
+  }
   if (!scratch_need()) return 1;
   if ((fd = dos_open(src)) < 0) { printf("file not found: %s\n", src); return 1; }
   total = 0;
   while (total < BUF_MAX && (n = dos_read(fd, g_scratch + total, BUF_MAX - total < 4096 ? BUF_MAX - total : 4096)) > 0)
     total = total + n;
   dos_close(fd);
-  if ((slot = ram_create(dst, total)) < 0) return 1;
-  ram_write(slot, g_scratch, total);
+  if ((h = file_create(dst)) < 0) { printf("cannot write %s\n", dst); return 1; }
+  if (total > 0 && file_write(h, g_scratch, total) != total) { file_close(h); printf("cannot write %s\n", dst); return 1; }
+  if (file_close(h) < 0) { printf("cannot write %s\n", dst); return 1; }
   printf("%s -> %s (%d bytes)\n", src, dst, total);
   return 0;
 }
@@ -1468,10 +1769,17 @@ int dispatch (int argc) {
     return 0;
   }
   if (cieq(cmd, "VER")) return cmd_ver();
-  if (cieq(cmd, "DIR")) return cmd_dir(page_switch(argc, g_argv));
+  if (cieq(cmd, "DIR")) return cmd_dir(first_operand(argc, g_argv), page_switch(argc, g_argv));
   if (cieq(cmd, "TYPE")) return cmd_type(argc, g_argv);
   if (cieq(cmd, "COPY"))
     return cmd_copy(argc > 1 ? g_argv[1] : 0, argc > 2 ? g_argv[2] : 0);
+  // DEL name: off the RAM disk if it is there, else off the home drive;
+  // B:name off drive B: (file_unlink)
+  if (cieq(cmd, "DEL") || cieq(cmd, "ERASE")) {
+    if (argc < 2) { printf("usage: DEL file\n"); return 1; }
+    if (file_unlink(g_argv[1]) < 0) { printf("cannot delete %s\n", g_argv[1]); return 1; }
+    return 0;
+  }
   if (cieq(cmd, "TIME")) return cmd_time();
   if (cieq(cmd, "MEM")) return cmd_mem();
   if (cieq(cmd, "EXIT")) { g_quit = 1; return 0; }
@@ -1666,9 +1974,25 @@ int read_config () {
         printf("DEVICE=CONSOLE.SYS: no mode given, prompt stays on its own line\n");
       }
     }
+    // HOME=B: names the drive files are written to (file_create): the
+    // page keeps drive B: in the browser, so what is saved there lasts.
+    // A home that is not there, or cannot be written, is no home, and
+    // files go to the RAM disk as before.
     if (starts_ci(p, "DEVICE=DRIVES.SYS")) {
       g_drives = 1;
-      printf("drive device installed, %d drive(s)\n", drv_count());
+      n = 0;
+      while (p + n < e && !starts_ci(p + n, "HOME=")) ++n;
+      if (p + n + 6 < e && p[n + 6] == ':') {
+        g_home = upper(p[n + 5]) - 'A';
+        if (g_home < 0 || g_home > 25) g_home = 0 - 1;
+      }
+      if (g_home >= 0 && !drv_writable(g_home)) {
+        printf("drive device installed, %d drive(s); %c: cannot be written, files go to the RAM disk\n",
+               drv_count(), drv_letter(g_home));
+        g_home = 0 - 1;
+      } else if (g_home >= 0) {
+        printf("drive device installed, %d drive(s), files are written to %c:\n", drv_count(), drv_letter(g_home));
+      } else printf("drive device installed, %d drive(s)\n", drv_count());
     }
     // Heap generations (see gen_dos). The registers answer before DOS
     // relies on them: written 1, HEAP_GEN must read back 1.
@@ -1703,6 +2027,9 @@ int main (int argc, char **argv) {
   if (!(g_namebuf = malloc(LINEMAX))) { printf("c4dos: out of memory\n"); return 1; }
   if (!(g_progbuf = malloc(LINEMAX + 8))) { printf("c4dos: out of memory\n"); return 1; }
   if (!(g_batbuf  = malloc(LINEMAX + 8))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!(g_wname   = malloc(LINEMAX + 4))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!(g_dname   = malloc(16))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!(g_copybuf = malloc(LINEMAX + 4))) { printf("c4dos: out of memory\n"); return 1; }
   g_batreq = 0;
   if (!(g_ram_name = malloc(RAMFILES * sizeof(int)))) { printf("c4dos: out of memory\n"); return 1; }
   if (!(g_ram_data = malloc(RAMFILES * sizeof(int)))) { printf("c4dos: out of memory\n"); return 1; }
@@ -1712,6 +2039,17 @@ int main (int argc, char **argv) {
   if (!(g_rh_pos   = malloc(RAMHANDLE * sizeof(int)))) { printf("c4dos: out of memory\n"); return 1; }
   n = 0;
   while (n < RAMHANDLE) { g_rh_slot[n] = 0 - 1; ++n; }
+  if (!(g_wh_kind = malloc(WHANDLE * sizeof(int)))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!(g_wh_ref  = malloc(WHANDLE * sizeof(int)))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!(g_wh_drv  = malloc(WHANDLE * sizeof(int)))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!(g_wh_img  = malloc(WHANDLE * sizeof(int)))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!(g_wh_name = malloc(WHANDLE * sizeof(int)))) { printf("c4dos: out of memory\n"); return 1; }
+  n = 0;
+  while (n < WHANDLE) {
+    g_wh_kind[n] = WH_FREE;
+    if (!(g_wh_name[n] = (int)malloc(LINEMAX))) { printf("c4dos: out of memory\n"); return 1; }
+    ++n;
+  }
   if (!(g_inbuf = malloc(INBUFMAX))) { printf("c4dos: out of memory\n"); return 1; }
   g_inlen = 0;
   g_inpos = 0;
@@ -1731,7 +2069,7 @@ int main (int argc, char **argv) {
   g_api[2] = 0;                                // filled after CONFIG.SYS
   g_api[3] = (int)&dos_api_write;
   g_api[4] = (int)&dos_api_close;
-  g_api[5] = 4;                                // API version
+  g_api[5] = 5;                                // API version
   g_api[6] = (int)&dos_api_open;
   g_api[7] = (int)&dos_api_read;
   g_api[8] = (int)&dos_api_rclose;
@@ -1759,6 +2097,7 @@ int main (int argc, char **argv) {
   g_sink_ctx = 0;
   g_heapgen = 0;
   g_gen_next = 0;
+  g_home = 0 - 1;
   g_echo = 1;
   g_clock = 0;
   g_quit = 0;
@@ -1771,8 +2110,9 @@ int main (int argc, char **argv) {
   // believing any of the API, so a DOS booted without
   // DEVICE=RAMDISK.SYS honestly reports that it cannot save a file
   // rather than failing halfway through one.
+  // The home drive (DRIVES.SYS HOME=) is somewhere to write as well.
+  if (g_ramdisk || g_home >= 0) g_api[2] = (int)&dos_api_create;
   if (g_ramdisk) {
-    g_api[2]  = (int)&dos_api_create;
     // Enumeration follows the same rule: only offered when there is a
     // disk to enumerate, so a caller that checks the slot is told the
     // truth rather than being handed an always-empty listing.
@@ -1780,8 +2120,12 @@ int main (int argc, char **argv) {
     g_api[10] = (int)&dos_api_entname;
     g_api[11] = (int)&dos_api_entsize;
     g_api[12] = (int)&dos_api_entdata;
-    g_api[18] = (int)&dos_api_unlink;
   }
+  if (g_ramdisk || g_drives) g_api[18] = (int)&dos_api_unlink;
+  // v5: always there, like 26 and 27: home() says -1 and drives() 1 when
+  // CONFIG.SYS gave no home and no drives
+  g_api[28] = (int)&dos_api_home;
+  g_api[29] = (int)&dos_api_drives;
 #if C4DOS_CLOCK
   // Same rule for the clock: offered only when the hardware was
   // declared, so a caller that checks the slot is told the truth.

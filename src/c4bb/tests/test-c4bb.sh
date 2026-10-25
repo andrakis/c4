@@ -178,6 +178,28 @@ else
     echo "$c4ke_badop_out" | tail -10
 fi
 
+# A task that breaks its own stack guard, both ways (src/c4ke/bin/overrun.c).
+# The report must tell a recursion that ran off the bottom of the stack
+# and came back from a stray write, though both leave SP near the top
+# when the kernel looks at exit -- "44 bytes used, guard broken" was
+# read as a stray write when the climb's case was c4sc recursing. And
+# the shell must survive both, the recursion stopping inside the guard.
+c4ke_deep_out=$(printf 'overrun.c4r\necho survived-the-overrun\n\\q\n' | timeout 300 $C4BB -c 200000000 -d $IMAGES/disk $IMAGES/c4ke32.c4r 2>/dev/null)
+c4ke_stray_out=$(printf 'overrun.c4r stray\necho survived-the-overrun\n\\q\n' | timeout 300 $C4BB -c 60000000 -d $IMAGES/disk $IMAGES/c4ke32.c4r 2>/dev/null)
+if echo "$c4ke_deep_out" | grep -qF "OVERRAN ITS STACK" && \
+   echo "$c4ke_deep_out" | grep -qF "its stack is used to the bottom" && \
+   echo "$c4ke_deep_out" | grep -qF "found as it exited" && \
+   echo "$c4ke_deep_out" | grep -qF "survived-the-overrun" && \
+   echo "$c4ke_stray_out" | grep -qF "1 of 64 guard words broken" && \
+   echo "$c4ke_stray_out" | grep -qF "its stack was never used below" && \
+   echo "$c4ke_stray_out" | grep -qF "survived-the-overrun"; then
+    echo "test-c4bb: c4ke tells a stack that ran off its bottom from a stray write OK"
+else
+    echo "test-c4bb: c4ke tells a stack that ran off its bottom from a stray write FAILED"; fail=1
+    echo "$c4ke_deep_out" | grep -a "overrun\|c4ke: task\|c4ke:   \|survived" | head -8
+    echo "$c4ke_stray_out" | grep -a "overrun\|c4ke: task\|c4ke:   \|survived" | head -8
+fi
+
 # The lockup that could not be interrupted: a TLEV whose frame restores
 # its own address. A unit test on a machine the test builds, because the
 # alternative is waiting for a corrupted frame to turn up, and a test

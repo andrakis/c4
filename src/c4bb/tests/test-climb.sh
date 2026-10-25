@@ -36,7 +36,9 @@ mkdir -p $T/d1 $T/d2
 LOG=$T/run.log
 
 mkfifo $T/in
-timeout 2400 node src/c4bb/sim/cli.js -i -s -m 256 \
+# The whole machine's budget, three power-ons and all. The waits below
+# are what notice a stuck step; this only stops a run that never ends.
+timeout 3600 node src/c4bb/sim/cli.js -i -s -m 256 \
     -d c4dos-c4ix32 -w $T/d1 -w $T/d2 < $T/in > $LOG 2>&1 &
 SIM=$!
 exec 3> $T/in                       # blocks until the simulator opens it
@@ -82,6 +84,37 @@ await () {                          # await <what> <marker> <seconds>
     return 1
 }
 
+# The same for a step that runs for a long time but SAYS so as it goes:
+# b4ke prints a line as each module is built. The budget is for silence,
+# not for the step, so a build that grows -- or a slower host -- does not
+# fail it, while one that stops making output still does. A fixed 900 s
+# for all of b4ke was outgrown as C4IX grew (sched.c alone went from
+# 29 KB to 65 KB in a week), and on helios the twelve now take longer
+# than that. <failed> ends the wait at once: b4ke stops at the first
+# failed step and prints its summary.
+await_busy () {                     # await_busy <what> <marker> <quiet secs> <failed>
+    local quiet=0 size=-1 now start=$SECONDS
+    while [ $quiet -lt $3 ]; do
+        if grep -q -- "$2" $LOG; then
+            echo "test-climb: $1 OK ($((SECONDS - start))s)"
+            return 0
+        fi
+        if grep -q -- "$4" $LOG; then
+            echo "test-climb: $1 FAILED"
+            tail -20 $LOG
+            fail=1
+            return 1
+        fi
+        now=$(wc -c < $LOG)
+        if [ "$now" != "$size" ]; then size=$now; quiet=0; else quiet=$((quiet + 2)); fi
+        sleep 2
+    done
+    echo "test-climb: $1 TIMED OUT, ${3}s without output (no '$2')"
+    tail -20 $LOG
+    fail=1
+    return 1
+}
+
 # Wait for the prompt, type, wait for the result.
 run () {                            # run <what> <prompt> <cmd> <marker> <secs>
     idle "$2" 300 || { fail=1; return 1; }
@@ -109,8 +142,9 @@ await "C4KE came up"       "C4SH - The C4 SHell"            300 || exit 1
 await "C4KE has its tree"  "^vfsload: 51/51 entries loaded"  60 || exit 1
 run "unpacked C4IX's source" 'c4sh>' 'tar x c4ix-src.tar' \
     "tar: extracted"             120 || exit 1
-run "C4KE built C4IX"        'c4sh>' 'b4ke -f c4ix.b4k' \
-    "b4ke: C4IX built"           900 || exit 1
+idle 'c4sh>' 300 || exit 1
+printf 'b4ke -f c4ix.b4k\n' >&3
+await_busy "C4KE built C4IX" "b4ke: C4IX built" 900 "^b4ke: [0-9]* ran," || exit 1
 want "b4ke had no failures" "b4ke: 13 ran, 0 skipped, 0 failed"
 run "installed the C4IX medium" 'c4sh>' 'kinstall C:' \
     "kinstall: eject drive 1"    300 || exit 1
@@ -121,7 +155,7 @@ printf 'reboot 1\n' >&3
 # ---- power-on 3: the kernel C4KE compiled ---------------------------
 await "BIOS boots drive 2" "bios: drive 2 has c4ix.c4r"      120 || exit 1
 await "C4IX came up"       "c4ix-sh -- 'help' for builtins"  300 || exit 1
-await "C4IX has its tree"  "vfsload: 28/28 entries loaded"    60 || exit 1
+await "C4IX has its tree"  "vfsload: 29/29 entries loaded"    60 || exit 1
 run "and a userland"       'c4ix:/\$' 'ls' "^uhello"         120 || exit 1
 run "clean shutdown"       'c4ix:/\$' 'exit' \
     "c4ix: shutdown complete"    120 || exit 1

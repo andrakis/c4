@@ -1945,8 +1945,34 @@ static int kernel_stack_intact (int *t) {
 	return 1;
 }
 
-static void kernel_stack_check (int *t) {
-	int used, i;
+//
+// What the report can say. The check runs at a switch or at exit, so SP
+// then is NOT how deep the stack went: a recursion that runs off the
+// bottom and returns between two checks leaves SP near the top and the
+// guard in ruins. "44 of 262144 bytes, guard broken" -- the old wording
+// -- was read as a stray write more than once (docs/dos-rung-fixes.md,
+// docs/next-session.md), and the climb's case was exactly that
+// recursion: c4sc 4,671 frames deep in g:resolvecode (docs/task-memory.md).
+//
+// The stack itself knows better. It is zeroed when the task starts
+// (kernel_task_start), so the lowest word that is not zero is as deep
+// as the task has ever written: its true high-water mark, between
+// checks or not. A stack used to within a guard's length of its bottom
+// ran off it -- not to the last word, because a frame need not write
+// every word it covers (a test recursion's frames left the bottom 20
+// bytes zero); a guard broken under a stack that never got near it was
+// hit by something else. A frame with more untouched locals than that
+// could still fool it, which is why it says "most likely".
+static int kernel_stack_peak (int *t) {
+	int *p, *end;
+	p   = (int *)(t[TASK_BASE] + TASK_STACK_GUARD);
+	end = (int *)(t[TASK_BASE] + TASK_STACK_GUARD + TASK_STACK_SIZE);
+	while (p < end && !*p) ++p;
+	return (int)end - (int)p;
+}
+
+static void kernel_stack_check (int *t, int at_exit) {
+	int used, peak, i, n;
 	int *g;
 	if (!t[TASK_BASE]) return;
 	// Low-water mark, sampled at every switch. Not exact -- a peak
@@ -1961,16 +1987,29 @@ static void kernel_stack_check (int *t) {
 	if (kernel_stack_intact(t)) return;
 	t[TASK_STACK_BROKEN] = 1;
 	++kernel_stack_overruns;
+	g = (int *)t[TASK_BASE];
+	i = TASK_STACK_GUARD / sizeof(int);
+	n = 0;
+	while (i--)
+		if (g[i] != TASK_STACK_POISON) ++n;
 	used = TASK_STACK_GUARD + TASK_STACK_SIZE - (t[TASK_REG_SP] - t[TASK_BASE]);
-	printf("c4ke: task %d (%s) OVERRAN ITS STACK: %d of %d bytes, guard broken.\n",
-	       t[TASK_ID], t[TASK_NAME] ? (char *)t[TASK_NAME] : "?", used, TASK_STACK_SIZE);
+	peak = kernel_stack_peak(t);
+	printf("c4ke: task %d (%s) OVERRAN ITS STACK of %d bytes: %d of %d guard words broken.\n",
+	       t[TASK_ID], t[TASK_NAME] ? (char *)t[TASK_NAME] : "?", TASK_STACK_SIZE,
+	       n, TASK_STACK_GUARD / sizeof(int));
+	if (peak > TASK_STACK_SIZE - TASK_STACK_GUARD)
+		printf("c4ke:   its stack is used to the bottom: it ran off it (a recursion deeper than the stack, most likely)\n");
+	else
+		printf("c4ke:   its stack was never used below %d bytes: a stray write from elsewhere, most likely\n", peak);
+	printf("c4ke:   found %s, with %d bytes in use then -- which is not how deep it went.\n",
+	       at_exit ? "as it exited" : "at a switch", used);
 	printf("c4ke: the heap below 0x%lx is no longer trustworthy.\n", t[TASK_BASE]);
 	// ...and on a board fitted with the provenance port, WHO. This is
 	// the question the guard could never answer: it notices at a
-	// context switch, some unknown time after the write, and 44 bytes
-	// of stack used with the guard broken means the write came from
-	// somewhere else entirely. c4bb remembers the PC that last stored
-	// to each word, so ask it.
+	// context switch or at exit, some unknown time after the write.
+	// c4bb remembers the PC that last stored to each word, so ask it.
+	// For a recursion, the words name PCs in the recursing function or
+	// in the ones it calls.
 	//
 	// Gated on the announcement, never probed: those addresses are
 	// c4bb devices and c4m's own memory everywhere else, so a kernel
@@ -1994,7 +2033,7 @@ static void kernel_before_switch (int *task) {
 	int *sigh, i;
 
 	if (kernel_task_current && kernel_task_current != task)
-		kernel_stack_check(kernel_task_current);
+		kernel_stack_check(kernel_task_current, 0);
 
 	// TODO: need a SIGWAITING or something to tell if the process is already in a signal handler.
 	if (task[TASK_SIGPENDING]) {
@@ -2041,11 +2080,12 @@ static void kernel_task_finish (int *task) {
 
 	// A task that overran and then exited without being switched out
 	// once more would otherwise never be checked.
-	kernel_stack_check(task);
-	if (kernel_verbosity >= VERB_MAX && task[TASK_STACK_LOW])
+	kernel_stack_check(task, 1);
+	// The stack's own high-water mark, not the switch-sampled one: a
+	// peak between two switches is what sizes a stack.
+	if (kernel_verbosity >= VERB_MAX && task[TASK_BASE])
 		printf("c4ke: task %d used at most %d of %d stack bytes\n", task[TASK_ID],
-		       TASK_STACK_GUARD + TASK_STACK_SIZE - (task[TASK_STACK_LOW] - task[TASK_BASE]),
-		       TASK_STACK_SIZE);
+		       kernel_stack_peak(task), TASK_STACK_SIZE);
 
 	// Update kernel counters
 	s = task[TASK_STATE];

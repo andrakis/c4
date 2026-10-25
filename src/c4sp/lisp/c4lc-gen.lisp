@@ -1430,10 +1430,16 @@
 		(if (if (= h 'land) true (= h 'lor)) g:INT
 		(if (= h 'comma) (g:typeof (g:last (tail e)))
 		(g:bintype e))))))))))))))))))))))
+;;
+;; Each operand is typed once, and its type handed down: typing one
+;; twice per level, as this did, takes 2^N steps on a chain of N
+;; (a + a + ... + a), and 3^N on a + (a + (...)). g:ltypes, below,
+;; gives the left operand's type when the caller already has it.
 (define g:bintype (lambda (e)
+	(g:bintype/lt e (g:typeof (g:second e)))))
+(define g:bintype/lt (lambda (e lt0)
 	(begin
 		(define h (head e))
-		(define lt0 (g:typeof (g:second e)))
 		(define shf (if (= h 'shl) true (= h 'shr)))
 		(define rt0 (if shf g:INT (g:typeof (g:third e))))
 		(if (g:fpbin? lt0 rt0) (if (g:fpcmp? h) g:INT (g:fpuac lt0 rt0))
@@ -1442,32 +1448,29 @@
 					(if (= h 'gt) true (if (= h 'le) true (= h 'ge))))))
 				g:INT
 				(g:llrty shf lt0 rt0))
-			(g:bintype/2 e))))))
-(define g:bintype/2 (lambda (e)
+			(g:bintype/2 e lt0 rt0))))))
+;; rt is the right operand's type, except after a shift, which does not
+;; look at it
+(define g:bintype/2 (lambda (e lt rt)
 	(begin
 		(define h (head e))
-		(define lt (g:typeof (g:second e)))
 		;; int + pointer is the pointer's (M13): Rise of the Triad's
 		;; *(dest+bufferofs), dest an int
-		(if (if (= h 'add) (if (g:isptr lt) false (g:isptr (g:typeof (g:third e)))) false)
-			(g:typeof (g:third e))
+		(if (if (= h 'add) (if (g:isptr lt) false (g:isptr rt)) false)
+			rt
 		(if (if (= h 'add) true (= h 'sub))
 			(if (g:isptr lt)
 				(if (= h 'add) lt
-				(if (if (> (g:elemsize lt) 1) (= lt (g:typeof (g:third e))) false) g:INT lt))
-			(begin
-				(define rt (g:typeof (g:third e)))
-				(if (g:unsbin? lt rt) (g:uac lt rt) (g:sumty lt))))
+				(if (if (> (g:elemsize lt) 1) (= lt rt) false) g:INT lt))
+			(if (g:unsbin? lt rt) (g:uac lt rt) (g:sumty lt)))
 		(if (if (= h 'shl) true (= h 'shr))
 			(if (g:arith? lt) (g:unres lt) g:INT)
-		(begin
-			(define rt2 (g:typeof (g:third e)))
-			(if (if (g:unsbin? lt rt2)
-					(not (if (= h 'eq) true (if (= h 'ne) true (if (= h 'lt) true
-						(if (= h 'gt) true (if (= h 'le) true (= h 'ge)))))))
-					false)
-				(g:uac lt rt2)
-			g:INT))))))))
+		(if (if (g:unsbin? lt rt)
+				(not (if (= h 'eq) true (if (= h 'ne) true (if (= h 'lt) true
+					(if (= h 'gt) true (if (= h 'le) true (= h 'ge)))))))
+				false)
+			(g:uac lt rt)
+		g:INT)))))))
 (define g:condtype (lambda (e)
 	(begin
 		(define tt (g:typeof (g:third e)))
@@ -1562,22 +1565,45 @@
 		(g:emit (list unop))
 		(set! g:ty t))))
 
+;; The types down an expression's left spine, while it is binary
+;; operators: (type-of x, type-of its left operand, ...), in one pass.
+(define g:ltypes (lambda (x)
+	(if (g:assoc/atom (head x) g:binops)
+		(begin
+			(define ls (g:ltypes (g:second x)))
+			(g:cons (g:bintype/lt x (head ls)) ls))
+	(list (g:typeof x)))))
+;; (NODE . TYPES): g:ltypes of NODE's left operand, left by g:binary/1
+;; for the g:binary of NODE, its left operand, while that is generated.
+;; A chain a + a + ... + a is then typed once, not once per level (N^2).
+(define g:lspine false)
+
 ;; binary operator with c4cc's pointer scaling -- and, when an operand
 ;; is unsigned, the usual arithmetic conversions (g:ubinary)
 (define g:binary (lambda (e opname)
+	(begin
+		(define sp (if (if g:lspine (= e (head g:lspine)) false)
+			(tail g:lspine)
+			(g:ltypes (g:second e))))
+		(set! g:lspine false)
+		(g:binary/0 e opname sp))))
+(define g:binary/0 (lambda (e opname sp)
 	;; int + pointer as pointer + int (M13): the pointer's arithmetic
-	(if (if (= opname 'ADD) (if (g:isptr (g:typeof (g:second e))) false (g:isptr (g:typeof (g:third e)))) false)
+	(if (if (= opname 'ADD) (if (g:isptr (head sp)) false (g:isptr (g:typeof (g:third e)))) false)
 		(g:binary (list (head e) (g:third e) (g:second e)) opname)
 	(begin
 		(define shf (if (= opname 'SHL) true (= opname 'SHR)))
-		(define lt0 (g:typeof (g:second e)))
+		(define lt0 (head sp))
 		(define rtl (if shf g:INT (g:typeof (g:third e))))
 		(if (g:llop? shf lt0 rtl) (g:llbinary e opname (g:llrty shf lt0 rtl))
-		(g:binary/1 e opname))))))
-(define g:binary/1 (lambda (e opname)
+		(g:binary/1 e opname sp))))))
+(define g:binary/1 (lambda (e opname sp)
 	(begin
 		(define rt0 (g:typeof (g:third e)))
-		(g:expr (g:second e))
+		(define l (g:second e))
+		(set! g:lspine (if (g:assoc/atom (head l) g:binops) (g:cons l (tail sp)) false))
+		(g:expr l)
+		(set! g:lspine false)
 		(define t g:ty)
 		(if (if (if (= opname 'SHL) true (= opname 'SHR))
 				(if (g:arith? t) (g:uns? (g:promote t)) false)
@@ -3345,24 +3371,33 @@
 (define gen:bssextra 0)
 
 ;; rebuild a symbol list, resolving 'glo entries whose offset is a bss
-;; (negative-encoded) offset to base + relative
-(define g:resolvesyms (lambda (ss base)
-	(if (empty? ss) (list)
+;; (negative-encoded) offset to base + relative.
+;;
+;; This and g:resolvecode below walk the whole module, so they loop
+;; (next, into an accumulator) rather than recurse: a recursion here is
+;; one stack frame per entry of the module's code. Compiled by c4sc that
+;; is 56 bytes a frame, so C4KE's 256 KB task stack holds about 4,700
+;; entries; src/c4ix/sched.c passed that at cd59860 (6,011) and is at
+;; 8,022 now, and the climb (`b4ke -f c4ix.b4k`) ran through the stack's
+;; guard and into the shell's code below it.
+(define g:resolvesyms (lambda (ss base acc)
+	(if (empty? ss) (g:reverse acc)
 	(begin
 		(define s (head ss))
-		(g:cons
+		(next g:resolvesyms (tail ss) base (g:cons
 			(if (if (= (g:second s) 'glo) (g:bss? (index s 3)) false)
 				(list (head s) 'glo (g:third s)
 					(+ base (g:bssoff (index s 3))) (index s 4) (index s 5) (index s 6))
 				s)
-			(g:resolvesyms (tail ss) base))))))
+			acc))))))
 
-;; rewrite (bss N) operands in the code to absolute (data base+N)
-(define g:resolvecode (lambda (cs base)
-	(if (empty? cs) (list)
+;; rewrite (bss N) operands in the code to absolute (data base+N), and
+;; (frame ID WORDS) to the frame's final size
+(define g:resolvecode (lambda (cs base acc)
+	(if (empty? cs) (g:reverse acc)
 	(begin
 		(define i (head cs))
-		(g:cons
+		(next g:resolvecode (tail cs) base (g:cons
 			(if (if (= 2 (length i))
 					(if (= 'list (typeof (second i))) (= 'bss (head (second i))) false)
 					false)
@@ -3372,7 +3407,7 @@
 					false)
 				(list (head i) (+ (index (second i) 2) (g:framewords (second (second i)) g:frames)))
 				i))
-			(g:resolvecode (tail cs) base))))))
+			acc))))))
 
 (define gen:module (lambda (ast)
 	(begin
@@ -3421,8 +3456,8 @@
 		;; loader must zero-fill beyond the stored data (align pad + bss).
 		(define bssbase (* g:WORD (/ (+ g:dlen g:WMASK) g:WORD)))
 		(set! gen:bssextra (- (+ bssbase g:blen) g:dlen))
-		(define syms (g:symsection (g:resolvesyms (g:reverse g:syms) bssbase) 0 (list)))
-		(define code (g:resolvecode (g:reverse g:code) bssbase))
+		(define syms (g:symsection (g:resolvesyms (g:reverse g:syms) bssbase (list)) 0 (list)))
+		(define code (g:resolvecode (g:reverse g:code) bssbase (list)))
 		(set! g:dpatches (g:resolvedglo g:dpatches bssbase (list)))
 		;; -fpic: every data reference relative to __c4_dbase, a new
 		;; extern global the loader supplies

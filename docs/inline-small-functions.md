@@ -380,7 +380,7 @@ it turned up a miscompilation:
 
 Task names and argv arriving empty, and a guard broken with 44 bytes
 used — which the kernel's own comment says means the write came from
-somewhere else entirely.
+somewhere else entirely. (2026-10-24: that does not follow. The 44 was SP when the kernel looked, at exit, not how deep the stack went; a recursion that runs off the bottom and comes back between checks reports the same, and the climb's case was exactly that. The report tells the two apart now: [task-memory.md](task-memory.md) M1.)
 
 Bisected: T3 alone clean, T4 without exit labels clean, T4 **with**
 them corrupt. Then bisected by budget: clean at 50 (3 labelled splices),

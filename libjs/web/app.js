@@ -2,15 +2,18 @@
 //
 // URL parameters:
 //   ?system=NAME                 which machine to boot (default c4ix): c4ix, c4ke,
-//                                c4dos, wolf3d, wolf3d-c4ix, doom, tyrian, rott, gui-demo, fb-demo,
+//                                c4dos, wolf3d, wolf3d6, wolf3d-c4ix, doom, tyrian, rott, gui-demo, fb-demo,
 //                                snd-demo, raycast -- SYSTEMS below
 //   ?image=URL&disk=URL          any other image and disk instead
+//   ?args=A+B                    more arguments for the system's program, after its
+//                                own: ?system=wolf3d&args=--secrets+--nodeath
 //   ?mhz=N                       how fast the machine runs, paced (default 100)
 //   ?snd=0                       no sound card
 //   ?cpus=N                      N processors, simulated (smp.js, docs/c4ix-smp.md)
 //   ?parallel                    ... each on a worker of its own (par.js), when the
 //                                page is cross-origin isolated (serve.mjs --isolate)
 //   ?persist=0 | reset           C4IX's files are not kept between visits / are forgotten first
+//   ?uploads=0                   the Uploads (your own files) are not put on the disk
 //   ?fast                        run as fast as the host can, unpaced
 //   ?realtime=0                  when the host cannot keep up, the machine's clock
 //                                slows with it, rather than keeping the wall's
@@ -26,6 +29,7 @@
 // test can drive it: c4m.write('ps\n'), c4m.status, await c4m.peek(a, n).
 
 import { C4M } from '../page.js';
+import { MediaStore, indexedDbBackend } from '../../src/c4bb/web/store.js';
 
 const IMAGES = '../../src/c4bb/images';
 const SYSTEMS = {
@@ -41,6 +45,10 @@ const SYSTEMS = {
   // machine's clock, so these are paced, at a clock it can keep up with.
   wolf3d: { label: 'Wolfenstein 3D (bare machine)', image: `${IMAGES}/games/wolf3d.c4r`, disk: `${IMAGES}/games`,
             argv: ['wolf3d.c4r'], mhz: 400 },
+  // ... and the registered game (games/wolf3d, wolf3d6), whose files are
+  // the person's own: Uploads put them on the disk
+  wolf3d6: { label: 'Wolfenstein 3D, registered (bare machine)', image: `${IMAGES}/games/wolf3d6.c4r`,
+             disk: `${IMAGES}/games`, argv: ['wolf3d6.c4r'], mhz: 400 },
   doom: { label: 'Doom (bare machine)', image: `${IMAGES}/games/doom.c4r`, disk: `${IMAGES}/games`,
           argv: ['doom.c4r'], mhz: 400 },
   // OpenTyrian (games/tyrian), where Tyrian's data was there to put on
@@ -63,6 +71,7 @@ const SYSTEMS = {
 };
 
 const $ = id => document.getElementById(id);
+const UPLOADS = 'uploads';   // the IndexedDB medium the Uploads are kept in (page.js)
 const params = new URLSearchParams(location.search);
 const which = params.get('system') || 'c4ix';
 
@@ -90,8 +99,10 @@ function fmtRate(ips) {
   return ips >= 1e6 ? (ips / 1e6).toFixed(1) + 'M' : ips >= 1e3 ? (ips / 1e3).toFixed(0) + 'k' : String(ips);
 }
 
+const extraArgs = (params.get('args') || '').split(/\s+/).filter(Boolean);
 const opts = {
   ...sys,
+  argv: sys.argv.concat(extraArgs),
   terminal: term,
   display: canvas,
   // 100 MHz: the interpreter manages well over that on a desktop, an idle
@@ -108,6 +119,7 @@ const opts = {
   parallel: params.has('parallel'),
   persist: params.get('persist') === '0' ? null : sys.persist || null,
   persistReset: params.get('persist') === 'reset',
+  uploads: params.get('uploads') === '0' ? null : UPLOADS,
 };
 // Configuration: the URL's parameters (above) as a form. OK writes the ones
 // that differ from their defaults into the URL, keeps any it does not know,
@@ -133,6 +145,8 @@ const CONFIG = [
     help: 'off: the message path even when the page is cross-origin isolated' },
   { key: 'persist', label: "C4IX's files", kind: 'select', def: '',
     options: [['', 'kept between visits'], ['0', 'not kept'], ['reset', 'forgotten, then kept']] },
+  { key: 'args', label: 'Arguments', kind: 'text', options: [],
+    help: "more for the system's program, after its own (wolf3d: --secrets --nodeath)" },
   { key: 'image', label: 'Image URL', kind: 'text', options: [], help: 'any other image instead of the system' },
   { key: 'disk', label: 'Disk URL', kind: 'text', options: [], help: 'its disk (a directory with an index.json)' },
 ];
@@ -304,13 +318,80 @@ $('reset').addEventListener('click', () => { vm.reset(); term.focus(); });
 $('ctrlc').addEventListener('click', () => { vm.signal(2); term.focus(); });
 // Reset Files: only where the page keeps C4IX's files (?persist=0 has none)
 const filesBtn = $('resetfiles');
-if (vm.store) filesBtn.style.display = '';
+if (vm.persistName) filesBtn.style.display = '';
 filesBtn.addEventListener('click', async () => {
   if (!confirm("Forget every change kept to C4IX's files -- what was saved, made and deleted -- " +
                'and boot again from the disk as it ships?')) return;
   await vm.resetFiles();
   term.focus();
 });
+
+// ---- Uploads: the person's own files, on drive 0 (page.js, opts.uploads) ----
+// Kept in IndexedDB, and given to the machine when it boots: adding or
+// forgetting one changes nothing until Boot with them, which reloads the
+// page (C4IX's files then are as the page's Reload leaves them).
+const upDialog = $('uploads'), upList = $('uploads-list'), upInput = $('uploads-input');
+const upStore = () => vm.store || (vm.store = new MediaStore(indexedDbBackend()));
+const fmtSize = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : n >= 1024 ? Math.round(n / 1024) + ' KB' : n + ' bytes';
+async function upFiles() {
+  try { return [...(await upStore().load(UPLOADS))].sort(([a], [b]) => (a < b ? -1 : 1)); } catch { return []; }
+}
+async function upShow() {
+  const files = await upFiles();
+  upList.replaceChildren();
+  for (const [name, data] of files) {
+    const li = document.createElement('li');
+    const n = document.createElement('span'); n.className = 'name'; n.textContent = name;
+    const z = document.createElement('span'); z.className = 'dim'; z.textContent = fmtSize(data.length);
+    const x = document.createElement('button'); x.type = 'button'; x.className = 'small'; x.textContent = 'Forget';
+    x.addEventListener('click', () => upForget(name));
+    li.append(n, z, x);
+    upList.append(li);
+  }
+  if (!files.length) {
+    const li = document.createElement('li'); li.className = 'none'; li.textContent = 'none yet';
+    upList.append(li);
+  }
+  $('uploadsbtn').textContent = files.length ? `Uploads (${files.length})` : 'Uploads';
+}
+async function upAdd(list) {
+  try {
+    for (const f of list) await upStore().backend.putFile(UPLOADS, f.name.toLowerCase(), new Uint8Array(await f.arrayBuffer()));
+  } catch (e) { alert(`Could not keep the files in this browser: ${e.message || e}`); }
+  await upShow();
+}
+// the store forgets a medium whole, so forgetting one is keeping the rest
+async function upForget(name) {
+  const keep = (await upFiles()).filter(([n]) => n !== name);
+  await upStore().erase(UPLOADS);
+  for (const [n, d] of keep) await upStore().backend.putFile(UPLOADS, n, d);
+  await upShow();
+}
+$('uploadsbtn').addEventListener('click', async () => { await upShow(); upDialog.showModal(); });
+$('uploads-add').addEventListener('click', () => upInput.click());
+upInput.addEventListener('change', async () => { await upAdd([...upInput.files]); upInput.value = ''; });
+$('uploads-clear').addEventListener('click', async () => {
+  if (!confirm('Forget every uploaded file?')) return;
+  try { await upStore().erase(UPLOADS); } catch { /* nothing kept */ }
+  await upShow();
+});
+$('uploads-boot').addEventListener('click', () => location.reload());
+// files dropped anywhere on the page are uploads too
+addEventListener('dragover', e => {
+  if (!e.dataTransfer.types.includes('Files')) return;
+  e.preventDefault();
+  document.body.classList.add('dropping');
+});
+addEventListener('dragleave', e => { if (!e.relatedTarget) document.body.classList.remove('dropping'); });
+addEventListener('drop', async e => {
+  document.body.classList.remove('dropping');
+  if (!e.dataTransfer.files.length) return;
+  e.preventDefault();
+  await upAdd([...e.dataTransfer.files]);
+  if (!upDialog.open) upDialog.showModal();
+});
+upShow();
+
 const pauseBtn = $('pause');
 let paused = false;
 pauseBtn.addEventListener('click', () => {

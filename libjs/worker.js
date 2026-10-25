@@ -9,6 +9,7 @@
 //   boot    { image: ArrayBuffer, argv, disk: [[name, ArrayBuffer]], arenaMb, mhz, unpaced, gui, snd, shared }
 //           snd: true fits the sound card (snd-device.js)
 //           persist: { files: [[name, Uint8Array]] } fits a writable drive 1, kept by the page
+//           uploads: [[name, Uint8Array]] laid over drive 0: the disk's file of that name is hidden
 //           cpus, quantum: that many processors, simulated (smp.js)
 //           parallel: ... each on a worker of its own (par.js), when the page is
 //           cross-origin isolated; simulated otherwise
@@ -158,6 +159,7 @@ function start(msg) {
   // controller wants bytes it can index.
   const files = msg.lazy ? new LazyFiles(msg.lazy.base, msg.lazy.index)
     : new Map((msg.disk || []).map(([n, b]) => [n, b instanceof Uint8Array ? b : new Uint8Array(b)]));
+  for (const [n, b] of msg.uploads || []) files.set(n, b instanceof Uint8Array ? b : new Uint8Array(b));
   const drives = [{ files, writable: false, sink: null }];
   if (msg.persist) {
     if (!persistDrive) persistDrive = {

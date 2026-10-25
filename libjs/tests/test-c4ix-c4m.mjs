@@ -57,8 +57,8 @@ type('\\q');
 check(until(() => prompt(n0), 20000), '\\q leaves C4KE, and C4IX\'s prompt comes back', text(n0));
 
 // C4KE's kernel compiled inside C4IX: from /usr, as the repo builds it. c4sc
-// needs more than the 1 MB of stack cc used to give it (the kernel stopped
-// it, and cc said only that the source did not compile).
+// once overran the 1 MB of stack cc gave it here (c4lc's g:resolvecode, fixed
+// in 29cbac9), and cc said only that the source did not compile.
 n0 = out.length;
 type('cc -o /tmp/c4ke.c4r src/c4ke/c4ke.c');
 check(until(() => prompt(n0), 60000) && !/did not compile|overran/.test(text(n0)),

@@ -597,8 +597,10 @@ spinner at -3 beside one at 0 gets 4.6 times the cycles
   one-file builds, which land in `/tmp/NAME.c4r`).
 
 - **`cc`** (8b01e1a, 955bc82, 2026-10-21): `src/c4ix/user/cc.c` runs
-  c4sc with c4lc's preprocessor, `/usr/include` on the include path and
-  the 1 MB of stack c4sc needs, and links with c4rlink when given `-l`
+  c4sc with c4lc's preprocessor and `/usr/include` on the include path,
+  on a task's default stack (1 MB at first, then 4 MB, until 2026-10-25:
+  c4lc's g:resolvecode recursed once per instruction, fixed in 29cbac9;
+  c4sc needs 11 KB at most now), and links with c4rlink when given `-l`
   or more than one source. It defines `C4CC` and `__c4cc__`, as the
   Makefile does, so the repo's own programs (`/usr/src/tests/mandel.c`)
   build as they are. src/c4tui/demo.c takes 18 machine-seconds with
@@ -813,7 +815,8 @@ spinner at -3 beside one at 0 gets 4.6 times the cycles
     a kernel copy. Now only a background job keeps its copy, and `wait`
     frees it.
   - *Most of cc's 5 MB was not SBRK.* It was c4sc, which cc runs: its
-    4 MB stack, its code and data, and its argv, which `task_destroy`
+    4 MB stack (a task's default 256 KB since 2026-10-25), its code and
+    data, and its argv, which `task_destroy`
     asked to free on every run and which were never freed. A user task
     whose `main` returns dies in `task_shim`, in its own context:
     `task_exit` yields until the trap handler takes it, and `sched_yield`

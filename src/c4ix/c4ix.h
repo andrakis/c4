@@ -343,9 +343,10 @@ void  sl4b_stats();
 // walk is the loop the scheduler context-switches along.
 enum { TASK_NAME_MAX = 16 };
 // 256KB on a 32-bit host, C4KE's TASK_STACK_SIZE: C4IX runs C4KE's
-// programs, and c4sc compiling the larger kernel modules needs more
-// than 64KB -- it overran that under C4KE first (docs/task-memory.md)
-// and then here, where it wrote over the heap and took every task down.
+// programs. c4sc compiling the larger kernel modules overran 64KB under
+// C4KE first (docs/task-memory.md) and then here, where it wrote over
+// the heap and took every task down. That was a c4lc bug, g:resolvecode
+// recursing once per instruction (29cbac9); c4sc now needs 11KB at most.
 // The lowest C4IX_STACK_GUARD words are poison (sched_forge), checked
 // at every switch, so an overrun now kills the task that did it.
 enum { C4IX_STACK_WORDS = 65536, C4IX_STACK_GUARD = 64, C4IX_STACK_POISON = 0x57415348 };

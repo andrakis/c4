@@ -1094,7 +1094,7 @@ void sched_yield() {
     // __c4_trap does not leave it (on c4m or libjs), so the handler would
     // run protected, every host opcode in it a nested trap that the
     // re-entry guard drops. It reaps there, so a dead task's frees were
-    // all dropped: each cc left c4sc's 4 MB stack and its image behind.
+    // all dropped: each cc left c4sc's stack (4 MB then) and its image behind.
     // The syscall gate raises the trap unprotected.
     if (sched_cur->privs == PRIV_USER) { __c4_opcode(0, 0, 0, SYS_YIELD); return; }
     __c4_trap(C4IX_TRAP_SOFT_IRQ, 0);

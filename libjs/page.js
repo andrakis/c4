@@ -9,6 +9,7 @@
 //     display:  document.getElementById('display'),    // optional <canvas>
 //     snd:      true,                                   // optional: a sound card, played here
 //     persist:  'c4ix',                                 // optional: drive 1, kept in IndexedDB under this name
+//     uploads:  'uploads',                              // optional: files laid over drive 0, kept in IndexedDB under this name
 //   });
 //   vm.on('out', bytes => ...);   vm.on('status', s => ...);   vm.on('exit', e => ...)
 //   vm.write('ps\n');  vm.signal(2);  vm.pause();  vm.resume();  vm.reset();
@@ -187,6 +188,16 @@ export class C4M {
         this.persistName = opts.persist;
       } catch { persist = null; }
     }
+    // Uploads: files the person gave the page (app.js's Uploads), kept in
+    // IndexedDB the same way and laid over drive 0 at every boot, so a
+    // program opens them by name as if the disk had them.
+    let uploads = [];
+    if (opts.uploads) {
+      try {
+        this.store = this.store || new MediaStore(indexedDbBackend());
+        uploads = [...(await this.store.load(opts.uploads))];
+      } catch { uploads = []; }
+    }
     // The shared display path, when the page is cross-origin isolated and
     // has a display; opts.shared === false asks for the message path.
     if (this.display && opts.shared !== false && globalThis.crossOriginIsolated && !this.shared) {
@@ -203,6 +214,7 @@ export class C4M {
       gui: this.display ? { w: this.display.width, h: this.display.height } : (opts.gui || null),
       snd: !!this.sound,
       persist,
+      uploads,
       shared: this.shared || null,
     };
     this.worker.postMessage(this.bootMsg);

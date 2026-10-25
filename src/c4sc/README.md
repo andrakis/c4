@@ -64,6 +64,7 @@ None of these is part of `make test`.
 | `make test-c4sc-lex` | compiled lexer's token dump matches the interpreted one over the c4fc lexer corpus |
 | `make test-c4sc-front` | preprocessor agrees with gcc -E on the twelve C4IX modules; parser matches the committed AST dump |
 | `make test-c4sc-back` | every image and object is byte-identical to the interpreted c4lc's; the twelve C4IX objects link to the same `c4ix.c4r` that `make c4ix.c4r` builds, and it boots |
+| `make test-c4sc-chain` | a 2000-term `a + a + ... + a`, 1000 products and 200 right-nested levels compile in seconds (they took time exponential in the length), byte-identical to the interpreted c4lc, and print the right sums |
 | `make test-c4sc-image` | `c4sc.c4r` under c4m produces the same object sizes as the native host |
 | `make test-c4sc-self` | fixed point: generations 1, 2 and 3 of c4sc are byte-identical, and it emits the same seven units |
 | `make test-c4sc-board` | on the simulated c4bb, `c4sc32-fused.c4r` compiles `boot.c` to the same bytes c4lc does |
@@ -91,7 +92,10 @@ None of these is part of `make test`.
   opcodes that c4m does not have, so `c4sc32.c4r` is kept for c4m and for the
   byte check.
 - **C4IX**: the same image is `/bin/c4sc`, which the BUILD.B4K files under
-  `/usr` run and `cc` (`src/c4ix/user/cc.c`) drives, on 1 MB of stack.
+  `/usr` run and `cc` (`src/c4ix/user/cc.c`) drives, on a task's default
+  256 KB stack. It needs 11 KB of it at most for the tree's sources
+  (c4m.c, 2026-10-25); the 1 MB and 4 MB it was given before were for
+  g:resolvecode recursing once per instruction (fixed in 29cbac9).
 
 ## Limits and known issues
 

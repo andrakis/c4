@@ -365,7 +365,7 @@ board reports under the same workload —
     c4ke: task 33 () OVERRAN ITS STACK: 44 of 262144 bytes, guard broken
 
 — 44 bytes used and the guard broken, which is a write from somewhere else
-entirely — **does not reproduce natively**. Fifty nested kernels with a
+entirely — **does not reproduce natively**. (2026-10-24: that does not follow. The 44 was SP when the kernel looked, at exit, not how deep the stack went; a recursion that runs off the bottom and comes back between checks reports the same, and the climb's case was exactly that. The report tells the two apart now: [task-memory.md](task-memory.md) M1.) Fifty nested kernels with a
 permission check on every load and store, and nothing touched anything it did
 not own. So the corruption belongs to the board: either to c4bb's own arena and
 `fw:` allocator, or to the memory-exhaustion path, which never happens natively

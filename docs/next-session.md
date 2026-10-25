@@ -39,7 +39,7 @@ Two leads, both newly visible only because F17 stopped eating them:
 
 - `c4ke: task 33 () OVERRAN ITS STACK: 44 of 262144 bytes, guard broken` — 44
   bytes used and the guard broken is not an overrun, it is a wild write. Find
-  the writer.
+  the writer. (2026-10-24: that does not follow. The 44 was SP when the kernel looked, at exit, not how deep the stack went; a recursion that runs off the bottom and comes back between checks reports the same, and the climb's case was exactly that. The report tells the two apart now: [task-memory.md](task-memory.md) M1.)
 - `lc4r: unable to open '(null)' or '.c4r'` — a task started with a null name.
 
 **Reproduce it in seconds, not half an hour.** `innerbench -mlqT -n 50` (`-l`

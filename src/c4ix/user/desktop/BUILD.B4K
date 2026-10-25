@@ -7,9 +7,10 @@ B4KE2
 # Every module includes winkit.h; the shell's include desktop.h too.
 SET ROOT /usr
 SET OUT /build
-# c4sc recurses deeply on a long source: edit.c, the Editor, overruns
-# even 1 MB, so the desktop gets 4 MB of stack per compile (SYS_STACK)
-SET STACK 4194304
+# c4sc runs on a task's default stack, 256 KB. edit.c, the deepest,
+# peaks at 6.7 KB of it
+# (measured 2026-10-25). The 4 MB this set was for a c4lc bug,
+# g:resolvecode recursing once per instruction (fixed in 29cbac9).
 SET LC c4sc -c 400000 compile -O -c -D C4IX_SHARED -I src/c4ix/include -I src/c4ix/user/desktop -I src/winkit
 SET KH src/winkit/winkit.h src/winkit/wkwin.h src/winkit/wkgui.h src/winkit/textgrid.h libjs/guest/gui.h
 SET H src/c4ix/user/desktop/desktop.h src/c4ix/include/c4ix_user.h $(KH)

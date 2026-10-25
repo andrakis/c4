@@ -63,13 +63,24 @@ URL parameters (from `web/app.js`). The page's Configuration button shows them a
 
 | Parameter | Meaning |
 |---|---|
-| `?system=c4ix\|c4ke\|c4dos\|wolf3d\|wolf3d-c4ix\|doom\|tyrian\|rott\|gui-demo\|fb-demo\|snd-demo\|raycast` | Which machine to boot (default `c4ix`). `c4dos` is C4DOS on the games' disk, with Wolfenstein 3D, Doom, Tyrian and Rise of the Triad; `wolf3d`, `doom`, `tyrian` and `rott` are those games on the bare machine, and `wolf3d-c4ix` Wolfenstein 3D on C4IX's whole display (docs/c4ix-wolf3d.md, games/doom/README.md, games/tyrian/README.md, games/rott/README.md; Tyrian's data only where it was there to copy). The last four are bare programs on the display or the sound card. |
+| `?system=c4ix\|c4ke\|c4dos\|wolf3d\|wolf3d6\|wolf3d-c4ix\|doom\|tyrian\|rott\|gui-demo\|fb-demo\|snd-demo\|raycast` | Which machine to boot (default `c4ix`). `c4dos` is C4DOS on the games' disk, with Wolfenstein 3D, Doom, Tyrian and Rise of the Triad; `wolf3d`, `doom`, `tyrian` and `rott` are those games on the bare machine, `wolf3d6` Wolfenstein 3D's registered game there, from its files in Uploads (below), and `wolf3d-c4ix` Wolfenstein 3D on C4IX's whole display (docs/c4ix-wolf3d.md, games/doom/README.md, games/tyrian/README.md, games/rott/README.md; Tyrian's data only where it was there to copy). The last four are bare programs on the display or the sound card. |
 | `?image=URL&disk=URL` | Any other image and disk. |
+| `?args=A+B` | More arguments for the system's program, after its own: `?system=wolf3d&args=--secrets+--nodeath` (games/wolf3d/README.md). |
+| `?uploads=0` | The Uploads are not put on the disk. |
 | `?mhz=N` | Paced speed (default 100). |
 | `?fast` | Unpaced. |
 | `?realtime=0` | When the host cannot keep up with `?mhz`, the machine's clock slows with it. By default it keeps the wall's time (`worker.js`), so a game drops frames rather than playing in slow motion. |
 | `?mem=MB` | Arena size (default 64). |
 | `?shared=0` | Use the message path even when isolated. |
+
+**Uploads** are files of the person's own: added with the Uploads button,
+or dropped on the page, kept in this browser (IndexedDB, as C4IX's
+drive 1 is) and laid over drive 0 at every boot (`page.js`'s
+`opts.uploads`, `worker.js`), so a program opens them by name as if the
+disk had them; on C4IX that is a file its own tree does not have
+(`sys_open`). Names are made lower case. Boot with them reloads the page.
+Wolfenstein 3D's registered files are played this way (`wolf3d6`,
+games/wolf3d/README.md).
 
 The running machine is `window.c4m` on the page, so the console or a test
 can drive it (`c4m.write('ps\n')`).

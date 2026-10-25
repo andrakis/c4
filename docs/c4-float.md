@@ -192,7 +192,7 @@ Two new units in `src/c4ix/libc`, in `/lib/libc.c4s`:
 - `tests/mathtest.c`: mathgen.c's libm vectors, each function within its ulp limit.
 - libctest (test-libjs): float lines too, against gcc's output.
 
-**Size.** math.c is the largest unit in libc (249 KB of object, -fpic), because every double operation is a helper call. c4sc needs 4 MB of stack for it inside C4IX (libc/BUILD.B4K).
+**Size.** math.c is the largest unit in libc (249 KB of object, -fpic), because every double operation is a helper call. Inside C4IX c4sc compiles it in 5.2 KB of stack, on a task's default 256 KB. The 4 MB libc/BUILD.B4K gave it until 2026-10-25 was for a c4lc bug, g:resolvecode recursing once per instruction (fixed in 29cbac9), not for its long expressions.
 
 ## c4m inside C4IX (2026-10-21)
 
@@ -207,6 +207,6 @@ Now such a build lends its guest the FLT of the machine under it: the same opcod
 
 boots C4KE to its shell in about 8 machine-seconds; `\q` comes back. `libjs/tests/test-c4ix-c4m.mjs` (in test-libjs) pins it.
 
-The kernel is at `/usr/c4ke.c4r` too, where the host's `make` leaves it beside `c4m.c` and `load-c4r.c`, so `c4m load-c4r.c -- c4ke.c4r` from `/usr` works as it does on the host. `cc src/c4ke/c4ke.c` builds it inside C4IX (about 40 machine-seconds); c4sc needs more than the 1 MB of stack cc used to give it, so cc now gives 4 MB (`-stack` for more), and says what the kernel said when it stops a tool.
+The kernel is at `/usr/c4ke.c4r` too, where the host's `make` leaves it beside `c4m.c` and `load-c4r.c`, so `c4m load-c4r.c -- c4ke.c4r` from `/usr` works as it does on the host. `cc src/c4ke/c4ke.c` builds it inside C4IX (about 40 machine-seconds); c4sc overran the 1 MB of stack cc gave it then, so cc gave 4 MB (`-stack` for more), and says what the kernel said when it stops a tool. That overrun was a c4lc bug, g:resolvecode recursing once per instruction (fixed in 29cbac9): the compile now peaks at 3.4 KB, and since 2026-10-25 cc gives a task's default 256 KB.
 
 In a Terminal, C4KE's shell used to wait for ever: it polls `/dev/stdin`, and C4IX opened the host's, the machine's console, which nobody in that window types at. A task whose stdin is a pipe now gets that pipe for `/dev/stdin` and `/dev/tty`, with `O_NONBLOCK` honoured (a read with nothing yet is -1). The lines that had waited in the pipe were what C4IX's shell ran after Ctrl-C (`top`, `raycast -f 50`); Ctrl-C now drops what the job had not read (`SYS_DISCARD`, 231), as a tty does. Ctrl-C there reaches C4KE's job, as on a host terminal: c4m used to hand its guest's `SIGH` to the machine under it, replacing C4IX's own handler, and had none itself, so C4IX cancelled c4m. Now `include/c4m_signal.h` keeps the guest's handler and asks the kernel underneath, through u0's `signal()`, for one of c4m's own that marks the signal pending. `libjs/tests/test-desktop.mjs` pins all three.

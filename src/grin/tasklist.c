@@ -97,31 +97,61 @@ void tasklist_cascade() {
     wk_redraw_all();
 }
 
+// One row of a tiling, n windows across the area at y, h high. A window
+// that cannot be resized (Calculator) keeps its size, and the others share
+// what is left of the row, so that it is not pushed off the screen; if
+// too little is left, every window gets an equal share and a fixed one is
+// kept inside the screen.
+enum { TILE_MAX = 64, TILE_MIN_W = 160 };
+static struct win *tiles[TILE_MAX];
+
+static void tile_row(struct win **row, int n, int y, int h) {
+    struct win *w;
+    int i, fixed, nres, rw, x, wx;
+    fixed = 0; nres = 0;
+    i = 0;
+    while (i < n) { if (row[i]->resizable) ++nres; else fixed = fixed + row[i]->w; ++i; }
+    rw = nres ? (wk.aw - fixed) / nres : 0;
+    if (nres && rw < TILE_MIN_W) { rw = wk.aw / n; fixed = 0 - 1; }
+    x = wk.ax;
+    i = 0;
+    while (i < n) {
+        w = row[i];
+        if (w->resizable) { wk_place(w->id, x, y, rw, h); x = x + rw; }
+        else {
+            wx = x;
+            if (wx + w->w > wk.ax + wk.aw) wx = wk.ax + wk.aw - w->w;
+            if (wx < wk.ax) wx = wk.ax;
+            wk_place(w->id, wx, y, w->w, w->h);
+            x = x + (fixed < 0 ? rw : w->w);
+        }
+        ++i;
+    }
+}
+
 void tasklist_tile() {
     struct win *w;
-    int n, cols, rows, k, cw, chh, ah, x, y;
+    int n, cols, rows, r, k, m, chh, ah;
     ah = area_h();
     n = 0;
     w = win_first();
-    while (w) { if (w->used && !w->dialog && !w->min) ++n; w = w->next; }
+    while (w) {
+        if (w->used && !w->dialog && !w->min && n < TILE_MAX) { unmax(w); tiles[n] = w; ++n; }
+        w = w->next;
+    }
     if (!n) return;
     cols = 1;
     while (cols * cols < n) ++cols;
     rows = (n + cols - 1) / cols;
     // side by side first, as 3.1 tiled two windows
     if (n == 2) { cols = 2; rows = 1; }
-    cw = wk.aw / cols; chh = ah / rows;
-    k = 0;
-    w = win_first();
-    while (w) {
-        if (w->used && !w->dialog && !w->min) {
-            unmax(w);
-            x = wk.ax + (k % cols) * cw; y = wk.ay + (k / cols) * chh;
-            if (w->resizable) wk_place(w->id, x, y, cw, chh);
-            else wk_place(w->id, x, y, w->w, w->h);
-            ++k;
-        }
-        w = w->next;
+    chh = ah / rows;
+    r = 0;
+    while (r < rows) {
+        k = r * cols;
+        m = n - k < cols ? n - k : cols;
+        tile_row(tiles + k, m, wk.ay + r * chh, chh);
+        ++r;
     }
     wk_redraw_all();
 }

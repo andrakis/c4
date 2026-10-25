@@ -1,5 +1,5 @@
 // test-grin.mjs - grin, C4DOS's graphical shell, headless
-// (docs/grin-plan.md, G2 and G3).
+// (docs/grin-plan.md, G2, G3 and G4).
 //
 // Boots C4DOS on the page's own disk (libjs/images/dos, build-images.sh)
 // with a display fitted, as ?system=c4dos does. Its AUTOEXEC.BAT ends
@@ -11,6 +11,15 @@
 // applications: two Clocks ticking and closed one at a time, with the
 // heap back where it was; Calculator's 12*12=; a DOS program refused by
 // File > Run; and EXITKEY, whose exit() from a key callback unloads it.
+// Then G4's: the machine has a drive B: that the test keeps as the page
+// keeps its store (C4DOS's HOME=B:), and Program Manager's groups from
+// PROGMAN.INI, each item launching what it should, an item made with
+// File > New, changed with Properties and deleted; Notepad saving
+// NOTE.TXT through its file box onto B:, File Manager listing it there
+// with its size and copying it to the RAM disk; and a second boot with
+// the files B: kept: grin at the resolution Control Panel chose, NOTE.TXT
+// still there and opening in Notepad, and File Manager's Delete taking
+// it off B: and out of the store.
 //
 //   node libjs/tests/test-grin.mjs
 
@@ -58,10 +67,18 @@ const image = new Uint8Array(readFileSync(join(DISK, 'c4dos32.c4r')));
 }
 
 // ---- with one ----------------------------------------------------------------------
+// Drive B: as the page keeps it (worker.js's persist drive, page.js's
+// store): what the machine closes there lands in `store`, what it deletes
+// leaves it, and the next boot is given what the store holds.
+const store = new Map();
+const homeDrive = () => ({
+  files: new Map([...store].map(([n, b]) => [n, b.slice()])), writable: true,
+  sink: (n, b) => store.set(n, b.slice()), remove: n => store.delete(n),
+});
 const files = new LazyDisk(index);
-const gui = new GuiDevice({ w: 640, h: 480 });
-const out = [];
-const vm = createMachine({ arenaMb: 64, mhz: 400, gui, drives: [{ files, writable: false, sink: null }], onByte: b => out.push(b) });
+let gui = new GuiDevice({ w: 640, h: 480 });
+let out = [];
+let vm = createMachine({ arenaMb: 64, mhz: 400, gui, drives: [{ files, writable: false, sink: null }, homeDrive()], onByte: b => out.push(b) });
 boot(vm, image, ['c4dos32.c4r']);
 const text = () => Buffer.from(out).toString('latin1');
 
@@ -203,8 +220,13 @@ check(until(() => (pm = win('File')) && pm.w === 640 && pm.h === 480), '... and 
 key(27, 0, 2);                          // Ctrl+Esc
 check(until(() => has('Switch To')), 'Ctrl+Esc opens the Task List');
 // (a row of the Task List's list: above its buttons, inside it)
-const inList = t => { const tl = at('Switch To'); return tl && t.y < tl.y && t.y > tl.y - 180 && t.x > tl.x - 40 && t.x < tl.x + 280; };
-const list = find('Control Panel').filter(t => { const tl = at('Switch To'); return tl && t.y < tl.y && t.y > tl.y - 180 && t.x > tl.x - 40 && t.x < tl.x + 280; });
+// (a row of the Task List: drawn after its title and before its buttons,
+// in its column -- a window behind it may have texts in the same place)
+const inList = t => {
+  const tl = at('Switch To'), i = frame.indexOf(t);
+  return tl && i > lastIndex('Task List') && i < lastIndex('Switch To') && t.y < tl.y && t.y > tl.y - 180 && t.x > tl.x - 40 && t.x < tl.x;
+};
+const list = find('Control Panel').filter(inList);
 check(list.length === 1 && find('Program Manager').length >= 2, 'it lists Program Manager and Control Panel',
   JSON.stringify(frame.map(t => [t.s, t.x, t.y])));
 if (list[0]) click(list[0].x + 5, list[0].y + 5);
@@ -247,7 +269,7 @@ const exitGrin = () => {
   // Program Manager's File menu: in front first (the Task List again)
   key(27, 0, 2);
   until(() => has('Switch To'));
-  const row = find('Program Manager').filter(t => { const tl = at('Switch To'); return tl && t.y < tl.y && t.y > tl.y - 180 && t.x > tl.x - 40 && t.x < tl.x + 280; })[0];
+  const row = find('Program Manager').filter(inList)[0];
   if (row) click(row.x + 5, row.y + 5);
   clickText('Switch To');
   clickText('File');
@@ -265,7 +287,8 @@ check(until(() => prompts() > p0 && !gui.stats().attached, 3000), 'OK ends it: t
 const typed = (line, budget = 1500) => { const p = prompts(), a = text().length; vm.dev.pushInput(line + '\n'); until(() => prompts() > p, budget); return text().slice(a); };
 check(/C4DOS version \d+\.\d+/.test(typed('VER')), 'VER answers at A>');
 const iniText = typed('TYPE GRIN.INI');
-check(/width=640/.test(iniText) && /height=480/.test(iniText) && /scheme=1/.test(iniText) && /pattern=2/.test(iniText), 'GRIN.INI on the RAM disk keeps the choices', iniText);
+check(/width=640/.test(iniText) && /height=480/.test(iniText) && /scheme=1/.test(iniText) && /pattern=2/.test(iniText), 'GRIN.INI keeps the choices', iniText);
+check(store.has('GRIN.INI') && /scheme=1/.test(Buffer.from(store.get('GRIN.INI')).toString('latin1')), 'GRIN.INI is on B:, the home drive, which the page keeps');
 
 // ---- GRIN again --------------------------------------------------------------------------
 const f0 = presents;
@@ -278,12 +301,35 @@ check(rects.some(r => r.rgb === 0x384c60), 'with the scheme GRIN.INI keeps');
 // loaded by DOS, kept while they have a window, and unloaded with their
 // memory when the last one goes. The windows are found by their first
 // menu ("Settings" for a Clock) and closed with the Task List's End Task.
-const inPm = all => { const p = win('File'); return p ? all.filter(t => within(p, t.x, t.y) && t.y > p.y + 40).pop() : undefined; };
+// A window by its title (Windows 3.1's chrome draws it 7 px down and
+// centred), as the rectangle under it whose middle is nearest the title's
+const winByTitle = title => {
+  const t = find(title).pop();
+  if (!t) return null;
+  const mid = t.x + t.s.trimEnd().length * 7 / 2;
+  const all = rects.filter(r => r.y === t.y - 7 && r.x < t.x && r.x + r.w > t.x && r.w > 100);
+  all.sort((a, b) => Math.abs(a.x + a.w / 2 - mid) - Math.abs(b.x + b.w / 2 - mid));
+  return all.length ? { x: all[0].x, y: all[0].y, w: all[0].w, h: all[0].h } : null;
+};
+// Program Manager's window, by its title (other windows have a File menu too)
+const pmWin = () => winByTitle('Program Manager') || win('File');
+const inPm = all => { const p = pmWin(); return p ? all.filter(t => within(p, t.x, t.y) && t.y > p.y + 40).pop() : undefined; };
 // Program Manager to the front first (a click on its title bar), then a
 // double click on the item
-const startItem = s => {
-  const p = win('File');
+const groupOf = { Clock: 'Accessories', Calculator: 'Accessories', 'Control Panel': 'Main', 'File Manager': 'Main',
+                  'DOS Prompt': 'Main', Notepad: 'Main', Doom: 'Games', 'Wolfenstein 3D': 'Games', Tyrian: 'Games',
+                  'Rise of the Triad': 'Games' };
+// a group shown: its name in the list down Program Manager's left
+const showGroup = g => {
+  const p = pmWin();
+  const t = p && find(g).filter(t => within(p, t.x, t.y) && t.x < p.x + 140)[0];
+  if (t) { click(t.x + 5, t.y + 5); settle(); }
+  return !!t;
+};
+const startItem = (s, group = groupOf[s] || 'Accessories') => {
+  const p = pmWin();
   if (p) { click(p.x + 40, p.y + BORDER + 9); settle(); }
+  showGroup(group);
   return dbl(s, inPm);
 };
 const figures = () => find(/^\d\d:\d\d:\d\d$/);
@@ -291,7 +337,7 @@ const taskList = () => { key(27, 0, 2); return until(() => has('Switch To') && h
 // a row of the Task List's list: in its column, which starts a little left
 // of its Switch To button's label (a window behind it, redrawn as a Clock
 // ticks, may put a title of the same text into the frame after the rows)
-const inTasks = t => { const tl = at('Switch To'); return tl && t.y < tl.y && t.y > tl.y - 180 && t.x > tl.x - 40 && t.x < tl.x; };
+const inTasks = inList;
 const switchTo = title => {
   if (!taskList()) return false;
   const row = find(title).filter(inTasks)[0];
@@ -331,6 +377,7 @@ const digital = () => { clickText('Settings'); until(() => has('Digital')); clic
 
 settle();
 const heap0 = vm.heap.used;
+showGroup('Accessories');
 check(has('Accessories') && !!inPm(find('Clock')) && !!inPm(find('Calculator')), 'Program Manager has the Accessories group: Clock and Calculator');
 startItem('Clock');
 check(until(() => has('Settings')), 'Accessories > Clock opens a Clock (clock.c4r)');
@@ -408,6 +455,138 @@ check(until(() => prompts() > p0 && !gui.stats().attached, 3000), 'Close on Prog
 const mem = typed('MEM');
 check(/programs loaded: 0/.test(mem), 'at A>, MEM: no program is left loaded, the Clock unloaded with grin', mem);
 check(/Clock is a grin application/.test(typed('CLOCK')), 'and CLOCK at A> says it needs grin: grin took its table back');
+
+// ---- G4: Program Manager's groups and items, Notepad, File Manager, B: --------------------------
+// a window's menu bar's texts, 27 px down from its corner
+const menuOf = (w, label) => w && find(label).filter(t => t.y === w.y + 27 && t.x > w.x && t.x < w.x + w.w)[0];
+const menu = (title, label, item) => {
+  const w = winByTitle(title);
+  const m = menuOf(w, label);
+  if (!m) return false;
+  click(m.x + 5, m.y + 5); settle();
+  if (!until(() => has(item))) return false;
+  return clickText(item);
+};
+// (keyCodes as a browser's: '.' is 190, not 46, which is Delete)
+const typeText = s => { for (const c of s) key(c === ' ' ? 32 : c === '.' ? 190 : c.toUpperCase().charCodeAt(0), c.charCodeAt(0), /[A-Z]/.test(c) ? 1 : 0); };
+// Help > About's count, from Program Manager's own menu
+const aboutCount = () => {
+  switchTo('Program Manager');
+  if (!menu('Program Manager', 'Help', 'About grin...')) return -1;
+  until(() => find(/running: \d+/).length > 0);
+  const m = (at(/running: \d+/) || { s: '' }).s.match(/running: (\d+)/);
+  okBox(); until(() => !find(/running: \d+/).length);
+  return m ? +m[1] : -1;
+};
+const endSession = () => { switchTo('Program Manager'); return menu('Program Manager', 'File', 'Exit grin...') && until(() => has('This will end your grin session.')); };
+const okBox = () => { clickText('OK'); settle(); };
+const storeText = n => store.has(n) ? Buffer.from(store.get(n)).toString('latin1') : null;
+
+p0 = prompts();
+vm.dev.pushInput('GRIN\n');
+check(until(() => has('Program Manager'), 3000), 'GRIN again, for the shell applications (G4)');
+check(text().includes('files are written to B:'), "the disk's CONFIG.SYS has DRIVES.SYS HOME=B:, and B: can be written", text().slice(0, 600));
+const pmIni = storeText('PROGMAN.INI');
+check(pmIni && /^\[Main\]$/m.test(pmIni) && /^\[Accessories\]$/m.test(pmIni) && /^\[Games\]$/m.test(pmIni) &&
+      /^Doom=DOOM,game,full$/m.test(pmIni) && /^Notepad=NOTEPAD,notepad,app$/m.test(pmIni),
+  'PROGMAN.INI, written with the default groups, is on B:', pmIni);
+showGroup('Main');
+check(['File Manager', 'DOS Prompt', 'Control Panel', 'Notepad'].every(s => inPm(find(s))), 'Main: File Manager, DOS Prompt, Control Panel, Notepad');
+showGroup('Games');
+check(['Wolfenstein 3D', 'Doom', 'Tyrian', 'Rise of the Triad'].every(s => inPm(find(s))), 'Games: the four games');
+
+// each item launches what it should
+startItem('DOS Prompt');
+check(until(() => find(/DOS Prompt windows come with a later version/).length > 0), 'DOS Prompt is a placeholder until G5, and says so');
+okBox();
+startItem('Doom');
+check(until(() => find(/Doom is a DOS program/).length > 0) && find(/DOOM/).length > 0,
+  'Games > Doom: a DOS program, which grin cannot run yet: it says how, at A>', JSON.stringify(frame.map(t => t.s)));
+okBox();
+startItem('Control Panel');
+check(until(() => has('Settings') && has('Display')), 'Main > Control Panel opens Control Panel');
+startItem('File Manager');
+check(until(() => has('File Manager') && has('RAM:') && has('A:') && has('B:')), 'Main > File Manager opens File Manager: A:, B: and RAM:');
+check(has('(files are saved here)'), '... on B:, the home drive');
+startItem('Notepad');
+check(until(() => has('Untitled - Notepad')), 'Main > Notepad opens Notepad (notepad.c4r)');
+check(aboutCount() === 1, '... a grin application: one running');
+
+// File > New, Properties, Delete
+startItem('Clock');
+endTask('Clock'); settle();
+showGroup('Accessories');
+check(menu('Program Manager', 'File', 'New...') && until(() => has('New Program Item') && has('Command Line:')), 'File > New opens New Program Item');
+typeText('Second Clock'); key(9); typeText('CLOCK'); key(13);
+check(until(() => !has('New Program Item') && !!inPm(find('Second Clock'))), '... OK: Accessories has Second Clock');
+check(/^Second Clock=CLOCK,app,app$/m.test(storeText('PROGMAN.INI') || ''), '... and PROGMAN.INI on B: has it', storeText('PROGMAN.INI'));
+dbl('Second Clock', inPm);
+check(until(() => has('Settings')), '... which starts a Clock');
+endTask('Clock'); settle();
+showGroup('Accessories');
+clickText('Second Clock', inPm);
+check(menu('Program Manager', 'File', 'Properties...') && until(() => has('Program Item Properties')), 'File > Properties opens the item');
+for (let i = 0; i < 5; i++) key(8);
+typeText('Ticker'); key(13);
+check(until(() => !has('Program Item Properties') && !!inPm(find('Second Ticker'))), '... changed: Second Ticker');
+check(/^Second Ticker=CLOCK,app,app$/m.test(storeText('PROGMAN.INI') || ''), '... in PROGMAN.INI too');
+check(menu('Program Manager', 'File', 'Delete') && until(() => find(/delete the item 'Second Ticker'/).length > 0), 'File > Delete asks');
+clickText('Yes');
+check(until(() => !inPm(find('Second Ticker'))) && !/Second Ticker/.test(storeText('PROGMAN.INI') || 'x'), '... Yes: the item is gone, from PROGMAN.INI too');
+
+// Notepad: some text, saved as NOTE.TXT through the file box
+switchTo('Untitled - Notepad');
+typeText('hello from grin');
+check(until(() => has('hello from grin')), 'Notepad takes typing');
+check(menu(/ - Notepad$/, 'File', 'Save As...') && until(() => has('Save as:') && has('/B:')), 'Save As is the file box, in /B:, the home drive', JSON.stringify(frame.map(t => t.s)));
+for (let i = 0; i < 16; i++) key(8);
+typeText('NOTE.TXT'); key(13);
+check(until(() => has('NOTE.TXT - Notepad')), 'it saves as NOTE.TXT', JSON.stringify(frame.map(t => t.s)));
+check(storeText('NOTE.TXT') === 'hello from grin', 'NOTE.TXT is on B:, as the page would keep it', storeText('NOTE.TXT'));
+check(/^NOTE\.TXT$/m.test(storeText('c4dos.dir') || ''), "... and in B:'s c4dos.dir", storeText('c4dos.dir'));
+
+// File Manager lists it on B:, with its size
+switchTo('File Manager');
+check(until(() => has('NOTE.TXT')), 'File Manager lists NOTE.TXT on B:');
+clickText('NOTE.TXT');
+check(until(() => has('B:NOTE.TXT   15 bytes')), '... its size when selected', JSON.stringify(frame.map(t => t.s)));
+check(menu('File Manager', 'File', 'Copy...') && until(() => has('Copy B:NOTE.TXT to:')), 'File > Copy... asks where, offering RAM:');
+key(13);
+clickText('RAM:');
+check(until(() => has('NOTE.TXT') && has('RAM:   1 file')), '... COPY through DOS: the RAM disk has NOTE.TXT');
+clickText('B:');
+until(() => has('(files are saved here)'));
+
+// 800x600, for the next boot to find
+startItem('Control Panel');
+dbl('Display');
+until(() => has('800 x 600'));
+clickText('800 x 600'); clickText('OK');
+check(until(() => gui.w === 800), 'Display: 800 x 600, kept in GRIN.INI on B:');
+check(/width=800/.test(storeText('GRIN.INI') || ''), '... width=800 there', storeText('GRIN.INI'));
+endSession(); clickText('OK');
+check(until(() => prompts() > p0 && !gui.stats().attached, 3000), 'File > Exit grin, Notepad and File Manager open: back at A>');
+check(/hello from grin/.test(typed('TYPE B:NOTE.TXT')), 'TYPE B:NOTE.TXT at A>');
+check(/NOTE\.TXT/.test(typed('DIR B:')), 'DIR B: lists it');
+
+// ---- a second boot, with what B: kept --------------------------------------------------
+gui = new GuiDevice({ w: 640, h: 480 });
+out = []; frame = []; cur = []; rects = []; curRects = []; partial = false; halted = false;
+vm = createMachine({ arenaMb: 64, mhz: 400, gui, drives: [{ files: new LazyDisk(index), writable: false, sink: null }, homeDrive()], onByte: b => out.push(b) });
+boot(vm, image, ['c4dos32.c4r']);
+check(until(() => has('Program Manager'), 3000), 'boot again, with the files B: kept');
+check(until(() => gui.w === 800 && gui.h === 600), `grin comes up at 800x600, as Control Panel left it (${gui.w}x${gui.h})`);
+startItem('File Manager');
+check(until(() => has('File Manager') && has('NOTE.TXT')), 'File Manager: NOTE.TXT is still on B:');
+dbl('NOTE.TXT');
+check(until(() => has('NOTE.TXT - Notepad') && has('hello from grin')), 'a double click opens it in Notepad, text and all');
+endTask('NOTE.TXT - Notepad');
+switchTo('File Manager');
+clickText('NOTE.TXT');
+check(menu('File Manager', 'File', 'Delete...') && until(() => has('Delete B:NOTE.TXT?')), 'File > Delete... asks');
+clickText('Yes');
+check(until(() => !has('NOTE.TXT')), '... Yes: NOTE.TXT is gone from the list');
+check(!store.has('NOTE.TXT') && !/NOTE\.TXT/.test(storeText('c4dos.dir') || ''), "... from B:, its c4dos.dir, and the page's store");
 
 console.log(fail ? 'test-grin: FAILED' : 'test-grin: OK');
 process.exit(fail);

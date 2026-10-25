@@ -371,16 +371,28 @@ What G1 added, and why:
 - **`struct wk_env wk`.** The colours change with the scheme and the
   screen with Control Panel, so they cannot be constants an application
   copies. Keeping them in one struct lets `import.c` reach them through
-  one pointer: `#define wk (*wk_import_env)` before including
-  `winkit.h` turns its `extern struct wk_env wk;` into a pointer, and
-  every `C_FACE` into a load through it.
+  one pointer. *As built in G3*: an application's files are compiled
+  with `-D WK_IMPORT`, under which `winkit.h` declares
+  `extern struct wk_env *wk_import_env;` and `#define wk
+  (*wk_import_env)`, so every `C_FACE` is a load through grin's struct.
+  (G1's idea, the define placed before including `winkit.h`, does not
+  compile: c4lc takes `extern struct wk_env (*wk_import_env);` for a
+  function pointer with its parameters missing; and `clock.c` and
+  `calc.c` are compiled unchanged, so the switch has to come from the
+  command line.)
 - **The host's functions.** Notepad reads and writes files and the file
   box lists folders, and the kit must not know whether that is
   libc4ix or C4DOS's libc. The shell provides them (the desktop's
-  `host.c`); `import.c` can forward them like the rest.
+  `host.c`). *As built in G3*: `import.c` serves memory and files
+  (`wk_alloc`, `wk_free`, `wk_fopen` ... `wk_fclose`) from the
+  application's own libc, so that what an application allocates and
+  opens is its own and goes when it is unloaded; it forwards
+  `wk_readdir` and `wk_clock`, which are grin's.
 
 `grin.h` adds what only grin has, such as `grin_exec(cmdline, how)`
-(deferred, see the rules below) and the game-window calls (3.6).
+(deferred, see the rules below) and the game-window calls (3.6). *As
+built in G3* it has `GRIN_RESIDENT` and `grin_present()`; `grin_exec`
+comes with the DOS programs (G5), the game-window calls with G6.
 
 **One source, two hosts.** In the C4IX desktop these names are the real
 functions, linked in. A grin application links **`grin/import.c`** in
@@ -394,6 +406,53 @@ So `calc.c`, `notepad.c` and `clock.c` compile unchanged into both:
 
 Each forwarded call costs a few instructions more, which is nothing
 beside the draw command it issues.
+
+**As built in G3** (`src/grin`):
+
+- **`kitfns.h`** lists the functions an application may call, one line
+  each (`K(type, name, (params), (args))`, `V(...)` for void): the
+  windows, dialogs, clipboard, drawing, schemes and widgets of
+  `winkit.h`, 72 of them. It is included three times: `gkit.h` makes
+  the table's members of it, `import.c` a stub each, `apps.c` the
+  filling. Not in it: the shell's section (`wk_init`, `wk_event`,
+  `wk_tick` and the rest), the screen savers, the accessories (an
+  application links its own), and memory and files (above). New
+  functions go at the end, so the table only grows.
+- **`gkit.h`**: `struct grin_kit` -- `magic` ('GRIN'), `version` (1),
+  `gen` (grin's heap generation, 0 without HEAP.SYS), `env` (`&wk`),
+  `hello`, then the functions.
+- **`import.c`**: every stub runs the kit in grin's generation, `old =
+  setgen(grin); call; setgen(old)` through slot 27, so the plan's
+  "every kit entry point reached from an application brackets setgen"
+  lives here, once, rather than in a wrapper per function in grin. Its
+  constructor finds the table (version 4 or more, slot 25, the magic and
+  version) and calls `hello`: that is how grin tells an application from
+  a DOS program it was asked to start.
+- **`apps.c`**, grin's side:
+  - the table is published in slot 25 by `apps_init` (after `wk_init`)
+    and taken back by `apps_end` (after `wk_close_all`, before
+    `gui_detach`);
+  - **proxies.** The kit calls a class's hooks itself, so for each class
+    an application opens windows of, grin keeps a proxy class whose
+    hooks are trampolines, made to match the real class at every
+    `wk_open` (the application sets `size` first). The table's
+    `wk_open`, `wk_find` and `wk_class_of` are grin's: they take and
+    give the application's own class, so it never sees a proxy;
+  - **every call into an application** is a trampoline: `setgen(app)`,
+    `catch(thunk, &call, &exited)`, `setgen(old)`, with grin's `cur` (the
+    application running, which `wk_open` needs) kept around it;
+  - **exit()**: `exited` marks the application dead, and nothing more is
+    called in it (a dead application's `close` says yes). At the top of
+    the loop, after `wk_tick` (`apps_reap`), a dead application's dialogs
+    and windows are closed, and every application with no window left
+    is unloaded. `unload` is never reached from inside a callback;
+  - **starting one**, `grin_run(cmdline)`: the words, `.c4r` added
+    when the program has no extension; an application loaded already
+    gets its `main` called again; otherwise `load`, refused with a
+    message box when the image did not say hello ("DOOM is not a grin
+    application...", and it is unloaded at once). A first launch whose
+    `main` does not return `GRIN_RESIDENT` (or exits) is dead at once.
+    At most 16 applications and 32 classes.
 
 A complete application under grin:
 
@@ -863,6 +922,66 @@ Deviations and findings:
     and grin keeps running.
   - The C4IX desktop's Calculator still passes `test-desktop.mjs`.
 - **Browser:** Clock and Calculator side by side, at both resolutions.
+
+*Done, branch `grin-g3` (2026-10-25).* What was built (3.4's "As built
+in G3" has the mechanism):
+
+- **`src/grin`**: `grin.h` (the application header), `gkit.h` and
+  `kitfns.h` (the table), `import.c` (the applications' half), and
+  `apps.c` (grin's: the table in slot 25, proxies and trampolines,
+  `grin_run`, `apps_reap`). `grin.c` calls `apps_init`, `apps_reap`
+  after `wk_tick`, and `apps_end`.
+- **The applications**, `src/grin/apps`: `clock.c` and `calc.c`, a
+  `main` of a few lines each around the kit's `clock_open` and
+  `calc_open`, and `exitkey.c`, test-grin's: a window whose key callback
+  calls `exit(3)`, with 100 KB of its own allocated in `main`. `make
+  grin-apps` compiles them, the kit's `clock.c` and `calc.c` and
+  `import.c` into `.grinapp/`, all with `-D WK_IMPORT` (kept apart from
+  `.grin/`, which build-images.sh links whole into `grin.c4r`).
+  build-images.sh links `clock.c4r`, `calc.c4r` and `exitkey.c4r` onto
+  `libjs/images/dos`, each with the bare libc, about 0.5 MB apiece.
+- **Program Manager**: an Accessories group beside Main, with Clock and
+  Calculator (double click, or Enter on the selected item; Left and
+  Right move between the three items); File > Run..., an input box whose
+  command line `grin_run` starts; Help > About says how many
+  applications are running.
+- **The Task List's Tile**: a window that cannot be resized
+  (Calculator) keeps its size and the others in its row share what is
+  left, so Clock and Calculator fit side by side at 640x480; before, it
+  gave every window an equal column and pushed the Calculator off the
+  screen.
+- **Tests:** test-grin.mjs gains 29 checks (70 in all); web-grin.mjs
+  gains the applications at both sizes (screenshots `grin-g3-640x480`
+  and `grin-g3-800x600`).
+  - Two Clocks (one image: About says 1 running), both ticking in
+    figures (Settings > Digital); End Task on one, the other ticks on;
+    End Task on both, the image is unloaded and `HEAP_USED` is back to
+    the byte (4,928,561 before and after).
+  - Calculator: `12*12=` typed shows `144`.
+  - File > Run... `DOOM`: "DOOM is not a grin application", unloaded.
+  - File > Run... `EXITKEY`; a key: its window is closed, it is
+    unloaded, and `HEAP_USED` is back to the byte, its 100 KB with it;
+    a Clock starts and closes after it.
+  - A Clock left open when the session ends: at `A>`, `MEM` says
+    `programs loaded: 0`, and `CLOCK` there says it needs grin (the
+    table was taken back).
+
+Deviations and findings:
+
+- `-D WK_IMPORT` rather than `#define wk` before the include, and memory
+  and files from the application's own libc rather than forwarded (3.4).
+- The shell's part of `winkit.h` is not offered to applications: an
+  application that called `wk_init` or `wk_tick` would break grin.
+- The `setgen` bracket is in `import.c`'s stubs, one place, not in
+  grin's table entries; drawing calls are bracketed too (two DOS calls
+  each), for uniformity rather than need.
+- `grin_run` starts applications only. A program that does not say
+  hello is refused with a message box; DOS programs come with G5.
+- grin's applications are about 0.5 MB each on the disk, the bare libc
+  linked whole into each, as it is into grin and the games.
+- The headless Clocks read the host's time of day (`GUI_CLOCK` is
+  `Date`), so test-grin waits for the ticks in host time, a second or
+  two.
 
 **G4: persistence and the shell applications**
 

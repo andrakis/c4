@@ -715,15 +715,17 @@ fi
 # BUILD.B4K files run it (docs/c4sc-design.md). The c4ke-root disk below
 # carries the same image.
 [ -f c4sc32-fused.c4r ] && cp c4sc32-fused.c4r $DISK/c4sc.c4r
-# It is copied, not built (building it is expensive), so say when it is
-# older than the c4lc it is compiled from: C4IX would rebuild itself with
-# yesterday's compiler. `make c4sc32-fused.c4r`, or test-c4ix-rebuild,
-# brings it up to date.
+# It is copied, not built: `make c4bb-images` builds it first (about two
+# minutes after a change to c4lc). Run on its own, this script says when
+# the copy is older than what it is compiled from -- C4IX would rebuild
+# itself with yesterday's compiler, which once overran the stack
+# compiling c4ke.c in test-libjs.
 if [ -f c4sc32-fused.c4r ]; then
-    for src in src/c4sp/lisp/c4lc*.lisp src/c4sp/lisp/c4r.lisp src/c4sp/include/gc.h; do
+    for src in src/c4sp/lisp/c4lc*.lisp src/c4sp/lisp/c4r.lisp src/c4sp/lisp/c4opt.lisp \
+               src/c4sp/include/gc.h src/c4sc/c4sc.lisp src/c4sc/c4sc-main.c src/c4sc/*.h; do
         if [ "$src" -nt c4sc32-fused.c4r ]; then
-            echo "c4bb: WARNING: c4sc32-fused.c4r is older than $src."
-            echo "c4bb:          It is COPIED here, not built -- run 'make c4sc32-fused.c4r'."
+            echo "c4bb: WARNING: c4sc32-fused.c4r is older than $src." >&2
+            echo "c4bb:          It is COPIED here, not built -- run 'make c4sc32-fused.c4r'." >&2
             break
         fi
     done

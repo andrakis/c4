@@ -2386,7 +2386,10 @@ c4bb-32bit: c4cc32 c4m32 c4sp32 c4rlink32
 # target builds what it uses.
 # ./cpp is a hard prerequisite now, not just for C4DOS: the shared
 # disk's c4m.c4r goes through it (build-images.sh).
-c4bb-images: c4bb-32bit $(C4LC_LISP) .img_g c4th32.c4r cpp
+# c4sc32-fused.c4r is the disk's compiler (c4sc.c4r), which C4IX
+# rebuilds itself with: named here, a change to c4lc remakes it rather
+# than leaving yesterday's compiler on the disk.
+c4bb-images: c4bb-32bit $(C4LC_LISP) .img_g c4th32.c4r cpp c4sc32-fused.c4r
 	IMG_G=$(IMG_G) bash src/c4bb/tests/build-images.sh
 
 # Source maps in the images (docs/c4-explorer.md, track S): the games
@@ -2845,7 +2848,9 @@ c4ix.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/c4ix.h $(patsubst %,$(C4IX_SR
 	@# propagates any module's failure through xargs.
 	$(call c4lc_compile_par,-O,$(C4IX_MODS),$(C4IX_SRC),.c4ix_)
 	$(C4RLINK) $(patsubst %,.c4ix_%.c4o,$(C4IX_MODS)) -o c4ix.c4r
-	rm -f .c4ix_*.pp.c .c4ix_*.c4o
+	@# its own objects only: .c4ix_* is every C4IX rule's prefix, and
+	@# under -j a wildcard here deleted the userland's mid-build
+	rm -f $(C4IX_MODS:%=.c4ix_%.pp.c) $(C4IX_MODS:%=.c4ix_%.c4o)
 
 # the spawn-test userland program: raw opcodes, no library. Under
 # protected mode its printf traps and the kernel emulates it onto the
@@ -2871,9 +2876,9 @@ libarc.c4l: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/lib/archive.c $(C4IX_SRC)/i
 # C4IX rebuilds everything it ships, inside itself, with b4ke and the
 # BUILD.B4K files the root archive carries (libjs/tests/test-rebuild.sh).
 # About nine minutes; not in test-libjs.
-# c4sc32-fused.c4r first: build-images.sh ships whatever copy of it is
-# there, and the machine's compiler has to be the one in the tree -- the
-# test compares what it builds with what c4lc built on the host.
+# The machine's compiler has to be the one in the tree -- the test
+# compares what it builds with what c4lc built on the host -- and
+# c4bb-images builds c4sc32-fused.c4r, the disk's c4sc, to see to that.
 # Where C4IX's cycles go (docs/c4ix-cpu.md): the profiler in five fixed
 # situations, 5 machine-seconds each -- a measurement, not a test
 prof-c4ix: c4bb-images
@@ -2881,7 +2886,7 @@ prof-c4ix: c4bb-images
 	   echo "== $$m"; TOP=12 USERIMGS= node libjs/tests/prof-c4ix.mjs $$m 5 | grep -v '^traps' | head -18; \
 	 done
 
-test-c4ix-rebuild: c4sc32-fused.c4r c4bb-images
+test-c4ix-rebuild: c4bb-images
 	bash libjs/tests/test-rebuild.sh
 
 # libc4ix as a shared library: the same image, loaded at run time by
@@ -2942,10 +2947,11 @@ c4ix-desktop.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libarc.c4l libc4ix.c4l $(C4IX_DES
 	$(C4RLINK) $(C4IX_DESKTOP:%=.c4ix_d_%.c4o) $(WINKIT:%=.c4ix_d_%.c4o) .c4ix_d_fp.c4o libarc.c4l libc4ix.c4l -o $@
 	rm -f $(C4IX_DESKTOP:%=.c4ix_d_%.c4o) $(WINKIT:%=.c4ix_d_%.c4o) .c4ix_d_fp.c4o .c4ix_d_*.pp.c
 
+# one object per program, so that -j can build several at once
 c4ix-%.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libc4ix.c4l $(C4IX_SRC)/user/%.c
-	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC)/include $(C4IX_SRC)/user/$*.c .c4ix_u.c4o > /dev/null
-	$(C4RLINK) .c4ix_u.c4o libc4ix.c4l -o $@
-	rm -f .c4ix_u.pp.c .c4ix_u.c4o
+	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC)/include $(C4IX_SRC)/user/$*.c .c4ix_u_$*.c4o > /dev/null
+	$(C4RLINK) .c4ix_u_$*.c4o libc4ix.c4l -o $@
+	rm -f .c4ix_u_$*.pp.c .c4ix_u_$*.c4o
 # top reads the CPU accounting through cpustat.h, as System Monitor does
 c4ix-top.c4r: $(C4IX_SRC)/include/cpustat.h
 

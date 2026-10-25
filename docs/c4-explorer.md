@@ -810,8 +810,10 @@ in c4).
   instruction that followed it, matched by `eq`. The fallback is
   coarser: merged instructions lose their own lines.
 - **c4sc's memory in the VM.** It grows with a `Line` node for every
-  statement and a line item for every row. The 4 MB stack the IDE's
-  compiles get, and C4DOS's 200,000-cell budget, are measured under
+  statement and a line item for every row. The IDE's compiles run on a
+  task's default 256 KB stack, of which c4sc uses 11 KB at most without
+  `-g` (measured 2026-10-25; it was 4 MB, for a c4lc bug fixed in
+  29cbac9). That and C4DOS's 200,000-cell budget are measured under
   `-g` in S3.
 - **c4fc parity.** Line items must survive opt.f exactly as they survive
   c4opt. This is why S4 comes after the rules are proved in c4lc.

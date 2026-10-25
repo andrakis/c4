@@ -5,9 +5,10 @@ B4KE2
 # layer, compiled -fpic here as libc is.
 SET ROOT /usr
 SET OUT /build
-# c4sc recurses deeply on math.c's long expressions: 4 MB of stack, as the
-# desktop's (1 MB overruns)
-SET STACK 4194304
+# c4sc runs on a task's default stack, 256 KB. math.c and stdio.c peak
+# at 5.2 KB of it, stdlib.c at 2.7 KB
+# (measured 2026-10-25). The 4 MB this set was for a c4lc bug,
+# g:resolvecode recursing once per instruction (fixed in 29cbac9).
 SET LC c4sc -c 400000 compile -O
 # -fpic: one copy of libc's code serves every task (src/c4ix/loader.c)
 SET LCF $(LC) -fno-builtin -fpic -c -I src/c4ix/libc/include -I src/c4ix/libc

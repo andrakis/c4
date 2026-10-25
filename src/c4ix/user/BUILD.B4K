@@ -6,8 +6,10 @@ B4KE2
 # Results are $(OUT)/bin/c4ix-NAME.c4r, the names the disk uses.
 SET ROOT /usr
 SET OUT /build
-# c4sc recurses deeply on a long function: 1 MB of stack (SYS_STACK)
-SET STACK 1048576
+# c4sc runs on a task's default stack, 256 KB. vfsload.c, the deepest,
+# peaks at 3.7 KB of it, sh.c and b4ke.c at 2.7 KB
+# (measured 2026-10-25). The 1 MB this set was for a c4lc bug,
+# g:resolvecode recursing once per instruction (fixed in 29cbac9).
 # built -D C4IX_SHARED and linked with -l against C4IX's shared
 # libraries -- but vfsload, which runs before there is a /lib, and splash,
 # which runs while the boot unpacks the root archive, carry their own

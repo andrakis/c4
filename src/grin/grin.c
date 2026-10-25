@@ -9,7 +9,8 @@
 // windows (the desktop's colour and pattern), what it takes before them
 // (Ctrl+Esc, and a double click on the desktop: the Task List),
 // GRIN.INI, and what the kit asks of its host -- memory, and files
-// through libc and bare.c, which are C4DOS's.
+// through libc and bare.c, which are C4DOS's. The applications grin runs
+// (Clock, Calculator) are apps.c's; the loop gives them their turn.
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -195,6 +196,7 @@ void grin_saver_test(int which) {
 
 // the pictures, 32x32, client-relative
 static void picture(int pic, int x, int y) {
+    int k;
     if (pic == PIC_DISPLAY) {
         d_rect(x + 2, y + 2, 28, 21, C_DARK);
         d_rect(x + 4, y + 4, 24, 17, 0x0000a0);
@@ -211,6 +213,20 @@ static void picture(int pic, int x, int y) {
         d_rect(x + 2, y + 4, 28, 22, 0x008080);
         d_rect(x + 5, y + 7, 14, 10, C_FACE); d_rect(x + 5, y + 7, 14, 3, C_TITLE);
         d_rect(x + 4, y + 21, 6, 4, C_FACE); d_rect(x + 12, y + 21, 6, 4, C_FACE);
+    } else if (pic == PIC_CLOCK) {
+        d_disc(x + 16, y + 16, 15, C_DARK);
+        d_disc(x + 16, y + 16, 13, C_WHITE);
+        d_rect(x + 15, y + 4, 2, 3, C_DARK); d_rect(x + 15, y + 26, 2, 3, C_DARK);
+        d_rect(x + 4, y + 15, 3, 2, C_DARK); d_rect(x + 26, y + 15, 3, 2, C_DARK);
+        d_line(x + 16, y + 16, x + 16, y + 7, C_DARK); d_line(x + 17, y + 16, x + 17, y + 7, C_DARK);
+        d_line(x + 16, y + 16, x + 22, y + 20, C_DARK);
+        d_line(x + 16, y + 16, x + 10, y + 24, 0xc02020);
+    } else if (pic == PIC_CALC) {
+        d_rect(x + 5, y + 1, 22, 30, C_DARK);
+        d_rect(x + 6, y + 2, 20, 28, C_FACE);
+        d_rect(x + 8, y + 4, 16, 6, 0x80a080); d_recto(x + 8, y + 4, 15, 5, C_SHADOW);
+        k = 0;
+        while (k < 12) { d_rect(x + 8 + (k % 3) * 6, y + 13 + (k / 3) * 4, 4, 3, k % 3 == 2 ? C_TITLE : C_DARK); ++k; }
     } else {
         // Control Panel: a window with sliders
         d_rect(x + 1, y + 2, 30, 28, C_FACE); d_recto(x + 1, y + 2, 29, 27, C_DARK);
@@ -308,6 +324,7 @@ int main(int argc, char **argv) {
     wk_scheme_use(ini.scheme, 0 - 1);
     wk_min_icons(1);
     wk_init(&shell);
+    apps_init();
     progman_open();
 
     running = 1;
@@ -337,6 +354,7 @@ int main(int argc, char **argv) {
         // not yet showing the display when it came
         if (!second_draw && __time() - start_ms >= 500) { second_draw = 1; wk_redraw_all(); }
         wk_tick();
+        apps_reap();
         if (!saver_active() && ini.saver && __time() - last_input >= ini.wait * 60000) {
             saver_start(ini.saver);
             gui_cursor(GUI_PTR_NONE);
@@ -369,6 +387,7 @@ int main(int argc, char **argv) {
 
     // the display back as it was found: no ring, so the console is DOS's again
     wk_close_all();
+    apps_end();
     if (saver_active()) saver_stop();
     gui_clear(C_DARK);
     gui_text2(wk.sw / 2 - 150, wk.sh / 2 - 10, 0xc0c0c0, 14, F_SANS, 0, "grin has ended. GRIN at A> starts it again.", 0 - 1);

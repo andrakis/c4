@@ -2387,7 +2387,7 @@ GAME_OBJS  :=
 GAME_TESTS :=
 include $(wildcard games/*/c4.mk)
 GAMES_ALL  := wolf3d doom tyrian rott
-c4bb-images: libc-bare-objs grin-objs $(GAME_OBJS)
+c4bb-images: libc-bare-objs grin-objs grin-apps $(GAME_OBJS)
 $(filter-out $(GAME_TESTS),$(GAMES_ALL:%=test-%)):
 	@echo "$@: skipped, games/$(@:test-%=%) is not here (games/README.md)"
 PHONY += $(GAMES_ALL:%=test-%)
@@ -2415,7 +2415,7 @@ PHONY += libc-bare-objs
 # the desktop's are; grin's own with it, so that its files go through
 # libc and bare.c to C4DOS. build-images.sh links it onto the page's
 # C4DOS disk, libjs/images/dos, which boots into it. test-grin drives it.
-GRIN       := grin progman tasklist control
+GRIN       := grin apps progman tasklist control
 GRIN_KIT   := draw ui wmcore dialog look95 look31 savers
 GRIN_HDRS  := $(wildcard src/grin/*.h src/winkit/*.h) libjs/guest/gui.h libjs/guest/gui.c
 GRIN_CC    := ./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O $(IMG_G) -c -I src/winkit -I .
@@ -2427,6 +2427,24 @@ grin-objs: $(GRIN:%=.grin/%.c4o) $(GRIN_KIT:%=.grin/wk-%.c4o)
 	@mkdir -p .grin
 	$(GRIN_CC) -fno-builtin -I src/c4ix/libc/include $< $@ > /dev/null
 PHONY += grin-objs
+# grin's applications (docs/grin-plan.md 3.4): each a C4DOS program of its
+# own, linked by build-images.sh from its main (src/grin/apps), the kit's
+# class it shows (src/winkit), src/grin/import.c in the kit's place, and
+# the bare libc. All of them are compiled with -D WK_IMPORT, which makes
+# winkit.h's wk grin's (import.c), and kept apart from grin's own objects.
+GRIN_APPS  := clock calc exitkey
+GRIN_APPKIT := clock calc
+grin-apps: $(GRIN_APPS:%=.grinapp/%.c4o) $(GRIN_APPKIT:%=.grinapp/wk-%.c4o) .grinapp/import.c4o
+.grinapp/wk-%.c4o: src/winkit/%.c $(GRIN_HDRS) $(C4LC_LISP) .img_g | c4sp32
+	@mkdir -p .grinapp
+	$(GRIN_CC) -D WK_IMPORT $< $@ > /dev/null
+.grinapp/import.c4o: src/grin/import.c $(GRIN_HDRS) $(wildcard src/c4ix/libc/include/*.h) $(C4LC_LISP) .img_g | c4sp32
+	@mkdir -p .grinapp
+	$(GRIN_CC) -D WK_IMPORT -fno-builtin -I src/c4ix/libc/include $< $@ > /dev/null
+.grinapp/%.c4o: src/grin/apps/%.c $(GRIN_HDRS) $(wildcard src/c4ix/libc/include/*.h) $(C4LC_LISP) .img_g | c4sp32
+	@mkdir -p .grinapp
+	$(GRIN_CC) -D WK_IMPORT -fno-builtin -I src/c4ix/libc/include -I src/grin $< $@ > /dev/null
+PHONY += grin-apps
 test-grin: c4bb-images
 	node libjs/tests/test-grin.mjs
 PHONY += test-grin

@@ -1,5 +1,5 @@
 // shell.h -- inside grin, C4DOS's graphical shell (docs/grin-plan.md):
-// what its modules share. (grin.h is to be the applications' header, G3.) grin is built on the window kit (src/winkit),
+// what its modules share. (grin.h is the applications' header.) grin is built on the window kit (src/winkit),
 // and as a shell it looks inside the kit's windows (wkwin.h) to cascade,
 // tile and list them.
 
@@ -35,12 +35,20 @@ void tasklist_cascade();
 void tasklist_tile();
 int  control_open();                  // control.c: Control Panel
 
+// the applications (apps.c): the kit's table in DOS's slot 25, and the
+// programs started as applications
+void apps_init();                     // at the start: the table published
+void apps_reap();                     // every pass, at the top of the loop: the dead and windowless unloaded
+void apps_end();                      // at the end, after every window: all unloaded, the table taken back
+int  apps_count();                    // how many are loaded
+int  grin_run(char *cmdline);         // start one: 0, or -1 with a message box saying why
+
 // a 32x32 picture with a label under it, centred on cx (Program Manager's
 // items, Control Panel's), drawn client-relative; and its hit box
 enum { ITEM_W = 76, ITEM_H = 60 };
 void grin_item(int cx, int y, int pic, char *label, int sel);
 int  grin_item_hit(int px, int py, int cx, int y);
-enum { PIC_CONTROL = 1, PIC_DISPLAY = 2, PIC_COLORS = 3, PIC_DESKTOP = 4 };
+enum { PIC_CONTROL = 1, PIC_DISPLAY = 2, PIC_COLORS = 3, PIC_DESKTOP = 4, PIC_CLOCK = 5, PIC_CALC = 6 };
 
 // grin's dialogs: windows of the kit's dialog chrome (WK_DIALOG), whose
 // state begins as the kit's own dialogs' does, with no buffer, so that

@@ -686,6 +686,13 @@ if ls .grin/*.c4o > /dev/null 2>&1 && ls .libc-bare/*.c4o > /dev/null 2>&1 && [ 
     say "the page's C4DOS disk, booting into grin: $LJDOS"
     mkdir -p $LJDOS
     ./c4rlink32 .grin/*.c4o .libc-bare/libc-*.c4o -o $LJDOS/grin.c4r > /dev/null
+    # its applications (docs/grin-plan.md 3.4): main, the kit's class, and
+    # import.c in the kit's place; EXITKEY is test-grin's
+    for app in clock calc exitkey; do
+        [ -f .grinapp/$app.c4o ] || continue
+        kit=; [ -f .grinapp/wk-$app.c4o ] && kit=.grinapp/wk-$app.c4o
+        ./c4rlink32 .grinapp/$app.c4o $kit .grinapp/import.c4o .libc-bare/libc-*.c4o -o $LJDOS/$app.c4r > /dev/null
+    done
     cp $OUT/c4dos32.c4r $LJDOS/
     if [ -d $GAMESDISK ]; then
         (cd $GAMESDISK && find . -type f ! -name config.sys ! -name autoexec.bat ! -name c4dos.dir \

@@ -194,10 +194,52 @@ void grin_saver_test(int which) {
 
 // ---- items: a picture and a label ---------------------------------------------------
 
+// greyed: every other line of a 32x32 picture in the window's white
+static void k_grey(int x, int y) {
+    int j;
+    j = 0;
+    while (j < 32) { d_rect(x, y + j, 32, 1, C_WHITE); j = j + 2; }
+}
+
 // the pictures, 32x32, client-relative
-static void picture(int pic, int x, int y) {
+void grin_picture(int pic, int x, int y) {
     int k;
-    if (pic == PIC_DISPLAY) {
+    if (pic == PIC_FILES) {
+        // a filing cabinet's drawer, open, with a folder in it
+        d_rect(x + 3, y + 4, 26, 26, C_DARK);
+        d_rect(x + 4, y + 5, 24, 24, 0xc0a060);
+        d_rect(x + 6, y + 8, 20, 9, C_DARK); d_rect(x + 7, y + 9, 18, 7, 0xe0c080);
+        d_rect(x + 13, y + 11, 6, 2, C_DARK);
+        d_rect(x + 6, y + 19, 20, 9, C_DARK); d_rect(x + 7, y + 20, 18, 7, 0xe0c080);
+        d_rect(x + 13, y + 22, 6, 2, C_DARK);
+        d_rect(x + 9, y + 1, 14, 7, 0xf0e070); d_recto(x + 9, y + 1, 13, 6, C_DARK);
+    } else if (pic == PIC_DOS) {
+        // a screen with a prompt on it
+        d_rect(x + 1, y + 3, 30, 24, C_DARK);
+        d_rect(x + 3, y + 5, 26, 20, 0x000000);
+        d_textn(x + 4, y + 8, 0xc0c0c0, 9, F_MONO, 5, "C>_", 3);
+        d_rect(x + 10, y + 27, 12, 3, C_SHADOW);
+    } else if (pic == PIC_NOTEPAD) {
+        // a pad of ruled paper, its spiral along the top
+        d_rect(x + 5, y + 3, 22, 28, C_DARK);
+        d_rect(x + 6, y + 4, 20, 26, C_WHITE);
+        k = 0;
+        while (k < 6) { d_rect(x + 8, y + 10 + k * 3, 16, 1, 0x8080c0); ++k; }
+        k = 0;
+        while (k < 5) { d_rect(x + 8 + k * 4, y + 1, 2, 5, C_SHADOW); ++k; }
+    } else if (pic == PIC_GAME) {
+        // a joystick
+        d_rect(x + 3, y + 20, 26, 9, C_DARK);
+        d_rect(x + 4, y + 21, 24, 7, 0x606060);
+        d_rect(x + 15, y + 8, 3, 13, C_DARK);
+        d_disc(x + 16, y + 7, 5, 0xc02020);
+        d_disc(x + 24, y + 18, 2, 0xe0e020);
+    } else if (pic == PIC_APP) {
+        // a window
+        d_rect(x + 2, y + 4, 28, 24, C_DARK);
+        d_rect(x + 3, y + 5, 26, 22, C_WHITE);
+        d_rect(x + 3, y + 5, 26, 5, C_TITLE);
+    } else if (pic == PIC_DISPLAY) {
         d_rect(x + 2, y + 2, 28, 21, C_DARK);
         d_rect(x + 4, y + 4, 24, 17, 0x0000a0);
         d_rect(x + 6, y + 6, 10, 6, C_WHITE);
@@ -236,13 +278,17 @@ static void picture(int pic, int x, int y) {
     }
 }
 
-void grin_item(int cx, int y, int pic, char *label, int sel) {
+void grin_item_dim(int cx, int y, int pic, char *label, int sel, int dim) {
     int lw;
-    picture(pic, cx - 16, y);
+    grin_picture(pic, cx - 16, y);
+    // not available: the picture greyed over, as 3.1 greyed a menu item
+    if (dim) { k_grey(cx - 16, y); }
     lw = ui_len(label) * 6 + 4;
     if (sel) d_rect(cx - lw / 2, y + 35, lw, 14, C_SEL);
-    d_text(cx - lw / 2 + 2, y + 36, sel ? C_WHITE : C_DARK, F_SANS, label);
+    d_text(cx - lw / 2 + 2, y + 36, sel ? C_WHITE : dim ? C_SHADOW : C_DARK, F_SANS, label);
 }
+
+void grin_item(int cx, int y, int pic, char *label, int sel) { grin_item_dim(cx, y, pic, label, sel, 0); }
 
 int grin_item_hit(int px, int py, int cx, int y) { return ui_hit(px, py, cx - ITEM_W / 2, y, ITEM_W, 52); }
 
@@ -285,9 +331,8 @@ void grin_quit() { running = 0; }
 
 // ---- what the kit asks of its host -------------------------------------------------
 //
-// Memory from libc; files through libc's bare.c, which is C4DOS's API:
-// written to the RAM disk, read from it or else from the disk. Listing a
-// folder comes with File Manager (G4): until then there is nothing to list.
+// Memory from libc. Files are disk.c's: through libc's bare.c, which is
+// C4DOS's API, with the file box's folders the drives.
 
 char *wk_alloc(int n) {
     char *p;
@@ -296,11 +341,6 @@ char *wk_alloc(int n) {
     return p;
 }
 void wk_free(char *p) { if (p) free(p); }
-int wk_fopen(char *path, int wr) { return open(path, wr ? O_WRONLY | O_CREAT | O_TRUNC : O_RDONLY); }
-int wk_fread(int fd, char *buf, int n) { return read(fd, buf, n); }
-int wk_fwrite(int fd, char *buf, int n) { return write(fd, buf, n); }
-void wk_fclose(int fd) { close(fd); }
-int wk_readdir(char *dir, int i, char *name) { return 0 - 1; }
 
 // ---- the session ----------------------------------------------------------------------
 

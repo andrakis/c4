@@ -273,6 +273,7 @@ extern char *notepad_name;            // in its titles ("Notepad"; the desktop's
 extern char *notepad_about;           // its Help > About line
 extern char *notepad_home;            // where Open starts
 extern char *notepad_untitled;        // where Save As offers to put a new document
+extern int notepad_filebox;           // 1: Open and Save As are file boxes (grin's); 0: typed paths
 int  wk_clock();                      // the host's time of day, in seconds since midnight
 
 // ---- screen savers (savers.c) ----------------------------------------------

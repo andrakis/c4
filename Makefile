@@ -2415,7 +2415,7 @@ PHONY += libc-bare-objs
 # the desktop's are; grin's own with it, so that its files go through
 # libc and bare.c to C4DOS. build-images.sh links it onto the page's
 # C4DOS disk, libjs/images/dos, which boots into it. test-grin drives it.
-GRIN       := grin apps progman tasklist control
+GRIN       := grin apps progman tasklist control filemgr disk
 GRIN_KIT   := draw ui wmcore dialog look95 look31 savers
 GRIN_HDRS  := $(wildcard src/grin/*.h src/winkit/*.h) libjs/guest/gui.h libjs/guest/gui.c
 GRIN_CC    := ./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O $(IMG_G) -c -I src/winkit -I .
@@ -2432,15 +2432,15 @@ PHONY += grin-objs
 # class it shows (src/winkit), src/grin/import.c in the kit's place, and
 # the bare libc. All of them are compiled with -D WK_IMPORT, which makes
 # winkit.h's wk grin's (import.c), and kept apart from grin's own objects.
-GRIN_APPS  := clock calc exitkey
-GRIN_APPKIT := clock calc
+GRIN_APPS  := clock calc exitkey notepad
+GRIN_APPKIT := clock calc notepad
 grin-apps: $(GRIN_APPS:%=.grinapp/%.c4o) $(GRIN_APPKIT:%=.grinapp/wk-%.c4o) .grinapp/import.c4o
 .grinapp/wk-%.c4o: src/winkit/%.c $(GRIN_HDRS) $(C4LC_LISP) .img_g | c4sp32
 	@mkdir -p .grinapp
 	$(GRIN_CC) -D WK_IMPORT $< $@ > /dev/null
 .grinapp/import.c4o: src/grin/import.c $(GRIN_HDRS) $(wildcard src/c4ix/libc/include/*.h) $(C4LC_LISP) .img_g | c4sp32
 	@mkdir -p .grinapp
-	$(GRIN_CC) -D WK_IMPORT -fno-builtin -I src/c4ix/libc/include $< $@ > /dev/null
+	$(GRIN_CC) -D WK_IMPORT -fno-builtin -I src/c4ix/libc/include -I src/grin $< $@ > /dev/null
 .grinapp/%.c4o: src/grin/apps/%.c $(GRIN_HDRS) $(wildcard src/c4ix/libc/include/*.h) $(C4LC_LISP) .img_g | c4sp32
 	@mkdir -p .grinapp
 	$(GRIN_CC) -D WK_IMPORT -fno-builtin -I src/c4ix/libc/include -I src/grin $< $@ > /dev/null

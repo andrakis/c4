@@ -8,8 +8,9 @@
 #include "wkwin.h"
 
 // GRIN.INI (grin.c): the screen, the colours, the desktop's pattern and
-// the screen saver. Kept on the RAM disk for now: C4DOS gains a drive
-// that the page keeps (HOME=B:) in G4.
+// the screen saver. Written where C4DOS writes a file with no drive: the
+// home drive (DRIVES.SYS HOME=B:), which the page keeps, else the RAM
+// disk.
 struct grin_ini {
     int sw, sh;                       // 640x480 or 800x600
     int scheme;                       // the kit's colour scheme
@@ -30,6 +31,8 @@ void  grin_quit();                    // the session ends: the loop stops
 
 // the built-in windows
 int  progman_open();                  // progman.c: Program Manager
+int  grin_start(char *cmdline);       // ... a command line: a built-in window, or an application
+int  filemgr_open();                  // filemgr.c: File Manager
 int  tasklist_open();                 // tasklist.c: the Task List
 void tasklist_cascade();
 void tasklist_tile();
@@ -48,7 +51,20 @@ int  grin_run(char *cmdline);         // start one: 0, or -1 with a message box 
 enum { ITEM_W = 76, ITEM_H = 60 };
 void grin_item(int cx, int y, int pic, char *label, int sel);
 int  grin_item_hit(int px, int py, int cx, int y);
-enum { PIC_CONTROL = 1, PIC_DISPLAY = 2, PIC_COLORS = 3, PIC_DESKTOP = 4, PIC_CLOCK = 5, PIC_CALC = 6 };
+enum { PIC_CONTROL = 1, PIC_DISPLAY = 2, PIC_COLORS = 3, PIC_DESKTOP = 4, PIC_CLOCK = 5, PIC_CALC = 6,
+       PIC_FILES = 7, PIC_DOS = 8, PIC_NOTEPAD = 9, PIC_GAME = 10, PIC_APP = 11, N_PICS = 12 };
+void grin_item_dim(int cx, int y, int pic, char *label, int sel, int dim);   // dim: greyed, not available
+void grin_picture(int pic, int x, int y);
+
+// C4DOS's files, as grin sees them (disk.c)
+enum { DRV_RAM = 26 };                // the RAM disk, where a drive's number would be
+int   gd_drives();                    // how many drives (DRIVES.SYS), 1 without
+int   gd_home();                      // where a file with no drive is written, or -1: the RAM disk
+int   gd_unlink(char *name);          // 0, or -1
+int   gd_exec(char *line);            // a command line, as A> runs it: its status
+int   gd_size(char *name);            // bytes, read through; -1 if it is not there
+int   gd_list(int drive, char *names, int max);   // a drive's files, WK_NAME bytes each: how many
+char *gd_name(int drive, char *name, char *out, int n);   // "B:NAME", "RAM:NAME"
 
 // grin's dialogs: windows of the kit's dialog chrome (WK_DIALOG), whose
 // state begins as the kit's own dialogs' does, with no buffer, so that

@@ -677,9 +677,11 @@ fi
 # A>, where GRIN starts it again), and the games with their data, linked
 # from the games disk where the filesystem allows. CONFIG.SYS is its own:
 # HEAP.SYS, because libjs's heap keeps generations and a game's memory
-# goes back when it quits. DRIVES.SYS HOME=B: (G4) and REDIR.SYS TAP (G5)
-# join it in later milestones. grin is linked whole with the bare libc,
-# as the games are, from the objects make grin-objs compiled.
+# goes back when it quits; DRIVES.SYS HOME=B:, so that a file saved with
+# no drive goes to B:, which the page keeps in the browser (the c4dos
+# store), and is still there at the next visit. REDIR.SYS TAP (G5) joins
+# it later. grin is linked whole with the bare libc, as the games are,
+# from the objects make grin-objs compiled.
 LJDOS=libjs/images/dos
 rm -rf $LJDOS
 if ls .grin/*.c4o > /dev/null 2>&1 && ls .libc-bare/*.c4o > /dev/null 2>&1 && [ -f $OUT/c4dos32.c4r ]; then
@@ -688,7 +690,7 @@ if ls .grin/*.c4o > /dev/null 2>&1 && ls .libc-bare/*.c4o > /dev/null 2>&1 && [ 
     ./c4rlink32 .grin/*.c4o .libc-bare/libc-*.c4o -o $LJDOS/grin.c4r > /dev/null
     # its applications (docs/grin-plan.md 3.4): main, the kit's class, and
     # import.c in the kit's place; EXITKEY is test-grin's
-    for app in clock calc exitkey; do
+    for app in clock calc notepad exitkey; do
         [ -f .grinapp/$app.c4o ] || continue
         kit=; [ -f .grinapp/wk-$app.c4o ] && kit=.grinapp/wk-$app.c4o
         ./c4rlink32 .grinapp/$app.c4o $kit .grinapp/import.c4o .libc-bare/libc-*.c4o -o $LJDOS/$app.c4r > /dev/null
@@ -702,7 +704,7 @@ if ls .grin/*.c4o > /dev/null 2>&1 && ls .libc-bare/*.c4o > /dev/null 2>&1 && [ 
         done
     fi
     sed 's/SIZE=[0-9]*/SIZE=16777216/' src/c4dos/fs/CONFIG.SYS > $LJDOS/config.sys
-    printf 'DEVICE=CONSOLE.SYS FLUSH\nDEVICE=DRIVES.SYS\nDEVICE=HEAP.SYS\n' >> $LJDOS/config.sys
+    printf 'DEVICE=CONSOLE.SYS FLUSH\nDEVICE=DRIVES.SYS HOME=B:\nDEVICE=HEAP.SYS\n' >> $LJDOS/config.sys
     list=$(echo $GAMES_ON_DISK | sed 's/ /, /g')
     {
         printf '@ECHO OFF\nECHO Welcome to C4DOS\nVER\n'

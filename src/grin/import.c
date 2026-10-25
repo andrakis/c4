@@ -27,6 +27,7 @@
 #include "winkit.h"
 #include "grin.h"
 #include "gkit.h"
+#include "dospath.h"
 
 extern int *__c4dos_api;              // bare.c's: C4DOS's table, written by its loader
 
@@ -75,7 +76,11 @@ char *wk_alloc(int n) {
     return p;
 }
 void wk_free(char *p) { if (p) free(p); }
-int wk_fopen(char *path, int wr) { return open(path, wr ? O_WRONLY | O_CREAT | O_TRUNC : O_RDONLY); }
+// the kit's paths are grin's ("/B:/NOTE.TXT", dospath.h), DOS's names underneath
+static char dospath[WK_PATH];
+int wk_fopen(char *path, int wr) {
+    return open(grin_dospath(path, dospath, WK_PATH), wr ? O_WRONLY | O_CREAT | O_TRUNC : O_RDONLY);
+}
 int wk_fread(int fd, char *buf, int n) { return read(fd, buf, n); }
 int wk_fwrite(int fd, char *buf, int n) { return write(fd, buf, n); }
 void wk_fclose(int fd) { close(fd); }

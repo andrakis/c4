@@ -17,6 +17,7 @@ char *notepad_name = "Notepad";
 char *notepad_about = "Notepad: edits plain text.";
 char *notepad_home = "/";                         // where Open starts
 char *notepad_untitled = "untitled.txt";          // where Save As offers to put a new one
+int notepad_filebox = 0;                          // Open and Save As: the kit's file box, not a typed path
 
 struct note {
     char path[WK_PATH];
@@ -266,7 +267,8 @@ static void note_key(int w, int down, int code, int ch, int mods) {
 
 static void save_as(int w, struct note *n) {
     ui_ncpy(n->ask, n->path[0] ? n->path : notepad_untitled, WK_PATH);
-    wk_inputbox(w, D_SAVEAS, "Save As", "Save as:", n->ask, WK_PATH);
+    if (notepad_filebox) wk_filebox(w, D_SAVEAS, 1, "*", n->ask, WK_PATH);
+    else wk_inputbox(w, D_SAVEAS, "Save As", "Save as:", n->ask, WK_PATH);
 }
 
 static void note_command(int w, int id) {
@@ -278,7 +280,8 @@ static void note_command(int w, int id) {
     if (item == N_NEW) { empty(n); n->path[0] = 0; retitle(w); }
     else if (item == N_OPEN) {
         ui_ncpy(n->ask, n->path[0] ? n->path : notepad_home, WK_PATH);
-        wk_inputbox(w, D_OPEN, "Open", "File to open:", n->ask, WK_PATH);
+        if (notepad_filebox) wk_filebox(w, D_OPEN, 0, "*", n->ask, WK_PATH);
+        else wk_inputbox(w, D_OPEN, "Open", "File to open:", n->ask, WK_PATH);
     } else if (item == N_SAVE) {
         if (!n->path[0]) save_as(w, n);
         else if (!save(n)) say(w, "Cannot save that file.");

@@ -146,12 +146,14 @@ int uopen(char *path, int flags) {
         // writing: where DOS puts it, or with no DOS onto drive 1
         if (dos()) {
             if ((h = dos1(DOS_CREATE, (int)path)) < 0) return 0 - 1;
-            return fd_new(F_DOSW, h);
+            if ((fd = fd_new(F_DOSW, h)) >= 0) fd_pos[fd] = 0;
+            return fd;
         }
         if (!drive1() || !(p1 = on1(path))) return 0 - 1;
         *(int *)BB_WNAME = (int)p1;
         if ((h = *(int *)BB_WNAME) < 0) return 0 - 1;
         if ((fd = fd_new(F_DRVW, h)) < 0) { *(int *)BB_WCLOSE = h; return 0 - 1; }
+        fd_pos[fd] = 0;
         return fd;
     }
     // through DOS (which looks in its RAM disk and on its home drive
@@ -191,8 +193,17 @@ int uread(int fd, char *buf, int len) {
     return n;
 }
 
+// A file being written goes one way, so lseek there only says where it
+// has got to (or goes nowhere): enough for ftell, which Doom pads its
+// saves by. Without it ftell said -1, every pad was a byte, and no save
+// loaded back.
 int ulseek(int fd, int off, int whence) {
     int at;
+    if (fd >= 3 && fd < FD_MAX && (fd_kind[fd] == F_DOSW || fd_kind[fd] == F_DRVW)) {
+        if ((whence == 1 || whence == 2) && off == 0) return fd_pos[fd];
+        if (whence == 0 && off == fd_pos[fd]) return off;
+        return 0 - 1;
+    }
     if (fd < 3 || fd >= FD_MAX || fd_kind[fd] != F_MEM) return 0 - 1;
     if (whence == 0) at = off;
     else if (whence == 1) at = fd_pos[fd] + off;
@@ -204,7 +215,7 @@ int ulseek(int fd, int off, int whence) {
 }
 
 int write(int fd, char *buf, int len) {
-    int i;
+    int i, n;
     int (*con)(char *, int);
     if (fd == 1 || fd == 2) {
         if ((con = (int (*)(char *, int))dos_con(DOS_CONWRITE))) return con(buf, len);
@@ -216,10 +227,11 @@ int write(int fd, char *buf, int len) {
         *(int *)BB_FD = fd_h[fd];
         *(int *)BB_WADDR = (int)buf;
         *(int *)BB_WLEN = len;
-        return *(int *)BB_WLEN;
-    }
-    if (fd < 3 || fd >= FD_MAX || fd_kind[fd] != F_DOSW) return 0 - 1;
-    return dos3(DOS_WRITE, fd_h[fd], (int)buf, len);
+        n = *(int *)BB_WLEN;
+    } else if (fd >= 3 && fd < FD_MAX && fd_kind[fd] == F_DOSW) n = dos3(DOS_WRITE, fd_h[fd], (int)buf, len);
+    else return 0 - 1;
+    if (n > 0) fd_pos[fd] = fd_pos[fd] + n;
+    return n;
 }
 
 // A file written is on its drive once it is closed, in one piece.
@@ -263,6 +275,7 @@ int ufstat(int fd, int *out, int n) {
     while (i < n) { out[i] = 0; ++i; }
     if (n > 0) out[0] = fd < 3 ? 3 : 2;  // the console, or a file
     if (n > 1 && fd >= 3 && fd_kind[fd] == F_MEM) out[1] = fd_len[fd];
+    if (n > 1 && fd >= 3 && fd_kind[fd] != F_MEM) out[1] = fd_pos[fd];
     return 0;
 }
 
@@ -281,10 +294,25 @@ int uunlink(char *path) {
     return *(int *)BB_UNLINK;
 }
 
+// rename: the file copied under its new name, then the old one deleted.
+// Neither DOS nor the machine has a rename of its own, and Doom saves a
+// game by writing temp.dsg and renaming it over doomsav0.dsg.
+int urename(char *path, char *newname) {
+    int fd, out, n, bad;
+    if ((fd = uopen(path, 0)) < 0) return 0 - 1;
+    if ((out = uopen(newname, 1)) < 0) { uclose(fd); return 0 - 1; }
+    n = fd_len[fd];
+    bad = n > 0 && write(out, fd_buf[fd], n) != n;
+    if (uclose(out) < 0) bad = 1;
+    uclose(fd);
+    if (bad) return 0 - 1;
+    uunlink(path);
+    return 0;
+}
+
 // what the machine has no way to do
 int ureaddir(char *path, int index, char *name) { return 0 - 1; }
 int umkdir(char *path) { return 0 - 1; }
-int urename(char *path, char *newname) { return 0 - 1; }
 int udup(int fd) { return 0 - 1; }
 int udup2(int oldfd, int newfd) { return 0 - 1; }
 int upipe(int *fds) { return 0 - 1; }

@@ -1402,7 +1402,7 @@ c4th.c4r: $(C4CC) $(C4TH_SRCS)
 # under c4m; and the same image runs inside C4KE, which is the one that
 # proves the indirect call through a local really is a JSRS the kernel can
 # host, rather than something only gcc's cast macro makes work.
-test-c4th: c4th c4th.c4r $(C4M) c4mp $(OISC4) c4sp $(C4KE_C4R)
+test-c4th: c4th c4th.c4r $(C4M) c4mp $(OISC4) c4sp $(C4KE_C4R) $(C4CC) $(C4RDUMP)
 	./c4th -selftest | cmp - src/c4th/tests/expected/b1.txt
 	$(C4M) load-c4r.c -- c4th.c4r -selftest | cmp - src/c4th/tests/expected/b1.txt
 	$(C4M) load-c4r.c -- $(C4KE_C4R) c4th.c4r -selftest | grep -q "selftest ok"
@@ -1443,9 +1443,11 @@ test-c4th: c4th c4th.c4r $(C4M) c4mp $(OISC4) c4sp $(C4KE_C4R)
 	# program is compiled by c4cc and hand-assembled in Forth, and the two
 	# instruction sequences must match. Addresses are masked -- they
 	# depend on where the segments landed, and the claim is about the
-	# encoding, not the layout.
+	# encoding, not the layout. c4rdump -c heads each instruction with
+	# its word offset ('     3:     LEA  2'); that is cut off too.
 	./c4cc -o .c4th_fact.c4r src/c4th/tests/fact.c > /dev/null
-	./c4rdump -c .c4th_fact.c4r 2>/dev/null | grep -E '^0x' | sed -E 's/^0x[0-9a-f]+: +//; s/[0-9]{7,}/*/; s/ +$$//' > .c4th_ccasm
+	./c4rdump -c .c4th_fact.c4r | grep -E '^ *[0-9]+: ' | sed -E 's/^ *[0-9]+: +//; s/[0-9]{7,}/*/; s/ +$$//' > .c4th_ccasm
+	test -s .c4th_ccasm
 	./c4th src/c4th/forth/core.f src/c4th/forth/asm.f src/c4th/tests/fact.f | sed -E 's/ +$$//' | cmp - .c4th_ccasm
 	# SEE: the same disassembler pointed at COMPILED Forth rather than at
 	# hand-written assembly. The listing is where the accumulator model

@@ -3,10 +3,11 @@
 Status: written 2026-10-24 against `smp` at 6295e18, and revised the
 same day with the user's answers (section 8). **G0 and G1 are built**
 (branches `grin-g0` and `grin-g1`, merged here on 2026-10-24), and
-**G2 is built** (branch `grin-g2`, 2026-10-24). Sections 3.2 and 3.3
+**G2 is built** (branch `grin-g2`, 2026-10-24), **G3** (branch `grin-g3`,
+2026-10-25) and **G4** (branch `grin-g4`, 2026-10-25). Sections 3.2 and 3.3
 say what G0 built where it differs from the first draft, 3.4 shows the
-window kit's API as G1 built it, and 3.9 and the G2 milestone say what
-G2 built. The rest is plan.
+window kit's API as G1 built it and G3's mechanism, 3.8 and 3.9 say what
+G2 and G4 built, and so do the milestones. The rest is plan.
 
 `grin` is to C4DOS what Windows 3.x was to MS-DOS: a program started
 from `AUTOEXEC.BAT` that takes over the screen and gives you windows, a
@@ -685,6 +686,40 @@ games.
 `PROGMAN.INI` (groups and items, each with its title, command line,
 icon and run mode) are ordinary files on the home drive.
 
+**As built in G4.** As above, with these particulars (docs/c4dos-design.md,
+"The home drive", has C4DOS's side whole):
+
+- **The machine** gains `DISK_UNLINK` (0x1cc), a file taken off a
+  writable drive, and the info bit `C4I_DRV` (0x40000), which says the
+  drive registers are fitted. A drive's `remove` hook carries a delete to
+  the host: worker.js posts it, page.js takes the file out of the store
+  (store.js's `deleteFile`), and the CLIs delete it from their directory.
+- **C4DOS** is API v5: slots 28 `home()` and 29 `drives()`; `create`
+  reaches drives; `unlink` and the new `DEL` take files off them; DOS
+  keeps each drive's `c4dos.dir`; `DIR B:` and `COPY x B:`. G0's caveat
+  is resolved: write handles are an indirection, so an unlink no longer
+  moves an open file onto its neighbour, and a program that ends with
+  files open has them closed.
+- **bare.c**, with no DOS, writes to drive 1 and reads it first, as
+  planned. Two things were missing for the games' saves to work at all,
+  under DOS as on the bare machine: a rename (Doom writes `temp.dsg` and
+  renames it; bare.c copies and deletes) and `ftell` on a file being
+  written (Doom pads its saves by it; it said -1, so no save of the bare
+  libc's had ever loaded back).
+- **The page**: `c4dos`, `doom`, `wolf3d` (shared by `wolf3d` and
+  `wolf3d6`, whose files are `.WL1` and `.WL6`), `tyrian` and `rott`
+  stores, beside C4IX's `c4ix`. `?persist=0`, `?persist=reset` and Reset
+  Files act on the current system's alone, and the button names it.
+- **Uploads** (the page's button, from smp) stay one medium, `uploads`,
+  for every system. They are the person's own files (Wolfenstein's
+  registered data, a WAD), read-only on drive 0, where every system
+  reads: the bare games look on drive 1 and then drive 0, C4DOS on A:.
+  They are not a system's saved state, so the one-store-per-system rule
+  is about what systems write; Reset Files leaves them alone, and one
+  upload serves `wolf3d6` bare and under C4DOS. worker.js adds them to
+  drive 0's `c4dos.dir`, so C4DOS lists them on A: and finds them in any
+  case. Forget deletes the one file.
+
 ### 3.9 The disk the page boots
 
 The user wants images of the page's own, with things like booting into
@@ -718,7 +753,14 @@ there (`make grin-objs`, which `c4bb-images` now builds):
 
 `?system=c4dos` boots it (`app.js`). The four bare-machine game systems
 still boot `src/c4bb/images/games`: they move with G4, which gives each
-its own store. The games disk's `CONFIG.SYS` is now made from
+its own store.
+
+**As built in G4.** The bare-machine game systems (`wolf3d`, `wolf3d6`,
+`doom`, `tyrian`, `rott`) boot from `libjs/images/dos` too, each with its
+store. The disk's `CONFIG.SYS` says `DRIVES.SYS HOME=B:`, and
+`notepad.c4r` is on it. `src/c4bb/images/games` stays: build-images.sh
+makes it and links the DOS disk's game files from it, and
+test-c4dos-heap boots it; nothing on the page does. The games disk's `CONFIG.SYS` is now made from
 `src/c4dos/fs/CONFIG.SYS` rather than copied from the shared disk, which
 in a fresh tree is not there yet at that point (G1's note).
 
@@ -983,7 +1025,7 @@ Deviations and findings:
   `Date`), so test-grin waits for the ticks in host time, a second or
   two.
 
-**G4: persistence and the shell applications**
+**G4: persistence and the shell applications** -- done, branch `grin-g4` (below)
 
 - `DRIVES.SYS HOME=`, with writes, `unlink` and `c4dos.dir` upkeep.
 - `bare.c` writes to drive 1 on the bare machine.
@@ -1003,6 +1045,77 @@ Deviations and findings:
 - **Browser:**
   - Save a note and reload the page: it is still there.
   - `?persist=reset` forgets it.
+
+*Done, branch `grin-g4` (2026-10-25), with smp 0f93fa2 merged.* What was
+built (3.8 and 3.9 have the persistence; docs/c4dos-design.md, "The home
+drive", C4DOS's):
+
+- **Program Manager** (`progman.c`) reads `PROGMAN.INI` from the home
+  drive, and writes it from the defaults when there is none: Main (File
+  Manager, DOS Prompt, Control Panel, Notepad), Accessories (Clock,
+  Calculator), Games (the four games). A line is
+  `title=command line,icon,mode`, the mode `app`, `full` or `window`.
+  One group is shown at a time, chosen from a list down its left. File >
+  New... and Properties... open one dialog (description, command line, an
+  icon stepped through with its button, the run mode as radio buttons);
+  Delete asks; each writes `PROGMAN.INI` at once. Built-in windows start
+  by command line, `FILEMAN` (or `WINFILE`), `CONTROL` and `PROGMAN`
+  (`grin_start`, which File > Run... uses too). DOS Prompt (`DOSPRMPT`)
+  is greyed and says it comes later; an item whose mode is `full` or
+  `window` says it is a DOS program and to run it at A> (G5, G6).
+- **File Manager** (`filemgr.c`): a drive bar of A:, every drive DOS
+  reports (slot 29) and RAM:, the home drive marked "(files are saved
+  here)"; a list from the drive's `c4dos.dir` or the RAM disk's slots; a
+  status line with the selected file's size, read through when it is
+  selected, or how many files; the list read again when the window comes
+  to the front, and by File > Refresh and F5. A double click opens a text
+  file (`.txt .c .h .bat .ini .cfg .md .doc .sys .dir .frm .lst .json .s`)
+  in Notepad and starts a `.c4r` as an application. File > Copy...
+  (`COPY` through exec, slot 19, offering the home drive, or RAM: from
+  there) and Delete... (unlink, slot 18, after asking).
+- **Notepad** (`apps/notepad.c`, `notepad.c4r`): the kit's `notepad.c`
+  with `notepad_filebox` set, so Open and Save As are the kit's file box;
+  a new document is offered `UNTITLED.TXT` on the home drive. The C4IX
+  desktop leaves the switch off and keeps its typed paths
+  (test-desktop.mjs unchanged).
+- **The file box's folders are DOS's drives.** `disk.c` gives the kit
+  `wk_readdir` (the root lists A:, B:, ... and RAM:; a drive lists its
+  files) and the file functions; `dospath.h` maps the kit's
+  `/B:/NOTE.TXT` to DOS's `B:NOTE.TXT` and back, for grin and for every
+  application's `import.c`.
+- New pictures: File Manager's cabinet, a DOS screen, a notepad, a
+  joystick for the games, a window for any other application.
+- **Tests:** test-grin.mjs gains 43 checks (113 in all), with a drive B:
+  kept as the page keeps a store: the G4 list above, NOTE.TXT saved
+  through the file box onto B: and into its `c4dos.dir`, File Manager's
+  size and Copy, 800x600 in GRIN.INI on B:, then a second boot with what
+  B: kept: grin at 800x600, NOTE.TXT opening in Notepad, and Delete
+  taking it off B: and out of the store. test-persist.mjs (`make
+  test-persist`, in test-libjs.sh): Doom saves a game on the bare machine
+  and loads it back on the next boot (`-loadgame 0`); Doom under C4DOS
+  saves to B: and loads it back; the bare game's store is untouched.
+  test-c4dos gains a c4bb leg with `HOME=B:` and a writable B:.
+  web-grin-g4.mjs is the browser check (a note saved, the page loaded
+  again, `?persist=reset`).
+
+Deviations and findings:
+
+- **API v5** rather than more of v4: slots 28 and 29, for File Manager
+  and Notepad to find the drives and the home drive.
+- **A machine register and an info bit** the plan did not name:
+  `DISK_UNLINK` (deletes on drives had no way to reach the medium) and
+  `C4I_DRV` (bare.c's "INFO bits, checked once" needed a bit to check).
+- **`DEL`/`ERASE`** at A>, beside `unlink`.
+- **bare.c's rename and `ftell`**: needed for any game save to work; the
+  games are unchanged.
+- **Uploads** are one store for every system (3.8, "As built in G4").
+- **Program Manager's groups are a list beside one group**, as planned
+  for G4; File > New makes items only (no new groups yet).
+- Doom keeps its saves as `doomsav0.dsg` (it writes `.savegame/temp.dsg`
+  and renames it to a name without the folder, and finds it again by the
+  drive's basename fallback), and this port writes no config when it
+  quits.
+- `src/c4bb/images/games` is not removed (3.9).
 
 **G5: DOS programs, redirection, DOS Prompt**
 

@@ -116,7 +116,7 @@ try {
   const taskList = async () => { await tab.key('Escape', { ctrl: true }); return shownHas('Switch To'); };
   const inTasks = async title => {
     const tl = (await find('Switch To'))[0];
-    return (await find(title)).filter(t => tl && t.y < tl.y && t.y > tl.y - 180 && t.x > tl.x - 40 && t.x < tl.x + 280).pop();
+    return (await find(title)).filter(t => tl && t.y < tl.y && t.y > tl.y - 180 && t.x > tl.x - 40 && t.x < tl.x).pop();
   };
   const task = async (title, button) => {
     await taskList();
@@ -126,7 +126,13 @@ try {
     await sleep(300);
   };
   // Program Manager to the front (its title), then an item
-  const item = async s => { await clickText('Program Manager'); return clickText(s, true); };
+  // (G4: one group at a time, chosen from the list down its left)
+  const item = async s => {
+    await clickText('Program Manager');
+    const g = (await find(s === 'Control Panel' ? 'Main' : 'Accessories')).sort((a, c) => a.x - c.x)[0];
+    if (g) { await clickAt(g.x + 5, g.y + 5); await sleep(300); }
+    return clickText(s, true);
+  };
   // Program Manager to an icon, by its control menu (the box is 13 px left of
   // its File menu and 18 up), and the rest tiled
   const sideBySide = async () => {

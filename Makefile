@@ -1128,6 +1128,32 @@ test-c4sc-back: c4sc-host c4sp $(C4RLINK) $(C4M)
 	@rm -f .c4sc_i.c4r .c4sc_c.c4r .c4sc_i.c4o .c4sc_*.c4o .c4sc_ix.c4r
 	@echo "test-c4sc-back: OK -- the kernel it built is the committed one, and it boots"
 
+# Long operator chains. A + a + ... + a typed its left operand twice per
+# level in g:bintype, so N terms took 2^N steps (22 took 4 s; 200 never
+# finished), and a + (a + (...)) 3^N; codegen then retyped the left spine
+# at every level. 2000 terms, 1000 products and 200 right-nested levels,
+# plain and -O: c4sc-host and the interpreted c4lc each finish in seconds,
+# byte-identical, and the program prints the sums.
+test-c4sc-chain: c4sc-host c4sp $(C4M)
+	@awk 'BEGIN { \
+	   printf "int a; int b;\nint main() {\n\ta = 1; b = 2;\n\tprintf(\"%%d %%d %%d\\n\",\n\t\t"; \
+	   for (i = 1; i < 2000; i++) printf "a + "; printf "a,\n\t\t"; \
+	   for (i = 1; i < 1000; i++) printf "a * b + "; printf "a * b,\n\t\t"; \
+	   for (i = 1; i < 200; i++) printf "a + ("; printf "a"; \
+	   for (i = 1; i < 200; i++) printf ")"; printf ");\n\treturn 0;\n}\n" }' > .c4sc_chain.c
+	@for fl in "" "-O"; do \
+	   timeout 30 ./c4sc-host -c 16000000 compile $$fl .c4sc_chain.c .c4sc_c.c4r >/dev/null \
+	     || { echo "test-c4sc-chain: c4sc-host $$fl did not finish"; exit 1; }; \
+	   timeout 60 ./c4sp -R -c 16000000 $(SRCS)/c4sp/lisp/c4lc.lisp $$fl .c4sc_chain.c .c4sc_i.c4r >/dev/null \
+	     || { echo "test-c4sc-chain: c4lc $$fl did not finish"; exit 1; }; \
+	   cmp -s .c4sc_i.c4r .c4sc_c.c4r \
+	     || { echo "test-c4sc-chain: $$fl DIFFERS from the interpreted c4lc"; exit 1; }; \
+	   $(C4M) load-c4r.c -- .c4sc_c.c4r | grep -qx "2000 2000 200" \
+	     || { echo "test-c4sc-chain: $$fl prints the wrong sums"; exit 1; }; \
+	 done
+	@rm -f .c4sc_chain.c .c4sc_c.c4r .c4sc_i.c4r
+	@echo "test-c4sc-chain: OK -- 2000-term chains compile in linear time, plain and -O"
+
 # M6: the compiler as an IMAGE. The seven generated units and the driver
 # are compiled to objects and linked by c4rlink, so c4lc -- lexer,
 # preprocessor, parser, tree passes, code generator, peephole passes and
@@ -3511,7 +3537,7 @@ c4rs: pre
 PHONY  = pre all clean-c4rs clean
 PHONY += test-libjs test-c4ix-smp serve-libjs test-libjs-web test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
 PHONY += run-c4dos-build32 test-c4dos-build32 run-c4dos-c4ix32 test-c4dos-c4ix32 test-c4cc-for test-respfile test-b4ke test-c4bb-storage test-c4bb-baseops test-c4bb-rungs test-c4bb-install test-c4bb-climb test-c4bb-web test-c4bb-firmware
-PHONY += test-c4sc test-c4sc-run test-c4sc-lex test-c4sc-front test-c4sc-back
+PHONY += test-c4sc test-c4sc-run test-c4sc-lex test-c4sc-front test-c4sc-back test-c4sc-chain
 PHONY += test-c4sc-image test-c4sc-self test-c4sc-board
 PHONY += test-c4dos-ladder32 serve-c4bb
 PHONY += run run-vg test test-massive

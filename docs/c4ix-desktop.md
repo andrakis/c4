@@ -507,7 +507,7 @@ it lacked was somewhere to edit and build in one place.
       freed at the top of the next pass of the main loop, since whoever
       closed it may still hold it.
 - [x] **`cc`** (`user/cc.c`): c4sc with c4lc's preprocessor, `/usr/include`
-      and a 1 MB stack, linking with c4rlink when given `-l` or several
+      on a task's default stack, linking with c4rlink when given `-l` or several
       sources. src/c4tui/demo.c takes 18 machine-seconds this way and 344
       with `c4sp c4lc.lisp`, for the same image.
 - [x] **Builds start built**: the root archive carries `/build`

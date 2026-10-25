@@ -92,7 +92,10 @@ None of these is part of `make test`.
   opcodes that c4m does not have, so `c4sc32.c4r` is kept for c4m and for the
   byte check.
 - **C4IX**: the same image is `/bin/c4sc`, which the BUILD.B4K files under
-  `/usr` run and `cc` (`src/c4ix/user/cc.c`) drives, on 1 MB of stack.
+  `/usr` run and `cc` (`src/c4ix/user/cc.c`) drives, on a task's default
+  256 KB stack. It needs 11 KB of it at most for the tree's sources
+  (c4m.c, 2026-10-25); the 1 MB and 4 MB it was given before were for
+  g:resolvecode recursing once per instruction (fixed in 29cbac9).
 
 ## Limits and known issues
 

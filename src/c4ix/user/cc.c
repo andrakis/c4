@@ -24,10 +24,13 @@
 //   -l /lib/libc.c4s a shared library, loaded when the program starts
 //                    (its callers are built -fno-builtin)
 //
-// -v prints each command before running it. c4sc recurses deeply on a
-// long source, so it runs on 4 MB of stack, as the desktop's BUILD.B4K
-// runs it: 1 MB was enough for c4m.c but not for C4KE's kernel,
-// src/c4ke/c4ke.c. -stack gives more.
+// -v prints each command before running it. The tools run on a task's
+// default stack, 256 KB, and -stack gives more. c4sc needs a few KB of
+// it: C4KE's kernel, src/c4ke/c4ke.c, peaks at 3.4 KB (2026-10-25). It
+// spends about 108 bytes a struct member and 124 an else-if arm or a
+// level of nesting, so only a generated source should need -stack. The
+// 4 MB cc gave before was for a c4lc bug, g:resolvecode recursing once
+// per instruction (fixed in 29cbac9).
 //
 // When the kernel stops a tool -- a stack overrun, a bad opcode -- it
 // says why on the console, and a Terminal is not the console: cc
@@ -35,7 +38,7 @@
 // the source did not compile.
 #include "c4ix_user.h"
 
-enum { MAXA = 64, CC_STACK = 4194304 };
+enum { MAXA = 64 };
 
 static char *KLOG = "/log/kernel";
 
@@ -46,7 +49,7 @@ static int   nsrc;
 static char *libs[MAXA];
 static int   nlib;
 static int   verbose;
-static int   stack;               // bytes, for each tool cc runs
+static int   stack;               // bytes, for each tool cc runs; 0 the default
 
 static char *cat3(char *a, char *b, char *c) {
     char *p, *q;
@@ -137,7 +140,7 @@ static int run(char *prog, int argc, char **argv) {
     code = uwait(pid);
     // a tool the kernel stopped: say what it said
     if (code < 0 && why(pid, from) == 2)
-        ufprintf(STDERR, "cc: %s ran on %d bytes of stack; -stack gives it more\n", prog, stack);
+        ufprintf(STDERR, "cc: %s ran out of stack; -stack BYTES gives it more\n", prog);
     return code;
 }
 
@@ -206,7 +209,6 @@ int main(int argc, char **argv) {
 
     link = !objonly && (nsrc > 1 || nlib > 0);
     if (!out && !objonly) out = named(srcs[0], ".c4r");
-    if (!stack) stack = CC_STACK;
     if (ustack(stack) < 0) { ufprintf(STDERR, "cc: -stack %d is more than a task may have\n", stack); return 2; }
 
     if (!link) {

@@ -6,8 +6,10 @@ B4KE2
 # disk run all ten fused opcodes.
 SET ROOT /usr
 SET OUT /build
-# c4sc recurses deeply on a long function: 1 MB of stack (SYS_STACK)
-SET STACK 1048576
+# c4sc runs on a task's default stack, 256 KB. libc4ix.c peaks at
+# 2.6 KB of it and archive.c at 2.7 KB
+# (measured 2026-10-25). The 1 MB this set was for a c4lc bug,
+# g:resolvecode recursing once per instruction (fixed in 29cbac9).
 SET LC c4sc -c 400000 compile -O
 CD $(ROOT)
 MKDIR $(OUT)/lib

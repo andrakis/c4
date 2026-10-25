@@ -5,8 +5,10 @@ B4KE2
 # Every module includes c4ix.h, so a change there rebuilds them all.
 SET ROOT /usr
 SET OUT /build
-# c4sc recurses deeply on a long function: 1 MB of stack (SYS_STACK)
-SET STACK 1048576
+# c4sc runs on a task's default stack, 256 KB. Every module here peaks
+# at 7.4 KB, most of it c4ix.h's struct task, at 108 bytes a member
+# (measured 2026-10-25). The 1 MB this set was for a c4lc bug,
+# g:resolvecode recursing once per instruction (fixed in 29cbac9).
 SET LC c4sc -c 400000 compile -O -c -I src/c4ix
 SET H src/c4ix/c4ix.h
 CD $(ROOT)

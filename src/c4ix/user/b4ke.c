@@ -585,8 +585,8 @@ static int b4_run(char **w, int n) {
         saved = udup(STDOUT);
         udup2(fd, STDOUT);
     }
-    // $(STACK), when set, is the stack in bytes for what this runs:
-    // c4sc compiling a large module needs more than a task's default
+    // $(STACK), when set, is the stack in bytes for what this runs, for
+    // a program that needs more than a task's default (none here does)
     i = b4_find("STACK", 5);
     ustack(i >= 0 ? b4_atoi(b4_vval[i]) : 0);
     // w[1] is the program; it is argv[0] of the child

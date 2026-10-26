@@ -45,9 +45,11 @@ From a C4KE shell (`make run`), or as the kernel's init:
            -a x          Pass argument to benchmark
 
 `innerbench` starts several copies of a benchmark, each by default inside
-its own nested kernel: `c4m load-c4r.c src/c4ke/c4ke.c -- -v 0 bench`,
+its own nested kernel: `c4m load-c4r.c src/c4ke/c4ke.c -- -v 0 bench.c4r`,
 that is, c4m compiling C4KE from source and running `bench` under it. It
-also starts `top -b` unless given `-T`. From its help text:
+names the image, not `bench`: on a C4IX disk `/bench` is C4IX's own bench,
+which a C4KE cannot run. It also starts `top -b` unless given `-T`. From its
+help text:
 
     innerbench [-n x] [-aTBDqcmlvVt] [-b args]
           -n x    Start x (number) inner benchmarks

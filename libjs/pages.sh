@@ -18,9 +18,10 @@
 #
 # The site repository is built by Jekyll (its _config.yml), which keeps
 # a file without front matter as it is, but:
-# - leaves out any name starting with _ or ., unless _config.yml's
-#   include names it (it has _*.h, for Rise of the Triad's headers): a
-#   name of the site's it would leave out stops this here;
+# - leaves out any name starting with . (the site has none: .gitignore
+#   and the like are left out here) or _, unless _config.yml's include
+#   names it (it has _*.h, for Rise of the Triad's headers): a name of
+#   the site's it would leave out stops this here;
 # - makes every .md a page (jekyll-optional-front-matter), Liquid and
 #   all, so the site has none: the page reads none of them.
 set -e
@@ -56,7 +57,8 @@ make -s -j"${PAGES_JOBS:-2}" c4bb-images
 # the site, in the site's repository
 sh libjs/site.sh "$repo/c4"
 find "$repo/c4" -name '*.md' -delete
-hidden=$(cd "$repo/c4" && find . -name '[_.]*' ! -name '_*.h' ! -name . | head -5)
+find "$repo/c4" -mindepth 1 -name '.*' -prune -exec rm -rf {} +
+hidden=$(cd "$repo/c4" && find . -name '_*' ! -name '_*.h' | head -5 | tr '\n' ' ')
 [ -z "$hidden" ] || die "Jekyll would leave these out of the site (_config.yml's include): $hidden"
 grep -q '_\*\.h' "$repo/_config.yml" || die "$repo/_config.yml does not include _*.h (Rise of the Triad's headers)"
 cd "$repo"

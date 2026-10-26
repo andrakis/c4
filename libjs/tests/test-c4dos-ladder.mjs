@@ -224,11 +224,28 @@ if (!quick) {
   begin();
   check(doom('doom', IX), 'Doom under C4IX, played and quit', text().slice(-1500));
   cost('Doom under C4IX');
+  // its filesystem is the page's C4IX's (the shared disk's c4ix.vfs.txt):
+  // the libraries the desktop and its programs are linked against, and
+  // the desktop itself, which loads /lib/libgui.c4s
+  o = cmd('ls /lib', IX, 60);
+  check(['libc4ix.c4s', 'libc.c4s', 'libarc.c4s', 'libgui.c4s'].every(l => o.includes(l)),
+    "C4IX's /lib has the shared libraries (libc4ix, libc, libarc, libgui)", o);
+  begin();
+  const f0 = presents, at0 = text().length;
+  vm.dev.pushInput('desktop\n');
+  const drew = until(() => presents >= f0 + 20, 120);
+  check(drew && !/missing|cannot|not found|unable/i.test(text().slice(at0)), "the desktop starts under the ladder's C4IX",
+    text().slice(at0).slice(-800));
+  vm.pendingSignal = 2;                     // Ctrl+C, as the page's button sends it
+  check(until(() => idle(IX), 60), 'Ctrl+C ends it, and C4IX is at its prompt again', text().slice(-500));
+  cost('the desktop under C4IX');
+  if (process.env.LADDER_DEBUG) console.log('--- desktop and Ctrl+C:\n' + text().slice(at0));
   begin();
   o = cmd('exit', A, 300);
   check(o.includes('c4ix: shutdown complete') && o.includes('c4ke: c4ix.c4r returned 0'),
     'C4IX shuts down, C4KE returns, and so does dosload, to A>', o);
   cost('exit (C4IX, then C4KE)');
+  if (process.env.LADDER_DEBUG) console.log('--- exit:\n' + o);
 } else {
   begin();
   o = cmd('exit', A, 120);

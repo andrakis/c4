@@ -974,6 +974,14 @@ if [ -n "$CLIMBSRC" ] && [ -f $LJDOS/c4dos32.c4r ]; then
     lad_put $CLIMBSRC
     lad_put $LJDOS
     rm -f $LJLAD/c4ix.c4r $LJLAD/boot.cfg
+    # The ladder's own files. Each name is unlinked first: what is there is
+    # a hard link into one of the disks above, and a cp onto it writes
+    # THROUGH the link, into that disk. That is how the climb floppy's
+    # small C4IX tree (no /lib/libgui.c4s, no desktop, no games) took the
+    # place of the shared disk's here, or the other way round, depending
+    # on which was made last. C4IX's tree is the shared disk's, so the
+    # C4IX the ladder builds comes up as ?system=c4ix does.
+    rm -f $LJLAD/c4ix.vfs.txt $LJLAD/build.bat $LJLAD/ladder.txt
     cp $DISK/c4ix.vfs.txt $LJLAD/c4ix.vfs.txt
     cp src/c4dos/fs/BUILD.BAT $LJLAD/build.bat
     cp src/c4dos/fs/LADDER.TXT $LJLAD/ladder.txt

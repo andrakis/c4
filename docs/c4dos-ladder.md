@@ -184,7 +184,7 @@ C4IX needs nothing for this: it boots as it does from dosload
 
 | target | what |
 |---|---|
-| `make test-libjs-ladder` | `test-c4dos-ladder.mjs`, the whole climb above with 24 checks, about 90 s; also in `make test-libjs` (which skips it without the disk). Under C4KE it also runs grin, opens a C4KE Prompt, starts `spin x &` in it, checks with `ps` that the spinning task ran on while grin waited (more than 1,000 of 2,000 ms), and kills it |
+| `make test-libjs-ladder` | `test-c4dos-ladder.mjs`, the whole climb above with 27 checks, about 90 s; also in `make test-libjs` (which skips it without the disk). Under C4KE it also runs grin, opens a C4KE Prompt, starts `spin x &` in it, checks with `ps` that the spinning task ran on while grin waited (more than 1,000 of 2,000 ms), and kills it. Under C4IX it checks `/lib` has the shared libraries and starts the desktop (which loads `/lib/libgui.c4s`) |
 | `node libjs/tests/test-c4dos-ladder.mjs --quick` | the same to C4KE and back, without b4ke |
 | `node libjs/tests/web-c4dos-ladder.mjs` | the page in the user's Chrome over CDP: the same climb typed into the terminal, with screenshots |
 

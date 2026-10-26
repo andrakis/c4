@@ -45,7 +45,7 @@ enum {
     VEC_MALC = 0x20, VEC_FREE = 0x24, VEC_RALC = 0x28,
     VEC_PRTF = 0x2c, VEC_STRC = 0x30,
     DEV_HEAP_BASE = 0x144, DEV_HEAP_END = 0x148,
-    DEV_INTERVAL = 0x154,
+    DEV_INTERVAL = 0x154, DEV_PIT = 0x1a0,
     // Drives, for the BIOS at the bottom of this file.
     DEV_DRIVE = 0x13c, DEV_DCOUNT = 0x188, DEV_DRO = 0x18c,
     DEV_EJECT = 0x190, DEV_RESCAN = 0x194, DEV_TIME_MS = 0x10c,
@@ -93,6 +93,15 @@ void __fw_heap_init () {
 // Save/restore (not set/clear) so nested calls - PRTF allocating
 // __fw_tmp while already inside another malloc, say - stay correct:
 // the inner call's restore leaves the outer call's mask in place.
+//
+// The board's PIT raises the same trap, and C4KE schedules on it when
+// it is there, so it is masked the same way. Masking keeps its
+// deadline (include/c4bb.h): the tick lands as the call returns. With
+// only the cycle interrupt masked, a C4KE on the PIT could switch
+// tasks mid-free and lose the free list's big block: malloc then
+// failed with megabytes in the heap, and where the ticks fell -- the
+// slow-clock mailbox test, a kernel a few instructions longer --
+// decided whether it happened.
 // A failed allocation used to be silent: fw_malc returned 0, the caller
 // said "out of memory", and nothing said whether the heap was full or
 // merely broken. It is worth one line on the way out, because those two
@@ -112,9 +121,10 @@ void __fw_oom (int size) {
 }
 
 int fw_malc (int size) {
-    int *blk, *prev, *rest, need, saved, result;
+    int *blk, *prev, *rest, need, saved, pit, result;
     saved = *(int *)DEV_INTERVAL;
     *(int *)DEV_INTERVAL = 0;
+    if ((pit = *(int *)DEV_PIT)) *(int *)DEV_PIT = 0;
     if (!__fw_heap_ready) __fw_heap_init();
     if (size <= 0) size = 1;
     need = (size + 4 + 7) / 8 * 8;       // header word + 8-byte rounding
@@ -137,16 +147,18 @@ int fw_malc (int size) {
             prev = blk; blk = (int *)blk[1];
         }
     }
+    if (pit) *(int *)DEV_PIT = pit;
     *(int *)DEV_INTERVAL = saved;
     if (!result) __fw_oom(size);
     return result;
 }
 
 void fw_free (int ptr) {
-    int *blk, *cur, *prev, saved;
+    int *blk, *cur, *prev, saved, pit;
     if (!ptr) return;
     saved = *(int *)DEV_INTERVAL;
     *(int *)DEV_INTERVAL = 0;
+    if ((pit = *(int *)DEV_PIT)) *(int *)DEV_PIT = 0;
     blk = (int *)ptr - 1;
     // insert address-ordered, coalesce with neighbours
     prev = 0; cur = __fw_free;
@@ -163,6 +175,7 @@ void fw_free (int ptr) {
         prev[0] = prev[0] + blk[0];
         prev[1] = blk[1];
     }
+    if (pit) *(int *)DEV_PIT = pit;
     *(int *)DEV_INTERVAL = saved;
 }
 

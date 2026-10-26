@@ -1,5 +1,5 @@
 // test-grin.mjs - grin, C4DOS's graphical shell, headless
-// (docs/grin-plan.md, G2, G3 and G4).
+// (docs/grin-plan.md, G2 to G5).
 //
 // Boots C4DOS on the page's own disk (libjs/images/dos, build-images.sh)
 // with a display fitted, as ?system=c4dos does. Its AUTOEXEC.BAT ends
@@ -20,6 +20,14 @@
 // the files B: kept: grin at the resolution Control Panel chose, NOTE.TXT
 // still there and opening in Notepad, and File Manager's Delete taking
 // it off B: and out of the store.
+// Then G5's: at A>, redirection (REDIR.SYS TAP on this disk): DIR into a
+// file, a c4cc program's printf through the console tap, a bare.c
+// program's line from < IN.TXT, and pipes; in grin, File > Run of a DOS
+// program, two DOS Prompt windows each with its own output, a bare.c
+// program reading a line in one while a Clock ticks and the other says
+// busy, a c4cc program and a pipe in one, EXIT, File Manager running a
+// .bat in a DOS Prompt, and Doom full screen from Program Manager, twice,
+// quit with keys, grin drawn again and the heap where it was.
 //
 //   node libjs/tests/test-grin.mjs
 
@@ -86,6 +94,7 @@ const text = () => Buffer.from(out).toString('latin1');
 // frame that does not begin with CLEAR paints over part of the one
 // before, as the display does (test-desktop.mjs has the same reader).
 let frame = [], cur = [], presents = 0, rects = [], curRects = [];
+const timesSeen = new Set();
 let gen = 0, clip = null, partial = false;
 const imgSize = new Map();
 const resized = [];
@@ -119,6 +128,7 @@ const pump = () => {
       for (let k = 0; k < n; k++) s += String.fromCharCode((words[i + 9 + (k >> 2)] >>> ((k & 3) * 8)) & 0xff);
       if (!partial || !clip || within(clip, words[i + 2], words[i + 3]))
         cur.push({ x: words[i + 2], y: words[i + 3], s, rgb: words[i + 4], gen });
+      if (/^\d\d:\d\d:\d\d$/.test(s.trimEnd())) timesSeen.add(s.trimEnd());
     }
     if (t === CMD.PRESENT) { frame = cur.slice(); rects = curRects.slice(); presents++; gen++; partial = true; }
     // a new size asked for (gui_size): the page's display takes it and
@@ -290,6 +300,31 @@ const iniText = typed('TYPE GRIN.INI');
 check(/width=640/.test(iniText) && /height=480/.test(iniText) && /scheme=1/.test(iniText) && /pattern=2/.test(iniText), 'GRIN.INI keeps the choices', iniText);
 check(store.has('GRIN.INI') && /scheme=1/.test(Buffer.from(store.get('GRIN.INI')).toString('latin1')), 'GRIN.INI is on B:, the home drive, which the page keeps');
 
+// ---- G5: redirection at A> -----------------------------------------------------------
+// The disk's CONFIG.SYS has DEVICE=REDIR.SYS TAP: > >> < and | for DOS's
+// builtins, for bare.c programs through DOS's console slots, and for
+// c4cc programs through the machine's console tap.
+check(text().includes('redirection installed (> >> < |), with the console tap'), "the disk's CONFIG.SYS has REDIR.SYS TAP", text().slice(0, 800));
+check(text().includes('Starting grin') && !store.has('.'), "the AUTOEXEC's ECHO lines have no > for REDIR.SYS to take (no file '.' on B:)", [...store.keys()].join(' '));
+let o = typed('DIR > LIST.TXT');
+check(!/askline\.c4r/i.test(o), 'DIR > LIST.TXT prints nothing at A>', o);
+o = typed('TYPE LIST.TXT');
+check(/askline\.c4r/i.test(o) && /grin\.c4r/i.test(o), '... and TYPE LIST.TXT shows the listing', o);
+check(store.has('LIST.TXT') && /grin\.c4r/i.test(Buffer.from(store.get('LIST.TXT')).toString('latin1')), '... which is on B:, the home drive');
+o = typed('HELLO > OUT.TXT');
+check(!/yello/.test(o), "HELLO > OUT.TXT: a c4cc program's printf goes into the file, through the console tap", o);
+check(/yello/.test(typed('TYPE OUT.TXT')), '... TYPE OUT.TXT: yello');
+typed('ECHO Ada > IN.TXT');
+o = typed('ASKLINE < IN.TXT');
+check(/askline: hello, Ada \(3 letters\)/.test(o), 'ASKLINE < IN.TXT: a bare.c program reads its line from the file', o);
+o = typed('DIR | DOSFILT');
+check(/^> ASKLINE\.C4R$/mi.test(o) && /dosfilt: \d+ lines/.test(o), 'DIR | DOSFILT: a pipe, through a RAM-disk file', o);
+o = typed('TYPE IN.TXT | DOSFILT -r');
+check(/^ADA$/m.test(o), "TYPE IN.TXT | DOSFILT -r: a c4cc program's READ fed from the pipe (the tap)", o);
+check(!/PIPE\d+\.\$\$\$/.test(typed('DIR')), '... and no pipe file is left on the RAM disk');
+for (const n of ['LIST.TXT', 'OUT.TXT', 'IN.TXT']) typed('DEL ' + n);
+check(!store.has('LIST.TXT') && !store.has('IN.TXT'), 'DEL takes them off B: again');
+
 // ---- GRIN again --------------------------------------------------------------------------
 const f0 = presents;
 vm.dev.pushInput('GRIN\n');
@@ -409,7 +444,9 @@ check(until(() => has('144')), 'typing 12*12= into it shows 144', JSON.stringify
 endTask('Calculator');
 check(until(() => !has('Hex')), 'End Task closes it');
 
-// File > Run...: a program that is not an application is refused
+// File > Run...: a program that is not an application is a DOS program,
+// and runs full screen (G5): HELLO prints at the console and returns, and
+// grin takes the display back
 const runCmd = cmd => {
   clickText('File'); until(() => has('Run...'));
   clickText('Run...');
@@ -419,9 +456,10 @@ const runCmd = cmd => {
   return true;
 };
 const heap1 = vm.heap.used;
-runCmd('DOOM');
-check(until(() => find(/DOOM is not a grin application/).length > 0, 3000), 'File > Run... DOOM: "DOOM is not a grin application"');
-clickText('OK'); settle();
+let a0 = text().length;
+runCmd('HELLO');
+check(until(() => text().slice(a0).includes('yello') && gui.stats().attached && has('Program Manager'), 3000),
+  'File > Run... HELLO: not an application, so a DOS program, full screen; grin comes back after it', text().slice(a0));
 check(running() === 0, '... and it is not kept loaded');
 // an application that calls exit() from its key callback
 runCmd('EXITKEY');
@@ -495,14 +533,7 @@ check(['File Manager', 'DOS Prompt', 'Control Panel', 'Notepad'].every(s => inPm
 showGroup('Games');
 check(['Wolfenstein 3D', 'Doom', 'Tyrian', 'Rise of the Triad'].every(s => inPm(find(s))), 'Games: the four games');
 
-// each item launches what it should
-startItem('DOS Prompt');
-check(until(() => find(/DOS Prompt windows come with a later version/).length > 0), 'DOS Prompt is a placeholder until G5, and says so');
-okBox();
-startItem('Doom');
-check(until(() => find(/Doom is a DOS program/).length > 0) && find(/DOOM/).length > 0,
-  'Games > Doom: a DOS program, which grin cannot run yet: it says how, at A>', JSON.stringify(frame.map(t => t.s)));
-okBox();
+// each item launches what it should (DOS Prompt and Doom: G5's, below)
 startItem('Control Panel');
 check(until(() => has('Settings') && has('Display')), 'Main > Control Panel opens Control Panel');
 startItem('File Manager');
@@ -587,6 +618,111 @@ check(menu('File Manager', 'File', 'Delete...') && until(() => has('Delete B:NOT
 clickText('Yes');
 check(until(() => !has('NOTE.TXT')), '... Yes: NOTE.TXT is gone from the list');
 check(!store.has('NOTE.TXT') && !/NOTE\.TXT/.test(storeText('c4dos.dir') || ''), "... from B:, its c4dos.dir, and the page's store");
+
+// ---- G5: DOS programs from grin --------------------------------------------------------
+// A window's texts: drawn inside it (another window drawn under it in the
+// same frame can put texts there too, so a check that something is NOT in
+// a window is made with no other window over the place)
+const inWin = (w, re) => !!w && frame.some(t => within(w, t.x, t.y) && re.test(t.s.trimEnd()));
+// (by its title, as winByTitle, but the whole window: the other DOS
+// Prompt's frame has lines at the same height)
+const dosWin = n => {
+  const t = find('DOS Prompt ' + n).pop();
+  if (!t) return null;
+  const r = rects.filter(r => r.y === t.y - 7 && r.x < t.x && r.x + r.w > t.x && r.h > 200).sort((a, b) => b.h - a.h)[0];
+  return r ? { x: r.x, y: r.y, w: r.w, h: r.h } : null;
+};
+const typeLine = s => { typeText(s); key(13); };
+// (typeText knows letters, digits, spaces and '.'; these need the rest)
+const typeRaw = s => { for (const c of s) key(c.charCodeAt(0), c.charCodeAt(0)); key(13); };
+
+startItem('Clock');
+digital();
+check(until(() => figures().length === 1), 'a Clock, in figures, for the DOS Prompt to run beside');
+startItem('DOS Prompt');
+check(until(() => !!dosWin(1) && has(/^EXIT closes it\./)), 'Main > DOS Prompt opens DOS Prompt 1: C4DOS in a window', JSON.stringify(frame.map(t => t.s)));
+check(until(() => inWin(dosWin(1), /^A>$/)), '... at A>');
+typeLine('ECHO in the first window');
+check(until(() => inWin(dosWin(1), /^in the first window$/)), 'ECHO in it answers in it');
+startItem('DOS Prompt');
+check(until(() => !!dosWin(2)), 'a second DOS Prompt: DOS Prompt 2');
+typeLine('DIR');
+check(until(() => inWin(dosWin(2), /^wolf3d\.c4r$/i)), 'DIR in DOS Prompt 2 lists A: there');
+
+// a bare.c program reading a line in its window: its read pumps grin's
+// loop, so the Clock ticks while it waits, and the other DOS Prompt is busy
+typeLine('ASKLINE');
+check(until(() => inWin(dosWin(2), /^askline: what is your name\?$/)), 'ASKLINE in DOS Prompt 2 asks, in that window');
+const seen0 = timesSeen.size, t0 = Date.now();
+while (timesSeen.size < seen0 + 2 && Date.now() - t0 < 6000 && !halted) run();
+check(timesSeen.size >= seen0 + 2, `... and the Clock keeps ticking while it waits (${timesSeen.size - seen0} new times drawn)`);
+startItem('Doom');
+check(until(() => find(/A DOS program is running \(ASKLINE\)/).length > 0), 'Games > Doom meanwhile: one DOS program at a time, says grin');
+okBox();
+switchTo('DOS Prompt 1');
+typeLine('DIR');
+check(until(() => inWin(dosWin(1), /^grin: busy -- ASKLINE is running/)), 'DIR in DOS Prompt 1 meanwhile: busy');
+switchTo('DOS Prompt 2');
+typeLine('Ada');
+check(until(() => inWin(dosWin(2), /^askline: hello, Ada \(3 letters\)$/)), 'Ada typed in DOS Prompt 2 is the line it reads');
+
+// a c4cc program (its printf through the console tap), redirection and a pipe
+typeLine('HELLO');
+check(until(() => inWin(dosWin(2), /^yello$/)), "HELLO in DOS Prompt 2: a c4cc program's output, from the tap");
+typeRaw('DIR | DOSFILT');
+check(until(() => inWin(dosWin(2), /^> GRIN\.C4R$/i) && inWin(dosWin(2), /^dosfilt: \d+ lines$/)), 'DIR | DOSFILT in it: a pipe');
+typeRaw('ECHO ECHO from a batch file > B:RUNME.BAT');
+check(until(() => /from a batch file/.test(storeText('RUNME.BAT') || '')), 'ECHO ... > B:RUNME.BAT: redirected onto B:', storeText('RUNME.BAT'));
+typeLine('EXIT');
+check(until(() => !dosWin(2)), 'EXIT closes DOS Prompt 2');
+check(until(() => inWin(dosWin(1), /^in the first window$/)) && !has(/^askline\.c4r$/i) && !has(/^yello$/),
+  'DOS Prompt 1 has its own lines and none of the other window\'s');
+
+// File Manager runs a batch file in a DOS Prompt
+switchTo('File Manager');
+menu('File Manager', 'File', 'Refresh');
+check(until(() => has('RUNME.BAT')), 'File Manager lists RUNME.BAT on B:');
+dbl('RUNME.BAT');
+check(until(() => !!dosWin(2) && inWin(dosWin(2), /^from a batch file$/)), '... and a double click runs it in a DOS Prompt', JSON.stringify(frame.map(t => t.s)));
+typeLine('EXIT');
+switchTo('DOS Prompt 1');
+typeLine('EXIT');
+check(until(() => !dosWin(1) && !dosWin(2)), 'EXIT closes the other one too');
+endTask('Clock');
+until(() => !figures().length);
+
+// Doom full screen from Program Manager: grin gives the display up, Doom
+// takes it; F10 then Y quits; grin takes the display back, at its size,
+// and draws everything. Twice, with HEAP_USED where it was each time.
+const slowKey = (code, ch = 0) => {
+  gui.event({ kind: 'keydown', code, char: ch, mods: 0 }); for (let i = 0; i < 10; i++) run(2e6);
+  gui.event({ kind: 'keyup', code, char: ch, mods: 0 }); for (let i = 0; i < 10; i++) run(2e6);
+};
+const haveDoom = existsSync(join(DISK, 'doom.c4r')) && existsSync(join(DISK, 'doom1.wad'));
+if (!haveDoom) console.log('test-grin: Doom full screen SKIPPED (no doom on the disk)');
+const doomHeap = [];
+settle();
+const doomHeap0 = vm.heap.used;
+for (let r = 1; haveDoom && r <= 2; r++) {
+  const f0 = presents;
+  startItem('Doom');
+  if (!check(until(() => presents > f0 + 40, 4000), `Doom ${r}: Games > Doom runs it full screen (frames arrive)`, text().slice(-400))) break;
+  frame = []; cur = []; rects = []; curRects = [];
+  slowKey(121);                       // F10: quit
+  slowKey(89, 121);                   // Y
+  if (!check(until(() => gui.stats().attached && has('Program Manager') && gui.w === 800 && gui.h === 600, 4000),
+    `Doom ${r}: F10 and Y quit it, and grin takes the display back at 800x600 and draws everything`, text().slice(-400))) break;
+  settle();
+  doomHeap.push(vm.heap.used);
+}
+if (doomHeap.length === 2) {
+  const worst = Math.max(...doomHeap.map(u => Math.abs(u - doomHeap0) / doomHeap0));
+  check(worst <= 0.01, `HEAP_USED after each Doom is where it was before (${doomHeap0} -> ${doomHeap.join(', ')})`);
+}
+check(aboutCount() === 0, 'grin carries on after Doom: Help > About, no application loaded');
+startItem('Clock');
+check(until(() => has('Settings')), '... a Clock starts');
+endTask('Clock');
 
 console.log(fail ? 'test-grin: FAILED' : 'test-grin: OK');
 process.exit(fail);

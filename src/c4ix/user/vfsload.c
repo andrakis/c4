@@ -50,6 +50,13 @@ enum { TAB = 9, CR = 13 };
 // [[c4bb-breadboard-computer]] memory / docs/c4bb-design.md for the
 // related, likely-connected C4IX `top` crash this shares a root cause
 // with.
+//
+// A repeatable case (2026-10-27): linked without its unreached
+// functions (c4rlink's default; 66,722 -> 53,878 bytes) it makes the
+// desktop's boot go wrong every time -- C4KE booted by c4m in a
+// Terminal never runs spin (test-desktop) -- and padded back to 66,786
+// bytes with a function nothing calls it works again. So it is linked
+// --no-gc (build-images.sh, user/BUILD.B4K) until this is understood.
 
 char **g_line_text;
 int   *g_line_indent;

@@ -19,22 +19,24 @@
 //             c4rstrip [-o out] in.c4r  the same program under a second name:
 //                                     one input, strip on, output over the input
 //                                     unless -o (Makefile builds it from this file)
-//             c4rlink --gc prog.c4o --start-lib libc-*.c4o -o prog.c4r
+//             c4rlink prog.c4o --start-lib libc-*.c4o -o prog.c4r
 //                                     a program with no shared library under
 //                                     it (the bare machine, C4DOS): of libc's
-//                                     objects only those it needs, and of
-//                                     everything only the functions it reaches
+//                                     objects only those it needs (and, as in
+//                                     every link, only the functions it reaches)
 // Compilation: gcc -Isrc/c4cc -Iinclude -I. src/c4ke/bin/c4rlink.c -o c4rlink
 //
 // Notes:
-//  - By default all code, data, and patches are copied, of every input. This
-//    includes unused/unreferenced functions, as well as static functions and
-//    data. Two options, off unless asked for, make the image smaller:
-//    --start-lib makes the inputs after it library members, each linked only
-//    if it defines a symbol something linked still lacks, as ld does an
-//    archive's (lib_select); --gc drops every function that the entry point,
-//    the constructors and destructors and the code addresses held in data do
-//    not reach (gc_functions). Neither changes the image when not given.
+//  - Every input's data is copied whole, but of its code only the functions
+//    something reaches: those the entry point, the constructors and
+//    destructors and the code addresses held in data reach, and with -r
+//    every function the library exports (gc_functions). --no-gc copies all
+//    the code, as c4rlink always did before 2026-10-27. An image with no
+//    entry point and no -r keeps all of it too.
+//  - --start-lib makes the inputs after it library members, each linked
+//    only if it defines a symbol something linked still lacks, as ld does an
+//    archive's (lib_select). Off unless given: an object named plainly is
+//    always linked, as with ld.
 //  - Static symbols are never merged: each module keeps its own copy.
 //  - Non-static symbols are merged by name. An extern symbol that another
 //    module defines resolves to that definition; two non-static definitions
@@ -58,7 +60,7 @@
 //     - take the entry point from the first module that has one (rebased).
 //  4: Resolve: every symbol-typed patch whose master symbol is now defined
 //     becomes a CODE patch pointing at the definition.
-//  5: With --gc, drop the functions nothing reaches and move the rest down.
+//  5: Drop the functions nothing reaches (unless --no-gc), move the rest down.
 //  6: Write the master image out.
 //
 // Shared libraries (-l LIB): LIB is a library (a -r image, named .c4s by
@@ -126,7 +128,7 @@ static void show_help (char *spec) {
 	else
 	printf("%s: Link multiple .c4r files into one\n"
 	       "%s: [-dvrs] [-g0] [-l lib.c4s] [-o outfile] [--] file1.c4r [...fileN.c4r]\n"
-	       "         [--gc] [--start-lib member.c4o ... [--end-lib]]\n"
+	       "         [--no-gc] [--start-lib member.c4o ... [--end-lib]]\n"
 	       "     -d            Turn on debug mode\n"
 	       "     -v            Turn on verbose mode\n"
 	       "     -r            Library mode: allow unresolved symbols\n"
@@ -137,7 +139,7 @@ static void show_help (char *spec) {
 	       "     --start-lib   The inputs after it are library members: each is\n"
 	       "                   linked only if it defines a symbol still undefined\n"
 	       "     --end-lib     The inputs after it are linked whole again\n"
-	       "     --gc          Drop the functions nothing reaches\n"
+	       "     --no-gc       Keep the functions nothing reaches (dropped by default)\n"
 	       "     --            End arguments\n", spec, spec);
 }
 
@@ -841,20 +843,26 @@ static int link_srcmap (int *master, int *c4rs, int count) {
 	return 0;
 }
 
-// ---- Dropping the functions nothing reaches (--gc) ----
+// ---- Dropping the functions nothing reaches (unless --no-gc) ----
 //
 // The code is cut into regions at every function's start: a defined
-// function's symbol (static ones too), and with a source map each of its
-// functions' start and end -- the map also names the code c4lc puts in
-// an object without a symbol, its soft-float and long long routines.
-// Each input's first word starts a region too. Every word of code that
+// function's symbol (static ones too), each input's first word, and
+// every ENT that follows a jump or a return -- found by decoding from
+// those, it is what starts the code c4lc puts in an object without a
+// symbol, its soft-float and long long routines. Not the source map,
+// which names those too: an image has to be the same code whether its
+// objects were compiled with -g or not (C4IX's own build compiles
+// without, test-c4ix-rebuild compares). Every word of code that
 // holds a code address is a patch, since the loader has to relocate it,
 // so a CODE patch from region A to region B is all there is of "A uses
 // B". A tail call jumps past its callee's ENT, into the middle of the
 // region: that is still B. What is live is what the entry point, the
 // constructors and destructors and every code address held in data
-// (DCODE: function pointers in initializers, tables) reach; with -r or
-// -l also every function another image could name. The rest goes: its
+// (DCODE: function pointers in initializers, tables) reach; with -r also
+// every function the library exports. A program linked with -l keeps
+// only what it reaches too: C4IX's loader resolves a program's names
+// against its libraries, never a library's against the program
+// (loader.c, link_modules). The rest goes: its
 // code, its patches, its functions' symbols, its part of the source map.
 // Everything after moves down. Data is not touched, so globals a loader
 // looks up by name (__c4dos_api, __c4ke_exit) are all still there.
@@ -998,13 +1006,14 @@ static int gc_srcmap (int *master, int *rs, int *newpos, int nreg) {
 // Drop the regions nothing reaches. Returns 0, or 1 when out of memory.
 static int gc_functions (int *master, int *c4rs, int count) {
 	int *mhdr, *code, *sym, *patch, *q, *rs, *newpos, *adjn, *adj, *idmap, *cd;
-	int  codelen, nreg, i, j, k, n, r, t, a, pc, e, op, np, words, nfun, kfun, flags, nf, start, len;
-	char *mark, *p;
+	int  codelen, nreg, i, j, k, n, r, t, a, pc, e, op, np, words, nfun, kfun, prev;
+	char *mark;
 
 	mhdr = (int *)master[C4R_HEADER];
 	code = (int *)master[C4R_CODE];
 	codelen = mhdr[C4R_HDR_CODELEN];
-	if (!codelen) return 0;
+	// with no entry point and no -r, nothing would say what is live
+	if (!codelen || (mhdr[C4R_HDR_ENTRY] == -1 && !cl_libmode)) return 0;
 	if (!(mark = malloc(codelen + 1))) return 1;
 	memset(mark, 0, codelen + 1);
 
@@ -1025,23 +1034,17 @@ static int gc_functions (int *master, int *c4rs, int count) {
 			mark[sym[C4R_SYMB_VALUE]] = 1;
 		sym = sym + C4R_SYMB__Sz; ++i;
 	}
-	if ((p = cl_map(master))) {
-		cl_mat = 1;
-		flags = cl_mu(p);
-		nf = cl_mu(p);
-		i = 0;
-		while (i < nf) { j = cl_mu(p); cl_mat = cl_mat + j; cl_mu(p); if (flags & 1) cl_mat = cl_mat + 4; ++i; }
-		nf = cl_mu(p);
-		i = 0; start = 0;
-		while (i < nf) {
-			start = start + cl_mu(p);
-			len = cl_mu(p);
-			j = cl_mu(p); cl_mat = cl_mat + j;
-			cl_mu(p); cl_mu(p);
-			if (start >= 0 && start < codelen) mark[start] = 1;
-			if (start + len > 0 && start + len < codelen) mark[start + len] = 1;
-			++i;
-		}
+	// ... and each ENT after a jump or return. Decoding goes on from
+	// each start; an operand that lands on one means the code before
+	// it was not instructions (c4cc leaves an object's word 0 unused),
+	// so decoding starts again there.
+	pc = 0; prev = -1;
+	while (pc < codelen) {
+		op = code[pc];
+		if (op == ENT && (prev == JMP || prev == LEV || prev == JMPA || prev == TLEV)) mark[pc] = 1;
+		prev = op;
+		if (gc_operand(op) && pc + 1 < codelen && mark[pc + 1]) { pc = pc + 1; prev = -1; }
+		else pc = pc + (gc_operand(op) ? 2 : 1);
 	}
 
 	// Glue a region that does not end in a jump or return to the next
@@ -1052,7 +1055,7 @@ static int gc_functions (int *master, int *c4rs, int count) {
 		op = -1;
 		while (pc < e) { op = code[pc]; pc = pc + (gc_operand(op) ? 2 : 1); }
 		if (e < codelen && (pc != e || !(op == JMP || op == LEV || op == JMPA || op == TLEV))) {
-			if (cl_debug) printf("c4rlink: --gc: code at %d runs on into %d\n", e - 1, e);
+			if (cl_debug) printf("c4rlink: gc: code at %d runs on into %d\n", e - 1, e);
 			mark[e] = 0;
 		}
 	}
@@ -1114,7 +1117,7 @@ static int gc_functions (int *master, int *c4rs, int count) {
 		if (q[C4R_PAT_TYPE] == C4R_PTYPE_DCODE) gc_reach(gc_region(rs, nreg, q[C4R_PAT_VALUE]));
 		q = q + C4R_PAT__Sz; ++i;
 	}
-	if (cl_libmode || cl_nlibs) {
+	if (cl_libmode) {
 		sym = (int *)master[C4R_SYMBOLS];
 		i = 0;
 		while (i < n) {
@@ -1228,7 +1231,7 @@ static int gc_functions (int *master, int *c4rs, int count) {
 		master[C4R_SRCMAPLEN] = 0;
 	}
 	if (cl_verbose)
-		printf("c4rlink: --gc: kept %d of %d functions, %d of %d words of code\n", kfun, nfun, words, codelen);
+		printf("c4rlink: gc: kept %d of %d functions, %d of %d words of code\n", kfun, nfun, words, codelen);
 	free(rs); free(newpos); free(gc_live);
 	return 0;
 }
@@ -1623,13 +1626,14 @@ int main (int argc, char **argv) {
 	outfile = "a.c4r";
 	c4r_alloc = 256; // should be enough for everyone
 	c4r_pos = 0;
-	cl_debug = cl_verbose = cl_libmode = cl_strip = cl_nomap = cl_gc = 0;
+	cl_debug = cl_verbose = cl_libmode = cl_strip = cl_nomap = 0;
+	cl_gc = 1;
 	// The strip tool is this program under another name (argv[0] ends in
 	// "c4rstrip", with or without .c4r): one input, strip on.
 	cl_striptool = 0;
 	arg = spec; while (*arg) ++arg;
 	while (arg > spec && *(arg - 1) != '/') --arg;
-	if (!my_strncmp(arg, "c4rstrip", 8)) { cl_striptool = 1; cl_strip = 1; }
+	if (!my_strncmp(arg, "c4rstrip", 8)) { cl_striptool = 1; cl_strip = 1; cl_gc = 0; }
 	count_code = count_data = count_patch = count_con = count_des = count_sym = 0;
 	cl_nlibs = 0;
 	if (!(cl_libs = malloc(CL_LIBMAX * CLL__Sz * sizeof(int)))) return 1;
@@ -1667,7 +1671,9 @@ int main (int argc, char **argv) {
 		} else if (endargs == 0 && !my_strcmp(*argv, "--end-lib")) {
 			inlib = 0;
 		} else if (endargs == 0 && !my_strcmp(*argv, "--gc")) {
-			cl_gc = 1;
+			cl_gc = 1;                          // the default; still accepted
+		} else if (endargs == 0 && !my_strcmp(*argv, "--no-gc")) {
+			cl_gc = 0;
 		} else if (endargs == 0 && **argv == '-') {
 			arg = *argv + 1; // skip dash
 			endopt = 0;
@@ -1860,18 +1866,11 @@ int main (int argc, char **argv) {
 		}
 		// the objects' source maps, unless -s or -g0 dropped them (or
 		// c4rstrip, which is -s)
-		// --gc reads the map for where functions are, so it is made
-		// for it, and dropped after when the image is not to have one
-		if ((cl_gc || (!cl_strip && !cl_nomap)) && link_srcmap(master, c4rs, c4r_pos))
+		if (!cl_strip && !cl_nomap && link_srcmap(master, c4rs, c4r_pos))
 			printf("%s: warning: out of memory for the source map; the image has none\n", spec);
 		if (cl_gc && !cl_striptool && gc_functions(master, c4rs, c4r_pos)) {
-			printf("%s: out of memory for --gc\n", spec);
+			printf("%s: out of memory dropping unreached functions (--no-gc links without)\n", spec);
 			return 4;
-		}
-		if ((cl_strip || cl_nomap) && master[C4R_SRCMAP]) {
-			free((char *)master[C4R_SRCMAP]);
-			master[C4R_SRCMAP] = 0;
-			master[C4R_SRCMAPLEN] = 0;
 		}
 		blank_patch_targets(master);
 		dstored = hdr[C4R_HDR_MEMSZ];

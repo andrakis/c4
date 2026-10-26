@@ -136,7 +136,7 @@ The facts that shaped the design were read from the code, not assumed.
 **The games under C4DOS** (`src/{wolf3d,doom,rott,opentyrian}`)
 
 - **Built** by c4lc and linked with libc's `bare.c` layer, of which they
-  carry only what they use (`c4rlink --gc --start-lib`,
+  carry only what they use (c4rlink drops unreached functions,
   docs/c4dos-design.md "Linking a bare program").
 - **How they run.** Each attaches its own ring at 640x480 and blits a
   320x200 8-bit frame scaled 2x. Each uses the sound card directly, and
@@ -1089,10 +1089,10 @@ Deviations and findings:
   hello is refused with a message box; DOS programs come with G5.
 - grin's applications were about 0.5 MB each on the disk, the bare libc
   linked whole into each, as it was into grin and the games. Since
-  2026-10-26 c4rlink links libc's objects as library members and drops
-  the functions nothing reaches (docs/c4dos-design.md "Linking a bare
-  program"): Clock is 67 KB, Notepad 103 KB, Calculator 245 KB, grin
-  548 KB.
+  2026-10-27 c4rlink drops the functions nothing reaches, and grin's
+  links name libc's objects as library members (docs/c4dos-design.md
+  "Linking a bare program"): Clock is 67 KB, Notepad 103 KB, Calculator
+  245 KB, grin 548 KB.
 - The headless Clocks read the host's time of day (`GUI_CLOCK` is
   `Date`), so test-grin waits for the ticks in host time, a second or
   two.

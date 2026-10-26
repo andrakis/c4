@@ -314,11 +314,12 @@ done
 PB=$OUT/build
 keep() { cp "$1" "$PB/$2"; }
 # Rebuilt when ANY of C4IX changed -- kernel, libc4ix, headers, user
-# programs -- or the display header its programs include, or IMG_G. This used to
-# list four kernel files, so an edit to sys.c, vfs.c or a user program
-# was silently not built.
+# programs -- or the display header its programs include, or IMG_G, or
+# the linker (it drops unreached functions, so what it writes changes
+# with it). This used to list four kernel files, so an edit to sys.c,
+# vfs.c or a user program was silently not built.
 if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
-   [ -n "$(find src/c4ix src/winkit libjs/guest/gui.h libjs/guest/gui.c libjs/guest/snd.h libjs/guest/snd.c $(ls .img_g 2>/dev/null) -newer $OUT/c4ix32.c4r -type f -print -quit)" ]; then
+   [ -n "$(find src/c4ix src/winkit libjs/guest/gui.h libjs/guest/gui.c libjs/guest/snd.h libjs/guest/snd.c $(ls .img_g 2>/dev/null) c4rlink32 -newer $OUT/c4ix32.c4r -type f -print -quit)" ]; then
     say "C4IX, compiled $G (c4lc)"
     rm -rf $PB
     mkdir -p $PB/kernel $PB/lib $PB/libc $PB/user $PB/desktop $PB/bin
@@ -465,7 +466,14 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     # C4IX binary here, all of which face the same shared-disk risk).
     say "C4IX's vfsload"
     ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -c -I src/c4ix/include src/c4ix/user/vfsload.c .c4bb_ix_u.c4o > /dev/null
-    ./c4rlink32 .c4bb_ix_u.c4o .c4bb_libc4ix32.c4l -o $DISK/c4ix-vfsload.c4r > /dev/null
+    # Linked whole (--no-gc), and so in src/c4ix/user/BUILD.B4K. Without
+    # its 47 unreached functions (12,844 bytes) the desktop's boot goes
+    # wrong every time: C4KE booted by c4m in a Terminal then never runs
+    # spin (test-desktop). The same image padded back to its old size
+    # with a function nothing calls works, so it is not a function that
+    # was needed but the size: vfsload.c's KNOWN ISSUE, which comes and
+    # goes as the image changes, not yet understood.
+    ./c4rlink32 --no-gc .c4bb_ix_u.c4o .c4bb_libc4ix32.c4l -o $DISK/c4ix-vfsload.c4r > /dev/null
     keep .c4bb_ix_u.c4o user/vfsload.c4o
     keep $DISK/c4ix-vfsload.c4r bin/c4ix-vfsload.c4r
     # the libraries are kept: the root archive ships them in /usr/lib,
@@ -495,21 +503,9 @@ GAMES_ON_DISK=
 GAMEFILES=$OUT/.gamefiles
 rm -rf $OUT/wolf3d $GAMESDISK $GAMEFILES
 mkdir -p $GAMEFILES
-# A bare program carries what it uses of libc and no more: libc's objects
-# are library members, linked only if something needs what they define,
-# and --gc drops every function nothing reaches (c4rlink.c's header;
-# docs/c4dos-design.md "Linking a bare program"). The games' own scripts
-# name ./c4rlink32 and .libc-bare's objects; while they run, this stands
-# in for it and adds the two, so they need no change for it.
-./c4rlink32() {
-    local a lib= args=()
-    case " $* " in *" --start-lib "*) command ./c4rlink32 "$@"; return ;; esac
-    for a in "$@"; do
-        case "$a" in .libc-bare/*) if [ -z "$lib" ]; then args+=(--start-lib); lib=1; fi ;; esac
-        args+=("$a")
-    done
-    if [ -n "$lib" ]; then command ./c4rlink32 --gc "${args[@]}"; else command ./c4rlink32 "$@"; fi
-}
+# A bare program carries what it uses of libc and no more: c4rlink drops
+# every function nothing reaches, in every link (docs/c4dos-design.md
+# "Linking a bare program").
 if [ -n "$GAMES" ] && ls .libc-bare/*.c4o > /dev/null 2>&1; then
     mkdir -p $GAMESDISK
     step "linking the games for the bare machine and C4DOS:"
@@ -525,7 +521,6 @@ if [ -n "$GAMES" ] && ls .libc-bare/*.c4o > /dev/null 2>&1; then
     rm -f $GAMEFILES.before
     echo
 fi
-unset -f ./c4rlink32
 if [ -n "$GAMES_ON_DISK" ]; then
     say "the games disk: their data, C4DOS's files, the indexes"
     # (C4DOS's own CONFIG.SYS, made as the C4DOS step below makes the
@@ -760,19 +755,19 @@ rm -rf $LJDOS
 if ls .grin/*.c4o > /dev/null 2>&1 && ls .libc-bare/*.c4o > /dev/null 2>&1 && [ -f $OUT/c4dos32.c4r ]; then
     say "the page's C4DOS disk, booting into grin: $LJDOS"
     mkdir -p $LJDOS/GRIN $LJDOS/BIN
-    # libc as library members, and --gc, as the games above
-    ./c4rlink32 --gc .grin/*.c4o --start-lib .libc-bare/libc-*.c4o -o $LJDOS/GRIN/grin.c4r > /dev/null
+    # libc's objects as library members: only those it needs
+    ./c4rlink32 .grin/*.c4o --start-lib .libc-bare/libc-*.c4o -o $LJDOS/GRIN/grin.c4r > /dev/null
     # its applications (docs/grin-plan.md 3.4): main, the kit's class, and
     # import.c in the kit's place; EXITKEY is test-grin's
     for app in clock calc notepad exitkey; do
         [ -f .grinapp/$app.c4o ] || continue
         kit=; [ -f .grinapp/wk-$app.c4o ] && kit=.grinapp/wk-$app.c4o
-        ./c4rlink32 --gc .grinapp/$app.c4o $kit .grinapp/import.c4o --start-lib .libc-bare/libc-*.c4o -o $LJDOS/GRIN/$app.c4r > /dev/null
+        ./c4rlink32 .grinapp/$app.c4o $kit .grinapp/import.c4o --start-lib .libc-bare/libc-*.c4o -o $LJDOS/GRIN/$app.c4r > /dev/null
     done
     # DOS programs for trying redirection with, and test-grin's: ASKLINE
     # (bare.c: reads a line through DOS), DOSFILT (a filter; -r is a plain
     # c4cc program's READ and printf, the tap's) and HELLO (c4cc's printf)
-    [ -f .grinapp/askline.c4o ] && ./c4rlink32 --gc .grinapp/askline.c4o --start-lib .libc-bare/libc-*.c4o -o $LJDOS/BIN/askline.c4r > /dev/null
+    [ -f .grinapp/askline.c4o ] && ./c4rlink32 .grinapp/askline.c4o --start-lib .libc-bare/libc-*.c4o -o $LJDOS/BIN/askline.c4r > /dev/null
     $CC -o $LJDOS/BIN/dosfilt.c4r include/c4dos.h src/tests/dosfilt.c > /dev/null
     cp $OUT/hello32.c4r $LJDOS/BIN/hello.c4r
     cp $OUT/c4dos32.c4r $LJDOS/

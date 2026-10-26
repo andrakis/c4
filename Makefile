@@ -2501,7 +2501,7 @@ PHONY += test-persist
 test-libc-bare: libc-bare-objs c4rlink32 $(C4LC_LISP) | c4sp32
 	@rm -rf .libc_t && mkdir -p .libc_t && cp src/c4ix/libc/tests/scantest.c .libc_t/
 	@./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O -fno-builtin -c -I src/c4ix/libc/include .libc_t/scantest.c .libc_t/scantest.c4o > /dev/null
-	@./c4rlink32 --gc .libc_t/scantest.c4o --start-lib .libc-bare/libc-*.c4o -o .libc_t/scantest.c4r > /dev/null
+	@./c4rlink32 .libc_t/scantest.c4o --start-lib .libc-bare/libc-*.c4o -o .libc_t/scantest.c4r > /dev/null
 	@gcc -m32 -w -o .libc_t/scantest-host .libc_t/scantest.c
 	@cd .libc_t && ./scantest-host scantest.c > host.txt && node ../libjs/cli.js -m 64 -d . scantest.c4r scantest.c > c4.txt
 	@cmp -s .libc_t/host.txt .libc_t/c4.txt || { echo "test-libc-bare: differs from gcc's:"; diff .libc_t/c4.txt .libc_t/host.txt; exit 1; }
@@ -3596,7 +3596,8 @@ test-task-mem: c4ke-pm.c4r c4ke32-pm.c4r c4ke32-nopm.c4r $(C4M) $(C4CC) c4cc32 $
 # Linking test: compile two modules separately, link both ways, run each,
 # and exercise library mode (-r) with a relink of the written library.
 # A third module nothing names is left out as a library member
-# (--start-lib) and dropped by --gc: both images are test_link.c4r.
+# (--start-lib), and its function dropped when it is linked plainly (the
+# default; --no-gc keeps it): both images are test_link.c4r.
 test-link: c4m $(C4CC) $(C4RLINK)
 	$(C4CC) -o tla.c4o src/tests/test_link_a.c
 	$(C4CC) -o tlb.c4o src/tests/test_link_b.c
@@ -3610,10 +3611,13 @@ test-link: c4m $(C4CC) $(C4RLINK)
 	$(C4M) load-c4r.c -- test_link3.c4r
 	$(C4RLINK) tla.c4o --start-lib tlb.c4o tlc.c4o -o test_link4.c4r
 	cmp test_link.c4r test_link4.c4r
-	$(C4RLINK) --gc tla.c4o tlb.c4o tlc.c4o -o test_link5.c4r
+	$(C4RLINK) tla.c4o tlb.c4o tlc.c4o -o test_link5.c4r
 	cmp test_link.c4r test_link5.c4r
 	$(C4M) load-c4r.c -- test_link5.c4r
-	rm -f tla.c4o tlb.c4o tlc.c4o tla.c4l test_link.c4r test_link2.c4r test_link3.c4r test_link4.c4r test_link5.c4r
+	$(C4RLINK) --no-gc tla.c4o tlb.c4o tlc.c4o -o test_link6.c4r
+	! cmp -s test_link.c4r test_link6.c4r
+	$(C4M) load-c4r.c -- test_link6.c4r
+	rm -f tla.c4o tlb.c4o tlc.c4o tla.c4l test_link.c4r test_link2.c4r test_link3.c4r test_link4.c4r test_link5.c4r test_link6.c4r
 	@echo "test-link: OK"
 clean-c4rs:
 	rm -rf $(C4RS) $(BIN) *.c4r c4ke.pre.c .tm_disk .tm_leak.c4r

@@ -93,6 +93,13 @@ export const STOP_NAMES = ['budget', 'halt', 'input', 'sleep', 'park', 'cpuhalt'
 // function returns -- a CPUH word in the ROM -- and the CPU-local window,
 // 64 words each processor sees its own of (docs/c4ix-smp.md, 3.4)
 export const CPU_HALT_ADDR = 0x18;
+// What the null guard's four words hold (boot.js initRom), seen only by
+// an instruction fetch: a data read there goes through the bus, which
+// answers 0 as it always did (bus.js). Its low byte is 0, so the string
+// at 0 is still empty. Running it means a jump to 0..15 -- a call
+// through a word nothing linked -- and sys() stops the machine instead
+// of running the ROM round and round, printing nothing.
+export const NULL_GUARD_OP = 0x4c554e00;     // bytes 00 4E 55 4C, low first: 0 'N' 'U' 'L'
 export const LOCAL_BASE = 0x800, LOCAL_END = 0x900;
 // HARD_IRQ's sub-code for an inter-processor interrupt: c4mp's HIRQ_IPI.
 // The PIT's tick is 1 too; no SMP guest runs the PIT.
@@ -555,6 +562,7 @@ export class Machine {
         this.trap(TRAP.DEBUG, 0, this.trapHandler);
         return STOP.BUDGET;
     }
+    if (op === NULL_GUARD_OP) return this.nullJump(this.pc - 4);
     if (op >= 0 && op < INS_SIZE && !this.trapHandler) {
       // Named but not implemented here (_BLT, c4mp's 66-78): a machine
       // mismatch, not a custom opcode. c4m halts (c4m.c:2360-2383).
@@ -618,6 +626,25 @@ export class Machine {
       pc = this.ld32(bp + 4) - 4;
       bp = this.ld32(bp);
     }
+  }
+
+  // A jump into the null guard (NULL_GUARD_OP). Most often a JSR to a
+  // word left 0, so the top of the stack is the return address and the
+  // trace starts at the caller; after a LEV or a JMP it is just the last
+  // thing pushed, and then the trace names no function.
+  nullJump(pc) {
+    const hex = n => '0x' + ((n >>> 0).toString(16).toUpperCase().padStart(8, '0'));
+    const ret = this.ld32(this.sp);
+    this.emitString(`libjs: jump to ${hex(pc)}, the null guard: nothing runs there. Halting.\n`);
+    this.emitString(`libjs:   bp ${hex(this.bp)}, sp ${hex(this.sp)}, a ${hex(this.a)}, mode ${this.mode},` +
+      ` after ${this.cycle} cycles; top of stack ${hex(ret)}, the return address if it was a call.\n`);
+    if (ret >= 0x1000 && ret < this.arena.size) {
+      const at = this.pc;
+      this.pc = ret;                       // stacktrace() names pc - 4: the call's operand
+      this.stacktrace();
+      this.pc = at;
+    }
+    return this.halt(-102);
   }
 
   tlevWedge(pc) {

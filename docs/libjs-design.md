@@ -132,6 +132,19 @@ Reused from `src/c4bb/sim/`: `arena.js`, `devices.js`, `loader.js`
   one wild store there used to end every task on the machine. c4bb's
   firmware latches at 0x20-0x3F stay RAM. Stack pushes and STL are not
   checked. `tests/test-rom.mjs`.
+- **A jump into the null guard stops the machine.** Its four words hold
+  `NULL_GUARD_OP` (`c4m.js`), which only an instruction fetch sees: a
+  data read below 0x10 goes through the bus, which answers 0 as before,
+  and the marker's low byte is 0, so the string at 0 is still empty.
+  Fetched, it reaches `sys()` as an unknown opcode, and `nullJump`
+  names the jump, the registers and, when the top of the stack is a
+  return address, a stack trace from the caller, then halts with -102.
+  The usual way there is a call through a word nothing linked -- a C4IX
+  program run without its libraries -- which before ran the ROM round
+  and round, printing nothing. It costs no instruction anything: a check
+  at every fetch cost an eighth of the speed, one at every jump that
+  takes pc from data about a twentieth. A jump elsewhere below 0x1000
+  is not caught.
 - **The heap** keeps no headers in guest memory. Sizes live in a `Map`,
   small blocks come from size classes, large ones from a first-fit list with
   coalescing, and once the bump pointer is at the end a small block is cut

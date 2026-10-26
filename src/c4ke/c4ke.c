@@ -2439,9 +2439,20 @@ static void op_await_pid(int trap, int ins, int mode, int a, int *bp, int *sp, i
 // before the host filesystem -- so a compiler running under C4KE can
 // write an image here and the kernel can execute it, no host write
 // syscall required (the VM has none).
+//
+// One entry is the kernel's own: /proc/uptime, the clock as a file in
+// the format c4m.c reads from a Linux host (c4_time_host): two numbers,
+// seconds with two decimals. The first is how long the kernel has been
+// up; the second, Linux's idle time summed over its CPUs, is here the
+// same clock in tenths of a second, which is how c4m's default reading
+// takes it (its integer part times 100 is milliseconds; `c4m -a` reads
+// the first). Its bytes are written again, in place, each time
+// OP_VFS_GET fetches it, so cat shows the time now. Tasks may not
+// replace or remove it.
 ///
 
 enum { RAMFS_MAX = 256 };
+enum { RAMFS_UPTIME_CAP = 47 };   // bytes /proc/uptime's buffer holds, past its NUL
 
 static char **ramfs_names;   // entry names, kernel-owned copies
 static char **ramfs_bufs;    // file contents, kernel-owned copies
@@ -2508,10 +2519,51 @@ static int ramfs_put (char *name, char *buf, int len) {
 	return 0;
 }
 
+static int ramfs_isuptime (char *name) {
+	return name && ramfs_strlen(name) == 12 && !memcmp(name, "/proc/uptime", 12);
+}
+
+// WHOLE.CC at p; the end. No arrays: plain c4 compiles this file.
+static char *ramfs_fmt (char *p, int whole, int cents) {
+	int div;
+	div = 1;
+	while (whole / div >= 10) div = div * 10;
+	while (div) { *p++ = '0' + (whole / div) % 10; div = div / 10; }
+	*p++ = '.';
+	*p++ = '0' + cents / 10;
+	*p++ = '0' + cents % 10;
+	return p;
+}
+
+// /proc/uptime's bytes, now, into entry i's buffer
+static void ramfs_uptime (int i) {
+	int ms;
+	char *p, *s;
+	ms = __time() - kernel_start_time;
+	if (ms < 0) ms = 0;
+	s = p = ramfs_bufs[i];
+	p = ramfs_fmt(p, ms / 1000, ms % 1000 / 10);
+	*p++ = ' ';
+	p = ramfs_fmt(p, ms / 100, ms % 100);
+	*p++ = 10;
+	*p = 0;
+	ramfs_lens[i] = p - s;
+}
+
+// Made at boot, with room for any time it will show
+static void ramfs_uptime_init () {
+	char *b;
+	if (!(b = malloc(RAMFS_UPTIME_CAP))) return;
+	memset(b, ' ', RAMFS_UPTIME_CAP);
+	ramfs_put("/proc/uptime", b, RAMFS_UPTIME_CAP);
+	free(b);
+}
+
 // The kernel-owned buffer, or 0. Length through plen when given.
 static char *ramfs_get (char *name, int *plen) {
 	int i;
 	if ((i = ramfs_find(name)) < 0) return 0;
+	if (ramfs_isuptime(name)) ramfs_uptime(i);
 	if (plen) *plen = ramfs_lens[i];
 	return ramfs_bufs[i];
 }
@@ -2539,7 +2591,8 @@ static char *ramfs_name_at (int i) {
 // The OP_VFS_* handlers. Arguments are at sp[1..n] (pushed through
 // __c4_opcode with the first argument listed last); results in a.
 static void op_vfs_put (int trap, int ins, int mode, int a, int *bp, int *sp, int *returnpc) {
-	a = ramfs_put((char *)sp[1], (char *)sp[2], sp[3]);
+	if (ramfs_isuptime((char *)sp[1])) a = -1;
+	else a = ramfs_put((char *)sp[1], (char *)sp[2], sp[3]);
 	trap_exit();
 }
 static void op_vfs_get (int trap, int ins, int mode, int a, int *bp, int *sp, int *returnpc) {
@@ -2547,7 +2600,8 @@ static void op_vfs_get (int trap, int ins, int mode, int a, int *bp, int *sp, in
 	trap_exit();
 }
 static void op_vfs_unlink (int trap, int ins, int mode, int a, int *bp, int *sp, int *returnpc) {
-	a = ramfs_unlink((char *)sp[1]);
+	if (ramfs_isuptime((char *)sp[1])) a = -1;
+	else a = ramfs_unlink((char *)sp[1]);
 	trap_exit();
 }
 static void op_vfs_count (int trap, int ins, int mode, int a, int *bp, int *sp, int *returnpc) {
@@ -4335,6 +4389,7 @@ int main (int argc, char **argv) {
 	install_custom_opcode(OP_VFS_UNLINK, (int *)&op_vfs_unlink);
 	install_custom_opcode(OP_VFS_COUNT, (int *)&op_vfs_count);
 	install_custom_opcode(OP_VFS_NAME, (int *)&op_vfs_name);
+	ramfs_uptime_init();
 	install_custom_opcode(OP_USER_PID, (int *)&op_user_pid);
 	install_custom_opcode(OP_USER_PARENT, (int *)&op_user_parent);
 	install_custom_opcode(OP_USER_SIGNAL, (int *)&op_user_signal);

@@ -166,9 +166,11 @@ extern int sys_restart;
 // VN_LINK is a second name for a RAM file (SYS_LINK): an entry in a
 // directory that holds no bytes, only the file it names. A path that
 // ends at one resolves to its file; the file keeps its first name.
+// VN_PROC is a read-only file whose bytes the kernel makes when it is
+// read: /proc/uptime (vfs.c, vfs_proc).
 enum {
     VN_CONSOLE = 1, VN_RAMFILE = 2, VN_HOSTFILE = 3, VN_PIPE = 4,
-    VN_DIR = 5, VN_LINK = 6
+    VN_DIR = 5, VN_LINK = 6, VN_PROC = 7
 };
 // 64: the root archive carries the repo's own tree, whose longest file
 // name is 26 characters (24 truncated them). Userland buffers that

@@ -205,6 +205,17 @@ export function setOpnames (names) { OPNAMES = names; }
 const O_NONBLOCK = 0x800;
 const FD_KEYBOARD = 0, FD_FIRST = 3;
 
+// /proc/uptime as Linux words it, for MS milliseconds since power-on:
+// seconds with two decimals, then -- where Linux has its idle time --
+// the same clock in tenths of a second, which is how c4m.c's default
+// reading takes that number (c4_time_host). C4IX writes its own the
+// same way (src/c4ix/vfs.c, vfs_proc).
+function procUptime (ms) {
+  const fix = (whole, cents) => whole + '.' + String(cents).padStart(2, '0');
+  return new TextEncoder().encode(fix(Math.floor(ms / 1000), Math.floor(ms % 1000 / 10)) + ' ' +
+                                  fix(Math.floor(ms / 100), ms % 100) + '\n');
+}
+
 export class Devices {
   constructor(arena, opts = {}) {
     this.arena = arena;
@@ -335,6 +346,15 @@ export class Devices {
       const raw = name === '/dev/tty';
       this.fds.set(fd, { kbd: true, raw, nonblock: !!(this.diskFlags & O_NONBLOCK) });
       if (raw) this.rawKbd++;
+      return fd;
+    }
+    // The machine's clock as a file, as a Linux host has it: c4m.c run
+    // by plain c4 (innerbench -c, the C4DOS floppies' c4m) reads its
+    // time from /proc/uptime, and a C4DOS or C4KE program's open() comes
+    // straight here -- neither kernel sees it. Made fresh at each open.
+    if (name === '/proc/uptime') {
+      const fd = this.nextFd++;
+      this.fds.set(fd, { data: procUptime(Math.max(0, this.simMs())), pos: 0 });
       return fd;
     }
     const { drv, rest } = this.resolveDrive(name);

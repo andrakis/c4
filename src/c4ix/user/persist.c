@@ -93,6 +93,7 @@ static int same(char *a, char *b) { return !ustrcmp(a, b); }
 static int excluded(char *path) {
     return same(path, "/tmp") || starts(path, "/tmp/") ||
            same(path, "/log") || starts(path, "/log/") ||
+           same(path, "/proc") || starts(path, "/proc/") ||
            same(path, "/var/persist") || starts(path, "/var/persist/");
 }
 

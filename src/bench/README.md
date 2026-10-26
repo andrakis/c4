@@ -95,7 +95,10 @@ c4m, which has no preprocessor, so `c4ke.c` must stay compilable without
 one. `innerbench` opens `c4m.c`, `load-c4r.c` and `src/c4ke/c4ke.c` by
 those names, relative to the working directory: run it from the repo root
 (the C4DOS build floppies copy them in under the same names). `-a` matters
-only when the nested c4m reads its clock from `/proc/uptime`.
+only when the nested c4m reads its clock from `/proc/uptime`, which is
+when plain c4 runs it (`-c`, or a C4DOS floppy's `c4m.c4r`). C4IX and
+C4KE have that file, and so do c4bb and libjs, so `innerbench -c` runs
+inside both kernels on every host but Windows (C4IX's on Windows too).
 
 ## Limits and known issues
 

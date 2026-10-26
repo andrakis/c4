@@ -87,6 +87,11 @@ A natively compiled c4m from this fork has a real clock: `clock_gettime`, or
 `timespec_get` under MSVC. **On Windows, build c4m natively to get working
 time measurement.**
 
+Inside the machine the file exists wherever c4m.c might look for it: C4IX
+makes `/proc/uptime` in its VFS, C4KE in its RAM filesystem, and c4bb's and
+libjs's disk device answers the name too, all from the machine's clock and
+in Linux's format.
+
 
 The stack
 ---------

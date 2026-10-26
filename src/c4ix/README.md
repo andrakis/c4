@@ -132,7 +132,7 @@ target.
 | `sl4b.c` | SL4B, a slab allocator for fixed-size kernel objects |
 | `task.c` | the task list; stacks of 64K words (256 KB on a 32-bit host), more when the spawner asks with `SYS_STACK` |
 | `sched.c` | the scheduler: switches inside c4m trap handlers (preemptive via the cycle interrupt), and the idle task |
-| `vfs.c` | vnodes, open file descriptions, per-task fd tables, pipes, directories |
+| `vfs.c` | vnodes, open file descriptions, per-task fd tables, pipes, directories, and the files the kernel makes at boot: `/tmp`, `/log/kernel` (the console, logged) and `/proc/uptime` (the clock, in Linux's format, made when it is read) |
 | `sys.c` | the syscall dispatcher: libc4ix's calls and trapped host opcodes both end here |
 | `c4ke.c` | the C4KE compatibility layer: answers `u0.h`'s custom opcodes, including the RAM-filesystem ones |
 | `loader.c` | the `.c4r` loader; prefers a RAM file to the host file of the same name |
@@ -158,7 +158,9 @@ target.
   does not report c4m is refused at boot; the cooperative scheduler
   once kept for one is gone (docs/c4ix-cpu.md, step 10). On Windows,
   plain c4 has no `/proc/uptime` clock; a natively built c4m does not
-  have that problem.
+  have that problem. Inside C4IX there is one: the kernel's own
+  `/proc/uptime`, so `c4 c4m.c` run as a C4IX task has a clock on any
+  host.
 - **32-bit / c4bb**: `c4ix32.c4r` boots on the breadboard, with the drives
   and, via C4DOS and C4KE, the whole climb
   ([docs/climbing-the-ladder.md](../../docs/climbing-the-ladder.md)).

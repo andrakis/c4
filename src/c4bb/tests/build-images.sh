@@ -244,6 +244,10 @@ cp src/c4bb/fs/c4ke.vfs.txt $DISK/
 cp load-c4r.c $DISK/load-c4r.c
 mkdir -p $DISK/src/c4ke
 cp src/c4ke/c4ke.c $DISK/src/c4ke/c4ke.c
+# The same for `c4 c4m.c clock.c`, the check that c4m.c under plain c4
+# has a clock: there it reads /proc/uptime, which C4IX, C4KE and this
+# disk's device provide (libjs/tests/test-libjs.sh).
+cp src/tests/clock.c $DISK/clock.c
 BIN_ALL_SRC="c4 c4m c4cc bench benchtop innerbench c4rdump c4rlink \
              type xxd top ls ps echo cat kill spin c4le \
              c4ke c4ke.vfs init vfsload c4sh eshell"

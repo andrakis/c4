@@ -64,7 +64,52 @@ static int vfs_nameeq(char *a, char *b) {
 
 static int vn_grow(struct vnode *vn, int need);
 
+// ---- /proc/uptime ----
+//
+// The clock, as a file: Linux's format, which is what c4m.c reads from
+// its host when plain c4 runs it (c4_time_host) -- so `c4 c4m.c`, and
+// innerbench -c with it, has a clock here as it has on Linux. Two
+// numbers, seconds with two decimals. The first is how long the kernel
+// has been up. The second is Linux's idle time summed over its CPUs;
+// here it is the same clock in tenths of a second, because that is how
+// c4m's default reading takes it (the integer part times 100 is
+// milliseconds). `c4m -a` reads the first number instead, and oisc4
+// the first with its fraction, so every reader's clock runs at the
+// right speed. The bytes are made when the file is read from its start
+// (vfs_read), stat'd or fetched whole (vfs_getdata), so two reads a
+// second apart see two times.
+static int vfs_boot_ms;            // __time() when the VFS came up
+
+// WHOLE.CC into P; the length
+static int vfs_fmt(char *p, int whole, int cents) {
+    char d[16];
+    int n, i;
+    n = 0;
+    d[n] = '0' + whole % 10; ++n; whole = whole / 10;
+    while (whole) { d[n] = '0' + whole % 10; ++n; whole = whole / 10; }
+    i = 0;
+    while (n) { --n; p[i] = d[n]; ++i; }
+    p[i] = '.';
+    p[i + 1] = '0' + cents / 10;
+    p[i + 2] = '0' + cents % 10;
+    return i + 3;
+}
+
+static void vfs_proc(struct vnode *vn) {
+    int ms, n;
+    if (!vn_grow(vn, 64)) return;
+    ms = __time() - vfs_boot_ms;
+    if (ms < 0) ms = 0;
+    n = vfs_fmt(vn->data, ms / 1000, ms % 1000 / 10);
+    vn->data[n] = ' '; ++n;
+    n = n + vfs_fmt(vn->data + n, ms / 100, ms % 100);
+    vn->data[n] = '\n'; ++n;
+    vn->data[n] = 0;
+    vn->size = n;
+}
+
 void vfs_init() {
+    struct vnode *vn;
     con_init();
     vn_cache = sl4b_cache_create("vnode", sizeof(struct vnode), 8);
     file_cache = sl4b_cache_create("file", sizeof(struct file), 16);
@@ -89,6 +134,10 @@ void vfs_init() {
     // that in any Unix -- so this one is made here rather than
     // silently conjured on first use.
     vfs_mkdir("/tmp");
+    // /proc/uptime, the clock (vfs_proc)
+    vfs_boot_ms = __time();
+    vfs_mkdir("/proc");
+    if ((vn = vfs_ramfile("/proc/uptime"))) vn->type = VN_PROC;
     // /log/kernel: the console, logged (console.c)
     con_logopen();
 }
@@ -254,6 +303,7 @@ static void vn_release(struct vnode *vn) {
     // RAM files and directories outlive their descriptors: they ARE
     // the filesystem.
     if (vn->type == VN_RAMFILE) return;
+    if (vn->type == VN_PROC) return;
     if (vn->type == VN_DIR) return;
     if (vn->type == VN_CONSOLE) return;
     if (vn->data) free(vn->data);
@@ -341,6 +391,17 @@ static int vn_is_program(struct vnode *vn) {
 void vn_stat(struct vnode *vn, int *out, int n) {
     int st[ST_WORDS];
     int i;
+    if (vn->type == VN_PROC) {
+        // a file to anything that asks, read-only, as long as it is now
+        vfs_proc(vn);
+        st[ST_TYPE] = 2; st[ST_SIZE] = vn->size; st[ST_PROG] = 0; st[ST_MTIME] = vn->mtime;
+        st[ST_INO] = vn->ino; st[ST_NLINK] = 1; st[ST_MODE] = 33060; st[ST_DEV] = 1;   // S_IFREG|0444
+        if (n <= 0) n = 4;
+        if (n > ST_WORDS) n = ST_WORDS;
+        i = 0;
+        while (i < n) { out[i] = st[i]; ++i; }
+        return;
+    }
     st[ST_TYPE] = vn->type == VN_DIR ? 1 : (vn->type == VN_RAMFILE ? 2 : 3);
     st[ST_SIZE] = vn->type == VN_RAMFILE ? vn->size : 0;
     st[ST_PROG] = vn_is_program(vn);
@@ -446,7 +507,8 @@ char *vfs_getdata(char *path, int *plen) {
     struct vnode *vn;
     sched_lock();
     vn = vfs_walk(path, 0, 0);
-    if (!vn || vn->type != VN_RAMFILE) { sched_unlock(); return 0; }
+    if (vn && vn->type == VN_PROC) vfs_proc(vn);
+    else if (!vn || vn->type != VN_RAMFILE) { sched_unlock(); return 0; }
     if (vn->lazy) vfs_fill(vn);
     if (!vn_grow(vn, vn->size + 1)) { sched_unlock(); return 0; }
     vn->data[vn->size] = 0;
@@ -456,11 +518,15 @@ char *vfs_getdata(char *path, int *plen) {
 }
 
 // The files (not folders) of the working directory, for COUNT and NAME.
+static int vn_isfile(struct vnode *vn) {
+    return vn->type == VN_RAMFILE || vn->type == VN_PROC;
+}
+
 static struct vnode *vfs_nth_file(int i) {
     struct vnode *vn;
     vn = vfs_cwd()->child;
     while (vn) {
-        if (vn_res(vn)->type == VN_RAMFILE) { if (!i) return vn; --i; }
+        if (vn_isfile(vn_res(vn))) { if (!i) return vn; --i; }
         vn = vn->next;
     }
     return 0;
@@ -471,7 +537,7 @@ int vfs_nfiles() {
     int n;
     n = 0;
     vn = vfs_cwd()->child;
-    while (vn) { if (vn_res(vn)->type == VN_RAMFILE) ++n; vn = vn->next; }
+    while (vn) { if (vn_isfile(vn_res(vn))) ++n; vn = vn->next; }
     return n;
 }
 
@@ -548,7 +614,7 @@ int vfs_rename(char *path, char *newname) {
     if (newname[0] == '.' && (n == 1 || (n == 2 && newname[1] == '.'))) return -1;
     sched_lock();
     vn = vfs_walk2(path, 0, 0);   // a link is renamed, not its file
-    if (!vn || vn == rootdir || !vn->parent || vfs_child(vn->parent, newname, n)) { sched_unlock(); return -1; }
+    if (!vn || vn == rootdir || !vn->parent || vn->type == VN_PROC || vfs_child(vn->parent, newname, n)) { sched_unlock(); return -1; }
     vfs_namecpy(vn->name, newname);
     sched_unlock();
     return 0;
@@ -645,7 +711,9 @@ int vfs_read(struct file *f, char *buf, int len) {
         return n;
     }
 
-    // RAM file: read from the description's own position
+    // RAM file: read from the description's own position. /proc/uptime
+    // is one too, made again whenever it is read from the start.
+    if (vn->type == VN_PROC && !f->pos) vfs_proc(vn);
     if (vn->lazy) vfs_fill(vn);
     n = vn->size - f->pos;
     if (n <= 0) { sched_unlock(); return 0; }
@@ -668,7 +736,7 @@ int vfs_write(struct file *f, char *buf, int len) {
         return len;
     }
     if (vn->type == VN_HOSTFILE) { sched_unlock(); return -1; }  // no write()
-    if (vn->type == VN_DIR) { sched_unlock(); return -1; }
+    if (vn->type == VN_DIR || vn->type == VN_PROC) { sched_unlock(); return -1; }
 
     if (vn->type == VN_PIPE) {
         // Compact first: a drained pipe reuses its buffer instead of

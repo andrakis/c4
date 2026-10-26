@@ -42,8 +42,8 @@ and `make test-c4l` (where plain c4's ability stops). Both are part of
 **Hosts:**
 
 - A native build has a real clock, signals and `FLT`.
-- Under plain c4, the clock is `/proc/uptime`. Where that file is missing
-  (Windows), time reads as 0; see
+- Under plain c4, the clock is `/proc/uptime`. C4IX and C4KE have one, and
+  so do c4bb and libjs. Where that file is missing (Windows), time reads as 0; see
   [Time on Windows](../README.md#time-on-windows). There are no signals, and
   `memcpy` is written in C.
 

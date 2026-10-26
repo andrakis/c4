@@ -97,6 +97,7 @@ int sys_open(char *path, int flags) {
         if ((h = open(path, 0)) >= 0) { close(h); return -1; }
     }
     if ((vn = vfs_lookup(path))) {
+        if (vn->type == VN_PROC && (flags & 3)) return -1;   // /proc/uptime is read-only
         if (flags & C4IX_O_TRUNC) { vn->size = 0; vn->lazy = 0; vfs_touch(vn); }   // the host bytes are not wanted
         return fd_open_vnode(t, vn, flags);
     }
@@ -476,7 +477,7 @@ int sys_dispatch(int num, int *args) {
             return f->vn->writers ? 0 : -1;
         }
         if (f->vn->type == VN_CONSOLE) return con_poll() ? 1 : 0;
-        if (f->vn->type == VN_RAMFILE) return f->vn->size > f->pos ? f->vn->size - f->pos : -1;
+        if (f->vn->type == VN_RAMFILE || f->vn->type == VN_PROC) return f->vn->size > f->pos ? f->vn->size - f->pos : -1;
         return 1;
     case SYS_INTR:     return sched_intr_below(task_get(args[0]));
     // Drop what a pipe holds unread, from either end: what a tty does with
@@ -497,11 +498,11 @@ int sys_dispatch(int num, int *args) {
         if (!t || !(f = fd_get(t, args[0]))) return -1;
         vn_stat(f->vn, (int *)args[1], args[2]);
         return 0;
-    // Only a RAM file has a position to move: a pipe, the console and a
+    // Only a RAM file (or /proc/uptime) has a position to move: a pipe, the console and a
     // host file (the host has no seek) are -1, libc's ESPIPE. Past the
     // end is allowed, and a write there leaves zeros in the gap.
     case SYS_LSEEK:
-        if (!t || !(f = fd_get(t, args[0])) || f->vn->type != VN_RAMFILE) return -1;
+        if (!t || !(f = fd_get(t, args[0])) || (f->vn->type != VN_RAMFILE && f->vn->type != VN_PROC)) return -1;
         if (args[2] == 0) num = args[1];
         else if (args[2] == 1) num = f->pos + args[1];
         else if (args[2] == 2) num = f->vn->size + args[1];

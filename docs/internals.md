@@ -706,6 +706,18 @@ memory-source mode, `c4r_load_mem`). `make test-c4ke-ramfs` demonstrates
 the whole cycle: compile inside C4KE, run from RAM, plus the same loop with
 c4sp's Lisp optimizer producing the image.
 
+One entry is the kernel's own: **`/proc/uptime`**, made at boot (when the
+`OP_VFS_*` opcodes are installed) and written again, in place, each time
+`OP_VFS_GET` fetches it. It holds the kernel's clock in the format c4m.c
+reads from a Linux host under plain c4 (`c4_time_host`): seconds since boot
+with two decimals, then the same clock in tenths of a second where Linux
+has its idle time, since c4m's default reading takes that number's integer
+part times 100 as milliseconds. `OP_VFS_PUT` and `OP_VFS_UNLINK` refuse it.
+A task's `open()` never sees this table (it is the machine's opcode, not
+the kernel's), so for c4m.c's own reader the machine provides the same
+file: Linux under native c4m, the disk device on c4bb and libjs. C4IX has
+its own (docs/c4ix-design.md).
+
 Detecting the kernel without u0: probe `OP_REQUEST_SYMBOL` (fixed number
 128), but only when `__c4_info()` reports `C4I_TRAPH` (0x400, "a trap
 handler is installed") -- under bare c4m the probe would just print trap

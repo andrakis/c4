@@ -21,6 +21,7 @@ At each prompt (the disk's `LADDER.TXT` says the same; `TYPE LADDER.TXT`):
 | `A>` | `BUILD` | C4KE and its init compiled onto the RAM disk (`LADDER` rebuilds the compiler first) |
 | `A>` | `RUN dosload.c4r c4ke.c4r` | boots the kernel just compiled, its RAM filesystem seeded from the RAM disk |
 | `c4sh>` | `doom`, `wolf3d`, `rps`, `raycast` | play, as C4KE tasks |
+| `c4sh>` | `grin` | grin as a C4KE task; its DOS Prompt is a C4KE Prompt (below) |
 | `c4sh>` | `tar x c4ix-src.tar` | C4IX's sources into the RAM filesystem |
 | `c4sh>` | `b4ke -f c4ix.b4k` | twelve modules and a link: `c4ix.c4r` |
 | `c4sh>` | `kboot c4ix.c4r` | C4KE shuts down, and the C4IX it built boots (`kboot c4ix.c4r --desktop` for the desktop) |
@@ -126,6 +127,37 @@ C4KE does not take back what a task allocated (there is no protected mode
 here to see it), so each Doom run under C4KE keeps about 14 MB until C4KE
 stops, when HEAP.SYS gives it all back. That is the reason for 128 MB.
 
+### grin under C4KE
+
+grin is a bare-libc program like the games, so it runs as a C4KE task too.
+Two things made it a good one:
+
+- **Its naps.** grin sleeps when it has nothing to do. It used the machine's
+  USLP, which on libjs stops the whole machine, every task with it. libc's
+  `usleep` (`bare.c`'s `umsleep`) now uses C4KE's `OP_USER_SLEEP` when the
+  program is a task (`__c4ke_exit` set), and grin naps through it.
+- **Its DOS Prompt.** With no DOS under it, the window is a **C4KE Prompt**
+  (`src/grin/dosprmpt.c`, `ke_run`): a line's first word is a program,
+  started as a task (`OP_USER_START_C4R`, found as c4sh finds one), the
+  rest its arguments. grin's loop carries on while it runs; what it prints
+  comes from the console tap into the window, and a line typed in the
+  window is fed to its fd 0 (Ctrl+Z ends its input). A last word `&` leaves
+  it running in the background, printing to the console; `kill PID [SIGNAL]`
+  is a builtin, as in C4KE's shells (SIGTERM unless told, 9 is SIGKILL);
+  `EXIT` closes the window.
+
+**Preemption.** Under C4KE the timer had almost never fired (`c4ke: 1
+timer ticks` at shutdown in these runs), so a task that never slept had the
+machine to itself. A background `top` or a busy `spin x` stalled the shell
+and grin. libjs and c4bb hold the PIT while a trap handler runs, and C4KE's
+`await_pid` blocked *inside* its handler (it called `schedule()` there):
+the kernel waiting on init, init on the shell and the shell on what it ran
+each left a handler open for good. `await_pid` now switches away from the
+trap as `sleep` does (`SCHEDULE_IN_TRAP`), and `kernel_task_finish` puts the
+exit code in the waiter's saved A. The PIT now preempts. Note that `spin`
+and `top` without `-b` take C4KE's input focus when they start, so the
+shell that started them gets no keys until it asks for them back.
+
 ### C4KE to C4IX: kboot
 
 On the breadboard the way up from C4KE is a medium and a reset (`kinstall
@@ -152,7 +184,7 @@ C4IX needs nothing for this: it boots as it does from dosload
 
 | target | what |
 |---|---|
-| `make test-libjs-ladder` | `test-c4dos-ladder.mjs`, the whole climb above with 16 checks, about 70 s; also in `make test-libjs` (which skips it without the disk) |
+| `make test-libjs-ladder` | `test-c4dos-ladder.mjs`, the whole climb above with 24 checks, about 90 s; also in `make test-libjs` (which skips it without the disk). Under C4KE it also runs grin, opens a C4KE Prompt, starts `spin x &` in it, checks with `ps` that the spinning task ran on while grin waited (more than 1,000 of 2,000 ms), and kills it |
 | `node libjs/tests/test-c4dos-ladder.mjs --quick` | the same to C4KE and back, without b4ke |
 | `node libjs/tests/web-c4dos-ladder.mjs` | the page in the user's Chrome over CDP: the same climb typed into the terminal, with screenshots |
 

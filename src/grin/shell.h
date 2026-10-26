@@ -80,6 +80,15 @@ int   gd_exec(char *line);            // a command line, as A> runs it: its stat
 int   gd_sink(int w, int r, int ctx); // the console's sink (slot 24): w(ctx, buf, n), r(ctx, buf, n); 0s give it back
 int   gd_setgen(int g);               // the heap generation now: the previous one, or -1
 int   gd_drive();                     // the drive DOS's prompt is on, 0 = A: (v6)
+// under C4KE, with no DOS (disk.c): its tasks, and the machine's console tap
+int   gd_c4ke();                      // 1: grin is a C4KE task, and there is no DOS
+int   gd_ke_start(int argc, char **argv);   // a program as a task: its pid, 0 if it could not start
+int   gd_ke_running(int pid);         // is it still running?
+int   gd_ke_kill(int pid, int sig);   // a signal to a task (kill): 0, or -1
+void  gd_tap(int on);                 // 1: keep what is printed; 0: the console again
+int   gd_tap_drain(char *buf, int n); // what was printed, up to n bytes: how many
+void  gd_tap_feed(char *buf, int n);  // fd 0 reads these n bytes, then end of input; -1: the keyboard
+int   gd_tap_left();                  // bytes of the feed not read yet (-1: the keyboard)
 int   gd_size(char *name);            // bytes, read through; -1 if it is not there
 int   gd_list(int drive, char *names, int max);   // a drive's files, WK_NAME bytes each: how many
 char *gd_name(int drive, char *name, char *out, int n);   // "B:NAME", "RAM:NAME"

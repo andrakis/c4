@@ -2426,7 +2426,10 @@ static void op_await_pid(int trap, int ins, int mode, int a, int *bp, int *sp, i
 		// inside a trap handler -- and the machine (libjs, c4bb) holds the
 		// PIT while a handler runs, so nothing was ever preempted: a task
 		// that did not sleep had the machine to itself.
-		SCHEDULE_IN_TRAP();
+		// Spelled out, not SCHEDULE_IN_TRAP(): c4m compiles this file with
+		// no preprocessor (innerbench), and a macro call is a call to
+		// nothing there ("bad function call").
+		__c4_jmp((int *)&trap_schedule_in_trap + 2);
 	} else {
 		// If task not running, no point in waiting
 		printf("c4ke: await_pid(%d) - process %d not found\n", pid, pid);

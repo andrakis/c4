@@ -234,8 +234,8 @@ c4sc at the DOS prompt.
 
 ### API versions
 
-The table is 32 words, zeroed at boot. Slot 5 is the version, 5 since
-2026-10-25 (4 from 2026-10-24).
+The table is 32 words, zeroed at boot. Slot 5 is the version, 6 since
+2026-10-26 (5 from 2026-10-25, 4 from 2026-10-24).
 
 | slot | v1 | | slot | v2 / v3 |
 |---|---|---|---|---|
@@ -273,7 +273,19 @@ The table is 32 words, zeroed at boot. Slot 5 is the version, 5 since
 | 28 | `home()` | the home drive (`DRIVES.SYS HOME=`), 0 = A:; -1 for none |
 | 29 | `drives()` | how many drives there are; 1 without `DRIVES.SYS` |
 
-and `create`, `write`, `close` (2-4) and `unlink` (18) reach drives:
+**v6** (2026-10-26, grin's G5: redirection and DOS Prompt windows):
+
+| slot | call | returns |
+|---|---|---|
+| 30 | `drive()` | the drive the prompt is on, 0 = A:. DOS has one for every caller; a DOS Prompt window keeps its own and asks after each line it runs |
+
+and conwrite, conread (16, 17) follow `REDIR.SYS`'s redirections
+("Redirection", below), which come before a sink. A sink (24) is called
+as the program that installed it: a program it loads meanwhile is that
+program's child, not the child of whatever DOS was running when it asked
+for input. `include/c4dos.h` has `dos_drive()`.
+
+v5's `create`, `write`, `close` (2-4) and `unlink` (18) reach drives:
 "The home drive", below. `include/c4dos.h` has `dos_home()` and
 `dos_drives()`. A handle `create` gives is no longer a RAM-disk slot
 number but `WFD` (2000) plus an entry of DOS's, so nothing may treat it
@@ -300,7 +312,7 @@ fd 1, 2 and 0 through slots 16 and 17 when the version word says 4.
 
 Slots 9–12 are advertised only when `DEVICE=RAMDISK.SYS` was installed;
 2 when there is a RAM disk or a home drive, 18 when there is a RAM disk
-or `DRIVES.SYS`; 28 and 29 always; and slot 15 only when
+or `DRIVES.SYS`; 28, 29 and 30 always; and slot 15 only when
 `DEVICE=CLOCK.SYS` was, so a caller
 that checks a slot is told the truth rather than handed an always-empty
 listing or a stopped clock. **Everything at 9 and above must be
@@ -335,10 +347,93 @@ tools write files DIRECTLY through the API (`dos_create`/`dos_write`/
 `dos_close` slots) instead of a captured console — simpler, and
 anything printf-shaped can be done in software where needed (the c4lm
 stdio.h vsnprintf is sitting right there when a tool wants it). Batch
-stays a command list, not a shell language. (Revisited 2026-10-24 for
-grin, keeping this as the default: redirection becomes opt-in with
-`DEVICE=REDIR.SYS`, `docs/grin-plan.md` 3.7. Not built yet; the console
-slots and the sink of API v4 are what it will stand on.)
+stays a command list, not a shell language.
+
+**DECISION CHANGED (user, 2026-10-24), built 2026-10-26: redirection is
+opt-in.** grin's DOS Prompt windows want `DIR | ...` and `> file` (its
+plan, `docs/grin-plan.md` 3.7), so `DEVICE=REDIR.SYS` turns on `>`,
+`>>`, `<` and `|`, and `DEVICE=REDIR.SYS TAP` says the machine has the
+console tap, for c4cc programs too. **Without the line, a command line
+is parsed exactly as before** — the 2026-08-21 decision stays the
+default, `ECHO a > b` still says `a > b`, and the build floppies, which
+do not have the line, are unaffected. Tools still write their files
+through the API. Batch files are still command lists; they redirect,
+and are redirected, like any other command.
+
+## Redirection: DEVICE=REDIR.SYS
+
+    cmd > file      cmd >> file      cmd < file      a | b | c
+
+- **Where it happens.** The prompt, each line of a batch file and
+  `exec` (slot 19) all run a command line through `line_run`. Without
+  `REDIR.SYS` that is `dispatch`, as it always was. With it, a line with
+  `>`, `<` or `|` in it goes through `redir_run`: split at the `|`s, each
+  segment's redirections taken out of it (`seg_parse`; a name runs to the
+  next space, `>` or `<`), and each segment run by `run_seg`, which opens
+  the files, keeps the outer level's state in its locals, runs the
+  command (a batch file it names included) and puts the state back. So
+  `T > T.OUT`, where `T.BAT` redirects lines of its own, nests.
+- **Targets.** Anything `create` can make: `RAM:NAME`, `B:NAME` on a
+  drive that can be written, a plain name on the home drive or else the
+  RAM disk. `>>` reads what the file held and writes it back first (a
+  file on a drive is written whole when it is closed). `<` reads the
+  whole file into a block of DOS's own.
+- **Pipes** run `a`, then `b`, through a temporary file on the RAM disk
+  (`RAM:PIPEn.$$$`), as MS-DOS's did, deleted when the next segment is
+  done; they need `RAMDISK.SYS`, and say so without it. `DIR` leaves
+  `.$$$` files out, so `DIR | x` does not list its own pipe.
+- **The catch** of making it opt-in rather than universal: with the line
+  in, a `>` in an `ECHO` is a redirection. The page's disk had `ECHO ...
+  back to A>.` in its AUTOEXEC, which wrote a file called `.` on B: until
+  the browser check showed the line missing (fixed in build-images.sh).
+- **What is redirected.** DOS's own output: every builtin, its error
+  messages and a batch file's echo now go through `pf`, a small
+  formatter (`%d %s %c %% %.Nd`, a format and exactly three arguments,
+  since plain c4 has no varargs of its own) that hands its buffer to
+  conwrite. A `bare.c` program's fd 1, 2 and 0, which go through slots
+  16 and 17. And, with the tap, a c4cc program's `PRTF`, `PUTC`, `PUTS`
+  and its `READ` of fd 0.
+- **Order of precedence** for the console: a redirect file, then a
+  shell's sink (slot 24), then the console. Under a DOS Prompt window's
+  sink, a line with no redirection in it still goes through `redir_run`
+  when the tap is in, so that a c4cc program's output reaches the window.
+- `TYPE /P`'s pause reads its line through conread, so a DOS Prompt
+  window's Enter answers it; paging is off into a file. `TYPE` copies
+  through a buffer of its own rather than the scratch, since a pause can
+  wait in grin while grin loads a program.
+- **ECHO says the rest of the line**, however many words: argv stops at
+  15, and ECHO puts back the spaces `parse_line` cut. (It used to drop
+  everything past fourteen words.) A redirected `ECHO hi > x` writes
+  `hi` with no trailing space.
+
+### The console tap
+
+A c4cc program prints with `PRTF`/`PUTC`/`PUTS` and reads with `READ`
+on fd 0, all straight to the machine, never near DOS. The tap is four
+registers in `src/c4bb/sim/devices.js`, so c4bb and libjs both have it:
+
+| register | | |
+|---|---|---|
+| `CON_TAP` 0x1d0 | w | 1: capture -- every byte the console would send (the opcodes, `UART_TX`, the block write) goes into a host buffer instead; 0: the console again (what is held stays) |
+| | r | bytes held |
+| `CON_ADDR` 0x1d4 | w | a buffer, for the two below |
+| `CON_LEN` 0x1d8 | w | drain: up to N held bytes copied to `CON_ADDR`, oldest first; r: how many |
+| `CON_IN` 0x1dc | w | fd 0's `READ`s take the N bytes at `CON_ADDR` (copied when written), then end of input; -1: the keyboard again. r: bytes left, or -1 |
+
+DOS captures whenever the console goes anywhere but the console (a
+redirect file or a sink) and drains what was caught to wherever it goes
+before writing anything else there and when a level of redirection ends
+(`tap_drain`, `tap_set`); `con_put` lets go of the capture for what is
+meant for the console itself. Fd 0 is fed from a `<` file, with nothing
+at all under a sink (a c4cc program in a DOS Prompt window reads end of
+input rather than the page's keyboard), and is the keyboard otherwise.
+
+**Announced, never probed:** `DEVICE=REDIR.SYS TAP`. Native c4m has no
+device window there, so the line is left off its floppies; there a
+redirected c4cc program's output stays on the console, and DOS says so,
+once, on the console. Everything redirection needs in DOS itself is plain
+c4 (the tap's loads and stores run only with `TAP`), and the tower leg
+of `test-c4dos` runs the redirection session under unmodified `c4`.
 
 ## dosload — LOADLIN for C4DOS
 
@@ -374,8 +469,9 @@ loading a kernel must not be the thing that demands a better CPU.
   `DEVICE=RAMDISK.SYS SIZE=n`, `DEVICE=CONSOLE.SYS FLUSH`,
   `DEVICE=DRIVES.SYS` (with `HOME=B:`, "The home drive" below) and
   `DEVICE=HEAP.SYS` (each program's memory freed when it ends; "Memory:
-  DEVICE=HEAP.SYS" above), all implemented; `FILES=n`, `SHELL=...`
-  reserved. grin's plan adds `REDIR.SYS` (`docs/grin-plan.md` 3.7).
+  DEVICE=HEAP.SYS" above) and `DEVICE=REDIR.SYS` (with `TAP`;
+  "Redirection" above), all implemented; `FILES=n`, `SHELL=...`
+  reserved.
   Parsed with a flattened-locals descent (the vfsload.c skeleton,
   c4cc-dialect).
 
@@ -397,17 +493,22 @@ loading a kernel must not be the thing that demands a better CPU.
 - `AUTOEXEC.BAT`: line-per-command batch, `ECHO`, `REM`, `@` prefix,
   run through the same reader as the interactive prompt (the c4sh
   INPUT_STDIN/INPUT_STREAM split, minus its known multi-line-read bug).
-- Builtins: `DIR` (`DIR B:` types B:'s listing), `TYPE`, `COPY`, `DEL`
+- Builtins: `DIR` (the prompt's drive's listing; `DIR B:` types B:'s),
+  `TYPE`, `COPY`, `DEL`
   (or `ERASE`), `RUN` (implicit for *.C4R names),
   `ECHO`, `REM`, `VER`, `TIME` (wants CLOCK.SYS), `MEM` (the heap too,
   with HEAP.SYS), `EXIT` (halts —
   the one legitimate use of the EXIT opcode), and a drive letter such
   as `B:` (below). A `.BAT` name runs the batch file.
   `TYPE file /P` and `DIR /P` page: 23 lines, then `-- More --` and a
-  wait. The wait is `get_line()`, which already understands that one
-  `read(0, ...)` may carry several lines, so a pause eats exactly one
-  and leaves the rest of a piped script for the prompt. Paging is off
-  unless `/P` is given, so nothing that scripts `TYPE` changes.
+  wait. The wait reads a line through conread (`con_get`, which like
+  the prompt's reader understands that one `read(0, ...)` may carry
+  several lines), so a pause eats exactly one and leaves the rest of a
+  piped script for the prompt. Paging is off unless `/P` is given, so
+  nothing that scripts `TYPE` changes. All of them print through `pf`
+  (above), so they can be redirected. With `HOME=B:`, `DIR` lists the
+  prompt's drive by name (`A:c4dos.dir`): the plain name opened the home
+  drive's listing first, so `DIR` at A> listed B: (until 2026-10-26).
 
 ### Drives, and one spelling for them
 
@@ -590,7 +691,7 @@ None of these is part of `make test`.
 
 | target | what it pins |
 |---|---|
-| `make test-c4dos` | four legs: native c4m, the clock build, unmodified `c4` through `c4l.c` (the purity pin: the clockless image uses no opcode above `EXIT`), and c4bb, including `c4.c4r` compiling hello inside it. Its script builds the images with `./cpp \| ./c4cc`, not the Makefile's c4lc. API v4 (`src/tests/dosexec.c`: exec three deep, a resident image, catch, a child's file, unlink, the console slots, the sink) runs on the native leg, the tower and c4bb; on c4bb it runs once more with `DRIVES.SYS HOME=B:` and a writable B: (the CLI's `-w`), with `COPY`, `DIR B:` and `DEL` |
+| `make test-c4dos` | four legs: native c4m, the clock build, unmodified `c4` through `c4l.c` (the purity pin: the clockless image uses no opcode above `EXIT`), and c4bb, including `c4.c4r` compiling hello inside it. Its script builds the images with `./cpp \| ./c4cc`, not the Makefile's c4lc. API v4 (`src/tests/dosexec.c`: exec three deep, a resident image, catch, a child's file, unlink, the console slots, the sink) runs on the native leg, the tower and c4bb; on c4bb it runs once more with `DRIVES.SYS HOME=B:` and a writable B: (the CLI's `-w`), with `COPY`, `DIR B:` and `DEL`. Redirection (`REDIR.SYS`: `DIR > LIST.TXT`, `>>`, `src/tests/dosfilt.c` given `<` and in a pipe of three, a redirected batch file and error message, a 17-word `ECHO`, no pipe file left) runs on the native leg and the tower, and without the line `>` and `\|` stay words; on c4bb, `REDIR.SYS TAP` with `HOME=B:`: `hello32 > OUT.TXT` (a c4cc program's printf, through the tap, onto B:), `hello32 \| dosfilt`, and `dosfilt -r` reading fd 0 from a pipe |
 | `make test-c4dos-heap` | on libjs, the Makefile's c4lc `-O` image with `HEAP.SYS`: the v4 scenarios with c4lc `-O` transients, a child's leftovers given back and its RAM-disk file kept, then Doom five times at the prompt with `HEAP_USED` within 1% (`libjs/tests/test-c4dos-heap.mjs`; Doom needs the games disk) |
 | `make test-cpp` | `cpp \| c4cc` and `gcc -E \| c4cc` give byte-identical images over the corpus, and `cpp.c` interpreted by plain c4 matches the native build |
 | `make test-dosload` | `dosload.c4r` uses no opcode above `EXIT` |

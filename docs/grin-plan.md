@@ -4,10 +4,12 @@ Status: written 2026-10-24 against `smp` at 6295e18, and revised the
 same day with the user's answers (section 8). **G0 and G1 are built**
 (branches `grin-g0` and `grin-g1`, merged here on 2026-10-24), and
 **G2 is built** (branch `grin-g2`, 2026-10-24), **G3** (branch `grin-g3`,
-2026-10-25) and **G4** (branch `grin-g4`, 2026-10-25). Sections 3.2 and 3.3
+2026-10-25), **G4** (branch `grin-g4`, 2026-10-25) and **G5** (branch
+`grin-g5`, 2026-10-26). Sections 3.2 and 3.3
 say what G0 built where it differs from the first draft, 3.4 shows the
-window kit's API as G1 built it and G3's mechanism, 3.8 and 3.9 say what
-G2 and G4 built, and so do the milestones. The rest is plan.
+window kit's API as G1 built it and G3's mechanism, 3.6 and 3.7 say what
+G5 built, 3.8 and 3.9 what G2 and G4 built, and so do the milestones.
+The rest is plan.
 
 `grin` is to C4DOS what Windows 3.x was to MS-DOS: a program started
 from `AUTOEXEC.BAT` that takes over the screen and gives you windows, a
@@ -598,6 +600,30 @@ kept in its properties, as a PIF file kept it:
 message box ("Close Doom before starting another program"). Exit grin
 is refused while a DOS program runs.
 
+*As built in G5* (`src/grin/grin.c`):
+
+- **The loop** is `pass(top)`: the display's events, `wk_tick`, the
+  screen saver, a redraw and a nap, with `apps_reap` only at the top.
+  `grin_pump()` is `pass(0)`. After each top-level pass, `main` runs one
+  DOS program that is waiting, if none is running: a full-screen one
+  (`full_run`) or a DOS Prompt's line (`dosprompt_top`, 3.7).
+- **Full screen.** `grin_full(cmdline)` queues the line, or, while a DOS
+  program runs or waits, says "A DOS program is running (DOOM). Let it
+  finish before starting another." `full_run`: the saver stopped, the
+  pointer hidden, the screen cleared, `gui_detach`, DOS's `exec` of the
+  line; then `gui_attach` with grin's ring at GRIN.INI's size, the event
+  mask, the arrow, `snd_reset()` (when the sound card is fitted),
+  `wk_repoint` and `wk_redraw_all`. The program's text goes to the
+  page's console, as at A>.
+- **What launches one:** a Program Manager item whose mode is `full`;
+  File > Run... and File Manager's double click on a `.c4r`, through
+  `grin_run`, which loads the program and, when it does not say hello,
+  unloads it and gives the line to `grin_full` (so DOS loads it twice,
+  and its constructors run twice; none of the games minds). A `window`
+  item is greyed and says that comes with G6.
+- **Exit grin** is refused, with the same message, while a DOS program
+  runs (which can only be a DOS Prompt's, waiting for a line).
+
 ### 3.7 Redirection, and DOS Prompt windows
 
 **At the prompt.** `DEVICE=REDIR.SYS` lets C4DOS's command line take
@@ -645,6 +671,39 @@ roads, and both have to be redirected.
 - **Several windows, one command at a time.** Several DOS Prompt windows
   can be open. While one runs a command, the others take typing but
   say "busy" on Enter.
+
+*As built in G5.* C4DOS's side -- `REDIR.SYS`, the formatter its
+builtins print through, the console tap, API v6 -- is in
+`docs/c4dos-design.md` ("Redirection: DEVICE=REDIR.SYS"). grin's is
+`src/grin/dosprmpt.c`:
+
+- **A window** is "DOS Prompt N", N the lowest number free, an 80x25
+  `textgrid.c` grid (WK_FIXED). At 640x480 it is cut to the screen's
+  width, so the last three columns and the scroll bar are off its right
+  edge; at 800x600 it fits.
+- **A line typed** is queued; the top of grin's loop runs it: the
+  window's own drive selected first (`exec("B:")`) when DOS's differs --
+  DOS has one prompt drive for everyone, and slot 30 says which it is
+  after each line -- then `sink(dp_write, dp_read, w)`, `exec(line)`,
+  `sink(0, 0, 0)`, and the prompt again.
+- `dp_write` feeds the grid, and draws at once at most every 50 ms, for a
+  program that writes and does not read. `dp_read` pumps grin's loop, in
+  grin's own heap generation, until a line is typed in its window;
+  Ctrl+Z (or Ctrl+D) gives the program the end of its input.
+- **C4DOS calls a sink as the program that installed it**, so an
+  application started while a DOS Prompt's program waits (Clock from
+  Program Manager) is grin's child, not that program's, and is not
+  unloaded with it.
+- **Busy:** the other windows say "grin: busy -- ASKLINE is running"
+  on Enter; Program Manager and File Manager refuse a second DOS program
+  with the message box above. A window whose line runs refuses to close.
+- **EXIT** (any case, spaces around it) closes the window, which looks
+  for the word before DOS sees it.
+- **c4cc programs** run through the tap: their output appears when they
+  return, and a read of fd 0 gets the end of input.
+- **File Manager** runs a `.bat` in a new DOS Prompt, typed at its first
+  prompt, and File > Edit opens the selected file in Notepad (the way to
+  edit a `.bat` now).
 
 ### 3.8 Persistence
 
@@ -764,6 +823,13 @@ test-c4dos-heap boots it; nothing on the page does. The games disk's `CONFIG.SYS
 `src/c4dos/fs/CONFIG.SYS` rather than copied from the shared disk, which
 in a fresh tree is not there yet at that point (G1's note).
 
+**As built in G5.** The disk's `CONFIG.SYS` has `DEVICE=REDIR.SYS TAP`,
+and three DOS programs for redirection are on it: `ASKLINE` (`bare.c`,
+reads a line: `src/grin/apps/askline.c`, linked with the bare libc
+alone), `DOSFILT` (a c4cc filter, `src/tests/dosfilt.c`; `-r` reads with
+`READ` and prints with `printf`, the tap's case) and `HELLO` (c4cc's
+`printf`). The AUTOEXEC's ECHO is no longer cut at fourteen words.
+
 ## 4. The first applications
 
 - **Program Manager** (built in) is the shell window. In G4 it shows one
@@ -798,7 +864,7 @@ in a fresh tree is not there yet at that point (G1's note).
 - **Control Panel** (built in): **Display** (640x480 or 800x600, applied
   at once and saved), Colors (schemes), and Desktop (pattern and
   screen saver).
-- **DOS Prompt** (built in): 3.7.
+- **DOS Prompt** (built in, G5): 3.7.
 - **Games**: Program Manager items, full screen from G5 and windowed
   from G6.
 
@@ -1135,6 +1201,61 @@ Deviations and findings:
 - **Browser:** Wolfenstein 3D full screen, play a little, and quit back
   to grin. Then a DOS Prompt with `DIR | ...` and `TYPE`.
 
+*Done, branch `grin-g5` (2026-10-26), with smp fb313d0 merged.* What was
+built: 3.6 and 3.7 ("As built in G5"), 3.9, and `docs/c4dos-design.md`
+("Redirection: DEVICE=REDIR.SYS", "The console tap", API v6).
+
+- **C4DOS:** `REDIR.SYS` (`>`, `>>`, `<`, `|` through `RAM:PIPEn.$$$`,
+  batch files too), opt-in, so a line without the device is parsed as
+  before; the builtins, their errors and a batch file's echo print
+  through `pf` and conwrite instead of `printf`; ECHO says the rest of
+  the line; `TYPE /P` pauses through conread; the console tap used with
+  `REDIR.SYS TAP`, and said once to be missing without it.
+- **Machine:** the tap's four registers in `devices.js` (0x1d0-0x1dc,
+  free until now), which c4bb's CLI and libjs share; libjs's `PRTF`,
+  `PUTC` and `PUTS` reach them through `emit`.
+- **grin:** the full-screen launch, DOS Prompt windows, `grin_pump`.
+- **Tests:** test-c4dos's redirection legs (native, tower, and the tap on
+  c4bb with `HOME=B:`); test-grin's G5 checks (37 more, 150 in all): at
+  A>, `DIR > LIST.TXT` and `TYPE LIST.TXT` (on B:), `HELLO > OUT.TXT`
+  through the tap, `ASKLINE < IN.TXT`, `DIR | DOSFILT` and `TYPE IN.TXT |
+  DOSFILT -r`; in grin, File > Run... HELLO full screen; two DOS Prompts,
+  `ECHO` in one and `DIR` in the other each in its own; `ASKLINE` reading
+  a line in DOS Prompt 2 while a Clock ticks, Doom refused meanwhile and
+  DOS Prompt 1 saying busy; `HELLO`, `DIR | DOSFILT` and `ECHO ... >
+  B:RUNME.BAT` in a window; EXIT; File Manager running RUNME.BAT in a DOS
+  Prompt; Doom full screen from Program Manager twice, quit with F10 and
+  Y, grin back at 800x600, `HEAP_USED` the same to the byte.
+
+Deviations and findings:
+
+- **API v6, slot 30** (`drive()`), which the plan did not name: a DOS
+  Prompt window keeps its own drive, and DOS's prompt drive is global.
+- **A sink runs as the image that installed it** (C4DOS's `sink_call`):
+  without that, Clock started while a DOS Prompt's program waited would
+  have been that program's child and unloaded with it.
+- **`DIR` with `HOME=B:` listed B:** at A> (G4's `dos_open` looks on the
+  home drive first); it now names the prompt's drive's listing.
+- **File Manager's File > Edit**, since a double click on a `.bat` now
+  runs it.
+- DOS Prompt windows are numbered, so that the Task List (and the test)
+  can tell them apart; at 640x480 a window is wider than the screen.
+- A full-screen DOS program's text goes to the page's console pane, as
+  at A>.
+- A c4cc program in a DOS Prompt reads end of input from fd 0 (the
+  page's keyboard would be the console pane's, not the window's).
+- **The disk's AUTOEXEC said `ECHO ... back to A>.`**, which REDIR.SYS
+  took for a redirection into a file called `.` on B:; it says "the A
+  prompt" now, and test-grin checks there is no such file. `DIR` leaves
+  out the pipe files (`.$$$`).
+- **Browser** (Chrome 151 on 9222, the page served from the worktree on
+  port 8494 and loaded through https://8494.code.home.stargazer.onl, a
+  secure context): `web-grin-g5.mjs`, all OK, no page errors. Wolfenstein
+  3D from Program Manager full screen, a new game on floor 1 (moved,
+  turned, one shot), Esc > Quit > Y, and grin drew Program Manager again;
+  then DOS Prompt 1 with `DIR | DOSFILT`, `ECHO ... > B:G5.TXT`, `TYPE
+  B:G5.TXT` and `HELLO`.
+
 **G6: games in a window**
 
 - A grin back-end in each bare platform (`plat-bare.c`, `dg-bare.c`,
@@ -1241,7 +1362,8 @@ Deviations and findings:
 5. Boot into grin from `AUTOEXEC.BAT`, on a disk set of the page's own.
 6. Persistence for C4DOS, and for the bare-machine games too.
 7. File redirection in C4DOS, opt-in through a `DEVICE=` line, so that
-   DOS Prompt windows work in grin, cooperatively.
+   DOS Prompt windows work in grin, cooperatively. (Built in G5:
+   `DEVICE=REDIR.SYS`, `docs/c4dos-design.md` "Redirection".)
 8. The command is `GRIN`.
 9. One persistence store per system, not one shared store. The planned
    ladder system needs a store of its own (3.8).

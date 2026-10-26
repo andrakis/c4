@@ -1987,7 +1987,9 @@ int c4cc_readargs (int argc, char **argv) {
   int r, i, fd;
   int use_stdin;
 
-  poolsz = 256 * 1024;
+  // What the source area holds (c4cc_init allocates it, poolsz there): the
+  // preprocessed kernel, comments kept, outgrew the 256 KB read here.
+  poolsz = 512 * 1024;
   --argc; ++argv;
   if (argc > 0 && **argv == '-' && (*argv)[1] == 's') { src = 1; --argc; ++argv; }
   if (argc > 0 && **argv == '-' && (*argv)[1] == 'd') { debug = 1; --argc; ++argv; }

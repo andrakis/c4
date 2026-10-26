@@ -93,7 +93,7 @@ const key = (code, ch = 0) => {
 const prompts = () => (text().match(/A:\\[^>\n]*>/g) || []).length;   // A:\>, A:\GAMES>
 
 check(until(() => prompts() > 0), haveGames ? 'C4DOS boots the games disk' : 'C4DOS boots', text());
-if (!noheap) check(text().includes('heap device installed'), 'HEAP.SYS is installed', text());
+if (!noheap) check(text().includes("installed: each program's memory is freed when it ends"), 'HEAP.SYS is installed', text());
 // One command at the prompt; what it printed.
 const cmd = (line, budget) => {
   const p = prompts(), at = text().length;

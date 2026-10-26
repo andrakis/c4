@@ -111,7 +111,7 @@ const doom = (line, prompt) => {
 // ---- C4DOS ----------------------------------------------------------------
 begin();
 check(until(() => idle(A), 60), 'C4DOS boots the ladder disk', text());
-check(text().includes('heap device installed'), 'with HEAP.SYS', text());
+check(text().includes("installed: each program's memory is freed when it ends"), 'with HEAP.SYS', text());
 // the disk is in directories, and APPEND finds what is in them: DIR at
 // the root has them, and the games, the build kit and C4KE and C4IX's
 // files are found from it (Doom, BUILD and everything above DOS below)

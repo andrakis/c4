@@ -1838,7 +1838,7 @@ int type_file (char *path, int page) {
 
 int cmd_ver () {
   pf("C4DOS version %d.%d\n", VER_MAJOR, VER_MINOR, 0);
-  pf("the operating system before operating systems\n", 0, 0, 0);
+  pf("C4DOS, made possible by Robert Swierczek's c4\n", 0, 0, 0);
   return 0;
 }
 
@@ -2918,8 +2918,169 @@ int dos_api_exec (char *cmd) {
   return r;
 }
 
+// ---- device drivers: their banners -----------------------------------------
+// DOS 6's drivers each announced themselves as CONFIG.SYS loaded them --
+// a name, what they were and their version, then what they had done:
+// "64 KB High Memory Area available", or why they had not. C4DOS's do the
+// same: drv_banner is the first line, drv_said the rest, indented under
+// it, saying what was installed or why it was not.
+enum { BANNER_W = 13 };
+int drv_banner (char *name, char *what) {
+  int n;
+  printf("%s", name);
+  n = xlen(name);
+  while (n < BANNER_W) { printf(" "); ++n; }
+  printf("%s, C4DOS %d.%d\n", what, VER_MAJOR, VER_MINOR);
+  return 0;
+}
+// the indent a banner's other lines start with
+int drv_indent () {
+  int n;
+  n = 0;
+  while (n < BANNER_W) { printf(" "); ++n; }
+  return 0;
+}
+
+// the value after KEY= on the line from p to e ("SIZE=", "HOME="), or 0
+char *cfg_arg (char *p, char *e, char *key) {
+  while (p < e && !starts_ci(p, key)) ++p;
+  if (p >= e) return 0;
+  return p + xlen(key);
+}
+// is the word there on the line from p to e?
+int cfg_has (char *p, char *e, char *word) {
+  while (p < e && !starts_ci(p, word)) ++p;
+  return p < e;
+}
+
+// DEVICE=CLOCK.SYS: TIME, and the clock in the API (slot 15)
+int dev_clock () {
+#if C4DOS_CLOCK
+  int ms, s;
+#endif
+  drv_banner("CLOCK.SYS", "clock driver");
+#if C4DOS_CLOCK
+  g_clock = 1;
+  ms = __time();
+  s = ms / 1000;
+  drv_indent(); printf("installed: TIME, and the clock for programs (API slot 15)\n");
+  drv_indent(); printf("the machine has been on %d.%d%d%d s\n", s, (ms / 100) % 10, (ms / 10) % 10, ms % 10);
+#else
+  drv_indent(); printf("not installed: this build of C4DOS has no clock (C4DOS_CLOCK)\n");
+#endif
+  return 0;
+}
+
+// DEVICE=RAMDISK.SYS [SIZE=n]: the RAM disk, n bytes (RAMSIZE without)
+int dev_ramdisk (char *p, char *e) {
+  int total;
+  char *v;
+  g_ramdisk = 1;
+  g_ram_budget = RAMSIZE;
+  if ((v = cfg_arg(p, e, "SIZE="))) {
+    total = 0;
+    while (v < e && *v >= '0' && *v <= '9') { total = total * 10 + (*v - '0'); ++v; }
+    if (total > 0) g_ram_budget = total;
+  }
+  drv_banner("RAMDISK.SYS", "RAM disk");
+  drv_indent(); printf("installed: %d bytes, room for %d files, over every drive\n", g_ram_budget, RAMFILES);
+  return 0;
+}
+
+// DEVICE=CONSOLE.SYS FLUSH: this console shows a partial line.
+//
+// Natively PRTF bottoms out in the host libc, whose stdout is
+// line-buffered on a TTY, so an "A>" with no newline sits in the buffer
+// and the user cannot tell DOS is ready. c4bb's UART emits each byte as
+// it is written, so there the classic DOS look works and is worth
+// keeping.
+//
+// ANNOUNCED, NEVER PROBED. The only probe in the tree is
+// include/c4bb_info.h, and that header says why it is no use here: it
+// asks __c4_info(), INFO is opcode 57, and c4cc compiles every function
+// in a header whether it is called or not -- so including it would put
+// DOS above the base-c4 rung and break the purity pin. A config line
+// costs nothing above EXIT.
+int dev_console (char *p, char *e) {
+  drv_banner("CONSOLE.SYS", "console driver");
+  drv_indent();
+  if (cfg_has(p, e, "FLUSH")) {
+    g_conflush = 1;
+    printf("installed: FLUSH, the prompt and what is typed share a line\n");
+  } else printf("installed, with no mode: the prompt stays on a line of its own\n");
+  return 0;
+}
+
+// DEVICE=DRIVES.SYS [HOME=B:]: the machine's drives, and the one files
+// are written to (file_create). The page keeps drive B: in the browser,
+// so what is saved there lasts. A home that is not there, or cannot be
+// written, is no home, and files go to the RAM disk as before.
+int dev_drives (char *p, char *e) {
+  int d;
+  char *v;
+  g_drives = 1;
+  if ((v = cfg_arg(p, e, "HOME=")) && v + 1 < e && v[1] == ':') {
+    g_home = upper(v[0]) - 'A';
+    if (g_home < 0 || g_home > 25) g_home = 0 - 1;
+  }
+  drv_banner("DRIVES.SYS", "drive driver");
+  drv_indent(); printf("installed: %d drive(s)", drv_count());
+  d = 0;
+  while (d < drv_count() && d < DRVMAX) {
+    printf(d ? ", %c: %s" : ": %c: %s", drv_letter(d), drv_writable(d) ? "can be written" : "read-only");
+    ++d;
+  }
+  printf("\n");
+  if (g_home >= 0 && !drv_writable(g_home)) {
+    drv_indent(); printf("HOME=%c: cannot be written, so files go to the RAM disk\n", drv_letter(g_home));
+    g_home = 0 - 1;
+  } else if (g_home >= 0) {
+    drv_indent(); printf("files are written to %c: (HOME=%c:)\n", drv_letter(g_home), drv_letter(g_home));
+  }
+  return 0;
+}
+
+// DEVICE=HEAP.SYS: heap generations (see gen_dos). The registers answer
+// before DOS relies on them: written 1, HEAP_GEN must read back 1.
+int dev_heap () {
+  int total, used;
+  drv_banner("HEAP.SYS", "heap generations");
+  drv_indent();
+  *(int *)BB_HEAP_GEN = 1;
+  if (*(int *)BB_HEAP_GEN != 1) {
+    printf("not installed: this machine's heap keeps no generations\n");
+    return 0;
+  }
+  *(int *)BB_HEAP_GEN = 0;
+  g_heapgen = 1;
+  printf("installed: each program's memory is freed when it ends\n");
+  used = *(int *)BB_HEAP_USED;
+  total = *(int *)BB_HEAP_END - *(int *)BB_HEAP_BASE;
+  drv_indent(); printf("heap: %d bytes free of %d\n", total - used, total);
+  return 0;
+}
+
+// DEVICE=REDIR.SYS [TAP]: > >> < and | on the command line (line_run).
+// TAP says the machine has the console tap, so that c4cc programs are
+// redirected too.
+int dev_redir (char *p, char *e) {
+  g_redir = 1;
+  drv_banner("REDIR.SYS", "redirection");
+  drv_indent();
+  if (cfg_has(p, e, "TAP")) {
+    g_tap = 1;
+    *(int *)BB_CON_TAP = 0;
+    *(int *)BB_CON_IN = 0 - 1;
+    printf("installed: > >> < and |, with the console tap\n");
+  } else {
+    printf("installed: > >> < and |\n");
+    drv_indent(); printf("no console tap (TAP): what a c4cc program prints stays on the console\n");
+  }
+  return 0;
+}
+
 int read_config () {
-  char *buf, *p, *e; int fd, n, total;
+  char *buf, *p, *e, *q; int fd, n, total, line;
   if (!scratch_need()) return 0;
   if ((fd = dos_open("config.sys")) < 0) return 0;
   total = 0;
@@ -2932,101 +3093,27 @@ int read_config () {
   buf[total] = 0;
 
   p = buf;
+  line = 0;
   while (*p) {
+    ++line;
     e = p;
     while (*e && *e != 10) ++e;
-    if (starts_ci(p, "DEVICE=CLOCK.SYS")) {
-#if C4DOS_CLOCK
-      g_clock = 1;
-      printf("clock device installed\n");
-#else
-      printf("DEVICE=CLOCK.SYS: this build has no clock hardware support\n");
-#endif
+    if (e > p && *(e - 1) == 13) --e;          // CRLF files
+    if (starts_ci(p, "DEVICE=CLOCK.SYS")) dev_clock();
+    else if (starts_ci(p, "DEVICE=RAMDISK.SYS")) dev_ramdisk(p, e);
+    else if (starts_ci(p, "DEVICE=CONSOLE.SYS")) dev_console(p, e);
+    else if (starts_ci(p, "DEVICE=DRIVES.SYS")) dev_drives(p, e);
+    else if (starts_ci(p, "DEVICE=HEAP.SYS")) dev_heap();
+    else if (starts_ci(p, "DEVICE=REDIR.SYS")) dev_redir(p, e);
+    else if (starts_ci(p, "DEVICE=")) {
+      // a driver C4DOS does not have: what DOS 6 said
+      q = p + 7;
+      printf("Bad or missing ");
+      while (q < e && *q != ' ' && *q != 9) { printf("%c", *q); ++q; }
+      printf("\nError in CONFIG.SYS line %d\n", line);
     }
-    if (starts_ci(p, "DEVICE=RAMDISK.SYS")) {
-      g_ramdisk = 1;
-      g_ram_budget = RAMSIZE;
-      n = 0;
-      while (p + n < e && !starts_ci(p + n, "SIZE=")) ++n;
-      if (p + n < e) {
-        total = 0;
-        n = n + 5;
-        while (p + n < e && p[n] >= '0' && p[n] <= '9') {
-          total = total * 10 + (p[n] - '0');
-          ++n;
-        }
-        if (total > 0) g_ram_budget = total;
-      }
-      printf("ramdisk device installed, %d bytes\n", g_ram_budget);
-    }
-    // Does this console flush a partial line? Natively PRTF bottoms out
-    // in the host libc, whose stdout is line-buffered on a TTY, so an
-    // "A>" with no newline sits in the buffer and the user cannot tell
-    // DOS is ready. c4bb's UART emits each byte as it is written, so
-    // there the classic DOS look works and is worth keeping.
-    //
-    // ANNOUNCED, NEVER PROBED. The only probe in the tree is
-    // include/c4bb_info.h, and that header says why it is no use here:
-    // it asks __c4_info(), INFO is opcode 57, and c4cc compiles every
-    // function in a header whether it is called or not -- so including
-    // it would put DOS above the base-c4 rung and break the purity pin.
-    // A config line costs nothing above EXIT.
-    if (starts_ci(p, "DEVICE=CONSOLE.SYS")) {
-      n = 0;
-      while (p + n < e && !starts_ci(p + n, "FLUSH")) ++n;
-      if (p + n < e) {
-        g_conflush = 1;
-        printf("console device installed, prompt unbuffered\n");
-      } else {
-        printf("DEVICE=CONSOLE.SYS: no mode given, prompt stays on its own line\n");
-      }
-    }
-    // HOME=B: names the drive files are written to (file_create): the
-    // page keeps drive B: in the browser, so what is saved there lasts.
-    // A home that is not there, or cannot be written, is no home, and
-    // files go to the RAM disk as before.
-    if (starts_ci(p, "DEVICE=DRIVES.SYS")) {
-      g_drives = 1;
-      n = 0;
-      while (p + n < e && !starts_ci(p + n, "HOME=")) ++n;
-      if (p + n + 6 < e && p[n + 6] == ':') {
-        g_home = upper(p[n + 5]) - 'A';
-        if (g_home < 0 || g_home > 25) g_home = 0 - 1;
-      }
-      if (g_home >= 0 && !drv_writable(g_home)) {
-        printf("drive device installed, %d drive(s); %c: cannot be written, files go to the RAM disk\n",
-               drv_count(), drv_letter(g_home));
-        g_home = 0 - 1;
-      } else if (g_home >= 0) {
-        printf("drive device installed, %d drive(s), files are written to %c:\n", drv_count(), drv_letter(g_home));
-      } else printf("drive device installed, %d drive(s)\n", drv_count());
-    }
-    // Heap generations (see gen_dos). The registers answer before DOS
-    // relies on them: written 1, HEAP_GEN must read back 1.
-    if (starts_ci(p, "DEVICE=HEAP.SYS")) {
-      *(int *)BB_HEAP_GEN = 1;
-      if (*(int *)BB_HEAP_GEN == 1) {
-        *(int *)BB_HEAP_GEN = 0;
-        g_heapgen = 1;
-        printf("heap device installed, each program's memory is freed when it ends\n");
-      } else {
-        printf("DEVICE=HEAP.SYS: this machine's heap keeps no generations\n");
-      }
-    }
-    // > >> < and | on the command line (line_run). TAP says the machine
-    // has the console tap, so that c4cc programs are redirected too.
-    if (starts_ci(p, "DEVICE=REDIR.SYS")) {
-      g_redir = 1;
-      n = 0;
-      while (p + n < e && !starts_ci(p + n, "TAP")) ++n;
-      if (p + n < e) {
-        g_tap = 1;
-        *(int *)BB_CON_TAP = 0;
-        *(int *)BB_CON_IN = 0 - 1;
-        printf("redirection installed (> >> < |), with the console tap\n");
-      } else printf("redirection installed (> >> < |)\n");
-    }
-    // FILES=, SHELL=, other DEVICE= lines: reserved, ignored
+    // FILES=, SHELL=: reserved, ignored
+    while (*e && *e != 10) ++e;
     p = *e ? e + 1 : e;
   }
   free(buf);

@@ -171,7 +171,7 @@ const prompts = () => (text().match(/A:\\[^>\n]*>/g) || []).length;
 
 // ---- boot to grin, with nothing typed ---------------------------------------------
 check(until(() => has('Program Manager') && has('Main'), 3000), 'C4DOS boots into grin: Program Manager is drawn', text());
-check(text().includes('heap device installed'), 'the disk\'s CONFIG.SYS has HEAP.SYS', text());
+check(text().includes("installed: each program's memory is freed when it ends"), 'the disk\'s CONFIG.SYS has HEAP.SYS', text());
 check(gui.w === 640 && gui.h === 480, `grin asks for 640x480 (${gui.w}x${gui.h})`);
 check(has('Control Panel') && has('File') && has('Help'), 'Program Manager has its File menu and the Main group\'s Control Panel');
 const pm0 = win('File');
@@ -305,7 +305,7 @@ check(store.has('GRIN.INI') && /scheme=1/.test(Buffer.from(store.get('GRIN.INI')
 // The disk's CONFIG.SYS has DEVICE=REDIR.SYS TAP: > >> < and | for DOS's
 // builtins, for bare.c programs through DOS's console slots, and for
 // c4cc programs through the machine's console tap.
-check(text().includes('redirection installed (> >> < |), with the console tap'), "the disk's CONFIG.SYS has REDIR.SYS TAP", text().slice(0, 800));
+check(text().includes('installed: > >> < and |, with the console tap'), "the disk's CONFIG.SYS has REDIR.SYS TAP", text().slice(0, 800));
 check(text().includes('Starting grin') && !store.has('.'), "the AUTOEXEC's ECHO lines have no > for REDIR.SYS to take (no file '.' on B:)", [...store.keys()].join(' '));
 let o = typed('DIR > LIST.TXT');
 check(!/c4dos32\.c4r/i.test(o), 'DIR > LIST.TXT prints nothing at A>', o);

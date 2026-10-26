@@ -491,6 +491,45 @@ loading a kernel must not be the thing that demands a better CPU.
   Parsed with a flattened-locals descent (the vfsload.c skeleton,
   c4cc-dialect).
 
+  **Each driver announces itself as it loads** (2026-10-26), as DOS 6's
+  did (`HIMEM: DOS XMS Driver, Version 3.10`, then `64 KB High Memory
+  Area available`): a banner with its file, what it is and the C4DOS
+  version, then lines under it saying what it did -- or why it did not.
+  The ladder disk boots like this:
+
+      C4DOS version 0.1
+      C4DOS, made possible by Robert Swierczek's c4
+      CLOCK.SYS    clock driver, C4DOS 0.1
+                   installed: TIME, and the clock for programs (API slot 15)
+                   the machine has been on 0.000 s
+      RAMDISK.SYS  RAM disk, C4DOS 0.1
+                   installed: 33554432 bytes, room for 64 files, over every drive
+      CONSOLE.SYS  console driver, C4DOS 0.1
+                   installed: FLUSH, the prompt and what is typed share a line
+      DRIVES.SYS   drive driver, C4DOS 0.1
+                   installed: 2 drive(s): A: read-only, B: can be written
+      HEAP.SYS     heap generations, C4DOS 0.1
+                   installed: each program's memory is freed when it ends
+                   heap: 128799937 bytes free of 133033984
+      REDIR.SYS    redirection, C4DOS 0.1
+                   installed: > >> < and |, with the console tap
+
+  A driver that cannot do its job says `not installed:` and why (the
+  clockless build's CLOCK.SYS; HEAP.SYS on a heap with no generations),
+  `HOME=` on a drive that cannot be written says where files go instead,
+  and REDIR.SYS without `TAP` says what that leaves out. A `DEVICE=` line
+  naming a driver C4DOS does not have gets DOS's own answer, `Bad or
+  missing EMM386.EXE` and `Error in CONFIG.SYS line 7`, and boot carries
+  on. Each driver is a function of its own (`dev_clock` ... `dev_redir`),
+  called by `read_config` for its line. (Until then each printed one line
+  such as `clock device installed`, and an unknown `DEVICE=` line was
+  ignored without a word.)
+
+  `VER` and the boot say `C4DOS, made possible by Robert Swierczek's c4`;
+  the tagline before it, "the operating system before operating
+  systems", was never the user's, and was wrong: there were operating
+  systems before DOS.
+
   `CONSOLE.SYS FLUSH` says **this console shows a partial line**, and
   the prompt is `A>` with the cursor after it, the way DOS always
   looked. Without it DOS puts the prompt on its own line instead,

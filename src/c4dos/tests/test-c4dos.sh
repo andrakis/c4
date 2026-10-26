@@ -111,12 +111,15 @@ check_dirs () {   # leg, output
 mkdir -p $T/fsr
 cp $T/fs/* $T/fsr/
 echo 'DEVICE=REDIR.SYS' >> $T/fsr/config.sys
+# ... and a driver C4DOS does not have, which DOS 6 met with "Bad or missing"
+echo 'DEVICE=EMM386.EXE NOEMS' >> $T/fsr/config.sys
 
 # The redirection session, and what it must say. The native leg and the
 # tower run it.
 REDIR_SCRIPT='DIR > LIST.TXT\nTYPE LIST.TXT\nECHO one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen\nECHO appended >> LIST.TXT\nTYPE LIST.TXT\ndosfilt < config.sys\nTYPE autoexec.bat | dosfilt\nECHO x y | dosfilt | dosfilt > PIPED.TXT\nTYPE PIPED.TXT\nECHO ECHO from the batch file > T.BAT\nT > T.OUT\nTYPE T.OUT\nTYPE nosuch.txt > E.TXT\nTYPE E.TXT\nDIR\nEXIT\n'
 check_redir () { # leg, output
-  echo "$2" | grep -q "redirection installed (> >> < |)" || { echo "FAIL $1 redir: CONFIG.SYS line"; exit 1; }
+  echo "$2" | grep -q "installed: > >> < and |" || { echo "FAIL $1 redir: CONFIG.SYS line"; exit 1; }
+  echo "$2" | grep -q "^Bad or missing EMM386.EXE$" && echo "$2" | grep -q "^Error in CONFIG.SYS line [0-9]*$" || { echo "FAIL $1: a driver C4DOS does not have"; exit 1; }
   # DIR went into the file, not onto the console: TYPE shows it, twice
   # (before and after the >>), and the listing in it has LIST.TXT itself
   [ "$(echo "$2" | grep -c '^hello.c4r$')" -ge 2 ] || { echo "FAIL $1 redir: TYPE LIST.TXT"; echo "$2" | head -40; exit 1; }
@@ -188,12 +191,12 @@ echo "$OUT" | grep -q "hello.c4r"                || { echo "FAIL native: DIR"; e
 echo "$OUT" | grep -q "yello"                    || { echo "FAIL native: RUN hello"; exit 1; }
 echo "$OUT" | grep -q "back at the prompt"       || { echo "FAIL native: no return to prompt"; exit 1; }
 echo "$OUT" | grep -q "bad command or file name" || { echo "FAIL native: bad-command"; exit 1; }
-echo "$OUT" | grep -q "no clock hardware"        || { echo "FAIL native: clockless build has a clock?"; exit 1; }
+echo "$OUT" | grep -q "this build of C4DOS has no clock" || { echo "FAIL native: clockless build has a clock?"; exit 1; }
 echo "test-c4dos: native session OK"
 
 # ---- leg 2: the clock build -----------------------------------------
 OUT=$(run_native c4dos-clock.c4r 'TIME\nEXIT\n')
-echo "$OUT" | grep -q "clock device installed"   || { echo "FAIL clock: CONFIG.SYS DEVICE line"; exit 1; }
+echo "$OUT" | grep -q "installed: TIME"   || { echo "FAIL clock: CONFIG.SYS DEVICE line"; exit 1; }
 echo "$OUT" | grep -q "uptime"                   || { echo "FAIL clock: TIME"; exit 1; }
 echo "test-c4dos: clock build OK"
 
@@ -234,7 +237,7 @@ echo "test-c4dos: case-insensitive names and .c4r completion OK"
 # one builtin that puts something in it. RUN out of RAM is the point --
 # it is what lets one stage's output be the next stage's input.
 OUT=$(run_native c4dos-clock.c4r 'COPY hello.c4r work.c4r\nDIR\nRUN work.c4r\nEXIT\n')
-echo "$OUT" | grep -q "ramdisk device installed" || { echo "FAIL ramdisk: CONFIG.SYS DEVICE line"; exit 1; }
+echo "$OUT" | grep -q "^RAMDISK.SYS  *RAM disk" || { echo "FAIL ramdisk: CONFIG.SYS DEVICE line"; exit 1; }
 echo "$OUT" | grep -q "work.c4r  <ram>"           || { echo "FAIL ramdisk: DIR does not list it"; exit 1; }
 echo "$OUT" | grep -q "yello"                     || { echo "FAIL ramdisk: RUN from RAM"; exit 1; }
 # RAM shadows the read-only disk: same name, RAM wins.
@@ -390,7 +393,7 @@ if [ -x ./c4cc32 ] && command -v node > /dev/null; then
   cp src/c4bb/images/disk/hello.c $T/fs/hello.c
   OUT=$(printf 'DIR\nRUN hello32.c4r\nTIME\nRUN c4.c4r hello.c\nECHO layers hold\nEXIT\n' \
         | node src/c4bb/sim/cli.js -c 500000000 -d $T/fs $T/c4dos32.c4r 2>&1)
-  echo "$OUT" | grep -q "clock device installed" || { echo "FAIL c4bb: CONFIG.SYS"; exit 1; }
+  echo "$OUT" | grep -q "installed: TIME" || { echo "FAIL c4bb: CONFIG.SYS"; exit 1; }
   echo "$OUT" | grep -q "yello"                  || { echo "FAIL c4bb: RUN hello32"; exit 1; }
   echo "$OUT" | grep -q "uptime 0:00:0"          || { echo "FAIL c4bb: TIME should read boot uptime"; exit 1; }
   echo "$OUT" | grep -q "layers hold"            || { echo "FAIL c4bb: c4-under-DOS did not return"; exit 1; }
@@ -406,7 +409,7 @@ if [ -x ./c4cc32 ] && command -v node > /dev/null; then
   ./c4cc32 -o $T/fs32/dosres.c4r include/c4dos.h src/tests/dosres.c > /dev/null
   (cd $T/fs32 && ls > c4dos.dir)
   OUT=$(printf "$V4_SCRIPT" | node src/c4bb/sim/cli.js -c 900000000 -d $T/fs32 $T/c4dos32.c4r 2>&1)
-  echo "$OUT" | grep -q "HEAP.SYS: this machine's heap keeps no generations" || { echo "FAIL c4bb: HEAP.SYS should be refused"; exit 1; }
+  echo "$OUT" | grep -q "not installed: this machine's heap keeps no generations" || { echo "FAIL c4bb: HEAP.SYS should be refused"; exit 1; }
   check_v4 c4bb "$OUT"
   echo "test-c4dos: API v4 on c4bb, and HEAP.SYS declined there"
   # DEVICE=DRIVES.SYS HOME=B: with a drive B: that can be written (the

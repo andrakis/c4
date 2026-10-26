@@ -49,7 +49,15 @@ struct wk_env {
     int desk, face, light, shadow;    // the scheme's colours (Settings)
     int title, title2, ititle, ititle2, sel;
 };
+// A grin application (compiled with -D WK_IMPORT, src/grin/import.c) has
+// no wk of its own: it reads grin's, through the pointer grin publishes
+// in its table, so that every C_FACE below is a load through it.
+#ifdef WK_IMPORT
+extern struct wk_env *wk_import_env;
+#define wk (*wk_import_env)
+#else
 extern struct wk_env wk;
+#endif
 
 // colours: these never change...
 enum { C_DARK = 0x000000, C_WHITE = 0xffffff, C_GREEN = 0x00ff00 };
@@ -265,6 +273,7 @@ extern char *notepad_name;            // in its titles ("Notepad"; the desktop's
 extern char *notepad_about;           // its Help > About line
 extern char *notepad_home;            // where Open starts
 extern char *notepad_untitled;        // where Save As offers to put a new document
+extern int notepad_filebox;           // 1: Open and Save As are file boxes (grin's); 0: typed paths
 int  wk_clock();                      // the host's time of day, in seconds since midnight
 
 // ---- screen savers (savers.c) ----------------------------------------------

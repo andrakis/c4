@@ -677,15 +677,31 @@ fi
 # A>, where GRIN starts it again), and the games with their data, linked
 # from the games disk where the filesystem allows. CONFIG.SYS is its own:
 # HEAP.SYS, because libjs's heap keeps generations and a game's memory
-# goes back when it quits. DRIVES.SYS HOME=B: (G4) and REDIR.SYS TAP (G5)
-# join it in later milestones. grin is linked whole with the bare libc,
-# as the games are, from the objects make grin-objs compiled.
+# goes back when it quits; DRIVES.SYS HOME=B:, so that a file saved with
+# no drive goes to B:, which the page keeps in the browser (the c4dos
+# store), and is still there at the next visit; REDIR.SYS TAP, so that
+# > >> < and | work at A> and in grin's DOS Prompt windows, for c4cc
+# programs too (the machine's console tap). grin is linked whole with the
+# bare libc, as the games are, from the objects make grin-objs compiled.
 LJDOS=libjs/images/dos
 rm -rf $LJDOS
 if ls .grin/*.c4o > /dev/null 2>&1 && ls .libc-bare/*.c4o > /dev/null 2>&1 && [ -f $OUT/c4dos32.c4r ]; then
     say "the page's C4DOS disk, booting into grin: $LJDOS"
     mkdir -p $LJDOS
     ./c4rlink32 .grin/*.c4o .libc-bare/libc-*.c4o -o $LJDOS/grin.c4r > /dev/null
+    # its applications (docs/grin-plan.md 3.4): main, the kit's class, and
+    # import.c in the kit's place; EXITKEY is test-grin's
+    for app in clock calc notepad exitkey; do
+        [ -f .grinapp/$app.c4o ] || continue
+        kit=; [ -f .grinapp/wk-$app.c4o ] && kit=.grinapp/wk-$app.c4o
+        ./c4rlink32 .grinapp/$app.c4o $kit .grinapp/import.c4o .libc-bare/libc-*.c4o -o $LJDOS/$app.c4r > /dev/null
+    done
+    # DOS programs for trying redirection with, and test-grin's: ASKLINE
+    # (bare.c: reads a line through DOS), DOSFILT (a filter; -r is a plain
+    # c4cc program's READ and printf, the tap's) and HELLO (c4cc's printf)
+    [ -f .grinapp/askline.c4o ] && ./c4rlink32 .grinapp/askline.c4o .libc-bare/libc-*.c4o -o $LJDOS/askline.c4r > /dev/null
+    $CC -o $LJDOS/dosfilt.c4r include/c4dos.h src/tests/dosfilt.c > /dev/null
+    cp $OUT/hello32.c4r $LJDOS/hello.c4r
     cp $OUT/c4dos32.c4r $LJDOS/
     if [ -d $GAMESDISK ]; then
         (cd $GAMESDISK && find . -type f ! -name config.sys ! -name autoexec.bat ! -name c4dos.dir \
@@ -695,13 +711,13 @@ if ls .grin/*.c4o > /dev/null 2>&1 && ls .libc-bare/*.c4o > /dev/null 2>&1 && [ 
         done
     fi
     sed 's/SIZE=[0-9]*/SIZE=16777216/' src/c4dos/fs/CONFIG.SYS > $LJDOS/config.sys
-    printf 'DEVICE=CONSOLE.SYS FLUSH\nDEVICE=DRIVES.SYS\nDEVICE=HEAP.SYS\n' >> $LJDOS/config.sys
+    printf 'DEVICE=CONSOLE.SYS FLUSH\nDEVICE=DRIVES.SYS HOME=B:\nDEVICE=HEAP.SYS\nDEVICE=REDIR.SYS TAP\n' >> $LJDOS/config.sys
     list=$(echo $GAMES_ON_DISK | sed 's/ /, /g')
     {
         printf '@ECHO OFF\nECHO Welcome to C4DOS\nVER\n'
         if [ -n "$list" ]; then printf 'ECHO The games on this disk: %s.\n' "$list"; fi
-        # (C4DOS splits a line into at most 15 words, so ECHO says 14)
-        printf 'ECHO Starting grin: its File menu has Exit grin, back to A>.\nGRIN\n'
+        # (no > in an ECHO here: REDIR.SYS would take it for a redirection)
+        printf 'ECHO Starting grin: its File menu has Exit grin, back to the A prompt.\nGRIN\n'
     } > $LJDOS/autoexec.bat
     (cd $LJDOS && ls -p | grep -v '/$' | grep -v '^manifest.json$' > c4dos.dir)
     (cd $LJDOS && find . -type f -not -name manifest.json | sed 's|^\./||') | \
@@ -962,15 +978,20 @@ if [ -n "$CLIMBSRC" ] && [ -f $LJDOS/c4dos32.c4r ]; then
     cp src/c4dos/fs/BUILD.BAT $LJLAD/build.bat
     cp src/c4dos/fs/LADDER.TXT $LJLAD/ladder.txt
     # the climb floppy's RAM disk (32 MB: LADDER and the kernel's sources),
-    # and the page's devices; HEAP.SYS gives each rung's memory back when
-    # it returns to the one below
+    # and the page's devices: HEAP.SYS gives each rung's memory back when
+    # it returns to the one below, REDIR.SYS TAP is for grin's DOS Prompts.
+    # No HOME=B:, as the page's C4DOS disk has: with a home drive, cpp and
+    # c4cc would write the kernel to B: rather than the RAM disk C4KE is
+    # seeded from.
     sed 's/SIZE=[0-9]*/SIZE=33554432/' src/c4dos/fs/CONFIG.SYS > $LJLAD/config.sys
-    printf 'DEVICE=CONSOLE.SYS FLUSH\nDEVICE=DRIVES.SYS\nDEVICE=HEAP.SYS\n' >> $LJLAD/config.sys
+    printf 'DEVICE=CONSOLE.SYS FLUSH\nDEVICE=DRIVES.SYS\nDEVICE=HEAP.SYS\nDEVICE=REDIR.SYS TAP\n' >> $LJLAD/config.sys
     list=$(echo $GAMES_ON_DISK | sed 's/ /, /g')
     {
         printf '@ECHO OFF\nECHO Welcome to C4DOS, the Build Ladder\nVER\n'
         if [ -n "$list" ]; then printf 'ECHO The games on this disk: %s.\n' "$list"; fi
-        # (C4DOS splits a line into at most 15 words, so ECHO says 14)
+        # (C4DOS splits a line into at most 15 words, so ECHO says 14; and
+        # no > in an ECHO: REDIR.SYS would take it for a redirection)
+        printf 'ECHO GRIN starts the graphical shell.\n'
         printf 'ECHO Climb: BUILD, then RUN dosload.c4r c4ke.c4r boots the kernel it built.\n'
         printf 'ECHO TYPE LADDER.TXT says every step, up to C4IX.\n'
     } > $LJLAD/autoexec.bat

@@ -12,7 +12,8 @@
 //   ?cpus=N                      N processors, simulated (smp.js, docs/c4ix-smp.md)
 //   ?parallel                    ... each on a worker of its own (par.js), when the
 //                                page is cross-origin isolated (serve.mjs --isolate)
-//   ?persist=0 | reset           the system's files (drive 1: C4IX's, the ladder's) are not kept / are forgotten first
+//   ?persist=0 | reset           the system's saved files (its store, SYSTEMS' `persist`) are
+//                                not kept between visits / are forgotten first
 //   ?uploads=0                   the Uploads (your own files) are not put on the disk
 //   ?fast                        run as fast as the host can, unpaced
 //   ?realtime=0                  when the host cannot keep up, the machine's clock
@@ -33,14 +34,21 @@ import { MediaStore, indexedDbBackend } from '../../src/c4bb/web/store.js';
 
 const IMAGES = '../../src/c4bb/images';
 const LJIMAGES = '../images';          // the page's own disks (build-images.sh)
+// `persist` names the system's store: drive 1 (B:), kept in this browser's
+// IndexedDB under that name and given back at the next boot (page.js).
+// Every system has its own -- C4DOS's saves are not the bare games', and
+// the ladder system has `ladder` -- so Reset Files and
+// ?persist= touch the current system's alone (docs/grin-plan.md 3.8).
 const SYSTEMS = {
   c4ix: { label: 'C4IX', image: `${IMAGES}/c4ix32.c4r`, disk: `${IMAGES}/disk`, argv: ['c4ix32.c4r', '--desktop'], persist: 'c4ix' },
   c4ke: { label: 'C4KE', image: `${IMAGES}/c4ke32.c4r`, disk: `${IMAGES}/disk`, argv: ['c4ke32.c4r'] },
   // C4DOS on the page's own disk (build-images.sh, libjs/images/dos):
   // its AUTOEXEC.BAT starts grin, the graphical shell (docs/grin-plan.md),
   // whose File > Exit grin comes back to A>. The games are on it too, so
-  // WOLF3D, DOOM, TYRIAN or ROTT at the prompt plays them.
-  c4dos: { label: 'C4DOS', image: `${LJIMAGES}/dos/c4dos32.c4r`, disk: `${LJIMAGES}/dos`, argv: ['c4dos32.c4r'], mhz: 400 },
+  // WOLF3D, DOOM, TYRIAN or ROTT at the prompt plays them. Its CONFIG.SYS
+  // says DRIVES.SYS HOME=B:, so what is saved goes to B:, the store.
+  c4dos: { label: 'C4DOS', image: `${LJIMAGES}/dos/c4dos32.c4r`, disk: `${LJIMAGES}/dos`, argv: ['c4dos32.c4r'], mhz: 400,
+           persist: 'c4dos' },
   // The Build Ladder (build-images.sh, libjs/images/ladder;
   // docs/c4dos-ladder.md): C4DOS with the games, and what it takes to
   // climb in one sitting -- BUILD compiles C4KE, dosload boots it, C4KE
@@ -50,25 +58,29 @@ const SYSTEMS = {
   // persist write there.
   'c4dos-ladder': { label: 'C4DOS Build Ladder', image: `${LJIMAGES}/ladder/c4dos32.c4r`, disk: `${LJIMAGES}/ladder`,
                     argv: ['c4dos32.c4r'], mhz: 400, mem: 128, persist: 'ladder' },
+  // The games with no operating system under them, from the same disk.
+  // libc's bare.c writes their saves and settings to drive 1, each game's
+  // own store, and reads it before the disk.
   // Wolfenstein 3D with no operating system under it (games/wolf3d/plat-bare.c),
   // and on C4IX drawing on the display itself rather than in a window
   // (wolf3d --direct, like raycast -G). The game times itself against the
   // machine's clock, so these are paced, at a clock it can keep up with.
-  wolf3d: { label: 'Wolfenstein 3D (bare machine)', image: `${IMAGES}/games/wolf3d.c4r`, disk: `${IMAGES}/games`,
-            argv: ['wolf3d.c4r'], mhz: 400 },
+  wolf3d: { label: 'Wolfenstein 3D (bare machine)', image: `${LJIMAGES}/dos/wolf3d.c4r`, disk: `${LJIMAGES}/dos`,
+            argv: ['wolf3d.c4r'], mhz: 400, persist: 'wolf3d' },
   // ... and the registered game (games/wolf3d, wolf3d6), whose files are
-  // the person's own: Uploads put them on the disk
-  wolf3d6: { label: 'Wolfenstein 3D, registered (bare machine)', image: `${IMAGES}/games/wolf3d6.c4r`,
-             disk: `${IMAGES}/games`, argv: ['wolf3d6.c4r'], mhz: 400 },
-  doom: { label: 'Doom (bare machine)', image: `${IMAGES}/games/doom.c4r`, disk: `${IMAGES}/games`,
-          argv: ['doom.c4r'], mhz: 400 },
+  // the person's own: Uploads put them on the disk. Its saves (.WL6) sit
+  // beside the shareware's (.WL1) in the one Wolfenstein store.
+  wolf3d6: { label: 'Wolfenstein 3D, registered (bare machine)', image: `${LJIMAGES}/dos/wolf3d6.c4r`,
+             disk: `${LJIMAGES}/dos`, argv: ['wolf3d6.c4r'], mhz: 400, persist: 'wolf3d' },
+  doom: { label: 'Doom (bare machine)', image: `${LJIMAGES}/dos/doom.c4r`, disk: `${LJIMAGES}/dos`,
+          argv: ['doom.c4r'], mhz: 400, persist: 'doom' },
   // OpenTyrian (games/tyrian), where Tyrian's data was there to put on
   // the disk (games/tyrian/data/README.md)
-  tyrian: { label: 'Tyrian (bare machine)', image: `${IMAGES}/games/tyrian.c4r`, disk: `${IMAGES}/games`,
-            argv: ['tyrian.c4r'], mhz: 400 },
+  tyrian: { label: 'Tyrian (bare machine)', image: `${LJIMAGES}/dos/tyrian.c4r`, disk: `${LJIMAGES}/dos`,
+            argv: ['tyrian.c4r'], mhz: 400, persist: 'tyrian' },
   // Rise of the Triad (games/rott), the shareware episode
-  rott: { label: 'Rise of the Triad (bare machine)', image: `${IMAGES}/games/rott.c4r`, disk: `${IMAGES}/games`,
-          argv: ['rott.c4r'], mhz: 400 },
+  rott: { label: 'Rise of the Triad (bare machine)', image: `${LJIMAGES}/dos/rott.c4r`, disk: `${LJIMAGES}/dos`,
+          argv: ['rott.c4r'], mhz: 400, persist: 'rott' },
   'wolf3d-c4ix': { label: 'Wolfenstein 3D (C4IX, direct)', image: `${IMAGES}/c4ix32.c4r`, disk: `${IMAGES}/disk`,
                    argv: ['c4ix32.c4r', '-e', 'persist -d 60 &', '-e', 'wolf3d --direct'], persist: 'c4ix', mhz: 400 },
   'gui-demo': { label: 'GUI demo (bare machine)', image: `${IMAGES}/gui-demo.c4r`, disk: null, argv: ['gui-demo.c4r'] },
@@ -154,7 +166,7 @@ const CONFIG = [
   { key: 'fast', label: 'Unpaced', kind: 'flag', help: 'as fast as the host can, whatever the MHz' },
   { key: 'shared', label: 'Shared display path', kind: 'onoff', def: true,
     help: 'off: the message path even when the page is cross-origin isolated' },
-  { key: 'persist', label: 'Kept files', kind: 'select', def: '',
+  { key: 'persist', label: 'Saved files', kind: 'select', def: '',
     options: [['', 'kept between visits'], ['0', 'not kept'], ['reset', 'forgotten, then kept']] },
   { key: 'args', label: 'Arguments', kind: 'text', options: [],
     help: "more for the system's program, after its own (wolf3d: --secrets --nodeath)" },
@@ -327,11 +339,16 @@ try {
 
 $('reset').addEventListener('click', () => { vm.reset(); term.focus(); });
 $('ctrlc').addEventListener('click', () => { vm.signal(2); term.focus(); });
-// Reset Files: only where the page keeps a system's files (?persist=0 has none)
+// Reset Files: only where the page keeps the system's files (?persist=0
+// has none), and only this system's store
 const filesBtn = $('resetfiles');
-if (vm.persistName) filesBtn.style.display = '';
+const keptBy = sys.label || 'this system';
+if (vm.persistName) {
+  filesBtn.style.display = '';
+  filesBtn.title = `forget every file ${keptBy} saved in this browser, and boot again from the disk as it ships`;
+}
 filesBtn.addEventListener('click', async () => {
-  if (!confirm(`Forget every change kept to ${sys.label || 'this system'}'s files -- what was saved, made and deleted -- ` +
+  if (!confirm(`Forget every change kept to ${keptBy}'s files -- what was saved, made and deleted -- ` +
                'and boot again from the disk as it ships?')) return;
   await vm.resetFiles();
   term.focus();
@@ -340,7 +357,16 @@ filesBtn.addEventListener('click', async () => {
 // ---- Uploads: the person's own files, on drive 0 (page.js, opts.uploads) ----
 // Kept in IndexedDB, and given to the machine when it boots: adding or
 // forgetting one changes nothing until Boot with them, which reloads the
-// page (C4IX's files then are as the page's Reload leaves them).
+// page (the system's saved files then are as the page's Reload leaves them).
+//
+// One medium, `uploads`, for every system, unlike the saved files: these
+// are what the person brings (Wolfenstein's registered data, a WAD),
+// read-only on drive 0 where every system reads -- the bare games, which
+// look on drive 1 and then drive 0; C4DOS, which finds them on A: and
+// lists them there (worker.js adds them to A:'s c4dos.dir); C4IX -- so
+// one upload serves wolf3d6 on the bare machine and WOLF3D under C4DOS.
+// Nothing a system writes goes here, and Reset Files leaves them alone:
+// Uploads' own Forget and Forget all do that.
 const upDialog = $('uploads'), upList = $('uploads-list'), upInput = $('uploads-input');
 const upStore = () => vm.store || (vm.store = new MediaStore(indexedDbBackend()));
 const fmtSize = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : n >= 1024 ? Math.round(n / 1024) + ' KB' : n + ' bytes';
@@ -371,11 +397,8 @@ async function upAdd(list) {
   } catch (e) { alert(`Could not keep the files in this browser: ${e.message || e}`); }
   await upShow();
 }
-// the store forgets a medium whole, so forgetting one is keeping the rest
 async function upForget(name) {
-  const keep = (await upFiles()).filter(([n]) => n !== name);
-  await upStore().erase(UPLOADS);
-  for (const [n, d] of keep) await upStore().backend.putFile(UPLOADS, n, d);
+  try { await upStore().backend.deleteFile(UPLOADS, name); } catch { /* not kept */ }
   await upShow();
 }
 $('uploadsbtn').addEventListener('click', async () => { await upShow(); upDialog.showModal(); });

@@ -12,6 +12,11 @@
 #      transient) compiles and runs hello.c INSIDE the simulated
 #      computer, then hands the prompt back.
 #
+# Redirection (DEVICE=REDIR.SYS: > >> < |, batch files too) is checked
+# on the native leg and the tower, and with the console tap (REDIR.SYS
+# TAP: a c4cc program's PRTF and READ) on c4bb; without the line a > is
+# just a word, as it always was.
+#
 # API v4 (re-entrant RUN: exec, load/start/unload, catch, unlink, the
 # console slots and the sink) is checked on the native leg, the tower and
 # c4bb alike, by src/tests/dosexec.c: the same scenarios, the same
@@ -57,7 +62,7 @@ cp src/c4dos/fs/AUTOEXEC.BAT $T/fs/autoexec.bat
 # Real spellings, not shouted: dir_resolve opens the name it finds in
 # this listing, so an entry of HELLO.C4R would name a file that is not
 # there and defeat the very lookup it exists to serve.
-printf 'config.sys\nautoexec.bat\nc4dos.dir\nhello.c4r\nraycast.c4r\ndosenum.c4r\ndosexec.c4r\ndosres.c4r\n' > $T/fs/c4dos.dir
+printf 'config.sys\nautoexec.bat\nc4dos.dir\nhello.c4r\nraycast.c4r\ndosenum.c4r\ndosexec.c4r\ndosres.c4r\ndosfilt.c4r\n' > $T/fs/c4dos.dir
 cp src/tests/hello.c4r $T/fs/hello.c4r
 # dosenum is the v2 API's pin: the only thing here that ENUMERATES the
 # RAM disk rather than naming a file. The kernel extension that seeds
@@ -68,6 +73,35 @@ cp src/tests/hello.c4r $T/fs/hello.c4r
 # dosexec and dosres are API v4's: a program that runs programs.
 ./c4cc -o $T/fs/dosexec.c4r include/c4dos.h src/tests/dosexec.c > /dev/null
 ./c4cc -o $T/fs/dosres.c4r include/c4dos.h src/tests/dosres.c > /dev/null
+# dosfilt is redirection's: a filter through DOS's console slots, or with
+# -r through READ and printf (the tap's)
+./c4cc -o $T/fs/dosfilt.c4r include/c4dos.h src/tests/dosfilt.c > /dev/null
+# the same floppy with DEVICE=REDIR.SYS
+mkdir -p $T/fsr
+cp $T/fs/* $T/fsr/
+echo 'DEVICE=REDIR.SYS' >> $T/fsr/config.sys
+
+# The redirection session, and what it must say. The native leg and the
+# tower run it.
+REDIR_SCRIPT='DIR > LIST.TXT\nTYPE LIST.TXT\nECHO one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen\nECHO appended >> LIST.TXT\nTYPE LIST.TXT\ndosfilt < config.sys\nTYPE autoexec.bat | dosfilt\nECHO x y | dosfilt | dosfilt > PIPED.TXT\nTYPE PIPED.TXT\nECHO ECHO from the batch file > T.BAT\nT > T.OUT\nTYPE T.OUT\nTYPE nosuch.txt > E.TXT\nTYPE E.TXT\nDIR\nEXIT\n'
+check_redir () { # leg, output
+  echo "$2" | grep -q "redirection installed (> >> < |)" || { echo "FAIL $1 redir: CONFIG.SYS line"; exit 1; }
+  # DIR went into the file, not onto the console: TYPE shows it, twice
+  # (before and after the >>), and the listing in it has LIST.TXT itself
+  [ "$(echo "$2" | grep -c '^hello.c4r$')" -ge 2 ] || { echo "FAIL $1 redir: TYPE LIST.TXT"; echo "$2" | head -40; exit 1; }
+  [ "$(echo "$2" | grep -c '^LIST.TXT  <ram>')" -ge 2 ] || { echo "FAIL $1 redir: DIR > LIST.TXT (the listing is not in the file)"; exit 1; }
+  echo "$2" | grep -q "seventeen$" || { echo "FAIL $1: ECHO stopped short of 17 words"; exit 1; }
+  [ "$(echo "$2" | grep -c '^appended$')" = 1 ] || { echo "FAIL $1 redir: >>"; exit 1; }
+  echo "$2" | grep -q "^> DEVICE=RAMDISK.SYS" || { echo "FAIL $1 redir: dosfilt < config.sys"; exit 1; }
+  echo "$2" | grep -q "^> .*WELCOME TO C4DOS" || { echo "FAIL $1 redir: TYPE | dosfilt"; exit 1; }
+  echo "$2" | grep -q "^> > X Y" || { echo "FAIL $1 redir: a pipe of three into a file"; exit 1; }
+  echo "$2" | grep -q "^> DOSFILT: 1 LINE" || { echo "FAIL $1 redir: the middle of the pipe"; exit 1; }
+  echo "$2" | grep -q "^from the batch file" || { echo "FAIL $1 redir: a batch file redirected"; exit 1; }
+  [ "$(echo "$2" | grep -c '^file not found: nosuch.txt')" = 1 ] || { echo "FAIL $1 redir: an error message redirected"; exit 1; }
+  # the pipe files are gone afterwards
+  if echo "$2" | grep -q 'PIPE[0-9]*[.][$][$][$]'; then echo "FAIL $1 redir: a pipe file was left behind"; exit 1; fi
+  return 0
+}
 
 # The v4 session, and what it must say. Every leg runs the same one.
 V4_SCRIPT='dosexec deep 3\nECHO prompt answers\ndosexec resident\ndosexec catch\ndosexec file\nTYPE kid.txt\ndosexec unlink\ndosexec read\na line for the program\nECHO after read\ndosexec sink\ndosexec gen\nEXIT\n'
@@ -227,6 +261,16 @@ OUT=$(run_native c4dos-clock.c4r "$V4_SCRIPT")
 check_v4 native "$OUT"
 echo "test-c4dos: API v4 (exec, load/start/unload, catch, unlink, console, sink) OK"
 
+# ---- leg 2h: redirection ----------------------------------------------
+# DEVICE=REDIR.SYS: > >> < and |, DOS's own builtins and error messages,
+# a filter through the console slots, a pipe of three, a batch file. And
+# without the line, the command line is parsed as it always was.
+OUT=$(cd $T/fsr && printf "$REDIR_SCRIPT" | "$R/c4m" "$R/load-c4r.c" -- "$R/$T/c4dos-clock.c4r" 2>&1)
+check_redir native "$OUT"
+OUT=$(run_native c4dos-clock.c4r 'ECHO a > b | c\nEXIT\n')
+echo "$OUT" | grep -q "^a > b | c$" || { echo "FAIL: without REDIR.SYS, > and | should be words"; exit 1; }
+echo "test-c4dos: redirection (> >> < |, batch files) OK, and without REDIR.SYS the line is as it was"
+
 # ---- leg 2f: the ladder ---------------------------------------------
 # The claim this whole system exists to support: C4DOS builds C4KE.
 # dostar unpacks the sources onto the RAM disk, cpp preprocesses the
@@ -294,6 +338,9 @@ echo "test-c4dos: the tower holds (plain c4 -> c4l -> C4DOS -> hello)"
 OUT=$( cd $T/fs && printf "$V4_SCRIPT" | "$R/c4" "$R/c4l.c" "$R/$T/c4dos.c4r" 2>&1 )
 check_v4 tower "$OUT"
 echo "test-c4dos: the tower runs API v4 too (programs running programs, on plain c4)"
+OUT=$( cd $T/fsr && printf "$REDIR_SCRIPT" | "$R/c4" "$R/c4l.c" "$R/$T/c4dos.c4r" 2>&1 )
+check_redir tower "$OUT"
+echo "test-c4dos: the tower redirects too (REDIR.SYS on plain c4)"
 
 # ---- leg 4: THE MACHINE (c4bb) --------------------------------------
 if [ -x ./c4cc32 ] && command -v node > /dev/null; then
@@ -322,6 +369,45 @@ if [ -x ./c4cc32 ] && command -v node > /dev/null; then
   echo "$OUT" | grep -q "HEAP.SYS: this machine's heap keeps no generations" || { echo "FAIL c4bb: HEAP.SYS should be refused"; exit 1; }
   check_v4 c4bb "$OUT"
   echo "test-c4dos: API v4 on c4bb, and HEAP.SYS declined there"
+  # DEVICE=DRIVES.SYS HOME=B: with a drive B: that can be written (the
+  # CLI's -w): the same session, so every file the v4 scenarios write
+  # goes to B: and the unlink scenario deletes from it; then COPY onto
+  # B:, DIR B:, a RAM copy over it, and DEL taking the RAM copy first
+  mkdir -p $T/fs32h $T/home
+  cp $T/fs32/* $T/fs32h/
+  echo 'DEVICE=DRIVES.SYS HOME=B:' >> $T/fs32h/config.sys
+  (cd $T/fs32h && ls > c4dos.dir)
+  OUT=$(printf "${V4_SCRIPT%EXIT\\n}COPY config.sys NOTE.TXT\nDIR B:\nTYPE b:note.txt\nCOPY NOTE.TXT RAM:\nDEL NOTE.TXT\nTYPE NOTE.TXT\nDEL NOTE.TXT\nTYPE NOTE.TXT\nDIR B:\nEXIT\n" \
+        | node src/c4bb/sim/cli.js -c 900000000 -d $T/fs32h -w $T/home $T/c4dos32.c4r 2>&1)
+  echo "$OUT" | grep -q "files are written to B:" || { echo "FAIL c4bb HOME=B:: CONFIG.SYS"; echo "$OUT" | head; exit 1; }
+  check_v4 c4bb-home "$OUT"
+  [ -f $T/home/kid.txt ] && grep -qx 'kid.txt' $T/home/c4dos.dir || { echo "FAIL c4bb HOME=B:: kid.txt not on B: and in its c4dos.dir"; exit 1; }
+  [ ! -e $T/home/gone.txt ] && ! grep -q 'gone.txt' $T/home/c4dos.dir || { echo "FAIL c4bb HOME=B:: unlink left gone.txt on B:"; exit 1; }
+  echo "$OUT" | grep -q "config.sys -> NOTE.TXT"  || { echo "FAIL c4bb HOME=B:: COPY"; exit 1; }
+  [ "$(echo "$OUT" | grep -c 'DEVICE=DRIVES.SYS HOME=B:')" -ge 2 ] || { echo "FAIL c4bb HOME=B:: TYPE b:note.txt and NOTE.TXT under its RAM copy"; echo "$OUT" | tail -20; exit 1; }
+  echo "$OUT" | grep -q "file not found: NOTE.TXT" || { echo "FAIL c4bb HOME=B:: two DELs should take both copies"; echo "$OUT" | tail -20; exit 1; }
+  [ ! -e $T/home/NOTE.TXT ] && ! grep -q 'NOTE.TXT' $T/home/c4dos.dir || { echo "FAIL c4bb HOME=B:: DEL left NOTE.TXT on B:"; exit 1; }
+  echo "test-c4dos: HOME=B: on c4bb: files on B:, its c4dos.dir kept, COPY, DIR B: and DEL"
+  # DEVICE=REDIR.SYS TAP: the machine's console tap catches a c4cc
+  # program's printf (hello32 into a file, and into a pipe) and feeds its
+  # READ of fd 0 (dosfilt -r at a pipe's end); redirect targets on B:
+  mkdir -p $T/fs32r $T/homer
+  cp $T/fs32/config.sys $T/fs32/autoexec.bat $T/fs/hello32.c4r $T/fs32r/
+  ./c4cc32 -o $T/fs32r/dosfilt.c4r include/c4dos.h src/tests/dosfilt.c > /dev/null
+  printf 'DEVICE=DRIVES.SYS HOME=B:\nDEVICE=REDIR.SYS TAP\n' >> $T/fs32r/config.sys
+  (cd $T/fs32r && ls > c4dos.dir)
+  OUT=$(printf 'hello32 > OUT.TXT\nTYPE OUT.TXT\nhello32 | dosfilt\nTYPE config.sys | dosfilt -r\nDIR | dosfilt -r > B:X.TXT\nTYPE B:X.TXT\nhello32\nEXIT\n' \
+        | node src/c4bb/sim/cli.js -c 900000000 -d $T/fs32r -w $T/homer $T/c4dos32.c4r 2>&1)
+  echo "$OUT" | grep -q "with the console tap" || { echo "FAIL c4bb tap: CONFIG.SYS"; echo "$OUT" | head; exit 1; }
+  # once from TYPE OUT.TXT and once from the last, plain hello32: the
+  # redirected run printed nothing on the console
+  [ "$(echo "$OUT" | grep -c '^yello$')" = 2 ] || { echo "FAIL c4bb tap: hello32 > OUT.TXT"; echo "$OUT"; exit 1; }
+  grep -qx 'yello' $T/homer/OUT.TXT || { echo "FAIL c4bb tap: OUT.TXT is not on B:"; exit 1; }
+  echo "$OUT" | grep -q '^> YELLO$' || { echo "FAIL c4bb tap: hello32 | dosfilt"; exit 1; }
+  echo "$OUT" | grep -q '^DEVICE=REDIR.SYS TAP$' || { echo "FAIL c4bb tap: READ fed from a pipe"; exit 1; }
+  echo "$OUT" | grep -q "^DOSFILT.C4R$" || { echo "FAIL c4bb tap: DIR | dosfilt -r > B:X.TXT"; echo "$OUT"; ls -la $T/homer; exit 1; }
+  grep -q 'dosfilt: .* lines (read)' $T/homer/X.TXT || { echo "FAIL c4bb tap: X.TXT on B:"; exit 1; }
+  echo "test-c4dos: the console tap on c4bb: a c4cc program's printf and READ redirected"
 else
   echo "test-c4dos: SKIP c4bb leg (need c4cc32 + node; run 'make c4bb-32bit')"
 fi

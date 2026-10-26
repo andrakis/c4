@@ -90,7 +90,9 @@ keeps the wall's (`?realtime`), so it says 89 too.
 3. **The page's C4DOS disk** (`libjs/images/dos`): the games and their
    data, grin, and the newest `c4dos32.c4r`.
 
-Its own `CONFIG.SYS` (CLOCK, a 32 MB RAMDISK, CONSOLE FLUSH, DRIVES, HEAP),
+Its own `CONFIG.SYS` (CLOCK, a 32 MB RAMDISK, CONSOLE FLUSH, DRIVES, HEAP,
+REDIR TAP; no `HOME=B:`, which would send what cpp and c4cc write to B:
+instead of the RAM disk C4KE is seeded from),
 `AUTOEXEC.BAT`, `BUILD.BAT`, `LADDER.TXT`, `c4dos.dir`, `index.json` and
 `manifest.json`. The prebuilt C4IX kernel is left out, so the one that
 boots is the one b4ke linked. Like the climb disk beside it, the ladder

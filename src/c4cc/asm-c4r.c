@@ -72,7 +72,9 @@
 // | | BYTE offset into DATA for types -3/-4 (data-resident words: pointer   | |
 // | | initializers of globals, switch jump tables). Code-resident patches   | |
 // | | are written first, in emission (= ascending address) order, then the  | |
-// | | data-resident ones.                                                   | |
+// | | data-resident ones. The patched word itself holds Value (0 for a      | |
+// | | symbol): loaders overwrite it, and a compile-time address there would | |
+// | | make two builds of one source differ.                                 | |
 // | |-----------------------------------------------------------------------| |
 // |---------------------------------------------------------------------------|
 // | Construct / Destruct segment format:                                      |
@@ -644,17 +646,6 @@ void dump_to_file (char *file) {
 	// Destructors length
 	tmp = destructor_count; writechecked(fd, &tmp, sizeof(int));
 
-	// Code
-	writechecked(fd, "C\0\0\0\0\0\0\0", sizeof(int));
-	// The inner parentheses matter when c4cc compiles itself: it types
-	// 1 + pointer as int, which un-scales the following subtraction and
-	// inflates the write to byte-count words. gcc computed it correctly,
-	// so this only ever broke the self-hosted compiler's output.
-	writechecked(fd, asmc4r_e_start, sizeof(int) * (1 + (asmc4r_e - asmc4r_e_start)));
-	// printf("Wrote %d bytes of code\n", 1 + asmc4r_e - asmc4r_e_start);
-	// Data
-	writechecked(fd, "D\0\0\0\0\0\0\0", sizeof(int));
-	writechecked(fd, data_s, data - data_s);
 	// Resolve symbol-typed patches whose symbol was defined later in this
 	// compilation (a JSR emitted while the target was only a prototype).
 	// The loader ignores symbol patches, so leaving them made standalone
@@ -676,6 +667,36 @@ void dump_to_file (char *file) {
 		++i;
 		lbl = lbl + LBL__Sz;
 	}
+	// Every patched word gets its patch's value: the offset into code or
+	// data it points at (0 for a symbol, which c4rlink resolves). Each
+	// loader overwrites these words, so what they hold only matters to
+	// the file: left alone they held c4cc's own addresses (where its code
+	// buffer and data pool happened to be, IMM/JMP/JSR operands and the
+	// pointer initializers c4cc.c leaves as dead compile-time values), so
+	// under ASLR no two builds of an unchanged source were byte-identical.
+	i = 0; lbl = asmc4r_labels;
+	while (i < asmc4r_labels_count) {
+		t = lbl[LBL_TYPE];
+		if (t >= 0) lbl[LBL_VALUE] = 0;
+		if (t == LT_DCODE || t == LT_DDATA)
+			*(int *)(data_s + lbl[LBL_INDEX]) = lbl[LBL_VALUE];
+		else if (t != LT_DROP)
+			asmc4r_e_start[lbl[LBL_INDEX]] = lbl[LBL_VALUE];
+		++i;
+		lbl = lbl + LBL__Sz;
+	}
+
+	// Code
+	writechecked(fd, "C\0\0\0\0\0\0\0", sizeof(int));
+	// The inner parentheses matter when c4cc compiles itself: it types
+	// 1 + pointer as int, which un-scales the following subtraction and
+	// inflates the write to byte-count words. gcc computed it correctly,
+	// so this only ever broke the self-hosted compiler's output.
+	writechecked(fd, asmc4r_e_start, sizeof(int) * (1 + (asmc4r_e - asmc4r_e_start)));
+	// printf("Wrote %d bytes of code\n", 1 + asmc4r_e - asmc4r_e_start);
+	// Data
+	writechecked(fd, "D\0\0\0\0\0\0\0", sizeof(int));
+	writechecked(fd, data_s, data - data_s);
 
 	// Patches: code-resident first in emission order (readers walk them
 	// in step with the instruction stream), then data-resident.

@@ -353,6 +353,14 @@ bytes by passing `-g0`, or by linking with `-s`:
   previous module's last row does not cover it. `-s` drops the map with
   the symbols. `-g0` drops only the map. That is for a dynamic image,
   which needs its symbols and so cannot take `-s`.
+
+  Since 2026-10-26 `--gc` does drop functions (docs/c4dos-design.md
+  "Linking a bare program"). It reads the merged map for where functions
+  start and end, then writes it again (`gc_srcmap`): the file table as it
+  was, the kept functions at their new starts, the rows in kept code
+  moved with it, and where removed code ended and the code after had no
+  row of its own, a row with the line that held there. Every kept
+  function's words keep their file and line.
 - **c4rstrip** drops the trailer as well as the symbols.
 - **C4SK** (the closed security kit, `~/git/c4sk`) seals images linked
   with `c4rlink32 -s`, so they carry no map. Its `verify.mjs` checks

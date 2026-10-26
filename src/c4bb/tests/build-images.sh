@@ -487,15 +487,29 @@ for g in $GAMES; do . $g/c4-images.sh c4ix; done
 
 # ... and with no C4IX under them: the bare machine, and C4DOS (c4's bare
 # libc, make libc-bare-objs). The same game objects, but for the C4IX
-# platform's (plat-bare.c, dg-bare.c), linked whole with libc. Their disk,
-# $OUT/games, has the games' files unpacked, since neither the bare
-# machine nor DOS can write to a drive, and C4DOS's own files, so it boots
-# C4DOS too.
+# platform's (plat-bare.c, dg-bare.c), with libc. Their disk, $OUT/games,
+# has the games' files unpacked, since neither the bare machine nor DOS
+# can write to a drive, and C4DOS's own files, so it boots C4DOS too.
 GAMESDISK=$OUT/games
 GAMES_ON_DISK=
 GAMEFILES=$OUT/.gamefiles
 rm -rf $OUT/wolf3d $GAMESDISK $GAMEFILES
 mkdir -p $GAMEFILES
+# A bare program carries what it uses of libc and no more: libc's objects
+# are library members, linked only if something needs what they define,
+# and --gc drops every function nothing reaches (c4rlink.c's header;
+# docs/c4dos-design.md "Linking a bare program"). The games' own scripts
+# name ./c4rlink32 and .libc-bare's objects; while they run, this stands
+# in for it and adds the two, so they need no change for it.
+./c4rlink32() {
+    local a lib= args=()
+    case " $* " in *" --start-lib "*) command ./c4rlink32 "$@"; return ;; esac
+    for a in "$@"; do
+        case "$a" in .libc-bare/*) if [ -z "$lib" ]; then args+=(--start-lib); lib=1; fi ;; esac
+        args+=("$a")
+    done
+    if [ -n "$lib" ]; then command ./c4rlink32 --gc "${args[@]}"; else command ./c4rlink32 "$@"; fi
+}
 if [ -n "$GAMES" ] && ls .libc-bare/*.c4o > /dev/null 2>&1; then
     mkdir -p $GAMESDISK
     step "linking the games for the bare machine and C4DOS:"
@@ -511,6 +525,7 @@ if [ -n "$GAMES" ] && ls .libc-bare/*.c4o > /dev/null 2>&1; then
     rm -f $GAMEFILES.before
     echo
 fi
+unset -f ./c4rlink32
 if [ -n "$GAMES_ON_DISK" ]; then
     say "the games disk: their data, C4DOS's files, the indexes"
     # (C4DOS's own CONFIG.SYS, made as the C4DOS step below makes the
@@ -745,18 +760,19 @@ rm -rf $LJDOS
 if ls .grin/*.c4o > /dev/null 2>&1 && ls .libc-bare/*.c4o > /dev/null 2>&1 && [ -f $OUT/c4dos32.c4r ]; then
     say "the page's C4DOS disk, booting into grin: $LJDOS"
     mkdir -p $LJDOS/GRIN $LJDOS/BIN
-    ./c4rlink32 .grin/*.c4o .libc-bare/libc-*.c4o -o $LJDOS/GRIN/grin.c4r > /dev/null
+    # libc as library members, and --gc, as the games above
+    ./c4rlink32 --gc .grin/*.c4o --start-lib .libc-bare/libc-*.c4o -o $LJDOS/GRIN/grin.c4r > /dev/null
     # its applications (docs/grin-plan.md 3.4): main, the kit's class, and
     # import.c in the kit's place; EXITKEY is test-grin's
     for app in clock calc notepad exitkey; do
         [ -f .grinapp/$app.c4o ] || continue
         kit=; [ -f .grinapp/wk-$app.c4o ] && kit=.grinapp/wk-$app.c4o
-        ./c4rlink32 .grinapp/$app.c4o $kit .grinapp/import.c4o .libc-bare/libc-*.c4o -o $LJDOS/GRIN/$app.c4r > /dev/null
+        ./c4rlink32 --gc .grinapp/$app.c4o $kit .grinapp/import.c4o --start-lib .libc-bare/libc-*.c4o -o $LJDOS/GRIN/$app.c4r > /dev/null
     done
     # DOS programs for trying redirection with, and test-grin's: ASKLINE
     # (bare.c: reads a line through DOS), DOSFILT (a filter; -r is a plain
     # c4cc program's READ and printf, the tap's) and HELLO (c4cc's printf)
-    [ -f .grinapp/askline.c4o ] && ./c4rlink32 .grinapp/askline.c4o .libc-bare/libc-*.c4o -o $LJDOS/BIN/askline.c4r > /dev/null
+    [ -f .grinapp/askline.c4o ] && ./c4rlink32 --gc .grinapp/askline.c4o --start-lib .libc-bare/libc-*.c4o -o $LJDOS/BIN/askline.c4r > /dev/null
     $CC -o $LJDOS/BIN/dosfilt.c4r include/c4dos.h src/tests/dosfilt.c > /dev/null
     cp $OUT/hello32.c4r $LJDOS/BIN/hello.c4r
     cp $OUT/c4dos32.c4r $LJDOS/

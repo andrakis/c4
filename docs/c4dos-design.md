@@ -848,6 +848,73 @@ carry `hello.c4r` and `raycast.c4r`.
     make run-c4dos-bb     # the breadboard machine, interactive
     make serve-c4bb       # the breadboard machine, in a browser
 
+### Linking a bare program
+
+A C4IX program links libc as a shared library (`c4rlink -l libc.c4s`)
+and is small. DOS has no dynamic loader, so a program for C4DOS or the
+bare machine carries its libc inside it: `make libc-bare-objs` makes
+nine objects (`.libc-bare/libc-*.c4o`, 484 KB), and every bare link
+named them all. c4rlink copied every input whole, so each program
+carried all nine -- askline, which reads one line, was 470 KB, Clock
+500 KB, grin 957 KB. Most of that was never run: `libc-math.c4o` alone
+is 253 KB, and c4lc puts its soft-float and `long long` routines into
+every object that needs them, so `libc-fp.c4o` (printf's `%f`) carries
+its own copy whether a program prints a float or not.
+
+Two c4rlink options, both off unless asked for, so every other link
+(the C4IX kernel, test-c4ix-rebuild, the climb) is the same bytes as
+before:
+
+- **`--start-lib`**: the inputs after it (up to `--end-lib`) are library
+  members, as the objects in an `ar` archive are to `ld`. A member is
+  linked only if it defines a symbol that something linked names in a
+  patch and nothing linked defines, repeated until nothing more comes in
+  (as lld's `--start-lib`, so the order does not matter). A program that
+  does no math leaves `libc-math.c4o` out: askline 470 KB -> 217 KB.
+- **`--gc`**: the functions nothing reaches go. The code is cut at every
+  function (its symbol, or with `-g` the source map's function table,
+  which also names c4lc's routines that have no symbol), and every code
+  address in an image is a patch, because the loader relocates it; so
+  the CODE patches are the whole of "this function uses that one". Kept
+  is what the entry point, the constructors and destructors and the code
+  addresses held in data (function tables, `grin_kit`'s) reach, and with
+  `-r` or `-l` every function another image could name. The rest leaves
+  with its patches, its symbols and its part of the source map, and the
+  code after moves down. Data is not touched: the globals a loader finds
+  by name (`__c4dos_api`, `__c4ke_exit`) stay. Each region is decoded,
+  and one that does not end on a jump or a return exactly where the next
+  begins is kept together with that one, so no code can run on into
+  something removed.
+
+`build-images.sh` links grin, its applications and askline with
+`--gc ... --start-lib .libc-bare/libc-*.c4o`, and the games the same:
+their `c4-images.sh` (in the game repositories) name `./c4rlink32` and
+`.libc-bare`'s objects, and while they run build-images defines a shell
+function `./c4rlink32` that adds the two options, so they need no
+change. `make test-libc-bare` links its test the same way.
+
+| program | linked whole | `--start-lib` | `--start-lib --gc` |
+|---|---:|---:|---:|
+| grin | 957,593 | 704,668 | 548,031 |
+| Clock | 500,389 | 247,468 | 66,983 |
+| Calculator | 610,955 | 358,030 | 244,618 |
+| Notepad | 521,432 | 268,507 | 103,106 |
+| EXITKEY (test-grin's) | 495,302 | 242,381 | 60,972 |
+| askline | 469,796 | 216,871 | 58,820 |
+| Doom | 2,096,899 | 2,096,899 | 1,762,726 |
+| Rise of the Triad | 3,580,198 | 3,327,299 | 3,198,935 |
+| OpenTyrian | 2,833,682 | 2,833,682 | 2,663,146 |
+| Wolfenstein 3D | 1,651,555 | 1,651,555 | 1,386,345 |
+| Wolfenstein 3D (registered) | 1,656,179 | 1,656,179 | 1,357,144 |
+
+(bytes, with `-g` source maps.) Doom, Tyrian and Wolf3D call one or two
+math functions (Doom: `fabs`), so `--start-lib` alone keeps all of
+`libc-math.c4o` for them; `--gc` then keeps just those. What is left
+is mostly the programs' own code. Not done, and small: a removed
+function's strings stay in the data (an application's whole data is
+about 7 KB), and so do extern symbols nothing named (at most 7 KB, in
+ROTT).
+
 ### The build floppy
 
 `make run-c4dos-build` is the one that matters for the ladder: boot it,

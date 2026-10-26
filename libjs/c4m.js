@@ -219,11 +219,13 @@ export class Machine {
     return this.sharedMem ? u8.slice(addr, end) : u8.subarray(addr, end);
   }
 
-  // Bytes to the console, in order with everything else the UART sends.
+  // Bytes to the console, in order with everything else the UART sends:
+  // through the device's console tap (CON_TAP) when it has one.
   emit(bytes) {
     const dev = this.dev, f = dev.onByte;
     dev.uartActivity += bytes.length;
-    if (f) for (let i = 0; i < bytes.length; i++) f(bytes[i]);
+    if (dev.tapOn) dev.conBytes(bytes);
+    else if (f) for (let i = 0; i < bytes.length; i++) f(bytes[i]);
   }
   emitString(s) {
     const b = new TextEncoder().encode(s);

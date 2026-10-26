@@ -23,6 +23,7 @@
 // write, no directories but the one, no processes.
 
 int *__c4dos_api;        // the loader's, under C4DOS; 0 on the bare machine
+int __c4ke_exit;         // C4KE's loader's, under C4KE: the opcode that ends a task
 
 enum {
     DOS_MAGIC_SLOT = 0, DOS_EXIT = 1, DOS_CREATE = 2, DOS_WRITE = 3, DOS_CLOSE = 4,
@@ -170,9 +171,11 @@ int uclose(int fd) {
     return 0;
 }
 
-// exit: back to DOS's prompt, or the machine stops
+// exit: back to DOS's prompt, the task ends under C4KE, or the machine
+// stops
 int uexit(int code) {
     if (dos() && __c4dos_api[DOS_EXIT]) dos1(DOS_EXIT, code);
+    if (__c4ke_exit) __c4_opcode(code, __c4ke_exit);
     exit(code);
     return 0;
 }

@@ -45,6 +45,7 @@ detail behind it. Each doc is one of three kinds:
 | [c4-explorer.md](c4-explorer.md) | plan | Source maps in C4R, Code Explorer (C source beside the VM code it became), windowed programs on the C4IX desktop with the IDE as one, and Wolfenstein 3D as an optional repository |
 | [busybox-port.md](busybox-port.md) | tracker | Busybox compiled by c4lc for C4IX: the measured compiler, kernel and libc gaps, and the order of work |
 | [c4dos-design.md](c4dos-design.md) | reference | C4DOS: the trap-free DOS, its API table and floppies |
+| [c4dos-ladder.md](c4dos-ladder.md) | reference | The Build Ladder on the page (`?system=c4dos-ladder`): C4DOS builds and boots C4KE, C4KE builds C4IX and boots it with `kboot`, games at each rung, in one session; what each step costs |
 | [climbing-the-ladder.md](climbing-the-ladder.md) | reference | The ladder by hand on the breadboard: C4DOS → C4KE → C4IX, each built by the one before |
 | [ladder-plan.md](ladder-plan.md) | history | The completed plan for the ladder: the DOS → C4KE hand-over and C4IX built in the machine |
 | [dos-rung-fixes.md](dos-rung-fixes.md) | history | The fixes the DOS rung needed on the board |

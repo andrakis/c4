@@ -2,7 +2,7 @@
 //
 // URL parameters:
 //   ?system=NAME                 which machine to boot (default c4ix): c4ix, c4ke,
-//                                c4dos, wolf3d, wolf3d6, wolf3d-c4ix, doom, tyrian, rott, gui-demo, fb-demo,
+//                                c4dos, c4dos-ladder, wolf3d, wolf3d6, wolf3d-c4ix, doom, tyrian, rott, gui-demo, fb-demo,
 //                                snd-demo, raycast -- SYSTEMS below
 //   ?image=URL&disk=URL          any other image and disk instead
 //   ?args=A+B                    more arguments for the system's program, after its
@@ -12,7 +12,7 @@
 //   ?cpus=N                      N processors, simulated (smp.js, docs/c4ix-smp.md)
 //   ?parallel                    ... each on a worker of its own (par.js), when the
 //                                page is cross-origin isolated (serve.mjs --isolate)
-//   ?persist=0 | reset           C4IX's files are not kept between visits / are forgotten first
+//   ?persist=0 | reset           the system's files (drive 1: C4IX's, the ladder's) are not kept / are forgotten first
 //   ?uploads=0                   the Uploads (your own files) are not put on the disk
 //   ?fast                        run as fast as the host can, unpaced
 //   ?realtime=0                  when the host cannot keep up, the machine's clock
@@ -41,6 +41,15 @@ const SYSTEMS = {
   // whose File > Exit grin comes back to A>. The games are on it too, so
   // WOLF3D, DOOM, TYRIAN or ROTT at the prompt plays them.
   c4dos: { label: 'C4DOS', image: `${LJIMAGES}/dos/c4dos32.c4r`, disk: `${LJIMAGES}/dos`, argv: ['c4dos32.c4r'], mhz: 400 },
+  // The Build Ladder (build-images.sh, libjs/images/ladder;
+  // docs/c4dos-ladder.md): C4DOS with the games, and what it takes to
+  // climb in one sitting -- BUILD compiles C4KE, dosload boots it, C4KE
+  // builds C4IX with b4ke and kboot boots that. 128 MB, because C4KE
+  // keeps what its tasks allocate until it stops. Drive 1 is a store of
+  // its own, `ladder` (docs/grin-plan.md 3.8): bbsave, save and C4IX's
+  // persist write there.
+  'c4dos-ladder': { label: 'C4DOS Build Ladder', image: `${LJIMAGES}/ladder/c4dos32.c4r`, disk: `${LJIMAGES}/ladder`,
+                    argv: ['c4dos32.c4r'], mhz: 400, mem: 128, persist: 'ladder' },
   // Wolfenstein 3D with no operating system under it (games/wolf3d/plat-bare.c),
   // and on C4IX drawing on the display itself rather than in a window
   // (wolf3d --direct, like raycast -G). The game times itself against the
@@ -114,7 +123,7 @@ const opts = {
   unpaced: params.has('fast') || !!sys.unpaced,
   realtime: params.get('realtime') !== '0',
   fpu: params.get('fpu') !== '0',
-  arenaMb: Number(params.get('mem')) || 64,
+  arenaMb: Number(params.get('mem')) || sys.mem || 64,
   shared: params.get('shared') !== '0',
   snd: params.get('snd') !== '0',
   cpus: Number(params.get('cpus')) || 0,
@@ -137,7 +146,7 @@ const CONFIG = [
   { key: 'parallel', label: 'A thread each', kind: 'flag',
     help: 'several processors at once, each on a worker (needs the page cross-origin isolated)' },
   { key: 'mem', label: 'Memory (MB)', kind: 'text', options: ['32', '64', '128', '256'],
-    help: 'the arena; empty is 64' },
+    help: `the arena; empty is the system's own (${sys.mem || 64})` },
   { key: 'snd', label: 'Sound card', kind: 'onoff', def: true },
   { key: 'fpu', label: 'FPU', kind: 'onoff', def: true, help: 'off: floats in software' },
   { key: 'realtime', label: 'Keep the wall clock', kind: 'onoff', def: true,
@@ -145,7 +154,7 @@ const CONFIG = [
   { key: 'fast', label: 'Unpaced', kind: 'flag', help: 'as fast as the host can, whatever the MHz' },
   { key: 'shared', label: 'Shared display path', kind: 'onoff', def: true,
     help: 'off: the message path even when the page is cross-origin isolated' },
-  { key: 'persist', label: "C4IX's files", kind: 'select', def: '',
+  { key: 'persist', label: 'Kept files', kind: 'select', def: '',
     options: [['', 'kept between visits'], ['0', 'not kept'], ['reset', 'forgotten, then kept']] },
   { key: 'args', label: 'Arguments', kind: 'text', options: [],
     help: "more for the system's program, after its own (wolf3d: --secrets --nodeath)" },
@@ -318,11 +327,11 @@ try {
 
 $('reset').addEventListener('click', () => { vm.reset(); term.focus(); });
 $('ctrlc').addEventListener('click', () => { vm.signal(2); term.focus(); });
-// Reset Files: only where the page keeps C4IX's files (?persist=0 has none)
+// Reset Files: only where the page keeps a system's files (?persist=0 has none)
 const filesBtn = $('resetfiles');
 if (vm.persistName) filesBtn.style.display = '';
 filesBtn.addEventListener('click', async () => {
-  if (!confirm("Forget every change kept to C4IX's files -- what was saved, made and deleted -- " +
+  if (!confirm(`Forget every change kept to ${sys.label || 'this system'}'s files -- what was saved, made and deleted -- ` +
                'and boot again from the disk as it ships?')) return;
   await vm.resetFiles();
   term.focus();

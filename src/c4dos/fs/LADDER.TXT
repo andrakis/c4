@@ -1,0 +1,19 @@
+The Build Ladder: C4DOS builds C4KE, C4KE builds C4IX, no reboot.
+
+At A>  (C4DOS)
+  WOLF3D, DOOM, TYRIAN, ROTT   play; each gives its memory back on quit
+  BUILD                        compile C4KE and its init on the RAM disk
+                               (LADDER: rebuild the compiler first)
+  RUN dosload.c4r c4ke.c4r     boot the kernel you just compiled
+
+At c4sh>  (C4KE)
+  wolf3d, doom, rps, raycast   play, as C4KE tasks
+  tar x c4ix-src.tar           C4IX's sources, into the RAM filesystem
+  b4ke -f c4ix.b4k             twelve modules and a link: c4ix.c4r
+  kboot c4ix.c4r               C4KE stops, and the C4IX it built boots
+  kboot c4ix.c4r --desktop     ... straight into the desktop
+  exit                         back to A>
+
+At c4ix:/$  (C4IX)
+  ls, ps, top, desktop         the system C4KE built
+  exit                         C4IX stops; C4KE returns, then to A>

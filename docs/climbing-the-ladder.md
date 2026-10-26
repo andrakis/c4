@@ -174,6 +174,11 @@ The same disk works: open `src/c4bb/web/index.html`, choose **(BIOS)**,
 which boots the climb disk (`c4dos32` boots the smaller recovery floppy,
 `src/c4bb/web/app.js`), and type the same things. The page's arena is 128 MB.
 
+libjs's page has the ladder too, with no BIOS and no reset:
+`?system=c4dos-ladder` boots C4DOS with the games, `BUILD` and `RUN
+dosload.c4r c4ke.c4r` as here, and in C4KE `kboot c4ix.c4r` boots the
+C4IX that `b4ke` just linked. [c4dos-ladder.md](c4dos-ladder.md).
+
 ## Non-interactively
 
 `make test-c4dos-c4ix32` runs the C4DOS-only route (`IX` under DOS) and

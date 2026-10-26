@@ -84,7 +84,7 @@ C4R_C4CC_SRCS := $(U0) include/c4dos.h load-c4r.c $(SRCS)/c4cc/c4cc.c $(SRCS)/c4
 C4KE_SRCS := load-c4r.c $(SRCS)/c4ke/c4ke.c \
              $(SRCS)/c4ke/extensions/c4ke_ipc.c $(SRCS)/c4ke/extensions/c4ke_plus.c \
              $(SRCS)/c4ke/extensions/c4ke_pm.c $(SRCS)/c4ke/extensions/c4ke_dos.c \
-             $(SRCS)/c4ke/extensions/c4ke_mbox.c
+             $(SRCS)/c4ke/extensions/c4ke_mbox.c $(SRCS)/c4ke/extensions/c4ke_boot.c
 C4KE_HDRS := $(INCLUDE)/c4.h $(INCLUDE)/c4m.h
 C4KE_C4R  := c4ke.c4r
 BIN_D     := $(SRCS)/c4ke/bin
@@ -359,6 +359,7 @@ C4KE_KIT := src/c4ke/c4ke.c:c4ke.c \
             src/c4ke/extensions/c4ke_pm.c:src/c4ke/extensions/c4ke_pm.c \
             src/c4ke/extensions/c4ke_dos.c:src/c4ke/extensions/c4ke_dos.c \
             src/c4ke/extensions/c4ke_mbox.c:src/c4ke/extensions/c4ke_mbox.c \
+            src/c4ke/extensions/c4ke_boot.c:src/c4ke/extensions/c4ke_boot.c \
             src/c4ke/bin/ps.c:ps.c \
             src/c4ke/bin/eshell.c:eshell.c \
             src/c4ke/services/init.c:init.c \
@@ -750,7 +751,7 @@ $(C4DOS_IX_DISK): c4dos32.c4r dostar32.c4r cpp32.c4r c4cc32.c4r dosload32.c4r \
                   b4ke32.c4r tar32.c4r ls32.c4r ps32.c4r \
                   bbsave32.c4r save32.c4r raycast-dos32.c4r reboot32.c4r \
                   install32.c4r $(SRCS)/c4dos/fs/install.lst \
-                  kinstall32.c4r $(SRCS)/c4ke/fs/c4ix.lst \
+                  kinstall32.c4r kboot32.c4r $(SRCS)/c4ke/fs/c4ix.lst \
                   $(SRCS)/c4bb/fs/c4ke-climb.vfs.txt \
                   $(SRCS)/c4bb/fs/c4ix-climb.vfs.txt \
                   c4-dos32.c4r c4m-dos32.c4r mandel-dos32.c4r rps-dos32.c4r \
@@ -791,6 +792,9 @@ $(C4DOS_IX_DISK): c4dos32.c4r dostar32.c4r cpp32.c4r c4cc32.c4r dosload32.c4r \
 	@cp ls32.c4r       $(C4DOS_IX_DISK)/ls.c4r
 	@cp ps32.c4r       $(C4DOS_IX_DISK)/ps.c4r
 	@cp $(BIN_D)/c4ix.b4k $(C4DOS_IX_DISK)/
+	@# ...and boots it, with no reboot: C4KE stops and runs the image
+	@# (extensions/c4ke_boot.c), as dosload does one rung down.
+	@cp kboot32.c4r    $(C4DOS_IX_DISK)/kboot.c4r
 	@cp reboot32.c4r   $(C4DOS_IX_DISK)/reboot.c4r
 	@# What makes this medium bootable to the BIOS (docs/c4bb-storage.md
 	@# M10). A name rather than a second copy of the image: the disk
@@ -2353,6 +2357,10 @@ install32.c4r: c4cc32 include/c4dos.h include/c4bb.h $(SRCS)/c4dos/install.c
 # The same job one rung up, as a C4KE task rather than a C4DOS
 # transient. It has its own name because the DOS one is on the same
 # floppy and cannot run here -- it talks to a DOS that is gone.
+# kboot: C4KE stops and boots another kernel, the C4IX b4ke just built
+# (extensions/c4ke_boot.c). The climb without a BIOS to reboot into.
+kboot32.c4r: c4cc32 $(U0) $(BIN_D)/kboot.c
+	./c4cc32 -o $@ $(U0) $(BIN_D)/kboot.c > /dev/null
 kinstall32.c4r: c4cc32 $(U0) include/c4bb.h $(BIN_D)/install.c
 	./c4cc32 -o $@ $(U0) include/c4bb.h $(BIN_D)/install.c > /dev/null
 save32.c4r: c4cc32 $(U0) include/c4bb.h $(BIN_D)/save.c
@@ -2505,6 +2513,16 @@ test-c4bb: c4bb-images $(C4M) $(TESTS_C4R)
 # own; the suite diffs against native c4m32/c4m and boots both kernels.
 test-libjs: c4bb-images $(C4M) $(TESTS_C4R) c4sp32
 	bash libjs/tests/test-libjs.sh
+
+# The Build Ladder on libjs, headless (docs/c4dos-ladder.md): the page's
+# ladder disk boots C4DOS, which plays Doom and builds C4KE; C4KE plays
+# Doom and rps, builds C4IX with b4ke and boots it with kboot; C4IX plays
+# Doom and exits, back through C4KE to A>. One machine, no reset, about
+# seventy seconds. The disk is copied from the climb floppy, so that
+# comes first.
+test-libjs-ladder: c4dos-c4ix32
+	$(MAKE) c4bb-images
+	node libjs/tests/test-c4dos-ladder.mjs
 
 # C4IX on several processors (docs/c4ix-smp.md S3): test-libjs's C4IX
 # checks that say whether the kernel holds together with several CPUs in
@@ -3591,7 +3609,7 @@ c4rs: pre
 
 # Marking the below rules as PHONY using singular .PHONY rule
 PHONY  = pre all clean-c4rs clean
-PHONY += test-libjs test-c4ix-smp serve-libjs test-libjs-web test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
+PHONY += test-libjs test-libjs-ladder test-c4ix-smp serve-libjs test-libjs-web test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
 PHONY += run-c4dos-build32 test-c4dos-build32 run-c4dos-c4ix32 test-c4dos-c4ix32 test-c4cc-for test-respfile test-b4ke test-c4bb-storage test-c4bb-baseops test-c4bb-rungs test-c4bb-install test-c4bb-climb test-c4bb-web test-c4bb-firmware
 PHONY += test-c4sc test-c4sc-run test-c4sc-lex test-c4sc-front test-c4sc-back test-c4sc-chain
 PHONY += test-c4sc-image test-c4sc-self test-c4sc-board

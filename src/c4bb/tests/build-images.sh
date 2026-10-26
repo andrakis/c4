@@ -926,6 +926,65 @@ if [ -d $CLIMBDISK ]; then
     echo "c4bb: browser climb disk: $CLIMBDISK ($(ls $CLIMBDISK | wc -l) entries)"
 fi
 
+# ---- the page's ladder disk: libjs/images/ladder ----------------------------
+# What ?system=c4dos-ladder boots: C4DOS with the games, and everything the
+# climb needs, so one page session goes C4DOS -> C4KE -> C4IX with no
+# reboot (docs/c4dos-ladder.md). Three layers, each over the one before:
+#   - the shared disk's C4IX userland and its tree (c4ix.vfs.txt), so the
+#     C4IX the machine builds boots into what ?system=c4ix has, desktop
+#     and games included;
+#   - the climb floppy (c4dos-c4ix32): the build kit, BUILD and LADDER's
+#     tools, the sources as archives, b4ke, c4ix.b4k, kboot, and the C4KE
+#     tree (c4ke.vfs.txt) that floppy is made for;
+#   - the page's C4DOS disk: the games and their data, grin, and the
+#     newest C4DOS.
+# The prebuilt C4IX kernel is left out: the one that boots is the one b4ke
+# links. Copied from the climb floppy, as $CLIMBDISK is, so it is skipped
+# (and says so) when that floppy has not been made.
+LJLAD=libjs/images/ladder
+rm -rf $LJLAD
+if [ -n "$CLIMBSRC" ] && [ -f $LJDOS/c4dos32.c4r ]; then
+    say "the page's ladder disk, C4DOS to C4KE to C4IX: $LJLAD"
+    mkdir -p $LJLAD
+    lad_put () {            # lad_put DIR: DIR's files onto the ladder disk, over what is there
+        (cd $1 && find . -type f ! -name manifest.json ! -name index.json ! -name c4dos.dir \
+            ! -name config.sys ! -name autoexec.bat | sed 's|^\./||') | while read f; do
+            mkdir -p "$LJLAD/$(dirname "$f")"
+            rm -f "$LJLAD/$f"
+            ln "$1/$f" "$LJLAD/$f" 2> /dev/null || cp "$1/$f" "$LJLAD/$f"
+        done
+    }
+    lad_put $DISK
+    lad_put $CLIMBSRC
+    lad_put $LJDOS
+    rm -f $LJLAD/c4ix.c4r $LJLAD/boot.cfg
+    cp $DISK/c4ix.vfs.txt $LJLAD/c4ix.vfs.txt
+    cp src/c4dos/fs/BUILD.BAT $LJLAD/build.bat
+    cp src/c4dos/fs/LADDER.TXT $LJLAD/ladder.txt
+    # the climb floppy's RAM disk (32 MB: LADDER and the kernel's sources),
+    # and the page's devices; HEAP.SYS gives each rung's memory back when
+    # it returns to the one below
+    sed 's/SIZE=[0-9]*/SIZE=33554432/' src/c4dos/fs/CONFIG.SYS > $LJLAD/config.sys
+    printf 'DEVICE=CONSOLE.SYS FLUSH\nDEVICE=DRIVES.SYS\nDEVICE=HEAP.SYS\n' >> $LJLAD/config.sys
+    list=$(echo $GAMES_ON_DISK | sed 's/ /, /g')
+    {
+        printf '@ECHO OFF\nECHO Welcome to C4DOS, the Build Ladder\nVER\n'
+        if [ -n "$list" ]; then printf 'ECHO The games on this disk: %s.\n' "$list"; fi
+        # (C4DOS splits a line into at most 15 words, so ECHO says 14)
+        printf 'ECHO Climb: BUILD, then RUN dosload.c4r c4ke.c4r boots the kernel it built.\n'
+        printf 'ECHO TYPE LADDER.TXT says every step, up to C4IX.\n'
+    } > $LJLAD/autoexec.bat
+    (cd $LJLAD && ls -p | grep -v '/$' | grep -v '^manifest.json$' > c4dos.dir)
+    (cd $LJLAD && find . -type f -not -name manifest.json | sed 's|^\./||') | \
+        awk 'BEGIN{printf "["} NR>1{printf ","} {printf "\"%s\"", $0} END{print "]"}' > $LJLAD/manifest.json
+    (cd $LJLAD && find . -type f -not -name manifest.json -not -name index.json -printf '%s %P\n' | sort -k2) | \
+        awk 'BEGIN{printf "["} NR>1{printf ","} {n=$0; sub(/^[0-9]+ /,"",n); printf "[\"%s\",%s]", n, $1} END{print "]"}' \
+        > $LJLAD/index.json
+    echo "c4bb: ladder disk: $LJLAD ($(find $LJLAD -type f | wc -l) files, $(du -sh $LJLAD | cut -f1))"
+else
+    echo "c4bb: no ladder disk: it needs the climb floppy ('make c4dos-c4ix32') and $LJDOS" >&2
+fi
+
 rm -f $ROOTDISK/manifest.json $ROOTDISK/c4dos.dir
 rm -f $ROOTDISK/config.sys $ROOTDISK/autoexec.bat $ROOTDISK/build.bat
 rm -f $ROOTDISK/c4ke-src.tar $ROOTDISK/dostar.c4r $ROOTDISK/dosload.c4r

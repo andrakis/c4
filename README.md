@@ -110,7 +110,9 @@ Unix-like OS, each system compiled by the one before it:
 3. C4KE unpacks C4IX's source, compiles its modules, links them, and boots
    it.
 
-See [docs/climbing-the-ladder.md](docs/climbing-the-ladder.md).
+See [docs/climbing-the-ladder.md](docs/climbing-the-ladder.md). On libjs's page
+the whole climb runs in one session, games at every rung:
+`?system=c4dos-ladder` ([docs/c4dos-ladder.md](docs/c4dos-ladder.md)).
 
 
 Components

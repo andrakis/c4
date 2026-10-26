@@ -810,6 +810,12 @@ static int *kernel_c4r;
 static int  kernel_start_time;
 static int  kernel_schedule_time;
 static int  kernel_shutdown_time;
+// The hand-off: a function an extension names to run once the kernel has
+// stopped, which is given init's status and returns the kernel's. Here
+// rather than in the extension, as the mailbox registers are, so that a
+// kernel built without extensions still compiles (extensions/README.md).
+// c4ke_boot.c sets it, to boot another kernel (`kboot c4ix.c4r`).
+static int *kernel_handoff;
 static int *kernel_extensions, kernel_ext_count, kernel_ext_errno;
 static int  kernel_ext_initialized;
 static int *kernel_syscall_handler, kernel_syscall_handler_stack;
@@ -1629,6 +1635,17 @@ static int kext_run_all (int callback_type) {
 }
 #ifndef __c4cc__
 #undef cb
+#endif
+
+// Call the hand-off (kernel_handoff, above) with init's status.
+#ifndef __c4cc__
+#define handoff(a) ((int (*)(int))handoff)(a)
+#endif
+static int kernel_run_handoff (int *handoff, int status) {
+	return handoff(status);
+}
+#ifndef __c4cc__
+#undef handoff
 #endif
 
 // Register a kernel extension, with optional event callback functions.
@@ -4438,6 +4455,13 @@ int main (int argc, char **argv) {
 		}
 	}
 
+	// A program built for the bare machine (src/c4ix/libc/bare.c) ends
+	// with the EXIT opcode, which stops the whole machine. Every task
+	// loaded from here on that has a __c4ke_exit global is told the
+	// opcode that ends a task instead (load-c4r.c, c4r_inject_name).
+	c4r_inject_name  = "__c4ke_exit";
+	c4r_inject_value = OP_TASK_EXIT;
+
 	// Init process
 	if (!kernel_init_argv) {
 		// No argc or argv given, synthesize
@@ -4618,6 +4642,12 @@ int main (int argc, char **argv) {
 		printf("s\nHave a nice day :)\n");
 	}
 
+	// Last of all, with every task, handler and timer gone: the hand-off.
+	// What it starts runs on this machine as if C4KE had never been here,
+	// and when that returns, so does C4KE, to whatever loaded it.
+	if (kernel_handoff)
+		init_result = kernel_run_handoff(kernel_handoff, init_result);
+
 	return init_result;
 }
 
@@ -4627,5 +4657,6 @@ int main (int argc, char **argv) {
 #include "src/c4ke/extensions/c4ke_pm.c"
 #include "src/c4ke/extensions/c4ke_dos.c"
 #include "src/c4ke/extensions/c4ke_mbox.c"
+#include "src/c4ke/extensions/c4ke_boot.c"
 
 #endif // ifndef C4KE

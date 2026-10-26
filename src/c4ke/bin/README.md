@@ -42,6 +42,7 @@ where the kernel's loader finds them by bare name.
 | `tar.c` | `tar x\|t archive.tar` unpacks a C4TAR1 archive (the format of `src/c4dos/dostar.c`) into the RAM filesystem | `make tar.c4r`, `tar32.c4r` |
 | `vfsload.c` | fills the RAM filesystem at boot from `c4ke.vfs.txt`; the file's header documents the manifest grammar. Built by c4lc, with `gcc -E` first | `make vfsload.c4r`; 32-bit by `build-images.sh` |
 | `save.c` | `save 1: [file]` writes RAM filesystem files onto a c4bb drive (board only, `include/c4bb.h`) | `make save32.c4r` |
+| `kboot.c` | `kboot image.c4r [args...]` stops C4KE and boots the image (the RAM filesystem's, else the disk's) with those arguments: the climb's last step with no reset (`extensions/c4ke_boot.c`, docs/c4dos-ladder.md) | `make kboot32.c4r` |
 | `install.c` | `kinstall C: [manifest]` writes a bootable medium from a manifest (default `c4ix.lst`, see `../fs/c4ix.lst`); board only | `make kinstall32.c4r` |
 
 ## Test programs

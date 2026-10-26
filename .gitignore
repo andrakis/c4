@@ -110,3 +110,13 @@ c4or1k-native
 # grin's objects (make grin-objs), and the page's own disks (build-images.sh)
 .grin/
 libjs/images/
+# what builds and tests write at the top of the tree
+/.bbstore/
+/c4dos-c4fc/
+/.c4fc_*.c4o
+/c4rstrip
+/c4rstrip32
+/src/oisc4/oisc4
+# the games' data from before they moved to games/ (games/README.md);
+# Tyrian's must never be committed
+/src/opentyrian/

@@ -1314,10 +1314,6 @@ gcc -E -P -Isrc/c4lm/include -I. -D__c4cc__=1 -DPURE_C4=1 \
   brace) behind `STDLIB_EXPERIMENTAL`. The implementation here drops in, but
   C4KE also wants `__c4ke_stream_dest`/`OP_STREAM_DEST` wired up, which is a
   separate piece of work.
-* **Three copies of the c4lm headers** exist — `c4lm/include/`,
-  `c4lm/src/include/` and `src/c4lm/include/` — and are byte-identical. All
-  three were updated together; picking one and deleting the others would remove
-  a standing trap.
 * No `%f`, and `%n` is deliberately unimplemented.
 
 ## 8.6 Building c4lm

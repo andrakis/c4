@@ -76,6 +76,37 @@ cp src/tests/hello.c4r $T/fs/hello.c4r
 # dosfilt is redirection's: a filter through DOS's console slots, or with
 # -r through READ and printf (the tap's)
 ./c4cc -o $T/fs/dosfilt.c4r include/c4dos.h src/tests/dosfilt.c > /dev/null
+# the same floppy in directories (API v7): SUB with a program, a note and
+# a batch file, SUB\DEEP under it, each with its own c4dos.dir and a
+# "NAME/" line in its parent's
+mkdir -p $T/fsd/SUB/DEEP
+cp $T/fs/config.sys $T/fs/autoexec.bat $T/fs/hello.c4r $T/fsd/
+cp $T/fs/hello.c4r $T/fsd/SUB/hello2.c4r
+echo 'a note in SUB' > $T/fsd/SUB/note.txt
+printf '@ECHO batch in SUB\n@RUN hello2.c4r\n' > $T/fsd/SUB/runsub.bat
+echo 'deep down' > $T/fsd/SUB/DEEP/deep.txt
+printf 'SUB/\nautoexec.bat\nc4dos.dir\nconfig.sys\nhello.c4r\n' > $T/fsd/c4dos.dir
+printf 'DEEP/\nc4dos.dir\nhello2.c4r\nnote.txt\nrunsub.bat\n' > $T/fsd/SUB/c4dos.dir
+printf 'c4dos.dir\ndeep.txt\n' > $T/fsd/SUB/DEEP/c4dos.dir
+DIRS_SCRIPT='DIR\nCD SUB\nDIR\nTYPE note.txt\nTYPE ..\\config.sys\nHELLO2\nRUNSUB\nCD deep\nCD\nTYPE deep.txt\nTYPE \\sub\\NOTE.TXT\nCD ..\\..\nCD\nsub\\hello2\nHELLO2\nPATH \\SUB\nPATH\nHELLO2\nRUNSUB\nTYPE note.txt\nAPPEND \\sub\nTYPE note.txt\nAPPEND ;\nPATH ;\nPATH\nCD NOSUCH\nCD ..\nCOPY config.sys RAM:\\TMP\\c.txt\nCD TMP\nDIR\nTYPE c.txt\nCD \\\nDIR\nCD SUB/DEEP\nCD\nCD /\nEXIT\n'
+check_dirs () {   # leg, output
+  echo "$2" | grep -q '^ Directory of A:\\SUB$' || { echo "FAIL $1 dirs: DIR in SUB"; echo "$2" | head -60; exit 1; }
+  echo "$2" | grep -q "^SUB  <DIR>$" && echo "$2" | grep -q "^DEEP  <DIR>$" || { echo "FAIL $1 dirs: a directory in DIR"; exit 1; }
+  [ "$(echo "$2" | grep -c '^a note in SUB$')" = 3 ] || { echo "FAIL $1 dirs: TYPE note.txt, by a path, along APPEND"; echo "$2"; exit 1; }
+  echo "$2" | grep -q "^DEVICE=RAMDISK.SYS" || { echo "FAIL $1 dirs: TYPE ..\\config.sys"; exit 1; }
+  [ "$(echo "$2" | grep -c '^yello$')" = 5 ] || { echo "FAIL $1 dirs: HELLO2 in SUB, by batch, by path, along PATH ($(echo "$2" | grep -c '^yello$'))"; echo "$2"; exit 1; }
+  [ "$(echo "$2" | grep -c '^batch in SUB$')" = 2 ] || { echo "FAIL $1 dirs: RUNSUB in SUB and along PATH"; exit 1; }
+  echo "$2" | grep -q '^A:\\SUB\\DEEP$' && echo "$2" | grep -q "^deep down$" || { echo "FAIL $1 dirs: CD deep"; exit 1; }
+  echo "$2" | grep -q '^A:\\$' || { echo "FAIL $1 dirs: CD ..\\.. to the root"; exit 1; }
+  echo "$2" | grep -q "SUB>" || { echo "FAIL $1 dirs: the prompt says the directory"; exit 1; }
+  [ "$(echo "$2" | grep -c 'bad command or file name: HELLO2')" = 1 ] || { echo "FAIL $1 dirs: HELLO2 at the root, with no PATH"; exit 1; }
+  echo "$2" | grep -q '^PATH=A:\\SUB$' && echo "$2" | grep -q "^No PATH$" || { echo "FAIL $1 dirs: PATH shown and cleared"; exit 1; }
+  [ "$(echo "$2" | grep -c 'file not found: note.txt')" = 1 ] || { echo "FAIL $1 dirs: note.txt at the root, with no APPEND"; exit 1; }
+  echo "$2" | grep -q "invalid directory: NOSUCH" && echo "$2" | grep -q "invalid directory: \.\.$" || { echo "FAIL $1 dirs: CD to nowhere"; exit 1; }
+  echo "$2" | grep -q "^c.txt  <ram> " && echo "$2" | grep -q "^TMP  <DIR> <ram>$" || { echo "FAIL $1 dirs: the RAM disk's directories"; echo "$2"; exit 1; }
+  [ "$(echo "$2" | grep -c '^A:\\SUB\\DEEP$')" = 2 ] || { echo "FAIL $1 dirs: CD SUB/DEEP, with a slash"; exit 1; }
+}
+
 # the same floppy with DEVICE=REDIR.SYS
 mkdir -p $T/fsr
 cp $T/fs/* $T/fsr/
@@ -271,6 +302,12 @@ OUT=$(run_native c4dos-clock.c4r 'ECHO a > b | c\nEXIT\n')
 echo "$OUT" | grep -q "^a > b | c$" || { echo "FAIL: without REDIR.SYS, > and | should be words"; exit 1; }
 echo "test-c4dos: redirection (> >> < |, batch files) OK, and without REDIR.SYS the line is as it was"
 
+# directories (API v7): CD, DIR of one, paths with \ and /, .. and \, a
+# program and a batch file in one, PATH and APPEND, the RAM disk's
+OUT=$(cd $T/fsd && printf "$DIRS_SCRIPT" | "$R/c4m" "$R/load-c4r.c" -- "$R/$T/c4dos-clock.c4r" 2>&1)
+check_dirs native "$OUT"
+echo "test-c4dos: directories (CD, DIR, paths, PATH, APPEND, the RAM disk's) OK"
+
 # ---- leg 2f: the ladder ---------------------------------------------
 # The claim this whole system exists to support: C4DOS builds C4KE.
 # dostar unpacks the sources onto the RAM disk, cpp preprocesses the
@@ -341,6 +378,9 @@ echo "test-c4dos: the tower runs API v4 too (programs running programs, on plain
 OUT=$( cd $T/fsr && printf "$REDIR_SCRIPT" | "$R/c4" "$R/c4l.c" "$R/$T/c4dos.c4r" 2>&1 )
 check_redir tower "$OUT"
 echo "test-c4dos: the tower redirects too (REDIR.SYS on plain c4)"
+OUT=$( cd $T/fsd && printf "$DIRS_SCRIPT" | "$R/c4" "$R/c4l.c" "$R/$T/c4dos.c4r" 2>&1 )
+check_dirs tower "$OUT"
+echo "test-c4dos: the tower has directories too (plain c4)"
 
 # ---- leg 4: THE MACHINE (c4bb) --------------------------------------
 if [ -x ./c4cc32 ] && command -v node > /dev/null; then
@@ -388,6 +428,23 @@ if [ -x ./c4cc32 ] && command -v node > /dev/null; then
   echo "$OUT" | grep -q "file not found: NOTE.TXT" || { echo "FAIL c4bb HOME=B:: two DELs should take both copies"; echo "$OUT" | tail -20; exit 1; }
   [ ! -e $T/home/NOTE.TXT ] && ! grep -q 'NOTE.TXT' $T/home/c4dos.dir || { echo "FAIL c4bb HOME=B:: DEL left NOTE.TXT on B:"; exit 1; }
   echo "test-c4dos: HOME=B: on c4bb: files on B:, its c4dos.dir kept, COPY, DIR B: and DEL"
+  # Directories on a drive that can be written: MD, a file into one, CD
+  # there, a c4cc program's own open() finding a name in it (the machine's
+  # DISK_DIRS), RD refusing until it is empty; MD on A:, which cannot be
+  # written, refused
+  mkdir -p $T/fs32d $T/homed
+  cp $T/fs32h/config.sys $T/fs32h/autoexec.bat $T/fs/c4.c4r $T/fs/hello.c $T/fs32d/
+  (cd $T/fs32d && ls > c4dos.dir)
+  OUT=$(printf 'MD B:\\W\nMD B:\\W\\X\nMD B:\\W\nCOPY hello.c B:\\w\nB:\nCD W\nRUN A:\\c4.c4r hello.c\nDIR\nCD \\\nRD W\\X\nRD W\nDEL W\\hello.c\nRD W\nDIR\nA:\nMD Q\nEXIT\n' \
+        | node src/c4bb/sim/cli.js -c 900000000 -d $T/fs32d -w $T/homed $T/c4dos32.c4r 2>&1)
+  echo "$OUT" | grep -q "hello.c -> B:.w.hello.c" || { echo "FAIL c4bb dirs: COPY into B:\\W"; echo "$OUT"; exit 1; }
+  echo "$OUT" | grep -q 'B:\\W>' || { echo "FAIL c4bb dirs: CD W on B:"; echo "$OUT"; exit 1; }
+  echo "$OUT" | grep -q "exit(0) cycle" || { echo "FAIL c4bb dirs: c4.c4r did not find hello.c in B:\\W (DISK_DIRS)"; echo "$OUT"; exit 1; }
+  echo "$OUT" | grep -q "is there already" || { echo "FAIL c4bb dirs: MD twice"; exit 1; }
+  echo "$OUT" | grep -q "W is not empty" || { echo "FAIL c4bb dirs: RD of a full directory"; echo "$OUT"; exit 1; }
+  echo "$OUT" | grep -q "cannot change Q - its drive cannot be written" || { echo "FAIL c4bb dirs: MD on A:"; exit 1; }
+  [ ! -e $T/homed/W/c4dos.dir ] && ! grep -q '^W/$' $T/homed/c4dos.dir || { echo "FAIL c4bb dirs: RD left W"; cat $T/homed/c4dos.dir; exit 1; }
+  echo "test-c4dos: directories on c4bb: MD, CD, RD on B:, and a c4cc program's open() in B:\\W"
   # DEVICE=REDIR.SYS TAP: the machine's console tap catches a c4cc
   # program's printf (hello32 into a file, and into a pipe) and feeds its
   # READ of fd 0 (dosfilt -r at a pipe's end); redirect targets on B:

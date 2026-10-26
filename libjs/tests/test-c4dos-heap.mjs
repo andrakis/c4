@@ -90,7 +90,7 @@ const key = (code, ch = 0) => {
   gui.event({ kind: 'keyup', code, char: ch });
   for (let i = 0; i < 20; i++) run(1e6);
 };
-const prompts = () => (text().match(/A>/g) || []).length;
+const prompts = () => (text().match(/A:\\[^>\n]*>/g) || []).length;   // A:\>, A:\GAMES>
 
 check(until(() => prompts() > 0), haveGames ? 'C4DOS boots the games disk' : 'C4DOS boots', text());
 if (!noheap) check(text().includes('heap device installed'), 'HEAP.SYS is installed', text());

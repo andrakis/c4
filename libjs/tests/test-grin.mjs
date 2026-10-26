@@ -44,7 +44,7 @@ const check = (cond, what, extra = '') => {
   if (!cond) fail = 1;
   return cond;
 };
-if (!existsSync(join(DISK, 'index.json')) || !existsSync(join(DISK, 'grin.c4r'))) {
+if (!existsSync(join(DISK, 'index.json')) || !existsSync(join(DISK, 'GRIN/grin.c4r'))) {
   console.log('test-grin: SKIPPED, no libjs/images/dos (make c4bb-images builds it)');
   process.exit(0);
 }
@@ -70,8 +70,8 @@ const image = new Uint8Array(readFileSync(join(DISK, 'c4dos32.c4r')));
   const vm = createMachine({ arenaMb: 64, mhz: 400, drives: [{ files: new LazyDisk(index), writable: false, sink: null }], onByte: b => out.push(b) });
   boot(vm, image, ['c4dos32.c4r']);
   const text = () => Buffer.from(out).toString('latin1');
-  for (let i = 0; i < 2000 && !/grin: this machine has no display[^]*A>/.test(text()); i++) if (vm.run(4e6) === STOP.HALT) break;
-  check(/grin: this machine has no display[^]*A>/.test(text()), 'with no display, grin says so and DOS comes back to A>', text());
+  for (let i = 0; i < 2000 && !/grin: this machine has no display[^]*A:\\>/.test(text()); i++) if (vm.run(4e6) === STOP.HALT) break;
+  check(/grin: this machine has no display[^]*A:\\>/.test(text()), 'with no display, grin says so and DOS comes back to A:\\>', text());
 }
 
 // ---- with one ----------------------------------------------------------------------
@@ -166,7 +166,8 @@ const win = menu => {
 };
 const minButton = w => [w.x + w.w - BORDER - 2 * BOX + 9, w.y + BORDER + 9];
 const maxButton = w => [w.x + w.w - BORDER - BOX + 9, w.y + BORDER + 9];
-const prompts = () => (text().match(/A>/g) || []).length;
+// DOS's prompt, A:\> (its current directory in it: A:\GAMES>)
+const prompts = () => (text().match(/A:\\[^>\n]*>/g) || []).length;
 
 // ---- boot to grin, with nothing typed ---------------------------------------------
 check(until(() => has('Program Manager') && has('Main'), 3000), 'C4DOS boots into grin: Program Manager is drawn', text());
@@ -307,10 +308,10 @@ check(store.has('GRIN.INI') && /scheme=1/.test(Buffer.from(store.get('GRIN.INI')
 check(text().includes('redirection installed (> >> < |), with the console tap'), "the disk's CONFIG.SYS has REDIR.SYS TAP", text().slice(0, 800));
 check(text().includes('Starting grin') && !store.has('.'), "the AUTOEXEC's ECHO lines have no > for REDIR.SYS to take (no file '.' on B:)", [...store.keys()].join(' '));
 let o = typed('DIR > LIST.TXT');
-check(!/askline\.c4r/i.test(o), 'DIR > LIST.TXT prints nothing at A>', o);
+check(!/c4dos32\.c4r/i.test(o), 'DIR > LIST.TXT prints nothing at A>', o);
 o = typed('TYPE LIST.TXT');
-check(/askline\.c4r/i.test(o) && /grin\.c4r/i.test(o), '... and TYPE LIST.TXT shows the listing', o);
-check(store.has('LIST.TXT') && /grin\.c4r/i.test(Buffer.from(store.get('LIST.TXT')).toString('latin1')), '... which is on B:, the home drive');
+check(/c4dos32\.c4r/i.test(o) && /^GRIN  <DIR>$/m.test(o), '... and TYPE LIST.TXT shows the listing: the root, its directories too', o);
+check(store.has('LIST.TXT') && /c4dos32\.c4r/i.test(Buffer.from(store.get('LIST.TXT')).toString('latin1')), '... which is on B:, the home drive');
 o = typed('HELLO > OUT.TXT');
 check(!/yello/.test(o), "HELLO > OUT.TXT: a c4cc program's printf goes into the file, through the console tap", o);
 check(/yello/.test(typed('TYPE OUT.TXT')), '... TYPE OUT.TXT: yello');
@@ -318,7 +319,7 @@ typed('ECHO Ada > IN.TXT');
 o = typed('ASKLINE < IN.TXT');
 check(/askline: hello, Ada \(3 letters\)/.test(o), 'ASKLINE < IN.TXT: a bare.c program reads its line from the file', o);
 o = typed('DIR | DOSFILT');
-check(/^> ASKLINE\.C4R$/mi.test(o) && /dosfilt: \d+ lines/.test(o), 'DIR | DOSFILT: a pipe, through a RAM-disk file', o);
+check(/^> C4DOS32\.C4R$/mi.test(o) && /dosfilt: \d+ lines/.test(o), 'DIR | DOSFILT: a pipe, through a RAM-disk file', o);
 o = typed('TYPE IN.TXT | DOSFILT -r');
 check(/^ADA$/m.test(o), "TYPE IN.TXT | DOSFILT -r: a c4cc program's READ fed from the pipe (the tap)", o);
 check(!/PIPE\d+\.\$\$\$/.test(typed('DIR')), '... and no pipe file is left on the RAM disk');
@@ -526,7 +527,7 @@ check(until(() => has('Program Manager'), 3000), 'GRIN again, for the shell appl
 check(text().includes('files are written to B:'), "the disk's CONFIG.SYS has DRIVES.SYS HOME=B:, and B: can be written", text().slice(0, 600));
 const pmIni = storeText('PROGMAN.INI');
 check(pmIni && /^\[Main\]$/m.test(pmIni) && /^\[Accessories\]$/m.test(pmIni) && /^\[Games\]$/m.test(pmIni) &&
-      /^Doom=DOOM,game,full$/m.test(pmIni) && /^Notepad=NOTEPAD,notepad,app$/m.test(pmIni),
+      /^Doom=\\GAMES\\DOOM\\DOOM,game,full$/m.test(pmIni) && /^Notepad=NOTEPAD,notepad,app$/m.test(pmIni),
   'PROGMAN.INI, written with the default groups, is on B:', pmIni);
 showGroup('Main');
 check(['File Manager', 'DOS Prompt', 'Control Panel', 'Notepad'].every(s => inPm(find(s))), 'Main: File Manager, DOS Prompt, Control Panel, Notepad');
@@ -580,11 +581,11 @@ check(/^NOTE\.TXT$/m.test(storeText('c4dos.dir') || ''), "... and in B:'s c4dos.
 switchTo('File Manager');
 check(until(() => has('NOTE.TXT')), 'File Manager lists NOTE.TXT on B:');
 clickText('NOTE.TXT');
-check(until(() => has('B:NOTE.TXT   15 bytes')), '... its size when selected', JSON.stringify(frame.map(t => t.s)));
-check(menu('File Manager', 'File', 'Copy...') && until(() => has('Copy B:NOTE.TXT to:')), 'File > Copy... asks where, offering RAM:');
+check(until(() => has('B:\\NOTE.TXT   15 bytes')), '... its size when selected', JSON.stringify(frame.map(t => t.s)));
+check(menu('File Manager', 'File', 'Copy...') && until(() => has('Copy B:\\NOTE.TXT to:')), 'File > Copy... asks where, offering RAM:');
 key(13);
 clickText('RAM:');
-check(until(() => has('NOTE.TXT') && has('RAM:   1 file')), '... COPY through DOS: the RAM disk has NOTE.TXT');
+check(until(() => has('NOTE.TXT') && has('RAM:\\   1 file')), '... COPY through DOS: the RAM disk has NOTE.TXT');
 clickText('B:');
 until(() => has('(files are saved here)'));
 
@@ -614,7 +615,7 @@ check(until(() => has('NOTE.TXT - Notepad') && has('hello from grin')), 'a doubl
 endTask('NOTE.TXT - Notepad');
 switchTo('File Manager');
 clickText('NOTE.TXT');
-check(menu('File Manager', 'File', 'Delete...') && until(() => has('Delete B:NOTE.TXT?')), 'File > Delete... asks');
+check(menu('File Manager', 'File', 'Delete...') && until(() => has('Delete B:\\NOTE.TXT?')), 'File > Delete... asks');
 clickText('Yes');
 check(until(() => !has('NOTE.TXT')), '... Yes: NOTE.TXT is gone from the list');
 check(!store.has('NOTE.TXT') && !/NOTE\.TXT/.test(storeText('c4dos.dir') || ''), "... from B:, its c4dos.dir, and the page's store");
@@ -641,13 +642,24 @@ digital();
 check(until(() => figures().length === 1), 'a Clock, in figures, for the DOS Prompt to run beside');
 startItem('DOS Prompt');
 check(until(() => !!dosWin(1) && has(/^EXIT closes it\./)), 'Main > DOS Prompt opens DOS Prompt 1: C4DOS in a window', JSON.stringify(frame.map(t => t.s)));
-check(until(() => inWin(dosWin(1), /^A>$/)), '... at A>');
+check(until(() => inWin(dosWin(1), /^A:\\>$/)), '... at A:\\>');
 typeLine('ECHO in the first window');
 check(until(() => inWin(dosWin(1), /^in the first window$/)), 'ECHO in it answers in it');
 startItem('DOS Prompt');
 check(until(() => !!dosWin(2)), 'a second DOS Prompt: DOS Prompt 2');
 typeLine('DIR');
-check(until(() => inWin(dosWin(2), /^wolf3d\.c4r$/i)), 'DIR in DOS Prompt 2 lists A: there');
+check(until(() => inWin(dosWin(2), /^c4dos32\.c4r$/i) && inWin(dosWin(2), /^GAMES  <DIR>$/)), 'DIR in DOS Prompt 2 lists A: there');
+// directories (C4DOS's API v7): each window keeps its own current one
+typeRaw('CD \\GAMES\\DOOM');
+check(until(() => inWin(dosWin(2), /^A:\\GAMES\\DOOM>$/)), 'CD \\GAMES\\DOOM in DOS Prompt 2: its prompt says where it is');
+typeLine('DIR');
+check(until(() => inWin(dosWin(2), /^doom1\.wad$/i)), '... and DIR lists Doom there');
+switchTo('DOS Prompt 1');
+typeLine('CD');
+check(until(() => inWin(dosWin(1), /^A:\\$/)), 'CD in DOS Prompt 1 says A:\\: the other window\'s directory is its own');
+switchTo('DOS Prompt 2');
+typeRaw('CD \\');
+check(until(() => inWin(dosWin(2), /^A:\\>$/)), 'CD \\ takes DOS Prompt 2 back to the root');
 
 // a bare.c program reading a line in its window: its read pumps grin's
 // loop, so the Clock ticks while it waits, and the other DOS Prompt is busy
@@ -670,12 +682,12 @@ check(until(() => inWin(dosWin(2), /^askline: hello, Ada \(3 letters\)$/)), 'Ada
 typeLine('HELLO');
 check(until(() => inWin(dosWin(2), /^yello$/)), "HELLO in DOS Prompt 2: a c4cc program's output, from the tap");
 typeRaw('DIR | DOSFILT');
-check(until(() => inWin(dosWin(2), /^> GRIN\.C4R$/i) && inWin(dosWin(2), /^dosfilt: \d+ lines$/)), 'DIR | DOSFILT in it: a pipe');
+check(until(() => inWin(dosWin(2), /^> C4DOS32\.C4R$/i) && inWin(dosWin(2), /^dosfilt: \d+ lines$/)), 'DIR | DOSFILT in it: a pipe');
 typeRaw('ECHO ECHO from a batch file > B:RUNME.BAT');
 check(until(() => /from a batch file/.test(storeText('RUNME.BAT') || '')), 'ECHO ... > B:RUNME.BAT: redirected onto B:', storeText('RUNME.BAT'));
 typeLine('EXIT');
 check(until(() => !dosWin(2)), 'EXIT closes DOS Prompt 2');
-check(until(() => inWin(dosWin(1), /^in the first window$/)) && !has(/^askline\.c4r$/i) && !has(/^yello$/),
+check(until(() => inWin(dosWin(1), /^in the first window$/)) && !has(/^c4dos32\.c4r$/i) && !has(/^yello$/),
   'DOS Prompt 1 has its own lines and none of the other window\'s');
 
 // File Manager runs a batch file in a DOS Prompt
@@ -688,6 +700,19 @@ typeLine('EXIT');
 switchTo('DOS Prompt 1');
 typeLine('EXIT');
 check(until(() => !dosWin(1) && !dosWin(2)), 'EXIT closes the other one too');
+
+// File Manager in directories (C4DOS's API v7): A:'s root has folders; a
+// double click opens one, .. comes back up
+switchTo('File Manager');
+clickText('A:');
+check(until(() => has('GAMES') && has('c4dos32.c4r')), 'File Manager on A:: the root, its folders in it', JSON.stringify(frame.map(t => t.s)));
+dbl('GAMES');
+check(until(() => has('DOOM') && has('..') && has(/^A:\\GAMES +\d+ files$/)), '... a double click opens GAMES', JSON.stringify(frame.map(t => t.s)));
+dbl('DOOM');
+check(until(() => has('doom1.wad')), '... and DOOM in it');
+dbl('..'); dbl('..');
+check(until(() => has('c4dos32.c4r') && !has('..')), '... and .. twice comes back up to the root');
+clickText('B:');
 endTask('Clock');
 until(() => !figures().length);
 
@@ -698,7 +723,7 @@ const slowKey = (code, ch = 0) => {
   gui.event({ kind: 'keydown', code, char: ch, mods: 0 }); for (let i = 0; i < 10; i++) run(2e6);
   gui.event({ kind: 'keyup', code, char: ch, mods: 0 }); for (let i = 0; i < 10; i++) run(2e6);
 };
-const haveDoom = existsSync(join(DISK, 'doom.c4r')) && existsSync(join(DISK, 'doom1.wad'));
+const haveDoom = existsSync(join(DISK, 'GAMES/DOOM/doom.c4r')) && existsSync(join(DISK, 'GAMES/DOOM/doom1.wad'));
 if (!haveDoom) console.log('test-grin: Doom full screen SKIPPED (no doom on the disk)');
 const doomHeap = [];
 settle();

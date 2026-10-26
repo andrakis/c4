@@ -3,10 +3,11 @@
 // CDP, in a tab of its own (cdp.mjs), the climb typed into the terminal as
 // a person would, with a screenshot at each rung:
 //
-//   A>       DOOM (quit with F10, Y); BUILD; RUN dosload.c4r c4ke.c4r
+//   A:\>     DIR; CD \GAMES\DOOM, DIR, CD \ (the disk's directories)
+//   A:\>     DOOM (quit with F10, Y); BUILD; RUN dosload.c4r c4ke.c4r
 //   c4sh>    doom; tar x c4ix-src.tar; b4ke -f c4ix.b4k; kboot c4ix.c4r
 //   c4ix:/$  doom; exit
-//   A>       MEM
+//   A:\>     MEM
 //
 //   node libjs/serve.mjs PORT --isolate &
 //   node libjs/tests/web-c4dos-ladder.mjs http://127.0.0.1:9222 https://PORT.example OUTDIR
@@ -78,13 +79,20 @@ try {
     await tab.key('y'); await sleep(600);
     return ok(what, drawing && await waitRe(prompt, from, 60000), await tail());
   };
-  const A = /A>\s*$/, KE = /c4sh>\s*$/, IX = /c4ix:\/\$\s*$/;
+  const A = /A:\\[^>\n]*>\s*$/, KE = /c4sh>\s*$/, IX = /c4ix:\/\$\s*$/;
 
-  ok('the page boots C4DOS on the ladder disk', await waitRe(/TYPE LADDER\.TXT[^]*A>\s*$/, 0, 90000), await tail());
+  ok('the page boots C4DOS on the ladder disk', await waitRe(/TYPE LADDER\.TXT[^]*A:\\>\s*$/, 0, 90000), await tail());
   ok("drive 1 is the ladder's own store", (await tab.eval('window.c4m.persistName')) === 'ladder');
   await step('TYPE LADDER.TXT', 'TYPE LADDER.TXT', A);
   await shot('1-c4dos');
-  await game('Doom at A>, played and quit', 'DOOM', A, '2-doom-c4dos');
+  let d = await step('DIR at the root', 'DIR', A, 60000);
+  ok('DIR at A:\\: the directories', d && /^GAMES  <DIR>$/m.test(d) && /^BUILD  <DIR>$/m.test(d) && !/doom1\.wad/.test(d), d);
+  d = await step('CD \\GAMES\\DOOM', 'CD \\GAMES\\DOOM', /A:\\GAMES\\DOOM>\s*$/, 60000);
+  d = d && await step('DIR there', 'DIR', /A:\\GAMES\\DOOM>\s*$/, 60000);
+  ok('CD \\GAMES\\DOOM and DIR there: Doom and its WAD', d && /doom1\.wad/.test(d), await tail());
+  await shot('1b-dirs');
+  ok('CD \\ back to the root', await step('CD \\', 'CD \\', A, 60000));
+  await game('Doom at A:\\, played and quit (found along APPEND)', 'DOOM', A, '2-doom-c4dos');
 
   let o = await step('BUILD', 'BUILD', A, 600000);
   ok('BUILD compiles C4KE on the RAM disk', o && o.includes('ram:c4ke.c4r') && o.includes('ram:init.c4r'), await tail());

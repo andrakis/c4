@@ -1,6 +1,14 @@
 The Build Ladder: C4DOS builds C4KE, C4KE builds C4IX, no reboot.
 
-At A>  (C4DOS)
+The disk, in directories (DIR, CD, MD and RD; CD \ is the root):
+  \GAMES\DOOM, \GAMES\WOLF3D, \GAMES\TYRIAN, \GAMES\ROTT   each game and its data
+  \BUILD   the build kit: BUILD, LADDER, IX, the compilers, the sources
+  \C4KE    C4KE's programs      \C4IX   C4IX's, and its tree
+  \GRIN    the graphical shell  \BIN    DOS programs
+PATH finds BUILD's programs and grin's from any directory; APPEND finds
+the games, and every file C4KE and C4IX ask for.
+
+At A:\>  (C4DOS)
   WOLF3D, DOOM, TYRIAN, ROTT   play; each gives its memory back on quit
   BUILD                        compile C4KE and its init on the RAM disk
                                (LADDER: rebuild the compiler first)
@@ -12,8 +20,8 @@ At c4sh>  (C4KE)
   b4ke -f c4ix.b4k             twelve modules and a link: c4ix.c4r
   kboot c4ix.c4r               C4KE stops, and the C4IX it built boots
   kboot c4ix.c4r --desktop     ... straight into the desktop
-  exit                         back to A>
+  exit                         back to A:\>
 
 At c4ix:/$  (C4IX)
   ls, ps, top, desktop         the system C4KE built
-  exit                         C4IX stops; C4KE returns, then to A>
+  exit                         C4IX stops; C4KE returns, then to A:\>

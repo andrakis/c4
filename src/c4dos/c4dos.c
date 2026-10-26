@@ -77,9 +77,10 @@ enum { RAMFD     = 1000 };   // pseudo-fd base, above any host descriptor
 enum { WHANDLE   = 16 };     // files open for writing at once
 enum { WFD       = 2000 };   // write handles start here (create's answers)
 enum { RAMSIZE   = 1048576 };// default RAM disk budget, SIZE= overrides
-enum { C4DOS_API_SLOTS = 32 }; // API table words (include/c4dos.h agrees)
+enum { C4DOS_API_SLOTS = 40 }; // API table words (include/c4dos.h agrees)
 enum { ARGVMAX  = 16 };
 enum { BATDEPTH = 4 };
+enum { DRVMAX   = 26 };      // A: to Z:, each with a current directory
 
 enum { VER_MAJOR = 0, VER_MINOR = 1 };
 
@@ -148,6 +149,32 @@ int g_linelen;           // the length of the line parse_line last split
 int g_redir;             // CONFIG.SYS said DEVICE=REDIR.SYS: > >> < and |
 int g_tap;               // ... with TAP: the machine has the console tap
 
+// ---- directories ------------------------------------------------------
+// Every drive has a current directory, kept as a path from its root with
+// '/' between the parts and no slash at either end, in its real spelling
+// ("" is the root, "GAMES/DOOM" is A:\GAMES\DOOM). A name DOS is given is
+// made into a drive and such a path (path_full) before anything opens
+// it, so DOS itself never leaves a name to be looked for relative to
+// anything: the machine is asked for "A:/GAMES/DOOM/doom.c4r", from the
+// root, and the host for "GAMES/DOOM/doom.c4r", from the directory the
+// disk is. A directory is a "NAME/" line in its parent's c4dos.dir, and
+// has a c4dos.dir of its own listing what is in it.
+int *g_cwd;              // char * per drive: its current directory
+char *g_path;            // PATH: where a command is looked for after the current directory
+char *g_append;          // APPEND: where any file is looked for after it
+                         // (both "A:BIN;A:GAMES/DOOM": a drive, a colon, a path from its root)
+char *g_pa;              // dos_open, file_create and file_unlink's path
+char *g_pb;              // ... and the same name on another drive (the home drive)
+char *g_pc;              // the builtins' (CD, MD, RD, DIR, COPY, PATH)
+char *g_pd;              // a candidate (APPEND, PATH)
+char *g_realbuf;         // path_real's answer
+char *g_partbuf;         // one part of a path
+char *g_cwdshow;         // a current directory as a person sees it, "\GAMES\DOOM"
+char *g_dirsbuf;         // what the machine is told to look through (dirs_tell)
+int g_pram;              // path_full: the name said RAM:
+int g_pdrive;            // ... it named a drive
+int g_pabs;              // ... it started at the root
+
 // ---- drives ---------------------------------------------------------
 //
 // BOARD ONLY, which is why it is gated. These are c4bb's memory-mapped
@@ -163,6 +190,12 @@ enum { BB_DRIVE = 0x13c, BB_COUNT = 0x188 };
 // same registers bbsave and install drive, and DISK_UNLINK beside them
 enum { BB_FD = 0x124, BB_WNAME = 0x178, BB_WADDR = 0x17c, BB_WLEN = 0x180,
        BB_WCLOSE = 0x184, BB_RO = 0x18c, BB_UNLINK = 0x1cc };
+// ... and DISK_DIRS, where the selected drive's relative names are looked
+// for: "GAMES/DOOM;BUILD" (the current directory, then APPEND's), then the
+// root. DOS never asks the machine for a relative name; the programs that
+// do -- C4KE, C4IX's vfsload, a c4cc program's own open() -- are older
+// than directories, and this is how they find their files (dirs_tell).
+enum { BB_DIRS = 0x1e0 };
 
 int drv_count ()       { if (!g_drives) return 1; return *(int *)BB_COUNT; }
 void drv_select (int n) { if (g_drives) *(int *)BB_DRIVE = n; }
@@ -203,20 +236,30 @@ int drv_writable (int n) {
   return !ro;
 }
 
-// "X:" and a name, which is how the registers are told the drive (the
-// machine's resolveDrive), in g_wname; 0 when it does not fit
+// The name the machine is asked for, for a path from drive n's root, in
+// g_wname; 0 when it does not fit. With DRIVES.SYS "X:/" and the path:
+// the letter is how the registers are told the drive (the machine's
+// resolveDrive), and the slash says from the root, whatever DISK_DIRS
+// holds. Without it the path alone: native c4m opens it in the directory
+// it was started in, which is the disk, and a machine nobody has told
+// DISK_DIRS looks from the root.
 char *g_wname;
-char *drv_path (int n, char *name) {
-  int i;
-  g_wname[0] = drv_letter(n);
-  g_wname[1] = ':';
-  i = 0;
-  while (name[i]) {
-    if (i + 3 >= LINEMAX) return 0;
-    g_wname[i + 2] = name[i];
-    ++i;
+char *drv_path (int n, char *path) {
+  int i, k;
+  k = 0;
+  if (g_drives) {
+    g_wname[0] = drv_letter(n);
+    g_wname[1] = ':';
+    g_wname[2] = '/';
+    k = 3;
   }
-  g_wname[i + 2] = 0;
+  i = 0;
+  while (path[i]) {
+    if (k + 1 >= LINEMAX) return 0;
+    g_wname[k] = path[i];
+    ++k; ++i;
+  }
+  g_wname[k] = 0;
   return g_wname;
 }
 
@@ -299,6 +342,91 @@ int starts_ci (char *s, char *prefix) {
   }
   return 1;
 }
+
+// ---- paths ------------------------------------------------------------
+
+// s onto the end of buf, which holds k bytes; the new length, or -1 when
+// it would not fit in LINEMAX (and once it has said -1 it keeps saying so)
+int bput (char *buf, int k, char *s) {
+  if (k < 0) return 0 - 1;
+  while (*s) {
+    if (k + 1 >= LINEMAX) { buf[k] = 0; return 0 - 1; }
+    buf[k] = *s;
+    ++k; ++s;
+  }
+  buf[k] = 0;
+  return k;
+}
+
+// A name as DOS takes it -- [RAM:][X:][\]DIR\DIR\NAME, with \ or / -- as
+// a drive and a path from that drive's root, in out: '/' between the
+// parts, "." and ".." gone, no slash at either end ("" is the root).
+// Relative to the drive's current directory unless it starts with a
+// slash; a name with no drive is on drive d. Returns the drive, or -1
+// when the name climbs above the root or will not fit. g_pram, g_pdrive
+// and g_pabs say what the name had.
+int path_full (char *name, int d, char *out) {
+  int k, i, n;
+  char *s;
+  g_pram = 0; g_pdrive = 0; g_pabs = 0;
+  if (starts_ci(name, "RAM:")) { g_pram = 1; name = name + 4; }
+  if (drv_prefix(name) >= 0) { d = drv_prefix(name); g_pdrive = 1; name = name + 2; }
+  if (d < 0 || d >= DRVMAX) return 0 - 1;
+  k = 0;
+  out[0] = 0;
+  if (*name == '/' || *name == 92) g_pabs = 1;
+  else if ((k = bput(out, 0, (char *)g_cwd[d])) < 0) return 0 - 1;
+  while (*name) {
+    while (*name == '/' || *name == 92) ++name;
+    n = 0;
+    while (name[n] && name[n] != '/' && name[n] != 92) ++n;
+    if (n == 2 && name[0] == '.' && name[1] == '.') {
+      if (!k) return 0 - 1;
+      while (k > 0 && out[k - 1] != '/') --k;
+      if (k > 0) --k;
+      out[k] = 0;
+    } else if (n > 0 && (n != 1 || name[0] != '.')) {
+      if (k + n + 2 >= LINEMAX) return 0 - 1;
+      if (k) { out[k] = '/'; ++k; }
+      i = 0;
+      while (i < n) { out[k] = name[i]; ++k; ++i; }
+      out[k] = 0;
+    }
+    name = name + n;
+  }
+  return d;
+}
+
+// where the last part of a path starts (the whole of it at the root)
+char *path_base (char *path) {
+  char *b;
+  b = path;
+  while (*path) { if (*path == '/') b = path + 1; ++path; }
+  return b;
+}
+// the directory a path is in, into out ("" for one at the root)
+char *path_parent (char *path, char *out) {
+  int k, n;
+  n = path_base(path) - path;
+  if (n > 0) --n;                      // not the slash
+  k = 0;
+  while (k < n) { out[k] = path[k]; ++k; }
+  out[k] = 0;
+  return out;
+}
+
+// A path from the root as a person writes it: "\" for the root,
+// "\GAMES\DOOM" below it. In g_cwdshow.
+char *path_show (char *s) {
+  int k;
+  g_cwdshow[0] = 92;
+  k = 1;
+  while (*s && k < LINEMAX - 1) { g_cwdshow[k] = *s == '/' ? 92 : *s; ++k; ++s; }
+  g_cwdshow[k] = 0;
+  return g_cwdshow;
+}
+// ... and drive d's current directory so
+char *cwd_show (int d) { return path_show((char *)g_cwd[d]); }
 
 // ---- the shared scratch --------------------------------------------------
 // g_scratch is 4MB, and the biggest single thing DOS holds. A kernel
@@ -613,6 +741,25 @@ int ram_unlink (char *name) {
   return 0;
 }
 
+// The RAM disk's names are paths from the root, as a drive's are
+// ("BUILD/c4ke.i"), and it sits over every drive at the same path. It has
+// no listings: a directory is there while some file in it is (or below
+// it), so this says whether one is.
+int ram_isdir (char *path) {
+  int i, n;
+  char *s;
+  if (!g_ramdisk) return 0;
+  if (!*path) return 1;
+  n = xlen(path);
+  i = 0;
+  while (i < g_ram_n) {
+    s = (char *)g_ram_name[i];
+    if (starts_ci(s, path) && s[n] == '/') return 1;
+    ++i;
+  }
+  return 0;
+}
+
 // open a RAM file for reading; returns a pseudo-fd or -1
 int ram_open (char *name) {
   int slot, h;
@@ -640,18 +787,26 @@ int ram_open (char *name) {
 // that exists. A disk with no c4dos.dir simply keeps the old
 // behaviour, which is the same trade DIR already makes.
 
-// compare s against the line at p, which ends at CR, LF or NUL
+// compare s against the line at p, which ends at CR, LF or NUL: 1 when
+// the line names that file, 2 when it names that directory ("NAME/"),
+// 0 otherwise
 int line_eq_ci (char *p, char *s) {
   while (*s && *p && *p != 10 && *p != 13) {
     if (upper(*p) != upper(*s)) return 0;
     ++p; ++s;
   }
   if (*s) return 0;
-  return !*p || *p == 10 || *p == 13;
+  if (*p == '/') {
+    ++p;
+    if (!*p || *p == 10 || *p == 13) return 2;
+    return 0;
+  }
+  if (!*p || *p == 10 || *p == 13) return 1;
+  return 0;
 }
 
-// A listing into g_dirbuf ("c4dos.dir", the selected drive's, or
-// "B:c4dos.dir"); returns its length, 0 if there is no listing
+// A listing into g_dirbuf (what the machine calls "A:/GAMES/c4dos.dir");
+// returns its length, 0 if there is no listing
 int dir_slurp_path (char *path) {
   int fd, n, total, going;
   // The raw open, deliberately: this is the resolver, and routing it
@@ -672,27 +827,36 @@ int dir_slurp_path (char *path) {
   return total;
 }
 
-char *g_dname;           // "X:c4dos.dir"
-char *dir_name (int n) {
-  char *s, *d;
-  g_dname[0] = drv_letter(n);
-  g_dname[1] = ':';
-  s = "c4dos.dir";
-  d = g_dname + 2;
-  while (*s) { *d = *s; ++d; ++s; }
-  *d = 0;
-  return g_dname;
+// The machine's name for directory dir's listing on drive n ("A:/c4dos.dir",
+// "A:/GAMES/c4dos.dir"), in g_wname by way of g_dname; 0 if it will not fit
+char *g_dname;
+char *lst_raw (int n, char *dir) {
+  int k;
+  k = bput(g_dname, 0, dir);
+  if (*dir) k = bput(g_dname, k, "/");
+  if (bput(g_dname, k, "c4dos.dir") < 0) return 0;
+  return drv_path(n, g_dname);
+}
+int lst_slurp (int n, char *dir) {
+  char *raw;
+  g_dirbuf[0] = 0;
+  if (!(raw = lst_raw(n, dir))) return 0;
+  return dir_slurp_path(raw);
 }
 
-// the real spelling of `name` according to the listing just slurped, or 0
+// The real spelling of `name` according to the listing just slurped, or
+// 0; g_isdir says whether it is a directory there
+int g_isdir;
 char *dir_find (char *name) {
   char *p, *q;
+  int kind;
   p = g_dirbuf;
   while (*p) {
-    if (line_eq_ci(p, name)) {
+    if ((kind = line_eq_ci(p, name))) {
       q = g_namebuf;
-      while (*p && *p != 10 && *p != 13) { *q = *p; ++q; ++p; }
+      while (*p && *p != 10 && *p != 13 && *p != '/') { *q = *p; ++q; ++p; }
       *q = 0;
+      g_isdir = kind == 2;
       return g_namebuf;
     }
     while (*p && *p != 10) ++p;
@@ -701,55 +865,77 @@ char *dir_find (char *name) {
   return 0;
 }
 
-// ... in the selected drive's listing, and in drive n's
-char *dir_resolve (char *name) {
-  if (!dir_slurp_path("c4dos.dir")) return 0;
-  return dir_find(name);
-}
-char *dir_resolve_on (int n, char *name) {
-  if (!dir_slurp_path(dir_name(n))) return 0;
-  return dir_find(name);
+// The real spelling of path on drive n, a part at a time through each
+// directory's listing, into out; 0 if some part is not listed there.
+// g_isdir says what the last part is (the root is a directory).
+char *path_real (int n, char *path, char *out) {
+  int k, i, m;
+  char *real;
+  k = 0;
+  out[0] = 0;
+  g_isdir = 1;
+  while (*path) {
+    if (!g_isdir) return 0;              // a file has nothing under it
+    m = 0;
+    while (path[m] && path[m] != '/') ++m;
+    if (m >= LINEMAX) return 0;
+    i = 0;
+    while (i < m) { g_partbuf[i] = path[i]; ++i; }
+    g_partbuf[i] = 0;
+    if (!lst_slurp(n, out)) return 0;
+    if (!(real = dir_find(g_partbuf))) return 0;
+    if (k) k = bput(out, k, "/");
+    if ((k = bput(out, k, real)) < 0) return 0;
+    path = path + m;
+    if (*path) ++path;
+  }
+  return out;
 }
 
-// ---- keeping a drive's listing ----------------------------------------
-// DIR, and grin's File Manager, list a drive by its c4dos.dir, so a file
-// DOS writes to a drive is added to the drive's listing when it is
-// closed, and taken out when it is deleted; a drive that had no listing
-// gets one. The listing is written as any file is, through the write
-// head, whole.
+// ---- keeping a drive's listings ----------------------------------------
+// DIR, and grin's File Manager, list a directory by its c4dos.dir, so a
+// file DOS writes to a drive is added to its directory's listing when it
+// is closed, and taken out when it is deleted; a directory that had no
+// listing gets one. MD writes a new directory's (empty) listing and adds
+// "NAME/" to its parent's; RD takes both away. A listing is written as
+// any file is, through the write head, whole.
 
-// g_dirbuf's first len bytes as drive n's c4dos.dir: 0, or -1
-int dir_put (int n, int len) {
+// g_dirbuf's first len bytes as directory dir's c4dos.dir on drive n: 0, or -1
+int dir_put (int n, char *dir, int len) {
   int fd, r;
-  if ((fd = bb_create(dir_name(n))) < 0) return 0 - 1;
+  char *raw;
+  if (!(raw = lst_raw(n, dir)) || (fd = bb_create(raw)) < 0) return 0 - 1;
   r = 0;
   if (len > 0 && bb_write(fd, g_dirbuf, len) != len) r = 0 - 1;
   if (bb_close(fd) < 0) r = 0 - 1;
   return r;
 }
 
-int dir_add (int n, char *name) {
+// name into directory dir's listing: kind 1 a file, 2 a directory ("NAME/")
+int dir_add (int n, char *dir, char *name, int kind) {
   int len, i;
   if (cieq(name, "c4dos.dir")) return 0;
-  len = dir_slurp_path(dir_name(n));
-  if (dir_find(name)) return 0;
-  if (len + xlen(name) + 2 >= DIRMAX) return 0 - 1;
+  len = lst_slurp(n, dir);
+  if (dir_find(name) && g_isdir == (kind == 2)) return 0;
+  if (len + xlen(name) + 3 >= DIRMAX) return 0 - 1;
   if (len > 0 && g_dirbuf[len - 1] != 10) { g_dirbuf[len] = 10; ++len; }
   i = 0;
   while (name[i]) { g_dirbuf[len] = name[i]; ++len; ++i; }
+  if (kind == 2) { g_dirbuf[len] = '/'; ++len; }
   g_dirbuf[len] = 10; ++len;
   g_dirbuf[len] = 0;
-  return dir_put(n, len);
+  return dir_put(n, dir, len);
 }
 
-int dir_drop (int n, char *name) {
+// ... and out of it
+int dir_drop (int n, char *dir, char *name, int kind) {
   int len, out;
   char *p;
-  if (!(len = dir_slurp_path(dir_name(n)))) return 0;
+  if (!(len = lst_slurp(n, dir))) return 0;
   p = g_dirbuf;
   out = 0;
   while (*p) {
-    if (line_eq_ci(p, name)) {
+    if (line_eq_ci(p, name) == kind) {
       while (*p && *p != 10) ++p;
       if (*p) ++p;
     } else {
@@ -758,42 +944,80 @@ int dir_drop (int n, char *name) {
     }
   }
   g_dirbuf[out] = 0;
-  return dir_put(n, out);
+  return dir_put(n, dir, out);
 }
 
-// Drive n's file, case-insensitively; -1 if it is not there
+// Is path a directory of drive n -- the root, or one its parent's
+// listing says is -- or of the RAM disk, which holds a directory while it
+// holds a file in it? Its real spelling into out, or 0. (Not "does
+// path/c4dos.dir open": a machine with no DRIVES.SYS finds a name it
+// does not have by its last part, and every directory has a c4dos.dir.)
+char *dir_there (int n, char *path, char *out) {
+  if (!*path) { out[0] = 0; return out; }
+  if (path_real(n, path, out) && g_isdir) return out;
+  if (ram_isdir(path)) { bput(out, 0, path); return out; }
+  return 0;
+}
+
+// Drive n's file at path, case-insensitively; -1 if it is not there
 int drv_open (int n, char *path) {
   int fd;
-  char *real;
-  if (!drv_path(n, path)) return 0 - 1;
+  if (!*path || !drv_path(n, path)) return 0 - 1;
   if ((fd = open(g_wname, 0)) >= 0) return fd;
-  if ((real = dir_resolve_on(n, path)) && drv_path(n, real)) return open(g_wname, 0);
+  if (path_real(n, path, g_realbuf) && !g_isdir && drv_path(n, g_realbuf)) return open(g_wname, 0);
   return 0 - 1;
 }
 
-// open for reading, case-insensitively. Every file this system opens
-// goes through here. A name with a drive ("B:NOTE.TXT") is that drive's
-// file. Any other is looked for in the RAM disk, then on the home drive
-// (HOME=, where files are written), then on the drive the prompt is on.
-int dos_open (char *path) {
-  int fd, n;
-  char *real;
-  // "./name" IS "name". c4ke.c says #include "./load-c4r.c", and a
-  // name that came out of an archive is stored plainly -- c4bb's own
-  // disk controller strips the prefix for the same reason.
-  if (path[0] == '.' && path[1] == '/') path = path + 2;
-  if ((real = ram_name(path))) return ram_open(real);
-  if (g_drives && (n = drv_prefix(path)) >= 0) return drv_open(n, path + 2);
-  // RAM first, disk second -- the same precedence C4KE's loader uses,
-  // and the reason a tool can rewrite a file that shipped read-only.
-  if ((fd = ram_open(path)) >= 0) return fd;
-  if (g_home >= 0 && g_home != g_drive && (fd = drv_open(g_home, path)) >= 0) return fd;
-  if ((fd = open(path, 0)) >= 0) return fd;
-  if ((real = dir_resolve(path))) {
-    if ((fd = ram_open(real)) >= 0) return fd;
-    return open(real, 0);
+// A name with no directory in it, along APPEND: each directory's copy on
+// the RAM disk, then on its drive. -1 if none.
+int append_open (char *name) {
+  int fd, k, n;
+  char *p;
+  p = g_append;
+  while (*p) {
+    k = 0;
+    while (*p && *p != ';' && k < LINEMAX - 2) { g_pd[k] = *p; ++k; ++p; }
+    if (*p == ';') ++p;
+    // "A:GAMES/DOOM" -> "A:/GAMES/DOOM/" and the name
+    g_pd[k] = 0;
+    if (k >= 2) {
+      g_partbuf[0] = g_pd[0]; g_partbuf[1] = ':'; g_partbuf[2] = '/';
+      g_partbuf[3] = 0;
+      k = bput(g_partbuf, 3, g_pd + 2);
+      if (k > 3) k = bput(g_partbuf, k, "/");
+      if ((k = bput(g_partbuf, k, name)) >= 0 && (n = path_full(g_partbuf, g_drive, g_pd)) >= 0) {
+        if ((fd = ram_open(g_pd)) >= 0) return fd;
+        if (n < drv_count() && (fd = drv_open(n, g_pd)) >= 0) return fd;
+      }
+    }
   }
   return 0 - 1;
+}
+
+// Open for reading, case-insensitively. Every file this system opens
+// goes through here. A name with a drive ("B:NOTE.TXT", "B:\SAVES\X") is
+// that drive's file, and "RAM:NAME" the RAM disk's. Any other is looked
+// for in the RAM disk, then in the home drive's current directory (HOME=,
+// where files are written), then on the drive the prompt is on -- each
+// at the same path: the current directory's, or from the root for a name
+// that starts with a slash -- and then, for a name that does not, along
+// APPEND.
+int dos_open (char *path) {
+  int fd, n;
+  if ((n = path_full(path, g_drive, g_pa)) < 0) return 0 - 1;
+  if (g_pram) return ram_open(g_pa);
+  if (g_pdrive) {
+    if (n >= drv_count()) return 0 - 1;
+    return drv_open(n, g_pa);
+  }
+  // RAM first, disk second -- the same precedence C4KE's loader uses,
+  // and the reason a tool can rewrite a file that shipped read-only.
+  if ((fd = ram_open(g_pa)) >= 0) return fd;
+  if (!g_pabs && g_home >= 0 && g_home != g_drive && path_full(path, g_home, g_pb) >= 0
+      && (fd = drv_open(g_home, g_pb)) >= 0) return fd;
+  if ((fd = drv_open(g_drive, g_pa)) >= 0) return fd;
+  if (g_pabs || !g_append[0]) return 0 - 1;
+  return append_open(path);
 }
 
 // Reads and closes have to go through here too: a pseudo-fd is not
@@ -828,14 +1052,18 @@ int dos_close (int fd) {
 // Where a new file goes (slot 2, create; COPY):
 //   - "RAM:name": the RAM disk;
 //   - "B:name": drive B:, if it can be written, else the RAM disk;
-//   - a plain name: the home drive (DRIVES.SYS HOME=) if there is one and
-//     it can be written, else the RAM disk.
+//   - a name with no drive: the home drive (DRIVES.SYS HOME=) if there is
+//     one and it can be written, else the RAM disk.
+// Each at its path: "B:NAME" in B:'s current directory, a plain "NAME" in
+// the home drive's (or, for the RAM disk, the prompt's drive's), and one
+// that starts with a slash from the root. On a drive the directory has
+// to be there already (MD makes one); the RAM disk takes any path.
 // Without HOME= -- the build floppies -- a plain name goes to the RAM
 // disk, as it always did. A file written to a drive is on it, and in its
-// c4dos.dir, once it is closed; one written to the RAM disk is there at
-// once. A plain name written to the home drive takes the RAM disk's copy
-// of that name away, if there was one, so that the file read next is
-// the one just written.
+// directory's c4dos.dir, once it is closed; one written to the RAM disk
+// is there at once. A plain name written to the home drive takes the RAM
+// disk's copy of that name away, if there was one, so that the file read
+// next is the one just written.
 
 int g_cur_img;           // (the loader's, below) the program running, 0 = none
 
@@ -864,25 +1092,35 @@ int wh_get (int handle) {
   return h;
 }
 
+// path on drive n with its directory's real spelling, into g_realbuf;
+// 0 when that directory is not there
+char *drv_target (int n, char *path) {
+  int k;
+  path_parent(path, g_pd);
+  if (!dir_there(n, g_pd, g_realbuf)) return 0;
+  k = xlen(g_realbuf);
+  if (k) k = bput(g_realbuf, k, "/");
+  if (bput(g_realbuf, k, path_base(path)) < 0) return 0;
+  return g_realbuf;
+}
+
 // create or truncate a file for writing; its handle, or -1
 int file_create (char *name) {
   int n, fd, slot, plain;
-  char *rest;
-  if (name[0] == '.' && name[1] == '/') name = name + 2;
-  rest = name;
-  plain = 0;
+  char *t;
+  if (path_full(name, g_drive, g_pa) < 0 || !*g_pa) return 0 - 1;
   n = 0 - 1;
-  if (ram_name(name)) rest = ram_name(name);
-  else if (g_drives && (n = drv_prefix(name)) >= 0) rest = name + 2;
-  else { n = g_home; plain = 1; }
-  if (n >= 0 && *rest && drv_writable(n) && drv_path(n, rest)) {
+  plain = !g_pram && !g_pdrive;
+  if (g_pdrive) { n = drv_prefix(name); bput(g_pb, 0, g_pa); }
+  else if (plain && g_home >= 0 && path_full(name, g_home, g_pb) >= 0) n = g_home;
+  if (n >= 0 && n < drv_count() && drv_writable(n) && (t = drv_target(n, g_pb)) && drv_path(n, t)) {
     if ((fd = bb_create(g_wname)) < 0) return 0 - 1;
-    if (plain && ram_find(rest) >= 0) ram_unlink(rest);
-    if ((slot = wh_new(WH_DRV, fd, n, rest)) < 0) bb_close(fd);
+    if (plain && ram_find(g_pa) >= 0) ram_unlink(g_pa);
+    if ((slot = wh_new(WH_DRV, fd, n, t)) < 0) bb_close(fd);
     return slot;
   }
-  if ((slot = ram_create(rest, 4096)) < 0) return 0 - 1;
-  return wh_new(WH_RAM, slot, 0 - 1, rest);
+  if ((slot = ram_create(g_pa, 4096)) < 0) return 0 - 1;
+  return wh_new(WH_RAM, slot, 0 - 1, g_pa);
 }
 
 int file_write (int handle, char *buf, int n) {
@@ -896,11 +1134,13 @@ int file_write (int handle, char *buf, int n) {
 // 0, or -1 when the drive would not take it
 int file_close (int handle) {
   int h, r;
+  char *s;
   if ((h = wh_get(handle)) < 0) return 0 - 1;
   r = 0;
   if (g_wh_kind[h] == WH_DRV) {
+    s = (char *)g_wh_name[h];
     if (bb_close(g_wh_ref[h]) < 0) r = 0 - 1;
-    else dir_add(g_wh_drv[h], (char *)g_wh_name[h]);
+    else dir_add(g_wh_drv[h], path_parent(s, g_pd), path_base(s), 1);
   }
   g_wh_kind[h] = WH_FREE;
   return r;
@@ -921,24 +1161,24 @@ int file_close_img (int img) {
 // Delete a file: "RAM:name" from the RAM disk, "B:name" from drive B:, a
 // plain name from the RAM disk if it is there, else from the home drive.
 // 0, or -1 if there was no such file or the drive cannot be written.
-int drv_unlink (int n, char *name) {
+int drv_unlink (int n, char *path) {
   char *real;
-  if (!drv_writable(n) || !drv_path(n, name)) return 0 - 1;
+  if (n >= drv_count() || !drv_writable(n) || !*path || !drv_path(n, path)) return 0 - 1;
+  real = path;
   if (bb_unlink(g_wname) < 0) {
-    if (!(real = dir_resolve_on(n, name)) || !drv_path(n, real) || bb_unlink(g_wname) < 0) return 0 - 1;
-    name = real;
+    if (!(real = path_real(n, path, g_realbuf)) || g_isdir || !drv_path(n, real) || bb_unlink(g_wname) < 0) return 0 - 1;
   }
-  dir_drop(n, name);
+  dir_drop(n, path_parent(real, g_pd), path_base(real), 1);
   return 0;
 }
 
 int file_unlink (char *name) {
   int n;
-  if (name[0] == '.' && name[1] == '/') name = name + 2;
-  if (ram_name(name)) return ram_unlink(name);
-  if (g_drives && (n = drv_prefix(name)) >= 0) return drv_unlink(n, name + 2);
-  if (ram_unlink(name) == 0) return 0;
-  if (g_home >= 0) return drv_unlink(g_home, name);
+  if ((n = path_full(name, g_drive, g_pa)) < 0) return 0 - 1;
+  if (g_pram) return ram_unlink(g_pa);
+  if (g_pdrive) return drv_unlink(n, g_pa);
+  if (ram_unlink(g_pa) == 0) return 0;
+  if (g_home >= 0 && path_full(name, g_home, g_pb) >= 0) return drv_unlink(g_home, g_pb);
   return 0 - 1;
 }
 
@@ -1602,10 +1842,6 @@ int cmd_ver () {
   return 0;
 }
 
-// The raw disk has no directory service (READ is all the hardware
-// gives us), so DIR reads the disk's manifest file - the same move
-// the c4bb web app makes with manifest.json. An honest limitation:
-// early machines listed what the label said.
 // a pipe's temporary file (RAM:PIPEn.$$$), which DIR leaves out: it is
 // the pipe's, not the person's, and DIR | x would list it while it is
 // being written
@@ -1615,29 +1851,116 @@ int is_pipe_file (char *s) {
   return n > 4 && s[n - 4] == '.' && s[n - 3] == '$' && s[n - 2] == '$' && s[n - 1] == '$';
 }
 
-int cmd_dir (char *drive, int page) {
-  int i, n;
-  // DIR B: lists B:'s c4dos.dir, and only that
-  if (drive && g_drives && (n = drv_num(drive)) >= 0) {
-    if (n >= drv_count()) { pf("no drive %c: - this machine has %d\n", drv_letter(n), drv_count(), 0); return 1; }
-    if (!type_file(dir_name(n), page)) pf("no c4dos.dir on %c: - nothing has been written there\n", drv_letter(n), 0, 0);
-    return 0;
+// The lines of a listing DIR prints, and the pause after a screenful
+// (DIR /P; never into a file)
+int g_pg_size;
+int g_pg_lines;
+int dir_line (char *fmt, int a, int b, int c) {
+  pf(fmt, a, b, c);
+  if (g_pg_size && g_out_h < 0) {
+    ++g_pg_lines;
+    if (g_pg_lines >= g_pg_size) {
+      g_pg_lines = 0;
+      if (!type_more()) g_pg_size = 0;   // EOF: the rest straight out
+    }
   }
-  // the prompt's drive's listing, by name: a plain "c4dos.dir" would be
-  // the home drive's (dos_open looks there first)
-  if (!type_file(g_drives ? dir_name(g_drive) : "c4dos.dir", page))
-    pf("no c4dos.dir on this disk - the raw disk has no directory service\n", 0, 0, 0);
-  if (g_ramdisk) {
+  return 0;
+}
+
+// a and b, case-insensitively, each up to its first '/' or its end
+int part_eq (char *a, char *b) {
+  while (*a && *a != '/' && *b && *b != '/') {
+    if (upper(*a) != upper(*b)) return 0;
+    ++a; ++b;
+  }
+  return (!*a || *a == '/') && (!*b || *b == '/');
+}
+
+// what of RAM-disk name s is below directory dir (k = its length), or 0
+char *ram_below (char *s, char *dir, int k) {
+  if (!k) return s;
+  if (starts_ci(s, dir) && s[k] == '/') return s + k + 1;
+  return 0;
+}
+
+// DIR [path] [/P]: a directory -- the current one, B:'s current one, or
+// any path -- from its listing (its c4dos.dir), a subdirectory as
+// NAME  <DIR>; then, on the prompt's drive, what the RAM disk holds
+// there, which sits over every drive, and how full it is. The raw disk
+// has no directory service (READ is all the hardware gives us), so a
+// directory's listing is a file -- the same move the c4bb web app makes
+// with manifest.json. An honest limitation: early machines listed what
+// the label said.
+int cmd_dir (char *arg, int page) {
+  int i, j, n, k, len, pipes, g, c;
+  char *buf, *p, *e, *s, *t, *u;
+  if ((n = path_full(arg ? arg : ".", g_drive, g_pc)) < 0) { pf("invalid directory: %s\n", (int)arg, 0, 0); return 1; }
+  if (n >= drv_count()) { pf("no drive %c: - this machine has %d\n", drv_letter(n), drv_count(), 0); return 1; }
+  if (!dir_there(n, g_pc, g_realbuf)) { pf("invalid directory: %s\n", (int)arg, 0, 0); return 1; }
+  bput(g_pc, 0, g_realbuf);
+  g_pg_size = page;
+  g_pg_lines = 0;
+  dir_line(" Directory of %c:%s\n", drv_letter(n), (int)path_show(g_pc), 0);
+  len = lst_slurp(n, g_pc);
+  g = gen_dos();
+  buf = malloc(len + 1);
+  gen_set(g);
+  if (!buf) { printf("c4dos: out of memory\n"); return 1; }
+  i = 0;
+  while (i < len) { buf[i] = g_dirbuf[i]; ++i; }
+  buf[len] = 0;
+  if (!len && !*g_pc) {
+    if (n) dir_line("no c4dos.dir on %c: - nothing has been written there\n", drv_letter(n), 0, 0);
+    else dir_line("no c4dos.dir on this disk - the raw disk has no directory service\n", 0, 0, 0);
+  }
+  // the listing: a line a name, "NAME/" a directory
+  p = buf;
+  while (*p) {
+    e = p;
+    while (*e && *e != 10 && *e != 13) ++e;
+    c = *e;
+    *e = 0;
+    if (e > p && *(e - 1) == '/') {
+      *(e - 1) = 0;
+      dir_line("%s  <DIR>\n", (int)p, 0, 0);
+      *(e - 1) = '/';
+    } else if (e > p) dir_line("%s\n", (int)p, 0, 0);
+    *e = c;
+    p = e;
+    while (*p == 10 || *p == 13) ++p;
+  }
+  // the RAM disk's files in this directory, and its directories below it
+  if (g_ramdisk && n == g_drive) {
+    k = xlen(g_pc);
+    pipes = 0;
     i = 0;
-    n = 0;
     while (i < g_ram_n) {
-      if (is_pipe_file((char *)g_ram_name[i])) ++n;
-      else pf("%s  <ram> %d bytes\n", g_ram_name[i], g_ram_len[i], 0);
+      s = (char *)g_ram_name[i];
+      if (is_pipe_file(s)) ++pipes;
+      else if ((t = ram_below(s, g_pc, k))) {
+        u = t;
+        while (*u && *u != '/') ++u;
+        if (!*u) dir_line("%s  <ram> %d bytes\n", (int)t, g_ram_len[i], 0);
+        else {
+          // a directory only the RAM disk has: once, and not if the
+          // listing has it already
+          j = 0;
+          while (j < i && !((e = ram_below((char *)g_ram_name[j], g_pc, k)) && part_eq(e, t))) ++j;
+          c = *u;
+          *u = 0;
+          p = buf;
+          while (*p && line_eq_ci(p, t) != 2) { while (*p && *p != 10) ++p; if (*p) ++p; }
+          if (j == i && !*p) dir_line("%s  <DIR> <ram>\n", (int)t, 0, 0);
+          *u = c;
+        }
+      }
       ++i;
     }
-    pf("ramdisk: %d of %d bytes used, %d file(s)\n",
-           g_ram_used, g_ram_budget, g_ram_n - n);
+    dir_line("ramdisk: %d of %d bytes used, %d file(s)\n", g_ram_used, g_ram_budget, g_ram_n - pipes);
   }
+  g = gen_dos();
+  free(buf);
+  gen_set(g);
   return 0;
 }
 
@@ -1787,7 +2110,28 @@ int dos_api_write (int h, char *buf, int len) {
 int dos_api_close (int h) { return file_close(h); }
 // The read half: DOS's own opener, which checks RAM before disk, made
 // available to a transient whose own open() only ever sees the host.
-int dos_api_open (char *name) { return dos_open(name); }
+//
+// A name with directories in it that opens nowhere is tried once more by
+// its last part. That is the machine's own courtesy from before there
+// were directories (devices.js finds a name it does not have by its
+// basename), which programs came to rely on: Doom asks for
+// ./.savegame/doomsav0.dsg, and its saves are at B:\doomsav0.dsg. DOS's
+// own lookups -- a command, TYPE, DIR -- stay exact.
+char *g_basebuf;
+int dos_api_open (char *name) {
+  int fd, k;
+  char *b, *s;
+  if ((fd = dos_open(name)) >= 0) return fd;
+  b = name;
+  s = name;
+  while (*s) { if (*s == '/' || *s == 92) b = s + 1; ++s; }
+  if (b == name || !*b) return 0 - 1;
+  k = 0;
+  if (starts_ci(name, "RAM:")) k = bput(g_basebuf, 0, "RAM:");
+  else if (drv_prefix(name) >= 0) { g_basebuf[0] = name[0]; g_basebuf[1] = ':'; k = 2; }
+  if (bput(g_basebuf, k, b) < 0) return 0 - 1;
+  return dos_open(g_basebuf);
+}
 int dos_api_read (int fd, char *buf, int len) { return dos_read(fd, buf, len); }
 int dos_api_rclose (int fd) { return dos_close(fd); }
 
@@ -1801,7 +2145,6 @@ int dos_api_home () { return g_home; }
 // v6: the drive the prompt is on, 0 = A: (a DOS Prompt window's prompt)
 int dos_api_drive () { return g_drive; }
 int dos_api_drives () { return drv_count(); }
-int dos_api_load (char *path) { return img_load(path); }
 int dos_api_start (int h, int argc, char **argv) { return img_start(h, argc, argv); }
 int dos_api_unload (int h) { return img_unload(h); }
 // fn(arg) under a run frame: an exit() inside it comes back here, as
@@ -1900,11 +2243,15 @@ int cmd_copy (char *src, char *dst) {
   int fd, n, total, h, i, k;
   if (!src || !dst || !*src || !*dst) { pf("usage: COPY src dst\n", 0, 0, 0); return 1; }
   if (!g_ramdisk && g_home < 0 && drv_prefix(dst) < 0) { pf("no ramdisk - add DEVICE=RAMDISK.SYS to CONFIG.SYS\n", 0, 0, 0); return 1; }
-  if (drv_num(dst) >= 0 || cieq(dst, "RAM:")) {
+  // to a drive, RAM: or a directory: the same name, there
+  k = xlen(dst);
+  if (drv_num(dst) >= 0 || cieq(dst, "RAM:") || dst[k - 1] == '/' || dst[k - 1] == 92
+      || ((n = path_full(dst, g_drive, g_pc)) >= 0 && n < drv_count() && *g_pc && dir_there(n, g_pc, g_realbuf))) {
     k = 0;
-    while (dst[k]) { g_copybuf[k] = dst[k]; ++k; }
+    while (dst[k] && k < LINEMAX - 2) { g_copybuf[k] = dst[k]; ++k; }
+    if (g_copybuf[k - 1] != ':' && g_copybuf[k - 1] != '/' && g_copybuf[k - 1] != 92) { g_copybuf[k] = 92; ++k; }
     i = xlen(src);
-    while (i > 0 && src[i - 1] != ':' && src[i - 1] != '/') --i;
+    while (i > 0 && src[i - 1] != ':' && src[i - 1] != '/' && src[i - 1] != 92) --i;
     while (src[i] && k < LINEMAX - 1) { g_copybuf[k] = src[i]; ++k; ++i; }
     g_copybuf[k] = 0;
     dst = g_copybuf;
@@ -1922,23 +2269,50 @@ int cmd_copy (char *src, char *dst) {
   return 0;
 }
 
-// A bare command with ".c4r" appended, if that names something that
-// opens. This is the courtesy COMMAND.COM extended with COM/EXE/BAT:
-// you type the program, not the file. Returns 0 when there is no such
-// program, so an unknown word still reaches "bad command or file name"
-// rather than being reported as a broken executable.
-char *prog_ext (char *name) {
-  char *q, *s;
-  int fd;
-  if (xlen(name) + 5 > LINEMAX) return 0;
-  q = g_progbuf;
-  s = name;
-  while (*s) { *q = *s; ++q; ++s; }
-  *q = '.'; ++q; *q = 'c'; ++q; *q = '4'; ++q; *q = 'r'; ++q; *q = 0;
-  if ((fd = dos_open(g_progbuf)) < 0) return 0;
-  dos_close(fd);
-  return g_progbuf;
+// name, with ext after it when ext is not 0, in buf, if that opens: as
+// DOS opens any name (the current directory, the RAM disk, the home
+// drive, APPEND), and then, for a name with no directory or drive in it,
+// in each PATH directory in turn. buf, or 0 if it is nowhere. This is
+// how a command is found: COMMAND.COM's courtesy of COM/EXE/BAT, and
+// PATH.
+int has_dir (char *s) {
+  while (*s) { if (*s == '/' || *s == 92 || *s == ':') return 1; ++s; }
+  return 0;
 }
+char *find_on_path (char *name, char *ext, char *buf) {
+  int fd, k, d;
+  char *p;
+  k = bput(buf, 0, name);
+  if (ext) k = bput(buf, k, ext);
+  if (k < 0) return 0;
+  if ((fd = dos_open(buf)) >= 0) { dos_close(fd); return buf; }
+  if (has_dir(name)) return 0;
+  p = g_path;
+  while (*p) {
+    // "A:BIN" -> "\BIN\NAME" on the prompt's drive (so the RAM disk is
+    // looked at too), "B:\BIN\NAME" on another
+    d = upper(p[0]) - 'A';
+    k = 0;
+    if (d != g_drive) { buf[0] = p[0]; buf[1] = ':'; k = 2; }
+    buf[k] = 92; ++k;
+    p = p + 2;
+    while (*p && *p != ';' && k < LINEMAX - 2) { buf[k] = *p; ++k; ++p; }
+    if (*p == ';') ++p;
+    buf[k] = 0;
+    if (buf[k - 1] != 92) { buf[k] = 92; ++k; buf[k] = 0; }
+    k = bput(buf, k, name);
+    if (ext) k = bput(buf, k, ext);
+    if (k >= 0 && (fd = dos_open(buf)) >= 0) { dos_close(fd); return buf; }
+  }
+  return 0;
+}
+
+// A bare command with ".c4r" appended, if that names something that
+// opens, here or along PATH. You type the program, not the file. Returns
+// 0 when there is no such program, so an unknown word still reaches "bad
+// command or file name" rather than being reported as a broken
+// executable.
+char *prog_ext (char *name) { return find_on_path(name, ".c4r", g_progbuf); }
 
 // Does this name a batch file? As typed if it already ends .bat, else
 // with .bat appended -- the same courtesy prog_ext extends to .c4r.
@@ -1951,24 +2325,192 @@ int is_bat_name (char *s) {
 }
 
 char *bat_path (char *name) {
-  char *q, *s;
-  int fd;
-  if (xlen(name) + 5 > LINEMAX) return 0;
-  q = g_batbuf;
-  s = name;
-  while (*s) { *q = *s; ++q; ++s; }
-  if (!is_bat_name(name)) { *q = '.'; ++q; *q = 'b'; ++q; *q = 'a'; ++q; *q = 't'; ++q; }
-  *q = 0;
-  if ((fd = dos_open(g_batbuf)) < 0) return 0;
-  dos_close(fd);
-  return g_batbuf;
+  if (is_bat_name(name)) return find_on_path(name, 0, g_batbuf);
+  return find_on_path(name, ".bat", g_batbuf);
 }
 
-// RUN's argument: as typed if it opens, else with ".c4r" appended.
+// RUN's argument: as typed if it opens, else with ".c4r" appended; each
+// here, then along PATH.
 char *prog_path (char *name) {
-  int fd;
-  if ((fd = dos_open(name)) >= 0) { dos_close(fd); return name; }
+  char *p;
+  if ((p = find_on_path(name, 0, g_progbuf))) return p;
   return prog_ext(name);
+}
+
+// ---- directories: CD, MD, RD, PATH and APPEND -----------------------------
+
+// Tell the machine where drive d's relative names are (DISK_DIRS): its
+// current directory, then APPEND's directories on it. Only DOS's own
+// opens know about directories; this is for the programs that do not --
+// C4KE, C4IX's vfsload, a c4cc program's open() -- which look for a name
+// where they were started, the way DOS before directories did. With
+// DRIVES.SYS only, like every drive register here.
+int dirs_tell (int d) {
+  int k;
+  char *p;
+  if (!g_drives || d < 0 || d >= drv_count()) return 0;
+  k = bput(g_dirsbuf, 0, (char *)g_cwd[d]);
+  p = g_append;
+  while (*p) {
+    if (upper(p[0]) - 'A' == d) {
+      k = bput(g_dirsbuf, k, ";");
+      p = p + 2;
+      while (*p && *p != ';' && k >= 0 && k < LINEMAX - 1) { g_dirsbuf[k] = *p; ++k; ++p; }
+      if (k >= 0) g_dirsbuf[k] = 0;
+    }
+    while (*p && *p != ';') ++p;
+    if (*p) ++p;
+  }
+  if (k < 0) return 0;
+  *(int *)BB_DRIVE = d;
+  *(int *)BB_DIRS = (int)g_dirsbuf;
+  *(int *)BB_DRIVE = g_drive;
+  return 0;
+}
+int dirs_tell_all () {
+  int d;
+  d = 0;
+  while (d < drv_count() && d < DRVMAX) { dirs_tell(d); ++d; }
+  return 0;
+}
+
+// CD path (slot 31): the current directory of path's drive becomes path
+// -- the prompt's drive stays where it is, as in every DOS -- if it is a
+// directory there (or one the RAM disk has). 0, or -1.
+int dos_chdir (char *arg) {
+  int n;
+  if ((n = path_full(arg, g_drive, g_pc)) < 0 || n >= drv_count()) return 0 - 1;
+  if (!dir_there(n, g_pc, g_realbuf)) return 0 - 1;
+  bput((char *)g_cwd[n], 0, g_realbuf);
+  dirs_tell(n);
+  return 0;
+}
+
+// MD path (slot 33): an empty listing for it, and "NAME/" in its parent's.
+// 0; -1 a bad name or no such parent, -2 it is there already, -3 the
+// drive cannot be written.
+int dos_mkdir (char *arg) {
+  int n, k, fd;
+  char *raw;
+  if ((n = path_full(arg, g_drive, g_pc)) < 0 || n >= drv_count() || !*g_pc) return 0 - 1;
+  if (dir_there(n, g_pc, g_realbuf)) return 0 - 2;
+  if (drv_path(n, g_pc) && (fd = open(g_wname, 0)) >= 0) { close(fd); return 0 - 2; }
+  if (!drv_writable(n)) return 0 - 3;
+  path_parent(g_pc, g_pd);
+  if (!dir_there(n, g_pd, g_realbuf)) return 0 - 1;
+  // the parent's real spelling, and the new name as it was typed
+  k = xlen(g_realbuf);
+  if (k) k = bput(g_realbuf, k, "/");
+  if ((k = bput(g_realbuf, k, path_base(g_pc))) < 0) return 0 - 1;
+  bput(g_pc, 0, g_realbuf);
+  if (!(raw = lst_raw(n, g_pc)) || (fd = bb_create(raw)) < 0 || bb_close(fd) < 0) return 0 - 3;
+  if (dir_add(n, path_parent(g_pc, g_pd), path_base(g_pc), 2) < 0) return 0 - 3;
+  return 0;
+}
+
+// RD path (slot 34): an empty directory gone, listing and all. 0; -1 no
+// such directory, -3 the drive cannot be written, -4 it is a current
+// directory (or holds one), -5 it is not empty.
+int dos_rmdir (char *arg) {
+  int n, k;
+  char *p, *s;
+  if ((n = path_full(arg, g_drive, g_pc)) < 0 || n >= drv_count() || !*g_pc) return 0 - 1;
+  if (!path_real(n, g_pc, g_realbuf) || !g_isdir) return 0 - 1;
+  bput(g_pc, 0, g_realbuf);
+  if (!drv_writable(n)) return 0 - 3;
+  k = xlen(g_pc);
+  s = (char *)g_cwd[n];
+  if (starts_ci(s, g_pc) && (!s[k] || s[k] == '/')) return 0 - 4;
+  // empty: nothing in its listing but the listing, nothing of the RAM
+  // disk's below it
+  lst_slurp(n, g_pc);
+  p = g_dirbuf;
+  while (*p) {
+    if (*p != 10 && *p != 13 && !line_eq_ci(p, "c4dos.dir")) return 0 - 5;
+    while (*p && *p != 10) ++p;
+    if (*p) ++p;
+  }
+  if (ram_isdir(g_pc)) return 0 - 5;
+  if (lst_raw(n, g_pc)) bb_unlink(g_wname);
+  dir_drop(n, path_parent(g_pc, g_pd), path_base(g_pc), 2);
+  return 0;
+}
+
+// PATH and APPEND: say what the list is (no argument), empty it (";"), or
+// make it the directories given ("\BIN;B:\TOOLS"), each kept as a drive
+// and a path from its root ("A:BIN;B:TOOLS"), so a list made in one
+// directory means the same in every other. Nothing checks that they are
+// there; MS-DOS never did either.
+int cmd_list (char *list, char *arg, char *what) {
+  int k, n, j;
+  char *p;
+  if (!arg) {
+    if (!*list) { pf("No %s\n", (int)what, 0, 0); return 0; }
+    pf("%s=", (int)what, 0, 0);
+    p = list;
+    while (*p) {
+      pf("%c:", p[0], 0, 0);
+      p = p + 2;
+      j = 0;
+      while (p[j] && p[j] != ';' && j < LINEMAX - 1) { g_pd[j] = p[j]; ++j; }
+      g_pd[j] = 0;
+      pf("%s", (int)path_show(g_pd), 0, 0);
+      p = p + j;
+      if (*p) { pf(";", 0, 0, 0); ++p; }
+    }
+    pf("\n", 0, 0, 0);
+    return 0;
+  }
+  k = 0;
+  list[0] = 0;
+  p = arg;
+  while (*p) {
+    j = 0;
+    while (p[j] && p[j] != ';' && j < LINEMAX - 1) { g_pd[j] = p[j]; ++j; }
+    g_pd[j] = 0;
+    p = p + j;
+    if (*p == ';') ++p;
+    if (j) {
+      if ((n = path_full(g_pd, g_drive, g_pc)) < 0) { list[0] = 0; pf("invalid directory: %s\n", (int)g_pd, 0, 0); return 1; }
+      if (k) k = bput(list, k, ";");
+      g_partbuf[0] = drv_letter(n); g_partbuf[1] = ':'; g_partbuf[2] = 0;
+      k = bput(list, k, g_partbuf);
+      if ((k = bput(list, k, g_pc)) < 0) { list[0] = 0; pf("%s is too long\n", (int)what, 0, 0); return 1; }
+    }
+  }
+  return 0;
+}
+
+// v4 slot 20: a program, found as RUN finds one (here, then along PATH)
+int dos_api_load (char *path) {
+  char *p;
+  if (!(p = prog_path(path))) p = path;
+  return img_load(p);
+}
+
+// v7 (2026-10-26): directories. chdir is CD's, mkdir MD's and rmdir RD's,
+// answering 0 or -1; getcwd(d) is drive d's current directory as a person
+// writes it ("\GAMES\DOOM"), d = -1 the prompt's drive: DOS's own buffer,
+// good until the next call.
+int dos_api_chdir (char *path) { return dos_chdir(path) < 0 ? 0 - 1 : 0; }
+int dos_api_getcwd (int d) {
+  if (d < 0 || d >= DRVMAX) d = g_drive;
+  return (int)cwd_show(d);
+}
+int dos_api_mkdir (char *path) { return dos_mkdir(path) < 0 ? 0 - 1 : 0; }
+int dos_api_rmdir (char *path) { return dos_rmdir(path) < 0 ? 0 - 1 : 0; }
+
+// CD: where the prompt's drive is (no argument), where drive B: is
+// ("CD B:"), or go somewhere
+int cmd_cd (char *arg) {
+  int n;
+  if (!arg || !*arg || ((n = drv_num(arg)) >= 0 && n < drv_count())) {
+    n = arg && *arg ? drv_num(arg) : g_drive;
+    pf("%c:%s\n", drv_letter(n), (int)cwd_show(n), 0);
+    return 0;
+  }
+  if (dos_chdir(arg) < 0) { pf("invalid directory: %s\n", (int)arg, 0, 0); return 1; }
+  return 0;
 }
 
 int dispatch (int argc) {
@@ -2000,6 +2542,28 @@ int dispatch (int argc) {
     if (argc < 2) { pf("usage: DEL file\n", 0, 0, 0); return 1; }
     if (file_unlink(g_argv[1]) < 0) { pf("cannot delete %s\n", (int)g_argv[1], 0, 0); return 1; }
     return 0;
+  }
+  // CD, MD, RD: directories (dos_chdir, dos_mkdir, dos_rmdir). "CD.."
+  // and "CD\" with no space, as every DOS took them.
+  if (starts_ci(cmd, "CD") && (cmd[2] == '.' || cmd[2] == 92)) return cmd_cd(cmd + 2);
+  if (cieq(cmd, "CD") || cieq(cmd, "CHDIR")) return cmd_cd(argc > 1 ? g_argv[1] : 0);
+  if (cieq(cmd, "MD") || cieq(cmd, "MKDIR") || cieq(cmd, "RD") || cieq(cmd, "RMDIR")) {
+    if (argc < 2) { pf("usage: %s directory\n", (int)cmd, 0, 0); return 1; }
+    r = upper(cmd[0]) == 'M' ? dos_mkdir(g_argv[1]) : dos_rmdir(g_argv[1]);
+    if (r == 0 - 2) pf("%s is there already\n", (int)g_argv[1], 0, 0);
+    else if (r == 0 - 3) pf("cannot change %s - its drive cannot be written\n", (int)g_argv[1], 0, 0);
+    else if (r == 0 - 4) pf("%s is a current directory\n", (int)g_argv[1], 0, 0);
+    else if (r == 0 - 5) pf("%s is not empty\n", (int)g_argv[1], 0, 0);
+    else if (r < 0) pf("invalid directory: %s\n", (int)g_argv[1], 0, 0);
+    return r < 0;
+  }
+  // PATH and APPEND, and their "PATH=..." spelling
+  if (starts_ci(cmd, "PATH=")) return cmd_list(g_path, cmd + 5, "PATH");
+  if (cieq(cmd, "PATH")) return cmd_list(g_path, argc > 1 ? g_argv[1] : 0, "PATH");
+  if (starts_ci(cmd, "APPEND=") || cieq(cmd, "APPEND")) {
+    r = cmd_list(g_append, starts_ci(cmd, "APPEND=") ? cmd + 7 : (argc > 1 ? g_argv[1] : 0), "APPEND");
+    dirs_tell_all();
+    return r;
   }
   if (cieq(cmd, "TIME")) return cmd_time();
   if (cieq(cmd, "MEM")) return cmd_mem();
@@ -2034,7 +2598,10 @@ int dispatch (int argc) {
     drv_select(i);
     return 0;
   }
-  if (is_program_name(cmd)) return run_program(cmd, argc, g_argv);
+  if (is_program_name(cmd)) {
+    if (!(path = prog_path(cmd))) path = cmd;
+    return run_program(path, argc, g_argv);
+  }
   // Not a builtin and no extension typed: try it as a program name.
   if ((path = prog_ext(cmd))) return run_program(path, argc, g_argv);
   // Then as a batch file. dispatch cannot run one itself -- run_batch
@@ -2080,7 +2647,7 @@ int run_batch (char *path, int depth) {
     }
     total = 0;
     while (total < n) { g_line[total] = p[total]; ++total; }
-    if (show && g_line[0]) pf("%c>%s\n", drv_letter(g_drive), (int)g_line, 0);
+    if (show && g_line[0]) pf("%c:%s>%s\n", drv_letter(g_drive), (int)cwd_show(g_drive), (int)g_line);
     // line_run, defined below (it runs batch files, so it comes after
     // this), reached the way a transient reaches DOS: through the stub
     invoke1((int *)g_linefn, depth);
@@ -2481,7 +3048,29 @@ int main (int argc, char **argv) {
   if (!(g_progbuf = malloc(LINEMAX + 8))) { printf("c4dos: out of memory\n"); return 1; }
   if (!(g_batbuf  = malloc(LINEMAX + 8))) { printf("c4dos: out of memory\n"); return 1; }
   if (!(g_wname   = malloc(LINEMAX + 4))) { printf("c4dos: out of memory\n"); return 1; }
-  if (!(g_dname   = malloc(16))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!(g_dname   = malloc(LINEMAX + 16))) { printf("c4dos: out of memory\n"); return 1; }
+  // directories: a current one per drive (the root to start with), PATH,
+  // APPEND, and the buffers paths are made in
+  if (!(g_cwd = malloc(DRVMAX * sizeof(int)))) { printf("c4dos: out of memory\n"); return 1; }
+  n = 0;
+  while (n < DRVMAX) {
+    if (!(g_cwd[n] = (int)malloc(LINEMAX))) { printf("c4dos: out of memory\n"); return 1; }
+    *(char *)g_cwd[n] = 0;
+    ++n;
+  }
+  if (!(g_path     = malloc(LINEMAX))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!(g_append   = malloc(LINEMAX))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!(g_pa       = malloc(LINEMAX))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!(g_pb       = malloc(LINEMAX))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!(g_pc       = malloc(LINEMAX))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!(g_pd       = malloc(LINEMAX))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!(g_realbuf  = malloc(LINEMAX))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!(g_partbuf  = malloc(LINEMAX))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!(g_cwdshow  = malloc(LINEMAX))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!(g_dirsbuf  = malloc(LINEMAX))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!(g_basebuf  = malloc(LINEMAX))) { printf("c4dos: out of memory\n"); return 1; }
+  g_path[0] = 0;
+  g_append[0] = 0;
   if (!(g_copybuf = malloc(LINEMAX + 4))) { printf("c4dos: out of memory\n"); return 1; }
   if (!(g_morebuf = malloc(LINEMAX + 4))) { printf("c4dos: out of memory\n"); return 1; }
   if (!(g_tapbuf  = malloc(TAPBUF + 4))) { printf("c4dos: out of memory\n"); return 1; }
@@ -2530,7 +3119,7 @@ int main (int argc, char **argv) {
   g_api[2] = 0;                                // filled after CONFIG.SYS
   g_api[3] = (int)&dos_api_write;
   g_api[4] = (int)&dos_api_close;
-  g_api[5] = 6;                                // API version
+  g_api[5] = 7;                                // API version
   g_api[6] = (int)&dos_api_open;
   g_api[7] = (int)&dos_api_read;
   g_api[8] = (int)&dos_api_rclose;
@@ -2566,6 +3155,7 @@ int main (int argc, char **argv) {
 
   cmd_ver();
   read_config();
+  dirs_tell_all();      // the machine looks from the root until a CD or APPEND says otherwise
   // Only now is it known whether there is anywhere to write. Advertise
   // CREATE only if there is: a transient checks that slot before
   // believing any of the API, so a DOS booted without
@@ -2589,6 +3179,11 @@ int main (int argc, char **argv) {
   g_api[29] = (int)&dos_api_drives;
   // v6: the prompt's drive, always there
   g_api[30] = (int)&dos_api_drive;
+  // v7: directories, always there
+  g_api[31] = (int)&dos_api_chdir;
+  g_api[32] = (int)&dos_api_getcwd;
+  g_api[33] = (int)&dos_api_mkdir;
+  g_api[34] = (int)&dos_api_rmdir;
 #if C4DOS_CLOCK
   // Same rule for the clock: offered only when the hardware was
   // declared, so a caller that checks the slot is told the truth.
@@ -2600,7 +3195,8 @@ int main (int argc, char **argv) {
     // A console that cannot flush a partial line needs the newline, or
     // the prompt is invisible until the next one. DEVICE=CONSOLE.SYS
     // FLUSH says this one can, and keeps the classic look.
-    printf(g_conflush ? "%c>" : "%c>\n", drv_letter(g_drive));
+    // The prompt is DOS's $P$G: the drive and its current directory.
+    printf(g_conflush ? "%c:%s>" : "%c:%s>\n", drv_letter(g_drive), cwd_show(g_drive));
     if (!get_line()) g_quit = 1;         // EOF: the console went away
     else line_run(0);
   }

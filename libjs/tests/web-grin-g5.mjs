@@ -125,8 +125,12 @@ try {
   // ---- a DOS Prompt: a pipe, a redirect onto B:, TYPE --------------------------------
   await item('Main', 'DOS Prompt');
   ok('Main > DOS Prompt opens DOS Prompt 1', await shownHas('DOS Prompt 1') && await shownHas('EXIT closes it.'));
+  await tab.type('CD \\GAMES\\WOLF3D\n');
+  ok('CD \\GAMES\\WOLF3D in it: the prompt says where it is', await shownRe('/^A:\\\\GAMES\\\\WOLF3D>$/'));
   await tab.type('DIR | DOSFILT\n');
   ok('DIR | DOSFILT in it: the listing through the filter', await shownRe('/^> WOLF3D\\.C4R$/i') && await shownRe('/^dosfilt: \\d+ lines$/'));
+  await shot('8b-dosprompt-dir');
+  await tab.type('CD \\\n');
   await tab.type('ECHO typed in a DOS Prompt window > B:G5.TXT\n');
   await tab.type('TYPE B:G5.TXT\n');
   ok('ECHO ... > B:G5.TXT, then TYPE B:G5.TXT', await shownHas('typed in a DOS Prompt window'));

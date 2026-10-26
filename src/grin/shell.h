@@ -81,7 +81,9 @@ int   gd_sink(int w, int r, int ctx); // the console's sink (slot 24): w(ctx, bu
 int   gd_setgen(int g);               // the heap generation now: the previous one, or -1
 int   gd_drive();                     // the drive DOS's prompt is on, 0 = A: (v6)
 int   gd_size(char *name);            // bytes, read through; -1 if it is not there
-int   gd_list(int drive, char *names, int max);   // a drive's files, WK_NAME bytes each: how many
+int   gd_list(int drive, char *dir, char *names, int max);   // a directory's files, WK_NAME bytes each ("NAME/" a directory): how many
+char *gd_getcwd(int drive);           // a drive's current directory, "\GAMES" (v7); -1 the prompt's
+int   gd_chdir(char *path);           // CD path: 0, or -1 (v7)
 char *gd_name(int drive, char *name, char *out, int n);   // "B:NAME", "RAM:NAME"
 
 // grin's dialogs: windows of the kit's dialog chrome (WK_DIALOG), whose

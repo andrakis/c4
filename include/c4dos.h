@@ -39,7 +39,8 @@ enum { C4DOS_MAGIC = 4404292 };
 // API table slots. Slots 0-8 are v1; 9-14 are v2 and MUST be gated on
 // dos_version() >= 2, because a v1 DOS allocated a 16-word table and
 // filled only the first nine -- the rest was uninitialised heap. 15 is
-// v3 (the clock) and 16-25 are v4 (below); the table is 32 words.
+// v3 (the clock), 16-27 v4, 28-29 v5, 30 v6 and 31-34 v7 (below); the
+// table is 40 words (32 before v7).
 enum {
   C4DOS_SLOT_MAGIC   = 0,
   C4DOS_SLOT_EXIT    = 1,   // dos_exit(status): return to the prompt
@@ -415,4 +416,40 @@ enum { C4DOS_SLOT_DRIVE = 30 };   // drive() -> the drive the prompt is on, 0 = 
 int dos_drive () {
   if (dos_version() < C4DOS_API_V6 || !__c4dos_api[C4DOS_SLOT_DRIVE] || !__c4dos_arm()) return 0;
   return __c4dos_call1((int *)__c4dos_api[C4DOS_SLOT_DRIVE], 0);
+}
+
+// ---- v7: directories --------------------------------------------------------
+//
+// Every drive has a current directory, and every name DOS takes is a
+// path: "GAMES\DOOM\DOOM.C4R", "..\X", "\X" from the root, "B:X" in B:'s
+// current directory, "/" as good as "\" (docs/c4dos-design.md
+// "Directories"). open, create and unlink (6, 2, 18) and load (20) take
+// them as they are; these four are CD, getting it back, MD and RD.
+enum { C4DOS_API_V7 = 7 };
+enum {
+  C4DOS_SLOT_CHDIR  = 31,   // chdir(path) -> 0, or -1: path's drive's current directory
+  C4DOS_SLOT_GETCWD = 32,   // getcwd(drive) -> char *: "\GAMES\DOOM"; drive -1 the prompt's
+  C4DOS_SLOT_MKDIR  = 33,   // mkdir(path) -> 0, or -1
+  C4DOS_SLOT_RMDIR  = 34    // rmdir(path) -> 0, or -1: an empty directory
+};
+int dos_v7 (int slot) {
+  if (dos_version() < C4DOS_API_V7) return 0;
+  return __c4dos_api[slot] != 0 && __c4dos_arm();
+}
+int dos_chdir (char *path) {
+  if (!dos_v7(C4DOS_SLOT_CHDIR)) return 0 - 1;
+  return __c4dos_call1((int *)__c4dos_api[C4DOS_SLOT_CHDIR], (int)path);
+}
+// DOS's own buffer, good until the next call; 0 before v7
+char *dos_getcwd (int drive) {
+  if (!dos_v7(C4DOS_SLOT_GETCWD)) return 0;
+  return (char *)__c4dos_call1((int *)__c4dos_api[C4DOS_SLOT_GETCWD], drive);
+}
+int dos_mkdir (char *path) {
+  if (!dos_v7(C4DOS_SLOT_MKDIR)) return 0 - 1;
+  return __c4dos_call1((int *)__c4dos_api[C4DOS_SLOT_MKDIR], (int)path);
+}
+int dos_rmdir (char *path) {
+  if (!dos_v7(C4DOS_SLOT_RMDIR)) return 0 - 1;
+  return __c4dos_call1((int *)__c4dos_api[C4DOS_SLOT_RMDIR], (int)path);
 }

@@ -443,12 +443,38 @@ void grin_draw_now() {
 enum { FULL_LINE = 256 };
 static char full_cmd[FULL_LINE];
 static int full_queued;
+static char full_dir[FULL_LINE];      // "A:\GAMES\DOOM": where it runs, or ""
+static char full_back[FULL_LINE];     // ... and where that drive was
+
+// A program named by a path ("\GAMES\DOOM\DOOM", "A:/GAMES/DOOM/doom.c4r")
+// runs with its own directory current, as Program Manager's and File
+// Manager's did in Windows when an item gave no working directory: a
+// game finds its data beside it. The directory goes into full_dir, with
+// the program's drive; "" for a bare word.
+static void full_where(char *cmdline) {
+    int k, e;
+    while (*cmdline == ' ') ++cmdline;
+    e = 0 - 1;
+    k = 0;
+    while (cmdline[k] && cmdline[k] != ' ' && k < FULL_LINE - 1) {
+        if (cmdline[k] == '\\' || cmdline[k] == '/') e = k;
+        ++k;
+    }
+    full_dir[0] = 0;
+    if (e < 0) return;
+    k = 0;
+    if (cmdline[1] != ':') { full_dir[0] = 'A' + gd_drive(); full_dir[1] = ':'; k = 2; }
+    while (e > 0 && k < FULL_LINE - 2) { full_dir[k] = *cmdline; ++k; ++cmdline; --e; }
+    if (full_dir[k - 1] == ':') { full_dir[k] = '\\'; ++k; }
+    full_dir[k] = 0;
+}
 
 int grin_full_waiting() { return full_queued; }
 
 int grin_full(char *cmdline) {
     if (dos_refuse()) return 0 - 1;
     if (!ui_ncpy(full_cmd, cmdline, FULL_LINE)) return 0 - 1;
+    full_where(full_cmd);
     full_queued = 1;
     return 0;
 }
@@ -462,7 +488,15 @@ static void full_run() {
     gui_clear(0x000000);
     gui_show();
     gui_detach();
+    // in the program's directory, and back
+    full_back[0] = 0;
+    if (full_dir[0]) {
+        full_back[0] = full_dir[0]; full_back[1] = ':'; full_back[2] = 0;
+        ui_ncat(full_back, gd_getcwd(full_dir[0] - 'A'), FULL_LINE);
+        if (gd_chdir(full_dir) < 0) full_back[0] = 0;
+    }
     gd_exec(full_cmd);
+    if (full_back[0]) gd_chdir(full_back);
     // the display back, as main first took it
     if (!gui_attach(ring, RING, ini.sw, ini.sh)) printf("grin: the display refused the ring after %s\n", dos_busy_name);
     gui_events(EVENTS);
@@ -511,7 +545,7 @@ int main(int argc, char **argv) {
     apps_end();
     if (saver_active()) saver_stop();
     gui_clear(C_DARK);
-    gui_text2(wk.sw / 2 - 150, wk.sh / 2 - 10, 0xc0c0c0, 14, F_SANS, 0, "grin has ended. GRIN at A> starts it again.", 0 - 1);
+    gui_text2(wk.sw / 2 - 150, wk.sh / 2 - 10, 0xc0c0c0, 14, F_SANS, 0, "grin has ended. GRIN at the prompt starts it again.", 0 - 1);
     gui_show();
     gui_detach();
     free((char *)ring);

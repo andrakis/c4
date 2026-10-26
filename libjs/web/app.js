@@ -44,8 +44,8 @@ const SYSTEMS = {
   c4ke: { label: 'C4KE', image: `${IMAGES}/c4ke32.c4r`, disk: `${IMAGES}/disk`, argv: ['c4ke32.c4r'] },
   // C4DOS on the page's own disk (build-images.sh, libjs/images/dos):
   // its AUTOEXEC.BAT starts grin, the graphical shell (docs/grin-plan.md),
-  // whose File > Exit grin comes back to A>. The games are on it too, so
-  // WOLF3D, DOOM, TYRIAN or ROTT at the prompt plays them. Its CONFIG.SYS
+  // whose File > Exit grin comes back to the prompt. The games are on it
+  // too, each in its directory (\GAMES\DOOM: CD there, then DOOM). Its CONFIG.SYS
   // says DRIVES.SYS HOME=B:, so what is saved goes to B:, the store.
   c4dos: { label: 'C4DOS', image: `${LJIMAGES}/dos/c4dos32.c4r`, disk: `${LJIMAGES}/dos`, argv: ['c4dos32.c4r'], mhz: 400,
            persist: 'c4dos' },
@@ -58,28 +58,30 @@ const SYSTEMS = {
   // persist write there.
   'c4dos-ladder': { label: 'C4DOS Build Ladder', image: `${LJIMAGES}/ladder/c4dos32.c4r`, disk: `${LJIMAGES}/ladder`,
                     argv: ['c4dos32.c4r'], mhz: 400, mem: 128, persist: 'ladder' },
-  // The games with no operating system under them, from the same disk.
-  // libc's bare.c writes their saves and settings to drive 1, each game's
-  // own store, and reads it before the disk.
+  // The games with no operating system under them, from the games disk
+  // (build-images.sh, src/c4bb/images/games), which stays flat: a bare
+  // game opens its files from the root, where the page's C4DOS disk has
+  // directories. libc's bare.c writes their saves and settings to drive
+  // 1, each game's own store, and reads it before the disk.
   // Wolfenstein 3D with no operating system under it (games/wolf3d/plat-bare.c),
   // and on C4IX drawing on the display itself rather than in a window
   // (wolf3d --direct, like raycast -G). The game times itself against the
   // machine's clock, so these are paced, at a clock it can keep up with.
-  wolf3d: { label: 'Wolfenstein 3D (bare machine)', image: `${LJIMAGES}/dos/wolf3d.c4r`, disk: `${LJIMAGES}/dos`,
+  wolf3d: { label: 'Wolfenstein 3D (bare machine)', image: `${IMAGES}/games/wolf3d.c4r`, disk: `${IMAGES}/games`,
             argv: ['wolf3d.c4r'], mhz: 400, persist: 'wolf3d' },
   // ... and the registered game (games/wolf3d, wolf3d6), whose files are
   // the person's own: Uploads put them on the disk. Its saves (.WL6) sit
   // beside the shareware's (.WL1) in the one Wolfenstein store.
-  wolf3d6: { label: 'Wolfenstein 3D, registered (bare machine)', image: `${LJIMAGES}/dos/wolf3d6.c4r`,
-             disk: `${LJIMAGES}/dos`, argv: ['wolf3d6.c4r'], mhz: 400, persist: 'wolf3d' },
-  doom: { label: 'Doom (bare machine)', image: `${LJIMAGES}/dos/doom.c4r`, disk: `${LJIMAGES}/dos`,
+  wolf3d6: { label: 'Wolfenstein 3D, registered (bare machine)', image: `${IMAGES}/games/wolf3d6.c4r`,
+             disk: `${IMAGES}/games`, argv: ['wolf3d6.c4r'], mhz: 400, persist: 'wolf3d' },
+  doom: { label: 'Doom (bare machine)', image: `${IMAGES}/games/doom.c4r`, disk: `${IMAGES}/games`,
           argv: ['doom.c4r'], mhz: 400, persist: 'doom' },
   // OpenTyrian (games/tyrian), where Tyrian's data was there to put on
   // the disk (games/tyrian/data/README.md)
-  tyrian: { label: 'Tyrian (bare machine)', image: `${LJIMAGES}/dos/tyrian.c4r`, disk: `${LJIMAGES}/dos`,
+  tyrian: { label: 'Tyrian (bare machine)', image: `${IMAGES}/games/tyrian.c4r`, disk: `${IMAGES}/games`,
             argv: ['tyrian.c4r'], mhz: 400, persist: 'tyrian' },
   // Rise of the Triad (games/rott), the shareware episode
-  rott: { label: 'Rise of the Triad (bare machine)', image: `${LJIMAGES}/dos/rott.c4r`, disk: `${LJIMAGES}/dos`,
+  rott: { label: 'Rise of the Triad (bare machine)', image: `${IMAGES}/games/rott.c4r`, disk: `${IMAGES}/games`,
           argv: ['rott.c4r'], mhz: 400, persist: 'rott' },
   'wolf3d-c4ix': { label: 'Wolfenstein 3D (C4IX, direct)', image: `${IMAGES}/c4ix32.c4r`, disk: `${IMAGES}/disk`,
                    argv: ['c4ix32.c4r', '-e', 'persist -d 60 &', '-e', 'wolf3d --direct'], persist: 'c4ix', mhz: 400 },

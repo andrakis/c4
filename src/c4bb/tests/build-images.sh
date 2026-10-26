@@ -493,11 +493,22 @@ for g in $GAMES; do . $g/c4-images.sh c4ix; done
 # C4DOS too.
 GAMESDISK=$OUT/games
 GAMES_ON_DISK=
-rm -rf $OUT/wolf3d $GAMESDISK
+GAMEFILES=$OUT/.gamefiles
+rm -rf $OUT/wolf3d $GAMESDISK $GAMEFILES
+mkdir -p $GAMEFILES
 if [ -n "$GAMES" ] && ls .libc-bare/*.c4o > /dev/null 2>&1; then
     mkdir -p $GAMESDISK
     step "linking the games for the bare machine and C4DOS:"
-    for g in $GAMES; do . $g/c4-images.sh bare; done
+    # The games disk stays flat (the bare machine has no directories), but
+    # the page's C4DOS disks give each game a directory of its own
+    # (\GAMES\DOOM), so what each one put here is noted: $GAMEFILES/NAME.
+    for g in $GAMES; do
+        (cd $GAMESDISK && find . -type f | LC_ALL=C sort) > $GAMEFILES.before
+        . $g/c4-images.sh bare
+        (cd $GAMESDISK && find . -type f | LC_ALL=C sort) | LC_ALL=C comm -13 $GAMEFILES.before - | sed 's|^\./||' \
+            > $GAMEFILES/$(basename $g | tr a-z A-Z)
+    done
+    rm -f $GAMEFILES.before
     echo
 fi
 if [ -n "$GAMES_ON_DISK" ]; then
@@ -683,48 +694,87 @@ fi
 # > >> < and | work at A> and in grin's DOS Prompt windows, for c4cc
 # programs too (the machine's console tap). grin is linked whole with the
 # bare libc, as the games are, from the objects make grin-objs compiled.
+#
+# Both page disks are in directories (C4DOS's API v7, docs/c4dos-design.md
+# "Directories"): every directory has its own c4dos.dir, a subdirectory a
+# "NAME/" line in its parent's, made here by `listings`. lj_put puts a
+# file onto one of them at a path, linked where the filesystem allows;
+# games_put puts each game's files into GAMES/NAME.
+listings () {           # listings DIR: a c4dos.dir in every directory under DIR
+    (cd $1 && find . -type d | while read -r d; do
+        (cd "$d" && { ls -p | grep '/$' || true; ls -p | grep -v '/$' | grep -v '^manifest.json$\|^index.json$' || true; } > c4dos.dir)
+    done)
+}
+lj_put () {             # lj_put SRC DISK PATH
+    mkdir -p "$2/$(dirname "$3")"
+    rm -f "$2/$3"
+    ln "$1" "$2/$3" 2> /dev/null || cp "$1" "$2/$3"
+}
+game_of () {            # game_of PATH: the game that put PATH on the games disk, or nothing
+    for gf in $GAMEFILES/*; do
+        if [ -f "$gf" ] && grep -qxF "$1" "$gf"; then basename "$gf"; return 0; fi
+    done
+    return 0
+}
+games_put () {          # games_put DISK: each game's files into DISK/GAMES/NAME
+    for gf in $GAMEFILES/*; do
+        [ -f "$gf" ] || continue
+        while read -r f; do
+            if [ -f "$GAMESDISK/$f" ]; then lj_put "$GAMESDISK/$f" $1 "GAMES/$(basename $gf)/$f"; fi
+        done < $gf
+    done
+    return 0
+}
+# the games' directories, for APPEND: "\GAMES\DOOM;\GAMES\ROTT"
+games_dirs () {
+    for gf in $GAMEFILES/*; do if [ -s "$gf" ]; then printf '\\GAMES\\%s;' "$(basename $gf)"; fi; done | sed 's/;$//'
+}
+disk_indexes () {       # disk_indexes DISK: manifest.json and index.json, every file in every directory
+    (cd $1 && find . -type f -not -name manifest.json | sed 's|^\./||') | \
+        awk 'BEGIN{printf "["} NR>1{printf ","} {printf "\"%s\"", $0} END{print "]"}' > $1/manifest.json
+    (cd $1 && find . -type f -not -name manifest.json -not -name index.json -printf '%s %P\n' | sort -k2) | \
+        awk 'BEGIN{printf "["} NR>1{printf ","} {n=$0; sub(/^[0-9]+ /,"",n); printf "[\"%s\",%s]", n, $1} END{print "]"}' \
+        > $1/index.json
+}
+
 LJDOS=libjs/images/dos
 rm -rf $LJDOS
+# Its directories: GRIN (grin and its applications), BIN (DOS programs),
+# GAMES\NAME (each game and its data); at the root only C4DOS and its two
+# files. AUTOEXEC.BAT puts GRIN and BIN on the PATH.
 if ls .grin/*.c4o > /dev/null 2>&1 && ls .libc-bare/*.c4o > /dev/null 2>&1 && [ -f $OUT/c4dos32.c4r ]; then
     say "the page's C4DOS disk, booting into grin: $LJDOS"
-    mkdir -p $LJDOS
-    ./c4rlink32 .grin/*.c4o .libc-bare/libc-*.c4o -o $LJDOS/grin.c4r > /dev/null
+    mkdir -p $LJDOS/GRIN $LJDOS/BIN
+    ./c4rlink32 .grin/*.c4o .libc-bare/libc-*.c4o -o $LJDOS/GRIN/grin.c4r > /dev/null
     # its applications (docs/grin-plan.md 3.4): main, the kit's class, and
     # import.c in the kit's place; EXITKEY is test-grin's
     for app in clock calc notepad exitkey; do
         [ -f .grinapp/$app.c4o ] || continue
         kit=; [ -f .grinapp/wk-$app.c4o ] && kit=.grinapp/wk-$app.c4o
-        ./c4rlink32 .grinapp/$app.c4o $kit .grinapp/import.c4o .libc-bare/libc-*.c4o -o $LJDOS/$app.c4r > /dev/null
+        ./c4rlink32 .grinapp/$app.c4o $kit .grinapp/import.c4o .libc-bare/libc-*.c4o -o $LJDOS/GRIN/$app.c4r > /dev/null
     done
     # DOS programs for trying redirection with, and test-grin's: ASKLINE
     # (bare.c: reads a line through DOS), DOSFILT (a filter; -r is a plain
     # c4cc program's READ and printf, the tap's) and HELLO (c4cc's printf)
-    [ -f .grinapp/askline.c4o ] && ./c4rlink32 .grinapp/askline.c4o .libc-bare/libc-*.c4o -o $LJDOS/askline.c4r > /dev/null
-    $CC -o $LJDOS/dosfilt.c4r include/c4dos.h src/tests/dosfilt.c > /dev/null
-    cp $OUT/hello32.c4r $LJDOS/hello.c4r
+    [ -f .grinapp/askline.c4o ] && ./c4rlink32 .grinapp/askline.c4o .libc-bare/libc-*.c4o -o $LJDOS/BIN/askline.c4r > /dev/null
+    $CC -o $LJDOS/BIN/dosfilt.c4r include/c4dos.h src/tests/dosfilt.c > /dev/null
+    cp $OUT/hello32.c4r $LJDOS/BIN/hello.c4r
     cp $OUT/c4dos32.c4r $LJDOS/
-    if [ -d $GAMESDISK ]; then
-        (cd $GAMESDISK && find . -type f ! -name config.sys ! -name autoexec.bat ! -name c4dos.dir \
-            ! -name manifest.json ! -name index.json | sed 's|^\./||') | while read f; do
-            mkdir -p "$LJDOS/$(dirname "$f")"
-            ln "$GAMESDISK/$f" "$LJDOS/$f" 2> /dev/null || cp "$GAMESDISK/$f" "$LJDOS/$f"
-        done
-    fi
+    if [ -d $GAMESDISK ]; then games_put $LJDOS; fi
     sed 's/SIZE=[0-9]*/SIZE=16777216/' src/c4dos/fs/CONFIG.SYS > $LJDOS/config.sys
     printf 'DEVICE=CONSOLE.SYS FLUSH\nDEVICE=DRIVES.SYS HOME=B:\nDEVICE=HEAP.SYS\nDEVICE=REDIR.SYS TAP\n' >> $LJDOS/config.sys
     list=$(echo $GAMES_ON_DISK | sed 's/ /, /g')
     {
-        printf '@ECHO OFF\nECHO Welcome to C4DOS\nVER\n'
-        if [ -n "$list" ]; then printf 'ECHO The games on this disk: %s.\n' "$list"; fi
+        printf '@ECHO OFF\nECHO Welcome to C4DOS\nVER\nPATH \\GRIN;\\BIN\n'
+        if [ -n "$list" ]; then
+            printf 'ECHO The games on this disk, each in its directory in \\GAMES: %s.\n' "$list"
+            printf 'ECHO CD \\GAMES\\DOOM, then DOOM, plays Doom; CD \\ comes back.\n'
+        fi
         # (no > in an ECHO here: REDIR.SYS would take it for a redirection)
-        printf 'ECHO Starting grin: its File menu has Exit grin, back to the A prompt.\nGRIN\n'
+        printf 'ECHO Starting grin: its File menu has Exit grin, back to the prompt.\nGRIN\n'
     } > $LJDOS/autoexec.bat
-    (cd $LJDOS && ls -p | grep -v '/$' | grep -v '^manifest.json$' > c4dos.dir)
-    (cd $LJDOS && find . -type f -not -name manifest.json | sed 's|^\./||') | \
-        awk 'BEGIN{printf "["} NR>1{printf ","} {printf "\"%s\"", $0} END{print "]"}' > $LJDOS/manifest.json
-    (cd $LJDOS && find . -type f -not -name manifest.json -not -name index.json -printf '%s %P\n' | sort -k2) | \
-        awk 'BEGIN{printf "["} NR>1{printf ","} {n=$0; sub(/^[0-9]+ /,"",n); printf "[\"%s\",%s]", n, $1} END{print "]"}' \
-        > $LJDOS/index.json
+    listings $LJDOS
+    disk_indexes $LJDOS
 fi
 
 # c4sc, the compiled c4lc, so C4IX can rebuild itself: /usr's
@@ -962,20 +1012,48 @@ rm -rf $LJLAD
 if [ -n "$CLIMBSRC" ] && [ -f $LJDOS/c4dos32.c4r ]; then
     say "the page's ladder disk, C4DOS to C4KE to C4IX: $LJLAD"
     mkdir -p $LJLAD
-    lad_put () {            # lad_put DIR: DIR's files onto the ladder disk, over what is there
+    # Its directories, a file's by its name: GAMES\NAME (a game's files,
+    # as on the page's C4DOS disk), GRIN and BIN (the same), BUILD (the
+    # build kit: the batch files, the archives, the compilers and the tools
+    # BUILD, LADDER and IX run, c4lc's Lisp, b4ke and what it reads), C4IX
+    # (C4IX's userland and its tree, c4ix.vfs.txt), and C4KE (C4KE's: the
+    # rest of the shared disk and the climb floppy, its programs and their
+    # sources). src/ stays where it was: the nested c4m innerbench starts
+    # opens src/c4ke/c4ke.c by that path.
+    lad_dir () {
+        case "$1" in
+            # (the shared disk's tyrian/ is C4IX's: its hostdir(tyrian/))
+            tyrian/*) echo C4IX ;;
+            */*) g=$(game_of "$1"); if [ -n "$g" ]; then echo "GAMES/$g"; fi ;;
+            config.sys|autoexec.bat|c4dos32.c4r|ladder.txt) ;;
+            grin.c4r|clock.c4r|calc.c4r|notepad.c4r|exitkey.c4r) echo GRIN ;;
+            askline.c4r|dosfilt.c4r|hello.c4r) echo BIN ;;
+            c4ix-src.tar|c4ix.b4k|c4ix.objs|c4ix.lst) echo BUILD ;;
+            c4ix-*|c4ix.*|c4ix_user.h) echo C4IX ;;
+            *.bat|*.tar|*.lisp|*.b4k|*.lst|u0.h) echo BUILD ;;
+            cpp.c4r|c4cc.c4r|c4sp.c4r|c4sc.c4r|c4rlink.c4r|c4rdump.c4r|c4th.c4r) echo BUILD ;;
+            dostar.c4r|dosload.c4r|b4ke.c4r|kboot.c4r|tar.c4r|install.c4r|kinstall.c4r) echo BUILD ;;
+            bbsave.c4r|save.c4r|reboot.c4r) echo BUILD ;;
+            *) g=$(game_of "$1"); if [ -n "$g" ]; then echo "GAMES/$g"; else echo C4KE; fi ;;
+        esac
+    }
+    lad_put () {            # lad_put DIR: DIR's files onto the ladder disk, each in its directory, over what is there
         (cd $1 && find . -type f ! -name manifest.json ! -name index.json ! -name c4dos.dir \
-            ! -name config.sys ! -name autoexec.bat | sed 's|^\./||') | while read f; do
-            mkdir -p "$LJLAD/$(dirname "$f")"
-            rm -f "$LJLAD/$f"
-            ln "$1/$f" "$LJLAD/$f" 2> /dev/null || cp "$1/$f" "$LJLAD/$f"
+            ! -name config.sys ! -name autoexec.bat | sed 's|^\./||') | while read -r f; do
+            # a page disk's own directories are the ladder's too
+            case "$f" in
+                GRIN/*|BIN/*|GAMES/*) to=$f ;;
+                *) d=$(lad_dir "$f"); to=${d:+$d/}$f ;;
+            esac
+            lj_put "$1/$f" $LJLAD "$to"
         done
     }
     lad_put $DISK
     lad_put $CLIMBSRC
     lad_put $LJDOS
-    rm -f $LJLAD/c4ix.c4r $LJLAD/boot.cfg
-    cp $DISK/c4ix.vfs.txt $LJLAD/c4ix.vfs.txt
-    cp src/c4dos/fs/BUILD.BAT $LJLAD/build.bat
+    rm -f $LJLAD/C4IX/c4ix.c4r $LJLAD/C4KE/boot.cfg
+    cp $DISK/c4ix.vfs.txt $LJLAD/C4IX/c4ix.vfs.txt
+    cp src/c4dos/fs/BUILD.BAT $LJLAD/BUILD/build.bat
     cp src/c4dos/fs/LADDER.TXT $LJLAD/ladder.txt
     # the climb floppy's RAM disk (32 MB: LADDER and the kernel's sources),
     # and the page's devices: HEAP.SYS gives each rung's memory back when
@@ -988,19 +1066,21 @@ if [ -n "$CLIMBSRC" ] && [ -f $LJDOS/c4dos32.c4r ]; then
     list=$(echo $GAMES_ON_DISK | sed 's/ /, /g')
     {
         printf '@ECHO OFF\nECHO Welcome to C4DOS, the Build Ladder\nVER\n'
-        if [ -n "$list" ]; then printf 'ECHO The games on this disk: %s.\n' "$list"; fi
+        printf 'PATH \\BUILD;\\GRIN;\\BIN\n'
+        # C4KE and C4IX look for a file where they were started, as DOS
+        # did before it had directories; APPEND says where else to look,
+        # for them (the machine's DISK_DIRS) and for DOS
+        printf 'REM C4KE and C4IX find their files, and the games, through APPEND\n'
+        printf 'APPEND \\BUILD;\\C4KE;\\C4IX;%s\n' "$(games_dirs)"
+        if [ -n "$list" ]; then printf 'ECHO The games, in \\GAMES: %s.\n' "$list"; fi
         # (C4DOS splits a line into at most 15 words, so ECHO says 14; and
         # no > in an ECHO: REDIR.SYS would take it for a redirection)
         printf 'ECHO GRIN starts the graphical shell.\n'
         printf 'ECHO Climb: BUILD, then RUN dosload.c4r c4ke.c4r boots the kernel it built.\n'
         printf 'ECHO TYPE LADDER.TXT says every step, up to C4IX.\n'
     } > $LJLAD/autoexec.bat
-    (cd $LJLAD && ls -p | grep -v '/$' | grep -v '^manifest.json$' > c4dos.dir)
-    (cd $LJLAD && find . -type f -not -name manifest.json | sed 's|^\./||') | \
-        awk 'BEGIN{printf "["} NR>1{printf ","} {printf "\"%s\"", $0} END{print "]"}' > $LJLAD/manifest.json
-    (cd $LJLAD && find . -type f -not -name manifest.json -not -name index.json -printf '%s %P\n' | sort -k2) | \
-        awk 'BEGIN{printf "["} NR>1{printf ","} {n=$0; sub(/^[0-9]+ /,"",n); printf "[\"%s\",%s]", n, $1} END{print "]"}' \
-        > $LJLAD/index.json
+    listings $LJLAD
+    disk_indexes $LJLAD
     echo "c4bb: ladder disk: $LJLAD ($(find $LJLAD -type f | wc -l) files, $(du -sh $LJLAD | cut -f1))"
 else
     echo "c4bb: no ladder disk: it needs the climb floppy ('make c4dos-c4ix32') and $LJDOS" >&2

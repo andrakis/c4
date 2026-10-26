@@ -1,4 +1,7 @@
 @ECHO OFF
+REM At the root of the RAM disk: what is built there is what C4KE is
+REM handed when dosload boots it (its init.c4r, not a C4KE\INIT.C4R).
+CD \
 REM The bootstrap, inside the machine: the compiler on the disk builds
 REM a compiler from source, that one builds the preprocessor AND builds
 REM itself again (the two images must be the same size -- that is the

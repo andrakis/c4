@@ -125,6 +125,20 @@ export const CON_ADDR = 0x1d4;   // w: buffer address for CON_LEN and CON_IN
 export const CON_LEN  = 0x1d8;   // w: drain up to N -> r: bytes copied
 export const CON_IN   = 0x1dc;   // w: feed N bytes to fd 0 (-1: the keyboard) -> r: left
 const TAP_MAX = 16 << 20;        // held bytes past this are dropped (and counted)
+// Directories (C4DOS's CD and APPEND; docs/c4dos-design.md "Directories").
+// A drive's files are keyed by their paths from its root ("GAMES/DOOM/
+// doom.c4r"), and a name the machine is asked for that starts with a
+// slash ("A:/GAMES/DOOM/doom.c4r") is one of those. Any other is
+// relative: it is looked for in each directory of the drive's search
+// list, in order, and then at the root. DISK_DIRS is written the address
+// of that list for the selected drive -- "GAMES/DOOM;BUILD", the
+// directories from the root separated by ';', an empty one the root --
+// and reads back how many it holds. C4DOS writes it when its current
+// directory or APPEND changes; it opens every file of its own from the
+// root, so the list is for programs that know nothing of directories
+// (C4KE, C4IX's vfsload, a c4cc program's open()). A drive nobody has
+// told looks from the root, as before there were directories.
+export const DISK_DIRS = 0x1e0;  // w: list address -> r: directories in the selected drive's list
 
 // c4_info() capability bits (c4m.c:206)
 export const C4I_WHOWROTE = 0x1000;   // the provenance port is fitted
@@ -342,14 +356,22 @@ export class Devices {
     if (!media) return -1;
     const files = media.files;
     const clean = rest.startsWith('./') ? rest.slice(2) : rest;
-    let data = files.get(clean) ?? files.get(rest);
+    let data;
+    // "/GAMES/x" is from the root; "x" is looked for along the drive's
+    // search list (DISK_DIRS), then at the root
+    if (clean.startsWith('/')) data = files.get(clean.replace(/^\/+/, '')) ?? files.get(clean);
+    else {
+      for (const d of media.dirs || []) if ((data = files.get(d ? `${d}/${clean}` : clean))) break;
+      if (!data) data = files.get(clean) ?? files.get(rest);
+    }
     // The disk is flat, but ls/cat show the vfs.txt tree's hierarchical
     // paths (e.g. "/home/user/hello.c") since that's what ramfs holds -
     // real disk-I/O tools like c4cc never learned that vocabulary and
     // ask for the path verbatim. Falling back to the basename here,
     // once, transparently to every guest program, means "cat" showing
     // you a path is also a path you can hand to any other tool.
-    if (!data && rest.includes('/')) {
+    // (Not for C4DOS's "A:/DIR/NAME", which means that file and no other.)
+    if (!data && rest.includes('/') && !(rest !== name && rest.startsWith('/'))) {
       const base = rest.slice(rest.lastIndexOf('/') + 1);
       data = files.get(base);
     }
@@ -419,8 +441,18 @@ export class Devices {
     const media = this.drives[drv];
     if (!media || !media.writable || !media.sink) return -1;
     const fd = this.nextFd++;
-    this.fds.set(fd, { w: { media, name: rest, chunks: [], len: 0 } });
+    this.fds.set(fd, { w: { media, name: this.wPath(media, rest), chunks: [], len: 0 } });
     return fd;
+  }
+
+  // Where a name written or deleted is: "/x" from the root, any other in
+  // the first directory of the drive's search list (DISK_DIRS: the
+  // current directory C4DOS last told it), "./" or not.
+  wPath (media, rest) {
+    const clean = rest.startsWith('./') ? rest.slice(2) : rest;
+    if (clean.startsWith('/')) return clean.replace(/^\/+/, '');
+    const d = media.dirs && media.dirs[0];
+    return d ? `${d}/${clean}` : clean;
   }
 
   diskWrite (len) {
@@ -443,7 +475,7 @@ export class Devices {
     const { drv, rest } = this.resolveDrive(name);
     const media = this.drives[drv];
     if (!media || !media.writable || !media.sink) return -1;
-    const clean = rest.startsWith('./') ? rest.slice(2) : rest;
+    const clean = this.wPath(media, rest);
     if (!media.files.has(clean)) return -1;
     media.files.delete(clean);
     if (media.remove) { try { media.remove(clean); } catch { return -1; } }
@@ -560,6 +592,10 @@ export class Devices {
       case DISK_WLEN:    return this.diskResult | 0;
       case DISK_WCLOSE:  return this.diskResult | 0;
       case DISK_UNLINK:  return this.diskResult | 0;
+      case DISK_DIRS: {
+        const m = this.drives[this.drive];
+        return m && m.dirs ? m.dirs.length : 0;
+      }
       case CON_TAP:      return this.tapLen | 0;
       case CON_ADDR:     return this.tapAddr | 0;
       case CON_LEN:      return this.tapResult | 0;
@@ -643,6 +679,11 @@ export class Devices {
       case DISK_WLEN:   this.diskResult = this.diskWrite(val | 0); return;
       case DISK_WCLOSE: this.diskResult = this.diskWClose(val | 0); return;
       case DISK_UNLINK: this.diskResult = this.diskUnlink(val); return;
+      case DISK_DIRS: {
+        const m = this.drives[this.drive];
+        if (m) m.dirs = this.arena.cstring(val >>> 0, 1024).split(';');
+        return;
+      }
       case CON_TAP:  this.tapOn = (val | 0) ? 1 : 0; return;
       case CON_ADDR: this.tapAddr = val | 0; return;
       case CON_LEN:  this.tapResult = this.tapDrain(val | 0); return;

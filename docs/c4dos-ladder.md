@@ -17,20 +17,33 @@ At each prompt (the disk's `LADDER.TXT` says the same; `TYPE LADDER.TXT`):
 
 | at | type | what happens |
 |---|---|---|
-| `A>` | `DOOM`, `WOLF3D`, `TYRIAN`, `ROTT`, `GRIN` | play; HEAP.SYS gives a game's memory back when it quits |
-| `A>` | `BUILD` | C4KE and its init compiled onto the RAM disk (`LADDER` rebuilds the compiler first) |
-| `A>` | `RUN dosload.c4r c4ke.c4r` | boots the kernel just compiled, its RAM filesystem seeded from the RAM disk |
+| `A:\>` | `DOOM`, `WOLF3D`, `TYRIAN`, `ROTT`, `GRIN` | play; HEAP.SYS gives a game's memory back when it quits |
+| `A:\>` | `BUILD` | C4KE and its init compiled onto the RAM disk (`LADDER` rebuilds the compiler first) |
+| `A:\>` | `RUN dosload.c4r c4ke.c4r` | boots the kernel just compiled, its RAM filesystem seeded from the RAM disk |
 | `c4sh>` | `doom`, `wolf3d`, `rps`, `raycast` | play, as C4KE tasks |
 | `c4sh>` | `tar x c4ix-src.tar` | C4IX's sources into the RAM filesystem |
 | `c4sh>` | `b4ke -f c4ix.b4k` | twelve modules and a link: `c4ix.c4r` |
 | `c4sh>` | `kboot c4ix.c4r` | C4KE shuts down, and the C4IX it built boots (`kboot c4ix.c4r --desktop` for the desktop) |
 | `c4ix:/$` | `ls`, `ps`, `top`, `doom`, `desktop` | the system C4KE built |
-| `c4ix:/$` | `exit` | C4IX shuts down; C4KE returns, then dosload, to `A>` |
-| `c4sh>` | `exit` | C4KE shuts down, back to `A>` |
+| `c4ix:/$` | `exit` | C4IX shuts down; C4KE returns, then dosload, to `A:\>` |
+| `c4sh>` | `exit` | C4KE shuts down, back to `A:\>` |
+
+The disk is in directories (C4DOS's API v7, [c4dos-design.md](c4dos-design.md)
+"Directories"): `\GAMES\DOOM`, `\GAMES\WOLF3D`, `\GAMES\TYRIAN` and
+`\GAMES\ROTT` (each game and its data), `\BUILD` (the build kit),
+`\C4KE` and `\C4IX` (each system's programs; C4IX's tree,
+`c4ix.vfs.txt`, is in its), `\GRIN` and `\BIN`; at the root only C4DOS,
+its two files and `LADDER.TXT`. `AUTOEXEC.BAT` puts `\BUILD`, `\GRIN` and
+`\BIN` on the `PATH`, and the build kit, C4KE's, C4IX's and the games'
+directories on `APPEND`: that is how every command above still works
+from the root, and how C4KE and C4IX, which know nothing of directories,
+find what they open (DOS tells the machine, `DISK_DIRS`). `BUILD`,
+`LADDER` and `IX` begin with `CD \`, so what they compile is at the root
+of the RAM disk, where C4KE looks for it.
 
 The system's defaults are 128 MB and 400 MHz (paced). Drive 1 is kept in
 the browser under the store `ladder`, apart from every other system's
-([grin-plan.md](grin-plan.md) 3.8): `RUN bbsave.c4r B:` at `A>`, `save B:`
+([grin-plan.md](grin-plan.md) 3.8): `RUN bbsave.c4r B:` at `A:\>`, `save B:`
 in C4KE and C4IX's `persist` write there, and Reset Files forgets it.
 
 ## What each step costs
@@ -78,7 +91,8 @@ keeps the wall's (`?realtime`), so it says 89 too.
 ### The disk
 
 `build-images.sh` lays three disks over each other into
-`libjs/images/ladder` (hard links where it can):
+`libjs/images/ladder` (hard links where it can), each file into its
+directory by its name (`lad_dir`):
 
 1. **The shared disk** (`src/c4bb/images/disk`), for C4IX's userland and
    its tree, `c4ix.vfs.txt`. So the C4IX the machine builds comes up as
@@ -93,8 +107,8 @@ keeps the wall's (`?realtime`), so it says 89 too.
 Its own `CONFIG.SYS` (CLOCK, a 32 MB RAMDISK, CONSOLE FLUSH, DRIVES, HEAP,
 REDIR TAP; no `HOME=B:`, which would send what cpp and c4cc write to B:
 instead of the RAM disk C4KE is seeded from),
-`AUTOEXEC.BAT`, `BUILD.BAT`, `LADDER.TXT`, `c4dos.dir`, `index.json` and
-`manifest.json`. The prebuilt C4IX kernel is left out, so the one that
+`AUTOEXEC.BAT`, `BUILD.BAT`, `LADDER.TXT`, a `c4dos.dir` in every
+directory, `index.json` and `manifest.json`. The prebuilt C4IX kernel is left out, so the one that
 boots is the one b4ke linked. Like the climb disk beside it, the ladder
 disk is copied from the climb floppy, not built from it: `make
 c4dos-c4ix32` first, then `make c4bb-images` (build-images.sh says when

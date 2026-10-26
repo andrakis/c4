@@ -1,4 +1,7 @@
 @ECHO OFF
+REM At the root of the RAM disk: what is built there is what C4KE is
+REM handed when dosload boots it (its init.c4r, not a C4KE\INIT.C4R).
+CD \
 REM Build C4IX, inside the machine, with the compiled c4lc.
 REM
 REM Twelve modules and a link. Each module is one c4sc run: preprocess,

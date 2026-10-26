@@ -15,6 +15,13 @@ from source. On the breadboard, C4DOS builds C4KE, and C4KE builds C4IX.
 [`c4.c`](c4.c) itself is kept as upstream wrote it. The only changes are a
 portability shim and a little more `-d` debug output.
 
+**[Try it in your browser](https://andrakis.github.io/c4/libjs/web/).** The page boots C4IX's desktop on
+[libjs](libjs/). Its System menu also has C4KE, C4DOS with grin, and the
+shareware episodes of Wolfenstein 3D, Doom and Rise of the Triad.
+[`?cpus=4&parallel`](https://andrakis.github.io/c4/libjs/web/?cpus=4&parallel) gives C4IX four processors,
+each on a thread of its own. The [Code Explorer](https://andrakis.github.io/c4/libjs/web/explore.html) takes the
+images apart, instruction by instruction and line by line.
+
 
 c4m: an extended c4 that any c4 can run
 ---------------------------------------

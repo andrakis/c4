@@ -1,0 +1,59 @@
+# The c4m.js page on GitHub Pages: https://andrakis.github.io/c4/
+#
+# Builds the images (make c4bb-images) with Wolfenstein 3D, Doom and Rise
+# of the Triad, their shareware data fetched from their MIRRORS and checked
+# by SHA-256 (games/README.md), and publishes them with the page
+# (libjs/site.sh). Never Tyrian: its data may not be passed on, and
+# libjs/site.sh refuses a tree that has it.
+#
+# The repository's Settings > Pages has its source set to GitHub Actions.
+name: pages
+
+on:
+  push:
+    branches: [smp]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: the games, never Tyrian
+        # .gitmodules names them by ssh, which a runner has no key for
+        run: >
+          git -c url.https://github.com/.insteadOf=git@github.com:
+          submodule update --init --checkout games/wolf3d games/doom games/rott
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+      - name: tools the build uses
+        run: sudo apt-get install -y --no-install-recommends xxd zip
+      - name: the games' data
+        run: make wolf3d-data doom-data rott-data
+      - name: the images
+        run: make -j4 c4bb-images
+      - name: the site
+        run: sh libjs/site.sh _site
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}libjs/web/
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

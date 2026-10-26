@@ -59,6 +59,16 @@ always has the sound card; a browser lets it play only after the first key
 or click.
 `LIBJS_PORT=NNNN` moves it.
 
+On GitHub Pages, at https://andrakis.github.io/c4/libjs/web/: `.github/workflows/pages.yml` builds
+the images with Wolfenstein 3D, Doom and Rise of the Triad, their
+shareware data fetched from their `MIRRORS` (games/README.md), and
+`site.sh` lays the site out as the repo is, with the images in it. It
+refuses a tree with Tyrian, whose data may not be passed on. Pages
+cannot send COOP/COEP headers, so `coi.js` does. It is a service worker
+for `libjs/` that adds them to every response, and the page registers it
+and reloads once on the first visit. A server that sends them, such as
+`serve.mjs --isolate`, leaves it nothing to do.
+
 URL parameters (from `web/app.js`). The page's Configuration button shows them as a form, and OK reloads the page with the ones changed:
 
 | Parameter | Meaning |
@@ -72,6 +82,7 @@ URL parameters (from `web/app.js`). The page's Configuration button shows them a
 | `?realtime=0` | When the host cannot keep up with `?mhz`, the machine's clock slows with it. By default it keeps the wall's time (`worker.js`), so a game drops frames rather than playing in slow motion. |
 | `?mem=MB` | Arena size (default 64). |
 | `?shared=0` | Use the message path even when isolated. |
+| `?coi=0` | No service worker isolating the page (`coi.js`): unregisters it. |
 
 **Uploads** are files of the person's own: added with the Uploads button,
 or dropped on the page, kept in this browser (IndexedDB, as C4IX's
@@ -166,6 +177,8 @@ Neither is in `make test`.
 | `cli.js` | The Node runner. |
 | `c4r.js` | The Code Explorer's reader: a C4R image, object or library at either word size, every segment and symbol, decoded with the machine's own opcode table, operands resolved, cross-references both ways. |
 | `serve.mjs` | A static server for the repo root, with optional COOP/COEP headers, and a directory's listing as JSON with `?ls`. |
+| `coi.js` | The COOP/COEP headers from a service worker, where the server cannot send them (GitHub Pages). |
+| `site.sh` | The page, the sources and the images as a static site, for GitHub Pages. |
 | `web/` | The page: terminal on the left, display on the right. `explore.html`, the Code Explorer. |
 | [guest/](guest/README.md) | `gui.h` and `snd.h`, the display and sound card APIs for guest C, and their demos. |
 | `tests/` | `test-libjs.sh`, the unit tests, the CDP gate (`cdp.mjs`, `test-web.mjs`, `test-web-gui.mjs`), and `src/strc.c`. |

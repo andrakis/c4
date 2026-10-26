@@ -22,6 +22,7 @@
 //   ?mem=MB                      arena size (default 64)
 //   ?shared=0                    use the message display path even when the page
 //                                is cross-origin isolated (serve.mjs --isolate)
+//   ?coi=0                       no service worker to isolate the page (../coi.js)
 //
 // The Configuration button shows them all as a form (CONFIG below).
 //
@@ -30,6 +31,10 @@
 
 import { C4M } from '../page.js';
 import { MediaStore, indexedDbBackend } from '../../src/c4bb/web/store.js';
+
+// On a host that cannot isolate the page, coi.js reloads it once with a
+// service worker that does: nothing boots before that
+await globalThis.c4coi?.ready;
 
 const IMAGES = '../../src/c4bb/images';
 const LJIMAGES = '../images';          // the page's own disks (build-images.sh)
@@ -71,6 +76,18 @@ const SYSTEMS = {
   raycast: { label: 'Raycast 640x480 (bare machine)', image: `${IMAGES}/disk/raycast.c4r`, disk: null,
              argv: ['raycast.c4r', '31x31', '-G', '640x480'], unpaced: true },
 };
+
+// The games are optional (games/README.md): one not built here is not on
+// the games disk, and its system is left off the menu
+const onDisk = async d => {
+  try {
+    const r = await fetch(`${d}/index.json`);
+    return r.ok ? new Set((await r.json()).map(e => e[0])) : new Set();
+  } catch { return new Set(); }
+};
+const GAMES = await onDisk(`${IMAGES}/games`);
+for (const [k, s] of Object.entries(SYSTEMS))
+  if (s.disk === `${IMAGES}/games` && !GAMES.has(s.image.split('/').pop())) delete SYSTEMS[k];
 
 const $ = id => document.getElementById(id);
 const UPLOADS = 'uploads';   // the IndexedDB medium the Uploads are kept in (page.js)

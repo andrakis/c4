@@ -65,10 +65,31 @@ boot(vm, new Uint8Array(readFileSync(join(disk, 'c4dos32.c4r'))), ['c4dos32.c4r'
 let log = '';
 const text = () => { if (out.length) log += Buffer.from(out.splice(0)).toString('latin1'); return log; };
 let presents = 0, halted = false;
+// The strings on the display, as test-grin.mjs keeps them: a frame's
+// text, with a partial redraw replacing what its rectangles cover.
+let cur = [], frame = [], clip = null, partial = false, gen = 0;
+const within = (r, x, y) => x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h;
 const pump = () => {
   const w = gui.drain();
-  for (let i = 0; w && i < w.length; i += w[i]) if (w[i + 1] === CMD.PRESENT) presents++;
+  for (let i = 0; w && i < w.length; i += w[i]) {
+    const t = w[i + 1];
+    if (t === CMD.CLEAR) { cur = []; partial = false; }
+    if (t === CMD.CLIP) clip = { x: w[i + 2], y: w[i + 3], w: w[i + 4], h: w[i + 5] };
+    if (t === CMD.NOCLIP) clip = null;
+    if (t === CMD.RECT && partial) {
+      const r = { x: w[i + 2], y: w[i + 3], w: w[i + 4], h: w[i + 5] };
+      cur = cur.filter(s => s.gen === gen || !within(r, s.x, s.y) || (clip && !within(clip, s.x, s.y)));
+    }
+    if (t === CMD.TEXT2) {
+      const n = w[i + 8];
+      let s = '';
+      for (let k = 0; k < n; k++) s += String.fromCharCode((w[i + 9 + (k >> 2)] >>> ((k & 3) * 8)) & 0xff);
+      cur.push({ x: w[i + 2], y: w[i + 3], s, gen });
+    }
+    if (t === CMD.PRESENT) { frame = cur.slice(); presents++; gen++; partial = true; }
+  }
 };
+const shown = re => frame.filter(t => re.test(t.s.trimEnd()));
 const run = () => { if (vm.run(4e6) === STOP.HALT) halted = true; pump(); };
 // run until cond() or `secs` of wall time
 const until = (cond, secs) => {
@@ -135,6 +156,51 @@ check(doom('doom', KE), 'Doom under C4KE, played and quit back to c4sh', text().
 cost('Doom under C4KE');
 o = cmd('rps', /move/, 30) + cmd('q', KE, 30);
 check(/Your move/.test(o) && idle(KE), 'rps under C4KE', o);
+
+// grin as a C4KE task, beside a task that spins in the background: its
+// naps are C4KE's sleep (bare.c), so the other task keeps running, and its
+// DOS Prompt is a C4KE Prompt, whose lines run as tasks
+begin();
+const ev = e => { gui.event(e); for (let i = 0; i < 5; i++) run(); };
+const click = (x, y) => { ev({ kind: 'move', x, y, buttons: 0 }); ev({ kind: 'down', x, y, button: 0 }); ev({ kind: 'up', x, y, button: 0 }); };
+const typeIn = s => {
+  for (const c of s) {
+    const code = c === ' ' ? 32 : c === '&' ? 55 : c === '-' ? 189 : c.toUpperCase().charCodeAt(0);
+    ev({ kind: 'keydown', code, char: c.charCodeAt(0) }); ev({ kind: 'keyup', code, char: c.charCodeAt(0) });
+  }
+  ev({ kind: 'keydown', code: 13, char: 0 }); ev({ kind: 'keyup', code: 13, char: 0 });
+};
+const clickText = re => { const t = shown(re).pop(); if (t) click(t.x + 5, t.y + 5); return !!t; };
+// spin's row in the last ps the window shows: [pid, TIME in ms]
+const spinRow = () => {
+  const r = shown(/\bspin x$/).pop();
+  const m = r && /^\s*(\d+)\s+\d+\s+\S+\s+\S+\s+\d+\s+\S+\s+\S+\s+(\d+)/.exec(r.s);
+  return m ? [+m[1], +m[2]] : [0, -1];
+};
+vm.dev.pushInput('grin\n');
+check(until(() => shown(/^Program Manager$/).length && shown(/^DOS Prompt$/).length, 60), 'grin under C4KE: Program Manager', text().slice(-800));
+let item = shown(/^DOS Prompt$/).pop();
+if (item) { click(item.x + 5, item.y + 5); click(item.x + 5, item.y + 5); }
+check(until(() => shown(/^C4KE Prompt 1$/).length && shown(/^c4ke>$/).length, 30), 'its DOS Prompt is a C4KE Prompt', JSON.stringify(frame.map(t => t.s)));
+typeIn('spin x &');
+check(until(() => shown(/^\[\d+\] in the background/).length, 30), 'spin x & starts a task in the background', JSON.stringify(frame.map(t => t.s)));
+typeIn('ps');
+check(until(() => spinRow()[1] >= 0, 30), 'ps runs in the window as a task, and lists it', JSON.stringify(frame.map(t => t.s)));
+const [spinPid, ms0] = spinRow(), cy0 = vm.cycle;
+until(() => vm.cycle - cy0 > 800e6, 120);     // two seconds of machine time, grin idle
+typeIn('ps');
+until(() => spinRow()[1] > ms0, 30);
+const ms1 = spinRow()[1];
+check(ms1 - ms0 > 1000, `the background task ran on while grin waited (${ms1 - ms0} ms of 2000)`);
+typeIn(`kill ${spinPid} 9`);
+check(until(() => text().includes(`SIGKILL on pid ${spinPid}!`) || text().includes(`SIGKILL on pid.${spinPid},`), 30), 'kill PID 9 in the window ends it (the task or the kernel says so on the console)', text().slice(-400));
+typeIn('exit');
+check(until(() => !shown(/^C4KE Prompt 1$/).length, 30), 'EXIT closes the window');
+cost('grin under C4KE');
+clickText(/^File$/); until(() => shown(/^Exit grin\.\.\.$/).length, 10);
+clickText(/^Exit grin\.\.\.$/); until(() => shown(/^OK$/).length, 10);
+clickText(/^OK$/);
+check(until(() => idle(KE), 60), 'File > Exit grin: back at c4sh', text().slice(-500));
 
 if (!quick) {
   begin();

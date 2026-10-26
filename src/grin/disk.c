@@ -17,6 +17,7 @@
 #include "dospath.h"
 
 extern int *__c4dos_api;              // bare.c's: C4DOS's table
+extern int __c4ke_exit;               // bare.c's: set by C4KE's loader, when grin is a C4KE task
 
 enum { SLOT_VERSION = 5, SLOT_OPEN = 6, SLOT_READ = 7, SLOT_RCLOSE = 8, SLOT_COUNT = 9,
        SLOT_ENTNAME = 10, SLOT_ENTSIZE = 11, SLOT_UNLINK = 18, SLOT_EXEC = 19,
@@ -155,3 +156,41 @@ int wk_readdir(char *dir, int i, char *name) {
     ui_ncpy(name, rd_names + i * WK_NAME, WK_NAME);
     return 0;
 }
+
+// ---- under C4KE --------------------------------------------------------------
+//
+// grin also runs as a C4KE task (the Build Ladder, docs/c4dos-ladder.md),
+// with no DOS under it. A DOS Prompt there runs C4KE's programs as tasks
+// of their own, and shows what they print through the machine's console
+// tap (docs/c4dos-design.md "The console tap"): CON_TAP keeps what is
+// printed, CON_LEN copies it out, CON_IN feeds fd 0 a line.
+
+enum { OP_REQUEST_SYMBOL = 128, KE_PRIV_USER = 1,
+       CON_TAP = 0x1d0, CON_ADDR = 0x1d4, CON_LEN = 0x1d8, CON_IN = 0x1dc };
+static int op_start, op_running, op_kill;
+
+int gd_c4ke() { return !__c4dos_api && __c4ke_exit; }
+
+int gd_ke_start(int argc, char **argv) {
+    if (!op_start) op_start = __c4_opcode("OP_USER_START_C4R", OP_REQUEST_SYMBOL);
+    if (!op_start) return 0;
+    return __c4_opcode(KE_PRIV_USER, argv[0], argv, argc, op_start);
+}
+
+int gd_ke_running(int pid) {
+    if (!op_running) op_running = __c4_opcode("OP_KERN_TASK_RUNNING", OP_REQUEST_SYMBOL);
+    if (!op_running) return 0;
+    return __c4_opcode(pid, op_running);
+}
+
+// (arguments reversed: the kernel reads sp[1], the pid, first)
+int gd_ke_kill(int pid, int sig) {
+    if (!op_kill) op_kill = __c4_opcode("OP_USER_KILL", OP_REQUEST_SYMBOL);
+    if (!op_kill) return 0 - 1;
+    return __c4_opcode(sig, pid, op_kill);
+}
+
+void gd_tap(int on) { *(int *)CON_TAP = on; }
+int gd_tap_drain(char *buf, int n) { *(int *)CON_ADDR = (int)buf; *(int *)CON_LEN = n; return *(int *)CON_LEN; }
+void gd_tap_feed(char *buf, int n) { *(int *)CON_ADDR = (int)buf; *(int *)CON_IN = n; }
+int gd_tap_left() { return *(int *)CON_IN; }

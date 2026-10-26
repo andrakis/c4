@@ -218,6 +218,16 @@ else bad "c4ix /proc/uptime, moving"; echo "$out" | grep -E '^[0-9. ]+$|uptime' 
 if echo "$out" | grep -qE "^clock: moved [0-9]+ ms"; then ok "c4ix: c4 c4m.c has a clock"
 else bad "c4ix: c4 c4m.c has a clock"; echo "$out" | grep -E "clock|uptime" | head -4; fi
 
+# A nested C4KE asked for `bench` in C4IX's root, where /bench is C4IX's
+# own: its loader refuses an image with words left for a linker, names
+# what it wanted, and goes on to bench.c4r, C4KE's. It used to run
+# C4IX's, whose first call went to address 0, and spin in the ROM.
+out=$(printf 'c4m load-c4r.c -- c4ke bench\nexit\n' | \
+      timeout 300 $LIBJS -m 64 -c 4000000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
+if echo "$out" | grep -qF "lc4r: 'bench' needs 'ucycles'" && echo "$out" | grep -qF "Benchmark complete"; then
+    ok "c4ix: a nested C4KE refuses C4IX's bench and runs its own"
+else bad "c4ix: a nested C4KE refuses C4IX's bench and runs its own"; echo "$out" | grep -E 'lc4r|Benchmark|libjs' | head -5; fi
+
 # The root archive (c4ix-root.tgz, build-images.sh) unpacks in the
 # background as task 4, which "wait 4" blocks on. Then a file deep in
 # the tree must have its real content, and the libraries must be there.

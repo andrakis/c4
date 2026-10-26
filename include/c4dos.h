@@ -402,3 +402,17 @@ int dos_drives () {
   if (dos_version() < C4DOS_API_V5 || !__c4dos_api[C4DOS_SLOT_DRIVES] || !__c4dos_arm()) return 1;
   return __c4dos_call1((int *)__c4dos_api[C4DOS_SLOT_DRIVES], 0);
 }
+
+// ---- v6: redirection, and the prompt's drive -------------------------------
+//
+// With DEVICE=REDIR.SYS a command line takes > >> < and |; conwrite and
+// conread (16, 17) follow them, so a program that uses them is
+// redirected with nothing more to do (docs/c4dos-design.md
+// "Redirection"). The prompt's drive is DOS's, one for every caller: a
+// DOS Prompt window asks it after each line it runs.
+enum { C4DOS_API_V6 = 6 };
+enum { C4DOS_SLOT_DRIVE = 30 };   // drive() -> the drive the prompt is on, 0 = A:
+int dos_drive () {
+  if (dos_version() < C4DOS_API_V6 || !__c4dos_api[C4DOS_SLOT_DRIVE] || !__c4dos_arm()) return 0;
+  return __c4dos_call1((int *)__c4dos_api[C4DOS_SLOT_DRIVE], 0);
+}

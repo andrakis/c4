@@ -144,6 +144,9 @@ int g_drives;            // CONFIG.SYS said DEVICE=DRIVES.SYS
 int g_drive;             // the drive the prompt is on, 0 = A:
 int g_home;              // DRIVES.SYS HOME=: where files are written, or -1
 int g_quit;              // EXIT was typed
+int g_linelen;           // the length of the line parse_line last split
+int g_redir;             // CONFIG.SYS said DEVICE=REDIR.SYS: > >> < and |
+int g_tap;               // ... with TAP: the machine has the console tap
 
 // ---- drives ---------------------------------------------------------
 //
@@ -939,6 +942,264 @@ int file_unlink (char *name) {
   return 0 - 1;
 }
 
+// ---- the console (API v4 slots 16, 17 and 24) ----------------------------
+// A program linked with libc's bare.c writes fd 1 and 2 and reads fd 0
+// through these, so DOS decides where its console goes: the real one, a
+// sink a shell installed (grin's DOS Prompt windows), or a redirect file
+// (REDIR.SYS). DOS's own builtins print through here too (pf, below).
+// c4cc programs print with PRTF and never come here; the console tap
+// catches them where the machine has one (REDIR.SYS TAP).
+int g_sink_w;            // write(ctx, buf, n), or 0 for the console
+int g_sink_r;            // read(ctx, buf, n), or 0 for the console
+int g_sink_ctx;
+int g_sink_img;          // the program that installed the sink
+
+// Redirection's state, for the command running now. Each level of
+// redirection keeps the outer one's in its locals (run_seg), so a batch
+// file redirected as a whole can redirect its own lines.
+int g_out_h;             // output goes to this write handle, or -1
+char *g_in_data;         // input comes from these bytes (a whole file), or 0
+int g_in_len;
+int g_in_pos;
+
+// The console tap (src/c4bb/sim/devices.js; docs/c4dos-design.md "The
+// console tap"): while CON_TAP is 1 the machine keeps what PRTF, PUTC and
+// PUTS send in a buffer of its own instead of the UART, and DOS drains it
+// (CON_ADDR, CON_LEN) to wherever the console goes; CON_IN feeds fd-0
+// READs from a guest buffer, then end of input (-1: the keyboard again).
+// ANNOUNCED, never probed, by DEVICE=REDIR.SYS TAP: under native c4m
+// these addresses are nothing at all.
+enum { BB_CON_TAP = 0x1d0, BB_CON_ADDR = 0x1d4, BB_CON_LEN = 0x1d8, BB_CON_IN = 0x1dc };
+enum { TAPBUF = 1024 };
+int g_tapping;           // CON_TAP is 1
+int g_tap_said;          // "no tap here" has been said
+char *g_tapbuf;          // a drained piece
+
+enum { INBUFMAX = 4096 };
+
+// n bytes to the real console. %.*s a run at a time, which every printf
+// in the family takes (c4bb's firmware formatter does too), and a NUL,
+// which would end a run, on its own. With the tap capturing, it is let
+// go for these: they are meant for the console.
+int con_put (char *buf, int n) {
+  int i, j;
+  if (g_tapping) *(int *)BB_CON_TAP = 0;
+  i = 0;
+  while (i < n) {
+    j = i;
+    while (j < n && buf[j]) ++j;
+    if (j > i) printf("%.*s", j - i, buf + i);
+    if (j < n) { printf("%c", 0); ++j; }
+    i = j;
+  }
+  if (g_tapping) *(int *)BB_CON_TAP = 1;
+  return n;
+}
+
+// Up to n bytes of the real console, a line at a time: what is buffered
+// up to and including the next newline, waiting for one if need be; at
+// end of input whatever is left, and then 0. The same buffer the prompt
+// reads, so a line typed ahead of a program is the program's -- before,
+// a program reading fd 0 itself missed whatever DOS had already read.
+int con_get (char *buf, int n) {
+  int i, k, got;
+  if (n <= 0) return 0;
+  got = 0 - 1;
+  while (got < 0) {
+    i = g_inpos;
+    while (i < g_inlen && g_inbuf[i] != 10) ++i;
+    if (i < g_inlen) got = i + 1 - g_inpos;
+    else {
+      k = g_inlen - g_inpos;
+      i = 0;
+      while (i < k) { g_inbuf[i] = g_inbuf[g_inpos + i]; ++i; }
+      g_inlen = k;
+      g_inpos = 0;
+      if (g_inlen >= INBUFMAX) got = g_inlen;     // a line longer than the buffer
+      else {
+        k = read(0, g_inbuf + g_inlen, INBUFMAX - g_inlen);
+        if (k <= 0) got = g_inlen;                // end of input
+        else g_inlen = g_inlen + k;
+      }
+    }
+  }
+  if (got > n) got = n;
+  i = 0;
+  while (i < got) { buf[i] = g_inbuf[g_inpos + i]; ++i; }
+  g_inpos = g_inpos + got;
+  return got;
+}
+
+// A sink is called as the program that installed it: a program it loads
+// is that program's child (grin starting Clock while a DOS Prompt's
+// program waits for a line), not the child of whichever program DOS was
+// running when it asked for input.
+int sink_call (int f, char *buf, int n) {
+  int oldimg, r;
+  oldimg = g_cur_img;
+  g_cur_img = g_sink_img;
+  r = invoke3((int *)f, g_sink_ctx, (int)buf, n);
+  g_cur_img = oldimg;
+  return r;
+}
+
+// n bytes where the console goes now: a redirect file, a shell's sink,
+// or the console itself. A file grows in DOS's generation: it is DOS's.
+int out_put (char *buf, int n) {
+  int g;
+  if (g_out_h >= 0) {
+    g = gen_dos();
+    file_write(g_out_h, buf, n);
+    gen_set(g);
+    return n;
+  }
+  if (g_sink_w) return sink_call(g_sink_w, buf, n);
+  return con_put(buf, n);
+}
+
+// What the tap holds, to where the console goes now. Called before
+// anything else is written there, so that the order is kept, and when a
+// level of redirection ends, so that what it caught goes into its file.
+int tap_drain () {
+  int n, going;
+  if (!g_tapping) return 0;
+  going = 1;
+  while (going) {
+    *(int *)BB_CON_ADDR = (int)g_tapbuf;
+    *(int *)BB_CON_LEN = TAPBUF;
+    n = *(int *)BB_CON_LEN;
+    if (n <= 0) going = 0;
+    else out_put(g_tapbuf, n);
+  }
+  return 0;
+}
+
+// The tap made to match the state: capturing while the console goes
+// anywhere but the console; fd 0 fed from the input file, or nothing at
+// all under a sink (a c4cc program in a DOS Prompt window reads end of
+// input rather than the page's keyboard), or else the keyboard.
+int tap_set () {
+  if (!g_tap) return 0;
+  g_tapping = (g_out_h >= 0 || g_sink_w) ? 1 : 0;   // (c4's || gives an operand, not 1)
+  *(int *)BB_CON_TAP = g_tapping;
+  if (g_in_data) {
+    *(int *)BB_CON_ADDR = (int)(g_in_data + g_in_pos);
+    *(int *)BB_CON_IN = g_in_len - g_in_pos;
+  } else if (g_sink_w) {
+    *(int *)BB_CON_ADDR = (int)g_tapbuf;
+    *(int *)BB_CON_IN = 0;
+  } else *(int *)BB_CON_IN = 0 - 1;
+  return 0;
+}
+
+int dos_api_conwrite (char *buf, int n) {
+  if (n <= 0) return 0;
+  tap_drain();
+  return out_put(buf, n);
+}
+// At most a line: from the input file (<), the sink, or the console. A
+// prompt the program printed for itself goes out first.
+int dos_api_conread (char *buf, int n) {
+  int i, k;
+  tap_drain();
+  if (g_in_data) {
+    i = 0;
+    while (g_in_pos < g_in_len && i < n) {
+      k = g_in_data[g_in_pos];
+      buf[i] = k;
+      ++i;
+      ++g_in_pos;
+      if (k == 10) return i;
+    }
+    return i;
+  }
+  if (g_sink_r) return sink_call(g_sink_r, buf, n);
+  return con_get(buf, n);
+}
+// Point the console at a caller's functions; 0 for either gives that
+// direction back to DOS. They are called as f(ctx, buf, n) and return
+// what write() and read() would.
+int dos_api_sink (int w, int r, int ctx) {
+  tap_drain();
+  g_sink_w = w;
+  g_sink_r = r;
+  g_sink_ctx = ctx;
+  g_sink_img = g_cur_img;
+  tap_set();
+  return 0;
+}
+
+// ---- the formatter ---------------------------------------------------------
+// printf goes straight to the console, so DOS's own words -- the
+// builtins, their errors, a batch file's echo -- are formatted here and
+// go through conwrite, where redirection and a shell's sink catch them.
+// pf takes a format and exactly three arguments (plain c4 has no varargs
+// of its own): %d, %s, %c, %% and %.Nd, a number of at least N digits.
+enum { PFMAX = 512 };
+char *g_pfbuf;
+int g_pfn;
+char *g_pfdig;
+
+int pf_flush () {
+  int n;
+  n = g_pfn;
+  g_pfn = 0;
+  if (n > 0) dos_api_conwrite(g_pfbuf, n);
+  return 0;
+}
+int pf_put (int c) {
+  if (g_pfn >= PFMAX) pf_flush();
+  g_pfbuf[g_pfn] = c;
+  ++g_pfn;
+  return 0;
+}
+int pf_num (int v, int digits) {
+  int n;
+  if (v < 0) { pf_put('-'); v = 0 - v; }
+  n = 0;
+  g_pfdig[n] = '0' + v % 10; v = v / 10; ++n;
+  while (v > 0) { g_pfdig[n] = '0' + v % 10; v = v / 10; ++n; }
+  while (n < digits && n < 20) { g_pfdig[n] = '0'; ++n; }
+  while (n > 0) { --n; pf_put(g_pfdig[n]); }
+  return 0;
+}
+int pf (char *fmt, int a, int b, int c) {
+  int k, v, digits;
+  char *s;
+  k = 0;
+  while (*fmt) {
+    if (*fmt != '%') { pf_put(*fmt); ++fmt; }
+    else {
+      ++fmt;
+      digits = 0;
+      if (*fmt == '.') {
+        ++fmt;
+        while (*fmt >= '0' && *fmt <= '9') { digits = digits * 10 + *fmt - '0'; ++fmt; }
+      }
+      if (*fmt == '%') pf_put('%');
+      else if (*fmt) {
+        v = k == 0 ? a : (k == 1 ? b : c);
+        ++k;
+        if (*fmt == 'd') pf_num(v, digits);
+        else if (*fmt == 'c') pf_put(v);
+        else if (*fmt == 's') {
+          s = (char *)v;
+          if (!s) s = "(null)";
+          while (*s) { pf_put(*s); ++s; }
+        }
+      }
+      if (*fmt) ++fmt;
+    }
+  }
+  pf_flush();
+  return 0;
+}
+// n bytes as they are
+int pf_n (char *s, int n) {
+  if (n > 0) { tap_drain(); out_put(s, n); }
+  return 0;
+}
+
 // The image's code and data are allocated in generation `gen`, the
 // program's own, so that releasing it takes them too; the scratch, which
 // is DOS's, is not.
@@ -956,15 +1217,15 @@ int c4r_load (char *path, int *api, int gen) {
   while (total < BUF_MAX && (n = dos_read(fd, g_scratch + total, BUF_MAX - total < 65536 ? BUF_MAX - total : 65536)) > 0)
     total = total + n;
   dos_close(fd);
-  if (total < 13) { printf("c4dos: %s is not a program\n", path); return 0; }
+  if (total < 13) { pf("c4dos: %s is not a program\n", (int)path, 0, 0); return 0; }
 
   p = g_scratch;
   if (!(p[0] == 'C' && p[1] == '4' && p[2] == 'R')) {
-    printf("c4dos: bad signature in %s\n", path);
+    pf("c4dos: bad signature in %s\n", (int)path, 0, 0);
     return 0;
   }
   if (p[4] / 8 != sizeof(int)) {
-    printf("c4dos: %d-bit image, this machine is %d-bit\n", p[4], sizeof(int) * 8);
+    pf("c4dos: %d-bit image, this machine is %d-bit\n", p[4], sizeof(int) * 8, 0);
     return 0;
   }
   memsz = 0;
@@ -1138,7 +1399,7 @@ int img_load (char *path) {
   g_refused = 0;
   g = gen_dos();
   p = 0;
-  if ((slot = img_find(0)) < 0) printf("c4dos: %d programs loaded, no room for another\n", IMGMAX);
+  if ((slot = img_find(0)) < 0) pf("c4dos: %d programs loaded, no room for another\n", IMGMAX, 0, 0);
   else if (!(p = malloc(H_WORDS * sizeof(int)))) printf("c4dos: out of memory\n");
   if (p) {
     memset(p, 0, H_WORDS * sizeof(int));
@@ -1224,6 +1485,13 @@ int img_unload (int h) {
 
 int run_program (char *path, int argc, char **argv) {
   int h, r;
+  // Redirected, with no tap: a program that prints for itself (c4cc's
+  // printf) still prints on the console. Said once, on the console,
+  // where that output is going to appear.
+  if (g_redir && !g_tap && !g_tap_said && (g_out_h >= 0 || g_sink_w || g_in_data)) {
+    g_tap_said = 1;
+    printf("c4dos: this machine has no console tap (REDIR.SYS TAP), so what a program prints for itself stays on the console\n");
+  }
   if (!(h = img_load(path))) {
     if (g_refused) return C4DOS_REFUSE;
     return 0 - 1;
@@ -1236,7 +1504,6 @@ int run_program (char *path, int argc, char **argv) {
 // ---- files ---------------------------------------------------------------
 
 // Pull ONE line from the console into g_line. Returns 0 on EOF.
-enum { INBUFMAX = 4096 };
 int get_line () {
   int i, n, got;
   memset(g_line, 0, LINEMAX);
@@ -1277,120 +1544,52 @@ int get_line () {
   return 1;
 }
 
-// ---- the console (API v4 slots 16, 17 and 24) ----------------------------
-// A program linked with libc's bare.c writes fd 1 and 2 and reads fd 0
-// through these, so DOS decides where its console goes: the real one, or
-// a sink a shell installed (grin's DOS Prompt windows), and in time a
-// redirect file (REDIR.SYS, a later milestone). c4cc programs print with
-// PRTF and never come here.
-int g_sink_w;            // write(ctx, buf, n), or 0 for the console
-int g_sink_r;            // read(ctx, buf, n), or 0 for the console
-int g_sink_ctx;
-
-// n bytes to the real console. %.*s a run at a time, which every printf
-// in the family takes (c4bb's firmware formatter does too), and a NUL,
-// which would end a run, on its own.
-int con_put (char *buf, int n) {
-  int i, j;
-  i = 0;
-  while (i < n) {
-    j = i;
-    while (j < n && buf[j]) ++j;
-    if (j > i) printf("%.*s", j - i, buf + i);
-    if (j < n) { printf("%c", 0); ++j; }
-    i = j;
-  }
-  return n;
-}
-
-// Up to n bytes of the real console, a line at a time: what is buffered
-// up to and including the next newline, waiting for one if need be; at
-// end of input whatever is left, and then 0. The same buffer the prompt
-// reads, so a line typed ahead of a program is the program's -- before,
-// a program reading fd 0 itself missed whatever DOS had already read.
-int con_get (char *buf, int n) {
-  int i, k, got;
-  if (n <= 0) return 0;
-  got = 0 - 1;
-  while (got < 0) {
-    i = g_inpos;
-    while (i < g_inlen && g_inbuf[i] != 10) ++i;
-    if (i < g_inlen) got = i + 1 - g_inpos;
-    else {
-      k = g_inlen - g_inpos;
-      i = 0;
-      while (i < k) { g_inbuf[i] = g_inbuf[g_inpos + i]; ++i; }
-      g_inlen = k;
-      g_inpos = 0;
-      if (g_inlen >= INBUFMAX) got = g_inlen;     // a line longer than the buffer
-      else {
-        k = read(0, g_inbuf + g_inlen, INBUFMAX - g_inlen);
-        if (k <= 0) got = g_inlen;                // end of input
-        else g_inlen = g_inlen + k;
-      }
-    }
-  }
-  if (got > n) got = n;
-  i = 0;
-  while (i < got) { buf[i] = g_inbuf[g_inpos + i]; ++i; }
-  g_inpos = g_inpos + got;
-  return got;
-}
-
-int dos_api_conwrite (char *buf, int n) {
-  if (n <= 0) return 0;
-  if (g_sink_w) return invoke3((int *)g_sink_w, g_sink_ctx, (int)buf, n);
-  return con_put(buf, n);
-}
-int dos_api_conread (char *buf, int n) {
-  if (g_sink_r) return invoke3((int *)g_sink_r, g_sink_ctx, (int)buf, n);
-  return con_get(buf, n);
-}
-// Point the console at a caller's functions; 0 for either gives that
-// direction back to DOS. They are called as f(ctx, buf, n) and return
-// what write() and read() would.
-int dos_api_sink (int w, int r, int ctx) {
-  g_sink_w = w;
-  g_sink_r = r;
-  g_sink_ctx = ctx;
-  return 0;
-}
-
-// Wait for the user before the next screenful. get_line() is exactly
-// the right reader here: it already understands that one read(0, ...)
-// may carry several lines, so a pause consumes ONE line and leaves the
-// rest of a piped script for the prompt to run. EOF stops the paging
-// rather than the file -- a script that piped no answer still wants
-// the whole thing typed.
+// Wait for the user before the next screenful: one line of input,
+// through conread, so that a DOS Prompt window's Enter answers it and a
+// piped script's next line does (con_get, like the prompt's reader,
+// knows that one read(0, ...) may carry several lines, and takes ONE).
+// EOF stops the paging rather than the file -- a script that piped no
+// answer still wants the whole thing typed.
+char *g_morebuf;
 int type_more () {
-  printf("-- More --");
-  if (!g_conflush) printf("\n");
-  if (!get_line()) return 0;
+  pf(g_conflush || g_sink_w ? "-- More --" : "-- More --\n", 0, 0, 0);
+  if (dos_api_conread(g_morebuf, LINEMAX) <= 0) return 0;
   return 1;
 }
 
 // print a file to the console; returns 1 if it existed.
-// page = lines per screenful, 0 for no paging.
+// page = lines per screenful, 0 for no paging (and none into a file).
+// A buffer of its own rather than the scratch: a pause waits in a DOS
+// Prompt window's sink, where grin may load a program meanwhile.
 int type_file (char *path, int page) {
-  int fd, n, i, lines;
-  if (!scratch_need()) return 0;
+  int fd, n, i, start, lines, g;
+  char *buf;
   if ((fd = dos_open(path)) < 0) return 0;
+  g = gen_dos();
+  buf = malloc(4096);
+  gen_set(g);
+  if (!buf) { dos_close(fd); printf("c4dos: out of memory\n"); return 1; }
+  if (g_out_h >= 0) page = 0;
   lines = 0;
-  while ((n = dos_read(fd, g_scratch, 4096)) > 0) {
+  while ((n = dos_read(fd, buf, 4096)) > 0) {
     i = 0;
+    start = 0;
     while (i < n) {
-      printf("%c", g_scratch[i]);
-      if (page && g_scratch[i] == 10) {
+      if (page && buf[i] == 10) {
         ++lines;
         if (lines >= page) {
+          pf_n(buf + start, i + 1 - start);
+          start = i + 1;
           lines = 0;
           if (!type_more()) page = 0;   // EOF: type the rest straight out
         }
       }
       ++i;
     }
+    pf_n(buf + start, n - start);
   }
   dos_close(fd);
+  free(buf);
   return 1;
 }
 
@@ -1398,8 +1597,8 @@ int type_file (char *path, int page) {
 // ---- builtins ------------------------------------------------------------
 
 int cmd_ver () {
-  printf("C4DOS version %d.%d\n", VER_MAJOR, VER_MINOR);
-  printf("the operating system before operating systems\n");
+  pf("C4DOS version %d.%d\n", VER_MAJOR, VER_MINOR, 0);
+  pf("the operating system before operating systems\n", 0, 0, 0);
   return 0;
 }
 
@@ -1407,24 +1606,37 @@ int cmd_ver () {
 // gives us), so DIR reads the disk's manifest file - the same move
 // the c4bb web app makes with manifest.json. An honest limitation:
 // early machines listed what the label said.
+// a pipe's temporary file (RAM:PIPEn.$$$), which DIR leaves out: it is
+// the pipe's, not the person's, and DIR | x would list it while it is
+// being written
+int is_pipe_file (char *s) {
+  int n;
+  n = xlen(s);
+  return n > 4 && s[n - 4] == '.' && s[n - 3] == '$' && s[n - 2] == '$' && s[n - 1] == '$';
+}
+
 int cmd_dir (char *drive, int page) {
   int i, n;
   // DIR B: lists B:'s c4dos.dir, and only that
   if (drive && g_drives && (n = drv_num(drive)) >= 0) {
-    if (n >= drv_count()) { printf("no drive %c: - this machine has %d\n", drv_letter(n), drv_count()); return 1; }
-    if (!type_file(dir_name(n), page)) printf("no c4dos.dir on %c: - nothing has been written there\n", drv_letter(n));
+    if (n >= drv_count()) { pf("no drive %c: - this machine has %d\n", drv_letter(n), drv_count(), 0); return 1; }
+    if (!type_file(dir_name(n), page)) pf("no c4dos.dir on %c: - nothing has been written there\n", drv_letter(n), 0, 0);
     return 0;
   }
-  if (!type_file("c4dos.dir", page))
-    printf("no c4dos.dir on this disk - the raw disk has no directory service\n");
+  // the prompt's drive's listing, by name: a plain "c4dos.dir" would be
+  // the home drive's (dos_open looks there first)
+  if (!type_file(g_drives ? dir_name(g_drive) : "c4dos.dir", page))
+    pf("no c4dos.dir on this disk - the raw disk has no directory service\n", 0, 0, 0);
   if (g_ramdisk) {
     i = 0;
+    n = 0;
     while (i < g_ram_n) {
-      printf("%s  <ram> %d bytes\n", (char *)g_ram_name[i], g_ram_len[i]);
+      if (is_pipe_file((char *)g_ram_name[i])) ++n;
+      else pf("%s  <ram> %d bytes\n", g_ram_name[i], g_ram_len[i], 0);
       ++i;
     }
-    printf("ramdisk: %d of %d bytes used, %d file(s)\n",
-           g_ram_used, g_ram_budget, g_ram_n);
+    pf("ramdisk: %d of %d bytes used, %d file(s)\n",
+           g_ram_used, g_ram_budget, g_ram_n - n);
   }
   return 0;
 }
@@ -1460,9 +1672,9 @@ char *first_operand (int argc, char **argv) {
 int cmd_type (int argc, char **argv) {
   char *path;
   path = first_operand(argc, argv);
-  if (!path || !*path) { printf("usage: TYPE file [/P]\n"); return 1; }
+  if (!path || !*path) { pf("usage: TYPE file [/P]\n", 0, 0, 0); return 1; }
   if (!type_file(path, page_switch(argc, argv))) {
-    printf("file not found: %s\n", path);
+    pf("file not found: %s\n", (int)path, 0, 0);
     return 1;
   }
   return 0;
@@ -1488,17 +1700,18 @@ int cmd_time () {
 #if C4DOS_CLOCK
   int ms, s, m, h;
   if (!g_clock) {
-    printf("no clock device - add DEVICE=CLOCK.SYS to CONFIG.SYS\n");
+    pf("no clock device - add DEVICE=CLOCK.SYS to CONFIG.SYS\n", 0, 0, 0);
     return 1;
   }
   ms = __time();
   s = ms / 1000; ms = ms % 1000;
   m = s / 60; s = s % 60;
   h = m / 60; m = m % 60;
-  printf("uptime %d:%.2d:%.2d.%.3d\n", h, m, s, ms);
+  pf("uptime %d:%.2d:%.2d", h, m, s);
+  pf(".%.3d\n", ms, 0, 0);
   return 0;
 #else
-  printf("this build has no clock hardware support\n");
+  pf("this build has no clock hardware support\n", 0, 0, 0);
   return 1;
 #endif
 }
@@ -1506,8 +1719,8 @@ int cmd_time () {
 int cmd_mem () {
   int used, total, i, n;
   // no meminfo primitive; report what DOS knows it holds
-  printf("resident: C4DOS shell, %d byte scratch, %d byte line buffer\n",
-         BUF_MAX, LINEMAX);
+  pf("resident: C4DOS shell, %d byte scratch, %d byte line buffer\n",
+         BUF_MAX, LINEMAX, 0);
   // ...unless HEAP.SYS said where the heap's books are. The machine
   // that has the generation registers has these three beside them.
   if (g_heapgen) {
@@ -1516,8 +1729,8 @@ int cmd_mem () {
     n = 0;
     i = 0;
     while (i < IMGMAX) { if (g_imgs[i]) ++n; ++i; }
-    printf("heap: %d bytes free of %d, %d in use\n", total - used, total, used);
-    printf("programs loaded: %d\n", n);
+    pf("heap: %d bytes free of %d, %d in use\n", total - used, total, used);
+    pf("programs loaded: %d\n", n, 0, 0);
   }
   return 0;
 }
@@ -1528,6 +1741,7 @@ int cmd_mem () {
 int parse_line () {
   char *p; int argc;
   p = g_line;
+  g_linelen = xlen(g_line);
   argc = 0;
   while (*p && argc < ARGVMAX - 1) {
     while (*p == ' ' || *p == 9) ++p;
@@ -1584,6 +1798,8 @@ int dos_api_rclose (int fd) { return dos_close(fd); }
 int dos_api_unlink (char *name) { return file_unlink(name); }
 // v5: where files go, and how many drives there are (grin's File Manager)
 int dos_api_home () { return g_home; }
+// v6: the drive the prompt is on, 0 = A: (a DOS Prompt window's prompt)
+int dos_api_drive () { return g_drive; }
 int dos_api_drives () { return drv_count(); }
 int dos_api_load (char *path) { return img_load(path); }
 int dos_api_start (int h, int argc, char **argv) { return img_start(h, argc, argv); }
@@ -1673,17 +1889,17 @@ int dos_api_release () {
 }
 
 // COPY src dst -- the one builtin that WRITES, and the demonstration
-// that the RAM disk works. There is no '>' redirection on this system
-// by decision (docs/c4dos-design.md); a tool that wants to produce a
-// file does it directly, and this is the smallest thing that does. dst
+// that the RAM disk works. '>' came later, and only with REDIR.SYS
+// (docs/c4dos-design.md "Redirection"); without it a tool that wants to
+// produce a file does it directly, and this is the smallest thing that does. dst
 // goes where create puts it (file_create): B:NAME onto B:, a plain name
 // onto the home drive or the RAM disk. A bare drive, "COPY X B:", keeps
 // the name.
 char *g_copybuf;         // a bare drive and the source's name
 int cmd_copy (char *src, char *dst) {
   int fd, n, total, h, i, k;
-  if (!src || !dst || !*src || !*dst) { printf("usage: COPY src dst\n"); return 1; }
-  if (!g_ramdisk && g_home < 0 && drv_prefix(dst) < 0) { printf("no ramdisk - add DEVICE=RAMDISK.SYS to CONFIG.SYS\n"); return 1; }
+  if (!src || !dst || !*src || !*dst) { pf("usage: COPY src dst\n", 0, 0, 0); return 1; }
+  if (!g_ramdisk && g_home < 0 && drv_prefix(dst) < 0) { pf("no ramdisk - add DEVICE=RAMDISK.SYS to CONFIG.SYS\n", 0, 0, 0); return 1; }
   if (drv_num(dst) >= 0 || cieq(dst, "RAM:")) {
     k = 0;
     while (dst[k]) { g_copybuf[k] = dst[k]; ++k; }
@@ -1694,15 +1910,15 @@ int cmd_copy (char *src, char *dst) {
     dst = g_copybuf;
   }
   if (!scratch_need()) return 1;
-  if ((fd = dos_open(src)) < 0) { printf("file not found: %s\n", src); return 1; }
+  if ((fd = dos_open(src)) < 0) { pf("file not found: %s\n", (int)src, 0, 0); return 1; }
   total = 0;
   while (total < BUF_MAX && (n = dos_read(fd, g_scratch + total, BUF_MAX - total < 4096 ? BUF_MAX - total : 4096)) > 0)
     total = total + n;
   dos_close(fd);
-  if ((h = file_create(dst)) < 0) { printf("cannot write %s\n", dst); return 1; }
-  if (total > 0 && file_write(h, g_scratch, total) != total) { file_close(h); printf("cannot write %s\n", dst); return 1; }
-  if (file_close(h) < 0) { printf("cannot write %s\n", dst); return 1; }
-  printf("%s -> %s (%d bytes)\n", src, dst, total);
+  if ((h = file_create(dst)) < 0) { pf("cannot write %s\n", (int)dst, 0, 0); return 1; }
+  if (total > 0 && file_write(h, g_scratch, total) != total) { file_close(h); pf("cannot write %s\n", (int)dst, 0, 0); return 1; }
+  if (file_close(h) < 0) { pf("cannot write %s\n", (int)dst, 0, 0); return 1; }
+  pf("%s -> %s (%d bytes)\n", (int)src, (int)dst, total);
   return 0;
 }
 
@@ -1763,9 +1979,14 @@ int dispatch (int argc) {
   if (cieq(cmd, "ECHO")) {
     if (argc > 1 && cieq(g_argv[1], "OFF")) { g_echo = 0; return 0; }
     if (argc > 1 && cieq(g_argv[1], "ON")) { g_echo = 1; return 0; }
-    r = 1;
-    while (r < argc) { printf(r > 1 ? " %s" : "%s", g_argv[r]); ++r; }
-    printf("\n");
+    // The rest of the line as it was typed, however many words (argv
+    // stops at ARGVMAX - 1 of them): parse_line put a NUL after each
+    // word it took, and those go back to being the spaces they were.
+    if (argc < 2) { pf("\n", 0, 0, 0); return 0; }
+    path = g_argv[1];
+    r = 0;
+    while (path + r < g_line + g_linelen) { if (!path[r]) path[r] = ' '; ++r; }
+    pf("%s\n", (int)path, 0, 0);
     return 0;
   }
   if (cieq(cmd, "VER")) return cmd_ver();
@@ -1776,24 +1997,24 @@ int dispatch (int argc) {
   // DEL name: off the RAM disk if it is there, else off the home drive;
   // B:name off drive B: (file_unlink)
   if (cieq(cmd, "DEL") || cieq(cmd, "ERASE")) {
-    if (argc < 2) { printf("usage: DEL file\n"); return 1; }
-    if (file_unlink(g_argv[1]) < 0) { printf("cannot delete %s\n", g_argv[1]); return 1; }
+    if (argc < 2) { pf("usage: DEL file\n", 0, 0, 0); return 1; }
+    if (file_unlink(g_argv[1]) < 0) { pf("cannot delete %s\n", (int)g_argv[1], 0, 0); return 1; }
     return 0;
   }
   if (cieq(cmd, "TIME")) return cmd_time();
   if (cieq(cmd, "MEM")) return cmd_mem();
   if (cieq(cmd, "EXIT")) { g_quit = 1; return 0; }
   if (cieq(cmd, "RUN")) {
-    if (argc < 2) { printf("usage: RUN program[.c4r] [args]\n"); return 1; }
+    if (argc < 2) { pf("usage: RUN program[.c4r] [args]\n", 0, 0, 0); return 1; }
     if (!(path = prog_path(g_argv[1]))) {
-      printf("file not found: %s\n", g_argv[1]);
+      pf("file not found: %s\n", (int)g_argv[1], 0, 0);
       return 1;
     }
     return run_program(path, argc - 1, g_argv + 1);
   }
   if (cieq(cmd, "RAM:")) {
-    printf("RAM: is not a drive - its files sit over every drive, ahead of the disk's\n");
-    printf("use the plain name (TYPE c4ke.i) or RAM:name for the RAM copy only\n");
+    pf("RAM: is not a drive - its files sit over every drive, ahead of the disk's\n", 0, 0, 0);
+    pf("use the plain name (TYPE c4ke.i) or RAM:name for the RAM copy only\n", 0, 0, 0);
     return 1;
   }
   // A bare "B:" changes drive, the way it always has in a DOS. Checked
@@ -1802,11 +2023,11 @@ int dispatch (int argc) {
   // argument.
   if ((i = drv_num(cmd)) >= 0) {
     if (!g_drives) {
-      printf("no drive device - add DEVICE=DRIVES.SYS to CONFIG.SYS\n");
+      pf("no drive device - add DEVICE=DRIVES.SYS to CONFIG.SYS\n", 0, 0, 0);
       return 1;
     }
     if (i >= drv_count()) {
-      printf("no drive %c: - this machine has %d\n", drv_letter(i), drv_count());
+      pf("no drive %c: - this machine has %d\n", drv_letter(i), drv_count(), 0);
       return 1;
     }
     g_drive = i;
@@ -1820,17 +2041,19 @@ int dispatch (int argc) {
   // is defined further down and this dialect is define-before-use, so
   // the batch is handed back and whoever called dispatch runs it.
   if ((path = bat_path(cmd))) { g_batreq = path; return 0; }
-  printf("bad command or file name: %s\n", g_argv[0]);
+  pf("bad command or file name: %s\n", (int)g_argv[0], 0, 0);
   return 1;
 }
 
 // ---- CONFIG.SYS and batch ------------------------------------------------
 
+int g_linefn;            // &line_run, for run_batch
+
 // run a file of commands, one per line. '@' prefixes suppress echo.
 // Returns 0 if the file existed.
 int run_batch (char *path, int depth) {
   char *buf, *p, *e; int fd, n, total, show;
-  if (depth > BATDEPTH) { printf("batch nested too deep\n"); return 1; }
+  if (depth > BATDEPTH) { pf("batch nested too deep\n", 0, 0, 0); return 1; }
   if (!scratch_need()) return 1;
   if ((fd = dos_open(path)) < 0) return 1;
   total = 0;
@@ -1857,17 +2080,235 @@ int run_batch (char *path, int depth) {
     }
     total = 0;
     while (total < n) { g_line[total] = p[total]; ++total; }
-    if (show && g_line[0]) printf("%c>%s\n", drv_letter(g_drive), g_line);
-    dispatch(parse_line());
-    if (g_batreq) {
-      g_batreq = 0;
-      if (depth + 1 <= BATDEPTH) run_batch(g_batbuf, depth + 1);
-      else printf("batch nested too deep\n");
-    }
+    if (show && g_line[0]) pf("%c>%s\n", drv_letter(g_drive), (int)g_line, 0);
+    // line_run, defined below (it runs batch files, so it comes after
+    // this), reached the way a transient reaches DOS: through the stub
+    invoke1((int *)g_linefn, depth);
     p = *e ? e + 1 : e;
   }
   free(buf);
   return 0;
+}
+
+// ---- one command line, and redirection (DEVICE=REDIR.SYS) -----------------
+//
+// The prompt, a batch file's lines and exec (slot 19) all run a command
+// line through line_run. Without REDIR.SYS that is dispatch and nothing
+// else, exactly as before the line existed: the 2026-08-21 decision, kept
+// as the default (docs/c4dos-design.md "Redirection"). With it:
+//
+//   cmd > file    cmd >> file    cmd < file    a | b | c
+//
+// A redirect target is any file create can make: "RAM:NAME", "B:NAME" on
+// a drive that can be written, a plain name on the home drive or the RAM
+// disk. A pipe runs a, then b, through a temporary RAM-disk file, as
+// MS-DOS's did. What is redirected: DOS's own output (pf), a bare.c
+// program's (slots 16 and 17), and with the tap a c4cc program's PRTF and
+// fd-0 READ.
+
+// a command, and a batch file it named; its status
+int cmd_run (int depth) {
+  int r;
+  r = dispatch(parse_line());
+  if (g_batreq) { g_batreq = 0; r = run_batch(g_batbuf, depth + 1); }
+  return r;
+}
+
+int has_redir (char *s) {
+  while (*s) { if (*s == '>' || *s == '<' || *s == '|') return 1; ++s; }
+  return 0;
+}
+
+// A whole file, for <, in a block of DOS's own; g_rx_len its length.
+// 0 if it does not open.
+int g_rx_len;
+char *redir_in (char *name) {
+  int fd, n, total, g;
+  char *d;
+  if (!scratch_need()) return 0;
+  if ((fd = dos_open(name)) < 0) return 0;
+  total = 0;
+  while (total < BUF_MAX && (n = dos_read(fd, g_scratch + total, BUF_MAX - total < 4096 ? BUF_MAX - total : 4096)) > 0)
+    total = total + n;
+  dos_close(fd);
+  g = gen_dos();
+  d = malloc(total + 1);
+  gen_set(g);
+  if (!d) { printf("c4dos: out of memory\n"); return 0; }
+  n = 0;
+  while (n < total) { d[n] = g_scratch[n]; ++n; }
+  d[total] = 0;
+  g_rx_len = total;
+  return d;
+}
+
+// A file for > (made afresh) or >> (what it held, then what comes): a
+// write handle, or -1.
+int redir_out (char *name, int append) {
+  int fd, n, total, h, g;
+  total = 0;
+  if (append) {
+    if (!scratch_need()) return 0 - 1;
+    if ((fd = dos_open(name)) >= 0) {
+      while (total < BUF_MAX && (n = dos_read(fd, g_scratch + total, BUF_MAX - total < 4096 ? BUF_MAX - total : 4096)) > 0)
+        total = total + n;
+      dos_close(fd);
+    }
+  }
+  g = gen_dos();
+  h = file_create(name);
+  if (h >= 0 && total > 0) file_write(h, g_scratch, total);
+  gen_set(g);
+  return h;
+}
+
+// Take the redirections out of segment s, in place: what is left is the
+// command. A name goes into out (>, >>) or in (<), each LINEMAX long;
+// g_rx_out, g_rx_app and g_rx_in say which were given. -1 when a > or <
+// has no name after it.
+int g_rx_out; int g_rx_app; int g_rx_in;
+int seg_parse (char *s, char *out, char *in) {
+  char *p, *q, *d;
+  int kind, k;
+  g_rx_out = 0; g_rx_app = 0; g_rx_in = 0;
+  p = s;
+  q = s;
+  while (*p) {
+    if (*p == '>' || *p == '<') {
+      kind = *p;
+      ++p;
+      if (kind == '>') {
+        g_rx_out = 1;
+        g_rx_app = 0;
+        if (*p == '>') { g_rx_app = 1; ++p; }
+        d = out;
+      } else { g_rx_in = 1; d = in; }
+      while (*p == ' ' || *p == 9) ++p;
+      k = 0;
+      while (*p && *p != ' ' && *p != 9 && *p != '>' && *p != '<') {
+        if (k < LINEMAX - 1) { d[k] = *p; ++k; }
+        ++p;
+      }
+      d[k] = 0;
+      if (!k) { pf("c4dos: no file name after %c\n", kind, 0, 0); return 0 - 1; }
+    } else { *q = *p; ++q; ++p; }
+  }
+  // "ECHO hi > x" puts "hi" in x, not "hi " (MS-DOS kept the space)
+  while (q > s && (*(q - 1) == ' ' || *(q - 1) == 9)) --q;
+  *q = 0;
+  return 0;
+}
+
+// Run cmd with its input from `in` (0: as it is) and its output to `out`
+// (0: as it is). The outer level's state is kept in locals and put back.
+int run_seg (char *cmd, char *in, char *out, int append, int depth) {
+  int h, r, n, oh, olen, opos, g;
+  char *data, *odata;
+  h = 0 - 1;
+  data = 0;
+  n = 0;
+  if (out && (h = redir_out(out, append)) < 0) { pf("cannot write %s\n", (int)out, 0, 0); return 1; }
+  if (in && !(data = redir_in(in))) {
+    if (h >= 0) file_close(h);
+    pf("file not found: %s\n", (int)in, 0, 0);
+    return 1;
+  }
+  if (data) n = g_rx_len;
+  tap_drain();                       // what the outer level caught is the outer level's
+  oh = g_out_h; odata = g_in_data; olen = g_in_len; opos = g_in_pos;
+  if (h >= 0) g_out_h = h;
+  if (data) { g_in_data = data; g_in_len = n; g_in_pos = 0; }
+  tap_set();
+  r = 0;
+  while (cmd[r] && r < LINEMAX - 1) { g_line[r] = cmd[r]; ++r; }
+  g_line[r] = 0;
+  r = cmd_run(depth);
+  tap_drain();                       // ... and this level's is this level's
+  g_out_h = oh; g_in_data = odata; g_in_len = olen; g_in_pos = opos;
+  tap_set();
+  if (h >= 0 && file_close(h) < 0) pf("cannot write %s\n", (int)out, 0, 0);
+  g = gen_dos();
+  if (data) free(data);
+  gen_set(g);
+  return r;
+}
+
+// "PIPEn.$$$" on the RAM disk, n counting up, into d
+int g_pipe_n;
+char *pipe_name (char *d) {
+  int n, k;
+  char *s;
+  s = "RAM:PIPE";
+  k = 0;
+  while (*s) { d[k] = *s; ++k; ++s; }
+  n = ++g_pipe_n;
+  if (n >= 1000) { g_pipe_n = 0; n = 0; }
+  if (n >= 100) { d[k] = '0' + n / 100; ++k; }
+  if (n >= 10) { d[k] = '0' + (n / 10) % 10; ++k; }
+  d[k] = '0' + n % 10; ++k;
+  s = ".$$$";
+  while (*s) { d[k] = *s; ++k; ++s; }
+  d[k] = 0;
+  return d;
+}
+
+// A line with redirection in it, or any line under a shell's sink when
+// the tap is in (so that a c4cc program's output reaches the sink): each
+// segment between |s run in turn, the pipe files deleted afterwards.
+int redir_run (int depth) {
+  char *buf, *seg, *e, *oname, *iname, *pa, *pb, *t, *in, *out;
+  int g, r, n, i, append, piped;
+  g = gen_dos();
+  buf = malloc(LINEMAX * 5);
+  gen_set(g);
+  if (!buf) { printf("c4dos: out of memory\n"); return 1; }
+  oname = buf + LINEMAX; iname = buf + LINEMAX * 2;
+  pa = buf + LINEMAX * 3; pb = buf + LINEMAX * 4;
+  pa[0] = 0; pb[0] = 0;
+  r = 0;
+  while (g_line[r] && r < LINEMAX - 1) { buf[r] = g_line[r]; ++r; }
+  buf[r] = 0;
+  n = 1;
+  r = 0;
+  while (buf[r]) { if (buf[r] == '|') ++n; ++r; }
+  if (n > 1 && !g_ramdisk) {
+    pf("a pipe needs the RAM disk - add DEVICE=RAMDISK.SYS to CONFIG.SYS\n", 0, 0, 0);
+    free(buf);
+    return 1;
+  }
+  r = 0;
+  i = 0;
+  seg = buf;
+  while (i < n && !g_quit) {
+    e = seg;
+    while (*e && *e != '|') ++e;
+    if (*e) { *e = 0; ++e; }
+    if (seg_parse(seg, oname, iname) < 0) { r = 1; i = n; }
+    else {
+      in = 0; out = 0; append = 0;
+      piped = 0;
+      if (g_rx_in) in = iname;
+      else if (i > 0 && pa[0]) in = pa;   // the last segment's output
+      if (g_rx_out) { out = oname; append = g_rx_app; }
+      else if (i < n - 1) { out = pipe_name(pb); piped = 1; }
+      r = run_seg(seg, in, out, append, depth);
+      if (pa[0]) { file_unlink(pa); pa[0] = 0; }
+      if (piped) { t = pa; pa = pb; pb = t; }
+      seg = e;
+      ++i;
+    }
+  }
+  if (pa[0]) file_unlink(pa);
+  free(buf);
+  return r;
+}
+
+// One command line, in g_line: through redirection when REDIR.SYS is in
+// and the line asks for it (or a sink is set and the tap is in), else
+// dispatch as it always was. Its status.
+int line_run (int depth) {
+  if (g_redir && (has_redir(g_line) || (g_tap && g_sink_w))) return redir_run(depth);
+  return cmd_run(depth);
 }
 
 // v4 slot 19: one command line, exactly as the prompt would run it --
@@ -1900,8 +2341,7 @@ int dos_api_exec (char *cmd) {
   g_line = line;
   g_argv = argv;
   g_quit = 0;
-  r = dispatch(parse_line());
-  if (g_batreq) { g_batreq = 0; r = run_batch(g_batbuf, 1); }
+  r = line_run(0);
   g_line = oline;
   g_argv = oargv;
   g_quit = oquit;
@@ -2006,6 +2446,19 @@ int read_config () {
         printf("DEVICE=HEAP.SYS: this machine's heap keeps no generations\n");
       }
     }
+    // > >> < and | on the command line (line_run). TAP says the machine
+    // has the console tap, so that c4cc programs are redirected too.
+    if (starts_ci(p, "DEVICE=REDIR.SYS")) {
+      g_redir = 1;
+      n = 0;
+      while (p + n < e && !starts_ci(p + n, "TAP")) ++n;
+      if (p + n < e) {
+        g_tap = 1;
+        *(int *)BB_CON_TAP = 0;
+        *(int *)BB_CON_IN = 0 - 1;
+        printf("redirection installed (> >> < |), with the console tap\n");
+      } else printf("redirection installed (> >> < |)\n");
+    }
     // FILES=, SHELL=, other DEVICE= lines: reserved, ignored
     p = *e ? e + 1 : e;
   }
@@ -2030,6 +2483,14 @@ int main (int argc, char **argv) {
   if (!(g_wname   = malloc(LINEMAX + 4))) { printf("c4dos: out of memory\n"); return 1; }
   if (!(g_dname   = malloc(16))) { printf("c4dos: out of memory\n"); return 1; }
   if (!(g_copybuf = malloc(LINEMAX + 4))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!(g_morebuf = malloc(LINEMAX + 4))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!(g_tapbuf  = malloc(TAPBUF + 4))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!(g_pfbuf   = malloc(PFMAX + 4))) { printf("c4dos: out of memory\n"); return 1; }
+  if (!(g_pfdig   = malloc(32))) { printf("c4dos: out of memory\n"); return 1; }
+  g_pfn = 0;
+  g_out_h = 0 - 1;
+  g_in_data = 0;
+  g_linefn = (int)&line_run;
   g_batreq = 0;
   if (!(g_ram_name = malloc(RAMFILES * sizeof(int)))) { printf("c4dos: out of memory\n"); return 1; }
   if (!(g_ram_data = malloc(RAMFILES * sizeof(int)))) { printf("c4dos: out of memory\n"); return 1; }
@@ -2069,7 +2530,7 @@ int main (int argc, char **argv) {
   g_api[2] = 0;                                // filled after CONFIG.SYS
   g_api[3] = (int)&dos_api_write;
   g_api[4] = (int)&dos_api_close;
-  g_api[5] = 5;                                // API version
+  g_api[5] = 6;                                // API version
   g_api[6] = (int)&dos_api_open;
   g_api[7] = (int)&dos_api_read;
   g_api[8] = (int)&dos_api_rclose;
@@ -2126,6 +2587,8 @@ int main (int argc, char **argv) {
   // CONFIG.SYS gave no home and no drives
   g_api[28] = (int)&dos_api_home;
   g_api[29] = (int)&dos_api_drives;
+  // v6: the prompt's drive, always there
+  g_api[30] = (int)&dos_api_drive;
 #if C4DOS_CLOCK
   // Same rule for the clock: offered only when the hardware was
   // declared, so a caller that checks the slot is told the truth.
@@ -2139,10 +2602,7 @@ int main (int argc, char **argv) {
     // FLUSH says this one can, and keeps the classic look.
     printf(g_conflush ? "%c>" : "%c>\n", drv_letter(g_drive));
     if (!get_line()) g_quit = 1;         // EOF: the console went away
-    else {
-      dispatch(parse_line());
-      if (g_batreq) { g_batreq = 0; run_batch(g_batbuf, 1); }
-    }
+    else line_run(0);
   }
   printf("C4DOS: system halted\n");
   return 0;

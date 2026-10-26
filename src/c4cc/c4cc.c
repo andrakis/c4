@@ -1987,7 +1987,11 @@ int c4cc_readargs (int argc, char **argv) {
   int r, i, fd;
   int use_stdin;
 
-  poolsz = 256 * 1024;
+  // The source area c4cc_init allocates. This said 256 KB, half of it,
+  // and a longer source was cut off where the limit fell: C4KE's
+  // preprocessed kernel passed 262,143 bytes in 2026-10, and c4cc then
+  // reported a missing parenthesis wherever the read had stopped.
+  poolsz = 512 * 1024;
   --argc; ++argv;
   if (argc > 0 && **argv == '-' && (*argv)[1] == 's') { src = 1; --argc; ++argv; }
   if (argc > 0 && **argv == '-' && (*argv)[1] == 'd') { debug = 1; --argc; ++argv; }
@@ -2032,6 +2036,9 @@ int c4cc_readargs (int argc, char **argv) {
     --argc; ++argv;
   }
   }
+  // Filled to the last byte: there may be more, and compiling what fits
+  // would report an error somewhere in the middle of the cut.
+  if (r <= 0) { printf("c4cc: the sources are larger than %d bytes\n", poolsz - 1); return -1; }
   // Reset pointer to start of code
   p = _p;
 

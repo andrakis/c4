@@ -395,7 +395,16 @@ int *c4r_load_opt_real (char *file, int options) {
 	if (c4r_debug || c4r_verbose) printf("lc4r: loading '%s'...\n", file);
 	fd = -1;
 	if (!c4r_mem_src) {
-		if ((fd = open(file, FILE_OPEN_MODE)) < 0) return 0;
+		// Everything above goes back. C4KE's loader tries the bare name
+		// before the one with .c4r on every program it starts, so this
+		// is the usual path, not a rare one, and it kept 349 bytes a time.
+		if ((fd = open(file, FILE_OPEN_MODE)) < 0) {
+			free((char *)c4r[C4R_FILENAME]);
+			free(header);
+			free(c4r);
+			free(buffer);
+			return 0;
+		}
 	}
 
 	//

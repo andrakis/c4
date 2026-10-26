@@ -44,17 +44,19 @@ The heap is libjs's `HEAP_USED`: what is allocated, of the 128 MB arena.
 |---|---|---|---|---|
 | C4DOS boots | 0.0 s | | 4.0 MB | |
 | Doom at `A>`, 40 frames, quit | 0.8 s | 157 M | 4.0 MB | 23.7 MB |
-| `BUILD` (c4ke.c4r 240,228 bytes) | 1.6 s | 364 M | 5.3 MB | 12.7 MB |
-| `RUN dosload.c4r c4ke.c4r` | 0.1 s | 20 M | 4.9 MB | 6.5 MB |
-| Doom under C4KE, quit | 0.7 s | 136 M | 19.1 MB | 25.2 MB |
+| `BUILD` (c4ke.c4r 256,848 bytes) | 1.7 s | 383 M | 5.3 MB | 12.7 MB |
+| `RUN dosload.c4r c4ke.c4r` | 0.1 s | 21 M | 4.6 MB | 6.5 MB |
+| Doom under C4KE, quit (each of three rounds) | 0.7 s | 136 M | 4.6 MB | 24.9 MB |
 | `tar x c4ix-src.tar` | 0.1 s | 13 M | | |
-| `b4ke -f c4ix.b4k` (c4ix.c4r 261,841 bytes) | 59.3 s | 12,113 M | 20.9 MB | 39.1 MB |
-| `kboot c4ix.c4r` | 0.3 s | 28 M | 35.7 MB | 35.7 MB |
-| Doom under C4IX, quit | 3.5 s | 636 M | 47.1 MB | 54.6 MB |
-| `exit` from C4IX, through C4KE, to `A>` | 3.5 s | 795 M | 0.0 MB | 60.7 MB |
+| `b4ke -f c4ix.b4k` (c4ix.c4r 261,841 bytes) | 62.3 s | 12,113 M | 5.4 MB | 24.1 MB |
+| `kboot c4ix.c4r` | 0.3 s | 28 M | 20.1 MB | 20.7 MB |
+| Doom under C4IX, quit | 3.5 s | 636 M | 31.5 MB | 39.0 MB |
+| `exit` from C4IX, through C4KE, to `A>` | 3.7 s | 799 M | 0.0 MB | 45.2 MB |
 
-The whole run is 14.3 G cycles and 70 s. The RAM disk is 32 MB
-(`CONFIG.SYS`), and the most any step held was 61 MB of the arena.
+The whole run is 14.6 G cycles and 75 s. The RAM disk is 32 MB
+(`CONFIG.SYS`), and the most any step held was 45 MB of the arena: 61 MB
+before C4KE gave each task's memory back, when Doom under C4KE kept
+14 MB until C4KE stopped.
 
 On the page (`web-c4dos-ladder.mjs`, Chrome 151 on the user's desktop,
 paced at 400 MHz, 2026-10-26; each time includes typing the line over
@@ -120,9 +122,16 @@ every task it loads that has one. `bare.c`'s `exit()` raises that opcode
 when it is set. Files, the console, the display and the keyboard need
 nothing: a C4KE task without protected mode reaches the machine's own.
 
-C4KE does not take back what a task allocated (there is no protected mode
-here to see it), so each Doom run under C4KE keeps about 14 MB until C4KE
-stops, when HEAP.SYS gives it all back. That is the reason for 128 MB.
+There is no protected mode here for C4KE to see what a task allocates,
+and each Doom run under C4KE used to keep about 14 MB until C4KE stopped.
+Now HEAP.SYS does the work one rung up as well: C4DOS announces it (its
+API's `gen`, slot 26), C4KE checks the registers itself, and each program
+task gets a heap generation of its own from `OP_TASK_EXEC` on, released
+when the task is reaped. The kernel's own memory stays in the kernel's
+generation, dosload's: every trap and timer tick switches to it, and the
+way back to a task switches to the task's. `test-c4dos-ladder.mjs` plays
+Doom three times at `c4sh>` and `HEAP_USED` is the same after each
+([task-memory.md](task-memory.md) M6).
 
 ### C4KE to C4IX: kboot
 
@@ -150,7 +159,7 @@ C4IX needs nothing for this: it boots as it does from dosload
 
 | target | what |
 |---|---|
-| `make test-libjs-ladder` | `test-c4dos-ladder.mjs`, the whole climb above with 16 checks, about 70 s; also in `make test-libjs` (which skips it without the disk) |
+| `make test-libjs-ladder` | `test-c4dos-ladder.mjs`, the whole climb above with 20 checks, about 75 s; also in `make test-libjs` (which skips it without the disk) |
 | `node libjs/tests/test-c4dos-ladder.mjs --quick` | the same to C4KE and back, without b4ke |
 | `node libjs/tests/web-c4dos-ladder.mjs` | the page in the user's Chrome over CDP: the same climb typed into the terminal, with screenshots |
 
@@ -160,7 +169,6 @@ C4IX needs nothing for this: it boots as it does from dosload
   shared disk's, prebuilt. C4IX's own `BUILD.B4K` files (`src/c4ix/lib`,
   `libc`, `user`) are B4KE2 scripts for C4IX's b4ke; C4KE's b4ke reads
   B4KE1, and has no `MKDIR` or `DEPS`.
-- **C4KE keeps a task's memory** until it stops (above).
 - C4IX's first line counts cycles from the machine's start, with `%d`:
   after b4ke's 12 G cycles it says a negative number.
 - Wolfenstein 3D starts and draws under C4KE; the test plays Doom at

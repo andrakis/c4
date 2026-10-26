@@ -9,7 +9,7 @@
 //
 //   A>      DOOM, quit (F10, Y); HEAP_USED back where it was
 //           BUILD; RUN dosload.c4r c4ke.c4r
-//   c4sh>   doom, quit; rps, q
+//   c4sh>   doom, quit, three times; HEAP_USED the same each time; rps, q
 //           tar x c4ix-src.tar; b4ke -f c4ix.b4k; kboot c4ix.c4r
 //   c4ix:/$ ls; doom, quit; exit
 //   A>      MEM: C4IX returned to C4KE, C4KE to dosload, dosload to DOS
@@ -130,9 +130,22 @@ check(/seeded \d+\/\d+ file\(s\) from the C4DOS RAM disk/.test(o) && o.includes(
 cost('dosload c4ke.c4r');
 
 // ---- C4KE -----------------------------------------------------------------
-begin();
-check(doom('doom', KE), 'Doom under C4KE, played and quit back to c4sh', text().slice(-1500));
-cost('Doom under C4KE');
+// Three rounds. C4KE gives each task a heap generation of HEAP.SYS's
+// (c4ke.c's C4KE_HEAP_GEN) and releases it when the task is reaped, so
+// HEAP_USED at c4sh> is the same after every round; without that each
+// one kept about 14 MB.
+check(o.includes('heap generations (C4DOS HEAP.SYS)'), 'C4KE takes heap generations from HEAP.SYS', o);
+// at the prompt, once idle has reaped the task that ended
+const settled = () => { for (let i = 0; i < 50; i++) run(); return vm.heap.used; };
+const keUsed = [];
+for (let round = 1; round <= 3; round++) {
+  begin();
+  check(doom('doom', KE), `Doom under C4KE (round ${round}), played and quit back to c4sh`, text().slice(-1500));
+  keUsed.push(settled());
+  cost(`Doom under C4KE, round ${round}`);
+}
+check(keUsed[1] === keUsed[0] && keUsed[2] === keUsed[0],
+  `and HEAP_USED at c4sh> stays flat (${keUsed[0]} bytes)`, keUsed.join(' -> '));
 o = cmd('rps', /move/, 30) + cmd('q', KE, 30);
 check(/Your move/.test(o) && idle(KE), 'rps under C4KE', o);
 

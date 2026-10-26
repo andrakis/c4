@@ -2521,6 +2521,12 @@ LIBJS_PORT ?= 8472
 serve-libjs:
 	node libjs/serve.mjs $(LIBJS_PORT) --isolate
 
+# The page on GitHub Pages (libjs/pages.sh): built in a tree of its own
+# with the three shareware games, and committed to the site's repository,
+# never pushed. BRANCH=name builds that branch, else the one checked out.
+pages:
+	sh libjs/pages.sh $(BRANCH)
+
 # The page in the user's own Chrome over CDP (9224, then 9222).
 test-libjs-web:
 	node libjs/tests/test-web.mjs
@@ -3591,7 +3597,7 @@ c4rs: pre
 
 # Marking the below rules as PHONY using singular .PHONY rule
 PHONY  = pre all clean-c4rs clean
-PHONY += test-libjs test-c4ix-smp serve-libjs test-libjs-web test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
+PHONY += test-libjs test-c4ix-smp serve-libjs pages test-libjs-web test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
 PHONY += run-c4dos-build32 test-c4dos-build32 run-c4dos-c4ix32 test-c4dos-c4ix32 test-c4cc-for test-respfile test-b4ke test-c4bb-storage test-c4bb-baseops test-c4bb-rungs test-c4bb-install test-c4bb-climb test-c4bb-web test-c4bb-firmware
 PHONY += test-c4sc test-c4sc-run test-c4sc-lex test-c4sc-front test-c4sc-back test-c4sc-chain
 PHONY += test-c4sc-image test-c4sc-self test-c4sc-board

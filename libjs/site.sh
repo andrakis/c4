@@ -1,6 +1,6 @@
 #!/bin/sh
 # libjs/site.sh OUT -- the c4m.js page as a static site, in OUT: what
-# GitHub Pages serves (.github/workflows/pages.yml), from a tree where
+# GitHub Pages serves (libjs/pages.sh), from a tree where
 # make c4bb-images has run.
 #
 # The site is the repository's own layout, because the page imports from

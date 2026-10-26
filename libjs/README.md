@@ -59,11 +59,13 @@ always has the sound card; a browser lets it play only after the first key
 or click.
 `LIBJS_PORT=NNNN` moves it.
 
-On GitHub Pages, at https://andrakis.github.io/c4/libjs/web/: `.github/workflows/pages.yml` builds
-the images with Wolfenstein 3D, Doom and Rise of the Triad, their
-shareware data fetched from their `MIRRORS` (games/README.md), and
-`site.sh` lays the site out as the repo is, with the images in it. It
-refuses a tree with Tyrian, whose data may not be passed on. Pages
+On GitHub Pages, at https://andrakis.github.io/c4/libjs/web/: `make pages`
+(`pages.sh`) builds the images in a tree of its own (`~/git/c4-pages`)
+with Wolfenstein 3D, Doom and Rise of the Triad, never Tyrian, whose
+data may not be passed on. `site.sh` lays the site out as the repo is,
+with the images in it, in the site repository's `c4/`
+(`~/git/andrakis.github.io`), and `pages.sh` commits it there. Pushing
+that repository publishes it. Pages
 cannot send COOP/COEP headers, so `coi.js` does. It is a service worker
 for `libjs/` that adds them to every response, and the page registers it
 and reloads once on the first visit. A server that sends them, such as
@@ -179,6 +181,7 @@ Neither is in `make test`.
 | `serve.mjs` | A static server for the repo root, with optional COOP/COEP headers, and a directory's listing as JSON with `?ls`. |
 | `coi.js` | The COOP/COEP headers from a service worker, where the server cannot send them (GitHub Pages). |
 | `site.sh` | The page, the sources and the images as a static site, for GitHub Pages. |
+| `pages.sh` | `make pages`: builds the site and commits it to the GitHub Pages repository. |
 | `web/` | The page: terminal on the left, display on the right. `explore.html`, the Code Explorer. |
 | [guest/](guest/README.md) | `gui.h` and `snd.h`, the display and sound card APIs for guest C, and their demos. |
 | `tests/` | `test-libjs.sh`, the unit tests, the CDP gate (`cdp.mjs`, `test-web.mjs`, `test-web-gui.mjs`), and `src/strc.c`. |

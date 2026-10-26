@@ -242,10 +242,11 @@ int grin_run(char *cmdline) {
         if (i == APPS) { say("Too many applications are running to start ", argv[0], "."); return 0 - 1; }
         hello = 0;
         if (!(h = dos1(SLOT_LOAD, (int)path))) { say("Cannot start ", argv[0], ": there is no such program, or it would not load."); return 0 - 1; }
+        // not an application: a DOS program, which DOS runs again full
+        // screen, from the top of the loop (grin_full)
         if (!hello) {
             dos1(SLOT_UNLOAD, h);
-            say(argv[0], " is not a grin application. DOS programs run from grin in a later version; ", "File > Exit grin, and run it at A>.");
-            return 0 - 1;
+            return grin_full(cmdline);
         }
         n = i + 1;
         a = &apps[i];
@@ -300,6 +301,8 @@ void apps_reap() {
         ++i;
     }
 }
+
+int grin_heapgen() { return grin_gen > 0 ? grin_gen : 0; }
 
 // how many are loaded (Help > About says)
 int apps_count() {

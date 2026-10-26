@@ -45,6 +45,21 @@ void apps_reap();                     // every pass, at the top of the loop: the
 void apps_end();                      // at the end, after every window: all unloaded, the table taken back
 int  apps_count();                    // how many are loaded
 int  grin_run(char *cmdline);         // start one: 0, or -1 with a message box saying why
+                                      // (a DOS program it finds goes to grin_full)
+int  grin_heapgen();                  // grin's own heap generation (0 without HEAP.SYS)
+
+// DOS programs (docs/grin-plan.md 3.6, 3.7): one at a time, run from the
+// top of the loop, full screen (grin.c) or in a DOS Prompt (dosprmpt.c)
+extern int  dos_busy;                 // one is running
+extern char dos_busy_name[64];        // its name, in capitals
+void dos_busy_set(char *cmdline);
+int  dos_refuse();                    // one is running or waiting: a message box says so, and 1
+int  grin_full(char *cmdline);        // full screen, at the top of the loop: 0, or -1 (refused)
+int  grin_full_waiting();
+int  dosprompt_open(char *cmd);       // a DOS Prompt window; cmd (or 0) typed at its first prompt
+void dosprompt_top();                 // the top of the loop: a DOS Prompt's line runs
+void grin_pump();                     // one pass of the loop, for a DOS program waiting in grin
+void grin_draw_now();                 // the damage drawn now (a DOS Prompt's output, as it comes)
 
 // a 32x32 picture with a label under it, centred on cx (Program Manager's
 // items, Control Panel's), drawn client-relative; and its hit box
@@ -62,6 +77,9 @@ int   gd_drives();                    // how many drives (DRIVES.SYS), 1 without
 int   gd_home();                      // where a file with no drive is written, or -1: the RAM disk
 int   gd_unlink(char *name);          // 0, or -1
 int   gd_exec(char *line);            // a command line, as A> runs it: its status
+int   gd_sink(int w, int r, int ctx); // the console's sink (slot 24): w(ctx, buf, n), r(ctx, buf, n); 0s give it back
+int   gd_setgen(int g);               // the heap generation now: the previous one, or -1
+int   gd_drive();                     // the drive DOS's prompt is on, 0 = A: (v6)
 int   gd_size(char *name);            // bytes, read through; -1 if it is not there
 int   gd_list(int drive, char *names, int max);   // a drive's files, WK_NAME bytes each: how many
 char *gd_name(int drive, char *name, char *out, int n);   // "B:NAME", "RAM:NAME"

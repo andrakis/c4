@@ -679,9 +679,10 @@ fi
 # HEAP.SYS, because libjs's heap keeps generations and a game's memory
 # goes back when it quits; DRIVES.SYS HOME=B:, so that a file saved with
 # no drive goes to B:, which the page keeps in the browser (the c4dos
-# store), and is still there at the next visit. REDIR.SYS TAP (G5) joins
-# it later. grin is linked whole with the bare libc, as the games are,
-# from the objects make grin-objs compiled.
+# store), and is still there at the next visit; REDIR.SYS TAP, so that
+# > >> < and | work at A> and in grin's DOS Prompt windows, for c4cc
+# programs too (the machine's console tap). grin is linked whole with the
+# bare libc, as the games are, from the objects make grin-objs compiled.
 LJDOS=libjs/images/dos
 rm -rf $LJDOS
 if ls .grin/*.c4o > /dev/null 2>&1 && ls .libc-bare/*.c4o > /dev/null 2>&1 && [ -f $OUT/c4dos32.c4r ]; then
@@ -695,6 +696,12 @@ if ls .grin/*.c4o > /dev/null 2>&1 && ls .libc-bare/*.c4o > /dev/null 2>&1 && [ 
         kit=; [ -f .grinapp/wk-$app.c4o ] && kit=.grinapp/wk-$app.c4o
         ./c4rlink32 .grinapp/$app.c4o $kit .grinapp/import.c4o .libc-bare/libc-*.c4o -o $LJDOS/$app.c4r > /dev/null
     done
+    # DOS programs for trying redirection with, and test-grin's: ASKLINE
+    # (bare.c: reads a line through DOS), DOSFILT (a filter; -r is a plain
+    # c4cc program's READ and printf, the tap's) and HELLO (c4cc's printf)
+    [ -f .grinapp/askline.c4o ] && ./c4rlink32 .grinapp/askline.c4o .libc-bare/libc-*.c4o -o $LJDOS/askline.c4r > /dev/null
+    $CC -o $LJDOS/dosfilt.c4r include/c4dos.h src/tests/dosfilt.c > /dev/null
+    cp $OUT/hello32.c4r $LJDOS/hello.c4r
     cp $OUT/c4dos32.c4r $LJDOS/
     if [ -d $GAMESDISK ]; then
         (cd $GAMESDISK && find . -type f ! -name config.sys ! -name autoexec.bat ! -name c4dos.dir \
@@ -704,13 +711,13 @@ if ls .grin/*.c4o > /dev/null 2>&1 && ls .libc-bare/*.c4o > /dev/null 2>&1 && [ 
         done
     fi
     sed 's/SIZE=[0-9]*/SIZE=16777216/' src/c4dos/fs/CONFIG.SYS > $LJDOS/config.sys
-    printf 'DEVICE=CONSOLE.SYS FLUSH\nDEVICE=DRIVES.SYS HOME=B:\nDEVICE=HEAP.SYS\n' >> $LJDOS/config.sys
+    printf 'DEVICE=CONSOLE.SYS FLUSH\nDEVICE=DRIVES.SYS HOME=B:\nDEVICE=HEAP.SYS\nDEVICE=REDIR.SYS TAP\n' >> $LJDOS/config.sys
     list=$(echo $GAMES_ON_DISK | sed 's/ /, /g')
     {
         printf '@ECHO OFF\nECHO Welcome to C4DOS\nVER\n'
         if [ -n "$list" ]; then printf 'ECHO The games on this disk: %s.\n' "$list"; fi
-        # (C4DOS splits a line into at most 15 words, so ECHO says 14)
-        printf 'ECHO Starting grin: its File menu has Exit grin, back to A>.\nGRIN\n'
+        # (no > in an ECHO here: REDIR.SYS would take it for a redirection)
+        printf 'ECHO Starting grin: its File menu has Exit grin, back to the A prompt.\nGRIN\n'
     } > $LJDOS/autoexec.bat
     (cd $LJDOS && ls -p | grep -v '/$' | grep -v '^manifest.json$' > c4dos.dir)
     (cd $LJDOS && find . -type f -not -name manifest.json | sed 's|^\./||') | \

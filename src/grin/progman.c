@@ -12,10 +12,9 @@
 //
 // An item is a title, a command line, an icon and a run mode: app (a grin
 // application, or one of grin's own windows, named by the command lines
-// FILEMAN, CONTROL and PROGMAN), full (a DOS program, full screen) or
-// window (a DOS program in a window). DOS programs run from grin in a
-// later milestone (G5, G6), so for now an item for one says how to run it
-// at A>; DOSPRMPT, the DOS Prompt, is there and greyed until then.
+// FILEMAN, CONTROL, PROGMAN and DOSPRMPT), full (a DOS program, full
+// screen) or window (a DOS program in a window, which comes with G6; until
+// then such an item says so and offers full screen).
 //
 // One group is shown at a time, picked from the list down the left (MDI
 // group windows come with G7). File > New and Properties edit an item,
@@ -185,25 +184,23 @@ static void say(char *a, char *b, char *c, char *d) {
     wk_msgbox(0, 0, "Program Manager", msg, WK_OK);
 }
 
-static int not_yet(char *cmd) { return word_is(cmd, "DOSPRMPT"); }
 
-// A command line: one of grin's own windows by name, or an application
-// (apps.c). 0 if it started.
+// A command line: one of grin's own windows by name, or a program --
+// an application, or a DOS program, which runs full screen (apps.c). 0
+// if it started.
 int grin_start(char *cmdline) {
     if (word_is(cmdline, "CONTROL")) return control_open() < 0 ? 0 - 1 : 0;
     if (word_is(cmdline, "FILEMAN") || word_is(cmdline, "WINFILE")) return filemgr_open() < 0 ? 0 - 1 : 0;
     if (word_is(cmdline, "PROGMAN")) return progman_open() < 0 ? 0 - 1 : 0;
-    if (not_yet(cmdline)) {
-        say("DOS Prompt windows come with a later version of grin. ",
-            "For now, File > Exit grin gives you the A> prompt, and GRIN brings grin back.", "", "");
-        return 0 - 1;
-    }
+    if (word_is(cmdline, "DOSPRMPT") || word_is(cmdline, "COMMAND")) return dosprompt_open(0) < 0 ? 0 - 1 : 0;
     return grin_run(cmdline);
 }
 
 static void launch(struct item *it) {
-    if (it->mode != RUN_APP) {
-        say(it->title, " is a DOS program, which grin cannot run yet. File > Exit grin, and type ", it->cmd, " at A>.");
+    if (it->mode == RUN_FULL) { grin_full(it->cmd); return; }
+    if (it->mode == RUN_WINDOW) {
+        say(it->title, " is set to run in a window, which comes with a later version of grin. ",
+            "Its Properties can set it to run full screen, as DOS programs run now.", "");
         return;
     }
     grin_start(it->cmd);
@@ -277,7 +274,7 @@ static void pm_draw(int w, int cw, int ch, int focused) {
     while ((i = nth(p->group, k)) >= 0) {
         if (item_y(k, cw) + ITEM_H - 10 < ch)
             grin_item_dim(item_cx(k, cw), item_y(k, cw), icon_pics[icon_index(items[i].icon)], items[i].title,
-                          p->sel == i + 1 && focused, not_yet(items[i].cmd));
+                          p->sel == i + 1 && focused, items[i].mode == RUN_WINDOW);   // greyed: not yet (G6)
         ++k;
     }
     d_clip_end();

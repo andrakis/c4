@@ -9,7 +9,9 @@
 // window comes to the front, so a file Notepad has just saved is there.
 //
 // A double click opens a file: a text file in Notepad, a .c4r as a grin
-// application (DOS programs run from grin in G5). Copy and Delete are
+// application or, if it is not one, as a DOS program full screen, and a
+// .bat in a DOS Prompt window (File > Edit opens it in Notepad instead).
+// Copy and Delete are
 // DOS's: COPY through exec (slot 19) and unlink (slot 18), on the RAM
 // disk and on drives that can be written.
 
@@ -30,10 +32,10 @@ struct fm {
     char msg[WK_PATH + 96];
 };
 
-static char *file_items[8] = { "Open", "Copy...", "Delete...", "-", "Refresh", "-", "Exit", 0 };
+static char *file_items[9] = { "Open", "Edit", "Copy...", "Delete...", "-", "Refresh", "-", "Exit", 0 };
 static char *help_items[2] = { "About File Manager...", 0 };
 static struct wk_menu menus[2];
-enum { M_OPEN = 0, M_COPY = 1, M_DELETE = 2, M_REFRESH = 4, M_EXIT = 6 };
+enum { M_OPEN = 0, M_EDIT = 1, M_COPY = 2, M_DELETE = 3, M_REFRESH = 5, M_EXIT = 7 };
 
 static struct fm *F(int w) { return (struct fm *)wk_state(w); }
 static char *name_of(struct fm *f, int k) { return f->names + k * WK_NAME; }
@@ -137,12 +139,22 @@ static int is_text(char *s) {
 }
 
 static char cmd[WK_PATH + 16];
+static void edit_sel(int w) {
+    struct fm *f;
+    f = F(w);
+    if (f->sel < 0) return;
+    gd_name(f->drive, name_of(f, f->sel), f->path, WK_PATH);
+    ui_cpy(cmd, "NOTEPAD ");
+    ui_ncat(cmd, f->path, WK_PATH + 16);
+    grin_run(cmd);
+}
 static void open_sel(int w) {
     struct fm *f;
     f = F(w);
     if (f->sel < 0) return;
     gd_name(f->drive, name_of(f, f->sel), f->path, WK_PATH);
-    if (is_text(f->path)) {
+    if (ends(f->path, ".bat")) dosprompt_open(f->path);
+    else if (is_text(f->path)) {
         ui_cpy(cmd, "NOTEPAD ");
         ui_ncat(cmd, f->path, WK_PATH + 16);
         grin_run(cmd);
@@ -150,7 +162,7 @@ static void open_sel(int w) {
     else {
         ui_ncpy(f->msg, "No application opens ", WK_PATH + 96);
         ui_ncat(f->msg, f->path, WK_PATH + 96);
-        ui_ncat(f->msg, ". Notepad opens text files (.TXT, .C, .BAT, .INI), and grin starts .C4R applications.", WK_PATH + 96);
+        ui_ncat(f->msg, ". Notepad opens text files (.TXT, .C, .INI), grin starts .C4R programs, and a DOS Prompt runs .BAT files.", WK_PATH + 96);
         wk_msgbox(w, 0, "File Manager", f->msg, WK_OK);
     }
 }
@@ -169,6 +181,7 @@ static void fm_command(int w, int id) {
     if (f->sel < 0) { if (id <= M_DELETE) wk_msgbox(w, 0, "File Manager", "Select a file first.", WK_OK); return; }
     gd_name(f->drive, name_of(f, f->sel), f->path, WK_PATH);
     if (id == M_OPEN) open_sel(w);
+    else if (id == M_EDIT) edit_sel(w);
     else if (id == M_DELETE) {
         ui_ncpy(f->msg, "Delete ", WK_PATH + 96);
         ui_ncat(f->msg, f->path, WK_PATH + 96);

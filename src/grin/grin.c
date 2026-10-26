@@ -10,7 +10,9 @@
 // (Ctrl+Esc, and a double click on the desktop: the Task List),
 // GRIN.INI, and what the kit asks of its host -- memory, and files
 // through libc and bare.c, which are C4DOS's. The applications grin runs
-// (Clock, Calculator) are apps.c's; the loop gives them their turn.
+// (Clock, Calculator) are apps.c's; the loop gives them their turn. DOS
+// programs run from the top of the loop, one at a time: full screen here
+// (grin_full), or in a DOS Prompt window (dosprmpt.c).
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,6 +21,7 @@
 #include <unistd.h>
 #include "shell.h"
 #include "wkgui.h"
+#include "libjs/guest/snd.h"
 
 static int running;
 struct grin_ini ini;
@@ -327,7 +330,12 @@ static void mouse_desk(int ev, int x, int y, int b) {
 
 static struct wk_shell shell = { .desktop = desktop, .mouse_desk = mouse_desk, .key = key };
 
-void grin_quit() { running = 0; }
+// the session ends -- but not while a DOS program runs, which would be
+// left with nothing to return to (and no DOS Prompt has one then)
+void grin_quit() {
+    if (dos_busy) { dos_refuse(); return; }
+    running = 0;
+}
 
 // ---- what the kit asks of its host -------------------------------------------------
 //
@@ -347,9 +355,127 @@ void wk_free(char *p) { if (p) free(p); }
 enum { RING = 65536, EVENTS = GUI_M_MOVE | GUI_M_BUTTONS | GUI_M_KEYS | GUI_M_WHEEL | GUI_M_WINDOW,
        NAP = 50 };
 
-int main(int argc, char **argv) {
-    int *ring, ev[4], busy, input, k, t, start_ms, second_draw, last_input, last_frame, last_draw;
+static int *ring;
+static int start_ms, second_draw, last_input, last_frame, last_draw;
 
+// One pass of the loop: the display's events to the windows, the
+// timers, the screen saver, a redraw, and a nap when there is nothing to
+// do. At the top (top = 1) it also unloads the applications that have
+// gone (apps_reap). grin_pump is the same pass for a DOS program that
+// waits in grin -- a DOS Prompt's program reading a line -- and so
+// unloads nothing and starts no DOS program: that program, DOS and grin's
+// own exec are on the stack under it.
+static void pass(int top) {
+    int ev[4], busy, input, k, t;
+    busy = 0; input = 0;
+    while (gui_poll(ev)) {
+        busy = 1; input = 1;
+        last_input = __time();
+        // the screen saver: the first key or movement ends it, and goes
+        // no further (except while a Test's click is let go)
+        if (saver_active()) {
+            if (ev[0] == GUI_EV_RESIZE) { wk_event(ev); continue; }
+            if (__time() - saver_grace < 0) continue;
+            if (ev[0] == GUI_EV_FOCUS) continue;
+            saver_stop();
+            gui_cursor(GUI_PTR_ARROW);
+            wk_repoint();
+            wk_redraw_all();
+            continue;
+        }
+        wk_event(ev);
+    }
+    // the first frame once more half a second in, in case the page was
+    // not yet showing the display when it came
+    if (!second_draw && __time() - start_ms >= 500) { second_draw = 1; wk_redraw_all(); }
+    wk_tick();
+    if (top) apps_reap();
+    if (!saver_active() && ini.saver && __time() - last_input >= ini.wait * 60000) {
+        saver_start(ini.saver);
+        gui_cursor(GUI_PTR_NONE);
+    }
+    if (saver_active()) {
+        if (__time() - last_frame >= SAVER_MS) { saver_frame(); gui_show(); last_frame = __time(); }
+        k = SAVER_MS - (__time() - last_frame);
+        if (k < 1) k = 1;
+        __c4_usleep(k * 1000);
+        return;
+    }
+    // a redraw: at once for input, else at most one every 25 ms
+    if (wk_dirty() && (input || __time() - last_draw >= 25)) {
+        wk_redraw(0);
+        last_draw = __time();
+        wk_drawn();
+        busy = 1;
+    }
+    // nothing to do: a nap until the next thing due, which an event
+    // from the display cuts short
+    if (!busy && running) {
+        k = wk_dirty() ? 25 - (__time() - last_draw) : NAP;
+        t = wk_next_timer();
+        if (t >= 0 && t < k) k = t;
+        if (!second_draw && k > 100) k = 100;
+        if (k < 1) k = 1;
+        __c4_usleep(k * 1000);
+    }
+}
+
+void grin_pump() { pass(0); }
+
+void grin_draw_now() {
+    if (saver_active() || !wk_dirty()) return;
+    wk_redraw(0);
+    last_draw = __time();
+    wk_drawn();
+}
+
+// ---- DOS programs, full screen (docs/grin-plan.md 3.6) ------------------------------
+//
+// grin hides its pointer and gives the display up (gui_detach); DOS runs
+// the program, which takes the display for itself; and when it returns,
+// grin takes the display back -- its ring again (the program took
+// GUI_RING and dropped it), its size, event mask and pointer -- quiets
+// the sound card, and draws everything. DOS has released the program's
+// heap by then. This is the C4IX desktop's udisplay_give and take with no
+// kernel in it. Always from the top of the loop, never from inside a
+// window's code, where the kit is on the stack.
+
+enum { FULL_LINE = 256 };
+static char full_cmd[FULL_LINE];
+static int full_queued;
+
+int grin_full_waiting() { return full_queued; }
+
+int grin_full(char *cmdline) {
+    if (dos_refuse()) return 0 - 1;
+    if (!ui_ncpy(full_cmd, cmdline, FULL_LINE)) return 0 - 1;
+    full_queued = 1;
+    return 0;
+}
+
+static void full_run() {
+    full_queued = 0;
+    dos_busy = 1;
+    dos_busy_set(full_cmd);
+    if (saver_active()) saver_stop();
+    gui_cursor(GUI_PTR_NONE);
+    gui_clear(0x000000);
+    gui_show();
+    gui_detach();
+    gd_exec(full_cmd);
+    // the display back, as main first took it
+    if (!gui_attach(ring, RING, ini.sw, ini.sh)) printf("grin: the display refused the ring after %s\n", dos_busy_name);
+    gui_events(EVENTS);
+    gui_cursor(GUI_PTR_ARROW);
+    if (snd_present()) snd_reset();
+    dos_busy = 0;
+    dos_busy_name[0] = 0;
+    wk_repoint();
+    wk_redraw_all();
+    last_input = __time();
+}
+
+int main(int argc, char **argv) {
     // c4bb and native c4m have no display, and say so through the info
     // word; there is nothing for grin to do there
     if (!gui_present()) { printf("grin: this machine has no display, so grin cannot run here.\n"); return 1; }
@@ -372,56 +498,11 @@ int main(int argc, char **argv) {
     start_ms = __time(); second_draw = 0;
     last_input = __time(); last_frame = 0; last_draw = 0;
     while (running) {
-        busy = 0; input = 0;
-        while (gui_poll(ev)) {
-            busy = 1; input = 1;
-            last_input = __time();
-            // the screen saver: the first key or movement ends it, and goes
-            // no further (except while a Test's click is let go)
-            if (saver_active()) {
-                if (ev[0] == GUI_EV_RESIZE) { wk_event(ev); continue; }
-                if (__time() - saver_grace < 0) continue;
-                if (ev[0] == GUI_EV_FOCUS) continue;
-                saver_stop();
-                gui_cursor(GUI_PTR_ARROW);
-                wk_repoint();
-                wk_redraw_all();
-                continue;
-            }
-            wk_event(ev);
-        }
-        // the first frame once more half a second in, in case the page was
-        // not yet showing the display when it came
-        if (!second_draw && __time() - start_ms >= 500) { second_draw = 1; wk_redraw_all(); }
-        wk_tick();
-        apps_reap();
-        if (!saver_active() && ini.saver && __time() - last_input >= ini.wait * 60000) {
-            saver_start(ini.saver);
-            gui_cursor(GUI_PTR_NONE);
-        }
-        if (saver_active()) {
-            if (__time() - last_frame >= SAVER_MS) { saver_frame(); gui_show(); last_frame = __time(); }
-            k = SAVER_MS - (__time() - last_frame);
-            if (k < 1) k = 1;
-            __c4_usleep(k * 1000);
-            continue;
-        }
-        // a redraw: at once for input, else at most one every 25 ms
-        if (wk_dirty() && (input || __time() - last_draw >= 25)) {
-            wk_redraw(0);
-            last_draw = __time();
-            wk_drawn();
-            busy = 1;
-        }
-        // nothing to do: a nap until the next thing due, which an event
-        // from the display cuts short
-        if (!busy && running) {
-            k = wk_dirty() ? 25 - (__time() - last_draw) : NAP;
-            t = wk_next_timer();
-            if (t >= 0 && t < k) k = t;
-            if (!second_draw && k > 100) k = 100;
-            if (k < 1) k = 1;
-            __c4_usleep(k * 1000);
+        pass(1);
+        // the top of the loop: a DOS program waiting to run, one at a time
+        if (running && !dos_busy) {
+            if (full_queued) full_run();
+            else dosprompt_top();
         }
     }
 

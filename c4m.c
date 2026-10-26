@@ -237,6 +237,7 @@ char *p, *lp, // current position in source code
      *data;   // data/bss pointer
 
 int *e, *le,  // current position in emitted code
+    *e_end,   // where the text area ends, less a statement's worth (stmt)
     *id,      // currently parsed identifier
     *sym,     // symbol table (simple list of identifiers)
     tk,       // current token
@@ -769,6 +770,14 @@ void stmt()
   int *a, *b, t;
   int *swv, *swa, *tbl, *b3, *b4, *bend, *bdef;
   int  swn, swdef, swmin, swmax, swrange, i2, v2, neg2, brk_base;
+
+  // Nothing checked the text area's end: code past it went into
+  // whatever was allocated next, harmlessly as it happened under
+  // glibc, into live memory under C4KE's heap, and the program crashed
+  // later. The kernel compiled from source (innerbench) had come within
+  // 300 words of it at 64 bits. One statement emits well under the
+  // margin e_end leaves.
+  if (e >= e_end) { printf("%d: code area full; c4m -PP doubles it\n", line); exit(-1); }
 
   if (tk == If) {
     next();
@@ -1720,7 +1729,7 @@ int c4m_close (int fd) {
 
 int c4m_main(int argc, char **argv)
 {
-  int fd, bt, ty, poolsz, printsyms;
+  int fd, bt, ty, poolsz, printsyms, textsz;
   int *pc, *sp, *bp, a; // vm registers
   int i, *t, r; // temps
   char*_p, *_data;       // initial pointer locations
@@ -1772,7 +1781,12 @@ int c4m_main(int argc, char **argv)
   if (!(sym = _sym = malloc(poolsz))) { printf("could not malloc(%d) symbol area\n", poolsz); return -1; }
   idmax = sym + (poolsz / sizeof(int)); // end of symbol table
   idmax = idmax - Idsz;                 // minus one element
-  if (!(le = e = _e = malloc(poolsz))) { printf("could not malloc(%d) text area\n", poolsz); return -1; }
+  // The text area counts words, so it is sized in them: 64K at the
+  // default pool, whatever the word size (256 KB at 32 bits, as it
+  // always was; 512 KB at 64, where poolsz bytes held only 32K).
+  textsz = poolsz / 4 * sizeof(int);
+  if (!(le = e = _e = malloc(textsz))) { printf("could not malloc(%d) text area\n", textsz); return -1; }
+  e_end = e + textsz / sizeof(int) - 1024;
   if (!(data = _data = malloc(poolsz))) { printf("could not malloc(%d) data area\n", poolsz); return -1; }
   if (!(sp = _sp = malloc(poolsz))) { printf("could not malloc(%d) stack area\n", poolsz); return -1; }
   if (!(brk_slots = malloc(BRK_MAX * sizeof(int)))) { printf("could not malloc break stack\n"); return -1; }
@@ -1781,7 +1795,7 @@ int c4m_main(int argc, char **argv)
   if ((i = __c4_signal_init())) { printf("c4m: signal init failed with reason %d\n", i); return -1; }
 
   memset(sym,  0, poolsz);
-  memset(e,    0, poolsz);
+  memset(e,    0, textsz);
   memset(data, 0, poolsz);
 
 #if C4_ONLY

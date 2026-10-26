@@ -8,6 +8,12 @@
 // cycle counter (CYCLES_PER_MS cycles = 1 simulated millisecond) plus
 // an offset that USLP advances, so a run is a pure function of its
 // inputs and every run of the same image produces identical timing.
+//
+// /proc/uptime: the disk controller opens that name as the HOST's file,
+// the way Linux's is for a native c4m -- made from TIME_MS, the clock the
+// TIME opcode reads, at each open, so it advances. Everything that opens
+// files through this controller sees it: C4DOS, a bare-machine program,
+// a C4KE task (whose open() never reaches its kernel). See diskOpen.
 
 export const UART_TX   = 0x100;
 export const UART_RX   = 0x104;
@@ -348,10 +354,11 @@ export class Devices {
       if (raw) this.rawKbd++;
       return fd;
     }
-    // The machine's clock as a file, as a Linux host has it: c4m.c run
-    // by plain c4 (innerbench -c, the C4DOS floppies' c4m) reads its
-    // time from /proc/uptime, and a C4DOS or C4KE program's open() comes
-    // straight here -- neither kernel sees it. Made fresh at each open.
+    // The host's /proc/uptime, as Linux has one for a native c4m: c4m.c
+    // run by plain c4 (innerbench -c, the C4DOS floppies' c4m) reads its
+    // time from it, and a C4DOS, bare or C4KE program's open() comes
+    // straight here -- no kernel sees it. Made from TIME_MS (simMs) at
+    // each open, so two opens apart see two times.
     if (name === '/proc/uptime') {
       const fd = this.nextFd++;
       this.fds.set(fd, { data: procUptime(Math.max(0, this.simMs())), pos: 0 });

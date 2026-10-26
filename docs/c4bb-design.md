@@ -189,8 +189,11 @@ to `/dev/stdin` and degrades to batched input.
 `Devices.rawKbd` counts the open raw descriptors, so an embedding UI
 can suppress its own local echo while one is held.
 
-Opening **`/proc/uptime`** gives a fresh file in Linux's format, made from
-the machine's clock (`TIME_MS`) at the open: seconds since power-on with
+Opening **`/proc/uptime`** gives the host's `/proc/uptime`, as Linux has
+one for a native c4m: whatever runs on the machine and opens files through
+this controller sees it -- C4DOS, a bare-machine program, a C4KE task. It
+is made from the machine's clock (`TIME_MS`, what the TIME opcode reads)
+at each open, so it advances: seconds since power-on with
 two decimals, then the same clock in tenths of a second where Linux has its
 idle time. That is the number c4m.c's default reading takes as tenths
 (`c4_time_host`, under plain c4), so a plain-c4 c4m.c running under C4DOS

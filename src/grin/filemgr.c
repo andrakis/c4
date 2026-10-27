@@ -1,10 +1,11 @@
 // filemgr.c -- File Manager (docs/grin-plan.md 4): a drive bar over a
-// list of the drive's files.
+// list of a directory's folders and files.
 //
 // The bar has A:, every other drive C4DOS has (DISK_COUNT, through its
 // slot 29), and RAM:, its RAM disk. A drive is listed from its
-// c4dos.dir, which DOS keeps on every drive it writes; the RAM disk from
-// DOS's own slots. A file's size is read when it is selected, as the
+// c4dos.dir, which DOS keeps on every drive it writes, a directory at a
+// time (C4DOS's API v7); the RAM disk from DOS's own slots. A double
+// click on a folder opens it, and on ".." goes back up. A file's size is read when it is selected, as the
 // disk has no other way to say it. The list is read again when the
 // window comes to the front, so a file Notepad has just saved is there.
 //
@@ -23,11 +24,12 @@ enum { D_DELETE = 1, D_COPY = 2 };
 
 struct fm {
     int drive;                        // the drive listed (0 = A:), or DRV_RAM
+    char dir[WK_PATH];                // its directory listed: "" the root, "GAMES/DOOM"
     int n, top, sel;                  // its files, the first shown, the selected (-1 none)
     int size;                         // the selected file's size: -1 it would not open, -2 not read yet
     int was_focused;
     char *names;                      // FM_MAX names, WK_NAME bytes each
-    char path[WK_PATH];               // the selected file's DOS name ("B:NOTE.TXT")
+    char path[WK_PATH];               // the selected file's DOS name ("B:/NOTE.TXT")
     char ask[WK_PATH];                // Copy's destination
     char msg[WK_PATH + 96];
 };
@@ -50,10 +52,35 @@ static char *drive_label(int d, char *out) {
     return out;
 }
 
+// is entry k a folder ("NAME/", or ".." going up)?
+static int is_folder(struct fm *f, int k) {
+    char *s;
+    s = name_of(f, k);
+    return ui_len(s) > 0 && s[ui_len(s) - 1] == '/';
+}
+
+// the DOS name of entry k, from the root, as a person writes it:
+// "A:\GAMES\DOOM.C4R", "RAM:\X"
+static char *fm_name(struct fm *f, int k, char *out) {
+    char lab[8];
+    int i;
+    ui_ncpy(out, drive_label(f->drive, lab), WK_PATH);
+    ui_ncat(out, "\\", WK_PATH);
+    i = ui_len(out);
+    ui_ncat(out, f->dir, WK_PATH);
+    if (f->dir[0]) ui_ncat(out, "/", WK_PATH);
+    ui_ncat(out, name_of(f, k), WK_PATH);
+    while (out[i]) { if (out[i] == '/') out[i] = '\\'; ++i; }
+    return out;
+}
+
 static void reload(int w) {
     struct fm *f;
     f = F(w);
-    f->n = f->names ? gd_list(f->drive, f->names, FM_MAX) : 0;
+    f->n = 0;
+    // below the root, ".." first: the way back up
+    if (f->names && f->dir[0]) { ui_cpy(f->names, "../"); f->n = 1; }
+    if (f->names) f->n = f->n + gd_list(f->drive, f->dir, f->names + f->n * WK_NAME, FM_MAX - f->n);
     if (f->sel >= f->n) f->sel = 0 - 1;
     if (f->top > f->n) f->top = 0;
     f->size = 0 - 2;
@@ -64,6 +91,29 @@ static void choose(int w, int d) {
     struct fm *f;
     f = F(w);
     f->drive = d; f->sel = 0 - 1; f->top = 0;
+    f->dir[0] = 0;
+    reload(w);
+}
+
+// into folder k: down into it, or up for ".."
+static void enter(int w, int k) {
+    struct fm *f;
+    int n;
+    char *s;
+    f = F(w);
+    s = name_of(f, k);
+    if (s[0] == '.' && s[1] == '.') {
+        n = ui_len(f->dir);
+        while (n > 0 && f->dir[n - 1] != '/') --n;
+        if (n > 0) --n;
+        f->dir[n] = 0;
+    } else {
+        if (f->dir[0]) ui_ncat(f->dir, "/", WK_PATH);
+        ui_ncat(f->dir, s, WK_PATH);
+        n = ui_len(f->dir);
+        if (n > 0 && f->dir[n - 1] == '/') f->dir[n - 1] = 0;
+    }
+    f->sel = 0 - 1; f->top = 0;
     reload(w);
 }
 
@@ -95,17 +145,27 @@ static void fm_draw(int w, int cw, int ch, int focused) {
     k = f->top;
     while (k < f->n && k < f->top + rows(ch)) {
         if (k == f->sel) d_rect(LX + 2, y, lw - 22, ROW, focused ? C_SEL : C_SHADOW);
-        // a page, folded at its corner
-        d_rect(LX + 6, y + 2, 9, 12, C_DARK);
-        d_rect(LX + 7, y + 3, 7, 10, C_WHITE);
-        d_rect(LX + 11, y + 3, 3, 3, C_SHADOW);
-        d_text(LX + 22, y + 1, k == f->sel ? C_WHITE : C_DARK, F_SANS, name_of(f, k));
+        if (is_folder(f, k)) {
+            // a folder, with its tab
+            d_rect(LX + 5, y + 3, 5, 2, C_DARK);
+            d_rect(LX + 5, y + 4, 12, 9, C_DARK);
+            d_rect(LX + 6, y + 5, 10, 7, 0xffe080);
+            ui_ncpy(f->msg, name_of(f, k), WK_PATH + 96);
+            f->msg[ui_len(f->msg) - 1] = 0;
+            d_text(LX + 22, y + 1, k == f->sel ? C_WHITE : C_DARK, F_SANS, f->msg);
+        } else {
+            // a page, folded at its corner
+            d_rect(LX + 6, y + 2, 9, 12, C_DARK);
+            d_rect(LX + 7, y + 3, 7, 10, C_WHITE);
+            d_rect(LX + 11, y + 3, 3, 3, C_SHADOW);
+            d_text(LX + 22, y + 1, k == f->sel ? C_WHITE : C_DARK, F_SANS, name_of(f, k));
+        }
         y = y + ROW;
         ++k;
     }
     ui_scrollbar(LX + lw - 18, list_y() + 2, list_h(ch) - 4, f->n, rows(ch), f->top);
     // the status line: the file selected and its size, or how many
-    if (f->sel >= 0 && f->size == 0 - 2) f->size = gd_size(gd_name(f->drive, name_of(f, f->sel), f->path, WK_PATH));
+    if (f->sel >= 0 && f->size == 0 - 2) f->size = is_folder(f, f->sel) ? 0 - 1 : gd_size(fm_name(f, f->sel, f->path));
     f->msg[0] = 0;
     if (f->sel >= 0) {
         ui_ncpy(f->msg, f->path, WK_PATH + 96);
@@ -115,7 +175,12 @@ static void fm_draw(int w, int cw, int ch, int focused) {
             ui_ncat(f->msg, f->size == 1 ? " byte" : " bytes", WK_PATH + 96);
         }
     } else {
+        // "A:\GAMES   5 files"
         ui_ncpy(f->msg, drive_label(f->drive, lab), WK_PATH + 96);
+        ui_ncat(f->msg, "\\", WK_PATH + 96);
+        k = ui_len(f->msg);
+        ui_ncat(f->msg, f->dir, WK_PATH + 96);
+        while (f->msg[k]) { if (f->msg[k] == '/') f->msg[k] = '\\'; ++k; }
         ui_ncat(f->msg, "   ", WK_PATH + 96);
         ui_ncat(f->msg, ui_num(num, f->n), WK_PATH + 96);
         ui_ncat(f->msg, f->n == 1 ? " file" : " files", WK_PATH + 96);
@@ -142,8 +207,8 @@ static char cmd[WK_PATH + 16];
 static void edit_sel(int w) {
     struct fm *f;
     f = F(w);
-    if (f->sel < 0) return;
-    gd_name(f->drive, name_of(f, f->sel), f->path, WK_PATH);
+    if (f->sel < 0 || is_folder(f, f->sel)) return;
+    fm_name(f, f->sel, f->path);
     ui_cpy(cmd, "NOTEPAD ");
     ui_ncat(cmd, f->path, WK_PATH + 16);
     grin_run(cmd);
@@ -152,7 +217,8 @@ static void open_sel(int w) {
     struct fm *f;
     f = F(w);
     if (f->sel < 0) return;
-    gd_name(f->drive, name_of(f, f->sel), f->path, WK_PATH);
+    if (is_folder(f, f->sel)) { enter(w, f->sel); return; }
+    fm_name(f, f->sel, f->path);
     if (ends(f->path, ".bat")) dosprompt_open(f->path);
     else if (is_text(f->path)) {
         ui_cpy(cmd, "NOTEPAD ");
@@ -178,8 +244,9 @@ static void fm_command(int w, int id) {
     id = id % WK_CMD_STEP;
     if (id == M_REFRESH) { reload(w); return; }
     if (id == M_EXIT) { wk_ask_close(w); return; }
-    if (f->sel < 0) { if (id <= M_DELETE) wk_msgbox(w, 0, "File Manager", "Select a file first.", WK_OK); return; }
-    gd_name(f->drive, name_of(f, f->sel), f->path, WK_PATH);
+    if (f->sel >= 0 && is_folder(f, f->sel) && id == M_OPEN) { enter(w, f->sel); return; }
+    if (f->sel < 0 || is_folder(f, f->sel)) { if (id <= M_DELETE) wk_msgbox(w, 0, "File Manager", "Select a file first.", WK_OK); return; }
+    fm_name(f, f->sel, f->path);
     if (id == M_OPEN) open_sel(w);
     else if (id == M_EDIT) edit_sel(w);
     else if (id == M_DELETE) {
@@ -190,7 +257,7 @@ static void fm_command(int w, int id) {
     } else if (id == M_COPY) {
         // offered: the home drive, or from there the RAM disk
         home = gd_home();
-        if (home >= 0 && home != f->drive) { f->ask[0] = 'A' + home; f->ask[1] = ':'; f->ask[2] = 0; }
+        if (home >= 0 && home != f->drive) { f->ask[0] = 'A' + home; f->ask[1] = ':'; f->ask[2] = '\\'; f->ask[3] = 0; }
         else ui_cpy(f->ask, "RAM:");
         ui_ncpy(f->msg, "Copy ", WK_PATH + 96);
         ui_ncat(f->msg, f->path, WK_PATH + 96);
@@ -314,6 +381,7 @@ int filemgr_open() {
     f->names = (char *)malloc(FM_MAX * WK_NAME);
     home = gd_home();
     f->drive = home >= 0 ? home : 0;
+    f->dir[0] = 0;
     f->sel = 0 - 1;
     reload(w);
     return w;

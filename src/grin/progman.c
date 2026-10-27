@@ -8,7 +8,7 @@
 //   File Manager=FILEMAN,files,app
 //   ...
 //   [Games]
-//   Doom=DOOM,game,window
+//   Doom=\GAMES\DOOM\DOOM,game,window
 //
 // An item is a title, a command line, an icon and a run mode: app (a grin
 // application, or one of grin's own windows, named by the command lines
@@ -50,12 +50,23 @@ static char *defaults[16] = {
     "Clock=CLOCK,clock,app",
     "Calculator=CALC,calc,app",
     "[Games]",
-    "Wolfenstein 3D=WOLF3D,game,window",
-    "Doom=DOOM,game,window",
-    "Tyrian=TYRIAN,game,window",
-    "Rise of the Triad=ROTT,game,window",
+    "Wolfenstein 3D=\\GAMES\\WOLF3D\\WOLF3D,game,window",
+    "Doom=\\GAMES\\DOOM\\DOOM,game,window",
+    "Tyrian=\\GAMES\\TYRIAN\\TYRIAN,game,window",
+    "Rise of the Triad=\\GAMES\\ROTT\\ROTT,game,window",
     0
 };
+// A PROGMAN.INI written before the games had directories (C4DOS's API
+// v7) names them by their bare words, which no longer find their data:
+// such an item is given the new command line when it is read.
+static char *moved[9] = {
+    "WOLF3D", "\\GAMES\\WOLF3D\\WOLF3D",
+    "DOOM", "\\GAMES\\DOOM\\DOOM",
+    "TYRIAN", "\\GAMES\\TYRIAN\\TYRIAN",
+    "ROTT", "\\GAMES\\ROTT\\ROTT",
+    0
+};
+static int ini_moved;
 static char *mode_names[N_MODES] = { "app", "full", "window" };
 static char *mode_labels[N_MODES] = { "grin application", "DOS program, full screen", "DOS program, in a window" };
 enum { N_ICONS = 8 };
@@ -123,6 +134,11 @@ static void ini_take() {
     k = 0;
     while (k < N_MODES) { if (ieq(f, mode_names[k])) it->mode = k; ++k; }
     if (!it->cmd[0]) return;
+    k = 0;
+    while (moved[k]) {
+        if (it->mode == RUN_FULL && ieq(it->cmd, moved[k])) { ui_ncpy(it->cmd, moved[k + 1], I_CMD); ini_moved = 1; }
+        k = k + 2;
+    }
     it->group = ngroups - 1;
     it->used = 1;
 }
@@ -163,6 +179,7 @@ static void pm_load() {
         if (n < 0) n = 0;
     }
     inibuf[n] = 0;
+    ini_moved = 0;
     i = 0;
     while (i < n) {
         k = 0;
@@ -171,7 +188,7 @@ static void pm_load() {
         line[k] = 0;
         if (k) ini_take();
     }
-    if (ngroups) return;
+    if (ngroups) { if (ini_moved) pm_save(); return; }
     k = 0;
     while (defaults[k]) { ui_ncpy(line, defaults[k], 200); ini_take(); ++k; }
     pm_save();

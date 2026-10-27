@@ -16,7 +16,10 @@ if [ -z "$OUT" ]; then          # on its own, not sourced
     DISK=$OUT/disk
     LJDOS=libjs/images/dos
     GAMES_ON_DISK=$(cat $OUT/.games-on-disk 2> /dev/null || true)
+    GAMEFILES=$OUT/.gamefiles
+    GAMESDISK=$OUT/games
     say () { echo "c4bb: $*"; }
+    . src/c4bb/tests/page-disks.sh
 fi
 # --- the climb disk, for the browser ---------------------------------
 # The web front-end fetches media out of images/, and the whole ladder
@@ -93,18 +96,46 @@ rm -rf $LJLAD
 if [ -n "$CLIMBSRC" ] && [ -f $LJDOS/c4dos32.c4r ]; then
     say "the page's ladder disk, C4DOS to C4KE to C4IX: $LJLAD"
     mkdir -p $LJLAD
-    lad_put () {            # lad_put DIR: DIR's files onto the ladder disk, over what is there
+    # Its directories, a file's by its name: GAMES\NAME (a game's files,
+    # as on the page's C4DOS disk), GRIN and BIN (the same), BUILD (the
+    # build kit: the batch files, the archives, the compilers and the tools
+    # BUILD, LADDER and IX run, c4lc's Lisp, b4ke and what it reads), C4IX
+    # (C4IX's userland and its tree, c4ix.vfs.txt), and C4KE (C4KE's: the
+    # rest of the shared disk and the climb floppy, its programs and their
+    # sources). src/ stays where it was: the nested c4m innerbench starts
+    # opens src/c4ke/c4ke.c by that path.
+    lad_dir () {
+        case "$1" in
+            # (the shared disk's tyrian/ is C4IX's: its hostdir(tyrian/))
+            tyrian/*) echo C4IX ;;
+            */*) g=$(game_of "$1"); if [ -n "$g" ]; then echo "GAMES/$g"; fi ;;
+            config.sys|autoexec.bat|c4dos32.c4r|ladder.txt) ;;
+            grin.c4r|clock.c4r|calc.c4r|notepad.c4r|exitkey.c4r) echo GRIN ;;
+            askline.c4r|dosfilt.c4r|hello.c4r) echo BIN ;;
+            c4ix-src.tar|c4ix.b4k|c4ix.objs|c4ix.lst) echo BUILD ;;
+            c4ix-*|c4ix.*|c4ix_user.h) echo C4IX ;;
+            *.bat|*.tar|*.lisp|*.b4k|*.lst|u0.h) echo BUILD ;;
+            cpp.c4r|c4cc.c4r|c4sp.c4r|c4sc.c4r|c4rlink.c4r|c4rdump.c4r|c4th.c4r) echo BUILD ;;
+            dostar.c4r|dosload.c4r|b4ke.c4r|kboot.c4r|tar.c4r|install.c4r|kinstall.c4r) echo BUILD ;;
+            bbsave.c4r|save.c4r|reboot.c4r) echo BUILD ;;
+            *) g=$(game_of "$1"); if [ -n "$g" ]; then echo "GAMES/$g"; else echo C4KE; fi ;;
+        esac
+    }
+    lad_put () {            # lad_put DIR: DIR's files onto the ladder disk, each in its directory, over what is there
         (cd $1 && find . -type f ! -name manifest.json ! -name index.json ! -name c4dos.dir \
-            ! -name config.sys ! -name autoexec.bat | sed 's|^\./||') | while read f; do
-            mkdir -p "$LJLAD/$(dirname "$f")"
-            rm -f "$LJLAD/$f"
-            ln "$1/$f" "$LJLAD/$f" 2> /dev/null || cp "$1/$f" "$LJLAD/$f"
+            ! -name config.sys ! -name autoexec.bat | sed 's|^\./||') | while read -r f; do
+            # a page disk's own directories are the ladder's too
+            case "$f" in
+                GRIN/*|BIN/*|GAMES/*) to=$f ;;
+                *) d=$(lad_dir "$f"); to=${d:+$d/}$f ;;
+            esac
+            lj_put "$1/$f" $LJLAD "$to"
         done
     }
     lad_put $DISK
     lad_put $CLIMBSRC
     lad_put $LJDOS
-    rm -f $LJLAD/c4ix.c4r $LJLAD/boot.cfg
+    rm -f $LJLAD/C4IX/c4ix.c4r $LJLAD/C4KE/boot.cfg
     # The ladder's own files. Each name is unlinked first: what is there is
     # a hard link into one of the disks above, and a cp onto it writes
     # THROUGH the link, into that disk. That is how the climb floppy's
@@ -112,9 +143,9 @@ if [ -n "$CLIMBSRC" ] && [ -f $LJDOS/c4dos32.c4r ]; then
     # place of the shared disk's here, or the other way round, depending
     # on which was made last. C4IX's tree is the shared disk's, so the
     # C4IX the ladder builds comes up as ?system=c4ix does.
-    rm -f $LJLAD/c4ix.vfs.txt $LJLAD/build.bat $LJLAD/ladder.txt
-    cp $DISK/c4ix.vfs.txt $LJLAD/c4ix.vfs.txt
-    cp src/c4dos/fs/BUILD.BAT $LJLAD/build.bat
+    rm -f $LJLAD/C4IX/c4ix.vfs.txt $LJLAD/BUILD/build.bat $LJLAD/ladder.txt
+    cp $DISK/c4ix.vfs.txt $LJLAD/C4IX/c4ix.vfs.txt
+    cp src/c4dos/fs/BUILD.BAT $LJLAD/BUILD/build.bat
     cp src/c4dos/fs/LADDER.TXT $LJLAD/ladder.txt
     # the climb floppy's RAM disk (32 MB: LADDER and the kernel's sources),
     # and the page's devices: HEAP.SYS gives each rung's memory back when
@@ -127,19 +158,21 @@ if [ -n "$CLIMBSRC" ] && [ -f $LJDOS/c4dos32.c4r ]; then
     list=$(echo $GAMES_ON_DISK | sed 's/ /, /g')
     {
         printf '@ECHO OFF\nECHO Welcome to C4DOS, the Build Ladder\nVER\n'
-        if [ -n "$list" ]; then printf 'ECHO The games on this disk: %s.\n' "$list"; fi
+        printf 'PATH \\BUILD;\\GRIN;\\BIN\n'
+        # C4KE and C4IX look for a file where they were started, as DOS
+        # did before it had directories; APPEND says where else to look,
+        # for them (the machine's DISK_DIRS) and for DOS
+        printf 'REM C4KE and C4IX find their files, and the games, through APPEND\n'
+        printf 'APPEND \\BUILD;\\C4KE;\\C4IX;%s\n' "$(games_dirs)"
+        if [ -n "$list" ]; then printf 'ECHO The games, in \\GAMES: %s.\n' "$list"; fi
         # (C4DOS splits a line into at most 15 words, so ECHO says 14; and
         # no > in an ECHO: REDIR.SYS would take it for a redirection)
         printf 'ECHO GRIN starts the graphical shell.\n'
         printf 'ECHO Climb: BUILD, then RUN dosload.c4r c4ke.c4r boots the kernel it built.\n'
         printf 'ECHO TYPE LADDER.TXT says every step, up to C4IX.\n'
     } > $LJLAD/autoexec.bat
-    (cd $LJLAD && ls -p | grep -v '/$' | grep -v '^manifest.json$' > c4dos.dir)
-    (cd $LJLAD && find . -type f -not -name manifest.json | sed 's|^\./||') | \
-        awk 'BEGIN{printf "["} NR>1{printf ","} {printf "\"%s\"", $0} END{print "]"}' > $LJLAD/manifest.json
-    (cd $LJLAD && find . -type f -not -name manifest.json -not -name index.json -printf '%s %P\n' | sort -k2) | \
-        awk 'BEGIN{printf "["} NR>1{printf ","} {n=$0; sub(/^[0-9]+ /,"",n); printf "[\"%s\",%s]", n, $1} END{print "]"}' \
-        > $LJLAD/index.json
+    listings $LJLAD
+    disk_indexes $LJLAD
     echo "c4bb: ladder disk: $LJLAD ($(find $LJLAD -type f | wc -l) files, $(du -sh $LJLAD | cut -f1))"
 else
     echo "c4bb: no ladder disk: it needs the climb floppy ('make c4bb-images' makes it) and $LJDOS" >&2

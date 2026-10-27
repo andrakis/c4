@@ -54,7 +54,7 @@ void apps_publish(int on);            // the table in slot 25 (1), or out of it 
 int  grin_fwin_open(char *title, int w, int h, int flags);
 void grin_fwin_frame(char *pixels, int w, int h, int pitch, int *pal);
 int  grin_fwin_poll(int *ev);
-void fwin_init();                     // at the start: grin's image (C4DOS v7)
+void fwin_init();                     // at the start: grin's image (C4DOS v8)
 int  fwin_event(int *ev);             // an event from the display: 1 if it was the game's
 int  fwin_fresh();                    // a game's frame waits to be drawn
 void fwin_run(char *cmdline);         // from the top of the loop: the program, windowed
@@ -95,7 +95,7 @@ int   gd_exec(char *line);            // a command line, as A> runs it: its stat
 int   gd_sink(int w, int r, int ctx); // the console's sink (slot 24): w(ctx, buf, n), r(ctx, buf, n); 0s give it back
 int   gd_setgen(int g);               // the heap generation now: the previous one, or -1
 int   gd_drive();                     // the drive DOS's prompt is on, 0 = A: (v6)
-int   gd_image(int h);                // the image DOS counts as running made h (0: only asked): the one before (v7), 0 without
+int   gd_image(int h);                // the image DOS counts as running made h (0: only asked): the one before (v8), 0 without
 // under C4KE, with no DOS (disk.c): its tasks, and the machine's console tap
 int   gd_c4ke();                      // 1: grin is a C4KE task, and there is no DOS
 int   gd_ke_start(int argc, char **argv);   // a program as a task: its pid, 0 if it could not start
@@ -106,7 +106,9 @@ int   gd_tap_drain(char *buf, int n); // what was printed, up to n bytes: how ma
 void  gd_tap_feed(char *buf, int n);  // fd 0 reads these n bytes, then end of input; -1: the keyboard
 int   gd_tap_left();                  // bytes of the feed not read yet (-1: the keyboard)
 int   gd_size(char *name);            // bytes, read through; -1 if it is not there
-int   gd_list(int drive, char *names, int max);   // a drive's files, WK_NAME bytes each: how many
+int   gd_list(int drive, char *dir, char *names, int max);   // a directory's files, WK_NAME bytes each ("NAME/" a directory): how many
+char *gd_getcwd(int drive);           // a drive's current directory, "\GAMES" (v7); -1 the prompt's
+int   gd_chdir(char *path);           // CD path: 0, or -1 (v7)
 char *gd_name(int drive, char *name, char *out, int n);   // "B:NAME", "RAM:NAME"
 
 // grin's dialogs: windows of the kit's dialog chrome (WK_DIALOG), whose

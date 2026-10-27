@@ -90,10 +90,10 @@ const key = (code, ch = 0) => {
   gui.event({ kind: 'keyup', code, char: ch });
   for (let i = 0; i < 20; i++) run(1e6);
 };
-const prompts = () => (text().match(/A>/g) || []).length;
+const prompts = () => (text().match(/A:\\[^>\n]*>/g) || []).length;   // A:\>, A:\GAMES>
 
 check(until(() => prompts() > 0), haveGames ? 'C4DOS boots the games disk' : 'C4DOS boots', text());
-if (!noheap) check(text().includes('heap device installed'), 'HEAP.SYS is installed', text());
+if (!noheap) check(text().includes("installed: each program's memory is freed when it ends"), 'HEAP.SYS is installed', text());
 // One command at the prompt; what it printed.
 const cmd = (line, budget) => {
   const p = prompts(), at = text().length;
@@ -132,7 +132,7 @@ if (files.has('dosexec.c4r') && !noheap) {
         inUse.length === 2 && inUse[0] - inUse[1] >= 1048576,
     'gen and setgen put memory in a loaded image\'s generation', o);
   check(memUsed() === used1, 'and all of it is back at the prompt');
-  // slot 31 (v7): an image loaded while another is counted as running
+  // slot 35 (v8): an image loaded while another is counted as running
   // is that one's child, and goes with it
   o = cmd('dosexec image');
   check(o.includes('image gave back mine') && o.includes('image(0) now says the loaded one') &&

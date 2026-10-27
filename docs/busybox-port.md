@@ -515,6 +515,10 @@ Each step lands with tests, and the next starts only when they are green.
   - The remedies stay noted in case: size the loader's buffer from `stat`,
     strip the symbols a dynamic image does not need, and let c4rlink drop
     unreferenced functions. The last would also remove most of §5's stubs.
+  - c4rlink drops unreached functions now (2026-10-27, docs/c4dos-design.md
+    "Linking a bare program"), Busybox's too, `-l` or not. But it does so
+    after symbols are resolved, so a removed function's imports must
+    still resolve: the stubs stay.
 - **Compile time on the host** is a few minutes: c4lc compiles the 275 KB
   `c4sp.c` in about 9 s natively. Inside C4IX it is an hour-scale job.
 - **vfork was the one deep kernel change.** It touched the scheduler's

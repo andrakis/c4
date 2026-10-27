@@ -42,7 +42,11 @@ Its repository's branch `c4` carries, beside the game:
 
 A game that is not here is not built, is not on any disk, and
 `make test-NAME` says it was skipped. The bare machine's libc that the
-games link there (`make libc-bare-objs`) is c4's.
+games link there (`make libc-bare-objs`) is c4's. c4rlink drops every
+function nothing reaches, so a game carries only the libc functions it
+uses (docs/c4dos-design.md "Linking a bare program"); `--start-lib`
+before `.libc-bare`'s objects would also leave out the data of those it
+does not need at all (3 KB, libc-math's, for a game that does no math).
 
 ## Data
 

@@ -34,22 +34,23 @@ enum {
 // come out as 8 and 10, not 9 and 13 - use numeric constants.
 enum { TAB = 9, CR = 13 };
 
-// KNOWN ISSUE: roughly 1 run in a few, exactly one entry's value
-// comes back empty or garbled by the time load_entries() reads it
-// back, even though it was stored correctly (confirmed by tracing).
-// It heals when unrelated debug prints are added, which only shift
-// timing - the signature of a race, not a logic bug in this file.
-// Masking the cycle-interrupt-interval device register (0x154, the
-// same one hw/microcode.uc's trap routine and fw.c's allocator use;
-// ordinary memory access is never protected-mode gated, so userland
-// can poke it directly) around this whole program's run was tried as
-// a fix and made things reliably WORSE (5/5 failures instead of an
-// intermittent one), so something else depends on preemption staying
-// live even during this boot-time task - not yet understood. Left
-// unmasked and undiagnosed rather than guessed at further; see
-// [[c4bb-breadboard-computer]] memory / docs/c4bb-design.md for the
-// related, likely-connected C4IX `top` crash this shares a root cause
-// with.
+// KNOWN ISSUE, as of 2026-08 on the breadboard: roughly 1 run in a few,
+// exactly one entry's value came back empty or garbled by the time
+// load_entries() read it back, though it was stored correctly
+// (confirmed by tracing), and it healed when unrelated debug prints
+// shifted the timing -- a preemption race, not a logic bug in this
+// file. docs/c4bb-design.md has what was tried, and the C4IX `top`
+// crash it was thought to share a cause with. Not seen since: the
+// boots the tests make load every entry (test-c4bb, test-desktop).
+//
+// What looked like it coming back (2026-10-27) was something else.
+// Linked without its unreached functions (66,722 -> 53,878 bytes), this
+// image made C4KE, booted by c4m in a desktop Terminal, hang every time
+// -- spin never ran (test-desktop) -- and padded back to its old size it
+// worked. The size only moved WHEN things happened. The bug was C4KE's:
+// its trap handlers unmasked the timer before they had returned, so a
+// tick, or a Ctrl-C, landing in between saved one task's registers as
+// another's (c4ke.c: ih_cycle, signal_forwarder).
 
 char **g_line_text;
 int   *g_line_indent;

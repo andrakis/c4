@@ -21,7 +21,7 @@
 // grin's loop (fwin_run, from grin.c) without the display being given up,
 // or typed in a DOS Prompt. While it runs, grin's loop runs only inside
 // its polls, which are DOS's code calling grin's: so each poll runs in
-// grin's heap generation (3.3) and as grin's image (C4DOS v7, image()),
+// grin's heap generation (3.3) and as grin's image (C4DOS v8, image()),
 // so that what grin allocates, and an application started meanwhile, are
 // grin's and not the game's. Its window is closed at the top of the loop
 // once the program has ended, whichever way it ended.
@@ -48,7 +48,7 @@ static int locked;                    // the mouse is locked to the display, for
 static int rx, ry, mx, my;            // motion short of a frame pixel; the pointer, in the frame
 static int held[8];                   // the keys the game was told are down, a bit each
 static int had_focus;
-static int me;                        // grin's image (C4DOS v7), 0 without
+static int me;                        // grin's image (C4DOS v8), 0 without
 
 static void push(int t, int a, int b, int c) {
     int n;

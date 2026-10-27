@@ -135,7 +135,9 @@ The facts that shaped the design were read from the code, not assumed.
 
 **The games under C4DOS** (`src/{wolf3d,doom,rott,opentyrian}`)
 
-- **Built** by c4lc and linked whole with libc's `bare.c` layer.
+- **Built** by c4lc and linked with libc's `bare.c` layer, of which they
+  carry only what they use (c4rlink drops unreached functions,
+  docs/c4dos-design.md "Linking a bare program").
 - **How they run.** Each attaches its own ring at 640x480 and blits a
   320x200 8-bit frame scaled 2x. Each uses the sound card directly, and
   exits through `exit()`: `atexit` detaches the display, then DOS slot
@@ -239,7 +241,7 @@ and on the device line it needs, the way slots 9-15 are. As built:
 | 27 | `setgen(g)` | **added in G0**: make generation `g` current; returns the previous one, -1 without HEAP.SYS |
 
 Later versions added 28 and 29 (v5, G4: `home()`, `drives()`), 30 (v6,
-G5: `drive()`) and **31 (v7, G6): `image(h)`**, which makes `h` the image
+G5: `drive()`) and **35 (v8, G6): `image(h)`**, which makes `h` the image
 DOS counts as running -- the parent of what it loads -- and returns the
 one before; grin's game window needs it (3.6, "As built in G6").
 `docs/c4dos-design.md` "API versions" has them all.
@@ -667,8 +669,8 @@ layer):
   `pass(PASS_GAME)`, which naps never and starts no screen saver -- the
   game keeps its own time), then returns the next event in gui.h's form,
   0 for none, -1 once the window has gone. Around the pass it switches
-  to grin's heap generation (`setgen`) and to grin's image (C4DOS v7's
-  `image()`, slot 31, new): without that an application started from
+  to grin's heap generation (`setgen`) and to grin's image (C4DOS v8's
+  `image()`, slot 35, new): without that an application started from
   Program Manager while a game played would have been the game's child,
   and C4DOS would have unloaded it with the game while its windows were
   grin's.
@@ -1169,8 +1171,12 @@ Deviations and findings:
   each), for uniformity rather than need.
 - `grin_run` starts applications only. A program that does not say
   hello is refused with a message box; DOS programs come with G5.
-- grin's applications are about 0.5 MB each on the disk, the bare libc
-  linked whole into each, as it is into grin and the games.
+- grin's applications were about 0.5 MB each on the disk, the bare libc
+  linked whole into each, as it was into grin and the games. Since
+  2026-10-27 c4rlink drops the functions nothing reaches, and grin's
+  links name libc's objects as library members (docs/c4dos-design.md
+  "Linking a bare program"): Clock is 67 KB, Notepad 103 KB, Calculator
+  245 KB, grin 548 KB.
 - The headless Clocks read the host's time of day (`GUI_CLOCK` is
   `Date`), so test-grin waits for the ticks in host time, a second or
   two.
@@ -1367,7 +1373,9 @@ tyrian be9c515, rott 244588f, each on its `c4` branch's commit).
   sizes, the windowed launch), grin.c's `pass(PASS_GAME)`, `win_run` and
   the table out of slot 25 during full screen, Program Manager's window
   items and `grin_dos`; the kit's `wk_menu_open()`.
-- **C4DOS:** slot 31, `image(h)`, version 7.
+- **C4DOS:** slot 35, `image(h)`, version 8. (G6 made it slot 31 and
+  version 7; C4DOS's directories had taken both meanwhile, so the merge
+  of the two, 2026-10-27, moved it.)
 - **Games:** Doom, Tyrian and ROTT keep their C4IX-shaped window trios,
   pointed at grin; Wolf3D's `plat-bare.c` opens grin's window itself.
   50 to 80 lines each with the table's declaration. Full screen and the
@@ -1419,7 +1427,7 @@ Deviations and findings:
   `import.c`, so they read slot 25 themselves. Putting them before the
   kit's functions moved those one word, once (every application is built
   with grin).
-- **C4DOS v7, `image(h)`**, not in the plan: without it an application
+- **C4DOS v8, `image(h)`**, not in the plan: without it an application
   started from Program Manager while a game played was the game's child,
   and C4DOS unloaded it with the game while grin still had its windows.
 - **`fwin_frame` copies the frame**; the plan had grin keep the game's

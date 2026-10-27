@@ -2,31 +2,29 @@
 // (docs/grin-plan.md 3.8). Included by grin (disk.c) and by every
 // application (import.c), each of which opens files itself.
 //
-// The kit's file box thinks in folders, "/" and names under it; C4DOS has
-// drives and no folders. So in grin a drive is a folder of the root:
-// "/B:/NOTE.TXT" is DOS's "B:NOTE.TXT", and "/RAM:/X" its "RAM:X" (the
-// RAM disk, which DOS reads ahead of every drive). A name with no folder
-// is DOS's as it stands, and DOS looks for it where it looks for any.
+// The kit's file box thinks in folders, "/" and names under it; C4DOS
+// has drives, each with its directories (API v7). So in grin a drive is
+// a folder of the root: "/B:/NOTE.TXT" is DOS's "B:/NOTE.TXT", B:'s
+// NOTE.TXT from its root, "/A:/GAMES/DOOM/DOOM.C4R" is A:\GAMES\DOOM\
+// DOOM.C4R, and "/RAM:/X" is "RAM:/X" (the RAM disk, which DOS reads
+// ahead of every drive). A name with no folder is DOS's as it stands,
+// and DOS looks for it where it looks for any.
 
 #ifndef GRIN_DOSPATH_H
 #define GRIN_DOSPATH_H 1
 
-// "/B:/NOTE.TXT" -> "B:NOTE.TXT" in out (n bytes); any other path as it is
+// "/B:/NOTE.TXT" -> "B:/NOTE.TXT" in out (n bytes); any other path as it is
 static char *grin_dospath(char *path, char *out, int n) {
     int i, k;
     if (path[0] != '/') return path;
     i = 1; k = 0;
-    while (path[i] && k < n - 1) {
-        out[k] = path[i]; ++k;
-        if (path[i] == ':' && path[i + 1] == '/') ++i;
-        ++i;
-    }
+    while (path[i] && k < n - 1) { out[k] = path[i]; ++k; ++i; }
     out[k] = 0;
     return out;
 }
 
-// ... and back: "B:NOTE.TXT" or "RAM:X" -> "/B:/NOTE.TXT", "/RAM:/X";
-// anything else as it is
+// ... and back: "B:NOTE.TXT", "B:\SAVES\X" or "RAM:X" -> "/B:/NOTE.TXT",
+// "/B:/SAVES/X", "/RAM:/X"; anything else as it is
 static char *grin_kitpath(char *name, char *out, int n) {
     int i, k, c;
     if (name[0] && name[1] == ':') i = 1;
@@ -36,7 +34,8 @@ static char *grin_kitpath(char *name, char *out, int n) {
     c = 0;
     while (c <= i) { out[k] = name[c]; ++k; ++c; }
     out[k] = '/'; ++k;
-    while (name[c] && k < n - 1) { out[k] = name[c]; ++k; ++c; }
+    while (name[c] == '/' || name[c] == '\\') ++c;
+    while (name[c] && k < n - 1) { out[k] = name[c] == '\\' ? '/' : name[c]; ++k; ++c; }
     out[k] = 0;
     return out;
 }

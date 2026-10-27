@@ -32,6 +32,7 @@ struct dosprompt {
     struct tgrid *g;
     int num;                          // "DOS Prompt 2": the lowest number free when it opened
     int drive;                        // this window's drive (DOS has one, for every window)
+    char dir[DP_LINE];                // ... and its directory there, "\GAMES" (DOS's too: one a drive)
     int running;                      // its line is the one DOS is running
     int eof;                          // Ctrl+Z typed for its program: end of input, once
     int inlen;                        // typed for its program and not read yet
@@ -71,11 +72,20 @@ int dos_refuse() {
     return 1;
 }
 
+// DOS's prompt: "A:\GAMES>"
 static void prompt(struct dosprompt *d) {
     char p[4];
     if (gd_c4ke()) { tg_say(d->g, "c4ke>"); return; }
-    p[0] = 'A' + d->drive; p[1] = '>'; p[2] = 0;
+    p[0] = 'A' + d->drive; p[1] = ':'; p[2] = 0;
     tg_say(d->g, p);
+    tg_say(d->g, d->dir);
+    tg_say(d->g, ">");
+}
+
+// where DOS's prompt is now, as this window's own
+static void dp_where(struct dosprompt *d) {
+    d->drive = gd_drive();
+    ui_ncpy(d->dir, gd_getcwd(d->drive), DP_LINE);
 }
 
 // is the line (no newline) EXIT, give or take spaces and case?
@@ -307,14 +317,16 @@ static void run_line(int w) {
     dos_busy = 1;
     dos_busy_set(d->cmd);
     d->running = 1; d->inlen = 0; d->eof = 0;
-    // the window's own drive: DOS has one prompt drive for everyone
+    // the window's own drive and directory: DOS has one prompt drive for
+    // everyone, and one current directory a drive
     if (gd_drive() != d->drive) { sel[0] = 'A' + d->drive; sel[1] = ':'; sel[2] = 0; gd_exec(sel); }
+    gd_chdir(d->dir);
     last_draw = __time();
     gd_sink((int)dp_write, (int)dp_read, w);
     gd_exec(d->cmd);
     gd_sink(0, 0, 0);
     if ((d = D(w)) && d->g) {
-        d->drive = gd_drive();
+        dp_where(d);
         d->running = 0; d->inlen = 0; d->eof = 0;
         prompt(d);
     }
@@ -356,7 +368,7 @@ int dosprompt_open(char *cmd) {
     d = D(w);
     d->num = n;
     if (!(d->g = tg_new(w))) { wk_close(w); return 0 - 1; }
-    d->drive = gd_drive();
+    dp_where(d);
     if (gd_c4ke())
         tg_say(d->g, "C4KE's programs, in a window: ls, ps, top, rps, doom ... each runs as a task,\na last word & runs it in the background, kill PID 9 ends it. EXIT closes this.\n\n");
     else

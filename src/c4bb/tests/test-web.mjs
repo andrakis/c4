@@ -237,7 +237,7 @@ try {
   await page.click('#turbo');
   await waitTerm('bios: booting');
   ok('the BIOS probes the drives and boots one', (await term()).includes('bios: drive 0 has'));
-  await waitTerm('A>');
+  await waitTerm('A:\\>');
   ok('C4DOS came up off the medium in drive 0', (await term()).includes('C4DOS version'));
 
   await page.click('#terminal');

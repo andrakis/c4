@@ -7,12 +7,12 @@
 // display fitted. Then, typing as a person would and waiting for each
 // prompt:
 //
-//   A>      DOOM, quit (F10, Y); HEAP_USED back where it was
+//   A:\>    DOOM, quit (F10, Y); HEAP_USED back where it was
 //           BUILD; RUN dosload.c4r c4ke.c4r
 //   c4sh>   doom, quit, three times; HEAP_USED the same each time; rps, q
 //           tar x c4ix-src.tar; b4ke -f c4ix.b4k; kboot c4ix.c4r
 //   c4ix:/$ ls; doom, quit; exit
-//   A>      MEM: C4IX returned to C4KE, C4KE to dosload, dosload to DOS
+//   A:\>    MEM: C4IX returned to C4KE, C4KE to dosload, dosload to DOS
 //
 // and says what each step cost: wall time, cycles, and the heap.
 //
@@ -110,7 +110,8 @@ const begin = () => { t0 = Date.now(); c0 = vm.cycle; vm.heap.peak = vm.heap.use
 const cost = what => costs.push(`${what}: ${((Date.now() - t0) / 1000).toFixed(1)} s, ` +
   `${((vm.cycle - c0) / 1e6).toFixed(0)}M cycles, heap ${MB(vm.heap.used)} after, ${MB(vm.heap.peak)} at most`);
 
-const A = /A>\s*$/, KE = /c4sh>\s*$/, IX = /c4ix:\/\$\s*$/;
+// DOS's prompt has its current directory in it: A:\>, A:\GAMES\DOOM>
+const A = /A:\\[^>\n]*>\s*$/, KE = /c4sh>\s*$/, IX = /c4ix:\/\$\s*$/;
 const idle = re => re.test(text().slice(-200));
 // type a line at a prompt; what it printed up to the next prompt
 const cmd = (line, prompt, secs = 120) => {
@@ -131,7 +132,17 @@ const doom = (line, prompt) => {
 // ---- C4DOS ----------------------------------------------------------------
 begin();
 check(until(() => idle(A), 60), 'C4DOS boots the ladder disk', text());
-check(text().includes('heap device installed'), 'with HEAP.SYS', text());
+check(text().includes("installed: each program's memory is freed when it ends"), 'with HEAP.SYS', text());
+// the disk is in directories, and APPEND finds what is in them: DIR at
+// the root has them, and the games, the build kit and C4KE and C4IX's
+// files are found from it (Doom, BUILD and everything above DOS below)
+let o = cmd('DIR', A, 60);
+check(/^GAMES  <DIR>$/m.test(o) && /^BUILD  <DIR>$/m.test(o) && /^C4IX  <DIR>$/m.test(o) && !/doom1\.wad/i.test(o),
+  'DIR at A:\\: the directories, not the 250 files', o);
+o = cmd('APPEND', A, 60);
+check(/^APPEND=A:\\BUILD;A:\\C4KE;A:\\C4IX;A:\\GAMES\\DOOM/m.test(o), "APPEND, AUTOEXEC.BAT's", o);
+o = cmd('CD GAMES\\DOOM', /A:\\GAMES\\DOOM>\s*$/, 60) + cmd('DIR', /A:\\GAMES\\DOOM>\s*$/, 60) + cmd('CD \\', A, 60);
+check(/doom1\.wad/.test(o) && /doom\.c4r/.test(o), 'CD GAMES\\DOOM, DIR there, CD \\', o);
 const used0 = vm.heap.used;
 begin();
 check(doom('DOOM', A), 'Doom at A>, played and quit', text().slice(-1500));
@@ -139,7 +150,7 @@ cost('Doom at A>');
 check(vm.heap.used === used0, 'and it gave all its memory back', `${used0} -> ${vm.heap.used}`);
 
 begin();
-let o = cmd('BUILD', A, 600);
+o = cmd('BUILD', A, 600);
 const kbytes = /c4cc: wrote (\d+) bytes to ram:c4ke\.c4r/.exec(o);
 check(kbytes && o.includes('ram:init.c4r'), 'BUILD compiles C4KE and its init on the RAM disk', o);
 cost(`BUILD (c4ke.c4r ${kbytes ? kbytes[1] : '?'} bytes)`);

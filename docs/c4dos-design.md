@@ -15,7 +15,8 @@ medium, and `make test-c4bb-climb` pins three power-ons, each booting a
 system the one before wrote (docs/climbing-the-ladder.md). Written as the
 contract on 2026-08-21; deviations have been written back here since.
 API v4 (2026-10-24) made RUN re-entrant and added `HEAP.SYS`, for grin
-(`docs/grin-plan.md` G0).
+(`docs/grin-plan.md` G0). API v7 (2026-10-26) gave the disks directories
+("Directories", below), and the page's disks are laid out in them.
 
 ## Why it exists
 
@@ -234,8 +235,8 @@ c4sc at the DOS prompt.
 
 ### API versions
 
-The table is 32 words, zeroed at boot; v7 fills its last, 31. Slot 5 is
-the version, 7 since 2026-10-27 (6 from 2026-10-26, 5 from 2026-10-25, 4
+The table is 40 words (32 before v7), zeroed at boot. Slot 5 is the
+version, 8 since 2026-10-27 (7 from 2026-10-26, 6 earlier that day, 5 from 2026-10-25, 4
 from 2026-10-24).
 
 | slot | v1 | | slot | v2 / v3 |
@@ -286,11 +287,25 @@ as the program that installed it: a program it loads meanwhile is that
 program's child, not the child of whatever DOS was running when it asked
 for input. `include/c4dos.h` has `dos_drive()`.
 
-**v7** (2026-10-27, grin's G6: games in a window):
+**v7** (2026-10-26, directories; "Directories", below):
 
 | slot | call | returns |
 |---|---|---|
-| 31 | `image(h)` | the image DOS counted as running, after making `h` that image; `h` = 0 only asks, and a handle that is not loaded changes nothing |
+| 31 | `chdir(path)` | 0, or -1: the current directory of path's drive (CD) |
+| 32 | `getcwd(drive)` | `char *`, DOS's own buffer: the drive's current directory as a person writes it, `\GAMES\DOOM`; drive -1 the prompt's |
+| 33 | `mkdir(path)` | 0, or -1 (MD) |
+| 34 | `rmdir(path)` | 0, or -1: an empty directory (RD) |
+
+and every slot that takes a name takes a path, relative to the current
+directory (`open`, `create`, `unlink`, `load`; `load` also looks along
+PATH, as RUN does). `include/c4dos.h` has `dos_chdir()`, `dos_getcwd()`,
+`dos_mkdir()` and `dos_rmdir()`.
+
+**v8** (2026-10-27, grin's G6: games in a window):
+
+| slot | call | returns |
+|---|---|---|
+| 35 | `image(h)` | the image DOS counted as running, after making `h` that image; `h` = 0 only asks, and a handle that is not loaded changes nothing |
 
 The image DOS counts as running is the parent of what it loads (an image
 unloaded takes its children with it), the owner of the files it opens for
@@ -332,7 +347,7 @@ fd 1, 2 and 0 through slots 16 and 17 when the version word says 4.
 
 Slots 9–12 are advertised only when `DEVICE=RAMDISK.SYS` was installed;
 2 when there is a RAM disk or a home drive, 18 when there is a RAM disk
-or `DRIVES.SYS`; 28, 29 and 30 always; and slot 15 only when
+or `DRIVES.SYS`; 28 to 34 always; and slot 15 only when
 `DEVICE=CLOCK.SYS` was, so a caller
 that checks a slot is told the truth rather than handed an always-empty
 listing or a stopped clock. **Everything at 9 and above must be
@@ -495,6 +510,45 @@ loading a kernel must not be the thing that demands a better CPU.
   Parsed with a flattened-locals descent (the vfsload.c skeleton,
   c4cc-dialect).
 
+  **Each driver announces itself as it loads** (2026-10-26), as DOS 6's
+  did (`HIMEM: DOS XMS Driver, Version 3.10`, then `64 KB High Memory
+  Area available`): a banner with its file, what it is and the C4DOS
+  version, then lines under it saying what it did -- or why it did not.
+  The ladder disk boots like this:
+
+      C4DOS version 0.1
+      C4DOS, made possible by Robert Swierczek's c4
+      CLOCK.SYS    clock driver, C4DOS 0.1
+                   installed: TIME, and the clock for programs (API slot 15)
+                   the machine has been on 0.000 s
+      RAMDISK.SYS  RAM disk, C4DOS 0.1
+                   installed: 33554432 bytes, room for 64 files, over every drive
+      CONSOLE.SYS  console driver, C4DOS 0.1
+                   installed: FLUSH, the prompt and what is typed share a line
+      DRIVES.SYS   drive driver, C4DOS 0.1
+                   installed: 2 drive(s): A: read-only, B: can be written
+      HEAP.SYS     heap generations, C4DOS 0.1
+                   installed: each program's memory is freed when it ends
+                   heap: 128799937 bytes free of 133033984
+      REDIR.SYS    redirection, C4DOS 0.1
+                   installed: > >> < and |, with the console tap
+
+  A driver that cannot do its job says `not installed:` and why (the
+  clockless build's CLOCK.SYS; HEAP.SYS on a heap with no generations),
+  `HOME=` on a drive that cannot be written says where files go instead,
+  and REDIR.SYS without `TAP` says what that leaves out. A `DEVICE=` line
+  naming a driver C4DOS does not have gets DOS's own answer, `Bad or
+  missing EMM386.EXE` and `Error in CONFIG.SYS line 7`, and boot carries
+  on. Each driver is a function of its own (`dev_clock` ... `dev_redir`),
+  called by `read_config` for its line. (Until then each printed one line
+  such as `clock device installed`, and an unknown `DEVICE=` line was
+  ignored without a word.)
+
+  `VER` and the boot say `C4DOS, made possible by Robert Swierczek's c4`;
+  the tagline before it, "the operating system before operating
+  systems", was never the user's, and was wrong: there were operating
+  systems before DOS.
+
   `CONSOLE.SYS FLUSH` says **this console shows a partial line**, and
   the prompt is `A>` with the cursor after it, the way DOS always
   looked. Without it DOS puts the prompt on its own line instead,
@@ -518,8 +572,9 @@ loading a kernel must not be the thing that demands a better CPU.
   (or `ERASE`), `RUN` (implicit for *.C4R names),
   `ECHO`, `REM`, `VER`, `TIME` (wants CLOCK.SYS), `MEM` (the heap too,
   with HEAP.SYS), `EXIT` (halts —
-  the one legitimate use of the EXIT opcode), and a drive letter such
-  as `B:` (below). A `.BAT` name runs the batch file.
+  the one legitimate use of the EXIT opcode), a drive letter such
+  as `B:` (below), and since v7 `CD`, `MD`, `RD`, `PATH` and `APPEND`
+  ("Directories", below). A `.BAT` name runs the batch file.
   `TYPE file /P` and `DIR /P` page: 23 lines, then `-- More --` and a
   wait. The wait reads a line through conread (`con_get`, which like
   the prompt's reader understands that one `read(0, ...)` may carry
@@ -529,6 +584,9 @@ loading a kernel must not be the thing that demands a better CPU.
   (above), so they can be redirected. With `HOME=B:`, `DIR` lists the
   prompt's drive by name (`A:c4dos.dir`): the plain name opened the home
   drive's listing first, so `DIR` at A> listed B: (until 2026-10-26).
+  Since v7 `DIR [path]` lists a directory -- the current one, `B:`'s
+  current one, any path -- under a ` Directory of A:\GAMES` line, a
+  subdirectory as `NAME  <DIR>`.
 
 ### Drives, and one spelling for them
 
@@ -539,10 +597,13 @@ ordinary memory under native c4m, so a probe would be a wild read. With
 the line, the prompt names the drive it is on and `B:` moves between
 them:
 
-    A>B:
-    B>DIR
-    B>A:
-    A>TYPE B:note.txt
+    A:\>B:
+    B:\>DIR
+    B:\>A:
+    A:\>TYPE B:note.txt
+
+(The prompt was `A>` until v7; it has said the current directory since,
+`A:\>`.)
 
 **Letters, everywhere a person can see.** The machine itself takes
 either spelling -- `Devices.resolveDrive` accepts `0:` and `A:` alike --
@@ -580,10 +641,11 @@ before.
   read next is what was just written.
 - **Reading** (`dos_open`): a name with a drive is that drive's; any
   other is looked for in the RAM disk, then on the home drive, then on
-  the drive the prompt is on.
+  the drive the prompt is on -- each in its current directory, or from
+  the root for a name that starts with `\` -- and then along APPEND.
 - **Listings**: DOS keeps a `c4dos.dir` on every drive it writes,
   adding a name when its file is closed and taking it out when the file
-  is deleted, and makes one on a drive that had none. `DIR B:` types it,
+  is deleted, and makes one on a drive that had none. `DIR B:` lists it,
   and grin's File Manager reads it.
 - **Deleting** (`unlink`, `DEL`): `RAM:name` off the RAM disk, `B:name`
   off B:, a plain name off the RAM disk if it is there, else off the
@@ -606,6 +668,175 @@ drive 0. It also renames (a copy and a delete: Doom saves by renaming
 `temp.dsg`) and answers `ftell` on a file being written, which Doom pads
 its saves by.
 
+## Directories (API v7)
+
+Until 2026-10-26 every disk was one directory: whatever its `c4dos.dir`
+listed. The page's disks had outgrown that -- the Build Ladder's root
+held 249 names, games beside compilers beside C4IX's userland -- and the
+user asked for directories ("Having everything in one directory is
+quickly becoming unmanageable"). Now:
+
+    A:\>CD GAMES\DOOM
+    A:\GAMES\DOOM>DIR
+     Directory of A:\GAMES\DOOM
+    c4dos.dir
+    doom.c4r
+    doom1.wad
+    A:\GAMES\DOOM>DOOM
+    A:\GAMES\DOOM>CD \
+    A:\>
+
+- **A name is a path**: `GAMES\DOOM\DOOM.C4R`, `..\X`, `\X` from the
+  root, `B:X` in B:'s current directory, `B:\X` from B:'s root. `/` is as
+  good as `\` everywhere but at the start of an argument to `DIR` or
+  `TYPE`, where it is a switch (`/P`), as it always was. Names and
+  directories are found case-insensitively, a part at a time.
+- **Every drive has a current directory**, the prompt shows the prompt
+  drive's (DOS's `$P$G`: `A:\>`, `A:\GAMES\DOOM>`), and `CD B:\X`
+  changes B:'s without leaving A:, as in every DOS. A batch file's echoed
+  lines carry the same prompt.
+- **Builtins**: `CD` (or `CHDIR`; `CD` alone says where the prompt's
+  drive is, `CD B:` where B: is, and `CD..` and `CD\` work without the
+  space), `MD` (`MKDIR`), `RD` (`RMDIR`: only an empty directory, and not
+  one that is, or holds, a current directory), `DIR [path]`, `PATH` and
+  `APPEND` (below). `COPY X DIR` copies into a directory under the same
+  name, as `COPY X B:` always did.
+- **Everything that takes a name takes a path**: `TYPE`, `COPY`, `DEL`,
+  `RUN`, a command word (`\GAMES\DOOM\DOOM`), a batch file, redirection
+  targets, and every API slot that names a file -- `open`, `create`,
+  `unlink` (6, 2, 18) and `load` (20) -- so a program built against
+  `include/c4dos.h` or `bare.c` resolves its files relative to the
+  current directory without knowing directories exist.
+
+### How a drive describes its tree: a c4dos.dir in every directory
+
+The question was whether a read-only drive should carry one listing of
+paths (the drive's keys already hold slashes, `src/c4ix/init.c`) or a
+listing per directory. Per directory, because:
+
+- `DIR` types one small file instead of filtering a large one, and the
+  name resolver reads one listing a level, not the whole tree for every
+  open;
+- writing a file adds one line to its own directory's listing; with one
+  listing every save on B: rewrote the whole tree's (and `DIRMAX`, 16 KB,
+  would have been the size of the disk rather than of a directory);
+- a disk with no subdirectories is exactly what it was: the old root
+  `c4dos.dir` is a valid listing of the root, so every floppy and every
+  B: written before v7 works unchanged.
+
+A directory is a line `NAME/` in its parent's listing, and has a
+`c4dos.dir` of its own listing what is in it (`MD` writes both; `RD`
+takes both away). The trailing slash is how `DIR` knows to say
+`NAME  <DIR>` and how grin's File Manager knows a folder. A directory is
+there when its parent's listing says so -- never because `NAME/c4dos.dir`
+happens to open (see the machine's basename fallback, below).
+`build-images.sh`'s `listings` writes one into every directory of the
+page's disks.
+
+### Paths inside DOS, and what the machine is asked for
+
+`path_full` makes any name a drive and a path from that drive's root,
+`/` between the parts and `.` and `..` gone (`..` above the root is an
+invalid directory); `path_real` finds its real spelling through the
+listings. DOS keeps each drive's current directory that way
+(`GAMES/DOOM`), and never asks for a relative name:
+
+- with `DRIVES.SYS` it asks the machine for `A:/GAMES/DOOM/doom.c4r` --
+  the slash after the drive says from the root (`devices.js`), and for
+  such a name the machine does **not** fall back to the name's last part
+  the way it does for anyone else's (`/home/user/hello.c` finds
+  `hello.c`): DOS means that file and no other;
+- without it the path alone, `GAMES/DOOM/doom.c4r`: native c4m opens it
+  in the directory it was started in, which is the disk, and so does
+  plain `c4` (the tower leg of `test-c4dos` runs a directory session
+  under unmodified `c4`).
+
+### The RAM disk has paths too
+
+Its names are paths from the root (`BUILD/c4ke.i`), and it still sits
+over every drive, now at the same path: a plain name written in
+`A:\BUILD` with no home drive is the RAM disk's `BUILD/c4ke.i`, which
+`A:\BUILD\C4KE.I` and `TYPE \BUILD\c4ke.i` both find. It has no
+listings: a directory is there while a file in it is (`CD TMP` after
+`COPY X RAM:\TMP\Y`), and `DIR` shows it as `TMP  <DIR> <ram>`. `RAM:X`
+is the RAM disk's `X` in the current directory, `RAM:\X` at its root.
+Slots 9-12 enumerate those paths, and C4KE's dos extension seeds its
+ramfs with them as they are -- which is why `BUILD.BAT`, `LADDER.BAT`
+and `IX.BAT` begin with `CD \`: what they build is at the root of the
+RAM disk, where C4KE's loader looks for `init.c4r` (built in `\BUILD`
+it would be `BUILD/init.c4r`, and C4KE would quietly boot some other
+init).
+
+### PATH and APPEND
+
+    PATH \BUILD;\GRIN;\BIN
+    APPEND \BUILD;\C4KE;\C4IX;\GAMES\DOOM
+
+`PATH` is where a command (a `.c4r`, a batch file, `RUN`'s argument, a
+program `load` (slot 20) is given) is looked for after the current
+directory. `APPEND` is MS-DOS 3.3's: where **any** file is looked for
+after the current directory (and the RAM disk and the home drive) -- for
+programs written before directories, which open `doom1.wad` or
+`c4ix.vfs.txt` and expect it to be there. Both are kept as drives and
+paths from the root, so a list set in one directory means the same in
+every other; `PATH ;` and `APPEND ;` clear them; with no argument they
+say what they are.
+
+**The programs that never come to DOS** -- C4KE (loaded by `dosload`),
+C4IX's `vfsload`, a c4cc program's own `open()` -- open relative names
+straight on the machine. For them DOS tells the machine where to look:
+`DISK_DIRS` (`0x1e0`, `src/c4bb/sim/devices.js`) holds a drive's search
+list, its current directory followed by APPEND's directories on it
+(`GAMES/DOOM;BUILD`), and a relative name is looked for along it, then
+at the root. DOS writes it whenever a current directory or APPEND
+changes (`dirs_tell`), with `DRIVES.SYS` only: like every register DOS
+touches, it is announced, never probed. So `CD B:\W` then `RUN
+A:\C4.C4R HELLO.C` compiles `B:\W\HELLO.C`, and on the ladder disk C4KE
+finds `c4sh.c4r` in `\C4KE`, `doom.c4r` and its WAD in `\GAMES\DOOM`, and
+C4IX's `vfsload` finds its tree in `\C4IX` -- none of them changed. A
+name DOS's search list does not mention is still found at the root, as
+before directories.
+
+**Programs' opens keep one old courtesy.** The machine finds a name it
+does not have by its last part, and Doom came to rely on that: it asks
+for `./.savegame/doomsav0.dsg`, and its saves are at `B:\doomsav0.dsg`.
+DOS's own lookups are now exact, so `open` (slot 6) alone tries a name
+with directories in it once more by its last part when it opens
+nowhere.
+
+### grin
+
+grin speaks v7 through `src/grin/disk.c` (`gd_getcwd`, `gd_chdir`):
+
+- **File Manager** lists a directory, folders first with a folder icon;
+  a double click opens one, and `..` goes back up. Its names are
+  `A:/GAMES/DOOM.C4R` -- from the root, whatever the current directory --
+  and so are the kit's (`/A:/GAMES/DOOM/` in a file box, `dospath.h`).
+- **DOS Prompt** windows keep a directory each, as they keep a drive:
+  the window's is made current before its line runs and read back after.
+- **A DOS program named by a path runs in its own directory** (`grin.c`
+  `full_where`), as Program Manager's and File Manager's did in Windows
+  when an item gave no working directory: Program Manager's games are
+  `\GAMES\DOOM\DOOM` and find their data beside them, and DOS's current
+  directory is put back afterwards. A `PROGMAN.INI` written before v7
+  names the games by bare words; reading it gives those items the new
+  command lines (and writes it back).
+
+### The page's disks
+
+`build-images.sh` lays both out in directories:
+
+| disk | directories |
+|---|---|
+| `libjs/images/dos` (`?system=c4dos`) | `GRIN` (grin and its applications), `BIN` (`ASKLINE`, `DOSFILT`, `HELLO`), `GAMES\DOOM`, `GAMES\WOLF3D`, `GAMES\ROTT`, `GAMES\TYRIAN` (each game and its data); at the root only `c4dos32.c4r`, `CONFIG.SYS`, `AUTOEXEC.BAT`. AUTOEXEC says `PATH \GRIN;\BIN` |
+| `libjs/images/ladder` (`?system=c4dos-ladder`) | the same, and `BUILD` (the build kit: `BUILD`, `LADDER`, `IX`, the compilers, the archives, c4lc's Lisp, `b4ke` and what it reads), `C4KE` (C4KE's programs and their sources), `C4IX` (C4IX's userland, `c4ix.vfs.txt`, `c4ix.sizes`, its copy of Tyrian's data); `src\` as it was. AUTOEXEC says `PATH \BUILD;\GRIN;\BIN` and `APPEND \BUILD;\C4KE;\C4IX;\GAMES\...`, so `DOOM` and `BUILD` still work from the root and C4KE and C4IX find everything they did |
+
+Which game a file belongs to comes from the games disk's assembly
+(`$OUT/.gamefiles/NAME`, what each `c4-images.sh bare` put there). The
+games disk itself (`src/c4bb/images/games`) stays flat: the bare-machine
+games on the page (`?system=doom` and the rest) now boot from it, since a
+bare game opens its files from the root.
+
 ## Building and running
 
 Three images, because they answer three different questions. All go
@@ -625,7 +856,8 @@ c4cc route and the Makefile ships the c4lc one.
 C4DOS opens `config.sys`, `autoexec.bat` and `c4dos.dir` relative to
 the working directory (other drives are reached with `DEVICE=DRIVES.SYS`,
 above), so "the disk" is
-simply a directory you `cd` into (or hand to c4bb with `-d`). `make`
+simply a directory you `cd` into (or hand to c4bb with `-d`); its
+subdirectories are C4DOS's, given a `c4dos.dir` each ("Directories"). `make`
 assembles two, since a 32-bit machine will not load a 64-bit transient:
 `c4dos-disk/` for the native runs and `c4dos-disk32/` for c4bb. Both
 carry `hello.c4r` and `raycast.c4r`.
@@ -634,6 +866,112 @@ carry `hello.c4r` and `raycast.c4r`.
     make run-c4dos-c4     # the tower: unmodified c4 -> c4l -> DOS
     make run-c4dos-bb     # the breadboard machine, interactive
     make serve-c4bb       # the breadboard machine, in a browser
+
+### Linking a bare program
+
+A C4IX program links libc as a shared library (`c4rlink -l libc.c4s`)
+and is small. DOS has no dynamic loader, so a program for C4DOS or the
+bare machine carries its libc inside it: `make libc-bare-objs` makes
+nine objects (`.libc-bare/libc-*.c4o`, 484 KB), and every bare link
+names them all. c4rlink used to copy every input whole, so each program
+carried all nine -- askline, which reads one line, was 470 KB, Clock
+500 KB, grin 957 KB. Most of that was never run: `libc-math.c4o` alone
+is 253 KB, and c4lc puts its soft-float and `long long` routines into
+every object that needs them, so `libc-fp.c4o` (printf's `%f`) carries
+its own copy whether a program prints a float or not.
+
+Since 2026-10-27 c4rlink keeps only the functions a program reaches, in
+every link (`--no-gc` keeps them all, as before). And one option, off
+unless given, leaves out whole objects:
+
+- **Dropping what nothing reaches** (c4rlink.c, `gc_functions`). The
+  code is cut at every function: its symbol, and every `ENT` after a
+  jump or a return, which is how c4lc's soft-float and `long long`
+  routines start, though they have no symbol. (Not the source map,
+  which names them too: an image must be the same code whether its
+  objects were compiled with `-g` or not, and C4IX's own build compiles
+  without.) Every code address in an image is a patch, because the
+  loader relocates it; so the CODE patches are the whole of "this
+  function uses that one". Kept is what the entry point, the
+  constructors and destructors and the code addresses held in data
+  (function tables, `grin_kit`'s) reach, and with `-r` every function
+  the library exports. A program linked with `-l` keeps only what it
+  reaches too: C4IX's loader resolves a program's names against its
+  libraries, never a library's against the program. The rest leaves
+  with its patches, its symbols and its part of the source map, and the
+  code after moves down. Data is not touched: the globals a loader finds
+  by name (`__c4dos_api`, `__c4ke_exit`, `__c4ix_systable`) stay. Each
+  region is decoded, and one that does not end on a jump or a return
+  exactly where the next begins is kept together with that one, so no
+  code can run on into something removed. An image with no entry point
+  and no `-r` is linked whole, since nothing says what is live; so is an
+  image where everything is reached, which is then the same bytes as
+  before.
+- **`--start-lib`**: the inputs after it (up to `--end-lib`) are library
+  members, as the objects in an `ar` archive are to `ld`. A member is
+  linked only if it defines a symbol that something linked names in a
+  patch and nothing linked defines, repeated until nothing more comes in
+  (as lld's `--start-lib`, so the order does not matter). It is not the
+  default because an object named plainly is always linked, as with
+  `ld`: one that only registers itself from a constructor would
+  otherwise vanish. Once unreached functions are dropped it adds little,
+  an unneeded member's data and symbols: 3,020 bytes of `libc-math.c4o`.
+
+`build-images.sh` links grin, its applications and askline with
+`--start-lib .libc-bare/libc-*.c4o`, as does `make test-libc-bare`. The
+games' `c4-images.sh` (in the game repositories) link libc plainly,
+and get the rest by default.
+
+| program | before | now | how |
+|---|---:|---:|---|
+| grin | 957,593 | 548,031 | `--start-lib` |
+| Clock | 500,389 | 66,983 | `--start-lib` |
+| Calculator | 610,955 | 244,618 | `--start-lib` |
+| Notepad | 521,432 | 103,106 | `--start-lib` |
+| EXITKEY (test-grin's) | 495,302 | 60,972 | `--start-lib` |
+| askline | 469,796 | 58,820 | `--start-lib` |
+| Doom | 2,096,899 | 1,762,726 | plain |
+| Rise of the Triad | 3,580,198 | 3,201,955 | plain |
+| OpenTyrian | 2,833,682 | 2,663,146 | plain |
+| Wolfenstein 3D | 1,651,555 | 1,386,345 | plain |
+| Wolfenstein 3D (registered) | 1,656,179 | 1,357,144 | plain |
+
+(bytes, with `-g` source maps.) With `--start-lib` but every function
+kept, a program that does no math drops `libc-math.c4o` and nothing
+else (askline 216,871, grin 704,668); Doom, Tyrian and Wolf3D call one
+or two math functions (Doom: `fabs`), so they keep all of it.
+
+The rest of the build gets it too. C4IX's and C4KE's kernels, C4IX's
+shared libraries and nearly all its programs reach every function they
+have, so they are the same bytes as before. What did change:
+
+| image | before | now |
+|---|---:|---:|
+| `c4ix-rott` (C4IX's ROTT) | 3,126,945 | 3,036,645 |
+| `c4ix-wolf3d6` | 1,206,202 | 1,144,137 |
+| `c4ix-doom` | 1,644,433 | 1,597,027 |
+| `c4ix-wolf3d` | 1,201,578 | 1,171,490 |
+| `c4ix-tyrian` | 2,381,676 | 2,364,422 |
+| `c4ix-splash` | 83,375 | 54,959 |
+| `c4ix-desktop` | 1,019,515 | 1,014,319 |
+| `c4sc32.c4r` (host) | 2,412,801 | 2,373,605 |
+| `c4sc.c4r` (fused, on the disks) | 2,044,933 | 2,012,129 |
+
+build-images.sh rebuilds C4IX when `c4rlink32` is newer than it, since
+what the linker writes now depends on the linker. C4IX's
+`c4ix-vfsload` was linked `--no-gc` at first: without its unreached
+functions (66,722 -> 53,878 bytes) the desktop's boot went wrong every
+time (test-desktop: C4KE in a Terminal never ran spin), and padded back
+to its old size with a function nothing calls it worked. The size only
+moved when things happened. The bug was C4KE's -- its trap handlers
+unmasked the timer before they had returned, so a tick or a Ctrl-C
+landing in between saved one task's registers as another's -- and is
+fixed in c4ke.c (`ih_cycle`, `signal_forwarder`); vfsload is linked like
+everything else.
+
+Not done, and small: a removed function's strings stay in the data (an
+application's whole data is about 7 KB), and so do extern symbols
+nothing named (at most 7 KB, in ROTT).
 
 ### The build floppy
 
@@ -675,16 +1013,19 @@ are 32-bit, board-only transients (`bbsave32.c4r`, `install32.c4r`).
 
 ### Finding a file
 
-`c4dos.dir` IS the directory service -- `DIR` types that file, because
+`c4dos.dir` IS the directory service -- `DIR` lists that file, because
 the raw disk cannot enumerate itself -- and it doubles as the name
 resolver. Every open goes through `dos_open`, which tries the name as
-typed and, failing that, scans the listing for a case-insensitive match
-and opens the spelling that actually exists. So `HELLO`, `hello.c4r`
-and `Hello.C4r` all reach the same file, the way DOS always let them.
+typed and, failing that, finds each part of its path in its directory's
+listing, case-insensitively, and opens the spelling that actually
+exists. So `HELLO`, `hello.c4r`, `Hello.C4r` and `\games\DOOM\DOOM.C4R`
+all reach the same files, the way DOS always let them. Since v7 there is
+a listing in every directory ("Directories").
 
 A command with no extension gets `.c4r` appended and retried, which is
 the courtesy `COMMAND.COM` extended with `COM`/`EXE`/`BAT`: you type
-the program, not the file. `RUN` does the same to its argument. A word
+the program, not the file. `RUN` does the same to its argument, and
+both look along PATH after the current directory. A word
 that resolves to nothing still reaches `bad command or file name`,
 rather than being reported as a broken executable.
 
@@ -711,7 +1052,7 @@ None of these is part of `make test`.
 
 | target | what it pins |
 |---|---|
-| `make test-c4dos` | four legs: native c4m, the clock build, unmodified `c4` through `c4l.c` (the purity pin: the clockless image uses no opcode above `EXIT`), and c4bb, including `c4.c4r` compiling hello inside it. Its script builds the images with `./cpp \| ./c4cc`, not the Makefile's c4lc. API v4 (`src/tests/dosexec.c`: exec three deep, a resident image, catch, a child's file, unlink, the console slots, the sink) runs on the native leg, the tower and c4bb; on c4bb it runs once more with `DRIVES.SYS HOME=B:` and a writable B: (the CLI's `-w`), with `COPY`, `DIR B:` and `DEL`. Redirection (`REDIR.SYS`: `DIR > LIST.TXT`, `>>`, `src/tests/dosfilt.c` given `<` and in a pipe of three, a redirected batch file and error message, a 17-word `ECHO`, no pipe file left) runs on the native leg and the tower, and without the line `>` and `\|` stay words; on c4bb, `REDIR.SYS TAP` with `HOME=B:`: `hello32 > OUT.TXT` (a c4cc program's printf, through the tap, onto B:), `hello32 \| dosfilt`, and `dosfilt -r` reading fd 0 from a pipe |
+| `make test-c4dos` | four legs: native c4m, the clock build, unmodified `c4` through `c4l.c` (the purity pin: the clockless image uses no opcode above `EXIT`), and c4bb, including `c4.c4r` compiling hello inside it. Its script builds the images with `./cpp \| ./c4cc`, not the Makefile's c4lc. API v4 (`src/tests/dosexec.c`: exec three deep, a resident image, catch, a child's file, unlink, the console slots, the sink) runs on the native leg, the tower and c4bb; on c4bb it runs once more with `DRIVES.SYS HOME=B:` and a writable B: (the CLI's `-w`), with `COPY`, `DIR B:` and `DEL`. Redirection (`REDIR.SYS`: `DIR > LIST.TXT`, `>>`, `src/tests/dosfilt.c` given `<` and in a pipe of three, a redirected batch file and error message, a 17-word `ECHO`, no pipe file left) runs on the native leg and the tower, and without the line `>` and `\|` stay words; on c4bb, `REDIR.SYS TAP` with `HOME=B:`: `hello32 > OUT.TXT` (a c4cc program's printf, through the tap, onto B:), `hello32 \| dosfilt`, and `dosfilt -r` reading fd 0 from a pipe. Directories (v7) on the native leg and the tower: `CD` and `DIR` of a subdirectory, `..\`, `\` and `/` paths, a program and a batch file run there, by a path and along `PATH`, a note found along `APPEND`, the RAM disk's directories; on c4bb with `HOME=B:`, `MD`, `RD` (refusing a full directory), `COPY` into one, `CD` there and a c4cc program's own `open()` finding its file through `DISK_DIRS` |
 | `make test-c4dos-heap` | on libjs, the Makefile's c4lc `-O` image with `HEAP.SYS`: the v4 scenarios with c4lc `-O` transients, a child's leftovers given back and its RAM-disk file kept, then Doom five times at the prompt with `HEAP_USED` within 1% (`libjs/tests/test-c4dos-heap.mjs`; Doom needs the games disk) |
 | `make test-cpp` | `cpp \| c4cc` and `gcc -E \| c4cc` give byte-identical images over the corpus, and `cpp.c` interpreted by plain c4 matches the native build |
 | `make test-dosload` | `dosload.c4r` uses no opcode above `EXIT` |

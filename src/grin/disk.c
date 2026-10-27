@@ -4,8 +4,10 @@
 // and the kit's host functions for files, which open through libc and
 // bare.c, so through DOS.
 //
-// A drive is listed by its c4dos.dir, which DOS keeps up to date on any
-// drive it writes (HOME=B:); the RAM disk by DOS's own slots (9-12).
+// A directory is listed by its c4dos.dir, which DOS keeps up to date on
+// any drive it writes (HOME=B:), a subdirectory a "NAME/" line in it
+// (C4DOS's API v7); the RAM disk by DOS's own slots (9-12), whose names
+// are paths from the root.
 // Neither says how big a file is, short of reading it, so a size is
 // read when it is asked for, a file at a time.
 
@@ -22,7 +24,7 @@ extern int __c4ke_exit;               // bare.c's: set by C4KE's loader, when gr
 enum { SLOT_VERSION = 5, SLOT_OPEN = 6, SLOT_READ = 7, SLOT_RCLOSE = 8, SLOT_COUNT = 9,
        SLOT_ENTNAME = 10, SLOT_ENTSIZE = 11, SLOT_UNLINK = 18, SLOT_EXEC = 19,
        SLOT_SINK = 24, SLOT_SETGEN = 27, SLOT_HOME = 28, SLOT_DRIVES = 29, SLOT_DRIVE = 30,
-       SLOT_IMAGE = 31 };
+       SLOT_CHDIR = 31, SLOT_GETCWD = 32, SLOT_IMAGE = 35 };
 enum { DIRBUF = 16384, CHUNK = 4096 };
 
 static int ver() { return __c4dos_api ? __c4dos_api[SLOT_VERSION] : 0; }
@@ -50,7 +52,15 @@ int gd_exec(char *line) { return ver() >= 4 && slot(SLOT_EXEC) ? call1(SLOT_EXEC
 int gd_sink(int w, int r, int ctx) { return ver() >= 4 && slot(SLOT_SINK) ? call3(SLOT_SINK, w, r, ctx) : 0 - 1; }
 int gd_setgen(int g) { return ver() >= 4 && slot(SLOT_SETGEN) ? call1(SLOT_SETGEN, g) : 0 - 1; }
 int gd_drive() { return ver() >= 6 && slot(SLOT_DRIVE) ? call1(SLOT_DRIVE, 0) : 0; }
-int gd_image(int h) { return ver() >= 7 && slot(SLOT_IMAGE) ? call1(SLOT_IMAGE, h) : 0; }
+// v7: a drive's current directory ("\GAMES"; "\" before v7), and CD
+char *gd_getcwd(int drive) {
+    char *p;
+    p = ver() >= 7 && slot(SLOT_GETCWD) ? (char *)call1(SLOT_GETCWD, drive) : 0;
+    return p ? p : "\\";
+}
+int gd_chdir(char *path) { return ver() >= 7 && slot(SLOT_CHDIR) ? call1(SLOT_CHDIR, (int)path) : 0 - 1; }
+// v8: the image DOS counts as running (fwin.c)
+int gd_image(int h) { return ver() >= 8 && slot(SLOT_IMAGE) ? call1(SLOT_IMAGE, h) : 0; }
 
 // "B:" for drive 1, "RAM:" for the RAM disk, and a name after it, in out
 char *gd_name(int drive, char *name, char *out, int n) {
@@ -73,25 +83,64 @@ int gd_size(char *name) {
     return total;
 }
 
-// Drive `drive`'s files (DRV_RAM: the RAM disk's) into names, WK_NAME
-// bytes each, at most max of them; how many. c4dos.dir itself is left
+// is name (to its end or a '/') among the first k names?
+static int listed(char *names, int k, char *name, int len) {
+    int i, j;
+    i = 0;
+    while (i < k) {
+        j = 0;
+        while (j < len && ((names[i * WK_NAME + j] | 32) == (name[j] | 32))) ++j;
+        if (j == len && (!names[i * WK_NAME + j] || names[i * WK_NAME + j] == '/')) return 1;
+        ++i;
+    }
+    return 0;
+}
+
+// Directory dir ("" the root, "GAMES/DOOM" below it) of drive `drive`
+// (DRV_RAM: of the RAM disk) into names, WK_NAME bytes each, at most max
+// of them; how many. A directory is "NAME/". c4dos.dir itself is left
 // out.
 static char dirbuf[DIRBUF];
-int gd_list(int drive, char *names, int max) {
-    int fd, n, got, i, k;
-    char path[16], *p;
+int gd_list(int drive, char *dir, char *names, int max) {
+    int fd, n, got, i, k, dl, len;
+    char path[WK_PATH], *p, *q;
     k = 0;
     if (drive == DRV_RAM) {
         if (!slot(SLOT_COUNT)) return 0;
         n = call1(SLOT_COUNT, 0);
+        dl = ui_len(dir);
         i = 0;
         while (i < n && k < max) {
-            if ((p = (char *)call1(SLOT_ENTNAME, i))) { ui_ncpy(names + k * WK_NAME, p, WK_NAME); ++k; }
+            if ((p = (char *)call1(SLOT_ENTNAME, i))) {
+                // below dir: a file in it, or the directory it is in under it
+                q = 0;
+                if (!dl) q = p;
+                else if (ui_len(p) > dl && p[dl] == '/') {
+                    q = p;
+                    len = 0;
+                    while (len < dl && (p[len] | 32) == (dir[len] | 32)) ++len;
+                    q = len == dl ? p + dl + 1 : 0;
+                }
+                if (q) {
+                    len = 0;
+                    while (q[len] && q[len] != '/') ++len;
+                    if (len && len < WK_NAME - 1 && !listed(names, k, q, len)) {
+                        memcpy(names + k * WK_NAME, q, len);
+                        names[k * WK_NAME + len] = 0;
+                        if (q[len] == '/') { names[k * WK_NAME + len] = '/'; names[k * WK_NAME + len + 1] = 0; }
+                        ++k;
+                    }
+                }
+            }
             ++i;
         }
         return k;
     }
-    gd_name(drive, "c4dos.dir", path, 16);
+    // "A:/" and the directory, from the root
+    path[0] = 'A' + drive; path[1] = ':'; path[2] = '/'; path[3] = 0;
+    ui_ncat(path, dir, WK_PATH);
+    if (dir[0]) ui_ncat(path, "/", WK_PATH);
+    ui_ncat(path, "c4dos.dir", WK_PATH);
     if ((fd = open(path, O_RDONLY)) < 0) return 0;
     got = 0;
     while (got < DIRBUF - 1 && (n = read(fd, dirbuf + got, DIRBUF - 1 - got)) > 0) got = got + n;
@@ -115,7 +164,7 @@ int gd_list(int drive, char *names, int max) {
 // ---- the kit's host functions for files --------------------------------------------
 //
 // Paths are the kit's (dospath.h). wk_readdir lists the root as the
-// drives and RAM:, and a drive as its files.
+// drives and RAM:, and a drive's directory as its folders and files.
 
 static char dospath[WK_PATH];
 int wk_fopen(char *path, int wr) {
@@ -125,16 +174,25 @@ int wk_fread(int fd, char *buf, int n) { return read(fd, buf, n); }
 int wk_fwrite(int fd, char *buf, int n) { return write(fd, buf, n); }
 void wk_fclose(int fd) { close(fd); }
 
-// which drive a kit folder is: "/B:" or "/B:/" -> 1, "/RAM:" -> DRV_RAM;
-// -1 for the root, -2 for anything else
+// which drive a kit folder is: "/B:" or "/B:/" -> 1, "/RAM:" -> DRV_RAM,
+// with the directory under it ("/A:/GAMES/DOOM" -> 0 and "GAMES/DOOM")
+// in folder_dir; -1 for the root, -2 for anything else
+static char folder_dir[WK_PATH];
 static int folder_drive(char *dir) {
-    int c;
+    int c, d, i, k;
     if (!dir[0] || (dir[0] == '/' && !dir[1])) return 0 - 1;
     if (dir[0] != '/') return 0 - 2;
     c = dir[1] | 32;
-    if (c >= 'a' && c <= 'z' && dir[2] == ':' && (!dir[3] || (dir[3] == '/' && !dir[4]))) return c - 'a';
-    if (c == 'r' && (dir[2] | 32) == 'a' && (dir[3] | 32) == 'm' && dir[4] == ':' && (!dir[5] || (dir[5] == '/' && !dir[6]))) return DRV_RAM;
-    return 0 - 2;
+    if (c >= 'a' && c <= 'z' && dir[2] == ':') { d = c - 'a'; i = 3; }
+    else if (c == 'r' && (dir[2] | 32) == 'a' && (dir[3] | 32) == 'm' && dir[4] == ':') { d = DRV_RAM; i = 5; }
+    else return 0 - 2;
+    if (dir[i] && dir[i] != '/') return 0 - 2;
+    while (dir[i] == '/') ++i;
+    k = 0;
+    while (dir[i] && k < WK_PATH - 1) { folder_dir[k] = dir[i]; ++k; ++i; }
+    while (k > 0 && folder_dir[k - 1] == '/') --k;
+    folder_dir[k] = 0;
+    return d;
 }
 
 enum { RD_MAX = 256 };
@@ -152,10 +210,13 @@ int wk_readdir(char *dir, int i, char *name) {
     if (d < 0) return 0 - 1;
     if (i == 0) {
         if (!rd_names && !(rd_names = (char *)malloc(RD_MAX * WK_NAME))) return 0 - 1;
-        rd_n = gd_list(d, rd_names, RD_MAX);
+        rd_n = gd_list(d, folder_dir, rd_names, RD_MAX);
     }
     if (!rd_names || i >= rd_n) return 0 - 1;
     ui_ncpy(name, rd_names + i * WK_NAME, WK_NAME);
+    // a directory is a folder
+    n = ui_len(name);
+    if (n > 0 && name[n - 1] == '/') { name[n - 1] = 0; return 1; }
     return 0;
 }
 

@@ -318,11 +318,12 @@ done
 PB=$OUT/build
 keep() { cp "$1" "$PB/$2"; }
 # Rebuilt when ANY of C4IX changed -- kernel, libc4ix, headers, user
-# programs -- or the display header its programs include, or IMG_G. This used to
-# list four kernel files, so an edit to sys.c, vfs.c or a user program
-# was silently not built.
+# programs -- or the display header its programs include, or IMG_G, or
+# the linker (it drops unreached functions, so what it writes changes
+# with it). This used to list four kernel files, so an edit to sys.c,
+# vfs.c or a user program was silently not built.
 if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
-   [ -n "$(find src/c4ix src/winkit libjs/guest/gui.h libjs/guest/gui.c libjs/guest/snd.h libjs/guest/snd.c $(ls .img_g 2>/dev/null) -newer $OUT/c4ix32.c4r -type f -print -quit)" ]; then
+   [ -n "$(find src/c4ix src/winkit libjs/guest/gui.h libjs/guest/gui.c libjs/guest/snd.h libjs/guest/snd.c $(ls .img_g 2>/dev/null) c4rlink32 -newer $OUT/c4ix32.c4r -type f -print -quit)" ]; then
     say "C4IX, compiled $G (c4lc)"
     rm -rf $PB
     mkdir -p $PB/kernel $PB/lib $PB/libc $PB/user $PB/desktop $PB/bin
@@ -491,17 +492,30 @@ for g in $GAMES; do . $g/c4-images.sh c4ix; done
 
 # ... and with no C4IX under them: the bare machine, and C4DOS (c4's bare
 # libc, make libc-bare-objs). The same game objects, but for the C4IX
-# platform's (plat-bare.c, dg-bare.c), linked whole with libc. Their disk,
-# $OUT/games, has the games' files unpacked, since neither the bare
-# machine nor DOS can write to a drive, and C4DOS's own files, so it boots
-# C4DOS too.
+# platform's (plat-bare.c, dg-bare.c), with libc. Their disk, $OUT/games,
+# has the games' files unpacked, since neither the bare machine nor DOS
+# can write to a drive, and C4DOS's own files, so it boots C4DOS too.
 GAMESDISK=$OUT/games
 GAMES_ON_DISK=
-rm -rf $OUT/wolf3d $GAMESDISK
+GAMEFILES=$OUT/.gamefiles
+rm -rf $OUT/wolf3d $GAMESDISK $GAMEFILES
+mkdir -p $GAMEFILES
+# A bare program carries what it uses of libc and no more: c4rlink drops
+# every function nothing reaches, in every link (docs/c4dos-design.md
+# "Linking a bare program").
 if [ -n "$GAMES" ] && ls .libc-bare/*.c4o > /dev/null 2>&1; then
     mkdir -p $GAMESDISK
     step "linking the games for the bare machine and C4DOS:"
-    for g in $GAMES; do . $g/c4-images.sh bare; done
+    # The games disk stays flat (the bare machine has no directories), but
+    # the page's C4DOS disks give each game a directory of its own
+    # (\GAMES\DOOM), so what each one put here is noted: $GAMEFILES/NAME.
+    for g in $GAMES; do
+        (cd $GAMESDISK && find . -type f | LC_ALL=C sort) > $GAMEFILES.before
+        . $g/c4-images.sh bare
+        (cd $GAMESDISK && find . -type f | LC_ALL=C sort) | LC_ALL=C comm -13 $GAMEFILES.before - | sed 's|^\./||' \
+            > $GAMEFILES/$(basename $g | tr a-z A-Z)
+    done
+    rm -f $GAMEFILES.before
     echo
 fi
 if [ -n "$GAMES_ON_DISK" ]; then
@@ -687,48 +701,51 @@ fi
 # > >> < and | work at A> and in grin's DOS Prompt windows, for c4cc
 # programs too (the machine's console tap). grin is linked whole with the
 # bare libc, as the games are, from the objects make grin-objs compiled.
+#
+# The page disks' directories: listings, lj_put, game_of, games_put,
+# games_dirs and disk_indexes, in page-disks.sh (climb-disks.sh uses
+# them too, when the Makefile runs it on its own).
+. src/c4bb/tests/page-disks.sh
+
 LJDOS=libjs/images/dos
 rm -rf $LJDOS
+# Its directories: GRIN (grin and its applications), BIN (DOS programs),
+# GAMES\NAME (each game and its data); at the root only C4DOS and its two
+# files. AUTOEXEC.BAT puts GRIN and BIN on the PATH.
 if ls .grin/*.c4o > /dev/null 2>&1 && ls .libc-bare/*.c4o > /dev/null 2>&1 && [ -f $OUT/c4dos32.c4r ]; then
     say "the page's C4DOS disk, booting into grin: $LJDOS"
-    mkdir -p $LJDOS
-    ./c4rlink32 .grin/*.c4o .libc-bare/libc-*.c4o -o $LJDOS/grin.c4r > /dev/null
+    mkdir -p $LJDOS/GRIN $LJDOS/BIN
+    # libc's objects as library members: only those it needs
+    ./c4rlink32 .grin/*.c4o --start-lib .libc-bare/libc-*.c4o -o $LJDOS/GRIN/grin.c4r > /dev/null
     # its applications (docs/grin-plan.md 3.4): main, the kit's class, and
     # import.c in the kit's place; EXITKEY is test-grin's
     for app in clock calc notepad exitkey; do
         [ -f .grinapp/$app.c4o ] || continue
         kit=; [ -f .grinapp/wk-$app.c4o ] && kit=.grinapp/wk-$app.c4o
-        ./c4rlink32 .grinapp/$app.c4o $kit .grinapp/import.c4o .libc-bare/libc-*.c4o -o $LJDOS/$app.c4r > /dev/null
+        ./c4rlink32 .grinapp/$app.c4o $kit .grinapp/import.c4o --start-lib .libc-bare/libc-*.c4o -o $LJDOS/GRIN/$app.c4r > /dev/null
     done
     # DOS programs for trying redirection with, and test-grin's: ASKLINE
     # (bare.c: reads a line through DOS), DOSFILT (a filter; -r is a plain
     # c4cc program's READ and printf, the tap's) and HELLO (c4cc's printf)
-    [ -f .grinapp/askline.c4o ] && ./c4rlink32 .grinapp/askline.c4o .libc-bare/libc-*.c4o -o $LJDOS/askline.c4r > /dev/null
-    $CC -o $LJDOS/dosfilt.c4r include/c4dos.h src/tests/dosfilt.c > /dev/null
-    cp $OUT/hello32.c4r $LJDOS/hello.c4r
+    [ -f .grinapp/askline.c4o ] && ./c4rlink32 .grinapp/askline.c4o --start-lib .libc-bare/libc-*.c4o -o $LJDOS/BIN/askline.c4r > /dev/null
+    $CC -o $LJDOS/BIN/dosfilt.c4r include/c4dos.h src/tests/dosfilt.c > /dev/null
+    cp $OUT/hello32.c4r $LJDOS/BIN/hello.c4r
     cp $OUT/c4dos32.c4r $LJDOS/
-    if [ -d $GAMESDISK ]; then
-        (cd $GAMESDISK && find . -type f ! -name config.sys ! -name autoexec.bat ! -name c4dos.dir \
-            ! -name manifest.json ! -name index.json | sed 's|^\./||') | while read f; do
-            mkdir -p "$LJDOS/$(dirname "$f")"
-            ln "$GAMESDISK/$f" "$LJDOS/$f" 2> /dev/null || cp "$GAMESDISK/$f" "$LJDOS/$f"
-        done
-    fi
+    if [ -d $GAMESDISK ]; then games_put $LJDOS; fi
     sed 's/SIZE=[0-9]*/SIZE=16777216/' src/c4dos/fs/CONFIG.SYS > $LJDOS/config.sys
     printf 'DEVICE=CONSOLE.SYS FLUSH\nDEVICE=DRIVES.SYS HOME=B:\nDEVICE=HEAP.SYS\nDEVICE=REDIR.SYS TAP\n' >> $LJDOS/config.sys
     list=$(echo $GAMES_ON_DISK | sed 's/ /, /g')
     {
-        printf '@ECHO OFF\nECHO Welcome to C4DOS\nVER\n'
-        if [ -n "$list" ]; then printf 'ECHO The games on this disk: %s.\n' "$list"; fi
+        printf '@ECHO OFF\nECHO Welcome to C4DOS\nVER\nPATH \\GRIN;\\BIN\n'
+        if [ -n "$list" ]; then
+            printf 'ECHO The games on this disk, each in its directory in \\GAMES: %s.\n' "$list"
+            printf 'ECHO CD \\GAMES\\DOOM, then DOOM, plays Doom; CD \\ comes back.\n'
+        fi
         # (no > in an ECHO here: REDIR.SYS would take it for a redirection)
-        printf 'ECHO Starting grin: its File menu has Exit grin, back to the A prompt.\nGRIN\n'
+        printf 'ECHO Starting grin: its File menu has Exit grin, back to the prompt.\nGRIN\n'
     } > $LJDOS/autoexec.bat
-    (cd $LJDOS && ls -p | grep -v '/$' | grep -v '^manifest.json$' > c4dos.dir)
-    (cd $LJDOS && find . -type f -not -name manifest.json | sed 's|^\./||') | \
-        awk 'BEGIN{printf "["} NR>1{printf ","} {printf "\"%s\"", $0} END{print "]"}' > $LJDOS/manifest.json
-    (cd $LJDOS && find . -type f -not -name manifest.json -not -name index.json -printf '%s %P\n' | sort -k2) | \
-        awk 'BEGIN{printf "["} NR>1{printf ","} {n=$0; sub(/^[0-9]+ /,"",n); printf "[\"%s\",%s]", n, $1} END{print "]"}' \
-        > $LJDOS/index.json
+    listings $LJDOS
+    disk_indexes $LJDOS
 fi
 
 # c4sc, the compiled c4lc, so C4IX can rebuild itself: /usr's

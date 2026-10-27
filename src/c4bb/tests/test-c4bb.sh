@@ -373,7 +373,7 @@ if [ -f $IMAGES/c4dos32.c4r ]; then
     dos_out=$(printf 'VER\nTIME\nRUN raycast.c4r 15x15 -s 3 -d -n 2 -g 40x12\nECHO dos-ok\nEXIT\n' \
         | timeout 300 $C4BB -c 900000000 -d $IMAGES/disk $IMAGES/c4dos32.c4r 2>/dev/null)
     dos_rows=$(echo "$dos_out" | grep -c '48;5;')
-    if echo "$dos_out" | grep -q "clock device installed" \
+    if echo "$dos_out" | grep -q "installed: TIME" \
        && [ "$dos_rows" = 24 ] \
        && echo "$dos_out" | grep -q "dos-ok" \
        && echo "$dos_out" | grep -q "system halted"; then

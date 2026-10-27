@@ -128,12 +128,12 @@ want () {                           # want <what> <pattern>
 
 # ---- power-on 1: the shipped floppy ---------------------------------
 await "BIOS boots drive 0" "bios: drive 0 has c4dos32.c4r" 60 || exit 1
-run "C4DOS built a kernel"       'A>' 'LADDER' \
+run "C4DOS built a kernel"       'A:\\>' 'LADDER' \
     "Type RUN dosload.c4r c4ke.c4r"  600 || exit 1
-run "installed the C4KE medium"  'A>' 'RUN install.c4r B:' \
+run "installed the C4KE medium"  'A:\\>' 'RUN install.c4r B:' \
     "install: eject drive 0"         300 || exit 1
 want "install summary" "^install: [0-9]* files, [0-9]* bytes onto drive 1, boot.cfg -> c4ke.c4r"
-idle 'A>' 60 || exit 1
+idle 'A:\\>' 60 || exit 1
 printf 'RUN reboot.c4r 0\n' >&3
 
 # ---- power-on 2: the kernel C4DOS compiled --------------------------

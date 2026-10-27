@@ -1,6 +1,6 @@
 // web-grin.mjs - grin's browser check (docs/grin-plan.md G2, G3): the
 // page boots straight into grin; Control Panel's Display switches it to
-// 800x600 and back; File > Exit grin comes back to A>, where VER answers.
+// 800x600 and back; File > Exit grin comes back to A:\>, where VER answers.
 // Then GRIN again, and its applications: Clock and Calculator side by
 // side (Program Manager minimised, the Task List's Tile), at 640x480 and
 // at 800x600. Screenshots at both sizes, each time. Over CDP, in a tab of its own in one of the
@@ -101,9 +101,9 @@ try {
   await clickText('File');
   await clickText('Exit grin...');
   ok('Exit grin asks first', await shownHas('This will end your grin session.'));
-  const before = (await term()).split('A>').length;
+  const before = (await term()).split('A:\\>').length;
   await clickText('OK');
-  ok('OK: back at A>', await tab.waitFor(`document.getElementById("terminal").innerText.split('A>').length > ${before}`, 15000), (await term()).slice(-300));
+  ok('OK: back at A>', await tab.waitFor(`document.getElementById("terminal").innerText.split('A:\\\\>').length > ${before}`, 15000), (await term()).slice(-300));
   await tab.eval('document.getElementById("terminal").focus()');
   await tab.type('VER\n');
   ok('VER answers', await tab.waitFor(`document.getElementById("terminal").innerText.split('C4DOS version').length > 2`, 15000), (await term()).slice(-300));

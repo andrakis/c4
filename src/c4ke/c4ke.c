@@ -3409,93 +3409,6 @@ static int task_loadc4r (int argc, char **argv) {
 	__c4_opcode(result, OP_TASK_EXIT);
 }
 
-///
-// Interrupt handlers
-///
-
-// Cycle interrupt handler.
-// This is never directly called via an opcode, it happens as a trap with
-// type TRAP_HARD_IRQ.
-// Since it isn't a function call, we must take care to save and not modify
-// any registers.
-static void ih_cycle (int type, int ins, int mode, int a, int *bp, int *sp, int *returnpc) {
-	// TODO: move to a generic function? duplicates code from schedule
-	int *next, *curr;
-	int  ih_ran;
-
-	//if (critical_path_value) {
-	//	printf("c4ke: ih_cycle in critical path!? (level %d)\n", critical_path_value);
-	//	return;
-	//}
-
-	critical_path_start();
-	kgen_kernel();
-	// Measured first, before anything below can perturb it.
-	++kernel_ih_ticks;
-	if (kernel_ih_depth) {
-		++kernel_ih_reentry;
-		if (kernel_ih_reentry <= 3)
-			printf("c4ke: ih_cycle RE-ENTERED at depth %d -- a tick landed inside the handler\n",
-			       kernel_ih_depth);
-	}
-	++kernel_ih_depth;
-	if (kernel_ih_lastarm) {
-		ih_ran = __c4_cycles() - kernel_ih_lastarm;
-		if (!kernel_ih_minrun || ih_ran < kernel_ih_minrun) kernel_ih_minrun = ih_ran;
-		if (ih_ran < IH_STARVED_CYCLES) {
-			++kernel_ih_starved;
-			// Said as it happens: the runs this is meant to explain are
-			// the ones that never reach a shutdown to report at.
-			if (kernel_ih_starved <= 3 || !(kernel_ih_starved % 1000))
-				printf("c4ke: tick %d left the resumed task only %d cycles\n",
-				       kernel_ih_starved, ih_ran);
-		}
-	}
-	current_task_timekeeping();
-
-	// Getting too close to stack overflow error, just return.
-	// (May lag system)
-	//if (sp <= (int *)kernel_task_current[TASK_BASE] + 100) {
-	//	printf(" !! c4ke: stack overflow warning, too many interrupts!! \n");
-	//	critical_path_end();
-	//	return;
-	//}
-
-	//printf("c4ke: forcing task schedule\n");
-	if ((next = kernel_task_find())) {
-		// printf("c4ke: ih_cycle found a task to run, switch from 0x%lx to 0x%lx\n",
-		//        kernel_task_current, next);
-		// Save current state
-		curr = kernel_task_current;
-		curr[TASK_REG_A]  = (int)a;
-		curr[TASK_REG_BP] = (int)bp;
-		curr[TASK_REG_SP] = (int)sp;
-		curr[TASK_REG_PC] = (int)returnpc;
-		// Load new state
-		if (kernel_pm_support)
-			mode = (next[TASK_PRIVS] == PRIV_KERNEL || next[TASK_LOADING]) ? MODE_UNPROTECTED : MODE_PROTECTED;
-		kernel_before_switch(next);
-		a  =        next[TASK_REG_A];
-		bp = (int *)next[TASK_REG_BP];
-		sp = (int *)next[TASK_REG_SP];
-		returnpc = (int *)next[TASK_REG_PC];
-		// Update the task pointer
-		// printf("c4ke: scheduled next task\n");
-		kernel_task_current = next;
-	} else {
-		// No task switch - probably idle is the only task available
-		// printf("c4ke: warning in ih_cycle: no other task found\n");
-		// Just return as normal since no other tasks found
-	}
-	kernel_task_timekeeping();
-	kgen_task();
-	critical_path_end();
-	// The clock starts HERE, when the timer is live again, so what it
-	// measures is exactly what the resumed task gets to do.
-	kernel_ih_lastarm = __c4_cycles();
-	--kernel_ih_depth;
-}
-
 //
 // Signal handling
 //
@@ -3562,21 +3475,9 @@ static void dump_tasks () {
 	}
 }
 
-// Callback handler for SIGINT
-static void signal_forwarder (int type, int sig, int mode, int a, int *bp, int *sp, int *returnpc) {
-	// Force override signal to our version of SIGINT
-	// TODO: no other signals will work
-	//sig = SIGINT;
-	if (kernel_shutdown) {
-		// Should not happen. Currently does if a signal handler is overwritten by invoking
-		// a new c4ke.
-		//printf("c4ke: signal_forwarder not removed during kernel shutdown, immediately exiting\n");
-		//exit(-100);
-		// Tell the task finisher to exit now
-		kernel_shutdown = 100;
-	}
-	trap_enter();
-	// printf("c4m: signal_forwarder(%d, %d)\n", type, sig);
+// A host signal for the task in focus. Runs in a trap handler, with the
+// timer masked.
+static void signal_to_focus (int sig) {
 	if (kernel_task_focus && (kernel_task_focus[TASK_STATE] & STATE_RUNNING))
 		// Signal to the task in focus
 		internal_signal(kernel_task_focus, sig);
@@ -3589,7 +3490,160 @@ static void signal_forwarder (int type, int sig, int mode, int a, int *bp, int *
 		// Wake kernel task, it begins shutdown
 		kernel_task_wake(kernel_tasks);
 	}
+}
+
+// A host signal that arrived while the timer was masked, for ih_cycle.
+static int kernel_signal_held;
+
+// Callback handler for SIGINT
+//
+// The host traps into this the moment a signal arrives, wherever the
+// kernel is: c4m and the board hold a signal back while the timer is
+// masked only for a kernel that has opted into trap_restores_interval,
+// and this one has not. So it can land inside another trap handler, or
+// a critical path. There it must not touch the tasks, and above all not
+// end in trap_exit(), which unmasks the timer: the handler it interrupted
+// then took a tick halfway through a task switch, ih_cycle saved that
+// handler's registers as the task's, and the task later resumed on a
+// stack that was no longer its own and ran off to address 0. C4KE booted
+// by c4m in a C4IX Terminal hung that way after a Ctrl-C, whenever the
+// key landed in a handler (test-desktop; it came and went with the size
+// of unrelated images, which only moved where in time it landed).
+//
+// INTERVAL is the host's bp+9 slot (c4m.c's trap()): the cycle interrupt
+// as the signal found it. With the PIT, the register says the same. A
+// signal that found the timer masked is held for the next tick, which
+// comes as soon as whatever masked it is done.
+static void signal_forwarder (int interval, int type, int sig, int mode, int a, int *bp, int *sp, int *returnpc) {
+	// Force override signal to our version of SIGINT
+	// TODO: no other signals will work
+	//sig = SIGINT;
+	if (kernel_shutdown) {
+		// Should not happen. Currently does if a signal handler is overwritten by invoking
+		// a new c4ke.
+		//printf("c4ke: signal_forwarder not removed during kernel shutdown, immediately exiting\n");
+		//exit(-100);
+		// Tell the task finisher to exit now
+		kernel_shutdown = 100;
+	}
+	if (kernel_pit_ms ? !*(int *)C4KE_PIT_REG : (kernel_cycles_count && !interval)) {
+		kernel_signal_held = sig;
+		return;
+	}
+	trap_enter();
+	// printf("c4m: signal_forwarder(%d, %d)\n", type, sig);
+	signal_to_focus(sig);
 	trap_exit();
+}
+
+///
+// Interrupt handlers
+///
+
+// Cycle interrupt handler.
+// This is never directly called via an opcode, it happens as a trap with
+// type TRAP_HARD_IRQ.
+// Since it isn't a function call, we must take care to save and not modify
+// any registers.
+static void ih_cycle (int type, int ins, int mode, int a, int *bp, int *sp, int *returnpc) {
+	// TODO: move to a generic function? duplicates code from schedule
+	int *next, *curr;
+	int  ih_ran, sig;
+
+	//if (critical_path_value) {
+	//	printf("c4ke: ih_cycle in critical path!? (level %d)\n", critical_path_value);
+	//	return;
+	//}
+
+	critical_path_start();
+	// Measured first, before anything below can perturb it.
+	++kernel_ih_ticks;
+	// A tick that lands in a trap handler on its way out. Every handler
+	// unmasks the timer in trap_exit() and only then returns through the
+	// host's TLEV, and the idle task spends nearly all its time in
+	// op_schedule, so ticks land in that gap all the time. Harmless when the
+	// handler switched nothing; but one that has switched has already made
+	// kernel_task_current the task it is switching TO, while the registers
+	// are still its own, on the old task's stack. Saving them below makes
+	// that task's context a handler's epilogue on another task's stack: it
+	// then resumes there and never runs again (spin never printing, in C4KE
+	// booted by c4m in a C4IX Terminal), and a signal built on that stack
+	// later overwrites a live frame. So let the handler finish: it is two
+	// instructions from its TLEV, and the next tick schedules. A handler's
+	// frame is the host's trap frame, whose bp+1 is the host's TLEV, as in
+	// this handler's own frame, just above RETURNPC.
+	if (bp && bp[1] == *((int *)&returnpc - 1)) {
+		critical_path_end();
+		return;
+	}
+	kgen_kernel();
+	if (kernel_ih_depth) {
+		++kernel_ih_reentry;
+		if (kernel_ih_reentry <= 3)
+			printf("c4ke: ih_cycle RE-ENTERED at depth %d -- a tick landed inside the handler\n",
+			       kernel_ih_depth);
+	}
+	++kernel_ih_depth;
+	if (kernel_ih_lastarm) {
+		ih_ran = __c4_cycles() - kernel_ih_lastarm;
+		if (!kernel_ih_minrun || ih_ran < kernel_ih_minrun) kernel_ih_minrun = ih_ran;
+		if (ih_ran < IH_STARVED_CYCLES) {
+			++kernel_ih_starved;
+			// Said as it happens: the runs this is meant to explain are
+			// the ones that never reach a shutdown to report at.
+			if (kernel_ih_starved <= 3 || !(kernel_ih_starved % 1000))
+				printf("c4ke: tick %d left the resumed task only %d cycles\n",
+				       kernel_ih_starved, ih_ran);
+		}
+	}
+	current_task_timekeeping();
+	// a signal that came while the timer was masked (signal_forwarder)
+	if ((sig = kernel_signal_held)) {
+		kernel_signal_held = 0;
+		signal_to_focus(sig);
+	}
+
+	// Getting too close to stack overflow error, just return.
+	// (May lag system)
+	//if (sp <= (int *)kernel_task_current[TASK_BASE] + 100) {
+	//	printf(" !! c4ke: stack overflow warning, too many interrupts!! \n");
+	//	critical_path_end();
+	//	return;
+	//}
+
+	//printf("c4ke: forcing task schedule\n");
+	if ((next = kernel_task_find())) {
+		// printf("c4ke: ih_cycle found a task to run, switch from 0x%lx to 0x%lx\n",
+		//        kernel_task_current, next);
+		// Save current state
+		curr = kernel_task_current;
+		curr[TASK_REG_A]  = (int)a;
+		curr[TASK_REG_BP] = (int)bp;
+		curr[TASK_REG_SP] = (int)sp;
+		curr[TASK_REG_PC] = (int)returnpc;
+		// Load new state
+		if (kernel_pm_support)
+			mode = (next[TASK_PRIVS] == PRIV_KERNEL || next[TASK_LOADING]) ? MODE_UNPROTECTED : MODE_PROTECTED;
+		kernel_before_switch(next);
+		a  =        next[TASK_REG_A];
+		bp = (int *)next[TASK_REG_BP];
+		sp = (int *)next[TASK_REG_SP];
+		returnpc = (int *)next[TASK_REG_PC];
+		// Update the task pointer
+		// printf("c4ke: scheduled next task\n");
+		kernel_task_current = next;
+	} else {
+		// No task switch - probably idle is the only task available
+		// printf("c4ke: warning in ih_cycle: no other task found\n");
+		// Just return as normal since no other tasks found
+	}
+	kernel_task_timekeeping();
+	kgen_task();
+	critical_path_end();
+	// The clock starts HERE, when the timer is live again, so what it
+	// measures is exactly what the resumed task gets to do.
+	kernel_ih_lastarm = __c4_cycles();
+	--kernel_ih_depth;
 }
 
 //static void sig_segv_handler (int type, int sig, int a, int *bp, int *sp, int *returnpc) {

@@ -190,13 +190,13 @@ int gens () {
   return 0;
 }
 
-// v7, image(): an image loaded while another is counted as running is
+// v8, image(): an image loaded while another is counted as running is
 // that one's child, and goes when it is unloaded (grin's game window
 // runs its loop as grin, so an application started from there is grin's)
 int images () {
   int me, h, h2, old;
   me = dos_image(0);
-  if (!me) { printf("dosexec: image: no slot 31\n"); return 1; }
+  if (!me) { printf("dosexec: image: no slot 35\n"); return 1; }
   if (!(h = dos_load("dosres.c4r"))) { printf("dosexec: image: load failed\n"); return 1; }
   old = dos_image(h);
   printf("dosexec: image gave back %s\n", old == me ? "mine" : "another");

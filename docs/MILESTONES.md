@@ -527,7 +527,7 @@ opcodes on 08-24. It runs c4or1k about 18–20% faster than c4m, and
 builds both natively and as `c4mp.c4r`, which c4m hosts. `make
 test-c4mp`; reference: `src/c4mp/README.md`.
 
-## C4DOS — the operating system before operating systems (2026-08-21)
+## C4DOS — made possible by Robert Swierczek's c4 (2026-08-21)
 
 A single-tasking, trap-free DOS with `CONFIG.SYS`, `AUTOEXEC.BAT`, an
 `A>` prompt, a RAM disk and transient programs. It uses nothing past

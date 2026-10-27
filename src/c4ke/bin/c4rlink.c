@@ -19,11 +19,24 @@
 //             c4rstrip [-o out] in.c4r  the same program under a second name:
 //                                     one input, strip on, output over the input
 //                                     unless -o (Makefile builds it from this file)
+//             c4rlink prog.c4o --start-lib libc-*.c4o -o prog.c4r
+//                                     a program with no shared library under
+//                                     it (the bare machine, C4DOS): of libc's
+//                                     objects only those it needs (and, as in
+//                                     every link, only the functions it reaches)
 // Compilation: gcc -Isrc/c4cc -Iinclude -I. src/c4ke/bin/c4rlink.c -o c4rlink
 //
 // Notes:
-//  - All code, data, and patches are copied. This includes unused/unreferenced
-//    functions, as well as static functions and data.
+//  - Every input's data is copied whole, but of its code only the functions
+//    something reaches: those the entry point, the constructors and
+//    destructors and the code addresses held in data reach, and with -r
+//    every function the library exports (gc_functions). --no-gc copies all
+//    the code, as c4rlink always did before 2026-10-27. An image with no
+//    entry point and no -r keeps all of it too.
+//  - --start-lib makes the inputs after it library members, each linked
+//    only if it defines a symbol something linked still lacks, as ld does an
+//    archive's (lib_select). Off unless given: an object named plainly is
+//    always linked, as with ld.
 //  - Static symbols are never merged: each module keeps its own copy.
 //  - Non-static symbols are merged by name. An extern symbol that another
 //    module defines resolves to that definition; two non-static definitions
@@ -33,8 +46,9 @@
 //    an error, unless -r (library mode) is given.
 //
 // How it works:
-//  1: Load every .c4r given on the command line, recording each module's
-//     code offset (words) and data offset (bytes) in the merged image.
+//  1: Load every .c4r given on the command line. With --start-lib, choose
+//     the members to link and drop the rest. Record each module's code
+//     offset (words) and data offset (bytes) in the merged image.
 //  2: Allocate a master structure sized from the summed segment lengths.
 //  3: For each module, in order:
 //     - append code and data;
@@ -46,7 +60,8 @@
 //     - take the entry point from the first module that has one (rebased).
 //  4: Resolve: every symbol-typed patch whose master symbol is now defined
 //     becomes a CODE patch pointing at the definition.
-//  5: Write the master image out.
+//  5: Drop the functions nothing reaches (unless --no-gc), move the rest down.
+//  6: Write the master image out.
 //
 // Shared libraries (-l LIB): LIB is a library (a -r image, named .c4s by
 // convention) that is NOT copied in. A reference to something LIB
@@ -83,6 +98,7 @@ enum {
 	CL_OFFSET_DATA,  // int, byte offset of this module's data in the master image
 	CL_REMAP,        // int *, module symbol id -> master symbol table index
 	CL_REMAP_MAX,    // int, entries in CL_REMAP
+	CL_MEMBER,       // int, 1: a library member (--start-lib), linked only if wanted
 	CL__Sz
 };
 
@@ -112,6 +128,7 @@ static void show_help (char *spec) {
 	else
 	printf("%s: Link multiple .c4r files into one\n"
 	       "%s: [-dvrs] [-g0] [-l lib.c4s] [-o outfile] [--] file1.c4r [...fileN.c4r]\n"
+	       "         [--no-gc] [--start-lib member.c4o ... [--end-lib]]\n"
 	       "     -d            Turn on debug mode\n"
 	       "     -v            Turn on verbose mode\n"
 	       "     -r            Library mode: allow unresolved symbols\n"
@@ -119,6 +136,10 @@ static void show_help (char *spec) {
 		       "     -g0           Write no source map, but keep the symbols\n"
 	       "     -l lib.c4s    Link against a shared library: load it at run time\n"
 	       "     -o outfile    Write to outfile (default: a.c4r)\n"
+	       "     --start-lib   The inputs after it are library members: each is\n"
+	       "                   linked only if it defines a symbol still undefined\n"
+	       "     --end-lib     The inputs after it are linked whole again\n"
+	       "     --no-gc       Keep the functions nothing reaches (dropped by default)\n"
 	       "     --            End arguments\n", spec, spec);
 }
 
@@ -822,6 +843,399 @@ static int link_srcmap (int *master, int *c4rs, int count) {
 	return 0;
 }
 
+// ---- Dropping the functions nothing reaches (unless --no-gc) ----
+//
+// The code is cut into regions at every function's start: a defined
+// function's symbol (static ones too), each input's first word, and
+// every ENT that follows a jump or a return -- found by decoding from
+// those, it is what starts the code c4lc puts in an object without a
+// symbol, its soft-float and long long routines. Not the source map,
+// which names those too: an image has to be the same code whether its
+// objects were compiled with -g or not (C4IX's own build compiles
+// without, test-c4ix-rebuild compares). Every word of code that
+// holds a code address is a patch, since the loader has to relocate it,
+// so a CODE patch from region A to region B is all there is of "A uses
+// B". A tail call jumps past its callee's ENT, into the middle of the
+// region: that is still B. What is live is what the entry point, the
+// constructors and destructors and every code address held in data
+// (DCODE: function pointers in initializers, tables) reach; with -r also
+// every function the library exports. A program linked with -l keeps
+// only what it reaches too: C4IX's loader resolves a program's names
+// against its libraries, never a library's against the program
+// (loader.c, link_modules). The rest goes: its
+// code, its patches, its functions' symbols, its part of the source map.
+// Everything after moves down. Data is not touched, so globals a loader
+// looks up by name (__c4dos_api, __c4ke_exit) are all still there.
+//
+// One thing would make that unsafe: code that runs on, without a jump,
+// into the region after it. So each region is decoded, and one that
+// does not end exactly at the next start on a JMP, LEV, JMPA or TLEV is
+// glued to the next one, which then stays or goes with it.
+
+int cl_gc;
+
+// Does opcode OP carry an operand word? (c4m.c's c4m_has_operand)
+static int gc_operand (int op) {
+	return op <= ADJ || op == JSRI || op == JSRS || (op >= LDL && op <= IMMP) || op == STL;
+}
+
+// The region holding code word A: the last of RS's N starts at or before it
+static int gc_region (int *rs, int n, int a) {
+	int lo, hi, mid;
+	lo = 0; hi = n - 1;
+	while (lo < hi) {
+		mid = (lo + hi + 1) / 2;
+		if (rs[mid] <= a) lo = mid; else hi = mid - 1;
+	}
+	return lo;
+}
+
+// Where code word A ends up: its region's new start, plus its place in it
+static int gc_moved (int *rs, int *newpos, int n, int a) {
+	int r;
+	r = gc_region(rs, n, a);
+	return newpos[r] + a - rs[r];
+}
+
+// Make region R live, and queue it to follow what it uses
+int *gc_live, *gc_work, gc_nwork;
+static void gc_reach (int r) {
+	if (r < 0 || gc_live[r]) return;
+	gc_live[r] = 1;
+	gc_work[gc_nwork++] = r;
+}
+
+// The source map, for what is left: the files as they were, the live
+// functions, and the rows in live code. Where a removed region ends
+// and code that had no row of its own follows, a row says what the
+// code there was. Returns 0, or 1 when out of memory.
+static int gc_srcmap (int *master, int *rs, int *newpos, int nreg) {
+	int *funcs, *rows, *out, *ro, *rf, *rl;
+	int  nfiles, flags, i, j, n, r, nf, start, len, pl, file, line, nstart, kept, x, off, s, e;
+	int  have, cf, cline, prevdead, filesend;
+	char *p;
+	p = cl_map(master);
+	if (!p) return 0;
+	cl_mat = 1;
+	flags = cl_mu(p);
+	nfiles = cl_mu(p);
+	i = 0;
+	while (i < nfiles) { pl = cl_mu(p); cl_mat = cl_mat + pl; cl_mu(p); if (flags & 1) cl_mat = cl_mat + 4; ++i; }
+	filesend = cl_mat;
+	cl_oom = 0;
+	funcs = sb_new();
+	rows = sb_new();
+	// functions
+	nf = cl_mu(p);
+	i = 0; start = 0; nstart = 0; kept = 0;
+	while (i < nf) {
+		start = start + cl_mu(p);
+		len = cl_mu(p);
+		pl = cl_mu(p);
+		x = cl_mat;
+		cl_mat = cl_mat + pl;
+		file = cl_mu(p);
+		line = cl_mu(p);
+		r = gc_region(rs, nreg, start);
+		if (gc_live[r]) {
+			off = newpos[r] + start - rs[r];
+			sb_u(funcs, off - nstart);
+			nstart = off;
+			sb_u(funcs, len);
+			sb_u(funcs, pl);
+			sb_mem(funcs, p + x, pl);
+			sb_u(funcs, file);
+			sb_u(funcs, line);
+			++kept;
+		}
+		++i;
+	}
+	// rows: read them all, then write those in live code
+	n = cl_mu(p);
+	ro = malloc(sizeof(int) * (n + 1));
+	rf = malloc(sizeof(int) * (n + 1));
+	rl = malloc(sizeof(int) * (n + 1));
+	if (!ro || !rf || !rl) cl_oom = 1;
+	i = 0; off = 0; file = 0; line = 0;
+	while (i < n && !cl_oom) {
+		x = cl_mu(p);
+		off = off + (x >> 1);
+		if (x & 1) file = cl_mu(p);
+		line = line + cl_ms(p);
+		ro[i] = off; rf[i] = file; rl[i] = line;
+		++i;
+	}
+	cl_roff = 0; cl_rfile = 0; cl_rline = 0; cl_nrows = 0;
+	j = 0; have = 0; cf = 0; cline = 0; prevdead = 0;
+	r = 0;
+	while (r < nreg && !cl_oom) {
+		if (!gc_live[r]) prevdead = 1;
+		else {
+			s = rs[r]; e = rs[r + 1];
+			// rows in the removed code before it: what holds where it starts
+			while (j < n && ro[j] < s) { have = 1; cf = rf[j]; cline = rl[j]; ++j; }
+			if (prevdead && have && !(j < n && ro[j] == s)) cl_row(rows, newpos[r], cf, cline);
+			while (j < n && ro[j] < e) {
+				cl_row(rows, newpos[r] + ro[j] - s, rf[j], rl[j]);
+				have = 1; cf = rf[j]; cline = rl[j];
+				++j;
+			}
+			prevdead = 0;
+		}
+		++r;
+	}
+	if (ro) free(ro);
+	if (rf) free(rf);
+	if (rl) free(rl);
+	out = sb_new();
+	sb_mem(out, p, filesend);                            // version, flags, files
+	sb_u(out, kept);
+	if (funcs) sb_mem(out, (char *)funcs[SB_BYTES], funcs[SB_LEN]);
+	sb_u(out, cl_nrows);
+	if (rows) sb_mem(out, (char *)rows[SB_BYTES], rows[SB_LEN]);
+	sb_free(funcs);
+	sb_free(rows);
+	if (cl_oom) { sb_free(out); return 1; }
+	free((char *)master[C4R_SRCMAP]);
+	master[C4R_SRCMAP] = out[SB_BYTES];
+	master[C4R_SRCMAPLEN] = out[SB_LEN];
+	free(out);
+	return 0;
+}
+
+// Drop the regions nothing reaches. Returns 0, or 1 when out of memory.
+static int gc_functions (int *master, int *c4rs, int count) {
+	int *mhdr, *code, *sym, *patch, *q, *rs, *newpos, *adjn, *adj, *idmap, *cd;
+	int  codelen, nreg, i, j, k, n, r, t, a, pc, e, op, np, words, nfun, kfun, prev;
+	char *mark;
+
+	mhdr = (int *)master[C4R_HEADER];
+	code = (int *)master[C4R_CODE];
+	codelen = mhdr[C4R_HDR_CODELEN];
+	// with no entry point and no -r, nothing would say what is live
+	if (!codelen || (mhdr[C4R_HDR_ENTRY] == -1 && !cl_libmode)) return 0;
+	if (!(mark = malloc(codelen + 1))) return 1;
+	memset(mark, 0, codelen + 1);
+
+	// The starts: word 0, each input's first word, each function
+	mark[0] = 1;
+	k = 0;
+	while (k < count) {
+		a = c4rs[k * CL__Sz + CL_OFFSET_CODE];
+		if (a >= 0 && a < codelen) mark[a] = 1;
+		++k;
+	}
+	sym = (int *)master[C4R_SYMBOLS];
+	n = mhdr[C4R_HDR_SYMBOLSLEN];
+	i = 0;
+	while (i < n) {
+		if (sym[C4R_SYMB_CLASS] == C4R_SCLASS_Fun && !(sym[C4R_SYMB_ATTRS] & ATTR_EXTERN) &&
+		    sym[C4R_SYMB_VALUE] >= 0 && sym[C4R_SYMB_VALUE] < codelen)
+			mark[sym[C4R_SYMB_VALUE]] = 1;
+		sym = sym + C4R_SYMB__Sz; ++i;
+	}
+	// ... and each ENT after a jump or return. Decoding goes on from
+	// each start; an operand that lands on one means the code before
+	// it was not instructions (c4cc leaves an object's word 0 unused),
+	// so decoding starts again there.
+	pc = 0; prev = -1;
+	while (pc < codelen) {
+		op = code[pc];
+		if (op == ENT && (prev == JMP || prev == LEV || prev == JMPA || prev == TLEV)) mark[pc] = 1;
+		prev = op;
+		if (gc_operand(op) && pc + 1 < codelen && mark[pc + 1]) { pc = pc + 1; prev = -1; }
+		else pc = pc + (gc_operand(op) ? 2 : 1);
+	}
+
+	// Glue a region that does not end in a jump or return to the next
+	pc = 0;
+	while (pc < codelen) {
+		e = pc + 1;
+		while (e < codelen && !mark[e]) ++e;
+		op = -1;
+		while (pc < e) { op = code[pc]; pc = pc + (gc_operand(op) ? 2 : 1); }
+		if (e < codelen && (pc != e || !(op == JMP || op == LEV || op == JMPA || op == TLEV))) {
+			if (cl_debug) printf("c4rlink: gc: code at %d runs on into %d\n", e - 1, e);
+			mark[e] = 0;
+		}
+	}
+
+	// The regions
+	nreg = 0;
+	i = 0;
+	while (i < codelen) { if (mark[i]) ++nreg; ++i; }
+	rs = malloc(sizeof(int) * (nreg + 1));
+	newpos = malloc(sizeof(int) * (nreg + 1));
+	adjn = malloc(sizeof(int) * (nreg + 2));
+	gc_live = malloc(sizeof(int) * (nreg + 1));
+	gc_work = malloc(sizeof(int) * (nreg + 1));
+	if (!rs || !newpos || !adjn || !gc_live || !gc_work) return 1;
+	j = 0;
+	i = 0;
+	while (i < codelen) { if (mark[i]) rs[j++] = i; ++i; }
+	rs[nreg] = codelen;
+	free(mark);
+
+	// What uses what: per region, the regions its CODE patches name
+	patch = (int *)master[C4R_PATCHES];
+	np = mhdr[C4R_HDR_PATCHLEN];
+	memset(adjn, 0, sizeof(int) * (nreg + 2));
+	i = 0; q = patch;
+	while (i < np) {
+		if (q[C4R_PAT_TYPE] == C4R_PTYPE_CODE)
+			adjn[gc_region(rs, nreg, q[C4R_PAT_ADDRESS]) + 1] = adjn[gc_region(rs, nreg, q[C4R_PAT_ADDRESS]) + 1] + 1;
+		q = q + C4R_PAT__Sz; ++i;
+	}
+	r = 0;
+	while (r < nreg) { adjn[r + 1] = adjn[r + 1] + adjn[r]; ++r; }
+	if (!(adj = malloc(sizeof(int) * (adjn[nreg] + 1)))) return 1;
+	// newpos is the fill cursor for now
+	memcpy(newpos, adjn, sizeof(int) * nreg);
+	i = 0; q = patch;
+	while (i < np) {
+		if (q[C4R_PAT_TYPE] == C4R_PTYPE_CODE) {
+			r = gc_region(rs, nreg, q[C4R_PAT_ADDRESS]);
+			adj[newpos[r]] = gc_region(rs, nreg, q[C4R_PAT_VALUE]);
+			newpos[r] = newpos[r] + 1;
+		}
+		q = q + C4R_PAT__Sz; ++i;
+	}
+
+	// The roots, and all they reach
+	memset(gc_live, 0, sizeof(int) * (nreg + 1));
+	gc_nwork = 0;
+	if (mhdr[C4R_HDR_ENTRY] >= 0 && mhdr[C4R_HDR_ENTRY] < codelen)
+		gc_reach(gc_region(rs, nreg, mhdr[C4R_HDR_ENTRY]));
+	cd = (int *)master[C4R_CONSTRUCTORS];
+	i = 0;
+	while (i < mhdr[C4R_HDR_CONSTRUCTLEN]) { gc_reach(gc_region(rs, nreg, cd[C4R_CNDE_Value])); cd = cd + C4R_CNDE__Sz; ++i; }
+	cd = (int *)master[C4R_DESTRUCTORS];
+	i = 0;
+	while (i < mhdr[C4R_HDR_DESTRUCTLEN]) { gc_reach(gc_region(rs, nreg, cd[C4R_CNDE_Value])); cd = cd + C4R_CNDE__Sz; ++i; }
+	i = 0; q = patch;
+	while (i < np) {
+		if (q[C4R_PAT_TYPE] == C4R_PTYPE_DCODE) gc_reach(gc_region(rs, nreg, q[C4R_PAT_VALUE]));
+		q = q + C4R_PAT__Sz; ++i;
+	}
+	if (cl_libmode) {
+		sym = (int *)master[C4R_SYMBOLS];
+		i = 0;
+		while (i < n) {
+			if (sym[C4R_SYMB_CLASS] == C4R_SCLASS_Fun && !(sym[C4R_SYMB_ATTRS] & (ATTR_EXTERN | ATTR_STATIC)) &&
+			    sym[C4R_SYMB_VALUE] >= 0 && sym[C4R_SYMB_VALUE] < codelen)
+				gc_reach(gc_region(rs, nreg, sym[C4R_SYMB_VALUE]));
+			sym = sym + C4R_SYMB__Sz; ++i;
+		}
+	}
+	while (gc_nwork) {
+		r = gc_work[--gc_nwork];
+		k = adjn[r];
+		while (k < adjn[r + 1]) { gc_reach(adj[k]); ++k; }
+	}
+	free(adj); free(adjn); free(gc_work);
+
+	// Where each live region goes
+	words = 0;
+	r = 0;
+	while (r < nreg) {
+		newpos[r] = words;
+		if (gc_live[r]) words = words + rs[r + 1] - rs[r];
+		++r;
+	}
+	newpos[nreg] = words;
+	if (words == codelen) { free(rs); free(newpos); free(gc_live); return 0; }
+
+	// The code, moved down
+	r = 0;
+	while (r < nreg) {
+		if (gc_live[r] && newpos[r] != rs[r]) {
+			i = 0;
+			while (i < rs[r + 1] - rs[r]) { code[newpos[r] + i] = code[rs[r] + i]; ++i; }
+		}
+		++r;
+	}
+	mhdr[C4R_HDR_CODELEN] = words;
+
+	// The patches: those in removed code go, the rest move
+	i = 0; q = patch; k = 0;
+	while (i < np) {
+		t = q[C4R_PAT_TYPE];
+		a = 1;                                      // kept
+		if (t == C4R_PTYPE_DCODE || t == C4R_PTYPE_DDATA || t == C4R_PTYPE_DSYM) {
+			if (t == C4R_PTYPE_DCODE) q[C4R_PAT_VALUE] = gc_moved(rs, newpos, nreg, q[C4R_PAT_VALUE]);
+		} else {
+			r = gc_region(rs, nreg, q[C4R_PAT_ADDRESS]);
+			if (!gc_live[r]) a = 0;
+			else {
+				q[C4R_PAT_ADDRESS] = newpos[r] + q[C4R_PAT_ADDRESS] - rs[r];
+				if (t == C4R_PTYPE_CODE) q[C4R_PAT_VALUE] = gc_moved(rs, newpos, nreg, q[C4R_PAT_VALUE]);
+			}
+		}
+		if (a) {
+			if (k != i) memcpy(patch + k * C4R_PAT__Sz, q, sizeof(int) * C4R_PAT__Sz);
+			++k;
+		}
+		q = q + C4R_PAT__Sz; ++i;
+	}
+	mhdr[C4R_HDR_PATCHLEN] = k;
+
+	// The entry point, constructors and destructors
+	if (mhdr[C4R_HDR_ENTRY] >= 0 && mhdr[C4R_HDR_ENTRY] < codelen)
+		mhdr[C4R_HDR_ENTRY] = gc_moved(rs, newpos, nreg, mhdr[C4R_HDR_ENTRY]);
+	cd = (int *)master[C4R_CONSTRUCTORS];
+	i = 0;
+	while (i < mhdr[C4R_HDR_CONSTRUCTLEN]) { cd[C4R_CNDE_Value] = gc_moved(rs, newpos, nreg, cd[C4R_CNDE_Value]); cd = cd + C4R_CNDE__Sz; ++i; }
+	cd = (int *)master[C4R_DESTRUCTORS];
+	i = 0;
+	while (i < mhdr[C4R_HDR_DESTRUCTLEN]) { cd[C4R_CNDE_Value] = gc_moved(rs, newpos, nreg, cd[C4R_CNDE_Value]); cd = cd + C4R_CNDE__Sz; ++i; }
+
+	// The symbols: a removed function's goes, the rest are renumbered
+	if (!(idmap = malloc(sizeof(int) * (n + 1)))) return 1;
+	sym = (int *)master[C4R_SYMBOLS];
+	nfun = 0; kfun = 0;
+	i = 0; j = 0;
+	while (i < n) {
+		q = sym + i * C4R_SYMB__Sz;
+		idmap[i] = -1;
+		if (q[C4R_SYMB_CLASS] == C4R_SCLASS_Fun && !(q[C4R_SYMB_ATTRS] & ATTR_EXTERN) &&
+		    q[C4R_SYMB_VALUE] >= 0 && q[C4R_SYMB_VALUE] < codelen) {
+			++nfun;
+			r = gc_region(rs, nreg, q[C4R_SYMB_VALUE]);
+			if (gc_live[r]) { q[C4R_SYMB_VALUE] = newpos[r] + q[C4R_SYMB_VALUE] - rs[r]; ++kfun; }
+			else { free((char *)q[C4R_SYMB_NAME]); q = 0; }
+		}
+		if (q) {
+			if (j != i) memcpy(sym + j * C4R_SYMB__Sz, q, sizeof(int) * C4R_SYMB__Sz);
+			sym[j * C4R_SYMB__Sz + C4R_SYMB_ID] = j;
+			idmap[i] = j;
+			++j;
+		}
+		++i;
+	}
+	mhdr[C4R_HDR_SYMBOLSLEN] = j;
+	// a symbol reference names an extern, which stays
+	i = 0; q = patch;
+	while (i < k) {
+		t = q[C4R_PAT_TYPE];
+		if (t >= 0 && t < n) q[C4R_PAT_TYPE] = idmap[t];
+		else if (t == C4R_PTYPE_DSYM && q[C4R_PAT_VALUE] >= 0 && q[C4R_PAT_VALUE] < n)
+			q[C4R_PAT_VALUE] = idmap[q[C4R_PAT_VALUE]];
+		q = q + C4R_PAT__Sz; ++i;
+	}
+	free(idmap);
+
+	if (master[C4R_SRCMAP] && gc_srcmap(master, rs, newpos, nreg)) {
+		printf("c4rlink: warning: out of memory for the source map; the image has none\n");
+		free((char *)master[C4R_SRCMAP]);
+		master[C4R_SRCMAP] = 0;
+		master[C4R_SRCMAPLEN] = 0;
+	}
+	if (cl_verbose)
+		printf("c4rlink: gc: kept %d of %d functions, %d of %d words of code\n", kfun, nfun, words, codelen);
+	free(rs); free(newpos); free(gc_live);
+	return 0;
+}
+
 // Serialize a c4r structure to a file. Layout must match c4r_load_opt_real
 // in load-c4r.c. Returns 0 on success.
 static int c4r_write (int *c4r, char *file) {
@@ -1026,8 +1440,175 @@ static int *cl_load (char *name) {
 	return loaded;
 }
 
+// ---- Library members (--start-lib ... --end-lib) ----
+//
+// An input after --start-lib (up to --end-lib, or the end) is a library
+// member, as an object in an ar archive is to ld: it is linked only if
+// it defines a symbol that something linked references and nothing
+// linked defines, and that is repeated until nothing more comes in. As
+// lld's --start-lib, not ld's archives, the order does not matter: a
+// member is wanted by inputs named after it as much as before it, and
+// by members already pulled in. "References" means a patch names the
+// symbol -- an object's table also lists, as externs, every function
+// its headers declared, used or not. A member pulled in is linked
+// whole; members left out are as if not named. With no --start-lib,
+// every input is linked, and the image is the same bytes as before.
+
+// The names seen: a hash of chains. Per name the bytes, their length,
+// NF_DEF (something linked defines it) and NF_REF (something linked
+// names it in a patch, as an extern), and the next in the chain.
+enum { NE_NAME, NE_LEN, NE_FLAGS, NE_NEXT, NE__Sz };
+enum { NF_DEF = 1, NF_REF = 2, NH_BUCKETS = 4096 };
+int *cl_nh, *cl_ne, cl_nen, cl_nemax;
+
+// The entry for NAME, made if ADD and there is none; 0 if none (or no room)
+static int *nh_find (char *name, int len, int add) {
+	int h, i, k, *e;
+	h = 0; i = 0;
+	while (i < len) { h = (h * 31 + (name[i] & 255)) & (NH_BUCKETS - 1); ++i; }
+	k = cl_nh[h];
+	while (k >= 0) {
+		e = cl_ne + k * NE__Sz;
+		if (e[NE_LEN] == len && !memcmp((char *)e[NE_NAME], name, len)) return e;
+		k = e[NE_NEXT];
+	}
+	if (!add || cl_nen >= cl_nemax) return 0;
+	e = cl_ne + cl_nen * NE__Sz;
+	e[NE_NAME] = (int)name; e[NE_LEN] = len; e[NE_FLAGS] = 0;
+	e[NE_NEXT] = cl_nh[h];
+	cl_nh[h] = cl_nen++;
+	return e;
+}
+
+// Does symbol SYM define its name for another module: not extern, not
+// static, a function or a global (what resolve_patches can resolve)?
+static int lib_def (int *sym) {
+	return !(sym[C4R_SYMB_ATTRS] & (ATTR_EXTERN | ATTR_STATIC)) &&
+	       (sym[C4R_SYMB_CLASS] == C4R_SCLASS_Fun || sym[C4R_SYMB_CLASS] == C4R_SCLASS_Glo);
+}
+
+// An input is linked: note what it defines and which externs it names.
+// Returns 0, or 1 when out of memory.
+static int lib_add (int *cl) {
+	int *c4r, *hdr, *sym, *p, *refd, *e;
+	int  i, n, id, t, maxid;
+	c4r = (int *)cl[CL_STRUCT];
+	hdr = (int *)cl[CL_HEADER];
+	n = hdr[C4R_HDR_SYMBOLSLEN];
+	maxid = -1;
+	sym = (int *)c4r[C4R_SYMBOLS];
+	i = 0;
+	while (i < n) {
+		if (sym[C4R_SYMB_ID] > maxid) maxid = sym[C4R_SYMB_ID];
+		sym = sym + C4R_SYMB__Sz; ++i;
+	}
+	if (maxid < 0) return 0;
+	if (!(refd = malloc(sizeof(int) * (maxid + 1)))) return 1;
+	memset(refd, 0, sizeof(int) * (maxid + 1));
+	p = (int *)c4r[C4R_PATCHES];
+	i = 0;
+	while (i < hdr[C4R_HDR_PATCHLEN]) {
+		t = p[C4R_PAT_TYPE];
+		id = -1;
+		if (t >= 0) id = t;
+		else if (t == C4R_PTYPE_DSYM) id = p[C4R_PAT_VALUE];
+		if (id >= 0 && id <= maxid) refd[id] = 1;
+		p = p + C4R_PAT__Sz; ++i;
+	}
+	sym = (int *)c4r[C4R_SYMBOLS];
+	i = 0;
+	while (i < n) {
+		e = 0;
+		if (lib_def(sym)) {
+			if (!(e = nh_find((char *)sym[C4R_SYMB_NAME], sym[C4R_SYMB_NAMELEN], 1))) { free(refd); return 1; }
+			e[NE_FLAGS] = e[NE_FLAGS] | NF_DEF;
+		} else if ((sym[C4R_SYMB_ATTRS] & ATTR_EXTERN) && !(sym[C4R_SYMB_ATTRS] & ATTR_STATIC) &&
+		           sym[C4R_SYMB_ID] >= 0 && refd[sym[C4R_SYMB_ID]]) {
+			if (!(e = nh_find((char *)sym[C4R_SYMB_NAME], sym[C4R_SYMB_NAMELEN], 1))) { free(refd); return 1; }
+			e[NE_FLAGS] = e[NE_FLAGS] | NF_REF;
+		}
+		sym = sym + C4R_SYMB__Sz; ++i;
+	}
+	free(refd);
+	return 0;
+}
+
+// The symbol of member CL that something linked wants, or 0
+static int *lib_wanted (int *cl) {
+	int *c4r, *hdr, *sym, *e, i, n;
+	c4r = (int *)cl[CL_STRUCT];
+	hdr = (int *)cl[CL_HEADER];
+	n = hdr[C4R_HDR_SYMBOLSLEN];
+	sym = (int *)c4r[C4R_SYMBOLS];
+	i = 0;
+	while (i < n) {
+		if (lib_def(sym) && (e = nh_find((char *)sym[C4R_SYMB_NAME], sym[C4R_SYMB_NAMELEN], 0)) &&
+		    (e[NE_FLAGS] & (NF_DEF | NF_REF)) == NF_REF)
+			return sym;
+		sym = sym + C4R_SYMB__Sz; ++i;
+	}
+	return 0;
+}
+
+// Choose the members to link, to a fixed point, and drop the others from
+// C4RS (freeing them), the rest keeping their order. NSYM is the inputs'
+// symbols summed, which bounds the names. Returns the inputs left, or -1
+// when out of memory.
+static int lib_select (int *c4rs, int count, int nsym) {
+	int *cl, *dst, *sym, k, more, left;
+	k = 0; more = 0;
+	while (k < count) { if (c4rs[k * CL__Sz + CL_MEMBER]) more = 1; ++k; }
+	if (!more) return count;
+	cl_nemax = nsym; cl_nen = 0;
+	if (!(cl_nh = malloc(sizeof(int) * NH_BUCKETS))) return -1;
+	memset(cl_nh, -1, sizeof(int) * NH_BUCKETS);
+	if (!(cl_ne = malloc(sizeof(int) * NE__Sz * (nsym + 1)))) { free(cl_nh); return -1; }
+	k = 0;
+	while (k < count) {
+		cl = c4rs + k * CL__Sz;
+		if (!cl[CL_MEMBER] && lib_add(cl)) return -1;
+		++k;
+	}
+	// CL_MEMBER: 1 still out, 2 pulled in
+	more = 1;
+	while (more) {
+		more = 0;
+		k = 0;
+		while (k < count) {
+			cl = c4rs + k * CL__Sz;
+			if (cl[CL_MEMBER] == 1 && (sym = lib_wanted(cl))) {
+				if (cl_verbose)
+					printf("c4rlink: '%.*s' brings in '%s'\n",
+					       sym[C4R_SYMB_NAMELEN], (char *)sym[C4R_SYMB_NAME], (char *)cl[CL_FILE]);
+				cl[CL_MEMBER] = 2;
+				if (lib_add(cl)) return -1;
+				more = 1;
+			}
+			++k;
+		}
+	}
+	free(cl_nh); free(cl_ne);
+	// keep the linked, in order
+	left = 0; dst = c4rs;
+	k = 0;
+	while (k < count) {
+		cl = c4rs + k * CL__Sz;
+		if (cl[CL_MEMBER] == 1) {
+			if (cl_verbose) printf("c4rlink: '%s' is not needed\n", (char *)cl[CL_FILE]);
+			c4r_free((int *)cl[CL_STRUCT]);
+		} else {
+			if (dst != cl) memcpy(dst, cl, sizeof(int) * CL__Sz);
+			dst[CL_ID] = left;
+			dst = dst + CL__Sz; ++left;
+		}
+		++k;
+	}
+	memset(dst, 0, sizeof(int) * CL__Sz * (count - left));
+	return left;
+}
+
 int main (int argc, char **argv) {
-	int   i, endargs, endopt, failed, unresolved;
+	int   i, endargs, endopt, failed, unresolved, inlib;
 	int  *master, *loaded;
 	int  *c4rs, *c4rs_it, c4r_alloc, c4r_pos;
 	char *spec, *arg, *outfile;
@@ -1046,16 +1627,18 @@ int main (int argc, char **argv) {
 	c4r_alloc = 256; // should be enough for everyone
 	c4r_pos = 0;
 	cl_debug = cl_verbose = cl_libmode = cl_strip = cl_nomap = 0;
+	cl_gc = 1;
 	// The strip tool is this program under another name (argv[0] ends in
 	// "c4rstrip", with or without .c4r): one input, strip on.
 	cl_striptool = 0;
 	arg = spec; while (*arg) ++arg;
 	while (arg > spec && *(arg - 1) != '/') --arg;
-	if (!my_strncmp(arg, "c4rstrip", 8)) { cl_striptool = 1; cl_strip = 1; }
+	if (!my_strncmp(arg, "c4rstrip", 8)) { cl_striptool = 1; cl_strip = 1; cl_gc = 0; }
 	count_code = count_data = count_patch = count_con = count_des = count_sym = 0;
 	cl_nlibs = 0;
 	if (!(cl_libs = malloc(CL_LIBMAX * CLL__Sz * sizeof(int)))) return 1;
 	endargs = 0;
+	inlib = 0;
 	failed = 0;
 
 	// Allocate structures
@@ -1083,6 +1666,14 @@ int main (int argc, char **argv) {
 			return 1;
 		} else if (!my_strcmp(*argv, "--")) {
 			endargs = 1;
+		} else if (endargs == 0 && !my_strcmp(*argv, "--start-lib")) {
+			inlib = 1;
+		} else if (endargs == 0 && !my_strcmp(*argv, "--end-lib")) {
+			inlib = 0;
+		} else if (endargs == 0 && !my_strcmp(*argv, "--gc")) {
+			cl_gc = 1;                          // the default; still accepted
+		} else if (endargs == 0 && !my_strcmp(*argv, "--no-gc")) {
+			cl_gc = 0;
 		} else if (endargs == 0 && **argv == '-') {
 			arg = *argv + 1; // skip dash
 			endopt = 0;
@@ -1151,26 +1742,15 @@ int main (int argc, char **argv) {
 				return 2;
 			}
 			if (cl_verbose) c4r_dump_info(loaded);
-			// Record the module and its position in the merged image
+			// Record the module; its place in the merged image is
+			// worked out below, once the members are chosen
 			c4rs_it[CL_ID] = c4r_pos;
 			c4rs_it[CL_STRUCT] = (int)loaded;
 			c4rs_it[CL_HEADER] = loaded[C4R_HEADER];
 			c4rs_it[CL_FILE]   = (int)*argv;
-			c4rs_it[CL_OFFSET_CODE] = count_code;
-			c4rs_it[CL_OFFSET_DATA] = count_data;
+			c4rs_it[CL_MEMBER] = inlib;
 			hdr = (int *)c4rs_it[CL_HEADER];
-			// Track statistics. The data cursor advances by each module's
-			// MEMSZ (its data image PLUS its BSS), so the next module --
-			// and every relocated data reference in this one -- sits past
-			// this module's BSS, and that BSS becomes a zero gap in the
-			// merged image. Only DATALEN bytes are copied in (below); the
-			// gap stays zero because the master data buffer is zeroed.
-			count_code  = count_code  + hdr[C4R_HDR_CODELEN];
-			count_data  = count_data  + hdr[C4R_HDR_MEMSZ];
-			count_patch = count_patch + hdr[C4R_HDR_PATCHLEN];
-			count_con   = count_con   + hdr[C4R_HDR_CONSTRUCTLEN];
-			count_des   = count_des   + hdr[C4R_HDR_DESTRUCTLEN];
-			count_sym   = count_sym   + hdr[C4R_HDR_SYMBOLSLEN];
+			count_sym = count_sym + hdr[C4R_HDR_SYMBOLSLEN];
 			// Advance pointer
 			c4rs_it = c4rs_it + CL__Sz;
 			++c4r_pos;
@@ -1181,6 +1761,34 @@ int main (int argc, char **argv) {
 	if (!c4r_pos) {
 		show_help(spec);
 		return 1;
+	}
+
+	// Library members: only those wanted stay
+	if ((c4r_pos = lib_select(c4rs, c4r_pos, count_sym)) < 0) {
+		printf("%s: out of memory choosing the library members\n", spec);
+		return 4;
+	}
+
+	// Each module's position in the merged image, and the totals
+	count_sym = 0;
+	c4rs_it = c4rs; i = 0;
+	while (i < c4r_pos) {
+		c4rs_it[CL_OFFSET_CODE] = count_code;
+		c4rs_it[CL_OFFSET_DATA] = count_data;
+		hdr = (int *)c4rs_it[CL_HEADER];
+		// The data cursor advances by each module's MEMSZ (its data
+		// image PLUS its BSS), so the next module -- and every
+		// relocated data reference in this one -- sits past this
+		// module's BSS, and that BSS becomes a zero gap in the merged
+		// image. Only DATALEN bytes are copied in (below); the gap
+		// stays zero because the master data buffer is zeroed.
+		count_code  = count_code  + hdr[C4R_HDR_CODELEN];
+		count_data  = count_data  + hdr[C4R_HDR_MEMSZ];
+		count_patch = count_patch + hdr[C4R_HDR_PATCHLEN];
+		count_con   = count_con   + hdr[C4R_HDR_CONSTRUCTLEN];
+		count_des   = count_des   + hdr[C4R_HDR_DESTRUCTLEN];
+		count_sym   = count_sym   + hdr[C4R_HDR_SYMBOLSLEN];
+		c4rs_it = c4rs_it + CL__Sz; ++i;
 	}
 
 	if (cl_verbose) {
@@ -1260,6 +1868,10 @@ int main (int argc, char **argv) {
 		// c4rstrip, which is -s)
 		if (!cl_strip && !cl_nomap && link_srcmap(master, c4rs, c4r_pos))
 			printf("%s: warning: out of memory for the source map; the image has none\n", spec);
+		if (cl_gc && !cl_striptool && gc_functions(master, c4rs, c4r_pos)) {
+			printf("%s: out of memory dropping unreached functions (--no-gc links without)\n", spec);
+			return 4;
+		}
 		blank_patch_targets(master);
 		dstored = hdr[C4R_HDR_MEMSZ];
 		dbytes = (char *)master[C4R_DATA];

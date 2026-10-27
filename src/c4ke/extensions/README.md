@@ -33,6 +33,7 @@ c4bb and in libjs.
 | `c4ke_plus.c` | `plus` | placeholder for features of the c4plus interpreter; reports "requires c4plus" and does nothing | never (no c4plus host) |
 | `c4ke_pm.c` | `pm` | protected mode: handles the trap a user task raises on a privileged instruction (I/O, `MALC`/`FREE`) and emulates it per task | only in kernels built with `-DCONFIG_ENABLE_PM=1`, and only on a c4m that reports `C4I_PROT` |
 | `c4ke_dos.c` | `dos` | the C4DOS hand-over: if C4DOS loaded the kernel, it wrote its API table into the exported `__c4dos_api`; at start this copies every file on the DOS RAM disk into the kernel RAM filesystem, so a kernel built in C4DOS boots the init it was just handed | only when `__c4dos_api` is set and its magic and version check out |
+| `c4ke_boot.c` | `boot` | `OP_KBOOT`, which `bin/kboot.c` raises: the kernel shuts down as when init exits, and then loads and runs another kernel image (C4IX, built by b4ke) through `kernel_handoff`, last thing in `main`. When that returns, so does C4KE. [docs/c4dos-ladder.md](../../../docs/c4dos-ladder.md) | always |
 | `c4ke_mbox.c` | `mbox` | message frames: `OP_MBOX_INFO/SEND/RECV/AWAIT` for the c4bb host mailbox and `OP_MSG_SEND/RECV` for per-task inboxes. User side: `include/c4ke_mbox.h` | the task-to-task half always; the host half only when the host announces a mailbox |
 
 `c4ke_pm.c`'s header still says "Shelved"; protected mode is optional

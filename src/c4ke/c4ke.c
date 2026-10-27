@@ -329,6 +329,36 @@ enum {
 	C4KE_PIT_MS   = 10      // the scheduling tick we ask for, real ms
 };
 
+// Heap generations: libjs's heap tags each block with the generation
+// current when it was allocated and frees a whole generation with one
+// store (libjs/heap.js; src/c4bb/sim/devices.js). C4DOS's DEVICE=HEAP.SYS
+// gives each program one (docs/c4dos-design.md). Here each task that
+// runs a program gets one too, so what a task allocated and never freed
+// goes back when it ends: without protected mode the kernel cannot see a
+// task's MALC at all, and Doom left 14 MB behind every run.
+//
+// ANNOUNCED, never probed, like the PIT: under native c4m these are
+// ordinary memory. C4DOS announces them (extensions/c4ke_dos.c asks its
+// API whether HEAP.SYS answered), and then the kernel checks them
+// itself before relying on them (kernel_heapgen_start).
+//
+// The rule that makes it safe is C4DOS's: the KERNEL's memory stays in
+// the kernel's generation -- the one it was started in, never released
+// by anything here. So HEAP_GEN holds a task's generation only while
+// that task's own code runs: every way into the kernel (trap_enter,
+// ih_cycle) switches to the kernel's, and trap_exit, the one way out,
+// switches to the generation of whichever task it resumes. A RAM file a
+// task writes (ramfs_put, in a trap), its inbox, its name, its stack and
+// its loaded image are all the kernel's, and outlive it or are freed by
+// kernel_clean_task as before.
+enum {
+	C4KE_HEAP_GEN     = 0x1c4,  // r/w: the generation new blocks get
+	C4KE_HEAP_RELEASE = 0x1c8,  // w: free every block of that generation
+	// Task generations are numbered from here, well clear of C4DOS's,
+	// which count up from 1 (c4dos.c's g_gen_next): 'K','E' << 16.
+	C4KE_GEN_BASE     = 1262813184
+};
+
 static char *VERSION() { return "0.66"; }
 
 // Task state, keep up to date in u0.c
@@ -404,6 +434,7 @@ enum {
 	TASK_CYCLES_HI,   // int, billions of cycles; see kernel_add_cycles
 	TASK_MEM_HEAD,    // int *, head of this task's tracked allocation list
 	TASK_LOADING,     // int, set until the task enters the program's main
+	TASK_GEN,         // int, the task's heap generation; 0: the kernel's
 	TASK__Sz          // task structure size
 };
 
@@ -810,6 +841,12 @@ static int *kernel_c4r;
 static int  kernel_start_time;
 static int  kernel_schedule_time;
 static int  kernel_shutdown_time;
+// The hand-off: a function an extension names to run once the kernel has
+// stopped, which is given init's status and returns the kernel's. Here
+// rather than in the extension, as the mailbox registers are, so that a
+// kernel built without extensions still compiles (extensions/README.md).
+// c4ke_boot.c sets it, to boot another kernel (`kboot c4ix.c4r`).
+static int *kernel_handoff;
 static int *kernel_extensions, kernel_ext_count, kernel_ext_errno;
 static int  kernel_ext_initialized;
 static int *kernel_syscall_handler, kernel_syscall_handler_stack;
@@ -856,6 +893,9 @@ static int kernel_cycles_force;
 // counter, and then it is the interval in milliseconds. Doubles as the
 // "is this machine's PIT ours to touch" flag: see C4KE_PIT_REG.
 static int kernel_pit_ms;
+// Non-zero once heap generations are announced and checked; see
+// C4KE_HEAP_GEN. kernel_gen is the kernel's own generation.
+static int kernel_heapgen, kernel_gen, kernel_gen_next;
 
 // Track task counts
 static int  kernel_tasks_unloaded, kernel_tasks_loaded;
@@ -1301,8 +1341,19 @@ static void kernel_task_timekeeping () {
 	kernel_tasks[TASK_TIMEMS] = kernel_tasks[TASK_TIMEMS] + time_difference();
 }
 
+// The heap generation for kernel work, and for the task about to run
+// (see C4KE_HEAP_GEN): a task without one of its own runs in the kernel's.
+static void kgen_kernel () {
+	if (kernel_heapgen) *(int *)C4KE_HEAP_GEN = kernel_gen;
+}
+static void kgen_task () {
+	if (kernel_heapgen)
+		*(int *)C4KE_HEAP_GEN = kernel_task_current[TASK_GEN] ? kernel_task_current[TASK_GEN] : kernel_gen;
+}
+
 static void trap_enter() {
 	critical_path_start();
+	kgen_kernel();
 	current_task_timekeeping();
 }
 
@@ -1310,15 +1361,35 @@ static void trap_enter() {
 static void trap_exit() {
 	// Assign task keeping
 	kernel_task_timekeeping();
+	kgen_task();
 	critical_path_end();
 }
 #else
 // TODO: c4m doesn't understand macro continuations, these must be on one line
 #define current_task_timekeeping() kernel_add_cycles(kernel_task_current, cycles_difference()); kernel_task_current[TASK_TIMEMS] = kernel_task_current[TASK_TIMEMS] + time_difference(); ++kernel_task_current[TASK_TRAPS];
 #define kernel_task_timekeeping() kernel_add_cycles(kernel_tasks, cycles_difference()); kernel_tasks[TASK_TIMEMS] = kernel_tasks[TASK_TIMEMS] + time_difference();
-#define trap_enter()          critical_path_start(); current_task_timekeeping();
-#define trap_exit()           kernel_task_timekeeping(); critical_path_end();
+#define kgen_kernel()         (kernel_heapgen ? (*(int *)C4KE_HEAP_GEN = kernel_gen) : 0)
+#define kgen_task()           (kernel_heapgen ? (*(int *)C4KE_HEAP_GEN = (kernel_task_current[TASK_GEN] ? kernel_task_current[TASK_GEN] : kernel_gen)) : 0)
+#define trap_enter()          critical_path_start(); kgen_kernel(); current_task_timekeeping();
+#define trap_exit()           kernel_task_timekeeping(); kgen_task(); critical_path_end();
 #endif
+
+// Heap generations are on: C4DOS said HEAP.SYS answered (extensions/
+// c4ke_dos.c). Checked before relied on, as C4DOS checks it: the
+// register holds the generation the kernel was started in, which must
+// not be 0 (that one is DOS's own), and one written must read back.
+static int kernel_heapgen_start () {
+	int g;
+	g = *(int *)C4KE_HEAP_GEN;
+	if (!g) return 0;
+	*(int *)C4KE_HEAP_GEN = C4KE_GEN_BASE;
+	if (*(int *)C4KE_HEAP_GEN != C4KE_GEN_BASE) { *(int *)C4KE_HEAP_GEN = g; return 0; }
+	*(int *)C4KE_HEAP_GEN = g;
+	kernel_gen = g;
+	kernel_gen_next = C4KE_GEN_BASE;
+	kernel_heapgen = 1;
+	return 1;
+}
 
 ///
 // Scheduling and task manipulation
@@ -1631,6 +1702,17 @@ static int kext_run_all (int callback_type) {
 #undef cb
 #endif
 
+// Call the hand-off (kernel_handoff, above) with init's status.
+#ifndef __c4cc__
+#define handoff(a) ((int (*)(int))handoff)(a)
+#endif
+static int kernel_run_handoff (int *handoff, int status) {
+	return handoff(status);
+}
+#ifndef __c4cc__
+#undef handoff
+#endif
+
 // Register a kernel extension, with optional event callback functions.
 // Can be called during a constructor in __attribute__((constructor)) functions.
 // - init can be used to add custom opcodes. Called before tasks are created.
@@ -1889,6 +1971,10 @@ static void kernel_clean_task (int *t) {
 	// pointer and a double free at exit.
 	if ((p = (int *)t[TASK_C4R]) && p != kernel_c4r) c4r_free(p);
 	if ((p = (int *)t[TASK_EXTDATA])) free(p);
+	// And everything else the program allocated and never freed, which
+	// without protected mode the kernel had no way to see. Last, so
+	// that nothing above frees a block this has already freed.
+	if (t[TASK_GEN]) *(int *)C4KE_HEAP_RELEASE = t[TASK_GEN];
 	// Mark as unused and clear other state.
 	memset(t, 0, sizeof(int) * TASK__Sz);
 	*t = STATE_UNLOADED;
@@ -2251,10 +2337,20 @@ static void op_peek_sp (int trap, int ins, int mode, int a, int *bp, int *sp, in
 //
 // The mode change takes effect immediately because mode is part of the
 // trap frame TLEV restores -- the same lever pm_syscall_handler uses.
+//
+// It is also where the program gets a heap generation of its own (see
+// C4KE_HEAP_GEN), for the same reason: what the loader allocated is the
+// kernel's. kernel_clean_task releases it. A task protected mode runs
+// gets none, as the kernel already takes back what it allocates.
 static void op_task_exec (int trap, int ins, int mode, int a, int *bp, int *sp, int *returnpc) {
 	kernel_task_current[TASK_LOADING] = 0;
 	if (kernel_pm_support)
 		mode = kernel_task_current[TASK_PRIVS] == PRIV_KERNEL ? MODE_UNPROTECTED : MODE_PROTECTED;
+	if (kernel_heapgen && !kernel_task_current[TASK_GEN] &&
+	    !(kernel_pm_support && kernel_task_current[TASK_PRIVS] != PRIV_KERNEL)) {
+		if (++kernel_gen_next <= C4KE_GEN_BASE) kernel_gen_next = C4KE_GEN_BASE + 1;
+		kernel_task_current[TASK_GEN] = kernel_gen_next;
+	}
 	trap_exit();
 }
 
@@ -3180,7 +3276,7 @@ static int task_loadc4r (int argc, char **argv) {
 	++argv_size;
 	if (!(name = malloc(argv_size))) {
 		printf("c4ke: failed to allocate name correctly\n");
-		name = "(out of memory)";
+		currenttask_update_name("(out of memory)");
 	} else {
 		memset(name, 0, argv_size);
 		// Copy items
@@ -3194,8 +3290,13 @@ static int task_loadc4r (int argc, char **argv) {
 		}
 		// Remove extraneous space
 		*--name_ptr = 0;
+		currenttask_update_name(name);
+		// The task keeps a copy. Freed now, not after the program: one
+		// that calls exit() never comes back to the end of this function,
+		// and this was left behind every time.
+		free(name);
 	}
-	currenttask_update_name(name);
+	name = (char *)kernel_task_current[TASK_NAME];
 
 	// printf("lc4r: load mode = 0x%x\n", kernel_loadc4r_mode);
 	alt_file = 0;
@@ -3221,11 +3322,12 @@ static int task_loadc4r (int argc, char **argv) {
 		if (!(module = c4r_load_opt(alt_file, kernel_loadc4r_mode))) {
 			printf("lc4r: unable to open '%s' or '%s'\n", file, alt_file);
 			free(alt_file);
-			free(name);
 			__c4_opcode(1, OP_TASK_EXIT);
 		}
 	}
 	critical_path_end();
+	// Done with, and for the same reason as the name, freed here.
+	if (alt_file) { free(alt_file); alt_file = 0; }
 	// printf("lc4r: module %s loaded\n", alt_file ? alt_file : file);
 
 	// c4r_dump_info(module);
@@ -3239,11 +3341,9 @@ static int task_loadc4r (int argc, char **argv) {
 	}
 	else
 		printf("c4ke: load not complete\n");
-	if (alt_file) free(alt_file);
 
 	if (kernel_verbosity >= VERB_MAX)
 		printf("task '%s' (%d): exit with status %d\n", name, p, result);
-	free(name);
 	// opcode exit
 	__c4_opcode(result, OP_TASK_EXIT);
 }
@@ -3268,6 +3368,7 @@ static void ih_cycle (int type, int ins, int mode, int a, int *bp, int *sp, int 
 	//}
 
 	critical_path_start();
+	kgen_kernel();
 	// Measured first, before anything below can perturb it.
 	++kernel_ih_ticks;
 	if (kernel_ih_depth) {
@@ -3326,6 +3427,7 @@ static void ih_cycle (int type, int ins, int mode, int a, int *bp, int *sp, int 
 		// Just return as normal since no other tasks found
 	}
 	kernel_task_timekeeping();
+	kgen_task();
 	critical_path_end();
 	// The clock starts HERE, when the timer is live again, so what it
 	// measures is exactly what the resumed task gets to do.
@@ -4438,6 +4540,13 @@ int main (int argc, char **argv) {
 		}
 	}
 
+	// A program built for the bare machine (src/c4ix/libc/bare.c) ends
+	// with the EXIT opcode, which stops the whole machine. Every task
+	// loaded from here on that has a __c4ke_exit global is told the
+	// opcode that ends a task instead (load-c4r.c, c4r_inject_name).
+	c4r_inject_name  = "__c4ke_exit";
+	c4r_inject_value = OP_TASK_EXIT;
+
 	// Init process
 	if (!kernel_init_argv) {
 		// No argc or argv given, synthesize
@@ -4574,6 +4683,12 @@ int main (int argc, char **argv) {
 	if (kernel_verbosity >= VERB_MAX)
 		printf("c4ke: cleaning up kernel task\n");
 	kernel_clean_task(kernel_tasks); // clean the kernel task now
+	// Every task's generation is released; whatever runs from here on
+	// (kernel_handoff's image, or whoever started us) is the kernel's.
+	if (kernel_heapgen) {
+		*(int *)C4KE_HEAP_GEN = kernel_gen;
+		kernel_heapgen = 0;
+	}
 	if (kernel_verbosity >= VERB_MAX)
 		printf("c4ke: unloading memory\n");
 	free(custom_opcodes);
@@ -4618,6 +4733,12 @@ int main (int argc, char **argv) {
 		printf("s\nHave a nice day :)\n");
 	}
 
+	// Last of all, with every task, handler and timer gone: the hand-off.
+	// What it starts runs on this machine as if C4KE had never been here,
+	// and when that returns, so does C4KE, to whatever loaded it.
+	if (kernel_handoff)
+		init_result = kernel_run_handoff(kernel_handoff, init_result);
+
 	return init_result;
 }
 
@@ -4627,5 +4748,6 @@ int main (int argc, char **argv) {
 #include "src/c4ke/extensions/c4ke_pm.c"
 #include "src/c4ke/extensions/c4ke_dos.c"
 #include "src/c4ke/extensions/c4ke_mbox.c"
+#include "src/c4ke/extensions/c4ke_boot.c"
 
 #endif // ifndef C4KE

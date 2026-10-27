@@ -2,7 +2,7 @@
 //
 // URL parameters:
 //   ?system=NAME                 which machine to boot (default c4ix): c4ix, c4ke,
-//                                c4dos, wolf3d, wolf3d6, wolf3d-c4ix, doom, tyrian, rott, gui-demo, fb-demo,
+//                                c4dos, c4dos-ladder, wolf3d, wolf3d6, wolf3d-c4ix, doom, tyrian, rott, gui-demo, fb-demo,
 //                                snd-demo, raycast -- SYSTEMS below
 //   ?image=URL&disk=URL          any other image and disk instead
 //   ?args=A+B                    more arguments for the system's program, after its
@@ -54,6 +54,15 @@ const SYSTEMS = {
   // says DRIVES.SYS HOME=B:, so what is saved goes to B:, the store.
   c4dos: { label: 'C4DOS', image: `${LJIMAGES}/dos/c4dos32.c4r`, disk: `${LJIMAGES}/dos`, argv: ['c4dos32.c4r'], mhz: 400,
            persist: 'c4dos' },
+  // The Build Ladder (build-images.sh, libjs/images/ladder;
+  // docs/c4dos-ladder.md): C4DOS with the games, and what it takes to
+  // climb in one sitting -- BUILD compiles C4KE, dosload boots it, C4KE
+  // builds C4IX with b4ke and kboot boots that. 128 MB, because C4KE
+  // keeps what its tasks allocate until it stops. Drive 1 is a store of
+  // its own, `ladder` (docs/grin-plan.md 3.8): bbsave, save and C4IX's
+  // persist write there.
+  'c4dos-ladder': { label: 'C4DOS Build Ladder', image: `${LJIMAGES}/ladder/c4dos32.c4r`, disk: `${LJIMAGES}/ladder`,
+                    argv: ['c4dos32.c4r'], mhz: 400, mem: 128, persist: 'ladder' },
   // The games with no operating system under them, from the same disk.
   // libc's bare.c writes their saves and settings to drive 1, each game's
   // own store, and reads it before the disk.
@@ -143,7 +152,7 @@ const opts = {
   unpaced: params.has('fast') || !!sys.unpaced,
   realtime: params.get('realtime') !== '0',
   fpu: params.get('fpu') !== '0',
-  arenaMb: Number(params.get('mem')) || 64,
+  arenaMb: Number(params.get('mem')) || sys.mem || 64,
   shared: params.get('shared') !== '0',
   snd: params.get('snd') !== '0',
   cpus: Number(params.get('cpus')) || 0,
@@ -166,7 +175,7 @@ const CONFIG = [
   { key: 'parallel', label: 'A thread each', kind: 'flag',
     help: 'several processors at once, each on a worker (needs the page cross-origin isolated)' },
   { key: 'mem', label: 'Memory (MB)', kind: 'text', options: ['32', '64', '128', '256'],
-    help: 'the arena; empty is 64' },
+    help: `the arena; empty is the system's own (${sys.mem || 64})` },
   { key: 'snd', label: 'Sound card', kind: 'onoff', def: true },
   { key: 'fpu', label: 'FPU', kind: 'onoff', def: true, help: 'off: floats in software' },
   { key: 'realtime', label: 'Keep the wall clock', kind: 'onoff', def: true,

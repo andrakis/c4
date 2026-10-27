@@ -34,6 +34,7 @@ FLUSH`, `DEVICE=DRIVES.SYS`) or a larger `SIZE=`.
 | `LADDER.BAT` | `c4dos-build`, `c4dos-build32`, `c4dos-c4ix32` | the bootstrap: `c4cc` builds `c4cc2`, which builds `cpp2` and itself again (`c4cc3`, the fixed-point check), then those tools build the kernel and init; `c4ke0.c4r` is the same kernel from the shipped compiler, for comparison |
 | `BUILDC4M.BAT` | `c4dos-build` | `BUILD.BAT` with `c4m.c4r` under the compiler, for a machine with only the original c4 opcodes |
 | `C4M-C4KE.BAT` | `c4dos-build` | boot C4KE under `c4m.c4r` from inside C4DOS (the host's `run-c4`, moved into the machine) |
+| `LADDER.TXT` | `libjs/images/ladder` | every step of the Build Ladder, C4DOS to C4IX on the page, for `TYPE LADDER.TXT` ([docs/c4dos-ladder.md](../../../docs/c4dos-ladder.md)) |
 | `IX.BAT` | `c4dos-c4ix32` | unpack `c4ix-src.tar`, compile C4IX's twelve modules with `c4sc.c4r`, link through `@c4ix.objs` |
 | `c4ix.objs` | `c4dos-c4ix32` | the twelve C4IX objects in link order |
 | `install.lst` | `c4dos-c4ix32` | what `RUN install.c4r B:` writes to make a bootable C4KE medium |

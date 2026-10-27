@@ -98,6 +98,10 @@ Two separate pieces of work, and only the first one is a bug:
       mode fails, which is what makes the pass mean something.
 - [x] **M5** The whole C4IX build under C4KE in 32 MB — **it fits in
       13**.
+- [x] **M6** Without protected mode, on libjs: each program task gets a
+      heap generation of C4DOS's `HEAP.SYS`, released when the task is
+      reaped. Doom three times under C4KE leaves `HEAP_USED` at `c4sh>`
+      where the first round did (`make test-libjs-ladder`).
 
 ---
 
@@ -322,6 +326,82 @@ Valgrind on the native run: **0 errors from 0 contexts**, 2,220 allocs
 against 2,208 frees, 82 MB allocated, 405 KB in use at exit — all of it
 c4m's own.
 
+## M6 — without protected mode: heap generations (libjs, 2026-10-26)
+
+M4 needs protected mode, because without it a task's `MALC` never
+reaches the kernel. On libjs the heap can do the bookkeeping instead:
+it tags every block with the **generation** current when it was
+allocated, and one store to `HEAP_RELEASE` frees a whole generation
+(`libjs/heap.js`, `HEAP_GEN` 0x1C4 and `HEAP_RELEASE` 0x1C8 in
+`src/c4bb/sim/devices.js`). C4DOS already gives each program one
+(`DEVICE=HEAP.SYS`, [c4dos-design.md](c4dos-design.md)); C4KE now does
+the same for its tasks. On the Build Ladder each Doom run under C4KE
+used to keep about 14 MB until C4KE stopped.
+
+**Announced, then checked, never probed.** Under native c4m 0x1C4 is
+ordinary memory. The `dos` extension asks C4DOS's API (v4, slot 26,
+`gen(0)`): it answers non-zero only when `HEAP.SYS` was installed and
+answered, and the image running then (dosload, or C4KE itself under
+`RUN`) has a generation of its own. `kernel_heapgen_start` then reads
+`HEAP_GEN` — the kernel's own generation, which must not be 0 — and
+checks a value written reads back, as C4DOS does. c4bb has the
+registers but no heap behind them, and its DOS never announces them.
+
+**The kernel's memory stays the kernel's.** The kernel's generation is
+the one it was started in; nothing in C4KE releases it (C4DOS does, when
+dosload returns). `HEAP_GEN` holds a task's generation only while that
+task's own code runs:
+
+- every way into the kernel switches to the kernel's generation —
+  `trap_enter` (every opcode handler and `signal_forwarder`) and
+  `ih_cycle`;
+- `trap_exit`, the way out, and the end of `ih_cycle` switch to the
+  generation of whichever task they resume, the kernel's for a task
+  without one.
+
+So a RAM-filesystem file a task writes (`ramfs_put`, in a trap), its
+inbox, its name, `kboot`'s command line: all the kernel's, and they
+outlive the task.
+
+**A task is the loader before it is the program** (M4's point 2 again).
+The generation is given at `OP_TASK_EXEC`, so the image, its code and
+data, the stack and the name, which the loader allocates, are the
+kernel's, freed by `kernel_clean_task` as before. A task that protected
+mode runs gets none: the kernel already tracks what it allocates.
+
+**Released last.** `kernel_clean_task` writes `HEAP_RELEASE` after its
+own frees, so nothing it frees explicitly is freed twice. At shutdown,
+once every task is cleaned, `HEAP_GEN` goes back to the kernel's and the
+feature off: what runs after (`kboot`'s C4IX) is the kernel's.
+
+**Numbers.** Task generations count up from `'K','E' << 16`
+(1,262,813,184), clear of C4DOS's, which count from 1.
+
+**What it turned up.** With the program's memory gone, what was left was
+the kernel's own, and it still grew by 364 bytes, six blocks, a run. Two
+leaks, both on every program start, both older than any of this:
+
+- `c4r_load_opt_real` (`load-c4r.c`) returned 0 on a failed `open()`
+  with its read buffer, the C4R structure, the header and the file name
+  still allocated: 349 bytes. `task_loadc4r` tries the bare name before
+  the one with `.c4r`, so this was the usual path, not a rare one.
+- `task_loadc4r` freed its copy of the command line and the `.c4r` name
+  after `main` returned. A program that calls `exit()` never comes back
+  there, and Doom, like every bare-machine game, does
+  (`__c4ke_exit`). Both are freed before the program starts now.
+
+**And one in the way.** c4cc read at most 256 KB of source into its
+512 KB source area, and the preprocessed kernel was already at 259,027
+bytes: these changes took it past, and c4cc reported a missing
+parenthesis wherever the read had stopped. It reads to the area's size
+now, and says so when sources do not fit.
+
+**Bar.** `test-c4dos-ladder.mjs` plays Doom under C4KE three times and
+checks `HEAP_USED` at `c4sh>` is the same after each round:
+4,848,431 bytes after each of the three, where each round used to add
+about 14 MB. The whole climb (`make test-libjs-ladder`), C4KE's b4ke
+build of C4IX included, now holds at most 45 MB of the arena, not 61.
+
 ## What protected mode costs, and why it is still not the default
 
 The dispatcher thread in `c4ke_pm.c` exists because C4KE has no streams:
@@ -363,9 +443,9 @@ ones not freeing what we allocated**, exactly as suspected.
 - **`ps` still reports `MEM` as gross allocation when protected mode is
   off**, because with it off nothing tells the kernel about a `free`.
   With it on the figure is now real: `kernel_task_free` subtracts.
-- **C4DOS still does not return a transient's memory.** That is the same
-  feature one rung down and the reason `IX.BAT` needs 128 MB
-  (`docs/compiler-on-the-board.md`). Nothing here touched it.
+- **C4DOS returns a transient's memory only on libjs** (`HEAP.SYS`).
+  On the board it still does not, which is the reason `IX.BAT` needs
+  128 MB (`docs/compiler-on-the-board.md`); and the same goes for M6.
 - **The stack size is one number for every task.** A compiler needs
   256 KB; `ls` needs a few hundred bytes. `TASK_STACK_LOW` is the
   measurement that a per-task stack size would be chosen from, and it is

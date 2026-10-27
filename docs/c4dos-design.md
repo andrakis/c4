@@ -719,6 +719,7 @@ None of these is part of `make test`.
 | `make test-c4dos-build32` | on c4bb: `BUILD`, then boot the kernel just built, to a clean shutdown |
 | `make test-c4dos-ladder32` | on c4bb: `LADDER` rebuilds the compiler to a fixed point, then the kernel; boots it |
 | `make test-c4dos-c4ix32` | on c4bb: `IX` builds C4IX with the compiled compiler and boots it. Minutes |
+| `make test-libjs-ladder` | on libjs, the page's ladder disk: Doom at `A>`, `BUILD`, dosload, Doom under C4KE, b4ke, `kboot` into C4IX, Doom there, and back to `A>` with every rung's memory given back ([c4dos-ladder.md](c4dos-ladder.md)). About seventy seconds |
 | `make test-c4dos-c4fc` | on c4bb: c4fc compiles a C program and C4DOS runs the result. About three minutes |
 
 `make test-c4bb-climb` (in `src/c4bb/tests/test-climb.sh`) is the
@@ -743,7 +744,10 @@ machine just built — it never existed as a file. The DOS RAM disk is
 released immediately afterwards; it was the initrd.
 
 The plan that got it there is `docs/ladder-plan.md` (complete); the
-climb by hand is `docs/climbing-the-ladder.md`.
+climb by hand is `docs/climbing-the-ladder.md`. On libjs's page the whole
+climb runs in one session (`?system=c4dos-ladder`, `docs/c4dos-ladder.md`):
+C4KE boots the C4IX it built with `kboot`, and each rung returns to the
+one below when it stops, with HEAP.SYS giving all of its memory back.
 
 ## c4fc, the compiler in the machine
 

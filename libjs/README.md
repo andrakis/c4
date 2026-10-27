@@ -75,14 +75,14 @@ URL parameters (from `web/app.js`). The page's Configuration button shows them a
 
 | Parameter | Meaning |
 |---|---|
-| `?system=c4ix\|c4ke\|c4dos\|wolf3d\|wolf3d6\|wolf3d-c4ix\|doom\|tyrian\|rott\|gui-demo\|fb-demo\|snd-demo\|raycast` | Which machine to boot (default `c4ix`). `c4dos` is C4DOS on the games' disk, with Wolfenstein 3D, Doom, Tyrian and Rise of the Triad; `wolf3d`, `doom`, `tyrian` and `rott` are those games on the bare machine, `wolf3d6` Wolfenstein 3D's registered game there, from its files in Uploads (below), and `wolf3d-c4ix` Wolfenstein 3D on C4IX's whole display (docs/c4ix-wolf3d.md, games/doom/README.md, games/tyrian/README.md, games/rott/README.md; Tyrian's data only where it was there to copy). The last four are bare programs on the display or the sound card. |
+| `?system=c4ix\|c4ke\|c4dos\|c4dos-ladder\|wolf3d\|wolf3d6\|wolf3d-c4ix\|doom\|tyrian\|rott\|gui-demo\|fb-demo\|snd-demo\|raycast` | Which machine to boot (default `c4ix`). `c4dos` is C4DOS on the games' disk, with Wolfenstein 3D, Doom, Tyrian and Rise of the Triad; `c4dos-ladder` is the Build Ladder, C4DOS on a disk of its own that also builds and boots C4KE, from which C4KE builds and boots C4IX, all in one page session (docs/c4dos-ladder.md; 128 MB, and its own store for drive 1); `wolf3d`, `doom`, `tyrian` and `rott` are those games on the bare machine, `wolf3d6` Wolfenstein 3D's registered game there, from its files in Uploads (below), and `wolf3d-c4ix` Wolfenstein 3D on C4IX's whole display (docs/c4ix-wolf3d.md, games/doom/README.md, games/tyrian/README.md, games/rott/README.md; Tyrian's data only where it was there to copy). The last four are bare programs on the display or the sound card. |
 | `?image=URL&disk=URL` | Any other image and disk. |
 | `?args=A+B` | More arguments for the system's program, after its own: `?system=wolf3d&args=--secrets+--nodeath` (games/wolf3d/README.md). |
 | `?uploads=0` | The Uploads are not put on the disk. |
 | `?mhz=N` | Paced speed (default 100). |
 | `?fast` | Unpaced. |
 | `?realtime=0` | When the host cannot keep up with `?mhz`, the machine's clock slows with it. By default it keeps the wall's time (`worker.js`), so a game drops frames rather than playing in slow motion. |
-| `?mem=MB` | Arena size (default 64). |
+| `?mem=MB` | Arena size (default 64; the ladder's 128). |
 | `?shared=0` | Use the message path even when isolated. |
 | `?coi=0` | No service worker isolating the page (`coi.js`): unregisters it. |
 
@@ -156,6 +156,7 @@ Neither is in `make test`.
 | Target | What it checks |
 |---|---|
 | `make test-libjs` | Unit tests (printf, heap, display, shared memory, desktop, the explorer's `c4r.js` over every image), then every corpus image byte for byte against native `c4m32` (or 64-bit `c4m` where `c4m32` cannot be trusted), the fused-opcode differential, STRC with symbol names, exit status, the PIT, and C4KE and C4IX booting with grep assertions. Builds `c4bb-images` first. |
+| `make test-libjs-ladder` | The Build Ladder headless (`tests/test-c4dos-ladder.mjs`, docs/c4dos-ladder.md): Doom at each rung, BUILD, dosload, b4ke, kboot, and back to `A>`, about seventy seconds. Makes the climb floppy and its disk first; `make test-libjs` runs it too when the disk is there. `tests/web-c4dos-ladder.mjs` is its browser check. |
 | `make test-libjs-web` | The page in the user's own Chrome over raw CDP (`LIBJS_CDP`, else ports 9224 then 9222), then the display legs with `--gui`. It never launches a browser; if none answers it says so. |
 
 ## Layout

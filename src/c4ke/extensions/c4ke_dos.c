@@ -47,10 +47,12 @@ enum {
 	DOSAPI_ENTSIZE = 11,  // entsize(i) -> bytes
 	DOSAPI_ENTDATA = 12,  // entdata(i) -> char *
 	DOSAPI_TRIM    = 13,  // trim() -> bytes released
-	DOSAPI_RELEASE = 14   // release() -> bytes released
+	DOSAPI_RELEASE = 14,  // release() -> bytes released
+	DOSAPI_GEN     = 26   // gen(0) -> the running image's heap generation; 0 without HEAP.SYS
 };
 enum { DOSAPI_MAGIC_VALUE = 4404292 };   // 'C','4','D' packed, as c4dos.c builds it
 enum { DOSAPI_MIN_VERSION = 2 };         // enumeration arrived in v2
+enum { DOSAPI_GEN_VERSION = 4 };         // and gen() in v4
 
 // Calling through an int * needs c4 syntax, which gcc rejects; the
 // macro is named after the VARIABLE so the same line means an indirect
@@ -86,7 +88,27 @@ static int dos_kext_usable () {
 	return __c4dos_api[DOSAPI_COUNT] != 0;
 }
 
+// Heap generations (c4ke.c's C4KE_HEAP_GEN). C4DOS announces them: its
+// gen() answers non-zero only when CONFIG.SYS said DEVICE=HEAP.SYS and
+// the registers answered, and the image running now -- dosload, or this
+// kernel when RUN started it -- then has a generation of its own. Asked
+// at KEXT_INIT, before the first task exists.
+static int dos_kext_heapgen () {
+	if (!__c4dos_api || __c4dos_api[DOSAPI_MAGIC] != DOSAPI_MAGIC_VALUE)
+		return 0;
+	if (__c4dos_api[DOSAPI_VERSION] < DOSAPI_GEN_VERSION || !__c4dos_api[DOSAPI_GEN])
+		return 0;
+	if (!dos_kext_call1((int *)__c4dos_api[DOSAPI_GEN], 0))
+		return 0;
+	if (kernel_heapgen_start())
+		printf("c4ke: heap generations (C4DOS HEAP.SYS), each task gives its memory back when it ends\n");
+	else
+		printf("c4ke: C4DOS has HEAP.SYS, but the heap here keeps no generations\n");
+	return 0;
+}
+
 static int dos_kext_init () {
+	dos_kext_heapgen();
 	return KXERR_NONE;
 }
 

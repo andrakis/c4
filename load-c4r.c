@@ -198,6 +198,14 @@ int c4r_src_read (int fd, char *buffer, int len) {
 }
 
 int c4r_readoffset;
+
+// One global to fill in: when c4r_inject_name is set, a load (keeping
+// the symbols or not) walks the symbol section and writes
+// c4r_inject_value into the image's global of that name, if it has one. This is how C4KE tells a program built for
+// the bare machine that it is a task (__c4ke_exit, src/c4ix/libc/bare.c),
+// as C4DOS writes __c4dos_api.
+char *c4r_inject_name;
+int   c4r_inject_value;
 int c4r_checked_read (int fd, char *buffer, int len) {
 	int i;
 	if ((i = c4r_src_read(fd, buffer, len)) <= 0) {
@@ -387,7 +395,16 @@ int *c4r_load_opt_real (char *file, int options) {
 	if (c4r_debug || c4r_verbose) printf("lc4r: loading '%s'...\n", file);
 	fd = -1;
 	if (!c4r_mem_src) {
-		if ((fd = open(file, FILE_OPEN_MODE)) < 0) return 0;
+		// Everything above goes back. C4KE's loader tries the bare name
+		// before the one with .c4r on every program it starts, so this
+		// is the usual path, not a rare one, and it kept 349 bytes a time.
+		if ((fd = open(file, FILE_OPEN_MODE)) < 0) {
+			free((char *)c4r[C4R_FILENAME]);
+			free(header);
+			free(c4r);
+			free(buffer);
+			return 0;
+		}
 	}
 
 	//
@@ -623,6 +640,12 @@ int *c4r_load_opt_real (char *file, int options) {
 						c4r_src_read(fd, buffer, target[C4R_SYMB_NAMELEN]); target[C4R_SYMB_NAME] = (int)c4r_strcpy_alloc(buffer);
 						c4r_src_read(fd, buffer, wordbytes); target[C4R_SYMB_VALUE] = *(int *)buffer;
 						//c4r_src_read(fd, buffer, wordbytes); target[C4R_SYMB_LENGTH] = *(int *)buffer;
+						if (c4r_inject_name && target[C4R_SYMB_CLASS] == 131) {   // Glo
+							tmp = c4r_inject_name; x = (int)target[C4R_SYMB_NAME]; p = 0;
+							while (tmp[p] && tmp[p] == ((char *)x)[p]) ++p;
+							if (!tmp[p] && !((char *)x)[p])
+								*(int *)((char *)data + target[C4R_SYMB_VALUE]) = c4r_inject_value;
+						}
 						if (c4r_debug) {
 							printf("Symbol %d @ 0x%lX:\n  Type: %d\n", i, c4r_readoffset, target[C4R_SYMB_TYPE]);
 							printf("  Class: %d", target[C4R_SYMB_CLASS]);
@@ -637,6 +660,29 @@ int *c4r_load_opt_real (char *file, int options) {
 					}
 					if (c4r_debug) printf("lc4r: loaded %d symbols, now at position 0x%x\n", i, c4r_readoffset);
 					if (options & C4ROPT_SRCMAP) c4r_read_trailer(fd, c4r, buffer, wordbytes);
+				} else if (c4r_inject_name) {
+					c4r_src_read(fd, buffer, wordbytes);
+					i = 0;
+					loop_target = *(char *)buffer == 'S' ? header[C4R_HDR_SYMBOLSLEN] : 0;
+					while (i < loop_target) {
+						c4r_src_read(fd, buffer, wordbytes);              // id
+						c4r_src_read(fd, buffer, wordbytes);              // type
+						c4r_src_read(fd, buffer, wordbytes); pc = *(int *)buffer;   // class
+						c4r_src_read(fd, buffer, wordbytes);              // attrs
+						c4r_src_read(fd, buffer, 1); x = *buffer & 255;   // name length
+						memset(buffer, 0, C4R_BUFFER_SIZE);
+						c4r_src_read(fd, buffer, x);
+						// the name, against c4r_inject_name
+						tmp = c4r_inject_name; p = 0;
+						while (p < x && tmp[p] && tmp[p] == buffer[p]) ++p;
+						p = p == x && !tmp[p];
+						c4r_src_read(fd, buffer, wordbytes);              // value
+						if (p && pc == 131) {                             // Glo: an offset into data
+							*(int *)((char *)data + *(int *)buffer) = c4r_inject_value;
+							i = loop_target;
+						}
+						++i;
+					}
 				}
 				c4r[C4R_SYMBOLS] = (int)symbols;
 

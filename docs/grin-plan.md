@@ -1385,6 +1385,11 @@ tyrian be9c515, rott 244588f, each on its `c4` branch's commit).
   starts a Clock and the Task List has no Doom (3.3's generation check).
   test-c4dos-heap's `dosexec image`. G5's full-screen Doom rounds set
   Doom's item to full screen by Properties first.
+- **The gate**, on helios: `make test-grin` OK (174), `test-c4dos` OK,
+  `test-c4dos-heap` OK, `test-persist` OK, `test-libjs` OK (558 OK
+  lines), `test-c4ix-rebuild` OK, and `test-wolf3d`, `test-doom`,
+  `test-tyrian`, `test-rott` OK with their timedemo checksums unchanged
+  (d7358845, 01914fe7, 389b26f7, 3b083b33).
 - **Browser** (Chrome 151 over CDP on 9222, the page served from the
   worktree on 8494, `web-grin-g6.mjs`, no page errors): Doom in a window
   at 800x600 beside a Clock and Notepad, typing in Notepad while the demo

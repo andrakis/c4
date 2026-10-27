@@ -939,13 +939,16 @@ have, so they are the same bytes as before. What did change:
 | `c4sc.c4r` (fused, on the disks) | 2,044,933 | 2,012,129 |
 
 build-images.sh rebuilds C4IX when `c4rlink32` is newer than it, since
-what the linker writes now depends on the linker. One image is linked
-`--no-gc` on purpose: C4IX's `c4ix-vfsload`. Without its unreached
-functions (66,722 -> 53,878 bytes) the desktop's boot goes wrong every
-time (test-desktop: C4KE in a Terminal never runs spin), and the same
-image padded back to its old size with a function nothing calls works:
-it is the size, not a function, that matters -- the "KNOWN ISSUE" in
-vfsload.c, still not understood.
+what the linker writes now depends on the linker. C4IX's
+`c4ix-vfsload` was linked `--no-gc` at first: without its unreached
+functions (66,722 -> 53,878 bytes) the desktop's boot went wrong every
+time (test-desktop: C4KE in a Terminal never ran spin), and padded back
+to its old size with a function nothing calls it worked. The size only
+moved when things happened. The bug was C4KE's -- its trap handlers
+unmasked the timer before they had returned, so a tick or a Ctrl-C
+landing in between saved one task's registers as another's -- and is
+fixed in c4ke.c (`ih_cycle`, `signal_forwarder`); vfsload is linked like
+everything else.
 
 Not done, and small: a removed function's strings stay in the data (an
 application's whole data is about 7 KB), and so do extern symbols

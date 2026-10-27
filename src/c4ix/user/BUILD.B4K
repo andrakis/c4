@@ -94,10 +94,8 @@ DEPS $(OUT)/bin/c4ix-gui.c4r : $(OUT)/user/gui.c4o $(LIBGUI) $(LIBC)
 RUN c4rlink $(OUT)/user/gui.c4o -l $(LIBGUI) -l $(LIBC) -o $(OUT)/bin/c4ix-gui.c4r
 DEPS $(OUT)/user/vfsload.c4o : src/c4ix/user/vfsload.c $(U)
 RUN $(LCS) src/c4ix/user/vfsload.c $(OUT)/user/vfsload.c4o
-# linked whole (--no-gc), as build-images.sh links it: vfsload.c's
-# KNOWN ISSUE goes wrong at the size the unreached functions leave
 DEPS $(OUT)/bin/c4ix-vfsload.c4r : $(OUT)/user/vfsload.c4o $(LIBCS)
-RUN c4rlink --no-gc $(OUT)/user/vfsload.c4o $(LIBCS) -o $(OUT)/bin/c4ix-vfsload.c4r
+RUN c4rlink $(OUT)/user/vfsload.c4o $(LIBCS) -o $(OUT)/bin/c4ix-vfsload.c4r
 DEPS $(OUT)/user/b4ke.c4o : src/c4ix/user/b4ke.c $(U)
 RUN $(LC) src/c4ix/user/b4ke.c $(OUT)/user/b4ke.c4o
 DEPS $(OUT)/bin/c4ix-b4ke.c4r : $(OUT)/user/b4ke.c4o $(LIBC)

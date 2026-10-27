@@ -466,14 +466,7 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     # C4IX binary here, all of which face the same shared-disk risk).
     say "C4IX's vfsload"
     ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -c -I src/c4ix/include src/c4ix/user/vfsload.c .c4bb_ix_u.c4o > /dev/null
-    # Linked whole (--no-gc), and so in src/c4ix/user/BUILD.B4K. Without
-    # its 47 unreached functions (12,844 bytes) the desktop's boot goes
-    # wrong every time: C4KE booted by c4m in a Terminal then never runs
-    # spin (test-desktop). The same image padded back to its old size
-    # with a function nothing calls works, so it is not a function that
-    # was needed but the size: vfsload.c's KNOWN ISSUE, which comes and
-    # goes as the image changes, not yet understood.
-    ./c4rlink32 --no-gc .c4bb_ix_u.c4o .c4bb_libc4ix32.c4l -o $DISK/c4ix-vfsload.c4r > /dev/null
+    ./c4rlink32 .c4bb_ix_u.c4o .c4bb_libc4ix32.c4l -o $DISK/c4ix-vfsload.c4r > /dev/null
     keep .c4bb_ix_u.c4o user/vfsload.c4o
     keep $DISK/c4ix-vfsload.c4r bin/c4ix-vfsload.c4r
     # the libraries are kept: the root archive ships them in /usr/lib,

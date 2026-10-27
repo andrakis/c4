@@ -549,6 +549,9 @@ check(until(() => !!inPane(find('c4ix'))), 'and one inside it');
 clickText('c4ix', inPane);
 until(() => !!inPane(find('examples')));
 clickText('examples', inPane);
+// The tree is taller than the pane by now (examples' files come last,
+// below the bottom row), so a turn of the wheel brings them up.
+{ const e = ed(); ev({ kind: 'wheel', x: e.x + 60, y: e.y + 200, dy: 1 }); }
 check(until(() => !!inPane(find('hello.c'))), 'which lists its files', screen());
 clickText('hello.c', inPane);
 check(until(() => has('hello.c - Editor') && edLine('int main(int argc, char **argv) {')), 'a click on a file opens it in the editor', screen());

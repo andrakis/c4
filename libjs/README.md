@@ -156,7 +156,7 @@ Neither is in `make test`.
 | Target | What it checks |
 |---|---|
 | `make test-libjs` | Unit tests (printf, heap, display, shared memory, desktop, the explorer's `c4r.js` over every image), then every corpus image byte for byte against native `c4m32` (or 64-bit `c4m` where `c4m32` cannot be trusted), the fused-opcode differential, STRC with symbol names, exit status, the PIT, and C4KE and C4IX booting with grep assertions. Builds `c4bb-images` first. |
-| `make test-libjs-ladder` | The Build Ladder headless (`tests/test-c4dos-ladder.mjs`, docs/c4dos-ladder.md): Doom at each rung, BUILD, dosload, b4ke, kboot, and back to `A>`, about seventy seconds. Makes the climb floppy and its disk first; `make test-libjs` runs it too when the disk is there. `tests/web-c4dos-ladder.mjs` is its browser check. |
+| `make test-libjs-ladder` | The Build Ladder headless (`tests/test-c4dos-ladder.mjs`, docs/c4dos-ladder.md): Doom at each rung, BUILD, dosload, b4ke, kboot, and back to `A>`, about seventy seconds. `make c4bb-images`, which it runs first, makes the climb floppy and the ladder disk; `make test-libjs` runs it too when the disk is there. `tests/web-c4dos-ladder.mjs` is its browser check. |
 | `make test-libjs-web` | The page in the user's own Chrome over raw CDP (`LIBJS_CDP`, else ports 9224 then 9222), then the display legs with `--gui`. It never launches a browser; if none answers it says so. |
 
 ## Layout

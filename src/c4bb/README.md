@@ -26,7 +26,7 @@ Run from the repo root.
 | `make c4bb-32bit` | The 32-bit native toolchain: `c4cc32`, `c4m32`, `c4sp32`, `c4rlink32`. |
 | `make c4bb-images` | Everything under `src/c4bb/images/` (generated, gitignored) and the four firmware stages in `fw/`, via [tests/build-images.sh](tests/build-images.sh). Needs `./cpp`. |
 | `make c4bb-web` | Everything the browser loads: builds the `c4dos-c4ix32` climb disk first (the slow half; it builds c4sc), then `c4bb-images`. |
-| `make c4dos-c4ix32` | The C4DOS disk that climbs to C4IX. `c4bb-images` only copies it into `images/climb`, so rebuild it when C4DOS, C4KE or C4IX change. `build-images.sh` warns when the copy is older than its sources. |
+| `make c4dos-c4ix32` | The C4DOS disk that climbs to C4IX. `make c4bb-images` remakes it after the images (it carries their C4IX userland) and copies it into `images/climb` and `libjs/images/ladder` again (`tests/climb-disks.sh`). `build-images.sh` run by hand only copies it, and warns when the copy is older than its sources. |
 
 `c4bb-images` makes four disks: `images/disk` (the shared disk: C4DOS, C4KE
 and C4IX side by side, which `test-c4bb` boots), `images/dos-recovery`,

@@ -99,9 +99,12 @@ instead of the RAM disk C4KE is seeded from),
 `AUTOEXEC.BAT`, `BUILD.BAT`, `LADDER.TXT`, `c4dos.dir`, `index.json` and
 `manifest.json`. The prebuilt C4IX kernel is left out, so the one that
 boots is the one b4ke linked. Like the climb disk beside it, the ladder
-disk is copied from the climb floppy, not built from it: `make
-c4dos-c4ix32` first, then `make c4bb-images` (build-images.sh says when
-it is skipped). `make test-libjs-ladder` does both.
+disk is copied from the climb floppy, not built from it
+(`src/c4bb/tests/climb-disks.sh`). `make c4bb-images` does it all in
+order: the images, then the floppy, which carries their C4IX userland,
+then the two copies of it again. (It used to take `make c4dos-c4ix32`
+first, by hand, and a ladder disk made without it went on building the
+old C4KE.) `make test-libjs-ladder` depends on it.
 
 ### C4DOS to C4KE
 

@@ -33,7 +33,9 @@ static int drivenum (char *s) {
 
 static int wanted (int argc, char **argv, char *name) {
 	int i;
-	if (argc <= 2) return 1;            // no list: everything
+	// /proc/uptime is the kernel's clock, not a file anyone made
+	if (nameeq(name, "/proc/uptime")) return 0;
+	if (argc <= 2) return 1;            // no list: everything else
 	i = 2;
 	while (i < argc) { if (nameeq(argv[i], name)) return 1; ++i; }
 	return 0;

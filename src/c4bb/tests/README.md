@@ -16,8 +16,10 @@ of these are part of `make test`.
 - the kernels `c4ke32.c4r` and `c4ix32.c4r` and their userlands;
 - four disks: `disk` (shared, three systems), `dos-recovery`, `c4ke-root`,
   and `climb`, which is **copied** from `c4dos-c4ix32/` at the repo root and
-  never built here. The script warns when that copy is older than its
-  sources; `make c4dos-c4ix32` rebuilds it.
+  never built here (`climb-disks.sh`, which also makes the page's ladder
+  disk). `make c4bb-images` remakes that floppy after this script, since
+  it carries the C4IX userland built here, and runs `climb-disks.sh` again;
+  this script run by hand warns when the copy is older than its sources.
 
 It needs `./cpp`, `c4cc32`, `c4sp32` and `c4th32.c4r`, which the make target
 lists as prerequisites.

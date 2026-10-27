@@ -2399,8 +2399,21 @@ c4bb-32bit: c4cc32 c4m32 c4sp32 c4rlink32
 # c4sc32-fused.c4r is the disk's compiler (c4sc.c4r), which C4IX
 # rebuilds itself with: named here, a change to c4lc remakes it rather
 # than leaving yesterday's compiler on the disk.
+#
+# The climb floppy (c4dos-c4ix32) is made here too, AFTER build-images.sh,
+# and then the disks that copy it are made again: the two feed each other.
+# The floppy carries the C4IX userland and vfsload that script builds, and
+# the script's climb and ladder disks are copies of the floppy (the ladder
+# disk lays it over the shared disk's userland, so a floppy made first
+# would put the last build's C4IX back). Nothing else rebuilt the floppy,
+# so after a kernel change the ladder disk's BUILD went on compiling the
+# old C4KE from its c4ke-src.tar. Both steps only copy: the floppy's
+# recipe takes archives and images that are targets of their own, and
+# climb-disks.sh is the copying end of build-images.sh.
 c4bb-images: c4bb-32bit $(C4LC_LISP) .img_g c4th32.c4r cpp c4sc32-fused.c4r
-	IMG_G=$(IMG_G) bash src/c4bb/tests/build-images.sh
+	IMG_G=$(IMG_G) C4BB_CLIMB_AGAIN=1 bash src/c4bb/tests/build-images.sh
+	@$(MAKE) --no-print-directory $(C4DOS_IX_DISK)
+	@bash src/c4bb/tests/climb-disks.sh
 
 # Source maps in the images (docs/c4-explorer.md, track S): the games
 # below and C4IX (build-images.sh) are compiled -g, so that the Code
@@ -2544,10 +2557,9 @@ test-libjs: c4bb-images $(C4M) $(TESTS_C4R) c4sp32
 # ladder disk boots C4DOS, which plays Doom and builds C4KE; C4KE plays
 # Doom and rps, builds C4IX with b4ke and boots it with kboot; C4IX plays
 # Doom and exits, back through C4KE to A>. One machine, no reset, about
-# seventy seconds. The disk is copied from the climb floppy, so that
-# comes first.
-test-libjs-ladder: c4dos-c4ix32
-	$(MAKE) c4bb-images
+# seventy seconds. The disk is copied from the climb floppy, which
+# c4bb-images remakes.
+test-libjs-ladder: c4bb-images
 	node libjs/tests/test-c4dos-ladder.mjs
 
 # C4IX on several processors (docs/c4ix-smp.md S3): test-libjs's C4IX

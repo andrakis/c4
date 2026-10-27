@@ -93,7 +93,8 @@ unchanged by `make test-c4ix`).
     0x120-0x138 disk controller: NAME (write ptr -> open, read -> fd),
                 FD/ADDR/LEN (LEN write triggers DMA, read -> result),
                 CLOSE, FLAGS (O_NONBLOCK honored for "/dev/stdin"
-                and "/dev/tty")
+                and "/dev/tty"); "/proc/uptime" opens as Linux's,
+                made from TIME_MS at the open (see below)
     0x134 OPNAME       write name ptr, read opcode number (_OPC)
     0x140 POWER        write -> halt with status (EXIT lands here)
     0x144/8 HEAP_BASE/END   set by the loader, read by the firmware
@@ -187,6 +188,18 @@ to `/dev/stdin` and degrades to batched input.
 
 `Devices.rawKbd` counts the open raw descriptors, so an embedding UI
 can suppress its own local echo while one is held.
+
+Opening **`/proc/uptime`** gives the host's `/proc/uptime`, as Linux has
+one for a native c4m: whatever runs on the machine and opens files through
+this controller sees it -- C4DOS, a bare-machine program, a C4KE task. It
+is made from the machine's clock (`TIME_MS`, what the TIME opcode reads)
+at each open, so it advances: seconds since power-on with
+two decimals, then the same clock in tenths of a second where Linux has its
+idle time. That is the number c4m.c's default reading takes as tenths
+(`c4_time_host`, under plain c4), so a plain-c4 c4m.c running under C4DOS
+or as a C4KE task, whose `open()` comes straight to this device, has a
+clock here as it has on Linux. C4IX makes its own (src/c4ix/vfs.c), and
+C4KE's RAM filesystem has one for `vfs_get` readers.
 
 The web terminal (`web/panels.js`) has a SCREEN, not just a scrollback.
 It began as a teletype -- one string, re-rendered whole, every non-SGR

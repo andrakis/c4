@@ -596,6 +596,19 @@ spinner at -3 beside one at 0 gets 4.6 times the cycles
   scratch files instead (init's demo, test.sh, cc's objects, the IDE's
   one-file builds, which land in `/tmp/NAME.c4r`).
 
+- **`/proc/uptime`** (2026-10-26): the kernel's clock as a file, in the
+  format c4m.c reads from a Linux host when plain c4 runs it
+  (`c4_time_host`). So `c4 c4m.c` has a clock inside C4IX, and
+  `innerbench -c` (src/bench) runs here. Two numbers, seconds with two
+  decimals: the time since the VFS came up, then, where Linux has its
+  idle time, the same clock in tenths of a second, because c4m's
+  default reading takes that number's integer part times 100 as
+  milliseconds (`c4m -a` reads the first). A `VN_PROC` vnode
+  (`vfs.c`, `vfs_proc`): its bytes are made when it is read from its
+  start, stat'd or fetched with C4KE's `OP_VFS_GET`. It can be read and
+  sought, but not written, truncated, linked, renamed or removed, and
+  `persist` never keeps `/proc`.
+
 - **`cc`** (8b01e1a, 955bc82, 2026-10-21): `src/c4ix/user/cc.c` runs
   c4sc with c4lc's preprocessor and `/usr/include` on the include path,
   on a task's default stack (1 MB at first, then 4 MB, until 2026-10-25:

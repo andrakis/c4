@@ -93,7 +93,7 @@ compatibility layer.
 
 | path | what |
 |---|---|
-| `c4ke.c` | the kernel: tasks, scheduler, trap and interrupt handlers, custom opcodes, the `.c4r` loader glue, signals, the RAM filesystem (`OP_VFS_*`), kernel extensions API, command line |
+| `c4ke.c` | the kernel: tasks, scheduler, trap and interrupt handlers, custom opcodes, the `.c4r` loader glue, signals, the RAM filesystem (`OP_VFS_*`, with the kernel's own `/proc/uptime`), kernel extensions API, command line |
 | [`extensions/`](extensions/README.md) | optional kernel modules compiled into the image |
 | [`bin/`](bin/README.md) | userland programs and tools run as C4KE tasks |
 | `services/init.c` | the init process: starts the VFS service, vfsload, then c4sh (linked with `eshell.c` as a fallback) |
@@ -118,6 +118,15 @@ The shell lives in [src/c4sh](../c4sh/README.md) and the benchmarks in
   returns 0 and the boot-time speed measurement never finishes. Pass `-m`
   or `-c N` there: `./c4 c4m.c load-c4r.c -- c4ke.c4r -m`. A natively built
   c4m uses `clock_gettime` (`timespec_get` on MSVC) and has no such problem.
+- **`/proc/uptime` inside C4KE**: the RAM filesystem has one, the kernel's
+  clock in Linux's format, written again each time `vfs_get` fetches it
+  (`cat /proc/uptime`, `ls /proc`; tasks cannot replace or remove it,
+  and `save` leaves it out). A task's `open()` does not reach the RAM
+  filesystem, though: it goes to the machine. On c4bb and libjs the disk
+  device answers `/proc/uptime` itself, from the machine's clock
+  (docs/c4bb-design.md), and on Linux the host does, so a plain-c4
+  `c4m.c` run as a C4KE task (`innerbench -c`, the C4DOS floppies'
+  `c4m.c4r`) has a clock on every host but Windows.
 - **32-bit / c4bb**: `c4ke32.c4r` boots on the breadboard. When `__c4_info()`
   reports the board's interval timer (bit `0x800`) and it answers a probe,
   the kernel schedules on real milliseconds instead of the cycle counter.

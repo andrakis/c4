@@ -1,5 +1,5 @@
 // test-grin.mjs - grin, C4DOS's graphical shell, headless
-// (docs/grin-plan.md, G2 to G5).
+// (docs/grin-plan.md, G2 to G6).
 //
 // Boots C4DOS on the page's own disk (libjs/images/dos, build-images.sh)
 // with a display fitted, as ?system=c4dos does. Its AUTOEXEC.BAT ends
@@ -28,6 +28,13 @@
 // busy, a c4cc program and a pipe in one, EXIT, File Manager running a
 // .bat in a DOS Prompt, and Doom full screen from Program Manager, twice,
 // quit with keys, grin drawn again and the heap where it was.
+// Then G6's: the games in a window of grin's. Doom from Program Manager
+// beside a Clock whose seconds go on and a Notepad that takes typing,
+// frames arriving in the window's rectangle; closing its window ends it,
+// with the heap where it was; Wolfenstein 3D (from File Manager), Tyrian
+// and Rise of the Triad each drawing in a window and closed; and a dialog
+// opened while Doom plays a timedemo, which still works after Doom has
+// ended by itself.
 //
 //   node libjs/tests/test-grin.mjs
 
@@ -94,6 +101,9 @@ const text = () => Buffer.from(out).toString('latin1');
 // frame that does not begin with CLEAR paints over part of the one
 // before, as the display does (test-desktop.mjs has the same reader).
 let frame = [], cur = [], presents = 0, rects = [], curRects = [];
+// every 8-bit image the display was sent (GUI_BLIT8, which the host turns
+// into 32-bit pixels): a game's frames
+let blits = [], blitCount = 0;
 const timesSeen = new Set();
 let gen = 0, clip = null, partial = false;
 const imgSize = new Map();
@@ -129,6 +139,11 @@ const pump = () => {
       if (!partial || !clip || within(clip, words[i + 2], words[i + 3]))
         cur.push({ x: words[i + 2], y: words[i + 3], s, rgb: words[i + 4], gen });
       if (/^\d\d:\d\d:\d\d$/.test(s.trimEnd())) timesSeen.add(s.trimEnd());
+    }
+    if (t === CMD.RGB) {
+      blitCount++;
+      blits.push({ x: words[i + 2], y: words[i + 3], w: words[i + 4], h: words[i + 5], dw: words[i + 6], dh: words[i + 7] });
+      if (blits.length > 64) blits.shift();
     }
     if (t === CMD.PRESENT) { frame = cur.slice(); rects = curRects.slice(); presents++; gen++; partial = true; }
     // a new size asked for (gui_size): the page's display takes it and
@@ -526,7 +541,7 @@ check(until(() => has('Program Manager'), 3000), 'GRIN again, for the shell appl
 check(text().includes('files are written to B:'), "the disk's CONFIG.SYS has DRIVES.SYS HOME=B:, and B: can be written", text().slice(0, 600));
 const pmIni = storeText('PROGMAN.INI');
 check(pmIni && /^\[Main\]$/m.test(pmIni) && /^\[Accessories\]$/m.test(pmIni) && /^\[Games\]$/m.test(pmIni) &&
-      /^Doom=DOOM,game,full$/m.test(pmIni) && /^Notepad=NOTEPAD,notepad,app$/m.test(pmIni),
+      /^Doom=DOOM,game,window$/m.test(pmIni) && /^Notepad=NOTEPAD,notepad,app$/m.test(pmIni),
   'PROGMAN.INI, written with the default groups, is on B:', pmIni);
 showGroup('Main');
 check(['File Manager', 'DOS Prompt', 'Control Panel', 'Notepad'].every(s => inPm(find(s))), 'Main: File Manager, DOS Prompt, Control Panel, Notepad');
@@ -691,6 +706,155 @@ check(until(() => !dosWin(1) && !dosWin(2)), 'EXIT closes the other one too');
 endTask('Clock');
 until(() => !figures().length);
 
+// ---- G6: games in a window ------------------------------------------------------------
+// A game's window: found by its Size menu, the first on its bar (win), or
+// by its title. Its control menu's Close closes it.
+const haveGame = (c4r, data) => existsSync(join(DISK, c4r)) && existsSync(join(DISK, data));
+const gameWin = () => win('Size');
+const closeBox = w => {
+  click(w.x + BORDER + 9, w.y + BORDER + 9); settle();
+  if (until(() => has('Close'), 200)) clickText('Close');
+};
+const framesIn = (w, n) => !!w && blits.length >= n && blits.slice(-n).every(b =>
+  within(w, b.x, b.y) && within(w, b.x + b.dw - 1, b.y + b.dh - 1));
+// The Task List's rows, by where they are under its buttons (a partial
+// frame may draw them after the buttons, where inTasks does not look);
+// and End Task on one of them
+const taskRows = () => { const tl = at('Switch To'); return frame.filter(t => tl && t.y < tl.y && t.y > tl.y - 180 && t.x > tl.x - 40 && t.x < tl.x); };
+// (title a string, or a pattern; a "Save changes?" it raises is answered No)
+const endTask2 = title => {
+  if (!taskList()) return false;
+  const row = taskRows().filter(t => typeof title === 'string' ? t.s.trimEnd() === title : title.test(t.s.trimEnd()))[0];
+  if (!row) { key(27); until(() => !has('Switch To')); return false; }
+  click(row.x + 5, row.y + 5); settle();
+  clickText('End Task');
+  const r = until(() => !has('Switch To'));
+  if (until(() => find(/Save changes/).length > 0, 30)) clickText('No');
+  return r;
+};
+const NOTEPAD = /^Untitled( \*)? - Notepad$/;
+const haveDoom = haveGame('doom.c4r', 'doom1.wad');
+if (!haveDoom) console.log('test-grin: Doom in a window SKIPPED (no doom on the disk)');
+if (haveDoom) {
+  startItem('Clock');
+  digital();
+  until(() => figures().length === 1);
+  startItem('Notepad');
+  until(() => has('Untitled - Notepad'));
+  settle();
+  const heapW0 = vm.heap.used;
+  const b0 = blitCount;
+  startItem('Doom');
+  check(until(() => !!gameWin() && blitCount > b0 + 40, 4000), "Games > Doom plays in a window of grin's: its frames arrive", text().slice(-400));
+  let dw = gameWin();
+  check(framesIn(dw, 20) && blits.slice(-20).every(b => b.w === 320 && b.h === 200 && b.dw === 640 && b.dh === 400),
+    `... 320x200 frames, at 2x (640x400) in the window's rectangle at 800x600 (${JSON.stringify(dw)}, ${JSON.stringify(blits[blits.length - 1])})`);
+  check(gui.stats().attached && has('Program Manager'), '... and grin keeps the display: Program Manager is drawn beside it');
+  // the cooperation: Doom runs grin's loop in its polls, so the Clock ticks
+  const seen0 = timesSeen.size, f0 = blitCount, t0 = Date.now();
+  while (timesSeen.size < seen0 + 2 && Date.now() - t0 < 8000 && !halted) run();
+  check(timesSeen.size >= seen0 + 2 && blitCount > f0 + 20,
+    `... while Doom plays, the Clock's seconds advance (${timesSeen.size - seen0} new times, ${blitCount - f0} frames meanwhile)`);
+  // keys go to the window with the focus: Notepad, clicked, takes typing
+  // while Doom plays on; then Doom's window, clicked, has them again
+  switchTo('Untitled - Notepad');
+  typeText('typed beside Doom');
+  const f1 = blitCount;
+  check(until(() => has('typed beside Doom')) && until(() => blitCount > f1 + 10),
+    'Notepad, switched to, takes typing while Doom plays on in its window');
+  switchTo('Doom');
+  // closing the window ends Doom; grin carries on, with the heap where it was
+  dw = gameWin();
+  if (dw) closeBox(dw);
+  check(until(() => !gameWin(), 3000), 'its control menu\'s Close closes Doom\'s window, and Doom ends', text().slice(-400));
+  const f2 = blitCount;
+  settle();
+  check(blitCount === f2 && gui.stats().attached && has('Program Manager') && has('typed beside Doom'),
+    'grin carries on: no more frames, Program Manager and Notepad still there');
+  endTask2(NOTEPAD);
+  until(() => !has('typed beside Doom'));
+  settle();
+  // (Notepad's text and window gone, the Clock still open: as before Doom)
+  startItem('Notepad'); until(() => has('Untitled - Notepad')); settle();
+  const heapW1 = vm.heap.used;
+  check(Math.abs(heapW1 - heapW0) / heapW0 <= 0.01, `HEAP_USED after Doom in a window is where it was before (${heapW0} -> ${heapW1}; Notepad was closed and opened again)`);
+  // and Doom alone, again, beside the same windows: to the byte
+  settle();
+  const heapW2 = vm.heap.used, b2 = blitCount;
+  startItem('Doom');
+  until(() => !!gameWin() && blitCount > b2 + 20, 4000);
+  if (gameWin()) closeBox(gameWin());
+  until(() => !gameWin(), 3000);
+  settle();
+  check(vm.heap.used === heapW2 && blitCount > b2 + 20, `Doom again, closed: HEAP_USED the same to the byte (${heapW2} -> ${vm.heap.used})`);
+  endTask2(NOTEPAD);
+  endTask2('Clock');
+  check(until(() => !find(NOTEPAD).length && !figures().length), "Notepad and the Clock closed by the Task List's End Task");
+}
+
+// Wolfenstein 3D from File Manager (a .C4R that Program Manager runs in a
+// window runs in one from there too), Tyrian and Rise of the Triad from
+// Program Manager: each draws in a window, and closes
+const oneFrame = (name, start, data, c4r) => {
+  if (!haveGame(c4r, data)) { console.log(`test-grin: ${name} in a window SKIPPED (not on the disk)`); return; }
+  const b0 = blitCount;
+  start();
+  if (!check(until(() => !!gameWin() && blitCount > b0 && framesIn(gameWin(), 1), 4000), `${name} draws a frame in a window of grin's`, text().slice(-300))) return;
+  closeBox(gameWin());
+  check(until(() => !gameWin(), 3000) && has('Program Manager'), `... and its window closes, and ${name} with it`, text().slice(-300));
+  settle();
+};
+oneFrame('Wolfenstein 3D', () => {
+  startItem('File Manager');
+  until(() => has('File Manager'));
+  clickText('A:');
+  until(() => has(/^A:\s+\d+ files$/));
+  // (A: has more files than the list shows: Down from the first, to
+  // wolf3d.c4r, whose name the status line shows, and Enter opens it)
+  clickText(frame.find(t => /^1wolf14\.zip$/i.test(t.s.trimEnd())) ? '1wolf14.zip' : 'A:');
+  for (let i = 0; i < 60 && !has(/^A:wolf3d\.c4r\b/i); i++) key(40);
+  key(13);
+}, 'vswap.wl1', 'wolf3d.c4r');
+endTask2('File Manager');
+oneFrame('Tyrian', () => startItem('Tyrian'), 'tyrian', 'tyrian.c4r');
+oneFrame('Rise of the Triad', () => startItem('Rise of the Triad'), 'HUNTBGIN.WAD', 'rott.c4r');
+
+// A dialog opened while a game plays is grin's, in grin's heap generation,
+// and still works once the game has ended (docs/grin-plan.md 3.3): File >
+// Run... DOOM -timedemo demo3 -show (in a window, as its item says), which
+// ends by itself; meanwhile Program Manager's File > Run... box, left
+// open; after Doom, CLOCK typed into it starts a Clock.
+if (haveDoom) {
+  const b0 = blitCount;
+  switchTo('Program Manager');
+  runCmd('DOOM -timedemo demo3 -show -nosound');
+  check(until(() => !!gameWin() && blitCount > b0 + 20, 4000), 'File > Run... DOOM -timedemo demo3 -show: a timedemo, in a window', text().slice(-300));
+  switchTo('Program Manager');
+  menu('Program Manager', 'File', 'Run...');
+  const b1 = blitCount;
+  check(until(() => has('Command Line:')) && until(() => blitCount > b1 + 10),
+    '... and meanwhile File > Run... opens its box, Doom drawing on under it', `${blitCount - b1} frames; ${JSON.stringify(frame.map(t => t.s.trimEnd()))}`);
+  // (Program Manager, maximised, covers Doom's window: the end is when its
+  // frames stop for good -- 400 runs, two seconds of the machine's, as a
+  // timedemo pauses for less -- and the Task List has no Doom any more)
+  let last = blitCount, still = 0;
+  const tq = Date.now();
+  while (still < 400 && Date.now() - tq < 1800000 && !halted) { run(); if (blitCount === last) ++still; else { still = 0; last = blitCount; } }
+  check(still >= 400, `... the timedemo ends by itself (${blitCount - b0} frames in all)`, text().slice(-300));
+  settle();
+  for (const c of 'CLOCK') key(c.charCodeAt(0), c.charCodeAt(0));
+  key(13);
+  check(until(() => !has('Command Line:') && has('Settings')), 'the box opened during the game still works after it: CLOCK typed there starts a Clock',
+    JSON.stringify(frame.map(t => t.s.trimEnd())));
+  taskList();
+  // (its rows by where they are: a partial frame may draw them after its buttons)
+  const rows = taskRows().map(t => t.s.trimEnd());
+  check(rows.includes('Clock') && !rows.includes('Doom'), "... and the Task List has the Clock, and Doom's window no more", JSON.stringify(rows));
+  key(27); until(() => !has('Switch To'));
+  endTask2('Clock');
+  check(until(() => !has('Settings')), "... and End Task closes the Clock");
+}
+
 // Doom full screen from Program Manager: grin gives the display up, Doom
 // takes it; F10 then Y quits; grin takes the display back, at its size,
 // and draws everything. Twice, with HEAP_USED where it was each time.
@@ -698,8 +862,18 @@ const slowKey = (code, ch = 0) => {
   gui.event({ kind: 'keydown', code, char: ch, mods: 0 }); for (let i = 0; i < 10; i++) run(2e6);
   gui.event({ kind: 'keyup', code, char: ch, mods: 0 }); for (let i = 0; i < 10; i++) run(2e6);
 };
-const haveDoom = existsSync(join(DISK, 'doom.c4r')) && existsSync(join(DISK, 'doom1.wad'));
 if (!haveDoom) console.log('test-grin: Doom full screen SKIPPED (no doom on the disk)');
+// (its item runs it in a window since G6: Properties sets it to full screen)
+if (haveDoom) {
+  switchTo('Program Manager');
+  showGroup('Games');
+  clickText('Doom', inPm);
+  check(menu('Program Manager', 'File', 'Properties...') && until(() => has('Program Item Properties')), "Doom's Properties, to run it full screen");
+  clickText('DOS program, full screen');
+  key(13);
+  check(until(() => !has('Program Item Properties')) && /^Doom=DOOM,game,full$/m.test(storeText('PROGMAN.INI') || ''),
+    '... full screen, in PROGMAN.INI too', storeText('PROGMAN.INI'));
+}
 const doomHeap = [];
 settle();
 const doomHeap0 = vm.heap.used;
@@ -719,7 +893,8 @@ if (doomHeap.length === 2) {
   const worst = Math.max(...doomHeap.map(u => Math.abs(u - doomHeap0) / doomHeap0));
   check(worst <= 0.01, `HEAP_USED after each Doom is where it was before (${doomHeap0} -> ${doomHeap.join(', ')})`);
 }
-check(aboutCount() === 0, 'grin carries on after Doom: Help > About, no application loaded');
+const loadedAfter = aboutCount();
+check(loadedAfter === 0, `grin carries on after Doom: Help > About, no application loaded (${loadedAfter})`);
 startItem('Clock');
 check(until(() => has('Settings')), '... a Clock starts');
 endTask('Clock');

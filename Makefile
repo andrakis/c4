@@ -2964,7 +2964,7 @@ libc4ix.c4s: libc4ix.c4l
 # libc: C4IX's C library, a shared library (src/c4ix/libc). -fno-builtin
 # but for opcodes.c, with libc4ix's syscall layer linked in, and -fpic
 # throughout, so C4IX loads its code once for every task.
-C4IX_LIBC := string stdlib stdio unix
+C4IX_LIBC := string stdlib stdio unix fp math
 libc.c4s: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_LIBC:%=$(C4IX_SRC)/libc/%.c) $(C4IX_SRC)/libc/opcodes.c $(C4IX_SRC)/libc/include/libc.h $(C4IX_SRC)/libc/sys.h $(C4IX_SRC)/lib/libc4ix.c
 	for m in $(C4IX_LIBC); do \
 	  $(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -fno-builtin -fpic -c -I $(C4IX_SRC)/libc/include -I $(C4IX_SRC)/libc $(C4IX_SRC)/libc/$$m.c .c4ix_libc_$$m.c4o > /dev/null || exit 1; \

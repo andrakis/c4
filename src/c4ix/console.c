@@ -178,25 +178,51 @@ int kputs(char *s) {
     return n;
 }
 
-// Digits of v in base, minus sign for negative decimal. Returns the
-// character count. (Most-negative int wraps on negation; kernel
-// prints don't go there.)
-static int kputnum(int v, int base) {
+// Digits of v in base: decimal signed, with a minus sign; hex unsigned,
+// as printf's %x (the shift's top nibble masked, as kputptr does, so a
+// word above 0x80000000 is its digits, not a minus sign). WIDTH pads to
+// that many characters: with zeros after the sign when ZERO, with spaces
+// on the right when LEFT, else spaces on the left. Returns the character
+// count. (Most-negative int wraps on negation; kernel prints don't go
+// there.)
+static int kputnum(int v, int base, int width, int zero, int left) {
     char buf[24];
     char *digits;
-    int i, n;
+    int i, n, neg, mask;
 
     digits = "0123456789abcdef";
     i = 0;
-    n = 0;
-    if (v < 0) { con_out('-'); ++n; v = -v; }
-    if (v == 0) { buf[i] = '0'; ++i; }
-    while (v) {
-        buf[i] = digits[v % base]; ++i;
-        v = v / base;
+    neg = 0;
+    if (base == 16) {
+        mask = ~(15 << (sizeof(int) * 8 - 4));
+        if (v == 0) { buf[i] = '0'; ++i; }
+        while (v) { buf[i] = digits[v & 15]; ++i; v = (v >> 4) & mask; }
+    } else {
+        if (v < 0) { neg = 1; v = -v; }
+        if (v == 0) { buf[i] = '0'; ++i; }
+        while (v) {
+            buf[i] = digits[v % base]; ++i;
+            v = v / base;
+        }
     }
-    n = n + i;
+    n = i + neg;
+    if (!left && !zero) while (n < width) { con_out(' '); ++n; }
+    if (neg) con_out('-');
+    if (!left && zero) while (n < width) { con_out('0'); ++n; }
     while (i) { --i; con_out(buf[i]); }
+    if (left) while (n < width) { con_out(' '); ++n; }
+    return n;
+}
+
+// s, padded to WIDTH with spaces, on the right when LEFT
+static int kputpad(char *s, int width, int left) {
+    int n, len;
+    len = 0;
+    while (s[len]) ++len;
+    n = len;
+    if (!left) while (n < width) { con_out(' '); ++n; }
+    kputs(s);
+    if (left) while (n < width) { con_out(' '); ++n; }
     return n;
 }
 
@@ -219,7 +245,9 @@ static int kputptr(int v) {
     return n;
 }
 
-// %d %x %p %s %c %%. Anything else prints verbatim. Returns characters
+// %d %x %p %s %c %%, with printf's width and its 0 and - flags on %d,
+// %x and %s: "0x%08x" is eight hex digits, zeros first; "%-12s" a name
+// in twelve columns. Anything else prints verbatim. Returns characters
 // written, printf-style.
 //
 // va_end must see ap exactly where va_start left it -- it re-reads
@@ -231,7 +259,7 @@ static int kputptr(int v) {
 int kprintf(char *fmt, ...) {
     va_list ap;    // one declarator per line: va_list is `int *`, so
     va_list walk;  // `va_list a, b` would make b a plain int
-    int n, c;
+    int n, c, width, zero, left;
 
     sched_lock();
     va_start(ap, fmt);
@@ -242,14 +270,21 @@ int kprintf(char *fmt, ...) {
         if (c != '%') { con_out(c); ++n; }
         else if (*fmt == 0) { con_out('%'); ++n; }
         else {
-            c = *fmt; ++fmt;
-            if (c == 'd')      n = n + kputnum(va_arg(walk, int), 10);
-            else if (c == 'x') n = n + kputnum(va_arg(walk, int), 16);
+            // flags and a width: %08x, %-12s
+            zero = 0; left = 0; width = 0;
+            while (*fmt == '0' || *fmt == '-') { if (*fmt == '0') zero = 1; else left = 1; ++fmt; }
+            while (*fmt >= '0' && *fmt <= '9') { width = width * 10 + (*fmt - '0'); ++fmt; }
+            if (left) zero = 0;
+            c = *fmt;
+            if (c) ++fmt;
+            if (c == 'd')      n = n + kputnum(va_arg(walk, int), 10, width, zero, left);
+            else if (c == 'x') n = n + kputnum(va_arg(walk, int), 16, width, zero, left);
             else if (c == 'p') n = n + kputptr(va_arg(walk, int));
-            else if (c == 's') n = n + kputs(va_arg(walk, char *));
+            else if (c == 's') n = n + kputpad(va_arg(walk, char *), width, left);
             else if (c == 'c') { con_out(va_arg(walk, int)); ++n; }
             else if (c == '%') { con_out('%'); ++n; }
-            else { con_out('%'); con_out(c); n = n + 2; }
+            else if (c) { con_out('%'); con_out(c); n = n + 2; }
+            else { con_out('%'); ++n; }
         }
     }
     va_end(ap);

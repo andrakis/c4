@@ -163,7 +163,7 @@ if [ -n "$CLIMBSRC" ] && [ -f $LJDOS/c4dos32.c4r ]; then
         # did before it had directories; APPEND says where else to look,
         # for them (the machine's DISK_DIRS) and for DOS
         printf 'REM C4KE and C4IX find their files, and the games, through APPEND\n'
-        printf 'APPEND \\BUILD;\\C4KE;\\C4IX;%s\n' "$(games_dirs)"
+        printf 'APPEND \\BUILD;\\C4KE;\\C4IX;\\GRIN;\\BIN;%s\n' "$(games_dirs)"
         if [ -n "$list" ]; then printf 'ECHO The games, in \\GAMES: %s.\n' "$list"; fi
         # (C4DOS splits a line into at most 15 words, so ECHO says 14; and
         # no > in an ECHO: REDIR.SYS would take it for a redirection)

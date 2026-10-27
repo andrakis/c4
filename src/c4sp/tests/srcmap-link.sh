@@ -33,10 +33,12 @@ maplen () { ./c4rdump -l "$1" | sed -n 's/^Source map: version 1, \([0-9]*\) byt
 payload () { local f=$1 w=$2 n=$3; tail -c $((w + (w - n % w) % w + n)) "$f" | head -c $n; }
 
 # ---- 1. c4rlink ----
+# Every link here is --no-gc: the maps checked are the objects' maps
+# whole, and c4rlink drops the functions nothing reaches by default.
 $LC -g -c -I src/tests src/tests/srcmap_probe.c $T/p.c4o > /dev/null || bad "srcmap_probe.c -g -c"
 $LC -g0 -c src/tests/test_link_b.c $T/b.c4o > /dev/null || bad "test_link_b.c -g0 -c"
 $LC -g -c -I src/tests src/tests/srcmap_link.c $T/l.c4o > /dev/null || bad "srcmap_link.c -g -c"
-./c4rlink $T/p.c4o $T/b.c4o $T/l.c4o -o $T/pbl.c4r > /dev/null || bad "c4rlink"
+./c4rlink --no-gc $T/p.c4o $T/b.c4o $T/l.c4o -o $T/pbl.c4r > /dev/null || bad "c4rlink"
 ./c4m load-c4r.c -- $T/pbl.c4r 2>&1 | grep -qx "66 28 27" || bad "the linked image does not run as srcmap_probe does"
 
 # what the linked map must be
@@ -74,7 +76,7 @@ if ! cmp -s $T/want.txt $T/got.txt; then bad "the linked map is not its objects'
 grep -q ' 0:0$' $T/got.txt || bad "no line-0 row where the object without a map starts"
 
 # c4cc's build of c4rlink, in the VM, as test-b4ke runs it
-printf 'B4KE1\nRUN c4rlink.c4r %s -o srcmap_vm.c4r\nRUN srcmap_vm.c4r\n' "$T/p.c4o $T/b.c4o $T/l.c4o" > $T/vm.b4k
+printf 'B4KE1\nRUN c4rlink.c4r --no-gc %s -o srcmap_vm.c4r\nRUN srcmap_vm.c4r\n' "$T/p.c4o $T/b.c4o $T/l.c4o" > $T/vm.b4k
 cp src/c4ke/bin/b4ke.c4r .
 ./c4m load-c4r.c -- c4ke.c4r b4ke -f $T/vm.b4k > $T/vm.log 2>&1
 grep -q "c4rlink: wrote $(stat -c %s $T/pbl.c4r) bytes to ramfs:srcmap_vm.c4r" $T/vm.log \
@@ -85,7 +87,7 @@ grep -qx "66 28 27" $T/vm.log || bad "the image c4rlink.c4r linked in the VM doe
 $LC32 -g -c -I src/tests src/tests/srcmap_probe.c $T/p32.c4o > /dev/null || bad "32-bit srcmap_probe.c"
 $LC32 -g0 -c src/tests/test_link_b.c $T/b32.c4o > /dev/null || bad "32-bit test_link_b.c"
 $LC32 -g -c -I src/tests src/tests/srcmap_link.c $T/l32.c4o > /dev/null || bad "32-bit srcmap_link.c"
-./c4rlink32 $T/p32.c4o $T/b32.c4o $T/l32.c4o -o $T/pbl32.c4r > /dev/null || bad "c4rlink32"
+./c4rlink32 --no-gc $T/p32.c4o $T/b32.c4o $T/l32.c4o -o $T/pbl32.c4r > /dev/null || bad "c4rlink32"
 ./c4m32 load-c4r.c -- $T/pbl32.c4r 2>&1 | grep -qx "66 28 27" || bad "the 32-bit linked image does not run"
 n=$(maplen $T/pbl.c4r)
 payload $T/pbl.c4r 8 $n > $T/map64
@@ -93,14 +95,14 @@ payload $T/pbl32.c4r 4 $n > $T/map32
 cmp -s $T/map64 $T/map32 || bad "the 32-bit link wrote another map"
 
 # -s and -g0
-./c4rlink -s $T/p.c4o $T/b.c4o $T/l.c4o -o $T/s.c4r > /dev/null
+./c4rlink --no-gc -s $T/p.c4o $T/b.c4o $T/l.c4o -o $T/s.c4r > /dev/null
 ./c4rdump -l $T/s.c4r | grep -q "No source map" || bad "-s kept the map"
-./c4rlink -g0 $T/p.c4o $T/b.c4o $T/l.c4o -o $T/g0.c4r > /dev/null
+./c4rlink --no-gc -g0 $T/p.c4o $T/b.c4o $T/l.c4o -o $T/g0.c4r > /dev/null
 ./c4rdump -l $T/g0.c4r | grep -q "No source map" || bad "-g0 kept the map"
 ./c4rdump -s $T/g0.c4r | grep -q "'link_sum'" || bad "-g0 dropped the symbols"
 $LC -g0 -c -I src/tests src/tests/srcmap_probe.c $T/p0.c4o > /dev/null
 $LC -g0 -c -I src/tests src/tests/srcmap_link.c $T/l0.c4o > /dev/null
-./c4rlink $T/p0.c4o $T/b.c4o $T/l0.c4o -o $T/pbl0.c4r > /dev/null
+./c4rlink --no-gc $T/p0.c4o $T/b.c4o $T/l0.c4o -o $T/pbl0.c4r > /dev/null
 cmp -s $T/g0.c4r $T/pbl0.c4r || bad "-g0 is not the image of the objects without maps"
 head -c $(stat -c %s $T/pbl0.c4r) $T/pbl.c4r | cmp -s - $T/pbl0.c4r || bad "the map changed the linked image"
 

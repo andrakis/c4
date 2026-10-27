@@ -140,7 +140,7 @@ let o = cmd('DIR', A, 60);
 check(/^GAMES  <DIR>$/m.test(o) && /^BUILD  <DIR>$/m.test(o) && /^C4IX  <DIR>$/m.test(o) && !/doom1\.wad/i.test(o),
   'DIR at A:\\: the directories, not the 250 files', o);
 o = cmd('APPEND', A, 60);
-check(/^APPEND=A:\\BUILD;A:\\C4KE;A:\\C4IX;A:\\GAMES\\DOOM/m.test(o), "APPEND, AUTOEXEC.BAT's", o);
+check(/^APPEND=A:\\BUILD;A:\\C4KE;A:\\C4IX;A:\\GRIN;A:\\BIN;A:\\GAMES\\DOOM/m.test(o), "APPEND, AUTOEXEC.BAT's", o);
 o = cmd('CD GAMES\\DOOM', /A:\\GAMES\\DOOM>\s*$/, 60) + cmd('DIR', /A:\\GAMES\\DOOM>\s*$/, 60) + cmd('CD \\', A, 60);
 check(/doom1\.wad/.test(o) && /doom\.c4r/.test(o), 'CD GAMES\\DOOM, DIR there, CD \\', o);
 const used0 = vm.heap.used;

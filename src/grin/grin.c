@@ -492,6 +492,19 @@ int grin_full(char *cmdline) { return queue(cmdline, Q_FULL); }
 // grin's table and plays in it; the display stays grin's
 int grin_window(char *cmdline) { return queue(cmdline, Q_WINDOW); }
 
+// the program in its own directory (full_where), and back after
+static void dir_enter() {
+    full_back[0] = 0;
+    if (full_dir[0]) {
+        full_back[0] = full_dir[0]; full_back[1] = ':'; full_back[2] = 0;
+        ui_ncat(full_back, gd_getcwd(full_dir[0] - 'A'), FULL_LINE);
+        if (gd_chdir(full_dir) < 0) full_back[0] = 0;
+    }
+}
+static void dir_leave() {
+    if (full_back[0]) gd_chdir(full_back);
+}
+
 static void full_run() {
     full_queued = 0;
     dos_busy = 1;
@@ -504,15 +517,9 @@ static void full_run() {
     // grin's table out of slot 25 meanwhile: the display is the program's,
     // so a game finding no grin takes it, as at A>
     apps_publish(0);
-    // in the program's directory, and back
-    full_back[0] = 0;
-    if (full_dir[0]) {
-        full_back[0] = full_dir[0]; full_back[1] = ':'; full_back[2] = 0;
-        ui_ncat(full_back, gd_getcwd(full_dir[0] - 'A'), FULL_LINE);
-        if (gd_chdir(full_dir) < 0) full_back[0] = 0;
-    }
+    dir_enter();
     gd_exec(full_cmd);
-    if (full_back[0]) gd_chdir(full_back);
+    dir_leave();
     apps_publish(1);
     // the display back, as main first took it
     if (!gui_attach(ring, RING, ini.sw, ini.sh)) printf("grin: the display refused the ring after %s\n", dos_busy_name);
@@ -533,7 +540,9 @@ static void win_run() {
     dos_busy = 1;
     dos_busy_set(full_cmd);
     if (saver_active()) { saver_stop(); gui_cursor(GUI_PTR_ARROW); wk_repoint(); wk_redraw_all(); }
+    dir_enter();
     fwin_run(full_cmd);
+    dir_leave();
     if (snd_present()) snd_reset();
     dos_busy = 0;
     dos_busy_name[0] = 0;

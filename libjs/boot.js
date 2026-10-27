@@ -24,7 +24,7 @@
 import { parseC4r, loadImage } from '../src/c4bb/sim/loader.js';
 import { Arena, MEM_BASE, TLEV_ADDR, OPNAMES_ROM } from '../src/c4bb/sim/arena.js';
 import { Devices, OPNAMES, HEAP_BASE, HEAP_END, CYCLES_PER_MS } from '../src/c4bb/sim/devices.js';
-import { OP, Machine, CPU_HALT_ADDR } from './c4m.js';
+import { OP, Machine, CPU_HALT_ADDR, NULL_GUARD_OP } from './c4m.js';
 import { Smp } from './smp.js';
 import { ParHost } from './par.js';
 import { Bus } from './bus.js';
@@ -72,6 +72,7 @@ export function createMachine(opts = {}) {
 }
 
 export function initRom(arena) {
+  for (let k = 0; k < 4; k++) arena.i32[k] = NULL_GUARD_OP;   // fetched, never read: c4m.js
   arena.i32[TLEV_ADDR >> 2] = OP.TLEV;
   arena.i32[CPU_HALT_ADDR >> 2] = OP.CPUH;
   arena.writeBytes(OPNAMES_ROM, new TextEncoder().encode(OPNAMES));

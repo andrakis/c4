@@ -3368,19 +3368,19 @@ static int task_loadc4r (int argc, char **argv) {
 	// compiler running under C4KE, say) is what runs.
 	module = 0;
 	if ((ramfs_data = ramfs_get(file, &ramfs_len)))
-		module = c4r_load_mem(file, ramfs_data, ramfs_len, kernel_loadc4r_mode);
+		module = c4r_load_mem(file, ramfs_data, ramfs_len, kernel_loadc4r_mode | C4ROPT_RUN);
 	else {
 		alt_file = strcpycat(file, ".c4r");
 		if ((ramfs_data = ramfs_get(alt_file, &ramfs_len)))
-			module = c4r_load_mem(alt_file, ramfs_data, ramfs_len, kernel_loadc4r_mode);
+			module = c4r_load_mem(alt_file, ramfs_data, ramfs_len, kernel_loadc4r_mode | C4ROPT_RUN);
 		free(alt_file);
 		alt_file = 0;
 	}
 	if (!module)
-	if (!(module = c4r_load_opt(file, kernel_loadc4r_mode))) {
+	if (!(module = c4r_load_opt(file, kernel_loadc4r_mode | C4ROPT_RUN))) {
 		// Attempt a version with .c4r appended
 		alt_file = strcpycat(file, ".c4r");
-		if (!(module = c4r_load_opt(alt_file, kernel_loadc4r_mode))) {
+		if (!(module = c4r_load_opt(alt_file, kernel_loadc4r_mode | C4ROPT_RUN))) {
 			printf("lc4r: unable to open '%s' or '%s'\n", file, alt_file);
 			free(alt_file);
 			__c4_opcode(1, OP_TASK_EXIT);

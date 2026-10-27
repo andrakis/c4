@@ -24,6 +24,7 @@ export class Bus {
 
   read32(addr) {
     addr = addr >>> 0;
+    if (addr < 0x10) return 0;           // the null guard reads 0 (c4m.js NULL_GUARD_OP)
     if (addr >= GUI_BASE && addr < GUI_END && this.gui) return this.gui.read32(addr & ~3) | 0;
     if (addr >= SND_BASE && addr < SND_END && this.snd) return this.snd.read32(addr & ~3) | 0;
     return this.arena.read32(addr) | 0;
@@ -37,6 +38,7 @@ export class Bus {
   }
 
   read8s(addr) {
+    if ((addr >>> 0) < 0x10) return 0;
     return this.arena.read8s(addr);
   }
 

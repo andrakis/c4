@@ -44,7 +44,11 @@ enum {
 	// The source map, out of the extension trailer that follows the
 	// symbols (docs/c4-explorer.md 2.1): with SYMBOLS only, since the
 	// trailer is found by walking them.
-	C4ROPT_SRCMAP = 2
+	C4ROPT_SRCMAP = 2,
+	// The image is to be run, not read: refuse one with words left for
+	// a linker (c4r_report_unlinked). An object (.c4o) is all such
+	// words, and c4rlink and c4rdump read them through here.
+	C4ROPT_RUN = 4
 };
 
 #ifndef FILE_OPEN_MODE
@@ -356,8 +360,30 @@ void c4r_read_trailer (int fd, int *c4r, char *buffer, int wordbytes) {
 	}
 }
 
+// An image that refers to a name it does not define: a patch that names
+// a symbol (its type a symbol id, or DSYM). A C4IX program is full
+// of them -- each call into its shared libc, which src/c4ix/loader.c
+// links at load -- and nothing here links anything, so the word would
+// stay as the compiler left it, 0, and the first call through it would
+// jump to address 0. (A C4KE that took /bench in C4IX's root for its own
+// bench ran C4IX's that way, and under libjs that is ROM: it spun there
+// silently.) With C4ROPT_RUN, the load fails; this says what the image
+// wanted, by name when the symbols were read.
+void c4r_report_unlinked (char *file, int *symbols, int nsyms, int count, int id) {
+	int *s, i;
+	s = symbols;
+	i = 0;
+	while (s && i < nsyms && s[C4R_SYMB_ID] != id) { s = s + C4R_SYMB__Sz; ++i; }
+	printf("lc4r: '%s' needs ", file);
+	if (s && i < nsyms) printf("'%s'", (char *)s[C4R_SYMB_NAME]);
+	else printf("symbol %d", id);
+	printf(" (%d reference%s to link), which it does not define and no loader here links", count, count == 1 ? "" : "s");
+	printf(" -- a C4IX program? Not loading it.\n");
+}
+
 int *c4r_load_opt_real (char *file, int options) {
 	int fd, i, x;
+	int unlinked, unlinked_id;
 	char *buffer;
 	int *c4r, *header, *code, *data, *patches, *symbols, *constructors, *destructors;
 	int  wordbytes, bad;
@@ -391,6 +417,7 @@ int *c4r_load_opt_real (char *file, int options) {
 
 	// These will be set correctly later
 	code = data = patches = symbols = constructors = destructors = 0;
+	unlinked = unlinked_id = 0;
 
 	if (c4r_debug || c4r_verbose) printf("lc4r: loading '%s'...\n", file);
 	fd = -1;
@@ -570,9 +597,12 @@ int *c4r_load_opt_real (char *file, int options) {
 						*(int *)(((char *)data) + paddr) = (int)(code + pvalu);
 					} else if(ptype == C4R_PTYPE_DDATA) {
 						*(int *)(((char *)data) + paddr) = (int)(((char *)data) + pvalu);
-					} else {
-						//printf("lc4r: unexpected patch type %d (not %d or %d)\n", target[C4R_PAT_TYPE], C4R_PTYPE_CODE, C4R_PTYPE_DATA);
-						//return c4r;
+					} else if (ptype >= 0 || ptype == -5) {
+						// A word only a linker fills in: a symbol id in the type (a
+						// code word) or, for -5 (DSYM, c4rlink.c), in the value (a data
+						// word). Counted, and the image refused once it is read:
+						// c4r_report_unlinked.
+						if (!unlinked++) unlinked_id = ptype >= 0 ? ptype : pvalu;
 					}
 
 					++i;
@@ -686,6 +716,22 @@ int *c4r_load_opt_real (char *file, int options) {
 				}
 				c4r[C4R_SYMBOLS] = (int)symbols;
 
+				// Words left for a linker, in an image to be run: refused,
+				// by the failure path below. What only this branch allocated
+				// goes first.
+				if (unlinked && (options & C4ROPT_RUN)) {
+					c4r_report_unlinked(file, (options & C4ROPT_SYMBOLS) ? symbols : 0,
+					                    header[C4R_HDR_SYMBOLSLEN], unlinked, unlinked_id);
+					if (options & C4ROPT_SYMBOLS) {
+						i = 0; target = symbols;
+						while (i++ < header[C4R_HDR_SYMBOLSLEN]) {
+							if (target[C4R_SYMB_NAME]) free((char *)target[C4R_SYMB_NAME]);
+							target = target + C4R_SYMB__Sz;
+						}
+					}
+					if (c4r[C4R_SRCMAP]) free((char *)c4r[C4R_SRCMAP]);
+					free((char *)c4r[C4R_FILENAME]);
+				} else {
 				// Success, cleanup buffer and file, return
 				if (c4r_debug) printf("lc4r: Successfully loaded, c4r = 0x%lx  header = 0x%lx\n", c4r, header);
 				c4r[C4R_LOADCOMPLETE] = 1;
@@ -695,6 +741,7 @@ int *c4r_load_opt_real (char *file, int options) {
 
 				if (c4r_verbose) printf("lc4r: load complete.\n");
 				return c4r;
+				}
 			}
 		}
 	}
@@ -1201,10 +1248,10 @@ int loadc4r_run (char *file, int argc, char **argv) {
 
 	alt_file = 0;
 
-	if (!(module = c4r_load(file))) {
+	if (!(module = c4r_load_opt(file, C4ROPT_SYMBOLS | C4ROPT_RUN))) {
 		// Attempt a version with .c4r appended
 		alt_file = strcpycat(file, ".c4r");
-		if (!(module = c4r_load(alt_file))) {
+		if (!(module = c4r_load_opt(alt_file, C4ROPT_SYMBOLS | C4ROPT_RUN))) {
 			printf("lc4r: unable to open '%s' or '%s'\n", file, alt_file);
 			free(alt_file);
 			return 1;

@@ -61,9 +61,9 @@ static int boot_handoff (int status) {
 	name = boot_argv[0];
 	module = 0;
 	if ((data = ramfs_get(name, &len)))
-		module = c4r_load_mem(name, data, len, kernel_loadc4r_mode);
+		module = c4r_load_mem(name, data, len, kernel_loadc4r_mode | C4ROPT_RUN);
 	else
-		module = c4r_load_opt(name, kernel_loadc4r_mode);
+		module = c4r_load_opt(name, kernel_loadc4r_mode | C4ROPT_RUN);
 	if (!module || !module[C4R_LOADCOMPLETE]) {
 		printf("kboot: could not load %s\n", name);
 		return status;

@@ -264,7 +264,7 @@ int main (int argc, char **argv) {
 			psh("--");
 			//if (mode & WITH_VERBOSE)
 			//	psh("-v");
-			psh("c4ke");
+			psh("c4ke.c4r");
 		} else if (mode & ONLY_DIRECT) {
 			psh("src/c4ke/c4ke.c");
 			psh("--");
@@ -284,10 +284,19 @@ int main (int argc, char **argv) {
 	}
 
 	// Bench command
+	//
+	// By the image's full name. A loader tries the bare name first and
+	// .c4r only after, and on a C4IX disk /bench is C4IX's OWN bench
+	// (an ilink to /bin/bench, c4ix-bench.c4r). The inner C4KE ran that
+	// as a C4KE task. Its main starts with a call to ucycles, an extern
+	// that C4IX's loader links from its shared libc and C4KE's leaves at
+	// 0, so it jumped to address 0 -- under libjs, ROM -- and ran there
+	// for good, printing nothing. The C4IX on the c4bb disk is where
+	// that /bench exists; a native c4m's C4IX has none.
 	if (mode & USE_BENCHTOP)
-		psh("benchtop");
+		psh("benchtop.c4r");
 	else {
-		psh("bench");
+		psh("bench.c4r");
 		if (mode & USE_QUIET)
 			psh("-q");
 		if (mode & WITH_VERBOSE)

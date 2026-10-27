@@ -5,10 +5,14 @@
 // drops guest stores to 0x00-0x1F and the opcode-name ROM, and names the
 // first one on the console. c4bb's firmware latches at 0x20-0x3F stay RAM.
 //
+// A jump into the null guard stops the machine rather than running the
+// ROM: its words hold NULL_GUARD_OP, which only a fetch sees -- a guest
+// reading 0..15 still gets 0.
+//
 // And ITH, which sets the machine's trap handler -- the kernel's -- traps
 // in protected mode, as SIGH and USLP do.
 import { createMachine, initRom } from '../boot.js';
-import { OP, CPU_HALT_ADDR } from '../c4m.js';
+import { OP, CPU_HALT_ADDR, NULL_GUARD_OP } from '../c4m.js';
 import { OPNAMES } from '../../src/c4bb/sim/devices.js';
 
 let fail = 0;
@@ -31,7 +35,7 @@ const romIntact = vm => {
   const i32 = vm.arena.i32;
   const names = Buffer.from(vm.arena.u8.subarray(0x200, 0x200 + OPNAMES.length)).toString('latin1');
   return i32[0x10 >> 2] === OP.TLEV && i32[CPU_HALT_ADDR >> 2] === OP.CPUH && names === OPNAMES &&
-         i32[0] === 0 && i32[1] === 0 && i32[2] === 0 && i32[3] === 0;
+         [0, 1, 2, 3].every(k => i32[k] === NULL_GUARD_OP);
 };
 
 // ---- stores of every kind into the ROM ----
@@ -85,6 +89,28 @@ const romIntact = vm => {
   check(vm.dev.halted && vm.dev.status === 9 && vm.trapHandler === HANDLER,
     'ITH in protected mode traps to the kernel and leaves its handler in place',
     `status ${vm.dev.status}, handler 0x${vm.trapHandler.toString(16)}`);
+}
+
+// ---- the null guard: reads give 0, a jump there halts ----
+{
+  const { vm, text } = machine();
+  put(vm, CODE + 0x100, [OP.IMM, 3, OP.PSH, OP.EXIT]);              // a nonzero read: EXIT 3
+  const JSR_AT = CODE + 10 * 4;
+  put(vm, CODE, [
+    OP.IMM, 0, OP.LI, OP.PSH, OP.IMM, 1, OP.LC, OP.ADD,             // *(int *)0 + *(char *)1
+    OP.BNZ, CODE + 0x100,
+    OP.JSR, 0,                                                      // a call through a word left 0
+    OP.IMM, 5, OP.PSH, OP.EXIT,
+  ]);
+  vm.run(1e5);
+  const t = text();
+  check(vm.dev.halted && vm.dev.status === -102, 'a call to 0 halts the machine (status -102), reads there gave 0',
+    `status ${vm.dev.status}\n${t}`);
+  check(t.includes('libjs: jump to 0x00000000, the null guard') &&
+        t.includes(`top of stack 0x${(JSR_AT + 8).toString(16).toUpperCase().padStart(8, '0')}`),
+    'and says where it went and where it came from', t);
+  check(vm.cycle < 100, 'at once, not after running the ROM', vm.cycle);
+  check(romIntact(vm), 'the guard still holds its marker');
 }
 
 process.exit(fail);

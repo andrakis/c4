@@ -4,12 +4,12 @@ Status: written 2026-10-24 against `smp` at 6295e18, and revised the
 same day with the user's answers (section 8). **G0 and G1 are built**
 (branches `grin-g0` and `grin-g1`, merged here on 2026-10-24), and
 **G2 is built** (branch `grin-g2`, 2026-10-24), **G3** (branch `grin-g3`,
-2026-10-25), **G4** (branch `grin-g4`, 2026-10-25) and **G5** (branch
-`grin-g5`, 2026-10-26). Sections 3.2 and 3.3
-say what G0 built where it differs from the first draft, 3.4 shows the
-window kit's API as G1 built it and G3's mechanism, 3.6 and 3.7 say what
-G5 built, 3.8 and 3.9 what G2 and G4 built, and so do the milestones.
-The rest is plan.
+2026-10-25), **G4** (branch `grin-g4`, 2026-10-25), **G5** (branch
+`grin-g5`, 2026-10-26) and **G6** (branch `grin-g6`, 2026-10-27).
+Sections 3.2 and 3.3 say what G0 built where it differs from the first
+draft, 3.4 shows the window kit's API as G1 built it and G3's mechanism,
+3.6 and 3.7 say what G5 and G6 built, 3.8 and 3.9 what G2 and G4 built,
+and so do the milestones. The rest is plan.
 
 `grin` is to C4DOS what Windows 3.x was to MS-DOS: a program started
 from `AUTOEXEC.BAT` that takes over the screen and gives you windows, a
@@ -238,6 +238,12 @@ and on the device line it needs, the way slots 9-15 are. As built:
 | 26 | `gen(h)` | **added in G0**: image `h`'s heap generation, or with `h` = 0 the caller's own (the image DOS last started); 0 without HEAP.SYS |
 | 27 | `setgen(g)` | **added in G0**: make generation `g` current; returns the previous one, -1 without HEAP.SYS |
 
+Later versions added 28 and 29 (v5, G4: `home()`, `drives()`), 30 (v6,
+G5: `drive()`) and **31 (v7, G6): `image(h)`**, which makes `h` the image
+DOS counts as running -- the parent of what it loads -- and returns the
+one before; grin's game window needs it (3.6, "As built in G6").
+`docs/c4dos-design.md` "API versions" has them all.
+
 `include/c4dos.h` documents and wraps every slot, through the invoke
 stub. **Changed from the draft**, which kept c4cc programs to slots
 0-18: the stub calls DOS's functions as ordinary calls, so it serves
@@ -395,7 +401,9 @@ What G1 added, and why:
 `grin.h` adds what only grin has, such as `grin_exec(cmdline, how)`
 (deferred, see the rules below) and the game-window calls (3.6). *As
 built in G3* it has `GRIN_RESIDENT` and `grin_present()`; `grin_exec`
-comes with the DOS programs (G5), the game-window calls with G6.
+comes with the DOS programs (G5). *As built in G6* the game-window calls
+are not in `grin.h` but in the table itself (gkit.h, version 2), since
+the games are DOS programs that never link `import.c`: 3.6.
 
 **One source, two hosts.** In the C4IX desktop these names are the real
 functions, linked in. A grin application links **`grin/import.c`** in
@@ -456,6 +464,9 @@ beside the draw command it issues.
     application...", and it is unloaded at once). A first launch whose
     `main` does not return `GRIN_RESIDENT` (or exits) is dead at once.
     At most 16 applications and 32 classes.
+    (G6: a program that is not an application goes to `grin_dos`, which
+    runs it in a window or full screen as Program Manager's item for it
+    says, 3.6.)
 
 A complete application under grin:
 
@@ -623,6 +634,78 @@ is refused while a DOS program runs.
   item is greyed and says that comes with G6.
 - **Exit grin** is refused, with the same message, while a DOS program
   runs (which can only be a DOS Prompt's, waiting for a line).
+
+*As built in G6* (`src/grin/fwin.c`, and each game's bare platform
+layer):
+
+- **The table.** `struct grin_kit` (gkit.h) is version 2: after `hello`
+  come `fwin_open(title, w, h, flags)`, `fwin_frame(pixels, w, h, pitch,
+  pal)` and `fwin_poll(ev)`, words 5 to 7, before the kit's functions. A
+  game declares those eight words itself and needs nothing else of
+  grin's; every application is built with grin, so moving the kit's
+  functions one word once broke nothing (the "table only grows" rule
+  holds from here). `flags` 1 says the mouse steers.
+- **A game finds grin** when slot 25 holds the table (C4DOS v4 or later,
+  the magic, version 2). grin takes it out of slot 25 while a
+  full-screen program has the display (`apps_publish`), so a game that
+  finds it can always have a window, and one that does not takes the
+  display as at `A>`. In each bare layer the C4IX back-end's trio is
+  pointed at grin: Doom's `dg_take` says the display is not the game's,
+  and `dg-gui.c` asks for the window it asks for on C4IX when a program
+  has the display (it says so on the console); Tyrian's and ROTT's
+  `*_open_display` likewise; Wolf3D's `plat-bare.c` opens grin's window
+  in `plat_open`. Never `gui_attach`. 50 to 80 lines each, the table's
+  declaration included.
+- **`fwin_frame`** copies the frame into a buffer of grin's (one, with
+  its palette) and damages the window's client area. grin's next redraw,
+  which the poll makes at once for a fresh frame rather than within 25
+  ms, sends it as `GUI_BLIT8`, scaled 1x or 2x by the host. Copied rather
+  than kept as a pointer, so that a redraw for another window's sake (a
+  Clock's tick, a window dragged over it) always has a whole frame.
+- **`fwin_poll`** runs one pass of grin's loop when its queue is empty
+  and it has not run one since it last said "none" (`grin_pump_game`:
+  `pass(PASS_GAME)`, which naps never and starts no screen saver -- the
+  game keeps its own time), then returns the next event in gui.h's form,
+  0 for none, -1 once the window has gone. Around the pass it switches
+  to grin's heap generation (`setgen`) and to grin's image (C4DOS v7's
+  `image()`, slot 31, new): without that an application started from
+  Program Manager while a game played would have been the game's child,
+  and C4DOS would have unloaded it with the game while its windows were
+  grin's.
+- **Keys** go to the game only while its window has the focus and no
+  dialog or menu holds them, all but Ctrl+Esc (the Task List); grin's
+  loop gives them to it before the kit sees them (`fwin_event`), since
+  the kit draws the whole scene again after every key. When the window
+  loses the focus the game is told (`GUI_EV_FOCUS`) and every key it
+  holds is let go. Mouse positions are in the frame's pixels.
+- **Pointer lock**, for a game that steers with the mouse (Tyrian, ROTT):
+  over its frame the window's pointer is `GUI_PTR_LOCK` ("Click to
+  capture the mouse"), so the click on the window locks it
+  (libjs/display.js); grin's event mask has `GUI_M_REL`, so the motion
+  comes as `GUI_EV_REL` and goes to the game alone (in frame pixels, the
+  remainder kept), with its buttons, until the first plain move, which
+  says Esc let it go. Losing the focus lets it go too. Doom and Wolf3D
+  take only keys, as full screen, and keep the arrow.
+- **Sizes**: the window's Size menu, 1x (320x200 client) or 2x (640x400);
+  2x when it fits the area (800x600), else 1x (at 640x480 a 2x window is
+  8 pixels wider than the screen).
+- **Launching**: Program Manager's `window` items (the four games, the
+  default now: `Doom=DOOM,game,window`), through `grin_window`, which
+  queues the line as `grin_full` does; at the top of the loop `win_run`
+  sets `dos_busy`, puts a sink on the console that keeps the last 200
+  bytes, and runs the line with DOS's `exec`, the display kept. A program
+  that ends without opening a window gets a message box with its last
+  line ("HELLO ended without opening a window. It said: yello"). File
+  Manager's double click on a `.c4r` and File > Run... reach `grin_dos`
+  when the program is not an application: the first Program Manager item
+  that runs the same program says window or full screen, as a PIF did;
+  with none, full screen. A game typed in a DOS Prompt plays in a window
+  too, its text in the DOS Prompt.
+- **Closing**: the window closed (control menu, End Task) makes the next
+  poll say -1, which each game takes as quit (Doom, Tyrian and ROTT
+  `exit(0)`, Wolf3D its quit event). At the top of the loop, after any
+  DOS program, `fwin_end` closes a window the program left, frees the
+  frame and lets the mouse go; `snd_reset()` quiets the sound card.
 
 ### 3.7 Redirection, and DOS Prompt windows
 
@@ -848,7 +931,8 @@ alone), `DOSFILT` (a c4cc filter, `src/tests/dosfilt.c`; `-r` reads with
     from slots 9-12. A disk file's size is fetched when it is selected,
     since the disk has no size query short of reading the file.
   - **Double click:**
-    - a `.c4r` runs, asking full screen or window the first time;
+    - a `.c4r` runs (G6: as the Program Manager item that names it
+      says, window or full screen, else full screen; it does not ask);
     - a text file (`.txt`, `.c`, `.bat`, `.ini`) opens in Notepad;
     - a `.bat` can also be run in a DOS Prompt.
   - **Copy and Delete** work through DOS, on the RAM disk and on
@@ -866,7 +950,7 @@ alone), `DOSFILT` (a c4cc filter, `src/tests/dosfilt.c`; `-r` reads with
   screen saver).
 - **DOS Prompt** (built in, G5): 3.7.
 - **Games**: Program Manager items, full screen from G5 and windowed
-  from G6.
+  from G6, their default since (`Doom=DOOM,game,window`).
 
 ## 5. Milestones
 
@@ -1272,6 +1356,94 @@ Deviations and findings:
 - **Browser:** Doom in a window beside Clock and Notepad, typing in
   Notepad while the demo plays. Frames per second are measured windowed
   and full screen for each game.
+
+*Done, branch `grin-g6` (2026-10-27), on `grin-plan` afccbdb (smp fb313d0
+already in it).* What was built: 3.6 ("As built in G6"), C4DOS API v7
+(`docs/c4dos-design.md`), and each game's bare platform layer, on a
+`grin-g6` branch of its own repository (wolf3d 1531fc2, doom 0de63a9,
+tyrian be9c515, rott 244588f, each on its `c4` branch's commit).
+
+- **grin:** `src/grin/fwin.c` (the window, its events, pointer lock,
+  sizes, the windowed launch), grin.c's `pass(PASS_GAME)`, `win_run` and
+  the table out of slot 25 during full screen, Program Manager's window
+  items and `grin_dos`; the kit's `wk_menu_open()`.
+- **C4DOS:** slot 31, `image(h)`, version 7.
+- **Games:** Doom, Tyrian and ROTT keep their C4IX-shaped window trios,
+  pointed at grin; Wolf3D's `plat-bare.c` opens grin's window itself.
+  50 to 80 lines each with the table's declaration. Full screen and the
+  bare machine unchanged.
+- **Tests:** test-grin's G6 checks (174 in all): Doom from Program
+  Manager in a window, 320x200 frames at 2x in the window's rectangle at
+  800x600, Program Manager drawn beside it, the Clock's seconds advancing
+  meanwhile, Notepad (switched to) taking typing while Doom draws on;
+  its control menu's Close ends Doom, `HEAP_USED` back where it was to
+  the byte (5,973,954 both times) and again for a second round; Wolf3D
+  from File Manager, Tyrian and ROTT each drawing a frame in a window and
+  closed; File > Run... `DOOM -timedemo demo3 -show` in a window, its Run
+  box opened meanwhile and left open over it while the timedemo plays
+  its 2,134 frames to the end by itself, then CLOCK typed into that box
+  starts a Clock and the Task List has no Doom (3.3's generation check).
+  test-c4dos-heap's `dosexec image`. G5's full-screen Doom rounds set
+  Doom's item to full screen by Properties first.
+- **Browser** (Chrome 151 over CDP on 9222, the page served from the
+  worktree on 8494, `web-grin-g6.mjs`, no page errors): Doom in a window
+  at 800x600 beside a Clock and Notepad, typing in Notepad while the demo
+  plays, Size > 1x and back, End Task closing it with the Clock and
+  Notepad still there. Screenshots in the session notes' `grin-g6-shots/`.
+
+**Frames per second** in the browser (Chrome 151 on the user's machine,
+`?system=c4dos`, 15 s each, counted as the 8-bit frames the page drew;
+each from a fresh boot at 640x480, so the windows are 1x, unless said):
+
+| game, and what it was doing | window | full screen |
+|---|---|---|
+| Doom, its demo | 29.8 (1x); 29.7 at 2x and 31.6 at 1x at 800x600 beside Clock and Notepad | 42.1 |
+| Wolfenstein 3D, floor 1, standing | 70 (its cap) | 69.9 |
+| Tyrian, its opening | 10.9 | 11.2 |
+| Rise of the Triad, its opening and demo | 11.3 | 10.7 |
+
+Doom loses about 30% in a window: each frame is copied once more, and
+grin's redraw draws the window's chrome and whatever else the damage
+touches (a Clock's tick widens it) before the blit; the others are held
+by their own pace, not by the drawing.
+
+Deviations and findings:
+
+- **The game-window calls are in the table, not in `grin.h`**, at words 5
+  to 7 of version 2: the games are DOS programs and never link
+  `import.c`, so they read slot 25 themselves. Putting them before the
+  kit's functions moved those one word, once (every application is built
+  with grin).
+- **C4DOS v7, `image(h)`**, not in the plan: without it an application
+  started from Program Manager while a game played was the game's child,
+  and C4DOS unloaded it with the game while grin still had its windows.
+- **`fwin_frame` copies the frame**; the plan had grin keep the game's
+  pointer. A copy means a redraw for another window's sake always has a
+  whole frame, whatever the game is doing to its buffer.
+- **Pointer lock only for a game that steers with the mouse** (Tyrian,
+  ROTT, `fwin_open`'s flag); Doom and Wolf3D take keys only, as they do
+  full screen.
+- **The table leaves slot 25 while a full-screen program runs**, so the
+  game's bare layer needs no second test for "grin is here but has given
+  the display up".
+- **Programs started from File Manager or File > Run** follow Program
+  Manager's item for the same program (window or full screen), as a PIF
+  did; the plan's "asking full screen or window the first time" is not
+  built. A windowed program that never opens a window gets a message box
+  with its console's last line.
+- **Games typed in a DOS Prompt** play in a window too, their console
+  text in the DOS Prompt.
+- **Program Manager's games default to `window`**; a PROGMAN.INI written
+  before G6 keeps `full` until its Properties change it.
+- **Doom's console message** under grin is "a program has the display;
+  playing in the window" (dg-gui.c's, unchanged); grin keeps the windowed
+  launch's console text, so no one sees it unless the game fails.
+- At 640x480 a 2x window is 8 pixels wider than the screen, so 1x is the
+  default there.
+- **Found on the way:** the shell's `time` on helios (dash) prints no
+  `real` line; test-grin's own helpers `endTask`/`inTasks` miss Task List
+  rows drawn after its buttons in a partial frame (G6's checks use
+  `endTask2`, which finds rows by place).
 
 **G7: finishing**
 

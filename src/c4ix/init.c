@@ -239,38 +239,40 @@ static int init_is(char *s, char *opt) {
 // put whatever you named into every role in turn. Booting to a shell
 // now needs no arguments at all, and the tour is behind --demo.
 static void init_usage() {
-    kputs("c4ix -- a small Unix-like kernel for the C4 virtual machine\n");
-    kputs("\n");
-    kputs("usage: c4ix.c4r [OPTION] [PROGRAM [ARGUMENT]...]\n");
-    kputs("\n");
-    kputs("  (no arguments)     boot to an interactive shell\n");
-    kputs("  PROGRAM [ARG]...   boot, run PROGRAM with ARGs, shut down\n");
-    kputs("  --demo IMAGE...    run the built-in demonstrations, below\n");
-    kputs("  -h, --help         print this and shut down\n");
-    kputs("  -q                 accepted and ignored, so older command\n");
-    kputs("                     lines keep working\n");
-    kputs("\n");
-    kputs("PROGRAM is an image path as the host filesystem sees it. The\n");
-    kputs("SHELL expands a bare name to c4ix-NAME.c4r or NAME.c4r; init\n");
-    kputs("does not, so name the image in full here.\n");
-    kputs("\n");
-    kputs("--demo takes six images and uses each for a fixed role:\n");
-    kputs("  1  calls printf directly -- proves redirection reaches a\n");
-    kputs("     program that has never heard of C4IX\n");
-    kputs("  2  uses libc4ix syscalls\n");
-    kputs("  3  writer and 4 reader of a pipeline\n");
-    kputs("  5  a shell, and 6 a script for it to run\n");
-    kputs("Fewer than six still runs the stages it has arguments for,\n");
-    kputs("so a short list puts one image into several roles.\n");
-    kputs("\n");
-    kputs("  c4ix.c4r --demo c4ix-hello.c4r c4ix-uhello.c4r c4ix-echo.c4r \\\n");
-    kputs("           c4ix-wc.c4r c4ix-sh.c4r src/c4ix/user/test.sh\n");
-    kputs("\n");
-    kputs("  c4ix.c4r --desktop   the web page's boot: the root archive unpacks first,\n");
-    kputs("                       with a loading screen, then the shell runs\n");
-    kputs("                       \"desktop &\" and \"top\", as if they were typed\n");
-    kputs("  c4ix.c4r -e CMD      the shell runs CMD first, as if it were typed (up\n");
-    kputs("                       to four, after --desktop's own if both are given)\n");
+    kputs("c4ix -- a small Unix-like kernel for the C4 virtual machine\n"
+          "\n"
+          "usage: c4ix.c4r [OPTION] [PROGRAM [ARGUMENT]...]\n"
+          "\n"
+          "  (no arguments)     boot to an interactive shell\n"
+          "  PROGRAM [ARG]...   boot, run PROGRAM with ARGs, shut down\n"
+          "  --demo IMAGE...    run the built-in demonstrations, below\n"
+          "  -h, --help         print this and shut down\n"
+          "  -q                 accepted and ignored, so older command\n"
+          "                     lines keep working\n"
+          "\n"
+          "PROGRAM is an image path as the host filesystem sees it. The\n"
+          "SHELL expands a bare name to c4ix-NAME.c4r or NAME.c4r; init\n"
+          "does not, so name the image in full here.\n"
+          "\n"
+          "--demo takes six images and uses each for a fixed role:\n"
+          "  1  calls printf directly -- proves redirection reaches a\n"
+          "     program that has never heard of C4IX\n"
+          "  2  uses libc4ix syscalls\n"
+          "  3  writer and 4 reader of a pipeline\n"
+          "  5  a shell, and 6 a script for it to run\n"
+          "Fewer than six still runs the stages it has arguments for,\n"
+          "so a short list puts one image into several roles.\n"
+          "\n"
+          "  c4ix.c4r --demo c4ix-hello.c4r c4ix-uhello.c4r c4ix-echo.c4r \\\n"
+          "           c4ix-wc.c4r c4ix-sh.c4r src/c4ix/user/test.sh\n"
+          "\n"
+          "  c4ix.c4r --desktop   the web page's boot: the root archive\n"
+          "                       unpacks first, with a loading screen,\n"
+          "                       then the shell runs \"desktop &\" and\n"
+          "                       \"top\", as if they were typed\n"
+          "  c4ix.c4r -e CMD      the shell runs CMD first, as if it were\n"
+          "                       typed (up to four, after --desktop's own\n"
+          "                       if both are given)\n");
 }
 
 // The guided tour. argc/av are shifted past --demo, so av[1] is the

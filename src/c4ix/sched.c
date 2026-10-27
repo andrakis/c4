@@ -1362,6 +1362,7 @@ void sched_init(int interval) {
         smp_ncpu = __c4_cpu_count();
         if (smp_ncpu > CPU_MAX) smp_ncpu = CPU_MAX;
     }
+    kprintf("c4ix: %d processor%s\n", smp_ncpu, (smp_ncpu > 1) ? "s" : "");
     if (smp_ncpu > 1) {
         // The boot CPU's state moves into the window, where it is its
         // own: a word at a time, since memcpy is the host's and writes the
@@ -1414,6 +1415,7 @@ void sched_init(int interval) {
         sched_interval = interval;
         __c4_configure(C4IX_CONF_HANDLER, (int)&sched_trap);
         __c4_configure(C4IX_CONF_INTERVAL, interval);
+        kprintf("c4ix: cycle interval set to %dk\n", interval / 1024);
     }
 
     // and the other CPUs, each on a stack of its own
@@ -1424,6 +1426,7 @@ void sched_init(int interval) {
             exit(-1);
         }
         __c4_cpu_start(k, (int)&smp_ap, smp_stack[k] + SMP_STACK_BYTES);
+        kprintf("c4ix: CPU %d stack allocated: 0x%08x, CPU booting\n", k, smp_stack[k]);
         ++k;
     }
     sched_banner();
@@ -1434,19 +1437,24 @@ void sched_init(int interval) {
 // the one heap, each with nothing of its own but its window (and, past
 // CPU 0, its idle task's stack, from the heap).
 static void sched_banner() {
-    int hb, he, mb;
+    int hb, he, mb, bs;
     if (host_has(C4IX_I_C4MJS)) {
         hb = *(int *)C4IX_HEAP_BASE;
         he = *(int *)C4IX_HEAP_END;
         // the heap ends a megabyte below the top, under the boot stack
-        mb = (he + 2 * 1048576 - 1) / 1048576;
-        kprintf("c4ix: %d MB of memory: the kernel below 0x%x, the heap to 0x%x (%d KB), the boot stack above\n",
-            mb, hb, he, (he - hb) / 1024);
+        bs = (he + 2 * 1048576 - 1);
+        mb = bs / 1048576;
+        kprintf("c4ix: %d MB of memory:\n", mb);
+        kprintf("  [mem 0x%08x-0x%08x] Kernel\n", 0, hb - 1);
+        kprintf("  [mem 0x%08x-0x%08x] Heap (%d MB)\n", hb, he - 1, ((he - hb) / 1024) / 1024);
+        kprintf("  [mem 0x%08x-0x%08x] Boot stack (%d MB)\n", he, bs, (((bs + 1) - he) / 1024) / 1024);
     }
-    if (smp_ncpu > 1)
-        kprintf("c4ix: %d processors, %s; they share all memory and the heap, each with a %d-byte window of its own at 0x%x\n",
-            smp_ncpu, host_has(C4IX_I_PAR) ? "a thread each, all at once" : "simulated, taking turns on one thread",
+    
+    if (smp_ncpu > 1) {
+        kprintf("  %s\n  CPUs share all memory and the heap\n  each with a %d-byte window of its own at 0x%08x\n",
+            host_has(C4IX_I_PAR) ? "a thread each, all at once" : "simulated, taking turns on one thread",
             256, CPU_WINDOW);
+    }
 }
 
 // Shutdown, from the kernel task: the other CPUs halt. Each takes the

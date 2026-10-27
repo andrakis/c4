@@ -84,9 +84,12 @@ int main(int argc, char **argv) {
         // several CPUs: each one's load, and which runs each task
         smp = b->h.ncpu > 1;
         if (smp) {
-            uprintf("%d CPUs:", b->h.ncpu);
+            uprintf("CPUs: ", b->h.ncpu);
             k = 0;
-            while (k < b->h.ncpu && k < CPUSTAT_CPUS) { uprintf(" cpu%d %d%%", k, cpu_load(a, b, k)); ++k; }
+            while (k < b->h.ncpu && k < CPUSTAT_CPUS) {
+                uprintf(" %d:%02d%%", k, cpu_load(a, b, k));
+                ++k;
+            }
             uprintf("\n");
         }
         upadhdr("ID", 4);

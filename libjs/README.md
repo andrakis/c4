@@ -71,7 +71,7 @@ for `libjs/` that adds them to every response, and the page registers it
 and reloads once on the first visit. A server that sends them, such as
 `serve.mjs --isolate`, leaves it nothing to do.
 
-URL parameters (from `web/app.js`). The page's Configuration button shows them as a form, and OK reloads the page with the ones changed:
+URL parameters (from `web/app.js`). The page's Configuration button shows them as a form, and OK reloads the page with the ones changed. Its Machine tab has the system, speed, processors and memory, with presets: Single Core, and Dual, Quad and Octo CPU (2, 4 and 8 processors, a thread each). The Other tab has the rest:
 
 | Parameter | Meaning |
 |---|---|

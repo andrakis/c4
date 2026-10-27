@@ -166,17 +166,18 @@ const opts = {
 // Configuration: the URL's parameters (above) as a form. OK writes the ones
 // that differ from their defaults into the URL, keeps any it does not know,
 // and so boots the machine again with them. A text box takes any value and
-// suggests the usual ones.
+// suggests the usual ones. Two tabs: Machine (what it is) and Other
+// (everything else: the ones an entry has no tab for).
 const CONFIG = [
-  { key: 'system', label: 'System', kind: 'select', def: 'c4ix',
+  { key: 'system', label: 'System', kind: 'select', def: 'c4ix', tab: 'machine',
     options: Object.entries(SYSTEMS).map(([k, s]) => [k, s.label]) },
-  { key: 'mhz', label: 'Speed (MHz)', kind: 'text', options: ['20', '50', '100', '200', '400', '800'],
+  { key: 'mhz', label: 'Speed (MHz)', kind: 'text', tab: 'machine', options: ['20', '50', '100', '200', '400', '800'],
     help: `paced to this clock; empty is the system's own (${sys.mhz || 100})` },
-  { key: 'cpus', label: 'Processors', kind: 'text', options: ['1', '2', '4', '8'],
+  { key: 'cpus', label: 'Processors', kind: 'text', tab: 'machine', options: ['1', '2', '4', '8'],
     help: 'empty or 1 is one; more are simulated, taking turns' },
-  { key: 'parallel', label: 'A thread each', kind: 'flag',
+  { key: 'parallel', label: 'A thread each', kind: 'flag', tab: 'machine',
     help: 'several processors at once, each on a worker (needs the page cross-origin isolated)' },
-  { key: 'mem', label: 'Memory (MB)', kind: 'text', options: ['32', '64', '128', '256'],
+  { key: 'mem', label: 'Memory (MB)', kind: 'text', tab: 'machine', options: ['32', '64', '128', '256'],
     help: `the arena; empty is the system's own (${sys.mem || 64})` },
   { key: 'snd', label: 'Sound card', kind: 'onoff', def: true },
   { key: 'fpu', label: 'FPU', kind: 'onoff', def: true, help: 'off: floats in software' },
@@ -193,10 +194,69 @@ const CONFIG = [
   { key: 'disk', label: 'Disk URL', kind: 'text', options: [], help: 'its disk (a directory with an index.json)' },
 ];
 
+// Presets on the Machine tab: the processors and how they run. Each
+// fills those two fields in, and OK boots with them as with any other.
+const PRESETS = [
+  { label: 'Single Core', cpus: '', parallel: false, help: 'one processor' },
+  { label: 'Dual CPU', cpus: '2', parallel: true, help: 'two processors, a thread each' },
+  { label: 'Quad CPU', cpus: '4', parallel: true, help: 'four processors, a thread each' },
+  { label: 'Octo CPU', cpus: '8', parallel: true, help: 'eight processors, a thread each' },
+];
+const TABS = [['machine', 'Machine'], ['other', 'Other']];
+
 const cfgDialog = $('config');
 const cfgFields = $('config-fields');
 const cfgInputs = {};
+const cfgTabs = document.createElement('div');
+cfgTabs.className = 'cfg-tabs';
+cfgTabs.setAttribute('role', 'tablist');
+const cfgPanels = {};
+for (const [t, name] of TABS) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.textContent = name;
+  b.setAttribute('role', 'tab');
+  b.dataset.tab = t;
+  b.addEventListener('click', () => cfgTab(t));
+  cfgTabs.append(b);
+  const panel = document.createElement('div');
+  panel.className = 'cfg-panel';
+  panel.setAttribute('role', 'tabpanel');
+  cfgPanels[t] = panel;
+}
+cfgFields.append(cfgTabs);
+// the presets, first on the Machine tab
+const cfgPresets = document.createElement('div');
+cfgPresets.className = 'cfg-presets';
+for (const pr of PRESETS) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.textContent = pr.label;
+  b.title = pr.help;
+  b.addEventListener('click', () => {
+    cfgInputs.cpus.value = pr.cpus;
+    cfgInputs.parallel.checked = pr.parallel;
+    cfgPresetShow();
+  });
+  pr.button = b;
+  cfgPresets.append(b);
+}
+const presetLabel = document.createElement('label');
+presetLabel.textContent = 'Preset';
+cfgPanels.machine.append(presetLabel, cfgPresets);
+for (const t of Object.keys(cfgPanels)) cfgFields.append(cfgPanels[t]);
+function cfgTab(t) {
+  for (const b of cfgTabs.children) b.setAttribute('aria-selected', String(b.dataset.tab === t));
+  for (const [k, panel] of Object.entries(cfgPanels)) panel.hidden = k !== t;
+}
+// the preset the two fields now say, marked
+function cfgPresetShow() {
+  const cpus = cfgInputs.cpus.value.trim() === '1' ? '' : cfgInputs.cpus.value.trim();
+  for (const pr of PRESETS)
+    pr.button.classList.toggle('on', pr.cpus === cpus && (pr.parallel === cfgInputs.parallel.checked || !pr.cpus));
+}
 for (const c of CONFIG) {
+  const panel = cfgPanels[c.tab || 'other'];
   const id = `cfg-${c.key}`;
   const label = document.createElement('label');
   label.htmlFor = id;
@@ -217,20 +277,22 @@ for (const c of CONFIG) {
       const list = document.createElement('datalist');
       list.id = `${id}-list`;
       for (const v of c.options) list.append(new Option(v));
-      cfgFields.append(list);
+      panel.append(list);
       input.setAttribute('list', list.id);
     }
   }
   input.id = id;
   cfgInputs[c.key] = input;
-  cfgFields.append(label, input);
+  panel.append(label, input);
   if (c.help) {
     const help = document.createElement('div');
     help.className = 'help';
     help.textContent = c.help;
-    cfgFields.append(help);
+    panel.append(help);
   }
 }
+cfgInputs.cpus.addEventListener('input', cfgPresetShow);
+cfgInputs.parallel.addEventListener('change', cfgPresetShow);
 
 // the form from a URL's parameters
 function cfgLoad(p) {
@@ -242,6 +304,7 @@ function cfgLoad(p) {
     else input.value = p.get(c.key) ?? '';
   }
   if (p.get('image')) cfgInputs.system.value = which;
+  cfgPresetShow();
 }
 
 // the URL's parameters from the form: the defaults left out, others kept
@@ -261,6 +324,7 @@ function cfgParams() {
 
 $('configure').addEventListener('click', () => {
   cfgLoad(new URLSearchParams(location.search));
+  cfgTab('machine');
   cfgDialog.showModal();
 });
 $('config-cancel').addEventListener('click', () => cfgDialog.close());

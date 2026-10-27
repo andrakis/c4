@@ -234,8 +234,9 @@ c4sc at the DOS prompt.
 
 ### API versions
 
-The table is 32 words, zeroed at boot. Slot 5 is the version, 6 since
-2026-10-26 (5 from 2026-10-25, 4 from 2026-10-24).
+The table is 32 words, zeroed at boot; v7 fills its last, 31. Slot 5 is
+the version, 7 since 2026-10-27 (6 from 2026-10-26, 5 from 2026-10-25, 4
+from 2026-10-24).
 
 | slot | v1 | | slot | v2 / v3 |
 |---|---|---|---|---|
@@ -284,6 +285,25 @@ and conwrite, conread (16, 17) follow `REDIR.SYS`'s redirections
 as the program that installed it: a program it loads meanwhile is that
 program's child, not the child of whatever DOS was running when it asked
 for input. `include/c4dos.h` has `dos_drive()`.
+
+**v7** (2026-10-27, grin's G6: games in a window):
+
+| slot | call | returns |
+|---|---|---|
+| 31 | `image(h)` | the image DOS counted as running, after making `h` that image; `h` = 0 only asks, and a handle that is not loaded changes nothing |
+
+The image DOS counts as running is the parent of what it loads (an image
+unloaded takes its children with it), the owner of the files it opens for
+writing, and `gen(0)`'s answer. DOS sets it whenever it calls into an
+image, and a sink is called as the image that installed it; but a child
+can also call a shell's code directly, not through DOS. grin's game
+window is one: a game calls grin's `fwin_poll`, which runs grin's loop,
+and an application started from Program Manager meanwhile would have been
+the game's child, unloaded with the game while its windows were still
+grin's. So the poll says `image(grin's own handle)` and gives the game's
+back after, as it says `setgen` for the heap. `include/c4dos.h` has
+`dos_image()`; `dosexec image` (test-c4dos-heap) checks that a load made
+while another image is named is that image's child and goes with it.
 
 v5's `create`, `write`, `close` (2-4) and `unlink` (18) reach drives:
 "The home drive", below. `include/c4dos.h` has `dos_home()` and

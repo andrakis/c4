@@ -1833,6 +1833,19 @@ int dos_api_setgen (int g) {
   gen_set(g);
   return old;
 }
+// v7: the image DOS counts as running -- the parent of what it loads, the
+// owner of the files it opens for writing, gen(0)'s answer -- for a
+// shell whose code a child calls directly, not through DOS. grin's game
+// window is one: the game calls grin's poll, which runs grin's loop, and
+// an application started from there is grin's child, not the game's,
+// as a sink's call makes it (sink_call). h = 0 only asks; a handle that
+// is not loaded changes nothing. Returns the image that was running.
+int dos_api_image (int h) {
+  int old;
+  old = g_cur_img;
+  if (h && img_find(h) >= 0) g_cur_img = h;
+  return old;
+}
 
 // ---- API v2: enumeration, and handing memory back ------------------------
 // v1 could create, write, open and read a file BY NAME. That is enough
@@ -2530,7 +2543,7 @@ int main (int argc, char **argv) {
   g_api[2] = 0;                                // filled after CONFIG.SYS
   g_api[3] = (int)&dos_api_write;
   g_api[4] = (int)&dos_api_close;
-  g_api[5] = 6;                                // API version
+  g_api[5] = 7;                                // API version
   g_api[6] = (int)&dos_api_open;
   g_api[7] = (int)&dos_api_read;
   g_api[8] = (int)&dos_api_rclose;
@@ -2589,6 +2602,8 @@ int main (int argc, char **argv) {
   g_api[29] = (int)&dos_api_drives;
   // v6: the prompt's drive, always there
   g_api[30] = (int)&dos_api_drive;
+  // v7: the image counted as running, for a shell called into directly
+  g_api[31] = (int)&dos_api_image;
 #if C4DOS_CLOCK
   // Same rule for the clock: offered only when the hardware was
   // declared, so a caller that checks the slot is told the truth.

@@ -416,3 +416,19 @@ int dos_drive () {
   if (dos_version() < C4DOS_API_V6 || !__c4dos_api[C4DOS_SLOT_DRIVE] || !__c4dos_arm()) return 0;
   return __c4dos_call1((int *)__c4dos_api[C4DOS_SLOT_DRIVE], 0);
 }
+
+// ---- v7: whose code is running ---------------------------------------------
+//
+// The image DOS counts as running is the parent of what it loads, the
+// owner of the files it opens for writing, and gen(0)'s answer. A shell
+// whose code a child calls directly, not through DOS, says "this is mine
+// now" with image(its own handle) and gives the old one back after:
+// grin's game window, whose poll runs grin's loop for the game
+// (docs/grin-plan.md 3.6). image(0) only asks; it is the caller's own
+// handle when asked from its main.
+enum { C4DOS_API_V7 = 7 };
+enum { C4DOS_SLOT_IMAGE = 31 };   // image(h) -> the image that was running (h = 0: no change)
+int dos_image (int h) {
+  if (dos_version() < C4DOS_API_V7 || !__c4dos_api[C4DOS_SLOT_IMAGE] || !__c4dos_arm()) return 0;
+  return __c4dos_call1((int *)__c4dos_api[C4DOS_SLOT_IMAGE], h);
+}

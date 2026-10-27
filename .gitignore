@@ -109,6 +109,7 @@ c4or1k-native
 .c4dos_heap_t/
 # grin's objects (make grin-objs), and the page's own disks (build-images.sh)
 .grin/
+.grinapp/
 libjs/images/
 # what builds and tests write at the top of the tree
 /.bbstore/

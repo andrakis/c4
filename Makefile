@@ -2418,7 +2418,7 @@ GAME_OBJS  :=
 GAME_TESTS :=
 include $(wildcard games/*/c4.mk)
 GAMES_ALL  := wolf3d doom tyrian rott
-c4bb-images: libc-bare-objs grin-objs $(GAME_OBJS)
+c4bb-images: libc-bare-objs grin-objs grin-apps $(GAME_OBJS)
 $(filter-out $(GAME_TESTS),$(GAMES_ALL:%=test-%)):
 	@echo "$@: skipped, games/$(@:test-%=%) is not here (games/README.md)"
 PHONY += $(GAMES_ALL:%=test-%)
@@ -2446,9 +2446,9 @@ PHONY += libc-bare-objs
 # the desktop's are; grin's own with it, so that its files go through
 # libc and bare.c to C4DOS. build-images.sh links it onto the page's
 # C4DOS disk, libjs/images/dos, which boots into it. test-grin drives it.
-GRIN       := grin progman tasklist control
-GRIN_KIT   := draw ui wmcore dialog look95 look31 savers
-GRIN_HDRS  := $(wildcard src/grin/*.h src/winkit/*.h) libjs/guest/gui.h libjs/guest/gui.c
+GRIN       := grin apps progman tasklist control filemgr disk dosprmpt fwin
+GRIN_KIT   := draw ui wmcore dialog look95 look31 savers textgrid
+GRIN_HDRS  := $(wildcard src/grin/*.h src/winkit/*.h) libjs/guest/gui.h libjs/guest/gui.c libjs/guest/snd.h libjs/guest/snd.c
 GRIN_CC    := ./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O $(IMG_G) -c -I src/winkit -I .
 grin-objs: $(GRIN:%=.grin/%.c4o) $(GRIN_KIT:%=.grin/wk-%.c4o)
 .grin/wk-%.c4o: src/winkit/%.c $(GRIN_HDRS) $(C4LC_LISP) .img_g | c4sp32
@@ -2458,9 +2458,35 @@ grin-objs: $(GRIN:%=.grin/%.c4o) $(GRIN_KIT:%=.grin/wk-%.c4o)
 	@mkdir -p .grin
 	$(GRIN_CC) -fno-builtin -I src/c4ix/libc/include $< $@ > /dev/null
 PHONY += grin-objs
+# grin's applications (docs/grin-plan.md 3.4): each a C4DOS program of its
+# own, linked by build-images.sh from its main (src/grin/apps), the kit's
+# class it shows (src/winkit), src/grin/import.c in the kit's place, and
+# the bare libc. All of them are compiled with -D WK_IMPORT, which makes
+# winkit.h's wk grin's (import.c), and kept apart from grin's own objects.
+# askline is test-grin's DOS program, not an application: build-images.sh
+# links it with the bare libc alone.
+GRIN_APPS  := clock calc exitkey notepad askline
+GRIN_APPKIT := clock calc notepad
+grin-apps: $(GRIN_APPS:%=.grinapp/%.c4o) $(GRIN_APPKIT:%=.grinapp/wk-%.c4o) .grinapp/import.c4o
+.grinapp/wk-%.c4o: src/winkit/%.c $(GRIN_HDRS) $(C4LC_LISP) .img_g | c4sp32
+	@mkdir -p .grinapp
+	$(GRIN_CC) -D WK_IMPORT $< $@ > /dev/null
+.grinapp/import.c4o: src/grin/import.c $(GRIN_HDRS) $(wildcard src/c4ix/libc/include/*.h) $(C4LC_LISP) .img_g | c4sp32
+	@mkdir -p .grinapp
+	$(GRIN_CC) -D WK_IMPORT -fno-builtin -I src/c4ix/libc/include -I src/grin $< $@ > /dev/null
+.grinapp/%.c4o: src/grin/apps/%.c $(GRIN_HDRS) $(wildcard src/c4ix/libc/include/*.h) $(C4LC_LISP) .img_g | c4sp32
+	@mkdir -p .grinapp
+	$(GRIN_CC) -D WK_IMPORT -fno-builtin -I src/c4ix/libc/include -I src/grin $< $@ > /dev/null
+PHONY += grin-apps
 test-grin: c4bb-images
 	node libjs/tests/test-grin.mjs
 PHONY += test-grin
+# test-persist: the saves that outlast the page (docs/grin-plan.md 3.8):
+# Doom on the bare machine saves to drive 1 and loads it back on the next
+# boot; Doom under C4DOS saves to B: (HOME=B:), and the stores stay apart
+test-persist: c4bb-images
+	node libjs/tests/test-persist.mjs
+PHONY += test-persist
 
 # test-libc-bare: libc's scanf, fseek and fread (src/c4ix/libc/tests/
 # scantest.c) on the bare machine, against gcc's build of the same.

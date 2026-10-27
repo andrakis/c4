@@ -19,7 +19,7 @@
 //
 // Firmware is loaded from src/c4bb/fw/fw.c4r next to this script.
 
-import { readFileSync, readdirSync, statSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, basename } from 'node:path';
 import { Arena, CONS_RET } from './arena.js';
@@ -172,6 +172,7 @@ async function main(argv) {
             writeFileSync(full, bytes);
           }
         : null,
+      remove: d.writable && d.dir ? name => rmSync(join(d.dir, name), { force: true }) : null,
     }));
   const dev = new Devices(arena, {
     drives,

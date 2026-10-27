@@ -3,10 +3,13 @@
 Status: written 2026-10-24 against `smp` at 6295e18, and revised the
 same day with the user's answers (section 8). **G0 and G1 are built**
 (branches `grin-g0` and `grin-g1`, merged here on 2026-10-24), and
-**G2 is built** (branch `grin-g2`, 2026-10-24). Sections 3.2 and 3.3
-say what G0 built where it differs from the first draft, 3.4 shows the
-window kit's API as G1 built it, and 3.9 and the G2 milestone say what
-G2 built. The rest is plan.
+**G2 is built** (branch `grin-g2`, 2026-10-24), **G3** (branch `grin-g3`,
+2026-10-25), **G4** (branch `grin-g4`, 2026-10-25), **G5** (branch
+`grin-g5`, 2026-10-26) and **G6** (branch `grin-g6`, 2026-10-27).
+Sections 3.2 and 3.3 say what G0 built where it differs from the first
+draft, 3.4 shows the window kit's API as G1 built it and G3's mechanism,
+3.6 and 3.7 say what G5 and G6 built, 3.8 and 3.9 what G2 and G4 built,
+and so do the milestones. The rest is plan.
 
 `grin` is to C4DOS what Windows 3.x was to MS-DOS: a program started
 from `AUTOEXEC.BAT` that takes over the screen and gives you windows, a
@@ -235,6 +238,12 @@ and on the device line it needs, the way slots 9-15 are. As built:
 | 26 | `gen(h)` | **added in G0**: image `h`'s heap generation, or with `h` = 0 the caller's own (the image DOS last started); 0 without HEAP.SYS |
 | 27 | `setgen(g)` | **added in G0**: make generation `g` current; returns the previous one, -1 without HEAP.SYS |
 
+Later versions added 28 and 29 (v5, G4: `home()`, `drives()`), 30 (v6,
+G5: `drive()`) and **31 (v7, G6): `image(h)`**, which makes `h` the image
+DOS counts as running -- the parent of what it loads -- and returns the
+one before; grin's game window needs it (3.6, "As built in G6").
+`docs/c4dos-design.md` "API versions" has them all.
+
 `include/c4dos.h` documents and wraps every slot, through the invoke
 stub. **Changed from the draft**, which kept c4cc programs to slots
 0-18: the stub calls DOS's functions as ordinary calls, so it serves
@@ -371,16 +380,30 @@ What G1 added, and why:
 - **`struct wk_env wk`.** The colours change with the scheme and the
   screen with Control Panel, so they cannot be constants an application
   copies. Keeping them in one struct lets `import.c` reach them through
-  one pointer: `#define wk (*wk_import_env)` before including
-  `winkit.h` turns its `extern struct wk_env wk;` into a pointer, and
-  every `C_FACE` into a load through it.
+  one pointer. *As built in G3*: an application's files are compiled
+  with `-D WK_IMPORT`, under which `winkit.h` declares
+  `extern struct wk_env *wk_import_env;` and `#define wk
+  (*wk_import_env)`, so every `C_FACE` is a load through grin's struct.
+  (G1's idea, the define placed before including `winkit.h`, does not
+  compile: c4lc takes `extern struct wk_env (*wk_import_env);` for a
+  function pointer with its parameters missing; and `clock.c` and
+  `calc.c` are compiled unchanged, so the switch has to come from the
+  command line.)
 - **The host's functions.** Notepad reads and writes files and the file
   box lists folders, and the kit must not know whether that is
   libc4ix or C4DOS's libc. The shell provides them (the desktop's
-  `host.c`); `import.c` can forward them like the rest.
+  `host.c`). *As built in G3*: `import.c` serves memory and files
+  (`wk_alloc`, `wk_free`, `wk_fopen` ... `wk_fclose`) from the
+  application's own libc, so that what an application allocates and
+  opens is its own and goes when it is unloaded; it forwards
+  `wk_readdir` and `wk_clock`, which are grin's.
 
 `grin.h` adds what only grin has, such as `grin_exec(cmdline, how)`
-(deferred, see the rules below) and the game-window calls (3.6).
+(deferred, see the rules below) and the game-window calls (3.6). *As
+built in G3* it has `GRIN_RESIDENT` and `grin_present()`; `grin_exec`
+comes with the DOS programs (G5). *As built in G6* the game-window calls
+are not in `grin.h` but in the table itself (gkit.h, version 2), since
+the games are DOS programs that never link `import.c`: 3.6.
 
 **One source, two hosts.** In the C4IX desktop these names are the real
 functions, linked in. A grin application links **`grin/import.c`** in
@@ -394,6 +417,56 @@ So `calc.c`, `notepad.c` and `clock.c` compile unchanged into both:
 
 Each forwarded call costs a few instructions more, which is nothing
 beside the draw command it issues.
+
+**As built in G3** (`src/grin`):
+
+- **`kitfns.h`** lists the functions an application may call, one line
+  each (`K(type, name, (params), (args))`, `V(...)` for void): the
+  windows, dialogs, clipboard, drawing, schemes and widgets of
+  `winkit.h`, 72 of them. It is included three times: `gkit.h` makes
+  the table's members of it, `import.c` a stub each, `apps.c` the
+  filling. Not in it: the shell's section (`wk_init`, `wk_event`,
+  `wk_tick` and the rest), the screen savers, the accessories (an
+  application links its own), and memory and files (above). New
+  functions go at the end, so the table only grows.
+- **`gkit.h`**: `struct grin_kit` -- `magic` ('GRIN'), `version` (1),
+  `gen` (grin's heap generation, 0 without HEAP.SYS), `env` (`&wk`),
+  `hello`, then the functions.
+- **`import.c`**: every stub runs the kit in grin's generation, `old =
+  setgen(grin); call; setgen(old)` through slot 27, so the plan's
+  "every kit entry point reached from an application brackets setgen"
+  lives here, once, rather than in a wrapper per function in grin. Its
+  constructor finds the table (version 4 or more, slot 25, the magic and
+  version) and calls `hello`: that is how grin tells an application from
+  a DOS program it was asked to start.
+- **`apps.c`**, grin's side:
+  - the table is published in slot 25 by `apps_init` (after `wk_init`)
+    and taken back by `apps_end` (after `wk_close_all`, before
+    `gui_detach`);
+  - **proxies.** The kit calls a class's hooks itself, so for each class
+    an application opens windows of, grin keeps a proxy class whose
+    hooks are trampolines, made to match the real class at every
+    `wk_open` (the application sets `size` first). The table's
+    `wk_open`, `wk_find` and `wk_class_of` are grin's: they take and
+    give the application's own class, so it never sees a proxy;
+  - **every call into an application** is a trampoline: `setgen(app)`,
+    `catch(thunk, &call, &exited)`, `setgen(old)`, with grin's `cur` (the
+    application running, which `wk_open` needs) kept around it;
+  - **exit()**: `exited` marks the application dead, and nothing more is
+    called in it (a dead application's `close` says yes). At the top of
+    the loop, after `wk_tick` (`apps_reap`), a dead application's dialogs
+    and windows are closed, and every application with no window left
+    is unloaded. `unload` is never reached from inside a callback;
+  - **starting one**, `grin_run(cmdline)`: the words, `.c4r` added
+    when the program has no extension; an application loaded already
+    gets its `main` called again; otherwise `load`, refused with a
+    message box when the image did not say hello ("DOOM is not a grin
+    application...", and it is unloaded at once). A first launch whose
+    `main` does not return `GRIN_RESIDENT` (or exits) is dead at once.
+    At most 16 applications and 32 classes.
+    (G6: a program that is not an application goes to `grin_dos`, which
+    runs it in a window or full screen as Program Manager's item for it
+    says, 3.6.)
 
 A complete application under grin:
 
@@ -538,6 +611,102 @@ kept in its properties, as a PIF file kept it:
 message box ("Close Doom before starting another program"). Exit grin
 is refused while a DOS program runs.
 
+*As built in G5* (`src/grin/grin.c`):
+
+- **The loop** is `pass(top)`: the display's events, `wk_tick`, the
+  screen saver, a redraw and a nap, with `apps_reap` only at the top.
+  `grin_pump()` is `pass(0)`. After each top-level pass, `main` runs one
+  DOS program that is waiting, if none is running: a full-screen one
+  (`full_run`) or a DOS Prompt's line (`dosprompt_top`, 3.7).
+- **Full screen.** `grin_full(cmdline)` queues the line, or, while a DOS
+  program runs or waits, says "A DOS program is running (DOOM). Let it
+  finish before starting another." `full_run`: the saver stopped, the
+  pointer hidden, the screen cleared, `gui_detach`, DOS's `exec` of the
+  line; then `gui_attach` with grin's ring at GRIN.INI's size, the event
+  mask, the arrow, `snd_reset()` (when the sound card is fitted),
+  `wk_repoint` and `wk_redraw_all`. The program's text goes to the
+  page's console, as at A>.
+- **What launches one:** a Program Manager item whose mode is `full`;
+  File > Run... and File Manager's double click on a `.c4r`, through
+  `grin_run`, which loads the program and, when it does not say hello,
+  unloads it and gives the line to `grin_full` (so DOS loads it twice,
+  and its constructors run twice; none of the games minds). A `window`
+  item is greyed and says that comes with G6.
+- **Exit grin** is refused, with the same message, while a DOS program
+  runs (which can only be a DOS Prompt's, waiting for a line).
+
+*As built in G6* (`src/grin/fwin.c`, and each game's bare platform
+layer):
+
+- **The table.** `struct grin_kit` (gkit.h) is version 2: after `hello`
+  come `fwin_open(title, w, h, flags)`, `fwin_frame(pixels, w, h, pitch,
+  pal)` and `fwin_poll(ev)`, words 5 to 7, before the kit's functions. A
+  game declares those eight words itself and needs nothing else of
+  grin's; every application is built with grin, so moving the kit's
+  functions one word once broke nothing (the "table only grows" rule
+  holds from here). `flags` 1 says the mouse steers.
+- **A game finds grin** when slot 25 holds the table (C4DOS v4 or later,
+  the magic, version 2). grin takes it out of slot 25 while a
+  full-screen program has the display (`apps_publish`), so a game that
+  finds it can always have a window, and one that does not takes the
+  display as at `A>`. In each bare layer the C4IX back-end's trio is
+  pointed at grin: Doom's `dg_take` says the display is not the game's,
+  and `dg-gui.c` asks for the window it asks for on C4IX when a program
+  has the display (it says so on the console); Tyrian's and ROTT's
+  `*_open_display` likewise; Wolf3D's `plat-bare.c` opens grin's window
+  in `plat_open`. Never `gui_attach`. 50 to 80 lines each, the table's
+  declaration included.
+- **`fwin_frame`** copies the frame into a buffer of grin's (one, with
+  its palette) and damages the window's client area. grin's next redraw,
+  which the poll makes at once for a fresh frame rather than within 25
+  ms, sends it as `GUI_BLIT8`, scaled 1x or 2x by the host. Copied rather
+  than kept as a pointer, so that a redraw for another window's sake (a
+  Clock's tick, a window dragged over it) always has a whole frame.
+- **`fwin_poll`** runs one pass of grin's loop when its queue is empty
+  and it has not run one since it last said "none" (`grin_pump_game`:
+  `pass(PASS_GAME)`, which naps never and starts no screen saver -- the
+  game keeps its own time), then returns the next event in gui.h's form,
+  0 for none, -1 once the window has gone. Around the pass it switches
+  to grin's heap generation (`setgen`) and to grin's image (C4DOS v7's
+  `image()`, slot 31, new): without that an application started from
+  Program Manager while a game played would have been the game's child,
+  and C4DOS would have unloaded it with the game while its windows were
+  grin's.
+- **Keys** go to the game only while its window has the focus and no
+  dialog or menu holds them, all but Ctrl+Esc (the Task List); grin's
+  loop gives them to it before the kit sees them (`fwin_event`), since
+  the kit draws the whole scene again after every key. When the window
+  loses the focus the game is told (`GUI_EV_FOCUS`) and every key it
+  holds is let go. Mouse positions are in the frame's pixels.
+- **Pointer lock**, for a game that steers with the mouse (Tyrian, ROTT):
+  over its frame the window's pointer is `GUI_PTR_LOCK` ("Click to
+  capture the mouse"), so the click on the window locks it
+  (libjs/display.js); grin's event mask has `GUI_M_REL`, so the motion
+  comes as `GUI_EV_REL` and goes to the game alone (in frame pixels, the
+  remainder kept), with its buttons, until the first plain move, which
+  says Esc let it go. Losing the focus lets it go too. Doom and Wolf3D
+  take only keys, as full screen, and keep the arrow.
+- **Sizes**: the window's Size menu, 1x (320x200 client) or 2x (640x400);
+  2x when it fits the area (800x600), else 1x (at 640x480 a 2x window is
+  8 pixels wider than the screen).
+- **Launching**: Program Manager's `window` items (the four games, the
+  default now: `Doom=DOOM,game,window`), through `grin_window`, which
+  queues the line as `grin_full` does; at the top of the loop `win_run`
+  sets `dos_busy`, puts a sink on the console that keeps the last 200
+  bytes, and runs the line with DOS's `exec`, the display kept. A program
+  that ends without opening a window gets a message box with its last
+  line ("HELLO ended without opening a window. It said: yello"). File
+  Manager's double click on a `.c4r` and File > Run... reach `grin_dos`
+  when the program is not an application: the first Program Manager item
+  that runs the same program says window or full screen, as a PIF did;
+  with none, full screen. A game typed in a DOS Prompt plays in a window
+  too, its text in the DOS Prompt.
+- **Closing**: the window closed (control menu, End Task) makes the next
+  poll say -1, which each game takes as quit (Doom, Tyrian and ROTT
+  `exit(0)`, Wolf3D its quit event). At the top of the loop, after any
+  DOS program, `fwin_end` closes a window the program left, frees the
+  frame and lets the mouse go; `snd_reset()` quiets the sound card.
+
 ### 3.7 Redirection, and DOS Prompt windows
 
 **At the prompt.** `DEVICE=REDIR.SYS` lets C4DOS's command line take
@@ -586,6 +755,39 @@ roads, and both have to be redirected.
   can be open. While one runs a command, the others take typing but
   say "busy" on Enter.
 
+*As built in G5.* C4DOS's side -- `REDIR.SYS`, the formatter its
+builtins print through, the console tap, API v6 -- is in
+`docs/c4dos-design.md` ("Redirection: DEVICE=REDIR.SYS"). grin's is
+`src/grin/dosprmpt.c`:
+
+- **A window** is "DOS Prompt N", N the lowest number free, an 80x25
+  `textgrid.c` grid (WK_FIXED). At 640x480 it is cut to the screen's
+  width, so the last three columns and the scroll bar are off its right
+  edge; at 800x600 it fits.
+- **A line typed** is queued; the top of grin's loop runs it: the
+  window's own drive selected first (`exec("B:")`) when DOS's differs --
+  DOS has one prompt drive for everyone, and slot 30 says which it is
+  after each line -- then `sink(dp_write, dp_read, w)`, `exec(line)`,
+  `sink(0, 0, 0)`, and the prompt again.
+- `dp_write` feeds the grid, and draws at once at most every 50 ms, for a
+  program that writes and does not read. `dp_read` pumps grin's loop, in
+  grin's own heap generation, until a line is typed in its window;
+  Ctrl+Z (or Ctrl+D) gives the program the end of its input.
+- **C4DOS calls a sink as the program that installed it**, so an
+  application started while a DOS Prompt's program waits (Clock from
+  Program Manager) is grin's child, not that program's, and is not
+  unloaded with it.
+- **Busy:** the other windows say "grin: busy -- ASKLINE is running"
+  on Enter; Program Manager and File Manager refuse a second DOS program
+  with the message box above. A window whose line runs refuses to close.
+- **EXIT** (any case, spaces around it) closes the window, which looks
+  for the word before DOS sees it.
+- **c4cc programs** run through the tap: their output appears when they
+  return, and a read of fd 0 gets the end of input.
+- **File Manager** runs a `.bat` in a new DOS Prompt, typed at its first
+  prompt, and File > Edit opens the selected file in Notepad (the way to
+  edit a `.bat` now).
+
 ### 3.8 Persistence
 
 The page's existing drive-1 store does the keeping. What is new is that
@@ -626,6 +828,40 @@ games.
 `PROGMAN.INI` (groups and items, each with its title, command line,
 icon and run mode) are ordinary files on the home drive.
 
+**As built in G4.** As above, with these particulars (docs/c4dos-design.md,
+"The home drive", has C4DOS's side whole):
+
+- **The machine** gains `DISK_UNLINK` (0x1cc), a file taken off a
+  writable drive, and the info bit `C4I_DRV` (0x40000), which says the
+  drive registers are fitted. A drive's `remove` hook carries a delete to
+  the host: worker.js posts it, page.js takes the file out of the store
+  (store.js's `deleteFile`), and the CLIs delete it from their directory.
+- **C4DOS** is API v5: slots 28 `home()` and 29 `drives()`; `create`
+  reaches drives; `unlink` and the new `DEL` take files off them; DOS
+  keeps each drive's `c4dos.dir`; `DIR B:` and `COPY x B:`. G0's caveat
+  is resolved: write handles are an indirection, so an unlink no longer
+  moves an open file onto its neighbour, and a program that ends with
+  files open has them closed.
+- **bare.c**, with no DOS, writes to drive 1 and reads it first, as
+  planned. Two things were missing for the games' saves to work at all,
+  under DOS as on the bare machine: a rename (Doom writes `temp.dsg` and
+  renames it; bare.c copies and deletes) and `ftell` on a file being
+  written (Doom pads its saves by it; it said -1, so no save of the bare
+  libc's had ever loaded back).
+- **The page**: `c4dos`, `doom`, `wolf3d` (shared by `wolf3d` and
+  `wolf3d6`, whose files are `.WL1` and `.WL6`), `tyrian` and `rott`
+  stores, beside C4IX's `c4ix`. `?persist=0`, `?persist=reset` and Reset
+  Files act on the current system's alone, and the button names it.
+- **Uploads** (the page's button, from smp) stay one medium, `uploads`,
+  for every system. They are the person's own files (Wolfenstein's
+  registered data, a WAD), read-only on drive 0, where every system
+  reads: the bare games look on drive 1 and then drive 0, C4DOS on A:.
+  They are not a system's saved state, so the one-store-per-system rule
+  is about what systems write; Reset Files leaves them alone, and one
+  upload serves `wolf3d6` bare and under C4DOS. worker.js adds them to
+  drive 0's `c4dos.dir`, so C4DOS lists them on A: and finds them in any
+  case. Forget deletes the one file.
+
 ### 3.9 The disk the page boots
 
 The user wants images of the page's own, with things like booting into
@@ -659,9 +895,23 @@ there (`make grin-objs`, which `c4bb-images` now builds):
 
 `?system=c4dos` boots it (`app.js`). The four bare-machine game systems
 still boot `src/c4bb/images/games`: they move with G4, which gives each
-its own store. The games disk's `CONFIG.SYS` is now made from
+its own store.
+
+**As built in G4.** The bare-machine game systems (`wolf3d`, `wolf3d6`,
+`doom`, `tyrian`, `rott`) boot from `libjs/images/dos` too, each with its
+store. The disk's `CONFIG.SYS` says `DRIVES.SYS HOME=B:`, and
+`notepad.c4r` is on it. `src/c4bb/images/games` stays: build-images.sh
+makes it and links the DOS disk's game files from it, and
+test-c4dos-heap boots it; nothing on the page does. The games disk's `CONFIG.SYS` is now made from
 `src/c4dos/fs/CONFIG.SYS` rather than copied from the shared disk, which
 in a fresh tree is not there yet at that point (G1's note).
+
+**As built in G5.** The disk's `CONFIG.SYS` has `DEVICE=REDIR.SYS TAP`,
+and three DOS programs for redirection are on it: `ASKLINE` (`bare.c`,
+reads a line: `src/grin/apps/askline.c`, linked with the bare libc
+alone), `DOSFILT` (a c4cc filter, `src/tests/dosfilt.c`; `-r` reads with
+`READ` and prints with `printf`, the tap's case) and `HELLO` (c4cc's
+`printf`). The AUTOEXEC's ECHO is no longer cut at fourteen words.
 
 ## 4. The first applications
 
@@ -681,7 +931,8 @@ in a fresh tree is not there yet at that point (G1's note).
     from slots 9-12. A disk file's size is fetched when it is selected,
     since the disk has no size query short of reading the file.
   - **Double click:**
-    - a `.c4r` runs, asking full screen or window the first time;
+    - a `.c4r` runs (G6: as the Program Manager item that names it
+      says, window or full screen, else full screen; it does not ask);
     - a text file (`.txt`, `.c`, `.bat`, `.ini`) opens in Notepad;
     - a `.bat` can also be run in a DOS Prompt.
   - **Copy and Delete** work through DOS, on the RAM disk and on
@@ -697,9 +948,9 @@ in a fresh tree is not there yet at that point (G1's note).
 - **Control Panel** (built in): **Display** (640x480 or 800x600, applied
   at once and saved), Colors (schemes), and Desktop (pattern and
   screen saver).
-- **DOS Prompt** (built in): 3.7.
+- **DOS Prompt** (built in, G5): 3.7.
 - **Games**: Program Manager items, full screen from G5 and windowed
-  from G6.
+  from G6, their default since (`Doom=DOOM,game,window`).
 
 ## 5. Milestones
 
@@ -864,7 +1115,67 @@ Deviations and findings:
   - The C4IX desktop's Calculator still passes `test-desktop.mjs`.
 - **Browser:** Clock and Calculator side by side, at both resolutions.
 
-**G4: persistence and the shell applications**
+*Done, branch `grin-g3` (2026-10-25).* What was built (3.4's "As built
+in G3" has the mechanism):
+
+- **`src/grin`**: `grin.h` (the application header), `gkit.h` and
+  `kitfns.h` (the table), `import.c` (the applications' half), and
+  `apps.c` (grin's: the table in slot 25, proxies and trampolines,
+  `grin_run`, `apps_reap`). `grin.c` calls `apps_init`, `apps_reap`
+  after `wk_tick`, and `apps_end`.
+- **The applications**, `src/grin/apps`: `clock.c` and `calc.c`, a
+  `main` of a few lines each around the kit's `clock_open` and
+  `calc_open`, and `exitkey.c`, test-grin's: a window whose key callback
+  calls `exit(3)`, with 100 KB of its own allocated in `main`. `make
+  grin-apps` compiles them, the kit's `clock.c` and `calc.c` and
+  `import.c` into `.grinapp/`, all with `-D WK_IMPORT` (kept apart from
+  `.grin/`, which build-images.sh links whole into `grin.c4r`).
+  build-images.sh links `clock.c4r`, `calc.c4r` and `exitkey.c4r` onto
+  `libjs/images/dos`, each with the bare libc, about 0.5 MB apiece.
+- **Program Manager**: an Accessories group beside Main, with Clock and
+  Calculator (double click, or Enter on the selected item; Left and
+  Right move between the three items); File > Run..., an input box whose
+  command line `grin_run` starts; Help > About says how many
+  applications are running.
+- **The Task List's Tile**: a window that cannot be resized
+  (Calculator) keeps its size and the others in its row share what is
+  left, so Clock and Calculator fit side by side at 640x480; before, it
+  gave every window an equal column and pushed the Calculator off the
+  screen.
+- **Tests:** test-grin.mjs gains 29 checks (70 in all); web-grin.mjs
+  gains the applications at both sizes (screenshots `grin-g3-640x480`
+  and `grin-g3-800x600`).
+  - Two Clocks (one image: About says 1 running), both ticking in
+    figures (Settings > Digital); End Task on one, the other ticks on;
+    End Task on both, the image is unloaded and `HEAP_USED` is back to
+    the byte (4,928,561 before and after).
+  - Calculator: `12*12=` typed shows `144`.
+  - File > Run... `DOOM`: "DOOM is not a grin application", unloaded.
+  - File > Run... `EXITKEY`; a key: its window is closed, it is
+    unloaded, and `HEAP_USED` is back to the byte, its 100 KB with it;
+    a Clock starts and closes after it.
+  - A Clock left open when the session ends: at `A>`, `MEM` says
+    `programs loaded: 0`, and `CLOCK` there says it needs grin (the
+    table was taken back).
+
+Deviations and findings:
+
+- `-D WK_IMPORT` rather than `#define wk` before the include, and memory
+  and files from the application's own libc rather than forwarded (3.4).
+- The shell's part of `winkit.h` is not offered to applications: an
+  application that called `wk_init` or `wk_tick` would break grin.
+- The `setgen` bracket is in `import.c`'s stubs, one place, not in
+  grin's table entries; drawing calls are bracketed too (two DOS calls
+  each), for uniformity rather than need.
+- `grin_run` starts applications only. A program that does not say
+  hello is refused with a message box; DOS programs come with G5.
+- grin's applications are about 0.5 MB each on the disk, the bare libc
+  linked whole into each, as it is into grin and the games.
+- The headless Clocks read the host's time of day (`GUI_CLOCK` is
+  `Date`), so test-grin waits for the ticks in host time, a second or
+  two.
+
+**G4: persistence and the shell applications** -- done, branch `grin-g4` (below)
 
 - `DRIVES.SYS HOME=`, with writes, `unlink` and `c4dos.dir` upkeep.
 - `bare.c` writes to drive 1 on the bare machine.
@@ -885,6 +1196,77 @@ Deviations and findings:
   - Save a note and reload the page: it is still there.
   - `?persist=reset` forgets it.
 
+*Done, branch `grin-g4` (2026-10-25), with smp 0f93fa2 merged.* What was
+built (3.8 and 3.9 have the persistence; docs/c4dos-design.md, "The home
+drive", C4DOS's):
+
+- **Program Manager** (`progman.c`) reads `PROGMAN.INI` from the home
+  drive, and writes it from the defaults when there is none: Main (File
+  Manager, DOS Prompt, Control Panel, Notepad), Accessories (Clock,
+  Calculator), Games (the four games). A line is
+  `title=command line,icon,mode`, the mode `app`, `full` or `window`.
+  One group is shown at a time, chosen from a list down its left. File >
+  New... and Properties... open one dialog (description, command line, an
+  icon stepped through with its button, the run mode as radio buttons);
+  Delete asks; each writes `PROGMAN.INI` at once. Built-in windows start
+  by command line, `FILEMAN` (or `WINFILE`), `CONTROL` and `PROGMAN`
+  (`grin_start`, which File > Run... uses too). DOS Prompt (`DOSPRMPT`)
+  is greyed and says it comes later; an item whose mode is `full` or
+  `window` says it is a DOS program and to run it at A> (G5, G6).
+- **File Manager** (`filemgr.c`): a drive bar of A:, every drive DOS
+  reports (slot 29) and RAM:, the home drive marked "(files are saved
+  here)"; a list from the drive's `c4dos.dir` or the RAM disk's slots; a
+  status line with the selected file's size, read through when it is
+  selected, or how many files; the list read again when the window comes
+  to the front, and by File > Refresh and F5. A double click opens a text
+  file (`.txt .c .h .bat .ini .cfg .md .doc .sys .dir .frm .lst .json .s`)
+  in Notepad and starts a `.c4r` as an application. File > Copy...
+  (`COPY` through exec, slot 19, offering the home drive, or RAM: from
+  there) and Delete... (unlink, slot 18, after asking).
+- **Notepad** (`apps/notepad.c`, `notepad.c4r`): the kit's `notepad.c`
+  with `notepad_filebox` set, so Open and Save As are the kit's file box;
+  a new document is offered `UNTITLED.TXT` on the home drive. The C4IX
+  desktop leaves the switch off and keeps its typed paths
+  (test-desktop.mjs unchanged).
+- **The file box's folders are DOS's drives.** `disk.c` gives the kit
+  `wk_readdir` (the root lists A:, B:, ... and RAM:; a drive lists its
+  files) and the file functions; `dospath.h` maps the kit's
+  `/B:/NOTE.TXT` to DOS's `B:NOTE.TXT` and back, for grin and for every
+  application's `import.c`.
+- New pictures: File Manager's cabinet, a DOS screen, a notepad, a
+  joystick for the games, a window for any other application.
+- **Tests:** test-grin.mjs gains 43 checks (113 in all), with a drive B:
+  kept as the page keeps a store: the G4 list above, NOTE.TXT saved
+  through the file box onto B: and into its `c4dos.dir`, File Manager's
+  size and Copy, 800x600 in GRIN.INI on B:, then a second boot with what
+  B: kept: grin at 800x600, NOTE.TXT opening in Notepad, and Delete
+  taking it off B: and out of the store. test-persist.mjs (`make
+  test-persist`, in test-libjs.sh): Doom saves a game on the bare machine
+  and loads it back on the next boot (`-loadgame 0`); Doom under C4DOS
+  saves to B: and loads it back; the bare game's store is untouched.
+  test-c4dos gains a c4bb leg with `HOME=B:` and a writable B:.
+  web-grin-g4.mjs is the browser check (a note saved, the page loaded
+  again, `?persist=reset`).
+
+Deviations and findings:
+
+- **API v5** rather than more of v4: slots 28 and 29, for File Manager
+  and Notepad to find the drives and the home drive.
+- **A machine register and an info bit** the plan did not name:
+  `DISK_UNLINK` (deletes on drives had no way to reach the medium) and
+  `C4I_DRV` (bare.c's "INFO bits, checked once" needed a bit to check).
+- **`DEL`/`ERASE`** at A>, beside `unlink`.
+- **bare.c's rename and `ftell`**: needed for any game save to work; the
+  games are unchanged.
+- **Uploads** are one store for every system (3.8, "As built in G4").
+- **Program Manager's groups are a list beside one group**, as planned
+  for G4; File > New makes items only (no new groups yet).
+- Doom keeps its saves as `doomsav0.dsg` (it writes `.savegame/temp.dsg`
+  and renames it to a name without the folder, and finds it again by the
+  drive's basename fallback), and this port writes no config when it
+  quits.
+- `src/c4bb/images/games` is not removed (3.9).
+
 **G5: DOS programs, redirection, DOS Prompt**
 
 - Full-screen launch, with the display handed back and `snd_reset`.
@@ -903,6 +1285,61 @@ Deviations and findings:
 - **Browser:** Wolfenstein 3D full screen, play a little, and quit back
   to grin. Then a DOS Prompt with `DIR | ...` and `TYPE`.
 
+*Done, branch `grin-g5` (2026-10-26), with smp fb313d0 merged.* What was
+built: 3.6 and 3.7 ("As built in G5"), 3.9, and `docs/c4dos-design.md`
+("Redirection: DEVICE=REDIR.SYS", "The console tap", API v6).
+
+- **C4DOS:** `REDIR.SYS` (`>`, `>>`, `<`, `|` through `RAM:PIPEn.$$$`,
+  batch files too), opt-in, so a line without the device is parsed as
+  before; the builtins, their errors and a batch file's echo print
+  through `pf` and conwrite instead of `printf`; ECHO says the rest of
+  the line; `TYPE /P` pauses through conread; the console tap used with
+  `REDIR.SYS TAP`, and said once to be missing without it.
+- **Machine:** the tap's four registers in `devices.js` (0x1d0-0x1dc,
+  free until now), which c4bb's CLI and libjs share; libjs's `PRTF`,
+  `PUTC` and `PUTS` reach them through `emit`.
+- **grin:** the full-screen launch, DOS Prompt windows, `grin_pump`.
+- **Tests:** test-c4dos's redirection legs (native, tower, and the tap on
+  c4bb with `HOME=B:`); test-grin's G5 checks (37 more, 150 in all): at
+  A>, `DIR > LIST.TXT` and `TYPE LIST.TXT` (on B:), `HELLO > OUT.TXT`
+  through the tap, `ASKLINE < IN.TXT`, `DIR | DOSFILT` and `TYPE IN.TXT |
+  DOSFILT -r`; in grin, File > Run... HELLO full screen; two DOS Prompts,
+  `ECHO` in one and `DIR` in the other each in its own; `ASKLINE` reading
+  a line in DOS Prompt 2 while a Clock ticks, Doom refused meanwhile and
+  DOS Prompt 1 saying busy; `HELLO`, `DIR | DOSFILT` and `ECHO ... >
+  B:RUNME.BAT` in a window; EXIT; File Manager running RUNME.BAT in a DOS
+  Prompt; Doom full screen from Program Manager twice, quit with F10 and
+  Y, grin back at 800x600, `HEAP_USED` the same to the byte.
+
+Deviations and findings:
+
+- **API v6, slot 30** (`drive()`), which the plan did not name: a DOS
+  Prompt window keeps its own drive, and DOS's prompt drive is global.
+- **A sink runs as the image that installed it** (C4DOS's `sink_call`):
+  without that, Clock started while a DOS Prompt's program waited would
+  have been that program's child and unloaded with it.
+- **`DIR` with `HOME=B:` listed B:** at A> (G4's `dos_open` looks on the
+  home drive first); it now names the prompt's drive's listing.
+- **File Manager's File > Edit**, since a double click on a `.bat` now
+  runs it.
+- DOS Prompt windows are numbered, so that the Task List (and the test)
+  can tell them apart; at 640x480 a window is wider than the screen.
+- A full-screen DOS program's text goes to the page's console pane, as
+  at A>.
+- A c4cc program in a DOS Prompt reads end of input from fd 0 (the
+  page's keyboard would be the console pane's, not the window's).
+- **The disk's AUTOEXEC said `ECHO ... back to A>.`**, which REDIR.SYS
+  took for a redirection into a file called `.` on B:; it says "the A
+  prompt" now, and test-grin checks there is no such file. `DIR` leaves
+  out the pipe files (`.$$$`).
+- **Browser** (Chrome 151 on 9222, the page served from the worktree on
+  port 8494 and loaded through https://8494.code.home.stargazer.onl, a
+  secure context): `web-grin-g5.mjs`, all OK, no page errors. Wolfenstein
+  3D from Program Manager full screen, a new game on floor 1 (moved,
+  turned, one shot), Esc > Quit > Y, and grin drew Program Manager again;
+  then DOS Prompt 1 with `DIR | DOSFILT`, `ECHO ... > B:G5.TXT`, `TYPE
+  B:G5.TXT` and `HELLO`.
+
 **G6: games in a window**
 
 - A grin back-end in each bare platform (`plat-bare.c`, `dg-bare.c`,
@@ -919,6 +1356,99 @@ Deviations and findings:
 - **Browser:** Doom in a window beside Clock and Notepad, typing in
   Notepad while the demo plays. Frames per second are measured windowed
   and full screen for each game.
+
+*Done, branch `grin-g6` (2026-10-27), on `grin-plan` afccbdb (smp fb313d0
+already in it).* What was built: 3.6 ("As built in G6"), C4DOS API v7
+(`docs/c4dos-design.md`), and each game's bare platform layer, on a
+`grin-g6` branch of its own repository (wolf3d 1531fc2, doom 0de63a9,
+tyrian be9c515, rott 244588f, each on its `c4` branch's commit).
+
+- **grin:** `src/grin/fwin.c` (the window, its events, pointer lock,
+  sizes, the windowed launch), grin.c's `pass(PASS_GAME)`, `win_run` and
+  the table out of slot 25 during full screen, Program Manager's window
+  items and `grin_dos`; the kit's `wk_menu_open()`.
+- **C4DOS:** slot 31, `image(h)`, version 7.
+- **Games:** Doom, Tyrian and ROTT keep their C4IX-shaped window trios,
+  pointed at grin; Wolf3D's `plat-bare.c` opens grin's window itself.
+  50 to 80 lines each with the table's declaration. Full screen and the
+  bare machine unchanged.
+- **Tests:** test-grin's G6 checks (174 in all): Doom from Program
+  Manager in a window, 320x200 frames at 2x in the window's rectangle at
+  800x600, Program Manager drawn beside it, the Clock's seconds advancing
+  meanwhile, Notepad (switched to) taking typing while Doom draws on;
+  its control menu's Close ends Doom, `HEAP_USED` back where it was to
+  the byte (5,973,954 both times) and again for a second round; Wolf3D
+  from File Manager, Tyrian and ROTT each drawing a frame in a window and
+  closed; File > Run... `DOOM -timedemo demo3 -show` in a window, its Run
+  box opened meanwhile and left open over it while the timedemo plays
+  its 2,134 frames to the end by itself, then CLOCK typed into that box
+  starts a Clock and the Task List has no Doom (3.3's generation check).
+  test-c4dos-heap's `dosexec image`. G5's full-screen Doom rounds set
+  Doom's item to full screen by Properties first.
+- **The gate**, on helios: `make test-grin` OK (174), `test-c4dos` OK,
+  `test-c4dos-heap` OK, `test-persist` OK, `test-libjs` OK (558 OK
+  lines), `test-c4ix-rebuild` OK, and `test-wolf3d`, `test-doom`,
+  `test-tyrian`, `test-rott` OK with their timedemo checksums unchanged
+  (d7358845, 01914fe7, 389b26f7, 3b083b33).
+- **Browser** (Chrome 151 over CDP on 9222, the page served from the
+  worktree on 8494, `web-grin-g6.mjs`, no page errors): Doom in a window
+  at 800x600 beside a Clock and Notepad, typing in Notepad while the demo
+  plays, Size > 1x and back, End Task closing it with the Clock and
+  Notepad still there. Screenshots in the session notes' `grin-g6-shots/`.
+
+**Frames per second** in the browser (Chrome 151 on the user's machine,
+`?system=c4dos`, 15 s each, counted as the 8-bit frames the page drew;
+each from a fresh boot at 640x480, so the windows are 1x, unless said):
+
+| game, and what it was doing | window | full screen |
+|---|---|---|
+| Doom, its demo | 29.8 (1x); 29.7 at 2x and 31.6 at 1x at 800x600 beside Clock and Notepad | 42.1 |
+| Wolfenstein 3D, floor 1, standing | 70 (its cap) | 69.9 |
+| Tyrian, its opening | 10.9 | 11.2 |
+| Rise of the Triad, its opening and demo | 11.3 | 10.7 |
+
+Doom loses about 30% in a window: each frame is copied once more, and
+grin's redraw draws the window's chrome and whatever else the damage
+touches (a Clock's tick widens it) before the blit; the others are held
+by their own pace, not by the drawing.
+
+Deviations and findings:
+
+- **The game-window calls are in the table, not in `grin.h`**, at words 5
+  to 7 of version 2: the games are DOS programs and never link
+  `import.c`, so they read slot 25 themselves. Putting them before the
+  kit's functions moved those one word, once (every application is built
+  with grin).
+- **C4DOS v7, `image(h)`**, not in the plan: without it an application
+  started from Program Manager while a game played was the game's child,
+  and C4DOS unloaded it with the game while grin still had its windows.
+- **`fwin_frame` copies the frame**; the plan had grin keep the game's
+  pointer. A copy means a redraw for another window's sake always has a
+  whole frame, whatever the game is doing to its buffer.
+- **Pointer lock only for a game that steers with the mouse** (Tyrian,
+  ROTT, `fwin_open`'s flag); Doom and Wolf3D take keys only, as they do
+  full screen.
+- **The table leaves slot 25 while a full-screen program runs**, so the
+  game's bare layer needs no second test for "grin is here but has given
+  the display up".
+- **Programs started from File Manager or File > Run** follow Program
+  Manager's item for the same program (window or full screen), as a PIF
+  did; the plan's "asking full screen or window the first time" is not
+  built. A windowed program that never opens a window gets a message box
+  with its console's last line.
+- **Games typed in a DOS Prompt** play in a window too, their console
+  text in the DOS Prompt.
+- **Program Manager's games default to `window`**; a PROGMAN.INI written
+  before G6 keeps `full` until its Properties change it.
+- **Doom's console message** under grin is "a program has the display;
+  playing in the window" (dg-gui.c's, unchanged); grin keeps the windowed
+  launch's console text, so no one sees it unless the game fails.
+- At 640x480 a 2x window is 8 pixels wider than the screen, so 1x is the
+  default there.
+- **Found on the way:** the shell's `time` on helios (dash) prints no
+  `real` line; test-grin's own helpers `endTask`/`inTasks` miss Task List
+  rows drawn after its buttons in a partial frame (G6's checks use
+  `endTask2`, which finds rows by place).
 
 **G7: finishing**
 
@@ -1009,7 +1539,8 @@ Deviations and findings:
 5. Boot into grin from `AUTOEXEC.BAT`, on a disk set of the page's own.
 6. Persistence for C4DOS, and for the bare-machine games too.
 7. File redirection in C4DOS, opt-in through a `DEVICE=` line, so that
-   DOS Prompt windows work in grin, cooperatively.
+   DOS Prompt windows work in grin, cooperatively. (Built in G5:
+   `DEVICE=REDIR.SYS`, `docs/c4dos-design.md` "Redirection".)
 8. The command is `GRIN`.
 9. One persistence store per system, not one shared store. The planned
    ladder system needs a store of its own (3.8).

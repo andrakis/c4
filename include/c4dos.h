@@ -10,8 +10,11 @@
 //
 // Why any of this exists: c4 and c4m have no write syscall, and c4bb's
 // disk controller is read-only. A tool that wants to produce a file
-// asks DOS to put it on the RAM disk (DEVICE=RAMDISK.SYS). There is no
-// '>' redirection on this system by decision -- tools write directly.
+// asks DOS to put it on the RAM disk (DEVICE=RAMDISK.SYS), or, since v5,
+// on a drive that can be written: "B:NAME" names one, and a plain name
+// goes to the home drive when CONFIG.SYS gives one (DEVICE=DRIVES.SYS
+// HOME=B:). There is no '>' redirection on this system by decision --
+// tools write directly.
 //
 // The calls go through the invoke stub, which is c4l.c's trick: a
 // function rewrites its own first instruction to JMP <target>, so
@@ -40,7 +43,7 @@ enum { C4DOS_MAGIC = 4404292 };
 enum {
   C4DOS_SLOT_MAGIC   = 0,
   C4DOS_SLOT_EXIT    = 1,   // dos_exit(status): return to the prompt
-  C4DOS_SLOT_CREATE  = 2,   // create(name) -> handle, or -1
+  C4DOS_SLOT_CREATE  = 2,   // create(name) -> handle, or -1 (on a drive: there once closed)
   C4DOS_SLOT_WRITE   = 3,   // write(handle, buf, len) -> len
   C4DOS_SLOT_CLOSE   = 4,   // close(handle)
   C4DOS_SLOT_VERSION = 5,
@@ -311,7 +314,7 @@ enum { C4DOS_API_V4 = 4 };
 enum {
   C4DOS_SLOT_CONWRITE = 16, // conwrite(buf, n) -> n: console output
   C4DOS_SLOT_CONREAD  = 17, // conread(buf, n) -> bytes, at most a line; 0 at end
-  C4DOS_SLOT_UNLINK   = 18, // unlink(name) -> 0, or -1
+  C4DOS_SLOT_UNLINK   = 18, // unlink(name) -> 0, or -1: the RAM disk's, or a drive's (v5)
   C4DOS_SLOT_EXEC     = 19, // exec(cmdline) -> its status, as the prompt runs it
   C4DOS_SLOT_LOAD     = 20, // load(path) -> handle, constructors run; 0 on failure
   C4DOS_SLOT_START    = 21, // start(h, argc, argv) -> main's status; h stays loaded
@@ -378,4 +381,54 @@ int dos_gen (int h) {
 int dos_setgen (int g) {
   if (!dos_v4(C4DOS_SLOT_SETGEN) || !__c4dos_arm()) return 0 - 1;
   return __c4dos_call1((int *)__c4dos_api[C4DOS_SLOT_SETGEN], g);
+}
+
+// ---- v5: drives that can be written ---------------------------------------
+//
+// create, write and close reach a writable drive (DEVICE=DRIVES.SYS):
+// "B:NAME" there, and a plain name on the home drive (HOME=B:) when
+// there is one. unlink takes a file off either. DOS keeps each drive's
+// c4dos.dir, which DIR B: types. These two say where things are.
+enum { C4DOS_API_V5 = 5 };
+enum {
+  C4DOS_SLOT_HOME   = 28,   // home() -> the home drive, 0 = A:; -1 for none
+  C4DOS_SLOT_DRIVES = 29    // drives() -> how many drives (1 without DRIVES.SYS)
+};
+int dos_home () {
+  if (dos_version() < C4DOS_API_V5 || !__c4dos_api[C4DOS_SLOT_HOME] || !__c4dos_arm()) return 0 - 1;
+  return __c4dos_call1((int *)__c4dos_api[C4DOS_SLOT_HOME], 0);
+}
+int dos_drives () {
+  if (dos_version() < C4DOS_API_V5 || !__c4dos_api[C4DOS_SLOT_DRIVES] || !__c4dos_arm()) return 1;
+  return __c4dos_call1((int *)__c4dos_api[C4DOS_SLOT_DRIVES], 0);
+}
+
+// ---- v6: redirection, and the prompt's drive -------------------------------
+//
+// With DEVICE=REDIR.SYS a command line takes > >> < and |; conwrite and
+// conread (16, 17) follow them, so a program that uses them is
+// redirected with nothing more to do (docs/c4dos-design.md
+// "Redirection"). The prompt's drive is DOS's, one for every caller: a
+// DOS Prompt window asks it after each line it runs.
+enum { C4DOS_API_V6 = 6 };
+enum { C4DOS_SLOT_DRIVE = 30 };   // drive() -> the drive the prompt is on, 0 = A:
+int dos_drive () {
+  if (dos_version() < C4DOS_API_V6 || !__c4dos_api[C4DOS_SLOT_DRIVE] || !__c4dos_arm()) return 0;
+  return __c4dos_call1((int *)__c4dos_api[C4DOS_SLOT_DRIVE], 0);
+}
+
+// ---- v7: whose code is running ---------------------------------------------
+//
+// The image DOS counts as running is the parent of what it loads, the
+// owner of the files it opens for writing, and gen(0)'s answer. A shell
+// whose code a child calls directly, not through DOS, says "this is mine
+// now" with image(its own handle) and gives the old one back after:
+// grin's game window, whose poll runs grin's loop for the game
+// (docs/grin-plan.md 3.6). image(0) only asks; it is the caller's own
+// handle when asked from its main.
+enum { C4DOS_API_V7 = 7 };
+enum { C4DOS_SLOT_IMAGE = 31 };   // image(h) -> the image that was running (h = 0: no change)
+int dos_image (int h) {
+  if (dos_version() < C4DOS_API_V7 || !__c4dos_api[C4DOS_SLOT_IMAGE] || !__c4dos_arm()) return 0;
+  return __c4dos_call1((int *)__c4dos_api[C4DOS_SLOT_IMAGE], h);
 }

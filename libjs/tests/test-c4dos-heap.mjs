@@ -132,6 +132,14 @@ if (files.has('dosexec.c4r') && !noheap) {
         inUse.length === 2 && inUse[0] - inUse[1] >= 1048576,
     'gen and setgen put memory in a loaded image\'s generation', o);
   check(memUsed() === used1, 'and all of it is back at the prompt');
+  // slot 31 (v7): an image loaded while another is counted as running
+  // is that one's child, and goes with it
+  o = cmd('dosexec image');
+  check(o.includes('image gave back mine') && o.includes('image(0) now says the loaded one') &&
+        o.includes('after giving it back, mine') && o.includes('not loaded changes nothing') &&
+        o.includes('unload of the first returned 0') && o.includes('unload of the one it parented returned -1'),
+    'image() makes a load the child of the image named, unloaded with it', o);
+  check(memUsed() === used1, '... and nothing is left behind');
 }
 
 const used = [];

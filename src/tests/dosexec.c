@@ -190,6 +190,27 @@ int gens () {
   return 0;
 }
 
+// v7, image(): an image loaded while another is counted as running is
+// that one's child, and goes when it is unloaded (grin's game window
+// runs its loop as grin, so an application started from there is grin's)
+int images () {
+  int me, h, h2, old;
+  me = dos_image(0);
+  if (!me) { printf("dosexec: image: no slot 31\n"); return 1; }
+  if (!(h = dos_load("dosres.c4r"))) { printf("dosexec: image: load failed\n"); return 1; }
+  old = dos_image(h);
+  printf("dosexec: image gave back %s\n", old == me ? "mine" : "another");
+  printf("dosexec: image(0) now says %s\n", dos_image(0) == h ? "the loaded one" : "another");
+  h2 = dos_load("dosres.c4r");
+  dos_image(old);
+  printf("dosexec: and after giving it back, %s\n", dos_image(0) == me ? "mine" : "another");
+  dos_image(12345);
+  printf("dosexec: a handle that is not loaded changes %s\n", dos_image(0) == me ? "nothing" : "something");
+  printf("dosexec: unload of the first returned %d\n", dos_unload(h));
+  printf("dosexec: unload of the one it parented returned %d\n", h2 ? dos_unload(h2) : 99);
+  return 0;
+}
+
 int num (char *s) {
   int n;
   n = 0;
@@ -202,7 +223,7 @@ int main (int argc, char **argv) {
     printf("dosexec: needs C4DOS API v4 (have %d)\n", dos_version());
     return 1;
   }
-  if (argc < 2) { printf("usage: dosexec deep N|resident|catch|file|unlink|read|sink|leak KB|gen\n"); return 1; }
+  if (argc < 2) { printf("usage: dosexec deep N|resident|catch|file|unlink|read|sink|leak KB|gen|image\n"); return 1; }
   if (streq(argv[1], "deep")) return deep(argc > 2 ? num(argv[2]) : 3);
   if (streq(argv[1], "resident")) return resident();
   if (streq(argv[1], "catch")) return catcher();
@@ -213,6 +234,7 @@ int main (int argc, char **argv) {
   if (streq(argv[1], "sink")) return sinker();
   if (streq(argv[1], "leak")) return leak(argc > 2 ? num(argv[2]) : 1024);
   if (streq(argv[1], "gen")) return gens();
+  if (streq(argv[1], "image")) return images();
   printf("dosexec: what is %s?\n", argv[1]);
   return 1;
 }

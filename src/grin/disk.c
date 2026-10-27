@@ -20,7 +20,8 @@ extern int *__c4dos_api;              // bare.c's: C4DOS's table
 
 enum { SLOT_VERSION = 5, SLOT_OPEN = 6, SLOT_READ = 7, SLOT_RCLOSE = 8, SLOT_COUNT = 9,
        SLOT_ENTNAME = 10, SLOT_ENTSIZE = 11, SLOT_UNLINK = 18, SLOT_EXEC = 19,
-       SLOT_SINK = 24, SLOT_SETGEN = 27, SLOT_HOME = 28, SLOT_DRIVES = 29, SLOT_DRIVE = 30 };
+       SLOT_SINK = 24, SLOT_SETGEN = 27, SLOT_HOME = 28, SLOT_DRIVES = 29, SLOT_DRIVE = 30,
+       SLOT_IMAGE = 31 };
 enum { DIRBUF = 16384, CHUNK = 4096 };
 
 static int ver() { return __c4dos_api ? __c4dos_api[SLOT_VERSION] : 0; }
@@ -48,6 +49,7 @@ int gd_exec(char *line) { return ver() >= 4 && slot(SLOT_EXEC) ? call1(SLOT_EXEC
 int gd_sink(int w, int r, int ctx) { return ver() >= 4 && slot(SLOT_SINK) ? call3(SLOT_SINK, w, r, ctx) : 0 - 1; }
 int gd_setgen(int g) { return ver() >= 4 && slot(SLOT_SETGEN) ? call1(SLOT_SETGEN, g) : 0 - 1; }
 int gd_drive() { return ver() >= 6 && slot(SLOT_DRIVE) ? call1(SLOT_DRIVE, 0) : 0; }
+int gd_image(int h) { return ver() >= 7 && slot(SLOT_IMAGE) ? call1(SLOT_IMAGE, h) : 0; }
 
 // "B:" for drive 1, "RAM:" for the RAM disk, and a name after it, in out
 char *gd_name(int drive, char *name, char *out, int n) {

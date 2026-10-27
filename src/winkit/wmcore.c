@@ -671,6 +671,8 @@ static int shape_at(int x, int y) {
     return PTR_ARROW;
 }
 void wk_repoint() { ptr_shape = PTR_ARROW; }
+// a drop-down menu is open (keys are its, not a window's: grin's game window)
+int wk_menu_open() { return menu_win != 0; }
 
 static void pointer(int x, int y) {
     int s;

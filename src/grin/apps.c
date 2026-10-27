@@ -242,11 +242,11 @@ int grin_run(char *cmdline) {
         if (i == APPS) { say("Too many applications are running to start ", argv[0], "."); return 0 - 1; }
         hello = 0;
         if (!(h = dos1(SLOT_LOAD, (int)path))) { say("Cannot start ", argv[0], ": there is no such program, or it would not load."); return 0 - 1; }
-        // not an application: a DOS program, which DOS runs again full
-        // screen, from the top of the loop (grin_full)
+        // not an application: a DOS program, which DOS runs again from the
+        // top of the loop, full screen or in a window (grin_dos)
         if (!hello) {
             dos1(SLOT_UNLOAD, h);
-            return grin_full(cmdline);
+            return grin_dos(cmdline);
         }
         n = i + 1;
         a = &apps[i];
@@ -321,6 +321,9 @@ void apps_init() {
     kit.gen = grin_gen > 0 ? grin_gen : 0;
     kit.env = &wk;
     kit.hello = g_hello;
+    kit.fwin_open = grin_fwin_open;
+    kit.fwin_frame = grin_fwin_frame;
+    kit.fwin_poll = grin_fwin_poll;
 #define K(r, n, p, a) kit.n = n;
 #define V(n, p, a) kit.n = n;
 #include "kitfns.h"
@@ -330,6 +333,14 @@ void apps_init() {
     kit.wk_find = g_find;
     kit.wk_class_of = g_class_of;
     if (dos_v4()) __c4dos_api[SLOT_SHELL] = (int)&kit;
+}
+
+// Out of slot 25 while a full-screen program has the display (grin.c),
+// and back after
+void apps_publish(int on) {
+    if (!dos_v4()) return;
+    if (on) __c4dos_api[SLOT_SHELL] = (int)&kit;
+    else if (__c4dos_api[SLOT_SHELL] == (int)&kit) __c4dos_api[SLOT_SHELL] = 0;
 }
 
 // grin's end, after every window has closed: every application unloaded,

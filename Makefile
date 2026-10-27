@@ -2446,7 +2446,7 @@ PHONY += libc-bare-objs
 # the desktop's are; grin's own with it, so that its files go through
 # libc and bare.c to C4DOS. build-images.sh links it onto the page's
 # C4DOS disk, libjs/images/dos, which boots into it. test-grin drives it.
-GRIN       := grin apps progman tasklist control filemgr disk dosprmpt
+GRIN       := grin apps progman tasklist control filemgr disk dosprmpt fwin
 GRIN_KIT   := draw ui wmcore dialog look95 look31 savers textgrid
 GRIN_HDRS  := $(wildcard src/grin/*.h src/winkit/*.h) libjs/guest/gui.h libjs/guest/gui.c libjs/guest/snd.h libjs/guest/snd.c
 GRIN_CC    := ./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O $(IMG_G) -c -I src/winkit -I .

@@ -12,7 +12,8 @@
 // through libc and bare.c, which are C4DOS's. The applications grin runs
 // (Clock, Calculator) are apps.c's; the loop gives them their turn. DOS
 // programs run from the top of the loop, one at a time: full screen here
-// (grin_full), or in a DOS Prompt window (dosprmpt.c).
+// (grin_full), in a window of their own (grin_window, fwin.c), or in a
+// DOS Prompt window (dosprmpt.c).
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -352,20 +353,25 @@ void wk_free(char *p) { if (p) free(p); }
 
 // ---- the session ----------------------------------------------------------------------
 
-enum { RING = 65536, EVENTS = GUI_M_MOVE | GUI_M_BUTTONS | GUI_M_KEYS | GUI_M_WHEEL | GUI_M_WINDOW,
+// GUI_M_REL: a game's window locks the mouse for it on a click (fwin.c);
+// its motion then comes as GUI_EV_REL, and only then
+enum { RING = 65536, EVENTS = GUI_M_MOVE | GUI_M_BUTTONS | GUI_M_KEYS | GUI_M_WHEEL | GUI_M_WINDOW | GUI_M_REL,
        NAP = 50 };
+enum { PASS_TOP = 1, PASS_GAME = 2 };
 
 static int *ring;
 static int start_ms, second_draw, last_input, last_frame, last_draw;
 
 // One pass of the loop: the display's events to the windows, the
 // timers, the screen saver, a redraw, and a nap when there is nothing to
-// do. At the top (top = 1) it also unloads the applications that have
+// do. At the top (PASS_TOP) it also unloads the applications that have
 // gone (apps_reap). grin_pump is the same pass for a DOS program that
 // waits in grin -- a DOS Prompt's program reading a line -- and so
 // unloads nothing and starts no DOS program: that program, DOS and grin's
-// own exec are on the stack under it.
-static void pass(int top) {
+// own exec are on the stack under it. A game's poll (PASS_GAME, fwin.c)
+// is that pass with no nap and no screen saver starting -- the game keeps
+// its own time, and plays on -- and a frame it sent is drawn at once.
+static void pass(int how) {
     int ev[4], busy, input, k, t;
     busy = 0; input = 0;
     while (gui_poll(ev)) {
@@ -383,14 +389,15 @@ static void pass(int top) {
             wk_redraw_all();
             continue;
         }
+        if (fwin_event(ev)) continue;
         wk_event(ev);
     }
     // the first frame once more half a second in, in case the page was
     // not yet showing the display when it came
     if (!second_draw && __time() - start_ms >= 500) { second_draw = 1; wk_redraw_all(); }
     wk_tick();
-    if (top) apps_reap();
-    if (!saver_active() && ini.saver && __time() - last_input >= ini.wait * 60000) {
+    if (how & PASS_TOP) apps_reap();
+    if (!(how & PASS_GAME) && !saver_active() && ini.saver && __time() - last_input >= ini.wait * 60000) {
         saver_start(ini.saver);
         gui_cursor(GUI_PTR_NONE);
     }
@@ -398,11 +405,11 @@ static void pass(int top) {
         if (__time() - last_frame >= SAVER_MS) { saver_frame(); gui_show(); last_frame = __time(); }
         k = SAVER_MS - (__time() - last_frame);
         if (k < 1) k = 1;
-        __c4_usleep(k * 1000);
+        if (!(how & PASS_GAME)) __c4_usleep(k * 1000);
         return;
     }
-    // a redraw: at once for input, else at most one every 25 ms
-    if (wk_dirty() && (input || __time() - last_draw >= 25)) {
+    // a redraw: at once for input or a game's frame, else at most one every 25 ms
+    if (wk_dirty() && (input || fwin_fresh() || __time() - last_draw >= 25)) {
         wk_redraw(0);
         last_draw = __time();
         wk_drawn();
@@ -410,7 +417,7 @@ static void pass(int top) {
     }
     // nothing to do: a nap until the next thing due, which an event
     // from the display cuts short
-    if (!busy && running) {
+    if (!busy && running && !(how & PASS_GAME)) {
         k = wk_dirty() ? 25 - (__time() - last_draw) : NAP;
         t = wk_next_timer();
         if (t >= 0 && t < k) k = t;
@@ -421,6 +428,7 @@ static void pass(int top) {
 }
 
 void grin_pump() { pass(0); }
+void grin_pump_game() { pass(PASS_GAME); }
 
 void grin_draw_now() {
     if (saver_active() || !wk_dirty()) return;
@@ -440,18 +448,22 @@ void grin_draw_now() {
 // kernel in it. Always from the top of the loop, never from inside a
 // window's code, where the kit is on the stack.
 
-enum { FULL_LINE = 256 };
+enum { FULL_LINE = 256, Q_FULL = 1, Q_WINDOW = 2 };
 static char full_cmd[FULL_LINE];
-static int full_queued;
+static int full_queued;               // a line waits: Q_FULL, full screen, or Q_WINDOW
 
-int grin_full_waiting() { return full_queued; }
+int grin_full_waiting() { return full_queued != 0; }
 
-int grin_full(char *cmdline) {
+static int queue(char *cmdline, int how) {
     if (dos_refuse()) return 0 - 1;
     if (!ui_ncpy(full_cmd, cmdline, FULL_LINE)) return 0 - 1;
-    full_queued = 1;
+    full_queued = how;
     return 0;
 }
+int grin_full(char *cmdline) { return queue(cmdline, Q_FULL); }
+// in a window of its own (fwin.c): a game's bare platform layer finds
+// grin's table and plays in it; the display stays grin's
+int grin_window(char *cmdline) { return queue(cmdline, Q_WINDOW); }
 
 static void full_run() {
     full_queued = 0;
@@ -462,7 +474,11 @@ static void full_run() {
     gui_clear(0x000000);
     gui_show();
     gui_detach();
+    // grin's table out of slot 25 meanwhile: the display is the program's,
+    // so a game finding no grin takes it, as at A>
+    apps_publish(0);
     gd_exec(full_cmd);
+    apps_publish(1);
     // the display back, as main first took it
     if (!gui_attach(ring, RING, ini.sw, ini.sh)) printf("grin: the display refused the ring after %s\n", dos_busy_name);
     gui_events(EVENTS);
@@ -472,6 +488,20 @@ static void full_run() {
     dos_busy_name[0] = 0;
     wk_repoint();
     wk_redraw_all();
+    last_input = __time();
+}
+
+// A DOS program in a window (fwin.c): the display is not given up, and
+// grin's loop runs inside the game's polls
+static void win_run() {
+    full_queued = 0;
+    dos_busy = 1;
+    dos_busy_set(full_cmd);
+    if (saver_active()) { saver_stop(); gui_cursor(GUI_PTR_ARROW); wk_repoint(); wk_redraw_all(); }
+    fwin_run(full_cmd);
+    if (snd_present()) snd_reset();
+    dos_busy = 0;
+    dos_busy_name[0] = 0;
     last_input = __time();
 }
 
@@ -491,6 +521,7 @@ int main(int argc, char **argv) {
     wk_min_icons(1);
     wk_init(&shell);
     apps_init();
+    fwin_init();
     progman_open();
 
     running = 1;
@@ -498,11 +529,14 @@ int main(int argc, char **argv) {
     start_ms = __time(); second_draw = 0;
     last_input = __time(); last_frame = 0; last_draw = 0;
     while (running) {
-        pass(1);
-        // the top of the loop: a DOS program waiting to run, one at a time
+        pass(PASS_TOP);
+        // the top of the loop: a DOS program waiting to run, one at a time;
+        // and the window of a game that has ended, closed
         if (running && !dos_busy) {
-            if (full_queued) full_run();
+            if (full_queued == Q_FULL) full_run();
+            else if (full_queued == Q_WINDOW) win_run();
             else dosprompt_top();
+            fwin_end();
         }
     }
 

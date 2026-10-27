@@ -240,6 +240,7 @@ int  wk_dirty();                      // 1 if anything waits to be drawn
 int  wk_next_timer();                 // ms until a timer is due, or -1 for none
 void wk_drawn();                      // after the frame was shown: drawn hooks
 void wk_repoint();                    // the display's pointer is an arrow again (it was away)
+int  wk_menu_open();                  // 1 while a drop-down menu is open
 void wk_screen(int w, int h);         // ask for a new screen size (gui_size) and relayout
 void wk_set_area(int x, int y, int w, int h);
 void wk_close_all();                  // every window, at once (shutting down)

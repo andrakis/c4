@@ -8,13 +8,16 @@
 //   File Manager=FILEMAN,files,app
 //   ...
 //   [Games]
-//   Doom=DOOM,game,full
+//   Doom=DOOM,game,window
 //
 // An item is a title, a command line, an icon and a run mode: app (a grin
 // application, or one of grin's own windows, named by the command lines
 // FILEMAN, CONTROL, PROGMAN and DOSPRMPT), full (a DOS program, full
-// screen) or window (a DOS program in a window, which comes with G6; until
-// then such an item says so and offers full screen).
+// screen) or window (a DOS program in a window of its own: the games,
+// whose bare platform layers find grin and play in it, fwin.c). A DOS
+// program started from File Manager or File > Run runs as the first item
+// that names the same program says, as a PIF said, else full screen
+// (grin_dos).
 //
 // One group is shown at a time, picked from the list down the left (MDI
 // group windows come with G7). File > New and Properties edit an item,
@@ -47,10 +50,10 @@ static char *defaults[16] = {
     "Clock=CLOCK,clock,app",
     "Calculator=CALC,calc,app",
     "[Games]",
-    "Wolfenstein 3D=WOLF3D,game,full",
-    "Doom=DOOM,game,full",
-    "Tyrian=TYRIAN,game,full",
-    "Rise of the Triad=ROTT,game,full",
+    "Wolfenstein 3D=WOLF3D,game,window",
+    "Doom=DOOM,game,window",
+    "Tyrian=TYRIAN,game,window",
+    "Rise of the Triad=ROTT,game,window",
     0
 };
 static char *mode_names[N_MODES] = { "app", "full", "window" };
@@ -198,12 +201,41 @@ int grin_start(char *cmdline) {
 
 static void launch(struct item *it) {
     if (it->mode == RUN_FULL) { grin_full(it->cmd); return; }
-    if (it->mode == RUN_WINDOW) {
-        say(it->title, " is set to run in a window, which comes with a later version of grin. ",
-            "Its Properties can set it to run full screen, as DOS programs run now.", "");
-        return;
-    }
+    if (it->mode == RUN_WINDOW) { grin_window(it->cmd); return; }
     grin_start(it->cmd);
+}
+
+// the program a command line names, as a file's name with no drive,
+// folder or extension, in capitals: "A:DOOM.C4R -warp 2" -> "DOOM"
+static void prog_of(char *cmd, char *out, int n) {
+    char *s, *b;
+    int k;
+    while (*cmd == ' ') ++cmd;
+    b = cmd; s = cmd;
+    while (*s && *s != ' ') { if (*s == ':' || *s == '/' || *s == '\\') b = s + 1; ++s; }
+    k = 0;
+    while (b < s && *b != '.' && k < n - 1) { out[k] = up(*b); ++k; ++b; }
+    out[k] = 0;
+}
+
+// A DOS program from File Manager or File > Run (apps.c's grin_run, when
+// the program is not an application): in a window when the first
+// Program Manager item that runs the same program runs it in one, else
+// full screen
+int grin_dos(char *cmdline) {
+    char want[16], have[16];
+    int k;
+    if (!loaded) pm_load();
+    prog_of(cmdline, want, 16);
+    k = 0;
+    while (k < ITEMS) {
+        if (items[k].used && items[k].mode != RUN_APP) {
+            prog_of(items[k].cmd, have, 16);
+            if (want[0] && ieq(want, have)) return items[k].mode == RUN_WINDOW ? grin_window(cmdline) : grin_full(cmdline);
+        }
+        ++k;
+    }
+    return grin_full(cmdline);
 }
 
 // ---- the window ----------------------------------------------------------------------------
@@ -274,7 +306,7 @@ static void pm_draw(int w, int cw, int ch, int focused) {
     while ((i = nth(p->group, k)) >= 0) {
         if (item_y(k, cw) + ITEM_H - 10 < ch)
             grin_item_dim(item_cx(k, cw), item_y(k, cw), icon_pics[icon_index(items[i].icon)], items[i].title,
-                          p->sel == i + 1 && focused, items[i].mode == RUN_WINDOW);   // greyed: not yet (G6)
+                          p->sel == i + 1 && focused, 0);
         ++k;
     }
     d_clip_end();

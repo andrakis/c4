@@ -47,6 +47,18 @@ int  apps_count();                    // how many are loaded
 int  grin_run(char *cmdline);         // start one: 0, or -1 with a message box saying why
                                       // (a DOS program it finds goes to grin_full)
 int  grin_heapgen();                  // grin's own heap generation (0 without HEAP.SYS)
+void apps_publish(int on);            // the table in slot 25 (1), or out of it while a program has the display (0)
+
+// a DOS program's frames in a grin window (fwin.c, docs/grin-plan.md 3.6):
+// the games. The three grin_fwin_* are the table's (gkit.h), the game's to call
+int  grin_fwin_open(char *title, int w, int h, int flags);
+void grin_fwin_frame(char *pixels, int w, int h, int pitch, int *pal);
+int  grin_fwin_poll(int *ev);
+void fwin_init();                     // at the start: grin's image (C4DOS v7)
+int  fwin_event(int *ev);             // an event from the display: 1 if it was the game's
+int  fwin_fresh();                    // a game's frame waits to be drawn
+void fwin_run(char *cmdline);         // from the top of the loop: the program, windowed
+void fwin_end();                      // from the top of the loop: a game's window left, closed
 
 // DOS programs (docs/grin-plan.md 3.6, 3.7): one at a time, run from the
 // top of the loop, full screen (grin.c) or in a DOS Prompt (dosprmpt.c)
@@ -56,9 +68,12 @@ void dos_busy_set(char *cmdline);
 int  dos_refuse();                    // one is running or waiting: a message box says so, and 1
 int  grin_full(char *cmdline);        // full screen, at the top of the loop: 0, or -1 (refused)
 int  grin_full_waiting();
+int  grin_window(char *cmdline);      // in a window of its own (fwin.c), at the top of the loop: 0, or -1
+int  grin_dos(char *cmdline);         // progman.c: in a window if a Program Manager item runs it in one, else full screen
 int  dosprompt_open(char *cmd);       // a DOS Prompt window; cmd (or 0) typed at its first prompt
 void dosprompt_top();                 // the top of the loop: a DOS Prompt's line runs
 void grin_pump();                     // one pass of the loop, for a DOS program waiting in grin
+void grin_pump_game();                // ... for a game's poll: no nap, its frame drawn at once
 void grin_draw_now();                 // the damage drawn now (a DOS Prompt's output, as it comes)
 
 // a 32x32 picture with a label under it, centred on cx (Program Manager's
@@ -80,6 +95,7 @@ int   gd_exec(char *line);            // a command line, as A> runs it: its stat
 int   gd_sink(int w, int r, int ctx); // the console's sink (slot 24): w(ctx, buf, n), r(ctx, buf, n); 0s give it back
 int   gd_setgen(int g);               // the heap generation now: the previous one, or -1
 int   gd_drive();                     // the drive DOS's prompt is on, 0 = A: (v6)
+int   gd_image(int h);                // the image DOS counts as running made h (0: only asked): the one before (v7), 0 without
 int   gd_size(char *name);            // bytes, read through; -1 if it is not there
 int   gd_list(int drive, char *names, int max);   // a drive's files, WK_NAME bytes each: how many
 char *gd_name(int drive, char *name, char *out, int n);   // "B:NAME", "RAM:NAME"

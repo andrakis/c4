@@ -42,7 +42,7 @@ const LJIMAGES = '../images';          // the page's own disks (build-images.sh)
 // `persist` names the system's store: drive 1 (B:), kept in this browser's
 // IndexedDB under that name and given back at the next boot (page.js).
 // Every system has its own -- C4DOS's saves are not the bare games', and
-// the planned ladder system will have `ladder` -- so Reset Files and
+// the ladder system has `ladder` -- so Reset Files and
 // ?persist= touch the current system's alone (docs/grin-plan.md 3.8).
 const SYSTEMS = {
   c4ix: { label: 'C4IX', image: `${IMAGES}/c4ix32.c4r`, disk: `${IMAGES}/disk`, argv: ['c4ix32.c4r', '--desktop'], persist: 'c4ix' },

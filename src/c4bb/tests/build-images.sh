@@ -974,19 +974,32 @@ if [ -n "$CLIMBSRC" ] && [ -f $LJDOS/c4dos32.c4r ]; then
     lad_put $CLIMBSRC
     lad_put $LJDOS
     rm -f $LJLAD/c4ix.c4r $LJLAD/boot.cfg
+    # The ladder's own files. Each name is unlinked first: what is there is
+    # a hard link into one of the disks above, and a cp onto it writes
+    # THROUGH the link, into that disk. That is how the climb floppy's
+    # small C4IX tree (no /lib/libgui.c4s, no desktop, no games) took the
+    # place of the shared disk's here, or the other way round, depending
+    # on which was made last. C4IX's tree is the shared disk's, so the
+    # C4IX the ladder builds comes up as ?system=c4ix does.
+    rm -f $LJLAD/c4ix.vfs.txt $LJLAD/build.bat $LJLAD/ladder.txt
     cp $DISK/c4ix.vfs.txt $LJLAD/c4ix.vfs.txt
     cp src/c4dos/fs/BUILD.BAT $LJLAD/build.bat
     cp src/c4dos/fs/LADDER.TXT $LJLAD/ladder.txt
     # the climb floppy's RAM disk (32 MB: LADDER and the kernel's sources),
-    # and the page's devices; HEAP.SYS gives each rung's memory back when
-    # it returns to the one below
+    # and the page's devices: HEAP.SYS gives each rung's memory back when
+    # it returns to the one below, REDIR.SYS TAP is for grin's DOS Prompts.
+    # No HOME=B:, as the page's C4DOS disk has: with a home drive, cpp and
+    # c4cc would write the kernel to B: rather than the RAM disk C4KE is
+    # seeded from.
     sed 's/SIZE=[0-9]*/SIZE=33554432/' src/c4dos/fs/CONFIG.SYS > $LJLAD/config.sys
-    printf 'DEVICE=CONSOLE.SYS FLUSH\nDEVICE=DRIVES.SYS\nDEVICE=HEAP.SYS\n' >> $LJLAD/config.sys
+    printf 'DEVICE=CONSOLE.SYS FLUSH\nDEVICE=DRIVES.SYS\nDEVICE=HEAP.SYS\nDEVICE=REDIR.SYS TAP\n' >> $LJLAD/config.sys
     list=$(echo $GAMES_ON_DISK | sed 's/ /, /g')
     {
         printf '@ECHO OFF\nECHO Welcome to C4DOS, the Build Ladder\nVER\n'
         if [ -n "$list" ]; then printf 'ECHO The games on this disk: %s.\n' "$list"; fi
-        # (C4DOS splits a line into at most 15 words, so ECHO says 14)
+        # (C4DOS splits a line into at most 15 words, so ECHO says 14; and
+        # no > in an ECHO: REDIR.SYS would take it for a redirection)
+        printf 'ECHO GRIN starts the graphical shell.\n'
         printf 'ECHO Climb: BUILD, then RUN dosload.c4r c4ke.c4r boots the kernel it built.\n'
         printf 'ECHO TYPE LADDER.TXT says every step, up to C4IX.\n'
     } > $LJLAD/autoexec.bat

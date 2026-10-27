@@ -282,7 +282,16 @@ int ufstat(int fd, int *out, int n) {
     return 0;
 }
 
-int umsleep(int ms) { if (ms > 0) __c4_usleep(ms * 1000); return 0; }
+// sleep: under C4KE, C4KE's sleep, so the other tasks run meanwhile; the
+// machine's USLP would stop all of them (it sleeps the machine)
+static int ke_sleep;
+int umsleep(int ms) {
+    if (ms <= 0) return 0;
+    if (__c4ke_exit && !ke_sleep) ke_sleep = __c4_opcode("OP_USER_SLEEP", 128);   // OP_REQUEST_SYMBOL
+    if (__c4ke_exit && ke_sleep) __c4_opcode(ms, ke_sleep);
+    else __c4_usleep(ms * 1000);
+    return 0;
+}
 int ugetcwd(char *buf, int len) { if (len < 2) return 0 - 1; buf[0] = '/'; buf[1] = 0; return 1; }
 int uchdir(char *path) { return (path[0] == '/' || path[0] == '.') && !path[1] ? 0 : 0 - 1; }
 int getpid() { return 1; }

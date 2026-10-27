@@ -18,6 +18,10 @@
 //     full-screen program has to wait.
 // EXIT closes the window. DOS's exec takes EXIT to end the exec, not
 // DOS, so the window looks for the word itself.
+//
+// With no DOS, grin is a C4KE task (the Build Ladder, docs/c4dos-ladder.md),
+// and the window is a C4KE Prompt instead: its lines run C4KE's programs as
+// tasks (ke_run, below).
 
 #include "shell.h"
 #include "textgrid.h"
@@ -33,6 +37,7 @@ struct dosprompt {
     int inlen;                        // typed for its program and not read yet
     char in[DP_IN];
     char cmd[DP_LINE];                // its line, waiting or running
+    char args[DP_LINE];               // under C4KE: the line's words, for its task's argv
 };
 
 int  dos_busy;                        // a DOS program, or a DOS Prompt's line, is running
@@ -68,6 +73,7 @@ int dos_refuse() {
 
 static void prompt(struct dosprompt *d) {
     char p[4];
+    if (gd_c4ke()) { tg_say(d->g, "c4ke>"); return; }
     p[0] = 'A' + d->drive; p[1] = '>'; p[2] = 0;
     tg_say(d->g, p);
 }
@@ -198,12 +204,106 @@ static int dp_read(int ctx, char *buf, int n) {
     return k;
 }
 
+// ---- under C4KE: the line as a task ------------------------------------------
+//
+// The line's first word is a program, found as C4KE's shell finds one (its
+// RAM filesystem, then the disk, with and without .c4r), and the rest are
+// its arguments; a last word & leaves it running in the background. A task
+// in the foreground runs beside grin, whose loop carries on: what it prints
+// comes from the console tap into the window, and a line typed in the
+// window is fed to its fd 0 (Ctrl+Z: the end of its input).
+
+enum { KE_ARGS = 16, KE_OUT = 512 };
+static char ke_out[KE_OUT];
+
+// a number, or 0
+static int ke_num(char *s) {
+    int n;
+    n = 0;
+    while (*s >= '0' && *s <= '9') { n = n * 10 + *s - '0'; ++s; }
+    return *s ? 0 : n;
+}
+
+static void ke_drain(struct dosprompt *d) {
+    int n;
+    while ((n = gd_tap_drain(ke_out, KE_OUT)) > 0) if (d && d->g) tg_feed(d->g, ke_out, n);
+}
+
+static void ke_run(int w) {
+    struct dosprompt *d;
+    char *p, *argv[KE_ARGS + 1];
+    int argc, bg, pid, fed;
+    d = D(w);
+    // the words, in the window's own copy (C4KE copies the argv it is given)
+    ui_ncpy(d->args, d->cmd, DP_LINE);
+    argc = 0;
+    p = d->args;
+    while (*p && argc < KE_ARGS) {
+        while (*p == ' ') { *p = 0; ++p; }
+        if (!*p) break;
+        argv[argc] = p; ++argc;
+        while (*p && *p != ' ') ++p;
+    }
+    argv[argc] = 0;
+    bg = argc > 1 && argv[argc - 1][0] == '&' && !argv[argc - 1][1];
+    if (bg) { --argc; argv[argc] = 0; }
+    if (!argc) { prompt(d); return; }
+    // kill PID [SIGNAL]: a builtin, as in C4KE's shells (bin/kill.c4r only
+    // says how to use it); SIGTERM unless told, 9 for SIGKILL
+    if (ui_eq(argv[0], "kill")) {
+        if (argc < 2 || (pid = ke_num(argv[1])) <= 0) tg_say(d->g, "usage: kill PID [SIGNAL]  (15, SIGTERM, unless told; 9 is SIGKILL)\n");
+        else if (gd_ke_kill(pid, argc > 2 ? ke_num(argv[2]) : 15) < 0) tg_say(d->g, "kill: no such task\n");
+        prompt(d);
+        return;
+    }
+    if (bg) {
+        if ((pid = gd_ke_start(argc, argv))) {
+            ui_cpy(ke_out, "[");
+            ui_num(ke_out + ui_len(ke_out), pid);
+            ui_ncat(ke_out, "] in the background: what it prints goes to the console\n", KE_OUT);
+            tg_say(d->g, ke_out);
+        } else tg_say(d->g, "c4ke: could not start it\n");
+        prompt(d);
+        return;
+    }
+    dos_busy = 1;
+    dos_busy_set(d->cmd);
+    d->running = 1; d->inlen = 0; d->eof = 0;
+    ke_drain(0);                      // anything held from before is not this line's
+    gd_tap(1);
+    if (!(pid = gd_ke_start(argc, argv))) tg_say(d->g, "c4ke: could not start it\n");
+    fed = 0;
+    while (pid && gd_ke_running(pid)) {
+        grin_pump();
+        if (!(d = D(w)) || !d->g) break;
+        ke_drain(d);
+        // a feed read to its end: fd 0 is the keyboard again, so the next
+        // read waits rather than ending the program's input
+        if (fed && !gd_tap_left()) { gd_tap_feed(0, 0 - 1); fed = 0; }
+        if (!fed && (d->inlen || d->eof)) {
+            gd_tap_feed(d->in, d->inlen);
+            fed = 1; d->inlen = 0; d->eof = 0;
+        }
+        grin_draw_now();
+    }
+    if ((d = D(w)) && d->g) ke_drain(d);
+    gd_tap(0);
+    gd_tap_feed(0, 0 - 1);
+    if ((d = D(w)) && d->g) {
+        d->running = 0; d->inlen = 0; d->eof = 0;
+        prompt(d);
+    }
+    dos_busy = 0;
+    dos_busy_name[0] = 0;
+}
+
 // The queued line, from the top of grin's loop (no DOS program running).
 static void run_line(int w) {
     struct dosprompt *d;
     char sel[4];
     queued = 0;
     if (!(d = D(w)) || !d->g) return;
+    if (gd_c4ke()) { ke_run(w); return; }
     dos_busy = 1;
     dos_busy_set(d->cmd);
     d->running = 1; d->inlen = 0; d->eof = 0;
@@ -246,7 +346,7 @@ int dosprompt_open(char *cmd) {
     char title[24];
     dp_class.size = sizeof(struct dosprompt);
     n = free_num();
-    ui_cpy(title, "DOS Prompt ");
+    ui_cpy(title, gd_c4ke() ? "C4KE Prompt " : "DOS Prompt ");
     ui_num(title + ui_len(title), n);
     ww = TG_W + 2 * BORDER + TG_SB_W;
     hh = TG_H + 2 * BORDER + TITLE_H + 1;
@@ -257,7 +357,10 @@ int dosprompt_open(char *cmd) {
     d->num = n;
     if (!(d->g = tg_new(w))) { wk_close(w); return 0 - 1; }
     d->drive = gd_drive();
-    tg_say(d->g, "C4DOS's command interpreter, in a window: DIR, TYPE, programs and batch files.\nEXIT closes it.\n\n");
+    if (gd_c4ke())
+        tg_say(d->g, "C4KE's programs, in a window: ls, ps, top, rps, doom ... each runs as a task,\na last word & runs it in the background, kill PID 9 ends it. EXIT closes this.\n\n");
+    else
+        tg_say(d->g, "C4DOS's command interpreter, in a window: DIR, TYPE, programs and batch files.\nEXIT closes it.\n\n");
     prompt(d);
     if (cmd && cmd[0]) {
         tg_say(d->g, cmd);

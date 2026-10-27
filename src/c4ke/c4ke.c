@@ -2201,8 +2201,10 @@ static void kernel_task_finish (int *task) {
 				if (t[TASK_WAITARG] == tid) {
 					// Found a task waiting on this task's id specifically
 
-					// Update the WAITARG with tasks exit code.
+					// Update the WAITARG with tasks exit code, and the
+					// waiter's A: await_pid returns it (op_await_pid)
 					t[TASK_WAITARG] = task[TASK_EXIT_CODE];
+					t[TASK_REG_A] = task[TASK_EXIT_CODE];
 					// printf("c4ke: woke task.%d with task exit code %d\n", t[TASK_ID], task[TASK_EXIT_CODE]);
 					// Wake up the task
 					kernel_task_wake(t);
@@ -2495,13 +2497,18 @@ static void op_await_pid(int trap, int ins, int mode, int a, int *bp, int *sp, i
 		kernel_task_current[TASK_WAITSTATE] = WSTATE_PID;
 		kernel_task_current[TASK_WAITARG] = pid;
 		++kernel_tasks_waiting;
-		trap_exit();
-		// TODO: schedule in trap, no way around it
-		schedule();
-		// Exit code is placed into TASK_WAITARG by kernel_task_finish
-		a = kernel_task_current[TASK_WAITARG];
-		// if (kernel_verbosity > VERB_MED)
-		//	printf("c4ke: op_await_pid returning, a = %d\n", a);
+		// Switch away from the trap itself, as sleep does: the task comes
+		// back out of this trap when kernel_task_finish wakes it, with the
+		// exit code put in its saved A. It used to call schedule() here,
+		// inside the handler, and so every task waiting on another (the
+		// kernel on init, init on the shell, the shell on what it ran) stayed
+		// inside a trap handler -- and the machine (libjs, c4bb) holds the
+		// PIT while a handler runs, so nothing was ever preempted: a task
+		// that did not sleep had the machine to itself.
+		// Spelled out, not SCHEDULE_IN_TRAP(): c4m compiles this file with
+		// no preprocessor (innerbench), and a macro call is a call to
+		// nothing there ("bad function call").
+		__c4_jmp((int *)&trap_schedule_in_trap + 2);
 	} else {
 		// If task not running, no point in waiting
 		printf("c4ke: await_pid(%d) - process %d not found\n", pid, pid);

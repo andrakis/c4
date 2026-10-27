@@ -405,7 +405,7 @@ static void pass(int how) {
         if (__time() - last_frame >= SAVER_MS) { saver_frame(); gui_show(); last_frame = __time(); }
         k = SAVER_MS - (__time() - last_frame);
         if (k < 1) k = 1;
-        if (!(how & PASS_GAME)) __c4_usleep(k * 1000);
+        if (!(how & PASS_GAME)) usleep(k * 1000);
         return;
     }
     // a redraw: at once for input or a game's frame, else at most one every 25 ms
@@ -416,14 +416,15 @@ static void pass(int how) {
         busy = 1;
     }
     // nothing to do: a nap until the next thing due, which an event
-    // from the display cuts short
+    // from the display cuts short (libc's usleep: under C4KE it is
+    // C4KE's sleep, and the other tasks run; bare.c)
     if (!busy && running && !(how & PASS_GAME)) {
         k = wk_dirty() ? 25 - (__time() - last_draw) : NAP;
         t = wk_next_timer();
         if (t >= 0 && t < k) k = t;
         if (!second_draw && k > 100) k = 100;
         if (k < 1) k = 1;
-        __c4_usleep(k * 1000);
+        usleep(k * 1000);
     }
 }
 

@@ -8,6 +8,8 @@ At A>  (C4DOS)
 
 At c4sh>  (C4KE)
   wolf3d, doom, rps, raycast   play, as C4KE tasks
+  grin                         the graphical shell: its DOS Prompt runs
+                               C4KE's programs (kill PID 9 ends one)
   tar x c4ix-src.tar           C4IX's sources, into the RAM filesystem
   b4ke -f c4ix.b4k             twelve modules and a link: c4ix.c4r
   kboot c4ix.c4r               C4KE stops, and the C4IX it built boots

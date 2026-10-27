@@ -356,7 +356,9 @@ rm -rf $T
 # Persistence (src/c4ix/user/persist.c): drive 1 keeps what changed. One
 # session writes a file, makes a directory, deletes a file the root
 # archive brought and syncs; the next, on the same drive, finds all three
-# as they were left. A third, after persist forget, starts clean.
+# as they were left. A third, after persist forget, starts clean. The
+# first also keeps the unpacked root archive on the drive, and the two
+# after it unpack that copy instead of the archive.
 T=$(mktemp -d)
 out=$(printf 'wait 4\necho kept > /usr/kept.txt\nmkdir /usr/kdir\nrm /usr/README.md\nsync\nexit\n' | \
       timeout 300 $LIBJS -m 64 -c 3000000000 -d $IMAGES/disk -w $T $IMAGES/c4ix32.c4r 2>/dev/null)
@@ -371,6 +373,13 @@ if echo "$out" | grep -qE "persist: [0-9]+ changes and 1 deletions kept" && [ -s
     ok "persist keeps a session's changes on drive 1 for the next"
 else bad "persist keeps a session's changes on drive 1 for the next"
      echo "$out" | grep -E "persist|sync|rm:" | head -4; echo "$out2" | grep -E "persist|kept|kdir|README" | head -6; fi
+if [ -s $T/c4ix-base.tar ] && [ "$(cat $T/c4ix-base.id)" = "$(cat $IMAGES/disk/c4ix-root.tgz.id)" ] &&
+   ! echo "$out" | grep -q "from the copy kept on drive 1" &&
+   echo "$out2" | grep -qE "persist: c4ix-root.tgz: [0-9]+ files from the copy kept on drive 1" &&
+   echo "$out3" | grep -qE "persist: c4ix-root.tgz: [0-9]+ files from the copy kept on drive 1"; then
+    ok "persist keeps the unpacked root archive on drive 1, and the next boots unpack that"
+else bad "persist keeps the unpacked root archive on drive 1, and the next boots unpack that"
+     ls -l $T; echo "$out2" | grep -E "persist" | head -4; fi
 rm -rf $T
 
 # Processors (smp.js, docs/c4ix-smp.md S1): c4mp's own guests, built for

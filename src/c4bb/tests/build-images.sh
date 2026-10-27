@@ -823,6 +823,10 @@ BUILT=$(cd $ROOT && {
 })
 tar --format=ustar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
     -C $ROOT -cf - usr --no-recursion $BUILT | gzip -9n > $DISK/c4ix-root.tgz
+# Its id, which C4IX's persist keeps with its unpacked copy on drive 1:
+# a boot whose archive has the same id unpacks that copy, not this
+# (src/c4ix/user/persist.c)
+sha256sum $DISK/c4ix-root.tgz | cut -c1-16 > $DISK/c4ix-root.tgz.id
 rm -rf $ROOT
 
 say "the disk's manifest, sizes and index"

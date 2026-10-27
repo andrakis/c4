@@ -3,7 +3,9 @@
 //
 //   persist boot ARCHIVE...  unpack the system (vfsload runs this as the
 //                            boot's unpacking task), note what it is,
-//                            then lay the saved changes over it
+//                            then lay the saved changes over it; the
+//                            unpacked system is kept on the drive, and
+//                            the next boot unpacks that instead
 //   persist save             write every change since boot to the drive
 //   sync                     the same (/bin/sync is this program)
 //   persist status           what save would write
@@ -28,6 +30,16 @@
 // newer than its source when they come back.
 //
 // /tmp, /log and /var/persist are never kept.
+//
+// The unpacked system, kept. Inflating the root archive is seconds of
+// interpreted work at every boot, and the archive is megabytes to fetch.
+// So where there is a drive, the tar it inflates to is kept there too,
+// 1:c4ix-base.tar, and 1:c4ix-base.id names the archive it came from:
+// the contents of NAME.id, a digest build-images.sh writes beside the
+// archive, or else its size. A boot whose archive has that id untars the
+// kept copy, and neither fetches nor inflates the archive. A new archive
+// has another id and is unpacked again; Reset Files on the page empties
+// the drive, and so does the same. Only for one archive, the root's.
 
 #include "c4ix_user.h"
 #include "archive.h"
@@ -42,6 +54,8 @@ enum {
 static char *SNAP = "1:c4ix-persist.tar";
 static char *BASE = "/var/persist/base";
 static char *WHITE = "/var/persist/whiteouts";
+static char *KTAR = "1:c4ix-base.tar";
+static char *KID = "1:c4ix-base.id";
 
 // ---- the drive ----
 
@@ -247,9 +261,100 @@ static int restore() {
     return 0;
 }
 
+// ---- the unpacked system, kept ----
+
+// The archive's id: its NAME.id's first line, else "size N"; 0 if neither
+static char *archive_id(char *name) {
+    char *idname, *id, *s;
+    int n, len, st[4];
+    n = ustrlen(name);
+    idname = (char *)ualloc(n + 4);
+    memcpy(idname, name, n);
+    memcpy(idname + n, ".id", 4);
+    id = arc_readfile(idname, &len);
+    free(idname);
+    if (id) {
+        n = 0;
+        while (n < len && id[n] != '\n' && id[n] != '\r') ++n;
+        id[n] = 0;
+        if (n > 0) return id;
+        free(id);
+    }
+    if (ustat(name, st) < 0 || st[1] <= 0) return 0;
+    id = (char *)ualloc(32);
+    memcpy(id, "size ", 5);
+    s = id + 5;
+    n = st[1];
+    len = 1;
+    while (n >= 10) { n = n / 10; ++len; }
+    s[len] = 0;
+    n = st[1];
+    while (len > 0) { --len; s[len] = '0' + n % 10; n = n / 10; }
+    return id;
+}
+
+// The kept copy, if it is ID's: its files, or -1
+static int from_kept(char *id) {
+    char *have, *tar;
+    int len, n, fd;
+    if ((fd = uopen(KID, O_RD)) < 0) return 0 - 1;
+    uclose(fd);
+    if (!(have = arc_readfile(KID, &len))) return 0 - 1;
+    have[len] = 0;
+    n = same(have, id);
+    free(have);
+    if (!n) return 0 - 1;
+    if (!(tar = arc_readfile(KTAR, &len))) return 0 - 1;
+    n = arc_untar(tar, len, "/", ARC_EXTRACT, 0);
+    free(tar);
+    return n;
+}
+
+// Keep TAR, the archive ID unpacked to. The id is emptied first and
+// written last, so a copy cut short is never taken for a whole one.
+static void keep(char *tar, int len, char *id) {
+    if (w_open(KID) < 0) return;
+    if (w_close() < 0) return;
+    if (w_open(KTAR) < 0) return;
+    w_put(tar, len);
+    if (w_close() < 0) { ufprintf(STDERR, "persist: could not keep %s\n", KTAR); return; }
+    if (w_open(KID) < 0) return;
+    w_put(id, ustrlen(id));
+    w_close();
+}
+
+// The archive unpacked, as arc_extract does, and its tar kept for ID
+static int unpack_keep(char *name, char *id) {
+    char *raw, *tar;
+    int rawlen, len, n;
+    if (!(raw = arc_readfile(name, &rawlen))) return 0 - 1;
+    if (rawlen >= 2 && (raw[0] & 255) == 0x1F && (raw[1] & 255) == 0x8B) {
+        if (arc_gunzip(raw, rawlen, &tar, &len) < 0) { free(raw); return 0 - 1; }
+        free(raw);
+    } else {
+        tar = raw;
+        len = rawlen;
+    }
+    n = arc_untar(tar, len, "/", ARC_EXTRACT, 0);
+    if (n >= 0 && id) keep(tar, len, id);
+    free(tar);
+    return n;
+}
+
 static int boot(int argc, char **argv) {
     int i, n;
+    char *id;
     i = 2;
+    // the root archive alone, and a drive: the copy kept from the boot
+    // before, or the archive unpacked and its copy kept for the next
+    if (argc == 3 && have_drive()) {
+        id = archive_id(argv[2]);
+        n = id ? from_kept(id) : 0 - 1;
+        if (n >= 0) uprintf("persist: %s: %d files from the copy kept on drive 1\n", argv[2], n);
+        else if (unpack_keep(argv[2], id) < 0) ufprintf(STDERR, "persist: %s: %s\n", argv[2], arc_error ? arc_error : "failed");
+        if (id) free(id);
+        i = argc;
+    }
     while (i < argc) {
         n = arc_extract(argv[i], "/", ARC_EXTRACT, 0);
         if (n < 0) ufprintf(STDERR, "persist: %s: %s\n", argv[i], arc_error ? arc_error : "failed");

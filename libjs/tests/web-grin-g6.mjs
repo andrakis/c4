@@ -7,7 +7,10 @@
 // user's Chromes (cdp.mjs), against a page served from this tree:
 //
 //   node libjs/serve.mjs PORT &
-//   node libjs/tests/web-grin-g6.mjs http://127.0.0.1:9222 https://PORT.code.home.stargazer.onl OUTDIR [SECONDS]
+//   node libjs/tests/web-grin-g6.mjs http://127.0.0.1:9222 https://PORT.code.home.stargazer.onl OUTDIR [SECONDS [WHAT]]
+//
+// WHAT: a comma-separated list of what to do, of "doom" (the first part)
+// and the games' names; all of it when it is left out.
 //
 // (through the https proxy rather than http://HOST:PORT: a plain-http page
 // on another host is not a secure context, and has no SharedArrayBuffer)
@@ -18,8 +21,9 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { Browser } from './cdp.mjs';
 
-const [cdp = 'http://127.0.0.1:9222', base = 'http://127.0.0.1:8472', outdir = '/tmp/web-grin-g6', secs = '15'] = process.argv.slice(2);
+const [cdp = 'http://127.0.0.1:9222', base = 'http://127.0.0.1:8472', outdir = '/tmp/web-grin-g6', secs = '15', what = ''] = process.argv.slice(2);
 const SECS = +secs;
+const want = s => !what || what.split(',').includes(s);
 mkdirSync(outdir, { recursive: true });
 let fail = 0;
 const ok = (what, cond, extra = '') => {
@@ -67,6 +71,16 @@ try {
     await tab.send('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode: vk, modifiers: mods });
     await sleep(150);
   };
+  // the Task List (Ctrl+Esc): a window brought to the front, or ended
+  const task = async (title, button) => {
+    await hold('Escape', 80, 2);
+    if (!await shownHas('End Task', 5000)) return false;
+    const rows = (await find(title)).sort((a, c) => a.y - c.y);
+    await clickT(rows[rows.length - 1]);
+    await clickText(button);
+    await sleep(800);
+    return true;
+  };
   const shot = async name => { writeFileSync(`${outdir}/${name}.png`, await tab.screenshot()); console.log(`web-grin-g6: screenshot ${outdir}/${name}.png`); };
   // the 8-bit frames the page has drawn (GUI_BLIT8, which the machine's
   // display device hands the page as RGB, command 102): a game's frames,
@@ -95,15 +109,24 @@ try {
     return up && await shownHas('Program Manager');
   };
 
+  let n0 = 0;
+  if (want('doom')) {
   ok('?persist=reset: the page boots into grin', await boot());
-  ok('grin is at 640x480 or 800x600', [640, 800].includes(await tab.eval("document.getElementById('display').width")));
+  // 800x600, where a game's window is 2x
+  await item('Main', 'Control Panel');
+  await shownHas('Display');
+  await clickText('Display', true);
+  await shownHas('800 x 600');
+  await clickText('800 x 600'); await clickText('OK');
+  ok('Control Panel > Display: 800x600', await tab.waitFor("document.getElementById('display').width === 800", 10000));
+  await task('Control Panel', 'End Task');
 
   // ---- Doom in a window, beside a Clock and Notepad -----------------------------------
   await item('Accessories', 'Clock');
   ok('Accessories > Clock', await shownHas('Settings'));
   await item('Main', 'Notepad');
   ok('Main > Notepad', await shownHas('Untitled - Notepad'));
-  let n0 = await count();
+  n0 = await count();
   await item('Games', 'Doom');
   ok('Games > Doom: it plays in a window of grin\'s, Program Manager still drawn',
     await tab.waitFor(`(window.c4m.display.rgbFrames | 0) > ${n0} + 20`, 90000) && await shownHas('Size') && await shownHas('Program Manager'));
@@ -111,7 +134,7 @@ try {
   await shot('grin-g6-1-doom-window');
   await measure('Doom, window 2x');
   // typing in Notepad while the demo plays
-  await clickText('Untitled - Notepad');
+  ok('the Task List brings Notepad to the front', await task('Untitled - Notepad', 'Switch To'));
   await tab.type('Typed in Notepad while Doom plays.');
   n0 = await count();
   ok('typing in Notepad while Doom\'s demo plays: Notepad shows it', await shownHas('Typed in Notepad while Doom plays.'));
@@ -119,7 +142,7 @@ try {
   ok('... and Doom drew on meanwhile', await count() > n0 + 5);
   await shot('grin-g6-2-typing-in-notepad');
   // the Size menu: 1x, and back to 2x
-  await clickText('Doom');
+  await task('Doom', 'Switch To');
   await clickText('Size');
   ok('Doom\'s Size menu', await shownHas('1x  320 x 200'));
   await clickText('1x  320 x 200');
@@ -131,15 +154,13 @@ try {
   await clickText('2x  640 x 400');
   await sleep(1000);
   // the Task List's End Task closes it, and Doom ends
-  await hold('Escape', 80, 2);
-  ok('Ctrl+Esc over Doom: the Task List', await shownHas('End Task'));
-  await clickT((await find('Doom')).sort((a, c) => a.y - c.y).pop());
-  await clickText('End Task');
+  ok('Ctrl+Esc over Doom: the Task List, End Task', await task('Doom', 'End Task'));
   n0 = await count();
   await sleep(2500);
   ok('End Task: Doom\'s window goes, and no more frames come', !(await shownHas('Size', 3000)) && await count() === n0);
   await shot('grin-g6-4-after-doom');
   ok('grin carries on: the Clock and Notepad are still there', await shownHas('Typed in Notepad while Doom plays.'));
+  }
 
   // ---- frames per second, each game, in a window and full screen -----------------------
   // Doom's demo plays by itself; Wolfenstein 3D goes into a new game
@@ -148,6 +169,7 @@ try {
   const games = [
     { name: 'Doom', start: async () => sleep(4000) },
     { name: 'Wolfenstein 3D', start: async () => {
+      await sleep(8000);
       for (let i = 0; i < 3; i++) { await hold('Enter'); await sleep(4000); }
       await hold('Escape'); await sleep(2500);
       await hold('n'); await sleep(1500);
@@ -160,6 +182,7 @@ try {
   ];
   for (const mode of ['window', 'full screen']) {
     for (const g of games) {
+      if (!want(g.name)) continue;
       ok(`fresh boot for ${g.name}, ${mode}`, await boot());
       if (mode === 'full screen') {
         await clickT(await pick('Games', g.name));
@@ -171,7 +194,8 @@ try {
       }
       n0 = await count();
       await item('Games', g.name);
-      if (!ok(`${g.name}, ${mode}: its frames arrive`, await tab.waitFor(`(window.c4m.display.rgbFrames | 0) > ${n0} + 5`, 120000))) continue;
+      // (one is enough: Wolfenstein 3D's sign-on draws one and waits for a key)
+      if (!ok(`${g.name}, ${mode}: its frames arrive`, await tab.waitFor(`(window.c4m.display.rgbFrames | 0) > ${n0}`, 120000))) continue;
       await g.start();
       const tag = g.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
       await shot(`grin-g6-fps-${tag}-${mode === 'window' ? 'window' : 'full'}`);

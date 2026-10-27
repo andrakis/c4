@@ -126,7 +126,11 @@ Then the segments in this order, each preceded by a one-word marker
   that points into code, -4 a data word that points into data. Addresses are
   word offsets into code for -1/-2 and byte offsets into data for -3/-4
   (pointer initializers of globals, switch jump tables). A positive type is a
-  symbol reference, resolved by the linker.
+  symbol reference, resolved by the linker. A loader overwrites the patched
+  word with the segment's load address plus value, so what the word holds in
+  the file is never read; c4cc writes the value there (0 for a symbol),
+  never one of its own addresses, so building an unchanged source twice
+  gives the same bytes.
 - **constructors / destructors** (`c`, `d`): one code offset per entry.
   Constructors run before `main`; destructors run after `main` returns, not
   after `exit()`.

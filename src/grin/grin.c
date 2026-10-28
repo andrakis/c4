@@ -8,7 +8,7 @@
 // This file: the start and the end, the loop, what grin draws under the
 // windows (the desktop's colour and pattern), what it takes before them
 // (Ctrl+Esc, and a double click on the desktop: the Task List),
-// GRIN.INI, and what the kit asks of its host -- memory, and files
+// GRIN.INI, the startup chime, and what the kit asks of its host -- memory, and files
 // through libc and bare.c, which are C4DOS's. The applications grin runs
 // (Clock, Calculator) are apps.c's; the loop gives them their turn. DOS
 // programs run from the top of the loop, one at a time: full screen here
@@ -36,6 +36,7 @@ struct grin_ini ini;
 //   pattern=0
 //   saver=0
 //   wait=5
+//   chime=1
 //
 // Read when grin starts: from the RAM disk if this session wrote one,
 // else from the disk, else the defaults. A line it does not know is
@@ -45,7 +46,7 @@ enum { INI_MAX = 1024 };
 static char inibuf[INI_MAX];
 
 static void ini_defaults() {
-    ini.sw = 640; ini.sh = 480; ini.scheme = 0; ini.pattern = 0; ini.saver = 0; ini.wait = 5;
+    ini.sw = 640; ini.sh = 480; ini.scheme = 0; ini.pattern = 0; ini.saver = 0; ini.wait = 5; ini.chime = 1;
 }
 
 static int ini_num(char *s) {
@@ -83,6 +84,7 @@ static void ini_load() {
         if ((v = ini_key(p, "pattern")) >= 0 && v < pattern_count()) ini.pattern = v;
         if ((v = ini_key(p, "saver")) >= 0 && v < saver_count()) ini.saver = v;
         if ((v = ini_key(p, "wait")) >= 1 && v <= 60) ini.wait = v;
+        if ((v = ini_key(p, "chime")) >= 0 && v <= 1) ini.chime = v;
         while (i < n && inibuf[i] != '\n') ++i;
         ++i;
     }
@@ -107,9 +109,56 @@ void ini_save() {
     ini_line("pattern", ini.pattern);
     ini_line("saver", ini.saver);
     ini_line("wait", ini.wait);
+    ini_line("chime", ini.chime);
     if ((fd = open("GRIN.INI", O_WRONLY | O_CREAT | O_TRUNC)) < 0) return;
     write(fd, inibuf, ui_len(inibuf));
     close(fd);
+}
+
+// ---- the startup chime --------------------------------------------------------------
+//
+// Four notes rising, C E G C, on the sound card's OPL, struck a little
+// apart and left to ring, in a bell's voice: a modulator three times the
+// note's frequency over a carrier at it, both dying away (no sustain).
+// Only where there is a card (announced, never probed: snd_present), and
+// only after grin's first frame is up: the card's stream is stamped, so
+// the whole chime is written at once and plays out in its own time, and
+// grin carries straight on. GRIN.INI's chime=0 (Control Panel's Sound)
+// leaves it out.
+
+enum { CHIME_NOTES = 4, CHIME_STEP = 150, CHIME_RING = 1400, CHIME_BLOCK = 5 };
+// the notes' F-numbers in block 5: f * 2^15 / 49716 for C5, E5, G5, C6
+static int chime_fnum[CHIME_NOTES] = { 345, 435, 517, 690 };
+// each channel's two operators' register offsets (OPL2 channels 0 to 3)
+static int chime_mod[CHIME_NOTES] = { 0x00, 0x01, 0x02, 0x08 };
+
+void grin_chime() {
+    int k, op, clock;
+    if (!snd_present() || !(snd_caps() & SND_HAS_OPL)) return;
+    clock = *(int *)SND_CLOCK;
+    snd_clock(1000);                  // snd_wait in milliseconds, for the chime; given back after
+    k = 0;
+    while (k < CHIME_NOTES) {
+        op = chime_mod[k];
+        snd_opl(0x20 + op, 0x03); snd_opl(0x23 + op, 0x01);   // no sustain; multiples 3 and 1
+        snd_opl(0x40 + op, 0x1a); snd_opl(0x43 + op, 0x0c);   // how much the modulator bends; loudness
+        snd_opl(0x60 + op, 0xf4); snd_opl(0x63 + op, 0xf2);   // a strike, and a slow fall
+        snd_opl(0x80 + op, 0x45); snd_opl(0x83 + op, 0x24);
+        snd_opl(0xe0 + op, 0); snd_opl(0xe3 + op, 0);
+        snd_opl(0xc0 + k, 0x06);                              // feedback 3, FM
+        ++k;
+    }
+    k = 0;
+    while (k < CHIME_NOTES) {
+        snd_opl(0xa0 + k, chime_fnum[k] & 255);
+        snd_opl(0xb0 + k, 0x20 | (CHIME_BLOCK << 2) | (chime_fnum[k] >> 8));
+        snd_wait(CHIME_STEP);
+        ++k;
+    }
+    snd_wait(CHIME_RING);
+    k = 0;
+    while (k < CHIME_NOTES) { snd_opl(0xb0 + k, (CHIME_BLOCK << 2) | (chime_fnum[k] >> 8)); ++k; }
+    snd_clock(clock > 0 ? clock : 1000000);
 }
 
 // ---- the desktop: its colour, and a pattern over it ----------------------------------
@@ -267,6 +316,12 @@ void grin_picture(int pic, int x, int y) {
         d_line(x + 16, y + 16, x + 16, y + 7, C_DARK); d_line(x + 17, y + 16, x + 17, y + 7, C_DARK);
         d_line(x + 16, y + 16, x + 22, y + 20, C_DARK);
         d_line(x + 16, y + 16, x + 10, y + 24, 0xc02020);
+    } else if (pic == PIC_SOUND) {
+        // a loudspeaker, and its sound
+        d_rect(x + 4, y + 11, 7, 10, C_DARK);
+        k = 0;
+        while (k < 8) { d_rect(x + 11 + k, y + 11 - k, 1, 10 + 2 * k, C_DARK); ++k; }
+        d_rect(x + 22, y + 13, 2, 6, C_SHADOW); d_rect(x + 26, y + 10, 2, 12, C_SHADOW);
     } else if (pic == PIC_CALC) {
         d_rect(x + 5, y + 1, 22, 30, C_DARK);
         d_rect(x + 6, y + 2, 20, 28, C_FACE);
@@ -360,7 +415,7 @@ enum { RING = 65536, EVENTS = GUI_M_MOVE | GUI_M_BUTTONS | GUI_M_KEYS | GUI_M_WH
 enum { PASS_TOP = 1, PASS_GAME = 2 };
 
 static int *ring;
-static int start_ms, second_draw, last_input, last_frame, last_draw;
+static int start_ms, second_draw, last_input, last_frame, last_draw, chimed, shown;
 
 // One pass of the loop: the display's events to the windows, the
 // timers, the screen saver, a redraw, and a nap when there is nothing to
@@ -414,6 +469,7 @@ static void pass(int how) {
         last_draw = __time();
         wk_drawn();
         busy = 1;
+        shown = 1;
     }
     // nothing to do: a nap until the next thing due, which an event
     // from the display cuts short (libc's usleep: under C4KE it is
@@ -563,6 +619,7 @@ int main(int argc, char **argv) {
     wk.style = S_WIN31;
     wk_scheme_use(ini.scheme, 0 - 1);
     wk_min_icons(1);
+    saver_marquee = "grin -- C4DOS in the manner of Windows 3.1";
     wk_init(&shell);
     apps_init();
     fwin_init();
@@ -572,8 +629,12 @@ int main(int argc, char **argv) {
     wk_redraw_all();
     start_ms = __time(); second_draw = 0;
     last_input = __time(); last_frame = 0; last_draw = 0;
+    chimed = 0; shown = 0;
     while (running) {
         pass(PASS_TOP);
+        // the first frame is up (the first pass may come too soon to draw):
+        // the chime, if there is a card and it is wanted
+        if (!chimed && shown) { chimed = 1; if (ini.chime) grin_chime(); }
         // the top of the loop: a DOS program waiting to run, one at a time;
         // and the window of a game that has ended, closed
         if (running && !dos_busy) {

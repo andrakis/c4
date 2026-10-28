@@ -16,6 +16,7 @@ struct grin_ini {
     int scheme;                       // the kit's colour scheme
     int pattern;                      // the desktop's (pattern_name), 0 none
     int saver, wait;                  // the screen saver (savers.c, 0 none), after how many minutes
+    int chime;                        // the startup chime (1, the default; 0 none)
 };
 extern struct grin_ini ini;
 void ini_save();
@@ -28,6 +29,7 @@ void  grin_set_pattern(int pattern);
 void  grin_set_screen(int sw, int sh);
 void  grin_saver_test(int which);     // the saver now, past the click that asked
 void  grin_quit();                    // the session ends: the loop stops
+void  grin_chime();                   // the startup chime, on the OPL (where there is a sound card)
 
 // the built-in windows
 int  progman_open();                  // progman.c: Program Manager
@@ -82,7 +84,7 @@ enum { ITEM_W = 76, ITEM_H = 60 };
 void grin_item(int cx, int y, int pic, char *label, int sel);
 int  grin_item_hit(int px, int py, int cx, int y);
 enum { PIC_CONTROL = 1, PIC_DISPLAY = 2, PIC_COLORS = 3, PIC_DESKTOP = 4, PIC_CLOCK = 5, PIC_CALC = 6,
-       PIC_FILES = 7, PIC_DOS = 8, PIC_NOTEPAD = 9, PIC_GAME = 10, PIC_APP = 11, N_PICS = 12 };
+       PIC_FILES = 7, PIC_DOS = 8, PIC_NOTEPAD = 9, PIC_GAME = 10, PIC_APP = 11, PIC_SOUND = 12, N_PICS = 13 };
 void grin_item_dim(int cx, int y, int pic, char *label, int sel, int dim);   // dim: greyed, not available
 void grin_picture(int pic, int x, int y);
 

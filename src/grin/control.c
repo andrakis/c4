@@ -1,15 +1,16 @@
 // control.c -- Control Panel (docs/grin-plan.md 4): Display (640x480 or
-// 800x600, applied at once), Colors (the kit's schemes) and Desktop (a
-// pattern, and the screen saver). Every choice is kept in GRIN.INI.
+// 800x600, applied at once), Colors (the kit's schemes), Desktop (a
+// pattern, and the screen saver) and Sound (the startup chime, with a
+// Test). Every choice is kept in GRIN.INI.
 
 #include "shell.h"
 
 // ---- the window: an item for each ---------------------------------------------------
 
-enum { N_ITEMS = 3, ITEM_Y = 12 };
-static char *item_labels[N_ITEMS] = { "Colors", "Desktop", "Display" };
-static int item_pics[N_ITEMS] = { PIC_COLORS, PIC_DESKTOP, PIC_DISPLAY };
-static char *settings_items[6] = { "Colors...", "Desktop...", "Display...", "-", "Exit", 0 };
+enum { N_ITEMS = 4, ITEM_Y = 12 };
+static char *item_labels[N_ITEMS] = { "Colors", "Desktop", "Display", "Sound" };
+static int item_pics[N_ITEMS] = { PIC_COLORS, PIC_DESKTOP, PIC_DISPLAY, PIC_SOUND };
+static char *settings_items[7] = { "Colors...", "Desktop...", "Display...", "Sound...", "-", "Exit", 0 };
 static struct wk_menu menus[1];
 
 struct control { int sel; };
@@ -17,6 +18,7 @@ struct control { int sel; };
 static void open_colors();
 static void open_desktop();
 static void open_display();
+static void open_sound();
 
 static int item_cx(int k) { return 12 + ITEM_W / 2 + k * (ITEM_W + 8); }
 
@@ -33,6 +35,7 @@ static void cp_choose(int k) {
     if (k == 0) open_colors();
     else if (k == 1) open_desktop();
     else if (k == 2) open_display();
+    else if (k == 3) open_sound();
 }
 
 static void cp_mouse(int w, int ev, int x, int y, int b) {
@@ -88,16 +91,18 @@ struct choice {
     int what;                         // which dialog
     int a, b, wait;                   // the choices: a's column, b's, the saver's wait
 };
-enum { D_DISPLAY = 1, D_COLORS = 2, D_DESKTOP = 3 };
+enum { D_DISPLAY = 1, D_COLORS = 2, D_DESKTOP = 3, D_SOUND = 4 };
 static char *sizes[2] = { "640 x 480", "800 x 600" };
+static char *chimes[2] = { "No chime", "A chime when grin starts" };
 
 static int col_n(int what, int col) {
-    if (what == D_DISPLAY) return 2;
+    if (what == D_DISPLAY || what == D_SOUND) return 2;
     if (what == D_COLORS) return wk_scheme_count();
     return col ? saver_count() : pattern_count();
 }
 static char *col_label(struct choice *c, int col, int k) {
     if (c->what == D_DISPLAY) return sizes[k];
+    if (c->what == D_SOUND) return chimes[k];
     if (c->what == D_COLORS) return wk_scheme_name(k);
     return col ? saver_name(k) : pattern_name(k);
 }
@@ -108,7 +113,7 @@ static int buttons_y(int what) {
     int n, m;
     n = col_n(what, 0);
     if (ncols(what) > 1 && (m = col_n(what, 1)) > n) n = m;
-    return rows_y() + n * RADIO_H + (what == D_DESKTOP ? 40 : 16);
+    return rows_y() + n * RADIO_H + (what == D_DESKTOP || what == D_SOUND ? 40 : 16);
 }
 
 static void ch_draw(int w, int cw, int ch, int focused) {
@@ -123,6 +128,7 @@ static void ch_draw(int w, int cw, int ch, int focused) {
         y = rows_y();
         if (c->what == D_DISPLAY) ui_group(10, 8, cw - 20, buttons_y(c->what) - 18, "Screen size");
         else if (c->what == D_COLORS) ui_group(10, 8, cw - 20, buttons_y(c->what) - 18, "Color schemes");
+        else if (c->what == D_SOUND) ui_group(10, 8, cw - 20, buttons_y(c->what) - 18, "Startup");
         else ui_group(col_x(col) - 10, 8, 160, buttons_y(c->what) - 18, col ? "Screen Saver" : "Pattern");
         while (k < col_n(c->what, col)) {
             ui_radio(col_x(col), y, col_label(c, col, k), k == (col ? c->b : c->a));
@@ -141,6 +147,7 @@ static void ch_draw(int w, int cw, int ch, int focused) {
         d_text(col_x(1) + 118, y + 4, C_DARK, F_SANS, "min");
         ui_button(col_x(0), y, 64, 20, "Test", 0, 0);
     }
+    if (c->what == D_SOUND) ui_button(col_x(0), buttons_y(c->what) - 34, 64, 20, "Test", 0, 0);
     ui_button(cw / 2 - OK_W - 6, buttons_y(c->what), OK_W, BTN_H, "OK", 0, 1);
     ui_button(cw / 2 + 6, buttons_y(c->what), OK_W, BTN_H, "Cancel", 0, 0);
 }
@@ -152,6 +159,7 @@ static void ch_ok(int w) {
     wk_close(w);
     if (c->what == D_DISPLAY) grin_set_screen(c->a ? 800 : 640, c->a ? 600 : 480);
     else if (c->what == D_COLORS) grin_set_scheme(c->a);
+    else if (c->what == D_SOUND) { ini.chime = c->a; ini_save(); }
     else {
         ini.saver = c->b; ini.wait = c->wait;
         grin_set_pattern(c->a);
@@ -172,6 +180,7 @@ static void ch_mouse(int w, int ev, int x, int y, int b) {
         if (ui_hit(x, y, col_x(1) + 92, by - 34, 20, 20) && c->wait < 60) { ++c->wait; return; }
         if (ui_hit(x, y, col_x(0), by - 34, 64, 20)) { grin_saver_test(c->b); return; }
     }
+    if (c->what == D_SOUND && ev == E_DOWN && ui_hit(x, y, col_x(0), by - 34, 64, 20)) { grin_chime(); return; }
     col = 0;
     while (col < ncols(c->what)) {
         k = 0;
@@ -217,6 +226,10 @@ static void open_display() {
 static void open_colors() {
     struct choice *c;
     if ((c = choice_open(D_COLORS, "Color", 260))) c->a = ini.scheme;
+}
+static void open_sound() {
+    struct choice *c;
+    if ((c = choice_open(D_SOUND, "Sound", 260))) c->a = ini.chime;
 }
 static void open_desktop() {
     struct choice *c;

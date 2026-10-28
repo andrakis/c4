@@ -224,8 +224,9 @@ static void bez_frame() {
 // ---- Marquee ----
 static int mq_x, mq_y, mq_hue;
 static char *mq_text;
+char *saver_marquee = "C4IX -- built upon Robert Swierczek's C4";   // Marquee's line: the shell's to change
 static void mq_place() { mq_x = wk.sw; mq_y = rnd_range(40, wk.sh - 100); }
-static void mq_start() { mq_text = "C4IX -- built upon Robert Swierczek's C4"; mq_place(); mq_hue = rnd_range(0, 1535); }
+static void mq_start() { mq_text = saver_marquee; mq_place(); mq_hue = rnd_range(0, 1535); }
 static void mq_frame() {
     d_rect(0, 0, wk.sw, wk.sh, 0);
     d_textn(mq_x, mq_y, hue_rgb(mq_hue, 255), 48, F_BOLD, 0, mq_text, 0 - 1);

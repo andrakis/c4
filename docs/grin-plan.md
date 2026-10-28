@@ -1,5 +1,12 @@
 # grin: a graphical interface for C4DOS (plan)
 
+**[grin.md](grin.md) is grin's design and status document now** (since
+G7, 2026-10-28): what grin is, how it is built and works, the milestones
+as built, and what is left, G8 and G9 among it. This plan is kept whole
+as the record it was built from: the "As built in ..." parts of section 3
+and each milestone's results, deviations and measurements in section 5
+are its particulars.
+
 Status: written 2026-10-24 against `smp` at 6295e18, and revised the
 same day with the user's answers (section 8). **G0 and G1 are built**
 (branches `grin-g0` and `grin-g1`, merged here on 2026-10-24), and
@@ -918,7 +925,8 @@ alone), `DOSFILT` (a c4cc filter, `src/tests/dosfilt.c`; `-r` reads with
 ## 4. The first applications
 
 - **Program Manager** (built in) is the shell window. In G4 it shows one
-  group at a time, with a group list. MDI group windows arrive in G7.
+  group at a time, with a group list. MDI group windows arrive in G7
+  (built: grin.md 3.7).
   - Its default groups:
     - **Main**: File Manager, DOS Prompt, Control Panel, Notepad;
     - **Accessories**: Clock, Calculator;
@@ -1466,6 +1474,15 @@ Deviations and findings:
 - A startup chime on the OPL.
 - `docs/grin.md` replaces this plan as the design and status document.
 - **Tests:** a headless check for each feature.
+
+*Done, branch `grin-g7` (2026-10-28).* What was built, its deviations and
+its checks are in [grin.md](grin.md) ("G7, as built", and sections 3.7 to
+3.10): Program Manager's groups as windows inside it, with Cascade, Tile
+and Arrange Icons in a Window menu that lists them, their places kept in
+PROGMAN.INI; the clipboard, which was already grin's memory, used at last
+by Notepad (a selection and an Edit menu), every text field, Calculator
+and the DOS Prompt (an Edit menu); the screen saver, built in G2, checked;
+the startup chime, with Control Panel's Sound to switch it off.
 
 **Rough sizes, by analogy with the C4IX desktop:**
 

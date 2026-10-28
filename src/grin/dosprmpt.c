@@ -19,6 +19,12 @@
 // EXIT closes the window. DOS's exec takes EXIT to end the exec, not
 // DOS, so the window looks for the word itself.
 //
+// Its Edit menu is the clipboard, as Windows 3.1's DOS window had it:
+// Copy takes the screen's text (as Print Screen took a DOS program's in
+// standard mode), and Paste types the clipboard in, a key a character,
+// up to the first line that runs a command (Ctrl+Ins and Shift+Ins, or
+// Ctrl+V, too; Ctrl+C stays DOS's ^C).
+//
 // With no DOS, grin is a C4KE task (the Build Ladder, docs/c4dos-ladder.md),
 // and the window is a C4KE Prompt instead: its lines run C4KE's programs as
 // tasks (ke_run, below).
@@ -100,6 +106,59 @@ static int is_exit(char *s) {
 
 // ---- the window ------------------------------------------------------------------
 
+static char *edit_items[3] = { "Copy", "Paste", 0 };
+static struct wk_menu menus[1];
+static char screen[TG_ROWS * (TG_COLS + 1) + 1];
+
+static void dp_key(int w, int down, int code, int ch, int mods);
+
+// the grid's text, a line a row with its trailing spaces gone, and the
+// empty rows at the bottom left out
+static void dp_copy(struct dosprompt *d) {
+    int r, c, n, end, start, v;
+    n = 0; end = 0;
+    r = 0;
+    while (r < TG_ROWS) {
+        start = n;
+        c = 0;
+        while (c < TG_COLS) {
+            v = d->g->cell[r * TG_COLS + c] & 255;
+            screen[n] = v >= 32 && v < 127 ? v : ' ';
+            ++n; ++c;
+        }
+        while (n > start && screen[n - 1] == ' ') --n;
+        screen[n] = 10; ++n;
+        if (n > start + 1) end = n;
+        ++r;
+    }
+    wk_clip_set(screen, end);
+}
+
+// the clipboard typed in; a line that queues a command is the last
+static void dp_paste(int w) {
+    struct dosprompt *d;
+    char *t;
+    int n, k;
+    t = wk_clip_get(&n);
+    k = 0;
+    while (k < n && (d = D(w)) && d->g) {
+        if (t[k] == 10) {
+            dp_key(w, 1, KEY_ENTER, 0, 0);
+            if (queued == w || !wk_alive(w)) return;
+        } else if (t[k] == 9) dp_key(w, 1, ' ', ' ', 0);
+        else if (t[k] >= 32 && t[k] < 127) dp_key(w, 1, t[k], t[k], 0);
+        ++k;
+    }
+}
+
+static void dp_command(int w, int id) {
+    struct dosprompt *d;
+    d = D(w);
+    if (!d->g) return;
+    if (id == WK_CMD(0, 0)) dp_copy(d);
+    else if (id == WK_CMD(0, 1)) dp_paste(w);
+}
+
 static void dp_draw(int w, int cw, int ch, int focused) {
     struct dosprompt *d;
     d = D(w);
@@ -120,6 +179,8 @@ static void dp_key(int w, int down, int code, int ch, int mods) {
     char *line;
     d = D(w);
     if (!down || !d->g) return;
+    if ((mods & M_CTRL) && code == KEY_INS) { dp_copy(d); return; }
+    if (ui_key_paste(code, ch, mods)) { dp_paste(w); return; }
     if ((mods & M_CTRL) && (ch == 'l' || ch == 'L' || code == 'L')) { tg_clear_screen(d->g); return; }
     // Ctrl+Z (or Ctrl+D): end of input for the program reading
     if (d->running && (mods & M_CTRL) && (ch == 'z' || ch == 'Z' || code == 'Z' || ch == 'd' || ch == 'D' || code == 'D')) {
@@ -174,8 +235,8 @@ static void dp_destroy(int w) {
 }
 
 static struct wk_class dp_class = {
-    .kind = ICON_TERM, .draw = dp_draw, .mouse = dp_mouse, .key = dp_key, .close = dp_close,
-    .destroy = dp_destroy
+    .kind = ICON_TERM, .draw = dp_draw, .mouse = dp_mouse, .key = dp_key, .command = dp_command,
+    .close = dp_close, .destroy = dp_destroy
 };
 
 // ---- the console's sink, while a window's line runs -------------------------------
@@ -361,10 +422,12 @@ int dosprompt_open(char *cmd) {
     ui_cpy(title, gd_c4ke() ? "C4KE Prompt " : "DOS Prompt ");
     ui_num(title + ui_len(title), n);
     ww = TG_W + 2 * BORDER + TG_SB_W;
-    hh = TG_H + 2 * BORDER + TITLE_H + 1;
+    hh = TG_H + 2 * BORDER + TITLE_H + 1 + MENU_H;
     if (ww > wk.sw) ww = wk.sw;
     if (hh > wk.sh) hh = wk.sh;
     if ((w = wk_open(&dp_class, title, ww, hh, WK_FIXED, 0)) < 0) return w;
+    menus[0].title = "Edit"; menus[0].items = edit_items;
+    wk_menu(w, menus, 1);
     d = D(w);
     d->num = n;
     if (!(d->g = tg_new(w))) { wk_close(w); return 0 - 1; }

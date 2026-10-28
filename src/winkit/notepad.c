@@ -6,12 +6,18 @@
 // rather than cut short (the desktop review's B6). Lines are found by
 // scanning for newlines, and drawn in a fixed-width face so the caret can
 // be placed exactly. Files open from, and save to, the host's (wk_fopen).
+//
+// A selection runs from an anchor to the caret: Shift with the moving
+// keys, or the mouse dragged, makes one, and typing replaces it. Edit's
+// Cut, Copy and Paste (and Ctrl+X, C and V, or Shift+Del, Ctrl+Ins and
+// Shift+Ins) go through the kit's clipboard, which every window shares.
 
 #include "winkit.h"
 
 enum { NCW = 7, NCH = 15, NFONT = 12, CHUNK = 4096 };
 enum { D_OPEN = 1, D_SAVEAS = 2 };                // its dialogs
 enum { N_NEW = 0, N_OPEN = 1, N_SAVE = 2, N_SAVEAS = 3, N_EXIT = 5 };   // File's items
+enum { E_CUT = 0, E_COPY = 1, E_PASTE = 2, E_DELETE = 3, E_ALL = 5 };    // Edit's
 
 char *notepad_name = "Notepad";
 char *notepad_about = "Notepad: edits plain text.";
@@ -24,6 +30,8 @@ struct note {
     char ask[WK_PATH];                            // a dialog's path, in and out
     int len, cap, caret, top, modified;
     int want_col;                                 // the column up/down tries to keep
+    int anchor;                                   // the selection's other end (anchor == caret: none)
+    int dragging;                                 // the mouse is making a selection
     char *text;                                   // cap bytes, len of them text and a 0
 };
 
@@ -31,8 +39,9 @@ static char buf[WK_PATH + 64];
 static char about_item[64];
 static char about_title[64];
 static char *file_items[7] = { "New", "Open...", "Save", "Save As...", "-", "Exit", 0 };
+static char *edit_items[7] = { "Cut", "Copy", "Paste", "Delete", "-", "Select All", 0 };
 static char *help_items[2];
-static struct wk_menu menus[2];
+static struct wk_menu menus[3];
 
 static struct note *N(int w) { return (struct note *)wk_state(w); }
 
@@ -61,7 +70,7 @@ static int room(struct note *n, int more) {
 }
 
 static void empty(struct note *n) {
-    n->len = 0; n->caret = 0; n->top = 0; n->modified = 0;
+    n->len = 0; n->caret = 0; n->anchor = 0; n->top = 0; n->modified = 0;
     if (n->text) n->text[0] = 0;
 }
 
@@ -107,8 +116,9 @@ static void note_open_hook(int w, char *path) {
     n = N(w);
     help_items[0] = about_item; help_items[1] = 0;
     menus[0].title = "File"; menus[0].items = file_items;
-    menus[1].title = "Help"; menus[1].items = help_items;
-    wk_menu(w, menus, 2);
+    menus[1].title = "Edit"; menus[1].items = edit_items;
+    menus[2].title = "Help"; menus[2].items = help_items;
+    wk_menu(w, menus, 3);
     if (!room(n, 1)) { wk_close(w); return; }
     empty(n);
     if (path) open_file(w, path, 1);
@@ -177,9 +187,51 @@ static void erase(struct note *n, int at) {
     n->modified = 1;
 }
 
+// ---- the selection, and the clipboard ------------------------------------------
+
+static int sel0(struct note *n) { return n->anchor < n->caret ? n->anchor : n->caret; }
+static int sel1(struct note *n) { return n->anchor < n->caret ? n->caret : n->anchor; }
+static int has_sel(struct note *n) { return n->anchor != n->caret && n->anchor >= 0 && n->anchor <= n->len; }
+
+// the selection taken out of the text: 1 if there was one
+static int cut_sel(struct note *n) {
+    int a, b, i;
+    if (!has_sel(n)) { n->anchor = n->caret; return 0; }
+    a = sel0(n); b = sel1(n);
+    i = a;
+    while (i + (b - a) <= n->len) { n->text[i] = n->text[i + (b - a)]; ++i; }
+    n->len = n->len - (b - a);
+    n->caret = a; n->anchor = a;
+    n->modified = 1;
+    return 1;
+}
+
+static void copy_sel(struct note *n) { if (has_sel(n)) wk_clip_set(n->text + sel0(n), sel1(n) - sel0(n)); }
+
+// the clipboard's text at the caret, in place of the selection (its
+// carriage returns dropped: a line ends in a newline here)
+static void paste(struct note *n) {
+    char *c;
+    int cn, k, m, i;
+    c = wk_clip_get(&cn);
+    if (cn <= 0) return;
+    if (!room(n, cn)) return;
+    cut_sel(n);
+    m = 0;
+    k = 0;
+    while (k < cn) { if (c[k] != 13 && c[k]) ++m; ++k; }
+    i = n->len;
+    while (i >= n->caret) { n->text[i + m] = n->text[i]; --i; }
+    k = 0;
+    while (k < cn) { if (c[k] != 13 && c[k]) { n->text[n->caret] = c[k]; ++n->caret; } ++k; }
+    n->len = n->len + m;
+    n->anchor = n->caret;
+    n->modified = 1;
+}
+
 static void note_draw(int w, int cw, int ch, int focused) {
     struct note *n;
-    int rows, cols, i, line, y, start, cl, cc, total;
+    int rows, cols, i, line, y, start, cl, cc, total, a, b, k;
     n = N(w);
     d_rect(0, 0, cw, ch, C_WHITE);
     d_bevel(0, 0, cw, ch, B_SUNKEN);
@@ -196,6 +248,17 @@ static void note_draw(int w, int cw, int ch, int focused) {
         start = i;
         while (i < n->len && n->text[i] != 10) ++i;
         if (i > start) d_textn(4, y, C_DARK, NFONT, F_MONO, NCW, n->text + start, i - start > cols ? cols : i - start);
+        // the selection's part of the line, white on the selection's colour
+        if (has_sel(n) && sel0(n) <= i && sel1(n) > start) {
+            a = sel0(n) > start ? sel0(n) - start : 0;
+            b = sel1(n) <= i ? sel1(n) - start : i - start + 1;   // past the end: its newline, a cell wide
+            if (b > cols) b = cols;
+            if (b > a) {
+                d_rect(4 + a * NCW, y, (b - a) * NCW, NCH - 1, C_SEL);
+                k = (b < i - start ? b : i - start) - a;
+                if (k > 0) d_textn(4 + a * NCW, y, C_WHITE, NFONT, F_MONO, NCW, n->text + start + a, k);
+            }
+        }
         if (focused && line == cl && cc <= cols) d_rect(4 + cc * NCW, y, 1, NCH - 1, C_DARK);
         y = y + NCH;
         ++line;
@@ -206,9 +269,19 @@ static void note_draw(int w, int cw, int ch, int focused) {
     ui_scrollbar(cw - 18, 2, ch - 4, total, rows, n->top);
 }
 
+// the buffer position under a point of the text, the nearest on its line
+static int pos_at(struct note *n, int x, int y) {
+    int col, row;
+    col = (x - 4 + NCW / 2) / NCW;
+    if (col < 0) col = 0;
+    row = (y - 4) / NCH;
+    if (row < 0) row = 0;
+    return pos_of(n, n->top + row, col);
+}
+
 static void note_mouse(int w, int ev, int x, int y, int b) {
     struct note *n;
-    int rows, t, col, cw, ch;
+    int rows, t, cw, ch;
     n = N(w);
     wk_size(w, &cw, &ch);
     rows = (ch - 6) / NCH;
@@ -218,19 +291,27 @@ static void note_mouse(int w, int ev, int x, int y, int b) {
         if (n->top < 0) n->top = 0;
         // keep the caret on screen, as editors do when they scroll
         n->caret = pos_of(n, n->top + (rows / 2), 0);
+        n->anchor = n->caret;
         return;
     }
+    if (ev == E_UP) { n->dragging = 0; return; }
     if (ev == E_MOVE) {
         t = ui_scroll_drag(cw - 18, 2, y);
-        if (t >= 0) { n->top = t; n->caret = pos_of(n, t, 0); }
+        if (t >= 0) { n->top = t; n->caret = pos_of(n, t, 0); n->anchor = n->caret; return; }
+        // a selection being dragged out
+        if (n->dragging && (t = pos_at(n, x, y)) != n->caret) {
+            n->caret = t;
+            line_of(n, n->caret, &n->want_col);
+            wk_invalidate(w, 0, 0, 0, 0);
+        }
         return;
     }
     if (ev != E_DOWN) return;
     t = ui_scroll_click(x, y, cw - 18, 2, ch - 4, lines(n), rows, n->top);
-    if (t >= 0) { n->top = t; n->caret = pos_of(n, t, 0); return; }
-    col = (x - 4 + NCW / 2) / NCW;
-    if (col < 0) col = 0;
-    n->caret = pos_of(n, n->top + (y - 4) / NCH, col);
+    if (t >= 0) { n->top = t; n->caret = pos_of(n, t, 0); n->anchor = n->caret; return; }
+    n->caret = pos_at(n, x, y);
+    if (!(wk.mods & M_SHIFT)) n->anchor = n->caret;      // Shift+click: the selection to here
+    n->dragging = 1;
     line_of(n, n->caret, &n->want_col);
 }
 
@@ -238,17 +319,23 @@ static void note_command(int w, int id);
 
 static void note_key(int w, int down, int code, int ch, int mods) {
     struct note *n;
-    int line, col, was;
+    int line, col, was, moved;
     if (!down) return;
     n = N(w);
     was = n->modified;
+    if (ui_key_copy(code, ch, mods)) { note_command(w, WK_CMD(1, E_COPY)); return; }
+    if (ui_key_cut(code, ch, mods)) { note_command(w, WK_CMD(1, E_CUT)); return; }
+    if (ui_key_paste(code, ch, mods)) { note_command(w, WK_CMD(1, E_PASTE)); return; }
     if (mods & M_CTRL) {
         if (ch == 's' || ch == 'S' || code == 'S') note_command(w, WK_CMD(0, N_SAVE));
         else if (ch == 'o' || ch == 'O' || code == 'O') note_command(w, WK_CMD(0, N_OPEN));
         else if (ch == 'n' || ch == 'N' || code == 'N') note_command(w, WK_CMD(0, N_NEW));
+        else if (ch == 'a' || ch == 'A' || code == 'A') note_command(w, WK_CMD(1, E_ALL));
         return;
     }
     line = line_of(n, n->caret, &col);
+    // the moving keys: with Shift they take the selection along
+    moved = 1;
     if (code == KEY_LEFT) { if (n->caret > 0) --n->caret; line_of(n, n->caret, &n->want_col); }
     else if (code == KEY_RIGHT) { if (n->caret < n->len) ++n->caret; line_of(n, n->caret, &n->want_col); }
     else if (code == KEY_UP) { if (line > 0) n->caret = pos_of(n, line - 1, n->want_col); }
@@ -257,11 +344,15 @@ static void note_key(int w, int down, int code, int ch, int mods) {
     else if (code == KEY_END) { n->caret = pos_of(n, line, 100000); line_of(n, n->caret, &n->want_col); }
     else if (code == KEY_PGUP) n->caret = pos_of(n, line > 20 ? line - 20 : 0, n->want_col);
     else if (code == KEY_PGDN) n->caret = pos_of(n, line + 20, n->want_col);
-    else if (code == KEY_BACK) { if (n->caret > 0) { --n->caret; erase(n, n->caret); } line_of(n, n->caret, &n->want_col); }
-    else if (code == KEY_DEL) erase(n, n->caret);
-    else if (code == KEY_ENTER) { insert(n, 10); n->want_col = 0; }
-    else if (code == KEY_TAB) { insert(n, ' '); insert(n, ' '); insert(n, ' '); insert(n, ' '); line_of(n, n->caret, &n->want_col); }
-    else if (ch >= 32 && ch < 127) { insert(n, ch); line_of(n, n->caret, &n->want_col); }
+    else moved = 0;
+    if (moved) { if (!(mods & M_SHIFT)) n->anchor = n->caret; return; }
+    // the editing keys: a selection is what they delete, or what typing replaces
+    if (code == KEY_BACK) { if (!cut_sel(n) && n->caret > 0) { --n->caret; erase(n, n->caret); } line_of(n, n->caret, &n->want_col); }
+    else if (code == KEY_DEL) { if (!cut_sel(n)) erase(n, n->caret); }
+    else if (code == KEY_ENTER) { cut_sel(n); insert(n, 10); n->want_col = 0; }
+    else if (code == KEY_TAB) { cut_sel(n); insert(n, ' '); insert(n, ' '); insert(n, ' '); insert(n, ' '); line_of(n, n->caret, &n->want_col); }
+    else if (ch >= 32 && ch < 127) { cut_sel(n); insert(n, ch); line_of(n, n->caret, &n->want_col); }
+    n->anchor = n->caret;
     if (n->modified != was) retitle(w);
 }
 
@@ -273,10 +364,21 @@ static void save_as(int w, struct note *n) {
 
 static void note_command(int w, int id) {
     struct note *n;
-    int item;
+    int item, was;
     n = N(w);
     item = id % WK_CMD_STEP;
-    if (id / WK_CMD_STEP == 1) { wk_msgbox(w, 0, about_title, notepad_about, WK_OK); return; }
+    if (id / WK_CMD_STEP == 2) { wk_msgbox(w, 0, about_title, notepad_about, WK_OK); return; }
+    if (id / WK_CMD_STEP == 1) {
+        was = n->modified;
+        if (item == E_COPY || item == E_CUT) copy_sel(n);
+        if (item == E_CUT || item == E_DELETE) cut_sel(n);
+        else if (item == E_PASTE) paste(n);
+        else if (item == E_ALL) { n->anchor = 0; n->caret = n->len; }
+        line_of(n, n->caret, &n->want_col);
+        if (n->modified != was) retitle(w);
+        wk_invalidate(w, 0, 0, 0, 0);
+        return;
+    }
     if (item == N_NEW) { empty(n); n->path[0] = 0; retitle(w); }
     else if (item == N_OPEN) {
         ui_ncpy(n->ask, n->path[0] ? n->path : notepad_home, WK_PATH);

@@ -9,6 +9,8 @@
 // that reads back to it, and its bits under it. 0.1 + 0.2 is
 // 0.30000000000000004 in Double and 0.3 in Single; Max * 2 is inf.
 //
+// Ctrl+C copies the display and Ctrl+V types the clipboard in.
+//
 // The decimal conversions are libc's fp.c (src/c4ix/libc), linked into
 // the shell: exact both ways. (fp.c sets errno, which the shell owns.)
 
@@ -453,12 +455,36 @@ static void calc_mouse(int w, int ev, int x, int y, int b) {
     }
 }
 
+static void calc_key(int w, int down, int code, int ch, int mods);
+
+// Ctrl+C copies what the display shows; Ctrl+V types the clipboard in,
+// a key a character, as Windows' Calculator took a paste (C4IX's desktop
+// and grin alike: the kit's clipboard)
+static void calc_clip(int w, int paste) {
+    struct calc *c;
+    char *t;
+    int n, k;
+    c = C(w);
+    if (!paste) {
+        k = 0;
+        while (c->disp[k] == ' ') ++k;
+        wk_clip_set(c->disp + k, ui_len(c->disp + k));
+        return;
+    }
+    t = wk_clip_get(&n);
+    k = 0;
+    while (k < n && k < 200) { if (t[k] > 32 && t[k] < 127) calc_key(w, 1, 0, t[k], 0); ++k; }
+}
+
 static void calc_key(int w, int down, int code, int ch, int mods) {
     struct calc *c;
     char k[2];
     if (!down) return;
     c = C(w);
     k[1] = 0;
+    if (ui_key_copy(code, ch, mods)) { calc_clip(w, 0); return; }
+    if (ui_key_paste(code, ch, mods)) { calc_clip(w, 1); return; }
+    if (mods & M_CTRL) return;
     if (c->mode != M_INT) {
         if (ch == '.' || ch == ',') { press(c, "."); return; }
         if (ch == 'e' || ch == 'E') { press(c, "Exp"); return; }

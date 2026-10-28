@@ -93,3 +93,7 @@ K(int, ui_join, (char *out, char *dir, char *name, int n), (out, dir, name, n))
 K(char *, ui_base, (char *path), (path))
 K(int, ui_eq, (char *a, char *b), (a, b))
 K(int, ui_ends, (char *s, char *suffix), (s, suffix))
+// version 3 (G7): the clipboard's keys
+K(int, ui_key_copy, (int code, int ch, int mods), (code, ch, mods))
+K(int, ui_key_cut, (int code, int ch, int mods), (code, ch, mods))
+K(int, ui_key_paste, (int code, int ch, int mods), (code, ch, mods))

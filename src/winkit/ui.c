@@ -250,9 +250,40 @@ int ui_field_hit(int px, int x, int w, char *text, int caret) {
 }
 
 // Editing keys for a field's text; returns 1 if the text changed.
+static int ctrl_letter(int code, int ch, int mods, int c) {
+    return (mods & M_CTRL) && !(mods & M_ALT) && (ch == c || ch == c + 32 || code == c);
+}
+int ui_key_copy(int code, int ch, int mods) { return ctrl_letter(code, ch, mods, 'C') || ((mods & M_CTRL) && code == KEY_INS); }
+int ui_key_cut(int code, int ch, int mods) { return ctrl_letter(code, ch, mods, 'X') || ((mods & M_SHIFT) && code == KEY_DEL); }
+int ui_key_paste(int code, int ch, int mods) { return ctrl_letter(code, ch, mods, 'V') || ((mods & M_SHIFT) && code == KEY_INS); }
+
+// A field has no selection: copy and cut take the whole of it, and a
+// paste puts the clipboard's first line in at the caret, as much as fits.
 int ui_field_key(char *text, int max, int *caret, int code, int ch, int mods) {
-    int n, i;
+    int n, i, k, cn;
+    char *c;
     n = ui_len(text);
+    if (ui_key_copy(code, ch, mods) || ui_key_cut(code, ch, mods)) {
+        wk_clip_set(text, n);
+        if (!ui_key_cut(code, ch, mods) || !n) return 0;
+        text[0] = 0; *caret = 0;
+        return 1;
+    }
+    if (ui_key_paste(code, ch, mods)) {
+        c = wk_clip_get(&cn);
+        k = 0;
+        while (k < cn && c[k] != 10 && c[k] != 13 && n < max) {
+            if (c[k] >= 32 && c[k] <= 126) {
+                i = n + 1;
+                while (i > *caret) { text[i] = text[i - 1]; --i; }
+                text[*caret] = c[k];
+                *caret = *caret + 1;
+                ++n;
+            }
+            ++k;
+        }
+        return k > 0;
+    }
     if (code == KEY_LEFT) { if (*caret > 0) *caret = *caret - 1; return 0; }
     if (code == KEY_RIGHT) { if (*caret < n) *caret = *caret + 1; return 0; }
     if (code == KEY_HOME) { *caret = 0; return 0; }

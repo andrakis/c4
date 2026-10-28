@@ -86,7 +86,7 @@ enum { E_DOWN = 1, E_UP = 2, E_MOVE = 3, E_DBL = 4, E_WHEEL = 5 };
 // keys (browser keyCodes) and modifiers
 enum { KEY_BACK = 8, KEY_TAB = 9, KEY_ENTER = 13, KEY_ESC = 27, KEY_PGUP = 33, KEY_PGDN = 34,
        KEY_END = 35, KEY_HOME = 36, KEY_LEFT = 37, KEY_UP = 38, KEY_RIGHT = 39, KEY_DOWN = 40,
-       KEY_DEL = 46, KEY_F2 = 113, KEY_F4 = 115, KEY_F5 = 116 };
+       KEY_INS = 45, KEY_DEL = 46, KEY_F2 = 113, KEY_F4 = 115, KEY_F5 = 116 };
 enum { M_SHIFT = 1, M_CTRL = 2, M_ALT = 4 };
 // pointer shapes, GUI_PTR_*'s numbers
 enum { PTR_ARROW = 0, PTR_TEXT = 1, PTR_RESIZE = 2 };
@@ -160,7 +160,8 @@ void  wk_inputbox(int owner, int dialog, char *title, char *prompt, char *buf, i
 void  wk_filebox(int owner, int dialog, int save, char *pattern, char *buf, int max);
                                       // buf: the start folder or name in, the path chosen out
 
-// the clipboard: text, copied in
+// the clipboard: text, copied in. One for every window: in grin the
+// kit's own memory, so a paste after the copier has gone still has it
 int   wk_clip_set(char *s, int n);    // 1 if it took it
 char *wk_clip_get(int *n);
 
@@ -199,6 +200,14 @@ int  ui_scroll_active();
 void ui_scroll_end();
 void ui_field(int x, int y, int w, char *text, int caret, int focused);
 int  ui_field_key(char *text, int max, int *caret, int code, int ch, int mods);
+                                               // ... Ctrl+C copies the whole field, Ctrl+X cuts it,
+                                               // Ctrl+V pastes at the caret (the clipboard's first line)
+// the clipboard's keys, CUA's beside the letters, as Windows 3.1 took
+// both: copy Ctrl+C or Ctrl+Ins, cut Ctrl+X or Shift+Del, paste Ctrl+V
+// or Shift+Ins
+int  ui_key_copy(int code, int ch, int mods);
+int  ui_key_cut(int code, int ch, int mods);
+int  ui_key_paste(int code, int ch, int mods);
 int  ui_field_hit(int px, int x, int w, char *text, int caret);   // the caret for a click
 void ui_tabs(int x, int y, char **labels, int n, int sel);
 int  ui_tab_hit(int px, int py, int x, int y, char **labels, int n);
@@ -286,5 +295,6 @@ void saver_start(int which);
 void saver_frame();
 void saver_stop();
 int  saver_frames();
+extern char *saver_marquee;          // what Marquee says (the C4IX desktop's line unless the shell says)
 
 #endif // WINKIT_H

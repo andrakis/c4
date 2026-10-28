@@ -35,6 +35,11 @@
 // and Rise of the Triad each drawing in a window and closed; and a dialog
 // opened while Doom plays a timedemo, which still works after Doom has
 // ended by itself.
+// Then G7's, on a machine with a sound card: the startup chime; Program
+// Manager's groups as windows inside it (MDI), cascaded, tiled, minimised,
+// maximised, dragged and kept; the clipboard across applications, after
+// the one that copied has gone; the screen saver's Test; and Control
+// Panel's Sound.
 //
 //   node libjs/tests/test-grin.mjs
 
@@ -43,6 +48,7 @@ import { join } from 'node:path';
 import { createMachine, boot } from '../boot.js';
 import { STOP } from '../c4m.js';
 import { GuiDevice, CMD } from '../gui-device.js';
+import { SoundDevice, EVT } from '../snd-device.js';
 
 const DISK = new URL('../images/dos/', import.meta.url).pathname;
 let fail = 0;
@@ -370,12 +376,18 @@ const inPm = all => { const p = pmWin(); return p ? all.filter(t => within(p, t.
 const groupOf = { Clock: 'Accessories', Calculator: 'Accessories', 'Control Panel': 'Main', 'File Manager': 'Main',
                   'DOS Prompt': 'Main', Notepad: 'Main', Doom: 'Games', 'Wolfenstein 3D': 'Games', Tyrian: 'Games',
                   'Rise of the Triad': 'Games' };
-// a group shown: its name in the list down Program Manager's left
+// a group shown: Program Manager's Window menu lists the groups ("2
+// Accessories"), and choosing one brings its window in front, restored
+// if it was an icon (G7's MDI)
 const showGroup = g => {
   const p = pmWin();
-  const t = p && find(g).filter(t => within(p, t.x, t.y) && t.x < p.x + 140)[0];
-  if (t) { click(t.x + 5, t.y + 5); settle(); }
-  return !!t;
+  const m = p && find('Window').filter(t => t.y === p.y + 27 && t.x > p.x && t.x < p.x + p.w)[0];
+  if (!m) return false;
+  click(m.x + 5, m.y + 5); settle();
+  const re = new RegExp('^\\d+ ' + g + '$');
+  if (!until(() => find(re).length > 0)) { key(27); return false; }
+  clickText(re);
+  return true;
 };
 const startItem = (s, group = groupOf[s] || 'Accessories') => {
   const p = pmWin();
@@ -541,7 +553,7 @@ vm.dev.pushInput('GRIN\n');
 check(until(() => has('Program Manager'), 3000), 'GRIN again, for the shell applications (G4)');
 check(text().includes('files are written to B:'), "the disk's CONFIG.SYS has DRIVES.SYS HOME=B:, and B: can be written", text().slice(0, 600));
 const pmIni = storeText('PROGMAN.INI');
-check(pmIni && /^\[Main\]$/m.test(pmIni) && /^\[Accessories\]$/m.test(pmIni) && /^\[Games\]$/m.test(pmIni) &&
+check(pmIni && /^\[Main\]( |$)/m.test(pmIni) && /^\[Accessories\]( |$)/m.test(pmIni) && /^\[Games\]( |$)/m.test(pmIni) &&
       /^Doom=\\GAMES\\DOOM\\DOOM,game,window$/m.test(pmIni) && /^Notepad=NOTEPAD,notepad,app$/m.test(pmIni),
   'PROGMAN.INI, written with the default groups, is on B:', pmIni);
 showGroup('Main');
@@ -925,6 +937,218 @@ check(loadedAfter === 0, `grin carries on after Doom: Help > About, no applicati
 startItem('Clock');
 check(until(() => has('Settings')), '... a Clock starts');
 endTask('Clock');
+
+// ---- G7: finishing -----------------------------------------------------------------------
+// A boot with a sound card fitted (snd-device.js), with what B: kept: the
+// startup chime on the OPL, written once grin's first frame is up.
+// Program Manager's groups as windows inside it (MDI), from its Window
+// menu: listed, cascaded and tiled, one minimised to an icon and back,
+// one maximised and back, one dragged by its title bar and its place kept
+// in PROGMAN.INI. The clipboard, one for every application and grin's own
+// memory: text copied in Notepad pasted into Calculator after Notepad has
+// gone, Calculator's figure pasted into the Run box's field, the field's
+// line pasted into a DOS Prompt, and the DOS Prompt's screen pasted into
+// Notepad. The screen saver (G2's, Control Panel's Desktop): its Test
+// runs Marquee until a key. Control Panel's Sound: No chime, kept in
+// GRIN.INI. Then one more boot: no chime, and the group where it was left.
+let snd = new SoundDevice();
+const keyOns = [];
+let oplWrites = 0;
+const drainSnd = () => {
+  const evs = snd.drain() || [];
+  for (const e of evs) {
+    if (e[0] === EVT.OPL) ++oplWrites;
+    if (e[0] === EVT.OPL && e[2] >= 0xb0 && e[2] <= 0xb8 && (e[3] & 0x20)) keyOns.push({ t: e[1], reg: e[2], presents });
+  }
+};
+const bootG7 = () => {
+  gui = new GuiDevice({ w: 640, h: 480 });
+  out = []; frame = []; cur = []; rects = []; curRects = []; partial = false; halted = false;
+  presents = 0; keyOns.length = 0; oplWrites = 0;
+  snd = new SoundDevice();
+  vm = createMachine({ arenaMb: 64, mhz: 400, gui, snd, drives: [{ files: new LazyDisk(index), writable: false, sink: null }, homeDrive()], onByte: b => out.push(b) });
+  boot(vm, image, ['c4dos32.c4r']);
+  // until grin has the display, then in steps of a hundred cycles until its
+  // first frame: nothing may be written to the OPL before it
+  for (let i = 0; i < 20000 && !gui.stats().attached && !halted; i++) { vm.run(2e5); pump(); drainSnd(); }
+  for (let i = 0; i < 2000000 && !presents && !halted; i++) { vm.run(100); pump(); drainSnd(); }
+  const before = oplWrites;
+  check(until(() => has('Program Manager'), 3000), 'boot with a sound card: grin comes up');
+  return before;
+};
+const chimeBefore = bootG7();
+for (let i = 0; i < 200 && keyOns.length < 4; i++) { run(); drainSnd(); }
+check(chimeBefore === 0 && keyOns.length === 4 && keyOns.every(k => k.presents > 0),
+  `the startup chime: four notes struck on the OPL, written after grin's first frame (${chimeBefore} OPL writes before it; ${keyOns.length} notes)`, JSON.stringify(keyOns));
+const gaps = keyOns.slice(1).map((k, i) => Math.round((k.t - keyOns[i].t) / 1000));
+check(keyOns.length === 4 && gaps.every(g => g === 150) && keyOns.map(k => k.reg).join() === [0xb0, 0xb1, 0xb2, 0xb3].join(),
+  `... on channels 0 to 3, 150 ms apart on the card's stream (${gaps.join(', ')} ms)`);
+
+// Program Manager's group windows: a group's frame by its name in its
+// title bar, drawn 6 px below the frame's top (its border and the bar's)
+const groupWin = name => {
+  const p = pmWin();
+  if (!p) return null;
+  const t = find(name).filter(t => within(p, t.x, t.y) && t.y > p.y + 40).pop();
+  if (!t) return null;
+  // (the last such rectangle: the frame, drawn after Program Manager's
+  // client area, which starts at the same height for a group at its top)
+  const r = rects.filter(r => r.y === t.y - 6 && r.x < t.x && r.x + r.w > t.x && r.w >= 140 && r.h >= 60 && within(p, r.x, r.y)).pop();
+  return r ? { x: r.x, y: r.y, w: r.w, h: r.h, i: frame.indexOf(t) } : null;
+};
+const CB = 3, CT = 18, CLIENT_DY = BORDER + 18 + 1 + 20;   // a window's client area: below its title bar and menu bar
+const overlap = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+const pmMenu = (label, item) => { switchTo('Program Manager'); return menu('Program Manager', label, item); };
+const GROUPS3 = ['Main', 'Accessories', 'Games'];
+// (all three open: a PROGMAN.INI from before G7 has Main open and the others icons)
+switchTo('Program Manager');
+for (const g of GROUPS3) showGroup(g);
+check(menu('Program Manager', 'Window', 'Cascade'), "Program Manager's Window menu: Cascade");
+let gws = GROUPS3.map(groupWin);
+check(gws.every(Boolean), 'Window > Cascade: the three groups are windows inside Program Manager', JSON.stringify(gws));
+const byX = gws.filter(Boolean).sort((a, b) => a.x - b.x);
+check(byX.length === 3 && byX[1].x - byX[0].x === 22 && byX[2].x - byX[1].x === 22 && byX[1].y - byX[0].y === 22 &&
+      byX.every(g => g.w === byX[0].w && g.h === byX[0].h),
+  '... each 22 px down and right of the one behind it, all the same size', JSON.stringify(byX));
+pmMenu('Window', 'Tile');
+settle();
+gws = GROUPS3.map(groupWin);
+check(gws.every(Boolean) && !overlap(gws[0], gws[1]) && !overlap(gws[0], gws[2]) && !overlap(gws[1], gws[2]),
+  'Window > Tile: side by side, none over another', JSON.stringify(gws));
+switchTo('Program Manager');
+const wm = menuOf(pmWin(), 'Window');
+if (wm) { click(wm.x + 5, wm.y + 5); settle(); }
+check(until(() => has('Arrange Icons') && has('1 Main') && has('2 Accessories') && has('3 Games')),
+  'the Window menu lists the groups, numbered, under Cascade, Tile and Arrange Icons');
+key(27); settle();
+
+// Games minimised to an icon along Program Manager's bottom, and back
+let gg = groupWin('Games');
+if (gg) click(gg.x + gg.w - CB - 2 * CT + 9, gg.y + CB + 9);
+settle();
+const gamesIcon = () => { const p = pmWin(); return p && find('Games').filter(t => within(p, t.x, t.y) && t.y > p.y + p.h - 64)[0]; };
+check(until(() => !groupWin('Games') && !!gamesIcon()), "Games' minimise button: an icon along Program Manager's bottom",
+  JSON.stringify(find('Games')));
+check(/^\[Games\] -?\d+,-?\d+,\d+,\d+,1,/m.test(storeText('PROGMAN.INI') || ''), '... minimised in PROGMAN.INI too', storeText('PROGMAN.INI'));
+const gi = gamesIcon();
+if (gi) { click(gi.x + 5, gi.y + 5); click(gi.x + 5, gi.y + 5); settle(); }
+check(until(() => !!groupWin('Games') && !gamesIcon()), '... and a double click on the icon restores it');
+check(until(() => inPm(find('Doom'))), '... with its items');
+// Main maximised: it fills Program Manager, whose title names it; and back
+let gm = groupWin('Main');
+if (gm) click(gm.x + gm.w - CB - CT + 9, gm.y + CB + 9);
+settle();
+check(until(() => has('Program Manager - [Main]')), "Main's maximise button: Program Manager's title says Program Manager - [Main]");
+const pmx = win('File');
+gm = groupWin('Main');
+check(gm && pmx && gm.x === pmx.x + BORDER && gm.w === pmx.w - 2 * BORDER, '... and Main fills its client area', JSON.stringify([gm, pmx]));
+if (gm) click(gm.x + gm.w - CB - CT + 9, gm.y + CB + 9);
+settle();
+check(until(() => has('Program Manager') && !has('Program Manager - [Main]')), '... and its restore button brings it back');
+// Ctrl+F6: the next group after Main, the active one, in front
+key(117, 0, 2);
+check(until(() => groupWin('Accessories') && groupWin('Accessories').i > groupWin('Main').i && groupWin('Accessories').i > groupWin('Games').i),
+  'Ctrl+F6 brings the next group after Main, Accessories, in front');
+// cascaded again, every group's items in sight (a tiled group is too
+// small to show all of them, and those below its edge are clipped away)
+pmMenu('Window', 'Cascade');
+settle();
+// Accessories dragged by its title bar
+const ga = groupWin('Accessories');
+if (ga) {
+  const x0 = ga.x + 40, y0 = ga.y + CB + 9;
+  ev({ kind: 'move', x: x0, y: y0, buttons: 0 }); ev({ kind: 'down', x: x0, y: y0, button: 0 });
+  ev({ kind: 'move', x: x0 + 30, y: y0 + 20, buttons: 1 }); ev({ kind: 'up', x: x0 + 30, y: y0 + 20, button: 0 });
+  settle();
+}
+const ga2 = groupWin('Accessories');
+check(ga && ga2 && ga2.x === ga.x + 30 && ga2.y === ga.y + 20, 'Accessories dragged by its title bar moves 30 right and 20 down',
+  JSON.stringify([ga, ga2]));
+const pmw = pmWin();
+const accLine = (storeText('PROGMAN.INI') || '').match(/^\[Accessories\] (-?\d+),(-?\d+),(\d+),(\d+),0,/m);
+check(accLine && pmw && ga2 && +accLine[1] === ga2.x - pmw.x - BORDER && +accLine[2] === ga2.y - pmw.y - CLIENT_DY,
+  "... and PROGMAN.INI on B: keeps its new place", storeText('PROGMAN.INI'));
+const accPlace = ga2;
+
+// ---- the clipboard ----
+const heapC0 = vm.heap.used;
+startItem('Notepad');
+check(until(() => has('Untitled - Notepad')), 'Notepad, for the clipboard');
+for (const [code, ch, mods] of [[49, '1'], [50, '2'], [56, '*', 1], [49, '1'], [50, '2'], [187, '=']]) key(code, ch.charCodeAt(0), mods || 0);
+check(until(() => has('12*12=')), '... 12*12= typed');
+key(36, 0, 1);                        // Shift+Home: all of the line selected
+check(menu(NOTEPAD, 'Edit', 'Cut') && until(() => !has('12*12=')), 'Shift+Home selects it, and Edit > Cut takes it out');
+check(menu(NOTEPAD, 'Edit', 'Paste') && until(() => has('12*12=')), '... Edit > Paste puts it back');
+key(65, 97, 2); key(67, 99, 2);       // Ctrl+A, Ctrl+C
+endTask2(NOTEPAD);
+settle();
+check(until(() => !find(NOTEPAD).length) && aboutCount() === 0, 'Ctrl+A, Ctrl+C, and Notepad closed: no application is loaded');
+check(Math.abs(vm.heap.used - heapC0) < 512, `... its memory freed (HEAP_USED ${heapC0} -> ${vm.heap.used}), the copied text not with it`);
+startItem('Calculator');
+check(until(() => has('Hex') && has('Dec')), 'Calculator');
+key(86, 118, 2);                      // Ctrl+V
+check(until(() => has('144')), "Ctrl+V types Notepad's 12*12= into it, after Notepad has gone: 144", JSON.stringify(frame.map(t => t.s)));
+key(67, 99, 2);                       // Ctrl+C: its display
+endTask2('Calculator');
+check(until(() => !has('Hex')), '... Ctrl+C copies the display, and Calculator is closed');
+switchTo('Program Manager');
+menu('Program Manager', 'File', 'Run...');
+until(() => has('Command Line:'));
+key(45, 0, 1);                        // Shift+Ins
+check(until(() => has('144')), "the Run box's field: Shift+Ins pastes Calculator's 144 at the caret, after Calculator has gone");
+for (let i = 0; i < 3; i++) key(8);
+for (const c of 'ECHO pasted into DOS') key(c.charCodeAt(0), c.charCodeAt(0));
+key(67, 99, 2);                       // Ctrl+C: the whole field
+key(27);
+check(until(() => !has('Command Line:')), '... a line typed there, Ctrl+C copies it all; Esc');
+startItem('DOS Prompt');
+check(until(() => !!dosWin(1) && inWin(dosWin(1), /^A:\\>$/)), 'a DOS Prompt, for its Edit menu');
+check(menu('DOS Prompt 1', 'Edit', 'Paste'), 'DOS Prompt 1: Edit > Paste');
+key(13);
+check(until(() => inWin(dosWin(1), /^pasted into DOS$/)), '... types the line in, and Enter runs it: ECHO answers', JSON.stringify(frame.map(t => t.s)));
+check(menu('DOS Prompt 1', 'Edit', 'Copy'), '... Edit > Copy takes its screen');
+typeLine('EXIT');
+check(until(() => !dosWin(1)), '... and EXIT closes it');
+startItem('Notepad');
+until(() => has('Untitled - Notepad'));
+key(86, 118, 2);
+check(until(() => has('A:\\>ECHO pasted into DOS') && has('pasted into DOS')), "Ctrl+V in Notepad: the DOS Prompt's screen, as text",
+  JSON.stringify(frame.map(t => t.s)));
+endTask2(NOTEPAD);
+until(() => !find(NOTEPAD).length);
+
+// ---- the screen saver (G2's): Marquee by its Test, ended by a key ----
+startItem('Control Panel');
+dbl('Desktop');
+until(() => has('Screen Saver') && has('Marquee'));
+clickText('Marquee');
+clickText('Test');
+check(until(() => find(/^grin -- C4DOS in the manner of Windows 3\.1$/).length > 0 && !has('Program Manager'), 600),
+  "Desktop's Test: the Marquee screen saver takes the screen, saying grin's line", JSON.stringify(frame.map(t => t.s)));
+key(16);
+check(until(() => has('Program Manager') && has('Screen Saver')), '... and a key ends it: the desktop and its windows are drawn again');
+clickText('Cancel');
+until(() => !has('Screen Saver'));
+// ---- Control Panel's Sound: its Test, and No chime ----
+keyOns.length = 0;
+dbl('Sound');
+check(until(() => has('A chime when grin starts') && has('No chime')), 'Control Panel > Sound: the startup chime, or none');
+clickText('Test');
+for (let i = 0; i < 50 && keyOns.length < 4; i++) { run(); drainSnd(); }
+check(keyOns.length === 4, `... its Test plays the chime (${keyOns.length} notes)`);
+clickText('No chime'); clickText('OK');
+check(until(() => !has('No chime')) && /chime=0/.test(storeText('GRIN.INI') || ''), '... No chime, OK: chime=0 in GRIN.INI on B:', storeText('GRIN.INI'));
+endTask2('Control Panel');
+
+// ---- once more: no chime, and the groups where they were left ----
+endSession(); clickText('OK');
+until(() => !gui.stats().attached, 3000);
+bootG7();
+for (let i = 0; i < 200; i++) { run(); drainSnd(); }
+check(keyOns.length === 0, `boot again: no chime, as GRIN.INI says (${keyOns.length} notes)`);
+const ga3 = groupWin('Accessories');
+check(ga3 && accPlace && ga3.x === accPlace.x && ga3.y === accPlace.y && ga3.w === accPlace.w,
+  '... and Accessories is where it was dragged to', JSON.stringify([accPlace, ga3]));
 
 console.log(fail ? 'test-grin: FAILED' : 'test-grin: OK');
 process.exit(fail);

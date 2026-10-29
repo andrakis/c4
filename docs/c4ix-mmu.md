@@ -1,7 +1,11 @@
 # C4IX's MMU: paged virtual memory with protection in libjs
 
-STATUS (2026-10-29): stages 1-4 built and committed on ix-mmu, measured
-(section 12); what is left is section 13.
+STATUS (2026-10-29): stages 1-7 built and committed on ix-mmu, measured
+(section 12): translation, the user/kernel split, a space per task,
+guard pages and read-only text (1-4); null reads, devices checked against
+the task's tables, C4KE's text a page at a time (5); user addresses that
+are not physical (6); swap, and the TLB kept right across CPUs (7). What
+is left is section 13.
 
 C4IX runs every task in one flat arena. Its protected mode (c4m's `mode`
 register, `sys_pmviolation` in `src/c4ix/sys.c`) stops a user task from
@@ -63,16 +67,14 @@ address is a physical address, and the kernel sees all of memory.
   spent. The only places the mode changes are `trap()` and TLEV, and both
   are already on the loop's slow path (`sys()` and `boundary()`), so the
   switch between loops costs nothing per instruction.
-- C4IX maps user memory at the same virtual address as its physical
-  address (an identity map), so a pointer a task hands the kernel in a
-  syscall is a pointer the kernel can use, exactly as now. The kernel
-  checks that the task may use it (`uaccess`, section 8), as `copy_from_user`
-  does. What a task can reach is decided by which pages its page table
-  maps and how, not by where they are.
-
-The identity map is a choice of the kernel's, not a limit of the MMU:
-the page tables translate, and section 11 is what it would take for C4IX
-to give a task addresses that are not physical ones.
+- A pointer a task hands the kernel in a syscall is a pointer the kernel
+  can use, as it always was. Through stage 5 C4IX mapped user memory at
+  its own address (an identity map); since stage 6 user addresses are a
+  window of their own, and kernel mode reaches them through the kernel's
+  map (libjs's user window, section 11). Either way the kernel checks
+  that the task may use the pointer (`uaccess`, section 8), as
+  `copy_from_user` does. What a task can reach is decided by which pages
+  its page table maps and how.
 
 ## 3. The page size: 4 KB
 
@@ -136,9 +138,9 @@ translation is not cached or not allowed:
     if (p >= 0 && (x & 3) === 0) a = i32[(p | (x & 4095)) >> 2];
     else -> slow path: page 0, an unaligned word, a fill, or a fault
 
-The arrays cover the first 256 MB of virtual space (65,536 pages, 768 KB a
-CPU); an address above that always walks, and with an identity map there
-are none. A fill writes all three arrays from one PTE, so a page that is
+The arrays cover the first 512 MB of virtual space (131,072 pages, 1.5 MB
+a CPU): memory, and the user window above it (section 11); an address
+above that always walks, and C4IX makes none. A fill writes all three arrays from one PTE, so a page that is
 read and written is walked once. Every fill is logged, so a flush puts
 back -1 only where it wrote, not over all 65,536 entries: a context switch
 costs the pages the outgoing task touched, typically tens.
@@ -180,7 +182,8 @@ them on every access either:
 A code window and an operand: an instruction whose opcode is the last word
 of a page has its operand on the next. If that page is not mapped next to
 this one in physical memory, the fetch faults (FINFO bit 4). The kernel's
-loader never maps code that way; an identity map cannot.
+loader never maps code that way: a region's pages are one run in memory
+and one run of user addresses.
 
 ## 6. User and kernel; read-only and no-execute
 
@@ -217,8 +220,9 @@ user-mode accesses there take the slow path they always took, and the
 **IOPM** register says what user mode may do there, as an x86's I/O
 permission bitmap does:
 
-    bit 0  read the ROM: the null guard, the TLEV word, the opcode names;
-           fetch the TLEV word, where trap frames return
+    bit 0  read the ROM: the null guard, the TLEV word, the opcode names
+           (the TLEV word, where trap frames return, runs whatever the
+           IOPM says)
     bit 1  c4bb's device registers, 0x100-0x1FF
     bit 2  the display, 0x400-0x47F
     bit 3  the sound card, 0x480-0x4FF
@@ -232,8 +236,9 @@ the IOPM refuses is a page fault like any other: a store through a null
 pointer is now a fault and a kill, where libjs dropped it (and said so)
 before.
 
-C4IX (stage 4) gives every user task the ROM, the display, the sound card
-and reading the window. The window is its own `struct cpu`, which a task
+C4IX gives every user task the display, the sound card and reading the
+window. Not the ROM, since stage 5: a null pointer's read is a fault, as
+its store is ("read of 0x00000004 (page 0, not allowed)"). The window is its own `struct cpu`, which a task
 that could write it could make itself the kernel's idle task with.
 c4bb's devices -- the drives, the heap's generations, RESET -- are for the
 task that asks, by `SYS_IOPERM`, as on Linux: only `persist` does, to
@@ -249,16 +254,19 @@ first word, sp before any pop -- so the instruction can be run again once
 the kernel has mapped the page. A slow path in the user loop saves them
 before it touches memory, and an opcode run in `sys()` (MCPY, the FPU)
 that faults part way throws, and the loop raises the fault from the
-registers it kept. C4IX uses that once: a C4KE program that writes its own
-code (C4KE's ps patches itself) has its text made writable and the store
-run again (section 9). The other use, paging in, is section 11's.
+registers it kept. C4IX uses that twice: a C4KE program that writes its own
+code (C4KE's ps patches itself) has the page it wrote made writable and the
+store run again (section 9); and a task that touches its own memory on
+swap has it brought back and the instruction run again (section 11).
 
 C4IX's trap handler (`sched_trap`) treats any other SEGV from a user
 task as the end of it (`mmu_fault`): a line to the console and the kernel
 log that says which task, what kind of access, at which address and pc,
 and whose the address is -- the kernel's image, the kernel's heap, another
-task (by name), the stack guard of a task, shared library code, page 0 --
-and whether it was mapped at all:
+task (by name), the stack guard of a task, shared library code, page 0,
+nobody's -- and whether it was mapped at all. A device's access at an
+address the task gave it is the task's fault too ("a device's write to",
+section 11):
 
     c4ix: task 12 (wild.c4r): page fault: write to 0x00002000 (the kernel's image, not mapped) at pc 0x0011a03c; killed
 
@@ -294,8 +302,8 @@ one, and in it:
 
 No page is both writable and executable. A C4KE program is the one
 exception: C4KE's ps patches its own code, so a C4KE program (one that has
-made a C4KE call, `ckabi`) that writes into its own code has that code
-made writable, and goes on. A C4IX program that does the same is killed.
+made a C4KE call, `ckabi`) that writes into its own code has the page it
+wrote made writable, that page alone, and goes on. A C4IX program that does the same is killed.
 
 A vfork child runs in its parent's space, with its own stack mapped into
 it, because it is using the parent's memory until it execs; then it gets
@@ -358,51 +366,96 @@ and a walk reads them with plain loads.
 
 - Each CPU sets its own KSP to a kernel stack of its own at start-up
   (`smp_ap`), and its own PTBR at every switch it makes.
-- A CPU's TLB only ever holds the space it is running. C4IX changes a
-  task's space while the task runs only from that task's own syscalls
-  (sbrk, malloc, spawn's argument copies), on its own CPU, with
-  INVLPG; and frees a space only when its task is dead and off every
-  CPU (`oncpu`). So no other CPU can hold a stale translation of it, and
-  there is no shootdown. Threads sharing a space on two CPUs at once
-  would need one: an IPI to each CPU in the space's CPU mask, which
-  flushes, before the page goes back to the heap.
-- The parallel engine's other CPUs ask CPU 0 for device work. None of
-  that is translated: a device sees physical addresses, which with the
-  identity map are the task's own.
+- C4IX changes a running task's space only from that task's own
+  syscalls (sbrk, malloc, spawn's argument copies), on its own CPU, with
+  INVLPG; and frees a space only when its task is dead and off every CPU
+  (`oncpu`). Swap (section 11) takes pages out of the spaces of tasks no
+  CPU is running -- but a CPU that ran one last may still have its space
+  loaded, and its TLB still holding the pages, since a switch to a
+  kernel task leaves the last space in. So the TLB's shootdown is a
+  generation: each swap-out bumps `mmu_gen`, each CPU remembers the
+  generation it last loaded a space at, and `mmu_switch`, finding the
+  space it is about to run already loaded from an older generation,
+  flushes before the task runs. No IPI and no waiting, because the one
+  moment a stale translation could be used is the next time that CPU
+  runs that space, and it looks then. Threads sharing a space on two CPUs
+  at once would need the IPI as well; C4IX has none.
+- The parallel engine's other CPUs ask CPU 0 for device work. The ask
+  carries the asker's PTBR and the kernel's map (par.js `K.PTBR`,
+  `K.UDIR`), so CPU 0 checks and translates what the device is given
+  against the asker's space, as the asker's own CPU would, and a refusal
+  goes back to be raised there (`DMA_FAULT`).
 
-## 11. What this does not do (yet), and how it would
+## 11. Addresses that are not physical, devices, and swap
 
-**Addresses that are not physical.** Every task could be linked at the
-same address (0x00400000, as on Linux), and its heap grow contiguously,
-with a non-identity map. The MMU already translates; what C4IX would need:
-the loader relocates to the virtual base while writing through the
-physical one; the kernel copies to and from user memory through the
-task's tables (`copyin`/`copyout`), not through the pointer; and devices
-that take addresses from user mode (the display's rings and framebuffer,
-the sound card's buffers) are given physical ones by the kernel, or
-translate through the writer's tables, which means a framebuffer must be
-physically contiguous or the device must gather pages.
+**User addresses** (stage 6, 7). Where memory fits below 256 MB, user
+mode's addresses are a window from 0x10000000, 256 MB of them (UWIN), and
+none is physical. An allocator of its own hands them out a run of pages
+at a time (`mmu_valloc`), so a region keeps its user address while its
+memory moves. Every task's pages are at their own user addresses in the
+task's space, and at the same ones in **the kernel's map** (`mmu_kdir`,
+UDIR), which maps every user address there is: kernel mode, which runs
+untranslated, reaches a user address through it (libjs's user window,
+`c4m.js kpa`) as readily as its own. The loop's inline loads and stores
+stop at the window; `ld32` and the rest, `cstring` and the block opcodes
+take it. So a pointer a task passes in a syscall is one the kernel follows
+as it always did, and nothing in its syscalls changed; and an address the
+map does not have is a bug in the kernel, which halts the machine there
+("libjs: the kernel used user address ..., which nothing is at").
 
-**DMA protection.** A task may write the display's RING register, and the
-host then writes events at that address. The kernel does not see the
-store. IOPM bit 2 is on for user tasks because the desktop and the games
-draw from user mode; an IOMMU check would be the display asking the MMU
-whether the writer's space maps the range writable.
+The kernel's own handles on user memory stay physical addresses -- what
+the loader writes an image through, what `ufree` frees -- and what it hands
+user mode is the user address of its memory (`mmu_uva`): the loader
+relocates a user task's image to them (`loader_uva`), and so its entry,
+constructors, destructors, libraries' data and slots; argv and the
+environment's pointers; the forged frame, which `mmu_adopt` rewrites; the
+entry page; a vfork child's stack; what `umem_alloc` gives. A region is
+found by either (`mmu_rgn`). Memory larger than 256 MB keeps the identity
+map, and no swap.
 
-**Swap** (designed, not built). Page out: the kernel picks a page whose A
-bit has stayed clear across a clock sweep, writes its 4 KB to a swap
-file -- host drive 1, which is IndexedDB in the page and a directory on
-the command line, through the drive registers persist already uses --
-clears P and keeps the swap slot in the PTE's upper bits, and INVLPGs.
-Page in: a fault on a not-present PTE with a slot is not a kill; the
-kernel reads the slot back into a free frame, sets P, and returns from
-the trap to the faulting instruction, which runs again (faults are
-precise for exactly this). The read is the drive's, which can block
-(`READ` returns -2), so the faulting task parks like a reader on an empty
-pipe and the CPU runs someone else. With the identity map a page that has
-been swapped out cannot be given to anyone else at its address, so swap
-needs the non-identity map first; and C4IX would also need to know which
-of its pages are the kernel's, which never go.
+**Devices** (stage 5). Every device that reads or writes guest memory at
+an address it was given goes through `arena.dma`, `dmaRead`, `dmaWrite` or
+`dmaCstring`: the display's event ring, framebuffer and BLIT8 sources, the
+sound card's samples, the drives' buffers, names and directory lists, the
+UART's and the console tap's buffers. While a user task's load or store is
+at a device, the task's MMU is the arena's `dmaCtx`, and the range must be
+the task's to read (and write), one run of memory, or the task takes the
+page fault it would have taken itself, with FK_DMA in FINFO:
+
+    c4ix: task 14 (wild.c4r): page fault: a device's write to 0x00002000 (the kernel's image, not mapped) at pc ...; killed
+
+-- an IOMMU's check. Given by the kernel, an address is found the way the
+kernel finds it (the window). The display's ring keeps the space that
+attached it, for the frames the host drains on its own. A page a device or
+the kernel has used is **pinned**: the host sets PTE_PIN (0x200) in the
+kernel's map, and swap leaves it alone, so the framebuffer, the rings and
+whatever the kernel copied in or out never move under them.
+
+**Swap** (stage 7). When the heap has no block for a region, the kernel
+puts blocks of idle tasks out to drive 1, a file each (`c4ix-swap-N`,
+through the drive registers persist uses), unmaps them from the task's
+space and its own map, and frees their memory. Which go: the largest
+block a task asked for (`umem_alloc`, not its image, stack or arguments),
+not pinned, of a task no CPU is running and that is not the one asking;
+first those whose pages nobody has used since the last look (PTE_A, which
+the look clears). A task that touches one again takes a page fault, and
+`mmu_fault` brings it back wherever there is room -- putting out others to
+make it, the faulting task's own other blocks among them -- at the same
+user address, and returns to the instruction, which runs again. A syscall
+given a pointer into one brings it back as it checks the pointer
+(`uaccess`, `ustrlen`), and only then may the kernel touch it; it may not
+put out the task's other blocks, which the same syscall may name. Every
+task not running is at the edge of user mode -- a syscall that waits is
+run again when its task wakes -- so nothing the kernel holds a pointer
+into is put out mid-use. On SMP, allocation takes the kernel lock when
+memory is short (`mmu_short`: seven eighths of the heap used), since
+swap runs only under it.
+
+`libjs/tests/test-c4ix-swap.mjs`: a probe measures the memory free; two
+holders take a third of it each and sleep; a hog takes six tenths, which
+only swap can give it; all three find every word as they left it, the log
+has blocks going out and coming back, and no exited program's file is
+left on drive 1.
 
 ## 12. Measurements
 
@@ -473,6 +526,35 @@ over the network, the display, the worker's round trips -- and V8 on that
 machine pays 3-5% for the checks (below), so the MMU does not show there.
 
 
+**Final, stage 7** (42c00f7, with ix-kmem merged: a space per task, user
+addresses that are not physical, devices checked, swap on drive 1), the
+same sessions:
+
+| workload | without the MMU: session, M instr/s | with it: session, M instr/s | the workload alone, without / with |
+|---|---|---|---|
+| boot (`wait 4`) | 6.56 s, 207.6 | 8.30 s, 165.3 (+27%) | |
+| cc builds and runs mandel.c | 10.39 s, 211.3 | 13.90 s, 159.7 (+34%) | 3.83 s / 5.60 s |
+| tar the root archive into /tmp | 13.04 s, 207.0 | 16.40 s, 166.3 (+26%) | 6.48 s / 8.10 s |
+| Doom demo3 (2,173 frames) | 57.28 s, 222.8 | 78.97 s, 161.6 (+38%) | 42.8 fps / 30.7 fps |
+| Wolf3D demo 1 (1,214 frames) | 28.73 s, 210.4 | 38.14 s, 158.7 (+33%) | 54.8 fps / 40.7 fps |
+| ROTT demo 4 (609 frames) | 22.67 s, 214.1 | 29.70 s, 164.0 (+31%) | 37.8 fps / 28.5 fps |
+| boot to the desktop (bench-desktop.mjs) | 7.57 s, 201.9 | 9.32 s, 165.9 (+23%) | |
+
+Without the MMU these are 1-6% slower than stage 4's, and the boot to the
+desktop 15%: the merge brought in ix-kmem's boot-stack guard, one compare
+more on each of the plain loop's inlined loads and stores (its commit
+measured 7% on the boot); the desktop's more is not looked into. None of
+the MMU's code runs without one. With it, the sessions take 2-5% longer
+than stage 4's with it: user addresses come
+from their own allocator now, so a window's offset is no longer 0 and the
+identity loop (section 12, below) never runs, and kernel mode reaches a
+user address through the kernel's map, a walk each time.
+
+In the browser, the same check as before with this build: 10.1 s to the
+desktop without the MMU, 11.3 s with it (Chrome 158 on the Windows
+machine, the better of two each). C4IX's page now fits the MMU unless
+`?mmu=0`.
+
 ### What translation cost, and what was tried
 
 The workload for this is the boot with the root archive unpacked
@@ -522,25 +604,26 @@ compare costs depends on the machine and the V8 that runs it.
 
 ## 13. Left undone
 
-- **Addresses that are not physical**, and with them **swap**: designed
-  (section 11), not built. C4IX maps every page at its own address.
-- **The display and the sound card take addresses from user mode** (the
-  event ring, the framebuffer, sample buffers) and the host reads and
-  writes there without asking the MMU. A task could point the display's
-  event ring at another task's memory. An IOMMU-like check in the devices
-  is section 11's; it is not done.
-- **The page's default is off.** `?mmu=1`, the Configuration dialog, or
-  `cli.js --mmu` turn it on. What it costs (section 12) is the case for
-  leaving that to whoever boots the machine.
-- **TLB shootdown**: none, and none needed while no two CPUs run one
-  address space at once (section 10). Threads would need one.
-- **Null-pointer reads** below 0x100 still read the ROM (0, or the TLEV
-  word), as they always have; stores there fault. Making page 0's ROM
-  unreadable to user mode would catch null reads too, and break whatever
-  reads it now.
+- **Swap is a block at a time**, not a page: a 1 MB block that one page
+  of is wanted comes back whole. Pages would need the frames of a region
+  to be apart, which the kernel's handles on a region (its physical base)
+  do not allow yet.
+- **Every task's addresses are apart**, from one window, rather than each
+  task having the same ones (0x00400000 on Linux): a region's user
+  address is unique in the machine, which keeps the kernel's map one map.
+- **TLB shootdown by IPI**: none. The generation (section 10) is enough
+  while no two CPUs run one space at once; threads would need the IPI.
+- **The kernel's first touch of a block on swap**, other than through a
+  syscall's checked pointers, would halt the machine (the window has no
+  way to fault in kernel mode). Nothing found does it; a pinned page --
+  any the kernel has used -- is never put out.
+- **A task that drives the drives itself** (`SYS_IOPERM`, persist) and is
+  preempted between two of its stores holds swap off until it runs again,
+  since swap's stores to the same registers would come between them.
+- **Swap files left over** by a machine stopped with blocks out stay on
+  drive 1 (`c4ix-swap-N`) until a later boot's swap writes the same
+  names.
+- **C4KE programs** may write their own code, a page at a time.
 - **c4bb's device registers** are for a task that asks (`SYS_IOPERM`),
-  and only `persist` asks. A program of the user's that drives the
-  drives itself under C4IX must ask too, or be killed by the fault.
-- **C4KE programs** keep writable text when they write it (C4KE's ps
-  does): their code is protected only until they first write it.
-
+  and only `persist` asks: nothing else in the tree uses them from user
+  mode.

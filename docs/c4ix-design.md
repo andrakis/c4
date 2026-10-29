@@ -941,13 +941,18 @@ spinner at -3 beside one at 0 gets 4.6 times the cycles
   kernel was booted with `-v`; the console's lines are as they were.
 
 - **An MMU** (branch ix-mmu, 2026-10-29): docs/c4ix-mmu.md. When the host
-  fits one (`cli.js --mmu`, the page's `?mmu=1`), user tasks run
-  translated, each in an address space of its own. A store into the kernel
-  or into another task is a page fault that kills only the task that made
-  it, and says so in the log. Stacks have guard pages, text is read-only,
-  data cannot be run, and c4bb's device registers are for a task that asks
-  (`SYS_IOPERM`, 244). The kernel runs untranslated, and every other system
-  is untouched. `libjs/tests/test-c4ix-mmu.mjs`.
+  fits one (`cli.js --mmu`; C4IX's page does unless `?mmu=0`), user tasks
+  run translated, each in an address space of its own, at user addresses
+  from 0x10000000 that are not physical ones. A store into the kernel or
+  into another task, or a null pointer's read, is a page fault that kills
+  only the task that made it, and says so in the log; so is a device
+  given an address that is not the task's (an IOMMU's check). Stacks have
+  guard pages, text is read-only, data cannot be run, and c4bb's device
+  registers are for a task that asks (`SYS_IOPERM`, 244). When memory runs
+  out, idle tasks' blocks go to swap on drive 1 and come back when they
+  are touched. The kernel runs untranslated, reaching user memory through
+  its map of it, and every other system is untouched.
+  `libjs/tests/test-c4ix-mmu.mjs`, `test-c4ix-swap.mjs`.
 
 ## 6.1 Running it
 

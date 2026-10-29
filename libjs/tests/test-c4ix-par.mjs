@@ -14,6 +14,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { createMachine, boot } from '../boot.js';
+import { STOP } from '../c4m.js';
 import { typeBytes } from '../keys.js';
 
 const ROOT = new URL('../../src/c4bb/images/', import.meta.url).pathname;
@@ -43,7 +44,22 @@ const vm = createMachine({ arenaMb: 48, mhz: 100, cpus: CPUS, parallel: process.
   spawn: url => new Worker(url), drives: [{ files, writable: false, sink: null }], onByte: b => out.push(b) });
 boot(vm, new Uint8Array(readFileSync(join(ROOT, 'c4ix32.c4r'))), ['c4ix32.c4r']);
 const text = (from = 0) => Buffer.from(out.slice(from)).toString('latin1');
-const until = (cond, budget) => { for (let i = 0; i < budget && !cond() && !vm.dev.halted; i++) vm.run(2e6); return cond(); };
+// On threads, vm.run comes back at once when CPU 0 naps or parks, so a
+// budget of runs was a second or so of real time while CPU 1 unpacked:
+// "wait 5" gave up before the archive was out (2026-10-30, with the MMU).
+// CPU 0 sleeps and parks for real here, as test-c4ix-guard.mjs and
+// cli.js have it do.
+const par = vm.smp && vm.smp.parallel ? vm.smp : null;
+const until = (cond, budget) => {
+  for (let i = 0; i < budget && !cond() && !vm.dev.halted; i++) {
+    const r = vm.run(2e6);
+    if (!par || vm.dev.halted) continue;
+    par.service();
+    if (r === STOP.SLEEP && par.othersRunning()) par.sleepSync(vm.dev.napMs);
+    else if (r === STOP.PARK || r === STOP.CPUHALT || vm.cpuState !== 'run') par.parkSync(10);
+  }
+  return cond();
+};
 let fail = 0;
 const check = (ok, what, detail) => {
   console.log(`test-c4ix-par: ${what} ${ok ? 'OK' : 'FAILED'}`);

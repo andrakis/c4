@@ -154,6 +154,12 @@ export function boot(machine, imageBytes, argv, opts = {}) {
   machine.heap.reset(heapBase, heapEnd);
   machine.dev.write32(HEAP_BASE, heapBase);
   machine.dev.write32(HEAP_END, heapEnd);
+  // The boot stack, from the reserve up to the arguments: a kernel that
+  // leaves it for good has it guarded (STACK_GUARD, c4m.js guardHit)
+  machine.dev.stackBase = heapEnd + reserveLen + mboxLen;
+  machine.dev.stackTop = arena.stackTop;
+  machine.dev.stackGuard = 0;
+  if (machine.dev.onGuard) machine.dev.onGuard();
   const reserve = reserveLen ? { base: heapEnd, len: reserveLen } : null;
   const mbox = mboxLen ? { base: heapEnd + reserveLen, len: mboxLen } : null;
   if (mbox) { machine.dev.mbox = mbox; arena.u8.fill(0, mbox.base, mbox.base + mbox.len); }

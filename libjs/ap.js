@@ -34,6 +34,10 @@ class ApDev {
   }
   simMs() { return Atomics.load(this.ctl, C.TIMEMS) | 0; }
   hostNow() { return Date.now(); }
+  // the boot stack's guard, as CPU 0 last set it (par.js ParHost)
+  get stackGuard() { return Atomics.load(this.ctl, C.GUARD); }
+  get stackBase() { return Atomics.load(this.ctl, C.GLO); }
+  get stackTop() { return Atomics.load(this.ctl, C.GHI); }
 }
 
 class ApMachine extends Machine {
@@ -102,6 +106,19 @@ class ApMachine extends Machine {
     }
     if (op === OP.EXIT) return this.halt(this.ld32(this.sp));
     return super.sys(op);
+  }
+
+  // A guard hit is told where the console is, and halts the machine
+  // there: CPU 0 says it with this CPU's registers (par.js, KIND.GUARD)
+  guardHit(x, n, write, v, op = 0, from = 0) {
+    const ctl = this.core.ctl, b = word(this.cpuId, 0);
+    ctl[b + K.BP] = this.bp;
+    ctl[b + K.CYCLES] = this.cycle | 0;
+    ctl[b + K.GN] = n | 0; ctl[b + K.GFROM] = from | 0; ctl[b + K.GW] = (write ? 1 : 0) | (this.mode ? 2 : 0);
+    this.flushPosted();
+    this.ask(KIND.GUARD, op, x, v);
+    this.dev.halted = true;
+    return 0;
   }
 
   // EXIT: this processor, never the machine

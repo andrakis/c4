@@ -78,6 +78,7 @@ node libjs/tests/test-c4ix-zombie.mjs || fail=1
 node libjs/tests/test-c4ix-cpu.mjs || fail=1
 node libjs/tests/test-c4ix-c4m.mjs || fail=1
 node libjs/tests/test-c4ix-sigh.mjs || fail=1
+node libjs/tests/test-c4ix-guard.mjs || fail=1   # the boot stack's guard: a program run off the end of the heap
 node libjs/tests/test-rom.mjs    || fail=1
 
 # ---- programs, byte for byte against native -----------------------------

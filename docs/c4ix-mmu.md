@@ -1,11 +1,14 @@
 # C4IX's MMU: paged virtual memory with protection in libjs
 
-STATUS (2026-10-29): stages 1-7 built and committed on ix-mmu, measured
+STATUS (2026-10-29): stages 1-10 built and committed on ix-mmu, measured
 (section 12): translation, the user/kernel split, a space per task,
 guard pages and read-only text (1-4); null reads, devices checked against
 the task's tables, C4KE's text a page at a time (5); user addresses that
-are not physical (6); swap, and the TLB kept right across CPUs (7). What
-is left is section 13.
+are not physical (6); swap, and the TLB kept right across CPUs (7); swap
+kept by the host, which the kernel can read (8); a page at a time (9);
+the TLB's shootdown by IPI (10). Fitted by default: cli.js and the tests
+(--no-mmu), and the page for C4IX, but for GitHub Pages' build. What is
+left is section 13.
 
 C4IX runs every task in one flat arena. Its protected mode (c4m's `mode`
 register, `sys_pmviolation` in `src/c4ix/sys.c`) stops a user task from
@@ -305,6 +308,17 @@ exception: C4KE's ps patches its own code, so a C4KE program (one that has
 made a C4KE call, `ckabi`) that writes into its own code has the page it
 wrote made writable, that page alone, and goes on. A C4IX program that does the same is killed.
 
+**Lending** (`SYS_MAPFROM`, 245, libc4ix `umapfrom`). A compositor
+draws what other programs made: the desktop shows a window's 8-bit canvas
+by handing the display the program's framebuffer and palette (GUI_BLIT8),
+which the display checks against the desktop's space (section 11). So a
+task may map memory of a task it started, or one its tasks did -- the
+window's shell's program -- read-only into its own space, at the same
+address (user addresses are the machine's, so it is free there). The
+region is pinned, so it stays where it is, and leaves the borrower's
+space when its owner frees it; a small block's chunk is what is lent.
+The desktop borrows a canvas's memory before it draws it.
+
 A vfork child runs in its parent's space, with its own stack mapped into
 it, because it is using the parent's memory until it execs; then it gets
 its own. Each region remembers the space it was mapped in, so the child's
@@ -366,20 +380,27 @@ and a walk reads them with plain loads.
 
 - Each CPU sets its own KSP to a kernel stack of its own at start-up
   (`smp_ap`), and its own PTBR at every switch it makes.
-- C4IX changes a running task's space only from that task's own
-  syscalls (sbrk, malloc, spawn's argument copies), on its own CPU, with
-  INVLPG; and frees a space only when its task is dead and off every CPU
-  (`oncpu`). Swap (section 11) takes pages out of the spaces of tasks no
-  CPU is running -- but a CPU that ran one last may still have its space
-  loaded, and its TLB still holding the pages, since a switch to a
-  kernel task leaves the last space in. So the TLB's shootdown is a
-  generation: each swap-out bumps `mmu_gen`, each CPU remembers the
-  generation it last loaded a space at, and `mmu_switch`, finding the
-  space it is about to run already loaded from an older generation,
-  flushes before the task runs. No IPI and no waiting, because the one
-  moment a stale translation could be used is the next time that CPU
-  runs that space, and it looks then. Threads sharing a space on two CPUs
-  at once would need the IPI as well; C4IX has none.
+- C4IX changes a running task's space from that task's own syscalls
+  (sbrk, malloc, spawn's argument copies), on its own CPU, with INVLPG;
+  and frees a space only when its task is dead and off every CPU
+  (`oncpu`). Swap (section 11) takes pages out of other tasks' spaces.
+  Two ways a CPU could keep a translation of such a page in its TLB, and
+  a shootdown for each:
+  - A CPU that ran the task last, and switched to a kernel task, which
+    leaves the last space in: each swap-out bumps a generation
+    (`mmu_gen`), each CPU remembers the one it last loaded a space at,
+    and `mmu_switch`, finding the space it is about to run already loaded
+    from an older one, flushes first -- the one moment the translation
+    could be used.
+  - A CPU running the task now (stage 10): the page leaves the task's
+    tables, the CPU is asked to forget (`mmu_shoot`) and sent an IPI,
+    which arrives as a trap whatever its mask, and the trap's first thing
+    (`mmu_trap_in`), before it waits for the kernel lock the swapping CPU
+    holds, is the flush and the answer. Only then is the page copied out
+    and its frame given up, so no store of the running task lands after
+    the copy. A CPU anywhere but user mode is not waited for: it flushes
+    on its way back (`mmu_trap_out`). The flags change by compare-and-swap,
+    a fence, so each CPU sees the other's in the order it was written.
 - The parallel engine's other CPUs ask CPU 0 for device work. The ask
   carries the asker's PTBR and the kernel's map (par.js `K.PTBR`,
   `K.UDIR`), so CPU 0 checks and translates what the device is given
@@ -431,31 +452,50 @@ the kernel has used is **pinned**: the host sets PTE_PIN (0x200) in the
 kernel's map, and swap leaves it alone, so the framebuffer, the rings and
 whatever the kernel copied in or out never move under them.
 
-**Swap** (stage 7). When the heap has no block for a region, the kernel
-puts blocks of idle tasks out to drive 1, a file each (`c4ix-swap-N`,
-through the drive registers persist uses), unmaps them from the task's
-space and its own map, and frees their memory. Which go: the largest
-block a task asked for (`umem_alloc`, not its image, stack or arguments),
-not pinned, of a task no CPU is running and that is not the one asking;
-first those whose pages nobody has used since the last look (PTE_A, which
-the look clears). A task that touches one again takes a page fault, and
-`mmu_fault` brings it back wherever there is room -- putting out others to
-make it, the faulting task's own other blocks among them -- at the same
-user address, and returns to the instruction, which runs again. A syscall
-given a pointer into one brings it back as it checks the pointer
-(`uaccess`, `ustrlen`), and only then may the kernel touch it; it may not
-put out the task's other blocks, which the same syscall may name. Every
+**Swap** (stages 7-10). User memory is frames (stage 9): the pages of
+heap blocks, each block taken for one region and its frames that
+region's until swap puts a page out; then the frame is free for any page
+coming back, and a block's record counts its frames in use wherever they
+are mapped; a block with none in use goes back to the heap (`mmu_fput`).
+When the heap has no block for a region, or there is no frame for a page
+coming back, pages of idle tasks go out to **the host's swap** (stage 8,
+devices.js `SWAP_ADDR`, `SWAP_CMD`: a page to a numbered slot, up to 256
+MB, memory beyond the arena, forgotten with the machine), and their
+frames are free. A page put out stays in the kernel's map, not present,
+its slot in the entry (`PTE_SWAP`, 0x400): libjs's window reads and
+writes the host's copy there, so the kernel finds the page's bytes even
+if it follows a pointer into it that it never checked.
+
+Which go: pages of what a task asked for (`umem_alloc`, not its image,
+stack or arguments), not pinned, first of the largest block of a task no
+CPU is running whose pages nobody has used since the last look (PTE_A,
+which the look clears); then of any task, one another CPU is running
+too, which forgets them first (the IPI, section 10); never the asking
+task's, but for a page fault's. For a block the heap has no room for,
+all of a block's pages go, so that its memory is the heap's again; for
+a frame, sixteen. A task that touches a page that is out takes a page
+fault, and `mmu_fault` brings it back into any free frame, with up to
+fifteen after it that are out too, at the same user address, and returns
+to the instruction, which runs again. A syscall given a pointer into one
+brings it back as it checks the pointer (`uaccess`, `ustrlen`). Every
 task not running is at the edge of user mode -- a syscall that waits is
 run again when its task wakes -- so nothing the kernel holds a pointer
-into is put out mid-use. On SMP, allocation takes the kernel lock when
-memory is short (`mmu_short`: seven eighths of the heap used), since
-swap runs only under it.
+into goes out mid-use. On SMP, allocation takes the kernel lock when
+memory is short (`mmu_short`: seven eighths of the heap used), since swap
+runs only under it.
+
+Swap's registers are its own, so a program that drives the drives itself
+(`SYS_IOPERM`, persist) and swap never come between each other's stores,
+and nothing is left on a drive.
 
 `libjs/tests/test-c4ix-swap.mjs`: a probe measures the memory free; two
 holders take a third of it each and sleep; a hog takes six tenths, which
-only swap can give it; all three find every word as they left it, the log
-has blocks going out and coming back, and no exited program's file is
-left on drive 1.
+only swap can give it; while a holder's block is out, the kernel reads it
+from the host's copy word for word; pages come back sixteen at most at a
+time; all three find every word as they left it; and the host keeps none
+of their pages once they are gone. With CPUS=2 the holders spin, and the
+log has pages going from a task another CPU was running, which forgot
+them first.
 
 ## 12. Measurements
 
@@ -555,6 +595,21 @@ desktop without the MMU, 11.3 s with it (Chrome 158 on the Windows
 machine, the better of two each). C4IX's page now fits the MMU unless
 `?mmu=0`.
 
+**Where the time goes** (after stage 7, Doom's demo3 under the MMU,
+12.7 billion instructions): 8 loads of a space, 8,611 TLB fills, 2.9
+million code-window refills, 1.6 million opcodes run in `sys()`. None of
+these is the cost: it is each instruction of the user loop, a table
+lookup on every load and store through a pointer, and the windows'
+offsets, which the identity loop (below) no longer saves since user
+addresses are not physical. What is left to try: user addresses chosen
+at their memory's address plus the window's base wherever that is free,
+so that every window has the same offset and a loop with it constant
+could run (the identity loop gave 5%); a window for the heap as there is
+one for the stack. Neither is done. So the MMU is fitted by default where
+it catches bugs -- cli.js and every test (`--no-mmu`, `mmu: false`), the
+page served from the tree -- and not on GitHub Pages, whose build writes
+`libjs/web/site.js` with it off (`?mmu=1` fits one there).
+
 ### What translation cost, and what was tried
 
 The workload for this is the boot with the root archive unpacked
@@ -604,25 +659,24 @@ compare costs depends on the machine and the V8 that runs it.
 
 ## 13. Left undone
 
-- **Swap is a block at a time**, not a page: a 1 MB block that one page
-  of is wanted comes back whole. Pages would need the frames of a region
-  to be apart, which the kernel's handles on a region (its physical base)
-  do not allow yet.
-- **Every task's addresses are apart**, from one window, rather than each
-  task having the same ones (0x00400000 on Linux): a region's user
-  address is unique in the machine, which keeps the kernel's map one map.
-- **TLB shootdown by IPI**: none. The generation (section 10) is enough
-  while no two CPUs run one space at once; threads would need the IPI.
-- **The kernel's first touch of a block on swap**, other than through a
-  syscall's checked pointers, would halt the machine (the window has no
-  way to fault in kernel mode). Nothing found does it; a pinned page --
-  any the kernel has used -- is never put out.
-- **A task that drives the drives itself** (`SYS_IOPERM`, persist) and is
-  preempted between two of its stores holds swap off until it runs again,
-  since swap's stores to the same registers would come between them.
-- **Swap files left over** by a machine stopped with blocks out stay on
-  drive 1 (`c4ix-swap-N`) until a later boot's swap writes the same
-  names.
+- **Every task's addresses are apart**, from one window of 256 MB,
+  rather than each task having the same ones (0x00400000 on Linux). A
+  user address is unique in the machine, which is what keeps the
+  kernel's map one map: the kernel follows any task's pointer, a vfork
+  child's or a borrowed canvas's, without asking whose it is. The same
+  addresses in every task would make each such access name its space,
+  and a wrong one would read another task's memory where it now halts.
+  The window is all tasks' together: 256 MB of user memory at once,
+  swap included.
+- **A device that needs one run of memory** -- the display's event ring,
+  and the framebuffer's fast path -- is given a page that has been out
+  and come back elsewhere only if it is next to the rest. Such memory is
+  pinned once a device has used it, so it does not move after; before,
+  the ring is refused (the task's fault) and the framebuffer copied a
+  page at a time.
+- **The light path on SMP** (`sched_light`: malloc and free without the
+  kernel lock) cannot swap. It is off while memory is short; a light
+  allocation that finds the heap full in between fails as without swap.
 - **C4KE programs** may write their own code, a page at a time.
 - **c4bb's device registers** are for a task that asks (`SYS_IOPERM`),
   and only `persist` asks: nothing else in the tree uses them from user

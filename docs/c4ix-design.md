@@ -937,11 +937,15 @@ spinner at -3 beside one at 0 gets 4.6 times the cycles
   calibrates, the kernel image's segments (libjs's loader gives them, in
   devices.js IMG_*), the drives and devices, the syscall table, each SL4B
   cache, the scheduler, the CPUs, each task the boot spawns and its exit,
-  and how long the boot took. The new lines go only to the log unless the
-  kernel was booted with `-v`; the console's lines are as they were.
+  and how long the boot took. On libjs they show on the console too while
+  the boot runs, until the console is the shell's (`klog_boot`), unless
+  the kernel was booted with `-q`; after, the new lines go only to the
+  log, unless it was booted with `-v`.
 
 - **An MMU** (branch ix-mmu, 2026-10-29): docs/c4ix-mmu.md. When the host
-  fits one (`cli.js --mmu`; C4IX's page does unless `?mmu=0`), user tasks
+  fits one (cli.js and the tests do unless `--no-mmu` or `mmu: false`;
+  C4IX's page does unless `?mmu=0`, but for the GitHub Pages build, whose
+  `libjs/web/site.js` turns it off), user tasks
   run translated, each in an address space of its own, at user addresses
   from 0x10000000 that are not physical ones. A store into the kernel or
   into another task, or a null pointer's read, is a page fault that kills
@@ -949,9 +953,13 @@ spinner at -3 beside one at 0 gets 4.6 times the cycles
   given an address that is not the task's (an IOMMU's check). Stacks have
   guard pages, text is read-only, data cannot be run, and c4bb's device
   registers are for a task that asks (`SYS_IOPERM`, 244). When memory runs
-  out, idle tasks' blocks go to swap on drive 1 and come back when they
-  are touched. The kernel runs untranslated, reaching user memory through
-  its map of it, and every other system is untouched.
+  out, idle tasks' pages go to the host's swap (up to 256 MB beyond the
+  arena), and come back a few at a time when they are touched; a task
+  another CPU is running forgets them first, by IPI. A program may borrow
+  a task's memory it started read-only (`SYS_MAPFROM`, 245), as the
+  desktop does to draw a window's canvas. The kernel runs untranslated,
+  reaching user memory through its map of it, and every other system is
+  untouched.
   `libjs/tests/test-c4ix-mmu.mjs`, `test-c4ix-swap.mjs`.
 
 ## 6.1 Running it

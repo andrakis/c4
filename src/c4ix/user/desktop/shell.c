@@ -21,12 +21,13 @@ static char tbuf[128];
 // ---- Settings' choices -------------------------------------------------------
 //
 // The colour scheme (the kit's), the desktop's own colour, its picture, the
-// screen saver and its wait, and the look.
+// screen saver and its wait, and the look; and the order Files lists in.
 static int swatches[8] = { 0x008080, 0x000040, 0x000000, 0x3a4a5a, 0x205030, 0x502850, 0xa09070, 0x606060 };
 enum { T_MODERN = 8 };
 static int cur_scheme, cur_bg;
 static int cur_wall;               // the picture (wall.c) under everything, or the colour
 static int cur_saver, cur_wait;    // the screen saver (savers.c, 0 none) and after how many minutes
+static int cur_sort;               // Files' order: SORT_* * 2, plus 1 for descending
 
 static void theme_init() {
     cur_scheme = T_MODERN; cur_bg = 0 - 1; cur_wall = 1; cur_saver = 1; cur_wait = 5; wk.style = S_FLAT;
@@ -39,9 +40,10 @@ int theme_bg() { return cur_bg; }
 int theme_wall() { return cur_wall; }
 int theme_saver() { return cur_saver; }
 int theme_wait() { return cur_wait; }
+int theme_sort() { return cur_sort; }
 int theme_swatch(int i) { return i >= 0 && i < 8 ? swatches[i] : 0; }
 
-// /etc/desktop.cfg: "scheme N bg V wall W saver S wait M style L", read
+// /etc/desktop.cfg: "scheme N bg V wall W saver S wait M style L sort O", read
 // when the desktop starts, so a choice outlives Power Off (and, with
 // persist, a reload of the page). Read into a buffer longer than any
 // file it takes, zeroed, so looking a few bytes ahead stays inside it.
@@ -73,6 +75,7 @@ static void theme_load() {
         if (cfg[i] == 's' && cfg[i + 1] == 'a' && cfg[i + 5] == ' ') { cfg_num(cfg + i + 6, &v); if (v >= 0 && v < saver_count()) cur_saver = v; }
         if (cfg[i] == 's' && cfg[i + 1] == 't' && cfg[i + 5] == ' ') { cfg_num(cfg + i + 6, &v); if (v >= 0 && v < N_STYLES) wk.style = v; }
         if (cfg[i] == 'w' && cfg[i + 1] == 'a' && cfg[i + 2] == 'i' && cfg[i + 4] == ' ') { cfg_num(cfg + i + 5, &v); if (v >= 1 && v <= 60) cur_wait = v; }
+        if (cfg[i] == 's' && cfg[i + 1] == 'o' && cfg[i + 4] == ' ') { cfg_num(cfg + i + 5, &v); if (v >= 0 && v < N_SORTS * 2) cur_sort = v; }
         ++i;
     }
     theme_apply();
@@ -91,6 +94,8 @@ static void theme_save() {
     ui_num(cfg + ui_len(cfg), cur_wait);
     ui_cat(cfg, " style ");
     ui_num(cfg + ui_len(cfg), wk.style);
+    ui_cat(cfg, " sort ");
+    ui_num(cfg + ui_len(cfg), cur_sort);
     ui_cat(cfg, "\n");
     write(fd, cfg, ui_len(cfg));
     uclose(fd);
@@ -113,6 +118,11 @@ void theme_set_style(int style) {
     wk.style = style >= 0 && style < N_STYLES ? style : S_FLAT;
     theme_save();
     wk_redraw_all();
+}
+// Files' order, kept as the rest are; each Files window sorts its own list
+void theme_set_sort(int sort) {
+    if (sort >= 0 && sort < N_SORTS * 2) cur_sort = sort;
+    theme_save();
 }
 void theme_set_saver(int which, int wait) {
     if (which >= 0 && which < saver_count()) cur_saver = which;

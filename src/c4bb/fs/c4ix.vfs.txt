@@ -45,6 +45,10 @@ ARCHIVES = c4ix-root.tgz
 		libctest: c4ix-libctest.c4r
 		pictest: c4ix-pictest.c4r
 		unixtest: c4ix-unixtest.c4r
+	# the person's own files: the web page's Uploads, each on drive 0 as
+	# home/NAME too and listed in c4ix.sizes (libjs/uploads.js). Empty
+	# where there are none, and on a disk with no c4ix.sizes.
+	home/: hostdir(home/)
 	# shared libraries: what a program linked with c4rlink -l loads
 	lib/:
 		libc4ix.c4s: c4ix-libc4ix.c4s

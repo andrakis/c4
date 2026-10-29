@@ -864,3 +864,34 @@ copied it (grin's G7 found the same for its applications, 86c4c89).
       outliving the Terminal that copied it. web-ix-edit.mjs, the browser
       check over CDP: a Terminal's selection pasted into the IDE, its
       Settings, the binary warning, the Open box, Text Editor's Save As.
+
+## Part sixteen: Files sorts, and the uploads have a place (asked for 2026-10-29)
+
+- [x] **Sorting** (`files.c`): View > Sort by Name, Type (the extension),
+      Size or Date, and Ascending or Descending, with a check mark on the
+      ones in use (the kit's `WK_CHECKED`: an item whose first byte it is).
+      A click on a column's header sorts by that column, again reverses
+      it, and an arrow on the header shows which. Folders come first
+      either way, names sort without regard to case, and what the order
+      leaves equal goes by name. Date is the VFS's modification order
+      (`vfs_touch`), as C4IX keeps no clock every host has. One order for
+      every Files window, kept as `sort N` in desktop.cfg (N is the key
+      times two, plus one for descending).
+- [x] **The uploads in /home**: the page's Uploads were laid over drive 0
+      by name, so a program could open them, but no listing named them.
+      `libjs/uploads.js` (worker.js, and test-desktop.mjs the same way)
+      now also puts each on the drive as `home/NAME` with a line in
+      `c4ix.sizes`, and the manifest's `home/: hostdir(home/)` makes them
+      lazy files in `/home` (vfsload.c, `load_hostdirs`). Files, `ls` and
+      the shell see them there; the bare names still open. /home is empty
+      where there are none.
+- [x] test-desktop.mjs: three uploads and a folder in /home, `ls` and `cat`
+      on them, and each order, by the menu and by the headers, kept across
+      closing Files.
+- [x] web-ix-files.mjs, the browser check over CDP: the uploads put in the
+      page's store, /home listing them in Files, the headers and View >
+      Sort; the uploads are taken out of the store again after.
+- [x] **The folder tree** starts with only the root open (its own folders,
+      nothing deeper), keeps open what was opened through a reload, brings
+      in a folder new to it collapsed, and lists each folder's folders by
+      name (`tree_walk`, `tree_load`).

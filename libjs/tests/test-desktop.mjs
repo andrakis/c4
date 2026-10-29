@@ -13,6 +13,7 @@ import { createMachine, boot } from '../boot.js';
 import { STOP } from '../c4m.js';
 import { GuiDevice, CMD } from '../gui-device.js';
 import { typeBytes } from '../keys.js';
+import { layUploads } from '../uploads.js';
 
 const ROOT = new URL('../../src/c4bb/images/', import.meta.url).pathname;
 // the screen's size: the desktop's own, until the test tells it another
@@ -40,6 +41,12 @@ class LazyDisk extends Map {
   }
 }
 const files = new LazyDisk(index);
+// The page's Uploads, laid over drive 0 as worker.js does (uploads.js):
+// C4IX lists them in /home. In the order given here they are made, the
+// VFS's dates, which with their names, sizes and extensions sorts each
+// of Files' orders differently.
+const UPLOADS = [['bravo.dat', 500], ['charlie.c', 9000], ['alpha.txt', 3000]];
+layUploads(files, UPLOADS.map(([n, z]) => [n, new TextEncoder().encode(`uploaded ${n}\n`.repeat(z)).slice(0, z)]));
 const gui = new GuiDevice({ w: 640, h: 480 });
 const out = [];
 const vm = createMachine({ arenaMb: 64, gui, drives: [{ files, writable: false, sink: null }], onByte: b => out.push(b) });
@@ -183,6 +190,12 @@ const inList = all => {
   if (!e) return undefined;
   return all.filter(t => t.x > e.x + 200 && t.x < e.x + 600 && t.y > e.y + 60 && t.y < e.y + 420).pop();
 };
+// anywhere in Files' window: its menu bar, the list's column headers
+const inFiles = all => {
+  const e = explorer();
+  if (!e) return undefined;
+  return all.filter(t => t.x > e.x && t.x < e.x + 600 && t.y > e.y && t.y < e.y + 420).pop();
+};
 const noDialog = () => !has('OK') && !has('Yes');
 
 // ---- boot C4IX, start the desktop ----------------------------------------------
@@ -202,6 +215,21 @@ check(until(() => consoleText().includes('[4] done (0)'), 3000), 'the root archi
   const c1 = consoleText().length;
   typeBytes(vm, new TextEncoder().encode('echo scheme 0 bg -1 wall 1 saver 0 wait 5 > /etc/desktop.cfg\n'));
   until(() => /c4ix:\/\$ ?$/.test(consoleText().slice(c1).trimEnd() + ' '));
+}
+// The uploads are in /home, where ls lists them, and open there and by
+// their bare names, as they did before they were listed anywhere
+{
+  const sh = cmd => {
+    const c0 = consoleText().length;
+    typeBytes(vm, new TextEncoder().encode(cmd + '\n'));
+    until(() => /c4ix:\/\$ ?$/.test(consoleText().slice(c0).trimEnd() + ' '));
+    return consoleText().slice(c0);
+  };
+  const ls = sh('ls /home');
+  check(UPLOADS.every(([n]) => ls.includes(n)), 'ls lists the uploads in /home', ls);
+  check(sh('cat /home/alpha.txt').includes('uploaded alpha.txt'), 'cat reads one there', consoleText().slice(-300));
+  check(sh('cat bravo.dat').includes('uploaded bravo.dat'), 'and by its bare name, from the host', consoleText().slice(-300));
+  sh('mkdir /home/zeta');
 }
 typeBytes(vm, new TextEncoder().encode('desktop\n'));
 check(until(() => consoleText().includes('desktop: running on the display')), 'desktop starts from the console');
@@ -365,6 +393,28 @@ const inTree = all => {
   if (!e) return undefined;
   return all.filter(t => t.x > e.x && t.x < e.x + 190 && t.y > e.y + 50 && t.y < e.y + 400).pop();
 };
+// It starts with only the root open: the root's folders, nothing deeper
+check(!!inTree(find('usr')) && !!inTree(find('bin')) && !inTree(find('src')) && !inTree(find('docs')),
+  'the tree starts with only the root open', screen());
+{
+  const ys = ['bin', 'build', 'home', 'tmp', 'usr'].map(n => inTree(find(n))?.y ?? -1);
+  check(ys.every((y, i) => y >= 0 && (i === 0 || y > ys[i - 1])), "and lists the root's folders by name", ys.join(' '));
+}
+// Into a deep folder through the list: the folders above it open, and
+// stay open after, which makes the tree taller and wider than its pane
+{
+  let path = '';
+  for (const d of ['usr', 'src', 'c4ix', 'libc', 'include']) {
+    path += '/' + d;
+    dbl(d, inList);
+    if (!until(() => has('Files - ' + path))) break;
+  }
+  check(has('Files - /usr/src/c4ix/libc/include') && !!inTree(find('libc')) && !!inTree(find('c4ix')),
+    'opening a folder deep down opens the folders above it in the tree', screen());
+  for (let i = 0; i < 5; i++) key('\b');
+  check(until(() => has('Files - /') && !!inTree(find('C4IX (/)'))) && !!inTree(find('src')),
+    'and they stay open back at the root', screen());
+}
 {
   const e = explorer();
   for (let i = 0; i < 40; i++) ev({ kind: 'wheel', x: e.x + 60, y: e.y + 200, dy: 1 });
@@ -462,6 +512,49 @@ key('DEL');
 check(until(() => has(/Delete these 2 items/)), 'Delete asks about both', screen());
 key('y');
 check(until(() => noDialog() && !inList(find('aa')) && !inList(find('bb'))), 'and Yes deletes both, the folder inside too', screen());
+
+// ---- Files: the uploads in /home, and the list's order ------------------------------
+// /home has the three uploads and the folder made above. Their order in
+// the list, top to bottom:
+const homeNames = ['zeta', ...UPLOADS.map(([n]) => n)];
+const order = () => homeNames.every(n => inList(find(n)))
+  ? homeNames.slice().sort((a, b) => inList(find(a)).y - inList(find(b)).y).join(' ') : screen();
+const viewMenu = item => { clickText('View'); settle(); return clickText(item); };
+key('\b');
+until(() => has('Files - /'));
+dbl('home', inList);
+check(until(() => has('Files - /home') && order() === 'zeta alpha.txt bravo.dat charlie.c'),
+  '/home lists the uploads by name, after the folder', order());
+check(!!inList(find('1 KB')) && !!inList(find('3 KB')) && !!inList(find('9 KB')), 'with their sizes', screen());
+viewMenu('Sort by Size');
+check(until(() => order() === 'zeta bravo.dat alpha.txt charlie.c'), 'View > Sort by Size: the smallest file first, the folder still first', order());
+viewMenu('Descending');
+check(until(() => order() === 'zeta charlie.c alpha.txt bravo.dat'), 'View > Descending: the largest first, the folder still first', order());
+viewMenu('Sort by Type');
+check(until(() => order() === 'zeta alpha.txt bravo.dat charlie.c'), 'Sort by Type keeps descending: by extension, txt dat c', order());
+viewMenu('Ascending');
+check(until(() => order() === 'zeta charlie.c bravo.dat alpha.txt'), 'and Ascending turns it round', order());
+viewMenu('Sort by Date');
+check(until(() => order() === 'zeta bravo.dat charlie.c alpha.txt'), 'Sort by Date: in the order they were made', order());
+clickText('Name', inFiles);
+check(until(() => order() === 'zeta alpha.txt bravo.dat charlie.c'), "clicking the Name column's header sorts by name", order());
+clickText('Name', inFiles);
+check(until(() => order() === 'zeta charlie.c bravo.dat alpha.txt'), 'and clicking it again reverses it', order());
+clickText('Size', inFiles);
+check(until(() => order() === 'zeta bravo.dat alpha.txt charlie.c'), 'clicking Size sorts by size, smallest first', order());
+// the order is kept with Settings' choices: a new Files window has it
+clickText('File', all => all.filter(t => inFiles([t])).sort((p, q) => p.y - q.y)[0]); settle(); clickText('Close');
+check(until(() => !explorer()), 'File > Close closes Files', screen());
+start('Files');
+until(() => has('Files - /'));
+dbl('home', inList);
+check(until(() => has('Files - /home') && order() === 'zeta bravo.dat alpha.txt charlie.c'), 'and Files opened again keeps the order', order());
+clickText('Name', inFiles);
+check(until(() => order() === 'zeta alpha.txt bravo.dat charlie.c'), 'by name again', order());
+key('\b');
+until(() => has('Files - /'));
+dbl('tmp', inList);
+check(until(() => has('Files - /tmp')), 'and back in /tmp');
 
 // ---- Text Editor --------------------------------------------------------------------------
 start('Text Editor');

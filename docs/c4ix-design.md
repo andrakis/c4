@@ -984,7 +984,8 @@ log was `/log/kernel`. `pin` and `nice` look where the shell does.
 | `/var/persist` | persist's list of the tree as it booted |
 | `/tmp`, `/proc` | scratch files; `/proc/uptime` |
 
-`/home` is not used, and is left for the person's own files.
+`/home` is for the person's own files: the page's uploads are listed
+there (`libjs/uploads.js`, docs/c4ix-desktop.md part sixteen).
 
 ## 6.1 Running it
 

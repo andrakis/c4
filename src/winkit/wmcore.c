@@ -339,9 +339,17 @@ static int drop_y(struct win *w) {
     return menu_idx < 0 ? w->y + BORDER + TITLE_H + 1 : w->y + BORDER + TITLE_H + 1 + MENU_H;
 }
 
+// the check mark left of a WK_CHECKED item
+static void check_mark(int x, int y, int rgb) {
+    int k;
+    k = 0;
+    while (k < 7) { gui_rect(x + k, y + (k < 2 ? 3 + k : 7 - k), 2, 2, rgb); ++k; }
+}
+
 static void draw_dropdown() {
     struct win *w;
     char **items;
+    char *s;
     int n, x, y, k, iy, mh;
     if (!(w = win_get(menu_win))) return;
     items = drop_items(w);
@@ -356,7 +364,9 @@ static void draw_dropdown() {
         if (items[k][0] == '-') { gui_rect(x + 3, iy + 3, DROP_W - 6, 1, C_SHADOW); gui_rect(x + 3, iy + 4, DROP_W - 6, 1, C_LIGHT); iy = iy + 8; }
         else {
             if (k == menu_hot) gui_rect(x + 3, iy, DROP_W - 6, 20, C_SEL);
-            d_text(x + 20, iy + 4, k == menu_hot ? C_WHITE : C_DARK, F_SANS, items[k]);
+            s = items[k];
+            if (s[0] == WK_CHECKED) { check_mark(x + 7, iy + 5, k == menu_hot ? C_WHITE : C_DARK); ++s; }
+            d_text(x + 20, iy + 4, k == menu_hot ? C_WHITE : C_DARK, F_SANS, s);
             iy = iy + 20;
         }
         ++k;

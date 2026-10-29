@@ -646,6 +646,7 @@ int c4r_load(char *path, struct c4r_image *img) {
 void loader_switch(struct task *t) {
     int *l;
     int k;
+    mmu_switch(t);                // and its address space (mmu.c)
     if (!t || !t->img_libs) return;
     l = (int *)t->img_libs;
     k = 0;

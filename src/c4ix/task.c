@@ -358,6 +358,7 @@ static void task_destroy(struct task *t) {
     if (t->env_vec) ufree(t->env_vec);
     if (t->env_data) ufree(t->env_data);
     umem_free_all(t, 1);
+    mmu_task_done(t);
     sl4b_free(task_cache, (char *)t);
 }
 

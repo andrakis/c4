@@ -11,9 +11,11 @@
 // and for nobody else; checks the pointers they pass the kernel; and
 // says what a page fault was.
 //
-// User memory is mapped at its own address (an identity map), so a
-// pointer a task passes in a syscall is one the kernel can use once it
-// has checked it (uaccess).
+// Each user task has an address space of its own: a page directory that
+// maps its pages and the shared libraries' code, and nothing else.
+// Memory is mapped at its own address (an identity map), so a pointer a
+// task passes in a syscall is one the kernel can use once it has checked
+// it (uaccess) against the task's own tables.
 //
 // Without the MMU none of this runs: umalloc and ufree are malloc and
 // free, and every task's memory is the heap's, as it always was.
@@ -22,7 +24,7 @@
 #include "c4ix.h"
 
 int mmu_on;                    // user mode is translated
-static int *mmu_dir;           // the page directory every user task runs in
+static int *mmu_dir;           // the directory the kernel's own tasks run in: nothing mapped
 static int mmu_memsize;        // the arena, bytes
 static int mmu_npages;
 static int mmu_ntables;        // page tables made
@@ -122,6 +124,7 @@ struct urgn {
     struct task *owner;        // 0 until adopted
     int shared;                // a cached library's code: mapped, never freed
     int heap;                  // what the task asked for (or its entry page): freed with its heap
+    int *dir;                  // the space it is mapped in: its owner's, or a vfork parent's
     struct urgn *next;         // the owner's regions
     // UR_SLAB
     int size;                  // its blocks' size
@@ -153,8 +156,59 @@ static struct task *mmu_root(struct task *t) {
     return t;
 }
 
+// T's address space: a vfork child's is its parent's, whose memory it
+// is using; a kernel task has none. Made on first use, with the shared
+// libraries' slot pages in it.
+static int mmu_nslotpages;
+static int mmu_slotpages[8];
+
 static int *mmu_dir_of(struct task *t) {
-    return mmu_dir;
+    int *d;
+    int k;
+    t = mmu_root(t);
+    if (!t || t->privs != PRIV_USER) return mmu_dir;
+    if (t->mmdir) return (int *)t->mmdir;
+    if (!(d = (int *)mmu_page())) return mmu_dir;
+    k = 0;
+    while (k < mmu_nslotpages) { mmu_map(d, mmu_slotpages[k], MMU_PAGE, PTE_P | PTE_U); ++k; }
+    t->mmdir = (int)d;
+    return d;
+}
+
+// T is done with its space (task_destroy, and execve's old one): its
+// tables go back to the page list. What was mapped in it is freed by name.
+static void mmu_dir_free(int *d) {
+    int k;
+    if (!d || d == mmu_dir) return;
+    k = 0;
+    while (k < 1024) {
+        if (d[k] & PTE_P) {
+            *(int *)(d[k] & ~(MMU_PAGE - 1)) = mmu_freepage;
+            mmu_freepage = d[k] & ~(MMU_PAGE - 1);
+            --mmu_ntables;
+        }
+        ++k;
+    }
+    *d = mmu_freepage;
+    mmu_freepage = (int)d;
+}
+
+void mmu_task_done(struct task *t) {
+    if (!mmu_on || !t->mmdir) return;
+    klock_take(mmu_ulock);
+    mmu_dir_free((int *)t->mmdir);
+    klock_drop(mmu_ulock);
+    t->mmdir = 0;
+}
+
+// The switch (loader_switch, at every one): the incoming task's space on
+// this CPU. A kernel task leaves the last one in: it runs untranslated,
+// and the user task it is likely to go back to finds its own still there.
+void mmu_switch(struct task *t) {
+    int d;
+    if (!mmu_on || !t || t->privs != PRIV_USER) return;
+    d = (int)mmu_dir_of(t);
+    if (*(int *)MMU_PTBR != d) *(int *)MMU_PTBR = d;
 }
 
 // A region of N bytes, unowned and unmapped: the kernel's until adopted
@@ -175,9 +229,11 @@ static struct urgn *mmu_region(int n, int kind) {
     return r;
 }
 
-// Map R into its owner's space, or take it out
+// Map R into its owner's space, or take it out of the space it is in
 static void mmu_rmap(struct urgn *r, int flags) {
-    mmu_map(mmu_dir_of(r->owner), r->base, r->npages * MMU_PAGE, flags);
+    if (flags) r->dir = mmu_dir_of(r->owner);
+    if (r->dir) mmu_map(r->dir, r->base, r->npages * MMU_PAGE, flags);
+    if (!flags) r->dir = 0;
 }
 
 static void mmu_give(struct urgn *r, struct task *t, int flags) {
@@ -236,20 +292,22 @@ void ufree(int p) {
     free((char *)p);
 }
 
-// A cached library's code: in every space that loads the library, and
-// never freed
+// A cached library's code: in every space that loads the library
+// (mmu_adopt maps it), and never freed
 void umem_share(int p) {
     struct urgn *r;
     if (!mmu_on || !(r = mmu_rgn(p))) return;
     r->shared = 1;
     r->flags = PTE_P | PTE_U | PTE_X | PTE_W;
-    mmu_map(mmu_dir, r->base, r->npages * MMU_PAGE, r->flags);
 }
 
-// Give P, if it is an unowned region, to T, mapped with FLAGS
+// Give P, if it is an unowned region, to T, mapped with FLAGS; a shared
+// one is mapped into T's space as it is everyone's
 static void mmu_take(struct task *t, int p, int flags) {
     struct urgn *r;
-    if (!p || !(r = mmu_rgn(p)) || r->kind != UR_BLOCK || r->base != p || r->owner || r->shared) return;
+    if (!p || !(r = mmu_rgn(p)) || r->kind != UR_BLOCK || r->base != p) return;
+    if (r->shared) { mmu_map(mmu_dir_of(t), r->base, r->npages * MMU_PAGE, r->flags); return; }
+    if (r->owner) return;
     mmu_give(r, t, flags);
 }
 
@@ -460,6 +518,16 @@ int mmu_user_entry(struct task *t) {
 }
 
 // ---- the shared libraries' data slots ----
+
+// A new page of slots, into every space there is
+static void mmu_slotall(int page) {
+    struct task *t;
+    t = task_first();
+    while (t) {
+        if (t->mmdir) mmu_map((int *)t->mmdir, page, MMU_PAGE, PTE_P | PTE_U);
+        t = t->next;
+    }
+}
 //
 // A -fpic library reads the address of the running task's copy of its
 // data from a word the scheduler sets (loader_switch). User mode reads
@@ -470,12 +538,13 @@ static int mmu_slotpage, mmu_nslots;
 int mmu_slot() {
     struct urgn *r;
     if (!mmu_slotpage || mmu_nslots == MMU_PAGE / sizeof(int)) {
-        if (!(r = mmu_region(MMU_PAGE, UR_BLOCK))) return 0;
+        if (mmu_nslotpages == 8 || !(r = mmu_region(MMU_PAGE, UR_BLOCK))) return 0;
         r->shared = 1;
         r->flags = PTE_P | PTE_U;
-        mmu_map(mmu_dir, r->base, MMU_PAGE, r->flags);
         mmu_slotpage = r->base;
         mmu_nslots = 0;
+        mmu_slotpages[mmu_nslotpages++] = r->base;
+        mmu_slotall(r->base);
     }
     ++mmu_nslots;
     return mmu_slotpage + (mmu_nslots - 1) * sizeof(int);
@@ -564,7 +633,7 @@ void mmu_cpu(int k) {
     }
     mmu_kstack[k] = s;
     *(int *)MMU_KSP = s + MMU_KSTACK;
-    *(int *)MMU_PTBR = (int)mmu_dir;
+    *(int *)MMU_PTBR = (int)mmu_dir;   // until the first user task
     // Page 0: the ROM, c4bb's devices, the display, the sound card, and
     // the CPU-local window to read (the libraries' data slots) but not
     // to write: it is the kernel's struct cpu (docs/c4ix-mmu.md 7)
@@ -587,7 +656,7 @@ void mmu_init() {
     }
     memset((char *)mmu_pg, 0, mmu_npages * sizeof(int));
     mmu_on = 1;
-    klog("mmu: 4 KB pages, %d of them; a user task's memory is whole pages, mapped for user mode, and the kernel's is not mapped\n",
+    klog("mmu: 4 KB pages, %d of them; each user task has a space of its own, its own pages and the shared code\n",
         mmu_npages);
     mmu_cpu(0);
 }

@@ -497,6 +497,7 @@ struct task {
     int  urgns;
     int  uchunk;
     int  uslab[8];
+    int  mmdir;                // its page directory: its address space (0 until it needs one)
     char name[TASK_NAME_MAX];
 };
 
@@ -802,6 +803,8 @@ void umem_free_all(struct task *t, int all);
 int  umem_bytes(struct task *t);
 int  mmu_user_entry(struct task *t);   // a page that runs T's constructors, main and exit
 int  mmu_slot();                       // a word user mode may read: a library's data slot
+void mmu_switch(struct task *t);       // T is about to run here: its space
+void mmu_task_done(struct task *t);    // T is gone: its space too
 // Could the running task use the N bytes at P (to write, if W)? And the
 // string at S: its length, or -1. Always yes without the MMU.
 int  uaccess(int p, int n, int w);

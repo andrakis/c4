@@ -929,6 +929,26 @@ spinner at -3 beside one at 0 gets 4.6 times the cycles
     had shifted the preemption points onto that window. The setup now
     runs under `sched_lock`.
 
+- **The kernel log** (branch ix-mmu, 2026-10-29). Every line the kernel
+  says goes into a 64 KB ring, stamped with the machine's time the way
+  Linux stamps its log (`[    0.012345]`). `dmesg` prints it, and
+  `/proc/kmsg` is the ring as a file. The boot fills it with what it finds
+  (`boot.c`, `boot_report`): the host's capabilities, the clock it
+  calibrates, the kernel image's segments (libjs's loader gives them, in
+  devices.js IMG_*), the drives and devices, the syscall table, each SL4B
+  cache, the scheduler, the CPUs, each task the boot spawns and its exit,
+  and how long the boot took. The new lines go only to the log unless the
+  kernel was booted with `-v`; the console's lines are as they were.
+
+- **An MMU** (branch ix-mmu, 2026-10-29): docs/c4ix-mmu.md. When the host
+  fits one (`cli.js --mmu`, the page's `?mmu=1`), user tasks run
+  translated, each in an address space of its own. A store into the kernel
+  or into another task is a page fault that kills only the task that made
+  it, and says so in the log. Stacks have guard pages, text is read-only,
+  data cannot be run, and c4bb's device registers are for a task that asks
+  (`SYS_IOPERM`, 244). The kernel runs untranslated, and every other system
+  is untouched. `libjs/tests/test-c4ix-mmu.mjs`.
+
 ## 6.1 Running it
 
     make run-c4ix        an interactive shell on c4m
@@ -950,6 +970,7 @@ spinner at -3 beside one at 0 gets 4.6 times the cycles
       --demo IMAGE...    run the built-in demonstrations
       -h, --help         print the usage and shut down
       -q                 accepted and ignored
+      -v                 the kernel log on the console as well (dmesg reads it either way)
       --desktop          the web page's boot: the root archive unpacks first,
                          with a loading screen, then the shell runs
                          "desktop &" and "top", as if they were typed

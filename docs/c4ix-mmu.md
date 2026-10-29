@@ -1,6 +1,7 @@
 # C4IX's MMU: paged virtual memory with protection in libjs
 
-STATUS (2026-10-29): designed, with the baseline measured (section 12).
+STATUS (2026-10-29): stages 1-4 built and committed on ix-mmu, measured
+(section 12); what is left is section 13.
 
 C4IX runs every task in one flat arena. Its protected mode (c4m's `mode`
 register, `sys_pmviolation` in `src/c4ix/sys.c`) stops a user task from
@@ -421,8 +422,125 @@ their session's less the boot's, which every session starts with (`wait
 | Wolf3D, demo 1 timedemo | 28.79 s | 5,963,519,835 | 208.3 | 22.60 s: 1,214 frames, 53.7 fps |
 | ROTT, demo 4 timedemo | 21.74 s | 4,773,282,411 | 221.1 | 15.55 s: 609 frames, 39.2 fps |
 
-(The stage tables follow as each stage lands.)
+**Stage 1** (one address space, every page the user's), the same
+sessions, the plain loop and then `--mmu`:
+
+| workload | without the MMU | with it | |
+|---|---|---|---|
+| boot (`wait 4`) | 6.32 s | 7.57 s | +20% |
+| cc builds and runs mandel.c | 10.02 s | 13.19 s | +32% |
+| tar the root archive into /tmp | 12.63 s | 14.31 s | +13% |
+| Doom demo3 | 54.32 s | 72.00 s | +33% |
+| Wolf3D demo 1 | 28.65 s | 37.06 s | +29% |
+| ROTT demo 4 | 22.67 s | 27.64 s | +22% |
+| boot to the desktop (bench-desktop.mjs) | 6.41 s | 8.40 s | +31% |
+
+**Final, stage 4** (f0d52ab: an address space per task, guard pages,
+read-only text, no-execute data, the IOPM), `bench-mmu.sh` and
+`bench-mmu.sh --mmu`:
+
+| workload | without the MMU: session, M instr/s | with it: session, M instr/s | the workload alone, without / with |
+|---|---|---|---|
+| boot (`wait 4`) | 6.24 s, 216.5 | 7.95 s, 170.5 (+27%) | |
+| cc builds and runs mandel.c | 9.94 s, 219.7 | 13.10 s, 167.7 (+32%) | 3.70 s / 5.15 s |
+| tar the root archive into /tmp | 12.48 s, 214.3 | 15.55 s, 173.3 (+25%) | 6.24 s / 7.60 s |
+| Doom demo3 (2,173 frames, checksum 01914fe7 both ways) | 53.85 s, 236.8 | 76.80 s, 165.9 (+43%) | 45.6 fps / 31.6 fps |
+| Wolf3D demo 1 (1,214 frames) | 28.41 s, 212.3 | 36.70 s, 164.4 (+29%) | 54.8 fps / 42.2 fps |
+| ROTT demo 4 (609 frames) | 22.34 s, 216.8 | 27.50 s, 176.3 (+23%) | 37.8 fps / 31.2 fps |
+| boot to the desktop (bench-desktop.mjs) | 6.56 s, 230.9 | 8.67 s, 176.1 (+32%) | |
+
+Without the MMU nothing moved: the same sessions run at the baseline's
+rate (216.5 against 216.1 M instr/s for the boot, 236.8 against 237.9
+for Doom), within the noise of a machine other sessions share. The
+cycles are up 1-3%, which is the kernel's log and the boot's report
+doing their work, not the interpreter. The plain loop is the one that
+ran before, chosen once per `run()`.
+
+With it, on helios, the sessions cost a fifth to two fifths more. Doom
+pays most. Part of that is stage 3: with one address space (stage 1) it
+took 72.0 s, against stage 4's 76.8 s, since every switch to another task
+and back loads another page directory and empties the TLB (section 9).
+The code window covering a whole program's text (stage 4's libjs change)
+took Doom from 78.3 s to 76.1 s on the stage-2 kernel.
+
+**In the browser** (`libjs/tests/web-c4ix-mmu.mjs`, over CDP in the
+Windows machine's Chrome 158, against the page served from helios,
+`?system=c4ix&persist=0&fast`, the better of two boots each, timed from
+the page's load to the desktop saying it runs on the display): 11.8 s
+without the MMU, 11.6 s with it, at about 100 M instr/s either way. The
+page's boot is mostly not the interpreter's work -- the disk read lazily
+over the network, the display, the worker's round trips -- and V8 on that
+machine pays 3-5% for the checks (below), so the MMU does not show there.
+
+
+### What translation cost, and what was tried
+
+The workload for this is the boot with the root archive unpacked
+(`wait 4`): 1.2 billion instructions, nearly all of them `persist` and
+libarc inflating and writing 600 files, in user mode. Times are the whole
+session's, so everything the kernel does is in them too.
+
+The user loop as first written compared against a window on every fetch
+and every stack access, and cost 60-80% (on a Windows machine first,
+node 24, where the same session without an MMU took 4.5-4.8 s):
+
+| user loop | session | |
+|---|---|---|
+| without an MMU | 4.5-4.8 s | |
+| a compare on every fetch and every push, pop and frame word | 7.7-8.5 s | |
+| ... the fetch's compare taken out (unsafe, to see) | 6.0 s | |
+| ... and the stack's too (unsafe) | 4.8 s | the compares were the cost |
+| ... the windows' offsets taken out instead (unsafe) | 7.5 s | the adds were not |
+| the code window by countdown: a jump comes back to look | 7.0 s | |
+| the stack window by countdown too, and no `ip` register | 5.3-5.4 s | |
+
+The `ip` register (the instruction's first word, kept for faults) alone
+was 0.4 s: a slow path works it out from pc instead.
+
+On helios (Ryzen 5 3600, node 26) the same session costs more, and the
+rest of the work was measured there:
+
+| user loop, stage-1 kernel | session |
+|---|---|
+| without an MMU | 6.1-6.3 s |
+| countdowns, a jump forcing a look at the top of the loop | 8.3-8.7 s |
+| a jump, ENT and ADJ looking at the windows themselves | 7.4-7.7 s |
+| the identity loop (the offsets' adds gone where they are 0) | 7.3-7.6 s |
+
+Taking out one kind of check at a time (unsafe, to see) moved nothing
+past the noise: the frame words' compares, the arrays for pointers, the
+windows' offsets (0.2-0.3 s), the jumps' look, user mode's `memcpy`
+going a page at a time. All of the checks at once (still unsafe) gave
+6.1-6.25 s, and the plain interpreter's loop run for user mode with the
+MMU on, translating nothing, 5.5 s -- faster than without an MMU at all,
+for a reason not looked into (with the MMU on, the kernel's traps from
+user mode land on one trap stack rather than on each task's). So
+on helios about a second is the checks, each a little, and half a
+second is the user loop's shape: its locals, its countdowns, its bigger
+body. On the Windows machine the same final loop costs 3-5%: how much a
+compare costs depends on the machine and the V8 that runs it.
 
 ## 13. Left undone
 
-(Filled in at the end.)
+- **Addresses that are not physical**, and with them **swap**: designed
+  (section 11), not built. C4IX maps every page at its own address.
+- **The display and the sound card take addresses from user mode** (the
+  event ring, the framebuffer, sample buffers) and the host reads and
+  writes there without asking the MMU. A task could point the display's
+  event ring at another task's memory. An IOMMU-like check in the devices
+  is section 11's; it is not done.
+- **The page's default is off.** `?mmu=1`, the Configuration dialog, or
+  `cli.js --mmu` turn it on. What it costs (section 12) is the case for
+  leaving that to whoever boots the machine.
+- **TLB shootdown**: none, and none needed while no two CPUs run one
+  address space at once (section 10). Threads would need one.
+- **Null-pointer reads** below 0x100 still read the ROM (0, or the TLEV
+  word), as they always have; stores there fault. Making page 0's ROM
+  unreadable to user mode would catch null reads too, and break whatever
+  reads it now.
+- **c4bb's device registers** are for a task that asks (`SYS_IOPERM`),
+  and only `persist` asks. A program of the user's that drives the
+  drives itself under C4IX must ask too, or be killed by the fault.
+- **C4KE programs** keep writable text when they write it (C4KE's ps
+  does): their code is protected only until they first write it.
+

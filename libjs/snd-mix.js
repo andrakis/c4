@@ -14,7 +14,7 @@
 // sounds bunched up, and the music cannot creep away from the game.
 
 import { OplChip } from './opl.js';
-import { EVT } from './snd-device.js';
+import { EVT, MUTE } from './snd-device.js';
 
 const VOICES = 8;
 const BLOCK = 1024;
@@ -32,6 +32,7 @@ export class SoundMixer {
     for (let i = 0; i < VOICES; i++) this.voices.push({ data: null, pos: 0, step: 0, vl: 0, vr: 0 });
     this.spkFreq = 0;
     this.spkPhase = 0;
+    this.gain = 1;                 // the card's MASTER: the whole mix, after it is clipped
     this.queue = [];
     this.head = 0;
     this.offset = 0;
@@ -86,6 +87,7 @@ export class SoundMixer {
         break;
       case EVT.VOL: this.vol(this.voices[e[2] & 7], e[3]); break;
       case EVT.SPK: this.spkFreq = e[2] > 0 ? 1193180 / e[2] : 0; break;
+      case EVT.MASTER: this.gain = e[2] & MUTE ? 0 : (e[2] & 0xff) / 255; break;
       case EVT.RESET:
         this.opl = new OplChip(this.rate);
         for (const v of this.voices) v.data = null;
@@ -124,10 +126,11 @@ export class SoundMixer {
       }
       this.spkPhase = ph;
     }
+    const g = this.gain;
     for (let i = at; i < at + n; i++) {
       const l = L[i], r = R[i];
-      L[i] = l > 1 ? 1 : l < -1 ? -1 : l;
-      R[i] = r > 1 ? 1 : r < -1 ? -1 : r;
+      L[i] = (l > 1 ? 1 : l < -1 ? -1 : l) * g;
+      R[i] = (r > 1 ? 1 : r < -1 ? -1 : r) * g;
     }
   }
 

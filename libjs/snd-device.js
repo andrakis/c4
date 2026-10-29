@@ -22,6 +22,9 @@
 //   0x4B0 PCM_BUSY  r    a bit for each channel still playing
 //   0x4B4 SPK       w    the PIT's divisor for the speaker's tone (1193180 / Hz); 0 is quiet
 //   0x4B8 RESET     w    everything quiet, the OPL's registers zero
+//   0x4BC MASTER    r/w  every sound's volume, 0-255 (default 255); bit 8
+//                        mutes. The listener scales its whole mix by it, so
+//                        it holds for every program, and RESET leaves it.
 //
 // The stream. An OPL write is stamped at the stream's cursor, which WAIT
 // moves on, so a player that makes music the way a sound card's
@@ -43,12 +46,14 @@ export const SND = {
   CAPS: 0x480, OPL: 0x484, WAIT: 0x488, AHEAD: 0x48c, CLOCK: 0x490,
   PCM_ADDR: 0x494, PCM_LEN: 0x498, PCM_RATE: 0x49c, PCM_VOL: 0x4a0,
   PCM_PLAY: 0x4a4, PCM_STOP: 0x4a8, PCM_SETVOL: 0x4ac, PCM_BUSY: 0x4b0,
-  SPK: 0x4b4, RESET: 0x4b8,
+  SPK: 0x4b4, RESET: 0x4b8, MASTER: 0x4bc,
 };
 // what the listener gets: [kind, t (us), ...], in the order they happened
 //   [OPL, t, reg, val]   [PCM, t, ch, rate, vol, bytes]   [STOP, t, ch | -1]
 //   [VOL, t, ch, vol]    [SPK, t, divisor]                [RESET, t]
-export const EVT = { OPL: 1, PCM: 2, STOP: 3, VOL: 4, SPK: 5, RESET: 6 };
+//   [MASTER, t, master]
+export const EVT = { OPL: 1, PCM: 2, STOP: 3, VOL: 4, SPK: 5, RESET: 6, MASTER: 7 };
+export const MUTE = 0x100;
 
 const CHANNELS = 8;
 const PCM_MAX = 4 << 20;                 // bytes in one sample
@@ -66,6 +71,7 @@ export class SoundDevice {
     this.clock = 1000000;
     this.cursor = 0;
     this.pcm = { addr: 0, len: 0, rate: 8000, vol: 0xffff };
+    this.master = 0xff;
     this.ends = new Float64Array(CHANNELS);   // when each channel's sound is over, us
     this.writes = 0;
     this.plays = 0;
@@ -103,6 +109,7 @@ export class SoundDevice {
       case SND.PCM_LEN: return this.pcm.len;
       case SND.PCM_RATE: return this.pcm.rate;
       case SND.PCM_VOL: return this.pcm.vol;
+      case SND.MASTER: return this.master;
       case SND.PCM_BUSY: {
         const n = this.now();
         let m = 0;
@@ -150,6 +157,10 @@ export class SoundDevice {
       case SND.RESET:
         this.ends.fill(0);
         this.emit([EVT.RESET, this.now()]);
+        return;
+      case SND.MASTER:
+        this.master = v & (MUTE | 0xff);
+        this.emit([EVT.MASTER, this.now(), this.master]);
         return;
       default: return;
     }

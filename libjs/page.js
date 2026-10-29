@@ -70,13 +70,15 @@ async function fetchIndex(dir) {
 // AudioContext suspended until the page is used, so the first key or
 // click resumes it. Until it runs nothing is sent, but the OPL's
 // registers are kept, and sent when it starts with every note off, so
-// music that was already playing comes in with its instruments.
+// music that was already playing comes in with its instruments; and so
+// is the master volume, which the desktop sets as it starts.
 class SoundOut {
   constructor() {
     this.ctx = null; this.failed = false; this.how = null;
     this.send = null;                     // a batch to the mixer, once there is one
     this.ask = null;                      // the mixer's stats
     this.shadow = new Map();
+    this.master = null;                   // the card's MASTER, set while nothing was sent
   }
 
   start() {
@@ -120,9 +122,11 @@ class SoundOut {
       for (const e of events) {
         if (e[0] === 1) this.shadow.set(e[2], e[3]);
         else if (e[0] === 6) this.shadow.clear();
+        else if (e[0] === 7) this.master = e[2];
       }
       return;
     }
+    if (this.master !== null) { events = [[7, now, this.master]].concat(events); this.master = null; }
     if (this.shadow.size) {
       const regs = [];
       for (const [reg, val] of this.shadow) {

@@ -353,6 +353,30 @@ if echo "$out" | grep -qF "snd-demo: 8 notes" && echo "$out" | grep -qE "sound: 
 else bad "snd-demo plays, the same every time"; echo "$out" | tail -3; echo "levels: $lev"; fi
 rm -rf $T
 
+# The card's master volume (MASTER), which the C4IX desktop's tray sets:
+# it reads back, RESET leaves it, and the whole mix follows it -- the
+# speaker's tone at full, at 128 of 255, and muted
+out=$(node --input-type=module -e "
+import { SoundDevice, SND, MUTE } from './libjs/snd-device.js';
+import { SoundMixer } from './libjs/snd-mix.js';
+let t = 0;
+const d = new SoundDevice({ now: () => t });
+const reads = [d.read32(SND.MASTER)];
+d.write32(SND.SPK, 1193);
+t = 500000; d.write32(SND.MASTER, 128);
+t = 600000; d.write32(SND.RESET, 1); d.write32(SND.SPK, 1193); reads.push(d.read32(SND.MASTER));
+t = 1000000; d.write32(SND.MASTER, 128 | MUTE); reads.push(d.read32(SND.MASTER));
+const mix = new SoundMixer(8000);
+mix.push(d.drain());
+const L = new Float32Array(12000), R = new Float32Array(12000);
+mix.render(L, R, 12000);
+const rms = (a, b) => { let s = 0; for (let i = a * 8000; i < b * 8000; i++) s += L[i] * L[i]; return Math.sqrt(s / ((b - a) * 8000)); };
+const r = [rms(0.1, 0.4), rms(0.7, 0.9), rms(1.1, 1.4)];
+console.log(reads.join(' '), Math.abs(r[1] / r[0] - 128 / 255) < 0.01 && r[0] > 0.1 && r[2] === 0 ? 'follows' : 'levels ' + r.join(' '));
+" 2>&1)
+if [ "$out" = "255 128 384 follows" ]; then ok "the sound card's master volume: kept through RESET, and the mix follows it"
+else bad "the sound card's master volume: kept through RESET, and the mix follows it"; echo "  $out"; fi
+
 # Persistence (src/c4ix/user/persist.c): drive 1 keeps what changed. One
 # session writes a file, makes a directory, deletes a file the root
 # archive brought and syncs; the next, on the same drive, finds all three

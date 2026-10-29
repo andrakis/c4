@@ -119,6 +119,13 @@ enum { SORT_NAME = 0, SORT_TYPE = 1, SORT_SIZE = 2, SORT_DATE = 3, N_SORTS = 4 }
 int  theme_sort();
 void theme_set_sort(int sort);
 
+// the screen's size (Settings): one of the sizes offered, asked of the
+// display at once and when the desktop starts, and remembered with the rest
+int  display_count();
+char *display_name(int i);         // "800x600"
+int  display_cur();                // the one in use
+void display_set(int i);
+
 // ---- wall.c: the desktop's picture ----
 int  wall_load(char *path);
 int  wall_draw(int x, int y, int w, int h);   // 0: no picture, fill with C_DESK

@@ -31,12 +31,14 @@ enum {
 	SND_CAPS = 0x480, SND_OPL = 0x484, SND_WAIT = 0x488, SND_AHEAD = 0x48c, SND_CLOCK = 0x490,
 	SND_PCM_ADDR = 0x494, SND_PCM_LEN = 0x498, SND_PCM_RATE = 0x49c, SND_PCM_VOL = 0x4a0,
 	SND_PCM_PLAY = 0x4a4, SND_PCM_STOP = 0x4a8, SND_PCM_SETVOL = 0x4ac, SND_PCM_BUSY = 0x4b0,
-	SND_SPK = 0x4b4, SND_RESET = 0x4b8,
+	SND_SPK = 0x4b4, SND_RESET = 0x4b8, SND_MASTER = 0x4bc,
 	C4I_SND = 0x8000
 };
 // CAPS
 enum { SND_HAS_OPL = 1, SND_HAS_PCM = 2, SND_HAS_SPK = 4, SND_HAS_OPL3 = 8 };
 enum { SND_CHANNELS = 8 };
+// MASTER: every sound's volume, 0-255, and this bit to silence them all
+enum { SND_MUTE = 256 };
 
 int  snd_present ();
 int  snd_caps ();
@@ -53,6 +55,11 @@ void snd_volume (int ch, int vol);
 int  snd_busy ();                          // a bit for each channel still playing
 // the PC speaker: a square wave at 1193180 / divisor Hz, 0 for quiet
 void snd_speaker (int divisor);
+// everything the card plays, scaled: 0-255 (255 as made), | SND_MUTE for
+// none of it. The person's to choose (the C4IX desktop's tray), not a
+// program's; snd_reset leaves it as it was.
+void snd_master (int vol);
+int  snd_master_get ();
 
 #ifndef C4IX_SHARED
 #include "snd.c"

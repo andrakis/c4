@@ -40,3 +40,7 @@ void snd_volume (int ch, int vol) {
 int snd_busy () { return *(int *)SND_PCM_BUSY; }
 
 void snd_speaker (int divisor) { *(int *)SND_SPK = divisor; }
+
+void snd_master (int vol) { *(int *)SND_MASTER = vol; }
+
+int snd_master_get () { return *(int *)SND_MASTER; }

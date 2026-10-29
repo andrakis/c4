@@ -6,14 +6,21 @@
 // and draws. It draws what is the desktop's own -- its picture and icons
 // under the windows, the taskbar and the Go menu over them -- and keeps
 // Settings' choices in /etc/desktop.cfg. The windows are the kit's.
+// The taskbar's tray has the volume: the sound card's master, which
+// every program's sound goes through (libjs/guest/snd.h).
 
 #include "desktop.h"
 #define printf uprintf
 #include "wkgui.h"
 
 enum { START_W = 200, N_ICONS = 6 };
+// the sound card's master volume (libjs/guest/snd.h), written here and
+// not through snd.c: the desktop is linked whole by the host's Makefile
+// too, without the card's functions
+enum { SND_MASTER = 0x4bc, SND_MUTE = 256, C4I_SND = 0x8000 };
 static int running;
 static int start_open, start_hot;
+static int vol_open, vol_drag;
 static int icon_t, icon_k;
 static int cpu_shown, cpu_n;
 static char tbuf[128];
@@ -21,16 +28,26 @@ static char tbuf[128];
 // ---- Settings' choices -------------------------------------------------------
 //
 // The colour scheme (the kit's), the desktop's own colour, its picture, the
-// screen saver and its wait, and the look; and the order Files lists in.
+// screen saver and its wait, the look, the screen's size, and the volume;
+// and the order Files lists in.
 static int swatches[8] = { 0x008080, 0x000040, 0x000000, 0x3a4a5a, 0x205030, 0x502850, 0xa09070, 0x606060 };
 enum { T_MODERN = 8 };
 static int cur_scheme, cur_bg;
 static int cur_wall;               // the picture (wall.c) under everything, or the colour
 static int cur_saver, cur_wait;    // the screen saver (savers.c, 0 none) and after how many minutes
 static int cur_sort;               // Files' order: SORT_* * 2, plus 1 for descending
+// The sizes offered: the window kit lays itself out at any of them, and
+// the page scales the display to its pane. 640x480 still fits Settings,
+// the Go menu and the desktop's icons.
+enum { N_SIZES = 3 };
+static int size_w[N_SIZES] = { 640, 800, 1024 }, size_h[N_SIZES] = { 480, 600, 768 };
+static char *size_names[N_SIZES] = { "640x480", "800x600", "1024x768" };
+static int cur_size;
+static int cur_vol, cur_mute;      // the volume, 0-100 as the tray shows it, and muted
 
 static void theme_init() {
     cur_scheme = T_MODERN; cur_bg = 0 - 1; cur_wall = 1; cur_saver = 1; cur_wait = 5; wk.style = S_FLAT;
+    cur_size = 1; cur_vol = 100; cur_mute = 0;
 }
 static void theme_apply() { wk_scheme_use(cur_scheme, cur_bg); }
 int theme_count() { return wk_scheme_count(); }
@@ -43,7 +60,8 @@ int theme_wait() { return cur_wait; }
 int theme_sort() { return cur_sort; }
 int theme_swatch(int i) { return i >= 0 && i < 8 ? swatches[i] : 0; }
 
-// /etc/desktop.cfg: "scheme N bg V wall W saver S wait M style L sort O", read
+// /etc/desktop.cfg: "scheme N bg V wall W saver S wait M style L sort O
+// res W H vol V mute M", read
 // when the desktop starts, so a choice outlives Power Off (and, with
 // persist, a reload of the page). Read into a buffer longer than any
 // file it takes, zeroed, so looking a few bytes ahead stays inside it.
@@ -57,7 +75,7 @@ static int cfg_num(char *s, int *v) {
     return k;
 }
 static void theme_load() {
-    int fd, n, i, v;
+    int fd, n, i, v, h, k;
     if ((fd = uopen("/etc/desktop.cfg", O_RD)) < 0) return;
     memset(cfg, 0, 128);
     n = uread(fd, cfg, 111);
@@ -76,6 +94,14 @@ static void theme_load() {
         if (cfg[i] == 's' && cfg[i + 1] == 't' && cfg[i + 5] == ' ') { cfg_num(cfg + i + 6, &v); if (v >= 0 && v < N_STYLES) wk.style = v; }
         if (cfg[i] == 'w' && cfg[i + 1] == 'a' && cfg[i + 2] == 'i' && cfg[i + 4] == ' ') { cfg_num(cfg + i + 5, &v); if (v >= 1 && v <= 60) cur_wait = v; }
         if (cfg[i] == 's' && cfg[i + 1] == 'o' && cfg[i + 4] == ' ') { cfg_num(cfg + i + 5, &v); if (v >= 0 && v < N_SORTS * 2) cur_sort = v; }
+        if (cfg[i] == 'r' && cfg[i + 1] == 'e' && cfg[i + 2] == 's' && cfg[i + 3] == ' ') {
+            k = cfg_num(cfg + i + 4, &v);
+            cfg_num(cfg + i + 5 + k, &h);
+            k = 0;
+            while (k < N_SIZES) { if (size_w[k] == v && size_h[k] == h) cur_size = k; ++k; }
+        }
+        if (cfg[i] == 'v' && cfg[i + 1] == 'o' && cfg[i + 2] == 'l' && cfg[i + 3] == ' ') { cfg_num(cfg + i + 4, &v); if (v >= 0 && v <= 100) cur_vol = v; }
+        if (cfg[i] == 'm' && cfg[i + 1] == 'u' && cfg[i + 4] == ' ') { cfg_num(cfg + i + 5, &v); cur_mute = v != 0; }
         ++i;
     }
     theme_apply();
@@ -96,7 +122,13 @@ static void theme_save() {
     ui_num(cfg + ui_len(cfg), wk.style);
     ui_cat(cfg, " sort ");
     ui_num(cfg + ui_len(cfg), cur_sort);
-    ui_cat(cfg, "\n");
+    ui_cat(cfg, " res ");
+    ui_num(cfg + ui_len(cfg), size_w[cur_size]);
+    ui_cat(cfg, " ");
+    ui_num(cfg + ui_len(cfg), size_h[cur_size]);
+    ui_cat(cfg, " vol ");
+    ui_num(cfg + ui_len(cfg), cur_vol);
+    ui_cat(cfg, cur_mute ? " mute 1\n" : " mute 0\n");
     write(fd, cfg, ui_len(cfg));
     uclose(fd);
 }
@@ -129,6 +161,28 @@ void theme_set_saver(int which, int wait) {
     if (wait >= 1 && wait <= 60) cur_wait = wait;
     theme_save();
     wk_redraw_all();
+}
+
+// The screen's size: asked of the display now (the page sizes its canvas,
+// the kit lays the windows out again, the picture is stretched to it)
+int display_count() { return N_SIZES; }
+char *display_name(int i) { return i >= 0 && i < N_SIZES ? size_names[i] : ""; }
+int display_cur() { return cur_size; }
+void display_set(int i) {
+    if (i < 0 || i >= N_SIZES) return;
+    cur_size = i;
+    theme_save();
+    if (wk.sw != size_w[i] || wk.sh != size_h[i]) wk_screen(size_w[i], size_h[i]);
+    wk_redraw_all();
+}
+
+// The volume, to the sound card: its master, 0-255, from the tray's
+// 0-100 squared, so the slider's middle sounds about half as loud
+static void volume_apply() {
+    int v;
+    if (!(__c4_info() & C4I_SND)) return;
+    v = cur_vol * cur_vol * 255 / 10000;
+    *(int *)SND_MASTER = cur_mute ? v | SND_MUTE : v;
 }
 
 // Settings' Preview: the saver now, past the click that asked for it
@@ -292,12 +346,81 @@ static int n_buttons() {
     while (w) { if (w->used && !w->dialog) ++n; w = w->next; }
     return n;
 }
-static int button_w() { int n, w; n = n_buttons(); if (!n) return 150; w = (wk.sw - 64 - 154) / n - 4; return w > 150 ? 150 : w; }
+static int button_w() { int n, w; n = n_buttons(); if (!n) return 150; w = (wk.sw - 64 - 178) / n - 4; return w > 150 ? 150 : w; }
 
-// The CPU meter beside the clock: System Monitor's number (tasks_cpu_usage),
+// The CPU meter beside the tray: System Monitor's number (tasks_cpu_usage),
 // taken every two seconds; a click opens System Monitor on Performance.
-enum { CPU_W = 66 };
-static int cpu_x() { return wk.sw - 146; }
+// The tray: the volume's speaker, then the clock, in one panel.
+enum { CPU_W = 66, TRAY_W = 96 };
+static int cpu_x() { return wk.sw - 170; }
+static int tray_x() { return wk.sw - 4 - TRAY_W; }
+
+// ---- the volume: the tray's speaker, and the popup it opens ---------------------------
+//
+// A slider (loud at the top, as Windows has it) and Mute, over the tray.
+// Each change goes to the sound card at once; the choice is remembered
+// when the popup closes, or when Mute is clicked.
+enum { VOL_W = 76, VOL_H = 190, VOL_TOP = 34, VOL_LEN = 100 };
+static int vol_x() { return wk.sw - 4 - VOL_W; }
+static int vol_y() { return wk.sh - TASK_H - VOL_H; }
+
+// the speaker, 16 by 16 at x, y: its waves by the volume, a red cross muted
+static void speaker(int x, int y) {
+    gui_rect(x + 1, y + 6, 4, 5, C_DARK);
+    gui_rect(x + 5, y + 5, 2, 7, C_DARK);
+    gui_rect(x + 7, y + 3, 2, 11, C_DARK);
+    if (cur_mute) {
+        gui_line(x + 11, y + 5, x + 15, y + 11, 0xd02020); gui_line(x + 11, y + 11, x + 15, y + 5, 0xd02020);
+        gui_line(x + 12, y + 5, x + 16, y + 11, 0xd02020); gui_line(x + 12, y + 11, x + 16, y + 5, 0xd02020);
+        return;
+    }
+    if (cur_vol > 0) gui_rect(x + 11, y + 6, 1, 5, C_DARK);
+    if (cur_vol > 33) { gui_rect(x + 13, y + 4, 1, 9, C_DARK); gui_rect(x + 12, y + 3, 1, 1, C_DARK); gui_rect(x + 12, y + 13, 1, 1, C_DARK); }
+    if (cur_vol > 66) { gui_rect(x + 15, y + 3, 1, 11, C_DARK); gui_rect(x + 14, y + 2, 1, 1, C_DARK); gui_rect(x + 14, y + 14, 1, 1, C_DARK); }
+}
+
+static void draw_volume() {
+    int x, y, ty, k;
+    x = vol_x(); y = vol_y();
+    gui_rect(x, y, VOL_W, VOL_H, C_FACE);
+    if (ui_style == S_FLAT) gui_recto(x, y, VOL_W, VOL_H, C_SHADOW); else d_bevel(x, y, VOL_W, VOL_H, B_RAISED);
+    d_text(x + 16, y + 10, C_DARK, F_BOLD, "Volume");
+    // the track, its marks, and the thumb where the volume is
+    gui_rect(x + VOL_W / 2 - 2, y + VOL_TOP, 4, VOL_LEN, C_SHADOW);
+    gui_rect(x + VOL_W / 2 - 1, y + VOL_TOP + 1, 2, VOL_LEN - 2, C_DARK);
+    k = 0;
+    while (k <= 10) { gui_rect(x + VOL_W / 2 + 14, y + VOL_TOP + k * VOL_LEN / 10, k % 5 ? 3 : 6, 1, C_SHADOW); ++k; }
+    ty = y + VOL_TOP + (100 - cur_vol) * VOL_LEN / 100 - 5;
+    gui_rect(x + VOL_W / 2 - 11, ty, 22, 10, ui_style == S_FLAT ? C_TITLE : C_FACE);
+    if (ui_style != S_FLAT) d_bevel(x + VOL_W / 2 - 11, ty, 22, 10, B_RAISED);
+    ui_num(tbuf, cur_vol);
+    ui_cat(tbuf, "%");
+    d_text(x + VOL_W / 2 - ui_len(tbuf) * 3, y + VOL_TOP + VOL_LEN + 8, C_DARK, F_SANS, tbuf);
+    // Mute: a check box
+    k = y + VOL_H - 26;
+    gui_rect(x + 12, k, 13, 13, C_WHITE);
+    if (ui_style == S_FLAT) gui_recto(x + 12, k, 13, 13, C_SHADOW); else d_bevel(x + 12, k, 13, 13, B_SUNKEN);
+    if (cur_mute) {
+        gui_line(x + 15, k + 6, x + 17, k + 9, C_DARK); gui_line(x + 17, k + 9, x + 22, k + 3, C_DARK);
+        gui_line(x + 15, k + 7, x + 17, k + 10, C_DARK); gui_line(x + 17, k + 10, x + 22, k + 4, C_DARK);
+    }
+    d_text(x + 31, k, C_DARK, F_SANS, "Mute");
+}
+
+// the volume for a point on the slider
+static void vol_slide(int y) {
+    int v;
+    v = 100 - (y - vol_y() - VOL_TOP) * 100 / VOL_LEN;
+    if (v < 0) v = 0;
+    if (v > 100) v = 100;
+    if (v != cur_vol) { cur_vol = v; volume_apply(); wk_redraw_all(); }
+}
+
+static void vol_close() {
+    vol_open = 0; vol_drag = 0;
+    theme_save();
+    wk_redraw_all();
+}
 
 static void draw_taskbar() {
     int k, i, bx, bw, secs, h, m, f, ty;
@@ -345,8 +468,10 @@ static void draw_taskbar() {
     ui_num(tbuf + 4, cpu_shown);
     ui_cat(tbuf, "%");
     d_text(cpu_x() + 17, ty + 9, C_DARK, F_SANS, tbuf);
-    gui_rect(wk.sw - 76, ty + 4, 72, 22, C_FACE);
-    if (ui_style != S_FLAT) d_bevel(wk.sw - 76, ty + 4, 72, 22, B_SUNKEN);
+    gui_rect(tray_x(), ty + 4, TRAY_W, 22, C_FACE);
+    if (ui_style != S_FLAT) d_bevel(tray_x(), ty + 4, TRAY_W, 22, B_SUNKEN);
+    if (vol_open && ui_style == S_FLAT) gui_rect(tray_x() + 1, ty + 5, 24, 20, C_LIGHT);
+    speaker(tray_x() + 5, ty + 7);
     secs = gui_clock();
     h = secs / 3600; m = (secs / 60) % 60;
     p = tbuf;
@@ -354,16 +479,17 @@ static void draw_taskbar() {
     else { if (h % 12 >= 10) { *p = '1'; ++p; } *p = '0' + (h % 12) % 10; ++p; }
     *p = ':'; ++p; *p = '0' + m / 10; ++p; *p = '0' + m % 10; ++p;
     *p = ' '; ++p; *p = h < 12 ? 'A' : 'P'; ++p; *p = 'M'; ++p; *p = 0;
-    d_text(wk.sw - 64, ty + 9, C_DARK, F_SANS, tbuf);
+    d_text(tray_x() + 32, ty + 9, C_DARK, F_SANS, tbuf);
 }
 
 // over the windows: the taskbar, and the Go menu while it is open
 static void front() {
     if (wk_in_damage(0, wk.sh - TASK_H, wk.sw, TASK_H)) draw_taskbar();
     if (start_open) draw_start();
+    if (vol_open) draw_volume();
 }
 
-static int popup() { return start_open; }
+static int popup() { return start_open || vol_open; }
 
 // ---- input the shell takes before the windows, and where there are none ----
 
@@ -371,6 +497,23 @@ static int mouse_front(int ev, int x, int y, int b) {
     int k, bw, ty;
     struct win *w;
     ty = wk.sh - TASK_H;
+    if (vol_open) {
+        if (ev == E_MOVE) {
+            if (vol_drag && (b & 1)) vol_slide(y);
+            else vol_drag = 0;
+            return 1;
+        }
+        if (ev != E_DOWN) return 0;
+        if (ui_hit(x, y, vol_x() + VOL_W / 2 - 12, vol_y() + VOL_TOP - 6, 24, VOL_LEN + 12)) { vol_drag = 1; vol_slide(y); return 1; }
+        if (ui_hit(x, y, vol_x() + 8, vol_y() + VOL_H - 30, VOL_W - 12, 20)) {
+            cur_mute = !cur_mute; volume_apply(); theme_save(); wk_redraw_all();
+            return 1;
+        }
+        if (ui_hit(x, y, vol_x(), vol_y(), VOL_W, VOL_H)) return 1;
+        // elsewhere, the speaker too: the popup closes, and the click goes no further
+        vol_close();
+        return 1;
+    }
     if (ev == E_MOVE) {
         if (!start_open) return 0;
         k = start_hit(x, y);
@@ -388,6 +531,7 @@ static int mouse_front(int ev, int x, int y, int b) {
     if (wk_modal()) return 1;
     if (ui_hit(x, y, 2, ty + 4, 56, 22)) { start_open = 1; start_hot = 0 - 1; wk_redraw_all(); return 1; }
     if (ui_hit(x, y, cpu_x(), ty + 4, CPU_W, 22)) { tasks_open_perf(); wk_redraw_all(); return 1; }
+    if (ui_hit(x, y, tray_x(), ty + 4, 26, 22)) { vol_open = 1; vol_drag = 0; wk_redraw_all(); return 1; }
     bw = button_w();
     k = 0; w = win_first();
     while (w) {
@@ -424,10 +568,11 @@ static int key(int down, int code, int ch, int mods) {
     // Ctrl+Shift+Esc: System Monitor, from anywhere
     if (code == KEY_ESC && (mods & M_CTRL) && (mods & M_SHIFT)) { tasks_open(); return 1; }
     if (start_open && code == KEY_ESC) { start_open = 0; wk_redraw_all(); return 1; }
+    if (vol_open && code == KEY_ESC) { vol_close(); return 1; }
     return 0;
 }
 
-static int pointer(int x, int y) { return start_open || y >= wk.sh - TASK_H ? PTR_ARROW : 0 - 1; }
+static int pointer(int x, int y) { return start_open || vol_open || y >= wk.sh - TASK_H ? PTR_ARROW : 0 - 1; }
 
 // a dialog no window asked: Run
 static void answer(int dialog, int yes) {
@@ -466,7 +611,11 @@ static void shutdown_screen() {
     gui_show();
 }
 
-enum { RING = 65536, EVENTS = GUI_M_MOVE | GUI_M_BUTTONS | GUI_M_KEYS | GUI_M_WHEEL | GUI_M_WINDOW };
+// The ring's command half takes the largest frame the desktop sends, one
+// of the picture's tiles (wall.c): 128x96 at 1024x768, 48 KB. A frame
+// longer than half of it is placed only when the ring's head happens to
+// allow (gui_frame), so the half is 128 KB.
+enum { RING = 262144, EVENTS = GUI_M_MOVE | GUI_M_BUTTONS | GUI_M_KEYS | GUI_M_WHEEL | GUI_M_WINDOW };
 
 int main(int argc, char **argv) {
     int *region, k, busy, secs, clock_min, last_tick, last_draw, input, start_ms, second_draw;
@@ -477,15 +626,17 @@ int main(int argc, char **argv) {
     // (include/display.h, and "aside" below)
     if (!udisplay_take(DISP_YIELDS)) { printf("desktop: a program has the display\n"); return 1; }
     if (!(region = ualloc(RING))) { printf("desktop: no memory for the display's ring\n"); udisplay_give(); return 1; }
-    if (!gui_attach(region, RING, 800, 600)) { printf("desktop: the display refused the ring\n"); udisplay_give(); return 1; }
-    // GUI_M_WINDOW too: a resize or a focus change from the page means the
-    // canvas may have been cleared, and the scene is drawn again
-    gui_events(EVENTS);
-    n_start = sizeof(start_items) / sizeof(start_items[0]);
-    start_games();
     theme_init();
     theme_apply();                     // the default scheme, unless the file names one
     theme_load();
+    // at the size Settings chose: 800x600 unless the file names another
+    if (!gui_attach(region, RING, size_w[cur_size], size_h[cur_size])) { printf("desktop: the display refused the ring\n"); udisplay_give(); return 1; }
+    // GUI_M_WINDOW too: a resize or a focus change from the page means the
+    // canvas may have been cleared, and the scene is drawn again
+    gui_events(EVENTS);
+    volume_apply();
+    n_start = sizeof(start_items) / sizeof(start_items[0]);
+    start_games();
     // the kit's Notepad, as this desktop has always called it
     notepad_name = "Text Editor";
     notepad_about = "Text Editor for C4IX: edits text in the RAM filesystem.";

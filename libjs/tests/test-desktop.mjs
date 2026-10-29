@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { createMachine, boot } from '../boot.js';
 import { STOP } from '../c4m.js';
 import { GuiDevice, CMD } from '../gui-device.js';
+import { SoundDevice, SND, EVT, MUTE } from '../snd-device.js';
 import { typeBytes } from '../keys.js';
 import { layUploads } from '../uploads.js';
 
@@ -48,8 +49,12 @@ const files = new LazyDisk(index);
 const UPLOADS = [['bravo.dat', 500], ['charlie.c', 9000], ['alpha.txt', 3000]];
 layUploads(files, UPLOADS.map(([n, z]) => [n, new TextEncoder().encode(`uploaded ${n}\n`.repeat(z)).slice(0, z)]));
 const gui = new GuiDevice({ w: 640, h: 480 });
+// a sound card too, for the tray's volume: what it is told to play is
+// let go of, but each master volume the desktop sets is kept
+const snd = new SoundDevice();
+const masters = [];
 const out = [];
-const vm = createMachine({ arenaMb: 64, gui, drives: [{ files, writable: false, sink: null }], onByte: b => out.push(b) });
+const vm = createMachine({ arenaMb: 64, gui, snd, drives: [{ files, writable: false, sink: null }], onByte: b => out.push(b) });
 boot(vm, new Uint8Array(readFileSync(join(ROOT, 'c4ix32.c4r'))), ['c4ix32.c4r']);
 const consoleText = () => Buffer.from(out).toString('latin1');
 
@@ -72,7 +77,9 @@ const cut = (a, b) => {
 };
 let rgbFrames = 0, rgbLast = null;
 const pump = () => {
+  for (const e of snd.drain() || []) if (e[0] === EVT.MASTER) masters.push(e[2]);
   const words = gui.drain();
+  let sized = null;
   for (let i = 0; words && i < words.length; i += words[i]) {
     const t = words[i + 1];
     if (t === CMD.CLEAR) { cur = []; curRects = []; partial = false; curImgs = 0; }
@@ -101,6 +108,7 @@ const pump = () => {
     }
     if (t === CMD.PRESENT) { frame = cur.slice(); rects = curRects.slice(); imgs = curImgs; presents++; gen++; partial = true; }
     if (t === CMD.CURSOR) pointer = words[i + 2];
+    if (t === CMD.SIZE) sized = { w: words[i + 2], h: words[i + 3] };
     // an 8-bit frame, made 32-bit by the device (GUI_BLIT8): count them,
     // and keep the last one's size and a sum of its pixels
     if (t === CMD.RGB) {
@@ -111,6 +119,8 @@ const pump = () => {
       rgbLast = { w, h, dw: words[i + 6], dh: words[i + 7], sum };
     }
   }
+  // a size asked for in a frame: the page sizes its canvas and says so (display.js resize)
+  if (sized && (sized.w !== gui.w || sized.h !== gui.h)) gui.event({ kind: 'resize', ...sized });
 };
 // run() returns early whenever the guest sleeps, so waiting is until()'s job
 const run = (cycles = 2e6) => { const r = vm.run(cycles); pump(); return r; };
@@ -234,6 +244,7 @@ check(until(() => consoleText().includes('[4] done (0)'), 3000), 'the root archi
 typeBytes(vm, new TextEncoder().encode('desktop\n'));
 check(until(() => consoleText().includes('desktop: running on the display')), 'desktop starts from the console');
 check(until(() => gui.w === SW && gui.h === SH && presents > 0), `it asks for ${SW}x${SH} and draws`);
+check(until(() => masters.length > 0) && snd.read32(SND.MASTER) === 255, 'and sets the sound card\'s volume, full and not muted', `masters ${masters}`);
 check(until(() => has(/c4ix:\/\$/), 800), 'a Terminal opens with a shell prompt', screen());
 check(has('Go') && has(/[0-9]{1,2}:[0-9]{2} [AP]M/), 'the taskbar has Go and a clock');
 check(until(() => has(/^CPU \d{1,3}%$/)), 'and a CPU meter beside the clock', screen());
@@ -998,11 +1009,11 @@ check(until(() => has('from-run'), 800), 'and runs it in a new Terminal', screen
 // ---- as many windows as memory allows (there were 8 slots) --------------------------------------
 // System Monitor's Performance tab (the CPU meter opens it) counts the windows open
 const opened = () => { const l = frame.find(t => t.s.trim() === 'Open windows'); const v = l && frame.find(t => t.y === l.y && /^\d+$/.test(t.s.trim())); return v ? +v.s.trim() : 0; };
-click(SW - 100, SH - TASK_H + 12);
+click(SW - 140, SH - TASK_H + 12);
 until(() => opened() > 0);
 const nopen = opened();
 for (let i = 0; i < 10; i++) { start('Calculator'); until(() => has('Hex')); }
-click(SW - 100, SH - TASK_H + 12);
+click(SW - 140, SH - TASK_H + 12);
 check(until(() => opened() === nopen + 10) && opened() > 8, 'ten more windows open, more than the old eight', `${nopen} then ${opened()}`);
 
 // ---- the screen's size, at run time: 640x480 and back (the window kit's relayout) ---------------
@@ -1032,6 +1043,56 @@ gui.event({ kind: 'resize', w: 800, h: 600 }); SW = 800; SH = 600;
 run(3e5);
 check(until(() => taskLine(0) && filling(800, 570) && !filling(640, 450)), 'back at 800x600, the taskbar and the maximised window follow', screen().slice(-400));
 
+// ---- the volume: the tray's speaker, its slider and Mute (the sound card's MASTER) ------------
+// The popup sits over the tray: its slider runs from 100% at the top to
+// 0% 100 px down, starting 34 px under the popup's top, which is 10 px
+// above the "Volume" drawn in it; Mute is near its bottom. The card is
+// told at once, the slider's 0-100 squared into 0-255.
+{
+  const clock = frame.find(t => /^\d+:\d\d [AP]M$/.test(t.s));
+  click(clock.x - 20, clock.y + 4);
+  check(until(() => has('Volume') && has('Mute') && has('100%')), 'the speaker beside the clock opens the volume', screen().slice(-300));
+  const v = find('Volume').pop(), px = v.x - 16, py = v.y - 10, sx = px + 38;
+  click(sx, py + 34 + 50);
+  check(until(() => has('50%')) && snd.read32(SND.MASTER) === 63, 'a click halfway down the slider: 50%, the card at 63 of 255',
+    `master ${snd.read32(SND.MASTER)} ` + screen().slice(-200));
+  ev({ kind: 'move', x: sx, y: py + 84, buttons: 0 }); ev({ kind: 'down', x: sx, y: py + 84, button: 0 });
+  for (let k = 1; k <= 5; k++) ev({ kind: 'move', x: sx, y: py + 84 + k * 5, buttons: 1 });
+  ev({ kind: 'up', x: sx, y: py + 109, button: 0 });
+  check(until(() => has('25%')) && snd.read32(SND.MASTER) === 15, 'dragging the thumb down: 25%, the card at 15', `master ${snd.read32(SND.MASTER)}`);
+  clickText('Mute', 'last', -12, 5);
+  check(until(() => masters[masters.length - 1] === (15 | MUTE)) && snd.read32(SND.MASTER) === (15 | MUTE), 'Mute silences the card, keeping the volume',
+    `master ${snd.read32(SND.MASTER)}`);
+  key('ESC');
+  check(until(() => !has('Mute') && !has('25%')), 'Esc closes it');
+  // (desktop.cfg's "vol 25 mute 1" is read after Power Off, below)
+}
+
+// ---- Settings > Screen size: 640x480, 1024x768, kept in /etc/desktop.cfg ---------------------
+// The display takes the size at once (wk_screen): the taskbar along its
+// bottom, the picture stretched to it, the windows on it. Left at
+// 1024x768, which the desktop starts at again below.
+const onScreen = () => frame.every(t => t.x >= 0 && t.x < SW && t.y >= 0 && t.y < SH);
+const settingsWin = () => rects.filter(q => q.w === 440 && q.h === 450).pop();
+start('Settings');
+check(until(() => has('Screen size') && has('640x480') && has('800x600') && has('1024x768')), 'Settings offers three screen sizes', screen());
+for (const [w, h] of [[640, 480], [1024, 768]]) {
+  const defs = imgdefs;
+  clickText(`${w}x${h}`);
+  SW = w; SH = h;
+  check(until(() => gui.w === w && gui.h === h && taskLine(0) && find('Go').some(t => t.y > SH - TASK_H)),
+    `${w}x${h}: the display takes it at once, the taskbar along its bottom`, `${gui.w}x${gui.h} ` + screen().slice(-300));
+  const clock = frame.find(t => /^\d+:\d\d [AP]M$/.test(t.s));
+  check(!!clock && clock.x > SW - 100 && clock.x < SW - 40 && clock.y > SH - TASK_H, 'the clock in its corner', JSON.stringify(clock));
+  check(imgdefs === defs + 64 && imgs > 0, 'the picture stretched to it', `imgdefs ${defs} then ${imgdefs}`);
+  const r = settingsWin();
+  check(!!r && r.x >= 0 && r.y >= 0 && r.x + r.w <= SW && r.y + r.h <= SH - TASK_H && onScreen() &&
+    find('System Monitor').some(t => t.x < 100 && t.y < SH - TASK_H),
+    'Settings, the desktop\'s icons and everything else on the screen', JSON.stringify(r) + ' ' + frame.filter(t => t.x >= SW || t.y >= SH).map(t => `${t.s}@${t.x},${t.y}`).join(' | '));
+}
+key('ESC');
+until(() => !has('Screen size'));
+
 // ---- the Windows 3.1 look (look31.c), from Settings, kept across a restart ---------------------
 // The control-menu box is a white bar 11 by 3 on the title bar's left;
 // the title is centred between it and the minimise and maximise buttons.
@@ -1042,7 +1103,7 @@ until(() => has('Look'));
 clickText('Windows 3.1', 'last', -8, 5);
 check(until(() => sysbox()), 'Settings > Look > Windows 3.1 draws the control-menu box', screen());
 {
-  const r = rects.filter(q => q.w === 440 && q.h === 430).pop();
+  const r = settingsWin();
   const t = r && frame.filter(s => s.s.trimEnd() === 'Settings' && s.y > r.y && s.y < r.y + 22).pop();
   const off = r && t ? Math.round(t.x + 'Settings'.length * 7 / 2 - (r.x + r.w / 2)) : 999;
   check(Math.abs(off) <= 20, `and a title centred in its bar (${off} px from the middle; the Flat look's is ${27 + 28 - 220})`, JSON.stringify({ r, t }));
@@ -1068,11 +1129,17 @@ check(!/c4ix-sh.c4r[\s\S]*c4ix-sh.c4r/.test(psOut.replace(/^[\s\S]*?ID/, '')), '
 {
   const c0 = consoleText().length;
   typeBytes(vm, new TextEncoder().encode('cat /etc/desktop.cfg\n'));
-  check(until(() => / style 2\b/.test(consoleText().slice(c0))), 'the look is kept in /etc/desktop.cfg', consoleText().slice(c0));
+  check(until(() => / style 2 sort \d+ res 1024 768 vol 25 mute 1\b/.test(consoleText().slice(c0))), 'the look, the size and the volume are kept in /etc/desktop.cfg', consoleText().slice(c0));
 }
+// the card as it is when the page starts, so the desktop has to set it
+snd.write32(SND.MASTER, 255);
+const nmasters = masters.length + 1;
 typeBytes(vm, new TextEncoder().encode('desktop\n'));
 check(until(() => /desktop: running on the display/.test(consoleText().split('desktop: shut down').pop())), 'the desktop starts again');
 check(until(() => has(/^Terminal - task/) && sysbox(), 800), 'in the Windows 3.1 look, as it was left', screen());
+// (the 3.1 look lights the taskbar's top one pixel down)
+check(gui.w === 1024 && gui.h === 768 && taskLine(1), 'at 1024x768, as it was left', `${gui.w}x${gui.h}`);
+check(masters.length > nmasters && snd.read32(SND.MASTER) === (15 | MUTE), 'and the sound card at 25%, muted, as it was left', `masters ${masters.slice(-3)}`);
 start('Power Off...');
 check(until(() => consoleText().split('desktop: shut down').length > 2, 2000), 'and Power Off ends it again');
 process.exit(fail);

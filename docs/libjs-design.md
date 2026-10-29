@@ -298,6 +298,7 @@ samples, and the PC speaker: what a DOS game expects to find.
 | 0x4B0 | PCM_BUSY | r | a bit for each channel still playing |
 | 0x4B4 | SPK | w | the PIT divisor of the speaker's tone; 0 is quiet |
 | 0x4B8 | RESET | w | everything quiet, the OPL zeroed |
+| 0x4BC | MASTER | r/w | every sound's volume, 0-255 (255 at power on); bit 8 mutes; RESET leaves it |
 
 - **The machine makes no samples.** Each write becomes an event with a
   time on it, and whoever listens mixes them (`snd-mix.js`). An
@@ -325,7 +326,12 @@ samples, and the PC speaker: what a DOS game expects to find.
   keeps an AudioContext silent until the page is used, so the first key or
   click starts it. Until then the OPL's registers are kept and sent with
   every note off, so music already playing comes in with its instruments.
-  `?snd=0` leaves the card out.
+  `?snd=0` leaves the card out. The master volume set meanwhile is kept
+  and sent the same way.
+- **The master volume** (MASTER) is the person's, not a program's: the
+  C4IX desktop's tray sets it, and a game's RESET leaves it. The mixer
+  scales its whole output by it, after clipping, so every program's
+  sound follows it, and muted is silence.
 - **`cli.js --wav FILE`** fits the card and writes everything it played
   to FILE at 44.1 kHz. Without `--wav` there is no card, so every test that
   runs a game runs it silent, as before.

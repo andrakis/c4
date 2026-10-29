@@ -30,11 +30,12 @@ void about_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     d_text(ox + 68, oy + 116, C_SHADOW, F_SANS, "Enter or Esc closes this window.");
 }
 
-// ---- Settings: the colour scheme, the desktop, the screen saver and the look ---------
+// ---- Settings: the scheme, the desktop, the screen's size, the saver and the look ----
 //
 // Display Properties, cut down: a list of schemes and a row of desktop
 // colours, each applied at once (theme_set, which also remembers them in
-// /etc/desktop.cfg), beside a preview drawn in the colours in use.
+// /etc/desktop.cfg), beside a preview drawn in the colours in use. The
+// screen's size too, which the display takes at once (display_set).
 
 static char *dflt_label;
 static char sbuf[16];
@@ -45,7 +46,7 @@ int settings_open() {
     w = win_first();
     while (w) { if (w->used && w->kind == K_SETTINGS) { win_raise(w->id); return w->id; } w = w->next; }
     dflt_label = "Defaults";
-    return win_open(K_SETTINGS, "Settings", 440, 430, 0);
+    return win_open(K_SETTINGS, "Settings", 440, 450, 0);
 }
 
 void settings_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
@@ -71,6 +72,11 @@ void settings_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
         if (sel) d_recto(x - 2, y + 58, 20, 20, C_DARK);
         ++i;
     }
+    // the screen's size: two to a row
+    y = y + 102;
+    ui_group(ox + 8, y, 180, 60, "Screen size");
+    i = 0;
+    while (i < display_count()) { ui_radio(ox + 18 + (i % 2) * 84, y + 16 + (i / 2) * 20, display_name(i), i == display_cur()); ++i; }
     // the preview: the desktop, an inactive window, an active one
     x = ox + 200; y = oy + 14;
     d_rect(x, y, cw - 210, 170, C_DESK);
@@ -126,6 +132,12 @@ void settings_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     i = 0;
     while (i < 8) {
         if (ui_hit(x, y, 16 + i * 20, sy + 58, 20, 20)) { theme_set(theme_scheme(), theme_swatch(i)); return; }
+        ++i;
+    }
+    // the screen's size (settings_draw)
+    i = 0;
+    while (i < display_count()) {
+        if (ui_hit(x, y, 14 + (i % 2) * 84, sy + 102 + 14 + (i / 2) * 20, 80, 18)) { display_set(i); return; }
         ++i;
     }
     // the screen saver group (settings_draw)

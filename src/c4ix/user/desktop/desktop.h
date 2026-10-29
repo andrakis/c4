@@ -114,6 +114,13 @@ void theme_set_style(int style);   // S_FLAT, S_CLASSIC or S_WIN31
 void saver_preview();              // the chosen saver now (Settings)
 int  theme_swatch(int i);          // the desktop colours Settings offers, 0..7
 
+// the screen's size (Settings): one of the sizes offered, asked of the
+// display at once and when the desktop starts, and remembered with the rest
+int  display_count();
+char *display_name(int i);         // "800x600"
+int  display_cur();                // the one in use
+void display_set(int i);
+
 // ---- wall.c: the desktop's picture ----
 int  wall_load(char *path);
 int  wall_draw(int x, int y, int w, int h);   // 0: no picture, fill with C_DESK

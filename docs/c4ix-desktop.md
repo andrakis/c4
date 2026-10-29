@@ -816,3 +816,51 @@ kit, `src/winkit/` (winkit.h has the API), and rebuilt the desktop on it.
   `files.c`: those modules did not move.
 - Minimised windows as icons, which the 3.1 look will have in grin (G2);
   here they go to the taskbar in every look.
+
+## Part fifteen: the screen's size, and a volume control (asked for 2026-10-29)
+
+- [x] **Settings > Screen size**: 640x480, 800x600 (the default) and
+      1024x768. The display takes the choice at once (`display_set`, the
+      kit's `wk_screen`: the page sizes its canvas and scales it to the
+      pane, the kit lays the windows out again, the picture is stretched
+      to it), and the desktop asks for it when it starts, before its first
+      frame. 640x480 still fits Settings (now 440x450), the Go menu with
+      every game in it, and the desktop's six icons. desktop.cfg gains
+      `res W H`.
+- [x] **The volume**: a speaker in the taskbar's tray, in the clock's
+      panel; the CPU meter moves left to make room. A click opens a popup
+      over the tray with a slider (100% at the top) and Mute. Each change
+      goes to the sound card at once, as its master volume (MASTER, 0x4BC,
+      docs/libjs-design.md "The sound card"): the slider's 0-100 squared
+      into 0-255, so its middle sounds about half as loud, and bit 8 for
+      Mute. The mixer scales everything by it, so every program follows
+      it, games included, and a game's RESET does not undo it. desktop.cfg
+      gains `vol V mute M`; the desktop sets the card when it starts.
+- [x] test-desktop.mjs fits a sound card: the volume at start, the
+      slider by click and by drag, Mute, Esc; Settings at
+      640x480 and 1024x768, with the taskbar, clock, picture, icons and
+      Settings on the screen at each; and a restart that comes back at
+      1024x768 with the card muted at 25%, its desktop.cfg ending
+      `res 1024 768 vol 25 mute 1`. test-libjs checks MASTER
+      through RESET and the mix at full, at 128 and muted.
+- [x] The display's ring is 256 KB (it was 64 KB). The picture's tiles
+      are the longest frames the desktop sends, 48 KB each at 1024x768,
+      and `gui_frame` places a frame longer than half the command ring
+      only when the ring's head happens to allow, dropping it otherwise:
+      at 1024x768 the picture came and went. At 800x600 a tile (30 KB)
+      was already more than half of the old ring's 32 KB.
+- [x] `web-desktop-display.mjs`: the same over CDP in a browser, with a
+      screenshot at each size.
+
+### Found on the way, not fixed
+
+- **A Terminal can take the desktop's stdout.** A task has 16 fds
+  (`FD_MAX`), and `start()` in `term.c` needs seven at once: two pipes and
+  three `udup`s of 0, 1 and 2. With three or four Terminals open, a
+  `udup` fails and returns -1, so `udup2(-1, STDOUT)` cannot put stdout
+  back, and fd 1 stays the new Terminal's pipe: the desktop's messages
+  (and `persist`'s at Power Off) go into that Terminal, not the console.
+  `start()` should check what `udup` returns and give up cleanly.
+- `gui_frame` (libjs/guest/gui.c) could place a long frame in an empty
+  ring at any head, by skipping to the start and ringing the bell to
+  drain the skip, rather than dropping it.

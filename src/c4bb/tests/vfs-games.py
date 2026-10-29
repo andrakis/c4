@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # vfs-games.py IN OUT GAME... -- C4IX's manifest with the games that are
 # on the disk: each one's own block (GAME/c4ix.vfs.txt) where #@games is,
-# at its indent, and its programs' names beside /bin's, an ilink to each,
-# where #@game-names is (games/README.md): every NAME.c4r its block puts
-# in its directory, or else the game's own name. With none, both go.
+# at its indent, and its programs' names, an ilink to each, where
+# #@game-names is (/usr/games/bin, on the shell's PATH; games/README.md):
+# every NAME.c4r its block puts in its directory, or else the game's own
+# name. With none, both go.
 import os, sys
 
 src, out, games = sys.argv[1], sys.argv[2], sys.argv[3:]

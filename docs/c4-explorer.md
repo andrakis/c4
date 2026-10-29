@@ -547,7 +547,7 @@ Choices behind this design:
   client's `printf` must not corrupt its window. The desktop dup2s the pipe ends
   onto 3 and 4 when it spawns the client, as it already does for 0-2,
   and sets `C4IX_DESK=3,4` in the client's environment. stdout and
-  stderr go to `/log/NAME.log`, a file per program that is cut back to
+  stderr go to `/var/log/NAME.log`, a file per program that is cut back to
   its last 64 KB when it is opened. System Monitor's Programs tab can
   show it.
 - **A client cannot break the desktop by being slow.** The desktop never

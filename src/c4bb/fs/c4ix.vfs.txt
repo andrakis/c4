@@ -7,6 +7,10 @@
 # Unlike C4KE's flat ramfs, C4IX has real directories: umkdir() is
 # called for every directory line as the manifest is parsed, so
 # "ls /bin" and "cd" both work for real, not just as string prefixes.
+# So / holds directories only: programs are in /bin, where the shell's
+# PATH finds them by name (src/c4ix/user/sh.c), the games each in their
+# own under /usr/games, and their names in /usr/games/bin, which PATH
+# names too.
 
 # vfsload itself is deliberately excluded: it's the boot-time loader
 # (built and named plainly as vfsload.c4r, not the c4ix-NAME.c4r
@@ -29,6 +33,12 @@ ARCHIVES = c4ix-root.tgz
 
 /: root
 	bin/:
+		# c4ix-hello.c4r -> /bin/hello, so "hello" works from the shell
+		# without the c4ix- prefix or .c4r suffix
+		each($BIN_ALL):
+			$1: c4ix-$1.c4r
+		# sync is persist save (src/c4ix/user/persist.c)
+		sync: ilink(/bin/persist)
 		each($TOOLS):
 			$1: $1.c4r
 		# exercises libc (src/c4ix/libc/tests)
@@ -41,13 +51,6 @@ ARCHIVES = c4ix-root.tgz
 		libc.c4s: c4ix-libc.c4s
 		libarc.c4s: c4ix-libarc.c4s
 		libgui.c4s: c4ix-libgui.c4s
-	each($BIN_ALL):
-		# c4ix-hello.c4r -> /bin/hello, and an unqualified alias at the
-		# root so "hello" works from the shell without the c4ix- prefix
-		# or .c4r suffix
-		$1: ilink(/bin/$1)
-		bin/:
-			$1: c4ix-$1.c4r
 	# /usr is the repo itself, unpacked from the archive below: its src/
 	# at /usr/src (the programs' sources, src/c4ix/examples, c4th's
 	# Forth), its include/ at /usr/include. These two headers are here
@@ -69,14 +72,10 @@ ARCHIVES = c4ix-root.tgz
 		share/
 			splash/:
 				c4ix.c4p.gz: c4ix-splash.c4p.gz
-		# the games that are on the disk, each its own block
-		# (games/NAME/c4ix.vfs.txt, src/c4bb/tests/vfs-games.py)
+		# the games that are on the disk, each its own block, its own
+		# directory (games/NAME/c4ix.vfs.txt, src/c4bb/tests/vfs-games.py)
 		games/
 			#@games
-	# and by name, as the programs in /bin are
-	#@game-names
-	# sync is persist save (src/c4ix/user/persist.c)
-	sync: ilink(/bin/persist)
-	bin/:
-		#@game-names
-		sync: ilink(/bin/persist)
+			# and their programs by name, where the shell's PATH looks
+			bin/:
+				#@game-names

@@ -21,6 +21,7 @@
 //   cmd &           -- background, reported by `jobs`, reaped by `wait`
 //   *.c, a?.txt     -- wildcards in a word's last component (sh_glob)
 //   builtins        -- exit, jobs, wait, cd, pwd, rm [-r] [-f], mv, help
+//   PATH=/bin:...   -- where a bare name is looked for (sh_candidate)
 //
 
 #include "c4ix_user.h"
@@ -252,17 +253,21 @@ static void sh_rm(char **argv, int argc) {
 
 // ---- command resolution ----
 //
-// A bare name is tried as /bin/NAME first, then c4ix-NAME.c4r, then as
-// written, then with .c4r appended. The order matters in both directions: C4IX's
-// own programs win, because this tree also contains C4KE binaries
-// with the same names (ps.c4r, cat.c4r, echo.c4r) which are built
-// against a different kernel's ABI and die on an illegal opcode
-// here; and anything else -- innerbench.c4r, c4m.c4r, whatever c4cc
-// produced -- still runs by name. A name containing '/' or '.' is a
-// path and is used exactly as written. Programs live on the host
+// A bare name is looked for in each directory PATH names, in order --
+// /bin, /usr/bin and /usr/games/bin, where each game has a link to the
+// program in its own directory -- then tried as c4ix-NAME.c4r, then as
+// written, then with .c4r appended. The order matters in both
+// directions: C4IX's own programs win, because this tree also contains
+// C4KE binaries with the same names (ps.c4r, cat.c4r, echo.c4r) which
+// are built against a different kernel's ABI and die on an illegal
+// opcode here; and anything else -- innerbench.c4r, c4m.c4r, whatever
+// c4cc produced -- still runs by name. A name containing '/' or '.' is
+// a path and is used exactly as written. Programs live on the host
 // filesystem, but the kernel checks its RAM files first, so a
-// generated program is found the same way.
-static char resolved[80];
+// generated program is found the same way. PATH=DIR:DIR... on a line of
+// its own changes the list, for this shell.
+static char *sh_path = "/bin:/usr/bin:/usr/games/bin";
+static char resolved[PATHW];
 
 // append src at dst, returning the position of the new terminator
 static char *sh_cat(char *dst, char *src) {
@@ -271,14 +276,15 @@ static char *sh_cat(char *dst, char *src) {
     return dst;
 }
 
-// Build candidate FORM for NAME: 0 /bin/NAME, 1 with the c4ix- prefix
-// and .c4r, 2 as written, 3 with .c4r. Returns 0 when there are no
-// more. /bin comes first so that a program rebuilt inside the machine
-// and installed there (b4ke -f INSTALL.B4K) is the one that runs; until
-// then /bin holds the same images the host names do.
+// Build candidate FORM for NAME: 0 DIR/NAME for the first DIR in PATH
+// that has it, 1 with the c4ix- prefix and .c4r, 2 as written, 3 with
+// .c4r. Returns 0 when there are no more. PATH comes first so that a
+// program rebuilt inside the machine and installed in /bin (b4ke -f
+// INSTALL.B4K) is the one that runs; until then /bin holds the same
+// images the host names do.
 static char *sh_candidate(char *name, int form) {
-    char *p;
-    int i, hasdot, st[4];
+    char *p, *d;
+    int i, n, hasdot, st[4];
 
     hasdot = 0;
     i = 0;
@@ -289,12 +295,23 @@ static char *sh_candidate(char *name, int form) {
     }
     if (hasdot) return (form == 0) ? name : 0;   // a path stands for itself
     if (form == 0) {
-        // only C4IX's own /bin: on a native host, an absent /bin/NAME
+        // only a file C4IX has: on a native host, an absent /bin/NAME
         // would fall through to the HOST's /bin (/bin/echo is an ELF)
-        p = sh_cat(resolved, "/bin/");
-        sh_cat(p, name);
-        if (ustat(resolved, st) < 0 || st[0] != 2) return 0;
-        return resolved;
+        d = sh_path;
+        while (*d) {
+            n = 0;
+            while (d[n] && d[n] != ':') ++n;
+            if (n && n + ustrlen(name) + 2 <= PATHW) {
+                i = 0;
+                while (i < n) { resolved[i] = d[i]; ++i; }
+                resolved[n] = '/';
+                sh_cat(resolved + n + 1, name);
+                if (ustat(resolved, st) == 0 && st[0] == 2) return resolved;
+            }
+            d = d + n;
+            if (*d == ':') ++d;
+        }
+        return 0;
     }
     if (form == 1) {
         p = sh_cat(resolved, "c4ix-");
@@ -411,8 +428,15 @@ static void sh_waitall() {
 // Returns 1 if the word was a builtin and has been handled.
 static int sh_exiting;
 static int sh_status;
+static int sh_path_owned;   // sh_path is a PATH= line's copy, to free
+
+static int sh_prefix(char *s, char *p) {
+    while (*p) { if (*s != *p) return 0; ++s; ++p; }
+    return 1;
+}
 
 static int sh_builtin(char **argv, int argc) {
+    char *p;
     if (!ustrcmp(argv[0], "exit")) {
         sh_exiting = 1;
         if (argc > 1) sh_status = sh_atoi(argv[1]);
@@ -438,7 +462,19 @@ static int sh_builtin(char **argv, int argc) {
         uprintf("  kill [-SIG] %%JOB | PID   default signal 15 (TERM)\n");
         uprintf("  wait [PID]                every job, or task PID\n");
         uprintf("  rm [-r] [-f] PATH...      -r: a directory and all in it\n");
+        uprintf("  PATH=DIR:DIR...           where a command is looked for\n");
         uprintf("wildcards: * and ? in a word's last part, as in rm /build/bin/*\n");
+        uprintf("PATH=%s\n", sh_path);
+        return 1;
+    }
+    if (argc == 1 && sh_prefix(argv[0], "PATH=")) {
+        // out of the line, which the next one reuses
+        if ((p = (char *)ualloc(ustrlen(argv[0]) - 4))) {
+            ustrcpy(p, argv[0] + 5);
+            if (sh_path_owned) free(sh_path);
+            sh_path = p;
+            sh_path_owned = 1;
+        }
         return 1;
     }
     if (!ustrcmp(argv[0], "cd")) {

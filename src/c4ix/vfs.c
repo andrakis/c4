@@ -146,20 +146,21 @@ void vfs_init() {
     if ((vn = vfs_ramfile("/proc/uptime"))) vn->type = VN_PROC;
     // /proc/kmsg: the kernel log, which dmesg prints (console.c)
     if ((vn = vfs_ramfile("/proc/kmsg"))) vn->type = VN_PROC;
-    // /log/kernel: the console, logged (console.c)
+    // /var/log/kernel: the console, logged (console.c)
     con_logopen();
-    klog("vfs: / and /tmp in RAM, /proc/uptime and /proc/kmsg made when read, /log/kernel\n");
+    klog("vfs: / and /tmp in RAM, /proc/uptime and /proc/kmsg made when read, /var/log/kernel\n");
 }
 
 // What the boot left on the host (SYS_LAZYFILE): files, and their bytes
 int vfs_nlazy, vfs_lazybytes;
 
-// /log/kernel, made at boot. The kernel holds a reference, so it cannot
-// be unlinked from under the console.
+// /var/log/kernel, made at boot. The kernel holds a reference, so it
+// cannot be unlinked from under the console.
 struct vnode *vfs_klog() {
     struct vnode *vn;
-    vfs_mkdir("/log");
-    if ((vn = vfs_ramfile("/log/kernel"))) ++vn->refs;
+    vfs_mkdir("/var");
+    vfs_mkdir("/var/log");
+    if ((vn = vfs_ramfile("/var/log/kernel"))) ++vn->refs;
     return vn;
 }
 

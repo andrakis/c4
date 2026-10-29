@@ -567,15 +567,15 @@ it lacked was somewhere to edit and build in one place.
       are committed, so building the disk needs no Pillow. It is a disk
       file (`/usr/share/splash/c4ix.c4p.gz`, lazy like the rest), not in
       the archive it is shown during.
-- [x] **`/log/kernel`.** Everything the console says while booting is
-      kept there: the kernel's lines, and the tasks' (vfsload, tar) until
+- [x] **`/var/log/kernel`** (`/log/kernel` until 2026-10-29). Everything
+      the console says while booting is kept there: the kernel's lines, and the tasks' (vfsload, tar) until
       init starts the shell. After that only the kernel's own lines are
       added, or top's redraws would fill it. Lines from before the VFS
       exists are held back and written when it does. It stops at 256 KB,
       and the kernel holds it open, so it cannot be deleted.
 - [x] Pinned by `test-boot-desktop.mjs`: vfsload waits; splash puts the
       logo up and animates; the desktop and top start only after the
-      archive is unpacked; `cat /log/kernel` has the kernel's and vfsload's
+      archive is unpacked; `cat /var/log/kernel` has the kernel's and vfsload's
       lines and not top's. Seen in a browser too (2026-10-21).
 
 ## Part nine: the boot logo as the desktop's picture, and screen savers (asked for 2026-10-21)

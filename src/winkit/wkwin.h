@@ -81,5 +81,33 @@ void wk_dialog_answer(struct win *d, int yes);   // close a dialog with this ans
 extern struct wk_class wk_msg_class;
 extern struct wk_class wk_input_class;
 extern struct wk_class wk_file_class;
+
+// ---- the file box: dialog.c's, drawn by the look in use (Windows 3.1's
+// there, Windows 95's in look95.c) ----
+enum { FB_MAX = 256, FB_ROWS = 12, FB_ROW = 16 };
+struct fdlg {
+    char *buf;                    // as a message box's (dialog.c)
+    int max;
+    char out[WK_PATH];            // the name typed, then the path chosen
+    int caret;
+    int save;
+    int n, top, sel;              // the folder's entries, the first shown, the one picked
+    char dir[WK_PATH];
+    char filter[WK_PATH];         // the types offered: "label|patterns|label|patterns..."
+    char pattern[WK_NAME];        // the patterns of the one in use, ';' between them
+    int ftype;                    // ... which that is
+    int drop;                     // a drop-down list open (look95.c): 1 the folders, 2 the types
+    int isdir[FB_MAX];
+    int order[FB_MAX];
+    char names[FB_MAX * WK_NAME];
+};
+char *wk_fb_name(struct fdlg *f, int k);        // the k'th entry shown, folders first
+void wk_fb_list(struct fdlg *f);                // the folder's entries read again
+void wk_fb_enter(struct fdlg *f, char *name);   // into a folder of the one shown, ".." up
+void wk_fb_ok(struct win *d, struct fdlg *f);   // Open or Save: the name typed, or a folder entered
+int  wk_fb_types(struct fdlg *f);               // how many types the filter offers
+void wk_fb_label(struct fdlg *f, int i, char *out, int n);   // type i's label
+void wk_fb_type(struct fdlg *f, int i);         // type i the one shown
+extern struct wk_class wk_file95_class;
 void wk_answer_owner(int owner, int dialog, int result);   // wmcore.c: to the window, or the shell
 #endif

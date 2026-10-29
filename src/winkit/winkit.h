@@ -158,7 +158,9 @@ int   wk_now();                       // milliseconds of machine time
 void  wk_msgbox(int owner, int dialog, char *title, char *text, int buttons);
 void  wk_inputbox(int owner, int dialog, char *title, char *prompt, char *buf, int max);
 void  wk_filebox(int owner, int dialog, int save, char *pattern, char *buf, int max);
-                                      // buf: the start folder or name in, the path chosen out
+                                      // buf: the start folder or name in, the path chosen out;
+                                      // pattern: "*", "*.c;*.h", or types and their patterns,
+                                      // "C Source (*.c)|*.c|All Files (*)|*", the first shown first
 
 // the clipboard: text, copied in. One for every window: in grin the
 // kit's own memory, so a paste after the copier has gone still has it
@@ -283,7 +285,8 @@ extern char *notepad_name;            // in its titles ("Notepad"; the desktop's
 extern char *notepad_about;           // its Help > About line
 extern char *notepad_home;            // where Open starts
 extern char *notepad_untitled;        // where Save As offers to put a new document
-extern int notepad_filebox;           // 1: Open and Save As are file boxes (grin's); 0: typed paths
+extern int notepad_filebox;           // 1: Open and Save As are file boxes; 0: typed paths
+extern char *notepad_filter;          // the types the file box offers ("*"; wk_filebox)
 int  wk_clock();                      // the host's time of day, in seconds since midnight
 
 // ---- screen savers (savers.c) ----------------------------------------------

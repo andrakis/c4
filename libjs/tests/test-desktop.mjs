@@ -469,9 +469,32 @@ check(until(() => has('Untitled - Text Editor')), 'Go > Text Editor opens a new 
 type('hello from c4ix\n'); type('second line');
 check(until(() => has('hello from c4ix') && has('second line') && has('Untitled * - Text Editor')), 'typing shows, and the title marks it modified', screen());
 key('s', 2, 83);
-check(until(() => has('Save as:')), 'Ctrl+S on a new file asks where');
+check(until(() => has('Save As') && has('Save in:') && has('Save as type:') && has('tmp') && has('untitled.txt') && has('All Files (*)')),
+  'Ctrl+S on a new file asks where, in a Windows 95 Save As: /tmp, the name, the types', screen());
 key('\n');
 check(until(() => has('untitled.txt - Text Editor')), 'and saves it to /tmp/untitled.txt', screen());
+// Open: the folder, up, a folder's contents, and the types
+key('o', 2, 79);
+// the file box's client area, from its "Look in:" (drawn at 10, 14); what is
+// drawn after that is the box's, the topmost window
+const fbox = () => { const i = frame.findIndex(s => /^(Look|Save) in:$/.test(s.s.trimEnd())); return i >= 0 ? { x: frame[i].x - 10, y: frame[i].y - 14, i } : null; };
+check(until(() => has('Look in:') && has('Files of type:') && !!fbox()), 'Ctrl+O opens a Windows 95 Open box', screen());
+const inBox = all => { const b = fbox(); return b ? all.filter(t => frame.indexOf(t) > b.i && t.x > b.x && t.y > b.y + 40 && t.y < b.y + 227).pop() : undefined; };
+check(until(() => !!inBox(find('untitled.txt'))), 'in the file\'s folder, which lists it', screen());
+{
+  // Up: the button right of "Look in"; the folders above in its list
+  const b = fbox();
+  click(b.x + 462 - 34 + 12, b.y + 21);
+  check(until(() => has('C4IX (/)') && !!inBox(find('usr')) && !inBox(find('untitled.txt'))), 'the Up button goes to the folder above', screen());
+  dbl('tmp', inBox);
+  check(until(() => !!inBox(find('untitled.txt'))), 'and a double click into a folder', screen());
+  clickText('All Files (*)');
+  check(until(() => has('Text Documents (*.txt)') && has('C Source (*.c;*.h)')), 'Files of type lists the types', screen());
+  clickText('C Source (*.c;*.h)');
+  check(until(() => has('C Source (*.c;*.h)') && !inBox(find('untitled.txt'))), 'and C Source shows no .txt', screen());
+  key('ESC');
+  check(until(() => !has('Look in:')), 'Esc cancels it', screen());
+}
 clickText(/^Files - /); key('F5');
 check(until(() => !!inList(find('untitled.txt')) && has('Text')), 'Files lists the saved file after a refresh', screen());
 const notes = find('untitled.txt - Text Editor').length;
@@ -863,6 +886,12 @@ check(until(() => sysbox()), 'Settings > Look > Windows 3.1 draws the control-me
 }
 key('ESC');
 until(() => !has('Look'));
+start('Text Editor');
+until(() => has('Untitled - Text Editor'));
+key('o', 2, 79);
+check(until(() => has('File name:') && has('Open') && !has('Look in:')), "and Text Editor's Open is Windows 3.1's file box", screen());
+key('ESC');
+until(() => !has('File name:'));
 
 // ---- Power Off --------------------------------------------------------------------------------
 start('Power Off...');

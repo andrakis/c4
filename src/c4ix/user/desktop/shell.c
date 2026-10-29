@@ -481,6 +481,8 @@ int main(int argc, char **argv) {
     notepad_about = "Text Editor for C4IX: edits text in the RAM filesystem.";
     notepad_home = "/";
     notepad_untitled = "/tmp/untitled.txt";
+    notepad_filebox = 1;
+    notepad_filter = "All Files (*)|*|Text Documents (*.txt)|*.txt|C Source (*.c;*.h)|*.c;*.h";
     wk_init(&shell);
     wall_load("/usr/share/splash/c4ix.c4p.gz");
     icon_k = 0 - 1;

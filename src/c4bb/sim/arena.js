@@ -36,6 +36,36 @@ export class Arena {
     this.dv = new DataView(this.buf);
     this.io = null;          // devices.js Devices instance
     this.stackTop = sizeBytes - ARGS_RESERVE;
+    // Whose word a device is acting on: null for the machine's own (no
+    // MMU, or kernel mode), else the user task's MMU while its load or
+    // store is at the device (libjs/mmu.js), which checks (dmaCheck)
+    this.dmaCtx = null;
+  }
+
+  // ---- what devices do at an address the guest gave them ----
+  // Every device that reads or writes guest memory at an address it was
+  // handed -- a buffer, a name, a ring, a framebuffer -- comes through
+  // these, so that a user task under an MMU can only hand it its own
+  // memory: the range is checked against the task's space, and a refusal
+  // is the task's page fault (docs/c4ix-mmu.md 11).
+  dma(addr, len, write) {
+    if (this.dmaCtx) this.dmaCtx.dmaCheck(addr >>> 0, len, write);
+    return addr >>> 0;
+  }
+  dmaRead(addr, len) {
+    addr = this.dma(addr, len, false);
+    return this.u8.slice(addr, addr + len);
+  }
+  dmaWrite(addr, bytes) {
+    addr = this.dma(addr, bytes.length, true);
+    this.u8.set(bytes, addr);
+  }
+  dmaCstring(addr, max = 4096) {
+    addr = addr >>> 0;
+    let end = addr;
+    while (end < addr + max && end < this.size && this.u8[end]) end++;
+    this.dma(addr, Math.min(end + 1, this.size) - addr, false);
+    return new TextDecoder('latin1').decode(this.u8.slice(addr, end));
   }
 
   // Out-of-range accesses read 0 and drop writes, like the aligned

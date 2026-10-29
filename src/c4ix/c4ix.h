@@ -807,7 +807,8 @@ enum { MMU_PAGE = 4096, MMU_KSTACK = 262144 };
 // A page table entry: the frame's address and these
 enum { PTE_P = 1, PTE_W = 2, PTE_U = 4, PTE_X = 8, PTE_A = 0x20, PTE_D = 0x40 };
 // What a fault was (MMU_FINFO)
-enum { MMU_FK_READ = 1, MMU_FK_WRITE = 2, MMU_FK_FETCH = 4, MMU_FK_PRESENT = 8 };
+// DMA: a device's access, at an address the task gave it
+enum { MMU_FK_READ = 1, MMU_FK_WRITE = 2, MMU_FK_FETCH = 4, MMU_FK_PRESENT = 8, MMU_FK_DMA = 32 };
 // The signal a page fault kills with, as waitpid reports it
 enum { C4IX_SIGSEGV = 11 };
 extern int mmu_on;
@@ -818,7 +819,9 @@ void mmu_fault(struct task *t, int va);   // TRAP_SEGV from a user task: kill it
 // What user mode may use of page 0 (MMU_IOPM)
 enum { IOPM_ROM = 1, IOPM_DEV = 2, IOPM_GUI = 4, IOPM_SND = 8, IOPM_LOCAL = 16, IOPM_LOCALW = 32 };
 // ... every user task's: the ROM, the display, the sound card, reading the window
-enum { MMU_IOPM_USER = 1 | 4 | 8 | 16 };
+// A user task's: the display, the sound card, and the CPU-local window to
+// read. Not the ROM: a null pointer's read faults (TLEV still runs there).
+enum { MMU_IOPM_USER = 4 | 8 | 16 };
 int  umalloc_stack(int n);             // umalloc, and a guard page below it
 int  mmu_ioperm(struct task *t, int bits);   // SYS_IOPERM
 // A user task's memory. Without the MMU these are malloc and free.

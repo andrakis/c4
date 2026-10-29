@@ -10,7 +10,11 @@
 //   wild stack         recurses until its stack runs out (the guard page)
 //   wild text          writes over its own code (read-only)
 //   wild exec          jumps into its own data (no-execute)
-//   wild null          reads through a null pointer's neighbourhood
+//   wild null          reads through a null pointer
+//   wild ring ADDR     points the display's event ring at ADDR, for the
+//                      device to write events there
+//   wild disk ADDR     asks for drive access (uioperm) and gives the drive
+//                      a file name at ADDR, for the device to read
 // The victim runs in the background throughout; at the end it must say
 // its word was never touched, and the kernel's log (dmesg) must name
 // every fault.
@@ -18,6 +22,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createMachine, boot } from '../boot.js';
 import { typeBytes } from '../keys.js';
+import { GuiDevice } from '../gui-device.js';
 
 const ROOT = new URL('../../src/c4bb/images/', import.meta.url).pathname;
 const index = JSON.parse(readFileSync(join(ROOT, 'disk/index.json'), 'utf8'));
@@ -50,7 +55,7 @@ int deep(int n) {
 int main(int argc, char **argv) {
     int *p, t0, secs, e;
     int code[4];
-    if (argc < 2) { uprintf("usage: wild victim SECS | kernel | poke ADDR | stack | text | exec | null\\n"); return 2; }
+    if (argc < 2) { uprintf("usage: wild victim SECS | kernel | poke ADDR | stack | text | exec | null | ring ADDR | disk ADDR\\n"); return 2; }
     if (!ustrcmp(argv[1], "victim")) {
         secs = 0;
         if (argc > 2) { e = 0; while (argv[2][e]) { secs = secs * 10 + argv[2][e] - '0'; ++e; } }
@@ -97,9 +102,23 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (!ustrcmp(argv[1], "null")) {
-        p = (int *)4096;
-        uprintf("wild: reading at 0x%x\\n", (int)p);
-        uprintf("wild: read %d\\n", *p);
+        p = (int *)0;
+        uprintf("wild: reading at 0x%x\\n", (int)(p + 1));
+        uprintf("wild: read %d\\n", p[1]);
+        return 0;
+    }
+    if (!ustrcmp(argv[1], "ring") && argc > 2) {
+        uprintf("wild: the display's ring at 0x%x\\n", hexval(argv[2]));
+        *(int *)0x40c = 4096;
+        *(int *)0x410 = hexval(argv[2]);
+        uprintf("wild: wrote it\\n");
+        return 0;
+    }
+    if (!ustrcmp(argv[1], "disk") && argc > 2) {
+        if (uioperm(UIOPERM_DEV) < 0) { uprintf("wild: no drive access\\n"); return 1; }
+        uprintf("wild: a file name at 0x%x\\n", hexval(argv[2]));
+        *(int *)0x120 = hexval(argv[2]);
+        uprintf("wild: wrote it\\n");
         return 0;
     }
     return 2;
@@ -108,10 +127,11 @@ int main(int argc, char **argv) {
 
 // STAGE: which checks this kernel has the MMU for (docs/c4ix-mmu.md): 1
 // translation only, 2 the kernel's memory, 3 another task's, 4 the guard
-// page, read-only text and no-execute. Default all.
-const stage = Number(process.env.STAGE || 4);
+// page, read-only text and no-execute, 5 null reads and what devices are
+// given. Default all.
+const stage = Number(process.env.STAGE || 5);
 const out = [];
-const vm = createMachine({ arenaMb: 64, mhz: 100, mmu: true, drives: [{ files, writable: false, sink: null }], onByte: b => out.push(b) });
+const vm = createMachine({ arenaMb: 64, mhz: 100, mmu: true, gui: new GuiDevice(), drives: [{ files, writable: false, sink: null }], onByte: b => out.push(b) });
 // C4IX_IMAGE: another kernel than the disk's, built on its own
 boot(vm, new Uint8Array(readFileSync(process.env.C4IX_IMAGE || join(ROOT, 'c4ix32.c4r'))), ['c4ix32.c4r']);
 const text = (from = 0) => Buffer.from(out.slice(from)).toString('latin1');
@@ -154,6 +174,12 @@ if (stage >= 4) {
   fault('stack', /page fault: write to 0x[0-9a-f]+ \(the stack guard of task wild\.c4r, not mapped\).*killed/);
   fault('text', /page fault: write to 0x[0-9a-f]+ \(task wild\.c4r, not allowed\).*killed/);
   fault('exec', /page fault: jump to 0x[0-9a-f]+ \(task wild\.c4r, not allowed\).*killed/);
+}
+if (stage >= 5) {
+  fault('null', /page fault: read of 0x00000004 \(page 0, not allowed\).*killed/);
+  fault('ring 0x2000', /page fault: a device's write to 0x00002000 \(the kernel's image, not mapped\).*killed/);
+  if (m) fault(`ring ${m[2]}`, new RegExp(`page fault: a device's write to 0x0*${m[2].slice(2)} \\(task wild\\.c4r, not mapped\\).*killed`));
+  fault('disk 0x2000', /page fault: a device's read of 0x00002000 \(the kernel's image, not mapped\).*killed/);
 }
 t = run('echo the kernel is fine');
 check(/^the kernel is fine$/m.test(t), 'the kernel carries on', t);

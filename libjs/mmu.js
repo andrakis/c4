@@ -27,8 +27,9 @@ export const MMU = {
   INVLPG: 0x518, FLUSH: 0x51c, IOPM: 0x520, MISSES: 0x524, FAULTS: 0x528, MEMSIZE: 0x52c,
 };
 export const PTE = { P: 1, W: 2, U: 4, X: 8, A: 0x20, D: 0x40 };
-// What a fault was (FINFO): the access, and whether the page was there
-export const FK = { READ: 1, WRITE: 2, FETCH: 4, PRESENT: 8 };
+// What a fault was (FINFO): the access, and whether the page was there.
+// DMA: a device's, at an address the task gave it (dmaCheck).
+export const FK = { READ: 1, WRITE: 2, FETCH: 4, PRESENT: 8, DMA: 32 };
 // Page 0's windows a user task may use (IOPM, section 7). At reset it may
 // use all of them, as without an MMU; a kernel takes away what it keeps.
 export const IOPM = { ROM: 1, DEV: 2, GUI: 4, SND: 8, LOCAL: 16, LOCALW: 32, ALL: 63 };
@@ -44,7 +45,47 @@ const CODE_WINS = 4;
 
 // Thrown by the translated ld32/st32 that sys() and the FPU call in user
 // mode; the user loop catches it and raises the fault
-const FAULT = { fault: true };
+export const FAULT = { fault: true };
+
+// The page table entry for va in the space at ptbr, from the tables in
+// i32 (an arena of size bytes): 0 when there is none
+function pteOf(i32, size, ptbr, va) {
+  if (!ptbr) return 0;
+  const pde = i32[(ptbr >>> 2) + (va >>> 22)] | 0;
+  if (!(pde & 1)) return 0;
+  const pt = pde & -4096;
+  if ((pt >>> 0) + 4096 > size) return 0;
+  return i32[(pt >>> 2) + ((va >>> 12) & 1023)] | 0;
+}
+
+// The first address of [addr, addr + len) that the space at ptbr does not
+// let user mode read (and write, if write), or -1 when it all does
+export function dmaRefused(i32, size, ptbr, addr, len, write) {
+  addr = addr >>> 0;
+  if (len <= 0) return -1;
+  const end = addr + len;
+  if (addr < 0x1000 || end > size) return addr;
+  const need = PTE.P | PTE.U | (write ? PTE.W : 0);
+  for (let va = addr & -4096; va < end; va += 4096) {
+    if ((pteOf(i32, size, ptbr, va) & need) !== need) return va < addr ? addr : va;
+  }
+  return -1;
+}
+
+// What a device sees of a user task's space when another CPU's task is
+// the one at it (par.js serves those on CPU 0): the asker's PTBR. A
+// refusal is kept for the asker to raise.
+export class DmaSpace {
+  constructor(arena) { this.arena = arena; this.ptbr = 0; this.faddr = -1; this.finfo = 0; }
+  dmaCheck(addr, len, write) {
+    const a = this.arena;
+    const bad = dmaRefused(a.i32, a.size, this.ptbr, addr, len, write);
+    if (bad < 0) return;
+    const pte = pteOf(a.i32, a.size, this.ptbr, bad);
+    this.faddr = bad; this.finfo = (write ? FK.WRITE : FK.READ) | FK.DMA | (pte & PTE.P ? FK.PRESENT : 0);
+    throw FAULT;
+  }
+}
 
 export class Mmu {
   constructor(m) {
@@ -228,6 +269,39 @@ export class Mmu {
     this.faults++;
   }
 
+  // A device, reached by this task's load or store, about to read (or
+  // write) [addr, addr + len) at the task's word: the display's rings and
+  // framebuffer, the sound card's samples, the drives' buffers and names.
+  // The device does what the task could have done itself, or the task
+  // takes the fault it would have taken -- an IOMMU's check, so that no
+  // device is a way round the task's page tables (docs/c4ix-mmu.md 11).
+  dmaCheck(addr, len, write) {
+    const a = this.m.arena;
+    const bad = dmaRefused(a.i32, a.size, this.ptbr, addr, len, write);
+    if (bad < 0) return;
+    const pte = pteOf(a.i32, a.size, this.ptbr, bad);
+    this.refuse(bad, (write ? FK.WRITE : FK.READ) | FK.DMA | (pte & PTE.P ? FK.PRESENT : 0));
+    throw FAULT;
+  }
+
+  // The bus, for user mode: a device it reaches checks the addresses it is
+  // given against this task's space (dmaCheck) while the access lasts
+  busRd32(x) {
+    const a = this.m.arena;
+    a.dmaCtx = this;
+    try { return this.lowRd32(x); } finally { a.dmaCtx = null; }
+  }
+  busWr32(x, v) {
+    const a = this.m.arena;
+    a.dmaCtx = this;
+    try { this.m.bus.write32(x, v | 0); } finally { a.dmaCtx = null; }
+  }
+  busWr8(x, v) {
+    const a = this.m.arena;
+    a.dmaCtx = this;
+    try { this.m.bus.write8(x, v & 0xff); } finally { a.dmaCtx = null; }
+  }
+
   // ---------------------------------------------------------------
   // Page 0 in user mode: the bus, as the interpreter's slow path has it,
   // where the IOPM allows (section 7). Returns false when it refuses.
@@ -260,8 +334,8 @@ export class Mmu {
   ld32(x) {
     x = x | 0;
     if ((x >>> 0) < 0x1000) {
-      if (!this.lowOk(x, FK.READ)) { this.refuse(x, FK.READ); throw FAULT; }
-      return this.lowRd32(x);
+      if (!this.lowOk(x, FK.READ)) { this.refuse(x, FK.READ | FK.PRESENT); throw FAULT; }
+      return this.busRd32(x);
     }
     if (x & 3) return (this.ld8(x) & 255) | ((this.ld8(x + 1) & 255) << 8) | ((this.ld8(x + 2) & 255) << 16) | (this.ld8(x + 3) << 24);
     const p = this.page(x, FK.READ);
@@ -271,7 +345,7 @@ export class Mmu {
   ld8(x) {
     x = x | 0;
     if ((x >>> 0) < 0x1000) {
-      if (!this.lowOk(x, FK.READ)) { this.refuse(x, FK.READ); throw FAULT; }
+      if (!this.lowOk(x, FK.READ)) { this.refuse(x, FK.READ | FK.PRESENT); throw FAULT; }
       return this.lowRd8(x);
     }
     const p = this.page(x, FK.READ);
@@ -282,10 +356,10 @@ export class Mmu {
     x = x | 0;
     const m = this.m;
     if ((x >>> 0) < 0x1000) {
-      if (!this.lowOk(x, FK.WRITE)) { this.refuse(x, FK.WRITE); throw FAULT; }
+      if (!this.lowOk(x, FK.WRITE)) { this.refuse(x, FK.WRITE | FK.PRESENT); throw FAULT; }
       if (m.smp && x >= LOCAL_BASE && x < LOCAL_END && (x & 3) === 0) { m.local[(x - LOCAL_BASE) >> 2] = v; return; }
       if (isRom(x, 4)) { m.romStore(x, v); return; }
-      m.bus.write32(x, v | 0);
+      this.busWr32(x, v);
       return;
     }
     if (x & 3) { for (let k = 0; k < 4; k++) this.st8(x + k, v >> (8 * k)); return; }
@@ -297,10 +371,10 @@ export class Mmu {
     x = x | 0;
     const m = this.m;
     if ((x >>> 0) < 0x1000) {
-      if (!this.lowOk(x, FK.WRITE)) { this.refuse(x, FK.WRITE); throw FAULT; }
+      if (!this.lowOk(x, FK.WRITE)) { this.refuse(x, FK.WRITE | FK.PRESENT); throw FAULT; }
       if (m.smp && x >= LOCAL_BASE && x < LOCAL_END) { m.localU8[x - LOCAL_BASE] = v; return; }
       if (isRom(x, 1)) { m.romStore(x, v & 0xff); return; }
-      m.bus.write8(x, v & 0xff);
+      this.busWr8(x, v);
       return;
     }
     const p = this.page(x, FK.WRITE);
@@ -518,9 +592,11 @@ export class Mmu {
   cFill(pc) {
     const m = this.m, w = this.cwins;
     if ((pc >>> 0) < 0x1000) {
-      // the ROM's TLEV word, where trap frames return; nothing else runs.
-      // The window is that word alone: cLen 0, so the next fetch looks.
-      if (((pc >>> 0) === TLEV_ADDR || (pc >>> 0) === CPU_HALT_ADDR) && (this.iopm & IOPM.ROM)) {
+      // the ROM's TLEV word, where trap frames return; nothing else runs,
+      // whether or not the IOPM lets the task read the ROM (a null
+      // pointer's reads: section 7). The window is that word alone: cLen
+      // 0, so the next fetch looks.
+      if ((pc >>> 0) === TLEV_ADDR || (pc >>> 0) === CPU_HALT_ADDR) {
         this.cLo = pc; this.cOff = 0; this.cLen = 0;
         return;
       }

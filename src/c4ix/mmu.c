@@ -679,10 +679,11 @@ void mmu_cpu(int k) {
     mmu_kstack[k] = s;
     *(int *)MMU_KSP = s + MMU_KSTACK;
     *(int *)MMU_PTBR = (int)mmu_dir;   // until the first user task
-    // Page 0: the ROM, the display, the sound card, and the CPU-local
-    // window to read (the libraries' data slots) but not to write: it is
-    // the kernel's struct cpu. c4bb's devices only for a task that asks
-    // (SYS_IOPERM). docs/c4ix-mmu.md 7.
+    // Page 0: the display, the sound card, and the CPU-local window to
+    // read (the libraries' data slots) but not to write: it is the
+    // kernel's struct cpu. Not the ROM, so that a null pointer's read is a
+    // fault (the TLEV word there still runs). c4bb's devices only for a
+    // task that asks (SYS_IOPERM). docs/c4ix-mmu.md 7.
     *(int *)MMU_IOPM = MMU_IOPM_USER;
     *(int *)MMU_CTL = 1;
     klog("mmu: CPU %d translating user mode, its traps on a %d KB stack at 0x%08x\n",
@@ -750,20 +751,25 @@ void mmu_fault(struct task *t, int va) {
     char *what;
     char whose[64];
     struct urgn *r;
+    int *e;
     info = *(int *)MMU_FINFO;
     pc = *(int *)MMU_FPC;
-    // A C4KE program writing its own code: C4KE's ps patches itself. Its
-    // text is made writable and the store runs again (faults are
-    // precise: the trap returns to the instruction). C4IX's own programs
-    // never do this, and are killed for it below.
-    if (t && t->ckabi && (info & MMU_FK_WRITE) && (r = mmu_rgn(va)) && r->code &&
-        r->owner == mmu_root(t) && !(r->flags & PTE_W)) {
-        r->flags = r->flags | PTE_W;
-        mmu_rmap(r, r->flags);
-        klog("mmu: task %d (%s), a C4KE program, writes its own code: its text made writable\n", t->id, t->name);
+    // A C4KE program writing its own code: C4KE's ps patches itself. The
+    // page it writes is made writable, that page alone, and the store
+    // runs again (faults are precise: the trap returns to the
+    // instruction); the rest of its text stays read-only. C4IX's own
+    // programs never do this, and are killed for it below.
+    if (t && t->ckabi && (info & MMU_FK_WRITE) && !(info & MMU_FK_DMA) && (r = mmu_rgn(va)) && r->code &&
+        r->owner == mmu_root(t) && r->dir && (e = mmu_pte(r->dir, va, 0)) &&
+        (*e & (PTE_P | PTE_U)) == (PTE_P | PTE_U) && !(*e & PTE_W)) {
+        *e = *e | PTE_W;
+        *(int *)MMU_INVLPG = va;
+        klog("mmu: task %d (%s), a C4KE program, writes its own code: the page at 0x%08x made writable\n",
+            t->id, t->name, va & ~(MMU_PAGE - 1));
         return;
     }
-    what = (info & MMU_FK_WRITE) ? "write to" : (info & MMU_FK_FETCH) ? "jump to" : "read of";
+    if (info & MMU_FK_DMA) what = (info & MMU_FK_WRITE) ? "a device's write to" : "a device's read of";
+    else what = (info & MMU_FK_WRITE) ? "write to" : (info & MMU_FK_FETCH) ? "jump to" : "read of";
     mmu_whose(va, whose);
     kprintf("c4ix: task %d (%s): page fault: %s 0x%08x (%s, %s) at pc 0x%08x; killed\n",
         t ? t->id : -1, t ? t->name : "?", what, va, whose,

@@ -353,7 +353,7 @@ export class Devices {
     const a = this.tapAddr >>> 0;
     if (a >= this.arena.size) return 0;
     n = Math.min(n, this.arena.size - a);
-    for (let i = 0; i < n; i++) this.arena.write8(a + i, this.tapBuf[i]);
+    this.arena.dmaWrite(a, this.tapBuf.subarray(0, n));
     this.tapBuf.copyWithin(0, n, this.tapLen);
     this.tapLen -= n;
     return n;
@@ -361,7 +361,7 @@ export class Devices {
   // fd 0 while it is fed: what is left of the feed, then end of input
   tapRead (addr, len) {
     const n = Math.max(0, Math.min(len | 0, this.tapIn.length - this.tapInPos));
-    for (let i = 0; i < n; i++) this.arena.write8(addr + i, this.tapIn[this.tapInPos + i]);
+    this.arena.dmaWrite(addr, this.tapIn.subarray(this.tapInPos, this.tapInPos + n));
     this.tapInPos += n;
     return n;
   }
@@ -386,7 +386,7 @@ export class Devices {
   }
 
   diskOpen(nameAddr) {
-    const name = this.arena.cstring(nameAddr >>> 0, 256);
+    const name = this.arena.dmaCstring(nameAddr >>> 0, 256);
     if (name === '/dev/stdin' || name === '/dev/tty') {
       const fd = this.nextFd++;
       const raw = name === '/dev/tty';
@@ -454,8 +454,9 @@ export class Devices {
     }
     let n = 0;
     while (n < len && this.rxFifo.length) {
+      const at = this.arena.dma(addr + n, 1, true);   // before the byte leaves the queue
       const b = this.rxFifo.shift();
-      this.arena.write8(addr + n, b);
+      this.arena.write8(at, b);
       n++;
       // One line per read, for every canonical reader -- blocking or
       // not. Stopping only on the blocking path (as this did) let a
@@ -481,7 +482,7 @@ export class Devices {
     if (!f) return -1;
     if (f.kbd) return this.kbdRead(this.diskAddr, len, f.nonblock, f.raw);
     const n = Math.min(len, f.data.length - f.pos);
-    for (let i = 0; i < n; i++) this.arena.write8(this.diskAddr + i, f.data[f.pos + i]);
+    if (n > 0) this.arena.dmaWrite(this.diskAddr, f.data.slice(f.pos, f.pos + n));
     f.pos += n;
     return n;
   }
@@ -489,7 +490,7 @@ export class Devices {
   // Create or truncate a file on a drive. A drive with no sink is a
   // pressed disc: it can be read forever and never written.
   diskCreate (nameAddr) {
-    const name = this.arena.cstring(nameAddr >>> 0, 256);
+    const name = this.arena.dmaCstring(nameAddr >>> 0, 256);
     const { drv, rest } = this.resolveDrive(name);
     const media = this.drives[drv];
     if (!media || !media.writable || !media.sink) return -1;
@@ -513,7 +514,7 @@ export class Devices {
     const f = this.fds.get(this.diskFd);
     if (!f || !f.w) return -1;
     const n = Math.max(0, len | 0);
-    const buf = this.arena.u8.slice(this.diskAddr >>> 0, (this.diskAddr >>> 0) + n);
+    const buf = this.arena.dmaRead(this.diskAddr, n);
     f.w.chunks.push(buf);
     f.w.len += n;
     return n;
@@ -524,7 +525,7 @@ export class Devices {
   // has one (the page's store, the CLI's directory). A drive with a sink
   // and no remove forgets the file for this session only.
   diskUnlink (nameAddr) {
-    const name = this.arena.cstring(nameAddr >>> 0, 256);
+    const name = this.arena.dmaCstring(nameAddr >>> 0, 256);
     const { drv, rest } = this.resolveDrive(name);
     const media = this.drives[drv];
     if (!media || !media.writable || !media.sink) return -1;
@@ -554,6 +555,7 @@ export class Devices {
     const addr = this.uartTxAddr >>> 0;
     if (addr >= this.arena.size) return 0;
     const end = Math.min(addr + n, this.arena.size);
+    this.arena.dma(addr, end - addr, false);
     const u8 = this.arena.u8;
     for (let a = addr; a < end; a++) {
       this.uartActivity++;
@@ -687,7 +689,7 @@ export class Devices {
       case OPNAME: {
         // Written a pointer to a NUL/space-terminated name; look it up
         // the way c4m's __opcode does: case-insensitive 4-char match.
-        this.opnameResult = this.opcodeByName(this.arena.cstring(val >>> 0, 16));
+        this.opnameResult = this.opcodeByName(this.arena.dmaCstring(val >>> 0, 16));
         return;
       }
       case DISK_FLAGS: this.diskFlags = val | 0; return;
@@ -741,7 +743,7 @@ export class Devices {
       case DISK_UNLINK: this.diskResult = this.diskUnlink(val); return;
       case DISK_DIRS: {
         const m = this.drives[this.drive];
-        if (m) m.dirs = this.arena.cstring(val >>> 0, 1024).split(';');
+        if (m) m.dirs = this.arena.dmaCstring(val >>> 0, 1024).split(';');
         return;
       }
       case CON_TAP:  this.tapOn = (val | 0) ? 1 : 0; return;
@@ -751,7 +753,7 @@ export class Devices {
         const n = val | 0;
         if (n < 0) { this.tapIn = null; return; }
         const a = this.tapAddr >>> 0;
-        this.tapIn = this.arena.u8.slice(a, Math.min(a + n, this.arena.size));
+        this.tapIn = a < this.arena.size ? this.arena.dmaRead(a, Math.min(n, this.arena.size - a)) : new Uint8Array(0);
         this.tapInPos = 0;
         return;
       }

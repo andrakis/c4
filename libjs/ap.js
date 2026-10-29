@@ -11,8 +11,8 @@
 
 import { Arena } from '../src/c4bb/sim/arena.js';
 import { OP, STOP, Machine, C4I_MMU } from './c4m.js';
-import { Mmu } from './mmu.js';
-import { C, K, S, R, KIND, ParCore, POSTED, PQLEN, PQSTRIDE } from './par.js';
+import { Mmu, FAULT } from './mmu.js';
+import { C, K, S, R, KIND, ParCore, POSTED, PQLEN, PQSTRIDE, DMA_FAULT } from './par.js';
 import { SharedHeap } from './sheap.js';
 
 const word = (k, f) => C.CPU0 + k * C.STRIDE + f;
@@ -76,6 +76,7 @@ class ApMachine extends Machine {
     ctl[b + K.KIND] = kind; ctl[b + K.OP] = op; ctl[b + K.SP] = this.sp; ctl[b + K.A] = this.a;
     ctl[b + K.RPC] = this.pc;
     ctl[b + K.ADDR] = addr | 0; ctl[b + K.VAL] = val | 0;
+    ctl[b + K.PTBR] = this.vm && this.mmu ? this.mmu.ptbr : 0;
     Atomics.store(ctl, b + K.REQ, R.ASK);
     this.core.ring();
     while (Atomics.load(ctl, b + K.REQ) === R.ASK) {
@@ -84,6 +85,8 @@ class ApMachine extends Machine {
     }
     const ra = ctl[b + K.RA], rstop = ctl[b + K.RSTOP];
     Atomics.store(ctl, b + K.REQ, R.IDLE);
+    // a device refused what this task gave it: the task's page fault
+    if (rstop === DMA_FAULT) { this.mmu.refuse(ctl[b + K.FADDR], ctl[b + K.FINFO]); throw FAULT; }
     return { ra, rstop };
   }
 

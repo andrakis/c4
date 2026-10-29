@@ -14,6 +14,10 @@ TOOLS = c4cc c4rlink c4rdump cpp c4sp c4th c4sc
 
 /: root
 	bin/:
+		# c4ix-hello.c4r -> /bin/hello, so "hello" works from the shell
+		# (its PATH, src/c4ix/user/sh.c)
+		each($BIN_ALL):
+			$1: c4ix-$1.c4r
 		each($TOOLS):
 			$1: $1.c4r
 		# exercises libc (src/c4ix/libc/tests)
@@ -22,12 +26,6 @@ TOOLS = c4cc c4rlink c4rdump cpp c4sp c4th c4sc
 	lib/:
 		libc4ix.c4s: libc4ix.c4s
 		libc.c4s: libc.c4s
-	each($BIN_ALL):
-		# c4ix-hello.c4r -> /bin/hello, and an unqualified alias at the
-		# root so "hello" works from the shell
-		$1: ilink(/bin/$1)
-		bin/:
-			$1: c4ix-$1.c4r
 	usr/
 		src/
 			bin/

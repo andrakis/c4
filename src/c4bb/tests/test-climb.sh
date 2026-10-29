@@ -155,8 +155,8 @@ printf 'reboot 1\n' >&3
 # ---- power-on 3: the kernel C4KE compiled ---------------------------
 await "BIOS boots drive 2" "bios: drive 2 has c4ix.c4r"      120 || exit 1
 await "C4IX came up"       "c4ix-sh -- 'help' for builtins"  300 || exit 1
-await "C4IX has its tree"  "vfsload: 29/29 entries loaded"    60 || exit 1
-run "and a userland"       'c4ix:/\$' 'ls' "^uhello"         120 || exit 1
+await "C4IX has its tree"  "vfsload: 15/15 entries loaded"    60 || exit 1
+run "and a userland"       'c4ix:/\$' 'ls /bin' "^uhello"    120 || exit 1
 run "clean shutdown"       'c4ix:/\$' 'exit' \
     "c4ix: shutdown complete"    120 || exit 1
 

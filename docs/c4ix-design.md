@@ -792,7 +792,7 @@ spinner at -3 beside one at 0 gets 4.6 times the cycles
     or stamped after the epoch, has changed. A path in the list that is
     gone was deleted. The saved changes are laid over the tree after the
     list is made, so the next save counts them as changes again and keeps
-    them. `/tmp`, `/log` and `/var/persist` are never kept.
+    them. `/tmp`, `/proc`, `/var/log` and `/var/persist` are never kept.
   - *What is kept* is one ustar archive, `1:c4ix-persist.tar`: the changed
     files in the order they were changed, so that b4ke still sees an
     object as newer than its source, then `var/persist/whiteouts`, the
@@ -928,6 +928,30 @@ spinner at -3 beside one at 0 gets 4.6 times the cycles
     x5-c4m.txt's hello said "after 0 syscalls", once the kernel's code
     had shifted the preemption points onto that window. The setup now
     runs under `sched_lock`.
+
+### The tree (2026-10-29)
+
+`/` holds directories only. The programs are in `/bin`, and the shell
+finds a bare name in the directories its `PATH` names (`sh.c`):
+`/bin:/usr/bin:/usr/games/bin`, until a line `PATH=DIR:DIR...` changes
+it. Until now each program had a second name at the root too, an ilink,
+from before the shell looked anywhere but where it was; and the kernel's
+log was `/log/kernel`. `pin` and `nice` look where the shell does.
+
+| where | what |
+|---|---|
+| `/bin` | the programs, `c4ix-NAME.c4r` as `NAME`; the toolchain; `sync` |
+| `/lib` | the shared libraries a program links with `-l` |
+| `/usr` | the repository, from the root archive: `/usr/src`, `/usr/include`, `/usr/lib` |
+| `/usr/games/NAME` | each game, its data, and its settings and saved games (Doom, ROTT and Wolf3D change to it; Tyrian names it, `tyr-c4ix.c`) |
+| `/usr/games/bin` | each game's programs by name, ilinks into those directories, so `doom` runs from anywhere |
+| `/build` | what `b4ke -C /usr` makes, already made |
+| `/etc` | the desktop's settings, `desktop.cfg` |
+| `/var/log/kernel` | the console, logged (`console.c`) |
+| `/var/persist` | persist's list of the tree as it booted |
+| `/tmp`, `/proc` | scratch files; `/proc/uptime` |
+
+`/home` is not used, and is left for the person's own files.
 
 ## 6.1 Running it
 

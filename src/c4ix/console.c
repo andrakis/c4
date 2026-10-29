@@ -44,7 +44,7 @@ static int  con_len;
 static int  con_pos;
 static int  con_eof;
 static int  con_gate;           // cycle count of the last host read
-// /log/kernel (below): the file, what waits for it, and whether tasks'
+// /var/log/kernel (below): the file, what waits for it, and whether tasks'
 // output is still logged -- declared up here, ahead of con_init
 enum { CON_PRE = 2048, CON_LOG_MAX = 262144 };
 static struct vnode *con_log;
@@ -116,7 +116,7 @@ int con_read(char *buf, int len) {
     return n;
 }
 
-// /log/kernel: what the console said. The kernel's own lines always;
+// /var/log/kernel: what the console said. The kernel's own lines always;
 // the tasks' only while booting (until init starts the shell), or top's
 // redraws would fill it within minutes. Lines from before the VFS exists
 // wait in con_pre. It stops at CON_LOG_MAX: a log, not a ring.
@@ -131,7 +131,7 @@ static int con_out(int c) {
     return c;
 }
 
-// The VFS is up: make /log/kernel and put what was said so far in it.
+// The VFS is up: make /var/log/kernel and put what was said so far in it.
 void con_logopen() {
     int i;
     if (!(con_log = vfs_klog())) return;

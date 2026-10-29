@@ -9,14 +9,16 @@ Programs that run as C4IX user tasks, behind protected mode. Each
 They include `c4ix_user.h` and do all I/O through libc4ix's syscalls
 (`uprintf`, `ufprintf`, `uread`, …), so fd 0 and fd 1 are whatever the
 shell or the desktop set them to: the console, a RAM file, or a pipe. The
-C4IX shell finds a bare command name as `c4ix-NAME.c4r` or `NAME.c4r`.
+C4IX shell finds a bare command name in the directories its `PATH`
+names (`/bin`, `/usr/bin`, `/usr/games/bin`), and then as
+`c4ix-NAME.c4r` or `NAME.c4r`.
 `C4IX_PROGS` in the Makefile is the set the tests build.
 
 ## Programs
 
 | file | what |
 |---|---|
-| `sh.c` | `c4ix-sh`, the shell: pipelines of any length, `<` and `>`, `&` jobs, builtins `exit jobs wait kill cd pwd help` (`wait PID` waits for any task). No fork: it points its own fd 0/1 at a stage, spawns, and restores them. `-p` puts the prompt on the input line (the Terminal passes it); `-e CMD` runs a line first, as if typed |
+| `sh.c` | `c4ix-sh`, the shell: pipelines of any length, `<` and `>`, `&` jobs, builtins `exit jobs wait kill cd pwd rm mv help` (`wait PID` waits for any task), and `PATH=DIR:DIR...`, where a bare name is looked for. No fork: it points its own fd 0/1 at a stage, spawns, and restores them. `-p` puts the prompt on the input line (the Terminal passes it); `-e CMD` runs a line first, as if typed |
 | `ls.c`, `cat.c`, `echo.c`, `wc.c`, `mkdir.c` | the usual; `cat` and `wc` read fd 0 when given no file |
 | `ps.c` | task table, one fixed-shape record per syscall |
 | `top.c` | samples the task table twice and reports what each task did in between |

@@ -34,11 +34,12 @@ Its repository's branch `c4` carries, beside the game:
   sources it twice. The first time it links the game for C4IX and puts its
   data on the disk; the second, for the bare machine and C4DOS, on the
   games disk.
-- `c4ix.vfs.txt`: its block of C4IX's manifest, `/usr/games/NAME`.
-  `src/c4bb/tests/vfs-games.py` puts it in the disk's manifest at
-  `#@games`, and its programs' names beside `/bin`'s at `#@game-names`,
-  for each game on the disk: every `NAME.c4r` its block puts there
-  (Wolfenstein 3D has two, `wolf3d` and the registered `wolf3d6`).
+- `c4ix.vfs.txt`: its block of C4IX's manifest, its own directory,
+  `/usr/games/NAME`. `src/c4bb/tests/vfs-games.py` puts it in the disk's
+  manifest at `#@games`, and its programs' names in `/usr/games/bin`, on
+  the shell's `PATH`, at `#@game-names`, for each game on the disk: every
+  `NAME.c4r` its block puts there (Wolfenstein 3D has two, `wolf3d` and
+  the registered `wolf3d6`). So `wolf3d` runs from any directory.
 
 A game that is not here is not built, is not on any disk, and
 `make test-NAME` says it was skipped. The bare machine's libc that the

@@ -89,13 +89,13 @@ check(until(() => Buffer.from(out.slice(n1)).toString('latin1').includes('still 
 const p0 = presents;
 gui.event({ kind: 'resize', w: SW, h: SH });
 check(until(() => presents > p0, 200), 'while the desktop keeps drawing');
-// /log/kernel: the kernel's lines and the boot's, not top's
+// /var/log/kernel: the kernel's lines and the boot's, not top's
 const n2 = out.length;
-typeBytes(vm, new TextEncoder().encode('cat /log/kernel\n'));
+typeBytes(vm, new TextEncoder().encode('cat /var/log/kernel\n'));
 {
   const logged = () => Buffer.from(out.slice(n2)).toString('latin1');
   check(until(() => logged().includes('vfsload: c4ix-root.tgz unpacked'), 300) && logged().includes('C4IX booting') &&
     logged().includes('c4ix: task 2') && !/top: \d+ tasks/.test(logged()),
-    '/log/kernel has the boot messages, the kernel\'s and vfsload\'s, and not top\'s', logged().slice(-800));
+    '/var/log/kernel has the boot messages, the kernel\'s and vfsload\'s, and not top\'s', logged().slice(-800));
 }
 process.exit(fail);

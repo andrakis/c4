@@ -29,7 +29,7 @@
 // Files go in the order they were changed, so b4ke still sees an object
 // newer than its source when they come back.
 //
-// /tmp, /log and /var/persist are never kept.
+// /tmp, /proc, /var/log and /var/persist are never kept.
 //
 // The unpacked system, kept. Inflating the root archive is seconds of
 // interpreted work at every boot, and the archive is megabytes to fetch.
@@ -106,7 +106,7 @@ static int same(char *a, char *b) { return !ustrcmp(a, b); }
 // never kept: what the system makes again itself, and this
 static int excluded(char *path) {
     return same(path, "/tmp") || starts(path, "/tmp/") ||
-           same(path, "/log") || starts(path, "/log/") ||
+           same(path, "/var/log") || starts(path, "/var/log/") ||
            same(path, "/proc") || starts(path, "/proc/") ||
            same(path, "/var/persist") || starts(path, "/var/persist/");
 }

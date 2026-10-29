@@ -34,13 +34,13 @@
 //
 // When the kernel stops a tool -- a stack overrun, a bad opcode -- it
 // says why on the console, and a Terminal is not the console: cc
-// finds that line in /log/kernel and says it too, rather than only that
+// finds that line in /var/log/kernel and says it too, rather than only that
 // the source did not compile.
 #include "c4ix_user.h"
 
 enum { MAXA = 64 };
 
-static char *KLOG = "/log/kernel";
+static char *KLOG = "/var/log/kernel";
 
 static char *flags[MAXA];        // passed to c4sc as they are
 static int   nflags;
@@ -87,7 +87,7 @@ static int prefix(char *s, char *p) {
     return !*p;
 }
 
-// What the kernel said about task pid in /log/kernel past its first
+// What the kernel said about task pid in /var/log/kernel past its first
 // `from` bytes ("c4ix: task 8 (c4sc) overran its 1048576-byte stack;
 // killing it"), said again here: 0 if it said nothing, 2 if it was a
 // stack overrun, 1 for anything else. Only what was logged after the

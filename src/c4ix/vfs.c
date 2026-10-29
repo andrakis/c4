@@ -138,16 +138,17 @@ void vfs_init() {
     vfs_boot_ms = __time();
     vfs_mkdir("/proc");
     if ((vn = vfs_ramfile("/proc/uptime"))) vn->type = VN_PROC;
-    // /log/kernel: the console, logged (console.c)
+    // /var/log/kernel: the console, logged (console.c)
     con_logopen();
 }
 
-// /log/kernel, made at boot. The kernel holds a reference, so it cannot
-// be unlinked from under the console.
+// /var/log/kernel, made at boot. The kernel holds a reference, so it
+// cannot be unlinked from under the console.
 struct vnode *vfs_klog() {
     struct vnode *vn;
-    vfs_mkdir("/log");
-    if ((vn = vfs_ramfile("/log/kernel"))) ++vn->refs;
+    vfs_mkdir("/var");
+    vfs_mkdir("/var/log");
+    if ((vn = vfs_ramfile("/var/log/kernel"))) ++vn->refs;
     return vn;
 }
 

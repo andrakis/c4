@@ -11,7 +11,7 @@
 //           BUILD; RUN dosload.c4r c4ke.c4r
 //   c4sh>   doom, quit, three times; HEAP_USED the same each time; rps, q
 //           tar x c4ix-src.tar; b4ke -f c4ix.b4k; kboot c4ix.c4r
-//   c4ix:/$ ls; doom, quit; exit
+//   c4ix:/$ ls /bin; doom, quit; exit
 //   A:\>    MEM: C4IX returned to C4KE, C4KE to dosload, dosload to DOS
 //
 // and says what each step cost: wall time, cycles, and the heap.
@@ -243,7 +243,7 @@ if (!quick) {
   cost('kboot c4ix.c4r');
 
   // ---- C4IX ---------------------------------------------------------------
-  o = cmd('ls', IX, 60);
+  o = cmd('ls /bin', IX, 60) + cmd('ls /usr/games/bin', IX, 60);
   check(/\bdoom\b/.test(o) && /\bdesktop\b/.test(o), "C4IX's tree has the page's userland", o);
   begin();
   check(doom('doom', IX), 'Doom under C4IX, played and quit', text().slice(-1500));

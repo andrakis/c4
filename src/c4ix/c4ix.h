@@ -832,6 +832,8 @@ int  mmu_uva(int p);                   // a user region's memory as user mode se
 int  mmu_phys(int p);                  // ... and as it is in memory
 void mmu_init();                       // at boot: tables, and on
 int  sched_has_bkl();                  // this CPU holds the kernel lock (sched.c)
+void mmu_trap_in();                    // sched_trap's first thing: a shootdown asked of this CPU
+void mmu_trap_out(struct task *t);     // ... and its last, T the task it goes back to
 void mmu_cpu(int k);                   // another CPU, as it starts
 int  mmu_map(int *dir, int va, int pa, int n, int flags);
 extern int mmu_short;                  // memory is short: allocation takes the kernel lock (sched_light)

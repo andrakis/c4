@@ -17,9 +17,11 @@
 // (libjs's user window) is the host's copy, word for word; and when every
 // program has gone, the host keeps none of their pages.
 //
-// CPUS=2 (PARALLEL=1: on threads): two processors, and the holders spin
-// rather than sleep, so that pages go while another CPU runs their task
-// -- which must forget them first, told by IPI (the TLB's shootdown).
+// CPUS=2 (PARALLEL=1: on threads): two processors, and the first holder
+// spins on CPU 1 rather than sleeping, so that the hog, wanting more than
+// the sleeper can give, takes pages of a task another CPU is running --
+// which must forget them first, told by IPI or on its way back from the
+// kernel (the TLB's shootdown).
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createMachine, boot } from '../boot.js';
@@ -64,6 +66,7 @@ int main(int argc, char **argv) {
     }
     if (argc < 3) { uprintf("usage: swaptest hold MB SECS | hog MB | probe\\n"); return 2; }
     mb = num(argv[2]);
+    if (!ustrcmp(argv[1], "hog")) uaffinity(getpid(), 1);   // CPU 0, where a spinner is not
     seed = getpid() * 1000003;
     b = (int **)ualloc(mb * sizeof(int *));
     i = 0;
@@ -79,10 +82,12 @@ int main(int argc, char **argv) {
         while (__time() - t0 < secs * 1000) umsleep(200);
     }
     if (!ustrcmp(argv[1], "spin")) {
+        uaffinity(getpid(), 2);           // CPU 1, alone there: running whenever swap looks
         secs = argc > 3 ? num(argv[3]) : 10;
         t0 = __time();
         bad = 0;
-        while (__time() - t0 < secs * 1000) bad = bad + b[0][0];
+        // in user mode nearly all the time: the clock only now and then
+        while (__time() - t0 < secs * 1000) { i = 0; while (i < 1000000) { bad = bad + b[0][0]; ++i; } }
     }
     i = 0;
     while (i < mb) {
@@ -119,63 +124,73 @@ const check = (ok, what, detail) => {
 const back = t => /(^|\n)c4ix:[^\n]*\$/.test(t);
 const prompt = from => back(text(from));
 const type = s => typeBytes(vm, new TextEncoder().encode(s + '\n'));
-const run = (c, budget = 20000) => { const n0 = out.length; type(c); until(() => prompt(n0), budget); return text(n0); };
+// a command, and what it printed up to the prompt after it: after its own
+// echo, since with two CPUs the last command's prompt can come after it
+const run = (c, budget = 20000) => {
+  const n0 = out.length;
+  type(c);
+  const after = () => { const t = text(n0), i = t.indexOf(c); return i >= 0 && back(t.slice(i + c.length)); };
+  until(after, budget);
+  return text(n0);
+};
+// ... and one whose own last line RE says it is done (on two CPUs the
+// prompts of the commands before it can come after its echo)
+const runFor = (c, re, budget) => { const n0 = out.length; type(c); until(() => re.test(text(n0)), budget); until(() => prompt(n0), 2000); return text(n0); };
 // lines of the kernel's log about swap: [task, name, address, KB, out | back in]
 const swapLines = t => [...t.matchAll(/swap: (\d+) KB of task (\d+) \(([^)]*)\) at (0x[0-9a-f]+) (out|back in)/g)]
   .map(m => ({ kb: Number(m[1]), task: m[2], name: m[3], va: m[4], dir: m[5] }));
 
 until(() => text().includes('c4ix:/$'), 3000);
 run('wait 4', 40000);
-let t = run('cc -l c4ix -o /tmp/swaptest.c4r swaptest.c', 40000);
-check(back(t) && !/error/i.test(t), 'swaptest.c compiles inside C4IX', t);
+let t = runFor('cc -l c4ix -o /tmp/swaptest.c4r swaptest.c', /c4rlink: wrote|error|did not compile/, 400000);
+check(back(t) && /c4rlink: wrote/.test(t) && !/error|did not compile/i.test(t), 'swaptest.c compiles inside C4IX', t);
 t = run('dmesg');
 check(/\] swap: the host keeps up to \d+ MB/.test(t), 'the kernel found the host\'s swap', t);
-t = run('/tmp/swaptest.c4r probe', 40000);
+t = runFor('/tmp/swaptest.c4r probe', /probe: \d+ MB|cannot run/, 40000);
 const free = Number((/probe: (\d+) MB/.exec(t) || [])[1] || 0);
-// (with two CPUs both holders spin, and the hog wants nine tenths: more
-// than the one not running at that moment can give it)
+// (with two CPUs the first holder spins, and the hog wants nine tenths:
+// more than the sleeper can give it)
 HOLD = Math.floor(free / 3); HOG = Math.floor(free * (CPUS > 1 ? 9 : 6) / 10);
 check(free >= 6, `a probe finds ${free} MB free`, t);
 
 // two holders, in the background, each until it has its memory
 const h0 = out.length;
-type(`/tmp/swaptest.c4r ${CPUS > 1 ? 'spin' : 'hold'} ${HOLD} 40 &`);
+type(`/tmp/swaptest.c4r ${CPUS > 1 ? 'spin' : 'hold'} ${HOLD} 300 &`);
 until(() => /(hold|spin) \d+: \d+ MB filled/.test(text(h0)), 20000);
 until(() => prompt(h0), 2000);
 const h1 = out.length;
-type(`/tmp/swaptest.c4r ${CPUS > 1 ? 'spin' : 'hold'} ${HOLD} 40 &`);
+type(`/tmp/swaptest.c4r hold ${HOLD} 300 &`);
 until(() => /(hold|spin) \d+: \d+ MB filled|out of memory/.test(text(h1)), 20000);
 until(() => prompt(h1), 2000);
 check(/(hold|spin) \d+: \d+ MB filled/.test(text(h0)) && /(hold|spin) \d+: \d+ MB filled/.test(text(h1)),
   `two holders have ${HOLD} MB each`, text(h0));
 
 // the hog: more than is left
-t = run(`/tmp/swaptest.c4r hog ${HOG}`, 60000);
+t = runFor(`/tmp/swaptest.c4r hog ${HOG}`, /hog \d+: \d+ MB (intact|corrupted)|out of memory|corrupted/, 60000);
 check(new RegExp(`hog \\d+: ${HOG} MB intact`).test(t), `the hog has ${HOG} MB of a ${MB} MB machine, intact`, t);
 
-// a holder's block put out while the hog ran: the kernel's view of it is
-// the host's copy (c4m.js kld32 through the window, kswap), the words as
-// the holder wrote them -- block i of a holder is i MB past its first
-// (user addresses are handed out in order), its words seed + i + j * 7
+// a page of a holder's put out while the hog ran: the kernel's view of it
+// is the host's copy (c4m.js kld32 through the window, kswap), the words
+// as the holder wrote them -- block i of a holder is i MB past its first
+// (user addresses are handed out in order), word j of it seed + i + j * 7
 const firsts = [...text(h0).matchAll(/(?:hold|spin) (\d+): \d+ MB filled, the first at (0x[0-9a-f]+)/g)].map(m => ({ task: m[1], va: parseInt(m[2], 16) }));
-const now = swapLines(run('dmesg'));
 let seen = null;
 for (const f of firsts) {
-  for (const l of now.filter(x => x.task === f.task && x.dir === 'out')) {
-    const va = parseInt(l.va, 16), i = (va - f.va) / 0x100000;
-    const back = now.some(x => x.task === f.task && x.dir === 'back in' && parseInt(x.va, 16) >= va && parseInt(x.va, 16) < va + l.kb * 1024);
-    if (Number.isInteger(i) && i >= 0 && i < HOLD && !back && vm.kswap(va) >= 0) { seen = { task: f.task, va, i }; break; }
+  for (let i = 0; i < HOLD && !seen; i++) {
+    for (let p = f.va + i * 0x100000; p < f.va + (i + 1) * 0x100000; p += 4096) {
+      if (vm.kswap(p) >= 0) { seen = { task: f.task, block: f.va + i * 0x100000, p, i }; break; }
+    }
   }
   if (seen) break;
 }
 if (seen) {
-  const seed = (Math.imul(Number(seen.task), 1000003) + seen.i) | 0;
-  const ok = [0, 1, 1000, 262143].every(j => vm.kld32(seen.va + 4 * j) === ((seed + j * 7) | 0));
-  check(ok, `the kernel reads holder ${seen.task}'s block ${seen.i}, which is out, from the host's copy`);
-} else check(false, 'a holder\'s block is out while the hog runs', now.map(x => JSON.stringify(x)).join('\n'));
+  const seed = (Math.imul(Number(seen.task), 1000003) + seen.i) | 0, j0 = (seen.p - seen.block) / 4;
+  const ok = [0, 1, 500, 1023].every(j => vm.kld32(seen.p + 4 * j) === ((seed + (j0 + j) * 7) | 0));
+  check(ok, `the kernel reads holder ${seen.task}'s page at 0x${seen.p.toString(16)}, which is out, from the host's copy`);
+} else check(false, 'a page of a holder\'s is out after the hog has run', swapLines(run('dmesg')).map(x => JSON.stringify(x)).join('\n'));
 
 // the holders wake, touch their blocks, and find them as they left them
-until(() => (text(h0).match(/(hold|spin) \d+: \d+ MB (intact|corrupted)|corrupted/g) || []).length >= 2, 60000);
+until(() => (text(h0).match(/(hold|spin) \d+: \d+ MB (intact|corrupted)|corrupted/g) || []).length >= 2, 200000);
 const held = text(h0);
 check((held.match(/(hold|spin) \d+: \d+ MB intact/g) || []).length === 2 && !/corrupted/.test(held),
   'both holders\' memory came back from swap intact', held);
@@ -192,8 +207,16 @@ if (process.env.STAGE !== '8') check(biggest > 0 && biggest <= 64, `pages come b
 check(!/page fault|panic|nothing is at/.test(text()), 'no fault, no panic', text());
 // what the host still keeps is some other task's idle block (the shell's,
 // say): the programs have all gone, and their pages with them
-if (CPUS > 1) check(/swap: \d+ KB of task \d+ \(swaptest\.c4r\) at 0x[0-9a-f]+ out, the CPU running it told to forget them first \(an IPI\)/.test(t),
-  'a page went from a task another CPU was running, which forgot it first (an IPI)', t);
+// The CPU is sent an IPI if it is in user mode then; if a tick has it
+// waiting for the kernel lock the swapping CPU holds (which it holds
+// while it looks for pages nobody has used), it forgets them on its way
+// back instead. Which one is the interleaving's: either is the shootdown.
+if (CPUS > 1) {
+  const ipi = /swap: \d+ KB of task \d+ \(swaptest\.c4r\) at 0x[0-9a-f]+ out, the CPU running it told to forget them first \(an IPI\)/.test(t);
+  const later = /swap: \d+ KB of task \d+ \(swaptest\.c4r\) at 0x[0-9a-f]+ out, the CPU running it, in the kernel, told to forget them on its way back/.test(t);
+  check(ipi || later, `a page went from a task another CPU was running, which forgot it first (${[ipi && 'an IPI', later && 'on its way back'].filter(Boolean).join(', ')})`,
+    t.split('\n').filter(l => /swap: .* out/.test(l)).join('\n'));
+}
 const kept = vm.dev.swapPages.size;
 const others = lines.filter(l => l.name !== 'swaptest.c4r' && l.dir === 'out').reduce((n, l) => n + l.kb / 4, 0);
 check(kept <= others, `the host keeps ${kept} pages, none of the programs' (others put out: ${others})`,

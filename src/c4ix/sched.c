@@ -683,6 +683,9 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     // handler exactly where it was, and the interrupt stays disabled
     // (c4m's own cycle path clears the interval) until the outer
     // handler re-arms it on the way out.
+    // A shootdown another CPU is waiting on (mmu.c): before anything that
+    // might wait for the kernel lock, which that CPU holds
+    if (mmu_on && smp_ncpu > 1) mmu_trap_in();
     if (sched_intrap) return;
     // Claim the handler BEFORE anything else, including the mask
     // below. Neither the syscall gateway nor __c4_trap disables the
@@ -719,6 +722,7 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
             if ((me->uacc | me->kacc) & ACCT_FOLD_AT) acct_fold(me);
             mode = C4IX_MODE_PROTECTED;
             interval = (sched_interval && sched_lockdepth == 0) ? sched_interval : 0;
+            mmu_trap_out(me);
             sched_intrap = 0;
             return;
         }
@@ -944,6 +948,7 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
         bkl_drop();
     }
 
+    if (mmu_on && smp_ncpu > 1) mmu_trap_out(sched_cur);
     // The flag stays set for the WHOLE handler, not just the service
     // call: everything below it -- task_release, the slab allocator,
     // any kprintf -- takes sched_lock, and an unlock outside the flag

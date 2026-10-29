@@ -354,6 +354,10 @@ const inTree = all => {
 // It starts with only the root open: the root's folders, nothing deeper
 check(!!inTree(find('usr')) && !!inTree(find('bin')) && !inTree(find('src')) && !inTree(find('docs')),
   'the tree starts with only the root open', screen());
+{
+  const ys = ['bin', 'build', 'home', 'tmp', 'usr'].map(n => inTree(find(n))?.y ?? -1);
+  check(ys.every((y, i) => y >= 0 && (i === 0 || y > ys[i - 1])), "and lists the root's folders by name", ys.join(' '));
+}
 // Into a deep folder through the list: the folders above it open, and
 // stay open after, which makes the tree taller and wider than its pane
 {

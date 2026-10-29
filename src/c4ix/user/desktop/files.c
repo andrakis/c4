@@ -19,7 +19,8 @@
 // to drag, as every bar on the desktop has: ui_scroll_drag) and the wheel. It follows the selection only when that moves,
 // not at every redraw, or the bar could never leave it. A folder with
 // folders in it has a +/- box: click it, double-click the row, or use
-// Left/Right or -/+ to collapse and expand. The tree starts collapsed but
+// Left/Right or -/+ to collapse and expand. Each folder's folders are in
+// name order, whatever order the list is in. The tree starts collapsed but
 // for the root, so it shows the root's folders and nothing deeper; a
 // folder opened stays open through a reload (by the hash of its path),
 // one new to the tree comes in collapsed, and the folders above the one
@@ -280,26 +281,33 @@ static int del_tree(char *dir) {
     return bad;
 }
 
-// Every folder, depth first, for the tree. DIR is copied in first thing,
-// so a caller may pass a buffer the recursion will reuse.
+// Every folder, depth first, for the tree, each folder's own by name (as
+// namecmp orders them). DIR is copied in first thing, so a caller may pass
+// a buffer the recursion will reuse. A folder's folders are taken smallest
+// first, a pass over it for each -- the next name after the last one
+// taken -- rather than with a list of them at every level of the recursion.
 static void tree_walk(struct files *f, char *dir, int depth) {
-    int i, r, me;
-    char nm[NAMEW];
+    int i, r, me, took, found;
+    char nm[NAMEW], last[NAMEW], next[NAMEW];
     if (f->nt >= MAXT || depth > MAXDEPTH) return;
     me = f->nt;
     ui_cpy(f->tpath + me * TPW, dir);
     f->tdepth[me] = depth;
     f->tflag[me] = 0;
     ++f->nt;
-    i = 0;
-    while (1) {
-        r = ureaddir(f->tpath + me * TPW, i, nm);
-        if (r < 0) break;
-        if (r == 1 && f->nt < MAXT) {
-            join(tbuf, f->tpath + me * TPW, nm);
-            tree_walk(f, tbuf, depth + 1);
+    took = 0;
+    while (f->nt < MAXT) {
+        found = 0;
+        i = 0;
+        while ((r = ureaddir(f->tpath + me * TPW, i, nm)) >= 0) {
+            if (r == 1 && (!took || namecmp(nm, last) > 0) && (!found || namecmp(nm, next) < 0)) { ui_cpy(next, nm); found = 1; }
+            ++i;
         }
-        ++i;
+        if (!found) break;
+        ui_cpy(last, next);
+        took = 1;
+        join(tbuf, f->tpath + me * TPW, next);
+        tree_walk(f, tbuf, depth + 1);
     }
     // a box only where a folder below was taken: not past MAXDEPTH or MAXT
     if (f->nt > me + 1) f->tflag[me] = T_KIDS;

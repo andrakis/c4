@@ -843,3 +843,7 @@ kit, `src/winkit/` (winkit.h has the API), and rebuilt the desktop on it.
 - [x] web-ix-files.mjs, the browser check over CDP: the uploads put in the
       page's store, /home listing them in Files, the headers and View >
       Sort; the uploads are taken out of the store again after.
+- [x] **The folder tree** starts with only the root open (its own folders,
+      nothing deeper), keeps open what was opened through a reload, brings
+      in a folder new to it collapsed, and lists each folder's folders by
+      name (`tree_walk`, `tree_load`).

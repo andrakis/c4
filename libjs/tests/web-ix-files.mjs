@@ -84,6 +84,10 @@ try {
   ok('the root lists /home', !!await inList('home'), JSON.stringify(await find('home')));
   // the tree starts with only the root open: /usr, not /usr/src or /usr/docs
   ok('the tree starts with only the root open', (await find('usr')).length > 0 && !(await find('src')).length && !(await find('docs')).length);
+  // ... with its folders by name: the tree's string of each is the leftmost
+  const treeYs = [];
+  for (const n of ['bin', 'build', 'home', 'tmp', 'usr']) treeYs.push(((await find(n)).sort((p, q) => p.x - q.x)[0] || { y: -1 }).y);
+  ok("the tree lists the root's folders by name", treeYs.every((y, i) => y >= 0 && (i === 0 || y > treeYs[i - 1])), treeYs.join(' '));
   await shot('root');
   await clickT(await inList('home'), true);
   ok('/home lists the uploads, by name', await shownHas('Files - /home') && await orderIs('alpha.txt bravo.dat charlie.c'), await order());

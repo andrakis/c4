@@ -270,6 +270,7 @@ export class GuiDevice {
     if (a.dmaCtx || !this.ringSpace) { this.blit8(p); return; }
     if (!this.ringDma) this.ringDma = new DmaSpace(a);
     this.ringDma.ptbr = this.ringSpace;
+    this.ringDma.udir = a.udir;
     a.dmaCtx = this.ringDma;
     try { this.blit8(p); }
     catch (e) { if (e !== FAULT) throw e; this.lostCommands++; }

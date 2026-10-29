@@ -120,6 +120,8 @@ void klock_drop(int *lk) {
 // a program's malloc and free reach without it (sched_trap's light path).
 static int bkl[2];
 static void bkl_take() { klock_take(bkl); }
+// Whether this CPU holds the kernel lock: the MMU swaps only then (mmu.c)
+int sched_has_bkl() { return smp_ncpu < 2 || bkl[0] == cpu_self->id + 1; }
 static void bkl_drop() { klock_drop(bkl); }
 
 // Whether N may run on CPU K by its mask (pin, SYS_AFFINITY). A mask
@@ -663,7 +665,7 @@ static int sched_light(int trap, int param) {
     struct task *t;
     t = sched_cur;
     return trap == C4IX_TRAP_PM && (param == C4IX_OP_MALC || param == C4IX_OP_FREE) &&
-        t && t->state == TS_RUNNING && t->privs == PRIV_USER && !t->ck_sigpend &&
+        t && t->state == TS_RUNNING && t->privs == PRIV_USER && !t->ck_sigpend && !mmu_short &&
         !sched_dying && !sched_resched && !sched_reload && !cpu_self->prev &&
         (!sched_interval || acct_in - sched_slice0 < sched_turn(t));
 }

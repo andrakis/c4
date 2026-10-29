@@ -807,6 +807,9 @@ enum {
 // address plus this, and kernel mode reaches it at either (libjs's user
 // window). Memory larger than it keeps the identity map.
 enum { MMU_UWIN_BASE = 0x10000000 };
+// A page table entry's bit the host sets in the kernel's map (UDIR) on a
+// page the kernel or a device has used: it never goes to swap
+enum { PTE_PIN = 0x200 };
 // A page; a CPU's stack for the traps that come from user mode
 enum { MMU_PAGE = 4096, MMU_KSTACK = 262144 };
 // A page table entry: the frame's address and these
@@ -821,8 +824,10 @@ extern int mmu_uoff;                   // the user window's base, or 0: user add
 int  mmu_uva(int p);                   // a user region's memory as user mode sees it (else P)
 int  mmu_phys(int p);                  // ... and as it is in memory
 void mmu_init();                       // at boot: tables, and on
+int  sched_has_bkl();                  // this CPU holds the kernel lock (sched.c)
 void mmu_cpu(int k);                   // another CPU, as it starts
-int  mmu_map(int *dir, int va, int n, int flags);
+int  mmu_map(int *dir, int va, int pa, int n, int flags);
+extern int mmu_short;                  // memory is short: allocation takes the kernel lock (sched_light)
 void mmu_fault(struct task *t, int va);   // TRAP_SEGV from a user task: kill it
 // What user mode may use of page 0 (MMU_IOPM)
 enum { IOPM_ROM = 1, IOPM_DEV = 2, IOPM_GUI = 4, IOPM_SND = 8, IOPM_LOCAL = 16, IOPM_LOCALW = 32 };

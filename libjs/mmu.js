@@ -17,7 +17,7 @@
 // A fault is precise: the registers the trap saves are the faulting
 // instruction's, before it changed any, so the instruction can run again.
 
-import { TLEV_ADDR } from '../src/c4bb/sim/arena.js';
+import { TLEV_ADDR, kernelPhys } from '../src/c4bb/sim/arena.js';
 import { OP, STOP, TRAP, CPU_HALT_ADDR, LOCAL_BASE, LOCAL_END, C4I_MMU, MMU_BASE, MMU_END,
          hasOperand, isRom, isPlainOp } from './c4m.js';
 
@@ -65,7 +65,7 @@ function pteOf(i32, size, ptbr, va) {
 // run of memory, and the physical address of addr returned. Else -1, and
 // dmaBad says where it went wrong and dmaBadPte what the entry there was.
 let dmaBad = 0, dmaBadPte = 0;
-export function dmaPhys(i32, size, ptbr, addr, len, write) {
+export function dmaPhys(i32, size, ptbr, addr, len, write, udir = 0) {
   addr = addr >>> 0;
   if (len < 1) len = 1;
   const end = addr + len;
@@ -79,6 +79,8 @@ export function dmaPhys(i32, size, ptbr, addr, len, write) {
     }
     if (pa < 0) pa = f | (addr & 4095);
     next = f + 4096;
+    // a page a device has used stays in memory (C4IX keeps it out of swap)
+    if (udir) kernelPhys(i32, size, udir, va);
   }
   return pa;
 }
@@ -88,10 +90,10 @@ const dmaKind = write => (write ? FK.WRITE : FK.READ) | FK.DMA | (dmaBadPte & PT
 // the one at it (par.js serves those on CPU 0): the asker's PTBR. A
 // refusal is kept for the asker to raise.
 export class DmaSpace {
-  constructor(arena) { this.arena = arena; this.ptbr = 0; this.faddr = -1; this.finfo = 0; }
+  constructor(arena) { this.arena = arena; this.ptbr = 0; this.udir = 0; this.faddr = -1; this.finfo = 0; }
   dmaCheck(addr, len, write) {
     const a = this.arena;
-    const pa = dmaPhys(a.i32, a.size, this.ptbr, addr, len, write);
+    const pa = dmaPhys(a.i32, a.size, this.ptbr, addr, len, write, this.udir);
     if (pa >= 0) return pa;
     this.faddr = dmaBad; this.finfo = dmaKind(write);
     throw FAULT;
@@ -117,6 +119,7 @@ export class Mmu {
   reset() {
     this.on = false;
     this.m.uwin = 0; this.m.udir = 0;
+    if (this.m.arena) { this.m.arena.uwin = 0; this.m.arena.udir = 0; }
     this.general = false;          // a window has been other than identity: runUser from now on
     this.ptbr = 0;
     this.ksp = 0;
@@ -175,7 +178,7 @@ export class Mmu {
       // the user window: where user addresses start (c4m.js kpa). The
       // arena's devices reach it as the kernel does.
       case MMU.UWIN: this.m.uwin = v & -4096; this.m.arena.uwin = this.m.uwin; return;
-      case MMU.UDIR: this.m.udir = v & -4096; return;
+      case MMU.UDIR: this.m.udir = v & -4096; this.m.arena.udir = this.m.udir; return;
     }
   }
 
@@ -295,7 +298,7 @@ export class Mmu {
   // device is a way round the task's page tables (docs/c4ix-mmu.md 11).
   dmaCheck(addr, len, write) {
     const a = this.m.arena;
-    const pa = dmaPhys(a.i32, a.size, this.ptbr, addr, len, write);
+    const pa = dmaPhys(a.i32, a.size, this.ptbr, addr, len, write, this.m.udir);
     if (pa >= 0) return pa;
     this.refuse(dmaBad, dmaKind(write));
     throw FAULT;

@@ -23,6 +23,30 @@ export const OPNAMES_ROM = 0x200;
 export const MEM_BASE = 0x1000;
 export const ARGS_RESERVE = 4096;
 
+// The word of the page table entry for va in the space whose directory
+// is at dir (two levels of 1,024 words, libjs/mmu.js), or -1. PIN: the
+// bit the host sets there on a page the kernel or a device has used,
+// which the kernel then never puts out to swap (C4IX's PTE_PIN).
+export const PTE_PIN = 0x200;
+export function pteWord(i32, size, dir, va) {
+  if (!dir) return -1;
+  const pde = i32[(dir >>> 2) + (va >>> 22)] | 0;
+  if (!(pde & 1)) return -1;
+  const pt = pde & -4096;
+  if ((pt >>> 0) + 4096 > size) return -1;
+  return (pt >>> 2) + ((va >>> 12) & 1023);
+}
+// The memory at user address x by the kernel's map (UDIR), the page
+// pinned; -1 if it maps nothing there
+export function kernelPhys(i32, size, udir, x) {
+  const w = pteWord(i32, size, udir, x);
+  if (w < 0) return -1;
+  const pte = i32[w] | 0;
+  if (!(pte & 1) || ((pte & -4096) >>> 0) + 4096 > size) return -1;
+  if (!(pte & PTE_PIN)) i32[w] = pte | PTE_PIN;
+  return (pte & -4096) | (x & 4095);
+}
+
 export class Arena {
   // A size, or a buffer to wrap: a SharedArrayBuffer lets a host on another
   // thread read and write the mailbox rings while the machine runs.
@@ -41,8 +65,10 @@ export class Arena {
     // store is at the device (libjs/mmu.js), which checks (dmaCheck)
     this.dmaCtx = null;
     // The user window (libjs/c4m.js kpa): kernel mode hands a device a
-    // user task's address as readily as its own. 0: none.
+    // user task's address as readily as its own. 0: none. udir: the
+    // kernel's map of user addresses, 0 for none (an offset, then).
     this.uwin = 0;
+    this.udir = 0;
   }
 
   // ---- what devices do at an address the guest gave them ----
@@ -59,6 +85,7 @@ export class Arena {
     addr = addr >>> 0;
     if (this.dmaCtx) return this.dmaCtx.dmaCheck(addr, len, write);
     if (this.uwin && addr >= this.uwin) {
+      if (this.udir) return kernelPhys(this.i32, this.size, this.udir, addr);
       const off = addr - this.uwin;
       return off < this.size ? off : -1;
     }

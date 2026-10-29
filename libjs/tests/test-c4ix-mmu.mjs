@@ -182,12 +182,13 @@ if (stage >= 5) {
   fault('disk 0x2000', /page fault: a device's read of 0x00002000 \(the kernel's image, not mapped\).*killed/);
 }
 if (stage >= 6 && m) {
-  // user addresses are not physical: the victim's word is at its page's
-  // address plus 256 MB, and where it is in memory is nobody's to write
+  // user addresses are not physical: the victim's word is in the window
+  // from 256 MB, and memory itself -- the same offset below it, whoever's
+  // that is -- is nobody's to write from user mode
   const va = parseInt(m[2], 16), pa = va - 0x10000000;
   check(va >= 0x10000000, `the victim's word is at a user address (${m[2]}), not a physical one`);
   const hex = n => n.toString(16);
-  fault(`poke 0x${hex(pa)}`, new RegExp(`page fault: write to 0x0*${hex(pa)} \\(task wild\\.c4r, not mapped\\).*killed`));
+  fault(`poke 0x${hex(pa)}`, new RegExp(`page fault: write to 0x0*${hex(pa)} \\([^)]*, not mapped\\).*killed`));
 }
 t = run('echo the kernel is fine');
 check(/^the kernel is fine$/m.test(t), 'the kernel carries on', t);

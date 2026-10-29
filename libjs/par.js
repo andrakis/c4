@@ -317,6 +317,7 @@ export class ParHost extends ParCore {
         if (ptbr) {
           if (!this.dma) this.dma = new DmaSpace(ar);
           this.dma.ptbr = ptbr;
+          this.dma.udir = ctl[b + K.UDIR];
           ar.dmaCtx = this.dma;
         }
         try {

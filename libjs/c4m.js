@@ -18,7 +18,7 @@ import {
   OPNAMES, UART_TX, TIME_MS, USLP_US, DISK_CLOSE,
   C4I_C4M, C4I_HRT, C4I_SIG, C4I_FLT, C4I_PROT, C4I_TRAPH, C4I_PIT, C4I_MBOX, C4I_DRV,
 } from '../src/c4bb/sim/devices.js';
-import { TLEV_ADDR, OPNAMES_ROM } from '../src/c4bb/sim/arena.js';
+import { TLEV_ADDR, OPNAMES_ROM, kernelPhys } from '../src/c4bb/sim/arena.js';
 import { fpu, C4I_FPU } from '../src/c4bb/sim/fpu.js';
 import { format } from './printf.js';
 
@@ -238,27 +238,32 @@ export class Machine {
 
   // ---------------------------------------------------------------
   // The user window (docs/c4ix-mmu.md 11). Under C4IX's MMU a user task's
-  // memory is at its pages' physical addresses plus uwin, mapped so in
-  // its page tables; kernel mode runs untranslated, and reaches a user
-  // address through the window: the page udir maps there, if it does,
-  // else the page uwin below it -- where the page was put, and stays
-  // unless swap moved it. So the kernel follows a pointer a task gave it
-  // as it follows its own. kpa: the physical address, or -1 past the end.
+  // memory is at user addresses from uwin, mapped in its page tables;
+  // kernel mode runs untranslated, and reaches a user address through the
+  // window: where udir, the kernel's map of all of them, says it is, or,
+  // with no map, the page uwin below it. So the kernel follows a pointer a
+  // task gave it as it follows its own. kpa: the physical address, or -1.
+  //
+  // With the kernel's map (UDIR: C4IX's map of every user address there
+  // is, swap having made them no longer an offset) it is the only word,
+  // and a page used through it is pinned (PTE_PIN): the kernel keeps it
+  // out of swap. An address it does not map is a bug in the kernel, which
+  // halts the machine there rather than read or write anything else.
   kpa(x) {
     x = x >>> 0;
-    const off = x - this.uwin;
     if (this.udir) {
-      const i32 = this.i32, size = this.u8.length;
-      const pde = i32[(this.udir >>> 2) + (x >>> 22)] | 0;
-      if (pde & 1) {
-        const pt = pde & -4096;
-        if ((pt >>> 0) + 4096 <= size) {
-          const pte = i32[(pt >>> 2) + ((x >>> 12) & 1023)] | 0;
-          if ((pte & 1) && ((pte & -4096) >>> 0) + 4096 <= size) return (pte & -4096) | (x & 4095);
-        }
-      }
+      const p = kernelPhys(this.i32, this.u8.length, this.udir, x);
+      if (p < 0) this.kmiss(x);
+      return p;
     }
+    const off = x - this.uwin;
     return off < this.u8.length ? off : -1;
+  }
+  kmiss(x) {
+    if (this.dev.halted) return;
+    const hex = n => '0x' + ((n >>> 0).toString(16).toUpperCase().padStart(8, '0'));
+    this.emitString(`libjs: the kernel used user address ${hex(x)}, which nothing is at (pc ${hex(this.pc)}). Halting.\n`);
+    this.halt(-105);
   }
   // Any address, as kernel mode reaches it: its own, or through the window
   kaddr(x) { return this.uwin && (x >>> 0) >= this.uwin ? this.kpa(x) : x >>> 0; }

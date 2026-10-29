@@ -12,15 +12,19 @@
 // says what a page fault was.
 //
 // Each user task has an address space of its own: a page directory that
-// maps its pages and the shared libraries' code, and nothing else. A
-// page is mapped at its physical address plus mmu_uoff (256 MB): user
-// addresses are not physical ones, and none of them is the kernel's.
-// Kernel mode, untranslated, reaches a user address through libjs's user
-// window (c4m.js kpa) as readily as its own, so a pointer a task passes
-// in a syscall is one the kernel can follow once it has checked it
-// (uaccess) against the task's own tables; what the kernel hands user
-// mode is the window's address (mmu_uva). Memory larger than the window's
-// base keeps the identity map (mmu_uoff 0).
+// maps its pages and the shared libraries' code, and nothing else. User
+// addresses are a window of 256 MB from mmu_uoff, handed out by an
+// allocator of their own (mmu_valloc), so they are not physical ones,
+// none of them is the kernel's, and memory can move under them: swap
+// (below) puts a task's idle blocks on drive 1 and brings them back
+// wherever there is room. The kernel's map (mmu_kdir) maps every user
+// address there is to its memory; kernel mode, untranslated, reaches a
+// user address through it (libjs's user window, c4m.js kpa) as readily
+// as its own, so a pointer a task passes in a syscall is one the kernel
+// can follow once it has checked it (uaccess) against the task's own
+// tables. What the kernel hands user mode is the user address of its
+// memory (mmu_uva). Memory larger than the window's base keeps the
+// identity map (mmu_uoff 0), and no swap.
 //
 // Without the MMU none of this runs: umalloc and ufree are malloc and
 // free, and every task's memory is the heap's, as it always was.
@@ -29,7 +33,16 @@
 #include "c4ix.h"
 
 int mmu_on;                    // user mode is translated
-int mmu_uoff;                  // where user addresses start: a page's physical address plus this
+int mmu_uoff;                  // where user addresses start
+int mmu_short;                 // memory is short: allocations take the kernel lock (sched_light)
+static int *mmu_kdir;          // the kernel's map of every user address (UDIR)
+static int *mmu_vpg;           // a user page's region, by its page in the window
+static int *mmu_vbits;         // the window's pages handed out, a bit each
+static int mmu_vnext;          // where the next search for free ones starts
+static int mmu_gen;            // bumped when a page leaves a space no CPU is running
+static int mmu_seen[CPU_MAX];  // ... as each CPU last loaded its space
+static int mmu_selfok;         // swap: the asking task's own blocks may go too (a page fault's, not a syscall's)
+enum { MMU_WINPAGES = 65536 }; // the window: 256 MB
 static int *mmu_dir;           // the directory the kernel's own tasks run in: nothing mapped
 static int mmu_memsize;        // the arena, bytes
 static int mmu_npages;
@@ -82,29 +95,57 @@ static int *mmu_pte(int *dir, int va, int make) {
     return pt + ((va >> 12) & 1023);
 }
 
-// Map N bytes of memory at PA, page by page, at their user addresses
-// (PA + mmu_uoff), with FLAGS (0 unmaps). This CPU forgets what it had of
-// them; another CPU running the same space is not told (docs/c4ix-mmu.md
-// 10).
-int mmu_map(int *dir, int pa, int n, int flags) {
+// Map N bytes at user address VA, page by page, to the memory at PA,
+// with FLAGS (0 unmaps). This CPU forgets what it had of them; another
+// CPU that has the space loaded but is not running it forgets them when
+// it next loads it (mmu_gen, mmu_switch); one running it is never asked
+// to (docs/c4ix-mmu.md 10).
+int mmu_map(int *dir, int va, int pa, int n, int flags) {
     int *e;
-    int end;
-    end = pa + n;
+    int k, np;
+    np = (n + (va & (MMU_PAGE - 1)) + MMU_PAGE - 1) / MMU_PAGE;
+    va = va & ~(MMU_PAGE - 1);
     pa = pa & ~(MMU_PAGE - 1);
-    while (pa < end) {
-        if (!(e = mmu_pte(dir, pa + mmu_uoff, flags != 0))) { if (flags) return 0; }
+    k = 0;
+    while (k < np) {
+        if (!(e = mmu_pte(dir, va, flags != 0))) { if (flags) return 0; }
         else {
             *e = flags ? (pa | flags) : 0;
-            *(int *)MMU_INVLPG = pa + mmu_uoff;
+            *(int *)MMU_INVLPG = va;
         }
+        va = va + MMU_PAGE;
         pa = pa + MMU_PAGE;
+        ++k;
     }
     return 1;
 }
 
-// A user address as memory has it, and memory as user mode sees it
-int mmu_phys(int p) {
-    return mmu_uoff && p >= mmu_uoff ? p - mmu_uoff : p;
+// ---- user addresses ----
+//
+// The window's pages, a bit each; its first page is never handed out, so
+// that no user address is the window's base
+static int mmu_valloc(int np) {
+    int i, run, start, n;
+    i = mmu_vnext; run = 0; start = i; n = 0;
+    while (n < MMU_WINPAGES + np) {
+        if (i >= MMU_WINPAGES) { i = 0; run = 0; start = 0; }
+        if (mmu_vbits[i >> 5] & (1 << (i & 31))) { run = 0; start = i + 1; }
+        else if (++run == np) {
+            i = start;
+            while (i < start + np) { mmu_vbits[i >> 5] = mmu_vbits[i >> 5] | (1 << (i & 31)); ++i; }
+            mmu_vnext = start + np;
+            return mmu_uoff + start * MMU_PAGE;
+        }
+        ++i;
+        ++n;
+    }
+    return 0;
+}
+
+static void mmu_vfree(int va, int np) {
+    int i;
+    i = (va - mmu_uoff) >> 12;
+    while (np > 0) { mmu_vbits[i >> 5] = mmu_vbits[i >> 5] & ~(1 << (i & 31)); ++i; --np; }
 }
 
 // ---- user memory ----
@@ -139,6 +180,9 @@ struct urgn {
     int *dir;                  // the space it is mapped in: its owner's, or a vfork parent's
     int guard;                 // its first page is a stack's guard: never mapped
     int code;                  // an image's code: read-only, but a C4KE program's (mmu_fault)
+    int va;                    // its user address (base's, with no window)
+    int swapped;               // on drive 1, not in memory: base and raw are 0
+    int swapn;                 // ... its file's number
     struct urgn *next;         // the owner's regions
     // UR_SLAB
     int size;                  // its blocks' size
@@ -158,16 +202,44 @@ static void mmu_setpg(struct urgn *r, int base, int n, struct urgn *v) {
     while (k < n) { mmu_pg[(base >> 12) + k] = (int)v; ++k; }
 }
 
+static void mmu_setvpg(int va, int n, struct urgn *v) {
+    int k;
+    k = 0;
+    while (k < n) { mmu_vpg[((va - mmu_uoff) >> 12) + k] = (int)v; ++k; }
+}
+
 // The region at P (in memory, or at its user address), or 0
 static struct urgn *mmu_rgn(int p) {
-    p = mmu_phys(p);
+    if (mmu_uoff && p >= mmu_uoff) {
+        if (p - mmu_uoff >= MMU_WINPAGES * MMU_PAGE) return 0;
+        return (struct urgn *)mmu_vpg[(p - mmu_uoff) >> 12];
+    }
     if (p < MMU_PAGE || p >= mmu_memsize) return 0;
     return (struct urgn *)mmu_pg[p >> 12];
 }
 
+// How far into R the address P is, memory's or user mode's
+static int mmu_off(struct urgn *r, int p) {
+    return mmu_uoff && p >= mmu_uoff ? p - r->va : p - r->base;
+}
+
+// A region's memory as user mode sees it, and a user address as memory has it
 int mmu_uva(int p) {
-    if (!mmu_uoff || !p || p >= mmu_uoff || !mmu_rgn(p)) return p;
-    return p + mmu_uoff;
+    struct urgn *r;
+    if (!mmu_uoff || !p || p >= mmu_uoff || !(r = mmu_rgn(p))) return p;
+    return r->va + (p - r->base);
+}
+
+int mmu_phys(int p) {
+    struct urgn *r;
+    if (!mmu_uoff || p < mmu_uoff) return p;
+    if ((r = mmu_rgn(p)) && !r->swapped) return r->base + (p - r->va);
+    return p - mmu_uoff;
+}
+
+// R in the kernel's map, or out of it
+static void mmu_kmap(struct urgn *r, int on) {
+    if (mmu_uoff) mmu_map(mmu_kdir, r->va, r->base, r->npages * MMU_PAGE, on ? PTE_P | PTE_U | PTE_W : 0);
 }
 
 // What a region is called by its users: its base, past its guard page
@@ -185,7 +257,7 @@ static struct task *mmu_root(struct task *t) {
 // is using; a kernel task has none. Made on first use, with the shared
 // libraries' slot pages in it.
 static int mmu_nslotpages;
-static int mmu_slotpages[8];
+static int mmu_slotva[8], mmu_slotpa[8];
 
 static int *mmu_dir_of(struct task *t) {
     int *d;
@@ -195,7 +267,7 @@ static int *mmu_dir_of(struct task *t) {
     if (t->mmdir) return (int *)t->mmdir;
     if (!(d = (int *)mmu_page())) return mmu_dir;
     k = 0;
-    while (k < mmu_nslotpages) { mmu_map(d, mmu_slotpages[k], MMU_PAGE, PTE_P | PTE_U); ++k; }
+    while (k < mmu_nslotpages) { mmu_map(d, mmu_slotva[k], mmu_slotpa[k], MMU_PAGE, PTE_P | PTE_U); ++k; }
     t->mmdir = (int)d;
     return d;
 }
@@ -234,6 +306,11 @@ void mmu_switch(struct task *t) {
     if (!mmu_on || !t || t->privs != PRIV_USER) return;
     d = (int)mmu_dir_of(t);
     if (*(int *)MMU_PTBR != d) *(int *)MMU_PTBR = d;
+    // A page went to swap from a space no CPU was running, perhaps this
+    // one, which this CPU may still hold translations of: the TLB's
+    // shootdown, at the one moment it matters, before the space runs
+    else if (mmu_gen && mmu_seen[cpu_self->id] != mmu_gen) *(int *)MMU_FLUSH = 1;
+    if (mmu_gen) mmu_seen[cpu_self->id] = mmu_gen;
     d = MMU_IOPM_USER | (mmu_root(t)->iopm & IOPM_DEV);
     if (*(int *)MMU_IOPM != d) *(int *)MMU_IOPM = d;
 }
@@ -248,28 +325,40 @@ int mmu_ioperm(struct task *t, int bits) {
     return 0;
 }
 
-// A region of N bytes, unowned and unmapped: the kernel's until adopted
+static int mmu_raw(int np, struct urgn *keep);
+
+// A region of N bytes, unowned and unmapped: the kernel's until adopted.
+// Its user address is its own, in the kernel's map from the start.
 static struct urgn *mmu_region(int n, int kind) {
     struct urgn *r;
     int raw, np;
     np = (n + MMU_PAGE - 1) / MMU_PAGE;
     if (np < 1) np = 1;
     if (!(r = (struct urgn *)sl4b_alloc(mmu_rcache))) return 0;
-    if (!(raw = (int)malloc(np * MMU_PAGE + MMU_PAGE - 1))) { sl4b_free(mmu_rcache, (char *)r); return 0; }
+    if (!(raw = mmu_raw(np, 0))) { sl4b_free(mmu_rcache, (char *)r); return 0; }
     r->kind = kind;
     r->raw = raw;
     r->base = (raw + MMU_PAGE - 1) & ~(MMU_PAGE - 1);
     r->npages = np;
+    r->va = r->base;
     klock_take(mmu_ulock);
+    if (mmu_uoff && !(r->va = mmu_valloc(np))) {
+        klock_drop(mmu_ulock);
+        free((char *)raw);
+        sl4b_free(mmu_rcache, (char *)r);
+        return 0;
+    }
     mmu_setpg(r, r->base, np, r);
+    if (mmu_uoff) mmu_setvpg(r->va, np, r);
     klock_drop(mmu_ulock);
+    mmu_kmap(r, 1);
     return r;
 }
 
 // Map R into its owner's space, or take it out of the space it is in
 static void mmu_rmap(struct urgn *r, int flags) {
     if (flags) r->dir = mmu_dir_of(r->owner);
-    if (r->dir) mmu_map(r->dir, r->base, r->npages * MMU_PAGE, flags);
+    if (r->dir) mmu_map(r->dir, r->va, r->base, r->npages * MMU_PAGE, flags);
     if (!flags) r->dir = 0;
 }
 
@@ -283,8 +372,10 @@ static void mmu_give(struct urgn *r, struct task *t, int flags) {
     mmu_rmap(r, flags);
     // a stack's guard page: below it, not mapped, so running off the end
     // is a fault where it happens, not a write over whatever is below
-    if (r->guard) mmu_map(r->dir, r->base, MMU_PAGE, 0);
+    if (r->guard) mmu_map(r->dir, r->va, r->base, MMU_PAGE, 0);
 }
+
+static void mmu_swapdrop(struct urgn *r);
 
 // Off its owner's list, out of its space, back to the heap
 static void mmu_release(struct urgn *r) {
@@ -302,11 +393,16 @@ static void mmu_release(struct urgn *r) {
     // writing events into memory that is someone else's now
     if (host_has(C4IX_I_GUI)) {
         ring = (int *)C4IX_GUI_RING;
-        if (mmu_phys(*ring) >= r->base && mmu_phys(*ring) < r->base + r->npages * MMU_PAGE) *ring = 0;
+        if (*ring && mmu_rgn(*ring) == r) *ring = 0;
     }
     klock_take(mmu_ulock);
-    if (r->kind != UR_SLAB) mmu_setpg(r, r->base, r->npages, 0);
+    if (r->kind != UR_SLAB) {
+        if (!r->swapped) mmu_setpg(r, r->base, r->npages, 0);
+        if (mmu_uoff) { mmu_setvpg(r->va, r->npages, 0); mmu_vfree(r->va, r->npages); }
+    }
     klock_drop(mmu_ulock);
+    if (r->kind != UR_SLAB && !r->swapped) mmu_kmap(r, 0);
+    if (r->swapped) mmu_swapdrop(r);
     if (r->raw) free((char *)r->raw);
     sl4b_free(mmu_rcache, (char *)r);
 }
@@ -334,8 +430,7 @@ void ufree(int p) {
     struct urgn *r;
     if (!p) return;
     if (!mmu_on) { kmem_free((char *)p); return; }
-    p = mmu_phys(p);
-    if ((r = mmu_rgn(p)) && r->kind == UR_BLOCK && mmu_start(r) == p) {
+    if ((r = mmu_rgn(p)) && r->kind == UR_BLOCK && mmu_off(r, p) == (r->guard ? MMU_PAGE : 0)) {
         if (!r->shared) mmu_release(r);
         return;
     }
@@ -355,15 +450,15 @@ void umem_share(int p) {
 // P is an image's code (mmu_fault)
 static void mmu_code(int p) {
     struct urgn *r;
-    if (p && (r = mmu_rgn(p)) && r->base == mmu_phys(p)) r->code = 1;
+    if (p && (r = mmu_rgn(p)) && !mmu_off(r, p)) r->code = 1;
 }
 
 // Give P, if it is an unowned region, to T, mapped with FLAGS; a shared
 // one is mapped into T's space as it is everyone's
 static void mmu_take(struct task *t, int p, int flags) {
     struct urgn *r;
-    if (!p || !(r = mmu_rgn(p)) || r->kind != UR_BLOCK || mmu_start(r) != mmu_phys(p)) return;
-    if (r->shared) { mmu_map(mmu_dir_of(t), r->base, r->npages * MMU_PAGE, r->flags); return; }
+    if (!p || !(r = mmu_rgn(p)) || r->kind != UR_BLOCK || mmu_off(r, p) != (r->guard ? MMU_PAGE : 0)) return;
+    if (r->shared) { mmu_map(mmu_dir_of(t), r->va, r->base, r->npages * MMU_PAGE, r->flags); return; }
     if (r->owner) return;
     mmu_give(r, t, flags);
 }
@@ -435,6 +530,7 @@ static struct urgn *mmu_newslab(struct task *t, int k) {
     s->kind = UR_SLAB;
     s->heap = 1;
     s->base = c->base + (c->npages - c->left) * MMU_PAGE;
+    s->va = c->va + (s->base - c->base);
     s->npages = 1;
     s->owner = t;
     s->size = 16 << k;
@@ -442,6 +538,7 @@ static struct urgn *mmu_newslab(struct task *t, int k) {
     --c->left;
     klock_take(mmu_ulock);
     mmu_pg[s->base >> 12] = (int)s;
+    if (mmu_uoff) mmu_vpg[(s->va - mmu_uoff) >> 12] = (int)s;
     s->next = (struct urgn *)t->urgns;
     t->urgns = (int)s;
     s->snext = (struct urgn *)t->uslab[k];
@@ -490,11 +587,10 @@ void umem_free(struct task *t, int p) {
     struct urgn *r;
     int i;
     t = mmu_root(t);
-    p = mmu_phys(p);
     if (!p || !(r = mmu_rgn(p)) || r->owner != t) return;
     if (r->kind == UR_SLAB) {
-        i = (p - r->base) / r->size;
-        if (r->base + i * r->size != p) return;
+        i = mmu_off(r, p) / r->size;
+        if (i * r->size != mmu_off(r, p)) return;
         klock_take(mmu_ulock);
         if (r->used[i >> 5] & (1 << (i & 31))) {
             r->used[i >> 5] = r->used[i >> 5] & ~(1 << (i & 31));
@@ -503,7 +599,7 @@ void umem_free(struct task *t, int p) {
         klock_drop(mmu_ulock);
         return;
     }
-    if (r->kind == UR_BLOCK && r->base == p) mmu_release(r);
+    if (r->kind == UR_BLOCK && !mmu_off(r, p)) mmu_release(r);
 }
 
 // T's heap, at its end or its execve (task_drop_image): its blocks, the
@@ -594,11 +690,11 @@ int mmu_user_entry(struct task *t) {
 // ---- the shared libraries' data slots ----
 
 // A new page of slots, into every space there is
-static void mmu_slotall(int page) {
+static void mmu_slotall(int va, int pa) {
     struct task *t;
     t = task_first();
     while (t) {
-        if (t->mmdir) mmu_map((int *)t->mmdir, page, MMU_PAGE, PTE_P | PTE_U);
+        if (t->mmdir) mmu_map((int *)t->mmdir, va, pa, MMU_PAGE, PTE_P | PTE_U);
         t = t->next;
     }
 }
@@ -617,12 +713,16 @@ int mmu_slot() {
         r->flags = PTE_P | PTE_U;
         mmu_slotpage = r->base;
         mmu_nslots = 0;
-        mmu_slotpages[mmu_nslotpages++] = r->base;
-        mmu_slotall(r->base);
+        mmu_slotva[mmu_nslotpages] = r->va;
+        mmu_slotpa[mmu_nslotpages] = r->base;
+        ++mmu_nslotpages;
+        mmu_slotall(r->va, r->base);
     }
     ++mmu_nslots;
     return mmu_slotpage + (mmu_nslots - 1) * sizeof(int);
 }
+
+static int mmu_fetch(struct task *t, int va);
 
 // ---- checking what a task hands the kernel ----
 //
@@ -635,11 +735,12 @@ int uaccess(int p, int n, int w) {
     if (!mmu_on || !(t = sched_current()) || t->privs != PRIV_USER) return 1;
     if (n <= 0) return 1;
     end = p + n;
-    if (p < mmu_uoff + MMU_PAGE || end < p || end > mmu_uoff + mmu_memsize) return 0;
+    if (p < mmu_uoff + MMU_PAGE || end < p || end > mmu_uoff + (mmu_uoff ? MMU_WINPAGES * MMU_PAGE : mmu_memsize)) return 0;
     need = PTE_P | PTE_U | (w ? PTE_W : 0);
     va = p & ~(MMU_PAGE - 1);
     while (va < end) {
-        if (!(e = mmu_pte(mmu_dir_of(t), va, 0)) || (*e & need) != need) return 0;
+        if ((!(e = mmu_pte(mmu_dir_of(t), va, 0)) || (*e & need) != need) &&
+            (!mmu_fetch(t, va) || !(e = mmu_pte(mmu_dir_of(t), va, 0)) || (*e & need) != need)) return 0;
         va = va + MMU_PAGE;
     }
     return 1;
@@ -660,8 +761,11 @@ int ustrlen(char *s) {
     while (1) {
         if (((int)s + n & ~(MMU_PAGE - 1)) != va) {
             va = (int)s + n & ~(MMU_PAGE - 1);
-            if ((int)s + n < mmu_uoff + MMU_PAGE || (int)s + n >= mmu_uoff + mmu_memsize) return -1;
-            if (!(e = mmu_pte(mmu_dir_of(t), va, 0)) || (*e & (PTE_P | PTE_U)) != (PTE_P | PTE_U)) return -1;
+            if ((int)s + n < mmu_uoff + MMU_PAGE ||
+                (int)s + n >= mmu_uoff + (mmu_uoff ? MMU_WINPAGES * MMU_PAGE : mmu_memsize)) return -1;
+            if ((!(e = mmu_pte(mmu_dir_of(t), va, 0)) || (*e & (PTE_P | PTE_U)) != (PTE_P | PTE_U)) &&
+                (!mmu_fetch(t, va) || !(e = mmu_pte(mmu_dir_of(t), va, 0)) ||
+                 (*e & (PTE_P | PTE_U)) != (PTE_P | PTE_U))) return -1;
         }
         if (!s[n]) return n;
         ++n;
@@ -715,10 +819,13 @@ void mmu_cpu(int k) {
     // task that asks (SYS_IOPERM). docs/c4ix-mmu.md 7.
     *(int *)MMU_IOPM = MMU_IOPM_USER;
     *(int *)MMU_UWIN = mmu_uoff;
+    *(int *)MMU_UDIR = (int)mmu_kdir;
     *(int *)MMU_CTL = 1;
     klog("mmu: CPU %d translating user mode, its traps on a %d KB stack at 0x%08x\n",
         k, MMU_KSTACK / 1024, s);
 }
+
+static void mmu_swapinit();
 
 // At boot, before anything runs in user mode
 void mmu_init() {
@@ -732,14 +839,28 @@ void mmu_init() {
         return;
     }
     memset((char *)mmu_pg, 0, mmu_npages * sizeof(int));
+    // user addresses from 256 MB, where memory fits below them: the
+    // window's books and the kernel's map of it
+    if (mmu_memsize <= MMU_UWIN_BASE) {
+        if (!(mmu_vpg = (int *)malloc(MMU_WINPAGES * sizeof(int))) ||
+            !(mmu_vbits = (int *)malloc(MMU_WINPAGES / 8)) ||
+            !(mmu_kdir = (int *)mmu_page())) {
+            klog("mmu: no memory for its tables; left off\n");
+            return;
+        }
+        memset((char *)mmu_vpg, 0, MMU_WINPAGES * sizeof(int));
+        memset((char *)mmu_vbits, 0, MMU_WINPAGES / 8);
+        mmu_vbits[0] = 1;
+        mmu_vnext = 1;
+        mmu_uoff = MMU_UWIN_BASE;
+    }
     mmu_on = 1;
-    // user addresses from 256 MB, where memory fits below them
-    mmu_uoff = mmu_memsize <= MMU_UWIN_BASE ? MMU_UWIN_BASE : 0;
     klog("mmu: 4 KB pages, %d of them; each user task has a space of its own, its own pages and the shared code\n",
         mmu_npages);
-    if (mmu_uoff) klog("mmu: user addresses start at 0x%08x, each page's own address plus that\n", mmu_uoff);
+    if (mmu_uoff) klog("mmu: user addresses are 256 MB from 0x%08x, none of them the kernel's or physical\n", mmu_uoff);
     else klog("mmu: memory reaches 0x%08x: user addresses are physical ones\n", MMU_UWIN_BASE);
     mmu_cpu(0);
+    mmu_swapinit();
 }
 
 // ---- faults ----
@@ -751,9 +872,10 @@ static void mmu_whose(int va, char *buf) {
     int i;
     r = mmu_rgn(va);
     if (va < MMU_PAGE) s = "page 0";
-    else if (va >= mmu_uoff + mmu_memsize || (va >= mmu_memsize && va < mmu_uoff)) s = "beyond memory";
+    else if (va >= mmu_memsize && (!mmu_uoff || va < mmu_uoff || va >= mmu_uoff + MMU_WINPAGES * MMU_PAGE)) s = "beyond memory";
+    else if (mmu_uoff && va >= mmu_uoff && !r) s = "nobody's";
     else if (r && r->shared) s = "shared library code";
-    else if (r && r->owner && r->guard && mmu_phys(va) < r->base + MMU_PAGE) {
+    else if (r && r->owner && r->guard && mmu_off(r, va) < MMU_PAGE) {
         s = "the stack guard of task ";
         i = 0;
         while (*s) { buf[i] = *s; ++s; ++i; }
@@ -779,15 +901,33 @@ static void mmu_whose(int va, char *buf) {
     buf[i] = 0;
 }
 
-// A user task took a page fault (TRAP_SEGV): say what it was, and kill it
+static int mmu_swapin(struct urgn *r);
+
+// A user task took a page fault (TRAP_SEGV): its memory back from swap,
+// or say what it was, and kill it
 void mmu_fault(struct task *t, int va) {
     int info, pc;
     char *what;
     char whose[64];
     struct urgn *r;
     int *e;
+    int k;
     info = *(int *)MMU_FINFO;
     pc = *(int *)MMU_FPC;
+    // Its own memory, on swap: back in, and the instruction runs again
+    // (faults are precise). With no room for it even after putting out
+    // others, the task cannot go on.
+    if (t && (r = mmu_rgn(va)) && r->swapped && r->owner == mmu_root(t)) {
+        mmu_selfok = 1;
+        k = mmu_swapin(r);
+        mmu_selfok = 0;
+        if (k) return;
+        kprintf("c4ix: task %d (%s): its memory at 0x%08x is on swap, and there is no room for it; killed\n",
+            t->id, t->name, va);
+        t->killsig = C4IX_SIGSEGV;
+        task_exit(-1);
+        return;
+    }
     // A C4KE program writing its own code: C4KE's ps patches itself. The
     // page it writes is made writable, that page alone, and the store
     // runs again (faults are precise: the trap returns to the
@@ -810,4 +950,232 @@ void mmu_fault(struct task *t, int va) {
         (info & MMU_FK_PRESENT) ? "not allowed" : "not mapped", pc);
     if (t) t->killsig = C4IX_SIGSEGV;
     task_exit(-1);
+}
+
+// ---- swap ----
+//
+// When the heap has no block for a region, the blocks of idle tasks go to
+// drive 1, a file each, and their memory back to the heap; a task that
+// touches one again takes a page fault, and it comes back wherever there
+// is room (mmu_fault), at the same user address. Which go: a block a task
+// asked for (umem_alloc), not its image, stack or arguments, of a task no
+// CPU is running and that is not the one asking -- every task not running
+// is at the edge of user mode, since a syscall that waits is run again
+// when its task wakes, and checks its pointers again (uaccess brings back
+// what they name). Not a block the kernel or a device has ever used
+// (PTE_PIN, which the host sets in the kernel's map): the display's
+// framebuffer and rings, what the kernel copied in and out. Blocks whose
+// pages nobody has used since the last look go first (PTE_A).
+static int mmu_swapok;         // drive 1 is there, and writable
+static int mmu_swapseq;        // the last file's number
+static int mmu_swapouts, mmu_swapins;
+
+enum {
+    DSK_NAME = 0x120, DSK_FD = 0x124, DSK_ADDR = 0x128, DSK_LEN = 0x12c, DSK_CLOSE = 0x130,
+    DSK_WNAME = 0x178, DSK_WADDR = 0x17c, DSK_WLEN = 0x180, DSK_WCLOSE = 0x184, DSK_UNLINK = 0x1cc
+};
+
+// "1:/c4ix-swap-N"
+static void mmu_swapname(char *b, int n) {
+    char d[12];
+    char *p;
+    int i, k;
+    p = "1:/c4ix-swap-";
+    i = 0;
+    while (*p) { b[i] = *p; ++p; ++i; }
+    k = 0;
+    d[k] = '0' + n % 10; ++k; n = n / 10;
+    while (n) { d[k] = '0' + n % 10; ++k; n = n / 10; }
+    while (k) { --k; b[i] = d[k]; ++i; }
+    b[i] = 0;
+}
+
+static int mmu_dwrite(char *name, int pa, int len) {
+    int fd;
+    *(int *)DSK_WNAME = (int)name;
+    if ((fd = *(int *)DSK_WNAME) < 0) return 0;
+    *(int *)DSK_FD = fd;
+    *(int *)DSK_WADDR = pa;
+    *(int *)DSK_WLEN = len;
+    if (*(int *)DSK_WLEN != len) { *(int *)DSK_WCLOSE = fd; return 0; }
+    *(int *)DSK_WCLOSE = fd;
+    return *(int *)DSK_WCLOSE >= 0;
+}
+
+static int mmu_dread(char *name, int pa, int len) {
+    int fd, n;
+    *(int *)DSK_NAME = (int)name;
+    if ((fd = *(int *)DSK_NAME) < 0) return 0;
+    *(int *)DSK_FD = fd;
+    *(int *)DSK_ADDR = pa;
+    *(int *)DSK_LEN = len;
+    n = *(int *)DSK_LEN;
+    *(int *)DSK_CLOSE = fd;
+    return n == len;
+}
+
+static void mmu_swapinit() {
+    int cur, ro;
+    if (!mmu_uoff || !host_has(C4IX_I_DRV) || *(int *)C4IX_DISK_COUNT < 2) {
+        klog("swap: none (%s)\n", mmu_uoff ? "no drive 1" : "user addresses are physical");
+        return;
+    }
+    cur = *(int *)C4IX_DISK_DRIVE;
+    *(int *)C4IX_DISK_DRIVE = 1;
+    ro = *(int *)C4IX_DISK_RO;
+    *(int *)C4IX_DISK_DRIVE = cur;
+    if (ro) { klog("swap: none (drive 1 is read-only)\n"); return; }
+    mmu_swapok = 1;
+    klog("swap: on drive 1, a file for each block put out\n");
+}
+
+static void mmu_swapdrop(struct urgn *r) {
+    char name[32];
+    mmu_swapname(name, r->swapn);
+    *(int *)DSK_UNLINK = (int)name;
+}
+
+// Has the host pinned any page of R (the kernel or a device used it)?
+// Has user mode used any since the last look (and forget that it did)?
+static int mmu_pinned(struct urgn *r) {
+    int *e;
+    int k;
+    k = 0;
+    while (k < r->npages) {
+        if ((e = mmu_pte(mmu_kdir, r->va + k * MMU_PAGE, 0)) && (*e & PTE_PIN)) return 1;
+        ++k;
+    }
+    return 0;
+}
+
+static int mmu_used(struct urgn *r) {
+    int *e;
+    int k, used;
+    used = 0;
+    k = 0;
+    while (k < r->npages && r->dir) {
+        if ((e = mmu_pte(r->dir, r->va + k * MMU_PAGE, 0)) && (*e & PTE_A)) { *e = *e & ~PTE_A; used = 1; }
+        ++k;
+    }
+    return used;
+}
+
+// R's pages to drive 1, and its memory back to the heap
+static int mmu_swapout(struct urgn *r) {
+    char name[32];
+    int len, n;
+    len = r->npages * MMU_PAGE;
+    n = ++mmu_swapseq;
+    mmu_swapname(name, n);
+    if (!mmu_dwrite(name, r->base, len)) {
+        klog("swap: drive 1 would not take %d KB; swap off\n", len / 1024);
+        mmu_swapok = 0;
+        return 0;
+    }
+    // out of its space -- no CPU is running it, and each that has it
+    // loaded forgets it before it runs it again (mmu_gen) -- and the
+    // kernel's map
+    if (r->dir) mmu_map(r->dir, r->va, r->base, len, 0);
+    mmu_kmap(r, 0);
+    ++mmu_gen;
+    klock_take(mmu_ulock);
+    mmu_setpg(r, r->base, r->npages, 0);
+    klock_drop(mmu_ulock);
+    free((char *)r->raw);
+    r->raw = 0;
+    r->base = 0;
+    r->swapped = 1;
+    r->swapn = n;
+    ++mmu_swapouts;
+    klog("swap: %d KB of task %d (%s) at 0x%08x out to drive 1, %s\n", len / 1024, r->owner->id, r->owner->name, r->va, name + 3);
+    return 1;
+}
+
+// R back from drive 1, wherever there is room, at its user address
+static int mmu_swapin(struct urgn *r) {
+    char name[32];
+    int raw, base, len;
+    len = r->npages * MMU_PAGE;
+    if (!(raw = mmu_raw(r->npages, r))) return 0;
+    base = (raw + MMU_PAGE - 1) & ~(MMU_PAGE - 1);
+    mmu_swapname(name, r->swapn);
+    if (!mmu_dread(name, base, len)) {
+        free((char *)raw);
+        klog("swap: drive 1 lost %s\n", name);
+        return 0;
+    }
+    *(int *)DSK_UNLINK = (int)name;
+    r->raw = raw;
+    r->base = base;
+    r->swapped = 0;
+    klock_take(mmu_ulock);
+    mmu_setpg(r, base, r->npages, r);
+    klock_drop(mmu_ulock);
+    mmu_kmap(r, 1);
+    if (r->dir) mmu_map(r->dir, r->va, base, len, r->flags);
+    ++mmu_swapins;
+    klog("swap: %d KB of task %d (%s) at 0x%08x back in, %s\n", len / 1024, r->owner->id, r->owner->name, r->va, name + 3);
+    return 1;
+}
+
+// A page fault or a syscall's pointer at VA, T's own memory on swap: back
+static int mmu_fetch(struct task *t, int va) {
+    struct urgn *r;
+    if (!(r = mmu_rgn(va)) || !r->swapped || r->owner != mmu_root(t)) return 0;
+    return mmu_swapin(r);
+}
+
+// The largest block that may go, of those nobody has used since the last
+// look (PASS 0), or of any (PASS 1); 0 if none. Never KEEP, and none at
+// all while a task that drives the drives itself is between two of its
+// stores (a READY task with SYS_IOPERM's devices: swap's own stores would
+// come between them). The asking task's own only for a page fault
+// (mmu_selfok): one that brings back one of its blocks may put out
+// another, which it can fault back in turn, where a syscall's pointers
+// must all stay in.
+static struct urgn *mmu_victim(int pass, struct urgn *keep) {
+    struct task *t, *me;
+    struct urgn *r, *best;
+    me = mmu_root(sched_current());
+    best = 0;
+    t = task_first();
+    while (t) {
+        if (t->privs == PRIV_USER && (t->iopm & IOPM_DEV) && t->state == TS_READY) return 0;
+        if (t->privs == PRIV_USER && !t->vfparent && !t->cpuidle && t->state != TS_ZOMBIE && t->state != TS_VFORK &&
+            (t == me ? mmu_selfok : !t->oncpu)) {
+            r = (struct urgn *)t->urgns;
+            while (r) {
+                if (r->kind == UR_BLOCK && r->heap && !r->shared && !r->guard && !r->swapped && !r->code &&
+                    r != keep && r->dir && (!best || r->npages > best->npages) && !mmu_pinned(r) &&
+                    (pass || !mmu_used(r))) best = r;
+                r = r->next;
+            }
+        }
+        t = t->next;
+    }
+    return best;
+}
+
+// Room for a block of NP pages, by putting blocks out: whether any went
+static int mmu_reclaim(int np, struct urgn *keep) {
+    struct urgn *r;
+    if (!mmu_swapok || !sched_has_bkl()) return 0;
+    if (!(r = mmu_victim(0, keep)) && !(r = mmu_victim(1, keep))) return 0;
+    return mmu_swapout(r);
+}
+
+// A heap block for NP pages, putting blocks out to make room while there
+// are any; and whether memory is short now (mmu_short: allocation takes
+// the kernel lock, where swap may run)
+static int mmu_raw(int np, struct urgn *keep) {
+    int raw, used, size;
+    while (!(raw = (int)malloc(np * MMU_PAGE + MMU_PAGE - 1))) {
+        if (!mmu_reclaim(np, keep)) return 0;
+    }
+    if (mmu_swapok) {
+        used = *(int *)C4IX_HEAP_USED;
+        size = *(int *)C4IX_HEAP_END - *(int *)C4IX_HEAP_BASE;
+        mmu_short = used > size / 8 * 7;
+    }
+    return raw;
 }

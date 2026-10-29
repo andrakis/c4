@@ -20,6 +20,13 @@
 // and scale to the canvas. Once a frame with one has been drawn the
 // program hears 'f' back, and may draw the next; and it hears keys let
 // go ('K') as well as pressed, which a game needs.
+//
+// Its Edit menu is the desktop's clipboard, as a console window's is: the
+// mouse selects (a run of lines, or with Alt held a block), Copy takes
+// the selection and Copy All the scrollback and the screen, and Paste
+// types the clipboard in, a key a character. Ctrl+Shift+C and V, Ctrl+Ins
+// and Shift+Ins do the same; Ctrl+C copies when there is a selection, and
+// is ^C when there is none.
 
 #include "desktop.h"
 #include "textgrid.h"
@@ -44,6 +51,9 @@ struct term {
 
 static char tmp[128];
 static char iobuf[IOBUF];
+static char *edit_items[7] = { "Copy   Ctrl+Shift+C", "Paste   Ctrl+Shift+V", "-", "Select All", "Copy All", 0 };
+static struct wk_menu menus[1];
+enum { T_COPY = 0, T_PASTE = 1, T_ALL = 3, T_COPYALL = 4 };
 
 static struct term *T(struct win *w) { return (struct term *)w->st; }
 
@@ -64,6 +74,7 @@ static void event(struct term *t, int kind, int a, int b, int c) {
 static void gfx_mode(struct term *t, int on) {
     if (on && !t->gfx) ui_ncpy(t->title, wk_get_title(t->win), 48);
     if (!on && t->gfx && t->title[0]) wk_title(t->win, t->title);
+    if (on && t->g) tg_unselect(t->g);
     t->gfx = on;
     t->ncur = 0; t->nshow = 0; t->buttons = 0; t->fpend = 0;
     mark_dirty();
@@ -174,10 +185,12 @@ int term_open(char *cmd) {
     int i, k;
     struct win *w;
     struct term *t;
-    i = win_open(K_TERM, "Terminal", TG_W + 2 * BORDER + TG_SB_W, TG_H + 2 * BORDER + TITLE_H + 1, sizeof(struct term));
+    i = win_open(K_TERM, "Terminal", TG_W + 2 * BORDER + TG_SB_W, TG_H + 2 * BORDER + TITLE_H + 1 + MENU_H, sizeof(struct term));
     if (i < 0) return 0 - 1;
     w = win_get(i);
     w->resizable = 0;
+    menus[0].title = "Edit"; menus[0].items = edit_items;
+    wk_menu(i, menus, 1);
     t = T(w);
     t->win = i;
     if (!(t->g = tg_new(i))) { t->ended = 1; win_close(i); return 0 - 1; }   // no memory left for it
@@ -264,12 +277,51 @@ void term_drawn(struct win *w) {
     if (t->gfx && !t->ended) event(t, 'f', 0, 0, 0);
 }
 
+// The clipboard typed in, as keys: a line at a time down the pipe, as
+// typing it would send them; to a canvas, each as a key.
+static void paste(struct win *w, struct term *t) {
+    char *s;
+    int n, k, c;
+    s = wk_clip_get(&n);
+    k = 0;
+    while (k < n && !t->ended) {
+        c = s[k] & 255;
+        if (c == 9) c = ' ';
+        if (t->gfx) { if (c == 10) event(t, 'k', KEY_ENTER, 13, 0); else if (c >= 32 && c < 127) event(t, 'k', 0, c, 0); }
+        else if (c == 10) { if ((c = tg_key(t->g, KEY_ENTER, 0, 0)) > 0) write(t->in_w, t->g->line, c); }
+        else if (c >= 32 && c < 127) tg_key(t->g, 0, c, 0);
+        ++k;
+    }
+    wk_invalidate(w->id, 0, 0, 0, 0);
+}
+
+void term_command(struct win *w, int menu, int item) {
+    struct term *t;
+    t = T(w);
+    if (!t->g) return;
+    if (item == T_COPY) { if (tg_copy(t->g, 0)) tg_unselect(t->g); }
+    else if (item == T_COPYALL) tg_copy(t->g, 1);
+    else if (item == T_ALL) tg_select_all(t->g);
+    else if (item == T_PASTE && !t->ended) { tg_unselect(t->g); paste(w, t); }
+}
+
+// the letter key, with Ctrl and Shift held
+static int ctrl_shift(int code, int ch, int mods, int c) {
+    return (mods & M_CTRL) && (mods & M_SHIFT) && (code == c || ch == c || ch == c + 32);
+}
+
 // A key typed here.
 void term_key(struct win *w, int code, int ch, int mods) {
     struct term *t;
     int n;
     t = T(w);
+    if (t->g && (ctrl_shift(code, ch, mods, 'C') || ((mods & M_CTRL) && code == KEY_INS) ||
+                 (t->g->sel && (mods & M_CTRL) && (ch == 'c' || ch == 'C' || code == 'C')))) { term_command(w, 0, T_COPY); return; }
+    if (t->g && (ctrl_shift(code, ch, mods, 'V') || ((mods & M_SHIFT) && code == KEY_INS))) { term_command(w, 0, T_PASTE); return; }
     if (t->ended) return;
+    // the modifiers alone are a canvas's business; anything else typed drops a selection
+    if (code == 16 || code == 17 || code == 18) { if (t->gfx) event(t, 'k', code, ch, mods); return; }
+    tg_unselect(t->g);
     if ((mods & M_CTRL) && (ch == 'c' || ch == 'C' || code == 'C')) {
         // What the program wrote before the interrupt shows first, as a
         // tty's output queue would have it: drawn after the ^C, the last
@@ -294,8 +346,14 @@ void term_key(struct win *w, int code, int ch, int mods) {
 void term_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     struct term *t;
     t = T(w);
+    if (!t->g) return;
+    if (!t->gfx) {
+        // the grid selects, its scroll bar scrolls
+        if (ev == E_WHEEL || ui_scroll_active() || (ev != E_UP && x >= TG_W)) { tg_mouse(t->g, ev, x, y); return; }
+        tg_select(t->g, ev, x - 2, y - 2, (wk.mods & M_ALT) != 0);
+        return;
+    }
     if (t->ended) return;
-    if (!t->gfx) { tg_mouse(t->g, ev, x, y); return; }
     x = x - 2; y = y - 2;                          // inside the sunken edge
     if (x < 0) x = 0; if (y < 0) y = 0;
     if (x >= GW) x = GW - 1; if (y >= GH) y = GH - 1;

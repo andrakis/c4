@@ -158,11 +158,19 @@ const dbl = (s, pick = 'last') => {
   return true;
 };
 const key = (ch, mods = 0, code) => {
-  const named = { '\n': 13, '\b': 8, ESC: 27, DEL: 46, F2: 113, F5: 116, TAB: 9, UP: 38, DOWN: 40 };
+  const named = { '\n': 13, '\b': 8, ESC: 27, DEL: 46, F2: 113, F5: 116, TAB: 9, UP: 38, DOWN: 40, END: 35, HOME: 36, LEFT: 37, RIGHT: 39, INS: 45 };
   const c = code ?? named[ch] ?? ch.toUpperCase().charCodeAt(0);
   ev({ kind: 'keydown', code: c, char: ch === '\n' ? 10 : ch.length === 1 && c !== 8 ? ch.charCodeAt(0) : 0, mods });
 };
 const type = s => { for (const ch of s) key(ch); };
+// a press at (x0, y0), the pointer moved to (x1, y1) with the button held, and let go
+const drag = (x0, y0, x1, y1) => {
+  ev({ kind: 'move', x: x0, y: y0, buttons: 0 }); ev({ kind: 'down', x: x0, y: y0, button: 0 });
+  for (let k = 1; k <= 4; k++) ev({ kind: 'move', x: x0 + ((x1 - x0) * k) / 4, y: y0 + ((y1 - y0) * k) / 4, buttons: 1 });
+  ev({ kind: 'up', x: x1, y: y1, button: 0 });
+};
+// a menu of the topmost window, and an item of it
+const menu = (title, item) => { clickText(title); until(() => has(item)); return clickText(item); };
 const start = item => { click(20, SH - TASK_H + 12); until(() => has('Power Off...')); const ok = clickText(item); settle(); return ok; };
 // Files' file list: right of its folder tree, inside its window. The
 // window is found by its title (drawn 27 px in from the window's left, 7 down).
@@ -236,6 +244,38 @@ key('', 0, 36); key('', 0, 46);                                // Home, Delete: 
 check(until(() => inputLine() === 'cho xyz'), 'Home and Delete edit at the start of the line', inputLine());
 type('e'); key('', 0, 35); type('!\n');                        // "e", End, "!", Enter
 check(until(() => has('xyz!')), 'End goes back to the end, and Enter sends the whole line', screen());
+// ---- the Terminal's clipboard: a run of text selected with the mouse, a
+// block with Alt held, and Paste typing it in --------------------------------------------------
+// the Terminal's text: 8 pixels a column, monospaced, its own colours
+const termText = s => frame.filter(t => t.adv === 8 && (typeof s === 'string' ? t.s.trimEnd() === s : s.test(t.s)));
+type('echo echo pasted\n');
+check(until(() => termText('echo pasted').length > 0 && inputLine() === ''), 'a line to copy', screen());
+{
+  const t = termText('echo pasted').pop();
+  drag(t.x + 2, t.y + 6, t.x + 11 * 8 - 3, t.y + 6);
+  check(until(() => frame.some(s => s.s === 'echo pasted' && s.rgb === 0xffffff)), 'dragging over it selects it, white on the selection', screen());
+  check(menu('Edit', 'Copy   Ctrl+Shift+C') && until(() => !frame.some(s => s.s === 'echo pasted' && s.rgb === 0xffffff)), 'Edit > Copy takes it', screen());
+  check(menu('Edit', 'Paste   Ctrl+Shift+V') && until(() => inputLine() === 'echo pasted'), 'Edit > Paste types it in', inputLine());
+  key('\n');
+  check(until(() => termText('pasted').length > 0), 'and Enter runs it', screen());
+}
+type('echo blk\n');
+until(() => termText('blk').length > 0 && inputLine() === '');
+{
+  // a block: the command's eight columns after the prompt, and the same
+  // columns of its output's row, which are blank (a run would take "blk")
+  const t = termText('blk').pop();
+  const n = termText('blk').length;
+  ev({ kind: 'keydown', code: 18, char: 0, mods: 4 });
+  drag(t.x + 8 * 8 + 2, t.y - 16 + 6, t.x + 15 * 8 + 3, t.y + 6);
+  ev({ kind: 'keyup', code: 18, char: 0, mods: 0 });
+  check(until(() => frame.some(s => s.s === 'echo blk' && s.rgb === 0xffffff) && !frame.some(s => s.s === 'blk' && s.rgb === 0xffffff)),
+    'with Alt held a drag selects a block', screen());
+  key('C', 3, 67);                                             // Ctrl+Shift+C
+  key('', 1, 45);                                              // Shift+Ins
+  check(until(() => termText('blk').length > n && inputLine() === ''), 'Ctrl+Shift+C copies it, and Shift+Ins pastes it: the one line, run',
+    inputLine() + ' / ' + screen().slice(-300));
+}
 type('cat /usr/src/c4ix/user/top.c\n');
 until(() => has(/^\s*return 0;/) && inputLine() === '', 600);
 check(!has(/^\/\/ C4IX userland: top\./), 'a long file scrolls its first line off the Terminal', screen());
@@ -244,6 +284,8 @@ check(until(() => has(/^\/\/ C4IX userland: top\./)), 'and PgUp scrolls back to 
 key('', 0, 34);                                                // PgDn
 type('echo back\n');
 check(until(() => has('back') && !has(/^\/\/ C4IX userland: top\./)), 'typing comes back to the bottom', screen());
+// Copy All: the scrollback and the screen (pasted into Text Editor, below)
+check(menu('Edit', 'Copy All'), 'Edit > Copy All', screen());
 
 // ---- top runs until Ctrl-C ----------------------------------------------------------------
 type('top\n');
@@ -436,6 +478,13 @@ const notes = find('untitled.txt - Text Editor').length;
 dbl('untitled.txt', inList);
 check(until(() => find('untitled.txt - Text Editor').length > notes), 'double-clicking it opens it in Text Editor');
 check(until(() => find('hello from c4ix').length >= 2), 'with what was saved in it');
+// the Terminal's Copy All, pasted here: its scrollback too, top.c's first line long scrolled off
+key('v', 2, 86);
+// PgUp a page at a time, each drawn before the next
+const topLine = () => frame.some(t => t.adv === 7 && /^\/\/ C4IX userland: top\./.test(t.s));
+for (let i = 0; i < 30 && !topLine(); i++) { key('', 0, 33); until(topLine, 8); }
+check(until(topLine),
+  "the Terminal's Copy All pastes into Text Editor, with what had scrolled off its screen", screen().slice(-600));
 
 // ---- Calculator ------------------------------------------------------------------------
 start('Calculator');

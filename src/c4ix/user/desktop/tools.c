@@ -28,7 +28,7 @@ struct tool {
 };
 
 static struct tool tools[N_KINDS] = {
-    [K_TERM]     = { .draw = term_draw, .mouse = term_mouse, .key = term_key, .keyup = term_keyup,
+    [K_TERM]     = { .draw = term_draw, .mouse = term_mouse, .key = term_key, .keyup = term_keyup, .command = term_command,
                      .tick = term_tick, .drawn = term_drawn, .close = term_close, .pointer_shape = PTR_TEXT },
     [K_FILES]    = { .draw = files_draw, .mouse = files_mouse, .key = files_key,
                      .command = files_command, .answer = files_answer },

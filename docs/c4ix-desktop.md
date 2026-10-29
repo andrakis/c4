@@ -840,3 +840,6 @@ kit, `src/winkit/` (winkit.h has the API), and rebuilt the desktop on it.
 - [x] test-desktop.mjs: three uploads and a folder in /home, `ls` and `cat`
       on them, and each order, by the menu and by the headers, kept across
       closing Files.
+- [x] web-ix-files.mjs, the browser check over CDP: the uploads put in the
+      page's store, /home listing them in Files, the headers and View >
+      Sort; the uploads are taken out of the store again after.

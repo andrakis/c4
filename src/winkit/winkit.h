@@ -121,6 +121,9 @@ struct wk_class {
 // a menu bar: titles, and for each an array of items ending in 0 ("-" a
 // separator); an item chosen reaches command as WK_CMD(menu, item)
 struct wk_menu { char *title; char **items; };
+// an item whose first byte is WK_CHECKED is drawn with a check mark beside
+// it, and without that byte ("-" is a separator)
+enum { WK_CHECKED = 1 };
 enum { WK_CMD_STEP = 256 };
 #define WK_CMD(m, i) ((m) * WK_CMD_STEP + (i))
 

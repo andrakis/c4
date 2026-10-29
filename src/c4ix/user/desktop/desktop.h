@@ -113,6 +113,10 @@ void theme_set_saver(int which, int wait);   // the screen saver and its minutes
 void theme_set_style(int style);   // S_FLAT, S_CLASSIC or S_WIN31
 void saver_preview();              // the chosen saver now (Settings)
 int  theme_swatch(int i);          // the desktop colours Settings offers, 0..7
+// Files' order: by one of these, SORT_* * 2, plus 1 for descending; folders first either way
+enum { SORT_NAME = 0, SORT_TYPE = 1, SORT_SIZE = 2, SORT_DATE = 3, N_SORTS = 4 };
+int  theme_sort();
+void theme_set_sort(int sort);
 
 // ---- wall.c: the desktop's picture ----
 int  wall_load(char *path);

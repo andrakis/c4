@@ -22,6 +22,14 @@
 // Left/Right or -/+ to collapse and expand. A collapsed folder stays
 // collapsed through a reload (by the hash of its path), but the folders
 // above the one being shown always open.
+//
+// The list is sorted by name, type (the extension), size or date, either
+// way round, folders first always: View > Sort, or a click on a column's
+// header (again reverses it), which shows the order with an arrow. One
+// order for every Files window, kept in /etc/desktop.cfg as Settings'
+// choices are (theme_sort). Names sort without regard to case. The date
+// is the VFS's modification order (vfs.c, vfs_touch): C4IX has no clock
+// every host keeps, but a later change always sorts after an earlier one.
 
 #include "desktop.h"
 
@@ -37,6 +45,7 @@ struct files {
     int n, sel, top;                   // the list: entries, selection, first row shown
     char name[MAXE * NAMEW];
     int isdir[MAXE], size[MAXE], prog[MAXE];
+    int mtime[MAXE];                   // ST_MTIME: the order things changed in
     int nt, tsel, ttop;                // the tree: folders, their depth, the one shown
     char tpath[MAXT * TPW];
     int tdepth[MAXT];
@@ -54,8 +63,14 @@ static char tbuf[256];
 
 static struct wk_menu menus[3];
 static char *file_items[8];
-static char *view_items[3];
+static char *view_items[10];
 static char *go_items[2];
+// View's sort items, each with WK_CHECKED before it: the item is the
+// string from its second byte on, or from its first when it is the one in use
+enum { V_SORT = 2, V_ASC = 7, V_DESC = 8 };
+enum { VCHK_W = 16 };
+static char vchk[6 * VCHK_W];
+static char *vlabel[6] = { "Sort by Name", "Sort by Type", "Sort by Size", "Sort by Date", "Ascending", "Descending" };
 
 static char *ename(struct files *f, int i) { return f->name + i * NAMEW; }
 
@@ -65,9 +80,118 @@ static void join(char *out, char *dir, char *name) {
     ui_cat(out, name);
 }
 
-static int before(char *a, char *b) {
+// ---- the order ----
+
+static int lower(int c) { c = c & 255; return c >= 'A' && c <= 'Z' ? c + 32 : c; }
+
+// names without regard to case; the same but for case, in byte order
+static int namecmp(char *a, char *b) {
+    char *p, *q;
+    p = a; q = b;
+    while (*p && lower(*p) == lower(*q)) { ++p; ++q; }
+    if (lower(*p) != lower(*q)) return lower(*p) - lower(*q);
     while (*a && *a == *b) { ++a; ++b; }
-    return (*a & 255) < (*b & 255);
+    return (*a & 255) - (*b & 255);
+}
+
+// what follows a name's last '.', or "" (a leading '.' is not one)
+static char *ext_of(char *s) {
+    char *e;
+    e = 0;
+    if (*s == '.') ++s;
+    while (*s) { if (*s == '.') e = s + 1; ++s; }
+    return e ? e : s;
+}
+
+// Entry I against entry J in the order in use: below 0 if I goes first.
+// Folders first either way; what the order leaves equal goes by name.
+static int cmp(struct files *f, int i, int j) {
+    int key, r;
+    if (f->isdir[i] != f->isdir[j]) return f->isdir[j] - f->isdir[i];
+    key = theme_sort() / 2;
+    r = 0;
+    if (key == SORT_TYPE && !f->isdir[i]) r = namecmp(ext_of(ename(f, i)), ext_of(ename(f, j)));
+    else if (key == SORT_SIZE) r = f->size[i] < f->size[j] ? 0 - 1 : f->size[i] > f->size[j];
+    else if (key == SORT_DATE) r = f->mtime[i] < f->mtime[j] ? 0 - 1 : f->mtime[i] > f->mtime[j];
+    if (!r) r = namecmp(ename(f, i), ename(f, j));
+    return theme_sort() & 1 ? 0 - r : r;
+}
+
+// entry SRC's name and facts into slot DST
+static void e_move(struct files *f, int dst, int src) {
+    ui_cpy(ename(f, dst), ename(f, src));
+    f->isdir[dst] = f->isdir[src]; f->size[dst] = f->size[src];
+    f->prog[dst] = f->prog[src]; f->mtime[dst] = f->mtime[src];
+}
+
+// Sort the list: an insertion sort of the entries' numbers, then each
+// entry moved once into place, a cycle of the permutation at a time, so
+// a name is copied once rather than at every step. The spare slot is
+// the one past the last, kept free for it.
+static int ord[MAXE];
+static void sort_list(struct files *f) {
+    int i, j, k, t;
+    i = 0;
+    while (i < f->n) {
+        t = i;
+        j = i;
+        while (j > 0 && cmp(f, t, ord[j - 1]) < 0) { ord[j] = ord[j - 1]; --j; }
+        ord[j] = t;
+        ++i;
+    }
+    // row R is to hold entry ord[R]
+    i = 0;
+    while (i < f->n) {
+        if (ord[i] != i) {
+            e_move(f, MAXE - 1, i);
+            j = i;
+            while (ord[j] != i) { k = ord[j]; e_move(f, j, k); ord[j] = j; j = k; }
+            e_move(f, j, MAXE - 1);
+            ord[j] = j;
+        }
+        ++i;
+    }
+}
+
+// View's check marks, for the order in use
+static void sort_marks() {
+    int k, s, on;
+    s = theme_sort();
+    k = 0;
+    while (k < 6) {
+        vchk[k * VCHK_W] = WK_CHECKED;
+        ui_cpy(vchk + k * VCHK_W + 1, vlabel[k]);
+        if (k < 4) on = k == s / 2;
+        else on = k - 4 == (s & 1);
+        view_items[k < 4 ? V_SORT + k : V_ASC + k - 4] = vchk + k * VCHK_W + (on ? 0 : 1);
+        ++k;
+    }
+}
+
+// the list sorted again, the focus kept on the same item
+static void resort(struct files *f) {
+    char nm[NAMEW];
+    int i;
+    nm[0] = 0;
+    if (f->sel >= 0 && f->sel < f->n) ui_cpy(nm, ename(f, f->sel));
+    sort_list(f);
+    i = 0;
+    while (i < f->n && !ui_eq(ename(f, i), nm)) ++i;
+    f->sel = i < f->n ? i : 0;
+    mark_only(f, f->sel);
+}
+
+// Another order, kept, and every Files window's list in it
+static void set_sort(int sort) {
+    int i;
+    theme_set_sort(sort);
+    sort_marks();
+    i = wk_next(0);
+    while (i) {
+        if (wk_class_of(i) == kind_class(K_FILES)) resort(F(win_get(i)));
+        i = wk_next(i);
+    }
+    mark_dirty();
 }
 
 // an object file or a library: linked into programs, never run itself
@@ -75,40 +199,27 @@ static int is_linkable(char *p) {
     return ui_ends(p, ".c4o") || ui_ends(p, ".c4l") || ui_ends(p, ".c4s");
 }
 
-// Read a directory: folders first, then files, each alphabetical.
+// Read a directory, in the order in use. Slot MAXE - 1 is sort_list's.
 static void load(struct files *f) {
-    int i, j, r, s, d, st[4];
+    int i, r, st[ST_MTIME + 1];
     char nm[NAMEW];
     f->n = 0;
     i = 0;
-    while (f->n < MAXE) {
+    while (f->n < MAXE - 1) {
         r = ureaddir(f->path, i, nm);
         if (r < 0) break;
         ui_cpy(ename(f, f->n), nm);
         f->isdir[f->n] = r;
         join(tbuf, f->path, nm);
-        st[2] = 0;
-        f->size[f->n] = (!r && ustat(tbuf, st) == 0) ? st[1] : 0;
-        f->prog[f->n] = !r && !is_linkable(nm) && (st[2] || ui_ends(nm, ".c4r"));
+        st[ST_SIZE] = 0; st[ST_PROG] = 0; st[ST_MTIME] = 0;
+        ustat2(tbuf, st, ST_MTIME + 1);
+        f->size[f->n] = r ? 0 : st[ST_SIZE];
+        f->mtime[f->n] = st[ST_MTIME];
+        f->prog[f->n] = !r && !is_linkable(nm) && (st[ST_PROG] || ui_ends(nm, ".c4r"));
         ++f->n;
         ++i;
     }
-    // insertion sort
-    i = 1;
-    while (i < f->n) {
-        j = i;
-        while (j > 0) {
-            if (f->isdir[j] > f->isdir[j - 1] ||
-                (f->isdir[j] == f->isdir[j - 1] && before(ename(f, j), ename(f, j - 1)))) {
-                ui_cpy(nm, ename(f, j)); ui_cpy(ename(f, j), ename(f, j - 1)); ui_cpy(ename(f, j - 1), nm);
-                d = f->isdir[j]; f->isdir[j] = f->isdir[j - 1]; f->isdir[j - 1] = d;
-                s = f->size[j]; f->size[j] = f->size[j - 1]; f->size[j - 1] = s;
-                s = f->prog[j]; f->prog[j] = f->prog[j - 1]; f->prog[j - 1] = s;
-                --j;
-            } else break;
-        }
-        ++i;
-    }
+    sort_list(f);
     if (f->sel >= f->n) f->sel = f->n - 1;
     if (f->sel < 0) f->sel = 0;
     if (f->top > f->sel) f->top = f->sel;
@@ -398,7 +509,8 @@ int files_open(char *path) {
     menus[0].title = "File"; menus[1].title = "View"; menus[2].title = "Go";
     file_items[0] = "Open"; file_items[1] = "New Folder"; file_items[2] = "Delete";
     file_items[3] = "Rename"; file_items[4] = "-"; file_items[5] = "Close"; file_items[6] = 0;
-    view_items[0] = "Refresh"; view_items[1] = 0;
+    view_items[0] = "Refresh"; view_items[1] = "-"; view_items[6] = "-"; view_items[9] = 0;
+    sort_marks();
     go_items[0] = "Up"; go_items[1] = 0;
     menus[0].items = file_items; menus[1].items = view_items; menus[2].items = go_items;
     wk_menu(i, menus, 3);
@@ -421,6 +533,25 @@ static void small_icon(int dir, int prog, int x, int y) {
 
 static int widths[3];
 static char *labels[3];
+// the columns, left to right, and the order a click on each sorts by
+static int col_sort[3] = { SORT_NAME, SORT_SIZE, SORT_TYPE };
+
+// the arrow on the header of the column the list is sorted by: up for
+// ascending, down for descending (by date has no column)
+static void sort_arrow(int x, int y) {
+    int k, r, down;
+    down = theme_sort() & 1;
+    k = 0;
+    while (k < 3 && col_sort[k] != theme_sort() / 2) { x = x + widths[k]; ++k; }
+    if (k == 3) return;
+    x = x + widths[k] - 14;
+    r = 0;
+    while (r < 4) {
+        if (down) d_rect(x + r, y + r, 7 - 2 * r, 1, C_SHADOW);
+        else d_rect(x + 3 - r, y + r, 1 + 2 * r, 1, C_SHADOW);
+        ++r;
+    }
+}
 
 // the +/- box on a folder with folders in it, centred where its lines meet
 static void t_box(int x, int y, int coll) {
@@ -494,6 +625,7 @@ void files_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     widths[0] = lw - 4 - 16 - 170; widths[1] = 70; widths[2] = 100;
     labels[0] = "Name"; labels[1] = "Size"; labels[2] = "Type";
     ui_header(lx + 2, oy + TOOL_H + 2, widths, labels, 3);
+    sort_arrow(lx + 2, oy + TOOL_H + 9);
     lh = th - 22;
     rows = (lh - 4) / ROW_H;
     if (f->sel < f->top) f->top = f->sel;
@@ -528,7 +660,7 @@ void files_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
 
 void files_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     struct files *f;
-    int th, lx, lw, rows, row, t, lh, trows, nv, node, bx;
+    int th, lx, lw, rows, row, t, lh, trows, nv, node, bx, k;
     f = F(w);
     th = ch - TOOL_H - STATUS_H - 2;
     lx = 2 + TREE_W + 4; lw = cw - TREE_W - 8;
@@ -585,6 +717,15 @@ void files_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
         if (x >= bx - 2 && x < bx + 11 && (f->tflag[node] & T_KIDS)) { if (ev == E_DOWN) t_toggle(w, node); return; }
         if (ev == E_DOWN) t_select(w, node);
         else t_toggle(w, node);
+        return;
+    }
+    // A column's header: sort by it, or the other way round if it is
+    // already. Each click, not the E_DBL that follows a second quick one.
+    if (ui_hit(x, y, lx + 2, TOOL_H + 2, lw - 4 - 16, 18)) {
+        if (ev != E_DOWN) return;
+        t = x - lx - 2 - (lw - 4 - 16 - 170);
+        k = col_sort[t < 0 ? 0 : t < 70 ? 1 : 2];
+        set_sort(theme_sort() / 2 == k ? theme_sort() ^ 1 : k * 2);
         return;
     }
     t = ui_scroll_click(x, y, lx + lw - 18, TOOL_H + 20, lh - 2, f->n, rows, f->top);
@@ -681,7 +822,11 @@ void files_command(struct win *w, int menu, int item) {
         }
         else if (item == 3 && f->n) inputbox(w, "Rename", "New name:", ename(f, f->sel), A_RENAME);
         else if (item == 5) win_close(win_index(w));
-    } else if (menu == 1) { load(f); tree_load(f); }
+    } else if (menu == 1) {
+        if (item == 0) { load(f); tree_load(f); }
+        else if (item >= V_SORT && item < V_SORT + N_SORTS) set_sort((item - V_SORT) * 2 + (theme_sort() & 1));
+        else if (item == V_ASC || item == V_DESC) set_sort(theme_sort() / 2 * 2 + (item == V_DESC));
+    }
     else if (menu == 2) up(w);
 }
 

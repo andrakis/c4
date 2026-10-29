@@ -112,7 +112,7 @@ const settle = () => { for (let i = 0; i < 20; i++) run(); return true; };
 const screen = () => frame.map(t => t.s).join('\n');
 const has = re => typeof re === 'string' ? frame.some(t => t.s.trimEnd() === re) : frame.some(t => re.test(t.s));
 const find = s => frame.filter(t => (typeof s === 'string' ? t.s.trimEnd() === s : s.test(t.s)));
-// Monospaced text as lines: the Editor colours a line in runs, one string
+// Monospaced text as lines: the IDE colours a line in runs, one string
 // each, so a run that starts where the last ended joins it, and the cursor
 // drawn over a character is left out.
 const rows = () => {
@@ -158,11 +158,19 @@ const dbl = (s, pick = 'last') => {
   return true;
 };
 const key = (ch, mods = 0, code) => {
-  const named = { '\n': 13, '\b': 8, ESC: 27, DEL: 46, F2: 113, F5: 116, TAB: 9, UP: 38, DOWN: 40 };
+  const named = { '\n': 13, '\b': 8, ESC: 27, DEL: 46, F2: 113, F5: 116, TAB: 9, UP: 38, DOWN: 40, END: 35, HOME: 36, LEFT: 37, RIGHT: 39, INS: 45 };
   const c = code ?? named[ch] ?? ch.toUpperCase().charCodeAt(0);
   ev({ kind: 'keydown', code: c, char: ch === '\n' ? 10 : ch.length === 1 && c !== 8 ? ch.charCodeAt(0) : 0, mods });
 };
 const type = s => { for (const ch of s) key(ch); };
+// a press at (x0, y0), the pointer moved to (x1, y1) with the button held, and let go
+const drag = (x0, y0, x1, y1) => {
+  ev({ kind: 'move', x: x0, y: y0, buttons: 0 }); ev({ kind: 'down', x: x0, y: y0, button: 0 });
+  for (let k = 1; k <= 4; k++) ev({ kind: 'move', x: x0 + ((x1 - x0) * k) / 4, y: y0 + ((y1 - y0) * k) / 4, buttons: 1 });
+  ev({ kind: 'up', x: x1, y: y1, button: 0 });
+};
+// a menu of the topmost window, and an item of it
+const menu = (title, item) => { clickText(title); until(() => has(item)); return clickText(item); };
 const start = item => { click(20, SH - TASK_H + 12); until(() => has('Power Off...')); const ok = clickText(item); settle(); return ok; };
 // Files' file list: right of its folder tree, inside its window. The
 // window is found by its title (drawn 27 px in from the window's left, 7 down).
@@ -181,7 +189,7 @@ const noDialog = () => !has('OK') && !has('Yes');
 check(until(() => consoleText().includes('c4ix:/$'), 2000), 'C4IX boots to its shell');
 check(/entries left on the host until first use/.test(consoleText()) && files.fetched.size < 12,
   `booting reads ${files.fetched.size} of ${index.length} disk files; the rest stay lazy`, [...files.fetched].join(' '));
-// The Editor's :make links with /usr/lib/libc4ix.c4l, which the root
+// The IDE's :make links with /usr/lib/libc4ix.c4l, which the root
 // archive brings: let its background unpack (task 4) finish first
 typeBytes(vm, new TextEncoder().encode('wait 4\n'));
 check(until(() => consoleText().includes('[4] done (0)'), 3000), 'the root archive unpacks in the background');
@@ -236,6 +244,38 @@ key('', 0, 36); key('', 0, 46);                                // Home, Delete: 
 check(until(() => inputLine() === 'cho xyz'), 'Home and Delete edit at the start of the line', inputLine());
 type('e'); key('', 0, 35); type('!\n');                        // "e", End, "!", Enter
 check(until(() => has('xyz!')), 'End goes back to the end, and Enter sends the whole line', screen());
+// ---- the Terminal's clipboard: a run of text selected with the mouse, a
+// block with Alt held, and Paste typing it in --------------------------------------------------
+// the Terminal's text: 8 pixels a column, monospaced, its own colours
+const termText = s => frame.filter(t => t.adv === 8 && (typeof s === 'string' ? t.s.trimEnd() === s : s.test(t.s)));
+type('echo echo pasted\n');
+check(until(() => termText('echo pasted').length > 0 && inputLine() === ''), 'a line to copy', screen());
+{
+  const t = termText('echo pasted').pop();
+  drag(t.x + 2, t.y + 6, t.x + 11 * 8 - 3, t.y + 6);
+  check(until(() => frame.some(s => s.s === 'echo pasted' && s.rgb === 0)), 'dragging over it selects it, drawn black on grey', screen());
+  check(menu('Edit', 'Copy   Ctrl+Shift+C') && until(() => !frame.some(s => s.s === 'echo pasted' && s.rgb === 0)), 'Edit > Copy takes it', screen());
+  check(menu('Edit', 'Paste   Ctrl+Shift+V') && until(() => inputLine() === 'echo pasted'), 'Edit > Paste types it in', inputLine());
+  key('\n');
+  check(until(() => termText('pasted').length > 0), 'and Enter runs it', screen());
+}
+type('echo blk\n');
+until(() => termText('blk').length > 0 && inputLine() === '');
+{
+  // a block: the command's eight columns after the prompt, and the same
+  // columns of its output's row, which are blank (a run would take "blk")
+  const t = termText('blk').pop();
+  const n = termText('blk').length;
+  ev({ kind: 'keydown', code: 18, char: 0, mods: 4 });
+  drag(t.x + 8 * 8 + 2, t.y - 16 + 6, t.x + 15 * 8 + 3, t.y + 6);
+  ev({ kind: 'keyup', code: 18, char: 0, mods: 0 });
+  check(until(() => frame.some(s => s.s === 'echo blk' && s.rgb === 0) && !frame.some(s => s.s === 'blk' && s.rgb === 0)),
+    'with Alt held a drag selects a block', screen());
+  key('C', 3, 67);                                             // Ctrl+Shift+C
+  key('', 1, 45);                                              // Shift+Ins
+  check(until(() => termText('blk').length > n && inputLine() === ''), 'Ctrl+Shift+C copies it, and Shift+Ins pastes it: the one line, run',
+    inputLine() + ' / ' + screen().slice(-300));
+}
 type('cat /usr/src/c4ix/user/top.c\n');
 until(() => has(/^\s*return 0;/) && inputLine() === '', 600);
 check(!has(/^\/\/ C4IX userland: top\./), 'a long file scrolls its first line off the Terminal', screen());
@@ -244,6 +284,8 @@ check(until(() => has(/^\/\/ C4IX userland: top\./)), 'and PgUp scrolls back to 
 key('', 0, 34);                                                // PgDn
 type('echo back\n');
 check(until(() => has('back') && !has(/^\/\/ C4IX userland: top\./)), 'typing comes back to the bottom', screen());
+// Copy All: the scrollback and the screen (pasted into Text Editor, below)
+check(menu('Edit', 'Copy All'), 'Edit > Copy All', screen());
 
 // ---- top runs until Ctrl-C ----------------------------------------------------------------
 type('top\n');
@@ -427,15 +469,45 @@ check(until(() => has('Untitled - Text Editor')), 'Go > Text Editor opens a new 
 type('hello from c4ix\n'); type('second line');
 check(until(() => has('hello from c4ix') && has('second line') && has('Untitled * - Text Editor')), 'typing shows, and the title marks it modified', screen());
 key('s', 2, 83);
-check(until(() => has('Save as:')), 'Ctrl+S on a new file asks where');
+check(until(() => has('Save As') && has('Save in:') && has('Save as type:') && has('tmp') && has('untitled.txt') && has('All Files (*)')),
+  'Ctrl+S on a new file asks where, in a Windows 95 Save As: /tmp, the name, the types', screen());
 key('\n');
 check(until(() => has('untitled.txt - Text Editor')), 'and saves it to /tmp/untitled.txt', screen());
+// Open: the folder, up, a folder's contents, and the types
+key('o', 2, 79);
+// the file box's client area, from its "Look in:" (drawn at 10, 14); what is
+// drawn after that is the box's, the topmost window
+const fbox = () => { const i = frame.findIndex(s => /^(Look|Save) in:$/.test(s.s.trimEnd())); return i >= 0 ? { x: frame[i].x - 10, y: frame[i].y - 14, i } : null; };
+check(until(() => has('Look in:') && has('Files of type:') && !!fbox()), 'Ctrl+O opens a Windows 95 Open box', screen());
+const inBox = all => { const b = fbox(); return b ? all.filter(t => frame.indexOf(t) > b.i && t.x > b.x && t.y > b.y + 40 && t.y < b.y + 227).pop() : undefined; };
+check(until(() => !!inBox(find('untitled.txt'))), 'in the file\'s folder, which lists it', screen());
+{
+  // Up: the button right of "Look in"; the folders above in its list
+  const b = fbox();
+  click(b.x + 462 - 34 + 12, b.y + 21);
+  check(until(() => has('C4IX (/)') && !!inBox(find('usr')) && !inBox(find('untitled.txt'))), 'the Up button goes to the folder above', screen());
+  dbl('tmp', inBox);
+  check(until(() => !!inBox(find('untitled.txt'))), 'and a double click into a folder', screen());
+  clickText('All Files (*)');
+  check(until(() => has('Text Documents (*.txt)') && has('C Source (*.c;*.h)')), 'Files of type lists the types', screen());
+  clickText('C Source (*.c;*.h)');
+  check(until(() => has('C Source (*.c;*.h)') && !inBox(find('untitled.txt'))), 'and C Source shows no .txt', screen());
+  key('ESC');
+  check(until(() => !has('Look in:')), 'Esc cancels it', screen());
+}
 clickText(/^Files - /); key('F5');
 check(until(() => !!inList(find('untitled.txt')) && has('Text')), 'Files lists the saved file after a refresh', screen());
 const notes = find('untitled.txt - Text Editor').length;
 dbl('untitled.txt', inList);
 check(until(() => find('untitled.txt - Text Editor').length > notes), 'double-clicking it opens it in Text Editor');
 check(until(() => find('hello from c4ix').length >= 2), 'with what was saved in it');
+// the Terminal's Copy All, pasted here: its scrollback too, top.c's first line long scrolled off
+key('v', 2, 86);
+// PgUp a page at a time, each drawn before the next
+const topLine = () => frame.some(t => t.adv === 7 && /^\/\/ C4IX userland: top\./.test(t.s));
+for (let i = 0; i < 30 && !topLine(); i++) { key('', 0, 33); until(topLine, 8); }
+check(until(topLine),
+  "the Terminal's Copy All pastes into Text Editor, with what had scrolled off its screen", screen().slice(-600));
 
 // ---- Calculator ------------------------------------------------------------------------
 start('Calculator');
@@ -478,20 +550,76 @@ key('ESC'); ftype('10*0.5==');
 check(until(() => has('2.5')), 'in Double too: 10 * 0.5 = = is 2.5', screen().slice(-300));
 clickText('Integer', 'last', -8, 5);
 
-// ---- Editor -------------------------------------------------------------------------------
+// ---- the IDE: Traditional typing, the clipboard, a binary file, its Settings ------------------
 // Printable keys go in with keyCode 0: this harness would otherwise make
 // '(' a Down arrow and '.' Delete (a browser sends their own keyCodes).
 const txt = s => { for (const ch of s) key(ch, 0, ch === '\n' ? 13 : 0); };
 const edLine = s => rows().some(t => t.s.trimEnd().endsWith(s));
-start('Editor');
-check(until(() => has('Untitled - Editor')), 'Go > Editor opens a new file in VIM mode', screen());
+start('IDE');
+check(until(() => has('Untitled - IDE') && has(/^Type to edit; Esc for a command/)), 'Go > IDE opens a new file, titled IDE, typing as Text Editor does', screen());
+check(rects.some(r => r.rgb === 0x000087 && r.w > 300), "in the Blue scheme, after VIM's blue", [...new Set(rects.map(r => r.rgb.toString(16)))].join(' '));
+txt('hello world');
+check(until(() => edLine('hello world')), 'typing types at once', screen());
+for (let i = 0; i < 5; i++) key('', 1, 37);                   // Shift+Left
+key('c', 2, 67); key('END'); txt(' '); key('v', 2, 86);
+check(until(() => edLine('hello world world')), 'Shift+Left selects, Ctrl+C copies, Ctrl+V pastes', screen());
+key('a', 2, 65); txt('x');
+check(until(() => edLine('x') && !edLine('hello world world')), 'Ctrl+A selects it all, and typing replaces it', screen());
+key('z', 2, 90);
+check(until(() => edLine('hello world world')), 'Ctrl+Z undoes that', screen());
+menu('Edit', 'Select All   Ctrl+A'); menu('Edit', 'Cut   Ctrl+X');
+check(until(() => !edLine('hello world world')), 'Edit > Select All, then Cut, take it out', screen());
+menu('Edit', 'Paste   Ctrl+V');
+check(until(() => edLine('hello world world')), 'and Edit > Paste puts it back', screen());
+{
+  // a drag over "hello", and Ctrl+X
+  const t = rows().find(t => t.s.trimEnd().endsWith('hello world world'));
+  drag(t.x + 1, t.y + 5, t.x + 5 * 7 + 1, t.y + 5);
+  key('x', 2, 88);
+  check(until(() => rows().some(t => t.s.trimEnd() === ' world world')), 'a drag selects, and Ctrl+X cuts it', screen());
+}
+// what a window copied is still there once the window has gone
+start('Terminal');
+type('echo survivor\n');
+check(until(() => termText('survivor').length > 0), 'a new Terminal says a word', screen());
+{
+  const t = termText('survivor').pop();
+  drag(t.x + 2, t.y + 6, t.x + 8 * 8 - 3, t.y + 6);
+  key('C', 3, 67);
+  // its close box: the Flat look's, 627 pixels right of its title
+  const ti = frame.filter(s => /^Terminal - task/.test(s.s) && s.y < SH - TASK_H).pop();
+  click(ti.x + 627, ti.y + 6);
+  check(until(() => !frame.some(s => s.s === ti.s)), 'it is copied, and the Terminal closed', screen());
+  // the IDE is on top again, and has the keys
+  key('', 0, 35); key('v', 2, 86);
+  check(until(() => edLine('worldsurvivor')), "and it pastes into the IDE: the clipboard's text outlived its window", screen());
+}
+// a binary file: asked about first, by a NUL in it or by its name
+key('ESC'); txt('e! /bin/hello\n');
+check(until(() => has(/does not look like text/)), 'opening a binary file asks first (a NUL in /bin/hello)', screen());
+clickText('Cancel');
+check(until(() => noDialog() && has('Untitled * - IDE')), 'and Cancel leaves it unopened', screen());
+key('ESC'); txt('e! /lib/libc.c4s\n');
+check(until(() => has(/does not look like text/)), 'a .c4s is binary by its name', screen());
+key('\n');
+check(until(() => noDialog() && has('libc.c4s - IDE')), 'and OK opens it anyway', screen());
+key('n', 2, 78);
+check(until(() => has('Untitled - IDE')), 'Ctrl+N: a new file', screen());
+// Settings: the colours, and VIM mode
+menu('View', 'Settings...');
+check(until(() => has('IDE Settings') && has('Colour scheme') && has('Input mode')), "View > Settings opens the IDE's settings", screen());
+clickText('Classic (black on white)', 'last', -8, 5);
+check(until(() => !rects.some(r => r.rgb === 0x000087 && r.w > 300) && rects.some(r => r.rgb === 0xffffff && r.w > 300)), 'Classic draws it black on white', screen());
+clickText('VIM: Normal, Insert and Visual modes', 'last', -8, 5);
+clickText('OK');
+check(until(() => !has('IDE Settings') && !has(/^-- EDIT --/)), 'VIM mode takes it out of Traditional typing, and OK closes Settings', screen());
 txt('i');
 check(until(() => has('-- INSERT --')), 'i enters Insert mode');
 txt('int main() {\n    return 4;\n}');
 key('ESC');
 check(until(() => edLine('int main() {') && edLine('return 4;') && !has('-- INSERT --')), 'typing shows, keeping the indent, and Esc leaves Insert', screen());
 txt(':w /tmp/t.c\n');
-check(until(() => has(/"\/tmp\/t\.c" written, 3 lines/) && has('t.c - Editor')), ':w writes the file', screen());
+check(until(() => has(/"\/tmp\/t\.c" written, 3 lines/) && has('t.c - IDE')), ':w writes the file', screen());
 txt('2Gf4r7');
 check(until(() => edLine('    return 7;')), '2G f4 r7 changes the number in place', screen());
 txt('ggyyp');
@@ -530,15 +658,15 @@ check(until(() => edLine('abc}')), 'that types at once', screen());
 key('ESC'); txt('set vim\n');
 check(until(() => !has(/^-- EDIT --/)), 'and Esc then set vim brings VIM back', screen());
 txt(':q!\n');
-check(until(() => !has(/t\.c \* - Editor|t\.c - Editor/)), ':q! closes the window');
+check(until(() => !has(/t\.c \* - IDE|t\.c - IDE/)), ':q! closes the window');
 
 // ---- the IDE: its desktop icon, its file pane, colours, its scroll bar -----------------------
 dbl('IDE');
-check(until(() => has('Untitled - Editor') && has('Files')), 'the IDE icon opens the Editor, with a file pane', screen());
-// The Editor window, by its title; what is drawn after the title in the
+check(until(() => has('Untitled - IDE') && has('Files')), 'the IDE icon opens the IDE, with a file pane, as it was left: VIM, Classic', screen());
+// The IDE window, by its title; what is drawn after the title in the
 // frame is that window's (it is on top), so other windows' text at the
 // same place does not count.
-const edTitle = () => frame.findIndex(t => / - Editor$/.test(t.s));
+const edTitle = () => frame.findIndex(t => / - IDE$/.test(t.s));
 const ed = () => { const i = edTitle(); return i >= 0 ? { x: frame[i].x - 27, y: frame[i].y - 7, i } : null; };
 const inPane = all => { const e = ed(); return e ? all.filter(t => frame.indexOf(t) > e.i && t.x > e.x && t.x < e.x + 184 && t.y > e.y + 60).pop() : undefined; };
 check(!!inPane(find('usr')) && !!inPane(find('bin')) && !inPane(find('src')), 'the pane lists the top of the disk, its folders closed', screen());
@@ -554,7 +682,16 @@ clickText('examples', inPane);
 { const e = ed(); ev({ kind: 'wheel', x: e.x + 60, y: e.y + 200, dy: 1 }); }
 check(until(() => !!inPane(find('hello.c'))), 'which lists its files', screen());
 clickText('hello.c', inPane);
-check(until(() => has('hello.c - Editor') && edLine('int main(int argc, char **argv) {')), 'a click on a file opens it in the editor', screen());
+check(until(() => has('hello.c - IDE') && edLine('int main(int argc, char **argv) {')), 'a click on a file opens it in the editor', screen());
+// File > Open: the Windows 95 box, in the file's folder, with the IDE's types
+menu('File', 'Open...');
+check(until(() => has('Look in:') && has('examples') && !!inBox(find('hello.c'))), "the IDE's File > Open is the Windows 95 box, in the file's folder", screen());
+clickText('All Files (*)');
+until(() => has('C Source (*.c;*.h)'));
+clickText('C Source (*.c;*.h)');
+check(until(() => has('C Source (*.c;*.h)') && !has('All Files (*)') && !!inBox(find('hello.c'))), 'with C Source among its types', screen());
+key('ESC');
+until(() => !has('Look in:'));
 check(frame.some(t => t.s === 'int' && t.rgb === 0x007878) && frame.some(t => t.s === 'return' && t.rgb === 0x0000b0) &&
   frame.some(t => /^\/\/ hello\.c/.test(t.s) && t.rgb === 0x2a8a2a) && frame.some(t => /^"hello from/.test(t.s) && t.rgb === 0xa01818),
   'a .c file is coloured: types, keywords, comments and strings', frame.filter(t => t.adv === 7).map(t => `${t.s}:${t.rgb.toString(16)}`).slice(0, 40).join(' '));
@@ -562,23 +699,26 @@ txt(':syntax off\n');
 check(until(() => edLine('int main(int argc, char **argv) {') && !frame.some(t => t.s === 'int' && t.rgb === 0x007878)), ':syntax off draws it plain', screen());
 txt(':syntax on\n');
 key('b', 2, 66);
-check(until(() => !has('Files') && has('hello.c - Editor')), 'Ctrl+B hides the file pane', screen());
+check(until(() => !has('Files') && has('hello.c - IDE')), 'Ctrl+B hides the file pane', screen());
 key('b', 2, 66);
 check(until(() => has('Files') && !!inPane(find('hello.c'))), 'and shows it again, still open at the file', screen());
 txt(':e /usr/src/c4ix/user/desktop/edit.c\n');
-check(until(() => has('edit.c - Editor') && !!inPane(find('edit.c'))), ':e opens a file, and the pane opens the folders to it', screen());
+check(until(() => has('edit.c - IDE') && !!inPane(find('edit.c'))), ':e opens a file, and the pane opens the folders to it', screen());
 {
   const e = ed();
   const firstLine = () => Math.min(...frame.filter(t => t.adv === 7 && /^\d+$/.test(t.s.trim()) && t.x > e.x + 184 && t.x < e.x + 250).map(t => +t.s.trim()));
   check(firstLine() === 1 && dragThumb(r => r.x > e.x + 400, 150) && until(() => firstLine() > 100),
     "dragging the editor's scroll thumb scrolls the text", `first line ${firstLine()}`);
 }
-// a long line: off to the right, then the bar across, then folded by wrap
+// a long line: folded by Word Wrap, which is on to start with; then off
+// to the right, and the bar across; then folded again
 txt(':e /tmp/long.txt\n');
-until(() => has('long.txt - Editor'));
+until(() => has('long.txt - IDE'));
 txt('i' + 'W'.repeat(110) + 'END');
 key('ESC'); txt('0');
-check(until(() => rows().some(t => /^W{40,}$/.test(t.s.trim())) && !edLine('WEND')), 'a long line shows its start, the rest off to the right', screen());
+check(until(() => edLine('WEND') && rows().filter(t => /^W{20,}/.test(t.s.trim())).length >= 2), 'Word Wrap is on: a long line folds onto the next row', screen());
+txt(':set nowrap\n');
+check(until(() => rows().some(t => /^W{40,}$/.test(t.s.trim())) && !edLine('WEND')), 'and :set nowrap shows its start, the rest off to the right', screen());
 {
   const e = ed();
   const hb = rects.filter(r => r.h === 16 && r.rgb === 0xe0e0e0 && r.x > e.x + 150 && r.w > 200).pop();
@@ -589,7 +729,7 @@ txt(':set wrap\n');
 check(until(() => edLine('WEND') && rows().filter(t => /^W{20,}/.test(t.s.trim())).length >= 2), ':set wrap folds it onto the next row', screen());
 txt(':set nowrap\n');
 txt(':e! /usr/src/c4ix/user/desktop/edit.c\n');
-until(() => has('edit.c - Editor'));
+until(() => has('edit.c - IDE'));
 // a build that takes a while, cancelled from the pane's button. /build
 // arrives built, so it is an edit that makes one: edit.c's object, again
 txt('Go// a change, so there is something to build'); key('ESC');
@@ -600,7 +740,7 @@ check(until(() => has('Build: cancelled') && !has('Build: running'), 400), 'Canc
 // src/tests has no BUILD.B4K, and /usr's builds the tree, not
 // mandel.c: so it is built alone, by cc, with the repo's headers
 txt(':e! /usr/src/tests/mandel.c\n');
-until(() => has('mandel.c - Editor'));
+until(() => has('mandel.c - IDE'));
 txt(':make\n');
 check(until(() => has(/^Build: finished/) && has(/^c4rlink: wrote \d+ bytes to ramfs:\/tmp\/mandel\.c4r/), 4000),
   ':make on a file no BUILD.B4K names builds it alone, with cc', frame.filter(t => /Build|mandel|cc|b4ke|c4lc|cannot|rror/.test(t.s)).map(t => t.s.trim()).join('\n'));
@@ -613,7 +753,7 @@ check(until(() => has(/^Build: finished/) && has(/^c4rlink: wrote \d+ bytes to r
   check(until(() => pointer === 0), 'and an arrow over the taskbar', `pointer ${pointer}`);
 }
 txt(':q\n');
-check(until(() => !has('edit.c - Editor')), 'and :q closes it');
+check(until(() => !has('edit.c - IDE')), 'and :q closes it');
 
 // ---- System Monitor ------------------------------------------------------------------------
 clickText(/^Terminal - task/);
@@ -650,6 +790,8 @@ check(until(() => !has('Color scheme')), 'Esc closes Settings');
 clickText(/^Terminal - task/);
 type('cat /etc/desktop.cfg\n');
 check(until(() => has(/^scheme 1 bg -1/)), 'the choice is kept in /etc/desktop.cfg', screen());
+type('cat /etc/ide.cfg\n');
+check(until(() => has(/^scheme 1 input 1/)), "and the IDE's in /etc/ide.cfg", screen());
 start('Settings');
 clickText('Defaults');
 check(until(() => rects.some(r => r.rgb === 0xeceff4 && r.w > 300) && !rects.some(r => r.rgb === 0xb8c4cc)), 'Defaults brings the Modern scheme back', screen());
@@ -814,6 +956,12 @@ check(until(() => sysbox()), 'Settings > Look > Windows 3.1 draws the control-me
 }
 key('ESC');
 until(() => !has('Look'));
+start('Text Editor');
+until(() => has('Untitled - Text Editor'));
+key('o', 2, 79);
+check(until(() => has('File name:') && has('Open') && !has('Look in:')), "and Text Editor's Open is Windows 3.1's file box", screen());
+key('ESC');
+until(() => !has('File name:'));
 
 // ---- Power Off --------------------------------------------------------------------------------
 start('Power Off...');

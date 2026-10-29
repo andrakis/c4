@@ -174,7 +174,7 @@ static void desktop(int x, int y, int w, int h) {
 enum { GO_RUN = 0 - 1, GO_OFF = 0 - 2, GO_WOLF = 0 - 3, GO_DOOM = 0 - 4, GO_TYRIAN = 0 - 5, GO_ROTT = 0 - 6 };
 struct go_item { char *label; int kind; };
 static struct go_item start_items[] = {
-    { "Terminal", K_TERM }, { "Files", K_FILES }, { "Text Editor", K_NOTE }, { "Editor", K_EDIT },
+    { "Terminal", K_TERM }, { "Files", K_FILES }, { "Text Editor", K_NOTE }, { "IDE", K_EDIT },
     { "Calculator", K_CALC }, { "System Monitor", K_TASKS }, { "Settings", K_SETTINGS },
     { "About C4IX", K_ABOUT }, { "-", 0 },
     { "Wolfenstein 3D", GO_WOLF }, { "Doom", GO_DOOM }, { "Tyrian", GO_TYRIAN },
@@ -481,6 +481,8 @@ int main(int argc, char **argv) {
     notepad_about = "Text Editor for C4IX: edits text in the RAM filesystem.";
     notepad_home = "/";
     notepad_untitled = "/tmp/untitled.txt";
+    notepad_filebox = 1;
+    notepad_filter = "All Files (*)|*|Text Documents (*.txt)|*.txt|C Source (*.c;*.h)|*.c;*.h";
     wk_init(&shell);
     wall_load("/usr/share/splash/c4ix.c4p.gz");
     icon_k = 0 - 1;

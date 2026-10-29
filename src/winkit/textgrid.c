@@ -79,6 +79,7 @@ static void newline(struct tgrid *t) {
         memcpy(t->sb + t->sbhead * COLS, t->cell, COLS * sizeof(int));
         t->sbhead = (t->sbhead + 1) % SB_ROWS;
         if (t->sbn < SB_ROWS) ++t->sbn;
+        ++t->nscr;
         // looking back: stay on the same rows while new ones arrive
         if (t->view && t->view < t->sbn) ++t->view;
         if (t->llen) --t->erow;
@@ -397,6 +398,103 @@ void tg_mouse(struct tgrid *t, int ev, int x, int y) {
     }
 }
 
+// ---- the selection --------------------------------------------------------------------
+//
+// Lines are numbered from the grid's first: line nscr is the grid's top
+// row now, and those before it are the scrollback's, as far back as it
+// keeps. A selection is two places, where it began and where it was
+// dragged to, in whichever order; a run takes every column between them,
+// a block only the columns between theirs.
+
+// the cells of line l, or 0 for one the scrollback no longer holds
+static int *row_of(struct tgrid *t, int l) {
+    int d;
+    d = t->nscr - l;
+    if (d > 0) {
+        if (d > t->sbn) return 0;
+        return t->sb + ((t->sbhead - d + SB_ROWS) % SB_ROWS) * COLS;
+    }
+    if (0 - d >= ROWS) return 0;
+    return t->cell + (0 - d) * COLS;
+}
+
+// the columns of line l the selection takes, a to b: 0 if none
+static int sel_cols(struct tgrid *t, int l, int *a, int *b) {
+    int l0, c0, l1, c1, k;
+    if (!t->sel) return 0;
+    l0 = t->sl0; c0 = t->sc0; l1 = t->sl1; c1 = t->sc1;
+    if (l1 < l0 || (l1 == l0 && c1 < c0)) { k = l0; l0 = l1; l1 = k; k = c0; c0 = c1; c1 = k; }
+    if (l < l0 || l > l1) return 0;
+    if (t->sel == 2) { *a = c0 < c1 ? c0 : c1; *b = c0 < c1 ? c1 : c0; return 1; }
+    *a = l == l0 ? c0 : 0;
+    *b = l == l1 ? c1 : COLS - 1;
+    return 1;
+}
+
+void tg_select(struct tgrid *t, int ev, int x, int y, int block) {
+    int l, c, r;
+    c = x / CW; r = y / CH;
+    if (x < 0 || c < 0) c = 0;
+    if (c >= COLS) c = COLS - 1;
+    if (y < 0 || r < 0) r = 0;
+    if (r >= ROWS) r = ROWS - 1;
+    l = t->nscr - t->view + r;
+    if (ev == E_DOWN) {
+        if (t->sel) wk_invalidate(t->win, 0, 0, 0, 0);
+        t->sel = 0;
+        t->selecting = block ? 2 : 1;
+        t->sl0 = l; t->sc0 = c; t->sl1 = l; t->sc1 = c;
+    } else if (ev == E_MOVE && t->selecting) {
+        if (l == t->sl1 && c == t->sc1) return;
+        t->sl1 = l; t->sc1 = c;
+        t->sel = l != t->sl0 || c != t->sc0 ? t->selecting : 0;
+        wk_invalidate(t->win, 0, 0, 0, 0);
+    } else if (ev == E_UP) t->selecting = 0;
+}
+
+void tg_select_all(struct tgrid *t) {
+    t->sel = 1; t->selecting = 0;
+    t->sl0 = t->nscr - t->sbn; t->sc0 = 0;
+    t->sl1 = t->nscr + ROWS - 1; t->sc1 = COLS - 1;
+    wk_invalidate(t->win, 0, 0, 0, 0);
+}
+
+void tg_unselect(struct tgrid *t) {
+    if (t->sel) wk_invalidate(t->win, 0, 0, 0, 0);
+    t->sel = 0; t->selecting = 0;
+}
+
+// Each line's text, its trailing spaces gone, a newline between lines;
+// everything (all) ends at its last line with something on it.
+int tg_copy(struct tgrid *t, int all) {
+    int l, la, lb, a, b, n, end, start, v, *row;
+    char *s;
+    if (all) { la = t->nscr - t->sbn; lb = t->nscr + ROWS - 1; }
+    else {
+        if (!t->sel) return 0;
+        la = t->sl0 < t->sl1 ? t->sl0 : t->sl1;
+        lb = t->sl0 < t->sl1 ? t->sl1 : t->sl0;
+    }
+    if (!(s = wk_alloc((lb - la + 1) * (COLS + 1) + 1))) return 0;
+    n = 0; end = 0;
+    l = la;
+    while (l <= lb) {
+        a = 0; b = COLS - 1;
+        if ((row = row_of(t, l)) && (all || sel_cols(t, l, &a, &b))) {
+            start = n;
+            while (a <= b) { v = row[a] & 255; s[n] = v >= 32 && v < 127 ? v : ' '; ++n; ++a; }
+            while (n > start && s[n - 1] == ' ') --n;
+            if (!all) end = n;
+            else if (n > start) end = n + 1;
+            if (l < lb || all) { s[n] = 10; ++n; }
+        }
+        ++l;
+    }
+    wk_clip_set(s, end);
+    wk_free(s);
+    return 1;
+}
+
 // ---- drawing ----------------------------------------------------------------------
 
 // Work out row r's runs: its rectangles of background, and its stretches
@@ -497,6 +595,17 @@ void tg_draw(struct tgrid *t, int ox, int oy, int focused) {
             } else d_rect(ox + run[0] * CW, oy + r * CH, run[1] * CW, CH, tg_pal[run[2]]);
             run = run + 3;
             ++k;
+        }
+        ++r;
+    }
+    // the selection, as a console shows it: black on the text's grey
+    r = 0;
+    while (t->sel && r < ROWS) {
+        if (sel_cols(t, t->nscr - v + r, &k, &n) && (run = row_of(t, t->nscr - v + r))) {
+            d_rect(ox + k * CW, oy + r * CH, (n - k + 1) * CW, CH, tg_pal[7]);
+            g = 0;
+            while (k + g <= n) { tmp[g] = run[k + g] & 255; if (tmp[g] < 32 || tmp[g] > 126) tmp[g] = ' '; ++g; }
+            d_textn(ox + k * CW, oy + r * CH + 1, C_DARK, TG_FONT, F_MONO, CW, tmp, g);
         }
         ++r;
     }

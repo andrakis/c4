@@ -61,6 +61,7 @@ void term_drawn(struct win *w);
 void term_tick(struct win *w);
 void term_close(struct win *w);
 void term_mouse(struct win *w, int ev, int x, int y, int cw, int ch);
+void term_command(struct win *w, int menu, int item);   // Edit: Copy, Paste, Select All, Copy All
 
 int  files_open(char *path);
 void files_draw(struct win *w, int ox, int oy, int cw, int ch, int focused);

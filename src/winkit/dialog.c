@@ -188,30 +188,84 @@ void wk_inputbox(int owner, int dialog, char *title, char *prompt, char *buf, in
 //
 // The folder's contents, folders first, then a name. A double click on a
 // folder (or "..") goes into it; on a file, or OK with a name, answers
-// with the folder and the name joined.
+// with the folder and the name joined. A name with a * in it is a pattern
+// instead: the files it matches are listed.
+//
+// The types a box offers are its pattern: "*", or Windows' filter string,
+// a label and its patterns in turn, "C Source (*.c;*.h)|*.c;*.h|All
+// Files (*)|*". The first is shown to start with. This file draws the box
+// in Windows 3.1's look, which shows the first type's files; look95.c
+// draws Windows 95's, with a list to choose the type from.
 
-enum { FB_MAX = 256, FB_ROWS = 12, FB_ROW = 16 };
+char *wk_fb_name(struct fdlg *f, int k) { return f->names + f->order[k] * WK_NAME; }
+static char *fname(struct fdlg *f, int k) { return wk_fb_name(f, k); }
 
-struct fdlg {
-    char *buf;                    // as struct dlg's
-    int max;
-    char out[WK_PATH];
-    int caret;
-    int save;
-    int n, top, sel;
-    char dir[WK_PATH];
-    char pattern[WK_NAME];
-    int isdir[FB_MAX];
-    int order[FB_MAX];
-    char names[FB_MAX * WK_NAME];
-};
+// the k'th field of the filter, '|' between them, into out: 0 if none
+static int fb_field(char *s, int k, char *out, int n) {
+    int i;
+    while (k > 0 && *s) { if (*s == '|') --k; ++s; }
+    if (k > 0) return 0;
+    i = 0;
+    while (s[i] && s[i] != '|' && i < n - 1) { out[i] = s[i]; ++i; }
+    out[i] = 0;
+    return 1;
+}
+static int fb_bar(char *s) { while (*s) { if (*s == '|') return 1; ++s; } return 0; }
 
-static char *fname(struct fdlg *f, int k) { return f->names + f->order[k] * WK_NAME; }
+int wk_fb_types(struct fdlg *f) {
+    int n;
+    char t[4];
+    if (!fb_bar(f->filter)) return 1;
+    n = 0;
+    while (fb_field(f->filter, 2 * n + 1, t, 4)) ++n;
+    return n > 0 ? n : 1;
+}
 
+void wk_fb_label(struct fdlg *f, int i, char *out, int n) {
+    if (fb_bar(f->filter)) { fb_field(f->filter, 2 * i, out, n); return; }
+    ui_ncpy(out, ui_eq(f->filter, "*") || !f->filter[0] ? "All Files (*)" : f->filter, n);
+}
+
+void wk_fb_type(struct fdlg *f, int i) {
+    if (i < 0 || i >= wk_fb_types(f)) i = 0;
+    f->ftype = i;
+    if (!fb_bar(f->filter) || !fb_field(f->filter, 2 * i + 1, f->pattern, WK_NAME)) ui_ncpy(f->pattern, f->filter, WK_NAME);
+    wk_fb_list(f);
+}
+
+// name's end is end, whatever the letters' case
+static int fb_ends(char *name, char *end, int n) {
+    int k, a, b;
+    k = ui_len(name);
+    if (n > k) return 0;
+    name = name + k - n;
+    k = 0;
+    while (k < n) {
+        a = name[k]; b = end[k];
+        if (a >= 'A' && a <= 'Z') a = a + 32;
+        if (b >= 'A' && b <= 'Z') b = b + 32;
+        if (a != b) return 0;
+        ++k;
+    }
+    return 1;
+}
+
+// a folder always; a file if one of the patterns takes it ("*", "*.c", or a name)
 static int fb_wanted(struct fdlg *f, char *name, int dir) {
-    if (dir || !f->pattern[0] || ui_eq(f->pattern, "*")) return 1;
-    if (f->pattern[0] == '*') return ui_ends(name, f->pattern + 1);
-    return ui_eq(name, f->pattern);
+    char *p;
+    int n;
+    if (dir || !f->pattern[0]) return 1;
+    p = f->pattern;
+    while (*p) {
+        n = 0;
+        while (p[n] && p[n] != ';') ++n;
+        if (n == 1 && p[0] == '*') return 1;
+        if (n > 1 && p[0] == '*' && fb_ends(name, p + 1, n - 1)) return 1;
+        if (n > 0 && p[0] != '*' && n == ui_len(name) && fb_ends(name, p, n)) return 1;
+        p = p + n;
+        if (*p == ';') ++p;
+    }
+    return 0;
 }
 
 static int fb_before(struct fdlg *f, int a, int b) {
@@ -222,11 +276,11 @@ static int fb_before(struct fdlg *f, int a, int b) {
     return (*p & 255) < (*q & 255);
 }
 
-static void fb_list(struct fdlg *f) {
+void wk_fb_list(struct fdlg *f) {
     int i, k, j, r;
     char name[WK_NAME];
     f->n = 0; f->top = 0; f->sel = 0 - 1;
-    if (f->dir[0] && !ui_eq(f->dir, "/")) {
+    if (f->dir[0] && !ui_eq(f->dir, "/") && !f->up) {
         ui_cpy(f->names, ".."); f->isdir[0] = 1; f->order[0] = 0; f->n = 1;
     }
     i = 0;
@@ -246,7 +300,7 @@ static void fb_list(struct fdlg *f) {
     }
 }
 
-static void fb_enter(struct fdlg *f, char *name) {
+void wk_fb_enter(struct fdlg *f, char *name) {
     int k;
     if (ui_eq(name, "..")) {
         k = ui_len(f->dir);
@@ -256,23 +310,32 @@ static void fb_enter(struct fdlg *f, char *name) {
         if (k < 1) k = 1;
         f->dir[k] = 0;
     } else if (!ui_join(f->dir, f->dir, name, WK_PATH)) return;
-    fb_list(f);
+    wk_fb_list(f);
     wk_redraw_all();
 }
+static void fb_enter(struct fdlg *f, char *name) { wk_fb_enter(f, name); }
 
 // OK, or a double click on a file: the folder and the name joined
-static void fb_ok(struct win *d, struct fdlg *f) {
+void wk_fb_ok(struct win *d, struct fdlg *f) {
     int k;
     char name[WK_NAME];
     k = 0;
     while (k < f->n) { if (f->isdir[f->order[k]] && ui_eq(fname(f, k), f->out)) { fb_enter(f, f->out); f->out[0] = 0; f->caret = 0; return; } ++k; }
+    // nothing typed: the folder picked, if one is
+    if (!f->out[0] && f->sel >= 0 && f->sel < f->n && f->isdir[f->order[f->sel]]) { ui_ncpy(name, fname(f, f->sel), WK_NAME); fb_enter(f, name); return; }
     if (!f->out[0]) return;
+    // a pattern: the files it takes
+    k = 0;
+    while (f->out[k] && f->out[k] != '*') ++k;
+    if (f->out[k] == '*' && f->out[0] != '/') { ui_ncpy(f->pattern, f->out, WK_NAME); f->out[0] = 0; f->caret = 0; wk_fb_list(f); wk_redraw_all(); return; }
     if (f->out[0] != '/') {                     // a name: in the folder shown
         ui_ncpy(name, f->out, WK_NAME);
         if (!ui_join(f->out, f->dir, name, WK_PATH)) { ui_ncpy(f->out, name, WK_NAME); return; }
     }
     wk_dialog_answer(d, 1);
 }
+
+static void fb_ok(struct win *d, struct fdlg *f) { wk_fb_ok(d, f); }
 
 static void file_draw(int w, int cw, int ch, int focused) {
     struct fdlg *f;
@@ -350,10 +413,13 @@ void wk_filebox(int owner, int dialog, int save, char *pattern, char *buf, int m
     struct fdlg *f;
     char *s;
     int k;
-    if (!(d = dialog_open(&wk_file_class, sizeof(struct fdlg), owner, dialog, save ? "Save As" : "Open", 420, 330))) return;
+    if (wk.style == S_WIN31) d = dialog_open(&wk_file_class, sizeof(struct fdlg), owner, dialog, save ? "Save As" : "Open", 420, 330);
+    else d = dialog_open(&wk_file95_class, sizeof(struct fdlg), owner, dialog, save ? "Save As" : "Open", 470, 330);
+    if (!d) return;
     f = (struct fdlg *)d->st;
     f->buf = buf; f->max = max; f->save = save;
-    ui_ncpy(f->pattern, pattern ? pattern : "*", WK_NAME);
+    f->up = wk.style != S_WIN31;
+    ui_ncpy(f->filter, pattern ? pattern : "*", WK_PATH);
     // buf: a folder to start in, or a path whose folder it is and whose name is offered
     f->dir[0] = '/'; f->dir[1] = 0;
     if (buf && buf[0] == '/') {
@@ -362,5 +428,5 @@ void wk_filebox(int owner, int dialog, int save, char *pattern, char *buf, int m
         if (s[0] && !ui_ends(f->dir, "/")) { ui_ncpy(f->out, s, WK_NAME); k = s - f->dir; f->dir[k > 1 ? k - 1 : 1] = 0; }
     } else if (buf && buf[0]) ui_ncpy(f->out, buf, WK_NAME);
     f->caret = ui_len(f->out);
-    fb_list(f);
+    wk_fb_type(f, 0);
 }

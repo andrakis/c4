@@ -1,5 +1,5 @@
-// edit.c -- Editor, the desktop's IDE: a text editor with a VIM mode
-// that builds what it edits. docs/c4ix-desktop.md.
+// edit.c -- the IDE: a text editor, modeless or with VIM's modes, that
+// builds what it edits. docs/c4ix-desktop.md.
 //
 // The text is an array of lines, each its own allocation, so a file is
 // as big as memory allows and an edit moves one line, not the file.
@@ -8,8 +8,14 @@
 // undo is a snapshot of the whole text before each change, which is
 // simple and, for the files this machine holds, cheap.
 //
-// VIM mode (the default; ":set novim" turns it off, for a plain editor in
-// which typing always types and Esc opens the command line):
+// Two ways of typing, chosen in its Settings (View > Settings, kept in
+// /etc/ide.cfg with the colour scheme). Traditional, the default, is Text
+// Editor's: typing always types, Shift with the moving keys or a drag of
+// the mouse selects, and typing replaces the selection; Ctrl+X, C and V
+// (and Shift+Del, Ctrl+Ins, Shift+Ins) cut, copy and paste, Ctrl+A selects
+// everything, Ctrl+Z and Ctrl+Y undo and redo, and Esc opens the command
+// line below (:w, :make and the rest). VIM mode (":set vim" for one
+// window, ":set novim" back):
 //   Normal   h j k l w b e W B E 0 ^ $ gg G { } % f t F T ; ,  with counts
 //            i a I A o O  x X D C s S r J ~  p P  u Ctrl-R  .  n N *
 //            d c y > <  with any motion, doubled for lines, and iw aw
@@ -31,8 +37,9 @@
 // runs what was built in a new Terminal: the .c file's image, or
 // the command a BUILD.B4K names with "SET RUN command".
 //
-// Long lines scroll across (a bar under the text), or, with :set wrap (View
-// > Word Wrap), fold onto the rows below; j and k still move by line. The
+// Long lines fold onto the rows below (Word Wrap, on to start with), or,
+// with :set nowrap (View > Word Wrap), scroll across under a bar; j and k
+// move by line either way. The
 // build pane scrolls both ways, and its Cancel button (or Build > Cancel)
 // stops a build: what b4ke is running first, then b4ke.
 //
@@ -43,7 +50,14 @@
 //
 // Colours. The text is coloured by what the file's name says it is: C and
 // headers, JavaScript, Lisp, Forth, shell scripts and Makefiles, and B4KE
-// build files. :syntax off (or View > Syntax Colouring) turns it off.
+// build files. :syntax off (or View > Syntax Colouring) turns it off. The
+// colours are a scheme's, chosen in Settings: Blue, after VIM's `blue`
+// (the default), or Classic, black on white.
+//
+// Edit's Cut, Copy and Paste go through the desktop's clipboard (the
+// kit's, which every window shares): in VIM mode they take a Visual
+// selection. A file that looks binary -- by its name (.c4r, .wad, .tgz
+// and the like) or a NUL in its first bytes -- is opened only once asked.
 
 #include "desktop.h"
 
@@ -54,8 +68,30 @@ enum { ECW = 7, ECH = 15, EFONT = 12, UNDO_MAX = 32, BROWS = 8, BLOG_MAX = 300,
 enum { FW = 180, FHDR = 20, FROW = 16, F_DIR = 1, F_OPEN = 2, F_KIDS = 400, FNAME = 64 };
 // the languages it colours, and the colours
 enum { L_TEXT = 0, L_C = 1, L_JS = 2, L_LISP = 3, L_FORTH = 4, L_SH = 5, L_B4K = 6, HL_MAX = 1024 };
-enum { HC_KW = 0x0000b0, HC_TYPE = 0x007878, HC_STR = 0xa01818, HC_COM = 0x2a8a2a, HC_NUM = 0x905000, HC_PRE = 0x8020a0 };
+// what each character is, for the colouring; the scheme's colour for it
+// is ec[that] (below)
+enum { HC_TEXT = 0, HC_KW = 1, HC_TYPE = 2, HC_STR = 3, HC_COM = 4, HC_NUM = 5, HC_PRE = 6 };
 enum { M_NORMAL = 0, M_INSERT = 1, M_VISUAL = 2, M_VLINE = 3, M_CMD = 4 };
+// Edit's items, and the answer this window asks for itself
+enum { E_CUT = 0, E_COPY = 1, E_PASTE = 2, E_ALL = 4 };
+enum { A_BINARY = 40 };
+
+// The colour schemes: the text's colours by HC_*, then the rest. A gutter
+// number colour of SHADOW is the desktop scheme's shadow.
+enum { SC_BG = 7, SC_GUT = 8, SC_GUTFG = 9, SC_SEL = 10, SC_TILDE = 11, SC_CUR = 12, SC_CURFG = 13, SC_N = 14,
+       N_SCHEMES = 2, SHADOW = 0x1000000 };
+static char *scheme_names[N_SCHEMES] = { "Blue (after VIM's blue)", "Classic (black on white)" };
+static int scheme_cols[N_SCHEMES * SC_N] = {
+    // Blue: VIM's `blue`, gold on dark blue
+    0xffd700, 0xffffff, 0x87d7ff, 0x87ffaf, 0xd7d7af, 0xff87af, 0x87ffff,
+    0x000087, 0x00005f, 0xffff87, 0x5f87d7, 0x5f87ff, 0xffd700, 0x000087,
+    // Classic: the IDE's first colours
+    0x000000, 0x0000b0, 0x007878, 0xa01818, 0x2a8a2a, 0x905000, 0x8020a0,
+    0xffffff, 0xe8e8e8, SHADOW, 0xa8c8ff, 0x6060c0, 0x000000, 0xffffff };
+// Settings: the scheme and the input mode (VIM's or not), for every IDE
+// window, kept in /etc/ide.cfg
+static int ide_scheme, ide_vim, ide_loaded;
+static int *ec;                       // the scheme in use: ec[HC_KW] and the rest
 
 struct edit {
     char path[128];
@@ -89,15 +125,22 @@ struct edit {
     int tah, ph, hb, maxw;                         // the text area's height, the build pane's, a bar across, the longest line
     int bleft, bmaxw, bcols, bcancel;              // the build pane across; a build being cancelled
     int fleft;                                     // the file pane across, in 6-pixel steps
+    int tsel, tlast;                               // Traditional: a selection from (vy, vx); the last key typed text
+    int drag;                                      // the mouse is selecting
+    char ask[WK_PATH];                             // a file box's path, in and out
+    char pend[128];                                // a binary file waiting to be opened, once asked
 };
 
 static struct edit *E(struct win *w) { return (struct edit *)w->st; }
 static char sb[512];
-static struct wk_menu edit_menus[4];
+static struct wk_menu edit_menus[5];
 static char *edit_file_items[7];
+static char *edit_edit_items[6];
 static char *edit_build_items[7];
-static char *edit_view_items[4];
+static char *edit_view_items[6];
 static char *edit_help_items[2];
+// what Open and Save As offer: the file box's types
+static char *ide_filter = "All Files (*)|*|C Source (*.c;*.h)|*.c;*.h|Build Files (*.b4k)|*.b4k|Scripts (*.sh;*.js;*.lisp;*.fs)|*.sh;*.js;*.mjs;*.lisp;*.scm;*.fs;*.f;*.4th|Text (*.txt;*.md)|*.txt;*.md";
 
 static int e_isspace(int c) { return c == ' ' || c == 9 || c == 10 || c == 13; }
 static int e_isword(int c) {
@@ -368,7 +411,7 @@ static void e_retitle(struct win *w) {
         ui_cpy(sb, e->path + k);
     } else ui_cpy(sb, "Untitled");
     if (e->modified) ui_cat(sb, " *");
-    ui_cat(sb, " - Editor");
+    ui_cat(sb, " - IDE");
     win_title(w, sb);
 }
 
@@ -388,7 +431,7 @@ static int e_load(struct edit *e, char *path) {
     uclose(fd);
     e_settext(e, b, n);
     free(b);
-    ui_cpy(e->path, path);
+    ui_ncpy(e->path, path, 128);
     e->cy = 0; e->cx = 0; e->want = 0; e->top = 0; e->left = 0;
     e->modified = 0;
     while (e->un > 0) { --e->un; free(e->utext[e->un]); }
@@ -407,7 +450,7 @@ static int e_save(struct edit *e, char *path) {
     uclose(fd);
     free(t);
     if (r != n) { e_say(e, "Write failed"); return 0; }
-    if (path != e->path) ui_cpy(e->path, path);
+    if (path != e->path) ui_ncpy(e->path, path, 128);
     e->modified = 0;
     ui_cpy(e->msg, "\"");
     ui_cat(e->msg, path);
@@ -417,6 +460,45 @@ static int e_save(struct edit *e, char *path) {
     f_add(e, e->path);
     f_reveal(e, e->path);
     return 1;
+}
+
+// Binary files, by their names' ends; then any file with a NUL in its
+// first bytes, which text never has.
+static char *bin_ext = " .c4r .c4o .c4l .c4s .c4m .tgz .tar .gz .zip .z .wad .wl1 .wl6 .sod .rtl .rts .grp .pak .bin .img .vfs .png .jpg .gif .bmp .ico .wav .mp3 .ogg .mid .voc .exe .com .o .a .so ";
+static int e_inwords(char *s, int n, char *list);
+static int e_binary(char *p) {
+    int i, k, fd, n;
+    char ext[12];
+    k = ui_len(p);
+    i = k;
+    while (i > 0 && p[i - 1] != '.' && p[i - 1] != '/') --i;
+    if (i > 0 && p[i - 1] == '.' && k - i + 1 < 12) {
+        n = 0;
+        while (i - 1 + n < k) { ext[n] = p[i - 1 + n]; if (ext[n] >= 'A' && ext[n] <= 'Z') ext[n] = ext[n] + 32; ++n; }
+        if (e_inwords(ext, n, bin_ext)) return 1;
+    }
+    if ((fd = uopen(p, O_RD)) < 0) return 0;
+    n = uread(fd, sb, 512);
+    uclose(fd);
+    i = 0;
+    while (i < n) { if (!sb[i]) return 1; ++i; }
+    return 0;
+}
+
+// A file into the editor: 1 opened, 0 cannot, 2 asked first (a binary
+// file, which A_BINARY's answer opens).
+static int e_open(struct win *w, char *path, int force) {
+    struct edit *e;
+    e = E(w);
+    if (!force && e_binary(path)) {
+        ui_ncpy(e->pend, path, 128);
+        ui_cpy(sb, "'");
+        ui_ncat(sb, ui_base(path), 200);
+        ui_cat(sb, "' does not look like text: it is a binary file, which the IDE cannot show, and would spoil if it saved it. Open it anyway?");
+        wk_msgbox(w->id, A_BINARY, "IDE", sb, WK_OKCANCEL);
+        return 2;
+    }
+    return e_load(e, path);
 }
 
 // ---- the cursor ------------------------------------------------------------------------
@@ -1258,7 +1340,7 @@ static void e_ex(struct win *w, char *c) {
     if (c[0] == 'e' && (c[1] == ' ' || (c[1] == '!' && c[2] == ' '))) {
         if (c[1] != '!' && e->modified) { e_say(e, "No write since last change (add ! to override)"); return; }
         c = c + (c[1] == '!' ? 3 : 2);
-        if (!e_load(e, c)) { e_settext(e, "", 0); ui_cpy(e->path, c); e->modified = 0; e->cy = 0; e->cx = 0; e_say(e, "New file"); }
+        if (!e_open(w, c, 0)) { e_settext(e, "", 0); ui_ncpy(e->path, c, 128); e->modified = 0; e->cy = 0; e->cx = 0; e_say(e, "New file"); }
         e_retitle(w);
         return;
     }
@@ -1281,7 +1363,7 @@ static void e_ex(struct win *w, char *c) {
     if (ui_eq(c, "cclose")) { e->bshown = 0; return; }
     if (ui_eq(c, "set nu") || ui_eq(c, "set number")) { e->nu = 1; return; }
     if (ui_eq(c, "set nonu") || ui_eq(c, "set nonumber")) { e->nu = 0; return; }
-    if (ui_eq(c, "set vim")) { e->vim = 1; e->mode = M_NORMAL; e_clamp(e); return; }
+    if (ui_eq(c, "set vim")) { e->vim = 1; e->tsel = 0; e->mode = M_NORMAL; e_clamp(e); return; }
     if (ui_eq(c, "set novim")) { e->vim = 0; e->mode = M_INSERT; e_say(e, "VIM mode off: type to edit; Esc for a command (set vim to come back)"); return; }
     if (c[0] == 's' && c[1] == '/') { e_subst(e, c + 1, 0); return; }
     if (c[0] == '%' && c[1] == 's' && c[2] == '/') { e_subst(e, c + 2, 1); return; }
@@ -1535,6 +1617,146 @@ static void e_normal_key(struct win *w, int code, int ch, int mods) {
     }
 }
 
+// ---- the selection and the clipboard -----------------------------------------------------
+//
+// A selection is VIM's Visual one, or Traditional's (tsel), from (vy, vx)
+// to the cursor. As a range it runs up to, not including, (y1, x1): a
+// Visual one takes the character under the cursor too, and a line-wise one
+// whole lines with their newlines.
+
+static int e_sel_on(struct edit *e) { return e->vim ? e->mode == M_VISUAL || e->mode == M_VLINE : e->tsel; }
+
+static int e_sel_range(struct edit *e, int *y0, int *x0, int *y1, int *x1) {
+    int t;
+    if (!e_sel_on(e)) return 0;
+    *y0 = e->vy; *x0 = e->vx; *y1 = e->cy; *x1 = e->cx;
+    if (*y1 < *y0 || (*y1 == *y0 && *x1 < *x0)) { t = *y0; *y0 = *y1; *y1 = t; t = *x0; *x0 = *x1; *x1 = t; }
+    if (*y0 < 0) *y0 = 0;
+    if (*y1 >= e->nl) { *y1 = e->nl - 1; *x1 = e->len[*y1]; }
+    if (e->vim && e->mode == M_VLINE) { *x0 = 0; *x1 = e->len[*y1] + 1; }
+    else if (e->vim) *x1 = *x1 + 1;
+    return *y1 > *y0 || *x1 > *x0;
+}
+
+// the selection gone: VIM back to Normal, Traditional to none
+static void e_sel_end(struct edit *e) {
+    e->tsel = 0;
+    if (e->vim && (e->mode == M_VISUAL || e->mode == M_VLINE)) { e->mode = M_NORMAL; e_clamp(e); }
+}
+
+static void e_copy(struct edit *e) {
+    char *t;
+    int n, y0, x0, y1, x1;
+    if (!e_sel_range(e, &y0, &x0, &y1, &x1)) return;
+    t = e_range(e, y0, x0, y1, x1, &n);
+    wk_clip_set(t, n);
+    free(t);
+}
+
+// the selection taken out of the text, the cursor where it began: 1 if there was one
+static int e_cut(struct edit *e) {
+    int y0, x0, y1, x1;
+    if (!e_sel_range(e, &y0, &x0, &y1, &x1)) { e_sel_end(e); return 0; }
+    e_delrange(e, y0, x0, y1, x1);
+    e->cy = y0; e->cx = x0; e->want = x0;
+    e_sel_end(e);
+    e_clamp(e);
+    return 1;
+}
+
+// the clipboard's text at the cursor, in place of the selection (its
+// carriage returns left out: a line ends in a newline here)
+static void e_paste(struct edit *e) {
+    char *c, *t;
+    int n, k, m;
+    c = wk_clip_get(&n);
+    if (n <= 0) return;
+    e_save_undo(e);
+    e_cut(e);
+    t = (char *)ualloc(n + 1);
+    m = 0; k = 0;
+    while (k < n) { if (c[k] != 13 && c[k]) { t[m] = c[k]; ++m; } ++k; }
+    e_instext(e, e->cy, e->cx, t, m);
+    free(t);
+    e->cy = e_ry; e->cx = e_rx; e->want = e->cx;
+    e_clamp(e);
+}
+
+static void e_edit(struct win *w, int item) {
+    struct edit *e;
+    e = E(w);
+    if (e->mode == M_CMD) e->mode = e->vim ? M_NORMAL : M_INSERT;
+    if (item == E_COPY) e_copy(e);
+    else if (item == E_CUT) {
+        if (!e_sel_on(e)) return;
+        e_save_undo(e);
+        e_copy(e);
+        e_cut(e);
+    }
+    else if (item == E_PASTE) e_paste(e);
+    else if (item == E_ALL) {
+        e->vy = 0; e->vx = 0;
+        e->cy = e->nl - 1; e->cx = e->len[e->cy];
+        if (e->vim) { e->mode = M_VISUAL; if (e->cx > 0) --e->cx; }
+        else e->tsel = e->nl > 1 || e->cx > 0;
+    }
+    e->tlast = 0;
+    e_retitle(w);
+}
+
+static int e_ctrl(int code, int ch, int mods, int c) { return (mods & M_CTRL) && (code == c || ch == c || ch == c + 32); }
+
+// Traditional: Text Editor's keys. The moving keys with Shift select; the
+// typing keys replace a selection; a run of characters typed is undone
+// as one.
+static void e_trad_key(struct win *w, int code, int ch, int mods) {
+    struct edit *e;
+    int typing, y0, x0, y1, x1;
+    e = E(w);
+    if (code == 16 || code == 17 || code == 18) return;       // Shift, Ctrl or Alt alone
+    if (ui_key_copy(code, ch, mods)) { e_edit(w, E_COPY); return; }
+    if (ui_key_cut(code, ch, mods)) { e_edit(w, E_CUT); return; }
+    if (ui_key_paste(code, ch, mods)) { e_edit(w, E_PASTE); return; }
+    if (e_ctrl(code, ch, mods, 'A')) { e_edit(w, E_ALL); return; }
+    if (e_ctrl(code, ch, mods, 'Z')) { e_undo(e, 0); e->tsel = 0; e->tlast = 0; e_clamp(e); return; }
+    if (e_ctrl(code, ch, mods, 'Y')) { e_undo(e, 1); e->tsel = 0; e->tlast = 0; e_clamp(e); return; }
+    if (e_ctrl(code, ch, mods, 'O')) { edit_command(w, 0, 1); return; }
+    if (e_ctrl(code, ch, mods, 'N')) { edit_command(w, 0, 0); return; }
+    if (code == KEY_ESC) {
+        if (e->tsel) { e->tsel = 0; return; }
+        e->mode = M_CMD; e->cmdkind = ':'; e->cmdn = 0; e->cmd[0] = 0;
+        return;
+    }
+    if (code == KEY_LEFT || code == KEY_RIGHT || code == KEY_UP || code == KEY_DOWN || code == KEY_HOME ||
+        code == KEY_END || code == KEY_PGUP || code == KEY_PGDN) {
+        e->tlast = 0;
+        if (mods & M_SHIFT) {
+            if (!e->tsel) { e->vy = e->cy; e->vx = e->cx; }
+            e_nav_insert(e, code, mods);
+            e->tsel = e->vy != e->cy || e->vx != e->cx;
+            return;
+        }
+        // Left and Right with a selection go to its ends
+        if (e->tsel && !(mods & M_CTRL) && (code == KEY_LEFT || code == KEY_RIGHT) && e_sel_range(e, &y0, &x0, &y1, &x1)) {
+            if (code == KEY_LEFT) { e->cy = y0; e->cx = x0; } else { e->cy = y1; e->cx = x1; }
+            e->want = e->cx; e->tsel = 0;
+            return;
+        }
+        e->tsel = 0;
+        e_nav_insert(e, code, mods);
+        return;
+    }
+    typing = ch >= 32 && ch < 127 && !(mods & M_CTRL);
+    if (!typing && code != KEY_ENTER && code != KEY_BACK && code != KEY_DEL && code != KEY_TAB) return;
+    if (!typing || !e->tlast || e->tsel) e_save_undo(e);
+    e->tlast = typing;
+    if (e->tsel) {
+        e_cut(e);
+        if (code == KEY_BACK || code == KEY_DEL) return;
+    }
+    e_insert_key(e, code, ch, mods);
+}
+
 // The way in for every key. It records the keys of a change as it is
 // made, so '.' can type them again.
 static void e_key(struct win *w, int code, int ch, int mods) {
@@ -1557,9 +1779,8 @@ static void e_key(struct win *w, int code, int ch, int mods) {
         return;
     }
     if (!e->vim) {
-        // the plain editor: always typing; Esc is the way to a command
-        if (code == KEY_ESC) { e->mode = M_CMD; e->cmdkind = ':'; e->cmdn = 0; e->cmd[0] = 0; return; }
-        e_insert_key(e, code, ch, mods);
+        // Traditional: always typing; Esc is the way to a command
+        e_trad_key(w, code, ch, mods);
         e_retitle(w);
         return;
     }
@@ -1635,7 +1856,7 @@ static int e_inwords(char *s, int n, char *list) {
 static void e_paint(int i, int j, int c) {
     while (i < j && i < HL_MAX) { hlc[i] = c; ++i; }
 }
-static int e_hcol(int i) { return i < HL_MAX ? hlc[i] : C_DARK; }
+static int e_hcol(int i) { return ec[i < HL_MAX ? hlc[i] : HC_TEXT]; }
 
 static char *c_kw = " if else while for do switch case default break continue return goto sizeof typedef struct union enum static extern const volatile register inline restrict ";
 static char *c_ty = " int char short long unsigned signed void float double ";
@@ -1772,7 +1993,7 @@ static void e_hl_sh(char *s, int n, int b4k) {
 static int e_hl(struct edit *e, int y, int st, int lang) {
     int n;
     n = e->len[y];
-    e_paint(0, n, C_DARK);
+    e_paint(0, n, HC_TEXT);
     if (lang == L_C || lang == L_JS) return e_hl_c(e->ln[y], n, st, lang == L_JS);
     if (lang == L_LISP) e_hl_lisp(e->ln[y], n);
     else if (lang == L_FORTH) e_hl_forth(e->ln[y], n);
@@ -2014,7 +2235,7 @@ static void f_pick(struct win *w, int i) {
     if (ui_eq(e->fpath[i], e->path)) return;
     if (e->modified) { e_say(e, "No write since last change: :w first, or :e! FILE"); return; }
     ui_cpy(p, e->fpath[i]);
-    if (!e_load(e, p)) e_say(e, "Cannot open that file");
+    if (!e_open(w, p, 0)) e_say(e, "Cannot open that file");
     e_retitle(w);
 }
 
@@ -2045,14 +2266,11 @@ static void f_mouse(struct win *w, int ev, int x, int y, int ch) {
 // ---- drawing ------------------------------------------------------------------------------
 
 static int e_selected(struct edit *e, int y, int x) {
-    int y0, x0, y1, x1, t;
-    if (e->mode != M_VISUAL && e->mode != M_VLINE) return 0;
-    y0 = e->vy; x0 = e->vx; y1 = e->cy; x1 = e->cx;
-    if (y1 < y0 || (y1 == y0 && x1 < x0)) { t = y0; y0 = y1; y1 = t; t = x0; x0 = x1; x1 = t; }
+    int y0, x0, y1, x1;
+    if (!e_sel_range(e, &y0, &x0, &y1, &x1)) return 0;
     if (y < y0 || y > y1) return 0;
-    if (e->mode == M_VLINE) return 1;
     if (y == y0 && x < x0) return 0;
-    if (y == y1 && x > x1) return 0;
+    if (y == y1 && x >= x1) return 0;
     return 1;
 }
 
@@ -2077,6 +2295,7 @@ static void e_draw_text(struct win *w, int ox, int oy, int cw, int ch, int focus
     int rows, cols, gw, y, line, x, n, sx, ph, sy, k, i, c, endsel, lang, st, tah, hb, h, seg, a, cseg, r, used, l, by;
     char num[16];
     e = E(w);
+    ec = scheme_cols + ide_scheme * SC_N;
     ph = e->bshown ? BPANE : 0;
     sy = oy + ch - ECH - 4;                       // the status line
     tah = ch - ECH - 4 - ph;                      // the text's area, its bars included
@@ -2114,8 +2333,8 @@ static void e_draw_text(struct win *w, int ox, int oy, int cw, int ch, int focus
     }
     e->lcx = e->cx; e->lcy = e->cy;
 
-    d_rect(ox, oy, cw, tah, C_WHITE);
-    if (gw) d_rect(ox, oy, gw + 2, tah, 0xe8e8e8);
+    d_rect(ox, oy, cw, tah, ec[SC_BG]);
+    if (gw) d_rect(ox, oy, gw + 2, tah, ec[SC_GUT]);
     line = e->top;
     r = 0;
     y = oy + 3;
@@ -2133,14 +2352,14 @@ static void e_draw_text(struct win *w, int ox, int oy, int cw, int ch, int focus
             if (gw && seg == 0) {
                 ui_num(num, line + 1);
                 k = ui_len(num);
-                d_textn(ox + 2 + (4 - k) * ECW, y, C_SHADOW, EFONT, F_MONO, ECW, num, k);
+                d_textn(ox + 2 + (4 - k) * ECW, y, ec[SC_GUTFG] == SHADOW ? C_SHADOW : ec[SC_GUTFG], EFONT, F_MONO, ECW, num, k);
             }
             // the selection behind the text
-            if (e->mode == M_VISUAL || e->mode == M_VLINE) {
+            if (e_sel_on(e)) {
                 x = a;
                 endsel = e->len[line] > a + cols ? a + cols : e->len[line];
                 while (x <= endsel && x < a + cols) {
-                    if (e_selected(e, line, x)) d_rect(sx + (x - a) * ECW, y, ECW, ECH, 0xa8c8ff);
+                    if (e_selected(e, line, x)) d_rect(sx + (x - a) * ECW, y, ECW, ECH, ec[SC_SEL]);
                     ++x;
                 }
             }
@@ -2158,17 +2377,17 @@ static void e_draw_text(struct win *w, int ox, int oy, int cw, int ch, int focus
             if (focused && line == e->cy && seg == cseg && e->mode != M_CMD) {
                 x = sx + (e->cx - a) * ECW;
                 if (e->vim && e->mode != M_INSERT) {
-                    d_rect(x, y, ECW, ECH, C_DARK);
+                    d_rect(x, y, ECW, ECH, ec[SC_CUR]);
                     c = e_char(e, line, e->cx);
-                    if (c != 10) { num[0] = c; d_textn(x, y, C_WHITE, EFONT, F_MONO, ECW, num, 1); }
-                } else d_rect(x, y, 2, ECH - 1, C_DARK);
+                    if (c != 10) { num[0] = c; d_textn(x, y, ec[SC_CURFG], EFONT, F_MONO, ECW, num, 1); }
+                } else d_rect(x, y, 2, ECH - 1, ec[SC_CUR]);
             }
             y = y + ECH;
             ++r; ++seg;
         }
         ++line;
     }
-    while (r < rows) { d_text(sx, y, 0x6060c0, F_MONO, "~"); y = y + ECH; ++r; }
+    while (r < rows) { d_text(sx, y, ec[SC_TILDE], F_MONO, "~"); y = y + ECH; ++r; }
     ui_scrollbar(ox + cw - 17, oy, tah - (hb ? 16 : 0), e->nl, rows, e->top);
     if (hb) {
         ui_hscrollbar(ox, oy + tah - 16, cw - 17, e->maxw + 1, cols, e->left);
@@ -2222,7 +2441,7 @@ static void e_draw_text(struct win *w, int ox, int oy, int cw, int ch, int focus
         if (focused) d_rect(ox + 4 + ui_len(sb) * ECW, sy + 2, 2, ECH - 1, C_DARK);
     } else {
         if (e->msg[0]) ui_cpy(sb, e->msg);
-        else if (!e->vim) ui_cpy(sb, "-- EDIT --  (Esc for a command: w, make, set vim; Ctrl+S saves)");
+        else if (!e->vim) ui_cpy(sb, "-- EDIT --  (Esc for a command: w, make, e FILE; Ctrl+S saves)");
         else if (e->mode == M_INSERT) ui_cpy(sb, "-- INSERT --");
         else if (e->mode == M_VISUAL) ui_cpy(sb, "-- VISUAL --");
         else if (e->mode == M_VLINE) ui_cpy(sb, "-- VISUAL LINE --");
@@ -2246,6 +2465,32 @@ static void e_scrolled(struct edit *e, int t) {
     e_clamp(e);
 }
 
+// The line and column at (x, y) in the text (as the last draw laid it
+// out), clamped to the text
+static void e_pos_at(struct edit *e, int x, int y, int *py, int *px) {
+    int r, l, h;
+    r = (y - 3) / ECH;
+    if (y < 3 || r < 0) r = 0;
+    if (!e->wrap) {
+        l = e->top + r;
+        if (l >= e->nl) l = e->nl - 1;
+        if (l < 0) l = 0;
+        *py = l;
+        *px = e->left + (x - 4 - e->gw + ECW / 2) / ECW;
+    } else {
+        // the row's line, and which of its wrapped rows
+        l = e->top;
+        while (l < e->nl - 1) { h = e_wh(e, l, e->cols); if (r < h) break; r = r - h; ++l; }
+        h = e_wh(e, l, e->cols);
+        if (r >= h) r = h - 1;
+        *py = l;
+        *px = r * e->cols + (x - 4 - e->gw + ECW / 2) / ECW;
+    }
+    if (x - 4 - e->gw + ECW / 2 < 0) *px = e->wrap ? r * e->cols : e->left;
+    if (*px > e->len[*py]) *px = e->len[*py];
+    if (*px < 0) *px = 0;
+}
+
 // Where things are, in the text's own coordinates (as the last draw left
 // them): the text's bars, then the build pane's header, log and bars.
 static void e_mouse_text(struct win *w, int ev, int x, int y, int cw, int ch) {
@@ -2263,6 +2508,15 @@ static void e_mouse_text(struct win *w, int ev, int x, int y, int cw, int ch) {
         if (t >= 0) { e->btop = t; return; }
         t = ui_scroll_drag(0, by + BLOG_H, x);
         if (t >= 0) { e->bleft = t; return; }
+        // a selection being dragged out: Traditional's, or VIM's Visual
+        if (e->drag) {
+            e_pos_at(e, x, y, &row, &line);
+            if (row == e->cy && line == e->cx) return;
+            e->cy = row; e->cx = line; e->want = line;
+            if (!e->vim) e->tsel = e->vy != e->cy || e->vx != e->cx;
+            else { if (e->mode != M_VISUAL) e->mode = M_VISUAL; e_clamp(e); }
+            wk_invalidate(w->id, 0, 0, 0, 0);
+        }
         return;
     }
     if (ev != E_DOWN && ev != E_DBL) return;
@@ -2301,26 +2555,24 @@ static void e_mouse_text(struct win *w, int ev, int x, int y, int cw, int ch) {
         if (t >= 0) e->left = t;
         return;
     }
-    if (e->mode == M_VISUAL || e->mode == M_VLINE || e->mode == M_CMD) e->mode = M_NORMAL;
-    r = (y - 3) / ECH;
-    if (r < 0) r = 0;
-    if (!e->wrap) {
-        line = e->top + r;
-        if (line >= e->nl) line = e->nl - 1;
-        if (line < 0) line = 0;
-        e->cy = line;
-        e->cx = e->left + (x - 4 - e->gw + ECW / 2) / ECW;
-    } else {
-        // the row's line, and which of its wrapped rows
-        l = e->top;
-        while (l < e->nl - 1) { h = e_wh(e, l, e->cols); if (r < h) break; r = r - h; ++l; }
-        h = e_wh(e, l, e->cols);
-        if (r >= h) r = h - 1;
-        e->cy = l;
-        e->cx = r * e->cols + (x - 4 - e->gw + ECW / 2) / ECW;
-    }
-    e_clamp(e);
+    if (e->mode == M_VISUAL || e->mode == M_VLINE || e->mode == M_CMD) e->mode = e->vim ? M_NORMAL : M_INSERT;
+    e->tlast = 0;
+    // Shift+click: Traditional's selection runs from where the cursor was
+    if (!e->vim && (wk.mods & M_SHIFT) && ev == E_DOWN) { if (!e->tsel) { e->vy = e->cy; e->vx = e->cx; } }
+    else e->tsel = 0;
+    e_pos_at(e, x, y, &e->cy, &e->cx);
+    if (e->vim) e_clamp(e);
     e->want = e->cx;
+    if (!e->vim && (wk.mods & M_SHIFT) && ev == E_DOWN) { e->tsel = e->vy != e->cy || e->vx != e->cx; e->drag = 1; return; }
+    // a double click takes a word (Traditional); a press starts a selection a drag makes
+    if (!e->vim && ev == E_DBL && e_isword(e_char(e, e->cy, e->cx))) {
+        r = e->cx; while (r > 0 && e_isword(e->ln[e->cy][r - 1])) --r;
+        l = e->cx; while (l < e->len[e->cy] && e_isword(e->ln[e->cy][l])) ++l;
+        e->vy = e->cy; e->vx = r; e->cx = l; e->tsel = l > r;
+        return;
+    }
+    e->vy = e->cy; e->vx = e->cx;
+    e->drag = ev == E_DOWN;
 }
 
 // The pointer over the window: a text beam over the text, an arrow over
@@ -2351,14 +2603,124 @@ void edit_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     struct edit *e;
     int t;
     e = E(w);
+    if (ev == E_UP) { e->drag = 0; return; }
     if (!f_on(e, cw)) { e_mouse_text(w, ev, x, y, cw, ch); return; }
     if (ev == E_MOVE) {
         t = ui_scroll_drag(FW - 17, FHDR, y);
         if (t >= 0) { e->ftop = t; return; }
         t = ui_scroll_drag(0, ch - 16, x);
         if (t >= 0) { e->fleft = t; return; }
-    } else if (x < FW + 2) { f_mouse(w, ev, x, y, ch); return; }
+    } else if (x < FW + 2) { e->drag = 0; f_mouse(w, ev, x, y, ch); return; }
     e_mouse_text(w, ev, x - FW - 2, y, cw - FW - 2, ch);
+}
+
+// ---- Settings: the colour scheme and the input mode ------------------------------------------
+//
+// One page for every IDE window, a window of its own: each choice is used
+// at once, in every IDE window open, and kept in /etc/ide.cfg as
+// "scheme N input M" (M 1 for VIM), as Settings keeps the desktop's in
+// /etc/desktop.cfg.
+
+static char icfg[64];
+
+static void ide_load() {
+    int fd, n, i, v;
+    ide_loaded = 1;
+    if ((fd = uopen("/etc/ide.cfg", O_RD)) < 0) return;
+    n = uread(fd, icfg, 60);
+    uclose(fd);
+    if (n <= 0) return;
+    icfg[n] = 0;
+    i = 0;
+    while (i < n) {
+        if (icfg[i] == 's' && icfg[i + 1] == 'c' && icfg[i + 6] == ' ' && e_digits(icfg + i + 7, &v) > 0 && v < N_SCHEMES) ide_scheme = v;
+        if (icfg[i] == 'i' && icfg[i + 1] == 'n' && icfg[i + 5] == ' ' && e_digits(icfg + i + 6, &v) > 0) ide_vim = v != 0;
+        ++i;
+    }
+}
+
+static void ide_save() {
+    int fd;
+    if ((fd = uopen("/etc/ide.cfg", O_WR + O_CREATE + O_TRUNCATE)) < 0) return;
+    ui_cpy(icfg, "scheme ");
+    ui_num(icfg + ui_len(icfg), ide_scheme);
+    ui_cat(icfg, ide_vim ? " input 1\n" : " input 0\n");
+    write(fd, icfg, ui_len(icfg));
+    uclose(fd);
+}
+
+// a choice made: into every IDE window, and kept
+static void ide_set(int scheme, int vim) {
+    struct win *w;
+    struct edit *e;
+    ide_scheme = scheme; ide_vim = vim;
+    ide_save();
+    w = win_first();
+    while (w) {
+        if (w->used && w->kind == K_EDIT && (e = E(w)) && e->vim != vim) {
+            e->vim = vim; e->tsel = 0; e->op = 0; e->pre = 0; e->count = 0;
+            e->mode = vim ? M_NORMAL : M_INSERT;
+            e_clamp(e);
+            e_say(e, vim ? "VIM mode: Esc for Normal, i to type" : "Traditional: type to edit; Esc for a command");
+        }
+        w = w->next;
+    }
+    mark_dirty();
+}
+
+// a piece of the preview: n characters of s in colour hc, along from *x
+static void iset_piece(int *x, int y, int hc, char *s) {
+    d_textn(*x, y, ec[hc], EFONT, F_MONO, ECW, s, ui_len(s));
+    *x = *x + ui_len(s) * ECW;
+}
+
+static void iset_draw(int w, int cw, int ch, int focused) {
+    int i, x, y;
+    d_rect(0, 0, cw, ch, C_FACE);
+    ui_group(8, 8, cw - 16, 66, "Colour scheme");
+    i = 0;
+    while (i < N_SCHEMES) { ui_radio(18, 28 + i * 20, scheme_names[i], i == ide_scheme); ++i; }
+    ui_group(8, 82, cw - 16, 66, "Input mode");
+    ui_radio(18, 102, "Traditional: type at once, as in Text Editor", !ide_vim);
+    ui_radio(18, 122, "VIM: Normal, Insert and Visual modes", ide_vim);
+    // the preview, in the scheme chosen
+    ec = scheme_cols + ide_scheme * SC_N;
+    y = 156;
+    d_rect(8, y, cw - 16, 3 * ECH + 8, ec[SC_BG]);
+    d_bevel(8, y, cw - 16, 3 * ECH + 8, B_SUNKEN);
+    x = 14; iset_piece(&x, y + 4, HC_PRE, "#include"); iset_piece(&x, y + 4, HC_TEXT, " "); iset_piece(&x, y + 4, HC_STR, "\"c4ix.h\"");
+    x = 14; iset_piece(&x, y + 4 + ECH, HC_TYPE, "int"); iset_piece(&x, y + 4 + ECH, HC_TEXT, " main() { ");
+    iset_piece(&x, y + 4 + ECH, HC_KW, "return"); iset_piece(&x, y + 4 + ECH, HC_TEXT, " "); iset_piece(&x, y + 4 + ECH, HC_NUM, "0");
+    iset_piece(&x, y + 4 + ECH, HC_TEXT, "; }");
+    x = 14; iset_piece(&x, y + 4 + 2 * ECH, HC_COM, "// the IDE's colours");
+    ui_button(cw - 88, ch - 34, 76, 24, "OK", 0, 1);
+}
+
+static void iset_mouse(int w, int ev, int x, int y, int b) {
+    int cw, ch, i;
+    if (ev != E_DOWN) return;
+    wk_size(w, &cw, &ch);
+    i = 0;
+    while (i < N_SCHEMES) { if (ui_hit(x, y, 14, 26 + i * 20, cw - 28, 18)) { ide_set(i, ide_vim); return; } ++i; }
+    if (ui_hit(x, y, 14, 100, cw - 28, 18)) { ide_set(ide_scheme, 0); return; }
+    if (ui_hit(x, y, 14, 120, cw - 28, 18)) { ide_set(ide_scheme, 1); return; }
+    if (ui_hit(x, y, cw - 88, ch - 34, 76, 24)) wk_close(w);
+}
+
+static void iset_key(int w, int down, int code, int ch, int mods) {
+    if (!down) return;
+    if (code == KEY_ESC || code == KEY_ENTER) wk_close(w);
+    else if (code == KEY_UP && ide_scheme > 0) ide_set(ide_scheme - 1, ide_vim);
+    else if (code == KEY_DOWN && ide_scheme < N_SCHEMES - 1) ide_set(ide_scheme + 1, ide_vim);
+}
+
+static struct wk_class iset_class = { .kind = K_SETTINGS, .draw = iset_draw, .mouse = iset_mouse, .key = iset_key };
+
+static void ide_settings() {
+    int i;
+    if ((i = wk_find(&iset_class))) { wk_raise(i); return; }
+    iset_class.size = 16;
+    wk_open(&iset_class, "IDE Settings", 380, 290, WK_FIXED | WK_CENTER, 0);
 }
 
 // ---- the window -----------------------------------------------------------------------------
@@ -2367,22 +2729,26 @@ int edit_open(char *path) {
     int i;
     struct win *w;
     struct edit *e;
-    i = win_open(K_EDIT, "Untitled - Editor", 760, 500, sizeof(struct edit));
+    if (!ide_loaded) ide_load();
+    i = win_open(K_EDIT, "Untitled - IDE", 760, 500, sizeof(struct edit));
     if (i < 0) return i;
     w = win_get(i);
     e = E(w);
-    edit_menus[0].title = "File"; edit_menus[1].title = "Build"; edit_menus[2].title = "View"; edit_menus[3].title = "Help";
+    edit_menus[0].title = "File"; edit_menus[1].title = "Edit"; edit_menus[2].title = "Build";
+    edit_menus[3].title = "View"; edit_menus[4].title = "Help";
     edit_file_items[0] = "New"; edit_file_items[1] = "Open..."; edit_file_items[2] = "Save";
     edit_file_items[3] = "Save As..."; edit_file_items[4] = "-"; edit_file_items[5] = "Close"; edit_file_items[6] = 0;
+    edit_edit_items[E_CUT] = "Cut   Ctrl+X"; edit_edit_items[E_COPY] = "Copy   Ctrl+C"; edit_edit_items[E_PASTE] = "Paste   Ctrl+V";
+    edit_edit_items[3] = "-"; edit_edit_items[E_ALL] = "Select All   Ctrl+A"; edit_edit_items[5] = 0;
     edit_build_items[0] = "Build   F5"; edit_build_items[1] = "Run   F6"; edit_build_items[2] = "Next Error   F8";
     edit_build_items[3] = "Previous Error"; edit_build_items[4] = "Show Output   F4";
     edit_build_items[5] = "Cancel Build"; edit_build_items[6] = 0;
     edit_view_items[0] = "Files   Ctrl+B"; edit_view_items[1] = "Syntax Colouring";
-    edit_view_items[2] = "Word Wrap"; edit_view_items[3] = 0;
+    edit_view_items[2] = "Word Wrap"; edit_view_items[3] = "-"; edit_view_items[4] = "Settings..."; edit_view_items[5] = 0;
     edit_help_items[0] = "Keys"; edit_help_items[1] = 0;
-    edit_menus[0].items = edit_file_items; edit_menus[1].items = edit_build_items;
-    edit_menus[2].items = edit_view_items; edit_menus[3].items = edit_help_items;
-    wk_menu(i, edit_menus, 4);
+    edit_menus[0].items = edit_file_items; edit_menus[1].items = edit_edit_items; edit_menus[2].items = edit_build_items;
+    edit_menus[3].items = edit_view_items; edit_menus[4].items = edit_help_items;
+    wk_menu(i, edit_menus, 5);
     e->utext = (char **)ualloc(UNDO_MAX * sizeof(int)); e->ulen = (int *)ualloc(UNDO_MAX * sizeof(int));
     e->ucy = (int *)ualloc(UNDO_MAX * sizeof(int)); e->ucx = (int *)ualloc(UNDO_MAX * sizeof(int));
     e->rtext = (char **)ualloc(UNDO_MAX * sizeof(int)); e->rlen = (int *)ualloc(UNDO_MAX * sizeof(int));
@@ -2393,7 +2759,8 @@ int edit_open(char *path) {
     e->epath = (char **)ualloc(ERR_MAX * sizeof(int));
     e->eline = (int *)ualloc(ERR_MAX * sizeof(int));
     e->elog = (int *)ualloc(ERR_MAX * sizeof(int));
-    e->vim = 1; e->nu = 1; e->mode = M_NORMAL; e->ecur = 0 - 1; e->bsel = 0 - 1;
+    e->vim = ide_vim; e->nu = 1; e->mode = ide_vim ? M_NORMAL : M_INSERT; e->ecur = 0 - 1; e->bsel = 0 - 1;
+    e->wrap = 1;
     e->hl_line = 0 - 1;
     e->lcx = 0 - 1; e->lcy = 0 - 1;
     e_insline(e, 0, "", 0);
@@ -2402,12 +2769,22 @@ int edit_open(char *path) {
     f_reserve(e, 64);
     f_open_dir(e, 0 - 1);
     if (path && path[0]) {
-        if (!e_load(e, path)) { ui_cpy(e->path, path); e_say(e, "New file"); }
+        if (!e_open(w, path, 0)) { ui_ncpy(e->path, path, 128); e_say(e, "New file"); }
     }
     e->modified = 0;
-    if (!e->msg[0]) e_say(e, "VIM keys: i to type, Esc, :w to save, :make (F5) to build, :help is the Help menu");
+    if (!e->msg[0] && e->vim) e_say(e, "VIM keys: i to type, Esc, :w to save, :make (F5) to build, :help is the Help menu");
+    if (!e->msg[0]) e_say(e, "Type to edit; Esc for a command (w, make, e FILE); F5 builds; View > Settings for colours and VIM");
     e_retitle(w);
     return i;
+}
+
+// Open and Save As: the kit's file box, starting at the file's own folder
+static void e_filebox(struct win *w, int save) {
+    struct edit *e;
+    e = E(w);
+    ui_ncpy(e->ask, e->path[0] ? e->path : (save ? "/tmp/untitled.c" : "/usr"), WK_PATH);
+    if (!e->path[0] && !save) ui_cat(e->ask, "/");
+    wk_filebox(w->id, save ? A_SAVEAS : A_OPEN, save, ide_filter, e->ask, WK_PATH);
 }
 
 void edit_command(struct win *w, int menu, int item) {
@@ -2415,19 +2792,20 @@ void edit_command(struct win *w, int menu, int item) {
     e = E(w);
     if (menu == 0) {
         if (item == 0) {
-            if (e->modified) { msgbox(w, "Editor", "Save the changes first (:w), or :q! to drop them.", 0, A_NONE); return; }
-            e_settext(e, "", 0); e->path[0] = 0; e->modified = 0; e->cy = 0; e->cx = 0; e_retitle(w);
+            if (e->modified) { msgbox(w, "IDE", "Save the changes first (Ctrl+S, or :w), or :q! to drop them.", 0, A_NONE); return; }
+            e_settext(e, "", 0); e->path[0] = 0; e->modified = 0; e->cy = 0; e->cx = 0; e->tsel = 0; e_retitle(w);
         }
-        else if (item == 1) inputbox(w, "Open", "File to edit:", e->path[0] ? e->path : "/usr/", A_OPEN);
+        else if (item == 1) e_filebox(w, 0);
         else if (item == 2) {
-            if (!e->path[0]) inputbox(w, "Save As", "Save as:", "/tmp/untitled.c", A_SAVEAS);
+            if (!e->path[0]) e_filebox(w, 1);
             else { e_save(e, e->path); e_retitle(w); }
         }
-        else if (item == 3) inputbox(w, "Save As", "Save as:", e->path[0] ? e->path : "/tmp/untitled.c", A_SAVEAS);
+        else if (item == 3) e_filebox(w, 1);
         else if (item == 5) win_close(win_index(w));
         return;
     }
-    if (menu == 1) {
+    if (menu == 1) { e_edit(w, item); return; }
+    if (menu == 2) {
         if (item == 0) e_make(w);
         else if (item == 1) e_ex(w, "run");
         else if (item == 2) e_goto_error(w, e->ecur + 1);
@@ -2436,14 +2814,18 @@ void edit_command(struct win *w, int menu, int item) {
         else if (item == 5) e_cancel(w);
         return;
     }
-    if (menu == 2) {
+    if (menu == 3) {
         if (item == 0) e->fshown = !e->fshown;
         else if (item == 1) e->nosyn = !e->nosyn;
         else if (item == 2) { e->wrap = !e->wrap; e->left = 0; }
+        else if (item == 4) ide_settings();
         return;
     }
-    msgbox(w, "Editor keys",
-           "Esc for Normal mode, i to insert. hjkl or arrows move; w b e words; dd yy p; u undo; . repeat. :w save, :make or F5 build, F8 next error, F6 run, Ctrl+B the file pane, :syntax off, :set novim for a plain editor.",
+    if (e->vim) msgbox(w, "IDE keys",
+           "Esc for Normal mode, i to insert. hjkl or arrows move; w b e words; dd yy p; u undo; . repeat. :w save, :make or F5 build, F8 next error, F6 run, Ctrl+B the file pane, :syntax off, :set novim for a plain editor; View > Settings for Traditional typing.",
+           0, A_NONE);
+    else msgbox(w, "IDE keys",
+           "Type to edit; Shift with the arrows selects; Ctrl+X, C, V cut, copy and paste; Ctrl+A all; Ctrl+Z undo, Ctrl+Y redo; Ctrl+S saves. Esc for a command: w, make, run, e FILE, set nowrap. F5 builds, F6 runs, F8 the next error, Ctrl+B the file pane; View > Settings for VIM mode and colours.",
            0, A_NONE);
 }
 
@@ -2452,8 +2834,10 @@ void edit_answer(struct win *w, int action, int yes) {
     e = E(w);
     if (!yes) return;
     if (action == A_OPEN) {
-        if (e->modified) { e_say(e, "No write since last change: :w first"); return; }
-        if (!e_load(e, dialog_text())) { ui_cpy(e->path, dialog_text()); e_settext(e, "", 0); e->modified = 0; e_say(e, "New file"); }
-    } else if (action == A_SAVEAS) e_save(e, dialog_text());
+        if (e->modified) { e_say(e, "No write since last change: save first (Ctrl+S, or :w)"); return; }
+        if (!e_open(w, e->ask, 0)) { ui_ncpy(e->path, e->ask, 128); e_settext(e, "", 0); e->modified = 0; e_say(e, "New file"); }
+    } else if (action == A_SAVEAS) e_save(e, e->ask);
+    else if (action == A_BINARY && !e_load(e, e->pend)) e_say(e, "Cannot open that file");
+    e->tsel = 0;
     e_retitle(w);
 }

@@ -38,6 +38,11 @@ struct tgrid {
     // window shows (0, the live grid).
     int *sb;
     int sbn, sbhead, view;
+    // A selection (tg_select): from a line and column to a line and column,
+    // the lines numbered from the grid's first (nscr: the rows scrolled off
+    // so far), so it stays on its text as more arrives. sel is 0 for none,
+    // 1 a run of lines, 2 a block.
+    int nscr, sel, sl0, sc0, sl1, sc1, selecting;
 };
 
 extern int tg_pal[256];               // xterm's 256 colours
@@ -56,3 +61,11 @@ void tg_clear_screen(struct tgrid *g);   // Ctrl+L
 void tg_scroll(struct tgrid *g, int rows);   // the scrollback: rows further back (negative: forward)
 void tg_draw(struct tgrid *g, int x, int y, int focused);   // the grid at x, y and its scroll bar
 void tg_mouse(struct tgrid *g, int ev, int x, int y);       // its scroll bar (E_WHEEL: y the steps)
+// The selection, made with the mouse on the grid (x, y inside its sunken
+// edge): a press starts one, a drag takes it on, and with block it is a
+// rectangle rather than a run of lines. A click with no drag drops it.
+void tg_select(struct tgrid *g, int ev, int x, int y, int block);
+void tg_select_all(struct tgrid *g);  // the scrollback and the screen
+void tg_unselect(struct tgrid *g);
+int  tg_copy(struct tgrid *g, int all);   // the selection (or, all, everything) onto the
+                                          // clipboard, a line a row; 0 if nothing was

@@ -28,6 +28,16 @@ enum {
 // writes events, into a task's memory. task.c reads it, and clears it
 // when the memory goes with a task that never detached.
 enum { C4IX_GUI_RING = 0x410 };
+// The kernel image as libjs's loader placed it (src/c4bb/sim/devices.js,
+// IMG_*): code, data, where the file's data ends and BSS begins, and the
+// end. Libjs's alone: C4IX_I_C4MJS.
+enum { C4IX_IMG_CODE = 0x1f0, C4IX_IMG_DATA = 0x1f4, C4IX_IMG_BSS = 0x1f8, C4IX_IMG_END = 0x1fc };
+// More of the machine, for the boot report (boot.c): the drives, the
+// mailbox, the display and the sound card
+enum { C4IX_DISK_DRIVE = 0x13c, C4IX_DISK_COUNT = 0x188, C4IX_DISK_RO = 0x18c,
+       C4IX_MBOX_BASE = 0x1b4, C4IX_MBOX_LEN = 0x1b8,
+       C4IX_GUI_CAPS = 0x400, C4IX_GUI_W = 0x404, C4IX_GUI_H = 0x408,
+       C4IX_I_PIT = 0x800, C4IX_I_MBOX = 0x2000, C4IX_I_SND = 0x8000, C4IX_I_FPU = 0x10000, C4IX_I_DRV = 0x40000 };
 // The heap's extent and use (c4bb's HEAP_BASE and HEAP_END, libjs's
 // HEAP_USED, src/c4bb/sim/devices.js), for the CPU snapshot.
 enum { C4IX_HEAP_BASE = 0x144, C4IX_HEAP_END = 0x148, C4IX_HEAP_USED = 0x1c0, C4IX_I_C4MJS = 8 };
@@ -298,6 +308,21 @@ void con_booted();         // boot is over: tasks' console output is no longer l
 void con_write_task(char *buf, int len);  // a task's bytes to the console
 int kputs(char *s);
 int kprintf(char *fmt, ...);
+// The kernel log (console.c): every line the kernel says, stamped with
+// the machine's time, in a ring that dmesg reads through /proc/kmsg.
+// klog's lines go only there, and to the console too when the kernel was
+// booted with -v (klog_verbose); kprintf's go to both.
+int klog(char *fmt, ...);
+extern int klog_verbose;
+extern int klog_cpms;          // cycles in a machine millisecond, once klog_calibrate has measured
+int klog_calibrate();
+int klog_copy(char *dst);      // the log into DST, KLOG_MAX bytes at least; its length
+enum { KLOG_MAX = 65536 };
+int con_is_booting();          // init has not started the shell yet
+extern int vfs_nlazy, vfs_lazybytes;   // what the boot left on the host (SYS_LAZYFILE)
+void boot_report();            // the machine, into the kernel log (boot.c)
+void boot_done();              // the boot is over: how long it took (boot.c)
+extern int boot_lastid;        // the last task the boot made: its tasks' exits are logged
 
 // ---- varargs (va.c) ----
 // The stock stdarg.h keeps its va area in per-unit statics. Statics

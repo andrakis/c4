@@ -60,6 +60,7 @@ struct sl4b_cache *sl4b_cache_create(char *name, int objsize, int perslab) {
     sl4b_namecpy(c->name, name);
     c->next = caches;
     caches = c;
+    klog("sl4b: cache '%s', %d-byte objects, %d a slab\n", c->name, c->objsize, c->perslab);
     return c;
 }
 

@@ -1,5 +1,6 @@
 //
-// C4IX console: kputc, kputs, kprintf, and console input.
+// C4IX console: kputc, kputs, kprintf, klog, the kernel log, and
+// console input.
 //
 // All kernel output funnels through kputc, which uses only the PUTC
 // opcode -- implemented by c4m and plain c4 alike. A task's output
@@ -63,7 +64,14 @@ void con_init() {
     con_pos = 0;
     con_eof = 0;
     con_gate = 0;
+    if (con_fd >= 0)
+        klog("console: the host's terminal, read without blocking (fd %d), polled every %d cycles\n",
+            con_fd, CON_POLL_CYCLES);
+    else klog("console: the host's terminal, read on fd 0, which stops the machine while it waits\n");
 }
+
+// Booting: until init starts the shell (con_booted)
+int con_is_booting() { return con_booting; }
 
 // Open the gate. Virtual cycles are the right clock while tasks are
 // running and exactly the wrong one when the machine is asleep -- the
@@ -125,9 +133,121 @@ static void con_logc(int c) {
     if (con_log) vfs_logc(con_log, c, CON_LOG_MAX);
     else if (con_npre < CON_PRE) { con_pre[con_npre] = c; ++con_npre; }
 }
+// ---- the kernel log (dmesg, /proc/kmsg) ----
+//
+// Every line the kernel says -- kprintf's, kputs', klog's -- goes into a
+// ring of KLOG_BYTES with the time it was said, Linux's way:
+//
+//     [    0.012345] sl4b: cache 'task', 376-byte objects, 16 a slab
+//
+// Once the ring is full the oldest lines go. A task's own output does
+// not come here (that is /log/kernel's, while booting). klog's lines go
+// only here, unless the kernel was booted with -v; kprintf's go to the
+// console as well, as they always did.
+//
+// The stamp is the machine's clock, seconds and microseconds since the
+// kernel first looked: TIME's milliseconds, and the cycles since the
+// last millisecond began for the rest, at the rate klog_calibrate
+// measured. Before that, and on a host whose clock does not move, the
+// microseconds are the millisecond's.
+enum { KLOG_BYTES = 65536 };
+static char klog_ring[KLOG_BYTES];
+static int  klog_n;            // bytes ever written: the ring holds the last KLOG_BYTES
+static int  klog_mid;          // inside a line: the next byte gets no stamp
+int  klog_verbose;             // -v: klog's lines on the console too
+int  klog_cpms;                // cycles in a millisecond of the machine's clock, once measured
+static int klog_t0, klog_started;   // __time() at the first stamp
+static int klog_ms, klog_cyc;  // the last millisecond seen, and the cycle count then
+static int kout_con = 1;       // where con_out sends a byte: the console too (klog clears it)
+
+static void klog_put(int c) {
+    klog_ring[klog_n & (KLOG_BYTES - 1)] = c;
+    ++klog_n;
+}
+
+// "[SSSSS.UUUUUU] ", the digits of v in width w, zeros if z
+static void klog_num(int v, int w, int z) {
+    char d[12];
+    int n;
+    n = 0;
+    d[n] = '0' + v % 10; ++n; v = v / 10;
+    while (v) { d[n] = '0' + v % 10; ++n; v = v / 10; }
+    while (n < w) { d[n] = z ? '0' : ' '; ++n; }
+    while (n) { --n; klog_put(d[n]); }
+}
+
+static void klog_stamp() {
+    int ms, cyc, d, us;
+    ms = __time();
+    cyc = __c4_cycles();
+    if (!klog_started) { klog_started = 1; klog_t0 = ms; }
+    if (ms != klog_ms) { klog_ms = ms; klog_cyc = cyc; }
+    us = 0;
+    if (klog_cpms > 0) {
+        d = cyc - klog_cyc;
+        if (d > klog_cpms) d = klog_cpms;
+        if (d > 0) us = d * 1000 / klog_cpms;
+        if (us > 999) us = 999;
+    }
+    ms = ms - klog_t0;
+    if (ms < 0) ms = 0;
+    klog_put('[');
+    klog_num(ms / 1000, 5, 0);
+    klog_put('.');
+    klog_num(ms % 1000 * 1000 + us, 6, 1);
+    klog_put(']');
+    klog_put(' ');
+}
+
+static void klog_c(int c) {
+    if (!klog_mid) { klog_stamp(); klog_mid = 1; }
+    klog_put(c);
+    if (c == '\n') klog_mid = 0;
+}
+
+// The rate the stamps need, and the cpu line's MHz: the cycles between
+// two ticks of the machine's millisecond clock, over four of them. Gives
+// up (0) if the clock does not move in a hundred million cycles.
+int klog_calibrate() {
+    int t, c0, c1, start;
+    start = __c4_cycles();
+    t = __time();
+    while (__time() == t) if (__c4_cycles() - start > 100000000) return 0;
+    c0 = __c4_cycles();
+    t = __time();
+    while (__time() - t < 4) if (__c4_cycles() - start > 100000000) return 0;
+    c1 = __c4_cycles();
+    klog_cpms = (c1 - c0) / 4;
+    return klog_cpms;
+}
+
+// The log as it stands, oldest line first, into DST (KLOG_BYTES at least);
+// its length. A line the ring has partly lost is left out.
+int klog_copy(char *dst) {
+    int n, start, k;
+    sched_lock();
+    n = klog_n;
+    start = 0;
+    if (n > KLOG_BYTES) {
+        start = n - KLOG_BYTES;
+        n = KLOG_BYTES;
+        while (n && klog_ring[start & (KLOG_BYTES - 1)] != '\n') { ++start; --n; }
+        if (n) { ++start; --n; }
+    }
+    k = KLOG_BYTES - (start & (KLOG_BYTES - 1));
+    if (k > n) k = n;
+    memcpy(dst, klog_ring + (start & (KLOG_BYTES - 1)), k);
+    if (n > k) memcpy(dst + k, klog_ring, n - k);
+    sched_unlock();
+    return n;
+}
+
 static int con_out(int c) {
-    putchar(c);
-    con_logc(c);
+    if (kout_con) {
+        putchar(c);
+        con_logc(c);
+    }
+    klog_c(c);
     return c;
 }
 
@@ -256,14 +376,9 @@ static int kputptr(int v) {
 //
 // The body runs under sched_lock: a line is atomic against
 // preemption, so no cycle interrupt can interleave two tasks' lines.
-int kprintf(char *fmt, ...) {
-    va_list ap;    // one declarator per line: va_list is `int *`, so
-    va_list walk;  // `va_list a, b` would make b a plain int
+static int kformat(char *fmt, int *walk) {
     int n, c, width, zero, left;
 
-    sched_lock();
-    va_start(ap, fmt);
-    walk = ap;
     n = 0;
     while (*fmt) {
         c = *fmt; ++fmt;
@@ -287,6 +402,35 @@ int kprintf(char *fmt, ...) {
             else { con_out('%'); ++n; }
         }
     }
+    return n;
+}
+
+int kprintf(char *fmt, ...) {
+    va_list ap;    // one declarator per line: va_list is `int *`, so
+    va_list walk;  // `va_list a, b` would make b a plain int
+    int n;
+
+    sched_lock();
+    va_start(ap, fmt);
+    walk = ap;
+    n = kformat(fmt, walk);
+    va_end(ap);
+    sched_unlock();
+    return n;
+}
+
+// kprintf's, into the kernel log only: on the console as well with -v
+int klog(char *fmt, ...) {
+    va_list ap;
+    va_list walk;
+    int n;
+
+    sched_lock();
+    va_start(ap, fmt);
+    walk = ap;
+    kout_con = klog_verbose;
+    n = kformat(fmt, walk);
+    kout_con = 1;
     va_end(ap);
     sched_unlock();
     return n;

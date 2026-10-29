@@ -518,6 +518,7 @@ void task_zombify(struct task *t, int code) {
     int was;
     if (t->state == TS_ZOMBIE) return;
     was = t->state;
+    if (con_is_booting() || t->id <= boot_lastid) klog("task %d (%s) exited %d\n", t->id, t->name, code);
     t->exitcode = code;
     t->state = TS_ZOMBIE;
     ++sched_nzombies;
@@ -1417,6 +1418,8 @@ void sched_init(int interval) {
         __c4_configure(C4IX_CONF_INTERVAL, interval);
         kprintf("c4ix: cycle interval set to %dk\n", interval / 1024);
     }
+    klog("sched: round robin by nice, a slice of %d cycles; idle task %d, kernel task %d\n",
+        interval, idle_task->id, kernel_task->id);
 
     // and the other CPUs, each on a stack of its own
     k = 1;
@@ -1427,6 +1430,8 @@ void sched_init(int interval) {
         }
         __c4_cpu_start(k, (int)&smp_ap, smp_stack[k] + SMP_STACK_BYTES);
         kprintf("c4ix: CPU %d stack allocated: 0x%08x, CPU booting\n", k, smp_stack[k]);
+        klog("smp: CPU %d started, %d-byte stack at 0x%08x, idle task %d\n",
+            k, SMP_STACK_BYTES, smp_stack[k], smp_idle_t[k]->id);
         ++k;
     }
     sched_banner();

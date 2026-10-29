@@ -1,6 +1,8 @@
 C4IX booting, N cycles spent loading the kernel image
 c4ix: host c4m, info 0xHH
 c4ix: protected mode on for user tasks, preemption on
+c4ix: 1 processor
+c4ix: cycle interval set to 48k
 c4ix: task 2 'init' created, scheduling after N cycles
 init: c4ix init v1 on c4m
 init: ping id 3, pong id 4, tasks 5
@@ -67,5 +69,5 @@ test: done
 init: shell exited 0 after 419 syscalls
 sl4b: cache 'task' objsize 720 perslab 16 slabs 1 allocs 46 frees 46 live 0
 sl4b: cache 'file' objsize 32 perslab 16 slabs 1 allocs 36 frees 36 live 0
-sl4b: cache 'vnode' objsize 216 perslab 8 slabs 2 allocs 21 frees 7 live 14
+sl4b: cache 'vnode' objsize 216 perslab 8 slabs 2 allocs 22 frees 7 live 15
 c4ix: shutdown complete, 0 tasks remain

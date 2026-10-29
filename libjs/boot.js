@@ -110,7 +110,10 @@ export function parseSymbols(bytes) {
 export function boot(machine, imageBytes, argv, opts = {}) {
   const arena = machine.arena, i32 = arena.i32;
   initRom(arena);
-  const img = loadImage(arena, parseC4r(imageBytes), MEM_BASE);
+  const parsed = parseC4r(imageBytes);
+  const img = loadImage(arena, parsed, MEM_BASE);
+  // for the program's own boot report (devices.js IMG_*)
+  machine.dev.img = { code: img.codeBase, data: img.dataBase, bss: img.dataBase + parsed.data.length, end: img.top };
 
   // argv strings and pointer table in the reserved area above the stack
   // (c4bb's layout, loader.js:141-154)

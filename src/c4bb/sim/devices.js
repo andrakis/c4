@@ -145,6 +145,15 @@ const TAP_MAX = 16 << 20;        // held bytes past this are dropped (and counte
 // (C4KE, C4IX's vfsload, a c4cc program's open()). A drive nobody has
 // told looks from the root, as before there were directories.
 export const DISK_DIRS = 0x1e0;  // w: list address -> r: directories in the selected drive's list
+// Where the loader put the program (libjs's boot.js): its code, its data,
+// where the file's data ends and its BSS begins, and its end -- what a
+// Linux kernel's linker symbols say (_text, _sdata, __bss_start, _end).
+// C4IX's boot report prints them. 0 where nothing says. Announced by
+// C4I_C4MJS, never probed.
+export const IMG_CODE = 0x1f0;   // r
+export const IMG_DATA = 0x1f4;   // r
+export const IMG_BSS  = 0x1f8;   // r
+export const IMG_END  = 0x1fc;   // r
 
 // c4_info() capability bits (c4m.c:206)
 export const C4I_WHOWROTE = 0x1000;   // the provenance port is fitted
@@ -252,6 +261,7 @@ export class Devices {
     this.status = 0;
     this.heapBase = 0;
     this.heapEnd = 0;
+    this.img = null;                  // { code, data, bss, end }: the program as loaded (IMG_*)
     this.uartActivity = 0;            // counters for the renderer
     this.diskActivity = 0;
     this.uartTxAddr = 0;              // UART block-write latch
@@ -576,6 +586,10 @@ export class Devices {
       case CYCLE_HI:   return this.machine ? (this.machine.cycle / 0x100000000) | 0 : 0;
       case OPNAME:     return this.opnameResult | 0;
       case HEAP_BASE:  return this.heapBase | 0;
+      case IMG_CODE:   return this.img ? this.img.code | 0 : 0;
+      case IMG_DATA:   return this.img ? this.img.data | 0 : 0;
+      case IMG_BSS:    return this.img ? this.img.bss | 0 : 0;
+      case IMG_END:    return this.img ? this.img.end | 0 : 0;
       case HEAP_END:   return this.heapEnd | 0;
       case HEAP_USED:  return this.machine && this.machine.heap ? this.machine.heap.used | 0 : 0;
       case HEAP_GEN:     return this.genHeap() ? this.machine.heap.gen | 0 : 0;

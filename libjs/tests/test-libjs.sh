@@ -78,7 +78,7 @@ node libjs/tests/test-c4ix-zombie.mjs || fail=1
 node libjs/tests/test-c4ix-cpu.mjs || fail=1
 node libjs/tests/test-c4ix-c4m.mjs || fail=1
 node libjs/tests/test-c4ix-sigh.mjs || fail=1
-STAGE=3 node libjs/tests/test-c4ix-mmu.mjs || fail=1   # the MMU: a wild write is killed, the kernel and others carry on
+node libjs/tests/test-c4ix-mmu.mjs || fail=1   # the MMU: a wild write is killed, the kernel and others carry on
 node libjs/tests/test-rom.mjs    || fail=1
 
 # ---- programs, byte for byte against native -----------------------------

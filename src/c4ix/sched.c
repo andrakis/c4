@@ -746,7 +746,9 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     // or whose top guard word has been written, ran off the end of its
     // stack: kill it here, before what it wrote under the stack -- some
     // other allocation -- takes the machine down in some other task.
-    if (sched_cur && sched_cur->stack && sched_cur->privs == PRIV_USER && sched_cur->state != TS_ZOMBIE &&
+    // Under the MMU the guard page below the stack does this, at the
+    // store that runs into it (mmu.c), and the poison is just stack.
+    if (!mmu_on && sched_cur && sched_cur->stack && sched_cur->privs == PRIV_USER && sched_cur->state != TS_ZOMBIE &&
         (sp < sched_cur->stack + C4IX_STACK_GUARD * sizeof(int) ||
          ((int *)sched_cur->stack)[C4IX_STACK_GUARD - 1] != C4IX_STACK_POISON)) {
         kprintf("c4ix: task %d (%s) overran its %d-byte stack; killing it\n",
@@ -1209,7 +1211,7 @@ int sched_forge(struct task *t, int entry, int argc, int argv) {
     int i, words;
 
     words = sched_next_stack_words > C4IX_STACK_WORDS ? sched_next_stack_words : C4IX_STACK_WORDS;
-    if (!(stk = (int *)umalloc(words * sizeof(int)))) return 0;
+    if (!(stk = (int *)umalloc_stack(words * sizeof(int)))) return 0;
     memset(stk, 0, words * sizeof(int));
     x = stk + words - 8;              // slack above, as C4KE leaves
     t->stack_words = words;

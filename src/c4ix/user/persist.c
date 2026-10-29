@@ -45,7 +45,7 @@
 #include "archive.h"
 
 enum {
-    C4I_C4MJS = 8,
+    C4I_C4MJS = 8, C4I_MMU = 0x80000,
     DISK_FD = 0x124, DISK_WNAME = 0x178, DISK_WADDR = 0x17c, DISK_WLEN = 0x180,
     DISK_WCLOSE = 0x184, DISK_COUNT = 0x188,
     PATHMAX = 256, NAMEMAX = 64, CHUNK = 65536, BLOCK = 512
@@ -569,6 +569,8 @@ int main(int argc, char **argv) {
 
     hdr = (char *)malloc(BLOCK);
     chunk = (char *)malloc(CHUNK);
+    // the drive's registers: under the MMU only for a task that asks
+    if (__c4_info() & C4I_MMU) uioperm(UIOPERM_DEV);
     me = argv[0];
     i = 0;
     while (argv[0][i]) { if (argv[0][i] == '/') me = argv[0] + i + 1; ++i; }

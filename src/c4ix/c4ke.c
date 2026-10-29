@@ -602,7 +602,7 @@ int ck_dispatch(int num, int *args) {
     int code;
 
     t = sched_current();
-    if (t) ++t->nsyscalls;
+    if (t) { ++t->nsyscalls; t->ckabi = 1; }
 
     switch (num) {
     case CK_REQUEST_SYMBOL: return ck_symbol((char *)args[0]);

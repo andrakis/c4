@@ -35,8 +35,12 @@ export const IOPM = { ROM: 1, DEV: 2, GUI: 4, SND: 8, LOCAL: 16, LOCALW: 32, ALL
 
 // Virtual pages the arrays cache: 256 MB. Above it every access walks.
 const LIMIT = 65536;
-// Pages the stack window grows by, each way, when it is made
-const STACK_GROW = 16;
+// Pages the stack window grows by, each way, when it is made, and the code
+// window: a program's whole text, so that its calls stay inside it
+const STACK_GROW = 16, CODE_GROW = 256;
+// Code windows kept, so that a program and its libraries' code, which are
+// apart, are not made again each time a call goes from one to the other
+const CODE_WINS = 4;
 
 // Thrown by the translated ld32/st32 that sys() and the FPU call in user
 // mode; the user loop catches it and raises the fault
@@ -48,6 +52,8 @@ export class Mmu {
     this.rd = new Int32Array(LIMIT).fill(-1);
     this.wr = new Int32Array(LIMIT).fill(-1);
     this.ex = new Int32Array(LIMIT).fill(-1);
+    this.nx = new Uint8Array(LIMIT);       // 1: known not to be runnable (xPage), until a flush
+    this.cwins = new Int32Array(3 * CODE_WINS);   // lo, len, off of each code window kept
     this.log = new Int32Array(LIMIT);
     this.nlog = 0;
     this.misses = 0;
@@ -63,20 +69,23 @@ export class Mmu {
     this.ksp = 0;
     this.iopm = IOPM.ALL;
     this.faddr = 0; this.finfo = 0; this.fpc = 0;
+    this.ncwins = 0;
     this.flush();
   }
 
   flush() {
-    const rd = this.rd, wr = this.wr, ex = this.ex, log = this.log;
-    for (let k = 0; k < this.nlog; k++) { const v = log[k]; rd[v] = -1; wr[v] = -1; ex[v] = -1; }
+    const rd = this.rd, wr = this.wr, ex = this.ex, nx = this.nx, log = this.log;
+    for (let k = 0; k < this.nlog; k++) { const v = log[k]; rd[v] = -1; wr[v] = -1; ex[v] = -1; nx[v] = 0; }
     this.nlog = 0;
+    this.ncwins = 0;
     this.sLo = 0; this.sLen = 0; this.sOff = 0;
     this.cLo = 0; this.cLen = 0; this.cOff = 0;
   }
 
   invlpg(va) {
     const v = va >>> 12;
-    if (v < LIMIT) { this.rd[v] = -1; this.wr[v] = -1; this.ex[v] = -1; }
+    if (v < LIMIT) { this.rd[v] = -1; this.wr[v] = -1; this.ex[v] = -1; this.nx[v] = 0; }
+    this.ncwins = 0;
     this.sLo = 0; this.sLen = 0; this.sOff = 0;
     this.cLo = 0; this.cLen = 0; this.cOff = 0;
   }
@@ -146,19 +155,42 @@ export class Mmu {
     this.misses++;
     const v = va >>> 12;
     if (v < LIMIT) {
-      if (this.rd[v] < 0 && this.wr[v] < 0 && this.ex[v] < 0) {
-        if (this.nlog === LIMIT) {
-          this.rd.fill(-1); this.wr.fill(-1); this.ex.fill(-1);
-          this.nlog = 0;
-        }
-        this.log[this.nlog++] = v;
-      }
+      if (this.rd[v] < 0 && this.wr[v] < 0 && this.ex[v] < 0 && !this.nx[v]) this.logv(v);
       this.rd[v] = frame;
       // written to only once it is dirty, so the first store sets D
       if ((npte & (PTE.W | PTE.D)) === (PTE.W | PTE.D)) this.wr[v] = frame;
       if (npte & PTE.X) this.ex[v] = frame;
     }
     return frame;
+  }
+
+  // V's entries are about to be set: logged, so that a flush clears them
+  logv(v) {
+    if (this.nlog === LIMIT) {
+      this.rd.fill(-1); this.wr.fill(-1); this.ex.fill(-1); this.nx.fill(0);
+      this.nlog = 0;
+    }
+    this.log[this.nlog++] = v;
+  }
+
+  // The physical page at va if user mode may run it, filled; -1 if not,
+  // which is remembered until the next flush. Raises nothing.
+  xPage(va) {
+    if ((va >>> 0) < 0x1000) return -1;
+    const v = va >>> 12;
+    if (v < LIMIT) {
+      if (this.ex[v] >= 0) return this.ex[v];
+      if (this.nx[v]) return -1;
+    }
+    const pte = this.probe(va);
+    if ((pte & (PTE.P | PTE.U | PTE.X)) !== (PTE.P | PTE.U | PTE.X)) {
+      if (v < LIMIT) {
+        if (this.rd[v] < 0 && this.wr[v] < 0) this.logv(v);
+        this.nx[v] = 1;
+      }
+      return -1;
+    }
+    return this.xlate(va, FK.FETCH);
   }
 
   // The cached page, or a fill: the slow path's first step
@@ -473,15 +505,18 @@ export class Mmu {
     try { this.st32(y, v); } catch (e) { if (e !== FAULT) throw e; this.raise(); }
   }
 
-  // The code window: the page pc is in, and the next when it follows on
-  // in physical memory too and may be run. cLen leaves out its last word,
-  // so that an instruction that starts inside it has its operand inside
-  // too; the loop refills the window when pc is past that, and an
-  // instruction in the last word is looked at here: its operand, if it
-  // has one, must be on the next page, mapped next to this one. Raises a
-  // fault (the caller looks at m.mode) if pc may not be run.
+  // The code window: the run of pages around pc that may be run, mapped
+  // next to each other in physical memory too -- a program's text, up to
+  // CODE_GROW pages each way. cLen leaves out its last word, so that an
+  // instruction that starts inside it has its operand inside too; the
+  // loop refills the window when pc is past that, and an instruction in
+  // the last word is looked at here: its operand, if it has one, must be
+  // on the next page, mapped next to this one. The last CODE_WINS windows
+  // are kept, so that going back and forth between a program and its
+  // libraries finds them made. Raises a fault (the caller looks at
+  // m.mode) if pc may not be run.
   cFill(pc) {
-    const m = this.m;
+    const m = this.m, w = this.cwins;
     if ((pc >>> 0) < 0x1000) {
       // the ROM's TLEV word, where trap frames return; nothing else runs.
       // The window is that word alone: cLen 0, so the next fetch looks.
@@ -491,18 +526,31 @@ export class Mmu {
       }
       this.refuse(pc, FK.FETCH); this.raise(); return;
     }
+    for (let k = 0; k < this.ncwins; k++) {
+      if ((pc - w[3 * k]) >>> 0 < w[3 * k + 1]) {
+        this.cLo = w[3 * k]; this.cLen = w[3 * k + 1]; this.cOff = w[3 * k + 2];
+        return;
+      }
+    }
     const p = this.page(pc, FK.FETCH);
     if (p < 0) { this.raise(); return; }
-    const vp = pc & -4096;
-    this.cLo = vp; this.cOff = p - vp; this.cLen = 4096 - 4;
-    // the next page, when an operand may lie there
-    const v2 = (vp + 4096) >>> 12;
-    let p2 = v2 < LIMIT ? this.ex[v2] : -1;
-    if (p2 < 0) {
-      const pte = this.probe(vp + 4096);
-      if ((pte & (PTE.P | PTE.U | PTE.X)) === (PTE.P | PTE.U | PTE.X)) p2 = this.xlate(vp + 4096, FK.FETCH);
+    const vp = pc & -4096, off = p - vp;
+    let lo = vp, hi = vp + 4096;
+    for (let k = 0; k < CODE_GROW; k++) {
+      const q = this.xPage(lo - 4096);
+      if (q < 0 || q - (lo - 4096) !== off) break;
+      lo -= 4096;
     }
-    if (p2 >= 0 && p2 === p + 4096) this.cLen = 8192 - 4;
+    for (let k = 0; k < CODE_GROW; k++) {
+      const q = this.xPage(hi);
+      if (q < 0 || q - hi !== off) break;
+      hi += 4096;
+    }
+    this.cLo = lo; this.cOff = off; this.cLen = hi - lo - 4;
+    // kept, the newest first
+    const n = this.ncwins < CODE_WINS ? this.ncwins++ : CODE_WINS - 1;
+    w.copyWithin(3, 0, 3 * n);
+    w[0] = lo; w[1] = hi - lo - 4; w[2] = off;
     // the last word of the window, whose operand would be past its end
     if ((pc - this.cLo) >>> 0 >= this.cLen && hasOperand(m.i32[(p | (pc & 4095)) >> 2])) {
       const q = this.page(pc + 4, FK.FETCH);

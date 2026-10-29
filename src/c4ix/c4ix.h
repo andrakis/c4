@@ -111,7 +111,9 @@ enum {
     SYS_AFFINITY = 242,
     // a task's priority (sched.c, sched_nice)
     SYS_NICE = 243,
-    SYS_TOP = 244          // one past the last: sched_trap's range check
+    // c4bb's device registers for this task, under the MMU (mmu.c)
+    SYS_IOPERM = 244,
+    SYS_TOP = 245          // one past the last: sched_trap's range check
 };
 // SYS_DISPLAY's operations, and TAKE's flag (include/display.h)
 enum { DISP_TAKE = 0, DISP_STATE = 1, DISP_YIELD = 2, DISP_GIVE = 3, DISP_YIELDS = 1 };
@@ -497,6 +499,8 @@ struct task {
     int  urgns;
     int  uchunk;
     int  uslab[8];
+    int  iopm;                 // what of page 0 it asked for (SYS_IOPERM)
+    int  ckabi;                // has made a C4KE call: a C4KE program
     int  mmdir;                // its page directory: its address space (0 until it needs one)
     char name[TASK_NAME_MAX];
 };
@@ -786,6 +790,10 @@ int  mmu_map(int *dir, int va, int n, int flags);
 void mmu_fault(struct task *t, int va);   // TRAP_SEGV from a user task: kill it
 // What user mode may use of page 0 (MMU_IOPM)
 enum { IOPM_ROM = 1, IOPM_DEV = 2, IOPM_GUI = 4, IOPM_SND = 8, IOPM_LOCAL = 16, IOPM_LOCALW = 32 };
+// ... every user task's: the ROM, the display, the sound card, reading the window
+enum { MMU_IOPM_USER = 1 | 4 | 8 | 16 };
+int  umalloc_stack(int n);             // umalloc, and a guard page below it
+int  mmu_ioperm(struct task *t, int bits);   // SYS_IOPERM
 // A user task's memory. Without the MMU these are malloc and free.
 // umalloc: whole pages, the kernel's until mmu_adopt gives them to the
 // task they were made for (its stack, image, arguments); ufree gives such

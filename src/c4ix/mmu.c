@@ -125,6 +125,8 @@ struct urgn {
     int shared;                // a cached library's code: mapped, never freed
     int heap;                  // what the task asked for (or its entry page): freed with its heap
     int *dir;                  // the space it is mapped in: its owner's, or a vfork parent's
+    int guard;                 // its first page is a stack's guard: never mapped
+    int code;                  // an image's code: read-only, but a C4KE program's (mmu_fault)
     struct urgn *next;         // the owner's regions
     // UR_SLAB
     int size;                  // its blocks' size
@@ -148,6 +150,11 @@ static void mmu_setpg(struct urgn *r, int base, int n, struct urgn *v) {
 static struct urgn *mmu_rgn(int p) {
     if (p < MMU_PAGE || p >= mmu_memsize) return 0;
     return (struct urgn *)mmu_pg[p >> 12];
+}
+
+// What a region is called by its users: its base, past its guard page
+static int mmu_start(struct urgn *r) {
+    return r->base + (r->guard ? MMU_PAGE : 0);
 }
 
 // Whose memory a task's region is: a vfork child allocates for its parent
@@ -209,6 +216,18 @@ void mmu_switch(struct task *t) {
     if (!mmu_on || !t || t->privs != PRIV_USER) return;
     d = (int)mmu_dir_of(t);
     if (*(int *)MMU_PTBR != d) *(int *)MMU_PTBR = d;
+    d = MMU_IOPM_USER | (mmu_root(t)->iopm & IOPM_DEV);
+    if (*(int *)MMU_IOPM != d) *(int *)MMU_IOPM = d;
+}
+
+// SYS_IOPERM: c4bb's device registers for T (bits, IOPM_DEV), as Linux's
+// ioperm gives a process its ports. persist asks, to write drive 1.
+int mmu_ioperm(struct task *t, int bits) {
+    t = mmu_root(t);
+    if (!t || t->privs != PRIV_USER) return -1;
+    t->iopm = bits & IOPM_DEV;
+    if (mmu_on) mmu_switch(t);
+    return 0;
 }
 
 // A region of N bytes, unowned and unmapped: the kernel's until adopted
@@ -244,6 +263,9 @@ static void mmu_give(struct urgn *r, struct task *t, int flags) {
     t->urgns = (int)r;
     klock_drop(mmu_ulock);
     mmu_rmap(r, flags);
+    // a stack's guard page: below it, not mapped, so running off the end
+    // is a fault where it happens, not a write over whatever is below
+    if (r->guard) mmu_map(r->dir, r->base, MMU_PAGE, 0);
 }
 
 // Off its owner's list, out of its space, back to the heap
@@ -280,12 +302,21 @@ int umalloc(int n) {
     return r->base;
 }
 
+// N bytes of stack, with a guard page below them that is never mapped
+int umalloc_stack(int n) {
+    struct urgn *r;
+    if (!mmu_on) return (int)malloc(n);
+    if (!(r = mmu_region(n + MMU_PAGE, UR_BLOCK))) return 0;
+    r->guard = 1;
+    return r->base + MMU_PAGE;
+}
+
 // A umalloc'd region given back, or a kernel block
 void ufree(int p) {
     struct urgn *r;
     if (!p) return;
     if (!mmu_on) { free((char *)p); return; }
-    if ((r = mmu_rgn(p)) && r->kind == UR_BLOCK && r->base == p) {
+    if ((r = mmu_rgn(p)) && r->kind == UR_BLOCK && mmu_start(r) == p) {
         if (!r->shared) mmu_release(r);
         return;
     }
@@ -298,14 +329,20 @@ void umem_share(int p) {
     struct urgn *r;
     if (!mmu_on || !(r = mmu_rgn(p))) return;
     r->shared = 1;
-    r->flags = PTE_P | PTE_U | PTE_X | PTE_W;
+    r->flags = PTE_P | PTE_U | PTE_X;
+}
+
+// P is an image's code (mmu_fault)
+static void mmu_code(int p) {
+    struct urgn *r;
+    if (p && (r = mmu_rgn(p)) && r->base == p) r->code = 1;
 }
 
 // Give P, if it is an unowned region, to T, mapped with FLAGS; a shared
 // one is mapped into T's space as it is everyone's
 static void mmu_take(struct task *t, int p, int flags) {
     struct urgn *r;
-    if (!p || !(r = mmu_rgn(p)) || r->kind != UR_BLOCK || r->base != p) return;
+    if (!p || !(r = mmu_rgn(p)) || r->kind != UR_BLOCK || mmu_start(r) != p) return;
     if (r->shared) { mmu_map(mmu_dir_of(t), r->base, r->npages * MMU_PAGE, r->flags); return; }
     if (r->owner) return;
     mmu_give(r, t, flags);
@@ -319,7 +356,14 @@ void mmu_adopt(struct task *t) {
     int *l;
     int k, code;
     if (!mmu_on || !t || t->privs != PRIV_USER) return;
-    code = PTE_P | PTE_U | PTE_X | PTE_W;
+    // code may be run and read, not written; data may not be run
+    code = PTE_P | PTE_U | PTE_X;
+    mmu_code(t->img_code);
+    if (t->img_libs) {
+        l = (int *)t->img_libs;
+        k = 0;
+        while (k < t->img_nlibs) { mmu_code(l[3 * k]); ++k; }
+    }
     mmu_take(t, t->stack, PTE_P | PTE_U | PTE_W);
     mmu_take(t, t->argv_vec, PTE_P | PTE_U | PTE_W);
     mmu_take(t, t->argv_data, PTE_P | PTE_U | PTE_W);
@@ -512,7 +556,7 @@ int mmu_user_entry(struct task *t) {
     *w++ = OPC_IMM; *w++ = SYS_EXIT; *w++ = OPC_PSH; *w++ = OPC_OPCD;
     *w = OPC_JMP; w[1] = (int)w; w = w + 2;
     r->heap = 1;
-    mmu_give(r, t, PTE_P | PTE_U | PTE_X | PTE_W);
+    mmu_give(r, t, PTE_P | PTE_U | PTE_X);
     t->sv_pc = r->base;
     return 1;
 }
@@ -634,10 +678,11 @@ void mmu_cpu(int k) {
     mmu_kstack[k] = s;
     *(int *)MMU_KSP = s + MMU_KSTACK;
     *(int *)MMU_PTBR = (int)mmu_dir;   // until the first user task
-    // Page 0: the ROM, c4bb's devices, the display, the sound card, and
-    // the CPU-local window to read (the libraries' data slots) but not
-    // to write: it is the kernel's struct cpu (docs/c4ix-mmu.md 7)
-    *(int *)MMU_IOPM = IOPM_ROM | IOPM_DEV | IOPM_GUI | IOPM_SND | IOPM_LOCAL;
+    // Page 0: the ROM, the display, the sound card, and the CPU-local
+    // window to read (the libraries' data slots) but not to write: it is
+    // the kernel's struct cpu. c4bb's devices only for a task that asks
+    // (SYS_IOPERM). docs/c4ix-mmu.md 7.
+    *(int *)MMU_IOPM = MMU_IOPM_USER;
     *(int *)MMU_CTL = 1;
     klog("mmu: CPU %d translating user mode, its traps on a %d KB stack at 0x%08x\n",
         k, MMU_KSTACK / 1024, s);
@@ -672,6 +717,15 @@ static void mmu_whose(int va, char *buf) {
     if (va < MMU_PAGE) s = "page 0";
     else if (va >= mmu_memsize) s = "beyond memory";
     else if (r && r->shared) s = "shared library code";
+    else if (r && r->owner && r->guard && va < r->base + MMU_PAGE) {
+        s = "the stack guard of task ";
+        i = 0;
+        while (*s) { buf[i] = *s; ++s; ++i; }
+        s = r->owner->name;
+        while (*s && i < 44) { buf[i] = *s; ++s; ++i; }
+        buf[i] = 0;
+        return;
+    }
     else if (r && r->owner) {
         s = "task ";
         i = 0;
@@ -693,9 +747,21 @@ static void mmu_whose(int va, char *buf) {
 void mmu_fault(struct task *t, int va) {
     int info, pc;
     char *what;
-    char whose[48];
+    char whose[64];
+    struct urgn *r;
     info = *(int *)MMU_FINFO;
     pc = *(int *)MMU_FPC;
+    // A C4KE program writing its own code: C4KE's ps patches itself. Its
+    // text is made writable and the store runs again (faults are
+    // precise: the trap returns to the instruction). C4IX's own programs
+    // never do this, and are killed for it below.
+    if (t && t->ckabi && (info & MMU_FK_WRITE) && (r = mmu_rgn(va)) && r->code &&
+        r->owner == mmu_root(t) && !(r->flags & PTE_W)) {
+        r->flags = r->flags | PTE_W;
+        mmu_rmap(r, r->flags);
+        klog("mmu: task %d (%s), a C4KE program, writes its own code: its text made writable\n", t->id, t->name);
+        return;
+    }
     what = (info & MMU_FK_WRITE) ? "write to" : (info & MMU_FK_FETCH) ? "jump to" : "read of";
     mmu_whose(va, whose);
     kprintf("c4ix: task %d (%s): page fault: %s 0x%08x (%s, %s) at pc 0x%08x; killed\n",

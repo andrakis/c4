@@ -606,6 +606,9 @@ int sys_dispatch(int num, int *args) {
     case SYS_DISPLAY:  return sys_display(t, args[0], args[1]);
     case SYS_AFFINITY: return sched_affinity(args[0] ? args[0] : (t ? t->id : 0), args[1]);
     case SYS_NICE:     return sched_nice(args[0] ? args[0] : (t ? t->id : 0), args[1]);
+    // c4bb's device registers, which a user task does not get unless it
+    // asks (docs/c4ix-mmu.md 7). Nothing to do without the MMU.
+    case SYS_IOPERM:   return mmu_ioperm(t, args[0]);
     case SYS_GETPID:   return t ? t->id : -1;
     // Freed with the task if it does not free it itself (task.c)
     case SYS_SBRK:     return task_ualloc(t, args[0]);

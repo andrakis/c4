@@ -116,6 +116,10 @@ DEPS $(OUT)/user/splash.c4o : src/c4ix/user/splash.c $(U) src/c4ix/include/archi
 RUN $(LCS) src/c4ix/user/splash.c $(OUT)/user/splash.c4o
 DEPS $(OUT)/bin/c4ix-splash.c4r : $(OUT)/user/splash.c4o $(LIBARCS) $(LIBCS)
 RUN c4rlink $(OUT)/user/splash.c4o $(LIBARCS) $(LIBCS) -o $(OUT)/bin/c4ix-splash.c4r
+DEPS $(OUT)/user/dmesg.c4o : src/c4ix/user/dmesg.c $(U)
+RUN $(LC) src/c4ix/user/dmesg.c $(OUT)/user/dmesg.c4o
+DEPS $(OUT)/bin/c4ix-dmesg.c4r : $(OUT)/user/dmesg.c4o $(LIBC)
+RUN c4rlink $(OUT)/user/dmesg.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-dmesg.c4r
 DEPS $(OUT)/user/crc32.c4o : src/c4ix/user/crc32.c $(U) src/c4ix/include/archive.h
 RUN $(LC) src/c4ix/user/crc32.c $(OUT)/user/crc32.c4o
 DEPS $(OUT)/bin/c4ix-crc32.c4r : $(OUT)/user/crc32.c4o $(LIBARC) $(LIBC)

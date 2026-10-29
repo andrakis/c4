@@ -6,12 +6,61 @@
 // A cache grows by malloc'ing a slab of `perslab` objects and
 // threading them onto a freelist; alloc pops, free pushes. Slabs are
 // never returned to the host -- freed objects stay cached for reuse,
-// which is the point.
+// which is the point. So slabs come from the kernel arena (below).
 //
 
 #include "c4ix.h"
 
 static struct sl4b_cache *caches;   // all caches, for sl4b_stats
+
+// ---- the kernel arena ----
+//
+// One block, taken at boot before any program runs, from which the
+// kernel carves what it keeps until shutdown (c4ix.h). On libjs the heap
+// hands out its lowest addresses first (heap.js's bump pointer), so the
+// block sits directly after the kernel image and the va area, below every
+// block a program will ever be given. Carving is a bump pointer: nothing
+// here is freed, so nothing needs more.
+int kmem_base, kmem_end, kmem_brk;
+int kmem_spills;             // carvings that did not fit, taken from the heap
+
+// The arena for NCPU processors: the kernel task's stack, an idle task's
+// for each CPU, and room for the slabs.
+void kmem_init(int ncpu) {
+    int bytes;
+    bytes = KMEM_STACK_BYTES * (1 + ncpu) + KMEM_SLAB_BYTES;
+    if (!(kmem_base = (int)malloc(bytes))) {
+        kputs("c4ix: panic: no memory for the kernel arena\n");
+        exit(-1);
+    }
+    memset((char *)kmem_base, 0, bytes);
+    kmem_brk = kmem_base;
+    kmem_end = kmem_base + bytes;
+}
+
+// BYTES of the arena, zeroed, or of the heap once the arena is full
+char *kmem_alloc(int bytes) {
+    char *p;
+    bytes = (bytes + 7) / 8 * 8;
+    sched_lock();
+    if (kmem_brk && kmem_brk + bytes <= kmem_end) {
+        p = (char *)kmem_brk;
+        kmem_brk = kmem_brk + bytes;
+        sched_unlock();
+        return p;
+    }
+    ++kmem_spills;
+    sched_unlock();
+    if ((p = (char *)malloc(bytes))) memset(p, 0, bytes);
+    return p;
+}
+
+// free(), for what may have come from kmem_alloc: the arena's own carvings
+// stay where they are (a host's free would be handed the middle of a block)
+void kmem_free(char *p) {
+    if ((int)p >= kmem_base && (int)p < kmem_end) return;
+    free(p);
+}
 
 static void sl4b_namecpy(char *dst, char *src) {
     int i;
@@ -26,7 +75,7 @@ static int sl4b_grow(struct sl4b_cache *c) {
     char *obj;
     int i;
 
-    if (!(s = (struct sl4b_slab *)malloc(sizeof(struct sl4b_slab) + c->objsize * c->perslab)))
+    if (!(s = (struct sl4b_slab *)kmem_alloc(sizeof(struct sl4b_slab) + c->objsize * c->perslab)))
         return 0;
     s->next = c->slabs;
     c->slabs = s;
@@ -46,7 +95,7 @@ static int sl4b_grow(struct sl4b_cache *c) {
 struct sl4b_cache *sl4b_cache_create(char *name, int objsize, int perslab) {
     struct sl4b_cache *c;
 
-    if (!(c = (struct sl4b_cache *)malloc(sizeof(struct sl4b_cache)))) return 0;
+    if (!(c = (struct sl4b_cache *)kmem_alloc(sizeof(struct sl4b_cache)))) return 0;
     // round the object size up to whole words: the freelist threads a
     // pointer through the first word of every free object
     c->objsize = (objsize + 7) / 8 * 8;
@@ -60,6 +109,7 @@ struct sl4b_cache *sl4b_cache_create(char *name, int objsize, int perslab) {
     sl4b_namecpy(c->name, name);
     c->next = caches;
     caches = c;
+    klog("sl4b: cache '%s', %d-byte objects, %d a slab\n", c->name, c->objsize, c->perslab);
     return c;
 }
 
@@ -95,4 +145,7 @@ void sl4b_stats() {
             c->nallocs, c->nfrees, c->nallocs - c->nfrees);
         c = c->next;
     }
+    if (kmem_spills)
+        kprintf("sl4b: the kernel arena (%d KB) filled: %d carvings came from the heap\n",
+            (kmem_end - kmem_base) / 1024, kmem_spills);
 }

@@ -27,6 +27,7 @@ COPY $(OUT)/bin/c4ix-tar.c4r /bin/tar
 COPY $(OUT)/bin/c4ix-gunzip.c4r /bin/gunzip
 COPY $(OUT)/bin/c4ix-splash.c4r /bin/splash
 COPY $(OUT)/bin/c4ix-crc32.c4r /bin/crc32
+COPY $(OUT)/bin/c4ix-dmesg.c4r /bin/dmesg
 COPY $(OUT)/bin/c4ix-persist.c4r /bin/persist
 COPY $(OUT)/bin/c4ix-desktop.c4r /bin/desktop
 COPY $(OUT)/bin/c4cc.c4r /bin/c4cc

@@ -25,7 +25,7 @@ fail=0
 ok()  { echo "test-rebuild: $1 OK"; }
 bad() { echo "test-rebuild: $1 FAILED"; fail=1; }
 
-LC_PROGS="hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt gui vfsload b4ke cc tar gunzip crc32 splash persist desktop libctest pictest unixtest"
+LC_PROGS="hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt gui vfsload b4ke cc tar gunzip crc32 splash persist desktop libctest pictest unixtest dmesg"
 CC_PROGS="c4cc c4rdump c4rlink cpp c4 c4m"
 {
     echo "wait 4"

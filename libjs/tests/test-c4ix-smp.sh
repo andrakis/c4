@@ -34,12 +34,17 @@ if echo "$out" | grep -qF "protected mode on for user tasks, preemption on" && e
    echo "$out" | grep -qF "shutdown complete, 0 tasks remain" && ! echo "$out" | grep -qE "cache .task. .*live [1-9]|panic|illegal"; then
     ok "boots, runs ps, and shuts down with every task freed"
 else bad "boots, runs ps, and shuts down with every task freed"; echo "$out" | grep -E 'processors|tasks|panic|illegal|live|shutdown' | head -8; fi
-if echo "$out" | grep -qE '^c4ix: 64 MB of memory: the kernel below 0x[0-9a-f]+, the heap to 0x[0-9a-f]+ \([0-9]+ KB\)'; then
+# the layout: the kernel image, its arena, the heap, the guarded boot
+# stack (sched.c, sched_banner), each [mem FIRST-LAST]
+mem () { echo "$out" | grep -qE "^  \[mem 0x[0-9a-f]{8}-0x[0-9a-f]{8}\] $1"; }
+if echo "$out" | grep -qxF 'c4ix: 64 MB of memory:' && mem 'Kernel image \(' && mem 'Kernel arena - ' &&
+   mem 'Heap - ' && mem 'Boot stack, guarded \(1024 KB\)'; then
     ok "the boot says the memory and its layout"
-else bad "the boot says the memory and its layout"; echo "$out" | grep -E 'memory' | head -3; fi
+else bad "the boot says the memory and its layout"; echo "$out" | grep -E 'memory|\[mem' | head -6; fi
 if [ "$N" -ge 2 ]; then
     if [ -n "$2" ]; then how="a thread each, all at once"; else how="simulated, taking turns on one thread"; fi
-    if echo "$out" | grep -qF "c4ix: $N processors, $how; they share all memory and the heap" &&
+    if echo "$out" | grep -qxF "c4ix: $N processors" && echo "$out" | grep -qxF "  $how" &&
+       echo "$out" | grep -qxF "  CPUs share all memory and the heap" &&
        [ "$(echo "$out" | grep -cE ' idle[0-9]+$')" = $((N - 1)) ]; then
         ok "starts $N processors, an idle task each, and says how they run"
     else bad "starts $N processors, an idle task each, and says how they run"; echo "$out" | grep -E 'processors|idle' | head -6; fi
@@ -95,7 +100,7 @@ else bad "three tasks share libc's code and keep their own data"; echo "$out" | 
 # on one CPU, the columns there always were
 out=$(printf 'ps\ntop 1\nexit\n' | c4ix 1000000000)
 if [ "$N" -ge 2 ]; then
-    if echo "$out" | grep -qE '^  ID  PPID STATE    CPU PRIV' && echo "$out" | grep -qE "^$N CPUs: cpu0 [0-9]+% cpu1 [0-9]+%"; then
+    if echo "$out" | grep -qE '^  ID  PPID STATE    CPU PRIV' && echo "$out" | grep -qE "^CPUs:  0:[0-9]+% 1:[0-9]+%"; then
         ok "ps and top show the CPUs"
     else bad "ps and top show the CPUs"; echo "$out" | grep -E 'ID|CPUs' | head -4; fi
 else

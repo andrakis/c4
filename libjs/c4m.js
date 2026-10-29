@@ -18,7 +18,7 @@ import {
   OPNAMES, UART_TX, TIME_MS, USLP_US, DISK_CLOSE,
   C4I_C4M, C4I_HRT, C4I_SIG, C4I_FLT, C4I_PROT, C4I_TRAPH, C4I_PIT, C4I_MBOX, C4I_DRV,
 } from '../src/c4bb/sim/devices.js';
-import { TLEV_ADDR, OPNAMES_ROM } from '../src/c4bb/sim/arena.js';
+import { TLEV_ADDR, OPNAMES_ROM, kernelPhys, kernelPte, PTE_SWAP } from '../src/c4bb/sim/arena.js';
 import { fpu, C4I_FPU } from '../src/c4bb/sim/fpu.js';
 import { format } from './printf.js';
 
@@ -57,14 +57,14 @@ export function hasOperand(i) {
 // the opcode-name ROM. c4bb's firmware latches at 0x20-0x3F are RAM.
 // Does the range of n bytes at x touch it?
 const ROM_LOW_END = 0x20;
-function isRom(x, n) {
+export function isRom(x, n) {
   const lo = x | 0, hi = lo + n;
   return (lo < ROM_LOW_END && hi > 0) ||
          (lo < OPNAMES_ROM + OPNAMES.length && hi > OPNAMES_ROM);
 }
 
 // run()'s own opcodes that OPCD can run, which have no operand: opcd().
-function isPlainOp(i) {
+export function isPlainOp(i) {
   return (i >= OP.LEV && i <= OP.MOD) || i === OP._JMP || i === OP._ADJ || i === OP.C4CY ||
          i === OP.JMPA || i === OP.LIP || i === OP.ADDL || i === OP.POPA;
 }
@@ -83,11 +83,17 @@ export const C4I_SMP = 0x100;
 // ... and they run at once, a thread each (par.js), rather than taking
 // turns on one (smp.js). Free in c4m.c's list, which ends at C4I_FPU.
 export const C4I_PAR = 0x20000;
+// The MMU is fitted (mmu.js, docs/c4ix-mmu.md); 0x40000 is C4I_DRV
+export const C4I_MMU = 0x80000;
+// Its registers, a window every CPU sees its own of, as the local one
+export const MMU_BASE = 0x500, MMU_END = 0x540;
 
 // Why run() stopped.
 // PARK and CPUHALT are one processor's, never the machine's (smp.js).
-export const STOP = { BUDGET: 0, HALT: 1, INPUT: 2, SLEEP: 3, PARK: 4, CPUHALT: 5 };
-export const STOP_NAMES = ['budget', 'halt', 'input', 'sleep', 'park', 'cpuhalt'];
+// SWITCH is the MMU's (mmu.js): the mode changed, and with it the loop to
+// run. It never leaves Machine.run.
+export const STOP = { BUDGET: 0, HALT: 1, INPUT: 2, SLEEP: 3, PARK: 4, CPUHALT: 5, SWITCH: 6 };
+export const STOP_NAMES = ['budget', 'halt', 'input', 'sleep', 'park', 'cpuhalt', 'switch'];
 
 // SMP (smp.js, c4mp's instruction set): where a started CPU's entry
 // function returns -- a CPUH word in the ROM -- and the CPU-local window,
@@ -115,6 +121,15 @@ export class Machine {
     this.heap = heap;
     this.gui = bus.gui || null;
     this.snd = bus.snd || null;
+    // The MMU (mmu.js), when the host fits one; vm is set while the user
+    // loop runs, and makes ld32 and the rest translate
+    this.mmu = null;
+    this.vm = false;
+    // The user window (kpa, below): where user addresses start, 0 for
+    // none, and the space kernel-mode accesses into it look in first.
+    // Set through the MMU's registers (UWIN, UDIR).
+    this.uwin = 0;
+    this.udir = 0;
     dev.machine = this;
     arena.io = dev;
     this.i32 = arena.i32;
@@ -147,6 +162,8 @@ export class Machine {
     // each TLEV. The PIT and the mailbox are held while it is non-zero,
     // as by c4bb's irqHold (machine.js) -- see boundary().
     this.irqHold = 0;
+    this.vm = false;
+    if (this.mmu) this.mmu.reset();
   }
 
   // ---------------------------------------------------------------
@@ -154,30 +171,232 @@ export class Machine {
   // and comes here for everything else: the device window, the ROM,
   // unaligned words, and addresses off either end of the arena.
   ld32(x) {
+    if (this.vm) return this.mmu.ld32(x);
+    if (this.uwin && (x >>> 0) >= this.uwin) return this.kld32(x);
     x = x | 0;
-    if ((x & 3) === 0 && x >= 0x1000) return this.i32[x >> 2] | 0;
+    if ((x & 3) === 0 && x >= 0x1000) {
+      if (this.inGuard(x, 4)) return this.guardHit(x, 4, false, 0);
+      return this.i32[x >> 2] | 0;
+    }
     if (this.smp && x >= LOCAL_BASE && x < LOCAL_END && (x & 3) === 0) return this.local[(x - LOCAL_BASE) >> 2] | 0;
+    if (this.mmu && x >= MMU_BASE && x < MMU_END) return this.mmu.read32(x) | 0;
     return this.bus.read32(x) | 0;
   }
   st32(x, v) {
+    if (this.vm) { this.mmu.st32(x, v); return; }
+    if (this.uwin && (x >>> 0) >= this.uwin) { this.kst32(x, v); return; }
     x = x | 0;
-    if ((x & 3) === 0 && x >= 0x1000) { this.i32[x >> 2] = v; return; }
+    if ((x & 3) === 0 && x >= 0x1000) {
+      if (this.inGuard(x, 4)) { this.guardHit(x, 4, true, v); return; }
+      this.i32[x >> 2] = v;
+      return;
+    }
     if (this.smp && x >= LOCAL_BASE && x < LOCAL_END && (x & 3) === 0) { this.local[(x - LOCAL_BASE) >> 2] = v; return; }
+    if (this.mmu && x >= MMU_BASE && x < MMU_END) { this.mmu.write32(x, v | 0); return; }
     if (isRom(x, 4)) { this.romStore(x, v); return; }
     this.bus.write32(x, v | 0);
   }
   ld8(x) {
+    if (this.vm) return this.mmu.ld8(x);
+    if (this.uwin && (x >>> 0) >= this.uwin) return this.kld8(x);
     x = x | 0;
-    if (x >= 0x1000) return (this.u8[x] << 24) >> 24;
+    if (x >= 0x1000) {
+      if (this.inGuard(x, 1)) return this.guardHit(x, 1, false, 0);
+      return (this.u8[x] << 24) >> 24;
+    }
     if (this.smp && x >= LOCAL_BASE && x < LOCAL_END) return (this.localU8[x - LOCAL_BASE] << 24) >> 24;
     return this.bus.read8s(x);
   }
   st8(x, v) {
+    if (this.vm) { this.mmu.st8(x, v); return; }
+    if (this.uwin && (x >>> 0) >= this.uwin) { this.kst8(x, v); return; }
     x = x | 0;
-    if (x >= 0x1000) { this.u8[x] = v; return; }
+    if (x >= 0x1000) {
+      if (this.inGuard(x, 1)) { this.guardHit(x, 1, true, v); return; }
+      this.u8[x] = v;
+      return;
+    }
     if (this.smp && x >= LOCAL_BASE && x < LOCAL_END) { this.localU8[x - LOCAL_BASE] = v; return; }
     if (isRom(x, 1)) { this.romStore(x, v & 0xff); return; }
     this.bus.write8(x, v & 0xff);
+  }
+
+  // The boot stack's guard (STACK_GUARD, devices.js): does the range of n
+  // bytes at x touch it? Where the loop inlines memory, it compares with
+  // guardLo() instead, so that an unguarded word costs one compare more.
+  inGuard(x, n) {
+    const d = this.dev;
+    return d.stackGuard ? x < d.stackTop && x + n > d.stackBase : false;
+  }
+  guardLo() {
+    const d = this.dev;
+    const g = d.stackGuard ? d.stackBase | 0 : 0x7fffffff;
+    // the user window too: an address in it is a user task's, which
+    // kernel mode reaches through kpa
+    return this.uwin && this.uwin < g ? this.uwin : g;
+  }
+
+  // ---------------------------------------------------------------
+  // The user window (docs/c4ix-mmu.md 11). Under C4IX's MMU a user task's
+  // memory is at user addresses from uwin, mapped in its page tables;
+  // kernel mode runs untranslated, and reaches a user address through the
+  // window: where udir, the kernel's map of all of them, says it is, or,
+  // with no map, the page uwin below it. So the kernel follows a pointer a
+  // task gave it as it follows its own. kpa: the physical address, or -1.
+  //
+  // With the kernel's map (UDIR: C4IX's map of every user address there
+  // is, swap having made them no longer an offset) it is the only word,
+  // and a page used through it is pinned (PTE_PIN): the kernel keeps it
+  // out of swap. A page put out to swap is -1 here, and the bytes are the
+  // host's copy (kswap, below). An address it does not map at all is a
+  // bug in the kernel, which halts the machine there rather than read or
+  // write anything else.
+  kpa(x) {
+    x = x >>> 0;
+    if (this.udir) {
+      const p = kernelPhys(this.i32, this.u8.length, this.udir, x);
+      if (p < 0 && this.kswap(x) < 0) this.kmiss(x);
+      return p;
+    }
+    const off = x - this.uwin;
+    return off < this.u8.length ? off : -1;
+  }
+  kmiss(x) {
+    if (this.dev.halted) return;
+    const hex = n => '0x' + ((n >>> 0).toString(16).toUpperCase().padStart(8, '0'));
+    this.emitString(`libjs: the kernel used user address ${hex(x)}, which nothing is at (pc ${hex(this.pc)}). Halting.\n`);
+    this.halt(-105);
+  }
+  // Any address, as kernel mode reaches it: its own, or through the window
+  kaddr(x) { return this.uwin && (x >>> 0) >= this.uwin ? this.kpa(x) : x >>> 0; }
+  // The slot of a page put out to swap at user address x, or -1
+  kswap(x) {
+    if (!this.udir) return -1;
+    const pte = kernelPte(this.i32, this.u8.length, this.udir, x >>> 0);
+    return (pte & 1) || !(pte & PTE_SWAP) ? -1 : pte >>> 12;
+  }
+  // The host's copy of a page put out (devices.js swapRd8); on the
+  // threaded engine's other CPUs, CPU 0's (ap.js)
+  swapRd8(slot, off) { return this.dev.swapRd8 ? this.dev.swapRd8(slot, off) : 0; }
+  swapWr8(slot, off, v) { if (this.dev.swapWr8) this.dev.swapWr8(slot, off, v); }
+  kld8(x) {
+    const p = this.kpa(x);
+    if (p >= 0) return (this.u8[p] << 24) >> 24;
+    const s = this.kswap(x);
+    return s < 0 ? 0 : (this.swapRd8(s, x & 4095) << 24) >> 24;
+  }
+  kst8(x, v) {
+    const p = this.kpa(x);
+    if (p >= 0) { this.u8[p] = v; return; }
+    const s = this.kswap(x);
+    if (s >= 0) this.swapWr8(s, x & 4095, v & 255);
+  }
+  kld32(x) {
+    const p = this.kpa(x);
+    if (p < 0) {
+      return this.kswap(x) < 0 ? 0
+        : (this.kld8(x) & 255) | ((this.kld8(x + 1) & 255) << 8) | ((this.kld8(x + 2) & 255) << 16) | (this.kld8(x + 3) << 24);
+    }
+    if ((p & 3) === 0) return this.i32[p >> 2] | 0;
+    return (this.kld8(x) & 255) | ((this.kld8(x + 1) & 255) << 8) | ((this.kld8(x + 2) & 255) << 16) | (this.kld8(x + 3) << 24);
+  }
+  kst32(x, v) {
+    const p = this.kpa(x);
+    if (p >= 0 && (p & 3) === 0) { this.i32[p >> 2] = v; return; }
+    if (p < 0 && this.kswap(x) < 0) return;
+    for (let k = 0; k < 4; k++) this.kst8(x + k, v >> (8 * k));
+  }
+  // Does the block opcode at the top of the stack touch the window?
+  kwin(op) {
+    const sp = this.sp, w = this.uwin, n = this.ld32(sp);
+    if (n <= 0) return false;
+    const d = this.ld32(sp + 8) >>> 0;
+    if (d >= w || ((d + n) >>> 0) > w) return true;
+    if (op === OP.MSET) return false;
+    const s = this.ld32(sp + 4) >>> 0;
+    return s >= w || ((s + n) >>> 0) > w;
+  }
+  // MSET, MCMP and MCPY in kernel mode with a user address among them: a
+  // run at a time that stays inside a page of each (a window page's
+  // neighbour need not be its neighbour in memory)
+  kblock(op) {
+    const sp = this.sp, u8 = this.u8;
+    const run = (x, y, left) => Math.min(left, 4096 - (x & 4095), 4096 - (y & 4095));
+    if (op === OP.MSET) {
+      const d = this.ld32(sp + 8), v = this.ld32(sp + 4) & 0xff, n = this.ld32(sp);
+      for (let k = 0; k < n;) {
+        const x = (d + k) >>> 0, r = run(x, x, n - k), p = this.kaddr(x);
+        if (p >= 0x1000 && p + r <= u8.length) u8.fill(v, p, p + r);
+        else for (let j = 0; j < r; j++) this.st8(x + j, v);   // a page put out: the host's copy
+        k += r;
+      }
+      this.a = d;
+      return STOP.BUDGET;
+    }
+    if (op === OP.MCMP) {
+      const p = this.ld32(sp + 8), q = this.ld32(sp + 4), n = this.ld32(sp);
+      let r = 0;
+      for (let k = 0; k < n; k++) {
+        const x = (this.ld8(p + k) & 255) - (this.ld8(q + k) & 255);
+        if (x) { r = x; break; }
+      }
+      this.a = r;
+      return STOP.BUDGET;
+    }
+    const d = this.ld32(sp + 8), s = this.ld32(sp + 4), n = this.ld32(sp);
+    if (d > s && d < s + n) {
+      for (let k = 0; k < n; k++) this.st8(d + k, this.ld8(s + k));
+    } else {
+      for (let k = 0; k < n;) {
+        const x = (d + k) >>> 0, y = (s + k) >>> 0, r = run(x, y, n - k);
+        const pd = this.kaddr(x), ps = this.kaddr(y);
+        if (pd >= 0x1000 && ps >= 0 && pd + r <= u8.length && ps + r <= u8.length) u8.copyWithin(pd, ps, ps + r);
+        else for (let j = 0; j < r; j++) this.st8(x + j, this.ld8(y + j));
+        k += r;
+      }
+    }
+    this.a = d;
+    return STOP.BUDGET;
+  }
+
+  // A read or write in the guarded boot stack. Nothing stands there once
+  // the kernel has left it (C4IX's sched_offboot), so whatever reaches it
+  // ran off the end of the heap -- a program writing past its block -- and
+  // the machine halts here, naming the pc and the address, rather than
+  // later, in whatever the write broke. The guard comes off first, so that
+  // the trace below can read what it likes. Returns 0, what the read gets.
+  // What touched it: n bytes at x, a load or a store of v; or OP, an opcode
+  // that takes a range (guardRange), n bytes from FROM, x the first guarded;
+  // or a TLEV whose frame says to go back to a stack at x.
+  guardHit(x, n, write, v, op = 0, from = 0) {
+    const d = this.dev;
+    const hex = k => '0x' + ((k >>> 0).toString(16).toUpperCase().padStart(8, '0'));
+    const lo = d.stackBase, hi = d.stackTop;
+    d.stackGuard = 0;
+    if (d.onGuard) d.onGuard();
+    const name = op ? OPNAMES.slice(op * 5, op * 5 + 4).trim() : '';
+    const what = op === OP.TLEV ? `TLEV to a stack at ${hex(x)}`
+      : op ? `${name} of ${n} bytes at ${hex(from)} ${write ? 'writes' : 'reads'} ${hex(x)}`
+      : write ? `write of ${hex(v)} to ${hex(x)}` : `read of ${n === 1 ? 'a byte' : 'a word'} at ${hex(x)}`;
+    this.emitString(`libjs: ${what}, at pc ${hex(this.pc - 4)}${(this.smp && this.smp.n > 1) || this.cpuId ? ` on cpu ${this.cpuId | 0}` : ''}: ` +
+      `that is the boot stack, guarded (${hex(lo)}-${hex(hi - 1)}).\n`);
+    this.emitString(`libjs:   Something ran off the end of the heap -- a program writing past its block? Halting.\n`);
+    this.emitString(`libjs:   bp ${hex(this.bp)}, sp ${hex(this.sp)}, a ${hex(this.a)}, mode ${this.mode},` +
+      ` after ${this.cycle} cycles.\n`);
+    // The image's symbols name the kernel's code; a program's is in the heap,
+    // where the nearest of them would name the wrong function
+    if (!d.heapBase || ((this.pc - 4) >>> 0) < (d.heapBase >>> 0)) this.stacktrace();
+    else this.emitString(`libjs:   pc is in the heap, a program's code: no symbols name it.\n`);
+    d.halted = true;                     // the machine, whichever CPU this is
+    d.status = -103;
+    return 0;
+  }
+
+  // An opcode's range of n bytes at x that reaches into the guard: named
+  // with the first guarded byte, before any of it is touched. For sys().
+  guardRange(op, x, n, write) {
+    this.guardHit(Math.max(x, this.dev.stackBase), n, write, 0, op, x);
+    return STOP.HALT;
   }
 
   // A store into the ROM words: dropped, and the first one named on the
@@ -218,6 +437,12 @@ export class Machine {
     }
   }
   cstring(addr, max = 1 << 20) {
+    if (this.vm) return this.mmu.cstring(addr, max);
+    if (this.uwin && (addr >>> 0) >= this.uwin) {
+      const out = [];
+      for (let k = 0; k < max; k++) { const b = this.kld8(addr + k) & 255; if (!b) break; out.push(b); }
+      return Uint8Array.from(out);
+    }
     const u8 = this.u8;
     addr = addr >>> 0;
     let end = addr;
@@ -247,6 +472,7 @@ export class Machine {
            (this.snd && this.snd.fitted ? C4I_SND : 0) |
            (this.smp ? C4I_SMP : 0) |
            (this.smp && this.smp.parallel ? C4I_PAR : 0) |
+           (this.mmu ? C4I_MMU : 0) |
            (this.trapHandler ? C4I_TRAPH : 0);
   }
 
@@ -264,6 +490,16 @@ export class Machine {
     const i32 = this.i32;
     const t = this.sp;
     let sp = t - TRAP_OFFSET * 4;
+    // With the MMU on (mmu.js), a trap is the way into kernel mode: from
+    // user mode it switches to the kernel's stack (KSP), as an x86 does,
+    // so that a wild sp cannot have the frame written over the kernel,
+    // and the handler runs untranslated
+    const mmu = this.mmu;
+    const kern = mmu !== null && mmu.on;
+    if (kern) {
+      if (this.mode && mmu.ksp) sp = mmu.ksp - TRAP_OFFSET * 4;
+      this.vm = false;
+    }
     i32[(sp -= 4) >> 2] = this.cycleInterval;   // bp+9
     this.cycleInterval = 0;
     i32[(sp -= 4) >> 2] = type;                 // bp+8
@@ -280,6 +516,7 @@ export class Machine {
     sp -= this.ld32(handler + 4) * 4;           // the handler's ENT operand
     this.sp = sp;
     this.pc = handler + 8;                      // past ENT n
+    if (kern) this.mode = 0;
     this.irqHold++;
     return true;
   }
@@ -306,6 +543,15 @@ export class Machine {
     this.cycleInterval = 0;
     this.mode = 0;
     return STOP.BUDGET;
+  }
+
+  // OPCD handed an opcode that carries an operand: refused with a
+  // (usually missed) OPV, as run() does inline
+  opvTrap(op) {
+    const nm = i => OPNAMES.slice(i * 5, i * 5 + 4);
+    this.emitString(`${nm(OP.OPCD)} does not support opcodes requiring arguments (${nm(op)} given)\n`);
+    this.trap(TRAP.OPV, op, this.trapHandler);
+    this.cycleInterval = 0; this.mode = 0;
   }
 
   // EXIT. With CPUs, only CPU 0's ends the machine, as main returning
@@ -373,6 +619,11 @@ export class Machine {
   // BUDGET means carry on.
   sys(op) {
     const dev = this.dev, sp = this.sp;
+    // Under the MMU, the opcodes that run the machine rather than the
+    // task are the kernel's: starting, halting and waking CPUs, IPIs,
+    // and the cycle interrupt's configuration (docs/c4ix-mmu.md 6)
+    if (this.vm && (op === OP.C4CF || (op >= OP.CPUS && op <= OP.CPUH) || (op >= OP.CWAI && op <= OP.IPI)))
+      return this.pmTrap(op);
     if (op >= OP.CPUI && op <= OP.IPI && this.smp) return this.smpOp(op);
     switch (op) {
       case OP.OPEN:
@@ -384,6 +635,7 @@ export class Machine {
         if (this.mode) return this.pmTrap(op);
         dev.diskFd = this.ld32(sp + 8);
         dev.diskAddr = this.ld32(sp + 4);
+        if (this.ld32(sp) > 0 && this.inGuard(dev.diskAddr, this.ld32(sp))) return this.guardRange(OP.READ, dev.diskAddr, this.ld32(sp), true);
         const r = isRom(dev.diskAddr, this.ld32(sp)) ? this.romRead(this.ld32(sp))
                                                      : dev.diskRead(this.ld32(sp)) | 0;
         if (r === -2) return this.blockedRead();
@@ -425,8 +677,11 @@ export class Machine {
         this.a = this.heap.realloc(this.u8, this.ld32(sp + 4), this.ld32(sp));
         return STOP.BUDGET;
       case OP.MSET: {
+        if (this.vm) return this.mmu.block(op);
+        if (this.uwin && this.kwin(op)) return this.kblock(op);
         const d = this.ld32(sp + 8), v = this.ld32(sp + 4), n = this.ld32(sp);
         if (n > 0) {
+          if (this.inGuard(d, n)) return this.guardRange(OP.MSET, d, n, true);
           if (d >= 0x1000) this.u8.fill(v & 0xff, d, d + n);
           else for (let k = 0; k < n; k++) this.st8(d + k, v);
         }
@@ -434,9 +689,13 @@ export class Machine {
         return STOP.BUDGET;
       }
       case OP.MCMP: {
+        if (this.vm) return this.mmu.block(op);
+        if (this.uwin && this.kwin(op)) return this.kblock(op);
         // glibc: the difference of the first unequal bytes, unsigned
         const p = this.ld32(sp + 8), q = this.ld32(sp + 4), n = this.ld32(sp);
         const u8 = this.u8;
+        if (n > 0 && this.inGuard(p, n)) return this.guardRange(OP.MCMP, p, n, false);
+        if (n > 0 && this.inGuard(q, n)) return this.guardRange(OP.MCMP, q, n, false);
         let r = 0;
         for (let k = 0; k < n; k++) {
           const x = (u8[p + k] | 0) - (u8[q + k] | 0);
@@ -446,9 +705,13 @@ export class Machine {
         return STOP.BUDGET;
       }
       case OP.MCPY: {
+        if (this.vm) return this.mmu.block(op);
+        if (this.uwin && this.kwin(op)) return this.kblock(op);
         const d = this.ld32(sp + 8), s = this.ld32(sp + 4), n = this.ld32(sp);
         if (n > 0) {
           const u8 = this.u8;
+          if (this.inGuard(s, n)) return this.guardRange(OP.MCPY, s, n, false);
+          if (this.inGuard(d, n)) return this.guardRange(OP.MCPY, d, n, true);
           // Forward, byte by byte, when the ranges overlap that way --
           // what c4bb's microcode and a naive memcpy do. Otherwise a
           // block copy.
@@ -546,16 +809,33 @@ export class Machine {
         break;
       }
       case OP.TLEV: {
+        if (this.vm) {
+          // a user task's own TLEV, a C4KE signal handler returning
+          // (c4ke.c ck_signal_deliver): the registers from its frame,
+          // but never the mode or the preemption mask
+          const bp = this.bp;
+          const pc = this.ld32(bp + 8);
+          if (pc === this.pc - 4) return this.tlevWedge(pc);
+          const nsp = this.ld32(bp + 12), nbp = this.ld32(bp + 16), na = this.ld32(bp + 20);
+          this.sp = nsp; this.bp = nbp; this.a = na; this.pc = pc;
+          return STOP.BUDGET;
+        }
         if (this.irqHold > 0) this.irqHold--;   // the handler ends: see boundary()
         const bp = this.bp;
         const pc = this.ld32(bp + 8);
         if (pc === this.pc - 4) return this.tlevWedge(pc);
+        // a switch onto the boot stack, which nothing stands on once it is guarded
+        if (this.inGuard(this.ld32(bp + 12), 4)) {
+          this.guardHit(this.ld32(bp + 12), 4, false, 0, OP.TLEV);
+          return STOP.HALT;
+        }
         this.sp = this.ld32(bp + 12);
         this.bp = this.ld32(bp + 16);
         this.a = this.ld32(bp + 20);
         this.mode = this.ld32(bp + 24);
         if (this.trapRestoresInterval) this.cycleInterval = this.ld32(bp + 36);
         this.pc = pc;
+        if (this.mode && this.mmu !== null && this.mmu.on) return STOP.SWITCH;
         return STOP.BUDGET;
       }
       case OP.DBG:
@@ -710,7 +990,7 @@ export class Machine {
   // handler (CWAI, sched.c klock_take), which must not wait behind them.
   boundary(cycle, nextIrq) {
     const dev = this.dev, i32 = this.i32;
-    const tlev = i32[this.pc >> 2] === OP.TLEV;   // TLEV is never interrupted
+    const tlev = (this.vm ? this.mmu.peek(this.pc) : i32[this.pc >> 2]) === OP.TLEV;   // TLEV is never interrupted
     const held = tlev || this.irqHold > 0;        // ... nor, by the PIT or the mailbox, a handler
     let interval = this.cycleInterval | 0;
     let fired = true;
@@ -817,6 +1097,15 @@ export class Machine {
   run(maxCycles) {
     // with CPUs, the boot CPU's run is the round robin's (smp.js)
     if (this.smp && !this.smp.running) return this.smp.run(maxCycles);
+    // with the MMU on, user mode runs a loop of its own (mmu.js), and
+    // the MMU says which loop runs when
+    if (this.mmu !== null && this.mmu.on) return this.mmu.run(maxCycles);
+    return this.runPlain(maxCycles);
+  }
+
+  // The interpreter's loop: every guest's, and C4IX's kernel mode under
+  // the MMU, which leaves it with STOP.SWITCH at a TLEV into user mode
+  runPlain(maxCycles) {
     const dev = this.dev, i32 = this.i32, u8 = this.u8;
     if (dev.halted) return STOP.HALT;
     let pc = this.pc | 0, sp = this.sp | 0, bp = this.bp | 0, a = this.a | 0;
@@ -837,6 +1126,9 @@ export class Machine {
     let lim = -1;
     let stop = STOP.BUDGET;
     let op = 0, x = 0;
+    // Where the inlined loads and stores stop: the boot stack's guard, once
+    // it is up (guardLo), and above it they take the slow path, which looks.
+    let glo = this.guardLo();
 
     loop: for (;;) {
       if (++cycle > lim) {
@@ -868,15 +1160,30 @@ export class Machine {
           case 6:  /* ENT */ sp -= 4; i32[sp >> 2] = bp; bp = sp; sp = (sp - (i32[pc >> 2] << 2)) | 0; pc += 4; break;
           case 7:  /* ADJ */ sp = (sp + (i32[pc >> 2] << 2)) | 0; pc += 4; break;
           case 8:  /* LEV */ sp = bp; bp = i32[sp >> 2]; pc = i32[(sp >> 2) + 1]; sp += 8; break;
-          case 9:  /* LI  */ a = ((a & 3) === 0 && a >= 0x1000) ? i32[a >> 2] | 0 : (this.cycle = cycle, this.ld32(a)); break;
-          case 10: /* LC  */ a = a >= 0x1000 ? (u8[a] << 24) >> 24 : (this.cycle = cycle, this.ld8(a)); break;
+          case 9:  /* LI  */
+            if ((a & 3) === 0 && a >= 0x1000 && a < glo) a = i32[a >> 2] | 0;
+            else {
+              this.pc = pc; this.sp = sp; this.bp = bp; this.a = a; this.cycle = cycle;
+              a = this.ld32(a);
+              if (dev.halted) { stop = STOP.HALT; break loop; }
+            }
+            break;
+          case 10: /* LC  */
+            if (a >= 0x1000 && a < glo) a = (u8[a] << 24) >> 24;
+            else {
+              this.pc = pc; this.sp = sp; this.bp = bp; this.a = a; this.cycle = cycle;
+              a = this.ld8(a);
+              if (dev.halted) { stop = STOP.HALT; break loop; }
+            }
+            break;
           case 11: /* SI  */
             x = i32[sp >> 2]; sp += 4;
-            if ((x & 3) === 0 && x >= 0x1000) i32[x >> 2] = a;
+            if ((x & 3) === 0 && x >= 0x1000 && x < glo) i32[x >> 2] = a;
             else {
               this.pc = pc; this.sp = sp; this.bp = bp; this.a = a; this.cycle = cycle;
               this.st32(x, a);
               if (dev.halted) { stop = STOP.HALT; break loop; }
+              glo = this.guardLo();
               interval = this.cycleInterval | 0;
               nextIrq = interval > 0 ? (Math.floor(cycle / interval) + 1) * interval : 0;
               chk = this.needChecks(); nextChk = 0; lim = -1;
@@ -884,11 +1191,12 @@ export class Machine {
             break;
           case 12: /* SC  */
             x = i32[sp >> 2]; sp += 4;
-            if (x >= 0x1000) u8[x] = a;
+            if (x >= 0x1000 && x < glo) u8[x] = a;
             else {
               this.pc = pc; this.sp = sp; this.bp = bp; this.a = a; this.cycle = cycle;
               this.st8(x, a);
               if (dev.halted) { stop = STOP.HALT; break loop; }
+              glo = this.guardLo();
               interval = this.cycleInterval | 0;
               nextIrq = interval > 0 ? (Math.floor(cycle / interval) + 1) * interval : 0;
               chk = this.needChecks(); nextChk = 0; lim = -1;
@@ -922,8 +1230,25 @@ export class Machine {
           case 82: /* PSHG */ x = i32[pc >> 2]; pc += 4; a = ((x & 3) === 0 && x >= 0x1000) ? i32[x >> 2] | 0 : (this.cycle = cycle, this.ld32(x)); sp -= 4; i32[sp >> 2] = a; break;
           case 83: /* LEAP */ a = (bp + (i32[pc >> 2] << 2)) | 0; pc += 4; sp -= 4; i32[sp >> 2] = a; break;
           case 84: /* IMMP */ a = i32[pc >> 2]; pc += 4; sp -= 4; i32[sp >> 2] = a; break;
-          case 85: /* LIP  */ a = ((a & 3) === 0 && a >= 0x1000) ? i32[a >> 2] | 0 : (this.cycle = cycle, this.ld32(a)); sp -= 4; i32[sp >> 2] = a; break;
-          case 86: /* ADDL */ x = (i32[sp >> 2] + a) | 0; sp += 4; a = ((x & 3) === 0 && x >= 0x1000) ? i32[x >> 2] | 0 : (this.cycle = cycle, this.ld32(x)); break;
+          // (LDG and PSHG's address is an image's global, never the boot stack)
+          case 85: /* LIP  */
+            if ((a & 3) === 0 && a >= 0x1000 && a < glo) a = i32[a >> 2] | 0;
+            else {
+              this.pc = pc; this.sp = sp; this.bp = bp; this.a = a; this.cycle = cycle;
+              a = this.ld32(a);
+              if (dev.halted) { stop = STOP.HALT; break loop; }
+            }
+            sp -= 4; i32[sp >> 2] = a;
+            break;
+          case 86: /* ADDL */
+            x = (i32[sp >> 2] + a) | 0; sp += 4;
+            if ((x & 3) === 0 && x >= 0x1000 && x < glo) a = i32[x >> 2] | 0;
+            else {
+              this.pc = pc; this.sp = sp; this.bp = bp; this.a = a; this.cycle = cycle;
+              a = this.ld32(x);
+              if (dev.halted) { stop = STOP.HALT; break loop; }
+            }
+            break;
           case 87: /* STL  */ i32[(bp >> 2) + i32[pc >> 2]] = a; pc += 4; break;
           case 88: /* POPA */ a = i32[sp >> 2]; sp += 4; break;
 

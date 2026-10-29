@@ -398,7 +398,7 @@ C4KE_KIT_SRCS := $(foreach p,$(C4KE_KIT),$(firstword $(subst :, ,$(p))))
 # src/c4ix spelled out rather than $(C4IX_SRC): both it and C4IX_MODS
 # are defined further down, and := expands now. The Makefile already
 # carries one bug of exactly this shape (see c4rlink.c's note on $(U0)).
-C4IX_KIT := $(foreach m,boot console va host sl4b task sched vfs sys c4ke loader init,\
+C4IX_KIT := $(foreach m,boot console va host sl4b task sched vfs sys c4ke loader mmu init,\
               src/c4ix/$(m).c:src/c4ix/$(m).c) \
             src/c4ix/c4ix.h:src/c4ix/c4ix.h \
             $(foreach h,$(wildcard include/*.h),$(h):$(h)) \
@@ -2905,7 +2905,7 @@ test-c4mp: c4m c4mp c4mp.c4r c4mp-smp0.c4r c4mp-smp1.c4r c4mp-deadlock.c4r $(TES
 # preprocessed, compiled to a .c4o object with full optimization, and
 # the kernel image is linked by c4rlink.
 C4IX_SRC  := src/c4ix
-C4IX_MODS := boot console va host sl4b task sched vfs sys c4ke loader init
+C4IX_MODS := boot console va host sl4b task sched vfs sys c4ke loader mmu init
 c4ix.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/c4ix.h $(patsubst %,$(C4IX_SRC)/%.c,$(C4IX_MODS))
 	@# No gcc here: c4lc preprocesses the modules itself (L9). Each
 	@# object is byte-identical to the gcc -E path, pinned by test-c4lc.
@@ -3043,7 +3043,7 @@ C4IX_PROGS := c4ix-hello.c4r c4ix-uhello.c4r c4ix-echo.c4r c4ix-wc.c4r \
               c4ix-cat.c4r c4ix-sh.c4r c4ix-ps.c4r c4ix-bench.c4r \
               c4ix-cycles.c4r c4ix-ls.c4r c4ix-mkdir.c4r c4ix-top.c4r \
               c4ix-spin.c4r c4ix-pin.c4r c4ix-nice.c4r c4ix-fmt.c4r c4ix-gui.c4r c4ix-desktop.c4r \
-              c4ix-b4ke.c4r c4ix-cc.c4r $(C4IX_ARC_PROGS)
+              c4ix-b4ke.c4r c4ix-cc.c4r c4ix-dmesg.c4r $(C4IX_ARC_PROGS)
 # The demonstrations are opt-in (--demo) and take their six images
 # positionally; `c4ix.c4r --help` documents the roles. With no
 # arguments at all the kernel boots to a shell, which is what

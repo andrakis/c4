@@ -12,6 +12,12 @@
 //   ?cpus=N                      N processors, simulated (smp.js, docs/c4ix-smp.md)
 //   ?parallel                    ... each on a worker of its own (par.js), when the
 //                                page is cross-origin isolated (serve.mjs --isolate)
+//   ?mmu=1 | 0                   fit an MMU (mmu.js, docs/c4ix-mmu.md), or not: C4IX
+//                                turns it on, and its user tasks each get an address
+//                                space of their own; nothing else uses it. On for
+//                                C4IX's systems unless ?mmu=0 or the site says
+//                                otherwise (site.js: GitHub Pages' build does), off
+//                                for the rest
 //   ?persist=0 | reset           the system's saved files (its store, SYSTEMS' `persist`) are
 //                                not kept between visits / are forgotten first
 //   ?uploads=0                   the Uploads (your own files) are not put on the disk
@@ -31,6 +37,7 @@
 // test can drive it: c4m.write('ps\n'), c4m.status, await c4m.peek(a, n).
 
 import { C4M } from '../page.js';
+import { SITE } from './site.js';
 import { MediaStore, indexedDbBackend } from '../../src/c4bb/web/store.js';
 
 // On a host that cannot isolate the page, coi.js reloads it once with a
@@ -45,7 +52,7 @@ const LJIMAGES = '../images';          // the page's own disks (build-images.sh)
 // the ladder system has `ladder` -- so Reset Files and
 // ?persist= touch the current system's alone (docs/grin-plan.md 3.8).
 const SYSTEMS = {
-  c4ix: { label: 'C4IX', image: `${IMAGES}/c4ix32.c4r`, disk: `${IMAGES}/disk`, argv: ['c4ix32.c4r', '--desktop'], persist: 'c4ix' },
+  c4ix: { label: 'C4IX', image: `${IMAGES}/c4ix32.c4r`, disk: `${IMAGES}/disk`, argv: ['c4ix32.c4r', '--desktop'], persist: 'c4ix', mmu: true },
   c4ke: { label: 'C4KE', image: `${IMAGES}/c4ke32.c4r`, disk: `${IMAGES}/disk`, argv: ['c4ke32.c4r'] },
   // C4DOS on the page's own disk (build-images.sh, libjs/images/dos):
   // its AUTOEXEC.BAT starts grin, the graphical shell (docs/grin-plan.md),
@@ -89,7 +96,7 @@ const SYSTEMS = {
   rott: { label: 'Rise of the Triad (bare machine)', image: `${IMAGES}/games/rott.c4r`, disk: `${IMAGES}/games`,
           argv: ['rott.c4r'], mhz: 400, persist: 'rott' },
   'wolf3d-c4ix': { label: 'Wolfenstein 3D (C4IX, direct)', image: `${IMAGES}/c4ix32.c4r`, disk: `${IMAGES}/disk`,
-                   argv: ['c4ix32.c4r', '-e', 'persist -d 60 &', '-e', 'wolf3d --direct'], persist: 'c4ix', mhz: 400 },
+                   argv: ['c4ix32.c4r', '-e', 'persist -d 60 &', '-e', 'wolf3d --direct'], persist: 'c4ix', mhz: 400, mmu: true },
   'gui-demo': { label: 'GUI demo (bare machine)', image: `${IMAGES}/gui-demo.c4r`, disk: null, argv: ['gui-demo.c4r'] },
   // Computes every pixel itself, so it claims a faster clock than c4bb's 20 MHz.
   'fb-demo': { label: 'Framebuffer demo (bare machine)', image: `${IMAGES}/fb-demo.c4r`, disk: null, argv: ['fb-demo.c4r'], mhz: 100 },
@@ -131,6 +138,11 @@ const sys = params.get('image')
   ? { image: params.get('image'), disk: params.get('disk'), argv: [params.get('image').split('/').pop()] }
   : SYSTEMS[which] || SYSTEMS.c4ix;
 
+// The MMU, where the system has one and the site does not say otherwise:
+// GitHub Pages' build turns it off (site.js), where the games' speed is
+// what a visitor sees; served from the tree, it is on, as in the tests
+const mmuDefault = !!sys.mmu && SITE.mmu !== false;
+
 const status = $('status');
 const kbd = $('kbd');
 const term = $('terminal');
@@ -159,6 +171,7 @@ const opts = {
   snd: params.get('snd') !== '0',
   cpus: Number(params.get('cpus')) || 0,
   parallel: params.has('parallel'),
+  mmu: (params.get('mmu') ?? (mmuDefault ? '1' : '0')) === '1',
   persist: params.get('persist') === '0' ? null : sys.persist || null,
   persistReset: params.get('persist') === 'reset',
   uploads: params.get('uploads') === '0' ? null : UPLOADS,
@@ -177,6 +190,9 @@ const CONFIG = [
     help: 'empty or 1 is one; more are simulated, taking turns' },
   { key: 'parallel', label: 'A thread each', kind: 'flag', tab: 'machine',
     help: 'several processors at once, each on a worker (needs the page cross-origin isolated)' },
+  { key: 'mmu', label: 'MMU', kind: 'select', tab: 'machine', def: mmuDefault ? '1' : '0',
+    options: [['0', 'off'], ['1', 'on: C4IX gives each program its own memory']],
+    help: 'paged memory with protection: a program that writes where it should not is stopped, and nothing else is hurt (C4IX only)' },
   { key: 'mem', label: 'Memory (MB)', kind: 'text', tab: 'machine', options: ['32', '64', '128', '256'],
     help: `the arena; empty is the system's own (${sys.mem || 64})` },
   { key: 'snd', label: 'Sound card', kind: 'onoff', def: true },

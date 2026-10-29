@@ -35,9 +35,11 @@ DEPS $(OUT)/kernel/c4ke.c4o : src/c4ix/c4ke.c $(H)
 RUN $(LC) src/c4ix/c4ke.c $(OUT)/kernel/c4ke.c4o
 DEPS $(OUT)/kernel/loader.c4o : src/c4ix/loader.c $(H)
 RUN $(LC) src/c4ix/loader.c $(OUT)/kernel/loader.c4o
+DEPS $(OUT)/kernel/mmu.c4o : src/c4ix/mmu.c $(H)
+RUN $(LC) src/c4ix/mmu.c $(OUT)/kernel/mmu.c4o
 DEPS $(OUT)/kernel/init.c4o : src/c4ix/init.c $(H)
 RUN $(LC) src/c4ix/init.c $(OUT)/kernel/init.c4o
-SET OBJS boot.c4o console.c4o va.c4o host.c4o sl4b.c4o task.c4o sched.c4o vfs.c4o sys.c4o c4ke.c4o loader.c4o init.c4o
+SET OBJS boot.c4o console.c4o va.c4o host.c4o sl4b.c4o task.c4o sched.c4o vfs.c4o sys.c4o c4ke.c4o loader.c4o mmu.c4o init.c4o
 CD $(OUT)/kernel
 LIST c4ix.objs $(OBJS)
 DEPS $(OUT)/c4ix.c4r : $(OBJS)

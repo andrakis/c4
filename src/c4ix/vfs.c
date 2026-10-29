@@ -97,6 +97,12 @@ static int vfs_fmt(char *p, int whole, int cents) {
 
 static void vfs_proc(struct vnode *vn) {
     int ms, n;
+    // /proc/kmsg: the kernel log (console.c), as dmesg prints it
+    if (vn->name[0] == 'k') {
+        if (!vn_grow(vn, KLOG_MAX + 1)) return;
+        vn->size = klog_copy(vn->data);
+        return;
+    }
     if (!vn_grow(vn, 64)) return;
     ms = __time() - vfs_boot_ms;
     if (ms < 0) ms = 0;
@@ -138,9 +144,15 @@ void vfs_init() {
     vfs_boot_ms = __time();
     vfs_mkdir("/proc");
     if ((vn = vfs_ramfile("/proc/uptime"))) vn->type = VN_PROC;
+    // /proc/kmsg: the kernel log, which dmesg prints (console.c)
+    if ((vn = vfs_ramfile("/proc/kmsg"))) vn->type = VN_PROC;
     // /log/kernel: the console, logged (console.c)
     con_logopen();
+    klog("vfs: / and /tmp in RAM, /proc/uptime and /proc/kmsg made when read, /log/kernel\n");
 }
+
+// What the boot left on the host (SYS_LAZYFILE): files, and their bytes
+int vfs_nlazy, vfs_lazybytes;
 
 // /log/kernel, made at boot. The kernel holds a reference, so it cannot
 // be unlinked from under the console.
@@ -340,6 +352,8 @@ int vfs_lazyfile(char *path, char *host, int size) {
     if (vn->data) { free(vn->data); vn->data = 0; vn->cap = 0; }
     vn->size = size;
     vn->lazy = 1;
+    ++vfs_nlazy;
+    vfs_lazybytes = vfs_lazybytes + size;
     sched_unlock();
     return 0;
 }

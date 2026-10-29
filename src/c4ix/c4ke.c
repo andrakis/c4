@@ -178,12 +178,20 @@ static void ck_calibrate() {
     if (ck_cpms < 1) ck_cpms = 1;
 }
 
+// A program's to read: in its own memory under the MMU (mmu.c)
+static char *ck_umalloc(int n) {
+    return mmu_on ? (char *)umem_alloc(sched_current(), n) : (char *)malloc(n);
+}
+static void ck_ufree(int p) {
+    if (mmu_on) umem_free(sched_current(), p); else free((char *)p);
+}
+
 static char *ck_strdup(char *s) {
     char *d;
     int n, i;
     n = 0;
     while (s[n]) ++n;
-    if (!(d = (char *)malloc(n + 1))) return 0;
+    if (!(d = ck_umalloc(n + 1))) return 0;
     i = 0;
     while (i <= n) { d[i] = s[i]; ++i; }
     return d;
@@ -230,7 +238,7 @@ static void ck_export_fill(int *kti) {
         // The name is a COPY. One address space means a pointer into
         // the task would work -- right up to the refresh where that
         // task has been reaped and ps prints from freed slab memory.
-        if (kte[CK_KTE_NAME]) free((char *)kte[CK_KTE_NAME]);
+        if (kte[CK_KTE_NAME]) ck_ufree(kte[CK_KTE_NAME]);
         kte[CK_KTE_NAME] = (int)ck_strdup(t->name);
         kte[CK_KTE_NAMELEN] = 0;
         while (t->name[kte[CK_KTE_NAMELEN]]) ++kte[CK_KTE_NAMELEN];
@@ -256,7 +264,7 @@ static void ck_export_fill(int *kti) {
         // same accuracy C4KE reports. The kernel task runs on the VM's
         // own stack and has no allocation to measure.
         kte[CK_KTE_STACK] = t->stack
-            ? (t->stack + t->stack_words * sizeof(int)) - t->sv_sp : 0;
+            ? (t->stack + t->stack_words * sizeof(int)) - mmu_phys(t->sv_sp) : 0;
         kte[CK_KTE_ALLOC] = 0;   // C4IX does not track per-task allocation
 
         kte = kte + CK_KTE__Sz;
@@ -266,7 +274,7 @@ static void ck_export_fill(int *kti) {
     // Clear any records left over from a larger listing, or ps would
     // report tasks that have gone.
     while (n < CK_TASK_SLOTS) {
-        if (kte[CK_KTE_NAME]) { free((char *)kte[CK_KTE_NAME]); kte[CK_KTE_NAME] = 0; }
+        if (kte[CK_KTE_NAME]) { ck_ufree(kte[CK_KTE_NAME]); kte[CK_KTE_NAME] = 0; }
         kte[CK_KTE_STATE] = CK_STATE_UNLOADED;
         kte = kte + CK_KTE__Sz;
         ++n;
@@ -279,7 +287,7 @@ static int ck_export() {
     int words;
 
     words = CK_KTI__Sz + CK_TASK_SLOTS * CK_KTE__Sz;
-    if (!(kti = (int *)malloc(words * sizeof(int)))) return 0;
+    if (!(kti = (int *)ck_umalloc(words * sizeof(int)))) return 0;
     memset(kti, 0, words * sizeof(int));
     kti[CK_KTI_COUNT] = CK_TASK_SLOTS;
     kti[CK_KTI_LIST] = (int)(kti + CK_KTI__Sz);
@@ -295,11 +303,11 @@ static void ck_export_free(int *kti) {
     kte = kti + CK_KTI__Sz;
     n = 0;
     while (n < CK_TASK_SLOTS) {
-        if (kte[CK_KTE_NAME]) free((char *)kte[CK_KTE_NAME]);
+        if (kte[CK_KTE_NAME]) ck_ufree(kte[CK_KTE_NAME]);
         kte = kte + CK_KTE__Sz;
         ++n;
     }
-    free(kti);
+    ck_ufree((int)kti);
 }
 
 // ---- spawning a C4KE program ----
@@ -327,6 +335,9 @@ int ck_argv_copy(struct task *t, int argc, char **argv) {
     char *blob, *p;
     int i, n, bytes;
 
+    // a copy made before (task_spawn's, under the MMU) goes
+    if (t->argv_vec) ufree(t->argv_vec);
+    if (t->argv_data) ufree(t->argv_data);
     t->argv_vec = 0;
     t->argv_data = 0;
     if (argc <= 0 || !argv) return 1;
@@ -338,13 +349,14 @@ int ck_argv_copy(struct task *t, int argc, char **argv) {
         else bytes = bytes + 1;
         ++i;
     }
-    if (!(vec = (char **)malloc((argc + 1) * sizeof(int)))) return 0;
-    if (!(blob = (char *)malloc(bytes))) { free((int *)vec); return 0; }
+    // the task's to read: its own pages under the MMU (mmu.c)
+    if (!(vec = (char **)umalloc((argc + 1) * sizeof(int)))) return 0;
+    if (!(blob = (char *)umalloc(bytes))) { ufree((int)vec); return 0; }
 
     p = blob;
     i = 0;
     while (i < argc) {
-        vec[i] = p;
+        vec[i] = (char *)mmu_uva((int)p);     // user mode reads them
         if (argv[i]) { n = 0; while (argv[i][n]) { *p = argv[i][n]; ++p; ++n; } }
         *p = 0; ++p;
         ++i;
@@ -352,6 +364,7 @@ int ck_argv_copy(struct task *t, int argc, char **argv) {
     vec[argc] = 0;
     t->argv_vec = (int)vec;
     t->argv_data = (int)blob;
+    mmu_adopt(t);
     return 1;
 }
 
@@ -529,6 +542,10 @@ void ck_signal_deliver(struct task *t, int *pa, int *pbp, int *psp,
 
     sp = (int *)*psp;
     sp = sp - 15;              // c4m's TRAP_OFFSET, so the frame has slack
+    // Under the MMU the frame goes on the task's own stack, which it must
+    // be able to write, and its handler returns through the ROM's TLEV
+    // word, which user mode may run; the kernel's copy it may not
+    if (mmu_on && !uaccess((int)(sp - 10 - h[1]), (10 + h[1] + 15) * sizeof(int), 1)) return;
 
     *--sp = interval;          // bp+9
     *--sp = C4IX_TRAP_SIGNAL;  // bp+8
@@ -538,7 +555,7 @@ void ck_signal_deliver(struct task *t, int *pa, int *pbp, int *psp,
     *--sp = *pbp;              // bp+4
     *--sp = *psp;              // bp+3  the ORIGINAL sp, not the offset one
     *--sp = *ppc;              // bp+2
-    *--sp = (int)&ck_tlev_word; // bp+1  where the handler's LEV lands
+    *--sp = mmu_on ? CK_TLEV_ROM : (int)&ck_tlev_word;   // bp+1  where the handler's LEV lands
     --sp;                      // bp+0
     *pbp = (int)sp;
     *sp = (int)sp;             // self-referential, exactly as c4m does
@@ -551,8 +568,8 @@ void ck_signal_deliver(struct task *t, int *pa, int *pbp, int *psp,
 
 void ck_task_free(struct task *t) {
     ck_exec_reset(t);
-    if (t->argv_vec) { free((int *)t->argv_vec); t->argv_vec = 0; }
-    if (t->argv_data) { free((char *)t->argv_data); t->argv_data = 0; }
+    if (t->argv_vec) { ufree(t->argv_vec); t->argv_vec = 0; }
+    if (t->argv_data) { ufree(t->argv_data); t->argv_data = 0; }
 }
 
 // A new image: the handlers, and the signals waiting for them, were the
@@ -581,10 +598,11 @@ void ck_exec_reset(struct task *t) {
 // (docs/c4ix-cpu.md, step 7).
 int ck_dispatch(int num, int *args) {
     struct task *t, *s;
+    char *p;
     int code;
 
     t = sched_current();
-    if (t) ++t->nsyscalls;
+    if (t) { ++t->nsyscalls; t->ckabi = 1; }
 
     switch (num) {
     case CK_REQUEST_SYMBOL: return ck_symbol((char *)args[0]);
@@ -677,17 +695,33 @@ int ck_dispatch(int num, int *args) {
         return 0;
 
     // the kernel RAM filesystem (vfs.c): C4KE's argument order, name first
-    case CK_VFS_PUT:             return vfs_put((char *)args[0], (char *)args[1], args[2]);
-    case CK_VFS_GET:             return (int)vfs_getdata((char *)args[0], (int *)args[1]);
-    case CK_VFS_UNLINK:          return vfs_unlink((char *)args[0]);
+    // Under the MMU what these hand back is a copy in the program's own
+    // memory: the RAM file's bytes and the name are the kernel's
+    case CK_VFS_PUT:
+        if (ustrlen((char *)args[0]) < 0 || !uaccess(args[1], args[2], 0)) return -1;
+        return vfs_put((char *)args[0], (char *)args[1], args[2]);
+    case CK_VFS_GET:
+        if (ustrlen((char *)args[0]) < 0 || (args[1] && !uaccess(args[1], sizeof(int), 1))) return 0;
+        if (!mmu_on) return (int)vfs_getdata((char *)args[0], (int *)args[1]);
+        if (!(p = vfs_getdata((char *)args[0], &code))) return 0;
+        if (args[1]) *(int *)args[1] = code;
+        return (int)ucopy(p, code + 1);
+    case CK_VFS_UNLINK:
+        if (ustrlen((char *)args[0]) < 0) return -1;
+        return vfs_unlink((char *)args[0]);
     case CK_VFS_COUNT:           return vfs_nfiles();
-    case CK_VFS_NAME:            return (int)vfs_fname(args[0]);
+    case CK_VFS_NAME:
+        if (!mmu_on || !(p = vfs_fname(args[0]))) return (int)vfs_fname(args[0]);
+        code = 0; while (p[code]) ++code;
+        return (int)ucopy(p, code + 1);
     case CK_KERN_TASKS_EXPORT:   return ck_export();
     case CK_KERN_TASKS_EXPORT_UPDATE:
-        if (args[0]) ck_export_fill((int *)args[0]);
+        if (args[0] && uaccess(args[0], (CK_KTI__Sz + CK_TASK_SLOTS * CK_KTE__Sz) * sizeof(int), 1))
+            ck_export_fill((int *)args[0]);
         return 0;
     case CK_KERN_TASKS_EXPORT_FREE:
-        ck_export_free((int *)args[0]);
+        if (args[0] && uaccess(args[0], (CK_KTI__Sz + CK_TASK_SLOTS * CK_KTE__Sz) * sizeof(int), 1))
+            ck_export_free((int *)args[0]);
         return 0;
     }
 

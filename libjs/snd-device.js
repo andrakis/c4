@@ -130,9 +130,12 @@ export class SoundDevice {
       case SND.PCM_PLAY: {
         const c = v & (CHANNELS - 1), { addr, len, rate, vol } = this.pcm;
         // inside the arena, or nothing: never a copy through a wild pointer
-        if (len <= 0 || len > PCM_MAX || addr < 0x1000 || addr + len > this.arena.size) return;
+        if (len <= 0 || len > PCM_MAX) return;
+        // the task's own samples, wherever they are in memory, or its page fault
+        const bytes = this.arena.dmaRead(addr, len);
+        if (bytes.length !== len) return;
         const t = this.now();
-        this.emit([EVT.PCM, t, c, rate, vol, this.arena.u8.slice(addr, addr + len)]);
+        this.emit([EVT.PCM, t, c, rate, vol, bytes]);
         this.ends[c] = t + len * 1e6 / rate;
         this.plays++;
         return;

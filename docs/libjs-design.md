@@ -145,6 +145,25 @@ Reused from `src/c4bb/sim/`: `arena.js`, `devices.js`, `loader.js`
   at every fetch cost an eighth of the speed, one at every jump that
   takes pc from data about a twentieth. A jump elsewhere below 0x1000
   is not caught.
+- **The boot stack can be guarded.** `boot.js` starts the program on the
+  megabyte under its arguments at the top of memory, above the heap (and
+  above the mailbox, when there is one). A kernel that has left it for
+  good -- C4IX, whose kernel task runs on a stack in its kernel arena
+  (`sched.c`, sched_offboot) -- writes 1 to `STACK_GUARD` (0x1ec;
+  `STACK_BASE` and `STACK_TOP`, 0x1e4 and 0x1e8, say where it is,
+  announced by `C4I_C4MJS`). From then on a read or write there halts
+  the machine with -103, and `guardHit` names the access, the pc, the CPU
+  and the registers, with a stack trace: whatever reaches it is a program
+  run off the end of the heap, which before wrote over the kernel task's
+  frames and crashed at some later switch. The loop's inlined loads and
+  stores (LI, LC, SI, SC, LIP, ADDL) compare with the guard's base, one
+  compare more, and above it take the slow path, which looks; MSET, MCPY,
+  MCMP and READ look at their whole range before touching any of it; and
+  a TLEV that would switch to a stack there halts too. Stack pushes, LDL
+  and STL, LDG and PSHG are not checked. On threads the guard is in the
+  control block, and a worker's hit is told by CPU 0 (`par.js`,
+  `KIND.GUARD`). 0 lifts it, for C4IX's way back at shutdown. Native c4m
+  has no such guard. `tests/test-c4ix-guard.mjs`.
 - **The heap** keeps no headers in guest memory. Sizes live in a `Map`,
   small blocks come from size classes, large ones from a first-fit list with
   coalescing, and once the bump pointer is at the end a small block is cut

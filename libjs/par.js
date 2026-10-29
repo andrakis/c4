@@ -32,13 +32,15 @@
 // a few ms at a time, answering requests as they come (parkSync).
 
 import { OP, STOP, Machine } from './c4m.js';
+import { DmaSpace, FAULT } from './mmu.js';
 
 // the control block, in words
 export const C = {
   HALT: 0,                      // the machine has stopped: every CPU leaves
   DOOR: 1,                      // CPU 0's doorbell: bumped and notified with each request
   TIMEMS: 2,                    // the machine's time in ms, as CPU 0 last published it
-  CPU0: 16, STRIDE: 24,         // CPU k's words start at CPU0 + k * STRIDE
+  GUARD: 3, GLO: 4, GHI: 5,     // the boot stack's guard (devices.js STACK_GUARD): on, and where
+  CPU0: 16, STRIDE: 28,         // CPU k's words start at CPU0 + k * STRIDE
 };
 export const K = {              // offsets within a CPU's words
   STATE: 0, ENTRY: 1, STACK: 2, IPI: 3, WAITADDR: 4,
@@ -46,10 +48,18 @@ export const K = {              // offsets within a CPU's words
   WAITVAL: 16, PC: 17,          // where it parked, for a deadlock's report
   WOKE: 18,                     // CPU 0's: a CWAK for the word it waits on (parkSync)
   RPC: 19,                      // the asker's pc: PRTF's argument count is the ADJ after it
+  BP: 20,                       // ... and its bp, for a guard hit's report,
+  GN: 21, GFROM: 22, GW: 23,    // ... and the rest of it (c4m.js guardHit's n, from; GW: write | mode << 1)
+  PTBR: 24,                     // a device access's: the asker's space when it is in user mode, else 0
+  FADDR: 25, FINFO: 26,         // ... and what the device refused there (RSTOP DMA_FAULT)
+  UDIR: 27,                     // the asker's UDIR: the space its kernel mode reaches user addresses in
 };
+// RSTOP for a device access the asker's space refused (mmu.js dmaCheck):
+// the asker raises the page fault, with FADDR and FINFO
+export const DMA_FAULT = -77;
 export const S = { OFF: 0, RUN: 1, WAIT: 2, HALT: 3 };             // a CPU's state
 export const R = { IDLE: 0, ASK: 1, DONE: 2 };                     // a request slot's
-export const KIND = { OP: 1, RD32: 2, WR32: 3, WR8: 4 };           // what is asked
+export const KIND = { OP: 1, RD32: 2, WR32: 3, WR8: 4, GUARD: 5, SWAP: 6 }; // what is asked
 export const MAXCPU = 32;
 const word = (k, f) => C.CPU0 + k * C.STRIDE + f;
 
@@ -214,6 +224,13 @@ export class ParHost extends ParCore {
       this.workers.push(w);
     }
     this.dev.machine = m0;
+    // the guard is every CPU's: each looks at the control block
+    this.dev.onGuard = () => {
+      Atomics.store(ctl, C.GLO, this.dev.stackBase | 0);
+      Atomics.store(ctl, C.GHI, this.dev.stackTop | 0);
+      Atomics.store(ctl, C.GUARD, this.dev.stackGuard | 0);
+    };
+    this.dev.onGuard();
   }
 
   // the machine's time: CPU 0's cycles, and what passed while it waited
@@ -277,14 +294,49 @@ export class ParHost extends ParCore {
       if (kind === KIND.OP) {
         const s = this.shadows[k];
         s.sp = ctl[b + K.SP]; s.a = ctl[b + K.A]; s.mode = 0; s.pc = ctl[b + K.RPC]; s.cycleInterval = 0;
+        // its kernel mode's user window (c4m.js kpa), as on its own CPU
+        s.uwin = this.m0.uwin; s.udir = ctl[b + K.UDIR];
         s.symbols = this.m0.symbols;
         this.dev.machine = s;
         rstop = s.sys(ctl[b + K.OP]);
         this.dev.machine = this.m0;
         ra = s.a;
-      } else if (kind === KIND.RD32) ra = this.m0.bus.read32(ctl[b + K.ADDR]);
-      else if (kind === KIND.WR32) this.m0.bus.write32(ctl[b + K.ADDR], ctl[b + K.VAL]);
-      else if (kind === KIND.WR8) this.m0.bus.write8(ctl[b + K.ADDR], ctl[b + K.VAL]);
+      } else if (kind === KIND.SWAP) {
+        // a byte of a page put out to swap, which the host keeps here
+        const slot = ctl[b + K.ADDR], v = ctl[b + K.VAL];
+        if (ctl[b + K.OP]) this.dev.swapWr8(slot, v & 4095, (v >>> 16) & 255);
+        else ra = this.dev.swapRd8(slot, v & 4095);
+      } else if (kind === KIND.GUARD) {
+        // its guard hit, told and halted here, where the console is
+        const s = this.shadows[k];
+        s.sp = ctl[b + K.SP]; s.a = ctl[b + K.A]; s.pc = ctl[b + K.RPC]; s.bp = ctl[b + K.BP]; s.mode = ctl[b + K.GW] >> 1;
+        s.cycle = ctl[b + K.CYCLES];
+        s.symbols = this.m0.symbols;
+        s.guardHit(ctl[b + K.ADDR], ctl[b + K.GN], (ctl[b + K.GW] & 1) !== 0, ctl[b + K.VAL], ctl[b + K.OP], ctl[b + K.GFROM]);
+        rstop = STOP.HALT;
+      } else {
+        // A device register, for a task in user mode there: what the
+        // device reads or writes at the task's word is checked against
+        // the task's space, as on its own CPU (mmu.js dmaCheck)
+        const ar = this.m0.arena, ptbr = ctl[b + K.PTBR];
+        if (ptbr) {
+          if (!this.dma) this.dma = new DmaSpace(ar);
+          this.dma.ptbr = ptbr;
+          this.dma.udir = ctl[b + K.UDIR];
+          ar.dmaCtx = this.dma;
+        }
+        try {
+          if (kind === KIND.RD32) ra = this.m0.bus.read32(ctl[b + K.ADDR]);
+          else if (kind === KIND.WR32) this.m0.bus.write32(ctl[b + K.ADDR], ctl[b + K.VAL]);
+          else if (kind === KIND.WR8) this.m0.bus.write8(ctl[b + K.ADDR], ctl[b + K.VAL]);
+        } catch (e) {
+          if (e !== FAULT) throw e;
+          rstop = DMA_FAULT;
+          ctl[b + K.FADDR] = this.dma.faddr; ctl[b + K.FINFO] = this.dma.finfo;
+        } finally {
+          ar.dmaCtx = null;
+        }
+      }
       ctl[b + K.RA] = ra;
       ctl[b + K.RSTOP] = rstop;
       Atomics.store(ctl, b + K.REQ, R.DONE);

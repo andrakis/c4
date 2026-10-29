@@ -120,6 +120,8 @@ void klock_drop(int *lk) {
 // a program's malloc and free reach without it (sched_trap's light path).
 static int bkl[2];
 static void bkl_take() { klock_take(bkl); }
+// Whether this CPU holds the kernel lock: the MMU swaps only then (mmu.c)
+int sched_has_bkl() { return smp_ncpu < 2 || bkl[0] == cpu_self->id + 1; }
 static void bkl_drop() { klock_drop(bkl); }
 
 // Whether N may run on CPU K by its mask (pin, SYS_AFFINITY). A mask
@@ -324,6 +326,7 @@ void sched_retire(struct task *t) {
 // (its ublocks, each with its header, task.c)
 static int task_mem(struct task *t) {
     int b;
+    if (mmu_on) return task_umem(t);   // its pages, all of them
     b = t->img_bytes;
     if (t->stack) b = b + t->stack_words * sizeof(int);
     return b + task_umem(t);
@@ -518,6 +521,7 @@ void task_zombify(struct task *t, int code) {
     int was;
     if (t->state == TS_ZOMBIE) return;
     was = t->state;
+    if (con_is_booting() || t->id <= boot_lastid) klog("task %d (%s) exited %d\n", t->id, t->name, code);
     t->exitcode = code;
     t->state = TS_ZOMBIE;
     ++sched_nzombies;
@@ -661,7 +665,7 @@ static int sched_light(int trap, int param) {
     struct task *t;
     t = sched_cur;
     return trap == C4IX_TRAP_PM && (param == C4IX_OP_MALC || param == C4IX_OP_FREE) &&
-        t && t->state == TS_RUNNING && t->privs == PRIV_USER && !t->ck_sigpend &&
+        t && t->state == TS_RUNNING && t->privs == PRIV_USER && !t->ck_sigpend && !mmu_short &&
         !sched_dying && !sched_resched && !sched_reload && !cpu_self->prev &&
         (!sched_interval || acct_in - sched_slice0 < sched_turn(t));
 }
@@ -679,6 +683,9 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     // handler exactly where it was, and the interrupt stays disabled
     // (c4m's own cycle path clears the interval) until the outer
     // handler re-arms it on the way out.
+    // A shootdown another CPU is waiting on (mmu.c): before anything that
+    // might wait for the kernel lock, which that CPU holds
+    if (mmu_on && smp_ncpu > 1) mmu_trap_in();
     if (sched_intrap) return;
     // Claim the handler BEFORE anything else, including the mask
     // below. Neither the syscall gateway nor __c4_trap disables the
@@ -715,6 +722,7 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
             if ((me->uacc | me->kacc) & ACCT_FOLD_AT) acct_fold(me);
             mode = C4IX_MODE_PROTECTED;
             interval = (sched_interval && sched_lockdepth == 0) ? sched_interval : 0;
+            mmu_trap_out(me);
             sched_intrap = 0;
             return;
         }
@@ -739,12 +747,14 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     // there is none, and then not even the call.
     if (task_reaplist) task_reap();
     // the stack an execve left, which its handler was standing on
-    if (sched_stale_stack) { free((int *)sched_stale_stack); sched_stale_stack = 0; }
+    if (sched_stale_stack) { ufree(sched_stale_stack); sched_stale_stack = 0; }
     // The stack guard. A task whose stack pointer is inside the guard,
     // or whose top guard word has been written, ran off the end of its
     // stack: kill it here, before what it wrote under the stack -- some
     // other allocation -- takes the machine down in some other task.
-    if (sched_cur && sched_cur->stack && sched_cur->privs == PRIV_USER && sched_cur->state != TS_ZOMBIE &&
+    // Under the MMU the guard page below the stack does this, at the
+    // store that runs into it (mmu.c), and the poison is just stack.
+    if (!mmu_on && sched_cur && sched_cur->stack && sched_cur->privs == PRIV_USER && sched_cur->state != TS_ZOMBIE &&
         (sp < sched_cur->stack + C4IX_STACK_GUARD * sizeof(int) ||
          ((int *)sched_cur->stack)[C4IX_STACK_GUARD - 1] != C4IX_STACK_POISON)) {
         kprintf("c4ix: task %d (%s) overran its %d-byte stack; killing it\n",
@@ -789,6 +799,9 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
         sys_pmviolation(param, (int *)sp, (int *)returnpc, &a);
     } else if (trap == C4IX_TRAP_SIGNAL) {
         sched_interrupt();
+    } else if (trap == C4IX_TRAP_SEGV) {
+        // a page fault: only user mode is translated (mmu.c)
+        if (sched_cur && sched_cur->privs == PRIV_USER) mmu_fault(sched_cur, param);
     }
 
     // The syscall could not finish because the task had to block.
@@ -935,6 +948,7 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
         bkl_drop();
     }
 
+    if (mmu_on && smp_ncpu > 1) mmu_trap_out(sched_cur);
     // The flag stays set for the WHOLE handler, not just the service
     // call: everything below it -- task_release, the slab allocator,
     // any kprintf -- takes sched_lock, and an unlock outside the flag
@@ -1198,13 +1212,18 @@ int task_wait(struct task *t) {
 //   X[2] where task_shim's own LEV would land -> task_lost
 //   X[3..5] task_shim's args, last first: argv, argc, entry
 int sched_next_stack_words;
+// An idle task's stack comes from the kernel arena instead (sched_init)
+static int sched_next_kstack;
 
 int sched_forge(struct task *t, int entry, int argc, int argv) {
     int *stk, *x;
     int i, words;
 
     words = sched_next_stack_words > C4IX_STACK_WORDS ? sched_next_stack_words : C4IX_STACK_WORDS;
-    if (!(stk = (int *)malloc(words * sizeof(int)))) return 0;
+    if (sched_next_kstack) {
+        words = KMEM_STACK_BYTES / sizeof(int);
+        if (!(stk = (int *)kmem_alloc(words * sizeof(int)))) return 0;
+    } else if (!(stk = (int *)umalloc_stack(words * sizeof(int)))) return 0;
     memset(stk, 0, words * sizeof(int));
     x = stk + words - 8;              // slack above, as C4KE leaves
     t->stack_words = words;
@@ -1266,7 +1285,7 @@ int sched_vfork(int bp) {
     n = w[0] - (bp + 2 * sizeof(int));
     if (n < 0 || n > C4IX_STACK_WORDS * sizeof(int) / 2) return -1;
     if (!(c = task_vchild(p))) return -1;
-    top = c->stack + (c->stack_words - 8) * sizeof(int);   // sched_forge's slack
+    top = mmu_uva(c->stack + (c->stack_words - 8) * sizeof(int));   // sched_forge's slack, where the child sees it
     c->sv = SV_REGS;
     c->sv_a = 0;
     c->sv_bp = w[0];
@@ -1289,10 +1308,80 @@ void sched_forge_argv(struct task *t, int argv) {
     int *x;
     if (!t || t->sv != SV_FRAME) return;
     x = (int *)t->sv_sp;
-    x[3] = argv;
+    x[3] = mmu_uva(argv);
 }
 
 // ---- lifecycle ----
+
+// The processors C4IX uses: libjs's SMP, which has the window, up to
+// CPU_MAX; otherwise one.
+int sched_ncpus() {
+    int n;
+    if (!host_has(C4IX_I_C4MJS) || !host_has(C4IX_I_SMP)) return 1;
+    n = __c4_cpu_count();
+    return n > CPU_MAX ? CPU_MAX : n;
+}
+
+// ---- off the boot stack ----
+//
+// The machine starts the kernel on its boot stack, the megabyte at the top
+// of memory, above the heap. While the kernel task stood on it -- main,
+// parked in sched_run for as long as the machine ran -- a program that
+// wrote past the top of the heap landed in its frames, and nothing noticed
+// until shutdown, or until something switched to it. So main's work after
+// boot is the kernel task's on a stack from the kernel arena, the boot
+// stack is left with only main's own frame on it, and libjs guards it:
+// from then on a read or write there halts the machine, naming the pc and
+// the address (libjs/c4m.js, guardHit), before it can do harm. At the end
+// the guard is lifted and the kernel comes back, so main returns as it
+// always did, through the image's destructors.
+//
+// Both hops are a trap whose handler swaps the registers with the ones
+// saved on the other side, as every task switch is (sched_trap).
+static int hop_sp, hop_bp, hop_pc;   // the side that is not running
+static int hop_entry, hop_argc, hop_argv, hop_ret;
+
+static void sched_hop(int interval, int trap, int param, int mode, int a, int bp, int sp, int returnpc) {
+    int x;
+    x = sp; sp = hop_sp; hop_sp = x;
+    x = bp; bp = hop_bp; hop_bp = x;
+    x = returnpc; returnpc = hop_pc; hop_pc = x;
+}
+
+// The boot stack guarded (1) or not (0), where libjs can
+static void sched_bootguard(int on) {
+    if (host_has(C4IX_I_C4MJS)) *(int *)C4IX_BOOT_GUARD = on;
+}
+
+// Where the first hop lands: the kernel task's stack, with nothing below.
+static void sched_kmain() {
+    int e;
+    install_trap_handler(0);
+    sched_bootguard(1);
+    e = hop_entry;
+    hop_ret = e(hop_argc, hop_argv);
+    sched_bootguard(0);
+    install_trap_handler((int)&sched_hop);
+    __c4_trap(C4IX_TRAP_SOFT_IRQ, 0);
+}
+
+int sched_offboot(int entry, int argc, int argv) {
+    int *stk, *x;
+    if (!(stk = (int *)kmem_alloc(KMEM_STACK_BYTES))) {
+        kputs("c4ix: panic: no stack for the kernel task\n");
+        exit(-1);
+    }
+    // a return from sched_kmain, which never returns, is lost
+    x = stk + KMEM_STACK_BYTES / sizeof(int) - 8;
+    x[0] = (int)&task_lost;
+    hop_entry = entry; hop_argc = argc; hop_argv = argv;
+    hop_sp = (int)x; hop_bp = 0; hop_pc = (int)&sched_kmain;
+    install_trap_handler((int)&sched_hop);
+    __c4_trap(C4IX_TRAP_SOFT_IRQ, 0);
+    // back from the kernel task: everything has shut down
+    install_trap_handler(0);
+    return hop_ret;
+}
 
 // This CPU's traps: the handler, and preemption. Every CPU's own.
 static void sched_arm(int interval) {
@@ -1319,6 +1408,7 @@ static void smp_ap() {
     cpu_self->idle = me;
     acct_out = __c4_cycles();
     sched_arm(sched_interval);
+    mmu_cpu(k);
     while (!smp_stopping) {
         sched_lock();
         smp_settle();
@@ -1345,7 +1435,11 @@ void sched_init(int interval) {
 
     // The idle task first, so it is task 0, as NT's idle
     // is; then the context we are running in becomes the kernel task.
-    if (!(idle_task = task_create("idle", (int)&sched_idle, 0, 0))) {
+    // Both stand on the kernel arena (sched_offboot).
+    sched_next_kstack = 1;
+    idle_task = task_create("idle", (int)&sched_idle, 0, 0);
+    sched_next_kstack = 0;
+    if (!idle_task) {
         kputs("c4ix: panic: cannot create the idle task\n");
         exit(-1);
     }
@@ -1357,11 +1451,7 @@ void sched_init(int interval) {
     // Processors: libjs's SMP, which has the window. Each other CPU's
     // idle task is in the list now, running, so nothing picks it, and
     // the CPU becomes it when it starts (smp_ap).
-    smp_ncpu = 1;
-    if (host_has(C4IX_I_C4MJS) && host_has(C4IX_I_SMP)) {
-        smp_ncpu = __c4_cpu_count();
-        if (smp_ncpu > CPU_MAX) smp_ncpu = CPU_MAX;
-    }
+    smp_ncpu = sched_ncpus();
     kprintf("c4ix: %d processor%s\n", smp_ncpu, (smp_ncpu > 1) ? "s" : "");
     if (smp_ncpu > 1) {
         // The boot CPU's state moves into the window, where it is its
@@ -1417,16 +1507,20 @@ void sched_init(int interval) {
         __c4_configure(C4IX_CONF_INTERVAL, interval);
         kprintf("c4ix: cycle interval set to %dk\n", interval / 1024);
     }
+    klog("sched: round robin by nice, a slice of %d cycles; idle task %d, kernel task %d\n",
+        interval, idle_task->id, kernel_task->id);
 
-    // and the other CPUs, each on a stack of its own
+    // and the other CPUs, each on a stack of its own, in the kernel arena
     k = 1;
     while (k < smp_ncpu) {
-        if (!(smp_stack[k] = (int)malloc(SMP_STACK_BYTES))) {
+        if (!(smp_stack[k] = (int)kmem_alloc(SMP_STACK_BYTES))) {
             kputs("c4ix: panic: cannot start the other processors\n");
             exit(-1);
         }
         __c4_cpu_start(k, (int)&smp_ap, smp_stack[k] + SMP_STACK_BYTES);
         kprintf("c4ix: CPU %d stack allocated: 0x%08x, CPU booting\n", k, smp_stack[k]);
+        klog("smp: CPU %d started, %d-byte stack at 0x%08x, idle task %d\n",
+            k, SMP_STACK_BYTES, smp_stack[k], smp_idle_t[k]->id);
         ++k;
     }
     sched_banner();
@@ -1434,22 +1528,31 @@ void sched_init(int interval) {
 
 // What the machine is, said once at boot, where libjs says it: the
 // memory and its layout, and the processors -- which share all of it and
-// the one heap, each with nothing of its own but its window (and, past
-// CPU 0, its idle task's stack, from the heap).
+// the one heap, each with nothing of its own but its window (and its idle
+// task's stack, in the kernel arena). From the bottom: the kernel image,
+// the kernel arena (which starts where the heap does: the va area is the
+// heap's first block, taken before main), the heap programs use, whatever
+// the host keeps for itself (the mailbox), the boot stack, guarded, and
+// the arguments above it, which are the rest.
 static void sched_banner() {
-    int hb, he, mb, bs;
+    int hb, he, bb, bt;
     if (host_has(C4IX_I_C4MJS)) {
         hb = *(int *)C4IX_HEAP_BASE;
         he = *(int *)C4IX_HEAP_END;
-        // the heap ends a megabyte below the top, under the boot stack
-        bs = he + 2 * 1048576 - 1;
-        mb = bs / 1048576;
-        kprintf("c4ix: %d MB of memory:\n", mb);
-        kprintf("  [mem 0x%08x-0x%08x] Kernel (%d KB)\n", 0, hb - 1, hb / 1024);
-        kprintf("  [mem 0x%08x-0x%08x] Heap - all your applications and memory (%d MB)\n", hb, he - 1, ((he - hb) / 1024) / 1024);
-        kprintf("  [mem 0x%08x-0x%08x] Boot stack (%d MB)\n", he, bs, (((bs + 1) - he) / 1024) / 1024);
+        bb = *(int *)C4IX_BOOT_BASE;
+        bt = *(int *)C4IX_BOOT_TOP;
+        kprintf("c4ix: %d MB of memory:\n", (bt + 4096) / 1048576);
+        kprintf("  [mem 0x%08x-0x%08x] Kernel image (%d KB)\n", 0, hb - 1, hb / 1024);
+        kprintf("  [mem 0x%08x-0x%08x] Kernel arena - tasks, files, kernel stacks (%d KB)\n",
+            hb, kmem_end - 1, (kmem_end - hb) / 1024);
+        kprintf("  [mem 0x%08x-0x%08x] Heap - all your applications and memory (%d MB)\n",
+            kmem_end, he - 1, ((he - kmem_end) / 1024) / 1024);
+        if (bb > he)
+            kprintf("  [mem 0x%08x-0x%08x] Reserved by the host - its mailbox (%d KB)\n", he, bb - 1, (bb - he) / 1024);
+        kprintf("  [mem 0x%08x-0x%08x] Boot stack, guarded (%d KB)\n", bb, bt - 1, (bt - bb) / 1024);
+        kprintf("  [mem 0x%08x-0x%08x] Arguments (%d KB)\n", bt, bt + 4095, 4);
     }
-    
+
     if (smp_ncpu > 1) {
         kprintf("  %s\n  CPUs share all memory and the heap\n  each with a %d-byte window of its own at 0x%08x\n",
             host_has(C4IX_I_PAR) ? "a thread each, all at once" : "simulated, taking turns on one thread",
@@ -1475,7 +1578,7 @@ static void smp_stop() {
     --sched_lockdepth;
     if (sched_interval) __c4_configure(C4IX_CONF_INTERVAL, sched_interval);
     k = 1;
-    while (k < smp_ncpu) { free((int *)smp_stack[k]); smp_stack[k] = 0; ++k; }
+    while (k < smp_ncpu) { kmem_free((char *)smp_stack[k]); smp_stack[k] = 0; ++k; }
 }
 
 // Disarm the trap machinery: after this the scheduler is inert and

@@ -10,8 +10,9 @@
 // itself: its books are shared (sheap.js).
 
 import { Arena } from '../src/c4bb/sim/arena.js';
-import { OP, STOP, Machine } from './c4m.js';
-import { C, K, S, R, KIND, ParCore, POSTED, PQLEN, PQSTRIDE } from './par.js';
+import { OP, STOP, Machine, C4I_MMU } from './c4m.js';
+import { Mmu, FAULT } from './mmu.js';
+import { C, K, S, R, KIND, ParCore, POSTED, PQLEN, PQSTRIDE, DMA_FAULT } from './par.js';
 import { SharedHeap } from './sheap.js';
 
 const word = (k, f) => C.CPU0 + k * C.STRIDE + f;
@@ -34,6 +35,10 @@ class ApDev {
   }
   simMs() { return Atomics.load(this.ctl, C.TIMEMS) | 0; }
   hostNow() { return Date.now(); }
+  // the boot stack's guard, as CPU 0 last set it (par.js ParHost)
+  get stackGuard() { return Atomics.load(this.ctl, C.GUARD); }
+  get stackBase() { return Atomics.load(this.ctl, C.GLO); }
+  get stackTop() { return Atomics.load(this.ctl, C.GHI); }
 }
 
 class ApMachine extends Machine {
@@ -71,6 +76,8 @@ class ApMachine extends Machine {
     ctl[b + K.KIND] = kind; ctl[b + K.OP] = op; ctl[b + K.SP] = this.sp; ctl[b + K.A] = this.a;
     ctl[b + K.RPC] = this.pc;
     ctl[b + K.ADDR] = addr | 0; ctl[b + K.VAL] = val | 0;
+    ctl[b + K.PTBR] = this.vm && this.mmu ? this.mmu.ptbr : 0;
+    ctl[b + K.UDIR] = this.udir;
     Atomics.store(ctl, b + K.REQ, R.ASK);
     this.core.ring();
     while (Atomics.load(ctl, b + K.REQ) === R.ASK) {
@@ -79,6 +86,8 @@ class ApMachine extends Machine {
     }
     const ra = ctl[b + K.RA], rstop = ctl[b + K.RSTOP];
     Atomics.store(ctl, b + K.REQ, R.IDLE);
+    // a device refused what this task gave it: the task's page fault
+    if (rstop === DMA_FAULT) { this.mmu.refuse(ctl[b + K.FADDR], ctl[b + K.FINFO]); throw FAULT; }
     return { ra, rstop };
   }
 
@@ -102,6 +111,23 @@ class ApMachine extends Machine {
     }
     if (op === OP.EXIT) return this.halt(this.ld32(this.sp));
     return super.sys(op);
+  }
+
+  // A byte of a page put out to swap: CPU 0 keeps them (par.js KIND.SWAP)
+  swapRd8(slot, off) { const r = this.ask(KIND.SWAP, 0, slot, off & 4095); return r === STOP.HALT ? 0 : r.ra & 255; }
+  swapWr8(slot, off, v) { this.ask(KIND.SWAP, 1, slot, (off & 4095) | ((v & 255) << 16)); }
+
+  // A guard hit is told where the console is, and halts the machine
+  // there: CPU 0 says it with this CPU's registers (par.js, KIND.GUARD)
+  guardHit(x, n, write, v, op = 0, from = 0) {
+    const ctl = this.core.ctl, b = word(this.cpuId, 0);
+    ctl[b + K.BP] = this.bp;
+    ctl[b + K.CYCLES] = this.cycle | 0;
+    ctl[b + K.GN] = n | 0; ctl[b + K.GFROM] = from | 0; ctl[b + K.GW] = (write ? 1 : 0) | (this.mode ? 2 : 0);
+    this.flushPosted();
+    this.ask(KIND.GUARD, op, x, v);
+    this.dev.halted = true;
+    return 0;
   }
 
   // EXIT: this processor, never the machine
@@ -160,6 +186,8 @@ function main(msg) {
   arena.io = null;                    // device registers go through ApBus, to CPU 0
   bus.m = m;
   m.noFpu = msg.noFpu;
+  // CPU 0 has an MMU: so has this CPU, its own, off until the kernel turns it on here
+  if (msg.info & C4I_MMU) m.mmu = new Mmu(m);
   m.heap = new SharedHeap(arena, msg.heap);
   m.smp = core;
   m.cpuId = id;

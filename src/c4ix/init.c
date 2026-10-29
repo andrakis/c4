@@ -247,8 +247,11 @@ static void init_usage() {
           "  PROGRAM [ARG]...   boot, run PROGRAM with ARGs, shut down\n"
           "  --demo IMAGE...    run the built-in demonstrations, below\n"
           "  -h, --help         print this and shut down\n"
-          "  -q                 accepted and ignored, so older command\n"
-          "                     lines keep working\n"
+          "  -q                 the boot's lines in the kernel log only;\n"
+          "                     on libjs they are on the console too\n"
+          "  -v                 the kernel log on the console as well,\n"
+          "                     as the kernel writes it (dmesg reads it\n"
+          "                     either way)\n"
           "\n"
           "PROGRAM is an image path as the host filesystem sees it. The\n"
           "SHELL expands a bare name to c4ix-NAME.c4r or NAME.c4r; init\n"
@@ -352,10 +355,10 @@ int init_main(int argc, int argv) {
         // Shift past the flag so the stages index from av[1] exactly
         // as the help text describes.
         if (init_is(av[i], "--demo")) return init_demo(argc - i, av + i);
-        // -q used to mean "skip the demonstrations". They are opt-in
-        // now, so it means nothing -- but silently accepting it keeps
-        // older command lines and older habits working.
-        if (init_is(av[i], "-q")) ++i;
+        // -q and -v are the kernel's (boot.c): its log on the console
+        // not even while booting, or always. (-q once meant "skip the
+        // demonstrations", which are opt-in now.)
+        while (i < argc && (init_is(av[i], "-q") || init_is(av[i], "-v"))) ++i;
         // --desktop (the browser's boot): the shell starts top in the
         // background on the console, then the desktop on the display,
         // as typing "top &" and "desktop" at the first prompt would
@@ -379,6 +382,7 @@ int init_main(int argc, int argv) {
         vav[1] = "-w";
         vav[2] = 0;
         if ((v = task_spawn(vav[0], desktop ? 2 : 1, (int)vav))) task_wait(v);
+        boot_done();
         con_booted();
 
         shargv[0] = "c4ix-sh.c4r";
@@ -406,6 +410,7 @@ int init_main(int argc, int argv) {
         return 0;
     }
 
+    boot_done();
     con_booted();
     if (!(a = task_spawn(av[i], argc - i, (int)(av + i)))) {
         kprintf("init: spawn of '%s' failed\n", av[i]);

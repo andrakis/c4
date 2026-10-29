@@ -135,7 +135,13 @@ static void gfx_draw(struct term *t, int ox, int oy) {
         else if (op == 'l' && n >= 5) d_line(ox + g[2], oy + g[3], ox + g[4], oy + g[5], g[6]);
         else if (op == 'd' && n >= 4) d_disc(ox + g[2], oy + g[3], g[4], g[5]);
         else if (op == 't' && n >= 6) d_textn(ox + g[2], oy + g[3], g[4], g[5], F_SANS, 0, (char *)(g + 7), g[6]);
-        else if (op == 'f' && n >= 5) d_blit8(ox, oy, g[3], g[4], (char *)g[2], g[5], (int *)g[6], GW, GH);
+        else if (op == 'f' && n >= 5) {
+            // the program's memory, which the display reads at the
+            // desktop's word: lent to the desktop first (under the MMU
+            // each task's is its own); a frame it will not lend is not drawn
+            if (umapfrom(g[2], g[5] * g[4]) == 0 && umapfrom(g[6], 1024) == 0)
+                d_blit8(ox, oy, g[3], g[4], (char *)g[2], g[5], (int *)g[6], GW, GH);
+        }
         if (g[0] < 2) break;
         i = i + g[0];
     }

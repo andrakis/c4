@@ -49,6 +49,7 @@
 // memory.
 
 import { HostMailbox } from '../src/c4bb/sim/mbox.js';
+import { DmaSpace, FAULT } from './mmu.js';
 
 export const GUI = {
   CAPS: 0x400, W: 0x404, H: 0x408, RINGLEN: 0x40c, RING: 0x410, BELL: 0x414,
@@ -136,11 +137,18 @@ export class GuiDevice {
         // word boundaries. Anything else detaches rather than letting the
         // host write through a wild pointer.
         const len = this.ringLen & ~7;
-        if ((base & 3) || len < 256 || base < 0x1000 || base + len > this.arena.size) {
+        if ((base & 3) || len < 256) { this.ringBase = 0; this.mbox = null; return; }
+        // the task's own memory to write, or its page fault; where it is
+        // in memory, which is where the host reads and writes the rings
+        const pa = this.arena.dma(base, len, true);
+        if (pa < 0x1000 || pa + len > this.arena.size) {
           this.ringBase = 0; this.mbox = null; return;
         }
         this.ringBase = base;
-        this.mbox = new HostMailbox(this.arena, { base, len });
+        // whose: the frames the host drains on its own (drain) are
+        // checked against the space that attached the ring
+        this.ringSpace = this.arena.dmaCtx ? this.arena.dmaCtx.ptbr : 0;
+        this.mbox = new HostMailbox(this.arena, { base: pa, len });
         return;
       }
       case GUI.BELL:
@@ -163,7 +171,7 @@ export class GuiDevice {
     try { frames = this.mbox.drain(); }
     catch { this.mbox.layout(); return; }          // a corrupt ring: start it over
     for (const f of frames) {
-      if (f.type === CMD.BLIT8) { this.blit8(f.payload); continue; }
+      if (f.type === CMD.BLIT8) { this.blit8Checked(f.payload); continue; }
       if (this.queued + this.queue.length + 2 + f.payload.length > QUEUE_LIMIT) { this.lostCommands++; continue; }
       this.queue.push(2 + f.payload.length, f.type);
       for (let i = 0; i < f.payload.length; i++) this.queue.push(f.payload[i]);
@@ -220,9 +228,10 @@ export class GuiDevice {
     const mode = this.fbMode;
     const lines = mode ? w : h, run = mode ? h : w;
     const pitch = this.fbPitch || run * 4;
-    const base = this.fbBase;
     const hm = h | (mode << 16);
-    if ((base & 3) || (pitch & 3) || base < 0x1000 || base + (lines - 1) * pitch + run * 4 > this.arena.size) return;
+    if ((this.fbBase & 3) || (pitch & 3)) return;
+    const base = this.arena.dma(this.fbBase, (lines - 1) * pitch + run * 4, false);
+    if (base < 0x1000 || base + (lines - 1) * pitch + run * 4 > this.arena.size) return;
     const n = w * h;
     // Shared path: one copy into the triple buffer, and a small marker in
     // the command stream where the frame belongs.
@@ -253,18 +262,34 @@ export class GuiDevice {
   // -- and queued as 32-bit pixels in the command stream, in order.
   // A window's game or emulator draws in 8 bits; converting here costs
   // the guest nothing.
+  // A BLIT8 the bell's store brought in is checked as that task's
+  // (arena.dma, its fault); one the host drains on its own, against the
+  // space that attached the ring, and dropped if that refuses it
+  blit8Checked(p) {
+    const a = this.arena;
+    if (a.dmaCtx || !this.ringSpace) { this.blit8(p); return; }
+    if (!this.ringDma) this.ringDma = new DmaSpace(a);
+    this.ringDma.ptbr = this.ringSpace;
+    this.ringDma.udir = a.udir;
+    a.dmaCtx = this.ringDma;
+    try { this.blit8(p); }
+    catch (e) { if (e !== FAULT) throw e; this.lostCommands++; }
+    finally { a.dmaCtx = null; }
+  }
+
   blit8(p) {
     const [x, y, w, h, src, pitch, pal, dw, dh] = p;
     const a = this.arena;
-    if (w <= 0 || h <= 0 || w > 4096 || h > 4096 || pitch < w) return;
-    if (src < 0x1000 || src + (h - 1) * pitch + w > a.size || (pal & 3) || pal < 0x1000 || pal + 1024 > a.size) return;
+    if (w <= 0 || h <= 0 || w > 4096 || h > 4096 || pitch < w || (pal & 3)) return;
+    const s = a.dma(src, (h - 1) * pitch + w, false), q = a.dma(pal, 1024, false);
+    if (s < 0x1000 || s + (h - 1) * pitch + w > a.size || q < 0x1000 || q + 1024 > a.size) return;
     const n = w * h;
     if (this.queued + this.queue.length + 8 + n > QUEUE_LIMIT) { this.lostCommands++; return; }
-    const u8 = a.u8, colours = a.i32.subarray(pal >> 2, (pal >> 2) + 256);
+    const u8 = a.u8, colours = a.i32.subarray(q >> 2, (q >> 2) + 256);
     const c = new Int32Array(8 + n);
     c[0] = 8 + n; c[1] = CMD.RGB; c[2] = x; c[3] = y; c[4] = w; c[5] = h; c[6] = dw; c[7] = dh;
     for (let j = 0, k = 8; j < h; j++) {
-      const row = src + j * pitch;
+      const row = s + j * pitch;
       for (let i = 0; i < w; i++) c[k++] = colours[u8[row + i]];
     }
     this.seal();

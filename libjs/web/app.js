@@ -446,7 +446,8 @@ filesBtn.addEventListener('click', async () => {
 // are what the person brings (Wolfenstein's registered data, a WAD),
 // read-only on drive 0 where every system reads -- the bare games, which
 // look on drive 1 and then drive 0; C4DOS, which finds them on A: and
-// lists them there (worker.js adds them to A:'s c4dos.dir); C4IX -- so
+// lists them there (uploads.js adds them to A:'s c4dos.dir); C4IX, which
+// lists them in /home (uploads.js again, and the manifest's hostdir) -- so
 // one upload serves wolf3d6 on the bare machine and WOLF3D under C4DOS.
 // Nothing a system writes goes here, and Reset Files leaves them alone:
 // Uploads' own Forget and Forget all do that.

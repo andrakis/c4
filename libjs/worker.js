@@ -10,6 +10,7 @@
 //           snd: true fits the sound card (snd-device.js)
 //           persist: { files: [[name, Uint8Array]] } fits a writable drive 1, kept by the page
 //           uploads: [[name, Uint8Array]] laid over drive 0: the disk's file of that name is hidden
+//                    (and C4IX lists them in /home: uploads.js)
 //           cpus, quantum: that many processors, simulated (smp.js)
 //           parallel: ... each on a worker of its own (par.js), when the page is
 //           cross-origin isolated; simulated otherwise
@@ -42,6 +43,7 @@ import { keyDown, typeBytes } from './keys.js';
 import { GuiDevice } from './gui-device.js';
 import { SoundDevice } from './snd-device.js';
 import { RingWriter, FbProducer } from './shared.js';
+import { layUploads } from './uploads.js';
 
 // A disk read on demand. The page sends an index of [name, size] and a
 // base URL; the first get() of a name fetches that one file with a
@@ -160,17 +162,8 @@ function start(msg) {
   // controller wants bytes it can index.
   const files = msg.lazy ? new LazyFiles(msg.lazy.base, msg.lazy.index)
     : new Map((msg.disk || []).map(([n, b]) => [n, b instanceof Uint8Array ? b : new Uint8Array(b)]));
-  for (const [n, b] of msg.uploads || []) files.set(n, b instanceof Uint8Array ? b : new Uint8Array(b));
-  // C4DOS lists a drive by its c4dos.dir, and finds a name typed in any
-  // case there: the uploads join drive 0's listing, so DIR and grin's File
-  // Manager show them and DOOM2.WAD finds doom2.wad
-  const dirFile = msg.uploads && msg.uploads.length ? files.get('c4dos.dir') : null;
-  if (dirFile) {
-    const dir = new TextDecoder().decode(dirFile);
-    const listed = new Set(dir.split(/\r?\n/).map(l => l.toLowerCase()));
-    const add = msg.uploads.map(([n]) => n).filter(n => !listed.has(n.toLowerCase()));
-    if (add.length) files.set('c4dos.dir', new TextEncoder().encode(dir.replace(/\n?$/, '\n') + add.join('\n') + '\n'));
-  }
+  // the uploads over them, and in C4DOS's and C4IX's listings (uploads.js)
+  layUploads(files, msg.uploads);
   const drives = [{ files, writable: false, sink: null }];
   if (msg.persist) {
     if (!persistDrive) persistDrive = {

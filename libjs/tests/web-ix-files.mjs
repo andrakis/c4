@@ -82,6 +82,9 @@ try {
   await clickT((await find('Filesystem')).pop(), true);
   ok('Filesystem opens Files at the root', await shownHas('Files - /'));
   ok('the root lists /home', !!await inList('home'), JSON.stringify(await find('home')));
+  // the tree starts with only the root open: /usr, not /usr/src or /usr/docs
+  ok('the tree starts with only the root open', (await find('usr')).length > 0 && !(await find('src')).length && !(await find('docs')).length);
+  await shot('root');
   await clickT(await inList('home'), true);
   ok('/home lists the uploads, by name', await shownHas('Files - /home') && await orderIs('alpha.txt bravo.dat charlie.c'), await order());
   await shot('home-by-name');

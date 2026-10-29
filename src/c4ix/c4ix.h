@@ -147,7 +147,7 @@ enum { C4IX_WNOHANG = 1 };
 // Past the name, at TI_CPU, the CPU running the task (-1 none), and at
 // TI_NCPU how many the machine has (docs/c4ix-smp.md S4).
 enum { TASKINFO_WORDS = 24, TI_CPU = 20, TI_NCPU = 21 };
-enum { FD_STDIN = 0, FD_STDOUT = 1, FD_STDERR = 2, FD_MAX = 16 };
+enum { FD_STDIN = 0, FD_STDOUT = 1, FD_STDERR = 2, FD_MAX = 64 };
 
 int  sys_dispatch(int num, int *args);   // args[0]=first, args[1]=second...
 int  sys_write(int fd, char *buf, int len);
@@ -464,7 +464,8 @@ struct task {
     struct vnode *block_vn;    // TS_BLOCKED: the vnode being waited on
     int  block_pos;            // position the blocked read wants data past
     int  fds[FD_MAX];          // struct file *, 0 where the fd is closed
-    int  fdcloexec[FD_MAX];    // 1: this fd is not inherited on spawn (SYS_CLOEXEC)
+    char fdcloexec[FD_MAX];    // 1: this fd is not inherited on spawn (SYS_CLOEXEC); a byte
+                               //   each, so 64 fds cost a task 576 bytes, not 1024
     struct vnode *cwd;         // working directory, inherited on spawn
     int  lockdepth;            // preemption-mask depth, saved across switches
     int  parent;               // task id that spawned this one

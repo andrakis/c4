@@ -163,25 +163,34 @@ static void gfx_draw(struct term *t, int ox, int oy) {
 // Our ends of the pipes are close-on-spawn, so no shell -- this one or a
 // later window's -- inherits them: that is what lets a shell see end of
 // file, and keeps each window's pipes its own.
+//
+// spawn gives the shell this task's 0, 1 and 2, so they point at the
+// pipes for the spawn and are put back after it. That takes seven
+// descriptors at once, and every step is checked: when the table is
+// full, a desktop that went on would keep a Terminal's pipe as its
+// stdout, and its own messages, and Power Off's, would go into that
+// window and never reach the console. Instead what was opened is closed,
+// 0, 1 and 2 are as they were, and term_open says no shell started.
 static char *sh_argv[3] = { "c4ix-sh.c4r", "-p", 0 };   // -p: the prompt on the input line
 static int start(struct term *t) {
     int pin[2], pout[2], s0, s1, s2;
+    t->pid = 0 - 1;
     if (upipe(pin) < 0) return 0;
     if (upipe(pout) < 0) { uclose(pin[0]); uclose(pin[1]); return 0; }
-    ucloexec(pin[1], 1);
-    ucloexec(pout[0], 1);
     s0 = udup(STDIN); s1 = udup(STDOUT); s2 = udup(STDERR);
-    ucloexec(s0, 1); ucloexec(s1, 1); ucloexec(s2, 1);
-    udup2(pin[0], STDIN);
-    udup2(pout[1], STDOUT);
-    udup2(pout[1], STDERR);
-    t->pid = spawn("c4ix-sh.c4r", 2, sh_argv);
-    udup2(s0, STDIN); udup2(s1, STDOUT); udup2(s2, STDERR);
-    uclose(s0); uclose(s1); uclose(s2);
+    if (s0 >= 0 && s1 >= 0 && s2 >= 0) {
+        ucloexec(pin[1], 1); ucloexec(pout[0], 1);
+        ucloexec(s0, 1); ucloexec(s1, 1); ucloexec(s2, 1);
+        if (udup2(pin[0], STDIN) >= 0 && udup2(pout[1], STDOUT) >= 0 && udup2(pout[1], STDERR) >= 0)
+            t->pid = spawn("c4ix-sh.c4r", 2, sh_argv);
+        // s0, s1 and s2 are open, so these cannot fail
+        udup2(s0, STDIN); udup2(s1, STDOUT); udup2(s2, STDERR);
+    }
+    uclose(s0); uclose(s1); uclose(s2);   // one that is -1 closes nothing
     uclose(pin[0]); uclose(pout[1]);
+    if (t->pid < 0) { uclose(pin[1]); uclose(pout[0]); return 0; }
     t->in_w = pin[1];
     t->out_r = pout[0];
-    if (t->pid < 0) { uclose(t->in_w); uclose(t->out_r); return 0; }
     return 1;
 }
 

@@ -170,7 +170,7 @@ target.
 ## Limits and known issues
 
 - libc4ix's `printf` takes no width specifiers (`user/ps.c` pads by hand).
-- fd tables have 16 slots.
+- fd tables have 64 slots (`FD_MAX`, c4ix.h; 16 until 2026-10-29).
 - A race not yet root-caused intermittently corrupts one entry when
   `c4ix-vfsload` fills the tree on c4bb, so `test-c4bb` only requires most
   entries to load (see `user/vfsload.c` and `src/c4bb/tests/test-c4bb.sh`).

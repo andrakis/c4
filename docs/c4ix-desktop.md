@@ -38,7 +38,7 @@ shaped so it can be added.
 - `SYS_CLOEXEC` (223): mark a descriptor close-on-spawn. Spawn clones the
   whole fd table, so without this every terminal's shell would hold the
   desktop's end of its own stdin (and never see end of file) and of every
-  other terminal's pipes, and the 16-slot tables would fill. Per fd, not
+  other terminal's pipes, and the fd tables would fill. Per fd, not
   per description: a dup of a marked fd is inherited. libc4ix:
   `ucloexec(fd, on)`.
 - `SYS_INTR` (222): interrupt the foreground job below a given task,
@@ -506,6 +506,20 @@ it lacked was somewhere to edit and build in one place.
       number kept for a closed window finds nothing; a closed window is
       freed at the top of the next pass of the main loop, since whoever
       closed it may still hold it.
+- [x] **Terminals until the descriptors run out** (2026-10-29). Each
+      Terminal holds 2 of the desktop's fds, and `start` (`term.c`) takes
+      7 at once: two pipes, and 0, 1 and 2 saved while they point at the
+      pipes for the spawn. At 16 fds a task three Terminals fitted; the
+      fourth found the table full, opened anyway, and left the desktop's
+      stdout on its pipe, so the desktop's messages, and Power Off's, went
+      into that window and never reached the console. `FD_MAX` is 64 now
+      (`c4ix.h`; `fdcloexec` a byte per fd, the task struct 1040 bytes
+      from 720), and `start` checks every step: a Terminal that does not
+      fit closes what it opened, leaves 0, 1 and 2 as they were, and says
+      "desktop: could not start a shell". 27 open at once in
+      `test-desktop.mjs`, which opens them until one is refused, then
+      checks that the room one shell leaves takes another and that Power
+      Off still reaches the console.
 - [x] **`cc`** (`user/cc.c`): c4sc with c4lc's preprocessor, `/usr/include`
       on a task's default stack, linking with c4rlink when given `-l` or several
       sources. src/c4tui/demo.c takes 18 machine-seconds this way and 344
@@ -933,13 +947,9 @@ copied it (grin's G7 found the same for its applications, 86c4c89).
 
 ### Found on the way, not fixed
 
-- **A Terminal can take the desktop's stdout.** A task has 16 fds
-  (`FD_MAX`), and `start()` in `term.c` needs seven at once: two pipes and
-  three `udup`s of 0, 1 and 2. With three or four Terminals open, a
-  `udup` fails and returns -1, so `udup2(-1, STDOUT)` cannot put stdout
-  back, and fd 1 stays the new Terminal's pipe: the desktop's messages
-  (and `persist`'s at Power Off) go into that Terminal, not the console.
-  `start()` should check what `udup` returns and give up cleanly.
+- **A Terminal could take the desktop's stdout**, with three or four
+  open: fixed on ix-fds, "Terminals until the descriptors run out" above
+  (64 fds a task, and `start()` checks each step).
 - `gui_frame` (libjs/guest/gui.c) could place a long frame in an empty
   ring at any head, by skipping to the start and ringing the bell to
   drain the skip, rather than dropping it.

@@ -892,21 +892,29 @@ static void e_make(struct win *w) {
     }
 
     // b4ke on pipes, as the Terminal runs its shell (term.c): our
-    // ends are close-on-spawn, its stdin is a pipe nobody writes
+    // ends are close-on-spawn, its stdin is a pipe nobody writes. Every
+    // step is checked, as there: with the table full, a desktop that
+    // went on would keep the build's pipe as its stdout for good.
     if (upipe(pin) < 0) { e_say(e, "No pipe for the build"); return; }
     if (upipe(pout) < 0) { uclose(pin[0]); uclose(pin[1]); e_say(e, "No pipe for the build"); return; }
-    ucloexec(pin[1], 1);
-    ucloexec(pout[0], 1);
     s0 = udup(STDIN); s1 = udup(STDOUT); s2 = udup(STDERR);
-    ucloexec(s0, 1); ucloexec(s1, 1); ucloexec(s2, 1);
-    udup2(pin[0], STDIN);
-    udup2(pout[1], STDOUT);
-    udup2(pout[1], STDERR);
-    e->pid = spawn("/bin/b4ke", k, argv);
-    udup2(s0, STDIN); udup2(s1, STDOUT); udup2(s2, STDERR);
-    uclose(s0); uclose(s1); uclose(s2);
+    e->pid = 0 - 1;
+    if (s0 >= 0 && s1 >= 0 && s2 >= 0) {
+        ucloexec(pin[1], 1); ucloexec(pout[0], 1);
+        ucloexec(s0, 1); ucloexec(s1, 1); ucloexec(s2, 1);
+        if (udup2(pin[0], STDIN) >= 0 && udup2(pout[1], STDOUT) >= 0 && udup2(pout[1], STDERR) >= 0)
+            e->pid = spawn("/bin/b4ke", k, argv);
+        // s0, s1 and s2 are open, so these cannot fail
+        udup2(s0, STDIN); udup2(s1, STDOUT); udup2(s2, STDERR);
+    }
     uclose(pin[0]); uclose(pout[1]); uclose(pin[1]);
-    if (e->pid < 0) { uclose(pout[0]); e_say(e, "Cannot start b4ke"); return; }
+    if (e->pid < 0) {
+        uclose(pout[0]);
+        e_say(e, s0 >= 0 && s1 >= 0 && s2 >= 0 ? "Cannot start b4ke" : "No descriptors for the build");
+        uclose(s0); uclose(s1); uclose(s2);   // one that is -1 closes nothing
+        return;
+    }
+    uclose(s0); uclose(s1); uclose(s2);
     e->out_r = pout[0];
     e_build_clear(e);
     e->building = 1; e->bshown = 1; e->bcancel = 0;

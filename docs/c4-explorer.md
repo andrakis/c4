@@ -118,7 +118,8 @@ I/O opcodes and nothing else, and c4m's SEGV trap is commented out
 (c4m.c:2103). Wolfenstein's `win_fb` already hands the desktop a pointer
 into the game's memory. Pipes never block a writer and grow without
 bound (vfs.c:674-683). `SYS_EVWAIT` wakes on any readable pipe the task
-holds. A task has at most 16 descriptors (`FD_MAX`, c4ix.h:113).
+holds. A task has at most 64 descriptors (`FD_MAX`, c4ix.h:132), 16
+until 2026-10-29.
 
 **The IDE.** `edit.c` is 2,460 lines and the desktop's largest module
 (a 225 KB object). It needs a 4 MB c4sc stack to compile. It reaches into
@@ -564,9 +565,10 @@ Choices behind this design:
   give crash isolation for traps (an illegal opcode or a stack overrun
   kills only the client), not for wild pointers.
 - **Descriptors.** Each client costs the desktop 2 fds, on top of each
-  Terminal's 2 and its own 3. With `FD_MAX` 16 that is about six
-  windows' worth. W1 raises `FD_MAX` to 64. The task struct grows by
-  the fd and cloexec words, and `x5-c4m.txt` is re-pinned.
+  Terminal's 2 and its own 3. With `FD_MAX` 16 that was about six
+  windows' worth. `FD_MAX` is 64 since 2026-10-29 (branch ix-fds,
+  ahead of W1): the task struct grew by the fd words and a byte of
+  cloexec each, and `x5-c4m.txt` was re-pinned.
 
 **How programs start.**
 
@@ -775,7 +777,7 @@ targets are marked *new*.
 | | what | tests |
 |---|---|---|
 | **W0** | **Groundwork in the desktop** (desktop review M1, B9, D1): one `struct tool` table instead of the if-ladders; per-tool state sized by `sizeof`; one `spawn_piped`, with its checks. No visible change. | `test-desktop.mjs` (its 164 checks), `test-c4ix-rebuild` (`desktop` byte-identical with itself after rebuilding inside). |
-| **W1** | **The server and libdesk.** `K_APP` windows; the protocol (4.1); `/lib/libdesk.c4s` with ui.c in it; `FD_MAX` 64; logs for clients' stdout. A demo client: bounce.c ported, with a menu and a dialog. | *new* `test-desk-client.mjs` (in `test-libjs`): the demo opens two windows, draws, gets clicks and keys, uses a menu and a dialog, resizes, follows a theme change; a client that stops reading is shown "(not responding)" and killed from System Monitor; one that exits loses its windows; no zombies. `test-c4ix`, `test-c4ix-c4ke` (x5 re-pinned for the task struct). |
+| **W1** | **The server and libdesk.** `K_APP` windows; the protocol (4.1); `/lib/libdesk.c4s` with ui.c in it; logs for clients' stdout (`FD_MAX` is 64 already). A demo client: bounce.c ported, with a menu and a dialog. | *new* `test-desk-client.mjs` (in `test-libjs`): the demo opens two windows, draws, gets clicks and keys, uses a menu and a dialog, resizes, follows a theme change; a client that stops reading is shown "(not responding)" and killed from System Monitor; one that exits loses its windows; no zombies. `test-c4ix`, `test-c4ix-c4ke`. |
 | **W2** | **Starting programs.** `/etc/desktop.apps` with `single`, the open event, Go entries, Files' "Open with", `start` and libdesk's self-start. | `test-desk-client.mjs`: from the Go menu, from Files, and `start` and `bounce` typed in a Terminal; a `single` demo launched twice is one task with two windows. |
 | **W3** | **The IDE as `/bin/ide`**, one process with many windows, and swap files. | `test-desktop.mjs`'s IDE checks (VIM operations, `:make`, errors, the file pane, colours, Cancel) unchanged in what they check, now against the client. New ones: two files opened from Files are two windows of one `ide` task in System Monitor; opening an open file raises its window; text yanked in one window pastes in the other; an IDE killed with a modified buffer offers to recover it at the next open. `test-c4ix-rebuild` builds `/bin/ide`. Recorded: the desktop's image size before and after. |
 

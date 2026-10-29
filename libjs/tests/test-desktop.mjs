@@ -1117,6 +1117,43 @@ check(until(() => has('File name:') && has('Open') && !has('Look in:')), "and Te
 key('ESC');
 until(() => !has('File name:'));
 
+// ---- Terminals until the desktop's descriptors run out ------------------------------------------
+// Each Terminal holds 2 of the desktop's descriptors, and starting one
+// takes 7 at once (term.c, start). At 16 a task (FD_MAX, c4ix.h) three
+// were open at most, and the next one still opened -- with the desktop's
+// stdout left on its pipe, so Power Off, below, said nothing on the
+// console. Now the table is 64; the Terminal that does not fit says so
+// in its window and leaves the desktop's 0, 1 and 2 as they were.
+{
+  const ids = () => frame.map(t => /^Terminal - task (\d+)/.exec(t.s)).filter(Boolean).map(m => +m[1]);
+  let top = Math.max(0, ...ids());
+  let more = 0, refused = false;
+  for (let i = 0; i < 40 && !refused; i++) {
+    start('Terminal');
+    let id = 0;
+    until(() => (id = ids().find(n => n > top) || 0) || has(/could not start a shell/), 800);
+    if (id) { top = id; more++; } else refused = true;
+  }
+  check(refused && has(/could not start a shell/), `Terminals open until the descriptors run out (${more} more), then one says it could not start a shell`, screen().slice(-400));
+  check(more > 4, `${more} more Terminals open at once, besides those already open (three in all at 16 fds)`);
+  // the IDE's :make starts b4ke the same way (edit.c, e_make), and is refused as cleanly
+  start('Editor');
+  until(() => has('Untitled - Editor'));
+  txt(':e! /tmp/t.c\n');
+  until(() => has('t.c - Editor'));
+  txt(':make\n');
+  check(until(() => has(/No (descriptors|pipe) for the build/), 400), ':make then says there are no descriptors for the build', screen().slice(-300));
+  txt(':q!\n');
+  until(() => !has('t.c - Editor'));
+  // the one refused kept nothing open: one shell gone makes room for
+  // another (the topmost window title still showing is a Terminal with a shell)
+  clickText(/^Terminal - task \d+/, all => all.filter(t => t.y < SH - TASK_H).pop());
+  type('exit\n');
+  check(until(() => has(/the shell has exited/), 800), 'exit ends a shell there', screen().slice(-300));
+  start('Terminal');
+  check(until(() => ids().some(n => n > top), 800), 'and a Terminal opens again in the room it left', screen().slice(-300));
+}
+
 // ---- Power Off --------------------------------------------------------------------------------
 start('Power Off...');
 check(until(() => consoleText().includes('desktop: shut down'), 2000), 'Power Off ends the desktop', consoleText().slice(-500) + ' / screen: ' + screen().slice(-400));

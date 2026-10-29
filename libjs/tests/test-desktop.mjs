@@ -351,6 +351,24 @@ const inTree = all => {
   if (!e) return undefined;
   return all.filter(t => t.x > e.x && t.x < e.x + 190 && t.y > e.y + 50 && t.y < e.y + 400).pop();
 };
+// It starts with only the root open: the root's folders, nothing deeper
+check(!!inTree(find('usr')) && !!inTree(find('bin')) && !inTree(find('src')) && !inTree(find('docs')),
+  'the tree starts with only the root open', screen());
+// Into a deep folder through the list: the folders above it open, and
+// stay open after, which makes the tree taller and wider than its pane
+{
+  let path = '';
+  for (const d of ['usr', 'src', 'c4ix', 'libc', 'include']) {
+    path += '/' + d;
+    dbl(d, inList);
+    if (!until(() => has('Files - ' + path))) break;
+  }
+  check(has('Files - /usr/src/c4ix/libc/include') && !!inTree(find('libc')) && !!inTree(find('c4ix')),
+    'opening a folder deep down opens the folders above it in the tree', screen());
+  for (let i = 0; i < 5; i++) key('\b');
+  check(until(() => has('Files - /') && !!inTree(find('C4IX (/)'))) && !!inTree(find('src')),
+    'and they stay open back at the root', screen());
+}
 {
   const e = explorer();
   for (let i = 0; i < 40; i++) ev({ kind: 'wheel', x: e.x + 60, y: e.y + 200, dy: 1 });

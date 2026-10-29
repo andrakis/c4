@@ -19,9 +19,11 @@
 // to drag, as every bar on the desktop has: ui_scroll_drag) and the wheel. It follows the selection only when that moves,
 // not at every redraw, or the bar could never leave it. A folder with
 // folders in it has a +/- box: click it, double-click the row, or use
-// Left/Right or -/+ to collapse and expand. A collapsed folder stays
-// collapsed through a reload (by the hash of its path), but the folders
-// above the one being shown always open.
+// Left/Right or -/+ to collapse and expand. The tree starts collapsed but
+// for the root, so it shows the root's folders and nothing deeper; a
+// folder opened stays open through a reload (by the hash of its path),
+// one new to the tree comes in collapsed, and the folders above the one
+// being shown always open.
 //
 // The list is sorted by name, type (the extension), size or date, either
 // way round, folders first always: View > Sort, or a click on a column's
@@ -38,7 +40,7 @@
 // ST_BYTES with room to spare.
 enum { MAXE = 400, NAMEW = 64, MAXT = 256, TPW = 128, MAXDEPTH = 10, TREE_W = 180, ROW_H = 17, TOOL_H = 30, STATUS_H = 20 };
 // a tree node's flags: it has folders under it, and it is collapsed
-enum { T_KIDS = 1, T_COLL = 2, MAXCOLL = 64 };
+enum { T_KIDS = 1, T_COLL = 2, MAXOPEN = 64 };
 
 struct files {
     char path[128];
@@ -310,24 +312,28 @@ static int phash(char *s) {
     return h;
 }
 
-// The tree again, from the disk. What was collapsed stays so, but every
-// folder above the one shown opens, so the selection can be seen.
+// The tree again, from the disk. A folder with folders in it is collapsed
+// unless it was open before -- the first time, only the root is -- but
+// every folder above the one shown opens, so the selection can be seen.
 static void tree_load(struct files *f) {
-    int old[MAXCOLL], no, i, j, h, d;
+    int open[MAXOPEN], no, first, i, j, h, d;
+    first = f->nt == 0;
     no = 0;
     i = 0;
     while (i < f->nt) {
-        if ((f->tflag[i] & T_COLL) && no < MAXCOLL) { old[no] = phash(f->tpath + i * TPW); ++no; }
+        if ((f->tflag[i] & T_KIDS) && !(f->tflag[i] & T_COLL) && no < MAXOPEN) { open[no] = phash(f->tpath + i * TPW); ++no; }
         ++i;
     }
     f->nt = 0;
     tree_walk(f, "/", 0);
     i = 0;
-    while (i < f->nt && no) {
-        h = phash(f->tpath + i * TPW);
-        j = 0;
-        while (j < no && old[j] != h) ++j;
-        if (j < no) f->tflag[i] = f->tflag[i] | T_COLL;
+    while (i < f->nt) {
+        if ((f->tflag[i] & T_KIDS) && !(first && i == 0)) {
+            h = phash(f->tpath + i * TPW);
+            j = 0;
+            while (j < no && open[j] != h) ++j;
+            if (j == no) f->tflag[i] = f->tflag[i] | T_COLL;
+        }
         ++i;
     }
     f->tsel = 0;

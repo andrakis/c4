@@ -11,7 +11,7 @@
 #     reboot 0                floppy OUT, restart
 #   BIOS boots drive 1 (C4KE -- the kernel C4DOS compiled)
 #     tar x c4ix-src.tar      the sources the medium was carrying
-#     b4ke -f c4ix.b4k        twelve modules and a link
+#     b4ke -f c4ix.b4k        thirteen modules and a link
 #     kinstall C:             writes the C4IX medium, from c4ix.lst
 #     reboot 1                that medium OUT, restart
 #   BIOS boots drive 2 (C4IX -- the kernel C4KE compiled)
@@ -145,7 +145,7 @@ run "unpacked C4IX's source" 'c4sh>' 'tar x c4ix-src.tar' \
 idle 'c4sh>' 300 || exit 1
 printf 'b4ke -f c4ix.b4k\n' >&3
 await_busy "C4KE built C4IX" "b4ke: C4IX built" 900 "^b4ke: [0-9]* ran," || exit 1
-want "b4ke had no failures" "b4ke: 13 ran, 0 skipped, 0 failed"
+want "b4ke had no failures" "b4ke: 14 ran, 0 skipped, 0 failed"
 run "installed the C4IX medium" 'c4sh>' 'kinstall C:' \
     "kinstall: eject drive 1"    300 || exit 1
 want "kinstall summary" "^kinstall: [0-9]* files, [0-9]* bytes onto drive 2, boot.cfg -> c4ix.c4r"

@@ -90,8 +90,11 @@ else bad "libc: libctest's output is the reference"
      echo "$out" | sed -n '/^printf: \[42/,/libctest: done/p' | diff - src/c4ix/libc/tests/libctest.txt | head -10; fi
 
 # libc is -fpic: its data slot is a word of the CPU-local window, which
-# each CPU points at the data of the task it runs
-out=$(printf 'pictest A 15 > /tmp/a &\npictest B 15 > /tmp/b &\npictest C 15 > /tmp/c &\nwait\ncat /tmp/a\ncat /tmp/b\ncat /tmp/c\nexit\n' | c4ix 1200000000)
+# each CPU points at the data of the task it runs. On two threads the
+# three and their cats came within a few cycles of 1.2G (2026-10-30, with
+# the MMU and the boot log), so a run that lost a little to the threads
+# stopped before B and C were shown: twice that.
+out=$(printf 'pictest A 15 > /tmp/a &\npictest B 15 > /tmp/b &\npictest C 15 > /tmp/c &\nwait\ncat /tmp/a\ncat /tmp/b\ncat /tmp/c\nexit\n' | c4ix 2400000000)
 if echo "$out" | grep -qx "A: ok" && echo "$out" | grep -qx "B: ok" && echo "$out" | grep -qx "C: ok" && ! echo "$out" | grep -qF "crossed"; then
     ok "three tasks share libc's code and keep their own data"
 else bad "three tasks share libc's code and keep their own data"; echo "$out" | grep -E 'ok|crossed|loader' | head -6; fi

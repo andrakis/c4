@@ -20,7 +20,7 @@ and is the machine with something in ROM instead.
 | `A>` | `LADDER` | the seed compiler rebuilds itself and the preprocessor, reaches a fixed point, and the tools it just built compile C4KE from its own source |
 | `A>` | `RUN dosload.c4r c4ke.c4r` | boots the kernel the machine compiled. C4DOS hands over its RAM disk on the way out, so everything just built is still there |
 | `c4sh>` | `tar x c4ix-src.tar` | C4KE unpacks C4IX's source into its own RAM filesystem — 43 files |
-| `c4sh>` | `b4ke -t -f c4ix.b4k` | twelve modules through the compiled compiler, then the link. This is the long one — `-t` runs `top` alongside so there is something to watch |
+| `c4sh>` | `b4ke -t -f c4ix.b4k` | thirteen modules through the compiled compiler, then the link. This is the long one — `-t` runs `top` alongside so there is something to watch |
 | `c4sh>` | `c4ix.c4r c4ix-sh.c4r` | boots C4IX — protected mode, preemption — with a shell |
 | `c4ix:/$` | `ls`, `ps` | C4IX, running, showing its own tasks |
 
@@ -41,10 +41,10 @@ Driven by a script with sleeps in it (`-i` streams a pipe now), on a
     c4sh>tar x c4ix-src.tar
     tar: extracted 43 files, 257816 bytes
     c4sh>b4ke -f c4ix.b4k
-    b4ke: C4IX, twelve modules and a link
+    b4ke: C4IX, thirteen modules and a link
     ...
     c4rlink: wrote 130665 bytes to ramfs:c4ix.c4r
-    b4ke: 13 ran, 0 skipped, 0 failed
+    b4ke: 14 ran, 0 skipped, 0 failed
     c4sh>c4ix.c4r c4ix-sh.c4r
     C4IX booting, 203277198 cycles spent loading the kernel image
     c4ix: protected mode on for user tasks, preemption on
@@ -143,7 +143,7 @@ for what it makes:
 | where | type | what happens |
 |---|---|---|
 | `c4sh>` | `tar x c4ix-src.tar` | C4IX's source, out of the archive the medium carried |
-| `c4sh>` | `b4ke -f c4ix.b4k` | twelve modules and a link |
+| `c4sh>` | `b4ke -f c4ix.b4k` | thirteen modules and a link |
 | `c4sh>` | `kinstall C:` | a bootable C4IX medium on drive 2, from `c4ix.lst` |
 | `c4sh>` | `reboot 1` | and the machine comes up in C4IX |
 

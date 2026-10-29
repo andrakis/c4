@@ -1869,7 +1869,7 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c $(C4RDUMP)
 	     || { echo "test-c4fc: c4or1k/$$m.c4o differs from c4lc -mcisc -O -c"; exit 1; }; \
 	   echo "  mcisc obj ok: $$m"; \
 	done
-	# F10, object mode: the whole of C4IX. Twelve .c4o objects, each
+	# F10, object mode: the whole of C4IX. Thirteen .c4o objects, each
 	# byte-identical to the one c4lc -O -c writes, linked by c4rlink into
 	# a kernel that must equal the committed image and then boot. An
 	# object is where a compiler's bookkeeping shows: what it could not
@@ -2909,7 +2909,7 @@ C4IX_MODS := boot console va host sl4b task sched vfs sys c4ke loader mmu init
 c4ix.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/c4ix.h $(patsubst %,$(C4IX_SRC)/%.c,$(C4IX_MODS))
 	@# No gcc here: c4lc preprocesses the modules itself (L9). Each
 	@# object is byte-identical to the gcc -E path, pinned by test-c4lc.
-	@# The twelve modules are independent .c -> .c4o compiles, so run
+	@# The thirteen modules are independent .c -> .c4o compiles, so run
 	@# them in parallel exactly as the c4or1k rules do. c4lc_compile_par
 	@# propagates any module's failure through xargs.
 	$(call c4lc_compile_par,-O,$(C4IX_MODS),$(C4IX_SRC),.c4ix_)
@@ -3575,7 +3575,7 @@ test-c4ke-ramfs: pre c4sp.c4r
 	$(C4M) $(RUN_C4KE) c4sp.c4r src/c4sp/tests/ramfs.lisp | grep -q "ramfs roundtrip ok"
 	# Linking in the machine: two objects compiled to the RAM filesystem,
 	# LINKED from it, and the result run out of it. This is the pin for
-	# building C4IX in-machine -- it is twelve objects plus a library.
+	# building C4IX in-machine -- it is thirteen objects plus a library.
 	$(C4M) $(RUN_C4KE) test_ramlink | grep -q "b_add(3, 4) = 7"
 	@echo "test-c4ke-ramfs: OK"
 

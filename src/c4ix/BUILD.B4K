@@ -1,5 +1,5 @@
 B4KE2
-# The C4IX kernel: twelve modules and a link, as build-images.sh and
+# The C4IX kernel: thirteen modules and a link, as build-images.sh and
 # `make c4ix.c4r` build it. The result is $(OUT)/c4ix.c4r, a kernel the
 # page can boot (?image=) once something gets it off the RAM disk.
 # Every module includes c4ix.h, so a change there rebuilds them all.

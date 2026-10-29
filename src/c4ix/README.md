@@ -2,7 +2,7 @@
 
 C4IX is the top rung of the ladder (C4DOS → C4KE → C4IX). Where C4KE is a
 single file in the plain c4 subset, C4IX is written in the C that c4lc
-compiles (structs, typedef, block declarations): twelve modules, each
+compiles (structs, typedef, block declarations): thirteen modules, each
 compiled to a `.c4o` object and linked by c4rlink. User programs run behind
 c4m's protected mode, so all of their I/O goes through syscalls, and the
 kernel owns what C4KE cannot: per-task file descriptors, pipes,
@@ -22,7 +22,7 @@ boots C4KE as a C4IX task (docs/c4-float.md).
 
 | target | produces |
 |---|---|
-| `make c4ix.c4r` | the kernel: the twelve modules compiled in parallel by c4lc `-O` (its own preprocessor, no gcc), then `c4rlink` |
+| `make c4ix.c4r` | the kernel: the thirteen modules compiled in parallel by c4lc `-O` (its own preprocessor, no gcc), then `c4rlink` |
 | `make libc4ix.c4l` | the userland C library, as a c4rlink library |
 | `make libarc.c4l` | gzip (inflate, CRC-32) and tar, for `c4ix-tar.c4r` and `c4ix-gunzip.c4r`, which link it as well |
 | `make c4ix-NAME.c4r` | `user/NAME.c` compiled with c4lc and linked with `libc4ix.c4l` (e.g. `c4ix-sh.c4r`, `c4ix-ls.c4r`) |

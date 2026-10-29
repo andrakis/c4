@@ -23,7 +23,7 @@ At each prompt (the disk's `LADDER.TXT` says the same; `TYPE LADDER.TXT`):
 | `c4sh>` | `doom`, `wolf3d`, `rps`, `raycast` | play, as C4KE tasks |
 | `c4sh>` | `grin` | grin as a C4KE task; its DOS Prompt is a C4KE Prompt (below) |
 | `c4sh>` | `tar x c4ix-src.tar` | C4IX's sources into the RAM filesystem |
-| `c4sh>` | `b4ke -f c4ix.b4k` | twelve modules and a link: `c4ix.c4r` |
+| `c4sh>` | `b4ke -f c4ix.b4k` | thirteen modules and a link: `c4ix.c4r` |
 | `c4sh>` | `kboot c4ix.c4r` | C4KE shuts down, and the C4IX it built boots (`kboot c4ix.c4r --desktop` for the desktop) |
 | `c4ix:/$` | `ls`, `ps`, `top`, `doom`, `desktop` | the system C4KE built |
 | `c4ix:/$` | `exit` | C4IX shuts down; C4KE returns, then dosload, to `A:\>` |

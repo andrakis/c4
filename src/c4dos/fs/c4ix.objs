@@ -1,5 +1,5 @@
-# the twelve C4IX objects, in link order -- the command line that
-# names them is sixteen tokens and C4DOS holds fifteen.
+# the thirteen C4IX objects, in link order -- the command line that
+# names them is seventeen tokens and C4DOS holds fifteen.
 boot.c4o
 console.c4o
 va.c4o
@@ -11,4 +11,5 @@ vfs.c4o
 sys.c4o
 c4ke.c4o
 loader.c4o
+mmu.c4o
 init.c4o

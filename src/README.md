@@ -193,7 +193,7 @@ and `test-b4ke`.
 **Folder:** [c4ix/](c4ix/).
 
 A Unix-like second-generation OS, written in c4lc's C (structs, typedef) as
-twelve modules linked by c4rlink. System calls own all I/O through
+thirteen modules linked by c4rlink. System calls own all I/O through
 protected-mode traps, which gives file descriptors, pipes, redirection and a
 real shell.
 

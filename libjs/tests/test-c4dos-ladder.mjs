@@ -233,7 +233,7 @@ if (!quick) {
   begin();
   o = cmd('b4ke -f c4ix.b4k', KE, 3000);
   const ixbytes = /c4rlink: wrote (\d+) bytes to ramfs:c4ix\.c4r/.exec(o);
-  check(ixbytes && o.includes('b4ke: 13 ran, 0 skipped, 0 failed'), 'b4ke builds C4IX: twelve modules and a link', o.slice(-1500));
+  check(ixbytes && o.includes('b4ke: 14 ran, 0 skipped, 0 failed'), 'b4ke builds C4IX: thirteen modules and a link', o.slice(-1500));
   cost(`b4ke -f c4ix.b4k (c4ix.c4r ${ixbytes ? ixbytes[1] : '?'} bytes)`);
 
   begin();

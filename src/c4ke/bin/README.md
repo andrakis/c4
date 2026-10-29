@@ -38,7 +38,7 @@ where the kernel's loader finds them by bare name.
 | `c4rlink.c` | link `.c4o` objects and `.c4l` libraries; `-r` writes a library, `-s` strips symbols, `@file` reads arguments from a file. Invoked as `c4rstrip` it strips one image | native `make c4rlink`, `make c4rstrip`; `make c4rlink.c4r`, `c4rlink32.c4r` |
 | `b4ke.c` | build driver: `b4ke [-f FILE] [-n] [-k] [-t]` runs a `.b4k` script (verbs `ECHO`, `LIST`, `TARGET`, `RUN`, magic `B4KE1`); a step is skipped when its `TARGET` already exists | `make pre`; `b4ke32.c4r` |
 | `b4ke-selftest.b4k` | two modules compiled, listed and linked in the RAM filesystem | read by `make test-b4ke` |
-| `c4ix.b4k` | builds C4IX's twelve modules with `c4sc.c4r` and links them | used on the breadboard climb |
+| `c4ix.b4k` | builds C4IX's thirteen modules with `c4sc.c4r` and links them | used on the breadboard climb |
 | `tar.c` | `tar x\|t archive.tar` unpacks a C4TAR1 archive (the format of `src/c4dos/dostar.c`) into the RAM filesystem | `make tar.c4r`, `tar32.c4r` |
 | `vfsload.c` | fills the RAM filesystem at boot from `c4ke.vfs.txt`; the file's header documents the manifest grammar. Built by c4lc, with `gcc -E` first | `make vfsload.c4r`; 32-bit by `build-images.sh` |
 | `save.c` | `save 1: [file]` writes RAM filesystem files onto a c4bb drive (board only, `include/c4bb.h`) | `make save32.c4r` |

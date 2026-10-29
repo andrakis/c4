@@ -104,7 +104,7 @@ try {
   o = await step('tar x c4ix-src.tar', 'tar x c4ix-src.tar', KE, 120000);
   ok("tar unpacks C4IX's sources", o && o.includes('tar: extracted'), await tail());
   o = await step('b4ke -f c4ix.b4k', 'b4ke -f c4ix.b4k', KE, 1200000);
-  ok('b4ke builds C4IX', o && o.includes('b4ke: 13 ran, 0 skipped, 0 failed'), await tail());
+  ok('b4ke builds C4IX', o && o.includes('b4ke: 14 ran, 0 skipped, 0 failed'), await tail());
   await shot('5-b4ke');
   o = await step('kboot c4ix.c4r', 'kboot c4ix.c4r', IX, 120000);
   ok('kboot: C4KE stops and the C4IX it built boots', o && o.includes('c4ke: booting c4ix.c4r') && o.includes('C4IX booting'), await tail());

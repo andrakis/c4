@@ -35,8 +35,8 @@ FLUSH`, `DEVICE=DRIVES.SYS`) or a larger `SIZE=`.
 | `BUILDC4M.BAT` | `c4dos-build` | `BUILD.BAT` with `c4m.c4r` under the compiler, for a machine with only the original c4 opcodes |
 | `C4M-C4KE.BAT` | `c4dos-build` | boot C4KE under `c4m.c4r` from inside C4DOS (the host's `run-c4`, moved into the machine) |
 | `LADDER.TXT` | `libjs/images/ladder` | every step of the Build Ladder, C4DOS to C4IX on the page, for `TYPE LADDER.TXT` ([docs/c4dos-ladder.md](../../../docs/c4dos-ladder.md)) |
-| `IX.BAT` | `c4dos-c4ix32` | unpack `c4ix-src.tar`, compile C4IX's twelve modules with `c4sc.c4r`, link through `@c4ix.objs` |
-| `c4ix.objs` | `c4dos-c4ix32` | the twelve C4IX objects in link order |
+| `IX.BAT` | `c4dos-c4ix32` | unpack `c4ix-src.tar`, compile C4IX's thirteen modules with `c4sc.c4r`, link through `@c4ix.objs` |
+| `c4ix.objs` | `c4dos-c4ix32` | the thirteen C4IX objects in link order |
 | `install.lst` | `c4dos-c4ix32` | what `RUN install.c4r B:` writes to make a bootable C4KE medium |
 | `cc.f` | `c4dos-c4fc` | the C4DOS front end for c4fc: defines `CC` and `OBJ`; edit its last lines to choose the file to compile |
 | `CC.BAT` | `c4dos-c4fc` | `CC`: load c4fc (`RUN c4th.c4r c4fc.f cc.f`) and compile what `cc.f` names |

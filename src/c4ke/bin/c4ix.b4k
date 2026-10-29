@@ -10,7 +10,7 @@ B4KE1
 # Each TARGET is checked after its RUN: a step is judged by what it
 # produced, because that is the only thing this machine can check
 # afterwards. Deleting an object is how you force one step to re-run.
-ECHO b4ke: C4IX, twelve modules and a link
+ECHO b4ke: C4IX, thirteen modules and a link
 TARGET boot.c4o
 RUN c4sc.c4r -c 200000 compile -O -c -I src/c4ix src/c4ix/boot.c boot.c4o
 TARGET console.c4o

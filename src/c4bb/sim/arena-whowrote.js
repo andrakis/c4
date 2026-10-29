@@ -73,6 +73,38 @@ export const WW_ANSWER = 0x1a8;   // r: PC of the last writer, or 0
 //<<< whowrote
 export const ARGS_RESERVE = 4096;
 
+// The word of the page table entry for va in the space whose directory
+// is at dir (two levels of 1,024 words, libjs/mmu.js), or -1. PIN: the
+// bit the host sets there on a page the kernel or a device has used,
+// which the kernel then never puts out to swap (C4IX's PTE_PIN).
+export const PTE_PIN = 0x200;
+export function pteWord(i32, size, dir, va) {
+  if (!dir) return -1;
+  const pde = i32[(dir >>> 2) + (va >>> 22)] | 0;
+  if (!(pde & 1)) return -1;
+  const pt = pde & -4096;
+  if ((pt >>> 0) + 4096 > size) return -1;
+  return (pt >>> 2) + ((va >>> 12) & 1023);
+}
+// The entry the kernel's map has for user address x, or 0
+export function kernelPte(i32, size, udir, x) {
+  const w = pteWord(i32, size, udir, x);
+  return w < 0 ? 0 : i32[w] | 0;
+}
+// ... and its bit for a page put out to swap (C4IX's PTE_SWAP): the slot
+// is in the entry's upper 20 bits
+export const PTE_SWAP = 0x400;
+// The memory at user address x by the kernel's map (UDIR), the page
+// pinned; -1 if it maps nothing there
+export function kernelPhys(i32, size, udir, x) {
+  const w = pteWord(i32, size, udir, x);
+  if (w < 0) return -1;
+  const pte = i32[w] | 0;
+  if (!(pte & 1) || ((pte & -4096) >>> 0) + 4096 > size) return -1;
+  if (!(pte & PTE_PIN)) i32[w] = pte | PTE_PIN;
+  return (pte & -4096) | (x & 4095);
+}
+
 export class Arena {
   // A size, or a buffer to wrap: a SharedArrayBuffer lets a host on another
   // thread read and write the mailbox rings while the machine runs.
@@ -98,6 +130,83 @@ export class Arena {
     this.regs = null;
     this.pcIndex = 0;
 //<<< whowrote
+    // Whose word a device is acting on: null for the machine's own (no
+    // MMU, or kernel mode), else the user task's MMU while its load or
+    // store is at the device (libjs/mmu.js), which checks (dmaCheck)
+    this.dmaCtx = null;
+    // The user window (libjs/c4m.js kpa): kernel mode hands a device a
+    // user task's address as readily as its own. 0: none. udir: the
+    // kernel's map of user addresses, 0 for none (an offset, then).
+    this.uwin = 0;
+    this.udir = 0;
+  }
+
+  // ---- what devices do at an address the guest gave them ----
+  // Every device that reads or writes guest memory at an address it was
+  // handed -- a buffer, a name, a ring, a framebuffer -- comes through
+  // these, so that a user task under an MMU can only hand it its own
+  // memory: the range is checked against the task's space, and a refusal
+  // is the task's page fault (docs/c4ix-mmu.md 11).
+  // dma: where the device finds [addr, addr + len), one run of memory --
+  // the address itself, or what the task's page tables or the window
+  // make of it -- or -1 when there is no such memory. A user task's
+  // refusal throws (its page fault).
+  dma(addr, len, write) {
+    addr = addr >>> 0;
+    if (this.dmaCtx) return this.dmaCtx.dmaCheck(addr, len, write);
+    if (this.uwin && addr >= this.uwin) {
+      if (this.udir) return kernelPhys(this.i32, this.size, this.udir, addr);
+      const off = addr - this.uwin;
+      return off < this.size ? off : -1;
+    }
+    return addr;
+  }
+  // A copy of LEN bytes at addr, a page at a time: past the end, short
+  dmaRead(addr, len) {
+    addr = addr >>> 0;
+    len = Math.max(0, len | 0);
+    if (!this.dmaCtx && !(this.uwin && addr >= this.uwin)) {
+      return this.u8.slice(addr, Math.min(addr + len, this.size));
+    }
+    const out = new Uint8Array(len);
+    for (let k = 0; k < len;) {
+      const va = (addr + k) >>> 0, r = Math.min(len - k, 4096 - (va & 4095));
+      const p = this.dma(va, r, false);
+      if (p < 0 || p + r > this.size) return out.subarray(0, k);
+      out.set(this.u8.subarray(p, p + r), k);
+      k += r;
+    }
+    return out;
+  }
+  dmaWrite(addr, bytes) {
+    addr = addr >>> 0;
+    if (!(bytes instanceof Uint8Array)) bytes = Uint8Array.from(bytes);
+    const len = bytes.length;
+    if (!this.dmaCtx && !(this.uwin && addr >= this.uwin)) {
+      if (addr < this.size) this.u8.set(len > this.size - addr ? bytes.subarray(0, this.size - addr) : bytes, addr);
+      return;
+    }
+    for (let k = 0; k < len;) {
+      const va = (addr + k) >>> 0, r = Math.min(len - k, 4096 - (va & 4095));
+      const p = this.dma(va, r, true);
+      if (p < 0 || p + r > this.size) return;
+      this.u8.set(bytes.subarray(k, k + r), p);
+      k += r;
+    }
+  }
+  dmaCstring(addr, max = 4096) {
+    addr = addr >>> 0;
+    const out = [];
+    let p = -1;
+    for (let k = 0; k < max; k++) {
+      const va = (addr + k) >>> 0;
+      if (p < 0 || (va & 4095) === 0) { p = this.dma(va, 1, false); if (p < 0 || p >= this.size) break; }
+      else p++;
+      const b = this.u8[p];
+      if (!b) break;
+      out.push(b);
+    }
+    return new TextDecoder('latin1').decode(Uint8Array.from(out));
   }
 
   // Out-of-range accesses read 0 and drop writes, like the aligned

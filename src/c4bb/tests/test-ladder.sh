@@ -23,7 +23,7 @@
 #   5. Under C4KE, a compiler and a LINKER both work in memory: two
 #      objects compiled to the RAM filesystem, linked from it, and the
 #      result executed out of it. That is what building C4IX needs --
-#      it is twelve objects plus a library archive.
+#      it is thirteen objects plus a library archive.
 #   6. c4lc, running on c4sp, compiles a real C4IX kernel module into
 #      the RAM filesystem, and c4rlink reads that object BACK out of
 #      memory and writes a library from it. The toolchain C4IX is

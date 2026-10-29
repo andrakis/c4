@@ -1,8 +1,8 @@
 //
 // C4IX: boot.
 //
-// Twelve .c4o objects (boot, console, va, host, sl4b, task, sched,
-// vfs, sys, c4ke, loader, init) compiled by c4lc -O -c and linked by
+// Thirteen .c4o objects (boot, console, va, host, sl4b, task, sched,
+// vfs, sys, c4ke, loader, mmu, init) compiled by c4lc -O -c and linked by
 // c4rlink. Boots under c4m with preemptive scheduling and protected
 // user tasks. C4IX images use C4CY, PUTC, JSRI and JSRS, which plain
 // c4 lacks, so plain c4 runs C4IX through c4m itself

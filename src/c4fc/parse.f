@@ -457,10 +457,17 @@ VARIABLE PACK-NOW   0 PACK-NOW !
 ' (PARSE-TYPE) IS PARSE-TYPE
 : SKIP-TYPE PARSE-TYPE DROP ;
 
+\ A call's arguments, at most MAXARGS. There were room for eight and no
+\ check, so a ninth (C4IX's boot_caps has nine) went past the cells into
+\ whatever the arena held next: the first string literal among the
+\ arguments, its bytes then written into the image as that pointer's.
+32 CONSTANT MAXARGS
 : ARGS ( -- args n ) {: | v n -- :}
-   8 CELLS ALLOT: TO v   0 TO n
+   MAXARGS CELLS ALLOT: TO v   0 TO n
    TK Rparen <> IF
-      BEGIN 1 EXPR v n CELLS + !  n 1+ TO n  TK Comma = WHILE TNEXT REPEAT
+      BEGIN
+         n MAXARGS = IF ." c4fc: " TOK@ .WHERE ." : more than 32 arguments" CR ABORT THEN
+         1 EXPR v n CELLS + !  n 1+ TO n  TK Comma = WHILE TNEXT REPEAT
    THEN
    Rparen WANT
    v n ;

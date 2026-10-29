@@ -154,6 +154,18 @@ export const IMG_CODE = 0x1f0;   // r
 export const IMG_DATA = 0x1f4;   // r
 export const IMG_BSS  = 0x1f8;   // r
 export const IMG_END  = 0x1fc;   // r
+// The boot stack (libjs's boot.js): the megabyte under the arguments at the
+// top of memory, where the machine starts the program. A kernel that has
+// left it for good -- C4IX, once its kernel task has a stack of its own --
+// writes 1 to STACK_GUARD, and from then on libjs halts the machine at any
+// read or write there, naming the pc and the address (libjs/c4m.js,
+// guardHit): whatever reaches it is a program run off the end of the heap.
+// 0 lifts the guard, for the way back at shutdown. Where nothing keeps a
+// boot stack, all three read 0 and the write does nothing. Announced by
+// C4I_C4MJS, never probed.
+export const STACK_BASE  = 0x1e4;  // r: the boot stack's lowest address
+export const STACK_TOP   = 0x1e8;  // r: one past its highest: the arguments start here
+export const STACK_GUARD = 0x1ec;  // r/w: 1 while the boot stack is guarded
 
 // c4_info() capability bits (c4m.c:206)
 export const C4I_WHOWROTE = 0x1000;   // the provenance port is fitted
@@ -262,6 +274,10 @@ export class Devices {
     this.heapBase = 0;
     this.heapEnd = 0;
     this.img = null;                  // { code, data, bss, end }: the program as loaded (IMG_*)
+    this.stackBase = 0;               // the boot stack, where the host keeps one
+    this.stackTop = 0;
+    this.stackGuard = 0;              // 1: guarded (STACK_GUARD)
+    this.onGuard = null;              // fn(): the guard changed (libjs/par.js)
     this.uartActivity = 0;            // counters for the renderer
     this.diskActivity = 0;
     this.uartTxAddr = 0;              // UART block-write latch
@@ -591,6 +607,9 @@ export class Devices {
       case IMG_BSS:    return this.img ? this.img.bss | 0 : 0;
       case IMG_END:    return this.img ? this.img.end | 0 : 0;
       case HEAP_END:   return this.heapEnd | 0;
+      case STACK_BASE: return this.stackBase | 0;
+      case STACK_TOP:  return this.stackTop | 0;
+      case STACK_GUARD: return this.stackGuard | 0;
       case HEAP_USED:  return this.machine && this.machine.heap ? this.machine.heap.used | 0 : 0;
       case HEAP_GEN:     return this.genHeap() ? this.machine.heap.gen | 0 : 0;
       case HEAP_RELEASE: return this.genHeap() ? this.machine.heap.released | 0 : 0;
@@ -770,6 +789,10 @@ export class Devices {
         return;
       case HEAP_BASE: this.heapBase = val | 0; return;
       case HEAP_END:  this.heapEnd = val | 0;  return;
+      case STACK_GUARD:
+        this.stackGuard = (val && this.stackTop > this.stackBase) ? 1 : 0;
+        if (this.onGuard) this.onGuard();
+        return;
       case HEAP_GEN:     if (this.genHeap()) this.machine.heap.gen = val | 0; return;
       case HEAP_RELEASE: if (this.genHeap()) this.machine.heap.release(val | 0); return;
       case MBOX_BELL: if (this.onDoorbell) this.onDoorbell(val | 0); return;

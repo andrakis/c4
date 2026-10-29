@@ -41,6 +41,11 @@ enum { C4IX_DISK_DRIVE = 0x13c, C4IX_DISK_COUNT = 0x188, C4IX_DISK_RO = 0x18c,
 // The heap's extent and use (c4bb's HEAP_BASE and HEAP_END, libjs's
 // HEAP_USED, src/c4bb/sim/devices.js), for the CPU snapshot.
 enum { C4IX_HEAP_BASE = 0x144, C4IX_HEAP_END = 0x148, C4IX_HEAP_USED = 0x1c0, C4IX_I_C4MJS = 8 };
+// The boot stack (libjs's STACK_BASE, STACK_TOP and STACK_GUARD, same
+// file): the megabyte at the top of memory, under the arguments, where the
+// machine started the kernel. Once the kernel is off it for good, libjs
+// guards it (sched.c, "Off the boot stack"). Libjs's alone: C4IX_I_C4MJS.
+enum { C4IX_BOOT_BASE = 0x1e4, C4IX_BOOT_TOP = 0x1e8, C4IX_BOOT_GUARD = 0x1ec };
 // Processors (docs/c4ix-smp.md S3): c4mp's C4I_SMP, which libjs reports
 // with --cpus. Only libjs has the CPU-local window C4IX needs, 0x800 to
 // 0x8FF, where each CPU sees 64 words of its own: its struct cpu at the
@@ -364,6 +369,24 @@ char *sl4b_alloc(struct sl4b_cache *c);
 void  sl4b_free(struct sl4b_cache *c, char *obj);
 void  sl4b_stats();
 
+// ---- the kernel arena (sl4b.c) ----
+// What the kernel keeps for as long as it runs -- the slabs and their
+// caches, the kernel task's and the idle tasks' stacks, the shared
+// libraries' books -- is carved from one block taken at boot, before
+// anything a program could have: on libjs, the heap's lowest addresses,
+// directly after the kernel image. A program that writes past the end of
+// its block runs upwards, into other programs' memory and then the boot
+// stack's guard, and never into a task struct or an idle task's frames.
+// Nothing carved is given back (kmem_free leaves it be). Past the end,
+// kmem_alloc takes from the heap and counts it (kmem_spills).
+// KMEM_STACK_BYTES: the kernel task's stack, and each idle task's.
+// KMEM_SLAB_BYTES: room for slabs and books, a few times what the desktop uses.
+enum { KMEM_STACK_BYTES = 65536, KMEM_SLAB_BYTES = 524288 };
+extern int kmem_base, kmem_end, kmem_brk, kmem_spills;
+void  kmem_init(int ncpu);
+char *kmem_alloc(int bytes);
+void  kmem_free(char *p);
+
 // ---- tasks (task.c) ----
 // Tasks live on a malloc'd singly linked list -- no fixed table.
 // Structs come from an SL4B cache, stacks from malloc (256KB each on a
@@ -670,6 +693,10 @@ void ck_signal_deliver(struct task *t, int *pa, int *pbp, int *psp,
 // Every switch runs in a trap handler (soft trap for yield, cycle
 // interrupt for preemption) that rewrites its own parameters; TLEV
 // loads them into the VM registers.
+int          sched_ncpus();       // the processors C4IX will use
+// Run ENTRY(argc, argv) as the kernel task, on a stack of its own, and
+// return what it returns: the boot stack is left until then (sched.c)
+int          sched_offboot(int entry, int argc, int argv);
 void         sched_init(int interval);
 void         sched_run();
 int          sched_sleep_due(int *pms);   // earliest sleeper deadline, 0 if none

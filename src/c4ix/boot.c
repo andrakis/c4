@@ -134,8 +134,34 @@ void boot_done() {
         klog("vfs: %d files (%d KB) left on the host until first use\n", vfs_nlazy, (vfs_lazybytes + 1023) / 1024);
 }
 
-int main(int argc, char **argv) {
+// The kernel task: everything from the scheduler's start to shutdown, on
+// a stack of its own in the kernel arena (sched.c, "Off the boot stack").
+static int kernel_main(int argc, int argv) {
     struct task *t;
+
+    sched_init(PREEMPT_INTERVAL);
+
+    if (!(t = task_create("init", (int)&init_main, argc, argv))) {
+        kputs("c4ix: panic: cannot create init task\n");
+        return 1;
+    }
+    // Cycles from VM start to the moment userland first runs. This
+    // is the boot cost, and it is the one number that can be
+    // compared with C4KE on equal terms: same VM, same counter, same
+    // meaning (see docs/c4ix-design.md 7).
+    kprintf("c4ix: task %d '%s' created, scheduling after %d cycles\n",
+        t->id, t->name, __c4_cycles());
+
+    sched_run();
+    sched_stop();
+
+    task_shutdown();
+    sl4b_stats();
+    kprintf("c4ix: shutdown complete, %d tasks remain\n", task_count());
+    return 0;
+}
+
+int main(int argc, char **argv) {
     int info, k;
 
     boot_cycles0 = __c4_cycles();
@@ -158,29 +184,12 @@ int main(int argc, char **argv) {
         host_has(C4IX_I_PROT) ? "on for user tasks" : "unavailable");
     boot_report();
 
+    // The kernel arena before anything else is allocated, so that it is
+    // the heap's lowest block after the va area (sl4b.c)
+    kmem_init(sched_ncpus());
     // The MMU, when the host has one, before anything runs in user mode
     mmu_init();
-
     // The VFS first: adopting the kernel task opens its console fds.
     vfs_init();
-    sched_init(PREEMPT_INTERVAL);
-
-    if (!(t = task_create("init", (int)&init_main, argc, (int)argv))) {
-        kputs("c4ix: panic: cannot create init task\n");
-        return 1;
-    }
-    // Cycles from VM start to the moment userland first runs. This
-    // is the boot cost, and it is the one number that can be
-    // compared with C4KE on equal terms: same VM, same counter, same
-    // meaning (see docs/c4ix-design.md 7).
-    kprintf("c4ix: task %d '%s' created, scheduling after %d cycles\n",
-        t->id, t->name, __c4_cycles());
-
-    sched_run();
-    sched_stop();
-
-    task_shutdown();
-    sl4b_stats();
-    kprintf("c4ix: shutdown complete, %d tasks remain\n", task_count());
-    return 0;
+    return sched_offboot((int)&kernel_main, argc, (int)argv);
 }

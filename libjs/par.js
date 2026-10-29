@@ -38,6 +38,7 @@ export const C = {
   HALT: 0,                      // the machine has stopped: every CPU leaves
   DOOR: 1,                      // CPU 0's doorbell: bumped and notified with each request
   TIMEMS: 2,                    // the machine's time in ms, as CPU 0 last published it
+  GUARD: 3, GLO: 4, GHI: 5,     // the boot stack's guard (devices.js STACK_GUARD): on, and where
   CPU0: 16, STRIDE: 24,         // CPU k's words start at CPU0 + k * STRIDE
 };
 export const K = {              // offsets within a CPU's words
@@ -46,10 +47,12 @@ export const K = {              // offsets within a CPU's words
   WAITVAL: 16, PC: 17,          // where it parked, for a deadlock's report
   WOKE: 18,                     // CPU 0's: a CWAK for the word it waits on (parkSync)
   RPC: 19,                      // the asker's pc: PRTF's argument count is the ADJ after it
+  BP: 20,                       // ... and its bp, for a guard hit's report,
+  GN: 21, GFROM: 22, GW: 23,    // ... and the rest of it (c4m.js guardHit's n, from; GW: write | mode << 1)
 };
 export const S = { OFF: 0, RUN: 1, WAIT: 2, HALT: 3 };             // a CPU's state
 export const R = { IDLE: 0, ASK: 1, DONE: 2 };                     // a request slot's
-export const KIND = { OP: 1, RD32: 2, WR32: 3, WR8: 4 };           // what is asked
+export const KIND = { OP: 1, RD32: 2, WR32: 3, WR8: 4, GUARD: 5 }; // what is asked
 export const MAXCPU = 32;
 const word = (k, f) => C.CPU0 + k * C.STRIDE + f;
 
@@ -214,6 +217,13 @@ export class ParHost extends ParCore {
       this.workers.push(w);
     }
     this.dev.machine = m0;
+    // the guard is every CPU's: each looks at the control block
+    this.dev.onGuard = () => {
+      Atomics.store(ctl, C.GLO, this.dev.stackBase | 0);
+      Atomics.store(ctl, C.GHI, this.dev.stackTop | 0);
+      Atomics.store(ctl, C.GUARD, this.dev.stackGuard | 0);
+    };
+    this.dev.onGuard();
   }
 
   // the machine's time: CPU 0's cycles, and what passed while it waited
@@ -282,6 +292,14 @@ export class ParHost extends ParCore {
         rstop = s.sys(ctl[b + K.OP]);
         this.dev.machine = this.m0;
         ra = s.a;
+      } else if (kind === KIND.GUARD) {
+        // its guard hit, told and halted here, where the console is
+        const s = this.shadows[k];
+        s.sp = ctl[b + K.SP]; s.a = ctl[b + K.A]; s.pc = ctl[b + K.RPC]; s.bp = ctl[b + K.BP]; s.mode = ctl[b + K.GW] >> 1;
+        s.cycle = ctl[b + K.CYCLES];
+        s.symbols = this.m0.symbols;
+        s.guardHit(ctl[b + K.ADDR], ctl[b + K.GN], (ctl[b + K.GW] & 1) !== 0, ctl[b + K.VAL], ctl[b + K.OP], ctl[b + K.GFROM]);
+        rstop = STOP.HALT;
       } else if (kind === KIND.RD32) ra = this.m0.bus.read32(ctl[b + K.ADDR]);
       else if (kind === KIND.WR32) this.m0.bus.write32(ctl[b + K.ADDR], ctl[b + K.VAL]);
       else if (kind === KIND.WR8) this.m0.bus.write8(ctl[b + K.ADDR], ctl[b + K.VAL]);

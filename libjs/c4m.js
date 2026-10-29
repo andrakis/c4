@@ -168,7 +168,10 @@ export class Machine {
   ld32(x) {
     if (this.vm) return this.mmu.ld32(x);
     x = x | 0;
-    if ((x & 3) === 0 && x >= 0x1000) return this.i32[x >> 2] | 0;
+    if ((x & 3) === 0 && x >= 0x1000) {
+      if (this.inGuard(x, 4)) return this.guardHit(x, 4, false, 0);
+      return this.i32[x >> 2] | 0;
+    }
     if (this.smp && x >= LOCAL_BASE && x < LOCAL_END && (x & 3) === 0) return this.local[(x - LOCAL_BASE) >> 2] | 0;
     if (this.mmu && x >= MMU_BASE && x < MMU_END) return this.mmu.read32(x) | 0;
     return this.bus.read32(x) | 0;
@@ -176,7 +179,11 @@ export class Machine {
   st32(x, v) {
     if (this.vm) { this.mmu.st32(x, v); return; }
     x = x | 0;
-    if ((x & 3) === 0 && x >= 0x1000) { this.i32[x >> 2] = v; return; }
+    if ((x & 3) === 0 && x >= 0x1000) {
+      if (this.inGuard(x, 4)) { this.guardHit(x, 4, true, v); return; }
+      this.i32[x >> 2] = v;
+      return;
+    }
     if (this.smp && x >= LOCAL_BASE && x < LOCAL_END && (x & 3) === 0) { this.local[(x - LOCAL_BASE) >> 2] = v; return; }
     if (this.mmu && x >= MMU_BASE && x < MMU_END) { this.mmu.write32(x, v | 0); return; }
     if (isRom(x, 4)) { this.romStore(x, v); return; }
@@ -185,17 +192,76 @@ export class Machine {
   ld8(x) {
     if (this.vm) return this.mmu.ld8(x);
     x = x | 0;
-    if (x >= 0x1000) return (this.u8[x] << 24) >> 24;
+    if (x >= 0x1000) {
+      if (this.inGuard(x, 1)) return this.guardHit(x, 1, false, 0);
+      return (this.u8[x] << 24) >> 24;
+    }
     if (this.smp && x >= LOCAL_BASE && x < LOCAL_END) return (this.localU8[x - LOCAL_BASE] << 24) >> 24;
     return this.bus.read8s(x);
   }
   st8(x, v) {
     if (this.vm) { this.mmu.st8(x, v); return; }
     x = x | 0;
-    if (x >= 0x1000) { this.u8[x] = v; return; }
+    if (x >= 0x1000) {
+      if (this.inGuard(x, 1)) { this.guardHit(x, 1, true, v); return; }
+      this.u8[x] = v;
+      return;
+    }
     if (this.smp && x >= LOCAL_BASE && x < LOCAL_END) { this.localU8[x - LOCAL_BASE] = v; return; }
     if (isRom(x, 1)) { this.romStore(x, v & 0xff); return; }
     this.bus.write8(x, v & 0xff);
+  }
+
+  // The boot stack's guard (STACK_GUARD, devices.js): does the range of n
+  // bytes at x touch it? Where the loop inlines memory, it compares with
+  // guardLo() instead, so that an unguarded word costs one compare more.
+  inGuard(x, n) {
+    const d = this.dev;
+    return d.stackGuard ? x < d.stackTop && x + n > d.stackBase : false;
+  }
+  guardLo() {
+    const d = this.dev;
+    return d.stackGuard ? d.stackBase | 0 : 0x7fffffff;
+  }
+
+  // A read or write in the guarded boot stack. Nothing stands there once
+  // the kernel has left it (C4IX's sched_offboot), so whatever reaches it
+  // ran off the end of the heap -- a program writing past its block -- and
+  // the machine halts here, naming the pc and the address, rather than
+  // later, in whatever the write broke. The guard comes off first, so that
+  // the trace below can read what it likes. Returns 0, what the read gets.
+  // What touched it: n bytes at x, a load or a store of v; or OP, an opcode
+  // that takes a range (guardRange), n bytes from FROM, x the first guarded;
+  // or a TLEV whose frame says to go back to a stack at x.
+  guardHit(x, n, write, v, op = 0, from = 0) {
+    const d = this.dev;
+    const hex = k => '0x' + ((k >>> 0).toString(16).toUpperCase().padStart(8, '0'));
+    const lo = d.stackBase, hi = d.stackTop;
+    d.stackGuard = 0;
+    if (d.onGuard) d.onGuard();
+    const name = op ? OPNAMES.slice(op * 5, op * 5 + 4).trim() : '';
+    const what = op === OP.TLEV ? `TLEV to a stack at ${hex(x)}`
+      : op ? `${name} of ${n} bytes at ${hex(from)} ${write ? 'writes' : 'reads'} ${hex(x)}`
+      : write ? `write of ${hex(v)} to ${hex(x)}` : `read of ${n === 1 ? 'a byte' : 'a word'} at ${hex(x)}`;
+    this.emitString(`libjs: ${what}, at pc ${hex(this.pc - 4)}${(this.smp && this.smp.n > 1) || this.cpuId ? ` on cpu ${this.cpuId | 0}` : ''}: ` +
+      `that is the boot stack, guarded (${hex(lo)}-${hex(hi - 1)}).\n`);
+    this.emitString(`libjs:   Something ran off the end of the heap -- a program writing past its block? Halting.\n`);
+    this.emitString(`libjs:   bp ${hex(this.bp)}, sp ${hex(this.sp)}, a ${hex(this.a)}, mode ${this.mode},` +
+      ` after ${this.cycle} cycles.\n`);
+    // The image's symbols name the kernel's code; a program's is in the heap,
+    // where the nearest of them would name the wrong function
+    if (!d.heapBase || ((this.pc - 4) >>> 0) < (d.heapBase >>> 0)) this.stacktrace();
+    else this.emitString(`libjs:   pc is in the heap, a program's code: no symbols name it.\n`);
+    d.halted = true;                     // the machine, whichever CPU this is
+    d.status = -103;
+    return 0;
+  }
+
+  // An opcode's range of n bytes at x that reaches into the guard: named
+  // with the first guarded byte, before any of it is touched. For sys().
+  guardRange(op, x, n, write) {
+    this.guardHit(Math.max(x, this.dev.stackBase), n, write, 0, op, x);
+    return STOP.HALT;
   }
 
   // A store into the ROM words: dropped, and the first one named on the
@@ -429,6 +495,7 @@ export class Machine {
         if (this.mode) return this.pmTrap(op);
         dev.diskFd = this.ld32(sp + 8);
         dev.diskAddr = this.ld32(sp + 4);
+        if (this.ld32(sp) > 0 && this.inGuard(dev.diskAddr, this.ld32(sp))) return this.guardRange(OP.READ, dev.diskAddr, this.ld32(sp), true);
         const r = isRom(dev.diskAddr, this.ld32(sp)) ? this.romRead(this.ld32(sp))
                                                      : dev.diskRead(this.ld32(sp)) | 0;
         if (r === -2) return this.blockedRead();
@@ -473,6 +540,7 @@ export class Machine {
         if (this.vm) return this.mmu.block(op);
         const d = this.ld32(sp + 8), v = this.ld32(sp + 4), n = this.ld32(sp);
         if (n > 0) {
+          if (this.inGuard(d, n)) return this.guardRange(OP.MSET, d, n, true);
           if (d >= 0x1000) this.u8.fill(v & 0xff, d, d + n);
           else for (let k = 0; k < n; k++) this.st8(d + k, v);
         }
@@ -484,6 +552,8 @@ export class Machine {
         // glibc: the difference of the first unequal bytes, unsigned
         const p = this.ld32(sp + 8), q = this.ld32(sp + 4), n = this.ld32(sp);
         const u8 = this.u8;
+        if (n > 0 && this.inGuard(p, n)) return this.guardRange(OP.MCMP, p, n, false);
+        if (n > 0 && this.inGuard(q, n)) return this.guardRange(OP.MCMP, q, n, false);
         let r = 0;
         for (let k = 0; k < n; k++) {
           const x = (u8[p + k] | 0) - (u8[q + k] | 0);
@@ -497,6 +567,8 @@ export class Machine {
         const d = this.ld32(sp + 8), s = this.ld32(sp + 4), n = this.ld32(sp);
         if (n > 0) {
           const u8 = this.u8;
+          if (this.inGuard(s, n)) return this.guardRange(OP.MCPY, s, n, false);
+          if (this.inGuard(d, n)) return this.guardRange(OP.MCPY, d, n, true);
           // Forward, byte by byte, when the ranges overlap that way --
           // what c4bb's microcode and a naive memcpy do. Otherwise a
           // block copy.
@@ -609,6 +681,11 @@ export class Machine {
         const bp = this.bp;
         const pc = this.ld32(bp + 8);
         if (pc === this.pc - 4) return this.tlevWedge(pc);
+        // a switch onto the boot stack, which nothing stands on once it is guarded
+        if (this.inGuard(this.ld32(bp + 12), 4)) {
+          this.guardHit(this.ld32(bp + 12), 4, false, 0, OP.TLEV);
+          return STOP.HALT;
+        }
         this.sp = this.ld32(bp + 12);
         this.bp = this.ld32(bp + 16);
         this.a = this.ld32(bp + 20);
@@ -906,6 +983,9 @@ export class Machine {
     let lim = -1;
     let stop = STOP.BUDGET;
     let op = 0, x = 0;
+    // Where the inlined loads and stores stop: the boot stack's guard, once
+    // it is up (guardLo), and above it they take the slow path, which looks.
+    let glo = this.guardLo();
 
     loop: for (;;) {
       if (++cycle > lim) {
@@ -937,15 +1017,30 @@ export class Machine {
           case 6:  /* ENT */ sp -= 4; i32[sp >> 2] = bp; bp = sp; sp = (sp - (i32[pc >> 2] << 2)) | 0; pc += 4; break;
           case 7:  /* ADJ */ sp = (sp + (i32[pc >> 2] << 2)) | 0; pc += 4; break;
           case 8:  /* LEV */ sp = bp; bp = i32[sp >> 2]; pc = i32[(sp >> 2) + 1]; sp += 8; break;
-          case 9:  /* LI  */ a = ((a & 3) === 0 && a >= 0x1000) ? i32[a >> 2] | 0 : (this.cycle = cycle, this.ld32(a)); break;
-          case 10: /* LC  */ a = a >= 0x1000 ? (u8[a] << 24) >> 24 : (this.cycle = cycle, this.ld8(a)); break;
+          case 9:  /* LI  */
+            if ((a & 3) === 0 && a >= 0x1000 && a < glo) a = i32[a >> 2] | 0;
+            else {
+              this.pc = pc; this.sp = sp; this.bp = bp; this.a = a; this.cycle = cycle;
+              a = this.ld32(a);
+              if (dev.halted) { stop = STOP.HALT; break loop; }
+            }
+            break;
+          case 10: /* LC  */
+            if (a >= 0x1000 && a < glo) a = (u8[a] << 24) >> 24;
+            else {
+              this.pc = pc; this.sp = sp; this.bp = bp; this.a = a; this.cycle = cycle;
+              a = this.ld8(a);
+              if (dev.halted) { stop = STOP.HALT; break loop; }
+            }
+            break;
           case 11: /* SI  */
             x = i32[sp >> 2]; sp += 4;
-            if ((x & 3) === 0 && x >= 0x1000) i32[x >> 2] = a;
+            if ((x & 3) === 0 && x >= 0x1000 && x < glo) i32[x >> 2] = a;
             else {
               this.pc = pc; this.sp = sp; this.bp = bp; this.a = a; this.cycle = cycle;
               this.st32(x, a);
               if (dev.halted) { stop = STOP.HALT; break loop; }
+              glo = this.guardLo();
               interval = this.cycleInterval | 0;
               nextIrq = interval > 0 ? (Math.floor(cycle / interval) + 1) * interval : 0;
               chk = this.needChecks(); nextChk = 0; lim = -1;
@@ -953,11 +1048,12 @@ export class Machine {
             break;
           case 12: /* SC  */
             x = i32[sp >> 2]; sp += 4;
-            if (x >= 0x1000) u8[x] = a;
+            if (x >= 0x1000 && x < glo) u8[x] = a;
             else {
               this.pc = pc; this.sp = sp; this.bp = bp; this.a = a; this.cycle = cycle;
               this.st8(x, a);
               if (dev.halted) { stop = STOP.HALT; break loop; }
+              glo = this.guardLo();
               interval = this.cycleInterval | 0;
               nextIrq = interval > 0 ? (Math.floor(cycle / interval) + 1) * interval : 0;
               chk = this.needChecks(); nextChk = 0; lim = -1;
@@ -991,8 +1087,25 @@ export class Machine {
           case 82: /* PSHG */ x = i32[pc >> 2]; pc += 4; a = ((x & 3) === 0 && x >= 0x1000) ? i32[x >> 2] | 0 : (this.cycle = cycle, this.ld32(x)); sp -= 4; i32[sp >> 2] = a; break;
           case 83: /* LEAP */ a = (bp + (i32[pc >> 2] << 2)) | 0; pc += 4; sp -= 4; i32[sp >> 2] = a; break;
           case 84: /* IMMP */ a = i32[pc >> 2]; pc += 4; sp -= 4; i32[sp >> 2] = a; break;
-          case 85: /* LIP  */ a = ((a & 3) === 0 && a >= 0x1000) ? i32[a >> 2] | 0 : (this.cycle = cycle, this.ld32(a)); sp -= 4; i32[sp >> 2] = a; break;
-          case 86: /* ADDL */ x = (i32[sp >> 2] + a) | 0; sp += 4; a = ((x & 3) === 0 && x >= 0x1000) ? i32[x >> 2] | 0 : (this.cycle = cycle, this.ld32(x)); break;
+          // (LDG and PSHG's address is an image's global, never the boot stack)
+          case 85: /* LIP  */
+            if ((a & 3) === 0 && a >= 0x1000 && a < glo) a = i32[a >> 2] | 0;
+            else {
+              this.pc = pc; this.sp = sp; this.bp = bp; this.a = a; this.cycle = cycle;
+              a = this.ld32(a);
+              if (dev.halted) { stop = STOP.HALT; break loop; }
+            }
+            sp -= 4; i32[sp >> 2] = a;
+            break;
+          case 86: /* ADDL */
+            x = (i32[sp >> 2] + a) | 0; sp += 4;
+            if ((x & 3) === 0 && x >= 0x1000 && x < glo) a = i32[x >> 2] | 0;
+            else {
+              this.pc = pc; this.sp = sp; this.bp = bp; this.a = a; this.cycle = cycle;
+              a = this.ld32(x);
+              if (dev.halted) { stop = STOP.HALT; break loop; }
+            }
+            break;
           case 87: /* STL  */ i32[(bp >> 2) + i32[pc >> 2]] = a; pc += 4; break;
           case 88: /* POPA */ a = i32[sp >> 2]; sp += 4; break;
 

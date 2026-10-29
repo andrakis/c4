@@ -315,12 +315,13 @@ int umalloc_stack(int n) {
 void ufree(int p) {
     struct urgn *r;
     if (!p) return;
-    if (!mmu_on) { free((char *)p); return; }
+    if (!mmu_on) { kmem_free((char *)p); return; }
     if ((r = mmu_rgn(p)) && r->kind == UR_BLOCK && mmu_start(r) == p) {
         if (!r->shared) mmu_release(r);
         return;
     }
-    free((char *)p);
+    // not the MMU's: the heap's, or the kernel arena's (an idle task's stack)
+    kmem_free((char *)p);
 }
 
 // A cached library's code: in every space that loads the library

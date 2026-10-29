@@ -834,6 +834,15 @@ until(() => !has('Look'));
   }
   check(refused && has(/could not start a shell/), `Terminals open until the descriptors run out (${more} more), then one says it could not start a shell`, screen().slice(-400));
   check(more > 4, `${more} more Terminals open at once, besides those already open (three in all at 16 fds)`);
+  // the IDE's :make starts b4ke the same way (edit.c, e_make), and is refused as cleanly
+  start('Editor');
+  until(() => has('Untitled - Editor'));
+  txt(':e! /tmp/t.c\n');
+  until(() => has('t.c - Editor'));
+  txt(':make\n');
+  check(until(() => has(/No (descriptors|pipe) for the build/), 400), ':make then says there are no descriptors for the build', screen().slice(-300));
+  txt(':q!\n');
+  until(() => !has('t.c - Editor'));
   // the one refused kept nothing open: one shell gone makes room for
   // another (the topmost window title still showing is a Terminal with a shell)
   clickText(/^Terminal - task \d+/, all => all.filter(t => t.y < SH - TASK_H).pop());

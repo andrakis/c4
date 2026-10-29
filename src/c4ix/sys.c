@@ -256,7 +256,10 @@ static int sys_execve(char *path, char **argv, char **envp) {
 
     t = sched_current();
     if (!t || !sched_in_trap() || t->privs != PRIV_USER) return -1;
-    if (!c4r_load(path, &img)) return -1;
+    loader_uva = mmu_on;
+    ok = c4r_load(path, &img);
+    loader_uva = 0;
+    if (!ok) return -1;
     if ((argc = task_strvec(argv, -1, &av, &ad)) < 0) { c4r_unload(&img); return -1; }
     if (task_strvec(envp, -1, &ev, &ed) < 0) {
         if (av) { ufree(av); ufree(ad); }
@@ -556,7 +559,7 @@ int sys_dispatch(int num, int *args) {
     // The environment execve gave the caller, NAME=VALUE strings ending
     // in a null pointer, or 0 for none: the kernel's copy, which libc
     // reads its own from
-    case SYS_ENVIRON:  return t ? t->env_vec : 0;
+    case SYS_ENVIRON:  return t ? mmu_uva(t->env_vec) : 0;
     case SYS_EXECVE:   return sys_execve((char *)args[0], (char **)args[1], (char **)args[2]);
     case SYS_WAITPID:  return sys_waitpid(args[0], (int *)args[1], args[2]);
     // sched_trap services it: it needs the trap's registers. Outside a

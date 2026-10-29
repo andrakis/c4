@@ -125,6 +125,11 @@ export class Machine {
     // loop runs, and makes ld32 and the rest translate
     this.mmu = null;
     this.vm = false;
+    // The user window (kpa, below): where user addresses start, 0 for
+    // none, and the space kernel-mode accesses into it look in first.
+    // Set through the MMU's registers (UWIN, UDIR).
+    this.uwin = 0;
+    this.udir = 0;
     dev.machine = this;
     arena.io = dev;
     this.i32 = arena.i32;
@@ -167,6 +172,7 @@ export class Machine {
   // unaligned words, and addresses off either end of the arena.
   ld32(x) {
     if (this.vm) return this.mmu.ld32(x);
+    if (this.uwin && (x >>> 0) >= this.uwin) return this.kld32(x);
     x = x | 0;
     if ((x & 3) === 0 && x >= 0x1000) {
       if (this.inGuard(x, 4)) return this.guardHit(x, 4, false, 0);
@@ -178,6 +184,7 @@ export class Machine {
   }
   st32(x, v) {
     if (this.vm) { this.mmu.st32(x, v); return; }
+    if (this.uwin && (x >>> 0) >= this.uwin) { this.kst32(x, v); return; }
     x = x | 0;
     if ((x & 3) === 0 && x >= 0x1000) {
       if (this.inGuard(x, 4)) { this.guardHit(x, 4, true, v); return; }
@@ -191,6 +198,7 @@ export class Machine {
   }
   ld8(x) {
     if (this.vm) return this.mmu.ld8(x);
+    if (this.uwin && (x >>> 0) >= this.uwin) return this.kld8(x);
     x = x | 0;
     if (x >= 0x1000) {
       if (this.inGuard(x, 1)) return this.guardHit(x, 1, false, 0);
@@ -201,6 +209,7 @@ export class Machine {
   }
   st8(x, v) {
     if (this.vm) { this.mmu.st8(x, v); return; }
+    if (this.uwin && (x >>> 0) >= this.uwin) { this.kst8(x, v); return; }
     x = x | 0;
     if (x >= 0x1000) {
       if (this.inGuard(x, 1)) { this.guardHit(x, 1, true, v); return; }
@@ -221,7 +230,108 @@ export class Machine {
   }
   guardLo() {
     const d = this.dev;
-    return d.stackGuard ? d.stackBase | 0 : 0x7fffffff;
+    const g = d.stackGuard ? d.stackBase | 0 : 0x7fffffff;
+    // the user window too: an address in it is a user task's, which
+    // kernel mode reaches through kpa
+    return this.uwin && this.uwin < g ? this.uwin : g;
+  }
+
+  // ---------------------------------------------------------------
+  // The user window (docs/c4ix-mmu.md 11). Under C4IX's MMU a user task's
+  // memory is at its pages' physical addresses plus uwin, mapped so in
+  // its page tables; kernel mode runs untranslated, and reaches a user
+  // address through the window: the page udir maps there, if it does,
+  // else the page uwin below it -- where the page was put, and stays
+  // unless swap moved it. So the kernel follows a pointer a task gave it
+  // as it follows its own. kpa: the physical address, or -1 past the end.
+  kpa(x) {
+    x = x >>> 0;
+    const off = x - this.uwin;
+    if (this.udir) {
+      const i32 = this.i32, size = this.u8.length;
+      const pde = i32[(this.udir >>> 2) + (x >>> 22)] | 0;
+      if (pde & 1) {
+        const pt = pde & -4096;
+        if ((pt >>> 0) + 4096 <= size) {
+          const pte = i32[(pt >>> 2) + ((x >>> 12) & 1023)] | 0;
+          if ((pte & 1) && ((pte & -4096) >>> 0) + 4096 <= size) return (pte & -4096) | (x & 4095);
+        }
+      }
+    }
+    return off < this.u8.length ? off : -1;
+  }
+  // Any address, as kernel mode reaches it: its own, or through the window
+  kaddr(x) { return this.uwin && (x >>> 0) >= this.uwin ? this.kpa(x) : x >>> 0; }
+  kld8(x) {
+    const p = this.kpa(x);
+    return p < 0 ? 0 : (this.u8[p] << 24) >> 24;
+  }
+  kst8(x, v) {
+    const p = this.kpa(x);
+    if (p >= 0) this.u8[p] = v;
+  }
+  kld32(x) {
+    const p = this.kpa(x);
+    if (p < 0) return 0;
+    if ((p & 3) === 0) return this.i32[p >> 2] | 0;
+    return (this.kld8(x) & 255) | ((this.kld8(x + 1) & 255) << 8) | ((this.kld8(x + 2) & 255) << 16) | (this.kld8(x + 3) << 24);
+  }
+  kst32(x, v) {
+    const p = this.kpa(x);
+    if (p < 0) return;
+    if ((p & 3) === 0) { this.i32[p >> 2] = v; return; }
+    for (let k = 0; k < 4; k++) this.kst8(x + k, v >> (8 * k));
+  }
+  // Does the block opcode at the top of the stack touch the window?
+  kwin(op) {
+    const sp = this.sp, w = this.uwin, n = this.ld32(sp);
+    if (n <= 0) return false;
+    const d = this.ld32(sp + 8) >>> 0;
+    if (d >= w || ((d + n) >>> 0) > w) return true;
+    if (op === OP.MSET) return false;
+    const s = this.ld32(sp + 4) >>> 0;
+    return s >= w || ((s + n) >>> 0) > w;
+  }
+  // MSET, MCMP and MCPY in kernel mode with a user address among them: a
+  // run at a time that stays inside a page of each (a window page's
+  // neighbour need not be its neighbour in memory)
+  kblock(op) {
+    const sp = this.sp, u8 = this.u8;
+    const run = (x, y, left) => Math.min(left, 4096 - (x & 4095), 4096 - (y & 4095));
+    if (op === OP.MSET) {
+      const d = this.ld32(sp + 8), v = this.ld32(sp + 4) & 0xff, n = this.ld32(sp);
+      for (let k = 0; k < n;) {
+        const x = (d + k) >>> 0, r = run(x, x, n - k), p = this.kaddr(x);
+        if (p >= 0x1000 && p + r <= u8.length) u8.fill(v, p, p + r);
+        k += r;
+      }
+      this.a = d;
+      return STOP.BUDGET;
+    }
+    if (op === OP.MCMP) {
+      const p = this.ld32(sp + 8), q = this.ld32(sp + 4), n = this.ld32(sp);
+      let r = 0;
+      for (let k = 0; k < n; k++) {
+        const x = (this.ld8(p + k) & 255) - (this.ld8(q + k) & 255);
+        if (x) { r = x; break; }
+      }
+      this.a = r;
+      return STOP.BUDGET;
+    }
+    const d = this.ld32(sp + 8), s = this.ld32(sp + 4), n = this.ld32(sp);
+    if (d > s && d < s + n) {
+      for (let k = 0; k < n; k++) this.st8(d + k, this.ld8(s + k));
+    } else {
+      for (let k = 0; k < n;) {
+        const x = (d + k) >>> 0, y = (s + k) >>> 0, r = run(x, y, n - k);
+        const pd = this.kaddr(x), ps = this.kaddr(y);
+        if (pd >= 0x1000 && ps >= 0 && pd + r <= u8.length && ps + r <= u8.length) u8.copyWithin(pd, ps, ps + r);
+        else for (let j = 0; j < r; j++) this.st8(x + j, this.ld8(y + j));
+        k += r;
+      }
+    }
+    this.a = d;
+    return STOP.BUDGET;
   }
 
   // A read or write in the guarded boot stack. Nothing stands there once
@@ -303,6 +413,11 @@ export class Machine {
   }
   cstring(addr, max = 1 << 20) {
     if (this.vm) return this.mmu.cstring(addr, max);
+    if (this.uwin && (addr >>> 0) >= this.uwin) {
+      const out = [];
+      for (let k = 0; k < max; k++) { const b = this.kld8(addr + k) & 255; if (!b) break; out.push(b); }
+      return Uint8Array.from(out);
+    }
     const u8 = this.u8;
     addr = addr >>> 0;
     let end = addr;
@@ -538,6 +653,7 @@ export class Machine {
         return STOP.BUDGET;
       case OP.MSET: {
         if (this.vm) return this.mmu.block(op);
+        if (this.uwin && this.kwin(op)) return this.kblock(op);
         const d = this.ld32(sp + 8), v = this.ld32(sp + 4), n = this.ld32(sp);
         if (n > 0) {
           if (this.inGuard(d, n)) return this.guardRange(OP.MSET, d, n, true);
@@ -549,6 +665,7 @@ export class Machine {
       }
       case OP.MCMP: {
         if (this.vm) return this.mmu.block(op);
+        if (this.uwin && this.kwin(op)) return this.kblock(op);
         // glibc: the difference of the first unequal bytes, unsigned
         const p = this.ld32(sp + 8), q = this.ld32(sp + 4), n = this.ld32(sp);
         const u8 = this.u8;
@@ -564,6 +681,7 @@ export class Machine {
       }
       case OP.MCPY: {
         if (this.vm) return this.mmu.block(op);
+        if (this.uwin && this.kwin(op)) return this.kblock(op);
         const d = this.ld32(sp + 8), s = this.ld32(sp + 4), n = this.ld32(sp);
         if (n > 0) {
           const u8 = this.u8;

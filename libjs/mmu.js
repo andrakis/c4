@@ -25,6 +25,7 @@ export { C4I_MMU, MMU_BASE, MMU_END };
 export const MMU = {
   CTL: 0x500, PTBR: 0x504, KSP: 0x508, FADDR: 0x50c, FINFO: 0x510, FPC: 0x514,
   INVLPG: 0x518, FLUSH: 0x51c, IOPM: 0x520, MISSES: 0x524, FAULTS: 0x528, MEMSIZE: 0x52c,
+  UWIN: 0x530, UDIR: 0x534,
 };
 export const PTE = { P: 1, W: 2, U: 4, X: 8, A: 0x20, D: 0x40 };
 // What a fault was (FINFO): the access, and whether the page was there.
@@ -34,8 +35,9 @@ export const FK = { READ: 1, WRITE: 2, FETCH: 4, PRESENT: 8, DMA: 32 };
 // use all of them, as without an MMU; a kernel takes away what it keeps.
 export const IOPM = { ROM: 1, DEV: 2, GUI: 4, SND: 8, LOCAL: 16, LOCALW: 32, ALL: 63 };
 
-// Virtual pages the arrays cache: 256 MB. Above it every access walks.
-const LIMIT = 65536;
+// Virtual pages the arrays cache: 512 MB, the user window (UWIN, at 256
+// MB) and memory below it. Above it every access walks.
+const LIMIT = 131072;
 // Pages the stack window grows by, each way, when it is made, and the code
 // window: a program's whole text, so that its calls stay inside it
 const STACK_GROW = 16, CODE_GROW = 256;
@@ -58,19 +60,29 @@ function pteOf(i32, size, ptbr, va) {
   return i32[(pt >>> 2) + ((va >>> 12) & 1023)] | 0;
 }
 
-// The first address of [addr, addr + len) that the space at ptbr does not
-// let user mode read (and write, if write), or -1 when it all does
-export function dmaRefused(i32, size, ptbr, addr, len, write) {
+// Where [addr, addr + len) is in memory, for a device, in the space at
+// ptbr: every page of it user mode's to read (and write, if write), one
+// run of memory, and the physical address of addr returned. Else -1, and
+// dmaBad says where it went wrong and dmaBadPte what the entry there was.
+let dmaBad = 0, dmaBadPte = 0;
+export function dmaPhys(i32, size, ptbr, addr, len, write) {
   addr = addr >>> 0;
-  if (len <= 0) return -1;
+  if (len < 1) len = 1;
   const end = addr + len;
-  if (addr < 0x1000 || end > size) return addr;
+  if (addr < 0x1000 || end > 0x100000000) { dmaBad = addr; dmaBadPte = 0; return -1; }
   const need = PTE.P | PTE.U | (write ? PTE.W : 0);
+  let pa = -1, next = 0;
   for (let va = addr & -4096; va < end; va += 4096) {
-    if ((pteOf(i32, size, ptbr, va) & need) !== need) return va < addr ? addr : va;
+    const pte = pteOf(i32, size, ptbr, va), f = pte & -4096;
+    if ((pte & need) !== need || (f >>> 0) + 4096 > size || (pa >= 0 && f !== next)) {
+      dmaBad = va < addr ? addr : va; dmaBadPte = pte; return -1;
+    }
+    if (pa < 0) pa = f | (addr & 4095);
+    next = f + 4096;
   }
-  return -1;
+  return pa;
 }
+const dmaKind = write => (write ? FK.WRITE : FK.READ) | FK.DMA | (dmaBadPte & PTE.P ? FK.PRESENT : 0);
 
 // What a device sees of a user task's space when another CPU's task is
 // the one at it (par.js serves those on CPU 0): the asker's PTBR. A
@@ -79,10 +91,9 @@ export class DmaSpace {
   constructor(arena) { this.arena = arena; this.ptbr = 0; this.faddr = -1; this.finfo = 0; }
   dmaCheck(addr, len, write) {
     const a = this.arena;
-    const bad = dmaRefused(a.i32, a.size, this.ptbr, addr, len, write);
-    if (bad < 0) return;
-    const pte = pteOf(a.i32, a.size, this.ptbr, bad);
-    this.faddr = bad; this.finfo = (write ? FK.WRITE : FK.READ) | FK.DMA | (pte & PTE.P ? FK.PRESENT : 0);
+    const pa = dmaPhys(a.i32, a.size, this.ptbr, addr, len, write);
+    if (pa >= 0) return pa;
+    this.faddr = dmaBad; this.finfo = dmaKind(write);
     throw FAULT;
   }
 }
@@ -105,6 +116,7 @@ export class Mmu {
   // Off, as at power-on and when a CPU is started (smp.js start)
   reset() {
     this.on = false;
+    this.m.uwin = 0; this.m.udir = 0;
     this.general = false;          // a window has been other than identity: runUser from now on
     this.ptbr = 0;
     this.ksp = 0;
@@ -147,6 +159,8 @@ export class Mmu {
       case MMU.MISSES: { const n = this.misses; this.misses = 0; return n; }
       case MMU.FAULTS: return this.faults;
       case MMU.MEMSIZE: return this.m.arena.size;
+      case MMU.UWIN: return this.m.uwin;
+      case MMU.UDIR: return this.m.udir;
     }
     return 0;
   }
@@ -158,6 +172,10 @@ export class Mmu {
       case MMU.INVLPG: this.invlpg(v); return;
       case MMU.FLUSH: this.flush(); return;
       case MMU.IOPM: this.iopm = v; return;
+      // the user window: where user addresses start (c4m.js kpa). The
+      // arena's devices reach it as the kernel does.
+      case MMU.UWIN: this.m.uwin = v & -4096; this.m.arena.uwin = this.m.uwin; return;
+      case MMU.UDIR: this.m.udir = v & -4096; return;
     }
   }
 
@@ -277,10 +295,9 @@ export class Mmu {
   // device is a way round the task's page tables (docs/c4ix-mmu.md 11).
   dmaCheck(addr, len, write) {
     const a = this.m.arena;
-    const bad = dmaRefused(a.i32, a.size, this.ptbr, addr, len, write);
-    if (bad < 0) return;
-    const pte = pteOf(a.i32, a.size, this.ptbr, bad);
-    this.refuse(bad, (write ? FK.WRITE : FK.READ) | FK.DMA | (pte & PTE.P ? FK.PRESENT : 0));
+    const pa = dmaPhys(a.i32, a.size, this.ptbr, addr, len, write);
+    if (pa >= 0) return pa;
+    this.refuse(dmaBad, dmaKind(write));
     throw FAULT;
   }
 

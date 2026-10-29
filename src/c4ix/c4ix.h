@@ -800,8 +800,13 @@ enum { C4IX_I_MMU = 0x80000 };
 enum {
     MMU_CTL = 0x500, MMU_PTBR = 0x504, MMU_KSP = 0x508, MMU_FADDR = 0x50c,
     MMU_FINFO = 0x510, MMU_FPC = 0x514, MMU_INVLPG = 0x518, MMU_FLUSH = 0x51c,
-    MMU_IOPM = 0x520, MMU_MISSES = 0x524, MMU_FAULTS = 0x528, MMU_MEMSIZE = 0x52c
+    MMU_IOPM = 0x520, MMU_MISSES = 0x524, MMU_FAULTS = 0x528, MMU_MEMSIZE = 0x52c,
+    MMU_UWIN = 0x530, MMU_UDIR = 0x534
 };
+// Where user addresses start: a user page is mapped at its physical
+// address plus this, and kernel mode reaches it at either (libjs's user
+// window). Memory larger than it keeps the identity map.
+enum { MMU_UWIN_BASE = 0x10000000 };
 // A page; a CPU's stack for the traps that come from user mode
 enum { MMU_PAGE = 4096, MMU_KSTACK = 262144 };
 // A page table entry: the frame's address and these
@@ -812,6 +817,9 @@ enum { MMU_FK_READ = 1, MMU_FK_WRITE = 2, MMU_FK_FETCH = 4, MMU_FK_PRESENT = 8, 
 // The signal a page fault kills with, as waitpid reports it
 enum { C4IX_SIGSEGV = 11 };
 extern int mmu_on;
+extern int mmu_uoff;                   // the user window's base, or 0: user addresses are physical
+int  mmu_uva(int p);                   // a user region's memory as user mode sees it (else P)
+int  mmu_phys(int p);                  // ... and as it is in memory
 void mmu_init();                       // at boot: tables, and on
 void mmu_cpu(int k);                   // another CPU, as it starts
 int  mmu_map(int *dir, int va, int n, int flags);
@@ -831,6 +839,9 @@ int  mmu_ioperm(struct task *t, int bits);   // SYS_IOPERM
 // blocks a task asks for (SYS_SBRK, malloc behind protected mode), small
 // ones from slabs of its own pages; umem_free_all, its heap (ALL:
 // everything it owns).
+// loader.c: the image being loaded is a user task's, relocated to the
+// addresses user mode sees (mmu_uva)
+extern int loader_uva;
 int  umalloc(int n);
 void ufree(int p);
 void umem_share(int p);                // a cached library's code: in every space, never freed

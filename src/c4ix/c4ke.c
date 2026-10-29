@@ -264,7 +264,7 @@ static void ck_export_fill(int *kti) {
         // same accuracy C4KE reports. The kernel task runs on the VM's
         // own stack and has no allocation to measure.
         kte[CK_KTE_STACK] = t->stack
-            ? (t->stack + t->stack_words * sizeof(int)) - t->sv_sp : 0;
+            ? (t->stack + t->stack_words * sizeof(int)) - mmu_phys(t->sv_sp) : 0;
         kte[CK_KTE_ALLOC] = 0;   // C4IX does not track per-task allocation
 
         kte = kte + CK_KTE__Sz;
@@ -356,7 +356,7 @@ int ck_argv_copy(struct task *t, int argc, char **argv) {
     p = blob;
     i = 0;
     while (i < argc) {
-        vec[i] = p;
+        vec[i] = (char *)mmu_uva((int)p);     // user mode reads them
         if (argv[i]) { n = 0; while (argv[i][n]) { *p = argv[i][n]; ++p; ++n; } }
         *p = 0; ++p;
         ++i;

@@ -98,6 +98,11 @@ static char *sym_next(char *p) { return p + 5 * sizeof(int) + 1 + sym_namelen(p)
 
 static void mod_data_relocate(struct c4r_mod *m, char *d);
 
+// The image is a user task's: what it points at, it points at where user
+// mode sees it (mmu.c, the user window)
+int loader_uva;
+static int L(int p) { return loader_uva ? mmu_uva(p) : p; }
+
 // does M's symbol table name NAME (defined or not)?
 static int mod_has(struct c4r_mod *m, char *name) {
     char *p;
@@ -278,8 +283,8 @@ static int mod_read(char *path, struct c4r_mod *m) {
     while (i < patchlen) {
         ptype = loader_word(p); paddr = loader_word(p + sizeof(int)); pvalu = loader_word(p + 2 * sizeof(int));
         p = p + 3 * sizeof(int);
-        if (ptype == -1) code[paddr] = (int)(code + pvalu);
-        else if (ptype == -2) code[paddr] = m->pic ? pvalu : (int)(data + pvalu);
+        if (ptype == -1) code[paddr] = L((int)(code + pvalu));
+        else if (ptype == -2) code[paddr] = m->pic ? pvalu : L((int)(data + pvalu));
         ++i;
     }
     mod_data_relocate(m, data);
@@ -295,8 +300,8 @@ static void mod_data_relocate(struct c4r_mod *m, char *d) {
     while (i < m->npatch) {
         ptype = loader_word(p); paddr = loader_word(p + sizeof(int)); pvalu = loader_word(p + 2 * sizeof(int));
         p = p + 3 * sizeof(int);
-        if (ptype == -3) *(int *)(d + paddr) = (int)(m->code + pvalu);
-        else if (ptype == -4) *(int *)(d + paddr) = (int)(d + pvalu);
+        if (ptype == -3) *(int *)(d + paddr) = L((int)(m->code + pvalu));
+        else if (ptype == -4) *(int *)(d + paddr) = L((int)(d + pvalu));
         ++i;
     }
 }
@@ -337,8 +342,8 @@ static int mod_export(struct c4r_mod *m, char *name, int len) {
         c = sym_class(p);
         if (sym_namelen(p) == len && !(sym_attrs(p) & (SATTR_STATIC | SATTR_EXTERN)) &&
             (c == SCLASS_FUN || c == SCLASS_GLO) && !memcmp(sym_name(p), name, len)) {
-            if (c == SCLASS_FUN) return (int)(m->code + sym_value(p));
-            return (int)(m->data + sym_value(p));
+            if (c == SCLASS_FUN) return L((int)(m->code + sym_value(p)));
+            return L((int)(m->data + sym_value(p)));
         }
         p = sym_next(p);
         ++i;
@@ -452,7 +457,7 @@ static int link_modules(char *path, struct c4r_mod *mods, int n) {
                     return 0;
                 }
             } else m->slot = mmu_on ? (int *)mmu_slot() : (int *)kmem_alloc(sizeof(int));
-            *m->slot = (int)m->data;
+            *m->slot = L((int)m->data);
         }
         // __c4_dbase is most of a -fpic library's symbol references (one
         // per function that touches data): find its id once, not per patch
@@ -464,14 +469,14 @@ static int link_modules(char *path, struct c4r_mod *mods, int n) {
             p = p + 3 * sizeof(int);
             ++i;
             if (ptype < 0) continue;
-            if (ptype == dbid) { m->code[paddr] = (int)m->slot; continue; }
+            if (ptype == dbid) { m->code[paddr] = L((int)m->slot); continue; }
             if (!(s = mod_symbol(m, ptype))) {
                 kprintf("c4ix: loader: %s: a patch names symbol %d, which is not in its table\n", k > 1 ? m->path : path, ptype);
                 bad = 1;
                 continue;
             }
             if (m->pic && loader_nameis(sym_name(s), sym_namelen(s), "__c4_dbase")) {
-                m->code[paddr] = (int)m->slot;
+                m->code[paddr] = L((int)m->slot);
                 continue;
             }
             addr = 0;
@@ -506,6 +511,7 @@ static int link_modules(char *path, struct c4r_mod *mods, int n) {
 
 // is ADDR inside M's data?
 static int mod_is_data(struct c4r_mod *m, int addr) {
+    addr = mmu_phys(addr);
     return addr >= (int)m->data && addr < (int)m->data + m->memsz + 8;
 }
 
@@ -568,14 +574,14 @@ int c4r_load(char *path, struct c4r_image *img) {
     k = n - 1;
     while (k >= 0) {
         i = 0;
-        while (i < (mods + k)->ncons) { cons[total++] = (int)((mods + k)->code + (mods + k)->cons[i]); ++i; }
+        while (i < (mods + k)->ncons) { cons[total++] = L((int)((mods + k)->code + (mods + k)->cons[i])); ++i; }
         --k;
     }
     total = 0;
     k = n - 1;
     while (k >= 0) {
         i = 0;
-        while (i < (mods + k)->ndes) { des[total++] = (int)((mods + k)->code + (mods + k)->des[i]); ++i; }
+        while (i < (mods + k)->ndes) { des[total++] = L((int)((mods + k)->code + (mods + k)->des[i])); ++i; }
         --k;
     }
 
@@ -617,7 +623,7 @@ int c4r_load(char *path, struct c4r_image *img) {
 
     img->code = (int)(mods + 0)->code;
     img->data = (int)(mods + 0)->data;
-    img->entry = (int)((mods + 0)->code + (mods + 0)->entry);
+    img->entry = L((int)((mods + 0)->code + (mods + 0)->entry));
     img->cons = (int)cons;
     img->ncons = ncons;
     img->des = (int)des;
@@ -651,7 +657,7 @@ void loader_switch(struct task *t) {
     l = (int *)t->img_libs;
     k = 0;
     while (k < t->img_nlibs) {
-        if (l[3 * k + 2]) *(int *)l[3 * k + 2] = l[3 * k + 1];
+        if (l[3 * k + 2]) *(int *)l[3 * k + 2] = t->privs == PRIV_USER ? mmu_uva(l[3 * k + 1]) : l[3 * k + 1];
         ++k;
     }
 }
@@ -665,7 +671,10 @@ struct task *task_spawn_priv(char *path, int argc, int argv, int privs) {
     char *name;
     int i;
 
-    if (!c4r_load(path, &img)) return 0;
+    loader_uva = mmu_on && privs == PRIV_USER;
+    i = c4r_load(path, &img);
+    loader_uva = 0;
+    if (!i) return 0;
     // The task is named for the program, not the path it was found by:
     // ps says "spin" whether the shell ran /bin/spin or a host image.
     name = path;

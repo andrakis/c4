@@ -52,6 +52,7 @@ export const K = {              // offsets within a CPU's words
   GN: 21, GFROM: 22, GW: 23,    // ... and the rest of it (c4m.js guardHit's n, from; GW: write | mode << 1)
   PTBR: 24,                     // a device access's: the asker's space when it is in user mode, else 0
   FADDR: 25, FINFO: 26,         // ... and what the device refused there (RSTOP DMA_FAULT)
+  UDIR: 27,                     // the asker's UDIR: the space its kernel mode reaches user addresses in
 };
 // RSTOP for a device access the asker's space refused (mmu.js dmaCheck):
 // the asker raises the page fault, with FADDR and FINFO
@@ -293,6 +294,8 @@ export class ParHost extends ParCore {
       if (kind === KIND.OP) {
         const s = this.shadows[k];
         s.sp = ctl[b + K.SP]; s.a = ctl[b + K.A]; s.mode = 0; s.pc = ctl[b + K.RPC]; s.cycleInterval = 0;
+        // its kernel mode's user window (c4m.js kpa), as on its own CPU
+        s.uwin = this.m0.uwin; s.udir = ctl[b + K.UDIR];
         s.symbols = this.m0.symbols;
         this.dev.machine = s;
         rstop = s.sys(ctl[b + K.OP]);

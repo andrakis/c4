@@ -351,8 +351,8 @@ export class Devices {
   tapDrain (n) {
     n = Math.max(0, Math.min(n | 0, this.tapLen));
     const a = this.tapAddr >>> 0;
-    if (a >= this.arena.size) return 0;
-    n = Math.min(n, this.arena.size - a);
+    if (a < 0x1000 || (!this.arena.uwin || a < this.arena.uwin) && a >= this.arena.size) return 0;
+    if (!this.arena.uwin || a < this.arena.uwin) n = Math.min(n, this.arena.size - a);
     this.arena.dmaWrite(a, this.tapBuf.subarray(0, n));
     this.tapBuf.copyWithin(0, n, this.tapLen);
     this.tapLen -= n;
@@ -455,6 +455,7 @@ export class Devices {
     let n = 0;
     while (n < len && this.rxFifo.length) {
       const at = this.arena.dma(addr + n, 1, true);   // before the byte leaves the queue
+      if (at < 0) break;
       const b = this.rxFifo.shift();
       this.arena.write8(at, b);
       n++;
@@ -552,16 +553,12 @@ export class Devices {
   uartWrite (len) {
     const n = Math.max(0, len | 0);
     if (!n) return 0;
-    const addr = this.uartTxAddr >>> 0;
-    if (addr >= this.arena.size) return 0;
-    const end = Math.min(addr + n, this.arena.size);
-    this.arena.dma(addr, end - addr, false);
-    const u8 = this.arena.u8;
-    for (let a = addr; a < end; a++) {
+    const bytes = this.arena.dmaRead(this.uartTxAddr, n);
+    for (let i = 0; i < bytes.length; i++) {
       this.uartActivity++;
-      this.conByte(u8[a]);
+      this.conByte(bytes[i]);
     }
-    return end - addr;
+    return bytes.length;
   }
 
   // Close is where a written file becomes real, in one piece: a half
@@ -752,8 +749,7 @@ export class Devices {
       case CON_IN: {
         const n = val | 0;
         if (n < 0) { this.tapIn = null; return; }
-        const a = this.tapAddr >>> 0;
-        this.tapIn = a < this.arena.size ? this.arena.dmaRead(a, Math.min(n, this.arena.size - a)) : new Uint8Array(0);
+        this.tapIn = this.arena.dmaRead(this.tapAddr, n);
         this.tapInPos = 0;
         return;
       }

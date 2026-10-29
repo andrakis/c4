@@ -137,7 +137,7 @@ int task_strvec(char **v, int n, int *pvec, int *pdata) {
     p = blob;
     i = 0;
     while (i < n) {
-        vec[i] = p;
+        vec[i] = (char *)mmu_uva((int)p);     // user mode reads them
         if (v[i]) { k = 0; while (v[i][k]) { *p = v[i][k]; ++p; ++k; } }
         *p = 0; ++p;
         ++i;

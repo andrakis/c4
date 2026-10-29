@@ -77,6 +77,7 @@ class ApMachine extends Machine {
     ctl[b + K.RPC] = this.pc;
     ctl[b + K.ADDR] = addr | 0; ctl[b + K.VAL] = val | 0;
     ctl[b + K.PTBR] = this.vm && this.mmu ? this.mmu.ptbr : 0;
+    ctl[b + K.UDIR] = this.udir;
     Atomics.store(ctl, b + K.REQ, R.ASK);
     this.core.ring();
     while (Atomics.load(ctl, b + K.REQ) === R.ASK) {

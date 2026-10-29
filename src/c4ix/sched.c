@@ -1278,7 +1278,7 @@ int sched_vfork(int bp) {
     n = w[0] - (bp + 2 * sizeof(int));
     if (n < 0 || n > C4IX_STACK_WORDS * sizeof(int) / 2) return -1;
     if (!(c = task_vchild(p))) return -1;
-    top = c->stack + (c->stack_words - 8) * sizeof(int);   // sched_forge's slack
+    top = mmu_uva(c->stack + (c->stack_words - 8) * sizeof(int));   // sched_forge's slack, where the child sees it
     c->sv = SV_REGS;
     c->sv_a = 0;
     c->sv_bp = w[0];
@@ -1301,7 +1301,7 @@ void sched_forge_argv(struct task *t, int argv) {
     int *x;
     if (!t || t->sv != SV_FRAME) return;
     x = (int *)t->sv_sp;
-    x[3] = argv;
+    x[3] = mmu_uva(argv);
 }
 
 // ---- lifecycle ----

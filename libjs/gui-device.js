@@ -137,16 +137,18 @@ export class GuiDevice {
         // word boundaries. Anything else detaches rather than letting the
         // host write through a wild pointer.
         const len = this.ringLen & ~7;
-        if ((base & 3) || len < 256 || base < 0x1000 || base + len > this.arena.size) {
+        if ((base & 3) || len < 256) { this.ringBase = 0; this.mbox = null; return; }
+        // the task's own memory to write, or its page fault; where it is
+        // in memory, which is where the host reads and writes the rings
+        const pa = this.arena.dma(base, len, true);
+        if (pa < 0x1000 || pa + len > this.arena.size) {
           this.ringBase = 0; this.mbox = null; return;
         }
-        // the task's own memory to write, or its page fault (arena.dma)
-        this.arena.dma(base, len, true);
         this.ringBase = base;
         // whose: the frames the host drains on its own (drain) are
         // checked against the space that attached the ring
         this.ringSpace = this.arena.dmaCtx ? this.arena.dmaCtx.ptbr : 0;
-        this.mbox = new HostMailbox(this.arena, { base, len });
+        this.mbox = new HostMailbox(this.arena, { base: pa, len });
         return;
       }
       case GUI.BELL:
@@ -226,10 +228,10 @@ export class GuiDevice {
     const mode = this.fbMode;
     const lines = mode ? w : h, run = mode ? h : w;
     const pitch = this.fbPitch || run * 4;
-    const base = this.fbBase;
     const hm = h | (mode << 16);
-    if ((base & 3) || (pitch & 3) || base < 0x1000 || base + (lines - 1) * pitch + run * 4 > this.arena.size) return;
-    this.arena.dma(base, (lines - 1) * pitch + run * 4, false);
+    if ((this.fbBase & 3) || (pitch & 3)) return;
+    const base = this.arena.dma(this.fbBase, (lines - 1) * pitch + run * 4, false);
+    if (base < 0x1000 || base + (lines - 1) * pitch + run * 4 > this.arena.size) return;
     const n = w * h;
     // Shared path: one copy into the triple buffer, and a small marker in
     // the command stream where the frame belongs.
@@ -277,17 +279,16 @@ export class GuiDevice {
   blit8(p) {
     const [x, y, w, h, src, pitch, pal, dw, dh] = p;
     const a = this.arena;
-    if (w <= 0 || h <= 0 || w > 4096 || h > 4096 || pitch < w) return;
-    if (src < 0x1000 || src + (h - 1) * pitch + w > a.size || (pal & 3) || pal < 0x1000 || pal + 1024 > a.size) return;
-    a.dma(src, (h - 1) * pitch + w, false);
-    a.dma(pal, 1024, false);
+    if (w <= 0 || h <= 0 || w > 4096 || h > 4096 || pitch < w || (pal & 3)) return;
+    const s = a.dma(src, (h - 1) * pitch + w, false), q = a.dma(pal, 1024, false);
+    if (s < 0x1000 || s + (h - 1) * pitch + w > a.size || q < 0x1000 || q + 1024 > a.size) return;
     const n = w * h;
     if (this.queued + this.queue.length + 8 + n > QUEUE_LIMIT) { this.lostCommands++; return; }
-    const u8 = a.u8, colours = a.i32.subarray(pal >> 2, (pal >> 2) + 256);
+    const u8 = a.u8, colours = a.i32.subarray(q >> 2, (q >> 2) + 256);
     const c = new Int32Array(8 + n);
     c[0] = 8 + n; c[1] = CMD.RGB; c[2] = x; c[3] = y; c[4] = w; c[5] = h; c[6] = dw; c[7] = dh;
     for (let j = 0, k = 8; j < h; j++) {
-      const row = src + j * pitch;
+      const row = s + j * pitch;
       for (let i = 0; i < w; i++) c[k++] = colours[u8[row + i]];
     }
     this.seal();

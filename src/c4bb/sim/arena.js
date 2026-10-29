@@ -40,6 +40,9 @@ export class Arena {
     // MMU, or kernel mode), else the user task's MMU while its load or
     // store is at the device (libjs/mmu.js), which checks (dmaCheck)
     this.dmaCtx = null;
+    // The user window (libjs/c4m.js kpa): kernel mode hands a device a
+    // user task's address as readily as its own. 0: none.
+    this.uwin = 0;
   }
 
   // ---- what devices do at an address the guest gave them ----
@@ -48,24 +51,65 @@ export class Arena {
   // these, so that a user task under an MMU can only hand it its own
   // memory: the range is checked against the task's space, and a refusal
   // is the task's page fault (docs/c4ix-mmu.md 11).
+  // dma: where the device finds [addr, addr + len), one run of memory --
+  // the address itself, or what the task's page tables or the window
+  // make of it -- or -1 when there is no such memory. A user task's
+  // refusal throws (its page fault).
   dma(addr, len, write) {
-    if (this.dmaCtx) this.dmaCtx.dmaCheck(addr >>> 0, len, write);
-    return addr >>> 0;
+    addr = addr >>> 0;
+    if (this.dmaCtx) return this.dmaCtx.dmaCheck(addr, len, write);
+    if (this.uwin && addr >= this.uwin) {
+      const off = addr - this.uwin;
+      return off < this.size ? off : -1;
+    }
+    return addr;
   }
+  // A copy of LEN bytes at addr, a page at a time: past the end, short
   dmaRead(addr, len) {
-    addr = this.dma(addr, len, false);
-    return this.u8.slice(addr, addr + len);
+    addr = addr >>> 0;
+    len = Math.max(0, len | 0);
+    if (!this.dmaCtx && !(this.uwin && addr >= this.uwin)) {
+      return this.u8.slice(addr, Math.min(addr + len, this.size));
+    }
+    const out = new Uint8Array(len);
+    for (let k = 0; k < len;) {
+      const va = (addr + k) >>> 0, r = Math.min(len - k, 4096 - (va & 4095));
+      const p = this.dma(va, r, false);
+      if (p < 0 || p + r > this.size) return out.subarray(0, k);
+      out.set(this.u8.subarray(p, p + r), k);
+      k += r;
+    }
+    return out;
   }
   dmaWrite(addr, bytes) {
-    addr = this.dma(addr, bytes.length, true);
-    this.u8.set(bytes, addr);
+    addr = addr >>> 0;
+    if (!(bytes instanceof Uint8Array)) bytes = Uint8Array.from(bytes);
+    const len = bytes.length;
+    if (!this.dmaCtx && !(this.uwin && addr >= this.uwin)) {
+      if (addr < this.size) this.u8.set(len > this.size - addr ? bytes.subarray(0, this.size - addr) : bytes, addr);
+      return;
+    }
+    for (let k = 0; k < len;) {
+      const va = (addr + k) >>> 0, r = Math.min(len - k, 4096 - (va & 4095));
+      const p = this.dma(va, r, true);
+      if (p < 0 || p + r > this.size) return;
+      this.u8.set(bytes.subarray(k, k + r), p);
+      k += r;
+    }
   }
   dmaCstring(addr, max = 4096) {
     addr = addr >>> 0;
-    let end = addr;
-    while (end < addr + max && end < this.size && this.u8[end]) end++;
-    this.dma(addr, Math.min(end + 1, this.size) - addr, false);
-    return new TextDecoder('latin1').decode(this.u8.slice(addr, end));
+    const out = [];
+    let p = -1;
+    for (let k = 0; k < max; k++) {
+      const va = (addr + k) >>> 0;
+      if (p < 0 || (va & 4095) === 0) { p = this.dma(va, 1, false); if (p < 0 || p >= this.size) break; }
+      else p++;
+      const b = this.u8[p];
+      if (!b) break;
+      out.push(b);
+    }
+    return new TextDecoder('latin1').decode(Uint8Array.from(out));
   }
 
   // Out-of-range accesses read 0 and drop writes, like the aligned

@@ -128,8 +128,8 @@ int main(int argc, char **argv) {
 // STAGE: which checks this kernel has the MMU for (docs/c4ix-mmu.md): 1
 // translation only, 2 the kernel's memory, 3 another task's, 4 the guard
 // page, read-only text and no-execute, 5 null reads and what devices are
-// given. Default all.
-const stage = Number(process.env.STAGE || 5);
+// given, 6 user addresses that are not physical. Default all.
+const stage = Number(process.env.STAGE || 6);
 const out = [];
 const vm = createMachine({ arenaMb: 64, mhz: 100, mmu: true, gui: new GuiDevice(), drives: [{ files, writable: false, sink: null }], onByte: b => out.push(b) });
 // C4IX_IMAGE: another kernel than the disk's, built on its own
@@ -180,6 +180,14 @@ if (stage >= 5) {
   fault('ring 0x2000', /page fault: a device's write to 0x00002000 \(the kernel's image, not mapped\).*killed/);
   if (m) fault(`ring ${m[2]}`, new RegExp(`page fault: a device's write to 0x0*${m[2].slice(2)} \\(task wild\\.c4r, not mapped\\).*killed`));
   fault('disk 0x2000', /page fault: a device's read of 0x00002000 \(the kernel's image, not mapped\).*killed/);
+}
+if (stage >= 6 && m) {
+  // user addresses are not physical: the victim's word is at its page's
+  // address plus 256 MB, and where it is in memory is nobody's to write
+  const va = parseInt(m[2], 16), pa = va - 0x10000000;
+  check(va >= 0x10000000, `the victim's word is at a user address (${m[2]}), not a physical one`);
+  const hex = n => n.toString(16);
+  fault(`poke 0x${hex(pa)}`, new RegExp(`page fault: write to 0x0*${hex(pa)} \\(task wild\\.c4r, not mapped\\).*killed`));
 }
 t = run('echo the kernel is fine');
 check(/^the kernel is fine$/m.test(t), 'the kernel carries on', t);

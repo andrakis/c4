@@ -141,7 +141,12 @@ const swapLines = t => [...t.matchAll(/swap: (\d+) KB of task (\d+) \(([^)]*)\) 
   .map(m => ({ kb: Number(m[1]), task: m[2], name: m[3], va: m[4], dir: m[5] }));
 
 until(() => text().includes('c4ix:/$'), 3000);
-run('wait 4', 40000);
+// the root archive's unpack, which brings /usr/lib/libc4ix.c4l: task 4 on
+// one CPU, but each CPU's idle task comes before init, so 5 on two -- and
+// "wait 4" there waited for vfsload, long gone, and cc raced the unpack
+// ("c4rlink: failed to load '/usr/lib/libc4ix.c4l'"; test-c4ix-par.mjs)
+const unpack = (/unpacking c4ix-root\.tgz in the background as task (\d+)/.exec(text()) || [])[1] || 4;
+runFor(`wait ${unpack}`, new RegExp(`\\[${unpack}\\] done`), 40000);
 let t = runFor('cc -l c4ix -o /tmp/swaptest.c4r swaptest.c', /c4rlink: wrote|error|did not compile/, 400000);
 check(back(t) && /c4rlink: wrote/.test(t) && !/error|did not compile/i.test(t), 'swaptest.c compiles inside C4IX', t);
 t = run('dmesg');

@@ -81,6 +81,7 @@ node libjs/tests/test-c4ix-sigh.mjs || fail=1
 node libjs/tests/test-c4ix-mmu.mjs || fail=1   # the MMU: a wild write is killed, the kernel and others carry on
 node libjs/tests/test-c4ix-swap.mjs || fail=1   # swap: more memory than there is, out to the host and back
 CPUS=2 node libjs/tests/test-c4ix-swap.mjs || fail=1   # ... with pages going from a task another CPU runs (IPI shootdown)
+node libjs/tests/test-c4ix-par.mjs || fail=1    # two CPUs on threads: cc links with libc4ix, and the program runs on each
 node libjs/tests/test-c4ix-guard.mjs || fail=1   # the boot stack's guard: a program run off the end of the heap
 node libjs/tests/test-rom.mjs    || fail=1
 

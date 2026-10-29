@@ -1108,14 +1108,14 @@ C4SC_BACK_DIFF := c4_jailbreak factorial hello multifun puts reverse \
 test-c4sc-back: c4sc-host c4sp $(C4RLINK) $(C4M)
 	@fail=0; for b in $(C4SC_BACK_DIFF); do \
 	   f=$(TESTS)/$$b.c; \
-	   for fl in "" "-O"; do \
+	   for fl in "" "-O" "-g" "-O -g"; do \
 	     ./c4sp -R -c 16000000 $(SRCS)/c4sp/lisp/c4lc.lisp $$fl $$f .c4sc_back_i.c4r >/dev/null 2>&1; \
 	     ./c4sc-host -c 16000000 compile $$fl $$f .c4sc_back_c.c4r >/dev/null 2>&1; \
 	     cmp -s .c4sc_back_i.c4r .c4sc_back_c.c4r \
 	       || { echo "test-c4sc-back: $$b $$fl DIFFERS"; fail=1; }; \
 	   done; \
 	 done; [ $$fail = 0 ] || exit 1
-	@echo "  corpus ok: $(words $(C4SC_BACK_DIFF)) programs, plain and -O, byte-identical"
+	@echo "  corpus ok: $(words $(C4SC_BACK_DIFF)) programs, plain, -O and both under -g, byte-identical"
 	@fail=0; for m in $(C4IX_MODS); do \
 	   ./c4sp -R -c 33554432 $(SRCS)/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC) \
 	       $(C4IX_SRC)/$$m.c .c4sc_back_i.c4o >/dev/null 2>&1; \
@@ -2996,7 +2996,7 @@ $(C4IX_ARC_PROGS): c4ix-%.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libarc.c4l libc4ix.c
 # The desktop is several modules (docs/c4ix-desktop.md): each is compiled
 # on its own, then all are linked with libc4ix, like the kernel. WINKIT's
 # are the window kit's (src/winkit), which grin shares.
-C4IX_DESKTOP := shell tools host term files taskmgr apps edit wall
+C4IX_DESKTOP := shell tools host term files taskmgr apps edit explore wall
 WINKIT := draw ui wmcore dialog look95 look31 textgrid savers calc notepad clock
 C4IX_DESKTOP_SRC := $(C4IX_DESKTOP:%=$(C4IX_SRC)/user/desktop/%.c) $(C4IX_SRC)/user/desktop/*.h libjs/guest/gui.h \
                     $(WINKIT:%=src/winkit/%.c) $(wildcard src/winkit/*.h) $(C4IX_SRC)/include/cpustat.h $(C4IX_SRC)/libc/fp.c

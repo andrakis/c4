@@ -48,6 +48,14 @@
 // editor. Opening a file opens the folders on the way to it. Ctrl+B,
 // View > Files or :Ex shows and hides it.
 //
+// Code. View > Code (F7, :code) shows the C4 code a .c file compiles to,
+// beside the text (below it in a narrow window): explore.c's pane, a
+// cut-down Code Explorer. It compiles the saved file with cc -g, again at
+// each save, shows the function the cursor is in with the instructions
+// from the cursor's line lit, and bands the lines that made code in the
+// gutter; a click on an instruction goes to its line, a double click on
+// a call to the callee. Its -O button compiles with and without -O.
+//
 // Colours. The text is coloured by what the file's name says it is: C and
 // headers, JavaScript, Lisp, Forth, shell scripts and Makefiles, and B4KE
 // build files. :syntax off (or View > Syntax Colouring) turns it off. The
@@ -62,7 +70,9 @@
 #include "desktop.h"
 
 enum { ECW = 7, ECH = 15, EFONT = 12, UNDO_MAX = 32, BROWS = 8, BLOG_MAX = 300,
-       ERR_MAX = 100, REC_MAX = 3000, KEY_F4 = 115, KEY_F6 = 117, KEY_F8 = 119 };
+       ERR_MAX = 100, REC_MAX = 3000, KEY_F4 = 115, KEY_F6 = 117, KEY_F7 = 118, KEY_F8 = 119 };
+// the Code pane: its least width beside the text, the text's least beside it
+enum { XPW = 250, XPW_MAX = 460, XTW = 300 };
 // the file pane: its width, its header, a row; a node's flags; how many
 // entries of one folder it lists
 enum { FW = 180, FHDR = 20, FROW = 16, F_DIR = 1, F_OPEN = 2, F_KIDS = 400, FNAME = 64 };
@@ -129,6 +139,7 @@ struct edit {
     int drag;                                      // the mouse is selecting
     char ask[WK_PATH];                             // a file box's path, in and out
     char pend[128];                                // a binary file waiting to be opened, once asked
+    int *xp; int xshown;                           // the Code pane (explore.c), and whether it is shown
 };
 
 static struct edit *E(struct win *w) { return (struct edit *)w->st; }
@@ -137,7 +148,7 @@ static struct wk_menu edit_menus[5];
 static char *edit_file_items[7];
 static char *edit_edit_items[6];
 static char *edit_build_items[7];
-static char *edit_view_items[6];
+static char *edit_view_items[7];
 static char *edit_help_items[2];
 // what Open and Save As offer: the file box's types
 static char *ide_filter = "All Files (*)|*|C Source (*.c;*.h)|*.c;*.h|Build Files (*.b4k)|*.b4k|Scripts (*.sh;*.js;*.lisp;*.fs)|*.sh;*.js;*.mjs;*.lisp;*.scm;*.fs;*.f;*.4th|Text (*.txt;*.md)|*.txt;*.md";
@@ -399,6 +410,7 @@ static void e_undo(struct edit *e, int redo) {
 // ---- files ---------------------------------------------------------------------------
 
 static void f_reveal(struct edit *e, char *path);
+static void x_compile(struct edit *e);
 static void f_add(struct edit *e, char *path);
 
 static void e_retitle(struct win *w) {
@@ -459,6 +471,7 @@ static int e_save(struct edit *e, char *path) {
     ui_cat(e->msg, " lines");
     f_add(e, e->path);
     f_reveal(e, e->path);
+    x_compile(e);
     return 1;
 }
 
@@ -498,7 +511,9 @@ static int e_open(struct win *w, char *path, int force) {
         wk_msgbox(w->id, A_BINARY, "IDE", sb, WK_OKCANCEL);
         return 2;
     }
-    return e_load(e, path);
+    if (!e_load(e, path)) return 0;
+    x_compile(e);
+    return 1;
 }
 
 // ---- the cursor ------------------------------------------------------------------------
@@ -926,12 +941,32 @@ static void e_make(struct win *w) {
 
 static void e_goto_error(struct win *w, int i);
 
-// Output waiting in the build's pipe; never blocks (wm.c's loop calls this).
+// The Code pane's compile, of the saved file, when the pane is shown
+static void x_compile(struct edit *e) {
+    char dir[128];
+    if (!e->xshown || !e->xp || !e->path[0]) return;
+    e_dirname(e->path, dir);
+    xp_compile(e->xp, e->path, dir);
+}
+static void e_code(struct win *w) {
+    struct edit *e;
+    e = E(w);
+    if (!e->xp) e->xp = xp_new();
+    e->xshown = !e->xshown;
+    if (!e->xshown) return;
+    if (!e->path[0]) { e_say(e, "Save the file first: the Code pane compiles what is saved"); return; }
+    if (e->modified) e_say(e, "The Code pane shows the file as saved: save to see your changes");
+    x_compile(e);
+}
+
+// Output waiting in the build's pipe, and the Code pane's compile; never
+// blocks (wm.c's loop calls this).
 void edit_tick(struct win *w) {
     struct edit *e;
     char buf[512];
     int n, i;
     e = E(w);
+    if (e->xp && xp_tick(e->xp)) mark_win_dirty(w);
     if (!e->building) return;
     while ((n = uavail(e->out_r)) > 0) {
         if (n > 512) n = 512;
@@ -998,6 +1033,7 @@ void edit_close(struct win *w) {
     int i;
     e = E(w);
     e_stop_build(e);
+    if (e->xp) { xp_free(e->xp); e->xp = 0; }
     i = 0;
     while (i < e->fn) { free(e->fpath[i]); ++i; }
     if (e->fpath) { free((char *)e->fpath); free((char *)e->fdepth); free((char *)e->fflag); }
@@ -1353,6 +1389,7 @@ static void e_ex(struct win *w, char *c) {
         return;
     }
     if (ui_eq(c, "make")) { e_make(w); return; }
+    if (ui_eq(c, "code")) { e_code(w); return; }
     if (ui_eq(c, "Ex") || ui_eq(c, "Explore") || ui_eq(c, "Lex") || ui_eq(c, "files")) { e->fshown = !e->fshown; return; }
     if (ui_eq(c, "syntax off") || ui_eq(c, "syn off")) { e->nosyn = 1; return; }
     if (ui_eq(c, "syntax on") || ui_eq(c, "syn on")) { e->nosyn = 0; return; }
@@ -1780,6 +1817,7 @@ static void e_key(struct win *w, int code, int ch, int mods) {
     if (code == KEY_F6) { e_ex(w, "run"); return; }
     if (code == KEY_F8) { e_goto_error(w, (mods & M_SHIFT) ? e->ecur - 1 : e->ecur + 1); return; }
     if (code == KEY_F4) { e->bshown = !e->bshown; return; }
+    if (code == KEY_F7) { e_code(w); return; }
     if (e->mode == M_CMD) {
         e_cmdline_key(w, code, ch);
         // without VIM mode there is no Normal to come back to
@@ -2357,6 +2395,8 @@ static void e_draw_text(struct win *w, int ox, int oy, int cw, int ch, int focus
         seg = 0;
         while (seg < h && r < rows) {
             a = e->wrap ? seg * cols : e->left;   // the first column this row shows
+            // a band where the Code pane's function has code from this line
+            if (seg == 0 && e->xshown && e->xp && (c = xp_band(e->xp, line + 1)) >= 0) d_rect(ox, y, 3, ECH, c);
             if (gw && seg == 0) {
                 ui_num(num, line + 1);
                 k = ui_len(num);
@@ -2454,7 +2494,9 @@ static void e_draw_text(struct win *w, int ox, int oy, int cw, int ch, int focus
         else if (e->mode == M_VISUAL) ui_cpy(sb, "-- VISUAL --");
         else if (e->mode == M_VLINE) ui_cpy(sb, "-- VISUAL LINE --");
         else sb[0] = 0;
+        d_clip(ox, sy, cw - 20 - 9 * ECW, ECH + 4);
         d_text(ox + 4, sy + 3, C_DARK, F_SANS, sb);
+        d_clip_end();
     }
     ui_num(sb, e->cy + 1);
     ui_cat(sb, ",");
@@ -2585,41 +2627,92 @@ static void e_mouse_text(struct win *w, int ev, int x, int y, int cw, int ch) {
 
 // The pointer over the window: a text beam over the text, an arrow over
 // the pane, the bars and the build log (as the last draw laid them out)
+// The Code pane's place in a CW by CH area beside the file pane: 1 beside
+// the text, 2 below it, 0 not shown; its rectangle in *PX.. and the text's
+// width and height in *TW, *TH
+static int x_place(struct edit *e, int cw, int ch, int *px, int *py, int *pw, int *ph, int *tw, int *th) {
+    int w;
+    *tw = cw; *th = ch;
+    if (!e->xshown || !e->xp) return 0;
+    w = cw * 2 / 5;
+    if (w < XPW) w = XPW;
+    if (w > XPW_MAX) w = XPW_MAX;
+    if (cw - w - 2 >= XTW) {
+        *px = cw - w; *py = 0; *pw = w; *ph = ch; *tw = cw - w - 2;
+        return 1;
+    }
+    *ph = ch * 2 / 5; *px = 0; *py = ch - *ph; *pw = cw; *th = ch - *ph - 2;
+    return 2;
+}
+
 int edit_pointer(struct win *w, int x, int y, int cw, int ch) {
     struct edit *e;
+    int px, py, pw, ph, tw, th;
     e = E(w);
     if (f_on(e, cw)) {
         if (x < FW + 2) return PTR_ARROW;
         x = x - FW - 2; cw = cw - FW - 2;
     }
+    if (x_place(e, cw, ch, &px, &py, &pw, &ph, &tw, &th)) {
+        if (x >= tw || y >= th) return PTR_ARROW;
+        cw = tw; ch = th;
+    }
     if (y < e->tah - (e->hb ? 16 : 0) && x < cw - 17) return PTR_TEXT;
     return PTR_ARROW;
 }
 
-// The file pane on the left when it is shown, the text beside it
+// The file pane on the left when it is shown, the text beside it, and
+// the Code pane beside the text or below it
 void edit_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     struct edit *e;
+    int px, py, pw, ph, tw, th, k;
     e = E(w);
-    if (!f_on(e, cw)) { e_draw_text(w, ox, oy, cw, ch, focused); return; }
-    f_draw(e, ox, oy, ch);
-    d_clip(ox + FW + 2, oy, cw - FW - 2, ch);
-    e_draw_text(w, ox + FW + 2, oy, cw - FW - 2, ch, focused);
+    if (f_on(e, cw)) { f_draw(e, ox, oy, ch); ox = ox + FW + 2; cw = cw - FW - 2; }
+    k = x_place(e, cw, ch, &px, &py, &pw, &ph, &tw, &th);
+    if (k) xp_cursor(e->xp, e->cy + 1);
+    d_clip(ox, oy, tw, th);
+    e_draw_text(w, ox, oy, tw, th, focused);
+    d_clip_end();
+    if (!k) return;
+    if (k == 1) d_rect(ox + tw, oy, 2, ch, C_SHADOW); else d_rect(ox, oy + th, cw, 2, C_SHADOW);
+    d_clip(ox + px, oy + py, pw, ph);
+    xp_draw(e->xp, ox + px, oy + py, pw, ph, ec, e->cy + 1, e->modified);
     d_clip_end();
 }
 
 void edit_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     struct edit *e;
-    int t;
+    int t, px, py, pw, ph, tw, th, k;
     e = E(w);
     if (ev == E_UP) { e->drag = 0; return; }
-    if (!f_on(e, cw)) { e_mouse_text(w, ev, x, y, cw, ch); return; }
-    if (ev == E_MOVE) {
-        t = ui_scroll_drag(FW - 17, FHDR, y);
-        if (t >= 0) { e->ftop = t; return; }
-        t = ui_scroll_drag(0, ch - 16, x);
-        if (t >= 0) { e->fleft = t; return; }
-    } else if (x < FW + 2) { e->drag = 0; f_mouse(w, ev, x, y, ch); return; }
-    e_mouse_text(w, ev, x - FW - 2, y, cw - FW - 2, ch);
+    if (f_on(e, cw)) {
+        if (ev == E_MOVE) {
+            t = ui_scroll_drag(FW - 17, FHDR, y);
+            if (t >= 0) { e->ftop = t; return; }
+            t = ui_scroll_drag(0, ch - 16, x);
+            if (t >= 0) { e->fleft = t; return; }
+        } else if (x < FW + 2) { e->drag = 0; f_mouse(w, ev, x, y, ch); return; }
+        x = x - FW - 2; cw = cw - FW - 2;
+    }
+    if ((k = x_place(e, cw, ch, &px, &py, &pw, &ph, &tw, &th))) {
+        // the Code pane: the wheel over it (a wheel's y is how far), its
+        // bar being dragged, or a click in it
+        if (ev == E_WHEEL && k == 1 && x >= px) { xp_mouse(e->xp, ev, 0, y, pw, ph); mark_win_dirty(w); return; }
+        if (ev == E_MOVE && xp_mouse(e->xp, ev, x - px, y - py, pw, ph) == 0 - 2) { mark_win_dirty(w); return; }
+        if (ev != E_MOVE && ev != E_WHEEL && x >= px && y >= py && x < px + pw && y < py + ph) {
+            e->drag = 0;
+            t = xp_mouse(e->xp, ev, x - px, y - py, pw, ph);
+            if (t > 0) {
+                e->cy = t - 1; e_clamp(e); e->cx = e_firstnb(e, e->cy); e->want = e->cx; e->tsel = 0;
+                if (e->vim && e->mode != M_INSERT) e->mode = M_NORMAL;
+            }
+            mark_win_dirty(w);
+            return;
+        }
+        if (ev != E_MOVE && ev != E_WHEEL && (x >= tw || y >= th)) return;   // the divider
+        cw = tw; ch = th;
+    }
+    e_mouse_text(w, ev, x, y, cw, ch);
 }
 
 // ---- Settings: the colour scheme and the input mode ------------------------------------------
@@ -2752,7 +2845,8 @@ int edit_open(char *path) {
     edit_build_items[3] = "Previous Error"; edit_build_items[4] = "Show Output   F4";
     edit_build_items[5] = "Cancel Build"; edit_build_items[6] = 0;
     edit_view_items[0] = "Files   Ctrl+B"; edit_view_items[1] = "Syntax Colouring";
-    edit_view_items[2] = "Word Wrap"; edit_view_items[3] = "-"; edit_view_items[4] = "Settings..."; edit_view_items[5] = 0;
+    edit_view_items[2] = "Word Wrap"; edit_view_items[3] = "Code   F7"; edit_view_items[4] = "-";
+    edit_view_items[5] = "Settings..."; edit_view_items[6] = 0;
     edit_help_items[0] = "Keys"; edit_help_items[1] = 0;
     edit_menus[0].items = edit_file_items; edit_menus[1].items = edit_edit_items; edit_menus[2].items = edit_build_items;
     edit_menus[3].items = edit_view_items; edit_menus[4].items = edit_help_items;
@@ -2826,14 +2920,15 @@ void edit_command(struct win *w, int menu, int item) {
         if (item == 0) e->fshown = !e->fshown;
         else if (item == 1) e->nosyn = !e->nosyn;
         else if (item == 2) { e->wrap = !e->wrap; e->left = 0; }
-        else if (item == 4) ide_settings();
+        else if (item == 3) e_code(w);
+        else if (item == 5) ide_settings();
         return;
     }
     if (e->vim) msgbox(w, "IDE keys",
-           "Esc for Normal mode, i to insert. hjkl or arrows move; w b e words; dd yy p; u undo; . repeat. :w save, :make or F5 build, F8 next error, F6 run, Ctrl+B the file pane, :syntax off, :set novim for a plain editor; View > Settings for Traditional typing.",
+           "Esc for Normal mode, i to insert. hjkl or arrows move; w b e words; dd yy p; u undo; . repeat. :w save, :make or F5 build, F8 next error, F6 run, F7 the code it compiles to, Ctrl+B the file pane, :syntax off, :set novim for a plain editor; View > Settings for Traditional typing.",
            0, A_NONE);
     else msgbox(w, "IDE keys",
-           "Type to edit; Shift with the arrows selects; Ctrl+X, C, V cut, copy and paste; Ctrl+A all; Ctrl+Z undo, Ctrl+Y redo; Ctrl+S saves. Esc for a command: w, make, run, e FILE, set nowrap. F5 builds, F6 runs, F8 the next error, Ctrl+B the file pane; View > Settings for VIM mode and colours.",
+           "Type to edit; Shift with the arrows selects; Ctrl+X, C, V cut, copy and paste; Ctrl+A all; Ctrl+Z undo, Ctrl+Y redo; Ctrl+S saves. Esc for a command: w, make, run, e FILE, set nowrap. F5 builds, F6 runs, F7 shows the code it compiles to, F8 the next error, Ctrl+B the file pane; View > Settings for VIM mode and colours.",
            0, A_NONE);
 }
 

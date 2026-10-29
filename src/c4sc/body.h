@@ -149,13 +149,18 @@ int sc_ast (int argc, char **argv) {
 // test uses.
 //
 //   c4sc-host compile [-O] [-c] [-P] [-mcisc] [-mfuse] [-conforming] [-fno-builtin] [-fpic]
-//                     [-I dir] [-D name] in.c out.c4r
+//                     [-g] [-g0] [-I dir] [-D name] in.c out.c4r
+//
+// -g gives the image a source map, as c4lc.lisp's -g does: the lexer
+// keeps each token's file, the parser puts the lines in, and the writer
+// adds the SMAP trailer (docs/c4-explorer.md 2.2). The code is the same
+// either way. -g0, no map, is the default.
 int sc_compile (int argc, char **argv) {
 	int *paths, *predefs, *ptail, *dtail, *e, *ast, *m, *out, *r;
-	int  opt, obj, usepp, cisc, fuse, conf, nobuiltin, pic;
+	int  opt, obj, usepp, cisc, fuse, conf, nobuiltin, pic, lines;
 	char *in, *outname;
 
-	opt = obj = usepp = cisc = fuse = conf = nobuiltin = pic = 0;
+	opt = obj = usepp = cisc = fuse = conf = nobuiltin = pic = lines = 0;
 	paths = predefs = ptail = dtail = 0;
 	while (argc > 0 && **argv == '-') {
 		if      (!memcmp(*argv, "-O", 3)) opt = 1;
@@ -166,6 +171,8 @@ int sc_compile (int argc, char **argv) {
 		else if (!memcmp(*argv, "-conforming", 12)) conf = 1;
 		else if (!memcmp(*argv, "-fno-builtin", 13)) nobuiltin = 1;
 		else if (!memcmp(*argv, "-fpic", 6)) pic = 1;
+		else if (!memcmp(*argv, "-g", 3)) lines = 1;
+		else if (!memcmp(*argv, "-g0", 4)) lines = 0;
 		else if (!memcmp(*argv, "-I", 3) && argc > 1) {
 			usepp = 1;   // -I implies -P, exactly as c4lc.lisp does
 			e = cons(mk_string(argv[1]), 0);
@@ -197,6 +204,8 @@ int sc_compile (int argc, char **argv) {
 	L_gen_58cisc = cisc ? cell_true : cell_false;
 	L_gen_58nobuiltin = nobuiltin ? cell_true : cell_false;
 	L_gen_58pic = pic ? cell_true : cell_false;
+	L_lex_58locs = lines ? cell_true : cell_false;
+	L_p_58lines = lines ? cell_true : cell_false;
 
 	if (usepp) {
 		L_pp_58paths = paths;
@@ -227,6 +236,7 @@ int sc_compile (int argc, char **argv) {
 	// globals are segregated to BSS, exactly as c4lc.lisp does it.
 	L_c4r_58v3 = cell_true;
 	L_c4r_58bss_45extra = L_gen_58bssextra;
+	if (lines) L_c4r_58srcfiles = L_lex_58files;
 	out = L_c4r_58encode(m);
 	L_c4r_58bss_45extra = mk_int(0);
 	if (c4sp_err) { printf("c4sc-host: %s\n", c4sp_err_msg); return 1; }

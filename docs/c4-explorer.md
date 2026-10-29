@@ -411,6 +411,13 @@ There must be one opcode table, so names cannot drift. It includes the
 fused opcodes (`-mfuse`, which wolf3d uses). A test checks it against
 c4m.c's enum.
 
+**In the IDE, first** (2026-10-30, docs/c4ix-desktop.md part eighteen):
+before W1 there is no `/bin/explore`, so a cut-down explorer is a pane
+of the IDE, `src/c4ix/user/desktop/explore.c`. It compiles the file
+being edited with `cc -g` (S3) and shows the function the cursor is in,
+linked both ways to the text, which is its source pane. When E1 comes,
+its reader and operand naming are the place to start.
+
 **E1, Code Explorer's window** (`/bin/explore`), a program on the
 desktop (track W). It has three panes:
 
@@ -766,7 +773,7 @@ targets are marked *new*.
 | **S0** | **The trailer, with no compiler emitting it.** `X` chunks in load-c4r.c (`C4ROPT_SRCMAP`), c4r.lisp (decode, encode, keep or drop by tag), c4rdump (`-l`, and skipping), and c4rstrip. `LOADCOMPLETE` checks in c4rlink and c4rdump. Loaders' bounds. A hand-made SMAP fixture. | *new* `test-srcmap`: the fixture loads in every loader (load-c4r.c, C4IX, libjs, c4bb, oisc4, c4mp, c4l, dosload) and runs the same; `c4r-roundtrip` is exact on it; c4rstrip removes it. `test-c4sp`, `test-c4lc`, `test-c4th` (roundtrip legs), `test-c4rstrip`, `test-link`. |
 | **S1** | **c4lc `-g`.** Fix the backslash-newline count. Locations with files, `#line` and gcc markers. `Line` nodes, line items, rows and function table from `c4r:encode`. Errors that name their file. | `test-srcmap` gains: the invariant (every `src/tests/*.c` and the C4IX modules, `-g` against `-g0`, equal after c4rstrip); the CRC's cost on wolf3d's largest unit; a golden `c4rdump -l` of a probe with includes, a macro, an inlined call and a `for`; the map's size on wolf3d recorded here. `test-c4lc` (AST golden unchanged), `test-c4sp-opt`. |
 | **S2** | **c4rlink merges, c4opt-run carries.** Rebased rows and functions, file union, line-0 rows for unmapped modules, `-s`. C4IX's loader trims cached library buffers. | `test-srcmap`: a linked map equals the concatenation of its objects' maps, rebased; `c4opt-run` on a mapped image keeps every row on an instruction of its line. `test-link`, `test-respfile`, `test-b4ke` (its 1898-byte pin stays: `-g` is not the default yet). |
-| **S3** | **c4sc and cc.** Regenerate, add `-g` to body.h, `cc -g`. | `test-c4sc-back` and `test-c4sc-run` also under `-g` (c4sc-host = c4lc, trailer included). `test-c4ix-rebuild` with a `-g` program in its list. |
+| **S3** | **c4sc and cc.** Regenerate, add `-g` to body.h, `cc -g`. Done 2026-10-30, for the IDE's Code pane (c4ix-desktop.md, part eighteen). | `test-c4sc-back` and `test-c4sc-run` also under `-g` (c4sc-host = c4lc, trailer included). `test-c4ix-rebuild` with a `-g` program in its list. |
 | **S4** | **c4fc `-g`.** Rows from `(STATEMENT)`, line items in opt.f, the same rules. | `test-c4fc`: the C4IX leg (F10, both compilers preprocess themselves) also with `-g`, `cmp` of whole files trailer and all. The `gcc -E` legs (c4th.c, C4KE) compare code only, since the line maps of a `.i` file and of the source differ, unless S1's marker support makes them equal, which this milestone checks. |
 | **S5** | **c4cc `-g`.** | `test-srcmap`: c4cc's map of a probe (one-file and `gcc -E` input) checked against the source; `test-c4sp-opt` (the `-S` listing format is pinned). |
 | **S6** | **Maps on by default**, the user's goal: in all four compilers at once, kernels and libraries included. `-g0` where a test compares against a reference image made without a map; pins that measure images re-pinned (test-b4ke's 1,898 bytes, the size tables in c4ix-design.md). Measure what it costs. | `make test` and every suite S0-S5 named, now with the default; `test-libjs` (the whole desktop suite on mapped images); `test-c4ix-rebuild`; `test-wolf3d` when the game is fetched; C4SK's own build still yields images with nothing after S. Recorded: the root archive's size, compressed, before and after; each image's map size; the heap after boot. |

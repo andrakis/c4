@@ -59,14 +59,18 @@ int *sc_call_named (char *name, int *args) {
 // extern symbol for c4rlink.
 extern int *L_lex_58conforming;
 extern int *L_lex_58pp;
+extern int *L_lex_58locs;               // -g: tokens keep their files, and the files are listed
+extern int *L_lex_58files;
 int *L_lex_58file (int *a0);
 extern int *L_pp_58paths;
 int *L_pp_58file (int *a0);
 int *L_pp_58predefine (int *a0);
 int *L_pp_58predefines (int *a0);
+extern int *L_p_58lines;                // -g: the parser puts the lines in
 int *L_parse_58program (int *a0);
 extern int *L_c4r_58v3;
 extern int *L_c4r_58bss_45extra;
+extern int *L_c4r_58srcfiles;           // -g: the map's files
 int *L_c4r_58decode (int *a0);
 int *L_c4r_58encode (int *a0);
 extern int *L_tree_58objmode;

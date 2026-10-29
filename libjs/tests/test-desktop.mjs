@@ -7,7 +7,8 @@
 // presented, and things are clicked by the text drawn on them, so the
 // test follows the layout rather than pinning coordinates.
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { createMachine, boot } from '../boot.js';
 import { STOP } from '../c4m.js';
@@ -15,6 +16,8 @@ import { GuiDevice, CMD } from '../gui-device.js';
 import { SoundDevice, SND, EVT, MUTE } from '../snd-device.js';
 import { typeBytes } from '../keys.js';
 import { layUploads } from '../uploads.js';
+import { readC4r, analyse, insnText } from '../c4r.js';
+import { OPNAMES } from '../../src/c4bb/sim/devices.js';
 
 const ROOT = new URL('../../src/c4bb/images/', import.meta.url).pathname;
 // the screen's size: the desktop's own, until the test tells it another
@@ -763,6 +766,82 @@ key('ESC'); txt('set vim\n');
 check(until(() => !has(/^-- EDIT --/)), 'and Esc then set vim brings VIM back', screen());
 txt(':q!\n');
 check(until(() => !has(/t\.c \* - IDE|t\.c - IDE/)), ':q! closes the window');
+
+// ---- the IDE's Code pane (explore.c): the code a C file compiles to ---------------------------
+{
+  // its opcode names are the machine's, and the numbers it treats apart theirs
+  const xsrc = readFileSync(new URL('../../src/c4ix/user/desktop/explore.c', import.meta.url), 'utf8');
+  const xnames = (/static char \*opnames =([^;]*);/.exec(xsrc) || [, ''])[1].match(/"([^"]*)"/g).map(q => q.slice(1, -1)).join('');
+  check(xnames === OPNAMES, "the Code pane's opcode names are the machine's (devices.js OPNAMES)", xnames);
+  const named = ['LEA', 'JMP', 'JSR', 'BZ', 'BNZ', 'ADJ', 'JSRI', 'JSRS', 'LDL', 'PSHL', 'LEAP', 'IMMP', 'STL'];
+  const opnum = n => OPNAMES.match(/.{5}/g).findIndex(t => t.slice(0, 4).trim() === n);
+  check(named.every(n => new RegExp(`O_${n} = ${opnum(n)}\\b`).test(xsrc)) && new RegExp(`O_N = ${OPNAMES.length / 5}\\b`).test(xsrc),
+    'and the opcodes it names by number are where OPNAMES has them');
+}
+const SQ = 'int sq(int a) {\nreturn a * a;\n}\nint main() {\nprintf("%d\\n", sq(7));\nreturn 0;\n}';
+start('IDE');
+until(() => has('Untitled - IDE'));
+txt(':e /tmp/sq.c\n');
+txt('i'); txt(SQ); key('ESC');
+txt(':w\n');
+check(until(() => has(/"\/tmp\/sq\.c" written, 7 lines/)), 'a file with two functions, written', screen());
+txt(':code\n');
+check(until(() => has(/^Code: main \(\d+ words\)/), 4000), ':code compiles it with cc -g, and shows the function the cursor is in', screen());
+// the pane: what is drawn right of its header, by rows
+const paneX = () => { const h = find(/^Code: /)[0]; return h ? h.x - 6 : 1e9; };
+const paneRows = () => {
+  const x0 = paneX(), h = find(/^Code: /)[0];
+  const by = new Map();
+  for (const t of frame) if (t.adv === 7 && t.x >= x0 && h && t.y > h.y + 8) { const l = by.get(t.y) || []; l.push(t); by.set(t.y, l); }
+  return [...by.keys()].sort((a, b) => a - b).map(y => by.get(y).sort((a, b) => a.x - b.x).map(t => t.s.trimEnd()));
+};
+// a row is its offset, perhaps a label, the mnemonic and its operand
+const insOf = r => { const k = /:$/.test(r[1] || '') ? 2 : 1; return r[k + 1] ? r[k].padEnd(5) + r[k + 1] : r[k]; };
+check(paneRows().some(r => insOf(r) === 'JSR  sq') && paneRows().some(r => insOf(r) === 'IMM  "%d\\n"'),
+  "main's call to sq, and its string, by name", paneRows().map(r => r.join(' ')).join('\n'));
+// the same as c4r.js says for the object host c4lc makes of the same source
+{
+  const top = new URL('../../', import.meta.url).pathname;
+  // c4sp32: the word C4IX's c4sc has
+  if (existsSync(join(top, 'c4sp32'))) {
+    writeFileSync('/tmp/.td-sq.c', SQ + '\n');
+    execFileSync('./c4sp32', ['-R', '-c', '16000000', 'src/c4sp/lisp/c4lc.lisp', '-O', '-g', '-c', '-P', '-I', '/tmp', '-I', 'src/c4ix/include',
+      '-D', 'C4CC=1', '-D', '__c4cc__=1', '/tmp/.td-sq.c', '/tmp/.td-sq.c4o'], { cwd: top, stdio: 'ignore' });
+    const a = analyse(readC4r(new Uint8Array(readFileSync('/tmp/.td-sq.c4o'))));
+    const f = a.funcs.find(g => g.name === 'main');
+    const want = [];
+    for (let k = f.first; k >= 0 && k < a.insns.length && a.insns[k].off < f.end; k++) want.push(insnText(a, a.insns[k], f));
+    const got = paneRows().map(insOf);
+    check(want.length > 3 && want.every((w, i) => got[i] === w), "each of main's instructions as libjs/c4r.js's insnText has it",
+      `want:\n${want.join('\n')}\ngot:\n${got.join('\n')}`);
+    unlinkSync('/tmp/.td-sq.c'); unlinkSync('/tmp/.td-sq.c4o');
+  } else console.log('test-desktop: (no ./c4sp32: the Code pane is not checked against c4r.js)');
+}
+txt('2G');
+check(until(() => has(/^Code: sq \(\d+ words\)/)), 'the cursor on another function shows that one', screen());
+txt('gg');
+{
+  const mul = find('MUL').filter(t => t.x >= paneX())[0];
+  if (mul) click(mul.x + 3, mul.y + 5);
+  check(!!mul && until(() => has('2,1')), "a click on an instruction goes to its line (sq's MUL, line 2)", screen());
+}
+txt('G');
+check(until(() => has(/^Code: main /)), 'G: main again');
+{
+  const call = find('sq').filter(t => t.x >= paneX())[0];
+  if (call) { click(call.x + 3, call.y + 5); click(call.x + 3, call.y + 5); }
+  check(!!call && until(() => has('1,1') && has(/^Code: sq /)), 'a double click on a call goes to the callee', screen());
+}
+{
+  const o = find('-O').filter(t => t.x >= paneX())[0];
+  if (o) click(o.x + 3, o.y + 5);
+  check(!!o && until(() => has('Compiling with -g...')), 'its -O button compiles again without -O', screen());
+  check(until(() => has('Compiled with -g') && has(/^Code: sq /), 4000), '... and shows that', screen());
+}
+key('F7', 0, 118);
+check(until(() => !has(/^Code: /)), 'F7 hides the pane', screen());
+txt(':q!\n');
+check(until(() => !has('sq.c - IDE')), 'and the window closes');
 
 // ---- the IDE: its desktop icon, its file pane, colours, its scroll bar -----------------------
 dbl('IDE');

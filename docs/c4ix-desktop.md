@@ -953,3 +953,68 @@ copied it (grin's G7 found the same for its applications, 86c4c89).
 - `gui_frame` (libjs/guest/gui.c) could place a long frame in an empty
   ring at any head, by skipping to the start and ringing the bell to
   drain the skip, rather than dropping it.
+
+## Part eighteen: the IDE shows the code it compiles to (asked for 2026-10-29)
+
+A cut-down Code Explorer (docs/c4-explorer.md, track E) inside the IDE,
+sized for 800x600 and 1024x768, and still usable at 640x480. The web
+page's three panes (libjs/web/explore.html) become one: the IDE's text is
+the source pane, and the cursor picks the function.
+
+- [x] **c4sc `-g`** (track S's S3): body.h takes `-g` and `-g0`, as
+      c4lc.lisp does, and sets the lexer's locations, the parser's lines
+      and the writer's files. The SMAP trailer is the one c4lc writes,
+      byte for byte, and the code is the same with or without it.
+      test-c4sc-back compiles its corpus under `-g` and `-O -g` too. cc
+      passes `-g` through, and says so in its usage.
+- [x] **View > Code** (F7, `:code`): a pane of its own module,
+      `explore.c`, beside the text when the window is wide enough (at
+      least 250 pixels for it and 300 for the text), below the text
+      otherwise. It compiles the saved file with `cc -g -c -O` into
+      `/tmp/.ide-PID-N.c4o`, on a pipe of its own, apart from the build,
+      and again at each save and each file opened. It reads the object
+      itself: the code, the patches, the symbols and the source map.
+- [x] **What it shows**: the function the cursor is in (the one with code
+      from the cursor's line, else the last one this file starts above
+      it), with each instruction's offset, a label where a branch lands,
+      the mnemonic and its operand named as libjs/c4r.js's `insnText`
+      names it: a function, `&global+n`, a string literal quoted, `L3`,
+      `[bp+2]`, an extern. The instructions from the cursor's line are
+      lit, each row has a band of its line's colour, and the gutter has
+      the same bands beside the lines that made code. The header names
+      the function and its size; the footer says where a picked
+      instruction came from, that the text has changed since it was
+      compiled, or why there is nothing to show (the compiler's last two
+      lines, when it failed).
+- [x] **Clicks**: an instruction goes to its line; a double click on a
+      call (or a function's address) goes to the callee, when it is in
+      the same file, and says which file it is in otherwise. The `-O`
+      button compiles again with or without `-O`.
+- [x] test-desktop.mjs: the pane's opcode table is the machine's
+      (devices.js OPNAMES), and so are the numbers it names; a two-function
+      file, `:code`, `JSR sq` and the string by name; every instruction of
+      `main` as `insnText` gives it for host c4lc's object of the same
+      source; the cursor on the other function; a click to a line, a
+      double click to the callee; `-O` off and on; F7 to hide it.
+- [x] `web-ix-code.mjs`: the same in a browser over CDP, a file
+      written in the IDE and `:code`, with a screenshot at 800x600
+      (beside the text), 640x480 (below it) and 1024x768.
+
+### Found on the way
+
+- **The last string literal of an object had no name** in the web
+  explorer too. c4lc leaves its NUL to the zeroed memory after the
+  data (an object's data can be exactly `%d\n`, three bytes), and
+  libjs/c4r.js's `cString` wanted a NUL inside the data, so the
+  operand read `data+0`. The data's end now ends a string, in
+  c4r.js and in the pane.
+- c4sc's driver is compiled apart from the generated units, so the
+  globals `-g` sets are declared in src/c4sc/host.h, beside the other
+  flags'.
+- The IDE's status line drew its message under the cursor's
+  line and column when the text was narrow; it is clipped short of
+  them now.
+
+Left out, from the page: the function list and its filter, the globals
+and strings, callers and callees, opening an image rather than a source,
+and the tooltips that explain each instruction (opdoc.js).

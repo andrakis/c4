@@ -33,6 +33,8 @@ DEPS $(OUT)/desktop/apps.c4o : src/c4ix/user/desktop/apps.c $(H)
 RUN $(LC) src/c4ix/user/desktop/apps.c $(OUT)/desktop/apps.c4o
 DEPS $(OUT)/desktop/edit.c4o : src/c4ix/user/desktop/edit.c $(H)
 RUN $(LC) src/c4ix/user/desktop/edit.c $(OUT)/desktop/edit.c4o
+DEPS $(OUT)/desktop/explore.c4o : src/c4ix/user/desktop/explore.c $(H)
+RUN $(LC) src/c4ix/user/desktop/explore.c $(OUT)/desktop/explore.c4o
 DEPS $(OUT)/desktop/wall.c4o : src/c4ix/user/desktop/wall.c $(H) src/c4ix/include/archive.h
 RUN $(LC) src/c4ix/user/desktop/wall.c $(OUT)/desktop/wall.c4o
 # the window kit
@@ -61,7 +63,7 @@ RUN $(LC) src/winkit/clock.c $(OUT)/desktop/clock.c4o
 # the Calculator's decimal conversions: libc's, which says double (slow)
 DEPS $(OUT)/desktop/fp.c4o : src/c4ix/libc/fp.c
 RUN $(LC) src/c4ix/libc/fp.c $(OUT)/desktop/fp.c4o
-SET OBJS shell.c4o tools.c4o host.c4o term.c4o files.c4o taskmgr.c4o apps.c4o edit.c4o wall.c4o draw.c4o ui.c4o wmcore.c4o dialog.c4o look95.c4o look31.c4o textgrid.c4o savers.c4o calc.c4o notepad.c4o clock.c4o fp.c4o
+SET OBJS shell.c4o tools.c4o host.c4o term.c4o files.c4o taskmgr.c4o apps.c4o edit.c4o explore.c4o wall.c4o draw.c4o ui.c4o wmcore.c4o dialog.c4o look95.c4o look31.c4o textgrid.c4o savers.c4o calc.c4o notepad.c4o clock.c4o fp.c4o
 CD $(OUT)/desktop
 LIST desktop.objs $(OBJS) -l $(OUT)/lib/libgui.c4s -l $(OUT)/lib/libarc.c4s -l $(OUT)/lib/libc4ix.c4s
 DEPS $(OUT)/bin/c4ix-desktop.c4r : $(OBJS) $(OUT)/lib/libgui.c4s $(OUT)/lib/libarc.c4s $(OUT)/lib/libc4ix.c4s

@@ -313,7 +313,9 @@ export function cString(data, off, max = 200) {
     s += String.fromCharCode(c);
     if (s.length >= max) return s + '...';
   }
-  return null;
+  // the data's end: c4lc leaves the last literal's NUL to the zeroed
+  // memory after it (an object's data can be exactly "%d\n")
+  return s;
 }
 
 export function hex(n) { return '0x' + (n >>> 0).toString(16); }

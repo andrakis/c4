@@ -2,7 +2,7 @@
 // compiler, compiled to an image -- where `c4sp c4lc.lisp` runs the same
 // compiler interpreted, many times slower (docs/c4sc-design.md).
 //
-//   cc [-O] [-c] [-conforming] [-fno-builtin] [-fpic] [-mfuse] [-v]
+//   cc [-O] [-c] [-g] [-conforming] [-fno-builtin] [-fpic] [-mfuse] [-v]
 //      [-stack bytes] [-I dir] [-D name] [-l lib] [-o out] file.c...
 //
 // c4lc's own preprocessor is always on (-P). After any -I given it
@@ -24,6 +24,8 @@
 //   -l /lib/libc.c4s a shared library, loaded when the program starts
 //                    (its callers are built -fno-builtin)
 //
+// -g gives each image a source map (c4sc's -g): which file and line each
+// run of code came from, which the IDE's Code pane reads.
 // -v prints each command before running it. The tools run on a task's
 // default stack, 256 KB, and -stack gives more. c4sc needs a few KB of
 // it: C4KE's kernel, src/c4ke/c4ke.c, peaks at 3.4 KB (2026-10-25). It
@@ -171,7 +173,7 @@ static int compile(char *src, char *out, int obj) {
 }
 
 static int usage() {
-    ufprintf(STDERR, "usage: cc [-O] [-c] [-conforming] [-fno-builtin] [-fpic] [-mfuse] [-v]\n");
+    ufprintf(STDERR, "usage: cc [-O] [-c] [-g] [-conforming] [-fno-builtin] [-fpic] [-mfuse] [-v]\n");
     ufprintf(STDERR, "          [-stack bytes] [-I dir] [-D name] [-l lib] [-o out] file.c...\n");
     return 2;
 }

@@ -816,3 +816,51 @@ kit, `src/winkit/` (winkit.h has the API), and rebuilt the desktop on it.
   `files.c`: those modules did not move.
 - Minimised windows as icons, which the 3.1 look will have in grin (G2);
   here they go to the taskbar in every look.
+
+## Part fifteen: the clipboard between apps, the IDE's settings, a Windows 95 file box (asked for 2026-10-28)
+
+The desktop is one task, so the kit's clipboard (`wk_clip_set`,
+`wk_clip_get` in `wmcore.c`) is every window's: what is copied is the
+kit's own copy, in the kit's memory, so it outlives the window that
+copied it (grin's G7 found the same for its applications, 86c4c89).
+
+- [x] **Terminal's Edit menu**: Copy, Paste, Select All and Copy All.
+      The mouse selects on the grid (`tg_select`, textgrid.c): a drag is
+      a run of lines, and with Alt held a block. The selection keeps to
+      its text as more arrives and while the scrollback is scrolled (its
+      lines are numbered from the grid's first). Copy All takes the
+      scrollback and the screen. Paste types the clipboard in, a key a
+      character, a line at a time down the pipe. Keys: Ctrl+Shift+C and
+      V, Ctrl+Ins and Shift+Ins; Ctrl+C copies when there is a selection
+      and is ^C when there is none. The window is a menu bar taller.
+- [x] **The IDE's Edit menu**: Cut, Copy, Paste, Select All, on the same
+      clipboard; in VIM mode they take a Visual selection (a drag of the
+      mouse makes one).
+- [x] **The IDE types as Text Editor does by default** (Traditional):
+      Shift with the moving keys, a drag or Shift+click select, a double
+      click takes a word, typing replaces the selection, Ctrl+X, C, V, A,
+      Z and Y; Esc still opens the command line (`:w`, `:make`, `:e`).
+      VIM mode is the other choice.
+- [x] **The IDE's Settings** (View > Settings): the colour scheme, Blue
+      (the default, after VIM's `blue`: gold on dark blue) or Classic (the
+      IDE's first colours), and the input mode, Traditional or VIM, with
+      a preview. Used at once in every IDE window, and kept in
+      `/etc/ide.cfg` as `scheme N input M`.
+- [x] **Word wrap on to start with** (`:set nowrap`, View > Word Wrap).
+- [x] **A binary file is opened only once asked**: by its name (`.c4r
+      .c4o .c4l .c4s .tgz .tar .zip .wad .wl1` and the like) or a NUL in
+      its first 512 bytes. OK opens it anyway, Cancel leaves the file
+      shown as it was. Open, `:e`, the file pane and Files all ask.
+- [x] **The IDE's title says IDE** ("hello.c - IDE"), and so does its
+      item on the Go menu.
+- [x] **Open and Save As are Windows 95's** in Text Editor and the IDE
+      (look95.c draws the kit's file box, dialog.c's, in the Flat and
+      Classic looks): Look in with the folder and a list of the folders
+      above it, an Up button, the folder's contents with icons, the name,
+      and Files of type. The types are a Windows filter string, "C Source
+      (*.c;*.h)|*.c;*.h|All Files (*)|*"; a name with a * in it lists what
+      it matches. In the Windows 3.1 look the box is 3.1's, as grin's is.
+- [x] test-desktop.mjs: checks for each, and for the clipboard's text
+      outliving the Terminal that copied it. web-ix-edit.mjs, the browser
+      check over CDP: a Terminal's selection pasted into the IDE, its
+      Settings, the binary warning, the Open box, Text Editor's Save As.

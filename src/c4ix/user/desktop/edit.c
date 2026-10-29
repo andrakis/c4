@@ -56,7 +56,8 @@
 //
 // Edit's Cut, Copy and Paste go through the desktop's clipboard (the
 // kit's, which every window shares): in VIM mode they take a Visual
-// selection.
+// selection. A file that looks binary -- by its name (.c4r, .wad, .tgz
+// and the like) or a NUL in its first bytes -- is opened only once asked.
 
 #include "desktop.h"
 
@@ -71,8 +72,9 @@ enum { L_TEXT = 0, L_C = 1, L_JS = 2, L_LISP = 3, L_FORTH = 4, L_SH = 5, L_B4K =
 // is ec[that] (below)
 enum { HC_TEXT = 0, HC_KW = 1, HC_TYPE = 2, HC_STR = 3, HC_COM = 4, HC_NUM = 5, HC_PRE = 6 };
 enum { M_NORMAL = 0, M_INSERT = 1, M_VISUAL = 2, M_VLINE = 3, M_CMD = 4 };
-// Edit's items
+// Edit's items, and the answer this window asks for itself
 enum { E_CUT = 0, E_COPY = 1, E_PASTE = 2, E_ALL = 4 };
+enum { A_BINARY = 40 };
 
 // The colour schemes: the text's colours by HC_*, then the rest. A gutter
 // number colour of SHADOW is the desktop scheme's shadow.
@@ -126,6 +128,7 @@ struct edit {
     int tsel, tlast;                               // Traditional: a selection from (vy, vx); the last key typed text
     int drag;                                      // the mouse is selecting
     char ask[WK_PATH];                             // a file box's path, in and out
+    char pend[128];                                // a binary file waiting to be opened, once asked
 };
 
 static struct edit *E(struct win *w) { return (struct edit *)w->st; }
@@ -457,6 +460,45 @@ static int e_save(struct edit *e, char *path) {
     f_add(e, e->path);
     f_reveal(e, e->path);
     return 1;
+}
+
+// Binary files, by their names' ends; then any file with a NUL in its
+// first bytes, which text never has.
+static char *bin_ext = " .c4r .c4o .c4l .c4s .c4m .tgz .tar .gz .zip .z .wad .wl1 .wl6 .sod .rtl .rts .grp .pak .bin .img .vfs .png .jpg .gif .bmp .ico .wav .mp3 .ogg .mid .voc .exe .com .o .a .so ";
+static int e_inwords(char *s, int n, char *list);
+static int e_binary(char *p) {
+    int i, k, fd, n;
+    char ext[12];
+    k = ui_len(p);
+    i = k;
+    while (i > 0 && p[i - 1] != '.' && p[i - 1] != '/') --i;
+    if (i > 0 && p[i - 1] == '.' && k - i + 1 < 12) {
+        n = 0;
+        while (i - 1 + n < k) { ext[n] = p[i - 1 + n]; if (ext[n] >= 'A' && ext[n] <= 'Z') ext[n] = ext[n] + 32; ++n; }
+        if (e_inwords(ext, n, bin_ext)) return 1;
+    }
+    if ((fd = uopen(p, O_RD)) < 0) return 0;
+    n = uread(fd, sb, 512);
+    uclose(fd);
+    i = 0;
+    while (i < n) { if (!sb[i]) return 1; ++i; }
+    return 0;
+}
+
+// A file into the editor: 1 opened, 0 cannot, 2 asked first (a binary
+// file, which A_BINARY's answer opens).
+static int e_open(struct win *w, char *path, int force) {
+    struct edit *e;
+    e = E(w);
+    if (!force && e_binary(path)) {
+        ui_ncpy(e->pend, path, 128);
+        ui_cpy(sb, "'");
+        ui_ncat(sb, ui_base(path), 200);
+        ui_cat(sb, "' does not look like text: it is a binary file, which the IDE cannot show, and would spoil if it saved it. Open it anyway?");
+        wk_msgbox(w->id, A_BINARY, "IDE", sb, WK_OKCANCEL);
+        return 2;
+    }
+    return e_load(e, path);
 }
 
 // ---- the cursor ------------------------------------------------------------------------
@@ -1298,7 +1340,7 @@ static void e_ex(struct win *w, char *c) {
     if (c[0] == 'e' && (c[1] == ' ' || (c[1] == '!' && c[2] == ' '))) {
         if (c[1] != '!' && e->modified) { e_say(e, "No write since last change (add ! to override)"); return; }
         c = c + (c[1] == '!' ? 3 : 2);
-        if (!e_load(e, c)) { e_settext(e, "", 0); ui_ncpy(e->path, c, 128); e->modified = 0; e->cy = 0; e->cx = 0; e_say(e, "New file"); }
+        if (!e_open(w, c, 0)) { e_settext(e, "", 0); ui_ncpy(e->path, c, 128); e->modified = 0; e->cy = 0; e->cx = 0; e_say(e, "New file"); }
         e_retitle(w);
         return;
     }
@@ -2193,7 +2235,7 @@ static void f_pick(struct win *w, int i) {
     if (ui_eq(e->fpath[i], e->path)) return;
     if (e->modified) { e_say(e, "No write since last change: :w first, or :e! FILE"); return; }
     ui_cpy(p, e->fpath[i]);
-    if (!e_load(e, p)) e_say(e, "Cannot open that file");
+    if (!e_open(w, p, 0)) e_say(e, "Cannot open that file");
     e_retitle(w);
 }
 
@@ -2727,7 +2769,7 @@ int edit_open(char *path) {
     f_reserve(e, 64);
     f_open_dir(e, 0 - 1);
     if (path && path[0]) {
-        if (!e_load(e, path)) { ui_ncpy(e->path, path, 128); e_say(e, "New file"); }
+        if (!e_open(w, path, 0)) { ui_ncpy(e->path, path, 128); e_say(e, "New file"); }
     }
     e->modified = 0;
     if (!e->msg[0] && e->vim) e_say(e, "VIM keys: i to type, Esc, :w to save, :make (F5) to build, :help is the Help menu");
@@ -2793,8 +2835,9 @@ void edit_answer(struct win *w, int action, int yes) {
     if (!yes) return;
     if (action == A_OPEN) {
         if (e->modified) { e_say(e, "No write since last change: save first (Ctrl+S, or :w)"); return; }
-        if (!e_load(e, e->ask)) { ui_ncpy(e->path, e->ask, 128); e_settext(e, "", 0); e->modified = 0; e_say(e, "New file"); }
+        if (!e_open(w, e->ask, 0)) { ui_ncpy(e->path, e->ask, 128); e_settext(e, "", 0); e->modified = 0; e_say(e, "New file"); }
     } else if (action == A_SAVEAS) e_save(e, e->ask);
+    else if (action == A_BINARY && !e_load(e, e->pend)) e_say(e, "Cannot open that file");
     e->tsel = 0;
     e_retitle(w);
 }

@@ -594,8 +594,17 @@ check(until(() => termText('survivor').length > 0), 'a new Terminal says a word'
   key('', 0, 35); key('v', 2, 86);
   check(until(() => edLine('worldsurvivor')), "and it pastes into the IDE: the clipboard's text outlived its window", screen());
 }
-// an empty file for what follows
-key('a', 2, 65); key('DEL');
+// a binary file: asked about first, by a NUL in it or by its name
+key('ESC'); txt('e! /bin/hello\n');
+check(until(() => has(/does not look like text/)), 'opening a binary file asks first (a NUL in /bin/hello)', screen());
+clickText('Cancel');
+check(until(() => noDialog() && has('Untitled * - IDE')), 'and Cancel leaves it unopened', screen());
+key('ESC'); txt('e! /lib/libc.c4s\n');
+check(until(() => has(/does not look like text/)), 'a .c4s is binary by its name', screen());
+key('\n');
+check(until(() => noDialog() && has('libc.c4s - IDE')), 'and OK opens it anyway', screen());
+key('n', 2, 78);
+check(until(() => has('Untitled - IDE')), 'Ctrl+N: a new file', screen());
 // Settings: the colours, and VIM mode
 menu('View', 'Settings...');
 check(until(() => has('IDE Settings') && has('Colour scheme') && has('Input mode')), "View > Settings opens the IDE's settings", screen());

@@ -324,6 +324,7 @@ void sched_retire(struct task *t) {
 // (its ublocks, each with its header, task.c)
 static int task_mem(struct task *t) {
     int b;
+    if (mmu_on) return task_umem(t);   // its pages, all of them
     b = t->img_bytes;
     if (t->stack) b = b + t->stack_words * sizeof(int);
     return b + task_umem(t);
@@ -740,7 +741,7 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     // there is none, and then not even the call.
     if (task_reaplist) task_reap();
     // the stack an execve left, which its handler was standing on
-    if (sched_stale_stack) { free((int *)sched_stale_stack); sched_stale_stack = 0; }
+    if (sched_stale_stack) { ufree(sched_stale_stack); sched_stale_stack = 0; }
     // The stack guard. A task whose stack pointer is inside the guard,
     // or whose top guard word has been written, ran off the end of its
     // stack: kill it here, before what it wrote under the stack -- some
@@ -1208,7 +1209,7 @@ int sched_forge(struct task *t, int entry, int argc, int argv) {
     int i, words;
 
     words = sched_next_stack_words > C4IX_STACK_WORDS ? sched_next_stack_words : C4IX_STACK_WORDS;
-    if (!(stk = (int *)malloc(words * sizeof(int)))) return 0;
+    if (!(stk = (int *)umalloc(words * sizeof(int)))) return 0;
     memset(stk, 0, words * sizeof(int));
     x = stk + words - 8;              // slack above, as C4KE leaves
     t->stack_words = words;

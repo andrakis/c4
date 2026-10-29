@@ -492,6 +492,11 @@ struct task {
     // next runs: only then may it preempt a less favoured one.
     int  nice;
     int  woke;
+    // Under the MMU (mmu.c): the regions of memory it owns, the chunk its
+    // small blocks are being cut from, and its slabs of each size
+    int  urgns;
+    int  uchunk;
+    int  uslab[8];
     char name[TASK_NAME_MAX];
 };
 
@@ -632,6 +637,10 @@ enum {
 enum { CK_TASK_SLOTS = 128 };
 enum { CK_SIG_MAX = 64 };
 enum { CK_SIGINT = 2, CK_SIGKILL = 9, CK_SIGUSR1 = 10, CK_SIGTERM = 15 };
+// The machine's TLEV word (libjs's ROM, at TLEV_ADDR): where a signal
+// handler returns under the MMU, which lets user mode run nothing else
+// of the kernel's
+enum { CK_TLEV_ROM = 0x10 };
 // u0.h:27 -- note this disagrees with C4IX's own PRIV_*, which is
 // PRIV_KERNEL = 0, PRIV_USER = 1. Convert at the boundary.
 enum { CK_PRIV_NONE = 0, CK_PRIV_USER = 1, CK_PRIV_KERNEL = 2 };
@@ -774,5 +783,30 @@ void mmu_init();                       // at boot: tables, and on
 void mmu_cpu(int k);                   // another CPU, as it starts
 int  mmu_map(int *dir, int va, int n, int flags);
 void mmu_fault(struct task *t, int va);   // TRAP_SEGV from a user task: kill it
+// What user mode may use of page 0 (MMU_IOPM)
+enum { IOPM_ROM = 1, IOPM_DEV = 2, IOPM_GUI = 4, IOPM_SND = 8, IOPM_LOCAL = 16, IOPM_LOCALW = 32 };
+// A user task's memory. Without the MMU these are malloc and free.
+// umalloc: whole pages, the kernel's until mmu_adopt gives them to the
+// task they were made for (its stack, image, arguments); ufree gives such
+// a region back, or frees a kernel block. umem_alloc and umem_free: the
+// blocks a task asks for (SYS_SBRK, malloc behind protected mode), small
+// ones from slabs of its own pages; umem_free_all, its heap (ALL:
+// everything it owns).
+int  umalloc(int n);
+void ufree(int p);
+void umem_share(int p);                // a cached library's code: in every space, never freed
+void mmu_adopt(struct task *t);        // what was made for T is T's
+int  umem_alloc(struct task *t, int n);
+void umem_free(struct task *t, int p);
+void umem_free_all(struct task *t, int all);
+int  umem_bytes(struct task *t);
+int  mmu_user_entry(struct task *t);   // a page that runs T's constructors, main and exit
+int  mmu_slot();                       // a word user mode may read: a library's data slot
+// Could the running task use the N bytes at P (to write, if W)? And the
+// string at S: its length, or -1. Always yes without the MMU.
+int  uaccess(int p, int n, int w);
+int  ustrlen(char *s);
+int  uvecok(char **v, int n);          // N strings (N < 0: up to a null pointer) and their vector
+char *ucopy(char *p, int n);           // N bytes at P, copied into the running task's memory
 
 #endif // __C4IX_H

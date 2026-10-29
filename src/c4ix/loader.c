@@ -113,9 +113,9 @@ static int mod_has(struct c4r_mod *m, char *name) {
 }
 
 static void mod_free(struct c4r_mod *m) {
-    if (m->shared) { if (m->data) free(m->data); m->data = 0; m->code = 0; m->buf = 0; return; }
-    if (m->code) free(m->code);
-    if (m->data) free(m->data);
+    if (m->shared) { if (m->data) ufree((int)m->data); m->data = 0; m->code = 0; m->buf = 0; return; }
+    if (m->code) ufree((int)m->code);
+    if (m->data) ufree((int)m->data);
     if (m->buf) free(m->buf);
     m->code = 0; m->data = 0; m->buf = 0;
 }
@@ -225,7 +225,8 @@ static int mod_read(char *path, struct c4r_mod *m) {
 
     // code: copy out of the read buffer into an exact-size allocation
     p = p + sizeof(int);   // 'C' marker word
-    if (!(code = (int *)malloc(codelen * sizeof(int) + sizeof(int)))) { free(buf); return 0; }
+    // umalloc: a user task's (mmu.c), when it is one
+    if (!(code = (int *)umalloc(codelen * sizeof(int) + sizeof(int)))) { free(buf); return 0; }
     memcpy(code, p, codelen * sizeof(int));
     p = p + codelen * sizeof(int);
 
@@ -233,7 +234,7 @@ static int mod_read(char *path, struct c4r_mod *m) {
     // malloc+memset so the BSS tail [datalen, memsz) is ready; only
     // datalen bytes are copied from the image.
     p = p + sizeof(int);   // 'D' marker
-    if (!(data = (char *)malloc(memsz + 8))) { free(code); free(buf); return 0; }
+    if (!(data = (char *)umalloc(memsz + 8))) { ufree((int)code); free(buf); return 0; }
     memset(data, 0, memsz + 8);
     memcpy(data, p, datalen);
     m->dtmpl = p;
@@ -303,7 +304,7 @@ static void mod_data_relocate(struct c4r_mod *m, char *d) {
 // A fresh copy of a cached library's data, for one more task.
 static char *mod_data_copy(struct c4r_mod *m) {
     char *d;
-    if (!(d = (char *)malloc(m->memsz + 8))) return 0;
+    if (!(d = (char *)umalloc(m->memsz + 8))) return 0;
     memset(d, 0, m->memsz + 8);
     memcpy(d, m->dtmpl, m->datalen);
     mod_data_relocate(m, d);
@@ -450,7 +451,7 @@ static int link_modules(char *path, struct c4r_mod *mods, int n) {
                     kprintf("c4ix: loader: %s: no slot left for another shared library\n", m->path);
                     return 0;
                 }
-            } else m->slot = (int *)malloc(sizeof(int));
+            } else m->slot = mmu_on ? (int *)mmu_slot() : (int *)malloc(sizeof(int));
             *m->slot = (int)m->data;
         }
         // __c4_dbase is most of a -fpic library's symbol references (one
@@ -594,6 +595,7 @@ int c4r_load(char *path, struct c4r_image *img) {
             sh->next = shlibs;
             shlibs = sh;
             (mods + k)->shared = 1;
+            umem_share((int)(mods + k)->code);
         }
         ++k;
     }
@@ -605,7 +607,8 @@ int c4r_load(char *path, struct c4r_image *img) {
         libs = (int *)malloc(3 * (n - 1) * sizeof(int));
         k = 1;
         while (k < n) {
-            libs[3 * (k - 1)] = (mods + k)->shared ? 0 : (int)(mods + k)->code;
+            // under the MMU the shared code too: mmu_adopt maps it, ufree leaves it
+            libs[3 * (k - 1)] = (mods + k)->shared && !mmu_on ? 0 : (int)(mods + k)->code;
             libs[3 * (k - 1) + 1] = (int)(mods + k)->data;
             libs[3 * (k - 1) + 2] = (int)(mods + k)->slot;
             ++k;
@@ -687,6 +690,13 @@ struct task *task_spawn_priv(char *path, int argc, int argv, int privs) {
     t->img_nlibs = img.nlibs;
     t->img_bytes = img.bytes;
     t->privs = privs;
+    // Under the MMU: argv in its own memory (init's is the kernel's), what
+    // was loaded for it mapped for it, and a page to start in
+    if (mmu_on && privs == PRIV_USER) {
+        if (ck_argv_copy(t, argc, (char **)argv) && t->argv_vec) sched_forge_argv(t, t->argv_vec);
+        mmu_adopt(t);
+        mmu_user_entry(t);
+    }
     // the CPUs it may run on are its parent's (pin)
     if (sched_cur && !sched_cur->cpuidle) { t->cpumask = sched_cur->cpumask; t->nice = sched_cur->nice; }
     sched_unlock();
@@ -700,15 +710,15 @@ struct task *task_spawn_priv(char *path, int argc, int argv, int privs) {
 // Free what c4r_load allocated: the image, its libraries, the lists.
 void c4r_unload(struct c4r_image *img) {
     int k;
-    if (img->code) free((int *)img->code);
-    if (img->data) free((char *)img->data);
+    if (img->code) ufree(img->code);
+    if (img->data) ufree(img->data);
     if (img->cons) free((int *)img->cons);
     if (img->des) free((int *)img->des);
     if (img->libs) {
         k = 0;
         while (k < img->nlibs) {
-            if (((int *)img->libs)[3 * k]) free((int *)((int *)img->libs)[3 * k]);
-            free((char *)((int *)img->libs)[3 * k + 1]);
+            if (((int *)img->libs)[3 * k]) ufree(((int *)img->libs)[3 * k]);
+            ufree(((int *)img->libs)[3 * k + 1]);
             ++k;
         }
         free((int *)img->libs);

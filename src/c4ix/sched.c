@@ -1442,11 +1442,11 @@ static void sched_banner() {
         hb = *(int *)C4IX_HEAP_BASE;
         he = *(int *)C4IX_HEAP_END;
         // the heap ends a megabyte below the top, under the boot stack
-        bs = (he + 2 * 1048576 - 1);
+        bs = he + 2 * 1048576 - 1;
         mb = bs / 1048576;
         kprintf("c4ix: %d MB of memory:\n", mb);
-        kprintf("  [mem 0x%08x-0x%08x] Kernel\n", 0, hb - 1);
-        kprintf("  [mem 0x%08x-0x%08x] Heap (%d MB)\n", hb, he - 1, ((he - hb) / 1024) / 1024);
+        kprintf("  [mem 0x%08x-0x%08x] Kernel (%d KB)\n", 0, hb - 1, hb / 1024);
+        kprintf("  [mem 0x%08x-0x%08x] Heap - all your applications and memory (%d MB)\n", hb, he - 1, ((he - hb) / 1024) / 1024);
         kprintf("  [mem 0x%08x-0x%08x] Boot stack (%d MB)\n", he, bs, (((bs + 1) - he) / 1024) / 1024);
     }
     

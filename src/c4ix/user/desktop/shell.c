@@ -174,7 +174,7 @@ static void desktop(int x, int y, int w, int h) {
 enum { GO_RUN = 0 - 1, GO_OFF = 0 - 2, GO_WOLF = 0 - 3, GO_DOOM = 0 - 4, GO_TYRIAN = 0 - 5, GO_ROTT = 0 - 6 };
 struct go_item { char *label; int kind; };
 static struct go_item start_items[] = {
-    { "Terminal", K_TERM }, { "Files", K_FILES }, { "Text Editor", K_NOTE }, { "Editor", K_EDIT },
+    { "Terminal", K_TERM }, { "Files", K_FILES }, { "Text Editor", K_NOTE }, { "IDE", K_EDIT },
     { "Calculator", K_CALC }, { "System Monitor", K_TASKS }, { "Settings", K_SETTINGS },
     { "About C4IX", K_ABOUT }, { "-", 0 },
     { "Wolfenstein 3D", GO_WOLF }, { "Doom", GO_DOOM }, { "Tyrian", GO_TYRIAN },

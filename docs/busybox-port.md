@@ -282,7 +282,7 @@ done; docs/c4ix-design.md §6 has the design:
 | `chmod`, `fchmod`, `chown`, `umask`, `utime` | none | succeed and do nothing (the VFS has no owners or modes), except `utime`, which can set the vnode's mtime. P1 (`cp -p`) |
 | `readlink`, `symlink`, `lstat` | none | `lstat` is `stat`; `readlink` fails with `EINVAL`; `symlink` fails with `EPERM`. P1 |
 | `ftruncate`, `rmdir` | `O_TRUNC`; `rmdir` is `unlink` | **DONE**: `SYS_FTRUNCATE(fd, len)`, and libc's `truncate` over it. `unlink` already refused a non-empty directory. P1 |
-| 16 fds per task (`FD_MAX`) | | Enough for the first install; hush keeps a few saved fds per redirection. Watch. |
+| 64 fds per task (`FD_MAX`; 16 until 2026-10-29) | | Enough for the first install; hush keeps a few saved fds per redirection. |
 
 ### 4.1 vfork and exec
 

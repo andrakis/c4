@@ -280,7 +280,7 @@ cp src/c4ke/include/service.h $DISK/
 # ---- C4IX and its userland ------------------------------------------
 # modules compiled by 32-bit c4lc (its own preprocessor), linked by
 # the 32-bit c4rlink; userland links against libc4ix
-C4IX_MODS="boot console va host sl4b task sched vfs sys c4ke loader init"
+C4IX_MODS="boot console va host sl4b task sched vfs sys c4ke loader mmu init"
 C4IX_USER="hello uhello echo wc cat sh ps bench cycles ls mkdir top spin pin nice fmt gui b4ke cc dmesg"
 # userland that also links libarc (gzip and tar): the root archive's unpacker
 C4IX_ARC_USER="tar gunzip crc32 splash persist"

@@ -10,7 +10,8 @@
 // itself: its books are shared (sheap.js).
 
 import { Arena } from '../src/c4bb/sim/arena.js';
-import { OP, STOP, Machine } from './c4m.js';
+import { OP, STOP, Machine, C4I_MMU } from './c4m.js';
+import { Mmu } from './mmu.js';
 import { C, K, S, R, KIND, ParCore, POSTED, PQLEN, PQSTRIDE } from './par.js';
 import { SharedHeap } from './sheap.js';
 
@@ -160,6 +161,8 @@ function main(msg) {
   arena.io = null;                    // device registers go through ApBus, to CPU 0
   bus.m = m;
   m.noFpu = msg.noFpu;
+  // CPU 0 has an MMU: so has this CPU, its own, off until the kernel turns it on here
+  if (msg.info & C4I_MMU) m.mmu = new Mmu(m);
   m.heap = new SharedHeap(arena, msg.heap);
   m.smp = core;
   m.cpuId = id;

@@ -33,10 +33,12 @@ TARGET c4ke.c4o
 RUN c4sc.c4r -c 200000 compile -O -c -I src/c4ix src/c4ix/c4ke.c c4ke.c4o
 TARGET loader.c4o
 RUN c4sc.c4r -c 200000 compile -O -c -I src/c4ix src/c4ix/loader.c loader.c4o
+TARGET mmu.c4o
+RUN c4sc.c4r -c 200000 compile -O -c -I src/c4ix src/c4ix/mmu.c mmu.c4o
 TARGET init.c4o
 RUN c4sc.c4r -c 200000 compile -O -c -I src/c4ix src/c4ix/init.c init.c4o
 ECHO b4ke: linking
-LIST c4ix.objs boot.c4o console.c4o va.c4o host.c4o sl4b.c4o task.c4o sched.c4o vfs.c4o sys.c4o c4ke.c4o loader.c4o init.c4o
+LIST c4ix.objs boot.c4o console.c4o va.c4o host.c4o sl4b.c4o task.c4o sched.c4o vfs.c4o sys.c4o c4ke.c4o loader.c4o mmu.c4o init.c4o
 TARGET c4ix.c4r
 RUN c4rlink.c4r @c4ix.objs -o c4ix.c4r
 ECHO b4ke: C4IX built

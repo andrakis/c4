@@ -57,14 +57,14 @@ export function hasOperand(i) {
 // the opcode-name ROM. c4bb's firmware latches at 0x20-0x3F are RAM.
 // Does the range of n bytes at x touch it?
 const ROM_LOW_END = 0x20;
-function isRom(x, n) {
+export function isRom(x, n) {
   const lo = x | 0, hi = lo + n;
   return (lo < ROM_LOW_END && hi > 0) ||
          (lo < OPNAMES_ROM + OPNAMES.length && hi > OPNAMES_ROM);
 }
 
 // run()'s own opcodes that OPCD can run, which have no operand: opcd().
-function isPlainOp(i) {
+export function isPlainOp(i) {
   return (i >= OP.LEV && i <= OP.MOD) || i === OP._JMP || i === OP._ADJ || i === OP.C4CY ||
          i === OP.JMPA || i === OP.LIP || i === OP.ADDL || i === OP.POPA;
 }
@@ -83,11 +83,17 @@ export const C4I_SMP = 0x100;
 // ... and they run at once, a thread each (par.js), rather than taking
 // turns on one (smp.js). Free in c4m.c's list, which ends at C4I_FPU.
 export const C4I_PAR = 0x20000;
+// The MMU is fitted (mmu.js, docs/c4ix-mmu.md); 0x40000 is C4I_DRV
+export const C4I_MMU = 0x80000;
+// Its registers, a window every CPU sees its own of, as the local one
+export const MMU_BASE = 0x500, MMU_END = 0x540;
 
 // Why run() stopped.
 // PARK and CPUHALT are one processor's, never the machine's (smp.js).
-export const STOP = { BUDGET: 0, HALT: 1, INPUT: 2, SLEEP: 3, PARK: 4, CPUHALT: 5 };
-export const STOP_NAMES = ['budget', 'halt', 'input', 'sleep', 'park', 'cpuhalt'];
+// SWITCH is the MMU's (mmu.js): the mode changed, and with it the loop to
+// run. It never leaves Machine.run.
+export const STOP = { BUDGET: 0, HALT: 1, INPUT: 2, SLEEP: 3, PARK: 4, CPUHALT: 5, SWITCH: 6 };
+export const STOP_NAMES = ['budget', 'halt', 'input', 'sleep', 'park', 'cpuhalt', 'switch'];
 
 // SMP (smp.js, c4mp's instruction set): where a started CPU's entry
 // function returns -- a CPUH word in the ROM -- and the CPU-local window,
@@ -115,6 +121,10 @@ export class Machine {
     this.heap = heap;
     this.gui = bus.gui || null;
     this.snd = bus.snd || null;
+    // The MMU (mmu.js), when the host fits one; vm is set while the user
+    // loop runs, and makes ld32 and the rest translate
+    this.mmu = null;
+    this.vm = false;
     dev.machine = this;
     arena.io = dev;
     this.i32 = arena.i32;
@@ -147,6 +157,8 @@ export class Machine {
     // each TLEV. The PIT and the mailbox are held while it is non-zero,
     // as by c4bb's irqHold (machine.js) -- see boundary().
     this.irqHold = 0;
+    this.vm = false;
+    if (this.mmu) this.mmu.reset();
   }
 
   // ---------------------------------------------------------------
@@ -154,25 +166,31 @@ export class Machine {
   // and comes here for everything else: the device window, the ROM,
   // unaligned words, and addresses off either end of the arena.
   ld32(x) {
+    if (this.vm) return this.mmu.ld32(x);
     x = x | 0;
     if ((x & 3) === 0 && x >= 0x1000) return this.i32[x >> 2] | 0;
     if (this.smp && x >= LOCAL_BASE && x < LOCAL_END && (x & 3) === 0) return this.local[(x - LOCAL_BASE) >> 2] | 0;
+    if (this.mmu && x >= MMU_BASE && x < MMU_END) return this.mmu.read32(x) | 0;
     return this.bus.read32(x) | 0;
   }
   st32(x, v) {
+    if (this.vm) { this.mmu.st32(x, v); return; }
     x = x | 0;
     if ((x & 3) === 0 && x >= 0x1000) { this.i32[x >> 2] = v; return; }
     if (this.smp && x >= LOCAL_BASE && x < LOCAL_END && (x & 3) === 0) { this.local[(x - LOCAL_BASE) >> 2] = v; return; }
+    if (this.mmu && x >= MMU_BASE && x < MMU_END) { this.mmu.write32(x, v | 0); return; }
     if (isRom(x, 4)) { this.romStore(x, v); return; }
     this.bus.write32(x, v | 0);
   }
   ld8(x) {
+    if (this.vm) return this.mmu.ld8(x);
     x = x | 0;
     if (x >= 0x1000) return (this.u8[x] << 24) >> 24;
     if (this.smp && x >= LOCAL_BASE && x < LOCAL_END) return (this.localU8[x - LOCAL_BASE] << 24) >> 24;
     return this.bus.read8s(x);
   }
   st8(x, v) {
+    if (this.vm) { this.mmu.st8(x, v); return; }
     x = x | 0;
     if (x >= 0x1000) { this.u8[x] = v; return; }
     if (this.smp && x >= LOCAL_BASE && x < LOCAL_END) { this.localU8[x - LOCAL_BASE] = v; return; }
@@ -218,6 +236,7 @@ export class Machine {
     }
   }
   cstring(addr, max = 1 << 20) {
+    if (this.vm) return this.mmu.cstring(addr, max);
     const u8 = this.u8;
     addr = addr >>> 0;
     let end = addr;
@@ -247,6 +266,7 @@ export class Machine {
            (this.snd && this.snd.fitted ? C4I_SND : 0) |
            (this.smp ? C4I_SMP : 0) |
            (this.smp && this.smp.parallel ? C4I_PAR : 0) |
+           (this.mmu ? C4I_MMU : 0) |
            (this.trapHandler ? C4I_TRAPH : 0);
   }
 
@@ -264,6 +284,16 @@ export class Machine {
     const i32 = this.i32;
     const t = this.sp;
     let sp = t - TRAP_OFFSET * 4;
+    // With the MMU on (mmu.js), a trap is the way into kernel mode: from
+    // user mode it switches to the kernel's stack (KSP), as an x86 does,
+    // so that a wild sp cannot have the frame written over the kernel,
+    // and the handler runs untranslated
+    const mmu = this.mmu;
+    const kern = mmu !== null && mmu.on;
+    if (kern) {
+      if (this.mode && mmu.ksp) sp = mmu.ksp - TRAP_OFFSET * 4;
+      this.vm = false;
+    }
     i32[(sp -= 4) >> 2] = this.cycleInterval;   // bp+9
     this.cycleInterval = 0;
     i32[(sp -= 4) >> 2] = type;                 // bp+8
@@ -280,6 +310,7 @@ export class Machine {
     sp -= this.ld32(handler + 4) * 4;           // the handler's ENT operand
     this.sp = sp;
     this.pc = handler + 8;                      // past ENT n
+    if (kern) this.mode = 0;
     this.irqHold++;
     return true;
   }
@@ -306,6 +337,15 @@ export class Machine {
     this.cycleInterval = 0;
     this.mode = 0;
     return STOP.BUDGET;
+  }
+
+  // OPCD handed an opcode that carries an operand: refused with a
+  // (usually missed) OPV, as run() does inline
+  opvTrap(op) {
+    const nm = i => OPNAMES.slice(i * 5, i * 5 + 4);
+    this.emitString(`${nm(OP.OPCD)} does not support opcodes requiring arguments (${nm(op)} given)\n`);
+    this.trap(TRAP.OPV, op, this.trapHandler);
+    this.cycleInterval = 0; this.mode = 0;
   }
 
   // EXIT. With CPUs, only CPU 0's ends the machine, as main returning
@@ -373,6 +413,11 @@ export class Machine {
   // BUDGET means carry on.
   sys(op) {
     const dev = this.dev, sp = this.sp;
+    // Under the MMU, the opcodes that run the machine rather than the
+    // task are the kernel's: starting, halting and waking CPUs, IPIs,
+    // and the cycle interrupt's configuration (docs/c4ix-mmu.md 6)
+    if (this.vm && (op === OP.C4CF || (op >= OP.CPUS && op <= OP.CPUH) || (op >= OP.CWAI && op <= OP.IPI)))
+      return this.pmTrap(op);
     if (op >= OP.CPUI && op <= OP.IPI && this.smp) return this.smpOp(op);
     switch (op) {
       case OP.OPEN:
@@ -425,6 +470,7 @@ export class Machine {
         this.a = this.heap.realloc(this.u8, this.ld32(sp + 4), this.ld32(sp));
         return STOP.BUDGET;
       case OP.MSET: {
+        if (this.vm) return this.mmu.block(op);
         const d = this.ld32(sp + 8), v = this.ld32(sp + 4), n = this.ld32(sp);
         if (n > 0) {
           if (d >= 0x1000) this.u8.fill(v & 0xff, d, d + n);
@@ -434,6 +480,7 @@ export class Machine {
         return STOP.BUDGET;
       }
       case OP.MCMP: {
+        if (this.vm) return this.mmu.block(op);
         // glibc: the difference of the first unequal bytes, unsigned
         const p = this.ld32(sp + 8), q = this.ld32(sp + 4), n = this.ld32(sp);
         const u8 = this.u8;
@@ -446,6 +493,7 @@ export class Machine {
         return STOP.BUDGET;
       }
       case OP.MCPY: {
+        if (this.vm) return this.mmu.block(op);
         const d = this.ld32(sp + 8), s = this.ld32(sp + 4), n = this.ld32(sp);
         if (n > 0) {
           const u8 = this.u8;
@@ -546,6 +594,17 @@ export class Machine {
         break;
       }
       case OP.TLEV: {
+        if (this.vm) {
+          // a user task's own TLEV, a C4KE signal handler returning
+          // (c4ke.c ck_signal_deliver): the registers from its frame,
+          // but never the mode or the preemption mask
+          const bp = this.bp;
+          const pc = this.ld32(bp + 8);
+          if (pc === this.pc - 4) return this.tlevWedge(pc);
+          const nsp = this.ld32(bp + 12), nbp = this.ld32(bp + 16), na = this.ld32(bp + 20);
+          this.sp = nsp; this.bp = nbp; this.a = na; this.pc = pc;
+          return STOP.BUDGET;
+        }
         if (this.irqHold > 0) this.irqHold--;   // the handler ends: see boundary()
         const bp = this.bp;
         const pc = this.ld32(bp + 8);
@@ -556,6 +615,7 @@ export class Machine {
         this.mode = this.ld32(bp + 24);
         if (this.trapRestoresInterval) this.cycleInterval = this.ld32(bp + 36);
         this.pc = pc;
+        if (this.mode && this.mmu !== null && this.mmu.on) return STOP.SWITCH;
         return STOP.BUDGET;
       }
       case OP.DBG:
@@ -710,7 +770,7 @@ export class Machine {
   // handler (CWAI, sched.c klock_take), which must not wait behind them.
   boundary(cycle, nextIrq) {
     const dev = this.dev, i32 = this.i32;
-    const tlev = i32[this.pc >> 2] === OP.TLEV;   // TLEV is never interrupted
+    const tlev = (this.vm ? this.mmu.peek(this.pc) : i32[this.pc >> 2]) === OP.TLEV;   // TLEV is never interrupted
     const held = tlev || this.irqHold > 0;        // ... nor, by the PIT or the mailbox, a handler
     let interval = this.cycleInterval | 0;
     let fired = true;
@@ -817,6 +877,15 @@ export class Machine {
   run(maxCycles) {
     // with CPUs, the boot CPU's run is the round robin's (smp.js)
     if (this.smp && !this.smp.running) return this.smp.run(maxCycles);
+    // with the MMU on, user mode runs a loop of its own (mmu.js), and
+    // the MMU says which loop runs when
+    if (this.mmu !== null && this.mmu.on) return this.mmu.run(maxCycles);
+    return this.runPlain(maxCycles);
+  }
+
+  // The interpreter's loop: every guest's, and C4IX's kernel mode under
+  // the MMU, which leaves it with STOP.SWITCH at a TLEV into user mode
+  runPlain(maxCycles) {
     const dev = this.dev, i32 = this.i32, u8 = this.u8;
     if (dev.halted) return STOP.HALT;
     let pc = this.pc | 0, sp = this.sp | 0, bp = this.bp | 0, a = this.a | 0;

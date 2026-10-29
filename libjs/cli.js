@@ -18,6 +18,8 @@
 //                each runs -q instructions in turn (default 1000)
 //   -q N         instructions a CPU runs before the next one's turn
 //   --parallel   ... each CPU on a thread of its own (par.js), for real
+//   --mmu        fit an MMU (docs/c4ix-mmu.md): C4IX turns it on, and then
+//                user tasks run in address spaces of their own
 //   --wav FILE   fit a sound card (snd-device.js) and write what it played,
 //                on the machine's own clock, to FILE: 44.1 kHz 16-bit stereo.
 //                The same session makes the same file. Without it there is
@@ -63,6 +65,7 @@ function parseArgs(argv) {
     else if (f === '--cpus') o.cpus = parseInt(argv[++i], 10);
     else if (f === '-q') o.quantum = parseInt(argv[++i], 10);
     else if (f === '--parallel') o.parallel = true;
+    else if (f === '--mmu') o.mmu = true;
     else if (f === '--') { i++; break; }
     else { console.error(`libjs: unknown option ${f}`); usage(); }
     i++;
@@ -111,7 +114,7 @@ async function main(argv) {
   const played = [];
   const machine = createMachine({
     arenaMb: o.arenaMb, drives, mhz: o.mhz, fpu: o.fpu, snd, cpus: o.cpus, quantum: o.quantum,
-    parallel: o.parallel, spawn: url => new Worker(url),
+    parallel: o.parallel, spawn: url => new Worker(url), mmu: o.mmu,
     onByte: b => { out.push(b); if (out.length >= 4096 || b === 10) flush(); },
   });
   const dev = machine.dev;

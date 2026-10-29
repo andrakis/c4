@@ -53,14 +53,15 @@ static void boot_frac(char *buf, int num, int den) {
 // The host's capability bits, by name: what the VM does (the devices
 // fitted to it have lines of their own, below)
 static void boot_caps(int info) {
-    klog("host: c4m%s%s%s%s%s%s%s\n",
+    klog("host: c4m%s%s%s%s%s%s%s%s\n",
         (info & C4IX_I_C4MJS) ? " (libjs)" : "",
         (info & C4IX_I_HRT) ? ", high-resolution timer" : "",
         (info & C4IX_I_SIG) ? ", signals" : "",
         (info & C4IX_I_FLT) ? ", float" : "",
         (info & C4IX_I_FPU) ? ", FPU" : "",
         (info & C4IX_I_PROT) ? ", protected mode" : "",
-        (info & C4IX_I_SMP) ? ((info & C4IX_I_PAR) ? ", processors on threads" : ", processors") : "");
+        (info & C4IX_I_SMP) ? ((info & C4IX_I_PAR) ? ", processors on threads" : ", processors") : "",
+        (info & C4IX_I_MMU) ? ", MMU" : "");
 }
 
 void boot_report() {
@@ -156,6 +157,9 @@ int main(int argc, char **argv) {
     kprintf("c4ix: protected mode %s, preemption on\n",
         host_has(C4IX_I_PROT) ? "on for user tasks" : "unavailable");
     boot_report();
+
+    // The MMU, when the host has one, before anything runs in user mode
+    mmu_init();
 
     // The VFS first: adopting the kernel task opens its console fds.
     vfs_init();

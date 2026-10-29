@@ -398,7 +398,7 @@ C4KE_KIT_SRCS := $(foreach p,$(C4KE_KIT),$(firstword $(subst :, ,$(p))))
 # src/c4ix spelled out rather than $(C4IX_SRC): both it and C4IX_MODS
 # are defined further down, and := expands now. The Makefile already
 # carries one bug of exactly this shape (see c4rlink.c's note on $(U0)).
-C4IX_KIT := $(foreach m,boot console va host sl4b task sched vfs sys c4ke loader init,\
+C4IX_KIT := $(foreach m,boot console va host sl4b task sched vfs sys c4ke loader mmu init,\
               src/c4ix/$(m).c:src/c4ix/$(m).c) \
             src/c4ix/c4ix.h:src/c4ix/c4ix.h \
             $(foreach h,$(wildcard include/*.h),$(h):$(h)) \
@@ -2905,7 +2905,7 @@ test-c4mp: c4m c4mp c4mp.c4r c4mp-smp0.c4r c4mp-smp1.c4r c4mp-deadlock.c4r $(TES
 # preprocessed, compiled to a .c4o object with full optimization, and
 # the kernel image is linked by c4rlink.
 C4IX_SRC  := src/c4ix
-C4IX_MODS := boot console va host sl4b task sched vfs sys c4ke loader init
+C4IX_MODS := boot console va host sl4b task sched vfs sys c4ke loader mmu init
 c4ix.c4r: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/c4ix.h $(patsubst %,$(C4IX_SRC)/%.c,$(C4IX_MODS))
 	@# No gcc here: c4lc preprocesses the modules itself (L9). Each
 	@# object is byte-identical to the gcc -E path, pinned by test-c4lc.

@@ -790,6 +790,9 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
         sys_pmviolation(param, (int *)sp, (int *)returnpc, &a);
     } else if (trap == C4IX_TRAP_SIGNAL) {
         sched_interrupt();
+    } else if (trap == C4IX_TRAP_SEGV) {
+        // a page fault: only user mode is translated (mmu.c)
+        if (sched_cur && sched_cur->privs == PRIV_USER) mmu_fault(sched_cur, param);
     }
 
     // The syscall could not finish because the task had to block.
@@ -1320,6 +1323,7 @@ static void smp_ap() {
     cpu_self->idle = me;
     acct_out = __c4_cycles();
     sched_arm(sched_interval);
+    mmu_cpu(k);
     while (!smp_stopping) {
         sched_lock();
         smp_settle();

@@ -752,4 +752,27 @@ struct task *task_spawn_priv(char *path, int argc, int argv, int privs);
 // ---- init (init.c) ----
 int init_main(int argc, int argv);
 
+// ---- the MMU (mmu.c, docs/c4ix-mmu.md) ----
+// libjs's, when its host fits one (C4I_MMU). It translates user mode;
+// the kernel runs untranslated. Its registers are each CPU's own.
+enum { C4IX_I_MMU = 0x80000 };
+enum {
+    MMU_CTL = 0x500, MMU_PTBR = 0x504, MMU_KSP = 0x508, MMU_FADDR = 0x50c,
+    MMU_FINFO = 0x510, MMU_FPC = 0x514, MMU_INVLPG = 0x518, MMU_FLUSH = 0x51c,
+    MMU_IOPM = 0x520, MMU_MISSES = 0x524, MMU_FAULTS = 0x528, MMU_MEMSIZE = 0x52c
+};
+// A page; a CPU's stack for the traps that come from user mode
+enum { MMU_PAGE = 4096, MMU_KSTACK = 262144 };
+// A page table entry: the frame's address and these
+enum { PTE_P = 1, PTE_W = 2, PTE_U = 4, PTE_X = 8, PTE_A = 0x20, PTE_D = 0x40 };
+// What a fault was (MMU_FINFO)
+enum { MMU_FK_READ = 1, MMU_FK_WRITE = 2, MMU_FK_FETCH = 4, MMU_FK_PRESENT = 8 };
+// The signal a page fault kills with, as waitpid reports it
+enum { C4IX_SIGSEGV = 11 };
+extern int mmu_on;
+void mmu_init();                       // at boot: tables, and on
+void mmu_cpu(int k);                   // another CPU, as it starts
+int  mmu_map(int *dir, int va, int n, int flags);
+void mmu_fault(struct task *t, int va);   // TRAP_SEGV from a user task: kill it
+
 #endif // __C4IX_H

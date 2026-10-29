@@ -12,6 +12,9 @@
 //   ?cpus=N                      N processors, simulated (smp.js, docs/c4ix-smp.md)
 //   ?parallel                    ... each on a worker of its own (par.js), when the
 //                                page is cross-origin isolated (serve.mjs --isolate)
+//   ?mmu=1                       fit an MMU (mmu.js, docs/c4ix-mmu.md): C4IX turns it
+//                                on, and its user tasks each get an address space of
+//                                their own; nothing else uses it. ?mmu=0 none
 //   ?persist=0 | reset           the system's saved files (its store, SYSTEMS' `persist`) are
 //                                not kept between visits / are forgotten first
 //   ?uploads=0                   the Uploads (your own files) are not put on the disk
@@ -159,6 +162,7 @@ const opts = {
   snd: params.get('snd') !== '0',
   cpus: Number(params.get('cpus')) || 0,
   parallel: params.has('parallel'),
+  mmu: (params.get('mmu') ?? (sys.mmu ? '1' : '0')) === '1',
   persist: params.get('persist') === '0' ? null : sys.persist || null,
   persistReset: params.get('persist') === 'reset',
   uploads: params.get('uploads') === '0' ? null : UPLOADS,
@@ -177,6 +181,9 @@ const CONFIG = [
     help: 'empty or 1 is one; more are simulated, taking turns' },
   { key: 'parallel', label: 'A thread each', kind: 'flag', tab: 'machine',
     help: 'several processors at once, each on a worker (needs the page cross-origin isolated)' },
+  { key: 'mmu', label: 'MMU', kind: 'select', tab: 'machine', def: sys.mmu ? '1' : '0',
+    options: [['0', 'off'], ['1', 'on: C4IX gives each program its own memory']],
+    help: 'paged memory with protection: a program that writes where it should not is stopped, and nothing else is hurt (C4IX only)' },
   { key: 'mem', label: 'Memory (MB)', kind: 'text', tab: 'machine', options: ['32', '64', '128', '256'],
     help: `the arena; empty is the system's own (${sys.mem || 64})` },
   { key: 'snd', label: 'Sound card', kind: 'onoff', def: true },

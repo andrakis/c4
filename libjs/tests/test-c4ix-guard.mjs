@@ -67,6 +67,9 @@ function start(cpus) {
   const vm = createMachine({
     arenaMb: 64, mhz: 100, drives: [{ files, writable: false, sink: null }], onByte: b => out.push(b),
     cpus, parallel: cpus > 1, spawn: url => new Worker(url),
+    // the guard is what stops a wild program where there is no MMU; with
+    // one (the default) its page fault would, first
+    mmu: false,
   });
   boot(vm, new Uint8Array(readFileSync(join(ROOT, 'c4ix32.c4r'))), ['c4ix32.c4r']);
   const par = vm.smp && vm.smp.parallel ? vm.smp : null;

@@ -113,6 +113,10 @@ class ApMachine extends Machine {
     return super.sys(op);
   }
 
+  // A byte of a page put out to swap: CPU 0 keeps them (par.js KIND.SWAP)
+  swapRd8(slot, off) { const r = this.ask(KIND.SWAP, 0, slot, off & 4095); return r === STOP.HALT ? 0 : r.ra & 255; }
+  swapWr8(slot, off, v) { this.ask(KIND.SWAP, 1, slot, (off & 4095) | ((v & 255) << 16)); }
+
   // A guard hit is told where the console is, and halts the machine
   // there: CPU 0 says it with this CPU's registers (par.js, KIND.GUARD)
   guardHit(x, n, write, v, op = 0, from = 0) {

@@ -15,7 +15,9 @@
 //   ?mmu=1 | 0                   fit an MMU (mmu.js, docs/c4ix-mmu.md), or not: C4IX
 //                                turns it on, and its user tasks each get an address
 //                                space of their own; nothing else uses it. On for
-//                                C4IX's systems unless ?mmu=0, off for the rest
+//                                C4IX's systems unless ?mmu=0 or the site says
+//                                otherwise (site.js: GitHub Pages' build does), off
+//                                for the rest
 //   ?persist=0 | reset           the system's saved files (its store, SYSTEMS' `persist`) are
 //                                not kept between visits / are forgotten first
 //   ?uploads=0                   the Uploads (your own files) are not put on the disk
@@ -35,6 +37,7 @@
 // test can drive it: c4m.write('ps\n'), c4m.status, await c4m.peek(a, n).
 
 import { C4M } from '../page.js';
+import { SITE } from './site.js';
 import { MediaStore, indexedDbBackend } from '../../src/c4bb/web/store.js';
 
 // On a host that cannot isolate the page, coi.js reloads it once with a
@@ -135,6 +138,11 @@ const sys = params.get('image')
   ? { image: params.get('image'), disk: params.get('disk'), argv: [params.get('image').split('/').pop()] }
   : SYSTEMS[which] || SYSTEMS.c4ix;
 
+// The MMU, where the system has one and the site does not say otherwise:
+// GitHub Pages' build turns it off (site.js), where the games' speed is
+// what a visitor sees; served from the tree, it is on, as in the tests
+const mmuDefault = !!sys.mmu && SITE.mmu !== false;
+
 const status = $('status');
 const kbd = $('kbd');
 const term = $('terminal');
@@ -163,7 +171,7 @@ const opts = {
   snd: params.get('snd') !== '0',
   cpus: Number(params.get('cpus')) || 0,
   parallel: params.has('parallel'),
-  mmu: (params.get('mmu') ?? (sys.mmu ? '1' : '0')) === '1',
+  mmu: (params.get('mmu') ?? (mmuDefault ? '1' : '0')) === '1',
   persist: params.get('persist') === '0' ? null : sys.persist || null,
   persistReset: params.get('persist') === 'reset',
   uploads: params.get('uploads') === '0' ? null : UPLOADS,
@@ -182,7 +190,7 @@ const CONFIG = [
     help: 'empty or 1 is one; more are simulated, taking turns' },
   { key: 'parallel', label: 'A thread each', kind: 'flag', tab: 'machine',
     help: 'several processors at once, each on a worker (needs the page cross-origin isolated)' },
-  { key: 'mmu', label: 'MMU', kind: 'select', tab: 'machine', def: sys.mmu ? '1' : '0',
+  { key: 'mmu', label: 'MMU', kind: 'select', tab: 'machine', def: mmuDefault ? '1' : '0',
     options: [['0', 'off'], ['1', 'on: C4IX gives each program its own memory']],
     help: 'paged memory with protection: a program that writes where it should not is stopped, and nothing else is hurt (C4IX only)' },
   { key: 'mem', label: 'Memory (MB)', kind: 'text', tab: 'machine', options: ['32', '64', '128', '256'],

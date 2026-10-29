@@ -167,6 +167,16 @@ export const STACK_BASE  = 0x1e4;  // r: the boot stack's lowest address
 export const STACK_TOP   = 0x1e8;  // r: one past its highest: the arguments start here
 export const STACK_GUARD = 0x1ec;  // r/w: 1 while the boot stack is guarded
 
+// Swap (libjs, docs/c4ix-mmu.md 11): pages a kernel puts out of memory,
+// kept by the host, a page to a numbered slot -- memory beyond the arena,
+// which lasts as long as the machine does. Behind registers of their own,
+// so that nothing a program does with the drives comes between a
+// kernel's swap and its stores. Announced by C4I_C4MJS, never probed.
+export const SWAP_ADDR = 0x11c;   // w: the page's address in memory, for the next SWAP_CMD
+export const SWAP_CMD  = 0x158;   // w: OP | SLOT << 4 -- 1 out, 2 in (and forget it), 3 forget, 4 forget
+                                  // every slot; r: the last one's 0, or -1; after 4, how many slots there are
+export const SWAP_PAGE = 4096;
+
 // c4_info() capability bits (c4m.c:206)
 export const C4I_WHOWROTE = 0x1000;   // the provenance port is fitted
 export const C4I_C4M = 0x2, C4I_HRT = 0x10, C4I_SIG = 0x20,
@@ -278,6 +288,11 @@ export class Devices {
     this.stackTop = 0;
     this.stackGuard = 0;              // 1: guarded (STACK_GUARD)
     this.onGuard = null;              // fn(): the guard changed (libjs/par.js)
+    // swap's pages, by slot (SWAP_*), up to swapSlots of them: 256 MB
+    this.swapPages = new Map();
+    this.swapSlots = opts.swapSlots ?? 65536;
+    this.swapAddr = 0;
+    this.swapResult = 0;
     this.uartActivity = 0;            // counters for the renderer
     this.diskActivity = 0;
     this.uartTxAddr = 0;              // UART block-write latch
@@ -365,6 +380,27 @@ export class Devices {
     this.tapInPos += n;
     return n;
   }
+
+  // Swap: one page between memory at SWAP_ADDR and its slot
+  swapOp (v) {
+    const op = v & 15, slot = v >>> 4, a = this.swapAddr, size = this.arena.size;
+    if (op === 4) { this.swapPages.clear(); return this.swapSlots; }
+    if (slot >= this.swapSlots) return -1;
+    if (op === 3) { this.swapPages.delete(slot); return 0; }
+    if (a < 0x1000 || a + SWAP_PAGE > size) return -1;
+    if (op === 1) { this.swapPages.set(slot, this.arena.u8.slice(a, a + SWAP_PAGE)); return 0; }
+    if (op === 2) {
+      const p = this.swapPages.get(slot);
+      if (!p) return -1;
+      this.arena.u8.set(p, a);
+      this.swapPages.delete(slot);
+      return 0;
+    }
+    return -1;
+  }
+  // A byte of a page put out, for a kernel that reaches it (c4m.js kld8)
+  swapRd8 (slot, off) { const p = this.swapPages.get(slot); return p ? p[off & 4095] : 0; }
+  swapWr8 (slot, off, v) { const p = this.swapPages.get(slot); if (p) p[off & 4095] = v; }
 
   // What `files` meant before there was more than one drive. Kept as a
   // property so nothing that reaches for dev.files has to know.
@@ -609,6 +645,7 @@ export class Devices {
       case STACK_BASE: return this.stackBase | 0;
       case STACK_TOP:  return this.stackTop | 0;
       case STACK_GUARD: return this.stackGuard | 0;
+      case SWAP_CMD:   return this.swapResult | 0;
       case HEAP_USED:  return this.machine && this.machine.heap ? this.machine.heap.used | 0 : 0;
       case HEAP_GEN:     return this.genHeap() ? this.machine.heap.gen | 0 : 0;
       case HEAP_RELEASE: return this.genHeap() ? this.machine.heap.released | 0 : 0;
@@ -791,6 +828,8 @@ export class Devices {
         this.stackGuard = (val && this.stackTop > this.stackBase) ? 1 : 0;
         if (this.onGuard) this.onGuard();
         return;
+      case SWAP_ADDR: this.swapAddr = val >>> 0; return;
+      case SWAP_CMD:  this.swapResult = this.swapOp(val); return;
       case HEAP_GEN:     if (this.genHeap()) this.machine.heap.gen = val | 0; return;
       case HEAP_RELEASE: if (this.genHeap()) this.machine.heap.release(val | 0); return;
       case MBOX_BELL: if (this.onDoorbell) this.onDoorbell(val | 0); return;

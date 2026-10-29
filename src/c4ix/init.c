@@ -247,8 +247,8 @@ static void init_usage() {
           "  PROGRAM [ARG]...   boot, run PROGRAM with ARGs, shut down\n"
           "  --demo IMAGE...    run the built-in demonstrations, below\n"
           "  -h, --help         print this and shut down\n"
-          "  -q                 accepted and ignored, so older command\n"
-          "                     lines keep working\n"
+          "  -q                 the boot's lines in the kernel log only;\n"
+          "                     on libjs they are on the console too\n"
           "  -v                 the kernel log on the console as well,\n"
           "                     as the kernel writes it (dmesg reads it\n"
           "                     either way)\n"
@@ -355,10 +355,9 @@ int init_main(int argc, int argv) {
         // Shift past the flag so the stages index from av[1] exactly
         // as the help text describes.
         if (init_is(av[i], "--demo")) return init_demo(argc - i, av + i);
-        // -q used to mean "skip the demonstrations". They are opt-in
-        // now, so it means nothing -- but silently accepting it keeps
-        // older command lines and older habits working.
-        // -v is the kernel's (boot.c): its log on the console too
+        // -q and -v are the kernel's (boot.c): its log on the console
+        // not even while booting, or always. (-q once meant "skip the
+        // demonstrations", which are opt-in now.)
         while (i < argc && (init_is(av[i], "-q") || init_is(av[i], "-v"))) ++i;
         // --desktop (the browser's boot): the shell starts top in the
         // background on the console, then the desktop on the display,

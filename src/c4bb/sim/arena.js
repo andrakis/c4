@@ -36,6 +36,14 @@ export function pteWord(i32, size, dir, va) {
   if ((pt >>> 0) + 4096 > size) return -1;
   return (pt >>> 2) + ((va >>> 12) & 1023);
 }
+// The entry the kernel's map has for user address x, or 0
+export function kernelPte(i32, size, udir, x) {
+  const w = pteWord(i32, size, udir, x);
+  return w < 0 ? 0 : i32[w] | 0;
+}
+// ... and its bit for a page put out to swap (C4IX's PTE_SWAP): the slot
+// is in the entry's upper 20 bits
+export const PTE_SWAP = 0x400;
 // The memory at user address x by the kernel's map (UDIR), the page
 // pinned; -1 if it maps nothing there
 export function kernelPhys(i32, size, udir, x) {

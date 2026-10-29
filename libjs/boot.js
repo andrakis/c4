@@ -48,8 +48,9 @@ import { Mmu } from './mmu.js';
 //             whose books are shared too (sheap.js). Where there is no
 //             SharedArrayBuffer (a page not cross-origin isolated), the
 //             simulated engine
-//   mmu       fit an MMU (mmu.js, docs/c4ix-mmu.md) to every CPU. It does
-//             nothing until the guest turns it on, which only C4IX does
+//   mmu       fit an MMU (mmu.js, docs/c4ix-mmu.md) to every CPU, unless
+//             false: one is fitted by default. It does nothing until the
+//             guest turns it on, which only C4IX does
 export function createMachine(opts = {}) {
   const bytes = (opts.arenaMb || 32) * 1024 * 1024;
   const par = opts.cpus > 1 && opts.parallel && opts.spawn && typeof SharedArrayBuffer !== 'undefined';
@@ -66,13 +67,13 @@ export function createMachine(opts = {}) {
   // the FPU opcode (F3): on unless asked otherwise (fpu: false)
   machine.noFpu = opts.fpu === false;
   dev.noFpu = machine.noFpu;
-  if (opts.mmu) machine.mmu = new Mmu(machine);
+  if (opts.mmu !== false) machine.mmu = new Mmu(machine);
   if (par) new ParHost(machine, opts.cpus | 0, opts.spawn);
   else if (opts.cpus) new Smp(machine, opts.cpus | 0, opts.quantum | 0,
     () => {
       const m = new Machine(arena, dev, bus, machine.heap);
       m.noFpu = machine.noFpu;
-      if (opts.mmu) m.mmu = new Mmu(m);
+      if (opts.mmu !== false) m.mmu = new Mmu(m);
       return m;
     });
   if (opts.gui) opts.gui.attach(machine);

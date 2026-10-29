@@ -162,20 +162,28 @@ static int kernel_main(int argc, int argv) {
 }
 
 int main(int argc, char **argv) {
-    int info, k;
+    int info, k, quiet;
 
     boot_cycles0 = __c4_cycles();
     boot_ms0 = __time();
     sched_early();
-    // -v: the kernel log on the console too, from the first line
+    // -v: the kernel log on the console too, from the first line to the
+    // last; -q: not even the boot's
+    quiet = 0;
     k = 1;
     while (k < argc) {
         if (argv[k][0] == '-' && argv[k][1] == 'v' && !argv[k][2]) klog_verbose = 1;
+        if (argv[k][0] == '-' && argv[k][1] == 'q' && !argv[k][2]) quiet = 1;
         ++k;
     }
     kprintf("C4IX booting, %d cycles spent loading the kernel image\n", __c4_cycles());
     info = host_detect();
     kprintf("c4ix: host %s, info 0x%x\n", host_name(), info);
+    // What the boot finds on the console as it goes, as Linux's says it,
+    // where someone is watching: libjs (the page, cli.js). On native c4m
+    // the log keeps it (dmesg): there the console is a test's transcript,
+    // and the lines' times and clocks are never twice the same.
+    klog_boot = !quiet && host_has(C4IX_I_C4MJS);
     if (!host_has(C4IX_I_C4M)) {
         kputs("c4ix: panic: this host is not c4m: C4IX needs its traps and cycle interrupt\n");
         return 1;

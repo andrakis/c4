@@ -155,6 +155,7 @@ static char klog_ring[KLOG_BYTES];
 static int  klog_n;            // bytes ever written: the ring holds the last KLOG_BYTES
 static int  klog_mid;          // inside a line: the next byte gets no stamp
 int  klog_verbose;             // -v: klog's lines on the console too
+int  klog_boot;                // ... and until the boot is done (boot.c: libjs, not -q; con_booted clears it)
 int  klog_cpms;                // cycles in a millisecond of the machine's clock, once measured
 static int klog_t0, klog_started;   // __time() at the first stamp
 static int klog_ms, klog_cyc;  // the last millisecond seen, and the cycle count then
@@ -261,7 +262,7 @@ void con_logopen() {
 }
 
 // Boot is over: tasks' output is no longer logged.
-void con_booted() { con_booting = 0; }
+void con_booted() { con_booting = 0; klog_boot = 0; }
 
 // A task's bytes to the console (vfs_write): up to CON_RUN at a time as
 // one host printf("%s"), where putchar is one host call a byte. Under
@@ -428,7 +429,7 @@ int klog(char *fmt, ...) {
     sched_lock();
     va_start(ap, fmt);
     walk = ap;
-    kout_con = klog_verbose;
+    kout_con = klog_verbose || klog_boot;
     n = kformat(fmt, walk);
     kout_con = 1;
     va_end(ap);

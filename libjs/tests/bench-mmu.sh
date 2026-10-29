@@ -20,7 +20,7 @@
 #
 # Run from the repo root after make c4bb-images.
 
-MMU=
+MMU=--no-mmu
 RUNS=1
 while [ $# -gt 0 ]; do
     case "$1" in

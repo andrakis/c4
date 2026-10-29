@@ -59,7 +59,7 @@ export const K = {              // offsets within a CPU's words
 export const DMA_FAULT = -77;
 export const S = { OFF: 0, RUN: 1, WAIT: 2, HALT: 3 };             // a CPU's state
 export const R = { IDLE: 0, ASK: 1, DONE: 2 };                     // a request slot's
-export const KIND = { OP: 1, RD32: 2, WR32: 3, WR8: 4, GUARD: 5 }; // what is asked
+export const KIND = { OP: 1, RD32: 2, WR32: 3, WR8: 4, GUARD: 5, SWAP: 6 }; // what is asked
 export const MAXCPU = 32;
 const word = (k, f) => C.CPU0 + k * C.STRIDE + f;
 
@@ -301,6 +301,11 @@ export class ParHost extends ParCore {
         rstop = s.sys(ctl[b + K.OP]);
         this.dev.machine = this.m0;
         ra = s.a;
+      } else if (kind === KIND.SWAP) {
+        // a byte of a page put out to swap, which the host keeps here
+        const slot = ctl[b + K.ADDR], v = ctl[b + K.VAL];
+        if (ctl[b + K.OP]) this.dev.swapWr8(slot, v & 4095, (v >>> 16) & 255);
+        else ra = this.dev.swapRd8(slot, v & 4095);
       } else if (kind === KIND.GUARD) {
         // its guard hit, told and halted here, where the console is
         const s = this.shadows[k];

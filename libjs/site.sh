@@ -32,6 +32,12 @@ rm -f "$list"
 mkdir -p "$out/src/c4bb" "$out/libjs"
 cp -r src/c4bb/images "$out/src/c4bb/"
 cp -r libjs/images "$out/libjs/"
+# the site's defaults (libjs/web/site.js): the MMU off for visitors,
+# whose games run faster without it (?mmu=1 still fits one)
+cat > "$out/libjs/web/site.js" <<'EOF'
+// site.js - written by libjs/site.sh for the site on GitHub Pages
+export const SITE = { mmu: false };
+EOF
 # the site's front door is the page
 cat > "$out/index.html" <<'EOF'
 <!DOCTYPE html>

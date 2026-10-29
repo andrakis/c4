@@ -118,7 +118,8 @@ enum {
     SYS_NICE = 243,
     // c4bb's device registers for this task, under the MMU (mmu.c)
     SYS_IOPERM = 244,
-    SYS_TOP = 245          // one past the last: sched_trap's range check
+    SYS_MAPFROM = 245,
+    SYS_TOP = 246          // one past the last: sched_trap's range check
 };
 // SYS_DISPLAY's operations, and TAKE's flag (include/display.h)
 enum { DISP_TAKE = 0, DISP_STATE = 1, DISP_YIELD = 2, DISP_GIVE = 3, DISP_YIELDS = 1 };
@@ -317,10 +318,13 @@ int kputs(char *s);
 int kprintf(char *fmt, ...);
 // The kernel log (console.c): every line the kernel says, stamped with
 // the machine's time, in a ring that dmesg reads through /proc/kmsg.
-// klog's lines go only there, and to the console too when the kernel was
-// booted with -v (klog_verbose); kprintf's go to both.
+// klog's lines go there, and to the console too while the boot goes on
+// libjs (klog_boot: the page and cli.js, as Linux's boot does; -q keeps
+// them in the log) and always when the kernel was booted with -v
+// (klog_verbose); kprintf's go to both.
 int klog(char *fmt, ...);
 extern int klog_verbose;
+extern int klog_boot;
 extern int klog_cpms;          // cycles in a machine millisecond, once klog_calibrate has measured
 int klog_calibrate();
 int klog_copy(char *dst);      // the log into DST, KLOG_MAX bytes at least; its length
@@ -810,6 +814,9 @@ enum { MMU_UWIN_BASE = 0x10000000 };
 // A page table entry's bit the host sets in the kernel's map (UDIR) on a
 // page the kernel or a device has used: it never goes to swap
 enum { PTE_PIN = 0x200 };
+// ... and the bit, in the kernel's map, of a page put out to swap: not
+// present, and the host's slot for it in the entry's upper 20 bits
+enum { PTE_SWAP = 0x400 };
 // A page; a CPU's stack for the traps that come from user mode
 enum { MMU_PAGE = 4096, MMU_KSTACK = 262144 };
 // A page table entry: the frame's address and these
@@ -837,6 +844,7 @@ enum { IOPM_ROM = 1, IOPM_DEV = 2, IOPM_GUI = 4, IOPM_SND = 8, IOPM_LOCAL = 16, 
 enum { MMU_IOPM_USER = 4 | 8 | 16 };
 int  umalloc_stack(int n);             // umalloc, and a guard page below it
 int  mmu_ioperm(struct task *t, int bits);   // SYS_IOPERM
+int  mmu_mapfrom(struct task *t, int va, int n);   // SYS_MAPFROM
 // A user task's memory. Without the MMU these are malloc and free.
 // umalloc: whole pages, the kernel's until mmu_adopt gives them to the
 // task they were made for (its stack, image, arguments); ufree gives such

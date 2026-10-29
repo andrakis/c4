@@ -24,7 +24,7 @@ enum {
     SYS_STACK = 228, SYS_CPUSTAT = 229, SYS_EVWAIT = 230, SYS_DISCARD = 231,
     SYS_VFORK = 232, SYS_EXECVE = 233, SYS_WAITPID = 234, SYS_LSEEK = 235,
     SYS_FSTAT = 236, SYS_LINK = 237, SYS_FTRUNCATE = 238, SYS_ENVIRON = 239,
-    SYS_DISPLAY = 240, SYS_AFFINITY = 242, SYS_NICE = 243, SYS_IOPERM = 244
+    SYS_DISPLAY = 240, SYS_AFFINITY = 242, SYS_NICE = 243, SYS_IOPERM = 244, SYS_MAPFROM = 245
 };
 // libjs's display, taken from the desktop and given back (include/display.h)
 #ifndef __C4IX_DISPLAY_H
@@ -95,6 +95,12 @@ int  unice(int id, int nice);
 // not have unless it asks: persist does, to write drive 1. 0, or -1.
 enum { UIOPERM_DEV = 2 };
 int  uioperm(int bits);
+// N bytes at ADDR, a program's this task started (or one they started),
+// readable here too, at the same address: under the MMU each task's memory
+// is its own, and the desktop draws a window's framebuffer from the
+// program's (umapfrom, docs/c4ix-mmu.md 9). 0, or -1 if it is not one's.
+// Without the MMU there is nothing to do, and it says 0.
+int  umapfrom(int addr, int n);
 // Sleep ms milliseconds, or less: until an event lands in the GUI ring at
 // ring (0: none), or, with pipes set, data or end of file on a pipe this
 // task reads. 1 if one already had.

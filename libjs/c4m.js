@@ -18,7 +18,7 @@ import {
   OPNAMES, UART_TX, TIME_MS, USLP_US, DISK_CLOSE,
   C4I_C4M, C4I_HRT, C4I_SIG, C4I_FLT, C4I_PROT, C4I_TRAPH, C4I_PIT, C4I_MBOX, C4I_DRV,
 } from '../src/c4bb/sim/devices.js';
-import { TLEV_ADDR, OPNAMES_ROM, kernelPhys } from '../src/c4bb/sim/arena.js';
+import { TLEV_ADDR, OPNAMES_ROM, kernelPhys, kernelPte, PTE_SWAP } from '../src/c4bb/sim/arena.js';
 import { fpu, C4I_FPU } from '../src/c4bb/sim/fpu.js';
 import { format } from './printf.js';
 
@@ -247,13 +247,15 @@ export class Machine {
   // With the kernel's map (UDIR: C4IX's map of every user address there
   // is, swap having made them no longer an offset) it is the only word,
   // and a page used through it is pinned (PTE_PIN): the kernel keeps it
-  // out of swap. An address it does not map is a bug in the kernel, which
-  // halts the machine there rather than read or write anything else.
+  // out of swap. A page put out to swap is -1 here, and the bytes are the
+  // host's copy (kswap, below). An address it does not map at all is a
+  // bug in the kernel, which halts the machine there rather than read or
+  // write anything else.
   kpa(x) {
     x = x >>> 0;
     if (this.udir) {
       const p = kernelPhys(this.i32, this.u8.length, this.udir, x);
-      if (p < 0) this.kmiss(x);
+      if (p < 0 && this.kswap(x) < 0) this.kmiss(x);
       return p;
     }
     const off = x - this.uwin;
@@ -267,24 +269,41 @@ export class Machine {
   }
   // Any address, as kernel mode reaches it: its own, or through the window
   kaddr(x) { return this.uwin && (x >>> 0) >= this.uwin ? this.kpa(x) : x >>> 0; }
+  // The slot of a page put out to swap at user address x, or -1
+  kswap(x) {
+    if (!this.udir) return -1;
+    const pte = kernelPte(this.i32, this.u8.length, this.udir, x >>> 0);
+    return (pte & 1) || !(pte & PTE_SWAP) ? -1 : pte >>> 12;
+  }
+  // The host's copy of a page put out (devices.js swapRd8); on the
+  // threaded engine's other CPUs, CPU 0's (ap.js)
+  swapRd8(slot, off) { return this.dev.swapRd8 ? this.dev.swapRd8(slot, off) : 0; }
+  swapWr8(slot, off, v) { if (this.dev.swapWr8) this.dev.swapWr8(slot, off, v); }
   kld8(x) {
     const p = this.kpa(x);
-    return p < 0 ? 0 : (this.u8[p] << 24) >> 24;
+    if (p >= 0) return (this.u8[p] << 24) >> 24;
+    const s = this.kswap(x);
+    return s < 0 ? 0 : (this.swapRd8(s, x & 4095) << 24) >> 24;
   }
   kst8(x, v) {
     const p = this.kpa(x);
-    if (p >= 0) this.u8[p] = v;
+    if (p >= 0) { this.u8[p] = v; return; }
+    const s = this.kswap(x);
+    if (s >= 0) this.swapWr8(s, x & 4095, v & 255);
   }
   kld32(x) {
     const p = this.kpa(x);
-    if (p < 0) return 0;
+    if (p < 0) {
+      return this.kswap(x) < 0 ? 0
+        : (this.kld8(x) & 255) | ((this.kld8(x + 1) & 255) << 8) | ((this.kld8(x + 2) & 255) << 16) | (this.kld8(x + 3) << 24);
+    }
     if ((p & 3) === 0) return this.i32[p >> 2] | 0;
     return (this.kld8(x) & 255) | ((this.kld8(x + 1) & 255) << 8) | ((this.kld8(x + 2) & 255) << 16) | (this.kld8(x + 3) << 24);
   }
   kst32(x, v) {
     const p = this.kpa(x);
-    if (p < 0) return;
-    if ((p & 3) === 0) { this.i32[p >> 2] = v; return; }
+    if (p >= 0 && (p & 3) === 0) { this.i32[p >> 2] = v; return; }
+    if (p < 0 && this.kswap(x) < 0) return;
     for (let k = 0; k < 4; k++) this.kst8(x + k, v >> (8 * k));
   }
   // Does the block opcode at the top of the stack touch the window?
@@ -308,6 +327,7 @@ export class Machine {
       for (let k = 0; k < n;) {
         const x = (d + k) >>> 0, r = run(x, x, n - k), p = this.kaddr(x);
         if (p >= 0x1000 && p + r <= u8.length) u8.fill(v, p, p + r);
+        else for (let j = 0; j < r; j++) this.st8(x + j, v);   // a page put out: the host's copy
         k += r;
       }
       this.a = d;

@@ -450,7 +450,7 @@ static int link_modules(char *path, struct c4r_mod *mods, int n) {
                     kprintf("c4ix: loader: %s: no slot left for another shared library\n", m->path);
                     return 0;
                 }
-            } else m->slot = (int *)malloc(sizeof(int));
+            } else m->slot = (int *)kmem_alloc(sizeof(int));
             *m->slot = (int)m->data;
         }
         // __c4_dbase is most of a -fpic library's symbol references (one
@@ -579,12 +579,12 @@ int c4r_load(char *path, struct c4r_image *img) {
     }
 
     // a -fpic library loaded for the first time stays, code and file,
-    // for the next task that needs it
+    // for the next task that needs it (its books in the kernel arena)
     k = 1;
     while (k < n) {
         if ((mods + k)->pic && !(mods + k)->shared) {
-            sh = (struct shlib *)malloc(sizeof(struct shlib));
-            sh->mod = (struct c4r_mod *)malloc(sizeof(struct c4r_mod));
+            sh = (struct shlib *)kmem_alloc(sizeof(struct shlib));
+            sh->mod = (struct c4r_mod *)kmem_alloc(sizeof(struct c4r_mod));
             memcpy((char *)sh->mod, (char *)(mods + k), sizeof(struct c4r_mod));
             sh->mod->data = 0;
             mod_trim(sh->mod);

@@ -24,26 +24,14 @@
 // the wait. 0.5 ms at the browser's 100 MHz.
 enum { PREEMPT_INTERVAL = 50000 };
 
-int main(int argc, char **argv) {
+// The kernel task: everything from the scheduler's start to shutdown, on
+// a stack of its own in the kernel arena (sched.c, "Off the boot stack").
+static int kernel_main(int argc, int argv) {
     struct task *t;
-    int info;
 
-    sched_early();
-    kprintf("C4IX booting, %d cycles spent loading the kernel image\n", __c4_cycles());
-    info = host_detect();
-    kprintf("c4ix: host %s, info 0x%x\n", host_name(), info);
-    if (!host_has(C4IX_I_C4M)) {
-        kputs("c4ix: panic: this host is not c4m: C4IX needs its traps and cycle interrupt\n");
-        return 1;
-    }
-    kprintf("c4ix: protected mode %s, preemption on\n",
-        host_has(C4IX_I_PROT) ? "on for user tasks" : "unavailable");
-
-    // The VFS first: adopting the kernel task opens its console fds.
-    vfs_init();
     sched_init(PREEMPT_INTERVAL);
 
-    if (!(t = task_create("init", (int)&init_main, argc, (int)argv))) {
+    if (!(t = task_create("init", (int)&init_main, argc, argv))) {
         kputs("c4ix: panic: cannot create init task\n");
         return 1;
     }
@@ -61,4 +49,26 @@ int main(int argc, char **argv) {
     sl4b_stats();
     kprintf("c4ix: shutdown complete, %d tasks remain\n", task_count());
     return 0;
+}
+
+int main(int argc, char **argv) {
+    int info;
+
+    sched_early();
+    kprintf("C4IX booting, %d cycles spent loading the kernel image\n", __c4_cycles());
+    info = host_detect();
+    kprintf("c4ix: host %s, info 0x%x\n", host_name(), info);
+    if (!host_has(C4IX_I_C4M)) {
+        kputs("c4ix: panic: this host is not c4m: C4IX needs its traps and cycle interrupt\n");
+        return 1;
+    }
+    kprintf("c4ix: protected mode %s, preemption on\n",
+        host_has(C4IX_I_PROT) ? "on for user tasks" : "unavailable");
+
+    // The kernel arena before anything else is allocated, so that it is
+    // the heap's lowest block after the va area (sl4b.c)
+    kmem_init(sched_ncpus());
+    // The VFS first: adopting the kernel task opens its console fds.
+    vfs_init();
+    return sched_offboot((int)&kernel_main, argc, (int)argv);
 }

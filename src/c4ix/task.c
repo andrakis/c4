@@ -348,7 +348,7 @@ static void task_ufree_all(struct task *t) {
 static void task_destroy(struct task *t) {
     ck_task_free(t);
     task_drop_image(t);
-    if (t->stack) free((int *)t->stack);
+    if (t->stack) kmem_free((char *)t->stack);   // an idle task's is the kernel arena's
     if (t->env_vec) free((int *)t->env_vec);
     if (t->env_data) free((char *)t->env_data);
     sl4b_free(task_cache, (char *)t);

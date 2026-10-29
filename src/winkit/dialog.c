@@ -280,7 +280,7 @@ void wk_fb_list(struct fdlg *f) {
     int i, k, j, r;
     char name[WK_NAME];
     f->n = 0; f->top = 0; f->sel = 0 - 1;
-    if (f->dir[0] && !ui_eq(f->dir, "/")) {
+    if (f->dir[0] && !ui_eq(f->dir, "/") && !f->up) {
         ui_cpy(f->names, ".."); f->isdir[0] = 1; f->order[0] = 0; f->n = 1;
     }
     i = 0;
@@ -418,6 +418,7 @@ void wk_filebox(int owner, int dialog, int save, char *pattern, char *buf, int m
     if (!d) return;
     f = (struct fdlg *)d->st;
     f->buf = buf; f->max = max; f->save = save;
+    f->up = wk.style != S_WIN31;
     ui_ncpy(f->filter, pattern ? pattern : "*", WK_PATH);
     // buf: a folder to start in, or a path whose folder it is and whose name is offered
     f->dir[0] = '/'; f->dir[1] = 0;

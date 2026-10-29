@@ -74,20 +74,23 @@ try {
   await sleep(1500);
 
   // ---- the Terminal: a selection, Edit > Copy ----
-  await clickText(/^Terminal - task/);
+  // its window's title, not its taskbar button (which would minimise it)
+  const H = await tab.eval("document.getElementById('display').height");
+  await clickT((await find(/^Terminal - task/)).filter(t => t.y < H - 30).pop());
   await tab.type('echo copied from a Terminal\n');
   ok('a line in the Terminal', await shownHas('copied from a Terminal'));
   {
-    const t = (await find('copied from a Terminal')).filter(t => t.adv === 8).pop();
+    const t = (await find('copied from a Terminal')).pop();
     await dragAt(t.x + 2, t.y + 6, t.x + 22 * 8 - 3, t.y + 6);
-    ok('a drag selects it', await tab.waitFor(`${shown}.some(t => t.s === 'copied from a Terminal' && t.rgb === 0xffffff)`, 5000));
+    // the selection draws the text again over itself (the row's own string runs on in spaces)
+    ok('a drag selects it', await tab.waitFor(`${shown}.filter(s => s.s.trimEnd() === 'copied from a Terminal' && s.x === ${t.x} && s.y === ${t.y}).length >= 2`, 5000));
     await shot('ix-edit-1-terminal-selection');
     await menu('Edit', 'Copy   Ctrl+Shift+C');
   }
 
   // ---- the IDE: Traditional, Blue, the paste ----
   await go('IDE');
-  ok('Go > IDE: Untitled - IDE, typing as Text Editor does', await shownHas('Untitled - IDE') && await shownHas(/^-- EDIT --/));
+  ok('Go > IDE: Untitled - IDE, typing as Text Editor does', await shownHas('Untitled - IDE') && await shownHas(/^Type to edit; Esc for a command/));
   await hold('v', 2);
   ok("Ctrl+V pastes the Terminal's text", await shownHas('copied from a Terminal', 5000));
   await hold('Enter');
@@ -101,6 +104,8 @@ try {
   await clickText('OK');
 
   // ---- a binary file asks ----
+  // (End: the selection made above goes, which the first Esc would otherwise take)
+  await hold('End');
   await hold('Escape');
   await tab.type('e! /bin/hello\n');
   ok('opening /bin/hello asks first', await shownHas(/does not look like text/, 5000));

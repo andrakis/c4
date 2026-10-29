@@ -598,14 +598,14 @@ void tg_draw(struct tgrid *t, int ox, int oy, int focused) {
         }
         ++r;
     }
-    // the selection, white on the selection's colour
+    // the selection, as a console shows it: black on the text's grey
     r = 0;
     while (t->sel && r < ROWS) {
         if (sel_cols(t, t->nscr - v + r, &k, &n) && (run = row_of(t, t->nscr - v + r))) {
-            d_rect(ox + k * CW, oy + r * CH, (n - k + 1) * CW, CH, C_SEL);
+            d_rect(ox + k * CW, oy + r * CH, (n - k + 1) * CW, CH, tg_pal[7]);
             g = 0;
             while (k + g <= n) { tmp[g] = run[k + g] & 255; if (tmp[g] < 32 || tmp[g] > 126) tmp[g] = ' '; ++g; }
-            d_textn(ox + k * CW, oy + r * CH + 1, C_WHITE, TG_FONT, F_MONO, CW, tmp, g);
+            d_textn(ox + k * CW, oy + r * CH + 1, C_DARK, TG_FONT, F_MONO, CW, tmp, g);
         }
         ++r;
     }

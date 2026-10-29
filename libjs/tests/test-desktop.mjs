@@ -253,8 +253,8 @@ check(until(() => termText('echo pasted').length > 0 && inputLine() === ''), 'a 
 {
   const t = termText('echo pasted').pop();
   drag(t.x + 2, t.y + 6, t.x + 11 * 8 - 3, t.y + 6);
-  check(until(() => frame.some(s => s.s === 'echo pasted' && s.rgb === 0xffffff)), 'dragging over it selects it, white on the selection', screen());
-  check(menu('Edit', 'Copy   Ctrl+Shift+C') && until(() => !frame.some(s => s.s === 'echo pasted' && s.rgb === 0xffffff)), 'Edit > Copy takes it', screen());
+  check(until(() => frame.some(s => s.s === 'echo pasted' && s.rgb === 0)), 'dragging over it selects it, drawn black on grey', screen());
+  check(menu('Edit', 'Copy   Ctrl+Shift+C') && until(() => !frame.some(s => s.s === 'echo pasted' && s.rgb === 0)), 'Edit > Copy takes it', screen());
   check(menu('Edit', 'Paste   Ctrl+Shift+V') && until(() => inputLine() === 'echo pasted'), 'Edit > Paste types it in', inputLine());
   key('\n');
   check(until(() => termText('pasted').length > 0), 'and Enter runs it', screen());
@@ -269,7 +269,7 @@ until(() => termText('blk').length > 0 && inputLine() === '');
   ev({ kind: 'keydown', code: 18, char: 0, mods: 4 });
   drag(t.x + 8 * 8 + 2, t.y - 16 + 6, t.x + 15 * 8 + 3, t.y + 6);
   ev({ kind: 'keyup', code: 18, char: 0, mods: 0 });
-  check(until(() => frame.some(s => s.s === 'echo blk' && s.rgb === 0xffffff) && !frame.some(s => s.s === 'blk' && s.rgb === 0xffffff)),
+  check(until(() => frame.some(s => s.s === 'echo blk' && s.rgb === 0) && !frame.some(s => s.s === 'blk' && s.rgb === 0)),
     'with Alt held a drag selects a block', screen());
   key('C', 3, 67);                                             // Ctrl+Shift+C
   key('', 1, 45);                                              // Shift+Ins

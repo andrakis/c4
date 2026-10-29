@@ -2720,7 +2720,7 @@ static void ide_settings() {
     int i;
     if ((i = wk_find(&iset_class))) { wk_raise(i); return; }
     iset_class.size = 16;
-    wk_open(&iset_class, "IDE Settings", 380, 250, WK_FIXED | WK_CENTER, 0);
+    wk_open(&iset_class, "IDE Settings", 380, 290, WK_FIXED | WK_CENTER, 0);
 }
 
 // ---- the window -----------------------------------------------------------------------------

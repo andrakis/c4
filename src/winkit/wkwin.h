@@ -97,6 +97,7 @@ struct fdlg {
     char pattern[WK_NAME];        // the patterns of the one in use, ';' between them
     int ftype;                    // ... which that is
     int drop;                     // a drop-down list open (look95.c): 1 the folders, 2 the types
+    int up;                       // the look has an Up button: no ".." among the entries
     int isdir[FB_MAX];
     int order[FB_MAX];
     char names[FB_MAX * WK_NAME];

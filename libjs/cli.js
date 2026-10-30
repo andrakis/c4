@@ -253,6 +253,9 @@ async function main(argv) {
     const ran = machine.cycle - machine.skipped;
     console.error(`libjs: ${ran} cycles in ${dt.toFixed(2)}s (${Math.round(ran / dt / 1000)}k inst/s), ` +
       `${machine.missedTraps} missed traps, status ${status}`);
+    // the heap MALC hands out: what was still held at the end, and the most ever held
+    if (machine.heap) console.error(`libjs: heap ${Math.round(machine.heap.used / 1024)} KB in use at exit, ` +
+      `${Math.round(machine.heap.peak / 1024)} KB at most, of ${Math.round((machine.heap.end - machine.heap.base) / 1024)} KB`);
     if (snd) { const st = snd.stats(); console.error(`libjs: sound: ${st.writes} OPL writes, ${st.plays} samples played`); }
   }
   return status & 0xff;

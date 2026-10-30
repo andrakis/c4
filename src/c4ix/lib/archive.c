@@ -28,7 +28,9 @@ enum {
     FIXLCODES = 288,        // literal/length codes in the fixed table
     FASTBITS = 9,           // lookup-table width
     FASTSIZE = 512,         // 1 << FASTBITS
-    TARBLOCK = 512
+    TARBLOCK = 512,
+    WINDOW = 32768,         // how far back a match reaches
+    WINCAP = 262144         // arc_gunzip_to's window: WINDOW, a stored block's 64 KB, and room
 };
 
 // ---- CRC-32 ----
@@ -71,6 +73,9 @@ char *in_buf;  int in_len;  int in_pos;
 char *out_buf; int out_cap; int out_pos;
 int bitbuf; int bitcnt;
 int in_short;              // set when the input ran out mid-stream
+// Streaming (arc_gunzip_to): OUT_BUF is a window, and what goes out of it
+// goes to OUT_SINK, a function; OUT_DONE bytes have, their CRC OUT_CRC
+int out_sink; int out_done; int out_crc;
 
 // The lengths and distances: base values and extra bits, RFC 1951 3.2.5.
 int lbase[29] = { 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31,
@@ -112,6 +117,20 @@ static struct huff *huff_new(int nsym) {
 static int arc_fail(char *why) {
     arc_error = why;
     return 0 - 1;
+}
+
+// The window is full: all but the last 32 KB, which a match may still
+// reach back into, go to the sink, and those 32 KB to the window's start
+static int out_flush() {
+    int n, put;
+    if (!(put = out_sink)) return arc_fail("output overflows its size");
+    n = out_pos - WINDOW;
+    out_crc = arc_crc32(out_crc, out_buf, n);
+    if (put(out_buf, n) != n) return arc_fail("the inflated data could not be written");
+    out_done = out_done + n;
+    memcpy(out_buf, out_buf + n, WINDOW);
+    out_pos = WINDOW;
+    return 0;
 }
 
 // The next NEED bits, low bit first. NEED is at most 16.
@@ -251,7 +270,11 @@ static int codes(struct huff *lc, struct huff *dc) {
             if (sym < 0) return arc_fail("bad literal/length code");
         }
         if (sym < 256) {
-            if (op >= oc) return arc_fail("output overflows its size");
+            if (op >= oc) {
+                out_pos = op;
+                if (out_flush() < 0) return 0 - 1;
+                op = out_pos;
+            }
             ob[op++] = sym;
             continue;
         }
@@ -289,7 +312,11 @@ static int codes(struct huff *lc, struct huff *dc) {
         }
         if (in_short) return arc_fail("input ends mid-block");
         if (dist > op) return arc_fail("distance reaches before the start");
-        if (op + len > oc) return arc_fail("output overflows its size");
+        if (op + len > oc) {
+            out_pos = op;
+            if (out_flush() < 0) return 0 - 1;
+            op = out_pos;
+        }
         from = ob + op - dist;
         if (dist >= len) {
             memcpy(ob + op, from, len);
@@ -316,7 +343,7 @@ static int stored() {
     in_pos = in_pos + 4;
     if (len != (0xFFFF ^ nlen)) return arc_fail("stored block length check");
     if (in_pos + len > in_len) return arc_fail("input ends in a stored block");
-    if (out_pos + len > out_cap) return arc_fail("output overflows its size");
+    if (out_pos + len > out_cap && out_flush() < 0) return 0 - 1;
     memcpy(out_buf + out_pos, in_buf + in_pos, len);
     out_pos = out_pos + len;
     in_pos = in_pos + len;
@@ -417,10 +444,9 @@ static int le32(char *p) {
     return ((p[0] & 255) | ((p[1] & 255) << 8) | ((p[2] & 255) << 16) | ((p[3] & 255) << 24)) & 0xFFFFFFFF;
 }
 
-int arc_gunzip(char *in, int inlen, char **out, int *outlen) {
-    int flags, pos, size, n, used, crc;
-    char *buf;
-
+// Where a gzip member's deflate data starts, or -1
+static int gz_start(char *in, int inlen) {
+    int flags, pos;
     if (inlen < 18 || (in[0] & 255) != 0x1F || (in[1] & 255) != 0x8B) return arc_fail("not gzip");
     if (in[2] != 8) return arc_fail("gzip, but not deflate");
     flags = in[3] & 255;
@@ -430,7 +456,14 @@ int arc_gunzip(char *in, int inlen, char **out, int *outlen) {
     if (flags & 16) { while (pos < inlen && in[pos]) ++pos; ++pos; }                 // FCOMMENT
     if (flags & 2) pos = pos + 2;                                                    // FHCRC
     if (pos >= inlen - 8) return arc_fail("gzip header runs off the end");
+    return pos;
+}
 
+int arc_gunzip(char *in, int inlen, char **out, int *outlen) {
+    int pos, size, n, used, crc;
+    char *buf;
+
+    if ((pos = gz_start(in, inlen)) < 0) return 0 - 1;
     // ISIZE is the size mod 2^32; nothing here is that big
     size = le32(in + inlen - 4);
     if (size < 0) return arc_fail("gzip member too large");
@@ -446,6 +479,28 @@ int arc_gunzip(char *in, int inlen, char **out, int *outlen) {
     return 0;
 }
 
+int arc_gunzip_to(char *in, int inlen, int put) {
+    int pos, n, used;
+    char *buf;
+
+    if ((pos = gz_start(in, inlen)) < 0) return 0 - 1;
+    if (le32(in + inlen - 4) < 0) return arc_fail("gzip member too large");
+    if (!(buf = (char *)ualloc(WINCAP))) return arc_fail("out of memory for the inflater's window");
+    out_sink = put; out_done = 0; out_crc = 0;
+    n = arc_inflate(in + pos, inlen - pos - 8, buf, WINCAP, &used);
+    out_sink = 0;
+    if (n >= 0) {
+        out_crc = arc_crc32(out_crc, buf, n);
+        if (put(buf, n) != n) n = arc_fail("the inflated data could not be written");
+    }
+    free(buf);
+    if (n < 0) return n;
+    n = out_done + n;
+    if (n != le32(in + inlen - 4)) return arc_fail("inflated size differs from the trailer");
+    if (out_crc != le32(in + inlen - 8)) return arc_fail("CRC mismatch: the archive is damaged");
+    return n;
+}
+
 // ---- files ----
 
 char *arc_readfile(char *path, int *plen) {
@@ -458,13 +513,13 @@ char *arc_readfile(char *path, int *plen) {
     fd = uopen(path, O_RD);
     if (fd < 0) { arc_error = "cannot open"; return 0; }
     if (st[1] <= 0) st[1] = 65536;
-    buf = (char *)ualloc(st[1] + 1);
+    if (!(buf = (char *)ualloc(st[1] + 1))) { uclose(fd); arc_error = "out of memory reading it"; return 0; }
     got = 0;
     while (1) {
         if (got == st[1]) {
             // bigger than stat said (a host file): grow
             char *nb;
-            nb = (char *)ualloc(st[1] * 2 + 1);
+            if (!(nb = (char *)ualloc(st[1] * 2 + 1))) { uclose(fd); free(buf); arc_error = "out of memory reading it"; return 0; }
             memcpy(nb, buf, got);
             free(buf);
             buf = nb;

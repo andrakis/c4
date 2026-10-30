@@ -217,16 +217,30 @@ struct vnode {
     int cap;                   // bytes allocated
     int rpos;                  // PIPE: read cursor into data
     int host;                  // HOSTFILE: the host descriptor
-    int writers;               // PIPE: descriptions still open for write
+    int writers;               // descriptions still open for write (a PIPE's end of file)
     struct vnode *next;        // sibling in the parent directory
     struct vnode *child;        // VN_DIR: first entry
     struct vnode *parent;       // VN_DIR: enclosing directory
     char name[VN_NAME_MAX];     // one component, not a path
     // A lazy RAM file (SYS_LAZYFILE): its bytes are still on the host,
-    // under this name, and are read in the first time anything opens,
-    // reads, writes or loads it. size is already right.
+    // under this name, and size is already right. Where the host reads a
+    // span of a file (vfs_spans), a read or a load takes what it asks for
+    // from there; a small file read is read in whole and kept, and so is
+    // any file something writes to or wants in place (vfs_getdata).
+    // Elsewhere the first use reads it in.
     char *hostname;
     int lazy;
+    // Its bytes are still the host's: lazy, or read in and not changed
+    // since (vfs_touch ends it). The copy in RAM is then a cache, which
+    // vfs_reclaim drops, least recently used first, when memory is short;
+    // the file is lazy again. Not while it is open for writing (writers
+    // counts those descriptions, for every kind of vnode), or held: a
+    // caller has its bytes in place (vfs_getdata).
+    int backed;
+    int held;
+    struct vnode *cnext;        // the cache: filled backed files, most recently used first
+    struct vnode *cprev;
+    int sig;                    // a lazy file's C4R signature, once looked at: 1 not a program, 2 a program
     // When it last changed, as a place in the order of changes rather
     // than a time (vfs_touch): b4ke compares two, nothing else does. A
     // file still on the host is 0, older than anything made here.
@@ -264,10 +278,22 @@ int          vfs_unlink(char *path);
 int          vfs_rename(char *path, char *newname);
 int          vfs_lazyfile(char *path, char *host, int size);
 int          vfs_fill(struct vnode *vn);         // read a lazy file's bytes in; 1 if it has them
+int          vfs_pread(struct vnode *vn, char *buf, int pos, int len);   // a RAM file's bytes at POS, wherever they are
+extern int   vfs_spans;                          // the host reads a span of a file: "NAME@OFF+LEN"
+// Memory for the kernel: malloc, and when it has none, files' cached
+// bytes dropped (vfs_reclaim) until it has. vfs_trim drops them while
+// memory is short (7/8 of the heap in use, where the host says).
+char        *vfs_malloc(int n);
+int          vfs_reclaim(int want);              // the bytes it freed
+void         vfs_trim();
+extern int   vfs_ncached, vfs_cachedbytes, vfs_dropped;   // the cache, and files dropped from it
 int          vfs_put(char *path, char *buf, int len);   // C4KE OP_VFS_PUT
 struct vnode *vfs_klog();                                // /var/log/kernel, held by the kernel
 void         vfs_logc(struct vnode *vn, int c, int max); // one byte on its end, up to MAX
-char        *vfs_getdata(char *path, int *plen);        // C4KE OP_VFS_GET
+// C4KE OP_VFS_GET: the file's own bytes. HOLD, if not 0, gets the vnode,
+// which keeps them until vfs_unhold; without, they are kept for good.
+char        *vfs_getdata(char *path, int *plen, struct vnode **hold);
+void         vfs_unhold(struct vnode *vn);
 int          vfs_nfiles();                              // C4KE OP_VFS_COUNT: files in the cwd
 char        *vfs_fname(int i);                          // C4KE OP_VFS_NAME
 struct vnode *vfs_root();

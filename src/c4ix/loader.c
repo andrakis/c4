@@ -125,6 +125,13 @@ static void mod_free(struct c4r_mod *m) {
     m->code = 0; m->data = 0; m->buf = 0;
 }
 
+// PATH did not fit: said, so that a program that will not start says
+// why (the shell's own word is only "cannot run"). 0.
+static int loader_nomem(char *path, int bytes) {
+    kprintf("c4ix: loader: out of memory loading %s (%d KB)\n", path, (bytes + 1023) / 1024);
+    return 0;
+}
+
 // Read and relocate one image. Returns 1 and fills M; its buf stays
 // allocated until the caller has linked it.
 static int mod_read(char *path, struct c4r_mod *m) {
@@ -165,7 +172,8 @@ static int mod_read(char *path, struct c4r_mod *m) {
             kprintf("c4ix: loader: %s is over the %d-byte limit\n", path, C4R_BUF_MAX);
             return 0;
         }
-        if (total <= 0 || !(buf = (char *)malloc(total + 16))) return 0;
+        if (total <= 0) return 0;
+        if (!(buf = vfs_malloc(total + 16))) return loader_nomem(path, total);
         if ((fd = open(path, 0)) < 0) { free(buf); return 0; }
         got = 0;
         while (got < total && (n = read(fd, buf + got, total - got < 65536 ? total - got : 65536)) > 0)
@@ -188,15 +196,19 @@ static int mod_read(char *path, struct c4r_mod *m) {
         // the whole compile-and-run loop, and this is what joins the
         // two halves. Without it the kernel can only ever run programs
         // that were built somewhere else.
-        if (vn->lazy) vfs_fill(vn);
+        // A file still on the host is read from there into the buffer,
+        // where the host reads spans: a program run is not kept as well.
         total = vn->size;
         if (total > C4R_BUF_MAX) {
             kprintf("c4ix: loader: %s is %d bytes, over the %d limit\n",
                     path, total, C4R_BUF_MAX);
             return 0;
         }
-        if (!(buf = (char *)malloc(total + 16))) return 0;
-        memcpy(buf, vn->data, total);
+        if (!(buf = vfs_malloc(total + 16))) return loader_nomem(path, total);
+        if (vfs_pread(vn, buf, 0, total) != total) {
+            kprintf("c4ix: loader: cannot read %s\n", path);
+            free(buf); return 0;
+        }
     }
     if (total < 13) {
         if (!loader_quiet) kprintf("c4ix: loader: %s is not a .c4r\n", path);
@@ -231,7 +243,7 @@ static int mod_read(char *path, struct c4r_mod *m) {
     // code: copy out of the read buffer into an exact-size allocation
     p = p + sizeof(int);   // 'C' marker word
     // umalloc: a user task's (mmu.c), when it is one
-    if (!(code = (int *)umalloc(codelen * sizeof(int) + sizeof(int)))) { free(buf); return 0; }
+    if (!(code = (int *)umalloc(codelen * sizeof(int) + sizeof(int)))) { free(buf); return loader_nomem(path, codelen * sizeof(int)); }
     memcpy(code, p, codelen * sizeof(int));
     p = p + codelen * sizeof(int);
 
@@ -239,7 +251,7 @@ static int mod_read(char *path, struct c4r_mod *m) {
     // malloc+memset so the BSS tail [datalen, memsz) is ready; only
     // datalen bytes are copied from the image.
     p = p + sizeof(int);   // 'D' marker
-    if (!(data = (char *)umalloc(memsz + 8))) { ufree((int)code); free(buf); return 0; }
+    if (!(data = (char *)umalloc(memsz + 8))) { ufree((int)code); free(buf); return loader_nomem(path, memsz); }
     memset(data, 0, memsz + 8);
     memcpy(data, p, datalen);
     m->dtmpl = p;
@@ -567,9 +579,19 @@ int c4r_load(char *path, struct c4r_image *img) {
     ncons = 0; ndes = 0;
     k = 0;
     while (k < n) { ncons = ncons + (mods + k)->ncons; ndes = ndes + (mods + k)->ndes; ++k; }
-    cons = 0; des = 0;
-    if (ncons) cons = (int *)malloc(ncons * sizeof(int));
-    if (ndes) des = (int *)malloc(ndes * sizeof(int));
+    cons = 0; des = 0; libs = 0;
+    if (ncons) cons = (int *)vfs_malloc(ncons * sizeof(int));
+    if (ndes) des = (int *)vfs_malloc(ndes * sizeof(int));
+    if (n > 1) libs = (int *)vfs_malloc(3 * (n - 1) * sizeof(int));
+    if ((ncons && !cons) || (ndes && !des) || (n > 1 && !libs)) {
+        if (cons) free((char *)cons);
+        if (des) free((char *)des);
+        if (libs) free((char *)libs);
+        k = 0;
+        while (k < n) { if ((mods + k)->buf) mod_free(mods + k); ++k; }
+        free(mods);
+        return loader_nomem(path, (ncons + ndes + 3 * n) * sizeof(int));
+    }
     total = 0;
     k = n - 1;
     while (k >= 0) {
@@ -589,9 +611,9 @@ int c4r_load(char *path, struct c4r_image *img) {
     // for the next task that needs it (its books in the kernel arena)
     k = 1;
     while (k < n) {
-        if ((mods + k)->pic && !(mods + k)->shared) {
-            sh = (struct shlib *)kmem_alloc(sizeof(struct shlib));
-            sh->mod = (struct c4r_mod *)kmem_alloc(sizeof(struct c4r_mod));
+        // (with no memory for its books, it is this task's alone)
+        if ((mods + k)->pic && !(mods + k)->shared && (sh = (struct shlib *)kmem_alloc(sizeof(struct shlib))) &&
+            (sh->mod = (struct c4r_mod *)kmem_alloc(sizeof(struct c4r_mod)))) {
             memcpy((char *)sh->mod, (char *)(mods + k), sizeof(struct c4r_mod));
             sh->mod->data = 0;
             mod_trim(sh->mod);
@@ -608,9 +630,7 @@ int c4r_load(char *path, struct c4r_image *img) {
 
     // the libraries, for the task: code to free (0 when shared), its own
     // data, and the slot the scheduler points at that data (0 if none)
-    libs = 0;
     if (n > 1) {
-        libs = (int *)malloc(3 * (n - 1) * sizeof(int));
         k = 1;
         while (k < n) {
             // under the MMU the shared code too: mmu_adopt maps it, ufree leaves it
@@ -705,7 +725,12 @@ struct task *task_spawn_priv(char *path, int argc, int argv, int privs) {
     if (mmu_on && privs == PRIV_USER) {
         if (ck_argv_copy(t, argc, (char **)argv) && t->argv_vec) sched_forge_argv(t, t->argv_vec);
         mmu_adopt(t);
-        mmu_user_entry(t);
+        // with no memory for the page it starts in, it would start at its
+        // image's kernel address: it goes at once, saying why
+        if (!mmu_user_entry(t)) {
+            kprintf("c4ix: out of memory starting %s\n", path);
+            task_zombify(t, -1);
+        }
     }
     // the CPUs it may run on are its parent's (pin)
     if (sched_cur && !sched_cur->cpuidle) { t->cpumask = sched_cur->cpumask; t->nice = sched_cur->nice; }

@@ -80,6 +80,13 @@ program can use:
   once, and so that a program can ask how many drives there are and
   whether the current one is writable.
 
+**Part of a file.** `NAME@OFF+LEN` opens LEN bytes of NAME from OFF as a
+file of their own (shorter past the end), where no file has that whole
+name: `1:c4ix-base.tar@1536+4110`. A read at an offset, with no seek and
+no new register. C4IX reads its root archive's files out of the tar it
+keeps on drive 1 this way (docs/c4ix-design.md, "The root archive, read
+where it is kept"). `Devices.diskOpen`; native c4m has no such form.
+
 **Writing.** Four new registers, mirroring the read side exactly:
 
     DISK_WNAME   create/truncate on the selected drive -> fd or -1

@@ -459,7 +459,9 @@ region's until swap puts a page out; then the frame is free for any page
 coming back, and a block's record counts its frames in use wherever they
 are mapped; a block with none in use goes back to the heap (`mmu_fput`).
 When the heap has no block for a region, or there is no frame for a page
-coming back, pages of idle tasks go out to **the host's swap** (stage 8,
+coming back, files' cached bytes go first, since they are on the host
+already (docs/c4ix-design.md, "The root archive, read where it is kept":
+`vfs_reclaim`), and then pages of idle tasks go out to **the host's swap** (stage 8,
 devices.js `SWAP_ADDR`, `SWAP_CMD`: a page to a numbered slot, up to 256
 MB, memory beyond the arena, forgotten with the machine), and their
 frames are free. A page put out stays in the kernel's map, not present,

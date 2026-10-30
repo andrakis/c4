@@ -962,6 +962,110 @@ spinner at -3 beside one at 0 gets 4.6 times the cycles
   untouched.
   `libjs/tests/test-c4ix-mmu.mjs`, `test-c4ix-swap.mjs`.
 
+- **The root archive, read where it is kept** (branch lazy-root,
+  2026-10-30, asked for: "If the unpacked files are persisted, surely we
+  can remove them from ram as they are saved to browser storage?"). Persist
+  already kept the unpacked root archive on drive 1, as
+  `1:c4ix-base.tar`, and every boot then untarred that copy into RAM:
+  1,178 files, 16.5 MB, there for good: `/usr/src` 5.3 MB, `/build` 7 MB,
+  `/usr/docs` 1.5 MB, `/usr/libjs` 1 MB. Swap could not help: it puts
+  out idle tasks' pages, never RAM files.
+  - *A span of a host file.* The host opens `NAME@OFF+LEN` as LEN bytes of
+    NAME from OFF (`Devices.diskOpen`, docs/c4bb-storage.md), where no
+    file has that whole name: a read at an offset, with no new register.
+    libjs announces it (`C4I_C4MJS`, `vfs_spans`); native c4m has none.
+  - *The tree, lazy.* `persist boot` no longer untars the kept tar. It
+    reads its headers, a span each, and makes every file a lazy file
+    (`SYS_LAZYFILE`) on its span of the tar, `1:c4ix-base.tar@OFF+LEN`,
+    and every directory. Nothing else is read. A lazy file now takes the
+    next modification stamp, as writing it would, so the tree is stamped
+    in the tar's order as untarring it was, and b4ke finds `/build` as
+    up to date as before. The first boot inflates the archive straight
+    onto the drive, a 256 KB window at a time (libarc's new
+    `arc_gunzip_to`, whose sink is a function: c4lc calls any variable),
+    and then does the same, so no boot holds the tree in RAM, and the
+    first holds the 4 MB archive and the window, not 4 + 16.5 + 16.5 MB.
+    With no drive (`cli.js` without `-w`, a browser that refuses storage),
+    or a drive that will not take the tar, the archive is unpacked into
+    RAM as before.
+  - *Reading.* `vfs_read` of a lazy file on a host with spans takes what
+    it asks for from the host, at its offset; a file of 64 KB or less
+    (`VFS_KEEP`) is read in whole and kept while memory is not short. The
+    loader reads a lazy program from the host straight into the image's
+    buffer (`vfs_pread`), so a program run is not kept as well. A write,
+    a truncate or C4KE's `OP_VFS_GET` (which hands out the bytes in place)
+    reads a file in. `stat` says whether a lazy span is a program by its
+    first three bytes, read once (`vn->sig`), not by its name.
+  - *The cache.* A file read in whose bytes are still the host's
+    (`vn->backed`: lazy, or read in and not changed since) is on a list,
+    most recently used first. `vfs_trim` drops files from its tail, their
+    bytes freed and the files lazy again, while 7/8 of the heap is in use
+    (where the host says how much is, `C4IX_HEAP_USED`); every kernel
+    allocation that could find no memory (`vfs_malloc`: a RAM file's
+    growth, an image, a stack, a non-MMU task's memory) and the MMU's
+    region and frame allocators (`mmu_raw`, `mmu_fget`, before swap) drop
+    files until it can. Never one open for writing (`writers` now counts
+    those for every vnode, not just pipes), nor one held: `OP_VFS_GET`
+    holds a file while it copies it for a task under the MMU, and without
+    the MMU, where the task keeps the kernel's pointer, keeps it for good.
+    A file that changes leaves the list (`vfs_touch`), and is RAM's until
+    `persist save` keeps it. `/proc/cache` says how many files are lazy
+    and their bytes, how many are cached and theirs, and how many times one
+    was dropped.
+  - *Out of memory, said.* A first boot whose unpack failed (`tar: cannot
+    write /build/...`) went on to the desktop on half a tree. A later one,
+    at 32 MB without the MMU, read the 16.5 MB kept tar with
+    `arc_readfile`, which did not check its allocation: the tar went to
+    address 0 (libjs: "store of 0x00000075 to ROM 0x00000000", the `u` of
+    its first name, `usr/`), and the boot never finished. `arc_readfile`
+    checks now, and `persist boot` tells memory from other failures: it
+    says the archive does not fit in this machine's N MB of heap and exits
+    3; vfsload, waiting for it at the desktop's boot, says so and exits 3;
+    and init prints "c4ix: out of memory: the system does not fit in this
+    machine's memory" and stops, instead of starting a desktop on half a
+    tree. The loader says when a program will not fit (`c4ix: loader: out
+    of memory loading PATH`), and checks the allocations it did not: the
+    constructor lists, the library table, a shared library's record. And
+    under the MMU, a task whose entry page could not be had
+    (`mmu_user_entry`, which spawn and execve did not check) would start
+    at its image's kernel address; it now ends at once, with `c4ix: out of
+    memory starting NAME`.
+  - *Measured* (libjs, the 32-bit image, the desktop's boot as the page
+    makes it, headless; heap from `machine.heap`):
+
+    | | before | after |
+    |---|---|---|
+    | heap in use, the desktop up (MMU off / on) | 29,073 / 30,517 KB | 4,698 / 6,141 KB |
+    | heap at its most, first boot (off / on) | 43,664 / 44,933 KB | 9,625 / 10,895 KB |
+    | heap at its most, from the kept copy (off / on) | 42,006 / 43,277 KB | 5,416 / 6,628 KB |
+    | console boot (`wait 4`, MMU off): in use, at its most | 22,880, 40,144 KB | 913, 2,179 KB |
+    | ... its cycles, from the kept copy | 75.2M | 72.2M |
+    | System Monitor's System, 64 MB, MMU on (Chrome 151) | 26.0 MB | 2,257 K |
+    | ... MMU off | | 878 K |
+    | smallest machine to the desktop, from the kept copy (off / on) | 38 / 44 MB | 7 / 9 MB |
+    | ... first boot (off / on) | | 12 / 14 MB |
+
+    The smallest machines were found headless, a megabyte at a time, and
+    the kept-copy ones checked in the page. Below them a first boot stops
+    with the message above; from the kept copy the tree is read, and it is
+    the desktop that does not fit (`c4ix: loader: out of memory loading
+    ...`, then the shell's "cannot run desktop"). At 45 MB with the MMU on,
+    which ran Wolf3D but neither Doom nor ROTT, both start now, in the page
+    and headless (and so does Wolf3D, headless); Doom does at 20 MB too,
+    and ROTT from 28 MB, below which its own 8.7 MB zone is what it cannot
+    have ("Z_AllocateZone: Couldn't malloc"). Before, at 45 MB, the page's
+    unpack failed part way and System held 25.4 MB of half a tree.
+    `test-c4ix-rebuild` runs without a drive, as before; run with one
+    (`-w`), so that the whole build reads the tree from the drive, it
+    passes too, in 719 s against 739 s.
+  - *Not done.* With the MMU and 6 MB (a 4 MB heap, 3 MB under the
+    smallest that boots), the first shell still faults at its first
+    instruction, a jump into the kernel's heap ("page fault: jump to
+    0x001e1a80"), while swap is busy. It is not the entry page, which the
+    check above would have reported. Left for the MMU's own work on
+    memory that runs out.
+  `libjs/tests/test-lazy-root.mjs`; in the page, `web-lazy-root.mjs`.
+
 ### The tree (2026-10-29)
 
 `/` holds directories only. The programs are in `/bin`, and the shell
@@ -982,7 +1086,7 @@ log was `/log/kernel`. `pin` and `nice` look where the shell does.
 | `/etc` | the desktop's settings, `desktop.cfg` |
 | `/var/log/kernel` | the console, logged (`console.c`) |
 | `/var/persist` | persist's list of the tree as it booted |
-| `/tmp`, `/proc` | scratch files; `/proc/uptime` |
+| `/tmp`, `/proc` | scratch files; `/proc/uptime`, `/proc/kmsg`, `/proc/cache` (files on the host and in RAM) |
 
 `/home` is for the person's own files: the page's uploads are listed
 there (`libjs/uploads.js`, docs/c4ix-desktop.md part sixteen).

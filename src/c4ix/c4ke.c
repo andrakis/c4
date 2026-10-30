@@ -598,6 +598,7 @@ void ck_exec_reset(struct task *t) {
 // (docs/c4ix-cpu.md, step 7).
 int ck_dispatch(int num, int *args) {
     struct task *t, *s;
+    struct vnode *held;
     char *p;
     int code;
 
@@ -702,10 +703,13 @@ int ck_dispatch(int num, int *args) {
         return vfs_put((char *)args[0], (char *)args[1], args[2]);
     case CK_VFS_GET:
         if (ustrlen((char *)args[0]) < 0 || (args[1] && !uaccess(args[1], sizeof(int), 1))) return 0;
-        if (!mmu_on) return (int)vfs_getdata((char *)args[0], (int *)args[1]);
-        if (!(p = vfs_getdata((char *)args[0], &code))) return 0;
+        // in place, the program keeps the bytes; a copy needs them only while it is made
+        if (!mmu_on) return (int)vfs_getdata((char *)args[0], (int *)args[1], 0);
+        if (!(p = vfs_getdata((char *)args[0], &code, &held))) return 0;
         if (args[1]) *(int *)args[1] = code;
-        return (int)ucopy(p, code + 1);
+        p = ucopy(p, code + 1);
+        vfs_unhold(held);
+        return (int)p;
     case CK_VFS_UNLINK:
         if (ustrlen((char *)args[0]) < 0) return -1;
         return vfs_unlink((char *)args[0]);

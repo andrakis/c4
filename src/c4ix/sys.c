@@ -98,7 +98,7 @@ int sys_open(char *path, int flags) {
     }
     if ((vn = vfs_lookup(path))) {
         if (vn->type == VN_PROC && (flags & 3)) return -1;   // /proc/uptime is read-only
-        if (flags & C4IX_O_TRUNC) { vn->size = 0; vn->lazy = 0; vfs_touch(vn); }   // the host bytes are not wanted
+        if (flags & C4IX_O_TRUNC) vfs_truncate(vn, 0);   // the host bytes are not wanted
         return fd_open_vnode(t, vn, flags);
     }
     if (flags & C4IX_O_CREAT) {
@@ -309,7 +309,12 @@ static int sys_execve(char *path, char **argv, char **envp) {
     // the new image, stack and arguments are its own, and it starts in
     // a page of its own (mmu.c)
     mmu_adopt(t);
-    mmu_user_entry(t);
+    // no memory for the page it starts in: the old image is gone, so it ends
+    if (!mmu_user_entry(t)) {
+        kprintf("c4ix: out of memory starting %s\n", t->name);
+        task_exit(-1);
+        return 0;
+    }
     sched_reload = 1;
     sched_new_slice();
     return 0;

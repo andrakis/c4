@@ -48,6 +48,34 @@ void wk_scheme_use(int i, int desk) {
     wk_full = 1;
 }
 
+// ---- fonts -------------------------------------------------------------------------
+//
+// The interface's three faces, each with its bold, the editors' three
+// fixed-width ones, and three sizes. A grid is a font size and a cell,
+// the cell no narrower than the face's characters (0.6 of its size in
+// Courier New, a little less in the others).
+static char *face_names[WK_FACES] = { "Tahoma", "Verdana", "Georgia" };
+static int faces[WK_FACES * 2] = { F_SANS, F_BOLD, F_VERDANA, F_VERDANA_B, F_SERIF, F_SERIF_B };
+static char *mono_names[WK_FACES] = { "Consolas", "Courier New", "Lucida Console" };
+static int monos[WK_FACES] = { F_MONO, F_COURIER, F_LUCIDA };
+static char *size_names[WK_SIZES] = { "Small", "Normal", "Large" };
+static int grids[WK_SIZES * 3] = { 10, 6, 13, 12, 7, 15, 14, 8, 17 };
+
+char *wk_face_name(int i) { return i >= 0 && i < WK_FACES ? face_names[i] : ""; }
+char *wk_mono_name(int i) { return i >= 0 && i < WK_FACES ? mono_names[i] : ""; }
+int wk_mono_font(int i) { return i >= 0 && i < WK_FACES ? monos[i] : F_MONO; }
+char *wk_size_name(int i) { return i >= 0 && i < WK_SIZES ? size_names[i] : ""; }
+void wk_font_use(int face, int size) {
+    if (face < 0 || face >= WK_FACES) face = 0;
+    if (size < 0 || size >= WK_SIZES) size = 1;
+    wk.fsans = faces[face * 2]; wk.fbold = faces[face * 2 + 1]; wk.fsize = size - 1;
+    wk_full = 1;
+}
+void wk_grid(int size, int *font_size, int *cw, int *ch) {
+    if (size < 0 || size >= WK_SIZES) size = 1;
+    *font_size = grids[size * 3]; *cw = grids[size * 3 + 1]; *ch = grids[size * 3 + 2];
+}
+
 int ui_mix(int a, int b, int t, int n) {
     int r, g, bl;
     r = ((a >> 16) & 255) + ((((b >> 16) & 255) - ((a >> 16) & 255)) * t) / n;
@@ -133,8 +161,12 @@ void d_rect(int x, int y, int w, int h, int rgb) { if (w > 0 && h > 0) gui_rect(
 void d_recto(int x, int y, int w, int h, int rgb) { gui_recto(x + ox, y + oy, w, h, rgb); }
 void d_line(int x0, int y0, int x1, int y1, int rgb) { gui_line(x0 + ox, y0 + oy, x1 + ox, y1 + oy, rgb); }
 void d_disc(int x, int y, int r, int rgb) { gui_disc(x + ox, y + oy, r, rgb); }
-void d_text(int x, int y, int rgb, int font, char *s) { gui_text2(x + ox, y + oy, rgb, 11, font, 0, s, 0 - 1); }
+// F_SANS and F_BOLD in the interface's face and size, when one was chosen
+// (wk_font_use; grin never does); every other font as it is
+void d_text(int x, int y, int rgb, int font, char *s) { d_textn(x, y, rgb, 11, font, 0, s, 0 - 1); }
 void d_textn(int x, int y, int rgb, int size, int font, int advance, char *s, int n) {
+    if (font == F_SANS && wk.fsans) { font = wk.fsans; size = size + wk.fsize; }
+    else if (font == F_BOLD && wk.fbold) { font = wk.fbold; size = size + wk.fsize; }
     gui_text2(x + ox, y + oy, rgb, size, font, advance, s, n);
 }
 void d_imgdef(int id, int w, int h, int *px) { gui_imgdef(id, w, h, px); }

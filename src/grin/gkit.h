@@ -11,8 +11,9 @@
 // one still finds everything it calls where it expects. Version 2 (G6)
 // put the game window's three entries before the kit's functions, which
 // moved them all one way once: every application is built with grin.
-// Version 3 (G7) added the clipboard's keys at the end.
-enum { GRIN_MAGIC = 1196575054, GRIN_KIT_VERSION = 3 };
+// Version 3 (G7) added the clipboard's keys at the end, version 4 the
+// fonts (Notepad's Format menu).
+enum { GRIN_MAGIC = 1196575054, GRIN_KIT_VERSION = 4 };
 
 struct grin_kit {
     int magic, version;

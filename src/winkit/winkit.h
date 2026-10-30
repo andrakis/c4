@@ -48,6 +48,7 @@ struct wk_env {
     int mods;                         // Shift, Ctrl, Alt as the last key left them
     int desk, face, light, shadow;    // the scheme's colours (Settings)
     int title, title2, ititle, ititle2, sel;
+    int fsans, fbold, fsize;          // the interface's font (wk_font_use): F_SANS's, F_BOLD's, a size step
 };
 // A grin application (compiled with -D WK_IMPORT, src/grin/import.c) has
 // no wk of its own: it reads grin's, through the pointer grin publishes
@@ -77,8 +78,21 @@ enum { C_DARK = 0x000000, C_WHITE = 0xffffff, C_GREEN = 0x00ff00 };
 enum { S_FLAT = 0, S_CLASSIC = 1, S_WIN31 = 2, N_STYLES = 3 };
 #define ui_style (wk.style)
 
-// fonts: monospace, a UI face, and its bold
-enum { F_MONO = 0, F_SANS = 1, F_BOLD = 2 };
+// fonts: monospace, a UI face, and its bold; then the display's other
+// faces (gui.h's GUI_* fonts), for a choice of them
+enum { F_MONO = 0, F_SANS = 1, F_BOLD = 2, F_COURIER = 3, F_LUCIDA = 4,
+       F_VERDANA = 5, F_VERDANA_B = 6, F_SERIF = 7, F_SERIF_B = 8 };
+// The choices offered (draw.c): faces for the interface, which d_text and
+// d_textn then draw F_SANS and F_BOLD in; fixed-width faces for an
+// editor; and sizes, Small, Normal and Large. The interface's size moves
+// F_SANS and F_BOLD a pixel down or up; an editor's is a text grid's.
+enum { WK_FACES = 3, WK_SIZES = 3 };
+char *wk_face_name(int i);            // the interface's faces: "Tahoma", "Verdana", "Georgia"
+char *wk_mono_name(int i);            // the fixed-width faces: "Consolas", "Courier New", "Lucida Console"
+int   wk_mono_font(int i);            // ... as a font for d_textn
+char *wk_size_name(int i);
+void  wk_font_use(int face, int size);  // the interface's face and size, from now on
+void  wk_grid(int size, int *font_size, int *cw, int *ch);   // a text grid's: its font's size, a cell
 // bevel styles
 enum { B_RAISED = 1, B_SUNKEN = 2, B_FIELD = 3, B_PRESSED = 4, B_ETCHED = 5 };
 // mouse events, in client coordinates
@@ -290,6 +304,7 @@ extern char *notepad_home;            // where Open starts
 extern char *notepad_untitled;        // where Save As offers to put a new document
 extern int notepad_filebox;           // 1: Open and Save As are file boxes; 0: typed paths
 extern char *notepad_filter;          // the types the file box offers ("*"; wk_filebox)
+extern char *notepad_cfg;             // where Format's choices are kept (wk_fopen), or 0 for nowhere
 int  wk_clock();                      // the host's time of day, in seconds since midnight
 
 // ---- screen savers (savers.c) ----------------------------------------------

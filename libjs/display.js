@@ -19,6 +19,27 @@ const POINTERS = ['default', 'text', 'nwse-resize', 'pointer', 'move', 'wait', '
 const PTR_LOCK = 8;
 import { RingReader, FbConsumer } from './shared.js';
 
+// TEXT2's fonts (GUI_* in libjs/guest/gui.h): a weight and a family, each
+// family a chain that ends somewhere distinct on Windows and on Linux. A
+// scale brings a wide face down to about the first sans face's width, as
+// the window kit guesses a string's width without measuring it.
+const MONO = 'ui-monospace, Consolas, "DejaVu Sans Mono", monospace';
+const SANS = 'Tahoma, "Segoe UI", Verdana, sans-serif';
+const COURIER = '"Courier New", Courier, "Nimbus Mono PS", monospace';
+const LUCIDA = '"Lucida Console", "Lucida Sans Typewriter", Monaco, "Noto Sans Mono", "DejaVu Sans Mono", monospace';
+const VERDANA = 'Verdana, "DejaVu Sans", "Bitstream Vera Sans", sans-serif';
+const SERIF = 'Georgia, "Times New Roman", "DejaVu Serif", serif';
+const FONTS = [
+  ['', MONO, 1], ['', SANS, 1], ['bold ', SANS, 1],           // 0 mono, 1 sans, 2 sans bold
+  ['', COURIER, 1], ['', LUCIDA, 1],                           // 3, 4: two more monospaced
+  ['', VERDANA, 0.95], ['bold ', VERDANA, 0.95],               // 5, 6: a wider sans, and bold
+  ['', SERIF, 1], ['bold ', SERIF, 1],                         // 7, 8: a serif, and bold
+];
+const fontCss = (font, size) => {
+  const [weight, family, k] = FONTS[font] || FONTS[font ? 1 : 0];
+  return `${weight}${Math.max(4, size) * k}px ${family}`;
+};
+
 const css = rgb => '#' + ((rgb >>> 0) & 0xffffff).toString(16).padStart(6, '0');
 const inRect = (r, x, y) => x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h;
 const cutRect = (a, b) => {
@@ -254,8 +275,7 @@ export class Display {
           const n = Math.max(0, Math.min(words[p + 6], (len - 9) * 4));
           const font = words[p + 4], adv = words[p + 5];
           c.fillStyle = css(words[p + 2]);
-          c.font = `${font === 2 ? 'bold ' : ''}${Math.max(4, words[p + 3])}px ` +
-                   (font ? 'Tahoma, "Segoe UI", Verdana, sans-serif' : 'ui-monospace, Consolas, "DejaVu Sans Mono", monospace');
+          c.font = fontCss(font, words[p + 3]);
           c.textBaseline = 'top';
           let s = '';
           for (let k = 0; k < n; k++) s += String.fromCharCode((words[p + 7 + (k >> 2)] >>> ((k & 3) * 8)) & 0xff);

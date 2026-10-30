@@ -59,7 +59,8 @@ export const GUI = {
 export const CMD = {
   CLEAR: 1, RECT: 2, RECTO: 3, LINE: 4, CIRCLE: 5, TEXT: 6, PIXEL: 7, PRESENT: 8,
   SIZE: 9, IMGDEF: 10, IMG: 11, CLIP: 12, NOCLIP: 13,
-  TEXT2: 14,            // [x, y, rgb, size, font, advance, n, chars]: 0 mono, 1 sans, 2 sans bold
+  TEXT2: 14,            // [x, y, rgb, size, font, advance, n, chars]: 0 mono, 1 sans, 2 sans bold,
+                        // 3 Courier, 4 Lucida (mono), 5 Verdana, 6 its bold, 7 serif, 8 its bold
   CURSOR: 15,           // [shape]: the pointer over the display, GUI_PTR_* -- no frame needed
   BLIT8: 16,            // [x, y, w, h, src, pitch, pal, dw, dh]: w x h bytes at src (pitch a
                         // row) through the 256 words 0x00RRGGBB at pal, drawn scaled to dw x dh.

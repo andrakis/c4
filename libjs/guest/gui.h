@@ -52,7 +52,11 @@ enum {
 enum { GUI_PTR_ARROW = 0, GUI_PTR_TEXT = 1, GUI_PTR_RESIZE = 2, GUI_PTR_HAND = 3,
        GUI_PTR_MOVE = 4, GUI_PTR_WAIT = 5, GUI_PTR_CROSS = 6, GUI_PTR_NONE = 7,
        GUI_PTR_LOCK = 8 };
-enum { GUI_MONO = 0, GUI_SANS = 1, GUI_SANS_BOLD = 2 };
+// fonts for gui_text2: the first three, and more faces for a choice of
+// them (the window kit's Settings); a font the display does not know is
+// drawn as GUI_SANS (or GUI_MONO, for 0)
+enum { GUI_MONO = 0, GUI_SANS = 1, GUI_SANS_BOLD = 2, GUI_COURIER = 3, GUI_LUCIDA = 4,
+       GUI_VERDANA = 5, GUI_VERDANA_BOLD = 6, GUI_SERIF = 7, GUI_SERIF_BOLD = 8 };
 // events: ev[0] is the type, ev[1..3] its payload
 enum {
 	GUI_EV_MOVE = 1,     // x, y, buttons

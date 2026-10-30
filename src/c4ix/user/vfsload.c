@@ -411,11 +411,13 @@ void handle_each(char *keyExpr, char *valuePattern, int indent, char *pathPrefix
 }
 
 // hostdir(PREFIX) as a directory line's value: every host file the
-// sizes table lists as PREFIX + NAME, NAME with no '/' in it, is the lazy
-// file NAME in that directory (load_hostdirs). A game's data that cannot
-// be shipped goes on the disk only where it is there to copy, so the
-// manifest cannot name its files -- and OpenTyrian's newsh#.shp and
-// shapes).dat could not be written in it anyway.
+// sizes table lists as PREFIX + NAME is the lazy file NAME in that
+// directory, and a NAME with a '/' in it is in a directory made for it
+// (load_hostdirs). A game's data that cannot be shipped goes on the disk
+// only where it is there to copy, so the manifest cannot name its files
+// -- and OpenTyrian's newsh#.shp and shapes).dat could not be written in
+// it anyway. The games' sources are hundreds of files in directories of
+// their own, which only the image build lists (/usr/games: games/: hostdir(games/)).
 enum { MAX_HOSTDIRS = 8 };
 char *g_hostdir_path[MAX_HOSTDIRS];
 char *g_hostdir_prefix[MAX_HOSTDIRS];
@@ -504,8 +506,9 @@ void load_sizes() {
     int fd, n;
     g_sizes = 0;
     if ((fd = uopen("c4ix.sizes", O_RD)) < 0) return;
-    g_sizes = (char *)ualloc(65536);
-    n = uread(fd, g_sizes, 65535);
+    // ~30 KB with the games' sources in it
+    g_sizes = (char *)ualloc(READ_CAP);
+    n = uread(fd, g_sizes, READ_CAP - 1);
     uclose(fd);
     if (n <= 0) { g_sizes = 0; return; }
     g_sizes_len = n;
@@ -522,15 +525,21 @@ char *host_of(char *path) {
     return 0;
 }
 
-int has_slash(char *s) {
-    while (*s) { if (*s == '/') return 1; ++s; }
-    return 0;
+// each directory in PATH after its first FROM characters, made (umkdir
+// leaves one that is there)
+void make_dirs(char *path, int from) {
+    int k;
+    k = from;
+    while (path[k]) {
+        if (path[k] == '/') { path[k] = 0; umkdir(path); path[k] = '/'; }
+        ++k;
+    }
 }
 
 // the hostdir(PREFIX) directories' files; how many were made
 int load_hostdirs() {
     int h, i, j, n, v, ok;
-    char *pfx, *host;
+    char *pfx, *host, *path;
 
     ok = 0;
     if (!g_sizes) return 0;
@@ -547,7 +556,9 @@ int load_hostdirs() {
             while (j < g_sizes_len && g_sizes[j] != 10) ++j;
             if (j - i > n && !memcmp(g_sizes + i, pfx, n)) {
                 host = str_dup_n(g_sizes + i, j - i);
-                if (!has_slash(host + n) && ulazyfile(str_cat(g_hostdir_path[h], host + n), host, v) == 0) ++ok;
+                path = str_cat(g_hostdir_path[h], host + n);
+                make_dirs(path, ustrlen(g_hostdir_path[h]));
+                if (ulazyfile(path, host, v) == 0) ++ok;
             }
             i = j + 1;
         }

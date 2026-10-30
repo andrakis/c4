@@ -77,8 +77,11 @@ ARCHIVES = c4ix-root.tgz
 			splash/:
 				c4ix.c4p.gz: c4ix-splash.c4p.gz
 		# the games that are on the disk, each its own block, its own
-		# directory (games/NAME/c4ix.vfs.txt, src/c4bb/tests/vfs-games.py)
-		games/
+		# directory (games/NAME/c4ix.vfs.txt, src/c4bb/tests/vfs-games.py);
+		# and each one's sources, at their paths in the repository, so the
+		# IDE's Code tab finds what a game's source map names: lazy files
+		# that only c4ix.sizes lists (docs/c4ix-desktop.md, part twenty)
+		games/: hostdir(games/)
 			#@games
 			# and their programs by name, where the shell's PATH looks
 			bin/:

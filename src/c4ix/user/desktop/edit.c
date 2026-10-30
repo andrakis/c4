@@ -92,11 +92,8 @@ enum { TABH = 24 };
 // the file pane: its width, its header, a row; a node's flags; how many
 // entries of one folder it lists
 enum { FW = 180, FHDR = 20, FROW = 16, F_DIR = 1, F_OPEN = 2, F_KIDS = 400, FNAME = 64 };
-// the languages it colours, and the colours
-enum { L_TEXT = 0, L_C = 1, L_JS = 2, L_LISP = 3, L_FORTH = 4, L_SH = 5, L_B4K = 6, HL_MAX = 1024 };
-// what each character is, for the colouring; the scheme's colour for it
-// is ec[that] (below)
-enum { HC_TEXT = 0, HC_KW = 1, HC_TYPE = 2, HC_STR = 3, HC_COM = 4, HC_NUM = 5, HC_PRE = 6 };
+// the languages it colours, and what each character is (desktop.h, hl.c):
+// the scheme's colour for it is ec[that] (below)
 enum { M_NORMAL = 0, M_INSERT = 1, M_VISUAL = 2, M_VLINE = 3, M_CMD = 4 };
 // Edit's items, and the answer this window asks for itself
 enum { E_CUT = 0, E_COPY = 1, E_PASTE = 2, E_ALL = 4 };
@@ -498,7 +495,6 @@ static int e_save(struct edit *e, char *path) {
 // Binary files, by their names' ends; then any file with a NUL in its
 // first bytes, which text never has.
 static char *bin_ext = " .c4r .c4o .c4l .c4s .c4m .tgz .tar .gz .zip .z .wad .wl1 .wl6 .sod .rtl .rts .grp .pak .bin .img .vfs .png .jpg .gif .bmp .ico .wav .mp3 .ogg .mid .voc .exe .com .o .a .so ";
-static int e_inwords(char *s, int n, char *list);
 static int e_binary(char *p) {
     int i, k, fd, n;
     char ext[12];
@@ -508,7 +504,7 @@ static int e_binary(char *p) {
     if (i > 0 && p[i - 1] == '.' && k - i + 1 < 12) {
         n = 0;
         while (i - 1 + n < k) { ext[n] = p[i - 1 + n]; if (ext[n] >= 'A' && ext[n] <= 'Z') ext[n] = ext[n] + 32; ++n; }
-        if (e_inwords(ext, n, bin_ext)) return 1;
+        if (hl_inwords(ext, n, bin_ext)) return 1;
     }
     if ((fd = uopen(p, O_RD)) < 0) return 0;
     n = uread(fd, sb, 512);
@@ -1954,186 +1950,15 @@ void edit_key(struct win *w, int code, int ch, int mods) { e_key(w, code, ch, mo
 
 // ---- syntax colours ---------------------------------------------------------------------
 //
-// Each line is coloured on its own, character by character, into hlc; the
-// one thing carried from line to line is being inside a C comment. Where
-// that stands at the top of the view is kept, with the count of changes
-// it was worked out for, so scrolling down does not read the file again.
+// hl.c colours a line; what is kept here is where the colouring stands
+// at the top of the view, with the count of changes it was worked out
+// for, so scrolling down does not read the file again.
 
-static int hlc[HL_MAX];
+static int e_hcol(int i) { return ec[hl_at(i)]; }
 
-static int e_lang(char *p) {
-    if (ui_ends(p, ".c") || ui_ends(p, ".h")) return L_C;
-    if (ui_ends(p, ".js") || ui_ends(p, ".mjs")) return L_JS;
-    if (ui_ends(p, ".lisp") || ui_ends(p, ".scm") || ui_ends(p, ".el")) return L_LISP;
-    if (ui_ends(p, ".f") || ui_ends(p, ".fs") || ui_ends(p, ".fth") || ui_ends(p, ".4th")) return L_FORTH;
-    if (ui_ends(p, ".sh") || ui_ends(p, "Makefile") || ui_ends(p, ".mk")) return L_SH;
-    if (ui_ends(p, ".b4k") || ui_ends(p, ".B4K")) return L_B4K;
-    return L_TEXT;
-}
-
-// Is S[0..N) one of LIST's words? LIST has a space before each word and
-// after the last.
-static int e_inwords(char *s, int n, char *list) {
-    int i, k;
-    i = 0;
-    while (list[i]) {
-        if (list[i] == ' ' && list[i + 1]) {
-            k = 0;
-            while (k < n && list[i + 1 + k] == s[k]) ++k;
-            if (k == n && list[i + 1 + k] == ' ') return 1;
-        }
-        ++i;
-    }
-    return 0;
-}
-
-static void e_paint(int i, int j, int c) {
-    while (i < j && i < HL_MAX) { hlc[i] = c; ++i; }
-}
-static int e_hcol(int i) { return ec[i < HL_MAX ? hlc[i] : HC_TEXT]; }
-
-static char *c_kw = " if else while for do switch case default break continue return goto sizeof typedef struct union enum static extern const volatile register inline restrict ";
-static char *c_ty = " int char short long unsigned signed void float double ";
-static char *js_kw = " function var let const if else for while do return new class this null true false undefined import export from of in typeof instanceof await async break continue switch case default throw try catch finally delete yield ";
-static char *lisp_kw = " define lambda if begin let let* letrec set! cond else and or not quote next define-macro when unless do case ";
-static char *forth_kw = " IF ELSE THEN BEGIN WHILE REPEAT UNTIL AGAIN DO ?DO LOOP +LOOP LEAVE UNLOOP EXIT ; : VARIABLE CONSTANT VALUE CREATE DOES> RECURSE DEFER IS TO CASE OF ENDOF ENDCASE IMMEDIATE POSTPONE ['] [CHAR] LITERAL :NONAME {: :} :M ;M ";
-static char *sh_kw = " if then else elif fi for in do done while until case esac function return export local set exit break continue shift ";
-
-// a string from I (its quote) to its end, \ escapes skipped
-static int e_strend(char *s, int n, int i) {
-    int q;
-    q = s[i];
-    ++i;
-    while (i < n && s[i] != q) { if (s[i] == 92) ++i; ++i; }
-    return i < n ? i + 1 : n;
-}
-
-// C and JavaScript; ST 1 is inside /* */
-static int e_hl_c(char *s, int n, int st, int js) {
-    int i, j, c, nb;
-    i = 0; nb = 0;
-    while (i < n) {
-        c = s[i];
-        if (st == 1) {
-            j = i;
-            while (j < n && !(s[j] == '*' && j + 1 < n && s[j + 1] == '/')) ++j;
-            if (j < n) { j = j + 2; st = 0; }
-            e_paint(i, j, HC_COM); i = j;
-        } else if (c == '/' && i + 1 < n && s[i + 1] == '/') { e_paint(i, n, HC_COM); i = n; }
-        else if (c == '/' && i + 1 < n && s[i + 1] == '*') { e_paint(i, i + 2, HC_COM); i = i + 2; st = 1; }
-        else if (c == '"' || c == 39 || (js && c == '`')) { j = e_strend(s, n, i); e_paint(i, j, HC_STR); i = j; }
-        else if (!js && c == '#' && !nb) {
-            j = i + 1;
-            while (j < n && s[j] == ' ') ++j;
-            while (j < n && e_isword(s[j])) ++j;
-            e_paint(i, j, HC_PRE); i = j;
-        } else if (c >= '0' && c <= '9' && (i == 0 || !e_isword(s[i - 1]))) {
-            j = i;
-            while (j < n && (e_isword(s[j]) || s[j] == '.')) ++j;
-            e_paint(i, j, HC_NUM); i = j;
-        } else if (e_isword(c)) {
-            j = i;
-            while (j < n && e_isword(s[j])) ++j;
-            if (e_inwords(s + i, j - i, js ? js_kw : c_kw)) e_paint(i, j, HC_KW);
-            else if (!js && e_inwords(s + i, j - i, c_ty)) e_paint(i, j, HC_TYPE);
-            i = j;
-        } else ++i;
-        if (c != ' ' && c != 9) nb = 1;
-    }
-    return st;
-}
-
-static int e_lispword(int c) { return c > ' ' && c != '(' && c != ')' && c != '"' && c != ';' && c != 39; }
-static void e_hl_lisp(char *s, int n) {
-    int i, j, c;
-    i = 0;
-    while (i < n) {
-        c = s[i];
-        if (c == ';') { e_paint(i, n, HC_COM); i = n; }
-        else if (c == '"') { j = e_strend(s, n, i); e_paint(i, j, HC_STR); i = j; }
-        else if (e_lispword(c)) {
-            j = i;
-            while (j < n && e_lispword(s[j])) ++j;
-            if ((c >= '0' && c <= '9') || (c == '-' && j > i + 1 && s[i + 1] >= '0' && s[i + 1] <= '9') || c == '#')
-                e_paint(i, j, HC_NUM);
-            else if (e_inwords(s + i, j - i, lisp_kw)) e_paint(i, j, HC_KW);
-            i = j;
-        } else ++i;
-    }
-}
-
-// Forth: blank-separated words, case not mattering; \ and ( comment, S" ." C"
-// ABORT" take a string, and : the name it defines
-static void e_hl_forth(char *s, int n) {
-    int i, j, k, c, def;
-    char up[24];
-    i = 0; def = 0;
-    while (i < n) {
-        if (s[i] == ' ' || s[i] == 9) { ++i; }
-        else {
-            j = i;
-            while (j < n && s[j] != ' ' && s[j] != 9) ++j;
-            k = 0;
-            while (k < j - i && k < 23) { c = s[i + k]; up[k] = c >= 'a' && c <= 'z' ? c - 32 : c; ++k; }
-            if (j - i == 1 && s[i] == 92) { e_paint(i, n, HC_COM); j = n; }
-            else if (j - i == 1 && s[i] == '(') {
-                k = j; while (k < n && s[k] != ')') ++k;
-                if (k < n) ++k;
-                e_paint(i, k, HC_COM); j = k;
-            } else if (j - i <= 23 && j > i && s[j - 1] == '"' && (j - i == 2 || (j - i == 6 && up[0] == 'A'))) {
-                e_paint(i, j, HC_KW);
-                k = j + 1; while (k < n && s[k] != '"') ++k;
-                if (k < n) ++k;
-                e_paint(j, k, HC_STR); j = k;
-            } else if (def) { e_paint(i, j, HC_TYPE); def = 0; }
-            else if ((s[i] >= '0' && s[i] <= '9') || (s[i] == '-' && j > i + 1 && s[i + 1] >= '0' && s[i + 1] <= '9'))
-                e_paint(i, j, HC_NUM);
-            else if (j - i <= 23 && e_inwords(up, j - i, forth_kw)) {
-                e_paint(i, j, HC_KW);
-                if (j - i == 1 && s[i] == ':') def = 1;
-            }
-            i = j;
-        }
-    }
-}
-
-// shell, Makefiles and B4KE: # comments, quotes, $variables; a B4KE line's
-// first word, in capitals, is its directive
-static void e_hl_sh(char *s, int n, int b4k) {
-    int i, j, c, first;
-    i = 0; first = 1;
-    while (i < n) {
-        c = s[i];
-        if (c == '#' && (i == 0 || s[i - 1] == ' ' || s[i - 1] == 9)) { e_paint(i, n, HC_COM); i = n; }
-        else if (c == '"' || c == 39) { j = e_strend(s, n, i); e_paint(i, j, HC_STR); i = j; first = 0; }
-        else if (c == '$') {
-            j = i + 1;
-            if (j < n && (s[j] == '{' || s[j] == '(')) { c = s[j] == '{' ? '}' : ')'; while (j < n && s[j] != c) ++j; if (j < n) ++j; }
-            else { while (j < n && e_isword(s[j])) ++j; }
-            e_paint(i, j, HC_TYPE); i = j; first = 0;
-        } else if (e_isword(c)) {
-            j = i;
-            while (j < n && e_isword(s[j])) ++j;
-            if (b4k && first && c >= 'A' && c <= 'Z') e_paint(i, j, HC_KW);
-            else if (!b4k && e_inwords(s + i, j - i, sh_kw)) e_paint(i, j, HC_KW);
-            else if (c >= '0' && c <= '9') e_paint(i, j, HC_NUM);
-            i = j; first = 0;
-        } else { if (c != ' ' && c != 9) first = 0; ++i; }
-    }
-}
-
-// Colour line Y into hlc; ST is the state at its start, and the state at
+// Colour line Y (hl.c); ST is the state at its start, and the state at
 // its end comes back
-static int e_hl(struct edit *e, int y, int st, int lang) {
-    int n;
-    n = e->len[y];
-    e_paint(0, n, HC_TEXT);
-    if (lang == L_C || lang == L_JS) return e_hl_c(e->ln[y], n, st, lang == L_JS);
-    if (lang == L_LISP) e_hl_lisp(e->ln[y], n);
-    else if (lang == L_FORTH) e_hl_forth(e->ln[y], n);
-    else if (lang == L_SH || lang == L_B4K) e_hl_sh(e->ln[y], n, lang == L_B4K);
-    return 0;
-}
+static int e_hl(struct edit *e, int y, int st, int lang) { return hl_line(e->ln[y], e->len[y], st, lang); }
 
 // the state at the start of line LINE
 static int e_hlstate(struct edit *e, int line, int lang) {
@@ -2475,7 +2300,7 @@ static void e_draw_text(struct win *w, int ox, int oy, int cw, int ch, int focus
     line = e->top;
     r = 0;
     y = oy + 3;
-    lang = e->nosyn ? L_TEXT : e_lang(e->path);
+    lang = e->nosyn ? L_TEXT : hl_lang(e->path);
     st = e_hlstate(e, e->top, lang);
     sx = ox + 4 + gw;
     while (line < e->nl && r < rows) {

@@ -65,6 +65,7 @@ page and type `desktop`.
 | `apps.c` | Text Editor, Calculator, About |
 | `edit.c` | Editor, the IDE: a VIM-mode editor (`:set novim` for a plain one; arrow keys in every mode) that builds what it edits. `:make`/F5 runs b4ke on the nearest `BUILD.B4K` above the file that names it, or has `cc -O -l c4ix` build a `.c` none names into `/tmp/NAME.c4r`; errors are listed under the text and F8 goes to the next. `:run`/F6 runs the result. Explorer opens source files here |
 | `hl.c` | the IDE's syntax colouring: C, JavaScript, Lisp, Forth, shell and B4KE, a line at a time |
+| `ideset.c` | IDE Settings: the colour scheme, Traditional or VIM typing, the font; `/etc/ide.cfg` |
 | `explore.c` | the IDE's Code tab (View > Code, F7): the functions, and the C4 code of one with its source lines between the instructions, for a `.c` file (by `cc -g`, following the cursor) or any compiled file opened as it is |
 
 Kernel calls the desktop added (`SYS_AVAIL`, `SYS_CLOEXEC`, `SYS_INTR`)

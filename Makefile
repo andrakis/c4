@@ -3789,6 +3789,9 @@ test-srcmap: c4sp c4sp32 c4 c4m c4m32 c4mp $(OISC4) $(C4RDUMP) $(C4RLINK) $(C4R_
 	@# carries a map through its passes (the script says how each is
 	@# checked).
 	bash src/c4sp/tests/srcmap-link.sh
+	@# c4rlink keeps one copy of c4lc's helpers, and a map that says so
+	@# (docs/link-fold.md)
+	bash src/c4sp/tests/fold-link.sh
 	@rm -f .srcmap_*
 	@echo "test-srcmap: OK"
 PHONY += test-srcmap

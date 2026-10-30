@@ -38,6 +38,10 @@
 //    archive's (lib_select). Off unless given: an object named plainly is
 //    always linked, as with ld.
 //  - Static symbols are never merged: each module keeps its own copy.
+//  - The code c4lc splices into each object without a symbol -- its
+//    <udiv>, <ld16s> and the like, its soft-float and long long routines
+//    -- is kept once: copies that are the same code are folded into the
+//    first (gc_fold), and gc drops the rest. --no-fold keeps them all.
 //  - Non-static symbols are merged by name. An extern symbol that another
 //    module defines resolves to that definition; two non-static definitions
 //    keep the first and warn.
@@ -60,7 +64,8 @@
 //     - take the entry point from the first module that has one (rebased).
 //  4: Resolve: every symbol-typed patch whose master symbol is now defined
 //     becomes a CODE patch pointing at the definition.
-//  5: Drop the functions nothing reaches (unless --no-gc), move the rest down.
+//  5: Fold the copies of c4lc's helpers into one (unless --no-fold), drop
+//     the functions nothing reaches (unless --no-gc), move the rest down.
 //  6: Write the master image out.
 //
 // Shared libraries (-l LIB): LIB is a library (a -r image, named .c4s by
@@ -128,7 +133,7 @@ static void show_help (char *spec) {
 	else
 	printf("%s: Link multiple .c4r files into one\n"
 	       "%s: [-dvrs] [-g0] [-l lib.c4s] [-o outfile] [--] file1.c4r [...fileN.c4r]\n"
-	       "         [--no-gc] [--start-lib member.c4o ... [--end-lib]]\n"
+	       "         [--no-gc] [--no-fold] [--start-lib member.c4o ... [--end-lib]]\n"
 	       "     -d            Turn on debug mode\n"
 	       "     -v            Turn on verbose mode\n"
 	       "     -r            Library mode: allow unresolved symbols\n"
@@ -140,6 +145,7 @@ static void show_help (char *spec) {
 	       "                   linked only if it defines a symbol still undefined\n"
 	       "     --end-lib     The inputs after it are linked whole again\n"
 	       "     --no-gc       Keep the functions nothing reaches (dropped by default)\n"
+	       "     --no-fold     Keep every object's copy of c4lc's helpers (one by default)\n"
 	       "     --            End arguments\n", spec, spec);
 }
 
@@ -1003,6 +1009,198 @@ static int gc_srcmap (int *master, int *rs, int *newpos, int nreg) {
 	return 0;
 }
 
+// ---- Folding c4lc's helpers (unless --no-fold) ----
+//
+// c4lc splices the routines it calls where the machine has no
+// instruction -- <udiv>, <umod>, <ld16s>, <ld16u>, <st16>, <lsr>, the
+// soft-float __c4d_ and __c4f_ ones, the long long __c4ll_ ones -- into
+// every object that uses them, as code with no symbol. An image linked
+// from twenty objects carried twenty copies of <ld16u>. Those are the
+// regions (gc's, above) no function symbol lies in: code nothing can
+// name, so nothing can tell one copy from another. Two of them are the
+// same when their code words are and their code-resident patches are:
+// the same type at the same place, a CODE patch into the region itself
+// at the same place in it, and any other the same value. Every code
+// address into a region the same as one before it -- CODE and DCODE
+// patches, the entry point, constructors and destructors -- moves to
+// that one, and gc drops it, as nothing reaches it any more. A copy
+// that calls its own object's copy of another helper is the same as
+// the next object's only once those callees are folded, so it goes
+// round until nothing more folds (helpers that call each other in a
+// cycle are left as they are). Not the source map: an image is the
+// same code whether its objects were compiled with -g or not.
+int cl_fold;
+
+// fd_reg: per candidate, its region; fd_to: the candidate it folded
+// into (itself while it has not); fd_cand: per region, its candidate or -1
+int *fd_reg, *fd_to, *fd_cand;
+
+// A code-resident patch: the word it fills is in code
+static int fd_incode (int t) {
+	return t != C4R_PTYPE_DCODE && t != C4R_PTYPE_DDATA && t != C4R_PTYPE_DSYM;
+}
+
+// Are candidates A and B the same code? PN/PL list each one's patches
+static int fd_same (int *master, int *rs, int *pn, int *pl, int a, int b) {
+	int *code, *patch, *p, *q;
+	int  i, n, ra, rb, len, va, vb, sa, sb;
+	code = (int *)master[C4R_CODE];
+	patch = (int *)master[C4R_PATCHES];
+	ra = rs[fd_reg[a]]; rb = rs[fd_reg[b]];
+	len = rs[fd_reg[a] + 1] - ra;
+	if (rs[fd_reg[b] + 1] - rb != len) return 0;
+	n = pn[a + 1] - pn[a];
+	if (pn[b + 1] - pn[b] != n) return 0;
+	i = 0;
+	while (i < len) { if (code[ra + i] != code[rb + i]) return 0; ++i; }
+	i = 0;
+	while (i < n) {
+		p = patch + pl[pn[a] + i] * C4R_PAT__Sz;
+		q = patch + pl[pn[b] + i] * C4R_PAT__Sz;
+		if (p[C4R_PAT_TYPE] != q[C4R_PAT_TYPE] || p[C4R_PAT_ADDRESS] - ra != q[C4R_PAT_ADDRESS] - rb) return 0;
+		va = p[C4R_PAT_VALUE]; vb = q[C4R_PAT_VALUE];
+		sa = p[C4R_PAT_TYPE] == C4R_PTYPE_CODE && va >= ra && va < ra + len;
+		sb = q[C4R_PAT_TYPE] == C4R_PTYPE_CODE && vb >= rb && vb < rb + len;
+		if (sa != sb) return 0;
+		if (sa ? (va - ra != vb - rb) : (va != vb)) return 0;
+		++i;
+	}
+	return 1;
+}
+
+// Where code address A goes: into the region its own folded into
+static int fd_move (int *rs, int nreg, int a, int codelen) {
+	int r, c;
+	if (a < 0 || a >= codelen) return a;
+	r = gc_region(rs, nreg, a);
+	c = fd_cand[r];
+	if (c < 0 || fd_to[c] == c) return a;
+	return rs[fd_reg[fd_to[c]]] + a - rs[r];
+}
+
+// Fold the helpers' copies. Returns 0, or 1 when out of memory.
+static int gc_fold (int *master, int *rs, int nreg) {
+	int *mhdr, *code, *sym, *patch, *q, *pn, *pl, *hash, *bnext, *bhead, *cd;
+	int  codelen, n, np, nc, i, c, r, a, h, b, folded, rounds, copies, words;
+
+	mhdr = (int *)master[C4R_HEADER];
+	code = (int *)master[C4R_CODE];
+	codelen = mhdr[C4R_HDR_CODELEN];
+	patch = (int *)master[C4R_PATCHES];
+	np = mhdr[C4R_HDR_PATCHLEN];
+	if (!(fd_cand = malloc(sizeof(int) * (nreg + 1)))) return 1;
+	// the candidates: the regions no defined function lies in
+	memset(fd_cand, 0, sizeof(int) * (nreg + 1));
+	sym = (int *)master[C4R_SYMBOLS];
+	n = mhdr[C4R_HDR_SYMBOLSLEN];
+	i = 0;
+	while (i < n) {
+		if (sym[C4R_SYMB_CLASS] == C4R_SCLASS_Fun && !(sym[C4R_SYMB_ATTRS] & ATTR_EXTERN) &&
+		    sym[C4R_SYMB_VALUE] >= 0 && sym[C4R_SYMB_VALUE] < codelen)
+			fd_cand[gc_region(rs, nreg, sym[C4R_SYMB_VALUE])] = -1;
+		sym = sym + C4R_SYMB__Sz; ++i;
+	}
+	nc = 0;
+	r = 0;
+	while (r < nreg) { if (fd_cand[r] == 0) fd_cand[r] = nc++; else fd_cand[r] = -1; ++r; }
+	fd_reg = malloc(sizeof(int) * (nc + 1));
+	fd_to = malloc(sizeof(int) * (nc + 1));
+	hash = malloc(sizeof(int) * (nc + 1));
+	bnext = malloc(sizeof(int) * (nc + 1));
+	bhead = malloc(sizeof(int) * (nc + 1));
+	pn = malloc(sizeof(int) * (nc + 2));
+	if (!fd_reg || !fd_to || !hash || !bnext || !bhead || !pn) return 1;
+	r = 0;
+	while (r < nreg) { if (fd_cand[r] >= 0) fd_reg[fd_cand[r]] = r; ++r; }
+
+	// Each candidate's patches, in table order: what the blanked words held.
+	// The words are blanked here, as blank_patch_targets does after.
+	memset(pn, 0, sizeof(int) * (nc + 2));
+	i = 0; q = patch;
+	while (i < np) {
+		if (fd_incode(q[C4R_PAT_TYPE])) {
+			code[q[C4R_PAT_ADDRESS]] = 0;
+			c = fd_cand[gc_region(rs, nreg, q[C4R_PAT_ADDRESS])];
+			if (c >= 0) pn[c + 1] = pn[c + 1] + 1;
+		}
+		q = q + C4R_PAT__Sz; ++i;
+	}
+	c = 0;
+	while (c < nc) { pn[c + 1] = pn[c + 1] + pn[c]; ++c; }
+	if (!(pl = malloc(sizeof(int) * (pn[nc] + 1)))) return 1;
+	memcpy(bhead, pn, sizeof(int) * nc);           // the fill cursor for now
+	i = 0; q = patch;
+	while (i < np) {
+		if (fd_incode(q[C4R_PAT_TYPE])) {
+			c = fd_cand[gc_region(rs, nreg, q[C4R_PAT_ADDRESS])];
+			if (c >= 0) { pl[bhead[c]] = i; bhead[c] = bhead[c] + 1; }
+		}
+		q = q + C4R_PAT__Sz; ++i;
+	}
+
+	// A hash of each one's length and code words; same-hash chains, each
+	// candidate's leading to the ones before it
+	c = 0;
+	while (c < nc) { bhead[c] = -1; ++c; }
+	c = 0;
+	while (c < nc) {
+		a = rs[fd_reg[c]];
+		h = (rs[fd_reg[c] + 1] - a) % 65521;
+		while (a < rs[fd_reg[c] + 1]) { h = (h * 31 + (code[a] & 65535)) % 65521; ++a; }
+		hash[c] = h;
+		fd_to[c] = c;
+		b = h % nc;
+		bnext[c] = bhead[b];
+		bhead[b] = c;
+		++c;
+	}
+
+	// Fold, round after round. A candidate the same as two before it would
+	// make those two the same, so the first one found is the only one.
+	copies = 0; words = 0; rounds = 0;
+	folded = 1;
+	while (folded) {
+		folded = 0;
+		c = 0;
+		while (c < nc) {
+			if (fd_to[c] == c) {
+				b = bnext[c];
+				while (b >= 0) {
+					if (fd_to[b] == b && hash[b] == hash[c] && fd_same(master, rs, pn, pl, b, c)) {
+						fd_to[c] = b;
+						++folded;
+						words = words + rs[fd_reg[c] + 1] - rs[fd_reg[c]];
+						b = -1;
+					} else b = bnext[b];
+				}
+			}
+			++c;
+		}
+		if (folded) {
+			i = 0; q = patch;
+			while (i < np) {
+				if (q[C4R_PAT_TYPE] == C4R_PTYPE_CODE || q[C4R_PAT_TYPE] == C4R_PTYPE_DCODE)
+					q[C4R_PAT_VALUE] = fd_move(rs, nreg, q[C4R_PAT_VALUE], codelen);
+				q = q + C4R_PAT__Sz; ++i;
+			}
+			mhdr[C4R_HDR_ENTRY] = fd_move(rs, nreg, mhdr[C4R_HDR_ENTRY], codelen);
+			cd = (int *)master[C4R_CONSTRUCTORS];
+			i = 0;
+			while (i < mhdr[C4R_HDR_CONSTRUCTLEN]) { cd[C4R_CNDE_Value] = fd_move(rs, nreg, cd[C4R_CNDE_Value], codelen); cd = cd + C4R_CNDE__Sz; ++i; }
+			cd = (int *)master[C4R_DESTRUCTORS];
+			i = 0;
+			while (i < mhdr[C4R_HDR_DESTRUCTLEN]) { cd[C4R_CNDE_Value] = fd_move(rs, nreg, cd[C4R_CNDE_Value], codelen); cd = cd + C4R_CNDE__Sz; ++i; }
+			copies = copies + folded;
+			++rounds;
+		}
+	}
+	if (cl_verbose)
+		printf("c4rlink: fold: %d copies of %d words folded, of %d regions with no symbol, in %d rounds\n",
+		       copies, words, nc, rounds);
+	free(fd_reg); free(fd_to); free(fd_cand); free(hash); free(bnext); free(bhead); free(pn); free(pl);
+	return 0;
+}
+
 // Drop the regions nothing reaches. Returns 0, or 1 when out of memory.
 static int gc_functions (int *master, int *c4rs, int count) {
 	int *mhdr, *code, *sym, *patch, *q, *rs, *newpos, *adjn, *adj, *idmap, *cd;
@@ -1075,6 +1273,7 @@ static int gc_functions (int *master, int *c4rs, int count) {
 	while (i < codelen) { if (mark[i]) rs[j++] = i; ++i; }
 	rs[nreg] = codelen;
 	free(mark);
+	if (cl_fold && gc_fold(master, rs, nreg)) return 1;
 
 	// What uses what: per region, the regions its CODE patches name
 	patch = (int *)master[C4R_PATCHES];
@@ -1628,6 +1827,7 @@ int main (int argc, char **argv) {
 	c4r_pos = 0;
 	cl_debug = cl_verbose = cl_libmode = cl_strip = cl_nomap = 0;
 	cl_gc = 1;
+	cl_fold = 1;
 	// The strip tool is this program under another name (argv[0] ends in
 	// "c4rstrip", with or without .c4r): one input, strip on.
 	cl_striptool = 0;
@@ -1674,6 +1874,8 @@ int main (int argc, char **argv) {
 			cl_gc = 1;                          // the default; still accepted
 		} else if (endargs == 0 && !my_strcmp(*argv, "--no-gc")) {
 			cl_gc = 0;
+		} else if (endargs == 0 && !my_strcmp(*argv, "--no-fold")) {
+			cl_fold = 0;
 		} else if (endargs == 0 && **argv == '-') {
 			arg = *argv + 1; // skip dash
 			endopt = 0;

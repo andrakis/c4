@@ -30,15 +30,19 @@ void about_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     d_text(ox + 68, oy + 116, C_SHADOW, F_SANS, "Enter or Esc closes this window.");
 }
 
-// ---- Settings: the scheme, the desktop, the screen's size, the saver and the look ----
+// ---- Settings: the scheme, the desktop, the screen's size, the saver, the look, the font ----
 //
 // Display Properties, cut down: a list of schemes and a row of desktop
 // colours, each applied at once (theme_set, which also remembers them in
 // /etc/desktop.cfg), beside a preview drawn in the colours in use. The
-// screen's size too, which the display takes at once (display_set).
+// screen's size too, which the display takes at once (display_set). And
+// in a third column the interface's font, its face and size, with a
+// sample: every window's titles, menus and dialogs are drawn in it.
 
 static char *dflt_label;
 static char sbuf[16];
+// the second column's width, and where the third starts and how wide it is
+enum { SET_COL = 222, SET_X3 = 432, SET_COL3 = 146 };
 
 int settings_open() {
     int k;
@@ -46,7 +50,7 @@ int settings_open() {
     w = win_first();
     while (w) { if (w->used && w->kind == K_SETTINGS) { win_raise(w->id); return w->id; } w = w->next; }
     dflt_label = "Defaults";
-    return win_open(K_SETTINGS, "Settings", 440, 450, 0);
+    return win_open(K_SETTINGS, "Settings", 590, 450, 0);
 }
 
 void settings_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
@@ -79,8 +83,8 @@ void settings_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     while (i < display_count()) { ui_radio(ox + 18 + (i % 2) * 84, y + 16 + (i / 2) * 20, display_name(i), i == display_cur()); ++i; }
     // the preview: the desktop, an inactive window, an active one
     x = ox + 200; y = oy + 14;
-    d_rect(x, y, cw - 210, 170, C_DESK);
-    d_bevel(x, y, cw - 210, 170, B_SUNKEN);
+    d_rect(x, y, SET_COL, 170, C_DESK);
+    d_bevel(x, y, SET_COL, 170, B_SUNKEN);
     d_rect(x + 12, y + 14, 150, 70, C_FACE); d_bevel(x + 12, y + 14, 150, 70, B_RAISED);
     d_rect(x + 15, y + 17, 144, 16, C_ITITLE);
     // its title in the scheme's dark when the bar is light, as the windows' (wm.c)
@@ -97,7 +101,7 @@ void settings_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     // the screen saver: which, after how long, and a look at it now
     x = ox + 200; y = oy + 192;
     n = saver_count();
-    ui_group(x, y, cw - 210, 26 + n * 18, "Screen saver");
+    ui_group(x, y, SET_COL, 26 + n * 18, "Screen saver");
     sel = theme_saver();
     i = 0;
     while (i < n) { ui_radio(x + 10, y + 16 + i * 18, saver_name(i), i == sel); ++i; }
@@ -110,10 +114,24 @@ void settings_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     ui_button(x + 192, y + 62, 22, 20, "+", 0, 0);
     // the look
     y = oy + 192 + 26 + n * 18 + 8;
-    ui_group(x, y, cw - 210, 44, "Look");
+    ui_group(x, y, SET_COL, 44, "Look");
     ui_radio(x + 10, y + 18, "Flat", ui_style == S_FLAT);
     ui_radio(x + 70, y + 18, "Classic", ui_style == S_CLASSIC);
     ui_radio(x + 140, y + 18, "Windows 3.1", ui_style == S_WIN31);
+    // the font: its face, its size, and a sample in it
+    x = ox + SET_X3; y = oy + 8;
+    ui_group(x, y, SET_COL3, 20 + WK_FACES * 20, "Font");
+    i = 0;
+    while (i < WK_FACES) { ui_radio(x + 10, y + 18 + i * 20, wk_face_name(i), i == theme_font()); ++i; }
+    y = y + 28 + WK_FACES * 20;
+    ui_group(x, y, SET_COL3, 20 + WK_SIZES * 20, "Font size");
+    i = 0;
+    while (i < WK_SIZES) { ui_radio(x + 10, y + 18 + i * 20, wk_size_name(i), i == theme_fsize()); ++i; }
+    y = y + 28 + WK_SIZES * 20;
+    d_rect(x, y, SET_COL3, 56, C_WHITE);
+    d_bevel(x, y, SET_COL3, 56, B_SUNKEN);
+    d_text(x + 8, y + 8, C_DARK, F_BOLD, "Window Title");
+    d_text(x + 8, y + 30, C_DARK, F_SANS, "The quick brown fox");
     ui_button(ox + 8, oy + ch - 34, 86, 24, dflt_label, 0, 0);
 }
 
@@ -154,7 +172,13 @@ void settings_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     if (ui_hit(x, y, 206, sy - 2, 60, 16)) { theme_set_style(S_FLAT); return; }
     if (ui_hit(x, y, 266, sy - 2, 66, 16)) { theme_set_style(S_CLASSIC); return; }
     if (ui_hit(x, y, 336, sy - 2, 90, 16)) { theme_set_style(S_WIN31); return; }
-    if (ui_hit(x, y, 8, ch - 34, 86, 24)) { theme_set(theme_count() - 1, 0 - 1); theme_set_wall(1); theme_set_style(S_FLAT); }
+    // the font's face and size (settings_draw): the third column
+    i = 0;
+    while (i < WK_FACES) { if (ui_hit(x, y, SET_X3 + 4, 24 + i * 20, SET_COL3 - 8, 18)) { theme_set_font(i, theme_fsize()); return; } ++i; }
+    sy = 8 + 28 + WK_FACES * 20;
+    i = 0;
+    while (i < WK_SIZES) { if (ui_hit(x, y, SET_X3 + 4, sy + 16 + i * 20, SET_COL3 - 8, 18)) { theme_set_font(theme_font(), i); return; } ++i; }
+    if (ui_hit(x, y, 8, ch - 34, 86, 24)) { theme_set(theme_count() - 1, 0 - 1); theme_set_wall(1); theme_set_style(S_FLAT); theme_set_font(0, 1); }
 }
 
 // Up and Down walk the schemes; Esc or Enter closes

@@ -33,10 +33,16 @@
 
 #include "desktop.h"
 
-// the IDE's text metrics (edit.c), and the tab's parts: its headers (a
-// field's height), its footer, how long a name is kept, the source lines
-// with no code shown between two that have, and how far back Back goes
-enum { XCW = 7, XCH = 15, XFONT = 12, XHDR = 22, XFOOT = XCH + 4, XGAP = 3, XHIST = 16, XFILT = 30 };
+// the IDE's text grid (edit.c's, IDE Settings' font), and the tab's parts:
+// its headers (a field's height), its footer, how long a name is kept, the
+// source lines with no code shown between two that have, and how far back
+// Back goes
+#define XCW ide_cw
+#define XCH ide_ch
+#define XFONT ide_fs
+#define XFACE ide_face
+#define XFOOT (XCH + 4)
+enum { XHDR = 22, XGAP = 3, XHIST = 16, XFILT = 30 };
 // the opcodes it treats apart (OPNAMES' order)
 enum { O_LEA = 0, O_JMP = 2, O_JSR = 3, O_BZ = 4, O_BNZ = 5, O_ADJ = 7, O_JSRI = 61, O_JSRS = 62,
        O_LDL = 79, O_PSHL = 81, O_LEAP = 83, O_IMMP = 84, O_STL = 87, O_N = 90 };
@@ -1006,7 +1012,7 @@ static void xp_draw_list(struct xp *x, int ox, int oy, int w, int h, int *cols, 
         // the one shown lit; the file edited's own functions, and the rest dimmer
         c = !x->objmode && x->ffile[f] != x->here ? cols[XC_COM] : cols[XC_TEXT];
         if (f == x->cur) { d_rect(ox, y + 2 + i * XCH, w - 17, XCH, cols[XC_SEL]); c = cols[XC_KW]; }
-        d_textn(ox + 4, y + 2 + i * XCH, c, XFONT, F_MONO, XCW, x->fname[f], ui_len(x->fname[f]));
+        d_textn(ox + 4, y + 2 + i * XCH, c, XFONT, XFACE, XCW, x->fname[f], ui_len(x->fname[f]));
         ++i;
     }
     if (x->ok && !x->nvis) d_text(ox + 4, y + 4, cols[XC_COM], F_SANS, "None by that name");
@@ -1059,10 +1065,10 @@ static void xp_draw_code(struct xp *x, int ox, int oy, int cw, int ch, int *cols
             d_rect(ox + 1, ry, 3, XCH, bands[x->dline[k] % 8]);
             ui_num(xb, x->dline[k]);
             n = ui_len(xb);
-            d_textn(sx + (ow + 1 - n) * XCW, ry, cols[XC_COM], XFONT, F_MONO, XCW, xb, n);
+            d_textn(sx + (ow + 1 - n) * XCW, ry, cols[XC_COM], XFONT, XFACE, XCW, xb, n);
             t = xp_line(x, x->dfile[k], x->dline[k], &n);
-            if (t) { n = xp_untab(t, n, xo, 240); if (n) d_textn(sx + c1 * XCW, ry, cols[XC_TEXT], XFONT, F_MONO, XCW, xo, n); }
-            else { xp_where_s(x, xb, x->dfile[k], x->dline[k]); d_textn(sx + c1 * XCW, ry, cols[XC_COM], XFONT, F_MONO, XCW, xb, ui_len(xb)); }
+            if (t) { n = xp_untab(t, n, xo, 240); if (n) d_textn(sx + c1 * XCW, ry, cols[XC_TEXT], XFONT, XFACE, XCW, xo, n); }
+            else { xp_where_s(x, xb, x->dfile[k], x->dline[k]); d_textn(sx + c1 * XCW, ry, cols[XC_COM], XFONT, XFACE, XCW, xb, ui_len(xb)); }
         } else {
             // an instruction: its offset (in hex), a label, the mnemonic and its operand
             j = x->dins[k];
@@ -1071,16 +1077,16 @@ static void xp_draw_code(struct xp *x, int ox, int oy, int cw, int ch, int *cols
             xb[0] = 0;
             xp_hex(xb, x->ioff[j]);
             n = ui_len(xb + 2);
-            d_textn(sx + (ow + 1 - n) * XCW, ry, cols[XC_COM], XFONT, F_MONO, XCW, xb + 2, n);
+            d_textn(sx + (ow + 1 - n) * XCW, ry, cols[XC_COM], XFONT, XFACE, XCW, xb + 2, n);
             cm = c1 + 5;
             if (x->ilab[j]) {
                 ui_cpy(xb, "L"); ui_num(xb + 1, x->ilab[j]); ui_cat(xb, ":");
-                d_textn(sx + c1 * XCW, ry, cols[XC_PRE], XFONT, F_MONO, XCW, xb, ui_len(xb));
+                d_textn(sx + c1 * XCW, ry, cols[XC_PRE], XFONT, XFACE, XCW, xb, ui_len(xb));
                 if (c1 + ui_len(xb) + 1 > cm) cm = c1 + ui_len(xb) + 1;
             }
             c = xp_text(x, j, m, xb);
-            d_textn(sx + cm * XCW, ry, cols[XC_KW], XFONT, F_MONO, XCW, m, ui_len(m));
-            if (xb[0]) d_textn(sx + (cm + 5) * XCW, ry, cols[c], XFONT, F_MONO, XCW, xb, ui_len(xb));
+            d_textn(sx + cm * XCW, ry, cols[XC_KW], XFONT, XFACE, XCW, m, ui_len(m));
+            if (xb[0]) d_textn(sx + (cm + 5) * XCW, ry, cols[c], XFONT, XFACE, XCW, xb, ui_len(xb));
         }
         if (k == x->sel) d_recto(ox, ry, lw, XCH, cols[XC_KW]);
         ++k; ++i;
@@ -1090,8 +1096,8 @@ static void xp_draw_code(struct xp *x, int ox, int oy, int cw, int ch, int *cols
     ui_scrollbar(ox + cw - 17, y, ch - XHDR, x->nd, rows, x->top);
     // a failed compile's last words, over the listing
     if (x->failed && !x->busy) {
-        if (x->errn > 0) d_textn(sx, y + 4, cols[XC_STR], XFONT, F_MONO, XCW, x->err0, ui_len(x->err0));
-        if (x->errn > 1) d_textn(sx, y + 4 + XCH, cols[XC_STR], XFONT, F_MONO, XCW, x->err1, ui_len(x->err1));
+        if (x->errn > 0) d_textn(sx, y + 4, cols[XC_STR], XFONT, XFACE, XCW, x->err0, ui_len(x->err0));
+        if (x->errn > 1) d_textn(sx, y + 4 + XCH, cols[XC_STR], XFONT, XFACE, XCW, x->err1, ui_len(x->err1));
     }
 }
 

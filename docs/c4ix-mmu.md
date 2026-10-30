@@ -6,9 +6,10 @@ guard pages and read-only text (1-4); null reads, devices checked against
 the task's tables, C4KE's text a page at a time (5); user addresses that
 are not physical (6); swap, and the TLB kept right across CPUs (7); swap
 kept by the host, which the kernel can read (8); a page at a time (9);
-the TLB's shootdown by IPI (10). Fitted by default: cli.js and the tests
-(--no-mmu), and the page for C4IX, but for GitHub Pages' build. What is
-left is section 13.
+the TLB's shootdown by IPI (10). Fitted by the tests (cli.js --mmu,
+createMachine's default, the browser checks' ?mmu=1) and while
+developing; off by default in cli.js and the page since 2026-10-30, for
+its cost (section 12). What is left is section 13.
 
 C4IX runs every task in one flat arena. Its protected mode (c4m's `mode`
 register, `sys_pmviolation` in `src/c4ix/sys.c`) stops a user task from
@@ -605,10 +606,13 @@ addresses are not physical. What is left to try: user addresses chosen
 at their memory's address plus the window's base wherever that is free,
 so that every window has the same offset and a loop with it constant
 could run (the identity loop gave 5%); a window for the heap as there is
-one for the stack. Neither is done. So the MMU is fitted by default where
-it catches bugs -- cli.js and every test (`--no-mmu`, `mmu: false`), the
-page served from the tree -- and not on GitHub Pages, whose build writes
-`libjs/web/site.js` with it off (`?mmu=1` fits one there).
+one for the stack. Neither is done. So the MMU is fitted where it catches
+bugs -- every test (test-libjs.sh's `cli.js --mmu`, `createMachine`'s
+default, which the node tests use, and the browser checks' `?mmu=1`) --
+and is off by default for use: `cli.js` without `--mmu`, and the page
+without `?mmu=1`, wherever it is served from (2026-10-30; until then the
+tree's page fitted one, and only GitHub Pages' build wrote
+`libjs/web/site.js` with it off).
 
 ### What translation cost, and what was tried
 

@@ -24,7 +24,7 @@ builds:
 
 From the repo root:
 
-    node libjs/cli.js [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [-hz MHz] [--fast] [--mbox BYTES] [--wav FILE] program.c4r [args...]
+    node libjs/cli.js [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [-hz MHz] [--fast] [--mbox BYTES] [--wav FILE] [--mmu] program.c4r [args...]
 
 | Flag | Meaning |
 |---|---|
@@ -38,6 +38,7 @@ From the repo root:
 | `--fast` | Interactive runs go as fast as the host can instead of pacing to the clock. |
 | `--mbox N` | Fit a mailbox of N bytes (c4bb's `MBOX_*` registers). |
 | `--wav FILE` | Fit a sound card and write what it played to FILE, 44.1 kHz 16-bit stereo, on the machine's own clock, so the same session makes the same file. Without it there is no card and programs run silent. |
+| `--mmu` | Fit an MMU (docs/c4ix-mmu.md): C4IX turns it on and gives each task an address space of its own. Off by default, for its cost; the tests fit one. |
 
 The flags are c4bb's `cli.js` flags, so a test can swap one runner for the
 other. Examples:

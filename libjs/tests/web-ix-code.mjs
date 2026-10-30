@@ -56,7 +56,7 @@ try {
   const shot = async name => { writeFileSync(`${outdir}/${name}.png`, await tab.screenshot()); console.log(`web-ix-code: screenshot ${outdir}/${name}.png`); };
   const go = async item => { const g = await find('Go'); await clickT(g[g.length - 1]); if (!await shownHas('Power Off...', 5000)) return false; return clickText(item); };
 
-  await tab.goto(`${base}/libjs/web/?persist=reset`);
+  await tab.goto(`${base}/libjs/web/?persist=reset&mmu=1`);
   const up = await tab.waitFor('window.c4m && window.c4m.display', 90000);
   await tab.eval('window.c4m.display.recordText = true');
   ok('?persist=reset: the page boots the C4IX desktop', up && await shownHas(/^Terminal - task/, 120000));
@@ -93,7 +93,7 @@ try {
     await shot(`ix-code-2-${w}x${h}`);
   }
   ok('no page errors', tab.errors.length === 0, tab.errors.join('\n  '));
-  await tab.goto(`${base}/libjs/web/?persist=reset`);
+  await tab.goto(`${base}/libjs/web/?persist=reset&mmu=1`);
   ok('?persist=reset at the end: nothing left in the store', await tab.waitFor('window.c4m && window.c4m.display', 90000));
 } finally {
   await tab.close();

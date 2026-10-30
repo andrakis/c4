@@ -19,7 +19,7 @@
 set -u
 cd "$(dirname "$0")/../.."
 IMAGES=src/c4bb/images
-LIBJS="node libjs/cli.js"
+LIBJS="node libjs/cli.js --mmu"
 B=/build
 fail=0
 ok()  { echo "test-rebuild: $1 OK"; }

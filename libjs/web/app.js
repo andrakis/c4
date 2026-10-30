@@ -14,10 +14,9 @@
 //                                page is cross-origin isolated (serve.mjs --isolate)
 //   ?mmu=1 | 0                   fit an MMU (mmu.js, docs/c4ix-mmu.md), or not: C4IX
 //                                turns it on, and its user tasks each get an address
-//                                space of their own; nothing else uses it. On for
-//                                C4IX's systems unless ?mmu=0 or the site says
-//                                otherwise (site.js: GitHub Pages' build does), off
-//                                for the rest
+//                                space of their own; nothing else uses it. Off
+//                                unless ?mmu=1 (or the Configuration dialog says
+//                                so), for what it costs; the browser checks fit one
 //   ?persist=0 | reset           the system's saved files (its store, SYSTEMS' `persist`) are
 //                                not kept between visits / are forgotten first
 //   ?uploads=0                   the Uploads (your own files) are not put on the disk
@@ -138,10 +137,10 @@ const sys = params.get('image')
   ? { image: params.get('image'), disk: params.get('disk'), argv: [params.get('image').split('/').pop()] }
   : SYSTEMS[which] || SYSTEMS.c4ix;
 
-// The MMU, where the system has one and the site does not say otherwise:
-// GitHub Pages' build turns it off (site.js), where the games' speed is
-// what a visitor sees; served from the tree, it is on, as in the tests
-const mmuDefault = !!sys.mmu && SITE.mmu !== false;
+// The MMU: off unless asked for (?mmu=1), since what it costs is what the
+// games feel (docs/c4ix-mmu.md 12); a site may fit one by default
+// (site.js), on a system that has one. The tests ask for it.
+const mmuDefault = !!sys.mmu && SITE.mmu === true;
 
 const status = $('status');
 const kbd = $('kbd');

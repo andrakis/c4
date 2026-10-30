@@ -18,10 +18,11 @@
 //                each runs -q instructions in turn (default 1000)
 //   -q N         instructions a CPU runs before the next one's turn
 //   --parallel   ... each CPU on a thread of its own (par.js), for real
-//   --no-mmu     no MMU (docs/c4ix-mmu.md). One is fitted by default:
-//                C4IX turns it on, and then user tasks run in address
-//                spaces of their own, so a wild write is caught where it
-//                happens; nothing else uses it. (--mmu: the default)
+//   --mmu        fit an MMU (docs/c4ix-mmu.md): C4IX turns it on, and
+//                then user tasks run in address spaces of their own, so a
+//                wild write is caught where it happens; nothing else uses
+//                it. Off by default, for its cost (docs/c4ix-mmu.md 12);
+//                the tests fit one. (--no-mmu: the default)
 //   --wav FILE   fit a sound card (snd-device.js) and write what it played,
 //                on the machine's own clock, to FILE: 44.1 kHz 16-bit stereo.
 //                The same session makes the same file. Without it there is
@@ -48,7 +49,7 @@ function usage() {
 }
 
 function parseArgs(argv) {
-  const o = { arenaMb: 32, maxCycles: Infinity, stats: false, drives: [], mmu: true,
+  const o = { arenaMb: 32, maxCycles: Infinity, stats: false, drives: [], mmu: false,
               interactive: false, mhz: 20, unpaced: false, mbox: 0 };
   let i = 0;
   while (i < argv.length && argv[i].startsWith('-')) {

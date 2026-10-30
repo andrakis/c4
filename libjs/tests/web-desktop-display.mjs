@@ -83,7 +83,7 @@ try {
     return { good: cw === w && ch === h && gos.length > 0 && !!c && c.x > w - 100 && c.y > h - 30 && out === 0, why: JSON.stringify({ cw, ch, c, gos: gos.length, out }) };
   };
 
-  await tab.goto(`${base}/libjs/web/?persist=reset`);
+  await tab.goto(`${base}/libjs/web/?persist=reset&mmu=1`);
   await tab.waitFor('window.c4m && window.c4m.display', 60000);
   await tab.eval('window.c4m.display.recordText = true');
   const up = await shownHas('Go', 120000);

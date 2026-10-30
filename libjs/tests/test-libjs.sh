@@ -13,7 +13,7 @@
 # Out of contract, as on c4bb: test_customop test_signal test_timekeeping
 # test_fread (need a kernel or a host fd), test_crash (STRC needs symbols).
 
-LIBJS="node libjs/cli.js"
+LIBJS="node libjs/cli.js --mmu"   # the MMU, off by default, catches what it can here
 C4M32="./c4m32 load-c4r.c --"
 C4M64="./c4m load-c4r.c --"
 IMAGES=src/c4bb/images

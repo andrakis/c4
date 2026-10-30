@@ -64,13 +64,13 @@ try {
   const sel = await tab.eval(`(() => { const s = document.getElementById('cfg-mmu');
     return s ? s.value + ' ' + [...s.options].map(o => o.value).join(',') + ' ' + !s.closest('.cfg-panel').hidden : 'none'; })()`);
   ok(`the Configuration dialog's Machine tab has the MMU (${sel})`, /^1 0,1 true$/.test(sel), sel);
-  // C4IX's page fits one unless told not to
+  // and with no ?mmu, none: it is off by default, for its cost
   await tab.goto(`${base}/libjs/web/?system=c4ix&persist=0&fast`);
   await sleep(500);
   await tab.eval('document.getElementById("configure").click()');
   await sleep(300);
   const def = await tab.eval(`(() => { const s = document.getElementById('cfg-mmu'); return s ? s.value : 'none'; })()`);
-  ok(`with no ?mmu, C4IX's page has the MMU on (${def})`, def === '1', def);
+  ok(`with no ?mmu, C4IX's page has the MMU off (${def})`, def === '0', def);
 } finally {
   await tab.close();
   b.disconnect();

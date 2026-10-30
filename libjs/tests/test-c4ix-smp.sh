@@ -18,7 +18,7 @@
 
 N=${1:-2}
 ENGINE="--cpus $N $2"
-LIBJS="node libjs/cli.js $ENGINE"
+LIBJS="node libjs/cli.js --mmu $ENGINE"
 IMAGES=src/c4bb/images
 U=$((4 + N - 1))                  # the root archive's unpack, task 4 on one CPU
 [ "$N" -lt 2 ] && U=4

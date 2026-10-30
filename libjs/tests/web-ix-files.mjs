@@ -31,7 +31,7 @@ const b = await Browser.connect(cdp);
 console.log(`web-ix-files: ${b.version}`);
 const tab = await b.newTab(false);
 try {
-  const page = `${base}/libjs/web/?system=c4ix&persist=reset`;
+  const page = `${base}/libjs/web/?system=c4ix&persist=reset&mmu=1`;
   // window.c4m is the page's machine. The page can reload itself after it
   // is up (coi.js isolating it on a first visit, ../coi.js), so what needs
   // the machine is done in a waitFor, which tries again until it can.

@@ -3,8 +3,9 @@
 // swap and brought back when they are touched, every byte as it was.
 //
 // A program compiled inside C4IX does it:
-//   swaptest hold MB SECS   fills MB of blocks of its own, sleeps SECS,
-//                           then checks every word
+//   swaptest hold MB SECS   fills MB of blocks of its own, sleeps until
+//                           there is a /tmp/swapgo (SECS at most), then
+//                           checks every word
 //   swaptest spin MB SECS   as hold, but runs the whole time, touching
 //                           one word of its first block and no other
 //   swaptest hog MB         fills MB, and checks every word at once
@@ -55,6 +56,12 @@ int check(int *p, int words, int seed) {
     while (i < words) { if (p[i] != seed + i * 7) return i; ++i; }
     return -1;
 }
+// the test says when to stop holding (a spinner held for SECS ran all of
+// them: on two CPUs a fixed 300 s was most of the test's time)
+int told() {
+    int st[4];
+    return ustat("/tmp/swapgo", st) == 0;
+}
 int main(int argc, char **argv) {
     int **b;
     int mb, secs, i, t0, seed, bad;
@@ -79,7 +86,7 @@ int main(int argc, char **argv) {
     if (!ustrcmp(argv[1], "hold")) {
         secs = argc > 3 ? num(argv[3]) : 10;
         t0 = __time();
-        while (__time() - t0 < secs * 1000) umsleep(200);
+        while (__time() - t0 < secs * 1000 && !told()) umsleep(200);
     }
     if (!ustrcmp(argv[1], "spin")) {
         uaffinity(getpid(), 2);           // CPU 1, alone there: running whenever swap looks
@@ -87,7 +94,7 @@ int main(int argc, char **argv) {
         t0 = __time();
         bad = 0;
         // in user mode nearly all the time: the clock only now and then
-        while (__time() - t0 < secs * 1000) { i = 0; while (i < 1000000) { bad = bad + b[0][0]; ++i; } }
+        while (__time() - t0 < secs * 1000 && !told()) { i = 0; while (i < 1000000) { bad = bad + b[0][0]; ++i; } }
     }
     i = 0;
     while (i < mb) {
@@ -195,6 +202,7 @@ if (seen) {
 } else check(false, 'a page of a holder\'s is out after the hog has run', swapLines(run('dmesg')).map(x => JSON.stringify(x)).join('\n'));
 
 // the holders wake, touch their blocks, and find them as they left them
+type('echo go > /tmp/swapgo');
 until(() => (text(h0).match(/(hold|spin) \d+: \d+ MB (intact|corrupted)|corrupted/g) || []).length >= 2, 200000);
 const held = text(h0);
 check((held.match(/(hold|spin) \d+: \d+ MB intact/g) || []).length === 2 && !/corrupted/.test(held),

@@ -2553,6 +2553,14 @@ test-c4bb: c4bb-images $(C4M) $(TESTS_C4R)
 test-libjs: c4bb-images $(C4M) $(TESTS_C4R) c4sp32
 	bash libjs/tests/test-libjs.sh
 
+# The quick tier: only what the paths changed since c4ix_and_toppings can
+# reach (libjs/tests/test-quick.sh says how it chooses) -- some parts of
+# test-libjs, test-c4ix if C4IX changed, the rebuild if its toolchain did.
+# For the edits before a merge; the full gate is still the one for it.
+# QUICK_BASE=branch measures from another; JOBS=2 as for test-libjs.
+test-quick:
+	bash libjs/tests/test-quick.sh
+
 # The Build Ladder on libjs, headless (docs/c4dos-ladder.md): the page's
 # ladder disk boots C4DOS, which plays Doom and builds C4KE; C4KE plays
 # Doom and rps, builds C4IX with b4ke and boots it with kboot; C4IX plays
@@ -3665,7 +3673,7 @@ c4rs: pre
 
 # Marking the below rules as PHONY using singular .PHONY rule
 PHONY  = pre all clean-c4rs clean
-PHONY += test-libjs test-libjs-ladder test-c4ix-smp serve-libjs pages test-libjs-web test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
+PHONY += test-libjs test-quick test-libjs-ladder test-c4ix-smp serve-libjs pages test-libjs-web test-c4tui test-c4th-bb run-c4dos-c4fc test-c4dos-c4fc
 PHONY += run-c4dos-build32 test-c4dos-build32 run-c4dos-c4ix32 test-c4dos-c4ix32 test-c4cc-for test-respfile test-b4ke test-c4bb-storage test-c4bb-baseops test-c4bb-rungs test-c4bb-install test-c4bb-climb test-c4bb-web test-c4bb-firmware
 PHONY += test-c4sc test-c4sc-run test-c4sc-lex test-c4sc-front test-c4sc-back test-c4sc-chain
 PHONY += test-c4sc-image test-c4sc-self test-c4sc-board

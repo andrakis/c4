@@ -5,6 +5,7 @@
 // is its IndexedDB one. Skips where no game is on the disk.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import zlib from 'node:zlib';
 import { createMachine, boot } from '../boot.js';
 import { typeBytes } from '../keys.js';
 import { LazyFiles, cacheMedium, loadCache, keepInCache } from '../lazy.js';
@@ -58,14 +59,17 @@ async function run(cached, cmds) {
 }
 
 // 1. no cache: boot, list the game's directory, read the file twice
-const wc = `wc ${path}`;
-const r = await run([], [`ls ${dir}`, wc, wc]);
+// crc32 reads the file whole, and says its CRC and size, which the host's
+// copy must have too
+const crc = `crc32 ${path}`;
+const want = `${zlib.crc32(read(name)).toString(16).padStart(8, '0')} ${size} ${path}`;
+const r = await run([], [`ls ${dir}`, crc, crc]);
 check(r.ok, 'C4IX boots to its shell, and unpacks its root archive');
 check(r.games[0].length === 0, 'the boot fetched no source', r.games[0].join(' '));
 check(r.outs[1].includes(base) && r.games[1].length === 0, `ls ${dir} lists ${base}, and fetches nothing`, r.outs[1]);
-check(r.games[2].join() === name, `the first wc fetched ${name}, and nothing else of the games'`, r.games[2].join(' '));
-check(r.outs[2].trim().split(/\s+/).includes(String(size)), `wc counts its ${size} bytes`, r.outs[2]);
-check(r.outs[3] === r.outs[2] && r.games[3].join() === name, 'the second wc fetched nothing', r.outs[3]);
+check(r.games[2].join() === name, `the first crc32 fetched ${name}, and nothing else of the games'`, r.games[2].join(' '));
+check(r.outs[2].includes(want), `crc32 says "${want}", as the host's copy has it`, r.outs[2]);
+check(r.outs[3] === r.outs[2] && r.games[3].join() === name, 'the second crc32 fetched nothing', r.outs[3]);
 check(r.files.fetched === r.fetched.length && r.files.cached === 0, 'the disk counts the fetches, and nothing from the cache');
 const stored = await backend.listFiles(medium);
 check(stored.length === 1 && stored[0].name === `${hash} ${name}` && stored[0].data.length === size,
@@ -74,8 +78,8 @@ check(stored.length === 1 && stored[0].name === `${hash} ${name}` && stored[0].d
 // 2. a second boot, with what the cache has: the file is not fetched
 const cached = await loadCache(backend, medium, index);
 check(cached.length === 1 && cached[0][0] === name, 'loadCache gives it back');
-const r2 = await run(cached, [wc]);
-check(r2.ok && r2.outs[1] === r.outs[2], 'the second boot\'s wc says the same', r2.outs[1]);
+const r2 = await run(cached, [crc]);
+check(r2.ok && r2.outs[1] === r.outs[2], 'the second boot\'s crc32 says the same', r2.outs[1]);
 check(ofGames(r2.fetched).length === 0 && r2.files.cached === 1, 'it came from the cache: nothing of the games\' fetched',
   ofGames(r2.fetched).join(' '));
 

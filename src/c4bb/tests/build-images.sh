@@ -861,9 +861,12 @@ say "the disk's manifest, sizes and index"
 # entry a lazy RAM file that the kernel reads from the host only when
 # something first uses it. index.json is the same table for the web
 # page, whose worker then fetches a file on first read instead of all
-# of them before boot. Written last, after every copy above.
-(cd $DISK && find . -type f -not -name manifest.json -not -name c4ix.sizes -not -name index.json -not -name c4ix.sizes.tmp \
-    -printf '%s %P\n' | sort -k2) > $DISK/c4ix.sizes.tmp
+# of them before boot. Written last, after every copy above. The games'
+# sources come after the rest: only hostdir(games/) looks for them, and
+# vfsload's lookup of a manifest entry finds it before their ~580 lines.
+(cd $DISK && { find . -type f -not -name manifest.json -not -name c4ix.sizes -not -name index.json -not -name c4ix.sizes.tmp \
+    -not -path './games/*' -printf '%s %P\n' | sort -k2
+    if [ -d games ]; then find games -type f -printf '%s %p\n' | sort -k2; fi; }) > $DISK/c4ix.sizes.tmp
 mv $DISK/c4ix.sizes.tmp $DISK/c4ix.sizes
 # index.json lists c4ix.sizes too -- a lazy disk serves only what its
 # index names, and without the table vfsload falls back to copying all.

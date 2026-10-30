@@ -526,20 +526,34 @@ char *host_of(char *path) {
 }
 
 // each directory in PATH after its first FROM characters, made (umkdir
-// leaves one that is there)
+// leaves one that is there) -- unless it is the last one made: the table
+// is sorted, so a directory's files come together, and the hundreds of
+// sources make a few dozen directories
+enum { PATHMAX = 256 };
+char *g_lastdir;
+int g_lastlen;
 void make_dirs(char *path, int from) {
-    int k;
+    int k, last;
+    k = from; last = 0;
+    while (path[k]) { if (path[k] == '/') last = k; ++k; }
+    if (!last || (last == g_lastlen && !memcmp(path, g_lastdir, last))) return;
     k = from;
-    while (path[k]) {
+    while (k <= last) {
         if (path[k] == '/') { path[k] = 0; umkdir(path); path[k] = '/'; }
         ++k;
     }
+    if (!g_lastdir) g_lastdir = (char *)ualloc(PATHMAX);
+    memcpy(g_lastdir, path, last); g_lastlen = last;
 }
 
-// the hostdir(PREFIX) directories' files; how many were made
+// the hostdir(PREFIX) directories' files; how many were made. The names
+// are put together in two buffers, as the kernel copies what it keeps:
+// an allocation each was a sixth of the time hundreds of files took.
 int load_hostdirs() {
-    int h, i, j, n, v, ok;
-    char *pfx, *host, *path;
+    int h, i, j, n, v, ok, dl;
+    char *pfx;
+    char path[PATHMAX];
+    char host[PATHMAX];
 
     ok = 0;
     if (!g_sizes) return 0;
@@ -547,6 +561,7 @@ int load_hostdirs() {
     while (h < g_nhostdirs) {
         pfx = g_hostdir_prefix[h];
         n = ustrlen(pfx);
+        dl = ustrlen(g_hostdir_path[h]);
         i = 0;
         while (i < g_sizes_len) {
             v = 0;
@@ -554,10 +569,10 @@ int load_hostdirs() {
             if (i < g_sizes_len && g_sizes[i] == ' ') ++i;
             j = i;
             while (j < g_sizes_len && g_sizes[j] != 10) ++j;
-            if (j - i > n && !memcmp(g_sizes + i, pfx, n)) {
-                host = str_dup_n(g_sizes + i, j - i);
-                path = str_cat(g_hostdir_path[h], host + n);
-                make_dirs(path, ustrlen(g_hostdir_path[h]));
+            if (j - i > n && j - i < PATHMAX && dl + j - i - n < PATHMAX && !memcmp(g_sizes + i, pfx, n)) {
+                memcpy(host, g_sizes + i, j - i); host[j - i] = 0;
+                memcpy(path, g_hostdir_path[h], dl); memcpy(path + dl, host + n, j - i - n + 1);
+                make_dirs(path, dl);
                 if (ulazyfile(path, host, v) == 0) ++ok;
             }
             i = j + 1;

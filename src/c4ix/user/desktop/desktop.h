@@ -15,7 +15,6 @@
 //   apps.c      About and Settings
 //   edit.c      Editor: the IDE, a VIM-mode editor that builds with b4ke
 //   hl.c        the IDE's syntax colouring
-//   ideset.c    IDE Settings: its colours, VIM mode or not, its font
 //   explore.c   the IDE's Code tab: the code a C file compiles to, or a
 //               compiled file's, with its source
 //   wall.c      the desktop's picture
@@ -95,16 +94,9 @@ void edit_answer(struct win *w, int action, int yes);
 void edit_tick(struct win *w);
 void edit_close(struct win *w);
 
-// ideset.c: IDE Settings, kept in /etc/ide.cfg. The text grid its font
-// makes: a cell's width and height, the font's size and face (edit.c and
-// the Code tab draw in it); the scheme's colours, by HC_* then these
+// edit.c's text grid, from IDE Settings' font: a cell's width and height,
+// the font's size and face (the Code tab draws in it too)
 extern int ide_cw, ide_ch, ide_fs, ide_face;
-enum { SC_BG = 7, SC_GUT = 8, SC_GUTFG = 9, SC_SEL = 10, SC_TILDE = 11, SC_CUR = 12, SC_CURFG = 13, SC_N = 14,
-       SHADOW = 0x1000000 };          // a gutter colour of SHADOW is the desktop scheme's shadow
-int *ide_colours();                   // the scheme in use
-int  ide_vim_on();                    // VIM mode chosen, for a new window
-void ide_settings();                  // the window (View > Settings...)
-void edit_vim_all(int vim);           // edit.c: every IDE window into the input mode chosen
 
 // hl.c: the IDE's syntax colouring. The languages, and what a character is.
 enum { L_TEXT = 0, L_C = 1, L_JS = 2, L_LISP = 3, L_FORTH = 4, L_SH = 5, L_B4K = 6, HL_MAX = 1024 };

@@ -54,7 +54,7 @@ bold, Georgia and its bold). A non-zero
 advance places each character exactly `advance` pixels after the last,
 which is what a character grid needs; 0 is the font's own spacing.
 
-**The desktop** (src/c4ix/user/desktop/, twelve modules of its own over the window kit's eleven in src/winkit, and libc's `fp.c`, linked with libc4ix -> c4ix-desktop.c4r; it was one file, `desktop.c`, until D6, `edit.c` joined in part four, `calc.c` left `apps.c` with floating point, and the window kit, which grin shares, left `wm.c`, `term.c` and `apps.c` in part fourteen; `explore.c` joined in part eighteen, and `hl.c` and `ideset.c` left `edit.c` in part twenty):
+**The desktop** (src/c4ix/user/desktop/, eleven modules of its own over the window kit's eleven in src/winkit, and libc's `fp.c`, linked with libc4ix -> c4ix-desktop.c4r; it was one file, `desktop.c`, until D6, `edit.c` joined in part four, `calc.c` left `apps.c` with floating point, and the window kit, which grin shares, left `wm.c`, `term.c` and `apps.c` in part fourteen; `explore.c` joined in part eighteen, and `hl.c` left `edit.c` in part twenty):
 - Asks for an 800x600 display (1024x768 was too small to read once the
   page scaled it into its pane), attaches the rings, and redraws what
   changed: the whole scene, or only the damaged regions
@@ -1134,16 +1134,17 @@ every screen size. Now:
     through the kit's `notepad_cfg`; grin names none, so its Notepad
     starts as it always did. grin's applications reach the kit through
     its table, which grew the six font functions (GRIN_KIT_VERSION 4).
-- [x] **Two modules out of edit.c.** Inside C4IX, c4sc ran out of
-      memory compiling edit.c (`cannot allocate gc mark state for
-      1350000 cells`): the root archive, which C4IX holds in RAM in the
-      same 64 MB as the compile, had grown with this part's sources,
-      docs and tests, and edit.c was already at the edge. hl.c, the
-      syntax colouring, is the IDE Code tab's work's own answer to the
-      same failure, cherry-picked here; ideset.c takes IDE Settings --
-      the colour schemes, the input mode, the font and /etc/ide.cfg --
-      and edit.c asks it for `ide_colours()` and `ide_vim_on()`, and
-      answers `edit_vim_all` when the input mode changes.
+- [ ] **The rebuild's memory.** test-c4ix-rebuild fails on this branch:
+      inside C4IX, c4sc runs out of memory compiling edit.c (`cannot
+      allocate gc mark state for 1350000 cells`). C4IX holds the root
+      archive in RAM, in the same 64 MB as the compile, and the archive is
+      about 40 KB bigger here than on the Code tab's branch, whose run
+      passes; edit.c was already at the edge. hl.c, that branch's answer
+      to the same failure, is cherry-picked here, and is not enough; nor
+      was moving IDE Settings into a module of its own (its object and
+      source in the archive cost about as much as it saved). What this
+      waits on is memory: the root archive's sources kept out of RAM, or
+      a bigger machine for the test.
 - [x] test-desktop.mjs reads each string's font and size now. Text
       Editor: a line of thirty words folds into rows that each end after
       a word and join back into the line, with no bar across; Word Wrap

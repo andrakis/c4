@@ -2996,7 +2996,7 @@ $(C4IX_ARC_PROGS): c4ix-%.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libarc.c4l libc4ix.c
 # The desktop is several modules (docs/c4ix-desktop.md): each is compiled
 # on its own, then all are linked with libc4ix, like the kernel. WINKIT's
 # are the window kit's (src/winkit), which grin shares.
-C4IX_DESKTOP := shell tools host term files taskmgr apps edit explore wall
+C4IX_DESKTOP := shell tools host term files taskmgr apps edit hl explore wall
 WINKIT := draw ui wmcore dialog look95 look31 textgrid savers calc notepad clock
 C4IX_DESKTOP_SRC := $(C4IX_DESKTOP:%=$(C4IX_SRC)/user/desktop/%.c) $(C4IX_SRC)/user/desktop/*.h libjs/guest/gui.h \
                     $(WINKIT:%=src/winkit/%.c) $(wildcard src/winkit/*.h) $(C4IX_SRC)/include/cpustat.h $(C4IX_SRC)/libc/fp.c

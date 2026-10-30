@@ -202,6 +202,7 @@ void ui_hscrollbar(int x, int y, int w, int total, int visible, int left);
 int  ui_hscroll_click(int px, int py, int x, int y, int w, int total, int visible, int left);
                                                // ... and a bar across: ui_scroll_drag(x, y, px)
 int  ui_scroll_active();
+int  ui_scroll_repeat();                        // the last press was an arrow's or the track's: the desktop repeats it
 void ui_scroll_end();
 void ui_field(int x, int y, int w, char *text, int caret, int focused);
 int  ui_field_key(char *text, int max, int *caret, int code, int ch, int mods);

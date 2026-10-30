@@ -482,6 +482,11 @@ check(until(() => has('Files - /lib') && !!inList(find('libc.c4s')) && has('Shar
 dbl('libc.c4s', inList);
 check(until(() => has('libc.c4s - IDE') && has(/^\S+ \(\d+ words/) && has(/^\d+ functions$/), 2000),
   "double-clicking one shows its code in the IDE's Code tab, rather than running it", screen());
+{
+  const copies = find('<udiv>');
+  check(copies.length > 1 && copies.every(t => frame.some(u => u.y === t.y && u.x > t.x && /\.c$/.test(u.s))),
+    "the compiler's helpers, a copy in each unit that called one, each named by its unit", screen());
+}
 menu('File', 'Close');
 check(until(() => !has('libc.c4s - IDE')) && !has(/missing|unresolved|cannot resolve/i), 'File > Close closes that, and nothing ran', screen());
 key('\b');
@@ -780,13 +785,14 @@ check(until(() => !has(/t\.c \* - IDE|t\.c - IDE/)), ':q! closes the window');
   check(named.every(n => new RegExp(`O_${n} = ${opnum(n)}\\b`).test(xsrc)) && new RegExp(`O_N = ${OPNAMES.length / 5}\\b`).test(xsrc),
     'and the opcodes it names by number are where OPNAMES has them');
 }
-const SQ = 'int sq(int a) {\nreturn a * a;\n}\nint main() {\nprintf("%d\\n", sq(7));\nreturn 0;\n}';
+const LONG = '// ' + 'abcdefghij'.repeat(12);   // a line the Code tab folds
+const SQ = `int sq(int a) {\nreturn a * a;\n}\nint main() {\nprintf("%d\\n", sq(7));\n${LONG}\nreturn 0;\n}`;
 start('IDE');
 until(() => has('Untitled - IDE'));
 txt(':e /tmp/sq.c\n');
 txt('i'); txt(SQ); key('ESC');
 txt(':w\n');
-check(until(() => has(/"\/tmp\/sq\.c" written, 7 lines/)), 'a file with two functions, written', screen());
+check(until(() => has(/"\/tmp\/sq\.c" written, 8 lines/)), 'a file with two functions, written', screen());
 txt(':code\n');
 check(until(() => has(/^main \(\d+ words, sq\.c:4\)$/), 4000), ':code opens the Code tab, compiles it with cc -g, and shows the function the cursor is in', screen());
 check(has('sq.c') && has('Code') && !has(/^-- (EDIT|INSERT) --/), "in the text's place, under a tab beside the text's", screen());
@@ -803,11 +809,17 @@ const codeRows = () => {
   const ow = 4, c1 = ow + 3;
   return [...by.keys()].sort((a, b) => a - b).map(y => {
     const r = by.get(y).sort((a, b) => a.x - b.x);
-    const src = r.length > 1 && !/:$/.test(r[1].s) && Math.round((r[1].x - h.x) / 7) < c1 + 4;
-    return { src, cells: r.map(t => t.s.trimEnd()) };
+    const more = Math.round((r[0].x - h.x) / 7) >= c1;
+    const src = more || (r.length > 1 && !/:$/.test(r[1].s) && Math.round((r[1].x - h.x) / 7) < c1 + 4);
+    return { src, more, cells: more ? ['', ...r.map(t => t.s.trimEnd())] : r.map(t => t.s.trimEnd()) };
   });
 };
-const listed = () => { const h = codeHdr(); return h ? frame.filter(t => t.adv === 7 && t.x < h.x - 8 && t.y > h.y + 8).map(t => t.s.trimEnd()) : []; };
+// the list's names start where its filter's text does (drawn even when
+// it is empty), on its header's row left of the code's
+const listed = () => {
+  const h = codeHdr(), f = h && frame.find(t => t.adv === 7 && t.y === h.y && t.x < h.x - 8);
+  return f ? frame.filter(t => t.adv === 7 && t.x === f.x && t.y > h.y + 8).map(t => t.s.trimEnd()) : [];
+};
 const insOf = r => { const c = r.cells, k = /:$/.test(c[1] || '') ? 2 : 1; return c[k + 1] ? c[k].padEnd(5) + c[k + 1] : c[k]; };
 const srcText = () => codeRows().filter(r => r.src).map(r => r.cells.slice(1).join(' '));
 check(codeRows().some(r => !r.src && insOf(r) === 'JSR  sq') && codeRows().some(r => !r.src && insOf(r) === 'IMM  "%d\\n"'),
@@ -815,6 +827,19 @@ check(codeRows().some(r => !r.src && insOf(r) === 'JSR  sq') && codeRows().some(
 check(srcText().includes('int main() {') && srcText().includes('printf("%d\\n", sq(7));') && srcText().includes('return 0;'),
   'its source lines between the instructions they made', codeRows().map(r => r.cells.join(' ')).join('\n'));
 check(listed().includes('sq') && listed().includes('main'), 'and its functions listed beside it', listed().join(' '));
+{
+  // the long line, folded: a row with its number, then rows of the rest
+  const rs = codeRows(), k = rs.findIndex(r => r.src && !r.more && LONG.startsWith(r.cells[1]) && r.cells[1].length > 10);
+  let text = k >= 0 ? rs[k].cells[1] : '';
+  for (let j = k + 1; k >= 0 && j < rs.length && rs[j].more; j++) text += rs[j].cells[1];
+  check(k >= 0 && rs[k + 1].more && text === LONG, 'a long source line is folded onto the rows below it', rs.map(r => r.cells.join('|')).join('\n'));
+  const hbar = () => rects.some(r => r.h === 16 && r.rgb === 0xe0e0e0 && r.w > 100 && r.x >= codeHdr().x - 6);
+  check(!hbar(), 'with no bar across while it wraps');
+  clickText('Wrap');
+  check(until(() => hbar() && !codeRows().some(r => r.more)), 'Wrap off: it is one row, with a bar across to scroll it', screen());
+  clickText('Wrap');
+  check(until(() => !hbar() && codeRows().some(r => r.more)), 'and Wrap on again folds it', screen());
+}
 // the same as c4r.js says for the object host c4lc makes of the same source
 {
   const top = new URL('../../', import.meta.url).pathname;
@@ -887,8 +912,44 @@ start('IDE');
 until(() => has('Untitled - IDE'));
 txt(':e /bin/ls\n');
 check(until(() => has('ls - IDE') && has(/^main \(\d+ words, ls\.c:\d+\)$/), 2000), 'a program (/bin/ls) opens in the Code tab alone, at main', screen());
-check(until(() => has(/^ls: \d+ functions?, [\d,]+ words of code, a map of \d+ files?$/)) && srcText().length > 3 && !has('Code'),
-  "with the source its map names, from /usr/src", codeRows().map(r => r.cells.join(' ')).join('\n'));
+check(until(() => has(/^ls: \d+ functions?, [\d,]+ words of code, a map of \d+ files?; loads lib\w+\.c4s/)) && srcText().length > 3 && !has('Code'),
+  "with the source its map names, from /usr/src, and the libraries it loads", codeRows().map(r => r.cells.join(' ')).join('\n') + '\n' + screen());
+{
+  // the libraries' functions follow its own in the list, and a call into one goes there
+  const own = ['ls_dir', 'main'];
+  check(listed().length > 10 && own.every(n => listed().indexOf(n) >= 0 && listed().indexOf(n) < 2), "the libraries' functions are listed after its own", listed().slice(0, 12).join(' '));
+  // ls_dir calls into the libraries near its top: PgDn until one is in view
+  clickText('ls_dir', all => all.filter(t => t.x < codeHdr().x - 8).pop());
+  until(() => has(/^ls_dir \(/));
+  const extern = () => codeRows().find(r => !r.src && r.cells.includes('JSR') && !own.includes(r.cells[r.cells.indexOf('JSR') + 1]));
+  for (let i = 0; i < 6 && !extern(); i++) { key('', 0, 34); settle(); }
+  const call = extern();
+  const name = call ? call.cells[call.cells.indexOf('JSR') + 1] : '';
+  const t = name && find(name).filter(t => t.x >= codeHdr().x)[0];
+  if (t) { click(t.x + 3, t.y + 5); click(t.x + 3, t.y + 5); }
+  check(!!t && until(() => has(new RegExp(`^${name} \\(\\d+ words.*, in lib\\w+\\.c4s\\)$`))), `a double click on a call to ${name} goes to it, in its library`, screen());
+  key('\b');
+  check(until(() => has(/^ls_dir \(/)), 'and Backspace comes back');
+}
+{
+  // a scroll bar's thumb drags; its arrow, held, keeps scrolling
+  const at = () => codeRows().map(r => r.cells.join(' '));
+  const top0 = at();
+  check(dragThumb(r => r.x > codeHdr().x, 60) && until(() => at()[0] !== top0[0]), "a scroll bar's thumb drags", at().slice(0, 2).join(' / '));
+  const bar = rects.filter(r => r.w === 16 && r.rgb === 0xe0e0e0 && r.x > codeHdr().x).pop();
+  const before = at();
+  if (bar) { ev({ kind: 'move', x: bar.x + 8, y: bar.y + bar.h - 8, buttons: 0 }); ev({ kind: 'down', x: bar.x + 8, y: bar.y + bar.h - 8, button: 0 }); }
+  const t0 = vm.dev.simMs();
+  until(() => vm.dev.simMs() - t0 > 1500, 3000);
+  ev({ kind: 'up', x: bar ? bar.x + 8 : 0, y: bar ? bar.y + bar.h - 8 : 0, button: 0 });
+  const after = at(), k = before.indexOf(after[0]);
+  check(!!bar && after[0] !== before[0] && (k < 0 || k > 3), "and holding its arrow keeps scrolling", `${k}: ${before.slice(0, 4).join(' / ')} -> ${after.slice(0, 2).join(' / ')}`);
+}
+// a helper the compiler brought: its source is its parser's string (c4lc-parse.lisp's p:llsrc)
+type('__c4ll_add');
+check(until(() => has(/^__c4ll_add \(\d+ words, <c4lc long long>:\d+, in lib\w+\.c4s\)$/) && srcText().some(t => /^static int \*__c4ll_add\(/.test(t))),
+  "a helper of the compiler's shows its source, from the parser that holds it", codeRows().map(r => r.cells.join(' ')).join('\n') + '\n' + screen());
+key('ESC');
 menu('File', 'Close');
 check(until(() => !has('ls - IDE')), 'File > Close closes it');
 

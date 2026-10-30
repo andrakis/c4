@@ -75,6 +75,7 @@ node libjs/tests/test-grin.mjs || fail=1         # grin, C4DOS's graphical shell
 node libjs/tests/test-persist.mjs || fail=1      # saves kept in a store per system: Doom bare and under C4DOS
 node libjs/tests/test-c4dos-ladder.mjs || fail=1 # the Build Ladder: C4DOS -> C4KE -> C4IX (skips without its disk)
 node libjs/tests/test-c4ix-zombie.mjs || fail=1
+node libjs/tests/test-lazy-src.mjs || fail=1     # the games' sources: lazy in /usr/games, fetched once, then from the cache
 node libjs/tests/test-c4ix-cpu.mjs || fail=1
 node libjs/tests/test-c4ix-c4m.mjs || fail=1
 node libjs/tests/test-c4ix-sigh.mjs || fail=1

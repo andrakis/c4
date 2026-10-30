@@ -11,6 +11,7 @@
 //     persist:  'c4ix',                                 // optional: drive 1, kept in IndexedDB under this name
 //     uploads:  'uploads',                              // optional: files laid over drive 0, kept in IndexedDB under this name
 //   });
+//   (a lazy disk's files with a hash, once read, are kept in IndexedDB too: lazy.js; cache: false keeps none)
 //   vm.on('out', bytes => ...);   vm.on('status', s => ...);   vm.on('exit', e => ...)
 //   vm.write('ps\n');  vm.signal(2);  vm.pause();  vm.resume();  vm.reset();
 //   await vm.resetFiles()       // forget drive 1 (opts.persist), and boot again
@@ -24,6 +25,7 @@ import { Terminal } from '../src/c4bb/web/panels.js';
 import { Display } from './display.js';
 import { makeShared } from './shared.js';
 import { MediaStore, indexedDbBackend } from '../src/c4bb/web/store.js';
+import { cacheMedium, loadCache, keepInCache } from './lazy.js';
 
 async function fetchBytes(url) {
   const r = await fetch(url);
@@ -222,6 +224,22 @@ export class C4M {
       shared: this.shared || null,
     };
     this.worker.postMessage(this.bootMsg);
+    // The lazy disk's files that are worth keeping (index.json gives them
+    // a hash: the games' sources) are kept in IndexedDB once read, and
+    // what is there goes to the worker as the machine boots, which does
+    // not wait for it: a file opened before it arrives is fetched
+    // (lazy.js). Never with opts.cache === false.
+    if (lazy && opts.cache !== false && lazy.index.some(e => e[2])) this.loadCache(opts.disk, lazy.index);
+  }
+
+  async loadCache(disk, index) {
+    try {
+      this.store = this.store || new MediaStore(indexedDbBackend());
+      this.cacheName = cacheMedium(disk);
+      const files = await loadCache(this.store.backend, this.cacheName, index);
+      if (files.length) this.worker.postMessage({ type: 'cache', files });
+      this.emit('cache', { loaded: files.length });
+    } catch { this.cacheName = null; }
   }
 
   on(ev, fn) {
@@ -244,6 +262,10 @@ export class C4M {
         if (this.store && !this.persistHold) (m.bytes ? this.store.backend.putFile(this.persistName, m.name, m.bytes)
           : this.store.backend.deleteFile(this.persistName, m.name)).then(
           () => this.emit('persist', { name: m.name, bytes: m.bytes ? m.bytes.length : -1 }), () => {});
+        break;
+      case 'cache':
+        if (this.cacheName) keepInCache(this.store.backend, this.cacheName, m.name, m.hash, m.bytes).then(
+          () => this.emit('cache', { name: m.name, bytes: m.bytes.length }), () => {});
         break;
       case 'gui': this.emit('resize', m); break;
       case 'exit': this.exited = m; this.emit('exit', m); break;

@@ -165,7 +165,9 @@ static int mod_read(char *path, struct c4r_mod *m) {
             kprintf("c4ix: loader: %s is over the %d-byte limit\n", path, C4R_BUF_MAX);
             return 0;
         }
-        if (total <= 0 || !(buf = (char *)malloc(total + 16))) return 0;
+        // mmu_kalloc: one run of memory, which swap makes when user memory
+        // has cut the heap up
+        if (total <= 0 || !(buf = mmu_kalloc(total + 16))) return 0;
         if ((fd = open(path, 0)) < 0) { free(buf); return 0; }
         got = 0;
         while (got < total && (n = read(fd, buf + got, total - got < 65536 ? total - got : 65536)) > 0)
@@ -195,7 +197,7 @@ static int mod_read(char *path, struct c4r_mod *m) {
                     path, total, C4R_BUF_MAX);
             return 0;
         }
-        if (!(buf = (char *)malloc(total + 16))) return 0;
+        if (!(buf = mmu_kalloc(total + 16))) return 0;
         memcpy(buf, vn->data, total);
     }
     if (total < 13) {

@@ -6,7 +6,9 @@ guard pages and read-only text (1-4); null reads, devices checked against
 the task's tables, C4KE's text a page at a time (5); user addresses that
 are not physical (6); swap, and the TLB kept right across CPUs (7); swap
 kept by the host, which the kernel can read (8); a page at a time (9);
-the TLB's shootdown by IPI (10). Fitted by the tests (cli.js --mmu,
+the TLB's shootdown by IPI (10); memory on demand, a clock over every
+task's pages and the kernel's touches unpinned (11, 2026-10-30, on
+c4ix-swap: section 11's "Memory on demand"). Fitted by the tests (cli.js --mmu,
 createMachine's default, the browser checks' ?mmu=1) and while
 developing; off by default in cli.js and the page since 2026-10-30, for
 its cost (section 12). What is left is section 13.
@@ -448,10 +450,12 @@ page fault it would have taken itself, with FK_DMA in FINFO:
 
 -- an IOMMU's check. Given by the kernel, an address is found the way the
 kernel finds it (the window). The display's ring keeps the space that
-attached it, for the frames the host drains on its own. A page a device or
-the kernel has used is **pinned**: the host sets PTE_PIN (0x200) in the
-kernel's map, and swap leaves it alone, so the framebuffer, the rings and
-whatever the kernel copied in or out never move under them.
+attached it, for the frames the host drains on its own. A page a device
+has used is **pinned**: the host sets PTE_PIN (0x200) in the kernel's
+map, and swap leaves it alone, so the framebuffer and the rings never
+move under the devices that hold them. (Until stage 11 a page the kernel
+had used through the window was pinned too; now its loads and stores look
+the page up each time, below.)
 
 **Swap** (stages 7-10). User memory is frames (stage 9): the pages of
 heap blocks, each block taken for one region and its frames that
@@ -467,31 +471,112 @@ its slot in the entry (`PTE_SWAP`, 0x400): libjs's window reads and
 writes the host's copy there, so the kernel finds the page's bytes even
 if it follows a pointer into it that it never checked.
 
-Which go: pages of what a task asked for (`umem_alloc`, not its image,
-stack or arguments), not pinned, first of the largest block of a task no
-CPU is running whose pages nobody has used since the last look (PTE_A,
-which the look clears); then of any task, one another CPU is running
-too, which forgets them first (the IPI, section 10); never the asking
-task's, but for a page fault's. For a block the heap has no room for,
-all of a block's pages go, so that its memory is the heap's again; for
-a frame, sixteen. A task that touches a page that is out takes a page
+Which go (stage 11, below; until then the largest idle block of a task
+no CPU was running, never the asking task's): pages of what tasks asked
+for (`umem_alloc`, not their images, stacks or arguments), not pinned,
+chosen by a clock. A task that touches a page that is out takes a page
 fault, and `mmu_fault` brings it back into any free frame, with up to
 fifteen after it that are out too, at the same user address, and returns
 to the instruction, which runs again. A syscall given a pointer into one
-brings it back as it checks the pointer (`uaccess`, `ustrlen`). Every
-task not running is at the edge of user mode -- a syscall that waits is
-run again when its task wakes -- so nothing the kernel holds a pointer
-into goes out mid-use. On SMP, allocation takes the kernel lock when
-memory is short (`mmu_short`: seven eighths of the heap used), since swap
-runs only under it.
+brings it back as it checks the pointer (`uaccess`, `ustrlen`). On SMP,
+allocation takes the kernel lock when memory is short (`mmu_short`: seven
+eighths of the heap used, or a page gone out since), since swap runs
+only under it.
+
+**Memory on demand** (stage 11). Until stage 11 a program could not have
+more than the heap had in one piece: a block was a heap block, and swap
+could only make room by putting out *other* tasks' blocks. At 45 MB with
+the MMU on, Rise of the Triad's 8.3 MB zone failed with 10 MB free (the
+largest run 5.3 MB) and nothing idle to put out; one big program alone
+has nothing to swap against. Now:
+
+- **A block a task asks for has no memory** (`mmu_lazy`). It is user
+  addresses, and for each page a slot of swap's that the host has never
+  written, which the host gives back as a page of zeros (devices.js
+  `swapOp`: IN of a slot it has no copy of fills the frame with zeros; a
+  kernel store through the window makes the copy). So a page's first
+  touch is a page fault like any other, and comes "back in" to a frame of
+  its own, from wherever one is, sixteen pages at a time. No block needs
+  one run of memory, and a task may ask for more than the machine has --
+  up to swap's 256 MB, the window's size -- and holds what it uses.
+- **The frames** of those pages come from heap blocks of 256 frames (a
+  MB; sixteen where the heap has no MB in one piece), while the heap
+  keeps a sixteenth for the kernel's own (`mmu_roomy`); past that, from
+  pages put out. Any frame serves any page, so a block's free frames are
+  as good as a new block's. The blocks come from the heap's **top**
+  (`SWAP_CMD` op 5, heap.js `setHigh`: the highest free range that fits,
+  or a second bump pointer down from the end), and the kernel's own
+  blocks from its bottom, as they always did: the two grow toward each
+  other. Taken from anywhere, sixty-four KB at a time, the frames of the
+  root archive's unpack left the heap 323 holes between the RAM files,
+  none over 2.5 MB, and ROTT's image could not be read in; from the top,
+  the same unpack leaves one free run of 17.5 MB. Each frame knows the
+  user address it holds (`mmu_fva`).
+- **The clock** (`mmu_clock`) is a hand that goes round the window's
+  pages. A page used since the hand last passed (PTE_A, set as the MMU
+  fills a translation) has its bit cleared and its translation forgotten,
+  so that a use sets it again, and is passed over; the first page not
+  used since goes. Any task's -- an idle one's, one another CPU is running
+  (which forgets it first, by IPI), and **the asking task's own**: one
+  program bigger than memory pages against itself. Never the sixteen
+  pages a fault is bringing in, nor a page a device has used. A page
+  comes in marked used: the instruction that wanted it has not run yet,
+  and one that wants two pages would otherwise put the first out to bring
+  the second in, for ever. The pages after the one a fault wants come in
+  with it only into frames that are free (`mmu_fget`'s EVICT): when memory
+  is short, a page a program may never touch is not worth one it will.
+- **A block opcode goes on from its fault** (libjs mmu.js `block`). MSET,
+  MCMP and MCPY in user mode run a page at a time, and a page that is out
+  stops them part way. Run again once the page is in, the same instruction
+  -- the same CPU, space, pc, stack and operands -- goes on from the byte
+  it stopped at rather than its first. A game's `memset` of its 9 MB zone
+  is one MSET: from the first byte each time, it would need every page of
+  the zone in at once, and with fewer frames than that it brought each in
+  only to put out one it needed again. Doom at 36 MB went on like that for
+  95 billion cycles.
+- **The kernel's touches no longer pin.** libjs's window (c4m.js `kpa`)
+  looks a page up at every load and store, and reads and writes the
+  host's copy of one that is out, so a page may move between two of the
+  kernel's accesses: a `read` into a game's zone no longer keeps it in
+  memory for good, as it did when every page the kernel had used was
+  pinned. A device's use still pins (`arena.dma`): a device may keep
+  what it was given, and the display does.
+- **A device that wants one run** -- the display's event ring, attached
+  by the desktop from user mode -- faults on a block whose pages are
+  frames from anywhere (FK_DMA). The block is made one run then
+  (`mmu_contig`): a heap block of its size, each page copied or brought
+  into its place at the same user address, and the access runs again.
+  The device then pins it. ("its 16 KB at 0x... made one run of memory,
+  for a device" in the kernel's log.)
+- **One run of memory**, when the kernel needs one -- an image as the
+  loader reads it, a region for an image or a stack (`mmu_raw`), a big
+  buffer (`mmu_kalloc`) -- is made by freeing frame blocks whole
+  (`mmu_reclaim`): of the blocks whose pages can all go, the one with the
+  fewest in use, its pages moved into free frames of other blocks
+  (`mmu_move`, a copy and no swap at all) or put out where there are
+  none, and the heap is asked again, until it has the run or nothing more
+  can go.
+
+Faults are the same fault, whatever brought the page out (swap, or never
+having been touched), and the same path brings it in; a page fault that
+finds no frame even after the clock has gone round twice kills its task
+("its memory ... is on swap, and there is no room for it"). The log says
+what went out a MB of one block at a time, and what came back in when
+the block changes: a program bigger than memory puts pages out at every
+fault, and the log is 64 KB. A page's first touch is not news, and is not
+logged (PTE_ZERO, 0x800, marks a page whose slot was never written).
 
 Swap's registers are its own, so a program that drives the drives itself
 (`SYS_IOPERM`, persist) and swap never come between each other's stores,
 and nothing is left on a drive.
 
-`libjs/tests/test-c4ix-swap.mjs`: a probe measures the memory free; two
-holders take a third of it each and sleep; a hog takes six tenths, which
-only swap can give it; while a holder's block is out, the kernel reads it
+`libjs/tests/test-c4ix-swap.mjs`: one task alone takes half as much
+again as the whole machine (72 MB of a 48 MB one), fills it and finds
+every word, its own pages out and back; then as one 72 MB block, set by
+one `memset` and copied by one `memcpy`, every word again; then, with the heap's free
+memory read from its registers, two holders take a third of it each and
+sleep; a hog takes six tenths, which only swap can give it; while a
+holder's page is out, the kernel reads it
 from the host's copy word for word; pages come back sixteen at most at a
 time; all three find every word as they left it; and the host keeps none
 of their pages once they are gone. With CPUS=2 the holders spin, and the
@@ -614,6 +699,62 @@ without `?mmu=1`, wherever it is served from (2026-10-30; until then the
 tree's page fitted one, and only GitHub Pages' build wrote
 `libjs/web/site.js` with it off).
 
+**Stage 11** (memory on demand, 2026-10-31, c4ix-swap). All with the MMU
+(`cli.js -s --mmu -m MB`), on helios, a game's timedemo after `wait 4`;
+the cycles are the whole session's. With a 45 MB machine the games need
+one thing that is not swap's: the vfs reads a WAD into one run of kernel
+memory (`vfs_fill`, as big as the file, rounded up to a power of two),
+which the heap that user frames fill has no room for. These were measured
+with that run made exact and taken through `mmu_kalloc` -- a two-line
+change to vfs.c, the root-files work's file, which is where it belongs --
+and each game in a machine of its own:
+
+| game | 64 MB, before (9f81a64) | 64 MB, stage 11 | 45 MB, stage 11 | frames, checksum (all three) |
+|---|---|---|---|---|
+| Doom, demo3 | 80.5 s, 12,788,020,551 | 81.1 s, 12,807,173,080 | 82.0 s, 12,807,173,080 | 2,173, 01914fe7 |
+| ROTT, demo 4 | 31.1 s, 4,891,776,473 | 31.0 s, 4,912,219,205 | 30.7 s, 4,914,557,838 | 609, 3b083b33 |
+| Wolf3D, demo 0 | 39.8 s, 6,078,138,575 | 39.5 s, 6,100,713,599 | 39.3 s, 6,100,713,599 | 1,214, d7358845 |
+
+What memory on demand costs is its first touches: 0.15-0.4% more
+instructions, the page faults that back a block as it is used. At 45 MB
+the games run the instructions they run at 64 (ROTT 0.05% more: ten
+runs of pages out and back): the zones fit once the image, stack and
+zone are no longer each a heap block of their own. Before, at 45 MB, ROTT
+did not start (its 8.3 MB zone in one block, of a heap with 10 MB free in
+pieces of 5.3 MB at most) and Doom read an empty WAD.
+
+In the page (Chrome 151 over CDP, `web-c4ix-swap.mjs`, `?mmu=1&fast`, the
+desktop running), Doom's demo3 at 45 MB took 92.8 s against 92.5 s at 64
+MB, the same 2,173 frames and checksum. ROTT in a 45 MB page did not:
+with the desktop's memory taken too, its 6.4 MB WAD found no run of
+kernel memory even with every user page out -- the root archive's RAM
+files are the rest of the heap (section 13). With the root files read
+from drive 1 instead (the root-files work, lazy-root 78889dc, put
+together with this for the test, `?persist` on), it did: ROTT's 609
+frames in 27.8 s against 28.1 s at 64 MB, checksum 3b083b33, and Doom's
+in 93.1 s against 93.2 s.
+
+**Two Dooms at once** in a 45 MB machine, each `doom -timedemo demo3` in
+the background: both ran their 2,173 frames to checksum 01914fe7, at 9.5
+fps each against 19.1 for one alone -- the CPU shared, and nothing more
+lost to paging -- with 91 runs of pages going out and none killed. With
+the root files on drive 1 as well, which leaves 3.2 MB of the heap in use
+after boot rather than 24, **two Dooms ran in a 32 MB machine** at 9.5 fps
+each, and **four** at 4.7 fps each: 2,173 frames and checksum 01914fe7
+every one, 29 runs of pages out, none killed. Four zones of 6 MB, four
+images and the WAD are more than 32 MB; what the four use at once is
+not.
+
+**Smaller machines.** C4IX with the MMU booted in 44 MB at least before
+(the root archive's unpack, user memory and RAM files at once, peaked at
+40 MB); now it boots in 32, its unpacker's memory paged, but in 32 the
+unpack cannot make every RAM file it should, and some are missing. Doom at
+36 MB now sets up its 6 MB zone (which, a block bigger than the frames
+free, went round for 95 billion cycles before `block` went on from its
+faults), and stops at its WAD: the kernel's RAM files, not user memory,
+leave no 4 MB run. Both are what the root files read from the drive
+instead of kept in RAM take away.
+
 ### What translation cost, and what was tried
 
 The workload for this is the boot with the root archive unpacked
@@ -681,6 +822,21 @@ compare costs depends on the machine and the V8 that runs it.
 - **The light path on SMP** (`sched_light`: malloc and free without the
   kernel lock) cannot swap. It is off while memory is short; a light
   allocation that finds the heap full in between fails as without swap.
+  A big block made there has no memory to find (stage 11), so only the
+  slabs' chunks can fail that way. Its frees take the frame and slot
+  locks (`mmu_flock`), but a light free of a block while another CPU's
+  clock is putting a page of that same block out is not excluded: the
+  first page out makes memory short, which ends the light path, but one
+  already in it is not waited for.
+- **Images, stacks and arguments stay in.** The kernel keeps physical
+  handles on them (what the loader wrote through, `mod_is_data`, the
+  stack's measure in C4KE's task table), which a page moved under would
+  make wrong without a word. A program's code and data are a fixed cost
+  of each copy that runs (Doom's about 1.5 MB).
+- **The RAM files are the kernel's, and stay in.** A file the vfs holds
+  -- the root archive's, Doom's WAD once it is read -- is kernel memory,
+  one run of it. `mmu_kalloc` can make that run by putting user pages
+  out; making the files themselves leave memory is the vfs's own work.
 - **C4KE programs** may write their own code, a page at a time.
 - **c4bb's device registers** are for a task that asks (`SYS_IOPERM`),
   and only `persist` asks: nothing else in the tree uses them from user

@@ -8,6 +8,9 @@
 // free lists, larger ones from first-fit free ranges sorted by address and
 // coalesced, the rest from a bump pointer, and a small block from a free
 // range once the bump pointer is at the end. Blocks are 16-byte aligned.
+// And while high is set (setHigh, C4IX's frames), a large block comes from
+// the top: the highest free range that fits, or a second bump pointer down
+// from the end.
 //
 // And so is heap.js's first rule, that a guest's bytes cannot be taken for
 // the heap's: what a block is, and how big, is in books of their own, a
@@ -33,7 +36,7 @@
 // belong to the block anyway.
 
 const SMALL_MAX = 4096, NCLASS = 9;            // 16 << 0 .. 16 << 8
-const C = { LOCK: 0, BASE: 1, END: 2, BRK: 3, USED: 4, PEAK: 5, COUNT: 6, NLARGE: 7, LCAP: 8, HEADS: 16, WORDS: 32 };
+const C = { LOCK: 0, BASE: 1, END: 2, BRK: 3, USED: 4, PEAK: 5, COUNT: 6, NLARGE: 7, LCAP: 8, TOP: 9, HIGH: 10, HEADS: 16, WORDS: 32 };
 const M_FREE = 16, M_LARGE = 32;               // map: 1..9 a used small block of that class, +16 free
 
 function classOf(n) {
@@ -81,13 +84,18 @@ export class SharedHeap {
     const ctl = this.ctl;
     base = (base + 15) & ~15;
     end = end & ~15;
-    ctl[C.BASE] = base; ctl[C.END] = end; ctl[C.BRK] = base;
+    ctl[C.BASE] = base; ctl[C.END] = end; ctl[C.BRK] = base; ctl[C.TOP] = end; ctl[C.HIGH] = 0;
     ctl[C.USED] = 0; ctl[C.PEAK] = 0; ctl[C.COUNT] = 0; ctl[C.NLARGE] = 0;
     for (let k = 0; k < NCLASS; k++) ctl[C.HEADS + k] = 0;
     this.map.fill(0);
     this.lspan.fill(0);
     this.unlock();
   }
+
+  // the books are every thread's, and so is the flag: one CPU's frames
+  // taken while it is set send another's large blocks up too, which harms
+  // nothing
+  setHigh(on) { Atomics.store(this.ctl, C.HIGH, on ? 1 : 0); }
 
   alloc(n) {
     n = n | 0;
@@ -143,10 +151,10 @@ export class SharedHeap {
       addr = this.pop(k);
     } else {
       span = (n + 15) & ~15;
-      addr = this.takeLarge(span);
+      addr = ctl[C.HIGH] ? this.takeHigh(span) : this.takeLarge(span);
     }
     if (!addr) {
-      if (ctl[C.BRK] + span <= ctl[C.END]) { addr = ctl[C.BRK]; ctl[C.BRK] = addr + span; }
+      if (ctl[C.BRK] + span <= ctl[C.TOP]) { addr = ctl[C.BRK]; ctl[C.BRK] = addr + span; }
       else if (span <= SMALL_MAX) addr = this.takeLarge(span);
       if (!addr) return 0;
     }
@@ -189,6 +197,24 @@ export class SharedHeap {
     return p;
   }
 
+  // from the top: the highest range above the bump region, the bump
+  // region's top, then the highest range below it, each carved from its
+  // high end
+  takeHigh(span) {
+    const ctl = this.ctl, L = this.large;
+    let i = ctl[C.NLARGE] - 1;
+    const carve = j => {
+      L[2 * j + 1] -= span;
+      const a = L[2 * j] + L[2 * j + 1];
+      if (!L[2 * j + 1]) { L.copyWithin(2 * j, 2 * j + 2, 2 * ctl[C.NLARGE]); ctl[C.NLARGE]--; }
+      return a;
+    };
+    for (; i >= 0 && L[2 * i] >= ctl[C.TOP]; i--) if (L[2 * i + 1] >= span) return carve(i);
+    if (ctl[C.TOP] - span >= ctl[C.BRK]) { ctl[C.TOP] -= span; return ctl[C.TOP]; }
+    for (; i >= 0; i--) if (L[2 * i + 1] >= span) return carve(i);
+    return 0;
+  }
+
   takeLarge(span) {
     const ctl = this.ctl, L = this.large, n = ctl[C.NLARGE];
     for (let i = 0; i < n; i++) {
@@ -222,9 +248,19 @@ export class SharedHeap {
       L[2 * lo - 1] += L[2 * lo + 1];
       L.copyWithin(2 * lo, 2 * lo + 2, 2 * n);
       n--;
+      lo--;
     }
-    // a free range that ends at the bump pointer goes back to it
-    if (n && L[2 * n - 2] + L[2 * n - 1] === ctl[C.BRK]) { ctl[C.BRK] = L[2 * n - 2]; n--; }
+    // a free range that ends at the bump pointer goes back to it, and one
+    // that starts at the top's, to that
+    if (L[2 * lo] + L[2 * lo + 1] === ctl[C.BRK]) {
+      ctl[C.BRK] = L[2 * lo];
+      L.copyWithin(2 * lo, 2 * lo + 2, 2 * n);
+      n--;
+    } else if (L[2 * lo] === ctl[C.TOP]) {
+      ctl[C.TOP] = L[2 * lo] + L[2 * lo + 1];
+      L.copyWithin(2 * lo, 2 * lo + 2, 2 * n);
+      n--;
+    }
     ctl[C.NLARGE] = n;
   }
 }

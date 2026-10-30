@@ -108,7 +108,7 @@ const pump = () => {
       let s = '';
       for (let k = 0; k < n; k++) s += String.fromCharCode((words[i + 9 + (k >> 2)] >>> ((k & 3) * 8)) & 0xff);
       if (!partial || !clip || within(clip, words[i + 2], words[i + 3]))
-        cur.push({ x: words[i + 2], y: words[i + 3], s, rgb: words[i + 4], adv: words[i + 7], gen });
+        cur.push({ x: words[i + 2], y: words[i + 3], s, rgb: words[i + 4], size: words[i + 5], font: words[i + 6], adv: words[i + 7], gen });
     }
     if (t === CMD.PRESENT) { frame = cur.slice(); rects = curRects.slice(); imgs = curImgs; presents++; gen++; partial = true; }
     if (t === CMD.CURSOR) pointer = words[i + 2];
@@ -617,6 +617,41 @@ for (let i = 0; i < 30 && !topLine(); i++) { key('', 0, 33); until(topLine, 8); 
 check(until(topLine),
   "the Terminal's Copy All pastes into Text Editor, with what had scrolled off its screen", screen().slice(-600));
 
+// Word Wrap (Format), on from the start: a line longer than the window is
+// wide folds onto the rows below, after a space; off, it is one row, cut
+// at the window's edge, which scrolls across under a bar to the caret
+start('Text Editor');
+until(() => has('Untitled - Text Editor'));
+const WORDS = Array.from({ length: 30 }, (_, i) => 'word' + i).join(' ');
+type(WORDS);
+const wordRows = () => frame.filter(t => /^word\d/.test(t.s)).sort((a, b) => a.y - b.y);
+check(until(() => wordRows().length >= 3 && wordRows().map(t => t.s).join(' ').replace(/ +/g, ' ').trim() === WORDS),
+  'Word Wrap: a long line folds onto the rows below, whole words to a row', wordRows().map(t => `${t.s}@${t.x},${t.y}`).join(' | '));
+check(wordRows().every(t => t.x === wordRows()[0].x && /(word\d+ ?)$/.test(t.s)) && wordRows().every(t => t.s.length <= 80),
+  'each row starts at the left and ends after a word', wordRows().map(t => t.s).join(' | '));
+const hbar = () => rects.some(r => r.h === 16 && r.w > 100 && r.rgb === 0xe0e0e0);
+check(!hbar(), 'with no bar across');
+menu('Format', 'Word Wrap');
+// (the row as it is shown, scrolled across: it may start inside a word)
+const lineRows = () => frame.filter(t => /word\d/.test(t.s));
+check(until(() => lineRows().length === 1 && hbar()), 'Format > Word Wrap off: one row, and a bar across', lineRows().map(t => t.s).join(' | '));
+check(/word29$/.test(lineRows()[0]?.s) && !/^word0 /.test(lineRows()[0]?.s), 'scrolled across to the caret at its end', lineRows()[0]?.s);
+key('HOME');
+check(until(() => wordRows().length === 1 && /^word0 word1 /.test(wordRows()[0].s) && !/word29/.test(wordRows()[0].s)),
+  'Home: back to its start, the rest past the edge', wordRows()[0]?.s);
+// the face and size: every Text Editor window's, at once
+menu('Format', 'Courier New');
+check(until(() => wordRows().length === 1 && wordRows()[0].font === 3 && wordRows()[0].adv === 7),
+  'Format > Courier New draws the text in it (font 3)', JSON.stringify(wordRows()[0]));
+menu('Format', 'Large');
+check(until(() => wordRows().length === 1 && wordRows()[0].font === 3 && wordRows()[0].adv === 8 && wordRows()[0].size === 14),
+  'Format > Large: a grid of 8 pixels a column, 14-pixel text', JSON.stringify(wordRows()[0]));
+check(find('hello from c4ix').every(t => t.adv === 8 && t.font === 3), 'in every Text Editor window', JSON.stringify(find('hello from c4ix')));
+// kept: notepad.cfg, which a new desktop reads (below, after Power Off)
+clickText(/^Terminal - task/);
+type('cat /etc/notepad.cfg\n');
+check(until(() => has(/^wrap 0 font 1 size 2/)), "Format's choices are kept in /etc/notepad.cfg", screen().slice(-300));
+
 // ---- Calculator ------------------------------------------------------------------------
 start('Calculator');
 check(until(() => has('Calculator') && has('Hex') && has('Dec')), 'Go > Calculator opens');
@@ -720,6 +755,14 @@ check(until(() => has('IDE Settings') && has('Colour scheme') && has('Input mode
 clickText('Classic (black on white)', 'last', -8, 5);
 check(until(() => !rects.some(r => r.rgb === 0x000087 && r.w > 300) && rects.some(r => r.rgb === 0xffffff && r.w > 300)), 'Classic draws it black on white', screen());
 clickText('VIM: Normal, Insert and Visual modes', 'last', -8, 5);
+// the font: the preview, and every IDE window, in its face and grid
+check(has('Font') && has('Consolas') && has('Courier New') && has('Lucida Console') && has('Large'), 'Settings offers fixed-width faces and sizes', screen());
+clickText('Courier New', 'last', -8, 5);
+clickText('Large', 'last', -8, 5);
+check(until(() => find('#include').some(t => t.font === 3 && t.adv === 8 && t.size === 14) && find('~').some(t => t.font === 3 && t.adv === 8)),
+  'Courier New, Large: the preview and the IDE behind it in a grid of 8 pixels', JSON.stringify(find('#include')));
+clickText('Normal', 'last', -8, 5);
+check(until(() => find('#include').some(t => t.font === 3 && t.adv === 7 && t.size === 12)), 'and Normal, 7 pixels again, still Courier New', JSON.stringify(find('#include')));
 clickText('OK');
 check(until(() => !has('IDE Settings') && !has(/^-- EDIT --/)), 'VIM mode takes it out of Traditional typing, and OK closes Settings', screen());
 txt('i');
@@ -815,6 +858,10 @@ check(codeRows().some(r => !r.src && insOf(r) === 'JSR  sq') && codeRows().some(
 check(srcText().includes('int main() {') && srcText().includes('printf("%d\\n", sq(7));') && srcText().includes('return 0;'),
   'its source lines between the instructions they made', codeRows().map(r => r.cells.join(' ')).join('\n'));
 check(listed().includes('sq') && listed().includes('main'), 'and its functions listed beside it', listed().join(' '));
+{
+  const h = codeHdr(), code = frame.filter(t => t.adv === 7 && h && t.x >= h.x - 6 && t.y > h.y + 8);
+  check(code.length > 5 && code.every(t => t.font === 3), "the Code tab drawn in the IDE's font, Courier New", JSON.stringify(code.filter(t => t.font !== 3).slice(0, 3)));
+}
 // the same as c4r.js says for the object host c4lc makes of the same source
 {
   const top = new URL('../../', import.meta.url).pathname;
@@ -1023,7 +1070,7 @@ clickText(/^Terminal - task/);
 type('cat /etc/desktop.cfg\n');
 check(until(() => has(/^scheme 1 bg -1/)), 'the choice is kept in /etc/desktop.cfg', screen());
 type('cat /etc/ide.cfg\n');
-check(until(() => has(/^scheme 1 input 1/)), "and the IDE's in /etc/ide.cfg", screen());
+check(until(() => has(/^scheme 1 input 1 font 1 size 1/)), "and the IDE's in /etc/ide.cfg, its font too", screen());
 start('Settings');
 clickText('Defaults');
 check(until(() => rects.some(r => r.rgb === 0xeceff4 && r.w > 300) && !rects.some(r => r.rgb === 0xb8c4cc)), 'Defaults brings the Modern scheme back', screen());
@@ -1201,7 +1248,7 @@ check(until(() => taskLine(0) && filling(800, 570) && !filling(640, 450)), 'back
 // bottom, the picture stretched to it, the windows on it. Left at
 // 1024x768, which the desktop starts at again below.
 const onScreen = () => frame.every(t => t.x >= 0 && t.x < SW && t.y >= 0 && t.y < SH);
-const settingsWin = () => rects.filter(q => q.w === 440 && q.h === 450).pop();
+const settingsWin = () => rects.filter(q => q.w === 590 && q.h === 450).pop();
 start('Settings');
 check(until(() => has('Screen size') && has('640x480') && has('800x600') && has('1024x768')), 'Settings offers three screen sizes', screen());
 for (const [w, h] of [[640, 480], [1024, 768]]) {
@@ -1234,7 +1281,7 @@ check(until(() => sysbox()), 'Settings > Look > Windows 3.1 draws the control-me
   const r = settingsWin();
   const t = r && frame.filter(s => s.s.trimEnd() === 'Settings' && s.y > r.y && s.y < r.y + 22).pop();
   const off = r && t ? Math.round(t.x + 'Settings'.length * 7 / 2 - (r.x + r.w / 2)) : 999;
-  check(Math.abs(off) <= 20, `and a title centred in its bar (${off} px from the middle; the Flat look's is ${27 + 28 - 220})`, JSON.stringify({ r, t }));
+  check(Math.abs(off) <= 20, `and a title centred in its bar (${off} px from the middle; the Flat look's is ${27 + 28 - 295})`, JSON.stringify({ r, t }));
 }
 key('ESC');
 until(() => !has('Look'));
@@ -1283,6 +1330,24 @@ until(() => !has('File name:'));
   check(until(() => ids().some(n => n > top), 800), 'and a Terminal opens again in the room it left', screen().slice(-300));
 }
 
+// ---- Settings > Font: the interface's face and size, kept in /etc/desktop.cfg ---------------------
+start('Settings');
+check(until(() => has('Font') && has('Font size') && has('Tahoma') && has('Verdana') && has('Georgia') && has('The quick brown fox')),
+  'Settings offers the interface\'s font, its face and size, with a sample', screen());
+check(find('The quick brown fox').every(t => t.font === 1 && t.size === 11), 'Tahoma, Normal: the sample in font 1 at 11', JSON.stringify(find('The quick brown fox')));
+clickText('Verdana', 'last', -8, 5);
+clickText('Large', 'last', -8, 5);
+check(until(() => find('The quick brown fox').some(t => t.font === 5 && t.size === 12) && find('Window Title').some(t => t.font === 6 && t.size === 12)),
+  'Verdana, Large: the sample in font 5 at 12, and its bold, 6', JSON.stringify(find('The quick brown fox')));
+check(find('Screen saver').every(t => t.font === 5) && find('Go').every(t => t.font === 5 || t.font === 6) && !frame.some(t => t.font === 1 || t.font === 2),
+  'and the whole interface: the groups, the taskbar, every window', JSON.stringify(frame.filter(t => t.font === 1 || t.font === 2).slice(0, 5)));
+{
+  const r = settingsWin();
+  check(!!r && r.x + r.w <= SW && onScreen(), 'and Settings still fits the screen', JSON.stringify(r));
+}
+key('ESC');
+until(() => !has('Font size'));
+
 // ---- Power Off --------------------------------------------------------------------------------
 start('Power Off...');
 check(until(() => consoleText().includes('desktop: shut down'), 2000), 'Power Off ends the desktop', consoleText().slice(-500) + ' / screen: ' + screen().slice(-400));
@@ -1295,7 +1360,7 @@ check(!/c4ix-sh.c4r[\s\S]*c4ix-sh.c4r/.test(psOut.replace(/^[\s\S]*?ID/, '')), '
 {
   const c0 = consoleText().length;
   typeBytes(vm, new TextEncoder().encode('cat /etc/desktop.cfg\n'));
-  check(until(() => / style 2 sort \d+ res 1024 768 vol 25 mute 1\b/.test(consoleText().slice(c0))), 'the look, the size and the volume are kept in /etc/desktop.cfg', consoleText().slice(c0));
+  check(until(() => / style 2 sort \d+ res 1024 768 vol 25 mute 1 font 1 fsize 2\b/.test(consoleText().slice(c0))), 'the look, the size, the volume and the font are kept in /etc/desktop.cfg', consoleText().slice(c0));
 }
 // the card as it is when the page starts, so the desktop has to set it
 snd.write32(SND.MASTER, 255);
@@ -1306,6 +1371,13 @@ check(until(() => has(/^Terminal - task/) && sysbox(), 800), 'in the Windows 3.1
 // (the 3.1 look lights the taskbar's top one pixel down)
 check(gui.w === 1024 && gui.h === 768 && taskLine(1), 'at 1024x768, as it was left', `${gui.w}x${gui.h}`);
 check(masters.length > nmasters && snd.read32(SND.MASTER) === (15 | MUTE), 'and the sound card at 25%, muted, as it was left', `masters ${masters.slice(-3)}`);
+check(find('Go').some(t => (t.font === 5 || t.font === 6) && t.size === 12) && !frame.some(t => t.font === 1 || t.font === 2), 'in Verdana, Large, as it was left', JSON.stringify(find('Go')));
+start('Text Editor');
+until(() => has('Untitled - Text Editor'));
+type('kept ' + WORDS);
+key('HOME');
+check(until(() => find(/word\d/).length === 1 && find(/^kept word0 /).some(t => t.font === 3 && t.adv === 8 && !/word29/.test(t.s)) && hbar()),
+  "and Text Editor in Courier New, Large, without Word Wrap, as notepad.cfg keeps them", JSON.stringify(find(/word\d/)));
 start('Power Off...');
 check(until(() => consoleText().split('desktop: shut down').length > 2, 2000), 'and Power Off ends it again');
 process.exit(fail);

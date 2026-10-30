@@ -14,7 +14,8 @@
 //   taskmgr.c   System Monitor
 //   apps.c      About and Settings
 //   edit.c      Editor: the IDE, a VIM-mode editor that builds with b4ke
-//   explore.c   the IDE's Code pane: the code a C file compiles to
+//   explore.c   the IDE's Code tab: the code a C file compiles to, or a
+//               compiled file's, with its source
 //   wall.c      the desktop's picture
 //
 // Only the kit and shell.c touch the display. Everything else draws
@@ -92,17 +93,20 @@ void edit_answer(struct win *w, int action, int yes);
 void edit_tick(struct win *w);
 void edit_close(struct win *w);
 
-// explore.c: the IDE's Code pane, which edit.c holds as an opaque int *
+// explore.c: the IDE's Code tab, which edit.c holds as an opaque int *
 int *xp_new();
 void xp_free(int *x);
 int  xp_compile(int *x, char *path, char *dir);   // cc -g -c PATH in the background; 0 if it cannot
-int  xp_tick(int *x);                            // 1 when the compile ended and the pane changed
+int  xp_load(int *x, char *path, char *dir);      // the compiled file PATH itself; 0 if it is not one
+int  xp_tick(int *x);                            // 1 when the compile ended and the tab changed
 int  xp_busy(int *x);
 int  xp_opt(int *x);                             // 1 if it compiles with -O
 void xp_cursor(int *x, int line);                // the cursor on LINE (1-based): its function
 int  xp_band(int *x, int line);                  // the band beside LINE, or -1
-void xp_draw(int *x, int ox, int oy, int cw, int ch, int *cols, int line, int modified);
-int  xp_mouse(int *x, int ev, int px, int py, int cw, int ch);   // a line to go to, or 0, -1, -2
+void xp_draw(int *x, int ox, int oy, int cw, int ch, int *cols, int modified, int focused);
+int  xp_mouse(int *x, int ev, int px, int py, int cw, int ch);   // 1 used, 0 not, 2 a line (xp_goto), -1, -2
+int  xp_key(int *x, int code, int ch, int mods);                 // 1 used, 0 not, 2 a line (xp_goto)
+int  xp_goto(int *x, char *path);                // the line asked for, its file into PATH (128)
 
 void about_open();
 void about_draw(struct win *w, int ox, int oy, int cw, int ch, int focused);

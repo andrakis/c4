@@ -64,7 +64,7 @@ page and type `desktop`.
 | `taskmgr.c` | System Monitor: Applications, Processes (CPU share over the last second, with System and idle rows, and an Interval column), Performance |
 | `apps.c` | Text Editor, Calculator, About |
 | `edit.c` | Editor, the IDE: a VIM-mode editor (`:set novim` for a plain one; arrow keys in every mode) that builds what it edits. `:make`/F5 runs b4ke on the nearest `BUILD.B4K` above the file that names it, or has `cc -O -l c4ix` build a `.c` none names into `/tmp/NAME.c4r`; errors are listed under the text and F8 goes to the next. `:run`/F6 runs the result. Explorer opens source files here |
-| `explore.c` | the IDE's Code pane (View > Code, F7): the C4 code a `.c` file compiles to, by `cc -g`, the function the cursor is in, linked both ways to the text |
+| `explore.c` | the IDE's Code tab (View > Code, F7): the functions, and the C4 code of one with its source lines between the instructions, for a `.c` file (by `cc -g`, following the cursor) or any compiled file opened as it is |
 
 Kernel calls the desktop added (`SYS_AVAIL`, `SYS_CLOEXEC`, `SYS_INTR`)
 and the display registers it uses are described in

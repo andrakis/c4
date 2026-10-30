@@ -5,7 +5,8 @@
 // inside, which is how /bin's are named) runs in a new
 // Terminal, a source file opens in the Editor, anything else in the Text Editor.
 // Object files and libraries (.c4o, .c4l, .c4s) are C4R inside too, but
-// only c4rlink and the loader use them: they say so rather than run.
+// only c4rlink and the loader use them, so they open in the IDE's Code
+// tab, which shows their code; File > Show Code does that for a program.
 // New Folder, Delete (confirmed)
 // and Rename go through the kernel's mkdir, unlink and rename.
 //
@@ -509,7 +510,7 @@ static void open_sel(struct win *w) {
     join(tbuf, f->path, ename(f, f->sel));
     if (f->isdir[f->sel]) go(w, tbuf);
     else if (f->prog[f->sel]) run_command(tbuf);
-    else if (is_linkable(tbuf)) msgbox(w, "Cannot Run", "Object files and libraries are linked into programs, not run.", 0, A_NONE);
+    else if (is_linkable(tbuf)) edit_open(tbuf);
     else if (is_source(tbuf)) edit_open(tbuf);
     else note_open(tbuf);
 }
@@ -522,7 +523,8 @@ int files_open(char *path) {
     w = win_get(i);
     menus[0].title = "File"; menus[1].title = "View"; menus[2].title = "Go";
     file_items[0] = "Open"; file_items[1] = "New Folder"; file_items[2] = "Delete";
-    file_items[3] = "Rename"; file_items[4] = "-"; file_items[5] = "Close"; file_items[6] = 0;
+    file_items[3] = "Rename"; file_items[4] = "Show Code"; file_items[5] = "-"; file_items[6] = "Close";
+    file_items[7] = 0;
     view_items[0] = "Refresh"; view_items[1] = "-"; view_items[6] = "-"; view_items[9] = 0;
     sort_marks();
     go_items[0] = "Up"; go_items[1] = 0;
@@ -835,7 +837,12 @@ void files_command(struct win *w, int menu, int item) {
             }
         }
         else if (item == 3 && f->n) inputbox(w, "Rename", "New name:", ename(f, f->sel), A_RENAME);
-        else if (item == 5) win_close(win_index(w));
+        else if (item == 4 && f->n && f->sel >= 0 && f->sel < f->n && !f->isdir[f->sel]) {
+            // the IDE's Code tab, for a compiled file (edit.c knows one by its header)
+            join(tbuf, f->path, ename(f, f->sel));
+            edit_open(tbuf);
+        }
+        else if (item == 6) win_close(win_index(w));
     } else if (menu == 1) {
         if (item == 0) { load(f); tree_load(f); }
         else if (item >= V_SORT && item < V_SORT + N_SORTS) set_sort((item - V_SORT) * 2 + (theme_sort() & 1));

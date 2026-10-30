@@ -48,13 +48,18 @@
 // editor. Opening a file opens the folders on the way to it. Ctrl+B,
 // View > Files or :Ex shows and hides it.
 //
-// Code. View > Code (F7, :code) shows the C4 code a .c file compiles to,
-// beside the text (below it in a narrow window): explore.c's pane, a
-// cut-down Code Explorer. It compiles the saved file with cc -g, again at
-// each save, shows the function the cursor is in with the instructions
-// from the cursor's line lit, and bands the lines that made code in the
-// gutter; a click on an instruction goes to its line, a double click on
-// a call to the callee. Its -O button compiles with and without -O.
+// Code. View > Code (F7, :code) opens a Code tab beside the text's, in
+// the text's place: explore.c, a cut-down Code Explorer, with the
+// functions down its left and the code a .c file compiles to, its source
+// lines between the instructions. It compiles the saved file with cc -g,
+// again at each save, and shows the function the cursor is in; typing
+// finds another by name, a double click on a call goes to the callee and
+// on a line back to it in the text, and Esc or F7 goes back to the text
+// (whose gutter is banded where that function has code). Its -O button
+// compiles with and without -O. A compiled file -- anything with C4R's
+// header, a program, an object or a library -- opens in the Code tab
+// alone, as it is, its sources read where its map says they are; F6 runs
+// a program.
 //
 // Colours. The text is coloured by what the file's name says it is: C and
 // headers, JavaScript, Lisp, Forth, shell scripts and Makefiles, and B4KE
@@ -64,15 +69,15 @@
 //
 // Edit's Cut, Copy and Paste go through the desktop's clipboard (the
 // kit's, which every window shares): in VIM mode they take a Visual
-// selection. A file that looks binary -- by its name (.c4r, .wad, .tgz
+// selection. Any other file that looks binary -- by its name (.wad, .tgz
 // and the like) or a NUL in its first bytes -- is opened only once asked.
 
 #include "desktop.h"
 
 enum { ECW = 7, ECH = 15, EFONT = 12, UNDO_MAX = 32, BROWS = 8, BLOG_MAX = 300,
        ERR_MAX = 100, REC_MAX = 3000, KEY_F4 = 115, KEY_F6 = 117, KEY_F7 = 118, KEY_F8 = 119 };
-// the Code pane: its least width beside the text, the text's least beside it
-enum { XPW = 250, XPW_MAX = 460, XTW = 300 };
+// the tabs over the text, when the Code tab is open: their height
+enum { TABH = 24 };
 // the file pane: its width, its header, a row; a node's flags; how many
 // entries of one folder it lists
 enum { FW = 180, FHDR = 20, FROW = 16, F_DIR = 1, F_OPEN = 2, F_KIDS = 400, FNAME = 64 };
@@ -139,7 +144,7 @@ struct edit {
     int drag;                                      // the mouse is selecting
     char ask[WK_PATH];                             // a file box's path, in and out
     char pend[128];                                // a binary file waiting to be opened, once asked
-    int *xp; int xshown;                           // the Code pane (explore.c), and whether it is shown
+    int *xp; int xshown, xtab, xobj;               // the Code tab (explore.c): open, in front; a compiled file, shown alone
 };
 
 static struct edit *E(struct win *w) { return (struct edit *)w->st; }
@@ -412,6 +417,7 @@ static void e_undo(struct edit *e, int redo) {
 static void f_reveal(struct edit *e, char *path);
 static void x_compile(struct edit *e);
 static void f_add(struct edit *e, char *path);
+static void e_dirname(char *path, char *out);
 
 static void e_retitle(struct win *w) {
     struct edit *e;
@@ -443,6 +449,7 @@ static int e_load(struct edit *e, char *path) {
     uclose(fd);
     e_settext(e, b, n);
     free(b);
+    if (e->xobj) { e->xobj = 0; e->xshown = 0; e->xtab = 0; }   // text again, after a compiled file
     ui_ncpy(e->path, path, 128);
     e->cy = 0; e->cx = 0; e->want = 0; e->top = 0; e->left = 0;
     e->modified = 0;
@@ -456,6 +463,7 @@ static int e_save(struct edit *e, char *path) {
     int fd, r, n;
     char *t;
     if (!path[0]) { e_say(e, "No file name"); return 0; }
+    if (e->xobj) { e_say(e, "A compiled file is shown, not text: there is nothing to save"); return 0; }
     if ((fd = uopen(path, O_WR + O_CREATE + O_TRUNCATE)) < 0) { e_say(e, "Cannot write that file"); return 0; }
     t = e_gettext(e, &n);
     r = n > 0 ? write(fd, t, n) : 0;
@@ -498,11 +506,39 @@ static int e_binary(char *p) {
     return 0;
 }
 
+// A compiled file: C4R's header, whatever its name
+static int e_isobj(char *p) {
+    int fd, n;
+    if ((fd = uopen(p, O_RD)) < 0) return 0;
+    n = uread(fd, sb, 4);
+    uclose(fd);
+    return n == 4 && sb[0] == 'C' && sb[1] == '4' && sb[2] == 'R';
+}
+// ... into the Code tab alone, as it is: the text is put away
+static int e_open_obj(struct win *w, char *path) {
+    struct edit *e;
+    char dir[128];
+    e = E(w);
+    if (!e->xp) e->xp = xp_new();
+    e_settext(e, "", 0);
+    while (e->un > 0) { --e->un; free(e->utext[e->un]); }
+    e_redo_clear(e);
+    ui_ncpy(e->path, path, 128);
+    e->cy = 0; e->cx = 0; e->want = 0; e->top = 0; e->left = 0; e->modified = 0; e->tsel = 0;
+    e->xobj = 1; e->xshown = 1; e->xtab = 1;
+    e_dirname(path, dir);
+    xp_load(e->xp, path, dir);
+    f_reveal(e, e->path);
+    return 1;
+}
+
 // A file into the editor: 1 opened, 0 cannot, 2 asked first (a binary
-// file, which A_BINARY's answer opens).
+// file, which A_BINARY's answer opens). A compiled file opens in the Code
+// tab.
 static int e_open(struct win *w, char *path, int force) {
     struct edit *e;
     e = E(w);
+    if (!force && e_isobj(path)) return e_open_obj(w, path);
     if (!force && e_binary(path)) {
         ui_ncpy(e->pend, path, 128);
         ui_cpy(sb, "'");
@@ -869,6 +905,7 @@ static void e_make(struct win *w) {
     int bk;
     e = E(w);
     if (e->building) { e_say(e, "A build is already running"); return; }
+    if (e->xobj) return;                          // a compiled file: already built
     if (!e->path[0]) { e_say(e, "Save the file first (:w FILE)"); return; }
     if (e->modified && !e_save(e, e->path)) return;
     e_retitle(w);
@@ -941,22 +978,46 @@ static void e_make(struct win *w) {
 
 static void e_goto_error(struct win *w, int i);
 
-// The Code pane's compile, of the saved file, when the pane is shown
+// The Code tab's compile, of the saved file, when the tab is open
 static void x_compile(struct edit *e) {
     char dir[128];
-    if (!e->xshown || !e->xp || !e->path[0]) return;
+    if (!e->xshown || !e->xp || !e->path[0] || e->xobj) return;
     e_dirname(e->path, dir);
     xp_compile(e->xp, e->path, dir);
 }
+// F7: the Code tab, opened the first time; then from one tab to the other
 static void e_code(struct win *w) {
     struct edit *e;
     e = E(w);
+    if (e->xobj) return;
     if (!e->xp) e->xp = xp_new();
-    e->xshown = !e->xshown;
-    if (!e->xshown) return;
-    if (!e->path[0]) { e_say(e, "Save the file first: the Code pane compiles what is saved"); return; }
-    if (e->modified) e_say(e, "The Code pane shows the file as saved: save to see your changes");
+    if (e->xshown) { e->xtab = !e->xtab; return; }
+    e->xshown = 1; e->xtab = 1;
     x_compile(e);
+}
+// the Code tab closed
+static void x_close(struct edit *e) { e->xshown = 0; e->xtab = 0; }
+
+// A line the Code tab asked for: in this text, or another file's in a
+// window of its own
+static void x_goto(struct win *w) {
+    struct edit *e, *o;
+    struct win *ow;
+    char p[128];
+    int line, i;
+    e = E(w);
+    line = xp_goto(e->xp, p);
+    if (line <= 0) return;
+    if (!e->xobj && ui_eq(p, e->path)) {
+        e->xtab = 0;
+        e->cy = line - 1; e_clamp(e); e->cx = e_firstnb(e, e->cy); e->want = e->cx; e->tsel = 0;
+        if (e->vim && e->mode != M_INSERT) e->mode = M_NORMAL;
+        return;
+    }
+    i = edit_open(p);
+    if (i < 0 || !(ow = win_get(i)) || ow->kind != K_EDIT) return;
+    o = E(ow);
+    o->cy = line - 1; e_clamp(o); o->cx = e_firstnb(o, o->cy); o->want = o->cx;
 }
 
 // Output waiting in the build's pipe, and the Code pane's compile; never
@@ -1802,6 +1863,14 @@ static void e_trad_key(struct win *w, int code, int ch, int mods) {
     e_insert_key(e, code, ch, mods);
 }
 
+// Run (F6): what was built; a compiled file shown, if it is a program
+static void e_run(struct win *w) {
+    struct edit *e;
+    e = E(w);
+    if (!e->xobj) { e_ex(w, "run"); return; }
+    if (ui_ends(e->path, ".c4r")) run_command(e->path);
+}
+
 // The way in for every key. It records the keys of a change as it is
 // made, so '.' can type them again.
 static void e_key(struct win *w, int code, int ch, int mods) {
@@ -1814,10 +1883,17 @@ static void e_key(struct win *w, int code, int ch, int mods) {
     // Ctrl+B: the file pane, as IDEs have it (VIM's page back is not here)
     if ((mods & M_CTRL) && (code == 66 || ch == 'b' || ch == 'B')) { e->fshown = !e->fshown; return; }
     if (code == KEY_F5) { e_make(w); return; }
-    if (code == KEY_F6) { e_ex(w, "run"); return; }
+    if (code == KEY_F6) { e_run(w); return; }
     if (code == KEY_F8) { e_goto_error(w, (mods & M_SHIFT) ? e->ecur - 1 : e->ecur + 1); return; }
     if (code == KEY_F4) { e->bshown = !e->bshown; return; }
     if (code == KEY_F7) { e_code(w); return; }
+    // the Code tab in front: its keys, and Esc back to the text
+    if (e->xshown && e->xtab && e->xp) {
+        k = xp_key(e->xp, code, ch, mods);
+        if (k == 2) x_goto(w);
+        else if (k == 0 && code == KEY_ESC && !e->xobj) e->xtab = 0;
+        return;
+    }
     if (e->mode == M_CMD) {
         e_cmdline_key(w, code, ch);
         // without VIM mode there is no Normal to come back to
@@ -2625,64 +2701,57 @@ static void e_mouse_text(struct win *w, int ev, int x, int y, int cw, int ch) {
     e->drag = ev == E_DOWN;
 }
 
-// The pointer over the window: a text beam over the text, an arrow over
-// the pane, the bars and the build log (as the last draw laid them out)
-// The Code pane's place in a CW by CH area beside the file pane: 1 beside
-// the text, 2 below it, 0 not shown; its rectangle in *PX.. and the text's
-// width and height in *TW, *TH
-static int x_place(struct edit *e, int cw, int ch, int *px, int *py, int *pw, int *ph, int *tw, int *th) {
-    int w;
-    *tw = cw; *th = ch;
-    if (!e->xshown || !e->xp) return 0;
-    w = cw * 2 / 5;
-    if (w < XPW) w = XPW;
-    if (w > XPW_MAX) w = XPW_MAX;
-    if (cw - w - 2 >= XTW) {
-        *px = cw - w; *py = 0; *pw = w; *ph = ch; *tw = cw - w - 2;
-        return 1;
-    }
-    *ph = ch * 2 / 5; *px = 0; *py = ch - *ph; *pw = cw; *th = ch - *ph - 2;
-    return 2;
+// The tabs over the text, while the Code tab is open (a compiled file's
+// window has none: it is all Code tab); the Code tab in front
+static int x_tabs(struct edit *e) { return e->xshown && e->xp && !e->xobj; }
+static int x_front(struct edit *e) { return e->xshown && e->xtab && e->xp; }
+static char *x_labels[2];
+static void x_tab_labels(struct edit *e) {
+    x_labels[0] = e->path[0] ? ui_base(e->path) : "Untitled";
+    x_labels[1] = "Code";
 }
 
+// The pointer over the window: a text beam over the text, an arrow over
+// the tabs, the Code tab, the bars and the build log (as the last draw
+// laid them out)
 int edit_pointer(struct win *w, int x, int y, int cw, int ch) {
     struct edit *e;
-    int px, py, pw, ph, tw, th;
     e = E(w);
     if (f_on(e, cw)) {
         if (x < FW + 2) return PTR_ARROW;
         x = x - FW - 2; cw = cw - FW - 2;
     }
-    if (x_place(e, cw, ch, &px, &py, &pw, &ph, &tw, &th)) {
-        if (x >= tw || y >= th) return PTR_ARROW;
-        cw = tw; ch = th;
-    }
+    if (x_tabs(e)) { if (y < TABH) return PTR_ARROW; y = y - TABH; }
+    if (x_front(e)) return PTR_ARROW;
     if (y < e->tah - (e->hb ? 16 : 0) && x < cw - 17) return PTR_TEXT;
     return PTR_ARROW;
 }
 
-// The file pane on the left when it is shown, the text beside it, and
-// the Code pane beside the text or below it
+// The file pane on the left when it is shown, and beside it the text, or
+// the Code tab in its place, under their tabs
 void edit_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     struct edit *e;
-    int px, py, pw, ph, tw, th, k;
     e = E(w);
+    ec = scheme_cols + ide_scheme * SC_N;
     if (f_on(e, cw)) { f_draw(e, ox, oy, ch); ox = ox + FW + 2; cw = cw - FW - 2; }
-    k = x_place(e, cw, ch, &px, &py, &pw, &ph, &tw, &th);
-    if (k) xp_cursor(e->xp, e->cy + 1);
-    d_clip(ox, oy, tw, th);
-    e_draw_text(w, ox, oy, tw, th, focused);
-    d_clip_end();
-    if (!k) return;
-    if (k == 1) d_rect(ox + tw, oy, 2, ch, C_SHADOW); else d_rect(ox, oy + th, cw, 2, C_SHADOW);
-    d_clip(ox + px, oy + py, pw, ph);
-    xp_draw(e->xp, ox + px, oy + py, pw, ph, ec, e->cy + 1, e->modified);
+    if (x_tabs(e)) {
+        x_tab_labels(e);
+        d_rect(ox, oy, cw, TABH, C_FACE);
+        ui_tabs(ox + 4, oy + 2, x_labels, 2, e->xtab);
+        ui_button(ox + cw - 24, oy + 3, 20, 18, "x", 0, 0);   // closes the Code tab
+        oy = oy + TABH; ch = ch - TABH;
+    }
+    // the function at the cursor: the Code tab's, and the gutter's bands
+    if (e->xshown && e->xp && !e->xobj) xp_cursor(e->xp, e->cy + 1);
+    d_clip(ox, oy, cw, ch);
+    if (x_front(e)) xp_draw(e->xp, ox, oy, cw, ch, ec, e->modified, focused);
+    else e_draw_text(w, ox, oy, cw, ch, focused);
     d_clip_end();
 }
 
 void edit_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     struct edit *e;
-    int t, px, py, pw, ph, tw, th, k;
+    int t;
     e = E(w);
     if (ev == E_UP) { e->drag = 0; return; }
     if (f_on(e, cw)) {
@@ -2694,23 +2763,26 @@ void edit_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
         } else if (x < FW + 2) { e->drag = 0; f_mouse(w, ev, x, y, ch); return; }
         x = x - FW - 2; cw = cw - FW - 2;
     }
-    if ((k = x_place(e, cw, ch, &px, &py, &pw, &ph, &tw, &th))) {
-        // the Code pane: the wheel over it (a wheel's y is how far), its
-        // bar being dragged, or a click in it
-        if (ev == E_WHEEL && k == 1 && x >= px) { xp_mouse(e->xp, ev, 0, y, pw, ph); mark_win_dirty(w); return; }
-        if (ev == E_MOVE && xp_mouse(e->xp, ev, x - px, y - py, pw, ph) == 0 - 2) { mark_win_dirty(w); return; }
-        if (ev != E_MOVE && ev != E_WHEEL && x >= px && y >= py && x < px + pw && y < py + ph) {
+    if (x_tabs(e)) {
+        // a tab picked, or the Code tab closed (a wheel's y is how far, not where)
+        if (ev != E_WHEEL && ev != E_MOVE && y < TABH) {
             e->drag = 0;
-            t = xp_mouse(e->xp, ev, x - px, y - py, pw, ph);
-            if (t > 0) {
-                e->cy = t - 1; e_clamp(e); e->cx = e_firstnb(e, e->cy); e->want = e->cx; e->tsel = 0;
-                if (e->vim && e->mode != M_INSERT) e->mode = M_NORMAL;
-            }
-            mark_win_dirty(w);
+            if (ev != E_DOWN) return;
+            x_tab_labels(e);
+            if (ui_hit(x, y, cw - 24, 3, 20, 18)) { x_close(e); mark_dirty(); return; }
+            t = ui_tab_hit(x, y, 4, 2, x_labels, 2);
+            if (t >= 0) { e->xtab = t; mark_dirty(); }
             return;
         }
-        if (ev != E_MOVE && ev != E_WHEEL && (x >= tw || y >= th)) return;   // the divider
-        cw = tw; ch = th;
+        if (ev != E_WHEEL) y = y - TABH;
+        ch = ch - TABH;
+    }
+    if (x_front(e)) {
+        e->drag = 0;
+        t = xp_mouse(e->xp, ev, x, y, cw, ch);
+        if (t == 2) { x_goto(w); mark_dirty(); return; }
+        if (t != 0) mark_win_dirty(w);
+        return;
     }
     e_mouse_text(w, ev, x, y, cw, ch);
 }
@@ -2895,6 +2967,7 @@ void edit_command(struct win *w, int menu, int item) {
     if (menu == 0) {
         if (item == 0) {
             if (e->modified) { msgbox(w, "IDE", "Save the changes first (Ctrl+S, or :w), or :q! to drop them.", 0, A_NONE); return; }
+            if (e->xobj) { e->xobj = 0; x_close(e); }
             e_settext(e, "", 0); e->path[0] = 0; e->modified = 0; e->cy = 0; e->cx = 0; e->tsel = 0; e_retitle(w);
         }
         else if (item == 1) e_filebox(w, 0);
@@ -2909,7 +2982,7 @@ void edit_command(struct win *w, int menu, int item) {
     if (menu == 1) { e_edit(w, item); return; }
     if (menu == 2) {
         if (item == 0) e_make(w);
-        else if (item == 1) e_ex(w, "run");
+        else if (item == 1) e_run(w);
         else if (item == 2) e_goto_error(w, e->ecur + 1);
         else if (item == 3) e_goto_error(w, e->ecur - 1);
         else if (item == 4) e->bshown = !e->bshown;

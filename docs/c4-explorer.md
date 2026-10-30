@@ -411,12 +411,14 @@ There must be one opcode table, so names cannot drift. It includes the
 fused opcodes (`-mfuse`, which wolf3d uses). A test checks it against
 c4m.c's enum.
 
-**In the IDE, first** (2026-10-30, docs/c4ix-desktop.md part eighteen):
-before W1 there is no `/bin/explore`, so a cut-down explorer is a pane
-of the IDE, `src/c4ix/user/desktop/explore.c`. It compiles the file
-being edited with `cc -g` (S3) and shows the function the cursor is in,
-linked both ways to the text, which is its source pane. When E1 comes,
-its reader and operand naming are the place to start.
+**In the IDE, first** (2026-10-30, docs/c4ix-desktop.md parts eighteen
+and nineteen): before W1 there is no `/bin/explore`, so a cut-down
+explorer is a tab of the IDE, `src/c4ix/user/desktop/explore.c`: a
+function list with a filter, and the code with its source lines between
+the instructions. It compiles the file being edited with `cc -g` (S3)
+and follows the cursor, and it opens any compiled file as it is, its
+sources found by the map. When E1 comes, its reader, operand naming and
+listing are the place to start.
 
 **E1, Code Explorer's window** (`/bin/explore`), a program on the
 desktop (track W). It has three panes:

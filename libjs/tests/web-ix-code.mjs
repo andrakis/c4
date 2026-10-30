@@ -1,7 +1,8 @@
-// web-ix-code.mjs - the IDE's Code pane in a browser (docs/c4ix-desktop.md,
-// part eighteen): a C file written in the IDE, View > Code, and the pane
-// at each of the desktop's sizes (beside the text at 800x600 and
-// 1024x768, below it at 640x480), with a screenshot of each. Over CDP, in
+// web-ix-code.mjs - the IDE's Code tab in a browser (docs/c4ix-desktop.md,
+// parts eighteen and nineteen): a C file written in the IDE, View > Code,
+// and the tab at each of the desktop's sizes, a function found by typing,
+// then two compiled files opened as they are (/bin/ls, and the desktop
+// itself, the biggest program C4IX has), with a screenshot of each. Over CDP, in
 // a tab of its own in one of the user's Chromes (cdp.mjs), against a page
 // served from this tree:
 //
@@ -73,7 +74,7 @@ try {
   ok('the file, written', await shownHas(/"\/tmp\/sq\.c" written/, 5000));
   await hold('Escape');
   await tab.type('code\n');
-  ok(':code compiles it and shows main', await shownHas(/^Code: main \(\d+ words\)/, 60000));
+  ok(':code compiles it and shows main', await shownHas(/^main \(\d+ words, sq\.c:7\)$/, 60000));
   await sleep(800);
   await shot('ix-code-1-800x600');
 
@@ -89,8 +90,35 @@ try {
     const H = await tab.eval("document.getElementById('display').height");
     await clickT((await find('sq.c - IDE')).filter(t => t.y < H - 30).pop());
     await sleep(1200);
-    ok(`${w}x${h}: the pane is there`, await shownHas(/^Code: main/, 5000));
+    ok(`${w}x${h}: the Code tab is there`, await shownHas(/^main \(/, 5000));
     await shot(`ix-code-2-${w}x${h}`);
+  }
+  // a function found by typing, and the IDE closed
+  await tab.type('sq');
+  ok('typing sq finds sq', await shownHas(/^sq \(\d+ words, sq\.c:3\)$/, 5000));
+  await sleep(500);
+  await shot('ix-code-3-typed');
+  await hold('Escape'); await hold('Escape');
+  await hold('Escape');
+  await tab.type('q!\n');
+  ok('and the IDE closes', await tab.waitFor(`!${shown}.some(t => t.s.trimEnd() === 'sq.c - IDE')`, 5000));
+
+  // ---- compiled files, as they are ----
+  for (const [file, name, re] of [['/bin/ls', 'ls', /^main \(\d+ words, ls\.c:\d+\)$/], ['/bin/desktop', 'desktop', /^main \(\d+ words, shell\.c:\d+\)$/]]) {
+    await go('IDE');
+    await shownHas('Untitled - IDE');
+    await hold('Escape');
+    const t0 = Date.now();
+    await tab.type(`e ${file}\n`);
+    ok(`${file} opens in the Code tab, at main`, await shownHas(re, 60000));
+    console.log(`web-ix-code: ${file} shown in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+    await sleep(800);
+    await shot(`ix-code-4-${name}`);
+    const fs = await find(/^File$/);
+    await clickT(fs[fs.length - 1]);
+    await shownHas('Close', 3000);
+    await clickText('Close');
+    ok(`File > Close closes it`, await tab.waitFor(`!${shown}.some(t => t.s.trimEnd() === '${name} - IDE')`, 5000));
   }
   ok('no page errors', tab.errors.length === 0, tab.errors.join('\n  '));
   await tab.goto(`${base}/libjs/web/?persist=reset&mmu=1`);

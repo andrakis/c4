@@ -50,7 +50,8 @@ const files = new LazyDisk(index);
 // VFS's dates, which with their names, sizes and extensions sorts each
 // of Files' orders differently.
 const UPLOADS = [['bravo.dat', 500], ['charlie.c', 9000], ['alpha.txt', 3000]];
-layUploads(files, UPLOADS.map(([n, z]) => [n, new TextEncoder().encode(`uploaded ${n}\n`.repeat(z)).slice(0, z)]));
+// (bravo.dat's last byte is a NUL, so the IDE takes it for a binary file)
+layUploads(files, UPLOADS.map(([n, z]) => { const b = new TextEncoder().encode(`uploaded ${n}\n`.repeat(z)).slice(0, z); if (n === 'bravo.dat') b[z - 1] = 0; return [n, b]; }));
 const gui = new GuiDevice({ w: 640, h: 480 });
 // a sound card too, for the tray's volume: what it is told to play is
 // let go of, but each master volume the desktop sets is kept
@@ -479,10 +480,10 @@ dbl('lib', inList);
 check(until(() => has('Files - /lib') && !!inList(find('libc.c4s')) && has('Shared Library')),
   '/lib lists its libraries as Shared Libraries', screen());
 dbl('libc.c4s', inList);
-check(until(() => has('Object files and libraries are linked into programs, not run.')),
-  'double-clicking one says it does not run, rather than running it', screen());
-key('\n');
-check(until(() => noDialog()) && !has(/missing|unresolved|cannot resolve/i), 'OK dismisses that, and nothing ran', screen());
+check(until(() => has('libc.c4s - IDE') && has(/^\S+ \(\d+ words/) && has(/^\d+ functions$/), 2000),
+  "double-clicking one shows its code in the IDE's Code tab, rather than running it", screen());
+menu('File', 'Close');
+check(until(() => !has('libc.c4s - IDE')) && !has(/missing|unresolved|cannot resolve/i), 'File > Close closes that, and nothing ran', screen());
 key('\b');
 check(until(() => has('Files - /')), 'and up to the root again');
 dbl('tmp', inList);
@@ -701,15 +702,16 @@ check(until(() => termText('survivor').length > 0), 'a new Terminal says a word'
   key('', 0, 35); key('v', 2, 86);
   check(until(() => edLine('worldsurvivor')), "and it pastes into the IDE: the clipboard's text outlived its window", screen());
 }
-// a binary file: asked about first, by a NUL in it or by its name
-key('ESC'); txt('e! /bin/hello\n');
-check(until(() => has(/does not look like text/)), 'opening a binary file asks first (a NUL in /bin/hello)', screen());
+// a binary file: asked about first, by a NUL in it or by its name (a
+// compiled one opens in the Code tab instead: below)
+key('ESC'); txt('e! /home/bravo.dat\n');
+check(until(() => has(/does not look like text/)), 'opening a binary file asks first (a NUL in /home/bravo.dat)', screen());
 clickText('Cancel');
 check(until(() => noDialog() && has('Untitled * - IDE')), 'and Cancel leaves it unopened', screen());
-key('ESC'); txt('e! /lib/libc.c4s\n');
-check(until(() => has(/does not look like text/)), 'a .c4s is binary by its name', screen());
+key('ESC'); txt('e! /usr/share/splash/c4ix.c4p.gz\n');
+check(until(() => has(/does not look like text/)), 'a .gz is binary by its name', screen());
 key('\n');
-check(until(() => noDialog() && has('libc.c4s - IDE')), 'and OK opens it anyway', screen());
+check(until(() => noDialog() && has('c4ix.c4p.gz - IDE')), 'and OK opens it anyway', screen());
 key('n', 2, 78);
 check(until(() => has('Untitled - IDE')), 'Ctrl+N: a new file', screen());
 // Settings: the colours, and VIM mode
@@ -786,19 +788,33 @@ txt('i'); txt(SQ); key('ESC');
 txt(':w\n');
 check(until(() => has(/"\/tmp\/sq\.c" written, 7 lines/)), 'a file with two functions, written', screen());
 txt(':code\n');
-check(until(() => has(/^Code: main \(\d+ words\)/), 4000), ':code compiles it with cc -g, and shows the function the cursor is in', screen());
-// the pane: what is drawn right of its header, by rows
-const paneX = () => { const h = find(/^Code: /)[0]; return h ? h.x - 6 : 1e9; };
-const paneRows = () => {
-  const x0 = paneX(), h = find(/^Code: /)[0];
+check(until(() => has(/^main \(\d+ words, sq\.c:4\)$/), 4000), ':code opens the Code tab, compiles it with cc -g, and shows the function the cursor is in', screen());
+check(has('sq.c') && has('Code') && !has(/^-- (EDIT|INSERT) --/), "in the text's place, under a tab beside the text's", screen());
+// The tab: its code's header, the listing below it by rows, and the list
+// of functions left of it. A row of source has its line's number, then
+// its text where the labels go; an instruction its offset, perhaps a
+// label, the mnemonic further on, and its operand.
+const codeHdr = () => find(/^[\w.]+ \(\d+ words/).pop();
+const codeRows = () => {
+  const h = codeHdr();
+  if (!h) return [];
   const by = new Map();
-  for (const t of frame) if (t.adv === 7 && t.x >= x0 && h && t.y > h.y + 8) { const l = by.get(t.y) || []; l.push(t); by.set(t.y, l); }
-  return [...by.keys()].sort((a, b) => a - b).map(y => by.get(y).sort((a, b) => a.x - b.x).map(t => t.s.trimEnd()));
+  for (const t of frame) if (t.adv === 7 && t.x >= h.x - 6 && t.y > h.y + 8) { const l = by.get(t.y) || []; l.push(t); by.set(t.y, l); }
+  const ow = 4, c1 = ow + 3;
+  return [...by.keys()].sort((a, b) => a - b).map(y => {
+    const r = by.get(y).sort((a, b) => a.x - b.x);
+    const src = r.length > 1 && !/:$/.test(r[1].s) && Math.round((r[1].x - h.x) / 7) < c1 + 4;
+    return { src, cells: r.map(t => t.s.trimEnd()) };
+  });
 };
-// a row is its offset, perhaps a label, the mnemonic and its operand
-const insOf = r => { const k = /:$/.test(r[1] || '') ? 2 : 1; return r[k + 1] ? r[k].padEnd(5) + r[k + 1] : r[k]; };
-check(paneRows().some(r => insOf(r) === 'JSR  sq') && paneRows().some(r => insOf(r) === 'IMM  "%d\\n"'),
-  "main's call to sq, and its string, by name", paneRows().map(r => r.join(' ')).join('\n'));
+const listed = () => { const h = codeHdr(); return h ? frame.filter(t => t.adv === 7 && t.x < h.x - 8 && t.y > h.y + 8).map(t => t.s.trimEnd()) : []; };
+const insOf = r => { const c = r.cells, k = /:$/.test(c[1] || '') ? 2 : 1; return c[k + 1] ? c[k].padEnd(5) + c[k + 1] : c[k]; };
+const srcText = () => codeRows().filter(r => r.src).map(r => r.cells.slice(1).join(' '));
+check(codeRows().some(r => !r.src && insOf(r) === 'JSR  sq') && codeRows().some(r => !r.src && insOf(r) === 'IMM  "%d\\n"'),
+  "main's call to sq, and its string, by name", codeRows().map(r => r.cells.join(' ')).join('\n'));
+check(srcText().includes('int main() {') && srcText().includes('printf("%d\\n", sq(7));') && srcText().includes('return 0;'),
+  'its source lines between the instructions they made', codeRows().map(r => r.cells.join(' ')).join('\n'));
+check(listed().includes('sq') && listed().includes('main'), 'and its functions listed beside it', listed().join(' '));
 // the same as c4r.js says for the object host c4lc makes of the same source
 {
   const top = new URL('../../', import.meta.url).pathname;
@@ -811,37 +827,70 @@ check(paneRows().some(r => insOf(r) === 'JSR  sq') && paneRows().some(r => insOf
     const f = a.funcs.find(g => g.name === 'main');
     const want = [];
     for (let k = f.first; k >= 0 && k < a.insns.length && a.insns[k].off < f.end; k++) want.push(insnText(a, a.insns[k], f));
-    const got = paneRows().map(insOf);
+    const got = codeRows().filter(r => !r.src).map(insOf);
     check(want.length > 3 && want.every((w, i) => got[i] === w), "each of main's instructions as libjs/c4r.js's insnText has it",
       `want:\n${want.join('\n')}\ngot:\n${got.join('\n')}`);
     unlinkSync('/tmp/.td-sq.c'); unlinkSync('/tmp/.td-sq.c4o');
-  } else console.log('test-desktop: (no ./c4sp32: the Code pane is not checked against c4r.js)');
+  } else console.log('test-desktop: (no ./c4sp32: the Code tab is not checked against c4r.js)');
 }
-txt('2G');
-check(until(() => has(/^Code: sq \(\d+ words\)/)), 'the cursor on another function shows that one', screen());
-txt('gg');
 {
-  const mul = find('MUL').filter(t => t.x >= paneX())[0];
+  const h = codeHdr(), t = find('sq').filter(t => h && t.x < h.x - 8).pop();
+  if (t) click(t.x + 3, t.y + 5);
+  check(!!t && until(() => has(/^sq \(\d+ words, sq\.c:1\)$/)) && srcText().includes('return a * a;'), 'a click in the list shows that function', screen());
+}
+type('ma');
+check(until(() => has(/^main \(/) && !listed().includes('sq')), 'typing finds a function by name: the list keeps those it matches', listed().join(' '));
+key('ESC');
+check(until(() => listed().includes('sq') && has(/^main \(/)), 'and Esc forgets what was typed', listed().join(' '));
+key('', 0, 38);
+check(until(() => has(/^sq \(/)), 'Up goes to the function before it in the list', screen());
+{
+  const mul = find('MUL').filter(t => t.x >= codeHdr().x)[0];
   if (mul) click(mul.x + 3, mul.y + 5);
-  check(!!mul && until(() => has('2,1')), "a click on an instruction goes to its line (sq's MUL, line 2)", screen());
-}
-txt('G');
-check(until(() => has(/^Code: main /)), 'G: main again');
-{
-  const call = find('sq').filter(t => t.x >= paneX())[0];
-  if (call) { click(call.x + 3, call.y + 5); click(call.x + 3, call.y + 5); }
-  check(!!call && until(() => has('1,1') && has(/^Code: sq /)), 'a double click on a call goes to the callee', screen());
+  check(!!mul && until(() => has(/^sq\.c:2  MUL/)), "a click on an instruction picks it: its line and what it is, below", screen());
 }
 {
-  const o = find('-O').filter(t => t.x >= paneX())[0];
-  if (o) click(o.x + 3, o.y + 5);
-  check(!!o && until(() => has('Compiling with -g...')), 'its -O button compiles again without -O', screen());
-  check(until(() => has('Compiled with -g') && has(/^Code: sq /), 4000), '... and shows that', screen());
+  const r = find('return a * a;').filter(t => t.x >= codeHdr().x)[0];
+  if (r) { click(r.x + 3, r.y + 5); click(r.x + 3, r.y + 5); }
+  check(!!r && until(() => has('2,1') && !codeHdr()), 'a double click on a line of source goes to it in the text', screen());
 }
 key('F7', 0, 118);
-check(until(() => !has(/^Code: /)), 'F7 hides the pane', screen());
+check(until(() => has(/^sq \(/)), 'F7: the Code tab again, on the function the cursor is in', screen());
+clickText('main', all => all.filter(t => t.x < codeHdr().x - 8).pop());
+check(until(() => has(/^main \(/)), 'main, from the list');
+{
+  const call = find('sq').filter(t => t.x >= codeHdr().x)[0];
+  if (call) { click(call.x + 3, call.y + 5); click(call.x + 3, call.y + 5); }
+  check(!!call && until(() => has(/^sq \(/)), 'a double click on a call goes to the callee', screen());
+}
+key('\b');
+check(until(() => has(/^main \(/)), 'and Backspace comes back', screen());
+{
+  const o = find('-O').filter(t => t.x >= codeHdr().x)[0];
+  if (o) click(o.x + 3, o.y + 5);
+  check(!!o && until(() => has('Compiling with -g...')), 'its -O button compiles again without -O', screen());
+  check(until(() => has('Compiled with -g') && has(/^main \(/), 4000), '... and shows that, the same function', screen());
+}
+key('ESC');
+check(until(() => !codeHdr() && has('2,1') && has('Code')), 'Esc: back to the text, the Code tab still beside it', screen());
+clickText('Code');
+check(until(() => has(/^main \(/)), 'a click on the Code tab shows it again', screen());
+{
+  const xb = find('x').filter(t => t.x > codeHdr().x).pop();
+  if (xb) click(xb.x + 3, xb.y + 5);
+  check(!!xb && until(() => !codeHdr() && !has('Code') && has('2,1')), 'and its x closes it', screen());
+}
 txt(':q!\n');
 check(until(() => !has('sq.c - IDE')), 'and the window closes');
+// a compiled file opens in the Code tab as it is, its source found by its map
+start('IDE');
+until(() => has('Untitled - IDE'));
+txt(':e /bin/ls\n');
+check(until(() => has('ls - IDE') && has(/^main \(\d+ words, ls\.c:\d+\)$/), 2000), 'a program (/bin/ls) opens in the Code tab alone, at main', screen());
+check(until(() => has(/^ls: \d+ functions?, [\d,]+ words of code, a map of \d+ files?$/)) && srcText().length > 3 && !has('Code'),
+  "with the source its map names, from /usr/src", codeRows().map(r => r.cells.join(' ')).join('\n'));
+menu('File', 'Close');
+check(until(() => !has('ls - IDE')), 'File > Close closes it');
 
 // ---- the IDE: its desktop icon, its file pane, colours, its scroll bar -----------------------
 dbl('IDE');

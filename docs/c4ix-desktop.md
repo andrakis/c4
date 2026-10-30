@@ -1018,3 +1018,61 @@ the source pane, and the cursor picks the function.
 Left out, from the page: the function list and its filter, the globals
 and strings, callers and callees, opening an image rather than a source,
 and the tooltips that explain each instruction (opdoc.js).
+
+## Part nineteen: the Code tab, closer to the Code Explorer (asked for 2026-10-30)
+
+What part eighteen made did not work well enough. Beside the text, at
+800x600 and below, it took too much of the window; it showed the code
+with no source in it, so reading it meant finding the line in the text
+by hand, include files and all; there was no way to go to a function but
+by moving the cursor to it; and a compiled file -- every program C4IX
+ships carries a source map now -- could not be opened at all. So it is
+nearer libjs's explorer (libjs/web/explore.html) now:
+
+- [x] **A tab, in the text's place.** View > Code (F7, `:code`) opens a
+      Code tab beside the file's, over the text; F7 or Esc goes from one
+      to the other, a click on a tab does too, and the tabs' `x` closes
+      the Code tab. The file pane stays where it was (Ctrl+B).
+- [x] **The functions down the left**, in the file's order (`A-Z` sorts
+      them by name), the one shown lit, the file's own brighter than
+      those from its headers. Typing finds one: the list keeps the names
+      with what was typed in them, and the first is shown; Esc forgets
+      it, and Up and Down go through the list.
+- [x] **The source between the instructions.** Each line of source the
+      map names is shown above the instructions it made, its number where
+      the offsets are and its text where the labels are, on the gutter's
+      colour; the few lines between two that made code (a `{`, a
+      declaration, a comment) are shown too, as the file has them, but
+      not blank ones. A click on a row lights every row of its line, and
+      the footer says where it came from; a double click on a call (or
+      Enter) goes to the callee, and Back (`<`, Backspace, Alt+Left)
+      comes back; a double click on any other row goes to its line in the
+      text -- this file's in this window, another's (a header) in a
+      window of its own.
+- [x] **A compiled file opens as it is.** The IDE takes anything with
+      C4R's header -- a program, an object, a library, whatever it is
+      called -- as compiled, rather than as a binary file to ask about:
+      it opens in the Code tab alone, at `main` (or the first function
+      by name), with no text and nothing to save. Its sources are read
+      where its map says: as the path is (C4IX's own compiles name their
+      files fully), under /usr (the images are compiled in the
+      repository, whose src/ is /usr/src), or beside the file. F6 runs a
+      program. Files opens objects and libraries in it on a double click,
+      and File > Show Code opens a program there. Without a map, the
+      functions are the symbols', with no source.
+- [x] test-desktop.mjs: `:code` is a tab with the source between the
+      instructions and both functions listed; `main` against
+      `insnText` as before; the list by a click, by typing, by Up; a
+      click on an instruction; a double click on a source line to the
+      text; F7 back; a double click on a call and Backspace; `-O` keeps
+      the function; Esc, the tab, its `x`; `/bin/ls` opened as it is,
+      its source from /usr/src; Files' double click on `libc.c4s`. The
+      binary-file checks use files that are not C4R now (a NUL in an
+      upload, and a `.gz`).
+- [x] `web-ix-code.mjs`: the tab at the three sizes, a function found by
+      typing, then `/bin/ls` and `/bin/desktop` (the biggest program
+      C4IX has, 818 functions over 24 files) opened as they are, timed,
+      with a screenshot of each.
+
+Left out still: the globals and strings, callers and callees, and
+opdoc.js's tooltips.

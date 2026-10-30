@@ -59,11 +59,23 @@ int  gc_collections;  // collect() runs
 int  gc_last_freed;   // cells reclaimed by the last collect
 int  gc_last_live;    // cells found live by the last collect
 
-// Mark state
-char *gc_marks;       // one byte per cell
-int  *gc_worklist;    // explicit mark worklist; a cell enters at most once,
-                      // so gc_ncells entries can never overflow
+// Mark state: a bit a cell, and a worklist of a fixed size.
+//
+// It was a byte a cell and a worklist entry a cell -- five bytes, against
+// the cell's sixteen -- which could never overflow, and which was a
+// quarter of a large compile's arena again: 6.7 MB for c4sc compiling
+// the desktop's edit.c inside C4IX's 64 MB machine, where that was what
+// ran out. A bit a cell is an eighth of a byte. The worklist holds only
+// cells that have children to visit, and a car is walked while its cdr
+// waits (gc_trace), so it holds about as many cells as data nests deep.
+// When it is full all the same, a cell is marked but not queued,
+// gc_wl_over says so, and gc_drain finds it again by walking the arena
+// for marked cells.
+enum { GC_WL_MAX = 16384 };
+char *gc_marks;       // one bit per cell: cell k is bit k & 7 of byte k >> 3
+int  *gc_worklist;    // GC_WL_MAX cells whose children are still to visit
 int   gc_wl_top;
+int   gc_wl_over;     // a marked cell did not fit on the worklist
 
 // The global-environment index, defined here rather than in cells.h only
 // because gc_shutdown below releases it and c4 wants a declaration first.
@@ -78,27 +90,20 @@ int *gc_root_genv;
 int *gc_root_true, *gc_root_false;
 int *gc_root_a, *gc_root_b, *gc_root_c;
 
-// The mark state for gc_ncells cells, or the end of the run (gc_addblock).
-// The mark state for N cells, or 0 when there is not the memory for it.
+// The mark bits for N cells, or 0 when there is not the memory for them.
 int gc_marksfor (int n) {
-	if (!(gc_marks = malloc(n))) return 0;
-	if (!(gc_worklist = (int *)malloc(n * sizeof(int)))) {
-		free(gc_marks);
-		gc_marks = 0;
-		return 0;
-	}
+	if (!(gc_marks = malloc((n + 7) / 8))) return 0;
 	return 1;
 }
 
 // Add a block, thread its cells onto the free list, and resize the mark
-// state. Returns 0 on success. The mark arrays carry nothing between
-// collections, so they are simply rebuilt rather than copied.
+// bits. Returns 0 on success. The bits carry nothing between collections,
+// so they are simply rebuilt rather than copied.
 //
 // They are given back BEFORE the block is asked for, and made again
 // after it. On a machine whose memory is all there is -- a C4IX task in a
 // 64 MB machine -- holding the old ones across the block's malloc is
-// what made the new ones fail: a block of the arena's size, then five
-// bytes a cell of mark state, with the old mark state still in the way
+// what made the new ones fail, when the mark state was five bytes a cell
 // (desktop/wm.c, compiled by c4sc inside C4IX's own rebuild).
 //
 // Without its mark state the collector cannot run at all, and it would
@@ -111,10 +116,8 @@ int gc_addblock (int n) {
 
 	if (gc_nblocks >= GC_MAXBLOCKS) return 1;
 	if (n < 256) n = 256;
-	if (gc_marks)    free(gc_marks);
-	if (gc_worklist) free((char *)gc_worklist);
+	if (gc_marks) free(gc_marks);
 	gc_marks = 0;
-	gc_worklist = 0;
 	// The block, and the mark state for the arena with it. Without room
 	// for both the arena stays as it was -- with its own mark state, or
 	// the run cannot go on -- and the caller may ask for less (gc_collect).
@@ -208,7 +211,10 @@ int gc_init (int ncells) {
 	gc_freelist = 0;
 	gc_free_count = 0;
 	gc_marks = 0;
-	gc_worklist = 0;
+	if (!(gc_worklist = malloc(GC_WL_MAX * sizeof(int)))) {
+		printf("c4sp: cannot allocate the mark worklist\n");
+		return 1;
+	}
 	gc_total_allocs = gc_collections = gc_last_freed = gc_last_live = 0;
 	if (gc_addblock(ncells)) {
 		printf("c4sp: cannot allocate %d-cell arena\n", ncells);
@@ -238,34 +244,78 @@ int gc_cellidx (int w) {
 
 int gc_valid_cell (int w) { return gc_cellidx(w) >= 0; }
 
-// Mark one candidate cell and queue it for its children to be visited.
-void gc_mark (int w) {
-	int idx;
-	idx = gc_cellidx(w);
-	if (idx < 0) return;
-	if (gc_marks[idx]) return;
-	gc_marks[idx] = 1;
-	gc_worklist[gc_wl_top++] = w;
+// Whether a cell of type T holds cells: two (A, B), three (A, B, C), or
+// none. Typed, not conservative: only the slots that hold cell references
+// per the table in cell.h are followed. A cell retained by a stale stack
+// word is on the free list with type T_NIL, so it holds none.
+int gc_kids (int t) {
+	if (t == T_CONS || t == T_ENV || t == T_CONT) return 2;
+	// Closures and kont frames: every used slot is a cell or 0
+	if (t == T_LAMBDA || t == T_MACRO || t == T_FASTMACRO ||
+	    (t >= T_KARG && t <= T_KMACRO)) return 3;
+	return 0;
 }
 
-// Visit queued cells' children. Typed, not conservative: only the slots
-// that hold cell references per the table in cell.h are followed. A cell
-// retained by a stale stack word is on the free list with type T_NIL, so
-// it contributes nothing here.
+// Mark one candidate cell, and queue it if it has children to visit.
+void gc_mark (int w) {
+	int idx, bit;
+	idx = gc_cellidx(w);
+	if (idx < 0) return;
+	bit = 1 << (idx & 7);
+	if (gc_marks[idx >> 3] & bit) return;
+	gc_marks[idx >> 3] = gc_marks[idx >> 3] | bit;
+	if (!gc_kids(((int *)w)[CELL_TYPE])) return;
+	if (gc_wl_top < GC_WL_MAX) gc_worklist[gc_wl_top++] = w;
+	else gc_wl_over = 1;
+}
+
+// Mark a cell's children. B is queued (and C), A is walked here, and so
+// on down: a list's car goes first and its cdr waits, one queued cdr for
+// each level the walk goes down, and when that cdr comes off the queue
+// it takes its own place there for the cdr after it. So what is queued
+// at once is about as many cells as the data nests deep, however long
+// its lists (docs/c4sp-design.md 4.8).
+void gc_trace (int *c) {
+	int k, idx, bit;
+	while (1) {
+		k = gc_kids(c[CELL_TYPE]);
+		if (!k) return;
+		gc_mark(c[CELL_B]);
+		if (k == 3) gc_mark(c[CELL_C]);
+		idx = gc_cellidx(c[CELL_A]);
+		if (idx < 0) return;
+		bit = 1 << (idx & 7);
+		if (gc_marks[idx >> 3] & bit) return;
+		gc_marks[idx >> 3] = gc_marks[idx >> 3] | bit;
+		c = (int *)c[CELL_A];
+	}
+}
+
+// Visit queued cells' children, and theirs, until nothing marked is left
+// unvisited. When the worklist overflowed, the cells left off it are
+// marked, so a walk of the arena finds them: every marked cell's children
+// are marked again (a no-op for those done already), and the walk repeats
+// until one goes by without an overflow.
 void gc_drain () {
-	int *c, t;
-	while (gc_wl_top) {
-		c = (int *)gc_worklist[--gc_wl_top];
-		t = c[CELL_TYPE];
-		if (t == T_CONS || t == T_ENV || t == T_CONT) {
-			gc_mark(c[CELL_A]);
-			gc_mark(c[CELL_B]);
-		} else if (t == T_LAMBDA || t == T_MACRO || t == T_FASTMACRO ||
-		           (t >= T_KARG && t <= T_KMACRO)) {
-			// Closures and kont frames: every used slot is a cell or 0
-			gc_mark(c[CELL_A]);
-			gc_mark(c[CELL_B]);
-			gc_mark(c[CELL_C]);
+	int *base;
+	int b, i, k;
+	while (1) {
+		while (gc_wl_top) gc_trace((int *)gc_worklist[--gc_wl_top]);
+		if (!gc_wl_over) return;
+		gc_wl_over = 0;
+		b = 0;
+		while (b < gc_nblocks) {
+			base = (int *)gc_block[b];
+			i = 0;
+			while (i < gc_block_cells[b]) {
+				k = gc_block_first[b] + i;
+				if (gc_marks[k >> 3] & (1 << (k & 7))) {
+					gc_trace(base + i * CELL__Sz);
+					while (gc_wl_top) gc_trace((int *)gc_worklist[--gc_wl_top]);
+				}
+				++i;
+			}
+			++b;
 		}
 	}
 }
@@ -293,11 +343,12 @@ void gc_collect () {
 	jmp_buf gc_regs;
 #endif
 	int *p, *c, *base;
-	int i, b, freed;
+	int i, b, k, freed;
 
 	++gc_collections;
-	memset(gc_marks, 0, gc_ncells);
+	memset(gc_marks, 0, (gc_ncells + 7) / 8);
 	gc_wl_top = 0;
+	gc_wl_over = 0;
 
 	// Roots: the interpreter globals...
 	gc_mark((int)gc_root_genv);
@@ -334,7 +385,8 @@ void gc_collect () {
 		base = (int *)gc_block[b];
 		i = gc_block_cells[b];
 		while (i--) {
-			if (gc_marks[gc_block_first[b] + i]) ++gc_last_live;
+			k = gc_block_first[b] + i;
+			if (gc_marks[k >> 3] & (1 << (k & 7))) ++gc_last_live;
 			else {
 				c = base + i * CELL__Sz;
 				if (c[CELL_TYPE] == T_STRING && c[CELL_A])

@@ -60,6 +60,7 @@ detail behind it. Each doc is one of three kinds:
 | [c4sp-design.md](c4sp-design.md) | reference | c4sp, the Lisp: cells, the collector, the CEK evaluator |
 | [c4lc-design.md](c4lc-design.md) | reference | c4lc, the C compiler in that Lisp, and how images are built (§13) |
 | [c4sc-design.md](c4sc-design.md) | tracker (done) | c4sc: c4lc's Lisp compiled to C |
+| [link-fold.md](link-fold.md) | reference | c4rlink keeps one copy of the helpers c4lc puts in every object: how, what must still match, and what it saves per image |
 | [c4-float.md](c4-float.md) | tracker (done) | `float` and `double`: softfp (F1), c4lc (F2), the FPU opcode (F3), libc's printf, strtod and math.h (F4), the Calculator (F5), soft against hard (F6) |
 | [compiler-speed.md](compiler-speed.md) | tracker | Making the C4IX build fast. Tracks 0 and A1 are mostly done; track A2 (a hand port of c4lc to C) was overtaken by c4sc and is still open |
 | [inline-small-functions.md](inline-small-functions.md) | tracker | `-minline` in c4lc and c4fc (I6, the fixed point after inlining, is open) |

@@ -218,7 +218,8 @@ u    nrows
     60 such);
   - the code c4lc emits without a symbol: the M4 helpers (`ld16s`,
     `udiv`, ...), the exit-255 stubs and `__c4lc_init`, under names such
-    as `<ld16s>`.
+    as `<ld16s>`. Each object has its own copy of a helper, but c4rlink
+    keeps one per image (link-fold.md).
 
   The table is the map's own, not the S segment's, so it works in a
   stripped image, and the profiler can stop charging the helpers to the

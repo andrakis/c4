@@ -907,6 +907,10 @@ unless given, leaves out whole objects:
   and no `-r` is linked whole, since nothing says what is live; so is an
   image where everything is reached, which is then the same bytes as
   before.
+- **Folding c4lc's helpers** (c4rlink.c, `gc_fold`). Before gc works out
+  what is live, regions with no symbol that are the same code (c4lc's
+  helpers, one copy per object) are folded into the first, so gc drops
+  the rest. `--no-fold` keeps them all. See link-fold.md.
 - **`--start-lib`**: the inputs after it (up to `--end-lib`) are library
   members, as the objects in an `ar` archive are to `ld`. A member is
   linked only if it defines a symbol that something linked names in a

@@ -160,10 +160,13 @@ t = nommu.sh('wait 4\n' + crcs(files));
 check(/read from there/.test(t) && crcLines(t, files).join('\n') === wanted(files).join('\n'), 'without the MMU too', crcLines(t, files).join('\n'));
 
 // ---- a desktop boot that does not fit stops, and says why ----
-const tiny = machine({ mb: 12, store: new Map(), desktop: true });
+// (5 MB: with swap -- memory on demand, paged against its own -- the
+// system fits in 7 now, where it did not in 12 before, docs/c4ix-mmu.md 11;
+// in 5 the root archive's own unpack has too little of the heap)
+const tiny = machine({ mb: 5, store: new Map(), desktop: true });
 tiny.until(() => tiny.halted() || /desktop: running on the display/.test(tiny.text()), 3000);
 t = tiny.text();
 check(tiny.halted() && /out of memory/.test(t) && !/desktop: running/.test(t) && !/store to|Trap type/i.test(t),
-  'a desktop boot in 12 MB stops, saying it ran out of memory', t.slice(-700));
+  'a desktop boot in 5 MB stops, saying it ran out of memory', t.slice(-700));
 
 process.exit(fail);

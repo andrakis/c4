@@ -451,11 +451,17 @@ page fault it would have taken itself, with FK_DMA in FINFO:
 -- an IOMMU's check. Given by the kernel, an address is found the way the
 kernel finds it (the window). The display's ring keeps the space that
 attached it, for the frames the host drains on its own. A page a device
-has used is **pinned**: the host sets PTE_PIN (0x200) in the kernel's
-map, and swap leaves it alone, so the framebuffer and the rings never
-move under the devices that hold them. (Until stage 11 a page the kernel
-had used through the window was pinned too; now its loads and stores look
-the page up each time, below.)
+is given the address of is **pinned**: the host sets PTE_PIN (0x200) in
+the kernel's map, and swap leaves it alone, so the rings and a
+framebuffer's run never move under the devices that hold them. A copy a
+device makes there and then, a page at a time (`arena.dmaRead`,
+`dmaWrite`: a drive's buffers, BLIT8's picture), pins nothing, and nor
+does an access the device was refused. (Until stage 11 a page the kernel
+had used through the window was pinned too, and so, until the fix below,
+was every page a drive had read or written: a program that wrote a
+drive -- `persist` unpacking the root archive onto drive 1 -- had nearly
+all its memory pinned, and in 12 MB it and the loading screen put each
+other's last few pages out for ever.)
 
 **Swap** (stages 7-10). User memory is frames (stage 9): the pages of
 heap blocks, each block taken for one region and its frames that
@@ -549,7 +555,25 @@ has nothing to swap against. Now:
   (`mmu_contig`): a heap block of its size, each page copied or brought
   into its place at the same user address, and the access runs again.
   The device then pins it. ("its 16 KB at 0x... made one run of memory,
-  for a device" in the kernel's log.)
+  for a device" in the kernel's log.) Only the owner's own access is
+  rescued so, and only while no page of the block is lent or pinned:
+  moving those would leave a borrower's map, or a device, on the old
+  frames. A refused access pins nothing (mmu.js `dmaPhys` pins once the
+  whole range has passed), so the ring's first try does not stop its
+  block being made one run.
+- **A borrowed picture is read a page at a time.** The desktop draws a
+  windowed game by borrowing its canvas and palette (SYS_MAPFROM) and
+  handing the display their addresses (GUI_BLIT8), which it reads at the
+  desktop's word. The display read the picture as one run, which the
+  canvas, a block whose frames come from anywhere, was only by chance;
+  and the borrower's fault, unlike the owner's, has no `mmu_contig`. So
+  the desktop was killed -- "a device's read of 0x... (task doom, not
+  allowed)" -- with Doom in a window at 32 MB on four CPUs, where in a 16
+  MB page the frames had happened to come out in order. BLIT8 now reads
+  the picture a row at a time and the palette whole, each through
+  `arena.dmaRead`, a page at a time, each page checked against the space
+  at it as before (gui-device.js `blit8`;
+  `libjs/tests/test-desktop-doom.mjs`).
 - **One run of memory**, when the kernel needs one -- an image as the
   loader reads it, a region for an image or a stack (`mmu_raw`), a big
   buffer (`mmu_kalloc`) -- is made by freeing frame blocks whole
@@ -757,6 +781,46 @@ faults), and stops at its WAD: the kernel's RAM files, not user memory,
 leave no 4 MB run. Both are what the root files read from the drive
 instead of kept in RAM take away.
 
+With the root files on drive 1 (lazy-root, merged), a desktop boot
+(`--desktop`, headless, the loading screen on the display) now comes up
+in 7 MB and more -- it stopped "out of memory" at 12 before, the root
+archive's unpacker's allocation failing -- and in 5 it stops so still:
+the unpacker's reading of the archive does not fit 3 MB of heap. In 6 the
+unpack finishes, and the loading screen pages its own 1.2 MB framebuffer
+in and out at every frame: slowly, the working set bigger than the
+memory. Getting there took four fixes (2026-10-31, c4ix-lend-run):
+
+- A copy by a device pins nothing (above). The 12 MB boot had gone 32
+  billion cycles without coming up.
+- **A region's pages are a region's only while they are its.** A region
+  made whole (an image, a stack, a task's first page) records each of its
+  pages of memory as its (`mmu_pg`); once all of them have moved or gone
+  out, its heap block is the heap's again and another region's -- while
+  the record still said the first one's, and freeing the first wiped the
+  second's. `mmu_uva` then gave the second's user address wrongly: in 8 MB
+  the shell started at another task's half-made page and was killed.
+  A freed frame block's pages are now nobody's, and a region freed clears
+  only the pages still its (`mmu_unsetpg`).
+- **The swap log keeps its own copy** of the task and name a run began
+  with, and says nothing while `mmu_kalloc` reclaims: the kernel's log is
+  a file, which grows through `mmu_kalloc`, so a klog could reach the swap
+  log inside itself, and read a name through a region gone. In 6 MB the
+  kernel followed a garbage pointer from there and libjs halted it.
+- **A device's fault on a page that is out brings the page in**, as the
+  task's own access would; only a refusal of pages that are in (FK_PRESENT:
+  not one run) makes the block one run. Before, every page a drive met out
+  first tried `mmu_contig` on the whole block -- `persist`'s, megabytes,
+  scanned and a heap block that big asked for -- and the 6 MB boot sat in
+  `mmu_pte` for minutes. And the display's framebuffer flip, like BLIT8,
+  copies a line at a time when its memory is not one run, rather than the
+  task being killed where the kernel finds no run to make (in 6 MB the
+  loading screen was).
+
+Memory on demand is not handed out where the heap has under 1 MB that is
+not the kernel's (`mmu_pageroom`, `MMU_MINROOM`): the block is a heap block
+then, which fails as it did before swap. None of the boots above came near
+it; it is a guard against paging in what cannot hold a page or two.
+
 ### What translation cost, and what was tried
 
 The workload for this is the boot with the root archive unpacked
@@ -816,11 +880,14 @@ compare costs depends on the machine and the V8 that runs it.
   The window is all tasks' together: 256 MB of user memory at once,
   swap included.
 - **A device that needs one run of memory** -- the display's event ring,
-  and the framebuffer's fast path -- is given a page that has been out
-  and come back elsewhere only if it is next to the rest. Such memory is
+  and the framebuffer's flip -- is given a page that has been out and
+  come back elsewhere only if it is next to the rest. Such memory is
   pinned once a device has used it, so it does not move after; before,
-  the ring is refused (the task's fault) and the framebuffer copied a
-  page at a time.
+  the access faults, and the owner's block is made one run
+  (`mmu_contig`). A borrower's is not: what a borrower hands a device
+  (BLIT8's picture) is read a page at a time instead, and so is a
+  framebuffer the kernel could not make one run; the ring alone must be
+  one, and a task whose ring cannot be made one is killed.
 - **The light path on SMP** (`sched_light`: malloc and free without the
   kernel lock) cannot swap. It is off while memory is short; a light
   allocation that finds the heap full in between fails as without swap.

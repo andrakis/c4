@@ -45,13 +45,15 @@ export function kernelPte(i32, size, udir, x) {
 // is in the entry's upper 20 bits
 export const PTE_SWAP = 0x400;
 // The memory at user address x by the kernel's map (UDIR), the page
-// pinned; -1 if it maps nothing there
-export function kernelPhys(i32, size, udir, x) {
+// pinned unless PIN is false (the kernel's own loads and stores through
+// the window, which find the page again each time, wherever it is); -1
+// if it maps nothing there
+export function kernelPhys(i32, size, udir, x, pin = true) {
   const w = pteWord(i32, size, udir, x);
   if (w < 0) return -1;
   const pte = i32[w] | 0;
   if (!(pte & 1) || ((pte & -4096) >>> 0) + 4096 > size) return -1;
-  if (!(pte & PTE_PIN)) i32[w] = pte | PTE_PIN;
+  if (pin && !(pte & PTE_PIN)) i32[w] = pte | PTE_PIN;
   return (pte & -4096) | (x & 4095);
 }
 

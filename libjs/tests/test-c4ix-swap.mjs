@@ -1,6 +1,6 @@
 // test-c4ix-swap.mjs -- C4IX's swap (docs/c4ix-mmu.md 11): more memory
-// than the machine has, the blocks of idle tasks put out to the host's
-// swap and brought back when they are touched, every byte as it was.
+// than the machine has, pages put out to the host's swap and brought back
+// when they are touched, every byte as it was.
 //
 // A program compiled inside C4IX does it:
 //   swaptest hold MB SECS   fills MB of blocks of its own, sleeps SECS,
@@ -8,14 +8,15 @@
 //   swaptest spin MB SECS   as hold, but runs the whole time, touching
 //                           one word of its first block and no other
 //   swaptest hog MB         fills MB, and checks every word at once
-//   swaptest probe          takes blocks of a MB until there are no more,
-//                           and says how many: the memory there is
-// Two holders take most of the memory and sleep; the hog then wants more
-// than is left, which only swap can give it. All three must say their
-// memory is intact, and the kernel's log must have blocks going out and
-// coming back. While a holder's block is out, the kernel's view of it
-// (libjs's user window) is the host's copy, word for word; and when every
-// program has gone, the host keeps none of their pages.
+// First one task alone asks for half as much again as the whole machine,
+// which it is given (a block is not memory until it is used), fills it,
+// and finds every word as it left it: its own pages go out to make room
+// for its own. Then two holders take most of the memory and sleep, and
+// the hog wants more than is left, which only swap can give it. All three
+// must say their memory is intact, and the kernel's log must have pages
+// going out and coming back. While a holder's page is out, the kernel's
+// view of it (libjs's user window) is the host's copy, word for word; and
+// when every program has gone, the host keeps none of their pages.
 //
 // CPUS=2 (PARALLEL=1: on threads): two processors, and the first holder
 // spins on CPU 1 rather than sleeping, so that the hog, wanting more than
@@ -58,14 +59,28 @@ int check(int *p, int words, int seed) {
 int main(int argc, char **argv) {
     int **b;
     int mb, secs, i, t0, seed, bad;
-    if (argc > 1 && !ustrcmp(argv[1], "probe")) {
+    if (argc < 3) { uprintf("usage: swaptest hold MB SECS | spin MB SECS | hog MB | one MB\\n"); return 2; }
+    mb = num(argv[2]);
+    if (!ustrcmp(argv[1], "one")) {
+        // one block of MB, set by one memset and copied by one memcpy, each
+        // a single instruction over more pages than memory holds
+        if (!(b = (int **)ualloc(mb * 1048576))) { uprintf("one: out of memory\\n"); return 1; }
+        memset((char *)b, 90, mb * 1048576);
+        memcpy((char *)b + mb * 524288, (char *)b, 4096);
         i = 0;
-        while (ualloc(1048576)) ++i;
-        uprintf("probe: %d MB\\n", i);
+        while (i < mb * 262144) {
+            if (((int *)b)[i] != 0x5a5a5a5a) { uprintf("one %d: corrupted at word %d\\n", getpid(), i); return 1; }
+            ++i;
+        }
+        memcpy((char *)b + mb * 524288, (char *)b, mb * 524288);
+        i = 0;
+        while (i < mb * 262144) {
+            if (((int *)b)[i] != 0x5a5a5a5a) { uprintf("one %d: corrupted at word %d\\n", getpid(), i); return 1; }
+            ++i;
+        }
+        uprintf("one %d: %d MB in one block intact\\n", getpid(), mb);
         return 0;
     }
-    if (argc < 3) { uprintf("usage: swaptest hold MB SECS | hog MB | probe\\n"); return 2; }
-    mb = num(argv[2]);
     if (!ustrcmp(argv[1], "hog")) uaffinity(getpid(), 1);   // CPU 0, where a spinner is not
     seed = getpid() * 1000003;
     b = (int **)ualloc(mb * sizeof(int *));
@@ -103,9 +118,10 @@ int main(int argc, char **argv) {
 `));
 
 // MB: memory (SWAP_MB). What the programs take is made from what the
-// probe finds free: two holders a third of it each, and a hog six tenths,
-// so that together they want more than there is by a half, and the hog
-// alone could have it.
+// heap has free (its registers, read from here: a program could not tell,
+// since what it is given is not memory until it uses it): two holders a
+// third of it each, and a hog six tenths, so that together they want more
+// than there is by a half, and the hog alone could have it.
 const MB = Number(process.env.SWAP_MB || 48);
 let HOLD = 0, HOG = 0;
 const out = [];
@@ -151,12 +167,25 @@ let t = runFor('cc -l c4ix -o /tmp/swaptest.c4r swaptest.c', /c4rlink: wrote|err
 check(back(t) && /c4rlink: wrote/.test(t) && !/error|did not compile/i.test(t), 'swaptest.c compiles inside C4IX', t);
 t = run('dmesg');
 check(/\] swap: the host keeps up to \d+ MB/.test(t), 'the kernel found the host\'s swap', t);
-t = runFor('/tmp/swaptest.c4r probe', /probe: \d+ MB|cannot run/, 40000);
-const free = Number((/probe: (\d+) MB/.exec(t) || [])[1] || 0);
+const free = Math.floor((vm.dev.read32(0x148) - vm.dev.read32(0x144) - vm.dev.read32(0x1c0)) / 1048576);
+
+// one task alone, half as much again as the whole machine: its own pages
+// go out for its own, and come back as it checks them
+const BIG = Math.floor(MB * 3 / 2);
+t = runFor(`/tmp/swaptest.c4r hog ${BIG}`, /hog \d+: \d+ MB (intact|corrupted)|out of memory|corrupted/, 200000);
+check(new RegExp(`hog \\d+: ${BIG} MB intact`).test(t), `one task has ${BIG} MB of a ${MB} MB machine, intact`, t);
+const alone = swapLines(run('dmesg')).filter(l => l.name === 'swaptest.c4r');
+check(alone.some(l => l.dir === 'out') && alone.some(l => l.dir === 'back in'),
+  `its own pages went out (${alone.filter(l => l.dir === 'out').length} runs) and came back (${alone.filter(l => l.dir === 'back in').length})`);
+// ... and as one block, which one memset fills and one memcpy copies: an
+// instruction over more pages than memory holds, which goes on from where
+// its fault stopped it rather than from its first byte (libjs mmu.js block)
+t = runFor(`/tmp/swaptest.c4r one ${BIG}`, /one \d+: \d+ MB in one block intact|out of memory|corrupted/, 200000);
+check(new RegExp(`one \\d+: ${BIG} MB in one block intact`).test(t), `one block of ${BIG} MB, set and copied whole, intact`, t);
 // (with two CPUs the first holder spins, and the hog wants nine tenths:
 // more than the sleeper can give it)
 HOLD = Math.floor(free / 3); HOG = Math.floor(free * (CPUS > 1 ? 9 : 6) / 10);
-check(free >= 6, `a probe finds ${free} MB free`, t);
+check(free >= 6, `the heap has ${free} MB free`);
 
 // two holders, in the background, each until it has its memory
 const h0 = out.length;
@@ -210,8 +239,6 @@ check(outs > 0 && ins > 0, `the kernel's log has blocks going out (${outs}) and 
 const biggest = Math.max(0, ...lines.filter(l => l.dir === 'back in').map(l => l.kb));
 if (process.env.STAGE !== '8') check(biggest > 0 && biggest <= 64, `pages come back a few at a time (at most ${biggest} KB at once)`, t);
 check(!/page fault|panic|nothing is at/.test(text()), 'no fault, no panic', text());
-// what the host still keeps is some other task's idle block (the shell's,
-// say): the programs have all gone, and their pages with them
 // The CPU is sent an IPI if it is in user mode then; if a tick has it
 // waiting for the kernel lock the swapping CPU holds (which it holds
 // while it looks for pages nobody has used), it forgets them on its way
@@ -222,8 +249,13 @@ if (CPUS > 1) {
   check(ipi || later, `a page went from a task another CPU was running, which forgot it first (${[ipi && 'an IPI', later && 'on its way back'].filter(Boolean).join(', ')})`,
     t.split('\n').filter(l => /swap: .* out/.test(l)).join('\n'));
 }
-const kept = vm.dev.swapPages.size;
-const others = lines.filter(l => l.name !== 'swaptest.c4r' && l.dir === 'out').reduce((n, l) => n + l.kb / 4, 0);
-check(kept <= others, `the host keeps ${kept} pages, none of the programs' (others put out: ${others})`,
-  lines.map(x => JSON.stringify(x)).join('\n'));
+// What the host still keeps is pages of tasks still there (the shell's,
+// say: one put out, or one the kernel wrote before the shell touched it):
+// each is a page the kernel's map has out, at its slot. The programs have
+// all gone, and their pages with them.
+const outSlots = new Set();
+for (let p = 0x10000000; p < 0x20000000; p += 4096) { const s = vm.kswap(p); if (s >= 0) outSlots.add(s); }
+const kept = [...vm.dev.swapPages.keys()];
+check(kept.every(s => outSlots.has(s)), `the host keeps ${kept.length} pages, each a page out of a task still there (${outSlots.size} out)`,
+  kept.filter(s => !outSlots.has(s)).join(' '));
 process.exit(fail);

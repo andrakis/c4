@@ -14,6 +14,12 @@
 //   - anything else is carved from a bump pointer;
 //   - and once that is at the end, a small block is carved from a free
 //     range too.
+// While high is set (setHigh: C4IX's swap device, SWAP_HIGH), a large
+// block comes from the top instead: the highest free range that fits, or
+// a second bump pointer coming down from the end. C4IX takes the frames of
+// user memory that way, so that they and the kernel's own long-lived
+// blocks (its RAM files) grow from either end rather than cutting each
+// other into holes.
 // Every block is 8-byte aligned. Fresh memory reads as zero because the
 // arena is zero-filled; recycled memory is not cleared (glibc does not
 // clear it either, and c4m.c:1055 notes programs only rely on the
@@ -46,6 +52,8 @@ export class Heap {
     this.base = (base + 7) & ~7;
     this.end = end & ~7;
     this.brk = this.base;             // bump pointer
+    this.top = this.end;              // ... and the one coming down (high)
+    this.high = false;
     this.sizes = new Map();           // addr -> requested size
     this.spans = new Map();           // addr -> bytes actually reserved
     this.small = new Map();           // class -> [addr, ...]
@@ -112,10 +120,10 @@ export class Heap {
       if (stack && stack.length) addr = stack.pop();
     } else {
       span = (n + 7) & ~7;
-      addr = this.takeLarge(span);
+      addr = this.high ? this.takeHigh(span) : this.takeLarge(span);
     }
     if (!addr) {
-      if (this.brk + span <= this.end) { addr = this.brk; this.brk += span; }
+      if (this.brk + span <= this.top) { addr = this.brk; this.brk += span; }
       // The bump pointer is at the end, but a free range may still have
       // room for a small block. Without this a heap with megabytes free
       // in its ranges refused a hundred bytes once its top was reached:
@@ -131,6 +139,34 @@ export class Heap {
     this.count++;
     if (this.used > this.peak) this.peak = this.used;
     return addr;
+  }
+
+  setHigh(on) { this.high = !!on; }
+
+  // From the top: the highest range above the bump region, the bump
+  // region's top, then the highest range below it -- each carved from its
+  // high end
+  takeHigh(span) {
+    const L = this.large;
+    let i = L.length - 1;
+    for (; i >= 0 && L[i].addr >= this.top; i--) {
+      const r = L[i];
+      if (r.len < span) continue;
+      r.len -= span;
+      const addr = r.addr + r.len;
+      if (!r.len) L.splice(i, 1);
+      return addr;
+    }
+    if (this.top - span >= this.brk) { this.top -= span; return this.top; }
+    for (; i >= 0; i--) {
+      const r = L[i];
+      if (r.len < span) continue;
+      r.len -= span;
+      const addr = r.addr + r.len;
+      if (!r.len) L.splice(i, 1);
+      return addr;
+    }
+    return 0;
   }
 
   takeLarge(span) {
@@ -182,11 +218,15 @@ export class Heap {
       L.splice(lo, 1);
       lo--;
     }
-    // A free range that ends at the bump pointer goes back to it.
-    const last = L[L.length - 1];
-    if (last && last.addr + last.len === this.brk) {
-      this.brk = last.addr;
-      L.pop();
+    // A free range that ends at the bump pointer goes back to it, and one
+    // that starts at the top's, to that.
+    const r = L[lo];
+    if (r.addr + r.len === this.brk) {
+      this.brk = r.addr;
+      L.splice(lo, 1);
+    } else if (r.addr === this.top) {
+      this.top = r.addr + r.len;
+      L.splice(lo, 1);
     }
   }
 

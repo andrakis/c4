@@ -175,6 +175,7 @@ export const STACK_GUARD = 0x1ec;  // r/w: 1 while the boot stack is guarded
 export const SWAP_ADDR = 0x11c;   // w: the page's address in memory, for the next SWAP_CMD
 export const SWAP_CMD  = 0x158;   // w: OP | SLOT << 4 -- 1 out, 2 in (and forget it), 3 forget, 4 forget
                                   // every slot; r: the last one's 0, or -1; after 4, how many slots there are
+                                  // 5: the heap's large blocks from its top while SLOT is 1 (C4IX's frames)
 export const SWAP_PAGE = 4096;
 
 // c4_info() capability bits (c4m.c:206)
@@ -385,13 +386,23 @@ export class Devices {
   swapOp (v) {
     const op = v & 15, slot = v >>> 4, a = this.swapAddr, size = this.arena.size;
     if (op === 4) { this.swapPages.clear(); return this.swapSlots; }
+    // 5: the heap's large blocks from its top while SLOT is 1 (heap.js
+    // setHigh): where C4IX takes its frames, away from its own blocks
+    if (op === 5) {
+      const h = this.machine && this.machine.heap;
+      if (!h || !h.setHigh) return -1;
+      h.setHigh(slot & 1);
+      return 0;
+    }
     if (slot >= this.swapSlots) return -1;
     if (op === 3) { this.swapPages.delete(slot); return 0; }
     if (a < 0x1000 || a + SWAP_PAGE > size) return -1;
     if (op === 1) { this.swapPages.set(slot, this.arena.u8.slice(a, a + SWAP_PAGE)); return 0; }
     if (op === 2) {
+      // a slot never written is a page never touched: zeros (C4IX hands
+      // out memory before it is used, docs/c4ix-mmu.md 11)
       const p = this.swapPages.get(slot);
-      if (!p) return -1;
+      if (!p) { this.arena.u8.fill(0, a, a + SWAP_PAGE); return 0; }
       this.arena.u8.set(p, a);
       this.swapPages.delete(slot);
       return 0;
@@ -400,7 +411,11 @@ export class Devices {
   }
   // A byte of a page put out, for a kernel that reaches it (c4m.js kld8)
   swapRd8 (slot, off) { const p = this.swapPages.get(slot); return p ? p[off & 4095] : 0; }
-  swapWr8 (slot, off, v) { const p = this.swapPages.get(slot); if (p) p[off & 4095] = v; }
+  swapWr8 (slot, off, v) {
+    let p = this.swapPages.get(slot);
+    if (!p) { if (slot >= this.swapSlots) return; this.swapPages.set(slot, p = new Uint8Array(SWAP_PAGE)); }
+    p[off & 4095] = v;
+  }
 
   // What `files` meant before there was more than one drive. Kept as a
   // property so nothing that reaches for dev.files has to know.

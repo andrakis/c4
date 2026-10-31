@@ -415,17 +415,30 @@ export class Mmu {
 
   // The block opcodes in user mode, a page at a time: c4m.js sys() hands
   // MSET, MCMP and MCPY here. A page the task may not use faults part way,
-  // as a store loop would; what was done before it stays done.
+  // as a store loop would; what was done before it stays done, and the
+  // instruction, run again once the kernel has brought the page in, goes on
+  // from there (part, below) rather than from its first byte. Under swap a
+  // block bigger than the memory there is to hold it -- a game's memset of
+  // its 9 MB zone -- would otherwise bring each page in only to put out one
+  // it needs again, for ever.
   block(op) {
     const m = this.m, sp = m.sp, u8 = m.u8;
+    const d = this.ld32(sp + 8), s = this.ld32(sp + 4), n = this.ld32(sp);
+    // the same instruction again: same space, pc, stack and operands
+    const pt = this.part;
+    let k = 0;
+    if (pt && pt.op === op && pt.pc === m.pc && pt.sp === sp && pt.ptbr === this.ptbr &&
+        pt.d === d && pt.s === s && pt.n === n) k = pt.k;
+    this.part = null;
+    const at = k0 => { this.part = { op, pc: m.pc, sp, ptbr: this.ptbr, d, s, n, k: k0 }; return FAULT; };
     if (op === OP.MSET) {
-      const d = this.ld32(sp + 8), v = this.ld32(sp + 4) & 0xff, n = this.ld32(sp);
-      for (let k = 0; k < n;) {
+      const v = s & 0xff;
+      while (k < n) {
         const x = (d + k) | 0;
-        if ((x >>> 0) < 0x1000) { this.st8(x, v); k++; continue; }
+        if ((x >>> 0) < 0x1000) { try { this.st8(x, v); } catch (e) { throw e === FAULT ? at(k) : e; } k++; continue; }
         const run = Math.min(n - k, 4096 - (x & 4095));
         const p = this.page(x, FK.WRITE);
-        if (p < 0) throw FAULT;
+        if (p < 0) throw at(k);
         u8.fill(v, p | (x & 4095), (p | (x & 4095)) + run);
         k += run;
       }
@@ -433,30 +446,35 @@ export class Mmu {
       return STOP.BUDGET;
     }
     if (op === OP.MCMP) {
-      const pa = this.ld32(sp + 8), qa = this.ld32(sp + 4), n = this.ld32(sp);
       let r = 0;
-      for (let k = 0; k < n; k++) {
-        const x = (this.ld8(pa + k) & 255) - (this.ld8(qa + k) & 255);
-        if (x) { r = x; break; }
-      }
+      try {
+        for (; k < n; k++) {
+          const x = (this.ld8(d + k) & 255) - (this.ld8(s + k) & 255);
+          if (x) { r = x; break; }
+        }
+      } catch (e) { throw e === FAULT ? at(k) : e; }
       m.a = r;
       return STOP.BUDGET;
     }
     // MCPY: forward, byte by byte when the ranges overlap that way (as
     // c4m.js does), else a run at a time within both pages
-    const d = this.ld32(sp + 8), s = this.ld32(sp + 4), n = this.ld32(sp);
     if (n > 0) {
       if (d > s && d < s + n) {
-        for (let k = 0; k < n; k++) this.st8(d + k, this.ld8(s + k));
+        try { for (; k < n; k++) this.st8(d + k, this.ld8(s + k)); }
+        catch (e) { throw e === FAULT ? at(k) : e; }
       } else {
-        for (let k = 0; k < n;) {
+        while (k < n) {
           const x = (d + k) | 0, y = (s + k) | 0;
-          if ((x >>> 0) < 0x1000 || (y >>> 0) < 0x1000) { this.st8(x, this.ld8(y)); k++; continue; }
+          if ((x >>> 0) < 0x1000 || (y >>> 0) < 0x1000) {
+            try { this.st8(x, this.ld8(y)); } catch (e) { throw e === FAULT ? at(k) : e; }
+            k++;
+            continue;
+          }
           const run = Math.min(n - k, 4096 - (x & 4095), 4096 - (y & 4095));
           const ps = this.page(y, FK.READ);
-          if (ps < 0) throw FAULT;
+          if (ps < 0) throw at(k);
           const pd = this.page(x, FK.WRITE);
-          if (pd < 0) throw FAULT;
+          if (pd < 0) throw at(k);
           u8.copyWithin(pd | (x & 4095), ps | (y & 4095), (ps | (y & 4095)) + run);
           k += run;
         }

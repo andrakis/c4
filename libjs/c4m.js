@@ -245,16 +245,18 @@ export class Machine {
   // task gave it as it follows its own. kpa: the physical address, or -1.
   //
   // With the kernel's map (UDIR: C4IX's map of every user address there
-  // is, swap having made them no longer an offset) it is the only word,
-  // and a page used through it is pinned (PTE_PIN): the kernel keeps it
-  // out of swap. A page put out to swap is -1 here, and the bytes are the
-  // host's copy (kswap, below). An address it does not map at all is a
+  // is, swap having made them no longer an offset) it is the only word.
+  // A page used through it is not pinned: each load and store looks it up
+  // again, so swap may move it between them (a device's use pins it,
+  // arena.dma: a device may hold on to what it was given). A page put out
+  // to swap is -1 here, and the bytes are the host's copy (kswap, below);
+  // one never written there, a page not touched yet, reads as zeros. An address it does not map at all is a
   // bug in the kernel, which halts the machine there rather than read or
   // write anything else.
   kpa(x) {
     x = x >>> 0;
     if (this.udir) {
-      const p = kernelPhys(this.i32, this.u8.length, this.udir, x);
+      const p = kernelPhys(this.i32, this.u8.length, this.udir, x, false);
       if (p < 0 && this.kswap(x) < 0) this.kmiss(x);
       return p;
     }

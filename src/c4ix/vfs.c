@@ -447,7 +447,7 @@ char *vfs_malloc(int n) {
     char *p;
     vfs_trim();
     while (!(p = (char *)malloc(n))) {
-        if (!vfs_reclaim(n)) return 0;
+        if (!vfs_reclaim(n)) return mmu_kalloc(n);
     }
     return p;
 }

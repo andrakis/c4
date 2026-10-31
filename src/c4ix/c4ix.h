@@ -879,8 +879,9 @@ int  mmu_mapfrom(struct task *t, int va, int n);   // SYS_MAPFROM
 // task they were made for (its stack, image, arguments); ufree gives such
 // a region back, or frees a kernel block. umem_alloc and umem_free: the
 // blocks a task asks for (SYS_SBRK, malloc behind protected mode), small
-// ones from slabs of its own pages; umem_free_all, its heap (ALL:
-// everything it owns).
+// ones from slabs of its own pages, big ones with no memory until each
+// page is used (swap's); umem_free_all, its heap (ALL: everything it
+// owns).
 // loader.c: the image being loaded is a user task's, relocated to the
 // addresses user mode sees (mmu_uva)
 extern int loader_uva;
@@ -896,6 +897,10 @@ int  mmu_user_entry(struct task *t);   // a page that runs T's constructors, mai
 int  mmu_slot();                       // a word user mode may read: a library's data slot
 void mmu_switch(struct task *t);       // T is about to run here: its space
 void mmu_task_done(struct task *t);    // T is gone: its space too
+// malloc for a big kernel buffer: with swap, pages put out to make one
+// run of N bytes when the heap has none (a program's image as the loader
+// reads it, a file's bytes)
+char *mmu_kalloc(int n);
 // Could the running task use the N bytes at P (to write, if W)? And the
 // string at S: its length, or -1. Always yes without the MMU.
 int  uaccess(int p, int n, int w);

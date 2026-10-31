@@ -104,7 +104,7 @@ try {
   ok('and the IDE closes', await tab.waitFor(`!${shown}.some(t => t.s.trimEnd() === 'sq.c - IDE')`, 5000));
 
   // ---- compiled files, as they are ----
-  for (const [file, name, re] of [['/bin/ls', 'ls', /^main \(\d+ words, ls\.c:\d+\)$/], ['/bin/desktop', 'desktop', /^main \(\d+ words, shell\.c:\d+\)$/]]) {
+  for (const [file, name, re] of [['/bin/ls', 'ls', /^main \(\d+ words, ls\.c:\d+\)$/], ['/bin/desktop', 'desktop', /^main \(\d+ words, shell\.c:\d+\)$/], ['/lib/libc.c4s', 'libc.c4s', /^\w+ \(\d+ words, \w+\.c:\d+\)$/]]) {
     await go('IDE');
     await shownHas('Untitled - IDE');
     await hold('Escape');

@@ -216,11 +216,19 @@ top of the GC source file.
 Naive recursive marking uses one C4 frame per cons, so a 10,000-element list
 would exhaust a C4KE task stack. Instead:
 
-* an explicit worklist (a malloc'd array of cell pointers), and
-* cdr-iteration: when marking a cons, loop along the cdr chain and push only
-  the cars.
+* an explicit worklist (a malloc'd array of 16K cell pointers), and
+* car-iteration: when marking a cons, follow the car at once and push the
+  cdr, so each level down leaves one cdr waiting.
 
-Depth then follows structure nesting, not list length.
+Depth then follows structure nesting, not list length. When the worklist is
+full all the same, the cell is marked but not queued, and the collector
+then walks the arena for marked cells to visit what it left off.
+
+The marks are a bitmap, a bit a cell, so the whole mark state is an eighth
+of a byte a cell and 64 KB. It was five bytes a cell -- a byte of mark and
+a worklist entry, so the list could never overflow -- until that was what
+ran out: 6.7 MB of it for c4sc compiling the desktop's edit.c inside
+C4IX's 64 MB machine.
 
 ### 4.9 Strings
 

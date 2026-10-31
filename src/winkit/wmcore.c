@@ -17,6 +17,10 @@ static int next_id;
 static int drag, drag_dx, drag_dy;        // a window's number while its title bar is dragged
 static int sizing, size_edges, size_w0, size_h0, size_x0, size_y0, size_wx, size_wy;
 static int down_win, down_t, down_x, down_y;   // for double clicks
+// a press on a scroll bar's arrow or track (ui_scroll_repeat), pressed
+// again while the button is held: after REP_WAIT, every REP_MS
+enum { REP_WAIT = 400, REP_MS = 50 };
+static int rep_win, rep_x, rep_y, rep_b, rep_next;
 static int menu_win, menu_idx, menu_hot;  // an open drop-down: its window, menu (-1 the
                                           // system menu), hot item
 static int ptr_shape;
@@ -275,6 +279,11 @@ int wk_next_timer() {
             ++k;
         }
         w = w->next;
+    }
+    if (rep_win) {
+        d = rep_next - now;
+        if (d < 0) d = 0;
+        if (best < 0 || d < best) best = d;
     }
     return best;
 }
@@ -633,7 +642,9 @@ static void mouse_down(int x, int y, int button) {
                 return;
             }
             if (ht == HT_CLIENT) {
+                ui_scroll_end();
                 client_mouse(w, E_DOWN, x, y, button);
+                if (ui_scroll_repeat()) { rep_win = i; rep_x = x; rep_y = y; rep_b = button; rep_next = wk_now() + REP_WAIT; }
                 if (w->used && down_win == i && t - down_t < 500 && x - down_x < 5 && down_x - x < 5 && y - down_y < 5 && down_y - y < 5) {
                     client_mouse(w, E_DBL, x, y, button);
                     down_win = 0;
@@ -729,7 +740,7 @@ static void mouse_move(int x, int y, int b) {
 
 static void mouse_up(int x, int y, int b) {
     struct win *w;
-    drag = 0; sizing = 0;
+    drag = 0; sizing = 0; rep_win = 0;
     ui_scroll_end();
     pointer(x, y);
     if ((w = focus())) client_mouse(w, E_UP, x, y, b);
@@ -793,4 +804,15 @@ void wk_tick() {
     w = first;
     while (w) { if (w->used && w->cls->idle) w->cls->idle(w->id); w = w->next; }
     timers();
+    // a scroll bar's arrow or track held: pressed again, as long as it
+    // still says it repeats (the thumb may have come under the pointer)
+    if (rep_win && wk_now() - rep_next >= 0) {
+        if ((w = win_get(rep_win)) && w->used && !w->min) {
+            ui_scroll_end();
+            client_mouse(w, E_DOWN, rep_x, rep_y, rep_b);
+            if (!ui_scroll_repeat()) rep_win = 0;
+            rep_next = wk_now() + REP_MS;
+            wk_invalidate(w->id, 0, 0, 0, 0);
+        } else rep_win = 0;
+    }
 }

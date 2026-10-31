@@ -1076,3 +1076,53 @@ nearer libjs's explorer (libjs/web/explore.html) now:
 
 Left out still: the globals and strings, callers and callees, and
 opdoc.js's tooltips.
+
+## Part twenty: the Code tab, used (asked for 2026-10-30)
+
+What the user found using part nineteen's Code tab:
+
+- [x] **Scroll bars.** The Code tab's bar could not be dragged: its drag
+      named the bar at the tab's right edge, where its click had named it
+      at the code's (the kit tells two bars apart by where they are).
+      And a held arrow scrolled one line, where every other desktop's
+      bar keeps going. Now the kit does that for every bar (winkit
+      `ui.c`, `wmcore.c`): a press on an arrow, or on the track either
+      side of the thumb, says it repeats (`ui_scroll_repeat`), and while
+      the button is held the desktop presses it again, after 400 ms and
+      then every 50 ms, until the thumb comes under the pointer. Every
+      window gets it, and so does grin, which shares the kit.
+- [x] **Shared libraries.** A program linked with `c4rlink -l` names each
+      library it loads in a static global `__c4_needed` (loader.c); the
+      Code tab reads those too, and the libraries those load, as the
+      loader would. Their functions follow the program's in the list, in
+      a colour of their own, a double click on a call into one (a symbol
+      patch, `JSR ureaddir`) goes there, the header names the library
+      ("in libc4ix.c4s"), and the footer lists what is loaded. Each module
+      keeps its own code, patches, symbols and map (`struct xmod`).
+- [x] **The functions that came twice, or eighteen times.** Not the tab's
+      doing: c4lc splices the helpers it calls -- `<udiv>`, `<ld16s>`,
+      the soft float `__c4d_*` and long long `__c4ll_*` -- into every unit
+      that uses them, as static functions, so wolf3d6 carries eighteen
+      copies of `<ld16s>` and libc.c4s three of `<udiv>`. The list now
+      names the unit each copy came with beside it, and the header says
+      "with id_ca.c". Making one copy do for all is c4rlink's to do (a
+      follow-up).
+- [x] **Libraries' sources.** libc.c4s has a map, of ten files, and its
+      own functions showed their source; what showed none were the
+      compiler's helpers, whose map file is c4lc's own (`<c4lc softfp>`,
+      `<c4lc long long>`): C that c4lc keeps in strings of its parser,
+      p:fpsrc and p:llsrc, spliced in as they are. The tab reads them
+      from there, /usr/src/c4sp/lisp/c4lc-parse.lisp, line 1 being the
+      define's own (so a double click opens the parser at the line). A
+      game's sources are not on the disk at all (the root archive has no
+      `games/`): that is the lazily loaded tree, a separate piece of
+      work.
+- [x] **Long source lines** fold onto the rows below, their number on the
+      first; Wrap (in the code's header) turns that off, and a bar
+      across then scrolls the listing.
+- [x] test-desktop.mjs: a long line folded and the bar across with Wrap
+      off; `/bin/ls`'s libraries listed after its functions, and a call
+      into one followed and back; the code's thumb dragged, and its arrow
+      held for a second and a half of machine time; a long long helper's
+      source from the parser; libc.c4s's helpers named by unit.
+      web-ix-code.mjs opens `/lib/libc.c4s` too.

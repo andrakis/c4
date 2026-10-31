@@ -14,6 +14,7 @@
 //   taskmgr.c   System Monitor
 //   apps.c      About and Settings
 //   edit.c      Editor: the IDE, a VIM-mode editor that builds with b4ke
+//   hl.c        the IDE's syntax colouring
 //   explore.c   the IDE's Code tab: the code a C file compiles to, or a
 //               compiled file's, with its source
 //   wall.c      the desktop's picture
@@ -92,6 +93,14 @@ void edit_command(struct win *w, int menu, int item);
 void edit_answer(struct win *w, int action, int yes);
 void edit_tick(struct win *w);
 void edit_close(struct win *w);
+
+// hl.c: the IDE's syntax colouring. The languages, and what a character is.
+enum { L_TEXT = 0, L_C = 1, L_JS = 2, L_LISP = 3, L_FORTH = 4, L_SH = 5, L_B4K = 6, HL_MAX = 1024 };
+enum { HC_TEXT = 0, HC_KW = 1, HC_TYPE = 2, HC_STR = 3, HC_COM = 4, HC_NUM = 5, HC_PRE = 6 };
+int  hl_lang(char *path);                        // L_* by the file's name
+int  hl_inwords(char *s, int n, char *list);     // S[0..N) one of LIST's words (" a b ")
+int  hl_line(char *s, int n, int st, int lang);  // colour a line; the C comment state after it
+int  hl_at(int i);                               // HC_* of the line's character I
 
 // explore.c: the IDE's Code tab, which edit.c holds as an opaque int *
 int *xp_new();

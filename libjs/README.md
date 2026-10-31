@@ -159,6 +159,60 @@ Neither is in `make test`.
 | `make test-libjs` | Unit tests (printf, heap, display, shared memory, desktop, the explorer's `c4r.js` over every image), then every corpus image byte for byte against native `c4m32` (or 64-bit `c4m` where `c4m32` cannot be trusted), the fused-opcode differential, STRC with symbol names, exit status, the PIT, and C4KE and C4IX booting with grep assertions. Builds `c4bb-images` first. |
 | `make test-libjs-ladder` | The Build Ladder headless (`tests/test-c4dos-ladder.mjs`, docs/c4dos-ladder.md): Doom at each rung, BUILD, dosload, b4ke, kboot, and back to `A>`, about seventy seconds. `make c4bb-images`, which it runs first, makes the climb floppy and the ladder disk; `make test-libjs` runs it too when the disk is there. `tests/web-c4dos-ladder.mjs` is its browser check. |
 | `make test-libjs-web` | The page in the user's own Chrome over raw CDP (`LIBJS_CDP`, else ports 9224 then 9222), then the display legs with `--gui`. It never launches a browser; if none answers it says so. |
+| `make test-quick` | The quick tier (`tests/test-quick.sh`): only the parts of `test-libjs` that the paths changed since `c4ix_and_toppings` can reach (`QUICK_BASE=` another branch), `test-c4ix` if C4IX changed, `test-c4ix-rebuild` if b4ke, cc, a `BUILD.B4K` or a compiler did. A desktop-only change runs the desktop part alone; docs alone run nothing. `QUICK_DRY=1` says what it would run. For the edits before a merge: the merge still has the full gate. |
+
+### The gate's time
+
+The full gate is `make c4bb-images test-c4ix test-c4ix-rebuild
+test-libjs`. `test-libjs.sh` is in parts, a function each that depends on
+no other: `PARTS="desktop grin"` runs only those, and `JOBS` sets how many
+run at once (2 by default; `JOBS=1` runs them in turn and prints as it
+goes). It ends with each part's time. `test-rebuild.sh` builds on two
+processors with `b4ke -j 2` (`REBUILD_CPUS=1` for one).
+
+On helios (six cores, 3 GB), with the images already built, before
+(2026-10-30, every suite in turn) and after (2026-10-31). A part's time
+after is its own, run beside another:
+
+| | Before | After |
+|---|---:|---:|
+| `test-libjs` part `grin` (test-grin.mjs) | 1262 s | 69 s |
+| `swap`: test-c4ix-swap.mjs, at `CPUS=2`, test-c4ix-par.mjs | 13 + 213 + 12 s | 46 s |
+| `desktop`: test-desktop.mjs, test-boot-desktop.mjs | 139 s | 115 s |
+| `ladder` (test-c4dos-ladder.mjs) | 99 s | 103 s |
+| `c4ix`: zombie, cpu, sigh, mmu, guard | 90 s | 91 s |
+| `c4m` (test-c4ix-c4m.mjs) | 74 s | 76 s |
+| `ixbuild`: b4ke and cc inside C4IX | 68 s | 71 s |
+| the other ten parts | 94 s | 93 s |
+| **`test-libjs`** | **2063 s** | **332 s** (664 s of parts, two at a time) |
+| **`test-c4ix-rebuild`** | **723 s** | **442 s** |
+| `c4bb-images` (up to date), `test-c4ix` | | 47 + 23 s |
+| **the gate** | **about 47 min** | **15 min** |
+
+The same 823 checks pass either way; memory in use on the whole machine
+peaked at 2.3 GB of 3.4.
+
+What it was, and why:
+
+- `test-grin.mjs` spent twenty of its twenty-one minutes in its own frame
+  reader, not in the machine. While Doom's timedemo played under the
+  maximised Program Manager, grin's redraws under a clip each drew the
+  window's whole frame again, which the reader kept, as a clip leaves the
+  new rectangle covering nothing: a quarter of a million by the end, each
+  filtered at every rectangle drawn. A rectangle drawn again at the same
+  place and size now stands for the old one. The machine ran the same
+  10,985 M cycles and 2134 frames either way.
+- The `CPUS=2` swap test's spinning holder spun for the 300 machine-seconds
+  it was given (3 x 10^10 cycles at 100 MHz), where one CPU's holders
+  sleep them away for nothing. The holders now stop when the test makes
+  `/tmp/swapgo`, once it has looked at the pages that are out.
+- The rebuild runs two compiles at once on two processors.
+- `JOBS=2`: two parts at a time. A part peaks at 330 MB (grin; the
+  desktop 280 MB, the ladder 200 MB), so two fit helios beside its other
+  services.
+- The ladder (b4ke building C4IX inside C4KE is 75 s of its 97), the
+  desktop and `test-c4ix-c4m` (cc compiling C4KE's kernel inside C4IX,
+  31 s) were looked at too: their time is the work they check.
 
 ## Layout
 

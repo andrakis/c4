@@ -15,12 +15,20 @@
 #     and the rebuilt c4cc has to compile a program that runs.
 #
 # Then a second b4ke run must find everything up to date.
-# About nine minutes under node; not in test-libjs.
+# Not in test-libjs.
+#
+# On two processors, a thread each, with b4ke -j 2: the same images from
+# two steps at once, in a 128 MB machine (two compiles want more than
+# 64), in seven minutes rather than twelve. REBUILD_CPUS=1 is the one
+# processor and 64 MB of before; 4 wants more than 128 MB (c4sp cannot
+# have its arena). Every task id is N - 1 higher on N.
 set -u
 cd "$(dirname "$0")/../.."
 IMAGES=src/c4bb/images
 LIBJS="node libjs/cli.js --mmu"
 B=/build
+N=${REBUILD_CPUS:-2} J="" MB=64 U=4
+if [ "$N" -gt 1 ]; then LIBJS="$LIBJS --cpus $N --parallel" J="-j $N" MB=128 U=$((4 + N - 1)); fi
 fail=0
 ok()  { echo "test-rebuild: $1 OK"; }
 bad() { echo "test-rebuild: $1 FAILED"; fail=1; }
@@ -28,8 +36,8 @@ bad() { echo "test-rebuild: $1 FAILED"; fail=1; }
 LC_PROGS="hello uhello echo wc cat sh ps bench cycles ls mkdir top spin fmt gui vfsload b4ke cc tar gunzip crc32 splash persist desktop libctest pictest unixtest dmesg"
 CC_PROGS="c4cc c4rdump c4rlink cpp c4 c4m"
 {
-    echo "wait 4"
-    echo "b4ke -B -C /usr"
+    echo "wait $U"
+    echo "b4ke -B $J -C /usr"
     for u in $LC_PROGS; do echo "crc32 $B/bin/c4ix-$u.c4r"; done
     for t in $CC_PROGS; do echo "crc32 $B/bin/$t.c4r"; done
     echo "crc32 $B/c4ix.c4r"
@@ -46,7 +54,7 @@ CC_PROGS="c4cc c4rdump c4rlink cpp c4 c4m"
     echo "echo installed-ls-runs | wc"
     echo "exit"
 } > .rebuild.cmds
-out=$(timeout 1500 $LIBJS -m 64 -d $IMAGES/disk $IMAGES/c4ix32.c4r < .rebuild.cmds 2>&1)
+out=$(timeout 1500 $LIBJS -m $MB -d $IMAGES/disk $IMAGES/c4ix32.c4r < .rebuild.cmds 2>&1)
 rm -f .rebuild.cmds
 
 # all built, and nothing failed or overran on the way (the second run

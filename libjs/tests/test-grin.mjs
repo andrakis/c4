@@ -136,6 +136,12 @@ const pump = () => {
         cur = cur.filter(s => s.gen === gen || !within(v, s.x, s.y));
         curRects = curRects.filter(q => q.gen === gen || !(within(v, q.x, q.y) && within(v, q.x + q.w - 1, q.y + q.h - 1)));
       }
+      // The same rectangle again, from an earlier frame, stands for it. A
+      // redraw under a clip draws a window's whole frame, which the clip
+      // leaves covering nothing; each was kept, and by the end of the
+      // timedemo (below) a quarter of a million of them were filtered at
+      // every rectangle drawn: twenty minutes of the test's twenty-one.
+      if (partial) curRects = curRects.filter(q => q.gen === gen || q.x !== r.x || q.y !== r.y || q.w !== r.w || q.h !== r.h || q.rgb !== r.rgb);
       curRects.push(r);
     }
     if (t === CMD.TEXT2) {

@@ -1107,8 +1107,10 @@ What the user found using part nineteen's Code tab:
       that uses them, as static functions, so wolf3d6 carries eighteen
       copies of `<ld16s>` and libc.c4s three of `<udiv>`. The list now
       names the unit each copy came with beside it, and the header says
-      "with id_ca.c". Making one copy do for all is c4rlink's to do (a
-      follow-up).
+      "with id_ca.c". Making one copy do for all was c4rlink's to do, and
+      it does now (docs/link-fold.md): what still comes more than once is
+      what cannot fold, `__c4fp_hw` and its FPU wrappers, whose statics
+      are each unit's.
 - [x] **Libraries' sources.** libc.c4s has a map, of ten files, and its
       own functions showed their source; what showed none were the
       compiler's helpers, whose map file is c4lc's own (`<c4lc softfp>`,
@@ -1126,7 +1128,7 @@ What the user found using part nineteen's Code tab:
       off; `/bin/ls`'s libraries listed after its functions, and a call
       into one followed and back; the code's thumb dragged, and its arrow
       held for a second and a half of machine time; a long long helper's
-      source from the parser; libc.c4s's helpers named by unit.
+      source from the parser; libc.c4s's `<udiv>` once, folded.
       web-ix-code.mjs opens `/lib/libc.c4s` too.
 
 ## Part twenty-one: the games' sources, read when they are opened (asked for 2026-10-30)

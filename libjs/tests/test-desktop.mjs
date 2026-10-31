@@ -483,9 +483,10 @@ dbl('libc.c4s', inList);
 check(until(() => has('libc.c4s - IDE') && has(/^\S+ \(\d+ words/) && has(/^\d+ functions$/), 2000),
   "double-clicking one shows its code in the IDE's Code tab, rather than running it", screen());
 {
+  // c4rlink folds the copies c4lc spliced into each unit (docs/link-fold.md)
   const copies = find('<udiv>');
-  check(copies.length > 1 && copies.every(t => frame.some(u => u.y === t.y && u.x > t.x && /\.c$/.test(u.s))),
-    "the compiler's helpers, a copy in each unit that called one, each named by its unit", screen());
+  check(copies.length === 1 && !frame.some(u => u.y === copies[0].y && u.x > copies[0].x && /\.c$/.test(u.s)),
+    "the compiler's helpers, one copy of each, named by no unit", screen());
 }
 menu('File', 'Close');
 check(until(() => !has('libc.c4s - IDE')) && !has(/missing|unresolved|cannot resolve/i), 'File > Close closes that, and nothing ran', screen());

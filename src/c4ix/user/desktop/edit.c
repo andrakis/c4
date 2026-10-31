@@ -9,7 +9,7 @@
 // simple and, for the files this machine holds, cheap.
 //
 // Two ways of typing, chosen in its Settings (View > Settings, kept in
-// /etc/ide.cfg with the colour scheme). Traditional, the default, is Text
+// /etc/ide.cfg with the colour scheme and the font). Traditional, the default, is Text
 // Editor's: typing always types, Shift with the moving keys or a drag of
 // the mouse selects, and typing replaces the selection; Ctrl+X, C and V
 // (and Shift+Del, Ctrl+Ins, Shift+Ins) cut, copy and paste, Ctrl+A selects
@@ -74,8 +74,19 @@
 
 #include "desktop.h"
 
-enum { ECW = 7, ECH = 15, EFONT = 12, UNDO_MAX = 32, BROWS = 8, BLOG_MAX = 300,
+enum { UNDO_MAX = 32, BROWS = 8, BLOG_MAX = 300,
        ERR_MAX = 100, REC_MAX = 3000, KEY_F4 = 115, KEY_F6 = 117, KEY_F7 = 118, KEY_F8 = 119 };
+// The text grid: a cell's width and height, the font's size and face.
+// Settings' font sets them (the kit's grids, wk_grid), for every IDE
+// window and its Code tab (explore.c)
+int ide_cw = 7;
+int ide_ch = 15;
+int ide_fs = 12;
+int ide_face = F_MONO;
+#define ECW ide_cw
+#define ECH ide_ch
+#define EFONT ide_fs
+#define EFACE ide_face
 // the tabs over the text, when the Code tab is open: their height
 enum { TABH = 24 };
 // the file pane: its width, its header, a row; a node's flags; how many
@@ -100,9 +111,10 @@ static int scheme_cols[N_SCHEMES * SC_N] = {
     // Classic: the IDE's first colours
     0x000000, 0x0000b0, 0x007878, 0xa01818, 0x2a8a2a, 0x905000, 0x8020a0,
     0xffffff, 0xe8e8e8, SHADOW, 0xa8c8ff, 0x6060c0, 0x000000, 0xffffff };
-// Settings: the scheme and the input mode (VIM's or not), for every IDE
-// window, kept in /etc/ide.cfg
-static int ide_scheme, ide_vim, ide_loaded;
+// Settings: the scheme, the input mode (VIM's or not) and the font's
+// face and size, for every IDE window, kept in /etc/ide.cfg
+static int ide_scheme, ide_vim, ide_loaded, ide_mono;
+static int ide_size = 1;
 static int *ec;                       // the scheme in use: ec[HC_KW] and the rest
 
 struct edit {
@@ -2235,7 +2247,10 @@ static int e_wseg(struct edit *e, int y, int x, int cols) {
     return s < h ? s : h - 1;
 }
 
-enum { BHDR = ECH + 2, BLOG_H = BROWS * ECH + 2, BPANE = BHDR + BLOG_H + 16 };
+// the build pane: its header (a line of the interface's text), its log (BROWS of the grid's)
+enum { BHDR = 17 };
+#define BLOG_H (BROWS * ECH + 2)
+#define BPANE (BHDR + BLOG_H + 16)
 
 static void e_draw_text(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     struct edit *e;
@@ -2301,7 +2316,7 @@ static void e_draw_text(struct win *w, int ox, int oy, int cw, int ch, int focus
             if (gw && seg == 0) {
                 ui_num(num, line + 1);
                 k = ui_len(num);
-                d_textn(ox + 2 + (4 - k) * ECW, y, ec[SC_GUTFG] == SHADOW ? C_SHADOW : ec[SC_GUTFG], EFONT, F_MONO, ECW, num, k);
+                d_textn(ox + 2 + (4 - k) * ECW, y, ec[SC_GUTFG] == SHADOW ? C_SHADOW : ec[SC_GUTFG], EFONT, EFACE, ECW, num, k);
             }
             // the selection behind the text
             if (e_sel_on(e)) {
@@ -2319,7 +2334,7 @@ static void e_draw_text(struct win *w, int ox, int oy, int cw, int ch, int focus
                 c = e_hcol(a + x);
                 k = x + 1;
                 while (k < n && e_hcol(a + k) == c) ++k;
-                d_textn(sx + x * ECW, y, c, EFONT, F_MONO, ECW, e->ln[line] + a + x, k - x);
+                d_textn(sx + x * ECW, y, c, EFONT, EFACE, ECW, e->ln[line] + a + x, k - x);
                 x = k;
             }
             // the cursor: a block in Normal, a bar in Insert
@@ -2328,7 +2343,7 @@ static void e_draw_text(struct win *w, int ox, int oy, int cw, int ch, int focus
                 if (e->vim && e->mode != M_INSERT) {
                     d_rect(x, y, ECW, ECH, ec[SC_CUR]);
                     c = e_char(e, line, e->cx);
-                    if (c != 10) { num[0] = c; d_textn(x, y, ec[SC_CURFG], EFONT, F_MONO, ECW, num, 1); }
+                    if (c != 10) { num[0] = c; d_textn(x, y, ec[SC_CURFG], EFONT, EFACE, ECW, num, 1); }
                 } else d_rect(x, y, 2, ECH - 1, ec[SC_CUR]);
             }
             y = y + ECH;
@@ -2336,7 +2351,7 @@ static void e_draw_text(struct win *w, int ox, int oy, int cw, int ch, int focus
         }
         ++line;
     }
-    while (r < rows) { d_text(sx, y, ec[SC_TILDE], F_MONO, "~"); y = y + ECH; ++r; }
+    while (r < rows) { d_textn(sx, y, ec[SC_TILDE], EFONT, EFACE, ECW, "~", 1); y = y + ECH; ++r; }
     ui_scrollbar(ox + cw - 17, oy, tah - (hb ? 16 : 0), e->nl, rows, e->top);
     if (hb) {
         ui_hscrollbar(ox, oy + tah - 16, cw - 17, e->maxw + 1, cols, e->left);
@@ -2372,7 +2387,7 @@ static void e_draw_text(struct win *w, int ox, int oy, int cw, int ch, int focus
             if (i == e->bsel) { d_rect(ox, by + 1 + k * ECH, cw - 17, ECH, 0x304070); c = C_WHITE; }
             n = ui_len(e->blog[i]) - e->bleft;
             if (n > e->bcols) n = e->bcols;
-            if (n > 0) d_textn(ox + 4, by + 1 + k * ECH, c, EFONT, F_MONO, ECW, e->blog[i] + e->bleft, n);
+            if (n > 0) d_textn(ox + 4, by + 1 + k * ECH, c, EFONT, EFACE, ECW, e->blog[i] + e->bleft, n);
             ++k; ++i;
         }
         ui_scrollbar(ox + cw - 17, by, BLOG_H, e->blogn, BROWS, e->btop);
@@ -2386,7 +2401,7 @@ static void e_draw_text(struct win *w, int ox, int oy, int cw, int ch, int focus
     if (e->mode == M_CMD) {
         sb[0] = e->cmdkind; sb[1] = 0;
         ui_cat(sb, e->cmd);
-        d_textn(ox + 4, sy + 2, C_DARK, EFONT, F_MONO, ECW, sb, ui_len(sb));
+        d_textn(ox + 4, sy + 2, C_DARK, EFONT, EFACE, ECW, sb, ui_len(sb));
         if (focused) d_rect(ox + 4 + ui_len(sb) * ECW, sy + 2, 2, ECH - 1, C_DARK);
     } else {
         if (e->msg[0]) ui_cpy(sb, e->msg);
@@ -2403,7 +2418,7 @@ static void e_draw_text(struct win *w, int ox, int oy, int cw, int ch, int focus
     ui_cat(sb, ",");
     ui_num(sb + ui_len(sb), e->cx + 1);
     k = ui_len(sb);
-    d_textn(ox + cw - 12 - k * ECW, sy + 2, C_DARK, EFONT, F_MONO, ECW, sb, k);
+    d_textn(ox + cw - 12 - k * ECW, sy + 2, C_DARK, EFONT, EFACE, ECW, sb, k);
 }
 
 // the view moved to T: the cursor comes along, as the redraw keeps it in view
@@ -2612,29 +2627,38 @@ void edit_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     e_mouse_text(w, ev, x, y, cw, ch);
 }
 
-// ---- Settings: the colour scheme and the input mode ------------------------------------------
+// ---- Settings: the colour scheme, the input mode and the font --------------------------------
 //
 // One page for every IDE window, a window of its own: each choice is used
 // at once, in every IDE window open, and kept in /etc/ide.cfg as
-// "scheme N input M" (M 1 for VIM), as Settings keeps the desktop's in
+// "scheme N input M font F size S" (M 1 for VIM; F and S the kit's
+// fixed-width faces and sizes), as Settings keeps the desktop's in
 // /etc/desktop.cfg.
 
 static char icfg[64];
 
+// the grid the font makes
+static void ide_grid() {
+    ide_face = wk_mono_font(ide_mono);
+    wk_grid(ide_size, &ide_fs, &ide_cw, &ide_ch);
+}
+
 static void ide_load() {
     int fd, n, i, v;
     ide_loaded = 1;
-    if ((fd = uopen("/etc/ide.cfg", O_RD)) < 0) return;
-    n = uread(fd, icfg, 60);
-    uclose(fd);
-    if (n <= 0) return;
+    n = 0;
+    if ((fd = uopen("/etc/ide.cfg", O_RD)) >= 0) { n = uread(fd, icfg, 60); uclose(fd); }
+    if (n < 0) n = 0;
     icfg[n] = 0;
     i = 0;
     while (i < n) {
         if (icfg[i] == 's' && icfg[i + 1] == 'c' && icfg[i + 6] == ' ' && e_digits(icfg + i + 7, &v) > 0 && v < N_SCHEMES) ide_scheme = v;
         if (icfg[i] == 'i' && icfg[i + 1] == 'n' && icfg[i + 5] == ' ' && e_digits(icfg + i + 6, &v) > 0) ide_vim = v != 0;
+        if (icfg[i] == 'f' && icfg[i + 1] == 'o' && icfg[i + 4] == ' ' && e_digits(icfg + i + 5, &v) > 0 && v < WK_FACES) ide_mono = v;
+        if (icfg[i] == 's' && icfg[i + 1] == 'i' && icfg[i + 4] == ' ' && e_digits(icfg + i + 5, &v) > 0 && v < WK_SIZES) ide_size = v;
         ++i;
     }
+    ide_grid();
 }
 
 static void ide_save() {
@@ -2642,7 +2666,11 @@ static void ide_save() {
     if ((fd = uopen("/etc/ide.cfg", O_WR + O_CREATE + O_TRUNCATE)) < 0) return;
     ui_cpy(icfg, "scheme ");
     ui_num(icfg + ui_len(icfg), ide_scheme);
-    ui_cat(icfg, ide_vim ? " input 1\n" : " input 0\n");
+    ui_cat(icfg, ide_vim ? " input 1 font " : " input 0 font ");
+    ui_num(icfg + ui_len(icfg), ide_mono);
+    ui_cat(icfg, " size ");
+    ui_num(icfg + ui_len(icfg), ide_size);
+    ui_cat(icfg, "\n");
     write(fd, icfg, ui_len(icfg));
     uclose(fd);
 }
@@ -2666,11 +2694,22 @@ static void ide_set(int scheme, int vim) {
     mark_dirty();
 }
 
+// the font chosen: every IDE window, and its Code tab, laid out again in it
+static void ide_set_font(int face, int size) {
+    ide_mono = face; ide_size = size;
+    ide_grid();
+    ide_save();
+    mark_dirty();
+}
+
 // a piece of the preview: n characters of s in colour hc, along from *x
 static void iset_piece(int *x, int y, int hc, char *s) {
-    d_textn(*x, y, ec[hc], EFONT, F_MONO, ECW, s, ui_len(s));
+    d_textn(*x, y, ec[hc], EFONT, EFACE, ECW, s, ui_len(s));
     *x = *x + ui_len(s) * ECW;
 }
+
+// the font group's columns: a face, or a size, in each
+static int iset_col[3] = { 18, 112, 222 };
 
 static void iset_draw(int w, int cw, int ch, int focused) {
     int i, x, y;
@@ -2681,9 +2720,14 @@ static void iset_draw(int w, int cw, int ch, int focused) {
     ui_group(8, 82, cw - 16, 66, "Input mode");
     ui_radio(18, 102, "Traditional: type at once, as in Text Editor", !ide_vim);
     ui_radio(18, 122, "VIM: Normal, Insert and Visual modes", ide_vim);
-    // the preview, in the scheme chosen
+    ui_group(8, 156, cw - 16, 66, "Font");
+    i = 0;
+    while (i < WK_FACES) { ui_radio(iset_col[i], 174, wk_mono_name(i), i == ide_mono); ++i; }
+    i = 0;
+    while (i < WK_SIZES) { ui_radio(iset_col[i], 196, wk_size_name(i), i == ide_size); ++i; }
+    // the preview, in the scheme and the font chosen
     ec = scheme_cols + ide_scheme * SC_N;
-    y = 156;
+    y = 230;
     d_rect(8, y, cw - 16, 3 * ECH + 8, ec[SC_BG]);
     d_bevel(8, y, cw - 16, 3 * ECH + 8, B_SUNKEN);
     x = 14; iset_piece(&x, y + 4, HC_PRE, "#include"); iset_piece(&x, y + 4, HC_TEXT, " "); iset_piece(&x, y + 4, HC_STR, "\"c4ix.h\"");
@@ -2702,6 +2746,12 @@ static void iset_mouse(int w, int ev, int x, int y, int b) {
     while (i < N_SCHEMES) { if (ui_hit(x, y, 14, 26 + i * 20, cw - 28, 18)) { ide_set(i, ide_vim); return; } ++i; }
     if (ui_hit(x, y, 14, 100, cw - 28, 18)) { ide_set(ide_scheme, 0); return; }
     if (ui_hit(x, y, 14, 120, cw - 28, 18)) { ide_set(ide_scheme, 1); return; }
+    i = 0;
+    while (i < 3) {
+        if (i < WK_FACES && ui_hit(x, y, iset_col[i] - 4, 172, 100, 18)) { ide_set_font(i, ide_size); return; }
+        if (i < WK_SIZES && ui_hit(x, y, iset_col[i] - 4, 194, 100, 18)) { ide_set_font(ide_mono, i); return; }
+        ++i;
+    }
     if (ui_hit(x, y, cw - 88, ch - 34, 76, 24)) wk_close(w);
 }
 
@@ -2718,7 +2768,7 @@ static void ide_settings() {
     int i;
     if ((i = wk_find(&iset_class))) { wk_raise(i); return; }
     iset_class.size = 16;
-    wk_open(&iset_class, "IDE Settings", 380, 290, WK_FIXED | WK_CENTER, 0);
+    wk_open(&iset_class, "IDE Settings", 380, 370, WK_FIXED | WK_CENTER, 0);
 }
 
 // ---- the window -----------------------------------------------------------------------------
@@ -2826,7 +2876,7 @@ void edit_command(struct win *w, int menu, int item) {
            "Esc for Normal mode, i to insert. hjkl or arrows move; w b e words; dd yy p; u undo; . repeat. :w save, :make or F5 build, F8 next error, F6 run, F7 the code it compiles to, Ctrl+B the file pane, :syntax off, :set novim for a plain editor; View > Settings for Traditional typing.",
            0, A_NONE);
     else msgbox(w, "IDE keys",
-           "Type to edit; Shift with the arrows selects; Ctrl+X, C, V cut, copy and paste; Ctrl+A all; Ctrl+Z undo, Ctrl+Y redo; Ctrl+S saves. Esc for a command: w, make, run, e FILE, set nowrap. F5 builds, F6 runs, F7 shows the code it compiles to, F8 the next error, Ctrl+B the file pane; View > Settings for VIM mode and colours.",
+           "Type to edit; Shift with the arrows selects; Ctrl+X, C, V cut, copy and paste; Ctrl+A all; Ctrl+Z undo, Ctrl+Y redo; Ctrl+S saves. Esc for a command: w, make, run, e FILE, set nowrap. F5 builds, F6 runs, F7 shows the code it compiles to, F8 the next error, Ctrl+B the file pane; View > Settings for VIM mode, colours and the font.",
            0, A_NONE);
 }
 

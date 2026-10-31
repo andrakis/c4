@@ -48,11 +48,13 @@ shaped so it can be added.
 
 **Display additions**: a CLOCK register (0x440, host local seconds since
 midnight) for the taskbar clock, the window growing to 0x47F; and `TEXT2 [x, y, rgb, size, font, advance, n, chars]`.
-Font 0 is monospace, 1 a sans-serif UI face, 2 its bold. A non-zero
+Font 0 is monospace, 1 a sans-serif UI face, 2 its bold; 3 to 8 are the
+faces part twenty offers (Courier New, Lucida Console, Verdana and its
+bold, Georgia and its bold). A non-zero
 advance places each character exactly `advance` pixels after the last,
 which is what a character grid needs; 0 is the font's own spacing.
 
-**The desktop** (src/c4ix/user/desktop/, nine modules of its own over the window kit's eleven in src/winkit, and libc's `fp.c`, linked with libc4ix -> c4ix-desktop.c4r; it was one file, `desktop.c`, until D6, `edit.c` joined in part four, `calc.c` left `apps.c` with floating point, and the window kit, which grin shares, left `wm.c`, `term.c` and `apps.c` in part fourteen):
+**The desktop** (src/c4ix/user/desktop/, eleven modules of its own over the window kit's eleven in src/winkit, and libc's `fp.c`, linked with libc4ix -> c4ix-desktop.c4r; it was one file, `desktop.c`, until D6, `edit.c` joined in part four, `calc.c` left `apps.c` with floating point, and the window kit, which grin shares, left `wm.c`, `term.c` and `apps.c` in part fourteen; `explore.c` joined in part eighteen, and `hl.c` left `edit.c` in part twenty):
 - Asks for an 800x600 display (1024x768 was too small to read once the
   page scaled it into its pane), attaches the rings, and redraws what
   changed: the whole scene, or only the damaged regions
@@ -1285,3 +1287,86 @@ Left for later: Tyrian's sources on the site, which needs site.sh's
 rule (no tree with games/tyrian) to tell its code from its data; and a
 kernel directory lookup better than linear, which would take the rest
 of the boot cost away.
+
+## Part twenty-two: Word Wrap in Text Editor, and a choice of fonts (asked for 2026-10-30)
+
+Text Editor's long lines ran off its right edge, out of reach; and the
+whole desktop was drawn in the same three fonts at the same sizes, at
+every screen size. Now:
+
+- [x] **Word Wrap** (Text Editor's new Format menu, on at first, a check
+      beside it). A line wider than the window folds onto the rows below,
+      after the last space that fits, or where the row is full if it has
+      none; a space just past the edge is the fold, and is not drawn.
+      Up, Down, Home and End move by these rows, as the IDE's do; a
+      click lands on the row it is on. Off, a line is one row, and the
+      text scrolls across under a bar, following the caret when it
+      moves, as the IDE's `:set nowrap` does. notepad.c keeps the text
+      in one buffer as before: a row is found from where it starts
+      (`row_end` says where it ends and the next begins), so nothing
+      else in it changed.
+- [x] **The fonts the display has.** `TEXT2` was always sized and faced
+      by the guest; the faces were 0 to 2. Six more: 3 Courier New and
+      4 Lucida Console (fixed-width), 5 Verdana and 6 its bold, 7
+      Georgia and 8 its bold (gui.h's `GUI_*`, the kit's `F_*`).
+      display.js, the one place the protocol is drawn (the tests only
+      read it; the native c4m has no display), names each as a chain of
+      families that ends somewhere different on Windows and on Linux:
+      "Lucida Console" is Noto Sans Mono on a Chromebook, for one.
+      Verdana is drawn at 0.95 of its size, which brings its width near
+      Tahoma's: the kit never measures text, it guesses (6 pixels a
+      character at 11, 7 bold), and the guesses hold in any of the three.
+- [x] **Three levels, a handful at each.** The kit offers them
+      (draw.c): the interface's faces, Tahoma, Verdana and Georgia; the
+      fixed-width ones, Consolas, Courier New and Lucida Console; and
+      Small, Normal and Large. For the interface a size is a pixel off
+      11 (10, 11, 12); for an editor it is a grid, a font size and a
+      cell (10 in 6x13, 12 in 7x15, 14 in 8x17), no narrower than the
+      face's characters.
+  - *The desktop*: Settings has a third column (the window is 590 wide
+    now, still inside 640x480), Font and Font size, with a sample.
+    `wk_font_use` sets `wk.fsans`, `wk.fbold` and `wk.fsize`, and
+    `d_text`/`d_textn` draw F_SANS and F_BOLD in them: every title,
+    menu, dialog, button and the taskbar, at once. Kept in
+    /etc/desktop.cfg as `font F fsize Z`, after `mute`. grin never sets
+    them, so it draws as it did.
+  - *The IDE*: IDE Settings has a Font group, faces and sizes. ECW,
+    ECH and EFONT were constants; they are `ide_cw`, `ide_ch` and
+    `ide_fs` now (with `ide_face`), set from the choice, and the Code
+    tab's XCW, XCH and XFONT are the same variables (explore.c), so the
+    text, the gutter, the status line, the build log and the Code tab all
+    move to the new grid. Kept in /etc/ide.cfg: `scheme N input M font F
+    size S`.
+  - *Text Editor*: Format lists the fixed-width faces and the sizes,
+    checked. The choices are every Text Editor window's, and kept in
+    /etc/notepad.cfg (`wrap W font F size S`), which the desktop names
+    through the kit's `notepad_cfg`; grin names none, so its Notepad
+    starts as it always did. grin's applications reach the kit through
+    its table, which grew the six font functions (GRIN_KIT_VERSION 4).
+- [x] **The rebuild's memory.** test-c4ix-rebuild failed on this branch:
+      inside C4IX, c4sc ran out of memory compiling edit.c (`cannot
+      allocate gc mark state for 1350000 cells`). C4IX held the root
+      archive in RAM, in the same 64 MB as the compile, and the archive was
+      about 40 KB bigger here than on the Code tab's branch; edit.c was
+      already at the edge, and neither hl.c (part twenty) nor moving IDE
+      Settings into a module of its own was enough. What fixed it was the
+      collector: c4sp kept five bytes of mark state a cell, 6.7 MB for
+      edit.c, and keeps a bit a cell and a worklist of a fixed size now,
+      0.23 MB (docs/c4sp-design.md, 4.8). The rebuild passes at 64 MB
+      with every branch of the time merged.
+- [x] test-desktop.mjs reads each string's font and size now. Text
+      Editor: a line of thirty words folds into rows that each end after
+      a word and join back into the line, with no bar across; Word Wrap
+      off makes it one row, scrolled to the caret, with the bar; Home
+      scrolls back; Courier New and Large draw it in font 3 on an
+      8-pixel grid, in every Text Editor window; /etc/notepad.cfg says so.
+      The IDE: Courier New, Large in the preview and the editor behind it,
+      then Normal; the Code tab in Courier New; /etc/ide.cfg says so.
+      Settings: Verdana, Large draws the sample in fonts 5 and 6 at 12,
+      and no string anywhere in fonts 1 or 2; Settings still fits; after
+      Power Off and a new desktop, desktop.cfg has `font 1 fsize 2`, the
+      desktop comes back in Verdana, and a new Text Editor in Courier
+      New, Large, without Word Wrap.
+- [x] web-ix-fonts.mjs: the page at 640x480, 800x600 and 1024x768, with
+      Text Editor wrapped and not, Settings in each face, the IDE at each
+      size; a screenshot of each.

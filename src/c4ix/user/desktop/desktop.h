@@ -94,6 +94,10 @@ void edit_answer(struct win *w, int action, int yes);
 void edit_tick(struct win *w);
 void edit_close(struct win *w);
 
+// edit.c's text grid, from IDE Settings' font: a cell's width and height,
+// the font's size and face (the Code tab draws in it too)
+extern int ide_cw, ide_ch, ide_fs, ide_face;
+
 // hl.c: the IDE's syntax colouring. The languages, and what a character is.
 enum { L_TEXT = 0, L_C = 1, L_JS = 2, L_LISP = 3, L_FORTH = 4, L_SH = 5, L_B4K = 6, HL_MAX = 1024 };
 enum { HC_TEXT = 0, HC_KW = 1, HC_TYPE = 2, HC_STR = 3, HC_COM = 4, HC_NUM = 5, HC_PRE = 6 };
@@ -144,6 +148,10 @@ int  theme_swatch(int i);          // the desktop colours Settings offers, 0..7
 enum { SORT_NAME = 0, SORT_TYPE = 1, SORT_SIZE = 2, SORT_DATE = 3, N_SORTS = 4 };
 int  theme_sort();
 void theme_set_sort(int sort);
+// the interface's font: one of the kit's faces and sizes (WK_FACES, WK_SIZES)
+int  theme_font();
+int  theme_fsize();
+void theme_set_font(int face, int size);
 
 // the screen's size (Settings): one of the sizes offered, asked of the
 // display at once and when the desktop starts, and remembered with the rest

@@ -28,8 +28,8 @@ static char tbuf[128];
 // ---- Settings' choices -------------------------------------------------------
 //
 // The colour scheme (the kit's), the desktop's own colour, its picture, the
-// screen saver and its wait, the look, the screen's size, and the volume;
-// and the order Files lists in.
+// screen saver and its wait, the look, the screen's size, the volume, and
+// the interface's font; and the order Files lists in.
 static int swatches[8] = { 0x008080, 0x000040, 0x000000, 0x3a4a5a, 0x205030, 0x502850, 0xa09070, 0x606060 };
 enum { T_MODERN = 8 };
 static int cur_scheme, cur_bg;
@@ -44,12 +44,13 @@ static int size_w[N_SIZES] = { 640, 800, 1024 }, size_h[N_SIZES] = { 480, 600, 7
 static char *size_names[N_SIZES] = { "640x480", "800x600", "1024x768" };
 static int cur_size;
 static int cur_vol, cur_mute;      // the volume, 0-100 as the tray shows it, and muted
+static int cur_font, cur_fsize;    // the interface's face and size (the kit's, wk_font_use)
 
 static void theme_init() {
     cur_scheme = T_MODERN; cur_bg = 0 - 1; cur_wall = 1; cur_saver = 1; cur_wait = 5; wk.style = S_FLAT;
-    cur_size = 1; cur_vol = 100; cur_mute = 0;
+    cur_size = 1; cur_vol = 100; cur_mute = 0; cur_font = 0; cur_fsize = 1;
 }
-static void theme_apply() { wk_scheme_use(cur_scheme, cur_bg); }
+static void theme_apply() { wk_scheme_use(cur_scheme, cur_bg); wk_font_use(cur_font, cur_fsize); }
 int theme_count() { return wk_scheme_count(); }
 char *theme_name(int i) { return wk_scheme_name(i); }
 int theme_scheme() { return cur_scheme; }
@@ -58,14 +59,16 @@ int theme_wall() { return cur_wall; }
 int theme_saver() { return cur_saver; }
 int theme_wait() { return cur_wait; }
 int theme_sort() { return cur_sort; }
+int theme_font() { return cur_font; }
+int theme_fsize() { return cur_fsize; }
 int theme_swatch(int i) { return i >= 0 && i < 8 ? swatches[i] : 0; }
 
 // /etc/desktop.cfg: "scheme N bg V wall W saver S wait M style L sort O
-// res W H vol V mute M", read
+// res W H vol V mute M font F fsize Z", read
 // when the desktop starts, so a choice outlives Power Off (and, with
 // persist, a reload of the page). Read into a buffer longer than any
 // file it takes, zeroed, so looking a few bytes ahead stays inside it.
-static char cfg[128];
+static char cfg[160];
 static int cfg_num(char *s, int *v) {
     int n, neg, k;
     n = 0; neg = 0; k = 0;
@@ -77,8 +80,8 @@ static int cfg_num(char *s, int *v) {
 static void theme_load() {
     int fd, n, i, v, h, k;
     if ((fd = uopen("/etc/desktop.cfg", O_RD)) < 0) return;
-    memset(cfg, 0, 128);
-    n = uread(fd, cfg, 111);
+    memset(cfg, 0, 160);
+    n = uread(fd, cfg, 143);
     uclose(fd);
     if (n <= 0) return;
     cfg[n] = 0;
@@ -102,6 +105,8 @@ static void theme_load() {
         }
         if (cfg[i] == 'v' && cfg[i + 1] == 'o' && cfg[i + 2] == 'l' && cfg[i + 3] == ' ') { cfg_num(cfg + i + 4, &v); if (v >= 0 && v <= 100) cur_vol = v; }
         if (cfg[i] == 'm' && cfg[i + 1] == 'u' && cfg[i + 4] == ' ') { cfg_num(cfg + i + 5, &v); cur_mute = v != 0; }
+        if (cfg[i] == 'f' && cfg[i + 1] == 'o' && cfg[i + 4] == ' ') { cfg_num(cfg + i + 5, &v); if (v >= 0 && v < WK_FACES) cur_font = v; }
+        if (cfg[i] == 'f' && cfg[i + 1] == 's' && cfg[i + 5] == ' ') { cfg_num(cfg + i + 6, &v); if (v >= 0 && v < WK_SIZES) cur_fsize = v; }
         ++i;
     }
     theme_apply();
@@ -128,7 +133,11 @@ static void theme_save() {
     ui_num(cfg + ui_len(cfg), size_h[cur_size]);
     ui_cat(cfg, " vol ");
     ui_num(cfg + ui_len(cfg), cur_vol);
-    ui_cat(cfg, cur_mute ? " mute 1\n" : " mute 0\n");
+    ui_cat(cfg, cur_mute ? " mute 1 font " : " mute 0 font ");
+    ui_num(cfg + ui_len(cfg), cur_font);
+    ui_cat(cfg, " fsize ");
+    ui_num(cfg + ui_len(cfg), cur_fsize);
+    ui_cat(cfg, "\n");
     write(fd, cfg, ui_len(cfg));
     uclose(fd);
 }
@@ -159,6 +168,15 @@ void theme_set_sort(int sort) {
 void theme_set_saver(int which, int wait) {
     if (which >= 0 && which < saver_count()) cur_saver = which;
     if (wait >= 1 && wait <= 60) cur_wait = wait;
+    theme_save();
+    wk_redraw_all();
+}
+
+// The interface's font: the face and size the kit draws F_SANS and F_BOLD in
+void theme_set_font(int face, int size) {
+    if (face >= 0 && face < WK_FACES) cur_font = face;
+    if (size >= 0 && size < WK_SIZES) cur_fsize = size;
+    theme_apply();
     theme_save();
     wk_redraw_all();
 }
@@ -644,6 +662,9 @@ int main(int argc, char **argv) {
     notepad_untitled = "/tmp/untitled.txt";
     notepad_filebox = 1;
     notepad_filter = "All Files (*)|*|Text Documents (*.txt)|*.txt|C Source (*.c;*.h)|*.c;*.h";
+    // its Format menu's choices, kept beside the desktop's and the IDE's
+    notepad_cfg = "/etc/notepad.cfg";
+    umkdir("/etc");
     wk_init(&shell);
     wall_load("/usr/share/splash/c4ix.c4p.gz");
     icon_k = 0 - 1;

@@ -64,6 +64,7 @@ function pteOf(i32, size, ptbr, va) {
 // ptbr: every page of it user mode's to read (and write, if write), one
 // run of memory, and the physical address of addr returned. Else -1, and
 // dmaBad says where it went wrong and dmaBadPte what the entry there was.
+// UDIR, the kernel's map: its pages are pinned there (0: not pinned).
 let dmaBad = 0, dmaBadPte = 0;
 export function dmaPhys(i32, size, ptbr, addr, len, write, udir = 0) {
   addr = addr >>> 0;
@@ -79,9 +80,11 @@ export function dmaPhys(i32, size, ptbr, addr, len, write, udir = 0) {
     }
     if (pa < 0) pa = f | (addr & 4095);
     next = f + 4096;
-    // a page a device has used stays in memory (C4IX keeps it out of swap)
-    if (udir) kernelPhys(i32, size, udir, va);
   }
+  // a page a device has used stays in memory (C4IX keeps it out of swap);
+  // one it was refused has not been used, and the kernel may still move
+  // it (mmu_contig makes a block one run for the device that was refused)
+  if (udir) for (let va = addr & -4096; va < end; va += 4096) kernelPhys(i32, size, udir, va);
   return pa;
 }
 const dmaKind = write => (write ? FK.WRITE : FK.READ) | FK.DMA | (dmaBadPte & PTE.P ? FK.PRESENT : 0);
@@ -91,9 +94,9 @@ const dmaKind = write => (write ? FK.WRITE : FK.READ) | FK.DMA | (dmaBadPte & PT
 // refusal is kept for the asker to raise.
 export class DmaSpace {
   constructor(arena) { this.arena = arena; this.ptbr = 0; this.udir = 0; this.faddr = -1; this.finfo = 0; }
-  dmaCheck(addr, len, write) {
+  dmaCheck(addr, len, write, pin = true) {
     const a = this.arena;
-    const pa = dmaPhys(a.i32, a.size, this.ptbr, addr, len, write, this.udir);
+    const pa = dmaPhys(a.i32, a.size, this.ptbr, addr, len, write, pin ? this.udir : 0);
     if (pa >= 0) return pa;
     this.faddr = dmaBad; this.finfo = dmaKind(write);
     throw FAULT;
@@ -296,9 +299,9 @@ export class Mmu {
   // The device does what the task could have done itself, or the task
   // takes the fault it would have taken -- an IOMMU's check, so that no
   // device is a way round the task's page tables (docs/c4ix-mmu.md 11).
-  dmaCheck(addr, len, write) {
+  dmaCheck(addr, len, write, pin = true) {
     const a = this.m.arena;
-    const pa = dmaPhys(a.i32, a.size, this.ptbr, addr, len, write, this.m.udir);
+    const pa = dmaPhys(a.i32, a.size, this.ptbr, addr, len, write, pin ? this.m.udir : 0);
     if (pa >= 0) return pa;
     this.refuse(dmaBad, dmaKind(write));
     throw FAULT;

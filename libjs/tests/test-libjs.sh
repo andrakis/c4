@@ -114,6 +114,7 @@ node libjs/tests/test-rom.mjs    || fail=1
 part_desktop () {
 node libjs/tests/test-desktop.mjs || fail=1
 node libjs/tests/test-boot-desktop.mjs || fail=1
+node libjs/tests/test-desktop-doom.mjs || fail=1  # Doom in a desktop window, 32 MB, MMU, 4 CPUs: its lent canvas read a page at a time
 }
 part_c4dos () {
 node libjs/tests/test-c4dos-heap.mjs || fail=1   # C4DOS HEAP.SYS: Doom five times at A>

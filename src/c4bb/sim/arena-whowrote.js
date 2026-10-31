@@ -152,12 +152,16 @@ export class Arena {
   // dma: where the device finds [addr, addr + len), one run of memory --
   // the address itself, or what the task's page tables or the window
   // make of it -- or -1 when there is no such memory. A user task's
-  // refusal throws (its page fault).
-  dma(addr, len, write) {
+  // refusal throws (its page fault). PIN: the device may keep the address
+  // (the display's ring, a framebuffer), so C4IX must not move the pages
+  // (PTE_PIN); a copy made now, a page at a time (dmaRead, dmaWrite), pins
+  // nothing -- a drive that pinned every buffer it wrote from left a
+  // program's memory unable to go out at all.
+  dma(addr, len, write, pin = true) {
     addr = addr >>> 0;
-    if (this.dmaCtx) return this.dmaCtx.dmaCheck(addr, len, write);
+    if (this.dmaCtx) return this.dmaCtx.dmaCheck(addr, len, write, pin);
     if (this.uwin && addr >= this.uwin) {
-      if (this.udir) return kernelPhys(this.i32, this.size, this.udir, addr);
+      if (this.udir) return kernelPhys(this.i32, this.size, this.udir, addr, pin);
       const off = addr - this.uwin;
       return off < this.size ? off : -1;
     }
@@ -173,7 +177,7 @@ export class Arena {
     const out = new Uint8Array(len);
     for (let k = 0; k < len;) {
       const va = (addr + k) >>> 0, r = Math.min(len - k, 4096 - (va & 4095));
-      const p = this.dma(va, r, false);
+      const p = this.dma(va, r, false, false);
       if (p < 0 || p + r > this.size) return out.subarray(0, k);
       out.set(this.u8.subarray(p, p + r), k);
       k += r;
@@ -190,7 +194,7 @@ export class Arena {
     }
     for (let k = 0; k < len;) {
       const va = (addr + k) >>> 0, r = Math.min(len - k, 4096 - (va & 4095));
-      const p = this.dma(va, r, true);
+      const p = this.dma(va, r, true, false);
       if (p < 0 || p + r > this.size) return;
       this.u8.set(bytes.subarray(k, k + r), p);
       k += r;

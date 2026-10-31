@@ -53,6 +53,8 @@ static int mmu_hand;           // swap's clock: the window's page it looks at ne
 static int mmu_flock[2];       // the frame blocks and swap's slots (klock: SMP's light path frees too)
 enum { SWAP_AHEAD = 16 };      // pages a fault brings back: its own, and those after it that went out
 enum { PTE_ZERO = 0x800 };     // the kernel's map: a page out that was never in, its slot never written (mmu_lazy)
+enum { MMU_MINROOM = 1048576 };   // memory on demand: the least room to page it in (mmu_lazy)
+int mmu_pageroom();
 static int mmu_swapok;         // the host keeps pages
 static int mmu_swapslots, mmu_sfree;   // its slots, and how many are free
 static int mmu_swapouts, mmu_swapins, mmu_moves, mmu_firsts;
@@ -214,6 +216,9 @@ struct urgn {
 static struct urgn *mmu_lastin;   // the block whose pages last came back (swap, mmu_bringin's log)
 static struct urgn *mmu_runr;     // ... and the one whose pages are going out (mmu_out's log)
 static int mmu_runn, mmu_runva, mmu_runshot, mmu_runlater, mmu_runon;
+static int mmu_runid;             // ... its task, and the task's name, as they were when the run began
+static char mmu_runname[32];
+static int mmu_quiet;             // reclaim for mmu_kalloc, which the kernel's log itself calls: no log
 static void mmu_runlog();
 
 static struct sl4b_cache *mmu_rcache;
@@ -223,6 +228,19 @@ static void mmu_setpg(struct urgn *r, int base, int n, struct urgn *v) {
     int k;
     k = 0;
     while (k < n) { mmu_pg[(base >> 12) + k] = (int)v; ++k; }
+}
+
+// R's pages of memory no longer its: only where they still say R. Its
+// block may have gone back to the heap already -- every page moved or put
+// out (mmu_move, mmu_pageout, mmu_contig) -- and be another region's now,
+// whose pages these are (mmu_rgn, and so mmu_uva, must find that one)
+static void mmu_unsetpg(struct urgn *r) {
+    int k;
+    k = 0;
+    while (k < r->npages) {
+        if (mmu_pg[(r->base >> 12) + k] == (int)r) mmu_pg[(r->base >> 12) + k] = 0;
+        ++k;
+    }
 }
 
 static void mmu_setvpg(int va, int n, struct urgn *v) {
@@ -473,6 +491,11 @@ static struct urgn *mmu_lazy(int n) {
     int np, k, s;
     np = (n + MMU_PAGE - 1) / MMU_PAGE;
     if (!mmu_uoff || !mmu_swapok || np < 1 || mmu_sfree < np) return 0;
+    // not where there is too little to page it in: two programs would put
+    // each other's pages out for ever, where a heap block would have
+    // failed and said so (a desktop boot in 12 MB went 32 billion cycles
+    // without coming up); then the block is a heap block, or nothing
+    if (mmu_pageroom() < MMU_MINROOM) return 0;
     if (!(r = (struct urgn *)sl4b_alloc(mmu_rcache))) return 0;
     r->kind = UR_BLOCK;
     r->npages = np;
@@ -540,7 +563,7 @@ static void mmu_release(struct urgn *r) {
     }
     klock_take(mmu_ulock);
     if (r->kind != UR_SLAB) {
-        if (!r->lazy) mmu_setpg(r, r->base, r->npages, 0);
+        if (!r->lazy) mmu_unsetpg(r);
         if (mmu_uoff) { mmu_setvpg(r->va, r->npages, 0); mmu_vfree(r->va, r->npages); }
     }
     klock_drop(mmu_ulock);
@@ -1072,7 +1095,10 @@ void mmu_fault(struct task *t, int va) {
     // -- a block's pages are frames from anywhere once they have been out
     // or were never touched -- the display's ring, say: the block made one
     // run, and the access runs again
-    if (t && (info & MMU_FK_DMA) && (r = mmu_rgn(va)) && r->owner == mmu_root(t) && mmu_contig(r)) return;
+    // (a page that is out is brought in below, as for the task's own
+    // access: only a refusal of pages that are in -- not one run -- is this)
+    if (t && (info & MMU_FK_DMA) && (info & MMU_FK_PRESENT) && (r = mmu_rgn(va)) && r->owner == mmu_root(t) &&
+        mmu_contig(r)) return;
     // Its own memory, on swap or not touched yet: in, and the instruction
     // runs again (faults are precise). With no room for it even after
     // putting out what else could go, the task cannot go on.
@@ -1138,9 +1164,11 @@ struct fchunk {
     struct fchunk *next;       // the chunks with a free frame
     struct fchunk *anext;      // every chunk (mmu_reclaim)
     int tried;                 // mmu_reclaim's round that found it could not be freed
+    int pool;                  // taken for single frames (mmu_fnew), not one region's
 };
 static struct fchunk *mmu_fcfree, *mmu_fcall;
 static int mmu_round;          // mmu_reclaim's rounds
+static int mmu_poolbytes;      // the heap's bytes in blocks of single frames (mmu_fnew)
 // Pages of a block taken for single frames: a big one where the heap has
 // one run that long, else a small one. Any frame serves any page, so a
 // big block's free frames are as good as a new block's, and the fewer
@@ -1203,8 +1231,11 @@ static void mmu_fput(int pa) {
     while (*pp && *pp != c) pp = &(*pp)->anext;
     if (*pp) *pp = c->anext;
     k = 0;
-    while (k < c->npages) { mmu_fc[(c->base >> 12) + k] = 0; ++k; }
+    // the block's pages are the heap's again, nobody's region (a region
+    // whose pages all moved or went out lives on elsewhere: mmu_unsetpg)
+    while (k < c->npages) { mmu_fc[(c->base >> 12) + k] = 0; mmu_pg[(c->base >> 12) + k] = 0; ++k; }
     klock_drop(mmu_flock);
+    if (c->pool) mmu_poolbytes = mmu_poolbytes - (c->npages * MMU_PAGE + MMU_PAGE - 1);
     free((char *)c->raw);
     free((char *)c->bits);
     free((char *)c);
@@ -1214,6 +1245,16 @@ static int mmu_clock(int keep, int want);
 
 // Is there room in the heap for another block of NP frames, leaving the
 // kernel its sixteenth? Past that, frames come from pages put out.
+// What memory on demand has to page in: the heap, less its sixteenth for
+// the kernel and less what the kernel and the regions of their own hold
+// (in use, but for the blocks of single frames)
+int mmu_pageroom() {
+    int used, size;
+    used = *(int *)C4IX_HEAP_USED;
+    size = *(int *)C4IX_HEAP_END - *(int *)C4IX_HEAP_BASE;
+    return size - size / 16 - (used - mmu_poolbytes);
+}
+
 static int mmu_roomy(int np) {
     int used, size;
     used = *(int *)C4IX_HEAP_USED;
@@ -1227,6 +1268,7 @@ static int mmu_roomy(int np) {
 // other, and a block of frames freed leaves a hole next to others, not
 // between two RAM files.
 static int mmu_fnew(int room) {
+    struct fchunk *c;
     int raw, np;
     np = FC_BIG;
     while (1) {
@@ -1237,7 +1279,11 @@ static int mmu_fnew(int room) {
             if (mmu_swapok) mmu_sop(SWAP_HIGH, 0, 0);
         }
         if (raw) {
-            if (mmu_cnew(raw, (raw + MMU_PAGE - 1) & ~(MMU_PAGE - 1), np, 0)) return 1;
+            if ((c = (struct fchunk *)mmu_cnew(raw, (raw + MMU_PAGE - 1) & ~(MMU_PAGE - 1), np, 0))) {
+                c->pool = 1;
+                mmu_poolbytes = mmu_poolbytes + np * MMU_PAGE + MMU_PAGE - 1;
+                return 1;
+            }
             free((char *)raw);
             return 0;
         }
@@ -1522,10 +1568,13 @@ static int mmu_fetch(struct task *t, int va) {
 // What went out of one block, said once for up to a MB of it, and when
 // pages of another block go, or the block is freed: the log is 64 KB, and
 // a program bigger than memory puts pages out at every fault
+// (the task and its name kept from the run's start: the run is said
+// later, when the region or its task may be gone; nothing said while
+// mmu_kalloc reclaims, which klog reaches as its file grows -- a klog
+// inside a klog)
 static void mmu_runlog() {
-    struct urgn *r;
-    if ((r = mmu_runr) && mmu_runn)
-        klog("swap: %d KB of task %d (%s) at 0x%08x out%s\n", mmu_runn * 4, r->owner->id, r->owner->name, mmu_runva,
+    if (mmu_runr && mmu_runn && !mmu_quiet)
+        klog("swap: %d KB of task %d (%s) at 0x%08x out%s\n", mmu_runn * 4, mmu_runid, mmu_runname, mmu_runva,
             mmu_shootdowns != mmu_runshot ? ", the CPU running it told to forget them first (an IPI)" :
             mmu_shootlater == mmu_runlater ? "" : mmu_runon ? ", the CPU running it, in the kernel, told to forget them on its way back" :
             ", the CPU that ran it last told to forget them before it runs it again");
@@ -1535,10 +1584,15 @@ static void mmu_runlog() {
 
 // The page at VA of R out, as part of a run for the log: 0 if it could not go
 static int mmu_out(struct urgn *r, int va) {
+    int k;
     if (r != mmu_runr || mmu_runn >= 256) {
         mmu_runlog();
         mmu_runr = r; mmu_runva = va; mmu_runshot = mmu_shootdowns; mmu_runlater = mmu_shootlater;
         mmu_runon = r->owner->oncpu;
+        mmu_runid = r->owner->id;
+        k = 0;
+        while (k < 31 && r->owner->name[k]) { mmu_runname[k] = r->owner->name[k]; ++k; }
+        mmu_runname[k] = 0;
     }
     if (!mmu_pageout(r, va)) return 0;
     ++mmu_runn;
@@ -1698,9 +1752,16 @@ static int mmu_raw(int np) {
 // Without swap, or on SMP's light path (no kernel lock), malloc as it is.
 char *mmu_kalloc(int n) {
     char *p;
+    int q;
     if ((p = (char *)malloc(n)) || !mmu_on || n <= 0) return p;
     while (!(p = (char *)malloc(n)) && vfs_reclaim(n)) ;
-    return p ? p : (char *)mmu_reclaim(n, 0);
+    if (p) return p;
+    q = mmu_quiet;
+    mmu_quiet = 1;
+    p = (char *)mmu_reclaim(n, 0);
+    mmu_runlog();
+    mmu_quiet = q;
+    return p;
 }
 
 // R's pages made one run of memory, for a device that wants one (its
@@ -1712,14 +1773,17 @@ char *mmu_kalloc(int n) {
 static int mmu_contig(struct urgn *r) {
     int *e, *u;
     int k, va, raw, base, f, s, run;
-    if (!mmu_uoff || r->kind != UR_BLOCK || !r->heap || r->shared || !r->dir) return 0;
+    // nor one lent to another space, or any of whose pages a device holds
+    // (PTE_PIN): their maps and addresses would be left on the old frames
+    if (!mmu_uoff || r->kind != UR_BLOCK || !r->heap || r->shared || !r->dir || r->peer[0] || r->peer[1]) return 0;
     run = 1;
     f = 0;
     k = 0;
-    while (run && k < r->npages) {
+    while (k < r->npages) {
         e = mmu_pte(mmu_kdir, r->va + k * MMU_PAGE, 0);
-        run = e && (*e & PTE_P) && (!k || (*e & ~(MMU_PAGE - 1)) == f + MMU_PAGE);
-        if (run) f = *e & ~(MMU_PAGE - 1);
+        if (e && (*e & PTE_PIN)) return 0;
+        run = run && e && (*e & PTE_P) && (!k || (*e & ~(MMU_PAGE - 1)) == f + MMU_PAGE);
+        if (e && (*e & PTE_P)) f = *e & ~(MMU_PAGE - 1);
         ++k;
     }
     if (run || !(raw = mmu_raw(r->npages))) return 0;

@@ -231,29 +231,42 @@ export class GuiDevice {
     const pitch = this.fbPitch || run * 4;
     const hm = h | (mode << 16);
     if ((this.fbBase & 3) || (pitch & 3)) return;
-    const base = this.arena.dma(this.fbBase, (lines - 1) * pitch + run * 4, false);
-    if (base < 0x1000 || base + (lines - 1) * pitch + run * 4 > this.arena.size) return;
+    // One run of memory, which the shared path hands on as it is; a
+    // framebuffer that is not one (under C4IX's MMU a block's frames come
+    // from anywhere, and the kernel may have found no run to make it one)
+    // is copied a line at a time instead, each a page at a time
+    // (arena.dmaRead), each page still the task's to read or its fault
+    let base;
+    try { base = this.arena.dma(this.fbBase, (lines - 1) * pitch + run * 4, false); }
+    catch (e) { if (e !== FAULT) throw e; base = -2; }
+    if (base !== -2 && (base < 0x1000 || base + (lines - 1) * pitch + run * 4 > this.arena.size)) return;
     const n = w * h;
     // Shared path: one copy into the triple buffer, and a small marker in
     // the command stream where the frame belongs.
-    if (this.fbShared && this.fbShared.publish(this.arena.i32, base, pitch, run, lines, w, hm)) {
+    if (base !== -2 && this.fbShared && this.fbShared.publish(this.arena.i32, base, pitch, run, lines, w, hm)) {
       this.queue.push(4, CMD.FBREF, w, hm);
       this.flips++;
       return;
     }
     if (this.queued + this.queue.length + n + 4 > QUEUE_LIMIT) { this.lostCommands++; return; }
+    const c = new Int32Array(4 + n);
+    c[0] = 4 + n; c[1] = CMD.FB; c[2] = w; c[3] = hm;
+    const i32 = this.arena.i32;
+    for (let y = 0; y < lines; y++) {
+      if (base === -2) {
+        const b = this.arena.dmaRead((this.fbBase + y * pitch) >>> 0, run * 4);
+        if (b.length < run * 4) return;
+        c.set(new Int32Array(b.buffer, b.byteOffset, run), 4 + y * run);
+        continue;
+      }
+      const row = (base + y * pitch) >> 2;
+      c.set(i32.subarray(row, row + run), 4 + y * run);
+    }
     this.seal();
     // A framebuffer frame covers the whole display, so one still waiting
     // with nothing after it is simply out of date: replace it.
     const last = this.chunks[this.chunks.length - 1];
     if (last && last[1] === CMD.FB) { this.chunks.pop(); this.queued -= last.length; this.skippedFlips = (this.skippedFlips | 0) + 1; }
-    const c = new Int32Array(4 + n);
-    c[0] = 4 + n; c[1] = CMD.FB; c[2] = w; c[3] = hm;
-    const i32 = this.arena.i32;
-    for (let y = 0; y < lines; y++) {
-      const row = (base + y * pitch) >> 2;
-      c.set(i32.subarray(row, row + run), 4 + y * run);
-    }
     this.chunks.push(c); this.queued += c.length;
     this.flips++;
   }
@@ -278,20 +291,27 @@ export class GuiDevice {
     finally { a.dmaCtx = null; }
   }
 
+  // The picture is read a row at a time and the palette whole, each a page
+  // at a time (arena.dmaRead): under C4IX's MMU a program's memory is
+  // frames from anywhere, one run only by chance, and a compositor that
+  // borrowed a game's canvas (SYS_MAPFROM) cannot have it made one. Each
+  // page is still checked against the space at it, and a refusal is its
+  // fault, as before.
   blit8(p) {
     const [x, y, w, h, src, pitch, pal, dw, dh] = p;
     const a = this.arena;
     if (w <= 0 || h <= 0 || w > 4096 || h > 4096 || pitch < w || (pal & 3)) return;
-    const s = a.dma(src, (h - 1) * pitch + w, false), q = a.dma(pal, 1024, false);
-    if (s < 0x1000 || s + (h - 1) * pitch + w > a.size || q < 0x1000 || q + 1024 > a.size) return;
     const n = w * h;
     if (this.queued + this.queue.length + 8 + n > QUEUE_LIMIT) { this.lostCommands++; return; }
-    const u8 = a.u8, colours = a.i32.subarray(q >> 2, (q >> 2) + 256);
+    const pb = a.dmaRead(pal, 1024);
+    if (pb.length < 1024) return;
+    const colours = new Int32Array(pb.buffer, pb.byteOffset, 256);
     const c = new Int32Array(8 + n);
     c[0] = 8 + n; c[1] = CMD.RGB; c[2] = x; c[3] = y; c[4] = w; c[5] = h; c[6] = dw; c[7] = dh;
     for (let j = 0, k = 8; j < h; j++) {
-      const row = s + j * pitch;
-      for (let i = 0; i < w; i++) c[k++] = colours[u8[row + i]];
+      const row = a.dmaRead((src + j * pitch) >>> 0, w);
+      if (row.length < w) return;
+      for (let i = 0; i < w; i++) c[k++] = colours[row[i]];
     }
     this.seal();
     this.chunks.push(c); this.queued += c.length;

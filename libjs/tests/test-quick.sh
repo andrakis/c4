@@ -31,7 +31,7 @@ for f in $paths; do
     libjs/tests/test-quick.sh) ;;
     libjs/tests/test-rebuild.sh) rebuild=1 ;;
     libjs/tests/test-grin.mjs) add grin ;;
-    libjs/tests/test-desktop.mjs|libjs/tests/test-boot-desktop.mjs) add desktop ;;
+    libjs/tests/test-desktop.mjs|libjs/tests/test-boot-desktop.mjs|libjs/tests/test-desktop-doom.mjs) add desktop ;;
     libjs/tests/test-c4dos-ladder.mjs) add ladder ;;
     libjs/tests/test-c4dos-heap.mjs|libjs/tests/test-persist.mjs) add c4dos ;;
     libjs/tests/test-c4ix-swap.mjs|libjs/tests/test-c4ix-par.mjs) add swap ;;

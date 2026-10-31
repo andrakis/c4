@@ -41,6 +41,12 @@ Its repository's branch `c4` carries, beside the game:
   `NAME.c4r` its block puts there (Wolfenstein 3D has two, `wolf3d` and
   the registered `wolf3d6`). So `wolf3d` runs from any directory.
 
+Its tracked text files, but not `data/`, go on the disk too, at their
+paths in c4 (`games/NAME/...`), so C4IX has them in `/usr/games/NAME`,
+where the IDE's Code tab finds what the game's source maps name. They
+are lazy files: nothing reads one before it is opened, and the web page
+keeps what it has read (docs/c4ix-desktop.md, part twenty-one).
+
 A game that is not here is not built, is not on any disk, and
 `make test-NAME` says it was skipped. The bare machine's libc that the
 games link there (`make libc-bare-objs`) is c4's. c4rlink drops every

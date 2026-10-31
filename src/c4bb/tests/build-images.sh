@@ -829,11 +829,31 @@ tar --format=ustar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
 sha256sum $DISK/c4ix-root.tgz | cut -c1-16 > $DISK/c4ix-root.tgz.id
 rm -rf $ROOT
 
+say "the games' sources, for the IDE's Code tab"
+# Each game on the disk brings its repository's text files (not data/),
+# at their paths in this tree: the source maps of its images name
+# games/doom/am_map.c, and C4IX has it at /usr/games/doom/am_map.c
+# (c4ix.vfs.txt's games/: hostdir(games/)), where the IDE's Code tab
+# looks (explore.c xp_where). Megabytes nobody should download to boot,
+# so they are lazy files in c4ix.sizes and index.json and in no
+# manifest.json; index.json gives each a hash, by which the page keeps
+# what it has read (docs/c4ix-desktop.md, part twenty-one).
+rm -rf $DISK/games
+for g in $GAMES; do
+    [ -f $DISK/c4ix-$(basename $g).c4r ] || continue
+    git -C $g ls-files 2> /dev/null | grep -v '^data/\|^\.\|/\.' |
+        while read -r f; do
+            [ -f "$g/$f" ] && grep -Iq . "$g/$f" 2>/dev/null || continue
+            mkdir -p "$DISK/$g/$(dirname "$f")"
+            cp "$g/$f" "$DISK/$g/$f"
+        done
+done
+
 say "the disk's manifest, sizes and index"
 # manifest for the web app's disk loader (recursive: some entries,
 # like src/c4ke/c4ke.c, are real subdirectories on purpose - see the
-# innerbench comment above)
-(cd $DISK && find . -type f -not -name manifest.json | sed 's|^\./||') | \
+# innerbench comment above); not the games' sources, which are lazy only
+(cd $DISK && find . -type f -not -name manifest.json -not -path './games/*' | sed 's|^\./||') | \
     awk 'BEGIN{printf "["} NR>1{printf ","} {printf "\"%s\"", $0} END{print "]"}' > $DISK/manifest.json
 
 # LAZY LOADING (docs/c4ix-desktop.md, part three). c4ix.sizes is a
@@ -841,17 +861,19 @@ say "the disk's manifest, sizes and index"
 # entry a lazy RAM file that the kernel reads from the host only when
 # something first uses it. index.json is the same table for the web
 # page, whose worker then fetches a file on first read instead of all
-# of them before boot. Written last, after every copy above.
-(cd $DISK && find . -type f -not -name manifest.json -not -name c4ix.sizes -not -name index.json -not -name c4ix.sizes.tmp \
-    -printf '%s %P\n' | sort -k2) > $DISK/c4ix.sizes.tmp
+# of them before boot. Written last, after every copy above. The games'
+# sources come after the rest: only hostdir(games/) looks for them, and
+# vfsload's lookup of a manifest entry finds it before their ~580 lines.
+(cd $DISK && { find . -type f -not -name manifest.json -not -name c4ix.sizes -not -name index.json -not -name c4ix.sizes.tmp \
+    -not -path './games/*' -printf '%s %P\n' | sort -k2
+    if [ -d games ]; then find games -type f -printf '%s %p\n' | sort -k2; fi; }) > $DISK/c4ix.sizes.tmp
 mv $DISK/c4ix.sizes.tmp $DISK/c4ix.sizes
 # index.json lists c4ix.sizes too -- a lazy disk serves only what its
 # index names, and without the table vfsload falls back to copying all.
-(cat $DISK/c4ix.sizes; echo "$(stat -c %s $DISK/c4ix.sizes) c4ix.sizes") | \
-    awk 'BEGIN{printf "["} NR>1{printf ","} {n=$0; sub(/^[0-9]+ /,"",n); printf "[\"%s\",%s]", n, $1} END{print "]"}' \
-    > $DISK/index.json
+# The games' sources have their hashes in it.
+python3 -I src/c4bb/tests/lazy-index.py $DISK games/
 # and the manifest again, so the eager loader sees c4ix.sizes too
-(cd $DISK && find . -type f -not -name manifest.json | sed 's|^\./||') | \
+(cd $DISK && find . -type f -not -name manifest.json -not -path './games/*' | sed 's|^\./||') | \
     awk 'BEGIN{printf "["} NR>1{printf ","} {printf "\"%s\"", $0} END{print "]"}' > $DISK/manifest.json
 
 # ---- per-system disks -----------------------------------------------
@@ -929,6 +951,7 @@ rm -f $ROOTDISK/c4ke-src.tar $ROOTDISK/dostar.c4r $ROOTDISK/dosload.c4r
 # what this disk is for.
 rm -f $ROOTDISK/c4ix.c4r $ROOTDISK/c4ix-*.c4r $ROOTDISK/c4ix.vfs.txt
 rm -f $ROOTDISK/c4ix-*.c $ROOTDISK/c4ix.h $ROOTDISK/c4ix_user.h
+rm -rf $ROOTDISK/games
 # The build tools, so C4KE can build C4IX the way it is meant to:
 # b4ke drives it, c4sc is the compiled c4lc, c4rlink joins the objects.
 # docs/c4sc-design.md and src/c4ke/bin/c4ix.b4k.

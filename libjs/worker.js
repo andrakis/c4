@@ -22,6 +22,7 @@
 //   gui     { kind, ... }                         a display event (gui-device.js)
 //   pause / resume / reset
 //   reset-files                                   drive 1 emptied, then reset; answered with files-reset
+//   cache   { files: [[name, hash, bytes]] }       what the page keeps of the lazy disk (lazy.js)
 //   peek    { id, addr, len }                     read guest memory
 //   poke    { id, addr, bytes }                   write guest memory
 // Worker -> page
@@ -32,6 +33,7 @@
 //   persist { name, bytes }   a file the machine closed on drive 1, for the page to keep;
 //                             bytes null: one it took off drive 1, for the page to forget
 //   files-reset {}            drive 1 is empty and the machine is booting again
+//   cache   { name, hash, bytes }  a lazy disk's file with a hash, read from the server: for the page to keep
 //   status  { ... }           about four times a second
 //   exit    { status, cycles }
 //   reply   { id, ... }       for peek and poke
@@ -44,37 +46,23 @@ import { GuiDevice } from './gui-device.js';
 import { SoundDevice } from './snd-device.js';
 import { RingWriter, FbProducer } from './shared.js';
 import { layUploads } from './uploads.js';
+import { LazyFiles } from './lazy.js';
 
-// A disk read on demand. The page sends an index of [name, size] and a
-// base URL; the first get() of a name fetches that one file with a
+// A disk read on demand (lazy.js). The page sends an index and a base
+// URL; the first get() of a name fetches that one file with a
 // synchronous XHR (allowed in a worker, and the machine's OPEN is
-// synchronous anyway) and keeps it. Names not in the index are absent,
-// as on an eager disk, and files the machine writes are kept like any
-// other. The fetch count is in stats, for the tests.
-class LazyFiles extends Map {
-  constructor(base, index) {
-    super();
-    this.base = base;
-    this.sizes = new Map(index);
-    this.fetched = 0;
-    this.fetchedBytes = 0;
-  }
-  has(name) { return super.has(name) || this.sizes.has(name); }
-  get(name) {
-    if (super.has(name)) return super.get(name);
-    if (!this.sizes.has(name)) return undefined;
-    const x = new XMLHttpRequest();
-    x.open('GET', this.base + name.split('/').map(encodeURIComponent).join('/'), false);
-    x.responseType = 'arraybuffer';
-    x.send();
-    if (x.status !== 200) { this.sizes.delete(name); return undefined; }
-    const b = new Uint8Array(x.response);
-    this.fetched++; this.fetchedBytes += b.length;
-    super.set(name, b);
-    return b;
-  }
-  *keys() { const seen = new Set(super.keys()); yield* seen; for (const k of this.sizes.keys()) if (!seen.has(k)) yield k; }
+// synchronous anyway) and keeps it.
+function fetchSync(base, name) {
+  const x = new XMLHttpRequest();
+  x.open('GET', base + name.split('/').map(encodeURIComponent).join('/'), false);
+  x.responseType = 'arraybuffer';
+  x.send();
+  return x.status === 200 ? new Uint8Array(x.response) : null;
 }
+// The files the page's cache had (a 'cache' message, after boot), and
+// those fetched since that it keeps: [[name, hash, bytes]]. Kept here for
+// the worker's life, so a reset reads none of them again.
+let cacheFiles = [];
 
 // Drive 1, when the page keeps one: made once, so a reset boots with what
 // the machine last wrote there, not what the page had at load.
@@ -160,8 +148,12 @@ function start(msg) {
   ringStalls = 0;
   // Files arrive as Uint8Arrays or bare ArrayBuffers; the disk
   // controller wants bytes it can index.
-  const files = msg.lazy ? new LazyFiles(msg.lazy.base, msg.lazy.index)
-    : new Map((msg.disk || []).map(([n, b]) => [n, b instanceof Uint8Array ? b : new Uint8Array(b)]));
+  // A lazy disk's files with a hash go to the page to keep, as they are read.
+  const files = msg.lazy ? new LazyFiles(msg.lazy.index, name => fetchSync(msg.lazy.base, name), (name, hash, bytes) => {
+    cacheFiles.push([name, hash, bytes]);
+    postMessage({ type: 'cache', name, hash, bytes: bytes.slice() });
+  }) : new Map((msg.disk || []).map(([n, b]) => [n, b instanceof Uint8Array ? b : new Uint8Array(b)]));
+  if (msg.lazy) files.fill(cacheFiles);
   // the uploads over them, and in C4DOS's and C4IX's listings (uploads.js)
   layUploads(files, msg.uploads);
   const drives = [{ files, writable: false, sink: null }];
@@ -353,7 +345,7 @@ setInterval(() => postStatus(false), 250);
 
 function lazyStats() {
   const f = vm && vm.dev.drives[0] && vm.dev.drives[0].files;
-  return f instanceof LazyFiles ? { lazy: true, files: f.sizes.size, fetched: f.fetched, bytes: f.fetchedBytes } : { lazy: false };
+  return f instanceof LazyFiles ? { lazy: true, files: f.sizes.size, fetched: f.fetched, bytes: f.fetchedBytes, cached: f.cached } : { lazy: false };
 }
 
 function echo(bytes) { for (const b of bytes) out.push(b); flush(); }
@@ -364,6 +356,13 @@ self.onmessage = e => {
     switch (m.type) {
       case 'boot': start(m); break;
       case 'reset': if (bootMsg) start(bootMsg); break;
+      // what the page's cache had for the lazy disk
+      case 'cache': {
+        cacheFiles = cacheFiles.concat(m.files);
+        const f = vm && vm.dev.drives[0] && vm.dev.drives[0].files;
+        if (f instanceof LazyFiles) f.fill(m.files);
+        break;
+      }
       case 'reset-files':
         if (persistDrive) persistDrive.files = new Map();
         if (bootMsg) start(bootMsg);

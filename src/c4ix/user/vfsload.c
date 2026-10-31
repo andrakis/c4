@@ -411,11 +411,13 @@ void handle_each(char *keyExpr, char *valuePattern, int indent, char *pathPrefix
 }
 
 // hostdir(PREFIX) as a directory line's value: every host file the
-// sizes table lists as PREFIX + NAME, NAME with no '/' in it, is the lazy
-// file NAME in that directory (load_hostdirs). A game's data that cannot
-// be shipped goes on the disk only where it is there to copy, so the
-// manifest cannot name its files -- and OpenTyrian's newsh#.shp and
-// shapes).dat could not be written in it anyway.
+// sizes table lists as PREFIX + NAME is the lazy file NAME in that
+// directory, and a NAME with a '/' in it is in a directory made for it
+// (load_hostdirs). A game's data that cannot be shipped goes on the disk
+// only where it is there to copy, so the manifest cannot name its files
+// -- and OpenTyrian's newsh#.shp and shapes).dat could not be written in
+// it anyway. The games' sources are hundreds of files in directories of
+// their own, which only the image build lists (/usr/games: games/: hostdir(games/)).
 enum { MAX_HOSTDIRS = 8 };
 char *g_hostdir_path[MAX_HOSTDIRS];
 char *g_hostdir_prefix[MAX_HOSTDIRS];
@@ -504,8 +506,9 @@ void load_sizes() {
     int fd, n;
     g_sizes = 0;
     if ((fd = uopen("c4ix.sizes", O_RD)) < 0) return;
-    g_sizes = (char *)ualloc(65536);
-    n = uread(fd, g_sizes, 65535);
+    // ~30 KB with the games' sources in it
+    g_sizes = (char *)ualloc(READ_CAP);
+    n = uread(fd, g_sizes, READ_CAP - 1);
     uclose(fd);
     if (n <= 0) { g_sizes = 0; return; }
     g_sizes_len = n;
@@ -522,15 +525,35 @@ char *host_of(char *path) {
     return 0;
 }
 
-int has_slash(char *s) {
-    while (*s) { if (*s == '/') return 1; ++s; }
-    return 0;
+// each directory in PATH after its first FROM characters, made (umkdir
+// leaves one that is there) -- unless it is the last one made: the table
+// is sorted, so a directory's files come together, and the hundreds of
+// sources make a few dozen directories
+enum { PATHMAX = 256 };
+char *g_lastdir;
+int g_lastlen;
+void make_dirs(char *path, int from) {
+    int k, last;
+    k = from; last = 0;
+    while (path[k]) { if (path[k] == '/') last = k; ++k; }
+    if (!last || (last == g_lastlen && !memcmp(path, g_lastdir, last))) return;
+    k = from;
+    while (k <= last) {
+        if (path[k] == '/') { path[k] = 0; umkdir(path); path[k] = '/'; }
+        ++k;
+    }
+    if (!g_lastdir) g_lastdir = (char *)ualloc(PATHMAX);
+    memcpy(g_lastdir, path, last); g_lastlen = last;
 }
 
-// the hostdir(PREFIX) directories' files; how many were made
+// the hostdir(PREFIX) directories' files; how many were made. The names
+// are put together in two buffers, as the kernel copies what it keeps:
+// an allocation each was a sixth of the time hundreds of files took.
 int load_hostdirs() {
-    int h, i, j, n, v, ok;
-    char *pfx, *host;
+    int h, i, j, n, v, ok, dl;
+    char *pfx;
+    char path[PATHMAX];
+    char host[PATHMAX];
 
     ok = 0;
     if (!g_sizes) return 0;
@@ -538,6 +561,7 @@ int load_hostdirs() {
     while (h < g_nhostdirs) {
         pfx = g_hostdir_prefix[h];
         n = ustrlen(pfx);
+        dl = ustrlen(g_hostdir_path[h]);
         i = 0;
         while (i < g_sizes_len) {
             v = 0;
@@ -545,9 +569,11 @@ int load_hostdirs() {
             if (i < g_sizes_len && g_sizes[i] == ' ') ++i;
             j = i;
             while (j < g_sizes_len && g_sizes[j] != 10) ++j;
-            if (j - i > n && !memcmp(g_sizes + i, pfx, n)) {
-                host = str_dup_n(g_sizes + i, j - i);
-                if (!has_slash(host + n) && ulazyfile(str_cat(g_hostdir_path[h], host + n), host, v) == 0) ++ok;
+            if (j - i > n && j - i < PATHMAX && dl + j - i - n < PATHMAX && !memcmp(g_sizes + i, pfx, n)) {
+                memcpy(host, g_sizes + i, j - i); host[j - i] = 0;
+                memcpy(path, g_hostdir_path[h], dl); memcpy(path + dl, host + n, j - i - n + 1);
+                make_dirs(path, dl);
+                if (ulazyfile(path, host, v) == 0) ++ok;
             }
             i = j + 1;
         }

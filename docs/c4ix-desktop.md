@@ -1126,3 +1126,162 @@ What the user found using part nineteen's Code tab:
       held for a second and a half of machine time; a long long helper's
       source from the parser; libc.c4s's helpers named by unit.
       web-ix-code.mjs opens `/lib/libc.c4s` too.
+
+## Part twenty-one: the games' sources, read when they are opened (asked for 2026-10-30)
+
+The Code tab finds a compiled file's sources where its map says, under
+/usr for the repository's own (part nineteen). The root archive puts
+the repository's text files there, but not games/: the games are
+submodules (games/README.md), and their sources are megabytes that every
+visitor would download to boot. So for Doom, Wolfenstein 3D, Rise of the
+Triad and OpenTyrian the tab found nothing, and showed `wl_def.h:1499`
+where the source should have been. Now each game's sources are on the
+disk as lazy files, listed at boot and read the first time something
+opens one; the page keeps what it has read, so it is read once.
+
+### What was there to build on
+
+- **The lazy disk** (part three). `c4ix.sizes`, a "SIZE NAME" line per
+  disk file, makes vfsload's entries lazy RAM files (`vfs_lazyfile`): a
+  name and a size, filled from the host on first use (`vfs_fill`), so
+  `ls` and stat cost nothing. In the page, `index.json` is the same table,
+  and the worker fetches a file with one synchronous request when the
+  machine first opens it.
+- **`hostdir(PREFIX)`**, vfsload's directory of every file the table lists
+  under a prefix: Tyrian's data (which the manifest cannot name, as it is
+  on the disk only where it was there to copy) and the uploads in /home.
+  It took one level only.
+- **The persist store** (page.js, src/c4bb/web/store.js): a medium per
+  system in IndexedDB, written as the machine closes files on drive 1.
+- **jor1k's 9p filesystem** (`js/worker/filesystem`) lists the whole tree
+  up front from a JSON file of names, sizes and modes, marks each file
+  "on the server", and fetches it on its first open, optionally as a
+  `.bz2`, or as a `LazyUint8Array` that fetches ranges. It keeps nothing
+  between visits but what the HTTP cache does. Taken from it: the tree
+  known at boot, the contents on open. Not taken: per-file compression
+  (the host gzips text on the way, and a source is tens of KB) and
+  ranges (a source is read whole anyway).
+
+### What was done
+
+- [x] **Which games.** Each game that is on the disk (its C4IX image is
+      there), so whichever are checked out. All four are GPL v2: Doom
+      (doomgeneric, `LICENSE`), Rise of the Triad (icculus.org's,
+      `COPYING`), OpenTyrian (`COPYING`), and Wolf4SDL, used under the GPL
+      (`license-gpl.txt`; id's original licence is `license-id.txt`). No
+      game's data is in its repository, so no data comes this way.
+      Tyrian's code may be passed on; its data may not, and libjs/site.sh
+      refuses a tree with games/tyrian at all, so the site has none of
+      Tyrian (its sources included) as before.
+- [x] **Which files.** The game repository's tracked text files
+      (`git -C games/NAME ls-files`, as the root archive takes c4's), but
+      not `data/` (data, and /usr/games/tyrian/data is Tyrian's hostdir)
+      or dot-files: every source its maps name, and its README, licence,
+      c4.mk and tools. Doom 192 files, 1.63 MB; Wolfenstein 3D 64,
+      1.52 MB; Rise of the Triad 201, 3.13 MB; OpenTyrian 125, 1.29 MB.
+- [x] **Where.** At their paths in the repository, on the disk and in
+      C4IX alike: `games/doom/am_map.c` is the disk's
+      `games/doom/am_map.c` and C4IX's `/usr/games/doom/am_map.c`, which is
+      where the Code tab looks for what Doom's map names (explore.c
+      `xp_where`: the path, then under /usr). It is the game's own
+      directory, beside `doom.c4r` and `doom1.wad`, as the repository
+      has them. Wolfenstein 3D's two programs share one tree. (The plan
+      for taking Wolfenstein 3D out of the repository, docs/c4-explorer.md,
+      had its sources copied to /usr/games/wolf3d as lazy files; this is
+      that, for every game.)
+- [x] **How they are listed.** build-images.sh copies them to the disk
+      and lists them in `c4ix.sizes`, as every disk file is. C4IX's
+      manifest says `games/: hostdir(games/)`, and hostdir now makes the
+      directories a name has in it (vfsload.c `make_dirs`), so the whole
+      tree is there at boot, ~580 lazy files, without a byte of them read.
+      They are in no `manifest.json`, so the eager loaders (the c4bb
+      page, `lazy: false`) do not fetch them, and the C4KE root disk
+      leaves them out.
+- [x] **How the page keeps them.** index.json gives a game source a
+      third element, the first 16 hex digits of its SHA-256
+      (src/c4bb/tests/lazy-index.py). The worker's disk (now libjs/lazy.js,
+      `LazyFiles`, the worker's class moved out so node can test it) hands
+      a file with a hash to the page once it has fetched it, and the page
+      keeps it in IndexedDB, in the medium `lazy DISK`, as "HASH NAME". At
+      the next boot the page reads that medium while the machine boots
+      (it does not wait for it) and gives the worker what still has the
+      index's hash; the rest it deletes. A rebuilt game whose file changed
+      has another hash, so the file is fetched again and kept under the
+      new one. The worker also keeps them for its own life, so a Reset
+      reads none of them again. `status.disk.cached` counts the files
+      that came from the cache.
+- [x] **Under node** a disk is a directory, read as it is: cli.js reads
+      it whole, the tests' lazy disks file by file, as before.
+- [x] **test-lazy-src.mjs** (in test-libjs): C4IX booted on the lazy
+      disk, its root archive unpacked, fetches none of the sources; `ls`
+      of the game's directory lists them and fetches nothing; `crc32` of
+      one fetches it, once, gives the host's CRC and size, and it is kept
+      under its hash; a second boot with
+      what was kept reads it from the cache and fetches nothing of the
+      games'; and an index with another hash for it drops the kept copy
+      and fetches it again.
+- [x] **web-ix-src.mjs**: in a browser, with the cache emptied, the boot
+      keeps nothing; `:e /usr/games/bin/doom` opens Doom in the Code tab
+      at `main` (dg-gui.c:164) with its C source between the
+      instructions, and File > Open of `/usr/games/wolf3d/wolf3d.c4r`
+      does the same for Wolfenstein 3D (wl_main.c:1848); the page keeps
+      both files; after a reload, Doom's source comes from the cache.
+      OK on Chrome 151, served on 8499.
+
+### What it costs
+
+Measured on helios's tree, which has all four games (Pages', without
+Tyrian, lists 457 of the 582):
+
+| | before | after |
+|---|---|---|
+| index.json, fetched at boot | 7,704 B (2,634 gzipped) | 36,834 B (13,639) |
+| c4ix.sizes, fetched at boot | 6,386 B (2,575 gzipped) | 22,129 B (6,885) |
+| requests at boot (test-lazy-src's console boot, archive unpacked) | 8 files | 8 files |
+| console prompt, machine time | 1.05 s (20.8M cycles) | 1.55 s (30.2M cycles) |
+| root archive unpacked, machine time | 69.7 s | 70.2 s |
+
+- **The boot** fetches no more files: the tables are larger, ~45 KB, or
+  ~15 KB as gzip sends them. Making 582 lazy files costs ~9.4M cycles
+  of vfsload, about 0.1 s at the page's 100 MHz. The first version cost
+  twice that: profiled (a boot profiler after prof-c4ix.mjs), it was the
+  kernel's linear directory lookup (`vfs_child`, 4.8M cycles, which
+  stays: each new file is looked up among those its directory already
+  has), two allocations per file in vfsload (now two buffers), a
+  `umkdir` per file (now one per directory), and every lookup of a
+  manifest entry reading past the sources' lines (now last in
+  c4ix.sizes).
+- **Opening one.** `:e /usr/games/bin/doom` showed Doom at `main` with
+  its source in 1.6 s, and File > Open of `/usr/games/wolf3d/wolf3d.c4r`
+  in 3.1 s (web-ix-src.mjs, Chrome 151): the program, then the one
+  source file shown, each one request. After a reload the source is
+  not requested at all.
+- **The site** (libjs/site.sh): the disk's `games/` is 457 files,
+  6.29 MB, for Doom, Wolfenstein 3D and Rise of the Triad -- about 3.5%
+  on a site of ~176 MB. They are copies of the site's own `games/`
+  (site.sh ships every tracked file of the checked-out games already),
+  which the Pages repository's git stores once. A visitor downloads only
+  the files they open, a few KB each with gzip.
+- **Instead, in the root archive**, the three games' sources would add
+  ~1.29 MB gzipped (413 + 248 + 624 KB) to the 3.96 MB that every
+  desktop boot fetches and inflates.
+- **Under node**, cli.js reads a disk directory whole, so it reads the
+  7.6 MB of sources at each start too; the tests' lazy disks do not.
+
+### Found on the way
+
+- **The games' programs are in /usr/games/bin**, not /bin: `/bin/doom`
+  does not exist, and the IDE opens it as a new file. `:e
+  /usr/games/bin/doom` (the shell finds `doom` on its PATH) is the way.
+- C4IX's `wc` counts its standard input only; `wc FILE` waits on it.
+- In this tree `c4ix-rott.c4r`'s map gives libjs/guest/snd.c as 1,077
+  bytes, and the file is 1,188: the Rise of the Triad image is older
+  than the file, so the Code tab marks that source as changed.
+- A new worktree needs its submodules checked out before its build
+  products are copied in and touched; otherwise every game object is
+  older than its source and is compiled again.
+
+Left for later: Tyrian's sources on the site, which needs site.sh's
+rule (no tree with games/tyrian) to tell its code from its data; and a
+kernel directory lookup better than linear, which would take the rest
+of the boot cost away.

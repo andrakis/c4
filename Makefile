@@ -2508,6 +2508,13 @@ PHONY += test-grin
 test-persist: c4bb-images
 	node libjs/tests/test-persist.mjs
 PHONY += test-persist
+# test-lazy-root: C4IX's root archive read from the tar persist keeps on
+# drive 1, not unpacked into RAM; files read kept, and dropped again when
+# memory is short (docs/c4ix-design.md, "The root archive, read where it
+# is kept"). Part of test-libjs.
+test-lazy-root: c4bb-images
+	node libjs/tests/test-lazy-root.mjs
+PHONY += test-lazy-root
 
 # test-libc-bare: libc's scanf, fseek and fread (src/c4ix/libc/tests/
 # scantest.c) on the bare machine, against gcc's build of the same.

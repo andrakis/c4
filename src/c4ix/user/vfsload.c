@@ -642,8 +642,11 @@ int load_entries() {
 // With -w (the desktop's boot: init --desktop) vfsload waits for each
 // instead, while c4ix-splash shows the loading screen on the display
 // (it says "not fitted" and leaves where there is none), so the desktop
-// and top start on the whole filesystem.
+// and top start on the whole filesystem. If memory ran out for it
+// (c4ix-persist's exit status 3), vfsload says so and exits 3, and init
+// starts no desktop on what there is.
 int g_wait;
+int g_nomem;
 
 static char *itoa10(int v) {
     char *b;
@@ -657,7 +660,7 @@ static char *itoa10(int v) {
 }
 
 void unpack_archives() {
-    int v, j, n, st[4], pid, sp;
+    int v, j, n, st[4], pid, sp, rc;
     char *name;
     char **targv;
     char **sargv;
@@ -690,8 +693,13 @@ void unpack_archives() {
     sargv = (char **)ualloc(4 * sizeof(int));
     sargv[0] = "c4ix-splash.c4r"; sargv[1] = "-p"; sargv[2] = itoa10(pid); sargv[3] = 0;
     sp = spawn(sargv[0], 3, sargv);
-    uwait(pid);
+    rc = uwait(pid);
     if (sp > 0) uwait(sp);
+    if (rc == 3) {
+        uprintf("vfsload: %s could not be unpacked: out of memory\n", name);
+        g_nomem = 1;
+        return;
+    }
     uprintf("vfsload: %s unpacked\n", name);
 }
 
@@ -726,5 +734,5 @@ int main(int argc, char **argv) {
     uprintf("vfsload: %d/%d entries loaded from %s\n", ok, g_nentries, manifestName);
     if (g_nhostdirs) uprintf("vfsload: %d more left on the host in hostdir() directories\n", load_hostdirs());
     unpack_archives();
-    return 0;
+    return g_nomem ? 3 : 0;
 }

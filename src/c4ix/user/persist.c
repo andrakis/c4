@@ -4,8 +4,9 @@
 //   persist boot ARCHIVE...  unpack the system (vfsload runs this as the
 //                            boot's unpacking task), note what it is,
 //                            then lay the saved changes over it; the
-//                            unpacked system is kept on the drive, and
-//                            the next boot unpacks that instead
+//                            unpacked system is kept on the drive, its
+//                            files are read from there, and the next
+//                            boot reads that copy instead
 //   persist save             write every change since boot to the drive
 //   sync                     the same (/bin/sync is this program)
 //   persist status           what save would write
@@ -40,6 +41,22 @@
 // kept copy, and neither fetches nor inflates the archive. A new archive
 // has another id and is unpacked again; Reset Files on the page empties
 // the drive, and so does the same. Only for one archive, the root's.
+//
+// Read where it is kept. The kept tar is not untarred into RAM: each of
+// its files is made a lazy file (ulazyfile) whose bytes are its span of
+// the tar on drive 1, "1:c4ix-base.tar@OFF+LEN", which the host reads
+// (devices.js diskOpen). Nothing of them is read at boot; the kernel
+// reads a file from there when it is wanted, keeps a small one while
+// memory allows and drops it again when memory is short (vfs.c, the
+// cache), and a file that changes is RAM's until persist save keeps it.
+// The first boot inflates the archive straight onto the drive, a window
+// at a time (arc_gunzip_to), and then does the same, so no boot holds
+// the unpacked tree in RAM. Where there is no drive, or it will not take
+// the tar, the archive is unpacked into RAM as before.
+//
+// Out of memory. A boot that cannot unpack the system says so and exits
+// 3 (NOMEM); vfsload and init then stop the desktop's boot there, where
+// the desktop on half a filesystem would only fail later, less clearly.
 
 #include "c4ix_user.h"
 #include "archive.h"
@@ -48,7 +65,9 @@ enum {
     C4I_C4MJS = 8, C4I_MMU = 0x80000,
     DISK_FD = 0x124, DISK_WNAME = 0x178, DISK_WADDR = 0x17c, DISK_WLEN = 0x180,
     DISK_WCLOSE = 0x184, DISK_COUNT = 0x188,
-    PATHMAX = 256, NAMEMAX = 64, CHUNK = 65536, BLOCK = 512
+    HEAP_BASE = 0x144, HEAP_END = 0x148,
+    PATHMAX = 256, NAMEMAX = 64, CHUNK = 65536, BLOCK = 512,
+    NOMEM = 3              // boot's exit status when memory ran out
 };
 
 static char *SNAP = "1:c4ix-persist.tar";
@@ -293,9 +312,105 @@ static char *archive_id(char *name) {
     return id;
 }
 
+// ---- the kept tar, read where it is ----
+
+static int nomem;          // what failed was memory
+
+static int oct(char *p, int n) {
+    int v, i;
+    v = 0; i = 0;
+    while (i < n && (p[i] == ' ' || !p[i])) ++i;
+    while (i < n && p[i] >= '0' && p[i] <= '7') { v = v * 8 + p[i] - '0'; ++i; }
+    return v;
+}
+
+// S gets V in decimal; the end of what it got
+static char *putdec(char *s, int v) {
+    char d[12];
+    int n;
+    n = 0;
+    d[n++] = '0' + v % 10; v = v / 10;
+    while (v > 0) { d[n++] = '0' + v % 10; v = v / 10; }
+    while (n) *s++ = d[--n];
+    *s = 0;
+    return s;
+}
+
+// OUT gets the name of LEN bytes of TAR from POS: TAR@POS+LEN
+static void span(char *out, char *tar, int pos, int len) {
+    char *e;
+    e = ustrcpy(out, tar) - 1;
+    *e++ = '@';
+    e = putdec(e, pos);
+    *e++ = '+';
+    putdec(e, len);
+}
+
+// TAR's bytes at POS, LEN of them, into BUF; how many
+static int span_read(char *tar, int pos, int len, char *buf) {
+    char name[PATHMAX];
+    int fd, n, got;
+    span(name, tar, pos, len);
+    if ((fd = uopen(name, O_RD)) < 0) return 0 - 1;
+    got = 0;
+    while (got < len && (n = uread(fd, buf + got, len - got)) > 0) got = got + n;
+    uclose(fd);
+    return got;
+}
+
+// The tar on the drive, its files made lazy files on their spans of it,
+// in its order, and its directories made: the files, or -1 (nomem says
+// whether memory ran out). A tar this does not read (not ustar) is -1
+// before anything is made.
+static int lazy_tar(char *tar) {
+    char name[PATHMAX], path[PATHMAX], dir[PATHMAX], host[PATHMAX];
+    char *e;
+    int pos, size, type, files, i, n, o, slash;
+    pos = 0; files = 0; dir[0] = 0;
+    while (span_read(tar, pos, BLOCK, hdr) == BLOCK && hdr[0]) {
+        if (hdr[257] != 'u' || hdr[258] != 's' || hdr[259] != 't') return 0 - 1;
+        // ustar: PREFIX "/" NAME, where there is a prefix
+        n = 0;
+        if (hdr[345]) { i = 0; while (i < 155 && hdr[345 + i]) name[n++] = hdr[345 + i++]; name[n++] = '/'; }
+        i = 0; while (i < 100 && hdr[i]) name[n++] = hdr[i++];
+        name[n] = 0;
+        size = oct(hdr + 124, 12);
+        type = hdr[156];
+        pos = pos + BLOCK;
+        // "/" NAME, without "./" before it or "/" after it
+        e = name;
+        while (e[0] == '.' && e[1] == '/') e = e + 2;
+        while (e[0] == '/') ++e;
+        path[0] = '/';
+        o = 1;
+        while (*e && o < PATHMAX - 1) path[o++] = *e++;
+        while (o > 1 && path[o - 1] == '/') --o;
+        path[o] = 0;
+        if (type == '5') {
+            if (arc_mkdirs(path) < 0) { nomem = 1; return 0 - 1; }
+        } else if (type == '0' || type == 0 || type == '7') {
+            // its directory, once for a run of files in it
+            slash = o - 1;
+            while (slash > 0 && path[slash] != '/') --slash;
+            path[slash] = 0;
+            if (slash > 0 && !same(dir, path)) {
+                if (arc_mkdirs(path) < 0) { nomem = 1; return 0 - 1; }
+                ustrcpy(dir, path);
+            }
+            path[slash] = '/';
+            span(host, tar, pos, size);
+            if (ulazyfile(path, host, size) < 0) { nomem = 1; return 0 - 1; }
+            ++files;
+        }
+        // links, devices and pax headers have nothing C4IX can hold
+        pos = pos + (size + BLOCK - 1) / BLOCK * BLOCK;
+    }
+    return files;
+}
+
 // The kept copy, if it is ID's: its files, or -1
 static int from_kept(char *id) {
-    char *have, *tar;
+    char *have;
     int len, n, fd;
     if ((fd = uopen(KID, O_RD)) < 0) return 0 - 1;
     uclose(fd);
@@ -304,60 +419,110 @@ static int from_kept(char *id) {
     n = same(have, id);
     free(have);
     if (!n) return 0 - 1;
-    if (!(tar = arc_readfile(KTAR, &len))) return 0 - 1;
-    n = arc_untar(tar, len, "/", ARC_EXTRACT, 0);
-    free(tar);
-    return n;
+    return lazy_tar(KTAR);
 }
 
-// Keep TAR, the archive ID unpacked to. The id is emptied first and
-// written last, so a copy cut short is never taken for a whole one.
-static void keep(char *tar, int len, char *id) {
-    if (w_open(KID) < 0) return;
-    if (w_close() < 0) return;
-    if (w_open(KTAR) < 0) return;
-    w_put(tar, len);
-    if (w_close() < 0) { ufprintf(STDERR, "persist: could not keep %s\n", KTAR); return; }
-    if (w_open(KID) < 0) return;
-    w_put(id, ustrlen(id));
-    w_close();
+// arc_gunzip_to's sink: the tar onto the drive as it is inflated
+static int to_drive(char *buf, int len) {
+    w_put(buf, len);
+    return wbad ? 0 - 1 : len;
 }
 
-// The archive unpacked, as arc_extract does, and its tar kept for ID
-static int unpack_keep(char *name, char *id) {
-    char *raw, *tar;
-    int rawlen, len, n;
-    if (!(raw = arc_readfile(name, &rawlen))) return 0 - 1;
+// was the last archive failure memory? (libarc's messages for it start "out of memory")
+static int arc_nomem() {
+    return !arc_error || (arc_error[0] == 'o' && arc_error[1] == 'u');
+}
+
+// The archive (RAW, read in) unpacked into RAM, as arc_extract does; its
+// tar kept for ID too, where there is one. The way where there is no
+// drive that takes the tar.
+static int unpack_ram(char *raw, int rawlen, char *id) {
+    char *tar;
+    int len, n;
     if (rawlen >= 2 && (raw[0] & 255) == 0x1F && (raw[1] & 255) == 0x8B) {
-        if (arc_gunzip(raw, rawlen, &tar, &len) < 0) { free(raw); return 0 - 1; }
+        if (arc_gunzip(raw, rawlen, &tar, &len) < 0) { free(raw); nomem = arc_nomem(); return 0 - 1; }
         free(raw);
     } else {
         tar = raw;
         len = rawlen;
     }
     n = arc_untar(tar, len, "/", ARC_EXTRACT, 0);
-    if (n >= 0 && id) keep(tar, len, id);
+    // a file that could not be written: there is nothing else it can be
+    if (n < 0 && !arc_error) { nomem = 1; arc_error = "out of memory for its files"; }
+    if (n >= 0 && id && w_open(KID) >= 0 && w_close() >= 0 && w_open(KTAR) >= 0) {
+        w_put(tar, len);
+        if (w_close() >= 0 && w_open(KID) >= 0) { w_put(id, ustrlen(id)); w_close(); }
+    }
     free(tar);
     return n;
 }
 
+// The archive inflated onto the drive as the tar ID unpacked to, and its
+// files read from there (lazy_tar). The id is emptied first and written
+// last, so a copy cut short is never taken for a whole one. Where the
+// drive will not take it, unpacked into RAM instead.
+static int unpack_keep(char *name, char *id) {
+    char *raw;
+    int rawlen, n;
+    if (!(raw = arc_readfile(name, &rawlen))) { nomem = arc_nomem(); return 0 - 1; }
+    if (!id || rawlen < 2 || (raw[0] & 255) != 0x1F || (raw[1] & 255) != 0x8B ||
+        w_open(KID) < 0 || w_close() < 0 || w_open(KTAR) < 0)
+        return unpack_ram(raw, rawlen, id);
+    n = arc_gunzip_to(raw, rawlen, (int)&to_drive);
+    if (w_close() < 0 || wbad) {
+        ufprintf(STDERR, "persist: could not keep %s; unpacking into memory\n", KTAR);
+        return unpack_ram(raw, rawlen, 0);
+    }
+    free(raw);
+    if (n < 0) { nomem = arc_nomem(); return 0 - 1; }
+    if (w_open(KID) >= 0) { w_put(id, ustrlen(id)); w_close(); }
+    if ((n = lazy_tar(KTAR)) >= 0) uprintf("persist: %s: %d files, unpacked onto drive 1 and read from there\n", name, n);
+    return n;
+}
+
+// How much memory this machine has for programs, in MB, where the host
+// says: its heap, as the kernel's boot line counts it
+static int heap_mb() {
+    if (!(__c4_info() & C4I_C4MJS)) return 0;
+    return (*(int *)HEAP_END - *(int *)HEAP_BASE) / 1048576;
+}
+
+// NAME could not be unpacked: why, and NOMEM if it was memory
+static int failed(char *name) {
+    ufprintf(STDERR, "persist: %s: %s\n", name, arc_error ? arc_error : nomem ? "out of memory" : "failed");
+    if (!nomem) return 0;
+    if (heap_mb()) ufprintf(STDERR, "persist: out of memory: %s does not fit in this machine's %d MB of heap\n", name, heap_mb());
+    else ufprintf(STDERR, "persist: out of memory unpacking %s\n", name);
+    return NOMEM;
+}
+
 static int boot(int argc, char **argv) {
-    int i, n;
+    int i, n, rc;
     char *id;
     i = 2;
+    rc = 0;
     // the root archive alone, and a drive: the copy kept from the boot
-    // before, or the archive unpacked and its copy kept for the next
+    // before, or the archive inflated onto the drive for this boot and
+    // the next; either way its files are read from there
     if (argc == 3 && have_drive()) {
         id = archive_id(argv[2]);
+        nomem = 0;
+        arc_error = 0;
         n = id ? from_kept(id) : 0 - 1;
-        if (n >= 0) uprintf("persist: %s: %d files from the copy kept on drive 1\n", argv[2], n);
-        else if (unpack_keep(argv[2], id) < 0) ufprintf(STDERR, "persist: %s: %s\n", argv[2], arc_error ? arc_error : "failed");
+        if (n >= 0) uprintf("persist: %s: %d files from the copy kept on drive 1, read from there\n", argv[2], n);
+        else if (nomem) rc = failed(argv[2]);
+        else if ((n = unpack_keep(argv[2], id)) < 0) rc = failed(argv[2]);
         if (id) free(id);
+        if (rc) return rc;
         i = argc;
     }
     while (i < argc) {
+        nomem = 0;
         n = arc_extract(argv[i], "/", ARC_EXTRACT, 0);
-        if (n < 0) ufprintf(STDERR, "persist: %s: %s\n", argv[i], arc_error ? arc_error : "failed");
+        if (n < 0) {
+            if (!arc_error) nomem = 1;
+            if ((rc = failed(argv[i]))) return rc;
+        }
         ++i;
     }
     if (!have_drive()) return 0;

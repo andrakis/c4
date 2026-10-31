@@ -497,7 +497,7 @@ static void mmu_release(struct urgn *r) {
 // image, a stack, argv. Page-aligned, and the kernel's until mmu_adopt.
 int umalloc(int n) {
     struct urgn *r;
-    if (!mmu_on) return (int)malloc(n);
+    if (!mmu_on) return (int)vfs_malloc(n);
     if (!(r = mmu_region(n, UR_BLOCK))) return 0;
     return r->base;
 }
@@ -505,7 +505,7 @@ int umalloc(int n) {
 // N bytes of stack, with a guard page below them that is never mapped
 int umalloc_stack(int n) {
     struct urgn *r;
-    if (!mmu_on) return (int)malloc(n);
+    if (!mmu_on) return (int)vfs_malloc(n);
     if (!(r = mmu_region(n + MMU_PAGE, UR_BLOCK))) return 0;
     r->guard = 1;
     return r->base + MMU_PAGE;
@@ -1131,7 +1131,7 @@ static int mmu_fget(struct urgn *keep) {
             if (!mmu_cnew(raw, (raw + MMU_PAGE - 1) & ~(MMU_PAGE - 1), FC_SMALL, 0)) { free((char *)raw); return 0; }
             continue;
         }
-        if (!mmu_evict(keep, 16)) return 0;
+        if (!vfs_reclaim(FC_SMALL * MMU_PAGE) && !mmu_evict(keep, 16)) return 0;
     }
     return 0;
 }
@@ -1408,14 +1408,16 @@ static int mmu_evict(struct urgn *keep, int want) {
     return n;
 }
 
-// A heap block for NP pages, putting out whole blocks to make room while
-// there are any (a block's memory is the heap's again once all its frames
-// are free); and whether memory is short now (mmu_short: allocation takes
-// the kernel lock, where swap may run)
+// A heap block for NP pages, dropping files' cached bytes (vfs.c) and
+// then putting out whole blocks to make room while there are any (a
+// block's memory is the heap's again once all its frames are free); and
+// whether memory is short now (mmu_short: allocation takes the kernel
+// lock, where swap may run). A cached file is the cheaper to give up:
+// its bytes are on the host already, where a page put out is written.
 static int mmu_raw(int np, struct urgn *keep) {
     int raw, used, size;
     while (!(raw = (int)malloc(np * MMU_PAGE + MMU_PAGE - 1))) {
-        if (!mmu_evict(keep, 0)) return 0;
+        if (!vfs_reclaim(np * MMU_PAGE + MMU_PAGE - 1) && !mmu_evict(keep, 0)) return 0;
     }
     if (mmu_swapok) {
         used = *(int *)C4IX_HEAP_USED;

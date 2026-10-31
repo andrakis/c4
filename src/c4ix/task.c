@@ -293,10 +293,12 @@ int task_umem(struct task *t) {
 // up what it gets for both of them.
 int task_ualloc(struct task *t, int bytes) {
     int *h;
-    if (!t || t->privs != PRIV_USER) return (int)malloc(bytes);
+    // files' cached bytes give way, while memory is short and when there is none (vfs.c)
+    vfs_trim();
+    if (!t || t->privs != PRIV_USER) return (int)vfs_malloc(bytes);
     if (mmu_on) return umem_alloc(t, bytes);
     while (t->vfparent) t = t->vfparent;
-    if (bytes < 0 || !(h = (int *)malloc(bytes + UBLOCK_WORDS * sizeof(int)))) return 0;
+    if (bytes < 0 || !(h = (int *)vfs_malloc(bytes + UBLOCK_WORDS * sizeof(int)))) return 0;
     sched_lock();
     klock_take(umem_lock);
     h[0] = t->ublocks;

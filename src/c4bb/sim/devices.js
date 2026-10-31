@@ -440,9 +440,29 @@ export class Devices {
       this.fds.set(fd, { data: procUptime(Math.max(0, this.simMs())), pos: 0 });
       return fd;
     }
+    let data = this.diskFind(name);
+    // "NAME@OFF+LEN": LEN bytes of NAME from OFF, as a file of their own,
+    // where there is no file of the whole name. C4IX reads its unpacked
+    // root archive this way, a file at a time out of the tar it keeps on
+    // drive 1 (docs/c4ix-design.md, "The root archive, read where it is
+    // kept"). Past the end it is shorter, or empty.
+    const span = data ? null : /^(.*)@(\d+)\+(\d+)$/.exec(name);
+    if (span && (data = this.diskFind(span[1]))) {
+      const at = Math.min(+span[2], data.length);
+      data = data.subarray(at, Math.min(at + +span[3], data.length));
+    }
+    if (!data) return -1;
+    const fd = this.nextFd++;
+    this.fds.set(fd, { data, pos: 0 });
+    return fd;
+  }
+
+  // The bytes of the file NAME names ("1:name" or a name on the selected
+  // drive), or undefined
+  diskFind(name) {
     const { drv, rest } = this.resolveDrive(name);
     const media = this.drives[drv];
-    if (!media) return -1;
+    if (!media) return undefined;
     const files = media.files;
     const clean = rest.startsWith('./') ? rest.slice(2) : rest;
     let data;
@@ -464,10 +484,7 @@ export class Devices {
       const base = rest.slice(rest.lastIndexOf('/') + 1);
       data = files.get(base);
     }
-    if (!data) return -1;
-    const fd = this.nextFd++;
-    this.fds.set(fd, { data, pos: 0 });
-    return fd;
+    return data;
   }
 
   // Canonical-mode line buffering, unconditionally: a real terminal's

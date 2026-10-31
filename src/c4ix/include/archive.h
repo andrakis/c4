@@ -7,6 +7,8 @@
 // Every archive this reads is a whole file in memory: the inflater
 // writes into one buffer the size the gzip trailer gives, and the tar
 // reader walks that buffer. Simple, and C4IX's files are RAM anyway.
+// The exception is arc_gunzip_to, which hands its output on a window at
+// a time: persist writes the root archive's tar to drive 1 so.
 //
 
 #ifndef __C4IX_ARCHIVE_H
@@ -27,6 +29,12 @@ int arc_crc32(int crc, char *buf, int len);
 // Inflate a gzip member. On success *OUT is a fresh buffer of *OUTLEN
 // bytes, CRC-checked, and 0 is returned; on failure, -1 and arc_error.
 int arc_gunzip(char *in, int inlen, char **out, int *outlen);
+
+// The same, a window at a time, for output too big to hold: PUT is a
+// function (c4lc calls any variable; pass (int)&fn), put(buf, len), that
+// takes each piece in order and returns LEN, or anything else to stop.
+// Memory: 256 KB beside the input. The output's size, or -1 and arc_error.
+int arc_gunzip_to(char *in, int inlen, int put);
 
 // Raw deflate data into OUT, which holds at most OUTCAP bytes.
 // Returns the bytes written, or -1. *USED gets the input consumed.

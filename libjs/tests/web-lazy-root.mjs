@@ -80,7 +80,7 @@ try {
     const said = (await out()).slice(n0);
     const size = await tab.eval("document.getElementById('display').width + 'x' + document.getElementById('display').height");
     // what a program that did not start says (the kernel's, the shell's, the game's own)
-    const bad = said.match(/.{0,60}(out of memory|cannot run|killed|not found|exited|page fault|Couldn't malloc).{0,60}/i);
+    const bad = said.match(/.{0,60}(out of memory|cannot find|cannot load|killed|not found|exited|page fault|Couldn't malloc).{0,60}/i);
     ok(`${g} starts in ${mb} MB (display ${size})`, !bad && size !== '800x600', bad ? bad[0] : said.slice(-600));
   }
 } finally {

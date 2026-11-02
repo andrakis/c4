@@ -345,9 +345,16 @@ static int b4_spawn(char *prog, int argc, char **argv) {
     int pid;
     char *alt;
     pid = spawn(b4_prog(prog), argc, argv);
-    if (pid < 0) { alt = b4_cat3("c4ix-", prog, ".c4r"); pid = spawn(alt, argc, argv); }
-    if (pid < 0) { alt = b4_cat3(prog, ".c4r", ""); pid = spawn(alt, argc, argv); }
+    if (pid == SPAWN_NOENT) { alt = b4_cat3("c4ix-", prog, ".c4r"); pid = spawn(alt, argc, argv); }
+    if (pid == SPAWN_NOENT) { alt = b4_cat3(prog, ".c4r", ""); pid = spawn(alt, argc, argv); }
     return pid;
+}
+
+// what b4_spawn's failure PID says, before the program's name
+static char *b4_why(int pid) {
+    if (pid == SPAWN_NOMEM) return "out of memory starting ";
+    if (pid == SPAWN_NOENT) return "cannot find ";
+    return "cannot start ";
 }
 
 // ---- -j: steps at once ----
@@ -457,7 +464,7 @@ static void b4_start(int k) {
     j->pid = b4_spawn(j->argv[1], j->argc - 1, j->argv + 1);
     if (j->out) { udup2(saved, STDOUT); uclose(saved); uclose(fd); }
     if (j->pid < 0) {
-        ++b4_failed; b4_line = j->line; b4_err("cannot start ", j->argv[1]);
+        ++b4_failed; b4_line = j->line; b4_err(b4_why(j->pid), j->argv[1]);
         if (!b4_keep) b4_stop = 1;
         b4_dequeue(k); b4_free_job(j);
         return;
@@ -592,7 +599,7 @@ static int b4_run(char **w, int n) {
     // w[1] is the program; it is argv[0] of the child
     pid = b4_spawn(w[1], n - 1, w + 1);
     if (out) { udup2(saved, STDOUT); uclose(saved); uclose(fd); }
-    if (pid < 0) { ++b4_failed; b4_target = 0; b4_ndeps = 0; return b4_err("cannot start ", w[1]); }
+    if (pid < 0) { ++b4_failed; b4_target = 0; b4_ndeps = 0; return b4_err(b4_why(pid), w[1]); }
     code = uwait(pid);
     ++b4_ran;
 

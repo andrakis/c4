@@ -42,6 +42,7 @@ enum { C4R_BUF_MAX = 4194304,     // 4MB image limit
 // -- a bare C4KE program name may match a real file that is not an
 // image at all. Complaints about those are noise, not diagnosis.
 int loader_quiet;
+int loader_err;
 
 // One image, read and relocated, with its file still at hand: the
 // symbol patches and the symbol table are read out of it in place.
@@ -125,9 +126,10 @@ static void mod_free(struct c4r_mod *m) {
     m->code = 0; m->data = 0; m->buf = 0;
 }
 
-// PATH did not fit: said, so that a program that will not start says
-// why (the shell's own word is only "cannot run"). 0.
+// PATH did not fit: said, with how much, and the shell says "out of
+// memory" where it would say "cannot find" (loader_err). 0.
 static int loader_nomem(char *path, int bytes) {
+    loader_err = SPAWN_NOMEM;
     kprintf("c4ix: loader: out of memory loading %s (%d KB)\n", path, (bytes + 1023) / 1024);
     return 0;
 }
@@ -161,7 +163,7 @@ static int mod_read(char *path, struct c4r_mod *m) {
         // copy, made while the 4 MB was held, landed past it, and a full
         // build left a heap of 4 MB holes too cut up to load the next
         // program into, until b4ke's allocations failed.
-        if (!(buf = (char *)malloc(65536))) { close(fd); return 0; }
+        if (!(buf = (char *)malloc(65536))) { close(fd); return loader_nomem(path, 65536); }
         total = 0;
         // never far past the limit: a host file of any size can be named
         while (total <= C4R_BUF_MAX && (n = read(fd, buf, 65536)) > 0) total = total + n;
@@ -185,6 +187,7 @@ static int mod_read(char *path, struct c4r_mod *m) {
             // Silent: callers try several candidate names (the shell
             // resolves "wc" against three), so a miss is routine and
             // the caller is the one that knows when to complain.
+            loader_err = SPAWN_NOENT;
             return 0;
         }
         // The RAM filesystem -- and this is not a convenience. A program the machine produced
@@ -408,14 +411,18 @@ static int load_libraries(char *path, struct c4r_mod *mods) {
                         // shared code already loaded: only the data is new
                         memcpy((char *)(mods + n), (char *)sh->mod, sizeof(struct c4r_mod));
                         (mods + n)->shared = 1;
-                        have = ((mods + n)->data = mod_data_copy(sh->mod)) != 0;
+                        if (!((mods + n)->data = mod_data_copy(sh->mod))) return loader_nomem(lib, sh->mod->memsz);
+                        have = 1;
                     } else {
                         loader_quiet = loader_quiet + 1;
-                        have = mod_read(lib, mods + n) || mod_read(lib + j, mods + n);
+                        have = mod_read(lib, mods + n) || (loader_err != SPAWN_NOMEM && mod_read(lib + j, mods + n));
                         loader_quiet = loader_quiet - 1;
                     }
                     if (!have) {
+                        // (out of memory for it: said already)
+                        if (loader_err == SPAWN_NOMEM) return 0;
                         kprintf("c4ix: loader: %s needs %s, which is not there\n", path, lib);
+                        loader_err = SPAWN_BAD;   // the program is there
                         return 0;
                     }
                     (mods + n)->path = lib;
@@ -560,7 +567,10 @@ int c4r_load(char *path, struct c4r_image *img) {
     int *cons, *des, *libs;
 
     memset((char *)img, 0, sizeof(struct c4r_image));
-    if (!(mods = (struct c4r_mod *)malloc((LIB_MAX + 1) * sizeof(struct c4r_mod)))) return 0;
+    // until it is known to be another reason, it will not load
+    loader_err = SPAWN_BAD;
+    if (!(mods = (struct c4r_mod *)malloc((LIB_MAX + 1) * sizeof(struct c4r_mod))))
+        return loader_nomem(path, (LIB_MAX + 1) * sizeof(struct c4r_mod));
     memset((char *)mods, 0, (LIB_MAX + 1) * sizeof(struct c4r_mod));
     if (!mod_read(path, mods)) { free(mods); return 0; }
     (mods + 0)->path = path;
@@ -708,6 +718,9 @@ struct task *task_spawn_priv(char *path, int argc, int argv, int privs) {
     if (!(t = task_create(name, img.entry, argc, argv))) {
         sched_unlock();
         c4r_unload(&img);
+        // no memory for its task or its stack
+        kprintf("c4ix: out of memory starting %s\n", path);
+        loader_err = SPAWN_NOMEM;
         return 0;
     }
     t->img_code = img.code;

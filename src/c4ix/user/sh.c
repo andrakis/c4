@@ -506,7 +506,7 @@ static int sh_runline(char **w, int nw) {
     char **spawned;
     char *infile, *outfile;
     char *cand;
-    int i, k, argc, background, hasnext, pid, fd, st, form;
+    int i, k, argc, background, hasnext, pid, fd, st, form, err;
     int prev_read, saved0, saved1;
     int p[2];
     int pids[ARG_MAX];
@@ -569,11 +569,14 @@ static int sh_runline(char **w, int nw) {
         }
 
         spawned = sh_dup_argv(argv, argc);
-        pid = -1;
+        // the first candidate that is there is the program: a later one
+        // is not tried when it would not load or there was no memory
+        pid = SPAWN_NOENT;
+        err = SPAWN_NOENT;
         form = 0;
-        while (form < 4 && pid < 0) {
+        while (form < 4 && pid < 0 && err == SPAWN_NOENT) {
             cand = sh_candidate(argv[0], form);
-            if (cand) pid = spawn(cand, argc, spawned);
+            if (cand) { pid = spawn(cand, argc, spawned); if (pid < 0) err = pid; }
             ++form;
         }
 
@@ -583,7 +586,14 @@ static int sh_runline(char **w, int nw) {
         if (hasnext) { uclose(p[1]); prev_read = p[0]; }
         else prev_read = -1;
 
-        if (pid < 0) { uprintf("sh: cannot run %s\n", argv[0]); free(spawned); return 1; }
+        if (pid < 0) {
+            // (what would not load, the kernel's log says why)
+            if (err == SPAWN_NOMEM) uprintf("sh: out of memory starting %s\n", argv[0]);
+            else if (err == SPAWN_NOENT) uprintf("sh: cannot find %s\n", argv[0]);
+            else uprintf("sh: cannot load %s\n", argv[0]);
+            free(spawned);
+            return 1;
+        }
         if (background) sh_addjob(pid, spawned);
         else { pids[npids] = pid; ++npids; free(spawned); }
     }

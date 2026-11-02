@@ -84,7 +84,7 @@ for (let i = 0; i < 3; i++) {
   check(/c4rlink: wrote/.test(t) && !/failed to load|did not|error/.test(t), `cc compiles and links where.c with libc4ix (${i + 1} of 3)`, t);
 }
 for (let k = 0; k < CPUS; k++) {
-  t = runFor(`pin ${k} /tmp/where0.c4r pinned`, /where: [^\n]*\n|cannot run/, 40000);
+  t = runFor(`pin ${k} /tmp/where0.c4r pinned`, /where: [^\n]*\n|cannot (find|load)|out of memory/, 40000);
   check(new RegExp(`where: pinned on CPU ${k} of ${CPUS}\\n`).test(t), `it runs on CPU ${k}`, t);
 }
 check(!/page fault|panic|illegal/.test(text()), 'no fault, no panic', text());

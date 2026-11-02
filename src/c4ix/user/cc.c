@@ -136,9 +136,11 @@ static int run(char *prog, int argc, char **argv) {
         uprintf("\n");
     }
     pid = spawn(cat3("/bin/", prog, ""), argc, argv);
-    if (pid < 0) pid = spawn(cat3(prog, ".c4r", ""), argc, argv);
-    if (pid < 0) pid = spawn(cat3("c4ix-", prog, ".c4r"), argc, argv);
-    if (pid < 0) { ufprintf(STDERR, "cc: cannot run %s\n", prog); return 1; }
+    if (pid == SPAWN_NOENT) pid = spawn(cat3(prog, ".c4r", ""), argc, argv);
+    if (pid == SPAWN_NOENT) pid = spawn(cat3("c4ix-", prog, ".c4r"), argc, argv);
+    if (pid == SPAWN_NOMEM) { ufprintf(STDERR, "cc: out of memory starting %s\n", prog); return 1; }
+    if (pid == SPAWN_NOENT) { ufprintf(STDERR, "cc: cannot find %s\n", prog); return 1; }
+    if (pid < 0) { ufprintf(STDERR, "cc: cannot load %s\n", prog); return 1; }
     code = uwait(pid);
     // a tool the kernel stopped: say what it said
     if (code < 0 && why(pid, from) == 2)

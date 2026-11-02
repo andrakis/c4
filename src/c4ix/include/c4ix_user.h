@@ -76,6 +76,10 @@ int  uclose(int fd);
 int  uexit(int code);
 int  uyield();
 int  spawn(char *path, int argc, char **argv);
+// spawn's failures: PATH is not there, there was not the memory to load
+// or start it, or it is there and will not load (the kernel's log says
+// why: not a .c4r, a library it needs missing, ...). The same in c4ix.h.
+enum { SPAWN_NOENT = -1, SPAWN_NOMEM = -2, SPAWN_BAD = -3 };
 int  uwait(int id);
 int  udup(int fd);
 int  udup2(int oldfd, int newfd);

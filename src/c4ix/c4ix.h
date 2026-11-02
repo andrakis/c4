@@ -705,6 +705,8 @@ enum { CK_TLEV_ROM = 0x10 };
 enum { CK_PRIV_NONE = 0, CK_PRIV_USER = 1, CK_PRIV_KERNEL = 2 };
 
 extern int loader_quiet;   // suppress "not an image" while probing paths
+extern int loader_err;     // why c4r_load last failed, SYS_SPAWN's answer:
+enum { SPAWN_NOENT = -1, SPAWN_NOMEM = -2, SPAWN_BAD = -3 };   // as include/c4ix_user.h
 
 int  ck_dispatch(int num, int *args);
 void ck_task_free(struct task *t);   // release compat state on reap

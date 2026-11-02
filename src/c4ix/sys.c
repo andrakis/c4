@@ -626,7 +626,8 @@ int sys_dispatch(int num, int *args) {
         sched_next_stack_words = (t && t->spawn_stack) ? t->spawn_stack / sizeof(int) : 0;
         s = task_spawn((char *)args[0], args[1], args[2]);
         sched_next_stack_words = 0;
-        if (!s) return -1;
+        // not there, out of memory, or it will not load (loader.c)
+        if (!s) return loader_err < 0 ? loader_err : SPAWN_BAD;
         // the child gets its own argv: the parent's may be gone, or
         // rewritten, by the time the child reads it
         // (under the MMU task_spawn has, into the child's own memory)

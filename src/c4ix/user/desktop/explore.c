@@ -548,7 +548,7 @@ int xp_compile(int *xi, char *path, char *dir) {
         ucloexec(s0, 1); ucloexec(s1, 1); ucloexec(s2, 1);
         if (udup2(pin[0], STDIN) >= 0 && udup2(pout[1], STDOUT) >= 0 && udup2(pout[1], STDERR) >= 0) {
             x->pid = spawn("/bin/cc", k, argv);
-            if (x->pid < 0) x->pid = spawn("c4ix-cc.c4r", k, argv);   // as cc finds its tools
+            if (x->pid == SPAWN_NOENT) x->pid = spawn("c4ix-cc.c4r", k, argv);   // as cc finds its tools
         }
         udup2(s0, STDIN); udup2(s1, STDOUT); udup2(s2, STDERR);
     }

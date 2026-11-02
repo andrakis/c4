@@ -475,7 +475,8 @@ static int sys_args_ok(int num, int *args) {
     case SYS_FSTAT:    return uaccess(args[1], (args[2] ? args[2] : 4) * sizeof(int), 1);
     case SYS_LINK: case SYS_RENAME:
                        return ustrlen((char *)args[0]) >= 0 && ustrlen((char *)args[1]) >= 0;
-    case SYS_LAZYFILE: return ustrlen((char *)args[0]) >= 0 && ustrlen((char *)args[1]) >= 0;
+    case SYS_LAZYFILE: case SYS_RELAZY:
+                       return ustrlen((char *)args[0]) >= 0 && ustrlen((char *)args[1]) >= 0;
     case SYS_WAITPID:  return !args[1] || uaccess(args[1], 2 * sizeof(int), 1);
     case SYS_SPAWN:    return ustrlen((char *)args[0]) >= 0 && uvecok((char **)args[2], args[1]);
     case SYS_EXECVE:   return ustrlen((char *)args[0]) >= 0 && uvecok((char **)args[1], -1) &&
@@ -573,6 +574,7 @@ int sys_dispatch(int num, int *args) {
     case SYS_UNLINK:   return vfs_unlink((char *)args[0]);
     case SYS_RENAME:   return vfs_rename((char *)args[0], (char *)args[1]);
     case SYS_LAZYFILE: return vfs_lazyfile((char *)args[0], (char *)args[1], args[2]);
+    case SYS_RELAZY:   return vfs_relazy((char *)args[0], (char *)args[1], args[2]);
     // The stack the caller's later spawns get, in bytes; 0 for the
     // default. A compiler on a big source wants more than the default
     // and every task paying for that would be most of the memory.

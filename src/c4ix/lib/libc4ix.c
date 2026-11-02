@@ -92,6 +92,7 @@ int ustat(char *path, int *out)       { return __c4ix_syscall(SYS_STAT, (int)pat
 int uunlink(char *path)               { return __c4ix_syscall(SYS_UNLINK, (int)path, 0, 0); }
 int urename(char *path, char *nn)     { return __c4ix_syscall(SYS_RENAME, (int)path, (int)nn, 0); }
 int ulazyfile(char *p, char *h, int n) { return __c4ix_syscall(SYS_LAZYFILE, (int)p, (int)h, n); }
+int urelazy(char *p, char *h, int s)  { return __c4ix_syscall(SYS_RELAZY, (int)p, (int)h, s); }
 int ustack(int bytes)                 { return __c4ix_syscall(SYS_STACK, bytes, 0, 0); }
 
 int uaffinity(int id, int mask)       { return __c4ix_syscall(SYS_AFFINITY, id, mask, 0); }

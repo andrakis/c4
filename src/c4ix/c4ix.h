@@ -119,7 +119,9 @@ enum {
     // c4bb's device registers for this task, under the MMU (mmu.c)
     SYS_IOPERM = 244,
     SYS_MAPFROM = 245,
-    SYS_TOP = 246          // one past the last: sched_trap's range check
+    // a file saved is the host's again (vfs.c, vfs_relazy; persist.c)
+    SYS_RELAZY = 246,
+    SYS_TOP = 247          // one past the last: sched_trap's range check
 };
 // SYS_DISPLAY's operations, and TAKE's flag (include/display.h)
 enum { DISP_TAKE = 0, DISP_STATE = 1, DISP_YIELD = 2, DISP_GIVE = 3, DISP_YIELDS = 1 };
@@ -277,6 +279,7 @@ int          vfs_truncate(struct vnode *vn, int len);  // a RAM file cut, or gro
 int          vfs_unlink(char *path);
 int          vfs_rename(char *path, char *newname);
 int          vfs_lazyfile(char *path, char *host, int size);
+int          vfs_relazy(char *path, char *host, int stamp);
 int          vfs_fill(struct vnode *vn);         // read a lazy file's bytes in; 1 if it has them
 int          vfs_pread(struct vnode *vn, char *buf, int pos, int len);   // a RAM file's bytes at POS, wherever they are
 extern int   vfs_spans;                          // the host reads a span of a file: "NAME@OFF+LEN"

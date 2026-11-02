@@ -24,7 +24,7 @@ enum {
     SYS_STACK = 228, SYS_CPUSTAT = 229, SYS_EVWAIT = 230, SYS_DISCARD = 231,
     SYS_VFORK = 232, SYS_EXECVE = 233, SYS_WAITPID = 234, SYS_LSEEK = 235,
     SYS_FSTAT = 236, SYS_LINK = 237, SYS_FTRUNCATE = 238, SYS_ENVIRON = 239,
-    SYS_DISPLAY = 240, SYS_AFFINITY = 242, SYS_NICE = 243, SYS_IOPERM = 244, SYS_MAPFROM = 245
+    SYS_DISPLAY = 240, SYS_AFFINITY = 242, SYS_NICE = 243, SYS_IOPERM = 244, SYS_MAPFROM = 245, SYS_RELAZY = 246
 };
 // libjs's display, taken from the desktop and given back (include/display.h)
 #ifndef __C4IX_DISPLAY_H
@@ -124,6 +124,10 @@ int  ustat(char *path, int *out); // out[0] 1 dir, 2 file, 3 other; out[1] bytes
 int  uunlink(char *path);         // remove a file, or an empty directory
 int  urename(char *path, char *newname);  // a new name in the same directory
 int  ulazyfile(char *path, char *host, int size); // a RAM file read from the host on first use
+// PATH, unchanged since STAMP (ustat out[3]), is the host's again at HOST
+// (persist save): read from there when wanted, its RAM the kernel's to
+// take back. Its stamp stays. 0, or -1: changed, or not a file
+int  urelazy(char *path, char *host, int stamp);
 int  ustack(int bytes);           // stack size for tasks this one spawns from now on; 0 the default
 // The POSIX process and file calls (docs/busybox-port.md §4). vfork's
 // child shares this task's memory and must leave by uexecve or uexit,

@@ -532,6 +532,41 @@ int vfs_lazyfile(char *path, char *host, int size) {
     return 0;
 }
 
+// PATH, saved (persist.c), is the host's again at HOST, its span of the
+// snapshot just written: unless it has changed since STAMP, whose bytes
+// are newer than the saved ones. It did not change, so its stamp stays
+// (persist -d would see a change at every save otherwise). Read from
+// there when wanted, as a file of the kept system is: a big one's bytes
+// freed now, a small one's kept in the cache, to go when memory is short;
+// while it is open to write or held, the cache keeps it (vn_droppable).
+int vfs_relazy(char *path, char *host, int stamp) {
+    struct vnode *vn;
+    char *h;
+    int n;
+    sched_lock();
+    if (!(vn = vfs_walk(path, 0, 0)) || vn->type != VN_RAMFILE || vn->mtime != stamp) { sched_unlock(); return -1; }
+    n = 0; while (host[n]) ++n;
+    // (taking the memory may drop it from the cache: lazy, as below)
+    if (!(h = vfs_malloc(n + 1))) { sched_unlock(); return -1; }
+    memcpy(h, host, n + 1);
+    if (vn->hostname) free(vn->hostname);
+    vn->hostname = h;
+    vn->backed = 1;
+    if (!vn->lazy) {
+        if (vn->size > VFS_KEEP && vn_droppable(vn)) {
+            cache_out(vn);
+            free(vn->data);
+            vn->data = 0;
+            vn->cap = 0;
+            vn->lazy = 1;
+            ++vfs_nlazy;
+            vfs_lazybytes = vfs_lazybytes + vn->size;
+        } else if (!vn_cached(vn)) cache_in(vn);
+    }
+    sched_unlock();
+    return 0;
+}
+
 // P gets V in decimal; its length
 static int vfs_dec(char *p, int v) {
     char d[12];

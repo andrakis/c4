@@ -793,7 +793,8 @@ spinner at -3 beside one at 0 gets 4.6 times the cycles
     gone was deleted. The saved changes are laid over the tree after the
     list is made, so the next save counts them as changes again and keeps
     them. `/tmp`, `/proc`, `/var/log` and `/var/persist` are never kept.
-  - *What is kept* is one ustar archive, `1:c4ix-persist.tar`: the changed
+  - *What is kept* is one ustar archive, `1:c4ix-persist.tar` (since
+    2026-11-02 that or `1:c4ix-persist-b.tar`, below): the changed
     files in the order they were changed, so that b4ke still sees an
     object as newer than its source, then `var/persist/whiteouts`, the
     deleted paths, which the next boot deletes again. It is streamed to
@@ -1009,7 +1010,7 @@ spinner at -3 beside one at 0 gets 4.6 times the cycles
     holds a file while it copies it for a task under the MMU, and without
     the MMU, where the task keeps the kernel's pointer, keeps it for good.
     A file that changes leaves the list (`vfs_touch`), and is RAM's until
-    `persist save` keeps it. `/proc/cache` says how many files are lazy
+    `persist save` keeps it (and then the drive's again, below). `/proc/cache` says how many files are lazy
     and their bytes, how many are cached and theirs, and how many times one
     was dropped.
   - *Out of memory, said.* A first boot whose unpack failed (`tar: cannot
@@ -1065,6 +1066,37 @@ spinner at -3 beside one at 0 gets 4.6 times the cycles
     check above would have reported. Left for the MMU's own work on
     memory that runs out.
   `libjs/tests/test-lazy-root.mjs`; in the page, `web-lazy-root.mjs`.
+
+- **Saved changes, read where they are kept** (2026-11-02, asked for:
+  Wolfenstein's shareware, unpacked at first run on a 12 MB machine,
+  "seemed to permanently use some extra memory"). A file a program wrote
+  stayed in RAM for good: `persist save` copied it to drive 1 and kept
+  it, and every boot read the whole snapshot into one buffer and untarred
+  it into RAM again, so the 1.8 MB of game data were back after every
+  reboot, and the registered game no longer fit.
+  - *After a save.* Once the tar is whole, each file saved is made the
+    host's again, at its span of the tar (`SYS_RELAZY`, `vfs_relazy`): a
+    file over 64 KB has its bytes freed then, a smaller one goes on the
+    cache's list, to be dropped when memory is short. Its stamp stays,
+    since it did not change (`persist -d` would see a change at every
+    save otherwise); a file stamped since the survey is newer than what
+    was saved and is left as it is.
+  - *At boot,* the saved files are made lazy spans of the snapshot, as
+    the kept system's are (`lazy_tar`), and nothing is untarred into RAM.
+    The whiteouts are read and deleted.
+  - *Two snapshots.* Files read from the last snapshot are read from it
+    until this save has made them the new one's, and the host replaces a
+    tar the moment it is closed. So saves alternate between
+    `1:c4ix-persist.tar` and `1:c4ix-persist-b.tar`, and
+    `1:c4ix-persist.cur` ("a" or "b") names the one finished last, written
+    after it. A drive from before has only the first, which is the
+    current one; `forget` writes its empty archive the same way.
+  - *Measured* (`test-lazy-root.mjs`, 64 MB): a 1,251 KB file written and
+    saved gives back 2,048 KB of heap, the file and its buffer's slack;
+    the next boot's heap is that of a boot with nothing saved, where it
+    was the snapshot's size more. A file written since the last save is
+    still RAM's, so a long build is RAM's until the desktop's
+    once-a-minute save.
 
 ### The tree (2026-10-29)
 

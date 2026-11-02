@@ -16,8 +16,20 @@
 // C4IX's files are RAM. What lasts is host drive 1 -- in the browser an
 // IndexedDB store the page keeps (libjs/page.js), on the command line
 // the directory `cli.js -w` names. The changes go there as one tar,
-// 1:c4ix-persist.tar, written through c4bb's disk write registers and
-// replaced whole when it closes, so a save cut short leaves the last.
+// written through c4bb's disk write registers and made whole when it
+// closes: 1:c4ix-persist.tar or 1:c4ix-persist-b.tar, each save into the
+// one the last did not use, and then 1:c4ix-persist.cur names it ("a"
+// or "b"; none: a drive from before there were two, its one tar). A save
+// cut short leaves the last.
+//
+// What is saved is the drive's again. Once the tar is whole and named,
+// each file saved is read from its span of it (urelazy), as the kept
+// system's files are (below): a big one's RAM is freed then, a small one
+// is kept as a cache memory can take back. The next boot makes the
+// saved files spans of the tar too, and untars nothing into RAM. A
+// changed file is RAM's only until it is saved. Why two tars: the files
+// read from the last are read from it until this save has made them
+// this one's, and a tar is replaced at once when written (devices.js).
 //
 // What a change is. `boot` walks the tree once the root archive is in,
 // and writes the list of every path there to /var/persist/base. That
@@ -48,7 +60,8 @@
 // (devices.js diskOpen). Nothing of them is read at boot; the kernel
 // reads a file from there when it is wanted, keeps a small one while
 // memory allows and drops it again when memory is short (vfs.c, the
-// cache), and a file that changes is RAM's until persist save keeps it.
+// cache), and a file that changes is RAM's until persist save keeps it,
+// and then the drive's again.
 // The first boot inflates the archive straight onto the drive, a window
 // at a time (arc_gunzip_to), and then does the same, so no boot holds
 // the unpacked tree in RAM. Where there is no drive, or it will not take
@@ -70,7 +83,9 @@ enum {
     NOMEM = 3              // boot's exit status when memory ran out
 };
 
-static char *SNAP = "1:c4ix-persist.tar";
+static char *SNAP = "1:c4ix-persist.tar";      // the changes saved: this one or SNAP2, as CUR says
+static char *SNAP2 = "1:c4ix-persist-b.tar";
+static char *CUR = "1:c4ix-persist.cur";
 static char *BASE = "/var/persist/base";
 static char *WHITE = "/var/persist/whiteouts";
 static char *KTAR = "1:c4ix-base.tar";
@@ -111,6 +126,39 @@ static int w_close() {
     *(int *)DISK_WCLOSE = wfd;
     if (*(int *)DISK_WCLOSE < 0) wbad = 1;
     return wbad ? 0 - 1 : 0;
+}
+
+// ---- the snapshots ----
+
+static int exists(char *name) {
+    int fd;
+    if ((fd = uopen(name, O_RD)) < 0) return 0;
+    uclose(fd);
+    return 1;
+}
+
+// The snapshot the last save finished, or 0 for none yet
+static char *snap_cur() {
+    char *c;
+    int len, b;
+    if (exists(CUR) && (c = arc_readfile(CUR, &len))) {
+        b = len > 0 && c[0] == 'b';
+        free(c);
+        return b ? SNAP2 : SNAP;
+    }
+    return exists(SNAP) ? SNAP : 0;
+}
+
+// the one a save writes: not the one files may be read from now
+static char *snap_next() {
+    return snap_cur() == SNAP ? SNAP2 : SNAP;
+}
+
+// TO, whole, is the one the next boot reads
+static int snap_name(char *to) {
+    w_open(CUR);
+    w_put(to == SNAP2 ? "b" : "a", 1);
+    return w_close();
 }
 
 // ---- strings and paths ----
@@ -249,19 +297,21 @@ static int write_base() {
     return 0;
 }
 
-// Lay the saved changes over the tree, then delete what they say was deleted
+static int nomem;          // what failed was memory
+static int lazy_tar(char *tar);
+
+// Lay the saved changes over the tree, as spans of the snapshot they are
+// in, then delete what they say was deleted
 static int restore() {
     char *snap, *list, *p, *q;
-    int len, slen, files, gone, fd;
-    // nothing saved yet, or a save of nothing (forget): nothing to do
-    if ((fd = uopen(SNAP, O_RD)) < 0) return 0;
-    uclose(fd);
-    if (!(snap = arc_readfile(SNAP, &slen))) return 0;
-    if (slen < BLOCK || !snap[0]) { free(snap); return 0; }
-    files = arc_untar(snap, slen, "/", ARC_EXTRACT, 0);
-    free(snap);
+    int len, files, gone;
+    // nothing saved yet: nothing to do (a save of nothing, forget's, has no files)
+    if (!(snap = snap_cur())) return 0;
+    // its files read where they are, on their spans of it (lazy_tar)
+    nomem = 0;
+    files = lazy_tar(snap);
     if (files < 0) {
-        ufprintf(STDERR, "persist: %s: %s; starting clean\n", SNAP, arc_error ? arc_error : "unreadable");
+        ufprintf(STDERR, "persist: %s: %s; starting clean\n", snap, nomem ? "out of memory" : "unreadable");
         return 0 - 1;
     }
     gone = 0;
@@ -275,6 +325,8 @@ static int restore() {
             p = q + 1;
         }
         free(list);
+        // read: a span of a tar a later save replaces (it is never saved)
+        uunlink(WHITE);
     }
     uprintf("persist: %d files kept from the last session, %d deleted\n", list ? files - 1 : files, gone);
     return 0;
@@ -313,8 +365,6 @@ static char *archive_id(char *name) {
 }
 
 // ---- the kept tar, read where it is ----
-
-static int nomem;          // what failed was memory
 
 static int oct(char *p, int n) {
     int v, i;
@@ -608,14 +658,21 @@ static void pad(int size) {
     if (r) { memset(chunk, 0, BLOCK - r); w_put(chunk, BLOCK - r); }
 }
 
-// one file's header and bytes; 0 if it could not be kept
-static int put_file(char *path) {
+static int *soff;        // where each change's bytes went in the tar, and how many; -1 if not
+static int *ssize;
+
+// one file's header and bytes, the change K; 0 if it could not be kept
+static int put_file(int k) {
+    char *path;
     int fd, n, got, size, st[4];
+    path = wpath[k];
     if (ustat(path, st) < 0) return 0;
     size = st[1];
     if (!header(path, size, 0)) { ufprintf(STDERR, "persist: %s: name too long to keep\n", path); return 0; }
     if ((fd = uopen(path, O_RD)) < 0) return 0;
     w_put(hdr, BLOCK);
+    soff[k] = wtotal;
+    ssize[k] = size;
     n = 0;
     while (n < size) {
         got = uread(fd, chunk, size - n < CHUNK ? size - n : CHUNK);
@@ -646,10 +703,13 @@ static void survey() {
     int i, j, k, t, st[4];
     walk_all();
     order = (int *)malloc((wn + 1) * sizeof(int));
+    soff = (int *)malloc((wn + 1) * sizeof(int));
+    ssize = (int *)malloc((wn + 1) * sizeof(int));
     norder = 0;
     sig = 0;
     i = 0;
     while (i < wn) {
+        soff[i] = 0 - 1;
         if (changed(i)) { order[norder++] = i; sig = sig * 31 + hash(wpath[i]) + wtime[i]; }
         ++i;
     }
@@ -678,15 +738,17 @@ static void survey() {
 
 static int save(int quiet) {
     int i, k, files, at, st[4];
-    char *list;
+    char *list, *to;
+    char host[PATHMAX];
     files = 0;
-    if (w_open(SNAP) < 0) { ufprintf(STDERR, "persist: cannot write %s\n", SNAP); return 1; }
+    to = snap_next();
+    if (w_open(to) < 0) { ufprintf(STDERR, "persist: cannot write %s\n", to); return 1; }
     i = 0;
     while (i < norder) {
         k = order[i];
         if (wdir[k]) {
             if (header(wpath[k], 0, 1)) { w_put(hdr, BLOCK); ++files; }
-        } else files = files + put_file(wpath[k]);
+        } else files = files + put_file(k);
         ++i;
     }
     if (nwhite) {
@@ -710,7 +772,19 @@ static int save(int quiet) {
     // the end of the archive: two zero blocks
     memset(chunk, 0, BLOCK * 2);
     w_put(chunk, BLOCK * 2);
-    if (w_close() < 0) { ufprintf(STDERR, "persist: writing %s failed\n", SNAP); return 1; }
+    if (w_close() < 0) { ufprintf(STDERR, "persist: writing %s failed\n", to); return 1; }
+    if (snap_name(to) < 0) { ufprintf(STDERR, "persist: writing %s failed\n", CUR); return 1; }
+    // what was saved is the drive's again, but what changed since the
+    // survey (its bytes newer than these)
+    i = 0;
+    while (i < norder) {
+        k = order[i];
+        if (!wdir[k] && soff[k] >= 0) {
+            span(host, to, soff[k], ssize[k]);
+            urelazy(wpath[k], host, wtime[k]);
+        }
+        ++i;
+    }
     if (!quiet) uprintf("persist: %d changes and %d deletions kept (%d KB)\n", files, nwhite, (wtotal + 1023) / 1024);
     return 0;
 }
@@ -721,6 +795,7 @@ static void freewalk() {
     while (i < wn) { free(wpath[i]); ++i; }
     wn = 0;
     if (order) { free((char *)order); order = 0; }
+    if (soff) { free((char *)soff); free((char *)ssize); soff = 0; ssize = 0; }
 }
 
 static int usage() {
@@ -729,7 +804,7 @@ static int usage() {
 }
 
 int main(int argc, char **argv) {
-    char *me;
+    char *me, *to;
     int i, secs, last, rc;
 
     hdr = (char *)malloc(BLOCK);
@@ -763,10 +838,12 @@ int main(int argc, char **argv) {
     }
     if (argc > 1 && same(argv[1], "forget")) {
         // an archive of nothing: the next boot is the archive alone
-        if (w_open(SNAP) < 0) return 1;
+        // (into the snapshot not in use, as a save writes)
+        to = snap_next();
+        if (w_open(to) < 0) return 1;
         memset(chunk, 0, BLOCK * 2);
         w_put(chunk, BLOCK * 2);
-        if (w_close() < 0) return 1;
+        if (w_close() < 0 || snap_name(to) < 0) return 1;
         uprintf("persist: forgotten; the next boot starts clean\n");
         return 0;
     }

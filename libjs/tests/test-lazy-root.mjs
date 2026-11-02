@@ -159,6 +159,50 @@ const nommu = machine({ store, mmu: false });
 t = nommu.sh('wait 4\n' + crcs(files));
 check(/read from there/.test(t) && crcLines(t, files).join('\n') === wanted(files).join('\n'), 'without the MMU too', crcLines(t, files).join('\n'));
 
+// ---- what a save keeps is the drive's again, and the next boot's ----
+// A file written is RAM's. Saved, a big one is read from its span of the
+// snapshot and its RAM freed (a small one is kept, a cache); the next
+// boot reads them from there too and untars nothing into RAM; and saves
+// after it, each into the snapshot the last did not use, leave them the
+// bytes they were, the boot after included.
+{
+  const pstore = new Map();
+  // the archive's biggest file: big enough to see in the heap
+  const [src, bytes] = [...want].reduce((x, y) => y[1].length > x[1].length ? y : x);
+  const mine = [['/usr/big.bin', bytes], ['/usr/small.txt', Buffer.from('small\n')]];
+  const mineLines = () => mine.map(([n, b]) => `${hex(b)} ${b.length} ${n}`);
+  const used = m => (m.sh('cat /proc/cache'), m.vm.heap.used);
+  const p1 = machine({ store: pstore });
+  p1.sh(`wait 4\ncat ${src} > /usr/big.bin\necho small > /usr/small.txt`);
+  const written = used(p1);
+  t = p1.sh('persist save\n' + crcs(mine.map(([n]) => n)));
+  const saved = used(p1);
+  check(/persist: \d+ changes and \d+ deletions kept/.test(t) && crcLines(t, mine.map(([n]) => n)).join('\n') === mineLines().join('\n'),
+    'a save: the files are their bytes, read from the snapshot', t.slice(-600));
+  check(written - saved > bytes.length * 0.9, `and the big one's RAM is freed (${kb(written - saved)} KB of the heap back, it is ${kb(bytes.length)} KB)`);
+  t = p1.sh('echo again > /usr/again.txt\npersist save\n' + crcs(mine.map(([n]) => n)));
+  check(pstore.has('c4ix-persist.tar') && pstore.has('c4ix-persist-b.tar') && Buffer.from(pstore.get('c4ix-persist.cur')).toString() === 'b' &&
+    crcLines(t, mine.map(([n]) => n)).join('\n') === mineLines().join('\n'),
+    'a second save goes into the other snapshot, and the files are still their bytes', t.slice(-600));
+
+  // the same drive with nothing saved, for the heap a boot takes
+  const bare = machine({ store: new Map([...pstore].filter(([n]) => !/persist/.test(n))) });
+  bare.sh('wait 4');
+  const bareUsed = used(bare);
+  const p2 = machine({ store: pstore });
+  t = p2.sh('wait 4\n' + crcs(mine.map(([n]) => n)));
+  const p2Used = used(p2);
+  check(/persist: \d+ files kept from the last session/.test(t) && crcLines(t, mine.map(([n]) => n)).join('\n') === mineLines().join('\n'),
+    'the next boot has them, their bytes', t.slice(-600));
+  check(p2Used - bareUsed < bytes.length / 2, `read from the snapshot, not untarred into RAM (the heap ${kb(p2Used - bareUsed)} KB more than with nothing saved)`);
+  t = p2.sh('persist save\n' + crcs(mine.map(([n]) => n)));
+  check(Buffer.from(pstore.get('c4ix-persist.cur')).toString() === 'a' && crcLines(t, mine.map(([n]) => n)).join('\n') === mineLines().join('\n'),
+    'saved again, into the snapshot its files were not read from, they are their bytes', t.slice(-600));
+  const p3 = machine({ store: pstore });
+  t = p3.sh('wait 4\n' + crcs(mine.map(([n]) => n)) + '\ncat /usr/again.txt');
+  check(crcLines(t, mine.map(([n]) => n)).join('\n') === mineLines().join('\n') && /^again$/m.test(t), 'and so does the boot after', t.slice(-600));
+}
+
 // ---- a desktop boot that does not fit stops, and says why ----
 // (with the MMU, 5 MB: with swap -- memory on demand, paged against its
 // own -- the system fits in 7 now, where it did not in 12 before,

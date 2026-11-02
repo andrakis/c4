@@ -137,6 +137,8 @@ export class Machine {
     // On the parallel engine the arena is a SharedArrayBuffer: what leaves
     // the machine (strings to print, to decode) is copied, not a view
     this.sharedMem = typeof SharedArrayBuffer !== 'undefined' && arena.u8.buffer instanceof SharedArrayBuffer;
+    // for tests: an IPI only as a trap enters its handler (boundary)
+    this.ipiAtTrap = false;
     this.reset();
   }
 
@@ -148,6 +150,7 @@ export class Machine {
     this.trapHandler = 0;
     this.cycleInterval = 0;
     this.cycleHandler = 0;
+    this.trapPc = 0;                    // where the last trap entered its handler (ipiAtTrap)
     this.bFired = false; this.bNextIrq = 0;   // boundary()'s results
     this.trapRestoresInterval = 0;
     this.signalHandlers = new Map();
@@ -518,6 +521,7 @@ export class Machine {
     sp -= this.ld32(handler + 4) * 4;           // the handler's ENT operand
     this.sp = sp;
     this.pc = handler + 8;                      // past ENT n
+    this.trapPc = this.pc;
     if (kern) this.mode = 0;
     this.irqHold++;
     return true;
@@ -1012,9 +1016,12 @@ export class Machine {
         irq = !tlev;
       }
       if (irq) this.hirq(0);
-      else if (this.ipiPending && !tlev) {
+      else if (this.ipiPending && !tlev && (!this.ipiAtTrap || this.pc === this.trapPc)) {
         // another CPU's interrupt (c4mp's order: after the tick).
         // Not held back by the preemption mask: it is a peer asking.
+        // (ipiAtTrap, for tests: held until this CPU next takes a trap,
+        // and then taken before the handler's first instruction -- the
+        // moment a handler is least ready for it)
         this.ipiPending = 0;
         this.hirq(HIRQ_IPI);
       } else if (this.pendingSignal && !(this.trapRestoresInterval && !interval)) {

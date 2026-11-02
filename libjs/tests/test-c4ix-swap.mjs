@@ -24,6 +24,9 @@
 // the sleeper can give, takes pages of a task another CPU is running --
 // which must forget them first, told by IPI or on its way back from the
 // kernel (the TLB's shootdown).
+// IPI_AT_TRAP=1 as well: each IPI held until its CPU next takes a trap,
+// and delivered before the handler's first instruction, inside it, where
+// it must only flush (sched.c sched_trap; docs/c4ix-mmu.md 10).
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createMachine, boot } from '../boot.js';
@@ -136,6 +139,9 @@ const CPUS = Number(process.env.CPUS || 1);
 const vm = createMachine({ arenaMb: MB, mhz: 100, mmu: true, cpus: CPUS,
   parallel: !!process.env.PARALLEL, spawn: url => new Worker(url),
   drives: [{ files, writable: false, sink: null }], onByte: b => out.push(b) });
+// IPI_AT_TRAP=1 (simulated CPUs): every IPI held until its CPU takes a
+// trap, and taken at the handler's first instruction (c4m.js ipiAtTrap)
+if (process.env.IPI_AT_TRAP && vm.smp) for (const m of vm.smp.machines) m.ipiAtTrap = true;
 boot(vm, new Uint8Array(readFileSync(process.env.C4IX_IMAGE || join(ROOT, 'c4ix32.c4r'))), ['c4ix32.c4r']);
 const text = (from = 0) => Buffer.from(out.slice(from)).toString('latin1');
 const until = (cond, budget) => { for (let i = 0; i < budget && !cond() && !vm.dev.halted; i++) vm.run(2e6); return cond(); };

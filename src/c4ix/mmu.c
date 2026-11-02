@@ -1868,6 +1868,14 @@ void mmu_trap_in() {
     if (mmu_shoot[k]) { *(int *)MMU_FLUSH = 1; mmu_set(&mmu_shoot[k], 0); }
 }
 
+// ... and an IPI inside a handler, before it says so or after (sched_trap):
+// only the flush, which says nothing of where this CPU is
+void mmu_trap_nested() {
+    int k;
+    k = cpu_self->id;
+    if (mmu_shoot[k]) { *(int *)MMU_FLUSH = 1; mmu_set(&mmu_shoot[k], 0); }
+}
+
 void mmu_trap_out(struct task *t) {
     int k;
     if (!mmu_on || smp_ncpu < 2) return;

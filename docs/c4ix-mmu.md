@@ -404,6 +404,19 @@ and a walk reads them with plain loads.
     the copy. A CPU anywhere but user mode is not waited for: it flushes
     on its way back (`mmu_trap_out`). The flags change by compare-and-swap,
     a fence, so each CPU sees the other's in the order it was written.
+  - Nothing holds an IPI back while a handler runs, so one can land in a
+    handler: before `sched_trap` has claimed it (`sched_intrap`, which
+    comes after `mmu_trap_in`), even before its first instruction, or
+    after the claim is let go on its way out. Such a trap interrupted
+    the kernel while the CPU's task is a user task, which happens nowhere
+    but in a handler, and it gets the flush alone (`mmu_trap_nested`).
+    Served as a handler, it sent the task back to user mode at the kernel
+    address it had interrupted, through its own frame. Under
+    `b4ke -j 3` at 32 MB on four CPUs, c4sc was killed by "jump to
+    0x0000ef20 (the kernel's image, not mapped)": that is `sched_trap`
+    just past its call of `mmu_trap_in`. test-c4ix-swap's IPI_AT_TRAP=1
+    holds every IPI until its CPU takes a trap, then delivers it before
+    the handler's first instruction (c4m.js `ipiAtTrap`).
 - The parallel engine's other CPUs ask CPU 0 for device work. The ask
   carries the asker's PTBR and the kernel's map (par.js `K.PTBR`,
   `K.UDIR`), so CPU 0 checks and translates what the device is given

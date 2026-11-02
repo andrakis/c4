@@ -683,10 +683,24 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     // handler exactly where it was, and the interrupt stays disabled
     // (c4m's own cycle path clears the interval) until the outer
     // handler re-arms it on the way out.
+    //
+    // Nor are IPIs held while a handler runs (c4m.js boundary), and the
+    // flag cannot cover all of one: an IPI can land before its first
+    // instruction, or after the flag is cleared on its way out. A trap
+    // that interrupted the kernel while the task is a user task's is in
+    // another trap's handler, then -- a user task runs the kernel's code
+    // only there. Served here as a handler, it would end by sending the
+    // task to user mode at the kernel address it interrupted, in the
+    // frame of the trap it landed in ("jump to ... the kernel's image").
+    // It is only a shootdown's flush to do, if one is asked of this CPU
+    // (mmu.c); the handler it landed in does the rest.
+    if (sched_intrap || (mode == C4IX_MODE_UNPROTECTED && sched_cur && sched_cur->privs == PRIV_USER)) {
+        if (mmu_on && smp_ncpu > 1) mmu_trap_nested();
+        return;
+    }
     // A shootdown another CPU is waiting on (mmu.c): before anything that
     // might wait for the kernel lock, which that CPU holds
     if (mmu_on && smp_ncpu > 1) mmu_trap_in();
-    if (sched_intrap) return;
     // Claim the handler BEFORE anything else, including the mask
     // below. Neither the syscall gateway nor __c4_trap disables the
     // cycle interrupt on the way in, so an interrupt can land in the

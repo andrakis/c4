@@ -96,13 +96,67 @@ static int vfs_fmt(char *p, int whole, int cents) {
 }
 
 static int vfs_dec(char *p, int v);
+static int vfs_kv(char *p, int n, char *name, int v);
+
+// RAM files' bytes under D, and how many: c[0], c[1] those written and not
+// the host's too (persist has not saved them, or they are /tmp's)
+static void vfs_ramuse(struct vnode *d, int *c) {
+    struct vnode *vn;
+    vn = d->child;
+    while (vn) {
+        if (vn->type == VN_DIR) vfs_ramuse(vn, c);
+        else if (vn->type == VN_RAMFILE && vn->data && !vn->backed) { c[0] = c[0] + vn->cap; c[1] = c[1] + 1; }
+        vn = vn->next;
+    }
+}
 
 static void vfs_proc(struct vnode *vn) {
-    int ms, n;
+    int ms, n, size, r[2], c[10];
     // /proc/kmsg: the kernel log (console.c), as dmesg prints it
     if (vn->name[0] == 'k') {
         if (!vn_grow(vn, KLOG_MAX + 1)) return;
         vn->size = klog_copy(vn->data);
+        return;
+    }
+    // /proc/meminfo: where memory is, in KB, "name value" a line (free
+    // prints it): the heap, its use, what is free and the biggest block
+    // of that; RAM files written and not saved, and how many; files kept
+    // from the host as a cache, and how many; files' bytes left on the
+    // host; and under the MMU the heap's blocks of single frames, every
+    // block of frames, how many, the frames in use in them and the blocks
+    // less than an eighth in use (mmu_counts), and swap
+    if (vn->name[0] == 'm') {
+        if (!vn_grow(vn, 512)) return;
+        r[0] = 0; r[1] = 0;
+        vfs_ramuse(rootdir, r);
+        mmu_counts(c);
+        size = *(int *)C4IX_HEAP_END - *(int *)C4IX_HEAP_BASE;
+        n = vfs_kv(vn->data, 0, "heap ", size / 1024);
+        if (vfs_heapinfo) {
+            n = vfs_kv(vn->data, n, "used ", *(int *)C4IX_HEAP_USED / 1024);
+            n = vfs_kv(vn->data, n, "free ", (size - *(int *)C4IX_HEAP_USED) / 1024);
+        }
+        if (c[5] >= 0) n = vfs_kv(vn->data, n, "largest ", c[5] / 1024);
+        n = vfs_kv(vn->data, n, "files ", r[0] / 1024);
+        n = vfs_kv(vn->data, n, "nfiles ", r[1]);
+        n = vfs_kv(vn->data, n, "cached ", vfs_cachedbytes / 1024);
+        n = vfs_kv(vn->data, n, "ncached ", vfs_ncached);
+        n = vfs_kv(vn->data, n, "lazy ", vfs_lazybytes / 1024);
+        if (mmu_on) {
+            n = vfs_kv(vn->data, n, "frames ", c[0] / 1024);
+            n = vfs_kv(vn->data, n, "blocks ", c[6] / 1024);
+            n = vfs_kv(vn->data, n, "nblocks ", c[7]);
+            n = vfs_kv(vn->data, n, "inuse ", c[8] / 1024);
+            n = vfs_kv(vn->data, n, "sparse ", c[9] / 1024);
+        }
+        if (c[1] > 0) {
+            n = vfs_kv(vn->data, n, "swap ", c[1] * 4);
+            n = vfs_kv(vn->data, n, "swapfree ", c[2] * 4);
+            n = vfs_kv(vn->data, n, "swapouts ", c[3]);
+            n = vfs_kv(vn->data, n, "swapins ", c[4]);
+        }
+        vn->data[n] = 0;
+        vn->size = n;
         return;
     }
     if (!vn_grow(vn, 128)) return;
@@ -170,6 +224,8 @@ void vfs_init() {
     if ((vn = vfs_ramfile("/proc/kmsg"))) vn->type = VN_PROC;
     // /proc/cache: files on the host and in RAM (the cache, below)
     if ((vn = vfs_ramfile("/proc/cache"))) vn->type = VN_PROC;
+    // /proc/meminfo: where memory is, which free prints (vfs_proc)
+    if ((vn = vfs_ramfile("/proc/meminfo"))) vn->type = VN_PROC;
     vfs_cache_init();
     // /var/log/kernel: the console, logged (console.c)
     con_logopen();
@@ -565,6 +621,14 @@ int vfs_relazy(char *path, char *host, int stamp) {
     }
     sched_unlock();
     return 0;
+}
+
+// P from N gets "NAME V\n" (V not below 0); where it ends
+static int vfs_kv(char *p, int n, char *name, int v) {
+    while (*name) p[n++] = *name++;
+    n = n + vfs_dec(p + n, v < 0 ? 0 : v);
+    p[n++] = '\n';
+    return n;
 }
 
 // P gets V in decimal; its length

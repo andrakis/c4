@@ -1098,6 +1098,72 @@ spinner at -3 beside one at 0 gets 4.6 times the cycles
     still RAM's, so a long build is RAM's until the desktop's
     once-a-minute save.
 
+- **free, and memory that did not come back** (2026-11-02, asked for: a
+  `b4ke -j 3` of the tree in the browser, 32 MB, four CPUs, the MMU on,
+  stopped at `src/c4ix/libc` with "c4sp: cannot allocate 400000-cell
+  arena", and would not finish even one job at a time with 11 MB free;
+  "System" held 16 MB; and persist said "writeing 1:c4ix-persist-b.tar
+  failed").
+  - *free* (`src/c4ix/user/free.c`) reads `/proc/meminfo` (vfs.c): the
+    heap, what is used and free and its biggest free block; RAM files
+    not saved, the cache, and under the MMU every block of frames, the
+    frames in use in them and the blocks less than an eighth in use; and
+    swap. It says when the free memory is in pieces (the biggest block
+    under half of it) and how much is kept by a few pages.
+  - *Why the build stopped.* Each compile is c4sc with `-c 400000`, a
+    6.4 MB arena that c4sp clears (and so touches) at start: three at
+    once are 19 MB of a 31 MB heap, which put out 277,969 pages. When
+    room to page in fell under a MB, the arena had to be one run of the
+    heap, and was not there. The build files start the arena at c4sp's
+    default, 65,536 cells, and it grows to four times what is live
+    (`gc_collect`) -- the big files need as much as before, the small
+    ones far less; and an arena that cannot start at `-c` starts at half,
+    down to 16,384 cells (`gc_init`), where it could only stop.
+  - *Why System kept it:* frames lent from programs' blocks, and a pool
+    flag never set (`docs/c4ix-mmu.md`, "Which block a frame comes from").
+  - *c4sc's page fault* (the "page fault: write to ... not mapped" that
+    killed a compile, and once a write to the kernel's heap). The light
+    path (`sched_light`: a program's malloc or free served without the
+    kernel lock) reaches the slab caches when it needs a region's record
+    (`sl4b_alloc`, for a new block or slab) and the files' cache
+    (`vfs_trim`, on every malloc while memory is short), and those lock
+    with `sched_lock` -- which in the trap handler took nothing, the
+    handler holding the kernel lock already but for there. A record freed
+    by a task's exit on one CPU went to a compile's malloc on another and
+    to the next asker as well: two regions in one record, and a list of
+    them with a cycle in it, where `mmu_release` went round for ever with
+    `mmu_ulock` held. On the light path `sched_lock` takes the kernel
+    lock now (`cpu_self->light`), so a malloc that stays in the task's
+    own blocks still runs without it and one that goes further waits for
+    it, as any trap does.
+  - *Why the build then hung* (output stopped after `splash.c`, b4ke
+    ready with three children to reap, three CPUs parked). A CPU is
+    marked on the task it switched out (`oncpu`) until its idle loop
+    passes `smp_settle`; no other CPU resumes the task meanwhile, and no
+    IPI is sent for it (`smp_kick`). The loop could be switched out
+    between settling and parking -- an IPI held while it had the lock
+    lands as it lets go -- and came back there, after the task it ran
+    had blocked, and parked with the mark still on. A switch back to an
+    idle task now sets its CPU's park word (`smp_park`), which the loop
+    clears under the lock before it settles: a park after such a switch
+    falls through to settle again.
+  - *persist's failed write.* A READ from a drive on any CPU overwrote
+    the drive's `DISK_FD` and `DISK_WADDR` (libjs's device registers are
+    CPU 0's for every CPU), between persist's own writes of them: c4m.js
+    READ puts them back. And two saves at once -- `persist -d`'s and a
+    `sync` typed -- wrote into the same snapshot: a save holds
+    `/tmp/persist.lock` (a `mkdir`, its holder's pid inside); `sync`
+    waits for it, and `-d` skips its turn.
+  - *Measured* (`libjs/tests/test-c4ix-free.mjs`; and the build, 32 MB,
+    four CPUs, the MMU on, `-j 3`): the whole tree, 127 steps (`b4ke: all
+    built, in /build`), 3,195 s of machine time (18 minutes in node), 1.48
+    million pages put out; where it had stopped at `src/c4ix/libc`. After
+    it, `free` has 11.4 MB in use -- 4.2 MB of it the build's RAM files,
+    not saved yet, 1.5 MB the cache, 2.5 MB programs' blocks (1.6 MB of
+    pages in them), 3.2 MB other -- and a biggest free block of 13.4 MB of
+    the 19.9 MB free. `x5-c4m.txt` is re-pinned for the vnode
+    `/proc/meminfo` adds.
+
 ### The tree (2026-10-29)
 
 `/` holds directories only. The programs are in `/bin`, and the shell

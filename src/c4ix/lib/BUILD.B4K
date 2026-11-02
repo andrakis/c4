@@ -10,7 +10,7 @@ SET OUT /build
 # 2.6 KB of it and archive.c at 2.7 KB
 # (measured 2026-10-25). The 1 MB this set was for a c4lc bug,
 # g:resolvecode recursing once per instruction (fixed in 29cbac9).
-SET LC c4sc -c 400000 compile -O
+SET LC c4sc -c 65536 compile -O
 CD $(ROOT)
 MKDIR $(OUT)/lib
 DEPS $(OUT)/lib/libc4ix.c4o : src/c4ix/lib/libc4ix.c src/c4ix/include/c4ix_user.h

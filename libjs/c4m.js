@@ -639,11 +639,19 @@ export class Machine {
         return STOP.BUDGET;
       case OP.READ: {
         if (this.mode) return this.pmTrap(op);
+        const buf = this.ld32(sp + 4), len = this.ld32(sp);
+        if (len > 0 && this.inGuard(buf, len)) return this.guardRange(OP.READ, buf, len, true);
+        // The disk's fd and address registers are left as READ found them:
+        // a guest writing a file through them, a register at a time
+        // (persist.c: DISK_FD, DISK_WADDR, DISK_WLEN), may be between two
+        // of them -- preempted, or on another CPU -- and its write went to
+        // this READ's fd instead, and failed
+        const fd0 = dev.diskFd, addr0 = dev.diskAddr;
         dev.diskFd = this.ld32(sp + 8);
-        dev.diskAddr = this.ld32(sp + 4);
-        if (this.ld32(sp) > 0 && this.inGuard(dev.diskAddr, this.ld32(sp))) return this.guardRange(OP.READ, dev.diskAddr, this.ld32(sp), true);
-        const r = isRom(dev.diskAddr, this.ld32(sp)) ? this.romRead(this.ld32(sp))
-                                                     : dev.diskRead(this.ld32(sp)) | 0;
+        dev.diskAddr = buf;
+        let r;
+        try { r = isRom(buf, len) ? this.romRead(len) : dev.diskRead(len) | 0; }
+        finally { dev.diskFd = fd0; dev.diskAddr = addr0; }
         if (r === -2) return this.blockedRead();
         this.a = r;
         return STOP.BUDGET;

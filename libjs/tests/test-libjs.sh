@@ -135,6 +135,7 @@ node libjs/tests/test-c4ix-sigh.mjs || fail=1
 node libjs/tests/test-c4ix-mmu.mjs || fail=1   # the MMU: a wild write is killed, the kernel and others carry on
 node libjs/tests/test-c4ix-guard.mjs || fail=1   # the boot stack's guard: a program run off the end of the heap
 node libjs/tests/test-c4ix-spawn.mjs || fail=1   # the shell says why a program did not start: not there, no memory, will not load
+node libjs/tests/test-c4ix-free.mjs || fail=1    # free: the heap's use and biggest block, in pieces or not, files not saved
 }
 part_c4m () {
 node libjs/tests/test-c4ix-c4m.mjs || fail=1

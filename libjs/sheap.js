@@ -97,6 +97,17 @@ export class SharedHeap {
   // nothing
   setHigh(on) { Atomics.store(this.ctl, C.HIGH, on ? 1 : 0); }
 
+  // the biggest block alloc could hand out now, as heap.js's
+  largest() {
+    this.lock();
+    try {
+      const ctl = this.ctl, L = this.large;
+      let n = ctl[C.TOP] - ctl[C.BRK];
+      for (let i = 0; i < ctl[C.NLARGE]; i++) if (L[2 * i + 1] > n) n = L[2 * i + 1];
+      return n;
+    } finally { this.unlock(); }
+  }
+
   alloc(n) {
     n = n | 0;
     if (n <= 0) return 0;

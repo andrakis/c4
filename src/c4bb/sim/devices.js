@@ -176,6 +176,7 @@ export const SWAP_ADDR = 0x11c;   // w: the page's address in memory, for the ne
 export const SWAP_CMD  = 0x158;   // w: OP | SLOT << 4 -- 1 out, 2 in (and forget it), 3 forget, 4 forget
                                   // every slot; r: the last one's 0, or -1; after 4, how many slots there are
                                   // 5: the heap's large blocks from its top while SLOT is 1 (C4IX's frames)
+                                  // 6: r: the biggest block the heap could hand out now (C4IX's free)
 export const SWAP_PAGE = 4096;
 
 // c4_info() capability bits (c4m.c:206)
@@ -393,6 +394,12 @@ export class Devices {
       if (!h || !h.setHigh) return -1;
       h.setHigh(slot & 1);
       return 0;
+    }
+    // 6: the biggest block the heap could hand out now (heap.js largest):
+    // one allocation bigger fails, however much is free in pieces
+    if (op === 6) {
+      const h = this.machine && this.machine.heap;
+      return h && h.largest ? h.largest() | 0 : -1;
     }
     if (slot >= this.swapSlots) return -1;
     if (op === 3) { this.swapPages.delete(slot); return 0; }

@@ -76,7 +76,8 @@ struct cpu *cpu_self;
 static struct cpu cpu_boot;
 int smp_ncpu;
 static int smp_idle[CPU_MAX];        // 1: that CPU runs its idle task
-static int smp_park[CPU_MAX];        // what an idle CPU parks on: only an IPI wakes it
+static int smp_park[CPU_MAX];        // what an idle CPU parks on: an IPI wakes it, and a switch
+                                     // back to its idle task makes it 1 (smp_ap)
 static int smp_stack[CPU_MAX];       // each other CPU's boot stack, its idle task's
 static struct task *smp_idle_t[CPU_MAX];   // ... and that idle task
 static int smp_stopping;             // shutdown: the other CPUs halt
@@ -408,11 +409,19 @@ int sched_switches;          // context switches since boot
 // Under SMP the mask is also the kernel lock, outside the handler: the
 // handler holds that already. Masked first, so that nothing preempts a
 // CPU holding it.
+// In the trap handler the kernel lock is held already -- but on the light
+// path (sched_light), where a program's malloc runs without it, and where
+// what the malloc reaches past the task's own blocks locks this way: the
+// slab caches (sl4b.c, a record for a new region), the files' cache
+// (vfs_trim, vfs_reclaim). Unlocked there, a region's record went to two
+// at once, freed by a task's exit on one CPU as a compile's malloc took
+// it on another: a region list with a cycle in it, and c4sc writing where
+// it had no memory (a -j 3 build in 32 MB).
 void sched_lock() {
     if (!sched_intrap) {
         if (sched_lockdepth == 0 && sched_interval) __c4_configure(C4IX_CONF_INTERVAL, 0);
         bkl_take();
-    }
+    } else if (cpu_self->light) bkl_take();
     ++sched_lockdepth;
 }
 
@@ -421,7 +430,7 @@ void sched_unlock() {
     if (!sched_intrap) {
         bkl_drop();
         if (sched_lockdepth == 0 && sched_interval) __c4_configure(C4IX_CONF_INTERVAL, sched_interval);
-    }
+    } else if (cpu_self->light) bkl_drop();
 }
 
 // The running task's slice starts again now: after a service that
@@ -729,7 +738,9 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
             ++me->ntraps;
             me->uacc = me->uacc + (acct_in - acct_out);
             acct_cpu(me, acct_in - acct_out);
+            cpu_self->light = 1;
             sys_pmviolation(param, (int *)sp, (int *)returnpc, &a);
+            cpu_self->light = 0;
             acct_out = __c4_cycles();
             me->kacc = me->kacc + (acct_out - acct_in);
             acct_cpu(me, acct_out - acct_in);
@@ -906,6 +917,7 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
             if (n != t) cpu_self->prev = t;
             n->oncpu = cpu_self->id + 1;
             smp_idle[cpu_self->id] = (n == cpu_self->idle);
+            if (n != t && n == cpu_self->idle) smp_park[cpu_self->id] = 1;
         }
         loader_switch(n);
         ++sched_switches;
@@ -1424,7 +1436,16 @@ static void smp_ap() {
     sched_arm(sched_interval);
     mmu_cpu(k);
     while (!smp_stopping) {
+        // A switch back to this loop sets the park word, so that the
+        // park below falls through and the loop settles first. The loop
+        // can be switched out anywhere -- an IPI held while it had the
+        // lock lands as it lets go -- and comes back where it was: a
+        // park then would keep the mark of the task it ran meanwhile
+        // (oncpu, smp_settle), which no CPU then resumes and no IPI is
+        // sent for (smp_kick). A -j 3 build in 32 MB stopped so: b4ke
+        // ready, three children to reap, three CPUs parked.
         sched_lock();
+        smp_park[k] = 0;
         smp_settle();
         r = sched_ready_here();
         if (!r) smp_idle[k] = 1;

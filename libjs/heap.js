@@ -143,6 +143,14 @@ export class Heap {
 
   setHigh(on) { this.high = !!on; }
 
+  // The biggest block alloc could hand out now: the longest free range,
+  // or the room between the bump pointers (C4IX's free: SWAP_CMD 6)
+  largest() {
+    let n = this.top - this.brk;
+    for (const r of this.large) if (r.len > n) n = r.len;
+    return n;
+  }
+
   // From the top: the highest range above the bump region, the bump
   // region's top, then the highest range below it -- each carved from its
   // high end

@@ -161,6 +161,62 @@ static int snap_name(char *to) {
     return w_close();
 }
 
+// ---- one save at a time ----
+//
+// Two saves at once -- the desktop's persist -d and a sync typed -- would
+// write the same tar, each a register at a time, into each other, and the
+// one that closed second would leave the other's files read from its
+// tar. A directory made is the lock: making it fails if it is there
+// (vfs_mkdir, under the kernel's lock). The holder's task id is in it,
+// so a holder that is gone, killed mid-save, leaves it to the next.
+
+static char *LOCK = "/tmp/persist.lock";
+static char *LOCKID = "/tmp/persist.lock/id";
+
+// the holder's task id; 0 if it has not written it yet
+static int lock_holder() {
+    char *p;
+    int len, i, id;
+    if (!(p = arc_readfile(LOCKID, &len))) return 0;
+    id = 0;
+    i = 0;
+    while (i < len && p[i] >= '0' && p[i] <= '9') { id = id * 10 + p[i] - '0'; ++i; }
+    free(p);
+    return id;
+}
+
+// The lock, waiting for it if WAIT (up to five minutes); 0 if not had
+static int lock_take(int wait) {
+    char id[16];
+    int fd, holder, tries, n, v;
+    tries = 0;
+    while (umkdir(LOCK) < 0) {
+        holder = lock_holder();
+        // a holder no longer there (UNICE_NONE: no such task), or one that
+        // made it and never named itself in five seconds
+        if ((holder > 0 && unice(holder, UNICE_ASK) == UNICE_NONE) || (holder == 0 && tries >= 50)) {
+            uunlink(LOCKID);
+            uunlink(LOCK);
+            tries = 0;
+            continue;
+        }
+        if (holder > 0 && !wait) return 0;
+        if (++tries > 3000) return 0;
+        umsleep(100);
+    }
+    n = 15;
+    id[n] = 0;
+    v = getpid();
+    while (n > 0) { id[--n] = '0' + v % 10; v = v / 10; if (!v) break; }
+    if ((fd = uopen(LOCKID, O_WR + O_CREATE + O_TRUNCATE)) >= 0) { write(fd, id + n, 15 - n); uclose(fd); }
+    return 1;
+}
+
+static void lock_drop() {
+    uunlink(LOCKID);
+    uunlink(LOCK);
+}
+
 // ---- strings and paths ----
 
 static int starts(char *s, char *p) {
@@ -737,7 +793,7 @@ static void survey() {
 }
 
 static int save(int quiet) {
-    int i, k, files, at, st[4];
+    int i, k, files, at, kb, st[4];
     char *list, *to;
     char host[PATHMAX];
     files = 0;
@@ -773,6 +829,7 @@ static int save(int quiet) {
     memset(chunk, 0, BLOCK * 2);
     w_put(chunk, BLOCK * 2);
     if (w_close() < 0) { ufprintf(STDERR, "persist: writing %s failed\n", to); return 1; }
+    kb = (wtotal + 1023) / 1024;
     if (snap_name(to) < 0) { ufprintf(STDERR, "persist: writing %s failed\n", CUR); return 1; }
     // what was saved is the drive's again, but what changed since the
     // survey (its bytes newer than these)
@@ -785,7 +842,7 @@ static int save(int quiet) {
         }
         ++i;
     }
-    if (!quiet) uprintf("persist: %d changes and %d deletions kept (%d KB)\n", files, nwhite, (wtotal + 1023) / 1024);
+    if (!quiet) uprintf("persist: %d changes and %d deletions kept (%d KB)\n", files, nwhite, kb);
     return 0;
 }
 
@@ -826,8 +883,11 @@ int main(int argc, char **argv) {
     }
 
     if (starts(me, "sync") || (argc > 1 && same(argv[1], "save"))) {
+        if (!lock_take(1)) { ufprintf(STDERR, "persist: another save is still running\n"); return 1; }
         survey();
-        return save(0);
+        rc = save(0);
+        lock_drop();
+        return rc;
     }
     if (argc > 1 && same(argv[1], "status")) {
         survey();
@@ -839,11 +899,16 @@ int main(int argc, char **argv) {
     if (argc > 1 && same(argv[1], "forget")) {
         // an archive of nothing: the next boot is the archive alone
         // (into the snapshot not in use, as a save writes)
+        if (!lock_take(1)) { ufprintf(STDERR, "persist: another save is still running\n"); return 1; }
         to = snap_next();
-        if (w_open(to) < 0) return 1;
-        memset(chunk, 0, BLOCK * 2);
-        w_put(chunk, BLOCK * 2);
-        if (w_close() < 0 || snap_name(to) < 0) return 1;
+        rc = 1;
+        if (w_open(to) >= 0) {
+            memset(chunk, 0, BLOCK * 2);
+            w_put(chunk, BLOCK * 2);
+            if (w_close() >= 0 && snap_name(to) >= 0) rc = 0;
+        }
+        lock_drop();
+        if (rc) return 1;
         uprintf("persist: forgotten; the next boot starts clean\n");
         return 0;
     }
@@ -857,12 +922,15 @@ int main(int argc, char **argv) {
         freewalk();
         for (;;) {
             umsleep(secs * 1000);
+            // a save already running: this one next time
+            if (!lock_take(0)) continue;
             survey();
             if (sig != last) {
                 rc = save(1);
                 if (rc == 0) last = sig;
             }
             freewalk();
+            lock_drop();
         }
     }
     return usage();

@@ -280,6 +280,7 @@ int          vfs_unlink(char *path);
 int          vfs_rename(char *path, char *newname);
 int          vfs_lazyfile(char *path, char *host, int size);
 int          vfs_relazy(char *path, char *host, int stamp);
+void         mmu_counts(int *c);   // /proc/meminfo's, ten: user frames, swap, the heap's biggest block (mmu.c)
 int          vfs_fill(struct vnode *vn);         // read a lazy file's bytes in; 1 if it has them
 int          vfs_pread(struct vnode *vn, char *buf, int pos, int len);   // a RAM file's bytes at POS, wherever they are
 extern int   vfs_spans;                          // the host reads a span of a file: "NAME@OFF+LEN"
@@ -768,6 +769,7 @@ struct cpu {
     struct task *prev;         // switched out here; its oncpu is cleared once this CPU is off its stack
     struct task *idle;         // this CPU's idle task
     int bkl_task;              // the running task holds the kernel lock (a kernel task)
+    int light;                 // a trap on the light path, without the kernel lock: sched_lock takes it
 };
 extern struct cpu *cpu_self;
 extern int smp_ncpu;           // processors in use: 1 unless the host has SMP

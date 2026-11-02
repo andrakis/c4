@@ -13,8 +13,8 @@ SET OUT /build
 # built -D C4IX_SHARED and linked with -l against C4IX's shared
 # libraries -- but vfsload, which runs before there is a /lib, and splash,
 # which runs while the boot unpacks the root archive, carry their own
-SET LC c4sc -c 400000 compile -O -c -D C4IX_SHARED -I src/c4ix/include
-SET LCS c4sc -c 400000 compile -O -c -I src/c4ix/include
+SET LC c4sc -c 65536 compile -O -c -D C4IX_SHARED -I src/c4ix/include
+SET LCS c4sc -c 65536 compile -O -c -I src/c4ix/include
 SET U src/c4ix/include/c4ix_user.h
 SET LIBC $(OUT)/lib/libc4ix.c4s
 SET LIBARC $(OUT)/lib/libarc.c4s
@@ -120,6 +120,10 @@ DEPS $(OUT)/user/dmesg.c4o : src/c4ix/user/dmesg.c $(U)
 RUN $(LC) src/c4ix/user/dmesg.c $(OUT)/user/dmesg.c4o
 DEPS $(OUT)/bin/c4ix-dmesg.c4r : $(OUT)/user/dmesg.c4o $(LIBC)
 RUN c4rlink $(OUT)/user/dmesg.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-dmesg.c4r
+DEPS $(OUT)/user/free.c4o : src/c4ix/user/free.c $(U)
+RUN $(LC) src/c4ix/user/free.c $(OUT)/user/free.c4o
+DEPS $(OUT)/bin/c4ix-free.c4r : $(OUT)/user/free.c4o $(LIBC)
+RUN c4rlink $(OUT)/user/free.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-free.c4r
 DEPS $(OUT)/user/crc32.c4o : src/c4ix/user/crc32.c $(U) src/c4ix/include/archive.h
 RUN $(LC) src/c4ix/user/crc32.c $(OUT)/user/crc32.c4o
 DEPS $(OUT)/bin/c4ix-crc32.c4r : $(OUT)/user/crc32.c4o $(LIBARC) $(LIBC)

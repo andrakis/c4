@@ -18,7 +18,7 @@ loaded once and shared by every task that uses it. Each task gets its own
 ## Using it
 
 ```
-c4sc -c 400000 compile -O -fno-builtin -c -I /usr/include/libc prog.c prog.c4o
+c4sc -c 65536 compile -O -fno-builtin -c -I /usr/include/libc prog.c prog.c4o
 c4rlink prog.c4o -l /lib/libc.c4s -o prog.c4r
 ```
 

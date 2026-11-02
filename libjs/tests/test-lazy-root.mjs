@@ -184,6 +184,12 @@ check(/read from there/.test(t) && crcLines(t, files).join('\n') === wanted(file
   check(pstore.has('c4ix-persist.tar') && pstore.has('c4ix-persist-b.tar') && Buffer.from(pstore.get('c4ix-persist.cur')).toString() === 'b' &&
     crcLines(t, mine.map(([n]) => n)).join('\n') === mineLines().join('\n'),
     'a second save goes into the other snapshot, and the files are still their bytes', t.slice(-600));
+  // two at once, as the desktop's persist -d and a sync typed can be: they
+  // take turns (persist.c's lock), and neither writes into the other
+  t = p1.sh('echo both > /usr/both.txt\npersist save &\npersist save &\nwait\n' + crcs(mine.map(([n]) => n)) + '\ncat /usr/both.txt');
+  check((t.match(/persist: \d+ changes and \d+ deletions kept/g) || []).length === 2 && !/failed|another save/.test(t) &&
+    crcLines(t, mine.map(([n]) => n)).join('\n') === mineLines().join('\n') && /^both$/m.test(t),
+    'two saves at once take turns, and the files are still their bytes', t.slice(-800));
 
   // the same drive with nothing saved, for the heap a boot takes
   const bare = machine({ store: new Map([...pstore].filter(([n]) => !/persist/.test(n))) });
@@ -199,8 +205,9 @@ check(/read from there/.test(t) && crcLines(t, files).join('\n') === wanted(file
   check(Buffer.from(pstore.get('c4ix-persist.cur')).toString() === 'a' && crcLines(t, mine.map(([n]) => n)).join('\n') === mineLines().join('\n'),
     'saved again, into the snapshot its files were not read from, they are their bytes', t.slice(-600));
   const p3 = machine({ store: pstore });
-  t = p3.sh('wait 4\n' + crcs(mine.map(([n]) => n)) + '\ncat /usr/again.txt');
-  check(crcLines(t, mine.map(([n]) => n)).join('\n') === mineLines().join('\n') && /^again$/m.test(t), 'and so does the boot after', t.slice(-600));
+  t = p3.sh('wait 4\n' + crcs(mine.map(([n]) => n)) + '\ncat /usr/again.txt\ncat /usr/both.txt');
+  check(crcLines(t, mine.map(([n]) => n)).join('\n') === mineLines().join('\n') && /^again$/m.test(t) && /^both$/m.test(t),
+    'and so does the boot after', t.slice(-600));
 }
 
 // ---- a desktop boot that does not fit stops, and says why ----

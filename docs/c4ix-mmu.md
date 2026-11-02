@@ -533,6 +533,40 @@ has nothing to swap against. Now:
   none over 2.5 MB, and ROTT's image could not be read in; from the top,
   the same unpack leaves one free run of 17.5 MB. Each frame knows the
   user address it holds (`mmu_fva`).
+- **Which block a frame comes from** (2026-11-02). A program's own
+  block -- its image, its stack, one the heap had in one run when there
+  was too little room to page in -- has free frames where its pages went
+  out, and they used to serve the next page anyone wanted, first of all:
+  `mmu_fput` puts a block at the head of the free list. A page of the
+  shell's, persist's or the desktop's that came in then kept the block --
+  all of it, 6.4 MB for a compiler's arena -- after the compiler had
+  gone, and a block of single frames that had emptied went back to the
+  heap instead. After a failed build in the browser `free` had 0 KB in
+  blocks of single frames and 20 MB more "other". Now `mmu_ftake` takes
+  a frame of a block of single frames first, of those the one with the
+  most frames in use (so the emptiest drain and go back whole), then a
+  new block, and a program's own block's free frames only when there is
+  neither. A program's block that outlives it, kept by frames lent to
+  other pages, becomes a block of single frames when the program goes
+  (`mmu_release`): its free frames serve first, and `mmu_freeblock` may
+  move what is left out of it when the heap wants a run. Room to page in
+  (`mmu_pageroom`, which says whether a big block may be memory on
+  demand) counts the free frames of programs' blocks too: they are
+  lent when there is nothing else.
+  - *A record's pool flag.* `mmu_cnew` never set `pool`, and a block's
+    record from the heap may be a freed block's: a program's block that
+    came back as a "block of single frames" had its bytes taken off
+    `mmu_poolbytes` as it went, which went to -100 MB once blocks of
+    single frames were common. Room to page in went with it, and every
+    big block was refused as memory on demand.
+  - *The heap's biggest free block* is `SWAP_CMD` op 6 (heap.js and
+    sheap.js `largest`): `/proc/meminfo`'s `largest`, and what `free`
+    compares with what is free to say the memory is in pieces.
+  - *Swap's lines* are four a second of the machine's clock, the rest
+    counted and said as a number: a build bigger than memory put 645
+    lines in the 64 KB log, and the line that said why a compiler could
+    not have its arena (`umem_alloc`'s "no memory for a block") was gone
+    before anyone looked.
 - **The clock** (`mmu_clock`) is a hand that goes round the window's
   pages. A page used since the hand last passed (PTE_A, set as the MMU
   fills a translation) has its bit cleared and its translation forgotten,

@@ -201,6 +201,7 @@ void gc_shutdown () {
 // Initialize the arena and thread the free list. Returns 0 on success.
 // NCELLS is the first block; the rest arrive as they are needed.
 int gc_init (int ncells) {
+	int n;
 	gc_nextra = 0;
 	if (!(gc_extra = malloc(GC_EXTRA_MAX * sizeof(int)))) {
 		printf("c4sp: cannot allocate the root table\n");
@@ -216,9 +217,18 @@ int gc_init (int ncells) {
 		return 1;
 	}
 	gc_total_allocs = gc_collections = gc_last_freed = gc_last_live = 0;
-	if (gc_addblock(ncells)) {
-		printf("c4sp: cannot allocate %d-cell arena\n", ncells);
-		return 1;
+	// -c is where the arena starts, and it grows (gc_collect): where
+	// memory will not give that much at once, it starts at half, and so
+	// on to 16384 cells, which is a run that collects more often rather
+	// than one that does not run
+	n = ncells;
+	while (gc_addblock(n)) {
+		if (n <= 16384) {
+			printf("c4sp: cannot allocate %d-cell arena\n", n);
+			return 1;
+		}
+		n = n / 2;
+		if (n < 16384) n = 16384;
 	}
 	return 0;
 }

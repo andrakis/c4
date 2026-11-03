@@ -96,8 +96,9 @@ void sched_early() {
 // A kernel lock is two words: 1 + the CPU holding it (0 if none), and
 // its holds, nested, so a CPU can take one it has. A CPU spins a little
 // on one held elsewhere, then parks in CWAI until the holder lets go.
-// On one CPU there is nothing to lock against, and these do nothing.
-void klock_take(int *lk) {
+// On one CPU there is no other CPU to lock against, and these only mask
+// preemption (below).
+static void klock_spin(int *lk) {
     int me, o, spin;
     if (smp_ncpu < 2) return;
     me = cpu_self->id + 1;
@@ -109,21 +110,48 @@ void klock_take(int *lk) {
     lk[1] = 1;
 }
 
-void klock_drop(int *lk) {
+static void klock_let(int *lk) {
     if (smp_ncpu < 2) return;
     if (--lk[1]) return;
     __c4_xchg((int)lk, 0);
     __c4_wake((int)lk, 1);
 }
 
+// A lock is the CPU's, not the task's: taken again on the CPU that holds
+// it, it is had at once. So whoever holds one is not to be switched out
+// while it does -- outside the trap handler, which nothing preempts, that
+// is a kernel task, and the clock would switch it out where it stood. A
+// trap of the task switched in then took the lock as its own, and went
+// through what the kernel task was halfway through: init's mmu_valloc,
+// its scan of the window half done, gave a new task's image the page a
+// program's malloc had just been given there (the program's write then
+// killed it, "the kernel's, for a task being made"). On one CPU, where
+// the lock itself is nothing, the same. So outside the handler a lock
+// masks preemption while it is held, as sched_lock does.
+void klock_take(int *lk) {
+    if (!sched_intrap) {
+        if (sched_lockdepth == 0 && sched_interval) __c4_configure(C4IX_CONF_INTERVAL, 0);
+        ++sched_lockdepth;
+    }
+    klock_spin(lk);
+}
+
+void klock_drop(int *lk) {
+    klock_let(lk);
+    if (!sched_intrap) {
+        --sched_lockdepth;
+        if (sched_lockdepth == 0 && sched_interval) __c4_configure(C4IX_CONF_INTERVAL, sched_interval);
+    }
+}
+
 // The big one, the KERNEL LOCK: everything in the kernel but what has a
 // lock of its own -- so far, the tasks' memory (task.c, umem_lock), which
 // a program's malloc and free reach without it (sched_trap's light path).
 static int bkl[2];
-static void bkl_take() { klock_take(bkl); }
+static void bkl_take() { klock_spin(bkl); }
 // Whether this CPU holds the kernel lock: the MMU swaps only then (mmu.c)
 int sched_has_bkl() { return smp_ncpu < 2 || bkl[0] == cpu_self->id + 1; }
-static void bkl_drop() { klock_drop(bkl); }
+static void bkl_drop() { klock_let(bkl); }
 
 // Whether N may run on CPU K by its mask (pin, SYS_AFFINITY). A mask
 // naming no CPU this machine has is no mask at all.

@@ -567,6 +567,38 @@ has nothing to swap against. Now:
     lines in the 64 KB log, and the line that said why a compiler could
     not have its arena (`umem_alloc`'s "no memory for a block") was gone
     before anyone looked.
+- **A table for a page coming back** (2026-11-03). A page that comes in
+  is mapped in its task's space, which may need a table there that it has
+  not got yet, and a table is a page of the kernel's heap (`mmu_page`),
+  taken 16 at a time. Under swap the heap's memory is frames, in pieces:
+  `innerbench -Tln 40` in 32 MB (forty c4m's, each with C4KE in it) had no
+  run of 16 pages left, its pages came in with no table to map them, and
+  the fault that followed could not make one either and killed the task --
+  "page fault: write to ... (task inner-kernel, not mapped)", 52 of them,
+  with 256 MB of swap free. A table now comes from a block of two pages
+  where there is no run of 16; and where there is not even that, pages
+  are put out to make one (`mmu_pte_out`, through `mmu_kalloc`). Pages
+  move then, so that is done only where no frame is held across it: a
+  page coming in makes its table before it takes its frame
+  (`mmu_pagein`), and a fault on a page that is in with no table makes
+  one before it maps it (`mmu_fault`, which looks again whether the page
+  is still in). A fault that still cannot have one says so ("no memory
+  for a table to map it in"). Measured: all forty benchmarks complete,
+  no task killed.
+  - *A lock is the CPU's, not the task's* (`klock_take`, sched.c), which
+    the change above brought out: `test-c4ix-mmu` failed on one CPU, the
+    root archive's unpack killed at its first write ("the kernel's, for a
+    task being made"). A klock taken again on the CPU that holds it is had
+    at once, and on one CPU it is nothing at all; and a kernel task -- one
+    that holds a lock outside the trap handler -- was preemptible. init
+    was switched out halfway through `mmu_valloc`'s scan of the window;
+    the unpack's malloc was given a page there; init went on from where
+    its scan stood and gave a new task's image the same page. Found by
+    watching the window's books from libjs (`mmu_vpg`, `mmu_vbits` and
+    `mmu_vnext` between runs of 2,000 cycles): a log line in the kernel
+    moved the timing, and the failure with it. Outside the handler a lock
+    now masks preemption while it is held, as `sched_lock` does (the
+    kernel lock, which `sched_lock` takes, keeps its plain spin).
 - **The clock** (`mmu_clock`) is a hand that goes round the window's
   pages. A page used since the hand last passed (PTE_A, set as the MMU
   fills a translation) has its bit cleared and its translation forgotten,

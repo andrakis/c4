@@ -71,30 +71,44 @@ int mmu_kstack[CPU_MAX];       // each CPU's trap stack (its base)
 //
 // A table is one page, page-aligned. The heap's blocks are 8-byte
 // aligned, so pages come from blocks of 16 pages at a time, of which
-// the aligned 15 or 16 inside are used; freed ones go on a list threaded
-// through their first word.
+// the aligned 15 or 16 inside are used, on a list threaded through
+// their first word, where freed ones go too. Where the heap has no run
+// of 16 pages -- its memory frames, in pieces between the kernel's
+// blocks -- a block of two, the aligned page in it; and where there is
+// not even that, a page coming back makes one by putting pages out
+// (mmu_pte_out). A table is what a page coming back needs to be mapped
+// in its task's space: 40 c4m's in 32 MB had pages come back unmapped,
+// and died of it ("page fault ... not mapped").
 enum { MMU_CHUNK = 16 };
 static int mmu_freepage;
-static int mmu_chunkp, mmu_chunkn;
 
 static int mmu_ulock[2];       // the regions, the map and the page list (klock: SMP's light path)
+
+// The pages of the heap block RAW, N pages long, to the list
+static void mmu_pages_add(int raw, int n) {
+    int p;
+    klock_take(mmu_ulock);
+    p = (raw + MMU_PAGE - 1) & ~(MMU_PAGE - 1);
+    while (p + MMU_PAGE <= raw + n * MMU_PAGE) {
+        *(int *)p = mmu_freepage;
+        mmu_freepage = p;
+        p = p + MMU_PAGE;
+    }
+    klock_drop(mmu_ulock);
+}
 
 static int mmu_page() {
     int p, raw;
     klock_take(mmu_ulock);
-    if (mmu_freepage) {
-        p = mmu_freepage;
-        mmu_freepage = *(int *)p;
-    } else {
-        if (!mmu_chunkn) {
-            if (!(raw = (int)malloc(MMU_CHUNK * MMU_PAGE))) { klock_drop(mmu_ulock); return 0; }
-            mmu_chunkp = (raw + MMU_PAGE - 1) & ~(MMU_PAGE - 1);
-            mmu_chunkn = (raw + MMU_CHUNK * MMU_PAGE - mmu_chunkp) / MMU_PAGE;
-        }
-        p = mmu_chunkp;
-        mmu_chunkp = mmu_chunkp + MMU_PAGE;
-        --mmu_chunkn;
+    while (!mmu_freepage) {
+        klock_drop(mmu_ulock);
+        if ((raw = (int)malloc(MMU_CHUNK * MMU_PAGE))) mmu_pages_add(raw, MMU_CHUNK);
+        else if ((raw = (int)malloc(2 * MMU_PAGE))) mmu_pages_add(raw, 2);
+        else return 0;
+        klock_take(mmu_ulock);
     }
+    p = mmu_freepage;
+    mmu_freepage = *(int *)p;
     klock_drop(mmu_ulock);
     memset((char *)p, 0, MMU_PAGE);
     return p;
@@ -111,6 +125,19 @@ static int *mmu_pte(int *dir, int va, int make) {
         dir[(va >> 22) & 1023] = (int)pt | PTE_P;
     } else pt = (int *)(pde & ~(MMU_PAGE - 1));
     return pt + ((va >> 12) & 1023);
+}
+
+// ... and where the heap has not even two pages in a run, pages put out
+// to make them (mmu_kalloc). Pages move then: only where nothing holds a
+// frame across it: a page coming in, before it takes its frame
+// (mmu_pagein), and a fault on a page that is in with no table (mmu_fault).
+static int *mmu_pte_out(int *dir, int va) {
+    int *e;
+    int raw;
+    if ((e = mmu_pte(dir, va, 1))) return e;
+    if (!(raw = (int)mmu_kalloc(2 * MMU_PAGE))) return 0;
+    mmu_pages_add(raw, 2);
+    return mmu_pte(dir, va, 1);
 }
 
 // Map N bytes at user address VA, page by page, to the memory at PA,
@@ -1154,9 +1181,20 @@ void mmu_fault(struct task *t, int va) {
     // when there was no memory for a table of its space (mmu_pagein), or
     // one mmu_contig took out and could not move
     if (t && r && r->owner == mmu_root(t) && r->heap && r->dir && (e = mmu_pte(mmu_kdir, va, 0)) && (*e & PTE_P) &&
-        (u = mmu_pte(r->dir, va, 1)) && !(*u & PTE_P)) {
-        *u = (*e & ~(MMU_PAGE - 1)) | r->flags;
-        *(int *)MMU_INVLPG = va;
+        !((u = mmu_pte(r->dir, va, 0)) && (*u & PTE_P))) {
+        if (!(u = mmu_pte_out(r->dir, va))) {
+            kprintf("c4ix: task %d (%s): its page at 0x%08x is in memory, and there is no memory for a table to map it in; killed\n",
+                t->id, t->name, va);
+            t->killsig = C4IX_SIGSEGV;
+            task_exit(-1);
+            return;
+        }
+        // (pages put out to make the table may have been this one: then
+        // the access faults again, and brings it in)
+        if (*e & PTE_P) {
+            *u = (*e & ~(MMU_PAGE - 1)) | r->flags;
+            *(int *)MMU_INVLPG = va;
+        }
         return;
     }
     // A C4KE program writing its own code: C4KE's ps patches itself. The
@@ -1570,13 +1608,20 @@ static int mmu_pagein(struct urgn *r, int va, int keep, int evict) {
     int *e, *u;
     int f, s;
     if (!(e = mmu_pte(mmu_kdir, va, 0)) || !(*e & PTE_SWAP)) return 1;
+    // the table it is mapped with first, where making one may put pages
+    // out -- which a frame taken for it would not live through (none of
+    // them this one, which is out already); without one it comes in
+    // unmapped, and its fault maps it (mmu_fault)
+    u = 0;
+    if (r->dir && evict) u = mmu_pte_out(r->dir, va);
+    else if (r->dir) u = mmu_pte(r->dir, va, 1);
     if (!(f = mmu_fget(va, keep, evict))) return 0;
     e = mmu_pte(mmu_kdir, va, 0);
     s = *e >> 12 & 0xfffff;
     mmu_sop(SWAP_IN, s, f);
     mmu_sput(s);
     *e = f | PTE_P | PTE_U | PTE_W;
-    if (r->dir && (u = mmu_pte(r->dir, va, 1))) *u = f | r->flags | PTE_A;
+    if (u) *u = f | r->flags | PTE_A;
     *(int *)MMU_INVLPG = va;
     --r->swapped;
     ++mmu_swapins;

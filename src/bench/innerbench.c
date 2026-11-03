@@ -42,18 +42,21 @@ void psh (char *str) {
 	_argv[_argc++] = str;
 }
 
-// The c4m to run. C4KE finds a bare "c4m" as c4m.c4r, its own build;
-// on a C4IX disk that name is the C4DOS build (build-images.sh: the disk
-// is C4DOS's too), which C4IX starts and which dies at its first store,
-// saying nothing. C4IX's c4m, a C4KE program like this one, is /bin/c4m,
-// where the shell's PATH finds it.
-char *c4m_name () {
+// The program to run as NAME: BIN where there is one, which is C4IX,
+// and NAME, found as C4KE finds it, where there is not (C4KE, the host).
+// C4KE finds a bare "c4m" as c4m.c4r, its own build; on a C4IX disk that
+// is the C4DOS build (build-images.sh: the disk is C4DOS's too), which
+// C4IX starts and which dies at its first store, saying nothing. And
+// "top" is C4KE's, whose shares of a 32-bit machine's cycles overflow
+// and go negative. C4IX's are /bin/c4m and /bin/top, where the shell's
+// PATH finds them.
+char *bin_or (char *bin, char *name) {
 	int fd;
-	if ((fd = open("/bin/c4m", 0)) >= 0) {
+	if ((fd = open(bin, 0)) >= 0) {
 		close(fd);
-		return "/bin/c4m";
+		return bin;
 	}
-	return "c4m";
+	return name;
 }
 
 void print_args () {
@@ -242,9 +245,14 @@ int main (int argc, char **argv) {
 	memset(pids, 0, i);
 	pid_counter = 0;
 
-	_argc = 2;
-	_argv[0] = "top";
-	_argv[1] = "-b"; // background mode
+	// C4KE's top in its background mode (it does not take the
+	// terminal's focus); C4IX's takes no options, nor the terminal
+	_argv[0] = bin_or("/bin/top", "top");
+	_argc = 1;
+	if (_argv[0][0] != '/') {
+		_argv[1] = "-b";
+		_argc = 2;
+	}
 	pid_top = 0;
 	if (!notop) {
 		pid_top = kern_user_start_c4r(_argc, _argv, "top", PRIV_USER);
@@ -266,7 +274,7 @@ int main (int argc, char **argv) {
 			if (mode & USE_ALTMODE)
 				psh("-a");
 		} else if (mode & ONLY_C4M) {
-			psh(c4m_name());
+			psh(bin_or("/bin/c4m", "c4m"));
 			if (mode & USE_ALTMODE)
 				psh("-a");
 		}

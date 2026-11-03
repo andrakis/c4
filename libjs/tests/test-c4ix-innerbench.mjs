@@ -6,7 +6,9 @@
 // C4KE does -- NAME, then NAME.c4r. On this disk c4m.c4r is the C4DOS
 // build, which C4IX starts and which dies at its first store, printing
 // nothing: innerbench said it was spawning c4m, and its benchmarks ended
-// at once. It runs /bin/c4m, C4IX's, where there is one.
+// at once. It runs /bin/c4m, C4IX's, where there is one -- and /bin/top,
+// where it ran C4KE's, whose shares of a 32-bit machine's cycles went
+// negative; and stops it when the benchmarks are done.
 //
 //   node libjs/tests/test-c4ix-innerbench.mjs
 import { readFileSync } from 'node:fs';
@@ -47,9 +49,13 @@ const sh = cmds => {
 };
 
 check(until(() => text().includes('c4ix:/$')), 'C4IX boots to its shell, the MMU on');
-sh('wait 7');
-const t = sh('cd /usr\ninnerbench -T -n 1');
+sh('wait 4');                 // the root archive's unpack (one CPU)
+const t = sh('cd /usr\ninnerbench -n 1');
 check(/^innerbench: invoking '\/bin\/c4m load-c4r\.c src\/c4ke\/c4ke\.c -- /m.test(t), 'innerbench starts /bin/c4m, C4IX\'s', t);
 check(/Benchmark complete: +\d/.test(t) && /^innerbench complete$/m.test(t) && !/page fault|cannot start/.test(t),
   'its C4KE, booted from source, runs bench to the end', t);
+check(/(^|\x1b\[H)top: \d+ tasks, CPU usage \d+% -- Ctrl-C to stop$/m.test(t) && !/c4top|-\d+%/.test(t),
+  'top beside it is C4IX\'s, its shares none of them negative', t);
+const ps = sh('ps');
+check(!/ top$/m.test(ps), 'and is stopped when the benchmarks are done', ps);
 process.exit(fail);

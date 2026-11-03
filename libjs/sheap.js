@@ -7,7 +7,9 @@
 // The rules are heap.js's: blocks of 16..4096 bytes come from per-class
 // free lists, larger ones from first-fit free ranges sorted by address and
 // coalesced, the rest from a bump pointer, and a small block from a free
-// range once the bump pointer is at the end. Blocks are 16-byte aligned.
+// range once the bump pointer is at the end, and every small block free
+// back to the ranges, merged, when a block cannot be had otherwise
+// (consolidate). Blocks are 16-byte aligned.
 // And while high is set (setHigh, C4IX's frames), a large block comes from
 // the top: the highest free range that fits, or a second bump pointer down
 // from the end.
@@ -101,6 +103,7 @@ export class SharedHeap {
   largest() {
     this.lock();
     try {
+      this.consolidate();
       const ctl = this.ctl, L = this.large;
       let n = ctl[C.TOP] - ctl[C.BRK];
       for (let i = 0; i < ctl[C.NLARGE]; i++) if (L[2 * i + 1] > n) n = L[2 * i + 1];
@@ -112,7 +115,11 @@ export class SharedHeap {
     n = n | 0;
     if (n <= 0) return 0;
     this.lock();
-    try { return this.take(n); } finally { this.unlock(); }
+    try {
+      const addr = this.take(n);
+      if (addr || !this.consolidate()) return addr;
+      return this.take(n);
+    } finally { this.unlock(); }
   }
 
   free(p) {
@@ -133,7 +140,7 @@ export class SharedHeap {
       const span = this.spanAt(p);
       if (span <= 0) return 0;
       if (n <= span) return p;            // it still fits
-      const q = this.take(n);
+      const q = this.take(n) || (this.consolidate() && this.take(n));
       if (!q) return 0;
       u8.copyWithin(q, p, p + span);
       this.give(p);
@@ -193,6 +200,51 @@ export class SharedHeap {
       ctl[C.HEADS + m - 1] = p;
       this.map[p >> 4] = m + M_FREE;
     }
+  }
+
+  // Every small block free on its class's list back to the free ranges,
+  // merged with its neighbours, as heap.js's: how many there were. Not
+  // where the ranges would be more than the books have room for: then the
+  // lists stay as they are.
+  consolidate() {
+    const ctl = this.ctl, map = this.map, L = this.large;
+    const all = [];
+    for (let k = 1; k <= NCLASS; k++) {
+      let p = ctl[C.HEADS + k - 1];
+      while (p && !(p & 15) && p >= ctl[C.BASE] && p < ctl[C.END] && map[p >> 4] === k + M_FREE) {
+        all.push(p, spanOf(k));
+        map[p >> 4] = 0;
+        p = this.i32[p >> 2] | 0;
+      }
+    }
+    if (!all.length) return 0;
+    const n = ctl[C.NLARGE];
+    const r = [];
+    for (let i = 0; i < all.length; i += 2) r.push([all[i], all[i + 1]]);
+    for (let i = 0; i < n; i++) r.push([L[2 * i], L[2 * i + 1]]);
+    r.sort((a, b) => a[0] - b[0]);
+    const m = [];
+    for (const x of r) {
+      const last = m[m.length - 1];
+      if (last && last[0] + last[1] === x[0]) last[1] += x[1];
+      else m.push([x[0], x[1]]);
+    }
+    let brk = ctl[C.BRK], top = ctl[C.TOP];
+    for (let i = 0; i < m.length; i++) {
+      if (m[i][0] + m[i][1] === brk) { brk = m[i][0]; m.splice(i--, 1); }
+      else if (m[i][0] === top) { top = m[i][0] + m[i][1]; m.splice(i--, 1); }
+    }
+    if (m.length > ctl[C.LCAP]) {
+      // no room: the blocks back on their lists, as they were
+      for (let i = 0; i < all.length; i += 2) map[all[i] >> 4] = classOf(all[i + 1]) + M_FREE;
+      return 0;
+    }
+    ctl[C.BRK] = brk;
+    ctl[C.TOP] = top;
+    for (let i = 0; i < m.length; i++) { L[2 * i] = m[i][0]; L[2 * i + 1] = m[i][1]; }
+    ctl[C.NLARGE] = m.length;
+    for (let k = 1; k <= NCLASS; k++) ctl[C.HEADS + k - 1] = 0;
+    return all.length / 2;
   }
 
   // a block of class k from its list, or 0; a link that does not lead to

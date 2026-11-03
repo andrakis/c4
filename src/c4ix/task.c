@@ -362,6 +362,7 @@ static void task_destroy(struct task *t) {
     umem_free_all(t, 1);
     mmu_task_done(t);
     sl4b_free(task_cache, (char *)t);
+    mmu_gone();
 }
 
 // Its image, its libraries' code and data and its heap: what a task

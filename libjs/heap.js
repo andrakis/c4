@@ -14,6 +14,14 @@
 //   - anything else is carved from a bump pointer;
 //   - and once that is at the end, a small block is carved from a free
 //     range too.
+// A small block freed goes on its class's stack, and stays there, kept for
+// one of its size, until a block cannot be had otherwise: then every
+// stack's blocks go back to the free ranges, merged with their neighbours
+// (consolidate, as glibc's malloc_consolidate does its fastbins), and the
+// block is looked for again. Kept on their stacks for good, they were
+// memory free and of no use to anything bigger: C4IX, after forty
+// programs had come and gone (innerbench -Tln 40 in 32 MB), had 19 MB
+// free and nothing bigger than 1.1 MB in one run.
 // While high is set (setHigh: C4IX's swap device, SWAP_HIGH), a large
 // block comes from the top instead: the highest free range that fits, or
 // a second bump pointer coming down from the end. C4IX takes the frames of
@@ -113,6 +121,13 @@ export class Heap {
   alloc(n) {
     n = n | 0;
     if (n <= 0) return 0;
+    const addr = this.take(n);
+    if (addr || !this.consolidate()) return addr;
+    return this.take(n);
+  }
+
+  // alloc's block, without consolidating: 0 if there is none
+  take(n) {
     let addr = 0, span = 0;
     if (n <= SMALL_MAX) {
       span = classOf(n);
@@ -143,9 +158,35 @@ export class Heap {
 
   setHigh(on) { this.high = !!on; }
 
+  // Every small block free on its class's stack back to the free ranges,
+  // merged with its neighbours: how many there were
+  consolidate() {
+    const all = [];
+    for (const [span, stack] of this.small) { for (const p of stack) all.push({ addr: p, len: span }); stack.length = 0; }
+    if (!all.length) return 0;
+    for (const r of this.large) all.push(r);
+    all.sort((a, b) => a.addr - b.addr);
+    const L = [];
+    for (const r of all) {
+      const last = L[L.length - 1];
+      if (last && last.addr + last.len === r.addr) last.len += r.len;
+      else L.push({ addr: r.addr, len: r.len });
+    }
+    // a range that ends at the bump pointer goes back to it, and one that
+    // starts at the top's, to that
+    for (let i = 0; i < L.length; i++) {
+      if (L[i].addr + L[i].len === this.brk) { this.brk = L[i].addr; L.splice(i--, 1); }
+      else if (L[i].addr === this.top) { this.top = L[i].addr + L[i].len; L.splice(i--, 1); }
+    }
+    this.large = L;
+    return all.length;
+  }
+
   // The biggest block alloc could hand out now: the longest free range,
-  // or the room between the bump pointers (C4IX's free: SWAP_CMD 6)
+  // or the room between the bump pointers (C4IX's free: SWAP_CMD 6),
+  // small blocks free consolidated first
   largest() {
+    this.consolidate();
     let n = this.top - this.brk;
     for (const r of this.large) if (r.len > n) n = r.len;
     return n;

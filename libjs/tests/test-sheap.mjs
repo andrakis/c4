@@ -99,6 +99,17 @@ if (!isMainThread) {
   ok(`exhaustion returns 0 (${big.length} MB given)`, big.length >= 20 && heap.alloc(1 << 20) === 0);
   for (const p of big) heap.free(p);
   ok('everything given back, a block that size fits again', heap.alloc(20 << 20) !== 0);
+  // small blocks freed go back to the free ranges, merged, when a block
+  // cannot be had otherwise (consolidate), as heap.js's
+  heap.reset(BASE, BASE + 64 * 1024);
+  const smalls = [];
+  for (let p; (p = heap.alloc(1000)); ) smalls.push(p);
+  ok(`64 blocks of 1 KB fill 64 KB (${smalls.length})`, smalls.length === 64);
+  for (let i = 0; i < smalls.length; i += 2) heap.free(smalls[i]);
+  ok('every other one freed: nothing bigger than one of them', heap.largest() === 1024 && heap.alloc(2048) === 0);
+  for (let i = 1; i < smalls.length; i += 2) heap.free(smalls[i]);
+  ok('all of them freed: one block of 64 KB again', heap.largest() === 64 * 1024, `largest ${heap.largest()}`);
+  ok('and it is had, a small block beside it too', heap.alloc(48 * 1024) !== 0 && heap.alloc(1000) !== 0);
 
   console.log(fail ? 'test-sheap: FAILURES' : 'test-sheap: OK');
   process.exit(fail);

@@ -162,11 +162,18 @@ static int sched_allows(struct task *n, int k) {
     return !m || (m & (1 << k)) != 0;
 }
 
+// Is N held (mmu.c, load control)? Not with a signal to take: it runs
+// to take it.
+static int sched_held(struct task *n) {
+    return n->held && !n->killsig && !n->ck_sigpend;
+}
+
 // Whether this CPU may run N: not while another CPU is on its stack,
 // an idle task only on its own CPU, a kernel task only on CPU 0, and a
-// pinned task only on its CPUs.
+// pinned task only on its CPUs; and no CPU a task held.
 static int sched_mine(struct task *n) {
     int me;
+    if (sched_held(n)) return 0;
     if (smp_ncpu < 2) return 1;
     me = cpu_self->id + 1;
     if (n->oncpu && n->oncpu != me) return 0;
@@ -236,7 +243,7 @@ static void smp_kick() {
     if (kern && me != 0 && smp_idle[0]) { __c4_ipi(0); smp_idle[0] = 0; --idle; }
     n = task_head;
     while (n && idle > 0) {
-        if (n->privs != PRIV_KERNEL && !n->cpuidle && !n->oncpu &&
+        if (n->privs != PRIV_KERNEL && !n->cpuidle && !n->oncpu && !sched_held(n) &&
             (n->state == TS_READY || sched_unblocked(n)) && (k = smp_idlefor(n)) >= 0) {
             __c4_ipi(k); smp_idle[k] = 0; --idle;
         }
@@ -561,6 +568,7 @@ void task_zombify(struct task *t, int code) {
     if (con_is_booting() || t->id <= boot_lastid) klog("task %d (%s) exited %d\n", t->id, t->name, code);
     t->exitcode = code;
     t->state = TS_ZOMBIE;
+    if (t->held) mmu_letgo(t);
     ++sched_nzombies;
     if (t != kernel_task && !t->cpuidle) --sched_nlive;
     task_unborrow(t);
@@ -791,6 +799,9 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
         me->uacc = me->uacc + (acct_in - acct_out);
         acct_cpu(me, acct_in - acct_out);
     }
+    // load control: a task held, or let go, while paging is most of what
+    // the machine does (mmu.c)
+    if (mmu_on) mmu_balance();
 
     // no nested switches while kernel structures move
     __c4_configure(C4IX_CONF_INTERVAL, 0);

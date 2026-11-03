@@ -561,6 +561,11 @@ struct task {
     int  ckabi;                // has made a C4KE call: a C4KE program
     int  mmdir;                // its page directory: its address space (0 until it needs one)
     char name[TASK_NAME_MAX];
+    // Load control (mmu.c, mmu_balance): held, it is not run while paging
+    // is most of what the machine does -- the machine ms it was held, 0
+    // if it is not; and when it was last let go
+    int  held;
+    int  letgo;
 };
 
 // What SYS_CPUSTAT copies out (sched_cpustat): a header, then one record
@@ -905,6 +910,9 @@ int  mmu_user_entry(struct task *t);   // a page that runs T's constructors, mai
 int  mmu_slot();                       // a word user mode may read: a library's data slot
 void mmu_switch(struct task *t);       // T is about to run here: its space
 void mmu_task_done(struct task *t);    // T is gone: its space too
+void mmu_gone();                       // a task is done: blocks of frames emptied into others, one held let go
+void mmu_balance();                    // load control: a task held, or let go (the scheduler, each trap)
+void mmu_letgo(struct task *t);        // ... T run again
 // malloc for a big kernel buffer: with swap, pages put out to make one
 // run of N bytes when the heap has none (a program's image as the loader
 // reads it, a file's bytes)

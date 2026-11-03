@@ -111,6 +111,20 @@ h6.gen = 9;
 check(h6.alloc(9000) !== 0, 'released space is reused');
 h6.free(dos); h6.free(dosgrow);
 
+// A small block freed stays on its class's stack until a block cannot be
+// had otherwise; then every stack goes back to the free ranges, merged
+// (consolidate). Small blocks that filled the heap, freed, are one block
+// again; every other one freed is pieces, nothing bigger than one.
+const h8 = new Heap(base, base + 64 * 1024);
+const smalls = [];
+for (let p; (p = h8.alloc(1000)); ) smalls.push(p);
+check(smalls.length === 64, `64 blocks of 1 KB fill 64 KB, not ${smalls.length}`);
+for (let i = 0; i < smalls.length; i += 2) h8.free(smalls[i]);
+check(h8.largest() === 1024 && h8.alloc(2048) === 0, 'every other one freed: nothing bigger than one of them');
+for (let i = 1; i < smalls.length; i += 2) h8.free(smalls[i]);
+check(h8.largest() === 64 * 1024, `all of them freed: one block of 64 KB again, not ${h8.largest()}`);
+check(h8.alloc(48 * 1024) !== 0 && h8.alloc(1000) !== 0, 'and it is had, a small block beside it too');
+
 // The registers (src/c4bb/sim/devices.js): HEAP_GEN reads back what was
 // written, HEAP_RELEASE frees and reads back the bytes freed.
 const { Devices, HEAP_GEN, HEAP_RELEASE, HEAP_USED } = await import('../../src/c4bb/sim/devices.js');

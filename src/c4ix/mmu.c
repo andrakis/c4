@@ -58,6 +58,9 @@ int mmu_pageroom();
 static int mmu_swapok;         // the host keeps pages
 static int mmu_swapslots, mmu_sfree;   // its slots, and how many are free
 static int mmu_swapouts, mmu_swapins, mmu_moves, mmu_firsts;
+// load control (mmu_balance): the cycles spent bringing pages back since
+// the window's start, that start in machine ms, and the tasks held
+static int mmu_pgcyc, mmu_lwin, mmu_nheld;
 static int mmu_salloc();
 static void mmu_fvaset(int pa, int va, int np);
 enum { MMU_WINPAGES = 65536 }; // the window: 256 MB
@@ -79,25 +82,45 @@ int mmu_kstack[CPU_MAX];       // each CPU's trap stack (its base)
 // (mmu_pte_out). A table is what a page coming back needs to be mapped
 // in its task's space: 40 c4m's in 32 MB had pages come back unmapped,
 // and died of it ("page fault ... not mapped").
+//
+// A block whose pages are all on the list again goes back to the heap.
+// Kept, the blocks a crowd of programs' tables took -- from wherever the
+// heap had a run, the middle of it when frames filled the rest -- cut its
+// free memory into pieces once the programs had gone: after innerbench
+// -Tln 40, twenty of them from 7 MB to 23 MB, and nothing more than 5 MB
+// in one run. (The kernel's map's tables, never freed, have blocks of
+// their own: mmu_kpage.)
 enum { MMU_CHUNK = 16 };
 static int mmu_freepage;
+struct tchunk {
+    int raw;                   // the heap's block
+    int n;                     // its pages
+    int nfree;                 // ... of them on the list
+};
+static int *mmu_tc;            // a page of memory's block of table pages (struct tchunk), by page number
 
 static int mmu_ulock[2];       // the regions, the map and the page list (klock: SMP's light path)
 
 // The pages of the heap block RAW, N pages long, to the list
 static void mmu_pages_add(int raw, int n) {
+    struct tchunk *c;
     int p;
+    // (no record, no lookup: the block is never freed)
+    c = mmu_tc ? (struct tchunk *)malloc(sizeof(struct tchunk)) : 0;
+    if (c) { c->raw = raw; c->n = 0; c->nfree = 0; }
     klock_take(mmu_ulock);
     p = (raw + MMU_PAGE - 1) & ~(MMU_PAGE - 1);
     while (p + MMU_PAGE <= raw + n * MMU_PAGE) {
         *(int *)p = mmu_freepage;
         mmu_freepage = p;
+        if (c) { mmu_tc[p >> 12] = (int)c; ++c->n; ++c->nfree; }
         p = p + MMU_PAGE;
     }
     klock_drop(mmu_ulock);
 }
 
 static int mmu_page() {
+    struct tchunk *c;
     int p, raw;
     klock_take(mmu_ulock);
     while (!mmu_freepage) {
@@ -109,6 +132,66 @@ static int mmu_page() {
     }
     p = mmu_freepage;
     mmu_freepage = *(int *)p;
+    if (mmu_tc && (c = (struct tchunk *)mmu_tc[p >> 12])) --c->nfree;
+    klock_drop(mmu_ulock);
+    memset((char *)p, 0, MMU_PAGE);
+    return p;
+}
+
+// A table's page P back to the list, under mmu_ulock; its block, every
+// page of it there, back to the heap
+static void mmu_page_free(int p) {
+    struct tchunk *c;
+    int *pp;
+    *(int *)p = mmu_freepage;
+    mmu_freepage = p;
+    if (!mmu_tc || !(c = (struct tchunk *)mmu_tc[p >> 12]) || ++c->nfree < c->n) return;
+    pp = &mmu_freepage;
+    while (*pp) {
+        if (mmu_tc[*pp >> 12] == (int)c) { mmu_tc[*pp >> 12] = 0; *pp = *(int *)*pp; }
+        else pp = (int *)*pp;
+    }
+    free((char *)c->raw);
+    free((char *)c);
+}
+
+// The kernel's map's tables (mmu_kdir), which are never freed, from blocks
+// of their own: among the others, each kept its block for good, and the
+// heap's memory in pieces round them -- after innerbench -Tln 40, twenty
+// blocks of 64 KB from 4 MB to 26 MB, kept by a table of the kernel's
+// each. At boot, a block of them for a 128th of memory (a table maps 4 MB
+// of the window: in 32 MB, 64, all of it), so that one taken later, from
+// the middle of a heap that frames have filled, is rare.
+static int mmu_kfreepage;
+
+static int mmu_kfill(int n) {
+    int raw, p;
+    if (!(raw = (int)malloc(n * MMU_PAGE))) {
+        n = 2;
+        if (!(raw = (int)malloc(n * MMU_PAGE))) return 0;
+    }
+    klock_take(mmu_ulock);
+    p = (raw + MMU_PAGE - 1) & ~(MMU_PAGE - 1);
+    while (p + MMU_PAGE <= raw + n * MMU_PAGE) {
+        *(int *)p = mmu_kfreepage;
+        mmu_kfreepage = p;
+        p = p + MMU_PAGE;
+    }
+    klock_drop(mmu_ulock);
+    return 1;
+}
+
+// A page for a table of the kernel's map, zeroed: 0 if there is none
+static int mmu_kpage() {
+    int p;
+    klock_take(mmu_ulock);
+    while (!mmu_kfreepage) {
+        klock_drop(mmu_ulock);
+        if (!mmu_kfill(MMU_CHUNK)) return 0;
+        klock_take(mmu_ulock);
+    }
+    p = mmu_kfreepage;
+    mmu_kfreepage = *(int *)p;
     klock_drop(mmu_ulock);
     memset((char *)p, 0, MMU_PAGE);
     return p;
@@ -120,7 +203,7 @@ static int *mmu_pte(int *dir, int va, int make) {
     int pde;
     pde = dir[(va >> 22) & 1023];
     if (!(pde & PTE_P)) {
-        if (!make || !(pt = (int *)mmu_page())) return 0;
+        if (!make || !(pt = (int *)(dir == mmu_kdir ? mmu_kpage() : mmu_page()))) return 0;
         ++mmu_ntables;
         dir[(va >> 22) & 1023] = (int)pt | PTE_P;
     } else pt = (int *)(pde & ~(MMU_PAGE - 1));
@@ -359,6 +442,20 @@ static int *mmu_dir_of(struct task *t) {
     return d;
 }
 
+// ... and where there is no page for it, pages put out to make one
+// (mmu_kalloc), as for a table (mmu_pte_out): what a task becoming a user
+// task does (mmu_adopt), before it has frames of its own that would move.
+// Without it, a space that could not be made was the kernel's own, empty
+// directory, and the task's regions were mapped into that.
+static int *mmu_dir_out(struct task *t) {
+    int *d;
+    int raw;
+    if ((d = mmu_dir_of(t)) != mmu_dir || !(t = mmu_root(t)) || t->privs != PRIV_USER) return d;
+    if (!(raw = (int)mmu_kalloc(2 * MMU_PAGE))) return d;
+    mmu_pages_add(raw, 2);
+    return mmu_dir_of(t);
+}
+
 // T is done with its space (task_destroy, and execve's old one): its
 // tables go back to the page list. What was mapped in it is freed by name.
 static void mmu_dir_free(int *d) {
@@ -367,14 +464,12 @@ static void mmu_dir_free(int *d) {
     k = 0;
     while (k < 1024) {
         if (d[k] & PTE_P) {
-            *(int *)(d[k] & ~(MMU_PAGE - 1)) = mmu_freepage;
-            mmu_freepage = d[k] & ~(MMU_PAGE - 1);
+            mmu_page_free(d[k] & ~(MMU_PAGE - 1));
             --mmu_ntables;
         }
         ++k;
     }
-    *d = mmu_freepage;
-    mmu_freepage = (int)d;
+    mmu_page_free((int)d);
 }
 
 void mmu_task_done(struct task *t) {
@@ -701,6 +796,7 @@ void mmu_adopt(struct task *t) {
     int *l, *x;
     int k, code;
     if (!mmu_on || !t || t->privs != PRIV_USER) return;
+    mmu_dir_out(t);
     // A frame forged before it was a user task (sched_forge) has memory's
     // addresses in it -- its stack, its argv, its entry -- which user mode
     // is about to use: its own addresses for them
@@ -1067,22 +1163,33 @@ static void mmu_swapinit();
 
 // At boot, before anything runs in user mode
 void mmu_init() {
+    int n;
     if (!host_has(C4IX_I_MMU)) return;
     mmu_memsize = *(int *)MMU_MEMSIZE;
     mmu_npages = mmu_memsize / MMU_PAGE;
     if (!(mmu_rcache = sl4b_cache_create("urgn", sizeof(struct urgn), 32)) ||
         !(mmu_pg = (int *)malloc(mmu_npages * sizeof(int))) ||
-        !(mmu_dir = (int *)mmu_page())) {
+        !(mmu_tc = (int *)malloc(mmu_npages * sizeof(int)))) {
+        klog("mmu: no memory for its tables; left off\n");
+        return;
+    }
+    memset((char *)mmu_tc, 0, mmu_npages * sizeof(int));
+    if (!(mmu_dir = (int *)mmu_page())) {
         klog("mmu: no memory for its tables; left off\n");
         return;
     }
     memset((char *)mmu_pg, 0, mmu_npages * sizeof(int));
     // user addresses from 256 MB, where memory fits below them: the
-    // window's books and the kernel's map of it
+    // window's books and the kernel's map of it, with tables for a 128th of
+    // memory (and a page more: the block is not page-aligned)
     if (mmu_memsize <= MMU_UWIN_BASE) {
+        n = mmu_npages / 128;
+        if (n < MMU_CHUNK) n = MMU_CHUNK;
+        if (n > MMU_WINPAGES / 1024) n = MMU_WINPAGES / 1024;
+        n = n + 1;
         if (!(mmu_vpg = (int *)malloc(MMU_WINPAGES * sizeof(int))) ||
             !(mmu_vbits = (int *)malloc(MMU_WINPAGES / 8)) ||
-            !(mmu_kdir = (int *)mmu_page())) {
+            !(mmu_kdir = (int *)mmu_page()) || !mmu_kfill(n)) {
             klog("mmu: no memory for its tables; left off\n");
             return;
         }
@@ -1153,7 +1260,7 @@ void mmu_fault(struct task *t, int va) {
     char *what;
     char whose[64];
     struct urgn *r;
-    int *e, *u;
+    int *e, *u, *d;
     int k;
     info = *(int *)MMU_FINFO;
     pc = *(int *)MMU_FPC;
@@ -1179,10 +1286,17 @@ void mmu_fault(struct task *t, int va) {
     }
     // Its own page, in memory, that its space has not got: one that came in
     // when there was no memory for a table of its space (mmu_pagein), or
-    // one mmu_contig took out and could not move
-    if (t && r && r->owner == mmu_root(t) && r->heap && r->dir && (e = mmu_pte(mmu_kdir, va, 0)) && (*e & PTE_P) &&
-        !((u = mmu_pte(r->dir, va, 0)) && (*u & PTE_P))) {
-        if (!(u = mmu_pte_out(r->dir, va))) {
+    // one mmu_contig took out and could not move -- or a page of its image,
+    // its stack, a shared library's code, mapped when it was given them
+    // where there was no memory for a table either (mmu_rmap, mmu_take:
+    // innerbench -Tln 40 had one c4m killed so, "not mapped"). Never a
+    // stack's guard page.
+    d = 0;
+    if (t && r && r->owner == mmu_root(t)) d = r->dir;
+    else if (t && r && r->shared) d = mmu_dir_of(t);
+    if (d && d != mmu_dir && !(r->guard && mmu_off(r, va) < MMU_PAGE) && (e = mmu_pte(mmu_kdir, va, 0)) && (*e & PTE_P) &&
+        !((u = mmu_pte(d, va, 0)) && (*u & PTE_P))) {
+        if (!(u = mmu_pte_out(d, va))) {
             kprintf("c4ix: task %d (%s): its page at 0x%08x is in memory, and there is no memory for a table to map it in; killed\n",
                 t->id, t->name, va);
             t->killsig = C4IX_SIGSEGV;
@@ -1641,14 +1755,17 @@ static int mmu_isout(int va) {
 // not come back
 static int mmu_bringin(struct urgn *r, int va) {
     int *e;
-    int k, n, end, fresh;
+    int k, n, end, fresh, c0;
     va = va & ~(MMU_PAGE - 1);
     fresh = (e = mmu_pte(mmu_kdir, va, 0)) && (*e & PTE_ZERO);
-    if (!mmu_pagein(r, va, va, 1)) return 0;
+    c0 = __c4_cycles();
+    if (!mmu_pagein(r, va, va, 1)) { mmu_pgcyc = mmu_pgcyc + (__c4_cycles() - c0); return 0; }
     n = 1;
     end = r->va + r->npages * MMU_PAGE;
     k = va + MMU_PAGE;
     while (n < SWAP_AHEAD && k < end && mmu_isout(k) && mmu_pagein(r, k, va, 0)) { ++n; k = k + MMU_PAGE; }
+    // (load control's measure, mmu_balance)
+    mmu_pgcyc = mmu_pgcyc + (__c4_cycles() - c0);
     // said once for a block while its pages come back, not for each
     // sixteen: the log is 64 KB. A page's first touch is not news.
     if (fresh) ++mmu_firsts;
@@ -1758,15 +1875,16 @@ static int mmu_clock(int keep, int want) {
 }
 
 // The page at VA of R into a free frame of another block than FROM, at the
-// same user address -- a copy, no swap -- or, with none free, out: 0 if it
+// same user address -- a copy, no swap -- or, with none free, out (OUT; or
+// without it, only into a block of single frames, and never out): 0 if it
 // could do neither. As a page put out leaves its space, so this one does
 // while it is copied: a CPU running it forgets it first, and each other
 // that has the space loaded before it next runs it (mmu_gen).
-static int mmu_move(struct urgn *r, int va, struct fchunk *from) {
+static int mmu_move(struct urgn *r, int va, struct fchunk *from, int out) {
     int *e, *u;
     int f, g, old;
     if (!(e = mmu_pte(mmu_kdir, va, 0)) || !(*e & PTE_P) || (*e & PTE_PIN)) return 0;
-    if (!(g = mmu_ftake(va, from, 1)) && !(g = mmu_ftake(va, from, 0))) return mmu_out(r, va);
+    if (!(g = mmu_ftake(va, from, 1)) && (!out || !(g = mmu_ftake(va, from, 0)))) return out ? mmu_out(r, va) : 0;
     f = *e & ~(MMU_PAGE - 1);
     u = r->dir ? mmu_pte(r->dir, va, 0) : 0;
     old = u ? *u : 0;
@@ -1783,6 +1901,41 @@ static int mmu_move(struct urgn *r, int va, struct fchunk *from) {
     return 1;
 }
 
+// Can every page in block C move? Never the pages from KEEP.
+static int mmu_movable(struct fchunk *c, int keep) {
+    struct urgn *r;
+    int *e;
+    int k, va, ok;
+    ok = 1;
+    k = 0;
+    while (ok && k < c->npages) {
+        if (!(c->bits[k >> 5] & (1 << (k & 31)))) {
+            va = mmu_fva[(c->base >> 12) + k];
+            r = va ? mmu_rgn(va) : 0;
+            ok = r && mmu_canout(r) && !(va >= keep && va < keep + SWAP_AHEAD * MMU_PAGE) &&
+                (e = mmu_pte(mmu_kdir, va, 0)) && (*e & PTE_P) && !(*e & PTE_PIN);
+        }
+        ++k;
+    }
+    return ok;
+}
+
+// Every page of block C moved (mmu_move, OUT as it has it), or as many
+// as would go; the block is freed with its last frame
+static void mmu_empty(struct fchunk *c, int out) {
+    struct urgn *r;
+    int k, va, n;
+    k = 0;
+    while (k < c->npages) {
+        // nothing of the block is read after its last frame
+        va = (c->bits[k >> 5] & (1 << (k & 31))) ? 0 : mmu_fva[(c->base >> 12) + k];
+        n = c->nused;
+        if (va && (r = mmu_rgn(va)) && !mmu_move(r, va, c, out)) return;
+        if (va && n == 1) return;
+        ++k;
+    }
+}
+
 // A frame block freed whole (the clock's choice is no use when the heap
 // needs one run of memory), its pages moved to free frames of other
 // blocks, or put out where there are none: of the blocks whose pages can
@@ -1790,42 +1943,156 @@ static int mmu_move(struct urgn *r, int va, struct fchunk *from) {
 // pages from KEEP.
 static int mmu_freeblock(int keep) {
     struct fchunk *c, *best;
-    struct urgn *r;
-    int *e;
-    int k, va, ok;
     best = 0;
     c = mmu_fcall;
     while (c) {
         if (c->nused && c->tried != mmu_round && (!best || c->nused < best->nused)) {
-            ok = 1;
-            k = 0;
-            while (ok && k < c->npages) {
-                if (!(c->bits[k >> 5] & (1 << (k & 31)))) {
-                    va = mmu_fva[(c->base >> 12) + k];
-                    r = va ? mmu_rgn(va) : 0;
-                    ok = r && mmu_canout(r) && !(va >= keep && va < keep + SWAP_AHEAD * MMU_PAGE) &&
-                        (e = mmu_pte(mmu_kdir, va, 0)) && (*e & PTE_P) && !(*e & PTE_PIN);
-                }
-                ++k;
-            }
-            if (ok) best = c;
+            if (mmu_movable(c, keep)) best = c;
             else c->tried = mmu_round;
         }
         c = c->anext;
     }
     if (!best) return 0;
     best->tried = mmu_round;
-    k = 0;
-    while (k < best->npages) {
-        // the block is freed with its last frame: nothing of it is read after
-        c = best;
-        va = (c->bits[k >> 5] & (1 << (k & 31))) ? 0 : mmu_fva[(c->base >> 12) + k];
-        ok = c->nused;
-        if (va && (r = mmu_rgn(va)) && !mmu_move(r, va, c)) break;
-        if (va && ok == 1) { k = c->npages; break; }
-        ++k;
-    }
+    mmu_empty(best, 1);
     return 1;
+}
+
+// ---- compaction ----
+//
+// A block of single frames goes back to the heap only with its last frame,
+// and a page coming back from swap takes whichever frame is free: once a
+// crowd of programs has gone, what is left -- the shells', the desktop's --
+// is a few pages to a block, across dozens of blocks, with the heap's free
+// memory in pieces between them (the desktop after innerbench -Tln 40 in
+// 32 MB: 60 blocks, 7 MB, 4 MB of it in use, and nothing free more than
+// 1.1 MB in one run). So when a task is done (task_destroy), the emptiest
+// block of single frames whose pages the others have free frames for has
+// them copied there (mmu_move, no swap), and goes back to the heap; then
+// the next, while one fits. Each block so freed is one fewer, and its
+// memory is the heap's top again, where blocks of frames come from.
+enum { COMPACT_MAX = 64 };     // blocks freed at a time, at most
+static void mmu_compact() {
+    struct fchunk *c, *best;
+    int spare, n, was;
+    if (!mmu_uoff || !mmu_fcall || !sched_has_bkl()) return;
+    ++mmu_round;
+    n = 0;
+    while (n < COMPACT_MAX) {
+        spare = 0;
+        c = mmu_fcall;
+        while (c) { if (c->pool) spare = spare + c->npages - c->nused; c = c->anext; }
+        best = 0;
+        c = mmu_fcall;
+        while (c) {
+            if (c->pool && c->nused && c->tried != mmu_round && c->nused <= spare - (c->npages - c->nused) &&
+                (!best || c->nused < best->nused)) {
+                if (mmu_movable(c, 0)) best = c;
+                else c->tried = mmu_round;
+            }
+            c = c->anext;
+        }
+        if (!best) break;
+        best->tried = mmu_round;
+        was = mmu_moves;
+        mmu_empty(best, 0);
+        if (mmu_moves == was) break;
+        ++n;
+    }
+    if (n) klog("mmu: %d blocks of frames given back to the heap, their pages moved to others\n", n);
+}
+
+// ---- load control ----
+//
+// Swap lets a task have more memory than there is, and every task that:
+// forty c4m's in 32 MB, a few MB each, ran, their pages going out and
+// coming back as they took turns. Fifty did not: each one's pages were out
+// before its turn came round again, every turn went on bringing them back,
+// and nothing finished -- 446,000 pages in and out in six minutes of the
+// machine's time, the CPUs taking turns at the kernel lock to do it. So
+// when bringing pages back is most of what the machine does, a task is
+// held: it is not run (sched_mine), its pages go out as the clock finds
+// them unused, and the others have the memory. Measured over each LOAD_MS
+// of the machine's clock, the cycles spent bringing pages back
+// (mmu_bringin) against a CPU's: more than half, and one more is held;
+// less than an eighth, and one is let go. Held for HOLD_MS, a task is let
+// go anyway, and if paging is still too much, another is held in its place
+// -- the one that has run longest since it was last held: so the held
+// take turns, and none waits for good. A task done lets one go.
+// Which is held: a user task ready to run, while one other at least is;
+// never one with a window on the display (a GUI ring: the desktop, a
+// game), a favoured one (nice), or one with a signal to take.
+enum { LOAD_MS = 250, HOLD_MS = 30000 };
+
+// May T be held?
+static int mmu_holdable(struct task *t) {
+    return t->privs == PRIV_USER && !t->cpuidle && !t->held && !t->vfparent && !t->ev_ring && t->nice >= 0 &&
+        !t->killsig && !t->ck_sigpend && t->urgns && (t->state == TS_READY || t->state == TS_RUNNING);
+}
+
+void mmu_letgo(struct task *t) {
+    if (!t->held) return;
+    t->held = 0;
+    t->letgo = __time();
+    --mmu_nheld;
+    klog("mmu: task %d (%s) let go, %d held\n", t->id, t->name, mmu_nheld);
+}
+
+// The task held longest, 0 if none is
+static struct task *mmu_oldest() {
+    struct task *t, *o;
+    o = 0;
+    t = task_head;
+    while (t && mmu_nheld) {
+        if (t->held && (!o || t->held - o->held < 0)) o = t;
+        t = t->next;
+    }
+    return o;
+}
+
+void mmu_balance() {
+    struct task *t, *v;
+    int now, dt, hi, lo, n;
+    if (!mmu_swapok || klog_cpms <= 0 || !sched_has_bkl()) return;
+    now = __time();
+    dt = now - mmu_lwin;
+    if (dt < LOAD_MS) return;
+    // (a window of the machine idle, or the first: calm)
+    hi = dt <= 4 * LOAD_MS && mmu_pgcyc / klog_cpms > dt / 2;
+    lo = dt > 4 * LOAD_MS || mmu_pgcyc / klog_cpms < dt / 8;
+    mmu_lwin = now;
+    mmu_pgcyc = 0;
+    // the one held longest, if paging is light or it has been held long enough
+    if ((v = mmu_oldest()) && (lo || now - v->held >= HOLD_MS)) mmu_letgo(v);
+    if (!hi) return;
+    // one more held: of those that may be, the one let go longest ago
+    n = 0;
+    v = 0;
+    t = task_head;
+    while (t) {
+        if (mmu_holdable(t)) {
+            ++n;
+            if (!v || t->letgo - v->letgo < 0) v = t;
+        }
+        t = t->next;
+    }
+    if (!v || n < 2) return;
+    v->held = now ? now : 1;
+    ++mmu_nheld;
+    klog("mmu: paging is most of what the machine does: task %d (%s) held, %d held\n", v->id, v->name, mmu_nheld);
+}
+
+// A task done (task_destroy): its memory is free -- a block of frames
+// whose pages fit in the others' is emptied into them (mmu_compact) -- and
+// one held is let go. (Under the kernel lock, preemption masked: a kernel
+// task reaps too -- init -- and a page must not be used while it moves.)
+void mmu_gone() {
+    struct task *o;
+    if (!mmu_on) return;
+    sched_lock();
+    mmu_compact();
+    if ((o = mmu_oldest())) mmu_letgo(o);
+    sched_unlock();
 }
 
 // A heap block of N bytes, putting out frame blocks whole to make room

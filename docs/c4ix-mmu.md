@@ -599,6 +599,68 @@ has nothing to swap against. Now:
     moved the timing, and the failure with it. Outside the handler a lock
     now masks preemption while it is held, as `sched_lock` does (the
     kernel lock, which `sched_lock` takes, keeps its plain spin).
+- **Fifty, and what forty leave behind** (2026-11-04). In the browser,
+  `innerbench -Tln 50` stopped the machine, and after `-Tln 40` `free` said
+  19 MB free and nothing more than 1.1 MB of it in one run, the programs
+  all gone. Five things:
+  - *Load control* (`mmu_balance`, from every trap). Fifty c4m's want
+    more memory between them than a turn of the round robin leaves them:
+    each one's pages were out before its turn came round again, every turn
+    went on bringing them back, and nothing finished -- 446,000 pages in
+    and out in six minutes of the machine's time, one CPU in `mmu_clock`
+    and the others spinning on the kernel lock. That is thrashing, and the
+    answer is the old one: run fewer. Over each 250 ms of the machine's
+    clock the cycles spent bringing pages back (`mmu_bringin`) are weighed
+    against a CPU's: more than half, and a task is *held* -- not run
+    (`sched_mine`, `smp_kick`), so its pages go out as the clock finds them
+    unused and the others have the memory; less than an eighth, or a task
+    done, and the one held longest is let go; held 30 s, it is let go
+    anyway, and if paging is still too much another is held in its place,
+    the one let go longest ago. Never the last task that could run, a task
+    with a window on the display (a GUI ring), a favoured one (nice), or
+    one with a signal to take. Held 5 s, the held took turns too fast:
+    each one let go brought its pages back, which held another, and with
+    18 held nothing finished either. Measured: `-Tln 50` all fifty done in
+    304 s, at most six held at once; `-Tln 40` 193 s, as before.
+  - *An image's, a stack's page with no table* (`mmu_fault`). A region
+    given to a task is mapped in its space when it is given (`mmu_rmap`),
+    and a table that could not be had there left pages unmapped, which
+    only a heap block's fault mended: one c4m in forty was killed "not
+    mapped" in its image. Any page of the task's own region, or of a
+    shared library's code, that is in memory and not in its space is
+    mapped at its fault now, a table made for it as above; never a stack's
+    guard page. And a task's directory, made when it becomes a user task
+    (`mmu_adopt`, `mmu_dir_out`), may put pages out to have its page: one
+    that could not be had was the kernel's own empty directory, and the
+    task's regions were mapped in that.
+  - *Tables' blocks back to the heap* (`mmu_page_free`). A block of 16
+    table pages whose pages are all free again is freed: kept, the blocks
+    forty programs' tables took -- from the middle of the heap, where
+    frames had filled the rest -- cut its free memory into pieces after
+    they had gone. The kernel's map's tables, which are never freed, come
+    from blocks of their own (`mmu_kpage`), most of them taken at boot: a
+    128th of memory, 64 tables in 32 MB, the whole window.
+  - *Compaction* (`mmu_compact`, when a task is done). A block of single
+    frames goes back to the heap only with its last frame, and a page
+    coming back takes whichever frame is free: the desktop's and the
+    shells' pages after a crowd had gone were a few to a block, 60 blocks.
+    The emptiest block whose pages the others have free frames for has
+    them copied there (`mmu_move`, never out), and goes back; then the
+    next, while one fits.
+  - *The heap merges what small blocks give back* (heap.js and sheap.js
+    `consolidate`). A small block freed stays on its class's list, kept
+    for one of its size, and the lists of a heap that had been busy cut
+    its free ranges between them: after `-Tln 40`, 735 of them, 71 KB, kept
+    20 MB free in 126 pieces. When a block cannot be had otherwise, and
+    when `free` asks for the biggest, every list goes back to the ranges,
+    merged with its neighbours.
+
+  Measured, all five: after `-Tln 40`, 26.4 MB free and 26.1 MB of it in
+  one run (it was 5.2 MB under node, 1.1 MB in the browser), "other" 2.8
+  MB as before it ran, not 4.6. After `-Tln 50`, 15.2 MB of 26.4: what
+  cuts it is 57 KB of the kernel's slabs for the tasks beyond forty-odd,
+  taken from the heap when the kernel's arena was full (`kmem_spills`),
+  from wherever it had room then, and kept, as slabs are.
 - **The clock** (`mmu_clock`) is a hand that goes round the window's
   pages. A page used since the hand last passed (PTE_A, set as the MMU
   fills a translation) has its bit cleared and its translation forgotten,

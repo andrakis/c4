@@ -42,6 +42,20 @@ void psh (char *str) {
 	_argv[_argc++] = str;
 }
 
+// The c4m to run. C4KE finds a bare "c4m" as c4m.c4r, its own build;
+// on a C4IX disk that name is the C4DOS build (build-images.sh: the disk
+// is C4DOS's too), which C4IX starts and which dies at its first store,
+// saying nothing. C4IX's c4m, a C4KE program like this one, is /bin/c4m,
+// where the shell's PATH finds it.
+char *c4m_name () {
+	int fd;
+	if ((fd = open("/bin/c4m", 0)) >= 0) {
+		close(fd);
+		return "/bin/c4m";
+	}
+	return "c4m";
+}
+
 void print_args () {
 	int    c, i;
 	char **v;
@@ -252,7 +266,7 @@ int main (int argc, char **argv) {
 			if (mode & USE_ALTMODE)
 				psh("-a");
 		} else if (mode & ONLY_C4M) {
-			psh("c4m");
+			psh(c4m_name());
 			if (mode & USE_ALTMODE)
 				psh("-a");
 		}

@@ -139,6 +139,7 @@ node libjs/tests/test-c4ix-free.mjs || fail=1    # free: the heap's use and bigg
 }
 part_c4m () {
 node libjs/tests/test-c4ix-c4m.mjs || fail=1
+node libjs/tests/test-c4ix-innerbench.mjs || fail=1   # innerbench: its benchmarks in /bin/c4m, not the disk's C4DOS c4m.c4r
 }
 part_swap () {
 node libjs/tests/test-c4ix-swap.mjs || fail=1   # swap: more memory than there is, out to the host and back

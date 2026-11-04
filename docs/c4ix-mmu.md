@@ -661,6 +661,25 @@ has nothing to swap against. Now:
   cuts it is 57 KB of the kernel's slabs for the tasks beyond forty-odd,
   taken from the heap when the kernel's arena was full (`kmem_spills`),
   from wherever it had room then, and kept, as slabs are.
+- **Two races on the light path** (2026-11-04). A program's malloc and free
+  take no kernel lock (`sched_light`), and a big block's come here. An
+  in-C4IX `b4ke -B -j 3` in 32 MB had a c4sc killed "not mapped" at the first
+  page of a block just given to it: 512 pages with slots, and the first
+  page's entry in the kernel's map empty. `test-c4ix-lazyrace` has four
+  programs allocate, write, check and free blocks of 2 to 64 KB at once.
+  - *A table made twice* (`mmu_pte`). Two CPUs with blocks in one 4 MB of
+    the kernel's map each found it had no table and made one, and the second
+    put in over the first lost what the first had written there: always a
+    block's first pages. The table goes in under `mmu_ulock` now, looked at
+    again there, the spare going back to its list. This is what the test
+    and the build were hitting.
+  - *Addresses given back too soon* (`mmu_release`). A block's user addresses
+    went back to the window before its entries in the kernel's map were
+    cleared, so another CPU's malloc could have them, and the first CPU then
+    emptied that block's entries and freed its swap slots, which could cost
+    a program its memory without a fault. They go back last now. The test
+    did not separate this one out: it failed with this fixed alone, and
+    passes with both.
 - **The clock** (`mmu_clock`) is a hand that goes round the window's
   pages. A page used since the hand last passed (PTE_A, set as the MMU
   fills a translation) has its bit cleared and its translation forgotten,

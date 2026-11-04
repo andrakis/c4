@@ -96,6 +96,8 @@ static int vfs_fmt(char *p, int whole, int cents) {
 }
 
 static int vfs_dec(char *p, int v);
+static int vfs_heapinfo;        // the host says how much of the heap is in use (C4IX_HEAP_USED)
+
 static int vfs_kv(char *p, int n, char *name, int v);
 
 // RAM files' bytes under D, and how many: c[0], c[1] those written and not
@@ -389,7 +391,6 @@ void vfs_touch(struct vnode *vn) {
 // (persist.c): they cost RAM only while in use.
 enum { VFS_KEEP = 65536 };      // a lazy file this big or smaller is kept once read
 int vfs_spans;                  // the host reads "NAME@OFF+LEN" (libjs; devices.js diskOpen)
-static int vfs_heapinfo;        // the host says how much of the heap is in use (C4IX_HEAP_USED)
 static struct vnode *vfs_chead; // most recently used
 static struct vnode *vfs_ctail;
 int vfs_ncached, vfs_cachedbytes, vfs_dropped;

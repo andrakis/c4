@@ -145,6 +145,8 @@ part_swap () {
 node libjs/tests/test-c4ix-swap.mjs || fail=1   # swap: more memory than there is, out to the host and back
 CPUS=2 node libjs/tests/test-c4ix-swap.mjs || fail=1   # ... with pages going from a task another CPU runs (IPI shootdown)
 CPUS=2 IPI_AT_TRAP=1 node libjs/tests/test-c4ix-swap.mjs || fail=1   # ... each IPI landing as a trap enters its handler
+node libjs/tests/test-c4ix-lazyrace.mjs || fail=1   # a program's free and another's malloc at once, no kernel lock
+PARALLEL=1 node libjs/tests/test-c4ix-lazyrace.mjs || fail=1   # ... on threads
 node libjs/tests/test-c4ix-par.mjs || fail=1    # two CPUs on threads: cc links with libc4ix, and the program runs on each
 }
 

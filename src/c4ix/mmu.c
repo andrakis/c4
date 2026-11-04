@@ -204,8 +204,22 @@ static int *mmu_pte(int *dir, int va, int make) {
     pde = dir[(va >> 22) & 1023];
     if (!(pde & PTE_P)) {
         if (!make || !(pt = (int *)(dir == mmu_kdir ? mmu_kpage() : mmu_page()))) return 0;
-        ++mmu_ntables;
-        dir[(va >> 22) & 1023] = (int)pt | PTE_P;
+        // Looked at again under the lock: a program's malloc takes no kernel
+        // lock (sched_light), and two CPUs' blocks in one 4 MB of the kernel's
+        // map each made it a table. The second put in over the first lost
+        // what the first had written there: a block's first pages, "not
+        // mapped" when they were touched.
+        klock_take(mmu_ulock);
+        pde = dir[(va >> 22) & 1023];
+        if (pde & PTE_P) {
+            if (dir == mmu_kdir) { *pt = mmu_kfreepage; mmu_kfreepage = (int)pt; }
+            else mmu_page_free((int)pt);
+            pt = (int *)(pde & ~(MMU_PAGE - 1));
+        } else {
+            ++mmu_ntables;
+            dir[(va >> 22) & 1023] = (int)pt | PTE_P;
+        }
+        klock_drop(mmu_ulock);
     } else pt = (int *)(pde & ~(MMU_PAGE - 1));
     return pt + ((va >> 12) & 1023);
 }
@@ -677,6 +691,20 @@ static void mmu_give(struct urgn *r, struct task *t, int flags) {
     if (r->guard) mmu_map(r->dir, r->va, r->base, MMU_PAGE, 0);
 }
 
+// A block of frames ("frames", below)
+struct fchunk {
+    int raw, base, npages;
+    int nused;                 // frames in use
+    int onlist;                // on mmu_fcfree
+    int *bits;                 // a bit a free frame
+    struct fchunk *next;       // the chunks with a free frame
+    struct fchunk *anext;      // every chunk (mmu_reclaim)
+    int tried;                 // mmu_reclaim's round that found it could not be freed
+    int pool;                  // taken for single frames (mmu_fnew), not one region's
+};
+
+static int mmu_poolbytes;      // the heap's bytes in blocks of single frames (mmu_fnew)
+
 // Off its owner's list, out of its space, back to the heap
 static void mmu_release(struct urgn *r) {
     struct urgn **pp;
@@ -711,7 +739,7 @@ static void mmu_release(struct urgn *r) {
         own = (struct fchunk *)mmu_fc[r->base >> 12];
     if (r->kind != UR_SLAB) {
         if (!r->lazy) mmu_unsetpg(r);
-        if (mmu_uoff) { mmu_setvpg(r->va, r->npages, 0); mmu_vfree(r->va, r->npages); }
+        if (mmu_uoff) mmu_setvpg(r->va, r->npages, 0);
     }
     klock_drop(mmu_ulock);
     // its frames back to their blocks (a block goes to the heap when none
@@ -719,6 +747,17 @@ static void mmu_release(struct urgn *r) {
     if (r->kind != UR_SLAB) {
         if (mmu_uoff) mmu_frames_release(r);
         else if (r->raw) free((char *)r->raw);
+    }
+    // Its addresses last, with nothing of it left in the kernel's map. A
+    // program's free takes no kernel lock (sched_light): handed out before
+    // that, another CPU's malloc had them, and the entries it had just made
+    // for its own block were taken for this one's, emptied and their slots
+    // freed -- a c4sc in a -j 3 build killed "not mapped" at its block's
+    // first page, 512 pages with slots and the first with none.
+    if (r->kind != UR_SLAB && mmu_uoff) {
+        klock_take(mmu_ulock);
+        mmu_vfree(r->va, r->npages);
+        klock_drop(mmu_ulock);
     }
     // its block, still the heap's for frames lent to other pages, is a
     // block of single frames now: its free ones serve first, it counts as
@@ -1347,19 +1386,8 @@ void mmu_fault(struct task *t, int va) {
 // all gone gives the heap its memory. (Without a window of user addresses
 // the old way stands: a region is its heap block, freed with it, and
 // there is no swap.)
-struct fchunk {
-    int raw, base, npages;
-    int nused;                 // frames in use
-    int onlist;                // on mmu_fcfree
-    int *bits;                 // a bit a free frame
-    struct fchunk *next;       // the chunks with a free frame
-    struct fchunk *anext;      // every chunk (mmu_reclaim)
-    int tried;                 // mmu_reclaim's round that found it could not be freed
-    int pool;                  // taken for single frames (mmu_fnew), not one region's
-};
 static struct fchunk *mmu_fcfree, *mmu_fcall;
 static int mmu_round;          // mmu_reclaim's rounds
-static int mmu_poolbytes;      // the heap's bytes in blocks of single frames (mmu_fnew)
 // Pages of a block taken for single frames: a big one where the heap has
 // one run that long, else a small one. Any frame serves any page, so a
 // big block's free frames are as good as a new block's, and the fewer

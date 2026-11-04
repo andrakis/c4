@@ -75,7 +75,8 @@ static int sched_interval;   // preemption interval, 0 = none
 struct cpu *cpu_self;
 static struct cpu cpu_boot;
 int smp_ncpu;
-static int smp_idle[CPU_MAX];        // 1: that CPU runs its idle task
+static int smp_idlemask;             // the CPUs running their idle tasks, bit k for CPU k
+#define SMP_IDLE(k, on) (smp_idlemask = (on) ? smp_idlemask | (1 << (k)) : smp_idlemask & ~(1 << (k)))
 static int smp_park[CPU_MAX];        // what an idle CPU parks on: an IPI wakes it, and a switch
                                      // back to its idle task makes it 1 (smp_ap)
 static int smp_stack[CPU_MAX];       // each other CPU's boot stack, its idle task's
@@ -162,7 +163,7 @@ static int sched_allows(struct task *n, int k) {
 
 // Is N held (mmu.c, load control)? Not with a signal to take: it runs
 // to take it.
-#define sched_held(n) ((n)->held && !(n)->killsig && !(n)->ck_sigpend)
+#define sched_held(n) (((n)->tflags & (TF_HELD | TF_SIG)) == TF_HELD)
 
 // Whether this CPU may run N: not while another CPU is on its stack,
 // an idle task only on its own CPU, a kernel task only on CPU 0, and a
@@ -211,36 +212,34 @@ static int smp_idlefor(struct task *n) {
     int k;
     k = smp_ncpu - 1;
     while (k >= 0) {
-        if (k != cpu_self->id && smp_idle[k] && sched_allows(n, k)) return k;
+        if (k != cpu_self->id && (smp_idlemask & (1 << k)) && sched_allows(n, k)) return k;
         --k;
     }
     return 0 - 1;
 }
+
+// Could N be ready, by what costs no call? READY; asleep, with its time come
+// or events to look at; or BLOCKED, which only sched_unblocked can say. NOW is
+// __time(), read once for a walk of the task list: most tasks in a long list
+// are asleep or waiting, and this is all a walk asks of them.
+#define SCHED_MAYBE(n, now) ((n)->state == TS_READY || ((n)->state == TS_SLEEPING ? (now) - (n)->ck_wake >= 0 || (n)->ev_wait : (n)->state == TS_BLOCKED))
 
 // Work some idle CPU could do: an IPI to one for each task ready, among
 // the CPUs it may run on. Kernel tasks are CPU 0's. Under the lock, at
 // the end of every trap; only when some CPU is idle does it look.
 static void smp_kick() {
     struct task *n;
-    int k, me, kern, idle;
+    int k, me, now;
     me = cpu_self->id;
-    idle = 0;
-    k = 0;
-    while (k < smp_ncpu) { if (k != me && smp_idle[k]) ++idle; ++k; }
-    if (!idle) return;
-    kern = 0;
+    now = __time();
+    // (kernel tasks are the list's first: CPU 0 is theirs before anyone's)
     n = task_head;
-    while (n && !kern) {
-        if (n->privs == PRIV_KERNEL && !n->cpuidle && !n->oncpu &&
-            (n->state == TS_READY || sched_unblocked(n))) kern = 1;
-        n = n->next;
-    }
-    if (kern && me != 0 && smp_idle[0]) { __c4_ipi(0); smp_idle[0] = 0; --idle; }
-    n = task_head;
-    while (n && idle > 0) {
-        if (n->privs != PRIV_KERNEL && !n->cpuidle && !n->oncpu && !sched_held(n) &&
-            (n->state == TS_READY || sched_unblocked(n)) && (k = smp_idlefor(n)) >= 0) {
-            __c4_ipi(k); smp_idle[k] = 0; --idle;
+    while (n && (smp_idlemask & ~(1 << me))) {
+        if (SCHED_MAYBE(n, now) && !n->cpuidle && !n->oncpu && !sched_held(n) &&
+            (n->state == TS_READY || sched_unblocked(n))) {
+            if (n->privs == PRIV_KERNEL) {
+                if (me != 0 && (smp_idlemask & 1)) { __c4_ipi(0); SMP_IDLE(0, 0); }
+            } else if ((k = smp_idlefor(n)) >= 0) { __c4_ipi(k); SMP_IDLE(k, 0); }
         }
         n = n->next;
     }
@@ -250,9 +249,11 @@ static void smp_kick() {
 // before it parks
 static int sched_ready_here() {
     struct task *n;
+    int now;
+    now = __time();
     n = task_head;
     while (n) {
-        if (!n->cpuidle && sched_mine(n) && (n->state == TS_READY || sched_unblocked(n))) return 1;
+        if (SCHED_MAYBE(n, now) && !n->cpuidle && sched_mine(n) && (n->state == TS_READY || sched_unblocked(n))) return 1;
         n = n->next;
     }
     return 0;
@@ -564,7 +565,9 @@ void task_zombify(struct task *t, int code) {
     if (con_is_booting() || t->id <= boot_lastid) klog("task %d (%s) exited %d\n", t->id, t->name, code);
     t->exitcode = code;
     t->state = TS_ZOMBIE;
+    TF_SET(t, TF_NOPAGE);
     if (t->held) mmu_letgo(t);
+    if (t->nice) sched_setnice(t, 0);
     ++sched_nzombies;
     if (t != kernel_task && !t->cpuidle) --sched_nlive;
     task_unborrow(t);
@@ -603,11 +606,13 @@ void task_zombify(struct task *t, int code) {
 // is this CPU's.
 static struct task *sched_pick(struct task *t) {
     struct task *n, *start, *idle;
+    int now;
     idle = cpu_self->idle;
+    now = __time();
     start = (t->state == TS_ZOMBIE) ? task_head : task_next(t);
     n = start;
     while (n) {
-        if (n != t && n != idle && !n->cpuidle && sched_mine(n)) {
+        if (SCHED_MAYBE(n, now) && n != t && n != idle && !n->cpuidle && sched_mine(n)) {
             if (n->state == TS_READY) return n;
             if (sched_unblocked(n)) return n;
         }
@@ -655,7 +660,13 @@ static struct task *sched_pick(struct task *t) {
 // The turns still go round, so a favoured task that never sleeps cannot
 // starve the others; a task with a positive nice is only ever preempted
 // by a woken task with a lower one. A child starts with its parent's.
-static int sched_niced;          // some task has had a nice set
+static int sched_nniced;         // tasks alive with a nice set
+
+void sched_setnice(struct task *t, int nice) {
+    sched_nniced = sched_nniced + (nice != 0) - (t->nice != 0);
+    t->nice = nice;
+    TF_PUT(t, TF_FAV, nice < 0);
+}
 
 // the cycles a task runs before its turn passes
 static int sched_turn(struct task *t) {
@@ -669,8 +680,8 @@ static struct task *sched_waker(struct task *t) {
     best = 0;
     n = task_head;
     while (n) {
-        if (n != t && !n->cpuidle && n->nice < t->nice && (!best || n->nice < best->nice) &&
-            sched_mine(n) && (n->state == TS_READY || sched_unblocked(n)) && n->woke) best = n;
+        if (n->woke && n != t && !n->cpuidle && n->nice < t->nice && (!best || n->nice < best->nice) &&
+            sched_mine(n) && (n->state == TS_READY || sched_unblocked(n))) best = n;
         n = n->next;
     }
     return best;
@@ -686,8 +697,7 @@ int sched_nice(int id, int nice) {
     if (!t || t->cpuidle || t->privs == PRIV_KERNEL) { sched_unlock(); return 0 - 100; }
     old = t->nice;
     if (nice >= 0 - 10 && nice <= 10) {
-        t->nice = nice;
-        if (nice) sched_niced = 1;
+        sched_setnice(t, nice);
     }
     sched_unlock();
     return old;
@@ -885,7 +895,7 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     // a syscall at the wrong moments would never be preempted.
     t = sched_cur;
     // a favoured task that has woken goes first (nice, above)
-    fv = (sched_niced && sched_lockdepth == 0 && t->state == TS_RUNNING && !t->cpuidle)
+    fv = (sched_nniced && sched_lockdepth == 0 && t->state == TS_RUNNING && !t->cpuidle)
         ? sched_waker(t) : 0;
     if (fv) {
         n = fv;
@@ -950,7 +960,7 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
             // this CPU stays on t's stack until the trap returns
             if (n != t) cpu_self->prev = t;
             n->oncpu = cpu_self->id + 1;
-            smp_idle[cpu_self->id] = (n == cpu_self->idle);
+            SMP_IDLE(cpu_self->id, n == cpu_self->idle);
             if (n != t && n == cpu_self->idle) smp_park[cpu_self->id] = 1;
         }
         loader_switch(n);
@@ -1003,7 +1013,7 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     // a kernel task keeps a hold of its own while it runs, and the
     // handler lets go of its.
     if (smp_ncpu > 1) {
-        smp_kick();
+        if (smp_idlemask & ~(1 << cpu_self->id)) smp_kick();
         hold = sched_cur->privs == PRIV_KERNEL && !sched_cur->cpuidle;
         if (cpu_self->bkl_task && !hold) { bkl_drop(); cpu_self->bkl_task = 0; }
         else if (!cpu_self->bkl_task && hold) { bkl_take(); cpu_self->bkl_task = 1; }
@@ -1106,6 +1116,7 @@ int sched_intr_below(struct task *root) {
     if (t == root || t->state == TS_ZOMBIE || t->privs != PRIV_USER) return 0;
     if (ck_has_handler(t, CK_SIGINT)) { ck_kill(t->id, CK_SIGINT); return 1; }
     t->killsig = CK_SIGINT;
+    TF_SET(t, TF_SIG);
     task_zombify(t, C4IX_EXIT_INTERRUPTED);
     return 1;
 }
@@ -1134,6 +1145,7 @@ static void sched_interrupt() {
     }
     kprintf("\nc4ix: interrupt: cancelling task %d '%s'\n", t->id, t->name);
     t->killsig = CK_SIGINT;
+    TF_SET(t, TF_SIG);
     task_zombify(t, C4IX_EXIT_INTERRUPTED);
 }
 
@@ -1357,6 +1369,7 @@ int sched_vfork(int bp) {
     p->posix = 1;
     p->wait_for = c->id;
     p->state = TS_VFORK;
+    TF_SET(p, TF_NOPAGE);
     return c->id;
 }
 
@@ -1484,7 +1497,7 @@ static void smp_ap() {
         smp_park[k] = 0;
         smp_settle();
         r = sched_ready_here();
-        if (!r) smp_idle[k] = 1;
+        if (!r) SMP_IDLE(k, 1);
         sched_unlock();
         if (r) sched_yield();
         else {
@@ -1699,7 +1712,7 @@ static int sched_idle(int argc, int argv) {
             sched_lock();
             smp_settle();
             ready = sched_ready_here();
-            smp_idle[0] = !ready;
+            SMP_IDLE(0, !ready);
         }
         // The idle task runs only when nothing else can: everything alive
         // is parked on something that has not arrived, and nothing can

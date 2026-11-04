@@ -608,6 +608,7 @@ int sys_dispatch(int num, int *args) {
     case SYS_EVWAIT:
         if (!t || !sched_in_trap()) return 0;
         t->ev_ring = args[1];
+        TF_PUT(t, TF_GUI, args[1]);
         t->ev_wait = (args[1] ? 1 : 0) | (args[2] ? 2 : 0);
         if (sched_events(t)) { t->ev_wait = 0; return 1; }
         t->ck_wake = __time() + (args[0] > 0 ? args[0] : 0);

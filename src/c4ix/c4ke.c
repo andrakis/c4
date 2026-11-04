@@ -485,12 +485,14 @@ int ck_kill(int pid, int sig) {
     if (!s || !s[sig * 3 + 2]) {
         if (!ck_default_kills(sig)) return 0;
         t->killsig = sig;
+        TF_SET(t, TF_SIG);
         task_zombify(t, C4IX_EXIT_INTERRUPTED);
         return 0;
     }
 
     ++s[sig * 3];
     ++t->ck_sigpend;
+    TF_SET(t, TF_SIG);
     // A signal wakes a parked task -- otherwise a handler installed to
     // shut a sleeping program down would never get to run, which is
     // exactly what innerbench's graceful shutdown depends on.
@@ -526,16 +528,17 @@ void ck_signal_deliver(struct task *t, int *pa, int *pbp, int *psp,
     int sig;
 
     if (!t || !t->ck_sigpend || t->state == TS_ZOMBIE) return;
-    if (!(s = ck_sigtab(t, 0))) { t->ck_sigpend = 0; return; }
+    if (!(s = ck_sigtab(t, 0))) { t->ck_sigpend = 0; TF_UNSIG(t); return; }
 
     sig = 1;
     while (sig < CK_SIG_MAX) {
         if (s[sig * 3] && s[sig * 3 + 2]) break;
         ++sig;
     }
-    if (sig == CK_SIG_MAX) { t->ck_sigpend = 0; return; }
+    if (sig == CK_SIG_MAX) { t->ck_sigpend = 0; TF_UNSIG(t); return; }
     --s[sig * 3];
     --t->ck_sigpend;
+    TF_UNSIG(t);
     h = (int *)s[sig * 3 + 2];
 
     if (!ck_tlev_word) ck_tlev_word = __opcode("TLEV");
@@ -577,6 +580,7 @@ void ck_task_free(struct task *t) {
 void ck_exec_reset(struct task *t) {
     if (t->ck_sigh) { free((int *)t->ck_sigh); t->ck_sigh = 0; }
     t->ck_sigpend = 0;
+    TF_UNSIG(t);
 }
 
 // ---- the dispatcher ----

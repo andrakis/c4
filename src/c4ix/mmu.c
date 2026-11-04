@@ -333,6 +333,7 @@ struct urgn {
     int va;                    // its user address (base's, with no window)
     int swapped;               // its pages put out to the host's swap (their slots in the kernel's map)
     int lazy;                  // no memory of its own: each page a frame of its own from first use (mmu_lazy)
+    int canout;                // a block of what its task asked for, mapped: its pages may go out (MMU_RCAN)
     int *peer[2];              // spaces it is lent to, read-only (SYS_MAPFROM)
     struct urgn *next;         // the owner's regions
     // UR_SLAB
@@ -343,6 +344,9 @@ struct urgn {
     // UR_CHUNK: pages not yet made slabs
     int left;
 };
+// ... kept as what it says changes; its task's half is TF_PAGEOK
+#define MMU_RCAN(r) ((r)->canout = (r)->kind == UR_BLOCK && (r)->heap && !(r)->shared && !(r)->guard && !(r)->code && (r)->dir && (r)->owner)
+#define mmu_canout(r) ((r) && (r)->canout && TF_PAGEOK((r)->owner))
 static struct urgn *mmu_lastin;   // the block whose pages last came back (swap, mmu_bringin's log)
 static struct urgn *mmu_runr;     // ... and the one whose pages are going out (mmu_out's log)
 static int mmu_runn, mmu_runva, mmu_runshot, mmu_runlater, mmu_runon;
@@ -683,6 +687,7 @@ static void mmu_rmap(struct urgn *r, int flags) {
     if (flags) r->dir = mmu_dir_of(r->owner);
     if (r->dir && (!flags || !r->lazy)) mmu_map(r->dir, r->va, r->base, r->npages * MMU_PAGE, flags);
     if (!flags) r->dir = 0;
+    MMU_RCAN(r);
 }
 
 static void mmu_give(struct urgn *r, struct task *t, int flags) {
@@ -793,6 +798,7 @@ int umalloc_stack(int n) {
     if (!mmu_on) return (int)vfs_malloc(n);
     if (!(r = mmu_region(n + MMU_PAGE, UR_BLOCK))) return 0;
     r->guard = 1;
+    MMU_RCAN(r);
     return r->base + MMU_PAGE;
 }
 
@@ -815,13 +821,14 @@ void umem_share(int p) {
     struct urgn *r;
     if (!mmu_on || !(r = mmu_rgn(p))) return;
     r->shared = 1;
+    MMU_RCAN(r);
     r->flags = PTE_P | PTE_U | PTE_X;
 }
 
 // P is an image's code (mmu_fault)
 static void mmu_code(int p) {
     struct urgn *r;
-    if (p && (r = mmu_rgn(p)) && !mmu_off(r, p)) r->code = 1;
+    if (p && (r = mmu_rgn(p)) && !mmu_off(r, p)) { r->code = 1; MMU_RCAN(r); }
 }
 
 // Give P, if it is an unowned region, to T, mapped with FLAGS; a shared
@@ -1327,6 +1334,7 @@ void mmu_fault(struct task *t, int va) {
         kprintf("c4ix: task %d (%s): its memory at 0x%08x is on swap, and there is no room for it; killed\n",
             t->id, t->name, va);
         t->killsig = C4IX_SIGSEGV;
+        TF_SET(t, TF_SIG);
         task_exit(-1);
         return;
     }
@@ -1346,6 +1354,7 @@ void mmu_fault(struct task *t, int va) {
             kprintf("c4ix: task %d (%s): its page at 0x%08x is in memory, and there is no memory for a table to map it in; killed\n",
                 t->id, t->name, va);
             t->killsig = C4IX_SIGSEGV;
+            TF_SET(t, TF_SIG);
             task_exit(-1);
             return;
         }
@@ -1377,7 +1386,7 @@ void mmu_fault(struct task *t, int va) {
     kprintf("c4ix: task %d (%s): page fault: %s 0x%08x (%s, %s) at pc 0x%08x; killed\n",
         t ? t->id : -1, t ? t->name : "?", what, va, whose,
         (info & MMU_FK_PRESENT) ? "not allowed" : "not mapped", pc);
-    if (t) t->killsig = C4IX_SIGSEGV;
+    if (t) { t->killsig = C4IX_SIGSEGV; TF_SET(t, TF_SIG); }
     task_exit(-1);
 }
 
@@ -1699,12 +1708,6 @@ static void mmu_swapinit() {
 // May R's pages go? What a task asked for, mapped in its space, of a task
 // that is going on: the asking one, an idle one, or one another CPU is
 // running, which is told to forget them first (mmu_pageout's shootdown)
-static int mmu_canout(struct urgn *r) {
-    struct task *t;
-    if (!r || r->kind != UR_BLOCK || !r->heap || r->shared || r->guard || r->code || !r->dir || !(t = r->owner)) return 0;
-    return t->privs == PRIV_USER && !t->vfparent && !t->cpuidle && t->state != TS_ZOMBIE && t->state != TS_VFORK;
-}
-
 // The page at VA of R out to the host, its frame free: 0 if it cannot go
 static int mmu_shootdown(int d);
 
@@ -2059,15 +2062,10 @@ static void mmu_compact() {
 // game), a favoured one (nice), or one with a signal to take.
 enum { HOLD_MS = 30000 };
 
-// May T be held?
-static int mmu_holdable(struct task *t) {
-    return t->privs == PRIV_USER && !t->cpuidle && !t->held && !t->vfparent && !t->ev_ring && t->nice >= 0 &&
-        !t->killsig && !t->ck_sigpend && t->urgns && (t->state == TS_READY || t->state == TS_RUNNING);
-}
-
 void mmu_letgo(struct task *t) {
     if (!t->held) return;
     t->held = 0;
+    TF_CLR(t, TF_HELD);
     t->letgo = __time();
     --mmu_nheld;
     klog("mmu: task %d (%s) let go, %d held\n", t->id, t->name, mmu_nheld);
@@ -2104,7 +2102,7 @@ void mmu_balance() {
     v = 0;
     t = task_head;
     while (t) {
-        if (mmu_holdable(t)) {
+        if (TF_HOLDOK(t)) {
             ++n;
             if (!v || t->letgo - v->letgo < 0) v = t;
         }
@@ -2112,6 +2110,7 @@ void mmu_balance() {
     }
     if (!v || n < 2) return;
     v->held = now ? now : 1;
+    TF_SET(v, TF_HELD);
     ++mmu_nheld;
     klog("mmu: paging is most of what the machine does: task %d (%s) held, %d held\n", v->id, v->name, mmu_nheld);
 }

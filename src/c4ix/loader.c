@@ -733,6 +733,7 @@ struct task *task_spawn_priv(char *path, int argc, int argv, int privs) {
     t->img_nlibs = img.nlibs;
     t->img_bytes = img.bytes;
     t->privs = privs;
+    TF_PUT(t, TF_USER, privs == PRIV_USER);
     // Under the MMU: argv in its own memory (init's is the kernel's), what
     // was loaded for it mapped for it, and a page to start in
     if (mmu_on && privs == PRIV_USER) {
@@ -746,7 +747,7 @@ struct task *task_spawn_priv(char *path, int argc, int argv, int privs) {
         }
     }
     // the CPUs it may run on are its parent's (pin)
-    if (sched_cur && !sched_cur->cpuidle) { t->cpumask = sched_cur->cpumask; t->nice = sched_cur->nice; }
+    if (sched_cur && !sched_cur->cpuidle) { t->cpumask = sched_cur->cpumask; sched_setnice(t, sched_cur->nice); }
     sched_unlock();
     if (con_is_booting())
         klog("task %d (%s) spawned by task %d, %s, %d KB of image\n", t->id, t->name,

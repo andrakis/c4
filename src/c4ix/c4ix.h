@@ -568,7 +568,31 @@ struct task {
     // if it is not; and when it was last let go
     int  held;
     int  letgo;
+    int  tflags;               // TF_*: what is true of it, kept as it changes
 };
+
+// What the hot paths ask of a task, answered from one word, kept where the
+// fields change (TF_SET, TF_CLR) instead of read field by field at each test.
+// state is not in it: it changes at every switch, and costs a compare where it
+// is wanted. TF_NOPAGE is for the two states it takes rarely.
+enum {
+    TF_USER = 1,               // privs is PRIV_USER
+    TF_VFCHILD = 2,            // vfparent: a vfork child, in its parent's memory
+    TF_GUI = 4,                // ev_ring: it has a window on the display
+    TF_FAV = 8,                // nice < 0
+    TF_SIG = 16,               // killsig or ck_sigpend: a signal to take
+    TF_HELD = 32,              // held (mmu.c)
+    TF_NOPAGE = 64             // TS_ZOMBIE or TS_VFORK: its pages stay
+};
+#define TF_SET(t, b) ((t)->tflags = (t)->tflags | (b))
+#define TF_CLR(t, b) ((t)->tflags = (t)->tflags & ~(b))
+#define TF_PUT(t, b, on) ((on) ? TF_SET(t, b) : TF_CLR(t, b))
+// ... ck_sigpend has gone to 0: no signal left, unless it is dying of one
+#define TF_UNSIG(t) ((t)->killsig || (t)->ck_sigpend ? 0 : TF_CLR(t, TF_SIG))
+// May its pages go out? (mmu.c, with the region's own flag)
+#define TF_PAGEOK(t) (((t)->tflags & (TF_USER | TF_VFCHILD | TF_NOPAGE)) == TF_USER)
+// May it be held? (mmu.c)
+#define TF_HOLDOK(t) (((t)->tflags & (TF_USER | TF_VFCHILD | TF_GUI | TF_FAV | TF_SIG | TF_HELD)) == TF_USER && ((t)->state == TS_READY || (t)->state == TS_RUNNING))
 
 // What SYS_CPUSTAT copies out (sched_cpustat): a header, then one record
 // per task, all taken in one trap so that every number describes the
@@ -748,6 +772,7 @@ void         sched_forge_argv(struct task *t, int argv);  // pre-start argv patc
 void         sched_stop();
 void         sched_yield();
 void         sched_new_slice();   // the running task's slice restarts
+void         sched_setnice(struct task *t, int nice);   // its nice, and the count of those with one
 int          sched_intr_below(struct task *root);   // a terminal's Ctrl-C
 // Preemption masked (nestable). In the trap handler, which nothing
 // preempts, that is only the depth; but for the light path, which has not

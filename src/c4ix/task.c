@@ -90,12 +90,14 @@ struct task *task_vchild(struct task *p) {
     t->cwd = p->cwd;
     t->parent = p->id;
     t->privs = p->privs;
+    TF_PUT(t, TF_USER, t->privs == PRIV_USER);
     t->cpumask = p->cpumask;
-    t->nice = p->nice;
+    sched_setnice(t, p->nice);
     t->spawn_stack = p->spawn_stack;
     t->img_libs = p->img_libs;
     t->img_nlibs = p->img_nlibs;
     t->vfparent = p;
+    TF_SET(t, TF_VFCHILD);
     if (p->env_vec) task_strvec((char **)p->env_vec, -1, &t->env_vec, &t->env_data);
     mmu_adopt(t);                 // its stack and environment
     task_append(t);
@@ -110,9 +112,10 @@ void task_unborrow(struct task *t) {
     struct task *p;
     if (!(p = t->vfparent)) return;
     t->vfparent = 0;
+    TF_CLR(t, TF_VFCHILD);
     t->img_libs = 0;
     t->img_nlibs = 0;
-    if (p->state == TS_VFORK && p->wait_for == t->id) p->state = TS_READY;
+    if (p->state == TS_VFORK && p->wait_for == t->id) { p->state = TS_READY; TF_CLR(p, TF_NOPAGE); }
 }
 
 int task_strvec(char **v, int n, int *pvec, int *pdata) {

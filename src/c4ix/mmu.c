@@ -62,6 +62,7 @@ static int mmu_swapouts, mmu_swapins, mmu_moves, mmu_firsts;
 // load control (mmu_balance): the cycles spent bringing pages back since
 // the window's start, that start in machine ms, and the tasks held
 static int mmu_pgcyc, mmu_nheld;
+static int mmu_nofnew;         // mmu_fnew found the heap had no block for frames
 int mmu_lwin;
 static int mmu_salloc();
 static void mmu_fvaset(int pa, int va, int np);
@@ -202,6 +203,9 @@ static int mmu_kpage() {
 // VA's entry in directory DIR, if it has a table for it: 0 if not. D and VA
 // are plain variables, read more than once.
 #define MMU_PTE0(d, va) (((d)[((va) >> 22) & 1023] & PTE_P) ? (int *)((d)[((va) >> 22) & 1023] & ~(MMU_PAGE - 1)) + (((va) >> 12) & 1023) : (int *)0)
+
+// ... and the table itself, for a loop over its pages
+#define MMU_TBL(d, va) (((d)[((va) >> 22) & 1023] & PTE_P) ? (int *)((d)[((va) >> 22) & 1023] & ~(MMU_PAGE - 1)) : (int *)0)
 
 // VA's entry in directory DIR, its table made if MAKE; 0 if there is none
 static int *mmu_pte(int *dir, int va, int make) {
@@ -467,6 +471,9 @@ static int *mmu_dir_of(struct task *t) {
     return d;
 }
 
+// ... in the common case without a call: not a vfork child, its space made
+#define MMU_DIR(t) (!(t)->vfparent && (t)->mmdir ? (int *)(t)->mmdir : mmu_dir_of(t))
+
 // ... and where there is no page for it, pages put out to make one
 // (mmu_kalloc), as for a table (mmu_pte_out): what a task becoming a user
 // task does (mmu_adopt), before it has frames of its own that would move.
@@ -511,7 +518,7 @@ void mmu_task_done(struct task *t) {
 void mmu_switch(struct task *t) {
     int d;
     if (!mmu_on || !t || t->privs != PRIV_USER) return;
-    d = (int)mmu_dir_of(t);
+    d = (int)MMU_DIR(t);
     mmu_loaded[cpu_self->id] = d;
     if (*(int *)MMU_PTBR != d) *(int *)MMU_PTBR = d;
     // A page went to swap from a space no CPU was running, perhaps this
@@ -965,7 +972,7 @@ int umem_alloc(struct task *t, int n) {
     klock_drop(mmu_ulock);
     // memory a task gets is zeroed: the last owner's bytes are not its
     memset((char *)(s->va + i * s->size), 0, s->size);
-    return mmu_uva(s->base + i * s->size);
+    return s->va + i * s->size;
 }
 
 // P from T's blocks back; anything that is not one of them is left alone
@@ -1117,7 +1124,7 @@ static int mmu_fetch(struct task *t, int va);
 // tables say: a syscall must not be a way round them.
 int uaccess(int p, int n, int w) {
     struct task *t;
-    int *e;
+    int *d, *e;
     int va, end, need;
     if (!mmu_on || !(t = sched_current()) || t->privs != PRIV_USER) return 1;
     if (n <= 0) return 1;
@@ -1125,9 +1132,10 @@ int uaccess(int p, int n, int w) {
     if (p < mmu_uoff + MMU_PAGE || end < p || end > mmu_uoff + (mmu_uoff ? MMU_WINPAGES * MMU_PAGE : mmu_memsize)) return 0;
     need = PTE_P | PTE_U | (w ? PTE_W : 0);
     va = p & ~(MMU_PAGE - 1);
+    d = MMU_DIR(t);
     while (va < end) {
-        if ((!(e = mmu_pte(mmu_dir_of(t), va, 0)) || (*e & need) != need) &&
-            (!mmu_fetch(t, va) || !(e = mmu_pte(mmu_dir_of(t), va, 0)) || (*e & need) != need)) return 0;
+        if ((!(e = MMU_PTE0(d, va)) || (*e & need) != need) &&
+            (!mmu_fetch(t, va) || !(e = MMU_PTE0(d, va)) || (*e & need) != need)) return 0;
         va = va + MMU_PAGE;
     }
     return 1;
@@ -1136,26 +1144,25 @@ int uaccess(int p, int n, int w) {
 // ... and a string: its length, or -1
 int ustrlen(char *s) {
     struct task *t;
-    int *e;
-    int n, va;
+    int *d, *e;
+    int n, p, va, lim;
     if (!mmu_on || !(t = sched_current()) || t->privs != PRIV_USER) {
         n = 0;
         while (s[n]) ++n;
         return n;
     }
-    n = 0;
-    va = -1;
+    // a page checked once, then its bytes
+    d = MMU_DIR(t);
+    p = (int)s;
     while (1) {
-        if (((int)s + n & ~(MMU_PAGE - 1)) != va) {
-            va = (int)s + n & ~(MMU_PAGE - 1);
-            if ((int)s + n < mmu_uoff + MMU_PAGE ||
-                (int)s + n >= mmu_uoff + (mmu_uoff ? MMU_WINPAGES * MMU_PAGE : mmu_memsize)) return -1;
-            if ((!(e = mmu_pte(mmu_dir_of(t), va, 0)) || (*e & (PTE_P | PTE_U)) != (PTE_P | PTE_U)) &&
-                (!mmu_fetch(t, va) || !(e = mmu_pte(mmu_dir_of(t), va, 0)) ||
-                 (*e & (PTE_P | PTE_U)) != (PTE_P | PTE_U))) return -1;
-        }
-        if (!s[n]) return n;
-        ++n;
+        if (p < mmu_uoff + MMU_PAGE || p >= mmu_uoff + (mmu_uoff ? MMU_WINPAGES * MMU_PAGE : mmu_memsize)) return -1;
+        va = p & ~(MMU_PAGE - 1);
+        if ((!(e = MMU_PTE0(d, va)) || (*e & (PTE_P | PTE_U)) != (PTE_P | PTE_U)) &&
+            (!mmu_fetch(t, va) || !(e = MMU_PTE0(d, va)) ||
+             (*e & (PTE_P | PTE_U)) != (PTE_P | PTE_U))) return -1;
+        lim = va + MMU_PAGE;
+        while (p < lim && *(char *)p) ++p;
+        if (p < lim) return p - (int)s;
     }
     return -1;
 }
@@ -1313,6 +1320,7 @@ void mmu_fault(struct task *t, int va) {
     char *what;
     char whose[64];
     struct urgn *r;
+    struct task *root;
     int *e, *u, *d;
     int k;
     info = *(int *)MMU_FINFO;
@@ -1323,12 +1331,13 @@ void mmu_fault(struct task *t, int va) {
     // run, and the access runs again
     // (a page that is out is brought in below, as for the task's own
     // access: only a refusal of pages that are in -- not one run -- is this)
-    if (t && (info & MMU_FK_DMA) && (info & MMU_FK_PRESENT) && (r = mmu_rgn(va)) && r->owner == mmu_root(t) &&
-        mmu_contig(r)) return;
+    r = t ? mmu_rgn(va) : 0;
+    root = mmu_root(t);
+    if (r && (info & MMU_FK_DMA) && (info & MMU_FK_PRESENT) && r->owner == root && mmu_contig(r)) return;
     // Its own memory, on swap or not touched yet: in, and the instruction
     // runs again (faults are precise). With no room for it even after
     // putting out what else could go, the task cannot go on.
-    if (t && (r = mmu_rgn(va)) && r->owner == mmu_root(t) && mmu_isout(va)) {
+    if (r && r->owner == root && mmu_isout(va)) {
         k = mmu_bringin(r, va);
         if (k) return;
         kprintf("c4ix: task %d (%s): its memory at 0x%08x is on swap, and there is no room for it; killed\n",
@@ -1346,8 +1355,8 @@ void mmu_fault(struct task *t, int va) {
     // innerbench -Tln 40 had one c4m killed so, "not mapped"). Never a
     // stack's guard page.
     d = 0;
-    if (t && r && r->owner == mmu_root(t)) d = r->dir;
-    else if (t && r && r->shared) d = mmu_dir_of(t);
+    if (r && r->owner == root) d = r->dir;
+    else if (r && r->shared) d = mmu_dir_of(t);
     if (d && d != mmu_dir && !(r->guard && mmu_off(r, va) < MMU_PAGE) && (e = MMU_PTE0(mmu_kdir, va)) && (*e & PTE_P) &&
         !((u = MMU_PTE0(d, va)) && (*u & PTE_P))) {
         if (!(u = mmu_pte_out(d, va))) {
@@ -1371,8 +1380,8 @@ void mmu_fault(struct task *t, int va) {
     // runs again (faults are precise: the trap returns to the
     // instruction); the rest of its text stays read-only. C4IX's own
     // programs never do this, and are killed for it below.
-    if (t && t->ckabi && (info & MMU_FK_WRITE) && !(info & MMU_FK_DMA) && (r = mmu_rgn(va)) && r->code &&
-        r->owner == mmu_root(t) && r->dir && (e = MMU_PTE0(r->dir, va)) &&
+    if (r && t->ckabi && (info & MMU_FK_WRITE) && !(info & MMU_FK_DMA) && r->code &&
+        r->owner == root && r->dir && (e = MMU_PTE0(r->dir, va)) &&
         (*e & (PTE_P | PTE_U)) == (PTE_P | PTE_U) && !(*e & PTE_W)) {
         *e = *e | PTE_W;
         *(int *)MMU_INVLPG = va;
@@ -1474,6 +1483,7 @@ static void mmu_fput(int pa) {
     while (k < c->npages) { mmu_fc[(c->base >> 12) + k] = 0; mmu_pg[(c->base >> 12) + k] = 0; ++k; }
     klock_drop(mmu_flock);
     if (c->pool) mmu_poolbytes = mmu_poolbytes - (c->npages * MMU_PAGE + MMU_PAGE - 1);
+    mmu_nofnew = 0;
     free((char *)c->raw);
     free((char *)c->bits);
     free((char *)c);
@@ -1591,7 +1601,13 @@ static int mmu_fget(int va, int keep, int evict) {
     room = 0;
     while (1) {
         if ((f = mmu_ftake(va, 0, 1))) return f;
-        if (mmu_fnew(room)) continue;
+        // (the heap had no block: not asked again for every frame, which is
+        // 2 refused mallocs and 6 of its registers, until a block has gone
+        // back or load control's next look: mmu_balance)
+        if (room || !mmu_nofnew) {
+            if (mmu_fnew(room)) continue;
+            if (!room) mmu_nofnew = 1;
+        }
         if ((f = mmu_ftake(va, 0, 0))) return f;
         if (evict && vfs_reclaim(FC_BIG * MMU_PAGE)) continue;
         if (!evict) return 0;
@@ -1768,7 +1784,6 @@ static int mmu_pagein(struct urgn *r, int va, int keep, int evict) {
     if (r->dir && evict) u = mmu_pte_out(r->dir, va);
     else if (r->dir) u = mmu_pte(r->dir, va, 1);
     if (!(f = mmu_fget(va, keep, evict))) return 0;
-    e = MMU_PTE0(mmu_kdir, va);
     s = *e >> 12 & 0xfffff;
     mmu_sop(SWAP_IN, s, f);
     mmu_sput(s);
@@ -1880,8 +1895,8 @@ static int mmu_out(struct urgn *r, int va) {
 // if any can go: the first clears what the second finds.
 static int mmu_clock(int keep, int want) {
     struct urgn *r;
-    int *e, *u;
-    int i, k, n, seen, va;
+    int *e, *u, *kt, *ut;
+    int i, k, n, seen, va, end;
     if (!mmu_swapok || !sched_has_bkl()) return 0;
     n = 0; seen = 0;
     while (n < want && seen < 2 * MMU_WINPAGES) {
@@ -1898,16 +1913,29 @@ static int mmu_clock(int keep, int want) {
             seen = seen + k;
             continue;
         }
-        mmu_hand = i + 1;
-        ++seen;
-        if (va >= keep && va < keep + SWAP_AHEAD * MMU_PAGE) continue;
-        if (!(e = MMU_PTE0(mmu_kdir, va)) || !(*e & PTE_P) || (*e & PTE_PIN)) continue;
-        if ((u = MMU_PTE0(r->dir, va)) && (*u & PTE_A)) {
-            *u = *u & ~PTE_A;
-            *(int *)MMU_INVLPG = va;
-            continue;
+        // the rest of this region, asked of it once, and its tables looked
+        // up once per 1,024 pages: when memory is short this is most of
+        // what the machine does
+        end = i + (r->va + r->npages * MMU_PAGE - va) / MMU_PAGE;
+        if (end > MMU_WINPAGES) end = MMU_WINPAGES;
+        kt = 0;
+        while (i < end && n < want) {
+            k = (va >> 12) & 1023;
+            if (!kt || !k) { kt = MMU_TBL(mmu_kdir, va); ut = MMU_TBL(r->dir, va); }
+            mmu_hand = ++i;
+            ++seen;
+            if (kt && !(va >= keep && va < keep + SWAP_AHEAD * MMU_PAGE)) {
+                e = kt + k;
+                if ((*e & PTE_P) && !(*e & PTE_PIN)) {
+                    u = ut ? ut + k : 0;
+                    if (u && (*u & PTE_A)) {
+                        *u = *u & ~PTE_A;
+                        *(int *)MMU_INVLPG = va;
+                    } else if (mmu_out(r, va)) ++n;
+                }
+            }
+            va = va + MMU_PAGE;
         }
-        if (mmu_out(r, va)) ++n;
     }
     return n;
 }
@@ -1949,8 +1977,8 @@ static int mmu_movable(struct fchunk *c, int keep) {
     while (ok && k < c->npages) {
         if (!(c->bits[k >> 5] & (1 << (k & 31)))) {
             va = mmu_fva[(c->base >> 12) + k];
-            r = va ? mmu_rgn(va) : 0;
-            ok = r && mmu_canout(r) && !(va >= keep && va < keep + SWAP_AHEAD * MMU_PAGE) &&
+            r = va ? (struct urgn *)mmu_vpg[(va - mmu_uoff) >> 12] : 0;
+            ok = mmu_canout(r) && !(va >= keep && va < keep + SWAP_AHEAD * MMU_PAGE) &&
                 (e = MMU_PTE0(mmu_kdir, va)) && (*e & PTE_P) && !(*e & PTE_PIN);
         }
         ++k;
@@ -2089,6 +2117,7 @@ void mmu_balance() {
     now = __time();
     dt = now - mmu_lwin;
     mmu_lwin = now;
+    mmu_nofnew = 0;
     if (klog_cpms <= 0) return;
     // (a window of the machine idle, or the first: calm)
     hi = dt <= 4 * MMU_LOAD_MS && mmu_pgcyc / klog_cpms > dt / 2;

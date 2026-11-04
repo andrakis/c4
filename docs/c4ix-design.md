@@ -1189,6 +1189,82 @@ log was `/log/kernel`. `pin` and `nice` look where the shell does.
 `/home` is for the person's own files: the page's uploads are listed
 there (`libjs/uploads.js`, docs/c4ix-desktop.md part sixteen).
 
+### Fast paths (2026-11-04)
+
+A call in c4 costs its `JSR`, `ENT`, `ADJ` and `LEV`, a push per argument and
+a load per parameter read, and every `&&` term a load, a compare and a branch.
+What runs at every trap, at every switch and for every page is written to ask
+as little as it can. The rules, for code added to those paths:
+
+- **Compute a predicate where what it depends on changes, not where it is
+  asked.** A task's `tflags` (`TF_*`, c4ix.h) answers what the hot paths ask of
+  a task, in one AND and one compare (`TF_PAGEOK`, `TF_HOLDOK`, `sched_held`),
+  and a field it depends on is written with its bit beside it: `TF_SET`,
+  `TF_CLR`, `sched_setnice`. A region's half of `mmu_canout` is `r->canout`
+  (`MMU_RCAN`, mmu.c), kept the same way.
+- **But not at the cost of a hotter path.** `state` changes at every switch, and
+  is not in the word: a bit kept there would tax the hottest path to spare the
+  coldest. `TF_HOLDOK` compares it where it is asked, and `TF_NOPAGE` is only
+  for the two states it takes rarely.
+- **A cross-module one-liner is a macro in c4ix.h**, with the rare case in a
+  `*_slow` function: `-minline` cannot cross modules, and the kernel is thirteen.
+  `sched_lock`, `klock_take`, `sched_has_bkl`, `task_next`, `vfs_trim`,
+  `mmu_trap_in`. They are expressions (`?:` and the comma, as `va_arg` is), and
+  an argument may be evaluated more than once: pass a plain variable.
+- **A walk asks a task the cheap questions first.** `SCHED_MAYBE` is all a walk
+  of the task list asks a task asleep and not due, or waiting; it reads the
+  clock once for the walk, not once per sleeper.
+- **What is invariant in a loop is asked once.** `mmu_clock` asks a region's
+  questions once for all its pages, and looks up a table once per 1,024 of them.
+- **Measure it.** Each of these was measured against the last, with
+  `/bin/bench PROG N` (C4IX's, `src/c4ix/user/bench.c`).
+
+Baseline f76fb05 to c4ix_and_toppings at the end of the pass, under libjs with
+the MMU, in 32 MB. Cycles, but for what is marked:
+
+| | 1 CPU | 4 CPUs |
+|---|---:|---:|
+| syscall (`getpid`) | 1,276 -> 1,029 | 2,768 -> 1,961 |
+| yield | 1,838 -> 1,409 | 3,563 -> 2,503 |
+| malloc + free | 2,823 -> 2,203 | 3,168 -> 2,576 |
+| syscall, 50 tasks asleep | 1,456 -> 1,099 | 13,161 -> 6,013 |
+| yield, 50 tasks asleep | 9,085 -> 5,054 | 21,517 -> 9,804 |
+| malloc + free, 50 asleep | 3,248 -> 2,323 | 5,021 -> 2,975 |
+
+| | before | after |
+|---|---:|---:|
+| 48 MB walked 4 times, in 32 MB, one program | 28.1 s | 16.8 s |
+| `innerbench -Tln 50` | 303 s | 263 s |
+| `innerbench -Tln 40` | 193 s | 177 s |
+| `b4ke -B -j 3` inside C4IX | 3,558 s | 3,289 s |
+| the kernel's image | 521,650 bytes | 587,388 bytes |
+| userland reached, native c4m | 3.17 M cycles | 3.64 M cycles |
+
+The times are the machine's, on 4 CPUs. The last two lines are the price: 13%
+more kernel, most of it the lock macros' 220 sites, and a boot that loads it.
+
+What the pass tried and left out, measured or not worth the keeping:
+
+- **`-minline` on the kernel.** On top of the macros: a syscall 2,453 -> 2,445
+  cycles, `-Tln 40` 179.07 -> 178.85 s, for 28 KB more image. And c4sc's
+  `compile`, which rebuilds the kernel inside C4IX, has no `-minline` to match.
+- **Counters of free frames** for `mmu_pageroom` and `mmu_compact`, whose walks
+  run for a big malloc and when a task is done, beside work far bigger. Counters
+  that can drift are not worth that.
+- **A free-word hint per block of frames, and a cached best block in
+  `mmu_ftake`.** After the clock's rewrite and `mmu_nofnew` a program bigger than
+  memory went fast enough that neither has been measured. A hint for the first
+  slab with room is no use either: the newest slab is the list's head, and the
+  walk past full ones happens once per slab filled.
+- **Caching a library's user address** (`loader_switch`): one `mmu_uva` per
+  library per switch of a program that has one. Not measured.
+
+Left for later, if trap cost is still worth chasing (they are medium risk): a
+slice deadline per CPU for the syscall fast path, `cpu_self->udir` to make
+`uaccess` a macro, and counts of the ready and sleeping so that a walk can be
+skipped whole. With 50 asleep on 4 CPUs a syscall still costs three times what
+it does alone: `smp_kick` still walks them, every trap, while a CPU is idle.
+
 ## 6.1 Running it
 
     make run-c4ix        an interactive shell on c4m

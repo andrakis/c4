@@ -774,6 +774,7 @@ void         sched_stop();
 void         sched_yield();
 void         sched_new_slice();   // the running task's slice restarts
 void         sched_setnice(struct task *t, int nice);   // its nice, and the count of those with one
+int          sched_busiest();     // the cycles the busiest CPU has run since the last asking (mmu_balance)
 // Something may be ready for an idle CPU that was not: smp_kick looks at this
 // trap's end, not at the next millisecond's (sched.c). A site that does not say
 // costs that millisecond, never a wakeup.
@@ -979,6 +980,9 @@ void mmu_letgo(struct task *t);        // ... T run again
 // run of N bytes when the heap has none (a program's image as the loader
 // reads it, a file's bytes)
 char *mmu_kalloc(int n);
+// ... and N bytes the kernel keeps for good, which cannot move: as low as can
+// be had, programs' pages moved or put out from below if that lowers it
+char *mmu_klow(int n);
 // Could the running task use the N bytes at P (to write, if W)? And the
 // string at S: its length, or -1. Always yes without the MMU.
 int  uaccess(int p, int n, int w);

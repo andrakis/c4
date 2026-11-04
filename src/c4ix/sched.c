@@ -292,6 +292,24 @@ static long long acct_cbusy[CPU_MAX];
 static long long acct_cidle[CPU_MAX];
 static int acct_cnap[CPU_MAX];
 
+// The cycles the busiest CPU has run its tasks since the last asking: how long
+// that was, in the cycles it had. The machine's clock is no measure of them:
+// on threads a CPU runs what its host gives it, however many MHz it says.
+static int sched_lastbusy[CPU_MAX];
+int sched_busiest() {
+    int k, b, d, most;
+    most = 0;
+    k = 0;
+    while (k < smp_ncpu) {
+        b = (int)acct_cbusy[k];
+        d = b - sched_lastbusy[k];
+        sched_lastbusy[k] = b;
+        if (d > most) most = d;
+        ++k;
+    }
+    return most;
+}
+
 static void acct_cpu(struct task *t, int d) {
     if (t->cpuidle) acct_cidle[cpu_self->id] = acct_cidle[cpu_self->id] + d;
     else acct_cbusy[cpu_self->id] = acct_cbusy[cpu_self->id] + d;

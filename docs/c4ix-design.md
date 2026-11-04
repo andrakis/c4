@@ -1211,6 +1211,15 @@ as little as it can. The rules, for code added to those paths:
   `sched_lock`, `klock_take`, `sched_has_bkl`, `task_next`, `vfs_trim`,
   `mmu_trap_in`. They are expressions (`?:` and the comma, as `va_arg` is), and
   an argument may be evaluated more than once: pass a plain variable.
+- **Ask when something has changed, or by the clock.** `smp_kick` looks for work
+  for an idle CPU at a switch, when `sched_wake` says so, and each millisecond of
+  the machine's clock, for what nothing says. A site that forgets to say costs that
+  millisecond, never a wakeup: which is what makes it safe to skip the walk.
+- **A cached answer names what ends it.** `UARGS_OK` keeps one stack page checked
+  per CPU, the check being a fifth of a syscall: ended by a switch, or by
+  `mmu_mapgen`, bumped after every unmap and read before the tables are. It vouches
+  only for reading a syscall's three words. (A task cannot aim a syscall at a page
+  it has unmapped: its own pushes would fault first.)
 - **A walk asks a task the cheap questions first.** `SCHED_MAYBE` is all a walk
   of the task list asks a task asleep and not due, or waiting; it reads the
   clock once for the walk, not once per sleeper.
@@ -1224,23 +1233,23 @@ the MMU, in 32 MB. Cycles, but for what is marked:
 
 | | 1 CPU | 4 CPUs |
 |---|---:|---:|
-| syscall (`getpid`) | 1,276 -> 1,029 | 2,768 -> 1,961 |
-| yield | 1,838 -> 1,409 | 3,563 -> 2,503 |
-| malloc + free | 2,823 -> 2,203 | 3,168 -> 2,576 |
-| syscall, 50 tasks asleep | 1,456 -> 1,099 | 13,161 -> 6,013 |
-| yield, 50 tasks asleep | 9,085 -> 5,054 | 21,517 -> 9,804 |
-| malloc + free, 50 asleep | 3,248 -> 2,323 | 5,021 -> 2,975 |
+| syscall (`getpid`) | 1,276 -> 819 | 2,768 -> 1,205 |
+| yield | 1,838 -> 1,215 | 3,563 -> 1,869 |
+| malloc + free | 2,823 -> 2,158 | 3,168 -> 2,502 |
+| syscall, 50 tasks asleep | 1,456 -> 873 | 13,161 -> 1,613 |
+| yield, 50 tasks asleep | 9,085 -> 4,870 | 21,517 -> 6,894 |
+| malloc + free, 50 asleep | 3,248 -> 2,277 | 5,021 -> 2,854 |
 
 | | before | after |
 |---|---:|---:|
-| 48 MB walked 4 times, in 32 MB, one program | 28.1 s | 16.8 s |
-| `innerbench -Tln 50` | 303 s | 263 s |
-| `innerbench -Tln 40` | 193 s | 177 s |
-| `b4ke -B -j 3` inside C4IX | 3,558 s | 3,289 s |
-| the kernel's image | 521,650 bytes | 587,388 bytes |
-| userland reached, native c4m | 3.17 M cycles | 3.64 M cycles |
+| `innerbench -Tln 50` | 303 s | 250 s |
+| `innerbench -Tln 40` | 193 s | 174 s |
+| `b4ke -B -j 3` inside C4IX | 3,558 s | 3,343 s |
+| 48 MB walked 4 times, in 32 MB, one program | 12.0 s | 10.2 s |
+| the kernel's image | 521,650 bytes | 596,105 bytes |
+| userland reached, native c4m | 3.17 M cycles | 3.74 M cycles |
 
-The times are the machine's, on 4 CPUs. The last two lines are the price: 13%
+The times are the machine's, on 4 CPUs. The last two lines are the price: 14%
 more kernel, most of it the lock macros' 220 sites, and a boot that loads it.
 
 What the pass tried and left out, measured or not worth the keeping:
@@ -1259,11 +1268,14 @@ What the pass tried and left out, measured or not worth the keeping:
 - **Caching a library's user address** (`loader_switch`): one `mmu_uva` per
   library per switch of a program that has one. Not measured.
 
-Left for later, if trap cost is still worth chasing (they are medium risk): a
-slice deadline per CPU for the syscall fast path, `cpu_self->udir` to make
-`uaccess` a macro, and counts of the ready and sleeping so that a walk can be
-skipped whole. With 50 asleep on 4 CPUs a syscall still costs three times what
-it does alone: `smp_kick` still walks them, every trap, while a CPU is idle.
+- **A slice deadline per CPU.** `SCHED_STAYS` does what it was for, with no CPU
+  having to tell another.
+- **`cpu_self->udir`.** The check's cost was in the call, and `UARGS_OK` skips that;
+  a stale directory would be a security hole, for a fraction of the gain.
+- **Counts of the ready, to skip `sched_pick`'s walk whole.** A site that missed
+  them would lose a wakeup, unlike `sched_wake`. The walk is 72 cycles a task, at
+  a switch: 4,870 cycles to yield with 50 asleep, against 1,215 alone. With that
+  many asleep it is what a real run queue would remove.
 
 ## 6.1 Running it
 

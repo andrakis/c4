@@ -729,9 +729,11 @@ struct fchunk {
     struct fchunk *anext;      // every chunk (mmu_reclaim)
     int tried;                 // mmu_reclaim's round that found it could not be freed
     int pool;                  // taken for single frames (mmu_fnew), not one region's
+    int inblock;               // this record and its bits are in the block's own slack
 };
 
 static int mmu_poolbytes;      // the heap's bytes in blocks of single frames (mmu_fnew)
+static int mmu_mhigh(int n);
 
 // Off its owner's list, out of its space, back to the heap
 static void mmu_release(struct urgn *r) {
@@ -1444,12 +1446,29 @@ enum { SWAP_ADDR = 0x11c, SWAP_CMD = 0x158, SWAP_OUT = 1, SWAP_IN = 2, SWAP_DROP
 static int mmu_sop(int op, int slot, int pa);
 static void mmu_sput(int s);
 
+// A block's record and its bits go in the block: a block of NP pages is NP
+// pages and a page less a byte, so there are 2 KB of slack before or after its
+// aligned pages, which nobody else can use. From the heap, they were two small
+// blocks of the kernel's among programs' memory: after innerbench -Tln 40 the
+// record of a block of frames, 32 bytes, kept in the middle of the heap for as
+// long as the block lived, and free memory in two pieces round it. (Not for a
+// region's own block of many pages, whose bits outgrow the slack: those are
+// freed with the region, which is not for long.)
 static int mmu_cnew(int raw, int base, int np, int used) {
     struct fchunk *c;
-    int k, n;
+    int k, n, need, in;
     n = (np + 31) / 32;
-    if (!(c = (struct fchunk *)malloc(sizeof(struct fchunk)))) return 0;
-    if (!(c->bits = (int *)malloc(n * sizeof(int)))) { free((char *)c); return 0; }
+    need = sizeof(struct fchunk) + n * sizeof(int);
+    in = 1;
+    if (need <= base - raw) c = (struct fchunk *)raw;
+    else if (need <= raw + np * MMU_PAGE + MMU_PAGE - 1 - (base + np * MMU_PAGE)) c = (struct fchunk *)(base + np * MMU_PAGE);
+    else in = 0;
+    if (in) c->bits = (int *)((int)c + sizeof(struct fchunk));
+    else {
+        if (!(c = (struct fchunk *)malloc(sizeof(struct fchunk)))) return 0;
+        if (!(c->bits = (int *)malloc(n * sizeof(int)))) { free((char *)c); return 0; }
+    }
+    c->inblock = in;
     memset((char *)c->bits, used ? 0 : 255, n * sizeof(int));
     c->raw = raw;
     c->base = base;
@@ -1504,9 +1523,13 @@ static void mmu_fput(int pa) {
     klock_drop(mmu_flock);
     if (c->pool) mmu_poolbytes = mmu_poolbytes - (c->npages * MMU_PAGE + MMU_PAGE - 1);
     mmu_nofnew = 0;
-    free((char *)c->raw);
-    free((char *)c->bits);
-    free((char *)c);
+    // (its books last, if they are not in it: the block's address is in them)
+    if (c->inblock) free((char *)c->raw);
+    else {
+        free((char *)c->raw);
+        free((char *)c->bits);
+        free((char *)c);
+    }
 }
 
 static int mmu_clock(int keep, int want);
@@ -2057,7 +2080,42 @@ static int mmu_freeblock(int keep) {
 // them copied there (mmu_move, no swap), and goes back to the heap; then
 // the next, while one fits. Each block so freed is one fewer, and its
 // memory is the heap's top again, where blocks of frames come from.
-enum { COMPACT_MAX = 64 };     // blocks freed at a time, at most
+//
+// And what is left moves up. A block made when the heap was full is wherever
+// there was room, and the last one left has no other to go into: after four
+// programs of 16 MB, a block of the shell's pages, 9 MB up, kept free memory in
+// two pieces for as long as the shell ran. With room above it, a block just big
+// enough is taken there and the pages copied: nothing else can tell, a user
+// address being all a program has of them.
+enum { COMPACT_MAX = 64, RAISE_MAX = 4 };     // blocks freed, and raised, at a time, at most
+
+// The block of single frames lowest in the heap has its pages moved to a new one
+// above it: 0 if none can
+static int mmu_raise() {
+    struct fchunk *c, *low, *nb;
+    int raw, np;
+    low = 0;
+    c = mmu_fcall;
+    while (c) {
+        if (c->pool && c->nused && c->tried != mmu_round && (!low || c->raw < low->raw)) {
+            if (mmu_movable(c, 0)) low = c;
+            else c->tried = mmu_round;
+        }
+        c = c->anext;
+    }
+    if (!low) return 0;
+    low->tried = mmu_round;
+    np = (low->nused + FC_SMALL - 1) / FC_SMALL * FC_SMALL;
+    if (np > low->npages) np = low->npages;
+    if (!(raw = mmu_mhigh(np * MMU_PAGE + MMU_PAGE - 1))) return 0;
+    if (raw <= low->raw) { free((char *)raw); return 0; }
+    if (!(nb = (struct fchunk *)mmu_cnew(raw, (raw + MMU_PAGE - 1) & ~(MMU_PAGE - 1), np, 0))) { free((char *)raw); return 0; }
+    nb->pool = 1;
+    mmu_poolbytes = mmu_poolbytes + np * MMU_PAGE + MMU_PAGE - 1;
+    mmu_empty(low, 0);
+    return 1;
+}
+
 static void mmu_compact() {
     struct fchunk *c, *best;
     int spare, n, was;
@@ -2086,6 +2144,9 @@ static void mmu_compact() {
         ++n;
     }
     if (n) klog("mmu: %d blocks of frames given back to the heap, their pages moved to others\n", n);
+    n = 0;
+    while (n < RAISE_MAX && mmu_raise()) ++n;
+    if (n) klog("mmu: %d blocks of frames moved up the heap\n", n);
 }
 
 // ---- load control ----
@@ -2100,8 +2161,11 @@ static void mmu_compact() {
 // held: it is not run (sched_mine), its pages go out as the clock finds
 // them unused, and the others have the memory. Measured over each LOAD_MS
 // of the machine's clock, the cycles spent bringing pages back
-// (mmu_bringin) against a CPU's: more than half, and one more is held;
-// less than an eighth, and one is let go. Held for HOLD_MS, a task is let
+// (mmu_bringin) against those the busiest CPU ran (sched_busiest): more than
+// half, and one more is held; less than an eighth, and one is let go. Not
+// against what the clock says a CPU has: on threads, in the browser, a CPU that
+// says 400 MHz runs a fraction of it, so paging that took all it had looked
+// like a twentieth, nothing was held, and fifty c4m's never finished. Held for HOLD_MS, a task is let
 // go anyway, and if paging is still too much, another is held in its place
 // -- the one that has run longest since it was last held: so the held
 // take turns, and none waits for good. A task done lets one go.
@@ -2134,15 +2198,15 @@ static struct task *mmu_oldest() {
 
 void mmu_balance() {
     struct task *t, *v;
-    int now, dt, hi, lo, n;
+    int now, dt, hi, lo, n, busy;
     now = __time();
     dt = now - mmu_lwin;
     mmu_lwin = now;
     mmu_nofnew = 0;
-    if (klog_cpms <= 0) return;
+    busy = sched_busiest();
     // (a window of the machine idle, or the first: calm)
-    hi = dt <= 4 * MMU_LOAD_MS && mmu_pgcyc / klog_cpms > dt / 2;
-    lo = dt > 4 * MMU_LOAD_MS || mmu_pgcyc / klog_cpms < dt / 8;
+    hi = dt <= 4 * MMU_LOAD_MS && mmu_pgcyc > busy / 2;
+    lo = dt > 4 * MMU_LOAD_MS || mmu_pgcyc < busy / 8;
     mmu_pgcyc = 0;
     // the one held longest, if paging is light or it has been held long enough
     if ((v = mmu_oldest()) && (lo || now - v->held >= HOLD_MS)) mmu_letgo(v);
@@ -2182,11 +2246,11 @@ void mmu_gone() {
 // while there are any that can go (a block's memory is the heap's again
 // once all its frames are free): 0 if even then there is none. Never the
 // pages from KEEP.
-static int mmu_reclaim(int n, int keep) {
+static int mmu_reclaim(int n, int keep, int high) {
     int raw;
     if (!mmu_swapok || !sched_has_bkl()) return 0;
     ++mmu_round;
-    while (!(raw = (int)malloc(n))) {
+    while (!(raw = high ? mmu_mhigh(n) : (int)malloc(n))) {
         if (!mmu_freeblock(keep)) return 0;
     }
     return raw;
@@ -2197,10 +2261,23 @@ static int mmu_reclaim(int n, int keep) {
 // (mmu_short: allocation takes the kernel lock, where swap may run). A
 // cached file is the cheaper to give up: its bytes are on the host
 // already, where a page put out is written.
+//
+// From the heap's top, as blocks of frames are (mmu_fnew): the bottom is the
+// kernel's, whose memory cannot move. Taken from the bottom, these were below
+// whatever the kernel took while they lived: a slab it needed for the fortieth
+// program went above them all, 23 MB up, and stayed there when they had gone.
+static int mmu_mhigh(int n) {
+    int raw;
+    if (mmu_swapok) mmu_sop(SWAP_HIGH, 1, 0);
+    raw = (int)malloc(n);
+    if (mmu_swapok) mmu_sop(SWAP_HIGH, 0, 0);
+    return raw;
+}
+
 static int mmu_raw(int np) {
     int raw, used, size;
-    while (!(raw = (int)malloc(np * MMU_PAGE + MMU_PAGE - 1)) && vfs_reclaim(np * MMU_PAGE + MMU_PAGE - 1)) ;
-    if (!raw && !(raw = mmu_reclaim(np * MMU_PAGE + MMU_PAGE - 1, 0))) return 0;
+    while (!(raw = mmu_mhigh(np * MMU_PAGE + MMU_PAGE - 1)) && vfs_reclaim(np * MMU_PAGE + MMU_PAGE - 1)) ;
+    if (!raw && !(raw = mmu_reclaim(np * MMU_PAGE + MMU_PAGE - 1, 0, 1))) return 0;
     if (mmu_swapok) {
         used = *(int *)C4IX_HEAP_USED;
         size = *(int *)C4IX_HEAP_END - *(int *)C4IX_HEAP_BASE;
@@ -2222,10 +2299,53 @@ char *mmu_kalloc(int n) {
     if (p) return p;
     q = mmu_quiet;
     mmu_quiet = 1;
-    p = (char *)mmu_reclaim(n, 0);
+    p = (char *)mmu_reclaim(n, 0, 0);
     mmu_runlog();
     mmu_quiet = q;
     return p;
+}
+
+// N bytes the kernel keeps for good (a slab), when the room between its memory
+// and programs' is gone. Its memory cannot move and programs' can: a block of
+// frames lower than where the heap would put it is emptied, its pages moved or
+// put out, and the heap asked again, up to a few times. The lowest such block
+// each time; one that holds a page that cannot go is passed over. Without the
+// kernel lock, or on SMP's light path, where another CPU's free may be taking
+// the region a page belongs to, or without swap: wherever the heap has room.
+enum { KLOW_TRIES = 4 };
+char *mmu_klow(int n) {
+    struct fchunk *c, *best;
+    int p, q, k, was;
+    p = (int)malloc(n);
+    if (!mmu_uoff || !mmu_swapok || !sched_has_bkl() || cpu_self->light) return (char *)p;
+    ++mmu_round;
+    k = 0;
+    while (k < KLOW_TRIES) {
+        best = 0;
+        c = mmu_fcall;
+        while (c) {
+            if (c->nused && c->tried != mmu_round && (!p || c->raw < p) && (!best || c->raw < best->raw)) {
+                if (mmu_movable(c, 0)) best = c;
+                else c->tried = mmu_round;
+            }
+            c = c->anext;
+        }
+        if (!best) break;
+        best->tried = mmu_round;
+        was = mmu_quiet;
+        mmu_quiet = 1;
+        mmu_empty(best, 1);
+        mmu_runlog();
+        mmu_quiet = was;
+        q = (int)malloc(n);
+        if (q && (!p || q < p)) {
+            if (p) free((char *)p);
+            p = q;
+        } else if (q) free((char *)q);
+        ++k;
+    }
+    if (k) klog("mmu: %d blocks of frames emptied for the kernel's %d bytes, now at 0x%08x\n", k, n, p);
+    return (char *)p;
 }
 
 // R's pages made one run of memory, for a device that wants one (its

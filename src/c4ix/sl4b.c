@@ -51,7 +51,7 @@ char *kmem_alloc(int bytes) {
     }
     ++kmem_spills;
     sched_unlock();
-    if ((p = (char *)malloc(bytes))) memset(p, 0, bytes);
+    if ((p = mmu_klow(bytes))) memset(p, 0, bytes);
     return p;
 }
 

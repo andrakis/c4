@@ -611,7 +611,8 @@ has nothing to swap against. Now:
     and the others spinning on the kernel lock. That is thrashing, and the
     answer is the old one: run fewer. Over each 250 ms of the machine's
     clock the cycles spent bringing pages back (`mmu_bringin`) are weighed
-    against a CPU's: more than half, and a task is *held* -- not run
+    against those the busiest CPU ran (`sched_busiest`): more than half, and a
+    task is *held* -- not run
     (`sched_mine`, `smp_kick`), so its pages go out as the clock finds them
     unused and the others have the memory; less than an eighth, or a task
     done, and the one held longest is let go; held 30 s, it is let go
@@ -620,7 +621,13 @@ has nothing to swap against. Now:
     with a window on the display (a GUI ring), a favoured one (nice), or
     one with a signal to take. Held 5 s, the held took turns too fast:
     each one let go brought its pages back, which held another, and with
-    18 held nothing finished either. Measured: `-Tln 50` all fifty done in
+    18 held nothing finished either. Weighed against what the clock said a
+    CPU had (`klog_cpms`), it worked on simulated CPUs, where the clock is
+    right, and not on threads, in the browser, where a CPU that says 400 MHz
+    runs a fraction of it: paging that took all it had looked like a twentieth,
+    nothing was held, and `-Tln 50` never finished (47 minutes, 2,400 pages a
+    second). `test-c4ix-loadctl` has four programs of 16 MB in 32 MB, on
+    threads. Measured: `-Tln 50` all fifty done in
     304 s, at most six held at once; `-Tln 40` 193 s, as before.
   - *An image's, a stack's page with no table* (`mmu_fault`). A region
     given to a task is mapped in its space when it is given (`mmu_rmap`),
@@ -661,6 +668,41 @@ has nothing to swap against. Now:
   cuts it is 57 KB of the kernel's slabs for the tasks beyond forty-odd,
   taken from the heap when the kernel's arena was full (`kmem_spills`),
   from wherever it had room then, and kept, as slabs are.
+- **The kernel at the heap's bottom, programs at its top** (2026-11-04). The
+  kernel runs untranslated, so what it allocates stays where it lands; what a
+  program has is behind the MMU, and can go anywhere. After `-Tln 40` free
+  memory was 7 to 16 MB in one run of 26, by the luck of the timing: of all the
+  kernel's blocks above 5 MB, two kept it in pieces, a slab of 4 KB and the
+  bits of a block of frames, 32 bytes.
+  - *A block's books in the block* (`mmu_cnew`). A block of frames is its pages
+    and a page less a byte, so there are 2 KB of slack before or after them that
+    nobody else can use. Its record and its bits go there.
+  - *Programs' blocks from the top* (`mmu_raw`, as `mmu_fnew` already did). From
+    the bottom, a program's image and stack were below whatever the kernel took
+    while they lived: the slab for the fortieth program went 23 MB up, the lowest
+    room there was, and stayed when they had gone. The heap's bottom is the
+    kernel's now, and free memory is the room between the two.
+  - *The kernel's for good, low* (`mmu_klow`, for a slab that spills out of the
+    arena). When that room is gone a block of frames below where the heap would
+    put it is emptied, its pages moved or put out, and the heap asked again.
+    Not on the light path, where another CPU's free may be taking the region a
+    page belongs to.
+  - *What is left moves up* (`mmu_raise`, from `mmu_compact`). A block made when
+    the heap was full is wherever there was room, and the last one left has no
+    other to go into. With room above it, a block just big enough is taken there
+    and its pages copied.
+  - *What still cannot move:* a program's image, stack and arguments. The kernel
+    keeps their addresses in memory (`t->stack`, `t->img_code`), and loads an
+    image through its one run; one long-lived program started late sits where it
+    landed. Without an MMU nothing can move: a slab's objects are named by raw
+    pointers everywhere, and all there is, is room to spare in the arena.
+
+  Measured, on threads at 400 MHz: `-Tln 40` 24.8 MB of 26.4 in one run, `-Tln
+  50` 24.8 of 26.3. On simulated CPUs `-Tln 50` 19.2 of 26.3: a slab went where
+  the heap could give it, above images and stacks that could not go. A price: with
+  23 MB of RAM files in 32 MB (no drive 1 to keep them on) `cc` could not load
+  c4sc, 3 MB free in two pieces with a 68 KB chunk of the shell's between them,
+  where it had just fitted before.
 - **Two races on the light path** (2026-11-04). A program's malloc and free
   take no kernel lock (`sched_light`), and a big block's come here. An
   in-C4IX `b4ke -B -j 3` in 32 MB had a c4sc killed "not mapped" at the first

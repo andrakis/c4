@@ -98,23 +98,25 @@ void sched_early() {
 // on one held elsewhere, then parks in CWAI until the holder lets go.
 // On one CPU there is no other CPU to lock against, and these only mask
 // preemption (below).
-static void klock_spin(int *lk) {
+int klock_spin(int *lk) {
     int me, o, spin;
-    if (smp_ncpu < 2) return;
+    if (smp_ncpu < 2) return 0;
     me = cpu_self->id + 1;
-    if (lk[0] == me) { ++lk[1]; return; }
+    if (lk[0] == me) { ++lk[1]; return 0; }
     spin = 0;
     while ((o = __c4_cas((int)lk, 0, me))) {
         if (++spin > BKL_SPIN) { __c4_wait((int)lk, o); spin = 0; }
     }
     lk[1] = 1;
+    return 0;
 }
 
-static void klock_let(int *lk) {
-    if (smp_ncpu < 2) return;
-    if (--lk[1]) return;
+int klock_let(int *lk) {
+    if (smp_ncpu < 2) return 0;
+    if (--lk[1]) return 0;
     __c4_xchg((int)lk, 0);
     __c4_wake((int)lk, 1);
+    return 0;
 }
 
 // A lock is the CPU's, not the task's: taken again on the CPU that holds
@@ -128,30 +130,26 @@ static void klock_let(int *lk) {
 // killed it, "the kernel's, for a task being made"). On one CPU, where
 // the lock itself is nothing, the same. So outside the handler a lock
 // masks preemption while it is held, as sched_lock does.
-void klock_take(int *lk) {
-    if (!sched_intrap) {
-        if (sched_lockdepth == 0 && sched_interval) __c4_configure(C4IX_CONF_INTERVAL, 0);
-        ++sched_lockdepth;
-    }
-    klock_spin(lk);
+int klock_take_slow(int *lk) {
+    if (sched_lockdepth == 0 && sched_interval) __c4_configure(C4IX_CONF_INTERVAL, 0);
+    ++sched_lockdepth;
+    return klock_spin(lk);
 }
 
-void klock_drop(int *lk) {
+int klock_drop_slow(int *lk) {
     klock_let(lk);
-    if (!sched_intrap) {
-        --sched_lockdepth;
-        if (sched_lockdepth == 0 && sched_interval) __c4_configure(C4IX_CONF_INTERVAL, sched_interval);
-    }
+    --sched_lockdepth;
+    if (sched_lockdepth == 0 && sched_interval) __c4_configure(C4IX_CONF_INTERVAL, sched_interval);
+    return 0;
 }
 
 // The big one, the KERNEL LOCK: everything in the kernel but what has a
 // lock of its own -- so far, the tasks' memory (task.c, umem_lock), which
 // a program's malloc and free reach without it (sched_trap's light path).
-static int bkl[2];
-static void bkl_take() { klock_spin(bkl); }
+int sched_bkl[2];
+static void bkl_take() { klock_spin(sched_bkl); }
 // Whether this CPU holds the kernel lock: the MMU swaps only then (mmu.c)
-int sched_has_bkl() { return smp_ncpu < 2 || bkl[0] == cpu_self->id + 1; }
-static void bkl_drop() { klock_let(bkl); }
+static void bkl_drop() { klock_let(sched_bkl); }
 
 // Whether N may run on CPU K by its mask (pin, SYS_AFFINITY). A mask
 // naming no CPU this machine has is no mask at all.
@@ -164,23 +162,20 @@ static int sched_allows(struct task *n, int k) {
 
 // Is N held (mmu.c, load control)? Not with a signal to take: it runs
 // to take it.
-static int sched_held(struct task *n) {
-    return n->held && !n->killsig && !n->ck_sigpend;
-}
+#define sched_held(n) ((n)->held && !(n)->killsig && !(n)->ck_sigpend)
 
 // Whether this CPU may run N: not while another CPU is on its stack,
 // an idle task only on its own CPU, a kernel task only on CPU 0, and a
 // pinned task only on its CPUs; and no CPU a task held.
-static int sched_mine(struct task *n) {
+static int sched_mine_smp(struct task *n) {
     int me;
-    if (sched_held(n)) return 0;
-    if (smp_ncpu < 2) return 1;
     me = cpu_self->id + 1;
     if (n->oncpu && n->oncpu != me) return 0;
     if (n->cpuidle) return n->cpuidle == me;
     if (n->privs == PRIV_KERNEL) return me == 1;
     return sched_allows(n, me - 1);
 }
+#define sched_mine(n) (!sched_held(n) && (smp_ncpu < 2 || sched_mine_smp(n)))
 
 // This CPU is off the stack of the task it last switched out. Under the
 // lock: at a trap's start, or in an idle loop.
@@ -452,20 +447,21 @@ int sched_switches;          // context switches since boot
 // at once, freed by a task's exit on one CPU as a compile's malloc took
 // it on another: a region list with a cycle in it, and c4sc writing where
 // it had no memory (a -j 3 build in 32 MB).
-void sched_lock() {
+int sched_lock_slow() {
     if (!sched_intrap) {
         if (sched_lockdepth == 0 && sched_interval) __c4_configure(C4IX_CONF_INTERVAL, 0);
         bkl_take();
-    } else if (cpu_self->light) bkl_take();
-    ++sched_lockdepth;
+    } else bkl_take();
+    return ++sched_lockdepth;
 }
 
-void sched_unlock() {
+int sched_unlock_slow() {
     --sched_lockdepth;
     if (!sched_intrap) {
         bkl_drop();
         if (sched_lockdepth == 0 && sched_interval) __c4_configure(C4IX_CONF_INTERVAL, sched_interval);
-    } else if (cpu_self->light) bkl_drop();
+    } else bkl_drop();
+    return 0;
 }
 
 // The running task's slice starts again now: after a service that
@@ -717,7 +713,7 @@ static int sched_light(int trap, int param) {
 
 static void sched_trap(int interval, int trap, int param, int mode, int a, int bp, int sp, int returnpc) {
     struct task *t, *n, *me, *fv;
-    int reload, hold;
+    int reload, hold, d;
 
     // Re-entry guard. c4m disables the cycle interrupt when IT takes
     // a trap, but not when user code raises one (the syscall gateway
@@ -773,23 +769,23 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
             me = sched_cur;
             ++me->ntraps;
             me->uacc = me->uacc + (acct_in - acct_out);
-            acct_cpu(me, acct_in - acct_out);
+            d = acct_out;
             cpu_self->light = 1;
             sys_pmviolation(param, (int *)sp, (int *)returnpc, &a);
             cpu_self->light = 0;
             acct_out = __c4_cycles();
             me->kacc = me->kacc + (acct_out - acct_in);
-            acct_cpu(me, acct_out - acct_in);
+            acct_cpu(me, acct_out - d);
             if ((me->uacc | me->kacc) & ACCT_FOLD_AT) acct_fold(me);
             mode = C4IX_MODE_PROTECTED;
             interval = (sched_interval && sched_lockdepth == 0) ? sched_interval : 0;
-            mmu_trap_out(me);
+            if (mmu_on) mmu_trap_out(me);
             sched_intrap = 0;
             return;
         }
         bkl_take();
-        smp_settle();
-        acct_unpark();
+        if (cpu_self->prev) smp_settle();
+        if (acct_parked[cpu_self->id]) acct_unpark();
         // Killed by another CPU while it ran here: nothing of it is to be
         // served, only switched away from
         if (sched_cur && sched_cur->state == TS_ZOMBIE) trap = C4IX_TRAP_SOFT_IRQ;
@@ -797,11 +793,10 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     if ((me = sched_cur)) {
         ++me->ntraps;
         me->uacc = me->uacc + (acct_in - acct_out);
-        acct_cpu(me, acct_in - acct_out);
     }
     // load control: a task held, or let go, while paging is most of what
     // the machine does (mmu.c)
-    if (mmu_on) mmu_balance();
+    if (mmu_swapok && __time() - mmu_lwin >= MMU_LOAD_MS) mmu_balance();
 
     // no nested switches while kernel structures move
     __c4_configure(C4IX_CONF_INTERVAL, 0);
@@ -995,10 +990,12 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     if (sched_cur->ck_sigpend)
         ck_signal_deliver(sched_cur, &a, &bp, &sp, &returnpc, mode, interval);
 
+    // (the CPU's count takes the trap's cycles and the task's before it at once)
+    d = acct_out;
     acct_out = __c4_cycles();
     if (me) {
         me->kacc = me->kacc + (acct_out - acct_in);
-        acct_cpu(me, acct_out - acct_in);
+        acct_cpu(me, acct_out - d);
         if ((me->uacc | me->kacc) & ACCT_FOLD_AT) acct_fold(me);
     }
 

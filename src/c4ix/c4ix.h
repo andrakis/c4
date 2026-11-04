@@ -289,7 +289,9 @@ extern int   vfs_spans;                          // the host reads a span of a f
 // memory is short (7/8 of the heap in use, where the host says).
 char        *vfs_malloc(int n);
 int          vfs_reclaim(int want);              // the bytes it freed
-void         vfs_trim();
+extern struct vnode *vfs_ctail;
+int          vfs_trim_slow();
+#define vfs_trim() (vfs_ctail ? vfs_trim_slow() : 0)
 extern int   vfs_ncached, vfs_cachedbytes, vfs_dropped;   // the cache, and files dropped from it
 int          vfs_put(char *path, char *buf, int len);   // C4KE OP_VFS_PUT
 struct vnode *vfs_klog();                                // /var/log/kernel, held by the kernel
@@ -627,8 +629,8 @@ void         task_unborrow(struct task *t);     // a vfork child is done with it
 struct task *task_get(int id);
 int sched_affinity(int id, int mask);
 int sched_nice(int id, int nice);
-struct task *task_first();
-struct task *task_next(struct task *t);
+#define task_first() task_head
+#define task_next(t) ((t)->next ? (t)->next : task_head)
 int          task_count();
 void         task_shutdown();
 // A userland task's memory (SYS_SBRK, and malloc behind protected mode):
@@ -747,8 +749,16 @@ void         sched_stop();
 void         sched_yield();
 void         sched_new_slice();   // the running task's slice restarts
 int          sched_intr_below(struct task *root);   // a terminal's Ctrl-C
-void         sched_lock();     // disable preemption (nestable)
-void         sched_unlock();
+// Preemption masked (nestable). In the trap handler, which nothing
+// preempts, that is only the depth; but for the light path, which has not
+// got the kernel lock, and outside the handler, which has to mask it.
+// Macros, like the others below (docs/c4ix-design.md, "Fast paths"): the
+// common case costs no call, and -minline cannot inline across modules.
+// They are expressions, and an argument may be evaluated more than once.
+int          sched_lock_slow();
+int          sched_unlock_slow();
+#define sched_lock()   ((sched_intrap && !cpu_self->light) ? ++cpu_self->lockdepth : sched_lock_slow())
+#define sched_unlock() ((sched_intrap && !cpu_self->light) ? --cpu_self->lockdepth : sched_unlock_slow())
 int          sched_forge(struct task *t, int entry, int argc, int argv);
 // SYS_VFORK, from the trap handler, which has the registers (bp is the
 // frame of the function that executed the syscall: the child returns
@@ -783,8 +793,14 @@ int  task_busy(struct task *t);   // some CPU may be on its stack: not to be fre
 int  task_cpu(struct task *t);    // the CPU running it, -1 if none is
 int  smp_slot_alloc();         // a library's data slot in the window, 0 if none is left
 // A lock: { 1 + the CPU holding it, its holds }, nested per CPU (sched.c)
-void klock_take(int *lk);
-void klock_drop(int *lk);
+// In the handler a lock is only the lock, and on one CPU not even that;
+// outside it, it masks preemption too (sched.c)
+int klock_spin(int *lk);
+int klock_let(int *lk);
+int klock_take_slow(int *lk);
+int klock_drop_slow(int *lk);
+#define klock_take(lk) (sched_intrap ? (smp_ncpu < 2 ? 0 : klock_spin(lk)) : klock_take_slow(lk))
+#define klock_drop(lk) (sched_intrap ? (smp_ncpu < 2 ? 0 : klock_let(lk)) : klock_drop_slow(lk))
 // SYS_EXECVE replaced the running task's context: the trap returns into
 // the forged one, and the old stack, still under the handler, is freed
 // at the next trap.
@@ -870,10 +886,20 @@ extern int mmu_uoff;                   // the user window's base, or 0: user add
 int  mmu_uva(int p);                   // a user region's memory as user mode sees it (else P)
 int  mmu_phys(int p);                  // ... and as it is in memory
 void mmu_init();                       // at boot: tables, and on
-int  sched_has_bkl();                  // this CPU holds the kernel lock (sched.c)
-void mmu_trap_in();                    // sched_trap's first thing: a shootdown asked of this CPU
-void mmu_trap_out(struct task *t);     // ... and its last, T the task it goes back to
-void mmu_trap_nested();                // ... an IPI inside a handler: the flush, if asked
+extern int sched_bkl[2];               // the kernel lock (sched.c)
+#define sched_has_bkl() (smp_ncpu < 2 || sched_bkl[0] == cpu_self->id + 1)   // this CPU holds it
+// Where this CPU is, for the TLB's shootdown (mmu.c): each word of
+// mmu_inkernel has one writer, its CPU, so one compare-and-swap (a fence)
+// is enough; and a flush asked of it
+extern int mmu_inkernel[CPU_MAX];
+extern int mmu_shoot[CPU_MAX];
+int  mmu_trap_flush();
+// sched_trap's first thing: a shootdown asked of this CPU
+#define mmu_trap_in() (__c4_cas((int)&mmu_inkernel[cpu_self->id], mmu_inkernel[cpu_self->id], 1), mmu_shoot[cpu_self->id] ? mmu_trap_flush() : 0)
+// ... and its last, T the task it goes back to
+#define mmu_trap_out(t) (__c4_cas((int)&mmu_inkernel[cpu_self->id], mmu_inkernel[cpu_self->id], !(t) || (t)->privs != PRIV_USER), mmu_shoot[cpu_self->id] ? mmu_trap_flush() : 0)
+// ... an IPI inside a handler: the flush, if asked
+#define mmu_trap_nested() (mmu_shoot[cpu_self->id] ? mmu_trap_flush() : 0)
 void mmu_cpu(int k);                   // another CPU, as it starts
 int  mmu_map(int *dir, int va, int pa, int n, int flags);
 extern int mmu_short;                  // memory is short: allocation takes the kernel lock (sched_light)
@@ -911,7 +937,11 @@ int  mmu_slot();                       // a word user mode may read: a library's
 void mmu_switch(struct task *t);       // T is about to run here: its space
 void mmu_task_done(struct task *t);    // T is gone: its space too
 void mmu_gone();                       // a task is done: blocks of frames emptied into others, one held let go
-void mmu_balance();                    // load control: a task held, or let go (the scheduler, each trap)
+// Load control: a task held, or let go, each MMU_LOAD_MS (mmu.c)
+enum { MMU_LOAD_MS = 250 };
+extern int mmu_swapok;                 // the host keeps pages
+extern int mmu_lwin;                   // when mmu_balance last looked
+void mmu_balance();
 void mmu_letgo(struct task *t);        // ... T run again
 // malloc for a big kernel buffer: with swap, pages put out to make one
 // run of N bytes when the heap has none (a program's image as the loader

@@ -500,16 +500,6 @@ struct task *task_get(int id) {
     return 0;
 }
 
-struct task *task_first() {
-    return task_head;
-}
-
-// Round-robin successor: after the tail comes the head again.
-struct task *task_next(struct task *t) {
-    if (t && t->next) return t->next;
-    return task_head;
-}
-
 int task_count() {
     return ntasks;
 }

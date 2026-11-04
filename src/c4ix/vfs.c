@@ -392,7 +392,7 @@ void vfs_touch(struct vnode *vn) {
 enum { VFS_KEEP = 65536 };      // a lazy file this big or smaller is kept once read
 int vfs_spans;                  // the host reads "NAME@OFF+LEN" (libjs; devices.js diskOpen)
 static struct vnode *vfs_chead; // most recently used
-static struct vnode *vfs_ctail;
+struct vnode *vfs_ctail;
 int vfs_ncached, vfs_cachedbytes, vfs_dropped;
 
 // libjs announces both (C4IX_I_C4MJS). Native c4m reads whole files and
@@ -487,9 +487,9 @@ int vfs_reclaim(int want) {
     return freed;
 }
 
-void vfs_trim() {
+int vfs_trim_slow() {
     struct vnode *vn, *p;
-    if (!vfs_ctail || !vfs_short()) return;
+    if (!vfs_short()) return 0;
     sched_lock();
     vn = vfs_ctail;
     while (vn && vfs_short()) {

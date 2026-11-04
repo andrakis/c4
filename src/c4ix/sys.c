@@ -457,8 +457,10 @@ static int sys_display(struct task *t, int op, int flags) {
 // kernel's own calls to sys_write and the rest pass its own buffers, so
 // the checks are here and in sys_pmviolation, not in them.)
 static int sys_args_ok(int num, int *args) {
+    int k;
     if (!mmu_on) return 1;
-    if (!uaccess((int)args, 3 * sizeof(int), 0)) return 0;
+    k = (int)args;
+    if (!UARGS_OK(k)) return 0;
     switch (num) {
     case SYS_WRITE:    return uaccess(args[1], args[2], 0);
     case SYS_READ:     return uaccess(args[1], args[2], 1);

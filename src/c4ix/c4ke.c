@@ -497,7 +497,7 @@ int ck_kill(int pid, int sig) {
     // shut a sleeping program down would never get to run, which is
     // exactly what innerbench's graceful shutdown depends on.
     if (t->state == TS_SLEEPING || t->state == TS_WAITING
-        || t->state == TS_BLOCKED) t->state = TS_READY;
+        || t->state == TS_BLOCKED) { t->state = TS_READY; sched_wake = 1; }
     return 0;
 }
 

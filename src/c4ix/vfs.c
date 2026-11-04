@@ -1148,6 +1148,7 @@ int vfs_write(struct file *f, char *buf, int len) {
         if (!vn_grow(vn, vn->size + len)) { sched_unlock(); return -1; }
         memcpy(vn->data + vn->size, buf, len);
         vn->size = vn->size + len;
+        sched_wake = 1;
         sched_unlock();
         return len;
     }
@@ -1209,7 +1210,7 @@ static void file_unref(struct file *f) {
     sched_lock();
     --f->refs;
     if (f->refs > 0) { sched_unlock(); return; }
-    if ((f->flags & 3) != C4IX_O_RDONLY) --f->vn->writers;
+    if ((f->flags & 3) != C4IX_O_RDONLY) { --f->vn->writers; sched_wake = 1; }
     vn_release(f->vn);
     sl4b_free(file_cache, (char *)f);
     sched_unlock();

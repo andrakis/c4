@@ -252,6 +252,8 @@ static int *mmu_pte_out(int *dir, int va) {
 // CPU that has the space loaded but is not running it forgets them when
 // it next loads it (mmu_gen, mmu_switch); one running it is never asked
 // to (docs/c4ix-mmu.md 10).
+int mmu_mapgen;                 // bumped after anything is unmapped (uaccess_args)
+
 int mmu_map(int *dir, int va, int pa, int n, int flags) {
     int *e;
     int k, np;
@@ -268,6 +270,12 @@ int mmu_map(int *dir, int va, int pa, int n, int flags) {
         va = va + MMU_PAGE;
         pa = pa + MMU_PAGE;
         ++k;
+    }
+    // after: whoever read it before looking at the tables finds it changed.
+    // (Atomic: one lost, a CPU could keep a page another has just unmapped.)
+    if (!flags) {
+        if (smp_ncpu > 1) __c4_fadd((int)&mmu_mapgen, 1);
+        else ++mmu_mapgen;
     }
     return 1;
 }
@@ -517,6 +525,7 @@ void mmu_task_done(struct task *t) {
 // and the user task it is likely to go back to finds its own still there.
 void mmu_switch(struct task *t) {
     int d;
+    cpu_self->okva = 0 - 1;
     if (!mmu_on || !t || t->privs != PRIV_USER) return;
     d = (int)MMU_DIR(t);
     mmu_loaded[cpu_self->id] = d;
@@ -1142,6 +1151,17 @@ int uaccess(int p, int n, int w) {
 }
 
 // ... and a string: its length, or -1
+// The arguments at P: mmu_mapgen read before the tables are, so that an unmap
+// after this look changes what the next one compares (UARGS_OK)
+int uaccess_args(int p) {
+    int g;
+    g = mmu_mapgen;
+    if (!uaccess(p, 3 * sizeof(int), 0)) return 0;
+    cpu_self->okva = p & ~(MMU_PAGE - 1);
+    cpu_self->okgen = g;
+    return 1;
+}
+
 int ustrlen(char *s) {
     struct task *t;
     int *d, *e;
@@ -2094,6 +2114,7 @@ void mmu_letgo(struct task *t) {
     if (!t->held) return;
     t->held = 0;
     TF_CLR(t, TF_HELD);
+    sched_wake = 1;
     t->letgo = __time();
     --mmu_nheld;
     klog("mmu: task %d (%s) let go, %d held\n", t->id, t->name, mmu_nheld);

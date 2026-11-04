@@ -582,7 +582,8 @@ enum {
     TF_FAV = 8,                // nice < 0
     TF_SIG = 16,               // killsig or ck_sigpend: a signal to take
     TF_HELD = 32,              // held (mmu.c)
-    TF_NOPAGE = 64             // TS_ZOMBIE or TS_VFORK: its pages stay
+    TF_NOPAGE = 64,            // TS_ZOMBIE or TS_VFORK: its pages stay
+    TF_PINNED = 128            // cpumask: only some CPUs may run it
 };
 #define TF_SET(t, b) ((t)->tflags = (t)->tflags | (b))
 #define TF_CLR(t, b) ((t)->tflags = (t)->tflags & ~(b))
@@ -773,6 +774,10 @@ void         sched_stop();
 void         sched_yield();
 void         sched_new_slice();   // the running task's slice restarts
 void         sched_setnice(struct task *t, int nice);   // its nice, and the count of those with one
+// Something may be ready for an idle CPU that was not: smp_kick looks at this
+// trap's end, not at the next millisecond's (sched.c). A site that does not say
+// costs that millisecond, never a wakeup.
+extern int   sched_wake;
 int          sched_intr_below(struct task *root);   // a terminal's Ctrl-C
 // Preemption masked (nestable). In the trap handler, which nothing
 // preempts, that is only the depth; but for the light path, which has not
@@ -810,6 +815,8 @@ struct cpu {
     struct task *idle;         // this CPU's idle task
     int bkl_task;              // the running task holds the kernel lock (a kernel task)
     int light;                 // a trap on the light path, without the kernel lock: sched_lock takes it
+    int okva;                  // a page the running task may read, checked (UARGS_OK), -1 for none
+    int okgen;                 // ... as of this mmu_mapgen
 };
 extern struct cpu *cpu_self;
 extern int smp_ncpu;           // processors in use: 1 unless the host has SMP
@@ -975,6 +982,13 @@ char *mmu_kalloc(int n);
 // Could the running task use the N bytes at P (to write, if W)? And the
 // string at S: its length, or -1. Always yes without the MMU.
 int  uaccess(int p, int n, int w);
+// ... and a syscall's three words of arguments, in the task's stack: a page
+// checked once, while the task runs here and nothing anywhere is unmapped
+// (mmu_mapgen), for the check is a fifth of what a syscall costs. Only for
+// reading: a page that has gone out since is read through the kernel's map.
+extern int mmu_mapgen;
+int  uaccess_args(int p);
+#define UARGS_OK(p) (((p) & ~(MMU_PAGE - 1)) == cpu_self->okva && cpu_self->okgen == mmu_mapgen && ((p) & (MMU_PAGE - 1)) <= MMU_PAGE - 3 * sizeof(int) ? 1 : uaccess_args(p))
 int  ustrlen(char *s);
 int  uvecok(char **v, int n);          // N strings (N < 0: up to a null pointer) and their vector
 char *ucopy(char *p, int n);           // N bytes at P, copied into the running task's memory

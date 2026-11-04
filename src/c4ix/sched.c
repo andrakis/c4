@@ -225,13 +225,20 @@ static int smp_idlefor(struct task *n) {
 #define SCHED_MAYBE(n, now) ((n)->state == TS_READY || ((n)->state == TS_SLEEPING ? (now) - (n)->ck_wake >= 0 || (n)->ev_wait : (n)->state == TS_BLOCKED))
 
 // Work some idle CPU could do: an IPI to one for each task ready, among
-// the CPUs it may run on. Kernel tasks are CPU 0's. Under the lock, at
-// the end of every trap; only when some CPU is idle does it look.
-static void smp_kick() {
+// the CPUs it may run on. Kernel tasks are CPU 0's. Under the lock, at the end
+// of a trap, when some CPU is idle and something has changed: a switch, or
+// sched_wake. Each millisecond of the machine's clock it looks anyway, for what
+// nothing says: a sleeper's time come, an event in a window's ring, which the
+// host writes. A walk at every trap made a getpid with 50 tasks asleep cost 6
+// times what it did alone. A millisecond is 100,000 cycles at 100 MHz, two
+// slices, in which the CPU running would be picking for itself anyway.
+int sched_wake;
+static int smp_kickms;          // the machine ms it last looked
+
+static void smp_kick(int now) {
     struct task *n;
-    int k, me, now;
+    int k, me;
     me = cpu_self->id;
-    now = __time();
     // (kernel tasks are the list's first: CPU 0 is theirs before anyone's)
     n = task_head;
     while (n && (smp_idlemask & ~(1 << me))) {
@@ -579,6 +586,7 @@ void task_zombify(struct task *t, int code) {
             (w->wait_for == t->id || (w->wait_for == -1 && t->parent == w->id))) {
             w->wait_posix = 0;
             w->state = TS_READY;
+            sched_wake = 1;
             w->woke = 1;
             return;
         }
@@ -589,6 +597,7 @@ void task_zombify(struct task *t, int code) {
             w->wait_result = code;
             w->sv_a = code;
             w->state = TS_READY;
+            sched_wake = 1;
             w->woke = 1;
             task_release(t);
             return;
@@ -669,9 +678,11 @@ void sched_setnice(struct task *t, int nice) {
 }
 
 // the cycles a task runs before its turn passes
-static int sched_turn(struct task *t) {
-    return t->nice < 0 ? sched_interval * (1 - t->nice) : sched_interval;
-}
+#define sched_turn(t) ((t)->nice < 0 ? sched_interval * (1 - (t)->nice) : sched_interval)
+
+// May the task running here go on running here? Only being held or pinned can
+// say no; anything else sched_mine asks is true of it.
+#define SCHED_STAYS(t) (!((t)->tflags & (TF_HELD | TF_PINNED)) || sched_mine(t))
 
 // A task that has woken and is more favoured than T, this CPU's to run:
 // the most favoured, or 0
@@ -712,14 +723,7 @@ int sched_nice(int id, int nice) {
 // and this CPU has nothing to settle. Everything else takes the lock, and
 // does what the light path leaves for later -- the reaping, the stack
 // guard -- at the next trap.
-static int sched_light(int trap, int param) {
-    struct task *t;
-    t = sched_cur;
-    return trap == C4IX_TRAP_PM && (param == C4IX_OP_MALC || param == C4IX_OP_FREE) &&
-        t && t->state == TS_RUNNING && t->privs == PRIV_USER && !t->ck_sigpend && !mmu_short &&
-        !sched_dying && !sched_resched && !sched_reload && !cpu_self->prev &&
-        (!sched_interval || acct_in - sched_slice0 < sched_turn(t));
-}
+#define sched_light(t, trap, param) ((trap) == C4IX_TRAP_PM && ((param) == C4IX_OP_MALC || (param) == C4IX_OP_FREE) && (t) && (t)->state == TS_RUNNING && ((t)->tflags & (TF_USER | TF_SIG)) == TF_USER && !mmu_short && !(sched_dying | sched_resched | sched_reload | (int)cpu_self->prev) && (!sched_interval || acct_in - sched_slice0 < sched_turn(t)))
 
 static void sched_trap(int interval, int trap, int param, int mode, int a, int bp, int sp, int returnpc) {
     struct task *t, *n, *me, *fv;
@@ -775,8 +779,8 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
         __c4_configure(C4IX_CONF_INTERVAL, 0);
         // The light path: a program's malloc or free that leaves it
         // running is served without the kernel lock (sched_light)
-        if (sched_light(trap, param)) {
-            me = sched_cur;
+        me = sched_cur;
+        if (sched_light(me, trap, param)) {
             ++me->ntraps;
             me->uacc = me->uacc + (acct_in - acct_out);
             d = acct_out;
@@ -902,7 +906,7 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
         sched_slice0 = acct_in;
     }
     else if ((trap == C4IX_TRAP_ILLOP || trap == C4IX_TRAP_PM) && !sched_resched
-        && t->state == TS_RUNNING && (t->cpuidle || sched_mine(t))
+        && t->state == TS_RUNNING && SCHED_STAYS(t)
         && (!sched_interval || acct_in - sched_slice0 < sched_turn(t)))
         n = t;
     // An IPI arrives whatever the mask: a task that masked preemption (an
@@ -935,6 +939,7 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     reload = sched_reload;
     sched_reload = 0;
     if (n != t || reload) {
+        sched_wake = 1;
         if (!reload) {
             t->sv = SV_REGS;
             t->sv_a = a; t->sv_bp = bp; t->sv_sp = sp; t->sv_pc = returnpc;
@@ -1013,7 +1018,14 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     // a kernel task keeps a hold of its own while it runs, and the
     // handler lets go of its.
     if (smp_ncpu > 1) {
-        if (smp_idlemask & ~(1 << cpu_self->id)) smp_kick();
+        if (smp_idlemask & ~(1 << cpu_self->id)) {
+            d = __time();
+            if (sched_wake || d != smp_kickms) {
+                sched_wake = 0;
+                smp_kickms = d;
+                smp_kick(d);
+            }
+        }
         hold = sched_cur->privs == PRIV_KERNEL && !sched_cur->cpuidle;
         if (cpu_self->bkl_task && !hold) { bkl_drop(); cpu_self->bkl_task = 0; }
         else if (!cpu_self->bkl_task && hold) { bkl_take(); cpu_self->bkl_task = 1; }
@@ -1165,6 +1177,8 @@ int sched_affinity(int id, int mask) {
     old = t->cpumask;
     if (mask >= 0) {
         t->cpumask = mask;
+        TF_PUT(t, TF_PINNED, mask);
+        sched_wake = 1;
         if (t == sched_cur) sched_resched = 1;
     }
     sched_unlock();

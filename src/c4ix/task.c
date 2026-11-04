@@ -53,6 +53,7 @@ struct task *task_create(char *name, int entry, int argc, int argv) {
     if (!(t = task_alloc(name))) return 0;
     t->entry = entry;
     t->state = TS_READY;
+    sched_wake = 1;
     if (!sched_forge(t, entry, argc, argv)) {
         sl4b_free(task_cache, (char *)t);
         return 0;
@@ -81,6 +82,7 @@ struct task *task_vchild(struct task *p) {
     struct task *t;
     if (!(t = task_alloc(p->name))) return 0;
     t->state = TS_READY;
+    sched_wake = 1;
     if (!sched_forge(t, 0, 0, 0)) {
         sl4b_free(task_cache, (char *)t);
         return 0;
@@ -92,6 +94,7 @@ struct task *task_vchild(struct task *p) {
     t->privs = p->privs;
     TF_PUT(t, TF_USER, t->privs == PRIV_USER);
     t->cpumask = p->cpumask;
+    TF_PUT(t, TF_PINNED, t->cpumask);
     sched_setnice(t, p->nice);
     t->spawn_stack = p->spawn_stack;
     t->img_libs = p->img_libs;
@@ -115,7 +118,7 @@ void task_unborrow(struct task *t) {
     TF_CLR(t, TF_VFCHILD);
     t->img_libs = 0;
     t->img_nlibs = 0;
-    if (p->state == TS_VFORK && p->wait_for == t->id) { p->state = TS_READY; TF_CLR(p, TF_NOPAGE); }
+    if (p->state == TS_VFORK && p->wait_for == t->id) { p->state = TS_READY; TF_CLR(p, TF_NOPAGE); sched_wake = 1; }
 }
 
 int task_strvec(char **v, int n, int *pvec, int *pdata) {

@@ -1,7 +1,7 @@
 # games
 
-The games c4 runs -- Wolfenstein 3D, Doom, OpenTyrian and Rise of the
-Triad -- are not part of c4's repository. Each lives in one of its own,
+The games c4 runs -- Wolfenstein 3D, Doom, OpenTyrian, Rise of the
+Triad and Quake -- are not part of c4's repository. Each lives in one of its own,
 on GitHub, on upstream's history with c4's port on top as commits, and
 is an optional submodule here:
 
@@ -11,6 +11,7 @@ is an optional submodule here:
 | `games/doom` | [andrakis/c4-Doom](https://github.com/andrakis/c4-Doom) | doomgeneric |
 | `games/tyrian` | [andrakis/c4-Tyrian](https://github.com/andrakis/c4-Tyrian) | OpenTyrian |
 | `games/rott` | [andrakis/c4-ROTT](https://github.com/andrakis/c4-ROTT) | icculus.org's Rise of the Triad 1.1.2 |
+| `games/quake` | c4-Quake | quakegeneric (GPL WinQuake) |
 
 A clone of c4 has none of them (`update = none` in `.gitmodules`).
 To have one:
@@ -69,6 +70,7 @@ not the one the game's `c4.mk` gives:
 | Doom | `doom1.wad`, id's shareware WAD (1.9) | `DOOM_WAD` |
 | Rise of the Triad | `1rott13.zip`, Apogee's shareware package | `ROTT_ZIP` |
 | OpenTyrian | `tyrian21.zip`, Tyrian 2.1, the user's own copy: it may not be passed on | `TYRIAN_ZIP` |
+| Quake | `quake106.zip`, id's shareware package (`pak0.pak` is taken out of it) | `QUAKE_ZIP` |
 
 ```
 DOOM_WAD=~/doom1.wad make doom-data

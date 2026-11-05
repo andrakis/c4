@@ -94,6 +94,10 @@ const SYSTEMS = {
   // Rise of the Triad (games/rott), the shareware episode
   rott: { label: 'Rise of the Triad (bare machine)', image: `${IMAGES}/games/rott.c4r`, disk: `${IMAGES}/games`,
           argv: ['rott.c4r'], mhz: 400, persist: 'rott' },
+  // Quake (games/quake), the shareware episode. The bare libc holds a file in
+  // memory whole, and its pak is 18 MB.
+  quake: { label: 'Quake (bare machine)', image: `${IMAGES}/games/quake.c4r`, disk: `${IMAGES}/games`,
+           argv: ['quake.c4r'], mhz: 400, mem: 128, persist: 'quake' },
   'wolf3d-c4ix': { label: 'Wolfenstein 3D (C4IX, direct)', image: `${IMAGES}/c4ix32.c4r`, disk: `${IMAGES}/disk`,
                    argv: ['c4ix32.c4r', '-e', 'persist -d 60 &', '-e', 'wolf3d --direct'], persist: 'c4ix', mhz: 400, mmu: true },
   'gui-demo': { label: 'GUI demo (bare machine)', image: `${IMAGES}/gui-demo.c4r`, disk: null, argv: ['gui-demo.c4r'] },

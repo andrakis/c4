@@ -386,6 +386,8 @@ Not needed after all: `memrchr`, `strverscmp`, `strsignal`, and
     `poll.h`, `paths.h`, `libgen.h`, `fnmatch.h`, `glob.h`, `regex.h`.
   - Each one declares only what exists. A use of anything else must fail at
     link time, not misbehave at run time.
+- (`games/quake/source/qg-jmp.c` is a working `setjmp` and `longjmp` for the VM, by two
+  `LEV`s, for whatever comes to need them in libc.)
 - **`setjmp`/`longjmp`:** they must link, because `vfork_daemon_rexec.c` is
   linked, and it is linked because of `prctl`. They need not work with
   NOFORK applets off, since `die_jmp` is used only there.

@@ -114,6 +114,7 @@ node libjs/tests/test-rom.mjs    || fail=1
 part_desktop () {
 node libjs/tests/test-desktop.mjs || fail=1
 node libjs/tests/test-boot-desktop.mjs || fail=1
+node libjs/tests/test-desktop-quake.mjs || fail=1  # Quake in a desktop window, with no display of its own
 node libjs/tests/test-desktop-doom.mjs || fail=1  # Doom in a desktop window, 32 MB, MMU, 4 CPUs: its lent canvas read a page at a time
 }
 part_c4dos () {
@@ -149,6 +150,7 @@ node libjs/tests/test-c4ix-lazyrace.mjs || fail=1   # a program's free and anoth
 PARALLEL=1 node libjs/tests/test-c4ix-lazyrace.mjs || fail=1   # ... on threads
 node libjs/tests/test-c4ix-loadctl.mjs || fail=1   # more programs than memory, on threads: load control, and memory in one piece after
 PARALLEL=0 node libjs/tests/test-c4ix-loadctl.mjs || fail=1   # ... on simulated CPUs
+node libjs/tests/test-c4ix-softpin.mjs || fail=1   # what draws goes to CPU 0, unless it was pinned; its children go anywhere
 node libjs/tests/test-c4ix-movable.mjs || fail=1   # images, stacks and small blocks move while they run, on threads
 PARALLEL=0 node libjs/tests/test-c4ix-movable.mjs || fail=1   # ... on simulated CPUs
 node libjs/tests/test-c4ix-par.mjs || fail=1    # two CPUs on threads: cc links with libc4ix, and the program runs on each

@@ -11,7 +11,7 @@ The rules for these ports:
 - compiler gaps are fixed as they come up; this file only finds and sizes
   them;
 - memory is not a concern (`?mem=64` raises libjs's arena);
-- Quake is out for now.
+- Quake was out at the time. It has since been ported (games/quake/README.c4.md).
 
 Status (2026-10-23): **Doom is ported** (games/doom/README.md): doomgeneric,
 on C4IX's whole display, under C4DOS and on the bare machine, its demos'

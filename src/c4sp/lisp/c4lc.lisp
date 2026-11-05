@@ -126,6 +126,7 @@
 	(set! lex:conforming Conf)
 	(set! gen:objmode Obj)
 	(set! gen:cisc Cisc)
+	(set! gen:fuse Fuse)
 	(set! gen:nobuiltin NoBuiltin)
 	(set! gen:pic Pic)
 	(set! lex:locs Lines)

@@ -171,3 +171,12 @@ k-arg-d 40140000 0
 k-cmp 1 1 0 1
 k-cmp-d 1 1
 k-cast 40400000 c0400000
+stl-f 40400000
+stl-g 3fc00000
+stl-val 40600000
+stl-val2 40200000
+stl-post 40200000
+stl-post2 40600000
+stl-pre 40200000
+stl-d 40140000 0
+stl-d2f 40a00000

@@ -3534,6 +3534,23 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	   ./c4m32 load-c4r.c -- .c4lc_e.c4r | cmp - src/c4sp/tests/expected/c4lc-m7ext.txt || exit 1; \
 	   echo "  m7 extern table ok, linked at 32 and 64 bits: c4lc $$fl"; \
 	 done
+	# ... and -mfuse, whose STL and POPA come from the code generator: only c4mp and
+	# libjs have the fused opcodes
+	@./c4sp src/c4sp/lisp/c4lc.lisp -O -mfuse -c $(TESTS)/c4lc_m7ext_a.c .c4lc_ea.c4o > /dev/null || exit 1; \
+	 ./c4sp src/c4sp/lisp/c4lc.lisp -O -mfuse -c $(TESTS)/c4lc_m7ext_b.c .c4lc_eb.c4o > /dev/null || exit 1; \
+	 $(C4RLINK) .c4lc_ea.c4o .c4lc_eb.c4o -o .c4lc_e.c4r > /dev/null || exit 1; \
+	 ./c4mp .c4lc_e.c4r | cmp - src/c4sp/tests/expected/c4lc-m7ext.txt || exit 1; \
+	 ./c4sp src/c4sp/lisp/c4lc.lisp -O -mfuse $(TESTS)/c4lc_float.c .c4lc_e.c4r > /dev/null || exit 1; \
+	 ./c4mp .c4lc_e.c4r | cmp - src/c4sp/tests/expected/c4lc-float.txt || exit 1; \
+	 if command -v node > /dev/null; then \
+	   ./c4sp32 src/c4sp/lisp/c4lc.lisp -O -mfuse -c $(TESTS)/c4lc_m7ext_a.c .c4lc_ea.c4o > /dev/null || exit 1; \
+	   ./c4sp32 src/c4sp/lisp/c4lc.lisp -O -mfuse -c $(TESTS)/c4lc_m7ext_b.c .c4lc_eb.c4o > /dev/null || exit 1; \
+	   ./c4rlink32 .c4lc_ea.c4o .c4lc_eb.c4o -o .c4lc_e.c4r > /dev/null || exit 1; \
+	   node libjs/cli.js .c4lc_e.c4r | cmp - src/c4sp/tests/expected/c4lc-m7ext.txt || exit 1; \
+	   ./c4sp32 src/c4sp/lisp/c4lc.lisp -O -mfuse $(TESTS)/c4lc_float.c .c4lc_e.c4r > /dev/null || exit 1; \
+	   node libjs/cli.js .c4lc_e.c4r | cmp - src/c4sp/tests/expected/c4lc-float.txt || exit 1; \
+	 fi
+	@echo "  -mfuse: the extern table and the float tests run, fused, on c4mp and libjs"
 	@rm -f .c4lc_ea.c4o .c4lc_eb.c4o .c4lc_e.c4r
 	# M4 qualifiers. const: every way of dropping a const without a cast
 	# warns and no other way does (c4lc_m4q.c, which then runs: a static

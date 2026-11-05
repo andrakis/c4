@@ -261,6 +261,17 @@ VARIABLE VUNUSED   0 VUNUSED !
    n >rhs @ GEN-ADDR   oPSH OP,
    n >lhs @ CT T-SIZE oIMM OP2,   oPSH OP,
    oMCPY OP,   3 oADJ OP2, ;
+\ A word-sized local, under -mfuse: the value and then STL, with no address on the
+\ stack while the value is worked out (c4lc's g:stl?).
+: STL? ( lhs -- f ) {: l | y t -- f :}
+   FUSE @ 0= IF 0 EXIT THEN
+   l >TAG n_var <> IF 0 EXIT THEN
+   l >sym @ TO y
+   y y.agg @ IF 0 EXIT THEN
+   y y.ct @ TO t
+   t T-BYTE? t T-HALF? OR t T-STRUCT? OR 0= ;
+: STL, ( lhs -- )  >sym @ y.val @ oSTL OP2, ;
+
 \ x, whose value nobody wants (c4lc's g:effect).
 : EFFECT ( x -- ) {: x -- :}
    x >TAG n_preinc =  x >TAG n_predec = OR  x >TAG n_postinc = OR  x >TAG n_postdec = OR
@@ -279,6 +290,14 @@ VARIABLE VUNUSED   0 VUNUSED !
       n >lhs @ >rhs @ GEN  oPSH OP,
       n >rhs @ GEN  oSXI OP,
       u 0= n >lhs @ CT t_uchar = AND IF 255 MASK, THEN EXIT THEN
+   n >lhs @ STL? IF
+      n >lhs @ S" assignment" WCHECK
+      n >rhs @ GEN
+      n >rhs @ CT  n >lhs @ CT  SCONV,
+      n >lhs @ CT T-PTR? IF
+         n >lhs @ CQ  n >rhs @ CQ  DROPPED? IF S" assignment" QWARN THEN THEN
+      n >lhs @ STL,
+      EXIT THEN
    n >lhs @ GEN-ADDR
    n >lhs @ S" assignment" WCHECK
    oPSH OP,
@@ -641,22 +660,33 @@ VARIABLE UFN   0 UFN !
    n >opnd @ CT TO t
    n >opnd @ GEN-ADDR
    n >opnd @ op oADD = IF S" increment" ELSE S" decrement" THEN WCHECK
-   oPSH OP,
+   n >opnd @ STL? 0= IF oPSH OP, THEN
    t LOAD,
    oPSH OP,  t STEP-OF oIMM OP2,  op OP,
    post 0= IF t T-PROMOTE t SCONV, THEN
-   t STORE,
+   n >opnd @ STL? IF n >opnd @ STL, ELSE t STORE, THEN
    post 0=  u 0= AND  t t_uchar = AND IF 255 MASK, THEN ;
+\ a local, wanted: the value is on the stack through the store, and POPA has it back
+: POST-LOCAL, ( node op -- ) {: n op | t -- :}
+   n >opnd @ CT TO t
+   n >opnd @ GEN-ADDR
+   n >opnd @ op oADD = IF S" increment" ELSE S" decrement" THEN WCHECK
+   t LOAD,
+   oPSH OP,  oPSH OP,  t STEP-OF oIMM OP2,  op OP,
+   n >opnd @ STL,
+   oPOPA OP, ;
 :M GEN n_preinc   oADD 0 INCDEC, ;M
 :M GEN n_predec   oSUB 0 INCDEC, ;M
 :M GEN n_postinc {: n | u -- :}
    VUNUSED @ TO u  0 VUNUSED !
+   u 0= IF n >opnd @ STL? IF n oADD POST-LOCAL, EXIT THEN THEN
    n oADD 1 INCDEC,
    u IF EXIT THEN
    oPSH OP, n >opnd @ CT STEP-OF oIMM OP2, oSUB OP,
    n >opnd @ CT t_uchar = IF 255 MASK, THEN ;M
 :M GEN n_postdec {: n | u -- :}
    VUNUSED @ TO u  0 VUNUSED !
+   u 0= IF n >opnd @ STL? IF n oSUB POST-LOCAL, EXIT THEN THEN
    n oSUB 1 INCDEC,
    u IF EXIT THEN
    oPSH OP, n >opnd @ CT STEP-OF oIMM OP2, oADD OP,

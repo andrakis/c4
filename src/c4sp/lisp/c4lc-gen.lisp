@@ -553,6 +553,27 @@
 ;; the value, so that p[i] = c; costs what it always did, and i++; what ++i; does,
 ;; with no step taken back off.
 (define g:vunused false)
+;; A word-sized local has no need of its address on the stack while the value is
+;; worked out: under -mfuse, the value and then STL. It is what STL is for, and the
+;; fuse pass cannot make it, not seeing past the value in LEA n; PSH; ...; SI.
+(define g:stl? (lambda (lv)
+	(if gen:fuse
+	(if (= (head lv) 'var)
+		(begin
+			(define s (g:find (g:second lv)))
+			(if (= (g:second s) 'loc)
+			(if (= (index s 4) nil)
+				(begin
+					(define t (g:third s))
+					(if (g:ll? t) false
+					(if (g:bytety? t) false
+					(if (g:halfty? t) false
+					(if (g:svalue? t) false
+					(not (g:rowty? t)))))))
+			false) false))
+	false) false)))
+(define g:stl! (lambda (lv)
+	(g:emit (list 'STL (- g:loc (index (g:find (g:second lv)) 3))))))
 (define g:store! (lambda (ty)
 	(if (g:ll? ty) (g:llcopy)
 	(if (g:bytety? ty) (g:emit '(SC))
@@ -1278,6 +1299,12 @@
 	(begin
 		(define t (g:lvtype lv))
 		(if (g:fp? t)
+			(if (g:stl? lv)
+			(begin
+				(g:wcheck lv "assignment")
+				(g:fpval rv t)
+				(g:stl! lv)
+				(set! g:ty t))
 			(begin
 				(g:addr lv)
 				(if g:lastarray (g:die "bad lvalue in assignment") nil)
@@ -1285,7 +1312,7 @@
 				(g:emit '(PSH))
 				(g:fpval rv t)
 				(g:store! t)
-				(set! g:ty t))
+				(set! g:ty t)))
 		;; an integer lvalue: the value converted as a cast converts it
 		(g:expr (list 'assign lv (list 'cast t rv)))))))
 
@@ -1596,17 +1623,18 @@
 	(begin
 		(define used (not g:vunused))
 		(set! g:vunused false)
+		(define stl (g:stl? (g:second e)))
 		(g:addr (g:second e))
 		(if g:lastarray (g:die "bad lvalue in pre-increment") nil)
 		(define t g:ty)
 		(g:wcheck (g:second e) (if (= op 'ADD) "increment" "decrement"))
-		(g:emit '(PSH))
+		(if stl nil (g:emit '(PSH)))
 		(g:load! t)
 		(g:emit '(PSH))
 		(g:emit (list 'IMM (g:step t)))
 		(g:emit (list op))
 		(if post nil (g:sconv! (g:promote t) t))
-		(g:store! t)
+		(if stl (g:stl! (g:second e)) (g:store! t))
 		(if (if post false (if used (= t g:UCHAR) false)) (g:mask! 255) nil)
 		(set! g:ty t))))
 
@@ -1615,6 +1643,22 @@
 	(begin
 		(define used (not g:vunused))
 		(set! g:vunused false)
+		(if (if used (g:stl? (g:second e)) false)
+			;; a local, wanted: the value is on the stack through the store
+			;; and POPA has it back, for *p++ in a loop
+			(begin
+				(g:addr (g:second e))
+				(define t g:ty)
+				(g:wcheck (g:second e) (if (= op 'ADD) "increment" "decrement"))
+				(g:load! t)
+				(g:emit '(PSH))
+				(g:emit '(PSH))
+				(g:emit (list 'IMM (g:step t)))
+				(g:emit (list op))
+				(g:stl! (g:second e))
+				(g:emit '(POPA))
+				(set! g:ty t))
+		(begin
 		(g:incdec e op true)
 		(define t g:ty)
 		(if used
@@ -1624,7 +1668,7 @@
 				(g:emit (list unop))
 				(if (= t g:UCHAR) (g:mask! 255) nil))
 			nil)
-		(set! g:ty t))))
+		(set! g:ty t))))))
 
 ;; The types down an expression's left spine, while it is binary
 ;; operators: (type-of x, type-of its left operand, ...), in one pass.
@@ -1957,6 +2001,18 @@
 						(if (= (head lv) 'index) (g:cisc-eligible-index? lv) false)
 						false)
 					(g:indexstore-cisc lv (g:third e))
+					(if (g:stl? lv)
+					(begin
+						(define t (g:lvtype lv))
+						(g:wcheck lv "assignment")
+						(g:expr (g:third e))
+						(g:sconv! g:ty t)
+						(if (g:isptr t)
+							(if (g:dropped? (g:qualof lv) (g:qualof (g:third e)))
+								(g:qwarn "assignment") nil)
+						nil)
+						(g:stl! lv)
+						(set! g:ty t))
 					(begin
 						(g:addr lv)
 						(if g:lastarray (g:die "bad lvalue in assignment") nil)
@@ -1970,7 +2026,7 @@
 								(g:qwarn "assignment") nil)
 						nil)
 						(g:store! t)
-						(set! g:ty t)))
+						(set! g:ty t))))
 				(if (if used (= g:ty g:UCHAR) false) (g:mask! 255) nil))
 		(if (= h 'deref)
 			(begin
@@ -2515,6 +2571,7 @@
 ;; docs/c4or1k-design.md's M12 section. Off by default; code compiled
 ;; with it must run under c4mp, not c4m (c4m traps the new opcodes).
 (define gen:cisc false)
+(define gen:fuse false)
 (define g:stubs nil)     ;; (LABEL ...) pending stub labels
 (define g:externs nil)   ;; (NAME TYPE VARIADIC) in first-seen order
 (define g:nexterns 0)

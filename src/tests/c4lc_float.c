@@ -187,5 +187,17 @@ int main() {
         printf("k-cmp-d %d %d\n", two > 1.5, (float)two <= 2.0);
         printf("k-cast %x %x\n", fb((float)3), fb((float)-3));
     }
+    // a float local takes its value through STL under -mfuse: the assignment's own
+    // value, ++ and --, and a double beside it, which does not fit in the word
+    {
+        float sa, sb, sc;
+        double sd;
+        sa = 1.5f; sb = sa; sa = sb + sb; pf("stl-f", sa); pf("stl-g", sb);
+        sc = (sa = 2.5f) + 1; pf("stl-val", sc); pf("stl-val2", sa);
+        sb = sa++; pf("stl-post", sb); pf("stl-post2", sa);
+        sb = --sa; pf("stl-pre", sb);
+        sd = sa; sd = sd * 2; pd("stl-d", sd);
+        sc = sd; pf("stl-d2f", sc);
+    }
     return 0;
 }

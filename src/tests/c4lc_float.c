@@ -140,5 +140,14 @@ int main() {
     b = 0.1f; d = b; c = d; printf("roundtrip %d\n", b == c);
     d = 0.1; c = d; printf("narrowed %d\n", c == d);
     printf("sizeof %d %d\n", (int)sizeof(double), (int)sizeof(1.5));
+
+    // no spaces: the - and the + are the expression's
+    a = 2.5; pd("tight-", 1.0-a); pd("tight+", 1.0+a); pd("tight-e", 1.5e1-a); pd("tighte-", 1.5e-1+a);
+    // a local float array of integers: floats, each of them
+    {
+        float t[3] = {-1, 0, 2};
+        float m[2] = {1, -1.0};
+        pf("arr0", t[0]); pf("arr1", t[1]); pf("arr2", t[2]); pf("mix0", m[0]); pf("mix1", m[1]);
+    }
     return 0;
 }

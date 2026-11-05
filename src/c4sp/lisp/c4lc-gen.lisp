@@ -547,6 +547,11 @@
 	(if (if (if (= ty g:UINT) true (= ty g:FLOAT)) g:W64 false) (begin (g:emit '(LI)) (g:mask! g:M32))
 	(if (g:ll? ty) nil
 	(g:emit '(LI))))))))))
+;; SC leaves in A the byte it stored as a signed char (c4's own rule, right for
+;; char), so the value of an assignment to an unsigned char, or of its ++ or --,
+;; has to be cut back to 0..255: (uc = 255) == 255. g:stmt says when nobody wants
+;; the value, so that `p[i] = c;` costs what it always did.
+(define g:vunused false)
 (define g:store! (lambda (ty)
 	(if (g:ll? ty) (g:llcopy)
 	(if (g:bytety? ty) (g:emit '(SC))
@@ -1542,6 +1547,8 @@
 	(g:incdec e op false)))
 (define g:incdec (lambda (e op post)
 	(begin
+		(define used (not g:vunused))
+		(set! g:vunused false)
 		(g:addr (g:second e))
 		(if g:lastarray (g:die "bad lvalue in pre-increment") nil)
 		(define t g:ty)
@@ -1553,16 +1560,20 @@
 		(g:emit (list op))
 		(if post nil (g:sconv! (g:promote t) t))
 		(g:store! t)
+		(if (if post false (if used (= t g:UCHAR) false)) (g:mask! 255) nil)
 		(set! g:ty t))))
 
 ;; x++ / x-- (post): as pre, then undo the adjustment in the result
 (define g:postincdec (lambda (e op unop)
 	(begin
+		(define used (not g:vunused))
+		(set! g:vunused false)
 		(g:incdec e op true)
 		(define t g:ty)
 		(g:emit '(PSH))
 		(g:emit (list 'IMM (g:step t)))
 		(g:emit (list unop))
+		(if (if used (= t g:UCHAR) false) (g:mask! 255) nil)
 		(set! g:ty t))))
 
 ;; The types down an expression's left spine, while it is binary
@@ -1876,6 +1887,8 @@
 		(if (= h 'assign)
 			(begin
 				(define lv (g:second e))
+				(define used (not g:vunused))
+				(set! g:vunused false)
 				(if (if gen:cisc
 						(if (= (head lv) 'index) (g:cisc-eligible-index? lv) false)
 						false)
@@ -1893,7 +1906,8 @@
 								(g:qwarn "assignment") nil)
 						nil)
 						(g:store! t)
-						(set! g:ty t))))
+						(set! g:ty t)))
+				(if (if used (= g:ty g:UCHAR) false) (g:mask! 255) nil))
 		(if (= h 'deref)
 			(begin
 				(g:expr (g:second e))
@@ -2112,7 +2126,12 @@
 				(define scope g:syms)
 				(g:stmts (tail s))
 				(set! g:syms scope))
-		(if (= h 'expr) (g:expr (g:second s))
+		(if (= h 'expr)
+			(begin
+				(if (if (if (= (head (g:second s)) 'assign) true (g:incdec? (head (g:second s))))
+						(= (g:lvtype (g:second (g:second s))) g:UCHAR) false)
+					(set! g:vunused true) nil)
+				(g:expr (g:second s)))
 		(if (= h 'if) (g:ifstmt s)
 		(if (= h 'while) (g:whilestmt s)
 		(if (= h 'dowhile) (g:dowhilestmt s)
@@ -3131,7 +3150,7 @@
 					(g:emit '(SI))))
 			(g:localaggr d val)))
 		(if (if (= (head init) 'braces)
-				(not (if (g:ll? (- (g:second d) g:PTR)) true (g:rowty? (- (g:second d) g:PTR)))) false)
+				(not (if (g:ll? (- (g:second d) g:PTR)) true (if (g:fp? (- (g:second d) g:PTR)) true (g:rowty? (- (g:second d) g:PTR))))) false)
 			(begin
 				(if (> (length (g:second init)) size)
 					(g:die (+ "too many initializers for " (g:third d))) nil)

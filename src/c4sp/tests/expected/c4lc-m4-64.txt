@@ -69,3 +69,14 @@ fmt 4464 65535 -5 5 deadbeef 10
 fmt2 ff -56    42|7    |
 loop 55 0
 wrapped 0
+uc-ne 0
+uc-eq 1
+uc-val 255 255
+sc-val -1 -1
+uc-cut 44
+uc-pre 255 255
+uc-post 255 0
+uc-dec 255 255
+uc-postdec 0 255
+uc-stmt 201
+uc-index 200 200

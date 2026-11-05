@@ -132,3 +132,12 @@ cond3 3dcccccd
 roundtrip 1
 narrowed 0
 sizeof 8 8
+tight- bff80000 0
+tight+ 400c0000 0
+tight-e 40290000 0
+tighte- 40053333 33333333
+arr0 bf800000
+arr1 0
+arr2 40000000
+mix0 3f800000
+mix1 bf800000

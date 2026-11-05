@@ -113,6 +113,11 @@ HELP-RESET
    t T-BYTE? IF oSC OP, EXIT THEN
    t T-HALF? IF h_st16 2 HCALL EXIT THEN
    oSI OP, ;
+\ SC leaves in A the byte it stored as a signed char (c4's own rule, right for
+\ char), so the value of an assignment to an unsigned char, or of its ++ or
+\ --, has to be cut back to 0..255. n_expst says when nobody wants the value,
+\ so that `p[i] = c;` costs what it always did. As c4lc's g:vunused.
+VARIABLE VUNUSED   0 VUNUSED !
 
 \ The conversion code for a value of type f in A, to type t: only to an
 \ integer type, and nothing when it already fits (c4lc's g:convert!).
@@ -256,15 +261,17 @@ HELP-RESET
    n >rhs @ GEN-ADDR   oPSH OP,
    n >lhs @ CT T-SIZE oIMM OP2,   oPSH OP,
    oMCPY OP,   3 oADJ OP2, ;
-:M GEN n_asgn {: n -- :}
+:M GEN n_asgn {: n | u -- :}
    n >lhs @ CT T-STRUCT? IF n STRUCT-ASGN EXIT THEN
+   VUNUSED @ TO u  0 VUNUSED !
    \ base and index both stay on the stack, unscaled, until the value is
    \ evaluated -- SXI wants all three, and computing the address first
    \ would need a slot to hold it across the right-hand side.
    n >lhs @ CISC-INDEX? IF
       n >lhs @ >lhs @ GEN  oPSH OP,
       n >lhs @ >rhs @ GEN  oPSH OP,
-      n >rhs @ GEN  oSXI OP, EXIT THEN
+      n >rhs @ GEN  oSXI OP,
+      u 0= n >lhs @ CT t_uchar = AND IF 255 MASK, THEN EXIT THEN
    n >lhs @ GEN-ADDR
    n >lhs @ S" assignment" WCHECK
    oPSH OP,
@@ -272,7 +279,8 @@ HELP-RESET
    n >rhs @ CT  n >lhs @ CT  SCONV,
    n >lhs @ CT T-PTR? IF
       n >lhs @ CQ  n >rhs @ CQ  DROPPED? IF S" assignment" QWARN THEN THEN
-   n >lhs @ CT STORE, ;M
+   n >lhs @ CT STORE,
+   u 0= n >lhs @ CT t_uchar = AND IF 255 MASK, THEN ;M
 
 \ Pointer arithmetic scales by what the pointer points AT, and a step of
 \ one emits no multiply at all -- which is not an optimisation but what
@@ -565,7 +573,11 @@ VARIABLE UFN   0 UFN !
       r CELL+ @ STORE,
    LOOP ;M
 
-:M STMT n_expst  >expr @ GEN ;M
+:M STMT n_expst {: n | x -- :}
+   n >expr @ TO x
+   x >TAG n_asgn =  x >TAG n_preinc = OR  x >TAG n_predec = OR  x >TAG n_postinc = OR  x >TAG n_postdec = OR IF
+      x CT t_uchar = VUNUSED ! THEN
+   x GEN ;M
 \ Inside a spliced body there is no frame to leave, so a return is a
 \ jump to the end of the splice rather than a LEV. The value is already
 \ in A either way, which is the whole reason this needs no rewriting of
@@ -619,7 +631,8 @@ VARIABLE UFN   0 UFN !
 \ The post forms store the new value unconverted and take the step back
 \ off it: converting first would lose the carry the undo needs, and the
 \ loads convert anyway.
-: INCDEC, ( node op post -- ) {: n op post | t -- :}
+: INCDEC, ( node op post -- ) {: n op post | t u -- :}
+   VUNUSED @ TO u  0 VUNUSED !
    n >opnd @ CT TO t
    n >opnd @ GEN-ADDR
    n >opnd @ op oADD = IF S" increment" ELSE S" decrement" THEN WCHECK
@@ -627,13 +640,18 @@ VARIABLE UFN   0 UFN !
    t LOAD,
    oPSH OP,  t STEP-OF oIMM OP2,  op OP,
    post 0= IF t T-PROMOTE t SCONV, THEN
-   t STORE, ;
+   t STORE,
+   post 0=  u 0= AND  t t_uchar = AND IF 255 MASK, THEN ;
 :M GEN n_preinc   oADD 0 INCDEC, ;M
 :M GEN n_predec   oSUB 0 INCDEC, ;M
-:M GEN n_postinc {: n -- :}
-   n oADD 1 INCDEC,  oPSH OP, n >opnd @ CT STEP-OF oIMM OP2, oSUB OP, ;M
-:M GEN n_postdec {: n -- :}
-   n oSUB 1 INCDEC,  oPSH OP, n >opnd @ CT STEP-OF oIMM OP2, oADD OP, ;M
+:M GEN n_postinc {: n | u -- :}
+   VUNUSED @ TO u  0 VUNUSED !
+   n oADD 1 INCDEC,  oPSH OP, n >opnd @ CT STEP-OF oIMM OP2, oSUB OP,
+   u 0= n >opnd @ CT t_uchar = AND IF 255 MASK, THEN ;M
+:M GEN n_postdec {: n | u -- :}
+   VUNUSED @ TO u  0 VUNUSED !
+   n oSUB 1 INCDEC,  oPSH OP, n >opnd @ CT STEP-OF oIMM OP2, oADD OP,
+   u 0= n >opnd @ CT t_uchar = AND IF 255 MASK, THEN ;M
 :M CT n_preinc   >opnd @ CT ;M
 :M CT n_predec   >opnd @ CT ;M
 :M CT n_postinc  >opnd @ CT ;M

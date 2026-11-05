@@ -291,11 +291,23 @@ VARIABLE FT   VARIABLE EMM   VARIABLE SMM   VARIABLE BANM
    THEN
    4 ;
 
+\ ... a byte about to be stored as a byte: PSH; IMM 255; AND; SC -> SC
+: ARITH-MASK ( i -- n ) {: i -- n :}
+   i 3 + IN# @ < 0= IF 0 EXIT THEN
+   i oPSH BARE? 0= IF 0 EXIT THEN
+   i 1+ oIMM PLAINOP? 0= IF 0 EXIT THEN
+   i 1+ IARG 255 <> IF 0 EXIT THEN
+   i 2 + oAND BARE? 0= IF 0 EXIT THEN
+   i 3 + oSC BARE? 0= IF 0 EXIT THEN
+   k_insn oSC 0 a_none EMIT-ITEM
+   4 ;
+
 : PASS-ARITH {: | i n -- :}
    0 JN# !   0 TO i
    BEGIN i IN# @ < WHILE
       i ARITH-ZERO TO n
       n 0= IF i ARITH-CHAIN TO n THEN
+      n 0= IF i ARITH-MASK TO n THEN
       n 0= IF i ARITH-LOCAL TO n THEN
       n 0= IF i ARITH-GLOBAL TO n THEN
       n IF i n + TO i ELSE i COPY-ITEM  i 1+ TO i THEN

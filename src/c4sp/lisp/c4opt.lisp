@@ -132,7 +132,12 @@
 			(if (if (>= N 6) (if (opt:plain B 'IMM) (if (opt:add1? (third R) 'ADD)
 					(if (opt:is (index R 3) 'PSH) (if (opt:plain (index R 4) 'IMM) (opt:add1? (index R 5) 'ADD) false) false) false) false) false)
 				(list (list I (list 'IMM (+ (second B) (second (index R 4)))) (third R)) 6)
-			false)))
+			;; a byte about to be stored as a byte, which SC cuts anyway, and whose
+			;; A after it is the same: PSH; IMM 255; AND; SC -> SC
+			(if (if (>= N 4) (if (opt:plain B 'IMM) (if (= 255 (second B))
+					(if (opt:add1? (third R) 'AND) (opt:add1? (index R 3) 'SC) false) false) false) false)
+				(list (list (index R 3)) 4)
+			false))))
 	;; a local's member or element: LEA n; PSH; IMM k; ADD -> LEA n+k/W
 	(if (if (opt:is I 'LEA) (>= N 4) false)
 		(if (if (opt:is (second R) 'PSH) (if (opt:plain (third R) 'IMM)

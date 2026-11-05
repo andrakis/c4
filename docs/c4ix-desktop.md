@@ -143,11 +143,13 @@ tabs); a message box; resizable windows (drag the bottom-right corner).
   takes everything selected, a folder with all that is in it. (A click
   carries no modifiers from the page, but Ctrl and Shift are keys the
   page sends: the desktop keeps them, `wm_mods`.)
-- **System Monitor** (Ctrl+Shift+Esc too): Applications (the desktop's
-  windows, Close, Show), Processes (every task with PID, CPU %,
+- **System Monitor** (Ctrl+Shift+Esc too): Programs (the desktop's
+  windows, Close, Show), Tasks (every task with PID, CPU %,
   CPU time in cycles, the memory it holds, syscalls and state, Kill),
-  Performance (a CPU gauge and a scrolling history graph, totals, and
-  the memory in use, free and in all, with its own history). The status
+  Load (a CPU gauge and a scrolling history graph; Totals, Memory
+  and Swap side by side, Memory with the largest free block and Swap with
+  what is on it, pages in and out per second and the tasks load control
+  holds, all from `/proc/meminfo`; and the memory's own history). The status
   bar says the memory in use on every page.
   - A task's memory is its image (code, data, the constructor and
     destructor lists), its stack, its copies of the shared libraries'
@@ -190,10 +192,10 @@ tabs); a message box; resizable windows (drag the bottom-right corner).
       status bar; double-click opens folders, runs programs, opens text in
       Text Editor; New Folder, Delete (confirmed), Rename; F2, F5, Del,
       Backspace, Enter, arrows
-- [x] System Monitor: Applications (Close, Show, New Task),
-      Processes (name, PID, CPU %, CPU time, syscalls, state; Kill,
-      confirmed; kernel tasks refused), Performance (gauge, 60 s history,
-      totals); also Ctrl+Shift+Esc -- which in a browser on Windows is
+- [x] System Monitor: Programs (Close, Show, New Task),
+      Tasks (name, PID, CPU %, CPU time, syscalls, state; Kill,
+      confirmed; kernel tasks refused), Load (gauge, 60 s history,
+      totals, memory and swap); also Ctrl+Shift+Esc -- which in a browser on Windows is
       taken by Windows itself, so the Go menu and the icon are the way
       in there
 - [x] Text Editor: open, edit, save (Ctrl+S, Save As), scroll bar, wheel,

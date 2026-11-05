@@ -35,6 +35,10 @@ struct tasks {
     int ival[MAXP];                            // Interval: thousands of cycles in the last sample
     int mem[MAXP];                             // bytes held; -1 for the idle row, which shows none
     int heap, heapused;                        // the heap, when the host says (else 0)
+    int largest;                               // ... its biggest block, KB (/proc/meminfo)
+    int swap, swapfree;                        // swap, KB, 0 if there is none
+    int pgin, pgout, held;                     // pages in and out a second, tasks held (mmu.c)
+    int swin, swout, swms;                     // the counts as last read, and when
     long long time[MAXP];                      // CPU Time, in cycles
     char name[MAXP * NAMEW];
     struct cpusample s[2];                     // this snapshot and the one before
@@ -63,6 +67,53 @@ static int row(struct tasks *t, int id, char *name, int privs, int state, int sy
     t->name[k * NAMEW + NAMEW - 1] = 0;
     ++t->n;
     return k;
+}
+
+// /proc/meminfo's value for NAME in BUF ("name value" lines), 0 if it has none
+static char membuf[768];
+static int meminfo(char *name) {
+    char *p;
+    int i, v;
+    p = membuf;
+    while (*p) {
+        i = 0;
+        while (name[i] && p[i] == name[i]) ++i;
+        if (!name[i] && p[i] == ' ') {
+            p = p + i + 1;
+            v = 0;
+            while (*p >= '0' && *p <= '9') { v = v * 10 + *p - '0'; ++p; }
+            return v;
+        }
+        while (*p && *p != '\n') ++p;
+        if (*p) ++p;
+    }
+    return 0;
+}
+
+// What the Load tab shows of swap, only when it is showing: reading the file makes
+// the kernel walk every RAM file. The rates are over the time since the last look;
+// a long time since (the tab was not showing) is no measure of now.
+static void swap_sample(struct tasks *t) {
+    int fd, n, got, now, in, out;
+    if ((fd = uopen("/proc/meminfo", O_RD)) < 0) return;
+    got = 0;
+    while (got < 767 && (n = uread(fd, membuf + got, 767 - got)) > 0) got = got + n;
+    uclose(fd);
+    membuf[got] = 0;
+    t->largest = meminfo("largest");
+    t->swap = meminfo("swap");
+    t->swapfree = meminfo("swapfree");
+    t->held = meminfo("held");
+    in = meminfo("swapins");
+    out = meminfo("swapouts");
+    now = __time();
+    if (t->swms && now - t->swms > 0 && now - t->swms < 5000) {
+        t->pgin = (in - t->swin) * 1000 / (now - t->swms);
+        t->pgout = (out - t->swout) * 1000 / (now - t->swms);
+    } else { t->pgin = 0; t->pgout = 0; }
+    t->swin = in;
+    t->swout = out;
+    t->swms = now;
 }
 
 static void sample(struct tasks *t) {
@@ -150,6 +201,7 @@ static void sample(struct tasks *t) {
         else { sys = 0; while (sys < HIST - 1) { t->mhist[sys] = t->mhist[sys + 1]; ++sys; } t->mhist[HIST - 1] = k; }
     }
     t->sampled = 1;
+    if (t->tab == 2) swap_sample(t);
     if (t->sel >= t->n) t->sel = t->n - 1;
 }
 
@@ -376,6 +428,33 @@ static void memory(struct tasks *t, int x, int y, int w, int h) {
     mbytes(buf, t->heap - t->heapused); d_text(x + w - 16 - ui_len(buf) * 6, y + 56, C_DARK, F_SANS, buf);
     d_text(x + 12, y + 72, C_DARK, F_SANS, "Total (MB)");
     mbytes(buf, t->heap); d_text(x + w - 16 - ui_len(buf) * 6, y + 72, C_DARK, F_SANS, buf);
+    // free memory in pieces shows here: less than Free is all that can be had at once
+    d_text(x + 12, y + 88, C_DARK, F_SANS, "Largest free (MB)");
+    mbytes(buf, t->largest * 1024); d_text(x + w - 16 - ui_len(buf) * 6, y + 88, C_DARK, F_SANS, buf);
+}
+
+// A figure in a group's row, at its right
+static void figure(int x, int y, int w, char *label, int v) {
+    d_text(x + 12, y, C_DARK, F_SANS, label);
+    ui_num_commas(buf, v);
+    d_text(x + w - 16 - ui_len(buf) * 6, y, C_DARK, F_SANS, buf);
+}
+
+// Swap: a bar of what is on it, and how fast pages are going: a machine with more
+// programs than memory says so here. A host with no swap (no MMU) says that.
+static void swapbox(struct tasks *t, int x, int y, int w, int h) {
+    int used, fill;
+    ui_group(x, y, w, h, "Swap");
+    if (t->swap <= 0) { d_text(x + 12, y + 20, C_DARK, F_SANS, "none on this host"); return; }
+    used = t->swap - t->swapfree;
+    d_rect(x + 12, y + 20, w - 24, 12, C_DARK);
+    fill = (int)(((long long)(w - 26) * used) / t->swap);
+    d_rect(x + 13, y + 21, fill, 10, C_GREEN);
+    d_text(x + 12, y + 40, C_DARK, F_SANS, "On swap (MB)");
+    mbytes(buf, used * 1024); d_text(x + w - 16 - ui_len(buf) * 6, y + 40, C_DARK, F_SANS, buf);
+    figure(x, y + 56, w, "Pages in /s", t->pgin);
+    figure(x, y + 72, w, "Pages out /s", t->pgout);
+    figure(x, y + 88, w, "Tasks held", t->held);
 }
 
 static void draw_perf(struct tasks *t, int ox, int oy, int cw, int ch) {
@@ -400,19 +479,19 @@ static void draw_perf(struct tasks *t, int ox, int oy, int cw, int ch) {
         ui_group(ox + gw + 34, oy + PAGE_Y + 8, cw - gw - 42, 130, "CPU Usage History");
         graph(t->hist, t->nhist, ox + gw + 42, oy + PAGE_Y + 24, cw - gw - 58, 106);
     }
-    ui_group(ox + 8, oy + PAGE_Y + 150, (cw - 24) / 2, 90, "Totals");
-    d_text(ox + 20, oy + PAGE_Y + 170, C_DARK, F_SANS, "Tasks");
-    ui_num(buf, t->n); d_text(ox + 150, oy + PAGE_Y + 170, C_DARK, F_SANS, buf);
-    d_text(ox + 20, oy + PAGE_Y + 188, C_DARK, F_SANS, "Open windows");
+    // Totals, Memory and Swap, side by side
+    gw = (cw - 32) / 3;
+    ui_group(ox + 8, oy + PAGE_Y + 150, gw, 106, "Totals");
+    figure(ox + 8, oy + PAGE_Y + 170, gw, "Tasks", t->n);
     secs = 0; w = win_first(); while (w) { if (w->used) ++secs; w = w->next; }
-    ui_num(buf, secs); d_text(ox + 150, oy + PAGE_Y + 188, C_DARK, F_SANS, buf);
-    d_text(ox + 20, oy + PAGE_Y + 206, C_DARK, F_SANS, "Up for (machine seconds)");
-    ui_num_commas(buf, (__time() - t->uptime0) / 1000); d_text(ox + 180, oy + PAGE_Y + 206, C_DARK, F_SANS, buf);
-    memory(t, ox + 16 + (cw - 24) / 2, oy + PAGE_Y + 150, (cw - 24) / 2, 90);
+    figure(ox + 8, oy + PAGE_Y + 188, gw, "Open windows", secs);
+    figure(ox + 8, oy + PAGE_Y + 206, gw, "Up for (seconds)", (__time() - t->uptime0) / 1000);
+    memory(t, ox + 16 + gw, oy + PAGE_Y + 150, gw, 106);
+    swapbox(t, ox + 24 + 2 * gw, oy + PAGE_Y + 150, gw, 106);
     // the page ends at ch: what is under the totals, if there is room
-    if (t->heap > 0 && ch - PAGE_Y > 320) {
-        ui_group(ox + 8, oy + PAGE_Y + 250, cw - 16, ch - PAGE_Y - 258, "Memory Usage History");
-        graph(t->mhist, t->nmhist, ox + 16, oy + PAGE_Y + 266, cw - 32, ch - PAGE_Y - 282);
+    if (t->heap > 0 && ch - PAGE_Y > 336) {
+        ui_group(ox + 8, oy + PAGE_Y + 266, cw - 16, ch - PAGE_Y - 274, "Memory Usage History");
+        graph(t->mhist, t->nmhist, ox + 16, oy + PAGE_Y + 282, cw - 32, ch - PAGE_Y - 298);
     }
 }
 

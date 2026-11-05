@@ -1116,6 +1116,9 @@ check(until(() => has('CPU Usage History') && has('Totals')), 'the Performance t
 // status bar says it on every page
 check(until(() => has('Memory Usage History') && has('In use (MB)') && has('Free (MB)') && has(/^Memory: [\d.]+ MB of [\d.]+ MB$/)),
       'it shows the memory in use and free', frame.filter(t => /Memory|MB/.test(t.s)).map(t => t.s.trim()).join(' | '));
+// and swap: how much is on it, how fast pages go, and the tasks held
+check(until(() => has('Swap') && has('On swap (MB)') && has('Pages in /s') && has('Pages out /s') && has('Tasks held') && has('Largest free (MB)')),
+      'it shows swap, and the largest free run', frame.filter(t => t.y > 150).map(t => t.s.trim()).join(' | '));
 clickText('Programs');
 check(until(() => has('Status') && find('Running').length >= 3), 'the Applications tab lists the windows');
 

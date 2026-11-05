@@ -1,13 +1,17 @@
 // test-c4ix-loadctl.mjs -- more programs than memory, and memory afterwards.
 //
-// Four programs of 16 MB in 32 MB take turns walking their memory, on threads
+// Six programs of 16 MB in 32 MB take turns walking their memory, on threads
 // at a nominal 400 MHz, the browser's way of running. Each one's pages go out
 // before its next turn, unless load control holds some of them back
 // (docs/c4ix-mmu.md 11): which must happen. It measured paging against the
 // cycles the clock said a CPU had, and on threads a CPU runs a fraction of what
 // it says, so it saw a twentieth where paging took all there was, held nothing,
-// and innerbench -Tln 50 never finished. All four must finish with every word as
-// they left it. And with them gone free memory must be in one piece: the
+// and innerbench -Tln 50 never finished. All six must finish with every word as
+// they left it. (Why six: with four, paging tops the mark for a window or so, and
+// whether one of the 250 ms windows catches it is down to their phase: a program
+// that spun a little first was held in 7 runs of 12. With six, in all 24, and the
+// same on the images before and after a change to the compiler.) And with them
+// gone free memory must be in one piece: the
 // kernel's blocks at the heap's bottom and programs' at its top, where a block
 // of the kernel's among programs' would be left in the middle of it.
 // PARALLEL=0: on simulated CPUs, where the clock is right.
@@ -85,16 +89,16 @@ let t = runFor('cc -l c4ix -o /tmp/hog.c4r hog.c', /c4rlink: wrote|error|did not
 check(/c4rlink: wrote/.test(t) && !/error|did not compile/i.test(t), 'hog.c compiles inside C4IX', t);
 
 const n0 = out.length;
-for (let i = 0; i < 4; i++) type('/tmp/hog.c4r 16 &');
+for (let i = 0; i < 6; i++) type('/tmp/hog.c4r 16 &');
 // (thrashing, they would go on for hours: a real-time limit, for the suite)
 const t0 = Date.now();
-const finished = () => [...text(n0).matchAll(/hog \d+: (fine|BAD|no memory)|killed/g)].length >= 4;
+const finished = () => [...text(n0).matchAll(/hog \d+: (fine|BAD|no memory)|killed/g)].length >= 6;
 until(() => finished() || Date.now() - t0 > 300000, 50000000);
-if (!finished()) { check(false, 'all four finish in 5 minutes', text(n0)); console.log('test-c4ix-loadctl: FAILED'); process.exit(1); }
+if (!finished()) { check(false, 'all six finish in 5 minutes', text(n0)); console.log('test-c4ix-loadctl: FAILED'); process.exit(1); }
 t = text(n0);
 check(!/killed/.test(t), 'no program is killed', t);
 check(!/BAD|no memory/.test(t), 'every word of every program is as it left it', t);
-check((t.match(/hog \d+: fine/g) || []).length === 4, 'all four finish', t);
+check((t.match(/hog \d+: fine/g) || []).length === 6, 'all six finish', t);
 
 const d = runFor('dmesg -t\necho @@dmesg@@', /@@dmesg@@\n/, 200000);
 check(/\bheld, \d+ held/.test(d), 'load control held a task', d);

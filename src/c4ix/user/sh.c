@@ -393,6 +393,47 @@ static void sh_jobs() {
 // printed it, so "%1" is the natural handle; a bare number is a pid,
 // for anything this shell did not start. The default is 15 (TERM),
 // which for a program with no handler simply cancels it.
+// Why a program would not load is the kernel's to say, and it says so on the machine's
+// console, which from a Terminal in the desktop is somewhere else: the last thing the
+// loader logged about NAME, from /proc/kmsg, here as well.
+enum { WHY_BUF = 2048, WHY_LINE = 200 };
+static int sh_has(char *s, char *what) {
+    int i, k;
+    i = 0;
+    while (s[i]) {
+        k = 0;
+        while (what[k] && s[i + k] == what[k]) ++k;
+        if (!what[k]) return i + 1;
+        ++i;
+    }
+    return 0;
+}
+static void sh_why(char *name) {
+    char *buf, *line, *keep;
+    int fd, n, i, len, at;
+    if ((fd = uopen("/proc/kmsg", O_RD)) < 0) return;
+    if (!(buf = (char *)malloc(WHY_BUF + 2 * WHY_LINE))) { uclose(fd); return; }
+    line = buf + WHY_BUF;
+    keep = line + WHY_LINE;
+    keep[0] = 0;
+    len = 0;
+    while ((n = uread(fd, buf, WHY_BUF)) > 0) {
+        i = 0;
+        while (i < n) {
+            if (buf[i] != 10) { if (len < WHY_LINE - 1) { line[len] = buf[i]; ++len; } }
+            else {
+                line[len] = 0;
+                if ((at = sh_has(line, "loader: ")) && sh_has(line, name)) ustrcpy(keep, line + at + 7);
+                len = 0;
+            }
+            ++i;
+        }
+    }
+    uclose(fd);
+    if (keep[0]) uprintf("sh: the kernel says: %s\n", keep);
+    free(buf);
+}
+
 static void sh_kill(char **argv, int argc) {
     int i, sig, pid, n;
 
@@ -587,10 +628,9 @@ static int sh_runline(char **w, int nw) {
         else prev_read = -1;
 
         if (pid < 0) {
-            // (what would not load, the kernel's log says why)
             if (err == SPAWN_NOMEM) uprintf("sh: out of memory starting %s\n", argv[0]);
             else if (err == SPAWN_NOENT) uprintf("sh: cannot find %s\n", argv[0]);
-            else uprintf("sh: cannot load %s\n", argv[0]);
+            else { uprintf("sh: cannot load %s\n", argv[0]); sh_why(argv[0]); }
             free(spawned);
             return 1;
         }

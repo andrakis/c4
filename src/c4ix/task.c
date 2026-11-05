@@ -93,7 +93,7 @@ struct task *task_vchild(struct task *p) {
     t->parent = p->id;
     t->privs = p->privs;
     TF_PUT(t, TF_USER, t->privs == PRIV_USER);
-    t->cpumask = p->cpumask;
+    t->cpumask = (p->tflags & TF_PINSOFT) ? 0 : p->cpumask;
     TF_PUT(t, TF_PINNED, t->cpumask);
     sched_setnice(t, p->nice);
     t->spawn_stack = p->spawn_stack;

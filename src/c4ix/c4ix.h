@@ -124,7 +124,7 @@ enum {
     SYS_TOP = 247          // one past the last: sched_trap's range check
 };
 // SYS_DISPLAY's operations, and TAKE's flag (include/display.h)
-enum { DISP_TAKE = 0, DISP_STATE = 1, DISP_YIELD = 2, DISP_GIVE = 3, DISP_YIELDS = 1 };
+enum { DISP_TAKE = 0, DISP_STATE = 1, DISP_YIELD = 2, DISP_GIVE = 3, DISP_PIN = 4, DISP_YIELDS = 1 };
 // What SYS_STAT and SYS_FSTAT write, a word each, as many as the caller
 // asks for: SYS_STAT's callers from before M7c ask for none, which is
 // the first four.
@@ -583,7 +583,8 @@ enum {
     TF_SIG = 16,               // killsig or ck_sigpend: a signal to take
     TF_HELD = 32,              // held (mmu.c)
     TF_NOPAGE = 64,            // TS_ZOMBIE or TS_VFORK: its pages stay
-    TF_PINNED = 128            // cpumask: only some CPUs may run it
+    TF_PINNED = 128,           // cpumask: only some CPUs may run it
+    TF_PINSOFT = 256           // ... CPU 0 by default, not asked for: its children do not inherit it
 };
 #define TF_SET(t, b) ((t)->tflags = (t)->tflags | (b))
 #define TF_CLR(t, b) ((t)->tflags = (t)->tflags & ~(b))
@@ -653,6 +654,7 @@ void         task_drop_image(struct task *t);   // execve: free its image, libra
 void         task_unborrow(struct task *t);     // a vfork child is done with its parent's memory
 struct task *task_get(int id);
 int sched_affinity(int id, int mask);
+void sched_softpin(struct task *t);
 int sched_nice(int id, int nice);
 #define task_first() task_head
 #define task_next(t) ((t)->next ? (t)->next : task_head)

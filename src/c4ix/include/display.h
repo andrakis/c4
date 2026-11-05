@@ -27,7 +27,7 @@
 // libjs's display, taken from the desktop and given back (include/display.h)
 #ifndef __C4IX_DISPLAY_H
 #define __C4IX_DISPLAY_H 1
-enum { DISP_TAKE = 0, DISP_STATE = 1, DISP_YIELD = 2, DISP_GIVE = 3, DISP_YIELDS = 1 };
+enum { DISP_TAKE = 0, DISP_STATE = 1, DISP_YIELD = 2, DISP_GIVE = 3, DISP_PIN = 4, DISP_YIELDS = 1 };
 int  udisplay(int op, int flags);
 int  udisplay_take(int flags);
 void udisplay_give();

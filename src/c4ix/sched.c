@@ -1206,11 +1206,22 @@ int sched_affinity(int id, int mask) {
     if (mask >= 0) {
         t->cpumask = mask;
         TF_PUT(t, TF_PINNED, mask);
+        TF_CLR(t, TF_PINSOFT);
         sched_wake = 1;
         if (t == sched_cur) sched_resched = 1;
     }
     sched_unlock();
     return old;
+}
+
+// A program that draws runs on CPU 0, where the display is: its frames go there
+// anyway, each from another CPU a round trip to it, and it is what a person watches.
+// Not if anything chose its CPUs (pin), and not its children: what a desktop starts
+// from a Terminal, a build among them, may run anywhere.
+void sched_softpin(struct task *t) {
+    if (t->cpumask || t->privs != PRIV_USER) return;
+    sched_affinity(t->id, 1);
+    TF_SET(t, TF_PINSOFT);
 }
 
 void sched_yield() {

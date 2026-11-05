@@ -422,7 +422,9 @@ static int sys_display(struct task *t, int op, int flags) {
     int me;
     if (!t) return -1;
     me = t->id;
+    if (op == DISP_PIN) { sched_softpin(t); return 0; }
     if (op == DISP_TAKE) {
+        sched_softpin(t);
         if (!disp_holder || disp_holder == me) {
             disp_holder = me; disp_hyields = flags & DISP_YIELDS;
             if (disp_want == me) disp_want = 0;

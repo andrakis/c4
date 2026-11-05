@@ -50,7 +50,7 @@ t = sh('nosuchprog\necho @@2@@', /^@@2@@$/m);
 check(/^sh: cannot find nosuchprog$/m.test(t), 'a program that is not there: "sh: cannot find nosuchprog"', t);
 
 t = sh('echo hello > /tmp/notprog.c4r\n/tmp/notprog.c4r\necho @@3@@', /^@@3@@$/m);
-check(/^sh: cannot load \/tmp\/notprog\.c4r$/m.test(t) && /not a \.c4r/.test(t),
+check(/^sh: cannot load \/tmp\/notprog\.c4r$/m.test(t) && /^sh: the kernel says: .*not a \.c4r/m.test(t),
   'a file that is not a program: "sh: cannot load", the kernel saying why', t);
 
 // all but 160 KB of the heap, held from outside: a MB at a time, then

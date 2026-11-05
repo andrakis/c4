@@ -20,6 +20,7 @@ detail behind it. Each doc is one of three kinds:
 
 | Doc | Kind | What it is |
 |---|---|---|
+| [quake-performance.md](quake-performance.md) | results | What each compiler and interpreter change gained Quake, by instructions and by the wall |
 | [fused-opcodes.md](fused-opcodes.md) | reference | The ten fused opcodes (79–88), which host runs which, and `-mfuse` |
 | [c4mpg-design.md](c4mpg-design.md) | tracker | c4mpg, the memory-protection guard (M4 and M6 open) |
 | [oisc4-design.md](oisc4-design.md) | reference | oisc4, the one-instruction computer |

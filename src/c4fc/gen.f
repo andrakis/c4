@@ -261,6 +261,13 @@ VARIABLE VUNUSED   0 VUNUSED !
    n >rhs @ GEN-ADDR   oPSH OP,
    n >lhs @ CT T-SIZE oIMM OP2,   oPSH OP,
    oMCPY OP,   3 oADJ OP2, ;
+\ x, whose value nobody wants (c4lc's g:effect).
+: EFFECT ( x -- ) {: x -- :}
+   x >TAG n_preinc =  x >TAG n_predec = OR  x >TAG n_postinc = OR  x >TAG n_postdec = OR
+   IF 1 VUNUSED ! THEN
+   x >TAG n_asgn = IF x CT t_uchar = VUNUSED ! THEN
+   x GEN ;
+
 :M GEN n_asgn {: n | u -- :}
    n >lhs @ CT T-STRUCT? IF n STRUCT-ASGN EXIT THEN
    VUNUSED @ TO u  0 VUNUSED !
@@ -391,7 +398,9 @@ VARIABLE VUNUSED   0 VUNUSED !
 :M CQ n_comma {: n -- q :}  n >args @ n >argn @ 1- CELLS + @ CQ ;M
 :M GEN n_comma {: n | v -- :}
    n >args @ TO v
-   n >argn @ 0 ?DO I CELLS v + @ GEN LOOP ;M
+   n >argn @ 0 ?DO
+      I CELLS v + @  I 1+ n >argn @ = IF GEN ELSE EFFECT THEN
+   LOOP ;M
 
 \ What a call compiles to is decided entirely by the CLASS of the name
 \ being called: an opcode for a builtin, JSR to a known address, JSRI
@@ -573,11 +582,7 @@ VARIABLE UFN   0 UFN !
       r CELL+ @ STORE,
    LOOP ;M
 
-:M STMT n_expst {: n | x -- :}
-   n >expr @ TO x
-   x >TAG n_asgn =  x >TAG n_preinc = OR  x >TAG n_predec = OR  x >TAG n_postinc = OR  x >TAG n_postdec = OR IF
-      x CT t_uchar = VUNUSED ! THEN
-   x GEN ;M
+:M STMT n_expst  >expr @ EFFECT ;M
 \ Inside a spliced body there is no frame to leave, so a return is a
 \ jump to the end of the splice rather than a LEV. The value is already
 \ in A either way, which is the whole reason this needs no rewriting of
@@ -646,12 +651,16 @@ VARIABLE UFN   0 UFN !
 :M GEN n_predec   oSUB 0 INCDEC, ;M
 :M GEN n_postinc {: n | u -- :}
    VUNUSED @ TO u  0 VUNUSED !
-   n oADD 1 INCDEC,  oPSH OP, n >opnd @ CT STEP-OF oIMM OP2, oSUB OP,
-   u 0= n >opnd @ CT t_uchar = AND IF 255 MASK, THEN ;M
+   n oADD 1 INCDEC,
+   u IF EXIT THEN
+   oPSH OP, n >opnd @ CT STEP-OF oIMM OP2, oSUB OP,
+   n >opnd @ CT t_uchar = IF 255 MASK, THEN ;M
 :M GEN n_postdec {: n | u -- :}
    VUNUSED @ TO u  0 VUNUSED !
-   n oSUB 1 INCDEC,  oPSH OP, n >opnd @ CT STEP-OF oIMM OP2, oADD OP,
-   u 0= n >opnd @ CT t_uchar = AND IF 255 MASK, THEN ;M
+   n oSUB 1 INCDEC,
+   u IF EXIT THEN
+   oPSH OP, n >opnd @ CT STEP-OF oIMM OP2, oADD OP,
+   n >opnd @ CT t_uchar = IF 255 MASK, THEN ;M
 :M CT n_preinc   >opnd @ CT ;M
 :M CT n_predec   >opnd @ CT ;M
 :M CT n_postinc  >opnd @ CT ;M
@@ -737,13 +746,13 @@ CREATE CNTM MMAX CELLS ALLOT   VARIABLE CNTN   0 CNTN !
 \ step is emitted after the body -- so it is a genuine forward branch.
 :M STMT n_for {: n | top m bb cb cont -- :}
    BRKN @ TO bb   CNTN @ TO cb
-   n >init @ ?DUP IF GEN THEN
+   n >init @ ?DUP IF EFFECT THEN
    CHERE TO top
    -1 TO m                              \ patch 0 is a real patch index
    n >cond @ ?DUP IF GEN  oBZ BR, TO m THEN
    n >body @ STMT
    CHERE TO cont
-   n >step @ ?DUP IF GEN THEN
+   n >step @ ?DUP IF EFFECT THEN
    oJMP top BACK,
    m 0< 0= IF m >RES THEN
    bb cb CHERE cont RESOLVE-LOOP ;M

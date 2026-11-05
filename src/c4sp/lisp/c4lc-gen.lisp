@@ -549,8 +549,9 @@
 	(g:emit '(LI))))))))))
 ;; SC leaves in A the byte it stored as a signed char (c4's own rule, right for
 ;; char), so the value of an assignment to an unsigned char, or of its ++ or --,
-;; has to be cut back to 0..255: (uc = 255) == 255. g:stmt says when nobody wants
-;; the value, so that `p[i] = c;` costs what it always did.
+;; has to be cut back to 0..255: (uc = 255) == 255. g:effect says when nobody wants
+;; the value, so that p[i] = c; costs what it always did, and i++; what ++i; does,
+;; with no step taken back off.
 (define g:vunused false)
 (define g:store! (lambda (ty)
 	(if (g:ll? ty) (g:llcopy)
@@ -1570,10 +1571,13 @@
 		(set! g:vunused false)
 		(g:incdec e op true)
 		(define t g:ty)
-		(g:emit '(PSH))
-		(g:emit (list 'IMM (g:step t)))
-		(g:emit (list unop))
-		(if (if used (= t g:UCHAR) false) (g:mask! 255) nil)
+		(if used
+			(begin
+				(g:emit '(PSH))
+				(g:emit (list 'IMM (g:step t)))
+				(g:emit (list unop))
+				(if (= t g:UCHAR) (g:mask! 255) nil))
+			nil)
 		(set! g:ty t))))
 
 ;; The types down an expression's left spine, while it is binary
@@ -1859,8 +1863,22 @@
 (define g:comma (lambda (es)
 	(if (empty? (tail es)) (g:expr (head es))
 	(begin
-		(g:expr (head es))
+		(g:effect (head es))
 		(next g:comma (tail es))))))
+
+;; x, whose value nobody wants. A float's or a long long's ++ goes another way
+;; (g:fpincdec, g:llexpr), which never reads g:vunused: it must not be left set.
+(define g:effect (lambda (x)
+	(begin
+		(define h (head x))
+		(if (g:incdec? h)
+			(begin
+				(define t (g:lvtype (g:second x)))
+				(if (if (g:fp? t) true (g:ll? t)) nil (set! g:vunused true)))
+		(if (= h 'assign)
+			(if (= (g:lvtype (g:second x)) g:UCHAR) (set! g:vunused true) nil)
+		nil))
+		(g:expr x))))
 
 (define g:expr (lambda (e)
 	(if g:fpon (if (g:fpnode? e) (g:fpexpr e) (g:expr/0 e)) (g:expr/0 e))))
@@ -2128,10 +2146,7 @@
 				(set! g:syms scope))
 		(if (= h 'expr)
 			(begin
-				(if (if (if (= (head (g:second s)) 'assign) true (g:incdec? (head (g:second s))))
-						(= (g:lvtype (g:second (g:second s))) g:UCHAR) false)
-					(set! g:vunused true) nil)
-				(g:expr (g:second s)))
+				(g:effect (g:second s)))
 		(if (= h 'if) (g:ifstmt s)
 		(if (= h 'while) (g:whilestmt s)
 		(if (= h 'dowhile) (g:dowhilestmt s)
@@ -2232,7 +2247,7 @@
 		(define oc g:cont)
 		(set! g:brk lend)
 		(set! g:cont lstep)
-		(if (= (g:second s) nil) nil (g:expr (g:second s)))
+		(if (= (g:second s) nil) nil (g:effect (g:second s)))
 		(g:label! lc)
 		(if (= (g:third s) nil) nil
 		(begin
@@ -2242,7 +2257,7 @@
 		(g:stmt (index s 4))
 		(g:loopline here)
 		(g:label! lstep)
-		(if (= (index s 3) nil) nil (g:expr (index s 3)))
+		(if (= (index s 3) nil) nil (g:effect (index s 3)))
 		(g:emit (list 'JMP (list 'code lc)))
 		(g:label! lend)
 		(set! g:brk ob)

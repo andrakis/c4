@@ -1192,11 +1192,56 @@
 	(begin
 		(define et (g:typeof e))
 		(if (= et ty) (g:expr e)
+		(begin
+		(define k (g:fpknown e ty))
+		(if (not (= k false)) (g:expr k)
 		(if (g:fp? et)
 			(g:fpcall (if (= ty g:DOUBLE) "__c4f_to_d" "__c4d_to_f") (list e) ty)
 		(if (g:isptr et) (g:die "a pointer cannot be converted to a float or double")
 		(if (g:svalue? et) (g:die "a struct cannot be converted to a float or double")
-		(g:fpcall (g:fromfn et ty) (list e) ty))))))))
+		(g:fpcall (g:fromfn et ty) (list e) ty))))))))))
+;; the constant e as a literal of the float type ty, or false: `x > 1`, `f = 0`,
+;; `f = 999999.9` need no helper, at run time, to say what the compiler knows. Both
+;; round to nearest, as the helpers do. An unsigned constant with its top bit set,
+;; and the one int with no positive, go the long way: g:fpint negates.
+(define g:fpknown (lambda (e ty)
+	(begin
+		(define h (head e))
+		(if (= h 'num)
+			(begin
+				(define t (g:nz (index e 2)))
+				(if (g:fp? t) (if (g:fpfits? e ty) (g:fpconst e ty) false)
+				(if (if (g:isptr t) true (g:svalue? t)) false
+				(if (< (g:second e) 0)
+					(if (g:uns? (g:promote t)) false
+					(if (= (g:second e) (- 0 (g:second e))) false
+						(g:fpint (g:second e) ty)))
+					(g:fpint (g:second e) ty)))))
+		(if (= h 'llnum)
+			(if (if (= (index e 3) g:DOUBLE) (g:fpfits? e ty) false) (g:fpconst e ty) false)
+		(if (= h 'neg)
+			(if (if (g:fplit? (g:second e)) (g:fpfits? (g:second e) ty) false)
+				(g:fpnegated (g:fpconst (g:second e) ty) ty) false)
+		false))))))
+;; can the literal l be made a literal of type ty? A double whose size a float cannot
+;; hold (1e300, 1e-50, and the edges where rounding might carry it out) is the
+;; run-time conversion's to answer, infinity or a subnormal: only the normal range,
+;; well inside, is folded.
+(define g:fpfits? (lambda (l ty)
+	(if (= ty g:DOUBLE) true
+	(if (= (head l) 'llnum) (g:fpfits/e (g:third l))
+	(if (= (g:nz (index l 2)) g:DOUBLE) (g:fpfits/e (bit:shr (g:second l) 32))
+	true)))))
+(define g:fpfits/e (lambda (hi)
+	(begin
+		(define e (bit:and (bit:shr hi 20) 2047))
+		(if (= e 0) (= 0 (bit:and hi 1048575))     ;; 0.0 and -0.0 only
+		(if (< e 900) false (< e 1150))))))
+;; the literal l of type ty with its sign the other way
+(define g:fpnegated (lambda (l ty)
+	(if (= ty g:FLOAT) (list 'num (bit:xor (g:second l) g:SIGN32) g:FLOAT)
+	(if g:W64 (list 'num (bit:xor (g:second l) (bit:shl 1 63)) g:DOUBLE)
+	(list 'llnum (g:second l) (bit:xor (g:third l) g:SIGN32) g:DOUBLE)))))
 ;; the helper that makes a float type out of an integer type: by the
 ;; integer's width and signedness after promotion
 (define g:fromfn (lambda (et ty)
@@ -1246,6 +1291,7 @@
 
 ;; -x: the sign bit, or __c4d_neg for a double in two words
 (define g:fpneg (lambda (x)
+	(if (g:fplit? x) (g:expr (g:fpnegated x (g:typeof x)))
 	(begin
 		(define t (g:typeof x))
 		(if (g:ll? t) (g:fpcall "__c4d_neg" (list x) t)
@@ -1254,7 +1300,7 @@
 			(g:emit '(PSH))
 			(g:emit (list 'IMM (if (= t g:FLOAT) g:SIGN32 g:MIN)))
 			(g:emit '(XOR))
-			(set! g:ty t))))))
+			(set! g:ty t)))))))
 
 ;; the helper's -1 / 0 / 1 / 2 (unordered) to C's answer: a NaN is
 ;; unequal to everything and in no order with anything

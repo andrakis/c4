@@ -149,5 +149,43 @@ int main() {
         float m[2] = {1, -1.0};
         pf("arr0", t[0]); pf("arr1", t[1]); pf("arr2", t[2]); pf("mix0", m[0]); pf("mix1", m[1]);
     }
+    // constants made literals by the compiler: each as the run-time conversion rounds it
+    {
+        float kf, zero;
+        double kd;
+        int two;
+        two = 2;
+        zero = 0;
+        kf = 16777217; pf("k-i2f-round", kf);
+        kf = -16777219; pf("k-i2f-neg", kf);
+        kf = 2147483647; pf("k-i2f-max", kf);
+        kf = -2147483647 - 1; pf("k-i2f-min", kf);
+        kf = 4294967295u; pf("k-u2f-max", kf);
+        kf = 0; pf("k-zero", kf);
+        kf = 'A'; pf("k-char", kf);
+        kd = 16777217; pd("k-i2d", kd);
+        kd = -7; pd("k-i2d-neg", kd);
+        kd = 4294967295u; pd("k-u2d-max", kd);
+        kf = 999999.9; pf("k-d2f", kf);
+        kf = 1.1; pf("k-d2f-round", kf);
+        kf = -1.1; pf("k-d2f-neg", kf);
+        kf = 1e300; pf("k-d2f-inf", kf);
+        kf = -1e300; pf("k-d2f-neginf", kf);
+        kf = 1e-50; pf("k-d2f-under", kf);
+        kf = 1e-40; pf("k-d2f-subnormal", kf);
+        kf = 3.4028235e38; pf("k-d2f-edge", kf);
+        kf = 3.4028236e38; pf("k-d2f-carry", kf);
+        kd = 1.1f; pd("k-f2d", kd);
+        kd = -1.1f; pd("k-f2d-neg", kd);
+        kf = -0.0; pf("k-negzero-d2f", kf);
+        kd = -0.0f; pd("k-negzero-f2d", kd);
+        kf = -1.5f; pf("k-neg-f", kf);
+        kd = -1.5; pd("k-neg-d", kd);
+        pf("k-arg", two * 1.5f + 2);
+        pd("k-arg-d", two * 1.5 + 2);
+        printf("k-cmp %d %d %d %d\n", (float)two > 1, (float)two == 2, (float)two < 1, zero == 0);
+        printf("k-cmp-d %d %d\n", two > 1.5, (float)two <= 2.0);
+        printf("k-cast %x %x\n", fb((float)3), fb((float)-3));
+    }
     return 0;
 }

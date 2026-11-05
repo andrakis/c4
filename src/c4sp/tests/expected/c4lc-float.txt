@@ -141,3 +141,33 @@ arr1 0
 arr2 40000000
 mix0 3f800000
 mix1 bf800000
+k-i2f-round 4b800000
+k-i2f-neg cb800002
+k-i2f-max 4f000000
+k-i2f-min cf000000
+k-u2f-max 4f800000
+k-zero 0
+k-char 42820000
+k-i2d 41700000 10000000
+k-i2d-neg c01c0000 0
+k-u2d-max 41efffff ffe00000
+k-d2f 497423fe
+k-d2f-round 3f8ccccd
+k-d2f-neg bf8ccccd
+k-d2f-inf 7f800000
+k-d2f-neginf ff800000
+k-d2f-under 0
+k-d2f-subnormal 116c2
+k-d2f-edge 7f7fffff
+k-d2f-carry 7f800000
+k-f2d 3ff19999 a0000000
+k-f2d-neg bff19999 a0000000
+k-negzero-d2f 80000000
+k-negzero-f2d 80000000 0
+k-neg-f bfc00000
+k-neg-d bff80000 0
+k-arg 40a00000
+k-arg-d 40140000 0
+k-cmp 1 1 0 1
+k-cmp-d 1 1
+k-cast 40400000 c0400000

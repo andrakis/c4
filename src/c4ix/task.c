@@ -52,8 +52,6 @@ struct task *task_create(char *name, int entry, int argc, int argv) {
     struct task *parent;
     if (!(t = task_alloc(name))) return 0;
     t->entry = entry;
-    t->state = TS_READY;
-    sched_wake = 1;
     if (!sched_forge(t, entry, argc, argv)) {
         sl4b_free(task_cache, (char *)t);
         return 0;
@@ -71,6 +69,8 @@ struct task *task_create(char *name, int entry, int argc, int argv) {
     }
     else fd_init_console(t);
     task_append(t);
+    task_state(t, TS_READY);
+    sched_wake = 1;
     sched_unlock();
     return t;
 }
@@ -81,8 +81,6 @@ struct task *task_create(char *name, int entry, int argc, int argv) {
 struct task *task_vchild(struct task *p) {
     struct task *t;
     if (!(t = task_alloc(p->name))) return 0;
-    t->state = TS_READY;
-    sched_wake = 1;
     if (!sched_forge(t, 0, 0, 0)) {
         sl4b_free(task_cache, (char *)t);
         return 0;
@@ -104,6 +102,8 @@ struct task *task_vchild(struct task *p) {
     if (p->env_vec) task_strvec((char **)p->env_vec, -1, &t->env_vec, &t->env_data);
     mmu_adopt(t);                 // its stack and environment
     task_append(t);
+    task_state(t, TS_READY);
+    sched_wake = 1;
     sched_unlock();
     return t;
 }
@@ -118,7 +118,7 @@ void task_unborrow(struct task *t) {
     TF_CLR(t, TF_VFCHILD);
     t->img_libs = 0;
     t->img_nlibs = 0;
-    if (p->state == TS_VFORK && p->wait_for == t->id) { p->state = TS_READY; TF_CLR(p, TF_NOPAGE); sched_wake = 1; }
+    if (p->state == TS_VFORK && p->wait_for == t->id) { task_state(p, TS_READY); TF_CLR(p, TF_NOPAGE); sched_wake = 1; }
 }
 
 int task_strvec(char **v, int n, int *pvec, int *pdata) {
@@ -159,7 +159,7 @@ int task_strvec(char **v, int n, int *pvec, int *pdata) {
 struct task *task_adopt(char *name) {
     struct task *t;
     if (!(t = task_alloc(name))) return 0;
-    t->state = TS_RUNNING;
+    task_state(t, TS_RUNNING);
     t->sv = SV_NONE;
     fd_init_console(t);
     task_append(t);
@@ -169,6 +169,7 @@ struct task *task_adopt(char *name) {
 void task_unlink(struct task *t) {
     struct task *p;
     sched_lock();
+    task_unqueue(t);
     if (task_head == t) task_head = t->next;
     else {
         p = task_head;

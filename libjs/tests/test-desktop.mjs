@@ -1443,4 +1443,6 @@ check(until(() => find(/word\d/).length === 1 && find(/^kept word0 /).some(t => 
   "and Text Editor in Courier New, Large, without Word Wrap, as notepad.cfg keeps them", JSON.stringify(find(/word\d/)));
 start('Power Off...');
 check(until(() => consoleText().split('desktop: shut down').length > 2, 2000), 'and Power Off ends it again');
+typeBytes(vm, new TextEncoder().encode('cat /proc/meminfo\n'));
+check(until(() => /^rqlost 0$/m.test(consoleText().split('desktop: shut down').pop()), 2000), 'no task was found off its queue', consoleText().slice(-600));
 process.exit(fail);

@@ -106,5 +106,6 @@ const kv = name => Number((new RegExp(`^${name} (\\d+)`, 'm').exec(f) || [])[1])
 const free = kv('free'), big = kv('largest');
 console.log(`test-c4ix-loadctl: ${free} KB free, ${big} KB of it in one run`);
 check(free > 20000 && big > free * 0.8, 'free memory is in one piece afterwards', f);
+check(/^rqlost 0$/m.test(f), 'no task was found off its queue', f);
 console.log(fail ? 'test-c4ix-loadctl: FAILED' : 'test-c4ix-loadctl: OK');
 process.exit(fail);

@@ -188,5 +188,6 @@ look();
 while (tries < 10 && !(kv('free') > 20000 && kv('largest') > kv('free') * 0.8)) { ++tries; until(() => false, par ? 100 : 200); look(); }
 console.log(`test-c4ix-movable: ${kv('free')} KB free, ${kv('largest')} KB of it in one run, after ${tries} more looks`);
 check(kv('free') > 20000 && kv('largest') > kv('free') * 0.8, 'free memory is in one piece afterwards', f);
+check(/^rqlost 0$/m.test(f), 'no task was found off its queue', f);
 console.log(fail ? 'test-c4ix-movable: FAILED' : 'test-c4ix-movable: OK');
 process.exit(fail);

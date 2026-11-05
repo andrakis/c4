@@ -219,6 +219,7 @@ struct vnode {
     int cap;                   // bytes allocated
     int rpos;                  // PIPE: read cursor into data
     int host;                  // HOSTFILE: the host descriptor
+    int waiters;               // PIPE: the first task blocked reading it (struct task *: sched_pipewake)
     int writers;               // descriptions still open for write (a PIPE's end of file)
     struct vnode *next;        // sibling in the parent directory
     struct vnode *child;        // VN_DIR: first entry
@@ -525,6 +526,10 @@ struct task {
     // it reads (sched_events)
     int  ev_wait;
     int  ev_ring;
+    // The queue it is on (sched.c), which says where its state says it should be
+    struct task *qnext;
+    struct task *qprev;
+    int  q;
     // C4KE compatibility state (c4ke.c). Zero for every task that
     // never uses it -- sl4b_alloc memsets, so this costs nothing to
     // carry and nothing to initialise.
@@ -775,6 +780,10 @@ int          sched_ncpus();       // the processors C4IX will use
 int          sched_offboot(int entry, int argc, int argv);
 void         sched_init(int interval);
 void         sched_run();
+void         task_state(struct task *t, int s);   // every change of a task's state: it goes where the state says (sched.c)
+void         task_unqueue(struct task *t);        // ... off them all, as it leaves the table
+void         sched_pipewake(struct vnode *vn);    // data or end of file on a pipe: its readers run again
+extern int   sched_rqlost;                        // tasks the watch found off their queues: must stay 0
 int          sched_sleep_due(int *pms);   // earliest sleeper deadline, 0 if none
 void         sched_forge_argv(struct task *t, int argv);  // pre-start argv patch
 void         sched_stop();

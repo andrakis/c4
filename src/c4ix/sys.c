@@ -36,7 +36,7 @@ static int sys_block(struct vnode *vn, int pos) {
     t = sched_current();
     t->block_vn = vn;
     t->block_pos = pos;
-    t->state = TS_BLOCKED;
+    task_state(t, TS_BLOCKED);
     if (sched_in_trap()) { sys_restart = 1; return 1; }
     while (t->state == TS_BLOCKED) sched_yield();
     return 0;
@@ -357,7 +357,7 @@ static int sys_waitpid(int pid, int *st, int opts) {
     if ((opts & C4IX_WNOHANG) || !sched_in_trap()) return 0;
     t->wait_for = pid;
     t->wait_posix = 1;
-    t->state = TS_WAITING;
+    task_state(t, TS_WAITING);
     sys_restart = 1;
     return 0;
 }
@@ -601,7 +601,7 @@ int sys_dispatch(int num, int *args) {
             return 0;
         }
         t->ck_wake = __time() + args[0];
-        t->state = TS_SLEEPING;
+        task_state(t, TS_SLEEPING);
         return 0;
     // Sleep args[0] ms, or less: until an event lands in the GUI ring at
     // args[1] (0: none), or with args[2] set, until a pipe the caller
@@ -614,7 +614,7 @@ int sys_dispatch(int num, int *args) {
         t->ev_wait = (args[1] ? 1 : 0) | (args[2] ? 2 : 0);
         if (sched_events(t)) { t->ev_wait = 0; return 1; }
         t->ck_wake = __time() + (args[0] > 0 ? args[0] : 0);
-        t->state = TS_SLEEPING;
+        task_state(t, TS_SLEEPING);
         return 0;
     case SYS_DISPLAY:  return sys_display(t, args[0], args[1]);
     case SYS_AFFINITY: return sched_affinity(args[0] ? args[0] : (t ? t->id : 0), args[1]);
@@ -663,7 +663,7 @@ int sys_dispatch(int num, int *args) {
         }
         t->wait_for = s->id;
         t->wait_posix = 0;
-        t->state = TS_WAITING;
+        task_state(t, TS_WAITING);
         return 0;
     }
 
@@ -921,7 +921,7 @@ void sys_pmviolation(int op, int *sp, int *returnpc, int *a) {
         *a = 0;
         if (t && sp[0] > 0) {
             t->ck_wake = __time() + (sp[0] + 999) / 1000;
-            t->state = TS_SLEEPING;
+            task_state(t, TS_SLEEPING);
         }
         return;
     // __c4_signal(sig, handler): the task's own handler, as a C4KE

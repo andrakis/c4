@@ -228,5 +228,6 @@ m = mem();
 for (let i = 0; i < 10 && !(m.largest >= m.free * 0.85); i++) { until(() => false, par ? 100 : 200); m = mem(); }
 console.log(`${name}: ${m.free} KB free, ${m.largest} KB of it in one run`);
 check(m.free > 20000 && m.largest >= m.free * 0.85, 'free memory is in one piece afterwards', m.text);
+check(/^rqlost 0$/m.test(m.text), 'no task was found off its queue', m.text);
 console.log(fail ? `${name}: FAILED` : `${name}: OK`);
 process.exit(fail);

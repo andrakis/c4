@@ -1346,10 +1346,26 @@ what it does alone, which was the point. The price is about 27 cycles on a sysca
 
 Whole loads move less. The 32 MB `b4ke -B -j 3` took 3,372,315 ms against 3,400,500.
 `innerbench -Tln 40` under node took 175 s against 178, leaving 26,116 KB in one piece of
-26,382. **`-Tln 50`, past what fits and paging hard, got slower:** 253 to 258 s on three
-runs against 227 (206 to 250 on earlier kernels), leaving 26,116 of 26,314. Why is not
-known; the new turn order is the first thing to look at, since it decides whose pages are
-wanted next. `spawn + wait` on 1 CPU read 159,399 and 177,378 cycles on two runs, so it is
+26,382.
+
+`-Tln 50` is past what fits, and is about the same on both. A single run says little: its
+time follows how many of the 50 get to start, and that turns on small shifts in timing,
+since a start that finds no room is refused. Under node a run repeats exactly, so nine runs
+each were shifted by typing a few `echo`s first, on the same disk:
+
+| Benchmarks that ran | Before, s | Run queue, s |
+|---:|---:|---:|
+| 50 | 245, 251, 254, 263 | 258, 261 |
+| 49 | 237, 249 | 244 |
+| 48 | | 234, 238 |
+| 47 | 222, 222, 224 | 227, 227 |
+| 46 | | 216, 216 |
+
+At the same count the queue is 0 to 2% slower on these few runs, which is within the
+spread. Inner kernels refused: 11 before, 17 with the queue, also too few to call. Swap
+traffic follows the count, not the kernel. Compare `-Tln 50` runs only at the same count.
+
+`spawn + wait` on 1 CPU read 159,399 and 177,378 cycles on two runs, so it is
 noisy at 5 reps; 158,475 before.
 
 In the page, 4 CPUs at 400 MHz, 32 MB with the desktop: `-Tln 40` 103 s, `-Tln 50` 118 to

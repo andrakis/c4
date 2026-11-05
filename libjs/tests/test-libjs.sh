@@ -149,6 +149,8 @@ node libjs/tests/test-c4ix-lazyrace.mjs || fail=1   # a program's free and anoth
 PARALLEL=1 node libjs/tests/test-c4ix-lazyrace.mjs || fail=1   # ... on threads
 node libjs/tests/test-c4ix-loadctl.mjs || fail=1   # more programs than memory, on threads: load control, and memory in one piece after
 PARALLEL=0 node libjs/tests/test-c4ix-loadctl.mjs || fail=1   # ... on simulated CPUs
+node libjs/tests/test-c4ix-movable.mjs || fail=1   # images, stacks and small blocks move while they run, on threads
+PARALLEL=0 node libjs/tests/test-c4ix-movable.mjs || fail=1   # ... on simulated CPUs
 node libjs/tests/test-c4ix-par.mjs || fail=1    # two CPUs on threads: cc links with libc4ix, and the program runs on each
 }
 

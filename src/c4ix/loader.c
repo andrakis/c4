@@ -687,7 +687,8 @@ void loader_switch(struct task *t) {
     l = (int *)t->img_libs;
     k = 0;
     while (k < t->img_nlibs) {
-        if (l[3 * k + 2]) *(int *)l[3 * k + 2] = t->privs == PRIV_USER ? mmu_uva(l[3 * k + 1]) : l[3 * k + 1];
+        // (a user task's by its user address, since mmu_adopt)
+        if (l[3 * k + 2]) *(int *)l[3 * k + 2] = l[3 * k + 1];
         ++k;
     }
 }

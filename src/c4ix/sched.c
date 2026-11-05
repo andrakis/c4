@@ -148,6 +148,7 @@ int klock_drop_slow(int *lk) {
 // lock of its own -- so far, the tasks' memory (task.c, umem_lock), which
 // a program's malloc and free reach without it (sched_trap's light path).
 int sched_bkl[2];
+int sched_lightcpu[CPU_MAX];
 static void bkl_take() { klock_spin(sched_bkl); }
 // Whether this CPU holds the kernel lock: the MMU swaps only then (mmu.c)
 static void bkl_drop() { klock_let(sched_bkl); }
@@ -798,7 +799,15 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
         // The light path: a program's malloc or free that leaves it
         // running is served without the kernel lock (sched_light)
         me = sched_cur;
-        if (sched_light(me, trap, param)) {
+        // Whoever moves pages sets mmu_moving and then waits for this word to
+        // clear; this sets the word and then reads mmu_moving: one of the two
+        // sees the other, whichever went first (mmu_still)
+        hold = sched_light(me, trap, param);
+        if (hold) {
+            __c4_cas((int)&sched_lightcpu[cpu_self->id], 0, 1);
+            if (mmu_moving) { __c4_cas((int)&sched_lightcpu[cpu_self->id], 1, 0); hold = 0; }
+        }
+        if (hold) {
             ++me->ntraps;
             me->uacc = me->uacc + (acct_in - acct_out);
             d = acct_out;
@@ -812,6 +821,7 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
             mode = C4IX_MODE_PROTECTED;
             interval = (sched_interval && sched_lockdepth == 0) ? sched_interval : 0;
             if (mmu_on) mmu_trap_out(me);
+            __c4_cas((int)&sched_lightcpu[cpu_self->id], 1, 0);
             sched_intrap = 0;
             return;
         }

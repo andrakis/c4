@@ -687,7 +687,12 @@ void unpack_archives() {
     targv[n] = 0;
     name = targv[2];
     pid = spawn(targv[0], n, targv);
-    if (pid < 0) { uprintf("vfsload: cannot start c4ix-persist for %s\n", name); return; }
+    if (pid < 0) {
+        uprintf("vfsload: cannot start c4ix-persist for %s\n", name);
+        // no room even to begin unpacking it: as much "does not fit" as running out part way
+        if (pid == SPAWN_NOMEM) g_nomem = 1;
+        return;
+    }
     if (!g_wait) { uprintf("vfsload: unpacking %s in the background as task %d\n", name, pid); return; }
     uprintf("vfsload: unpacking %s as task %d, and waiting for it\n", name, pid);
     sargv = (char **)ualloc(4 * sizeof(int));

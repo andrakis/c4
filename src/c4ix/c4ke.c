@@ -264,7 +264,7 @@ static void ck_export_fill(int *kti) {
         // same accuracy C4KE reports. The kernel task runs on the VM's
         // own stack and has no allocation to measure.
         kte[CK_KTE_STACK] = t->stack
-            ? (t->stack + t->stack_words * sizeof(int)) - mmu_phys(t->sv_sp) : 0;
+            ? mmu_uva(t->stack + t->stack_words * sizeof(int)) - mmu_uva(t->sv_sp) : 0;
         kte[CK_KTE_ALLOC] = 0;   // C4IX does not track per-task allocation
 
         kte = kte + CK_KTE__Sz;
@@ -384,10 +384,15 @@ static struct task *ck_spawn(char *name, int argc, int argv, int privs) {
     // The bare name may well name a real file that is not an image --
     // "c4m" is the host binary sitting in the repo root -- so a failed
     // signature check here is ordinary, not an error worth reporting.
+    // Out of memory is not "no such file": the other name may be another program.
+    // /bin/c4m.c4r is the C4DOS build, not /bin/c4m: tried when /bin/c4m could not be
+    // had, it ran under a C4IX program's name and died patching its own code.
     loader_quiet = 1;
+    loader_err = 0;
     t = task_spawn_priv(path, argc, argv, privs);
     loader_quiet = 0;
     if (t) return t;
+    if (loader_err == SPAWN_NOMEM) return 0;
 
     i = n;
     path[i] = '.'; path[i+1] = 'c'; path[i+2] = '4'; path[i+3] = 'r'; path[i+4] = 0;

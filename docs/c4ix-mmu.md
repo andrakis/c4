@@ -691,11 +691,10 @@ has nothing to swap against. Now:
     the heap was full is wherever there was room, and the last one left has no
     other to go into. With room above it, a block just big enough is taken there
     and its pages copied.
-  - *What still cannot move:* a program's image, stack and arguments. The kernel
-    keeps their addresses in memory (`t->stack`, `t->img_code`), and loads an
-    image through its one run; one long-lived program started late sits where it
-    landed. Without an MMU nothing can move: a slab's objects are named by raw
-    pointers everywhere, and all there is, is room to spare in the arena.
+  - *What cannot move:* code shared with other spaces, a page a device has used
+    (`PTE_PIN`), and whatever the kernel itself allocated. Without an MMU nothing
+    can move: a slab's objects are named by raw pointers everywhere, and all there
+    is, is room to spare in the arena.
 
   Measured, on threads at 400 MHz: `-Tln 40` 24.8 MB of 26.4 in one run, `-Tln
   50` 24.8 of 26.3. On simulated CPUs `-Tln 50` 19.2 of 26.3: a slab went where
@@ -703,6 +702,58 @@ has nothing to swap against. Now:
   23 MB of RAM files in 32 MB (no drive 1 to keep them on) `cc` could not load
   c4sc, 3 MB free in two pieces with a 68 KB chunk of the shell's between them,
   where it had just fitted before.
+- **Images, stacks, arguments and small blocks move too** (2026-11-05). They
+  were what still held free memory apart: one long-lived program started late sat
+  where it landed. The kernel knew them by the memory's address (`t->stack`,
+  `t->img_code`). From `mmu_adopt` it knows them by their user addresses, which do
+  not change and which it reaches through its map as readily, so what is behind
+  them can be copied (`urgn.canmove`), and `mmu_raise` and `mmu_klow` may take
+  any block whose pages can all move.
+  - *They may move, but not go out.* The kernel uses an image, a stack and
+    arguments between one trap and the next, and could not bring them back when
+    there is no room. `canout` stays as it was. So fifty `c4m`s with their 264 KB
+    stacks need that much memory: in 32 MB with the desktop, four or five of
+    `-Tln 50` say "out of memory starting /bin/c4m" and the rest finish.
+  - *Code moves whole.* The machine reads an opcode and its operand with one
+    offset (section 5), so an opcode that is a page's last word wants the next
+    page next to it in memory, or the fetch faults (`MMU_FK_SPLIT`). A page of
+    code copied alone broke that: the first sign was c4sc "jump to ... not mapped"
+    at a pc 4 below the address. `mmu_canmove` refuses code of more than a page,
+    and a block that is one region of code is moved all together (`mmu_codeof`,
+    `mmu_codeup`, sharing `mmu_rerun` with `mmu_contig`).
+  - *A fault that has already been answered* (`mmu_fault`). A CPU moving a page
+    takes it out of the space while it copies, holding the kernel lock. A CPU that
+    faults on it waits for that lock, and finds the page back. It forgets what it
+    knew of the page (a fetch that found nothing leaves "cannot run there" behind
+    it until `INVLPG`) and runs the instruction again. Not for `MMU_FK_SPLIT`,
+    which running again cannot mend: that retry made a -j 3 build in 32 MB stop
+    dead, every CPU faulting at one address for ever.
+  - *The light path stands aside* (`mmu_still`). A program's malloc and free take
+    no kernel lock, so a page being moved could be the one a malloc is clearing.
+    Whoever moves pages sets `mmu_moving` and waits for each CPU's
+    `sched_lightcpu` to clear; the light path sets its word and then reads
+    `mmu_moving`, so one of the two sees the other. The wait is bounded, because a
+    CPU on the light path can be waiting for the kernel lock this one holds, and
+    the caller goes without.
+  - *Out of memory is not "no such file"* (`ck_spawn`). When `/bin/c4m` could not
+    be had, the kernel went on to try `/bin/c4m.c4r`, which is C4DOS's build, and
+    it ran under a C4IX program's name until it failed on `write`. It stops now,
+    saying why. And a desktop boot stops as well if the root archive's unpacker
+    cannot even start (`vfsload`): that is as much "does not fit" as running out
+    part way.
+
+  Measured with `test-c4ix-movable` (three programs checking their code, globals,
+  deep stacks, small blocks and arguments each round, while big ones come and go
+  beneath and above them), and in the page at
+  `?mhz=400&cpus=4&mmu=1&mem=32&system=c4ix` with the desktop: `-Tln 40` finished
+  in 107 s with 22.4 MB in one run of 24.0 free, `-Tln 50` in 129 to 153 s with
+  13.6 to 17.2 MB in one run of about 24, none killed. That stays as it is once
+  idle: something that cannot move is left in the middle after fifty, and what
+  has not been looked into. Under node, without the desktop, `-Tln 40` left 22.2
+  MB of 26.4 in one run and `-Tln 50` 24.6 of 26.3, and an in-C4IX `b4ke -B -j 3`
+  in 32 MB took 3,400,500 simulated ms, against 3,342,611 before. Each block of
+  code moved costs a shootdown and a copy of the whole of it; the fast paths'
+  numbers (`docs/c4ix-design.md`) did not move.
 - **Two races on the light path** (2026-11-04). A program's malloc and free
   take no kernel lock (`sched_light`), and a big block's come here. An
   in-C4IX `b4ke -B -j 3` in 32 MB had a c4sc killed "not mapped" at the first

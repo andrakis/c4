@@ -113,7 +113,7 @@ static void vfs_ramuse(struct vnode *d, int *c) {
 }
 
 static void vfs_proc(struct vnode *vn) {
-    int ms, n, size, r[2], c[10];
+    int ms, n, size, r[2], c[12];
     // /proc/kmsg: the kernel log (console.c), as dmesg prints it
     if (vn->name[0] == 'k') {
         if (!vn_grow(vn, KLOG_MAX + 1)) return;
@@ -126,9 +126,10 @@ static void vfs_proc(struct vnode *vn) {
     // from the host as a cache, and how many; files' bytes left on the
     // host; and under the MMU the heap's blocks of single frames, every
     // block of frames, how many, the frames in use in them and the blocks
-    // less than an eighth in use (mmu_counts), and swap
+    // less than an eighth in use (mmu_counts), and swap: its slots, the pages out
+    // and in since boot, the tasks load control holds, the pages moved in memory
     if (vn->name[0] == 'm') {
-        if (!vn_grow(vn, 512)) return;
+        if (!vn_grow(vn, 640)) return;
         r[0] = 0; r[1] = 0;
         vfs_ramuse(rootdir, r);
         mmu_counts(c);
@@ -156,6 +157,8 @@ static void vfs_proc(struct vnode *vn) {
             n = vfs_kv(vn->data, n, "swapfree ", c[2] * 4);
             n = vfs_kv(vn->data, n, "swapouts ", c[3]);
             n = vfs_kv(vn->data, n, "swapins ", c[4]);
+            n = vfs_kv(vn->data, n, "held ", c[10]);
+            n = vfs_kv(vn->data, n, "moves ", c[11]);
         }
         vn->data[n] = 0;
         vn->size = n;

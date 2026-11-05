@@ -20,7 +20,7 @@
 //     outside, the next allocation drops them all, and read again they
 //     are the same; a file changed since boot is not dropped, and keeps
 //     its change
-//   - a desktop boot that does not fit stops, saying it ran out of memory
+//   - a desktop boot that does not fit has no desktop, and says it ran out of memory
 //
 //   node libjs/tests/test-lazy-root.mjs
 
@@ -210,17 +210,19 @@ check(/read from there/.test(t) && crcLines(t, files).join('\n') === wanted(file
     'and so does the boot after', t.slice(-600));
 }
 
-// ---- a desktop boot that does not fit stops, and says why ----
+// ---- a desktop boot that does not fit has no desktop, and says why ----
 // (with the MMU, 5 MB: with swap -- memory on demand, paged against its
 // own -- the system fits in 7 now, where it did not in 12 before,
-// docs/c4ix-mmu.md 11; in 5 the root archive's own unpack has too little
-// of the heap. Without the MMU nothing makes room, and 10 MB is too few)
+// docs/c4ix-mmu.md 11. In 5 either the root archive cannot be unpacked,
+// and the boot stops there, or it can, by a few KB of the heap's layout,
+// and the desktop cannot load: the shell says so, and there is still a
+// console. Without the MMU nothing makes room, and 10 MB is too few)
 for (const [mb, mmu] of [[5, true], [10, false]]) {
   const tiny = machine({ mb, mmu, store: new Map(), desktop: true });
-  tiny.until(() => tiny.halted() || /desktop: running on the display/.test(tiny.text()), 3000);
+  tiny.until(() => tiny.halted() || /desktop: running on the display|sh: out of memory starting desktop/.test(tiny.text()), 3000);
   t = tiny.text();
-  check(tiny.halted() && /out of memory/.test(t) && !/desktop: running/.test(t) && !/store to|Trap type/i.test(t),
-    `a desktop boot in ${mb} MB${mmu ? '' : ' without the MMU'} stops, saying it ran out of memory`, t.slice(-700));
+  check((tiny.halted() || /sh: out of memory starting desktop/.test(t)) && /out of memory/.test(t) && !/desktop: running/.test(t) && !/store to|Trap type/i.test(t),
+    `a desktop boot in ${mb} MB${mmu ? '' : ' without the MMU'} has no desktop, saying it ran out of memory`, t.slice(-700));
 }
 
 process.exit(fail);

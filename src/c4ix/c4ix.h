@@ -911,7 +911,7 @@ enum { MMU_PAGE = 4096, MMU_KSTACK = 262144 };
 enum { PTE_P = 1, PTE_W = 2, PTE_U = 4, PTE_X = 8, PTE_A = 0x20, PTE_D = 0x40 };
 // What a fault was (MMU_FINFO)
 // DMA: a device's access, at an address the task gave it
-enum { MMU_FK_READ = 1, MMU_FK_WRITE = 2, MMU_FK_FETCH = 4, MMU_FK_PRESENT = 8, MMU_FK_DMA = 32 };
+enum { MMU_FK_READ = 1, MMU_FK_WRITE = 2, MMU_FK_FETCH = 4, MMU_FK_PRESENT = 8, MMU_FK_SPLIT = 16, MMU_FK_DMA = 32 };
 // The signal a page fault kills with, as waitpid reports it
 enum { C4IX_SIGSEGV = 11 };
 extern int mmu_on;
@@ -936,6 +936,10 @@ int  mmu_trap_flush();
 void mmu_cpu(int k);                   // another CPU, as it starts
 int  mmu_map(int *dir, int va, int pa, int n, int flags);
 extern int mmu_short;                  // memory is short: allocation takes the kernel lock (sched_light)
+// Pages are moving (mmu_still): no CPU takes the light path, and each says
+// when it is on it. Under SMP: each word is written by its own CPU.
+extern int mmu_moving;
+extern int sched_lightcpu[CPU_MAX];
 void mmu_fault(struct task *t, int va);   // TRAP_SEGV from a user task: kill it
 // What user mode may use of page 0 (MMU_IOPM)
 enum { IOPM_ROM = 1, IOPM_DEV = 2, IOPM_GUI = 4, IOPM_SND = 8, IOPM_LOCAL = 16, IOPM_LOCALW = 32 };

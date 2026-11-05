@@ -3,7 +3,7 @@
 // /proc/meminfo (vfs.c) and free (src/c4ix/user/free.c) against the
 // heap's own books (heap.js): its size, what is in use, and the biggest
 // block it could hand out (SWAP_CMD 6, heap.js largest). Then the heap is
-// cut into pieces from outside -- a 256 KB block taken and every other
+// cut into pieces from outside -- a 384 KB block taken and every other
 // one given back -- and free says the free memory is in pieces and how
 // big the biggest is; given all back, it does not. And a RAM file written
 // is counted as one not saved, until persist save makes it the drive's.
@@ -65,9 +65,10 @@ let r = row(t, 'memory');
 check(r && r[0] === m.heap && near(r[1], K(h.used), 1024) && near(r[3], K(h.largest()), 256) && /^swap: /m.test(t) && !/in pieces/.test(t),
   'free prints them, with swap, and the free memory in one piece', t);
 
-// the heap in pieces: 256 KB blocks while they come, every other given back
+// the heap in pieces: 384 KB blocks while they come, every other given back
+// (free has to start: its stack is 256 KB and a guard page, in one piece)
 const taken = [];
-for (let p; (p = h.alloc(256 << 10)); ) taken.push(p);
+for (let p; (p = h.alloc(384 << 10)); ) taken.push(p);
 for (let i = 0; i < taken.length; i += 2) h.free(taken[i]);
 t = sh('free');
 r = row(t, 'memory');

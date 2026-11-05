@@ -19,7 +19,7 @@ import {
   C4I_C4M, C4I_HRT, C4I_SIG, C4I_FLT, C4I_PROT, C4I_TRAPH, C4I_PIT, C4I_MBOX, C4I_DRV,
 } from '../src/c4bb/sim/devices.js';
 import { TLEV_ADDR, OPNAMES_ROM, kernelPhys, kernelPte, PTE_SWAP } from '../src/c4bb/sim/arena.js';
-import { fpu, fpuFloat, C4I_FPU } from '../src/c4bb/sim/fpu.js';
+import { fpu, fpuFloat, fpuDouble, FPU_A, FPU_B, FPU_R, C4I_FPU } from '../src/c4bb/sim/fpu.js';
 import { format } from './printf.js';
 
 // Opcode numbers (c4m.c:339-390). Literal so the switch below compiles
@@ -820,6 +820,11 @@ export class Machine {
         // here like any opcode this machine lacks
         const v = this.noFpu ? undefined : fpu(this, sp);
         if (v !== undefined) { this.a = v | 0; return STOP.BUDGET; }
+        if (this.noFpu && !this.trapHandler) {
+          // c4lc -mfpu: softfp's helpers ask first, so nothing else gets here
+          this.emitString('c4m: this program needs an FPU (it was built with -mfpu), and this machine has none. Halting.\n');
+          return this.halt(-1);
+        }
         break;
       }
       case OP.TLEV: {
@@ -1122,6 +1127,19 @@ export class Machine {
 
   // The interpreter's loop: every guest's, and C4IX's kernel mode under
   // the MMU, which leaves it with STOP.SWITCH at a TLEV into user mode
+  // a double's FPU sub-op from runPlain's loop, or false for the long way: an address
+  // that is not plain memory, as LI and SI there decide it
+  fpuPlain(op, sp, glo) {
+    if (op === 21) return false;
+    const i32 = this.i32, s = sp >> 2, bit = 1 << (op - 17);
+    const pa = i32[s + 1], pb = i32[s + 2], pr = i32[s + 3];
+    if (FPU_A & bit && !((pa & 3) === 0 && pa >= 0x1000 && pa < glo - 4)) return false;
+    if (FPU_B & bit && !((pb & 3) === 0 && pb >= 0x1000 && pb < glo - 4)) return false;
+    if (FPU_R & bit && !((pr & 3) === 0 && pr >= 0x1000 && pr < glo - 4)) return false;
+    this.fpuV = fpuDouble(i32, op, FPU_A & bit ? pa >> 2 : pa, pb >> 2, pr >> 2) | 0;
+    return true;
+  }
+
   runPlain(maxCycles) {
     const dev = this.dev, i32 = this.i32, u8 = this.u8;
     if (dev.halted) return STOP.HALT;
@@ -1313,11 +1331,16 @@ export class Machine {
           case 89:   /* FPU */
             // A float's: its operands are on the stack and nothing can change that
             // the checks would want to see. The way below costs 16 times as much
-            // (docs/libjs-design.md). A double's goes that way: it has addresses.
+            // (docs/libjs-design.md). A double's the same, if its addresses are all
+            // plain memory.
             if (op === 89) {
               x = i32[sp >> 2];
               if ((x - 1) >>> 0 < 8 && !this.noFpu) {
                 a = fpuFloat(x, i32[(sp >> 2) + 1], i32[(sp >> 2) + 2]) | 0;
+                break;
+              }
+              if ((x - 17) >>> 0 < 10 && !this.noFpu && this.fpuPlain(x, sp, glo)) {
+                a = this.fpuV;
                 break;
               }
             }

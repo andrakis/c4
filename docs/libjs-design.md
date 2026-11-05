@@ -228,7 +228,9 @@ message path.
   in their own `switch`. The way out, `sys()` and then `needChecks()` and a floor division
   for the next interrupt on the way back, cost about 16 times the opcode's share of the
   instructions. Quake's timedemo on the bare machine, with the same image: 82.2 s to 73.1 s.
-  A double's sub-ops take the long way still: they read and write through addresses.
+  A double's sub-ops stay too, if every address is plain memory, or under the MMU in the
+  windows and not across a page (`fpuPlain`, `fpuUser`); anything else takes the long way,
+  from the start, since nothing has been written yet.
 - **A finished frame goes out at once** (2026-11-05). A `PRESENT` reaching the device
   flushes the commands to the page there (`gui.onPresent`, the worker's `flushDisplay`),
   from whichever CPU rang, where they used to wait for CPU 0's slice to end. A slice was

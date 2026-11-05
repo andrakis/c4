@@ -235,6 +235,28 @@ VARIABLE FT   VARIABLE EMM   VARIABLE SMM   VARIABLE BANM
    REPEAT
    SWAP-BUFS ;
 
+\ -- arith --------------------------------------------------------------
+\ What an operand known at compile time makes unnecessary, as c4opt's
+\ opt:arith. A rule answers how many items it took, and has emitted what
+\ replaces them; the pass runs again on what it made (OPT-RUN's rounds), which
+\ is c4opt's "back on the input" for every chain these rules meet.
+
+: ARITH-ZERO ( i -- n ) {: i -- n :}             \ PSH; IMM 0; ADD -> nothing
+   i oPSH BARE? 0= IF 0 EXIT THEN
+   i 2 + IN# @ < 0= IF 0 EXIT THEN
+   i 1+ oIMM PLAINOP? 0= IF 0 EXIT THEN
+   i 1+ IARG 0<> IF 0 EXIT THEN
+   i 2 + oADD BARE?  i 2 + oSUB BARE? OR 0= IF 0 EXIT THEN
+   3 ;
+
+: PASS-ARITH {: | i n -- :}
+   0 JN# !   0 TO i
+   BEGIN i IN# @ < WHILE
+      i ARITH-ZERO TO n
+      n IF i n + TO i ELSE i COPY-ITEM  i 1+ TO i THEN
+   REPEAT
+   SWAP-BUFS ;
+
 \ -- shl ----------------------------------------------------------------
 \ PSH; IMM 8; MUL -> PSH; IMM 3; SHL, which every pointer subscript emits.
 \
@@ -484,7 +506,7 @@ VARIABLE FT   VARIABLE EMM   VARIABLE SMM   VARIABLE BANM
    SWAP-BUFS ;
 
 : OPT-PASSES
-   PASS-FOLD PASS-SHL PASS-ADJ0 PASS-JMPNEXT PASS-THREAD PASS-TAIL
+   PASS-FOLD PASS-ARITH PASS-SHL PASS-ADJ0 PASS-JMPNEXT PASS-THREAD PASS-TAIL
    PASS-ADJ0 PASS-DEAD ;
 
 : OPT-RUN {: | n prev rounds -- :}

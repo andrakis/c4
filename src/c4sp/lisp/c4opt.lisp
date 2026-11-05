@@ -101,6 +101,37 @@
 
 ;; ---- passes; each takes and returns an instruction list ----
 
+;; arith: what an operand known at compile time makes unnecessary.
+;; opt:arith-try takes the next instructions and answers (REPLACEMENT N),
+;; the N of them replaced, or false. The replacement goes back on the
+;; input: it may match again with what follows.
+(define opt:n-arith 0)
+(define opt:arith-try (lambda (R) (begin
+	(define I (head R))
+	(define N (length R))
+	(if (if (opt:is I 'PSH) (>= N 3) false)
+		(begin
+			(define B (second R))
+			(define C (head (third R)))
+			;; x + 0, x - 0: PSH; IMM 0; ADD -> nothing
+			(if (if (opt:plain B 'IMM) (if (= 0 (second B)) (if (= 1 (length (third R))) (if (= C 'ADD) true (= C 'SUB)) false) false) false)
+				(list (list) 3)
+			false))
+	false))))
+(define opt:arith (lambda (Code) (next opt:arith/2 Code (list))))
+(define opt:arith/2 (lambda (Code Acc)
+	(if (empty? Code) (reverse Acc)
+	(if (not (opt:arith-head? (head Code))) (next opt:arith/2 (tail Code) (cons (head Code) Acc))
+	(begin
+		(define F (opt:arith-try (opt:reals Code 6)))
+		(if (= false F)
+			(next opt:arith/2 (tail Code) (cons (head Code) Acc))
+			(begin
+				(set! opt:n-arith (+ (second F) opt:n-arith))
+				(define D (opt:skip Code (second F)))
+				(next opt:arith/2 (+ (head F) (+ (head D) (second D))) Acc))))))))
+(define opt:arith-head? (lambda (I) (opt:is I 'PSH)))
+
 ;; constant folding: the window is (IMM a) (PSH) (IMM b) (OP).
 ;; opt:fold-try returns the folded (IMM v), or nil.
 (define opt:fold-try (lambda (I R)
@@ -446,7 +477,7 @@
 
 (define opt:passes (lambda (Code Syms)
 	;; adj0 runs again after tail: a same-size tail transform emits ADJ 0
-	(opt:dead (opt:adj0 (opt:tail (opt:thread (opt:jmpnext (opt:adj0 (opt:shl (opt:fold Code))))) Syms)))))
+	(opt:dead (opt:adj0 (opt:tail (opt:thread (opt:jmpnext (opt:adj0 (opt:shl (opt:arith (opt:fold Code)))))) Syms)))))
 
 (define opt:count-instrs (lambda (Code) (next opt:count/2 Code 0)))
 (define opt:count/2 (lambda (Code N)

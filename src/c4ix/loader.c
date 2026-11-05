@@ -522,7 +522,8 @@ static int link_modules(char *path, struct c4r_mod *mods, int n) {
                 bad = 1;
                 continue;
             }
-            m->code[paddr] = addr;
+            // &g + k, folded by c4opt: the patch's value is the k
+            m->code[paddr] = addr + pvalu;
         }
     }
     return !bad;

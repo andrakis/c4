@@ -202,6 +202,7 @@ int sc_compile (int argc, char **argv) {
 	L_lex_58conforming = conf ? cell_true : cell_false;
 	L_gen_58objmode = obj ? cell_true : cell_false;
 	L_gen_58cisc = cisc ? cell_true : cell_false;
+	L_gen_58fuse = fuse ? cell_true : cell_false;
 	L_gen_58nobuiltin = nobuiltin ? cell_true : cell_false;
 	L_gen_58pic = pic ? cell_true : cell_false;
 	L_lex_58locs = lines ? cell_true : cell_false;

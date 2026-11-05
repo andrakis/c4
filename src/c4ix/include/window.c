@@ -35,10 +35,11 @@ void win_end() { win_ch(27); win_ch('\\'); }
 void win_arg(int v, int more) { win_num(v); if (more) win_ch(','); }
 
 // Become a canvas, titled. 1 on success.
-int udisplay(int op, int flags);           // libc4ix
 int win_open(char *title) {
-    // a program in a window draws too: CPU 0, unless it was pinned (sched_softpin)
-    udisplay(4, 0);
+    // a program in a window draws too: CPU 0, unless it was pinned (sched_softpin).
+    // SYS_DISPLAY, DISP_PIN, by the gate here: c4cc builds this file into a program
+    // with no libc4ix.
+    win_sys(240, 4, 0, 0);
     if (!win_out) {
         win_out = (char *)malloc(WIN_OUTCAP + 16);
         win_in = (char *)malloc(WIN_INCAP + 16);

@@ -2413,6 +2413,12 @@ c4bb-32bit: c4cc32 c4m32 c4sp32 c4rlink32
 c4bb-images: c4bb-32bit $(C4LC_LISP) .img_g c4th32.c4r cpp c4sc32-fused.c4r
 	IMG_G=$(IMG_G) C4BB_CLIMB_AGAIN=1 bash src/c4bb/tests/build-images.sh
 	@$(MAKE) --no-print-directory $(C4DOS_IX_DISK)
+	@# C4IX's programs and libraries reach the floppy from the disk, and cannot be
+	@# its prerequisites (a circle): a change to libc4ix alone leaves it up to date
+	@# to make, with the old library beside the new c4ix.sizes, and C4IX cannot read
+	@# it. So they are copied whether or not make thought the floppy was stale.
+	@cp src/c4bb/images/disk/c4ix-*.c4r src/c4bb/images/disk/c4ix-libc4ix.c4s src/c4bb/images/disk/vfsload.c4r $(C4DOS_IX_DISK)/
+	@cd $(C4DOS_IX_DISK) && ls -p | grep -v '/$$' > c4dos.dir
 	@bash src/c4bb/tests/climb-disks.sh
 
 # Source maps in the images (docs/c4-explorer.md, track S): the games

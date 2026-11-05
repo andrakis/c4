@@ -19,7 +19,7 @@ import {
   C4I_C4M, C4I_HRT, C4I_SIG, C4I_FLT, C4I_PROT, C4I_TRAPH, C4I_PIT, C4I_MBOX, C4I_DRV,
 } from '../src/c4bb/sim/devices.js';
 import { TLEV_ADDR, OPNAMES_ROM, kernelPhys, kernelPte, PTE_SWAP } from '../src/c4bb/sim/arena.js';
-import { fpu, C4I_FPU } from '../src/c4bb/sim/fpu.js';
+import { fpu, fpuFloat, C4I_FPU } from '../src/c4bb/sim/fpu.js';
 import { format } from './printf.js';
 
 // Opcode numbers (c4m.c:339-390). Literal so the switch below compiles
@@ -1307,6 +1307,19 @@ export class Machine {
               nextIrq = interval > 0 ? (Math.floor(cycle / interval) + 1) * interval : 0;
               chk = this.needChecks(); nextChk = 0; lim = -1;
               break;
+            }
+            // falls through
+
+          case 89:   /* FPU */
+            // A float's: its operands are on the stack and nothing can change that
+            // the checks would want to see. The way below costs 16 times as much
+            // (docs/libjs-design.md). A double's goes that way: it has addresses.
+            if (op === 89) {
+              x = i32[sp >> 2];
+              if ((x - 1) >>> 0 < 8 && !this.noFpu) {
+                a = fpuFloat(x, i32[(sp >> 2) + 1], i32[(sp >> 2) + 2]) | 0;
+                break;
+              }
             }
             // falls through
 

@@ -71,6 +71,12 @@ rather than the top of either list.
 | libjs | all ten, with c4mp's meanings, so the disk's `-mfuse` images run as they do on c4bb | `libjs/c4m.js` |
 | plain `c4` | none; refuses a fused image by name | `c4l.c` `scan_extended` |
 
+**Who emits `STL` and `POPA`.** Not the fuse pass, which sees windows of instructions and
+cannot see past the value in `LEA n; PSH; ...; SI`. c4th's backend did from the start, and since
+2026-11-06 so do c4lc and c4fc, under `-mfuse`, for a word-sized local: `x = e` is the value and
+`STL`, `x++` is `PSHL x; IMM 1; ADD; STL x`, and a `*p++` whose old value is wanted keeps it on
+the stack through the store and has it back with `POPA`. Quake: 4.7% fewer instructions.
+
 **Why three in c4m.** `LDL`, `STL` and `POPA` are what a stack-machine
 code generator needs to treat the frame as registers, and c4th's native
 backend uses those three and nothing else. Without them `>R`, `DO`/`LOOP`

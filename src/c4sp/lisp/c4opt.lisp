@@ -6,6 +6,10 @@
 ;;
 ;; Passes, from design 9.4:
 ;;   fold      IMM a; PSH; IMM b; OP  ->  IMM (a OP b)   (both plain ints)
+;;   arith     what an operand known at compile time makes unnecessary:
+;;             PSH; IMM 0; ADD -> nothing; x + a + b -> x + (a+b);
+;;             LEA n; PSH; IMM k; ADD -> LEA n+k/W; IMM &g; PSH; IMM k; ADD -> IMM &g+k;
+;;             PSH; IMM 255; AND; SC -> SC
 ;;   shl       PSH; IMM 8; MUL        ->  PSH; IMM 3; SHL
 ;;   adj0      ADJ 0                  ->  (removed)
 ;;   jmpnext   JMP L just before (label L)               (falls through)

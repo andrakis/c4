@@ -77,6 +77,16 @@ function darith(m, op, pa, pb, pr) {
 
 const cmp = (a, b) => (a !== a || b !== b) ? 2 : a < b ? -1 : a > b ? 1 : 0;
 
+// A float's sub-op, 1 to 8, whose operands are already in hand: a float is its bits,
+// so nothing here reads or writes the machine, and an interpreter's loop can do it
+// without leaving (libjs's, c4m.js and mmu.js).
+export function fpuFloat(op, a, b) {
+  if (op <= 5) return farith(op, a >>> 0, b >>> 0);
+  if (op === 6) return cmp(fval(a >>> 0), fval(b >>> 0));
+  if (op === 7) return fbits(Math.fround(a | 0));
+  return toInt(fval(a >>> 0));
+}
+
 // Run one FPU instruction; M has ld32(addr) and st32(addr, v). Returns
 // the accumulator, or undefined for a sub-op there is not.
 export function fpu(m, sp) {

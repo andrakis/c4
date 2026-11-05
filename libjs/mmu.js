@@ -18,6 +18,7 @@
 // instruction's, before it changed any, so the instruction can run again.
 
 import { TLEV_ADDR, kernelPhys } from '../src/c4bb/sim/arena.js';
+import { fpuFloat } from '../src/c4bb/sim/fpu.js';
 import { OP, STOP, TRAP, CPU_HALT_ADDR, LOCAL_BASE, LOCAL_END, C4I_MMU, MMU_BASE, MMU_END,
          hasOperand, isRom, isPlainOp } from './c4m.js';
 
@@ -1031,6 +1032,18 @@ export class Mmu {
           }
           // falls through
 
+        case 89:   /* FPU */
+          // As c4m.js's: a float's, on the stack, if all of it is in the window
+          // (which promises a word either side of sp, no more).
+          if (op === 89) {
+            y = i32[(sp + sOff) >> 2];
+            if ((y - 1) >>> 0 < 8 && !m.noFpu && sp - sLo <= sLen - 12) {
+              p = sp + 8;
+              a = fpuFloat(y, i32[(sp + 4 + sOff) >> 2], i32[(p + sOff) >> 2]) | 0;
+              break;
+            }
+          }
+          // falls through
         default: {
           m.pc = pc; m.sp = sp; m.bp = bp; m.a = a; m.cycle = cycle;
           const s = this.sysUser(op, pc - 4, sp, bp, a);
@@ -1076,7 +1089,7 @@ function identityLoop() {
                     '$1 if (sOff !== 0) { this.general = true; stop = STOP.SWITCH; break loop; }');
   if (/[cs]Off\) >> 2/.test(src)) return null;
   try {
-    return new Function('STOP', 'LIMIT', 'hasOperand', 'isPlainOp', `return ${src}`)(STOP, LIMIT, hasOperand, isPlainOp);
+    return new Function('STOP', 'LIMIT', 'hasOperand', 'isPlainOp', 'fpuFloat', `return ${src}`)(STOP, LIMIT, hasOperand, isPlainOp, fpuFloat);
   } catch {
     return null;
   }

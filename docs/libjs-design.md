@@ -223,6 +223,12 @@ message path.
   is emptied, then the worker empties drive 1 and boots in one step
   (`reset-files`, answered by `files-reset`), and a file the old machine
   sent in between is dropped rather than kept.
+- **A float's FPU opcode stays in the loop** (2026-11-06). Its operands are on the stack and
+  it touches nothing else (`fpuFloat`, `src/c4bb/sim/fpu.js`), so `run` and `runUser` do it
+  in their own `switch`. The way out, `sys()` and then `needChecks()` and a floor division
+  for the next interrupt on the way back, cost about 16 times the opcode's share of the
+  instructions. Quake's timedemo on the bare machine, with the same image: 82.2 s to 73.1 s.
+  A double's sub-ops take the long way still: they read and write through addresses.
 - **A finished frame goes out at once** (2026-11-05). A `PRESENT` reaching the device
   flushes the commands to the page there (`gui.onPresent`, the worker's `flushDisplay`),
   from whichever CPU rang, where they used to wait for CPU 0's slice to end. A slice was

@@ -259,6 +259,9 @@ export class ParHost extends ParCore {
   // between CPU 0's slices: answer anyone waiting, and apply what was
   // posted, then its own IPI
   poll(m) {
+    // the time the other CPUs read (TIME, ap.js): it moves as CPU 0 runs, not
+    // only when one of them happens to ask for something
+    Atomics.store(this.ctl, C.TIMEMS, this.dev.simMs());
     if (Atomics.load(this.ctl, C.DOOR) !== this.seenDoor) this.service();
     else for (let k = 1; k < this.n; k++) this.applyPosted(k);
     return super.poll(m);

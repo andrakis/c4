@@ -386,6 +386,9 @@ enum { SL4B_NAME_MAX = 16 };
 
 struct sl4b_slab {
     struct sl4b_slab *next;
+    // (only while sl4b_tidy has them: its free objects, and which)
+    int nfree;
+    int free[2];
 };
 
 struct sl4b_cache {
@@ -396,6 +399,8 @@ struct sl4b_cache {
     int nallocs;
     int nfrees;
     int nslabs;
+    int nspilled;              // ... of them out of the arena, the heap's: what sl4b_tidy can give back
+    int moves;                 // a live object may be copied elsewhere (sl4b_tidy, and it is the MMU's region records)
     struct sl4b_cache *next;   // all-caches list, for sl4b_stats
     char name[SL4B_NAME_MAX];
 };
@@ -404,6 +409,8 @@ struct sl4b_cache *sl4b_cache_create(char *name, int objsize, int perslab);
 char *sl4b_alloc(struct sl4b_cache *c);
 void  sl4b_free(struct sl4b_cache *c, char *obj);
 void  sl4b_stats();
+int   sl4b_tidy();             // slabs out of the arena given back, what is in them moved first: 1 if there is more to do
+int   sl4b_spilled();          // slabs out of the arena now
 
 // ---- the kernel arena (sl4b.c) ----
 // What the kernel keeps for as long as it runs -- the slabs and their
@@ -974,6 +981,13 @@ int  mmu_slot();                       // a word user mode may read: a library's
 void mmu_switch(struct task *t);       // T is about to run here: its space
 void mmu_task_done(struct task *t);    // T is gone: its space too
 void mmu_gone();                       // a task is done: blocks of frames emptied into others, one held let go
+// A task has gone, and the kernel's own memory may be tidied, at a trap's start and
+// at most once a MMU_TIDY_MS (sched_trap): nothing in hand there
+enum { MMU_TIDY_MS = 1000 };
+extern int mmu_tidying, mmu_tidywhen;
+void mmu_tidy();
+int  mmu_rmove(char *from, char *to);  // the region record FROM has been copied to TO: everything that names it told
+char *umem_block(int n);               // without the MMU: a program's block, from the heap's top where the host can
 // Load control: a task held, or let go, each MMU_LOAD_MS (mmu.c)
 enum { MMU_LOAD_MS = 250 };
 extern int mmu_swapok;                 // the host keeps pages

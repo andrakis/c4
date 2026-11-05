@@ -180,7 +180,7 @@ static void ck_calibrate() {
 
 // A program's to read: in its own memory under the MMU (mmu.c)
 static char *ck_umalloc(int n) {
-    return mmu_on ? (char *)umem_alloc(sched_current(), n) : (char *)malloc(n);
+    return mmu_on ? (char *)umem_alloc(sched_current(), n) : umem_block(n);
 }
 static void ck_ufree(int p) {
     if (mmu_on) umem_free(sched_current(), p); else free((char *)p);

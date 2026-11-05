@@ -180,9 +180,13 @@ const moved = [...d.matchAll(/blocks moved up the heap, (\d+) pages of images, s
 console.log(`test-c4ix-movable: ${moved} pages of images, stacks and small blocks moved`);
 check(moved > 50, 'images, stacks and small blocks moved', d);
 
-const f = runFor('cat /proc/meminfo\necho @@mem@@', /^@@mem@@\n/m, 200000);
+// the movers have said so but may not be gone yet: a look or two
+let f, tries = 0;
 const kv = name => Number((new RegExp(`^${name} (\\d+)`, 'm').exec(f) || [])[1]);
-console.log(`test-c4ix-movable: ${kv('free')} KB free, ${kv('largest')} KB of it in one run`);
+const look = () => { f = runFor('cat /proc/meminfo\necho @@mem@@', /^@@mem@@\n/m, 200000); };
+look();
+while (tries < 10 && !(kv('free') > 20000 && kv('largest') > kv('free') * 0.8)) { ++tries; until(() => false, par ? 100 : 200); look(); }
+console.log(`test-c4ix-movable: ${kv('free')} KB free, ${kv('largest')} KB of it in one run, after ${tries} more looks`);
 check(kv('free') > 20000 && kv('largest') > kv('free') * 0.8, 'free memory is in one piece afterwards', f);
 console.log(fail ? 'test-c4ix-movable: FAILED' : 'test-c4ix-movable: OK');
 process.exit(fail);

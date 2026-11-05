@@ -160,6 +160,7 @@ static void vfs_proc(struct vnode *vn) {
             n = vfs_kv(vn->data, n, "held ", c[10]);
             n = vfs_kv(vn->data, n, "moves ", c[11]);
         }
+        n = vfs_kv(vn->data, n, "spilled ", sl4b_spilled());
         vn->data[n] = 0;
         vn->size = n;
         return;
@@ -951,6 +952,7 @@ char *vfs_fname(int i) {
 // never notice.
 int vfs_unlink(char *path) {
     struct vnode *vn, *l;
+    struct task *t;
     sched_lock();
     vn = vfs_walk2(path, 0, 0);
     if (!vn || vn == rootdir || !vn->parent ||
@@ -992,6 +994,12 @@ int vfs_unlink(char *path) {
         if (vn->data) free(vn->data);
         if (vn->hostname) free(vn->hostname);
         sl4b_free(vn_cache, (char *)vn);
+    } else if (vn->type == VN_DIR) {
+        // an empty directory goes too, unless a task is still in it: its cwd
+        // is a pointer, with no count (it stays, with no name, until reboot)
+        t = task_head;
+        while (t && t->cwd != vn) t = t->next;
+        if (!t) sl4b_free(vn_cache, (char *)vn);
     }
     sched_unlock();
     return 0;

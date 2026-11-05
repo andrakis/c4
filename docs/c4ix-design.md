@@ -1189,6 +1189,24 @@ log was `/log/kernel`. `pin` and `nice` look where the shell does.
 `/home` is for the person's own files: the page's uploads are listed
 there (`libjs/uploads.js`, docs/c4ix-desktop.md part sixteen).
 
+### Memory given back when tasks have gone (2026-11-05)
+
+The kernel's arena is fixed, and when it is full a slab comes from the heap, wherever
+the heap has room: at the peak of a crowd of programs, that is the middle of what will
+be free memory once they have gone. It used to stay there until a reboot. Now when a
+task has gone, a second or more later and with no kernel task wanting to run, a trap
+tidies (`mmu_tidy`). Slabs with nothing in them go back to the heap (`sl4b_tidy`), and
+a cache whose objects can be told apart from what names them (`c->moves`, so far
+`urgn`, by `mmu_rmove`) has its live objects copied down first. With the MMU, page
+tables move down too. Alloc and free stay a pop and a push.
+
+Programs' memory comes from the heap's top and the kernel's from its bottom, with or
+without the MMU (`umem_block`, `SWAP_HIGH`). With it, programs' pages also move
+(`mmu_compact`, `mmu_raise`). Without it, programs cannot move, so a program that stays
+cuts free memory until it exits, and a task, vnode or file alive in a slab keeps that
+slab. `docs/c4ix-mmu.md` section 11 has the evidence, what each case can and cannot
+do, and the numbers.
+
 ### Fast paths (2026-11-04)
 
 A call in c4 costs its `JSR`, `ENT`, `ADJ` and `LEV`, a push per argument and

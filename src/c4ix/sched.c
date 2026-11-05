@@ -839,6 +839,8 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     // load control: a task held, or let go, while paging is most of what
     // the machine does (mmu.c)
     if (mmu_swapok && __time() - mmu_lwin >= MMU_LOAD_MS) mmu_balance();
+    // the kernel's own memory, tidied now and then once a task has gone
+    if (mmu_tidying && __time() - mmu_tidywhen >= MMU_TIDY_MS) mmu_tidy();
 
     // no nested switches while kernel structures move
     __c4_configure(C4IX_CONF_INTERVAL, 0);

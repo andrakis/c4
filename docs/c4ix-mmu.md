@@ -747,13 +747,102 @@ has nothing to swap against. Now:
   beneath and above them), and in the page at
   `?mhz=400&cpus=4&mmu=1&mem=32&system=c4ix` with the desktop: `-Tln 40` finished
   in 107 s with 22.4 MB in one run of 24.0 free, `-Tln 50` in 129 to 153 s with
-  13.6 to 17.2 MB in one run of about 24, none killed. That stays as it is once
-  idle: something that cannot move is left in the middle after fifty, and what
-  has not been looked into. Under node, without the desktop, `-Tln 40` left 22.2
+  13.6 to 17.2 MB in one run of about 24, none killed. That stayed as it was once
+  idle, until the kernel's own memory was tidied too (the next entry). Under node,
+  without the desktop, `-Tln 40` left 22.2
   MB of 26.4 in one run and `-Tln 50` 24.6 of 26.3, and an in-C4IX `b4ke -B -j 3`
   in 32 MB took 3,400,500 simulated ms, against 3,342,611 before. Each block of
   code moved costs a shootdown and a copy of the whole of it; the fast paths'
   numbers (`docs/c4ix-design.md`) did not move.
+- **The kernel's own memory, tidied when tasks have gone** (2026-11-05). What
+  was left in the middle after fifty was the kernel's. A dump of the heap after
+  `-Tln 50` in the page, each block marked with who allocated it, showed 4 KB slabs
+  of `urgn` records (one a program's regions) at 3 MB, 4 MB, 9.9 MB and 11 MB, and
+  8 KB blocks of page tables among them: taken from the heap when the arena was full,
+  above programs that have since gone. Tasks, vnodes and open files were not there.
+  Nothing asked for a slab back when its objects were freed, so memory stayed cut
+  up until a reboot. Now when a task has gone (`mmu_gone` sets `mmu_tidying`), a
+  second or more later and when no kernel task wants to run, a trap calls `mmu_tidy`.
+  - *Slabs go back* (`sl4b_tidy`, sl4b.c). For each cache with slabs out of the
+    arena, the free objects are counted against their slabs. From the highest slab
+    down, a slab with every object free goes back to the heap. In a cache whose
+    objects can move (`c->moves`, so far `urgn`), a live object is copied to a free
+    one lower down, the arena's first, and `mmu_rmove` tells everything that names
+    it: the owner's region list and cached pointers (`t->urgns`, `t->uchunk`,
+    `t->uslab`), `mmu_vpg`, `mmu_pg`, `mmu_lastin` and `mmu_runr`. At most 256 are
+    moved at a time, and enough stay free that the next allocations do not take a
+    slab straight back. The free list is rebuilt lowest first, so what comes next
+    is low too. Nothing here costs `sl4b_alloc` or `sl4b_free` anything.
+  - *Page tables move* (`mmu_tables_tidy`). A user table in a block of its own moves
+    to a free page lower down, or a new block lower down, then the directory entry is
+    changed, its CPUs told (`mmu_shootdown`), and the old page freed. A table block's
+    record (`struct tchunk`) now lives in the block's slack when there is room, where
+    the 16-byte records were little walls of their own.
+  - *Why objects are moved, not read through a handle.* A pointer read through
+    another pointer costs an extra load at every use, on paths this kernel has spent
+    a great deal of work shortening, and would mean rewriting every use of a task,
+    vnode and region. Living in the user window would need the MMU, and a `kpa` walk
+    for each. Only `urgn` moves, because what names a region record is a short list
+    that can be fixed from here. `struct task` and `struct vnode` do not: raw
+    pointers to them are on kernel stacks. Their slabs go back when they are empty,
+    and when they are not they stay where they are.
+  - *Without the MMU.* Programs cannot move: their addresses are their memory's.
+    What can be done is to keep them apart. A program's image, stack and blocks now
+    come from the heap's top (`umem_block`, with `SWAP_HIGH`), the kernel's memory and
+    files from the bottom, so what is left when programs go is not in their middle.
+    The slabs are tidied the same way, with no records to move. What this cannot do,
+    and without the MMU nothing can:
+    - a program that stays where it landed, started when the top was full, cuts free
+      memory until it exits;
+    - a task, vnode or open file alive in a slab keeps that slab;
+    - with several CPUs `SWAP_HIGH` is one flag for the machine, so an allocation on
+      another CPU between its set and clear goes to the wrong end (seen: a file's
+      64 KB among the programs). It is a placement hint, never a wrong result, and
+      nothing moves it back without the MMU;
+    - native c4m has no high placement: there it all goes bottom up, as it did.
+  - *`vfs_unlink` kept a directory's vnode* for good: 2,600 directories made and
+    removed left 218 slabs behind. It is freed now, unless a task's `cwd` is it.
+  - *A slab that could not be had* (`mmu_klow`). In the page, a first `-Tln 40` had
+    11 of its 40 killed: "mmu: 4 blocks emptied for the kernel's 4112 bytes, now at
+    0x00000000", then C4KE's "unable to allocate kernel sig handler". `mmu_klow`
+    tried four blocks, lowest first, and since images and stacks may move but not go
+    out, with no free frame those could all stay full while a block of ordinary pages
+    further up would have made the room. With nothing yet it now drops cached files'
+    bytes and goes on through every block. This came with moving images and stacks,
+    not with tidying; `-Tln 40` passing before was luck.
+
+  `test-c4ix-tidy` runs threads, simulated CPUs and no MMU. A big program holds the
+  heap, a file is written among the programs, 2,600 directories and 5,000 regions (with
+  the MMU) take slabs out of the arena, and they go, but for 200 regions kept by a
+  program that goes on checking them. The slabs must come back but for what is still
+  in use, then all of them; records must have moved; the program and the file must not
+  be able to tell; and free memory must be in one piece. `/proc/meminfo` has
+  `spilled`, the slabs out of the arena.
+
+  In the page at `?mhz=400&cpus=4&mmu=1&mem=32&system=c4ix` with the desktop, largest
+  free of free, KB:
+
+  | | before | after |
+  |---|---:|---:|
+  | `-Tln 40` | 22.4 of 24.0 MB | 22,486 to 22,694 of about 23,900 |
+  | `-Tln 50` | 13.6 to 17.3 of about 24 MB | 22,694 of 24,143 |
+
+  and without the MMU, `mmu=0&mem=64`, against 20.9 MB of about 59 before:
+
+  | | under node | in the page |
+  |---|---:|---:|
+  | `-Tln 20` | 57,154 of 59,045 | 53,053 to 53,329 of 58,997 |
+  | `-Tln 20`, again | | 51,205 of 58,869 |
+  | `-Tln 8`, in 32 MB | | 25,600 of 26,229 |
+
+  It holds for a run or two, and without the MMU it slowly gives ground, as what stays
+  among programs stays. What the MMU's numbers lack is the desktop's own blocks and
+  kernel memory at the bottom.
+
+  Under node, without the desktop, `-Tln 50` left 24,772 of 25,810 KB and `-Tln 40`
+  20,408 of 25,526, measured as the last program left. Fifty `c4m`s in 32 MB are still
+  past what fits: one run with a build alongside had one task killed, "no memory
+  for a table to map it in", wanting 8 KB in one run with nothing able to go.
 - **Two races on the light path** (2026-11-04). A program's malloc and free
   take no kernel lock (`sched_light`), and a big block's come here. An
   in-C4IX `b4ke -B -j 3` in 32 MB had a c4sc killed "not mapped" at the first

@@ -304,7 +304,7 @@ int task_ualloc(struct task *t, int bytes) {
     if (!t || t->privs != PRIV_USER) return (int)vfs_malloc(bytes);
     if (mmu_on) return umem_alloc(t, bytes);
     while (t->vfparent) t = t->vfparent;
-    if (bytes < 0 || !(h = (int *)vfs_malloc(bytes + UBLOCK_WORDS * sizeof(int)))) return 0;
+    if (bytes < 0 || !(h = (int *)umem_block(bytes + UBLOCK_WORDS * sizeof(int)))) return 0;
     sched_lock();
     klock_take(umem_lock);
     h[0] = t->ublocks;

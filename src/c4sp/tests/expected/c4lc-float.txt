@@ -180,3 +180,112 @@ stl-post2 40600000
 stl-pre 40200000
 stl-d 40140000 0
 stl-d2f 40a00000
+fpu-add 3fe00000
+fpu-sub 3fa00000
+fpu-mul 3ec00000
+fpu-div 40c00000
+fpu-dadd 3ffc0000 0
+fpu-dsub 3ff40000 0
+fpu-dmul 3fd80000 0
+fpu-ddiv 40180000 0
+fpu-nest 4035d174
+fpu-dnest 4006ba2e 8ba2e8ba
+fpu-mix 40208000 0
+fpu-i2f 40e00000
+fpu-i2d 401c0000 0
+fpu-c2f c0400000
+fpu-c2d c0080000 0
+fpu-f2i 1 -1 1500
+fpu-d2i 1 -1 1500
+fpu-f2c -106 44
+fpu-d2c -106 44
+fpu-f2u b2d05e00 b2d05e00
+fpu-u2f 4f32d05e
+fpu-u2d 41e65a0b c0000000
+fpu-w 3fe00000
+fpu-n 3ffc0000 0
+fpu-order bf800000
+fpu-order-d 3fe00000 0
+fpu-order-l 0
+fpu-order-r 0
+fpu-order-m c0140000 0
+fpu-order-c 1 0
+fpu-order-a 40400000
+fpu-order-b 40000000
+cmp-near a 110001 001101
+cmp-near n 110001 0011
+cmp-near x 001101 10
+cmp-near z 100101
+cmp-near f 011011
+cmp-below a 001101 110001
+cmp-below n 110001 0011
+cmp-below x 001101 10
+cmp-below z 100101
+cmp-below f 011011
+cmp-above a 110001 001101
+cmp-above n 110001 0011
+cmp-above x 001101 10
+cmp-above z 100101
+cmp-above f 011011
+cmp-nnear a 001101 110001
+cmp-nnear n 001101 1100
+cmp-nnear x 001101 10
+cmp-nnear z 010100
+cmp-nnear f 010110
+cmp-nbelow a 001101 110001
+cmp-nbelow n 110001 0011
+cmp-nbelow x 001101 10
+cmp-nbelow z 010100
+cmp-nbelow f 010110
+cmp-nabove a 001101 110001
+cmp-nabove n 001101 1100
+cmp-nabove x 001101 10
+cmp-nabove z 010100
+cmp-nabove f 010110
+cmp-half a 110001 001101
+cmp-half n 110001 0011
+cmp-half x 010110 01
+cmp-half z 100101
+cmp-half f 011011
+cmp-under a 110001 001101
+cmp-under n 110001 0011
+cmp-under x 001101 10
+cmp-under z 100101
+cmp-under f 011011
+cmp-zero a 001101 110001
+cmp-zero n 110001 0011
+cmp-zero x 001101 10
+cmp-zero z 001010
+cmp-zero f 010110
+cmp-nzero a 001101 110001
+cmp-nzero n 110001 0011
+cmp-nzero x 001101 10
+cmp-nzero z 001010
+cmp-nzero f 010110
+cmp-inf a 110001 001101
+cmp-inf n 110001 0011
+cmp-inf x 110001 00
+cmp-inf z 100101
+cmp-inf f 101001
+cmp-ninf a 001101 110001
+cmp-ninf n 001101 1100
+cmp-ninf x 001101 10
+cmp-ninf z 010100
+cmp-ninf f 010110
+cmp-nan a 000001 000001
+cmp-nan n 000001 0000
+cmp-nan x 000001 00
+cmp-nan z 000100
+cmp-nan f 000000
+cmp-max a 110001 001101
+cmp-max n 110001 0011
+cmp-max x 110001 00
+cmp-max z 100101
+cmp-max f 011011
+cmp-tiny a 001101 110001
+cmp-tiny n 110001 0011
+cmp-tiny x 001101 10
+cmp-tiny z 100101
+cmp-tiny f 011011
+cmp-both 0 1 1 1
+cmp-effect 10

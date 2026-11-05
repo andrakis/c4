@@ -78,6 +78,7 @@ int *L_tree_58optimize (int *a0);
 extern int *L_gen_58objmode;
 extern int *L_gen_58cisc;
 extern int *L_gen_58fuse;
+extern int *L_gen_58fpu;
 extern int *L_gen_58nobuiltin;
 extern int *L_gen_58pic;
 extern int *L_gen_58bssextra;

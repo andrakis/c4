@@ -1024,8 +1024,14 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
             // C4KE's ABI puts the opcode at sp[0] too.
             a = ck_dispatch(param, (int *)sp + 1);
         } else {
-            kprintf("c4ix: task %d hit illegal opcode %d\n",
-                sched_cur ? sched_cur->id : -1, param);
+            // 89 is FPU. softfp's helpers ask first, so only a program built
+            // with c4lc -mfpu gets here, and the machine is why it cannot run
+            if (param == 89)
+                kprintf("c4ix: task %d needs an FPU (it was built with -mfpu), and this machine has none\n",
+                    sched_cur ? sched_cur->id : -1);
+            else
+                kprintf("c4ix: task %d hit illegal opcode %d\n",
+                    sched_cur ? sched_cur->id : -1, param);
             task_exit(-1);
         }
     } else if (trap == C4IX_TRAP_OPV) {

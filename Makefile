@@ -3513,8 +3513,10 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	# float and double (docs/c4-float.md): literals rounded at both ends of
 	# both formats, arithmetic, NaN and -0 compares, every conversion,
 	# globals, aggregates, structs, pointers, calls (through pointers too);
-	# the golden is gcc's, the same at both sizes, plain, -O and -minline
-	@for fl in "" "-O" "-minline"; do \
+	# the golden is gcc's, the same at both sizes, plain, -O and -minline, and
+	# with the FPU opcode in place of the helpers (-mfpu: only at 32 bits does it
+	# change anything)
+	@for fl in "" "-O" "-minline" "-mfpu" "-O -mfpu"; do \
 	   ./c4sp src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_float.c .c4lc_b.c4r > /dev/null || exit 1; \
 	   ./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-float.txt || exit 1; \
 	   ./c4sp32 src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_float.c .c4lc_b.c4r > /dev/null || exit 1; \
@@ -3542,6 +3544,8 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	 ./c4mp .c4lc_e.c4r | cmp - src/c4sp/tests/expected/c4lc-m7ext.txt || exit 1; \
 	 ./c4sp src/c4sp/lisp/c4lc.lisp -O -mfuse $(TESTS)/c4lc_float.c .c4lc_e.c4r > /dev/null || exit 1; \
 	 ./c4mp .c4lc_e.c4r | cmp - src/c4sp/tests/expected/c4lc-float.txt || exit 1; \
+	 ./c4sp src/c4sp/lisp/c4lc.lisp -O -mfuse -mfpu $(TESTS)/c4lc_float.c .c4lc_e.c4r > /dev/null || exit 1; \
+	 ./c4mp .c4lc_e.c4r | cmp - src/c4sp/tests/expected/c4lc-float.txt || exit 1; \
 	 if command -v node > /dev/null; then \
 	   ./c4sp32 src/c4sp/lisp/c4lc.lisp -O -mfuse -c $(TESTS)/c4lc_m7ext_a.c .c4lc_ea.c4o > /dev/null || exit 1; \
 	   ./c4sp32 src/c4sp/lisp/c4lc.lisp -O -mfuse -c $(TESTS)/c4lc_m7ext_b.c .c4lc_eb.c4o > /dev/null || exit 1; \
@@ -3549,6 +3553,11 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	   node libjs/cli.js .c4lc_e.c4r | cmp - src/c4sp/tests/expected/c4lc-m7ext.txt || exit 1; \
 	   ./c4sp32 src/c4sp/lisp/c4lc.lisp -O -mfuse $(TESTS)/c4lc_float.c .c4lc_e.c4r > /dev/null || exit 1; \
 	   node libjs/cli.js .c4lc_e.c4r | cmp - src/c4sp/tests/expected/c4lc-float.txt || exit 1; \
+	   ./c4sp32 src/c4sp/lisp/c4lc.lisp -O -mfuse -mfpu $(TESTS)/c4lc_float.c .c4lc_e.c4r > /dev/null || exit 1; \
+	   node libjs/cli.js .c4lc_e.c4r | cmp - src/c4sp/tests/expected/c4lc-float.txt || exit 1; \
+	 fi
+	@if command -v node > /dev/null; then \
+	   node libjs/cli.js --no-fpu .c4lc_e.c4r 2>&1 | grep -q "needs an FPU" || { echo "  -mfpu without an FPU did not say why"; exit 1; }; \
 	 fi
 	@echo "  -mfuse: the extern table and the float tests run, fused, on c4mp and libjs"
 	@rm -f .c4lc_ea.c4o .c4lc_eb.c4o .c4lc_e.c4r

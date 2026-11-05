@@ -157,10 +157,10 @@ int sc_ast (int argc, char **argv) {
 // either way. -g0, no map, is the default.
 int sc_compile (int argc, char **argv) {
 	int *paths, *predefs, *ptail, *dtail, *e, *ast, *m, *out, *r;
-	int  opt, obj, usepp, cisc, fuse, conf, nobuiltin, pic, lines;
+	int  opt, obj, usepp, cisc, fuse, fpu, conf, nobuiltin, pic, lines;
 	char *in, *outname;
 
-	opt = obj = usepp = cisc = fuse = conf = nobuiltin = pic = lines = 0;
+	opt = obj = usepp = cisc = fuse = fpu = conf = nobuiltin = pic = lines = 0;
 	paths = predefs = ptail = dtail = 0;
 	while (argc > 0 && **argv == '-') {
 		if      (!memcmp(*argv, "-O", 3)) opt = 1;
@@ -168,6 +168,7 @@ int sc_compile (int argc, char **argv) {
 		else if (!memcmp(*argv, "-P", 3)) usepp = 1;
 		else if (!memcmp(*argv, "-mcisc", 7)) cisc = 1;
 		else if (!memcmp(*argv, "-mfuse", 7)) { fuse = 1; opt = 1; }
+		else if (!memcmp(*argv, "-mfpu", 6)) fpu = 1;
 		else if (!memcmp(*argv, "-conforming", 12)) conf = 1;
 		else if (!memcmp(*argv, "-fno-builtin", 13)) nobuiltin = 1;
 		else if (!memcmp(*argv, "-fpic", 6)) pic = 1;
@@ -203,6 +204,7 @@ int sc_compile (int argc, char **argv) {
 	L_gen_58objmode = obj ? cell_true : cell_false;
 	L_gen_58cisc = cisc ? cell_true : cell_false;
 	L_gen_58fuse = fuse ? cell_true : cell_false;
+	L_gen_58fpu = fpu ? cell_true : cell_false;
 	L_gen_58nobuiltin = nobuiltin ? cell_true : cell_false;
 	L_gen_58pic = pic ? cell_true : cell_false;
 	L_lex_58locs = lines ? cell_true : cell_false;

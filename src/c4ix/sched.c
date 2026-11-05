@@ -219,11 +219,153 @@ static int smp_idlefor(struct task *n) {
     return 0 - 1;
 }
 
-// Could N be ready, by what costs no call? READY; asleep, with its time come
-// or events to look at; or BLOCKED, which only sched_unblocked can say. NOW is
-// __time(), read once for a walk of the task list: most tasks in a long list
-// are asleep or waiting, and this is all a walk asks of them.
-#define SCHED_MAYBE(n, now) ((n)->state == TS_READY || ((n)->state == TS_SLEEPING ? (now) - (n)->ck_wake >= 0 || (n)->ev_wait : (n)->state == TS_BLOCKED))
+// ---- the queues ----
+//
+// A task is on the queue its state says, and what the scheduler looks at is the
+// queues, not the table: on a machine with many tasks and few of them ready the
+// walks were most of a switch's cost, a yield with 50 asleep four times one alone.
+//
+//   Q_READY  ready, oldest first. A task goes on the tail as it is preempted or woken,
+//            so the turns go round; each CPU takes the first it may run (sched_mine:
+//            pins, a task still on another's stack, kernel tasks CPU 0's, the held).
+//   Q_SLEEP  on the clock alone, soonest first: one compare says if anyone is due.
+//   Q_POLL   what nothing says has arrived, because the host writes it: an event in
+//            a window's ring (SYS_EVWAIT), the console's input. Looked at each ms.
+//   Q_PIPE   blocked reading a pipe, on the pipe's own list: woken by a write, and by
+//            the last writer's close (sched_pipewake).
+//
+// Every change of state comes through task_state, under the lock. And the walk that
+// used to find the ready is kept, each 16 ms, as a watch (sched_tick): a task its state
+// says should be on a queue and is not, it puts there, and counts. So a site that
+// forgets costs a few ms, not a task that never runs; and the tests fail on the count
+// (/proc/meminfo's rqlost).
+enum { Q_READY = 1, Q_SLEEP = 2, Q_POLL = 3, Q_PIPE = 4 };
+static struct task *rq_head, *rq_tail, *sl_head, *pl_head;
+int sched_rqlost;
+static int sched_tickms;        // the machine ms it last looked
+static int sched_watchms;       // ... and when the watch last walked the table
+enum { SCHED_WATCH_MS = 16 };
+
+static void q_off(struct task *t) {
+    if (!t->q) return;
+    if (t->qprev) t->qprev->qnext = t->qnext;
+    else if (t->q == Q_READY) rq_head = t->qnext;
+    else if (t->q == Q_SLEEP) sl_head = t->qnext;
+    else if (t->q == Q_POLL) pl_head = t->qnext;
+    else t->block_vn->waiters = (int)t->qnext;
+    if (t->qnext) t->qnext->qprev = t->qprev;
+    else if (t->q == Q_READY) rq_tail = t->qprev;
+    t->q = 0;
+    t->qnext = 0;
+    t->qprev = 0;
+}
+
+static void rq_add(struct task *t) {
+    t->q = Q_READY;
+    t->qnext = 0;
+    t->qprev = rq_tail;
+    if (rq_tail) rq_tail->qnext = t;
+    else rq_head = t;
+    rq_tail = t;
+}
+
+// On a list with no tail kept, at its head
+#define Q_PUSH(head, t, which) ((t)->q = (which), (t)->qprev = 0, (t)->qnext = (head), ((head) ? ((head)->qprev = (t)) : 0), (head) = (t))
+
+static void sl_add(struct task *t) {
+    struct task *p;
+    t->q = Q_SLEEP;
+    if (!sl_head || t->ck_wake - sl_head->ck_wake < 0) {
+        t->qprev = 0;
+        t->qnext = sl_head;
+        if (sl_head) sl_head->qprev = t;
+        sl_head = t;
+        return;
+    }
+    p = sl_head;
+    while (p->qnext && p->qnext->ck_wake - t->ck_wake <= 0) p = p->qnext;
+    t->qprev = p;
+    t->qnext = p->qnext;
+    if (p->qnext) p->qnext->qprev = t;
+    p->qnext = t;
+}
+
+void task_state(struct task *t, int s) {
+    struct task *h;
+    sched_lock();
+    q_off(t);
+    t->state = s;
+    if (s == TS_READY) {
+        if (!t->cpuidle) rq_add(t);
+    } else if (s == TS_SLEEPING) {
+        if (t->ev_wait) Q_PUSH(pl_head, t, Q_POLL);
+        else sl_add(t);
+    } else if (s == TS_BLOCKED) {
+        if (t->block_vn->type == VN_PIPE) {
+            h = (struct task *)t->block_vn->waiters;
+            Q_PUSH(h, t, Q_PIPE);
+            t->block_vn->waiters = (int)h;
+        } else Q_PUSH(pl_head, t, Q_POLL);
+    }
+    sched_unlock();
+}
+
+void task_unqueue(struct task *t) {
+    sched_lock();
+    q_off(t);
+    sched_unlock();
+}
+
+// N can run: its wait is over
+static void sched_wakeup(struct task *n) {
+    n->ev_wait = 0;
+    task_state(n, TS_READY);
+    n->woke = 1;
+    sched_wake = 1;
+}
+
+// Whoever's time has come
+#define SCHED_DUE(now) while (sl_head && (now) - sl_head->ck_wake >= 0) sched_wakeup(sl_head)
+
+// Data has come to a pipe, or its last writer has gone. Their reads run again,
+// and whoever is too late blocks again.
+void sched_pipewake(struct vnode *vn) {
+    sched_lock();
+    while (vn->waiters) sched_wakeup((struct task *)vn->waiters);
+    sched_unlock();
+}
+
+// Each ms of the machine's clock, by whoever has the lock first
+static void sched_tick(int now) {
+    struct task *n, *x;
+    int s;
+    sched_tickms = now;
+    SCHED_DUE(now);
+    n = pl_head;
+    while (n) {
+        x = n->qnext;
+        sched_unblocked(n);
+        n = x;
+    }
+    // the watch: a walk of the whole table, for what should never be
+    if (now - sched_watchms < SCHED_WATCH_MS) return;
+    sched_watchms = now;
+    n = task_head;
+    while (n) {
+        s = n->state;
+        if (!n->q && !n->cpuidle && (s == TS_READY || s == TS_SLEEPING || s == TS_BLOCKED)) {
+            if (!sched_rqlost) klog("sched: task %d (%s) in state %d was on no queue\n", n->id, n->name, s);
+            ++sched_rqlost;
+            task_state(n, s);
+            sched_wake = 1;
+        } else if (n->q == Q_PIPE && vfs_readable(n->block_vn, n->block_pos)) {
+            if (!sched_rqlost) klog("sched: task %d (%s) was left waiting for a pipe that has data\n", n->id, n->name);
+            ++sched_rqlost;
+            sched_wakeup(n);
+        }
+        n = n->next;
+    }
+}
 
 // Work some idle CPU could do: an IPI to one for each task ready, among
 // the CPUs it may run on. Kernel tasks are CPU 0's. Under the lock, at the end
@@ -240,11 +382,9 @@ static void smp_kick(int now) {
     struct task *n;
     int k, me;
     me = cpu_self->id;
-    // (kernel tasks are the list's first: CPU 0 is theirs before anyone's)
-    n = task_head;
+    n = rq_head;
     while (n && (smp_idlemask & ~(1 << me))) {
-        if (SCHED_MAYBE(n, now) && !n->cpuidle && !n->oncpu && !sched_held(n) &&
-            (n->state == TS_READY || sched_unblocked(n))) {
+        if (!n->cpuidle && !n->oncpu && !sched_held(n)) {
             if (n->privs == PRIV_KERNEL) {
                 if (me != 0 && (smp_idlemask & 1)) { __c4_ipi(0); SMP_IDLE(0, 0); }
             } else if ((k = smp_idlefor(n)) >= 0) { __c4_ipi(k); SMP_IDLE(k, 0); }
@@ -259,10 +399,12 @@ static int sched_ready_here() {
     struct task *n;
     int now;
     now = __time();
-    n = task_head;
+    if (now != sched_tickms) sched_tick(now);
+    else SCHED_DUE(now);
+    n = rq_head;
     while (n) {
-        if (SCHED_MAYBE(n, now) && !n->cpuidle && sched_mine(n) && (n->state == TS_READY || sched_unblocked(n))) return 1;
-        n = n->next;
+        if (!n->cpuidle && sched_mine(n)) return 1;
+        n = n->qnext;
     }
     return 0;
 }
@@ -499,7 +641,7 @@ void sched_new_slice() {
 
 // ---- picking the next task ----
 
-// What a parked task is waiting for, asked as sched_pick passes it. (A
+// What a parked task is waiting for, asked of the poll list each ms. (A
 // TS_WAITING task is not asked: task_zombify wakes it when its target
 // dies, below.)
 // A TS_BLOCKED task is parked on a vnode -- an empty pipe. It wakes
@@ -510,15 +652,12 @@ void sched_new_slice() {
 static int sched_unblocked(struct task *n) {
     if (n->state == TS_SLEEPING) {
         if (__time() - n->ck_wake < 0 && !(n->ev_wait && sched_events(n))) return 0;
-        n->ev_wait = 0;
-        n->state = TS_READY;
-        n->woke = 1;
+        sched_wakeup(n);
         return 1;
     }
     if (n->state != TS_BLOCKED) return 0;
     if (!vfs_readable(n->block_vn, n->block_pos)) return 0;
-    n->state = TS_READY;
-    n->woke = 1;
+    sched_wakeup(n);
     return 1;
 }
 
@@ -551,13 +690,16 @@ int sched_sleep_due(int *pms) {
     int found;
 
     found = 0;
-    t = task_head;
+    sched_lock();
+    if (sl_head) { *pms = sl_head->ck_wake; found = 1; }
+    t = pl_head;
     while (t) {
         if (t->state == TS_SLEEPING) {
             if (!found || t->ck_wake - *pms < 0) { *pms = t->ck_wake; found = 1; }
         }
-        t = t->next;
+        t = t->qnext;
     }
+    sched_unlock();
     return found;
 }
 
@@ -590,7 +732,7 @@ void task_zombify(struct task *t, int code) {
     was = t->state;
     if (con_is_booting() || t->id <= boot_lastid) klog("task %d (%s) exited %d\n", t->id, t->name, code);
     t->exitcode = code;
-    t->state = TS_ZOMBIE;
+    task_state(t, TS_ZOMBIE);
     TF_SET(t, TF_NOPAGE);
     if (t->held) mmu_letgo(t);
     if (t->nice) sched_setnice(t, 0);
@@ -604,7 +746,7 @@ void task_zombify(struct task *t, int code) {
         if (w->state == TS_WAITING && w->wait_posix &&
             (w->wait_for == t->id || (w->wait_for == -1 && t->parent == w->id))) {
             w->wait_posix = 0;
-            w->state = TS_READY;
+            task_state(w, TS_READY);
             sched_wake = 1;
             w->woke = 1;
             return;
@@ -615,7 +757,7 @@ void task_zombify(struct task *t, int code) {
             // sv_a into the accumulator, where SYS_WAIT's result belongs
             w->wait_result = code;
             w->sv_a = code;
-            w->state = TS_READY;
+            task_state(w, TS_READY);
             sched_wake = 1;
             w->woke = 1;
             task_release(t);
@@ -625,27 +767,23 @@ void task_zombify(struct task *t, int code) {
     }
 }
 
-// Round-robin after t: the next runnable task; else t itself, if it can
-// still run; else the idle task, which never takes a turn of its own.
-// A task that has just died may be off the list already -- its waiter
-// reaped it -- so the walk starts from the head for a zombie, and stops
-// when it comes back round to where it started.
-// Under SMP, only what this CPU may run (sched_mine), and the idle task
-// is this CPU's.
+// The queue's first that this CPU may run (sched_mine), and the idle task is
+// this CPU's; else t itself, if it can still run; else the idle task, which
+// never takes a turn of its own. N stays on the queue until it is switched to:
+// the caller may yet keep T.
 static struct task *sched_pick(struct task *t) {
-    struct task *n, *start, *idle;
+    struct task *n, *x, *idle;
     int now;
     idle = cpu_self->idle;
     now = __time();
-    start = (t->state == TS_ZOMBIE) ? task_head : task_next(t);
-    n = start;
+    SCHED_DUE(now);
+    n = rq_head;
     while (n) {
-        if (SCHED_MAYBE(n, now) && n != t && n != idle && !n->cpuidle && sched_mine(n)) {
-            if (n->state == TS_READY) return n;
-            if (sched_unblocked(n)) return n;
-        }
-        n = task_next(n);
-        if (n == start) n = 0;
+        x = n->qnext;
+        // (an idle task is one only once it has been made)
+        if (n->cpuidle) q_off(n);
+        else if (n != t && n != idle && sched_mine(n)) return n;
+        n = x;
     }
     if ((t->state == TS_RUNNING || t->state == TS_READY || sched_unblocked(t)) &&
         (t == idle || t->cpuidle || sched_mine(t))) return t;
@@ -708,11 +846,10 @@ void sched_setnice(struct task *t, int nice) {
 static struct task *sched_waker(struct task *t) {
     struct task *n, *best;
     best = 0;
-    n = task_head;
+    n = rq_head;
     while (n) {
-        if (n->woke && n != t && !n->cpuidle && n->nice < t->nice && (!best || n->nice < best->nice) &&
-            sched_mine(n) && (n->state == TS_READY || sched_unblocked(n))) best = n;
-        n = n->next;
+        if (n->woke && n != t && !n->cpuidle && n->nice < t->nice && (!best || n->nice < best->nice) && sched_mine(n)) best = n;
+        n = n->qnext;
     }
     return best;
 }
@@ -838,7 +975,12 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     }
     // load control: a task held, or let go, while paging is most of what
     // the machine does (mmu.c)
-    if (mmu_swapok && __time() - mmu_lwin >= MMU_LOAD_MS) mmu_balance();
+    d = __time();
+    if (mmu_swapok && d - mmu_lwin >= MMU_LOAD_MS) mmu_balance();
+    // the kernel's own memory, tidied now and then once a task has gone
+    if (mmu_tidying && d - mmu_tidywhen >= MMU_TIDY_MS) mmu_tidy();
+    // the queues: what nothing says has happened (sched_tick)
+    if (d != sched_tickms) sched_tick(d);
 
     // no nested switches while kernel structures move
     __c4_configure(C4IX_CONF_INTERVAL, 0);
@@ -960,6 +1102,8 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
             smp_idlefor(n) >= 0) n = t;
         sched_slice0 = acct_in;
     }
+    // (kept, and it was woken in its own trap: it is running, not waiting its turn)
+    if (n == t && t->q == Q_READY) { q_off(t); t->state = TS_RUNNING; }
     sched_resched = 0;
     // An execve forged the running task a new context: it is resumed
     // from that even if it is picked again, and the trap's registers,
@@ -972,7 +1116,11 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
             t->sv = SV_REGS;
             t->sv_a = a; t->sv_bp = bp; t->sv_sp = sp; t->sv_pc = returnpc;
         }
-        if (t->state == TS_RUNNING) t->state = TS_READY;
+        // to the queue's tail, unless it is going on or it is an idle task
+        if (t->state == TS_RUNNING) {
+            t->state = TS_READY;
+            if (n != t && !t->cpuidle) rq_add(t);
+        }
         if (n->sv == SV_REGS) {
             a = n->sv_a; bp = n->sv_bp; sp = n->sv_sp; returnpc = n->sv_pc;
         } else {
@@ -986,6 +1134,7 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
         // the mask travels with the task, not with the machine
         t->lockdepth = sched_lockdepth;
         sched_lockdepth = n->lockdepth;
+        q_off(n);
         n->state = TS_RUNNING;
         n->woke = 0;
         sched_cur = n;
@@ -1327,7 +1476,7 @@ int task_wait(struct task *t) {
     me = sched_cur;
     me->wait_for = t->id;
     me->wait_posix = 0;
-    me->state = TS_WAITING;
+    task_state(me, TS_WAITING);
     while (me->state == TS_WAITING) sched_yield();
     return me->wait_result;
 }
@@ -1421,7 +1570,7 @@ int sched_vfork(int bp) {
     memcpy((char *)c->sv_sp, (char *)(bp + 2 * sizeof(int)), n);
     p->posix = 1;
     p->wait_for = c->id;
-    p->state = TS_VFORK;
+    task_state(p, TS_VFORK);
     TF_SET(p, TF_NOPAGE);
     return c->id;
 }
@@ -1583,7 +1732,7 @@ void sched_init(int interval) {
     idle_task->cpuidle = 1;
     cpu_self->idle = idle_task;
     kernel_task = task_adopt("kernel");
-    kernel_task->state = TS_RUNNING;
+    task_state(kernel_task, TS_RUNNING);
     idle_task->parent = kernel_task->id;
     // Processors: libjs's SMP, which has the window. Each other CPU's
     // idle task is in the list now, running, so nothing picks it, and
@@ -1735,12 +1884,16 @@ void sched_stop() {
 // A task parked on console input: what a keystroke would wake.
 static int sched_console_reader() {
     struct task *t;
-    t = task_head;
-    while (t) {
-        if (sched_reading_console(t)) return 1;
-        t = t->next;
+    int r;
+    r = 0;
+    sched_lock();
+    t = pl_head;
+    while (t && !r) {
+        r = sched_reading_console(t);
+        t = t->qnext;
     }
-    return 0;
+    sched_unlock();
+    return r;
 }
 
 // The idle task: what runs when nothing else can, which is to say

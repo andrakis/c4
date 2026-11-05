@@ -52,6 +52,7 @@ CC_PROGS="c4cc c4rdump c4rlink cpp c4 c4m"
     echo "b4ke -C /usr"
     echo "b4ke -C /usr -f INSTALL.B4K"
     echo "echo installed-ls-runs | wc"
+    echo "cat /proc/meminfo"
     echo "exit"
 } > .rebuild.cmds
 out=$(timeout 1500 $LIBJS -m $MB -d $IMAGES/disk $IMAGES/c4ix32.c4r < .rebuild.cmds 2>&1)
@@ -96,5 +97,8 @@ else bad "a second run finds everything up to date"; echo "$out" | grep 'up to d
 if echo "$out" | grep -qF "b4ke: installed in /bin and /usr/lib" && echo "$out" | grep -qF "18 bytes 1 lines"; then
     ok "INSTALL.B4K puts them in /bin, and they run"
 else bad "INSTALL.B4K puts them in /bin, and they run"; fi
+
+if echo "$out" | grep -qE "^rqlost 0$"; then ok "no task was found off its queue"
+else bad "no task was found off its queue"; echo "$out" | grep -E "rqlost|was on no queue|left waiting" | head; fi
 
 if [ $fail = 0 ]; then echo "test-rebuild: OK"; else echo "test-rebuild: FAILURES"; exit 1; fi

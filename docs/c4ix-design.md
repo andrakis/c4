@@ -1189,6 +1189,24 @@ log was `/log/kernel`. `pin` and `nice` look where the shell does.
 `/home` is for the person's own files: the page's uploads are listed
 there (`libjs/uploads.js`, docs/c4ix-desktop.md part sixteen).
 
+### Memory given back when tasks have gone (2026-11-05)
+
+The kernel's arena is fixed, and when it is full a slab comes from the heap, wherever
+the heap has room: at the peak of a crowd of programs, that is the middle of what will
+be free memory once they have gone. It used to stay there until a reboot. Now when a
+task has gone, a second or more later and with no kernel task wanting to run, a trap
+tidies (`mmu_tidy`). Slabs with nothing in them go back to the heap (`sl4b_tidy`), and
+a cache whose objects can be told apart from what names them (`c->moves`, so far
+`urgn`, by `mmu_rmove`) has its live objects copied down first. With the MMU, page
+tables move down too. Alloc and free stay a pop and a push.
+
+Programs' memory comes from the heap's top and the kernel's from its bottom, with or
+without the MMU (`umem_block`, `SWAP_HIGH`). With it, programs' pages also move
+(`mmu_compact`, `mmu_raise`). Without it, programs cannot move, so a program that stays
+cuts free memory until it exits, and a task, vnode or file alive in a slab keeps that
+slab. `docs/c4ix-mmu.md` section 11 has the evidence, what each case can and cannot
+do, and the numbers.
+
 ### Fast paths (2026-11-04)
 
 A call in c4 costs its `JSR`, `ENT`, `ADJ` and `LEV`, a push per argument and
@@ -1220,9 +1238,8 @@ as little as it can. The rules, for code added to those paths:
   `mmu_mapgen`, bumped after every unmap and read before the tables are. It vouches
   only for reading a syscall's three words. (A task cannot aim a syscall at a page
   it has unmapped: its own pushes would fault first.)
-- **A walk asks a task the cheap questions first.** `SCHED_MAYBE` is all a walk
-  of the task list asks a task asleep and not due, or waiting; it reads the
-  clock once for the walk, not once per sleeper.
+- **A walk that finds nothing should not be walked.** The scheduler's walks of the
+  task table became queues (below). What is left of them reads the clock once.
 - **What is invariant in a loop is asked once.** `mmu_clock` asks a region's
   questions once for all its pages, and looks up a table once per 1,024 of them.
 - **Measure it.** Each of these was measured against the last, with
@@ -1273,9 +1290,73 @@ What the pass tried and left out, measured or not worth the keeping:
 - **`cpu_self->udir`.** The check's cost was in the call, and `UARGS_OK` skips that;
   a stale directory would be a security hole, for a fraction of the gain.
 - **Counts of the ready, to skip `sched_pick`'s walk whole.** A site that missed
-  them would lose a wakeup, unlike `sched_wake`. The walk is 72 cycles a task, at
-  a switch: 4,870 cycles to yield with 50 asleep, against 1,215 alone. With that
-  many asleep it is what a real run queue would remove.
+  them would lose a wakeup, unlike `sched_wake`. The walk was 72 cycles a task, at
+  a switch: 4,870 cycles to yield with 50 asleep, against 1,215 alone. The run
+  queue removed it instead.
+
+### The run queue (2026-11-05)
+
+A task is on the queue its state says, and the scheduler looks at the queues rather
+than the task table, so what a switch costs no longer depends on how many tasks are
+waiting.
+
+| Queue | Who | What takes them off |
+|---|---|---|
+| `Q_READY` | ready, oldest first; a task goes on the tail as it is preempted or woken | a CPU taking the first it may run (`sched_mine`) |
+| `Q_SLEEP` | asleep on the clock, soonest first | one compare with the head says if anyone is due |
+| `Q_POLL` | waiting for what the host writes with no event: a window's ring (`SYS_EVWAIT`), the console | looked at each ms (`sched_tick`) |
+| `Q_PIPE` | blocked reading a pipe, on that pipe's own list (`vn->waiters`) | a write, or the last writer's close (`sched_pipewake`) |
+
+- **Every change of state goes through `task_state`**, under the lock. The only other
+  writes are the switch's own, between `q_off` and `rq_add`, where it is the one
+  moving the task. A new site writes `task_state` or it breaks the watch.
+- **The old walk is kept as a watch.** Every 16 ms `sched_tick` walks the table for a
+  task whose state says it should be on a queue and is not, or left on a pipe that has
+  data. It puts the task right, logs the first, and counts in `sched_rqlost`,
+  `/proc/meminfo`'s `rqlost`. So a site that forgets costs a few ms, not a task that
+  never runs. `test-c4ix-free`, `-loadctl`, `-movable`, `-tidy`, `test-desktop` and
+  `test-rebuild` fail if the count is not 0.
+- **A task held by load control stays on the ready queue**, skipped by `sched_mine`,
+  rather than coming off it. A signal must release a held task (`sched_held` asks
+  `TF_SIG`), and any of the places that post one would otherwise have to requeue it.
+  Few tasks are ever held, so the skip costs little.
+- **Blocked on the console stays polled.** The host delivers those bytes with no event
+  the kernel sees. Only a pipe has a writer in the kernel to wake its reader.
+- **The turn order changed.** It was "the next in the table after this one"; it is now
+  the order they became ready, which is fairer to a task woken late. A parent that has
+  waited comes back on whichever CPU is free, and each CPU has its own count of cycles,
+  so `bench`'s spawn loop now pins itself for its two readings.
+
+Before to after, the same kernel but for this, under libjs with the MMU in 32 MB, in
+cycles. (`spawn + wait` is left out of the comparison: the pin changed what it measures.)
+
+| | 1 CPU | 4 CPUs |
+|---|---:|---:|
+| syscall (`getpid`) | 829 -> 856 | 1,222 -> 1,212 |
+| yield | 1,227 -> 944 | 1,891 -> 1,379 |
+| malloc + free | 2,182 -> 2,236 | 2,599 -> 2,559 |
+| syscall, 50 tasks asleep | 877 -> 849 | 1,646 -> 1,210 |
+| yield, 50 tasks asleep | 4,897 -> 960 | 6,906 -> 1,400 |
+| malloc + free, 50 asleep | 2,283 -> 2,179 | 2,950 -> 2,527 |
+
+Native c4m, 1 CPU: yield 1,095 -> 808, syscall 697 -> 722, malloc + free 1,746 -> 1,793.
+The kernel's image went from 623,323 to 633,338 bytes. With 50 asleep a task now costs
+what it does alone, which was the point. The price is about 27 cycles on a syscall on
+1 CPU, for the clock's compare at each trap and what the setter's calls add.
+
+Whole loads move less. The 32 MB `b4ke -B -j 3` took 3,372,315 ms against 3,400,500.
+`innerbench -Tln 40` under node took 175 s against 178, leaving 26,116 KB in one piece of
+26,382. **`-Tln 50`, past what fits and paging hard, got slower:** 253 to 258 s on three
+runs against 227 (206 to 250 on earlier kernels), leaving 26,116 of 26,314. Why is not
+known; the new turn order is the first thing to look at, since it decides whose pages are
+wanted next. `spawn + wait` on 1 CPU read 159,399 and 177,378 cycles on two runs, so it is
+noisy at 5 reps; 158,475 before.
+
+In the page, 4 CPUs at 400 MHz, 32 MB with the desktop: `-Tln 40` 103 s, `-Tln 50` 118 to
+149 s, nothing killed, `rqlost` 0, and 22,692 to 23,230 KB in one piece of about 24,400
+afterwards. With 50 in 32 MB some inner kernels are refused at start ("out of memory
+starting /bin/c4m"), so 42 to 48 of the 50 report; the kernel before the queue did the
+same. `mmu=0` in 64 MB: `-Tln 20` 47 to 49 s, `rqlost` 0.
 
 ## 6.1 Running it
 

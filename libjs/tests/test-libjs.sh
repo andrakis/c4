@@ -153,6 +153,9 @@ PARALLEL=0 node libjs/tests/test-c4ix-loadctl.mjs || fail=1   # ... on simulated
 node libjs/tests/test-c4ix-softpin.mjs || fail=1   # what draws goes to CPU 0, unless it was pinned; its children go anywhere
 node libjs/tests/test-c4ix-movable.mjs || fail=1   # images, stacks and small blocks move while they run, on threads
 PARALLEL=0 node libjs/tests/test-c4ix-movable.mjs || fail=1   # ... on simulated CPUs
+node libjs/tests/test-c4ix-tidy.mjs || fail=1   # the kernel's own memory given back and moved once tasks have gone, on threads
+PARALLEL=0 node libjs/tests/test-c4ix-tidy.mjs || fail=1   # ... on simulated CPUs
+MMU=0 node libjs/tests/test-c4ix-tidy.mjs || fail=1   # ... and without the MMU
 node libjs/tests/test-c4ix-par.mjs || fail=1    # two CPUs on threads: cc links with libc4ix, and the program runs on each
 }
 

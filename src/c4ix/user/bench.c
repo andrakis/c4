@@ -88,10 +88,13 @@ static int bench_malloc() {
 // through the loader, the scheduler and the reaper.
 static int bench_spawn(char *prog) {
     char *av[2];
-    int i, t0, pid;
+    int i, t0, pid, was, r;
 
     av[0] = prog;
     av[1] = 0;
+    // each CPU has its own count of cycles, and a parent that has waited comes back
+    // on whichever is free: on one CPU for the two readings
+    was = uaffinity(0, 1);
     t0 = ucycles();
     i = 0;
     while (i < SPAWN_REPS) {
@@ -99,7 +102,9 @@ static int bench_spawn(char *prog) {
         uwait(pid);
         ++i;
     }
-    return (ucycles() - t0) / SPAWN_REPS;
+    r = (ucycles() - t0) / SPAWN_REPS;
+    if (was >= 0) uaffinity(0, was);
+    return r;
 }
 
 int main(int argc, char **argv) {

@@ -160,6 +160,8 @@ static void vfs_proc(struct vnode *vn) {
             n = vfs_kv(vn->data, n, "held ", c[10]);
             n = vfs_kv(vn->data, n, "moves ", c[11]);
         }
+        n = vfs_kv(vn->data, n, "spilled ", sl4b_spilled());
+        n = vfs_kv(vn->data, n, "rqlost ", sched_rqlost);
         vn->data[n] = 0;
         vn->size = n;
         return;
@@ -951,6 +953,7 @@ char *vfs_fname(int i) {
 // never notice.
 int vfs_unlink(char *path) {
     struct vnode *vn, *l;
+    struct task *t;
     sched_lock();
     vn = vfs_walk2(path, 0, 0);
     if (!vn || vn == rootdir || !vn->parent ||
@@ -992,6 +995,12 @@ int vfs_unlink(char *path) {
         if (vn->data) free(vn->data);
         if (vn->hostname) free(vn->hostname);
         sl4b_free(vn_cache, (char *)vn);
+    } else if (vn->type == VN_DIR) {
+        // an empty directory goes too, unless a task is still in it: its cwd
+        // is a pointer, with no count (it stays, with no name, until reboot)
+        t = task_head;
+        while (t && t->cwd != vn) t = t->next;
+        if (!t) sl4b_free(vn_cache, (char *)vn);
     }
     sched_unlock();
     return 0;
@@ -1152,6 +1161,7 @@ int vfs_write(struct file *f, char *buf, int len) {
         memcpy(vn->data + vn->size, buf, len);
         vn->size = vn->size + len;
         sched_wake = 1;
+        sched_pipewake(vn);
         sched_unlock();
         return len;
     }
@@ -1213,7 +1223,11 @@ static void file_unref(struct file *f) {
     sched_lock();
     --f->refs;
     if (f->refs > 0) { sched_unlock(); return; }
-    if ((f->flags & 3) != C4IX_O_RDONLY) { --f->vn->writers; sched_wake = 1; }
+    if ((f->flags & 3) != C4IX_O_RDONLY) {
+        --f->vn->writers;
+        sched_wake = 1;
+        if (!f->vn->writers && f->vn->type == VN_PIPE) sched_pipewake(f->vn);
+    }
     vn_release(f->vn);
     sl4b_free(file_cache, (char *)f);
     sched_unlock();

@@ -547,7 +547,7 @@ static void mod_trim(struct c4r_mod *m) {
     while (i < m->nsym) { p = sym_next(p); ++i; }
     ob = m->buf;
     keep = p - ob;
-    if (keep >= m->buflen || !(nb = (char *)malloc(keep + 16))) return;
+    if (keep >= m->buflen || !(nb = mmu_on ? (char *)malloc(keep + 16) : umem_block(keep + 16))) return;
     memcpy(nb, ob, keep);
     m->dtmpl = nb + (m->dtmpl - ob);
     m->patches = nb + (m->patches - ob);

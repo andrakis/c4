@@ -89,4 +89,6 @@ check(written.files - before.files >= 400 && written.nfiles === before.nfiles + 
   `a file written counts as not saved (${written.files - before.files} K more), and saved it does not (${saved.files} K)`,
   JSON.stringify({ before, written, saved }));
 
+const q = sh('cat /proc/meminfo');
+check(/^rqlost 0$/m.test(q), 'no task was found off its queue', q);
 process.exit(fail);

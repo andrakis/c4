@@ -180,7 +180,7 @@ static void ck_calibrate() {
 
 // A program's to read: in its own memory under the MMU (mmu.c)
 static char *ck_umalloc(int n) {
-    return mmu_on ? (char *)umem_alloc(sched_current(), n) : (char *)malloc(n);
+    return mmu_on ? (char *)umem_alloc(sched_current(), n) : umem_block(n);
 }
 static void ck_ufree(int p) {
     if (mmu_on) umem_free(sched_current(), p); else free((char *)p);
@@ -502,7 +502,7 @@ int ck_kill(int pid, int sig) {
     // shut a sleeping program down would never get to run, which is
     // exactly what innerbench's graceful shutdown depends on.
     if (t->state == TS_SLEEPING || t->state == TS_WAITING
-        || t->state == TS_BLOCKED) { t->state = TS_READY; sched_wake = 1; }
+        || t->state == TS_BLOCKED) { task_state(t, TS_READY); sched_wake = 1; }
     return 0;
 }
 
@@ -675,7 +675,7 @@ int ck_dispatch(int num, int *args) {
         if (!t) return 0;
         if (args[0] <= 0) return 0;
         t->ck_wake = __time() + args[0];
-        t->state = TS_SLEEPING;
+        task_state(t, TS_SLEEPING);
         return 0;
 
     case CK_USER_SIGNAL:         return ck_signal(t, args[0], args[1]);
@@ -701,7 +701,7 @@ int ck_dispatch(int num, int *args) {
         }
         t->wait_for = s->id;
         t->wait_posix = 0;
-        t->state = TS_WAITING;
+        task_state(t, TS_WAITING);
         return 0;
 
     // the kernel RAM filesystem (vfs.c): C4KE's argument order, name first

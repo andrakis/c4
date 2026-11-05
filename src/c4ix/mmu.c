@@ -110,11 +110,14 @@ static int mmu_ulock[2];       // the regions, the map and the page list (klock:
 static void mmu_pages_add(int raw, int n) {
     struct tchunk *c;
     int p;
-    // (no record, no lookup: the block is never freed)
-    c = mmu_tc ? (struct tchunk *)malloc(sizeof(struct tchunk)) : 0;
+    // (no record, no lookup: the block is never freed. It goes in the slack before
+    // the block's first aligned page, if there is any: from the heap, a dozen bytes
+    // of the kernel's among programs' memory)
+    p = (raw + MMU_PAGE - 1) & ~(MMU_PAGE - 1);
+    c = 0;
+    if (mmu_tc) c = p - raw >= sizeof(struct tchunk) ? (struct tchunk *)raw : (struct tchunk *)malloc(sizeof(struct tchunk));
     if (c) { c->raw = raw; c->n = 0; c->nfree = 0; }
     klock_take(mmu_ulock);
-    p = (raw + MMU_PAGE - 1) & ~(MMU_PAGE - 1);
     while (p + MMU_PAGE <= raw + n * MMU_PAGE) {
         *(int *)p = mmu_freepage;
         mmu_freepage = p;
@@ -156,8 +159,10 @@ static void mmu_page_free(int p) {
         if (mmu_tc[*pp >> 12] == (int)c) { mmu_tc[*pp >> 12] = 0; *pp = *(int *)*pp; }
         else pp = (int *)*pp;
     }
-    free((char *)c->raw);
-    free((char *)c);
+    // (its record last, if it is not in the block)
+    p = c->raw;
+    if ((int)c != p) free((char *)c);
+    free((char *)p);
 }
 
 // The kernel's map's tables (mmu_kdir), which are never freed, from blocks
@@ -822,7 +827,7 @@ static void mmu_release(struct urgn *r) {
 // image, a stack, argv. Page-aligned, and the kernel's until mmu_adopt.
 int umalloc(int n) {
     struct urgn *r;
-    if (!mmu_on) return (int)vfs_malloc(n);
+    if (!mmu_on) return (int)umem_block(n);
     if (!(r = mmu_region(n, UR_BLOCK))) return 0;
     return r->base;
 }
@@ -830,7 +835,7 @@ int umalloc(int n) {
 // N bytes of stack, with a guard page below them that is never mapped
 int umalloc_stack(int n) {
     struct urgn *r;
-    if (!mmu_on) return (int)vfs_malloc(n);
+    if (!mmu_on) return (int)umem_block(n);
     if (!(r = mmu_region(n + MMU_PAGE, UR_BLOCK))) return 0;
     r->guard = 1;
     MMU_RCAN(r);
@@ -1288,7 +1293,8 @@ void mmu_init() {
     if (!host_has(C4IX_I_MMU)) return;
     mmu_memsize = *(int *)MMU_MEMSIZE;
     mmu_npages = mmu_memsize / MMU_PAGE;
-    if (!(mmu_rcache = sl4b_cache_create("urgn", sizeof(struct urgn), 32)) ||
+    if ((mmu_rcache = sl4b_cache_create("urgn", sizeof(struct urgn), 32))) mmu_rcache->moves = 1;
+    if (!mmu_rcache ||
         !(mmu_pg = (int *)malloc(mmu_npages * sizeof(int))) ||
         !(mmu_tc = (int *)malloc(mmu_npages * sizeof(int)))) {
         klog("mmu: no memory for its tables; left off\n");
@@ -1768,6 +1774,21 @@ static int mmu_sop(int op, int slot, int pa) {
     r = *(int *)SWAP_CMD;
     klock_drop(mmu_flock);
     return r;
+}
+
+// Without the MMU a program's memory cannot move, and it may outlive what the kernel
+// allocates around it. So it comes from the top of the heap and the kernel's from
+// the bottom, as with the MMU (mmu_raw), and free memory is the room between them:
+// when the programs have gone, it is in one piece. On a host that keeps the heap and can
+// be asked (libjs); elsewhere, the heap's choice. One program that stays, started
+// when the top was full, stays where it landed: nothing can be done about that here.
+char *umem_block(int n) {
+    char *p;
+    if (!host_has(C4IX_I_C4MJS)) return vfs_malloc(n);
+    mmu_sop(SWAP_HIGH, 1, 0);
+    p = vfs_malloc(n);
+    mmu_sop(SWAP_HIGH, 0, 0);
+    return p;
 }
 
 static int mmu_salloc() {
@@ -2361,6 +2382,7 @@ void mmu_balance() {
 // task reaps too -- init -- and a page must not be used while it moves.)
 void mmu_gone() {
     struct task *o;
+    mmu_tidying = 1;
     if (!mmu_on) return;
     sched_lock();
     mmu_compact();
@@ -2438,7 +2460,10 @@ char *mmu_kalloc(int n) {
 // put out, and the heap asked again, up to a few times. The lowest such block
 // each time; one that holds a page that cannot go is passed over. Without the
 // light path standing aside (mmu_still), or without swap: wherever the heap has
-// room.
+// room. With no room at all, cached files go first and then as many blocks as it
+// takes, not a few: images and stacks may move but not go out, so with no free
+// frame the lowest blocks can empty to no effect while one of pages further up
+// would do, and a slab not had is a program told it has no memory.
 enum { KLOW_TRIES = 4 };
 char *mmu_klow(int n) {
     struct fchunk *c, *best;
@@ -2446,9 +2471,10 @@ char *mmu_klow(int n) {
     int p, q, k, was;
     p = (int)malloc(n);
     if (!mmu_uoff || !mmu_swapok || !mmu_still()) return (char *)p;
+    while (!p && vfs_reclaim(n)) p = (int)malloc(n);
     ++mmu_round;
     k = 0;
-    while (k < KLOW_TRIES) {
+    while (k < KLOW_TRIES || !p) {
         best = 0;
         c = mmu_fcall;
         while (c) {
@@ -2554,6 +2580,139 @@ static int mmu_rerun(struct urgn *r, int raw) {
     klock_drop(mmu_ulock);
     ++mmu_gen;
     return 1;
+}
+
+// The record of a region has been copied from FROM to TO (sl4b_tidy): everything
+// that names it. That is all of it: its owner's list, its slab list and chunk, the two
+// maps, and the logs'. mmu.c's own, kept so that this stays true: the kernel holds
+// a region by its address otherwise, not by its record, between one trap and the next.
+int mmu_rmove(char *from, char *to) {
+    struct urgn *o, *n;
+    struct urgn **pp;
+    struct task *t;
+    int k, i;
+    o = (struct urgn *)from;
+    n = (struct urgn *)to;
+    if ((t = o->owner)) {
+        pp = (struct urgn **)&t->urgns;
+        while (*pp && *pp != o) pp = &(*pp)->next;
+        if (*pp) *pp = n;
+        if (t->uchunk == (int)o) t->uchunk = (int)n;
+        if (o->kind == UR_SLAB) {
+            k = 0;
+            while ((16 << k) < o->size) ++k;
+            pp = (struct urgn **)&t->uslab[k];
+            while (*pp && *pp != o) pp = &(*pp)->snext;
+            if (*pp) *pp = n;
+        }
+    }
+    if (mmu_uoff) {
+        k = (o->va - mmu_uoff) >> 12;
+        i = 0;
+        while (i < o->npages) {
+            if (mmu_vpg[k + i] == (int)o) mmu_vpg[k + i] = (int)n;
+            ++i;
+        }
+    }
+    if (!o->lazy && o->base) {
+        k = o->base >> 12;
+        i = 0;
+        while (i < o->npages) {
+            if (mmu_pg[k + i] == (int)o) mmu_pg[k + i] = (int)n;
+            ++i;
+        }
+    }
+    if (mmu_lastin == o) mmu_lastin = n;
+    if (mmu_runr == o) mmu_runr = n;
+    return 1;
+}
+
+// ---- tidying the kernel's own memory ----
+//
+// Now and then, once a task has gone: at the start of a trap, with the kernel lock,
+// the light path off it, before anything is in hand. Not while a kernel task is
+// between two instructions: init, loading a program, has a region's record in a
+// local. sched_trap asks; the slabs, then the tables of the spaces that are left.
+int mmu_tidying, mmu_tidywhen;
+
+// The lowest page on the list of free table pages: 0 if none
+static int mmu_tlow() {
+    int p, low;
+    low = 0;
+    p = mmu_freepage;
+    while (p) {
+        if (!low || p < low) low = p;
+        p = *(int *)p;
+    }
+    return low;
+}
+
+// A table is named by one entry of one directory, and nothing keeps its address
+// but a walk under way: the CPUs running its space answer before its old page goes
+// (the shootdown), and from then on they walk the new one. So a table left in a
+// block of its own in the middle of the heap, from when the heap was full, can go
+// lower, and the block back to the heap with the last of them. mmu_kdir's tables
+// are never in such a block (mmu_kfill).
+static void mmu_tables_tidy() {
+    struct task *t;
+    int *d;
+    int *pp;
+    int k, hi, p, q, e, raw, nofill;
+    if (!mmu_tc || !mmu_uoff) return;
+    nofill = 0;
+    hi = (mmu_uoff >> 22) + (MMU_WINPAGES >> 10);
+    t = task_head;
+    while (t) {
+        if (t->privs == PRIV_USER && !t->vfparent && (d = (int *)t->mmdir)) {
+            k = mmu_uoff >> 22;
+            while (k < hi) {
+                if ((d[k] & PTE_P) && mmu_tc[(p = d[k] & ~(MMU_PAGE - 1)) >> 12]) {
+                    q = mmu_tlow();
+                    // nothing lower free: a block, if the heap has one lower down
+                    if ((!q || q >= p) && !nofill) {
+                        if ((raw = (int)malloc(MMU_CHUNK * MMU_PAGE)) && raw < p) {
+                            mmu_pages_add(raw, MMU_CHUNK);
+                            q = mmu_tlow();
+                        } else {
+                            if (raw) free((char *)raw);
+                            nofill = 1;
+                        }
+                    }
+                    if (q && q < p && mmu_tc[q >> 12] != mmu_tc[p >> 12]) {
+                        klock_take(mmu_ulock);
+                        pp = &mmu_freepage;
+                        while (*pp != q) pp = (int *)*pp;
+                        *pp = *(int *)q;
+                        --((struct tchunk *)mmu_tc[q >> 12])->nfree;
+                        klock_drop(mmu_ulock);
+                        memcpy((char *)q, (char *)p, MMU_PAGE);
+                        e = d[k];
+                        d[k] = q | (e & (MMU_PAGE - 1));
+                        klock_take(mmu_ulock);
+                        if (mmu_shootdown((int)d)) mmu_page_free(p);
+                        else { d[k] = e; mmu_page_free(q); }
+                        klock_drop(mmu_ulock);
+                    }
+                }
+                ++k;
+            }
+        }
+        t = t->next;
+    }
+}
+
+void mmu_tidy() {
+    struct task *t;
+    mmu_tidywhen = __time();
+    t = task_head;
+    while (t) {
+        if (t->privs != PRIV_USER && !t->cpuidle && (t->state == TS_READY || t->state == TS_RUNNING)) return;
+        t = t->next;
+    }
+    if (!mmu_still()) return;
+    mmu_tidying = sl4b_tidy();
+    if (mmu_on) mmu_tables_tidy();
+    mmu_unstill();
 }
 
 // R's pages pinned in the kernel's map: swap leaves them where they are

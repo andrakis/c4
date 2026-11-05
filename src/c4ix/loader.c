@@ -459,7 +459,7 @@ static int link_modules(char *path, struct c4r_mod *mods, int n) {
     struct c4r_mod *m;
     char *p, *s;
     char name[128];
-    int k, i, j, ptype, paddr, addr, bad, len, dbid;
+    int k, i, j, ptype, paddr, pvalu, addr, bad, len, dbid;
     bad = 0;
     k = 0;
     while (k < n) {
@@ -484,18 +484,18 @@ static int link_modules(char *path, struct c4r_mod *mods, int n) {
         p = m->patches;
         i = 0;
         while (i < m->npatch) {
-            ptype = loader_word(p); paddr = loader_word(p + sizeof(int));
+            ptype = loader_word(p); paddr = loader_word(p + sizeof(int)); pvalu = loader_word(p + 2 * sizeof(int));
             p = p + 3 * sizeof(int);
             ++i;
             if (ptype < 0) continue;
-            if (ptype == dbid) { m->code[paddr] = L((int)m->slot); continue; }
+            if (ptype == dbid) { m->code[paddr] = L((int)m->slot + pvalu); continue; }
             if (!(s = mod_symbol(m, ptype))) {
                 kprintf("c4ix: loader: %s: a patch names symbol %d, which is not in its table\n", k > 1 ? m->path : path, ptype);
                 bad = 1;
                 continue;
             }
             if (m->pic && loader_nameis(sym_name(s), sym_namelen(s), "__c4_dbase")) {
-                m->code[paddr] = L((int)m->slot);
+                m->code[paddr] = L((int)m->slot + pvalu);
                 continue;
             }
             addr = 0;

@@ -40,16 +40,17 @@ VARIABLE PMAP                           \ code address -> its patch, or 0
 \ The pass working sets, allocated with everything else: FT for thread,
 \ EMM/SMM/BANM for tail.
 VARIABLE FT   VARIABLE EMM   VARIABLE SMM   VARIABLE BANM
-: I[] ( buf i -- a )  4 CELLS * + ;
+: I[] ( buf i -- a )  5 CELLS * + ;
 : I.K ( a -- a )  ;
 : I.O ( a -- a )  1 CELLS + ;
 : I.A ( a -- a )  2 CELLS + ;
 : I.T ( a -- a )  3 CELLS + ;
+: I.V ( a -- a )  4 CELLS + ;              \ a_ext: what its patch adds to the symbol
 
 : OPT-INIT
    CN @ 2 * 4096 + MAXI !
-   MAXI @ 4 CELLS * ALLOCATE IBUF !
-   MAXI @ 4 CELLS * ALLOCATE JBUF !
+   MAXI @ 5 CELLS * ALLOCATE IBUF !
+   MAXI @ 5 CELLS * ALLOCATE JBUF !
    MAXI @ CELLS ALLOCATE LMAP !
    MAXI @ CELLS ALLOCATE FT !
    MAXI @ CELLS ALLOCATE EMM !
@@ -61,7 +62,7 @@ VARIABLE FT   VARIABLE EMM   VARIABLE SMM   VARIABLE BANM
 : ITEM, ( buf n kind op arg at -- n' ) {: b n k o a t | p -- n :}
    n MAXI @ < 0= IF ." c4fc: too many instructions to optimise" CR ABORT THEN
    b n I[] TO p
-   k p I.K !   o p I.O !   a p I.A !   t p I.T !
+   k p I.K !   o p I.O !   a p I.A !   t p I.T !   0 p I.V !
    n 1+ ;
 
 \ -- decoding ------------------------------------------------------------
@@ -123,7 +124,8 @@ VARIABLE FT   VARIABLE EMM   VARIABLE SMM   VARIABLE BANM
          i 1+ PATCH-AT TO p
          p IF
             p @ -1 = IF IBUF @ n k_insn w  p 2 CELLS + @ a_code ITEM, TO n ELSE
-            p @ -1000 <= IF IBUF @ n k_insn w  p @ a_ext ITEM, TO n
+            p @ -1000 <= IF IBUF @ n k_insn w  p @ a_ext ITEM,
+                               p 2 CELLS + @  IBUF @ n I[] I.V !  TO n
                      ELSE IBUF @ n k_insn w  p 2 CELLS + @ a_data ITEM, TO n THEN THEN
          ELSE
             IBUF @ n k_insn w  i 1+ CELLS CODE @ + @  a_plain ITEM, TO n
@@ -161,7 +163,7 @@ VARIABLE FT   VARIABLE EMM   VARIABLE SMM   VARIABLE BANM
             p I.O @ OP,  -1 CHERE p I.A @ LADDR PAT,  p I.A @ LADDR C,
          ELSE
          p I.T @ a_ext = IF
-            p I.O @ OP,  p I.A @ CHERE 0 PAT,  0 C,
+            p I.O @ OP,  p I.A @ CHERE p I.V @ PAT,  0 C,
          ELSE
             p I.O @ OP,  -2 CHERE p I.A @ PAT,  0 C,
          THEN THEN THEN THEN
@@ -188,7 +190,8 @@ VARIABLE FT   VARIABLE EMM   VARIABLE SMM   VARIABLE BANM
    JBUF @ JN# @ k o a t ITEM, JN# ! ;
 : COPY-ITEM ( i -- ) {: i | p -- :}
    IBUF @ i I[] TO p
-   p I.K @ p I.O @ p I.A @ p I.T @ EMIT-ITEM ;
+   p I.K @ p I.O @ p I.A @ p I.T @ EMIT-ITEM
+   p I.V @  JBUF @ JN# @ 1- I[] I.V ! ;
 : IK ( i -- k )   IBUF @ SWAP I[] I.K @ ;
 : IOP ( i -- op ) IBUF @ SWAP I[] I.O @ ;
 : IARG ( i -- a ) IBUF @ SWAP I[] I.A @ ;
@@ -249,10 +252,52 @@ VARIABLE FT   VARIABLE EMM   VARIABLE SMM   VARIABLE BANM
    i 2 + oADD BARE?  i 2 + oSUB BARE? OR 0= IF 0 EXIT THEN
    3 ;
 
+\ ... x + a + b: PSH; IMM a; ADD; PSH; IMM b; ADD -> PSH; IMM a+b; ADD, however
+\ long the chain.
+: ADD-AT? ( i -- f ) {: i -- f :}                \ PSH; IMM k; ADD starts at i
+   i 2 + IN# @ < 0= IF 0 EXIT THEN
+   i oPSH BARE?  i 1+ oIMM PLAINOP? AND  i 2 + oADD BARE? AND ;
+: ARITH-CHAIN ( i -- n ) {: i | k j -- n :}
+   i ADD-AT? 0= IF 0 EXIT THEN
+   i 3 + ADD-AT? 0= IF 0 EXIT THEN
+   i 1+ IARG TO k   i 3 + TO j
+   BEGIN j ADD-AT? WHILE j 1+ IARG k + TO k  j 3 + TO j REPEAT
+   k_insn oPSH 0 a_none EMIT-ITEM
+   k_insn oIMM k a_plain EMIT-ITEM
+   k_insn oADD 0 a_none EMIT-ITEM
+   j i - ;
+
+\ ... a local's member or element: LEA n; PSH; IMM k; ADD -> LEA n+k/W. And a
+\ global's: IMM &g; PSH; IMM k; ADD -> IMM &g+k.
+: ARITH-LOCAL ( i -- n ) {: i | n -- n :}
+   i oLEA PLAINOP? 0= IF 0 EXIT THEN
+   i 1+ IN# @ < 0= IF 0 EXIT THEN
+   i 1+ ADD-AT? 0= IF 0 EXIT THEN
+   i 2 + IARG 1 CELLS 1- AND IF 0 EXIT THEN
+   i IARG  i 2 + IARG 1 CELLS /  + TO n
+   k_insn oLEA n a_plain EMIT-ITEM
+   4 ;
+: ARITH-GLOBAL ( i -- n ) {: i | t -- n :}
+   i LBL? IF 0 EXIT THEN
+   i IOP oIMM <> IF 0 EXIT THEN
+   i ITY TO t   t a_data <> t a_ext <> AND IF 0 EXIT THEN
+   i 1+ IN# @ < 0= IF 0 EXIT THEN
+   i 1+ ADD-AT? 0= IF 0 EXIT THEN
+   t a_data = IF
+      k_insn oIMM  i IARG i 2 + IARG +  a_data EMIT-ITEM
+   ELSE
+      k_insn oIMM  i IARG  a_ext EMIT-ITEM
+      IBUF @ i I[] I.V @  i 2 + IARG +  JBUF @ JN# @ 1- I[] I.V !
+   THEN
+   4 ;
+
 : PASS-ARITH {: | i n -- :}
    0 JN# !   0 TO i
    BEGIN i IN# @ < WHILE
       i ARITH-ZERO TO n
+      n 0= IF i ARITH-CHAIN TO n THEN
+      n 0= IF i ARITH-LOCAL TO n THEN
+      n 0= IF i ARITH-GLOBAL TO n THEN
       n IF i n + TO i ELSE i COPY-ITEM  i 1+ TO i THEN
    REPEAT
    SWAP-BUFS ;
@@ -488,6 +533,7 @@ VARIABLE FT   VARIABLE EMM   VARIABLE SMM   VARIABLE BANM
          c oPSH = b oLI = AND  a oLEA = a oIMM = OR AND IF
             k_insn  a oLEA = IF oPSHL ELSE oPSHG THEN
             i IARG  i ITY  EMIT-ITEM
+            IBUF @ i I[] I.V @  JBUF @ JN# @ 1- I[] I.V !
             i 3 + TO i
          ELSE
             a b FUSE2 TO op
@@ -497,6 +543,7 @@ VARIABLE FT   VARIABLE EMM   VARIABLE SMM   VARIABLE BANM
                   k_insn op 0 a_none EMIT-ITEM
                ELSE
                   k_insn op  i IARG  i ITY  EMIT-ITEM
+                  IBUF @ i I[] I.V @  JBUF @ JN# @ 1- I[] I.V !
                THEN
                i 2 + TO i
             THEN

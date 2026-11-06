@@ -93,7 +93,14 @@ Nothing here touched it, so it shrinks only in proportion.
 in round 2. This is not the extra CPUs as such. At 4 CPUs Quake does not run on CPU 0: the
 scheduler gives a task the highest idle CPU (`smp_idlefor`, `sched.c`), so it runs on CPU 3, on a
 worker of its own, and `pin 0 quake` puts it back. The cost is that of running on such a CPU with
-the MMU off. Measured below in one sitting, a slower one than the table above, nothing else open.
+the MMU off.
+
+**So no game a person plays pays this.** These timedemos draw nothing. A program that draws is
+pinned to CPU 0 (`sched_softpin`), so with `-show` Quake goes there unasked: 29.5 s for 300 frames,
+the same as `pin 0`. To compare builds at several CPUs, use `-show` or `pin 0`. The 4 CPU rows above
+measure a place no displayed game runs.
+
+Measured below in one sitting, a slower one than the table above, nothing else open.
 
 | 4 CPUs, MMU off, demo1 | time | fps |
 |---|---:|---:|
@@ -128,8 +135,23 @@ Two things point somewhere. One thread spinning in another tab takes CPU 0 from 
 and MMU on from 37.9 s to about 52 s, on a host with 12 logical CPUs, while CPU 3 with the MMU off
 goes only from 34.5 s to 40.5 s: under that load the gap is gone. And for about twenty minutes in one
 sitting CPU 3 ran 27-28 s (a whole demo in 89 s), which could not be repeated, so the code is able to
-run that fast there. The tab is hidden in all of these, and whether a visible one changes this has
-not been tried. That may also be the 9-15% between sittings noted above.
+run that fast there. That may also be the 9-15% between sittings noted above.
+
+It belongs to one machine or one Chrome. 300 frames, MMU off, the tab in front:
+
+| | CPU 3 | CPU 0 |
+|---|---:|---:|
+| desktop, Windows, Chrome 159 | 34.3 s | 29.6 s |
+| Chromebook, Chrome 151 | 28.8 s | 28.6 s |
+
+These cannot say whether it is the version, the system or the processor. A tab being in front does
+not change the desktop's figures. On the Chromebook a tab behind another costs 40-50%.
+
+**What the round trips to CPU 0 cost** is small. Every request from CPU 3 timed, in 300 frames: 505
+and 25 ms waiting without `-show`; with `pin 3` and `-show`, 301 presents at 0.4 ms each, 120-150 ms
+in all. Forcing a drawing Quake onto CPU 3 takes 37.4-38.0 s on the desktop and 33.3 s on the
+Chromebook, with 4% more instructions. The time goes on running, not on waiting for CPU 0.
+
 
 **Other images.** Only Quake is built `-mfpu`, but the rest of the compiler's work reaches
 everything. Their sizes moved; their speed has not been timed.

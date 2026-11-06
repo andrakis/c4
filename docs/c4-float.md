@@ -69,7 +69,8 @@ conversions, and the double's negate and absolute value is the `FPU` opcode wher
 and `IMMP op; FPU; ADJ 3`. The opcode wants `a` on top, so `b` goes first when neither side
 writes anything (`g:fppure?`), and otherwise `a` goes first as ever and waits in a temporary.
 Such an image needs an FPU. Where there is none the opcode is illegal: C4IX's kernel and the
-bare machine stop and say the program needs one. Only Quake is built this way, and libc is not
+bare machine stop and say the program needs one. Only Quake is built this way, with its own copy
+of `math.c` so built (`games/quake/c4.mk`), and libc is not
 (its helpers still ask), so everything else still runs on a machine without an FPU.
 
 **A float against a double** (2026-11-06, with or without `-mfpu`). Two floats widened compare as

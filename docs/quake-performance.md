@@ -107,10 +107,65 @@ everything. Their sizes moved; their speed has not been timed.
 | `c4ix32.c4r` | 634,124 | 630,072 | −0.6% |
 | `c4dos32.c4r` | 166,311 | 166,311 | none |
 
+## Round 3: libc's math, and `trunc`
+
+Rounds 1 and 2 left `math.c` itself as it was: built without `-mfpu`, it calls a helper for every
+operation on a double, and each helper asks whether there is an FPU. Counting each math function
+with everything it calls, by walking the frames at each sample, round 2's image spent:
+
+| function | share of instructions | calls a frame | instructions a call |
+|---|---:|---:|---:|
+| `ceil` | 5.42% | 792 | 779 |
+| `sin` | 2.57% | 88 | 3,343 |
+| `cos` | 2.12% | 88 | 2,742 |
+| `floor` | 0.62% | 128 | 557 |
+| **all of libc's math** | **10.77%** | | |
+
+`ceil` costs more than `sin` and `cos` together, 3.9% of it from `R_EmitEdge`, because `trunc` took
+a double's bits through 64-bit shift helpers. So:
+
+| step | M instructions a frame | change | image bytes |
+|---|---:|---:|---:|
+| round 2 | 11.402 | | 2,317,746 |
+| `trunc` through an `int` where the value fits (libc, for everyone) | 11.226 | −1.5% | 2,318,686 |
+| Quake's own copy of `math.c`, built `-mfpu` (`games/quake/c4.mk`) | 10.533 | −6.2% | 2,236,734 |
+| **round 3** | | **−7.6%** | **−3.5%** |
+| **all three rounds, against the baseline** | | **−42.0%** | **−19.4%** |
+
+That takes libc's math to 3.41%: `ceil` 1.65%, `sin` and `cos` 1.47%, `floor` 0.26%. Under C4IX
+Quake used to share libc's math and now carries its own, so `disk/c4ix-quake.c4r` grows from
+2,009,781 bytes to 2,079,971. `trunc` adds under 3 KB to the other games.
+
+All in one sitting, 2026-11-06, a slower one than the table above. The page ran round 3, round 2,
+then the baseline, one run of each, without the guard change described under "Extra CPUs". Node
+took turns between rounds 2 and 3, three runs each, with one run of the baseline at the end.
+
+| Where it runs | baseline | round 2 | round 3 | round 3 against round 2 | against the baseline | speed |
+|---|---:|---:|---:|---:|---:|---:|
+| node, bare machine | 99.3 s | 51.2 s | 44.9 s | −12.3% | −54.8% | ×2.21 |
+| page, MMU on, 1 CPU | 224.9 s, 4.3 fps | 109.0 s, 8.9 fps | 94.0 s, 10.4 fps | −13.7% | −58.2% | ×2.39 |
+| page, MMU off, 1 CPU | 169.8 s, 5.7 fps | 82.8 s, 11.8 fps | 74.6 s, 13.1 fps | −10.0% | −56.1% | ×2.28 |
+| page, MMU on, 4 CPUs | 238.0 s, 4.1 fps | 110.5 s, 8.8 fps | 98.1 s, 9.9 fps | −11.2% | −58.8% | ×2.43 |
+| page, MMU off, 4 CPUs | 244.2 s, 4.0 fps | 111.8 s, 8.7 fps | 93.9 s, 10.4 fps | −16.0% | −61.6% | ×2.60 |
+
+**Two things this rules out for now.**
+
+*Tail calls.* Of 76.6 k calls a frame, 1.8 k (2.4%) are in tail position, a call with only `ADJ` and
+`LEV` after it, and taking those out would save at most 0.03% of instructions. `c4opt` has a tail
+pass already, and finds nothing in `math.c`: `return -k_sin(...)` still has to negate; a double
+comes back through a hidden pointer, so `sin` copies the result after the call; and `k_sin` takes
+five words of arguments where `sin` has three, and the caller clears them.
+
+*`sin` and `cos` as FPU operations.* The FPU opcode has none, though the older `FLTI_SIN` and
+`FLTI_COS` do. They would now save at most 1.4% of instructions, and at a risk: today's software
+`sin` gives the same bits on every host, and a host's `sinf` or `Math.sin` need not, which
+`test-quake` would notice. `ceil` and `floor` as FPU operations would save up to 1.9% and are exact
+everywhere, so they would come first.
+
 ## What is left
 
 The FPU opcode is now 2.2% of instructions, so math is no longer where the time goes. By
-instructions, in round 2's image:
+instructions, in round 2's image, before round 3 took most of the last row and the `__c4ll_shr`:
 
 | function | share |
 |---|---:|
@@ -126,4 +181,4 @@ instructions, in round 2's image:
 
 Not tried yet: writing a double operation straight to its target; double literals as data, not
 temporaries; float arithmetic where a double literal is exact; `x * 0.1` as a float by a flag,
-which would change results; `ceil` and `trunc` themselves; an opcode for a 16-bit load (parked).
+which would change results; `ceil` and `floor` as FPU operations; an opcode for a 16-bit load (parked).

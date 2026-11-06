@@ -2098,6 +2098,12 @@ test-c4fp: c4sp c4sp32 $(C4M) c4m32 $(C4LC_LISP) src/c4fp/softfp.c src/c4fp/mkfp
 	     fi; \
 	   done; \
 	done
+	@# and as Quake builds it (games/quake/c4.mk): its operations on the FPU, at 32 bits
+	./c4sp32 src/c4sp/lisp/c4lc.lisp -O -mfpu -P src/c4ix/libc/tests/mathtest.c .c4fp_vm.c4r > /dev/null
+	./c4m32 load-c4r.c -- .c4fp_vm.c4r .c4fp_mvec.txt | grep -q "mathtest: OK" || { echo "test-c4fp: mathtest -mfpu wrong on c4m32"; exit 1; }
+	node libjs/cli.js --fast -d . .c4fp_vm.c4r .c4fp_mvec.txt < /dev/null | grep -q "mathtest: OK" || { echo "test-c4fp: mathtest -mfpu wrong on libjs"; exit 1; }
+	./c4sp32 src/c4sp/lisp/c4lc.lisp -O -mfuse -mfpu -P src/c4ix/libc/tests/mathtest.c .c4fp_vm.c4r > /dev/null
+	node libjs/cli.js --fast -d . .c4fp_vm.c4r .c4fp_mvec.txt < /dev/null | grep -q "mathtest: OK" || { echo "test-c4fp: mathtest -mfuse -mfpu wrong on libjs"; exit 1; }
 	rm -f .c4fp_gen .c4fp_mgen .c4fp_vec.txt .c4fp_mvec.txt .c4fp_vm.c4r .c4fp_out.txt
 	@echo "test-c4fp: OK"
 PHONY += test-c4fp

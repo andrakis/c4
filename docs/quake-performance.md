@@ -9,7 +9,8 @@ over 978 frames. `make test-quake` holds all of it to gcc's frames on demo3.
   checksum work. These counts repeat exactly.
 - *Node:* the wall time of the same run, three runs each, baseline and new taking turns.
 - *Page:* the game's own `speed:` line, in a background tab of Chrome at 400 MHz with 128 MB,
-  Quake at the C4IX shell on CPU 0. One run of each, baseline and new served in turn.
+  Quake at the C4IX shell. One run of each, baseline and new served in turn. At 4 CPUs it
+  ran on CPU 3 (see "Extra CPUs" below), unless it says otherwise.
 
 ## Round 1: the compiler's easy wins, and the FPU in the loop
 
@@ -88,9 +89,47 @@ opcode that stays in the loop costs far less than a call and a way out of it.
 **The MMU** costs ×1.34 at 1 CPU, in all three builds: 216.8/161.8, 153.9/114.6, 103.6/77.3.
 Nothing here touched it, so it shrinks only in proportion.
 
-**Extra CPUs** cost a lot with the MMU off and almost nothing with it on, with Quake on CPU 0
-and nothing else running: ×1.39 against ×1.02 in round 2. At 4 CPUs the MMU buys back nothing,
-as 105.4 s against 107.7 s shows. That is not explained yet.
+**Extra CPUs** cost a lot with the MMU off and almost nothing with it on: ×1.39 against ×1.02
+in round 2. This is not the extra CPUs as such. At 4 CPUs Quake does not run on CPU 0: the
+scheduler gives a task the highest idle CPU (`smp_idlefor`, `sched.c`), so it runs on CPU 3, on a
+worker of its own, and `pin 0 quake` puts it back. The cost is that of running on such a CPU with
+the MMU off. Measured below in one sitting, a slower one than the table above, nothing else open.
+
+| 4 CPUs, MMU off, demo1 | time | fps |
+|---|---:|---:|
+| on CPU 3, as it was | 111.0 s | 8.8 |
+| on CPU 3, the guard read plainly | 101.8 s | 9.6 |
+| `pin 0` | 87.7 s | 11.1 |
+| 1 CPU, for comparison | 84.4 s | 11.5 |
+
+With the MMU on, CPU 3 and CPU 0 come within 1 s over 300 frames (36.3 s and 35.3 s; later, in a
+slower sitting, 37.9 s both), so the MMU's cost and this one nearly cancel at 4 CPUs.
+
+About 3.5 s of the 9.2 s this cost in 300 frames was the boot stack's guard. On another CPU
+`stackGuard`, `stackBase` and `stackTop` were each an `Atomics.load`, and Quake makes 60,000 `MCPY`
+calls a frame, each looking at the guard five times: 278 M loads in 300 frames. With the MMU on
+`MCPY` goes to `mmu.block` and never looks. They are plain reads now. Under node, on helios and on a
+Windows machine, that closes the gap altogether.
+
+**The rest, about 5 s in 300 frames, is not explained.** It shows only in the page. CPU 3 runs the
+same 3.892 G instructions, at a steady 111 M a second against CPU 0's 140 M, so it is not extra
+work. A profile puts the difference at the top of `runPlain`'s loop, `++cycle > lim` and the fetch,
+and not in the opcodes. What it is not:
+
+- the CPU: `pin 1`, `pin 2` and `pin 3` all take 35 s;
+- `ApMachine.sys` inlined into the loop: made too big to inline, 34.6 s against 35.1 s;
+- `cycle` as a double: an int32 counter in the loop, 34.3 s against 34.9 s, and none on CPU 0;
+- warm-up: a second timedemo in the same machine takes the same, and 300 frames and 978 show the
+  same ratio;
+- the slice, 16K cycles instead of 64K, or `cycle` starting past any Smi: no change;
+- `runUser` on the same thread loses about 1 s, so the thread itself is not slow.
+
+Two things point somewhere. One thread spinning in another tab takes CPU 0 from 29.6 s to 40.8 s,
+and MMU on from 37.9 s to about 52 s, on a host with 12 logical CPUs, while CPU 3 with the MMU off
+goes only from 34.5 s to 40.5 s: under that load the gap is gone. And for about twenty minutes in one
+sitting CPU 3 ran 27-28 s (a whole demo in 89 s), which could not be repeated, so the code is able to
+run that fast there. The tab is hidden in all of these, and whether a visible one changes this has
+not been tried. That may also be the 9-15% between sittings noted above.
 
 **Other images.** Only Quake is built `-mfpu`, but the rest of the compiler's work reaches
 everything. Their sizes moved; their speed has not been timed.

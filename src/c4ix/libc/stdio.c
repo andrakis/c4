@@ -262,7 +262,9 @@ static void src_unget(struct src *r, int c) {
     else r->s = r->s - 1;
 }
 
-static int scan_space(int c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v'; }
+// By number, as isspace is: libc is built without -conforming, where c4lc's
+// escapes are c4cc's and '\f' is the letter f, so scanf split words at f and v.
+static int scan_space(int c) { return c == ' ' || (c >= 9 && c <= 13); }
 
 static int scan_digit(int c, int base) {
     int d;

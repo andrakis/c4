@@ -1,7 +1,7 @@
 # games
 
-The games c4 runs -- Wolfenstein 3D, Doom, OpenTyrian and Rise of the
-Triad -- are not part of c4's repository. Each lives in one of its own,
+The games c4 runs -- Wolfenstein 3D, Doom, OpenTyrian, Rise of the Triad
+and Simon Tatham's Puzzles -- are not part of c4's repository. Each lives in one of its own,
 on GitHub, on upstream's history with c4's port on top as commits, and
 is an optional submodule here:
 
@@ -11,6 +11,7 @@ is an optional submodule here:
 | `games/doom` | [andrakis/c4-Doom](https://github.com/andrakis/c4-Doom) | doomgeneric |
 | `games/tyrian` | [andrakis/c4-Tyrian](https://github.com/andrakis/c4-Tyrian) | OpenTyrian |
 | `games/rott` | [andrakis/c4-ROTT](https://github.com/andrakis/c4-ROTT) | icculus.org's Rise of the Triad 1.1.2 |
+| `games/puzzles` | andrakis/c4-Puzzles (not on GitHub yet) | Simon Tatham's Portable Puzzle Collection |
 
 A clone of c4 has none of them (`update = none` in `.gitmodules`).
 To have one:
@@ -55,9 +56,15 @@ uses (docs/c4dos-design.md "Linking a bare program"); `--start-lib`
 before `.libc-bare`'s objects would also leave out the data of those it
 does not need at all (3 KB, libc-math's, for a game that does no math).
 
+The Puzzles are forty programs that share a core, so `c4-images.sh` links an
+image for each of them, about 800 KB on C4IX, and their block names them all.
+`puzzles` lists them, which is also the image `vfs-games.py` looks for to say
+the game is on the disk: `c4ix-NAME.c4r`, for NAME the game's directory.
+
 ## Data
 
-No game's data is committed, in c4 or in the game's repository.
+No game's data is committed, in c4 or in the game's repository. The Puzzles have
+none.
 `make NAME-data` puts it in `games/NAME/data/` (ignored there) with
 `games/fetch.sh`, which takes it from the variable the game names, or
 from the URLs in its `data/MIRRORS`, and refuses a file whose SHA-256 is

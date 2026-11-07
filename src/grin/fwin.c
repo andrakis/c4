@@ -31,7 +31,9 @@
 #include "shell.h"
 #include "wkgui.h"
 
-enum { FW_MOUSE = 1 };                // fwin_open's flags: the game steers with the mouse
+// fwin_open's flags: the game steers with the mouse; or only clicks with it,
+// the pointer free (The Ace of Penguins)
+enum { FW_MOUSE = 1, FW_CLICK = 2 };
 enum { QN = 128, OUT_N = 200, SAY_N = 320 };
 
 static int win;                       // the game's window, or 0
@@ -91,7 +93,7 @@ static void fw_draw(int w, int cw, int ch, int focused) {
 // the mouse over the window, not locked: in the frame's pixels, for a
 // game that wants it (a double click is its first click and a second)
 static void fw_mouse(int w, int ev, int x, int y, int b) {
-    if (!(flags & FW_MOUSE)) return;
+    if (!(flags & (FW_MOUSE | FW_CLICK))) return;
     mx = clampx(x / scale); my = clampy(y / scale);
     if (ev == E_MOVE) push(GUI_EV_MOVE, mx, my, b);
     else if (ev == E_DOWN) push(GUI_EV_DOWN, mx, my, b);

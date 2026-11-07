@@ -49,6 +49,10 @@ libc.c4s
 /.doom_t/
 /.libc_t/
 /doom-host
+# The Ace of Penguins' objects, generated images and gcc build (make ace-objs,
+# ace-host), its test
+/.ace/
+/.ace_t/
 # OpenTyrian's objects (make tyrian-objs), its gcc build, its test
 /.tyrian/
 /.tyr_t/

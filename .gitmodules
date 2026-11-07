@@ -18,3 +18,8 @@
 	url = git@github.com:andrakis/c4-ROTT.git
 	branch = c4
 	update = none
+[submodule "ace"]
+	path = games/ace
+	url = git@github.com:andrakis/c4-Ace.git
+	branch = c4
+	update = none

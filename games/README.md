@@ -1,7 +1,7 @@
 # games
 
-The games c4 runs -- Wolfenstein 3D, Doom, OpenTyrian and Rise of the
-Triad -- are not part of c4's repository. Each lives in one of its own,
+The games c4 runs -- Wolfenstein 3D, Doom, OpenTyrian, Rise of the Triad
+and The Ace of Penguins -- are not part of c4's repository. Each lives in one of its own,
 on GitHub, on upstream's history with c4's port on top as commits, and
 is an optional submodule here:
 
@@ -11,6 +11,7 @@ is an optional submodule here:
 | `games/doom` | [andrakis/c4-Doom](https://github.com/andrakis/c4-Doom) | doomgeneric |
 | `games/tyrian` | [andrakis/c4-Tyrian](https://github.com/andrakis/c4-Tyrian) | OpenTyrian |
 | `games/rott` | [andrakis/c4-ROTT](https://github.com/andrakis/c4-ROTT) | icculus.org's Rise of the Triad 1.1.2 |
+| `games/ace` | andrakis/c4-Ace (not on GitHub yet) | The Ace of Penguins 1.5~rc2, on the history Debian keeps at salsa.debian.org/games-team/ace-of-penguins |
 
 A clone of c4 has none of them (`update = none` in `.gitmodules`).
 To have one:
@@ -73,3 +74,8 @@ not the one the game's `c4.mk` gives:
 ```
 DOOM_WAD=~/doom1.wad make doom-data
 ```
+
+The Ace of Penguins has no data to fetch. Its images are PNGs in its own
+source, under its GPL, and they build with it: `c4/imglib.py` decodes them on
+the host and writes C into `.ace/gen`, so what is generated is not committed
+either (`games/ace/README.c4.md`).

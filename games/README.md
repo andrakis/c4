@@ -1,7 +1,7 @@
 # games
 
-The games c4 runs -- Wolfenstein 3D, Doom, OpenTyrian and Rise of the
-Triad -- are not part of c4's repository. Each lives in one of its own,
+The games c4 runs -- Wolfenstein 3D, Doom, OpenTyrian, Rise of the Triad
+and Super Blit Kart -- are not part of c4's repository. Each lives in one of its own,
 on GitHub, on upstream's history with c4's port on top as commits, and
 is an optional submodule here:
 
@@ -11,6 +11,7 @@ is an optional submodule here:
 | `games/doom` | [andrakis/c4-Doom](https://github.com/andrakis/c4-Doom) | doomgeneric |
 | `games/tyrian` | [andrakis/c4-Tyrian](https://github.com/andrakis/c4-Tyrian) | OpenTyrian |
 | `games/rott` | [andrakis/c4-ROTT](https://github.com/andrakis/c4-ROTT) | icculus.org's Rise of the Triad 1.1.2 |
+| `games/sbk` | andrakis/c4-SBK (not on GitHub yet) | Super Blit Kart, rewritten in C from Daft-Freak's C++; a history of its own, so that the art stays out of it |
 
 A clone of c4 has none of them (`update = none` in `.gitmodules`).
 To have one:
@@ -68,6 +69,7 @@ not the one the game's `c4.mk` gives:
 | Wolfenstein 3D | `1wolf14.zip`, Apogee's shareware package | `WOLF3D_ZIP` |
 | Doom | `doom1.wad`, id's shareware WAD (1.9) | `DOOM_WAD` |
 | Rise of the Triad | `1rott13.zip`, Apogee's shareware package | `ROTT_ZIP` |
+| Super Blit Kart | its PNGs, maps and font, from a fixed commit of upstream's; the licence on them is not settled (`games/sbk/data/README.md`) | none |
 | OpenTyrian | `tyrian21.zip`, Tyrian 2.1, the user's own copy: it may not be passed on | `TYRIAN_ZIP` |
 
 ```

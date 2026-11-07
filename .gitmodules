@@ -18,3 +18,13 @@
 	url = git@github.com:andrakis/c4-ROTT.git
 	branch = c4
 	update = none
+[submodule "frotz"]
+	path = games/frotz
+	url = git@github.com:andrakis/c4-Frotz.git
+	branch = c4
+	update = none
+[submodule "advent"]
+	path = games/advent
+	url = git@github.com:andrakis/c4-Advent.git
+	branch = c4
+	update = none

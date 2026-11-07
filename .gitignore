@@ -49,6 +49,14 @@ libc.c4s
 /.doom_t/
 /.libc_t/
 /doom-host
+# Open Adventure's objects, its gcc build, its test
+/.advent/
+/.adv_t/
+/advent-host
+# Frotz's objects, its gcc build, its test
+/.frotz/
+/.frz_t/
+/frotz-host
 # OpenTyrian's objects (make tyrian-objs), its gcc build, its test
 /.tyrian/
 /.tyr_t/

@@ -128,6 +128,23 @@
 ;; same +2 per pointer level; c4lc-gen's g:FLOAT says what they are
 (define p:FLOAT 1025024)
 (define p:DOUBLE 1025088)
+;; _Bool, past them in the band: a byte, and whatever is stored in one
+;; becomes 0 or 1 (c4lc-gen's g:convert!/2)
+(define p:BOOL 1025152)
+;; a pointer to a function with a float or double in its signature: a word
+;; as every function pointer is, but a type of its own, past them, 64 apart:
+;; its entry in p:fnsigs is (TYPE RETURN PARAMS), for what a call through it
+;; makes of its arguments and of what comes back (c4lc-gen's g:fnret). Any
+;; other function pointer stays an int.
+(define p:FN0 1025216)
+(define p:fnsigs nil)
+(define p:nfnsigs 0)
+(define p:newfnty (lambda (rt pts)
+	(begin
+		(define ty (+ p:FN0 (* 64 p:nfnsigs)))
+		(set! p:nfnsigs (+ p:nfnsigs 1))
+		(set! p:fnsigs (p:cons (list ty rt pts) p:fnsigs))
+		ty)))
 (define p:SIGN32 (bit:shl 1 31))
 (define p:WORD (sys:wordsize))
 (define p:BITS (* 8 p:WORD))
@@ -158,10 +175,11 @@
 (define p:convval (lambda (v t)
 	(if (if (= t p:CHAR) true (= t p:SCHAR)) (p:sext v 8)
 	(if (= t p:UCHAR) (bit:and v 255)
+	(if (= t p:BOOL) (if (= v 0) 0 1)
 	(if (= t p:SHORT) (p:sext v 16)
 	(if (= t p:USHORT) (bit:and v 65535)
 	(if (= t p:UINT) (bit:and v p:M32)
-	v)))))))
+	v))))))))
 
 ;; unsigned order and division on a whole word
 (define p:ult (lambda (a b) (< (bit:xor a p:MIN) (bit:xor b p:MIN))))
@@ -260,6 +278,32 @@
 			(set! p:structs (p:cons (list n ty) p:structs))
 			ty)))))
 
+;; a tag the unit has defined already, defined again inside a function,
+;; is another struct until that function ends (Mines' `struct grid`)
+(define p:lstructs (list))
+(define p:defined? (lambda (n)
+	(begin
+		(define a (p:assoc n p:structs))
+		(if a (if (p:assoc (p:second a) p:slayouts) true false) false))))
+(define p:lstruct (lambda (n)
+	(begin
+		(define ty (+ p:STRUCT0 (* p:SSTEP p:nstructs)))
+		(set! p:nstructs (+ p:nstructs 1))
+		(set! p:structs (p:cons (list n ty) p:structs))
+		(set! p:lstructs (p:cons ty p:lstructs))
+		ty)))
+(define p:endlstructs (lambda ()
+	(if (empty? p:lstructs) nil
+	(begin
+		(set! p:structs (p:dropty p:structs (list)))
+		(set! p:lstructs (list))))))
+(define p:dropty (lambda (l acc)
+	(if (empty? l) (p:reverse acc)
+	(next p:dropty (tail l)
+		(if (p:tymember? (p:second (head l)) p:lstructs) acc (p:cons (head l) acc))))))
+(define p:tymember? (lambda (t l)
+	(if (empty? l) false (if (= t (head l)) true (next p:tymember? t (tail l))))))
+
 ;; struct S / union U [{ members }] -- returns the value type; a body
 ;; queues a (structdef NAME TYPE ISUNION MEMBERS SIZE LAYOUT) node on
 ;; p:pending. The layout is worked out here (M9), so a constant can say
@@ -272,7 +316,10 @@
 			(if (= (p:kind) 'Id)
 				(begin (define v (p:value)) (p:advance) v)
 			(+ "@anon" p:nstructs)))
-		(define ty (p:structid n))
+		(define ty
+			(if (if p:infn (if (= (p:kind) 'Lbrace) (p:defined? n) false) false)
+				(p:lstruct n)
+				(p:structid n)))
 		(if (= (p:kind) 'Lbrace)
 			(begin
 				(p:advance)
@@ -556,7 +603,7 @@
 	(if (if (p:svalue? ty) true (p:rowty? ty)) (p:second (p:slay ty))
 	(if (< ty 512) p:WORD
 	(if (> (- (- ty 512) (* 64 (/ (- ty 512) 64))) 0) p:WORD
-	(if (if (= ty 512) true (= ty 576)) 1
+	(if (if (= ty 512) true (if (= ty 576) true (= ty p:BOOL))) 1
 	(if (if (= ty 640) true (= ty 704)) 2
 	(if (if (= ty 896) true (if (= ty 960) true (= ty p:DOUBLE))) 8
 	p:WORD)))))))))
@@ -1151,10 +1198,15 @@
 		(p:expect 'Semi "semicolon after do-while")
 		(list 'dowhile s c))))
 
+;; a block's names go with it: a typedef it declared, and a typedef
+;; hidden by a variable of that name (p:shadow)
 (define p:block (lambda ()
 	(begin
 		(p:advance)
-		(next p:block/2 (list)))))
+		(define tds p:typedefs)
+		(define r (p:block/2 (list)))
+		(set! p:typedefs tds)
+		r)))
 (define p:block/2 (lambda (acc)
 	(if (= (p:kind) 'Rbrace)
 		(begin (set! p:rbrace (p:line)) (p:advance) (p:cons 'block (p:reverse acc)))
@@ -1284,23 +1336,54 @@
 ;; NAME false when there is none and SIZE nil when it is no array
 (define p:fnptrdecl (lambda ()
 	(begin
-		;; a call through the pointer has no type but the word's, so a float
-		;; or double coming back would be read as an integer -- and a double
-		;; on a 32-bit target returns through a pointer the call never passes
-		(if (if (= p:lastty p:FLOAT) true (= p:lastty p:DOUBLE))
-			(p:die "a pointer to a function returning float or double is not supported yet (docs/c4-float.md)")
-			nil)		(p:advance)
+		;; a call through the pointer has no type but the word's, unless a
+		;; float or double comes back or goes in: then the pointer's own type
+		;; says so (p:newfnty), the call reads the bits as one, or passes the
+		;; pointer a double on a 32-bit target returns through, and converts
+		;; its arguments as a prototype's would. So `0.0` for a float, two
+		;; words where one is wanted, does not move the rest.
+		(define rt (if (if (= p:lastty p:FLOAT) true (= p:lastty p:DOUBLE)) p:lastty p:INT))
 		(p:advance)
-		(set! p:fnty (p:fnstars p:INT))
+		(p:advance)
+		(define stars (p:fnstars 0))
 		(p:skipquals)
+		;; (*(fns[])) is (*fns[])
+		(define wrap (= (p:kind) 'Lparen))
+		(if wrap (p:advance) nil)
 		(define n (if (= (p:kind) 'Id) (p:value) false))
 		(if n (p:advance) nil)
 		(define size (p:arraysize))
 		(set! p:inner nil)
+		(if wrap (p:expect 'Rparen ") in a function pointer declarator") nil)
 		(p:expect 'Rparen ") in a function pointer declarator")
 		(if (= (p:kind) 'Lparen) nil (p:die "parameter list of a function pointer expected"))
-		(p:skipparens 0)
+		(define hasfp (p:fpparams? p:toks 0))
+		;; only then parsed: a struct first named in a list is not given an
+		;; id here, nor in c4fc, which takes no floats
+		(define pts
+			(if hasfp
+				(begin
+					(p:advance)
+					(p:ptypes (head (p:params (list))) (list)))
+			(begin (p:skipparens 0) nil)))
+		(set! p:inner nil)
+		(set! p:fnty (+ stars
+			(if (if hasfp true (not (= rt p:INT))) (p:newfnty rt pts) p:INT)))
 		(list n size))))
+;; a float or a double in the parameter list at this '('
+(define p:fpparams? (lambda (toks d)
+	(begin
+		(define k (head (head toks)))
+		(if (= k 'Eof) false
+		(if (= k 'Lparen) (next p:fpparams? (tail toks) (+ d 1))
+		(if (= k 'Rparen) (if (= d 1) false (next p:fpparams? (tail toks) (- d 1)))
+		(if (if (= k 'Float) true (= k 'Double)) true
+		(if (if (= k 'Id) (p:fptypedef? (p:second (head toks))) false) true
+		(next p:fpparams? (tail toks) d)))))))))
+(define p:fptypedef? (lambda (n)
+	(begin
+		(define a (p:assoc n p:typedefs))
+		(if a (if (= (p:second a) p:FLOAT) true (= (p:second a) p:DOUBLE)) false))))
 (define p:skipquals (lambda ()
 	(if (if (= (p:kind) 'Const) true (= (p:kind) 'Volatile))
 		(begin (p:advance) (next p:skipquals))
@@ -1654,6 +1737,17 @@
 
 ;; ---- local declarations ----
 
+;; `grid *grid`: from there to the block's end the name is the variable's,
+;; so `grid->x` is an expression and `(grid)` is no cast
+(define p:shadow (lambda (n)
+	(if (p:assoc n p:typedefs) (set! p:typedefs (p:untypedef n p:typedefs (list))) nil)))
+(define p:untypedef (lambda (n l acc)
+	(if (empty? l) (p:reverse acc)
+	(next p:untypedef n (tail l) (if (= (head (head l)) n) acc (p:cons (head l) acc))))))
+(define p:shadowps (lambda (ps)
+	(if (empty? ps) nil
+	(begin (p:shadow (p:second (head ps))) (next p:shadowps (tail ps))))))
+
 ;; one "int|char decl, decl;" line; returns local nodes (order kept).
 ;; A static line returns none: its globals are queued (p:statics). So
 ;; does an extern line, and a function's prototype among the locals.
@@ -1725,6 +1819,7 @@
 			(if (= (p:kind) 'Id) nil (p:die "bad local declaration")))
 		(define n (if fp (head fp) (p:value)))
 		(if fp nil (p:advance))
+		(p:shadow n)
 		(define size (if fp (p:second fp) (p:arraysize/t ty)))
 		(define elem (if (= size nil) ty (p:elemty ty)))
 		(define ty2 (if (= size nil) ty (+ elem p:PTR)))
@@ -1785,7 +1880,7 @@
 (define p:svalue? (lambda (ty)
 	(if (< ty p:STRUCT0) false
 	(if (p:rowty? ty) false
-	(if (if (>= ty p:FLOAT) (< ty (+ p:DOUBLE 64)) false) false
+	(if (>= ty p:FLOAT) false
 	(= 0 (- (- ty p:STRUCT0)
 		(* p:SSTEP (/ (- ty p:STRUCT0) p:SSTEP)))))))))
 
@@ -1871,11 +1966,13 @@
 				(set! p:hiddens (list))
 				(set! p:infn true)
 				(define tds p:typedefs)
+				(p:shadowps ps)
 				(define ls (p:localdecls (list)))
 				(define body (p:block/2 (list)))
 				(if p:lines (set! p:fnlocs (p:cons (list n entry p:rbrace) p:fnlocs)) nil)
 				(set! p:infn false)
 				(set! p:typedefs tds)
+				(p:endlstructs)
 				(set! p:srenames (list))
 				(set! p:locals (list))
 				(set! p:lvars (list))
@@ -3444,7 +3541,9 @@ static int __c4fp_hw() {
 		(set! p:pack 0)
 		(set! p:packs (list))
 		(set! p:nstructs 0)
-		(set! p:typedefs (list))
+		(set! p:fnsigs (list))
+		(set! p:nfnsigs 0)
+		(set! p:typedefs (list (list "_Bool" p:BOOL 0)))
 		(set! p:pending (list))
 		(p:cons 'program (p:top (list))))))
 

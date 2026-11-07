@@ -69,7 +69,7 @@
 	(if (= ty 0) 1
 	(if (< ty 512) (sys:wordsize)
 	(if (> (- (- ty 512) (* 64 (/ (- ty 512) 64))) 0) (sys:wordsize)
-	(if (if (= ty 512) true (= ty 576)) 1
+	(if (if (= ty 512) true (if (= ty 576) true (= ty 1025152))) 1
 	(if (if (= ty 640) true (= ty 704)) 2
 	(if (if (= ty 896) true (if (= ty 960) true (= ty 1025088))) 8
 	(sys:wordsize)))))))))
@@ -575,9 +575,9 @@
 ;; out as a cast. char keeps c4's own behaviour.
 (define t:convty? (lambda (ty)
 	(if (= ty 512) true (if (= ty 576) true (if (= ty 640) true
-	(if (= ty 704) true (if (= ty 768) true
+	(if (= ty 704) true (if (= ty 768) true (if (= ty 1025152) true
 	;; a long long parameter (M8): an int argument must be widened
-	(if (= ty 896) true (if (= ty 960) true (t:fpty? ty))))))))))
+	(if (= ty 896) true (if (= ty 960) true (t:fpty? ty)))))))))))
 (define t:cwrap (lambda (ty x) (if (t:convty? ty) (list 'cast ty x) x)))
 (define t:rty 1)    ;; the return type of the body being spliced (T4)
 

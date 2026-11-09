@@ -554,7 +554,7 @@ fi
 say "C4IX's sources on the disk, and c4m as a C4IX program (c4lc)"
 # with the block of each game that is on the disk (games/NAME/c4ix.vfs.txt)
 python3 -I src/c4bb/tests/vfs-games.py src/c4bb/fs/c4ix.vfs.txt $DISK/c4ix.vfs.txt \
-    $(for g in $GAMES; do if [ -f $DISK/c4ix-$(basename $g).c4r ]; then echo $g; fi; done)
+    $(for g in $GAMES; do if ls $DISK/c4ix-$(basename $g)*.c4r > /dev/null 2>&1; then echo $g; fi; done)
 # the boot logo, for splash (src/c4ix/art/mkc4p.py made it from Kiln's PNG)
 cp src/c4ix/art/c4ix.c4p.gz $DISK/c4ix-splash.c4p.gz
 for n in $C4IX_USER $C4IX_ARC_USER; do
@@ -840,7 +840,7 @@ say "the games' sources, for the IDE's Code tab"
 # what it has read (docs/c4ix-desktop.md, part twenty-one).
 rm -rf $DISK/games
 for g in $GAMES; do
-    [ -f $DISK/c4ix-$(basename $g).c4r ] || continue
+    ls $DISK/c4ix-$(basename $g)*.c4r > /dev/null 2>&1 || continue
     git -C $g ls-files 2> /dev/null | grep -v '^data/\|^\.\|/\.' |
         while read -r f; do
             [ -f "$g/$f" ] && grep -Iq . "$g/$f" 2>/dev/null || continue

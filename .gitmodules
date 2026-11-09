@@ -18,3 +18,13 @@
 	url = git@github.com:andrakis/c4-ROTT.git
 	branch = c4
 	update = none
+[submodule "bsdgames"]
+	path = games/bsdgames
+	url = git@github.com:andrakis/c4-BSD-Games.git
+	branch = c4
+	update = none
+[submodule "pdcurses"]
+	path = games/pdcurses
+	url = git@github.com:andrakis/c4-PDCurses.git
+	branch = c4
+	update = none

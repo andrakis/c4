@@ -283,8 +283,9 @@ for want in "C4IX booting" "protected mode on for user tasks, preemption on" \
     if echo "$out" | grep -qF "$want"; then ok "c4ix-boot '$want'"; else bad "c4ix-boot '$want'"; fi
 done
 # The C4IX vfsload race (docs/c4bb-design.md) is a known issue carried
-# over from c4bb, so "most entries" is the pin here too.
-if echo "$out" | grep -qE '[4-9][0-9]/[4-9][0-9] entries loaded from c4ix\.vfs\.txt'; then
+# over from c4bb, so "most entries" is the pin here too: 40 or more, of 40
+# or more (the BSD games took it past 99).
+if echo "$out" | grep -qE '([4-9][0-9]|[1-9][0-9][0-9])/([4-9][0-9]|[1-9][0-9][0-9]) entries loaded from c4ix\.vfs\.txt'; then
     ok "c4ix-vfs manifest mostly loaded ($(echo "$out" | grep -oE '[0-9]+/[0-9]+ entries loaded'))"
 else bad "c4ix-vfs manifest mostly loaded"; echo "$out" | grep -E 'entries loaded|cannot open' | head -5; fi
 

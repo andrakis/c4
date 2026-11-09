@@ -24,7 +24,7 @@ struct grin_kit {
     // games' bare platform layers, which declare these eight words
     // themselves and need nothing else of grin's: so they stay here, words
     // 5 to 7, whatever kitfns.h grows to
-    int  (*fwin_open)(char *title, int w, int h, int flags);   // 1, or 0: flags 1, the mouse steers
+    int  (*fwin_open)(char *title, int w, int h, int flags);   // 1, or 0: flags 1, the mouse steers; 2, it clicks
     void (*fwin_frame)(char *pixels, int w, int h, int pitch, int *pal);   // pal: 256 0x00RRGGBB
     int  (*fwin_poll)(int *ev);       // gui.h's event: 1, 0 none, -1 the window has closed
 #define K(r, n, p, a) r (*n) p;

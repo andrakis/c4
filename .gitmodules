@@ -32,5 +32,8 @@
 [submodule "puzzles"]
 	path = games/puzzles
 	url = git@github.com:andrakis/c4-Puzzles.git
+[submodule "ace"]
+	path = games/ace
+	url = git@github.com:andrakis/c4-Ace.git
 	branch = c4
 	update = none

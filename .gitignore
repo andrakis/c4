@@ -60,6 +60,10 @@ libc.c4s
 # The puzzles' objects, their gcc builds under it, their test
 /.puzzles/
 /.puz_t/
+# The Ace of Penguins' objects, generated images and gcc build (make ace-objs,
+# ace-host), its test
+/.ace/
+/.ace_t/
 # OpenTyrian's objects (make tyrian-objs), its gcc build, its test
 /.tyrian/
 /.tyr_t/

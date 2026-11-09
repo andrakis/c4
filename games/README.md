@@ -12,6 +12,8 @@ is an optional submodule here:
 | `games/tyrian` | [andrakis/c4-Tyrian](https://github.com/andrakis/c4-Tyrian) | OpenTyrian |
 | `games/rott` | [andrakis/c4-ROTT](https://github.com/andrakis/c4-ROTT) | icculus.org's Rise of the Triad 1.1.2 |
 | `games/quake` | [andrakis/c4-Quake](https://github.com/andrakis/c4-Quake) | quakegeneric (GPL WinQuake) |
+| `games/frotz` | [andrakis/c4-Frotz](https://github.com/andrakis/c4-Frotz) | Frotz's dumb interface, with Zork I, II and III |
+| `games/advent` | [andrakis/c4-Advent](https://github.com/andrakis/c4-Advent) | Open Adventure |
 
 A clone of c4 has none of them (`update = none` in `.gitmodules`).
 To have one:
@@ -71,6 +73,7 @@ not the one the game's `c4.mk` gives:
 | Rise of the Triad | `1rott13.zip`, Apogee's shareware package | `ROTT_ZIP` |
 | OpenTyrian | `tyrian21.zip`, Tyrian 2.1, the user's own copy: it may not be passed on | `TYRIAN_ZIP` |
 | Quake | `quake106.zip`, id's shareware package (`pak0.pak` is taken out of it) | `QUAKE_ZIP` |
+| Frotz | `zork1.z3`, `zork2.z3`, `zork3.z3`, Microsoft's MIT release of Zork, fetched from a fixed commit | `ZORK1_Z3`, `ZORK2_Z3`, `ZORK3_Z3` |
 
 ```
 DOOM_WAD=~/doom1.wad make doom-data

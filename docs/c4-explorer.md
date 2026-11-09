@@ -594,6 +594,11 @@ Choices behind this design:
   opens another window. Installing a program means adding its line, so
   an optional one, such as the game (track G), appears in the Go menu
   only when it is there.
+
+  The first part of this is built, for the games alone
+  (docs/c4ix-desktop.md, part twenty-three): each line starts
+  `CATEGORY|NAME|COMMAND`, a game's `c4ix.vfs.txt` brings its own, and
+  they go in Go > Games. The other fields would follow those three.
 - **From a shell.** `start PROG ARGS` writes one canvas escape to its
   Terminal (`ESC _ G x;PROG ARGS ESC \`), and the desktop spawns PROG
   as a client, a child of the desktop rather than of the shell.

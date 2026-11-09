@@ -40,6 +40,11 @@ Its repository's branch `c4` carries, beside the game:
   the shell's `PATH`, at `#@game-names`, for each game on the disk: every
   `NAME.c4r` its block puts there (Wolfenstein 3D has two, `wolf3d` and
   the registered `wolf3d6`). So `wolf3d` runs from any directory.
+  A `#@app CATEGORY|NAME|COMMAND` line in it puts a game in the desktop's
+  Go menu: `#@app Games|Doom|doom`, or `#@app Games/Puzzles|Net|puzzles net`
+  for a menu of its own within Games. A game can have as many as it has
+  things to start. vfs-games.py gathers them into `/etc/desktop.apps`
+  (docs/c4ix-desktop.md, part twenty-three).
 
 Its tracked text files, but not `data/`, go on the disk too, at their
 paths in c4 (`games/NAME/...`), so C4IX has them in `/usr/games/NAME`,

@@ -1374,3 +1374,66 @@ every screen size. Now:
 - [x] web-ix-fonts.mjs: the page at 640x480, 800x600 and 1024x768, with
       Text Editor wrapped and not, Settings in each face, the IDE at each
       size; a screenshot of each.
+
+## Part twenty-three: a Games category in the Go menu (asked for 2026-11-06)
+
+The games sat among the tools, a line each in `start_items` in shell.c
+and another in `game_path()`. The ports to come (docs/ports-survey.md)
+would have brought about 56, 40 of them Simon Tatham's Puzzles, at 26
+pixels a row, on a screen at most 768 high. So:
+
+- [x] **Go > Games** opens a menu of its own, to the right: Doom, Rise of
+      the Triad, Tyrian, Wolfenstein 3D, by name. It opens when the
+      pointer is on the row, or on a press where there was no move, as a
+      touch has none. Games is not in Go at all on a disk with no game.
+- [x] **A menu can open a menu, up to Go, Games and a group.** A
+      category of `Games/Puzzles` is a row in Games that opens its own
+      list, and groups come first. A menu that is too tall wraps into
+      columns, as many rows to a column as fit above the taskbar; 40 rows
+      are 2 columns at 1024x768 and 3 at 640x480. It goes right of the
+      row that opened it, and over its parent if the screen has no room
+      there, and up if it has none below. A row's arrow is five thin
+      rectangles.
+- [x] **The way across.** A menu opened by hovering can't shut as soon
+      as the pointer leaves the row, or the pointer could never reach
+      anything below it: from Games, a move down and right crosses Run...
+      So rows in a parent do not light while the pointer is moving right.
+      Moving left or straight up or down, the row under it takes over.
+      A press always counts. Esc shuts everything, as it did.
+- [x] **A game brings its own line.** It has no line in shell.c any more:
+      a `#@app` line in its `c4ix.vfs.txt` (games/README.md) goes into
+      `/etc/desktop.apps`, by way of vfs-games.py and the disk's
+      `c4ix-desktop.apps`, for each game on the disk. The desktop reads
+      the file once, when it starts:
+
+      ```
+      CATEGORY|NAME|COMMAND
+      Games|Doom|doom
+      Games/Puzzles|Net|puzzles net
+      ```
+
+      A line whose program isn't on the disk is left out: by the path the
+      command names, or else by name in `/usr/games/bin`. So is another
+      category's, a comment, and anything without three fields; fields
+      after the third are for W2 of docs/c4-explorer.md, which this is
+      the first part of, and are ignored. The list holds 128 rows and
+      8 KB of text; beyond that the rest are not listed. A game that
+      doesn't use a Terminal starts the same way: `run_command` opens one
+      for its program, and a window from `window.h` or the whole display
+      is drawn over that.
+- [x] The tools stay in the source. Go's own rows want icons and are the
+      desktop's; they are for W2 to move, if it comes to that.
+
+Not done, for now: a launcher window (the menus hold what is coming),
+keys in the menu, and an icon on a game's row.
+
+- [x] test-desktop.mjs: the games are not in Go itself; Games is there
+      where the manifest has a game; the pointer on it lists the games on
+      the disk and only those, by name; moving right across Run... keeps
+      them and moving down it closes them. For the second desktop it
+      replaces `/etc/desktop.apps` with 42 rows, a comment, a line whose
+      program isn't there and another category's: groups come first, the
+      three are not listed, 40 puzzles are on the screen in 2 columns at
+      1024x768 and 3 at 640x480, Verdana Large included, Cards takes
+      Puzzles' place, and picking Puzzle 39 runs its command in a
+      Terminal and shuts the menu.

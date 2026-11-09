@@ -1224,16 +1224,35 @@ type('gui 40\n');
 check(until(() => gui.w === SW && has(/^Terminal - task/) && has(/gui: done after 40 frames/), 1500),
   'and has it back when the program ends, and draws it all again', `${gui.w}x${gui.h} ` + screen().slice(-300));
 
-// ---- the games in the Go menu: each where it is on the disk ------------------------------------
+// ---- the games in the Go menu: under Games, each where it is on the disk -----------------------
 // (games/README.md: optional submodules; C4IX's manifest lists the ones there)
 {
   const vfs = readFileSync(join(ROOT, 'disk/c4ix.vfs.txt'), 'utf8');
   const games = [['wolf3d', 'Wolfenstein 3D'], ['doom', 'Doom'], ['tyrian', 'Tyrian'], ['rott', 'Rise of the Triad']];
+  const there = games.filter(([g]) => new RegExp(`^\\s*${g}: ilink`, 'm').test(vfs));
+  const hover = (x, y) => ev({ kind: 'move', x, y, buttons: 0 });
   click(20, SH - TASK_H + 12);
   until(() => has('Power Off...'));
-  const wrong = games.filter(([g, label]) => new RegExp(`^\\s*${g}: ilink`, 'm').test(vfs) !== frame.some(t => t.s.trimEnd() === label));
-  check(wrong.length === 0, 'the Go menu lists the games that are on the disk, and only those',
-    wrong.map(([g]) => g).join(' ') || 'all as the manifest says');
+  check(!games.some(([, label]) => has(label)), 'the games are not in the Go menu itself');
+  check(has('Games') === (there.length > 0), 'which has Games where a game is on the disk', `${there.length} on the disk`);
+  if (there.length) {
+    const g = find('Games')[0];
+    hover(g.x + 5, g.y + 5);
+    check(until(() => has(there[0][1]), 200), 'the pointer on Games opens them', screen().slice(-300));
+    const wrong = games.filter(([, label]) => there.some(t => t[1] === label) !== has(label));
+    check(wrong.length === 0, 'it lists the games that are on the disk, and only those',
+      wrong.map(([n]) => n).join(' ') || 'all as the manifest says');
+    const rows = there.map(([, label]) => find(label)[0]).sort((a, b) => a.y - b.y).map(t => t.s.trimEnd());
+    check(rows.join() === there.map(t => t[1]).sort().join(), 'by name', rows.join());
+    // the way across: right and down, over Run..., and the games stay
+    // (the menu's, drawn last: System Monitor has a Run... button too)
+    const r = find('Run...').pop(), one = there[0][1];
+    hover(r.x + 60, r.y + 5);
+    check(has(one), 'moving right, across Run..., they stay on the way to them', screen().slice(-300));
+    settle();
+    hover(r.x + 60, r.y + 6);
+    check(until(() => !has(one), 200), 'and they go once it moves on along Run...', screen().slice(-300));
+  }
   key('ESC');
   until(() => !has('Power Off...'));
 }
@@ -1425,6 +1444,15 @@ check(!/c4ix-sh.c4r[\s\S]*c4ix-sh.c4r/.test(psOut.replace(/^[\s\S]*?ID/, '')), '
   typeBytes(vm, new TextEncoder().encode('cat /etc/desktop.cfg\n'));
   check(until(() => / style 2 sort \d+ res 1024 768 vol 25 mute 1 font 1 fsize 2\b/.test(consoleText().slice(c0))), 'the look, the size, the volume and the font are kept in /etc/desktop.cfg', consoleText().slice(c0));
 }
+// what the ports will bring, for the Games menu to hold (docs/c4ix-desktop.md, part
+// twenty-three): a file on the disk, as cat finds it there, in place of the games' lines
+{
+  const lines = ['# a comment', 'Games|Not On The Disk|no-such-program', 'Tools|Not A Game|/bin/echo not-a-game'];
+  for (let k = 0; k < 40; k++) lines.push(`Games/Puzzles|Puzzle ${String(k).padStart(2, '0')}|/bin/echo picked-${k}`);
+  lines.push('Games/Cards|Solitaire|/bin/echo picked-solitaire', 'Games|Shooter|/bin/echo picked-shooter');
+  files.set('td-apps.txt', new TextEncoder().encode(lines.join('\n') + '\n'));
+  typeBytes(vm, new TextEncoder().encode('cat td-apps.txt > /etc/desktop.apps\n'));
+}
 // the card as it is when the page starts, so the desktop has to set it
 snd.write32(SND.MASTER, 255);
 const nmasters = masters.length + 1;
@@ -1441,6 +1469,39 @@ type('kept ' + WORDS);
 key('HOME');
 check(until(() => find(/word\d/).length === 1 && find(/^kept word0 /).some(t => t.font === 3 && t.adv === 8 && !/word29/.test(t.s)) && hbar()),
   "and Text Editor in Courier New, Large, without Word Wrap, as notepad.cfg keeps them", JSON.stringify(find(/word\d/)));
+// ---- Games with 42 in it: groups, and a long one in columns on the screen -------------------------
+{
+  const hover = t => ev({ kind: 'move', x: t.x + 5, y: t.y + 5, buttons: 0 });
+  const puzzles = () => frame.filter(t => /^Puzzle \d\d/.test(t.s));
+  const openPuzzles = () => {
+    click(20, SH - TASK_H + 12);
+    until(() => has('Power Off...'));
+    hover(find('Games')[0]);
+    until(() => has('Puzzles'));
+    hover(find('Puzzles')[0]);
+    until(() => has('Puzzle 39'));
+  };
+  const onScreen = () => puzzles().length === 40 && puzzles().every(t => t.x >= 0 && t.x + 8 * t.s.trimEnd().length <= SW && t.y >= 0 && t.y + 14 <= SH - TASK_H);
+  const columns = () => new Set(puzzles().map(t => t.x)).size;
+  openPuzzles();
+  check(has('Cards') && has('Shooter') && find('Cards')[0].y < find('Puzzles')[0].y && find('Puzzles')[0].y < find('Shooter')[0].y,
+    "the groups come first in Games, each named once, then what isn't in one", screen().slice(-400));
+  check(!has('Not On The Disk') && !has('Not A Game') && !has('# a comment'), "a line whose program isn't there, another category's and a comment are not listed", screen().slice(-400));
+  check(onScreen() && columns() === 2, '40 in a group at 1024x768 are on the screen, in 2 columns', JSON.stringify(puzzles().slice(-2)));
+  // the Puzzles row is under the pointer's way back: on it, the group stays; on Cards, the group goes
+  hover(find('Cards')[0]);
+  check(until(() => !has('Puzzle 00') && has('Solitaire'), 200), 'another group in its place', screen().slice(-300));
+  hover(find('Puzzles')[0]);
+  until(() => has('Puzzle 39'));
+  check(clickText('Puzzle 39') && until(() => has(/picked-39/), 800) && !has('Power Off...'), "a row in a group runs its command in a Terminal, and the menu shuts", screen().slice(-300));
+  gui.event({ kind: 'resize', w: 640, h: 480 }); SW = 640; SH = 480;
+  run(3e5);
+  until(() => taskLine(1));
+  openPuzzles();
+  check(onScreen() && columns() === 3, 'and at 640x480, in 3 columns, over Go if it must', JSON.stringify(puzzles().slice(-2)));
+  key('ESC');
+  check(until(() => !has('Power Off...') && !has('Puzzle 00'), 200), 'Esc shuts them all');
+}
 start('Power Off...');
 check(until(() => consoleText().split('desktop: shut down').length > 2, 2000), 'and Power Off ends it again');
 typeBytes(vm, new TextEncoder().encode('cat /proc/meminfo\n'));

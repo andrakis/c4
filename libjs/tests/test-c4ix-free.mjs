@@ -66,15 +66,17 @@ check(r && r[0] === m.heap && near(r[1], K(h.used), 1024) && near(r[3], K(h.larg
   'free prints them, with swap, and the free memory in one piece', t);
 
 // the heap in pieces: 384 KB blocks while they come, every other given back
-// (free has to start: its stack is 256 KB and a guard page, in one piece)
+// (free has to start: its stack is 256 KB and a guard page, in one piece).
+// Counted from the last taken, which stays: what no block fitted lies beside
+// it, and given back it would make a hole of up to twice the size.
 const taken = [];
 for (let p; (p = h.alloc(384 << 10)); ) taken.push(p);
-for (let i = 0; i < taken.length; i += 2) h.free(taken[i]);
+for (let i = taken.length - 2; i >= 0; i -= 2) h.free(taken[i]);
 t = sh('free');
 r = row(t, 'memory');
 check(r && r[2] > 2048 && r[3] < 512 && /^The free memory is in pieces: nothing bigger than +\d+ K can be had at once\.$/m.test(t),
   `in pieces: ${r && r[2]} K free, nothing bigger than ${r && r[3]} K, and free says so`, t);
-for (let i = 1; i < taken.length; i += 2) h.free(taken[i]);
+for (let i = taken.length - 1; i >= 0; i -= 2) h.free(taken[i]);
 t = sh('free');
 r = row(t, 'memory');
 check(r && r[3] > r[2] / 2 && !/in pieces/.test(t), 'given back, one piece again', t);

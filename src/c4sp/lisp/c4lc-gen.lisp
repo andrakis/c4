@@ -64,6 +64,8 @@
 ;; float and double (the floating-point section below); on a 32-bit
 ;; target a double is carried exactly as long long is
 (define g:FLOAT 1025024)
+(define g:BOOL 1025152)
+(define g:FN0 1025216)
 (define g:DOUBLE 1025088)
 (define g:ll? (lambda (t) (if (= t g:LL) true (if (= t g:ULL) true (if (= t g:DOUBLE) (= g:WORD 4) false)))))
 (define g:BITS (* 8 g:WORD))
@@ -450,10 +452,15 @@
 	(if (< ty 512) (/ (- ty (bit:and ty 1)) 2)
 	(/ (- (- ty 512) (* 64 (/ (- ty 512) 64))) 2))))
 ;; an integer VALUE type: not a pointer, not a struct
+;; (_Bool and the function pointers with floats in their signatures are
+;; past the struct band, but are as much integers as any: c4lc-parse's
+;; p:BOOL, p:FN0)
+(define g:fnty? (lambda (t) (if (>= t g:FN0) (= 0 (g:plevel t)) false)))
 (define g:arith? (lambda (t)
-	(if (< t g:STRUCT0) (= 0 (g:plevel t)) false)))
+	(if (< t g:STRUCT0) (= 0 (g:plevel t))
+	(if (= t g:BOOL) true (g:fnty? t)))))
 (define g:bytety? (lambda (t)
-	(if (= t g:CHAR) true (if (= t g:UCHAR) true (= t g:SCHAR)))))
+	(if (= t g:CHAR) true (if (= t g:UCHAR) true (if (= t g:SCHAR) true (= t g:BOOL))))))
 (define g:halfty? (lambda (t) (if (= t g:SHORT) true (= t g:USHORT))))
 ;; the usual arithmetic conversions: everything narrower than a word
 ;; promotes to int, and int < uint < ulong
@@ -503,11 +510,17 @@
 		(if (= f t) nil (g:die "internal: a float or double converted without its helper"))
 	(if (g:ll? f)
 		(if (g:ll? t) nil
-		(begin (g:emit '(LI)) (g:convert! (if (= f g:ULL) g:UINT g:INT) t)))
+		(begin
+			(if (= t g:BOOL) (g:die "a long long made a _Bool without a cast") nil)
+			(g:emit '(LI)) (g:convert! (if (= f g:ULL) g:UINT g:INT) t)))
 	(if (g:ll? t) (g:die "internal: a long long is made before its operand, not after")
 	(g:convert!/2 f t))))))
 (define g:convert!/2 (lambda (f t)
 	(if (g:arith? t)
+		;; anything but 0 is 1: not a truncation, so a mask will not do
+		(if (= t g:BOOL)
+			(if (= f g:BOOL) nil
+			(begin (g:emit '(PSH)) (g:emit '(IMM 0)) (g:emit '(NE))))
 		(if (if (= t g:CHAR) true (= t g:SCHAR))
 			(if (if (= f g:CHAR) true (= f g:SCHAR)) nil (g:sext! 8))
 		(if (= t g:UCHAR) (if (= f g:UCHAR) nil (g:mask! 255))
@@ -520,7 +533,7 @@
 				(if (if (= f g:UCHAR) true (if (= f g:USHORT) true (= f g:UINT))) nil
 					(g:mask! g:M32))
 			nil)
-		nil)))))
+		nil))))))
 	nil)))
 ;; ... and the conversion an assignment, a ++ or a return makes. char
 ;; keeps c4's own rule -- the value of `c = 300` is 300, SC drops the
@@ -530,7 +543,9 @@
 	(if (if (g:fp? f) true (g:fp? t)) (g:convert! f t)
 	(if (g:ll? f)
 		(if (g:ll? t) nil
-		(begin (g:emit '(LI)) (g:sconv! (if (= f g:ULL) g:UINT g:INT) t)))
+		(begin
+			(if (= t g:BOOL) (g:die "a long long made a _Bool without a cast") nil)
+			(g:emit '(LI)) (g:sconv! (if (= f g:ULL) g:UINT g:INT) t)))
 	(g:sconv!/2 f t)))))
 (define g:sconv!/2 (lambda (f t)
 	(if (= t g:CHAR) nil
@@ -540,7 +555,7 @@
 
 ;; loads and stores by type
 (define g:load! (lambda (ty)
-	(if (if (= ty g:CHAR) true (= ty g:SCHAR)) (g:emit '(LC))
+	(if (if (= ty g:CHAR) true (if (= ty g:SCHAR) true (= ty g:BOOL))) (g:emit '(LC))
 	(if (= ty g:UCHAR) (begin (g:emit '(LC)) (g:mask! 255))
 	(if (= ty g:SHORT) (g:helpcall 'ld16s 1)
 	(if (= ty g:USHORT) (g:helpcall 'ld16u 1)
@@ -1143,7 +1158,7 @@
 ;; that says float or double, and which g:fpexpr reaches through
 ;; ordinary calls. Literals arrive as bits (the lexer rounds them).
 (define g:fp? (lambda (t) (if (= t g:FLOAT) true (= t g:DOUBLE))))
-(define g:fpband? (lambda (t) (if (>= t g:FLOAT) (< t (+ g:DOUBLE 64)) false)))
+(define g:fpband? (lambda (t) (>= t g:FLOAT)))
 (define g:fpbin? (lambda (a b) (if (g:fp? a) true (g:fp? b))))
 ;; the usual arithmetic conversions, with a float in them
 (define g:fpuac (lambda (a b) (if (if (= a g:DOUBLE) true (= b g:DOUBLE)) g:DOUBLE g:FLOAT)))
@@ -1379,6 +1394,7 @@
 ;; (cast TY E) with a float on one side
 (define g:fpcast (lambda (ty e)
 	(if (g:fp? ty) (g:fpval e ty)
+	(if (= ty g:BOOL) (begin (g:expr (list 'ne e (g:fpzero (g:typeof e)))) (set! g:ty g:BOOL))
 	(if (g:isptr ty) (g:die "a float or double cannot be converted to a pointer")
 	(if (g:svalue? ty) (g:die "a float or double cannot be converted to a struct")
 	(begin
@@ -1393,7 +1409,7 @@
 		(begin
 			(g:fpcall fn (list e) g:INT)
 			(g:convert! (g:third (g:find fn)) ty)))
-		(set! g:ty ty)))))))
+		(set! g:ty ty))))))))
 
 ;; lv = rv, either side a float
 (define g:fpassign (lambda (lv rv)
@@ -1657,8 +1673,8 @@
 		(if (= h 'llnum) (index e 3)
 		(if (= h 'str) g:PTR
 		(if (= h 'var) (g:vartype (g:find (g:second e)))
-		(if (if (= h 'call) true (= h 'cmpd)) (if (= h 'call) (g:third (g:find (g:second e))) (index e 2))
-		(if (= h 'calle) g:INT
+		(if (if (= h 'call) true (= h 'cmpd)) (if (= h 'call) (g:callty (g:find (g:second e))) (index e 2))
+		(if (= h 'calle) (g:fnret (g:typeof (g:calltgt (g:second e))))
 		(if (= h 'assign) (g:lvtype (g:second e))
 		(if (= h 'deref) (g:decay (- (g:typeof (g:second e)) g:PTR))
 		(if (= h 'addr) (g:addrty (g:second e) (g:lvtype (g:second e)))
@@ -1922,7 +1938,8 @@
 
 (define g:binary/2 (lambda (e opname t)
 	(begin
-		(define es (if (g:isptr t) (g:elemsize t) 1))
+		;; only + and - scale: a pointer to a struct never defined compares
+		(define es (if (if (g:isptr t) (if (= opname 'ADD) true (= opname 'SUB)) false) (g:elemsize t) 1))
 		(g:emit '(PSH))
 		(g:iexpr (g:third e))
 		(if (= opname 'ADD)
@@ -1974,6 +1991,20 @@
 		(list 'extph (index s 3))
 	(list 'code (index s 3)))))
 
+;; what a call through a pointer of type t gives: a word, unless its
+;; signature says otherwise (c4lc-parse's p:fnsigs)
+(define g:fnret (lambda (t)
+	(if (g:fnty? t) (g:second (p:assoc t p:fnsigs)) g:INT)))
+;; ... the types its arguments take; nil, as written
+(define g:fnps (lambda (t)
+	(if (g:fnty? t) (g:third (p:assoc t p:fnsigs)) nil)))
+;; ... and what a call by name gives: a function's type, a variable's
+;; through g:fnret. The pointers aside, as ever, the variable's own type.
+(define g:callty (lambda (s)
+	(begin
+		(define t (g:third s))
+		(if (if (= (g:second s) 'fun) true (= (g:second s) 'ext)) t
+		(if (g:fnty? t) (g:fnret t) t)))))
 (define g:call (lambda (e)
 	(begin
 		(define n (g:second e))
@@ -1982,11 +2013,16 @@
 		;; a known function's parameters (types, masks) for the const check
 		(define kf (if (= cl 'fun) true (= cl 'ext)))
 		(define t0 (g:pushargs (tail (tail e)) 0
-			(if kf (index s 8) nil) (if kf (index s 9) nil)
+			(if kf (index s 8) (g:fnps (g:third s))) (if kf (index s 9) nil)
 			;; a call through a variable holding a pointer: its arguments as written
-			(if (if (= cl (quote loc)) true (if (= cl (quote glo)) true (= cl (quote extg)))) "a call through a pointer" n)))		(define llr (if kf (g:sret? (g:third s)) false))
-		(define rtmp (if llr (if (g:ll? (g:third s)) (g:ltemp) (g:ltempw (g:pw (g:third s)))) 0))
+			(if (if (= cl (quote loc)) true (if (= cl (quote glo)) true (= cl (quote extg)))) "a call through a pointer" n)))		(define rty (g:callty s))
+		(define llr (if kf (g:sret? rty) (if (g:fnty? (g:third s)) (g:sret? rty) false)))
+		(define rtmp (if llr (if (g:ll? rty) (g:ltemp) (g:ltempw (g:pw rty))) 0))
 		(define t t0)
+		;; a double through a pointer comes back through this one as well
+		(if (if llr (not kf) false)
+			(begin (g:emit (list 'LEA rtmp)) (g:emit '(PSH)) (set! t (+ t 1)))
+			nil)
 		(if (= cl 'sys) (g:emit (list (index s 3)))
 		(if (if (= cl 'fun) true (= cl 'ext))
 			(begin
@@ -2018,7 +2054,7 @@
 		(g:die (+ "bad function call: " n)))))))
 		(if (> t 0) (g:emit (list 'ADJ t)) nil)
 		(if llr (g:emit (list 'LEA rtmp)) nil)
-		(set! g:ty (g:third s)))))
+		(set! g:ty rty))))
 ;; A struct passed by value (M9): its words, the last pushed first, so
 ;; the first lands at the lowest address -- the parameter's -- as a long
 ;; long's do. Its address waits in a temporary while they go, and the
@@ -2068,7 +2104,13 @@
 ;; finds the frame a JSR builds. The value is a word.
 (define g:callexpr (lambda (e)
 	(begin
-		(define t (g:pushargs (tail (tail e)) 0 nil nil "a call through a pointer"))
+		(define rty (g:typeof e))
+		(define t0 (g:pushargs (tail (tail e)) 0 (g:fnps (g:typeof (g:calltgt (g:second e)))) nil
+			"a call through a pointer"))
+		(define llr (g:ll? rty))
+		(define rtmp (if llr (g:ltemp) 0))
+		(if llr (begin (g:emit (list 'LEA rtmp)) (g:emit '(PSH))) nil)
+		(define t (if llr (+ t0 1) t0))
 		(define l (g:newlabel))
 		(g:emit (list 'IMM (list 'code l)))
 		(g:emit '(PSH))
@@ -2076,19 +2118,21 @@
 		(g:emit '(JMPA))
 		(g:label! l)
 		(if (> t 0) (g:emit (list 'ADJ t)) nil)
-		(set! g:ty g:INT))))
+		(if llr (g:emit (list 'LEA rtmp)) nil)
+		(set! g:ty rty))))
 (define g:pushargs (lambda (args t pts pqs fname)
 	(if (empty? args) t
 	(begin
 		(define pt (if (if (= pts nil) true (empty? pts)) nil (head pts)))
 		;; a float argument: converted to its parameter's type, or promoted
 		;; to double -- but a float helper's own arguments go as they are
-		(define a (if g:fpon
+		(define a (if (= pt g:BOOL) (list 'cast g:BOOL (head args))
+			(if g:fpon
 			(if (g:llname? fname) (head args)
 			;; through a pointer the parameters are unknown: as written
 			(if (if (= pt nil) (= fname "a call through a pointer") false) (head args)
 			(g:fparg (head args) pt)))
-			(head args)))
+			(head args))))
 		(define wide (if (= pt nil) (g:ll? (g:typeof a)) (g:ll? pt)))
 		;; a struct by value: the parameter's type, or as written
 		(define sty (if (= pt nil) (g:typeof a) pt))
@@ -2242,8 +2286,12 @@
 				(set! g:ty (g:second e)))
 		(if (= h 'cast)
 			(begin
-				(g:expr (g:third e))
-				(g:convert! g:ty (g:second e))
+				;; a long long's truth is both its words
+				(if (if (= (g:second e) g:BOOL) (g:ll? (g:typeof (g:third e))) false)
+					(g:expr (list 'ne (g:third e) (list 'llnum 0 0 (g:typeof (g:third e)))))
+				(begin
+					(g:expr (g:third e))
+					(g:convert! g:ty (g:second e))))
 				(set! g:ty (g:second e)))
 		(if (= h 'sizeof)
 			(begin
@@ -3050,7 +3098,10 @@
 			(begin (g:ifillagg ety cnt off (g:items it) true) (tail cur))
 		(if (if (= h 'str) (if (= cnt nil) false (g:bytety? ety)) false)
 			(begin (g:istrfill cnt off (g:second it)) (tail cur))
-		(g:ifillagg ety cnt off cur false)))))))
+		;; a whole struct, not its first member: its bytes
+		(if (if (= cnt nil) (if (= h 'expr) (= (g:typeof (g:second it)) ety) false) false)
+			(begin (g:lstruct ety off (g:second it)) (tail cur))
+		(g:ifillagg ety cnt off cur false))))))))
 ;; `{ 5 }` for a scalar is 5
 (define g:unwrap (lambda (it)
 	(if (if (= (head it) 'agg) true (= (head it) 'braces))
@@ -3274,6 +3325,17 @@
 		(if (if (= h 'num) false (g:svalue? g:ty))
 			(g:die "a struct value in an initializer is not supported") nil)
 		(g:store! ty))))
+(define g:lstruct (lambda (ty off e)
+	(begin
+		(if (= g:imode 'local) nil (g:die "a struct value in an initializer is not constant"))
+		(g:laddr off)
+		(g:emit '(PSH))
+		(g:sval e ty "an initializer")
+		(g:emit '(PSH))
+		(g:emit (list 'IMM (g:tysize ty)))
+		(g:emit '(PSH))
+		(g:emit '(MCPY))
+		(g:emit '(ADJ 3)))))
 (define g:lstrfill (lambda (s i off)
 	(if (>= i (length s)) nil
 	(begin
@@ -3384,9 +3446,10 @@
 	(begin
 		(define et (g:typeof (g:second init)))
 		(if (= et ty) init
+		(if (= ty g:BOOL) (list 'einit (list 'cast ty (g:second init)))
 		(if (g:fp? ty) (list 'fpinit (g:second init))
 		(if (g:fp? et) (list 'einit (list 'cast ty (g:second init)))
-		init)))))))
+		init))))))))
 
 ;; emit the initializer of local node d whose frame slot is val
 (define g:eminit (lambda (d val)

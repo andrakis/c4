@@ -1243,6 +1243,51 @@ c4lc only.
   definitions), the same at 32 and 64 bits. It runs in test-c4lc at both
   sizes, plain, `-O` and `-minline`, and in `C4SC_BACK_DIFF`.
 
+### 14.13 What Simon Tatham's Puzzles needed (2026-11-07)
+
+Forty games and a core of 23 units (`games/puzzles`). `src/tests/c4lc_puz.c`
+checks each of these, its golden gcc's, at 32 and 64 bits, plain, `-O` and
+`-minline`. It is c4lc only.
+
+- **`_Bool`**, a type code past the float band (`p:BOOL`), and a predeclared
+  name rather than a keyword, so a unit that never says it pays nothing. It is
+  a byte, and whatever is stored in one becomes 0 or 1: `bool b = x & 256` is 1,
+  where `unsigned char` would make it 0 and a word-sized `int` would make it 256,
+  which is not `== true`. It converts at an assignment, a compound assignment,
+  a `return`, a cast, a local's initializer and a prototyped argument, from a
+  float by comparing with 0.0 and from a long long by both its words. An argument
+  through a function pointer does not convert, as it never has. Storing a long
+  long in one with no cast is refused rather than cut to its low word. A global's
+  constant initializer stays as written.
+- **Function pointers with floats in their signatures** (`p:FN0`, `p:fnsigs`).
+  `float (*anim_length)(...)` used to be refused, and every unit of the
+  collection declares it. A pointer that returns or takes a float or a double now
+  gets a type of its own, 64 apart past `_Bool`, with its return and parameter
+  types beside it. The call has that return type, and converts its arguments.
+  That matters more than the return: midend.c passes `0.0` for a `float`
+  parameter, and as written that is two words, which moved every later argument
+  and blanked the display with no error at all. Every other function pointer stays
+  an `int`, its list skipped token by token, so a unit with no floats compiles
+  to the same bytes, and c4fc's agree.
+- **A variable named like a typedef**: `tdq *tdq = snew(struct tdq);` and
+  then `tdq->queue`. A local or a parameter hides the typedef from its
+  declaration to the end of its block (`p:shadow`), and a block now restores
+  `p:typedefs` as a function did.
+- **A tag defined again in a function** (Mines' `struct grid { ... } g`): if the
+  unit has already defined that tag, the function's is another struct until the
+  function ends (`p:lstruct`). A tag not yet defined is not new, so a pointer
+  declared before its local definition stays the same struct.
+- **A pointer to a struct never defined** can be compared. `g:binary/2` asked
+  for the element's size before it knew the operator was `+` or `-`.
+- **A whole struct as an element** of a local aggregate's initializer
+  (`g:lstruct`, Penrose's `Point tilevertices[4] = { tri->vertices[...], ... }`):
+  when the item's type is the element's, its bytes, not its first member.
+- **`(*(fns[]))`**: the extra parentheses, in `p:fnptrdecl`.
+
+**Not done**, and changed in the game instead (`range.c`, its only change):
+bitfields, and a function typedef, `typedef move *(reasoning)(...)` then
+`static reasoning f;`.
+
 ## 15. Source maps: `-g` (track S, S0-S2, 2026-10-24)
 
 docs/c4-explorer.md §2 is the design. This section records what c4lc does.

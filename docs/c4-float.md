@@ -85,7 +85,7 @@ above it, and `f == 0.1` stays a double compare because 0.1 is not a float.
 
 **Conversions C makes implicitly:**
 - **Arguments:** converted to a prototyped parameter's type. An argument with no parameter to match (a variadic call, or an unprototyped one) gets C's default promotion, float to double, so `printf("%f", x)` passes a double.
-- **Calls through function pointers:** the arguments go as written, because a pointer carries no parameter types in c4lc.
+- **Calls through function pointers:** a pointer with a float or a double in its signature carries its parameter types (`p:fnsigs`), and the arguments convert as a prototype's do. Any other pointer has only words to pass, so its arguments go as written.
 - **`return`:** converts to the function's type.
 - **Initializers:** a global initialized with an integer constant gets that integer converted at compile time.
 
@@ -93,7 +93,7 @@ above it, and `f == 0.1` stays a double compare because 0.1 is not a float.
 
 ### Not yet, or differently
 
-- **A pointer to a function returning `float` or `double`** is refused with a message. c4lc types a function pointer as a word, so a call through one could not know the value is a float, and a 32-bit double comes back through a pointer the call never passes. Pointers to functions taking float arguments are fine.
+- **A pointer to a function returning `float` or `double`** has a type of its own, as above, which is the return type its call has. A double comes back through a hidden pointer on a 32-bit target, as from any function. Added for Simon Tatham's Puzzles (docs/c4lc-design.md, 14.13).
 - **`-minline` leaves a unit with floats alone.** The tree pass converts a spliced argument only by the parameter's type, and does not know an expression's type, so an `int` argument for a `double` parameter would arrive as its integer bits. (T4 also refuses a function returning a double at 32 bits, as it refuses `long long`: the result is a temporary's address.)
 - **No constant folding of float expressions.** A global's initializer is a literal, a negated literal, or an integer constant.
 - **c4fc refuses floats.** Its lexer reads `1.5` as three tokens and it has no `float` keyword. (Parity with c4lc is a later step.)

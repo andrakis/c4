@@ -29,5 +29,8 @@
 [submodule "advent"]
 	path = games/advent
 	url = git@github.com:andrakis/c4-Advent.git
+[submodule "puzzles"]
+	path = games/puzzles
+	url = git@github.com:andrakis/c4-Puzzles.git
 	branch = c4
 	update = none

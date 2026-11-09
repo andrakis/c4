@@ -2441,8 +2441,8 @@ IMG_G := -g
 FORCE:
 PHONY += FORCE
 
-# THE GAMES (games/README.md): Wolfenstein 3D, Doom, OpenTyrian and Rise
-# of the Triad live in repositories of their own, each an optional
+# THE GAMES (games/README.md): Wolfenstein 3D, Doom, OpenTyrian, Rise of
+# the Triad and the Puzzles live in repositories of their own, each an optional
 # submodule at games/NAME. Each one checked out brings its c4.mk -- its
 # rules, objects, data and test -- included here, and c4bb-images builds
 # its objects (build-images.sh then links it, with its c4-images.sh). A
@@ -2450,7 +2450,7 @@ PHONY += FORCE
 GAME_OBJS  :=
 GAME_TESTS :=
 include $(wildcard games/*/c4.mk)
-GAMES_ALL  := wolf3d doom tyrian rott quake frotz advent
+GAMES_ALL  := wolf3d doom tyrian rott quake frotz advent puzzles
 c4bb-images: libc-bare-objs grin-objs grin-apps $(GAME_OBJS)
 $(filter-out $(GAME_TESTS),$(GAMES_ALL:%=test-%)):
 	@echo "$@: skipped, games/$(@:test-%=%) is not here (games/README.md)"
@@ -3528,6 +3528,16 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	   ./c4sp32 src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_float.c .c4lc_b.c4r > /dev/null || exit 1; \
 	   ./c4m32 load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-float.txt || exit 1; \
 	   echo "  float ok, gcc's answers at 32 and 64 bits: c4lc $$fl"; \
+	 done
+	# what the Puzzles needed (games/puzzles): _Bool, a function pointer that
+	# returns a float or a double, a variable named like a typedef, a tag
+	# defined again in a function, a whole struct in a local initializer
+	@for fl in "" "-O" "-minline"; do \
+	   ./c4sp src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_puz.c .c4lc_b.c4r > /dev/null || exit 1; \
+	   ./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-puz.txt || exit 1; \
+	   ./c4sp32 src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_puz.c .c4lc_b.c4r > /dev/null || exit 1; \
+	   ./c4m32 load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-puz.txt || exit 1; \
+	   echo "  puzzles' constructs ok, gcc's answers at 32 and 64 bits: c4lc $$fl"; \
 	 done
 	# M7b: data words naming another unit's functions (patch type -5 in
 	# the object, which c4rlink resolves) -- an applet table like Busybox's

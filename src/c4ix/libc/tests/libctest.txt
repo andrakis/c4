@@ -27,6 +27,11 @@ file: line 1
 file: line 2
 file: line 3
 file: 3 lines, eof 1
+r+: read 4, then 10 at 7
+r+: line X
+r+: line 2
+r+: line 3
+r+: 3 lines
 errno: null fopen 1: No such file or directory
 getopt: verbose 1 n 3 rest one two
 dirent: libctest.txt found

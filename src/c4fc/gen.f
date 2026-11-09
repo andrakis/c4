@@ -454,6 +454,32 @@ VARIABLE TMAX   0 TMAX !
    REPEAT
    TCUR !
    w ;
+
+\ L op= R whose L does something (n_opasgn), as c4lc-gen's g:oplower: L's
+\ address goes in a two-word temporary, once, and the rest is the plain
+\ assignment over *temporary, which already knows every type's load,
+\ conversion and store. Unlike STRUCT-PUSH's, this temporary is free
+\ again only when the STATEMENT ends -- each statement method puts TCUR
+\ back as it found it, which is c4lc's g:stmt -- so two in one statement
+\ take two, at the offsets c4lc gives them.
+:M GEN n_ltempv {: n -- :}  n >off @ oLEA OP2,  oLI OP, ;M
+:M CT  n_ltempv >nty @ ;M
+:M CQ  n_ltempv DROP 0 ;M
+:M CT  n_opasgn >lhs @ CT ;M
+\ c4lc's g:qualof knows neither, so neither does this: a const L is not
+\ refused here, as it is not there
+:M CQ  n_opasgn DROP 0 ;M
+:M GEN n_opasgn {: n | off t d b -- :}
+   2 TCUR +!   TCUR @ TMAX @ MAX TMAX !
+   NLOC @ TCUR @ + NEGATE TO off
+   off oLEA OP2,  oPSH OP,
+   n >lhs @ GEN-ADDR
+   oSI OP,
+   n_ltempv 3 CELLS NEW TO t   off t >off !   n >lhs @ CT 2 + t >nty !
+   t n_deref N1 TO d
+   n_bin 4 CELLS NEW TO b
+   d b >lhs !   n >rhs @ >rhs @ b >rhs !   n >rhs @ >op @ b >op !
+   d b n_asgn N2 GEN ;M
 \ the type argument i is passed as: its parameter's, when f says, or its own
 : ARG-TYPE ( arg i f -- t ) {: a i f -- t :}
    f IF f y.pt @ IF i f y.nfix @ < IF f y.pt @ i CELLS + @ EXIT THEN THEN THEN
@@ -563,10 +589,11 @@ VARIABLE UFN   0 UFN !
    n >isym @ TO y   y y.val @ TO off
    n >icount @ TO s
    s 0< IF
+      TCUR @                               \ (n_opasgn's temporaries: see there)
       off oLEA OP2,  oPSH OP,  n >expr @ GEN
       y y.ct @ T-PTR? IF
          y y.q @  n >expr @ CQ  DROPPED? IF S" initialization" QWARN THEN THEN
-      oSI OP,  EXIT THEN
+      oSI OP,  TCUR !  EXIT THEN
    n >ivals @ TO v   n >ivn @ TO c
    s 0 ?DO
       I c < IF I CELLS v + @ ELSE 0 THEN TO val
@@ -586,6 +613,7 @@ VARIABLE UFN   0 UFN !
    o 1 CELLS 1- AND 0= IF b o 1 CELLS / + oLEA OP2, EXIT THEN
    b oLEA OP2,  oPSH OP,  o oIMM OP2,  oADD OP, ;
 :M STMT n_lagg {: n | b v r e -- :}
+   TCUR @
    n >lsym @ y.val @ TO b
    b oLEA OP2,  oPSH OP,  0 oIMM OP2,  oPSH OP,  n >lbytes @ oIMM OP2,  oPSH OP,
    oMSET OP,  3 oADJ OP2,
@@ -599,21 +627,27 @@ VARIABLE UFN   0 UFN !
          e CT T-STRUCT? IF ." c4fc: a struct value in an initializer is not supported" CR ABORT THEN
       ELSE r 3 CELLS + @ oIMM OP2, THEN
       r CELL+ @ STORE,
-   LOOP ;M
+   LOOP
+   TCUR ! ;M
 
-:M STMT n_expst  >expr @ EFFECT ;M
+\ Every statement that evaluates an expression puts TCUR back as it found
+\ it, after the statements inside it have: an n_opasgn's temporary lives
+\ to the end of its statement (c4lc-gen's g:stmt).
+:M STMT n_expst  TCUR @ SWAP  >expr @ EFFECT  TCUR ! ;M
 \ Inside a spliced body there is no frame to leave, so a return is a
 \ jump to the end of the splice rather than a LEV. The value is already
 \ in A either way, which is the whole reason this needs no rewriting of
 \ the tree -- see inline.f.
 :M STMT n_ret {: n | e -- :}
+   TCUR @
    n >expr @ TO e
    e IF
       e GEN
       e CT RETT @ SCONV,
       RETT @ T-PTR? IF RETQ @ e CQ DROPPED? IF S" return" QWARN THEN THEN
    THEN
-   INLRET @ IF oJMP BR, INLM, ELSE oLEV OP, THEN ;M
+   INLRET @ IF oJMP BR, INLM, ELSE oLEV OP, THEN
+   TCUR ! ;M
 :M STMT n_blk {: n -- :}
    n >len @ 0 ?DO n >list @ I CELLS + @ STMT LOOP ;M
 
@@ -746,35 +780,42 @@ CREATE CNTM MMAX CELLS ALLOT   VARIABLE CNTN   0 CNTN !
 :M STMT n_empty  DROP ;M
 
 :M STMT n_if {: n | m1 m2 -- :}
+   TCUR @
    n >cond @ GEN   oBZ BR, TO m1
    n >body @ STMT
    n >else @ IF
       oJMP BR, TO m2   m1 >RES   n >else @ STMT   m2 >RES
    ELSE
       m1 >RES
-   THEN ;M
+   THEN
+   TCUR ! ;M
 
 :M STMT n_while {: n | top m bb cb -- :}
+   TCUR @
    BRKN @ TO bb   CNTN @ TO cb
    CHERE TO top
    n >cond @ GEN   oBZ BR, TO m
    n >body @ STMT
    oJMP top BACK,
    m >RES
-   bb cb CHERE top RESOLVE-LOOP ;M
+   bb cb CHERE top RESOLVE-LOOP
+   TCUR ! ;M
 
 :M STMT n_do {: n | top m bb cb cont -- :}
+   TCUR @
    BRKN @ TO bb   CNTN @ TO cb
    CHERE TO top
    n >body @ STMT
    CHERE TO cont
    n >cond @ GEN
    oBNZ top BACK,
-   bb cb CHERE cont RESOLVE-LOOP ;M
+   bb cb CHERE cont RESOLVE-LOOP
+   TCUR ! ;M
 
 \ continue in a for loop goes to the STEP, not to the condition, and the
 \ step is emitted after the body -- so it is a genuine forward branch.
 :M STMT n_for {: n | top m bb cb cont -- :}
+   TCUR @
    BRKN @ TO bb   CNTN @ TO cb
    n >init @ ?DUP IF EFFECT THEN
    CHERE TO top
@@ -785,7 +826,8 @@ CREATE CNTM MMAX CELLS ALLOT   VARIABLE CNTN   0 CNTN !
    n >step @ ?DUP IF EFFECT THEN
    oJMP top BACK,
    m 0< 0= IF m >RES THEN
-   bb cb CHERE cont RESOLVE-LOOP ;M
+   bb cb CHERE cont RESOLVE-LOOP
+   TCUR ! ;M
 
 \ -- switch -------------------------------------------------------------
 \ A jump table, not a chain of compares, because that is what c4lc emits:
@@ -843,6 +885,7 @@ VARIABLE CURSW   0 CURSW !
    CHERE w w.def ! ;M
 
 :M STMT n_switch {: n | w save m e bb m1 m2 m3 m4 end def k sp prev -- :}
+   TCUR @
    CURSW @ TO save
    SWC ALLOT: TO w
    n >lo @ w w.lo !  n >hi @ w w.hi !  -1 w w.def !  0 w w.cv !
@@ -902,4 +945,5 @@ VARIABLE CURSW   0 CURSW !
    LOOP
    THEN
    BRKN @ bb ?DO BRKM I CELLS + @ end RESTO LOOP   bb BRKN !
-   save CURSW ! ;M
+   save CURSW !
+   TCUR ! ;M

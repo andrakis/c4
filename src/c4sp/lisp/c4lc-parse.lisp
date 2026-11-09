@@ -860,11 +860,29 @@
 	(AddA 1) (SubA 1) (MulA 1) (DivA 1) (ModA 1)
 	(AndA 1) (OrA 1) (XorA 1) (ShlA 1) (ShrA 1)))
 
-;; compound assignment: desugared to L = L op R (the lvalue is parsed
-;; once but EMITTED twice; a[i++] += x is out of contract)
+;; compound assignment: desugared to L = L op R, the lvalue parsed once and
+;; emitted twice, which is what most of them want: i += 1 stays i = i + 1 to
+;; the optimizer. One whose lvalue does something, a[i++] += x or a[f()] |= x,
+;; becomes (opassign L (op L R)), and g:oplower evaluates L once.
 (define p:compound '(
 	(AddA add) (SubA sub) (MulA mul) (DivA div) (ModA mod)
 	(AndA band) (OrA bor) (XorA bxor) (ShlA shl) (ShrA shr)))
+;; does evaluating this do anything?
+(define p:effects '(call calle assign opassign preinc predec postinc postdec))
+(define p:effects?/h (lambda (h l)
+	(if (empty? l) false
+	(if (= h (head l)) true
+	(next p:effects?/h h (tail l))))))
+(define p:effects? (lambda (x)
+	(if (= 'list (typeof x))
+		(if (empty? x) false
+		(if (p:effects?/h (head x) p:effects) true
+		(p:effects?/l x)))
+	false)))
+(define p:effects?/l (lambda (l)
+	(if (empty? l) false
+	(if (p:effects? (head l)) true
+	(next p:effects?/l (tail l))))))
 (define p:level (lambda (k)
 	(begin
 		(define a (p:assoc/atom k p:levels))
@@ -1125,7 +1143,7 @@
 				(begin
 					(p:advance)
 					(next p:climb
-						(list 'assign lhs
+						(list (if (p:effects? lhs) 'opassign 'assign) lhs
 							(list (p:second ca) lhs (p:expr 1)))
 						lev))
 			(begin

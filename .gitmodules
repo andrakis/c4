@@ -38,5 +38,13 @@
 [submodule "sbk"]
 	path = games/sbk
 	url = git@github.com:andrakis/c4-SBK.git
+[submodule "bsdgames"]
+	path = games/bsdgames
+	url = git@github.com:andrakis/c4-BSD-Games.git
+	branch = c4
+	update = none
+[submodule "pdcurses"]
+	path = games/pdcurses
+	url = git@github.com:andrakis/c4-PDCurses.git
 	branch = c4
 	update = none

@@ -270,8 +270,13 @@ VARIABLE T-ADJ  0 T-ADJ !                 \ consumed by the next TOK,
 : DECODE ( end dst -- n ) {: end dst -- n :}
    0
    BEGIN POS @ end < WHILE
-      CH 92 = IF 1 POS +! ESCAPE ELSE CH 1 POS +! THEN
-      OVER dst + C!  1+
+      CH 92 = IF
+         1 POS +!
+         \ -conforming: a backslash-newline in a string is nothing at all
+         CONFORMING @ 0<> CH 10 = AND IF 1 POS +! ELSE ESCAPE OVER dst + C!  1+ THEN
+      ELSE
+         CH 1 POS +! OVER dst + C!  1+
+      THEN
    REPEAT ;
 
 \ -- the token makers ---------------------------------------------------

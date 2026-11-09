@@ -77,7 +77,13 @@
 (define t:binops '(add sub mul div mod shl shr band bor bxor
 	eq ne lt gt le ge))
 
+;; opassign: g:oplower wants it as (op L R), so only R may be folded
 (define t:fexpr (lambda (e)
+	(if (= (head e) 'opassign)
+		(list 'opassign (t:second e)
+			(list (head (t:third e)) (t:second (t:third e)) (t:fexpr (t:third (t:third e)))))
+	(t:fexpr/0 e))))
+(define t:fexpr/0 (lambda (e)
 	(begin
 		(define h (head e))
 		(if (= h 'num) e
@@ -585,7 +591,7 @@
 ;; may be impure -- writing through a pointer is usually the whole point
 ;; of the function -- but an ARGUMENT may not be, because substitution
 ;; can duplicate it, drop it, or move it past another argument.
-(define t:impure '(assign call preinc predec postinc postdec))
+(define t:impure '(assign opassign call preinc predec postinc postdec))
 (define t:pure? (lambda (e)
 	(if (= 'list (typeof e))
 		(if (t:member? (head e) t:impure) false
@@ -1183,7 +1189,7 @@
 ;;   - the parameter appears where an identifier is required (a call
 ;;     name, sizeof), which only a name can fill.
 ;; Otherwise the argument is substituted and the parameter costs nothing.
-(define t:mutators '(assign preinc predec postinc postdec))
+(define t:mutators '(assign opassign preinc predec postinc postdec))
 (define t:isvar? (lambda (n e)
 	(if (= 'list (typeof e))
 		(if (= (head e) 'var) (= (t:second e) n) false)

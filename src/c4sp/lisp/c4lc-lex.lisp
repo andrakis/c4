@@ -381,10 +381,14 @@
 	(begin
 		(define c (string:byte lex:src i))
 		(if (= c 92)
+			;; -conforming: a backslash-newline in a string is nothing at all
+			;; (C's phase 2). c4cc's escape table keeps the newline.
+			(if (if lex:conforming (= (lex:peek (+ i 1)) 10) false)
+				(next lex:strdecode (+ i 2) end buf n)
 			(begin
 				(define j (lex:escape2 (+ i 1)))
 				(string:byte! buf n lex:val)
-				(next lex:strdecode j end buf (+ n 1)))
+				(next lex:strdecode j end buf (+ n 1))))
 		(begin
 			(string:byte! buf n c)
 			(next lex:strdecode (+ i 1) end buf (+ n 1))))))))

@@ -1932,6 +1932,27 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c $(C4RDUMP)
 	   cmp -s .c4fc_lc.c4r .c4fc_fc.c4r || { echo "test-c4fc: c4lc_$$u.c's object differs from c4lc -O's"; exit 1; }; \
 	 done
 	@echo "  m7 extern table: c4fc's objects are c4lc's (-c, plain and -O)"
+	# L op= R evaluates L once, a[f()] += x and *p++ |= m alike: the image
+	# is c4lc's, plain and -O, and what it prints is gcc's, -minline too.
+	# C4FC leaves out what c4fc cannot say: floating point, and an int
+	# narrower than the word.
+	gcc -E -Iinclude -I. -DC4CC=1 -D__c4__=1 -D__C4CC__=1 -D__c4cc__=1 $(C4_INTTYPES) -DC4FC=1 -C \
+	   src/c4sp/tests/c4lc_opassign.c > .c4fc_pp.c
+	gcc -w -DC4FC=1 -o .c4fc_opa src/c4sp/tests/c4lc_opassign.c
+	./.c4fc_opa > .c4fc_opa.txt
+	@for m in "" "1 OPTIMIZE !" "-minline"; do \
+	   ./c4th $(C4FC_ALL) -e ": GO $$m C4FC-INIT -P S\" include\" -I S\" .\" -I S\" C4CC=1\" -D S\" __c4__=1\" -D S\" __C4CC__=1\" -D S\" __c4cc__=1\" -D S\" __GNUC__=1\" -D S\" C4FC=1\" -D S\" src/c4sp/tests/c4lc_opassign.c\" C4FC ; GO" > .c4fc_fc.c4r 2>&1; \
+	   if [ "$$m" != "-minline" ]; then \
+	      ./c4sp src/c4sp/lisp/c4lc.lisp `[ -n "$$m" ] && echo -O` .c4fc_pp.c .c4fc_lc.c4r > /dev/null 2>&1 \
+	        || { echo "test-c4fc: c4lc could not compile c4lc_opassign.c"; exit 1; }; \
+	      cmp -s .c4fc_lc.c4r .c4fc_fc.c4r \
+	        || { echo "test-c4fc: c4lc_opassign.c ($$m) differs from c4lc"; exit 1; }; \
+	   fi; \
+	   $(C4M) load-c4r.c -- .c4fc_fc.c4r | cmp -s - .c4fc_opa.txt \
+	     || { echo "test-c4fc: c4lc_opassign.c ($$m) prints what gcc's does not"; exit 1; }; \
+	 done
+	@echo "  opassign: L op= R evaluates L once, as c4lc's and gcc's do"
+	@rm -f .c4fc_opa .c4fc_opa.txt
 	@rm -f .c4fc_lex.txt .c4fc_a.txt .c4fc_b.txt .c4fc_lc.c4r .c4fc_fc.c4r
 	@rm -f .c4fc_o0.c4r .c4fc_o1.c4r .c4fc_o2.c4r .c4fc_r0 .c4fc_r1 .c4fc_pp.c
 	@echo "test-c4fc: OK"
@@ -2450,7 +2471,7 @@ PHONY += FORCE
 GAME_OBJS  :=
 GAME_TESTS :=
 include $(wildcard games/*/c4.mk)
-GAMES_ALL  := wolf3d doom tyrian rott quake frotz advent puzzles ace sbk
+GAMES_ALL  := wolf3d doom tyrian rott quake frotz advent puzzles ace sbk pdcurses bsdgames
 c4bb-images: libc-bare-objs grin-objs grin-apps $(GAME_OBJS)
 $(filter-out $(GAME_TESTS),$(GAMES_ALL:%=test-%)):
 	@echo "$@: skipped, games/$(@:test-%=%) is not here (games/README.md)"
@@ -3229,6 +3250,20 @@ test-raycast: c4sp c4sp32 $(C4M) c4m32 $(TESTS)/raycast.c4r
 		15x15 -s 3 -i -K -g 40x14 2>&1 | grep -c '48;5;') -eq 98
 	@rm -f .raycast32.c4r
 	@echo "test-raycast: OK"
+
+# a compound assignment evaluates its left side once: c4lc's program says what
+# gcc's says
+# ... and main's prototype, in a unit that doesn't define it, is no entry point
+test-c4lc-opassign: c4sp32 c4rlink32 libc-bare-objs
+	./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O -fno-builtin -c -conforming -I src/c4ix/libc/include src/c4sp/tests/c4lc_opassign.c .opa.c4o > /dev/null
+	./c4rlink32 .opa.c4o .libc-bare/libc-*.c4o -o .opa.c4r > /dev/null
+	gcc -m32 -w -o .opa_host src/c4sp/tests/c4lc_opassign.c
+	./.opa_host > .opa_gcc.txt
+	node libjs/cli.js -m 16 .opa.c4r | tr -d '\r' | cmp - .opa_gcc.txt
+	./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp -O -g -mfuse -fno-builtin -c -conforming src/c4sp/tests/c4lc_mainproto.c .opa.c4o > /dev/null
+	@rm -f .opa.c4o .opa.c4r .opa_host .opa_gcc.txt
+	@echo "test-c4lc-opassign: OK"
+PHONY += test-c4lc-opassign
 
 test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.c4r \
            c4sp32 c4m32 c4rlink32 $(C4RDUMP)

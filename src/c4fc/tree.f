@@ -95,6 +95,9 @@ VARIABLE FN-LABELS   0 FN-LABELS !
 \ -- the ones that only descend ------------------------------------------
 
 :M FOLD n_asgn   {: n -- n :}  n >rhs @ FOLD n >rhs !  n ;M
+\ only R of the (op L R): gen.f wants it as it was parsed, and c4lc-tree's
+\ t:fexpr folds nothing else of an opassign
+:M FOLD n_opasgn {: n | b -- n :}  n >rhs @ TO b  b >rhs @ FOLD b >rhs !  n ;M
 :M FOLD n_cast   {: n -- n :}  n >expr @ FOLD n >expr !  n ;M
 :M FOLD n_deref  {: n -- n :}  n >opnd @ FOLD n >opnd !  n ;M
 :M FOLD n_member {: n -- n :}  n >lhs @ FOLD n >lhs !  n ;M
@@ -308,6 +311,7 @@ GENERIC: REFS ( node -- )
 :M REFS n_postdec >opnd @ REFS ;M
 
 :M REFS n_asgn  {: n -- :}  n >lhs @ REFS  n >rhs @ REFS ;M
+:M REFS n_opasgn {: n -- :}  n >lhs @ REFS  n >rhs @ REFS ;M
 :M REFS n_bin   {: n -- :}  n >lhs @ REFS  n >rhs @ REFS ;M
 :M REFS n_index {: n -- :}  n >lhs @ REFS  n >rhs @ REFS ;M
 :M REFS n_lor   {: n -- :}  n >lhs @ REFS  n >rhs @ REFS ;M

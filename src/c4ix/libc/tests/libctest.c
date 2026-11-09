@@ -103,6 +103,22 @@ int main(int argc, char **argv) {
     while (fgets(buf, 64, f)) { buf[strlen(buf) - 1] = 0; printf("file: %s\n", buf); ++n; }
     printf("file: %d lines, eof %d\n", n, feof(f));
     fclose(f);
+    // "r+": read, seek, write over a byte, seek, read on. What was read
+    // ahead is not written back (it was, at the seek, before stdio.c's
+    // __F_DIRTY), and the write lands where the reader was.
+    f = fopen("/tmp/libctest.txt", "r+");
+    n = (int) fread(buf, 1, 4, f);
+    fseek(f, 5, SEEK_SET);
+    fputc('X', f);
+    fseek(f, 0, SEEK_CUR);
+    c = fgetc(f);
+    printf("r+: read %d, then %d at %ld\n", n, c, ftell(f));
+    fclose(f);
+    f = fopen("/tmp/libctest.txt", "r");
+    n = 0;
+    while (fgets(buf, 64, f)) { buf[strlen(buf) - 1] = 0; printf("r+: %s\n", buf); ++n; }
+    printf("r+: %d lines\n", n);
+    fclose(f);
     f = fopen("/tmp/no/such/file", "r");
     printf("errno: %s fopen %d: %s\n", f ? "opened?" : "null", errno == ENOENT, strerror(errno));
 

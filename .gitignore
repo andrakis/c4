@@ -144,3 +144,8 @@ libjs/images/
 # the games' data from before they moved to games/ (games/README.md);
 # Tyrian's must never be committed
 /src/opentyrian/
+# the BSD games' and PDCurses's objects, and their tests (games/README.md)
+.bsd/
+.bsd_t/
+.pdcurses/
+.pdc_t/

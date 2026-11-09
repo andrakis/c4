@@ -9,7 +9,11 @@
 //
 // fseek and ftell move a FILE over lseek, dropping what it had read ahead
 // or writing out what it had waiting; fread takes what the buffer holds
-// and reads the rest straight into the caller's memory.
+// and reads the rest straight into the caller's memory. A FILE that both
+// reads and writes ("r+" and the rest) has one buffer for both: writing
+// drops what was read ahead, putting the descriptor back where the reader
+// is, and reading writes out what waits. fflush writes only what was
+// written, never what was read.
 //
 // scanf, sscanf and fscanf read C's conversions: d i u o x X p n c s and
 // [set], with a width, * to read without storing and h hh l ll lengths,
@@ -59,7 +63,9 @@ static int file_buf(FILE *f) {
 int fflush(FILE *f) {
     int n, w;
     if (!f) { fflush(stdout); fflush(stderr); return 0; }
-    if (!(f->flags & __F_WRITE) || f->pos == 0) return 0;
+    if (!(f->flags & __F_DIRTY)) return 0;
+    f->flags = f->flags & ~__F_DIRTY;
+    if (f->pos == 0) return 0;
     n = 0;
     while (n < f->pos) {
         w = write(f->fd, f->buf + n, f->pos - n);
@@ -79,6 +85,15 @@ int fputc(int c, FILE *f) {
         return c & 255;
     }
     if (!file_buf(f)) return EOF;
+    if (!(f->flags & __F_DIRTY)) {
+        // what was read ahead goes: the descriptor goes back to the reader
+        if (f->len > f->pos || f->ungot >= 0)
+            lseek(f->fd, -(f->len - f->pos + (f->ungot >= 0)), SEEK_CUR);
+        f->pos = 0;
+        f->len = 0;
+        f->ungot = -1;
+        f->flags = (f->flags & ~__F_EOF) | __F_DIRTY;
+    }
     f->buf[f->pos++] = c;
     if (f->pos == BUFSIZ || ((f->flags & __F_LINE) && c == 10)) {
         if (fflush(f) == EOF) return EOF;
@@ -120,6 +135,7 @@ int fgetc(FILE *f) {
     if (f->flags & __F_EOF) return EOF;
     // reading the terminal: what was written to it first goes out first
     if (f == stdin) fflush(stdout);
+    if ((f->flags & __F_DIRTY) && fflush(f) == EOF) return EOF;
     if (f->pos >= f->len) {
         if (!file_buf(f)) return EOF;
         f->len = uread(f->fd, f->buf, BUFSIZ);
@@ -180,6 +196,7 @@ int getline(char **line, int *cap, FILE *f) {
 int fread(char *p, int size, int n, FILE *f) {
     int total, got, k, c;
     if (size <= 0 || n <= 0) return 0;
+    if ((f->flags & __F_DIRTY) && fflush(f) == EOF) return 0;
     total = size * n;
     got = 0;
     if (f->ungot >= 0 && got < total) { p[got++] = f->ungot; f->ungot = -1; }
@@ -211,14 +228,14 @@ int fread(char *p, int size, int n, FILE *f) {
 long ftell(FILE *f) {
     int at;
     if ((at = lseek(f->fd, 0, SEEK_CUR)) < 0) return -1;
-    if (f->flags & __F_WRITE && f->pos > 0 && !(f->flags & __F_READ && f->len > 0)) return at + f->pos;
+    if (f->flags & __F_DIRTY) return at + f->pos;
     at = at - (f->len - f->pos);
     if (f->ungot >= 0) at = at - 1;
     return at;
 }
 
 int fseek(FILE *f, long off, int whence) {
-    if (f->flags & __F_WRITE && fflush(f) == EOF) return -1;
+    if (fflush(f) == EOF) return -1;
     if (whence == SEEK_CUR) {
         off = off - (f->len - f->pos);
         if (f->ungot >= 0) off = off - 1;

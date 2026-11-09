@@ -226,7 +226,9 @@ typedef struct __c4ix_file {
     int len;            // read: bytes in buf
     int ungot;          // -1, or the byte ungetc gave back
 } FILE;
-enum { __F_READ = 1, __F_WRITE = 2, __F_EOF = 4, __F_ERR = 8, __F_LINE = 16, __F_UNBUF = 32, __F_OWNBUF = 64 };
+// __F_DIRTY: buf holds output not yet written, pos bytes of it. Otherwise it
+// holds what was read ahead, if anything: one or the other, for "r+" and the rest
+enum { __F_READ = 1, __F_WRITE = 2, __F_EOF = 4, __F_ERR = 8, __F_LINE = 16, __F_UNBUF = 32, __F_OWNBUF = 64, __F_DIRTY = 128 };
 extern FILE *stdin;
 extern FILE *stdout;
 extern FILE *stderr;

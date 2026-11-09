@@ -35,5 +35,8 @@
 [submodule "ace"]
 	path = games/ace
 	url = git@github.com:andrakis/c4-Ace.git
+[submodule "sbk"]
+	path = games/sbk
+	url = git@github.com:andrakis/c4-SBK.git
 	branch = c4
 	update = none

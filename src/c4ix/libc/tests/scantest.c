@@ -21,6 +21,14 @@ int main(int argc, char **argv) {
     printf("2: %d %d %d %d\n", r, a, b, c);
     r = sscanf("hello world", "%s %s", s1, s2);
     printf("3: %d %s %s\n", r, s1, s2);
+    // Letters that are escapes, and a real tab: by number, as this is built
+    // without -conforming too, where "\t" is not a tab
+    strcpy(buf, "free wave vat of");
+    buf[4] = 9;
+    r = sscanf(buf, "%s %s", s1, s2);
+    printf("3a: %d %s %s\n", r, s1, s2);
+    r = sscanf(buf + 10, "%s %s", s1, s2);
+    printf("3b: %d %s %s\n", r, s1, s2);
     r = sscanf("abc123def", "%[a-z]%d%n", s1, &a, &n);
     printf("4: %d %s %d %d\n", r, s1, a, n);
     r = sscanf("key = 99;", "%[^ =] = %d", s1, &a);

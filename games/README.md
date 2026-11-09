@@ -1,9 +1,11 @@
 # games
 
 The games c4 runs -- Wolfenstein 3D, Doom, OpenTyrian, Rise of the
-Triad, Quake, Simon Tatham's Puzzles, The Ace of Penguins, Super Blit Kart and the BSD games -- are not part of c4's repository. Each lives in one of its own,
-on GitHub, on upstream's history with c4's port on top as commits, and
-is an optional submodule here:
+Triad, Quake, Frotz with Zork I-III, Open Adventure, Simon Tatham's
+Puzzles, The Ace of Penguins, Super Blit Kart and the BSD games -- are
+not part of c4's repository. Each lives in one of its own, on GitHub,
+on upstream's history with c4's port on top as commits, and is an
+optional submodule here:
 
 | path | repository | upstream |
 |---|---|---|

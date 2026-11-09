@@ -11,7 +11,7 @@ is an optional submodule here:
 | `games/doom` | [andrakis/c4-Doom](https://github.com/andrakis/c4-Doom) | doomgeneric |
 | `games/tyrian` | [andrakis/c4-Tyrian](https://github.com/andrakis/c4-Tyrian) | OpenTyrian |
 | `games/rott` | [andrakis/c4-ROTT](https://github.com/andrakis/c4-ROTT) | icculus.org's Rise of the Triad 1.1.2 |
-| `games/puzzles` | andrakis/c4-Puzzles (not on GitHub yet) | Simon Tatham's Portable Puzzle Collection |
+| `games/puzzles` | [andrakis/c4-Puzzles](https://github.com/andrakis/c4-Puzzles) | Simon Tatham's Portable Puzzle Collection |
 
 A clone of c4 has none of them (`update = none` in `.gitmodules`).
 To have one:

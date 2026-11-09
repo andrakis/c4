@@ -8,6 +8,8 @@ int global;
 char *msg = "hello\nworld";
 char *empty = "";
 char *quirks = "tab\there\rcr\0nul\\slash\"quote";
+char *joined = "one\n\
+two";
 
 /* block comment
    spanning lines: the token after it must report the right line */

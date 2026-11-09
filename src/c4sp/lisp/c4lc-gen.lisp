@@ -1409,6 +1409,10 @@
 		g:INT))))))))
 (define g:unres (lambda (t) (if (g:fp? t) t (if (g:uns? (g:promote t)) (g:promote t) (if (g:ll? t) t g:INT)))))
 (define g:typeof (lambda (e)
+	(if (= (head e) 'opassign) (g:lvtype (g:second e))
+	(if (= (head e) 'ltempv) (g:third e)
+	(g:typeof/0 e)))))
+(define g:typeof/0 (lambda (e)
 	(begin
 		(define h (head e))
 		(if (= h 'num) (if (= (index e 2) nil) g:INT (index e 2))
@@ -1851,9 +1855,33 @@
 		(g:expr (head es))
 		(next g:comma (tail es))))))
 
+;; (opassign L (op L R)): a[i++] += x. L's address goes in a temporary, once,
+;; and the rest is the plain form over *temporary, (ltempv OFF TYPE) being that
+;; temporary's value. Whatever the type, the plain form knows what to do.
+(define g:oplower (lambda (e)
+	(begin
+		(define lv (g:second e))
+		(define rhs (g:third e))
+		(define pt (+ (g:lvtype lv) g:PTR))
+		(define off (g:ltemp))
+		(g:emit (list 'LEA off))
+		(g:emit '(PSH))
+		(g:addr lv)
+		(if g:lastarray (g:die "bad lvalue in assignment") nil)
+		(g:emit '(SI))
+		(define d (list 'deref (list 'ltempv off pt)))
+		(list 'assign d (list (head rhs) d (g:third rhs))))))
 (define g:expr (lambda (e)
 	(if g:fpon (if (g:fpnode? e) (g:fpexpr e) (g:expr/0 e)) (g:expr/0 e))))
 (define g:expr/0 (lambda (e)
+	(if (= (head e) 'opassign) (g:expr (g:oplower e))
+	(if (= (head e) 'ltempv)
+		(begin
+			(g:emit (list 'LEA (g:second e)))
+			(g:emit '(LI))
+			(set! g:ty (g:third e)))
+	(g:expr/1 e)))))
+(define g:expr/1 (lambda (e)
 	(begin
 		(define h (head e))
 		(if (if (= h 'num) (g:ll? (g:nz (index e 2))) false)
@@ -3450,6 +3478,8 @@
 		(define m (g:lookup "main" g:syms))
 		(if m nil
 			(if gen:objmode nil (g:die "no main function")))
+		;; (in an object, m may only be main's prototype, an extern: its field 3
+		;; is then the extern's number, not a label, and it is no entry)
 		;; BSS finalize: bss base = word-aligned end of the data image;
 		;; resolve bss-relative offsets in both the symbol table and the
 		;; code before either is serialized. gen:bssextra = the bytes the
@@ -3475,7 +3505,7 @@
 				(set! code (g:remapext code base (list)))
 				(set! g:dpatches (g:remapdsym g:dpatches base (list))))
 			nil)
-		(list 2 (* 8 g:WORD) (if m (list 'code (index m 3)) -1)
+		(list 2 (* 8 g:WORD) (if (if m (= (g:second m) 'fun) false) (list 'code (index m 3)) -1)
 			code
 			(string:substr g:data 0 g:dlen)
 			syms

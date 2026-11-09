@@ -73,7 +73,9 @@ Add 11 oADD INFIX   Sub 11 oSUB INFIX
 Mul 12 oMUL INFIX   Div 12 oDIV INFIX  Mod 12 oMOD INFIX
 
 \ L op= R is L = L op R, the lvalue's tree in both places (c4lc-parse's
-\ p:compound): the binary operator an assignment operator stands for, or 0
+\ p:compound) -- unless evaluating L does something (EFFECTS?), when it
+\ is n_opasgn and gen.f evaluates L once. The binary operator an
+\ assignment operator stands for, or 0
 : COMPOUND-OF ( kind -- kind' | 0 ) {: k -- k' :}
    k AddA = IF Add EXIT THEN  k SubA = IF Sub EXIT THEN  k MulA = IF Mul EXIT THEN
    k DivA = IF Div EXIT THEN  k ModA = IF Mod EXIT THEN  k ShlA = IF Shl EXIT THEN
@@ -640,6 +642,31 @@ CREATE SLBUF 8192 ALLOT
    TK Dec   = IF TNEXT 13 EXPR n_predec N1 EXIT THEN
    POSTFIX ;
 
+\ Does evaluating this do anything -- a call, an assignment or a ++
+\ anywhere in it? c4lc-parse's p:effects?. A compound assignment whose
+\ lvalue does is n_opasgn, and every other stays L = L op R, which is
+\ what the optimizer wants of i += 1. No locals: it recurses with the
+\ expression, and c4th's locals stack is not checked.
+: EFFECTS? ( n -- f )
+   DUP >TAG
+   DUP n_call = OVER n_icall = OR OVER n_asgn = OR OVER n_opasgn = OR
+   OVER n_preinc = OR OVER n_predec = OR OVER n_postinc = OR OVER n_postdec = OR
+   IF 2DROP -1 EXIT THEN
+   DUP n_bin = OVER n_index = OR OVER n_lor = OR OVER n_land = OR IF
+      DROP DUP >lhs @ RECURSE IF DROP -1 EXIT THEN  >rhs @ RECURSE EXIT THEN
+   DUP n_member = IF DROP >lhs @ RECURSE EXIT THEN
+   DUP n_cast = IF DROP >expr @ RECURSE EXIT THEN
+   DUP n_not = OVER n_bnot = OR OVER n_neg = OR OVER n_deref = OR OVER n_addr = OR IF
+      DROP >opnd @ RECURSE EXIT THEN
+   DUP n_cond = IF
+      DROP DUP >cond @ RECURSE IF DROP -1 EXIT THEN
+      DUP >body @ RECURSE IF DROP -1 EXIT THEN
+      >else @ RECURSE EXIT THEN
+   n_comma = IF
+      0 SWAP DUP >argn @ 0 ?DO DUP >args @ I CELLS + @ RECURSE ROT OR SWAP LOOP
+      DROP EXIT THEN
+   DROP 0 ;
+
 : (EXPR) ( lev -- node ) {: lev | n i p r q nd -- n :}
    UNARY TO n
    BEGIN
@@ -649,7 +676,7 @@ CREATE SLBUF 8192 ALLOT
          TNEXT  1 EXPR TO r
          n_bin 4 CELLS NEW TO nd
          n nd >lhs !  r nd >rhs !  q IN-FIND CELLS INO + @ nd >op !
-         n nd n_asgn N2 TO n
+         n nd  n EFFECTS? IF n_opasgn ELSE n_asgn THEN  N2 TO n
       ELSE TK Cond = lev 2 <= AND IF
          TNEXT  1 EXPR TO r  Colon WANT  2 EXPR TO q
          n_cond 4 CELLS NEW TO nd

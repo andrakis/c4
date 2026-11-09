@@ -5,6 +5,9 @@ world))
 (global 2 empty nil 0 (str ))
 (global 2 quirks nil 0 (str tabhere
 cr
+(global 2 joined nil 0 (str one
+
+two))
 (global 1 after_block nil 0 nil)
 (func 1 add ((1 a) (1 b)) false 0 (locals) (block (return (add (var a) (var b)))))
 (func 1 variadic ((1 n)) true 32 (locals) (block (return (var n))))

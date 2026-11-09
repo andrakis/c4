@@ -18,6 +18,14 @@ NODE: n_var    NFIELD: >sym                    ;NODE
 NODE: n_gvar   NFIELD: >sym                    ;NODE
 NODE: n_asgn   NFIELD: >lhs  NFIELD: >rhs      ;NODE
 NODE: n_bin    NFIELD: >lhs  NFIELD: >rhs  NFIELD: >op ;NODE
+\ L op= R whose L does something -- a[i++] += x, *p++ |= m, a[f()] -= y
+\ (parse.f's EFFECTS?). >rhs is the n_bin (op L R) the plain form would
+\ assign; gen.f evaluates L once, through a frame temporary. c4lc's
+\ (opassign L (op L R)). Any other L op= R is n_asgn L (op L R).
+NODE: n_opasgn NFIELD: >lhs  NFIELD: >rhs      ;NODE
+\ ... and that temporary's value, the address of L: its LEA operand and
+\ its type, a pointer to L's. gen.f makes these; the parser never does.
+NODE: n_ltempv NFIELD: >off  NFIELD: >nty      ;NODE
 NODE: n_call   NFIELD: >fn   NFIELD: >args NFIELD: >argn ;NODE
 \ A call through an expression (M7b): ops[i](x), s->fn(x), (*fp)(x).
 \ >fn holds the target EXPRESSION, not a symbol; the other two are

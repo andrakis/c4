@@ -19,7 +19,6 @@ enum { START_W = 200, N_ICONS = 6 };
 // too, without the card's functions
 enum { SND_MASTER = 0x4bc, SND_MUTE = 256, C4I_SND = 0x8000 };
 static int running;
-static int start_open, start_hot;
 static int vol_open, vol_drag;
 static int icon_t, icon_k;
 static int cpu_shown, cpu_n;
@@ -252,38 +251,144 @@ static void desktop(int x, int y, int w, int h) {
 }
 
 // ---- the Go menu: a banner down the left, then the tools -----------------------------
+//
+// A row starts something, or opens another menu beside it: Games, and in
+// that a group of games. The tools are listed here. The games list
+// themselves in /etc/desktop.apps (games/README.md).
 
-enum { GO_RUN = 0 - 1, GO_OFF = 0 - 2, GO_WOLF = 0 - 3, GO_DOOM = 0 - 4, GO_TYRIAN = 0 - 5, GO_ROTT = 0 - 6 };
-struct go_item { char *label; int kind; };
+enum { GO_RUN = 0 - 1, GO_OFF = 0 - 2, GO_CMD = 0 - 3 };
+enum { M_GO, M_GAMES, M_GROUPS, N_MENUS = 12, N_GAMES = 128, APPS_MAX = 8192, GO_ROW = 26, GO_DEPTH = 3 };
+struct go_item { char *label; int kind; int opens; char *cmd; int menu; };
 static struct go_item start_items[] = {
     { "Terminal", K_TERM }, { "Files", K_FILES }, { "Text Editor", K_NOTE }, { "IDE", K_EDIT },
     { "Calculator", K_CALC }, { "System Monitor", K_TASKS }, { "Settings", K_SETTINGS },
     { "About C4IX", K_ABOUT }, { "-", 0 },
-    { "Wolfenstein 3D", GO_WOLF }, { "Doom", GO_DOOM }, { "Tyrian", GO_TYRIAN },
-    { "Rise of the Triad", GO_ROTT }, { "Run...", GO_RUN }, { "-", 0 }, { "Power Off...", GO_OFF }
+    { "Games", 0, M_GAMES }, { "Run...", GO_RUN }, { "-", 0 }, { "Power Off...", GO_OFF }
 };
 static int n_start;
+// The rows of every menu but Go, each menu's together (games_load)
+static struct go_item game_items[N_GAMES];
+static int n_games, n_menus;
+static int menu_first[N_MENUS], menu_n[N_MENUS];
 
-// The games are optional (games/README.md in c4): each one's entry is in
-// the menu only where its program is on the disk -- until programs list
-// themselves in /etc/desktop.apps (docs/c4-explorer.md, W2)
-static char *game_path(int kind) {
-    if (kind == GO_WOLF) return "/usr/games/wolf3d/wolf3d.c4r";
-    if (kind == GO_DOOM) return "/usr/games/doom/doom.c4r";
-    if (kind == GO_TYRIAN) return "/usr/games/tyrian/tyrian.c4r";
-    if (kind == GO_ROTT) return "/usr/games/rott/rott.c4r";
-    return 0;
+static struct go_item *menu_items(int m) { return m ? &game_items[menu_first[m]] : start_items; }
+static int menu_count(int m) { return m ? menu_n[m] : n_start; }
+
+// the field at s ends at the next |: the one after it, or 0 if this was the last
+static char *next_field(char *s) {
+    while (*s && *s != '|') ++s;
+    if (!*s) return 0;
+    *s = 0;
+    return s + 1;
 }
+
+// A command's program is on the disk: at the path it names, or else by name
+// in /usr/games/bin, where a game's programs are (vfs-games.py)
+static int program_there(char *cmd) {
+    char path[96], *d;
+    int k, st[8];
+    d = path;
+    k = 0;
+    while (cmd[k] && cmd[k] != ' ' && cmd[k] != '/') ++k;
+    if (cmd[k] != '/') { ui_cpy(path, "/usr/games/bin/"); d = path + ui_len(path); }
+    k = 0;
+    while (cmd[k] && cmd[k] != ' ' && k < 80) { d[k] = cmd[k]; ++k; }
+    d[k] = 0;
+    return ustat(path, st) == 0;
+}
+
+static void game_add(char *label, int kind, char *cmd, int menu, int opens) {
+    struct go_item *it;
+    it = &game_items[n_games];
+    ++n_games;
+    it->label = label; it->kind = kind; it->cmd = cmd; it->menu = menu; it->opens = opens;
+}
+
+// the menu of a group of games, new the first time it is named; 0 if there is no room
+static int game_group(char *name) {
+    int k;
+    k = 0;
+    while (k < n_games) {
+        if (game_items[k].opens && ui_eq(game_items[k].label, name)) return game_items[k].opens;
+        ++k;
+    }
+    if (n_menus == N_MENUS || n_games == N_GAMES) return 0;
+    game_add(name, 0, 0, M_GAMES, n_menus);
+    ++n_menus;
+    return n_menus - 1;
+}
+
+// A line of /etc/desktop.apps: CATEGORY|NAME|COMMAND, cut up where it is.
+// CATEGORY is Games, or Games/GROUP for a menu of its own within Games. Any
+// other category is not this menu's. Nor is a line whose program is not on
+// the disk. docs/c4-explorer.md's W2 would add its fields after these.
+static void game_line(char *s) {
+    char *name, *cmd, *group;
+    int menu;
+    if (!(name = next_field(s)) || !(cmd = next_field(name))) return;
+    next_field(cmd);
+    group = s;
+    while (*group && *group != '/') ++group;
+    if (*group) { *group = 0; ++group; }
+    if (!ui_eq(s, "Games") || !name[0] || !cmd[0] || !program_there(cmd)) return;
+    menu = group[0] ? game_group(group) : M_GAMES;
+    if (menu && n_games < N_GAMES) game_add(name, GO_CMD, cmd, menu, 0);
+}
+
+// In a menu, its groups first, then by name
+static int game_before(struct go_item *a, struct go_item *b) {
+    char *p, *q;
+    if (a->menu != b->menu) return a->menu < b->menu;
+    if (!a->opens != !b->opens) return a->opens != 0;
+    p = a->label; q = b->label;
+    while (*p && *p == *q) { ++p; ++q; }
+    return (*p & 255) < (*q & 255);
+}
+
+static void games_load() {
+    struct go_item t;
+    char *buf, *s, *e;
+    int fd, n, k, j;
+    n_menus = M_GROUPS;
+    if ((fd = uopen("/etc/desktop.apps", O_RD)) < 0) return;
+    if (!(buf = wk_alloc(APPS_MAX))) { uclose(fd); return; }
+    n = uread(fd, buf, APPS_MAX - 1);
+    uclose(fd);
+    s = buf;
+    while (n > 0 && *s) {
+        e = s;
+        while (*e && *e != 10) ++e;
+        k = *e;
+        *e = 0;
+        game_line(s);
+        s = k ? e + 1 : e;
+    }
+    k = 1;
+    while (k < n_games) {
+        memcpy((char *)&t, (char *)&game_items[k], sizeof(struct go_item));
+        j = k;
+        while (j > 0 && game_before(&t, &game_items[j - 1])) {
+            memcpy((char *)&game_items[j], (char *)&game_items[j - 1], sizeof(struct go_item));
+            --j;
+        }
+        memcpy((char *)&game_items[j], (char *)&t, sizeof(struct go_item));
+        ++k;
+    }
+    k = n_games;
+    while (k > 0) { --k; menu_first[game_items[k].menu] = k; ++menu_n[game_items[k].menu]; }
+}
+
+// Games is in the menu only where there is one to list
 static void start_games() {
-    int k, n, st[8];
-    char *p;
+    int k, n;
+    games_load();
     k = 0;
     n = 0;
     while (k < n_start) {
-        p = game_path(start_items[k].kind);
-        if (!p || ustat(p, st) == 0) {
+        if (!start_items[k].opens || menu_n[start_items[k].opens]) {
             start_items[n].label = start_items[k].label;
             start_items[n].kind = start_items[k].kind;
+            start_items[n].opens = start_items[k].opens;
             ++n;
         }
         ++k;
@@ -291,68 +396,196 @@ static void start_games() {
     n_start = n;
 }
 
+// What is open: Go, then what it opened, each over the last
+struct go_panel { int menu, x, y, w, h, rows, colw, hot; };
+static struct go_panel go_open[GO_DEPTH];
+static int go_depth;               // how many: 0 is the menu shut
+static int go_x;                   // where the pointer was
+
 static int start_height() {
     int k, h;
     h = 6; k = 0;
-    while (k < n_start) { h = h + (start_items[k].label[0] == '-' ? 8 : 26); ++k; }
+    while (k < n_start) { h = h + (start_items[k].label[0] == '-' ? 8 : GO_ROW); ++k; }
     return h;
 }
 
-static void draw_start() {
-    int mx, my, mw, mh, k, iy;
+static void go_start() {
+    struct go_panel *p;
+    p = &go_open[0];
+    p->menu = M_GO; p->hot = 0 - 1;
+    p->x = 2; p->w = START_W; p->h = start_height();
+    p->y = wk.sh - TASK_H - p->h;
+    p->rows = n_start; p->colw = START_W - 29;
+    go_depth = 1;
+}
+
+// where row k of a menu is: Go's right of its banner and with its rules,
+// the others in columns
+static void go_row_at(struct go_panel *p, int k, int *x, int *y) {
+    int j, t;
+    if (p->menu) {
+        *x = p->x + 3 + k / p->rows * p->colw;
+        *y = p->y + 3 + k % p->rows * GO_ROW;
+        return;
+    }
+    t = p->y + 3;
+    j = 0;
+    while (j < k) { t = t + (start_items[j].label[0] == '-' ? 8 : GO_ROW); ++j; }
+    *x = p->x + 26;
+    *y = t;
+}
+
+// Open the menu that row k of level l opens, beside that row: as many rows
+// as fit above the taskbar to a column, as many columns as that takes, and
+// over its parent if the screen has no room to the right.
+static void go_flyout(int l, int k) {
+    struct go_panel *p, *q;
+    struct go_item *items;
+    int x, y, n, wide, j, room;
+    p = &go_open[l];
+    q = &go_open[l + 1];
+    q->menu = menu_items(p->menu)[k].opens;
+    q->hot = 0 - 1;
+    n = menu_count(q->menu);
+    items = menu_items(q->menu);
+    wide = 0;
+    j = 0;
+    while (j < n) { if (ui_len(items[j].label) > wide) wide = ui_len(items[j].label); ++j; }
+    q->colw = wide * (7 + wk.fsize) + 34;
+    room = (wk.sh - TASK_H - 6) / GO_ROW;
+    q->rows = n < room ? n : room;
+    q->w = (n + q->rows - 1) / q->rows * q->colw + 6;
+    q->h = q->rows * GO_ROW + 6;
+    go_row_at(p, k, &x, &y);
+    q->x = x + p->colw - 1;
+    if (q->x + q->w > wk.sw) q->x = wk.sw - q->w;
+    if (q->x < 0) q->x = 0;
+    q->y = y - 3;
+    if (q->y + q->h > wk.sh - TASK_H) q->y = wk.sh - TASK_H - q->h;
+    if (q->y < 0) q->y = 0;
+    go_depth = l + 2;
+}
+
+static void draw_go_panel(struct go_panel *p) {
+    struct go_item *items;
+    int n, k, x, y, a, rgb;
     char c[2], *banner;
-    mw = START_W; mh = start_height();
-    mx = 2; my = wk.sh - TASK_H - mh;
-    gui_rect(mx, my, mw, mh, C_FACE);
-    d_bevel(mx, my, mw, mh, B_RAISED);
-    gui_rect(mx + 3, my + 3, 22, mh - 6, ui_style == S_FLAT ? C_TITLE : C_SHADOW);
-    c[1] = 0;
-    banner = "C4IX";
+    gui_rect(p->x, p->y, p->w, p->h, C_FACE);
+    d_bevel(p->x, p->y, p->w, p->h, B_RAISED);
+    if (p->menu == M_GO) {
+        gui_rect(p->x + 3, p->y + 3, 22, p->h - 6, ui_style == S_FLAT ? C_TITLE : C_SHADOW);
+        c[1] = 0;
+        banner = "C4IX";
+        k = 0;
+        while (k < 4) { c[0] = banner[k]; gui_text2(p->x + 8, p->y + p->h - 30 - (3 - k) * 18, C_WHITE, 16, F_BOLD, 0, c, 1); ++k; }
+    }
+    items = menu_items(p->menu);
+    n = menu_count(p->menu);
     k = 0;
-    while (k < 4) { c[0] = banner[k]; gui_text2(mx + 8, my + mh - 30 - (3 - k) * 18, C_WHITE, 16, F_BOLD, 0, c, 1); ++k; }
-    iy = my + 3;
-    k = 0;
-    while (k < n_start) {
-        if (start_items[k].label[0] == '-') {
-            gui_rect(mx + 28, iy + 3, mw - 32, 1, C_SHADOW); gui_rect(mx + 28, iy + 4, mw - 32, 1, C_LIGHT);
-            iy = iy + 8;
+    while (k < n) {
+        go_row_at(p, k, &x, &y);
+        if (items[k].label[0] == '-') {
+            gui_rect(x + 2, y + 3, p->w - 32, 1, C_SHADOW); gui_rect(x + 2, y + 4, p->w - 32, 1, C_LIGHT);
         } else {
-            if (k == start_hot) gui_rect(mx + 26, iy, mw - 29, 26, C_SEL);
-            if (start_items[k].kind > 0) d_icon(start_items[k].kind, mx + 32, iy + 5);
-            d_text(mx + 56, iy + 7, k == start_hot ? C_WHITE : C_DARK, F_SANS, start_items[k].label);
-            iy = iy + 26;
+            rgb = k == p->hot ? C_WHITE : C_DARK;
+            if (k == p->hot) gui_rect(x, y, p->colw, GO_ROW, C_SEL);
+            if (items[k].kind > 0) d_icon(items[k].kind, x + 6, y + 5);
+            d_text(x + (p->menu == M_GO ? 30 : 10), y + 7, rgb, F_SANS, items[k].label);
+            // a row that opens a menu has an arrow at its right
+            a = 0;
+            while (items[k].opens && a < 5) { gui_rect(x + p->colw - 14 + a, y + 8 + a, 1, 9 - a - a, rgb); ++a; }
         }
         ++k;
     }
 }
 
-static int start_hit(int x, int y) {
-    int mh, my, k, iy;
-    mh = start_height();
-    my = wk.sh - TASK_H - mh;
-    if (x < 28 || x >= START_W + 2 || y < my || y >= my + mh) return 0 - 1;
-    iy = my + 3;
+static void draw_start() {
+    int l;
+    l = 0;
+    while (l < go_depth) { draw_go_panel(&go_open[l]); ++l; }
+}
+
+static int go_hit(struct go_panel *p, int px, int py) {
+    struct go_item *items;
+    int n, k, x, y;
+    items = menu_items(p->menu);
+    n = menu_count(p->menu);
     k = 0;
-    while (k < n_start) {
-        if (start_items[k].label[0] == '-') iy = iy + 8;
-        else { if (y >= iy && y < iy + 26) return k; iy = iy + 26; }
+    while (k < n) {
+        go_row_at(p, k, &x, &y);
+        if (items[k].label[0] != '-' && ui_hit(px, py, x, y, p->colw, GO_ROW)) return k;
         ++k;
     }
     return 0 - 1;
 }
 
-static void start_pick(int k) {
-    int kind;
-    start_open = 0; wk_redraw_all();
-    if (k < 0) return;
-    kind = start_items[k].kind;
-    if (kind > 0) launch(kind);
-    else if (kind == GO_RUN) inputbox(0, "Run", "Program to run:", "", A_RUN);
-    else if (kind == GO_OFF) running = 0;
-    else if (kind == GO_WOLF) run_command("wolf3d");
-    else if (kind == GO_DOOM) run_command("doom");
-    else if (kind == GO_TYRIAN) run_command("tyrian");
-    else if (kind == GO_ROTT) run_command("rott");
+// the topmost menu at (x, y), or -1
+static int go_under(int x, int y) {
+    struct go_panel *p;
+    int l;
+    l = go_depth;
+    while (l > 0) {
+        --l;
+        p = &go_open[l];
+        if (ui_hit(x, y, p->x, p->y, p->w, p->h)) return l;
+    }
+    return 0 - 1;
+}
+
+// The pointer moved. Over a row, that row lights, and if it opens a menu the
+// menu opens; what any other row had open closes. Except on the way across:
+// moving right, over the rows below the one that opened a menu, nothing
+// changes, so the menu is still there when the pointer arrives.
+static void go_move(int x, int y) {
+    struct go_panel *p;
+    int l, k, depth, hot;
+    l = go_under(x, y);
+    if (l < 0) {
+        go_x = x;
+        p = &go_open[go_depth - 1];
+        if (p->hot >= 0) { p->hot = 0 - 1; wk_redraw_all(); }
+        return;
+    }
+    p = &go_open[l];
+    k = go_hit(p, x, y);
+    if (l < go_depth - 1 && k != p->hot && x > go_x) { go_x = x; return; }
+    go_x = x;
+    depth = go_depth;
+    hot = p->hot;
+    if (l < go_depth - 1 && k == hot) {
+        // back on the row that opened the next: that one stays, what it opened goes
+        go_depth = l + 2;
+        if (go_open[l + 1].hot >= 0 || depth != go_depth) { go_open[l + 1].hot = 0 - 1; wk_redraw_all(); }
+        return;
+    }
+    p->hot = k;
+    go_depth = l + 1;
+    if (k >= 0 && menu_items(p->menu)[k].opens) go_flyout(l, k);
+    if (k != hot || depth != go_depth) wk_redraw_all();
+}
+
+static void start_pick(struct go_item *it) {
+    if (it->kind > 0) launch(it->kind);
+    else if (it->kind == GO_RUN) inputbox(0, "Run", "Program to run:", "", A_RUN);
+    else if (it->kind == GO_OFF) running = 0;
+    else if (it->kind == GO_CMD) run_command(it->cmd);
+}
+
+// A press: as a move first (a touch has none before it), then a row that
+// starts something does, a row that opens a menu has done, and anywhere else
+// shuts the menu.
+static void go_press(int x, int y) {
+    struct go_item *it;
+    int l, k;
+    go_x = x;
+    go_move(x, y);
+    l = go_under(x, y);
+    k = l < 0 ? 0 - 1 : go_hit(&go_open[l], x, y);
+    it = k < 0 ? 0 : &menu_items(go_open[l].menu)[k];
+    if (it && it->opens) return;
+    go_depth = 0;
+    wk_redraw_all();
+    if (it) start_pick(it);
 }
 
 // ---- the taskbar ----------------------------------------------------------------------
@@ -447,8 +680,8 @@ static void draw_taskbar() {
     ty = wk.sh - TASK_H;
     gui_rect(0, ty, wk.sw, TASK_H, C_FACE);
     gui_rect(0, ty + (ui_style == S_FLAT ? 0 : 1), wk.sw, 1, ui_style == S_FLAT ? C_SHADOW : C_LIGHT);
-    gui_rect(2, ty + 4, 56, 22, ui_style == S_FLAT && start_open ? C_LIGHT : C_FACE);
-    if (ui_style != S_FLAT || start_open) d_bevel(2, ty + 4, 56, 22, start_open ? B_PRESSED : B_RAISED);
+    gui_rect(2, ty + 4, 56, 22, ui_style == S_FLAT && go_depth ? C_LIGHT : C_FACE);
+    if (ui_style != S_FLAT || go_depth) d_bevel(2, ty + 4, 56, 22, go_depth ? B_PRESSED : B_RAISED);
     // C4IX's mark: a cake (C4IX, C4KE -- cakes), its candle lit
     k = ty + 4;
     gui_rect(8, k + 13, 15, 6, 0x8b5a2b);
@@ -503,11 +736,11 @@ static void draw_taskbar() {
 // over the windows: the taskbar, and the Go menu while it is open
 static void front() {
     if (wk_in_damage(0, wk.sh - TASK_H, wk.sw, TASK_H)) draw_taskbar();
-    if (start_open) draw_start();
+    if (go_depth) draw_start();
     if (vol_open) draw_volume();
 }
 
-static int popup() { return start_open || vol_open; }
+static int popup() { return go_depth || vol_open; }
 
 // ---- input the shell takes before the windows, and where there are none ----
 
@@ -533,21 +766,15 @@ static int mouse_front(int ev, int x, int y, int b) {
         return 1;
     }
     if (ev == E_MOVE) {
-        if (!start_open) return 0;
-        k = start_hit(x, y);
-        if (k != start_hot) { start_hot = k; wk_redraw_all(); }
+        if (!go_depth) return 0;
+        go_move(x, y);
         return 1;
     }
     if (ev != E_DOWN) return 0;
-    if (start_open) {
-        k = start_hit(x, y);
-        start_open = 0; wk_redraw_all();
-        if (k >= 0) start_pick(k);
-        return 1;
-    }
+    if (go_depth) { go_press(x, y); return 1; }
     if (y < ty) return 0;
     if (wk_modal()) return 1;
-    if (ui_hit(x, y, 2, ty + 4, 56, 22)) { start_open = 1; start_hot = 0 - 1; wk_redraw_all(); return 1; }
+    if (ui_hit(x, y, 2, ty + 4, 56, 22)) { go_start(); wk_redraw_all(); return 1; }
     if (ui_hit(x, y, cpu_x(), ty + 4, CPU_W, 22)) { tasks_open_perf(); wk_redraw_all(); return 1; }
     if (ui_hit(x, y, tray_x(), ty + 4, 26, 22)) { vol_open = 1; vol_drag = 0; wk_redraw_all(); return 1; }
     bw = button_w();
@@ -585,12 +812,12 @@ static int key(int down, int code, int ch, int mods) {
     icon_k = 0 - 1;
     // Ctrl+Shift+Esc: System Monitor, from anywhere
     if (code == KEY_ESC && (mods & M_CTRL) && (mods & M_SHIFT)) { tasks_open(); return 1; }
-    if (start_open && code == KEY_ESC) { start_open = 0; wk_redraw_all(); return 1; }
+    if (go_depth && code == KEY_ESC) { go_depth = 0; wk_redraw_all(); return 1; }
     if (vol_open && code == KEY_ESC) { vol_close(); return 1; }
     return 0;
 }
 
-static int pointer(int x, int y) { return start_open || vol_open || y >= wk.sh - TASK_H ? PTR_ARROW : 0 - 1; }
+static int pointer(int x, int y) { return go_depth || vol_open || y >= wk.sh - TASK_H ? PTR_ARROW : 0 - 1; }
 
 // a dialog no window asked: Run
 static void answer(int dialog, int yes) {
@@ -599,6 +826,7 @@ static void answer(int dialog, int yes) {
 
 // the screen changed size: the taskbar along its new bottom, and the picture stretched again
 static void resized() {
+    go_depth = 0;
     wk_set_area(0, 0, wk.sw, wk.sh - TASK_H);
     wall_resize();
 }

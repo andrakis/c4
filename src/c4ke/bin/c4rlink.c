@@ -372,8 +372,9 @@ static int merge_c4rs (int *master, int *c4rs, int count) {
 					       (char *)cl[CL_FILE], i, pid);
 					return 1;
 				}
+				// (its value: what to add to the symbol, from c4opt)
 				dstPatch[C4R_PAT_TYPE]  = ((int *)cl[CL_REMAP])[pid];
-				dstPatch[C4R_PAT_VALUE] = 0;
+				dstPatch[C4R_PAT_VALUE] = srcPatch[C4R_PAT_VALUE];
 			}
 			mhdr[C4R_HDR_PATCHLEN] = mhdr[C4R_HDR_PATCHLEN] + 1;
 			srcPatch = srcPatch + C4R_PAT__Sz;
@@ -576,11 +577,13 @@ static int resolve_patches (int *master) {
 			sym = (int *)master[C4R_SYMBOLS] + (t * C4R_SYMB__Sz);
 			if (!(sym[C4R_SYMB_ATTRS] & ATTR_EXTERN)) {
 				if (sym[C4R_SYMB_CLASS] == C4R_SCLASS_Fun) {
+					// (code is in words; what a compiler added is in bytes)
 					patch[C4R_PAT_TYPE]  = C4R_PTYPE_CODE;
-					patch[C4R_PAT_VALUE] = sym[C4R_SYMB_VALUE];
+					patch[C4R_PAT_VALUE] = sym[C4R_SYMB_VALUE] + patch[C4R_PAT_VALUE] / (int)sizeof(int);
 				} else if (sym[C4R_SYMB_CLASS] == C4R_SCLASS_Glo) {
+					// e.g. &vid.colormap: a member's offset, from c4opt
 					patch[C4R_PAT_TYPE]  = C4R_PTYPE_DATA;
-					patch[C4R_PAT_VALUE] = sym[C4R_SYMB_VALUE];
+					patch[C4R_PAT_VALUE] = sym[C4R_SYMB_VALUE] + patch[C4R_PAT_VALUE];
 				} else {
 					printf("c4rlink: symbol '%.*s' is not a function or global, cannot resolve\n",
 					       sym[C4R_SYMB_NAMELEN], (char *)sym[C4R_SYMB_NAME]);

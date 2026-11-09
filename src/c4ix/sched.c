@@ -1024,8 +1024,14 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
             // C4KE's ABI puts the opcode at sp[0] too.
             a = ck_dispatch(param, (int *)sp + 1);
         } else {
-            kprintf("c4ix: task %d hit illegal opcode %d\n",
-                sched_cur ? sched_cur->id : -1, param);
+            // 89 is FPU. softfp's helpers ask first, so only a program built
+            // with c4lc -mfpu gets here, and the machine is why it cannot run
+            if (param == 89)
+                kprintf("c4ix: task %d needs an FPU (it was built with -mfpu), and this machine has none\n",
+                    sched_cur ? sched_cur->id : -1);
+            else
+                kprintf("c4ix: task %d hit illegal opcode %d\n",
+                    sched_cur ? sched_cur->id : -1, param);
             task_exit(-1);
         }
     } else if (trap == C4IX_TRAP_OPV) {
@@ -1355,11 +1361,22 @@ int sched_affinity(int id, int mask) {
     if (mask >= 0) {
         t->cpumask = mask;
         TF_PUT(t, TF_PINNED, mask);
+        TF_CLR(t, TF_PINSOFT);
         sched_wake = 1;
         if (t == sched_cur) sched_resched = 1;
     }
     sched_unlock();
     return old;
+}
+
+// A program that draws runs on CPU 0, where the display is: its frames go there
+// anyway, each from another CPU a round trip to it, and it is what a person watches.
+// Not if anything chose its CPUs (pin), and not its children: what a desktop starts
+// from a Terminal, a build among them, may run anywhere.
+void sched_softpin(struct task *t) {
+    if (t->cpumask || t->privs != PRIV_USER) return;
+    sched_affinity(t->id, 1);
+    TF_SET(t, TF_PINSOFT);
 }
 
 void sched_yield() {

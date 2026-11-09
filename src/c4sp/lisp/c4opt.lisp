@@ -6,6 +6,10 @@
 ;;
 ;; Passes, from design 9.4:
 ;;   fold      IMM a; PSH; IMM b; OP  ->  IMM (a OP b)   (both plain ints)
+;;   arith     what an operand known at compile time makes unnecessary:
+;;             PSH; IMM 0; ADD -> nothing; x + a + b -> x + (a+b);
+;;             LEA n; PSH; IMM k; ADD -> LEA n+k/W; IMM &g; PSH; IMM k; ADD -> IMM &g+k;
+;;             PSH; IMM 255; AND; SC -> SC
 ;;   shl       PSH; IMM 8; MUL        ->  PSH; IMM 3; SHL
 ;;   adj0      ADJ 0                  ->  (removed)
 ;;   jmpnext   JMP L just before (label L)               (falls through)
@@ -100,6 +104,70 @@
 	'nofold))))))))))))))))))
 
 ;; ---- passes; each takes and returns an instruction list ----
+
+;; arith: what an operand known at compile time makes unnecessary.
+;; opt:arith-try takes the next instructions and answers (REPLACEMENT N),
+;; the N of them replaced, or false. The replacement goes back on the
+;; input: it may match again with what follows.
+(define opt:n-arith 0)
+(define opt:add1? (lambda (I Name) (if (= Name (head I)) (= 1 (length I)) false)))
+;; is a reference an address the linker or loader adds to?
+(define opt:dataref? (lambda (Op)
+	(if (= 'list (typeof Op)) (if (= 'data (head Op)) true (= 'extern (head Op))) false)))
+;; ... that address K further on. A data reference's offset is in its patch; a
+;; symbol's patch has room for what to add to the symbol (c4rlink, loader.c).
+(define opt:refplus (lambda (Op K)
+	(if (= 'data (head Op))
+		(if (>= (length Op) 3) (list 'data (+ (second Op) K) (third Op)) (list 'data (+ (second Op) K)))
+		(list 'extern (second Op)
+			(if (>= (length Op) 3) (third Op) 0)
+			(+ (if (= 4 (length Op)) (index Op 3) 0) K)))))
+(define opt:arith-try (lambda (R) (begin
+	(define I (head R))
+	(define N (length R))
+	(if (if (opt:is I 'PSH) (>= N 3) false)
+		(begin
+			(define B (second R))
+			(define C (head (third R)))
+			;; x + 0, x - 0: PSH; IMM 0; ADD -> nothing
+			(if (if (opt:plain B 'IMM) (if (= 0 (second B)) (if (= 1 (length (third R))) (if (= C 'ADD) true (= C 'SUB)) false) false) false)
+				(list (list) 3)
+			;; x + a + b: PSH; IMM a; ADD; PSH; IMM b; ADD -> PSH; IMM a+b; ADD
+			(if (if (>= N 6) (if (opt:plain B 'IMM) (if (opt:add1? (third R) 'ADD)
+					(if (opt:is (index R 3) 'PSH) (if (opt:plain (index R 4) 'IMM) (opt:add1? (index R 5) 'ADD) false) false) false) false) false)
+				(list (list I (list 'IMM (+ (second B) (second (index R 4)))) (third R)) 6)
+			;; a byte about to be stored as a byte, which SC cuts anyway, and whose
+			;; A after it is the same: PSH; IMM 255; AND; SC -> SC
+			(if (if (>= N 4) (if (opt:plain B 'IMM) (if (= 255 (second B))
+					(if (opt:add1? (third R) 'AND) (opt:add1? (index R 3) 'SC) false) false) false) false)
+				(list (list (index R 3)) 4)
+			false))))
+	;; a local's member or element: LEA n; PSH; IMM k; ADD -> LEA n+k/W
+	(if (if (opt:is I 'LEA) (>= N 4) false)
+		(if (if (opt:is (second R) 'PSH) (if (opt:plain (third R) 'IMM)
+				(if (opt:add1? (index R 3) 'ADD) (= 0 (bit:and (second (third R)) (- W 1))) false) false) false)
+			(list (list (list 'LEA (+ (second I) (/ (second (third R)) W)))) 4)
+		false)
+	;; a global's: IMM &g; PSH; IMM k; ADD -> IMM &g+k
+	(if (if (opt:is I 'IMM) (if (>= N 4) (opt:dataref? (second I)) false) false)
+		(if (if (opt:is (second R) 'PSH) (if (opt:plain (third R) 'IMM) (opt:add1? (index R 3) 'ADD) false) false)
+			(list (list (list 'IMM (opt:refplus (second I) (second (third R))))) 4)
+		false)
+	false))))))
+(define opt:arith (lambda (Code) (next opt:arith/2 Code (list))))
+(define opt:arith/2 (lambda (Code Acc)
+	(if (empty? Code) (reverse Acc)
+	(if (not (opt:arith-head? (head Code))) (next opt:arith/2 (tail Code) (cons (head Code) Acc))
+	(begin
+		(define F (opt:arith-try (opt:reals Code 6)))
+		(if (= false F)
+			(next opt:arith/2 (tail Code) (cons (head Code) Acc))
+			(begin
+				(set! opt:n-arith (+ (second F) opt:n-arith))
+				(define D (opt:skip Code (second F)))
+				(next opt:arith/2 (+ (head F) (+ (head D) (second D))) Acc))))))))
+(define opt:arith-head? (lambda (I)
+	(if (opt:is I 'PSH) true (if (opt:is I 'LEA) true (opt:is I 'IMM)))))
 
 ;; constant folding: the window is (IMM a) (PSH) (IMM b) (OP).
 ;; opt:fold-try returns the folded (IMM v), or nil.
@@ -446,7 +514,7 @@
 
 (define opt:passes (lambda (Code Syms)
 	;; adj0 runs again after tail: a same-size tail transform emits ADJ 0
-	(opt:dead (opt:adj0 (opt:tail (opt:thread (opt:jmpnext (opt:adj0 (opt:shl (opt:fold Code))))) Syms)))))
+	(opt:dead (opt:adj0 (opt:tail (opt:thread (opt:jmpnext (opt:adj0 (opt:shl (opt:arith (opt:fold Code)))))) Syms)))))
 
 (define opt:count-instrs (lambda (Code) (next opt:count/2 Code 0)))
 (define opt:count/2 (lambda (Code N)

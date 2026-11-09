@@ -2098,6 +2098,12 @@ test-c4fp: c4sp c4sp32 $(C4M) c4m32 $(C4LC_LISP) src/c4fp/softfp.c src/c4fp/mkfp
 	     fi; \
 	   done; \
 	done
+	@# and as Quake builds it (games/quake/c4.mk): its operations on the FPU, at 32 bits
+	./c4sp32 src/c4sp/lisp/c4lc.lisp -O -mfpu -P src/c4ix/libc/tests/mathtest.c .c4fp_vm.c4r > /dev/null
+	./c4m32 load-c4r.c -- .c4fp_vm.c4r .c4fp_mvec.txt | grep -q "mathtest: OK" || { echo "test-c4fp: mathtest -mfpu wrong on c4m32"; exit 1; }
+	node libjs/cli.js --fast -d . .c4fp_vm.c4r .c4fp_mvec.txt < /dev/null | grep -q "mathtest: OK" || { echo "test-c4fp: mathtest -mfpu wrong on libjs"; exit 1; }
+	./c4sp32 src/c4sp/lisp/c4lc.lisp -O -mfuse -mfpu -P src/c4ix/libc/tests/mathtest.c .c4fp_vm.c4r > /dev/null
+	node libjs/cli.js --fast -d . .c4fp_vm.c4r .c4fp_mvec.txt < /dev/null | grep -q "mathtest: OK" || { echo "test-c4fp: mathtest -mfuse -mfpu wrong on libjs"; exit 1; }
 	rm -f .c4fp_gen .c4fp_mgen .c4fp_vec.txt .c4fp_mvec.txt .c4fp_vm.c4r .c4fp_out.txt
 	@echo "test-c4fp: OK"
 PHONY += test-c4fp
@@ -2413,6 +2419,12 @@ c4bb-32bit: c4cc32 c4m32 c4sp32 c4rlink32
 c4bb-images: c4bb-32bit $(C4LC_LISP) .img_g c4th32.c4r cpp c4sc32-fused.c4r
 	IMG_G=$(IMG_G) C4BB_CLIMB_AGAIN=1 bash src/c4bb/tests/build-images.sh
 	@$(MAKE) --no-print-directory $(C4DOS_IX_DISK)
+	@# C4IX's programs and libraries reach the floppy from the disk, and cannot be
+	@# its prerequisites (a circle): a change to libc4ix alone leaves it up to date
+	@# to make, with the old library beside the new c4ix.sizes, and C4IX cannot read
+	@# it. So they are copied whether or not make thought the floppy was stale.
+	@cp src/c4bb/images/disk/c4ix-*.c4r src/c4bb/images/disk/c4ix-libc4ix.c4s src/c4bb/images/disk/vfsload.c4r $(C4DOS_IX_DISK)/
+	@cd $(C4DOS_IX_DISK) && ls -p | grep -v '/$$' > c4dos.dir
 	@bash src/c4bb/tests/climb-disks.sh
 
 # Source maps in the images (docs/c4-explorer.md, track S): the games
@@ -2438,7 +2450,7 @@ PHONY += FORCE
 GAME_OBJS  :=
 GAME_TESTS :=
 include $(wildcard games/*/c4.mk)
-GAMES_ALL  := wolf3d doom tyrian rott
+GAMES_ALL  := wolf3d doom tyrian rott quake
 c4bb-images: libc-bare-objs grin-objs grin-apps $(GAME_OBJS)
 $(filter-out $(GAME_TESTS),$(GAMES_ALL:%=test-%)):
 	@echo "$@: skipped, games/$(@:test-%=%) is not here (games/README.md)"
@@ -3507,8 +3519,10 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	# float and double (docs/c4-float.md): literals rounded at both ends of
 	# both formats, arithmetic, NaN and -0 compares, every conversion,
 	# globals, aggregates, structs, pointers, calls (through pointers too);
-	# the golden is gcc's, the same at both sizes, plain, -O and -minline
-	@for fl in "" "-O" "-minline"; do \
+	# the golden is gcc's, the same at both sizes, plain, -O and -minline, and
+	# with the FPU opcode in place of the helpers (-mfpu: only at 32 bits does it
+	# change anything)
+	@for fl in "" "-O" "-minline" "-mfpu" "-O -mfpu"; do \
 	   ./c4sp src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_float.c .c4lc_b.c4r > /dev/null || exit 1; \
 	   ./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-float.txt || exit 1; \
 	   ./c4sp32 src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_float.c .c4lc_b.c4r > /dev/null || exit 1; \
@@ -3528,6 +3542,30 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	   ./c4m32 load-c4r.c -- .c4lc_e.c4r | cmp - src/c4sp/tests/expected/c4lc-m7ext.txt || exit 1; \
 	   echo "  m7 extern table ok, linked at 32 and 64 bits: c4lc $$fl"; \
 	 done
+	# ... and -mfuse, whose STL and POPA come from the code generator: only c4mp and
+	# libjs have the fused opcodes
+	@./c4sp src/c4sp/lisp/c4lc.lisp -O -mfuse -c $(TESTS)/c4lc_m7ext_a.c .c4lc_ea.c4o > /dev/null || exit 1; \
+	 ./c4sp src/c4sp/lisp/c4lc.lisp -O -mfuse -c $(TESTS)/c4lc_m7ext_b.c .c4lc_eb.c4o > /dev/null || exit 1; \
+	 $(C4RLINK) .c4lc_ea.c4o .c4lc_eb.c4o -o .c4lc_e.c4r > /dev/null || exit 1; \
+	 ./c4mp .c4lc_e.c4r | cmp - src/c4sp/tests/expected/c4lc-m7ext.txt || exit 1; \
+	 ./c4sp src/c4sp/lisp/c4lc.lisp -O -mfuse $(TESTS)/c4lc_float.c .c4lc_e.c4r > /dev/null || exit 1; \
+	 ./c4mp .c4lc_e.c4r | cmp - src/c4sp/tests/expected/c4lc-float.txt || exit 1; \
+	 ./c4sp src/c4sp/lisp/c4lc.lisp -O -mfuse -mfpu $(TESTS)/c4lc_float.c .c4lc_e.c4r > /dev/null || exit 1; \
+	 ./c4mp .c4lc_e.c4r | cmp - src/c4sp/tests/expected/c4lc-float.txt || exit 1; \
+	 if command -v node > /dev/null; then \
+	   ./c4sp32 src/c4sp/lisp/c4lc.lisp -O -mfuse -c $(TESTS)/c4lc_m7ext_a.c .c4lc_ea.c4o > /dev/null || exit 1; \
+	   ./c4sp32 src/c4sp/lisp/c4lc.lisp -O -mfuse -c $(TESTS)/c4lc_m7ext_b.c .c4lc_eb.c4o > /dev/null || exit 1; \
+	   ./c4rlink32 .c4lc_ea.c4o .c4lc_eb.c4o -o .c4lc_e.c4r > /dev/null || exit 1; \
+	   node libjs/cli.js .c4lc_e.c4r | cmp - src/c4sp/tests/expected/c4lc-m7ext.txt || exit 1; \
+	   ./c4sp32 src/c4sp/lisp/c4lc.lisp -O -mfuse $(TESTS)/c4lc_float.c .c4lc_e.c4r > /dev/null || exit 1; \
+	   node libjs/cli.js .c4lc_e.c4r | cmp - src/c4sp/tests/expected/c4lc-float.txt || exit 1; \
+	   ./c4sp32 src/c4sp/lisp/c4lc.lisp -O -mfuse -mfpu $(TESTS)/c4lc_float.c .c4lc_e.c4r > /dev/null || exit 1; \
+	   node libjs/cli.js .c4lc_e.c4r | cmp - src/c4sp/tests/expected/c4lc-float.txt || exit 1; \
+	 fi
+	@if command -v node > /dev/null; then \
+	   node libjs/cli.js --no-fpu .c4lc_e.c4r 2>&1 | grep -q "needs an FPU" || { echo "  -mfpu without an FPU did not say why"; exit 1; }; \
+	 fi
+	@echo "  -mfuse: the extern table and the float tests run, fused, on c4mp and libjs"
 	@rm -f .c4lc_ea.c4o .c4lc_eb.c4o .c4lc_e.c4r
 	# M4 qualifiers. const: every way of dropping a const without a cast
 	# warns and no other way does (c4lc_m4q.c, which then runs: a static

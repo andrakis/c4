@@ -1,3 +1,31 @@
+ext 11 12 13 14 15
+exta 21 22 23 24 25
+extp 12 14
+extq 26
+exts a r
+exti 24
+extd 23
+mine 31 32
+loc 41 42 43 44 45
+loca 46 47 48
+locp 42 44
+stl 7 8
+stl-chain 3 3 3
+stl-self 6
+stl-post 7 6
+stl-postd 6 7
+stl-pre 7 7
+stl-pred 6 6
+stl-stmt 6
+stl-ptr 1 2 3
+stl-ptrd 4 3
+stl-pstore 9 8 2
+stl-for 3 7 10
+stl-narrow 201 101
+stl-uc 256
+stl-ch -56
+mask 44
+mask-store 200 -56
 cat 100 105 1
 echo 201 206 2
 first 109 201

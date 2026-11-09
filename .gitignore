@@ -57,6 +57,10 @@ libc.c4s
 /.rott/
 /.rott_t/
 /rott-host
+# Quake's objects (make quake-objs), its gcc build, its test
+/.quake/
+/.quake_t/
+/quake-host
 # the -g or -g0 the images were compiled with (make .img_g)
 /.img_g
 

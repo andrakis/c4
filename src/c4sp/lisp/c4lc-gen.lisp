@@ -547,6 +547,33 @@
 	(if (if (if (= ty g:UINT) true (= ty g:FLOAT)) g:W64 false) (begin (g:emit '(LI)) (g:mask! g:M32))
 	(if (g:ll? ty) nil
 	(g:emit '(LI))))))))))
+;; SC leaves in A the byte it stored as a signed char (c4's own rule, right for
+;; char), so the value of an assignment to an unsigned char, or of its ++ or --,
+;; has to be cut back to 0..255: (uc = 255) == 255. g:effect says when nobody wants
+;; the value, so that p[i] = c; costs what it always did, and i++; what ++i; does,
+;; with no step taken back off.
+(define g:vunused false)
+;; A word-sized local has no need of its address on the stack while the value is
+;; worked out: under -mfuse, the value and then STL. It is what STL is for, and the
+;; fuse pass cannot make it, not seeing past the value in LEA n; PSH; ...; SI.
+(define g:stl? (lambda (lv)
+	(if gen:fuse
+	(if (= (head lv) 'var)
+		(begin
+			(define s (g:find (g:second lv)))
+			(if (= (g:second s) 'loc)
+			(if (= (index s 4) nil)
+				(begin
+					(define t (g:third s))
+					(if (g:ll? t) false
+					(if (g:bytety? t) false
+					(if (g:halfty? t) false
+					(if (g:svalue? t) false
+					(not (g:rowty? t)))))))
+			false) false))
+	false) false)))
+(define g:stl! (lambda (lv)
+	(g:emit (list 'STL (- g:loc (index (g:find (g:second lv)) 3))))))
 (define g:store! (lambda (ty)
 	(if (g:ll? ty) (g:llcopy)
 	(if (g:bytety? ty) (g:emit '(SC))
@@ -1145,6 +1172,96 @@
 		(g:call (+ (list 'call name) args))
 		(set! g:ty ty))))
 
+;; -mfpu: the opcode a helper would have reached, without the helper. Each of them is a
+;; call, an ENT, a test of __c4fp_hw (itself a call), the opcode and a LEV: 17 instructions
+;; around the one that does the work, and for a double two MCPYs to push it. The price is
+;; a machine that has no FPU: the opcode is illegal there and nothing falls back. So it is
+;; a flag, for a program that means it, and libc is built without it. Not at 64 bits, where
+;; a double is a word and not the address the opcode's double forms want.
+(define g:hwfp? (lambda () (if gen:fpu (not g:W64) false)))
+;; the sub-op (src/c4bb/sim/fpu.js)
+(define g:fpuop (lambda (ty h)
+	(+ (if (= ty g:FLOAT) 0 16)
+		(if (= h 'add) 1 (if (= h 'sub) 2 (if (= h 'mul) 3 (if (= h 'div) 4 6)))))))
+;; the sub-op on top of what is pushed, and the words taken back off
+(define g:fpu! (lambda (op words)
+	(begin
+		(g:emit (list 'IMM op))
+		(g:emit '(PSH))
+		(g:emit '(FPU))
+		(g:emit (list 'ADJ words)))))
+;; can this be evaluated at any time before or after another such? It reads, and writes
+;; nothing: no call and no assignment. What is not listed is not.
+(define g:fppure? (lambda (e)
+	(begin
+		(define h (head e))
+		(if (if (= h 'num) true (if (= h 'llnum) true (= h 'var))) true
+		(if (if (= h 'deref) true (if (= h 'neg) true (if (= h 'lognot) true (if (= h 'bitnot) true
+				(if (= h 'member) true (= h 'arrow))))))
+			(g:fppure? (g:second e))
+		(if (= h 'cast) (g:fppure? (g:third e))
+		(if (if (= h 'index) true (if (g:fparith? h) true (if (g:fpcmp? h) true (g:fpbad? h))))
+			(if (g:fppure? (g:second e)) (g:fppure? (g:third e)) false)
+		false)))))))
+;; x and y of type ty, on the stack as the opcode wants them: x on top. That is y first,
+;; which nobody can tell if neither writes. If one does, x first as C4 has always done
+;; it, kept in a temporary while y goes.
+(define g:fpuargs (lambda (ty x y)
+	(if (if (g:fppure? x) (g:fppure? y) false)
+		(begin
+			(g:expr y) (g:emit '(PSH))
+			(g:expr x) (g:emit '(PSH)))
+	(begin
+		(define t (g:ltemp))
+		(g:emit (list 'LEA t)) (g:emit '(PSH))
+		(g:expr x)
+		(if (g:ll? ty) (g:llcopy) (g:emit '(SI)))
+		(g:expr y) (g:emit '(PSH))
+		(g:emit (list 'LEA t))
+		(if (g:ll? ty) nil (g:emit '(LI)))
+		(g:emit '(PSH))))))
+(define g:fpuarith (lambda (h ty x y)
+	(begin
+		(if (g:ll? ty)
+			(begin
+				(define r (g:ltemp))
+				(g:emit (list 'LEA r)) (g:emit '(PSH))
+				(g:fpuargs ty x y)
+				(g:fpu! (g:fpuop ty h) 4)
+				(g:emit (list 'LEA r)))
+		(begin
+			(g:fpuargs ty x y)
+			(g:fpu! (g:fpuop ty h) 3)))
+		(set! g:ty ty))))
+;; a double made by sub-op op from one word that A will hold: r, a slot the sub-op does
+;; not read (whatever is in A does), the word
+(define g:fpuword (lambda (op e)
+	(begin
+		(define r (g:ltemp))
+		(g:emit (list 'LEA r)) (g:emit '(PSH)) (g:emit '(PSH))
+		(g:iexpr e) (g:emit '(PSH))
+		(g:fpu! op 4)
+		(g:emit (list 'LEA r))
+		(set! g:ty g:DOUBLE))))
+;; float to double, and double to float
+(define g:fpuwiden (lambda (e ty)
+	(if (= ty g:DOUBLE) (g:fpuword 25 e)
+	(begin
+		(g:expr e) (g:emit '(PSH))
+		(g:fpu! 26 2)
+		(set! g:ty g:FLOAT)))))
+;; an integer to float type ty: the int's own sub-op, or a helper for any other integer
+(define g:fpfrom (lambda (e et ty)
+	(begin
+		(define fn (g:fromfn et ty))
+		(if (if (g:hwfp?) (= fn (g:fpname ty "from_i")) false)
+			(if (= ty g:DOUBLE) (g:fpuword 23 e)
+			(begin
+				(g:iexpr e) (g:emit '(PSH))
+				(g:fpu! 7 2)
+				(set! g:ty g:FLOAT)))
+		(g:fpcall fn (list e) ty)))))
+
 ;; is this node one g:fpexpr makes?
 (define g:fpnode? (lambda (e)
 	(begin
@@ -1177,8 +1294,10 @@
 		(if (g:fparith? h)
 			(begin
 				(define ty (g:fpuac (g:typeof (g:second e)) (g:typeof (g:third e))))
+				(if (g:hwfp?)
+					(g:fpuarith h ty (g:fpwrap (g:second e) ty) (g:fpwrap (g:third e) ty))
 				(g:fpcall (g:fpname ty (+ "" h))
-					(list (g:fpwrap (g:second e) ty) (g:fpwrap (g:third e) ty)) ty))
+					(list (g:fpwrap (g:second e) ty) (g:fpwrap (g:third e) ty)) ty)))
 		(g:die (+ "invalid operand to " (+ (+ "" h) ": a float or double"))))))))))))))
 
 ;; e converted to the float type ty
@@ -1186,11 +1305,57 @@
 	(begin
 		(define et (g:typeof e))
 		(if (= et ty) (g:expr e)
+		(begin
+		(define k (g:fpknown e ty))
+		(if (not (= k false)) (g:expr k)
 		(if (g:fp? et)
-			(g:fpcall (if (= ty g:DOUBLE) "__c4f_to_d" "__c4d_to_f") (list e) ty)
+			(if (g:hwfp?) (g:fpuwiden e ty)
+			(g:fpcall (if (= ty g:DOUBLE) "__c4f_to_d" "__c4d_to_f") (list e) ty))
 		(if (g:isptr et) (g:die "a pointer cannot be converted to a float or double")
 		(if (g:svalue? et) (g:die "a struct cannot be converted to a float or double")
-		(g:fpcall (g:fromfn et ty) (list e) ty))))))))
+		(g:fpfrom e et ty))))))))))
+;; the constant e as a literal of the float type ty, or false: `x > 1`, `f = 0`,
+;; `f = 999999.9` need no helper, at run time, to say what the compiler knows. Both
+;; round to nearest, as the helpers do. An unsigned constant with its top bit set,
+;; and the one int with no positive, go the long way: g:fpint negates.
+(define g:fpknown (lambda (e ty)
+	(begin
+		(define h (head e))
+		(if (= h 'num)
+			(begin
+				(define t (g:nz (index e 2)))
+				(if (g:fp? t) (if (g:fpfits? e ty) (g:fpconst e ty) false)
+				(if (if (g:isptr t) true (g:svalue? t)) false
+				(if (< (g:second e) 0)
+					(if (g:uns? (g:promote t)) false
+					(if (= (g:second e) (- 0 (g:second e))) false
+						(g:fpint (g:second e) ty)))
+					(g:fpint (g:second e) ty)))))
+		(if (= h 'llnum)
+			(if (if (= (index e 3) g:DOUBLE) (g:fpfits? e ty) false) (g:fpconst e ty) false)
+		(if (= h 'neg)
+			(if (if (g:fplit? (g:second e)) (g:fpfits? (g:second e) ty) false)
+				(g:fpnegated (g:fpconst (g:second e) ty) ty) false)
+		false))))))
+;; can the literal l be made a literal of type ty? A double whose size a float cannot
+;; hold (1e300, 1e-50, and the edges where rounding might carry it out) is the
+;; run-time conversion's to answer, infinity or a subnormal: only the normal range,
+;; well inside, is folded.
+(define g:fpfits? (lambda (l ty)
+	(if (= ty g:DOUBLE) true
+	(if (= (head l) 'llnum) (g:fpfits/e (g:third l))
+	(if (= (g:nz (index l 2)) g:DOUBLE) (g:fpfits/e (bit:shr (g:second l) 32))
+	true)))))
+(define g:fpfits/e (lambda (hi)
+	(begin
+		(define e (bit:and (bit:shr hi 20) 2047))
+		(if (= e 0) (= 0 (bit:and hi 1048575))     ;; 0.0 and -0.0 only
+		(if (< e 900) false (< e 1150))))))
+;; the literal l of type ty with its sign the other way
+(define g:fpnegated (lambda (l ty)
+	(if (= ty g:FLOAT) (list 'num (bit:xor (g:second l) g:SIGN32) g:FLOAT)
+	(if g:W64 (list 'num (bit:xor (g:second l) (bit:shl 1 63)) g:DOUBLE)
+	(list 'llnum (g:second l) (bit:xor (g:third l) g:SIGN32) g:DOUBLE)))))
 ;; the helper that makes a float type out of an integer type: by the
 ;; integer's width and signedness after promotion
 (define g:fromfn (lambda (et ty)
@@ -1217,9 +1382,17 @@
 	(if (g:isptr ty) (g:die "a float or double cannot be converted to a pointer")
 	(if (g:svalue? ty) (g:die "a float or double cannot be converted to a struct")
 	(begin
-		(g:fpcall (g:tofn ty (g:typeof e)) (list e) g:INT)
-		(define rt (g:third (g:find (g:tofn ty (g:typeof e)))))
-		(g:convert! rt ty)
+		(define ft (g:typeof e))
+		(define fn (g:tofn ty ft))
+		(if (if (g:hwfp?) (= fn (g:fpname ft "to_i")) false)
+			(begin
+				(g:expr e) (g:emit '(PSH))
+				(g:fpu! (if (= ft g:FLOAT) 8 24) 2)
+				(set! g:ty g:INT)
+				(g:convert! g:INT ty))
+		(begin
+			(g:fpcall fn (list e) g:INT)
+			(g:convert! (g:third (g:find fn)) ty)))
 		(set! g:ty ty)))))))
 
 ;; lv = rv, either side a float
@@ -1227,6 +1400,12 @@
 	(begin
 		(define t (g:lvtype lv))
 		(if (g:fp? t)
+			(if (g:stl? lv)
+			(begin
+				(g:wcheck lv "assignment")
+				(g:fpval rv t)
+				(g:stl! lv)
+				(set! g:ty t))
 			(begin
 				(g:addr lv)
 				(if g:lastarray (g:die "bad lvalue in assignment") nil)
@@ -1234,12 +1413,13 @@
 				(g:emit '(PSH))
 				(g:fpval rv t)
 				(g:store! t)
-				(set! g:ty t))
+				(set! g:ty t)))
 		;; an integer lvalue: the value converted as a cast converts it
 		(g:expr (list 'assign lv (list 'cast t rv)))))))
 
 ;; -x: the sign bit, or __c4d_neg for a double in two words
 (define g:fpneg (lambda (x)
+	(if (g:fplit? x) (g:expr (g:fpnegated x (g:typeof x)))
 	(begin
 		(define t (g:typeof x))
 		(if (g:ll? t) (g:fpcall "__c4d_neg" (list x) t)
@@ -1248,15 +1428,77 @@
 			(g:emit '(PSH))
 			(g:emit (list 'IMM (if (= t g:FLOAT) g:SIGN32 g:MIN)))
 			(g:emit '(XOR))
-			(set! g:ty t))))))
+			(set! g:ty t)))))))
+
+;; A float compared with a double need not be made a double. Two floats widened compare as
+;; they are. A float and a double constant D compare the same as the float and D rounded the
+;; right way: every float is below D or above it, so f > D is f > the float below D, f < D
+;; is f < the float above it. If D is a float there is no way to go, and if it is not, f == D
+;; is plain false, left to run time for the sake of what f does to get there. Only where
+;; g:fpfits/e says D is well inside a float's range.
+;;
+;; the float a double expression widens, or false
+(define g:fpwidened (lambda (e)
+	(if (= (g:typeof e) g:FLOAT) e
+	(if (= (head e) 'cast)
+		(if (if (= (g:second e) g:DOUBLE) (= (g:typeof (g:third e)) g:FLOAT) false) (g:third e) false)
+	false))))
+(define g:fpsigned (lambda (neg m) (if neg (bit:or m g:SIGN32) m)))
+;; the literal l (two words) as a float, for operator h with the float on its left, or false
+(define g:fpround (lambda (l h)
+	(if (not (= (head l) 'llnum)) false
+	(if (not (g:fpfits/e (g:third l))) false
+	(begin
+		(define hi (g:third l))
+		(define neg (not (= 0 (bit:and hi g:SIGN32))))
+		(define e (bit:and (bit:shr hi 20) 2047))
+		(if (= e 0) (list 'num (g:fpsigned neg 0) g:FLOAT)
+		(begin
+			(define m (bit:or (bit:shl (- e 896) 23)
+				(bit:or (bit:shl (bit:and hi 1048575) 3) (bit:and (bit:shr (g:second l) 29) 7))))
+			(if (= 0 (bit:and (g:second l) 536870911)) (list 'num (g:fpsigned neg m) g:FLOAT)
+			(if (if (= h 'eq) true (= h 'ne)) false
+			;; the magnitude truncated is the float nearer zero
+			(list 'num (g:fpsigned neg
+				(if (if (if (= h 'gt) true (= h 'le)) (not neg) (if (= h 'lt) neg (if (= h 'ge) neg false)))
+					m (+ m 1))) g:FLOAT))))))))))
+(define g:fpmirror (lambda (h)
+	(if (= h 'lt) 'gt (if (= h 'gt) 'lt (if (= h 'le) 'ge (if (= h 'ge) 'le h))))))
+;; (h x y) with both sides floats, if that is the same question; or false
+(define g:fpnarrow (lambda (h x y)
+	(if g:W64 false
+	(if (not (= (g:fpuac (g:typeof x) (g:typeof y)) g:DOUBLE)) false
+	(begin
+		(define fx (g:fpwidened x))
+		(define fy (g:fpwidened y))
+		(if (not (= fx false))
+			(if (not (= fy false)) (list h fx fy)
+			(begin
+				(define k (g:fpknown y g:DOUBLE))
+				(define r (if (= k false) false (g:fpround k h)))
+				(if (= r false) false (list h fx r))))
+		(if (not (= fy false))
+			(begin
+				(define k2 (g:fpknown x g:DOUBLE))
+				(define r2 (if (= k2 false) false (g:fpround k2 (g:fpmirror h))))
+				(if (= r2 false) false (list (g:fpmirror h) fy r2)))
+		false)))))))
 
 ;; the helper's -1 / 0 / 1 / 2 (unordered) to C's answer: a NaN is
 ;; unequal to everything and in no order with anything
 (define g:fpcompare (lambda (e)
 	(begin
+		(define n (g:fpnarrow (head e) (g:second e) (g:third e)))
+		(if (not (= n false)) (g:fpcompare/2 n) (g:fpcompare/2 e)))))
+(define g:fpcompare/2 (lambda (e)
+	(begin
 		(define h (head e))
 		(define ty (g:fpuac (g:typeof (g:second e)) (g:typeof (g:third e))))
-		(g:fpcall (g:fpname ty "cmp") (list (g:fpwrap (g:second e) ty) (g:fpwrap (g:third e) ty)) g:INT)
+		(if (g:hwfp?)
+			(begin
+				(g:fpuargs ty (g:fpwrap (g:second e) ty) (g:fpwrap (g:third e) ty))
+				(g:fpu! (g:fpuop ty 'cmp) 3))
+		(g:fpcall (g:fpname ty "cmp") (list (g:fpwrap (g:second e) ty) (g:fpwrap (g:third e) ty)) g:INT))
 		(g:emit '(PSH))
 		(if (= h 'eq) (begin (g:emit '(IMM 0)) (g:emit '(EQ)))
 		(if (= h 'ne) (begin (g:emit '(IMM 0)) (g:emit '(NE)))
@@ -1542,28 +1784,54 @@
 	(g:incdec e op false)))
 (define g:incdec (lambda (e op post)
 	(begin
+		(define used (not g:vunused))
+		(set! g:vunused false)
+		(define stl (g:stl? (g:second e)))
 		(g:addr (g:second e))
 		(if g:lastarray (g:die "bad lvalue in pre-increment") nil)
 		(define t g:ty)
 		(g:wcheck (g:second e) (if (= op 'ADD) "increment" "decrement"))
-		(g:emit '(PSH))
+		(if stl nil (g:emit '(PSH)))
 		(g:load! t)
 		(g:emit '(PSH))
 		(g:emit (list 'IMM (g:step t)))
 		(g:emit (list op))
 		(if post nil (g:sconv! (g:promote t) t))
-		(g:store! t)
+		(if stl (g:stl! (g:second e)) (g:store! t))
+		(if (if post false (if used (= t g:UCHAR) false)) (g:mask! 255) nil)
 		(set! g:ty t))))
 
 ;; x++ / x-- (post): as pre, then undo the adjustment in the result
 (define g:postincdec (lambda (e op unop)
 	(begin
+		(define used (not g:vunused))
+		(set! g:vunused false)
+		(if (if used (g:stl? (g:second e)) false)
+			;; a local, wanted: the value is on the stack through the store
+			;; and POPA has it back, for *p++ in a loop
+			(begin
+				(g:addr (g:second e))
+				(define t g:ty)
+				(g:wcheck (g:second e) (if (= op 'ADD) "increment" "decrement"))
+				(g:load! t)
+				(g:emit '(PSH))
+				(g:emit '(PSH))
+				(g:emit (list 'IMM (g:step t)))
+				(g:emit (list op))
+				(g:stl! (g:second e))
+				(g:emit '(POPA))
+				(set! g:ty t))
+		(begin
 		(g:incdec e op true)
 		(define t g:ty)
-		(g:emit '(PSH))
-		(g:emit (list 'IMM (g:step t)))
-		(g:emit (list unop))
-		(set! g:ty t))))
+		(if used
+			(begin
+				(g:emit '(PSH))
+				(g:emit (list 'IMM (g:step t)))
+				(g:emit (list unop))
+				(if (= t g:UCHAR) (g:mask! 255) nil))
+			nil)
+		(set! g:ty t))))))
 
 ;; The types down an expression's left spine, while it is binary
 ;; operators: (type-of x, type-of its left operand, ...), in one pass.
@@ -1848,8 +2116,22 @@
 (define g:comma (lambda (es)
 	(if (empty? (tail es)) (g:expr (head es))
 	(begin
-		(g:expr (head es))
+		(g:effect (head es))
 		(next g:comma (tail es))))))
+
+;; x, whose value nobody wants. A float's or a long long's ++ goes another way
+;; (g:fpincdec, g:llexpr), which never reads g:vunused: it must not be left set.
+(define g:effect (lambda (x)
+	(begin
+		(define h (head x))
+		(if (g:incdec? h)
+			(begin
+				(define t (g:lvtype (g:second x)))
+				(if (if (g:fp? t) true (g:ll? t)) nil (set! g:vunused true)))
+		(if (= h 'assign)
+			(if (= (g:lvtype (g:second x)) g:UCHAR) (set! g:vunused true) nil)
+		nil))
+		(g:expr x))))
 
 (define g:expr (lambda (e)
 	(if g:fpon (if (g:fpnode? e) (g:fpexpr e) (g:expr/0 e)) (g:expr/0 e))))
@@ -1876,10 +2158,24 @@
 		(if (= h 'assign)
 			(begin
 				(define lv (g:second e))
+				(define used (not g:vunused))
+				(set! g:vunused false)
 				(if (if gen:cisc
 						(if (= (head lv) 'index) (g:cisc-eligible-index? lv) false)
 						false)
 					(g:indexstore-cisc lv (g:third e))
+					(if (g:stl? lv)
+					(begin
+						(define t (g:lvtype lv))
+						(g:wcheck lv "assignment")
+						(g:expr (g:third e))
+						(g:sconv! g:ty t)
+						(if (g:isptr t)
+							(if (g:dropped? (g:qualof lv) (g:qualof (g:third e)))
+								(g:qwarn "assignment") nil)
+						nil)
+						(g:stl! lv)
+						(set! g:ty t))
 					(begin
 						(g:addr lv)
 						(if g:lastarray (g:die "bad lvalue in assignment") nil)
@@ -1894,6 +2190,7 @@
 						nil)
 						(g:store! t)
 						(set! g:ty t))))
+				(if (if used (= g:ty g:UCHAR) false) (g:mask! 255) nil))
 		(if (= h 'deref)
 			(begin
 				(g:expr (g:second e))
@@ -2112,7 +2409,9 @@
 				(define scope g:syms)
 				(g:stmts (tail s))
 				(set! g:syms scope))
-		(if (= h 'expr) (g:expr (g:second s))
+		(if (= h 'expr)
+			(begin
+				(g:effect (g:second s)))
 		(if (= h 'if) (g:ifstmt s)
 		(if (= h 'while) (g:whilestmt s)
 		(if (= h 'dowhile) (g:dowhilestmt s)
@@ -2213,7 +2512,7 @@
 		(define oc g:cont)
 		(set! g:brk lend)
 		(set! g:cont lstep)
-		(if (= (g:second s) nil) nil (g:expr (g:second s)))
+		(if (= (g:second s) nil) nil (g:effect (g:second s)))
 		(g:label! lc)
 		(if (= (g:third s) nil) nil
 		(begin
@@ -2223,7 +2522,7 @@
 		(g:stmt (index s 4))
 		(g:loopline here)
 		(g:label! lstep)
-		(if (= (index s 3) nil) nil (g:expr (index s 3)))
+		(if (= (index s 3) nil) nil (g:effect (index s 3)))
 		(g:emit (list 'JMP (list 'code lc)))
 		(g:label! lend)
 		(set! g:brk ob)
@@ -2435,6 +2734,9 @@
 ;; docs/c4or1k-design.md's M12 section. Off by default; code compiled
 ;; with it must run under c4mp, not c4m (c4m traps the new opcodes).
 (define gen:cisc false)
+(define gen:fuse false)
+;; -mfpu: a float's operations are the FPU opcode where they stand (g:fpuargs)
+(define gen:fpu false)
 (define g:stubs nil)     ;; (LABEL ...) pending stub labels
 (define g:externs nil)   ;; (NAME TYPE VARIADIC) in first-seen order
 (define g:nexterns 0)
@@ -3131,7 +3433,7 @@
 					(g:emit '(SI))))
 			(g:localaggr d val)))
 		(if (if (= (head init) 'braces)
-				(not (if (g:ll? (- (g:second d) g:PTR)) true (g:rowty? (- (g:second d) g:PTR)))) false)
+				(not (if (g:ll? (- (g:second d) g:PTR)) true (if (g:fp? (- (g:second d) g:PTR)) true (g:rowty? (- (g:second d) g:PTR))))) false)
 			(begin
 				(if (> (length (g:second init)) size)
 					(g:die (+ "too many initializers for " (g:third d))) nil)

@@ -100,6 +100,7 @@ function flush() {
 
 function flushDisplay() {
   if (!gui) return;
+  gui.onPresent = flushDisplay;
   const frames = gui.drain();
   if (frames) {
     if (ring) {
@@ -189,9 +190,12 @@ function tick() {
   const now = performance.now();
   if (parked) { lostMs += now - parkedAt; parked = false; }
   const dev = vm.dev;
-  // Paced, a slice is 16 simulated milliseconds, so the machine is never
-  // more than a frame ahead of the clock. Unpaced, it is simply big.
-  const slice = bootMsg.unpaced ? 5e6 : dev.cyclesPerMs * 16;
+  // Paced, a slice is 4 simulated milliseconds, so the machine is never
+  // more than a frame ahead of the clock. And on a host slower than the MHz
+  // asked for, TIME crawls through a slice and then jumps by what it lost
+  // (realtime, below): over 16 ms at 400 MHz, 50 ms of crawl and a jump of 34,
+  // which a game paced by TIME sees as uneven frames. Unpaced, it is simply big.
+  const slice = bootMsg.unpaced ? 5e6 : dev.cyclesPerMs * 4;
   const t = performance.now();
   let r;
   try {

@@ -23,6 +23,29 @@ double gda[4] = { 0.5, -3, 1e-300, 4.9e-324 };
 struct body { char tag; float m; double v[2]; int n; };
 struct body gb = { 'b', 1.25f, { 2.5, -0.125 }, 42 };
 
+// for the order a side effect happens in, whatever the compiler does with the operands
+int fseq;
+float fnext(void) { fseq = fseq + 1; return fseq; }
+double dnext(void) { fseq = fseq + 1; return fseq; }
+
+// every way of comparing v with a constant, or a constant with v
+void cmp_01(char *what, float v) {
+    printf("%s a %d%d%d", what, v > 0.1, v >= 0.1, v < 0.1);
+    printf("%d%d%d", v <= 0.1, v == 0.1, v != 0.1);
+    printf(" %d%d%d", 0.1 > v, 0.1 >= v, 0.1 < v);
+    printf("%d%d%d\n", 0.1 <= v, 0.1 == v, 0.1 != v);
+    printf("%s n %d%d%d", what, v > -0.1, v >= -0.1, v < -0.1);
+    printf("%d%d%d", v <= -0.1, v == -0.1, v != -0.1);
+    printf(" %d%d%d%d\n", -0.1 > v, -0.1 >= v, -0.1 < v, -0.1 <= v);
+    printf("%s x %d%d%d", what, v > 0.5, v >= 0.5, v < 0.5);
+    printf("%d%d%d", v <= 0.5, v == 0.5, v != 0.5);
+    printf(" %d%d\n", 0.5 > v, 0.5 == v);
+    printf("%s z %d%d%d", what, v > 0.0, v < 0.0, v == 0.0);
+    printf("%d%d%d\n", v != 0.0, v == -0.0, v > -0.0);
+    printf("%s f %d%d%d", what, v > 1e300, v < 1e300, v > 1e-300);
+    printf("%d%d%d\n", v < 1e-300, v < 3.4028235677973366e38, v > 1e-46);
+}
+
 float scale(float x, int k) { return x * k; }
 double hyp2(double a, double b) { return a * a + b * b; }
 float fneg(float x) { return -x; }
@@ -140,5 +163,116 @@ int main() {
     b = 0.1f; d = b; c = d; printf("roundtrip %d\n", b == c);
     d = 0.1; c = d; printf("narrowed %d\n", c == d);
     printf("sizeof %d %d\n", (int)sizeof(double), (int)sizeof(1.5));
+
+    // no spaces: the - and the + are the expression's
+    a = 2.5; pd("tight-", 1.0-a); pd("tight+", 1.0+a); pd("tight-e", 1.5e1-a); pd("tighte-", 1.5e-1+a);
+    // a local float array of integers: floats, each of them
+    {
+        float t[3] = {-1, 0, 2};
+        float m[2] = {1, -1.0};
+        pf("arr0", t[0]); pf("arr1", t[1]); pf("arr2", t[2]); pf("mix0", m[0]); pf("mix1", m[1]);
+    }
+    // constants made literals by the compiler: each as the run-time conversion rounds it
+    {
+        float kf, zero;
+        double kd;
+        int two;
+        two = 2;
+        zero = 0;
+        kf = 16777217; pf("k-i2f-round", kf);
+        kf = -16777219; pf("k-i2f-neg", kf);
+        kf = 2147483647; pf("k-i2f-max", kf);
+        kf = -2147483647 - 1; pf("k-i2f-min", kf);
+        kf = 4294967295u; pf("k-u2f-max", kf);
+        kf = 0; pf("k-zero", kf);
+        kf = 'A'; pf("k-char", kf);
+        kd = 16777217; pd("k-i2d", kd);
+        kd = -7; pd("k-i2d-neg", kd);
+        kd = 4294967295u; pd("k-u2d-max", kd);
+        kf = 999999.9; pf("k-d2f", kf);
+        kf = 1.1; pf("k-d2f-round", kf);
+        kf = -1.1; pf("k-d2f-neg", kf);
+        kf = 1e300; pf("k-d2f-inf", kf);
+        kf = -1e300; pf("k-d2f-neginf", kf);
+        kf = 1e-50; pf("k-d2f-under", kf);
+        kf = 1e-40; pf("k-d2f-subnormal", kf);
+        kf = 3.4028235e38; pf("k-d2f-edge", kf);
+        kf = 3.4028236e38; pf("k-d2f-carry", kf);
+        kd = 1.1f; pd("k-f2d", kd);
+        kd = -1.1f; pd("k-f2d-neg", kd);
+        kf = -0.0; pf("k-negzero-d2f", kf);
+        kd = -0.0f; pd("k-negzero-f2d", kd);
+        kf = -1.5f; pf("k-neg-f", kf);
+        kd = -1.5; pd("k-neg-d", kd);
+        pf("k-arg", two * 1.5f + 2);
+        pd("k-arg-d", two * 1.5 + 2);
+        printf("k-cmp %d %d %d %d\n", (float)two > 1, (float)two == 2, (float)two < 1, zero == 0);
+        printf("k-cmp-d %d %d\n", two > 1.5, (float)two <= 2.0);
+        printf("k-cast %x %x\n", fb((float)3), fb((float)-3));
+    }
+    // a float local takes its value through STL under -mfuse: the assignment's own
+    // value, ++ and --, and a double beside it, which does not fit in the word
+    {
+        float sa, sb, sc;
+        double sd;
+        sa = 1.5f; sb = sa; sa = sb + sb; pf("stl-f", sa); pf("stl-g", sb);
+        sc = (sa = 2.5f) + 1; pf("stl-val", sc); pf("stl-val2", sa);
+        sb = sa++; pf("stl-post", sb); pf("stl-post2", sa);
+        sb = --sa; pf("stl-pre", sb);
+        sd = sa; sd = sd * 2; pd("stl-d", sd);
+        sc = sd; pf("stl-d2f", sc);
+    }
+    // -mfpu: the opcode where the helper was. All four operations and their operands
+    // in the order the opcode wants, however deep; the conversions; and an operand with
+    // an effect, which has to come first still when it stands first
+    {
+        float a, b;
+        double d, e;
+        int i;
+        char c;
+        a = 1.5f; b = 0.25f; d = 1.5; e = 0.25; i = 7; c = -3;
+        pf("fpu-add", a + b); pf("fpu-sub", a - b); pf("fpu-mul", a * b); pf("fpu-div", a / b);
+        pd("fpu-dadd", d + e); pd("fpu-dsub", d - e); pd("fpu-dmul", d * e); pd("fpu-ddiv", d / e);
+        pf("fpu-nest", (a + b) * (a - b) / (a * b + 1) - (b - a));
+        pd("fpu-dnest", (d + e) * (d - e) / (d * e + 1) - (e - d));
+        pd("fpu-mix", a * d - b / e + i);
+        pf("fpu-i2f", i); pd("fpu-i2d", i); pf("fpu-c2f", c); pd("fpu-c2d", c);
+        printf("fpu-f2i %d %d %d\n", (int)a, (int)-a, (int)(a * 1000));
+        printf("fpu-d2i %d %d %d\n", (int)d, (int)-d, (int)(d * 1000));
+        printf("fpu-f2c %d %d\n", (char)(a * 100), (unsigned char)(a * 200));
+        printf("fpu-d2c %d %d\n", (char)(d * 100), (unsigned char)(d * 200));
+        printf("fpu-f2u %x %x\n", (unsigned int)(a * 2000000000.0f), (unsigned int)(d * 2000000000.0));
+        pf("fpu-u2f", 3000000000u); pd("fpu-u2d", 3000000000u);
+        pf("fpu-w", (float)(d + e)); pd("fpu-n", (double)a + (double)b);
+        fseq = 0; pf("fpu-order", fnext() - fnext());
+        fseq = 0; pd("fpu-order-d", dnext() / dnext());
+        fseq = 0; pf("fpu-order-l", fnext() - 1.0f);
+        fseq = 0; pf("fpu-order-r", 1.0f - fnext());
+        fseq = 0; pd("fpu-order-m", fnext() - dnext() * fnext());
+        fseq = 0; printf("fpu-order-c %d %d\n", fnext() < fnext(), dnext() > dnext());
+        fseq = 0; a = fnext() + (b = fnext()); pf("fpu-order-a", a); pf("fpu-order-b", b);
+    }
+    // a float against a double constant compares as floats, rounded the way the operator
+    // needs: the floats either side of 0.1, the one nearest, both signs, and what is no number
+    {
+        float v, zero;
+        v = 0.1f; cmp_01("cmp-near", v);
+        v = 0.099999994f; cmp_01("cmp-below", v);
+        v = 0.10000001f; cmp_01("cmp-above", v);
+        v = -0.1f; cmp_01("cmp-nnear", v);
+        v = -0.099999994f; cmp_01("cmp-nbelow", v);
+        v = -0.10000001f; cmp_01("cmp-nabove", v);
+        v = 0.5f; cmp_01("cmp-half", v);
+        v = 0.49999997f; cmp_01("cmp-under", v);
+        zero = 0; cmp_01("cmp-zero", zero);
+        v = -zero; cmp_01("cmp-nzero", v);
+        v = 1 / zero; cmp_01("cmp-inf", v);
+        v = -1 / zero; cmp_01("cmp-ninf", v);
+        v = zero / zero; cmp_01("cmp-nan", v);
+        v = 3.4028235e38f; cmp_01("cmp-max", v);
+        v = 1e-45f; cmp_01("cmp-tiny", v);
+        printf("cmp-both %d %d %d %d\n", (double)v < (double)zero, (double)v > zero, zero == (double)zero, (double)zero >= zero);
+        fseq = 0; fseq = (fnext() == 0.1) + fseq * 10; printf("cmp-effect %d\n", fseq);
+    }
     return 0;
 }

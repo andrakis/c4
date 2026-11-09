@@ -476,6 +476,16 @@ The scheduler honours it in four places in sched.c:
 Kernel tasks stay on CPU 0 and idle tasks on their own CPU; neither can
 be pinned.
 
+What draws goes to CPU 0, by default (`sched_softpin`, 2026-11-05): a program that
+takes the display (`DISP_TAKE`, the desktop and every full-screen game) or opens a
+window (`DISP_PIN`, window.c) gets a mask of CPU 0, unless something has already given
+it one. Its frames go to CPU 0 anyway, each from another CPU a request and its answer,
+and it is what a person watches. `TF_PINSOFT` says the mask was not asked for, so a
+child does not inherit it: what a desktop starts from a Terminal, a build among them,
+may run anywhere. Anything that sets the mask clears the flag, and `pin` before the
+program means it is never set: running several games at once, each on a CPU of its
+own, is what `pin` is for.
+
 `pin` is the command:
 
 ```

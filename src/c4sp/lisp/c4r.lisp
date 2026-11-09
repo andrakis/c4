@@ -626,8 +626,7 @@
 						(if (= -1 T) (list 'code (third P) Operand)
 							(if (= -2 T) (list 'data (third P) Operand)
 								;; extern keeps the patch value word too:
-								;; it is compile-time garbage, preserved
-								;; for the byte-identical round trip
+								;; what to add to the symbol (opt:refplus)
 								(list 'extern T Operand (third P))))) Acc))
 					(next c4r:decode-code F At Codelen Labels (tail Patches) (+ Pos 2) Acc))
 				(begin
@@ -883,8 +882,7 @@
 					(string:word! Out (+ PatchAt (* 2 W))
 						(if (= 'code T) (c4r:label LT (second Op))
 							(if (= 'data T) (second Op)
-								;; extern: the preserved garbage value word,
-								;; or 0 for optimizer-created references
+								;; extern: what to add to the symbol, or 0
 								(if (= 4 (length Op)) (index Op 3) 0))))
 					(set! PatchAt (+ PatchAt (* 3 W)))
 					;; operand word: raw if preserved, else the target

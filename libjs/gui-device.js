@@ -171,14 +171,20 @@ export class GuiDevice {
     let frames;
     try { frames = this.mbox.drain(); }
     catch { this.mbox.layout(); return; }          // a corrupt ring: start it over
+    let presented = false;
     for (const f of frames) {
       if (f.type === CMD.BLIT8) { this.blit8Checked(f.payload); continue; }
       if (this.queued + this.queue.length + 2 + f.payload.length > QUEUE_LIMIT) { this.lostCommands++; continue; }
       this.queue.push(2 + f.payload.length, f.type);
       for (let i = 0; i < f.payload.length; i++) this.queue.push(f.payload[i]);
       this.commands++;
-      if (f.type === CMD.PRESENT) this.presents++;
+      if (f.type === CMD.PRESENT) { this.presents++; presented = true; }
     }
+    // A finished frame goes out now, whichever CPU rang (the worker's
+    // flushDisplay), not when CPU 0's slice ends: at 400 MHz a slice is
+    // 6.4M cycles, 50 ms on a host running 130M a second, and the page,
+    // which shows only the newest, saw every third frame a game made.
+    if (presented && this.onPresent) this.onPresent();
   }
 
   // Everything queued since the last call, as one Int32Array of

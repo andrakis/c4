@@ -270,7 +270,7 @@ export function analyse(img) {
       else if (s !== null) ins.ref.str = s;
     } else if (pt && pt.type > 0) {
       const s = byId.get(pt.type);
-      ins.ref = { kind: 'extern', name: s ? s.name : `symbol ${pt.type}`, sym: s };
+      ins.ref = { kind: 'extern', name: (s ? s.name : `symbol ${pt.type}`) + (pt.val ? `+${pt.val}` : ''), sym: s };
     } else if (BP_REL.has(ins.op)) {
       ins.ref = { kind: 'bp', n: ins.arg };
     }

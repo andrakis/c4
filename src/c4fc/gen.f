@@ -113,6 +113,11 @@ HELP-RESET
    t T-BYTE? IF oSC OP, EXIT THEN
    t T-HALF? IF h_st16 2 HCALL EXIT THEN
    oSI OP, ;
+\ SC leaves in A the byte it stored as a signed char (c4's own rule, right for
+\ char), so the value of an assignment to an unsigned char, or of its ++ or
+\ --, has to be cut back to 0..255. n_expst says when nobody wants the value,
+\ so that `p[i] = c;` costs what it always did. As c4lc's g:vunused.
+VARIABLE VUNUSED   0 VUNUSED !
 
 \ The conversion code for a value of type f in A, to type t: only to an
 \ integer type, and nothing when it already fits (c4lc's g:convert!).
@@ -256,15 +261,43 @@ HELP-RESET
    n >rhs @ GEN-ADDR   oPSH OP,
    n >lhs @ CT T-SIZE oIMM OP2,   oPSH OP,
    oMCPY OP,   3 oADJ OP2, ;
-:M GEN n_asgn {: n -- :}
+\ A word-sized local, under -mfuse: the value and then STL, with no address on the
+\ stack while the value is worked out (c4lc's g:stl?).
+: STL? ( lhs -- f ) {: l | y t -- f :}
+   FUSE @ 0= IF 0 EXIT THEN
+   l >TAG n_var <> IF 0 EXIT THEN
+   l >sym @ TO y
+   y y.agg @ IF 0 EXIT THEN
+   y y.ct @ TO t
+   t T-BYTE? t T-HALF? OR t T-STRUCT? OR 0= ;
+: STL, ( lhs -- )  >sym @ y.val @ oSTL OP2, ;
+
+\ x, whose value nobody wants (c4lc's g:effect).
+: EFFECT ( x -- ) {: x -- :}
+   x >TAG n_preinc =  x >TAG n_predec = OR  x >TAG n_postinc = OR  x >TAG n_postdec = OR
+   IF 1 VUNUSED ! THEN
+   x >TAG n_asgn = IF x CT t_uchar = VUNUSED ! THEN
+   x GEN ;
+
+:M GEN n_asgn {: n | u -- :}
    n >lhs @ CT T-STRUCT? IF n STRUCT-ASGN EXIT THEN
+   VUNUSED @ TO u  0 VUNUSED !
    \ base and index both stay on the stack, unscaled, until the value is
    \ evaluated -- SXI wants all three, and computing the address first
    \ would need a slot to hold it across the right-hand side.
    n >lhs @ CISC-INDEX? IF
       n >lhs @ >lhs @ GEN  oPSH OP,
       n >lhs @ >rhs @ GEN  oPSH OP,
-      n >rhs @ GEN  oSXI OP, EXIT THEN
+      n >rhs @ GEN  oSXI OP,
+      u 0= n >lhs @ CT t_uchar = AND IF 255 MASK, THEN EXIT THEN
+   n >lhs @ STL? IF
+      n >lhs @ S" assignment" WCHECK
+      n >rhs @ GEN
+      n >rhs @ CT  n >lhs @ CT  SCONV,
+      n >lhs @ CT T-PTR? IF
+         n >lhs @ CQ  n >rhs @ CQ  DROPPED? IF S" assignment" QWARN THEN THEN
+      n >lhs @ STL,
+      EXIT THEN
    n >lhs @ GEN-ADDR
    n >lhs @ S" assignment" WCHECK
    oPSH OP,
@@ -272,7 +305,8 @@ HELP-RESET
    n >rhs @ CT  n >lhs @ CT  SCONV,
    n >lhs @ CT T-PTR? IF
       n >lhs @ CQ  n >rhs @ CQ  DROPPED? IF S" assignment" QWARN THEN THEN
-   n >lhs @ CT STORE, ;M
+   n >lhs @ CT STORE,
+   u 0= n >lhs @ CT t_uchar = AND IF 255 MASK, THEN ;M
 
 \ Pointer arithmetic scales by what the pointer points AT, and a step of
 \ one emits no multiply at all -- which is not an optimisation but what
@@ -383,7 +417,9 @@ HELP-RESET
 :M CQ n_comma {: n -- q :}  n >args @ n >argn @ 1- CELLS + @ CQ ;M
 :M GEN n_comma {: n | v -- :}
    n >args @ TO v
-   n >argn @ 0 ?DO I CELLS v + @ GEN LOOP ;M
+   n >argn @ 0 ?DO
+      I CELLS v + @  I 1+ n >argn @ = IF GEN ELSE EFFECT THEN
+   LOOP ;M
 
 \ What a call compiles to is decided entirely by the CLASS of the name
 \ being called: an opcode for a builtin, JSR to a known address, JSRI
@@ -565,7 +601,7 @@ VARIABLE UFN   0 UFN !
       r CELL+ @ STORE,
    LOOP ;M
 
-:M STMT n_expst  >expr @ GEN ;M
+:M STMT n_expst  >expr @ EFFECT ;M
 \ Inside a spliced body there is no frame to leave, so a return is a
 \ jump to the end of the splice rather than a LEV. The value is already
 \ in A either way, which is the whole reason this needs no rewriting of
@@ -619,21 +655,42 @@ VARIABLE UFN   0 UFN !
 \ The post forms store the new value unconverted and take the step back
 \ off it: converting first would lose the carry the undo needs, and the
 \ loads convert anyway.
-: INCDEC, ( node op post -- ) {: n op post | t -- :}
+: INCDEC, ( node op post -- ) {: n op post | t u -- :}
+   VUNUSED @ TO u  0 VUNUSED !
    n >opnd @ CT TO t
    n >opnd @ GEN-ADDR
    n >opnd @ op oADD = IF S" increment" ELSE S" decrement" THEN WCHECK
-   oPSH OP,
+   n >opnd @ STL? 0= IF oPSH OP, THEN
    t LOAD,
    oPSH OP,  t STEP-OF oIMM OP2,  op OP,
    post 0= IF t T-PROMOTE t SCONV, THEN
-   t STORE, ;
+   n >opnd @ STL? IF n >opnd @ STL, ELSE t STORE, THEN
+   post 0=  u 0= AND  t t_uchar = AND IF 255 MASK, THEN ;
+\ a local, wanted: the value is on the stack through the store, and POPA has it back
+: POST-LOCAL, ( node op -- ) {: n op | t -- :}
+   n >opnd @ CT TO t
+   n >opnd @ GEN-ADDR
+   n >opnd @ op oADD = IF S" increment" ELSE S" decrement" THEN WCHECK
+   t LOAD,
+   oPSH OP,  oPSH OP,  t STEP-OF oIMM OP2,  op OP,
+   n >opnd @ STL,
+   oPOPA OP, ;
 :M GEN n_preinc   oADD 0 INCDEC, ;M
 :M GEN n_predec   oSUB 0 INCDEC, ;M
-:M GEN n_postinc {: n -- :}
-   n oADD 1 INCDEC,  oPSH OP, n >opnd @ CT STEP-OF oIMM OP2, oSUB OP, ;M
-:M GEN n_postdec {: n -- :}
-   n oSUB 1 INCDEC,  oPSH OP, n >opnd @ CT STEP-OF oIMM OP2, oADD OP, ;M
+:M GEN n_postinc {: n | u -- :}
+   VUNUSED @ TO u  0 VUNUSED !
+   u 0= IF n >opnd @ STL? IF n oADD POST-LOCAL, EXIT THEN THEN
+   n oADD 1 INCDEC,
+   u IF EXIT THEN
+   oPSH OP, n >opnd @ CT STEP-OF oIMM OP2, oSUB OP,
+   n >opnd @ CT t_uchar = IF 255 MASK, THEN ;M
+:M GEN n_postdec {: n | u -- :}
+   VUNUSED @ TO u  0 VUNUSED !
+   u 0= IF n >opnd @ STL? IF n oSUB POST-LOCAL, EXIT THEN THEN
+   n oSUB 1 INCDEC,
+   u IF EXIT THEN
+   oPSH OP, n >opnd @ CT STEP-OF oIMM OP2, oADD OP,
+   n >opnd @ CT t_uchar = IF 255 MASK, THEN ;M
 :M CT n_preinc   >opnd @ CT ;M
 :M CT n_predec   >opnd @ CT ;M
 :M CT n_postinc  >opnd @ CT ;M
@@ -719,13 +776,13 @@ CREATE CNTM MMAX CELLS ALLOT   VARIABLE CNTN   0 CNTN !
 \ step is emitted after the body -- so it is a genuine forward branch.
 :M STMT n_for {: n | top m bb cb cont -- :}
    BRKN @ TO bb   CNTN @ TO cb
-   n >init @ ?DUP IF GEN THEN
+   n >init @ ?DUP IF EFFECT THEN
    CHERE TO top
    -1 TO m                              \ patch 0 is a real patch index
    n >cond @ ?DUP IF GEN  oBZ BR, TO m THEN
    n >body @ STMT
    CHERE TO cont
-   n >step @ ?DUP IF GEN THEN
+   n >step @ ?DUP IF EFFECT THEN
    oJMP top BACK,
    m 0< 0= IF m >RES THEN
    bb cb CHERE cont RESOLVE-LOOP ;M

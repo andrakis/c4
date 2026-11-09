@@ -50,6 +50,13 @@ export function makeServer(root = ROOT, isolate = ISOLATE) {
           res.end(JSON.stringify(list));
           return;
         }
+        // without the slash, the page's relative URLs would name the directory above it
+        const [path, query] = req.url.split('?');
+        if (!path.endsWith('/')) {
+          res.writeHead(302, { location: path.replace(/^\/+/, '/') + '/' + (query === undefined ? '' : '?' + query) });
+          res.end();
+          return;
+        }
         p = join(p, 'index.html');
       }
       const body = await readFile(p);

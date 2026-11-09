@@ -373,7 +373,7 @@ VARIABLE EXTN   0 EXTN !
 : FIX-EXTERNS ( base -- ) {: b | p -- :}
    PN @ 0 ?DO
       I 3 * CELLS PATCH @ + TO p
-      p @ -1000 <= IF  b -1000 p @ - +  p !  0 p 2 CELLS + !  THEN
+      p @ -1000 <= IF  b -1000 p @ - +  p !  THEN        \ (its value: what to add, from opt.f)
       p @ -5 = p 2 CELLS + @ -1000 <= AND IF  b -1000 p 2 CELLS + @ - +  p 2 CELLS + !  THEN
    LOOP ;
 

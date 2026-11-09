@@ -223,6 +223,24 @@ message path.
   is emptied, then the worker empties drive 1 and boots in one step
   (`reset-files`, answered by `files-reset`), and a file the old machine
   sent in between is dropped rather than kept.
+- **A float's FPU opcode stays in the loop** (2026-11-06). Its operands are on the stack and
+  it touches nothing else (`fpuFloat`, `src/c4bb/sim/fpu.js`), so `run` and `runUser` do it
+  in their own `switch`. The way out, `sys()` and then `needChecks()` and a floor division
+  for the next interrupt on the way back, cost about 16 times the opcode's share of the
+  instructions. Quake's timedemo on the bare machine, with the same image: 82.2 s to 73.1 s.
+  A double's sub-ops stay too, if every address is plain memory, or under the MMU in the
+  windows and not across a page (`fpuPlain`, `fpuUser`); anything else takes the long way,
+  from the start, since nothing has been written yet.
+- **A finished frame goes out at once** (2026-11-05). A `PRESENT` reaching the device
+  flushes the commands to the page there (`gui.onPresent`, the worker's `flushDisplay`),
+  from whichever CPU rang, where they used to wait for CPU 0's slice to end. A slice was
+  16 simulated ms, 6.4M cycles at 400 MHz, 50 ms on a host running 130M a second, and the
+  page, which shows the newest, saw every third frame a game made. It is 4 simulated ms
+  now: with `realtime`, on a host slower than the MHz asked for, `TIME` crawls through a
+  slice and jumps by what it lost at the end, which a game paced by `TIME` sees as uneven
+  frames. And CPU 0 publishes the time the other CPUs read at every poll, not only when
+  one of them asks for something. Doom on 4 CPUs, MMU on, display updates a second: on
+  CPU 0 20.3 to 29.0, on CPU 1 27.6 to 28.4; at its smallest view, on CPU 0 35 to 49.5.
 - **The run loop** runs a slice (about 1M instructions, capped near 8 ms),
   flushes output, then:
   - on `sleep`, waits the requested time;

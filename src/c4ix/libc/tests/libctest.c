@@ -150,6 +150,10 @@ int main(int argc, char **argv) {
     printf("unix: vfork child %d waitpid status %d", pid > 0, waitpid(pid, &n, 0) == pid ? WEXITSTATUS(n) : -1);
     printf(" again %d\n", waitpid(pid, &n, WNOHANG));
 
+    // an offset on another library's global: c4opt folds it into the
+    // patch's value, and the loader has to add it
+    printf("loader: &optind + 1 is %d on\n", (int)((&optind + 1) - &optind));
+
     printf("libctest: done\n");
     return 0;
 }

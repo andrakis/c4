@@ -77,6 +77,62 @@ function darith(m, op, pa, pb, pr) {
 
 const cmp = (a, b) => (a !== a || b !== b) ? 2 : a < b ? -1 : a > b ? 1 : 0;
 
+// A float's sub-op, 1 to 8, whose operands are already in hand: a float is its bits,
+// so nothing here reads or writes the machine, and an interpreter's loop can do it
+// without leaving (libjs's, c4m.js and mmu.js).
+export function fpuFloat(op, a, b) {
+  if (op <= 5) return farith(op, a >>> 0, b >>> 0);
+  if (op === 6) return cmp(fval(a >>> 0), fval(b >>> 0));
+  if (op === 7) return fbits(Math.fround(a | 0));
+  return toInt(fval(a >>> 0));
+}
+
+// A double's sub-op, its words at word indexes into i32 that the caller has found and
+// checked, whole, before anything was written: so an interpreter's loop can do it too,
+// and take the long way, fpu() below, for an address it cannot answer for. Not 21 (sqrt).
+// a is the index of a's words, or for 23 and 25 the word itself; ib and ir as the sub-op
+// needs them. Returns what fpu() does.
+export function fpuDouble(i32, op, a, ib, ir) {
+  if (op === 23) {
+    D[0] = a | 0;
+    i32[ir] = DU[LO]; i32[ir + 1] = DU[HI];
+    return 0;
+  }
+  if (op === 25) {
+    const u = a >>> 0;
+    if (fnan(u)) {
+      const sig = u & 0x7fffff;
+      i32[ir] = (sig & 7) << 29;
+      i32[ir + 1] = (u & 0x80000000) | 0x7ff80000 | (sig >>> 3);
+    } else {
+      D[0] = fval(u);
+      i32[ir] = DU[LO]; i32[ir + 1] = DU[HI];
+    }
+    return 0;
+  }
+  const alo = i32[a] | 0, ahi = i32[a + 1] | 0;
+  DU[LO] = alo; DU[HI] = ahi;
+  const x = D[0];
+  if (op === 24) return toInt(x);
+  if (op === 26) {
+    if (dnan(alo, ahi)) return ((ahi & 0x80000000) | 0x7fc00000 | ((ahi & 0xfffff) << 3) | (alo >>> 29)) | 0;
+    return fbits(Math.fround(x));
+  }
+  const blo = i32[ib] | 0, bhi = i32[ib + 1] | 0;
+  DU[LO] = blo; DU[HI] = bhi;
+  const y = D[0];
+  if (op === 22) return cmp(x, y);
+  if (dnan(alo, ahi)) { i32[ir] = alo; i32[ir + 1] = ahi | 0x00080000; return 0; }
+  if (dnan(blo, bhi)) { i32[ir] = blo; i32[ir + 1] = bhi | 0x00080000; return 0; }
+  const c = op === 17 ? x + y : op === 18 ? x - y : op === 19 ? x * y : x / y;
+  if (c !== c) { i32[ir] = 0; i32[ir + 1] = 0xfff80000 | 0; return 0; }
+  D[0] = c;
+  i32[ir] = DU[LO]; i32[ir + 1] = DU[HI];
+  return 0;
+}
+// which addresses a double's sub-op reads and writes, by a bit each for 17 to 26
+export const FPU_A = 0x2af, FPU_B = 0x02f, FPU_R = 0x14f;
+
 // Run one FPU instruction; M has ld32(addr) and st32(addr, v). Returns
 // the accumulator, or undefined for a sub-op there is not.
 export function fpu(m, sp) {

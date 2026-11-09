@@ -459,7 +459,7 @@ static int link_modules(char *path, struct c4r_mod *mods, int n) {
     struct c4r_mod *m;
     char *p, *s;
     char name[128];
-    int k, i, j, ptype, paddr, addr, bad, len, dbid;
+    int k, i, j, ptype, paddr, pvalu, addr, bad, len, dbid;
     bad = 0;
     k = 0;
     while (k < n) {
@@ -484,18 +484,18 @@ static int link_modules(char *path, struct c4r_mod *mods, int n) {
         p = m->patches;
         i = 0;
         while (i < m->npatch) {
-            ptype = loader_word(p); paddr = loader_word(p + sizeof(int));
+            ptype = loader_word(p); paddr = loader_word(p + sizeof(int)); pvalu = loader_word(p + 2 * sizeof(int));
             p = p + 3 * sizeof(int);
             ++i;
             if (ptype < 0) continue;
-            if (ptype == dbid) { m->code[paddr] = L((int)m->slot); continue; }
+            if (ptype == dbid) { m->code[paddr] = L((int)m->slot + pvalu); continue; }
             if (!(s = mod_symbol(m, ptype))) {
                 kprintf("c4ix: loader: %s: a patch names symbol %d, which is not in its table\n", k > 1 ? m->path : path, ptype);
                 bad = 1;
                 continue;
             }
             if (m->pic && loader_nameis(sym_name(s), sym_namelen(s), "__c4_dbase")) {
-                m->code[paddr] = L((int)m->slot);
+                m->code[paddr] = L((int)m->slot + pvalu);
                 continue;
             }
             addr = 0;
@@ -522,7 +522,8 @@ static int link_modules(char *path, struct c4r_mod *mods, int n) {
                 bad = 1;
                 continue;
             }
-            m->code[paddr] = addr;
+            // &g + k, folded by c4opt: the patch's value is the k
+            m->code[paddr] = addr + pvalu;
         }
     }
     return !bad;
@@ -748,7 +749,7 @@ struct task *task_spawn_priv(char *path, int argc, int argv, int privs) {
         }
     }
     // the CPUs it may run on are its parent's (pin)
-    if (sched_cur && !sched_cur->cpuidle) { t->cpumask = sched_cur->cpumask; TF_PUT(t, TF_PINNED, t->cpumask); sched_setnice(t, sched_cur->nice); }
+    if (sched_cur && !sched_cur->cpuidle) { t->cpumask = (sched_cur->tflags & TF_PINSOFT) ? 0 : sched_cur->cpumask; TF_PUT(t, TF_PINNED, t->cpumask); sched_setnice(t, sched_cur->nice); }
     sched_unlock();
     if (con_is_booting())
         klog("task %d (%s) spawned by task %d, %s, %d KB of image\n", t->id, t->name,

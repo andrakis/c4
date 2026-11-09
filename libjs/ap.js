@@ -35,10 +35,14 @@ class ApDev {
   }
   simMs() { return Atomics.load(this.ctl, C.TIMEMS) | 0; }
   hostNow() { return Date.now(); }
-  // the boot stack's guard, as CPU 0 last set it (par.js ParHost)
-  get stackGuard() { return Atomics.load(this.ctl, C.GUARD); }
-  get stackBase() { return Atomics.load(this.ctl, C.GLO); }
-  get stackTop() { return Atomics.load(this.ctl, C.GHI); }
+  // the boot stack's guard, as CPU 0 last set it (par.js ParHost). Plain reads:
+  // MCPY alone looks at these 15 times a call, and in Atomics.load they took 9%
+  // of Quake's time on this CPU with no MMU (docs/quake-performance.md). They
+  // change only at boot, at a guard hit, and at shutdown, and the loop's own
+  // copy (guardLo) is already up to a slice old.
+  get stackGuard() { return this.ctl[C.GUARD]; }
+  get stackBase() { return this.ctl[C.GLO]; }
+  get stackTop() { return this.ctl[C.GHI]; }
 }
 
 class ApMachine extends Machine {

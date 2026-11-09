@@ -38,6 +38,12 @@ double sqrt(double x) { return m_from(__c4d_sqrt(m_bits(x))); }
 double trunc(double x) {
     int e;
     unsigned long long b, m;
+    // Most values fit an int, and the conversion costs far less than 64-bit
+    // shifts of the bits. (A result of 0 goes on, to keep the sign of -0.)
+    if (x > -2147483648.0 && x < 2147483648.0) {
+        e = (int)x;
+        if (e) return (double)e;
+    }
     b = m_bits(x);
     e = m_exp(x) - 1023;
     if (e >= 52) return x;                       // already whole, inf, NaN

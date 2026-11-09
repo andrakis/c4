@@ -252,6 +252,33 @@ void t_loop() {
 	printf("wrapped %u\n", i);
 }
 
+// The value of an assignment is the left side's, after the store: SC leaves a
+// signed char in A, which an unsigned char has to be cut back from. The same for
+// ++ and --, and nothing of it when nobody wants the value.
+void t_assignval() {
+	unsigned char t, *p;
+	unsigned char src[2];
+	signed char sc;
+	int a, b;
+	src[0] = 255;
+	src[1] = 1;
+	p = src;
+	printf("uc-ne %d\n", (t = p[0]) != 0xFF);
+	printf("uc-eq %d\n", (t = src[0]) == 255);
+	a = (t = p[0]);
+	printf("uc-val %d %d\n", a, t);
+	a = (sc = p[0]);
+	printf("sc-val %d %d\n", a, sc);
+	a = (t = 300);
+	printf("uc-cut %d\n", a);
+	t = 254; a = ++t; printf("uc-pre %d %d\n", a, t);
+	t = 255; a = t++; printf("uc-post %d %d\n", a, t);
+	t = 0; a = --t; printf("uc-dec %d %d\n", a, t);
+	t = 0; a = t--; printf("uc-postdec %d %d\n", a, t);
+	t = 200; t++; b = t; printf("uc-stmt %d\n", b);
+	a = (p[1] = 200); printf("uc-index %d %d\n", a, src[1]);
+}
+
 int main() {
 	t_globals();
 	t_wrap();
@@ -265,5 +292,6 @@ int main() {
 	t_calls();
 	t_printf();
 	t_loop();
+	t_assignval();
 	return 0;
 }

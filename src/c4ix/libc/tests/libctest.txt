@@ -32,4 +32,5 @@ getopt: verbose 1 n 3 rest one two
 dirent: libctest.txt found
 unix: lseek 6 world fstat 11 100644 nlink 1 ftruncate 5 link nlink 2 1 excl 1
 unix: vfork child 1 waitpid status 7 again -1
+loader: &optind + 1 is 1 on
 libctest: done

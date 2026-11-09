@@ -18,6 +18,7 @@
 // instruction's, before it changed any, so the instruction can run again.
 
 import { TLEV_ADDR, kernelPhys } from '../src/c4bb/sim/arena.js';
+import { fpuFloat, fpuDouble, FPU_A, FPU_B, FPU_R } from '../src/c4bb/sim/fpu.js';
 import { OP, STOP, TRAP, CPU_HALT_ADDR, LOCAL_BASE, LOCAL_END, C4I_MMU, MMU_BASE, MMU_END,
          hasOperand, isRom, isPlainOp } from './c4m.js';
 
@@ -746,6 +747,35 @@ export class Mmu {
   //  - a slow path saves the registers as the instruction found them (pc
   //    its first word, sp before any pop) and leaves the loop when a
   //    fault has taken the machine into kernel mode.
+  // a double's FPU sub-op from runUser's loop, or false for the long way: a page not in
+  // the windows, or a double across two. Nothing is done until all of it is known, so
+  // the long way can start again from nothing and fault where it should.
+  fpuUser(op, pa, pb, pr) {
+    if (op === 21) return false;
+    const i32 = this.m.i32, rd = this.rd, wr = this.wr, bit = 1 << (op - 17);
+    let a = pa, ib = 0, ir = 0, v = 0, p = 0;
+    if (FPU_A & bit) {
+      if ((pa & 3) !== 0 || (pa & 4095) > 4088) return false;
+      v = pa >>> 12; p = v < LIMIT ? rd[v] : -1;
+      if (p < 0) return false;
+      a = (p | (pa & 4095)) >> 2;
+    }
+    if (FPU_B & bit) {
+      if ((pb & 3) !== 0 || (pb & 4095) > 4088) return false;
+      v = pb >>> 12; p = v < LIMIT ? rd[v] : -1;
+      if (p < 0) return false;
+      ib = (p | (pb & 4095)) >> 2;
+    }
+    if (FPU_R & bit) {
+      if ((pr & 3) !== 0 || (pr & 4095) > 4088) return false;
+      v = pr >>> 12; p = v < LIMIT ? wr[v] : -1;
+      if (p < 0) return false;
+      ir = (p | (pr & 4095)) >> 2;
+    }
+    this.fpuV = fpuDouble(i32, op, a, ib, ir) | 0;
+    return true;
+  }
+
   runUser(maxCycles) {
     const m = this.m, dev = m.dev, i32 = m.i32, u8 = m.u8;
     const rd = this.rd, wr = this.wr;
@@ -1031,6 +1061,26 @@ export class Mmu {
           }
           // falls through
 
+        case 89:   /* FPU */
+          // As c4m.js's: a float's, on the stack, if all of it is in the window
+          // (which promises a word either side of sp, no more).
+          if (op === 89) {
+            y = i32[(sp + sOff) >> 2];
+            if ((y - 1) >>> 0 < 8 && !m.noFpu && sp - sLo <= sLen - 12) {
+              p = sp + 8;
+              a = fpuFloat(y, i32[(sp + 4 + sOff) >> 2], i32[(p + sOff) >> 2]) | 0;
+              break;
+            }
+            // ... and a double's, if its addresses are in the windows (fpuUser)
+            if ((y - 17) >>> 0 < 10 && !m.noFpu && sp - sLo <= sLen - 16) {
+              p = sp + 8; v = sp + 12;
+              if (this.fpuUser(y, i32[(sp + 4 + sOff) >> 2], i32[(p + sOff) >> 2], i32[(v + sOff) >> 2])) {
+                a = this.fpuV;
+                break;
+              }
+            }
+          }
+          // falls through
         default: {
           m.pc = pc; m.sp = sp; m.bp = bp; m.a = a; m.cycle = cycle;
           const s = this.sysUser(op, pc - 4, sp, bp, a);
@@ -1076,7 +1126,7 @@ function identityLoop() {
                     '$1 if (sOff !== 0) { this.general = true; stop = STOP.SWITCH; break loop; }');
   if (/[cs]Off\) >> 2/.test(src)) return null;
   try {
-    return new Function('STOP', 'LIMIT', 'hasOperand', 'isPlainOp', `return ${src}`)(STOP, LIMIT, hasOperand, isPlainOp);
+    return new Function('STOP', 'LIMIT', 'hasOperand', 'isPlainOp', 'fpuFloat', `return ${src}`)(STOP, LIMIT, hasOperand, isPlainOp, fpuFloat);
   } catch {
     return null;
   }

@@ -172,9 +172,11 @@
 	;; object's MEMSZ when merging, so objects carry it too.
 	(set! c4r:v3 true)
 	(set! c4r:bss-extra gen:bssextra)
+	(set! c4r:bss-size gen:bsssize)
 	(if Lines (set! c4r:srcfiles lex:files) nil)
 	(define Out (c4r:encode M))
 	(set! c4r:bss-extra 0)
+	(set! c4r:bss-size 0)
 	(set! c4r:srcfiles (list))
 	(if (file:write OutName Out)
 		(print ";; c4lc:" In "-" (length Out) "bytes -" OutName)

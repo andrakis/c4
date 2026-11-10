@@ -34,7 +34,9 @@
 
 #include "c4ix.h"
 
-enum { C4R_BUF_MAX = 4194304,     // 4MB image limit
+enum { C4R_BUF_MAX = 16777216,    // a 16 MB image limit: Duke Nukem 3D is over 4
+                                  // (games/duke3d), and the buffer is only as
+                                  // big as the file read (below)
        LIB_MAX = 8,               // libraries one program may load, in all
        SCLASS_FUN = 129, SCLASS_GLO = 131, SATTR_STATIC = 8, SATTR_EXTERN = 16 };
 

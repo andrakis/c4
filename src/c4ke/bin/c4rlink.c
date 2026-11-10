@@ -104,6 +104,8 @@ enum {
 	CL_REMAP,        // int *, module symbol id -> master symbol table index
 	CL_REMAP_MAX,    // int, entries in CL_REMAP
 	CL_MEMBER,       // int, 1: a library member (--start-lib), linked only if wanted
+	CL_BSS_BASE,     // int, where in the module's data its BSS begins (MEMSZ for none)
+	CL_OFFSET_BSS,   // int, byte offset of this module's BSS in the master image
 	CL__Sz
 };
 
@@ -122,6 +124,21 @@ enum { C4R_PTYPE_DSYM = -5 };
 enum { CL_LIBMAX = 8, CLL_STRUCT = 0, CLL_PATH, CLL_USED, CLL__Sz };
 int *cl_libs;
 int  cl_nlibs;
+int  cl_needed_at;    // where add_needed puts the next library's name
+
+// A module's data offset OFF, in the merged image. Every module's
+// initialized data comes first, each at its CL_OFFSET_DATA; then the
+// libraries' names (add_needed); then every module's BSS, each at its
+// CL_OFFSET_BSS. The image stores data up to its last non-zero byte, so
+// with the BSS all at the end none of it is stored, where before each
+// module's BSS was a run of zeros between the next one's data and its own
+// (Duke Nukem 3D's were 3.3 MB of a 5.7 MB image). A module from c4lc or
+// c4fc says how much of its MEMSZ is BSS (C4R_HDR_BSS, load-c4r.c); one
+// that does not keeps its MEMSZ together, as every module used to.
+static int data_at (int *cl, int off) {
+	if (off < cl[CL_BSS_BASE]) return cl[CL_OFFSET_DATA] + off;
+	return cl[CL_OFFSET_BSS] + (off - cl[CL_BSS_BASE]);
+}
 
 static void show_help (char *spec) {
 	if (cl_striptool)
@@ -231,7 +248,7 @@ static int import_symbols (int *master, int *cl) {
 				if (defined) msym[C4R_SYMB_VALUE] = sym[C4R_SYMB_VALUE] + offsetCode;
 				else         msym[C4R_SYMB_VALUE] = 0;
 			} else if (sym[C4R_SYMB_CLASS] == C4R_SCLASS_Glo) {
-				if (defined) msym[C4R_SYMB_VALUE] = sym[C4R_SYMB_VALUE] + offsetData;
+				if (defined) msym[C4R_SYMB_VALUE] = data_at(cl, sym[C4R_SYMB_VALUE]);
 				else         msym[C4R_SYMB_VALUE] = 0;
 			}
 			mhdr[C4R_HDR_SYMBOLSLEN] = m + 1;
@@ -247,7 +264,7 @@ static int import_symbols (int *master, int *cl) {
 				if (sym[C4R_SYMB_CLASS] == C4R_SCLASS_Fun)
 					msym[C4R_SYMB_VALUE] = sym[C4R_SYMB_VALUE] + offsetCode;
 				else if (sym[C4R_SYMB_CLASS] == C4R_SCLASS_Glo)
-					msym[C4R_SYMB_VALUE] = sym[C4R_SYMB_VALUE] + offsetData;
+					msym[C4R_SYMB_VALUE] = data_at(cl, sym[C4R_SYMB_VALUE]);
 				if (cl_verbose)
 					printf("c4rlink: '%.*s' resolved by '%s'\n",
 					       sym[C4R_SYMB_NAMELEN], name, (char *)cl[CL_FILE]);
@@ -339,7 +356,7 @@ static int merge_c4rs (int *master, int *c4rs, int count) {
 			// (words); data-resident ones (-3/-4) by the data offset
 			// (bytes)
 			if (pid == C4R_PTYPE_DCODE || pid == C4R_PTYPE_DDATA || pid == C4R_PTYPE_DSYM)
-				dstPatch[C4R_PAT_ADDRESS] = offsetData + srcPatch[C4R_PAT_ADDRESS];
+				dstPatch[C4R_PAT_ADDRESS] = data_at(cl, srcPatch[C4R_PAT_ADDRESS]);
 			else
 				dstPatch[C4R_PAT_ADDRESS] = offsetCode + srcPatch[C4R_PAT_ADDRESS];
 			if (pid == C4R_PTYPE_CODE) {
@@ -347,13 +364,13 @@ static int merge_c4rs (int *master, int *c4rs, int count) {
 				dstPatch[C4R_PAT_VALUE] = offsetCode + srcPatch[C4R_PAT_VALUE];
 			} else if (pid == C4R_PTYPE_DATA) {
 				dstPatch[C4R_PAT_TYPE]  = pid;
-				dstPatch[C4R_PAT_VALUE] = offsetData + srcPatch[C4R_PAT_VALUE];
+				dstPatch[C4R_PAT_VALUE] = data_at(cl, srcPatch[C4R_PAT_VALUE]);
 			} else if (pid == C4R_PTYPE_DCODE) {
 				dstPatch[C4R_PAT_TYPE]  = pid;
 				dstPatch[C4R_PAT_VALUE] = offsetCode + srcPatch[C4R_PAT_VALUE];
 			} else if (pid == C4R_PTYPE_DDATA) {
 				dstPatch[C4R_PAT_TYPE]  = pid;
-				dstPatch[C4R_PAT_VALUE] = offsetData + srcPatch[C4R_PAT_VALUE];
+				dstPatch[C4R_PAT_VALUE] = data_at(cl, srcPatch[C4R_PAT_VALUE]);
 			} else if (pid == C4R_PTYPE_DSYM) {
 				// the symbol id is in VALUE: remap it as a symbol type is
 				if (srcPatch[C4R_PAT_VALUE] < 0 || srcPatch[C4R_PAT_VALUE] >= cl[CL_REMAP_MAX] ||
@@ -502,24 +519,20 @@ static int lib_defines (char *name, int len) {
 }
 
 // Record each library something was resolved against: its run-time path
-// appended to the data, and a static __c4_needed symbol pointing at it.
+// in the data, and a static __c4_needed symbol pointing at it. The layout
+// (main) left room for every library's name before the BSS; nothing in the
+// code refers to them, so they need not have been placed any sooner.
 // The symbol table has room: main allocates CL_LIBMAX spare entries.
 static int add_needed (int *master) {
-	int *mhdr, *sym, k, n, len, memsz;
-	char *path, *ndata;
+	int *mhdr, *sym, k, n, len;
+	char *path;
 	mhdr = (int *)master[C4R_HEADER];
 	k = 0;
 	while (k < cl_nlibs) {
 		if (cl_libs[k * CLL__Sz + CLL_USED]) {
 			path = (char *)cl_libs[k * CLL__Sz + CLL_PATH];
 			len = 0; while (path[len]) ++len;
-			memsz = mhdr[C4R_HDR_MEMSZ];
-			if (!(ndata = malloc(memsz + len + 1))) return 1;
-			if (memsz) memcpy(ndata, (char *)master[C4R_DATA], memsz);
-			memcpy(ndata + memsz, path, len + 1);
-			if (master[C4R_DATA]) free((char *)master[C4R_DATA]);
-			master[C4R_DATA] = (int)ndata;
-			mhdr[C4R_HDR_MEMSZ] = memsz + len + 1;
+			memcpy((char *)master[C4R_DATA] + cl_needed_at, path, len + 1);
 			n = mhdr[C4R_HDR_SYMBOLSLEN];
 			sym = (int *)master[C4R_SYMBOLS] + (n * C4R_SYMB__Sz);
 			sym[C4R_SYMB_ID]      = n;
@@ -528,7 +541,8 @@ static int add_needed (int *master) {
 			sym[C4R_SYMB_ATTRS]   = ATTR_STATIC;
 			sym[C4R_SYMB_NAMELEN] = 11;
 			sym[C4R_SYMB_NAME]    = (int)c4r_strcpy_alloc("__c4_needed");
-			sym[C4R_SYMB_VALUE]   = memsz;
+			sym[C4R_SYMB_VALUE]   = cl_needed_at;
+			cl_needed_at = cl_needed_at + len + 1;
 			mhdr[C4R_HDR_SYMBOLSLEN] = n + 1;
 			if (cl_verbose) printf("c4rlink: needs %s\n", path);
 		}
@@ -1491,6 +1505,9 @@ static int c4r_write (int *c4r, char *file) {
 	tmp = (5 + i) & ~i;
 	writechecked(fd, &hdr[C4R_HDR_MEMSZ], sizeof(int));
 	tmp = tmp - sizeof(int);
+	// at 32 bits, how much of MEMSZ is BSS (load-c4r.c), so that a
+	// library made with -r is laid out as its modules were
+	if (tmp == 4) { writechecked(fd, &hdr[C4R_HDR_BSS], sizeof(int)); tmp = 0; }
 	while (tmp-- > 0) writechecked(fd, "p", 1);
 	tmp = hdr[C4R_HDR_ENTRY];        writechecked(fd, &tmp, sizeof(int));
 	tmp = hdr[C4R_HDR_CODELEN];      writechecked(fd, &tmp, sizeof(int));
@@ -1816,6 +1833,7 @@ int main (int argc, char **argv) {
 	char *spec, *arg, *outfile;
 	int  *hdr;
 	int   count_code, count_data, count_patch, count_con, count_des, count_sym;
+	int   count_bss, bss_at, len;
 	int   dstored, k;
 	char *dbytes;
 
@@ -1838,6 +1856,7 @@ int main (int argc, char **argv) {
 	while (arg > spec && *(arg - 1) != '/') --arg;
 	if (!my_strncmp(arg, "c4rstrip", 8)) { cl_striptool = 1; cl_strip = 1; cl_gc = 0; }
 	count_code = count_data = count_patch = count_con = count_des = count_sym = 0;
+	count_bss = 0;
 	cl_nlibs = 0;
 	if (!(cl_libs = malloc(CL_LIBMAX * CLL__Sz * sizeof(int)))) return 1;
 	endargs = 0;
@@ -1974,27 +1993,47 @@ int main (int argc, char **argv) {
 		return 4;
 	}
 
-	// Each module's position in the merged image, and the totals
+	// Each module's position in the merged image, and the totals. The
+	// data cursor advances by each module's data before its BSS
+	// (CL_BSS_BASE: all of its MEMSZ for a module that does not say), and
+	// the BSS goes after everything (data_at). Only DATALEN bytes of a
+	// module are copied in (below); the rest stays zero because the
+	// master data buffer is zeroed.
 	count_sym = 0;
 	c4rs_it = c4rs; i = 0;
 	while (i < c4r_pos) {
 		c4rs_it[CL_OFFSET_CODE] = count_code;
 		c4rs_it[CL_OFFSET_DATA] = count_data;
 		hdr = (int *)c4rs_it[CL_HEADER];
-		// The data cursor advances by each module's MEMSZ (its data
-		// image PLUS its BSS), so the next module -- and every
-		// relocated data reference in this one -- sits past this
-		// module's BSS, and that BSS becomes a zero gap in the merged
-		// image. Only DATALEN bytes are copied in (below); the gap
-		// stays zero because the master data buffer is zeroed.
+		c4rs_it[CL_BSS_BASE] = hdr[C4R_HDR_MEMSZ] - hdr[C4R_HDR_BSS];
 		count_code  = count_code  + hdr[C4R_HDR_CODELEN];
-		count_data  = count_data  + hdr[C4R_HDR_MEMSZ];
+		count_data  = count_data  + c4rs_it[CL_BSS_BASE];
+		count_bss   = count_bss   + hdr[C4R_HDR_BSS];
 		count_patch = count_patch + hdr[C4R_HDR_PATCHLEN];
 		count_con   = count_con   + hdr[C4R_HDR_CONSTRUCTLEN];
 		count_des   = count_des   + hdr[C4R_HDR_DESTRUCTLEN];
 		count_sym   = count_sym   + hdr[C4R_HDR_SYMBOLSLEN];
 		c4rs_it = c4rs_it + CL__Sz; ++i;
 	}
+	// room for the libraries' names (add_needed), then a word boundary
+	cl_needed_at = count_data;
+	k = 0;
+	while (k < cl_nlibs) {
+		arg = (char *)cl_libs[k * CLL__Sz + CLL_PATH];
+		len = 0; while (arg[len]) ++len;
+		count_data = count_data + len + 1;
+		++k;
+	}
+	count_data = (count_data + sizeof(int) - 1) & ~(sizeof(int) - 1);
+	// then every module's BSS
+	bss_at = count_data;
+	c4rs_it = c4rs; i = 0;
+	while (i < c4r_pos) {
+		c4rs_it[CL_OFFSET_BSS] = bss_at;
+		bss_at = bss_at + ((int *)c4rs_it[CL_HEADER])[C4R_HDR_BSS];
+		c4rs_it = c4rs_it + CL__Sz; ++i;
+	}
+	count_data = count_data + count_bss;
 
 	if (cl_verbose) {
 		printf("%s: command parsing complete, %d c4r structures loaded\n",
@@ -2025,6 +2064,7 @@ int main (int argc, char **argv) {
 	// stored/trimmed length) is computed after the merge, below.
 	hdr[C4R_HDR_MEMSZ]   = count_data;
 	hdr[C4R_HDR_DATALEN] = count_data;
+	hdr[C4R_HDR_BSS]     = count_bss;
 	if (count_patch && !(master[C4R_PATCHES] = (int)malloc((i = sizeof(int) * C4R_PAT__Sz * count_patch)))) {
 		printf("%s: failed to allocate %d bytes for master patches\n", spec, i);
 		return 6;

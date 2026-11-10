@@ -42,7 +42,11 @@
 // | | B    | WordBits       | How large a word is                           | |
 // | | B*8  | MEMSZ/padding  | v2: 'p' filler. v3: the first word (at byte   | |
 // | |      |                | offset 5) is the total in-memory data size;   | |
-// | |      |                | the part past DataLen is zero-filled BSS      | |
+// | |      |                | the part past DataLen is zero-filled BSS. At  | |
+// | |      |                | 32 bits the next four bytes say how much of   | |
+// | |      |                | MEMSZ, at its end, is uninitialized globals   | |
+// | |      |                | (c4lc, c4fc, c4rlink; 0 for unknown), which   | |
+// | |      |                | c4rlink lays out after all the data           | |
 // | | W    | Entry          | Position to begin code execution              | |
 // | | W    | CodeLen        | Length of code segment in words               | |
 // | | W    | DataLen        | Length of data segment in bytes               | |

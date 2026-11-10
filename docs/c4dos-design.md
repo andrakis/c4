@@ -481,7 +481,9 @@ DOS's memory back, and jumps:
 and DOS already injects the API into it, so a kernel started the
 ordinary way can already find the RAM disk. dosload adds two things:
 
-- **Memory.** DOS holds a 4 MB read scratch. dosload copies the loaded
+- **Memory.** DOS holds a 4 MB read scratch (RUN grows it, doubling, for
+  a program bigger than that, such as Duke Nukem 3D's, and it stays that
+  size until TRIM). dosload copies the loaded
   image's constructor and destructor tables out and resolves them to
   absolute addresses, so it can call `dos_trim()` before the kernel
   starts. (When dosload was written DOS's own copy of *dosload's* tables

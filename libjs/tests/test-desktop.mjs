@@ -114,13 +114,14 @@ const pump = () => {
     if (t === CMD.CURSOR) pointer = words[i + 2];
     if (t === CMD.SIZE) sized = { w: words[i + 2], h: words[i + 3] };
     // an 8-bit frame, made 32-bit by the device (GUI_BLIT8): count them,
-    // and keep the last one's size and a sum of its pixels
+    // and keep the last one's place, size and a sum of all its pixels (a
+    // tile of the Puzzles' Net turned is a few thin lines)
     if (t === CMD.RGB) {
       rgbFrames++;
       const w = words[i + 4], h = words[i + 5];
       let sum = 0;
-      for (let k = 0; k < w * h; k += 97) sum = (sum * 31 + words[i + 8 + k]) | 0;
-      rgbLast = { w, h, dw: words[i + 6], dh: words[i + 7], sum };
+      for (let k = 0; k < w * h; k++) sum = (sum * 31 + words[i + 8 + k]) | 0;
+      rgbLast = { x: words[i + 2], y: words[i + 3], w, h, dw: words[i + 6], dh: words[i + 7], sum };
     }
   }
   // a size asked for in a frame: the page sizes its canvas and says so (display.js resize)
@@ -1258,6 +1259,106 @@ check(until(() => gui.w === SW && has(/^Terminal - task/) && has(/gui: done afte
   }
   key('ESC');
   until(() => !has('Power Off...'));
+}
+
+// ---- a game in a window of its own: no shell, the window only its canvas ---------------------
+// (games/README.md: a desktop.apps line that says `window`.) The Puzzles' Net
+// from Go > Games > Puzzles and from Run..., and Ace's Thornq from Files, each
+// where it is on the disk.
+{
+  const vfs = readFileSync(join(ROOT, 'disk/c4ix.vfs.txt'), 'utf8');
+  const terms = () => find(/^Terminal - task/).length;
+  const hover = t => ev({ kind: 'move', x: t.x + 5, y: t.y + 5, buttons: 0 });
+  const t0 = terms();
+  if (/^\s*net: ilink/m.test(vfs)) {
+    let f0 = rgbFrames;
+    click(20, SH - TASK_H + 12);
+    until(() => has('Power Off...'));
+    hover(find('Games')[0]);
+    until(() => has('Puzzles'));
+    hover(find('Puzzles')[0]);
+    until(() => has('Net'));
+    clickText('Net');
+    check(until(() => rgbFrames > f0 && has('Net') && !has('Power Off...'), 3000),
+      'Go > Games > Puzzles > Net plays in a window of its own, which the game titles', `frames ${rgbFrames - f0} ` + screen().slice(-300));
+    check(rgbLast && rgbLast.w === 640 && rgbLast.h === 400 && rgbLast.dw === 640 && rgbLast.dh === 400,
+      'its frames the canvas\'s size', JSON.stringify(rgbLast));
+    check(terms() === t0, 'with no Terminal', screen().slice(-300));
+    {
+      // n, a new game: a new picture
+      const before = rgbLast.sum, n = rgbFrames;
+      type('n');
+      check(until(() => rgbFrames > n && rgbLast.sum !== before, 1500), 'a key goes to the game', `frames ${rgbFrames - n}`);
+    }
+    // its menu bar (window.h's win_menu): the game's own controls
+    check(has('Game') && has('Type') && has('Help'), 'the window has the game\'s menus: Game, Type, Help', screen().slice(-300));
+    {
+      let before = rgbLast.sum, n = rgbFrames;
+      menu('Game', 'New   N');
+      check(until(() => rgbFrames > n && rgbLast.sum !== before, 1500), 'Game > New starts a new game', `frames ${rgbFrames - n}`);
+      // a move: a click in the middle of the canvas, where the frame was
+      // drawn (under the menu bar), turns the tile there
+      until(() => false, 20);
+      const cx = rgbLast.x + (rgbLast.dw >> 1), cy = rgbLast.y + (rgbLast.dh >> 1);
+      const fresh = rgbLast.sum;
+      n = rgbFrames;
+      click(cx, cy);
+      check(until(() => rgbFrames > n && rgbLast.sum !== fresh, 1500), 'a click under the menu bar reaches the board', `frames ${rgbFrames - n}`);
+      until(() => false, 20);
+      const moved = rgbLast.sum;
+      menu('Game', 'Undo   U');
+      check(moved !== fresh && until(() => rgbLast.sum === fresh, 1500), 'Game > Undo takes the move back: the picture before it',
+        `${rgbLast.sum === moved ? 'the move still shown' : 'another picture'}`);
+      check(rgbLast.dw === 640 && rgbLast.dh === 400, 'and the canvas is the size it was', JSON.stringify(rgbLast));
+    }
+    key('ESC');
+    check(until(() => !has('Net'), 1500) && terms() === t0, 'Esc ends the game, and its window goes with it', screen().slice(-300));
+    // its name typed in Run... is the same
+    start('Run...');
+    until(() => has(/Program to run/));
+    f0 = rgbFrames;
+    type('net'); key('\n');
+    check(until(() => rgbFrames > f0 && has('Net'), 3000) && terms() === t0, 'so is net typed in Run...', screen().slice(-300));
+    key('c', 2, 67);
+    check(until(() => !has('Net'), 1500) && terms() === t0, 'Ctrl-C ends it, and the window with it', screen().slice(-300));
+    // typed in a Terminal, it makes that Terminal its canvas, as --window did, and q
+    // gives the Terminal back
+    clickText(/^Terminal - task/, 'first');
+    f0 = rgbFrames;
+    type('net\n');
+    check(until(() => rgbFrames > f0 && has('Net'), 3000) && terms() < t0, 'net in a Terminal plays in that Terminal', screen().slice(-300));
+    type('q');
+    check(until(() => terms() === t0, 1500) && !has('Net'), 'and q gives it back', screen().slice(-300));
+  } else console.log('test-desktop: the Puzzles are not on the disk (games/README.md): their window checks skipped');
+  if (/^\s*thornq: ilink/m.test(vfs)) {
+    // Files: a double-click on the program, by its path under /usr/games
+    start('Files');
+    until(() => has('Files - /'));
+    dbl('usr', inList);
+    until(() => has('Files - /usr') && !!inList(find('games')));
+    dbl('games', inList);
+    until(() => has('Files - /usr/games') && !!inList(find('ace')));
+    dbl('ace', inList);
+    until(() => has('Files - /usr/games/ace'));
+    key('END');
+    // (at the list's foot, below where inList looks; nothing else on the screen has the name)
+    check(until(() => has('thornq.c4r')), 'Files lists the Ace of Penguins in /usr/games/ace', screen().slice(-300));
+    const f0 = rgbFrames;
+    dbl('thornq.c4r');
+    check(until(() => rgbFrames > f0 && has('thornq'), 3000) && terms() === t0,
+      'a double-click on thornq.c4r plays it in a window of its own, with no Terminal', `frames ${rgbFrames - f0} ` + screen().slice(-300));
+    check(rgbLast && rgbLast.dw === 640 && rgbLast.dh === 400 && rgbLast.w * 400 === rgbLast.h * 640,
+      'its frames the canvas\'s shape', JSON.stringify(rgbLast));
+    {
+      const before = rgbLast.sum, n = rgbFrames;
+      menu('Game', 'New Game   F2');
+      check(until(() => rgbFrames > n && rgbLast.sum !== before, 1500), 'Game > New Game deals again', `frames ${rgbFrames - n}`);
+    }
+    key('c', 2, 67);
+    check(until(() => !has('thornq'), 1500), 'Ctrl-C ends it, and the window with it', screen().slice(-300));
+    clickText('File', all => all.filter(t => inFiles([t])).sort((p, q) => p.y - q.y)[0]); settle(); clickText('Close');
+    until(() => !explorer());
+  } else console.log('test-desktop: the Ace of Penguins is not on the disk (games/README.md): its window check skipped');
 }
 
 // ---- Run --------------------------------------------------------------------------------------

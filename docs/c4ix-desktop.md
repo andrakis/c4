@@ -1438,6 +1438,115 @@ keys in the menu, and an icon on a game's row.
       Puzzles' place, and picking Puzzle 39 runs its command in a
       Terminal and shuts the menu.
 
+## Part twenty-four: click-driven games in a window of their own (asked for 2026-11-10)
+
+The user: the Ace games should run in a window by default, instead of
+fullscreen, and so should anything like them, games that animate little
+and mostly answer clicks, without a Terminal. That is The Ace of
+Penguins' eleven games and Simon Tatham's forty Puzzles.
+
+- [x] **A window that is only the program's canvas** (`term_run` in
+      term.c). It is a Terminal's window with no shell in it: the
+      desktop spawns the program itself on the two pipes, with the
+      command's words for its arguments and its first found as the shell
+      finds it (`desk_which`: a path as written, or a name in `/bin`,
+      `/usr/bin` or `/usr/games/bin`, with `.c4r` or not). It has no
+      menu and no scroll bar, so it is the canvas's 640x400 and a
+      border; the program's own title replaces its name once it opens
+      the canvas. The window closes when the program ends. One showing
+      text the program wrote, as an error is, stays open to be read,
+      with a line saying the program has ended. Ctrl-C ends the program,
+      and so does closing the window, as for a Terminal. The shell's
+      prompt means nothing here: a program writing `$ ` is not taken for
+      one.
+- [x] **How the desktop knows** (decided). A game's `/etc/desktop.apps`
+      line says so, in a fourth field: `CATEGORY|NAME|COMMAND|FLAGS`,
+      where FLAGS are words and `window` is the one there is.
+  - Why there: the line is already where a game says how it starts,
+    and W2 of docs/c4-explorer.md planned this file to grow the
+    starting options (`single`) after COMMAND. `single` becomes another
+    word of FLAGS, and W2's suffixes and icon follow it. A desktop that
+    doesn't know the field cuts the line at COMMAND as before, so a
+    line with it is still listed.
+  - Not in the program: nothing in a `.c4r` describes it, and adding a
+    field to the format for this would make every linker and loader
+    know it. Not by guessing from the program's name or size either.
+  - Files and Run... have a path or a typed command, not a line. The
+    desktop keeps the names of the programs whose lines say `window`
+    (tools.c, `desk_window_app`), and `run_command` gives such a
+    program its own window: named alone, or by a path under
+    `/usr/games`, which is how Files names one. The names are unique
+    there, since vfs-games.py refuses two games' programs with one
+    name. The same program anywhere else gets a Terminal, where it
+    still plays in a window, the Terminal itself.
+  - `files.c` is unchanged: `open_sel` calls `run_command`, which
+    decides.
+- [x] **The games choose a window themselves.** `window.h`'s
+      `win_here()` is 1 when stdin and stdout are both pipes (SYS_FSTAT's
+      mode, S_IFIFO), as in either kind of desktop window, and 0 on the
+      console. Ace and the Puzzles open a window where it is 1, and take
+      the whole display where it is 0, as before; `-fullscreen` (Ace)
+      and `--fullscreen` (Puzzles) take the display anyway, and
+      `-window` / `--window` still ask for the window. Typed in a
+      Terminal, a game makes that Terminal its canvas until it ends, as
+      `--window` did. Ace's `-demo`, which test-ace runs, is left as it
+      was: no window it wasn't asked for.
+- [x] **A table bigger than the canvas.** Ace sends its table in the
+      middle of a frame of the window's shape, which the desktop scales
+      to the canvas. That frame was always 640x400, and `oy` would have
+      gone negative for a taller table; a game in a window is laid out
+      at 640x400 (`init_table` clamps to the display's size, which a
+      window sets to that), so none was. Now the frame is as big as the
+      table needs, in the window's shape, and the desktop scales it
+      down; the mouse is mapped back through it, and the last frame is
+      kept until the next, which the desktop may still draw. A program
+      started by its path also has its name without `.c4r` for a title.
+- [x] **Go > Games** has the games that were not in it yet: Cards (Ace's
+      six card games), Puzzles (the forty, and Ace's Mastermind,
+      Merlin, Minesweeper, Pegged and Taipei), both in windows of their
+      own; Quake and Super Blit Kart, which take the display from a
+      Terminal as Doom does; Text Adventures (Zork I, II and III, Open
+      Adventure) and BSD Games (22 of them), in a Terminal, which the
+      curses ones make their canvas, as they did. Phantasia and hack are not
+      listed: they need a current directory they can write
+      (games/README.md), and a Terminal starts in `/`.
+- [x] **A menu bar, which the game gives** (asked for the same day: the
+      usual title bar, and menus to control the game). `window.h` has two
+      more ops, `M n;title` (menu n, 0 starting the bar again) and `I
+      n;label` (an item of it: `-` a rule, a leading `*` a check mark),
+      and a pick comes back as `c menu,item` (WIN_MENU). `win_menu` and
+      `win_item` send them.
+  - The game declares them, not desktop.apps, because only the game
+    knows what it has: the Puzzles' presets are the game's own list, and
+    Ace's keys differ from game to game. So the menus are there however
+    the game was started, from Go, Run... or Files.
+  - A program's own window takes them (term.c `prog_menu`: 4 menus, 40
+    items each, 2 KB of text); a Terminal ignores them, keeping its Edit
+    menu, and there the keys are the controls. The first menu grows the
+    window by the bar's height, so the canvas stays 640x400 and the mouse
+    is measured from it as before.
+  - The Puzzles: Game (New, Restart, Undo, Redo, Solve where the game
+    can, Exit), the buttons' own actions; Type, the presets, the one in
+    play checked and sent again when it changes; Help, About, a line in
+    the status bar. The button row stays.
+  - Ace: Game (New Game, F2, in every game; Undo, Backspace, in the eight
+    that undo; Thornq's hint and auto-hints, Minesweeper's autoplay,
+    Spider's arrows; Exit), Spider's Suits, Minesweeper's Level, Pegged's
+    and Taipei's Layout, and Help (F1) where a game has help. Each item
+    is a key the game's own `key()` takes, so a pick is that key. Ace has
+    no redo and no "deal this hand again": F2 deals anew.
+- [x] test-desktop.mjs, where the games are on the disk: Go > Games >
+      Puzzles > Net opens a window titled Net, its frames 640x400, with
+      no Terminal; a key reaches the game; it has Game, Type and Help;
+      Game > New is a new game, a click on the board under the menu bar
+      turns a tile, and Game > Undo takes it back; Esc ends it and the
+      window goes. `net` from Run... does the same, and Ctrl-C ends it with its
+      window. `net` typed in a Terminal makes the Terminal its canvas,
+      and `q` gives it back. In Files, a double-click on
+      `/usr/games/ace/thornq.c4r` plays Thornq in a window of its own,
+      in frames of the canvas's shape, Game > New Game deals again, and
+      Ctrl-C closes it.
+
 ## Part twenty-five: the games' directories, listed when first looked in (asked for 2026-11-10)
 
 With every game merged (the BSD games, Ace, Super Blit Kart, the

@@ -318,15 +318,31 @@ static int game_group(char *name) {
     return n_menus - 1;
 }
 
-// A line of /etc/desktop.apps: CATEGORY|NAME|COMMAND, cut up where it is.
-// CATEGORY is Games, or Games/GROUP for a menu of its own within Games. Any
-// other category is not this menu's. Nor is a line whose program is not on
-// the disk. docs/c4-explorer.md's W2 would add its fields after these.
+// the word w is one of s's, which are separated by spaces
+static int has_word(char *s, char *w) {
+    int n;
+    n = ui_len(w);
+    while (*s) {
+        while (*s == ' ') ++s;
+        if (!memcmp(s, w, n) && (s[n] == 0 || s[n] == ' ')) return 1;
+        while (*s && *s != ' ') ++s;
+    }
+    return 0;
+}
+
+// A line of /etc/desktop.apps: CATEGORY|NAME|COMMAND|FLAGS, cut up where it
+// is. CATEGORY is Games, or Games/GROUP for a menu of its own within Games.
+// Any other category is not this menu's. Nor is a line whose program is not
+// on the disk. FLAGS, which may be left out, are words: `window` says the
+// program plays in a window of its own, with no Terminal, from here and from
+// Files (tools.c, run_command). docs/c4-explorer.md's W2 would add `single`
+// to them, and its fields after them.
 static void game_line(char *s) {
-    char *name, *cmd, *group;
+    char *name, *cmd, *group, *flags;
     int menu;
     if (!(name = next_field(s)) || !(cmd = next_field(name))) return;
-    next_field(cmd);
+    if ((flags = next_field(cmd))) next_field(flags);
+    if (flags && cmd[0] && has_word(flags, "window")) desk_window_app(cmd);
     group = s;
     while (*group && *group != '/') ++group;
     if (*group) { *group = 0; ++group; }

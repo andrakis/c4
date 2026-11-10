@@ -147,7 +147,85 @@ void inputbox(struct win *owner, char *title, char *prompt, char *initial, int a
     wk_inputbox(owner ? owner->id : 0, action, title, prompt, dtext, 121);   // 120 characters
 }
 
-void run_command(char *cmd) { term_open(cmd); }
+// ---- starting a program -------------------------------------------------------------
+//
+// A command runs in a new Terminal, typed at its shell's first prompt; or,
+// for a game whose /etc/desktop.apps line says `window` (shell.c), in a
+// window that is only its canvas, with no shell (term.c, term_run). Those
+// games are known by their programs' names, which are unique on the disk
+// (/usr/games/bin, vfs-games.py): a command names one by that name alone,
+// or by a path under /usr/games, as Files does. The rest -- a program
+// elsewhere, anything the desktop.apps lines do not mark -- gets a
+// Terminal, where such a game still opens its window, the Terminal itself.
+
+enum { N_WINDOWED = 96, WNAME = 32 };
+static char windowed[N_WINDOWED * WNAME];
+static int n_windowed;
+
+// The name a command's program goes by: its first word's last part, less
+// any .c4r. 0 if there is none, or it is too long to be a game's.
+static int prog_name(char *cmd, char *out) {
+    char *s, *base;
+    int n;
+    while (*cmd == ' ') ++cmd;
+    base = cmd; s = cmd;
+    while (*s && *s != ' ') { if (*s == '/') base = s + 1; ++s; }
+    n = s - base;
+    if (n > 4 && base[n - 4] == '.' && base[n - 3] == 'c' && base[n - 2] == '4' && base[n - 1] == 'r') n = n - 4;
+    if (n <= 0 || n >= WNAME) return 0;
+    memcpy(out, base, n);
+    out[n] = 0;
+    return 1;
+}
+
+void desk_window_app(char *cmd) {
+    if (n_windowed < N_WINDOWED && prog_name(cmd, windowed + n_windowed * WNAME)) ++n_windowed;
+}
+
+static int is_windowed(char *cmd) {
+    char name[WNAME], *s;
+    int i;
+    while (*cmd == ' ') ++cmd;
+    s = cmd;
+    while (*s && *s != ' ' && *s != '/') ++s;
+    // a path: one of the games' only under /usr/games
+    if (*s == '/' && memcmp(cmd, "/usr/games/", 11) != 0) return 0;
+    if (!prog_name(cmd, name)) return 0;
+    i = 0;
+    while (i < n_windowed) { if (ui_eq(windowed + i * WNAME, name)) return 1; ++i; }
+    return 0;
+}
+
+// The program a command's first word names, as the shell finds it (sh.c):
+// a path as written, or with .c4r; a bare name in /bin, /usr/bin or
+// /usr/games/bin, as is or with .c4r. 1 with its path in path (WK_PATH).
+static char *which_dirs[4] = { "/bin/", "/usr/bin/", "/usr/games/bin/", 0 };
+int desk_which(char *cmd, char *path) {
+    char name[WK_NAME];
+    int k, d, slash, st[8];
+    while (*cmd == ' ') ++cmd;
+    k = 0; slash = 0;
+    while (cmd[k] && cmd[k] != ' ') { if (cmd[k] == '/') slash = 1; ++k; }
+    if (k == 0 || k >= WK_NAME - 4) return 0;
+    memcpy(name, cmd, k);
+    name[k] = 0;
+    d = 0;
+    while (slash ? d < 1 : which_dirs[d] != 0) {
+        path[0] = 0;
+        if (!slash) ui_cpy(path, which_dirs[d]);
+        ui_cat(path, name);
+        if (ustat(path, st) == 0 && st[0] != 1) return 1;
+        ui_cat(path, ".c4r");
+        if (ustat(path, st) == 0 && st[0] != 1) return 1;
+        ++d;
+    }
+    return 0;
+}
+
+void run_command(char *cmd) {
+    if (is_windowed(cmd) && term_run(cmd) >= 0) return;
+    term_open(cmd);
+}
 int note_open(char *path) { return notepad_open(path); }
 
 void launch(int kind) {

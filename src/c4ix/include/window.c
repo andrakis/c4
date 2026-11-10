@@ -34,6 +34,23 @@ void win_begin(int op) { win_ch(27); win_ch('_'); win_ch('G'); win_ch(op); }
 void win_end() { win_ch(27); win_ch('\\'); }
 void win_arg(int v, int more) { win_num(v); if (more) win_ch(','); }
 
+// 1 when stdin and stdout are both pipes, as a window of the desktop's
+// gives them: a Terminal, or one the desktop opened for the program alone.
+// SYS_FSTAT's ST_MODE (c4ix_user.h): a pipe is S_IFIFO|0666, the console
+// S_IFCHR|0666.
+int win_here() {
+    int *st, k, r;
+    st = (int *)malloc(8 * sizeof(int));
+    if (!st) return 0;
+    r = 1; k = 0;
+    while (k < 2) {
+        if (win_sys(236, k, (int)st, 8) < 0 || st[6] != 4534) r = 0;
+        k = k + 1;
+    }
+    free((char *)st);
+    return r;
+}
+
 // Become a canvas, titled. 1 on success.
 int win_open(char *title) {
     // a program in a window draws too: CPU 0, unless it was pinned (sched_softpin).
@@ -79,6 +96,11 @@ void win_present() { win_begin('p'); win_end(); win_flush(); }
 // 256 colours (0x00RRGGBB) at pal, scaled to fill the canvas; present to
 // show it. The window reads them when it draws, and then sends WIN_FRAME:
 // draw the next frame into them only after that, or into other memory.
+// The menu bar of a window of the program's own (window.h): menu n, and an
+// item of it. Sent with the next frame.
+void win_menu(int n, char *title) { win_begin('M'); win_num(n); win_ch(';'); win_str(title); win_end(); }
+void win_item(int n, char *label) { win_begin('I'); win_num(n); win_ch(';'); win_str(label); win_end(); }
+
 void win_fb(char *pixels, int w, int h, int pitch, int *pal) {
     win_begin('f'); win_arg((int)pixels, 1); win_arg(w, 1); win_arg(h, 1);
     win_arg(pitch, 1); win_arg((int)pal, 0); win_end();
@@ -117,6 +139,7 @@ int win_poll(int *ev) {
         else if (k == 's') kind = WIN_SIZE;
         else if (k == 'K') kind = WIN_KEYUP;
         else if (k == 'f') kind = WIN_FRAME;
+        else if (k == 'c') kind = WIN_MENU;
         j = 3; k = 0;
         while (k < 3) {
             v = 0; neg = 0;

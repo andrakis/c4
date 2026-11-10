@@ -282,13 +282,43 @@ static int del_tree(char *dir) {
     return bad;
 }
 
-// Every folder, depth first, for the tree, each folder's own by name (as
-// namecmp orders them). DIR is copied in first thing, so a caller may pass
-// a buffer the recursion will reuse. A folder's folders are taken smallest
-// first, a pass over it for each -- the next name after the last one
-// taken -- rather than with a list of them at every level of the recursion.
+// The folders open in the tree, by the hash of the path, while it is
+// made again (tree_load)
+static int t_open[MAXOPEN], t_nopen;
+
+static int phash(char *s);
+
+// Is DIR the folder shown, or one above it?
+static int t_above(struct files *f, char *dir) {
+    int n;
+    n = ui_len(dir);
+    if (n == 1 && dir[0] == '/') return 1;
+    return !memcmp(f->path, dir, n) && (f->path[n] == 0 || f->path[n] == '/');
+}
+
+// Has DIR a folder in it? One a directory still on the host (stat's
+// device 3: vfs.c, vfs_lazydir) is taken to have, as the games' do: to
+// look would make its entries.
+static int t_haskids(char *dir) {
+    int i, r, st[ST_WORDS];
+    char nm[NAMEW];
+    if (ustat2(dir, st, ST_WORDS) >= 0 && st[ST_DEV] == 3) return 1;
+    i = 0;
+    while ((r = ureaddir(dir, i, nm)) >= 0) { if (r == 1) return 1; ++i; }
+    return 0;
+}
+
+// The tree's folders, depth first, each folder's own by name (as namecmp
+// orders them) -- but only in the open folders and those above the one
+// shown: the rest are a row each, with a box if they have folders, and
+// are read when opened (t_toggle). Every folder on the disk was walked at
+// every click once, hundreds with the games' sources: a second each.
+// DIR is copied in first thing, so a caller may pass a buffer the
+// recursion will reuse. A folder's folders are taken smallest first, a
+// pass over it for each -- the next name after the last one taken --
+// rather than with a list of them at every level of the recursion.
 static void tree_walk(struct files *f, char *dir, int depth) {
-    int i, r, me, took, found;
+    int i, r, me, took, found, h;
     char nm[NAMEW], last[NAMEW], next[NAMEW];
     if (f->nt >= MAXT || depth > MAXDEPTH) return;
     me = f->nt;
@@ -296,6 +326,15 @@ static void tree_walk(struct files *f, char *dir, int depth) {
     f->tdepth[me] = depth;
     f->tflag[me] = 0;
     ++f->nt;
+    if (depth > 0 && !t_above(f, dir)) {
+        h = phash(dir);
+        i = 0;
+        while (i < t_nopen && t_open[i] != h) ++i;
+        if (i == t_nopen) {
+            if (depth < MAXDEPTH && t_haskids(dir)) f->tflag[me] = T_KIDS;
+            return;
+        }
+    }
     took = 0;
     while (f->nt < MAXT) {
         found = 0;
@@ -325,12 +364,12 @@ static int phash(char *s) {
 // unless it was open before -- the first time, only the root is -- but
 // every folder above the one shown opens, so the selection can be seen.
 static void tree_load(struct files *f) {
-    int open[MAXOPEN], no, first, i, j, h, d;
+    int first, i, j, h, d;
     first = f->nt == 0;
-    no = 0;
+    t_nopen = 0;
     i = 0;
     while (i < f->nt) {
-        if ((f->tflag[i] & T_KIDS) && !(f->tflag[i] & T_COLL) && no < MAXOPEN) { open[no] = phash(f->tpath + i * TPW); ++no; }
+        if ((f->tflag[i] & T_KIDS) && !(f->tflag[i] & T_COLL) && t_nopen < MAXOPEN) { t_open[t_nopen] = phash(f->tpath + i * TPW); ++t_nopen; }
         ++i;
     }
     f->nt = 0;
@@ -340,8 +379,8 @@ static void tree_load(struct files *f) {
         if ((f->tflag[i] & T_KIDS) && !(first && i == 0)) {
             h = phash(f->tpath + i * TPW);
             j = 0;
-            while (j < no && open[j] != h) ++j;
-            if (j == no) f->tflag[i] = f->tflag[i] | T_COLL;
+            while (j < t_nopen && t_open[j] != h) ++j;
+            if (j == t_nopen) f->tflag[i] = f->tflag[i] | T_COLL;
         }
         ++i;
     }
@@ -471,7 +510,16 @@ static void t_toggle(struct win *w, int i) {
     f = F(w);
     if (i < 0 || i >= f->nt || !(f->tflag[i] & T_KIDS)) return;
     f->tflag[i] = f->tflag[i] ^ T_COLL;
-    if (!(f->tflag[i] & T_COLL)) return;
+    if (!(f->tflag[i] & T_COLL)) {
+        // opened, and its folders not read yet: the tree again, with it open
+        if (i + 1 >= f->nt || f->tdepth[i + 1] <= f->tdepth[i]) {
+            d = f->ttop;
+            tree_load(f);
+            f->ttop = d;
+            f->tfollow = 0;
+        }
+        return;
+    }
     d = f->tdepth[i];
     j = i + 1;
     while (j < f->nt && f->tdepth[j] > d) { if (j == f->tsel) { t_select(w, i); return; } ++j; }

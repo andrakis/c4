@@ -48,3 +48,8 @@
 	url = git@github.com:andrakis/c4-PDCurses.git
 	branch = c4
 	update = none
+[submodule "duke3d"]
+	path = games/duke3d
+	url = git@github.com:andrakis/c4-Duke3D.git
+	branch = c4
+	update = none

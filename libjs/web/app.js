@@ -98,6 +98,14 @@ const SYSTEMS = {
   // memory whole, and its pak is 18 MB.
   quake: { label: 'Quake (bare machine)', image: `${IMAGES}/games/quake.c4r`, disk: `${IMAGES}/games`,
            argv: ['quake.c4r'], mhz: 400, mem: 128, persist: 'quake' },
+  // Duke Nukem 3D (games/duke3d), the shareware episode; and the full game
+  // from the person's own DUKE3D.GRP, which the Uploads put on the disk
+  // (duke3d -home). The bare libc holds a file in memory whole, and the
+  // Atomic Edition's GRP is 44 MB.
+  duke3d: { label: 'Duke Nukem 3D (bare machine)', image: `${IMAGES}/games/duke3d.c4r`, disk: `${IMAGES}/games`,
+            argv: ['duke3d.c4r'], mhz: 400, mem: 64, persist: 'duke3d' },
+  'duke3d-full': { label: 'Duke Nukem 3D, your files (bare machine)', image: `${IMAGES}/games/duke3d.c4r`,
+                   disk: `${IMAGES}/games`, argv: ['duke3d.c4r', '-home'], mhz: 400, mem: 128, persist: 'duke3d' },
   'wolf3d-c4ix': { label: 'Wolfenstein 3D (C4IX, direct)', image: `${IMAGES}/c4ix32.c4r`, disk: `${IMAGES}/disk`,
                    argv: ['c4ix32.c4r', '-e', 'persist -d 60 &', '-e', 'wolf3d --direct'], persist: 'c4ix', mhz: 400, mmu: true },
   'gui-demo': { label: 'GUI demo (bare machine)', image: `${IMAGES}/gui-demo.c4r`, disk: null, argv: ['gui-demo.c4r'] },

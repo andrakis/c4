@@ -2471,7 +2471,7 @@ PHONY += FORCE
 GAME_OBJS  :=
 GAME_TESTS :=
 include $(wildcard games/*/c4.mk)
-GAMES_ALL  := wolf3d doom tyrian rott quake frotz advent puzzles ace sbk pdcurses bsdgames
+GAMES_ALL  := wolf3d doom tyrian rott quake duke3d frotz advent puzzles ace sbk pdcurses bsdgames
 c4bb-images: libc-bare-objs grin-objs grin-apps $(GAME_OBJS)
 $(filter-out $(GAME_TESTS),$(GAMES_ALL:%=test-%)):
 	@echo "$@: skipped, games/$(@:test-%=%) is not here (games/README.md)"

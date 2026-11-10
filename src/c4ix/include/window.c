@@ -96,6 +96,11 @@ void win_present() { win_begin('p'); win_end(); win_flush(); }
 // 256 colours (0x00RRGGBB) at pal, scaled to fill the canvas; present to
 // show it. The window reads them when it draws, and then sends WIN_FRAME:
 // draw the next frame into them only after that, or into other memory.
+// The menu bar of a window of the program's own (window.h): menu n, and an
+// item of it. Sent with the next frame.
+void win_menu(int n, char *title) { win_begin('M'); win_num(n); win_ch(';'); win_str(title); win_end(); }
+void win_item(int n, char *label) { win_begin('I'); win_num(n); win_ch(';'); win_str(label); win_end(); }
+
 void win_fb(char *pixels, int w, int h, int pitch, int *pal) {
     win_begin('f'); win_arg((int)pixels, 1); win_arg(w, 1); win_arg(h, 1);
     win_arg(pitch, 1); win_arg((int)pal, 0); win_end();
@@ -134,6 +139,7 @@ int win_poll(int *ev) {
         else if (k == 's') kind = WIN_SIZE;
         else if (k == 'K') kind = WIN_KEYUP;
         else if (k == 'f') kind = WIN_FRAME;
+        else if (k == 'c') kind = WIN_MENU;
         j = 3; k = 0;
         while (k < 3) {
             v = 0; neg = 0;

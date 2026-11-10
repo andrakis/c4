@@ -1510,11 +1510,39 @@ Penguins' eleven games and Simon Tatham's forty Puzzles.
       curses ones make their canvas, as they did. Phantasia and hack are not
       listed: they need a current directory they can write
       (games/README.md), and a Terminal starts in `/`.
+- [x] **A menu bar, which the game gives** (asked for the same day: the
+      usual title bar, and menus to control the game). `window.h` has two
+      more ops, `M n;title` (menu n, 0 starting the bar again) and `I
+      n;label` (an item of it: `-` a rule, a leading `*` a check mark),
+      and a pick comes back as `c menu,item` (WIN_MENU). `win_menu` and
+      `win_item` send them.
+  - The game declares them, not desktop.apps, because only the game
+    knows what it has: the Puzzles' presets are the game's own list, and
+    Ace's keys differ from game to game. So the menus are there however
+    the game was started, from Go, Run... or Files.
+  - A program's own window takes them (term.c `prog_menu`: 4 menus, 40
+    items each, 2 KB of text); a Terminal ignores them, keeping its Edit
+    menu, and there the keys are the controls. The first menu grows the
+    window by the bar's height, so the canvas stays 640x400 and the mouse
+    is measured from it as before.
+  - The Puzzles: Game (New, Restart, Undo, Redo, Solve where the game
+    can, Exit), the buttons' own actions; Type, the presets, the one in
+    play checked and sent again when it changes; Help, About, a line in
+    the status bar. The button row stays.
+  - Ace: Game (New Game, F2, in every game; Undo, Backspace, in the eight
+    that undo; Thornq's hint and auto-hints, Minesweeper's autoplay,
+    Spider's arrows; Exit), Spider's Suits, Minesweeper's Level, Pegged's
+    and Taipei's Layout, and Help (F1) where a game has help. Each item
+    is a key the game's own `key()` takes, so a pick is that key. Ace has
+    no redo and no "deal this hand again": F2 deals anew.
 - [x] test-desktop.mjs, where the games are on the disk: Go > Games >
       Puzzles > Net opens a window titled Net, its frames 640x400, with
-      no Terminal; a key reaches the game; Esc ends it and the window
-      goes. `net` from Run... does the same, and Ctrl-C ends it with its
+      no Terminal; a key reaches the game; it has Game, Type and Help;
+      Game > New is a new game, a click on the board under the menu bar
+      turns a tile, and Game > Undo takes it back; Esc ends it and the
+      window goes. `net` from Run... does the same, and Ctrl-C ends it with its
       window. `net` typed in a Terminal makes the Terminal its canvas,
       and `q` gives it back. In Files, a double-click on
       `/usr/games/ace/thornq.c4r` plays Thornq in a window of its own,
-      in frames of the canvas's shape, and Ctrl-C closes it.
+      in frames of the canvas's shape, Game > New Game deals again, and
+      Ctrl-C closes it.

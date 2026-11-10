@@ -114,13 +114,14 @@ const pump = () => {
     if (t === CMD.CURSOR) pointer = words[i + 2];
     if (t === CMD.SIZE) sized = { w: words[i + 2], h: words[i + 3] };
     // an 8-bit frame, made 32-bit by the device (GUI_BLIT8): count them,
-    // and keep the last one's size and a sum of its pixels
+    // and keep the last one's place, size and a sum of all its pixels (a
+    // tile of the Puzzles' Net turned is a few thin lines)
     if (t === CMD.RGB) {
       rgbFrames++;
       const w = words[i + 4], h = words[i + 5];
       let sum = 0;
-      for (let k = 0; k < w * h; k += 97) sum = (sum * 31 + words[i + 8 + k]) | 0;
-      rgbLast = { w, h, dw: words[i + 6], dh: words[i + 7], sum };
+      for (let k = 0; k < w * h; k++) sum = (sum * 31 + words[i + 8 + k]) | 0;
+      rgbLast = { x: words[i + 2], y: words[i + 3], w, h, dw: words[i + 6], dh: words[i + 7], sum };
     }
   }
   // a size asked for in a frame: the page sizes its canvas and says so (display.js resize)
@@ -1287,6 +1288,27 @@ check(until(() => gui.w === SW && has(/^Terminal - task/) && has(/gui: done afte
       type('n');
       check(until(() => rgbFrames > n && rgbLast.sum !== before, 1500), 'a key goes to the game', `frames ${rgbFrames - n}`);
     }
+    // its menu bar (window.h's win_menu): the game's own controls
+    check(has('Game') && has('Type') && has('Help'), 'the window has the game\'s menus: Game, Type, Help', screen().slice(-300));
+    {
+      let before = rgbLast.sum, n = rgbFrames;
+      menu('Game', 'New   N');
+      check(until(() => rgbFrames > n && rgbLast.sum !== before, 1500), 'Game > New starts a new game', `frames ${rgbFrames - n}`);
+      // a move: a click in the middle of the canvas, where the frame was
+      // drawn (under the menu bar), turns the tile there
+      until(() => false, 20);
+      const cx = rgbLast.x + (rgbLast.dw >> 1), cy = rgbLast.y + (rgbLast.dh >> 1);
+      const fresh = rgbLast.sum;
+      n = rgbFrames;
+      click(cx, cy);
+      check(until(() => rgbFrames > n && rgbLast.sum !== fresh, 1500), 'a click under the menu bar reaches the board', `frames ${rgbFrames - n}`);
+      until(() => false, 20);
+      const moved = rgbLast.sum;
+      menu('Game', 'Undo   U');
+      check(moved !== fresh && until(() => rgbLast.sum === fresh, 1500), 'Game > Undo takes the move back: the picture before it',
+        `${rgbLast.sum === moved ? 'the move still shown' : 'another picture'}`);
+      check(rgbLast.dw === 640 && rgbLast.dh === 400, 'and the canvas is the size it was', JSON.stringify(rgbLast));
+    }
     key('ESC');
     check(until(() => !has('Net'), 1500) && terms() === t0, 'Esc ends the game, and its window goes with it', screen().slice(-300));
     // its name typed in Run... is the same
@@ -1325,6 +1347,11 @@ check(until(() => gui.w === SW && has(/^Terminal - task/) && has(/gui: done afte
       'a double-click on thornq.c4r plays it in a window of its own, with no Terminal', `frames ${rgbFrames - f0} ` + screen().slice(-300));
     check(rgbLast && rgbLast.dw === 640 && rgbLast.dh === 400 && rgbLast.w * 400 === rgbLast.h * 640,
       'its frames the canvas\'s shape', JSON.stringify(rgbLast));
+    {
+      const before = rgbLast.sum, n = rgbFrames;
+      menu('Game', 'New Game   F2');
+      check(until(() => rgbFrames > n && rgbLast.sum !== before, 1500), 'Game > New Game deals again', `frames ${rgbFrames - n}`);
+    }
     key('c', 2, 67);
     check(until(() => !has('thornq'), 1500), 'Ctrl-C ends it, and the window with it', screen().slice(-300));
     clickText('File', all => all.filter(t => inFiles([t])).sort((p, q) => p.y - q.y)[0]); settle(); clickText('Close');

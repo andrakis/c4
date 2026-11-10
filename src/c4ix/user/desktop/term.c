@@ -20,7 +20,9 @@
 // when the program ends -- unless it is showing text the program wrote,
 // an error most likely, which stays to be read. Ctrl-C ends the program,
 // as closing the window does. Go > Games and Files start a game so when
-// its /etc/desktop.apps line says `window` (tools.c, run_command).
+// its /etc/desktop.apps line says `window` (tools.c, run_command). The
+// program may give its window a menu bar (window.h: the M and I ops): the
+// window grows by the bar's height, and a pick goes down the pipe as 'c'.
 //
 // A canvas may show a framebuffer, the 'f' op: 8-bit pixels and a
 // palette in the program's own memory, which GUI_BLIT8 has the host read
@@ -42,6 +44,8 @@ enum { IOBUF = 8192 };
 // graphics mode: the canvas (the grid's own area), and the two display
 // lists -- the one being built, and the one shown
 enum { GW = 640, GH = 400, GLIST = 6000 };
+// a program's own window's menu bar: menus, items in each, and their text
+enum { MENUS = 4, MITEMS = 40, MTEXT = 2048 };
 
 struct term {
     int win;                      // its window's number
@@ -55,6 +59,11 @@ struct term {
     int ncur, nshow;
     int gcur[GLIST];              // [len, op, numbers..., text]
     int gshow[GLIST];
+    // the menu bar a program gave its own window (prog_menu)
+    int nmenus, mlen, mcount[MENUS];
+    struct wk_menu menus[MENUS];
+    char *mitem[MENUS * (MITEMS + 1)];
+    char mtext[MTEXT];
 };
 
 static char tmp[128];
@@ -88,6 +97,40 @@ static void gfx_mode(struct term *t, int on) {
     mark_dirty();
 }
 
+// A program's own window's menu bar (window.h): M starts menu m (m 0 the
+// whole bar again), I adds an item to menu m. They come in order; one
+// that does not fit is dropped. The first menu grows the window by the
+// bar's height, so the canvas keeps its size and its place in the client
+// area, where the mouse is measured from.
+static void prog_menu(struct term *t, int op, int m, char *s) {
+    struct win *w;
+    int k, had;
+    if (!s) s = "";
+    k = ui_len(s);
+    if (m < 0 || m >= MENUS) return;
+    had = t->nmenus;
+    if (op == 'M') {
+        if (m == 0) { t->nmenus = 0; t->mlen = 0; }
+        if (m != t->nmenus || t->mlen + k + 1 > MTEXT) return;
+        t->menus[m].title = t->mtext + t->mlen;
+        t->menus[m].items = t->mitem + m * (MITEMS + 1);
+        t->menus[m].items[0] = 0;
+        t->mcount[m] = 0;
+        t->nmenus = m + 1;
+    } else {
+        if (m >= t->nmenus || t->mcount[m] >= MITEMS || t->mlen + k + 1 > MTEXT) return;
+        t->menus[m].items[t->mcount[m]] = t->mtext + t->mlen;
+        t->mcount[m] = t->mcount[m] + 1;
+        t->menus[m].items[t->mcount[m]] = 0;
+    }
+    ui_cpy(t->mtext + t->mlen, s);
+    if (op == 'I' && s[0] == '*') t->mtext[t->mlen] = WK_CHECKED;
+    t->mlen = t->mlen + k + 1;
+    wk_menu(t->win, t->menus, t->nmenus);
+    if (!had && t->nmenus && (w = win_get(t->win))) wk_place(t->win, w->x, w->y, w->w, w->h + MENU_H);
+    mark_dirty();
+}
+
 // One command, ESC _ and ESC \ already stripped: G, the op, numbers
 // separated by commas, and for text a ';' and the string.
 static void apc(char *ctx, char *abuf, int alen) {
@@ -116,6 +159,8 @@ static void apc(char *ctx, char *abuf, int alen) {
     }
     if (op == 'q') { gfx_mode(t, 0); return; }
     if (!t->gfx) return;
+    // a menu bar: a program's own window's only (a Terminal has its own)
+    if (op == 'M' || op == 'I') { if (t->bare) prog_menu(t, op, n ? nums[0] : 0, s); return; }
     if (op == 'p') {
         memcpy(t->gshow, t->gcur, t->ncur * sizeof(int));
         t->nshow = t->ncur;
@@ -252,7 +297,7 @@ int term_run(char *cmd) {
     s = argv[0];
     while (*s) ++s;
     while (s > argv[0] && s[-1] != '/') --s;
-    i = win_open(K_TERM, s, TG_W + 2 * BORDER, TG_H + 2 * BORDER + TITLE_H, sizeof(struct term));
+    i = win_open(K_TERM, s, TG_W + 2 * BORDER, TG_H + 2 * BORDER + TITLE_H + 1, sizeof(struct term));
     if (i < 0) return 0 - 1;
     w = win_get(i);
     w->resizable = 0;
@@ -364,6 +409,8 @@ static void paste(struct win *w, struct term *t) {
 void term_command(struct win *w, int menu, int item) {
     struct term *t;
     t = T(w);
+    // a program's own window: its menus are the program's
+    if (t->bare) { if (!t->ended && t->gfx) event(t, 'c', menu, item, 0); return; }
     if (!t->g) return;
     if (item == T_COPY) { if (tg_copy(t->g, 0)) tg_unselect(t->g); }
     else if (item == T_COPYALL) tg_copy(t->g, 1);

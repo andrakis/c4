@@ -17,6 +17,14 @@
 // console there is none, and a game takes the display instead
 // (display.h); the Ace of Penguins and the Puzzles decide so.
 //
+// In a window of its own a program may have a menu bar: win_menu(n,
+// title) starts menu n (0 starts the bar again), win_item(n, label) adds
+// an item to it -- "-" a rule, a leading '*' a check mark -- and a pick
+// comes back from win_poll as WIN_MENU, ev[0] the menu and ev[1] the
+// item, rules counted. The window grows by the bar's height, and the
+// canvas and its coordinates stay as they were. A Terminal, which has a
+// menu of its own, ignores both: there the keys are the game's controls.
+//
 // Built by either compiler. The functions are in window.c, beside this
 // file, which this includes unless C4IX_SHARED is defined: then a program
 // links C4IX's shared libc4ix (c4rlink -l /lib/libc4ix.c4s), which has
@@ -38,10 +46,13 @@
 //     t x,y,rgb,size;text  text        p                 show the frame
 //     f addr,w,h,pitch,pal  an 8-bit framebuffer, scaled to the canvas
 //     q         be a terminal again
+//     M n;title  menu n of the menu bar (0: the bar anew)
+//     I n;label  an item of menu n ("-" a rule, "*label" checked)
 //   window -> program   ESC E <kind> <a>,<b>,<c> newline
 //     s w,h,0 the canvas size   d x,y,button  u x,y,button
 //     m x,y,buttons             k keycode,char,mods
 //     K keycode,char,mods (let go)  f 0,0,0 (a framebuffer frame was drawn)
+//     c menu,item,0 (an item of the menu bar picked)
 
 #ifndef __C4IX_WINDOW_H
 #define __C4IX_WINDOW_H 1
@@ -50,7 +61,7 @@ enum {
     WIN_W = 640, WIN_H = 400,
     // win_poll's answers
     WIN_NONE = 0, WIN_DOWN = 1, WIN_UP = 2, WIN_MOVE = 3, WIN_KEY = 4, WIN_SIZE = 5,
-    WIN_KEYUP = 6, WIN_FRAME = 7,
+    WIN_KEYUP = 6, WIN_FRAME = 7, WIN_MENU = 8,
     // key codes (browser keyCodes) and modifiers
     WIN_K_ESC = 27, WIN_K_ENTER = 13, WIN_K_LEFT = 37, WIN_K_UP = 38,
     WIN_K_RIGHT = 39, WIN_K_DOWN = 40, WIN_SHIFT = 1, WIN_CTRL = 2, WIN_ALT = 4,
@@ -77,6 +88,8 @@ void win_disc(int x, int y, int r, int rgb);
 void win_text(int x, int y, int rgb, int size, char *s);
 void win_present();
 void win_fb(char *pixels, int w, int h, int pitch, int *pal);
+void win_menu(int n, char *title);
+void win_item(int n, char *label);
 void win_sleep(int ms);
 int win_poll(int *ev);
 

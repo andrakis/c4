@@ -468,6 +468,29 @@ console.log(reads.join(' '), Math.abs(r[1] / r[0] - 128 / 255) < 0.01 && r[0] > 
 " 2>&1)
 if [ "$out" = "255 128 384 follows" ]; then ok "the sound card's master volume: kept through RESET, and the mix follows it"
 else bad "the sound card's master volume: kept through RESET, and the mix follows it"; echo "  $out"; fi
+
+# Sixteen sample channels (CAPS bit 4): a sound on each at once, every one
+# busy, and the mix holds all sixteen -- channel 15 is not channel 7, and
+# playing on one channel cuts off only that channel's sound
+out=$(node --input-type=module -e "
+import { SoundDevice, SND } from './libjs/snd-device.js';
+import { SoundMixer } from './libjs/snd-mix.js';
+let t = 0;
+const mem = new Uint8Array(4096).fill(130);
+const d = new SoundDevice({ now: () => t });
+d.arena = { dmaRead: (a, n) => mem.subarray(a, a + n) };
+const caps = d.read32(SND.CAPS);
+d.write32(SND.PCM_LEN, 4000); d.write32(SND.PCM_RATE, 8000);
+for (let c = 0; c < 16; c++) { d.write32(SND.PCM_VOL, c < 8 ? 0x00ff : 0xff00); d.write32(SND.PCM_PLAY, c); }
+const busy = d.read32(SND.PCM_BUSY);
+const mix = new SoundMixer(8000);
+mix.push(d.drain());
+const L = new Float32Array(400), R = new Float32Array(400);
+mix.render(L, R, 400);
+console.log(caps & 16, busy.toString(16), (L[200] / R[200]).toFixed(3), L[200] > 0.09 ? 'all' : 'some ' + L[200]);
+" 2>&1)
+if [ "$out" = "16 ffff 1.000 all" ]; then ok "the sound card's sixteen sample channels, all sounding at once"
+else bad "the sound card's sixteen sample channels, all sounding at once"; echo "  $out"; fi
 }
 
 # Persistence (src/c4ix/user/persist.c): drive 1 keeps what changed. One

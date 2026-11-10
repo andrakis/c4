@@ -1,5 +1,5 @@
 // snd-device.js - the sound card, host side: an AdLib (an OPL2, or the
-// OPL3 it grew into), eight channels of 8-bit samples, and the PC
+// OPL3 it grew into), sixteen channels of 8-bit samples, and the PC
 // speaker. The machine never makes a sample. What it writes becomes
 // events stamped with when they happen, and whoever listens -- the
 // page's AudioWorklet, or cli.js --wav writing a file -- mixes them with
@@ -7,7 +7,8 @@
 //
 // Registers, one word each, in the window bus.js routes here:
 //
-//   0x480 CAPS      r    bit0 OPL, bit1 samples, bit2 speaker, bit3 OPL3
+//   0x480 CAPS      r    bit0 OPL, bit1 samples, bit2 speaker, bit3 OPL3,
+//                        bit4 sixteen sample channels (eight without it)
 //   0x484 OPL       w    (reg << 8) | val, reg 0x000-0x1FF (0x100 up is the OPL3's second bank)
 //   0x488 WAIT      w    n: the stream moves n CLOCK units on
 //   0x48C AHEAD     r    microseconds the stream is ahead of now
@@ -16,7 +17,7 @@
 //   0x498 PCM_LEN   r/w  how many
 //   0x49C PCM_RATE  r/w  at what rate, Hz
 //   0x4A0 PCM_VOL   r/w  left | (right << 8), 0-255 each
-//   0x4A4 PCM_PLAY  w    ch 0-7: play ADDR/LEN/RATE/VOL there now (the bytes are copied now)
+//   0x4A4 PCM_PLAY  w    ch 0-15: play ADDR/LEN/RATE/VOL there now (the bytes are copied now)
 //   0x4A8 PCM_STOP  w    ch, or -1 for all of them
 //   0x4AC PCM_SETVOL w   ch: PCM_VOL becomes its volume, as it plays
 //   0x4B0 PCM_BUSY  r    a bit for each channel still playing
@@ -55,7 +56,7 @@ export const SND = {
 export const EVT = { OPL: 1, PCM: 2, STOP: 3, VOL: 4, SPK: 5, RESET: 6, MASTER: 7 };
 export const MUTE = 0x100;
 
-const CHANNELS = 8;
+const CHANNELS = 16;
 const PCM_MAX = 4 << 20;                 // bytes in one sample
 const EVENT_LIMIT = 1 << 16;             // undelivered events before the oldest go
 
@@ -102,7 +103,7 @@ export class SoundDevice {
 
   read32(addr) {
     switch (addr) {
-      case SND.CAPS: return 1 | 2 | 4 | 8;
+      case SND.CAPS: return 1 | 2 | 4 | 8 | 16;
       case SND.AHEAD: return Math.max(0, Math.min(0x7fffffff, Math.round(this.cursor - this.now())));
       case SND.CLOCK: return this.clock;
       case SND.PCM_ADDR: return this.pcm.addr;

@@ -73,9 +73,15 @@ enum { LINEMAX  = 256 };
 enum { DIRMAX   = 16384 };   // c4dos.dir, slurped for name resolution
 enum { RAMFILES  = 64 };     // RAM disk slots
 enum { RAMHANDLE = 8 };      // RAM files open at once
-enum { RAMFD     = 1000 };   // pseudo-fd base, above any host descriptor
+// The pseudo-fds sit far above any host descriptor. They were 1000 and
+// 2000, but the simulated machine (src/c4bb/sim/devices.js) never reuses
+// a descriptor: each open takes the next number. The ladder disk with
+// every game on it, and a long APPEND, opened its thousandth file during
+// BUILD, and c4cc.c4r's descriptor was taken for a RAM handle: "c4cc.c4r
+// is not a program".
+enum { RAMFD     = 1073741824 }; // pseudo-fd base, 2^30
 enum { WHANDLE   = 16 };     // files open for writing at once
-enum { WFD       = 2000 };   // write handles start here (create's answers)
+enum { WFD       = 1073745920 }; // write handles start here (create's answers): RAMFD + 4096
 enum { RAMSIZE   = 1048576 };// default RAM disk budget, SIZE= overrides
 enum { C4DOS_API_SLOTS = 40 }; // API table words (include/c4dos.h agrees)
 enum { ARGVMAX  = 16 };

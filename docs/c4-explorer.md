@@ -596,9 +596,12 @@ Choices behind this design:
   only when it is there.
 
   The first part of this is built, for the games alone
-  (docs/c4ix-desktop.md, part twenty-three): each line starts
-  `CATEGORY|NAME|COMMAND`, a game's `c4ix.vfs.txt` brings its own, and
-  they go in Go > Games. The other fields would follow those three.
+  (docs/c4ix-desktop.md, parts twenty-three and twenty-four): each line
+  starts `CATEGORY|NAME|COMMAND`, a game's `c4ix.vfs.txt` brings its
+  own, and they go in Go > Games. A fourth field, FLAGS, is words that
+  say how the program starts: `window`, a window of its own with no
+  shell, is the one there is, and `single` would be another. The
+  suffixes and the icon would follow it.
 - **From a shell.** `start PROG ARGS` writes one canvas escape to its
   Terminal (`ESC _ G x;PROG ARGS ESC \`), and the desktop spawns PROG
   as a client, a child of the desktop rather than of the shell.

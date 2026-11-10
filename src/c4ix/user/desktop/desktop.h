@@ -27,7 +27,7 @@
 #include "c4ix_user.h"
 #include "wkwin.h"
 
-enum { TASK_H = 30, SIGTERM = 15 };
+enum { TASK_H = 30, SIGINT = 2, SIGTERM = 15 };
 
 // window kinds (the kit's icons have the same numbers)
 enum { K_TERM = 1, K_ABOUT = 2, K_FILES = 3, K_TASKS = 4, K_NOTE = 5, K_CALC = 6,
@@ -51,12 +51,15 @@ int  now_ms();
 void msgbox(struct win *owner, char *title, char *text, int yesno, int action);
 void inputbox(struct win *owner, char *title, char *prompt, char *initial, int action);
 char *dialog_text();                  // the text an input dialog was answered with
-void run_command(char *cmd);          // a new Terminal running cmd
+void run_command(char *cmd);          // a new Terminal running cmd, or a window game's own window
+void desk_window_app(char *cmd);      // cmd's program is a game that plays in a window of its own
+int  desk_which(char *cmd, char *path);   // the path of cmd's program, as the shell finds it; 0 none
 void launch(int kind);                // a new window of that kind (the Go menu, the icons)
 struct wk_class *kind_class(int kind);
 
 // ---- the tools: each window kind's hooks (tools.c calls these) ----
 int  term_open(char *cmd);
+int  term_run(char *cmd);             // cmd in a window that is only its canvas, no shell
 void term_draw(struct win *w, int ox, int oy, int cw, int ch, int focused);
 void term_key(struct win *w, int code, int ch, int mods);
 void term_keyup(struct win *w, int code, int ch, int mods);

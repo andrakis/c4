@@ -15,6 +15,13 @@
 // window becomes a terminal again when the program says so, when Ctrl-C
 // stops it, or when the shell's prompt comes back.
 //
+// Or the window is a program's own (term_run): no shell and no menu, the
+// program itself on the pipes, and the window only its canvas. It closes
+// when the program ends -- unless it is showing text the program wrote,
+// an error most likely, which stays to be read. Ctrl-C ends the program,
+// as closing the window does. Go > Games and Files start a game so when
+// its /etc/desktop.apps line says `window` (tools.c, run_command).
+//
 // A canvas may show a framebuffer, the 'f' op: 8-bit pixels and a
 // palette in the program's own memory, which GUI_BLIT8 has the host read
 // and scale to the canvas. Once a frame with one has been drawn the
@@ -39,6 +46,7 @@ enum { GW = 640, GH = 400, GLIST = 6000 };
 struct term {
     int win;                      // its window's number
     int pid, in_w, out_r, ended;
+    int bare;                     // the program's own window: no shell (term_run)
     struct tgrid *g;              // the text
     char pending[128];            // a command to type at the first prompt
     int gfx, buttons;             // a canvas now; mouse buttons held on it
@@ -172,7 +180,7 @@ static void gfx_draw(struct term *t, int ox, int oy) {
 // window and never reach the console. Instead what was opened is closed,
 // 0, 1 and 2 are as they were, and term_open says no shell started.
 static char *sh_argv[3] = { "c4ix-sh.c4r", "-p", 0 };   // -p: the prompt on the input line
-static int start(struct term *t) {
+static int start(struct term *t, char *path, int argc, char **argv) {
     int pin[2], pout[2], s0, s1, s2;
     t->pid = 0 - 1;
     if (upipe(pin) < 0) return 0;
@@ -182,7 +190,7 @@ static int start(struct term *t) {
         ucloexec(pin[1], 1); ucloexec(pout[0], 1);
         ucloexec(s0, 1); ucloexec(s1, 1); ucloexec(s2, 1);
         if (udup2(pin[0], STDIN) >= 0 && udup2(pout[1], STDOUT) >= 0 && udup2(pout[1], STDERR) >= 0)
-            t->pid = spawn("c4ix-sh.c4r", 2, sh_argv);
+            t->pid = spawn(path, argc, argv);
         // s0, s1 and s2 are open, so these cannot fail
         udup2(s0, STDIN); udup2(s1, STDOUT); udup2(s2, STDERR);
     }
@@ -211,12 +219,52 @@ int term_open(char *cmd) {
     if (!(t->g = tg_new(i))) { t->ended = 1; win_close(i); return 0 - 1; }   // no memory left for it
     t->g->apc = apc; t->g->ctx = (char *)t;
     if (cmd) ui_ncpy(t->pending, cmd, 128);
-    if (!start(t)) { tg_say(t->g, "desktop: could not start a shell\n"); t->ended = 1; t->pid = 0 - 1; return i; }
+    if (!start(t, "c4ix-sh.c4r", 2, sh_argv)) { tg_say(t->g, "desktop: could not start a shell\n"); t->ended = 1; t->pid = 0 - 1; return i; }
     // "Terminal - task N": the id ps shows for this window's shell
     ui_cpy(tmp, "Terminal - task ");
     k = ui_len(tmp);
     ui_num(tmp + k, t->pid);
     win_title(w, tmp);
+    return i;
+}
+
+// A program in a window of its own, with no shell: the command's words are
+// its arguments, the first found as the shell finds it (desk_which). The
+// window is the canvas's size, with no menu and no scroll bar, and has the
+// program's name for a title until the program gives one.
+enum { RUN_ARGS = 16 };
+int term_run(char *cmd) {
+    int i, n;
+    struct win *w;
+    struct term *t;
+    char path[WK_PATH], line[128], *argv[RUN_ARGS + 1], *s;
+    if (!desk_which(cmd, path)) return 0 - 1;
+    ui_ncpy(line, cmd, 128);
+    n = 0; s = line;
+    while (*s && n < RUN_ARGS) {
+        while (*s == ' ') { *s = 0; ++s; }
+        if (!*s) break;
+        argv[n] = s; ++n;
+        while (*s && *s != ' ') ++s;
+    }
+    if (n == 0) return 0 - 1;
+    argv[n] = 0;
+    s = argv[0];
+    while (*s) ++s;
+    while (s > argv[0] && s[-1] != '/') --s;
+    i = win_open(K_TERM, s, TG_W + 2 * BORDER, TG_H + 2 * BORDER + TITLE_H, sizeof(struct term));
+    if (i < 0) return 0 - 1;
+    w = win_get(i);
+    w->resizable = 0;
+    t = T(w);
+    t->win = i;
+    t->bare = 1;
+    if (!(t->g = tg_new(i))) { t->ended = 1; win_close(i); return 0 - 1; }   // no memory left for it
+    t->g->apc = apc; t->g->ctx = (char *)t;
+    if (!start(t, path, n, argv)) {
+        tg_say(t->g, "desktop: could not start "); tg_say(t->g, path); tg_say(t->g, "\n");
+        t->ended = 1; t->pid = 0 - 1;
+    }
     return i;
 }
 
@@ -251,7 +299,7 @@ void term_tick(struct win *w) {
         got = got + n;
         tg_feed(t->g, iobuf, n);
         // the shell's prompt ends "$ " (c4ix-sh -p) and is the last thing it writes
-        prompt = n >= 2 && iobuf[n - 2] == '$' && iobuf[n - 1] == ' ';
+        prompt = !t->bare && n >= 2 && iobuf[n - 2] == '$' && iobuf[n - 1] == ' ';
         // the shell's prompt is back: whatever made this a canvas has ended
         if (t->gfx && prompt) gfx_mode(t, 0);
         // ... and time to type a waiting command
@@ -271,7 +319,10 @@ void term_tick(struct win *w) {
         uclose(t->out_r);
         uwait(t->pid);
         t->ended = 1;
-        tg_say(t->g, "\n[the shell has exited; close this window]\n");
+        // a program's own window goes with it, unless it shows what the program wrote
+        if (t->bare && (t->gfx || (!t->g->cx && !t->g->cy && !t->g->sbn))) { win_close(t->win); return; }
+        if (t->bare) tg_say(t->g, "\n[the program has ended; close this window]\n");
+        else tg_say(t->g, "\n[the shell has exited; close this window]\n");
     }
 }
 
@@ -337,6 +388,8 @@ void term_key(struct win *w, int code, int ch, int mods) {
     // the modifiers alone are a canvas's business; anything else typed drops a selection
     if (code == 16 || code == 17 || code == 18) { if (t->gfx) event(t, 'k', code, ch, mods); return; }
     tg_unselect(t->g);
+    // a program's own window: Ctrl-C ends the program, and with it the window
+    if (t->bare && (mods & M_CTRL) && (ch == 'c' || ch == 'C' || code == 'C')) { ukill(t->pid, SIGINT); return; }
     if ((mods & M_CTRL) && (ch == 'c' || ch == 'C' || code == 'C')) {
         // What the program wrote before the interrupt shows first, as a
         // tty's output queue would have it: drawn after the ^C, the last

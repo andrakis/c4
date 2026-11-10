@@ -34,6 +34,23 @@ void win_begin(int op) { win_ch(27); win_ch('_'); win_ch('G'); win_ch(op); }
 void win_end() { win_ch(27); win_ch('\\'); }
 void win_arg(int v, int more) { win_num(v); if (more) win_ch(','); }
 
+// 1 when stdin and stdout are both pipes, as a window of the desktop's
+// gives them: a Terminal, or one the desktop opened for the program alone.
+// SYS_FSTAT's ST_MODE (c4ix_user.h): a pipe is S_IFIFO|0666, the console
+// S_IFCHR|0666.
+int win_here() {
+    int *st, k, r;
+    st = (int *)malloc(8 * sizeof(int));
+    if (!st) return 0;
+    r = 1; k = 0;
+    while (k < 2) {
+        if (win_sys(236, k, (int)st, 8) < 0 || st[6] != 4534) r = 0;
+        k = k + 1;
+    }
+    free((char *)st);
+    return r;
+}
+
 // Become a canvas, titled. 1 on success.
 int win_open(char *title) {
     // a program in a window draws too: CPU 0, unless it was pinned (sched_softpin).

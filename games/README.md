@@ -51,10 +51,23 @@ Its repository's branch `c4` carries, beside the game:
   `NAME.c4r` its block puts there (Wolfenstein 3D has two, `wolf3d` and
   the registered `wolf3d6`). So `wolf3d` runs from any directory.
   A `#@app CATEGORY|NAME|COMMAND` line in it puts a game in the desktop's
-  Go menu: `#@app Games|Doom|doom`, or `#@app Games/Puzzles|Net|puzzles net`
+  Go menu: `#@app Games|Doom|doom`, or `#@app Games/BSD Games|Robots|robots`
   for a menu of its own within Games. A game can have as many as it has
   things to start. vfs-games.py gathers them into `/etc/desktop.apps`
-  (docs/c4ix-desktop.md, part twenty-three).
+  (docs/c4ix-desktop.md, part twenty-three). The command runs in a new
+  Terminal. A fourth field of words, FLAGS, can say otherwise: `window`
+  starts the program in a window that is only its canvas, with no shell,
+  which closes when it ends -- for a game played with the mouse in a window
+  of its own (window.h), as the Ace of Penguins' and the Puzzles' are:
+  `#@app Games/Puzzles|Net|net|window`. Files and Run... do the same for
+  that program, named alone or by its path under `/usr/games`
+  (docs/c4ix-desktop.md, part twenty-four).
+
+  The menu has Cards and Puzzles in windows of their own; Doom, Quake,
+  Rise of the Triad, Super Blit Kart, Tyrian and Wolfenstein 3D, which take
+  the whole display from a Terminal; and Text Adventures and BSD Games in a
+  Terminal. Phantasia and hack are left out, since they need a current
+  directory they can write.
 
 Its tracked text files, but not `data/`, go on the disk too, at their
 paths in c4 (`games/NAME/...`), so C4IX has them in `/usr/games/NAME`,
@@ -72,6 +85,9 @@ does not need at all (3 KB, libc-math's, for a game that does no math).
 
 The Puzzles are forty programs that share a core, so `c4-images.sh` links an
 image for each of them, about 800 KB on C4IX, and their block names them all.
+Each plays in a window, as the Ace of Penguins' games do: the one it was started
+in, a Terminal or the desktop's window for it alone, and the whole display on
+the console or with `--fullscreen` (Ace's is `-fullscreen`).
 `puzzles` lists them, which is also the image `vfs-games.py` looks for to say
 the game is on the disk: `c4ix-NAME.c4r`, for NAME the game's directory.
 ## Curses

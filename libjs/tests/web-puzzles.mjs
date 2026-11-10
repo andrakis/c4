@@ -1,7 +1,8 @@
 // web-puzzles.mjs - Simon Tatham's Puzzles on C4IX, in a browser
-// (games/puzzles/c4/README.md): Net on the whole display, played with the
-// mouse and the keyboard, its buttons, the desktop back when it ends, then
-// in a Terminal window; and a few more games, for their text. Over CDP, in a
+// (games/puzzles/c4/README.md): Net on the whole display (--fullscreen),
+// played with the mouse and the keyboard, its buttons, the desktop back when
+// it ends, then in the Terminal it was typed in, where it plays by default;
+// and a few more games on the display, for their text. Over CDP, in a
 // tab of its own in one of the user's Chromes (cdp.mjs), against a page served
 // from this tree:
 //
@@ -62,7 +63,7 @@ try {
   await term();
 
   // ---- Net, the same game test-puzzles plays, on the whole display ----
-  await tab.type('net 5x5:85a78294523ebdb592379c831\n');
+  await tab.type('net --fullscreen 5x5:85a78294523ebdb592379c831\n');
   await sleep(6000);
   const w = await tab.eval("document.getElementById('display').width");
   ok('the display is the game\'s, 640 across', w === 640, w);
@@ -114,10 +115,10 @@ try {
   ok('Quit: the desktop has its display back', await shownHas(/^Terminal - task/, 30000));
   await shot('net-6-desktop');
 
-  // ---- --window: in the Terminal it was started from ----
+  // ---- by default: in the Terminal it was typed in ----
   await term();
   await tab.eval(`${shown}.length = 0`).catch(() => {});
-  await tab.type('net --window 5x5:85a78294523ebdb592379c831\n');
+  await tab.type('net 5x5:85a78294523ebdb592379c831\n');
   await sleep(5000);
   await shot('net-7-window');
   // the middle of the board, at its place in the window on an 800x600 desktop
@@ -133,7 +134,7 @@ try {
   // ---- the rest, for their text and their shapes ----
   for (const g of ['mines', 'solo', 'keen', 'untangle', 'map', 'loopy', 'tracks']) {
     await term();
-    await tab.type(`${g}\n`);
+    await tab.type(`${g} --fullscreen\n`);
     await sleep(g === 'keen' || g === 'loopy' ? 12000 : 7000);
     await shot(`game-${g}`);
     await tab.key('Escape');

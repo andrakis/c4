@@ -7,7 +7,15 @@
 // travels through the program's own stdout and stdin, as escape
 // sequences the Terminal understands, so there is nothing to
 // attach to and nothing to clean up: when the program ends, the window
-// is a terminal again.
+// is a terminal again. The desktop can also start a program in a window
+// that is only its canvas, with no shell (Go > Games, and Files, for the
+// games whose /etc/desktop.apps line says `window`): there the window
+// closes when the program ends.
+//
+// win_here() says whether there is a window to open: stdin and stdout
+// are pipes, as the desktop gives a program in either kind. On the
+// console there is none, and a game takes the display instead
+// (display.h); the Ace of Penguins and the Puzzles decide so.
 //
 // Built by either compiler. The functions are in window.c, beside this
 // file, which this includes unless C4IX_SHARED is defined: then a program
@@ -58,6 +66,7 @@ void win_num(int v);
 void win_begin(int op);
 void win_end();
 void win_arg(int v, int more);
+int win_here();
 int win_open(char *title);
 void win_close();
 void win_clear(int rgb);

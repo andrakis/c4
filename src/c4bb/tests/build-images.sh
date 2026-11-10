@@ -509,13 +509,22 @@ if [ -n "$GAMES" ] && ls .libc-bare/*.c4o > /dev/null 2>&1; then
     # The games disk stays flat (the bare machine has no directories), but
     # the page's C4DOS disks give each game a directory of its own
     # (\GAMES\DOOM), so what each one put here is noted: $GAMEFILES/NAME.
+    # Two games may not put the same name here: the second would replace the
+    # first's file, unnoticed until the first was played (The Ace of
+    # Penguins and the BSD games each have a canfield.c4r).
     for g in $GAMES; do
         (cd $GAMESDISK && find . -type f | LC_ALL=C sort) > $GAMEFILES.before
+        touch $GAMEFILES.mark
         . $g/c4-images.sh bare
+        clash=$(cd $GAMESDISK && find . -type f -newer $GAMEFILES.mark | LC_ALL=C sort | LC_ALL=C comm -12 $GAMEFILES.before - | sed 's|^\./||')
+        if [ -n "$clash" ]; then
+            echo; echo "build-images: $g replaced what another game put on the games disk: $clash" >&2
+            exit 1
+        fi
         (cd $GAMESDISK && find . -type f | LC_ALL=C sort) | LC_ALL=C comm -13 $GAMEFILES.before - | sed 's|^\./||' \
             > $GAMEFILES/$(basename $g | tr a-z A-Z)
     done
-    rm -f $GAMEFILES.before
+    rm -f $GAMEFILES.before $GAMEFILES.mark
     echo
 fi
 if [ -n "$GAMES_ON_DISK" ]; then

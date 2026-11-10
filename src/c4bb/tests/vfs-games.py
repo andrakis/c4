@@ -31,11 +31,18 @@ for line in open(src).read().split('\n'):
                 if not l.startswith('#@'):
                     lines.append(pad + l if l else l)
     elif mark == '#@game-names':
+        # one directory: a name two games both give a program would be the
+        # second's, and the first's unreachable by name (the Ace of Penguins
+        # and the BSD games each had a canfield)
+        owner = {}
         for g in games:
             n = os.path.basename(g.rstrip('/'))
             progs = [l.strip().split(':')[0][:-4] for l in block(g)
                      if not l.startswith('#') and l.strip().split(':')[0].endswith('.c4r')] or [n]
             for p in progs:
+                if p in owner:
+                    sys.exit(f'vfs-games: {owner[p]} and {n} both have a program named {p}')
+                owner[p] = n
                 lines.append(f'{pad}{p}: ilink(/usr/games/{n}/{p}.c4r)')
     elif mark == '#@desktop-apps':
         if apps:

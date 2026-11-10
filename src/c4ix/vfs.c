@@ -281,10 +281,13 @@ struct vnode *vfs_cwd() {
 // directories: "." and ".." mean something, and a name is only ever
 // matched against the entries of one directory.
 
+static void vfs_dirfill(struct vnode *dir);
+
 static struct vnode *vfs_child(struct vnode *dir, char *name, int len) {
     struct vnode *vn;
     int i;
     if (!vfs_isdir(dir)) return 0;
+    vfs_dirfill(dir);
     vn = dir->child;
     while (vn) {
         i = 0;
@@ -571,10 +574,13 @@ struct vnode *vfs_ramfile(char *path) {
 // It is a change, as writing the file would be: it takes the next
 // modification stamp, so files made in a tar's order are ordered as
 // unpacking them was.
+static int vfs_lazydir(char *path, char *host);
+
 int vfs_lazyfile(char *path, char *host, int size) {
     struct vnode *vn;
     char *h;
     int n;
+    if (size < 0) return vfs_lazydir(path, host);
     sched_lock();
     if (!(vn = vfs_walk(path, 1, 0)) || vn->type != VN_RAMFILE) { sched_unlock(); return -1; }
     n = 0; while (host[n]) ++n;
@@ -592,6 +598,128 @@ int vfs_lazyfile(char *path, char *host, int size) {
     vfs_lazybytes = vfs_lazybytes + size;
     sched_unlock();
     return 0;
+}
+
+// ---- directories whose entries are the host's ----
+//
+// A host directory: PATH holds whatever the host has under the name
+// prefix HOST ("games/doom/"), but none of it is made until something
+// first looks in it -- a lookup through it, a listing, an rmdir. Then
+// the host's HOST.c4ix-dir (build-images.sh writes one in every such
+// directory) says what is there, a line each: "SIZE NAME" a file, made a
+// lazy file of the host's HOST + NAME, and "d NAME" a directory, made a
+// host directory of HOST + NAME + "/" in its turn. vfsload makes one of
+// each hostdir(PREFIX) in its manifest (SYS_LAZYFILE with a size of
+// -1), where it made a lazy file of every host file under PREFIX at
+// every boot: the games' sources and data were three thousand of them,
+// four seconds of the boot. An entry the directory already has is left
+// as it is, and a directory of the manifest's that the host has too gets
+// the host's entries the same way, when it is first looked in.
+//
+// What is made is stamped 0, not a change: persist (which stats such a
+// directory as device 3 and does not go in) saves only what is stamped
+// after its epoch there. A directory waiting to be listed is one with a
+// hostname, which is its prefix; once listed it has none.
+static int vfs_lazydir(char *path, char *host) {
+    struct vnode *vn;
+    char *h;
+    int n;
+    sched_lock();
+    if (!(vn = vfs_walk(path, 0, 0))) vn = vfs_walk(path, 1, 1);
+    if (!vn || vn->type != VN_DIR || vn == rootdir) { sched_unlock(); return -1; }
+    n = 0; while (host[n]) ++n;
+    if (!n || host[n - 1] != '/' || !(h = vfs_malloc(n + 1))) { sched_unlock(); return -1; }
+    memcpy(h, host, n + 1);
+    if (vn->hostname) free(vn->hostname);
+    vn->hostname = h;
+    sched_unlock();
+    return 0;
+}
+
+// One entry the listing names, NAME (LEN bytes) in DIR, whose host
+// prefix is PFX (PL bytes): a lazy file of SIZE bytes, or with ISDIR a
+// host directory. 0 when there was no memory for it.
+static int vfs_dirent_make(struct vnode *dir, char *pfx, int pl, char *name, int len, int isdir, int size) {
+    struct vnode *vn;
+    char *h;
+    if ((vn = vfs_child(dir, name, len))) {
+        // the manifest's directory: the host's entries join it when it is looked in
+        if (isdir && vn->type == VN_DIR && !vn->hostname) {
+            if (!(h = vfs_malloc(pl + len + 2))) return 0;
+            memcpy(h, pfx, pl); memcpy(h + pl, name, len); h[pl + len] = '/'; h[pl + len + 1] = 0;
+            vn->hostname = h;
+        }
+        return 1;
+    }
+    if (!(h = vfs_malloc(pl + len + 2))) return 0;
+    memcpy(h, pfx, pl); memcpy(h + pl, name, len);
+    h[pl + len] = isdir ? '/' : 0; h[pl + len + 1] = 0;
+    if (!(vn = vn_alloc(isdir ? VN_DIR : VN_RAMFILE))) { free(h); return 0; }
+    vfs_namecpy2(vn->name, name, len);
+    vn->parent = dir;
+    vn->next = dir->child;
+    dir->child = vn;
+    vn->mtime = 0;
+    vn->hostname = h;
+    if (!isdir) {
+        vn->size = size;
+        vn->lazy = 1;
+        vn->backed = 1;
+        ++vfs_nlazy;
+        vfs_lazybytes = vfs_lazybytes + size;
+    }
+    return 1;
+}
+
+static void vfs_dirlist(struct vnode *dir);
+
+// (lookups take no lock, and this changes the tree)
+static void vfs_dirfill(struct vnode *dir) {
+    if (!dir || dir->type != VN_DIR || !dir->hostname) return;
+    sched_lock();
+    if (dir->hostname) vfs_dirlist(dir);
+    sched_unlock();
+}
+
+static void vfs_dirlist(struct vnode *dir) {
+    char *pfx, *buf, *nb, *p, *e;
+    char host[PATH_MAX];
+    int fd, n, got, cap, pl, size, isdir, nl;
+    pfx = dir->hostname;
+    dir->hostname = 0;      // listed from here on, however this goes
+    pl = 0; while (pfx[pl]) ++pl;
+    if (pl + 10 > PATH_MAX) { free(pfx); return; }
+    memcpy(host, pfx, pl); memcpy(host + pl, ".c4ix-dir", 10);
+    if ((fd = open(host, 0)) < 0) { free(pfx); return; }
+    cap = 4096; got = 0;
+    if (!(buf = vfs_malloc(cap))) { close(fd); free(pfx); return; }
+    while ((n = read(fd, buf + got, cap - 1 - got)) > 0) {
+        got = got + n;
+        if (got < cap - 1) continue;
+        if (!(nb = vfs_malloc(cap * 2))) break;
+        memcpy(nb, buf, got);
+        free(buf);
+        buf = nb;
+        cap = cap * 2;
+    }
+    close(fd);
+    buf[got] = 0;
+    p = buf;
+    while (*p) {
+        e = p;
+        while (*e && *e != 10) ++e;
+        isdir = 0; size = 0;
+        if (*p == 'd') { isdir = 1; ++p; }
+        else while (*p >= '0' && *p <= '9') { size = size * 10 + *p - '0'; ++p; }
+        if (*p == ' ') ++p;
+        // (the length first: c4lc and c4fc order pl + (e - p) differently)
+        nl = e - p;
+        if (nl > 0 && nl < VN_NAME_MAX && pl + nl + 2 < PATH_MAX &&
+            !vfs_dirent_make(dir, pfx, pl, p, nl, isdir, size)) break;
+        p = *e ? e + 1 : e;
+    }
+    free(buf);
+    free(pfx);
 }
 
 // PATH, saved (persist.c), is the host's again at HOST, its span of the
@@ -792,7 +920,8 @@ void vn_stat(struct vnode *vn, int *out, int n) {
     st[ST_NLINK] = 1 + vn->nlinks;
     st[ST_MODE] = vn->type == VN_DIR ? 16877 : vn->type == VN_RAMFILE ? (st[ST_PROG] ? 33261 : 33188)
                 : vn->type == VN_PIPE ? 4534 : 8630;   // S_IFDIR|0755, S_IFREG|0755 or 0644, S_IFIFO|0666, S_IFCHR|0666
-    st[ST_DEV] = (vn->type == VN_RAMFILE || vn->type == VN_DIR) ? 1 : vn->type == VN_HOSTFILE ? 2 : 0;
+    st[ST_DEV] = (vn->type == VN_DIR && vn->hostname) ? 3
+               : (vn->type == VN_RAMFILE || vn->type == VN_DIR) ? 1 : vn->type == VN_HOSTFILE ? 2 : 0;
     if (n <= 0) n = 4;
     if (n > ST_WORDS) n = ST_WORDS;
     i = 0;
@@ -918,6 +1047,7 @@ static int vn_isfile(struct vnode *vn) {
 
 static struct vnode *vfs_nth_file(int i) {
     struct vnode *vn;
+    vfs_dirfill(vfs_cwd());
     vn = vfs_cwd()->child;
     while (vn) {
         if (vn_isfile(vn_res(vn))) { if (!i) return vn; --i; }
@@ -930,6 +1060,7 @@ int vfs_nfiles() {
     struct vnode *vn;
     int n;
     n = 0;
+    vfs_dirfill(vfs_cwd());
     vn = vfs_cwd()->child;
     while (vn) { if (vn_isfile(vn_res(vn))) ++n; vn = vn->next; }
     return n;
@@ -956,6 +1087,7 @@ int vfs_unlink(char *path) {
     struct task *t;
     sched_lock();
     vn = vfs_walk2(path, 0, 0);
+    if (vn && vn->type == VN_DIR) vfs_dirfill(vn);
     if (!vn || vn == rootdir || !vn->parent ||
         (vn->type == VN_DIR && vn->child) ||
         (vn->type != VN_DIR && vn->type != VN_RAMFILE && vn->type != VN_LINK)) { sched_unlock(); return -1; }
@@ -1000,7 +1132,7 @@ int vfs_unlink(char *path) {
         // is a pointer, with no count (it stays, with no name, until reboot)
         t = task_head;
         while (t && t->cwd != vn) t = t->next;
-        if (!t) sl4b_free(vn_cache, (char *)vn);
+        if (!t) { if (vn->hostname) free(vn->hostname); vn->hostname = 0; sl4b_free(vn_cache, (char *)vn); }
     }
     sched_unlock();
     return 0;
@@ -1048,6 +1180,7 @@ int vfs_direntry(struct vnode *dir, int index, char *name, int *isdir) {
     int i;
     if (!vfs_isdir(dir)) return 0;
     sched_lock();
+    vfs_dirfill(dir);
     vn = dir->child;
     i = 0;
     while (vn) {

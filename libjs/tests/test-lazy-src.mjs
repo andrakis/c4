@@ -31,8 +31,11 @@ const read = n => { try { return new Uint8Array(readFileSync(join(DISK, n))); } 
 
 // C4IX on a lazy disk with what the cache had, to its shell, its root
 // archive unpacked (so all of the boot is over); then each command: its
-// output, and the games' files fetched by the time it was done
-const ofGames = a => a.filter(n => n.startsWith('games/'));
+// output, and the games' files fetched by the time it was done -- not
+// their directories' listings (.c4ix-dir), which C4IX reads when it first
+// looks in a directory (vfs.c, vfs_lazydir)
+const isListing = n => n.endsWith('/.c4ix-dir');
+const ofGames = a => a.filter(n => n.startsWith('games/') && !isListing(n));
 async function run(cached, cmds) {
   const fetched = [], kept = [];
   const files = new LazyFiles(index, n => { fetched.push(n); return read(n); },
@@ -45,13 +48,14 @@ async function run(cached, cmds) {
   const prompts = from => text(from).split('c4ix:/$').length - 1;
   for (let i = 0; i < 3000 && !prompts(0); i++) vm.run(2e6);
   const task = /unpacking \S+ in the background as task (\d+)/.exec(text());
-  const res = { ok: prompts(0) > 0 && !!task, files, outs: [], games: [] };
+  const res = { ok: prompts(0) > 0 && !!task, files, outs: [], games: [], listings: [] };
   for (const c of [task ? `wait ${task[1]}` : 'true', ...cmds]) {
     const n0 = out.length;
     typeBytes(vm, new TextEncoder().encode(c + '\n'));
     for (let i = 0; i < 3000 && !prompts(n0); i++) vm.run(2e6);
     res.outs.push(text(n0));
     res.games.push(ofGames(fetched));
+    res.listings.push(fetched.filter(isListing));
   }
   res.fetched = fetched;
   await Promise.all(kept);
@@ -66,6 +70,9 @@ const want = `${zlib.crc32(read(name)).toString(16).padStart(8, '0')} ${size} ${
 const r = await run([], [`ls ${dir}`, crc, crc]);
 check(r.ok, 'C4IX boots to its shell, and unpacks its root archive');
 check(r.games[0].length === 0, 'the boot fetched no source', r.games[0].join(' '));
+const listed = r.listings[1].filter(n => !r.listings[0].includes(n));
+check(listed.includes(`${name.slice(0, name.lastIndexOf('/'))}/.c4ix-dir`) && listed.every(isListing) && !r.listings[0].length,
+  `ls ${dir} reads its listings, and the boot read none`, `boot: ${r.listings[0].join(' ')}; ls: ${listed.join(' ')}`);
 check(r.outs[1].includes(base) && r.games[1].length === 0, `ls ${dir} lists ${base}, and fetches nothing`, r.outs[1]);
 check(r.games[2].join() === name, `the first crc32 fetched ${name}, and nothing else of the games'`, r.games[2].join(' '));
 check(r.outs[2].includes(want), `crc32 says "${want}", as the host's copy has it`, r.outs[2]);

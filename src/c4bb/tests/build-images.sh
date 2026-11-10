@@ -858,6 +858,15 @@ for g in $GAMES; do
         done
 done
 
+# The hostdir(PREFIX) directories of C4IX's manifest, listed: each
+# directory under PREFIX gets a .c4ix-dir, from which the kernel makes its
+# entries when something first looks in it (vfs.c, vfs_lazydir). The
+# boot makes one entry for each hostdir, not one for each of the games'
+# thousands of sources and data files, which took seconds.
+HOSTDIRS=$(grep -o 'hostdir([^)]*)' $DISK/c4ix.vfs.txt | sed 's/^hostdir(//; s/)$//' | sort -u)
+find $DISK -name .c4ix-dir -delete
+python3 -I src/c4bb/tests/host-dirs.py $DISK $HOSTDIRS > /dev/null
+
 say "the disk's manifest, sizes and index"
 # manifest for the web app's disk loader (recursive: some entries,
 # like src/c4ke/c4ke.c, are real subdirectories on purpose - see the
@@ -873,14 +882,22 @@ say "the disk's manifest, sizes and index"
 # of them before boot. Written last, after every copy above. The games'
 # sources come after the rest: only hostdir(games/) looks for them, and
 # vfsload's lookup of a manifest entry finds it before their ~580 lines.
+# Every file on the disk is in $OUT/.disk-sizes, for index.json; those in
+# the host directories are left out of c4ix.sizes, where vfsload has no
+# use for them (their listings name them), but for each one's own
+# PREFIX.c4ix-dir: vfsload looks there to know a listing is on the disk.
 (cd $DISK && { find . -type f -not -name manifest.json -not -name c4ix.sizes -not -name index.json -not -name c4ix.sizes.tmp \
     -not -path './games/*' -printf '%s %P\n' | sort -k2
-    if [ -d games ]; then find games -type f -printf '%s %p\n' | sort -k2; fi; }) > $DISK/c4ix.sizes.tmp
+    if [ -d games ]; then find games -type f -printf '%s %p\n' | sort -k2; fi; }) > $OUT/.disk-sizes
+awk -v pfx="$HOSTDIRS" 'BEGIN { n = split(pfx, p, " ") }
+    { name = substr($0, index($0, " ") + 1)
+      for (i = 1; i <= n; i++) if (index(name, p[i]) == 1 && name != p[i] ".c4ix-dir") next; print }' \
+    $OUT/.disk-sizes > $DISK/c4ix.sizes.tmp
 mv $DISK/c4ix.sizes.tmp $DISK/c4ix.sizes
-# index.json lists c4ix.sizes too -- a lazy disk serves only what its
-# index names, and without the table vfsload falls back to copying all.
-# The games' sources have their hashes in it.
-python3 -I src/c4bb/tests/lazy-index.py $DISK games/
+# index.json lists every file, and c4ix.sizes -- a lazy disk serves only
+# what its index names, and without the table vfsload falls back to
+# copying all. The games' sources have their hashes in it.
+python3 -I src/c4bb/tests/lazy-index.py $DISK $OUT/.disk-sizes games/
 # and the manifest again, so the eager loader sees c4ix.sizes too
 (cd $DISK && find . -type f -not -name manifest.json -not -path './games/*' | sed 's|^\./||') | \
     awk 'BEGIN{printf "["} NR>1{printf ","} {printf "\"%s\"", $0} END{print "]"}' > $DISK/manifest.json

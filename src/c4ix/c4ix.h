@@ -134,7 +134,8 @@ enum {
     ST_INO = 4,            // the vnode's number: two names of one file share it
     ST_NLINK = 5,          // its names (SYS_LINK)
     ST_MODE = 6,           // made up: 0755 for directories and programs, 0644 for the rest
-    ST_DEV = 7,            // 1 for the RAM filesystem, 2 for a host file, 0 for the console or a pipe
+    ST_DEV = 7,            // 1 for the RAM filesystem, 2 for a host file, 0 for the console or a pipe,
+                           // 3 for a directory whose entries are still the host's (vfs.c, vfs_lazydir)
     ST_WORDS = 8
 };
 // SYS_WAITPID: options, and the two words it writes (exit code, signal)
@@ -231,6 +232,8 @@ struct vnode {
     // from there; a small file read is read in whole and kept, and so is
     // any file something writes to or wants in place (vfs_getdata).
     // Elsewhere the first use reads it in.
+    // A directory with a hostname has entries on the host, under that
+    // prefix, not yet made (vfs_lazydir).
     char *hostname;
     int lazy;
     // Its bytes are still the host's: lazy, or read in and not changed

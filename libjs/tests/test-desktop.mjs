@@ -338,7 +338,9 @@ const t0 = vm.dev.simMs();
 until(() => vm.dev.simMs() - t0 > 5000, 3000);
 check(has(/Ctrl-C to stop/) && !frame.some(t => /^c4ix:\/\$/.test(t.s) && t.y > 300), 'and is still running five machine-seconds later', screen());
 key('c', 2, 67);
-check(until(() => has(/\^C/) && frame.filter(t => /^c4ix:\/\$/.test(t.s)).length >= 1), 'Ctrl-C stops it and the prompt comes back', screen());
+// top may be stopped partway through a line, and the shell doesn't start
+// its prompt on a fresh one, so the prompt can follow what top had written
+check(until(() => has(/\^C/) && frame.filter(t => /(^|\s)c4ix:\/\$/.test(t.s)).length >= 1), 'Ctrl-C stops it and the prompt comes back', screen());
 
 // ---- Ctrl-C drops what was typed at the job and not read --------------------------------------
 // as a tty flushes its input: before, the shell read the line next and ran it

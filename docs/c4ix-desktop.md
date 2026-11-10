@@ -1437,3 +1437,76 @@ keys in the menu, and an icon on a game's row.
       1024x768 and 3 at 640x480, Verdana Large included, Cards takes
       Puzzles' place, and picking Puzzle 39 runs its command in a
       Terminal and shuts the menu.
+
+## Part twenty-five: the games' directories, listed when first looked in (asked for 2026-11-10)
+
+With every game merged (the BSD games, Ace, Super Blit Kart, the
+puzzles, Quake, Frotz and Adventure beside Doom, Wolfenstein 3D, Rise of
+the Triad and Tyrian), part twenty-one's way of listing the games'
+files at boot made the boot slow. `c4ix.sizes` had 3,261 lines, and
+vfsload made a lazy file for each one under a `hostdir()`. That is a
+name and a size each, but thousands of them, and the boot took 103M
+cycles: 5.2 s at the page's 100 MHz before the console prompt. Asked
+for: a few seconds at most, and the rest loaded when it is wanted.
+
+### What was done
+
+- [x] **A host directory.** A directory vnode (vfs.c) with a
+      `hostname` is one whose entries are still on the host: the
+      prefix, ending '/', under which its files are. The first time
+      anything looks in it (`vfs_child`, `vfs_nth_file`, `vfs_nfiles`,
+      `vfs_direntry`, and `vfs_unlink` before its "is it empty"), the
+      kernel reads the host file `PREFIX.c4ix-dir` (`vfs_dirlist`) and
+      makes its entries: a lazy file for each "SIZE NAME" line and a
+      host directory for each "d NAME" line. A directory the manifest
+      has made already gets the host's entries added to it. Made
+      entries have the date 0. `SYS_LAZYFILE` with size -1 makes one
+      (`vfs_lazydir`), and stat gives such a directory device 3 until it
+      is listed.
+- [x] **The listings.** build-images.sh takes each `hostdir(PREFIX)` of
+      the disk's manifest and writes a `.c4ix-dir` in every directory
+      under it (src/c4bb/tests/host-dirs.py). `c4ix.sizes` leaves out
+      every file under a host directory except each one's own
+      `PREFIX.c4ix-dir`: vfsload looks that name up to know whether a
+      listing exists. Opening it would fetch it, on the page, at every
+      boot. With no listing, vfsload makes a lazy file for each line, as
+      before. index.json still lists every file. A listing gets no
+      hash, so the page doesn't keep it: it is small and read once per
+      boot.
+- [x] **vfsload's look-ups** hash the sizes table and the manifest's
+      entries (`index_sizes`, `host_of`), instead of a walk of each for
+      every entry.
+- [x] **persist** doesn't walk into a directory still on the host
+      (device 3). Its base list notes it as `PATH/`, and a path under one
+      counts as changed only if it is dated after the boot, so listing
+      a directory doesn't make its entries look new.
+- [x] **Files' tree** (files.c) reads only the folders that are open,
+      and those above the one shown. Every other folder is a row, with
+      a box if it has folders in it; a host directory is taken to have
+      some. Clicking a folder walked the whole disk to draw the tree
+      again: a second or so, and millions of instructions, once the
+      games' directories were there. Opening a folder reads it then.
+
+### What it costs
+
+| | before | after |
+|---|---|---|
+| c4ix.sizes | 3,261 lines | 341 lines |
+| boot to the console prompt | 103M cycles, 5.16 s | 13.7M cycles, 0.68 s |
+| `ls /usr/games/rott` | nothing fetched | `games/.c4ix-dir`, `games/rott/.c4ix-dir` |
+
+- test-lazy-src.mjs now checks that the boot reads no listing, and that
+  `ls` of a game's directory reads only listings. test-desktop's boot
+  check, that a boot reads fewer than 12 disk files, holds again.
+
+### Found on the way
+
+- **The display kept the scale of the size before.** A size the desktop
+  asks for from Settings (`wk_screen`) is a SIZE command in the shared
+  ring. display.js sized the canvas, but the page was never told, so it
+  stayed at the last size's scale: 800x600's ×1.42 put 1024x768 at
+  about ×1.11. A program that gives the display back, or a reload,
+  attaches through the size registers, which do tell the page. Then
+  1024x768 snapped to ×1, since whole numbers within 15% of the fit
+  were taken. Now app.js watches the canvas's width and height, and
+  snaps only within 5%.

@@ -483,21 +483,58 @@ void parse_block(int parentIndent, char *pathPrefix) {
 char *g_sizes;
 int g_sizes_len;
 
-// the size the table gives for host file NAME, or -1
-int size_of(char *name) {
-    int i, n, v, k;
-    if (!g_sizes) return 0 - 1;
-    n = ustrlen(name);
-    i = 0;
-    while (i < g_sizes_len) {
+// Looking names up. The table is hundreds of lines and the manifest
+// hundreds of entries, and each entry looked up by a walk of the table
+// (and each alias by a walk of the entries) was most of the boot once
+// every game was on the disk: both go in hash tables, once.
+enum { HBUCKETS = 1024 };
+int hname(char *s, int n) {
+    int h, i;
+    h = 5381; i = 0;
+    while (i < n) { h = h * 33 + (s[i] & 255); ++i; }
+    return h & (HBUCKETS - 1);
+}
+
+// the table's lines: where each name is in g_sizes, its length and size
+int *g_sz_off, *g_sz_len, *g_sz_val, *g_sz_next, *g_sz_head;
+void index_sizes() {
+    int i, j, v, k, n;
+    n = 1; i = 0;
+    while (i < g_sizes_len) { if (g_sizes[i] == 10) ++n; ++i; }
+    g_sz_off = (int *)ualloc(n * sizeof(int)); g_sz_len = (int *)ualloc(n * sizeof(int));
+    g_sz_val = (int *)ualloc(n * sizeof(int)); g_sz_next = (int *)ualloc(n * sizeof(int));
+    g_sz_head = (int *)ualloc(HBUCKETS * sizeof(int));
+    memset((char *)g_sz_head, 0, HBUCKETS * sizeof(int));
+    k = 0; i = 0;
+    while (i < g_sizes_len && k < n) {
         v = 0;
         while (i < g_sizes_len && g_sizes[i] >= '0' && g_sizes[i] <= '9') { v = v * 10 + (g_sizes[i] - '0'); ++i; }
         if (i < g_sizes_len && g_sizes[i] == ' ') ++i;
-        k = 0;
-        while (k < n && i + k < g_sizes_len && g_sizes[i + k] == name[k]) ++k;
-        if (k == n && (i + k >= g_sizes_len || g_sizes[i + k] == 10)) return v;
-        while (i < g_sizes_len && g_sizes[i] != 10) ++i;
-        ++i;
+        j = i;
+        while (j < g_sizes_len && g_sizes[j] != 10) ++j;
+        if (j > i) {
+            g_sz_off[k] = i; g_sz_len[k] = j - i; g_sz_val[k] = v;
+            // at the chain's end, so the first line with a name is found first
+            g_sz_next[k] = 0;
+            v = hname(g_sizes + i, j - i);
+            if (!g_sz_head[v]) g_sz_head[v] = k + 1;
+            else { v = g_sz_head[v] - 1; while (g_sz_next[v]) v = g_sz_next[v] - 1; g_sz_next[v] = k + 1; }
+            ++k;
+        }
+        i = j + 1;
+    }
+}
+
+// the size the table gives for host file NAME, or -1
+int size_of(char *name) {
+    int n, k;
+    if (!g_sizes) return 0 - 1;
+    n = ustrlen(name);
+    k = g_sz_head[hname(name, n)];
+    while (k) {
+        --k;
+        if (g_sz_len[k] == n && !memcmp(g_sizes + g_sz_off[k], name, n)) return g_sz_val[k];
+        k = g_sz_next[k];
     }
     return 0 - 1;
 }
@@ -512,15 +549,32 @@ void load_sizes() {
     uclose(fd);
     if (n <= 0) { g_sizes = 0; return; }
     g_sizes_len = n;
+    index_sizes();
 }
 
-// the host name behind a vfs path an earlier entry made, or 0
+// the host name behind a vfs path an earlier entry made, or 0. The
+// entries' paths are hashed the first time: by then they are all made.
+int *g_ent_head, *g_ent_next;
 char *host_of(char *path) {
-    int i;
-    i = 0;
-    while (i < g_nentries) {
+    int i, h;
+    if (!g_ent_head) {
+        g_ent_head = (int *)ualloc(HBUCKETS * sizeof(int));
+        g_ent_next = (int *)ualloc((g_nentries + 1) * sizeof(int));
+        memset((char *)g_ent_head, 0, HBUCKETS * sizeof(int));
+        // from the last, onto the front: each chain in the entries' order
+        i = g_nentries;
+        while (i > 0) {
+            --i;
+            h = hname(g_entry_path[i], ustrlen(g_entry_path[i]));
+            g_ent_next[i] = g_ent_head[h];
+            g_ent_head[h] = i + 1;
+        }
+    }
+    i = g_ent_head[hname(path, ustrlen(path))];
+    while (i) {
+        --i;
         if (g_entry_is_ilink[i] != 1 && !ustrcmp(g_entry_path[i], path)) return g_entry_value[i];
-        ++i;
+        i = g_ent_next[i];
     }
     return 0;
 }
@@ -546,19 +600,63 @@ void make_dirs(char *path, int from) {
     memcpy(g_lastdir, path, last); g_lastlen = last;
 }
 
-// the hostdir(PREFIX) directories' files; how many were made. The names
-// are put together in two buffers, as the kernel copies what it keeps:
-// an allocation each was a sixth of the time hundreds of files took.
+// The hostdir(PREFIX) directories, each made a host directory: the kernel
+// lists it from the host's PREFIX.c4ix-dir when something first looks in
+// it (vfs.c, vfs_lazydir), so the boot makes one entry for each and none
+// for the thousands of files in them. How many were made. Whether the
+// listing is there is c4ix.sizes's to say, which names it: to open it
+// would fetch it, on a page's lazy disk, at every boot. The deepest
+// first: one inside another (/usr/games/bsdgames/data in /usr/games) is
+// walked to through the outer one, which, left on the host already,
+// would be listed to find it.
+int load_hostdir_files(int h);
 int load_hostdirs() {
-    int h, i, j, n, v, ok, dl;
+    int h, ok, fd, n, listed, left, best, *done;
+    char host[PATHMAX];
+    ok = 0;
+    if (!(done = (int *)ualloc((g_nhostdirs + 1) * sizeof(int)))) return 0;
+    memset((char *)done, 0, (g_nhostdirs + 1) * sizeof(int));
+    left = g_nhostdirs;
+    while (left > 0) {
+        best = 0 - 1;
+        h = 0;
+        while (h < g_nhostdirs) {
+            if (!done[h] && (best < 0 || ustrlen(g_hostdir_path[h]) > ustrlen(g_hostdir_path[best]))) best = h;
+            ++h;
+        }
+        h = best;
+        done[h] = 1;
+        --left;
+        n = ustrlen(g_hostdir_prefix[h]);
+        if (n + 10 < PATHMAX) {
+            memcpy(host, g_hostdir_prefix[h], n);
+            memcpy(host + n, ".c4ix-dir", 10);
+        } else host[0] = 0;
+        listed = 0;
+        if (host[0] && g_sizes) listed = size_of(host) >= 0;
+        else if (host[0] && (fd = uopen(host, O_RD)) >= 0) { uclose(fd); listed = 1; }
+        if (listed) {
+            if (ulazyfile(g_hostdir_path[h], g_hostdir_prefix[h], 0 - 1) == 0) ++ok;
+        }
+        // a disk from before the listings: a lazy file each, from c4ix.sizes
+        else load_hostdir_files(h);
+        ++h;
+    }
+    return ok;
+}
+
+// hostdir(PREFIX) H's files from c4ix.sizes, a lazy file each; how many.
+// The names are put together in two buffers, as the kernel copies what
+// it keeps: an allocation each was a sixth of the time hundreds took.
+int load_hostdir_files(int h) {
+    int i, j, n, v, ok, dl;
     char *pfx;
     char path[PATHMAX];
     char host[PATHMAX];
 
     ok = 0;
     if (!g_sizes) return 0;
-    h = 0;
-    while (h < g_nhostdirs) {
+    {
         pfx = g_hostdir_prefix[h];
         n = ustrlen(pfx);
         dl = ustrlen(g_hostdir_path[h]);
@@ -577,7 +675,6 @@ int load_hostdirs() {
             }
             i = j + 1;
         }
-        ++h;
     }
     return ok;
 }
@@ -737,7 +834,7 @@ int main(int argc, char **argv) {
 
     ok = load_entries();
     uprintf("vfsload: %d/%d entries loaded from %s\n", ok, g_nentries, manifestName);
-    if (g_nhostdirs) uprintf("vfsload: %d more left on the host in hostdir() directories\n", load_hostdirs());
+    if (g_nhostdirs) uprintf("vfsload: %d hostdir() directories left on the host until first looked in\n", load_hostdirs());
     unpack_archives();
     return g_nomem ? 3 : 0;
 }

@@ -310,11 +310,13 @@ static void found(char *path, int dir, int mtime) {
     ++wn;
 }
 
-// Everything under DIR (a path without its trailing slash; "" is /)
+// Everything under DIR (a path without its trailing slash; "" is /). A
+// directory whose entries are still the host's (stat's device 3: vfs.c,
+// vfs_lazydir) is found, as a 2, but not gone into: that would make them.
 static void walk(char *dir) {
     char name[NAMEMAX];
     char *path;
-    int i, kind, len, st[4];
+    int i, kind, len, st[ST_WORDS];
     path = (char *)malloc(PATHMAX);
     i = 0;
     while ((kind = ureaddir(dir[0] ? dir : "/", i, name)) >= 0) {
@@ -323,7 +325,8 @@ static void walk(char *dir) {
         if (len >= PATHMAX) continue;
         ustrcpy(ustrcpy(ustrcpy(path, dir) - 1, "/") - 1, name);
         if (excluded(path)) continue;
-        if (ustat(path, st) < 0) continue;
+        if (ustat2(path, st, ST_WORDS) < 0) continue;
+        if (kind == 1 && st[ST_DEV] == 3) { found(path, 2, st[3]); continue; }
         found(path, kind == 1, st[3]);
         if (kind == 1) walk(path);
     }
@@ -337,7 +340,10 @@ static void walk_all() {
 
 // ---- boot ----
 
-// The base: every path there is now, one a line, and its stamp is the epoch
+// The base: every path there is now, one a line, and its stamp is the
+// epoch. A host directory is there twice, the second time as "PATH/":
+// what it holds was not there to walk, and is not a change unless it is
+// stamped after the epoch (changed).
 static int write_base() {
     int fd, i;
     umkdir("/var");
@@ -347,6 +353,7 @@ static int write_base() {
     while (i < wn) {
         write(fd, wpath[i], ustrlen(wpath[i]));
         write(fd, "\n", 1);
+        if (wdir[i] == 2) { write(fd, wpath[i], ustrlen(wpath[i])); write(fd, "/\n", 2); }
         ++i;
     }
     uclose(fd);
@@ -749,9 +756,35 @@ static int nwhite;
 static int wbytes;       // the whiteout list's length
 static int sig;          // a summary of what would be written, for -d
 
+// Is PATH inside a directory that was the host's when the base was
+// noted ("DIR/" in it)?
+static int in_hostdir(char *path) {
+    char *p;
+    int n, c;
+    n = ustrlen(path);
+    while (n > 1) {
+        --n;
+        if (path[n] != '/') continue;
+        p = path + n + 1;
+        c = *p;
+        *p = 0;
+        if (hhas(path)) { *p = c; return 1; }
+        *p = c;
+    }
+    return 0;
+}
+
 static int changed(int i) {
-    if (!hhas(wpath[i])) return 1;
-    return !wdir[i] && wtime[i] > epoch;
+    // the host's, made since: a change only if stamped after the epoch
+    if (!hhas(wpath[i])) return !in_hostdir(wpath[i]) || wtime[i] > epoch;
+    return wdir[i] != 1 && wtime[i] > epoch;
+}
+
+// A base path that is gone: a deletion. A host directory's "DIR/" line
+// is not a path of its own (write_base).
+static int gone(char *p) {
+    int st[4];
+    return p && !excluded(p) && p[ustrlen(p) - 1] != '/' && ustat(p, st) < 0;
 }
 
 // What a save would write: the changes in order, the deletions, and SIG
@@ -783,7 +816,7 @@ static void survey() {
     nwhite = 0; wbytes = 0;
     i = 0;
     while (i < hcap) {
-        if (hset[i] && !excluded(hset[i]) && ustat(hset[i], st) < 0) {
+        if (gone(hset[i])) {
             ++nwhite;
             wbytes = wbytes + ustrlen(hset[i]) + 1;
             sig = sig * 31 + hash(hset[i]);
@@ -812,7 +845,7 @@ static int save(int quiet) {
         at = 0;
         i = 0;
         while (i < hcap) {
-            if (hset[i] && !excluded(hset[i]) && ustat(hset[i], st) < 0) {
+            if (gone(hset[i])) {
                 ustrcpy(list + at, hset[i]);
                 at = at + ustrlen(hset[i]);
                 list[at++] = '\n';

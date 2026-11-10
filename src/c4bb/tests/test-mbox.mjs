@@ -63,8 +63,15 @@ for (let i = 0; i < 200; i++) {
   while (!mb.send(100 + i, [i, i * 2])) { runUntilIdle(); for (const f of mb.drain()) { if (f.seq !== lastSeq + 1) inOrder = false; lastSeq = f.seq; received++; } }
   sent++;
 }
-runUntilIdle();
-for (const f of mb.drain()) { if (f.seq !== lastSeq + 1) inOrder = false; lastSeq = f.seq; received++; }
+// The guest may still be behind: the last frames wait in the ring to it
+// while its replies fill the ring back, so run and drain until nothing
+// more comes (which slice of the run the idle doorbell lands in decided
+// whether one round was enough)
+for (let n = -1; n !== received; ) {
+  n = received;
+  runUntilIdle();
+  for (const f of mb.drain()) { if (f.seq !== lastSeq + 1) inOrder = false; lastSeq = f.seq; received++; }
+}
 check(sent === 200 && received === 200, `wrap: sent ${sent}, received ${received}`);
 check(inOrder, 'wrap: sequence numbers contiguous across the markers');
 

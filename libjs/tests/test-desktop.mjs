@@ -322,7 +322,8 @@ until(() => termText('blk').length > 0 && inputLine() === '');
 type('cat /usr/src/c4ix/user/top.c\n');
 until(() => has(/^\s*return 0;/) && inputLine() === '', 600);
 check(!has(/^\/\/ C4IX userland: top\./), 'a long file scrolls its first line off the Terminal', screen());
-for (let i = 0; i < 8; i++) key('', 0, 33);                    // PgUp, to the start
+// PgUp until it shows: how many pages that is depends on what came before
+for (let i = 0; i < 12 && !until(() => has(/^\/\/ C4IX userland: top\./), 50); i++) key('', 0, 33);
 check(until(() => has(/^\/\/ C4IX userland: top\./)), 'and PgUp scrolls back to it', screen());
 key('', 0, 34);                                                // PgDn
 type('echo back\n');

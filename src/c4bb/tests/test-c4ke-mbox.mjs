@@ -128,7 +128,10 @@ got = mb.drain();
 check(got.length === 1 && got[0].type === 261 && got[0].payload[0] === 42,
       `second echo: ${got.map((f) => `${f.type}[${Array.from(f.payload)}]`).join(' ')}`);
 mb.send(0, []); dev.raiseMbox();
-check(runUntil(() => out.includes('mbecho: done, 1 frames'), 20e6), 'the second mbecho exited');
+// (C4KE says when a tick starved the task it resumed -- the slow clock
+// makes that happen -- and it can land inside mbecho's line)
+const said = () => out.replace(/c4ke: tick \d+ left the resumed task only \d+ cycles\n/g, '');
+check(runUntil(() => said().includes('mbecho: done, 1 frames'), 20e6), 'the second mbecho exited');
 
 dev.pushInput('\\q\n');
 runUntil(() => dev.halted || out.includes('clean shutdown'), 20e6);

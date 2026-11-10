@@ -279,7 +279,8 @@ else bad "c4ke: c4 c4m.c has a clock"; echo "$out" | grep -E "clock|uptime" | he
 # from it -- about 28 MB, which left 32 too little for a program that
 # loads a shared library meanwhile.
 part_ixsh () {
-out=$(printf 'c4ix-ps.c4r\nexit\n' | timeout 300 $LIBJS -m 64 -c 120000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
+# (with every game on the disk the boot alone is 103M cycles, for vfsload)
+out=$(printf 'c4ix-ps.c4r\nexit\n' | timeout 300 $LIBJS -m 64 -c 200000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
 for want in "C4IX booting" "protected mode on for user tasks, preemption on" \
             "c4ix-sh" "c4ix-ps.c4r" "tasks,"; do
     if echo "$out" | grep -qF "$want"; then ok "c4ix-boot '$want'"; else bad "c4ix-boot '$want'"; fi

@@ -74,7 +74,9 @@ for (let p; (p = h.alloc(384 << 10)); ) taken.push(p);
 for (let i = taken.length - 2; i >= 0; i -= 2) h.free(taken[i]);
 t = sh('free');
 r = row(t, 'memory');
-check(r && r[2] > 2048 && r[3] < 512 && /^The free memory is in pieces: nothing bigger than +\d+ K can be had at once\.$/m.test(t),
+// A hole can join a free piece too small for a block that was there before
+// (one the disk's games left at 148 K made one of 532 K), so under two blocks.
+check(r && r[2] > 2048 && r[3] < 768 && /^The free memory is in pieces: nothing bigger than +\d+ K can be had at once\.$/m.test(t),
   `in pieces: ${r && r[2]} K free, nothing bigger than ${r && r[3]} K, and free says so`, t);
 for (let i = taken.length - 1; i >= 0; i -= 2) h.free(taken[i]);
 t = sh('free');

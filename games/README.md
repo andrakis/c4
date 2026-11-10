@@ -17,8 +17,8 @@ optional submodule here:
 | `games/frotz` | [andrakis/c4-Frotz](https://github.com/andrakis/c4-Frotz) | Frotz's dumb interface, with Zork I, II and III |
 | `games/advent` | [andrakis/c4-Advent](https://github.com/andrakis/c4-Advent) | Open Adventure |
 | `games/puzzles` | [andrakis/c4-Puzzles](https://github.com/andrakis/c4-Puzzles) | Simon Tatham's Portable Puzzle Collection |
-| `games/ace` | andrakis/c4-Ace (not on GitHub yet) | The Ace of Penguins 1.5~rc2, on the history Debian keeps at salsa.debian.org/games-team/ace-of-penguins |
-| `games/sbk` | andrakis/c4-SBK (not on GitHub yet) | Super Blit Kart, rewritten in C from Daft-Freak's C++; a history of its own, so that the art stays out of it |
+| `games/ace` | [andrakis/c4-Ace](https://github.com/andrakis/c4-Ace) | The Ace of Penguins 1.5~rc2, on the history Debian keeps at salsa.debian.org/games-team/ace-of-penguins |
+| `games/sbk` | [andrakis/c4-SBK](https://github.com/andrakis/c4-SBK) | Super Blit Kart, rewritten in C from Daft-Freak's C++; a history of its own, so that the art stays out of it |
 | `games/pdcurses` | [andrakis/c4-PDCurses](https://github.com/andrakis/c4-PDCurses) | PDCurses, and a curses for C4's machines |
 | `games/bsdgames` | [andrakis/c4-BSD-Games](https://github.com/andrakis/c4-BSD-Games) | bsd-games 2.17, Debian's copy of it |
 

@@ -384,8 +384,10 @@ term.focus();
 // ---- the splitter, and the display scaled to its pane ----------------------
 // The terminal's width is dragged; the display takes the rest, and the
 // canvas is scaled to fit it, keeping its shape. When a whole-number scale
-// (1x, 2x, ...) is within 15% of the best fit, it snaps to that and draws
-// with sharp pixels; otherwise it scales smoothly.
+// (1x, 2x, ...) is within 5% of the best fit, it snaps to that and draws
+// with sharp pixels; otherwise it scales smoothly. (Within 15% it was:
+// 1024x768 in a pane that fits it 1.13 times was left at 1x, with a
+// border of an eighth all round.)
 const panes = $('panes'), splitter = $('splitter'), wrap = $('display-wrap');
 const TERM_W_KEY = 'c4m.js:term-w';
 const setTermW = px => {
@@ -422,7 +424,7 @@ function fitDisplay() {
   if (aw <= 0 || ah <= 0 || !canvas.width) return;
   const fit = Math.min(aw / canvas.width, ah / canvas.height);
   const whole = Math.floor(fit);
-  const scale = whole >= 1 && whole >= fit * 0.85 ? whole : fit;
+  const scale = whole >= 1 && whole >= fit * 0.95 ? whole : fit;
   canvas.style.width = Math.floor(canvas.width * scale) + 'px';
   canvas.style.height = Math.floor(canvas.height * scale) + 'px';
   canvas.classList.toggle('crisp', Number.isInteger(scale));
@@ -430,6 +432,13 @@ function fitDisplay() {
 }
 new ResizeObserver(fitDisplay).observe(wrap);
 vm.on('resize', () => requestAnimationFrame(fitDisplay));
+// and whenever the canvas is sized at all: the worker says so ('resize')
+// for the size registers, a program's attach, but a SIZE command in the
+// shared ring -- the desktop's Settings, wk_screen -- sizes it in
+// display.js without a word to the page, and the canvas kept the scale
+// of the size before
+new MutationObserver(() => requestAnimationFrame(fitDisplay))
+  .observe(canvas, { attributes: true, attributeFilter: ['width', 'height'] });
 fitDisplay();
 
 try {

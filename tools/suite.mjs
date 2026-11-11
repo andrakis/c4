@@ -26,11 +26,12 @@
 // running ones may still grow to, its peak fits in the memory available
 // now (/proc/meminfo, so everything else on the machine counts too) less
 // the reserve, and its processors fit; when nothing is running it starts
-// whatever it needs. Linux only: it reads /proc.
+// whatever it needs. On Linux it reads /proc; on Windows (under MSYS2,
+// docs/windows.md) MSYS2's /proc, through an MSYS2 shell.
 
 import { spawn, execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, openSync, closeSync, readdirSync } from 'node:fs';
-import { cpus } from 'node:os';
+import { cpus, freemem } from 'node:os';
 import { join } from 'node:path';
 
 const argv = process.argv.slice(2);
@@ -76,14 +77,67 @@ const result = join(opt.out, 'result.txt');
 writeFileSync(result, '');
 const note = line => { writeFileSync(result, line + '\n', { flag: 'a' }); console.log(line); };
 
-// ---- /proc ----------------------------------------------------------
+// ---- /proc: Linux's, or on Windows MSYS2's ------------------------------
+const WIN = process.platform === 'win32';
 const PAGE = 4096;
 function memAvailableMb() {
+  if (WIN) return freemem() / 1048576;  // the available physical memory
   const m = /MemAvailable:\s+(\d+)/.exec(readFileSync('/proc/meminfo', 'utf8'));
   return m ? +m[1] / 1024 : 0;
 }
+// On Windows (docs/windows.md) node is not an MSYS2 program and cannot
+// read MSYS2's /proc, and Windows' own idea of who started whom is no
+// use: an MSYS2 exec is a new Windows process whose parent has gone. So
+// one MSYS2 shell, kept for the whole run, reads /proc for each request:
+// every process's MSYS2 pid, parent, resident pages and Windows pid. The
+// tree is MSYS2's, and a test's root is found by the Windows pid node has
+// for it. MSYS2's pages are 64K, so it says their size first.
+let sh;
+function winProcesses() {
+  if (!sh) {
+    const script = `getconf PAGESIZE
+      while read -r _; do
+        for d in /proc/[0-9]*; do
+          read -r w < $d/winpid && read -r st < $d/stat && read -r _ r _ < $d/statm || continue
+          st=\${st##*) }; set -- $st
+          echo "\${d#/proc/} $2 $r $w"
+        done 2>/dev/null
+        echo END
+      done`;
+    sh = spawn('sh', ['-c', script], { stdio: ['pipe', 'pipe', 'ignore'] });
+    sh.buf = ''; sh.waiting = [];
+    sh.stdout.setEncoding('utf8');
+    sh.stdout.on('data', d => {
+      sh.buf += d;
+      if (!sh.page) {
+        const i = sh.buf.indexOf('\n');
+        if (i < 0) return;
+        sh.page = +sh.buf.slice(0, i); sh.buf = sh.buf.slice(i + 1);
+      }
+      let i;
+      while ((i = sh.buf.indexOf('END\n')) >= 0) {
+        const block = sh.buf.slice(0, i);
+        sh.buf = sh.buf.slice(i + 4);
+        sh.waiting.shift()?.(block);
+      }
+    });
+  }
+  return new Promise(res => { sh.waiting.push(res); sh.stdin.write('\n'); }).then(block => {
+    const kids = new Map(), rss = new Map(), root = new Map();
+    for (const line of block.split('\n')) {
+      const [pid, ppid, pages, winpid] = line.trim().split(' ').map(Number);
+      if (!pid) continue;
+      rss.set(pid, pages * sh.page / 1048576);
+      root.set(winpid, pid);
+      if (!kids.has(ppid)) kids.set(ppid, []);
+      kids.get(ppid).push(pid);
+    }
+    return { kids, rss, root };
+  });
+}
 // every process: its parent and resident size, in MB
-function processes() {
+async function processes() {
+  if (WIN) return winProcesses();
   const kids = new Map(), rss = new Map();
   for (const d of readdirSync('/proc')) {
     if (!/^\d+$/.test(d)) continue;
@@ -99,10 +153,13 @@ function processes() {
   return { kids, rss };
 }
 function treeMb(pid, p) {
+  if (p.root) pid = p.root.get(pid) ?? pid;   // Windows: node's pid for it, to MSYS2's
   let mb = 0;
-  const stack = [pid];
+  const stack = [pid], seen = new Set();
   while (stack.length) {
     const q = stack.pop();
+    if (seen.has(q)) continue;
+    seen.add(q);
     mb += p.rss.get(q) || 0;
     for (const k of p.kids.get(q) || []) stack.push(k);
   }
@@ -114,7 +171,9 @@ function treeMb(pid, p) {
 function run(target, log, makeArgs) {
   const timing = log + '.time';
   const fd = openSync(log, 'w');
-  const child = spawn('/usr/bin/time', ['-f', '%e %U %S', '-o', timing, 'make', ...makeArgs, target],
+  // MSYS2's GNU time on Windows, found on the PATH: node is not an MSYS2
+  // program, and has no /usr/bin
+  const child = spawn(WIN ? 'time' : '/usr/bin/time', ['-f', '%e %U %S', '-o', timing, 'make', ...makeArgs, target],
     { stdio: ['ignore', fd, fd] });
   closeSync(fd);
   const job = { target, child, start: Date.now(), peak: 0, now: 0, timing };
@@ -225,9 +284,9 @@ function startFitting() {
 
 const s2 = Date.now();
 await new Promise(res => {
-  const tick = () => {
+  const tick = async () => {
     if (running.size) {
-      const p = processes();
+      const p = await processes();
       let total = 0;
       for (const j of running) { j.now = treeMb(j.child.pid, p); j.peak = Math.max(j.peak, j.now); total += j.now; }
       peakTotal = Math.max(peakTotal, total);

@@ -28,6 +28,15 @@ static void __attribute__((constructor)) c4_msys2_binary (void) {
 	_setmode(2, 0x8000);
 }
 
+/* BSD's names for the fixed-width types, which glibc's sys/types.h has
+ * and MinGW's has not (bsdgames' monop/initdeck). The very types glibc
+ * gives them on i386, so a program that also has glibc's cannot have
+ * them otherwise: GCC takes a typedef again if the type is the same. */
+typedef unsigned char u_int8_t;
+typedef unsigned short int u_int16_t;
+typedef unsigned int u_int32_t;
+typedef unsigned long long int u_int64_t;
+
 #define SIGRTMAX 64
 #define S_IRUSR 0400                   /* _S_IREAD, _S_IWRITE, _S_IEXEC */
 #define S_IWUSR 0200

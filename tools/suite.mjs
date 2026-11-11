@@ -16,8 +16,11 @@
 // one file at once can corrupt it, so the first phase builds, in one make,
 // everything the tests depend on: c4bb-images, each test's prerequisites,
 // and what their recipes make again ($(MAKE) c4ix.c4r and the like). The
-// second runs each test as `make -s TEST`, which then finds all it needs
-// up to date and only tests.
+// second runs each test as `make -s -o c4bb-images TEST`, which then finds
+// all it needs up to date and only tests. -o, because c4bb-images is no
+// file: its recipe (build-images.sh) runs whenever a test names it, and a
+// dozen tests do. Packed, several ran it at once, each deleting and
+// copying the disks the others were copying.
 //
 // What a test needs is learned: each run keeps every test's time, its
 // peak memory (all its processes together, sampled every second) and its
@@ -267,7 +270,7 @@ function startFitting() {
   for (let i = 0; i < queue.length; i++) {
     if (!fits(queue[i])) continue;
     const t = queue.splice(i, 1)[0];
-    const job = run(t, join(opt.out, `${t}.log`), ['-s']);
+    const job = run(t, join(opt.out, `${t}.log`), ['-s', '-o', 'c4bb-images']);
     running.add(job);
     job.done.then(j => {
       running.delete(j);

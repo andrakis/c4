@@ -13,8 +13,9 @@ import { createMachine, boot } from '../boot.js';
 import { STOP } from '../c4m.js';
 import { GuiDevice, CMD } from '../gui-device.js';
 import { typeBytes } from '../keys.js';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = new URL('../../src/c4bb/images/', import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL('../../src/c4bb/images/', import.meta.url));
 const SW = 800, SH = 600, TASK_H = 30;
 let fail = 0;
 const check = (cond, what, extra = '') => {

@@ -25,10 +25,11 @@ import { join } from 'node:path';
 import { createMachine, boot } from '../boot.js';
 import { STOP } from '../c4m.js';
 import { GuiDevice, CMD } from '../gui-device.js';
+import { fileURLToPath } from 'node:url';
 
 const args = process.argv.slice(2);
 const opt = n => (args.includes(n) ? args[args.indexOf(n) + 1] : null);
-const disk = opt('--disk') || new URL('../images/ladder/', import.meta.url).pathname;
+const disk = opt('--disk') || fileURLToPath(new URL('../images/ladder/', import.meta.url));
 const quick = args.includes('--quick');
 const T = 'test-c4dos-ladder';
 if (!existsSync(join(disk, 'index.json'))) {

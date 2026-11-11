@@ -25,8 +25,9 @@ import { join } from 'node:path';
 import { createMachine, boot } from '../boot.js';
 import { STOP } from '../c4m.js';
 import { GuiDevice, CMD } from '../gui-device.js';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = new URL('../../src/c4bb/images/', import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL('../../src/c4bb/images/', import.meta.url));
 const args = process.argv.slice(2);
 const rounds = args.includes('--rounds') ? +args[args.indexOf('--rounds') + 1] : 5;
 const noheap = args.includes('--noheap');
@@ -57,7 +58,7 @@ class LazyDisk extends Map {
   }
 }
 const files = new LazyDisk(index);
-const FS = new URL('../../src/c4dos/fs/', import.meta.url).pathname;
+const FS = fileURLToPath(new URL('../../src/c4dos/fs/', import.meta.url));
 // (the games disk has the line already; it is taken out and put back so
 // that --noheap can leave it out)
 const config = readFileSync(haveGames ? join(disk, 'config.sys') : join(FS, 'CONFIG.SYS'), 'latin1')

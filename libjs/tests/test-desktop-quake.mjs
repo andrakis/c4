@@ -25,8 +25,9 @@ import { createMachine, boot } from '../boot.js';
 import { STOP } from '../c4m.js';
 import { GuiDevice, CMD } from '../gui-device.js';
 import { typeBytes } from '../keys.js';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = process.env.IMAGES || new URL('../../src/c4bb/images/', import.meta.url).pathname;
+const ROOT = process.env.IMAGES || fileURLToPath(new URL('../../src/c4bb/images/', import.meta.url));
 const MB = Number(process.env.MB || 64), CPUS = Number(process.env.CPUS || 4), PARALLEL = !!process.env.PARALLEL;
 const FRAMES = Number(process.env.FRAMES || 30);
 let fail = 0;

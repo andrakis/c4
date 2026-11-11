@@ -1311,6 +1311,27 @@ check(until(() => gui.w === SW && has(/^Terminal - task/) && has(/gui: done afte
         `${rgbLast.sum === moved ? 'the move still shown' : 'another picture'}`);
       check(rgbLast.dw === 640 && rgbLast.dh === 400, 'and the canvas is the size it was', JSON.stringify(rgbLast));
     }
+    // maximised (a double click on its title), the canvas is the window's
+    // inside (window.h's win_resizable): the puzzle laid out again, in frames
+    // that size, drawn as they are, on the screen; a click in the middle
+    // still turns a tile; restored, 640x400 again
+    {
+      const title = all => all.filter(t => t.y < SH - TASK_H).pop();
+      let n = rgbFrames;
+      dbl('Net', title);
+      check(until(() => rgbFrames > n && rgbLast.dw > 640 && rgbLast.dh > 400 && rgbLast.w === rgbLast.dw && rgbLast.h === rgbLast.dh, 3000)
+        && rgbLast.x >= 0 && rgbLast.x + rgbLast.dw <= SW && rgbLast.y + rgbLast.dh <= SH - TASK_H,
+        'maximised, Net is laid out again for the window, its frames the bigger canvas\'s size', JSON.stringify(rgbLast));
+      until(() => false, 20);
+      const before = rgbLast.sum;
+      n = rgbFrames;
+      click(rgbLast.x + (rgbLast.dw >> 1), rgbLast.y + (rgbLast.dh >> 1));
+      check(until(() => rgbFrames > n && rgbLast.sum !== before, 1500), 'and a click in its middle turns a tile', `frames ${rgbFrames - n}`);
+      n = rgbFrames;
+      dbl('Net', title);
+      check(until(() => rgbFrames > n && rgbLast.w === 640 && rgbLast.h === 400 && rgbLast.dw === 640 && rgbLast.dh === 400, 3000),
+        'restored, its frames 640x400 again', JSON.stringify(rgbLast));
+    }
     key('ESC');
     check(until(() => !has('Net'), 1500) && terms() === t0, 'Esc ends the game, and its window goes with it', screen().slice(-300));
     // its name typed in Run... is the same
@@ -1353,6 +1374,13 @@ check(until(() => gui.w === SW && has(/^Terminal - task/) && has(/gui: done afte
       const before = rgbLast.sum, n = rgbFrames;
       menu('Game', 'New Game   F2');
       check(until(() => rgbFrames > n && rgbLast.sum !== before, 1500), 'Game > New Game deals again', `frames ${rgbFrames - n}`);
+    }
+    {
+      // maximised: Thornq lays its table out for the bigger window
+      const n = rgbFrames;
+      dbl('thornq', all => all.filter(t => t.y < SH - TASK_H).pop());
+      check(until(() => rgbFrames > n && rgbLast.dw > 640 && rgbLast.dh > 400 && rgbLast.w === rgbLast.dw && rgbLast.h === rgbLast.dh, 3000),
+        'maximised, Thornq deals across the bigger window, its frames that size', JSON.stringify(rgbLast));
     }
     key('c', 2, 67);
     check(until(() => !has('thornq'), 1500), 'Ctrl-C ends it, and the window with it', screen().slice(-300));

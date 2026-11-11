@@ -38,6 +38,8 @@ enum { C4IX_DISK_DRIVE = 0x13c, C4IX_DISK_COUNT = 0x188, C4IX_DISK_RO = 0x18c,
        C4IX_MBOX_BASE = 0x1b4, C4IX_MBOX_LEN = 0x1b8,
        C4IX_GUI_CAPS = 0x400, C4IX_GUI_W = 0x404, C4IX_GUI_H = 0x408,
        C4IX_I_PIT = 0x800, C4IX_I_MBOX = 0x2000, C4IX_I_SND = 0x8000, C4IX_I_FPU = 0x10000, C4IX_I_DRV = 0x40000 };
+// The sound card's RESET (libjs/snd-device.js): every voice and the OPL quiet
+enum { C4IX_SND_RESET = 0x4b8 };
 // The heap's extent and use (c4bb's HEAP_BASE and HEAP_END, libjs's
 // HEAP_USED, src/c4bb/sim/devices.js), for the CPU snapshot.
 enum { C4IX_HEAP_BASE = 0x144, C4IX_HEAP_END = 0x148, C4IX_HEAP_USED = 0x1c0, C4IX_I_C4MJS = 8 };

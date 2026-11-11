@@ -43,7 +43,7 @@ import { createMachine, boot } from './boot.js';
 import { STOP } from './c4m.js';
 import { keyDown, typeBytes } from './keys.js';
 import { GuiDevice } from './gui-device.js';
-import { SoundDevice } from './snd-device.js';
+import { SoundDevice, EVT } from './snd-device.js';
 import { RingWriter, FbProducer } from './shared.js';
 import { layUploads } from './uploads.js';
 import { LazyFiles } from './lazy.js';
@@ -146,6 +146,9 @@ function start(msg) {
   if (ring && fbSab !== msg.shared.fb) { fbSab = msg.shared.fb; fbProducer = new FbProducer(fbSab); }
   gui = msg.gui ? new GuiDevice({ ...msg.gui, fbShared: ring ? fbProducer : null }) : null;
   snd = msg.snd ? new SoundDevice({ now: () => performance.now() * 1000 }) : null;
+  // The page's mixer outlives a reset, and with it whatever the old
+  // machine left playing: the new one starts quiet, whatever it boots
+  if (snd) snd.emit([EVT.RESET, snd.now()]);
   ringStalls = 0;
   // Files arrive as Uint8Arrays or bare ArrayBuffers; the disk
   // controller wants bytes it can index.

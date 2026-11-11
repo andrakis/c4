@@ -70,6 +70,9 @@ void boot_report() {
 
     info = host_info();
     boot_caps(info);
+    // Whatever the last system left playing stops here: a game killed
+    // mid-sound, or one that never said its card was done with
+    if (info & C4IX_I_SND) *(int *)C4IX_SND_RESET = 1;
     // the clock: how many cycles a millisecond of it is
     if (klog_calibrate()) {
         boot_frac(mhz, klog_cpms, 1000);

@@ -602,7 +602,7 @@ int *builtin_call (int id, int *args, int *env) {
 		if (cell_type(a1) != T_STRING) { c4sp_error("file:write needs a string"); return 0; }
 #if NATIVE
 		pr_reset(); cell_write(a0, 0);
-		n = open(pr_term(), 577, 384); // O_WRONLY|O_CREAT|O_TRUNC, 0600
+		n = open(pr_term(), O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, 0600);
 		if (n < 0) return cell_false;
 		len = write(n, (char *)a1[CELL_A], a1[CELL_B]);
 		close(n);

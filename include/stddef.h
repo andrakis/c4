@@ -2,12 +2,14 @@
 // C4KE Standard Library: stddef.h
 // Provides standard definitions.
 
-#ifndef __STDDEF_H
-#define __STDDEF_H
-
 #ifndef __c4cc__
+// The host's, and through no guard of ours: a host header that wants one
+// type from it says so first (#define __need_wint_t, as MSYS2's and
+// Cygwin's do) and includes it again, and it has to get there every time.
 #include_next <stddef.h>
 #else  /* ifndef __c4cc__ */
+#ifndef __STDDEF_H
+#define __STDDEF_H
 
 // Everything is an int
 #define size_t    int
@@ -27,8 +29,8 @@
 #define unsigned
 #endif /* ifndef __c4_inttypes__ */
 
-#endif /* ifndef __c4cc__ */
-
 #endif /* ifndef __STDDEF_H */
+
+#endif /* ifndef __c4cc__ */
 
 

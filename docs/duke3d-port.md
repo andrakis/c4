@@ -230,6 +230,68 @@ the column loops themselves (40%) and `<ld16s>`, c4's 16-bit load (11%).
   nothing (Chocolate gave the keys defaults and the mouse none): they are DOS's
   setup program's defaults now, with the wheel for the weapons.
 
+**Three more, played with the Atomic Edition's files** (2026-11-12, the
+person's own GRP on C4IX):
+
+- Quitting (F10, or Quit in the menu, then Y) left a black screen and the game
+  running at full speed. On its way out `gameexit` showed the TEN advert (the
+  shareware's ordering screens), faded in by the palette alone, and waited for
+  a key in a loop that never slept; `duke-display.c` showed a palette only with
+  a frame, so the screen stayed black. The game goes straight back to the
+  desktop or the prompt now, and a palette is shown as soon as it is set, as
+  SDL's 8-bit screen showed it (the end of an episode fades in so too). Checked
+  in node: C4IX with the GRP in `/home`, `duke3d -home` on the whole display,
+  F10 and Y. Before, the game kept the display and drew nothing more; after,
+  it lets the display go, the prompt comes back, and `ps` shows no game.
+- Low detail (Video Setup's Detail) scrambled the view, which it draws into a
+  tile: Chocolate's `setviewtotile` stepped `ylookup` by the tile's width,
+  where a row of the view is a column of the tile, its height long (Ken's
+  stepped by `ysiz`).
+- `duke3d-full`, the bare machine, could not open a 44 MB GRP in its 128 MB:
+  the bare libc reads a file whole, into a buffer that doubles as it fills, so
+  32 MB and 64 MB at once. It has 192 MB now (160 MB was enough at 320x200).
+
+**A profile of a demo.** The Atomic Edition's `demo1.dmo` on the bare machine,
+frames 400 to 1000, every call counted by its target and by its call site (a
+copy of `c4m.js` that counts at `JSR`, `JSRI` and `JSRS`): 8.36 M instructions
+and 127,000 calls a frame. By calls, `<ld16s>` 65,700 (c4lc's 16-bit load, a
+call to 19 instructions), `<lsr>` 17,200 (18,400 of them `slopevlin`'s),
+`<st16>` 12,700, `__c4ll_mul` 3,000, `mulscale` 2,900, `__c4ll_and` 2,600,
+`c4_umul64` 2,500, `c4_mulscale` 2,200, `mulscale16` 1,500 and `klabs` 900. By
+instructions, `<ld16s>` 11.8%, `slopevlin` 11.2%, `hlineasm4` 11.0%,
+`vlineasm4` 10.3%, `mvlineasm4` 6.7%, `__c4ll_mul` 4.1%, `<lsr>` 3.3%,
+`c4_udiv64` 3.2% and `c4_umul64` 3.1%. Done:
+
+- `slopevlin`, the sloped floors and ceilings, written again as the other
+  inner loops were: no `<lsr>`, no 64-bit product, no unsigned division, and
+  its two register tricks kept (the x step's low byte is the count of pixels
+  left, the y step's the last pixel drawn), so the same pixels.
+- The `mulscaleN`, `dmulscaleN`, `tmulscaleN` and `divscaleN` wrappers are
+  macros: c4lc calls a `static inline` function as any other, so each was two
+  calls. Each uses each argument once, as the function it names does.
+- `CheckAnimStarted` makes its test where it is needed. It ran 322 times in
+  the run, five a frame of the opening `.ANM`, and never in the demo.
+
+After: **7.12 M instructions a frame on the demo (-14.8%), 95,500 calls**;
+6.98 M on the test's script, from 7.05 M (few slopes on E1L1). Every frame the
+same, by the checksums of both runs.
+
+Not done, with the reason:
+
+- `<ld16s>` is the biggest single cost now, 13% and 58,700 calls a frame:
+  `short` fields and arrays, `drawalls`, the scans, the actors. The VM has no
+  16-bit load, so it is c4lc's to open-code (or the VM's to add), and then
+  every program gains.
+- `klabs` as a macro: Duke passes it expressions (`klabs(ps[j].oposx-s->x)`),
+  which a macro works out twice. c4lc's `-minline` inlines the function
+  safely, but only where an argument of a parameter used twice is a variable
+  or a constant, and Duke has no such call: built with `-minline`, the image
+  is the one built without it, byte for byte. A `-minline` that bound such an
+  argument to a temporary first would take them. They are 900 calls a frame,
+  about 0.2%.
+- `mulscale`'s 32-bit path takes operands within 46,340, and 70% of the
+  demo's calls are outside it (`c4_mulscale`, `c4_umul64`: about 6%).
+
 **In the page**, C4IX, 320x200, the test's 600 frames shown (`-show`, sound and
 music on), on the Chrome of CDP 9222 (2026-11-11): 12.9 fps as the page starts
 (paced at 100 MHz, with the MMU); at `mhz=400&cpus=1`, 16.2 fps with the MMU and
@@ -239,6 +301,7 @@ machine's Chrome: 10.4 and 13.1.)
 **Tests.** `test-duke3d` plays E1L1 from the script (`-script`, 600 frames)
 under gcc and c4lc on the bare machine, under C4DOS and inside C4IX, and then
 changes the screen size in the game's own menu (`-menu`: Options, Video Setup,
-320x200 to 400x300) inside C4IX; all match. `-home` was played with an upload
+320x200 to 400x300) inside C4IX, sets the detail low there, and quits from the
+game (F10, Y), which must end it; all match. `-home` was played with an upload
 laid over C4IX's disk as the page lays it (the GRP in `/home`) and on the bare
 machine; sound and music were recorded from the card (`cli.js --wav`).

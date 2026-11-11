@@ -104,30 +104,32 @@ if [ -n "$CLIMBSRC" ] && [ -f $LJDOS/c4dos32.c4r ]; then
     # rest of the shared disk and the climb floppy, its programs and their
     # sources). src/ stays where it was: the nested c4m innerbench starts
     # opens src/c4ke/c4ke.c by that path.
-    lad_dir () {
+    lad_dir () {            # lad_dir PATH: dir= the ladder disk's directory for PATH, or nothing
+        dir=
         case "$1" in
             # (the shared disk's tyrian/ is C4IX's: its hostdir(tyrian/))
-            tyrian/*) echo C4IX ;;
-            */*) g=$(game_of "$1"); if [ -n "$g" ]; then echo "GAMES/$g"; fi ;;
+            tyrian/*) dir=C4IX ;;
+            */*) game_of "$1"; if [ -n "$game" ]; then dir="GAMES/$game"; fi ;;
             config.sys|autoexec.bat|c4dos32.c4r|ladder.txt) ;;
-            grin.c4r|clock.c4r|calc.c4r|notepad.c4r|exitkey.c4r) echo GRIN ;;
-            askline.c4r|dosfilt.c4r|hello.c4r) echo BIN ;;
-            c4ix-src.tar|c4ix.b4k|c4ix.objs|c4ix.lst) echo BUILD ;;
-            c4ix-*|c4ix.*|c4ix_user.h) echo C4IX ;;
-            *.bat|*.tar|*.lisp|*.b4k|*.lst|u0.h) echo BUILD ;;
-            cpp.c4r|c4cc.c4r|c4sp.c4r|c4sc.c4r|c4rlink.c4r|c4rdump.c4r|c4th.c4r) echo BUILD ;;
-            dostar.c4r|dosload.c4r|b4ke.c4r|kboot.c4r|tar.c4r|install.c4r|kinstall.c4r) echo BUILD ;;
-            bbsave.c4r|save.c4r|reboot.c4r) echo BUILD ;;
-            *) g=$(game_of "$1"); if [ -n "$g" ]; then echo "GAMES/$g"; else echo C4KE; fi ;;
+            grin.c4r|clock.c4r|calc.c4r|notepad.c4r|exitkey.c4r) dir=GRIN ;;
+            askline.c4r|dosfilt.c4r|hello.c4r) dir=BIN ;;
+            c4ix-src.tar|c4ix.b4k|c4ix.objs|c4ix.lst) dir=BUILD ;;
+            c4ix-*|c4ix.*|c4ix_user.h) dir=C4IX ;;
+            *.bat|*.tar|*.lisp|*.b4k|*.lst|u0.h) dir=BUILD ;;
+            cpp.c4r|c4cc.c4r|c4sp.c4r|c4sc.c4r|c4rlink.c4r|c4rdump.c4r|c4th.c4r) dir=BUILD ;;
+            dostar.c4r|dosload.c4r|b4ke.c4r|kboot.c4r|tar.c4r|install.c4r|kinstall.c4r) dir=BUILD ;;
+            bbsave.c4r|save.c4r|reboot.c4r) dir=BUILD ;;
+            *) game_of "$1"; if [ -n "$game" ]; then dir="GAMES/$game"; else dir=C4KE; fi ;;
         esac
     }
     lad_put () {            # lad_put DIR: DIR's files onto the ladder disk, each in its directory, over what is there
+        games_map
         (cd $1 && find . -type f ! -name manifest.json ! -name index.json ! -name c4dos.dir \
             ! -name config.sys ! -name autoexec.bat | sed 's|^\./||') | while read -r f; do
             # a page disk's own directories are the ladder's too
             case "$f" in
                 GRIN/*|BIN/*|GAMES/*) to=$f ;;
-                *) d=$(lad_dir "$f"); to=${d:+$d/}$f ;;
+                *) lad_dir "$f"; to=${dir:+$dir/}$f ;;
             esac
             lj_put "$1/$f" $LJLAD "$to"
         done

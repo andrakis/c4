@@ -4,7 +4,7 @@ A direct interpreter for the c4m virtual machine, written the way `c4m.c`'s
 dispatch loop is: one `switch` over an `Int32Array`. It boots the 32-bit
 C4KE and C4IX images in Node or in a browser Web Worker, with a terminal, a
 display device that a guest program draws into, and a sound card (an AdLib
-OPL, eight channels of 8-bit samples and the PC speaker).
+OPL, sixteen channels of 8-bit samples and the PC speaker).
 
 It shares its memory map, device registers, `.c4r` loader, disk controller,
 keyboard, clocks and mailbox with the c4bb breadboard computer

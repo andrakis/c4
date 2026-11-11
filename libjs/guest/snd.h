@@ -1,5 +1,5 @@
 // snd.h -- the libjs sound card, from inside the machine: an AdLib (OPL2,
-// and the OPL3's second bank), eight channels of 8-bit samples, and the
+// and the OPL3's second bank), sixteen channels of 8-bit samples, and the
 // PC speaker. docs/libjs-design.md "The sound card".
 //
 // ANNOUNCED, NEVER PROBED: call snd_present() first. On a machine without
@@ -35,8 +35,11 @@ enum {
 	C4I_SND = 0x8000
 };
 // CAPS
-enum { SND_HAS_OPL = 1, SND_HAS_PCM = 2, SND_HAS_SPK = 4, SND_HAS_OPL3 = 8 };
-enum { SND_CHANNELS = 8 };
+enum { SND_HAS_OPL = 1, SND_HAS_PCM = 2, SND_HAS_SPK = 4, SND_HAS_OPL3 = 8, SND_HAS_PCM16 = 16 };
+// sample channels: sixteen since SND_HAS_PCM16, eight on a card without it.
+// Eight were too few for Quake, whose own mixer has eight for what starts
+// besides its ambience and its looped sounds.
+enum { SND_CHANNELS = 16 };
 // MASTER: every sound's volume, 0-255, and this bit to silence them all
 enum { SND_MUTE = 256 };
 

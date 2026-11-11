@@ -1,5 +1,5 @@
 // snd-mix.js - the sound device's events made into samples: the AdLib
-// (opl.js), eight channels of 8-bit samples, and the PC speaker, mixed to
+// (opl.js), sixteen channels of 8-bit samples, and the PC speaker, mixed to
 // stereo. The page's AudioWorklet (snd-worklet.js) runs one in real time;
 // cli.js --wav runs one over a whole session and writes the file.
 //
@@ -16,7 +16,7 @@
 import { OplChip } from './opl.js';
 import { EVT, MUTE } from './snd-device.js';
 
-const VOICES = 8;
+const VOICES = 16;
 const BLOCK = 1024;
 const OPL_GAIN = 4 / 32768;        // dbopl's output, scaled as Wolf4SDL scales it, to [-1, 1]
 const PCM_GAIN = 0.8 / 128;
@@ -76,16 +76,16 @@ export class SoundMixer {
       case EVT.OPL: this.opl.write(e[2], e[3]); break;
       case EVT.PCM: {
         if (this.frameOf(e[1]) < this.frame - PCM_STALE * this.rate) break;
-        const v = this.voices[e[2] & 7];
+        const v = this.voices[e[2] & (VOICES - 1)];
         v.data = e[5]; v.pos = 0; v.step = e[3] / this.rate;
         this.vol(v, e[4]);
         break;
       }
       case EVT.STOP:
         if (e[2] < 0) { for (const v of this.voices) v.data = null; }
-        else this.voices[e[2] & 7].data = null;
+        else this.voices[e[2] & (VOICES - 1)].data = null;
         break;
-      case EVT.VOL: this.vol(this.voices[e[2] & 7], e[3]); break;
+      case EVT.VOL: this.vol(this.voices[e[2] & (VOICES - 1)], e[3]); break;
       case EVT.SPK: this.spkFreq = e[2] > 0 ? 1193180 / e[2] : 0; break;
       case EVT.MASTER: this.gain = e[2] & MUTE ? 0 : (e[2] & 0xff) / 255; break;
       case EVT.RESET:

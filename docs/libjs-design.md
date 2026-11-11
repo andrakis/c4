@@ -65,7 +65,7 @@ Out of scope for now: c4mp multiprocessing.
 | `libjs/boot.js` | `parseC4r`/`loadImage` (reused), argv, and a c4mp-style trampoline. |
 | `libjs/gui-device.js` | The display registers and the two rings, host side. |
 | `libjs/snd-device.js` | The sound card's registers: what the guest writes, as timed events. |
-| `libjs/snd-mix.js` | The events made into samples: the OPL, eight sample channels and the speaker, mixed to stereo. Shared by the worklet and `cli.js --wav`. |
+| `libjs/snd-mix.js` | The events made into samples: the OPL, sixteen sample channels and the speaker, mixed to stereo. Shared by the worklet and `cli.js --wav`. |
 | `libjs/snd-worklet.js` | The mixer in the page's AudioWorklet (on the page's own thread where there is none). |
 | `libjs/opl.js`, `opl-tables.js` | The AdLib: DOSBox's dbopl, ported to JavaScript (GNU GPL v2 or later), with its tables as its C++ makes them. |
 | `libjs/keys.js` | Cooked and raw keyboard handling, copied from `src/c4bb/web/app.js`. |
@@ -299,12 +299,16 @@ commands to the host.
 
 It sits at **0x0480-0x04FF**, beside the display, and guests check
 `__c4_info() & C4I_SND` (0x8000) before touching it. It is an AdLib (an
-OPL2, with the OPL3's second bank), eight channels of unsigned 8-bit
-samples, and the PC speaker: what a DOS game expects to find.
+OPL2, with the OPL3's second bank), sixteen channels of unsigned 8-bit
+samples, and the PC speaker: what a DOS game expects to find. It had
+eight until Quake (2026-11-10): Quake's own mixer has eight for the sounds
+that start, besides its ambience and the looped sounds a map places, and
+with four left it cut off one sound for another a few times a second in a
+fight. CAPS bit 4 says there are sixteen.
 
 | Address | Register | Access | Meaning |
 |---|---|---|---|
-| 0x480 | CAPS | r | bit0 OPL, bit1 samples, bit2 speaker, bit3 OPL3 |
+| 0x480 | CAPS | r | bit0 OPL, bit1 samples, bit2 speaker, bit3 OPL3, bit4 sixteen sample channels (eight without it) |
 | 0x484 | OPL | w | (reg << 8) \| val; reg 0x100 and up is the OPL3's second bank |
 | 0x488 | WAIT | w | the stream moves n CLOCK units on |
 | 0x48C | AHEAD | r | microseconds the stream is ahead of now |

@@ -352,10 +352,10 @@ What stands in the way, and how G9 would meet it:
   the console's sink and the open files are global now; each must be
   saved and restored with the stack switch, as a VM's state was.
 - **The display** is already shared: each game blits into its own window.
-- **The sound card** has one OPL and eight sample channels. Two games
+- **The sound card** has one OPL and sixteen sample channels (eight until 2026-11-10). Two games
   writing the OPL would mix their music into noise: the game whose window
   has the focus gets the OPL and the speaker; samples could be shared by
-  giving each game four channels (`snd.h`'s channel numbers mapped), or
+  giving each game eight channels (`snd.h`'s channel numbers mapped), or
   the background game muted, as an enhanced-mode PIF's "Exclusive" did.
 - **Memory**: Doom and ROTT take about 15 and 17 MB, so two fit in the
   page's 64 MB; the heap generations already keep each game's apart and

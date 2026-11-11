@@ -153,3 +153,7 @@ libjs/images/
 .bsd_t/
 .pdcurses/
 .pdc_t/
+
+# make suite (tools/suite.mjs): its logs, and what it learned of each test
+.suite/
+.suite-stats.json

@@ -2477,6 +2477,18 @@ $(filter-out $(GAME_TESTS),$(GAMES_ALL:%=test-%)):
 	@echo "$@: skipped, games/$(@:test-%=%) is not here (games/README.md)"
 PHONY += $(GAMES_ALL:%=test-%)
 
+# THE FULL SUITE: every test, and every game's (a game that is not here
+# says so and passes). `make suite` runs them packed, as many at once as
+# memory and processors allow, longest first (tools/suite.mjs); its logs
+# and result.txt are in .suite/, and what it learns of each test --
+# time, peak memory, processors -- in .suite-stats.json, for the next run.
+SUITE := test test-c4lc test-c4fc test-srcmap test-c4sc test-c4sc-lex test-c4sc-image          test-c4bb test-c4bb-climb test-c4rstrip test-oisc4          test-c4ix test-c4ix-smp test-c4ix-c4ke test-c4ix-rebuild test-persist          test-c4dos test-c4dos-heap test-c4dos-c4fc test-c4dos-c4ix32 test-grin test-libc-bare          test-libjs test-libjs-ladder $(GAMES_ALL:%=test-%)
+print-suite:
+	@echo $(SUITE)
+suite:
+	node tools/suite.mjs
+PHONY += print-suite suite
+
 # The bare machine's libc, for the games on the bare machine and under
 # C4DOS and for test-libc-bare: libc built without -fpic, and its system
 # layer over the machine's own opcodes (src/c4ix/libc/bare.c) for

@@ -33,6 +33,8 @@
 //   persist { name, bytes }   a file the machine closed on drive 1, for the page to keep;
 //                             bytes null: one it took off drive 1, for the page to forget
 //   files-reset {}            drive 1 is empty and the machine is booting again
+//   download { name, bytes }  a file the machine hands the person (C4IX's download:
+//                             devices.js "download:NAME"), for the page to save
 //   cache   { name, hash, bytes }  a lazy disk's file with a hash, read from the server: for the page to keep
 //   status  { ... }           about four times a second
 //   exit    { status, cycles }
@@ -172,6 +174,7 @@ function start(msg) {
     cpus: msg.cpus | 0, quantum: msg.quantum | 0, mmu: !!msg.mmu,
     parallel: !!msg.parallel, spawn: url => new Worker(url, { type: 'module' }),
     onByte: b => { out.push(b); if (out.length >= 4096) flush(); },
+    onDownload: (name, bytes) => { const b = bytes.slice(); postMessage({ type: 'download', name, bytes: b }, [b.buffer]); },
   });
   boot(vm, new Uint8Array(msg.image), msg.argv || ['image.c4r'], { mbox: msg.mbox | 0 });
   par = vm.smp && vm.smp.parallel ? vm.smp : null;

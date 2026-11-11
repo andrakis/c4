@@ -76,7 +76,7 @@ URL parameters (from `web/app.js`). The page's Configuration button shows them a
 
 | Parameter | Meaning |
 |---|---|
-| `?system=c4ix\|c4ke\|c4dos\|c4dos-ladder\|wolf3d\|wolf3d6\|wolf3d-c4ix\|doom\|tyrian\|rott\|gui-demo\|fb-demo\|snd-demo\|raycast` | Which machine to boot (default `c4ix`). `c4dos` is C4DOS on the games' disk, with Wolfenstein 3D, Doom, Tyrian and Rise of the Triad; `c4dos-ladder` is the Build Ladder, C4DOS on a disk of its own that also builds and boots C4KE, from which C4KE builds and boots C4IX, all in one page session (docs/c4dos-ladder.md; 128 MB, and its own store for drive 1); `wolf3d`, `doom`, `tyrian` and `rott` are those games on the bare machine, `wolf3d6` Wolfenstein 3D's registered game there, from its files in Uploads (below), and `wolf3d-c4ix` Wolfenstein 3D on C4IX's whole display (docs/c4ix-wolf3d.md, games/doom/README.md, games/tyrian/README.md, games/rott/README.md; Tyrian's data only where it was there to copy). The last four are bare programs on the display or the sound card. |
+| `?system=c4ix\|c4ke\|c4dos\|c4dos-ladder\|wolf3d\|wolf3d6\|wolf3d-c4ix\|doom\|doom-full\|tyrian\|rott\|rottreg\|quake\|quake-full\|duke3d\|duke3d-full\|gui-demo\|fb-demo\|snd-demo\|raycast` | Which machine to boot (default `c4ix`). `c4dos` is C4DOS on the games' disk, with Wolfenstein 3D, Doom, Tyrian and Rise of the Triad; `c4dos-ladder` is the Build Ladder, C4DOS on a disk of its own that also builds and boots C4KE, from which C4KE builds and boots C4IX, all in one page session (docs/c4dos-ladder.md; 128 MB, and its own store for drive 1); `wolf3d`, `doom`, `tyrian` and `rott` are those games on the bare machine, `wolf3d6` Wolfenstein 3D's registered game there, from its files in Uploads (below), `doom-full` (or `doom1-full`, `doom2-full`, `tnt-full`, `plutonia-full` for one IWAD of several), `quake-full`, `duke3d-full` and `rottreg` the others that play the person's own files (the Uploads' folders, below), and `wolf3d-c4ix` Wolfenstein 3D on C4IX's whole display (docs/c4ix-wolf3d.md, games/doom/README.md, games/tyrian/README.md, games/rott/README.md; Tyrian's data only where it was there to copy). The last four are bare programs on the display or the sound card. |
 | `?image=URL&disk=URL` | Any other image and disk. |
 | `?args=A+B` | More arguments for the system's program, after its own: `?system=wolf3d&args=--secrets+--nodeath` (games/wolf3d/README.md). |
 | `?uploads=0` | The Uploads are not put on the disk. |
@@ -93,8 +93,49 @@ drive 1 is) and laid over drive 0 at every boot (`page.js`'s
 `opts.uploads`, `worker.js`), so a program opens them by name as if the
 disk had them; on C4IX that is a file its own tree does not have
 (`sys_open`). Names are made lower case. Boot with them reloads the page.
-Wolfenstein 3D's registered files are played this way (`wolf3d6`,
-games/wolf3d/README.md).
+
+Each upload goes in a **folder**, picked from the dialog's list before the
+files are added (or dropped): `/home`, as before, or one for each game that
+plays the person's own files (`FOLDERS` in `uploads.js`). The list shows
+each file's folder, and Forget takes it out of that folder alone. In the
+store an upload in a folder is named `FOLDER/NAME`, and `uploads.js`
+(`layUploads`) puts it where each system finds it: on drive 0 as
+`FOLDER/NAME` (the bare games open that name), in C4DOS's listing as the
+directory `A:\FOLDER`, and in C4IX as `/home/FOLDER/NAME`. Each game looks
+in its own folder first, then in `/home`, so uploads from before there
+were folders still play:
+
+| folder | the game, and what it plays | Go > Games (C4IX) | `?system=` (bare machine) |
+|---|---|---|---|
+| `/home/wolf3d` | `wolf3d6`: Wolfenstein 3D's registered `*.WL6` (games/wolf3d/README.md) | Wolfenstein 3D (your files) | `wolf3d6` |
+| `/home/duke3d` | `duke3d -home`: `DUKE3D.GRP` (games/duke3d/README.c4.md) | Duke Nukem 3D (your files) | `duke3d-full` |
+| `/home/quake` | `quake -home`: `pak0.pak` and `pak1.pak`, the registered game (games/quake/README.c4.md) | Quake (your files) | `quake-full` (256 MB) |
+| `/home/doom` | `doom -home`: `doom.wad`, `doom2.wad`, `plutonia.wad`, `tnt.wad` (games/doom/README.md) | Doom (your files) > each IWAD | `doom-full`, or `doom1-full`, `doom2-full`, `tnt-full`, `plutonia-full` (128 MB) |
+| `/home/rott` | `rottreg`: `DARKWAR.WAD`, `.RTL`, `.RTC` (games/rott/README.md) | Rise of the Triad (your files) | `rottreg` |
+
+On the bare machine and under C4DOS a game looks in `FOLDER/` at drive
+0's root, then at the root itself; not under `/home`, which the disk would
+answer by a path's last part, from the root (devices.js `diskFind`).
+
+**Downloads.** What a system keeps can be taken away as files, two ways:
+
+- **Saved Files** (the page's button, beside Reset Files, wherever the
+  system has a store) lists the store -- drive 1, kept in this browser --
+  without the machine, and downloads a file, a folder as a tar, or all of
+  it as `STORE.tar`. Every system's: the bare games' saves and settings
+  by their names, C4DOS's B:, and C4IX's changes by their paths, from
+  the tar persist last wrote (`kept.js`; `c4ix-persist.cur` says which of
+  its two). For C4IX that is the files as the last save kept them: the
+  desktop saves a minute after a change, and at Shut Down.
+- **In C4IX**, `download PATH...` in a shell, or **Files' File >
+  Download**, hands a file over as it is now, and a folder as `NAME.tar`
+  (`download` is persist by another name: `src/c4ix/user/persist.c`). It
+  writes `download:NAME` through the drive's write registers, which
+  `devices.js` gives to `onDownload` rather than to a drive; `worker.js`
+  posts it to the page (`download`), and the page saves it. On the
+  command line nothing takes it, and `download` says so.
+
+The folder tar is ustar, as C4IX's persist writes, read by any tar.
 
 The running machine is `window.c4m` on the page, so the console or a test
 can drive it (`c4m.write('ps\n')`).

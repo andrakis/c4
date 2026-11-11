@@ -66,7 +66,7 @@ static void mark_only(struct files *f, int i);
 static char tbuf[256];
 
 static struct wk_menu menus[3];
-static char *file_items[8];
+static char *file_items[9];
 static char *view_items[10];
 static char *go_items[2];
 // View's sort items, each with WK_CHECKED before it: the item is the
@@ -571,8 +571,8 @@ int files_open(char *path) {
     w = win_get(i);
     menus[0].title = "File"; menus[1].title = "View"; menus[2].title = "Go";
     file_items[0] = "Open"; file_items[1] = "New Folder"; file_items[2] = "Delete";
-    file_items[3] = "Rename"; file_items[4] = "Show Code"; file_items[5] = "-"; file_items[6] = "Close";
-    file_items[7] = 0;
+    file_items[3] = "Rename"; file_items[4] = "Show Code"; file_items[5] = "Download";
+    file_items[6] = "-"; file_items[7] = "Close"; file_items[8] = 0;
     view_items[0] = "Refresh"; view_items[1] = "-"; view_items[6] = "-"; view_items[9] = 0;
     sort_marks();
     go_items[0] = "Up"; go_items[1] = 0;
@@ -857,7 +857,8 @@ void files_key(struct win *w, int code, int ch, int mods) {
 void files_command(struct win *w, int menu, int item) {
     struct files *f;
     char path[256], name[NAMEW];
-    int n, i, dirs;
+    char *av[3];
+    int n, i, dirs, pid;
     f = F(w);
     if (menu == 0) {
         if (item == 0) open_sel(w);
@@ -890,7 +891,16 @@ void files_command(struct win *w, int menu, int item) {
             join(tbuf, f->path, ename(f, f->sel));
             edit_open(tbuf);
         }
-        else if (item == 6) win_close(win_index(w));
+        else if (item == 5 && f->n && f->sel >= 0 && f->sel < f->n) {
+            // to the web page, which saves it where the browser keeps
+            // downloads, a folder as a tar: persist's download (/bin/download).
+            // The desktop waits for it, as it does for persist save
+            join(path, f->path, ename(f, f->sel));
+            av[0] = "download"; av[1] = path; av[2] = 0;
+            if ((pid = spawn("/bin/download", 2, av)) < 0 || uwait(pid) != 0)
+                msgbox(w, "Download", "It could not be downloaded: only the web page takes downloads.", 0, A_NONE);
+        }
+        else if (item == 7) win_close(win_index(w));
     } else if (menu == 1) {
         if (item == 0) { load(f); tree_load(f); }
         else if (item >= V_SORT && item < V_SORT + N_SORTS) set_sort((item - V_SORT) * 2 + (theme_sort() & 1));

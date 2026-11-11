@@ -310,6 +310,8 @@ export class Devices {
     this.drive = 0;                   // the selected drive
     this.onRescan = opts.onRescan || null;
     this.onEject = opts.onEject || null;
+    // a file written to "download:NAME", for the person (diskCreate)
+    this.onDownload = opts.onDownload || null;
     this.resetRequested = false;
     this.cyclesPerMs = opts.cyclesPerMs || CYCLES_PER_MS;
     // The real clock. hostNow is injectable so a test can pin it; by
@@ -567,6 +569,19 @@ export class Devices {
   // pressed disc: it can be read forever and never written.
   diskCreate (nameAddr) {
     const name = this.arena.dmaCstring(nameAddr >>> 0, 256);
+    // "download:NAME": a file handed to the person (C4IX's download,
+    // src/c4ix/user/persist.c), written as any file is and given at its
+    // close to onDownload(NAME, bytes) -- the web page saves it where the
+    // browser keeps downloads -- and kept on no drive. -1 where the host
+    // has no one to give it to.
+    if (name.startsWith('download:')) {
+      const as = name.slice(9);
+      if (!this.onDownload || !as) return -1;
+      const media = { files: new Map(), writable: true, sink: (n, b) => { media.files.delete(n); this.onDownload(n, b); } };
+      const fd = this.nextFd++;
+      this.fds.set(fd, { w: { media, name: as, chunks: [], len: 0 } });
+      return fd;
+    }
     const { drv, rest } = this.resolveDrive(name);
     const media = this.drives[drv];
     if (!media || !media.writable || !media.sink) return -1;

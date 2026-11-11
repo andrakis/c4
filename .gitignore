@@ -75,6 +75,7 @@ libc.c4s
 # Rise of the Triad's objects (make rott-objs), its gcc build, its test
 /.rott/
 /.rott_t/
+/.rottreg/
 /rott-host
 # Quake's objects (make quake-objs), its gcc build, its test
 /.quake/

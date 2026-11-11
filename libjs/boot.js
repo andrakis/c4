@@ -37,6 +37,8 @@ import { Mmu } from './mmu.js';
 //   arenaMb   memory in megabytes (default 32)
 //   drives    [{ files: Map<name, Uint8Array>, writable, sink }] (c4bb's drives)
 //   onByte    console sink, one byte at a time
+//   onDownload(name, bytes)  a file the machine hands the person (C4IX's
+//             download: devices.js "download:NAME"); without it, none is taken
 //   mhz       how fast the machine claims to be; TIME is cycles / (mhz * 1000)
 //   gui       a GuiDevice to fit, or null
 //   snd       a SoundDevice (snd-device.js) to fit, or null
@@ -58,6 +60,7 @@ export function createMachine(opts = {}) {
   const dev = new Devices(arena, {
     drives: opts.drives,
     onByte: opts.onByte,
+    onDownload: opts.onDownload,
     cyclesPerMs: opts.mhz ? Math.max(1, Math.round(opts.mhz * 1000)) : CYCLES_PER_MS,
     hostNow: opts.hostNow,
   });

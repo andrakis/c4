@@ -2,7 +2,9 @@
 //
 // URL parameters:
 //   ?system=NAME                 which machine to boot (default c4ix): c4ix, c4ke,
-//                                c4dos, c4dos-ladder, wolf3d, wolf3d6, wolf3d-c4ix, doom, tyrian, rott, gui-demo, fb-demo,
+//                                c4dos, c4dos-ladder, wolf3d, wolf3d6, wolf3d-c4ix, doom, doom-full,
+//                                doom1-full, doom2-full, tnt-full, plutonia-full, tyrian, rott,
+//                                rottreg, quake, quake-full, duke3d, duke3d-full, gui-demo, fb-demo,
 //                                snd-demo, raycast -- SYSTEMS below
 //   ?image=URL&disk=URL          any other image and disk instead
 //   ?args=A+B                    more arguments for the system's program, after its
@@ -38,6 +40,8 @@
 import { C4M } from '../page.js';
 import { SITE } from './site.js';
 import { MediaStore, indexedDbBackend } from '../../src/c4bb/web/store.js';
+import { FOLDERS, uploadName, uploadParts } from '../uploads.js';
+import { keptFiles, keptFolders, folderTar } from '../kept.js';
 
 // On a host that cannot isolate the page, coi.js reloads it once with a
 // service worker that does: nothing boots before that
@@ -87,6 +91,16 @@ const SYSTEMS = {
              disk: `${IMAGES}/games`, argv: ['wolf3d6.c4r'], mhz: 400, persist: 'wolf3d' },
   doom: { label: 'Doom (bare machine)', image: `${IMAGES}/games/doom.c4r`, disk: `${IMAGES}/games`,
           argv: ['doom.c4r'], mhz: 400, persist: 'doom' },
+  // ... and the person's own IWAD (doom.wad, doom2.wad, plutonia.wad,
+  // tnt.wad), which the Uploads put in doom/ or at the root (doom -home,
+  // games/doom/README.md): read whole when it opens, Doom II's 14 MB
+  'doom-full': { label: 'Doom, your files (bare machine)', image: `${IMAGES}/games/doom.c4r`, disk: `${IMAGES}/games`,
+                 argv: ['doom.c4r', '-home'], mhz: 400, mem: 128, persist: 'doom' },
+  // ... or one of them by name (-iwad), when there are several
+  ...Object.fromEntries([['doom1', 'The Ultimate Doom', 'doom.wad'], ['doom2', 'Doom II', 'doom2.wad'],
+                         ['tnt', 'Final Doom: TNT', 'tnt.wad'], ['plutonia', 'Final Doom: Plutonia', 'plutonia.wad']]
+    .map(([k, what, wad]) => [`${k}-full`, { label: `Doom, your files: ${what} (bare machine)`, image: `${IMAGES}/games/doom.c4r`,
+      disk: `${IMAGES}/games`, argv: ['doom.c4r', '-home', '-iwad', wad], mhz: 400, mem: 128, persist: 'doom' }])),
   // OpenTyrian (games/tyrian), where Tyrian's data was there to put on
   // the disk (games/tyrian/data/README.md)
   tyrian: { label: 'Tyrian (bare machine)', image: `${IMAGES}/games/tyrian.c4r`, disk: `${IMAGES}/games`,
@@ -94,18 +108,29 @@ const SYSTEMS = {
   // Rise of the Triad (games/rott), the shareware episode
   rott: { label: 'Rise of the Triad (bare machine)', image: `${IMAGES}/games/rott.c4r`, disk: `${IMAGES}/games`,
           argv: ['rott.c4r'], mhz: 400, persist: 'rott' },
+  // ... and the registered game, rottreg, from the person's own DARKWAR
+  // files, which the Uploads put in rott/ or at the root (games/rott/README.md).
+  // A store of its own: its saved games are not the shareware's.
+  rottreg: { label: 'Rise of the Triad, your files (bare machine)', image: `${IMAGES}/games/rottreg.c4r`,
+             disk: `${IMAGES}/games`, argv: ['rottreg.c4r'], mhz: 400, persist: 'rottreg' },
   // Quake (games/quake), the shareware episode. The bare libc holds a file in
   // memory whole, and its pak is 18 MB.
   quake: { label: 'Quake (bare machine)', image: `${IMAGES}/games/quake.c4r`, disk: `${IMAGES}/games`,
            argv: ['quake.c4r'], mhz: 400, mem: 128, persist: 'quake' },
+  // ... and the registered game from the person's own pak1.pak (and
+  // pak0.pak), which the Uploads put in quake/ or at the root (quake -home,
+  // games/quake/README.c4.md): 18 and 34 MB, each read whole when it opens
+  'quake-full': { label: 'Quake, your files (bare machine)', image: `${IMAGES}/games/quake.c4r`, disk: `${IMAGES}/games`,
+                  argv: ['quake.c4r', '-home'], mhz: 400, mem: 256, persist: 'quake' },
   // Duke Nukem 3D (games/duke3d), the shareware episode; and the full game
   // from the person's own DUKE3D.GRP, which the Uploads put on the disk
   // (duke3d -home). The bare libc holds a file in memory whole, and the
-  // Atomic Edition's GRP is 44 MB.
+  // Atomic Edition's GRP is 44 MB: read into a buffer that doubles as it
+  // fills, 96 MB at once at its peak, which 128 MB did not leave room for.
   duke3d: { label: 'Duke Nukem 3D (bare machine)', image: `${IMAGES}/games/duke3d.c4r`, disk: `${IMAGES}/games`,
             argv: ['duke3d.c4r'], mhz: 400, mem: 64, persist: 'duke3d' },
   'duke3d-full': { label: 'Duke Nukem 3D, your files (bare machine)', image: `${IMAGES}/games/duke3d.c4r`,
-                   disk: `${IMAGES}/games`, argv: ['duke3d.c4r', '-home'], mhz: 400, mem: 128, persist: 'duke3d' },
+                   disk: `${IMAGES}/games`, argv: ['duke3d.c4r', '-home'], mhz: 400, mem: 192, persist: 'duke3d' },
   'wolf3d-c4ix': { label: 'Wolfenstein 3D (C4IX, direct)', image: `${IMAGES}/c4ix32.c4r`, disk: `${IMAGES}/disk`,
                    argv: ['c4ix32.c4r', '-e', 'persist -d 60 &', '-e', 'wolf3d --direct'], persist: 'c4ix', mhz: 400, mmu: true },
   'gui-demo': { label: 'GUI demo (bare machine)', image: `${IMAGES}/gui-demo.c4r`, disk: null, argv: ['gui-demo.c4r'] },
@@ -487,20 +512,50 @@ filesBtn.addEventListener('click', async () => {
 // one upload serves wolf3d6 on the bare machine and WOLF3D under C4DOS.
 // Nothing a system writes goes here, and Reset Files leaves them alone:
 // Uploads' own Forget and Forget all do that.
+//
+// Each upload goes in a folder, picked before the files are (FOLDERS,
+// uploads.js): /home, or a game's own, /home/doom and the like, where
+// that game looks first. Its name in the store is the folder's and the
+// file's, "doom/doom2.wad"; one in /home is the file's alone, as before.
 const upDialog = $('uploads'), upList = $('uploads-list'), upInput = $('uploads-input');
+const upFolder = $('uploads-folder');
 const upStore = () => vm.store || (vm.store = new MediaStore(indexedDbBackend()));
 const fmtSize = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : n >= 1024 ? Math.round(n / 1024) + ' KB' : n + ' bytes';
+for (const [f, label, what] of FOLDERS) {
+  const o = document.createElement('option');
+  o.value = f; o.textContent = label; if (what) o.title = what;
+  upFolder.append(o);
+}
+// the folder last picked, for this browser (a convenience: /home without it)
+try { const f = localStorage.getItem('c4m.uploadFolder'); if (FOLDERS.some(([k]) => k === f)) upFolder.value = f; } catch { /* no storage */ }
+const folderHint = () => { $('uploads-folder-what').textContent = (FOLDERS.find(([f]) => f === upFolder.value) || [])[2] || ''; };
+upFolder.addEventListener('change', () => {
+  folderHint();
+  try { localStorage.setItem('c4m.uploadFolder', upFolder.value); } catch { /* no storage */ }
+});
+folderHint();
 async function upFiles() {
-  try { return [...(await upStore().load(UPLOADS))].sort(([a], [b]) => (a < b ? -1 : 1)); } catch { return []; }
+  // by folder, /home's first, then by name
+  const key = n => { const [f, file] = uploadParts(n); return [f, file]; };
+  try {
+    return [...(await upStore().load(UPLOADS))].sort(([a], [b]) => {
+      const [fa, na] = key(a), [fb, nb] = key(b);
+      return fa !== fb ? (fa < fb ? -1 : 1) : na < nb ? -1 : na > nb ? 1 : 0;
+    });
+  } catch { return []; }
 }
 async function upShow() {
   const files = await upFiles();
   upList.replaceChildren();
   for (const [name, data] of files) {
+    const [folder, file] = uploadParts(name);
     const li = document.createElement('li');
-    const n = document.createElement('span'); n.className = 'name'; n.textContent = name;
+    const n = document.createElement('span'); n.className = 'name';
+    const d = document.createElement('span'); d.className = 'dim'; d.textContent = `/home/${folder ? folder + '/' : ''}`;
+    n.append(d, file);
     const z = document.createElement('span'); z.className = 'dim'; z.textContent = fmtSize(data.length);
     const x = document.createElement('button'); x.type = 'button'; x.className = 'small'; x.textContent = 'Forget';
+    x.title = `forget ${file}, in /home/${folder ? folder + '/' : ''}`;
     x.addEventListener('click', () => upForget(name));
     li.append(n, z, x);
     upList.append(li);
@@ -513,7 +568,7 @@ async function upShow() {
 }
 async function upAdd(list) {
   try {
-    for (const f of list) await upStore().backend.putFile(UPLOADS, f.name.toLowerCase(), new Uint8Array(await f.arrayBuffer()));
+    for (const f of list) await upStore().backend.putFile(UPLOADS, uploadName(upFolder.value, f.name), new Uint8Array(await f.arrayBuffer()));
   } catch (e) { alert(`Could not keep the files in this browser: ${e.message || e}`); }
   await upShow();
 }
@@ -545,6 +600,73 @@ addEventListener('drop', async e => {
   if (!upDialog.open) upDialog.showModal();
 });
 upShow();
+
+// ---- Downloads: files of the machine's, saved where the browser keeps them ----
+// Two ways, for two needs (libjs/README.md, "Downloads"):
+// - C4IX hands a file over as it is now: `download PATH` in a shell, or
+//   Files' File > Download, a folder as a tar (src/c4ix/user/persist.c).
+//   It reaches the page as the worker's `download` (devices.js
+//   "download:NAME"), saved here at once.
+// - Saved Files lists what the system keeps in this browser, its store
+//   (drive 1, SYSTEMS' `persist`), read from IndexedDB without the
+//   machine: every system's -- the bare games' saves, C4DOS's B:, C4IX's
+//   changes as its last save kept them (kept.js) -- with a file, a
+//   folder or the lot to download.
+function saveAs(name, bytes) {
+  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
+  const a = document.createElement('a');
+  a.href = url; a.download = name.split('/').pop() || 'download';
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+vm.on('download', ({ name, bytes }) => saveAs(name, bytes));
+
+const svDialog = $('saved'), svList = $('saved-list');
+async function svFiles() {
+  try { return keptFiles(await upStore().load(vm.persistName)); } catch { return []; }
+}
+async function svShow() {
+  const files = await svFiles();
+  const isC4ix = files.some(([p]) => p.startsWith('/'));
+  $('saved-what').textContent = `What ${keptBy} keeps in this browser (its drive 1, the store "${vm.persistName}"), ` +
+    (isC4ix ? 'as its last save kept it: the desktop saves a minute after a change, and at Shut Down. ' +
+              'In C4IX, Files\' File > Download (or download in a shell) hands over a file as it is now.'
+            : 'as the system last wrote it.');
+  svList.replaceChildren();
+  const row = (cls, label, size, button, title, onclick) => {
+    const li = document.createElement('li'); li.className = cls;
+    const n = document.createElement('span'); n.className = 'name'; n.textContent = label;
+    const z = document.createElement('span'); z.className = 'dim'; z.textContent = size;
+    const x = document.createElement('button'); x.type = 'button'; x.className = 'small'; x.textContent = button; x.title = title;
+    x.addEventListener('click', onclick);
+    li.append(n, z, x);
+    svList.append(li);
+  };
+  const dirOf = p => p.slice(0, Math.max(0, p.lastIndexOf('/')));
+  for (const [folder, all] of keptFolders(files)) {
+    const here = files.filter(([p]) => dirOf(p) === folder);
+    if (!here.length && folder) continue;   // a folder with only folders in it: its own row is noise
+    const shown = isC4ix ? (folder || '/') : (folder ? folder + '/' : '(the top)');
+    row('folder', shown, `${all.length} file${all.length === 1 ? '' : 's'}`, '.tar', `download ${shown} and all in it, as a tar`,
+        () => { const t = folderTar(files, folder, vm.persistName); saveAs(t.name, t.bytes); });
+    for (const [p, b] of here)
+      row('file', p.slice(folder ? folder.length + 1 : 0), fmtSize(b.length), 'Download', `download ${p}`, () => saveAs(p, b));
+  }
+  if (!files.length) {
+    const li = document.createElement('li'); li.className = 'none'; li.textContent = 'nothing kept yet';
+    svList.append(li);
+  }
+  $('saved-all').disabled = !files.length;
+}
+if (vm.persistName) $('savedbtn').style.display = '';
+$('savedbtn').addEventListener('click', async () => { await svShow(); svDialog.showModal(); });
+$('saved-refresh').addEventListener('click', svShow);
+$('saved-all').addEventListener('click', async () => {
+  const t = folderTar(await svFiles(), '', vm.persistName);
+  saveAs(t.name, t.bytes);
+});
+// what the machine keeps while the list is open
+vm.on('persist', () => { if (svDialog.open) svShow(); });
 
 const pauseBtn = $('pause');
 let paused = false;

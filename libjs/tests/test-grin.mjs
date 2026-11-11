@@ -853,10 +853,14 @@ oneFrame('Wolfenstein 3D', () => {
   startItem('File Manager');
   until(() => has('File Manager'));
   clickText('A:');
-  // A:\GAMES\WOLF3D, and a double click on wolf3d.c4r there
+  // A:\GAMES\WOLF3D, and a double click on wolf3d.c4r there. GAMES has
+  // more folders than File Manager's list has rows (thirteen and .., in
+  // thirteen rows), and WOLF3D is the last: Down moves the selection, and
+  // the list with it, until WOLF3D is drawn
   until(() => has('GAMES'));
   dbl('GAMES');
-  until(() => has('WOLF3D'));
+  until(() => has(/^A:\\GAMES +\d+ files$/));
+  for (let i = 0; i < 40 && !has('WOLF3D'); i++) key(40);
   dbl('WOLF3D');
   until(() => has('wolf3d.c4r'));
   dbl('wolf3d.c4r');

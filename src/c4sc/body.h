@@ -239,9 +239,11 @@ int sc_compile (int argc, char **argv) {
 	// globals are segregated to BSS, exactly as c4lc.lisp does it.
 	L_c4r_58v3 = cell_true;
 	L_c4r_58bss_45extra = L_gen_58bssextra;
+	L_c4r_58bss_45size = L_gen_58bsssize;    // how much of it is BSS (c4r.lisp)
 	if (lines) L_c4r_58srcfiles = L_lex_58files;
 	out = L_c4r_58encode(m);
 	L_c4r_58bss_45extra = mk_int(0);
+	L_c4r_58bss_45size = mk_int(0);
 	if (c4sp_err) { printf("c4sc-host: %s\n", c4sp_err_msg); return 1; }
 
 	// The size line comes BEFORE the write, because under bare c4m there

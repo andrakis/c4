@@ -70,6 +70,7 @@ extern int *L_p_58lines;                // -g: the parser puts the lines in
 int *L_parse_58program (int *a0);
 extern int *L_c4r_58v3;
 extern int *L_c4r_58bss_45extra;
+extern int *L_c4r_58bss_45size;
 extern int *L_c4r_58srcfiles;           // -g: the map's files
 int *L_c4r_58decode (int *a0);
 int *L_c4r_58encode (int *a0);
@@ -82,6 +83,7 @@ extern int *L_gen_58fpu;
 extern int *L_gen_58nobuiltin;
 extern int *L_gen_58pic;
 extern int *L_gen_58bssextra;
+extern int *L_gen_58bsssize;
 int *L_gen_58module (int *a0);
 extern int *L_opt_58fuse_45on;
 int *L_c4opt_58optimize (int *a0);

@@ -80,6 +80,10 @@ libc.c4s
 /.quake/
 /.quake_t/
 /quake-host
+# Duke Nukem 3D's objects (make duke3d-objs), its gcc build, its test
+/.duke3d/
+/.duke3d_t/
+/duke3d-host
 # the -g or -g0 the images were compiled with (make .img_g)
 /.img_g
 

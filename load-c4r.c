@@ -36,6 +36,12 @@ enum {
 // actually stored -- the excess is BSS (zero-initialized, occupies no
 // image bytes). Version 2 images have no such field; for them MEMSZ is
 // taken to equal DATALEN. Both versions load.
+//
+// At 32 bits the field's eight bytes hold MEMSZ and four more, which a
+// v3 object from c4lc or c4fc uses for the size of its BSS (see
+// C4R_HDR_BSS): the zero-filled part at the END of MEMSZ, which begins at
+// MEMSZ - BSS. Zero there (or v2's 'p' filler) says nothing; c4rlink then
+// keeps that module's whole MEMSZ together, as it always did.
 enum { C4R__Supported_Version = 3 };
 
 enum {
@@ -71,6 +77,9 @@ enum {
 	C4R_HDR_DESTRUCTLEN, // int
 	C4R_HDR_MEMSZ,       // int -- data segment total in-memory size (v3+);
 	                     //        >= DATALEN, the excess is zero-filled BSS.
+	C4R_HDR_BSS,         // int -- of MEMSZ, how much at its end is BSS: the
+	                     //        uninitialized globals, no part of an
+	                     //        initialized one (v3, 32 bits); 0 for unknown
 	C4R_HDR__Sz
 };
 
@@ -459,6 +468,10 @@ int *c4r_load_opt_real (char *file, int options) {
 			x = (5 + i) & ~i;
 			c4r_src_read(fd, buffer, x); // padding word: MEMSZ (v3+)
 			header[C4R_HDR_MEMSZ] = *(int *)buffer;
+			// and at 32 bits, the BSS size beside it ('pppp' in v2)
+			header[C4R_HDR_BSS] = 0;
+			if (x == 8 && sizeof(int) == 4 && *(int *)(buffer + 4) != 1886417008)
+				header[C4R_HDR_BSS] = *(int *)(buffer + 4);
 			wordbytes = header[C4R_HDR_WORDBITS] / 8;
 			c4r_src_read(fd, buffer, wordbytes); header[C4R_HDR_ENTRY] = *(int *)buffer;
 			c4r_src_read(fd, buffer, wordbytes); header[C4R_HDR_CODELEN] = *(int *)buffer;
@@ -491,6 +504,10 @@ int *c4r_load_opt_real (char *file, int options) {
 			// actually stored.
 			if (header[C4R_HDR_MEMSZ] < header[C4R_HDR_DATALEN])
 				header[C4R_HDR_MEMSZ] = header[C4R_HDR_DATALEN];
+			// nor a BSS that would start before the stored bytes end
+			if (header[C4R_HDR_VERSION] < C4R__Supported_Version || header[C4R_HDR_BSS] < 0 ||
+			    header[C4R_HDR_MEMSZ] - header[C4R_HDR_BSS] < header[C4R_HDR_DATALEN])
+				header[C4R_HDR_BSS] = 0;
 
 			if (c4r_verbose) c4r_dump_info(c4r);
 

@@ -573,7 +573,11 @@ CREATE WSCR 1 CELLS ALLOT
    \ and then four zeros. Writing one word and stopping made a header
    \ four bytes short, which nothing noticed until c4fc ran on a 32-bit
    \ machine: at 64 bits one word IS the field.
-   MEMSZ FW   8 1 CELLS - 0 ?DO 0 OUT-C LOOP
+   \ At 32 bits the four bytes after it say how much of memsz is region
+   \ 3, the BSS -- as c4lc says it, for c4rlink, which lays every
+   \ module's BSS out after all their data (load-c4r.c, C4R_HDR_BSS).
+   MEMSZ FW
+   1 CELLS 4 = IF MEMSZ DB3 @ - FW ELSE 8 1 CELLS - 0 ?DO 0 OUT-C LOOP THEN
    ENTRY @ FW   CN @ FW   dl FW   PN @ FW   SN @ FW   CONSN @ FW   DESN @ FW
    67 FMK  CN @ 0 ?DO I CELLS CODE @ + @ FW LOOP
    68 FMK  dl 0 ?DO I DBYTE OUT-C LOOP

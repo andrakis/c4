@@ -126,6 +126,7 @@
 	;; MEMSZ: v3 reads the padding word; v2 has none (no BSS)
 	(define Memsz (if (>= Version 3) (string:word F 5) Datalen))
 	(if (< Memsz Datalen) (set! Memsz Datalen) nil)
+	(set! c4r:bss-size (if (if (>= Version 3) (= W 4) false) (string:word F 9) 0))
 	(define Patchlen  (string:word F (+ H (* 3 W))))
 	(define Symslen   (string:word F (+ H (* 4 W))))
 	(define Conslen   (string:word F (+ H (* 5 W))))
@@ -657,6 +658,12 @@
 ;; later encode without BSS is unaffected.
 (define c4r:bss-extra 0)
 
+;; how much of MEMSZ, at its end, is BSS: written at byte 9 in a 32-bit
+;; v3 image, where the field's last four bytes were zeros (load-c4r.c's
+;; C4R_HDR_BSS); 0 for unknown. The compiler sets it before an encode, and
+;; decode sets it from the file, so a roundtrip writes it back.
+(define c4r:bss-size 0)
+
 ;; chunks the next encode appends to the module's own (test-srcmap's
 ;; fixture). Reset by whoever sets it, as c4r:bss-extra is.
 (define c4r:extra-chunks (list))
@@ -731,7 +738,8 @@
 	(define I 5)
 	;; padding word (byte 5): MEMSZ in v3, else 'p' filler as asm-c4r uses
 	(if EmitV3
-		(begin (c4r:fill-bytes Out 5 8 0) (string:word! Out 5 Memsz))
+		(begin (c4r:fill-bytes Out 5 8 0) (string:word! Out 5 Memsz)
+			(if (= W 4) (string:word! Out 9 c4r:bss-size) nil))
 		(c4r:fill-bytes Out 5 8 112))
 	(string:word! Out 13 (if (= -1 Entry) -1 (c4r:label LT (second Entry))))
 	(string:word! Out (+ 13 W) Codelen)

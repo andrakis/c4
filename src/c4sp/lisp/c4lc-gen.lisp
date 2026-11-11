@@ -3762,6 +3762,11 @@
 ;; gen:bssextra carries the extra in-memory bytes beyond the data image
 ;; (alignment pad + bss size) so c4r:encode can record MEMSZ.
 (define gen:bssextra 0)
+;; and how much of the data's in-memory size is the BSS, at its end: the
+;; header records it (c4r:bss-size), and c4rlink puts every module's BSS
+;; after all the modules' initialized data, where the image need not store
+;; it (load-c4r.c, C4R_HDR_BSS)
+(define gen:bsssize 0)
 
 ;; rebuild a symbol list, resolving 'glo entries whose offset is a bss
 ;; (negative-encoded) offset to base + relative.
@@ -3845,12 +3850,17 @@
 			(if gen:objmode nil (g:die "no main function")))
 		;; (in an object, m may only be main's prototype, an extern: its field 3
 		;; is then the extern's number, not a label, and it is no entry)
-		;; BSS finalize: bss base = word-aligned end of the data image;
-		;; resolve bss-relative offsets in both the symbol table and the
-		;; code before either is serialized. gen:bssextra = the bytes the
-		;; loader must zero-fill beyond the stored data (align pad + bss).
-		(define bssbase (* g:WORD (/ (+ g:dlen g:WMASK) g:WORD)))
+		;; BSS finalize: bss base = word-aligned end of the data image,
+		;; and a word more, so that the address just past the last
+		;; initialized object is never the BSS's first (c4rlink moves the
+		;; two apart, and a constant address names one or the other); c4fc
+		;; places it the same (parse.f, PLACE-GLOBALS). Resolve
+		;; bss-relative offsets in both the symbol table and the code
+		;; before either is serialized. gen:bssextra = the bytes the loader
+		;; must zero-fill beyond the stored data (align pad, the word, bss).
+		(define bssbase (+ (* g:WORD (/ (+ g:dlen g:WMASK) g:WORD)) g:WORD))
 		(set! gen:bssextra (- (+ bssbase g:blen) g:dlen))
+		(set! gen:bsssize g:blen)
 		(define syms (g:symsection (g:resolvesyms (g:reverse g:syms) bssbase (list)) 0 (list)))
 		(define code (g:resolvecode (g:reverse g:code) bssbase (list)))
 		(set! g:dpatches (g:resolvedglo g:dpatches bssbase (list)))

@@ -506,7 +506,7 @@ Each step lands with tests, and the next starts only when they are green.
 ## 8. Risks
 
 - **Image size is not a risk after all.** C4IX caps an image at 4 MB
-  (`C4R_BUF_MAX`, `loader.c`).
+  (`C4R_BUF_MAX`, `loader.c`; 16 MB since Duke Nukem 3D's, 2026-11-10).
   - The measured build is 64 KB of x86-64 text in whole units (§2.1).
   - `c4m.c` gives the ratio: it is 35.8 KB of x86-32 text from gcc, and a
     113 KB `.c4r` from 32-bit c4lc `-O`, symbols included. That is about

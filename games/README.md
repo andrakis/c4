@@ -1,7 +1,7 @@
 # games
 
 The games c4 runs -- Wolfenstein 3D, Doom, OpenTyrian, Rise of the
-Triad, Quake, Frotz with Zork I-III, Open Adventure, Simon Tatham's
+Triad, Quake, Duke Nukem 3D, Frotz with Zork I-III, Open Adventure, Simon Tatham's
 Puzzles, The Ace of Penguins, Super Blit Kart and the BSD games -- are
 not part of c4's repository. Each lives in one of its own, on GitHub,
 on upstream's history with c4's port on top as commits, and is an
@@ -14,6 +14,7 @@ optional submodule here:
 | `games/tyrian` | [andrakis/c4-Tyrian](https://github.com/andrakis/c4-Tyrian) | OpenTyrian |
 | `games/rott` | [andrakis/c4-ROTT](https://github.com/andrakis/c4-ROTT) | icculus.org's Rise of the Triad 1.1.2 |
 | `games/quake` | [andrakis/c4-Quake](https://github.com/andrakis/c4-Quake) | quakegeneric (GPL WinQuake) |
+| `games/duke3d` | [andrakis/c4-Duke3D](https://github.com/andrakis/c4-Duke3D) | Chocolate Duke3D (the GPL Atomic Edition source, with Ken Silverman's Build engine under his own licence) |
 | `games/frotz` | [andrakis/c4-Frotz](https://github.com/andrakis/c4-Frotz) | Frotz's dumb interface, with Zork I, II and III |
 | `games/advent` | [andrakis/c4-Advent](https://github.com/andrakis/c4-Advent) | Open Adventure |
 | `games/puzzles` | [andrakis/c4-Puzzles](https://github.com/andrakis/c4-Puzzles) | Simon Tatham's Portable Puzzle Collection |

@@ -104,6 +104,7 @@ int g_depth;             // run frames open, 0 at the prompt
 char *g_line;            // the command line buffer
 char **g_argv;           // parsed argument vector
 char *g_scratch;         // shared file-read scratch (BUF_MAX)
+int   g_scratch_cap;     // ...or bigger, after a program that was (c4r_more)
 char *g_dirbuf;          // c4dos.dir contents (NOT g_scratch: a name is
                          // resolved while a caller is filling scratch)
 char *g_namebuf;         // the real spelling a resolve found
@@ -444,6 +445,7 @@ char *cwd_show (int d) { return path_show((char *)g_cwd[d]); }
 char *scratch_need () {
   int g;
   if (!g_scratch) {
+    g_scratch_cap = BUF_MAX;
     g = gen_dos();       // DOS's, whoever's call brought it back
     if (!(g_scratch = malloc(BUF_MAX))) printf("c4dos: out of memory\n");
     gen_set(g);
@@ -1449,6 +1451,32 @@ int pf_n (char *s, int n) {
 // The image's code and data are allocated in generation `gen`, the
 // program's own, so that releasing it takes them too; the scratch, which
 // is DOS's, is not.
+// A program bigger than the scratch (Duke Nukem 3D's is near 6 MB): the
+// scratch grows to hold it, doubling, since DOS cannot ask a file's size
+// before reading it; it stays that size until TRIM gives it back. It used
+// to stop at 4 MB and load what it had, and the program ran off its end.
+// The rest of FD after TOTAL bytes; the new total, or -1.
+int c4r_more (int fd, int total) {
+  char *big;
+  int n, g, i;
+  while (1) {
+    if (total == g_scratch_cap) {
+      g = gen_dos();
+      big = malloc(g_scratch_cap * 2);
+      gen_set(g);
+      if (!big) { printf("c4dos: out of memory\n"); return 0 - 1; }
+      i = 0;   // no memcpy on plain c4
+      while (i < total) { big[i] = g_scratch[i]; ++i; }
+      free(g_scratch);
+      g_scratch = big;
+      g_scratch_cap = g_scratch_cap * 2;
+    }
+    n = dos_read(fd, g_scratch + total, g_scratch_cap - total < 65536 ? g_scratch_cap - total : 65536);
+    if (n <= 0) return total;
+    total = total + n;
+  }
+}
+
 int c4r_load (char *path, int *api, int gen) {
   char *p, *data;
   int *code, *cons, *des;
@@ -1462,7 +1490,9 @@ int c4r_load (char *path, int *api, int gen) {
   // bounded by the scratch: a file of any size can be named
   while (total < BUF_MAX && (n = dos_read(fd, g_scratch + total, BUF_MAX - total < 65536 ? BUF_MAX - total : 65536)) > 0)
     total = total + n;
+  if (total == BUF_MAX) total = c4r_more(fd, total);
   dos_close(fd);
+  if (total < 0) return 0;
   if (total < 13) { pf("c4dos: %s is not a program\n", (int)path, 0, 0); return 0; }
 
   p = g_scratch;
@@ -2221,10 +2251,13 @@ int dos_api_entdata (int i) {
 // calls scratch_need(), so this is safe at any moment; the next TYPE
 // or RUN simply pays for one malloc. Returns the bytes released.
 int dos_api_trim () {
+  int n;
   if (!g_scratch) return 0;
   free(g_scratch);
   g_scratch = 0;
-  return BUF_MAX;
+  n = g_scratch_cap;
+  g_scratch_cap = 0;
+  return n;
 }
 
 // Give back the RAM disk contents. The caller has copied out whatever

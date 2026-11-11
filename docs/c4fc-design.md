@@ -421,7 +421,12 @@ The bar rises rung by rung and c4lc supplies it at every one.
          opcode 0 and no function begins with one.
       2. **Version 3, and v2's eight padding bytes hold the data
          segment's MEMSZ** — its size in memory, which is larger than
-         the bytes written.
+         the bytes written. At 32 bits the four bytes after it hold how
+         much of MEMSZ, at its end, is BSS (region 3), which c4rlink lays
+         out after every module's data so no image stores it; region 3
+         begins a word after region 2's end, so that the address just
+         past an initialised object is never the BSS's first
+         (2026-11-10, load-c4r.c's C4R_HDR_BSS).
       3. **The data segment is written with trailing zeros trimmed.**
          The loader zero-fills to memsz, so a string's terminating nul
          at the very end of the segment is simply not stored.

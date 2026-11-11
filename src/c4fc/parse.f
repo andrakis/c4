@@ -1671,7 +1671,10 @@ DEFER AGG-FILL ( ety cnt off v i -- i' )
 \ that names one gets shifted here.
 : PLACE-GLOBALS {: | off y -- :}
    IDN @ ALIGNUP DB2 !
-   DB2 @ DN @ ALIGNUP + DB3 !
+   \ a word between the initialised data and region 3, as c4lc leaves:
+   \ the address just past the last initialised object is then never
+   \ region 3's first, which c4rlink puts somewhere else (emit.f)
+   DB2 @ DN @ ALIGNUP + 1 CELLS + DB3 !
    DB2 @ FIX-REGION2
    0 TO off
    STN @ 0 ?DO

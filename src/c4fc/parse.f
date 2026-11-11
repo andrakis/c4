@@ -784,7 +784,8 @@ DEFER LOCAL-RECS ( ety cnt ai -- v )
             dt  ag IF na ELSE -1 THEN  ai LOCAL-RECS nn >lrecs !
             nn v V,
          THEN
-         nd 0<> ivn 0<> OR IF
+         \ iv alone is `= ""` or `= {}`: no values, every element zeroed
+         nd 0<> ivn 0<> OR iv 0<> OR IF
             STN @ 1- ST[] TO y
             n_linit 7 CELLS NEW TO nn
             nd nn >expr !  y nn >isym !  iv nn >ivals !  ivn nn >ivn !

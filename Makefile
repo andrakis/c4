@@ -1104,7 +1104,8 @@ C4SC_BACK_DIFF := c4_jailbreak factorial hello multifun puts reverse \
                   test_malloc test-order test-ptrs test_static test_switch \
                   tests c4lc_l2 global test_gcscan test-oisc test_printf \
                   c4lc_m4 c4lc_m4q c4lc_m4v c4lc_m7 c4lc_ll c4lc_m9 c4lc_m9lc \
-                  c4lc_m10 c4lc_m10lc c4lc_m11lc c4lc_m12lc c4lc_m13lc
+                  c4lc_m10 c4lc_m10lc c4lc_m11lc c4lc_m12lc c4lc_m13lc \
+                  c4lc_linit c4lc_linitlc
 test-c4sc-back: c4sc-host c4sp $(C4RLINK) $(C4M)
 	@fail=0; for b in $(C4SC_BACK_DIFF); do \
 	   f=$(TESTS)/$$b.c; \
@@ -1694,7 +1695,7 @@ C4FC_GEN_SWEEP := hello multifun puts reverse test_basic test_continue \
                   test_static test_switch tests c4lc_l2 global \
                   test_gcscan vararg2 test_vprintf c4_jailbreak \
                   c4lc_m4 c4lc_m4q c4lc_m4v c4lc_m4std c4lc_m7 c4lc_ll \
-                  c4lc_m7fwd c4lc_m9 c4lc_m10
+                  c4lc_m7fwd c4lc_m9 c4lc_m10 c4lc_linit
 
 test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c $(C4RDUMP)
 	./c4th $(C4FC_LIB) src/c4fc/tests/dsl.f | cmp - src/c4fc/tests/expected/dsl.txt
@@ -3534,8 +3535,11 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	# register, declarations in a block, sparse switches, casts and
 	# addresses plus offsets in constants (c4lc_m10.c, c4fc too); &a[k]
 	# set at start-up and floating point folded (c4lc_m10lc.c, c4lc
-	# only). gcc's goldens, the same at both sizes.
-	@for t in m9 m9lc m10 m10lc m11lc m12lc m13lc; do for fl in "" "-O" "-minline"; do \
+	# only). gcc's goldens, the same at both sizes. linit: initialised
+	# locals, copied from a template in the data when the stores would
+	# weigh enough (c4lc-design 14.14, c4fc too); linitlc: the same
+	# beside long longs, floats and struct values (c4lc only).
+	@for t in m9 m9lc m10 m10lc m11lc m12lc m13lc linit linitlc; do for fl in "" "-O" "-minline"; do \
 	   ./c4sp src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_$$t.c .c4lc_b.c4r > /dev/null || exit 1; \
 	   ./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-$$t.txt || exit 1; \
 	   ./c4sp32 src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_$$t.c .c4lc_b.c4r > /dev/null || exit 1; \

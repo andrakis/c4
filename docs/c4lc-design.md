@@ -547,11 +547,13 @@ output as the golden: `src/tests/c4lc_pp.c` for the preprocessor and
     string, a type name, or a name that no enum or static const answers
     before the next `,` or `}`.
   - An array's list of plain numbers keeps its element-by-element stores.
-    Anything else is `g:localaggr`'s: an `MSET` of the whole local, then
-    the global walk in a third mode, `'local`, storing each value at its
-    offset as the declaration runs.
+    Anything else is `g:localaggr`'s: the global walk in a third mode,
+    `'local`, records each value and its offset; then, as the declaration
+    runs, an `MSET` of the whole local and each record stored.
   - c4fc walks it at parse time into `(offset type node value)` records,
     which its `n_lagg` node stores in the same order.
+  - Both forms take their constants from a template in the data, with one
+    `MCPY`, once the stores would weigh enough (14.14).
   - T2 sees the calls in it (`t:aggrefs`, c4fc's `REFS n_lagg`); T1 folds
     none of it.
 - **`__func__`, `__LINE__` and `__FILE__`**:
@@ -1287,6 +1289,96 @@ checks each of these, its golden gcc's, at 32 and 64 bits, plain, `-O` and
 **Not done**, and changed in the game instead (`range.c`, its only change):
 bitfields, and a function typedef, `typedef move *(reasoning)(...)` then
 `static reasoning f;`.
+
+### 14.14 Initialised locals from a template (2026-11-11)
+
+Duke Nukem 3D's `CONFIG_WriteSetup` showed what an initialised local cost:
+`char commmacro[] = COMMMACRO;` ("CommbatMacro# ") was fifteen times `LEA`,
+`IMM n`, `ADD`, `PSH`, `IMM b`, `SC` -- seven instructions and ten words a
+byte, as if it were written `s[0] = 'C'; s[1] = 'o'; ...`. Every element
+past the initializer was stored as a zero the same way, so `char
+buf[256] = "x";` was 256 stores, and a brace list of numbers four
+instructions a word.
+
+Now (`g:ltemplate`, c4fc's `LTEMPLATE`) the constants are laid out in the
+data as the local's first bytes and the declaration copies them in:
+
+```
+LEA base; PSH; IMM <template>; PSH; IMM L; PSH; MCPY; ADJ 3
+```
+
+`MCPY` is memcpy's opcode, which struct assignment already uses, so it
+needs no libc and works under `-fno-builtin`. Then, if more than `g:LTAIL`
+(8) words of zeros follow the template, one `MSET` clears them; a shorter
+tail is copied with the rest. What is no constant -- an expression, a
+long long, a float, a struct value -- is stored after the copy, as before.
+
+- **What goes in**: a number for an integer or a pointer, and a string's
+  address for a pointer. The string is placed in the data ahead of the
+  template, which holds a data patch (`ddata`) to it, as a global's
+  initializer does. The template ends at its last nonzero byte.
+- **Both forms**: a plain array of numbers or a char array's string
+  (`g:linitarr`; c4fc's `n_linit`) as records made from its elements, and
+  a brace list (`g:localaggr`; `n_lagg`) from the records its walk makes.
+- **When**: the stores have to weigh `g:LTMPL` (8) or more, a word's store
+  1, a byte's 2 and a 16-bit one's 4 (`g:lweight`, c4fc's `LWEIGHT`): eight
+  words, four bytes, two shorts. The records must ascend without
+  overlapping -- a designator that goes back is only right stored in order
+  -- and the template may not be sparse, over four words a constant
+  (`{1, 2, 3, 4, [999] = 5}` stays an `MSET` and five stores).
+- **c4fc** makes the same template at the same place in its region 2 (the
+  data a function's code reaches), with the same patches in the same order,
+  and test-c4fc compares the bytes. Making c4lc_linit.c agree also found
+  `char d[16] = "";` and `= {}` compiling to nothing in c4fc, which made no
+  `n_linit` without values; it zeroes the array now, as c4lc does.
+
+**The threshold was measured**, a 32-bit image by `c4lc -O`, a function
+with one initialised local called two million times by libjs (`cli.js -s`),
+the bare loop taken off:
+
+| local | image bytes, stores / copy | cycles a call | ns a call (libjs) |
+|---|---|---|---|
+| `int a[2]`  | 100 / 120 | 18 / 18 | 60 / 180 |
+| `int a[3]`  | 124 / 124 | 22 / 18 | 100 / 185 |
+| `int a[4]`  | 148 / 128 | 26 / 18 | 105 / 200 |
+| `int a[6]`  | 196 / 136 | 34 / 18 | 150 / 190 |
+| `int a[8]`  | 244 / 144 | 42 / 18 | 185 / 164 |
+| `int a[16]` | 436 / 176 | 74 / 18 | 355 / 169 |
+| `char a[2]` | 100 / 98  | 18 / 15 | 84 / 155 |
+| `char a[3]` | 140 / 99  | 25 / 15 | 135 / 155 |
+| `char a[4]` | 180 / 100 | 32 / 15 | 155 / 140 |
+| `char a[8]` | 324 / 104 | 57 / 15 | 310 / 155 |
+
+The copy is smaller from three words or two bytes, and runs fewer
+instructions from two. But libjs leaves its fast loop for `MCPY` and `MSET`
+(they return `STOP.BUDGET`), and one costs as much time as some 35 plain
+instructions, so the stores are kept below eight words or four bytes,
+where the copy is no slower there either.
+
+Whole functions, old and new:
+
+| function | cycles a call | ns a call (libjs) |
+|---|---|---|
+| `char s[] = "CommbatMacro# "` | 114 / 29 | 570 / 200 |
+| `char s[64] = "abc"` | 407 / 26 | 1730 / 260 |
+| `int a[64] = {1, ..., 16}` | 266 / 26 | 1030 / 250 |
+| `struct { int; char; short; char *; } p = {...}` | 62 / 19 | 385 / 155 |
+| `int a[4] = {1, 2, 3, 4}` (kept) | 26 / 26 | 110 / 105 |
+
+Images, compiled as the build compiles them, old and new:
+
+- **Duke Nukem 3D** (`duke3d.c4r`, 32-bit, `-O -g -mfuse`): 4,701,063 to
+  4,683,027 bytes, 18,036 fewer, from six units: game.c 8,784, player.c
+  5,436, menues.c 1,448, config.c 1,081, premap.c 671, actors.c 616.
+  config.c is 3,421 instructions after c4opt and now 3,229: each of its two
+  `commmacro` initializers was 105 instructions and is 8.
+- **The C4IX kernel** (`c4ix.c4r` and the 32-bit one): byte-identical. No
+  local of it has an initializer that weighs enough.
+
+Tests: c4lc_linit.c (c4lc and c4fc, in test-c4fc's sweep and
+test-c4sc-back) and c4lc_linitlc.c (c4lc's alone: long longs, floats,
+struct values and compound literals beside a template, typedefs, `_Bool`),
+each against gcc's golden at 32 and 64 bits, plain, `-O` and `-minline`.
 
 ## 15. Source maps: `-g` (track S, S0-S2, 2026-10-24)
 

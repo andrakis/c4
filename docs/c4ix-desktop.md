@@ -1535,6 +1535,30 @@ Penguins' eleven games and Simon Tatham's forty Puzzles.
     and Taipei's Layout, and Help (F1) where a game has help. Each item
     is a key the game's own `key()` takes, so a pick is that key. Ace has
     no redo and no "deal this hand again": F2 deals anew.
+- [x] **The window any size, the game laid out for it** (asked for
+      2026-11-11: a maximised Mines drew its board at a fixed size in the
+      top-left, and on a short screen cut its bottom rows off). The canvas
+      was 640x400 whatever the window, and a program's own window could
+      not be resized, only maximised.
+  - `window.h` has `win_resizable()`, the op `z 1`: the canvas is then
+    the window's whole inside, a window of the program's own takes a drag
+    on its edges, and a maximised one fills the screen. A Terminal keeps
+    its size but may still be maximised. Each new size goes down the
+    pipe as `s w,h` (WIN_SIZE) once the window has held still at it for
+    100 ms (term.c `follow`), so a drag through many sizes is one
+    re-layout. A program that does not ask has 640x400, as before.
+  - The Puzzles: a new size is FE_EV_SIZE; fe.c makes a frame that size
+    and lays the puzzle out again, `midend_size` with the room between
+    the buttons and the status line, the puzzle as big as it fits there
+    (in a window; on the whole display, up to twice its own size, as
+    before) and centred. A window smaller than 240x140 shows a frame that
+    size, scaled down.
+  - Ace: a new size is ACE_EV_SIZE. The games that lay themselves out
+    (Solitaire, FreeCell, Spider, Thornq: a resize callback) get a table
+    the window's size, at least 640x400; the rest keep theirs. Either way
+    the frame has the window's shape, the table in its middle: scaled up
+    in whole pixels where the window holds it twice or more, drawn as it
+    is where it fits, scaled down where it does not.
 - [x] test-desktop.mjs, where the games are on the disk: Go > Games >
       Puzzles > Net opens a window titled Net, its frames 640x400, with
       no Terminal; a key reaches the game; it has Game, Type and Help;
@@ -1545,7 +1569,10 @@ Penguins' eleven games and Simon Tatham's forty Puzzles.
       and `q` gives it back. In Files, a double-click on
       `/usr/games/ace/thornq.c4r` plays Thornq in a window of its own,
       in frames of the canvas's shape, Game > New Game deals again, and
-      Ctrl-C closes it.
+      Ctrl-C closes it. Maximised, Net's frames are the bigger canvas's
+      size, drawn as they are, and a click in the middle turns a tile;
+      restored, 640x400 again. Thornq maximised deals across the bigger
+      table, in frames of its shape.
 
 ## Part twenty-five: the games' directories, listed when first looked in (asked for 2026-11-10)
 

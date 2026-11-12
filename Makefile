@@ -957,7 +957,16 @@ test-b4ke: $(BIN_D)/b4ke.c4r $(C4KE_C4R) $(C4M) $(C4R_C4CC) $(C4R_C4RLINK) $(TES
 	$(C4M) $(RUN_C4KE) b4ke -f $(SRCS)/c4ke/bin/b4ke-selftest.b4k -n > .b4ke_n.log 2>&1
 	grep -q "would run: c4rlink.c4r @b4ke.objs -o b4ked.c4r" .b4ke_n.log
 	grep -q "b4ke: 0 ran, 0 skipped, 0 failed" .b4ke_n.log
-	@rm -f .b4ke.log .b4ke_n.log
+	@# Naming a target builds only the steps that make it -- the way the
+	@# climb splits C4IX over four machines -- and a name no step makes
+	@# is a failure, not a quiet build of nothing.
+	$(C4M) $(RUN_C4KE) b4ke -f $(SRCS)/c4ke/bin/b4ke-selftest.b4k tlb.c4o > .b4ke_g.log 2>&1
+	grep -q "b4ke: 1 ran, 0 skipped, 0 failed" .b4ke_g.log
+	! grep -q "compiling module" .b4ke_g.log
+	-$(C4M) $(RUN_C4KE) b4ke -f $(SRCS)/c4ke/bin/b4ke-selftest.b4k -n nosuch.c4o > .b4ke_g.log 2>&1
+	grep -q "b4ke: nothing in $(SRCS)/c4ke/bin/b4ke-selftest.b4k makes nosuch.c4o" .b4ke_g.log
+	grep -q "b4ke: 0 ran, 0 skipped, 1 failed" .b4ke_g.log
+	@rm -f .b4ke.log .b4ke_n.log .b4ke_g.log
 	@echo "test-b4ke: OK"
 
 # c4sc: the c4sp Lisp, compiled to C (docs/c4sc-design.md). M1 emits C
@@ -2677,10 +2686,12 @@ test-c4bb-web: src/c4bb/images/climb
 src/c4bb/images/climb: | $(C4DOS_IX_DISK)
 	bash src/c4bb/tests/build-images.sh
 
-# The whole climb (M11 and M12): three power-ons, three systems, each
-# booted from a medium the previous one wrote. M11's bar is a strict
-# prefix of M12's, so they share one script rather than building the
-# same kernel twice.
+# The whole climb (M11 and M12): three systems, each booted from a
+# medium the previous one wrote. M11's bar is a strict prefix of M12's,
+# so they share one script rather than building the same kernel twice.
+# C4KE's build of C4IX is shared out over four simulated machines at
+# once (test-climb.sh says how), so this test uses about four CPUs for
+# most of its run.
 test-c4bb-climb: c4dos32.c4r $(C4DOS_IX_DISK)
 	bash src/c4bb/tests/test-climb.sh
 

@@ -15,11 +15,21 @@
 // the rung below. So B4KE is part of the answer to "what did building
 // the kernel buy me".
 //
-//   b4ke [-f FILE] [-n] [-k] [-t]
+//   b4ke [-f FILE] [-n] [-k] [-t] [TARGET...]
 //     -f FILE   build file (default BUILD.B4K)
 //     -t        run `top` alongside, so there is something to watch
 //     -n        say what would run, run nothing
 //     -k        keep going after a failed step
+//     TARGET    build only the steps that make these, as `make a b` does
+//
+// Naming targets is how one build is split over several machines
+// (src/c4bb/tests/test-climb.sh): each runs the same file and asks for
+// its share. A RUN whose TARGET was not asked for is passed over and
+// counted nowhere; ECHO lines are not printed, because they narrate the
+// whole file ("C4IX built") and a share is not the whole file; LIST
+// lines are still written, so asking for the link alone works. Naming
+// a target no step makes is a failure -- a share that silently built
+// nothing is the mistake this catches.
 //
 // The format is five verbs, one per line, dull on purpose in the way
 // C4TAR1 is dull:
@@ -57,6 +67,9 @@ static int   b4_ran;         // steps actually run
 static int   b4_skipped;     // steps skipped because the target existed
 static int   b4_failed;      // steps that did not produce their target
 static char *b4_target;      // pending TARGET, or 0
+static char **b4_goals;      // the targets asked for, or none: everything
+static int   *b4_asked;      // per goal: did a step make it
+static int    b4_ngoals;
 
 static int b4_isspace (int c) { return c == ' ' || c == 9 || c == 13; }
 
@@ -138,9 +151,28 @@ static int b4_write_list (char **argv, int argc) {
 	return 1;
 }
 
+// Is this step one of the ones asked for? With no targets named, every
+// step is. Marks the goal as found, so the end can name any that no
+// step makes.
+static int b4_wanted () {
+	int i;
+	if (!b4_ngoals) return 1;
+	if (!b4_target) return 0;
+	i = 0;
+	while (i < b4_ngoals) {
+		if (b4_streq(b4_goals[i], b4_target)) { b4_asked[i] = 1; return 1; }
+		++i;
+	}
+	return 0;
+}
+
 static int b4_run (char **argv, int argc) {
 	int task, i;
 
+	if (!b4_wanted()) {
+		b4_target = 0;
+		return 1;
+	}
 	if (b4_target && b4_exists(b4_target)) {
 		printf("b4ke: %s is already here, skipping\n", b4_target);
 		++b4_skipped;
@@ -190,6 +222,12 @@ int main (int argc, char **argv) {
 	b4_skipped = 0;
 	b4_failed  = 0;
 	b4_target  = 0;
+	b4_ngoals  = 0;
+	if (!(b4_goals = malloc(argc * sizeof(char *)))
+	    || !(b4_asked = malloc(argc * sizeof(int)))) {
+		printf("b4ke: out of memory\n");
+		return 1;
+	}
 
 	i = 1;
 	while (i < argc) {
@@ -197,7 +235,15 @@ int main (int argc, char **argv) {
 		else if (b4_streq(argv[i], "-n")) b4_dry = 1;
 		else if (b4_streq(argv[i], "-k")) b4_keep = 1;
 		else if (b4_streq(argv[i], "-t")) b4_top = 1;
-		else { printf("usage: b4ke [-f FILE] [-n] [-k] [-t]\n"); return 1; }
+		else if (*argv[i] == '-') {
+			printf("usage: b4ke [-f FILE] [-n] [-k] [-t] [TARGET...]\n");
+			return 1;
+		}
+		else {
+			b4_goals[b4_ngoals] = argv[i];
+			b4_asked[b4_ngoals] = 0;
+			++b4_ngoals;
+		}
 		++i;
 	}
 
@@ -242,6 +288,7 @@ int main (int argc, char **argv) {
 			continue;
 		}
 		if (b4_streq(words[0], "ECHO")) {
+			if (b4_ngoals) continue;      // it narrates the whole file
 			i = 1;
 			while (i < n) {
 				printf("%s", words[i]);
@@ -265,6 +312,19 @@ int main (int argc, char **argv) {
 		else {
 			printf("b4ke: %d: unknown verb '%s'\n", b4_line, words[0]);
 			return 1;
+		}
+	}
+
+	// A target asked for that no step makes. Only once the whole file has
+	// been read: a build that stopped at a failure has already said why.
+	if (ok) {
+		i = 0;
+		while (i < b4_ngoals) {
+			if (!b4_asked[i]) {
+				printf("b4ke: nothing in %s makes %s\n", b4_file, b4_goals[i]);
+				++b4_failed;
+			}
+			++i;
 		}
 	}
 

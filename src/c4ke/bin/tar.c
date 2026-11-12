@@ -1,7 +1,15 @@
-// tar -- unpack an archive into C4KE's RAM filesystem.
+// tar -- unpack an archive into C4KE's RAM filesystem, or make one.
 //
 //   tar x archive.tar     extract every member
 //   tar t archive.tar     list members, extract nothing
+//   tar c archive.tar file...
+//                         pack those files into a new archive, in the
+//                         RAM filesystem; `save` puts it on a medium
+//
+// `c` is how a build moves between machines without the host packing
+// anything: each one the climb test splits b4ke over packs the objects
+// IT compiled, saves the archive onto its own blank medium, and the
+// machine that links unpacks every one (src/c4bb/tests/test-climb.sh).
 //
 // dostar (src/c4dos/dostar.c) does this one rung down, onto the C4DOS
 // RAM disk, and the format and the parser are deliberately the same.
@@ -102,17 +110,85 @@ static char *entry (char *p, char *end) {
 	return q;
 }
 
+// The archive being made: o_buf grows by doubling, as g_buf does.
+char *o_buf;
+int   o_len, o_cap;
+
+static int put (char *src, int n) {
+	char *b;
+	int   i;
+	while (o_len + n > o_cap) {
+		if (!(b = malloc(o_cap + o_cap))) return 0;
+		i = 0;
+		while (i < o_len) { b[i] = o_buf[i]; ++i; }
+		free(o_buf);
+		o_buf = b;
+		o_cap = o_cap + o_cap;
+	}
+	i = 0;
+	while (i < n) { o_buf[o_len + i] = src[i]; ++i; }
+	o_len = o_len + n;
+	return 1;
+}
+
+static int putstr (char *s) {
+	int n;
+	n = 0;
+	while (s[n]) ++n;
+	return put(s, n);
+}
+
+static int putnum (int v) {
+	if (v >= 10 && !putnum(v / 10)) return 0;
+	return put("0123456789" + v % 10, 1);
+}
+
+// tar c: every member from wherever it is, the same rule as the archive
+// itself (slurp); the archive goes into the RAM filesystem.
+static int create (int argc, char **argv) {
+	int i, total;
+
+	o_cap = TAR_CHUNK;
+	o_len = 0;
+	if (!(o_buf = malloc(o_cap)) || !putstr("C4TAR1\n")) {
+		printf("tar: out of memory\n");
+		return 1;
+	}
+	total = 0;
+	i = 3;
+	while (i < argc) {
+		if (!slurp(argv[i])) { printf("tar: cannot read %s\n", argv[i]); return 1; }
+		if (!putstr(argv[i]) || !putstr(" ") || !putnum(g_len) || !putstr("\n")
+		    || !put(g_buf, g_len)) {
+			printf("tar: out of memory\n");
+			return 1;
+		}
+		total = total + g_len;
+		free(g_buf);
+		++i;
+	}
+	if (vfs_put(argv[2], o_buf, o_len)) {
+		printf("tar: could not write %s\n", argv[2]);
+		return 1;
+	}
+	printf("tar: packed %d files, %d bytes into %s\n", argc - 3, total, argv[2]);
+	return 0;
+}
+
 int main (int argc, char **argv) {
 	char *p, *end, *data, *mode;
 	int   extract, count, total;
 
-	if (argc < 3) {
+	if (argc < 3 || ((*argv[1] == 'c' || *argv[1] == 'C') && argc < 4)) {
 		printf("usage: tar x|t archive.tar\n");
+		printf("       tar c archive.tar file...\n");
 		printf("  x  extract every member into the RAM filesystem\n");
 		printf("  t  list members\n");
+		printf("  c  pack files into a new archive in the RAM filesystem\n");
 		return 1;
 	}
 	mode = argv[1];
+	if (*mode == 'c' || *mode == 'C') return create(argc, argv);
 	extract = (*mode == 'x' || *mode == 'X');
 
 	if (!slurp(argv[2])) { printf("tar: cannot read %s\n", argv[2]); return 1; }

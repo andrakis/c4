@@ -1022,7 +1022,9 @@ in one and not the other shows up there.
 
 Nothing crosses a boot except the media. `make test-c4bb-climb` is the
 pin, and M11's bar is a strict prefix of it, so they share one script
-rather than building the same kernel twice.
+rather than building the same kernel twice. The pin no longer runs
+`b4ke` on one machine as the transcript above does: it shares the
+build out over four, which is the next section but one.
 
 `kinstall` is `install` one rung up, and the only real difference is
 where a file might be: **the ramfs first, then the drive this system
@@ -1069,6 +1071,85 @@ Waiting on output rather than on a clock is also what makes the test
 usable: a sleep long enough for `b4ke` on a slow host is minutes of
 dead waiting on a fast one, and one short enough for a fast host fails
 on a slow one for no reason at all.
+
+### Four machines build C4IX, 2026-11-12
+
+On one machine the climb took 2,487 s on helios, and 2,392 s of it
+was `b4ke`: thirteen compiles in a row, the longest test in the suite
+and its whole critical path. The compiles do not depend on each other,
+so the test now powers on four machines from the medium C4DOS wrote and
+gives each a share:
+
+    climb   C4DOS, LADDER, install B:, reboot 0   -> C4KE, from drive 1
+    s1..s3  powered on once install B: is done    -> C4KE, from drive 0
+    each    tar x c4ix-src.tar
+            b4ke -f c4ix.b4k <its share>          b4ke: 3 ran, 0 skipped, 0 failed
+            tar c objs.tar <its share>            tar: packed 3 files, ... into objs.tar
+            save 1: objs.tar                      (the climb machine: save 2:)
+
+    link    C4KE medium in drive 0, a blank in drive 1, the four object
+            media in drives 2-5
+            tar x 2:objs.tar ... tar x 5:objs.tar
+            b4ke -f c4ix.b4k                      b4ke: 1 ran, 13 skipped, 0 failed
+            kinstall B:
+            reboot 0                              -> C4IX, from drive 1
+
+**What it still proves.** Every module is compiled by C4KE, inside a
+machine booted from the medium C4DOS wrote, and C4IX boots from a medium
+C4KE wrote after linking those objects. The objects go from machine to
+machine the way anything goes between machines that share nothing: on a
+medium, written by the system that made them and read by the one that
+links them. The host packs nothing; it only puts disks in drives. And
+the link machine runs the whole `c4ix.b4k`, not just the link, so
+**13 skipped** is the check that every module arrived. A module missing
+from every share would be compiled there instead, and that count
+would fail.
+
+Two small tools made that possible, and both are general:
+
+- **`b4ke` takes targets.** `b4ke -f c4ix.b4k mmu.c4o va.c4o` runs only
+  the steps that make those two, as `make a b` would. ECHO lines are
+  not printed then, because "C4IX built" narrates the whole file. A
+  name that no step makes is a failure, so a share with a typo cannot
+  quietly build nothing. `make test-b4ke` pins both.
+- **`tar c`.** C4KE's `tar` could only unpack. `tar c objs.tar a.c4o
+  b.c4o` packs files from the RAM filesystem into one archive there,
+  for `save` to write out. The machine that receives the archive reads
+  it with `tar x 2:objs.tar`, through the drive prefix every `open()`
+  on the board already understands.
+
+Why a fresh machine links rather than the climb machine: a drive's
+contents are read when the machine powers on (and at a reset), the way
+a disk in a drive is. A running machine does not see a file another
+machine has just written to the host directory. Collecting the media
+into a fifth power-on is the honest form of that, and it costs about
+20 s.
+
+The shares are balanced by time, measured one module at a time during
+a suite run (mmu 518 s, vfs 373, sched 347, sys 229 ... host 45; the
+table is in `test-climb.sh`). mmu.c alone is the floor. Four at once,
+each share runs slower than its sum, because the machines share the
+host: mmu alone takes 722-752 s, and the four shares finish within
+about 40 s of each other.
+
+Three runs in a row on helios, 2026-11-12, against the one-machine run
+on c4ix_and_toppings:
+
+| | one machine | four machines |
+|---|---|---|
+| C4DOS ladder and install | 65 s | 60-62 s |
+| C4KE boot and `tar x` | 8 s | 8-10 s |
+| `b4ke` | 2,392 s | 754-795 s, the slowest of four shares |
+| pack, save, power on the link machine, unpack | none | 26 s |
+| link | (in `b4ke`) | 18-20 s |
+| kinstall, C4IX boot, `ls`, shutdown | 20 s | 20 s |
+| **total** | **2,487 s** | **895-936 s** |
+
+The machines pace themselves to the board's 20 MHz clock (`cli.js`
+without `--fast`), so each uses well under a whole host CPU: the test
+averages about 2.7 CPUs over its run (2,485-2,537 s of CPU time in
+895-936 s). The simulators are waited for after they are powered off,
+so the suite runner's CPU figure for this test counts all four.
 
 ### M5: the browser gets drives
 

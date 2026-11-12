@@ -1059,12 +1059,15 @@ spinner at -3 beside one at 0 gets 4.6 times the cycles
     `test-c4ix-rebuild` runs without a drive, as before; run with one
     (`-w`), so that the whole build reads the tree from the drive, it
     passes too, in 719 s against 739 s.
-  - *Not done.* With the MMU and 6 MB (a 4 MB heap, 3 MB under the
+  - *Not done* (then). With the MMU and 6 MB (a 4 MB heap, 3 MB under the
     smallest that boots), the first shell still faults at its first
     instruction, a jump into the kernel's heap ("page fault: jump to
     0x001e1a80"), while swap is busy. It is not the entry page, which the
     check above would have reported. Left for the MMU's own work on
-    memory that runs out.
+    memory that runs out. (Not seen since 2026-11-13: a first boot to
+    the shell at 6 MB with the MMU now reads the tree whole. Most likely
+    the same refused read as below, though the old message was not made
+    again to show it.)
   - *Checked again* (2026-11-13; asked: is the tree still read from drive
     1, and does the desktop still start in 8 MB?). The page's path had not
     changed: 1,226 files from the copy kept on drive 1, System 2,744 K at
@@ -1097,14 +1100,39 @@ spinner at -3 beside one at 0 gets 4.6 times the cycles
     | ... from the kept copy | | 5 / 6 MB | 5 / 6 MB |
     | ... no drive 1, the tree in RAM | | 44 / 30 MB | 44 / 29 MB |
 
-    *Not done.* A first boot to the desktop in 8 or 9 MB with the MMU,
-    before and after, reads the archive wrong while swap is busy:
-    persist says "bad literal/length code", or now "not a tar archive",
-    and as that is not memory the boot goes on, and the desktop starts
-    with no tree. The same archive inflates whole in 10 MB (and to the
-    shell in 9), so it is likely a task's paged memory going wrong under
-    swap rather than the inflater; not found yet, and left with the 6 MB
-    fault above for the MMU's work on memory that runs out.
+    *Found* (2026-11-13, later). A first boot to the desktop in 8 or 9
+    MB with the MMU read the archive wrong: persist said "not a tar
+    archive" ("bad literal/length code" on c4ix_and_toppings), and as
+    that was not memory the boot went on, and the desktop started with
+    no tree. Neither the inflater nor swap's pages were at fault, but a
+    read. `arc_readfile` reads the 4.3 MB archive into its buffer in one
+    `read`. The syscall's check (`uaccess`) brings every page of the
+    buffer in first, and in a small machine the first of them are out
+    again by the time the read is made. The kernel's host read gives the
+    drive the user address, through the window. libjs's `dmaWrite`
+    stopped at the first page that was out, and `diskRead` still said it
+    had read all 4,328,592 bytes. The buffer stayed zeros. With no gzip
+    magic, persist took it for a plain tar.
+    The kernel's own loads and stores through the window have reached
+    the host's copy of a page that is out since swap began (c4m.js
+    `kld8`, `kst8`). Now a device's copy reaches it too (arena.js
+    `dmaSwapped`, for `dmaRead` and `dmaWrite`). A drive's read and
+    write also count only the bytes they moved. The smallest machines
+    with the MMU on a first boot, headless: the desktop 8 MB (was 10),
+    the shell 6 MB (was 9). In 7 MB the archive inflates whole too, but
+    the boot pages so hard that the desktop is not up within the test's
+    8,000 M cycles, and from the kept copy the desktop needs 8 anyway.
+    In 5 MB persist cannot start, and says so.
+
+    A root archive that cannot be read for a reason other than memory
+    now stops the desktop's boot, as running out of memory does. A
+    desktop on no tree looks like one, then every program on it fails,
+    and the reason is on a console hidden behind it. persist exits 4
+    (`DAMAGED`), vfsload passes it on, and init says "c4ix: the root
+    archive could not be read, so the system's files are not there" and
+    stops. A console boot goes on as before (vfsload does not wait for
+    persist there), with persist's message on the console. The drive
+    keeps no copy: the id is written last, so the next boot tries again.
 
   `libjs/tests/test-lazy-root.mjs`; in the page, `web-lazy-root.mjs`.
 

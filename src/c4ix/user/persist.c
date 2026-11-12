@@ -70,6 +70,10 @@
 // Out of memory. A boot that cannot unpack the system says so and exits
 // 3 (NOMEM); vfsload and init then stop the desktop's boot there, where
 // the desktop on half a filesystem would only fail later, less clearly.
+// A root archive that cannot be read for any other reason (damaged: "bad
+// literal/length code", "CRC mismatch", "not a tar archive") is 4
+// (DAMAGED), and stops the desktop's boot too: a desktop with no tree
+// under it looks like one, and then every program on it fails.
 
 #include "c4ix_user.h"
 #include "archive.h"
@@ -80,7 +84,8 @@ enum {
     DISK_WCLOSE = 0x184, DISK_COUNT = 0x188,
     HEAP_BASE = 0x144, HEAP_END = 0x148,
     PATHMAX = 256, NAMEMAX = 64, CHUNK = 65536, BLOCK = 512,
-    NOMEM = 3              // boot's exit status when memory ran out
+    NOMEM = 3,             // boot's exit status when memory ran out
+    DAMAGED = 4            // ... and when the root archive could not be read
 };
 
 static char *SNAP = "1:c4ix-persist.tar";      // the changes saved: this one or SNAP2, as CUR says
@@ -600,10 +605,11 @@ static int heap_mb() {
     return (*(int *)HEAP_END - *(int *)HEAP_BASE) / 1048576;
 }
 
-// NAME could not be unpacked: why, and NOMEM if it was memory
-static int failed(char *name) {
+// NAME could not be unpacked: why; NOMEM if it was memory, else DAMAGED
+// if it is the root archive (ROOT), the system's own files
+static int failed(char *name, int root) {
     ufprintf(STDERR, "persist: %s: %s\n", name, arc_error ? arc_error : nomem ? "out of memory" : "failed");
-    if (!nomem) return 0;
+    if (!nomem) return root ? DAMAGED : 0;
     if (heap_mb()) ufprintf(STDERR, "persist: out of memory: %s does not fit in this machine's %d MB of heap\n", name, heap_mb());
     else ufprintf(STDERR, "persist: out of memory unpacking %s\n", name);
     return NOMEM;
@@ -623,8 +629,8 @@ static int boot(int argc, char **argv) {
         arc_error = 0;
         n = id ? from_kept(id) : 0 - 1;
         if (n >= 0) uprintf("persist: %s: %d files from the copy kept on drive 1, read from there\n", argv[2], n);
-        else if (nomem) rc = failed(argv[2]);
-        else if ((n = unpack_keep(argv[2], id)) < 0) rc = failed(argv[2]);
+        else if (nomem) rc = failed(argv[2], 1);
+        else if ((n = unpack_keep(argv[2], id)) < 0) rc = failed(argv[2], 1);
         if (id) free(id);
         if (rc) return rc;
         i = argc;
@@ -634,7 +640,7 @@ static int boot(int argc, char **argv) {
         n = arc_extract(argv[i], "/", ARC_EXTRACT, 0);
         if (n < 0) {
             if (!arc_error) nomem = 1;
-            if ((rc = failed(argv[i]))) return rc;
+            if ((rc = failed(argv[i], i == 2))) return rc;
         }
         ++i;
     }

@@ -47,15 +47,19 @@
 // its headers (a field's height), its footer, how long a name is kept, the
 // source lines with no code shown between two that have, how far back
 // Back goes, the modules one tab holds (a program and the libraries it
-// loads: loader.c's LIB_MAX and one), and the longest source line drawn
+// loads: loader.c's LIB_MAX and one), and the longest source line drawn;
+// then how far the listing looks for a row's lines (xp_lay): the lines a
+// statement may go on to, the labels and braces above one, and the head
+// of a function, shown whole up to this long
 #define XCW ide_cw
 #define XCH ide_ch
 #define XFONT ide_fs
 #define XFACE ide_face
 #define XFOOT (XCH + 4)
-enum { XHDR = 22, XGAP = 3, XHIST = 16, XFILT = 30, XMODS = 9, XSRC = 480 };
+enum { XHDR = 22, XGAP = 3, XHIST = 16, XFILT = 30, XMODS = 9, XSRC = 480,
+       XCONT = 24, XLEAD = 12, XHEAD = 80 };
 // the opcodes it treats apart (OPNAMES' order)
-enum { O_LEA = 0, O_JMP = 2, O_JSR = 3, O_BZ = 4, O_BNZ = 5, O_ADJ = 7, O_JSRI = 61, O_JSRS = 62,
+enum { O_LEA = 0, O_IMM = 1, O_JMP = 2, O_JSR = 3, O_BZ = 4, O_BNZ = 5, O_ADJ = 7, O_JSRI = 61, O_JSRS = 62, O_JMPA = 63,
        O_LDL = 79, O_PSHL = 81, O_LEAP = 83, O_IMMP = 84, O_STL = 87, O_N = 90 };
 // patch types (load-c4r.c), and symbol classes and attributes (c4r.js)
 enum { P_CODE = -1, P_DATA = -2, S_FUN = 129, S_GLO = 131, S_EXTERN = 16 };
@@ -770,9 +774,9 @@ static void xp_decode(struct xp *x, int g) {
     }
 }
 
-// one row of the listing
+// one row of the listing (counted only, while there is nowhere to put it)
 static int xp_row_add(struct xp *x, int n, int ins, int file, int line, int seg) {
-    x->dins[n] = ins; x->dfile[n] = file; x->dline[n] = line; x->dseg[n] = seg;
+    if (x->dins) { x->dins[n] = ins; x->dfile[n] = file; x->dline[n] = line; x->dseg[n] = seg; }
     return n + 1;
 }
 // ... and the rows of a source line, COLS wide (0: one row, scrolled across)
@@ -784,54 +788,160 @@ static int xp_src_rows(struct xp *x, int n, int file, int line, int len, int col
     return n;
 }
 
-// The listing's rows, for source COLS wide (0 when it is not wrapped):
-// each instruction, after the source line it came from when that is a
-// new one. The few lines between one line and the next with no code of
-// their own -- a {, a declaration, a comment -- are shown too, as they
-// read in the file; blank ones are not.
-static int xp_text(struct xp *x, int k, char *mn, char *d);
-static void xp_layout(struct xp *x, int cols) {
-    int f, k, r, l, lf, ll, a, n, len, cap, w;
-    char mn[8];
-    struct xmod *m;
-    if (x->dins) { free((char *)x->dins); free((char *)x->dfile); free((char *)x->dline); free((char *)x->dseg); }
-    m = x->cm; f = x->gidx[x->cur];
-    // a row for each piece of each line: count them first
-    cap = 8; k = 0; lf = m->ffile[f]; ll = m->fline[f] - 1;
-    while (k < x->nins) {
-        r = x->irow[k];
-        if (r >= 0 && m->rline[r] > 0 && (m->rfile[r] != lf || m->rline[r] != ll)) {
-            l = m->rline[r];
-            a = l;
-            if (m->rfile[r] == lf && l > ll && l - ll <= XGAP + 1) a = ll + 1;
-            while (a <= l) { len = xp_line(x, m, m->rfile[r], a); cap = cap + (cols > 0 && len > cols ? (len + cols - 1) / cols : 1); ++a; }
-            lf = m->rfile[r]; ll = l;
-        }
-        ++cap; ++k;
+// ---- which source lines go with a row ----
+//
+// A row names the line its statement starts on. The listing shows that
+// line, the lines the statement goes on to, and some of the lines above
+// it that have no code of their own: all of them in the function's head
+// (its name to its first statement: the parameters, the brace, the
+// locals), a few anywhere else, and past those the run of labels, braces
+// and comments just above it -- so a case's label is over its code.
+
+// the first character of line L that is not a space, or 0 (none, or no line)
+static int xp_lead_c(struct xp *x, struct xmod *m, int i, int l) {
+    int n, k;
+    n = xp_line(x, m, i, l);
+    k = 0;
+    while (k < n && xo[k] == ' ') ++k;
+    return k < n ? xo[k] & 255 : 0;
+}
+static int xp_idc(int c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'; }
+// Line L has no code of its own and reads as part of what follows it: a
+// blank line, a comment, a preprocessor line, a case's or a goto's label,
+// or braces and else and do alone
+static int xp_lead(struct xp *x, struct xmod *m, int i, int l) {
+    int n, k, j;
+    n = xp_line(x, m, i, l);
+    if (n < 0) return 0;
+    k = 0;
+    while (k < n && xo[k] == ' ') ++k;
+    if (k == n || xo[k] == '#' || (xo[k] == '/' && (xo[k + 1] == '/' || xo[k + 1] == '*')) || xo[k] == '*') return 1;
+    // a label: a word, then a colon, and nothing after it but a comment
+    j = k;
+    while (j < n && xp_idc(xo[j] & 255)) ++j;
+    if (j - k == 4 && !memcmp(xo + k, "case", 4)) {
+        // case V: its value, to the colon (past a character's quotes)
+        while (j < n && xo[j] != ':') { if (xo[j] == 39 && j + 2 < n) j = j + 2; ++j; }
+    } else while (j > k && j < n && xo[j] == ' ') ++j;
+    if (j > k && j < n && xo[j] == ':' && xo[j + 1] != ':') {
+        ++j;
+        while (j < n && xo[j] == ' ') ++j;
+        if (j == n || xo[j] == '{' || (xo[j] == '/' && (xo[j + 1] == '/' || xo[j + 1] == '*'))) return 1;
     }
-    x->dins = xp_ints(cap); x->dfile = xp_ints(cap); x->dline = xp_ints(cap); x->dseg = xp_ints(cap);
+    // braces, else and do
+    while (k < n) {
+        if (xo[k] == '{' || xo[k] == '}' || xo[k] == ' ') ++k;
+        else if (!memcmp(xo + k, "else", 4) && !xp_idc(xo[k + 4] & 255)) k = k + 4;
+        else if (!memcmp(xo + k, "do", 2) && !xp_idc(xo[k + 2] & 255)) k = k + 2;
+        else if (xo[k] == '/' && (xo[k + 1] == '/' || xo[k + 1] == '*')) k = n;
+        else return 0;
+    }
+    return 1;
+}
+// Whether line L leaves its statement unfinished: a bracket still open
+// (*DEPTH, carried from line to line, as *CMT carries a comment), an
+// initializer's brace, or an operator or a comma at its end
+static int xp_goes_on(struct xp *x, struct xmod *m, int i, int l, int *depth, int *cmt) {
+    int n, k, c, q, last;
+    n = xp_line(x, m, i, l);
+    if (n < 0) return 0;
+    k = 0; q = 0; last = 0;
+    while (k < n) {
+        c = xo[k] & 255;
+        if (*cmt) { if (c == '*' && xo[k + 1] == '/') { *cmt = 0; ++k; } }
+        else if (q) { if (c == 92) ++k; else if (c == q) q = 0; }
+        else if (c == '/' && xo[k + 1] == '/') k = n;
+        else if (c == '/' && xo[k + 1] == '*') { *cmt = 1; ++k; }
+        else if (c == '"' || c == 39) { q = c; last = c; }
+        else if (c == '(' || c == '[' || (c == '{' && (last == '=' || *depth > 0))) { *depth = *depth + 1; last = c; }
+        else if (c == ')' || c == ']' || (c == '}' && *depth > 0)) { *depth = *depth - 1; last = c; }
+        else if (c != ' ') last = c;
+        ++k;
+    }
+    if (*depth != 0) return *depth > 0;
+    return last == ',' || last == '=' || last == '+' || last == '-' || last == '*' || last == '/' || last == '%' ||
+           last == '&' || last == '|' || last == '^' || last == '<' || last == '>' || last == '?' || last == '!' || last == 92;
+}
+// Line L of file I has a row of the function shown
+static int xp_mapped(struct xp *x, int i, int l) {
+    int k, r;
+    struct xmod *m;
+    m = x->cm;
+    k = 0;
+    while (k < x->nins) { r = x->irow[k]; if (r >= 0 && m->rfile[r] == i && m->rline[r] == l) return 1; ++k; }
+    return 0;
+}
+// The last line of the statement that starts at line L of file I: the
+// lines it goes on to, up to a preprocessor's, or past its brackets one
+// with code of its own (an if's last line can hold its body)
+static int xp_stmt_end(struct xp *x, struct xmod *m, int i, int l) {
+    int e, depth, cmt;
+    depth = 0; cmt = 0; e = l;
+    if (!xp_goes_on(x, m, i, l, &depth, &cmt)) return l;
+    while (e - l < XCONT) {
+        if (xp_line(x, m, i, e + 1) < 0 || xp_lead_c(x, m, i, e + 1) == '#' || (depth <= 0 && xp_mapped(x, i, e + 1))) return e;
+        ++e;
+        if (!xp_goes_on(x, m, i, e, &depth, &cmt)) return e;
+    }
+    return e;
+}
+
+// The listing's rows, for source COLS wide (0 when it is not wrapped):
+// each instruction, after the source lines of its row when that is a new
+// one (above); blank lines are left out. Counted only while x->dins is 0.
+static int xp_text(struct xp *x, int k, char *mn, char *d);
+static int xp_lay(struct xp *x, int cols) {
+    int f, k, r, l, lf, lr, ll, hi, a, e, n, len, fi, hd;
+    struct xmod *m;
+    m = x->cm; f = x->gidx[x->cur];
     n = 0; x->maxw = 0;
-    lf = m->ffile[f]; ll = m->fline[f] - 1;   // so the function's own first line is shown
+    // the file and line of the last row, the last line shown and the
+    // furthest: the line before the function's, so that its own first
+    // line is shown
+    lf = m->ffile[f]; lr = ll = hi = m->fline[f] - 1;
+    hd = 1;                                   // until a row past the function's own line
     k = 0;
     while (k < x->nins) {
         r = x->irow[k];
-        if (r >= 0 && m->rline[r] > 0 && (m->rfile[r] != lf || m->rline[r] != ll)) {
-            l = m->rline[r];
-            a = l;
-            if (m->rfile[r] == lf && l > ll && l - ll <= XGAP + 1) a = ll + 1;
-            while (a <= l) {
-                len = xp_line(x, m, m->rfile[r], a);
-                if (a == l || (len > 0 && !xp_blank(xo, len))) {
-                    n = xp_src_rows(x, n, m->rfile[r], a, len, cols);
-                    if (len > x->maxw) x->maxw = len;
+        if (r >= 0 && m->rline[r] > 0 && (m->rfile[r] != lf || m->rline[r] != lr)) {
+            fi = m->rfile[r]; l = m->rline[r];
+            // a line the statement before it went on to is shown already
+            if (fi != lf || l <= lr || l > ll) {
+                a = l;
+                if (fi == lf && l > ll) {
+                    if ((hd && l - ll <= XHEAD) || l - ll <= XGAP + 1) a = ll + 1;
+                    else while (a - 1 > ll && l - a < XLEAD && xp_lead(x, m, fi, a - 1)) --a;
+                    // not again what a loop's body showed before its condition came back up
+                    if (a <= hi) a = hi < l ? hi + 1 : l;
                 }
-                ++a;
+                if (fi == m->ffile[f] && l > m->fline[f]) hd = 0;
+                e = xp_stmt_end(x, m, fi, l);
+                while (a <= e) {
+                    len = xp_line(x, m, fi, a);
+                    if (a == l || (len > 0 && !xp_blank(xo, len))) {
+                        n = xp_src_rows(x, n, fi, a, len, cols);
+                        if (len > x->maxw) x->maxw = len;
+                    }
+                    ++a;
+                }
+                if (fi != lf || e > hi) hi = e;
+                ll = e;
             }
-            lf = m->rfile[r]; ll = l;
+            lf = fi; lr = l;
         }
         n = xp_row_add(x, n, k, r >= 0 ? m->rfile[r] : 0 - 1, r >= 0 ? m->rline[r] : 0, 0);
         ++k;
     }
+    return n;
+}
+static void xp_layout(struct xp *x, int cols) {
+    int k, n, w;
+    char mn[8];
+    if (x->dins) { free((char *)x->dins); free((char *)x->dfile); free((char *)x->dline); free((char *)x->dseg); }
+    x->dins = 0;
+    n = xp_lay(x, cols) + 1;                  // count them, then make them
+    x->dins = xp_ints(n); x->dfile = xp_ints(n); x->dline = xp_ints(n); x->dseg = xp_ints(n);
+    n = xp_lay(x, cols);
     x->nd = n;
     // the widest instruction, for the bar across: a label's room, the
     // mnemonic's, and its operand, which can be a long string
@@ -1087,7 +1197,7 @@ static void xm_quote(struct xmod *m, char *d, int off, int n, int max) {
 // instruction K's mnemonic into M and its operand into D; the operand's
 // colour
 static int xp_text(struct xp *x, int k, char *mn, char *d) {
-    int op, a, w, t, v, f, g, n, s, j;
+    int op, a, w, t, v, f, g, n, j;
     char *nm;
     struct xmod *m;
     m = x->cm;
@@ -1110,6 +1220,11 @@ static int xp_text(struct xp *x, int k, char *mn, char *d) {
         xp_hex(d, v); return XC_NUM;
     }
     if (t == P_DATA) {
+        // a switch's table of addresses, which c4lc puts after its unit's
+        // globals with no name of its own: its IMM is a JMPA's, a few on
+        j = k + 1;
+        while (j < x->nins && j <= k + 3 && x->iop[j] != O_JMPA) ++j;
+        if (op == O_IMM && j < x->nins && j <= k + 3) { ui_cpy(d, "jump table, data+"); ui_num(d + ui_len(d), v); return XC_NUM; }
         g = xm_global(m, v);
         n = xm_cstr(m, v);
         // a unit's literals follow its globals with no symbol of their own
@@ -1140,9 +1255,9 @@ static int xp_text(struct xp *x, int k, char *mn, char *d) {
         ui_cat(d, "]");
         return XC_NUM;
     }
-    s = 0;
-    if (a < 0) { d[0] = '-'; s = 1; a = 0 - a; }
-    ui_num(d + s, a);
+    // a plain number, INT_MIN too (ui_num's): only a patch makes an
+    // operand an address
+    ui_num(d, a);
     return XC_NUM;
 }
 

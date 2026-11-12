@@ -17,7 +17,10 @@
 // everything the tests depend on: c4bb-images, each test's prerequisites,
 // and what their recipes make again ($(MAKE) c4ix.c4r and the like). The
 // second runs each test as `make -s TEST`, which then finds all it needs
-// up to date and only tests.
+// up to date and only tests. What the first built that is not a file
+// (c4bb-images, phony) the second is told is made (make -o c4bb-images):
+// else every test runs build-images.sh again, several at once over the
+// same src/c4bb/images, and they trip over each other's files.
 //
 // What a test needs is learned: each run keeps every test's time, its
 // peak memory (all its processes together, sampled every second) and its
@@ -29,7 +32,7 @@
 // whatever it needs. Linux only: it reads /proc.
 
 import { spawn, execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdirSync, openSync, closeSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, openSync, closeSync, readdirSync, existsSync } from 'node:fs';
 import { cpus } from 'node:os';
 import { join } from 'node:path';
 
@@ -150,14 +153,13 @@ function prerequisites() {
     rules.set(m[1], { prereqs: m[2].split('|')[0].split(/\s+/).filter(Boolean), recipe });
   }
   const phony = new Set((rules.get('.PHONY') || { prereqs: [] }).prereqs);
-  // A phony prerequisite with a recipe of its own does work, and as phony
-  // would do it again for the test: left to the test, as is a test-* or
-  // run-* one (test-c4l, a test of test's that is not declared phony).
-  // One that only gathers files (libc-bare-objs) is built here.
+  // A test-* or run-* prerequisite is a test's own work (test-c4l, a test
+  // of test's that is not declared phony): left to it. Everything else is
+  // built here, phony steps too (pre copies the images into the top
+  // directory, which tests running at once would do over each other).
   const want = new Set(['c4bb-images']);
   const add = p => {
     if (tests.includes(p) || want.has(p) || /^(test|run)-/.test(p)) return;
-    if (phony.has(p) && (rules.get(p)?.recipe.length)) return;
     want.add(p);
   };
   for (const t of tests) {
@@ -169,12 +171,17 @@ function prerequisites() {
       if (m && !m[2].startsWith('$')) add(m[2]);
     }
   }
-  return [...want];
+  // What this phase builds that is no file -- c4bb-images, phony, whose
+  // recipe (build-images.sh) every test would otherwise run again, all of
+  // them at once over the same src/c4bb/images -- the tests are told is
+  // made already (make -o).
+  const held = [...want].filter(p => rules.get(p)?.recipe.length && (phony.has(p) || !existsSync(p)));
+  return { prep: [...want], held };
 }
 
-if (opt.listPrep) { console.log(prerequisites().join('\n')); process.exit(0); }
+const { prep, held } = prerequisites();
+if (opt.listPrep) { console.log(prep.join('\n') + `\n(held: ${held.join(' ')})`); process.exit(0); }
 if (opt.build) {
-  const prep = prerequisites();
   const log = join(opt.out, 'build.log');
   const fd = openSync(log, 'w');
   const s = Date.now();
@@ -208,15 +215,18 @@ function startFitting() {
   for (let i = 0; i < queue.length; i++) {
     if (!fits(queue[i])) continue;
     const t = queue.splice(i, 1)[0];
-    const job = run(t, join(opt.out, `${t}.log`), ['-s']);
+    const job = run(t, join(opt.out, `${t}.log`), ['-s', ...held.flatMap(h => ['-o', h])]);
     running.add(job);
     job.done.then(j => {
       running.delete(j);
       j.wall = (Date.now() - j.start) / 1000;
       j.cpu = cpuOf(j);
       finished.push(j);
-      stats[j.target] = { wall: Math.round(j.wall), mem: Math.round(j.peak), cpu: +j.cpu.toFixed(2) };
-      writeFileSync(STATS, JSON.stringify(stats, null, 1) + '\n');
+      // a failure's numbers are of what it did before failing: not kept
+      if (j.code === 0) {
+        stats[j.target] = { wall: Math.round(j.wall), mem: Math.round(j.peak), cpu: +j.cpu.toFixed(2) };
+        writeFileSync(STATS, JSON.stringify(stats, null, 1) + '\n');
+      }
       note(`${j.target} exit=${j.code} ${Math.round(j.wall)}s ${Math.round(j.peak)}MB cpu ${j.cpu.toFixed(1)}`);
     });
     i = -1;                             // what fits has changed

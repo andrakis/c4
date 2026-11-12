@@ -374,10 +374,15 @@ struct urgn {
 // device has used (PTE_PIN). And not one page of code alone: the machine reads an
 // opcode and its operand with one offset, so an opcode that is the last word of a
 // page wants the next page next to it in memory, or the task faults for good
-// (MMU_FK_SPLIT, docs/c4ix-mmu.md 5). Code moves whole (mmu_rerun, mmu_codeof).
+// (MMU_FK_SPLIT, docs/c4ix-mmu.md 5). Nor one page of a stack: libjs keeps a word
+// either side of sp in one run of memory (its stack window), so with sp at a page's
+// end and the next page's frame not next to it, the instruction faults on a page
+// that is there, runs again, and faults again, for ever (test-c4ix-movable's
+// mover, 2026-11-12). Code and stacks move whole (mmu_rerun, mmu_wholeof).
+#define MMU_WHOLE(r) (((r)->flags & PTE_X) || (r)->guard)
 #define MMU_RCAN(r) ((r)->canout = (r)->kind == UR_BLOCK && (r)->heap && !(r)->shared && !(r)->guard && !(r)->code && (r)->dir && (r)->owner, (r)->canmove = ((r)->kind == UR_BLOCK || (r)->kind == UR_CHUNK) && !(r)->shared && (r)->dir && (r)->owner)
 #define mmu_canout(r) ((r) && (r)->canout && TF_PAGEOK((r)->owner))
-#define mmu_canmove(r) ((r) && (r)->canmove && (!((r)->flags & PTE_X) || (r)->npages == 1) && TF_PAGEOK((r)->owner))
+#define mmu_canmove(r) ((r) && (r)->canmove && (!MMU_WHOLE(r) || (r)->npages == 1) && TF_PAGEOK((r)->owner))
 static struct urgn *mmu_lastin;   // the block whose pages last came back (swap, mmu_bringin's log)
 static struct urgn *mmu_runr;     // ... and the one whose pages are going out (mmu_out's log)
 static int mmu_runn, mmu_runva, mmu_runshot, mmu_runlater, mmu_runon;
@@ -2201,15 +2206,15 @@ static int mmu_freeblock(int keep) {
 // address being all a program has of them.
 enum { COMPACT_MAX = 64, RAISE_MAX = 4 };     // blocks freed, and raised, at a time, at most
 
-// The region of code that block C is, every page of it in its place, and free to
-// move as one: 0 if it is anything else
-static struct urgn *mmu_codeof(struct fchunk *c) {
+// The region of code, or the stack, that block C is, every page of it in its place,
+// and free to move as one: 0 if it is anything else
+static struct urgn *mmu_wholeof(struct fchunk *c) {
     struct urgn *r;
     int *e;
     int k, va;
     va = mmu_fva[c->base >> 12];
     r = va ? (struct urgn *)mmu_vpg[(va - mmu_uoff) >> 12] : 0;
-    if (!r || r->kind != UR_BLOCK || !(r->flags & PTE_X) || r->shared || !r->dir || !r->owner || !TF_PAGEOK(r->owner) ||
+    if (!r || r->kind != UR_BLOCK || !MMU_WHOLE(r) || r->shared || !r->dir || !r->owner || !TF_PAGEOK(r->owner) ||
         r->peer[0] || r->peer[1] || r->base != c->base || r->npages != c->npages || c->nused != c->npages) return 0;
     k = 0;
     while (k < r->npages) {
@@ -2220,8 +2225,9 @@ static struct urgn *mmu_codeof(struct fchunk *c) {
     return r;
 }
 
-// Code in block C moved whole to a block higher in the heap: 0 if there is none
-static int mmu_codeup(struct urgn *r, struct fchunk *c) {
+// Code or a stack in block C moved whole to a block higher in the heap: 0 if there
+// is none
+static int mmu_wholeup(struct urgn *r, struct fchunk *c) {
     int raw, np;
     np = r->npages;
     if (!(raw = mmu_mhigh(np * MMU_PAGE + MMU_PAGE - 1))) return 0;
@@ -2242,14 +2248,14 @@ static int mmu_raise() {
     c = mmu_fcall;
     while (c) {
         if (c->nused && c->tried != mmu_round && (!low || c->raw < low->raw)) {
-            if (mmu_movable(c, 0) || mmu_codeof(c)) low = c;
+            if (mmu_movable(c, 0) || mmu_wholeof(c)) low = c;
             else c->tried = mmu_round;
         }
         c = c->anext;
     }
     if (!low) return 0;
     low->tried = mmu_round;
-    if ((r = mmu_codeof(low))) return mmu_codeup(r, low);
+    if ((r = mmu_wholeof(low))) return mmu_wholeup(r, low);
     np = (low->nused + FC_SMALL - 1) / FC_SMALL * FC_SMALL;
     if (np > low->npages) np = low->npages;
     if (!(raw = mmu_mhigh(np * MMU_PAGE + MMU_PAGE - 1))) return 0;
@@ -2479,14 +2485,14 @@ char *mmu_klow(int n) {
         c = mmu_fcall;
         while (c) {
             if (c->nused && c->tried != mmu_round && (!p || c->raw < p) && (!best || c->raw < best->raw)) {
-                if (mmu_movable(c, 0) || mmu_codeof(c)) best = c;
+                if (mmu_movable(c, 0) || mmu_wholeof(c)) best = c;
                 else c->tried = mmu_round;
             }
             c = c->anext;
         }
         if (!best) break;
         best->tried = mmu_round;
-        if ((r = mmu_codeof(best))) mmu_codeup(r, best);
+        if ((r = mmu_wholeof(best))) mmu_wholeup(r, best);
         else {
             was = mmu_quiet;
             mmu_quiet = 1;
@@ -2568,7 +2574,8 @@ static int mmu_rerun(struct urgn *r, int raw) {
         } else memset((char *)(base + k * MMU_PAGE), 0, MMU_PAGE);
         *e = (base + k * MMU_PAGE) | PTE_P | PTE_U | PTE_W;
         mmu_fva[(base >> 12) + k] = va;
-        if ((u = mmu_pte(r->dir, va, 1))) *u = (base + k * MMU_PAGE) | r->flags;
+        // (a stack's guard page stays out of its space)
+        if (!(r->guard && !k) && (u = mmu_pte(r->dir, va, 1))) *u = (base + k * MMU_PAGE) | r->flags;
         *(int *)MMU_INVLPG = va;
         ++k;
     }

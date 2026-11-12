@@ -67,6 +67,8 @@ Out of scope for now: c4mp multiprocessing.
 | `libjs/snd-device.js` | The sound card's registers: what the guest writes, as timed events. |
 | `libjs/snd-mix.js` | The events made into samples: the OPL, sixteen sample channels and the speaker, mixed to stereo. Shared by the worklet and `cli.js --wav`. |
 | `libjs/snd-worklet.js` | The mixer in the page's AudioWorklet (on the page's own thread where there is none). |
+| `libjs/snd-gm.js` | The General MIDI synth behind the card's MIDI port: SpessaSynth playing the person's SoundFont, inside the mixer. |
+| `libjs/vendor/` | SpessaSynth's core (Apache-2.0) and what it needs, as published ([vendor/README.md](../libjs/vendor/README.md)). |
 | `libjs/opl.js`, `opl-tables.js` | The AdLib: DOSBox's dbopl, ported to JavaScript (GNU GPL v2 or later), with its tables as its C++ makes them. |
 | `libjs/keys.js` | Cooked and raw keyboard handling, copied from `src/c4bb/web/app.js`. |
 | `libjs/worker.js` | The Worker: arena, devices, machine, run loop, messages. |
@@ -304,7 +306,8 @@ samples, and the PC speaker: what a DOS game expects to find. It had
 eight until Quake (2026-11-10): Quake's own mixer has eight for the sounds
 that start, besides its ambience and the looped sounds a map places, and
 with four left it cut off one sound for another a few times a second in a
-fight. CAPS bit 4 says there are sixteen.
+fight. CAPS bit 4 says there are sixteen. Since 2026-11-12 it also has a
+MIDI port, for a General MIDI synth (below).
 
 | Address | Register | Access | Meaning |
 |---|---|---|---|
@@ -321,6 +324,8 @@ fight. CAPS bit 4 says there are sixteen.
 | 0x4B4 | SPK | w | the PIT divisor of the speaker's tone; 0 is quiet |
 | 0x4B8 | RESET | w | everything quiet, the OPL zeroed |
 | 0x4BC | MASTER | r/w | every sound's volume, 0-255 (255 at power on); bit 8 mutes; RESET leaves it |
+| 0x4C0 | MIDI | w | a short MIDI message, status \| (data1 << 8) \| (data2 << 16), stamped on the stream |
+| 0x4C4 | MIDI_DATA | w | one byte, as an MPU-401's data port takes them in UART mode: running status, and system exclusives whole at their F7 |
 
 - **The machine makes no samples.** Each write becomes an event with a
   time on it, and whoever listens mixes them (`snd-mix.js`). An
@@ -363,6 +368,47 @@ fight. CAPS bit 4 says there are sixteen.
   changes a bit. `test-libjs` builds the C++ (`libjs/tests/src/oplref`),
   renders random register streams through both, and requires the same
   samples. It renders about 20 times faster than real time.
+- **General MIDI** (2026-11-12). The OPL is DOSBox set to AdLib; a DOS
+  game with a General MIDI driver sounded far better on an MPU-401 with
+  a Sound Canvas behind it, and that is what DOSBox's `mididevice` gives.
+  CAPS bit 5 says a synth hears the MIDI port: the person chose General
+  MIDI (the page's Configuration, Music; `cli.js --midi`). A game asks once,
+  as it starts its music, and plays it there instead of on the OPL;
+  without the bit it plays the AdLib, as on a machine with no MPU-401, so
+  the AdLib stays the default. A message is stamped at the stream's cursor
+  as an OPL write is, so a player that keeps the stream ahead (Doom's MUS
+  reader, audiolib's task manager in Duke Nukem 3D and Rise of the Triad)
+  plays MIDI exactly as evenly, however unevenly the machine runs. RESET
+  stops every note and resets the synth.
+- **The synth** is `snd-gm.js`: SpessaSynth's processor
+  (`vendor/spessasynth_core.js`, Apache-2.0), a SoundFont 2/3 and DLS
+  player written for an AudioWorklet, given the person's own SoundFont
+  from the Uploads (`uploads.js`, `pickSoundFont`: `?soundfont=NAME`, else
+  the first in `/home/soundfonts`, else the first). The mixer applies each
+  message at its frame and has the synth add its samples to the mix, so
+  MIDI and FM share one clock, one latency and the MASTER. A worklet
+  cannot `import()` late, so the page adds `snd-gm.js` to it ahead of
+  `snd-worklet.js` only for General MIDI, and the AdLib's pages never load
+  SpessaSynth's megabyte. While the SoundFont is being read (about 150 ms
+  for a 32 MB one) the synth keeps what sets the channels up and plays it
+  when it can; while the AudioContext waits for the first click the page
+  keeps the same, as it keeps the OPL's registers.
+- **No SoundFont ships.** The good free ones are big (GeneralUser GS is
+  32 MB, FluidR3_GM 140 MB) and not ours to vouch for, so the person
+  uploads one: GeneralUser GS (its licence lets anyone use and pass it on)
+  is the one the checks used. `?music=gm` with none uploaded plays the
+  AdLib, and the page says why.
+- **Web MIDI** (`?music=midi`): the messages go instead to a synth outside
+  the browser, the first MIDI output (`?midiout=NAME` picks one): on
+  Windows, the Microsoft GS Wavetable Synth that DOSBox plays there. Each
+  is sent with the time it is due on the page's clock, as far behind as
+  the worklet plays; MASTER scales the channels' volumes, since it cannot
+  reach that synth otherwise; system exclusives are left out, which Web
+  MIDI would ask the person for separately. Without Web MIDI or an output
+  it falls back to a SoundFont, then to the AdLib.
+- **`cli.js --midi FILE`** gives the card its synth and writes each message
+  with its time to FILE; `--sf2 FILE` has `--wav` play them with that
+  SoundFont.
 
 ## Processors
 

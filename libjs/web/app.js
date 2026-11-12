@@ -9,6 +9,11 @@
 //                                own: ?system=wolf3d&args=--secrets+--nodeath
 //   ?mhz=N                       how fast the machine runs, paced (default 100)
 //   ?snd=0                       no sound card
+//   ?music=gm | midi             the games' music in General MIDI rather than on the
+//                                AdLib: gm plays it with a SoundFont from the Uploads
+//                                (?soundfont=NAME picks one; the first by default),
+//                                midi sends it to the computer's own synth by Web
+//                                MIDI (?midiout=NAME picks an output) -- page.js
 //   ?cpus=N                      N processors, simulated (smp.js, docs/c4ix-smp.md)
 //   ?parallel                    ... each on a worker of its own (par.js), when the
 //                                page is cross-origin isolated (serve.mjs --isolate)
@@ -180,6 +185,9 @@ const opts = {
   arenaMb: Number(params.get('mem')) || sys.mem || 64,
   shared: params.get('shared') !== '0',
   snd: params.get('snd') !== '0',
+  music: params.get('music') || 'opl',
+  soundfont: params.get('soundfont') || '',
+  midiOut: params.get('midiout') || '',
   cpus: Number(params.get('cpus')) || 0,
   parallel: params.has('parallel'),
   mmu: (params.get('mmu') ?? (mmuDefault ? '1' : '0')) === '1',
@@ -207,6 +215,12 @@ const CONFIG = [
   { key: 'mem', label: 'Memory (MB)', kind: 'text', tab: 'machine', options: ['32', '64', '128', '256'],
     help: `the arena; empty is the system's own (${sys.mem || 64})` },
   { key: 'snd', label: 'Sound card', kind: 'onoff', def: true },
+  { key: 'music', label: 'Music', kind: 'select', def: 'opl',
+    options: [['opl', 'AdLib (OPL FM synthesis)'], ['gm', 'General MIDI: a SoundFont from the Uploads'],
+      ['midi', "General MIDI: the computer's own synth (Web MIDI)"]],
+    help: "Doom, Duke Nukem 3D and Rise of the Triad play their music in General MIDI, as on a Sound Canvas; the other games have only the AdLib's" },
+  { key: 'soundfont', label: 'SoundFont', kind: 'text', options: [],
+    help: 'which upload (.sf2, .sf3, .dls) General MIDI plays with; empty: the first in /home/soundfonts, else the first' },
   { key: 'fpu', label: 'FPU', kind: 'onoff', def: true, help: 'off: floats in software' },
   { key: 'realtime', label: 'Keep the wall clock', kind: 'onoff', def: true,
     help: 'off: when the host cannot keep up, the machine slows down instead of dropping frames' },
@@ -378,6 +392,16 @@ vm.on('status', s => {
 vm.on('kbd', ({ raw }) => updateKbd());
 vm.on('exit', e => { status.textContent = `halted, status ${e.status} after ${e.cycles} cycles`; });
 vm.on('error', e => { status.textContent = e.message; });
+// how the music plays (page.js's musicFor), when it is not the AdLib or
+// the AdLib was not what was asked for
+const musicEl = document.createElement('span');
+musicEl.id = 'music';
+status.after(musicEl);
+vm.on('music', m => {
+  const what = m.music === 'gm' ? `General MIDI · ${m.name}` : m.music === 'midi' ? `General MIDI · ${m.name}` : 'AdLib';
+  musicEl.textContent = m.music === 'opl' && !m.why ? '' : `music: ${what}${m.why ? ` (${m.why})` : ''}`;
+  musicEl.title = m.why || '';
+});
 
 function updateKbd() {
   const focused = document.activeElement === term;

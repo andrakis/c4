@@ -44,3 +44,14 @@ void snd_speaker (int divisor) { *(int *)SND_SPK = divisor; }
 void snd_master (int vol) { *(int *)SND_MASTER = vol; }
 
 int snd_master_get () { return *(int *)SND_MASTER; }
+
+void snd_midi (int status, int data1, int data2) {
+	*(int *)SND_MIDI = (status & 255) | ((data1 & 127) << 8) | ((data2 & 127) << 16);
+}
+
+void snd_midi_byte (int b) { *(int *)SND_MIDI_DATA = b & 255; }
+
+void snd_midi_bytes (char *p, int n) {
+	int i;
+	for (i = 0; i < n; i++) *(int *)SND_MIDI_DATA = p[i] & 255;
+}

@@ -15,6 +15,21 @@
 //   makes every such file a lazy file in /home (vfsload.c, load_hostdirs):
 //   Files, ls and the shell see them there.
 
+// A SoundFont, for General MIDI music (page.js, opts.music): an upload
+// ending .sf2, .sf3 or .dls. The one named `want` if there is one, else
+// the first in a soundfonts/ folder (/home/soundfonts), else the first.
+// [name, bytes], or null.
+export const isSoundFont = name => /\.(sf2|sf3|dls)$/i.test(name);
+export function pickSoundFont(uploads, want) {
+  const sfs = (uploads || []).filter(([n]) => isSoundFont(n)).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  if (want) {
+    const w = want.toLowerCase();
+    const hit = sfs.find(([n]) => n.toLowerCase() === w) || sfs.find(([n]) => n.toLowerCase().split('/').pop() === w);
+    if (hit) return hit;
+  }
+  return sfs.find(([n]) => n.toLowerCase().startsWith('soundfonts/')) || sfs[0] || null;
+}
+
 export function layUploads(files, uploads) {
   if (!uploads || !uploads.length) return;
   const ups = uploads.map(([n, b]) => [n, b instanceof Uint8Array ? b : new Uint8Array(b)]);

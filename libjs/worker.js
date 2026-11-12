@@ -7,7 +7,8 @@
 //
 // Page -> worker
 //   boot    { image: ArrayBuffer, argv, disk: [[name, ArrayBuffer]], arenaMb, mhz, unpaced, gui, snd, shared }
-//           snd: true fits the sound card (snd-device.js)
+//           snd: true fits the sound card (snd-device.js); midi: true gives
+//           it a General MIDI synth on its MIDI port (page.js, opts.music)
 //           persist: { files: [[name, Uint8Array]] } fits a writable drive 1, kept by the page
 //           uploads: [[name, Uint8Array]] laid over drive 0: the disk's file of that name is hidden
 //                    (and C4IX lists them in /home: uploads.js)
@@ -145,7 +146,7 @@ function start(msg) {
   ring = msg.gui && msg.shared ? new RingWriter(msg.shared.ring) : null;
   if (ring && fbSab !== msg.shared.fb) { fbSab = msg.shared.fb; fbProducer = new FbProducer(fbSab); }
   gui = msg.gui ? new GuiDevice({ ...msg.gui, fbShared: ring ? fbProducer : null }) : null;
-  snd = msg.snd ? new SoundDevice({ now: () => performance.now() * 1000 }) : null;
+  snd = msg.snd ? new SoundDevice({ now: () => performance.now() * 1000, midi: !!msg.midi }) : null;
   // The page's mixer outlives a reset, and with it whatever the old
   // machine left playing: the new one starts quiet, whatever it boots
   if (snd) snd.emit([EVT.RESET, snd.now()]);

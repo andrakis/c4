@@ -114,9 +114,9 @@ const meminfo = t => Object.fromEntries([...t.matchAll(/^(files|nfiles|heap|used
 // writes itself (68 KB in 2, 2026-11-12); the tree in RAM is 24 MB
 const RAM_FILES_KB = 1024;
 // The smallest machines the desktop is up in, [MB, MMU, from the kept
-// copy]. Measured 2026-11-13 (headless, 640x480): from the kept copy 8 MB
-// with the MMU and 7 without (78889dc: 9 and 7; the page, 1024x768, 8 and
-// 8); the first boot, which inflates the archive onto the drive, 10 MB
+// copy]. Measured 2026-11-13, headless and in the page alike: from the
+// kept copy 8 MB with the MMU and 7 without (78889dc: 9 and 7); the
+// first boot, which inflates the archive onto the drive, 10 MB
 // with the MMU and 10 without (78889dc: 14 and 12; before arc_readfile
 // read the archive into one buffer of its size, 10 and 21). (In 8 and 9
 // with the MMU the archive's data goes wrong under swap -- "not a tar

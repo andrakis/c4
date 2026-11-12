@@ -1085,7 +1085,9 @@ spinner at -3 beside one at 0 gets 4.6 times the cycles
     buffer was grown when full, before the read that finds the end. It now
     counts a host file by reading it through once, and reads one byte into
     the room for the 0 before it grows a full buffer. The smallest
-    machines, headless at 640x480, MMU off / on:
+    machines, headless, MMU off / on (the page, Chrome 151, the same: 10
+    MB with the MMU on a first boot, 8 and 7 from the kept copy, where 7
+    without the MMU could not load the desktop before):
 
     | | 78889dc | before | after |
     |---|---|---|---|

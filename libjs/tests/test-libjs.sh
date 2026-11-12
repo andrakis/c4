@@ -492,6 +492,39 @@ console.log(caps & 16, busy.toString(16), (L[200] / R[200]).toFixed(3), L[200] >
 " 2>&1)
 if [ "$out" = "16 ffff 1.000 all" ]; then ok "the sound card's sixteen sample channels, all sounding at once"
 else bad "the sound card's sixteen sample channels, all sounding at once"; echo "  $out"; fi
+
+# The MIDI port (CAPS bit 5), for General MIDI music: there only with a
+# synth; a short message (MIDI) and bytes (MIDI_DATA: running status, a
+# system exclusive, real time left out) stamped at the stream's cursor;
+# and the mixer's synth (snd-gm.js, with SpessaSynth's own one-preset
+# SoundFont) sounding a note while it is held, and quiet once it is let go
+out=$(node --input-type=module -e "
+import { SoundDevice, SND, EVT } from './libjs/snd-device.js';
+import { SoundMixer } from './libjs/snd-mix.js';
+import { GmSynth, sampleSoundFont } from './libjs/snd-gm.js';
+let t = 0;
+const none = new SoundDevice({ now: () => t }), d = new SoundDevice({ now: () => t, midi: true });
+none.write32(SND.MIDI, 0x7f3c90);
+const caps = [none.read32(SND.CAPS) & 32, d.read32(SND.CAPS) & 32, none.drain()];
+d.write32(SND.CLOCK, 1000);
+d.write32(SND.MIDI, 0xc0 | (5 << 8));
+d.write32(SND.MIDI, 0x90 | (60 << 8) | (100 << 16));
+d.write32(SND.WAIT, 500);
+for (const b of [0x80, 60, 0, 0xf8, 62, 0, 0xf0, 0x7e, 0x7f, 0x09, 0x01, 0xf7, 0xb0, 7, 90]) d.write32(SND.MIDI_DATA, b);
+const ev = d.drain();
+const said = ev.map(e => e[0] === EVT.MIDI ? e[1] / 1000 + ':' + e[2].map(b => b.toString(16)).join('.') : '?').join(' ');
+const synth = new GmSynth(22050);
+await synth.load(sampleSoundFont(), 'sample');
+const mix = new SoundMixer(22050, { synth });
+mix.push(ev);
+const L = new Float32Array(22050), R = new Float32Array(22050);
+mix.render(L, R, 22050);
+const peak = (a, b) => { let p = 0; for (let i = Math.round(a * 22050); i < Math.round(b * 22050); i++) p = Math.max(p, Math.abs(L[i])); return p; };
+console.log(caps.join(' '), '|', said, '|', peak(0.05, 0.45) > 0.02 && peak(0.8, 1) < 0.005 ? 'held, then quiet' : 'levels ' + peak(0.05, 0.45) + ' ' + peak(0.8, 1));
+" 2>&1)
+if [ "$out" = "0 32  | 0:c0.5 0:90.3c.64 500:80.3c.0 500:80.3e.0 500:f0.7e.7f.9.1.f7 500:b0.7.5a | held, then quiet" ]; then
+    ok "the sound card's MIDI port: stamped on the stream, and played by a SoundFont"
+else bad "the sound card's MIDI port: stamped on the stream, and played by a SoundFont"; echo "  $out"; fi
 }
 
 # Persistence (src/c4ix/user/persist.c): drive 1 keeps what changed. One

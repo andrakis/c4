@@ -35,6 +35,8 @@ body {
 #bar button:hover, #bar select:hover { border-color: var(--cyan); color: var(--cyan); }
 #bar button.active { border-color: var(--pink); color: var(--pink); }
 #status { margin-left: auto; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#music { margin-left: .75em; color: var(--dim); white-space: nowrap; }
+#music:empty { display: none; }
 
 /* Terminal | splitter | display. The terminal's width is the person's to
    choose (drag the splitter; kept in localStorage), the display takes the

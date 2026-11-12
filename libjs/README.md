@@ -38,6 +38,8 @@ From the repo root:
 | `--fast` | Interactive runs go as fast as the host can instead of pacing to the clock. |
 | `--mbox N` | Fit a mailbox of N bytes (c4bb's `MBOX_*` registers). |
 | `--wav FILE` | Fit a sound card and write what it played to FILE, 44.1 kHz 16-bit stereo, on the machine's own clock, so the same session makes the same file. Without it there is no card and programs run silent. |
+| `--midi FILE` | Give the sound card a General MIDI synth on its MIDI port, so a game plays its music there, and write each message with its time (microseconds, then the bytes in hex) to FILE. |
+| `--sf2 FILE` | ... and have `--wav` play the messages with this SoundFont (`snd-gm.js`). |
 | `--mmu` | Fit an MMU (docs/c4ix-mmu.md): C4IX turns it on and gives each task an address space of its own. Off by default, for its cost; the tests fit one. |
 
 The flags are c4bb's `cli.js` flags, so a test can swap one runner for the
@@ -80,6 +82,7 @@ URL parameters (from `web/app.js`). The page's Configuration button shows them a
 | `?image=URL&disk=URL` | Any other image and disk. |
 | `?args=A+B` | More arguments for the system's program, after its own: `?system=wolf3d&args=--secrets+--nodeath` (games/wolf3d/README.md). |
 | `?uploads=0` | The Uploads are not put on the disk. |
+| `?music=gm\|midi` | The games' music in General MIDI instead of on the AdLib (the default), as DOSBox's General MIDI is: Doom, Duke Nukem 3D and Rise of the Triad. `gm` plays it with a SoundFont from the Uploads, `?soundfont=NAME` naming which (else the first in `/home/soundfonts`, else the first `.sf2`, `.sf3` or `.dls`); `midi` sends it to the computer's own synth by Web MIDI (on Windows the Microsoft GS Wavetable Synth; `?midiout=NAME` picks the output), and the browser asks first. Configuration's Music and SoundFont set them. Without a SoundFont, or without Web MIDI, it is the AdLib, and the page says why beside the status. |
 | `?mhz=N` | Paced speed (default 100). |
 | `?fast` | Unpaced. |
 | `?realtime=0` | When the host cannot keep up with `?mhz`, the machine's clock slows with it. By default it keeps the wall's time (`worker.js`), so a game drops frames rather than playing in slow motion. |
@@ -136,6 +139,11 @@ answer by a path's last part, from the root (devices.js `diskFind`).
   command line nothing takes it, and `download` says so.
 
 The folder tar is ustar, as C4IX's persist writes, read by any tar.
+
+A SoundFont for General MIDI music (`?music=gm`) is an upload too. None
+ships with c4: the free ones are tens of megabytes. GeneralUser GS
+(https://schristiancollins.com/generaluser.php, free to use and to pass
+on) is a good one.
 
 The running machine is `window.c4m` on the page, so the console or a test
 can drive it (`c4m.write('ps\n')`).
@@ -268,6 +276,8 @@ What it was, and why:
 | `shared.js` | The display's SharedArrayBuffer path, used when the page is cross-origin isolated. |
 | `snd-device.js` | The sound card's registers: each write becomes an event with a time on it. |
 | `snd-mix.js`, `snd-worklet.js` | The mixer that turns those events into samples, in the page's AudioWorklet or for `cli.js --wav`. |
+| `snd-gm.js` | The General MIDI synth on the card's MIDI port: SpessaSynth (`vendor/`, Apache-2.0) playing the person's SoundFont inside the mixer. |
+| `vendor/` | SpessaSynth's core and the two small libraries it needs, as published ([vendor/README.md](vendor/README.md)). |
 | `opl.js`, `opl-tables.js` | The AdLib's OPL2/OPL3: DOSBox's dbopl, ported line by line (GPL v2 or later). |
 | `keys.js` | What a keypress means to the machine, cooked or raw. Copied from `src/c4bb/web/app.js`, which cannot be imported. |
 | `worker.js` | The Web Worker: arena, devices, machine, run loop, messages. |

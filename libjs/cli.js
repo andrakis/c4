@@ -2,7 +2,8 @@
 // cli.js - run a .c4r on the libjs c4m from the command line.
 //
 //   node libjs/cli.js [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i]
-//                     [-hz MHz] [--fast] [--mbox BYTES] [--wav FILE] program.c4r [args...]
+//                     [-hz MHz] [--fast] [--mbox BYTES] [--wav FILE] [--midi FILE] [--sf2 FILE]
+//                     program.c4r [args...]
 //
 //   -m MB        arena size in megabytes (default 32)
 //   -c cycles    cycle budget (default unlimited); running out is status 9
@@ -27,6 +28,11 @@
 //                on the machine's own clock, to FILE: 44.1 kHz 16-bit stereo.
 //                The same session makes the same file. Without it there is
 //                no sound card, and programs run silent
+//   --midi FILE  the sound card has a General MIDI synth on its MIDI port
+//                (CAPS bit 5), so a game plays its music there, and every
+//                message is written to FILE as it is stamped, a line each:
+//                microseconds, then the bytes in hex
+//   --sf2 FILE   ... and --wav plays them with this SoundFont (snd-gm.js)
 //
 // The flags are c4bb's (src/c4bb/sim/cli.js), so a test can swap one
 // runner for the other. Piped stdin without -i is fed to the keyboard up
@@ -40,11 +46,11 @@ import { constants } from 'node:os';
 import { createMachine, boot } from './boot.js';
 import { Worker } from 'node:worker_threads';
 import { STOP } from './c4m.js';
-import { SoundDevice } from './snd-device.js';
+import { SoundDevice, EVT } from './snd-device.js';
 import { renderWav } from './snd-mix.js';
 
 function usage() {
-  console.error('usage: cli.js [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [-hz MHz] [--fast] [--mbox BYTES] [--wav FILE] program.c4r [args...]');
+  console.error('usage: cli.js [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [-hz MHz] [--fast] [--mbox BYTES] [--wav FILE] [--midi FILE] [--sf2 FILE] program.c4r [args...]');
   process.exit(1);
 }
 
@@ -65,6 +71,8 @@ function parseArgs(argv) {
     else if (f === '--no-fpu') o.fpu = false;
     else if (f === '--mbox') o.mbox = parseInt(argv[++i], 10);
     else if (f === '--wav') o.wav = argv[++i];
+    else if (f === '--midi') o.midi = argv[++i];
+    else if (f === '--sf2') o.sf2 = argv[++i];
     else if (f === '--cpus') o.cpus = parseInt(argv[++i], 10);
     else if (f === '-q') o.quantum = parseInt(argv[++i], 10);
     else if (f === '--parallel') o.parallel = true;
@@ -114,7 +122,7 @@ async function main(argv) {
     remove: d.writable ? name => rmSync(join(d.dir, name), { force: true }) : null,
   }));
 
-  const snd = o.wav ? new SoundDevice() : null;
+  const snd = o.wav || o.midi || o.sf2 ? new SoundDevice({ midi: !!(o.midi || o.sf2) }) : null;
   const played = [];
   const machine = createMachine({
     arenaMb: o.arenaMb, drives, mhz: o.mhz, fpu: o.fpu, snd, cpus: o.cpus, quantum: o.quantum,
@@ -246,7 +254,15 @@ async function main(argv) {
   if (snd) {
     const e = snd.drain();
     if (e) for (const x of e) played.push(x);
-    writeFileSync(o.wav, renderWav(played, 44100, Math.max(snd.now(), snd.cursor)));
+    let synth = null;
+    if (o.sf2 && o.wav) {
+      const { GmSynth } = await import('./snd-gm.js');
+      synth = new GmSynth(44100);
+      await synth.load(readFileSync(o.sf2), o.sf2);
+    }
+    if (o.wav) writeFileSync(o.wav, renderWav(played, 44100, Math.max(snd.now(), snd.cursor), { synth }));
+    if (o.midi) writeFileSync(o.midi, played.filter(x => x[0] === EVT.MIDI)
+      .map(x => `${Math.round(x[1])} ${x[2].map(b => b.toString(16).padStart(2, '0')).join(' ')}\n`).join(''));
   }
   if (o.stats) {
     const dt = (Date.now() - t0) / 1000;
@@ -256,7 +272,7 @@ async function main(argv) {
     // the heap MALC hands out: what was still held at the end, and the most ever held
     if (machine.heap) console.error(`libjs: heap ${Math.round(machine.heap.used / 1024)} KB in use at exit, ` +
       `${Math.round(machine.heap.peak / 1024)} KB at most, of ${Math.round((machine.heap.end - machine.heap.base) / 1024)} KB`);
-    if (snd) { const st = snd.stats(); console.error(`libjs: sound: ${st.writes} OPL writes, ${st.plays} samples played`); }
+    if (snd) { const st = snd.stats(); console.error(`libjs: sound: ${st.writes} OPL writes, ${st.plays} samples played, ${st.midis} MIDI messages`); }
   }
   return status & 0xff;
 }

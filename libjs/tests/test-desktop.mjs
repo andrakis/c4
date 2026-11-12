@@ -828,7 +828,7 @@ check(until(() => !has(/t\.c \* - IDE|t\.c - IDE/)), ':q! closes the window');
   const xsrc = readFileSync(new URL('../../src/c4ix/user/desktop/explore.c', import.meta.url), 'utf8');
   const xnames = (/static char \*opnames =([^;]*);/.exec(xsrc) || [, ''])[1].match(/"([^"]*)"/g).map(q => q.slice(1, -1)).join('');
   check(xnames === OPNAMES, "the Code pane's opcode names are the machine's (devices.js OPNAMES)", xnames);
-  const named = ['LEA', 'JMP', 'JSR', 'BZ', 'BNZ', 'ADJ', 'JSRI', 'JSRS', 'LDL', 'PSHL', 'LEAP', 'IMMP', 'STL'];
+  const named = ['LEA', 'IMM', 'JMP', 'JSR', 'BZ', 'BNZ', 'ADJ', 'JSRI', 'JSRS', 'JMPA', 'LDL', 'PSHL', 'LEAP', 'IMMP', 'STL'];
   const opnum = n => OPNAMES.match(/.{5}/g).findIndex(t => t.slice(0, 4).trim() === n);
   check(named.every(n => new RegExp(`O_${n} = ${opnum(n)}\\b`).test(xsrc)) && new RegExp(`O_N = ${OPNAMES.length / 5}\\b`).test(xsrc),
     'and the opcodes it names by number are where OPNAMES has them');
@@ -858,7 +858,9 @@ const codeRows = () => {
   return [...by.keys()].sort((a, b) => a - b).map(y => {
     const r = by.get(y).sort((a, b) => a.x - b.x);
     const more = Math.round((r[0].x - h.x) / 7) >= c1;
-    const src = more || (r.length > 1 && !/:$/.test(r[1].s) && Math.round((r[1].x - h.x) / 7) < c1 + 4);
+    // an instruction's label is L and a number; a source line can end in a
+    // colon too (case 1:)
+    const src = more || (r.length > 1 && !/^L\d+:$/.test(r[1].s.trimEnd()) && Math.round((r[1].x - h.x) / 7) < c1 + 4);
     return { src, more, cells: more ? ['', ...r.map(t => t.s.trimEnd())] : r.map(t => t.s.trimEnd()) };
   });
 };
@@ -868,7 +870,7 @@ const listed = () => {
   const h = codeHdr(), f = h && frame.find(t => t.adv === 7 && t.y === h.y && t.x < h.x - 8);
   return f ? frame.filter(t => t.adv === 7 && t.x === f.x && t.y > h.y + 8).map(t => t.s.trimEnd()) : [];
 };
-const insOf = r => { const c = r.cells, k = /:$/.test(c[1] || '') ? 2 : 1; return c[k + 1] ? c[k].padEnd(5) + c[k + 1] : c[k]; };
+const insOf = r => { const c = r.cells, k = /^L\d+:$/.test(c[1] || '') ? 2 : 1; return c[k + 1] ? c[k].padEnd(5) + c[k + 1] : c[k]; };
 const srcText = () => codeRows().filter(r => r.src).map(r => r.cells.slice(1).join(' '));
 check(codeRows().some(r => !r.src && insOf(r) === 'JSR  sq') && codeRows().some(r => !r.src && insOf(r) === 'IMM  "%d\\n"'),
   "main's call to sq, and its string, by name", codeRows().map(r => r.cells.join(' ')).join('\n'));
@@ -957,6 +959,58 @@ check(until(() => has(/^main \(/)), 'a click on the Code tab shows it again', sc
 }
 txt(':q!\n');
 check(until(() => !has('sq.c - IDE')), 'and the window closes');
+// What the listing puts above each piece of code (explore.c's xp_lay, on
+// c4lc -g's rows): a K&R function from its name down; a statement that
+// goes on over two lines, whole, before its code; an initialised local's
+// line over its code; a switch's case labels over theirs, past comments,
+// and its line again over the dispatch at its end; and INT_MIN, a plain
+// number, as a number
+{
+  const XT = ['int kr', '(int a)', '{', 'return a + 1;', '}',
+    'int lim(int a, int d)', '{', 'if (d == 0 ||', 'a == -2147483647 - 1)', 'return 0;', 'return a;', '}',
+    'int ini(int a)', '{', 'int n = 3;', 'char w[] = "h";', 'return n + w[a];', '}',
+    'int sw(int a)', '{', 'switch (a) {', 'case 1:', 'a = 4;', 'break;', '// one', '// two', 'case 2:', 'case 3:',
+    'a = 5;', 'break;', 'default:', 'a = 6;', '}', 'return a;', '}',
+    'int main() {', 'return kr(1) + lim(1, 2) + ini(0) + sw(2);', '}'].join('\n');
+  start('IDE');
+  until(() => has('Untitled - IDE'));
+  txt(':e /tmp/xt.c\n');
+  txt('i'); txt(XT); key('ESC');
+  txt(':w\n');
+  check(until(() => has(/"\/tmp\/xt\.c" written/)), 'a file of what the listing has to place, written', screen());
+  txt(':code\n');
+  check(until(() => has(/^main \(\d+ words, xt\.c:\d+\)$/), 4000), ':code shows it', screen());
+  const pick = n => {
+    const h = codeHdr(), t = find(n).filter(t => h && t.x < h.x - 8).pop();
+    if (t) click(t.x + 3, t.y + 5);
+    return !!t && until(() => has(new RegExp(`^${n} \\(`)));
+  };
+  // the listing as S(ource) and I(nstruction) rows
+  const lst = () => codeRows().map(r => r.src ? 'S ' + r.cells.slice(1).join(' ') : 'I ' + insOf(r));
+  const after = (l, s) => { const k = l.indexOf('S ' + s); return k >= 0 && k + 1 < l.length ? l[k + 1] : ''; };
+  let l;
+  check(pick('kr') && has(/^kr \(\d+ words, xt\.c:1\)$/) && (l = lst())[0] === 'S int kr' &&
+    ['(int a)', '{', 'return a + 1;'].every(s => l.includes('S ' + s)),
+    'a K&R function is at its name, and its parameters are shown', (l || []).join('\n'));
+  check(pick('lim') && after(l = lst(), 'if (d == 0 ||') === 'S a == -2147483647 - 1)' && after(l, 'a == -2147483647 - 1)').startsWith('I '),
+    "a statement's lines all come before its code", l.join('\n'));
+  check(l.includes('I IMM  -2147483648'), 'INT_MIN is shown as a number', l.join('\n'));
+  check(pick('ini') && after(l = lst(), 'int n = 3;').startsWith('I ') && after(l, 'char w[] = "h";').startsWith('I '),
+    "an initialised local's line is over its code", l.join('\n'));
+  check(pick('sw') && after(l = lst(), '// one') === 'S // two' && after(l, '// two') === 'S case 2:' &&
+    after(l, 'case 2:') === 'S case 3:' && after(l, 'case 3:') === 'S a = 5;' && l.includes('S case 1:'),
+    "a switch's case labels are over their code", l.join('\n'));
+  {
+    // the dispatch, at the switch's end: the switch's line again (its
+    // first case is 1, so it starts PSH, IMM 1, SUB)
+    let ok = false, i = 0;
+    while (!ok && i < 4) { l = lst(); ok = l.some((s, k) => s === 'S switch (a) {' && l[k + 1] === 'I PSH'); if (!ok) { key('', 0, 34); settle(); } ++i; }
+    check(ok, "and the switch's line is over its dispatch", l.join('\n'));
+  }
+  key('ESC');
+  txt(':q!\n');
+  check(until(() => !has('xt.c - IDE') && !has('xt.c * - IDE')), 'and the window closes');
+}
 // a compiled file opens in the Code tab as it is, its source found by its map
 start('IDE');
 until(() => has('Untitled - IDE'));

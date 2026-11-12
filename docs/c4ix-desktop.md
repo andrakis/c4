@@ -1045,9 +1045,15 @@ nearer libjs's explorer (libjs/web/explore.html) now:
 - [x] **The source between the instructions.** Each line of source the
       map names is shown above the instructions it made, its number where
       the offsets are and its text where the labels are, on the gutter's
-      colour; the few lines between two that made code (a `{`, a
-      declaration, a comment) are shown too, as the file has them, but
-      not blank ones. A click on a row lights every row of its line, and
+      colour. A statement over several lines is shown whole before its
+      code. Some lines with no code of their own are shown too, as the
+      file has them, but not blank ones: all of a function's head (its
+      name, its parameters, its locals), the few between two lines that
+      made code, and past those the labels, braces and comments just
+      above a statement, so a `case` is over its code. A number is a
+      number, and only an address the object's patches say is one is
+      shown as a name or a string (a switch's table as `jump table`).
+      A click on a row lights every row of its line, and
       the footer says where it came from; a double click on a call (or
       Enter) goes to the callee, and Back (`<`, Backspace, Alt+Left)
       comes back; a double click on any other row goes to its line in the

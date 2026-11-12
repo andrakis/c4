@@ -237,6 +237,8 @@ map can be byte-identical to c4lc's:
 - its exit (LEV, and the jump to a shared exit), at the line of the
   closing brace;
 - a `for`'s condition and step, at the line where each begins;
+- a `switch`'s dispatch (the table's lookup, after its cases), at the
+  line of the `switch`;
 - a declaration with an initializer, as a statement;
 - code that comes from a macro, at the line where the macro was used, as
   gcc does it;

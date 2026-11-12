@@ -2737,6 +2737,7 @@
 
 (define g:switchstmt (lambda (s)
 	(begin
+		(define here g:lineloc)
 		(g:iexpr (g:second s))
 		(define ld (g:newlabel))
 		(define lend (g:newlabel))
@@ -2754,6 +2755,7 @@
 		(set! g:swcases ocases)
 		(set! g:swdef odef)
 		(g:emit (list 'JMP (list 'code lend)))
+		(g:loopline here)
 		(g:label! ld)
 		(g:swdispatch cases def lend)
 		(g:label! lend))))
@@ -3716,8 +3718,16 @@
 	(begin
 		(define d (head ls))
 		(if (= (index d 4) nil) nil
-			(g:eminit d (index (g:find (g:third d)) 3)))
+			(begin
+				(g:declline (g:third d))
+				(g:eminit d (index (g:find (g:third d)) 3))))
 		(next g:localinits (tail ls))))))
+;; -g: an initializer's code is its declaration's line (p:fnlocs' DECLS)
+(define g:dlocs (list))
+(define g:declline (lambda (n)
+	(begin
+		(define e (g:lookup n g:dlocs))
+		(if e (g:emit (list 'line (g:second e))) nil))))
 
 ;; block-position declarations: allocate from the frame cursor,
 ;; register (block scope handles removal), run the initializer HERE --
@@ -3781,6 +3791,7 @@
 				(g:emit (list 'func n (g:second fl)))
 				(g:emit (list 'line (g:second fl))))
 			nil)
+		(set! g:dlocs (if fl (index fl 3) (list)))
 		(g:label! (index s 3))
 		;; the long long temporaries go below everything else, and how
 		;; many there are is known at the end: (frame ID WORDS) is

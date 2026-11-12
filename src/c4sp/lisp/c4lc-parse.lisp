@@ -88,9 +88,14 @@
 ;; Under -g every statement is (line LOC STMT), which the
 ;; generator turns into a line item ahead of the statement's code, and
 ;; each function's entry and closing brace are in p:fnlocs, (NAME ENTRY
-;; CLOSE). Without -g the tree is exactly what it was.
+;; CLOSE DECLS): ENTRY is its name's line, and DECLS the lines of the
+;; locals declared at the top of its body, ((NAME LOC) ...), so that an
+;; initializer's code has its declaration's row. Without -g the tree is
+;; exactly what it was.
 (define p:lines false)
 (define p:fnlocs (list))
+(define p:nameloc 0)         ;; the location of the name p:function's '(' follows
+(define p:dlocs (list))      ;; DECLS, as p:localdecls reads them
 (define p:rbrace 0)          ;; the location of the last '}' a block ended at
 
 (define p:expect (lambda (k what)
@@ -1891,8 +1896,20 @@
 	(if (= (p:kind) 'Typedef)
 		(begin (p:typedefdecl) (next p:localdecls acc))
 	(if (if (p:declstart?) true (if (= (p:kind) 'Static) true (= (p:kind) 'Extern)))
-		(next p:localdecls (+ acc (p:localline)))
+		(begin
+			;; -g: each name this line declares, at the line's start
+			(define loc (p:line))
+			(define nv (length p:lvars))
+			(define got (p:localline))
+			(if p:lines (p:declat p:lvars (- (length p:lvars) nv) loc) nil)
+			(next p:localdecls (+ acc got)))
 	(p:cons 'locals acc)))))
+(define p:declat (lambda (l n loc)
+	(if (> n 0)
+		(begin
+			(set! p:dlocs (p:cons (list (head (head l)) loc) p:dlocs))
+			(next p:declat (tail l) (- n 1) loc))
+		nil)))
 
 ;; struct VALUE type: ty >= 1024 with pointer level 0
 (define p:svalue? (lambda (ty)
@@ -1925,6 +1942,7 @@
 				(if (= (p:kind) 'Attribute) (+ attr (p:attribute)) attr))
 			(if (= (p:kind) 'Id) nil (p:die "bad global declaration"))
 			(define n (p:value))
+			(set! p:nameloc (p:line))
 			(p:advance)
 			(if (= (p:kind) 'Lparen)
 				(p:function ty n a2 q)
@@ -1959,7 +1977,9 @@
 	(next p:krset (tail ps) n ty (p:cons (head ps) acc))))))
 (define p:function (lambda (ty n attr rq)
 	(begin
-		(define entry (p:line))           ;; the '(' after the name: the name's line
+		;; the name's line (K&R puts the '(' on a line of its own)
+		(define entry (if (= p:nameloc 0) (p:line) p:nameloc))
+		(set! p:nameloc 0)
 		(p:advance)
 		(define pv (p:params (list)))
 		(define ps (p:krdecls (head pv)))
@@ -1985,9 +2005,10 @@
 				(set! p:infn true)
 				(define tds p:typedefs)
 				(p:shadowps ps)
+				(set! p:dlocs (list))
 				(define ls (p:localdecls (list)))
 				(define body (p:block/2 (list)))
-				(if p:lines (set! p:fnlocs (p:cons (list n entry p:rbrace) p:fnlocs)) nil)
+				(if p:lines (set! p:fnlocs (p:cons (list n entry p:rbrace p:dlocs) p:fnlocs)) nil)
 				(set! p:infn false)
 				(set! p:typedefs tds)
 				(p:endlstructs)

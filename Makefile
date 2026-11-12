@@ -3882,6 +3882,11 @@ test-srcmap: c4sp c4sp32 c4 c4m c4m32 c4mp $(OISC4) $(C4RDUMP) $(C4RLINK) $(C4R_
 	./c4sp -c 400000 src/c4sp/lisp/c4lc.lisp -g -O -minline -P -I src/tests src/tests/srcmap_probe.c .srcmap_probe.c4r > /dev/null
 	$(C4RDUMP) -l .srcmap_probe.c4r | diff src/c4sp/tests/expected/srcmap-probe.txt -
 	$(C4M) load-c4r.c -- .srcmap_probe.c4r 2>&1 | grep -qx "66 28 27"
+	@# the rows of code no statement owns: a K&R function at its name's
+	@# line, an initialised local's code at its declaration, a switch's
+	@# dispatch at the switch (what the IDE's Code tab shows above them)
+	./c4sp -c 400000 src/c4sp/lisp/c4lc.lisp -g -O src/tests/srcmap_lines.c .srcmap_lines.c4r > /dev/null
+	$(C4RDUMP) -l .srcmap_lines.c4r | diff src/c4sp/tests/expected/srcmap-lines.txt -
 	bash src/c4sp/tests/srcmap-invariant.sh
 	@# S2: c4rlink merges the objects' maps, rebased, and c4opt-run
 	@# carries a map through its passes (the script says how each is

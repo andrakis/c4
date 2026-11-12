@@ -888,8 +888,127 @@ static void freewalk() {
     if (soff) { free((char *)soff); free((char *)ssize); soff = 0; ssize = 0; }
 }
 
+// ---- download: what the person takes away --------------------------------
+//
+//   download PATH...         each file handed to the web page, which saves
+//   persist download PATH... it where the browser keeps downloads; a
+//                            folder as NAME.tar, all that is in it (ustar,
+//                            as save writes)
+//
+// The host takes it as a file written to "download:NAME" through the same
+// write registers (libjs's devices.js, onDownload), and keeps nothing of it
+// on the machine's side. Where nothing takes it -- the command line, native
+// c4m -- it says so. download is persist by another name (/bin/download,
+// an ilink, as sync is), and the desktop's Files runs it for File >
+// Download (desktop/files.c). A file in the page's store (drive 1) can also
+// be saved from the page itself, without the machine (libjs/README.md).
+
+static int dl_open(char *name) {
+    char full[PATHMAX + 16];
+    ustrcpy(ustrcpy(full, "download:") - 1, name);
+    return w_open(full);
+}
+
+// the file ABS into the tar as REL ("/NAME/...", as header wants), SIZE bytes
+static int dl_file(char *abs, char *rel, int size) {
+    int fd, n, got;
+    if (!header(rel, size, 0)) { ufprintf(STDERR, "download: %s: name too long for a tar\n", abs); return 0; }
+    if ((fd = uopen(abs, O_RD)) < 0) { ufprintf(STDERR, "download: cannot read %s\n", abs); return 0; }
+    w_put(hdr, BLOCK);
+    n = 0;
+    while (n < size) {
+        got = uread(fd, chunk, size - n < CHUNK ? size - n : CHUNK);
+        if (got <= 0) break;
+        w_put(chunk, got);
+        n = n + got;
+    }
+    // a file that shrank as it was read: the header promised SIZE bytes
+    if (n < size) { memset(chunk, 0, CHUNK); while (n < size) { w_put(chunk, size - n < CHUNK ? size - n : CHUNK); n = n + CHUNK; } }
+    uclose(fd);
+    pad(size);
+    return 1;
+}
+
+// the folder ABS and all in it, as REL and what is under it; how many files
+static int dl_tree(char *abs, char *rel) {
+    char name[NAMEMAX];
+    char *a, *r;
+    int i, kind, n, st[4];
+    a = (char *)malloc(PATHMAX);
+    r = (char *)malloc(PATHMAX);
+    n = 0;
+    if (!a || !r) return 0;
+    // the folder's own entry, "NAME/"
+    if (ustrlen(rel) + 2 < PATHMAX) {
+        ustrcpy(ustrcpy(r, rel) - 1, "/");
+        if (header(r, 0, 1)) w_put(hdr, BLOCK);
+    }
+    i = 0;
+    while ((kind = ureaddir(abs, i, name)) >= 0) {
+        ++i;
+        if (ustrlen(abs) + 2 + ustrlen(name) >= PATHMAX || ustrlen(rel) + 2 + ustrlen(name) >= PATHMAX) continue;
+        ustrcpy(ustrcpy(ustrcpy(a, abs[1] ? abs : "") - 1, "/") - 1, name);
+        ustrcpy(ustrcpy(ustrcpy(r, rel) - 1, "/") - 1, name);
+        // what is made up as it is read is not taken away
+        if (starts(a, "/proc/") || same(a, "/proc")) continue;
+        if (ustat(a, st) < 0) continue;
+        if (st[0] == 1) n = n + dl_tree(a, r);
+        else if (st[0] == 2 && dl_file(a, r, st[1])) ++n;
+    }
+    free(a);
+    free(r);
+    return n;
+}
+
+static int download(int argc, char **argv, int from) {
+    char path[PATHMAX], name[NAMEMAX + 8], rel[NAMEMAX + 2];
+    char *p, *b;
+    int i, k, n, rc, fd, got, st[4];
+    if (from >= argc) { ufprintf(STDERR, "usage: download FILE|FOLDER...\n"); return 2; }
+    if (!(__c4_info() & C4I_C4MJS)) { ufprintf(STDERR, "download: only the web page takes downloads\n"); return 1; }
+    rc = 0;
+    i = from;
+    while (i < argc) {
+        p = argv[i];
+        ++i;
+        if (ustrlen(p) >= PATHMAX) { rc = 1; continue; }
+        ustrcpy(path, p);
+        // "dir/" is "dir"; "/" stays
+        k = ustrlen(path);
+        while (k > 1 && path[k - 1] == '/') { --k; path[k] = 0; }
+        if (ustat(path, st) < 0) { ufprintf(STDERR, "download: %s: no such file or folder\n", p); rc = 1; continue; }
+        // the name it is saved as: its last part ("/" is c4ix)
+        b = path;
+        k = 0;
+        while (path[k]) { if (path[k] == '/' && path[k + 1]) b = path + k + 1; ++k; }
+        if (*b == '/' || !*b) b = "c4ix";
+        if (ustrlen(b) > NAMEMAX) { ufprintf(STDERR, "download: %s: name too long\n", p); rc = 1; continue; }
+        ustrcpy(name, b);
+        if (st[0] == 1) {
+            ustrcpy(name + ustrlen(name), ".tar");
+            if (dl_open(name) < 0) { ufprintf(STDERR, "download: nothing here takes downloads (the web page does)\n"); return 1; }
+            // inside it, "NAME/...", as "/NAME/..." for header
+            ustrcpy(ustrcpy(rel, "/") - 1, b);
+            n = dl_tree(path, rel);
+            memset(chunk, 0, BLOCK * 2);
+            w_put(chunk, BLOCK * 2);
+            if (w_close() < 0) { ufprintf(STDERR, "download: %s: not taken\n", p); rc = 1; continue; }
+            uprintf("download: %s, %d file%s\n", name, n, n == 1 ? "" : "s");
+        } else {
+            if ((fd = uopen(path, O_RD)) < 0) { ufprintf(STDERR, "download: cannot read %s\n", p); rc = 1; continue; }
+            if (dl_open(name) < 0) { uclose(fd); ufprintf(STDERR, "download: nothing here takes downloads (the web page does)\n"); return 1; }
+            n = 0;
+            while ((got = uread(fd, chunk, CHUNK)) > 0) { w_put(chunk, got); n = n + got; }
+            uclose(fd);
+            if (w_close() < 0) { ufprintf(STDERR, "download: %s: not taken\n", p); rc = 1; continue; }
+            uprintf("download: %s, %d bytes\n", name, n);
+        }
+    }
+    return rc;
+}
+
 static int usage() {
-    ufprintf(STDERR, "usage: persist boot ARCHIVE... | save | status | forget | -d SECS\n");
+    ufprintf(STDERR, "usage: persist boot ARCHIVE... | save | status | forget | -d SECS | download PATH...\n");
     return 2;
 }
 
@@ -905,6 +1024,9 @@ int main(int argc, char **argv) {
     i = 0;
     while (argv[0][i]) { if (argv[0][i] == '/') me = argv[0] + i + 1; ++i; }
     if (argc > 1 && same(argv[1], "boot")) return boot(argc, argv);
+    // (needs no drive 1: the page takes it)
+    if (starts(me, "download")) return download(argc, argv, 1);
+    if (argc > 1 && same(argv[1], "download")) return download(argc, argv, 2);
 
     // the daemon is started on every desktop boot: where there is no
     // drive it simply has nothing to do

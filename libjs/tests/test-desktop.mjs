@@ -16,6 +16,7 @@ import { GuiDevice, CMD } from '../gui-device.js';
 import { SoundDevice, SND, EVT, MUTE } from '../snd-device.js';
 import { typeBytes } from '../keys.js';
 import { layUploads } from '../uploads.js';
+import { untar } from '../kept.js';
 import { readC4r, analyse, insnText } from '../c4r.js';
 import { OPNAMES } from '../../src/c4bb/sim/devices.js';
 
@@ -51,14 +52,20 @@ const files = new LazyDisk(index);
 // of Files' orders differently.
 const UPLOADS = [['bravo.dat', 500], ['charlie.c', 9000], ['alpha.txt', 3000]];
 // (bravo.dat's last byte is a NUL, so the IDE takes it for a binary file)
-layUploads(files, UPLOADS.map(([n, z]) => { const b = new TextEncoder().encode(`uploaded ${n}\n`.repeat(z)).slice(0, z); if (n === 'bravo.dat') b[z - 1] = 0; return [n, b]; }));
+const upBytes = (n, z) => { const b = new TextEncoder().encode(`uploaded ${n}\n`.repeat(z)).slice(0, z); if (n === 'bravo.dat') b[z - 1] = 0; return b; };
+// ... and one in a folder, as the Uploads' folder list puts it (/home/wolf3d)
+const FOLDER_UP = ['wolf3d/delta.wl6', 700];
+layUploads(files, [...UPLOADS, FOLDER_UP].map(([n, z]) => [n, upBytes(n, z)]));
 const gui = new GuiDevice({ w: 640, h: 480 });
 // a sound card too, for the tray's volume: what it is told to play is
 // let go of, but each master volume the desktop sets is kept
 const snd = new SoundDevice();
 const masters = [];
 const out = [];
-const vm = createMachine({ arenaMb: 64, gui, snd, drives: [{ files, writable: false, sink: null }], onByte: b => out.push(b) });
+// what C4IX hands the page (download, Files' File > Download: devices.js "download:NAME")
+const downloads = [];
+const vm = createMachine({ arenaMb: 64, gui, snd, drives: [{ files, writable: false, sink: null }], onByte: b => out.push(b),
+                          onDownload: (n, b) => downloads.push([n, b.slice()]) });
 boot(vm, new Uint8Array(readFileSync(join(ROOT, 'c4ix32.c4r'))), ['c4ix32.c4r']);
 const consoleText = () => Buffer.from(out).toString('latin1');
 
@@ -244,6 +251,19 @@ check(until(() => consoleText().includes('[4] done (0)'), 3000), 'the root archi
   check(UPLOADS.every(([n]) => ls.includes(n)), 'ls lists the uploads in /home', ls);
   check(sh('cat /home/alpha.txt').includes('uploaded alpha.txt'), 'cat reads one there', consoleText().slice(-300));
   check(sh('cat bravo.dat').includes('uploaded bravo.dat'), 'and by its bare name, from the host', consoleText().slice(-300));
+  check(sh('ls /home/wolf3d').includes('delta.wl6') && sh('cat /home/wolf3d/delta.wl6').includes('uploaded wolf3d/delta.wl6'),
+    'an upload in a folder is in that folder, /home/wolf3d', consoleText().slice(-300));
+  // download: a file, and a folder as a tar, handed to the page
+  const same = (a, b) => a && b && a.length === b.length && a.every((v, i) => v === b[i]);
+  const said = sh('download /home/alpha.txt');
+  check(downloads.length === 1 && downloads[0][0] === 'alpha.txt' && same(downloads[0][1], upBytes('alpha.txt', 3000)) &&
+        said.includes('download: alpha.txt, 3000 bytes'), 'download hands a file to the page, by its name, every byte', said);
+  sh('download /home/wolf3d/');
+  const t = downloads[1] && untar(downloads[1][1]);
+  check(downloads.length === 2 && downloads[1][0] === 'wolf3d.tar' && t.dirs.includes('wolf3d') &&
+        same((t.files.find(([n]) => n === 'wolf3d/delta.wl6') || [])[1], upBytes(...FOLDER_UP)),
+    'and a folder as NAME.tar, what is in it under NAME/', downloads.map(([n]) => n).join(' ') + ' ' + consoleText().slice(-200));
+  check(sh('download /nowhere').includes('no such file or folder') && downloads.length === 2, 'and says so of what is not there');
   sh('mkdir /home/zeta');
 }
 typeBytes(vm, new TextEncoder().encode('desktop\n'));
@@ -576,6 +596,14 @@ dbl('home', inList);
 check(until(() => has('Files - /home') && order() === 'zeta bravo.dat alpha.txt charlie.c'), 'and Files opened again keeps the order', order());
 clickText('Name', inFiles);
 check(until(() => order() === 'zeta alpha.txt bravo.dat charlie.c'), 'by name again', order());
+// File > Download: the selected file, to the page
+{
+  const before = downloads.length;
+  clickText('alpha.txt', inList); settle();
+  clickText('File', all => all.filter(t => inFiles([t])).sort((p, q) => p.y - q.y)[0]); settle(); clickText('Download');
+  check(until(() => downloads.length === before + 1) && downloads[before][0] === 'alpha.txt' && downloads[before][1].length === 3000 && noDialog(),
+    'File > Download hands the selected file to the page', downloads.map(([n]) => n).join(' ') + '\n' + screen());
+}
 key('\b');
 until(() => has('Files - /'));
 dbl('tmp', inList);

@@ -108,6 +108,7 @@ node libjs/tests/test-sheap.mjs  || fail=1
 node libjs/tests/test-gui.mjs    || fail=1
 node libjs/tests/test-shared.mjs || fail=1
 node libjs/tests/test-rom.mjs    || fail=1
+node libjs/tests/test-kept.mjs   || fail=1   # the Uploads' folders, and Saved Files' lists and tars
 }
 
 # ---- machines booted and driven ------------------------------------------
@@ -503,6 +504,16 @@ part_ixpersist () {
 T=$(mktemp -d)
 out=$(printf 'wait 4\necho kept > /usr/kept.txt\nmkdir /usr/kdir\nrm /usr/README.md\nsync\nexit\n' | \
       timeout 300 $LIBJS -m 64 -c 3000000000 -d $IMAGES/disk -w $T $IMAGES/c4ix32.c4r 2>/dev/null)
+# the page's Saved Files reads the same drive (kept.js): what was saved, by
+# its path, and nothing of the system's own or persist's
+kept=$(node --input-type=module -e "
+  import { readdirSync, readFileSync } from 'node:fs';
+  import { keptFiles } from './libjs/kept.js';
+  const m = new Map(readdirSync('$T').map(n => [n, new Uint8Array(readFileSync('$T/' + n))]));
+  for (const [p, b] of keptFiles(m)) console.log(p + '=' + new TextDecoder().decode(b).trim());" 2>&1)
+if echo "$kept" | grep -qx "/usr/kept.txt=kept" && ! echo "$kept" | grep -q "^/var/persist\|README.md"; then
+    ok "Saved Files lists what persist kept, by its path (kept.js)"
+else bad "Saved Files lists what persist kept, by its path (kept.js)"; echo "$kept" | head -5; fi
 out2=$(printf 'wait 4\ncat /usr/kept.txt\nls /usr\npersist forget\nexit\n' | \
       timeout 300 $LIBJS -m 64 -c 3000000000 -d $IMAGES/disk -w $T $IMAGES/c4ix32.c4r 2>/dev/null)
 out3=$(printf 'wait 4\nls /usr\nexit\n' | \

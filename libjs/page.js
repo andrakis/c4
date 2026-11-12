@@ -267,6 +267,8 @@ export class C4M {
         if (this.cacheName) keepInCache(this.store.backend, this.cacheName, m.name, m.hash, m.bytes).then(
           () => this.emit('cache', { name: m.name, bytes: m.bytes.length }), () => {});
         break;
+      // a file the machine handed the person (C4IX's download): the page saves it
+      case 'download': this.emit('download', { name: m.name, bytes: m.bytes }); break;
       case 'gui': this.emit('resize', m); break;
       case 'exit': this.exited = m; this.emit('exit', m); break;
       case 'error': this.emit('error', m); break;

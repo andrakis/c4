@@ -98,14 +98,14 @@ body {
 }
 
 /* Configuration: the URL's parameters as a form (app.js, CONFIG) */
-#config, #uploads {
+#config, #uploads, #saved {
   background: var(--panel); color: var(--text); border: 1px solid var(--edge);
   border-radius: 8px; padding: 16px 20px; width: min(560px, calc(100vw - 32px));
   max-height: calc(100vh - 32px); overflow: auto;
 }
-#config::backdrop, #uploads::backdrop { background: rgba(6, 5, 18, 0.7); }
-#config h2, #uploads h2 { margin: 0 0 4px; color: var(--pink); font-size: 15px; }
-#config p, #uploads p { margin: 0 0 12px; }
+#config::backdrop, #uploads::backdrop, #saved::backdrop { background: rgba(6, 5, 18, 0.7); }
+#config h2, #uploads h2, #saved h2 { margin: 0 0 4px; color: var(--pink); font-size: 15px; }
+#config p, #uploads p, #saved p { margin: 0 0 12px; }
 .cfg-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--edge); margin-bottom: 12px; }
 #config .cfg-tabs button { border-bottom: none; border-radius: 4px 4px 0 0; margin-bottom: -1px; color: var(--dim); }
 #config .cfg-tabs button[aria-selected=true] { color: var(--pink); border-color: var(--edge); background: var(--panel); border-bottom: 1px solid var(--panel); }
@@ -123,18 +123,29 @@ body {
 #config input:focus, #config select:focus { outline: none; border-color: var(--cyan); }
 .config-buttons { display: flex; gap: 8px; margin-top: 16px; }
 .config-buttons .grow { flex: 1; }
-#config button, #uploads button {
+#config button, #uploads button, #saved button {
   background: var(--chip); color: var(--text); border: 1px solid var(--edge);
   border-radius: 4px; padding: 4px 12px; font: inherit; cursor: pointer;
 }
-#config button:hover, #uploads button:hover { border-color: var(--cyan); color: var(--cyan); }
-#config button.primary, #uploads button.primary { border-color: var(--pink); color: var(--pink); }
+#config button:hover, #uploads button:hover, #saved button:hover { border-color: var(--cyan); color: var(--cyan); }
+#config button.primary, #uploads button.primary, #saved button.primary { border-color: var(--pink); color: var(--pink); }
 /* Uploads: the person's own files, laid over drive 0 (app.js) */
-#uploads-list { list-style: none; margin: 0; padding: 0; max-height: 40vh; overflow: auto; }
-#uploads-list li { display: flex; gap: 12px; align-items: center; padding: 3px 0; border-bottom: 1px solid var(--edge); }
-#uploads-list li .name { flex: 1; }
-#uploads-list li.none { color: var(--dim); border: none; }
-#uploads button.small { padding: 0 8px; font-size: 12px; }
+#uploads-list, #saved-list { list-style: none; margin: 0; padding: 0; max-height: 40vh; overflow: auto; }
+#uploads-list li, #saved-list li { display: flex; gap: 12px; align-items: center; padding: 3px 0; border-bottom: 1px solid var(--edge); }
+#uploads-list li .name, #saved-list li .name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+#uploads-list li.none, #saved-list li.none { color: var(--dim); border: none; }
+#uploads-list li .name .dim { margin-right: 1px; }
+/* Saved Files: what this system keeps in this browser, to download (app.js) */
+#saved-list li.folder { color: var(--cyan); padding-top: 8px; }
+#saved-list li.file .name { padding-left: 14px; }
+.uploads-to { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; margin-bottom: 10px; }
+.uploads-to .dim { font-size: 12px; }
+#uploads select {
+  background: var(--chip); color: var(--text); border: 1px solid var(--edge);
+  border-radius: 4px; padding: 4px 8px; font: inherit; margin-left: 6px;
+}
+#uploads select:focus { outline: none; border-color: var(--cyan); }
+#uploads button.small, #saved button.small { padding: 0 8px; font-size: 12px; }
 body.dropping #panes { outline: 2px dashed var(--cyan); outline-offset: -6px; }
 @media (max-width: 480px) {
   .cfg-panel { grid-template-columns: 1fr; }

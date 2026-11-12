@@ -503,12 +503,33 @@ int arc_gunzip_to(char *in, int inlen, int put) {
 
 // ---- files ----
 
+// How many bytes reading PATH gives, read through once; -1 if it will
+// not open or there is no memory to read it with
+static int arc_count(char *path) {
+    char *b;
+    int fd, n, total;
+    if ((fd = uopen(path, O_RD)) < 0) return 0 - 1;
+    if (!(b = (char *)ualloc(65536))) { uclose(fd); return 0 - 1; }
+    total = 0;
+    while ((n = uread(fd, b, 65536)) > 0) total = total + n;
+    free(b);
+    uclose(fd);
+    return total;
+}
+
+// PATH's bytes, read into one buffer of their size (and a 0 after
+// them); its length in *PLEN. A file the VFS does not have -- the host's,
+// which uopen falls back to, as the root archive is -- has no size to
+// stat, and the host none to tell: it is read through once to count it
+// first. Grown as it was read, doubling, a 4.3 MB archive took an 8 MB
+// buffer with the 4 MB one still held to copy from, 12 MB at once, and a
+// first boot without the MMU needed 20 MB where 12 had done.
 char *arc_readfile(char *path, int *plen) {
     int st[4], fd, got, n;
     char *buf;
     if (ustat(path, st) < 0 || st[0] != 2) {
         // not in the VFS: the host may still have it (uopen falls back)
-        st[1] = 0;
+        st[1] = arc_count(path);
     }
     fd = uopen(path, O_RD);
     if (fd < 0) { arc_error = "cannot open"; return 0; }
@@ -517,8 +538,13 @@ char *arc_readfile(char *path, int *plen) {
     got = 0;
     while (1) {
         if (got == st[1]) {
-            // bigger than stat said (a host file): grow
+            // full: one byte more, into the room for the 0 after, says
+            // whether there is more. Grown at once, every file the size
+            // stat said took a buffer twice that at its end.
             char *nb;
+            if ((n = uread(fd, buf + got, 1)) <= 0) break;
+            got = got + n;
+            // bigger than stat said (a host file): grow
             if (!(nb = (char *)ualloc(st[1] * 2 + 1))) { uclose(fd); free(buf); arc_error = "out of memory reading it"; return 0; }
             memcpy(nb, buf, got);
             free(buf);

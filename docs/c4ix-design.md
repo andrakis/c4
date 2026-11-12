@@ -1065,6 +1065,45 @@ spinner at -3 beside one at 0 gets 4.6 times the cycles
     0x001e1a80"), while swap is busy. It is not the entry page, which the
     check above would have reported. Left for the MMU's own work on
     memory that runs out.
+  - *Checked again* (2026-11-13; asked: is the tree still read from drive
+    1, and does the desktop still start in 8 MB?). The page's path had not
+    changed: 1,226 files from the copy kept on drive 1, System 2,744 K at
+    64 MB with the MMU. Two harnesses read the tree from RAM where the page
+    does not. `test-c4ix-innerbench` gave drive 1 no sink, which
+    `devices.js` makes read-only, so persist fell back to unpacking into
+    RAM: 23.9 MB in 1,227 files, 4.4 MB free of 32. `test-desktop` gave no
+    drive 1 at all. Both now have a drive 1 that keeps what is written,
+    and check that persist read the tree from it. `test-lazy-root` keeps
+    the fall-back, on a drive with no sink, and checks it, and fails if a
+    boot from the kept copy holds 1 MB of RAM files or the desktop no
+    longer starts in the machines below.
+    The first boot without the MMU had grown from 12 MB to 21.
+    `arc_readfile` reads the root archive, which is not in the VFS and
+    so has no size to stat, by growing its buffer as it goes, doubling
+    from 64 KB with the old one held while it copies: 4 + 8 MB for the
+    4.3 MB archive. A file it could stat took twice its size too, as the
+    buffer was grown when full, before the read that finds the end. It now
+    counts a host file by reading it through once, and reads one byte into
+    the room for the 0 before it grows a full buffer. The smallest
+    machines, headless at 640x480, MMU off / on:
+
+    | | 78889dc | before | after |
+    |---|---|---|---|
+    | to the desktop, first boot | 12 / 14 MB | 21 / 10 MB | 10 / 10 MB |
+    | ... from the kept copy | 7 / 9 MB | 8 / 8 MB | 7 / 8 MB |
+    | to the shell, first boot | | 20 / 9 MB | 9 / 9 MB |
+    | ... from the kept copy | | 5 / 6 MB | 5 / 6 MB |
+    | ... no drive 1, the tree in RAM | | 44 / 30 MB | 44 / 29 MB |
+
+    *Not done.* A first boot to the desktop in 8 or 9 MB with the MMU,
+    before and after, reads the archive wrong while swap is busy:
+    persist says "bad literal/length code", or now "not a tar archive",
+    and as that is not memory the boot goes on, and the desktop starts
+    with no tree. The same archive inflates whole in 10 MB (and to the
+    shell in 9), so it is likely a task's paged memory going wrong under
+    swap rather than the inflater; not found yet, and left with the 6 MB
+    fault above for the MMU's work on memory that runs out.
+
   `libjs/tests/test-lazy-root.mjs`; in the page, `web-lazy-root.mjs`.
 
 - **Saved changes, read where they are kept** (2026-11-02, asked for:

@@ -64,7 +64,12 @@ const masters = [];
 const out = [];
 // what C4IX hands the page (download, Files' File > Download: devices.js "download:NAME")
 const downloads = [];
-const vm = createMachine({ arenaMb: 64, gui, snd, drives: [{ files, writable: false, sink: null }], onByte: b => out.push(b),
+// Drive 1 as the page gives it (worker.js), one that keeps what is
+// written: persist keeps the root archive's tar there, and the desktop
+// reads the tree's files from it, not from RAM (persist.c).
+const vm = createMachine({ arenaMb: 64, gui, snd, onByte: b => out.push(b),
+                          drives: [{ files, writable: false, sink: null },
+                                   { files: new Map(), writable: true, sink: () => {}, remove: () => {} }],
                           onDownload: (n, b) => downloads.push([n, b.slice()]) });
 boot(vm, new Uint8Array(readFileSync(join(ROOT, 'c4ix32.c4r'))), ['c4ix32.c4r']);
 const consoleText = () => Buffer.from(out).toString('latin1');
@@ -227,7 +232,10 @@ check(/entries left on the host until first use/.test(consoleText()) && files.fe
 // The IDE's :make links with /usr/lib/libc4ix.c4l, which the root
 // archive brings: let its background unpack (task 4) finish first
 typeBytes(vm, new TextEncoder().encode('wait 4\n'));
-check(until(() => consoleText().includes('[4] done (0)'), 3000), 'the root archive unpacks in the background');
+check(until(() => consoleText().includes('[4] done (0)'), 3000) &&
+  /persist: c4ix-root\.tgz: \d+ files, unpacked onto drive 1 and read from there/.test(consoleText()),
+  'the root archive unpacks in the background, onto drive 1, and is read from there',
+  consoleText().split('\n').filter(l => /persist|\[4\]/.test(l)).join(' | '));
 // No screen saver: headless, an idle machine covers its five minutes
 // within a long build (the savers are tried below, from Settings)
 {

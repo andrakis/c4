@@ -20,6 +20,11 @@
 //     outside, the next allocation drops them all, and read again they
 //     are the same; a file changed since boot is not dropped, and keeps
 //     its change
+//   - a drive 1 that takes nothing (no sink) gets the RAM unpack, as no
+//     drive does; booted from the kept copy, RAM files are under
+//     RAM_FILES_KB, not the tree's megabytes
+//   - the desktop boots in a small machine: from the kept copy and on a
+//     first boot, MMU on and off, each in at most its limit (SMALLEST)
 //   - a desktop boot that does not fit has no desktop, and says it ran out of memory
 //
 //   node libjs/tests/test-lazy-root.mjs
@@ -77,11 +82,13 @@ class LazyDisk extends Map {
 }
 const disk = new LazyDisk();
 
-// C4IX on the console, drive 1 kept in STORE (none: no drive 1)
-function machine({ mb = 64, store = null, mmu = true, desktop = false } = {}) {
+// C4IX on the console, drive 1 kept in STORE (none: no drive 1;
+// SINKLESS: a drive 1 that takes nothing written, devices.js's read-only)
+function machine({ mb = 64, store = null, mmu = true, desktop = false, sinkless = false } = {}) {
   const out = [];
   const drives = [{ files: disk, writable: false, sink: null }];
   if (store) drives.push({ files: new Map(store), writable: true, sink: (n, b) => store.set(n, b), remove: n => store.delete(n) });
+  else if (sinkless) drives.push({ files: new Map(), writable: true, sink: null, remove: () => {} });
   const gui = desktop ? new GuiDevice({ w: 640, h: 480 }) : null;
   const vm = createMachine({ arenaMb: mb, mmu, gui, drives, onByte: b => out.push(b) });
   boot(vm, new Uint8Array(readFileSync(join(ROOT, 'c4ix32.c4r'))), desktop ? ['c4ix32.c4r', '--desktop'] : ['c4ix32.c4r']);
@@ -101,6 +108,22 @@ function machine({ mb = 64, store = null, mmu = true, desktop = false } = {}) {
 }
 const cache = t => { const m = /lazy (\d+) (\d+)\ncached (\d+) (\d+)\ndropped (\d+)/.exec(t); return m ? m.slice(1).map(Number) : null; };
 const kb = n => Math.round(n / 1024);
+// /proc/meminfo's "name value" lines (vfs.c), the last of each
+const meminfo = t => Object.fromEntries([...t.matchAll(/^(files|nfiles|heap|used|free|cached|lazy) (\d+)$/gm)].map(m => [m[1], +m[2]]));
+// Booted from the copy kept on drive 1, the RAM files are only what boot
+// writes itself (68 KB in 2, 2026-11-12); the tree in RAM is 24 MB
+const RAM_FILES_KB = 1024;
+// The smallest machines the desktop is up in, [MB, MMU, from the kept
+// copy]. Measured 2026-11-13 (headless, 640x480): from the kept copy 8 MB
+// with the MMU and 7 without (78889dc: 9 and 7; the page, 1024x768, 8 and
+// 8); the first boot, which inflates the archive onto the drive, 10 MB
+// with the MMU and 10 without (78889dc: 14 and 12; before arc_readfile
+// read the archive into one buffer of its size, 10 and 21). (In 8 and 9
+// with the MMU the archive's data goes wrong under swap -- "not a tar
+// archive", "bad literal/length code" -- and the desktop starts with no
+// tree.) A boot that needs more than these has put the tree, or something
+// new, back in RAM.
+const SMALLEST = [[8, true, true], [7, false, true], [10, true, false], [10, false, false]];
 
 // ---- no drive: the tree unpacked into RAM, as before ----
 const ram = machine();
@@ -109,6 +132,16 @@ const ramUsed = ram.vm.heap.used;
 check(crcLines(ramOut, files).join('\n') === wanted(files).join('\n'), 'without a drive the tree is unpacked into RAM, the archive\'s bytes',
   crcLines(ramOut, files).join('\n'));
 const ramB4ke = ramOut.split('\n').filter(l => /^b4ke|RUN|would/.test(l)).join('\n');
+
+// ---- a drive 1 that takes nothing: the tree unpacked into RAM too ----
+{
+  const ro = machine({ sinkless: true });
+  const t = ro.sh('wait 4\n' + crcs(files) + '\ncat /proc/meminfo');
+  const m = meminfo(t);
+  check(!/read from there/.test(t) && crcLines(t, files).join('\n') === wanted(files).join('\n') && m.files > 12 << 10,
+    `a drive 1 that takes nothing gets the tree unpacked into RAM, as no drive does (${m.files} KB in ${m.nfiles} RAM files)`,
+    t.split('\n').filter(l => /persist|vfsload/.test(l)).join(' | '));
+}
 
 // ---- the first boot with a drive: inflated onto it, read from there ----
 const store = new Map();
@@ -125,9 +158,12 @@ check(ramUsed - firstUsed > 12 << 20, `the heap after boot: ${kb(firstUsed)} KB,
 
 // ---- the second: the copy kept ----
 const kept = machine({ store });
-t = kept.sh('wait 4\n' + crcs(files) + `\n${prog} lazy-run-ok\nb4ke -n -C /usr\ncat /proc/cache`);
+t = kept.sh('wait 4\ncat /proc/meminfo\n' + crcs(files) + `\n${prog} lazy-run-ok\nb4ke -n -C /usr\ncat /proc/cache`);
 check(/persist: c4ix-root\.tgz: \d+ files from the copy kept on drive 1, read from there/.test(t),
   'the next boot reads the copy kept on drive 1', t.split('\n').filter(l => /persist/.test(l)).join(' | '));
+const km = meminfo(t);
+check(km.files < RAM_FILES_KB, `and after it ${km.files} KB is in ${km.nfiles} RAM files, under ${RAM_FILES_KB} KB: the tree's ${kb(tar.length)} KB is not in RAM`,
+  JSON.stringify(km));
 check(crcLines(t, files).join('\n') === wanted(files).join('\n'), `${small.length} small files, ${big.length} big ones and /usr/BUILD.B4K are the archive's, byte for byte`,
   crcLines(t, files).join('\n'));
 check(/^lazy-run-ok$/m.test(t), 'a program in the tree runs from the drive');
@@ -210,14 +246,27 @@ check(/read from there/.test(t) && crcLines(t, files).join('\n') === wanted(file
     'and so does the boot after', t.slice(-600));
 }
 
+// ---- the smallest machines the desktop is up in ----
+{
+  const base = new Map([...store].filter(([n]) => /^c4ix-base\./.test(n)));
+  for (const [mb, mmu, fromKept] of SMALLEST) {
+    const m = machine({ mb, mmu, store: fromKept ? new Map(base) : new Map(), desktop: true });
+    m.until(() => m.halted() || /desktop: running on the display|out of memory/.test(m.text()), 4000);
+    const t = m.text();
+    check(/desktop: running on the display/.test(t) && /read from there/.test(t) && !/out of memory|Trap type|store to/i.test(t),
+      `the desktop is up in ${mb} MB${mmu ? '' : ' without the MMU'}, ${fromKept ? 'from the copy kept on drive 1' : 'on a first boot'}`,
+      t.split('\n').filter(l => /persist|memory|desktop|Trap/i.test(l)).join(' | '));
+  }
+}
+
 // ---- a desktop boot that does not fit has no desktop, and says why ----
 // (with the MMU, 5 MB: with swap -- memory on demand, paged against its
 // own -- the system fits in 7 now, where it did not in 12 before,
 // docs/c4ix-mmu.md 11. In 5 either the root archive cannot be unpacked,
 // and the boot stops there, or it can, by a few KB of the heap's layout,
 // and the desktop cannot load: the shell says so, and there is still a
-// console. Without the MMU nothing makes room, and 10 MB is too few)
-for (const [mb, mmu] of [[5, true], [10, false]]) {
+// console. Without the MMU nothing makes room, and 9 MB is too few)
+for (const [mb, mmu] of [[5, true], [9, false]]) {
   const tiny = machine({ mb, mmu, store: new Map(), desktop: true });
   tiny.until(() => tiny.halted() || /desktop: running on the display|sh: out of memory starting desktop/.test(tiny.text()), 3000);
   t = tiny.text();

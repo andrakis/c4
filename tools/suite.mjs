@@ -164,13 +164,18 @@ function prerequisites() {
     rules.set(m[1], { prereqs: m[2].split('|')[0].split(/\s+/).filter(Boolean), recipe });
   }
   const phony = new Set((rules.get('.PHONY') || { prereqs: [] }).prereqs);
-  // A test-* or run-* prerequisite is a test's own work (test-c4l, a test
-  // of test's that is not declared phony): left to it. Everything else is
-  // built here, phony steps too (pre copies the images into the top
-  // directory, which tests running at once would do over each other).
+  // A test that is another's prerequisite (test-libc-bare, of test-doom,
+  // test-quake and test-duke3d) runs once, as a job of its own, and the
+  // others are told it is made: else each runs it again, at once, in the
+  // same scratch directory (.libc_t), and they delete each other's files.
+  // A run-* prerequisite is left to its test. Everything else is built
+  // here, phony steps too (pre copies the images into the top directory,
+  // which tests running at once would do over each other).
   const want = new Set(['c4bb-images']);
+  const sub = new Set();
   const add = p => {
-    if (tests.includes(p) || want.has(p) || /^(test|run)-/.test(p)) return;
+    if (/^test-/.test(p)) { sub.add(p); if (!tests.includes(p)) tests.push(p); return; }
+    if (tests.includes(p) || want.has(p) || /^run-/.test(p)) return;
     want.add(p);
   };
   for (const t of tests) {
@@ -187,7 +192,7 @@ function prerequisites() {
   // them at once over the same src/c4bb/images -- the tests are told is
   // made already (make -o).
   const held = [...want].filter(p => rules.get(p)?.recipe.length && (phony.has(p) || !existsSync(p)));
-  return { prep: [...want], held };
+  return { prep: [...want], held: [...held, ...sub] };
 }
 
 const { prep, held } = prerequisites();
@@ -226,7 +231,7 @@ function startFitting() {
   for (let i = 0; i < queue.length; i++) {
     if (!fits(queue[i])) continue;
     const t = queue.splice(i, 1)[0];
-    const job = run(t, join(opt.out, `${t}.log`), ['-s', ...held.flatMap(h => ['-o', h])]);
+    const job = run(t, join(opt.out, `${t}.log`), ['-s', ...held.filter(h => h !== t).flatMap(h => ['-o', h])]);
     running.add(job);
     job.done.then(j => {
       running.delete(j);

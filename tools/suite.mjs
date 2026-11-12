@@ -8,7 +8,12 @@
 //   -j N          at most N tests at once (default: processors - 1)
 //   --cpus N      processors the tests may use between them (default: processors - 1)
 //   --reserve MB  memory left free for everything else (default 300)
-//   --build-jobs N  make -j for the first phase (default 2)
+//   --mem MB      memory the machine can grow to (default: $SUITE_MEM, else
+//                 what it has now). A Hyper-V guest with Dynamic Memory
+//                 shows only what it has been given so far; the rest is
+//                 counted as available, and the host adds it as it is used.
+//   --build-jobs N  make -j for the first phase (default: a job per 1.5 GB
+//                 of memory, from 2 up to the processors the tests may use)
 //   --no-build    skip the first phase
 //   --list-prep   print what the first phase would build, and stop
 //
@@ -37,7 +42,7 @@ import { cpus } from 'node:os';
 import { join } from 'node:path';
 
 const argv = process.argv.slice(2);
-const opt = { out: '.suite', jobs: 0, cpus: 0, reserve: 300, buildJobs: 2, build: true };
+const opt = { out: '.suite', jobs: 0, cpus: 0, reserve: 300, mem: +(process.env.SUITE_MEM || 0), buildJobs: 0, build: true };
 const tests = [];
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
@@ -45,6 +50,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '-j') opt.jobs = +argv[++i];
   else if (a === '--cpus') opt.cpus = +argv[++i];
   else if (a === '--reserve') opt.reserve = +argv[++i];
+  else if (a === '--mem') opt.mem = +argv[++i];
   else if (a === '--build-jobs') opt.buildJobs = +argv[++i];
   else if (a === '--no-build') opt.build = false;
   else if (a === '--list-prep') opt.listPrep = true;
@@ -54,6 +60,9 @@ for (let i = 0; i < argv.length; i++) {
 const NCPU = cpus().length;
 if (!opt.cpus) opt.cpus = Math.max(1, NCPU - 1);
 if (!opt.jobs) opt.jobs = opt.cpus;
+const memTotalMb = () => +/MemTotal:\s+(\d+)/.exec(readFileSync('/proc/meminfo', 'utf8'))[1] / 1024;
+if (!opt.buildJobs)
+  opt.buildJobs = Math.max(2, Math.min(opt.cpus, Math.floor(Math.max(opt.mem, memTotalMb()) / 1536)));
 if (!tests.length) tests.push(...execFileSync('make', ['-s', 'print-suite'], { encoding: 'utf8' }).trim().split(/\s+/));
 mkdirSync(opt.out, { recursive: true });
 
@@ -81,9 +90,11 @@ const note = line => { writeFileSync(result, line + '\n', { flag: 'a' }); consol
 
 // ---- /proc ----------------------------------------------------------
 const PAGE = 4096;
+// with --mem, what the machine has yet to be given counts as available
 function memAvailableMb() {
-  const m = /MemAvailable:\s+(\d+)/.exec(readFileSync('/proc/meminfo', 'utf8'));
-  return m ? +m[1] / 1024 : 0;
+  const info = readFileSync('/proc/meminfo', 'utf8');
+  const kb = k => +(new RegExp(`${k}:\\s+(\\d+)`).exec(info) || [0, 0])[1] / 1024;
+  return kb('MemAvailable') + Math.max(0, opt.mem - kb('MemTotal'));
 }
 // every process: its parent and resident size, in MB
 function processes() {

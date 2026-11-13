@@ -1114,7 +1114,7 @@ C4SC_BACK_DIFF := c4_jailbreak factorial hello multifun puts reverse \
                   tests c4lc_l2 global test_gcscan test-oisc test_printf \
                   c4lc_m4 c4lc_m4q c4lc_m4v c4lc_m7 c4lc_ll c4lc_m9 c4lc_m9lc \
                   c4lc_m10 c4lc_m10lc c4lc_m11lc c4lc_m12lc c4lc_m13lc \
-                  c4lc_linit c4lc_linitlc c4lc_h16
+                  c4lc_linit c4lc_linitlc c4lc_h16 c4lc_u8
 test-c4sc-back: c4sc-host c4sp $(C4RLINK) $(C4M)
 	@fail=0; for b in $(C4SC_BACK_DIFF); do \
 	   f=$(TESTS)/$$b.c; \
@@ -1704,7 +1704,7 @@ C4FC_GEN_SWEEP := hello multifun puts reverse test_basic test_continue \
                   test_static test_switch tests c4lc_l2 global \
                   test_gcscan vararg2 test_vprintf c4_jailbreak \
                   c4lc_m4 c4lc_m4q c4lc_m4v c4lc_m4std c4lc_m7 c4lc_ll \
-                  c4lc_m7fwd c4lc_m9 c4lc_m10 c4lc_linit c4lc_h16
+                  c4lc_m7fwd c4lc_m9 c4lc_m10 c4lc_linit c4lc_h16 c4lc_u8
 
 test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c $(C4RDUMP)
 	./c4th $(C4FC_LIB) src/c4fc/tests/dsl.f | cmp - src/c4fc/tests/expected/dsl.txt
@@ -3541,19 +3541,19 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	   ./c4m32 load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-m4-32.txt || exit 1; \
 	   echo "  m4 ok, gcc's answers at 32 and 64 bits: c4lc $$fl"; \
 	 done
-	# LH LHU SH LSR (docs/c4-16bit.md): shorts at every alignment, the
+	# LH LHU SH LSR LCU (docs/c4-16bit.md): shorts at every alignment, the
 	# values of their assignments and post-increments, an unsigned >> by a
-	# run-time count -- on c4m at both word sizes, libjs and the c4bb sim,
-	# against gcc's answers
-	@for fl in "" "-O"; do \
-	   ./c4sp src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_h16.c .c4lc_b.c4r > /dev/null || exit 1; \
-	   ./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-h16.txt || exit 1; \
-	   ./c4sp32 src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_h16.c .c4lc_b.c4r > /dev/null || exit 1; \
-	   ./c4m32 load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-h16.txt || exit 1; \
-	   node libjs/cli.js .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-h16.txt || exit 1; \
-	   node src/c4bb/sim/cli.js .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-h16.txt || exit 1; \
-	   echo "  h16 ok, gcc's answers on c4m, c4m32, libjs and c4bb: c4lc $$fl"; \
-	 done
+	# run-time count, unsigned chars beside signed ones -- on c4m at both
+	# word sizes, libjs and the c4bb sim, against gcc's answers
+	@for t in h16 u8; do for fl in "" "-O"; do \
+	   ./c4sp src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_$$t.c .c4lc_b.c4r > /dev/null || exit 1; \
+	   ./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-$$t.txt || exit 1; \
+	   ./c4sp32 src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_$$t.c .c4lc_b.c4r > /dev/null || exit 1; \
+	   ./c4m32 load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-$$t.txt || exit 1; \
+	   node libjs/cli.js .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-$$t.txt || exit 1; \
+	   node src/c4bb/sim/cli.js .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-$$t.txt || exit 1; \
+	   echo "  $$t ok, gcc's answers on c4m, c4m32, libjs and c4bb: c4lc $$fl"; \
+	 done; done
 	# M7b: the C Busybox needs (docs/busybox-port.md), one golden from gcc
 	# that does not depend on the word size
 	@for fl in "" "-O" "-minline"; do \

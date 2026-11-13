@@ -317,6 +317,7 @@ call counted by its target. Each step ends on the same checksum,
 |---|---:|---:|---:|
 | before (section 9) | 7.119 | | 95,555 |
 | 16-bit loads and stores, LSR, as opcodes (docs/c4-16bit.md) | 5.861 | −17.7% | 23,365 |
+| `LCU`, an unsigned byte's load (docs/c4-16bit.md) | 5.595 | −4.5% | 23,367 |
 
 **16-bit loads and stores.** `<ld16s>`, `<ld16u>` and `<st16>` were 72,200
 calls a frame between them, each a call and 19 to 22 instructions. They are

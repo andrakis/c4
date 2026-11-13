@@ -79,7 +79,7 @@ static char *opnames =
     "LXI ,SXI ,TRAW,"
     "LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,"
     "FPU ,"
-    "LH  ,LHU ,SH  ,LSR ,";
+    "LH  ,LHU ,SH  ,LSR ,LCU ,";
 
 // a line's colour: a small palette, cycled by line
 static int bands[8] = { 0x5fd7ff, 0xffaf5f, 0x87ff87, 0xff87d7, 0xd7d75f, 0xaf87ff, 0x5fffd7, 0xff8787 };

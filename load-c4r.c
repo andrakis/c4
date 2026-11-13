@@ -904,7 +904,7 @@ enum {
 	// F3: IEEE arithmetic (docs/c4-float.md)
 	FPU ,
 	// 16-bit loads and store, logical shift right (docs/c4-16bit.md)
-	LH  ,LHU ,SH  ,LSR ,
+	LH  ,LHU ,SH  ,LSR ,LCU ,
 	// End of instructions
 	INS_SIZE,
 };

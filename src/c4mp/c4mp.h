@@ -124,7 +124,7 @@ enum {
     // natively by c4_fpu_instruction, hosted by the host's own FPU
     FPU ,
     // 16-bit loads and store, logical shift right (docs/c4-16bit.md), run as c4m runs them
-    LH  ,LHU ,SH  ,LSR ,
+    LH  ,LHU ,SH  ,LSR ,LCU ,
     INS_SIZE
 };
 

@@ -80,7 +80,7 @@ HELP-RESET
 \ lives.
 : LOAD, ( ct -- ) {: t -- :}
    t t_char = t t_schar = OR IF oLC OP, EXIT THEN
-   t t_uchar = IF oLC OP, 255 MASK, EXIT THEN
+   t t_uchar = IF oLCU OP, EXIT THEN
    t t_short = IF oLH OP, EXIT THEN
    t t_ushort = IF oLHU OP, EXIT THEN
    t t_uint = W64? AND IF oLI OP, M32 MASK, EXIT THEN

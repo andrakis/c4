@@ -1,4 +1,4 @@
-# 16-bit loads and stores, and a logical shift: four opcodes
+# 16-bit loads and stores, a logical shift and an unsigned byte: five opcodes
 
 c4's machine had no 16-bit load or store and no logical shift right. c4lc
 and c4fc called a helper for each, a routine laid down in every unit that
@@ -108,3 +108,31 @@ build to gcc's frames.
 Duke has fewer calls by three quarters: 58,700 of the 72,200 calls it no
 longer makes were `<ld16s>`. What is left of its profile, and Quake's, is
 in docs/duke3d-port.md section 10 and docs/quake-performance.md round 4.
+
+## And an unsigned byte: `LCU`
+
+The same machinery made a fifth opcode cheap. An `unsigned char` load was
+`LC; PSH; IMM 255; AND`: `LC` sign-extends, and the mask takes the sign
+off. Textures, palettes and colour maps are arrays of unsigned bytes, so
+that sequence is in every game's inner loops: sampling where the pc was,
+it began 1.5% of all the instructions Duke ran (6% of them were in it)
+and 0.7% of Quake's.
+
+| | opcode | does | was |
+|---|---|---|---|
+| 94 | `LCU` | `a = *(unsigned char *)a` | `LC; PSH; IMM 255; AND` |
+
+Every machine as above: c4m, c4mpg and c4mp `*(char *)a & 255`; libjs
+`u8[a]`; the c4bb microcode is `LC`'s two microsteps with `MEM_RDBU` (the
+board already reads unsigned bytes, for `PUTC` and `MCMP`); oisc4 a byte
+read and an `AND` through the math device, 7 instructions. c4lc's and
+c4fc's `unsigned char` loads emit it. `src/tests/c4lc_u8.c` runs beside
+`c4lc_h16.c`.
+
+| | before | after | |
+|---|---:|---:|---:|
+| Duke, demo1, frames 400-1000 | 5.861 M | 5.595 M | -4.5% |
+| Quake, demo1 timedemo | 9.921 M | 9.719 M | -2.0% |
+
+Same checksums, same frames.
+

@@ -124,7 +124,7 @@ enum {
 	// F3: IEEE arithmetic (docs/c4-float.md) -- named, not run here
 	FPU ,
 	// 16-bit loads and store, logical shift right (docs/c4-16bit.md)
-	LH  ,LHU ,SH  ,LSR ,
+	LH  ,LHU ,SH  ,LSR ,LCU ,
 	INS_MAX
 };
 
@@ -474,7 +474,7 @@ int vm_opcode_lookup (int nameoff) {
 	// F3: IEEE arithmetic (docs/c4-float.md)
 	"FPU ,"
 	// 16-bit loads and store, logical shift right (docs/c4-16bit.md)
-	"LH  ,LHU ,SH  ,LSR ,";
+	"LH  ,LHU ,SH  ,LSR ,LCU ,";
 	r = 0;
 	while (r < INS_MAX) {
 		a = name; b = ops + r * 5;
@@ -809,6 +809,7 @@ int o4_size (int op) {
 	if (op == LHU) return 20;
 	if (op == SH) return 12;
 	if (op == LSR) return 23;
+	if (op == LCU) return 7;
 	// The syscall class ends at DBG. Bounding it by INS_MAX would make
 	// every opcode appended after DBG look like a syscall.
 	if (op >= OPEN && op <= DBG) return 3;  // syscall class
@@ -1051,6 +1052,15 @@ void translate_one (int i) {
 		emit(RT0, 0, P_MATHY);
 		emit(RZ, 0, P_MATHOP);              // OR
 		emit(P_MATHV, 0, RA);               // a = high << 8 | low
+	}
+	else if (op == LCU) {
+		emit(RA, 0, b + 2 * INSTB);         // patch src of #3
+		emit(RZ, 1, RWR);
+		emit(PH, 0, P_MATHX);               // X = signed byte [a]
+		emit(RZ, 0, RWR);
+		emit(RZ, 255, P_MATHY);
+		emit(RZ, AND - OR, P_MATHOP);
+		emit(P_MATHV, 0, RA);               // a = the byte, unsigned
 	}
 	else if (op == SH) {
 		// RWW stores every target but a port as a byte, so the patches

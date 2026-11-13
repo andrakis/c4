@@ -676,3 +676,7 @@ op LSR:                         # a = (unsigned)*sp++ >> a (count mod 32)
     C=-1 MDR_IN
     ALU=XOR ALU_RM ALU_OUT B_IN
     ALU=AND ALU_RT ALU_OUT A_IN
+
+op LCU:                         # a = *(unsigned char*)a: LC, unsigned
+    A_OUT MAR_IN
+    MEM_RDBU MDR_OUT A_IN

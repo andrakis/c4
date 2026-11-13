@@ -509,6 +509,7 @@ export class Mmu {
       case OP.LHU: a = (m.ld8(a) & 255) | ((m.ld8((a + 1) | 0) & 255) << 8); break;
       case OP.SH: x = m.ld32(sp); m.st8(x, a); m.st8((x + 1) | 0, a >> 8); sp += 4; break;
       case OP.LSR: x = m.ld32(sp); a = (x >>> a) | 0; sp += 4; break;
+      case OP.LCU: a = m.ld8(a) & 255; break;
       case OP.PSH: m.st32(sp - 4, a); sp -= 4; break;
       case OP.LIP: a = m.ld32(a); m.st32(sp - 4, a); sp -= 4; break;
       case OP.ADDL: x = (m.ld32(sp) + a) | 0; a = m.ld32(x); sp += 4; break;
@@ -955,6 +956,15 @@ export class Mmu {
           }
           break;
         case 93: /* LSR */ a = (i32[(sp + sOff) >> 2] >>> a) | 0; sp += 4; break;
+        case 94: /* LCU */
+          v = a >>> 12; p = v < LIMIT ? rd[v] : -1;
+          if (p >= 0) a = u8[p | (a & 4095)];
+          else {
+            m.pc = pc - 4; m.sp = sp; m.bp = bp; m.a = a; m.cycle = cycle;
+            a = this.pRd8(a) & 255;
+            if (!m.mode) { stop = STOP.SWITCH; break loop; }
+          }
+          break;
         case 13: /* PSH */ sp -= 4; i32[(sp + sOff) >> 2] = a; break;
         case 14: /* OR  */ a = i32[(sp + sOff) >> 2] | a; sp += 4; break;
         case 15: /* XOR */ a = i32[(sp + sOff) >> 2] ^ a; sp += 4; break;

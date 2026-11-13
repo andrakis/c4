@@ -81,7 +81,9 @@
 	FPU
 	;; 16-bit loads and store, logical shift right (docs/c4-16bit.md).
 	;; Appended.
-	LH LHU SH LSR))
+	LH LHU SH LSR
+	;; an unsigned char's load. Appended.
+	LCU))
 (define c4r:nops (length c4r:ops))
 
 ;; does opcode n take an operand word? LEA..ADJ are 0..7; JSRI 61 JSRS 62;

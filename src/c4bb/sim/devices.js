@@ -237,7 +237,7 @@ export let OPNAMES =
   'FPU ,' +
   // 90-93: 16-bit loads and store, logical shift right (docs/c4-16bit.md),
   // microcoded from the transfers the board already makes
-  'LH  ,LHU ,SH  ,LSR ,';
+  'LH  ,LHU ,SH  ,LSR ,LCU ,';
 export const STOCK_OPNAMES = OPNAMES;
 export function setOpnames (names) { OPNAMES = names; }
 

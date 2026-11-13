@@ -89,6 +89,7 @@ VARIABLE DESS   VARIABLE DESN
 89 CONSTANT oFPU
 \ 16-bit loads and store, logical shift right (docs/c4-16bit.md)
 90 CONSTANT oLH   91 CONSTANT oLHU  92 CONSTANT oSH   93 CONSTANT oLSR
+94 CONSTANT oLCU
 
 BEGIN-STRUCTURE SYMR
    FIELD: y.name  FIELD: y.nlen  FIELD: y.type  FIELD: y.class  FIELD: y.val

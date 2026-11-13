@@ -106,6 +106,7 @@ const DOC = {
   LHU:  ['', 'Load unsigned short: `A` = the two bytes at the address in `A`, low byte first. A dereference, `A = *(unsigned short *)A`.'],
   SH:   ['', 'Store short: pop an address off the stack, and store `A`'s low two bytes there, low byte first. A dereference, `*(short *)pop = A`. `A` is unchanged.'],
   LSR:  ['', 'Pop the first item off the stack and shift it right by `A` bits, bringing in zeros: `A` = (unsigned) pop >> `A`.'],
+  LCU:  ['', 'Load unsigned char: `A` = the byte at the address in `A`. A dereference, `A = *(unsigned char *)A`.'],
 };
 
 // A fused opcode is two or three instructions in one (docs/fused-opcodes.md)

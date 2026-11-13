@@ -440,6 +440,7 @@ own numbering is untouched and the numbers below hold.
 | 91 | `LHU` | c4lc, c4fc: an `unsigned short` load | `a = *(unsigned short *)a` | 2026-11-13 |
 | 92 | `SH` | c4lc, c4fc: a 16-bit store | `*(short *)*sp++ = a`; `a` unchanged, as `SI` | 2026-11-13 |
 | 93 | `LSR` | c4lc, c4fc: an unsigned `>>` by a count known at run time | `a = (unsigned)*sp++ >> a`, the count modulo the word's bits | 2026-11-13 |
+| 94 | `LCU` | c4lc, c4fc: an `unsigned char` load | `a = *(unsigned char *)a`: `LC` without the sign (docs/c4-16bit.md) | 2026-11-13 |
 
 A **named-only** opcode is one c4m knows the name of but does not
 execute. With no trap handler installed it halts with "*NAME* (opcode

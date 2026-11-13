@@ -719,7 +719,7 @@ included (`char + 1` is a `char`; `?:` has its else-arm's type).
 - **`>>`** of a whole unsigned word: by a constant `k`, `SHR` then `AND
   ~(-1 << (W-k))` (nothing for k = 0); by a variable, `LSR`.
   `<<` is the same opcode either way.
-- **Loads**: `unsigned char` is `LC; PSH; IMM 255; AND`; `short` and
+- **Loads**: `unsigned char` is `LCU` (it was `LC; PSH; IMM 255; AND`); `short` and
   `unsigned short` are `LH`/`LHU`; a 64-bit host's `unsigned`
   masks. **Stores**: the one-byte types `SC`, the shorts `SH`,
   everything else `SI`.

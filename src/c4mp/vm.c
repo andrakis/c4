@@ -123,7 +123,7 @@ void c4_vm_init() {
         "LXI ,SXI ,TRAW,"
         "LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,"
         "FPU ,"
-        "LH  ,LHU ,SH  ,LSR ,";
+        "LH  ,LHU ,SH  ,LSR ,LCU ,";
 }
 
 // One place decides which opcodes carry an operand word, the same rule
@@ -440,6 +440,7 @@ int c4_run(struct c4_cpu * RESTRICT c, int quantum) {
         // the count taken modulo the word's bits (docs/c4-16bit.md).
         case LH:   a = (*(char *)a & 255) | (*(char *)(a + 1) << 8); break;
         case LHU:  a = (*(char *)a & 255) | ((*(char *)(a + 1) & 255) << 8); break;
+        case LCU:  a = *(char *)a & 255; break;
         case SH:   t = (int *)*sp++; *(char *)t = a; *((char *)t + 1) = a >> 8; break;
         case LSR:  r = a & (sizeof(int) * 8 - 1); a = *sp++;
                    if (r) a = (a >> r) & ~((int)-1 << (sizeof(int) * 8 - r));

@@ -532,7 +532,7 @@
 ;; loads and stores by type
 (define g:load! (lambda (ty)
 	(if (if (= ty g:CHAR) true (if (= ty g:SCHAR) true (= ty g:BOOL))) (g:emit '(LC))
-	(if (= ty g:UCHAR) (begin (g:emit '(LC)) (g:mask! 255))
+	(if (= ty g:UCHAR) (g:emit '(LCU))
 	(if (= ty g:SHORT) (g:emit '(LH))
 	(if (= ty g:USHORT) (g:emit '(LHU))
 	(if (if (if (= ty g:UINT) true (= ty g:FLOAT)) g:W64 false) (begin (g:emit '(LI)) (g:mask! g:M32))

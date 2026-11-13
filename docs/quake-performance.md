@@ -254,6 +254,7 @@ build to gcc's frames on demo3.
 |---|---:|---:|---:|---:|
 | round 3 | 10.533 | | 56,360 | 1,571,465 |
 | 16-bit loads and stores, LSR, as opcodes (docs/c4-16bit.md) | 9.921 | −5.8% | 24,169 | 1,563,937 |
+| `LCU`, an unsigned byte's load (docs/c4-16bit.md) | 9.719 | −2.0% | 24,169 | 1,561,585 |
 
 **16-bit loads and stores.** `<ld16u>`, `<ld16s>`, `<st16>` and `<lsr>` were 32,200 calls a frame
 (`<ld16u>` 16,000 of them: the edges' and the surfaces' `unsigned short` fields), each a call and

@@ -406,6 +406,8 @@ enum {
 	// known only at run time. A short is two bytes, low first, at any
 	// address; SH leaves a as it was, as SI does.
 	LH  ,LHU ,SH  ,LSR ,
+	// an unsigned char's load: LC without the sign (docs/c4-16bit.md)
+	LCU ,
 	// End of instructions
 	INS_SIZE,
 };
@@ -438,7 +440,7 @@ void c4m_setup_opcodes () {
 	// F3
 	"FPU ,"
 	// 16-bit loads and store, logical shift right (docs/c4-16bit.md)
-	"LH  ,LHU ,SH  ,LSR ,";
+	"LH  ,LHU ,SH  ,LSR ,LCU ,";
 }
 // One place decides which opcodes carry an operand word. Everything that
 // walks code -- the debug disassembler, OPCD's refusal -- asks here.
@@ -2150,6 +2152,9 @@ int c4m_main(int argc, char **argv)
 	}
 	// a = (unsigned)*sp++ >> a, the count taken modulo the word's bits:
 	// SHR's arithmetic shift with the copies of the sign bit masked off
+    else if (i == LCU) {
+		a = *(char *)a & 255;                                             // load unsigned char
+	}
     else if (i == LSR) {
 		r = a & (sizeof(int) * 8 - 1); a = *sp++;
 		if (r) a = (a >> r) & ~((int)-1 << (sizeof(int) * 8 - r));

@@ -39,8 +39,10 @@ export const OP = {
   LDL: 79, LDG: 80, PSHL: 81, PSHG: 82, LEAP: 83, IMMP: 84, LIP: 85, ADDL: 86, STL: 87, POPA: 88, FPU: 89,
   // 16-bit loads and store, logical shift right (docs/c4-16bit.md)
   LH: 90, LHU: 91, SH: 92, LSR: 93,
+  // an unsigned char's load
+  LCU: 94,
 };
-export const INS_SIZE = 94;
+export const INS_SIZE = 95;
 OPNAMES.match(/.{5}/g).forEach((n, i) => {
   const name = n.slice(0, 4).trim();
   if (OP[name] !== undefined && OP[name] !== i)
@@ -69,7 +71,7 @@ export function isRom(x, n) {
 export function isPlainOp(i) {
   return (i >= OP.LEV && i <= OP.MOD) || i === OP._JMP || i === OP._ADJ || i === OP.C4CY ||
          i === OP.JMPA || i === OP.LIP || i === OP.ADDL || i === OP.POPA ||
-         (i >= OP.LH && i <= OP.LSR);
+         (i >= OP.LH && i <= OP.LCU);
 }
 
 export const TRAP = { ILLOP: 0, HARD_IRQ: 1, SOFT_IRQ: 2, SIGNAL: 3, SEGV: 4, OPV: 5, PM_VIOLATION: 6, DEBUG: 7 };
@@ -1096,6 +1098,7 @@ export class Machine {
       case OP.LHU: a = this.ld16(a) & 0xffff; break;
       case OP.SH: x = i32[sp >> 2]; sp += 4; this.st16(x, a); break;
       case OP.LSR: x = i32[sp >> 2]; sp += 4; a = (x >>> a) | 0; break;
+      case OP.LCU: a = this.ld8(a) & 255; break;
       case OP.PSH: sp -= 4; i32[sp >> 2] = a; break;
       case OP.LIP: a = this.ld32(a); sp -= 4; i32[sp >> 2] = a; break;
       case OP.ADDL: x = (i32[sp >> 2] + a) | 0; sp += 4; a = this.ld32(x); break;
@@ -1286,6 +1289,14 @@ export class Machine {
             }
             break;
           case 93: /* LSR */ a = (i32[sp >> 2] >>> a) | 0; sp += 4; break;
+          case 94: /* LCU */
+            if (a >= 0x1000 && a < glo) a = u8[a];
+            else {
+              this.pc = pc; this.sp = sp; this.bp = bp; this.a = a; this.cycle = cycle;
+              a = this.ld8(a) & 255;
+              if (dev.halted) { stop = STOP.HALT; break loop; }
+            }
+            break;
           case 13: /* PSH */ sp -= 4; i32[sp >> 2] = a; break;
           case 14: /* OR  */ a = i32[sp >> 2] | a; sp += 4; break;
           case 15: /* XOR */ a = i32[sp >> 2] ^ a; sp += 4; break;

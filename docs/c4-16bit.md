@@ -124,6 +124,9 @@ own checksum (`dg_frame`) 22%; Wolfenstein 3D `ScalePost` 42% and the
 display's `c4sdl_present` 19%; ROTT its checksum (`rott_frame`) 21%, the row
 and wall drawers 37%, and `__c4ll_udivmod` 11% -- which c4lc's long long
 division made 1.5% the same day (docs/c4lc-design.md 14.7): ROTT 3.916 M.
+Then ROTT's `FixedMul` and `FixedMulShift` (`watcom.c`, under `C4ROTT`),
+which c4lc made four long long calls each, from 32-bit operations as Duke's
+`c4_mulscale` is made: 3.729 M, -4.8%; -22.6% in all.
 
 ## And an unsigned byte: `LCU`
 

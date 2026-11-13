@@ -87,6 +87,7 @@ char *line_start, *statement_start;
 char *_p, *_data;       // initial pointer locations
 int  *_sym, *_e, *_sp;  // initial pointer locations
 int  *_oisc4_e;
+int  *e_end;           // stmt() stops short of this: the text area is full
 int   c4cc_initialized;
 
 // Patch label types shared with the backends (asm-c4r.c defines the same
@@ -1036,6 +1037,7 @@ void stmt()
   int *b3, *b4, *bend, *bdef, *odef, *oend, *o3, *o4;
 
   statement_start = p;
+  if (e > e_end) { printf("%d: the program is too big: the text area holds %d words\n", line, 128 * 1024); die(-1); }
 
   if (tk == If) {
     next();
@@ -1905,7 +1907,7 @@ void print_stacktrace (int *pc_orig, int *idmain, int *bp, int *sp) {
 }
 
 int c4cc_init () {
-  int i, poolsz, len;
+  int i, poolsz, textsz, len;
   char *x;
 
   if(c4cc_initialized) return 0;
@@ -1924,12 +1926,18 @@ int c4cc_init () {
 
   poolsz = 512 * 1024;
   if (!(sym = _sym = malloc(poolsz))) { printf("could not malloc(%d) symbol area\n", poolsz); return -1; }
-  if (!(le = e = _e = malloc(poolsz))) { printf("could not malloc(%d) text area\n", poolsz); return -1; }
+  // The text area holds 128 K words: 512 KB at 32 bits, 1 MB at 64. It
+  // was 512 KB at both, and at 64 bits the 66,000 words of c4rlink.c4r
+  // ran past it into the data area, unchecked, until common globals put
+  // it over by enough to break the build (2026-11-13).
+  textsz = 128 * 1024 * sizeof(int);
+  if (!(le = e = _e = malloc(textsz))) { printf("could not malloc(%d) text area\n", textsz); return -1; }
+  e_end = _e + 127 * 1024;
   if (!(data = _data = malloc(poolsz))) { printf("could not malloc(%d) data area\n", poolsz); return -1; }
   if (!(_sp = malloc(poolsz))) { printf("could not malloc(%d) stack area\n", poolsz); return -1; }
 
   memset(sym,  0, poolsz);
-  memset(e,    0, poolsz);
+  memset(e,    0, textsz);
   memset(data, 0, poolsz);
 
   data_s = data;

@@ -319,6 +319,7 @@ call counted by its target. Each step ends on the same checksum,
 | 16-bit loads and stores, LSR, as opcodes (docs/c4-16bit.md) | 5.861 | −17.7% | 23,365 |
 | `LCU`, an unsigned byte's load (docs/c4-16bit.md) | 5.595 | −4.5% | 23,367 |
 | the c4 loops shift with `LSR` (`hlineasm4`, `vlineasm4`, `mvlineasm4`, `slopevlin`) | 5.224 | −6.6% | 23,365 |
+| `vlineasm4`, `mvlineasm4`, `hlineasm4` four pixels a turn | 4.866 | −6.9% | 23,365 |
 
 **16-bit loads and stores.** `<ld16s>`, `<ld16u>` and `<st16>` were 72,200
 calls a frame between them, each a call and 19 to 22 instructions. They are
@@ -332,4 +333,11 @@ bytes to 4,157,388.
 logical shift from an arithmetic one and a mask, `((int32_t)v >> sh) & mask`,
 four instructions; with `LSR` each is `v >> sh`, one. `hlineasm4` went from
 46 instructions a pixel to 40.
+
+**Four pixels a turn.** What was left of a pixel's cost in `vlineasm4` was a
+third the loop's: a compare, a branch, a decrement and a jump, 9 of 28
+instructions. The column and row loops draw four pixels a turn now and the
+rest one at a time; `hlineasm4` writes `dest[0]` to `dest[-3]` and steps
+`dest` by four. About 21 instructions a pixel in `vlineasm4`, 32 in
+`hlineasm4`.
 

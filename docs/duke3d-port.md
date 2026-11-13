@@ -292,6 +292,16 @@ Not done, with the reason:
 - `mulscale`'s 32-bit path takes operands within 46,340, and 70% of the
   demo's calls are outside it (`c4_mulscale`, `c4_umul64`: about 6%).
 
+**Keys Setup showed "..." for every key** (2026-11-13). `control.h` defined
+`KeyMapping` in every unit that included it, and so did other headers and pairs
+of files with other globals (177 in all): gcc's `-fcommon` merges such
+definitions, but c4lc and c4rlink keep a copy a unit, and c4rlink's "duplicate
+definition ..., keeping first" keeps only the symbol. The menus and
+`duke3d.cfg` read and wrote copies the game never set, so a saved `duke3d.cfg`
+bound no key at all. Every global is defined once now, and a `duke3d.cfg` that
+names no key gets the default controls. c4lc also made two objects of one
+global defined twice in one unit, which C makes one.
+
 **In the page**, C4IX, 320x200, the test's 600 frames shown (`-show`, sound and
 music on), on the Chrome of CDP 9222 (2026-11-11): 12.9 fps as the page starts
 (paced at 100 MHz, with the MMU); at `mhz=400&cpus=1`, 16.2 fps with the MMU and

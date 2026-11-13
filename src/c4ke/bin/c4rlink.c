@@ -1029,10 +1029,11 @@ static int gc_srcmap (int *master, int *rs, int *newpos, int nreg) {
 // ---- Folding c4lc's helpers (unless --no-fold) ----
 //
 // c4lc splices the routines it calls where the machine has no
-// instruction -- <udiv>, <umod>, <ld16s>, <ld16u>, <st16>, <lsr>, the
-// soft-float __c4d_ and __c4f_ ones, the long long __c4ll_ ones -- into
-// every object that uses them, as code with no symbol. An image linked
-// from twenty objects carried twenty copies of <ld16u>. Those are the
+// instruction -- <udiv>, <umod>, the soft-float __c4d_ and __c4f_ ones,
+// the long long __c4ll_ ones, and until they were opcodes <ld16s>,
+// <ld16u>, <st16> and <lsr> -- into every object that uses them, as code
+// with no symbol. An image linked from twenty objects carried twenty
+// copies of <ld16u>. Those are the
 // regions (gc's, above) no function symbol lies in: code nothing can
 // name, so nothing can tell one copy from another. Two of them are the
 // same when their code words are and their code-resident patches are:

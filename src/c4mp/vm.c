@@ -122,7 +122,8 @@ void c4_vm_init() {
         "CAS ,XCHG,FADD,CWAI,CWAK,IPI ,"
         "LXI ,SXI ,TRAW,"
         "LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,"
-        "FPU ,";
+        "FPU ,"
+        "LH  ,LHU ,SH  ,LSR ,";
 }
 
 // One place decides which opcodes carry an operand word, the same rule
@@ -434,6 +435,15 @@ int c4_run(struct c4_cpu * RESTRICT c, int quantum) {
         case SI:   *(int *)*sp++ = a; break;
         case SC:   a = *(char *)*sp++ = a; break;
         case PSH:  *--sp = a; break;
+        // 16 bits, two bytes, low first, at any address; SH leaves a
+        // alone. LSR: SHR with the copies of the sign bit masked off,
+        // the count taken modulo the word's bits (docs/c4-16bit.md).
+        case LH:   a = (*(char *)a & 255) | (*(char *)(a + 1) << 8); break;
+        case LHU:  a = (*(char *)a & 255) | ((*(char *)(a + 1) & 255) << 8); break;
+        case SH:   t = (int *)*sp++; *(char *)t = a; *((char *)t + 1) = a >> 8; break;
+        case LSR:  r = a & (sizeof(int) * 8 - 1); a = *sp++;
+                   if (r) a = (a >> r) & ~((int)-1 << (sizeof(int) * 8 - r));
+                   break;
 
         case OR:   a = *sp++ |  a; break;
         case XOR:  a = *sp++ ^  a; break;

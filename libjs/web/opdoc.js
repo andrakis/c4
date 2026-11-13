@@ -102,6 +102,10 @@ const DOC = {
   SXI:  ['', 'Store an element of an array of 8-byte elements: pop the index, then the base, and store `A` in the word at base + index×8. A dereference. c4mp only (c4lc -mcisc).'],
   TRAW: ['', 'Put the terminal in raw mode, or take it out (the word on top of the stack). c4mp only.'],
   FPU:  ['', '**__c4_fpu**(r, b, a, op): IEEE arithmetic, single or double. The sub-op is on top of the stack, then *a*, *b* and *r*. A float is its bits; a double is the address of its two words, and a double result is written where *r* points. `A` = the result.'],
+  LH:   ['', 'Load short: `A` = the two bytes at the address in `A`, low byte first, sign-extended. A dereference, `A = *(short *)A`.'],
+  LHU:  ['', 'Load unsigned short: `A` = the two bytes at the address in `A`, low byte first. A dereference, `A = *(unsigned short *)A`.'],
+  SH:   ['', 'Store short: pop an address off the stack, and store `A`'s low two bytes there, low byte first. A dereference, `*(short *)pop = A`. `A` is unchanged.'],
+  LSR:  ['', 'Pop the first item off the stack and shift it right by `A` bits, bringing in zeros: `A` = (unsigned) pop >> `A`.'],
 };
 
 // A fused opcode is two or three instructions in one (docs/fused-opcodes.md)

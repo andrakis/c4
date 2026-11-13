@@ -1056,7 +1056,7 @@ test-c4sc-lex: c4sc-host c4sp
 	head -n -1 $(SRCS)/c4sp/tests/expected/c4lc-tokens.txt | cmp - .c4sc_lex.txt
 	./c4sc-host tokens -conforming $(TESTS)/c4lc_lex_sample.c > .c4sc_lex.txt
 	head -n -1 $(SRCS)/c4sp/tests/expected/c4lc-tokens-conforming.txt | cmp - .c4sc_lex.txt
-	./c4sc-host tokens -count $(SRCS)/c4cc/c4cc.c | grep -q "^tokens 15147$$"
+	./c4sc-host tokens -count $(SRCS)/c4cc/c4cc.c | grep -q "^tokens 15148$$"
 	@fail=0; for f in $(C4SC_LEX_SWEEP); do \
 	   ./c4sp -R -c 33554432 $(SRCS)/c4sp/lisp/c4lc-tokens.lisp $$f > .c4sc_i.txt 2>&1; \
 	   head -n -1 .c4sc_i.txt > .c4sc_i2.txt; \
@@ -1114,7 +1114,7 @@ C4SC_BACK_DIFF := c4_jailbreak factorial hello multifun puts reverse \
                   tests c4lc_l2 global test_gcscan test-oisc test_printf \
                   c4lc_m4 c4lc_m4q c4lc_m4v c4lc_m7 c4lc_ll c4lc_m9 c4lc_m9lc \
                   c4lc_m10 c4lc_m10lc c4lc_m11lc c4lc_m12lc c4lc_m13lc \
-                  c4lc_linit c4lc_linitlc
+                  c4lc_linit c4lc_linitlc c4lc_h16
 test-c4sc-back: c4sc-host c4sp $(C4RLINK) $(C4M)
 	@fail=0; for b in $(C4SC_BACK_DIFF); do \
 	   f=$(TESTS)/$$b.c; \
@@ -1194,7 +1194,7 @@ c4sc.c4r: c4sp $(C4LC_LISP) $(C4RLINK) $(C4SC_GEN) src/c4sc/c4sc-main.c \
 test-c4sc-image: c4sc.c4r c4sc-host $(C4M) c4sp
 	@# the image runs, and computes what the interpreter computes
 	$(C4M) load-c4r.c -- c4sc.c4r -c 4000000 tokens -count $(SRCS)/c4cc/c4cc.c \
-	  | grep -q "^tokens 15147$$"
+	  | grep -q "^tokens 15148$$"
 	@echo "  hosted lex: tokens 15125"
 	@# a real compile, hosted: the image it produces has to be the size
 	@# the native build produces. Bare c4m has no write syscall -- the
@@ -1704,7 +1704,7 @@ C4FC_GEN_SWEEP := hello multifun puts reverse test_basic test_continue \
                   test_static test_switch tests c4lc_l2 global \
                   test_gcscan vararg2 test_vprintf c4_jailbreak \
                   c4lc_m4 c4lc_m4q c4lc_m4v c4lc_m4std c4lc_m7 c4lc_ll \
-                  c4lc_m7fwd c4lc_m9 c4lc_m10 c4lc_linit
+                  c4lc_m7fwd c4lc_m9 c4lc_m10 c4lc_linit c4lc_h16
 
 test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c $(C4RDUMP)
 	./c4th $(C4FC_LIB) src/c4fc/tests/dsl.f | cmp - src/c4fc/tests/expected/dsl.txt
@@ -1713,7 +1713,7 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c $(C4RDUMP)
 	head -n -1 src/c4sp/tests/expected/c4lc-tokens.txt | cmp - .c4fc_lex.txt
 	./c4th $(C4FC_LIB) -e ': GO 4194304 ARENA-INIT 1 CONFORMING ! S" src/tests/c4lc_lex_sample.c" LEX-FILE DUMP-TOKENS ; GO' > .c4fc_lex.txt
 	head -n -1 src/c4sp/tests/expected/c4lc-tokens-conforming.txt | cmp - .c4fc_lex.txt
-	./c4th $(C4FC_LIB) -e ': GO 33554432 ARENA-INIT S" src/c4cc/c4cc.c" LEX-FILE COUNT-TOKENS ; GO' | grep -q "^tokens 15147$$"
+	./c4th $(C4FC_LIB) -e ': GO 33554432 ARENA-INIT S" src/c4cc/c4cc.c" LEX-FILE COUNT-TOKENS ; GO' | grep -q "^tokens 15148$$"
 	@for f in $(C4FC_LEX_SWEEP); do \
 	   ./c4sp src/c4sp/lisp/c4lc-tokens.lisp $$f > .c4fc_a.txt 2>&1; \
 	   ./c4th $(C4FC_LIB) -e ": GO 67108864 ARENA-INIT S\" $$f\" LEX-FILE DUMP-TOKENS ; GO" > .c4fc_b.txt 2>&1; \
@@ -3540,6 +3540,19 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	   ./c4sp32 src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_m4.c .c4lc_b.c4r > /dev/null || exit 1; \
 	   ./c4m32 load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-m4-32.txt || exit 1; \
 	   echo "  m4 ok, gcc's answers at 32 and 64 bits: c4lc $$fl"; \
+	 done
+	# LH LHU SH LSR (docs/c4-16bit.md): shorts at every alignment, the
+	# values of their assignments and post-increments, an unsigned >> by a
+	# run-time count -- on c4m at both word sizes, libjs and the c4bb sim,
+	# against gcc's answers
+	@for fl in "" "-O"; do \
+	   ./c4sp src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_h16.c .c4lc_b.c4r > /dev/null || exit 1; \
+	   ./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-h16.txt || exit 1; \
+	   ./c4sp32 src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_h16.c .c4lc_b.c4r > /dev/null || exit 1; \
+	   ./c4m32 load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-h16.txt || exit 1; \
+	   node libjs/cli.js .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-h16.txt || exit 1; \
+	   node src/c4bb/sim/cli.js .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-h16.txt || exit 1; \
+	   echo "  h16 ok, gcc's answers on c4m, c4m32, libjs and c4bb: c4lc $$fl"; \
 	 done
 	# M7b: the C Busybox needs (docs/busybox-port.md), one golden from gcc
 	# that does not depend on the word size

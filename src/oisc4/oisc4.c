@@ -123,6 +123,8 @@ enum {
 	LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,
 	// F3: IEEE arithmetic (docs/c4-float.md) -- named, not run here
 	FPU ,
+	// 16-bit loads and store, logical shift right (docs/c4-16bit.md)
+	LH  ,LHU ,SH  ,LSR ,
 	INS_MAX
 };
 
@@ -470,7 +472,9 @@ int vm_opcode_lookup (int nameoff) {
 	"LXI ,SXI ,TRAW,"
 	"LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,"
 	// F3: IEEE arithmetic (docs/c4-float.md)
-	"FPU ,";
+	"FPU ,"
+	// 16-bit loads and store, logical shift right (docs/c4-16bit.md)
+	"LH  ,LHU ,SH  ,LSR ,";
 	r = 0;
 	while (r < INS_MAX) {
 		a = name; b = ops + r * 5;
@@ -800,6 +804,11 @@ int o4_size (int op) {
 	if (op == ADDL) return 8;
 	if (op == STL) return 2;
 	if (op == POPA) return 3;
+	// 16 bits and LSR (docs/c4-16bit.md), through the math device
+	if (op == LH) return 17;
+	if (op == LHU) return 20;
+	if (op == SH) return 12;
+	if (op == LSR) return 23;
 	// The syscall class ends at DBG. Bounding it by INS_MAX would make
 	// every opcode appended after DBG look like a syscall.
 	if (op >= OPEN && op <= DBG) return 3;  // syscall class
@@ -1013,6 +1022,78 @@ void translate_one (int i) {
 		emit(RSP, 0, b + 1 * INSTB);        // patch src of #2
 		emit(PH, 0, RA);                    // a = [sp]
 		emit(RSP, 8, RSP);
+	}
+	// -- 16 bits and a logical shift (docs/c4-16bit.md) ---------------
+	// A short is two bytes, low first: LC's byte reads and SC's byte
+	// writes, put together by the math device. SH leaves a alone.
+	else if (op == LH || op == LHU) {
+		// RWR reads every source but a port as a byte, so it is on for
+		// the two loads alone
+		emit(RA, 0, b + 2 * INSTB);         // patch src of #3
+		emit(RZ, 1, RWR);
+		emit(PH, 0, P_MATHX);               // X = signed byte [a]
+		emit(RZ, 0, RWR);
+		emit(RZ, 255, P_MATHY);
+		emit(RZ, AND - OR, P_MATHOP);
+		emit(P_MATHV, 0, RT0);              // t0 = the low byte
+		emit(RA, 1, b + 9 * INSTB);         // patch src of #10: a + 1
+		emit(RZ, 1, RWR);
+		emit(PH, 0, P_MATHX);               // X = signed byte [a + 1]
+		emit(RZ, 0, RWR);
+		if (op == LHU) {
+			emit(RZ, 255, P_MATHY);
+			emit(RZ, AND - OR, P_MATHOP);
+			emit(P_MATHV, 0, P_MATHX);      // X = the high byte, unsigned
+		}
+		emit(RZ, 256, P_MATHY);
+		emit(RZ, MUL - OR, P_MATHOP);
+		emit(P_MATHV, 0, P_MATHX);          // X = high << 8
+		emit(RT0, 0, P_MATHY);
+		emit(RZ, 0, P_MATHOP);              // OR
+		emit(P_MATHV, 0, RA);               // a = high << 8 | low
+	}
+	else if (op == SH) {
+		// RWW stores every target but a port as a byte, so the patches
+		// come first and it is on for the two stores alone
+		emit(RSP, 0, b + 1 * INSTB);        // patch src of #2
+		emit(PH, 0, RT0);                   // t0 = [sp] (target address)
+		emit(RSP, 8, RSP);
+		emit(RT0, 0, b + 9 * INSTB + 16);   // patch dst of #10
+		emit(RT0, 1, b + 10 * INSTB + 16);  // patch dst of #11: t0 + 1
+		emit(RA, 0, P_MATHX);
+		emit(RZ, 8, P_MATHY);
+		emit(RZ, SHR - OR, P_MATHOP);       // a >> 8
+		emit(RZ, 1, RWW);
+		emit(RA, 0, PH);                    // byte [t0] = a
+		emit(P_MATHV, 0, PH);               // byte [t0 + 1] = a >> 8
+		emit(RZ, 0, RWW);
+	}
+	else if (op == LSR) {
+		// (x >> c) & ~((MIN >> c) << 1), as c4m.c does it: the shifted
+		// copies of the sign bit masked off, c taken modulo 64
+		emit(RA, 0, P_MATHX);
+		emit(RZ, 63, P_MATHY);
+		emit(RZ, AND - OR, P_MATHOP);
+		emit(P_MATHV, 0, RT0);              // t0 = c
+		emit(RSP, 0, b + 5 * INSTB);        // patch src of #6
+		emit(PH, 0, P_MATHX);               // X = [sp]
+		emit(RSP, 8, RSP);
+		emit(RT0, 0, P_MATHY);
+		emit(RZ, SHR - OR, P_MATHOP);
+		emit(P_MATHV, 0, RA);               // a = x >> c
+		emit(RZ, (int)1 << 63, P_MATHX);
+		emit(RT0, 0, P_MATHY);
+		emit(RZ, SHR - OR, P_MATHOP);       // MIN >> c
+		emit(P_MATHV, 0, P_MATHX);
+		emit(RZ, 1, P_MATHY);
+		emit(RZ, SHL - OR, P_MATHOP);       // << 1
+		emit(P_MATHV, 0, P_MATHX);
+		emit(RZ, -1, P_MATHY);
+		emit(RZ, XOR - OR, P_MATHOP);       // the mask
+		emit(P_MATHV, 0, P_MATHX);
+		emit(RA, 0, P_MATHY);
+		emit(RZ, AND - OR, P_MATHOP);
+		emit(P_MATHV, 0, RA);               // a = (x >> c) & mask
 	}
 	else if (op >= OPEN && op <= DBG) { // remaining syscall class
 		emit(RSP, 0, RR0);

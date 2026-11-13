@@ -242,4 +242,21 @@ instructions, in round 2's image, before round 3 took most of the last row and t
 
 Not tried yet: writing a double operation straight to its target; double literals as data, not
 temporaries; float arithmetic where a double literal is exact; `x * 0.1` as a float by a flag,
-which would change results; `ceil` and `floor` as FPU operations; an opcode for a 16-bit load (parked).
+which would change results; `ceil` and `floor` as FPU operations; an opcode for a 16-bit load (done in round 4).
+
+## Round 4: 16-bit loads and stores (2026-11-13)
+
+Instructions only, as "How it is measured" says: demo1 on the bare machine under node, `-sum 0`,
+the whole run of 978 frames, every instruction and every call counted. `test-quake` holds each
+build to gcc's frames on demo3.
+
+| step | M instructions a frame | change | calls a frame | image bytes |
+|---|---:|---:|---:|---:|
+| round 3 | 10.533 | | 56,360 | 1,571,465 |
+| 16-bit loads and stores, LSR, as opcodes (docs/c4-16bit.md) | 9.921 | −5.8% | 24,169 | 1,563,937 |
+
+**16-bit loads and stores.** `<ld16u>`, `<ld16s>`, `<st16>` and `<lsr>` were 32,200 calls a frame
+(`<ld16u>` 16,000 of them: the edges' and the surfaces' `unsigned short` fields), each a call and
+19 to 24 instructions. They are opcodes now, `LHU`, `LH`, `SH` and `LSR`, one instruction each;
+docs/c4-16bit.md says why opcodes and what each machine does.
+

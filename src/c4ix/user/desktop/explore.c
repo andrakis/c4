@@ -33,7 +33,7 @@
 // a double click on any other row opens its line in the editor. Without
 // a map the functions come from the symbols, with no source to show.
 //
-// c4lc splices the helpers it calls (<udiv>, <ld16s>, the soft float
+// c4lc splices the helpers it calls (<udiv>, <umod>, the soft float
 // __c4d_ and long long __c4ll_ ones) into each unit that uses them, so a
 // program has as many copies as units that needed one; the list names
 // each copy's unit beside it.
@@ -78,7 +78,8 @@ static char *opnames =
     "CAS ,XCHG,FADD,CWAI,CWAK,IPI ,"
     "LXI ,SXI ,TRAW,"
     "LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,"
-    "FPU ,";
+    "FPU ,"
+    "LH  ,LHU ,SH  ,LSR ,";
 
 // a line's colour: a small palette, cycled by line
 static int bands[8] = { 0x5fd7ff, 0xffaf5f, 0x87ff87, 0xff87d7, 0xd7d75f, 0xaf87ff, 0x5fffd7, 0xff8787 };

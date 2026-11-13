@@ -212,7 +212,12 @@ static void apc(char *ctx, char *abuf, int alen) {
             if (t->gshow[k + 1] == 'f') t->fpend = 1;
             k = k + t->gshow[k];
         }
-        wk_invalidate(t->win, 0, 0, 0, 0);
+        // A framebuffer fills the canvas, so only the canvas changed, and
+        // its frame covers all of it (gfx_draw): nothing under it or
+        // around it is drawn again. Lines and text may reach outside it,
+        // and the whole window is drawn for those.
+        if (t->fpend) wk_invalidate_covered(t->win, 2, 2, t->gw, t->gh);
+        else wk_invalidate(t->win, 0, 0, 0, 0);
         return;
     }
     // everything else is drawn later: into the list being built
@@ -227,9 +232,22 @@ static void apc(char *ctx, char *abuf, int alen) {
 }
 
 static void gfx_draw(struct term *t, int ox, int oy) {
-    int i, *g, n, op;
-    d_rect(ox, oy, t->gw, t->gh, 0);
+    int i, *g, n, op, fb, clip;
+    // The last framebuffer covers the whole canvas, and what came before
+    // it: drawn from there, with no black under it, and what follows it
+    // kept to the canvas (only the canvas is drawn again after a frame)
+    fb = 0 - 1;
     i = 0;
+    while (i < t->nshow && t->gshow[i] >= 2) {
+        if (t->gshow[i + 1] == 'f' && t->gshow[i] >= 7) fb = i;
+        i = i + t->gshow[i];
+    }
+    clip = 0;
+    if (fb < 0) { d_rect(ox, oy, t->gw, t->gh, 0); i = 0; }
+    else {
+        i = fb;
+        if (i + t->gshow[i] < t->nshow) { d_clip(ox, oy, t->gw, t->gh); clip = 1; }
+    }
     while (i < t->nshow) {
         g = t->gshow + i;
         op = g[1];
@@ -246,10 +264,12 @@ static void gfx_draw(struct term *t, int ox, int oy) {
             // each task's is its own); a frame it will not lend is not drawn
             if (umapfrom(g[2], g[5] * g[4]) == 0 && umapfrom(g[6], 1024) == 0)
                 d_blit8(ox, oy, g[3], g[4], (char *)g[2], g[5], (int *)g[6], t->gw, t->gh);
+            else d_rect(ox, oy, t->gw, t->gh, 0);
         }
         if (g[0] < 2) break;
         i = i + g[0];
     }
+    if (clip) d_clip_end();
 }
 
 // ---- the shell --------------------------------------------------------------------
@@ -522,6 +542,8 @@ void term_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
 void term_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     struct term *t;
     t = T(w);
+    // only the canvas being drawn again (a frame): it covers all of that
+    if (t->gfx && d_damage_within(ox + 2, oy + 2, t->gw, t->gh)) { gfx_draw(t, ox + 2, oy + 2); return; }
     d_rect(ox, oy, cw, ch, C_DARK);
     if (t->gfx) { d_bevel(ox, oy, t->gw + 4, t->gh + 4, B_SUNKEN); gfx_draw(t, ox + 2, oy + 2); return; }
     d_bevel(ox, oy, TG_W, TG_H, B_SUNKEN);

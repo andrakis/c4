@@ -941,7 +941,12 @@ long` (960), the codes the parser makes only when `sys:wordsize` is 4.
 - **Arithmetic** calls helpers written in C, `p:llsrc` in
   c4lc-parse.lisp: add, sub, mul (16-bit limbs), and, or, xor, the three
   shifts, signed and unsigned compares, div, mod, udiv, umod (shift and
-  subtract, with a one-word fast path when both high halves are 0), neg.
+  subtract, with a one-word fast path when both high halves are 0, and
+  since 2026-11-13 a second for a divisor below 2^30: long division in
+  as many bits a step as the remainder has room for beside the divisor,
+  by the machine's own `DIV` and `MOD`, about 700 instructions where the
+  bit at a time took 5,700 -- ROTT's fixed-point divisions, 9.8% of its
+  demo), neg.
   `~` is inline. The parser reads them after any unit that says `long
   long`; they are static, registered when first called (`g:find`, kept
   in `g:llsyms` outside the scopes), and generated only then -- each

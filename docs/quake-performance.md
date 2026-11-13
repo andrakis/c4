@@ -256,6 +256,7 @@ build to gcc's frames on demo3.
 | 16-bit loads and stores, LSR, as opcodes (docs/c4-16bit.md) | 9.921 | −5.8% | 24,169 | 1,563,937 |
 | `LCU`, an unsigned byte's load (docs/c4-16bit.md) | 9.719 | −2.0% | 24,169 | 1,561,585 |
 | `R_DrawSurfaceBlock8`'s rows and `D_DrawSpans8`'s runs written out (`C4QUAKE`) | 8.573 | −11.8% | 24,169 | 1,565,961 |
+| `D_DrawZSpans`' pairs, four a turn, one expression each | 8.370 | −2.4% | 24,169 | 1,567,053 |
 
 **16-bit loads and stores.** `<ld16u>`, `<ld16s>`, `<st16>` and `<lsr>` were 32,200 calls a frame
 (`<ld16u>` 16,000 of them: the edges' and the surfaces' `unsigned short` fields), each a call and
@@ -271,5 +272,9 @@ pixels in the same order. On a stack machine a loop's counting is a large part o
   without `pix` kept in memory between its load and its use: 21 instructions a pixel, from 40.
 - `D_DrawSpans8` moves `pdest` past the run of up to eight pixels it draws between two divisions
   and jumps into the run written out, through a dense `switch`, which c4lc makes a jump table; each
-  pixel is written back from past the run: 27 instructions a pixel, from 36.
+  pixel is written back from past the run: 27 instructions a pixel, from 36.- `D_DrawZSpans` writes two z values a word. Each word is now one expression,
+  `(izi >> 16) | ((izi + izistep) & 0xFFFF0000)`, `izi` stepping by the two steps' sum, four words a
+  turn of the loop and a jump into the last few: 17 to 20 instructions a word, from 34.
+
+Each build's demo1 still ends on gcc's checksum, `ea3fefe7`, and demo3 on `1f87d635`.
 

@@ -933,17 +933,19 @@ check(listed().includes('sq') && listed().includes('main'), 'and its functions l
   const top = new URL('../../', import.meta.url).pathname;
   // c4sp32: the word C4IX's c4sc has
   if (existsSync(join(top, 'c4sp32'))) {
-    writeFileSync('/tmp/.td-sq.c', SQ + '\n');
+    // a name of its own: another test-desktop may be running beside this one
+    const sq = `/tmp/.td-sq-${process.pid}`;
+    writeFileSync(sq + '.c', SQ + '\n');
     execFileSync('./c4sp32', ['-R', '-c', '16000000', 'src/c4sp/lisp/c4lc.lisp', '-O', '-g', '-c', '-P', '-I', '/tmp', '-I', 'src/c4ix/include',
-      '-D', 'C4CC=1', '-D', '__c4cc__=1', '/tmp/.td-sq.c', '/tmp/.td-sq.c4o'], { cwd: top, stdio: 'ignore' });
-    const a = analyse(readC4r(new Uint8Array(readFileSync('/tmp/.td-sq.c4o'))));
+      '-D', 'C4CC=1', '-D', '__c4cc__=1', sq + '.c', sq + '.c4o'], { cwd: top, stdio: 'ignore' });
+    const a = analyse(readC4r(new Uint8Array(readFileSync(sq + '.c4o'))));
     const f = a.funcs.find(g => g.name === 'main');
     const want = [];
     for (let k = f.first; k >= 0 && k < a.insns.length && a.insns[k].off < f.end; k++) want.push(insnText(a, a.insns[k], f));
     const got = codeRows().filter(r => !r.src).map(insOf);
     check(want.length > 3 && want.every((w, i) => got[i] === w), "each of main's instructions as libjs/c4r.js's insnText has it",
       `want:\n${want.join('\n')}\ngot:\n${got.join('\n')}`);
-    unlinkSync('/tmp/.td-sq.c'); unlinkSync('/tmp/.td-sq.c4o');
+    unlinkSync(sq + '.c'); unlinkSync(sq + '.c4o');
   } else console.log('test-desktop: (no ./c4sp32: the Code tab is not checked against c4r.js)');
 }
 {
@@ -1360,6 +1362,31 @@ check(until(() => gui.w === SW && has(/^Terminal - task/) && has(/gui: done afte
   const terms = () => find(/^Terminal - task/).length;
   const hover = t => ev({ kind: 'move', x: t.x + 5, y: t.y + 5, buttons: 0 });
   const t0 = terms();
+  // The game's window: its caption and its menu bar are what is drawn just
+  // above its frame. Not simply the last such string drawn: a window
+  // elsewhere may draw one later (the IDE, redrawing its line as its
+  // cursor blinks, once drew a "Net" under the game's window). And a menu
+  // item is one drawn after its title is clicked, not one still on the
+  // screen from before.
+  const above = all => all.filter(t => rgbLast && t.y < rgbLast.y && t.y >= rgbLast.y - 60
+    && t.x >= rgbLast.x - 40 && t.x < rgbLast.x + rgbLast.dw).pop();
+  const gameMenu = (title, item) => {
+    const g = gen;
+    clickText(title, above);
+    const fresh = all => all.filter(t => t.gen > g).pop();
+    until(() => !!fresh(find(item)));
+    return clickText(item, fresh);
+  };
+  // the game has stopped drawing: its picture the same for STILL ms (a
+  // Net tile turns over several frames)
+  const STILL = 300;
+  const still = () => {
+    let sum = rgbLast && rgbLast.sum, at = vm.dev.simMs();
+    return until(() => {
+      if (rgbLast && rgbLast.sum !== sum) { sum = rgbLast.sum; at = vm.dev.simMs(); }
+      return vm.dev.simMs() - at >= STILL;
+    }, 3000);
+  };
   if (/^\s*net: ilink/m.test(vfs)) {
     let f0 = rgbFrames;
     click(20, SH - TASK_H + 12);
@@ -1376,6 +1403,7 @@ check(until(() => gui.w === SW && has(/^Terminal - task/) && has(/gui: done afte
     check(terms() === t0, 'with no Terminal', screen().slice(-300));
     {
       // n, a new game: a new picture
+      still();
       const before = rgbLast.sum, n = rgbFrames;
       type('n');
       check(until(() => rgbFrames > n && rgbLast.sum !== before, 1500), 'a key goes to the game', `frames ${rgbFrames - n}`);
@@ -1383,20 +1411,21 @@ check(until(() => gui.w === SW && has(/^Terminal - task/) && has(/gui: done afte
     // its menu bar (window.h's win_menu): the game's own controls
     check(has('Game') && has('Type') && has('Help'), 'the window has the game\'s menus: Game, Type, Help', screen().slice(-300));
     {
+      still();
       let before = rgbLast.sum, n = rgbFrames;
-      menu('Game', 'New   N');
+      gameMenu('Game', 'New   N');
       check(until(() => rgbFrames > n && rgbLast.sum !== before, 1500), 'Game > New starts a new game', `frames ${rgbFrames - n}`);
       // a move: a click in the middle of the canvas, where the frame was
       // drawn (under the menu bar), turns the tile there
-      until(() => false, 20);
+      still();
       const cx = rgbLast.x + (rgbLast.dw >> 1), cy = rgbLast.y + (rgbLast.dh >> 1);
       const fresh = rgbLast.sum;
       n = rgbFrames;
       click(cx, cy);
       check(until(() => rgbFrames > n && rgbLast.sum !== fresh, 1500), 'a click under the menu bar reaches the board', `frames ${rgbFrames - n}`);
-      until(() => false, 20);
+      still();
       const moved = rgbLast.sum;
-      menu('Game', 'Undo   U');
+      gameMenu('Game', 'Undo   U');
       check(moved !== fresh && until(() => rgbLast.sum === fresh, 1500), 'Game > Undo takes the move back: the picture before it',
         `${rgbLast.sum === moved ? 'the move still shown' : 'another picture'}`);
       check(rgbLast.dw === 640 && rgbLast.dh === 400, 'and the canvas is the size it was', JSON.stringify(rgbLast));
@@ -1406,19 +1435,19 @@ check(until(() => gui.w === SW && has(/^Terminal - task/) && has(/gui: done afte
     // that size, drawn as they are, on the screen; a click in the middle
     // still turns a tile; restored, 640x400 again
     {
-      const title = all => all.filter(t => t.y < SH - TASK_H).pop();
       let n = rgbFrames;
-      dbl('Net', title);
+      dbl('Net', above);
       check(until(() => rgbFrames > n && rgbLast.dw > 640 && rgbLast.dh > 400 && rgbLast.w === rgbLast.dw && rgbLast.h === rgbLast.dh, 3000)
         && rgbLast.x >= 0 && rgbLast.x + rgbLast.dw <= SW && rgbLast.y + rgbLast.dh <= SH - TASK_H,
         'maximised, Net is laid out again for the window, its frames the bigger canvas\'s size', JSON.stringify(rgbLast));
-      until(() => false, 20);
+      still();
       const before = rgbLast.sum;
       n = rgbFrames;
       click(rgbLast.x + (rgbLast.dw >> 1), rgbLast.y + (rgbLast.dh >> 1));
       check(until(() => rgbFrames > n && rgbLast.sum !== before, 1500), 'and a click in its middle turns a tile', `frames ${rgbFrames - n}`);
+      still();
       n = rgbFrames;
-      dbl('Net', title);
+      dbl('Net', above);
       check(until(() => rgbFrames > n && rgbLast.w === 640 && rgbLast.h === 400 && rgbLast.dw === 640 && rgbLast.dh === 400, 3000),
         'restored, its frames 640x400 again', JSON.stringify(rgbLast));
     }
@@ -1461,14 +1490,16 @@ check(until(() => gui.w === SW && has(/^Terminal - task/) && has(/gui: done afte
     check(rgbLast && rgbLast.dw === 640 && rgbLast.dh === 400 && rgbLast.w * 400 === rgbLast.h * 640,
       'its frames the canvas\'s shape', JSON.stringify(rgbLast));
     {
+      still();
       const before = rgbLast.sum, n = rgbFrames;
-      menu('Game', 'New Game   F2');
+      gameMenu('Game', 'New Game   F2');
       check(until(() => rgbFrames > n && rgbLast.sum !== before, 1500), 'Game > New Game deals again', `frames ${rgbFrames - n}`);
     }
     {
       // maximised: Thornq lays its table out for the bigger window
+      still();
       const n = rgbFrames;
-      dbl('thornq', all => all.filter(t => t.y < SH - TASK_H).pop());
+      dbl('thornq', above);
       check(until(() => rgbFrames > n && rgbLast.dw > 640 && rgbLast.dh > 400 && rgbLast.w === rgbLast.dw && rgbLast.h === rgbLast.dh, 3000),
         'maximised, Thornq deals across the bigger window, its frames that size', JSON.stringify(rgbLast));
     }

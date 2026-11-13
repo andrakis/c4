@@ -147,7 +147,8 @@ function start(msg) {
   bootMsg = msg;
   ring = msg.gui && msg.shared ? new RingWriter(msg.shared.ring) : null;
   if (ring && fbSab !== msg.shared.fb) { fbSab = msg.shared.fb; fbProducer = new FbProducer(fbSab); }
-  gui = msg.gui ? new GuiDevice({ ...msg.gui, fbShared: ring ? fbProducer : null }) : null;
+  // the page's: BLIT8's pixels in its order
+  gui = msg.gui ? new GuiDevice({ ...msg.gui, fbShared: ring ? fbProducer : null, abgr: true }) : null;
   snd = msg.snd ? new SoundDevice({ now: () => performance.now() * 1000, midi: !!msg.midi }) : null;
   // The page's mixer outlives a reset, and with it whatever the old
   // machine left playing: the new one starts quiet, whatever it boots

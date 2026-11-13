@@ -9,7 +9,7 @@
 import { readFileSync } from 'node:fs';
 import { createMachine, boot } from '../boot.js';
 import { STOP } from '../c4m.js';
-import { GuiDevice, CMD } from '../gui-device.js';
+import { GuiDevice, CMD, RGB_ABGR } from '../gui-device.js';
 
 const IMG = new URL('../../src/c4bb/images/gui-demo.c4r', import.meta.url);
 let fail = 0;
@@ -107,4 +107,35 @@ check(gui.dropped === 0 && gui.lostCommands === 0, 'nothing dropped either way')
   check(irq && +irq[1] >= 1 && +irq[2] === 1, `events arrive by interrupt (${irq && irq[0]})`, t);
   check(flips < 100, `q ended it after ${flips} flips`);
 }
+// ---- BLIT8, made on the host -----------------------------------------
+// A 40x8 picture at an address whose rows cross a page, and its palette:
+// in the guest's colours (0x00RRGGBB), and with the page's abgr option
+// in ImageData's order, flagged in dh; read in place, and read a page at
+// a time through the window (arena.uwin, as kernel mode hands a device a
+// user address), the same either way.
+{
+  const g = new GuiDevice({ w: 640, h: 480 });
+  const m = createMachine({ arenaMb: 4, gui: g });
+  const a = m.arena, src = 0x20000 - 100, pitch = 64, pal = 0x30000;
+  for (let i = 0; i < 256; i++) a.i32[(pal >> 2) + i] = (i << 16) | ((255 - i) << 8) | (i ^ 0x5a);
+  for (let y = 0; y < 8; y++) for (let x = 0; x < 40; x++) a.u8[src + y * pitch + x] = (x * 7 + y * 13) & 255;
+  const want = (x, y) => { const i = (x * 7 + y * 13) & 255; return (i << 16) | ((255 - i) << 8) | (i ^ 0x5a); };
+  const abgr = v => (0xff000000 | ((v & 0xff) << 16) | (v & 0xff00) | ((v >> 16) & 0xff)) | 0;
+  const one = (dev, s) => { dev.blit8([5, 6, 40, 8, s, pitch, pal, 80, 16]); const f = dev.drain(); return f; };
+  let f = one(g, src);
+  let ok = f && f[1] === CMD.RGB && f[4] === 40 && f[5] === 8 && f[7] === 16;
+  for (let y = 0; ok && y < 8; y++) for (let x = 0; x < 40; x++) if (f[8 + y * 40 + x] !== want(x, y)) { ok = false; break; }
+  check(ok, 'BLIT8 comes out as 0x00RRGGBB pixels by default');
+  const g2 = new GuiDevice({ w: 640, h: 480, abgr: true });
+  g2.attach(m);
+  f = one(g2, src);
+  ok = f && f[1] === CMD.RGB && f[7] === (16 | RGB_ABGR);
+  for (let y = 0; ok && y < 8; y++) for (let x = 0; x < 40; x++) if (f[8 + y * 40 + x] !== abgr(want(x, y))) { ok = false; break; }
+  check(ok, 'with abgr, in ImageData order and flagged');
+  a.uwin = 0x100000;                     // the window: user address uwin + off is off
+  const f2 = one(g2, a.uwin + src);
+  a.uwin = 0;
+  check(f2 && f2.length === f.length && f2.every((v, i) => v === f[i]), 'read a page at a time, the same pixels');
+}
+
 process.exit(fail);

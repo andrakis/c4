@@ -190,8 +190,11 @@ async function main(argv) {
     if (par && !dev.halted) {
       par.service();
       // CPU 0 naps while the others work: for real, until an IPI. The
-      // machine's clock gets only what it slept.
-      if (r === STOP.SLEEP && par.othersRunning()) {
+      // machine's clock gets only what it slept. An IPI may have come
+      // already, from a CPU that has parked since (a task it put to sleep
+      // sooner than the nap's end): then the nap is over at once, rather
+      // than a nap the clock took whole with nobody running.
+      if (r === STOP.SLEEP && (par.othersRunning() || par.ipiFor0())) {
         const nap = dev.napMs;
         let slept = 0;
         while (slept < nap && !par.ipiFor0() && !dev.halted) {

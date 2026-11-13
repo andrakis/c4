@@ -5,12 +5,13 @@
 // its last writer since (sched_pipegen, sched.c); a task blocked in read is on
 // its pipe's own list (sched_pipewake). Either way a write it misses leaves it
 // asleep: until its timeout, or until the watch finds it (rqlost). So a writer
-// on CPU 0 writes 200 lines 3 ms apart to a reader pinned to CPU 2, which
-// waits for each in uevwait, then in read: every line must arrive, no wake may
-// find nothing (the reader's timeout is 2 s), the whole must take about 600 ms
-// of the machine's time, not seconds, and rqlost stays 0. (The writer is on
-// CPU 0 because a task asleep on the clock and pinned to another CPU wakes up to
-// 100 ms late, before the run queue too: each of its 3 ms sleeps took 100.)
+// pinned to CPU 1 writes 200 lines 3 ms apart to a reader pinned to CPU 2,
+// which waits for each in uevwait, then in read: every line must arrive, no
+// wake may find nothing (the reader's timeout is 2 s), the whole must take
+// about 600 ms of the machine's time, not seconds, and rqlost stays 0. (The
+// writer's sleeps check one more wakeup: a task asleep on the clock, pinned to
+// a CPU other than 0, once woke up to 100 ms late, the next nap of CPU 0's idle
+// loop, which woke it but had no way to tell its CPU: each 3 ms took 100.)
 // PARALLEL=0: on simulated CPUs.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -80,8 +81,17 @@ const until = (cond, budget) => {
     const r = vm.run(2e6);
     if (!par || vm.dev.halted) continue;
     par.service();
-    if (r === STOP.SLEEP && par.othersRunning()) par.sleepSync(vm.dev.napMs);
-    else if (r === STOP.PARK || r === STOP.CPUHALT || vm.cpuState !== 'run') par.parkSync(10);
+    // CPU 0 naps while the others work as cli.js has it: for real, until an
+    // IPI, and the machine's clock gets only what it slept. (The clock took
+    // the whole nap as it began, so a nap an IPI ended early would count in
+    // full, and a wakeup that came in time would look 100 ms late.) And an
+    // IPI already come, from a CPU that has parked since, ends it at once.
+    if (r === STOP.SLEEP && (par.othersRunning() || par.ipiFor0())) {
+      const nap = vm.dev.napMs;
+      let slept = 0;
+      while (slept < nap && !par.ipiFor0() && !vm.dev.halted) slept += par.sleepSync(nap - slept);
+      if (slept < nap) vm.dev.sleepMs -= nap - slept;
+    } else if (r === STOP.PARK || r === STOP.CPUHALT || vm.cpuState !== 'run') par.parkSync(10);
   }
   return cond();
 };
@@ -101,7 +111,7 @@ check(/c4rlink: wrote/.test(t) && !/error|did not compile/i.test(t), 'pw.c compi
 
 for (const [mode, how] of [['r', 'asleep in uevwait'], ['b', 'blocked in read']]) {
   const m0 = vm.dev.simMs();
-  t = runFor(`/tmp/pw.c4r w 1 200 3 | /tmp/pw.c4r ${mode} 4\necho @@${mode}@@`, new RegExp(`^@@${mode}@@\\n`, 'm'), 5000000);
+  t = runFor(`/tmp/pw.c4r w 2 200 3 | /tmp/pw.c4r ${mode} 4\necho @@${mode}@@`, new RegExp(`^@@${mode}@@\\n`, 'm'), 5000000);
   const ms = Math.round(vm.dev.simMs() - m0);
   const m = new RegExp(`pw ${mode}: (\\d+) lines, (\\d+) wakes, (\\d+) with nothing`).exec(t);
   console.log(`test-c4ix-pipewake: ${how}: ${m ? m[0] : 'no report'}, ${ms} machine ms`);

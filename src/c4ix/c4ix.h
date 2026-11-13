@@ -587,6 +587,7 @@ struct task {
     int  letgo;
     int  tflags;               // TF_*: what is true of it, kept as it changes
     int  fdtop;                // one past the highest fd it has had: what a walk of fds needs see
+    int  evgen;                // SYS_EVWAIT: sched_pipegen when its pipes were last looked at
 };
 
 // What the hot paths ask of a task, answered from one word, kept where the

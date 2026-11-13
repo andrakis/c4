@@ -255,9 +255,21 @@ build to gcc's frames on demo3.
 | round 3 | 10.533 | | 56,360 | 1,571,465 |
 | 16-bit loads and stores, LSR, as opcodes (docs/c4-16bit.md) | 9.921 | −5.8% | 24,169 | 1,563,937 |
 | `LCU`, an unsigned byte's load (docs/c4-16bit.md) | 9.719 | −2.0% | 24,169 | 1,561,585 |
+| `R_DrawSurfaceBlock8`'s rows and `D_DrawSpans8`'s runs written out (`C4QUAKE`) | 8.573 | −11.8% | 24,169 | 1,565,961 |
 
 **16-bit loads and stores.** `<ld16u>`, `<ld16s>`, `<st16>` and `<lsr>` were 32,200 calls a frame
 (`<ld16u>` 16,000 of them: the edges' and the surfaces' `unsigned short` fields), each a call and
 19 to 24 instructions. They are opcodes now, `LHU`, `LH`, `SH` and `LSR`, one instruction each;
 docs/c4-16bit.md says why opcodes and what each machine does.
+
+**The two inner loops** that were 47% of the instructions, written for c4 under `C4QUAKE`, the same
+pixels in the same order. On a stack machine a loop's counting is a large part of a pixel's work:
+`for (b=15; b>=0; b--)` costs a compare, a branch, a decrement and a jump for every pixel, and
+`*pdest++` keeps the old pointer on the stack and pops it back.
+
+- `R_DrawSurfaceBlock8_mip0` to `_mip3` write a row's 16, 8, 4 or 2 pixels out, without the loop and
+  without `pix` kept in memory between its load and its use: 21 instructions a pixel, from 40.
+- `D_DrawSpans8` moves `pdest` past the run of up to eight pixels it draws between two divisions
+  and jumps into the run written out, through a dense `switch`, which c4lc makes a jump table; each
+  pixel is written back from past the run: 27 instructions a pixel, from 36.
 

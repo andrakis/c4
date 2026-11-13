@@ -318,6 +318,7 @@ call counted by its target. Each step ends on the same checksum,
 | before (section 9) | 7.119 | | 95,555 |
 | 16-bit loads and stores, LSR, as opcodes (docs/c4-16bit.md) | 5.861 | −17.7% | 23,365 |
 | `LCU`, an unsigned byte's load (docs/c4-16bit.md) | 5.595 | −4.5% | 23,367 |
+| the c4 loops shift with `LSR` (`hlineasm4`, `vlineasm4`, `mvlineasm4`, `slopevlin`) | 5.224 | −6.6% | 23,365 |
 
 **16-bit loads and stores.** `<ld16s>`, `<ld16u>` and `<st16>` were 72,200
 calls a frame between them, each a call and 19 to 22 instructions. They are
@@ -326,4 +327,9 @@ machine c4 has; and `<lsr>` is `LSR`. docs/c4-16bit.md has the reasons for
 opcodes rather than open-coded loads (that would have saved about 7%, not
 17.7%) and what each machine does. The image is 11% smaller: 4,680,784
 bytes to 4,157,388.
+
+**The loops' shifts.** The c4 versions of the inner loops (section 9) made a
+logical shift from an arithmetic one and a mask, `((int32_t)v >> sh) & mask`,
+four instructions; with `LSR` each is `v >> sh`, one. `hlineasm4` went from
+46 instructions a pixel to 40.
 

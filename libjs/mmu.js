@@ -505,6 +505,11 @@ export class Mmu {
       case OP.LC: a = m.ld8(a); break;
       case OP.SI: x = m.ld32(sp); m.st32(x, a); sp += 4; break;
       case OP.SC: x = m.ld32(sp); m.st8(x, a); sp += 4; a = (a << 24) >> 24; break;
+      case OP.LH: a = ((m.ld8(a) & 255) | (m.ld8((a + 1) | 0) << 8)) | 0; break;
+      case OP.LHU: a = (m.ld8(a) & 255) | ((m.ld8((a + 1) | 0) & 255) << 8); break;
+      case OP.SH: x = m.ld32(sp); m.st8(x, a); m.st8((x + 1) | 0, a >> 8); sp += 4; break;
+      case OP.LSR: x = m.ld32(sp); a = (x >>> a) | 0; sp += 4; break;
+      case OP.LCU: a = m.ld8(a) & 255; break;
       case OP.PSH: m.st32(sp - 4, a); sp -= 4; break;
       case OP.LIP: a = m.ld32(a); m.st32(sp - 4, a); sp -= 4; break;
       case OP.ADDL: x = (m.ld32(sp) + a) | 0; a = m.ld32(x); sp += 4; break;
@@ -692,6 +697,14 @@ export class Mmu {
   }
   pWr8(x, v) {
     try { this.st8(x, v); } catch (e) { if (e !== FAULT) throw e; this.raise(); }
+  }
+  // a short, two bytes, low first: a fault at either raises it from the
+  // instruction's start, which runs again from nothing (LH, SH)
+  pRd16(x) {
+    try { return ((this.ld8(x) & 255) | (this.ld8((x + 1) | 0) << 8)) | 0; } catch (e) { if (e !== FAULT) throw e; this.raise(); return 0; }
+  }
+  pWr16(x, v) {
+    try { this.st8(x, v); this.st8((x + 1) | 0, v >> 8); } catch (e) { if (e !== FAULT) throw e; this.raise(); }
   }
 
   // ---------------------------------------------------------------
@@ -915,6 +928,42 @@ export class Mmu {
             chk = m.needChecks(); nextChk = 0; lim = -1;
           }
           a = (a << 24) >> 24;
+          break;
+        // 16 bits: both bytes in one page, or the long way
+        case 90: /* LH  */
+        case 91: /* LHU */
+          v = a >>> 12; p = v < LIMIT ? rd[v] : -1;
+          if (p >= 0 && (a & 4095) !== 4095) { y = p | (a & 4095); a = u8[y] | (u8[y + 1] << 8); }
+          else {
+            m.pc = pc - 4; m.sp = sp; m.bp = bp; m.a = a; m.cycle = cycle;
+            a = this.pRd16(a);
+            if (!m.mode) { stop = STOP.SWITCH; break loop; }
+          }
+          if (op === 90) a = (a << 16) >> 16; else a = a & 0xffff;
+          break;
+        case 92: /* SH  */
+          x = i32[(sp + sOff) >> 2];
+          v = x >>> 12; p = v < LIMIT ? wr[v] : -1;
+          if (p >= 0 && (x & 4095) !== 4095) { y = p | (x & 4095); u8[y] = a; u8[y + 1] = a >> 8; sp += 4; }
+          else {
+            m.pc = pc - 4; m.sp = sp; m.bp = bp; m.a = a; m.cycle = cycle;
+            this.pWr16(x, a);
+            if (!m.mode || dev.halted) { stop = dev.halted ? STOP.HALT : STOP.SWITCH; break loop; }
+            sp += 4;
+            interval = m.cycleInterval | 0;
+            nextIrq = interval > 0 ? (Math.floor(cycle / interval) + 1) * interval : 0;
+            chk = m.needChecks(); nextChk = 0; lim = -1;
+          }
+          break;
+        case 93: /* LSR */ a = (i32[(sp + sOff) >> 2] >>> a) | 0; sp += 4; break;
+        case 94: /* LCU */
+          v = a >>> 12; p = v < LIMIT ? rd[v] : -1;
+          if (p >= 0) a = u8[p | (a & 4095)];
+          else {
+            m.pc = pc - 4; m.sp = sp; m.bp = bp; m.a = a; m.cycle = cycle;
+            a = this.pRd8(a) & 255;
+            if (!m.mode) { stop = STOP.SWITCH; break loop; }
+          }
           break;
         case 13: /* PSH */ sp -= 4; i32[(sp + sOff) >> 2] = a; break;
         case 14: /* OR  */ a = i32[(sp + sOff) >> 2] | a; sp += 4; break;

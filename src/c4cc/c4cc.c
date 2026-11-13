@@ -239,7 +239,9 @@ void c4cc_init_instructions() {
 	// -mfuse was passed; same no-bounds-check reason as above.
 	"LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,"
 	// F3: IEEE arithmetic (docs/c4-float.md)
-	"FPU ,";
+	"FPU ,"
+	// 16-bit loads and store, logical shift right (docs/c4-16bit.md)
+	"LH  ,LHU ,SH  ,LSR ,LCU ,";
 	c4cc_keywords =
 		"static extern __attribute__ constructor destructor "     // Ignored by c4m
 		"char else enum if int return sizeof for continue while " // Keywords

@@ -242,4 +242,52 @@ instructions, in round 2's image, before round 3 took most of the last row and t
 
 Not tried yet: writing a double operation straight to its target; double literals as data, not
 temporaries; float arithmetic where a double literal is exact; `x * 0.1` as a float by a flag,
-which would change results; `ceil` and `floor` as FPU operations; an opcode for a 16-bit load (parked).
+which would change results; `ceil` and `floor` as FPU operations; an opcode for a 16-bit load (done in round 4).
+
+## Round 4: 16-bit loads and stores (2026-11-13)
+
+Instructions only, as "How it is measured" says: demo1 on the bare machine under node, `-sum 0`,
+the whole run of 978 frames, every instruction and every call counted. `test-quake` holds each
+build to gcc's frames on demo3.
+
+| step | M instructions a frame | change | calls a frame | image bytes |
+|---|---:|---:|---:|---:|
+| round 3 | 10.533 | | 56,360 | 1,571,465 |
+| 16-bit loads and stores, LSR, as opcodes (docs/c4-16bit.md) | 9.921 | −5.8% | 24,169 | 1,563,937 |
+| `LCU`, an unsigned byte's load (docs/c4-16bit.md) | 9.719 | −2.0% | 24,169 | 1,561,585 |
+| `R_DrawSurfaceBlock8`'s rows and `D_DrawSpans8`'s runs written out (`C4QUAKE`) | 8.573 | −11.8% | 24,169 | 1,565,961 |
+| `D_DrawZSpans`' pairs, four a turn, one expression each | 8.370 | −2.4% | 24,169 | 1,567,053 |
+| libc: a long long division by a divisor below 2^30 a few bits a step | 8.369 | −0.0% | 24,169 | 1,569,081 |
+| libc: `trunc`'s zeros and `floor`'s and `ceil`'s sign without the bits | 8.282 | −1.0% | 20,262 | 1,569,221 |
+| **round 4** | | **−21.4%** | **−64.0%** | **−0.1%** |
+
+Node, the whole demo1 run, round 3's image and round 4's in turn, three runs each (2026-11-13):
+48.7 s to 41.8 s, −14.2%.
+
+**16-bit loads and stores.** `<ld16u>`, `<ld16s>`, `<st16>` and `<lsr>` were 32,200 calls a frame
+(`<ld16u>` 16,000 of them: the edges' and the surfaces' `unsigned short` fields), each a call and
+19 to 24 instructions. They are opcodes now, `LHU`, `LH`, `SH` and `LSR`, one instruction each;
+docs/c4-16bit.md says why opcodes and what each machine does.
+
+**The two inner loops** that were 47% of the instructions, written for c4 under `C4QUAKE`, the same
+pixels in the same order. On a stack machine a loop's counting is a large part of a pixel's work:
+`for (b=15; b>=0; b--)` costs a compare, a branch, a decrement and a jump for every pixel, and
+`*pdest++` keeps the old pointer on the stack and pops it back.
+
+- `R_DrawSurfaceBlock8_mip0` to `_mip3` write a row's 16, 8, 4 or 2 pixels out, without the loop and
+  without `pix` kept in memory between its load and its use: 21 instructions a pixel, from 40.
+- `D_DrawSpans8` moves `pdest` past the run of up to eight pixels it draws between two divisions
+  and jumps into the run written out, through a dense `switch`, which c4lc makes a jump table; each
+  pixel is written back from past the run: 27 instructions a pixel, from 36.- `D_DrawZSpans` writes two z values a word. Each word is now one expression,
+  `(izi >> 16) | ((izi + izistep) & 0xFFFF0000)`, `izi` stepping by the two steps' sum, four words a
+  turn of the loop and a jump into the last few: 17 to 20 instructions a word, from 34.
+
+
+**`ceil` and `floor`** asked `m_neg` for the sign, which takes the double's 64 bits apart with long
+long shift helpers; once `t != x`, `x` is neither 0 nor whole, so `x < 0` says the same. `trunc` of a
+value in (−1, 1) went the long way to keep its zero's sign; `x * 0.0` is that zero. The same bits as
+glibc's for every edge value. `ceil` drops out of the profile and `trunc` is 0.6%, so neither needs
+an FPU operation of its own after all.
+
+Each build's demo1 still ends on gcc's checksum, `ea3fefe7`, and demo3 on `1f87d635`.
+

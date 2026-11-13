@@ -717,11 +717,11 @@ included (`char + 1` is a `char`; `?:` has its else-arm's type).
 - **Division** of a whole unsigned word: a call to the `udiv`/`umod`
   helper.
 - **`>>`** of a whole unsigned word: by a constant `k`, `SHR` then `AND
-  ~(-1 << (W-k))` (nothing for k = 0); by a variable, the `lsr` helper.
+  ~(-1 << (W-k))` (nothing for k = 0); by a variable, `LSR`.
   `<<` is the same opcode either way.
-- **Loads**: `unsigned char` is `LC; PSH; IMM 255; AND`; `short` and
-  `unsigned short` call `ld16s`/`ld16u`; a 64-bit host's `unsigned`
-  masks. **Stores**: the one-byte types `SC`, the shorts call `st16`,
+- **Loads**: `unsigned char` is `LCU` (it was `LC; PSH; IMM 255; AND`); `short` and
+  `unsigned short` are `LH`/`LHU`; a 64-bit host's `unsigned`
+  masks. **Stores**: the one-byte types `SC`, the shorts `SH`,
   everything else `SI`.
 - **Casts emit conversion code**: truncation to a narrow type (`AND`
   for the unsigned ones, a shift up and an arithmetic shift down for
@@ -748,14 +748,16 @@ included (`char + 1` is a `char`; `?:` has its else-arm's type).
   int -1 there and `4294967295u` without `-O`. The tree pass has names,
   not types, so it cannot see the other arm's; c4fc folds the same way.
 
-The six helpers (`ld16s ld16u st16 udiv umod lsr`, `g:helpbody`) are
-emitted once each, after the last function and the prototype stubs,
-in that fixed order, and only if something called them. A call is
-`PSH; JSR label; ADJ n` to a label in the same unit: there is no symbol,
-nothing to link and nothing for the loader to know, so `-c` objects
-work unchanged. 16-bit loads go through a helper because computing two
-byte addresses from one address needs it twice, and this machine has no
-way to copy the top of the stack.
+The two helpers (`udiv umod`, `g:helpbody`) are emitted once each,
+after the last function and the prototype stubs, in that fixed order,
+and only if something called them. A call is `PSH; JSR label; ADJ n` to
+a label in the same unit: there is no symbol, nothing to link and
+nothing for the loader to know, so `-c` objects work unchanged. There
+were six until 2026-11-13: the 16-bit loads and store and the logical
+shift by a variable (`ld16s ld16u st16 lsr`) were helpers too, because
+computing two byte addresses from one address needs it twice and this
+machine has no way to copy the top of the stack. They are opcodes now,
+`LH LHU SH LSR` (docs/c4-16bit.md), and c4fc emits the same.
 
 ### 14.3 Literals and constant folding
 
@@ -939,7 +941,12 @@ long` (960), the codes the parser makes only when `sys:wordsize` is 4.
 - **Arithmetic** calls helpers written in C, `p:llsrc` in
   c4lc-parse.lisp: add, sub, mul (16-bit limbs), and, or, xor, the three
   shifts, signed and unsigned compares, div, mod, udiv, umod (shift and
-  subtract, with a one-word fast path when both high halves are 0), neg.
+  subtract, with a one-word fast path when both high halves are 0, and
+  since 2026-11-13 a second for a divisor below 2^30: long division in
+  as many bits a step as the remainder has room for beside the divisor,
+  by the machine's own `DIV` and `MOD`, about 700 instructions where the
+  bit at a time took 5,700 -- ROTT's fixed-point divisions, 9.8% of its
+  demo), neg.
   `~` is inline. The parser reads them after any unit that says `long
   long`; they are static, registered when first called (`g:find`, kept
   in `g:llsyms` outside the scopes), and generated only then -- each

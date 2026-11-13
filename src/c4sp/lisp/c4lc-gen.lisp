@@ -321,14 +321,15 @@
 
 ;; ---- the M4 helpers ----
 ;;
-;; Six small routines the generator calls instead of open-coding what
-;; the VM has no opcode for: a 16-bit load (sign- or zero-extending), a
-;; 16-bit store, unsigned word division and remainder, and a logical
-;; right shift by a run-time count. Each is emitted ONCE, at the end of
-;; the unit's code, and only if something called it -- no symbol, no
-;; library, no link step: a call is a JSR to a label in the same unit,
-;; which is why c4rlink and the loader never hear about them.
-(define g:HELPERS '(ld16s ld16u st16 udiv umod lsr))
+;; Two small routines the generator calls instead of open-coding what
+;; the VM has no opcode for: unsigned word division and remainder. Each
+;; is emitted ONCE, at the end of the unit's code, and only if something
+;; called it -- no symbol, no library, no link step: a call is a JSR to a
+;; label in the same unit, which is why c4rlink and the loader never hear
+;; about them. There were six: a 16-bit load, signed and unsigned, the
+;; 16-bit store and the logical right shift by a run-time count are the
+;; VM's own now, LH LHU SH and LSR (docs/c4-16bit.md).
+(define g:HELPERS '(udiv umod))
 (define g:helps (list))    ;; ((NAME LABEL) ...) for the helpers used
 (define g:helper (lambda (h)
 	(begin
@@ -367,21 +368,6 @@
 		(define maxpos (bit:xor g:MIN -1))
 		(g:madebody (+ "<" (+ "" h) ">"))
 		(g:label! l)
-		(if (= h 'ld16s)
-			(g:emitl (list '(ENT 0)
-				'(LEA 2) '(LI) '(PSH) '(IMM 1) '(ADD) '(LC) '(PSH) '(IMM 8) '(SHL)
-				'(PSH) '(LEA 2) '(LI) '(LC) '(PSH) '(IMM 255) '(AND) '(OR) '(LEV)))
-		(if (= h 'ld16u)
-			(g:emitl (list '(ENT 0)
-				'(LEA 2) '(LI) '(PSH) '(IMM 1) '(ADD) '(LC) '(PSH) '(IMM 255) '(AND)
-				'(PSH) '(IMM 8) '(SHL)
-				'(PSH) '(LEA 2) '(LI) '(LC) '(PSH) '(IMM 255) '(AND) '(OR) '(LEV)))
-		(if (= h 'st16)
-			(g:emitl (list '(ENT 0)
-				'(LEA 3) '(LI) '(PSH) '(LEA 2) '(LI) '(SC)
-				'(LEA 3) '(LI) '(PSH) '(IMM 1) '(ADD) '(PSH)
-				'(LEA 2) '(LI) '(PSH) '(IMM 8) '(SHR) '(SC)
-				'(LEA 2) '(LI) '(LEV)))
 		(if (= h 'udiv)
 			(begin
 				(define l1 (g:newlabel))
@@ -432,17 +418,7 @@
 					'(LEA -1) '(LI) '(LEV)
 					(list 'label m4)
 					'(LEA -1) '(LI) '(PSH) '(LEA 2) '(LI) '(SUB) '(LEV))))
-		(if (= h 'lsr)
-			(begin
-				(define s1 (g:newlabel))
-				(g:emitl (list '(ENT 0)
-					'(LEA 2) '(LI) (list 'BZ (list 'code s1))
-					'(LEA 3) '(LI) '(PSH) '(LEA 2) '(LI) '(SHR)
-					'(PSH) '(IMM -1) '(PSH) (list 'IMM g:BITS) '(PSH) '(LEA 2) '(LI) '(SUB)
-					'(SHL) '(PSH) '(IMM -1) '(XOR) '(AND) '(LEV)
-					(list 'label s1)
-					'(LEA 3) '(LI) '(LEV))))
-		nil)))))))))
+		nil)))))
 
 ;; ---- types (M4) ----
 
@@ -556,9 +532,9 @@
 ;; loads and stores by type
 (define g:load! (lambda (ty)
 	(if (if (= ty g:CHAR) true (if (= ty g:SCHAR) true (= ty g:BOOL))) (g:emit '(LC))
-	(if (= ty g:UCHAR) (begin (g:emit '(LC)) (g:mask! 255))
-	(if (= ty g:SHORT) (g:helpcall 'ld16s 1)
-	(if (= ty g:USHORT) (g:helpcall 'ld16u 1)
+	(if (= ty g:UCHAR) (g:emit '(LCU))
+	(if (= ty g:SHORT) (g:emit '(LH))
+	(if (= ty g:USHORT) (g:emit '(LHU))
 	(if (if (if (= ty g:UINT) true (= ty g:FLOAT)) g:W64 false) (begin (g:emit '(LI)) (g:mask! g:M32))
 	(if (g:ll? ty) nil
 	(g:emit '(LI))))))))))
@@ -592,7 +568,7 @@
 (define g:store! (lambda (ty)
 	(if (g:ll? ty) (g:llcopy)
 	(if (g:bytety? ty) (g:emit '(SC))
-	(if (g:halfty? ty) (g:helpcall 'st16 2)
+	(if (g:halfty? ty) (g:emit '(SH))
 	(g:emit '(SI)))))))
 
 ;; ---- struct types (L7) ----
@@ -1931,7 +1907,7 @@
 			(if (= opname 'SHR)
 				(begin
 					(define k (if (= (head (g:third e)) 'num) (g:second (g:third e)) nil))
-					(if (= k nil) (g:helpcall 'lsr 2)
+					(if (= k nil) (g:emit '(LSR))
 					(begin
 						(g:emit '(SHR))
 						(if (if (> k 0) (< k g:BITS) false)

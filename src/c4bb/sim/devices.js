@@ -234,7 +234,10 @@ export let OPNAMES =
   // (hw/microcode.uc); c4m itself runs only LDL, STL and POPA.
   'LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,' +
   // F3 (89): IEEE arithmetic, src/c4bb/sim/fpu.js
-  'FPU ,';
+  'FPU ,' +
+  // 90-93: 16-bit loads and store, logical shift right (docs/c4-16bit.md),
+  // microcoded from the transfers the board already makes
+  'LH  ,LHU ,SH  ,LSR ,LCU ,';
 export const STOCK_OPNAMES = OPNAMES;
 export function setOpnames (names) { OPNAMES = names; }
 

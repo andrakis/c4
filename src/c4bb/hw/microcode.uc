@@ -628,3 +628,55 @@ op ADDL:                        # a = *(int*)(*sp++ + a)   was: ADD; LI
     MEM_RD MDR_OUT B_IN SP_INC
     ALU=ADD ALU_OUT MAR_IN
     MEM_RD MDR_OUT A_IN
+
+# ---- 16 bits and a logical shift (90-93): docs/c4-16bit.md -------------
+#
+# What c4lc and c4fc called a helper for, a call and some twenty
+# instructions each: a short's load and store, and an unsigned >> by a
+# count known only at run time. No new circuitry -- a short is two of the
+# byte transfers LC and SC already make, low byte first, B_INC1 steps to
+# the second, and the shift and the mask are the ALU's.
+
+op LH:                          # a = *(short*)a  (sign from the high byte)
+    A_OUT MAR_IN B_IN B_INC1
+    MEM_RDBU MDR_OUT T_IN
+    B_OUT MAR_IN
+    MEM_RDB MDR_OUT B_IN
+    C=8 A_IN
+    ALU=SHL ALU_OUT B_IN
+    ALU=OR ALU_RT ALU_OUT A_IN
+
+op LHU:                         # a = *(unsigned short*)a
+    A_OUT MAR_IN B_IN B_INC1
+    MEM_RDBU MDR_OUT T_IN
+    B_OUT MAR_IN
+    MEM_RDBU MDR_OUT B_IN
+    C=8 A_IN
+    ALU=SHL ALU_OUT B_IN
+    ALU=OR ALU_RT ALU_OUT A_IN
+
+op SH:                          # *(short*)*sp++ = a; a unchanged, as SI
+    SP_OUT MAR_IN
+    MEM_RD MDR_OUT T_IN B_IN B_INC1 SP_INC
+    T_OUT MAR_IN
+    A_OUT MDR_IN MEM_WRB
+    B_OUT MAR_IN
+    A_OUT B_IN
+    C=8 T_IN
+    ALU=SHR ALU_RT ALU_OUT MDR_IN MEM_WRB
+
+op LSR:                         # a = (unsigned)*sp++ >> a (count mod 32)
+    SP_OUT MAR_IN
+    MEM_RD MDR_OUT B_IN SP_INC
+    ALU=SHR ALU_OUT T_IN
+    C=-2147483648 B_IN
+    ALU=SHR ALU_OUT B_IN
+    B_OUT MDR_IN
+    ALU=ADD ALU_RM ALU_OUT B_IN
+    C=-1 MDR_IN
+    ALU=XOR ALU_RM ALU_OUT B_IN
+    ALU=AND ALU_RT ALU_OUT A_IN
+
+op LCU:                         # a = *(unsigned char*)a: LC, unsigned
+    A_OUT MAR_IN
+    MEM_RDBU MDR_OUT A_IN

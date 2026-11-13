@@ -37,8 +37,12 @@ export const OP = {
   // (smp.js); 76-78 (LXI, SXI, TRAW) are c4mp's alone
   CPUI: 66, CPUN: 67, CPUS: 68, CPUH: 69, CAS: 70, XCHG: 71, FADD: 72, CWAI: 73, CWAK: 74, IPI: 75,
   LDL: 79, LDG: 80, PSHL: 81, PSHG: 82, LEAP: 83, IMMP: 84, LIP: 85, ADDL: 86, STL: 87, POPA: 88, FPU: 89,
+  // 16-bit loads and store, logical shift right (docs/c4-16bit.md)
+  LH: 90, LHU: 91, SH: 92, LSR: 93,
+  // an unsigned char's load
+  LCU: 94,
 };
-export const INS_SIZE = 89;
+export const INS_SIZE = 95;
 OPNAMES.match(/.{5}/g).forEach((n, i) => {
   const name = n.slice(0, 4).trim();
   if (OP[name] !== undefined && OP[name] !== i)
@@ -66,7 +70,8 @@ export function isRom(x, n) {
 // run()'s own opcodes that OPCD can run, which have no operand: opcd().
 export function isPlainOp(i) {
   return (i >= OP.LEV && i <= OP.MOD) || i === OP._JMP || i === OP._ADJ || i === OP.C4CY ||
-         i === OP.JMPA || i === OP.LIP || i === OP.ADDL || i === OP.POPA;
+         i === OP.JMPA || i === OP.LIP || i === OP.ADDL || i === OP.POPA ||
+         (i >= OP.LH && i <= OP.LCU);
 }
 
 export const TRAP = { ILLOP: 0, HARD_IRQ: 1, SOFT_IRQ: 2, SIGNAL: 3, SEGV: 4, OPV: 5, PM_VIOLATION: 6, DEBUG: 7 };
@@ -209,6 +214,15 @@ export class Machine {
     }
     if (this.smp && x >= LOCAL_BASE && x < LOCAL_END) return (this.localU8[x - LOCAL_BASE] << 24) >> 24;
     return this.bus.read8s(x);
+  }
+  // a short: two bytes, low first, each as ld8 and st8 take it (LH, SH)
+  ld16(x) {
+    const lo = this.ld8(x) & 255;
+    return (lo | (this.ld8((x + 1) | 0) << 8)) | 0;
+  }
+  st16(x, v) {
+    this.st8(x, v);
+    this.st8((x + 1) | 0, v >> 8);
   }
   st8(x, v) {
     if (this.vm) { this.mmu.st8(x, v); return; }
@@ -1080,6 +1094,11 @@ export class Machine {
       case OP.LC: a = this.ld8(a); break;
       case OP.SI: x = i32[sp >> 2]; sp += 4; this.st32(x, a); break;
       case OP.SC: x = i32[sp >> 2]; sp += 4; this.st8(x, a); a = (a << 24) >> 24; break;
+      case OP.LH: a = this.ld16(a); break;
+      case OP.LHU: a = this.ld16(a) & 0xffff; break;
+      case OP.SH: x = i32[sp >> 2]; sp += 4; this.st16(x, a); break;
+      case OP.LSR: x = i32[sp >> 2]; sp += 4; a = (x >>> a) | 0; break;
+      case OP.LCU: a = this.ld8(a) & 255; break;
       case OP.PSH: sp -= 4; i32[sp >> 2] = a; break;
       case OP.LIP: a = this.ld32(a); sp -= 4; i32[sp >> 2] = a; break;
       case OP.ADDL: x = (i32[sp >> 2] + a) | 0; sp += 4; a = this.ld32(x); break;
@@ -1237,6 +1256,46 @@ export class Machine {
               chk = this.needChecks(); nextChk = 0; lim = -1;
             }
             a = (a << 24) >> 24;
+            break;
+          // 16 bits (docs/c4-16bit.md): two bytes, low first, at any address;
+          // SH leaves a as it was
+          case 90: /* LH  */
+            if (a >= 0x1000 && a < glo - 1) a = ((u8[a] | (u8[a + 1] << 8)) << 16) >> 16;
+            else {
+              this.pc = pc; this.sp = sp; this.bp = bp; this.a = a; this.cycle = cycle;
+              a = this.ld16(a);
+              if (dev.halted) { stop = STOP.HALT; break loop; }
+            }
+            break;
+          case 91: /* LHU */
+            if (a >= 0x1000 && a < glo - 1) a = u8[a] | (u8[a + 1] << 8);
+            else {
+              this.pc = pc; this.sp = sp; this.bp = bp; this.a = a; this.cycle = cycle;
+              a = this.ld16(a) & 0xffff;
+              if (dev.halted) { stop = STOP.HALT; break loop; }
+            }
+            break;
+          case 92: /* SH  */
+            x = i32[sp >> 2]; sp += 4;
+            if (x >= 0x1000 && x < glo - 1) { u8[x] = a; u8[x + 1] = a >> 8; }
+            else {
+              this.pc = pc; this.sp = sp; this.bp = bp; this.a = a; this.cycle = cycle;
+              this.st16(x, a);
+              if (dev.halted) { stop = STOP.HALT; break loop; }
+              glo = this.guardLo();
+              interval = this.cycleInterval | 0;
+              nextIrq = interval > 0 ? (Math.floor(cycle / interval) + 1) * interval : 0;
+              chk = this.needChecks(); nextChk = 0; lim = -1;
+            }
+            break;
+          case 93: /* LSR */ a = (i32[sp >> 2] >>> a) | 0; sp += 4; break;
+          case 94: /* LCU */
+            if (a >= 0x1000 && a < glo) a = u8[a];
+            else {
+              this.pc = pc; this.sp = sp; this.bp = bp; this.a = a; this.cycle = cycle;
+              a = this.ld8(a) & 255;
+              if (dev.halted) { stop = STOP.HALT; break loop; }
+            }
             break;
           case 13: /* PSH */ sp -= 4; i32[sp >> 2] = a; break;
           case 14: /* OR  */ a = i32[sp >> 2] | a; sp += 4; break;

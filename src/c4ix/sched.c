@@ -1743,6 +1743,13 @@ static void smp_ap() {
         // (oncpu, smp_settle), which no CPU then resumes and no IPI is
         // sent for (smp_kick). A -j 3 build in 32 MB stopped so: b4ke
         // ready, three children to reap, three CPUs parked.
+        //
+        // And any idle CPU sweeps the zombies nobody waits on, as CPU 0's
+        // idle task does: a shell's background job is collected only so,
+        // and with CPU 0 busy its memory stayed taken -- three programs
+        // running on four CPUs kept a finished one's 20 MB, and nothing
+        // moved up into it (PARALLEL=0 test-c4ix-movable).
+        if (sched_nzombies) task_reap_orphans();
         sched_lock();
         smp_park[k] = 0;
         smp_settle();

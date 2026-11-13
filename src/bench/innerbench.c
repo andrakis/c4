@@ -49,12 +49,15 @@ void psh (char *str) {
 // C4IX starts and which dies at its first store, saying nothing. And
 // "top" is C4KE's, whose shares of a 32-bit machine's cycles overflow
 // and go negative. C4IX's are /bin/c4m and /bin/top, where the shell's
-// PATH finds them.
+// PATH finds them. A program image, not just a file: C4IX under the native
+// c4m opens what it does not have on the host, and Linux has a /bin/top.
 char *bin_or (char *bin, char *name) {
-	int fd;
+	int fd, n;
+	char sig[4];
 	if ((fd = open(bin, 0)) >= 0) {
+		n = read(fd, sig, 4);
 		close(fd);
-		return bin;
+		if (n == 4 && sig[0] == 'C' && sig[1] == '4' && sig[2] == 'R') return bin;
 	}
 	return name;
 }

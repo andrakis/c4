@@ -2806,6 +2806,25 @@
 ;; the same contract: legal to declare and call-compile, fatal to
 ;; execute.
 (define gen:objmode false)
+;; A global with no initializer, not static, in an object (-c): a
+;; tentative definition, which c4rlink makes one object with the other
+;; units' (c4rlink.c, common_plan). Its symbol says so, ATTR_COMMON (128),
+;; and its storage is followed by a word nothing uses: c4rlink moves
+;; every reference into it to the one kept, and that includes &a[N] just
+;; past its end, which must therefore not be the next global's address.
+;; c4fc does the same (parse.f, COMMON? and PLACE-GLOBALS).
+(define g:tattrs (lambda (gattrs)
+	(if (if gen:objmode (= 0 (bit:and (g:nz gattrs) 8)) false)
+		(bit:or (g:nz gattrs) 128)
+		gattrs)))
+;; reserve nb bss bytes for a global whose attributes (g:tattrs) are ta
+(define g:tballoc (lambda (nb ta)
+	(begin
+		(define at (g:balloc nb))
+		(if (= 0 (bit:and (g:nz ta) 128)) nil
+			(set! g:blen (+ g:blen g:WORD)))
+		at)))
+
 ;; M12, -mcisc: emit c4mp-only fused array-element opcodes (LXI/SXI)
 ;; instead of the generic index codegen, for int/pointer-element
 ;; (8-byte) arrays -- see g:indexload-cisc/g:indexstore-cisc below and
@@ -2880,11 +2899,27 @@
 			false))
 		(if (= (head d) 'structdef) nil      ;; g:structpass did it
 		(if isglobal (if isext nil
-			(if (if (= (index d 5) nil) (g:laterinit? (g:third d) (tail decls)) false) nil
-			(g:global d)))
+			(if (= (index d 5) nil)
+				;; a tentative definition: nothing, if the unit defines the
+				;; name with an initializer further down or has defined it
+				;; already -- one object, as c4fc's DECL makes it
+				(if (g:laterinit? (g:third d) (tail decls)) nil
+				(if (g:gloname? (g:third d) g:syms) nil
+				(g:global d)))
+			;; a second initialized definition of a global is an error; a
+			;; static's two stay two objects, as in c4fc
+			(if (if (= 0 (bit:and (g:nz (index d 4)) 8)) (g:gloname? (g:third d) g:syms) false)
+				(g:die (+ "redefinition of " (g:third d)))
+			(g:global d))))
 		nil))
 		(next g:datapass (tail decls)
 			(if isext (+ pending (list d)) pending))))))
+
+;; has the unit given global N storage already?
+(define g:gloname? (lambda (n l)
+	(if (empty? l) false
+	(if (if (= (head (head l)) n) (= (g:second (head l)) 'glo) false) true
+	(next g:gloname? n (tail l))))))
 
 ;; `int x;` before `int x = 9;` is one object, the definition's: the
 ;; first allocates nothing (M7b; c4fc's DECL retires its record)
@@ -2985,14 +3020,15 @@
 	(begin
 		(define bytes (g:tysize ty))
 		;; a struct global is never initialized -> pure BSS
-		(set! g:syms (g:cons (list n 'glo ty (g:balloc bytes) bytes gattrs g:gq) g:syms)))))
+		(define ta (g:tattrs gattrs))
+		(set! g:syms (g:cons (list n 'glo ty (g:tballoc bytes ta) bytes ta g:gq) g:syms)))))
 
 (define g:globalscalar (lambda (n ty init0 gattrs)
 	(begin
 		(define init (g:fpinit init0 ty))
 		(define at
 			;; no initializer -> BSS (one word); otherwise placed in data
-			(if (= init nil) (g:balloc (if (g:ll? ty) 8 g:WORD))
+			(if (= init nil) (g:tballoc (if (g:ll? ty) 8 g:WORD) (g:tattrs gattrs))
 			(if (if (= (head init) 'num) (g:ll? ty) false)
 				(begin
 					(define lo (g:dword (g:second init)))
@@ -3019,7 +3055,7 @@
 					(set! g:dpatches (g:cons (g:addrpatch slot (g:second init) f) g:dpatches))
 					slot)
 			(g:die (+ "unsupported global initializer for " n)))))))))
-		(set! g:syms (g:cons (list n 'glo ty at nil gattrs g:gq) g:syms)))))
+		(set! g:syms (g:cons (list n 'glo ty at nil (if (= init nil) (g:tattrs gattrs) gattrs) g:gq) g:syms)))))
 
 ;; array storage: char arrays are s bytes, everything else s words;
 ;; uninitialized/short-initialized elements are zero
@@ -3031,7 +3067,7 @@
 		;; an uninitialized array is pure BSS (occupies no image bytes,
 		;; does not touch g:data/DMAX -- so it may be arbitrarily large)
 		(if (= init nil)
-			(set! g:syms (g:cons (list n 'glo ty (g:balloc bytes) bytes gattrs g:gq) g:syms))
+			(set! g:syms (g:cons (list n 'glo ty (g:tballoc bytes (g:tattrs gattrs)) bytes (g:tattrs gattrs) g:gq) g:syms))
 			(g:globalarrayinit n ty s init gattrs elem bytewise bytes)))))
 
 ;; the initialized-array case (kept out of g:globalarray so its own BSS

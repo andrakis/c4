@@ -37,14 +37,29 @@
 //    only if it defines a symbol something linked still lacks, as ld does an
 //    archive's (lib_select). Off unless given: an object named plainly is
 //    always linked, as with ld.
-//  - Static symbols are never merged: each module keeps its own copy.
+//  - Static symbols are never merged: each module keeps its own copy, and
+//    its name is never found by another module's (master_symfind). Before
+//    2026-11-13 it was: a global or an extern of the same name in a later
+//    module met the static, warned "duplicate definition" and took it.
 //  - The code c4lc splices into each object without a symbol -- its
 //    <udiv>, <ld16s> and the like, its soft-float and long long routines
 //    -- is kept once: copies that are the same code are folded into the
 //    first (gc_fold), and gc drops the rest. --no-fold keeps them all.
 //  - Non-static symbols are merged by name. An extern symbol that another
-//    module defines resolves to that definition; two non-static definitions
-//    keep the first and warn.
+//    module defines resolves to that definition.
+//  - A global defined in several modules is one object, as gcc -fcommon
+//    and ld make it (common_plan). A global with no initializer -- a
+//    tentative definition, whose symbol c4lc and c4fc mark ATTR_COMMON --
+//    gives way to the one that has an initializer, or, when none has, to
+//    the biggest (the first of equals); every reference of the modules
+//    that gave way, code or data, is moved to it (ref_at). Two globals
+//    that both have initializers stop the link ("multiple definition").
+//    --warn-common names each one merged. Before 2026-11-13 every module
+//    kept its own storage and only the symbol was merged, with a warning:
+//    Duke Nukem 3D's headers define 177 globals, and its Keys Setup read
+//    a copy of KeyMapping no one had written.
+//  - Two non-static definitions of a function, or of a function and a
+//    global, keep the first and warn.
 //  - Symbol-typed patches (JSR to an extern function) are rewritten to CODE
 //    patches once the symbol is resolved. Any still unresolved at the end are
 //    an error, unless -r (library mode) is given.
@@ -106,10 +121,18 @@ enum {
 	CL_MEMBER,       // int, 1: a library member (--start-lib), linked only if wanted
 	CL_BSS_BASE,     // int, where in the module's data its BSS begins (MEMSZ for none)
 	CL_OFFSET_BSS,   // int, byte offset of this module's BSS in the master image
+	CL_ALIAS,        // int *, the module's globals merged into another's (common_plan):
+	                 //   (offset, bytes, where the one kept is in the master) each
+	CL_NALIAS,       // int, entries in CL_ALIAS
 	CL__Sz
 };
 
 int cl_verbose, cl_debug, cl_libmode, cl_strip, cl_striptool, cl_nomap;
+
+// A symbol attribute beside c4cc.c's ATTR_* (whose bits stop at 0x40): a
+// global with no initializer, a tentative definition, which c4lc and c4fc
+// mark in an object (common_plan)
+enum { ATTR_COMMON = 0x80 };
 
 // A data word holding a symbol's address (M7b): ADDRESS is a byte offset
 // into data, VALUE the symbol's id. Only objects and libraries carry it --
@@ -140,6 +163,23 @@ static int data_at (int *cl, int off) {
 	return cl[CL_OFFSET_BSS] + (off - cl[CL_BSS_BASE]);
 }
 
+// Where in the merged image a reference of module CL to its data offset
+// OFF lands: data_at, unless OFF is in a global of the module that gave
+// way to another module's (common_plan), when it is the same place in
+// that one. Only what a reference names goes through here -- a DATA or
+// DDATA patch's value, a global symbol's -- never where a patch or the
+// module's own bytes lie.
+static int ref_at (int *cl, int off) {
+	int *a, i;
+	a = (int *)cl[CL_ALIAS];
+	i = 0;
+	while (i < cl[CL_NALIAS]) {
+		if (off >= a[0] && off < a[0] + a[1]) return a[2] + (off - a[0]);
+		a = a + 3; ++i;
+	}
+	return data_at(cl, off);
+}
+
 static void show_help (char *spec) {
 	if (cl_striptool)
 	printf("%s: Strip the symbol table from a .c4r\n"
@@ -150,7 +190,7 @@ static void show_help (char *spec) {
 	else
 	printf("%s: Link multiple .c4r files into one\n"
 	       "%s: [-dvrs] [-g0] [-l lib.c4s] [-o outfile] [--] file1.c4r [...fileN.c4r]\n"
-	       "         [--no-gc] [--no-fold] [--start-lib member.c4o ... [--end-lib]]\n"
+	       "         [--no-gc] [--no-fold] [--warn-common] [--start-lib member.c4o ... [--end-lib]]\n"
 	       "     -d            Turn on debug mode\n"
 	       "     -v            Turn on verbose mode\n"
 	       "     -r            Library mode: allow unresolved symbols\n"
@@ -163,13 +203,16 @@ static void show_help (char *spec) {
 	       "     --end-lib     The inputs after it are linked whole again\n"
 	       "     --no-gc       Keep the functions nothing reaches (dropped by default)\n"
 	       "     --no-fold     Keep every object's copy of c4lc's helpers (one by default)\n"
+	       "     --warn-common Name each global defined in several inputs, made one\n"
 	       "     --            End arguments\n", spec, spec);
 }
 
 static int my_strcmp (char *s1, char *s2) { while(*s1 && (*s1 == *s2)) { ++s1; ++s2; } return *s1 - *s2; }
 static int my_strncmp (char *s1, char *s2, int n) { while(n > 1 && *s1 && (*s1 == *s2)) { ++s1; ++s2; --n; } return n ? *s1 - *s2 : 0; }
 
-// Find a symbol in the master table by name; returns table index or -1.
+// Find a non-static symbol in the master table by name; returns table
+// index or -1. A static is its module's alone: no other module's name,
+// global or extern, may find it.
 static int master_symfind (int *master, char *name, int len) {
 	int *hdr, *sym, i, count;
 	hdr = (int *)master[C4R_HEADER];
@@ -177,7 +220,7 @@ static int master_symfind (int *master, char *name, int len) {
 	sym = (int *)master[C4R_SYMBOLS];
 	i = 0;
 	while (i < count) {
-		if (sym[C4R_SYMB_NAMELEN] == len &&
+		if (sym[C4R_SYMB_NAMELEN] == len && !(sym[C4R_SYMB_ATTRS] & ATTR_STATIC) &&
 		    !memcmp((char *)sym[C4R_SYMB_NAME], name, len))
 			return i;
 		++i;
@@ -248,7 +291,8 @@ static int import_symbols (int *master, int *cl) {
 				if (defined) msym[C4R_SYMB_VALUE] = sym[C4R_SYMB_VALUE] + offsetCode;
 				else         msym[C4R_SYMB_VALUE] = 0;
 			} else if (sym[C4R_SYMB_CLASS] == C4R_SCLASS_Glo) {
-				if (defined) msym[C4R_SYMB_VALUE] = data_at(cl, sym[C4R_SYMB_VALUE]);
+				// (a global that gave way names the one kept, ref_at)
+				if (defined) msym[C4R_SYMB_VALUE] = ref_at(cl, sym[C4R_SYMB_VALUE]);
 				else         msym[C4R_SYMB_VALUE] = 0;
 			}
 			mhdr[C4R_HDR_SYMBOLSLEN] = m + 1;
@@ -264,10 +308,20 @@ static int import_symbols (int *master, int *cl) {
 				if (sym[C4R_SYMB_CLASS] == C4R_SCLASS_Fun)
 					msym[C4R_SYMB_VALUE] = sym[C4R_SYMB_VALUE] + offsetCode;
 				else if (sym[C4R_SYMB_CLASS] == C4R_SCLASS_Glo)
-					msym[C4R_SYMB_VALUE] = data_at(cl, sym[C4R_SYMB_VALUE]);
+					msym[C4R_SYMB_VALUE] = ref_at(cl, sym[C4R_SYMB_VALUE]);
 				if (cl_verbose)
 					printf("c4rlink: '%.*s' resolved by '%s'\n",
 					       sym[C4R_SYMB_NAMELEN], name, (char *)cl[CL_FILE]);
+			} else if (defined && mdefined &&
+			           sym[C4R_SYMB_CLASS] == C4R_SCLASS_Glo && msym[C4R_SYMB_CLASS] == C4R_SCLASS_Glo) {
+				// one object (common_plan): every definition's value is
+				// already the one kept. If this one has the initializer,
+				// the entry is no longer tentative (in a -r library, it
+				// must not give way to another initialized one later)
+				if (!(sym[C4R_SYMB_ATTRS] & ATTR_COMMON)) {
+					msym[C4R_SYMB_ATTRS] = sym[C4R_SYMB_ATTRS];
+					msym[C4R_SYMB_TYPE]  = sym[C4R_SYMB_TYPE];
+				}
 			} else if (defined && mdefined) {
 				printf("c4rlink: warning: duplicate definition of '%.*s' in '%s', keeping first\n",
 				       sym[C4R_SYMB_NAMELEN], name, (char *)cl[CL_FILE]);
@@ -364,13 +418,13 @@ static int merge_c4rs (int *master, int *c4rs, int count) {
 				dstPatch[C4R_PAT_VALUE] = offsetCode + srcPatch[C4R_PAT_VALUE];
 			} else if (pid == C4R_PTYPE_DATA) {
 				dstPatch[C4R_PAT_TYPE]  = pid;
-				dstPatch[C4R_PAT_VALUE] = data_at(cl, srcPatch[C4R_PAT_VALUE]);
+				dstPatch[C4R_PAT_VALUE] = ref_at(cl, srcPatch[C4R_PAT_VALUE]);
 			} else if (pid == C4R_PTYPE_DCODE) {
 				dstPatch[C4R_PAT_TYPE]  = pid;
 				dstPatch[C4R_PAT_VALUE] = offsetCode + srcPatch[C4R_PAT_VALUE];
 			} else if (pid == C4R_PTYPE_DDATA) {
 				dstPatch[C4R_PAT_TYPE]  = pid;
-				dstPatch[C4R_PAT_VALUE] = data_at(cl, srcPatch[C4R_PAT_VALUE]);
+				dstPatch[C4R_PAT_VALUE] = ref_at(cl, srcPatch[C4R_PAT_VALUE]);
 			} else if (pid == C4R_PTYPE_DSYM) {
 				// the symbol id is in VALUE: remap it as a symbol type is
 				if (srcPatch[C4R_PAT_VALUE] < 0 || srcPatch[C4R_PAT_VALUE] >= cl[CL_REMAP_MAX] ||
@@ -1826,6 +1880,176 @@ static int lib_select (int *c4rs, int count, int nsym) {
 	return left;
 }
 
+// ---- One object for a global several modules define (common_plan) ----
+//
+// C lets a unit write `int x;` at file scope with no initializer: a
+// tentative definition. Headers do it (Duke Nukem 3D's control.h defines
+// KeyMapping), and gcc -fcommon and ld make every unit's x one object.
+// In an object, c4lc and c4fc mark such a global's symbol ATTR_COMMON
+// (g:tattrs, COMMON?). An object from before 2026-11-13 has no such mark;
+// at 32 bits its tentative globals are still known, as the non-static
+// ones in its BSS (C4R_HDR_BSS, CL_BSS_BASE): c4lc and c4fc put a global
+// there only when it has no initializer -- even `= 0` puts it in the
+// initialized data. Per name defined more than once:
+//   - two with initializers: an error, the link fails;
+//   - one with an initializer: it is kept;
+//   - none: the biggest is kept, the first of equals;
+// and each other definition gives way: its bytes in its module become an
+// alias of the one kept (CL_ALIAS), so the module's references -- code
+// patches, data words, its symbol -- name the one kept (ref_at). Its own
+// storage stays where it is, unused. A function among them leaves the
+// name as it always was: the first is kept, with a warning (import_symbols).
+//
+// How big a global is, the object does not say: it is the bytes to the
+// next global of the module, static or not, or to the end of its region
+// (glo_extent). Every byte of c4lc's and c4fc's BSS is some global's, and
+// each of them leaves a word after a non-static global in the BSS, so the
+// address just past such a global -- `&a[N]`, which a compiler may fold
+// into one constant -- falls inside the extent, never on the next global,
+// and moves with it. An initialized global's extent may take in strings
+// after it: it is an upper bound, and a tentative definition bigger than
+// that is warned about (the one kept is too small for that module's use).
+// c4cc's objects (asm-c4r's) mark nothing and say nothing of a BSS:
+// nothing of them is tentative.
+
+enum { DF_CL, DF_SYM, DF_KIND, DF_SIZE, DF_NEXT, DF__Sz };
+enum { DK_TENT, DK_INIT, DK_FUN };
+int cl_warncommon;
+
+// The bytes from module CL's global at OFF to the module's next global,
+// static or not, or to the end of OFF's region (the data, or the BSS)
+static int glo_extent (int *cl, int off) {
+	int *c4r, *hdr, *sym, i, n, end, v;
+	c4r = (int *)cl[CL_STRUCT];
+	hdr = (int *)cl[CL_HEADER];
+	end = off < cl[CL_BSS_BASE] ? cl[CL_BSS_BASE] : hdr[C4R_HDR_MEMSZ];
+	n = hdr[C4R_HDR_SYMBOLSLEN];
+	sym = (int *)c4r[C4R_SYMBOLS];
+	i = 0;
+	while (i < n) {
+		v = sym[C4R_SYMB_VALUE];
+		if (sym[C4R_SYMB_CLASS] == C4R_SCLASS_Glo && !(sym[C4R_SYMB_ATTRS] & ATTR_EXTERN) &&
+		    v > off && v < end)
+			end = v;
+		sym = sym + C4R_SYMB__Sz; ++i;
+	}
+	return end - off;
+}
+
+// Module CL's global at OFF, EXTENT bytes, is the one at master offset TO
+static int add_alias (int *cl, int off, int extent, int to) {
+	int *a;
+	if (!cl[CL_ALIAS]) {
+		if (!(cl[CL_ALIAS] = (int)malloc(sizeof(int) * 3 * ((int *)cl[CL_HEADER])[C4R_HDR_SYMBOLSLEN])))
+			return 1;
+		cl[CL_NALIAS] = 0;
+	}
+	a = (int *)cl[CL_ALIAS] + 3 * cl[CL_NALIAS];
+	a[0] = off; a[1] = extent; a[2] = to;
+	cl[CL_NALIAS] = cl[CL_NALIAS] + 1;
+	return 0;
+}
+
+// Decide, for every global more than one of the COUNT modules defines,
+// which is kept, and alias the others to it. Run once every module's
+// place in the merged image is known. NSYM bounds the names. Returns 0,
+// 1 when two definitions both have initializers (each pair is printed),
+// or -1 when out of memory.
+static int common_plan (int *c4rs, int count, int nsym) {
+	int *defs, *cl, *c4r, *hdr, *sym, *e, *d, *w, *wcl, *wsym;
+	int  k, i, n, nd, x, ninit, nfun, ndef, failed;
+	cl_nemax = nsym; cl_nen = 0;
+	if (!(cl_nh = malloc(sizeof(int) * NH_BUCKETS))) return -1;
+	memset(cl_nh, -1, sizeof(int) * NH_BUCKETS);
+	if (!(cl_ne = malloc(sizeof(int) * NE__Sz * (nsym + 1)))) { free(cl_nh); return -1; }
+	if (!(defs = malloc(sizeof(int) * DF__Sz * (nsym + 1)))) { free(cl_nh); free(cl_ne); return -1; }
+	// every definition a module offers the others, listed by name (an
+	// entry's NE_FLAGS is its last definition's index + 1; DF_NEXT
+	// goes back to the one before, -1 at the first)
+	nd = 0;
+	k = 0;
+	while (k < count) {
+		cl = c4rs + k * CL__Sz;
+		c4r = (int *)cl[CL_STRUCT];
+		hdr = (int *)cl[CL_HEADER];
+		n = hdr[C4R_HDR_SYMBOLSLEN];
+		sym = (int *)c4r[C4R_SYMBOLS];
+		i = 0;
+		while (i < n) {
+			if (lib_def(sym)) {
+				if (!(e = nh_find((char *)sym[C4R_SYMB_NAME], sym[C4R_SYMB_NAMELEN], 1))) {
+					free(cl_nh); free(cl_ne); free(defs); return -1;
+				}
+				d = defs + nd * DF__Sz;
+				d[DF_CL] = (int)cl; d[DF_SYM] = (int)sym;
+				if (sym[C4R_SYMB_CLASS] == C4R_SCLASS_Fun) { d[DF_KIND] = DK_FUN; d[DF_SIZE] = 0; }
+				else {
+					d[DF_KIND] = (sym[C4R_SYMB_ATTRS] & ATTR_COMMON) ||
+					             sym[C4R_SYMB_VALUE] >= cl[CL_BSS_BASE] ? DK_TENT : DK_INIT;
+					d[DF_SIZE] = glo_extent(cl, sym[C4R_SYMB_VALUE]);
+				}
+				d[DF_NEXT] = e[NE_FLAGS] - 1;
+				e[NE_FLAGS] = nd + 1;
+				++nd;
+			}
+			sym = sym + C4R_SYMB__Sz; ++i;
+		}
+		++k;
+	}
+	failed = 0;
+	k = 0;
+	while (k < cl_nen) {
+		e = cl_ne + k * NE__Sz;
+		++k;
+		ninit = 0; nfun = 0; ndef = 0; w = 0;
+		x = e[NE_FLAGS] - 1;
+		while (x >= 0) {
+			d = defs + x * DF__Sz;
+			++ndef;
+			if (d[DF_KIND] == DK_FUN) ++nfun;
+			else if (d[DF_KIND] == DK_INIT) {
+				++ninit;
+				// (the list runs backwards: the earlier is met later)
+				if (w && w[DF_KIND] == DK_INIT) {
+					wsym = (int *)w[DF_SYM];
+					printf("c4rlink: multiple definition of '%.*s': in '%s' and in '%s'\n",
+					       wsym[C4R_SYMB_NAMELEN], (char *)wsym[C4R_SYMB_NAME],
+					       (char *)((int *)d[DF_CL])[CL_FILE], (char *)((int *)w[DF_CL])[CL_FILE]);
+				}
+				w = d;
+			} else if (!ninit && (!w || d[DF_SIZE] >= w[DF_SIZE]))
+				w = d;               // the biggest; >= : the first of equals
+			x = d[DF_NEXT];
+		}
+		if (ndef < 2 || nfun) continue;
+		if (ninit > 1) { failed = 1; continue; }
+		wcl = (int *)w[DF_CL];
+		wsym = (int *)w[DF_SYM];
+		x = e[NE_FLAGS] - 1;
+		while (x >= 0) {
+			d = defs + x * DF__Sz;
+			x = d[DF_NEXT];
+			if (d == w) continue;
+			cl = (int *)d[DF_CL];
+			sym = (int *)d[DF_SYM];
+			// (its extent less the word after it, against an upper bound)
+			if (w[DF_KIND] == DK_INIT && d[DF_SIZE] - (int)sizeof(int) > w[DF_SIZE])
+				printf("c4rlink: warning: '%.*s' is %d bytes in '%s', but %d where it is initialized, in '%s'\n",
+				       sym[C4R_SYMB_NAMELEN], (char *)sym[C4R_SYMB_NAME], d[DF_SIZE] - (int)sizeof(int),
+				       (char *)cl[CL_FILE], w[DF_SIZE], (char *)wcl[CL_FILE]);
+			if (cl_warncommon || cl_verbose)
+				printf("c4rlink: common '%.*s': '%s' uses the one in '%s'\n",
+				       sym[C4R_SYMB_NAMELEN], (char *)sym[C4R_SYMB_NAME],
+				       (char *)cl[CL_FILE], (char *)wcl[CL_FILE]);
+			if (add_alias(cl, sym[C4R_SYMB_VALUE], d[DF_SIZE], data_at(wcl, wsym[C4R_SYMB_VALUE]))) {
+				free(cl_nh); free(cl_ne); free(defs); return -1;
+			}
+		}
+	}
+	free(cl_nh); free(cl_ne); free(defs);
+	return failed;
+}
+
 int main (int argc, char **argv) {
 	int   i, endargs, endopt, failed, unresolved, inlib;
 	int  *master, *loaded;
@@ -1849,6 +2073,7 @@ int main (int argc, char **argv) {
 	cl_debug = cl_verbose = cl_libmode = cl_strip = cl_nomap = 0;
 	cl_gc = 1;
 	cl_fold = 1;
+	cl_warncommon = 0;
 	// The strip tool is this program under another name (argv[0] ends in
 	// "c4rstrip", with or without .c4r): one input, strip on.
 	cl_striptool = 0;
@@ -1898,6 +2123,8 @@ int main (int argc, char **argv) {
 			cl_gc = 0;
 		} else if (endargs == 0 && !my_strcmp(*argv, "--no-fold")) {
 			cl_fold = 0;
+		} else if (endargs == 0 && !my_strcmp(*argv, "--warn-common")) {
+			cl_warncommon = 1;
 		} else if (endargs == 0 && **argv == '-') {
 			arg = *argv + 1; // skip dash
 			endopt = 0;
@@ -2035,6 +2262,13 @@ int main (int argc, char **argv) {
 	}
 	count_data = count_data + count_bss;
 
+	// A global several modules define is one object (common_plan)
+	if ((k = common_plan(c4rs, c4r_pos, count_sym))) {
+		if (k < 0) printf("%s: out of memory merging the globals\n", spec);
+		printf("%s: link failure\n", spec);
+		return 1;
+	}
+
 	if (cl_verbose) {
 		printf("%s: command parsing complete, %d c4r structures loaded\n",
 		       spec, c4r_pos);
@@ -2141,6 +2375,9 @@ int main (int argc, char **argv) {
 			c4r_free((int *)c4rs_it[CL_STRUCT]);
 		if (c4rs_it[CL_REMAP])
 			free((int *)c4rs_it[CL_REMAP]);
+		if (c4rs_it[CL_ALIAS])
+			free((int *)c4rs_it[CL_ALIAS]);
+		c4rs_it[CL_ALIAS] = 0;
 		c4rs_it[CL_ID] = c4rs_it[CL_STRUCT] = c4rs_it[CL_HEADER] = c4rs_it[CL_REMAP] = 0;
 		c4rs_it = c4rs_it + CL__Sz;
 	}

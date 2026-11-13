@@ -1666,7 +1666,8 @@ C4FC_ALL := $(C4FC_LIB) src/c4fc/pp.f src/c4fc/ast.f src/c4fc/types.f \
 C4FC_SPIKE := src/tests/hello.c src/c4fc/tests/spike1.c src/c4fc/tests/spike2.c \
               src/c4fc/tests/spike3.c src/c4fc/tests/spike4.c \
               src/c4fc/tests/spike5.c src/c4fc/tests/spike6.c \
-              src/c4fc/tests/spike7.c src/c4fc/tests/spike8.c
+              src/c4fc/tests/spike7.c src/c4fc/tests/spike8.c \
+              src/tests/c4lc_tentative.c
 
 # F2, the lexer. The oracle is c4lc's own, three ways: its golden dump
 # of the sample that carries every token kind and quirk, the same with
@@ -1899,6 +1900,21 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c $(C4RDUMP)
 	cmp .c4fc_ix.c4r c4ix.c4r
 	$(C4M) load-c4r.c -- .c4fc_ix.c4r --demo 2>&1 | grep -q "shutdown complete"
 	@rm -f .c4fc_lc.c4o .c4fc_ix.c4r .c4fc_ix_*.c4o
+	# Tentative definitions (c4rlink.c, common_plan): each marked
+	# ATTR_COMMON with a word after it, and a global defined twice in one
+	# unit one object -- byte for byte c4lc's -c and -O -c. A global
+	# initialized twice is c4fc's error too.
+	@for f in common_b common_c common_d c4lc_tentative; do \
+	   for o in "" "-O"; do \
+	      ./c4sp src/c4sp/lisp/c4lc.lisp $$o -c $(TESTS)/$$f.c .c4fc_lc.c4o >/dev/null 2>&1; \
+	      ./c4th $(C4FC_ALL) -e ": GO `echo $$o | sed 's/-O/1 OPTIMIZE !/'` -c S\" $(TESTS)/$$f.c\" C4FC ; GO" > .c4fc_fc.c4o 2>&1; \
+	      cmp -s .c4fc_lc.c4o .c4fc_fc.c4o \
+	        || { echo "test-c4fc: $$f.c4o differs from c4lc $$o -c"; exit 1; }; \
+	   done; \
+	   echo "  common obj ok: $$f"; \
+	done
+	./c4th $(C4FC_ALL) -e ': GO -c S" $(TESTS)/c4lc_redef.c" C4FC ; GO' 2>&1 | grep -aq "c4fc: redefinition of r"
+	@rm -f .c4fc_lc.c4o .c4fc_fc.c4o
 	# M4 qualifiers, c4fc's half. The const battery must draw from c4fc
 	# exactly the lines it draws from c4lc -- the same golden files
 	# test-c4lc holds c4lc to -- and the image must be c4lc's. A warning
@@ -3437,6 +3453,11 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	cat $(TESTS)/test_link_d.c $(TESTS)/test_link_c.c > .c4lc_pp.c
 	./c4sp src/c4sp/lisp/c4lc.lisp .c4lc_pp.c .c4lc_ol.c4r > /dev/null
 	./c4m load-c4r.c -- .c4lc_ol.c4r | cmp - src/c4sp/tests/expected/c4lc-link.txt
+	# A global several units define is one object, as with gcc -fcommon
+	# (c4rlink.c, common_plan); in one unit c4lc makes one, and a global
+	# initialized twice is an error (docs/c4lc-design.md, Globals defined
+	# more than once)
+	bash src/c4sp/tests/common-link.sh
 	# L8, extern DATA: test_link_e.c defines shared globals (scalar,
 	# array, char array, struct, fn-address slot), test_link_f.c
 	# declares them extern; symbol patches resolve to DATA patches.

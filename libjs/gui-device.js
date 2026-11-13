@@ -76,6 +76,9 @@ export const EV = { MOVE: 1, DOWN: 2, UP: 3, KEYDOWN: 4, KEYUP: 5, RESIZE: 6, FO
 const MASK = { [EV.MOVE]: 1, [EV.DOWN]: 2, [EV.UP]: 2, [EV.KEYDOWN]: 4, [EV.KEYUP]: 4,
                [EV.RESIZE]: 8, [EV.FOCUS]: 8, [EV.WHEEL]: 16, [EV.REL]: 32 };
 const QUEUE_LIMIT = 8 << 20;             // words of undelivered commands before dropping
+// what a command before a frame that covers the display still matters for:
+// the state it sets for the commands after it (display.js keeps the same)
+const STATE = new Set([CMD.SIZE, CMD.IMGDEF, CMD.CLIP, CMD.NOCLIP, CMD.CURSOR]);
 
 export class GuiDevice {
   constructor(opts = {}) {
@@ -97,9 +100,14 @@ export class GuiDevice {
     this.queued = 0;                     // words in chunks
     this.fbBase = 0; this.fbPitch = 0; this.fbMode = 0; this.flips = 0; this.flipMs = 0;
     this.fbShared = opts.fbShared || null;   // shared.js FbProducer, when the page is isolated
-    // For the page (worker.js): BLIT8's pixels made in the page's order (RGB_ABGR)
+    // For the page (worker.js): BLIT8's pixels made in the page's order
+    // (RGB_ABGR), and what is still queued when a frame covering the
+    // display comes is dropped -- the page would draw it and cover it
     this.abgr = !!opts.abgr;
+    this.dropCovered = !!opts.dropCovered;
+    this.unclipped = true;               // no CLIP narrower than the display is in force
     this.lut = new Int32Array(256);
+    this.coveredDrops = 0;               // frames dropped so
     this.sizeReq = null;
     this.t0 = Date.now();
     this.commands = 0; this.presents = 0; this.events = 0; this.lostCommands = 0;
@@ -180,6 +188,8 @@ export class GuiDevice {
     let presented = false;
     for (const f of frames) {
       if (f.type === CMD.BLIT8) { this.blit8Checked(f.payload); continue; }
+      if (f.type === CMD.CLIP) { const [x, y, w, h] = f.payload; this.unclipped = x <= 0 && y <= 0 && x + w >= this.w && y + h >= this.h; }
+      else if (f.type === CMD.NOCLIP) this.unclipped = true;
       if (this.queued + this.queue.length + 2 + f.payload.length > QUEUE_LIMIT) { this.lostCommands++; continue; }
       this.queue.push(2 + f.payload.length, f.type);
       for (let i = 0; i < f.payload.length; i++) this.queue.push(f.payload[i]);
@@ -349,9 +359,32 @@ export class GuiDevice {
         i += r; va = (va + r) >>> 0;
       }
     }
+    // a frame over the whole display, unclipped: whatever is queued
+    // before it would only be drawn to be covered
+    if (this.dropCovered && this.unclipped && x <= 0 && y <= 0 &&
+        x + (dw > 0 ? dw : w) >= this.w && y + (dh > 0 ? dh : h) >= this.h) this.dropQueued();
     this.seal();
     this.chunks.push(c); this.queued += c.length;
     this.commands++;
+  }
+
+  // Drop every queued command but those setting state for later ones
+  // (STATE): a frame that covers the display is next. The page would
+  // draw them and cover them, or, behind (a background tab, a full
+  // ring), would take them in with this one and show only this one.
+  dropQueued() {
+    this.seal();
+    if (!this.chunks.length) return;
+    const keep = [];
+    for (const ch of this.chunks) {
+      for (let i = 0; i < ch.length && ch[i] >= 2; i += ch[i]) {
+        const t = ch[i + 1];
+        if (STATE.has(t)) for (let k = 0; k < ch[i]; k++) keep.push(ch[i + k]);
+        else if (t === CMD.RGB || t === CMD.FB || t === CMD.FBREF) this.coveredDrops++;
+      }
+    }
+    this.chunks = keep.length ? [Int32Array.from(keep)] : [];
+    this.queued = keep.length;
   }
 
   takeSizeRequest() {
@@ -396,6 +429,7 @@ export class GuiDevice {
   stats() {
     return { w: this.w, h: this.h, attached: !!this.mbox, commands: this.commands,
              presents: this.presents, events: this.events, dropped: this.dropped,
-             lostCommands: this.lostCommands, flips: this.flips, flipMs: Math.round(this.flipMs) };
+             lostCommands: this.lostCommands, flips: this.flips, flipMs: Math.round(this.flipMs),
+             coveredDrops: this.coveredDrops };
   }
 }

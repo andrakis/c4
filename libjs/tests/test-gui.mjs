@@ -138,4 +138,31 @@ check(gui.dropped === 0 && gui.lostCommands === 0, 'nothing dropped either way')
   check(f2 && f2.length === f.length && f2.every((v, i) => v === f[i]), 'read a page at a time, the same pixels');
 }
 
+// ---- frames that would only be covered -------------------------------
+// With dropCovered, a BLIT8 over the whole display drops what is queued
+// before it but the state (CLIP, NOCLIP, IMGDEF, SIZE, CURSOR); one that
+// does not cover it, or comes inside a narrower clip, drops nothing.
+{
+  const g = new GuiDevice({ w: 320, h: 200, abgr: true, dropCovered: true });
+  const m = createMachine({ arenaMb: 4, gui: g });
+  const pal = 0x30000, src = 0x20000;
+  const types = f => { const t = []; for (let i = 0; f && i < f.length; i += f[i]) t.push(f[i + 1]); return t.join(','); };
+  const queue = (...cmds) => { for (const c of cmds) g.queue.push(c.length + 1, ...c); };
+  queue([CMD.RECT, 0, 0, 10, 10, 1], [CMD.CURSOR, 2], [CMD.PRESENT]);
+  g.blit8([0, 0, 160, 100, src, 160, pal, 320, 200]);
+  queue([CMD.PRESENT]);
+  g.blit8([0, 0, 160, 100, src, 160, pal, 320, 200]);
+  queue([CMD.PRESENT]);
+  check(types(g.drain()) === `${CMD.CURSOR},${CMD.RGB},${CMD.PRESENT}` && g.coveredDrops === 1,
+        'a frame over the display replaces what was queued, but the state');
+  queue([CMD.RECT, 0, 0, 10, 10, 1], [CMD.PRESENT]);
+  g.blit8([10, 0, 160, 100, src, 160, pal, 300, 200]);
+  check(types(g.drain()) === `${CMD.RECT},${CMD.PRESENT},${CMD.RGB}`, 'one that does not cover it keeps it');
+  g.queue.push(6, CMD.CLIP, 0, 0, 100, 100);
+  g.unclipped = false;                   // as pull() leaves it after that CLIP from the ring
+  queue([CMD.RECT, 0, 0, 10, 10, 1]);
+  g.blit8([0, 0, 160, 100, src, 160, pal, 320, 200]);
+  check(types(g.drain()) === `${CMD.CLIP},${CMD.RECT},${CMD.RGB}`, 'nor one inside a narrower clip');
+}
+
 process.exit(fail);

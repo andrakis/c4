@@ -134,10 +134,20 @@ export class Display {
       if (!this.presentMode) this.present();
       return;
     }
-    let full = -1;
+    // ... and BLIT8's frame (RGB) over the whole display, with no clip
+    // narrower than it in force
+    let full = -1, clipped = !!this.clipRect && !this.covers(this.clipRect.x, this.clipRect.y, this.clipRect.w, this.clipRect.h);
     for (let i = 0; i < end; i += words[i]) {
       const t = words[i + 1];
       if (t === CMD.CLEAR || t === CMD.FB || t === CMD.FBREF) full = i;
+      else if (t === CMD.CLIP) clipped = !this.covers(words[i + 2], words[i + 3], words[i + 4], words[i + 5]);
+      else if (t === CMD.NOCLIP) clipped = false;
+      else if (t === CMD.RGB && !clipped) {
+        const w = words[i + 4], h = words[i + 5], dw = words[i + 6];
+        let dh = words[i + 7];
+        if ((dh & ~0xffff) === RGB_ABGR) dh &= 0xffff;
+        if (this.covers(words[i + 2], words[i + 3], dw > 0 ? dw : w, dh > 0 ? dh : h)) full = i;
+      }
     }
     if (full > 0) {
       const keep = [];
@@ -158,6 +168,9 @@ export class Display {
       this.coalescing = false;
     }
   }
+
+  // A rectangle over the whole display
+  covers(x, y, w, h) { return x <= 0 && y <= 0 && x + w >= this.width && y + h >= this.height; }
 
   // Throw away whatever is waiting in the ring (a reset).
   discard() { if (this.ring) this.ring.read(); }

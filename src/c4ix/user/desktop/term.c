@@ -216,7 +216,7 @@ static void apc(char *ctx, char *abuf, int alen) {
         // its frame covers all of it (gfx_draw): nothing under it or
         // around it is drawn again. Lines and text may reach outside it,
         // and the whole window is drawn for those.
-        if (t->fpend) wk_invalidate_covered(t->win, 2, 2, t->gw, t->gh);
+        if (t->fpend) { wk_invalidate_covered(t->win, 2, 2, t->gw, t->gh); mark_frame(); }
         else wk_invalidate(t->win, 0, 0, 0, 0);
         return;
     }

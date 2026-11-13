@@ -47,6 +47,7 @@ void win_raise(int i);
 int  win_focused();
 void mark_dirty();                    // the whole scene is to be drawn again
 void mark_win_dirty(struct win *w);   // only this window's contents changed
+void mark_frame();                    // a program's framebuffer frame waits: drawn at once (shell.c)
 int  now_ms();
 void msgbox(struct win *owner, char *title, char *text, int yesno, int action);
 void inputbox(struct win *owner, char *title, char *prompt, char *initial, int action);

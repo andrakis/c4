@@ -3290,7 +3290,7 @@ test-c4lc-opassign: c4sp32 c4rlink32 libc-bare-objs
 PHONY += test-c4lc-opassign
 
 test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.c4r \
-           c4sp32 c4m32 c4rlink32 $(C4RDUMP)
+           c4sp32 c4m32 c4rlink32 $(C4RDUMP) c4mp
 	./c4sp src/c4sp/lisp/c4lc-tokens.lisp src/tests/c4lc_lex_sample.c | cmp - src/c4sp/tests/expected/c4lc-tokens.txt
 	./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/c4lc-tokens.lisp src/tests/c4lc_lex_sample.c | cmp - src/c4sp/tests/expected/c4lc-tokens.txt
 	./c4sp src/c4sp/lisp/c4lc-tokens.lisp -count src/c4cc/c4cc.c | grep -q "^tokens [0-9]"

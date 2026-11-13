@@ -244,11 +244,13 @@ export class ParHost extends ParCore {
     const m0 = this.m0;
     let left = maxCycles, r = STOP.BUDGET;
     this.running = true;
+    this.napT0 = 0;
     try {
       while (left > 0) {
         const before = m0.cycle;
         r = m0.run(Math.min(left, 16384));
         left -= Math.max(1, m0.cycle - before);
+        if (r === STOP.SLEEP) { this.napFrom = this.dev.simMs() - this.dev.napMs; this.napT0 = Date.now(); }
         this.poll(m0);
         if (r !== STOP.BUDGET || m0.dev.halted) break;
       }
@@ -256,12 +258,23 @@ export class ParHost extends ParCore {
     return m0.dev.halted ? STOP.HALT : r;
   }
 
+  // The time the other CPUs read (TIME, ap.js). The machine's clock takes
+  // CPU 0's nap whole as it begins (USLP), and its host gives back what it
+  // did not sleep, if an IPI ends it; meanwhile the others see the nap's
+  // start and the real time since. Shown its end, CPU 1 set a 3 ms sleep
+  // from there, so it asked CPU 0 for nothing, and slept out the nap: 100
+  // ms for each 3 (test-c4ix-pipewake's writer, on threads).
+  timeMs() {
+    const t = this.dev.simMs();
+    return this.napT0 ? Math.min(t, this.napFrom + (Date.now() - this.napT0)) : t;
+  }
+
   // between CPU 0's slices: answer anyone waiting, and apply what was
   // posted, then its own IPI
   poll(m) {
     // the time the other CPUs read (TIME, ap.js): it moves as CPU 0 runs, not
     // only when one of them happens to ask for something
-    Atomics.store(this.ctl, C.TIMEMS, this.dev.simMs());
+    Atomics.store(this.ctl, C.TIMEMS, this.timeMs());
     if (Atomics.load(this.ctl, C.DOOR) !== this.seenDoor) this.service();
     else for (let k = 1; k < this.n; k++) this.applyPosted(k);
     return super.poll(m);
@@ -287,7 +300,7 @@ export class ParHost extends ParCore {
   service() {
     const ctl = this.ctl;
     this.seenDoor = Atomics.load(ctl, C.DOOR);
-    Atomics.store(ctl, C.TIMEMS, this.dev.simMs());
+    Atomics.store(ctl, C.TIMEMS, this.timeMs());
     for (let k = 1; k < this.n; k++) {
       const b = word(k, 0);
       this.applyPosted(k);              // before its request: they came first
@@ -347,9 +360,22 @@ export class ParHost extends ParCore {
     }
   }
 
-  // Some other CPU is running, not parked
+  // Some other CPU is running, not parked -- or about to: an IPI waits
+  // for it, or the word it parked on has moved on, which its thread has yet
+  // to see. Counted as parked, CPU 0's nap went by at once, its clock a nap
+  // on for each time round, while that thread woke: a task woken for CPU 1
+  // by CPU 0's idle loop, or CPU 1 parked on the kernel lock CPU 0 had let
+  // go, started a second of the machine's time late (test-c4ix-pipewake).
   othersRunning() {
-    for (let k = 1; k < this.n; k++) if (this.state(k) === S.RUN) return true;
+    const ctl = this.ctl;
+    for (let k = 1; k < this.n; k++) {
+      const s = this.state(k);
+      if (s === S.RUN || Atomics.load(ctl, word(k, K.IPI))) return true;
+      if (s === S.WAIT) {
+        const wa = Atomics.load(ctl, word(k, K.WAITADDR));
+        if (wa && Atomics.load(this.ai32, wa >> 2) !== Atomics.load(ctl, word(k, K.WAITVAL))) return true;
+      }
+    }
     return false;
   }
 

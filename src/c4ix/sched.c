@@ -39,6 +39,7 @@ static struct task *kernel_task;
 static struct task *idle_task;
 static int sched_idle(int argc, int argv);
 static int sched_unblocked(struct task *n);
+static int sched_napto;         // CPU 0's idle loop naps until this ms (0: it does not)
 static int sched_pipesready(struct task *t);
 static int sched_pipegen;       // bumped by every pipe's write and last writer's close (sched_events)
 static void sched_banner();
@@ -302,6 +303,12 @@ void task_state(struct task *t, int s) {
     } else if (s == TS_SLEEPING) {
         if (t->ev_wait) Q_PUSH(pl_head, t, Q_POLL);
         else sl_add(t);
+        // CPU 0's idle loop naps to the soonest deadline it knew of, and
+        // the other CPUs park with none: one sooner, set on another CPU,
+        // ends the nap, or nobody looks until it is over. A task pinned to
+        // CPU 1 slept 100 ms, the nap with nobody asleep, for each 3 it
+        // asked (test-c4ix-pipewake's writer).
+        if (sched_napto && t->ck_wake - sched_napto < 0 && cpu_self->id) { sched_napto = 0; __c4_ipi(0); }
     } else if (s == TS_BLOCKED) {
         if (t->block_vn->type == VN_PIPE) {
             h = (struct task *)t->block_vn->waiters;
@@ -397,7 +404,7 @@ static void smp_kick(int now) {
                 if (me != 0 && (smp_idlemask & 1)) { __c4_ipi(0); SMP_IDLE(0, 0); }
             } else if ((k = smp_idlefor(n)) >= 0) { __c4_ipi(k); SMP_IDLE(k, 0); }
         }
-        n = n->next;
+        n = n->qnext;
     }
 }
 
@@ -414,6 +421,11 @@ static int sched_ready_here() {
         if (!n->cpuidle && sched_mine(n)) return 1;
         n = n->qnext;
     }
+    // Ready, but not for this CPU: a task pinned to another, which this
+    // look may have just woken. That CPU is parked, and nothing else would
+    // tell it until this one trapped again, after its nap: 100 ms for each
+    // 3 ms sleep of a task pinned to CPU 1 (test-c4ix-pipewake's writer).
+    if (rq_head && smp_ncpu > 1) smp_kick(now);
     return 0;
 }
 
@@ -1743,6 +1755,13 @@ static void smp_ap() {
         // (oncpu, smp_settle), which no CPU then resumes and no IPI is
         // sent for (smp_kick). A -j 3 build in 32 MB stopped so: b4ke
         // ready, three children to reap, three CPUs parked.
+        //
+        // And any idle CPU sweeps the zombies nobody waits on, as CPU 0's
+        // idle task does: a shell's background job is collected only so,
+        // and with CPU 0 busy its memory stayed taken -- three programs
+        // running on four CPUs kept a finished one's 20 MB, and nothing
+        // moved up into it (PARALLEL=0 test-c4ix-movable).
+        if (sched_nzombies) task_reap_orphans();
         sched_lock();
         smp_park[k] = 0;
         smp_settle();
@@ -1993,8 +2012,12 @@ static int sched_idle(int argc, int argv) {
             if (budget < 0) budget = 0;
             if (budget < nap) nap = budget;
         }
-        // (an IPI ends the nap early: another CPU left work for this one)
-        if (smp_ncpu > 1) sched_unlock();
+        // (an IPI ends the nap early: another CPU left work for this one,
+        // or put a task to sleep with a deadline before the nap's end)
+        if (smp_ncpu > 1) {
+            if (!ready) sched_napto = __time() + (nap + 999) / 1000;
+            sched_unlock();
+        }
         // the counter stands still meanwhile: idle time in ms instead
         ms = __time();
         if (smp_ncpu > 1) {
@@ -2006,7 +2029,7 @@ static int sched_idle(int argc, int argv) {
         // The cycle counter stood still while we slept, so the
         // console's own rate limit has no way to know that real
         // time passed. Tell it.
-        if (smp_ncpu > 1) sched_lock();
+        if (smp_ncpu > 1) { sched_lock(); sched_napto = 0; }
         con_wake();
         if (smp_ncpu > 1) sched_unlock();
         sched_yield();

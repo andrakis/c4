@@ -393,7 +393,8 @@ static int disp_want, disp_wyields, disp_want_at;   // who asks, and since when
 // A holder asleep on the clock or its event ring looks now
 static void disp_nudge(int id) {
     struct task *w;
-    if ((w = task_get(id)) && w->state == TS_SLEEPING) w->ck_wake = __time();
+    // (again on its queue: the clock's is in order of deadline)
+    if ((w = task_get(id)) && w->state == TS_SLEEPING) { w->ck_wake = __time(); task_state(w, TS_SLEEPING); }
 }
 
 static void disp_pass() {

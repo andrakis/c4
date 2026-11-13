@@ -883,7 +883,7 @@ int sched_nice(int id, int nice) {
 
 static void sched_trap(int interval, int trap, int param, int mode, int a, int bp, int sp, int returnpc) {
     struct task *t, *n, *me, *fv;
-    int reload, hold, d;
+    int reload, hold, d, rc;
 
     // Re-entry guard. c4m disables the cycle interrupt when IT takes
     // a trap, but not when user code raises one (the syscall gateway
@@ -987,8 +987,21 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
 
     // Safe point: we are on the trapped task's stack, so any corpse
     // left over from an earlier exit can finally be freed. Usually
-    // there is none, and then not even the call.
-    if (task_reaplist) task_reap();
+    // there is none, and then not even the call. What that costs -- the
+    // dead task's memory given back, and the rest moved up (task_destroy)
+    // -- is the kernel's, not this task's: charged to whoever trapped next,
+    // a program that never stopped showed in ps as using three or four
+    // slices more for each one beside it that ended (test-c4ix-smp's nice).
+    rc = 0;
+    if (task_reaplist) {
+        rc = __c4_cycles();
+        task_reap();
+        rc = __c4_cycles() - rc;
+        if (kernel_task) {
+            kernel_task->kacc = kernel_task->kacc + rc;
+            if (kernel_task->kacc & ACCT_FOLD_AT) acct_fold(kernel_task);
+        }
+    }
     // the stack an execve left, which its handler was standing on
     if (sched_stale_stack) { ufree(sched_stale_stack); sched_stale_stack = 0; }
     // The stack guard. A task whose stack pointer is inside the guard,
@@ -1192,7 +1205,7 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     d = acct_out;
     acct_out = __c4_cycles();
     if (me) {
-        me->kacc = me->kacc + (acct_out - acct_in);
+        me->kacc = me->kacc + (acct_out - acct_in) - rc;
         acct_cpu(me, acct_out - d);
         if ((me->uacc | me->kacc) & ACCT_FOLD_AT) acct_fold(me);
     }

@@ -320,6 +320,8 @@ call counted by its target. Each step ends on the same checksum,
 | `LCU`, an unsigned byte's load (docs/c4-16bit.md) | 5.595 | −4.5% | 23,367 |
 | the c4 loops shift with `LSR` (`hlineasm4`, `vlineasm4`, `mvlineasm4`, `slopevlin`) | 5.224 | −6.6% | 23,365 |
 | `vlineasm4`, `mvlineasm4`, `hlineasm4` four pixels a turn | 4.866 | −6.9% | 23,365 |
+| `c4_mulscale` in signed 16-bit digits | 4.754 | −2.3% | 21,425 |
+| **all of round 2** | | **−33.2%** | **−77.6%** |
 
 **16-bit loads and stores.** `<ld16s>`, `<ld16u>` and `<st16>` were 72,200
 calls a frame between them, each a call and 19 to 22 instructions. They are
@@ -340,4 +342,13 @@ instructions. The column and row loops draw four pixels a turn now and the
 rest one at a time; `hlineasm4` writes `dest[0]` to `dest[-3]` and steps
 `dest` by four. About 21 instructions a pixel in `vlineasm4`, 32 in
 `hlineasm4`.
+
+**`mulscale` outside its 32-bit path.** 70% of the demo's `mulscale` calls
+have an operand past 46,340 and went to `c4_mulscale`: both operands'
+magnitudes, `c4_umul64`'s four products through two pointers, and the 64-bit
+product negated when the signs differed, about 160 instructions. With the
+high 16-bit digits signed (`a >> 16`) and the low ones not (`a & 0xffff`),
+the cross products stay within 2^31 and the sum needs two carries; no call,
+no signs, `INT32_MIN` too, about 100. Checked against the int64 product on
+four million pairs.
 

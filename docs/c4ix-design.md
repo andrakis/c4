@@ -1363,6 +1363,9 @@ What the pass tried and left out, measured or not worth the keeping:
   a switch: 4,870 cycles to yield with 50 asleep, against 1,215 alone. The run
   queue removed it instead.
 
+Where the kernel's time goes under three whole loads, function by function, is
+under [its own heading](#where-the-kernels-time-goes-2026-11-13) below.
+
 ### The run queue (2026-11-05)
 
 A task is on the queue its state says, and the scheduler looks at the queues rather
@@ -1442,6 +1445,124 @@ In the page, 4 CPUs at 400 MHz, 32 MB with the desktop: `-Tln 40` 103 s, `-Tln 5
 afterwards. With 50 in 32 MB some inner kernels are refused at start ("out of memory
 starting /bin/c4m"), so 42 to 48 of the 50 report; the kernel before the queue did the
 same. `mmu=0` in 64 MB: `-Tln 20` 47 to 49 s, `rqlost` 0.
+
+### Where the kernel's time goes (2026-11-13)
+
+Three loads under libjs with the MMU, 4 CPUs, 32 MB, on c4ix_and_toppings 564cf1a,
+profiled by function: the CPU's pc sampled in chunks of random length, and a helper
+(`klock_spin` and `klock_let`, the `<...>` stubs, `mem*` and `str*`) charged to the
+function that called it, found by walking `bp` (`[bp]` the caller's `bp`, `[bp+4]` the
+return pc). So `bkl_take` is the time spent spinning for the kernel lock.
+
+| Load | Machine time | Kernel | User | Idle |
+|---|---:|---:|---:|---:|
+| Quake in a desktop window, frames 6 to 120 | 66,700 ms | 2.13% | 22.94% | 74.92% |
+| `innerbench -Tln 40` | 182,479 ms | 21.10% | 75.09% | 3.80% |
+| `b4ke -B -j 3` inside C4IX | 3,278,075 ms | 5.02% | 51.02% | 43.96% |
+
+The top 20 of each, as a share of the kernel's time:
+
+| | Quake in a window | | `-Tln 40` | | `b4ke -B -j 3` | |
+|---:|---|---:|---|---:|---|---:|
+| 1 | `sched_events` | 53.2% | `bkl_take` | 27.7% | `sched_trap` | 25.1% |
+| 2 | `sched_trap` | 22.0% | `sched_trap` | 18.9% | `mmu_ftake` | 13.1% |
+| 3 | `sched_tick` | 5.3% | `vfs_span_at` | 12.2% | `umem_alloc` | 9.1% |
+| 4 | `acct_cpu` | 2.5% | `vfs_read` | 8.1% | `bkl_take` | 6.6% |
+| 5 | `sched_allows` | 1.7% | `vfs_span_read` | 4.3% | `mmu_clock` | 4.9% |
+| 6 | `bkl_take` | 1.6% | `vfs_dec` | 4.0% | `mmu_fput` | 2.4% |
+| 7 | `sched_run` | 1.6% | `vfs_pread` | 3.5% | `mmu_sop` | 2.3% |
+| 8 | `smp_ap` | 1.6% | `uaccess` | 2.5% | `mod_read` | 2.1% |
+| 9 | `mmu_ftake` | 1.6% | `sys_pmviolation` | 1.8% | `mmu_salloc` | 2.0% |
+| 10 | `sched_mine_smp` | 1.5% | `acct_cpu` | 1.8% | `mmu_pageout` | 1.9% |
+| 11 | `bkl_drop` | 1.2% | `sys_read` | 1.2% | `acct_cpu` | 1.9% |
+| 12 | `smp_kick` | 0.8% | `umem_alloc` | 1.1% | `mmu_pagein` | 1.8% |
+| 13 | `sched_unblocked` | 0.8% | `sched_run` | 1.1% | `mod_data_relocate` | 1.7% |
+| 14 | `sched_pick` | 0.6% | `mmu_ftake` | 1.0% | `sched_run` | 1.6% |
+| 15 | `smp_idlefor` | 0.5% | `smp_idlefor` | 1.0% | `mmu_shootdown` | 1.5% |
+| 16 | `sched_waker` | 0.5% | `sched_tick` | 0.9% | `link_modules` | 1.5% |
+| 17 | `uaccess` | 0.3% | `mmu_clock` | 0.8% | `sched_pick` | 1.5% |
+| 18 | `sched_cpustat` | 0.3% | `sched_mine_smp` | 0.8% | `mmu_sput` | 1.5% |
+| 19 | `mmu_pagein` | 0.2% | `mmu_switch` | 0.7% | `sched_tick` | 1.4% |
+| 20 | `mmu_sput` | 0.2% | `sched_pick` | 0.6% | `mmu_uva` | 1.2% |
+
+`sched_trap` is the trap itself: the switch, the accounting, the clock's checks. What
+each load says:
+
+- **Quake: the poll for pipes was half the kernel.** The desktop and each program in a
+  window sleep in `SYS_EVWAIT` on `Q_POLL`, which `sched_tick` looks at every ms, and
+  `sched_events` walked all 64 fds of each, every time, for a pipe with something to
+  read. Fixed below.
+- **`-Tln 40`: a third of the kernel is waiting for the lock, and a third is reading
+  spans.** Each inner c4m loads `c4ke.c4r` a few bytes at a time (`load-c4r.c`): 555,641
+  reads of a host span in the run, 555,560 of them of `c4ke.c4r` and 537,160 of 2 to 16
+  bytes. Each is a trap, the span parsed again (`vfs_span_at`, `vfs_dec`) and the host's
+  file opened, read and closed, all under the kernel lock, which is why the lock is
+  also the top line. Not changed here (below).
+- **`b4ke`: memory.** `mmu_ftake`'s walk of the frame lists and `umem_alloc` are a fifth
+  of the kernel's time, and the kernel is 5% of the machine's.
+
+#### The poll that waited for pipes
+
+A pipe's write, and its last writer's close, already call `sched_pipewake` to wake the
+readers blocked on it. That now also bumps `sched_pipegen`. A task's walk of its pipes
+(`sched_pipesready`) notes the count it saw in `t->evgen`, and the poll each ms
+(`sched_evpoll`) walks them again only once the count has moved. The window's ring is
+still looked at each ms: the host writes it with no event the kernel sees. And a walk
+goes only as far as the task has ever had an fd (`t->fdtop`, kept by `fd_install`,
+`fd_dup2` and the clones), not all 64.
+
+The bump and the walk are both under the scheduler's lock, the bump after the data is
+in, so a write the walk missed has always moved the count. A wakeup lost anyway would leave the task asleep until its
+timeout: the watch (above) now also looks every 16 ms for a task asleep in `SYS_EVWAIT`
+with a pipe ready and its count current, wakes it, and counts it in `rqlost`.
+`test-c4ix-pipewake` has a reader on CPU 2 wait for 200 lines written 3 ms apart from
+another CPU, asleep in `uevwait` and then blocked in `read`, on threads and on simulated
+CPUs: every line arrives, no wake finds nothing, no timeout is waited out, and `rqlost`
+stays 0.
+
+Before to after, the same disk, the windowed timedemo of Wolf3D in node (`ix.mjs`,
+measured from its first frames to its last):
+
+| | 564cf1a | after |
+|---|---:|---:|
+| Wolf3D in a window, 1,208 frames | 32,806 machine ms | 32,035 machine ms |
+| ... the cycles it ran | 3,280.6 M | 3,203.5 M |
+| ... the kernel's share | 4.1% | 1.8% |
+| ... the poll's (`sched_events`; then `sched_evpoll` and `sched_pipesready`) | 2.42% | 0.08% |
+| Quake in a window: the kernel's share | 2.13% | 1.05% |
+
+`innerbench -Tln 40` took 175.2 s against 174.2, the same: nothing there waits in
+`SYS_EVWAIT`.
+
+#### What a task's exit cost the next one
+
+A task that ends is freed at the next trap, on whichever task trapped (`task_reap`):
+its memory given back and the rest moved up (`task_destroy`, `mmu_compact`), 140,000 to
+240,000 cycles. Those were charged to the task that trapped. On one CPU with the run
+queue, the trap after an exit is most often the plain program's, so in
+`test-c4ix-smp`'s nice check a program never stopping showed in `ps` as using three or
+four slices more for each one beside it that ended, and `nice -n -3` got 2.7 to 2.9
+times its cycles where the check asks more than 3. The reap's cycles now go to the
+kernel task: 3.7 times (43,565k cycles against 11,860k), the four slices to one that
+nice -3 is.
+
+#### Left for later
+
+What the profiles found that is not cheap, or not low in risk:
+
+- **Tiny reads of a host span** (`-Tln 40`): a read-ahead per open file in the kernel, or
+  `load-c4r.c` reading in bulk, or the span's parse kept with the open file. Each would
+  take most of a third of that load's kernel time, and with it time under the lock.
+- **The kernel lock** (`bkl_take`, 28% of the kernel in `-Tln 40`): shorter work under
+  it, starting with the span reads.
+- **`mmu_ftake`'s walk** and **`umem_alloc`** (`b4ke`, 13% and 9%): a cached best block
+  per pool and a free-word hint, left out on 2026-11-04 as not then measured.
+- **A sleeper pinned to a CPU other than 0 wakes up to 100 ms late**: each `umsleep(3)`
+  of a task pinned to CPU 1 took 100 ms. Before the run queue too (dd3f564).
+  `test-c4ix-pipewake` keeps its writer on CPU 0 for this.
+- **`b4ke -B -j 3` in 32 MB runs out of memory at 564cf1a** ("loader: out of memory
+  loading /bin/c4sc (2101 KB)", `BUILD.B4K:30`), where on 2026-11-05 it finished.
+  `test-c4ix-rebuild` runs it in 64 and 128 MB, and passes.
 
 ## 6.1 Running it
 

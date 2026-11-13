@@ -3543,9 +3543,10 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	 done
 	# LH LHU SH LSR LCU (docs/c4-16bit.md): shorts at every alignment, the
 	# values of their assignments and post-increments, an unsigned >> by a
-	# run-time count, unsigned chars beside signed ones -- on c4m at both
+	# run-time count, unsigned chars beside signed ones, and long long
+	# division by every size of divisor (c4lc_lldiv) -- on c4m at both
 	# word sizes, libjs and the c4bb sim, against gcc's answers
-	@for t in h16 u8; do for fl in "" "-O"; do \
+	@for t in h16 u8 lldiv; do for fl in "" "-O"; do \
 	   ./c4sp src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_$$t.c .c4lc_b.c4r > /dev/null || exit 1; \
 	   ./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-$$t.txt || exit 1; \
 	   ./c4sp32 src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_$$t.c .c4lc_b.c4r > /dev/null || exit 1; \

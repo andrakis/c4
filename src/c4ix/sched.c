@@ -39,6 +39,8 @@ static struct task *kernel_task;
 static struct task *idle_task;
 static int sched_idle(int argc, int argv);
 static int sched_unblocked(struct task *n);
+static int sched_pipesready(struct task *t);
+static int sched_pipegen;       // bumped by every pipe's write and last writer's close (sched_events)
 static void sched_banner();
 static int sched_interval;   // preemption interval, 0 = none
 
@@ -331,6 +333,7 @@ static void sched_wakeup(struct task *n) {
 // and whoever is too late blocks again.
 void sched_pipewake(struct vnode *vn) {
     sched_lock();
+    ++sched_pipegen;
     while (vn->waiters) sched_wakeup((struct task *)vn->waiters);
     sched_unlock();
 }
@@ -360,6 +363,11 @@ static void sched_tick(int now) {
             sched_wake = 1;
         } else if (n->q == Q_PIPE && vfs_readable(n->block_vn, n->block_pos)) {
             if (!sched_rqlost) klog("sched: task %d (%s) was left waiting for a pipe that has data\n", n->id, n->name);
+            ++sched_rqlost;
+            sched_wakeup(n);
+        } else if (n->q == Q_POLL && n->state == TS_SLEEPING && (n->ev_wait & 2) && n->evgen == sched_pipegen &&
+                   sched_pipesready(n)) {
+            if (!sched_rqlost) klog("sched: task %d (%s) was left asleep with a pipe it reads ready\n", n->id, n->name);
             ++sched_rqlost;
             sched_wakeup(n);
         }
@@ -649,9 +657,10 @@ void sched_new_slice() {
 // and the emptiness becomes end-of-file instead.
 // A TS_SLEEPING task is parked on the clock. Subtract rather than
 // compare the raw values -- the habit that survives a wrap.
+static int sched_evpoll(struct task *t);
 static int sched_unblocked(struct task *n) {
     if (n->state == TS_SLEEPING) {
-        if (__time() - n->ck_wake < 0 && !(n->ev_wait && sched_events(n))) return 0;
+        if (__time() - n->ck_wake < 0 && !(n->ev_wait && sched_evpoll(n))) return 0;
         sched_wakeup(n);
         return 1;
     }
@@ -663,24 +672,44 @@ static int sched_unblocked(struct task *n) {
 
 // What SYS_EVWAIT waits for besides the clock: an event in the task's GUI
 // ring, whose header is [capacity, head, tail] -- the host moves the head,
-// the task the tail -- or data, or end of file, on a pipe it reads.
-int sched_events(struct task *t) {
+// the task the tail -- or data, or end of file, on a pipe it reads. The
+// pipes are walked only as far as the task has had an fd (fdtop), and each
+// walk notes sched_pipegen, so the poll each ms (sched_evpoll) walks them
+// again only once some pipe has had data or lost its last writer since.
+// Walked every ms, they were half the kernel's time with Quake in a window,
+// and 2% of the machine's with Wolf3D or Duke3D in one.
+static int sched_pipesready(struct task *t) {
     struct file *f;
-    int fd, *ring;
+    int fd;
+    t->evgen = sched_pipegen;
+    fd = 0;
+    while (fd < t->fdtop) {
+        f = (struct file *)t->fds[fd];
+        if (f && f->vn->type == VN_PIPE && (f->flags & 3) == C4IX_O_RDONLY
+            && (f->vn->size > f->vn->rpos || !f->vn->writers)) return 1;
+        ++fd;
+    }
+    return 0;
+}
+
+int sched_events(struct task *t) {
+    int *ring;
     if (t->ev_wait & 1) {
         ring = (int *)t->ev_ring;
         if (ring && ring[1] != ring[2]) return 1;
     }
-    if (t->ev_wait & 2) {
-        fd = 0;
-        while (fd < FD_MAX) {
-            f = (struct file *)t->fds[fd];
-            if (f && f->vn->type == VN_PIPE && (f->flags & 3) == C4IX_O_RDONLY
-                && (f->vn->size > f->vn->rpos || !f->vn->writers)) return 1;
-            ++fd;
-        }
+    return (t->ev_wait & 2) && sched_pipesready(t);
+}
+
+// ... asked each ms of a task asleep in SYS_EVWAIT: its ring, which the host
+// writes with no event the kernel sees, and its pipes only if one has changed
+static int sched_evpoll(struct task *t) {
+    int *ring;
+    if (t->ev_wait & 1) {
+        ring = (int *)t->ev_ring;
+        if (ring && ring[1] != ring[2]) return 1;
     }
-    return 0;
+    return (t->ev_wait & 2) && t->evgen != sched_pipegen && sched_pipesready(t);
 }
 
 // The earliest deadline among sleeping tasks, or 0 if none. The idle
@@ -883,7 +912,7 @@ int sched_nice(int id, int nice) {
 
 static void sched_trap(int interval, int trap, int param, int mode, int a, int bp, int sp, int returnpc) {
     struct task *t, *n, *me, *fv;
-    int reload, hold, d;
+    int reload, hold, d, rc;
 
     // Re-entry guard. c4m disables the cycle interrupt when IT takes
     // a trap, but not when user code raises one (the syscall gateway
@@ -987,8 +1016,21 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
 
     // Safe point: we are on the trapped task's stack, so any corpse
     // left over from an earlier exit can finally be freed. Usually
-    // there is none, and then not even the call.
-    if (task_reaplist) task_reap();
+    // there is none, and then not even the call. What that costs -- the
+    // dead task's memory given back, and the rest moved up (task_destroy)
+    // -- is the kernel's, not this task's: charged to whoever trapped next,
+    // a program that never stopped showed in ps as using three or four
+    // slices more for each one beside it that ended (test-c4ix-smp's nice).
+    rc = 0;
+    if (task_reaplist) {
+        rc = __c4_cycles();
+        task_reap();
+        rc = __c4_cycles() - rc;
+        if (kernel_task) {
+            kernel_task->kacc = kernel_task->kacc + rc;
+            if (kernel_task->kacc & ACCT_FOLD_AT) acct_fold(kernel_task);
+        }
+    }
     // the stack an execve left, which its handler was standing on
     if (sched_stale_stack) { ufree(sched_stale_stack); sched_stale_stack = 0; }
     // The stack guard. A task whose stack pointer is inside the guard,
@@ -1192,7 +1234,7 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     d = acct_out;
     acct_out = __c4_cycles();
     if (me) {
-        me->kacc = me->kacc + (acct_out - acct_in);
+        me->kacc = me->kacc + (acct_out - acct_in) - rc;
         acct_cpu(me, acct_out - d);
         if ((me->uacc | me->kacc) & ACCT_FOLD_AT) acct_fold(me);
     }

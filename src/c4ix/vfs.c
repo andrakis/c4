@@ -1378,7 +1378,12 @@ int fd_install(struct task *t, struct file *f) {
     sched_lock();
     fd = 0;
     while (fd < FD_MAX) {
-        if (!t->fds[fd]) { t->fds[fd] = (int)f; sched_unlock(); return fd; }
+        if (!t->fds[fd]) {
+            t->fds[fd] = (int)f;
+            if (fd >= t->fdtop) t->fdtop = fd + 1;
+            sched_unlock();
+            return fd;
+        }
         ++fd;
     }
     sched_unlock();
@@ -1414,6 +1419,7 @@ int fd_dup2(struct task *t, int oldfd, int newfd) {
     if (t->fds[newfd]) fd_close(t, newfd);
     ++f->refs;
     t->fds[newfd] = (int)f;
+    if (newfd >= t->fdtop) t->fdtop = newfd + 1;
     t->fdcloexec[newfd] = 0;          // a dup is inherited unless asked otherwise
     sched_unlock();
     return newfd;
@@ -1440,6 +1446,7 @@ void fd_clone(struct task *dst, struct task *src) {
         if ((f = fd_get(src, fd)) && !src->fdcloexec[fd]) {
             ++f->refs;
             dst->fds[fd] = (int)f;
+            dst->fdtop = fd + 1;
         }
         ++fd;
     }
@@ -1457,6 +1464,7 @@ void fd_clone_all(struct task *dst, struct task *src) {
         if ((f = fd_get(src, fd))) {
             ++f->refs;
             dst->fds[fd] = (int)f;
+            dst->fdtop = fd + 1;
             dst->fdcloexec[fd] = src->fdcloexec[fd];
         }
         ++fd;

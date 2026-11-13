@@ -261,6 +261,9 @@ build to gcc's frames on demo3.
 | libc: `trunc`'s zeros and `floor`'s and `ceil`'s sign without the bits | 8.282 | −1.0% | 20,262 | 1,569,221 |
 | **round 4** | | **−21.4%** | **−64.0%** | **−0.1%** |
 
+Node, the whole demo1 run, round 3's image and round 4's in turn, three runs each (2026-11-13):
+48.7 s to 41.8 s, −14.2%.
+
 **16-bit loads and stores.** `<ld16u>`, `<ld16s>`, `<st16>` and `<lsr>` were 32,200 calls a frame
 (`<ld16u>` 16,000 of them: the edges' and the surfaces' `unsigned short` fields), each a call and
 19 to 24 instructions. They are opcodes now, `LHU`, `LH`, `SH` and `LSR`, one instruction each;

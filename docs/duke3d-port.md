@@ -323,6 +323,12 @@ call counted by its target. Each step ends on the same checksum,
 | `c4_mulscale` in signed 16-bit digits | 4.754 | −2.3% | 21,425 |
 | **all of round 2** | | **−33.2%** | **−77.6%** |
 
+**Wall time**, node's bare machine on helios, the demo's whole run of 1,000
+frames with the GRP's loading, before and after in turn, three runs each
+(2026-11-13): 36.9 s to 29.4 s, −20%. Less than the instructions' −33%: the
+first 400 frames and the loading are in it, and what went was cheap per
+instruction, the opcodes' slow paths aside.
+
 **16-bit loads and stores.** `<ld16s>`, `<ld16u>` and `<st16>` were 72,200
 calls a frame between them, each a call and 19 to 22 instructions. They are
 the opcodes `LH`, `LHU` and `SH` now, one instruction each, run by every

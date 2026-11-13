@@ -86,6 +86,11 @@ char *line_start, *statement_start;
 
 char *_p, *_data;       // initial pointer locations
 int  *_sym, *_e, *_sp;  // initial pointer locations
+// The text area's end, less room for one statement: each stmt() looks.
+// It was the 512 KB of the other areas, 64K words, and c4rlink.c4r (with
+// c4cc and the loader built in) came to 66,023: the last 487 went on over
+// the end, unseen, until a little more code in load-c4r.c made it crash.
+int  *e_lim;
 int  *_oisc4_e;
 int   c4cc_initialized;
 
@@ -1036,6 +1041,7 @@ void stmt()
   int *b3, *b4, *bend, *bdef, *odef, *oend, *o3, *o4;
 
   statement_start = p;
+  if (e > e_lim) { printf("%d: out of code space (%d words)\n", line, e - _e); die(-1); }
 
   if (tk == If) {
     next();
@@ -1924,12 +1930,13 @@ int c4cc_init () {
 
   poolsz = 512 * 1024;
   if (!(sym = _sym = malloc(poolsz))) { printf("could not malloc(%d) symbol area\n", poolsz); return -1; }
-  if (!(le = e = _e = malloc(poolsz))) { printf("could not malloc(%d) text area\n", poolsz); return -1; }
+  if (!(le = e = _e = malloc(2 * poolsz))) { printf("could not malloc(%d) text area\n", 2 * poolsz); return -1; }
+  e_lim = _e + 2 * poolsz / sizeof(int) - 4096;
   if (!(data = _data = malloc(poolsz))) { printf("could not malloc(%d) data area\n", poolsz); return -1; }
   if (!(_sp = malloc(poolsz))) { printf("could not malloc(%d) stack area\n", poolsz); return -1; }
 
   memset(sym,  0, poolsz);
-  memset(e,    0, poolsz);
+  memset(e,    0, 2 * poolsz);
   memset(data, 0, poolsz);
 
   data_s = data;

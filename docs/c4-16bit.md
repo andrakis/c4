@@ -109,6 +109,22 @@ Duke has fewer calls by three quarters: 58,700 of the 72,200 calls it no
 longer makes were `<ld16s>`. What is left of its profile, and Quake's, is
 in docs/duke3d-port.md section 10 and docs/quake-performance.md round 4.
 
+The other games, with `LCU` (below) as well, each demo whole on node's bare
+machine, every frame the same by its checksum:
+
+| | before | after | | calls a frame |
+|---|---:|---:|---:|---:|
+| Doom, `-timedemo demo3`, 2,173 frames | 4.496 M | 3.856 M | -14.2% | 23,976 -> 10,267 |
+| Wolfenstein 3D, `--timedemo 1`, 1,214 frames | 2.902 M | 2.152 M | -25.9% | 44,420 -> 4,646 |
+| Rise of the Triad, `--timedemo 4`, 609 frames | 4.818 M | 4.340 M | -9.9% | 17,809 -> 9,890 |
+
+Wolfenstein 3D's `ReadShort` and the scalers' tables are shorts. What each
+spends the rest on: Doom `R_DrawColumn` 32%, `R_DrawSpan` 21% and its test's
+own checksum (`dg_frame`) 22%; Wolfenstein 3D `ScalePost` 42% and the
+display's `c4sdl_present` 19%; ROTT its checksum (`rott_frame`) 21%, the row
+and wall drawers 37%, and `__c4ll_udivmod` 11% -- which c4lc's long long
+division made 1.5% the same day (docs/c4lc-design.md 14.7): ROTT 3.916 M.
+
 ## And an unsigned byte: `LCU`
 
 The same machinery made a fifth opcode cheap. An `unsigned char` load was

@@ -7,8 +7,9 @@
 // Every archive this reads is a whole file in memory: the inflater
 // writes into one buffer the size the gzip trailer gives, and the tar
 // reader walks that buffer. Simple, and C4IX's files are RAM anyway.
-// The exception is arc_gunzip_to, which hands its output on a window at
-// a time: persist writes the root archive's tar to drive 1 so.
+// The exceptions are arc_gunzip_to, which hands its output on a window at
+// a time, and arc_gunzip_file, which also reads its input so: persist
+// inflates the root archive onto drive 1 with 384 KB, not its 4.3 MB.
 //
 
 #ifndef __C4IX_ARCHIVE_H
@@ -18,6 +19,8 @@
 enum { ARC_LIST = 0, ARC_EXTRACT = 1 };
 // verbosity: 0 quiet, 1 one line per file, 2 also directories
 enum { ARC_QUIET = 0, ARC_VERBOSE = 1 };
+// arc_gunzip_file: the file is not gzip
+enum { ARC_NOTGZ = -2 };
 
 // The error text of the last failure, or 0.
 extern char *arc_error;
@@ -35,6 +38,9 @@ int arc_gunzip(char *in, int inlen, char **out, int *outlen);
 // takes each piece in order and returns LEN, or anything else to stop.
 // Memory: 256 KB beside the input. The output's size, or -1 and arc_error.
 int arc_gunzip_to(char *in, int inlen, int put);
+// arc_gunzip_to, reading PATH as it goes rather than from memory; returns
+// ARC_NOTGZ, having put nothing, where PATH is not gzip
+int arc_gunzip_file(char *path, int put);
 
 // Raw deflate data into OUT, which holds at most OUTCAP bytes.
 // Returns the bytes written, or -1. *USED gets the input consumed.

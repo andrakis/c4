@@ -650,6 +650,71 @@ preprocessor, and its images are 18–27% larger (§11). Single-file
 images (`c4sp.c4r`, C4DOS) are compiled by c4lc in one step without
 `-c`.
 
+### 13.1 Globals defined more than once (2026-11-13)
+
+C lets a unit define a global at file scope with no initializer, `int x;`,
+and lets several units do it: a *tentative definition*. Headers do it --
+Duke Nukem 3D's `control.h` defined `KeyMapping` in every unit that included
+it -- and gcc (`-fcommon`) and ld make them all one object. Until 2026-11-13
+c4lc and c4rlink kept one copy per unit: c4rlink printed "duplicate
+definition of 'x' ..., keeping first", merged the symbol and left every unit
+using its own storage, so Duke's Keys Setup read a `KeyMapping` that no one
+had written. The rule now:
+
+- **Across units (c4rlink, `common_plan`).** A global defined in several
+  inputs is one object. A tentative definition gives way to the one that has
+  an initializer; when none has one, the biggest is kept (the first of
+  equals). Every reference the other units make to theirs -- code, data
+  words, the symbol -- moves to the one kept; their own storage stays,
+  unused. Two definitions that both have initializers stop the link:
+  `c4rlink: multiple definition of 'x': in 'a.c4o' and in 'b.c4o'`. A
+  tentative definition bigger than the initialized one it gives way to is
+  warned about. `--warn-common` names every global it merged. Functions are
+  as they were: a second definition is ignored, with the old warning.
+- **Statics are private.** A static's name is never found by another
+  module. Before, a global or an `extern` in a later module met the static
+  of the same name (advent's `static read` before libc's `read`, ROTT's
+  `static floor` before libc's `floor()`, Quake's `static forward, right,
+  up`), warned "duplicate definition", and an `extern` bound to the static.
+- **In one unit (c4lc and c4fc).** `int x; int x;`, `int x = 1; int x;` and
+  `int x; int x = 1;` are each one object, the initialized one if there is
+  one (c4fc's DECL already did this; c4lc made two objects of the first two).
+  `int x = 1; int x = 2;` is an error, "redefinition of x"; a static's two
+  stay two objects in both compilers, as before.
+- **How c4rlink knows.** In an object (`-c`), c4lc and c4fc mark the symbol
+  of a non-static global with no initializer `ATTR_COMMON` (0x80; c4lc-gen's
+  `g:tattrs`, c4fc's `COMMON?`), and follow its storage with a word that
+  nothing uses. An object does not record its globals' sizes: c4rlink takes
+  a global as running to the module's next global (static or not) or to the
+  end of its region, which every byte of c4lc's and c4fc's BSS belongs to.
+  The spare word puts the address just past a tentative global -- `&a[N]`,
+  which the compilers fold to one constant -- inside that span, so it moves
+  with the global and never names the next one. An older object (no mark) is
+  read by its BSS at 32 bits (`C4R_HDR_BSS`: a global there has no
+  initializer); c4cc's objects have neither, and nothing of theirs is
+  tentative.
+- **Not covered**: a program's global of the same name as one in a shared
+  library it is linked against with `-l` stays the program's own; the
+  library keeps its own, as before.
+
+`src/c4sp/tests/common-link.sh` (in `test-c4lc`) links `src/tests/common_a.c`,
+`common_b.c` and `common_c.c` at 32 and 64 bits, plain and `-O`, in three
+orders and with a `-r` library; before this they printed `common 11 0 0 5 7
+5011`, now what gcc does, `common 111 4 42 5 7 7111`. `test-c4fc` holds c4fc's
+objects of the one-unit cases to c4lc's, byte for byte.
+
+The ports had, besides Duke's 177 (which `games/duke3d` had since defined once
+each): BSD hack's `PC`, `BC`, `UP` (also in `c4bsd.c`, unused there), sail's
+`gid_t` twice in one unit (`gid_t gid;` with no `gid_t` typedef in C4IX's
+headers, which c4lc takes as two `int` globals, `gid_t` and `gid`) and
+backgammon's `args` twice in one unit, none of them read from two copies; and
+the static clashes above, of which no `extern` reached a static. A survey of
+every multi-object link in the C4IX and bare-machine images found 372
+"duplicate definition" warnings in 166 links before, and none after
+(2026-11-13). With every object rebuilt by the new compilers, `--warn-common`
+names three merges in those links, hack's `PC`, `BC` and `UP`, and none
+stops a link.
+
 ## 14. Integer types and qualifiers (M4, 2026-10)
 
 `signed`, `unsigned`, `short`, `long`, `const` and `volatile` are real,
@@ -717,11 +782,11 @@ included (`char + 1` is a `char`; `?:` has its else-arm's type).
 - **Division** of a whole unsigned word: a call to the `udiv`/`umod`
   helper.
 - **`>>`** of a whole unsigned word: by a constant `k`, `SHR` then `AND
-  ~(-1 << (W-k))` (nothing for k = 0); by a variable, the `lsr` helper.
+  ~(-1 << (W-k))` (nothing for k = 0); by a variable, `LSR`.
   `<<` is the same opcode either way.
-- **Loads**: `unsigned char` is `LC; PSH; IMM 255; AND`; `short` and
-  `unsigned short` call `ld16s`/`ld16u`; a 64-bit host's `unsigned`
-  masks. **Stores**: the one-byte types `SC`, the shorts call `st16`,
+- **Loads**: `unsigned char` is `LCU` (it was `LC; PSH; IMM 255; AND`); `short` and
+  `unsigned short` are `LH`/`LHU`; a 64-bit host's `unsigned`
+  masks. **Stores**: the one-byte types `SC`, the shorts `SH`,
   everything else `SI`.
 - **Casts emit conversion code**: truncation to a narrow type (`AND`
   for the unsigned ones, a shift up and an arithmetic shift down for
@@ -748,14 +813,16 @@ included (`char + 1` is a `char`; `?:` has its else-arm's type).
   int -1 there and `4294967295u` without `-O`. The tree pass has names,
   not types, so it cannot see the other arm's; c4fc folds the same way.
 
-The six helpers (`ld16s ld16u st16 udiv umod lsr`, `g:helpbody`) are
-emitted once each, after the last function and the prototype stubs,
-in that fixed order, and only if something called them. A call is
-`PSH; JSR label; ADJ n` to a label in the same unit: there is no symbol,
-nothing to link and nothing for the loader to know, so `-c` objects
-work unchanged. 16-bit loads go through a helper because computing two
-byte addresses from one address needs it twice, and this machine has no
-way to copy the top of the stack.
+The two helpers (`udiv umod`, `g:helpbody`) are emitted once each,
+after the last function and the prototype stubs, in that fixed order,
+and only if something called them. A call is `PSH; JSR label; ADJ n` to
+a label in the same unit: there is no symbol, nothing to link and
+nothing for the loader to know, so `-c` objects work unchanged. There
+were six until 2026-11-13: the 16-bit loads and store and the logical
+shift by a variable (`ld16s ld16u st16 lsr`) were helpers too, because
+computing two byte addresses from one address needs it twice and this
+machine has no way to copy the top of the stack. They are opcodes now,
+`LH LHU SH LSR` (docs/c4-16bit.md), and c4fc emits the same.
 
 ### 14.3 Literals and constant folding
 
@@ -939,7 +1006,12 @@ long` (960), the codes the parser makes only when `sys:wordsize` is 4.
 - **Arithmetic** calls helpers written in C, `p:llsrc` in
   c4lc-parse.lisp: add, sub, mul (16-bit limbs), and, or, xor, the three
   shifts, signed and unsigned compares, div, mod, udiv, umod (shift and
-  subtract, with a one-word fast path when both high halves are 0), neg.
+  subtract, with a one-word fast path when both high halves are 0, and
+  since 2026-11-13 a second for a divisor below 2^30: long division in
+  as many bits a step as the remainder has room for beside the divisor,
+  by the machine's own `DIV` and `MOD`, about 700 instructions where the
+  bit at a time took 5,700 -- ROTT's fixed-point divisions, 9.8% of its
+  demo), neg.
   `~` is inline. The parser reads them after any unit that says `long
   long`; they are static, registered when first called (`g:find`, kept
   in `g:llsyms` outside the scopes), and generated only then -- each

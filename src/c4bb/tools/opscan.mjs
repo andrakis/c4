@@ -67,14 +67,16 @@ const RUNGS = {
   c4m: {
     // FPU (F3): every image with float or double in it carries the opcode
     // in its helpers, which run it only where INFO says C4I_FPU
-    max: 'DBG', extra: ['FPU'],
-    what: "c4m's own opcodes: JSRS, traps, signals, INFO, the FPU and the rest",
+    // and the 16-bit loads and store and LSR (90-93), c4lc's short and
+    // unsigned >>, which c4m runs as its own (docs/c4-16bit.md)
+    max: 'DBG', extra: ['FPU', 'LH', 'LHU', 'SH', 'LSR', 'LCU'],
+    what: "c4m's own opcodes: JSRS, traps, signals, INFO, the FPU, 16-bit loads and the rest",
     who: 'c4cc and c4rlink, C4KE and C4IX, and both userlands',
   },
   fused: {
     max: 'DBG',
     extra: ['LDL', 'LDG', 'PSHL', 'PSHG', 'LEAP', 'IMMP', 'LIP', 'ADDL',
-            'STL', 'POPA', 'FPU'],
+            'STL', 'POPA', 'FPU', 'LH', 'LHU', 'SH', 'LSR', 'LCU'],
     what: 'c4m plus the ten fused opcodes (docs/fused-opcodes.md)',
     who: 'images built through the fused backend',
   },

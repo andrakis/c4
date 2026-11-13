@@ -33,7 +33,7 @@
 // a double click on any other row opens its line in the editor. Without
 // a map the functions come from the symbols, with no source to show.
 //
-// c4lc splices the helpers it calls (<udiv>, <ld16s>, the soft float
+// c4lc splices the helpers it calls (<udiv>, <umod>, the soft float
 // __c4d_ and long long __c4ll_ ones) into each unit that uses them, so a
 // program has as many copies as units that needed one; the list names
 // each copy's unit beside it.
@@ -60,7 +60,7 @@ enum { XHDR = 22, XGAP = 3, XHIST = 16, XFILT = 30, XMODS = 9, XSRC = 480,
        XCONT = 24, XLEAD = 12, XHEAD = 80 };
 // the opcodes it treats apart (OPNAMES' order)
 enum { O_LEA = 0, O_IMM = 1, O_JMP = 2, O_JSR = 3, O_BZ = 4, O_BNZ = 5, O_ADJ = 7, O_JSRI = 61, O_JSRS = 62, O_JMPA = 63,
-       O_LDL = 79, O_PSHL = 81, O_LEAP = 83, O_IMMP = 84, O_STL = 87, O_N = 90 };
+       O_LDL = 79, O_PSHL = 81, O_LEAP = 83, O_IMMP = 84, O_STL = 87, O_N = 95 };
 // patch types (load-c4r.c), and symbol classes and attributes (c4r.js)
 enum { P_CODE = -1, P_DATA = -2, S_FUN = 129, S_GLO = 131, S_EXTERN = 16 };
 // the colours, from the IDE's scheme as edit.c passes it (HC_* then SC_*)
@@ -78,7 +78,8 @@ static char *opnames =
     "CAS ,XCHG,FADD,CWAI,CWAK,IPI ,"
     "LXI ,SXI ,TRAW,"
     "LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,"
-    "FPU ,";
+    "FPU ,"
+    "LH  ,LHU ,SH  ,LSR ,LCU ,";
 
 // a line's colour: a small palette, cycled by line
 static int bands[8] = { 0x5fd7ff, 0xffaf5f, 0x87ff87, 0xff87d7, 0xd7d75f, 0xaf87ff, 0x5fffd7, 0xff8787 };

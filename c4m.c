@@ -400,6 +400,14 @@ enum {
 	// and its operands on the stack, as FLT's -- c4lc's helpers use it
 	// when the info word has C4I_FPU
 	FPU ,
+	// 16-bit loads and a store, and a logical shift right (docs/c4-16bit.md):
+	// what c4lc and c4fc called a helper for -- <ld16s>, <ld16u>, <st16>
+	// and <lsr> -- for short, unsigned short and an unsigned >> by a count
+	// known only at run time. A short is two bytes, low first, at any
+	// address; SH leaves a as it was, as SI does.
+	LH  ,LHU ,SH  ,LSR ,
+	// an unsigned char's load: LC without the sign (docs/c4-16bit.md)
+	LCU ,
 	// End of instructions
 	INS_SIZE,
 };
@@ -430,7 +438,9 @@ void c4m_setup_opcodes () {
 	// here; the other seven are c4mp's, and named only.
 	"LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,"
 	// F3
-	"FPU ,";
+	"FPU ,"
+	// 16-bit loads and store, logical shift right (docs/c4-16bit.md)
+	"LH  ,LHU ,SH  ,LSR ,LCU ,";
 }
 // One place decides which opcodes carry an operand word. Everything that
 // walks code -- the debug disassembler, OPCD's refusal -- asks here.
@@ -2127,6 +2137,27 @@ int c4m_main(int argc, char **argv)
 	}
     else if (i == SC)  {
 		a = *(char *)*sp++ = a;                                           // store char
+	}
+	// 16 bits, two bytes, low first, at any address (docs/c4-16bit.md).
+	// LH's high byte is a char's load, so the result has the sign of the
+	// short; SH leaves a alone, as SI does.
+    else if (i == LH)  {
+		a = (*(char *)a & 255) | (*(char *)(a + 1) << 8);                  // load short
+	}
+    else if (i == LHU) {
+		a = (*(char *)a & 255) | ((*(char *)(a + 1) & 255) << 8);          // load unsigned short
+	}
+    else if (i == SH)  {
+		t = (int *)*sp++; *(char *)t = a; *((char *)t + 1) = a >> 8;      // store short
+	}
+	// a = (unsigned)*sp++ >> a, the count taken modulo the word's bits:
+	// SHR's arithmetic shift with the copies of the sign bit masked off
+    else if (i == LCU) {
+		a = *(char *)a & 255;                                             // load unsigned char
+	}
+    else if (i == LSR) {
+		r = a & (sizeof(int) * 8 - 1); a = *sp++;
+		if (r) a = (a >> r) & ~((int)-1 << (sizeof(int) * 8 - r));
 	}
     else if (i == PSH) *--sp = a;                                         // push
 

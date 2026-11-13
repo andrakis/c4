@@ -1056,7 +1056,7 @@ test-c4sc-lex: c4sc-host c4sp
 	head -n -1 $(SRCS)/c4sp/tests/expected/c4lc-tokens.txt | cmp - .c4sc_lex.txt
 	./c4sc-host tokens -conforming $(TESTS)/c4lc_lex_sample.c > .c4sc_lex.txt
 	head -n -1 $(SRCS)/c4sp/tests/expected/c4lc-tokens-conforming.txt | cmp - .c4sc_lex.txt
-	./c4sc-host tokens -count $(SRCS)/c4cc/c4cc.c | grep -q "^tokens 15147$$"
+	./c4sc-host tokens -count $(SRCS)/c4cc/c4cc.c | grep -q "^tokens 15198$$"
 	@fail=0; for f in $(C4SC_LEX_SWEEP); do \
 	   ./c4sp -R -c 33554432 $(SRCS)/c4sp/lisp/c4lc-tokens.lisp $$f > .c4sc_i.txt 2>&1; \
 	   head -n -1 .c4sc_i.txt > .c4sc_i2.txt; \
@@ -1114,7 +1114,7 @@ C4SC_BACK_DIFF := c4_jailbreak factorial hello multifun puts reverse \
                   tests c4lc_l2 global test_gcscan test-oisc test_printf \
                   c4lc_m4 c4lc_m4q c4lc_m4v c4lc_m7 c4lc_ll c4lc_m9 c4lc_m9lc \
                   c4lc_m10 c4lc_m10lc c4lc_m11lc c4lc_m12lc c4lc_m13lc \
-                  c4lc_linit c4lc_linitlc
+                  c4lc_linit c4lc_linitlc c4lc_h16 c4lc_u8
 test-c4sc-back: c4sc-host c4sp $(C4RLINK) $(C4M)
 	@fail=0; for b in $(C4SC_BACK_DIFF); do \
 	   f=$(TESTS)/$$b.c; \
@@ -1194,7 +1194,7 @@ c4sc.c4r: c4sp $(C4LC_LISP) $(C4RLINK) $(C4SC_GEN) src/c4sc/c4sc-main.c \
 test-c4sc-image: c4sc.c4r c4sc-host $(C4M) c4sp
 	@# the image runs, and computes what the interpreter computes
 	$(C4M) load-c4r.c -- c4sc.c4r -c 4000000 tokens -count $(SRCS)/c4cc/c4cc.c \
-	  | grep -q "^tokens 15147$$"
+	  | grep -q "^tokens 15198$$"
 	@echo "  hosted lex: tokens 15125"
 	@# a real compile, hosted: the image it produces has to be the size
 	@# the native build produces. Bare c4m has no write syscall -- the
@@ -1666,7 +1666,8 @@ C4FC_ALL := $(C4FC_LIB) src/c4fc/pp.f src/c4fc/ast.f src/c4fc/types.f \
 C4FC_SPIKE := src/tests/hello.c src/c4fc/tests/spike1.c src/c4fc/tests/spike2.c \
               src/c4fc/tests/spike3.c src/c4fc/tests/spike4.c \
               src/c4fc/tests/spike5.c src/c4fc/tests/spike6.c \
-              src/c4fc/tests/spike7.c src/c4fc/tests/spike8.c
+              src/c4fc/tests/spike7.c src/c4fc/tests/spike8.c \
+              src/tests/c4lc_tentative.c
 
 # F2, the lexer. The oracle is c4lc's own, three ways: its golden dump
 # of the sample that carries every token kind and quirk, the same with
@@ -1704,7 +1705,7 @@ C4FC_GEN_SWEEP := hello multifun puts reverse test_basic test_continue \
                   test_static test_switch tests c4lc_l2 global \
                   test_gcscan vararg2 test_vprintf c4_jailbreak \
                   c4lc_m4 c4lc_m4q c4lc_m4v c4lc_m4std c4lc_m7 c4lc_ll \
-                  c4lc_m7fwd c4lc_m9 c4lc_m10 c4lc_linit
+                  c4lc_m7fwd c4lc_m9 c4lc_m10 c4lc_linit c4lc_h16 c4lc_u8
 
 test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c $(C4RDUMP)
 	./c4th $(C4FC_LIB) src/c4fc/tests/dsl.f | cmp - src/c4fc/tests/expected/dsl.txt
@@ -1713,7 +1714,7 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c $(C4RDUMP)
 	head -n -1 src/c4sp/tests/expected/c4lc-tokens.txt | cmp - .c4fc_lex.txt
 	./c4th $(C4FC_LIB) -e ': GO 4194304 ARENA-INIT 1 CONFORMING ! S" src/tests/c4lc_lex_sample.c" LEX-FILE DUMP-TOKENS ; GO' > .c4fc_lex.txt
 	head -n -1 src/c4sp/tests/expected/c4lc-tokens-conforming.txt | cmp - .c4fc_lex.txt
-	./c4th $(C4FC_LIB) -e ': GO 33554432 ARENA-INIT S" src/c4cc/c4cc.c" LEX-FILE COUNT-TOKENS ; GO' | grep -q "^tokens 15147$$"
+	./c4th $(C4FC_LIB) -e ': GO 33554432 ARENA-INIT S" src/c4cc/c4cc.c" LEX-FILE COUNT-TOKENS ; GO' | grep -q "^tokens 15198$$"
 	@for f in $(C4FC_LEX_SWEEP); do \
 	   ./c4sp src/c4sp/lisp/c4lc-tokens.lisp $$f > .c4fc_a.txt 2>&1; \
 	   ./c4th $(C4FC_LIB) -e ": GO 67108864 ARENA-INIT S\" $$f\" LEX-FILE DUMP-TOKENS ; GO" > .c4fc_b.txt 2>&1; \
@@ -1899,6 +1900,21 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c $(C4RDUMP)
 	cmp .c4fc_ix.c4r c4ix.c4r
 	$(C4M) load-c4r.c -- .c4fc_ix.c4r --demo 2>&1 | grep -q "shutdown complete"
 	@rm -f .c4fc_lc.c4o .c4fc_ix.c4r .c4fc_ix_*.c4o
+	# Tentative definitions (c4rlink.c, common_plan): each marked
+	# ATTR_COMMON with a word after it, and a global defined twice in one
+	# unit one object -- byte for byte c4lc's -c and -O -c. A global
+	# initialized twice is c4fc's error too.
+	@for f in common_b common_c common_d c4lc_tentative; do \
+	   for o in "" "-O"; do \
+	      ./c4sp src/c4sp/lisp/c4lc.lisp $$o -c $(TESTS)/$$f.c .c4fc_lc.c4o >/dev/null 2>&1; \
+	      ./c4th $(C4FC_ALL) -e ": GO `echo $$o | sed 's/-O/1 OPTIMIZE !/'` -c S\" $(TESTS)/$$f.c\" C4FC ; GO" > .c4fc_fc.c4o 2>&1; \
+	      cmp -s .c4fc_lc.c4o .c4fc_fc.c4o \
+	        || { echo "test-c4fc: $$f.c4o differs from c4lc $$o -c"; exit 1; }; \
+	   done; \
+	   echo "  common obj ok: $$f"; \
+	done
+	./c4th $(C4FC_ALL) -e ': GO -c S" $(TESTS)/c4lc_redef.c" C4FC ; GO' 2>&1 | grep -aq "c4fc: redefinition of r"
+	@rm -f .c4fc_lc.c4o .c4fc_fc.c4o
 	# M4 qualifiers, c4fc's half. The const battery must draw from c4fc
 	# exactly the lines it draws from c4lc -- the same golden files
 	# test-c4lc holds c4lc to -- and the image must be c4lc's. A warning
@@ -3290,7 +3306,7 @@ test-c4lc-opassign: c4sp32 c4rlink32 libc-bare-objs
 PHONY += test-c4lc-opassign
 
 test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.c4r \
-           c4sp32 c4m32 c4rlink32 $(C4RDUMP)
+           c4sp32 c4m32 c4rlink32 $(C4RDUMP) c4mp
 	./c4sp src/c4sp/lisp/c4lc-tokens.lisp src/tests/c4lc_lex_sample.c | cmp - src/c4sp/tests/expected/c4lc-tokens.txt
 	./c4m load-c4r.c -- c4sp.c4r src/c4sp/lisp/c4lc-tokens.lisp src/tests/c4lc_lex_sample.c | cmp - src/c4sp/tests/expected/c4lc-tokens.txt
 	./c4sp src/c4sp/lisp/c4lc-tokens.lisp -count src/c4cc/c4cc.c | grep -q "^tokens [0-9]"
@@ -3437,6 +3453,11 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	cat $(TESTS)/test_link_d.c $(TESTS)/test_link_c.c > .c4lc_pp.c
 	./c4sp src/c4sp/lisp/c4lc.lisp .c4lc_pp.c .c4lc_ol.c4r > /dev/null
 	./c4m load-c4r.c -- .c4lc_ol.c4r | cmp - src/c4sp/tests/expected/c4lc-link.txt
+	# A global several units define is one object, as with gcc -fcommon
+	# (c4rlink.c, common_plan); in one unit c4lc makes one, and a global
+	# initialized twice is an error (docs/c4lc-design.md, Globals defined
+	# more than once)
+	bash src/c4sp/tests/common-link.sh
 	# L8, extern DATA: test_link_e.c defines shared globals (scalar,
 	# array, char array, struct, fn-address slot), test_link_f.c
 	# declares them extern; symbol patches resolve to DATA patches.
@@ -3541,6 +3562,20 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	   ./c4m32 load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-m4-32.txt || exit 1; \
 	   echo "  m4 ok, gcc's answers at 32 and 64 bits: c4lc $$fl"; \
 	 done
+	# LH LHU SH LSR LCU (docs/c4-16bit.md): shorts at every alignment, the
+	# values of their assignments and post-increments, an unsigned >> by a
+	# run-time count, unsigned chars beside signed ones, and long long
+	# division by every size of divisor (c4lc_lldiv) -- on c4m at both
+	# word sizes, libjs and the c4bb sim, against gcc's answers
+	@for t in h16 u8 lldiv; do for fl in "" "-O"; do \
+	   ./c4sp src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_$$t.c .c4lc_b.c4r > /dev/null || exit 1; \
+	   ./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-$$t.txt || exit 1; \
+	   ./c4sp32 src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_$$t.c .c4lc_b.c4r > /dev/null || exit 1; \
+	   ./c4m32 load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-$$t.txt || exit 1; \
+	   node libjs/cli.js .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-$$t.txt || exit 1; \
+	   node src/c4bb/sim/cli.js .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-$$t.txt || exit 1; \
+	   echo "  $$t ok, gcc's answers on c4m, c4m32, libjs and c4bb: c4lc $$fl"; \
+	 done; done
 	# M7b: the C Busybox needs (docs/busybox-port.md), one golden from gcc
 	# that does not depend on the word size
 	@for fl in "" "-O" "-minline"; do \

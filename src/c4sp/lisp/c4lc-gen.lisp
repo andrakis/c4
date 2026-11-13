@@ -321,14 +321,15 @@
 
 ;; ---- the M4 helpers ----
 ;;
-;; Six small routines the generator calls instead of open-coding what
-;; the VM has no opcode for: a 16-bit load (sign- or zero-extending), a
-;; 16-bit store, unsigned word division and remainder, and a logical
-;; right shift by a run-time count. Each is emitted ONCE, at the end of
-;; the unit's code, and only if something called it -- no symbol, no
-;; library, no link step: a call is a JSR to a label in the same unit,
-;; which is why c4rlink and the loader never hear about them.
-(define g:HELPERS '(ld16s ld16u st16 udiv umod lsr))
+;; Two small routines the generator calls instead of open-coding what
+;; the VM has no opcode for: unsigned word division and remainder. Each
+;; is emitted ONCE, at the end of the unit's code, and only if something
+;; called it -- no symbol, no library, no link step: a call is a JSR to a
+;; label in the same unit, which is why c4rlink and the loader never hear
+;; about them. There were six: a 16-bit load, signed and unsigned, the
+;; 16-bit store and the logical right shift by a run-time count are the
+;; VM's own now, LH LHU SH and LSR (docs/c4-16bit.md).
+(define g:HELPERS '(udiv umod))
 (define g:helps (list))    ;; ((NAME LABEL) ...) for the helpers used
 (define g:helper (lambda (h)
 	(begin
@@ -367,21 +368,6 @@
 		(define maxpos (bit:xor g:MIN -1))
 		(g:madebody (+ "<" (+ "" h) ">"))
 		(g:label! l)
-		(if (= h 'ld16s)
-			(g:emitl (list '(ENT 0)
-				'(LEA 2) '(LI) '(PSH) '(IMM 1) '(ADD) '(LC) '(PSH) '(IMM 8) '(SHL)
-				'(PSH) '(LEA 2) '(LI) '(LC) '(PSH) '(IMM 255) '(AND) '(OR) '(LEV)))
-		(if (= h 'ld16u)
-			(g:emitl (list '(ENT 0)
-				'(LEA 2) '(LI) '(PSH) '(IMM 1) '(ADD) '(LC) '(PSH) '(IMM 255) '(AND)
-				'(PSH) '(IMM 8) '(SHL)
-				'(PSH) '(LEA 2) '(LI) '(LC) '(PSH) '(IMM 255) '(AND) '(OR) '(LEV)))
-		(if (= h 'st16)
-			(g:emitl (list '(ENT 0)
-				'(LEA 3) '(LI) '(PSH) '(LEA 2) '(LI) '(SC)
-				'(LEA 3) '(LI) '(PSH) '(IMM 1) '(ADD) '(PSH)
-				'(LEA 2) '(LI) '(PSH) '(IMM 8) '(SHR) '(SC)
-				'(LEA 2) '(LI) '(LEV)))
 		(if (= h 'udiv)
 			(begin
 				(define l1 (g:newlabel))
@@ -432,17 +418,7 @@
 					'(LEA -1) '(LI) '(LEV)
 					(list 'label m4)
 					'(LEA -1) '(LI) '(PSH) '(LEA 2) '(LI) '(SUB) '(LEV))))
-		(if (= h 'lsr)
-			(begin
-				(define s1 (g:newlabel))
-				(g:emitl (list '(ENT 0)
-					'(LEA 2) '(LI) (list 'BZ (list 'code s1))
-					'(LEA 3) '(LI) '(PSH) '(LEA 2) '(LI) '(SHR)
-					'(PSH) '(IMM -1) '(PSH) (list 'IMM g:BITS) '(PSH) '(LEA 2) '(LI) '(SUB)
-					'(SHL) '(PSH) '(IMM -1) '(XOR) '(AND) '(LEV)
-					(list 'label s1)
-					'(LEA 3) '(LI) '(LEV))))
-		nil)))))))))
+		nil)))))
 
 ;; ---- types (M4) ----
 
@@ -556,9 +532,9 @@
 ;; loads and stores by type
 (define g:load! (lambda (ty)
 	(if (if (= ty g:CHAR) true (if (= ty g:SCHAR) true (= ty g:BOOL))) (g:emit '(LC))
-	(if (= ty g:UCHAR) (begin (g:emit '(LC)) (g:mask! 255))
-	(if (= ty g:SHORT) (g:helpcall 'ld16s 1)
-	(if (= ty g:USHORT) (g:helpcall 'ld16u 1)
+	(if (= ty g:UCHAR) (g:emit '(LCU))
+	(if (= ty g:SHORT) (g:emit '(LH))
+	(if (= ty g:USHORT) (g:emit '(LHU))
 	(if (if (if (= ty g:UINT) true (= ty g:FLOAT)) g:W64 false) (begin (g:emit '(LI)) (g:mask! g:M32))
 	(if (g:ll? ty) nil
 	(g:emit '(LI))))))))))
@@ -592,7 +568,7 @@
 (define g:store! (lambda (ty)
 	(if (g:ll? ty) (g:llcopy)
 	(if (g:bytety? ty) (g:emit '(SC))
-	(if (g:halfty? ty) (g:helpcall 'st16 2)
+	(if (g:halfty? ty) (g:emit '(SH))
 	(g:emit '(SI)))))))
 
 ;; ---- struct types (L7) ----
@@ -1931,7 +1907,7 @@
 			(if (= opname 'SHR)
 				(begin
 					(define k (if (= (head (g:third e)) 'num) (g:second (g:third e)) nil))
-					(if (= k nil) (g:helpcall 'lsr 2)
+					(if (= k nil) (g:emit '(LSR))
 					(begin
 						(g:emit '(SHR))
 						(if (if (> k 0) (< k g:BITS) false)
@@ -2806,6 +2782,25 @@
 ;; the same contract: legal to declare and call-compile, fatal to
 ;; execute.
 (define gen:objmode false)
+;; A global with no initializer, not static, in an object (-c): a
+;; tentative definition, which c4rlink makes one object with the other
+;; units' (c4rlink.c, common_plan). Its symbol says so, ATTR_COMMON (128),
+;; and its storage is followed by a word nothing uses: c4rlink moves
+;; every reference into it to the one kept, and that includes &a[N] just
+;; past its end, which must therefore not be the next global's address.
+;; c4fc does the same (parse.f, COMMON? and PLACE-GLOBALS).
+(define g:tattrs (lambda (gattrs)
+	(if (if gen:objmode (= 0 (bit:and (g:nz gattrs) 8)) false)
+		(bit:or (g:nz gattrs) 128)
+		gattrs)))
+;; reserve nb bss bytes for a global whose attributes (g:tattrs) are ta
+(define g:tballoc (lambda (nb ta)
+	(begin
+		(define at (g:balloc nb))
+		(if (= 0 (bit:and (g:nz ta) 128)) nil
+			(set! g:blen (+ g:blen g:WORD)))
+		at)))
+
 ;; M12, -mcisc: emit c4mp-only fused array-element opcodes (LXI/SXI)
 ;; instead of the generic index codegen, for int/pointer-element
 ;; (8-byte) arrays -- see g:indexload-cisc/g:indexstore-cisc below and
@@ -2880,11 +2875,27 @@
 			false))
 		(if (= (head d) 'structdef) nil      ;; g:structpass did it
 		(if isglobal (if isext nil
-			(if (if (= (index d 5) nil) (g:laterinit? (g:third d) (tail decls)) false) nil
-			(g:global d)))
+			(if (= (index d 5) nil)
+				;; a tentative definition: nothing, if the unit defines the
+				;; name with an initializer further down or has defined it
+				;; already -- one object, as c4fc's DECL makes it
+				(if (g:laterinit? (g:third d) (tail decls)) nil
+				(if (g:gloname? (g:third d) g:syms) nil
+				(g:global d)))
+			;; a second initialized definition of a global is an error; a
+			;; static's two stay two objects, as in c4fc
+			(if (if (= 0 (bit:and (g:nz (index d 4)) 8)) (g:gloname? (g:third d) g:syms) false)
+				(g:die (+ "redefinition of " (g:third d)))
+			(g:global d))))
 		nil))
 		(next g:datapass (tail decls)
 			(if isext (+ pending (list d)) pending))))))
+
+;; has the unit given global N storage already?
+(define g:gloname? (lambda (n l)
+	(if (empty? l) false
+	(if (if (= (head (head l)) n) (= (g:second (head l)) 'glo) false) true
+	(next g:gloname? n (tail l))))))
 
 ;; `int x;` before `int x = 9;` is one object, the definition's: the
 ;; first allocates nothing (M7b; c4fc's DECL retires its record)
@@ -2985,14 +2996,15 @@
 	(begin
 		(define bytes (g:tysize ty))
 		;; a struct global is never initialized -> pure BSS
-		(set! g:syms (g:cons (list n 'glo ty (g:balloc bytes) bytes gattrs g:gq) g:syms)))))
+		(define ta (g:tattrs gattrs))
+		(set! g:syms (g:cons (list n 'glo ty (g:tballoc bytes ta) bytes ta g:gq) g:syms)))))
 
 (define g:globalscalar (lambda (n ty init0 gattrs)
 	(begin
 		(define init (g:fpinit init0 ty))
 		(define at
 			;; no initializer -> BSS (one word); otherwise placed in data
-			(if (= init nil) (g:balloc (if (g:ll? ty) 8 g:WORD))
+			(if (= init nil) (g:tballoc (if (g:ll? ty) 8 g:WORD) (g:tattrs gattrs))
 			(if (if (= (head init) 'num) (g:ll? ty) false)
 				(begin
 					(define lo (g:dword (g:second init)))
@@ -3019,7 +3031,7 @@
 					(set! g:dpatches (g:cons (g:addrpatch slot (g:second init) f) g:dpatches))
 					slot)
 			(g:die (+ "unsupported global initializer for " n)))))))))
-		(set! g:syms (g:cons (list n 'glo ty at nil gattrs g:gq) g:syms)))))
+		(set! g:syms (g:cons (list n 'glo ty at nil (if (= init nil) (g:tattrs gattrs) gattrs) g:gq) g:syms)))))
 
 ;; array storage: char arrays are s bytes, everything else s words;
 ;; uninitialized/short-initialized elements are zero
@@ -3031,7 +3043,7 @@
 		;; an uninitialized array is pure BSS (occupies no image bytes,
 		;; does not touch g:data/DMAX -- so it may be arbitrarily large)
 		(if (= init nil)
-			(set! g:syms (g:cons (list n 'glo ty (g:balloc bytes) bytes gattrs g:gq) g:syms))
+			(set! g:syms (g:cons (list n 'glo ty (g:tballoc bytes (g:tattrs gattrs)) bytes (g:tattrs gattrs) g:gq) g:syms))
 			(g:globalarrayinit n ty s init gattrs elem bytewise bytes)))))
 
 ;; the initialized-array case (kept out of g:globalarray so its own BSS

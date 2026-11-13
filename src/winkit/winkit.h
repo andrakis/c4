@@ -158,6 +158,10 @@ int   wk_alive(int w);
 void  wk_title(int w, char *s);
 char *wk_get_title(int w);
 void  wk_invalidate(int w, int x, int y, int ww, int hh);   // ww = 0: all of it
+void  wk_invalidate_covered(int w, int x, int y, int ww, int hh);
+                                      // ... part of it that its draw paints every pixel of (a
+                                      // program's frame): when nothing else changed, only it is
+                                      // drawn there, not what is under it or its own frame
 void  wk_menu(int w, struct wk_menu *m, int n);
 int   wk_timer(int w, int id, int ms);                      // every ms (0 stops it); 1 if set
 void  wk_raise(int w);
@@ -199,6 +203,7 @@ void d_imgdef(int id, int w, int h, int *px);
 void d_image(int id, int x, int y);
 // w x h 8-bit pixels at src through 256 colours at pal, scaled to dw x dh
 void d_blit8(int x, int y, int w, int h, char *src, int pitch, int *pal, int dw, int dh);
+int  d_damage_within(int x, int y, int w, int h);   // 1 if all that is being redrawn is inside
 int  ui_mix(int a, int b, int t, int n);   // a colour T/N of the way from A to B
 
 // colour schemes (draw.c)

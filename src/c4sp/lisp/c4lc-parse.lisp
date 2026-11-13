@@ -2401,10 +2401,31 @@ static int *__c4ll_udiv(int *d, int *a, int *b) { int r[2]; __c4ll_udivmod(d, r,
 static int *__c4ll_umod(int *d, int *a, int *b) { int q[2]; __c4ll_udivmod(q, d, a, b); return d; }
 static int __c4ll_udivmod(int *q, int *r, int *a, int *b) {
     unsigned nl, nh, bl, bh, rl, rh, ql, qh, t;
-    int i;
+    int i, k, take, rr, bb;
     nl = a[0]; nh = a[1]; bl = b[0]; bh = b[1];
     if (nh == 0 && bh == 0) {
         q[0] = nl / bl; q[1] = 0; r[0] = nl % bl; r[1] = 0;
+        return 0;
+    }
+    if (bh == 0 && bl != 0 && bl < 0x40000000) {
+        t = bl; k = 0;
+        if (t < 0x8000) { t = t << 16; k = k + 16; }
+        if (t < 0x800000) { t = t << 8; k = k + 8; }
+        if (t < 0x8000000) { t = t << 4; k = k + 4; }
+        if (t < 0x20000000) { t = t << 2; k = k + 2; }
+        if (t < 0x40000000) { t = t << 1; k = k + 1; }
+        bb = bl; rr = 0; ql = 0; qh = 0; i = 64;
+        while (i > 0) {
+            take = i < k ? i : k;
+            rr = (rr << take) | (int)(nh >> (32 - take));
+            nh = (nh << take) | (nl >> (32 - take));
+            nl = nl << take;
+            qh = (qh << take) | (ql >> (32 - take));
+            ql = (ql << take) | (unsigned)(rr / bb);
+            rr = rr % bb;
+            i = i - take;
+        }
+        q[0] = ql; q[1] = qh; r[0] = rr; r[1] = 0;
         return 0;
     }
     rl = 0; rh = 0; ql = 0; qh = 0; i = 0;

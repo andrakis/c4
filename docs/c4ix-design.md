@@ -1134,6 +1134,26 @@ spinner at -3 beside one at 0 gets 4.6 times the cycles
     persist there), with persist's message on the console. The drive
     keeps no copy: the id is written last, so the next boot tries again.
 
+    *Without the MMU, in 8 MB* (2026-11-13, asked for: the first boot
+    in 8 MB without the MMU too, where it needed 10). The 2 MB were the
+    archive: persist read all 4.3 MB of it into one buffer
+    (`arc_readfile`), then inflated it onto the drive, and the buffer
+    was held until the tar was whole. With the MMU, swap put most of it
+    out; without, the heap had to hold it, persist's 256 KB window, and
+    the desktop starting beside them, and in 8 and 9 MB persist said
+    "out of memory reading it". `arc_gunzip_file` inflates it as it
+    reads it, 128 KB at a time (`in_more` moves what is left, and the 4
+    bytes before it that the bit buffer may hand back, down the buffer
+    and reads on; `codes` re-reads the input's length after each slow
+    path). The trailer is read after the last block, so the archive's
+    size is never needed. persist keeps `arc_readfile` only where the
+    archive is not gzip or the drive will not take the tar. Smallest
+    machines without the MMU, headless: the desktop on a first boot 7 MB
+    (was 10), the shell 5 MB (was 9); from the kept copy 7 MB, as
+    before. In 6 MB the tree unpacks and the desktop cannot load ("c4ix:
+    loader: out of memory loading /bin/desktop (1175 KB)"). With the
+    MMU, as before: 8 MB.
+
   `libjs/tests/test-lazy-root.mjs`; in the page, `web-lazy-root.mjs`.
 
 - **Saved changes, read where they are kept** (2026-11-02, asked for:

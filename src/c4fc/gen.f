@@ -9,15 +9,15 @@
 :M GEN n_str   {: n -- :}  n >off @ n >slen @ D-STR, IMMD, ;M
 
 \ -- M4: the helpers -----------------------------------------------------
-\ Six small routines called where the VM has no opcode: a 16-bit load
-\ (sign- or zero-extending), a 16-bit store, unsigned word division and
-\ remainder, and a logical right shift by a run-time count. Each is laid
-\ down ONCE, after the last function, and only if something called it;
-\ a call is a JSR to an address in the same unit, so there is no symbol
-\ and nothing for c4rlink to know. c4lc-gen.lisp's g:helpbody is the
-\ same code, instruction for instruction.
-0 CONSTANT h_ld16s  1 CONSTANT h_ld16u  2 CONSTANT h_st16
-3 CONSTANT h_udiv   4 CONSTANT h_umod   5 CONSTANT h_lsr
+\ Two small routines called where the VM has no opcode: unsigned word
+\ division and remainder. Each is laid down ONCE, after the last
+\ function, and only if something called it; a call is a JSR to an
+\ address in the same unit, so there is no symbol and nothing for c4rlink
+\ to know. c4lc-gen.lisp's g:helpbody is the same code, instruction for
+\ instruction. The 16-bit loads and store and the logical right shift by
+\ a run-time count were helpers too; they are the VM's own now, LH LHU SH
+\ and LSR (docs/c4-16bit.md).
+0 CONSTANT h_udiv   1 CONSTANT h_umod
 CREATE HM-ID VEC ALLOT   CREATE HM-MK VEC ALLOT
 : HELP-RESET ( -- )  HM-ID 64 VEC-INIT  HM-MK 64 VEC-INIT ;
 HELP-RESET
@@ -31,18 +31,6 @@ HELP-RESET
 
 : L2, ( n -- )  oLEA OP2, ;
 : I2, ( n -- )  oIMM OP2, ;
-: H-LD16 ( signed -- ) {: sg -- :}
-   0 oENT OP2,
-   2 L2, oLI OP, oPSH OP, 1 I2, oADD OP, oLC OP,
-   sg 0= IF oPSH OP, 255 I2, oAND OP, THEN
-   oPSH OP, 8 I2, oSHL OP,
-   oPSH OP, 2 L2, oLI OP, oLC OP, oPSH OP, 255 I2, oAND OP, oOR OP, oLEV OP, ;
-: H-ST16 ( -- )
-   0 oENT OP2,
-   3 L2, oLI OP, oPSH OP, 2 L2, oLI OP, oSC OP,
-   3 L2, oLI OP, oPSH OP, 1 I2, oADD OP, oPSH OP,
-   2 L2, oLI OP, oPSH OP, 8 I2, oSHR OP, oSC OP,
-   2 L2, oLI OP, oLEV OP, ;
 : H-ULT, ( -- )                          \ A := stack (^MIN) vs b (^MIN), flag to come
    oPSH OP, WMIN I2, oXOR OP, oPSH OP, 2 L2, oLI OP, oPSH OP, WMIN I2, oXOR OP, ;
 : H-UDIV ( -- ) {: | m1 m2 -- :}
@@ -77,21 +65,9 @@ HELP-RESET
    -1 L2, oLI OP, oLEV OP,
    m4 >RES
    -1 L2, oLI OP, oPSH OP, 2 L2, oLI OP, oSUB OP, oLEV OP, ;
-: H-LSR ( -- ) {: | m -- :}
-   0 oENT OP2,
-   2 L2, oLI OP, oBZ BR, TO m
-   3 L2, oLI OP, oPSH OP, 2 L2, oLI OP, oSHR OP,
-   oPSH OP, -1 I2, oPSH OP, WBITS I2, oPSH OP, 2 L2, oLI OP, oSUB OP,
-   oSHL OP, oPSH OP, -1 I2, oXOR OP, oAND OP, oLEV OP,
-   m >RES
-   3 L2, oLI OP, oLEV OP, ;
 : EMIT-HELPERS ( -- )
-   h_ld16s HUSED? IF h_ld16s HRES -1 H-LD16 THEN
-   h_ld16u HUSED? IF h_ld16u HRES  0 H-LD16 THEN
-   h_st16  HUSED? IF h_st16  HRES H-ST16 THEN
    h_udiv  HUSED? IF h_udiv  HRES H-UDIV THEN
-   h_umod  HUSED? IF h_umod  HRES H-UMOD THEN
-   h_lsr   HUSED? IF h_lsr   HRES H-LSR  THEN ;
+   h_umod  HUSED? IF h_umod  HRES H-UMOD THEN ;
 
 \ -- M4: loads, stores and conversions by type ----------------------------
 : MASK, ( m -- )  oPSH OP, oIMM OP2, oAND OP, ;
@@ -104,14 +80,14 @@ HELP-RESET
 \ lives.
 : LOAD, ( ct -- ) {: t -- :}
    t t_char = t t_schar = OR IF oLC OP, EXIT THEN
-   t t_uchar = IF oLC OP, 255 MASK, EXIT THEN
-   t t_short = IF h_ld16s 1 HCALL EXIT THEN
-   t t_ushort = IF h_ld16u 1 HCALL EXIT THEN
+   t t_uchar = IF oLCU OP, EXIT THEN
+   t t_short = IF oLH OP, EXIT THEN
+   t t_ushort = IF oLHU OP, EXIT THEN
    t t_uint = W64? AND IF oLI OP, M32 MASK, EXIT THEN
    oLI OP, ;
 : STORE, ( ct -- ) {: t -- :}
    t T-BYTE? IF oSC OP, EXIT THEN
-   t T-HALF? IF h_st16 2 HCALL EXIT THEN
+   t T-HALF? IF oSH OP, EXIT THEN
    oSI OP, ;
 \ SC leaves in A the byte it stored as a signed char (c4's own rule, right for
 \ char), so the value of an assignment to an unsigned char, or of its ++ or
@@ -359,7 +335,7 @@ VARIABLE VUNUSED   0 VUNUSED !
          >rhs @ DUP NUM? IF
             >val @ oSHR OP,
             DUP 0> OVER WBITS < AND IF -1 WBITS ROT - LSHIFT INVERT MASK, ELSE DROP THEN
-         ELSE DROP h_lsr 2 HCALL THEN
+         ELSE DROP oLSR OP, THEN
          EXIT THEN
       >op @ OP, EXIT
    THEN

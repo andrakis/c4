@@ -39,10 +39,11 @@ double trunc(double x) {
     int e;
     unsigned long long b, m;
     // Most values fit an int, and the conversion costs far less than 64-bit
-    // shifts of the bits. (A result of 0 goes on, to keep the sign of -0.)
+    // shifts of the bits. A result of 0 is x * 0.0: a zero with x's sign.
     if (x > -2147483648.0 && x < 2147483648.0) {
         e = (int)x;
         if (e) return (double)e;
+        return x * 0.0;
     }
     b = m_bits(x);
     e = m_exp(x) - 1023;
@@ -54,13 +55,14 @@ double trunc(double x) {
 double floor(double x) {
     double t;
     t = trunc(x);
-    if (m_neg(x) && t != x) return t - 1;
+    // t != x: x is neither 0 nor whole, so its sign is x < 0's
+    if (t != x && x < 0.0) return t - 1;
     return t;
 }
 double ceil(double x) {
     double t;
     t = trunc(x);
-    if (!m_neg(x) && t != x) return t + 1;
+    if (t != x && x > 0.0) return t + 1;
     return t;
 }
 // halfway away from zero

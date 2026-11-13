@@ -281,7 +281,7 @@ Not done, with the reason:
 - `<ld16s>` is the biggest single cost now, 13% and 58,700 calls a frame:
   `short` fields and arrays, `drawalls`, the scans, the actors. The VM has no
   16-bit load, so it is c4lc's to open-code (or the VM's to add), and then
-  every program gains.
+  every program gains. (Done: section 10.)
 - `klabs` as a macro: Duke passes it expressions (`klabs(ps[j].oposx-s->x)`),
   which a macro works out twice. c4lc's `-minline` inlines the function
   safely, but only where an argument of a parameter used twice is a variable
@@ -291,6 +291,21 @@ Not done, with the reason:
   about 0.2%.
 - `mulscale`'s 32-bit path takes operands within 46,340, and 70% of the
   demo's calls are outside it (`c4_mulscale`, `c4_umul64`: about 6%).
+
+**Keys Setup showed "..." for every key** (2026-11-13). `control.h` defined
+`KeyMapping` in every unit that included it, and so did other headers and pairs
+of files with other globals (177 in all): gcc's `-fcommon` merges such
+definitions, but c4lc and c4rlink keep a copy a unit, and c4rlink's "duplicate
+definition ..., keeping first" keeps only the symbol. The menus and
+`duke3d.cfg` read and wrote copies the game never set, so a saved `duke3d.cfg`
+bound no key at all. Every global is defined once now, and a `duke3d.cfg` that
+names no key gets the default controls. c4lc also made two objects of one
+global defined twice in one unit, which C makes one.
+Since 2026-11-13 the toolchain does what gcc does (c4lc-design.md 13.1):
+c4rlink makes a global several units define one object, and c4lc one object
+of a global defined twice in a unit. Built from the headers before the fix,
+Duke now links with no warning; the fix stays, since it is the C a
+`-fno-common` compiler wants too.
 
 **In the page**, C4IX, 320x200, the test's 600 frames shown (`-show`, sound and
 music on), on the Chrome of CDP 9222 (2026-11-11): 12.9 fps as the page starts
@@ -305,3 +320,56 @@ changes the screen size in the game's own menu (`-menu`: Options, Video Setup,
 game (F10, Y), which must end it; all match. `-home` was played with an upload
 laid over C4IX's disk as the page lays it (the GRP in `/home`) and on the bare
 machine; sound and music were recorded from the card (`cli.js --wav`).
+
+## 10. Performance, round 2 (2026-11-13)
+
+Measured as section 9's profile was: the Atomic Edition's `demo1.dmo` on
+node's bare machine, frames 400 to 1000, every instruction counted and every
+call counted by its target. Each step ends on the same checksum,
+`25b25fc6`, and `test-duke3d` holds every build to gcc's frames.
+
+| step | M instructions a frame | change | calls a frame |
+|---|---:|---:|---:|
+| before (section 9) | 7.119 | | 95,555 |
+| 16-bit loads and stores, LSR, as opcodes (docs/c4-16bit.md) | 5.861 | −17.7% | 23,365 |
+| `LCU`, an unsigned byte's load (docs/c4-16bit.md) | 5.595 | −4.5% | 23,367 |
+| the c4 loops shift with `LSR` (`hlineasm4`, `vlineasm4`, `mvlineasm4`, `slopevlin`) | 5.224 | −6.6% | 23,365 |
+| `vlineasm4`, `mvlineasm4`, `hlineasm4` four pixels a turn | 4.866 | −6.9% | 23,365 |
+| `c4_mulscale` in signed 16-bit digits | 4.754 | −2.3% | 21,425 |
+| **all of round 2** | | **−33.2%** | **−77.6%** |
+
+**Wall time**, node's bare machine on helios, the demo's whole run of 1,000
+frames with the GRP's loading, before and after in turn, three runs each
+(2026-11-13): 36.9 s to 29.4 s, −20%. Less than the instructions' −33%: the
+first 400 frames and the loading are in it, and what went was cheap per
+instruction, the opcodes' slow paths aside.
+
+**16-bit loads and stores.** `<ld16s>`, `<ld16u>` and `<st16>` were 72,200
+calls a frame between them, each a call and 19 to 22 instructions. They are
+the opcodes `LH`, `LHU` and `SH` now, one instruction each, run by every
+machine c4 has; and `<lsr>` is `LSR`. docs/c4-16bit.md has the reasons for
+opcodes rather than open-coded loads (that would have saved about 7%, not
+17.7%) and what each machine does. The image is 11% smaller: 4,680,784
+bytes to 4,157,388.
+
+**The loops' shifts.** The c4 versions of the inner loops (section 9) made a
+logical shift from an arithmetic one and a mask, `((int32_t)v >> sh) & mask`,
+four instructions; with `LSR` each is `v >> sh`, one. `hlineasm4` went from
+46 instructions a pixel to 40.
+
+**Four pixels a turn.** What was left of a pixel's cost in `vlineasm4` was a
+third the loop's: a compare, a branch, a decrement and a jump, 9 of 28
+instructions. The column and row loops draw four pixels a turn now and the
+rest one at a time; `hlineasm4` writes `dest[0]` to `dest[-3]` and steps
+`dest` by four. About 21 instructions a pixel in `vlineasm4`, 32 in
+`hlineasm4`.
+
+**`mulscale` outside its 32-bit path.** 70% of the demo's `mulscale` calls
+have an operand past 46,340 and went to `c4_mulscale`: both operands'
+magnitudes, `c4_umul64`'s four products through two pointers, and the 64-bit
+product negated when the signs differed, about 160 instructions. With the
+high 16-bit digits signed (`a >> 16`) and the low ones not (`a & 0xffff`),
+the cross products stay within 2^31 and the sum needs two carries; no call,
+no signs, `INT32_MIN` too, about 100. Checked against the int64 product on
+four million pairs.
+

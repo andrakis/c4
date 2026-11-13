@@ -120,15 +120,17 @@ const RAM_FILES_KB = 1024;
 // copy]. Measured 2026-11-13, headless and in the page alike: from the
 // kept copy 8 MB with the MMU and 7 without (78889dc: 9 and 7); the
 // first boot, which inflates the archive onto the drive, 8 MB
-// with the MMU and 10 without (78889dc: 14 and 12; before arc_readfile
-// read the archive into one buffer of its size, 10 and 21). With the MMU
+// with the MMU and 7 without (78889dc: 14 and 12; before arc_readfile
+// read the archive into one buffer of its size, 10 and 21; before persist
+// inflated it as it read it, arc_gunzip_file, rather than reading all
+// 4.3 MB of it first, 8 and 10). With the MMU
 // the first boot needed 10 until the archive's one 4 MB read into
 // persist's buffer, whose first pages swap had put out again by the time
 // of the read, wrote them (arena.js dmaSwapped): it stopped at the first
 // and said it had read it all, and persist found zeros ("not a tar
 // archive"). A boot that needs more than these has put the tree, or
 // something new, back in RAM.
-const SMALLEST = [[8, true, true], [7, false, true], [8, true, false], [10, false, false]];
+const SMALLEST = [[8, true, true], [7, false, true], [8, true, false], [7, false, false]];
 
 // ---- no drive: the tree unpacked into RAM, as before ----
 const ram = machine();
@@ -270,8 +272,9 @@ check(/read from there/.test(t) && crcLines(t, files).join('\n') === wanted(file
 // docs/c4ix-mmu.md 11. In 5 either the root archive cannot be unpacked,
 // and the boot stops there, or it can, by a few KB of the heap's layout,
 // and the desktop cannot load: the shell says so, and there is still a
-// console. Without the MMU nothing makes room, and 9 MB is too few)
-for (const [mb, mmu] of [[5, true], [9, false]]) {
+// console. Without the MMU nothing makes room: in 6 MB the tree is
+// unpacked, and the desktop cannot load)
+for (const [mb, mmu] of [[5, true], [6, false]]) {
   const tiny = machine({ mb, mmu, store: new Map(), desktop: true });
   tiny.until(() => tiny.halted() || /desktop: running on the display|sh: out of memory starting desktop/.test(tiny.text()), 3000);
   t = tiny.text();

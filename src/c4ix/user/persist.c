@@ -579,19 +579,26 @@ static int unpack_ram(char *raw, int rawlen, char *id) {
 // files read from there (lazy_tar). The id is emptied first and written
 // last, so a copy cut short is never taken for a whole one. Where the
 // drive will not take it, unpacked into RAM instead.
+//
+// The archive is inflated as it is read (arc_gunzip_file), 128 KB of it
+// at a time: read whole first, its 4.3 MB were in memory beside the
+// desktop starting, and a first boot without the MMU needed 10 MB.
 static int unpack_keep(char *name, char *id) {
     char *raw;
-    int rawlen, n;
-    if (!(raw = arc_readfile(name, &rawlen))) { nomem = arc_nomem(); return 0 - 1; }
-    if (!id || rawlen < 2 || (raw[0] & 255) != 0x1F || (raw[1] & 255) != 0x8B ||
-        w_open(KID) < 0 || w_close() < 0 || w_open(KTAR) < 0)
-        return unpack_ram(raw, rawlen, id);
-    n = arc_gunzip_to(raw, rawlen, (int)&to_drive);
-    if (w_close() < 0 || wbad) {
-        ufprintf(STDERR, "persist: could not keep %s; unpacking into memory\n", KTAR);
-        return unpack_ram(raw, rawlen, 0);
+    int rawlen, n, kept;
+    kept = 0;
+    if (id && w_open(KID) >= 0 && w_close() >= 0 && w_open(KTAR) >= 0) {
+        n = arc_gunzip_file(name, (int)&to_drive);
+        if (w_close() < 0 || wbad) {
+            ufprintf(STDERR, "persist: could not keep %s; unpacking into memory\n", KTAR);
+            id = 0;
+        } else if (n != ARC_NOTGZ) kept = 1;
     }
-    free(raw);
+    if (!kept) {
+        // a plain tar, or a drive that will not take it: into RAM
+        if (!(raw = arc_readfile(name, &rawlen))) { nomem = arc_nomem(); return 0 - 1; }
+        return unpack_ram(raw, rawlen, id);
+    }
     if (n < 0) { nomem = arc_nomem(); return 0 - 1; }
     if (w_open(KID) >= 0) { w_put(id, ustrlen(id)); w_close(); }
     if ((n = lazy_tar(KTAR)) >= 0) uprintf("persist: %s: %d files, unpacked onto drive 1 and read from there\n", name, n);

@@ -172,9 +172,12 @@ static void csi(struct tgrid *t, int fin) {
     if (t->cy >= ROWS) t->cy = ROWS - 1;
 }
 
+// The window is drawn again only when the grid changed. The ESC _ commands
+// are the window's code's (t->apc), which says itself what they changed: a
+// game's frames come that way, each only a part of the window (term.c's 'p').
 void tg_feed(struct tgrid *t, char *buf, int n) {
-    int i, c;
-    i = 0;
+    int i, c, grid;
+    i = 0; grid = 0;
     while (i < n) {
         c = buf[i] & 255;
         ++i;
@@ -204,8 +207,10 @@ void tg_feed(struct tgrid *t, char *buf, int n) {
             if (c == ';') { if (!t->np) t->np = 1; if (t->np < 8) { t->param[t->np] = 0; ++t->np; } continue; }
             t->esc = 0;
             if (c >= 64 && c <= 126) csi(t, c);
+            grid = 1;
             continue;
         }
+        if (c != 27) grid = 1;
         if (c == 27) t->esc = 1;
         else if (c == 10) newline(t);              // a tty turns \n into \r\n
         else if (c == 13) { t->cx = 0; t->wrap = 0; }
@@ -213,7 +218,7 @@ void tg_feed(struct tgrid *t, char *buf, int n) {
         else if (c == 9) { t->cx = (t->cx + 8) & ~7; if (t->cx >= COLS) t->cx = COLS - 1; }
         else if (c >= 32) putc_(t, c);
     }
-    wk_invalidate(t->win, 0, 0, 0, 0);
+    if (grid) wk_invalidate(t->win, 0, 0, 0, 0);
 }
 
 void tg_echo(struct tgrid *t, int c) { tmp[0] = c; tg_feed(t, tmp, 1); }

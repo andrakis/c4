@@ -214,6 +214,19 @@ void wk_invalidate(int i, int x, int y, int ww, int hh) {
     else wk_dirty_rect(wk_client_x(w) + x, wk_client_y(w) + y, ww, hh);
 }
 
+// ... and a part of them that its draw paints whole: a program's frame,
+// which in a game is every frame. When that is all the damage at the
+// next redraw (redraw_part), the window's own draw and the windows above
+// it make the picture there: the desktop, the windows under it and its
+// own frame are covered, and are not drawn. One part, the latest: two
+// windows' frames make damage that is in neither, and all is drawn.
+static int cover_win, cover_x, cover_y, cover_w, cover_h;
+void wk_invalidate_covered(int i, int x, int y, int ww, int hh) {
+    if (ww <= 0 || hh <= 0) { wk_invalidate(i, 0, 0, 0, 0); return; }
+    cover_win = i; cover_x = x; cover_y = y; cover_w = ww; cover_h = hh;
+    wk_invalidate(i, x, y, ww, hh);
+}
+
 // A dialog's answer: to the window that asked, raised first, or to the
 // shell when no window did. An owner closed meanwhile hears nothing.
 void wk_answer_owner(int owner, int dialog, int result) {
@@ -453,14 +466,46 @@ static void draw_window(struct win *w, int focused) {
     if (l->grip) l->grip(w);
 }
 
-static void draw_windows() {
-    struct win *w, *f;
+// The windows that reach into the damage, back to front, from w up
+static void draw_windows_from(struct win *w) {
+    struct win *f;
     f = focus();
-    w = zbot;
     while (w) {
         if (!w->min && wk_in_damage(w->x, w->y, w->w, w->h)) draw_window(w, w == f);
         w = w->above;
     }
+}
+static void draw_windows() { draw_windows_from(zbot); }
+
+// The window whose covered part (wk_invalidate_covered) holds all the
+// damage, inside its client area as it is now; or 0
+static struct win *covering() {
+    struct win *w;
+    int x0, y0, x1, y1, cx, cy;
+    if (!cover_win || !(w = win_get(cover_win)) || w->min || !w->cls->draw) return 0;
+    cx = wk_client_x(w); cy = wk_client_y(w);
+    x0 = cx + cover_x; y0 = cy + cover_y;
+    x1 = x0 + cover_w; y1 = y0 + cover_h;
+    if (x0 < cx) x0 = cx;
+    if (y0 < cy) y0 = cy;
+    if (x1 > cx + wk_client_w(w)) x1 = cx + wk_client_w(w);
+    if (y1 > cy + wk_client_h(w)) y1 = cy + wk_client_h(w);
+    if (wk_dmg_x0 < x0 || wk_dmg_y0 < y0 || wk_dmg_x1 > x1 || wk_dmg_y1 > y1) return 0;
+    return w;
+}
+
+// Its client area alone (and the size grip over its corner)
+static void draw_client(struct win *w, int focused) {
+    struct wk_look *l;
+    int cx, cy, cw, ch;
+    l = wk_look();
+    cx = wk_client_x(w); cy = wk_client_y(w); cw = wk_client_w(w); ch = wk_client_h(w);
+    wk_client_clip(cx, cy, cw, ch);
+    wk_origin(cx, cy);
+    w->cls->draw(w->id, cw, ch, focused);
+    wk_origin(0, 0);
+    wk_noclip();
+    if (l->grip) l->grip(w);
 }
 
 static void redraw() {
@@ -475,25 +520,35 @@ static void redraw() {
     gui_show();
     wk_full = 0;
     wk_dmg = 0;
+    cover_win = 0;
 }
 
 // Only the damage: the desktop under it, the windows that reach into it,
 // back to front, and what the shell has over them. A menu open is drawn
 // over everything, so that is still the whole scene.
 static void redraw_part() {
+    struct win *c;
     if (menu_win || (shell && shell->popup && shell->popup())) { redraw(); return; }
     wk_part = 1;
     wk_origin(0, 0);
     wk_noclip();
-    if (shell && shell->desktop) shell->desktop(wk_dmg_x0, wk_dmg_y0, wk_dmg_x1 - wk_dmg_x0, wk_dmg_y1 - wk_dmg_y0);
-    else gui_rect(wk_dmg_x0, wk_dmg_y0, wk_dmg_x1 - wk_dmg_x0, wk_dmg_y1 - wk_dmg_y0, C_DESK);
-    wk_icons_draw();
-    draw_windows();
+    // a program's frame, and nothing else: that window's picture, and
+    // whatever is over it
+    if ((c = covering())) {
+        draw_client(c, c == focus());
+        draw_windows_from(c->above);
+    } else {
+        if (shell && shell->desktop) shell->desktop(wk_dmg_x0, wk_dmg_y0, wk_dmg_x1 - wk_dmg_x0, wk_dmg_y1 - wk_dmg_y0);
+        else gui_rect(wk_dmg_x0, wk_dmg_y0, wk_dmg_x1 - wk_dmg_x0, wk_dmg_y1 - wk_dmg_y0, C_DESK);
+        wk_icons_draw();
+        draw_windows();
+    }
     if (shell && shell->front) shell->front();
     gui_noclip();
     gui_show();
     wk_part = 0;
     wk_dmg = 0;
+    cover_win = 0;
 }
 
 int wk_dirty() { return wk_full || wk_dmg; }

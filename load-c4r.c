@@ -197,10 +197,40 @@ char *c4r_strcpy_alloc (char *source) {
 char *c4r_mem_src;
 int   c4r_mem_len, c4r_mem_pos;
 
+// And a file is read through a buffer of its own. The header and the
+// patches and symbols are read a word at a time, and each read() is a
+// system call: in C4IX a trap, and the host's file opened, read and
+// closed again under the kernel lock. innerbench -Tln 40 made 537,160 of
+// them of 2 to 16 bytes, its inner c4m's each loading C4KE, a fifth of the
+// kernel's time (docs/c4ix-design.md). c4r_load says which fd it is
+// (c4r_rfd, the fd + 1) as it opens the file, and forgets it as it closes.
+enum { C4R_RBUF = 4096 };
+char *c4r_rbuf;
+int   c4r_rfd, c4r_rlen, c4r_rpos;
+
 int c4r_src_read (int fd, char *buffer, int len) {
-	int n;
-	if (!c4r_mem_src)
-		return read(fd, buffer, len);
+	int n, got;
+	if (!c4r_mem_src) {
+		if (fd + 1 != c4r_rfd || (!c4r_rbuf && !(c4r_rbuf = malloc(C4R_RBUF))))
+			return read(fd, buffer, len);
+		got = 0;
+		while (got < len) {
+			if (c4r_rpos >= c4r_rlen) {
+				// what is left of a big read (a section) goes straight in
+				if (len - got >= C4R_RBUF) {
+					if ((n = read(fd, buffer + got, len - got)) <= 0) return got ? got : n;
+					return got + n;
+				}
+				if ((n = read(fd, c4r_rbuf, C4R_RBUF)) <= 0) return got ? got : n;
+				c4r_rlen = n;
+				c4r_rpos = 0;
+			}
+			n = c4r_rlen - c4r_rpos;
+			if (n > len - got) n = len - got;
+			while (n > 0) { buffer[got] = c4r_rbuf[c4r_rpos]; ++got; ++c4r_rpos; --n; }
+		}
+		return got;
+	}
 	n = c4r_mem_len - c4r_mem_pos;
 	if (n <= 0) return 0;
 	if (n > len) n = len;
@@ -435,12 +465,15 @@ int *c4r_load_opt_real (char *file, int options) {
 		// before the one with .c4r on every program it starts, so this
 		// is the usual path, not a rare one, and it kept 349 bytes a time.
 		if ((fd = open(file, FILE_OPEN_MODE)) < 0) {
+			c4r_rfd = 0;
 			free((char *)c4r[C4R_FILENAME]);
 			free(header);
 			free(c4r);
 			free(buffer);
 			return 0;
 		}
+		c4r_rfd = fd + 1;
+		c4r_rlen = c4r_rpos = 0;
 	}
 
 	//
@@ -755,6 +788,7 @@ int *c4r_load_opt_real (char *file, int options) {
 
 				free(buffer);
 				close(fd);
+				c4r_rfd = 0;
 
 				if (c4r_verbose) printf("lc4r: load complete.\n");
 				return c4r;
@@ -774,6 +808,7 @@ int *c4r_load_opt_real (char *file, int options) {
 	if (c4r) free(c4r);
 	if (buffer) free(buffer);
 	if (fd >= 0) close(fd);
+	c4r_rfd = 0;
 
 	if (c4r_verbose) printf("lc4r: load failure.\n");
 

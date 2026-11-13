@@ -426,7 +426,11 @@ The bar rises rung by rung and c4lc supplies it at every one.
          out after every module's data so no image stores it; region 3
          begins a word after region 2's end, so that the address just
          past an initialised object is never the BSS's first
-         (2026-11-10, load-c4r.c's C4R_HDR_BSS).
+         (2026-11-10, load-c4r.c's C4R_HDR_BSS). In an object, a
+         non-static global in region 3 -- a tentative definition --
+         has its symbol marked ATTR_COMMON (0x80) and a word after it
+         (`COMMON?`, c4lc-gen's `g:tattrs`), for c4rlink, which makes
+         it one object with other units' (c4lc-design.md 13.1).
       3. **The data segment is written with trailing zeros trimmed.**
          The loader zero-fills to memsz, so a string's terminating nul
          at the very end of the segment is simply not stored.

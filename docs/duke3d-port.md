@@ -301,6 +301,11 @@ definition ..., keeping first" keeps only the symbol. The menus and
 bound no key at all. Every global is defined once now, and a `duke3d.cfg` that
 names no key gets the default controls. c4lc also made two objects of one
 global defined twice in one unit, which C makes one.
+Since 2026-11-13 the toolchain does what gcc does (c4lc-design.md 13.1):
+c4rlink makes a global several units define one object, and c4lc one object
+of a global defined twice in a unit. Built from the headers before the fix,
+Duke now links with no warning; the fix stays, since it is the C a
+`-fno-common` compiler wants too.
 
 **In the page**, C4IX, 320x200, the test's 600 frames shown (`-show`, sound and
 music on), on the Chrome of CDP 9222 (2026-11-11): 12.9 fps as the page starts

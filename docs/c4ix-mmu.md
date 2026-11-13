@@ -493,7 +493,12 @@ MB, memory beyond the arena, forgotten with the machine), and their
 frames are free. A page put out stays in the kernel's map, not present,
 its slot in the entry (`PTE_SWAP`, 0x400): libjs's window reads and
 writes the host's copy there, so the kernel finds the page's bytes even
-if it follows a pointer into it that it never checked.
+if it follows a pointer into it that it never checked. A device given
+such a page by the kernel (a drive's read into a task's buffer) copies
+to and from the host's copy too (arena.js `dmaSwapped`). Until
+2026-11-13 it stopped at the first page that was out, and the drive
+still said it had read the whole buffer: persist's one 4 MB read of the
+root archive, in an 8 MB machine, left the buffer as zeros.
 
 Which go (stage 11, below; until then the largest idle block of a task
 no CPU was running, never the asking task's): pages of what tasks asked

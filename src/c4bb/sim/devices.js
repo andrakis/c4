@@ -559,10 +559,12 @@ export class Devices {
       return this.tapIn ? this.tapRead(this.diskAddr, len) : this.kbdRead(this.diskAddr, len, false);
     if (!f) return -1;
     if (f.kbd) return this.kbdRead(this.diskAddr, len, f.nonblock, f.raw);
+    // what reached memory, not what was asked: a buffer that ends is a
+    // short read, and the rest is still there for the next
     const n = Math.min(len, f.data.length - f.pos);
-    if (n > 0) this.arena.dmaWrite(this.diskAddr, f.data.slice(f.pos, f.pos + n));
-    f.pos += n;
-    return n;
+    const got = n > 0 ? this.arena.dmaWrite(this.diskAddr, f.data.subarray(f.pos, f.pos + n)) : 0;
+    f.pos += got;
+    return got;
   }
 
   // Create or truncate a file on a drive. A drive with no sink is a
@@ -607,8 +609,8 @@ export class Devices {
     const n = Math.max(0, len | 0);
     const buf = this.arena.dmaRead(this.diskAddr, n);
     f.w.chunks.push(buf);
-    f.w.len += n;
-    return n;
+    f.w.len += buf.length;
+    return buf.length;
   }
 
   // Take a file off a writable drive: out of what the machine sees at

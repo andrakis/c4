@@ -340,7 +340,7 @@ int init_main(int argc, int argv) {
     char *shargv[16];
     char *vav[3];
     char *cmds[4];
-    int i, desktop, shargc, ncmd, k;
+    int i, desktop, shargc, ncmd, k, vrc;
 
     av = (char **)argv;
     i = 1;
@@ -381,12 +381,20 @@ int init_main(int argc, int argv) {
         vav[0] = "c4ix-vfsload.c4r";
         vav[1] = "-w";
         vav[2] = 0;
-        if ((v = task_spawn(vav[0], desktop ? 2 : 1, (int)vav)) && task_wait(v) == 3 && desktop) {
+        vrc = (v = task_spawn(vav[0], desktop ? 2 : 1, (int)vav)) ? task_wait(v) : 0;
+        if (vrc == 3 && desktop) {
             // the system did not fit: say so and stop, rather than start
             // a desktop that falls over on what is missing
             kprintf("c4ix: out of memory: the system does not fit in this machine's memory.\n");
             kprintf("c4ix: the boot stops here. Give the machine more memory and boot again.\n");
             return 3;
+        }
+        if (vrc == 4 && desktop) {
+            // the root archive could not be read (persist said why): no
+            // desktop on a tree that is not there
+            kprintf("c4ix: the root archive could not be read, so the system's files are not there.\n");
+            kprintf("c4ix: the boot stops here.\n");
+            return 4;
         }
         boot_done();
         con_booted();

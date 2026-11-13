@@ -178,27 +178,61 @@ export class Arena {
     for (let k = 0; k < len;) {
       const va = (addr + k) >>> 0, r = Math.min(len - k, 4096 - (va & 4095));
       const p = this.dma(va, r, false, false);
-      if (p < 0 || p + r > this.size) return out.subarray(0, k);
-      out.set(this.u8.subarray(p, p + r), k);
+      if (p >= 0 && p + r <= this.size) out.set(this.u8.subarray(p, p + r), k);
+      else {
+        const s = this.dmaSwapped(va);
+        if (!s) return out.subarray(0, k);
+        if (s.page) out.set(s.page.subarray(va & 4095, (va & 4095) + r), k);
+      }
       k += r;
     }
     return out;
   }
+  // ... and LEN bytes written there: how many were (short where memory ends)
   dmaWrite(addr, bytes) {
     addr = addr >>> 0;
     if (!(bytes instanceof Uint8Array)) bytes = Uint8Array.from(bytes);
     const len = bytes.length;
     if (!this.dmaCtx && !(this.uwin && addr >= this.uwin)) {
-      if (addr < this.size) this.u8.set(len > this.size - addr ? bytes.subarray(0, this.size - addr) : bytes, addr);
-      return;
+      if (addr >= this.size) return 0;
+      const n = Math.min(len, this.size - addr);
+      this.u8.set(n < len ? bytes.subarray(0, n) : bytes, addr);
+      return n;
     }
     for (let k = 0; k < len;) {
       const va = (addr + k) >>> 0, r = Math.min(len - k, 4096 - (va & 4095));
       const p = this.dma(va, r, true, false);
-      if (p < 0 || p + r > this.size) return;
-      this.u8.set(bytes.subarray(k, k + r), p);
+      if (p >= 0 && p + r <= this.size) this.u8.set(bytes.subarray(k, k + r), p);
+      else {
+        const s = this.dmaSwapped(va, true);
+        if (!s) return k;
+        s.page.set(bytes.subarray(k, k + r), va & 4095);
+      }
       k += r;
     }
+    return len;
+  }
+  // A page the kernel's map has put out to swap, where kernel mode hands
+  // a device a user address (the window, no task's MMU): the host's copy
+  // of it, as the kernel's own loads and stores find it (c4m.js kld8,
+  // kst8). C4IX takes in a 4 MB read to a task's buffer in one host read,
+  // its pages brought in by uaccess first -- and in a small machine the
+  // first of them are out again by the time the read is made. Without
+  // this the read stopped at the first such page and still said it had
+  // read it all. { page }: its bytes (null: a slot never written, zeros,
+  // unless WRITE, which makes it); null if it is not out.
+  dmaSwapped(va, write = false) {
+    const io = this.io;
+    if (this.dmaCtx || !this.udir || !io || !io.swapPages) return null;
+    const pte = kernelPte(this.i32, this.size, this.udir, va);
+    if ((pte & 1) || !(pte & PTE_SWAP)) return null;
+    const slot = pte >>> 12;
+    let page = io.swapPages.get(slot) || null;
+    if (!page && write) {
+      if (slot >= io.swapSlots) return null;
+      io.swapPages.set(slot, page = new Uint8Array(4096));
+    }
+    return { page };
   }
   dmaCstring(addr, max = 4096) {
     addr = addr >>> 0;

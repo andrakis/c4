@@ -586,6 +586,7 @@ struct task {
     int  held;
     int  letgo;
     int  tflags;               // TF_*: what is true of it, kept as it changes
+    int  fdtop;                // one past the highest fd it has had: what a walk of fds needs see
 };
 
 // What the hot paths ask of a task, answered from one word, kept where the

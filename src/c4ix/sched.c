@@ -663,7 +663,8 @@ static int sched_unblocked(struct task *n) {
 
 // What SYS_EVWAIT waits for besides the clock: an event in the task's GUI
 // ring, whose header is [capacity, head, tail] -- the host moves the head,
-// the task the tail -- or data, or end of file, on a pipe it reads.
+// the task the tail -- or data, or end of file, on a pipe it reads, among
+// the fds the task has had (fdtop), not all FD_MAX.
 int sched_events(struct task *t) {
     struct file *f;
     int fd, *ring;
@@ -673,7 +674,7 @@ int sched_events(struct task *t) {
     }
     if (t->ev_wait & 2) {
         fd = 0;
-        while (fd < FD_MAX) {
+        while (fd < t->fdtop) {
             f = (struct file *)t->fds[fd];
             if (f && f->vn->type == VN_PIPE && (f->flags & 3) == C4IX_O_RDONLY
                 && (f->vn->size > f->vn->rpos || !f->vn->writers)) return 1;

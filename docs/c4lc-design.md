@@ -701,7 +701,9 @@ had written. The rule now:
 `common_b.c` and `common_c.c` at 32 and 64 bits, plain and `-O`, in three
 orders and with a `-r` library; before this they printed `common 11 0 0 5 7
 5011`, now what gcc does, `common 111 4 42 5 7 7111`. `test-c4fc` holds c4fc's
-objects of the one-unit cases to c4lc's, byte for byte.
+objects of these units and the one-unit cases to c4lc's, byte for byte.
+`common_a.c`'s `int *tend = &table[4];` joined them on 2026-11-14, when
+c4fc gained initializers set at start-up (c4fc-design.md).
 
 The ports had, besides Duke's 177 (which `games/duke3d` had since defined once
 each): BSD hack's `PC`, `BC`, `UP` (also in `c4bsd.c`, unused there), sail's

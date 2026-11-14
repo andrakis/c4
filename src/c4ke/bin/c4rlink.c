@@ -1891,7 +1891,8 @@ static int lib_select (int *c4rs, int count, int nsym) {
 // at 32 bits its tentative globals are still known, as the non-static
 // ones in its BSS (C4R_HDR_BSS, CL_BSS_BASE): c4lc and c4fc put a global
 // there only when it has no initializer -- even `= 0` puts it in the
-// initialized data. Per name defined more than once:
+// initialized data, and so does an initializer __c4lc_init computes at
+// start-up (`int *p = &t[4];`). Per name defined more than once:
 //   - two with initializers: an error, the link fails;
 //   - one with an initializer: it is kept;
 //   - none: the biggest is kept, the first of equals;

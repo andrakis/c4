@@ -2053,7 +2053,7 @@
 					(if (if (= size nil) (if (p:svalue? ty) false (p:dyninit?)) false)
 						(begin
 							(set! p:dyninits (p:cons (list n (p:expr 1) ty) p:dyninits))
-							nil)
+							(list 'dynz))
 					(p:init)))
 			nil))
 		(set! p:curgv false)
@@ -2087,6 +2087,11 @@
 ;; `fixed *costable = sintable+(ANGLES/4);` are stored before main runs,
 ;; by __c4lc_init, a static function the parser writes after the unit.
 ;; Nothing can tell, short of another constructor reading the global first.
+;; The global itself has an initializer, (dynz): a zero word in the data,
+;; as `T x = 0;` but never a constant. So it is a definition, not a
+;; tentative one -- a second in the unit is "redefinition", a second
+;; unit's is c4rlink's "multiple definition", and an `int *x;` elsewhere
+;; gives way to it (c4rlink.c, common_plan).
 (define p:dyninits nil)   ;; ((NAME EXPR TYPE) ...), the last first
 ;; is the initializer at hand one that p:init cannot take? Not when it is
 ;; a string, &NAME alone, a NAME alone, a float literal alone, or a constant

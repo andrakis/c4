@@ -1917,8 +1917,9 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c $(C4RDUMP)
 	# ATTR_COMMON with a word after it, and a global defined twice in one
 	# unit one object -- byte for byte c4lc's -c and -O -c. A global
 	# initialized twice is c4fc's error too. common_a's &table[4] is set
-	# by __c4lc_init (DYN-FUNC), and c4fc_dyninit.c must print c4lc's line.
-	@for f in common_a common_b common_c common_d c4lc_tentative c4fc_dyninit; do \
+	# by __c4lc_init (DYN-FUNC), a definition as `= 0` is, and
+	# c4fc_dyninit.c must print c4lc's line.
+	@for f in common_a common_b common_c common_d common_e common_f c4lc_tentative c4fc_dyninit; do \
 	   for o in "" "-O"; do \
 	      ./c4sp src/c4sp/lisp/c4lc.lisp $$o -c $(TESTS)/$$f.c .c4fc_lc.c4o >/dev/null 2>&1; \
 	      ./c4th $(C4FC_ALL) -e ": GO `echo $$o | sed 's/-O/1 OPTIMIZE !/'` -c S\" $(TESTS)/$$f.c\" C4FC ; GO" > .c4fc_fc.c4o 2>&1; \
@@ -1928,6 +1929,7 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c $(C4RDUMP)
 	   echo "  common obj ok: $$f"; \
 	done
 	./c4th $(C4FC_ALL) -e ': GO -c S" $(TESTS)/c4lc_redef.c" C4FC ; GO' 2>&1 | grep -aq "c4fc: redefinition of r"
+	./c4th $(C4FC_ALL) -e ': GO -c S" $(TESTS)/c4lc_dynredef.c" C4FC ; GO' 2>&1 | grep -aq "c4fc: redefinition of r"
 	./c4th $(C4FC_ALL) -e ': GO S" $(TESTS)/c4fc_dyninit.c" C4FC ; GO' > .c4fc_fc.c4r
 	$(C4M) load-c4r.c -- .c4fc_fc.c4r 2>&1 | grep -q "^dyninit 30 7 9 5 4 12 1 3 8 10 2 11 60 22 7 40$$"
 	@rm -f .c4fc_lc.c4o .c4fc_fc.c4o .c4fc_fc.c4r

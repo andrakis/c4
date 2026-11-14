@@ -3001,7 +3001,9 @@
 
 (define g:globalscalar (lambda (n ty init0 gattrs)
 	(begin
-		(define init (g:fpinit init0 ty))
+		;; one __c4lc_init sets (dynz, p:dyninits) is a zero, as `T x = 0;`
+		(define init (if (if (= init0 nil) false (= (head init0) 'dynz)) (list 'num 0)
+			(g:fpinit init0 ty)))
 		(define at
 			;; no initializer -> BSS (one word); otherwise placed in data
 			(if (= init nil) (g:tballoc (if (g:ll? ty) 8 g:WORD) (g:tattrs gattrs))

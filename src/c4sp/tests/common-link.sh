@@ -8,8 +8,11 @@
 # linked in any order, and with B and C as a -r library, the image must
 # print what gcc -fcommon makes of it, with no warning, and --warn-common
 # must name the three it merged. common_d.c initializes limit a second
-# time: that link must stop. In one unit, c4lc_tentative.c's twice-defined
-# globals must each be one symbol, and c4lc_redef.c must not compile.
+# time: that link must stop. common_a.c's tend, which __c4lc_init sets, is
+# an initialized definition: common_f.c's tentative one gives way to it,
+# and common_e.c's, set at start-up too, stops the link. In one unit,
+# c4lc_tentative.c's twice-defined globals must each be one symbol, and
+# c4lc_redef.c and c4lc_dynredef.c must not compile.
 # At 64 and 32 bits, plain and -O.
 #
 #   bash src/c4sp/tests/common-link.sh
@@ -30,7 +33,7 @@ for w in "" 32; do
   lc="./c4sp$w -c 400000 src/c4sp/lisp/c4lc.lisp"
   for o in "" -O; do
     k="($w$o)"
-    for u in a b c d; do
+    for u in a b c d e f; do
       $lc $o -c src/tests/common_$u.c $T/$u.c4o > /dev/null || bad "common_$u.c -c $k"
     done
     ./c4rlink$w $T/a.c4o $T/b.c4o $T/c.c4o -o $T/abc.c4r > $T/log 2>&1 || bad "a b c $k: $(cat $T/log)"
@@ -46,10 +49,17 @@ for w in "" 32; do
       bad "a b c d $k links: limit is initialized twice"
     fi
     grep -q "multiple definition of 'limit'" $T/log || bad "a b c d $k: no multiple definition of limit: $(cat $T/log)"
+    ./c4rlink$w $T/f.c4o $T/a.c4o $T/b.c4o $T/c.c4o -o $T/fabc.c4r > $T/log 2>&1 || bad "f a b c $k: $(cat $T/log)"
+    grep -qi "warn" $T/log && bad "f a b c $k warns: $(cat $T/log)"
+    run "$w" $T/fabc.c4r "f a b c $k"
+    if ./c4rlink$w $T/a.c4o $T/b.c4o $T/c.c4o $T/e.c4o -o $T/abce.c4r > $T/log 2>&1; then
+      bad "a b c e $k links: tend is set at start-up twice"
+    fi
+    grep -q "multiple definition of 'tend'" $T/log || bad "a b c e $k: no multiple definition of tend: $(cat $T/log)"
     # one unit
     $lc $o -c src/tests/c4lc_tentative.c $T/t.c4o > /dev/null || bad "c4lc_tentative.c -c $k"
     if [ -z "$w" ]; then
-      for v in x y z arr; do
+      for v in x y z arr pa pb; do
         [ "$(./c4rdump -s $T/t.c4o | grep -c " '$v':")" = 1 ] || bad "c4lc_tentative.c -c $k: $v is not one symbol"
       done
     fi
@@ -59,6 +69,10 @@ for w in "" 32; do
       bad "c4lc_redef.c $k compiles"
     fi
     grep -q "redefinition of r" $T/log || bad "c4lc_redef.c $k: no redefinition of r: $(cat $T/log)"
+    if $lc $o -c src/tests/c4lc_dynredef.c $T/r.c4o > $T/log 2>&1; then
+      bad "c4lc_dynredef.c $k compiles"
+    fi
+    grep -q "redefinition of r" $T/log || bad "c4lc_dynredef.c $k: no redefinition of r: $(cat $T/log)"
   done
 done
 

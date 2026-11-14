@@ -498,7 +498,8 @@ for g in $GAMES; do . $g/c4-images.sh c4ix; done
 GAMESDISK=$OUT/games
 GAMES_ON_DISK=
 GAMEFILES=$OUT/.gamefiles
-rm -rf $OUT/wolf3d $GAMESDISK $GAMEFILES
+GAMESTAGE=$OUT/.gamestage
+rm -rf $OUT/wolf3d $GAMESDISK $GAMEFILES $GAMESTAGE
 mkdir -p $GAMEFILES
 # A bare program carries what it uses of libc and no more: c4rlink drops
 # every function nothing reaches, in every link (docs/c4dos-design.md
@@ -511,20 +512,24 @@ if [ -n "$GAMES" ] && ls .libc-bare/*.c4o > /dev/null 2>&1; then
     # (\GAMES\DOOM), so what each one put here is noted: $GAMEFILES/NAME.
     # Two games may not put the same name here: the second would replace the
     # first's file, unnoticed until the first was played (The Ace of
-    # Penguins and the BSD games each have a canfield.c4r).
+    # Penguins and the BSD games each have a canfield.c4r). So each game
+    # puts its files in an empty $GAMESTAGE, whose list is that game's, and
+    # they go on the disk only if no name of theirs is there already.
     for g in $GAMES; do
-        (cd $GAMESDISK && find . -type f | LC_ALL=C sort) > $GAMEFILES.before
-        touch $GAMEFILES.mark
+        gamefiles=$GAMEFILES/$(basename $g | tr a-z A-Z)
+        rm -rf $GAMESTAGE; mkdir -p $GAMESTAGE
+        GAMESDISK=$GAMESTAGE
         . $g/c4-images.sh bare
-        clash=$(cd $GAMESDISK && find . -type f -newer $GAMEFILES.mark | LC_ALL=C sort | LC_ALL=C comm -12 $GAMEFILES.before - | sed 's|^\./||')
+        GAMESDISK=$OUT/games
+        (cd $GAMESTAGE && find . -type f) | sed 's|^\./||' | LC_ALL=C sort > $gamefiles
+        clash=$( (cd $GAMESDISK && find . -type f) | sed 's|^\./||' | LC_ALL=C sort | LC_ALL=C comm -12 - $gamefiles)
         if [ -n "$clash" ]; then
-            echo; echo "build-images: $g replaced what another game put on the games disk: $clash" >&2
+            echo; echo "build-images: ${gamefiles##*/} puts on the games disk what another game put there:" $clash >&2
             exit 1
         fi
-        (cd $GAMESDISK && find . -type f | LC_ALL=C sort) | LC_ALL=C comm -13 $GAMEFILES.before - | sed 's|^\./||' \
-            > $GAMEFILES/$(basename $g | tr a-z A-Z)
+        cp -pR $GAMESTAGE/. $GAMESDISK/
     done
-    rm -f $GAMEFILES.before $GAMEFILES.mark
+    rm -rf $GAMESTAGE
     echo
 fi
 if [ -n "$GAMES_ON_DISK" ]; then

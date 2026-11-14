@@ -62,6 +62,12 @@ const NCPU = cpus().length;
 if (!opt.cpus) opt.cpus = Math.max(1, NCPU - 1);
 if (!opt.jobs) opt.jobs = opt.cpus;
 const WIN = process.platform === 'win32';
+// MSYS2 gives node, a Windows program, PWD in Windows' form (C:/c4w/c4).
+// Passed on, it is the PWD of every shell under make, which keeps it as
+// it names the right directory: $(pwd) is then C:/..., which POSIX does
+// not take for an absolute path (cp -rs refused it). Without it, each
+// shell finds its own: /c/c4w/c4.
+if (WIN) { delete process.env.PWD; delete process.env.OLDPWD; }
 const memTotalMb = () => WIN ? totalmem() / 1048576
   : +/MemTotal:\s+(\d+)/.exec(readFileSync('/proc/meminfo', 'utf8'))[1] / 1024;
 if (!opt.buildJobs)

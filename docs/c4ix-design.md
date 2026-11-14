@@ -1662,12 +1662,25 @@ What the profiles found that is not cheap, or not low in risk:
   per pool and a free-word hint, left out on 2026-11-04 as not then measured.
 - **`b4ke -B -j 3` in 32 MB runs out of memory at 564cf1a** ("loader: out of memory
   loading /bin/c4sc (2101 KB)", `BUILD.B4K:30`), where on 2026-11-05 it finished.
-  `test-c4ix-rebuild` runs it in 64 and 128 MB, and passes. On 2026-11-14, on the
-  65e1676 disk, it finished with 65e1676's kernel (3,986,822 machine ms). It ran out
-  of memory again with c4b8bee's kernel ("loader: out of memory loading /bin/c4sc
-  (2077 KB)", `BUILD.B4K:27`), whose only kernel changes since are 4251ab2 and bd36d8e
-  (above). A run with those two, on a disk with the loader buffer since reverted,
-  finished on 2026-11-13 (3,970,065 ms). One run each, so which way they push it is not yet known.
+  `test-c4ix-rebuild` runs it in 64 and 128 MB, and passes. It is not a regression of
+  one kernel but a chance one. On 2026-11-14 and 15, on the 65e1676 disk, 17 runs at
+  quanta of 800, 1000, 1100 and 1250 (kprof's sampling moves the schedule as well)
+  ran out of memory 5 times:
+
+  | Kernel | Runs | Out of memory |
+  |---|---|---|
+  | 65e1676's | 4 | 1 |
+  | c4b8bee's | 5 | 3 |
+  | c4b8bee's without 4251ab2 (orphans) | 4 | 1 |
+  | c4b8bee's without bd36d8e (pinned sleeper) | 4 | 0 |
+
+  Every failure is the same allocation: loading c4sc (2077 KB) for the desktop's
+  sub-build, at `BUILD.B4K:27` to `:44`. The loader reads a whole `.c4r` into one
+  kernel buffer (`vfs_malloc(total + 16)`, loader.c) before it copies the code and
+  data out into the task's paged memory, so each load needs 2 MB of kernel heap in
+  one piece, and with three compiles going that is down to where the frees fall.
+  The fix is to read the header first and then each section straight into its
+  allocation, so only the small tables pass through the kernel heap.
 
 ## 6.1 Running it
 

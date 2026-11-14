@@ -50,6 +50,11 @@ NATIVE_TARGETS := c4 c4m c4cc
 ifneq ($(filter MSYS% MINGW% CYGWIN%,$(shell uname -s)),)
 WINDOWS := 1
 export PATH := $(CURDIR)/tools/msys2:$(PATH)
+# MSYS2 turns an argument that looks like a path into Windows' form for a
+# Windows program (node, MinGW's builds). Duke Nukem 3D's switches look
+# like paths: /v1 reached duke3d-host and node as C:/msys64/v1, and only
+# the C4DOS and C4IX runs, typed in, played the level asked for.
+export MSYS2_ARG_CONV_EXCL := /v1;/l1;/s2;/ns;/nm
 endif
 # Preprocessor, will use our own at some point
 # We use our own include directories, and have some stdlib style headers.

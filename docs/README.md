@@ -15,6 +15,7 @@ detail behind it. Each doc is one of three kinds:
 | [internals.md](internals.md) | reference | How c4m, C4KE and C4IX work inside: traps, the cycle interrupt, custom opcodes, protected mode, the `.c4r` format, and how c4lm stalled |
 | [MILESTONES.md](MILESTONES.md) | history | What was built, in order, per component |
 | [DOCS-PLAN.md](DOCS-PLAN.md) | tracker | This documentation pass, before `pm-investigation` merges to master |
+| [windows.md](windows.md) | reference | Building and running the whole suite natively on Windows, under MSYS2 |
 
 ## Machines
 

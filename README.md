@@ -177,6 +177,8 @@ Quick start
 	make run              # C4KE under native c4m; type `help` or `ls`, try `bench`
 	make run-c4           # the same kernel under unmodified c4 (slow)
 	make test             # the core suite
+	make suite            # every test and game, packed by tools/suite.mjs
+	                      # (on Windows, under MSYS2: docs/windows.md)
 
 	make run-c4ix         # C4IX's shell
 	make run-c4dos        # C4DOS's A> prompt

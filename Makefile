@@ -2540,6 +2540,19 @@ suite:
 	node tools/suite.mjs
 PHONY += print-suite suite
 
+# A game's frames (tools/framebench.mjs, docs/framebench.md): the frame
+# rate's low, average and high, its 1% and 0.1% lows, the worst frame's
+# time and the instructions a frame, on node's bare machine, where every
+# run counts the same. FB_RUN is the run (`node tools/framebench.mjs
+# --list`), FB_ARGS more options: --profile for where the heaviest frames
+# go, --page CDP for the page in a Chrome, --data DIR for the person's files.
+#   make framebench FB_RUN=quake-demo1 FB_ARGS=--profile
+#   make framebench FB_RUN=duke3d FB_ARGS="--data ~/duke/atomic"
+FB_RUN ?= duke3d-sw
+framebench: c4bb-images
+	node tools/framebench.mjs $(FB_ARGS) $(FB_RUN)
+PHONY += framebench
+
 # The bare machine's libc, for the games on the bare machine and under
 # C4DOS and for test-libc-bare: libc built without -fpic, and its system
 # layer over the machine's own opcodes (src/c4ix/libc/bare.c) for

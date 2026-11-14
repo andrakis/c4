@@ -131,7 +131,7 @@ const RAM_FILES_KB = 1024;
 // and said it had read it all, and persist found zeros ("not a tar
 // archive"). A boot that needs more than these has put the tree, or
 // something new, back in RAM.
-const SMALLEST = [[8, true, true], [7, false, true], [8, true, false], [7, false, false]];
+const SMALLEST = [[8, true, true], [6, false, true], [8, true, false], [6, false, false]];
 
 // ---- no drive: the tree unpacked into RAM, as before ----
 const ram = machine();
@@ -273,9 +273,10 @@ check(/read from there/.test(t) && crcLines(t, files).join('\n') === wanted(file
 // docs/c4ix-mmu.md 11. In 5 either the root archive cannot be unpacked,
 // and the boot stops there, or it can, by a few KB of the heap's layout,
 // and the desktop cannot load: the shell says so, and there is still a
-// console. Without the MMU nothing makes room: in 6 MB the tree is
-// unpacked, and the desktop cannot load)
-for (const [mb, mmu] of [[5, true], [6, false]]) {
+// console. Without the MMU nothing makes room: in 5 MB the desktop
+// cannot load. In 6 it could not until the loader stopped reading each
+// program's code through a kernel buffer of the whole file)
+for (const [mb, mmu] of [[5, true], [5, false]]) {
   const tiny = machine({ mb, mmu, store: new Map(), desktop: true });
   tiny.until(() => tiny.halted() || /desktop: running on the display|sh: out of memory starting desktop/.test(tiny.text()), 3000);
   t = tiny.text();

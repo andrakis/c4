@@ -1150,9 +1150,10 @@ spinner at -3 beside one at 0 gets 4.6 times the cycles
     archive is not gzip or the drive will not take the tar. Smallest
     machines without the MMU, headless: the desktop on a first boot 7 MB
     (was 10), the shell 5 MB (was 9); from the kept copy 7 MB, as
-    before. In 6 MB the tree unpacks and the desktop cannot load ("c4ix:
-    loader: out of memory loading /bin/desktop (1175 KB)"). With the
-    MMU, as before: 8 MB.
+    before. In 6 MB the tree unpacked and the desktop could not load
+    ("c4ix: loader: out of memory loading /bin/desktop (1175 KB)"),
+    until the loader read a program's code where it goes (2026-11-15):
+    6 MB now, both ways. With the MMU, as before: 8 MB.
 
   `libjs/tests/test-lazy-root.mjs`; in the page, `web-lazy-root.mjs`.
 
@@ -1566,24 +1567,139 @@ times its cycles where the check asks more than 3. The reap's cycles now go to t
 kernel task: 3.7 times (43,565k cycles against 11,860k), the four slices to one that
 nice -3 is.
 
+#### Finished jobs that nobody waits for (2026-11-14)
+
+A shell collects a background job only on `wait`. Until then the job is a zombie that
+nobody waits for, and only CPU 0's idle task swept those up (`task_reap_orphans`). With
+CPU 0 busy, a finished job kept its memory. In PARALLEL=0 `test-c4ix-movable`, three
+programs running on four CPUs kept a finished one's 20 MB, nothing moved up into it, and
+only 8 pages moved where the test asks for more than 50. Now every CPU sweeps them as it
+parks (`smp_ap`). The test moves 550 pages on simulated CPUs and 690 on threads.
+
+#### A sleeper pinned off CPU 0 (2026-11-14)
+
+A task pinned to CPU 1 that asked to sleep 3 ms slept 100 ms. There were three causes,
+and each had to be fixed:
+
+- **CPU 0's idle loop naps until the soonest deadline it knows of.** A sooner one, set
+  on another CPU while CPU 0 naps, went unseen until the nap ended. `sched_idle` now
+  notes when its nap ends (`sched_napto`). `task_state`, putting a task to sleep on
+  another CPU with a deadline before then, ends the nap with an IPI.
+- **A look that wakes a task for another CPU now tells that CPU.** `sched_ready_here`
+  kicks it (`smp_kick`). Before, the parked CPU heard nothing until this one trapped
+  again, after its nap.
+- **`smp_kick` walked the task list (`next`) where it meant the run queue (`qnext`).**
+
+`disp_nudge` also puts the holder it nudges back on the clock's queue, which is kept in
+order of deadline.
+
+Threads (libjs `par.js`, `ap.js`) had three faults of their own:
+
+- **CPU 0 took its nap at once whenever the others looked parked**, so the machine's
+  clock moved a nap on each time round while a worker thread was still waking. A CPU
+  now counts as running when an IPI waits for it, or when the word it parked on has
+  already moved (`othersRunning`). The kernel lock once stayed free for a second while
+  a worker waited on it.
+- **The other CPUs read the time at the nap's end.** Shown that time, CPU 1 set its 3 ms
+  sleep from there and slept out the whole nap. They now read the nap's start plus the
+  real time since (`timeMs`).
+- **A parked worker waited a second at a time.** It now waits in 10 ms slices,
+  looking each time at the word, for an IPI, and for the machine's halt. That includes
+  an IPI the poll has already taken (`ipiPending`).
+
+`test-c4ix-pipewake` has its writer back on CPU 1. On threads it failed twice in full
+suites run beside another gate, with `uevwait` at 1,828 and 3,523 machine ms against the
+1,800 limit. After these changes, six threaded runs at load 3 to 4.7 took 797 to 992 ms,
+and the gate's runs took 706 to 709 ms. Under `innerbench -Tln 40` the kernel changes
+measure as nothing: 191,552 machine ms against 191,441.
+
+#### Why buffering the loader's reads made `-Tln 40` slower (2026-11-14)
+
+Each inner c4m of `-Tln 40` loads `c4ke.c4r` with 13,889 reads of 3 to 37 bytes (above).
+A 4 KB buffer in `c4r_src_read` (7a40651) brought that down to 19 reads, and the
+kernel's share of the load from 19.6% to 5.0%. But the load took three times as long:
+577,895 machine ms against 191,441. The buffer copied a byte at a time; with `memcpy`
+instead, the load still took longer than with no buffer (below). The buffer was
+reverted (f1ec21b).
+
+Nothing waits. innerbench runs `/bin/c4m load-c4r.c -- c4ke.c4r`, so the loader is
+compiled from source and interpreted by c4m, and the buffer's copy ran as interpreted
+code. Run alone, with output and host opens stamped in machine time, the loader worked
+through the 58 KB of patches and symbols in 11.3 s with a read per word, and 20.4 s
+through the buffer with `memcpy`. The CPU running c4m used 306 M cycles for the whole run
+before and 495 M after: 13,600 more for each of the 13,889 calls.
+
+What it costs code that c4m interprets inside C4IX to get 4 bytes: a loop doing it
+20,000 times, each way, in cycles per 4 bytes after the empty loop:
+
+| Way | Cycles |
+|---|---:|
+| `read()`: a trap, `vfs_read`, the host span opened, read and closed | 2,800 |
+| `memcpy` from a buffer, and the position moved on | 3,700 |
+| a loop over the 4 bytes | 31,000 |
+
+A whole system call costs less than two interpreted statements. c4m finds each opcode by
+walking a chain of about 75 `else if (i == OP)` tests, after its checks for signals and
+cycle interrupts. That makes each interpreted instruction hundreds of cycles, the later
+in the chain the dearer (c4m.c's main loop). It is a chain, not a `switch`, because plain
+c4 compiles c4m.c as source (`$(C4) c4m.c load-c4r.c`, and innerbench's `-c`), and plain
+c4 has no `switch`. For a load that interprets, the trap is the cheap part.
+
+#### A program's code read where it goes (2026-11-15)
+
+`b4ke -B -j 3` in 32 MB ran out of memory at 564cf1a ("loader: out of memory loading
+/bin/c4sc (2101 KB)", `BUILD.B4K:30`), where on 2026-11-05 it had finished;
+`test-c4ix-rebuild` runs it in 64 and 128 MB, and passed. It was not one kernel's
+regression but chance. On 2026-11-14 and 15, on the 65e1676 disk, 17 runs at quanta of
+800, 1000, 1100 and 1250 (kprof's sampling moves the schedule as well) ran out of
+memory 5 times:
+
+| Kernel | Runs | Out of memory |
+|---|---|---|
+| 65e1676's | 4 | 1 |
+| c4b8bee's | 5 | 3 |
+| c4b8bee's without 4251ab2 (orphans) | 4 | 1 |
+| c4b8bee's without bd36d8e (pinned sleeper) | 4 | 0 |
+| c4b8bee's with the loader below | 6 | 0 |
+
+Every failure was the same allocation: c4sc (2077 KB) for the desktop's sub-build, at
+`BUILD.B4K:27` to `:44`. The loader read the whole `.c4r` into one kernel buffer and
+then copied the code out of it into an allocation of its own (`umalloc`, which is one
+run of frames too, `mmu_raw`). So each c4sc load held 2,126,549 bytes and then
+1,282,044 more, each in one piece of the heap, while two other compilers came and
+went.
+
+`mod_read` now reads the header into 80 bytes on its stack, then the code straight
+into its allocation, and only the rest (from the `D` marker: the data as the file has
+it, the patches, the two lists and the symbols) into the buffer, which is all it is
+kept for. For c4sc that is 844,460 bytes. The largest piece a load needs is the code
+(1.3 MB, where it was 2 MB), and the most it holds at once, data included, is 2.2 MB,
+where it was 3.5. A host file is still read twice, once to count it; then come three
+reads, which for `ls` the host sees as `@0+45`, `@45+1864` and `@1909+2724`. A header whose
+lengths do not fit the file is refused ("is cut short").
+
+Six runs with it, at quanta of 800 to 1250 and the default, all finished (3,972,125 to
+3,982,155 machine ms). The desktop now comes up without the MMU in 6 MB on a first
+boot and from the kept copy (it was 7; the 6 MB boot had stopped with "out of memory
+loading /bin/desktop"), and in 5 it still says it is out of memory
+(`test-lazy-root.mjs`).
+
 #### Left for later
 
 What the profiles found that is not cheap, or not low in risk:
 
-- **Tiny reads of a host span** (`-Tln 40`): a read-ahead per open file in the kernel, or
-  `load-c4r.c` reading in bulk, or the span's parse kept with the open file. Each would
-  take most of a third of that load's kernel time, and with it time under the lock.
+- **Tiny reads of a host span** (`-Tln 40`). `load-c4r.c` reading in bulk was tried, and
+  cost more than it saved, because c4m interprets it (above). A read-ahead in the
+  kernel, or the span's parse kept with the open file, would save kernel time without
+  adding any interpreted code.
+- **c4m's opcode chain**: interpreted code, which is most of `-Tln 40`'s user time, pays
+  hundreds of cycles an instruction (above). A two-level chain would fit what plain c4
+  can compile. So would testing the commonest opcodes first, as the fused ones already
+  are.
 - **The kernel lock** (`bkl_take`, 28% of the kernel in `-Tln 40`): shorter work under
   it, starting with the span reads.
 - **`mmu_ftake`'s walk** and **`umem_alloc`** (`b4ke`, 13% and 9%): a cached best block
   per pool and a free-word hint, left out on 2026-11-04 as not then measured.
-- **A sleeper pinned to a CPU other than 0 wakes up to 100 ms late**: each `umsleep(3)`
-  of a task pinned to CPU 1 took 100 ms. Before the run queue too (dd3f564).
-  `test-c4ix-pipewake` keeps its writer on CPU 0 for this.
-- **`b4ke -B -j 3` in 32 MB runs out of memory at 564cf1a** ("loader: out of memory
-  loading /bin/c4sc (2101 KB)", `BUILD.B4K:30`), where on 2026-11-05 it finished.
-  `test-c4ix-rebuild` runs it in 64 and 128 MB, and passes.
-
 ## 6.1 Running it
 
     make run-c4ix        an interactive shell on c4m

@@ -36,7 +36,7 @@
 
 enum { C4R_BUF_MAX = 16777216,    // a 16 MB image limit: Duke Nukem 3D is over 4
                                   // (games/duke3d), and the buffer is only as
-                                  // big as the file read (below)
+                                  // big as the file after its code (below)
        LIB_MAX = 8,               // libraries one program may load, in all
        SCLASS_FUN = 129, SCLASS_GLO = 131, SATTR_STATIC = 8, SATTR_EXTERN = 16 };
 
@@ -46,8 +46,8 @@ enum { C4R_BUF_MAX = 16777216,    // a 16 MB image limit: Duke Nukem 3D is over 
 int loader_quiet;
 int loader_err;
 
-// One image, read and relocated, with its file still at hand: the
-// symbol patches and the symbol table are read out of it in place.
+// One image, read and relocated, with its file still at hand (from the
+// 'D' marker on: the code is read where it goes): the symbol patches and the symbol table are read out of it in place.
 struct c4r_mod {
     char *buf;
     int *code;
@@ -64,7 +64,7 @@ struct c4r_mod {
     int codelen;                  // code words
     int shared;                   // its code is the cache's: neither relink nor free it
     int *slot;                    // pic: the word that holds the task's data base
-    int buflen;                   // bytes in buf: the file as read
+    int buflen;                   // bytes in buf: the file after its code
 };
 
 // -fpic libraries, loaded once: the first task's mod, kept, by path
@@ -136,18 +136,31 @@ static int loader_nomem(char *path, int bytes) {
     return 0;
 }
 
+// N bytes of the image at OFF into DST: from the RAM file VN, or the
+// host file FD, which is read in order, a chunk at a time. 1 when all
+// of them came.
+static int mod_in(int fd, struct vnode *vn, int off, char *dst, int n) {
+    int got, k;
+    if (vn) return vfs_pread(vn, dst, off, n) == n;
+    got = 0;
+    while (got < n && (k = read(fd, dst + got, n - got < 65536 ? n - got : 65536)) > 0) got = got + k;
+    return got == n;
+}
+
 // Read and relocate one image. Returns 1 and fills M; its buf stays
 // allocated until the caller has linked it.
 static int mod_read(char *path, struct c4r_mod *m) {
     char *buf, *p, *data;
+    char hdr[80];
     int *code;
-    int fd, n, total, got;
+    int fd, n, total, hlen, rest;
     int entry, codelen, datalen, patchlen, symlen, conslen, deslen, memsz;
     int i, ptype, paddr, pvalu;
     struct vnode *vn;
 
     memset((char *)m, 0, sizeof(struct c4r_mod));
     buf = 0;
+    fd = -1;
     // A RAM file by this path wins over the host. The comment below once
     // said the two could not name the same file, but a host is free to
     // answer a path it does not have -- c4bb's disk tries the bare file
@@ -157,7 +170,7 @@ static int mod_read(char *path, struct c4r_mod *m) {
     if (vn && vn->type != VN_RAMFILE) vn = 0;
     if (!vn && (fd = open(path, 0)) >= 0) {
         // The host says nothing of a file's size, so it is read twice:
-        // a chunk at a time to count it, then into a buffer just that
+        // a chunk at a time to count it, then into allocations just that
         // size. A cached -fpic library keeps its file for as long as the
         // machine runs, as the template of every task's copy of its
         // data, and the 4 MB buffer each load used to keep was a third of
@@ -177,13 +190,7 @@ static int mod_read(char *path, struct c4r_mod *m) {
             return 0;
         }
         if (total <= 0) return 0;
-        if (!(buf = vfs_malloc(total + 16))) return loader_nomem(path, total);
-        if ((fd = open(path, 0)) < 0) { free(buf); return 0; }
-        got = 0;
-        while (got < total && (n = read(fd, buf + got, total - got < 65536 ? total - got : 65536)) > 0)
-            got = got + n;
-        close(fd);
-        total = got;
+        if ((fd = open(path, 0)) < 0) return 0;
     } else {
         if (!vn) {
             // Silent: callers try several candidate names (the shell
@@ -201,34 +208,38 @@ static int mod_read(char *path, struct c4r_mod *m) {
         // the whole compile-and-run loop, and this is what joins the
         // two halves. Without it the kernel can only ever run programs
         // that were built somewhere else.
-        // A file still on the host is read from there into the buffer,
-        // where the host reads spans: a program run is not kept as well.
+        // A file still on the host is read from there, where the host
+        // reads spans: a program run is not kept as well.
         total = vn->size;
         if (total > C4R_BUF_MAX) {
             kprintf("c4ix: loader: %s is %d bytes, over the %d limit\n",
                     path, total, C4R_BUF_MAX);
             return 0;
         }
-        if (!(buf = vfs_malloc(total + 16))) return loader_nomem(path, total);
-        if (vfs_pread(vn, buf, 0, total) != total) {
-            kprintf("c4ix: loader: cannot read %s\n", path);
-            free(buf); return 0;
-        }
-    }
-    if (total < 13) {
-        if (!loader_quiet) kprintf("c4ix: loader: %s is not a .c4r\n", path);
-        free(buf); return 0;
     }
 
-    p = buf;
+    // The header, then the code, each read straight to where it goes:
+    // only what follows the code -- the data as the file has it, the
+    // patches, the lists and the symbols -- passes through a kernel
+    // buffer. The whole file used to, and the code was copied out of it,
+    // so c4sc's load held its 2 MB file and then its 1.3 MB of code, each
+    // in one piece of the heap, and a 32 MB b4ke -B -j 3 ran out of
+    // memory one run in three (docs/c4ix-design.md).
+    hlen = 13 + 8 * sizeof(int);   // signature, version, wordbits, padding; 7 lengths; 'C'
+    if (total < hlen || !mod_in(fd, vn, 0, hdr, hlen)) {
+        if (fd >= 0) close(fd);
+        if (!loader_quiet) kprintf("c4ix: loader: %s is not a .c4r\n", path);
+        return 0;
+    }
+    p = hdr;
     if (!(p[0] == 'C' && p[1] == '4' && p[2] == 'R')) {
+        if (fd >= 0) close(fd);
         if (!loader_quiet) kprintf("c4ix: loader: bad signature in %s\n", path);
-        free(buf);
         return 0;
     }
     if (p[4] / 8 != sizeof(int)) {
+        if (fd >= 0) close(fd);
         kprintf("c4ix: loader: %d-bit image, host is %d-bit\n", p[4], sizeof(int) * 8);
-        free(buf);
         return 0;
     }
     // padding word (byte 5) = data MEMSZ in v3 (total in-memory size,
@@ -244,13 +255,43 @@ static int mod_read(char *path, struct c4r_mod *m) {
     conslen  = loader_word(p); p = p + sizeof(int);
     deslen   = loader_word(p); p = p + sizeof(int);
     if (memsz < datalen) memsz = datalen;
+    // what follows the code: at least the 'D' marker and the data
+    rest = -1;
+    if (codelen >= 0 && codelen <= (total - hlen) / sizeof(int)) rest = total - hlen - codelen * sizeof(int);
+    if (rest < sizeof(int) || datalen < 0 || datalen > rest - sizeof(int)) {
+        if (fd >= 0) close(fd);
+        kprintf("c4ix: loader: %s is cut short\n", path);
+        return 0;
+    }
 
-    // code: copy out of the read buffer into an exact-size allocation
-    p = p + sizeof(int);   // 'C' marker word
+    // code: read into an exact-size allocation
     // umalloc: a user task's (mmu.c), when it is one
-    if (!(code = (int *)umalloc(codelen * sizeof(int) + sizeof(int)))) { free(buf); return loader_nomem(path, codelen * sizeof(int)); }
-    memcpy(code, p, codelen * sizeof(int));
-    p = p + codelen * sizeof(int);
+    if (!(code = (int *)umalloc(codelen * sizeof(int) + sizeof(int)))) {
+        if (fd >= 0) close(fd);
+        return loader_nomem(path, codelen * sizeof(int));
+    }
+    if (!mod_in(fd, vn, hlen, (char *)code, codelen * sizeof(int))) {
+        if (fd >= 0) close(fd);
+        ufree((int)code);
+        kprintf("c4ix: loader: cannot read %s\n", path);
+        return 0;
+    }
+    // the rest, into a buffer of its size
+    if (!(buf = vfs_malloc(rest + 16))) {
+        if (fd >= 0) close(fd);
+        ufree((int)code);
+        return loader_nomem(path, rest);
+    }
+    if (!mod_in(fd, vn, hlen + codelen * sizeof(int), buf, rest)) {
+        if (fd >= 0) close(fd);
+        ufree((int)code);
+        free(buf);
+        kprintf("c4ix: loader: cannot read %s\n", path);
+        return 0;
+    }
+    if (fd >= 0) close(fd);
+    total = rest;
+    p = buf;
 
     // data: allocate the full in-memory size (memsz), zero-padded by
     // malloc+memset so the BSS tail [datalen, memsz) is ready; only

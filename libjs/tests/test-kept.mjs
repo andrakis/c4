@@ -44,24 +44,26 @@ check(uploadParts('doom/doom2.wad').join('|') === 'doom|doom2.wad' && uploadPart
 }
 
 // ---- tar and untar, against GNU tar both ways ----
+// (tar is run in the folder, with names relative to it: on Windows a
+// path node makes is C:\..., which GNU tar takes for a remote host)
 const dir = mkdtempSync(join(tmpdir(), 'test-kept-'));
 try {
   const big = new Uint8Array(70000).map((_, i) => (i * 7) & 255);
   const long = 'a'.repeat(60) + '/' + 'b'.repeat(60) + '/' + 'c'.repeat(50) + '.txt';
   const archive = tar([['wolf3d/savegam0.wl6', t('save 0\n')], ['wolf3d/sub/big.bin', big], [long, t('long name\n')]]);
   writeFileSync(join(dir, 'a.tar'), archive);
-  const listed = execFileSync('tar', ['tf', join(dir, 'a.tar')], { encoding: 'utf8' }).trim().split('\n');
+  const listed = execFileSync('tar', ['tf', 'a.tar'], { cwd: dir, encoding: 'utf8' }).trim().split('\n');
   check(['wolf3d/', 'wolf3d/savegam0.wl6', 'wolf3d/sub/', 'wolf3d/sub/big.bin', long].every(n => listed.includes(n)),
     'tar: GNU tar lists its files and their folders, a name over 100 bytes too', listed.join(' '));
   mkdirSync(join(dir, 'x'));
-  execFileSync('tar', ['xf', join(dir, 'a.tar'), '-C', join(dir, 'x')]);
+  execFileSync('tar', ['xf', 'a.tar', '-C', 'x'], { cwd: dir });
   check(same(new Uint8Array(readFileSync(join(dir, 'x/wolf3d/sub/big.bin'))), big) &&
         readFileSync(join(dir, 'x', long), 'utf8') === 'long name\n', 'and takes out the same bytes');
   const back = untar(archive);
   check(back.files.length === 3 && same(back.files[1][1], big) && back.files[2][0] === long && back.dirs.includes('wolf3d/sub'),
     'untar reads it back, names, bytes and folders');
   writeFileSync(join(dir, 'x/plain.txt'), 'gnu\n');
-  execFileSync('tar', ['--format=ustar', '-cf', join(dir, 'g.tar'), '-C', join(dir, 'x'), 'plain.txt', 'wolf3d']);
+  execFileSync('tar', ['--format=ustar', '-cf', 'g.tar', '-C', 'x', 'plain.txt', 'wolf3d'], { cwd: dir });
   const g = untar(new Uint8Array(readFileSync(join(dir, 'g.tar'))));
   check(g.files.some(([n, b]) => n === 'plain.txt' && d(b) === 'gnu\n') && g.files.some(([n, b]) => n === 'wolf3d/sub/big.bin' && same(b, big)),
     'and reads what GNU tar writes (ustar, as C4IX\'s persist writes)');

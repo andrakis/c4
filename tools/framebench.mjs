@@ -34,6 +34,8 @@
 //                    its pc sampled every --every instructions, default 97,
 //                    and every call counted by its target)
 //   --image FILE     another build of the game's image
+//   --out DIR        node: the files the game writes go to DIR (duke3d's
+//                    -shot N frames, as shotN.ppm)
 //   page only:
 //   --base URL       where the page is served (https://8497.code.home.stargazer.onl)
 //   --query Q        the page's query (default mhz=400&mmu=1)
@@ -101,6 +103,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--profile') o.profile = true;
   else if (a === '--every') o.every = +v();
   else if (a === '--image') o.image = v();
+  else if (a === '--out') o.out = v();
   else if (a === '--page') o.page = v();
   else if (a === '--base') o.base = v().replace(/\/$/, '');
   else if (a === '--query') o.query = v();
@@ -114,7 +117,7 @@ for (let i = 0; i < argv.length; i++) {
 }
 const R = RUNS[o.run];
 if (!R) { console.error(`usage: framebench.mjs [options] RUN [-- ARGS...]; RUN one of ${Object.keys(RUNS).join(', ')}`); process.exit(2); }
-if (R.data && !o.data) { console.error(`framebench: ${o.run} needs --data DIR, the person's files`); process.exit(2); }
+if (R.data && !o.data && !o.again) { console.error(`framebench: ${o.run} needs --data DIR, the person's files`); process.exit(2); }
 
 // ---- the numbers ----
 const fmt = (x, d = 1) => Number.isFinite(x) ? x.toFixed(d) : '-';
@@ -147,7 +150,7 @@ function instrRows(ins, first) {
 // (when profiling) counts every call by its target. Nothing is written to
 // the tree. If c4m.js's call lines change, this says so rather than
 // measuring nothing.
-const FB = globalThis.__framebench = { base: 0, n: 0, on: new Uint8Array(1), calls: null, hit: null };
+const FB = globalThis.__framebench = { base: 0, n: 0, on: new Uint8Array(1), starts: new Uint8Array(1), calls: null, hit: null };
 function hookC4m(src) {
   const look = ' if ((x = (pc - FB.base) >>> 2) < FB.n) { if (FB.calls !== null) FB.calls[x]++; if (FB.on[x] !== 0) FB.hit(x, cycle, this); }';
   for (const line of ['case 3:  /* JSR */ sp -= 4; i32[sp >> 2] = pc + 4; pc = i32[pc >> 2];',
@@ -156,6 +159,13 @@ function hookC4m(src) {
     if (src.split(line).length !== 2) throw new Error(`framebench: libjs/c4m.js no longer has "${line}"; its hook needs updating`);
     src = src.replace(line, line + look);
   }
+  // c4lc calls through an expression with JMPA, the return address pushed
+  // first (c4lc-gen.lisp g:callexpr); a switch's jump table jumps with it
+  // too. A JMPA counts as a call where it lands on a function's start
+  // (FB.starts)
+  const jmpa = 'case 63: /* JMPA */ pc = a;';
+  if (src.split(jmpa).length !== 2) throw new Error(`framebench: libjs/c4m.js no longer has "${jmpa}"; its hook needs updating`);
+  src = src.replace(jmpa, jmpa + ' if (FB.calls !== null && (x = (pc - FB.base) >>> 2) < FB.n && FB.starts[x] !== 0) FB.calls[x]++;');
   return 'const FB = globalThis.__framebench;\n' + src;
 }
 
@@ -185,7 +195,12 @@ async function nodeRun(profile) {
     const bytes = new Uint8Array(readFileSync(imgPath));
     const out = [];
     const files = new Disk(o.data ? [o.data, GAMES] : [GAMES]);
-    const vm = createMachine({ arenaMb: R.mem, drives: [{ files, writable: false, sink: null }], onByte: b => out.push(b), mhz: 20 });
+    // --out: what the game writes (Duke's -shot N frames) lands there. The
+    // bare libc writes to drive 1, the game's store (bare.c)
+    const sink = o.out && !wantProfile ? (name, b) => writeFileSync(join(o.out, basename(name)), b) : null;
+    const drives = [{ files, writable: false, sink: null }];
+    if (sink) drives.push({ files: new Map(), writable: true, sink });
+    const vm = createMachine({ arenaMb: R.mem, drives, onByte: b => out.push(b), mhz: 20 });
     boot(vm, bytes, [basename(imgPath), ...R.args, ...o.extra]);
     const img = readC4r(bytes), S = img.smap;
     if (!S || !S.funcs) throw new Error('framebench: the image has no source map (build it with -g)');
@@ -198,6 +213,8 @@ async function nodeRun(profile) {
     const fAt = at(R.frame), mAt = R.mark ? at(R.mark) : -1;
     FB.on[fAt] = 1; if (mAt >= 0) FB.on[mAt] = 2;
     FB.calls = wantProfile ? new Uint32Array(FB.n) : null;
+    FB.starts = new Uint8Array(FB.n);
+    for (const f of funcs) if (f.start < FB.n) FB.starts[f.start] = 1;
     const cyc = [], wall = [], marks = [];
     let stop = false, frame = 0;
     // profile: samples and calls charged to the group of the frame being made
@@ -327,7 +344,10 @@ async function pageRun() {
     const boot = async () => {
       await tab.goto(url);
       if (!await tab.waitFor('!!window.c4m', 40000)) throw new Error('no machine on the page: ' + await tab.eval('location.href'));
-      await tab.eval(`window.__out = ''; { const td = new TextDecoder(); window.c4m.on('out', b => { window.__out += td.decode(b); }); }`);
+      // the game's output, and when its timedemo line came: what the page
+      // draws after that (the shell taking the display back) is not its
+      await tab.eval(`window.__out = ''; window.__end = 0; { const td = new TextDecoder(); window.c4m.on('out', b => {
+        window.__out += td.decode(b); if (!window.__end && /timedemo: /.test(window.__out.slice(-400))) window.__end = performance.now(); }); }`);
       if (!await tab.waitFor('/desktop: running on the display/.test(window.__out)', 400000, 250)) throw new Error('the desktop did not start');
     };
     await boot();
@@ -403,7 +423,7 @@ async function pageRun() {
         if (/timedemo: .*frames/.test(out) || /cannot load|over the|libjs: /.test(out)) break;
         await sleep(2000);
       }
-      const fb = await tab.eval('({ t: window.__fb.t, k: window.__fb.k })');
+      const fb = await tab.eval('({ t: window.__fb.t, k: window.__fb.k, end: window.__end })');
       result = { fb, out };
     }
   } finally {
@@ -422,7 +442,10 @@ async function pageRun() {
 }
 
 function pageReport(result) {
-  const { fb, out, url, chrome, cmd } = result, lag = result.lag;
+  const { out, url, chrome, cmd } = result, lag = result.lag;
+  let fb = result.fb;
+  // only what was drawn before the game's timedemo line came
+  if (fb.end) { const n = fb.t.findIndex(t => t > fb.end); if (n >= 0) fb = { ...fb, t: fb.t.slice(0, n), k: fb.k.slice(0, n) }; }
   const gameLines = out.split('\n').filter(l => /^speed:|^timedemo:|^duke3d:|cannot load|libjs:/.test(l));
   console.log(`framebench: ${result.run} in the page, ${url}, Chrome at ${chrome}: ${cmd}`);
   console.log(`  ${gameLines.join(' | ') || 'no result: ' + out.slice(-300)}`);
@@ -447,29 +470,43 @@ function pageReport(result) {
     console.log(`  ... in frames shown: ${counts.join(' ')}; in frame times: median ${fmt(pct(s, 50) * rate.avg / 1000, 2)}`);
     return;
   }
-  // frame i (1-based, as the game counts them) and the batch it was drawn
-  // in. The game's count is its timedemo line's: the frames presented
-  // before those (a title, a palette shown alone) are left out
+  // the game's frames, by its timedemo line; off, the presents beyond them
   const told = /^timedemo: .*?(\d+) frames/m.exec(out), N = told ? +told[1] : total, off = Math.max(0, total - N);
-  const fms = [], batchOf = [];
-  let idx = -off;
-  for (let j = 0; j < fb.t.length; j++)
-    for (let q = 0; q < fb.k[j]; q++) { if (++idx > 0) { fms[idx] = j ? (fb.t[j] - fb.t[j - 1]) / fb.k[j] : NaN; batchOf[idx] = j; } }
-  console.log(`  ${total} frames presented, ${fb.t.length} batches drawn (${fmt(100 * fb.t.length / total, 1)}% of the frames seen); the game's ${N} are the last`);
-  // the same frames node counts: --like takes a node run's demos (--json)
+  console.log(`  ${total} presents for the game's ${N} frames, ${fb.t.length} batches drawn`);
+  // The page presents more often than the game makes frames (a palette
+  // shown alone presents too: Duke's flashes when hit), so its presents are
+  // not the game's frames. A run (or with --like, each of a node run's
+  // demos) starts after its level's load, found as the last long wait for a
+  // batch where the start should be, and ends where the next one's load
+  // starts, or at the game's timedemo line. Its average is the game's
+  // frames (node's count) over that time; the rest is the frames the page
+  // showed, a batch each, timed from the one before.
   const segs = o.like ? JSON.parse(readFileSync(o.like, 'utf8')).segs.map(({ name, from, to }) => ({ name, from, to }))
-                      : [{ name: 'run', from: 2 + (o.skip ?? R.skip ?? 0), to: idx }];
+                      : [{ name: 'run', from: 2 + (o.skip ?? R.skip ?? 0), to: N }];
+  const cum = [], gap = [];
+  for (let j = 0, c = 0; j < fb.t.length; j++) { c += fb.k[j]; cum[j] = c; gap[j] = j ? fb.t[j] - fb.t[j - 1] : 0; }
+  const medGap = sorted(gap.slice(1))[gap.length >> 1] || 1;
   for (const s of segs) {
-    const made = [], seen = [];
-    for (let i = Math.max(2, s.from); i <= Math.min(s.to, idx); i++) {
-      made.push(fms[i]);
-      if (batchOf[i] !== batchOf[i + 1] && batchOf[i] > 0) seen.push(fb.t[batchOf[i]] - fb.t[batchOf[i] - 1]);
-    }
-    if (!made.length) continue;
-    console.log(`\n-- ${s.name}: frames ${s.from}-${Math.min(s.to, idx)} (${made.length}), ${seen.length} seen`);
+    // where the load should be, by the page's count of presents: a run's
+    // start, past the presents before the game's frames, within 12; a demo's
+    // up to a quarter further on than the game's count, palettes and all
+    const lo = o.like ? s.from - 3 : s.from + off - 12, hi = o.like ? Math.ceil(s.from * 1.25) + 60 : s.from + off + 12;
+    // a load can be several waits (Wolf3D's are three): up to the last of them
+    let at = -1;
+    for (let j = 1; j < fb.t.length; j++) if (cum[j] >= lo && cum[j] <= hi && gap[j] > Math.max(4 * medGap, 300)) at = j;
+    s.at = at;
+    s.first = at >= 0 ? at : Math.max(0, cum.findIndex(c => c >= s.from + (o.like ? 0 : off)) - 1);
+  }
+  for (let i = 0; i < segs.length; i++) {
+    const s = segs[i], last = i + 1 < segs.length ? segs[i + 1].first - 1 : fb.t.length - 1;
+    if (last <= s.first) continue;
+    const seen = gap.slice(s.first + 1, last + 1), secs = (fb.t[last] - fb.t[s.first]) / 1000, frames = s.to - s.from + 1;
+    const r = rates(seen);
+    r.avg = frames / secs;
+    console.log(`\n-- ${s.name}: the game's frames ${s.from}-${s.to} (${frames}) in ${fmt(secs, 1)} s, ${seen.length} seen` +
+                (s.at >= 0 ? `; its load left out (${fmt(gap[s.at], 0)} ms)` : ''));
     console.log(rateHead);
-    console.log(rateRow('the page, frames made', rates(made)));
-    console.log(rateRow('the page, frames seen', rates(seen)));
+    console.log(rateRow('the page', r));
   }
 }
 

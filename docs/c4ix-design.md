@@ -1642,7 +1642,64 @@ walking a chain of about 75 `else if (i == OP)` tests, after its checks for sign
 cycle interrupts. That makes each interpreted instruction hundreds of cycles, the later
 in the chain the dearer (c4m.c's main loop). It is a chain, not a `switch`, because plain
 c4 compiles c4m.c as source (`$(C4) c4m.c load-c4r.c`, and innerbench's `-c`), and plain
-c4 has no `switch`. For a load that interprets, the trap is the cheap part.
+c4 has no `switch`. For a load that interprets, the trap is the cheap part. The chain has
+two levels now (next part).
+
+#### c4m's dispatch, in two levels (2026-11-15)
+
+Counted with a c4m32 that tallies what it runs, running C4IX's own c4m (`c4ix-c4m.c4r`,
+c4m.c built by c4lc) on `load-c4r.c -- c4ke.c4r -m`, the c4lc-built c4m ran 164 of its
+instructions for each one it interpreted. (The count leaves out c4m compiling
+`load-c4r.c`, 14.4 M either way, and C4KE's `-m` takes out its timed loop.) About 120 of
+the 164 were the chain: some 20 tests an instruction, each `LEA i; LI; PSH; IMM op; EQ;
+BZ`. Once C4KE turns on its cycle interrupt, `cycle % interval` added a division and ten
+instructions more to every one.
+
+What that load interprets, of 1,229,537 instructions:
+
+| Opcode | Share | Opcode | Share |
+|---|---:|---|---:|
+| PSH | 23.9% | MUL | 2.2% |
+| LI | 17.8% | EQ | 1.7% |
+| LEA | 16.8% | JMP | 1.6% |
+| IMM | 11.3% | SUB | 1.4% |
+| SI | 5.6% | LEV, ENT, JSR | 1.2% each |
+| ADD | 4.9% | READ | 1.1% |
+| BZ | 3.5% | LC | 1.0% |
+| ADJ | 2.5% | the other 37 | 1.1% |
+
+So the chain tests the range first: `i <= PSH` (c4's own fourteen), then `i <= MOD` (the
+sixteen operators), each in the order above, then the fused, 16-bit and other
+instructions, then the syscalls in enum order. It is still all `if`s, which every
+compiler of c4m.c can build, plain c4 included. The cycle interrupt's test is now one
+compare with `c4m_irq_at`, the next multiple of the interval. Only C4CF and TLEV make the
+interval nonzero, and both rearm it. At that cycle `c4m_irq_due` makes the old test, so
+interrupts land on the same cycles as before. c4mpg.c has both changes as well,
+`check-fork.sh` passes, and the chain was moved arm by arm, with nothing in the arms
+changed.
+
+| | Before | After |
+|---|---:|---:|
+| c4lc-built c4m's instructions per interpreted one | 164 | 86 |
+| `/bin/c4m load-c4r.c -- c4ke.c4r -v 0 bench.c4r` in C4IX, alone | 20,756 ms | 14,488 ms |
+| ...its last read of `c4ke.c4r` | 12,132 ms | 7,643 ms |
+| ...bench's score in that inner C4KE | 169 | 1,273 |
+| `innerbench -Tln 40`, two runs each, all 40 finished | 191,493 / 191,175 ms | 135,507 / 136,239 ms |
+| ...the kernel's share | 19.6% | 30.0% |
+| plain c4 running c4m.c on `test_realloc` | 115.0 M cycles | 68.0 M cycles |
+
+The times are machine ms under node (`kone4.mjs` and `kload-ab.mjs`, MMU, 4 CPUs,
+32 MB). gcc's c4m gained too: under `test-c4ix-c4ke`, `bench` inside `innerbench`
+runs about 1.25 M cycles in its 2.4 s where it ran 0.84 M, which took the count past a
+million, so `C4KE_MASK` now masks the unit of `cycles` as it did that of `score`.
+
+What is left is the same for every instruction, whatever the opcode. PSH, the commonest,
+now costs 65: 3 for `while (run)`, 12 for the cycle and its compare, 3 for a pending
+signal, 14 for `i = *pc++`, 6 for the OPCD test, 3 for `debug`, 6 for the range, 6 for
+the opcode and 11 for the push. Most of that is c4lc's code for a pointer's
+post-increment, 11 instructions, and LEA's `bp + *pc++` takes 27. c4opt's `-mfuse` would
+shorten the image, but it uses c4mp's fused opcodes as well as c4m's three, so it was
+not measured here.
 
 #### Left for later
 
@@ -1652,12 +1709,14 @@ What the profiles found that is not cheap, or not low in risk:
   cost more than it saved, because c4m interprets it (above). A read-ahead in the
   kernel, or the span's parse kept with the open file, would save kernel time without
   adding any interpreted code.
-- **c4m's opcode chain**: interpreted code, which is most of `-Tln 40`'s user time, pays
-  hundreds of cycles an instruction (above). A two-level chain would fit what plain c4
-  can compile. So would testing the commonest opcodes first, as the fused ones already
-  are.
-- **The kernel lock** (`bkl_take`, 28% of the kernel in `-Tln 40`): shorter work under
-  it, starting with the span reads.
+- **c4m's dispatch**: the chain has two levels, with the commonest opcodes first, since
+  2026-11-15 (above). That took `-Tln 40` from 191 s to 136 s, and an interpreted
+  instruction from 164 of c4m's own to 86. What is left is per instruction: the OPCD and
+  `debug` tests (9), the fetch (14), and c4lc's code for `*pc++` (11). Moving OPCD into
+  the chain needs a second dispatch for the opcode it names, which plain c4 cannot
+  express short of copying the arms.
+- **The kernel lock** (`bkl_take`, 28% of the kernel in `-Tln 40`, and 38% since c4m's
+  dispatch got cheaper): shorter work under it, starting with the span reads.
 - **`mmu_ftake`'s walk** and **`umem_alloc`** (`b4ke`, 13% and 9%): a cached best block
   per pool and a free-word hint, left out on 2026-11-04 as not then measured.
 - **`b4ke -B -j 3` in 32 MB runs out of memory at 564cf1a** ("loader: out of memory

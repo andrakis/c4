@@ -1481,6 +1481,102 @@ DEFER AGG-FILL ( ety cnt off v i -- i' )
    16 NEW-VEC LREC !  2 AMODE !  0 SWAP AGG-TOP  0 AMODE !  LREC @ ;
 ' (LOCAL-RECS) IS LOCAL-RECS
 
+\ -- initializers set at start-up (c4lc-parse's p:dyninit?) ------------
+\ A scalar global whose initializer is not a form the folder takes -- a
+\ string, &NAME, a NAME, a brace list or a constant expression -- is set
+\ by __c4lc_init, a static constructor written after the unit, as c4lc
+\ does: `int *tend = &table[4];`, `fixed *costable = sintable+(ANGLES/4);`.
+\ The global itself is tentative. DYNV holds one record per global:
+\ name, length, its expression's tokens (a vector), and its symbol and
+\ qualifiers while the constructor is compiled.
+VARIABLE DYNV
+: DYN-RESET ( -- )  16 NEW-VEC DYNV ! ;
+: TOKK ( i -- k )  DUP TOKS V# < IF TOKS V@ t.kind @ ELSE DROP Eof THEN ;
+: DYN-END? ( k -- f )  DUP Comma = SWAP Semi = OR ;
+\ past a parenthesized group at I (p:skipgroup)
+: DYN-GROUP ( i -- i' ) {: i | d k -- i :}
+   0 TO d
+   BEGIN
+      i TOKK TO k
+      k Eof = IF i EXIT THEN
+      k Lparen = IF d 1+ TO d THEN   k Rparen = IF d 1- TO d THEN
+      i 1+ TO i
+      k Rparen = d 0= AND
+   UNTIL i ;
+\ past `[...]`s, `.m` and `->m` (p:skippost, p:skipbrak)
+: DYN-POST ( i -- i' ) {: i | d k -- i :}
+   BEGIN
+      i TOKK TO k
+      k Dot = k Arrow = OR IF i 2 + TO i 0 ELSE
+      k Brak = IF
+         i 1+ TO i   1 TO d
+         BEGIN
+            i TOKK TO k
+            k Eof = IF -1 ELSE
+            k Rbrak = d 1 = AND IF i 1+ TO i -1 ELSE
+            k Brak = IF d 1+ TO d THEN   k Rbrak = IF d 1- TO d THEN
+            i 1+ TO i  0 THEN THEN
+         UNTIL 0
+      ELSE -1 THEN THEN
+   UNTIL i ;
+\ past sizeof's unparenthesized operand, `*p`, `name`, `a[i].m` (p:skipunary)
+: DYN-UNARY ( i -- i' ) {: i | k -- i :}
+   BEGIN i TOKK DUP Mul = SWAP And = OR WHILE i 1+ TO i REPEAT
+   i TOKK Id = IF i 1+ DYN-POST ELSE i THEN ;
+\ up to the , or ; that ends it, does the initializer hold a string, an
+\ &, a type name or a name that is no constant? sizeof's operand aside
+\ (p:dynscan)
+: DYN-SCAN ( i -- f ) {: i | d k -- f :}
+   0 TO d
+   BEGIN
+      i TOKK TO k
+      k Eof = IF 0 EXIT THEN
+      d 0= k DYN-END? AND IF 0 EXIT THEN
+      k Sizeof = IF
+         i 1+ TOKK Lparen = IF i 1+ DYN-GROUP ELSE i 1+ DYN-UNARY THEN TO i
+      ELSE
+         k Str = k And = OR IF -1 EXIT THEN
+         k KIND-TYPE? IF -1 EXIT THEN
+         k Id = IF i NONCONST-AT? IF -1 EXIT THEN THEN
+         k Lparen = k Brak = OR IF d 1+ TO d THEN
+         k Rparen = k Rbrak = OR IF d 1- TO d THEN
+         i 1+ TO i
+      THEN
+   AGAIN ;
+\ is the initializer at token I one for __c4lc_init? Not a string, &NAME
+\ alone, a brace list or a NAME alone (p:dyninit?)
+: DYN-AT? ( i -- f ) {: i | k k2 -- f :}
+   i TOKK TO k   i 1+ TOKK TO k2
+   k Str = IF 0 EXIT THEN
+   k And = IF  k2 Id = IF i 2 + TOKK DYN-END? 0= EXIT THEN  -1 EXIT THEN
+   k Lbrace = IF 0 EXIT THEN
+   k Id = k2 DYN-END? AND IF 0 EXIT THEN
+   i DYN-SCAN ;
+\ a static local's initializer names the function's other static locals
+\ by their plain names, which mean FUNCTION.NAME only inside it: the
+\ token is copied under the name SALIAS gives, as c4lc-parse resolves
+\ the names where it reads the expression. A member's name stays.
+: DYN-TOK ( t pk -- t' ) {: t pk | a u t2 -- t :}
+   ST-MANGLE @ 0=  t t.kind @ Id <> OR  pk Dot = OR  pk Arrow = OR IF t EXIT THEN
+   t t.val @ t t.len @ SALIAS TO u TO a
+   a t t.val @ = IF t EXIT THEN
+   TOK ALLOT: TO t2   t t2 TOK MOVE   a t2 t.val !  u t2 t.len !  t2 ;
+\ at the `=` of global A U: record its expression and step past it
+: DYN-REC ( a u -- ) {: a u | r d k v pk -- :}
+   TNEXT
+   16 NEW-VEC TO v   0 TO d   0 TO pk
+   BEGIN
+      TK TO k
+      k Eof =  d 0= k DYN-END? AND  OR 0=
+   WHILE
+      k Lparen = k Brak = OR IF d 1+ TO d THEN
+      k Rparen = k Rbrak = OR IF d 1- TO d THEN
+      TOK@ pk DYN-TOK v V,   k TO pk
+      TNEXT
+   REPEAT
+   5 CELLS ALLOT: TO r   a r !  u r CELL+ !  v r 2 CELLS + !
+   r DYNV @ V, ;
+
 : DECL {: | a u ct dt t n sz ag sc at y ivn off es fa fu fr fs fx fk bq q ce fn ai sa su aet acn gy pm sbr -- :}
    STORAGE TO sc
    TYPE? 0= IF ." c4fc: a declaration was expected" CR ABORT THEN
@@ -1520,6 +1616,8 @@ DEFER AGG-FILL ( ety cnt off v i -- i' )
       THEN
       \ the initialiser, if there is one
       -1 TO fr   -1 TO fs   0 TO ai   0 TO gy   0 TO sbr
+      \ ... unless __c4lc_init sets it: then this is `T x;`
+      ag 0=  TK Assign = AND IF  TP @ 1+ DYN-AT? IF a u DYN-REC THEN  THEN
       TK Assign = IF
          TNEXT
          \ a scalar's string in braces, `char *s = { "..." };`: the string
@@ -1717,11 +1815,44 @@ DEFER AGG-FILL ( ety cnt off v i -- i' )
 
 ' DECL IS DECL-D
 
+\ __c4lc_init (p:dynfunc), after the last function and before the
+\ helpers: `static int __attribute__((constructor)) __c4lc_init() {
+\ x = EXPR; ... }`, parsed from tokens made here and each initializer's
+\ own. c4lc stores through `*(T *)&x`, which is the same code as `x`
+\ (2026-11-14, every scalar type, plain and -O) but for a const x: its
+\ const is lifted while the constructor is compiled, so it is set once.
+CREATE DYN-TOKS VEC ALLOT
+: DYN-FUNC ( -- ) {: | v r y tp -- :}
+   DYNV @ V# 0= IF EXIT THEN
+   64 NEW-VEC TO v   v LEXV !
+   Static 0 0 TOK,  Int 0 0 TOK,
+   Attribute 0 0 TOK,  Lparen 0 0 TOK,  Lparen 0 0 TOK,  Constructor 0 0 TOK,
+   Rparen 0 0 TOK,  Rparen 0 0 TOK,
+   Id S" __c4lc_init" TOK,  Lparen 0 0 TOK,  Rparen 0 0 TOK,  Lbrace 0 0 TOK,
+   DYNV @ V# 0 ?DO
+      I DYNV @ V@ TO r
+      Id r @ r CELL+ @ TOK,  Assign 0 0 TOK,
+      r 2 CELLS + @ DUP V# 0 ?DO I OVER V@ v V, LOOP DROP
+      Semi 0 0 TOK,
+      r @ r CELL+ @ ST-FIND TO y   y r 3 CELLS + !
+      y IF  y y.q @ r 4 CELLS + !  y y.q @ 1 INVERT AND y y.q !  THEN
+   LOOP
+   Rbrace 0 0 TOK,  Eof 0 0 TOK,
+   TOKS LEXV !
+   TOKS DYN-TOKS VEC MOVE   v TOKS VEC MOVE   TP @ TO tp  0 TP !
+   DECL
+   DYN-TOKS TOKS VEC MOVE   tp TP !
+   DYNV @ V# 0 ?DO
+      I DYNV @ V@ TO r   r 3 CELLS + @ TO y
+      y IF r 4 CELLS + @ y y.q ! THEN
+   LOOP ;
+
 : PROGRAM
-   0 PACK-NOW !
+   0 PACK-NOW !  DYN-RESET
    BEGIN TK Eof <> WHILE
       TK Pack = IF TV PACK-NOW ! TNEXT ELSE DECL THEN   \ a #pragma pack line
    REPEAT
+   DYN-FUNC
    EMIT-HELPERS                         \ M4: after the last function, as c4lc
    FIX-FORWARDS
    PLACE-GLOBALS

@@ -295,9 +295,9 @@ either kind compiles to c4lc's bytes.
 ## What Wolfenstein 3D needed (M9, 2026-10-22)
 
 c4lc-design.md 14.8 has the language side; c4fc follows c4lc in all of
-it but the two things it has no basis for -- a typedef inside a function
-and an initializer computed at start-up, which needs floats -- and emits
-the same bytes.
+it but a typedef inside a function and a float, and emits the same
+bytes. An initializer computed at start-up came later (see "Initializers
+set at start-up" below).
 
 - **`parse.f`**: a prototype that ends at a comma leaves it to DECL
   (`PROTO-MORE`); an array parameter is a pointer; a scalar's initializer
@@ -327,8 +327,9 @@ the same bytes.
 ## What Doom needed (M10, 2026-10-23)
 
 c4lc-design.md 14.9 has the language side. c4fc follows c4lc in all of it
-but what needs a typedef, a float or an initializer computed at start-up
-(`&a[k]` as a scalar global's), and emits the same bytes.
+but what needs a typedef or a float, and emits the same bytes. `&a[k]` as
+a scalar global's initializer came later (see "Initializers set at
+start-up" below).
 
 - **`c4fc.f`**: `UNTAG` drops `register`, or makes it an `int` token
   before a name and `=`, `,`, `;`, `[` or `)` (`IMPLICIT-INT?`).
@@ -349,6 +350,44 @@ but what needs a typedef, a float or an initializer computed at start-up
   and added when `EMIT-TABPATS` resolves the value, or for another
   unit's data in the word itself, for c4rlink. c4lc folds more than this
   (`p + k`, members, a string plus k); c4fc does not yet.
+
+## Initializers set at start-up (2026-11-14)
+
+A scalar global whose initializer is none of the forms the folder takes
+(a string, `&NAME`, a `NAME`, a brace list, a constant expression) is set
+before `main` by `__c4lc_init`, a static constructor after the unit's
+last function: `int *tend = &table[4];`, `int *after = table + 5;`,
+`char *mid = (char *)&text[4];`, `static int *p = &buf[2];` in a
+function. That is c4lc's rule (c4lc-parse's `p:dyninit?` and
+`p:dynfunc`, c4lc-design.md 14.8), and c4fc now makes the same object.
+Before, c4fc stopped at the `&` with "unexpected token".
+
+- **`DYN-AT?`** is `p:dyninit?` on the tokens after the `=`: it says yes
+  when the expression up to the `,` or `;` holds a string, an `&`, a type
+  name or a name that is no constant. A `sizeof` operand doesn't count
+  (`DYN-SCAN`, `DYN-GROUP`, `DYN-UNARY`, `DYN-POST`).
+- **`DYN-REC`** keeps the expression's tokens and steps past them, so the
+  global is declared as `T x;`: tentative, and `ATTR_COMMON` in an
+  object, as in c4lc. In a static local's initializer, a name of the
+  function's other static locals gets a token copy under its
+  `FUNCTION.NAME` (`DYN-TOK`, through `SALIAS`), since c4lc resolves the
+  names where it reads them.
+- **`DYN-FUNC`**, at the end of `PROGRAM` and before the helpers, builds
+  `static int __attribute__((constructor)) __c4lc_init() { x = EXPR; ... }`
+  from tokens it makes with `TOK,` and the kept ones. It parses that with
+  `DECL`, with `TOKS` swapped out for the moment.
+  - c4lc stores through `*(T *)&x`. In c4lc that gives the same bytes as
+    `x =` for every scalar type, plain and `-O` (2026-11-14), except a
+    `const x`, which `x =` refuses. So each global's `const` bit (`y.q`
+    bit 0) is cleared while the constructor is compiled, and restored
+    after.
+
+`src/tests/c4fc_dyninit.c` (in `C4FC_SPIKE`) covers `&a[k]`, `&a[i][j]`,
+`&s.m`, `a + k`, a cast, a const global, a static, several declarators on
+a line, a function pointer, a static local naming another, and the
+unit's own constructor. sizeof and enum initializers stay data. It must
+print c4lc's line, and its object is compared too. `common_a.c` joins
+the common objects that test-c4fc compares.
 
 ## Verification
 

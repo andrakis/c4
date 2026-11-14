@@ -1667,7 +1667,7 @@ C4FC_SPIKE := src/tests/hello.c src/c4fc/tests/spike1.c src/c4fc/tests/spike2.c 
               src/c4fc/tests/spike3.c src/c4fc/tests/spike4.c \
               src/c4fc/tests/spike5.c src/c4fc/tests/spike6.c \
               src/c4fc/tests/spike7.c src/c4fc/tests/spike8.c \
-              src/tests/c4lc_tentative.c
+              src/tests/c4lc_tentative.c src/tests/c4fc_dyninit.c
 
 # F2, the lexer. The oracle is c4lc's own, three ways: its golden dump
 # of the sample that carries every token kind and quirk, the same with
@@ -1903,8 +1903,9 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c $(C4RDUMP)
 	# Tentative definitions (c4rlink.c, common_plan): each marked
 	# ATTR_COMMON with a word after it, and a global defined twice in one
 	# unit one object -- byte for byte c4lc's -c and -O -c. A global
-	# initialized twice is c4fc's error too.
-	@for f in common_b common_c common_d c4lc_tentative; do \
+	# initialized twice is c4fc's error too. common_a's &table[4] is set
+	# by __c4lc_init (DYN-FUNC), and c4fc_dyninit.c must print c4lc's line.
+	@for f in common_a common_b common_c common_d c4lc_tentative c4fc_dyninit; do \
 	   for o in "" "-O"; do \
 	      ./c4sp src/c4sp/lisp/c4lc.lisp $$o -c $(TESTS)/$$f.c .c4fc_lc.c4o >/dev/null 2>&1; \
 	      ./c4th $(C4FC_ALL) -e ": GO `echo $$o | sed 's/-O/1 OPTIMIZE !/'` -c S\" $(TESTS)/$$f.c\" C4FC ; GO" > .c4fc_fc.c4o 2>&1; \
@@ -1914,7 +1915,9 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c $(C4RDUMP)
 	   echo "  common obj ok: $$f"; \
 	done
 	./c4th $(C4FC_ALL) -e ': GO -c S" $(TESTS)/c4lc_redef.c" C4FC ; GO' 2>&1 | grep -aq "c4fc: redefinition of r"
-	@rm -f .c4fc_lc.c4o .c4fc_fc.c4o
+	./c4th $(C4FC_ALL) -e ': GO S" $(TESTS)/c4fc_dyninit.c" C4FC ; GO' > .c4fc_fc.c4r
+	$(C4M) load-c4r.c -- .c4fc_fc.c4r 2>&1 | grep -q "^dyninit 30 7 9 5 4 12 1 3 8 10 2 11 60 22 7 40$$"
+	@rm -f .c4fc_lc.c4o .c4fc_fc.c4o .c4fc_fc.c4r
 	# M4 qualifiers, c4fc's half. The const battery must draw from c4fc
 	# exactly the lines it draws from c4lc -- the same golden files
 	# test-c4lc holds c4lc to -- and the image must be c4lc's. A warning

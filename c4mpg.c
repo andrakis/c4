@@ -2217,10 +2217,30 @@ int c4m_isdevfd (int fd) {
 	return (c4m_devfd >> fd) & 1;
 }
 
+// A guest's open() flags are Linux's numbers (include/fcntl.h), and
+// on Linux the host's too. A host that numbers them otherwise -- Windows,
+// under MSYS2 or MinGW -- has its own numbers set by c4m_util.h, which
+// only a compiler with a preprocessor reads; these declarations, zero,
+// are what plain c4 and every Linux build see.
+#ifndef C4M_OHOST
+int c4m_ohost, c4m_o_creat, c4m_o_excl, c4m_o_trunc, c4m_o_append, c4m_o_nonblock, c4m_o_binary;
+#endif
+int c4m_oflags (int f) {
+	int h;
+	if (!c4m_ohost) return f;
+	h = f & 3;                               // O_RDONLY, O_WRONLY, O_RDWR
+	if (f & 64)   h = h | c4m_o_creat;
+	if (f & 128)  h = h | c4m_o_excl;
+	if (f & 512)  h = h | c4m_o_trunc;
+	if (f & 1024) h = h | c4m_o_append;
+	if (f & 2048) h = h | c4m_o_nonblock;
+	return h | c4m_o_binary;
+}
+
 int c4m_open (char *path, int flags) {
 	int fd;
 	if (dos_readable() && !c4m_isdev(path)) return dos_fopen(path);
-	fd = open(path, flags);
+	fd = open(path, c4m_oflags(flags));
 	// Only worth remembering while a C4DOS is present to be confused
 	// with; without one, c4m_isdevfd is never asked.
 	if (fd >= 0 && fd < 32 && dos_readable()) c4m_devfd = c4m_devfd | (1 << fd);

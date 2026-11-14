@@ -20,8 +20,9 @@ import { readFile, readdir, stat } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { networkInterfaces } from 'node:os';
 import { proxyUrl } from '../src/c4bb/tools/proxy-domain.mjs';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = new URL('..', import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const args = process.argv.slice(2);
 const PORT = Number(args.find(a => /^\d+$/.test(a)) || process.env.LIBJS_PORT || 8472);
 const ISOLATE = args.includes('--isolate');

@@ -12,22 +12,36 @@ listings () {           # listings DIR: a c4dos.dir in every directory under DIR
         (cd "$d" && { ls -p | grep '/$' || true; ls -p | grep -v '/$' | grep -v '^manifest.json$\|^index.json$' || true; } > c4dos.dir)
     done)
 }
+#
+# These run once per file, thousands of times, so they start no process
+# they can do without: no $(...), no grep per game. A fork is cheap on
+# Linux, but under MSYS2 on Windows (docs/windows.md) it costs tens of
+# milliseconds, and twenty a file made the ladder disk half an hour.
 lj_put () {             # lj_put SRC DISK PATH
-    mkdir -p "$2/$(dirname "$3")"
+    case $3 in */*) set -- "$1" "$2" "$3" "$2/${3%/*}" ;; *) set -- "$1" "$2" "$3" "$2" ;; esac
+    [ -d "$4" ] || mkdir -p "$4"
     rm -f "$2/$3"
     ln "$1" "$2/$3" 2> /dev/null || cp "$1" "$2/$3"
 }
-game_of () {            # game_of PATH: the game that put PATH on the games disk, or nothing
+games_map () {          # games_map: GAME_OF[PATH], the game that put PATH on the games disk, for game_of
+    declare -gA GAME_OF=()
+    local gf f
     for gf in $GAMEFILES/*; do
-        if [ -f "$gf" ] && grep -qxF "$1" "$gf"; then basename "$gf"; return 0; fi
+        [ -f "$gf" ] || continue
+        while IFS= read -r f || [ -n "$f" ]; do
+            [ -n "$f" ] && [ -z "${GAME_OF[$f]+x}" ] && GAME_OF[$f]=${gf##*/}
+        done < "$gf"
     done
     return 0
+}
+game_of () {            # game_of PATH: game= the game that put PATH on the games disk, or nothing (games_map first)
+    game=${GAME_OF[$1]-}
 }
 games_put () {          # games_put DISK: each game's files into DISK/GAMES/NAME
     for gf in $GAMEFILES/*; do
         [ -f "$gf" ] || continue
         while read -r f; do
-            if [ -f "$GAMESDISK/$f" ]; then lj_put "$GAMESDISK/$f" $1 "GAMES/$(basename $gf)/$f"; fi
+            if [ -f "$GAMESDISK/$f" ]; then lj_put "$GAMESDISK/$f" $1 "GAMES/${gf##*/}/$f"; fi
         done < $gf
     done
     return 0

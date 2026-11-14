@@ -10,8 +10,9 @@ import { createMachine, boot } from '../boot.js';
 import { typeBytes } from '../keys.js';
 import { LazyFiles, cacheMedium, loadCache, keepInCache } from '../lazy.js';
 import { memoryBackend } from '../../src/c4bb/web/store.js';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = new URL('../../src/c4bb/images/', import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL('../../src/c4bb/images/', import.meta.url));
 const DISK = join(ROOT, 'disk');
 const index = JSON.parse(readFileSync(join(DISK, 'index.json'), 'utf8'));
 const image = new Uint8Array(readFileSync(join(ROOT, 'c4ix32.c4r')));

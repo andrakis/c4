@@ -1,0 +1,22 @@
+#!/bin/sh
+# python3, under MSYS2 (docs/windows.md): MSYS2's own, except for a
+# script that imports Pillow (PIL). MSYS2 has Pillow only for its MinGW
+# pythons -- its own python has no FreeType to build one with -- so such
+# a script (games/sbk/c4/mkassets.py) runs under MinGW's python instead
+# (pacman -S mingw-w64-x86_64-python-pillow), through lf.py, which has
+# it write text as Linux does: a Windows python writes \r\n.
+n=0
+for a; do
+	case $a in -*) n=$((n + 1)) ;; *) script=$a; break ;; esac
+done
+if [ -n "$script" ] && grep -qs '^[[:space:]]*\(from\|import\)[[:space:]]\+PIL' "$script"; then
+	# python's own options, then lf.py, then the script and its arguments
+	for a; do
+		shift
+		[ $n -eq 0 ] && set -- "$@" "$(dirname "$0")/lf.py"
+		set -- "$@" "$a"
+		n=$((n - 1))
+	done
+	exec /mingw64/bin/python3 "$@"
+fi
+exec /usr/bin/python3 "$@"

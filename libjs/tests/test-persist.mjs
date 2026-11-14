@@ -27,9 +27,10 @@ import { join } from 'node:path';
 import { createMachine, boot } from '../boot.js';
 import { STOP } from '../c4m.js';
 import { GuiDevice, CMD } from '../gui-device.js';
+import { fileURLToPath } from 'node:url';
 
-const DISK = new URL('../images/dos/', import.meta.url).pathname;
-const GAMES = new URL('../../src/c4bb/images/games/', import.meta.url).pathname;
+const DISK = fileURLToPath(new URL('../images/dos/', import.meta.url));
+const GAMES = fileURLToPath(new URL('../../src/c4bb/images/games/', import.meta.url));
 let fail = 0;
 const check = (cond, what, extra = '') => {
   console.log(`test-persist: ${what} ${cond ? 'OK' : 'FAILED'}${!cond && extra ? '\n  ' + String(extra).slice(-1500) : ''}`);

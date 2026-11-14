@@ -39,6 +39,24 @@
 int c4mp_debug;
 int c4mp_fpu;
 
+// A guest's open() flags are Linux's numbers (include/fcntl.h). On a host
+// that numbers them otherwise -- Windows, docs/windows.md -- c4m_util.h
+// says so with C4M_OHOST, and they are renumbered as c4m.c's
+// c4m_oflags() does; anywhere else they are the host's already.
+#ifdef C4M_OHOST
+static int c4mp_oflags (int f) {
+    int h = f & 3;
+    if (f & 64)   h |= c4m_o_creat;
+    if (f & 128)  h |= c4m_o_excl;
+    if (f & 512)  h |= c4m_o_trunc;
+    if (f & 1024) h |= c4m_o_append;
+    if (f & 2048) h |= c4m_o_nonblock;
+    return h | c4m_o_binary;
+}
+#else
+#define c4mp_oflags(f) (f)
+#endif
+
 // ---- raw terminal mode (TRAW opcode, M18) ---------------------------
 // c4or1k needs fd 0 in raw mode so a typed Ctrl+C is delivered to the
 // guest as a byte (its tty line discipline then signals the guest's
@@ -465,7 +483,7 @@ int c4_run(struct c4_cpu * RESTRICT c, int quantum) {
 
         // Opcodes that reach the host are the protected-mode boundary.
         case OPEN:
-            if (mode == MODE_UNPROTECTED) a = open((char *)sp[1], *sp);
+            if (mode == MODE_UNPROTECTED) a = open((char *)sp[1], c4mp_oflags(*sp));
             else PM_TRAP(OPEN);
             break;
         case READ:

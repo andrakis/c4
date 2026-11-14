@@ -49,8 +49,9 @@ import { createMachine, boot } from '../boot.js';
 import { STOP } from '../c4m.js';
 import { GuiDevice, CMD } from '../gui-device.js';
 import { SoundDevice, EVT } from '../snd-device.js';
+import { fileURLToPath } from 'node:url';
 
-const DISK = new URL('../images/dos/', import.meta.url).pathname;
+const DISK = fileURLToPath(new URL('../images/dos/', import.meta.url));
 let fail = 0;
 const check = (cond, what, extra = '') => {
   console.log(`test-grin: ${what} ${cond ? 'OK' : 'FAILED'}${!cond && extra ? '\n  ' + String(extra).slice(-1500) : ''}`);

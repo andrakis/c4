@@ -43,6 +43,19 @@ EXTRA_CC  :=
 # the right answer, -O2 alone does not.
 NATIVE_CC_OPTS := -O2 -fwrapv -g -idirafter include -I . $(EXTRA_CC)
 NATIVE_TARGETS := c4 c4m c4cc
+# Windows, under MSYS2 (docs/windows.md). MSYS2's own gcc builds the host
+# programs as POSIX ones, much as on Linux, but has no 32-bit target: the
+# gcc in tools/msys2, first on the PATH, hands every `gcc -m32` (here, in
+# the games' c4.mk and in their scripts) to MinGW's i686 gcc instead.
+ifneq ($(filter MSYS% MINGW% CYGWIN%,$(shell uname -s)),)
+WINDOWS := 1
+export PATH := $(CURDIR)/tools/msys2:$(PATH)
+# MSYS2 turns an argument that looks like a path into Windows' form for a
+# Windows program (node, MinGW's builds). Duke Nukem 3D's switches look
+# like paths: /v1 reached duke3d-host and node as C:/msys64/v1, and only
+# the C4DOS and C4IX runs, typed in, played the level asked for.
+export MSYS2_ARG_CONV_EXCL := /v1;/l1;/s2;/ns;/nm
+endif
 # Preprocessor, will use our own at some point
 # We use our own include directories, and have some stdlib style headers.
 # We also define the following symbols, which TODO needd to be narrowed down to a single
@@ -2500,7 +2513,16 @@ PHONY += FORCE
 GAME_OBJS  :=
 GAME_TESTS :=
 include $(wildcard games/*/c4.mk)
-GAMES_ALL  := wolf3d doom tyrian rott quake duke3d frotz advent puzzles ace sbk pdcurses bsdgames
+ifdef WINDOWS
+# The BSD games' host builds need POSIX -- termios, pwd.h, sys/wait.h --
+# that MinGW, the only 32-bit gcc on Windows, has not got. There they
+# are MSYS2's 64-bit builds, and so is the PDCurses the curses ones link:
+# they are written for any Unix, 64-bit ones included, and what
+# test-bsdgames and test-pdcurses hold the c4 builds to is what they print.
+BSD_HOST_CC := $(subst -m32 , ,$(BSD_HOST_CC))
+PDC_HOST_CC := $(subst -m32 , ,$(PDC_HOST_CC))
+endif
+GAMES_ALL  :=wolf3d doom tyrian rott quake duke3d frotz advent puzzles ace sbk pdcurses bsdgames
 c4bb-images: libc-bare-objs grin-objs grin-apps $(GAME_OBJS)
 $(filter-out $(GAME_TESTS),$(GAMES_ALL:%=test-%)):
 	@echo "$@: skipped, games/$(@:test-%=%) is not here (games/README.md)"

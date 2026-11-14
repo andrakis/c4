@@ -8,6 +8,7 @@
 // frame. Run: node src/c4bb/tests/test-terminal.mjs
 import { Terminal } from '../web/panels.js';
 import { readFileSync } from 'fs';
+import { fileURLToPath } from 'node:url';
 
 let fails = 0;
 const eq = (name, got, want) => {
@@ -100,7 +101,7 @@ const text = t => t.lines.map(r => r.map(c => c.ch).join('').replace(/\s+$/, '')
 // are two files that must agree about the same escape sequences and
 // have no other reason to stay in step, so this reads both and checks.
 {
-  const here = new URL('.', import.meta.url).pathname;
+  const here = fileURLToPath(new URL('.', import.meta.url));
   const app = readFileSync(here + '../web/app.js', 'utf8');
   const tui = readFileSync(here + '../../c4tui/c4tui.c', 'utf8');
 

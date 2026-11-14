@@ -23,6 +23,11 @@
 #include <string.h>
 #include <memory.h>
 #include <fcntl.h>
+// A native build opens with the host's own flags, and on Windows
+// (docs/windows.md) asks for bytes, not text: Linux has no O_BINARY.
+#if NATIVE && !defined(O_BINARY)
+#define O_BINARY 0
+#endif
 
 #ifdef __GNUC__
 #include <unistd.h>

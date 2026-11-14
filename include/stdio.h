@@ -27,7 +27,13 @@
 #define __STDIO_H 1
 
 #ifndef __c4cc__
+#ifdef __MINGW32__
+// MinGW, for the 32-bit host builds on Windows (docs/windows.md), has no
+// /usr/include: the next stdio.h is its own
+#include_next <stdio.h>
+#else
 #include_next </usr/include/stdio.h>
+#endif
 #else /* ifndef __c4cc__ */
 #ifndef C4KE
 

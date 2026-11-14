@@ -93,8 +93,12 @@ power_on () {                       # power_on <name> <drive args...>
     local name=$1
     shift
     mkfifo $T/$name.in
-    timeout 3600 node src/c4bb/sim/cli.js -i -s -m 256 "$@" \
-        < $T/$name.in > $T/$name.log 2>&1 &
+    # Through cat, not `< fifo`: on Windows node is no MSYS2 program, and
+    # an MSYS2 fifo handed to it reads as already ended, so C4DOS halted
+    # at its first prompt (docs/windows.md). cat is one, and passes what
+    # is written on through a pipe, as it does anywhere. $! is timeout's.
+    cat $T/$name.in | timeout 3600 node src/c4bb/sim/cli.js -i -s -m 256 "$@" \
+        > $T/$name.log 2>&1 &
     echo $! > $T/$name.pid
 }
 

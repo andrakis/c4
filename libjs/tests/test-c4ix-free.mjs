@@ -13,8 +13,9 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createMachine, boot } from '../boot.js';
 import { typeBytes } from '../keys.js';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = new URL('../../src/c4bb/images/', import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL('../../src/c4bb/images/', import.meta.url));
 const DISK = join(ROOT, 'disk');
 class LazyDisk extends Map {
   constructor() { super(); this.sizes = new Map(JSON.parse(readFileSync(join(DISK, 'index.json'), 'utf8'))); }

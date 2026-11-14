@@ -541,11 +541,14 @@ out=$(printf 'wait 4\necho kept > /usr/kept.txt\nmkdir /usr/kdir\nrm /usr/README
       timeout 300 $LIBJS -m 64 -c 3000000000 -d $IMAGES/disk -w $T $IMAGES/c4ix32.c4r 2>/dev/null)
 # the page's Saved Files reads the same drive (kept.js): what was saved, by
 # its path, and nothing of the system's own or persist's
+# (the drive's folder as an argument, not in the script: on Windows
+# MSYS2 makes a path node can read only of an argument, docs/windows.md)
 kept=$(node --input-type=module -e "
   import { readdirSync, readFileSync } from 'node:fs';
   import { keptFiles } from './libjs/kept.js';
-  const m = new Map(readdirSync('$T').map(n => [n, new Uint8Array(readFileSync('$T/' + n))]));
-  for (const [p, b] of keptFiles(m)) console.log(p + '=' + new TextDecoder().decode(b).trim());" 2>&1)
+  const T = process.argv[1];
+  const m = new Map(readdirSync(T).map(n => [n, new Uint8Array(readFileSync(T + '/' + n))]));
+  for (const [p, b] of keptFiles(m)) console.log(p + '=' + new TextDecoder().decode(b).trim());" "$T" 2>&1)
 if echo "$kept" | grep -qx "/usr/kept.txt=kept" && ! echo "$kept" | grep -q "^/var/persist\|README.md"; then
     ok "Saved Files lists what persist kept, by its path (kept.js)"
 else bad "Saved Files lists what persist kept, by its path (kept.js)"; echo "$kept" | head -5; fi

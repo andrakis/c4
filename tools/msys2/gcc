@@ -1,0 +1,18 @@
+#!/bin/sh
+# gcc, under MSYS2 (docs/windows.md). The Makefile puts this directory
+# first on the PATH on Windows.
+#
+# MSYS2's gcc builds 64-bit POSIX programs, and has no -m32. A `gcc -m32`
+# goes to MinGW's i686 gcc instead (pacman -S mingw-w64-i686-gcc), with
+# -m32 taken out, linked static so that the program needs none of
+# MinGW's DLLs, and with mingw.h first: binary files, and the few POSIX
+# names these programs use. Anything else is MSYS2's gcc, as asked.
+case " $* " in
+*" -m32 "*) ;;
+*) exec /usr/bin/gcc "$@" ;;
+esac
+for a; do
+	shift
+	[ "$a" = -m32 ] || set -- "$@" "$a"
+done
+PATH=/mingw32/bin:$PATH exec /mingw32/bin/gcc -static -include "$(dirname "$0")/mingw.h" "$@"

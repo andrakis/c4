@@ -12,8 +12,9 @@ import { readFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 import { readC4r, analyse, insnText, PATCH } from '../c4r.js';
 import { parseC4r } from '../../src/c4bb/sim/loader.js';
+import { fileURLToPath } from 'node:url';
 
-const root = new URL('../..', import.meta.url).pathname;
+const root = fileURLToPath(new URL('../..', import.meta.url));
 let files = process.argv.slice(2);
 if (!files.length) {
   const walk = d => readdirSync(d).flatMap(n => {

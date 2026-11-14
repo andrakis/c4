@@ -291,7 +291,7 @@ void th_p_savefile (int *w) {
 	path = th_pathbuf;
 	memcpy(path, (char *)na, nu);
 	path[nu] = 0;
-	if ((fd = open(path, 577, 384)) < 0) { th_push(0); return; }
+	if ((fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, 0600)) < 0) { th_push(0); return; }
 	wr = write(fd, (char *)a, n);
 	close(fd);
 	th_push(wr == n ? -1 : 0);

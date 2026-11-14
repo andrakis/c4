@@ -42,8 +42,9 @@ import { Machine } from '../sim/machine.js';
 import { assemble } from '../sim/ucode.js';
 import { boot } from '../sim/loader.js';
 import { Turbo } from '../sim/turbo.js';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = new URL('../../..', import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL('../../..', import.meta.url));
 const UC = readFileSync(`${ROOT}src/c4bb/hw/microcode.uc`, 'utf8');
 const FW = readFileSync(`${ROOT}src/c4bb/fw/fw.c4r`);
 

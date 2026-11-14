@@ -31,6 +31,11 @@
 //#define CLOCK_MODE      CLOCK_REALTIME
 #define CLOCK_MODE      CLOCK_MONOTONIC_RAW
 
+// MSYS2 and Cygwin have CLOCK_MONOTONIC, and no _RAW
+#if !defined(CLOCK_MONOTONIC_RAW) && defined(CLOCK_MONOTONIC)
+#define CLOCK_MONOTONIC_RAW CLOCK_MONOTONIC
+#endif
+
 // On MSVC, clock_gettime doesn't exist, nor do the various monotonic / realtime options
 #ifndef CLOCK_MONOTONIC_RAW
 #define CLOCK_REALTIME 0
@@ -69,6 +74,32 @@ static uint64_t nanos()
 }
 
 static int c4m_time () { return millis(); }
+
+// open()'s flags, as this host numbers them, for c4m_oflags() in c4m.c:
+// every guest is compiled with Linux's numbers (include/fcntl.h), and
+// the VM's OPEN hands them to the host. Windows numbers them otherwise,
+// under MSYS2 or Cygwin as under MinGW, and MinGW opens in text mode
+// unless asked for O_BINARY. Set only here, a header plain c4 never
+// reads; without C4M_OHOST, c4m.c declares them itself, zero, which is
+// "Linux, as they are". Static: several of c4mp's modules include this.
+#include <fcntl.h>
+#ifndef O_BINARY
+#define O_BINARY 0
+#endif
+#ifndef O_NONBLOCK
+#define O_NONBLOCK 0
+#endif
+#if O_CREAT != 0100 || O_BINARY
+#define C4M_OHOST 1
+static int c4m_ohost = 1;
+static int c4m_o_creat = O_CREAT, c4m_o_excl = O_EXCL, c4m_o_trunc = O_TRUNC,
+    c4m_o_append = O_APPEND, c4m_o_nonblock = O_NONBLOCK, c4m_o_binary = O_BINARY;
+// and a file the guest creates gets a mode: the VM's OPEN passes none,
+// and what is left where the third argument would be is, on Windows, a
+// mode that can leave the file unreadable. A third argument already
+// there is the one open() reads; this one then goes unread.
+#define open(path, ...) open(path, __VA_ARGS__, 0666)
+#endif
 
 // NB: for all 3 timestamp functions above: gcc defines the type of the internal
 // `tv_sec` seconds value inside the `struct timespec`, which is used

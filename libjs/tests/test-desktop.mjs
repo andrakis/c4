@@ -19,8 +19,9 @@ import { layUploads } from '../uploads.js';
 import { untar } from '../kept.js';
 import { readC4r, analyse, insnText } from '../c4r.js';
 import { OPNAMES } from '../../src/c4bb/sim/devices.js';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = new URL('../../src/c4bb/images/', import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL('../../src/c4bb/images/', import.meta.url));
 // the screen's size: the desktop's own, until the test tells it another
 let SW = 800, SH = 600;
 const TASK_H = 30;
@@ -930,7 +931,7 @@ check(listed().includes('sq') && listed().includes('main'), 'and its functions l
 }
 // the same as c4r.js says for the object host c4lc makes of the same source
 {
-  const top = new URL('../../', import.meta.url).pathname;
+  const top = fileURLToPath(new URL('../../', import.meta.url));
   // c4sp32: the word C4IX's c4sc has
   if (existsSync(join(top, 'c4sp32'))) {
     // a name of its own: another test-desktop may be running beside this one

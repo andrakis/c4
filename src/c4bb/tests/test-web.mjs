@@ -43,8 +43,9 @@ import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { networkInterfaces } from 'node:os';
 import { proxyUrl } from '../tools/proxy-domain.mjs';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = new URL('../../..', import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL('../../..', import.meta.url));
 const PORT = Number(process.env.C4BB_PORT || 8479);
 const CDP = process.env.C4BB_CDP || 'http://127.0.0.1:9222';
 const LOCAL = process.argv.includes('--local');

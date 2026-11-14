@@ -12,10 +12,14 @@ int z = 4;              // z is this one
 int arr[3];
 int arr[3];
 int *px = &x;
+int *pa = &arr[1];      // set at start-up, by __c4lc_init
+int *pa;                // the same pa
+int *pb;
+int *pb = &arr[2];      // pb is this one
 
 int main () {
 	x = 2;
 	arr[2] = 9;
-	printf("tentative %d %d %d %d %d\n", x, y, z, arr[2], *px);
+	printf("tentative %d %d %d %d %d\n", x, y, z, arr[2] + (pb - pa) - 1, *px);
 	return 0;
 }

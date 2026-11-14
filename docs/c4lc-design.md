@@ -681,6 +681,15 @@ had written. The rule now:
   one (c4fc's DECL already did this; c4lc made two objects of the first two).
   `int x = 1; int x = 2;` is an error, "redefinition of x"; a static's two
   stay two objects in both compilers, as before.
+- **A global set at start-up is initialized (2026-11-15).** `int *p =
+  &t[4];`, which `__c4lc_init` sets before `main` (14.8), is a definition
+  with an initializer: c4lc and c4fc give it a zero word in the
+  initialized data, as `int *p = 0;`, and no `ATTR_COMMON`. So a second
+  in the unit is "redefinition of p", another unit's `int *p = &u[1];`
+  stops the link with "multiple definition of 'p'", as ld stops gcc's, and
+  an `int *p;` elsewhere gives way to it. Until then the global was
+  tentative, and two units that each set it were merged without a word,
+  with both constructors writing the one object.
 - **How c4rlink knows.** In an object (`-c`), c4lc and c4fc mark the symbol
   of a non-static global with no initializer `ATTR_COMMON` (0x80; c4lc-gen's
   `g:tattrs`, c4fc's `COMMON?`), and follow its storage with a word that
@@ -703,7 +712,10 @@ orders and with a `-r` library; before this they printed `common 11 0 0 5 7
 5011`, now what gcc does, `common 111 4 42 5 7 7111`. `test-c4fc` holds c4fc's
 objects of these units and the one-unit cases to c4lc's, byte for byte.
 `common_a.c`'s `int *tend = &table[4];` joined them on 2026-11-14, when
-c4fc gained initializers set at start-up (c4fc-design.md).
+c4fc gained initializers set at start-up (c4fc-design.md). With `common_f.c`'s
+tentative `tend` the link prints the same line; with `common_e.c`'s, set at
+start-up too, it stops ("multiple definition of 'tend'"), and
+`c4lc_dynredef.c`, which sets `r` at start-up twice, does not compile.
 
 The ports had, besides Duke's 177 (which `games/duke3d` had since defined once
 each): BSD hack's `PC`, `BC`, `UP` (also in `c4bsd.c`, unused there), sail's
@@ -1121,7 +1133,8 @@ own source.
   stores through `*(T *)&NAME`, so a `const` global is set too. Wolf3D's
   `const float radtoint = (float)(FINEANGLES/2/PI);` and `fixed *costable =
   sintable+(ANGLES/4);` are two. Nothing can tell, short of another
-  constructor reading the global first.
+  constructor reading the global first. The global itself is a zero word
+  in the initialized data, a definition and never a constant (13.1).
 - **C's struct layout.** A member starts at a multiple of its own
   alignment -- 1 for the one-byte types, 2 for the shorts, the word for
   the word-sized ones, min(8, word) for long long and double (as i386's

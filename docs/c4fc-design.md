@@ -366,9 +366,11 @@ Before, c4fc stopped at the `&` with "unexpected token".
   when the expression up to the `,` or `;` holds a string, an `&`, a type
   name or a name that is no constant. A `sizeof` operand doesn't count
   (`DYN-SCAN`, `DYN-GROUP`, `DYN-UNARY`, `DYN-POST`).
-- **`DYN-REC`** keeps the expression's tokens and steps past them, so the
-  global is declared as `T x;`: tentative, and `ATTR_COMMON` in an
-  object, as in c4lc. In a static local's initializer, a name of the
+- **`DYN-REC`** keeps the expression's tokens and steps past them, and
+  `DECL` declares the global as `T x = 0;` (`DYN-Z`), as c4lc does (`dynz`):
+  a definition with an initializer, never a constant and never
+  `ATTR_COMMON` (since 2026-11-15; it was `T x;`, tentative, before). In
+  a static local's initializer, a name of the
   function's other static locals gets a token copy under its
   `FUNCTION.NAME` (`DYN-TOK`, through `SALIAS`), since c4lc resolves the
   names where it reads them.
@@ -387,7 +389,8 @@ Before, c4fc stopped at the `&` with "unexpected token".
 a line, a function pointer, a static local naming another, and the
 unit's own constructor. sizeof and enum initializers stay data. It must
 print c4lc's line, and its object is compared too. `common_a.c` joins
-the common objects that test-c4fc compares.
+the common objects that test-c4fc compares, and so do `common_e.c` and
+`common_f.c`; `c4lc_dynredef.c` must be c4fc's "redefinition of r" too.
 
 ## Verification
 

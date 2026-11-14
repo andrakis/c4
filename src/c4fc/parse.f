@@ -1486,7 +1486,10 @@ DEFER AGG-FILL ( ety cnt off v i -- i' )
 \ string, &NAME, a NAME, a brace list or a constant expression -- is set
 \ by __c4lc_init, a static constructor written after the unit, as c4lc
 \ does: `int *tend = &table[4];`, `fixed *costable = sintable+(ANGLES/4);`.
-\ The global itself is tentative. DYNV holds one record per global:
+\ The global itself is `T x = 0;`, a definition and never a constant, as
+\ c4lc's (dynz): a second is "redefinition", another unit's is c4rlink's
+\ "multiple definition", and an `int *x;` gives way to it. DYNV holds one
+\ record per global:
 \ name, length, its expression's tokens (a vector), and its symbol and
 \ qualifiers while the constructor is compiled.
 VARIABLE DYNV
@@ -1561,7 +1564,10 @@ VARIABLE DYNV
    t t.val @ t t.len @ SALIAS TO u TO a
    a t t.val @ = IF t EXIT THEN
    TOK ALLOT: TO t2   t t2 TOK MOVE   a t2 t.val !  u t2 t.len !  t2 ;
-\ at the `=` of global A U: record its expression and step past it
+\ at the `=` of global A U: record its expression and step past it, to
+\ the , or ; -- DECL then makes the global `T x = 0;` (DYN-Z; DECL has
+\ no room for another local)
+VARIABLE DYN-Z
 : DYN-REC ( a u -- ) {: a u | r d k v pk -- :}
    TNEXT
    16 NEW-VEC TO v   0 TO d   0 TO pk
@@ -1575,7 +1581,7 @@ VARIABLE DYNV
       TNEXT
    REPEAT
    5 CELLS ALLOT: TO r   a r !  u r CELL+ !  v r 2 CELLS + !
-   r DYNV @ V, ;
+   r DYNV @ V,   1 DYN-Z ! ;
 
 : DECL {: | a u ct dt t n sz ag sc at y ivn off es fa fu fr fs fx fk bq q ce fn ai sa su aet acn gy pm sbr -- :}
    STORAGE TO sc
@@ -1615,10 +1621,11 @@ VARIABLE DYNV
          dt T-STRUCT? IF dt T-SIZE TO sz  1 TO ag THEN
       THEN
       \ the initialiser, if there is one
-      -1 TO fr   -1 TO fs   0 TO ai   0 TO gy   0 TO sbr
-      \ ... unless __c4lc_init sets it: then this is `T x;`
+      -1 TO fr   -1 TO fs   0 TO ai   0 TO gy   0 TO sbr   0 DYN-Z !
+      \ ... unless __c4lc_init sets it: then this is `T x = 0;`
       ag 0=  TK Assign = AND IF  TP @ 1+ DYN-AT? IF a u DYN-REC THEN  THEN
-      TK Assign = IF
+      TK Assign = DYN-Z @ OR IF
+         DYN-Z @ IF 0 IVAL !  1 TO ivn ELSE
          TNEXT
          \ a scalar's string in braces, `char *s = { "..." };`: the string
          ag 0=  TK Lbrace = AND  TP @ 1+ TOKS V@ t.kind @ Str = AND IF TNEXT 1 TO sbr THEN
@@ -1654,6 +1661,7 @@ VARIABLE DYNV
             CONST-EXPR IVAL !  1 TO ivn  1 TO ce
          THEN THEN THEN THEN THEN
          sbr IF  TK Comma = IF TNEXT THEN  Rbrace WANT  THEN
+         THEN                                   \ DYN-Z
          ai IF
             \ M7b: the strings the pointers take first, then the storage,
             \ then every value at its offset (c4lc-gen's g:globalaggr)

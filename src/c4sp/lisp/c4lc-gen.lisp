@@ -2494,10 +2494,14 @@
 				(g:emit '(LEV)))
 		(if (= h 'break)
 			(if (= g:brk nil) (g:die "break outside of loop or switch")
-				(g:emit (list 'JMP (list 'code g:brk))))
+				(begin
+					(set! g:jumped (cons g:brk g:jumped))
+					(g:emit (list 'JMP (list 'code g:brk)))))
 		(if (= h 'continue)
 			(if (= g:cont nil) (g:die "continue outside of loop")
-				(g:emit (list 'JMP (list 'code g:cont))))
+				(begin
+					(set! g:jumped (cons g:cont g:jumped))
+					(g:emit (list 'JMP (list 'code g:cont)))))
 		(if (= h 'empty) nil
 		;; T4b: only the inliner makes these; the parser never does.
 		(if (= h 'ijmp)
@@ -2525,6 +2529,16 @@
 		(if (= 'list (typeof e)) (if (= (head e) 'num) (= (length e) 2) false) false)
 	false)))
 (define g:ktrue? (lambda (e) (if (g:kint? e) (not (= (g:second e) 0)) false)))
+;; the labels a break or a continue jumped to. A loop whose condition is
+;; not tested places its end (and a do's continue) only if one did: c4fc
+;; marks a place a label only when something branches there, and a label
+;; nothing reaches would keep dead code after the loop alive, the LEV
+;; after a while (1) that only returns.
+(define g:jumped (list))
+(define g:jumped? (lambda (l ls)
+	(if (empty? ls) false (if (= (head ls) l) true (next g:jumped? l (tail ls))))))
+(define g:label-jumped! (lambda (l)
+	(if (g:jumped? l g:jumped) (g:label! l) nil)))
 
 (define g:ifstmt (lambda (s)
 	(begin
@@ -2550,15 +2564,17 @@
 		(set! g:brk lend)
 		(set! g:cont lc)
 		(g:label! lc)
-		(if (g:ktrue? (g:second s)) nil
+		(define tested (not (g:ktrue? (g:second s))))
+		(if tested
 		(begin
 			(g:texpr (g:second s))
-			(g:emit (list 'BZ (list 'code lend)))))
+			(g:emit (list 'BZ (list 'code lend))))
+		nil)
 		(define here g:lineloc)
 		(g:stmt (g:third s))
 		(g:loopline here)
 		(g:emit (list 'JMP (list 'code lc)))
-		(g:label! lend)
+		(if tested (g:label! lend) (g:label-jumped! lend))
 		(set! g:brk ob)
 		(set! g:cont oc))))
 
@@ -2575,17 +2591,19 @@
 		(set! g:cont lstep)
 		(if (= (g:second s) nil) nil (g:effect (g:second s)))
 		(g:label! lc)
-		(if (if (= (g:third s) nil) true (g:ktrue? (g:third s))) nil
+		(define tested (if (= (g:third s) nil) false (not (g:ktrue? (g:third s)))))
+		(if tested
 		(begin
 			(g:texpr (g:third s))
-			(g:emit (list 'BZ (list 'code lend)))))
+			(g:emit (list 'BZ (list 'code lend))))
+		nil)
 		(define here g:lineloc)
 		(g:stmt (index s 4))
 		(g:loopline here)
 		(g:label! lstep)
 		(if (= (index s 3) nil) nil (g:effect (index s 3)))
 		(g:emit (list 'JMP (list 'code lc)))
-		(g:label! lend)
+		(if tested (g:label! lend) (g:label-jumped! lend))
 		(set! g:brk ob)
 		(set! g:cont oc))))
 
@@ -3784,16 +3802,19 @@
 		(set! g:cont lc)
 		(g:label! lb)
 		(g:stmt (g:second s))
-		(g:label! lc)
 		;; do ... while (0), the macro's idiom, is its body once; while (1)
 		;; is a jump back
 		(if (g:kint? (g:third s))
-			(if (= (g:second (g:third s)) 0) nil
-				(g:emit (list 'JMP (list 'code lb))))
+			(begin
+				(g:label-jumped! lc)
+				(if (= (g:second (g:third s)) 0) nil
+					(g:emit (list 'JMP (list 'code lb))))
+				(g:label-jumped! lend))
 		(begin
+			(g:label! lc)
 			(g:texpr (g:third s))
-			(g:emit (list 'BNZ (list 'code lb)))))
-		(g:label! lend)
+			(g:emit (list 'BNZ (list 'code lb)))
+			(g:label! lend)))
 		(set! g:brk ob)
 		(set! g:cont oc))))
 

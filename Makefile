@@ -892,6 +892,11 @@ $(C4DOS_IX_DISK): c4dos32.c4r dostar32.c4r cpp32.c4r c4cc32.c4r dosload32.c4r \
 	@# dozen "cannot open" lines on the way up. src/c4bb/fs says why.
 	@cp $(SRCS)/c4bb/fs/c4ke-climb.vfs.txt $(C4DOS_IX_DISK)/c4ke.vfs.txt
 	@cd $(C4DOS_IX_DISK) && ls -p | grep -v '/$$' > c4dos.dir
+	@# The target is the directory, whose time moves only when a name in
+	@# it comes or goes, not when a file is written again: without this
+	@# it stays older than whatever was rebuilt since it was first made,
+	@# and every test that needs it makes it again, all at once.
+	@touch $(C4DOS_IX_DISK)
 	@echo "c4dos-c4ix32: ready -- boot it on c4bb, then LADDER, then IX"
 	@echo "                 (or LADDER, dosload c4ke.c4r, and build C4IX from inside it)"
 

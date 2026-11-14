@@ -1150,9 +1150,10 @@ spinner at -3 beside one at 0 gets 4.6 times the cycles
     archive is not gzip or the drive will not take the tar. Smallest
     machines without the MMU, headless: the desktop on a first boot 7 MB
     (was 10), the shell 5 MB (was 9); from the kept copy 7 MB, as
-    before. In 6 MB the tree unpacks and the desktop cannot load ("c4ix:
-    loader: out of memory loading /bin/desktop (1175 KB)"). With the
-    MMU, as before: 8 MB.
+    before. In 6 MB the tree unpacked and the desktop could not load
+    ("c4ix: loader: out of memory loading /bin/desktop (1175 KB)"),
+    until the loader read a program's code where it goes (2026-11-15):
+    6 MB now, both ways. With the MMU, as before: 8 MB.
 
   `libjs/tests/test-lazy-root.mjs`; in the page, `web-lazy-root.mjs`.
 
@@ -1644,6 +1645,45 @@ in the chain the dearer (c4m.c's main loop). It is a chain, not a `switch`, beca
 c4 compiles c4m.c as source (`$(C4) c4m.c load-c4r.c`, and innerbench's `-c`), and plain
 c4 has no `switch`. For a load that interprets, the trap is the cheap part.
 
+#### A program's code read where it goes (2026-11-15)
+
+`b4ke -B -j 3` in 32 MB ran out of memory at 564cf1a ("loader: out of memory loading
+/bin/c4sc (2101 KB)", `BUILD.B4K:30`), where on 2026-11-05 it had finished;
+`test-c4ix-rebuild` runs it in 64 and 128 MB, and passed. It was not one kernel's
+regression but chance. On 2026-11-14 and 15, on the 65e1676 disk, 17 runs at quanta of
+800, 1000, 1100 and 1250 (kprof's sampling moves the schedule as well) ran out of
+memory 5 times:
+
+| Kernel | Runs | Out of memory |
+|---|---|---|
+| 65e1676's | 4 | 1 |
+| c4b8bee's | 5 | 3 |
+| c4b8bee's without 4251ab2 (orphans) | 4 | 1 |
+| c4b8bee's without bd36d8e (pinned sleeper) | 4 | 0 |
+| c4b8bee's with the loader below | 6 | 0 |
+
+Every failure was the same allocation: c4sc (2077 KB) for the desktop's sub-build, at
+`BUILD.B4K:27` to `:44`. The loader read the whole `.c4r` into one kernel buffer and
+then copied the code out of it into an allocation of its own (`umalloc`, which is one
+run of frames too, `mmu_raw`). So each c4sc load held 2,126,549 bytes and then
+1,282,044 more, each in one piece of the heap, while two other compilers came and
+went.
+
+`mod_read` now reads the header into 80 bytes on its stack, then the code straight
+into its allocation, and only the rest (from the `D` marker: the data as the file has
+it, the patches, the two lists and the symbols) into the buffer, which is all it is
+kept for. For c4sc that is 844,460 bytes. The largest piece a load needs is the code
+(1.3 MB, where it was 2 MB), and the most it holds at once, data included, is 2.2 MB,
+where it was 3.5. A host file is still read twice, once to count it; then come three
+reads, which for `ls` the host sees as `@0+45`, `@45+1864` and `@1909+2724`. A header whose
+lengths do not fit the file is refused ("is cut short").
+
+Six runs with it, at quanta of 800 to 1250 and the default, all finished (3,972,125 to
+3,982,155 machine ms). The desktop now comes up without the MMU in 6 MB on a first
+boot and from the kept copy (it was 7; the 6 MB boot had stopped with "out of memory
+loading /bin/desktop"), and in 5 it still says it is out of memory
+(`test-lazy-root.mjs`).
+
 #### Left for later
 
 What the profiles found that is not cheap, or not low in risk:
@@ -1660,28 +1700,6 @@ What the profiles found that is not cheap, or not low in risk:
   it, starting with the span reads.
 - **`mmu_ftake`'s walk** and **`umem_alloc`** (`b4ke`, 13% and 9%): a cached best block
   per pool and a free-word hint, left out on 2026-11-04 as not then measured.
-- **`b4ke -B -j 3` in 32 MB runs out of memory at 564cf1a** ("loader: out of memory
-  loading /bin/c4sc (2101 KB)", `BUILD.B4K:30`), where on 2026-11-05 it finished.
-  `test-c4ix-rebuild` runs it in 64 and 128 MB, and passes. It is not a regression of
-  one kernel but a chance one. On 2026-11-14 and 15, on the 65e1676 disk, 17 runs at
-  quanta of 800, 1000, 1100 and 1250 (kprof's sampling moves the schedule as well)
-  ran out of memory 5 times:
-
-  | Kernel | Runs | Out of memory |
-  |---|---|---|
-  | 65e1676's | 4 | 1 |
-  | c4b8bee's | 5 | 3 |
-  | c4b8bee's without 4251ab2 (orphans) | 4 | 1 |
-  | c4b8bee's without bd36d8e (pinned sleeper) | 4 | 0 |
-
-  Every failure is the same allocation: loading c4sc (2077 KB) for the desktop's
-  sub-build, at `BUILD.B4K:27` to `:44`. The loader reads a whole `.c4r` into one
-  kernel buffer (`vfs_malloc(total + 16)`, loader.c) before it copies the code and
-  data out into the task's paged memory, so each load needs 2 MB of kernel heap in
-  one piece, and with three compiles going that is down to where the frees fall.
-  The fix is to read the header first and then each section straight into its
-  allocation, so only the small tables pass through the kernel heap.
-
 ## 6.1 Running it
 
     make run-c4ix        an interactive shell on c4m

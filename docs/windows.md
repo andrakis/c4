@@ -138,9 +138,24 @@ What differs on Windows, and where
   384)` now says `O_WRONLY | O_CREAT | O_TRUNC | O_BINARY`.
 - **`include/stddef.h`** no longer guards the host's stddef.h: MSYS2's
   headers include it again for one type at a time (`__need_wint_t`).
-- **node** is a Windows program. `new URL(rel, import.meta.url).pathname`
-  is `/C:/...` there, so the node scripts use `fileURLToPath`. The paths
-  node is given are relative, which both sides read alike.
+- **node is a Windows program**, and MSYS2 stands between it and the
+  POSIX side in five ways a test can trip on:
+  - `new URL(rel, import.meta.url).pathname` is `/C:/...` there, so the
+    node scripts use `fileURLToPath`.
+  - MSYS2 converts an *argument* that looks like a path (`/tmp/x` becomes
+    `C:/msys64/tmp/x`), but nothing inside a `node -e` script: a path
+    goes to node as an argument. The other way, a path node makes is
+    `C:\...`, which GNU tar takes for a host to reach: run tar in the
+    folder, with relative names.
+  - It converts arguments that only look like paths, too: Duke Nukem
+    3D's `/v1 /l1 /s2` reached the MinGW build and node as
+    `C:/msys64/v1`. The Makefile lists them in `MSYS2_ARG_CONV_EXCL`.
+  - node is given `PWD` in Windows' form, and a shell started under it
+    keeps that, so `$(pwd)` is `C:/...`, which POSIX does not take for
+    absolute (`cp -rs` refuses it). tools/suite.mjs drops `PWD` on
+    Windows.
+  - A program not of MSYS2's reads an MSYS2 fifo as already ended:
+    test-climb.sh puts `cat` between its fifos and the simulators.
 - **Processes cost.** A fork takes tens of milliseconds under MSYS2, so a
   shell loop that starts a few processes per file is slow: the ladder
   disk's (climb-disks.sh) started twenty a file and took half an hour.
@@ -151,3 +166,32 @@ What differs on Windows, and where
   reads MSYS2's /proc each second (each process's parent, resident pages,
   which are 64K there, and Windows pid), and asks node for the memory
   available.
+
+
+How it went on Cyron
+--------------------
+
+Cyron is a Ryzen 5 3600 (12 threads) with 32 GB, which hosts helios
+(4 GB, 6 processors). The runs were at Idle priority, `--cpus 8 -j 8
+--build-jobs 8`, two thirds of its processors, beside its other work.
+All 39 of `make suite`'s tests pass on Windows, as on helios
+(2026-11-14, c4ix_and_toppings merged in).
+
+| run | build | tests | total |
+|---|---|---|---|
+| Cyron, a fresh clone | 58 min | 44 min | 102 min |
+| Cyron, the next run (the build up to date but for build-images.sh) | 21 min | 39 min | 60 min |
+| helios, `--mem 5120`, a worktree a few days behind | 82 min (-j3) | 49 min | 131 min |
+
+The tests take a little less on Cyron than on helios, with more of them
+at once; one at a time they are slower where they start many processes
+(test-c4ix-smp 25 min against 14, test-sbk 18 against 9, test-c4lc 7
+against 4) and as fast where they compute. The peak was 2.3 GB.
+
+Two of the runner's measures are rougher on Windows:
+
+- **CPU.** GNU time counts the CPU of MSYS2 processes, not of the
+  Windows programs under them, so a test that is mostly node or MinGW's
+  builds shows cpu 0.0, and the packer takes it to need one processor.
+- **Memory.** A Windows program's own children (node's) are not in
+  MSYS2's /proc, so a test's peak is somewhat under what it used.

@@ -164,6 +164,12 @@ pre: $(C4) $(C4M) $(C4CC) $(C4RDUMP) $(C4RLINK) $(C4RS) $(BIN_D) $(BENCHS)
 	cp $(SRCS)/bench/*.c4r .
 	cp $(SRCS)/tests/*.c4r .
 
+# Two of the copies pre makes are named by tests (test-c4rstrip,
+# test-srcmap): without a rule of their own, a tree that has not run pre
+# has no way to make them.
+hello.c4r factorial.c4r: %.c4r: $(TESTS)/%.c4r
+	cp $< $@
+
 # Standard targets
 run: pre
 	$(C4M) $(RUN_C4KE)

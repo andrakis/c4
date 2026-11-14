@@ -82,6 +82,7 @@ extern int *L_gen_58fuse;
 extern int *L_gen_58fpu;
 extern int *L_gen_58nobuiltin;
 extern int *L_gen_58pic;
+extern int *L_gen_58opt;
 extern int *L_gen_58bssextra;
 extern int *L_gen_58bsssize;
 int *L_gen_58module (int *a0);

@@ -137,6 +137,7 @@
 	(set! gen:fpu Fpu)
 	(set! gen:nobuiltin NoBuiltin)
 	(set! gen:pic Pic)
+	(set! gen:opt Opt)
 	(set! lex:locs Lines)
 	(set! p:lines Lines)
 	(define Ast (parse:program

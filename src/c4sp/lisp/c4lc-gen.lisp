@@ -2519,6 +2519,13 @@
 		(g:stmt (head l))
 		(next g:stmts (tail l))))))
 
+;; e is an int constant, (num V) with no type of its own, and -O is on
+(define g:kint? (lambda (e)
+	(if gen:opt
+		(if (= 'list (typeof e)) (if (= (head e) 'num) (= (length e) 2) false) false)
+	false)))
+(define g:ktrue? (lambda (e) (if (g:kint? e) (not (= (g:second e) 0)) false)))
+
 (define g:ifstmt (lambda (s)
 	(begin
 		(g:texpr (g:second s))
@@ -2543,8 +2550,10 @@
 		(set! g:brk lend)
 		(set! g:cont lc)
 		(g:label! lc)
-		(g:texpr (g:second s))
-		(g:emit (list 'BZ (list 'code lend)))
+		(if (g:ktrue? (g:second s)) nil
+		(begin
+			(g:texpr (g:second s))
+			(g:emit (list 'BZ (list 'code lend)))))
 		(define here g:lineloc)
 		(g:stmt (g:third s))
 		(g:loopline here)
@@ -2566,7 +2575,7 @@
 		(set! g:cont lstep)
 		(if (= (g:second s) nil) nil (g:effect (g:second s)))
 		(g:label! lc)
-		(if (= (g:third s) nil) nil
+		(if (if (= (g:third s) nil) true (g:ktrue? (g:third s))) nil
 		(begin
 			(g:texpr (g:third s))
 			(g:emit (list 'BZ (list 'code lend)))))
@@ -2808,6 +2817,13 @@
 ;; with it must run under c4mp, not c4m (c4m traps the new opcodes).
 (define gen:cisc false)
 (define gen:fuse false)
+;; -O: a loop's condition that is a plain int constant is not tested
+;; (g:kint?). c4lc-tree's T1 already drops if (0), while (0) and
+;; for (;0;) when the function has no labels; what is left for here is
+;; do ... while (K), which runs its body whatever K is, and while (K)
+;; or for (;K;) with K not 0, which test nothing. c4fc's gen.f does the
+;; same under OPTIMIZE (KINT?).
+(define gen:opt false)
 ;; -mfpu: a float's operations are the FPU opcode where they stand (g:fpuargs)
 (define gen:fpu false)
 (define g:stubs nil)     ;; (LABEL ...) pending stub labels
@@ -3769,8 +3785,14 @@
 		(g:label! lb)
 		(g:stmt (g:second s))
 		(g:label! lc)
-		(g:texpr (g:third s))
-		(g:emit (list 'BNZ (list 'code lb)))
+		;; do ... while (0), the macro's idiom, is its body once; while (1)
+		;; is a jump back
+		(if (g:kint? (g:third s))
+			(if (= (g:second (g:third s)) 0) nil
+				(g:emit (list 'JMP (list 'code lb))))
+		(begin
+			(g:texpr (g:third s))
+			(g:emit (list 'BNZ (list 'code lb)))))
 		(g:label! lend)
 		(set! g:brk ob)
 		(set! g:cont oc))))

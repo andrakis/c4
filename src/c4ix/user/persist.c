@@ -70,6 +70,10 @@
 // Out of memory. A boot that cannot unpack the system says so and exits
 // 3 (NOMEM); vfsload and init then stop the desktop's boot there, where
 // the desktop on half a filesystem would only fail later, less clearly.
+// A root archive that cannot be read for any other reason (damaged: "bad
+// literal/length code", "CRC mismatch", "not a tar archive") is 4
+// (DAMAGED), and stops the desktop's boot too: a desktop with no tree
+// under it looks like one, and then every program on it fails.
 
 #include "c4ix_user.h"
 #include "archive.h"
@@ -80,7 +84,8 @@ enum {
     DISK_WCLOSE = 0x184, DISK_COUNT = 0x188,
     HEAP_BASE = 0x144, HEAP_END = 0x148,
     PATHMAX = 256, NAMEMAX = 64, CHUNK = 65536, BLOCK = 512,
-    NOMEM = 3              // boot's exit status when memory ran out
+    NOMEM = 3,             // boot's exit status when memory ran out
+    DAMAGED = 4            // ... and when the root archive could not be read
 };
 
 static char *SNAP = "1:c4ix-persist.tar";      // the changes saved: this one or SNAP2, as CUR says
@@ -574,19 +579,26 @@ static int unpack_ram(char *raw, int rawlen, char *id) {
 // files read from there (lazy_tar). The id is emptied first and written
 // last, so a copy cut short is never taken for a whole one. Where the
 // drive will not take it, unpacked into RAM instead.
+//
+// The archive is inflated as it is read (arc_gunzip_file), 128 KB of it
+// at a time: read whole first, its 4.3 MB were in memory beside the
+// desktop starting, and a first boot without the MMU needed 10 MB.
 static int unpack_keep(char *name, char *id) {
     char *raw;
-    int rawlen, n;
-    if (!(raw = arc_readfile(name, &rawlen))) { nomem = arc_nomem(); return 0 - 1; }
-    if (!id || rawlen < 2 || (raw[0] & 255) != 0x1F || (raw[1] & 255) != 0x8B ||
-        w_open(KID) < 0 || w_close() < 0 || w_open(KTAR) < 0)
-        return unpack_ram(raw, rawlen, id);
-    n = arc_gunzip_to(raw, rawlen, (int)&to_drive);
-    if (w_close() < 0 || wbad) {
-        ufprintf(STDERR, "persist: could not keep %s; unpacking into memory\n", KTAR);
-        return unpack_ram(raw, rawlen, 0);
+    int rawlen, n, kept;
+    kept = 0;
+    if (id && w_open(KID) >= 0 && w_close() >= 0 && w_open(KTAR) >= 0) {
+        n = arc_gunzip_file(name, (int)&to_drive);
+        if (w_close() < 0 || wbad) {
+            ufprintf(STDERR, "persist: could not keep %s; unpacking into memory\n", KTAR);
+            id = 0;
+        } else if (n != ARC_NOTGZ) kept = 1;
     }
-    free(raw);
+    if (!kept) {
+        // a plain tar, or a drive that will not take it: into RAM
+        if (!(raw = arc_readfile(name, &rawlen))) { nomem = arc_nomem(); return 0 - 1; }
+        return unpack_ram(raw, rawlen, id);
+    }
     if (n < 0) { nomem = arc_nomem(); return 0 - 1; }
     if (w_open(KID) >= 0) { w_put(id, ustrlen(id)); w_close(); }
     if ((n = lazy_tar(KTAR)) >= 0) uprintf("persist: %s: %d files, unpacked onto drive 1 and read from there\n", name, n);
@@ -600,10 +612,11 @@ static int heap_mb() {
     return (*(int *)HEAP_END - *(int *)HEAP_BASE) / 1048576;
 }
 
-// NAME could not be unpacked: why, and NOMEM if it was memory
-static int failed(char *name) {
+// NAME could not be unpacked: why; NOMEM if it was memory, else DAMAGED
+// if it is the root archive (ROOT), the system's own files
+static int failed(char *name, int root) {
     ufprintf(STDERR, "persist: %s: %s\n", name, arc_error ? arc_error : nomem ? "out of memory" : "failed");
-    if (!nomem) return 0;
+    if (!nomem) return root ? DAMAGED : 0;
     if (heap_mb()) ufprintf(STDERR, "persist: out of memory: %s does not fit in this machine's %d MB of heap\n", name, heap_mb());
     else ufprintf(STDERR, "persist: out of memory unpacking %s\n", name);
     return NOMEM;
@@ -623,8 +636,8 @@ static int boot(int argc, char **argv) {
         arc_error = 0;
         n = id ? from_kept(id) : 0 - 1;
         if (n >= 0) uprintf("persist: %s: %d files from the copy kept on drive 1, read from there\n", argv[2], n);
-        else if (nomem) rc = failed(argv[2]);
-        else if ((n = unpack_keep(argv[2], id)) < 0) rc = failed(argv[2]);
+        else if (nomem) rc = failed(argv[2], 1);
+        else if ((n = unpack_keep(argv[2], id)) < 0) rc = failed(argv[2], 1);
         if (id) free(id);
         if (rc) return rc;
         i = argc;
@@ -634,7 +647,7 @@ static int boot(int argc, char **argv) {
         n = arc_extract(argv[i], "/", ARC_EXTRACT, 0);
         if (n < 0) {
             if (!arc_error) nomem = 1;
-            if ((rc = failed(argv[i]))) return rc;
+            if ((rc = failed(argv[i], i == 2))) return rc;
         }
         ++i;
     }
@@ -888,8 +901,127 @@ static void freewalk() {
     if (soff) { free((char *)soff); free((char *)ssize); soff = 0; ssize = 0; }
 }
 
+// ---- download: what the person takes away --------------------------------
+//
+//   download PATH...         each file handed to the web page, which saves
+//   persist download PATH... it where the browser keeps downloads; a
+//                            folder as NAME.tar, all that is in it (ustar,
+//                            as save writes)
+//
+// The host takes it as a file written to "download:NAME" through the same
+// write registers (libjs's devices.js, onDownload), and keeps nothing of it
+// on the machine's side. Where nothing takes it -- the command line, native
+// c4m -- it says so. download is persist by another name (/bin/download,
+// an ilink, as sync is), and the desktop's Files runs it for File >
+// Download (desktop/files.c). A file in the page's store (drive 1) can also
+// be saved from the page itself, without the machine (libjs/README.md).
+
+static int dl_open(char *name) {
+    char full[PATHMAX + 16];
+    ustrcpy(ustrcpy(full, "download:") - 1, name);
+    return w_open(full);
+}
+
+// the file ABS into the tar as REL ("/NAME/...", as header wants), SIZE bytes
+static int dl_file(char *abs, char *rel, int size) {
+    int fd, n, got;
+    if (!header(rel, size, 0)) { ufprintf(STDERR, "download: %s: name too long for a tar\n", abs); return 0; }
+    if ((fd = uopen(abs, O_RD)) < 0) { ufprintf(STDERR, "download: cannot read %s\n", abs); return 0; }
+    w_put(hdr, BLOCK);
+    n = 0;
+    while (n < size) {
+        got = uread(fd, chunk, size - n < CHUNK ? size - n : CHUNK);
+        if (got <= 0) break;
+        w_put(chunk, got);
+        n = n + got;
+    }
+    // a file that shrank as it was read: the header promised SIZE bytes
+    if (n < size) { memset(chunk, 0, CHUNK); while (n < size) { w_put(chunk, size - n < CHUNK ? size - n : CHUNK); n = n + CHUNK; } }
+    uclose(fd);
+    pad(size);
+    return 1;
+}
+
+// the folder ABS and all in it, as REL and what is under it; how many files
+static int dl_tree(char *abs, char *rel) {
+    char name[NAMEMAX];
+    char *a, *r;
+    int i, kind, n, st[4];
+    a = (char *)malloc(PATHMAX);
+    r = (char *)malloc(PATHMAX);
+    n = 0;
+    if (!a || !r) return 0;
+    // the folder's own entry, "NAME/"
+    if (ustrlen(rel) + 2 < PATHMAX) {
+        ustrcpy(ustrcpy(r, rel) - 1, "/");
+        if (header(r, 0, 1)) w_put(hdr, BLOCK);
+    }
+    i = 0;
+    while ((kind = ureaddir(abs, i, name)) >= 0) {
+        ++i;
+        if (ustrlen(abs) + 2 + ustrlen(name) >= PATHMAX || ustrlen(rel) + 2 + ustrlen(name) >= PATHMAX) continue;
+        ustrcpy(ustrcpy(ustrcpy(a, abs[1] ? abs : "") - 1, "/") - 1, name);
+        ustrcpy(ustrcpy(ustrcpy(r, rel) - 1, "/") - 1, name);
+        // what is made up as it is read is not taken away
+        if (starts(a, "/proc/") || same(a, "/proc")) continue;
+        if (ustat(a, st) < 0) continue;
+        if (st[0] == 1) n = n + dl_tree(a, r);
+        else if (st[0] == 2 && dl_file(a, r, st[1])) ++n;
+    }
+    free(a);
+    free(r);
+    return n;
+}
+
+static int download(int argc, char **argv, int from) {
+    char path[PATHMAX], name[NAMEMAX + 8], rel[NAMEMAX + 2];
+    char *p, *b;
+    int i, k, n, rc, fd, got, st[4];
+    if (from >= argc) { ufprintf(STDERR, "usage: download FILE|FOLDER...\n"); return 2; }
+    if (!(__c4_info() & C4I_C4MJS)) { ufprintf(STDERR, "download: only the web page takes downloads\n"); return 1; }
+    rc = 0;
+    i = from;
+    while (i < argc) {
+        p = argv[i];
+        ++i;
+        if (ustrlen(p) >= PATHMAX) { rc = 1; continue; }
+        ustrcpy(path, p);
+        // "dir/" is "dir"; "/" stays
+        k = ustrlen(path);
+        while (k > 1 && path[k - 1] == '/') { --k; path[k] = 0; }
+        if (ustat(path, st) < 0) { ufprintf(STDERR, "download: %s: no such file or folder\n", p); rc = 1; continue; }
+        // the name it is saved as: its last part ("/" is c4ix)
+        b = path;
+        k = 0;
+        while (path[k]) { if (path[k] == '/' && path[k + 1]) b = path + k + 1; ++k; }
+        if (*b == '/' || !*b) b = "c4ix";
+        if (ustrlen(b) > NAMEMAX) { ufprintf(STDERR, "download: %s: name too long\n", p); rc = 1; continue; }
+        ustrcpy(name, b);
+        if (st[0] == 1) {
+            ustrcpy(name + ustrlen(name), ".tar");
+            if (dl_open(name) < 0) { ufprintf(STDERR, "download: nothing here takes downloads (the web page does)\n"); return 1; }
+            // inside it, "NAME/...", as "/NAME/..." for header
+            ustrcpy(ustrcpy(rel, "/") - 1, b);
+            n = dl_tree(path, rel);
+            memset(chunk, 0, BLOCK * 2);
+            w_put(chunk, BLOCK * 2);
+            if (w_close() < 0) { ufprintf(STDERR, "download: %s: not taken\n", p); rc = 1; continue; }
+            uprintf("download: %s, %d file%s\n", name, n, n == 1 ? "" : "s");
+        } else {
+            if ((fd = uopen(path, O_RD)) < 0) { ufprintf(STDERR, "download: cannot read %s\n", p); rc = 1; continue; }
+            if (dl_open(name) < 0) { uclose(fd); ufprintf(STDERR, "download: nothing here takes downloads (the web page does)\n"); return 1; }
+            n = 0;
+            while ((got = uread(fd, chunk, CHUNK)) > 0) { w_put(chunk, got); n = n + got; }
+            uclose(fd);
+            if (w_close() < 0) { ufprintf(STDERR, "download: %s: not taken\n", p); rc = 1; continue; }
+            uprintf("download: %s, %d bytes\n", name, n);
+        }
+    }
+    return rc;
+}
+
 static int usage() {
-    ufprintf(STDERR, "usage: persist boot ARCHIVE... | save | status | forget | -d SECS\n");
+    ufprintf(STDERR, "usage: persist boot ARCHIVE... | save | status | forget | -d SECS | download PATH...\n");
     return 2;
 }
 
@@ -905,6 +1037,9 @@ int main(int argc, char **argv) {
     i = 0;
     while (argv[0][i]) { if (argv[0][i] == '/') me = argv[0] + i + 1; ++i; }
     if (argc > 1 && same(argv[1], "boot")) return boot(argc, argv);
+    // (needs no drive 1: the page takes it)
+    if (starts(me, "download")) return download(argc, argv, 1);
+    if (argc > 1 && same(argv[1], "download")) return download(argc, argv, 2);
 
     // the daemon is started on every desktop boot: where there is no
     // drive it simply has nothing to do

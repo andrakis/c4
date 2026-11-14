@@ -179,7 +179,10 @@ them on every access either:
   page, if that is the task's too. **If a word either side of `sp` is
   not writable, the instruction faults before it runs**: `sp` has left the
   stack (or run into the guard page), and the next push or pop would fault
-  anyway. That is the one place the MMU is not precise to the access; it
+  anyway. It faults too when the two words are on pages not next to each
+  other in physical memory, which running again cannot mend: so the kernel
+  keeps a stack one run, as it does code (section 11, the moves). That is
+  the one place the MMU is not precise to the access; it
   is to the instruction, whose registers are as they were.
 - Frame words (LDL, STL, PSHL, JSRS, LEV's two words) are at `bp` plus an
   operand anything could have written, so each is compared with the
@@ -490,7 +493,12 @@ MB, memory beyond the arena, forgotten with the machine), and their
 frames are free. A page put out stays in the kernel's map, not present,
 its slot in the entry (`PTE_SWAP`, 0x400): libjs's window reads and
 writes the host's copy there, so the kernel finds the page's bytes even
-if it follows a pointer into it that it never checked.
+if it follows a pointer into it that it never checked. A device given
+such a page by the kernel (a drive's read into a task's buffer) copies
+to and from the host's copy too (arena.js `dmaSwapped`). Until
+2026-11-13 it stopped at the first page that was out, and the drive
+still said it had read the whole buffer: persist's one 4 MB read of the
+root archive, in an 8 MB machine, left the buffer as zeros.
 
 Which go (stage 11, below; until then the largest idle block of a task
 no CPU was running, never the asking task's): pages of what tasks asked
@@ -719,8 +727,20 @@ has nothing to swap against. Now:
     page next to it in memory, or the fetch faults (`MMU_FK_SPLIT`). A page of
     code copied alone broke that: the first sign was c4sc "jump to ... not mapped"
     at a pc 4 below the address. `mmu_canmove` refuses code of more than a page,
-    and a block that is one region of code is moved all together (`mmu_codeof`,
-    `mmu_codeup`, sharing `mmu_rerun` with `mmu_contig`).
+    and a block that is one region of code is moved all together (`mmu_wholeof`,
+    `mmu_wholeup`, sharing `mmu_rerun` with `mmu_contig`).
+  - *Stacks move whole too.* The stack window (section 5) is one run of memory
+    with a word either side of `sp`. A stack copied a page at a time had each
+    page in a free frame of whichever block was fullest (`mmu_ftake`), so two
+    that follow each other were seldom next to each other. When `sp` came to rest exactly on such a
+    boundary, the window could not be made: libjs faulted on a page that was
+    there, the kernel found it there and ran the instruction again, and it
+    faulted again. `test-c4ix-movable`'s mover a took 9.8 million traps in one
+    instruction under `PARALLEL=0`, while b and c finished, and whether it
+    happened turned on where its frames fell (a `printf` added or taken away hid
+    it). So `mmu_canmove` refuses a stack of more than a page as it does code
+    (`MMU_WHOLE`), a stack's block moves whole, and `mmu_rerun` leaves the guard
+    page out of the space.
   - *A fault that has already been answered* (`mmu_fault`). A CPU moving a page
     takes it out of the space while it copies, holding the kernel lock. A CPU that
     faults on it waits for that lock, and finds the page back. It forgets what it

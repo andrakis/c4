@@ -57,10 +57,11 @@ int ui_ends(char *s, char *suffix) {
 char *ui_num(char *buf, int v) {
     char t[24];
     int n, neg, k;
+    // digits from the remainders, kept positive: INT_MIN has no positive
+    // twin to negate into
     neg = v < 0;
-    if (neg) v = 0 - v;
     n = 0;
-    while (1) { t[n] = '0' + v % 10; ++n; v = v / 10; if (!v) break; }
+    while (1) { k = v % 10; if (k < 0) k = 0 - k; t[n] = '0' + k; ++n; v = v / 10; if (!v) break; }
     k = 0;
     if (neg) { buf[k] = '-'; ++k; }
     while (n) { --n; buf[k] = t[n]; ++k; }

@@ -37,8 +37,10 @@ ARCHIVES = c4ix-root.tgz
 		# without the c4ix- prefix or .c4r suffix
 		each($BIN_ALL):
 			$1: c4ix-$1.c4r
-		# sync is persist save (src/c4ix/user/persist.c)
+		# sync is persist save (src/c4ix/user/persist.c), and download is
+		# persist download: a file or folder handed to the web page
 		sync: ilink(/bin/persist)
+		download: ilink(/bin/persist)
 		each($TOOLS):
 			$1: $1.c4r
 		# exercises libc (src/c4ix/libc/tests)

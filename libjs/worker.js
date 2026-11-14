@@ -7,7 +7,8 @@
 //
 // Page -> worker
 //   boot    { image: ArrayBuffer, argv, disk: [[name, ArrayBuffer]], arenaMb, mhz, unpaced, gui, snd, shared }
-//           snd: true fits the sound card (snd-device.js)
+//           snd: true fits the sound card (snd-device.js); midi: true gives
+//           it a General MIDI synth on its MIDI port (page.js, opts.music)
 //           persist: { files: [[name, Uint8Array]] } fits a writable drive 1, kept by the page
 //           uploads: [[name, Uint8Array]] laid over drive 0: the disk's file of that name is hidden
 //                    (and C4IX lists them in /home: uploads.js)
@@ -33,6 +34,8 @@
 //   persist { name, bytes }   a file the machine closed on drive 1, for the page to keep;
 //                             bytes null: one it took off drive 1, for the page to forget
 //   files-reset {}            drive 1 is empty and the machine is booting again
+//   download { name, bytes }  a file the machine hands the person (C4IX's download:
+//                             devices.js "download:NAME"), for the page to save
 //   cache   { name, hash, bytes }  a lazy disk's file with a hash, read from the server: for the page to keep
 //   status  { ... }           about four times a second
 //   exit    { status, cycles }
@@ -144,8 +147,9 @@ function start(msg) {
   bootMsg = msg;
   ring = msg.gui && msg.shared ? new RingWriter(msg.shared.ring) : null;
   if (ring && fbSab !== msg.shared.fb) { fbSab = msg.shared.fb; fbProducer = new FbProducer(fbSab); }
-  gui = msg.gui ? new GuiDevice({ ...msg.gui, fbShared: ring ? fbProducer : null }) : null;
-  snd = msg.snd ? new SoundDevice({ now: () => performance.now() * 1000 }) : null;
+  // the page's: BLIT8's pixels in its order, and frames it would only cover dropped
+  gui = msg.gui ? new GuiDevice({ ...msg.gui, fbShared: ring ? fbProducer : null, abgr: true, dropCovered: true }) : null;
+  snd = msg.snd ? new SoundDevice({ now: () => performance.now() * 1000, midi: !!msg.midi }) : null;
   // The page's mixer outlives a reset, and with it whatever the old
   // machine left playing: the new one starts quiet, whatever it boots
   if (snd) snd.emit([EVT.RESET, snd.now()]);
@@ -175,6 +179,7 @@ function start(msg) {
     cpus: msg.cpus | 0, quantum: msg.quantum | 0, mmu: !!msg.mmu,
     parallel: !!msg.parallel, spawn: url => new Worker(url, { type: 'module' }),
     onByte: b => { out.push(b); if (out.length >= 4096) flush(); },
+    onDownload: (name, bytes) => { const b = bytes.slice(); postMessage({ type: 'download', name, bytes: b }, [b.buffer]); },
   });
   boot(vm, new Uint8Array(msg.image), msg.argv || ['image.c4r'], { mbox: msg.mbox | 0 });
   par = vm.smp && vm.smp.parallel ? vm.smp : null;

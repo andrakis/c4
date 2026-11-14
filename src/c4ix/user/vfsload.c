@@ -741,9 +741,11 @@ int load_entries() {
 // (it says "not fitted" and leaves where there is none), so the desktop
 // and top start on the whole filesystem. If memory ran out for it
 // (c4ix-persist's exit status 3), vfsload says so and exits 3, and init
-// starts no desktop on what there is.
+// starts no desktop on what there is; if the root archive could not be
+// read (4: damaged), it exits 4, and init stops there too.
 int g_wait;
 int g_nomem;
+int g_damaged;
 
 static char *itoa10(int v) {
     char *b;
@@ -802,6 +804,11 @@ void unpack_archives() {
         g_nomem = 1;
         return;
     }
+    if (rc == 4) {
+        uprintf("vfsload: %s could not be unpacked: it is damaged\n", name);
+        g_damaged = 1;
+        return;
+    }
     uprintf("vfsload: %s unpacked\n", name);
 }
 
@@ -836,5 +843,5 @@ int main(int argc, char **argv) {
     uprintf("vfsload: %d/%d entries loaded from %s\n", ok, g_nentries, manifestName);
     if (g_nhostdirs) uprintf("vfsload: %d hostdir() directories left on the host until first looked in\n", load_hostdirs());
     unpack_archives();
-    return g_nomem ? 3 : 0;
+    return g_nomem ? 3 : g_damaged ? 4 : 0;
 }

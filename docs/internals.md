@@ -436,6 +436,11 @@ own numbering is untouched and the numbers below hold.
 | 87 | `STL` | `c4lc -mfuse`, c4th | `*(bp+n) = a` | `bbb9ec3` 2026-08-24 |
 | 88 | `POPA` | `c4lc -mfuse`, c4th | `a = *sp++` | `bbb9ec3` 2026-08-24 |
 | 89 | `FPU` | `__c4_fpu(r, b, a, op)` | IEEE single and double (F3, docs/c4-float.md): `sp[0]` the sub-op, `sp[1]` a, `sp[2]` b, `sp[3]` r; floats as bits, doubles by address. Announced by `C4I_FPU` (0x10000). c4m and c4mp run softfp.c compiled natively, libjs and the c4bb sim `src/c4bb/sim/fpu.js`; a c4m or c4mp built for the VM by c4lc lends its host's; plain c4, c4cc builds and oisc4 name it only and raise `TRAP_ILLOP` | F3 2026-10-22 |
+| 90 | `LH` | c4lc, c4fc: a `short` load | `a = *(short *)a`: two bytes, low first, at any address, sign-extended (docs/c4-16bit.md). Run by every machine: c4m, c4mpg, c4mp, libjs, the c4bb microcode and oisc4 | 2026-11-13 |
+| 91 | `LHU` | c4lc, c4fc: an `unsigned short` load | `a = *(unsigned short *)a` | 2026-11-13 |
+| 92 | `SH` | c4lc, c4fc: a 16-bit store | `*(short *)*sp++ = a`; `a` unchanged, as `SI` | 2026-11-13 |
+| 93 | `LSR` | c4lc, c4fc: an unsigned `>>` by a count known at run time | `a = (unsigned)*sp++ >> a`, the count modulo the word's bits | 2026-11-13 |
+| 94 | `LCU` | c4lc, c4fc: an `unsigned char` load | `a = *(unsigned char *)a`: `LC` without the sign (docs/c4-16bit.md) | 2026-11-13 |
 
 A **named-only** opcode is one c4m knows the name of but does not
 execute. With no trap handler installed it halts with "*NAME* (opcode

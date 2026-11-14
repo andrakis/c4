@@ -34,9 +34,14 @@ const check = (ok, what, extra = '') => {
   if (!ok) fail = 1;
 };
 const out = [];
+// Drive 1 as the page has it, one that takes what is written: persist
+// keeps the root archive there and C4IX reads its files from it, so the
+// tree is not in RAM (persist.c). On a drive that would not take the tar
+// (sink: null, as this had it), the tree was unpacked into RAM, 24 MB of
+// the 32, and C4KE's stacks barely fitted beside it.
 const vm = createMachine({ arenaMb: 32, mmu: true,
   drives: [{ files: new LazyDisk(), writable: false, sink: null },
-           { files: new Map(), writable: true, sink: null, remove: () => {} }],
+           { files: new Map(), writable: true, sink: () => {}, remove: () => {} }],
   onByte: b => out.push(b) });
 boot(vm, new Uint8Array(readFileSync(join(ROOT, 'c4ix32.c4r'))), ['c4ix32.c4r']);
 const text = (from = 0) => Buffer.from(out.slice(from)).toString('latin1');
@@ -51,6 +56,8 @@ const sh = cmds => {
 
 check(until(() => text().includes('c4ix:/$')), 'C4IX boots to its shell, the MMU on');
 sh('wait 4');                 // the root archive's unpack (one CPU)
+check(/persist: c4ix-root\.tgz: \d+ files, unpacked onto drive 1 and read from there/.test(text()),
+  'the root archive is read from drive 1, not unpacked into RAM', text().split('\n').filter(l => /persist/.test(l)).join(' | '));
 const t = sh('cd /usr\ninnerbench -n 1');
 check(/^innerbench: invoking '\/bin\/c4m load-c4r\.c src\/c4ke\/c4ke\.c -- /m.test(t), 'innerbench starts /bin/c4m, C4IX\'s', t);
 check(/Benchmark complete: +\d/.test(t) && /^innerbench complete$/m.test(t) && !/page fault|cannot start/.test(t),

@@ -784,7 +784,8 @@ DEFER LOCAL-RECS ( ety cnt ai -- v )
             dt  ag IF na ELSE -1 THEN  ai LOCAL-RECS nn >lrecs !
             nn v V,
          THEN
-         nd 0<> ivn 0<> OR IF
+         \ iv alone is `= ""` or `= {}`: no values, every element zeroed
+         nd 0<> ivn 0<> OR iv 0<> OR IF
             STN @ 1- ST[] TO y
             n_linit 7 CELLS NEW TO nn
             nd nn >expr !  y nn >isym !  iv nn >ivals !  ivn nn >ivn !
@@ -1588,6 +1589,11 @@ DEFER AGG-FILL ( ety cnt off v i -- i' )
          \ not taken for another unit's.
          COLLECT @ IF a u DG-DEF THEN
          a u ST-FIND TO y
+         \ a second initialised definition of a global is an error; a
+         \ static's two stay two objects (c4lc-gen's g:datapass)
+         y IF y y.class @ c_glo = y y.ini @ 0<> AND sc 8 <> AND IF
+            ." c4fc: redefinition of " a u TYPE CR ABORT
+         THEN THEN
          y IF y y.class @ c_glo = y y.ini @ 0= AND IF
             off  y y.val @ CELLS GOFF + !   c_gone y y.class !   0 y y.nlen !
          THEN THEN
@@ -1666,6 +1672,15 @@ DEFER AGG-FILL ( ety cnt off v i -- i' )
       THEN
    LOOP ;
 
+\ A global with no initialiser, not static, in an object: a tentative
+\ definition, which c4rlink makes one object with the other units'
+\ (c4rlink.c, common_plan). Its symbol says so, ATTR_COMMON (128), and a
+\ word nothing uses follows it, so that the address just past it is no
+\ other global's -- c4rlink moves every reference into it to the one it
+\ keeps. c4lc-gen's g:tattrs and g:tballoc, word for word.
+: COMMON? ( y -- f )
+   >R  OBJECT @  R@ y.ini @ 0= AND  R> y.sc @ 8 <> AND ;
+
 \ Where the three data regions actually land. Region 1 was placed as it
 \ was declared; regions 2 and 3 are relative until now, so every patch
 \ that names one gets shifted here.
@@ -1683,6 +1698,7 @@ DEFER AGG-FILL ( ety cnt off v i -- i' )
          off ALIGNUP TO off
          DB3 @ off +  y y.val @ CELLS GOFF + !
          off y y.sz @ + TO off
+         y COMMON? IF off 1 CELLS + TO off THEN
       THEN
    LOOP
    GOFF FIX-GLOBALS
@@ -1694,6 +1710,7 @@ DEFER AGG-FILL ( ety cnt off v i -- i' )
          y y.name @ y y.nlen @ y y.ct @ 131
          y y.ini @ IF y y.val @ ELSE y y.val @ CELLS GOFF + @ THEN
          y y.agg @ IF ATTR-ARRAY ELSE 0 THEN  y y.sc @ OR
+         y COMMON? IF 128 OR THEN
          SYM,
       THEN
    LOOP ;

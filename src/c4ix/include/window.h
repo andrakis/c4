@@ -25,6 +25,15 @@
 // canvas and its coordinates stay as they were. A Terminal, which has a
 // menu of its own, ignores both: there the keys are the game's controls.
 //
+// The canvas is WIN_W by WIN_H however big the window is, unless the
+// program calls win_resizable(): then the canvas is the whole of the
+// window's inside, a window of the program's own may be dragged to any
+// size, and a maximised one fills the screen. Each new size comes from
+// win_poll as WIN_SIZE, ev[0] and ev[1] the canvas's width and height,
+// once the window has held still at it for a moment; from then on the
+// mouse is in those pixels, and a framebuffer drawn that size is shown as
+// it is. (A smaller one is still scaled to fill the canvas.)
+//
 // Built by either compiler. The functions are in window.c, beside this
 // file, which this includes unless C4IX_SHARED is defined: then a program
 // links C4IX's shared libc4ix (c4rlink -l /lib/libc4ix.c4s), which has
@@ -47,9 +56,11 @@
 //     f addr,w,h,pitch,pal  an 8-bit framebuffer, scaled to the canvas
 //     q         be a terminal again
 //     M n;title  menu n of the menu bar (0: the bar anew)
+//     z 1       the canvas follows the window's size (z 0: WIN_W by WIN_H)
 //     I n;label  an item of menu n ("-" a rule, "*label" checked)
 //   window -> program   ESC E <kind> <a>,<b>,<c> newline
-//     s w,h,0 the canvas size   d x,y,button  u x,y,button
+//     s w,h,0 the canvas size (after o, and each time it changes)
+//     d x,y,button  u x,y,button
 //     m x,y,buttons             k keycode,char,mods
 //     K keycode,char,mods (let go)  f 0,0,0 (a framebuffer frame was drawn)
 //     c menu,item,0 (an item of the menu bar picked)
@@ -90,6 +101,7 @@ void win_present();
 void win_fb(char *pixels, int w, int h, int pitch, int *pal);
 void win_menu(int n, char *title);
 void win_item(int n, char *label);
+void win_resizable();
 void win_sleep(int ms);
 int win_poll(int *ev);
 

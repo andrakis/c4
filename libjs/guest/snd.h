@@ -1,6 +1,6 @@
 // snd.h -- the libjs sound card, from inside the machine: an AdLib (OPL2,
-// and the OPL3's second bank), sixteen channels of 8-bit samples, and the
-// PC speaker. docs/libjs-design.md "The sound card".
+// and the OPL3's second bank), sixteen channels of 8-bit samples, the PC
+// speaker, and a MIDI port. docs/libjs-design.md "The sound card".
 //
 // ANNOUNCED, NEVER PROBED: call snd_present() first. On a machine without
 // the card the registers at 0x480 are ordinary memory.
@@ -11,6 +11,12 @@
 // to it, so music plays evenly however unevenly the program runs, as long
 // as it keeps the stream ahead: make more while snd_ahead() is short.
 // Samples and the speaker play now.
+//
+// The MIDI port is there to play when snd_caps() has SND_HAS_MIDI: the
+// person chose General MIDI music, and a synth hears it, as an MPU-401's
+// MIDI OUT would have had a Sound Canvas on it. A game then plays its
+// music there instead of on the OPL. Its messages are stamped with the
+// stream's time, as OPL writes are, and snd_wait() moves them on alike.
 //
 // The functions are in snd.c, beside this file, which this includes
 // unless C4IX_SHARED is defined: then a program links /lib/libgui.c4s,
@@ -31,11 +37,11 @@ enum {
 	SND_CAPS = 0x480, SND_OPL = 0x484, SND_WAIT = 0x488, SND_AHEAD = 0x48c, SND_CLOCK = 0x490,
 	SND_PCM_ADDR = 0x494, SND_PCM_LEN = 0x498, SND_PCM_RATE = 0x49c, SND_PCM_VOL = 0x4a0,
 	SND_PCM_PLAY = 0x4a4, SND_PCM_STOP = 0x4a8, SND_PCM_SETVOL = 0x4ac, SND_PCM_BUSY = 0x4b0,
-	SND_SPK = 0x4b4, SND_RESET = 0x4b8, SND_MASTER = 0x4bc,
+	SND_SPK = 0x4b4, SND_RESET = 0x4b8, SND_MASTER = 0x4bc, SND_MIDI = 0x4c0, SND_MIDI_DATA = 0x4c4,
 	C4I_SND = 0x8000
 };
 // CAPS
-enum { SND_HAS_OPL = 1, SND_HAS_PCM = 2, SND_HAS_SPK = 4, SND_HAS_OPL3 = 8, SND_HAS_PCM16 = 16 };
+enum { SND_HAS_OPL = 1, SND_HAS_PCM = 2, SND_HAS_SPK = 4, SND_HAS_OPL3 = 8, SND_HAS_PCM16 = 16, SND_HAS_MIDI = 32 };
 // sample channels: sixteen since SND_HAS_PCM16, eight on a card without it.
 // Eight were too few for Quake, whose own mixer has eight for what starts
 // besides its ambience and its looped sounds.
@@ -63,6 +69,12 @@ void snd_speaker (int divisor);
 // program's; snd_reset leaves it as it was.
 void snd_master (int vol);
 int  snd_master_get ();
+// the MIDI port (SND_HAS_MIDI): a whole short message, as many data bytes
+// as its status takes; or bytes one at a time, as an MPU-401's data port
+// took them in UART mode (running status, and system exclusives F0 ... F7)
+void snd_midi (int status, int data1, int data2);
+void snd_midi_byte (int b);
+void snd_midi_bytes (char *p, int n);
 
 #ifndef C4IX_SHARED
 #include "snd.c"

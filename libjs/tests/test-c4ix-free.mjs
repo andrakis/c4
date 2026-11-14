@@ -50,6 +50,12 @@ const sh = cmds => {
 const info = t => Object.fromEntries([...t.matchAll(/^([a-z]+) (\d+)$/gm)].map(m => [m[1], +m[2]]));
 const row = (t, name) => { const m = new RegExp(`^${name}: +(\\d+) K +(\\d+) K +(\\d+) K +(\\d+) K`, 'm').exec(t); return m ? m.slice(1).map(Number) : null; };
 const near = (a, b, slack) => Math.abs(a - b) <= slack;
+// What C4IX says it uses is read while cat or free runs, the heap's books
+// after: 1 MB for the program, and a block of single frames (mmu_fnew,
+// FC_BIG pages and one more) if the pool had no frame free when it started,
+// given back when it ends. Which it is depends on how the boot went (after
+// persist streamed the root archive, arc_gunzip_file, it was the block)
+const USED_SLACK = 1024 + 1028;
 const h = vm.heap, K = n => n >> 10;
 
 check(until(() => text().includes('c4ix:/$')), 'C4IX boots to its shell, the MMU on');
@@ -57,13 +63,13 @@ sh('wait 4');
 
 let t = sh('cat /proc/meminfo');
 let m = info(t);
-check(m.heap === K(h.end - h.base) && near(m.used, K(h.used), 1024) && near(m.largest, K(h.largest()), 256) &&
+check(m.heap === K(h.end - h.base) && near(m.used, K(h.used), USED_SLACK) && near(m.largest, K(h.largest()), 256) &&
   near(m.free, m.heap - m.used, 1) && m.swap > 0 && m.frames >= 0,
   `/proc/meminfo has the heap's size, use and biggest block (${m.heap} K, ${m.used} K, ${m.largest} K)`, t);
 
 t = sh('free');
 let r = row(t, 'memory');
-check(r && r[0] === m.heap && near(r[1], K(h.used), 1024) && near(r[3], K(h.largest()), 256) && /^swap: /m.test(t) && !/in pieces/.test(t),
+check(r && r[0] === m.heap && near(r[1], K(h.used), USED_SLACK) && near(r[3], K(h.largest()), 256) && /^swap: /m.test(t) && !/in pieces/.test(t),
   'free prints them, with swap, and the free memory in one piece', t);
 
 // the heap in pieces: 384 KB blocks while they come, every other given back

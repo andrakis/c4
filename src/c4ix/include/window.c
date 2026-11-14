@@ -100,6 +100,8 @@ void win_present() { win_begin('p'); win_end(); win_flush(); }
 // item of it. Sent with the next frame.
 void win_menu(int n, char *title) { win_begin('M'); win_num(n); win_ch(';'); win_str(title); win_end(); }
 void win_item(int n, char *label) { win_begin('I'); win_num(n); win_ch(';'); win_str(label); win_end(); }
+// the canvas follows the window's size: WIN_SIZE tells each new one
+void win_resizable() { win_begin('z'); win_num(1); win_end(); win_flush(); }
 
 void win_fb(char *pixels, int w, int h, int pitch, int *pal) {
     win_begin('f'); win_arg((int)pixels, 1); win_arg(w, 1); win_arg(h, 1);

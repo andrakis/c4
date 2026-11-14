@@ -108,6 +108,7 @@ node libjs/tests/test-sheap.mjs  || fail=1
 node libjs/tests/test-gui.mjs    || fail=1
 node libjs/tests/test-shared.mjs || fail=1
 node libjs/tests/test-rom.mjs    || fail=1
+node libjs/tests/test-kept.mjs   || fail=1   # the Uploads' folders, and Saved Files' lists and tars
 }
 
 # ---- machines booted and driven ------------------------------------------
@@ -153,6 +154,8 @@ PARALLEL=0 node libjs/tests/test-c4ix-loadctl.mjs || fail=1   # ... on simulated
 node libjs/tests/test-c4ix-softpin.mjs || fail=1   # what draws goes to CPU 0, unless it was pinned; its children go anywhere
 node libjs/tests/test-c4ix-movable.mjs || fail=1   # images, stacks and small blocks move while they run, on threads
 PARALLEL=0 node libjs/tests/test-c4ix-movable.mjs || fail=1   # ... on simulated CPUs
+node libjs/tests/test-c4ix-pipewake.mjs || fail=1   # a reader woken by a writer on another CPU, on threads
+PARALLEL=0 node libjs/tests/test-c4ix-pipewake.mjs || fail=1   # ... on simulated CPUs
 node libjs/tests/test-c4ix-tidy.mjs || fail=1   # the kernel's own memory given back and moved once tasks have gone, on threads
 PARALLEL=0 node libjs/tests/test-c4ix-tidy.mjs || fail=1   # ... on simulated CPUs
 MMU=0 node libjs/tests/test-c4ix-tidy.mjs || fail=1   # ... and without the MMU
@@ -491,6 +494,39 @@ console.log(caps & 16, busy.toString(16), (L[200] / R[200]).toFixed(3), L[200] >
 " 2>&1)
 if [ "$out" = "16 ffff 1.000 all" ]; then ok "the sound card's sixteen sample channels, all sounding at once"
 else bad "the sound card's sixteen sample channels, all sounding at once"; echo "  $out"; fi
+
+# The MIDI port (CAPS bit 5), for General MIDI music: there only with a
+# synth; a short message (MIDI) and bytes (MIDI_DATA: running status, a
+# system exclusive, real time left out) stamped at the stream's cursor;
+# and the mixer's synth (snd-gm.js, with SpessaSynth's own one-preset
+# SoundFont) sounding a note while it is held, and quiet once it is let go
+out=$(node --input-type=module -e "
+import { SoundDevice, SND, EVT } from './libjs/snd-device.js';
+import { SoundMixer } from './libjs/snd-mix.js';
+import { GmSynth, sampleSoundFont } from './libjs/snd-gm.js';
+let t = 0;
+const none = new SoundDevice({ now: () => t }), d = new SoundDevice({ now: () => t, midi: true });
+none.write32(SND.MIDI, 0x7f3c90);
+const caps = [none.read32(SND.CAPS) & 32, d.read32(SND.CAPS) & 32, none.drain()];
+d.write32(SND.CLOCK, 1000);
+d.write32(SND.MIDI, 0xc0 | (5 << 8));
+d.write32(SND.MIDI, 0x90 | (60 << 8) | (100 << 16));
+d.write32(SND.WAIT, 500);
+for (const b of [0x80, 60, 0, 0xf8, 62, 0, 0xf0, 0x7e, 0x7f, 0x09, 0x01, 0xf7, 0xb0, 7, 90]) d.write32(SND.MIDI_DATA, b);
+const ev = d.drain();
+const said = ev.map(e => e[0] === EVT.MIDI ? e[1] / 1000 + ':' + e[2].map(b => b.toString(16)).join('.') : '?').join(' ');
+const synth = new GmSynth(22050);
+await synth.load(sampleSoundFont(), 'sample');
+const mix = new SoundMixer(22050, { synth });
+mix.push(ev);
+const L = new Float32Array(22050), R = new Float32Array(22050);
+mix.render(L, R, 22050);
+const peak = (a, b) => { let p = 0; for (let i = Math.round(a * 22050); i < Math.round(b * 22050); i++) p = Math.max(p, Math.abs(L[i])); return p; };
+console.log(caps.join(' '), '|', said, '|', peak(0.05, 0.45) > 0.02 && peak(0.8, 1) < 0.005 ? 'held, then quiet' : 'levels ' + peak(0.05, 0.45) + ' ' + peak(0.8, 1));
+" 2>&1)
+if [ "$out" = "0 32  | 0:c0.5 0:90.3c.64 500:80.3c.0 500:80.3e.0 500:f0.7e.7f.9.1.f7 500:b0.7.5a | held, then quiet" ]; then
+    ok "the sound card's MIDI port: stamped on the stream, and played by a SoundFont"
+else bad "the sound card's MIDI port: stamped on the stream, and played by a SoundFont"; echo "  $out"; fi
 }
 
 # Persistence (src/c4ix/user/persist.c): drive 1 keeps what changed. One
@@ -503,6 +539,16 @@ part_ixpersist () {
 T=$(mktemp -d)
 out=$(printf 'wait 4\necho kept > /usr/kept.txt\nmkdir /usr/kdir\nrm /usr/README.md\nsync\nexit\n' | \
       timeout 300 $LIBJS -m 64 -c 3000000000 -d $IMAGES/disk -w $T $IMAGES/c4ix32.c4r 2>/dev/null)
+# the page's Saved Files reads the same drive (kept.js): what was saved, by
+# its path, and nothing of the system's own or persist's
+kept=$(node --input-type=module -e "
+  import { readdirSync, readFileSync } from 'node:fs';
+  import { keptFiles } from './libjs/kept.js';
+  const m = new Map(readdirSync('$T').map(n => [n, new Uint8Array(readFileSync('$T/' + n))]));
+  for (const [p, b] of keptFiles(m)) console.log(p + '=' + new TextDecoder().decode(b).trim());" 2>&1)
+if echo "$kept" | grep -qx "/usr/kept.txt=kept" && ! echo "$kept" | grep -q "^/var/persist\|README.md"; then
+    ok "Saved Files lists what persist kept, by its path (kept.js)"
+else bad "Saved Files lists what persist kept, by its path (kept.js)"; echo "$kept" | head -5; fi
 out2=$(printf 'wait 4\ncat /usr/kept.txt\nls /usr\npersist forget\nexit\n' | \
       timeout 300 $LIBJS -m 64 -c 3000000000 -d $IMAGES/disk -w $T $IMAGES/c4ix32.c4r 2>/dev/null)
 out3=$(printf 'wait 4\nls /usr\nexit\n' | \

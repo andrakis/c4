@@ -13,7 +13,7 @@
 // Colours are 0x00RRGGBB. In an image (IMGDEF) the top byte is
 // transparency: 0 is opaque, 255 is fully transparent.
 
-import { CMD } from './gui-device.js';
+import { CMD, RGB_ABGR } from './gui-device.js';
 // GUI_PTR_* (libjs/guest/gui.h) as CSS cursors
 const POINTERS = ['default', 'text', 'nwse-resize', 'pointer', 'move', 'wait', 'crosshair', 'none', 'none'];
 const PTR_LOCK = 8;
@@ -134,10 +134,20 @@ export class Display {
       if (!this.presentMode) this.present();
       return;
     }
-    let full = -1;
+    // ... and BLIT8's frame (RGB) over the whole display, with no clip
+    // narrower than it in force
+    let full = -1, clipped = !!this.clipRect && !this.covers(this.clipRect.x, this.clipRect.y, this.clipRect.w, this.clipRect.h);
     for (let i = 0; i < end; i += words[i]) {
       const t = words[i + 1];
       if (t === CMD.CLEAR || t === CMD.FB || t === CMD.FBREF) full = i;
+      else if (t === CMD.CLIP) clipped = !this.covers(words[i + 2], words[i + 3], words[i + 4], words[i + 5]);
+      else if (t === CMD.NOCLIP) clipped = false;
+      else if (t === CMD.RGB && !clipped) {
+        const w = words[i + 4], h = words[i + 5], dw = words[i + 6];
+        let dh = words[i + 7];
+        if ((dh & ~0xffff) === RGB_ABGR) dh &= 0xffff;
+        if (this.covers(words[i + 2], words[i + 3], dw > 0 ? dw : w, dh > 0 ? dh : h)) full = i;
+      }
     }
     if (full > 0) {
       const keep = [];
@@ -158,6 +168,9 @@ export class Display {
       this.coalescing = false;
     }
   }
+
+  // A rectangle over the whole display
+  covers(x, y, w, h) { return x <= 0 && y <= 0 && x + w >= this.width && y + h >= this.height; }
 
   // Throw away whatever is waiting in the ring (a reset).
   discard() { if (this.ring) this.ring.read(); }
@@ -349,9 +362,14 @@ export class Display {
         }
         case CMD.RGB: {
           // BLIT8's pixels, made 32-bit by the device: drawn at (x, y),
-          // scaled to dw x dh without smoothing, inside any clip
+          // scaled to dw x dh without smoothing, inside any clip. The
+          // worker's device makes them in ImageData's order already
+          // (RGB_ABGR in dh), and they are copied as they are.
           const x = words[p], y = words[p + 1], w = words[p + 2], h = words[p + 3];
-          const dw = words[p + 4], dh = words[p + 5];
+          const dw = words[p + 4];
+          let dh = words[p + 5];
+          const abgr = (dh & ~0xffff) === RGB_ABGR;
+          if (abgr) dh &= 0xffff;
           if (w <= 0 || h <= 0 || w * h > len - 8) break;
           if (!this.rgbCanvas || this.rgbCanvas.width !== w || this.rgbCanvas.height !== h) {
             this.rgbCanvas = document.createElement('canvas');
@@ -359,7 +377,8 @@ export class Display {
             this.rgbImage = new ImageData(w, h);
           }
           const d = new Uint32Array(this.rgbImage.data.buffer);
-          for (let k = 0; k < w * h; k++) {
+          if (abgr) d.set(new Uint32Array(words.buffer, words.byteOffset + (p + 6) * 4, w * h));
+          else for (let k = 0; k < w * h; k++) {
             const v = words[p + 6 + k];
             d[k] = 0xff000000 | ((v & 0xff) << 16) | (v & 0xff00) | ((v >> 16) & 0xff);
           }

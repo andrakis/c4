@@ -234,7 +234,10 @@ export let OPNAMES =
   // (hw/microcode.uc); c4m itself runs only LDL, STL and POPA.
   'LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,' +
   // F3 (89): IEEE arithmetic, src/c4bb/sim/fpu.js
-  'FPU ,';
+  'FPU ,' +
+  // 90-93: 16-bit loads and store, logical shift right (docs/c4-16bit.md),
+  // microcoded from the transfers the board already makes
+  'LH  ,LHU ,SH  ,LSR ,LCU ,';
 export const STOCK_OPNAMES = OPNAMES;
 export function setOpnames (names) { OPNAMES = names; }
 
@@ -310,6 +313,8 @@ export class Devices {
     this.drive = 0;                   // the selected drive
     this.onRescan = opts.onRescan || null;
     this.onEject = opts.onEject || null;
+    // a file written to "download:NAME", for the person (diskCreate)
+    this.onDownload = opts.onDownload || null;
     this.resetRequested = false;
     this.cyclesPerMs = opts.cyclesPerMs || CYCLES_PER_MS;
     // The real clock. hostNow is injectable so a test can pin it; by
@@ -557,16 +562,31 @@ export class Devices {
       return this.tapIn ? this.tapRead(this.diskAddr, len) : this.kbdRead(this.diskAddr, len, false);
     if (!f) return -1;
     if (f.kbd) return this.kbdRead(this.diskAddr, len, f.nonblock, f.raw);
+    // what reached memory, not what was asked: a buffer that ends is a
+    // short read, and the rest is still there for the next
     const n = Math.min(len, f.data.length - f.pos);
-    if (n > 0) this.arena.dmaWrite(this.diskAddr, f.data.slice(f.pos, f.pos + n));
-    f.pos += n;
-    return n;
+    const got = n > 0 ? this.arena.dmaWrite(this.diskAddr, f.data.subarray(f.pos, f.pos + n)) : 0;
+    f.pos += got;
+    return got;
   }
 
   // Create or truncate a file on a drive. A drive with no sink is a
   // pressed disc: it can be read forever and never written.
   diskCreate (nameAddr) {
     const name = this.arena.dmaCstring(nameAddr >>> 0, 256);
+    // "download:NAME": a file handed to the person (C4IX's download,
+    // src/c4ix/user/persist.c), written as any file is and given at its
+    // close to onDownload(NAME, bytes) -- the web page saves it where the
+    // browser keeps downloads -- and kept on no drive. -1 where the host
+    // has no one to give it to.
+    if (name.startsWith('download:')) {
+      const as = name.slice(9);
+      if (!this.onDownload || !as) return -1;
+      const media = { files: new Map(), writable: true, sink: (n, b) => { media.files.delete(n); this.onDownload(n, b); } };
+      const fd = this.nextFd++;
+      this.fds.set(fd, { w: { media, name: as, chunks: [], len: 0 } });
+      return fd;
+    }
     const { drv, rest } = this.resolveDrive(name);
     const media = this.drives[drv];
     if (!media || !media.writable || !media.sink) return -1;
@@ -592,8 +612,8 @@ export class Devices {
     const n = Math.max(0, len | 0);
     const buf = this.arena.dmaRead(this.diskAddr, n);
     f.w.chunks.push(buf);
-    f.w.len += n;
-    return n;
+    f.w.len += buf.length;
+    return buf.length;
   }
 
   // Take a file off a writable drive: out of what the machine sees at

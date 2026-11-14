@@ -8,7 +8,12 @@
 //   -j N          at most N tests at once (default: processors - 1)
 //   --cpus N      processors the tests may use between them (default: processors - 1)
 //   --reserve MB  memory left free for everything else (default 300)
-//   --build-jobs N  make -j for the first phase (default 2)
+//   --mem MB      memory the machine can grow to (default: $SUITE_MEM, else
+//                 what it has now). A Hyper-V guest with Dynamic Memory
+//                 shows only what it has been given so far; the rest is
+//                 counted as available, and the host adds it as it is used.
+//   --build-jobs N  make -j for the first phase (default: a job per 1.5 GB
+//                 of memory, from 2 up to the processors the tests may use)
 //   --no-build    skip the first phase
 //   --list-prep   print what the first phase would build, and stop
 //
@@ -16,11 +21,11 @@
 // one file at once can corrupt it, so the first phase builds, in one make,
 // everything the tests depend on: c4bb-images, each test's prerequisites,
 // and what their recipes make again ($(MAKE) c4ix.c4r and the like). The
-// second runs each test as `make -s -o c4bb-images TEST`, which then finds
-// all it needs up to date and only tests. -o, because c4bb-images is no
-// file: its recipe (build-images.sh) runs whenever a test names it, and a
-// dozen tests do. Packed, several ran it at once, each deleting and
-// copying the disks the others were copying.
+// second runs each test as `make -s TEST`, which then finds all it needs
+// up to date and only tests. What the first built that is not a file
+// (c4bb-images, phony) the second is told is made (make -o c4bb-images):
+// else every test runs build-images.sh again, several at once over the
+// same src/c4bb/images, and they trip over each other's files.
 //
 // What a test needs is learned: each run keeps every test's time, its
 // peak memory (all its processes together, sampled every second) and its
@@ -33,12 +38,12 @@
 // docs/windows.md) MSYS2's /proc, through an MSYS2 shell.
 
 import { spawn, execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdirSync, openSync, closeSync, readdirSync } from 'node:fs';
-import { cpus, freemem } from 'node:os';
+import { readFileSync, writeFileSync, mkdirSync, openSync, closeSync, readdirSync, existsSync } from 'node:fs';
+import { cpus, freemem, totalmem } from 'node:os';
 import { join } from 'node:path';
 
 const argv = process.argv.slice(2);
-const opt = { out: '.suite', jobs: 0, cpus: 0, reserve: 300, buildJobs: 2, build: true };
+const opt = { out: '.suite', jobs: 0, cpus: 0, reserve: 300, mem: +(process.env.SUITE_MEM || 0), buildJobs: 0, build: true };
 const tests = [];
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
@@ -46,6 +51,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '-j') opt.jobs = +argv[++i];
   else if (a === '--cpus') opt.cpus = +argv[++i];
   else if (a === '--reserve') opt.reserve = +argv[++i];
+  else if (a === '--mem') opt.mem = +argv[++i];
   else if (a === '--build-jobs') opt.buildJobs = +argv[++i];
   else if (a === '--no-build') opt.build = false;
   else if (a === '--list-prep') opt.listPrep = true;
@@ -55,6 +61,11 @@ for (let i = 0; i < argv.length; i++) {
 const NCPU = cpus().length;
 if (!opt.cpus) opt.cpus = Math.max(1, NCPU - 1);
 if (!opt.jobs) opt.jobs = opt.cpus;
+const WIN = process.platform === 'win32';
+const memTotalMb = () => WIN ? totalmem() / 1048576
+  : +/MemTotal:\s+(\d+)/.exec(readFileSync('/proc/meminfo', 'utf8'))[1] / 1024;
+if (!opt.buildJobs)
+  opt.buildJobs = Math.max(2, Math.min(opt.cpus, Math.floor(Math.max(opt.mem, memTotalMb()) / 1536)));
 if (!tests.length) tests.push(...execFileSync('make', ['-s', 'print-suite'], { encoding: 'utf8' }).trim().split(/\s+/));
 mkdirSync(opt.out, { recursive: true });
 
@@ -81,12 +92,13 @@ writeFileSync(result, '');
 const note = line => { writeFileSync(result, line + '\n', { flag: 'a' }); console.log(line); };
 
 // ---- /proc: Linux's, or on Windows MSYS2's ------------------------------
-const WIN = process.platform === 'win32';
 const PAGE = 4096;
+// with --mem, what the machine has yet to be given counts as available
 function memAvailableMb() {
-  if (WIN) return freemem() / 1048576;  // the available physical memory
-  const m = /MemAvailable:\s+(\d+)/.exec(readFileSync('/proc/meminfo', 'utf8'));
-  return m ? +m[1] / 1024 : 0;
+  if (WIN) return freemem() / 1048576 + Math.max(0, opt.mem - totalmem() / 1048576);
+  const info = readFileSync('/proc/meminfo', 'utf8');
+  const kb = k => +(new RegExp(`${k}:\\s+(\\d+)`).exec(info) || [0, 0])[1] / 1024;
+  return kb('MemAvailable') + Math.max(0, opt.mem - kb('MemTotal'));
 }
 // On Windows (docs/windows.md) node is not an MSYS2 program and cannot
 // read MSYS2's /proc, and Windows' own idea of who started whom is no
@@ -212,14 +224,18 @@ function prerequisites() {
     rules.set(m[1], { prereqs: m[2].split('|')[0].split(/\s+/).filter(Boolean), recipe });
   }
   const phony = new Set((rules.get('.PHONY') || { prereqs: [] }).prereqs);
-  // A phony prerequisite with a recipe of its own does work, and as phony
-  // would do it again for the test: left to the test, as is a test-* or
-  // run-* one (test-c4l, a test of test's that is not declared phony).
-  // One that only gathers files (libc-bare-objs) is built here.
+  // A test that is another's prerequisite (test-libc-bare, of test-doom,
+  // test-quake and test-duke3d) runs once, as a job of its own, and the
+  // others are told it is made: else each runs it again, at once, in the
+  // same scratch directory (.libc_t), and they delete each other's files.
+  // A run-* prerequisite is left to its test. Everything else is built
+  // here, phony steps too (pre copies the images into the top directory,
+  // which tests running at once would do over each other).
   const want = new Set(['c4bb-images']);
+  const sub = new Set();
   const add = p => {
-    if (tests.includes(p) || want.has(p) || /^(test|run)-/.test(p)) return;
-    if (phony.has(p) && (rules.get(p)?.recipe.length)) return;
+    if (/^test-/.test(p)) { sub.add(p); if (!tests.includes(p)) tests.push(p); return; }
+    if (tests.includes(p) || want.has(p) || /^run-/.test(p)) return;
     want.add(p);
   };
   for (const t of tests) {
@@ -231,12 +247,17 @@ function prerequisites() {
       if (m && !m[2].startsWith('$')) add(m[2]);
     }
   }
-  return [...want];
+  // What this phase builds that is no file -- c4bb-images, phony, whose
+  // recipe (build-images.sh) every test would otherwise run again, all of
+  // them at once over the same src/c4bb/images -- the tests are told is
+  // made already (make -o).
+  const held = [...want].filter(p => rules.get(p)?.recipe.length && (phony.has(p) || !existsSync(p)));
+  return { prep: [...want], held: [...held, ...sub] };
 }
 
-if (opt.listPrep) { console.log(prerequisites().join('\n')); process.exit(0); }
+const { prep, held } = prerequisites();
+if (opt.listPrep) { console.log(prep.join('\n') + `\n(held: ${held.join(' ')})`); process.exit(0); }
 if (opt.build) {
-  const prep = prerequisites();
   const log = join(opt.out, 'build.log');
   const fd = openSync(log, 'w');
   const s = Date.now();
@@ -270,15 +291,18 @@ function startFitting() {
   for (let i = 0; i < queue.length; i++) {
     if (!fits(queue[i])) continue;
     const t = queue.splice(i, 1)[0];
-    const job = run(t, join(opt.out, `${t}.log`), ['-s', '-o', 'c4bb-images']);
+    const job = run(t, join(opt.out, `${t}.log`), ['-s', ...held.filter(h => h !== t).flatMap(h => ['-o', h])]);
     running.add(job);
     job.done.then(j => {
       running.delete(j);
       j.wall = (Date.now() - j.start) / 1000;
       j.cpu = cpuOf(j);
       finished.push(j);
-      stats[j.target] = { wall: Math.round(j.wall), mem: Math.round(j.peak), cpu: +j.cpu.toFixed(2) };
-      writeFileSync(STATS, JSON.stringify(stats, null, 1) + '\n');
+      // a failure's numbers are of what it did before failing: not kept
+      if (j.code === 0) {
+        stats[j.target] = { wall: Math.round(j.wall), mem: Math.round(j.peak), cpu: +j.cpu.toFixed(2) };
+        writeFileSync(STATS, JSON.stringify(stats, null, 1) + '\n');
+      }
       note(`${j.target} exit=${j.code} ${Math.round(j.wall)}s ${Math.round(j.peak)}MB cpu ${j.cpu.toFixed(1)}`);
     });
     i = -1;                             // what fits has changed

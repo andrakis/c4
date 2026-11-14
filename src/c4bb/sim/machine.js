@@ -39,7 +39,10 @@ export function setOpcodeNames (names) { setOpnames(names); rebuildOpcodeTables(
 // microcode has dispatchTab[-1] and misses its trap exactly as an
 // unknown one did before. What changes is that the board can EXECUTE
 // LDL/STL/POPA and NAME the rest (docs/fused-opcodes.md).
-export const INS_SIZE = 89;
+// 95: and the 16-bit loads and store, LSR and LCU, 90-94 (docs/c4-16bit.md),
+// microcode with no new circuitry. FPU (89) stays a jsop the decoder
+// does not dispatch: it traps here as it did when it was past the end.
+export const INS_SIZE = 95;
 
 // The single place that decides which opcodes carry an operand word,
 // mirroring c4m_has_operand (c4m.c:344) exactly -- including JSRI and

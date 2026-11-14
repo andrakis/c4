@@ -9,15 +9,15 @@
 :M GEN n_str   {: n -- :}  n >off @ n >slen @ D-STR, IMMD, ;M
 
 \ -- M4: the helpers -----------------------------------------------------
-\ Six small routines called where the VM has no opcode: a 16-bit load
-\ (sign- or zero-extending), a 16-bit store, unsigned word division and
-\ remainder, and a logical right shift by a run-time count. Each is laid
-\ down ONCE, after the last function, and only if something called it;
-\ a call is a JSR to an address in the same unit, so there is no symbol
-\ and nothing for c4rlink to know. c4lc-gen.lisp's g:helpbody is the
-\ same code, instruction for instruction.
-0 CONSTANT h_ld16s  1 CONSTANT h_ld16u  2 CONSTANT h_st16
-3 CONSTANT h_udiv   4 CONSTANT h_umod   5 CONSTANT h_lsr
+\ Two small routines called where the VM has no opcode: unsigned word
+\ division and remainder. Each is laid down ONCE, after the last
+\ function, and only if something called it; a call is a JSR to an
+\ address in the same unit, so there is no symbol and nothing for c4rlink
+\ to know. c4lc-gen.lisp's g:helpbody is the same code, instruction for
+\ instruction. The 16-bit loads and store and the logical right shift by
+\ a run-time count were helpers too; they are the VM's own now, LH LHU SH
+\ and LSR (docs/c4-16bit.md).
+0 CONSTANT h_udiv   1 CONSTANT h_umod
 CREATE HM-ID VEC ALLOT   CREATE HM-MK VEC ALLOT
 : HELP-RESET ( -- )  HM-ID 64 VEC-INIT  HM-MK 64 VEC-INIT ;
 HELP-RESET
@@ -31,18 +31,6 @@ HELP-RESET
 
 : L2, ( n -- )  oLEA OP2, ;
 : I2, ( n -- )  oIMM OP2, ;
-: H-LD16 ( signed -- ) {: sg -- :}
-   0 oENT OP2,
-   2 L2, oLI OP, oPSH OP, 1 I2, oADD OP, oLC OP,
-   sg 0= IF oPSH OP, 255 I2, oAND OP, THEN
-   oPSH OP, 8 I2, oSHL OP,
-   oPSH OP, 2 L2, oLI OP, oLC OP, oPSH OP, 255 I2, oAND OP, oOR OP, oLEV OP, ;
-: H-ST16 ( -- )
-   0 oENT OP2,
-   3 L2, oLI OP, oPSH OP, 2 L2, oLI OP, oSC OP,
-   3 L2, oLI OP, oPSH OP, 1 I2, oADD OP, oPSH OP,
-   2 L2, oLI OP, oPSH OP, 8 I2, oSHR OP, oSC OP,
-   2 L2, oLI OP, oLEV OP, ;
 : H-ULT, ( -- )                          \ A := stack (^MIN) vs b (^MIN), flag to come
    oPSH OP, WMIN I2, oXOR OP, oPSH OP, 2 L2, oLI OP, oPSH OP, WMIN I2, oXOR OP, ;
 : H-UDIV ( -- ) {: | m1 m2 -- :}
@@ -77,21 +65,9 @@ HELP-RESET
    -1 L2, oLI OP, oLEV OP,
    m4 >RES
    -1 L2, oLI OP, oPSH OP, 2 L2, oLI OP, oSUB OP, oLEV OP, ;
-: H-LSR ( -- ) {: | m -- :}
-   0 oENT OP2,
-   2 L2, oLI OP, oBZ BR, TO m
-   3 L2, oLI OP, oPSH OP, 2 L2, oLI OP, oSHR OP,
-   oPSH OP, -1 I2, oPSH OP, WBITS I2, oPSH OP, 2 L2, oLI OP, oSUB OP,
-   oSHL OP, oPSH OP, -1 I2, oXOR OP, oAND OP, oLEV OP,
-   m >RES
-   3 L2, oLI OP, oLEV OP, ;
 : EMIT-HELPERS ( -- )
-   h_ld16s HUSED? IF h_ld16s HRES -1 H-LD16 THEN
-   h_ld16u HUSED? IF h_ld16u HRES  0 H-LD16 THEN
-   h_st16  HUSED? IF h_st16  HRES H-ST16 THEN
    h_udiv  HUSED? IF h_udiv  HRES H-UDIV THEN
-   h_umod  HUSED? IF h_umod  HRES H-UMOD THEN
-   h_lsr   HUSED? IF h_lsr   HRES H-LSR  THEN ;
+   h_umod  HUSED? IF h_umod  HRES H-UMOD THEN ;
 
 \ -- M4: loads, stores and conversions by type ----------------------------
 : MASK, ( m -- )  oPSH OP, oIMM OP2, oAND OP, ;
@@ -104,14 +80,14 @@ HELP-RESET
 \ lives.
 : LOAD, ( ct -- ) {: t -- :}
    t t_char = t t_schar = OR IF oLC OP, EXIT THEN
-   t t_uchar = IF oLC OP, 255 MASK, EXIT THEN
-   t t_short = IF h_ld16s 1 HCALL EXIT THEN
-   t t_ushort = IF h_ld16u 1 HCALL EXIT THEN
+   t t_uchar = IF oLCU OP, EXIT THEN
+   t t_short = IF oLH OP, EXIT THEN
+   t t_ushort = IF oLHU OP, EXIT THEN
    t t_uint = W64? AND IF oLI OP, M32 MASK, EXIT THEN
    oLI OP, ;
 : STORE, ( ct -- ) {: t -- :}
    t T-BYTE? IF oSC OP, EXIT THEN
-   t T-HALF? IF h_st16 2 HCALL EXIT THEN
+   t T-HALF? IF oSH OP, EXIT THEN
    oSI OP, ;
 \ SC leaves in A the byte it stored as a signed char (c4's own rule, right for
 \ char), so the value of an assignment to an unsigned char, or of its ++ or
@@ -359,7 +335,7 @@ VARIABLE VUNUSED   0 VUNUSED !
          >rhs @ DUP NUM? IF
             >val @ oSHR OP,
             DUP 0> OVER WBITS < AND IF -1 WBITS ROT - LSHIFT INVERT MASK, ELSE DROP THEN
-         ELSE DROP h_lsr 2 HCALL THEN
+         ELSE DROP oLSR OP, THEN
          EXIT THEN
       >op @ OP, EXIT
    THEN
@@ -579,12 +555,100 @@ VARIABLE UFN   0 UFN !
    UFN @ 0 ?DO  I CELLS UFL + @ i = IF I CELLS UFM + @ >RES THEN  LOOP
    n >body @ STMT ;M
 
+\ c4lc-gen's g:laddr: a local's address plus OFF -- LEA's own when it is
+\ word-aligned, else added to the base
+: LADDR, ( base off -- ) {: b o -- :}
+   o 1 CELLS 1- AND 0= IF b o 1 CELLS / + oLEA OP2, EXIT THEN
+   b oLEA OP2,  oPSH OP,  o oIMM OP2,  oADD OP, ;
+\ N bytes from OFF zeroed (c4lc-gen's g:lmset)
+: LMSET, ( base off n -- ) {: b o n -- :}
+   b o LADDR,  oPSH OP,  0 oIMM OP2,  oPSH OP,  n oIMM OP2,  oPSH OP,
+   oMSET OP,  3 oADJ OP2, ;
+
+\ A local's constants as a template (c4lc-array-init), c4lc-gen's
+\ g:ltemplate word for word. A record is parse.f's LREC, (offset type
+\ node value). With LTMPL stores or more, the constants -- a number, or a
+\ string's address for a pointer -- are written into the data, up to
+\ the last nonzero one (or the end, when no more than LTAIL words are
+\ left), and copied into the local with MCPY; the rest is zeroed with
+\ MSET, and only what is no constant is stored after. Records that go
+\ back, or a template over four words a constant, keep the stores.
+8 CONSTANT LTMPL   8 CONSTANT LTAIL
+: LR-CONST? ( r -- f ) {: r | e -- f :}
+   r 2 CELLS + @ TO e
+   e 0= IF -1 EXIT THEN
+   e @ n_str = IF r CELL+ @ T-PTR? EXIT THEN
+   0 ;
+: LR-W ( r -- n )  CELL+ @ T-SIZE ;
+\ a store's weight (c4lc-gen's g:lweight): a word 1, a byte 2, 16 bits 4
+: LWEIGHT ( w -- n )  DUP 1 = IF DROP 2 EXIT THEN  2 = IF 4 ELSE 1 THEN ;
+\ what the constants weigh, or -1 when the records do not ascend
+: LR-SCAN ( v -- n ) {: v | at n r -- n :}
+   0 TO at  0 TO n
+   v V# 0 ?DO
+      I v V@ TO r
+      n 0< 0= IF
+         r @ at < IF -1 TO n ELSE
+            r @ r LR-W + TO at
+            r LR-CONST? IF n r LR-W LWEIGHT + TO n THEN
+         THEN
+      THEN
+   LOOP n ;
+: LR-NZ? ( r -- f ) {: r -- f :}
+   r LR-CONST? 0= IF 0 EXIT THEN
+   r 2 CELLS + @ IF -1 EXIT THEN
+   r 3 CELLS + @ 0<> ;
+: LR-STR? ( r -- f )  DUP LR-NZ? SWAP 2 CELLS + @ 0<> AND ;
+\ c4lc-gen's g:iput, into region 2
+: D-PUT ( v ty off -- ) {: v t o -- :}
+   t T-BYTE? IF v 255 AND DATA @ o + C! EXIT THEN
+   t T-HALF? IF v 255 AND DATA @ o + C!  v 8 RSHIFT 255 AND DATA @ o + 1+ C! EXIT THEN
+   v DATA @ o + ! ;
+\ where the template ends: past the last nonzero constant
+: LR-END ( v -- l ) {: v | l r -- l :}
+   0 TO l
+   v V# 0 ?DO  I v V@ TO r  r LR-NZ? IF r @ r LR-W + TO l THEN  LOOP  l ;
+\ N constants make a template, unless it would be sparse
+: LTMPL? ( n v -- f )  OVER LTMPL < IF 2DROP 0 EXIT THEN  LR-END SWAP 4 * CELLS > 0= ;
+: LTEMPLATE ( base nbytes v -- ) {: b nb v | l at r ss j -- :}
+   v LR-END TO l
+   l IF  nb l - LTAIL CELLS > 0= IF nb TO l THEN  THEN   \ a short zero tail is copied too
+   l IF
+      16 NEW-VEC TO ss                  \ the strings first, in order
+      v V# 0 ?DO
+         I v V@ TO r
+         r LR-STR? IF  r 2 CELLS + @ DUP >off @ SWAP >slen @ D-STR, ss V, THEN
+      LOOP
+      D-ALIGN  l D-ALLOT TO at
+      0 TO j
+      v V# 0 ?DO
+         I v V@ TO r
+         r LR-STR? IF
+            at r @ +  j ss V@  3 -4 (TABPAT)  j 1+ TO j
+         ELSE r LR-NZ? IF  r 3 CELLS + @  r CELL+ @  at r @ +  D-PUT  THEN THEN
+      LOOP
+      b oLEA OP2,  oPSH OP,  at IMMD,  oPSH OP,  l oIMM OP2,  oPSH OP,
+      oMCPY OP,  3 oADJ OP2,
+   THEN
+   l nb < IF b l nb l - LMSET, THEN ;
+
 \ A scalar takes SI even when it is a char, which is what c4cc did and
 \ what c4lc kept; an array is stored element by element, the elements
-\ past the initialiser list zeroed.
+\ past the initialiser list zeroed -- or, with LTMPL stores or more,
+\ from a template (c4lc-gen's g:linitarr).
 : LIBYTE, ( off idx v -- ) {: off i v -- :}
    off oLEA OP2,  oPSH OP,  i oIMM OP2,  oADD OP,  oPSH OP,
    v oIMM OP2,  oSC OP, ;
+: LINIT-TMPL ( n -- ) {: n | et st v r -- :}
+   n >isym @ y.ct @ T-DEREF TO et
+   n >ibyte @ 1 = IF 1 ELSE n >ibyte @ 2 = IF 2 ELSE 1 CELLS THEN THEN TO st
+   16 NEW-VEC TO v
+   n >ivn @ 0 ?DO
+      4 CELLS ALLOT: TO r
+      I st * r !  et r CELL+ !  0 r 2 CELLS + !  I CELLS n >ivals @ + @ r 3 CELLS + !
+      r v V,
+   LOOP
+   n >isym @ y.val @  n >icount @ st *  v LTEMPLATE ;
 :M STMT n_linit {: n | y off v c s val -- :}
    n >isym @ TO y   y y.val @ TO off
    n >icount @ TO s
@@ -595,6 +659,8 @@ VARIABLE UFN   0 UFN !
          y y.q @  n >expr @ CQ  DROPPED? IF S" initialization" QWARN THEN THEN
       oSI OP,  TCUR !  EXIT THEN
    n >ivals @ TO v   n >ivn @ TO c
+   s  n >ibyte @ 2 = IF 4 * ELSE n >ibyte @ 1 = IF 2* THEN THEN  LTMPL < 0=
+   y y.ct @ T-DEREF T-STRUCT? 0= AND IF  n LINIT-TMPL EXIT THEN
    s 0 ?DO
       I c < IF I CELLS v + @ ELSE 0 THEN TO val
       n >ibyte @ 1 = IF
@@ -608,18 +674,17 @@ VARIABLE UFN   0 UFN !
    LOOP ;M
 
 \ c4lc-gen's g:localaggr: MSET zeroes the object, then each value goes to
-\ its offset -- LEA's own when it is word-aligned, else added to the base
-: LADDR, ( base off -- ) {: b o -- :}
-   o 1 CELLS 1- AND 0= IF b o 1 CELLS / + oLEA OP2, EXIT THEN
-   b oLEA OP2,  oPSH OP,  o oIMM OP2,  oADD OP, ;
-:M STMT n_lagg {: n | b v r e -- :}
+\ its offset (LADDR,) -- or, with LTMPL constants or more, they come from
+\ a template and only the rest are stored
+:M STMT n_lagg {: n | b v r e t -- :}
    TCUR @
    n >lsym @ y.val @ TO b
-   b oLEA OP2,  oPSH OP,  0 oIMM OP2,  oPSH OP,  n >lbytes @ oIMM OP2,  oPSH OP,
-   oMSET OP,  3 oADJ OP2,
    n >lrecs @ TO v
+   v LR-SCAN v LTMPL? TO t
+   t IF b n >lbytes @ v LTEMPLATE ELSE b 0 n >lbytes @ LMSET, THEN
    v V# 0 ?DO
       I v V@ TO r
+      t r LR-CONST? AND 0= IF
       b r @ LADDR,  oPSH OP,
       r 2 CELLS + @ TO e
       e IF
@@ -627,6 +692,7 @@ VARIABLE UFN   0 UFN !
          e CT T-STRUCT? IF ." c4fc: a struct value in an initializer is not supported" CR ABORT THEN
       ELSE r 3 CELLS + @ oIMM OP2, THEN
       r CELL+ @ STORE,
+      THEN
    LOOP
    TCUR ! ;M
 

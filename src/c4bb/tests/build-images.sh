@@ -788,6 +788,9 @@ fi
 # `#include <u0.h>` and a C4IX program's <c4ix_user.h> both just work --
 # and its docs, Makefile and BUILD.B4K are /usr's. The C4IX libraries
 # are in /usr/lib. Reproducible: fixed order, owner and times, gzip -n.
+# Not libjs/vendor: SpessaSynth's 1.3 MB of JavaScript is the page's,
+# and in the RAM filesystem it left too little for C4KE's 256 KB stacks
+# when innerbench boots C4KE inside C4IX (test-c4ix-innerbench).
 #
 # At its end, /build: what `b4ke -C /usr` makes, already made
 # (PB above), so a build inside C4IX -- the IDE's, or b4ke's -- starts
@@ -803,7 +806,7 @@ rm -rf $ROOT
 mkdir -p $ROOT/usr/lib $ROOT/usr/include
 if git rev-parse --git-dir > /dev/null 2>&1; then
     git ls-files -- src docs include libjs README.md LICENSE Makefile BUILD.B4K INSTALL.B4K c4.c c4m.c c4m_float.c c4l.c load-c4r.c |
-        grep -v '^src/c4bb/images/\|^src/c4or1k/images/' |
+        grep -v '^src/c4bb/images/\|^src/c4or1k/images/\|^libjs/vendor/' |
         while read -r f; do
             [ -f "$f" ] && grep -Iq . "$f" 2>/dev/null || continue
             mkdir -p "$ROOT/usr/$(dirname "$f")"

@@ -1059,12 +1059,101 @@ spinner at -3 beside one at 0 gets 4.6 times the cycles
     `test-c4ix-rebuild` runs without a drive, as before; run with one
     (`-w`), so that the whole build reads the tree from the drive, it
     passes too, in 719 s against 739 s.
-  - *Not done.* With the MMU and 6 MB (a 4 MB heap, 3 MB under the
+  - *Not done* (then). With the MMU and 6 MB (a 4 MB heap, 3 MB under the
     smallest that boots), the first shell still faults at its first
     instruction, a jump into the kernel's heap ("page fault: jump to
     0x001e1a80"), while swap is busy. It is not the entry page, which the
     check above would have reported. Left for the MMU's own work on
-    memory that runs out.
+    memory that runs out. (Not seen since 2026-11-13: a first boot to
+    the shell at 6 MB with the MMU now reads the tree whole. Most likely
+    the same refused read as below, though the old message was not made
+    again to show it.)
+  - *Checked again* (2026-11-13; asked: is the tree still read from drive
+    1, and does the desktop still start in 8 MB?). The page's path had not
+    changed: 1,226 files from the copy kept on drive 1, System 2,744 K at
+    64 MB with the MMU. Two harnesses read the tree from RAM where the page
+    does not. `test-c4ix-innerbench` gave drive 1 no sink, which
+    `devices.js` makes read-only, so persist fell back to unpacking into
+    RAM: 23.9 MB in 1,227 files, 4.4 MB free of 32. `test-desktop` gave no
+    drive 1 at all. Both now have a drive 1 that keeps what is written,
+    and check that persist read the tree from it. `test-lazy-root` keeps
+    the fall-back, on a drive with no sink, and checks it, and fails if a
+    boot from the kept copy holds 1 MB of RAM files or the desktop no
+    longer starts in the machines below.
+    The first boot without the MMU had grown from 12 MB to 21.
+    `arc_readfile` reads the root archive, which is not in the VFS and
+    so has no size to stat, by growing its buffer as it goes, doubling
+    from 64 KB with the old one held while it copies: 4 + 8 MB for the
+    4.3 MB archive. A file it could stat took twice its size too, as the
+    buffer was grown when full, before the read that finds the end. It now
+    counts a host file by reading it through once, and reads one byte into
+    the room for the 0 before it grows a full buffer. The smallest
+    machines, headless, MMU off / on (the page, Chrome 151, the same: 10
+    MB with the MMU on a first boot, 8 and 7 from the kept copy, where 7
+    without the MMU could not load the desktop before):
+
+    | | 78889dc | before | after |
+    |---|---|---|---|
+    | to the desktop, first boot | 12 / 14 MB | 21 / 10 MB | 10 / 10 MB |
+    | ... from the kept copy | 7 / 9 MB | 8 / 8 MB | 7 / 8 MB |
+    | to the shell, first boot | | 20 / 9 MB | 9 / 9 MB |
+    | ... from the kept copy | | 5 / 6 MB | 5 / 6 MB |
+    | ... no drive 1, the tree in RAM | | 44 / 30 MB | 44 / 29 MB |
+
+    *Found* (2026-11-13, later). A first boot to the desktop in 8 or 9
+    MB with the MMU read the archive wrong: persist said "not a tar
+    archive" ("bad literal/length code" on c4ix_and_toppings), and as
+    that was not memory the boot went on, and the desktop started with
+    no tree. Neither the inflater nor swap's pages were at fault, but a
+    read. `arc_readfile` reads the 4.3 MB archive into its buffer in one
+    `read`. The syscall's check (`uaccess`) brings every page of the
+    buffer in first, and in a small machine the first of them are out
+    again by the time the read is made. The kernel's host read gives the
+    drive the user address, through the window. libjs's `dmaWrite`
+    stopped at the first page that was out, and `diskRead` still said it
+    had read all 4,328,592 bytes. The buffer stayed zeros. With no gzip
+    magic, persist took it for a plain tar.
+    The kernel's own loads and stores through the window have reached
+    the host's copy of a page that is out since swap began (c4m.js
+    `kld8`, `kst8`). Now a device's copy reaches it too (arena.js
+    `dmaSwapped`, for `dmaRead` and `dmaWrite`). A drive's read and
+    write also count only the bytes they moved. The smallest machines
+    with the MMU on a first boot, headless: the desktop 8 MB (was 10),
+    the shell 6 MB (was 9). In 7 MB the archive inflates whole too, but
+    the boot pages so hard that the desktop is not up within the test's
+    8,000 M cycles, and from the kept copy the desktop needs 8 anyway.
+    In 5 MB persist cannot start, and says so.
+
+    A root archive that cannot be read for a reason other than memory
+    now stops the desktop's boot, as running out of memory does. A
+    desktop on no tree looks like one, then every program on it fails,
+    and the reason is on a console hidden behind it. persist exits 4
+    (`DAMAGED`), vfsload passes it on, and init says "c4ix: the root
+    archive could not be read, so the system's files are not there" and
+    stops. A console boot goes on as before (vfsload does not wait for
+    persist there), with persist's message on the console. The drive
+    keeps no copy: the id is written last, so the next boot tries again.
+
+    *Without the MMU, in 8 MB* (2026-11-13, asked for: the first boot
+    in 8 MB without the MMU too, where it needed 10). The 2 MB were the
+    archive: persist read all 4.3 MB of it into one buffer
+    (`arc_readfile`), then inflated it onto the drive, and the buffer
+    was held until the tar was whole. With the MMU, swap put most of it
+    out; without, the heap had to hold it, persist's 256 KB window, and
+    the desktop starting beside them, and in 8 and 9 MB persist said
+    "out of memory reading it". `arc_gunzip_file` inflates it as it
+    reads it, 128 KB at a time (`in_more` moves what is left, and the 4
+    bytes before it that the bit buffer may hand back, down the buffer
+    and reads on; `codes` re-reads the input's length after each slow
+    path). The trailer is read after the last block, so the archive's
+    size is never needed. persist keeps `arc_readfile` only where the
+    archive is not gzip or the drive will not take the tar. Smallest
+    machines without the MMU, headless: the desktop on a first boot 7 MB
+    (was 10), the shell 5 MB (was 9); from the kept copy 7 MB, as
+    before. In 6 MB the tree unpacks and the desktop cannot load ("c4ix:
+    loader: out of memory loading /bin/desktop (1175 KB)"). With the
+    MMU, as before: 8 MB.
+
   `libjs/tests/test-lazy-root.mjs`; in the page, `web-lazy-root.mjs`.
 
 - **Saved changes, read where they are kept** (2026-11-02, asked for:
@@ -1294,6 +1383,9 @@ What the pass tried and left out, measured or not worth the keeping:
   a switch: 4,870 cycles to yield with 50 asleep, against 1,215 alone. The run
   queue removed it instead.
 
+Where the kernel's time goes under three whole loads, function by function, is
+under [its own heading](#where-the-kernels-time-goes-2026-11-13) below.
+
 ### The run queue (2026-11-05)
 
 A task is on the queue its state says, and the scheduler looks at the queues rather
@@ -1373,6 +1465,124 @@ In the page, 4 CPUs at 400 MHz, 32 MB with the desktop: `-Tln 40` 103 s, `-Tln 5
 afterwards. With 50 in 32 MB some inner kernels are refused at start ("out of memory
 starting /bin/c4m"), so 42 to 48 of the 50 report; the kernel before the queue did the
 same. `mmu=0` in 64 MB: `-Tln 20` 47 to 49 s, `rqlost` 0.
+
+### Where the kernel's time goes (2026-11-13)
+
+Three loads under libjs with the MMU, 4 CPUs, 32 MB, on c4ix_and_toppings 564cf1a,
+profiled by function: the CPU's pc sampled in chunks of random length, and a helper
+(`klock_spin` and `klock_let`, the `<...>` stubs, `mem*` and `str*`) charged to the
+function that called it, found by walking `bp` (`[bp]` the caller's `bp`, `[bp+4]` the
+return pc). So `bkl_take` is the time spent spinning for the kernel lock.
+
+| Load | Machine time | Kernel | User | Idle |
+|---|---:|---:|---:|---:|
+| Quake in a desktop window, frames 6 to 120 | 66,700 ms | 2.13% | 22.94% | 74.92% |
+| `innerbench -Tln 40` | 182,479 ms | 21.10% | 75.09% | 3.80% |
+| `b4ke -B -j 3` inside C4IX | 3,278,075 ms | 5.02% | 51.02% | 43.96% |
+
+The top 20 of each, as a share of the kernel's time:
+
+| | Quake in a window | | `-Tln 40` | | `b4ke -B -j 3` | |
+|---:|---|---:|---|---:|---|---:|
+| 1 | `sched_events` | 53.2% | `bkl_take` | 27.7% | `sched_trap` | 25.1% |
+| 2 | `sched_trap` | 22.0% | `sched_trap` | 18.9% | `mmu_ftake` | 13.1% |
+| 3 | `sched_tick` | 5.3% | `vfs_span_at` | 12.2% | `umem_alloc` | 9.1% |
+| 4 | `acct_cpu` | 2.5% | `vfs_read` | 8.1% | `bkl_take` | 6.6% |
+| 5 | `sched_allows` | 1.7% | `vfs_span_read` | 4.3% | `mmu_clock` | 4.9% |
+| 6 | `bkl_take` | 1.6% | `vfs_dec` | 4.0% | `mmu_fput` | 2.4% |
+| 7 | `sched_run` | 1.6% | `vfs_pread` | 3.5% | `mmu_sop` | 2.3% |
+| 8 | `smp_ap` | 1.6% | `uaccess` | 2.5% | `mod_read` | 2.1% |
+| 9 | `mmu_ftake` | 1.6% | `sys_pmviolation` | 1.8% | `mmu_salloc` | 2.0% |
+| 10 | `sched_mine_smp` | 1.5% | `acct_cpu` | 1.8% | `mmu_pageout` | 1.9% |
+| 11 | `bkl_drop` | 1.2% | `sys_read` | 1.2% | `acct_cpu` | 1.9% |
+| 12 | `smp_kick` | 0.8% | `umem_alloc` | 1.1% | `mmu_pagein` | 1.8% |
+| 13 | `sched_unblocked` | 0.8% | `sched_run` | 1.1% | `mod_data_relocate` | 1.7% |
+| 14 | `sched_pick` | 0.6% | `mmu_ftake` | 1.0% | `sched_run` | 1.6% |
+| 15 | `smp_idlefor` | 0.5% | `smp_idlefor` | 1.0% | `mmu_shootdown` | 1.5% |
+| 16 | `sched_waker` | 0.5% | `sched_tick` | 0.9% | `link_modules` | 1.5% |
+| 17 | `uaccess` | 0.3% | `mmu_clock` | 0.8% | `sched_pick` | 1.5% |
+| 18 | `sched_cpustat` | 0.3% | `sched_mine_smp` | 0.8% | `mmu_sput` | 1.5% |
+| 19 | `mmu_pagein` | 0.2% | `mmu_switch` | 0.7% | `sched_tick` | 1.4% |
+| 20 | `mmu_sput` | 0.2% | `sched_pick` | 0.6% | `mmu_uva` | 1.2% |
+
+`sched_trap` is the trap itself: the switch, the accounting, the clock's checks. What
+each load says:
+
+- **Quake: the poll for pipes was half the kernel.** The desktop and each program in a
+  window sleep in `SYS_EVWAIT` on `Q_POLL`, which `sched_tick` looks at every ms, and
+  `sched_events` walked all 64 fds of each, every time, for a pipe with something to
+  read. Fixed below.
+- **`-Tln 40`: a third of the kernel is waiting for the lock, and a third is reading
+  spans.** Each inner c4m loads `c4ke.c4r` a few bytes at a time (`load-c4r.c`): 555,641
+  reads of a host span in the run, 555,560 of them of `c4ke.c4r` and 537,160 of 2 to 16
+  bytes. Each is a trap, the span parsed again (`vfs_span_at`, `vfs_dec`) and the host's
+  file opened, read and closed, all under the kernel lock, which is why the lock is
+  also the top line. Not changed here (below).
+- **`b4ke`: memory.** `mmu_ftake`'s walk of the frame lists and `umem_alloc` are a fifth
+  of the kernel's time, and the kernel is 5% of the machine's.
+
+#### The poll that waited for pipes
+
+A pipe's write, and its last writer's close, already call `sched_pipewake` to wake the
+readers blocked on it. That now also bumps `sched_pipegen`. A task's walk of its pipes
+(`sched_pipesready`) notes the count it saw in `t->evgen`, and the poll each ms
+(`sched_evpoll`) walks them again only once the count has moved. The window's ring is
+still looked at each ms: the host writes it with no event the kernel sees. And a walk
+goes only as far as the task has ever had an fd (`t->fdtop`, kept by `fd_install`,
+`fd_dup2` and the clones), not all 64.
+
+The bump and the walk are both under the scheduler's lock, the bump after the data is
+in, so a write the walk missed has always moved the count. A wakeup lost anyway would leave the task asleep until its
+timeout: the watch (above) now also looks every 16 ms for a task asleep in `SYS_EVWAIT`
+with a pipe ready and its count current, wakes it, and counts it in `rqlost`.
+`test-c4ix-pipewake` has a reader on CPU 2 wait for 200 lines written 3 ms apart from
+another CPU, asleep in `uevwait` and then blocked in `read`, on threads and on simulated
+CPUs: every line arrives, no wake finds nothing, no timeout is waited out, and `rqlost`
+stays 0.
+
+Before to after, the same disk, the windowed timedemo of Wolf3D in node (`ix.mjs`,
+measured from its first frames to its last):
+
+| | 564cf1a | after |
+|---|---:|---:|
+| Wolf3D in a window, 1,208 frames | 32,806 machine ms | 32,035 machine ms |
+| ... the cycles it ran | 3,280.6 M | 3,203.5 M |
+| ... the kernel's share | 4.1% | 1.8% |
+| ... the poll's (`sched_events`; then `sched_evpoll` and `sched_pipesready`) | 2.42% | 0.08% |
+| Quake in a window: the kernel's share | 2.13% | 1.05% |
+
+`innerbench -Tln 40` took 175.2 s against 174.2, the same: nothing there waits in
+`SYS_EVWAIT`.
+
+#### What a task's exit cost the next one
+
+A task that ends is freed at the next trap, on whichever task trapped (`task_reap`):
+its memory given back and the rest moved up (`task_destroy`, `mmu_compact`), 140,000 to
+240,000 cycles. Those were charged to the task that trapped. On one CPU with the run
+queue, the trap after an exit is most often the plain program's, so in
+`test-c4ix-smp`'s nice check a program never stopping showed in `ps` as using three or
+four slices more for each one beside it that ended, and `nice -n -3` got 2.7 to 2.9
+times its cycles where the check asks more than 3. The reap's cycles now go to the
+kernel task: 3.7 times (43,565k cycles against 11,860k), the four slices to one that
+nice -3 is.
+
+#### Left for later
+
+What the profiles found that is not cheap, or not low in risk:
+
+- **Tiny reads of a host span** (`-Tln 40`): a read-ahead per open file in the kernel, or
+  `load-c4r.c` reading in bulk, or the span's parse kept with the open file. Each would
+  take most of a third of that load's kernel time, and with it time under the lock.
+- **The kernel lock** (`bkl_take`, 28% of the kernel in `-Tln 40`): shorter work under
+  it, starting with the span reads.
+- **`mmu_ftake`'s walk** and **`umem_alloc`** (`b4ke`, 13% and 9%): a cached best block
+  per pool and a free-word hint, left out on 2026-11-04 as not then measured.
+- **A sleeper pinned to a CPU other than 0 wakes up to 100 ms late**: each `umsleep(3)`
+  of a task pinned to CPU 1 took 100 ms. Before the run queue too (dd3f564).
+  `test-c4ix-pipewake` keeps its writer on CPU 0 for this.
+- **`b4ke -B -j 3` in 32 MB runs out of memory at 564cf1a** ("loader: out of memory
+  loading /bin/c4sc (2101 KB)", `BUILD.B4K:30`), where on 2026-11-05 it finished.
+  `test-c4ix-rebuild` runs it in 64 and 128 MB, and passes.
 
 ## 6.1 Running it
 

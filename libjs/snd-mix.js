@@ -1,6 +1,7 @@
 // snd-mix.js - the sound device's events made into samples: the AdLib
-// (opl.js), sixteen channels of 8-bit samples, and the PC speaker, mixed to
-// stereo. The page's AudioWorklet (snd-worklet.js) runs one in real time;
+// (opl.js), sixteen channels of 8-bit samples, the PC speaker, and the
+// MIDI port's General MIDI synth when there is one (opts.synth, a GmSynth
+// from snd-gm.js), mixed to stereo. The page's AudioWorklet (snd-worklet.js) runs one in real time;
 // cli.js --wav runs one over a whole session and writes the file.
 //
 // Events are snd-device.js's, [kind, t, ...] with t in microseconds of
@@ -41,6 +42,10 @@ export class SoundMixer {
     this.slack = Math.round((opts.slack || 0.05) * rate);
     this.synced = false;
     this.resyncs = 0;
+    // the MIDI port's synth: midi(bytes), reset(), and render(L, R, at, n),
+    // which adds n frames into L and R from at. Without one MIDI is lost,
+    // as an MPU-401 with nothing on its MIDI OUT loses it.
+    this.synth = opts.synth || null;
   }
 
   frameOf(t) { return Math.round(t * this.rate / 1e6 + this.offset); }
@@ -88,7 +93,10 @@ export class SoundMixer {
       case EVT.VOL: this.vol(this.voices[e[2] & (VOICES - 1)], e[3]); break;
       case EVT.SPK: this.spkFreq = e[2] > 0 ? 1193180 / e[2] : 0; break;
       case EVT.MASTER: this.gain = e[2] & MUTE ? 0 : (e[2] & 0xff) / 255; break;
+      // late or not, a message is played: a dropped note off would hang
+      case EVT.MIDI: if (this.synth) this.synth.midi(e[2]); break;
       case EVT.RESET:
+        if (this.synth) this.synth.reset();
         this.opl = new OplChip(this.rate);
         for (const v of this.voices) v.data = null;
         this.spkFreq = 0;
@@ -102,6 +110,7 @@ export class SoundMixer {
     this.opl.generate(n, ob);
     if (stereo) for (let i = 0; i < n; i++) { L[at + i] = ob[i * 2] * OPL_GAIN; R[at + i] = ob[i * 2 + 1] * OPL_GAIN; }
     else for (let i = 0; i < n; i++) L[at + i] = R[at + i] = ob[i] * OPL_GAIN;
+    if (this.synth) this.synth.render(L, R, at, n);
     for (const v of this.voices) {
       if (!v.data) continue;
       const d = v.data, len = d.length;
@@ -150,9 +159,9 @@ export class SoundMixer {
 }
 
 // A session's events as a 16-bit stereo WAV file (cli.js --wav), endUs
-// long: the events in the device's clock, from 0
-export function renderWav(events, rate, endUs) {
-  const mix = new SoundMixer(rate);
+// long: the events in the device's clock, from 0. opts.synth plays MIDI.
+export function renderWav(events, rate, endUs, opts = {}) {
+  const mix = new SoundMixer(rate, { synth: opts.synth });
   mix.push(events);
   const frames = Math.max(0, Math.ceil(endUs * rate / 1e6));
   const L = new Float32Array(4096), R = new Float32Array(4096);

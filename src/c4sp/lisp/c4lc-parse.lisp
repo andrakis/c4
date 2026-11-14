@@ -88,9 +88,14 @@
 ;; Under -g every statement is (line LOC STMT), which the
 ;; generator turns into a line item ahead of the statement's code, and
 ;; each function's entry and closing brace are in p:fnlocs, (NAME ENTRY
-;; CLOSE). Without -g the tree is exactly what it was.
+;; CLOSE DECLS): ENTRY is its name's line, and DECLS the lines of the
+;; locals declared at the top of its body, ((NAME LOC) ...), so that an
+;; initializer's code has its declaration's row. Without -g the tree is
+;; exactly what it was.
 (define p:lines false)
 (define p:fnlocs (list))
+(define p:nameloc 0)         ;; the location of the name p:function's '(' follows
+(define p:dlocs (list))      ;; DECLS, as p:localdecls reads them
 (define p:rbrace 0)          ;; the location of the last '}' a block ended at
 
 (define p:expect (lambda (k what)
@@ -1891,8 +1896,20 @@
 	(if (= (p:kind) 'Typedef)
 		(begin (p:typedefdecl) (next p:localdecls acc))
 	(if (if (p:declstart?) true (if (= (p:kind) 'Static) true (= (p:kind) 'Extern)))
-		(next p:localdecls (+ acc (p:localline)))
+		(begin
+			;; -g: each name this line declares, at the line's start
+			(define loc (p:line))
+			(define nv (length p:lvars))
+			(define got (p:localline))
+			(if p:lines (p:declat p:lvars (- (length p:lvars) nv) loc) nil)
+			(next p:localdecls (+ acc got)))
 	(p:cons 'locals acc)))))
+(define p:declat (lambda (l n loc)
+	(if (> n 0)
+		(begin
+			(set! p:dlocs (p:cons (list (head (head l)) loc) p:dlocs))
+			(next p:declat (tail l) (- n 1) loc))
+		nil)))
 
 ;; struct VALUE type: ty >= 1024 with pointer level 0
 (define p:svalue? (lambda (ty)
@@ -1925,6 +1942,7 @@
 				(if (= (p:kind) 'Attribute) (+ attr (p:attribute)) attr))
 			(if (= (p:kind) 'Id) nil (p:die "bad global declaration"))
 			(define n (p:value))
+			(set! p:nameloc (p:line))
 			(p:advance)
 			(if (= (p:kind) 'Lparen)
 				(p:function ty n a2 q)
@@ -1959,7 +1977,9 @@
 	(next p:krset (tail ps) n ty (p:cons (head ps) acc))))))
 (define p:function (lambda (ty n attr rq)
 	(begin
-		(define entry (p:line))           ;; the '(' after the name: the name's line
+		;; the name's line (K&R puts the '(' on a line of its own)
+		(define entry (if (= p:nameloc 0) (p:line) p:nameloc))
+		(set! p:nameloc 0)
 		(p:advance)
 		(define pv (p:params (list)))
 		(define ps (p:krdecls (head pv)))
@@ -1985,9 +2005,10 @@
 				(set! p:infn true)
 				(define tds p:typedefs)
 				(p:shadowps ps)
+				(set! p:dlocs (list))
 				(define ls (p:localdecls (list)))
 				(define body (p:block/2 (list)))
-				(if p:lines (set! p:fnlocs (p:cons (list n entry p:rbrace) p:fnlocs)) nil)
+				(if p:lines (set! p:fnlocs (p:cons (list n entry p:rbrace p:dlocs) p:fnlocs)) nil)
 				(set! p:infn false)
 				(set! p:typedefs tds)
 				(p:endlstructs)
@@ -2380,10 +2401,31 @@ static int *__c4ll_udiv(int *d, int *a, int *b) { int r[2]; __c4ll_udivmod(d, r,
 static int *__c4ll_umod(int *d, int *a, int *b) { int q[2]; __c4ll_udivmod(q, d, a, b); return d; }
 static int __c4ll_udivmod(int *q, int *r, int *a, int *b) {
     unsigned nl, nh, bl, bh, rl, rh, ql, qh, t;
-    int i;
+    int i, k, take, rr, bb;
     nl = a[0]; nh = a[1]; bl = b[0]; bh = b[1];
     if (nh == 0 && bh == 0) {
         q[0] = nl / bl; q[1] = 0; r[0] = nl % bl; r[1] = 0;
+        return 0;
+    }
+    if (bh == 0 && bl != 0 && bl < 0x40000000) {
+        t = bl; k = 0;
+        if (t < 0x8000) { t = t << 16; k = k + 16; }
+        if (t < 0x800000) { t = t << 8; k = k + 8; }
+        if (t < 0x8000000) { t = t << 4; k = k + 4; }
+        if (t < 0x20000000) { t = t << 2; k = k + 2; }
+        if (t < 0x40000000) { t = t << 1; k = k + 1; }
+        bb = bl; rr = 0; ql = 0; qh = 0; i = 64;
+        while (i > 0) {
+            take = i < k ? i : k;
+            rr = (rr << take) | (int)(nh >> (32 - take));
+            nh = (nh << take) | (nl >> (32 - take));
+            nl = nl << take;
+            qh = (qh << take) | (ql >> (32 - take));
+            ql = (ql << take) | (unsigned)(rr / bb);
+            rr = rr % bb;
+            i = i - take;
+        }
+        q[0] = ql; q[1] = qh; r[0] = rr; r[1] = 0;
         return 0;
     }
     rl = 0; rh = 0; ql = 0; qh = 0; i = 0;

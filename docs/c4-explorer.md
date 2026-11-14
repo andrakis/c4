@@ -216,9 +216,10 @@ u    nrows
 - **Functions.** There is one per emitted body:
   - static functions, whose plain names repeat across units (wolf3d has
     60 such);
-  - the code c4lc emits without a symbol: the M4 helpers (`ld16s`,
-    `udiv`, ...), the exit-255 stubs and `__c4lc_init`, under names such
-    as `<ld16s>`. Each object has its own copy of a helper, but c4rlink
+  - the code c4lc emits without a symbol: the M4 helpers (`udiv`,
+    `umod`; `ld16s` and the like until they became opcodes,
+    docs/c4-16bit.md), the exit-255 stubs and `__c4lc_init`, under names
+    such as `<udiv>`. Each object has its own copy of a helper, but c4rlink
     keeps one per image (link-fold.md).
 
   The table is the map's own, not the S segment's, so it works in a
@@ -237,6 +238,8 @@ map can be byte-identical to c4lc's:
 - its exit (LEV, and the jump to a shared exit), at the line of the
   closing brace;
 - a `for`'s condition and step, at the line where each begins;
+- a `switch`'s dispatch (the table's lookup, after its cases), at the
+  line of the `switch`;
 - a declaration with an initializer, as a statement;
 - code that comes from a macro, at the line where the macro was used, as
   gcc does it;

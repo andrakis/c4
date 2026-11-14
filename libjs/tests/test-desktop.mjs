@@ -16,6 +16,7 @@ import { GuiDevice, CMD } from '../gui-device.js';
 import { SoundDevice, SND, EVT, MUTE } from '../snd-device.js';
 import { typeBytes } from '../keys.js';
 import { layUploads } from '../uploads.js';
+import { untar } from '../kept.js';
 import { readC4r, analyse, insnText } from '../c4r.js';
 import { OPNAMES } from '../../src/c4bb/sim/devices.js';
 import { fileURLToPath } from 'node:url';
@@ -52,14 +53,25 @@ const files = new LazyDisk(index);
 // of Files' orders differently.
 const UPLOADS = [['bravo.dat', 500], ['charlie.c', 9000], ['alpha.txt', 3000]];
 // (bravo.dat's last byte is a NUL, so the IDE takes it for a binary file)
-layUploads(files, UPLOADS.map(([n, z]) => { const b = new TextEncoder().encode(`uploaded ${n}\n`.repeat(z)).slice(0, z); if (n === 'bravo.dat') b[z - 1] = 0; return [n, b]; }));
+const upBytes = (n, z) => { const b = new TextEncoder().encode(`uploaded ${n}\n`.repeat(z)).slice(0, z); if (n === 'bravo.dat') b[z - 1] = 0; return b; };
+// ... and one in a folder, as the Uploads' folder list puts it (/home/wolf3d)
+const FOLDER_UP = ['wolf3d/delta.wl6', 700];
+layUploads(files, [...UPLOADS, FOLDER_UP].map(([n, z]) => [n, upBytes(n, z)]));
 const gui = new GuiDevice({ w: 640, h: 480 });
 // a sound card too, for the tray's volume: what it is told to play is
 // let go of, but each master volume the desktop sets is kept
 const snd = new SoundDevice();
 const masters = [];
 const out = [];
-const vm = createMachine({ arenaMb: 64, gui, snd, drives: [{ files, writable: false, sink: null }], onByte: b => out.push(b) });
+// what C4IX hands the page (download, Files' File > Download: devices.js "download:NAME")
+const downloads = [];
+// Drive 1 as the page gives it (worker.js), one that keeps what is
+// written: persist keeps the root archive's tar there, and the desktop
+// reads the tree's files from it, not from RAM (persist.c).
+const vm = createMachine({ arenaMb: 64, gui, snd, onByte: b => out.push(b),
+                          drives: [{ files, writable: false, sink: null },
+                                   { files: new Map(), writable: true, sink: () => {}, remove: () => {} }],
+                          onDownload: (n, b) => downloads.push([n, b.slice()]) });
 boot(vm, new Uint8Array(readFileSync(join(ROOT, 'c4ix32.c4r'))), ['c4ix32.c4r']);
 const consoleText = () => Buffer.from(out).toString('latin1');
 
@@ -221,7 +233,10 @@ check(/entries left on the host until first use/.test(consoleText()) && files.fe
 // The IDE's :make links with /usr/lib/libc4ix.c4l, which the root
 // archive brings: let its background unpack (task 4) finish first
 typeBytes(vm, new TextEncoder().encode('wait 4\n'));
-check(until(() => consoleText().includes('[4] done (0)'), 3000), 'the root archive unpacks in the background');
+check(until(() => consoleText().includes('[4] done (0)'), 3000) &&
+  /persist: c4ix-root\.tgz: \d+ files, unpacked onto drive 1 and read from there/.test(consoleText()),
+  'the root archive unpacks in the background, onto drive 1, and is read from there',
+  consoleText().split('\n').filter(l => /persist|\[4\]/.test(l)).join(' | '));
 // No screen saver: headless, an idle machine covers its five minutes
 // within a long build (the savers are tried below, from Settings)
 {
@@ -245,6 +260,19 @@ check(until(() => consoleText().includes('[4] done (0)'), 3000), 'the root archi
   check(UPLOADS.every(([n]) => ls.includes(n)), 'ls lists the uploads in /home', ls);
   check(sh('cat /home/alpha.txt').includes('uploaded alpha.txt'), 'cat reads one there', consoleText().slice(-300));
   check(sh('cat bravo.dat').includes('uploaded bravo.dat'), 'and by its bare name, from the host', consoleText().slice(-300));
+  check(sh('ls /home/wolf3d').includes('delta.wl6') && sh('cat /home/wolf3d/delta.wl6').includes('uploaded wolf3d/delta.wl6'),
+    'an upload in a folder is in that folder, /home/wolf3d', consoleText().slice(-300));
+  // download: a file, and a folder as a tar, handed to the page
+  const same = (a, b) => a && b && a.length === b.length && a.every((v, i) => v === b[i]);
+  const said = sh('download /home/alpha.txt');
+  check(downloads.length === 1 && downloads[0][0] === 'alpha.txt' && same(downloads[0][1], upBytes('alpha.txt', 3000)) &&
+        said.includes('download: alpha.txt, 3000 bytes'), 'download hands a file to the page, by its name, every byte', said);
+  sh('download /home/wolf3d/');
+  const t = downloads[1] && untar(downloads[1][1]);
+  check(downloads.length === 2 && downloads[1][0] === 'wolf3d.tar' && t.dirs.includes('wolf3d') &&
+        same((t.files.find(([n]) => n === 'wolf3d/delta.wl6') || [])[1], upBytes(...FOLDER_UP)),
+    'and a folder as NAME.tar, what is in it under NAME/', downloads.map(([n]) => n).join(' ') + ' ' + consoleText().slice(-200));
+  check(sh('download /nowhere').includes('no such file or folder') && downloads.length === 2, 'and says so of what is not there');
   sh('mkdir /home/zeta');
 }
 typeBytes(vm, new TextEncoder().encode('desktop\n'));
@@ -577,6 +605,14 @@ dbl('home', inList);
 check(until(() => has('Files - /home') && order() === 'zeta bravo.dat alpha.txt charlie.c'), 'and Files opened again keeps the order', order());
 clickText('Name', inFiles);
 check(until(() => order() === 'zeta alpha.txt bravo.dat charlie.c'), 'by name again', order());
+// File > Download: the selected file, to the page
+{
+  const before = downloads.length;
+  clickText('alpha.txt', inList); settle();
+  clickText('File', all => all.filter(t => inFiles([t])).sort((p, q) => p.y - q.y)[0]); settle(); clickText('Download');
+  check(until(() => downloads.length === before + 1) && downloads[before][0] === 'alpha.txt' && downloads[before][1].length === 3000 && noDialog(),
+    'File > Download hands the selected file to the page', downloads.map(([n]) => n).join(' ') + '\n' + screen());
+}
 key('\b');
 until(() => has('Files - /'));
 dbl('tmp', inList);
@@ -829,7 +865,7 @@ check(until(() => !has(/t\.c \* - IDE|t\.c - IDE/)), ':q! closes the window');
   const xsrc = readFileSync(new URL('../../src/c4ix/user/desktop/explore.c', import.meta.url), 'utf8');
   const xnames = (/static char \*opnames =([^;]*);/.exec(xsrc) || [, ''])[1].match(/"([^"]*)"/g).map(q => q.slice(1, -1)).join('');
   check(xnames === OPNAMES, "the Code pane's opcode names are the machine's (devices.js OPNAMES)", xnames);
-  const named = ['LEA', 'JMP', 'JSR', 'BZ', 'BNZ', 'ADJ', 'JSRI', 'JSRS', 'LDL', 'PSHL', 'LEAP', 'IMMP', 'STL'];
+  const named = ['LEA', 'IMM', 'JMP', 'JSR', 'BZ', 'BNZ', 'ADJ', 'JSRI', 'JSRS', 'JMPA', 'LDL', 'PSHL', 'LEAP', 'IMMP', 'STL'];
   const opnum = n => OPNAMES.match(/.{5}/g).findIndex(t => t.slice(0, 4).trim() === n);
   check(named.every(n => new RegExp(`O_${n} = ${opnum(n)}\\b`).test(xsrc)) && new RegExp(`O_N = ${OPNAMES.length / 5}\\b`).test(xsrc),
     'and the opcodes it names by number are where OPNAMES has them');
@@ -859,7 +895,9 @@ const codeRows = () => {
   return [...by.keys()].sort((a, b) => a - b).map(y => {
     const r = by.get(y).sort((a, b) => a.x - b.x);
     const more = Math.round((r[0].x - h.x) / 7) >= c1;
-    const src = more || (r.length > 1 && !/:$/.test(r[1].s) && Math.round((r[1].x - h.x) / 7) < c1 + 4);
+    // an instruction's label is L and a number; a source line can end in a
+    // colon too (case 1:)
+    const src = more || (r.length > 1 && !/^L\d+:$/.test(r[1].s.trimEnd()) && Math.round((r[1].x - h.x) / 7) < c1 + 4);
     return { src, more, cells: more ? ['', ...r.map(t => t.s.trimEnd())] : r.map(t => t.s.trimEnd()) };
   });
 };
@@ -869,7 +907,7 @@ const listed = () => {
   const h = codeHdr(), f = h && frame.find(t => t.adv === 7 && t.y === h.y && t.x < h.x - 8);
   return f ? frame.filter(t => t.adv === 7 && t.x === f.x && t.y > h.y + 8).map(t => t.s.trimEnd()) : [];
 };
-const insOf = r => { const c = r.cells, k = /:$/.test(c[1] || '') ? 2 : 1; return c[k + 1] ? c[k].padEnd(5) + c[k + 1] : c[k]; };
+const insOf = r => { const c = r.cells, k = /^L\d+:$/.test(c[1] || '') ? 2 : 1; return c[k + 1] ? c[k].padEnd(5) + c[k + 1] : c[k]; };
 const srcText = () => codeRows().filter(r => r.src).map(r => r.cells.slice(1).join(' '));
 check(codeRows().some(r => !r.src && insOf(r) === 'JSR  sq') && codeRows().some(r => !r.src && insOf(r) === 'IMM  "%d\\n"'),
   "main's call to sq, and its string, by name", codeRows().map(r => r.cells.join(' ')).join('\n'));
@@ -896,17 +934,19 @@ check(listed().includes('sq') && listed().includes('main'), 'and its functions l
   const top = fileURLToPath(new URL('../../', import.meta.url));
   // c4sp32: the word C4IX's c4sc has
   if (existsSync(join(top, 'c4sp32'))) {
-    writeFileSync('/tmp/.td-sq.c', SQ + '\n');
+    // a name of its own: another test-desktop may be running beside this one
+    const sq = `/tmp/.td-sq-${process.pid}`;
+    writeFileSync(sq + '.c', SQ + '\n');
     execFileSync('./c4sp32', ['-R', '-c', '16000000', 'src/c4sp/lisp/c4lc.lisp', '-O', '-g', '-c', '-P', '-I', '/tmp', '-I', 'src/c4ix/include',
-      '-D', 'C4CC=1', '-D', '__c4cc__=1', '/tmp/.td-sq.c', '/tmp/.td-sq.c4o'], { cwd: top, stdio: 'ignore' });
-    const a = analyse(readC4r(new Uint8Array(readFileSync('/tmp/.td-sq.c4o'))));
+      '-D', 'C4CC=1', '-D', '__c4cc__=1', sq + '.c', sq + '.c4o'], { cwd: top, stdio: 'ignore' });
+    const a = analyse(readC4r(new Uint8Array(readFileSync(sq + '.c4o'))));
     const f = a.funcs.find(g => g.name === 'main');
     const want = [];
     for (let k = f.first; k >= 0 && k < a.insns.length && a.insns[k].off < f.end; k++) want.push(insnText(a, a.insns[k], f));
     const got = codeRows().filter(r => !r.src).map(insOf);
     check(want.length > 3 && want.every((w, i) => got[i] === w), "each of main's instructions as libjs/c4r.js's insnText has it",
       `want:\n${want.join('\n')}\ngot:\n${got.join('\n')}`);
-    unlinkSync('/tmp/.td-sq.c'); unlinkSync('/tmp/.td-sq.c4o');
+    unlinkSync(sq + '.c'); unlinkSync(sq + '.c4o');
   } else console.log('test-desktop: (no ./c4sp32: the Code tab is not checked against c4r.js)');
 }
 {
@@ -958,6 +998,58 @@ check(until(() => has(/^main \(/)), 'a click on the Code tab shows it again', sc
 }
 txt(':q!\n');
 check(until(() => !has('sq.c - IDE')), 'and the window closes');
+// What the listing puts above each piece of code (explore.c's xp_lay, on
+// c4lc -g's rows): a K&R function from its name down; a statement that
+// goes on over two lines, whole, before its code; an initialised local's
+// line over its code; a switch's case labels over theirs, past comments,
+// and its line again over the dispatch at its end; and INT_MIN, a plain
+// number, as a number
+{
+  const XT = ['int kr', '(int a)', '{', 'return a + 1;', '}',
+    'int lim(int a, int d)', '{', 'if (d == 0 ||', 'a == -2147483647 - 1)', 'return 0;', 'return a;', '}',
+    'int ini(int a)', '{', 'int n = 3;', 'char w[] = "h";', 'return n + w[a];', '}',
+    'int sw(int a)', '{', 'switch (a) {', 'case 1:', 'a = 4;', 'break;', '// one', '// two', 'case 2:', 'case 3:',
+    'a = 5;', 'break;', 'default:', 'a = 6;', '}', 'return a;', '}',
+    'int main() {', 'return kr(1) + lim(1, 2) + ini(0) + sw(2);', '}'].join('\n');
+  start('IDE');
+  until(() => has('Untitled - IDE'));
+  txt(':e /tmp/xt.c\n');
+  txt('i'); txt(XT); key('ESC');
+  txt(':w\n');
+  check(until(() => has(/"\/tmp\/xt\.c" written/)), 'a file of what the listing has to place, written', screen());
+  txt(':code\n');
+  check(until(() => has(/^main \(\d+ words, xt\.c:\d+\)$/), 4000), ':code shows it', screen());
+  const pick = n => {
+    const h = codeHdr(), t = find(n).filter(t => h && t.x < h.x - 8).pop();
+    if (t) click(t.x + 3, t.y + 5);
+    return !!t && until(() => has(new RegExp(`^${n} \\(`)));
+  };
+  // the listing as S(ource) and I(nstruction) rows
+  const lst = () => codeRows().map(r => r.src ? 'S ' + r.cells.slice(1).join(' ') : 'I ' + insOf(r));
+  const after = (l, s) => { const k = l.indexOf('S ' + s); return k >= 0 && k + 1 < l.length ? l[k + 1] : ''; };
+  let l;
+  check(pick('kr') && has(/^kr \(\d+ words, xt\.c:1\)$/) && (l = lst())[0] === 'S int kr' &&
+    ['(int a)', '{', 'return a + 1;'].every(s => l.includes('S ' + s)),
+    'a K&R function is at its name, and its parameters are shown', (l || []).join('\n'));
+  check(pick('lim') && after(l = lst(), 'if (d == 0 ||') === 'S a == -2147483647 - 1)' && after(l, 'a == -2147483647 - 1)').startsWith('I '),
+    "a statement's lines all come before its code", l.join('\n'));
+  check(l.includes('I IMM  -2147483648'), 'INT_MIN is shown as a number', l.join('\n'));
+  check(pick('ini') && after(l = lst(), 'int n = 3;').startsWith('I ') && after(l, 'char w[] = "h";').startsWith('I '),
+    "an initialised local's line is over its code", l.join('\n'));
+  check(pick('sw') && after(l = lst(), '// one') === 'S // two' && after(l, '// two') === 'S case 2:' &&
+    after(l, 'case 2:') === 'S case 3:' && after(l, 'case 3:') === 'S a = 5;' && l.includes('S case 1:'),
+    "a switch's case labels are over their code", l.join('\n'));
+  {
+    // the dispatch, at the switch's end: the switch's line again (its
+    // first case is 1, so it starts PSH, IMM 1, SUB)
+    let ok = false, i = 0;
+    while (!ok && i < 4) { l = lst(); ok = l.some((s, k) => s === 'S switch (a) {' && l[k + 1] === 'I PSH'); if (!ok) { key('', 0, 34); settle(); } ++i; }
+    check(ok, "and the switch's line is over its dispatch", l.join('\n'));
+  }
+  key('ESC');
+  txt(':q!\n');
+  check(until(() => !has('xt.c - IDE') && !has('xt.c * - IDE')), 'and the window closes');
+}
 // a compiled file opens in the Code tab as it is, its source found by its map
 start('IDE');
 until(() => has('Untitled - IDE'));
@@ -1271,6 +1363,31 @@ check(until(() => gui.w === SW && has(/^Terminal - task/) && has(/gui: done afte
   const terms = () => find(/^Terminal - task/).length;
   const hover = t => ev({ kind: 'move', x: t.x + 5, y: t.y + 5, buttons: 0 });
   const t0 = terms();
+  // The game's window: its caption and its menu bar are what is drawn just
+  // above its frame. Not simply the last such string drawn: a window
+  // elsewhere may draw one later (the IDE, redrawing its line as its
+  // cursor blinks, once drew a "Net" under the game's window). And a menu
+  // item is one drawn after its title is clicked, not one still on the
+  // screen from before.
+  const above = all => all.filter(t => rgbLast && t.y < rgbLast.y && t.y >= rgbLast.y - 60
+    && t.x >= rgbLast.x - 40 && t.x < rgbLast.x + rgbLast.dw).pop();
+  const gameMenu = (title, item) => {
+    const g = gen;
+    clickText(title, above);
+    const fresh = all => all.filter(t => t.gen > g).pop();
+    until(() => !!fresh(find(item)));
+    return clickText(item, fresh);
+  };
+  // the game has stopped drawing: its picture the same for STILL ms (a
+  // Net tile turns over several frames)
+  const STILL = 300;
+  const still = () => {
+    let sum = rgbLast && rgbLast.sum, at = vm.dev.simMs();
+    return until(() => {
+      if (rgbLast && rgbLast.sum !== sum) { sum = rgbLast.sum; at = vm.dev.simMs(); }
+      return vm.dev.simMs() - at >= STILL;
+    }, 3000);
+  };
   if (/^\s*net: ilink/m.test(vfs)) {
     let f0 = rgbFrames;
     click(20, SH - TASK_H + 12);
@@ -1287,6 +1404,7 @@ check(until(() => gui.w === SW && has(/^Terminal - task/) && has(/gui: done afte
     check(terms() === t0, 'with no Terminal', screen().slice(-300));
     {
       // n, a new game: a new picture
+      still();
       const before = rgbLast.sum, n = rgbFrames;
       type('n');
       check(until(() => rgbFrames > n && rgbLast.sum !== before, 1500), 'a key goes to the game', `frames ${rgbFrames - n}`);
@@ -1294,23 +1412,45 @@ check(until(() => gui.w === SW && has(/^Terminal - task/) && has(/gui: done afte
     // its menu bar (window.h's win_menu): the game's own controls
     check(has('Game') && has('Type') && has('Help'), 'the window has the game\'s menus: Game, Type, Help', screen().slice(-300));
     {
+      still();
       let before = rgbLast.sum, n = rgbFrames;
-      menu('Game', 'New   N');
+      gameMenu('Game', 'New   N');
       check(until(() => rgbFrames > n && rgbLast.sum !== before, 1500), 'Game > New starts a new game', `frames ${rgbFrames - n}`);
       // a move: a click in the middle of the canvas, where the frame was
       // drawn (under the menu bar), turns the tile there
-      until(() => false, 20);
+      still();
       const cx = rgbLast.x + (rgbLast.dw >> 1), cy = rgbLast.y + (rgbLast.dh >> 1);
       const fresh = rgbLast.sum;
       n = rgbFrames;
       click(cx, cy);
       check(until(() => rgbFrames > n && rgbLast.sum !== fresh, 1500), 'a click under the menu bar reaches the board', `frames ${rgbFrames - n}`);
-      until(() => false, 20);
+      still();
       const moved = rgbLast.sum;
-      menu('Game', 'Undo   U');
+      gameMenu('Game', 'Undo   U');
       check(moved !== fresh && until(() => rgbLast.sum === fresh, 1500), 'Game > Undo takes the move back: the picture before it',
         `${rgbLast.sum === moved ? 'the move still shown' : 'another picture'}`);
       check(rgbLast.dw === 640 && rgbLast.dh === 400, 'and the canvas is the size it was', JSON.stringify(rgbLast));
+    }
+    // maximised (a double click on its title), the canvas is the window's
+    // inside (window.h's win_resizable): the puzzle laid out again, in frames
+    // that size, drawn as they are, on the screen; a click in the middle
+    // still turns a tile; restored, 640x400 again
+    {
+      let n = rgbFrames;
+      dbl('Net', above);
+      check(until(() => rgbFrames > n && rgbLast.dw > 640 && rgbLast.dh > 400 && rgbLast.w === rgbLast.dw && rgbLast.h === rgbLast.dh, 3000)
+        && rgbLast.x >= 0 && rgbLast.x + rgbLast.dw <= SW && rgbLast.y + rgbLast.dh <= SH - TASK_H,
+        'maximised, Net is laid out again for the window, its frames the bigger canvas\'s size', JSON.stringify(rgbLast));
+      still();
+      const before = rgbLast.sum;
+      n = rgbFrames;
+      click(rgbLast.x + (rgbLast.dw >> 1), rgbLast.y + (rgbLast.dh >> 1));
+      check(until(() => rgbFrames > n && rgbLast.sum !== before, 1500), 'and a click in its middle turns a tile', `frames ${rgbFrames - n}`);
+      still();
+      n = rgbFrames;
+      dbl('Net', above);
+      check(until(() => rgbFrames > n && rgbLast.w === 640 && rgbLast.h === 400 && rgbLast.dw === 640 && rgbLast.dh === 400, 3000),
+        'restored, its frames 640x400 again', JSON.stringify(rgbLast));
     }
     key('ESC');
     check(until(() => !has('Net'), 1500) && terms() === t0, 'Esc ends the game, and its window goes with it', screen().slice(-300));
@@ -1351,9 +1491,18 @@ check(until(() => gui.w === SW && has(/^Terminal - task/) && has(/gui: done afte
     check(rgbLast && rgbLast.dw === 640 && rgbLast.dh === 400 && rgbLast.w * 400 === rgbLast.h * 640,
       'its frames the canvas\'s shape', JSON.stringify(rgbLast));
     {
+      still();
       const before = rgbLast.sum, n = rgbFrames;
-      menu('Game', 'New Game   F2');
+      gameMenu('Game', 'New Game   F2');
       check(until(() => rgbFrames > n && rgbLast.sum !== before, 1500), 'Game > New Game deals again', `frames ${rgbFrames - n}`);
+    }
+    {
+      // maximised: Thornq lays its table out for the bigger window
+      still();
+      const n = rgbFrames;
+      dbl('thornq', above);
+      check(until(() => rgbFrames > n && rgbLast.dw > 640 && rgbLast.dh > 400 && rgbLast.w === rgbLast.dw && rgbLast.h === rgbLast.dh, 3000),
+        'maximised, Thornq deals across the bigger window, its frames that size', JSON.stringify(rgbLast));
     }
     key('c', 2, 67);
     check(until(() => !has('thornq'), 1500), 'Ctrl-C ends it, and the window with it', screen().slice(-300));

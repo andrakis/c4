@@ -175,6 +175,13 @@ void d_blit8(int x, int y, int w, int h, char *src, int pitch, int *pal, int dw,
     gui_blit8(x + ox, y + oy, w, h, src, pitch, pal, dw, dh);
 }
 
+// While only the damage is drawn: 1 if all of it is inside this part of
+// the client area, so what a draw paints around that part is not seen
+int d_damage_within(int x, int y, int w, int h) {
+    x = x + ox; y = y + oy;
+    return wk_part && wk_dmg_x0 >= x && wk_dmg_y0 >= y && wk_dmg_x1 <= x + w && wk_dmg_y1 <= y + h;
+}
+
 // The bevels: two pixels, light top-left, dark bottom-right (or the other
 // way round for a sunken one). Flat draws an outline, the accent's when
 // pressed; Classic and Windows 3.1 bevel.

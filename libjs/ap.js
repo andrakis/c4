@@ -228,13 +228,23 @@ function main(msg) {
       if (r === STOP.CPUHALT) break;
       if (r === STOP.PARK) {
         // wait for the word, a CWAK, an IPI or the machine's end; then
-        // CWAI returns 0 and its caller looks again
-        Atomics.wait(m.i32, m.waitAddr >> 2, m.waitVal, 1000);
+        // CWAI returns 0 and its caller looks again. In slices, each
+        // looking again at the word and for an IPI: an IPI that came before
+        // CWAI said where it waits found no word to wake (par.js ipi), and
+        // the word can move on with no wake seen here -- the kernel lock,
+        // let go while this CPU parked on it, stayed free a second while
+        // it waited, and a task pinned here with it (test-c4ix-pipewake).
+        const t0 = Date.now(), wi = m.waitAddr >> 2;
+        while (!m.ipiPending && !Atomics.load(ctl, word(id, K.IPI)) && !Atomics.load(ctl, C.HALT) &&
+               Atomics.load(m.i32, wi) === m.waitVal && Date.now() - t0 < 1000)
+          Atomics.wait(m.i32, wi, m.waitVal, 10);
         if (Atomics.load(ctl, C.HALT)) return;
-        if (Atomics.load(ctl, word(id, K.IPI))) { Atomics.store(ctl, word(id, K.IPI), 0); m.ipiPending = 1; }
+        // running again before the IPI is taken: with neither, CPU 0 would
+        // count this one parked (par.js othersRunning)
         m.cpuState = 'run';
         Atomics.store(ctl, word(id, K.WAITADDR), 0);
         Atomics.store(ctl, st, S.RUN);
+        if (Atomics.load(ctl, word(id, K.IPI))) { Atomics.store(ctl, word(id, K.IPI), 0); m.ipiPending = 1; }
       } else if (r === STOP.INPUT) {
         Atomics.wait(ctl, word(id, K.SLEEP), 0, 5);   // a key may come; ask again soon
       }

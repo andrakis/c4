@@ -22,6 +22,9 @@ static int running;
 static int vol_open, vol_drag;
 static int icon_t, icon_k;
 static int cpu_shown, cpu_n;
+static int frame_waiting;          // a program's framebuffer frame (term.c): no 25 ms wait
+
+void mark_frame() { frame_waiting = 1; }
 static char tbuf[128];
 
 // ---- Settings' choices -------------------------------------------------------
@@ -1000,7 +1003,11 @@ int main(int argc, char **argv) {
         // A redraw: the whole scene, or what is damaged. Input gets one at
         // once; a program pouring out text (raycast, top) gets at most one
         // every 25 ms -- it can print far faster than a person can read.
-        if (wk_dirty() && (input || __time() - last_draw >= 25)) {
+        // A game's frame gets one at once too: it sends the next only when
+        // told this one was drawn (wk_drawn), so it cannot flood the
+        // desktop, and held back it would be held to 40 frames a second.
+        if (wk_dirty() && (input || frame_waiting || __time() - last_draw >= 25)) {
+            frame_waiting = 0;
             wk_redraw(0);
             last_draw = __time();
             wk_drawn();                // the frames just shown have been read: their programs may draw again

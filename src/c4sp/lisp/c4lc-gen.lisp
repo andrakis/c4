@@ -321,14 +321,15 @@
 
 ;; ---- the M4 helpers ----
 ;;
-;; Six small routines the generator calls instead of open-coding what
-;; the VM has no opcode for: a 16-bit load (sign- or zero-extending), a
-;; 16-bit store, unsigned word division and remainder, and a logical
-;; right shift by a run-time count. Each is emitted ONCE, at the end of
-;; the unit's code, and only if something called it -- no symbol, no
-;; library, no link step: a call is a JSR to a label in the same unit,
-;; which is why c4rlink and the loader never hear about them.
-(define g:HELPERS '(ld16s ld16u st16 udiv umod lsr))
+;; Two small routines the generator calls instead of open-coding what
+;; the VM has no opcode for: unsigned word division and remainder. Each
+;; is emitted ONCE, at the end of the unit's code, and only if something
+;; called it -- no symbol, no library, no link step: a call is a JSR to a
+;; label in the same unit, which is why c4rlink and the loader never hear
+;; about them. There were six: a 16-bit load, signed and unsigned, the
+;; 16-bit store and the logical right shift by a run-time count are the
+;; VM's own now, LH LHU SH and LSR (docs/c4-16bit.md).
+(define g:HELPERS '(udiv umod))
 (define g:helps (list))    ;; ((NAME LABEL) ...) for the helpers used
 (define g:helper (lambda (h)
 	(begin
@@ -367,21 +368,6 @@
 		(define maxpos (bit:xor g:MIN -1))
 		(g:madebody (+ "<" (+ "" h) ">"))
 		(g:label! l)
-		(if (= h 'ld16s)
-			(g:emitl (list '(ENT 0)
-				'(LEA 2) '(LI) '(PSH) '(IMM 1) '(ADD) '(LC) '(PSH) '(IMM 8) '(SHL)
-				'(PSH) '(LEA 2) '(LI) '(LC) '(PSH) '(IMM 255) '(AND) '(OR) '(LEV)))
-		(if (= h 'ld16u)
-			(g:emitl (list '(ENT 0)
-				'(LEA 2) '(LI) '(PSH) '(IMM 1) '(ADD) '(LC) '(PSH) '(IMM 255) '(AND)
-				'(PSH) '(IMM 8) '(SHL)
-				'(PSH) '(LEA 2) '(LI) '(LC) '(PSH) '(IMM 255) '(AND) '(OR) '(LEV)))
-		(if (= h 'st16)
-			(g:emitl (list '(ENT 0)
-				'(LEA 3) '(LI) '(PSH) '(LEA 2) '(LI) '(SC)
-				'(LEA 3) '(LI) '(PSH) '(IMM 1) '(ADD) '(PSH)
-				'(LEA 2) '(LI) '(PSH) '(IMM 8) '(SHR) '(SC)
-				'(LEA 2) '(LI) '(LEV)))
 		(if (= h 'udiv)
 			(begin
 				(define l1 (g:newlabel))
@@ -432,17 +418,7 @@
 					'(LEA -1) '(LI) '(LEV)
 					(list 'label m4)
 					'(LEA -1) '(LI) '(PSH) '(LEA 2) '(LI) '(SUB) '(LEV))))
-		(if (= h 'lsr)
-			(begin
-				(define s1 (g:newlabel))
-				(g:emitl (list '(ENT 0)
-					'(LEA 2) '(LI) (list 'BZ (list 'code s1))
-					'(LEA 3) '(LI) '(PSH) '(LEA 2) '(LI) '(SHR)
-					'(PSH) '(IMM -1) '(PSH) (list 'IMM g:BITS) '(PSH) '(LEA 2) '(LI) '(SUB)
-					'(SHL) '(PSH) '(IMM -1) '(XOR) '(AND) '(LEV)
-					(list 'label s1)
-					'(LEA 3) '(LI) '(LEV))))
-		nil)))))))))
+		nil)))))
 
 ;; ---- types (M4) ----
 
@@ -556,9 +532,9 @@
 ;; loads and stores by type
 (define g:load! (lambda (ty)
 	(if (if (= ty g:CHAR) true (if (= ty g:SCHAR) true (= ty g:BOOL))) (g:emit '(LC))
-	(if (= ty g:UCHAR) (begin (g:emit '(LC)) (g:mask! 255))
-	(if (= ty g:SHORT) (g:helpcall 'ld16s 1)
-	(if (= ty g:USHORT) (g:helpcall 'ld16u 1)
+	(if (= ty g:UCHAR) (g:emit '(LCU))
+	(if (= ty g:SHORT) (g:emit '(LH))
+	(if (= ty g:USHORT) (g:emit '(LHU))
 	(if (if (if (= ty g:UINT) true (= ty g:FLOAT)) g:W64 false) (begin (g:emit '(LI)) (g:mask! g:M32))
 	(if (g:ll? ty) nil
 	(g:emit '(LI))))))))))
@@ -592,7 +568,7 @@
 (define g:store! (lambda (ty)
 	(if (g:ll? ty) (g:llcopy)
 	(if (g:bytety? ty) (g:emit '(SC))
-	(if (g:halfty? ty) (g:helpcall 'st16 2)
+	(if (g:halfty? ty) (g:emit '(SH))
 	(g:emit '(SI)))))))
 
 ;; ---- struct types (L7) ----
@@ -1931,7 +1907,7 @@
 			(if (= opname 'SHR)
 				(begin
 					(define k (if (= (head (g:third e)) 'num) (g:second (g:third e)) nil))
-					(if (= k nil) (g:helpcall 'lsr 2)
+					(if (= k nil) (g:emit '(LSR))
 					(begin
 						(g:emit '(SHR))
 						(if (if (> k 0) (< k g:BITS) false)
@@ -2737,6 +2713,7 @@
 
 (define g:switchstmt (lambda (s)
 	(begin
+		(define here g:lineloc)
 		(g:iexpr (g:second s))
 		(define ld (g:newlabel))
 		(define lend (g:newlabel))
@@ -2754,6 +2731,7 @@
 		(set! g:swcases ocases)
 		(set! g:swdef odef)
 		(g:emit (list 'JMP (list 'code lend)))
+		(g:loopline here)
 		(g:label! ld)
 		(g:swdispatch cases def lend)
 		(g:label! lend))))
@@ -2804,6 +2782,25 @@
 ;; the same contract: legal to declare and call-compile, fatal to
 ;; execute.
 (define gen:objmode false)
+;; A global with no initializer, not static, in an object (-c): a
+;; tentative definition, which c4rlink makes one object with the other
+;; units' (c4rlink.c, common_plan). Its symbol says so, ATTR_COMMON (128),
+;; and its storage is followed by a word nothing uses: c4rlink moves
+;; every reference into it to the one kept, and that includes &a[N] just
+;; past its end, which must therefore not be the next global's address.
+;; c4fc does the same (parse.f, COMMON? and PLACE-GLOBALS).
+(define g:tattrs (lambda (gattrs)
+	(if (if gen:objmode (= 0 (bit:and (g:nz gattrs) 8)) false)
+		(bit:or (g:nz gattrs) 128)
+		gattrs)))
+;; reserve nb bss bytes for a global whose attributes (g:tattrs) are ta
+(define g:tballoc (lambda (nb ta)
+	(begin
+		(define at (g:balloc nb))
+		(if (= 0 (bit:and (g:nz ta) 128)) nil
+			(set! g:blen (+ g:blen g:WORD)))
+		at)))
+
 ;; M12, -mcisc: emit c4mp-only fused array-element opcodes (LXI/SXI)
 ;; instead of the generic index codegen, for int/pointer-element
 ;; (8-byte) arrays -- see g:indexload-cisc/g:indexstore-cisc below and
@@ -2878,11 +2875,27 @@
 			false))
 		(if (= (head d) 'structdef) nil      ;; g:structpass did it
 		(if isglobal (if isext nil
-			(if (if (= (index d 5) nil) (g:laterinit? (g:third d) (tail decls)) false) nil
-			(g:global d)))
+			(if (= (index d 5) nil)
+				;; a tentative definition: nothing, if the unit defines the
+				;; name with an initializer further down or has defined it
+				;; already -- one object, as c4fc's DECL makes it
+				(if (g:laterinit? (g:third d) (tail decls)) nil
+				(if (g:gloname? (g:third d) g:syms) nil
+				(g:global d)))
+			;; a second initialized definition of a global is an error; a
+			;; static's two stay two objects, as in c4fc
+			(if (if (= 0 (bit:and (g:nz (index d 4)) 8)) (g:gloname? (g:third d) g:syms) false)
+				(g:die (+ "redefinition of " (g:third d)))
+			(g:global d))))
 		nil))
 		(next g:datapass (tail decls)
 			(if isext (+ pending (list d)) pending))))))
+
+;; has the unit given global N storage already?
+(define g:gloname? (lambda (n l)
+	(if (empty? l) false
+	(if (if (= (head (head l)) n) (= (g:second (head l)) 'glo) false) true
+	(next g:gloname? n (tail l))))))
 
 ;; `int x;` before `int x = 9;` is one object, the definition's: the
 ;; first allocates nothing (M7b; c4fc's DECL retires its record)
@@ -2983,14 +2996,15 @@
 	(begin
 		(define bytes (g:tysize ty))
 		;; a struct global is never initialized -> pure BSS
-		(set! g:syms (g:cons (list n 'glo ty (g:balloc bytes) bytes gattrs g:gq) g:syms)))))
+		(define ta (g:tattrs gattrs))
+		(set! g:syms (g:cons (list n 'glo ty (g:tballoc bytes ta) bytes ta g:gq) g:syms)))))
 
 (define g:globalscalar (lambda (n ty init0 gattrs)
 	(begin
 		(define init (g:fpinit init0 ty))
 		(define at
 			;; no initializer -> BSS (one word); otherwise placed in data
-			(if (= init nil) (g:balloc (if (g:ll? ty) 8 g:WORD))
+			(if (= init nil) (g:tballoc (if (g:ll? ty) 8 g:WORD) (g:tattrs gattrs))
 			(if (if (= (head init) 'num) (g:ll? ty) false)
 				(begin
 					(define lo (g:dword (g:second init)))
@@ -3017,7 +3031,7 @@
 					(set! g:dpatches (g:cons (g:addrpatch slot (g:second init) f) g:dpatches))
 					slot)
 			(g:die (+ "unsupported global initializer for " n)))))))))
-		(set! g:syms (g:cons (list n 'glo ty at nil gattrs g:gq) g:syms)))))
+		(set! g:syms (g:cons (list n 'glo ty at nil (if (= init nil) (g:tattrs gattrs) gattrs) g:gq) g:syms)))))
 
 ;; array storage: char arrays are s bytes, everything else s words;
 ;; uninitialized/short-initialized elements are zero
@@ -3029,7 +3043,7 @@
 		;; an uninitialized array is pure BSS (occupies no image bytes,
 		;; does not touch g:data/DMAX -- so it may be arbitrarily large)
 		(if (= init nil)
-			(set! g:syms (g:cons (list n 'glo ty (g:balloc bytes) bytes gattrs g:gq) g:syms))
+			(set! g:syms (g:cons (list n 'glo ty (g:tballoc bytes (g:tattrs gattrs)) bytes (g:tattrs gattrs) g:gq) g:syms))
 			(g:globalarrayinit n ty s init gattrs elem bytewise bytes)))))
 
 ;; the initialized-array case (kept out of g:globalarray so its own BSS
@@ -3303,27 +3317,38 @@
 
 ;; ---- a local aggregate's initializer (M7b) ----
 ;;
-;; The walk above in a third mode, 'local: the local is zeroed with MSET
-;; (memset's opcode, which needs no libc), then each value is stored at
-;; its offset as the declaration runs -- a number, a string's address, or
-;; any expression (p:linit's (expr E)). A word-aligned offset is LEA's
-;; own; any other is added to the base. c4fc's n_lagg is the same.
+;; The walk above in a third mode, 'local, which records each value and
+;; its offset -- a number, a string's address, or any expression
+;; (p:linit's (expr E)) -- as (st TY OFF IT), and a whole struct as
+;; (sv TY OFF E). Then, as the declaration runs, the local is zeroed with
+;; MSET (memset's opcode, which needs no libc) and each record stored, a
+;; word-aligned offset being LEA's own and any other added to the base;
+;; or, when there are enough constants, they come from a template
+;; (g:ltemplate, below) and only the rest are stored. c4fc's n_lagg is
+;; the same.
 (define g:lbase 0)
+(define g:lrecording false)
+(define g:lrecs (list))
 (define g:localaggr (lambda (d val)
 	(begin
 		(define size (index d 3))
 		(define ty (g:second d))
-		(set! g:lbase (- g:loc val))
-		(g:emit (list 'LEA g:lbase))
-		(g:emit '(PSH))
-		(g:emit '(IMM 0))
-		(g:emit '(PSH))
-		(g:emit (list 'IMM (g:lbytes d)))
-		(g:emit '(PSH))
-		(g:emit '(MSET))
-		(g:emit '(ADJ 3))
+		(define base (- g:loc val))
 		(set! g:imode 'local)
+		(set! g:lrecs (list))
+		(set! g:lrecording true)
 		(g:ifillagg (if (= size nil) ty (- ty g:PTR)) size 0 (g:items (index d 4)) true)
+		(set! g:lrecording false)
+		(define rs (g:reverse g:lrecs))
+		(set! g:lrecs (list))
+		(set! g:lbase base)
+		(if (not (g:ltmpl? (g:lscan rs 0 0) rs))
+			(begin
+				(g:lmset 0 (g:lbytes d))
+				(g:lreplay rs base false))
+		(begin
+			(g:ltemplate (g:lbytes d) rs)
+			(g:lreplay rs base true)))
 		(set! g:imode 'put))))
 (define g:laddr (lambda (off)
 	(if (= 0 (bit:and off g:WMASK)) (g:emit (list 'LEA (+ g:lbase (/ off g:WORD))))
@@ -3332,7 +3357,148 @@
 		(g:emit '(PSH))
 		(g:emit (list 'IMM off))
 		(g:emit '(ADD))))))
+;; N bytes from OFF zeroed
+(define g:lmset (lambda (off n)
+	(begin
+		(g:laddr off)
+		(g:emit '(PSH))
+		(g:emit '(IMM 0))
+		(g:emit '(PSH))
+		(g:emit (list 'IMM n))
+		(g:emit '(PSH))
+		(g:emit '(MSET))
+		(g:emit '(ADJ 3)))))
+;; the records stored in order, all of them or (VARONLY) those that are
+;; no constant. The base is set again for each: an expression may hold
+;; a compound literal, whose own initializer moves it.
+(define g:lreplay (lambda (rs base varonly)
+	(if (empty? rs) nil
+	(begin
+		(define r (head rs))
+		(if (if varonly (g:lconst? r) false) nil
+		(begin
+			(set! g:lbase base)
+			(set! g:imode 'local)
+			(if (= (head r) 'sv) (g:lstruct/e (g:second r) (g:third r) (index r 3))
+			(g:lstore/e (g:second r) (g:third r) (index r 3)))))
+		(next g:lreplay (tail rs) base varonly)))))
+
+;; ---- a local's constants as a template (c4lc-array-init) ----
+;;
+;; Stored one by one, `char s[] = "abc..."` costs seven instructions a
+;; byte (LEA PSH IMM ADD PSH IMM SC) and `int a[] = {...}` four a word,
+;; and the elements past the initializer are stored as zeros the same
+;; way. When the stores weigh g:LTMPL or more (g:lweight: eight words,
+;; four bytes), the constants go into the data instead, laid out as the
+;; local's first L bytes (L ends at the last nonzero one), and the
+;; declaration copies them with MCPY, memcpy's opcode as struct
+;; assignment uses it, and zeroes the rest with MSET: sixteen
+;; instructions at most, whatever the size. A string a pointer takes is
+;; placed ahead of the template, which holds a data patch to it, as a
+;; global's initializer does.
+;;
+;; Where it pays was measured (docs/c4lc-design.md 14.14): the image is
+;; smaller from three words or two bytes, and c4m runs fewer
+;; instructions from two, but libjs leaves its fast loop for MCPY, which
+;; costs as much as some 35 instructions -- so the stores stay until
+;; eight words or four bytes, where the copy is no slower there either.
+;;
+;; A constant is a number for an integer or a pointer, and a string's
+;; address for a pointer; long longs, floats, struct values and other
+;; expressions are stored after the copy, as before. The records must
+;; ascend without overlapping -- a designator that goes back is only
+;; right stored in order -- or the stores stay; and so must a sparse
+;; template, over four words a constant (`{1, 2, 3, 4, [999] = 5}`).
+;; A zero tail of up to g:LTAIL words is copied with the rest rather
+;; than given an MSET of its own: `char s[] = "abc"` is one MCPY of
+;; four bytes. c4fc's LTMPL and LTAIL are the same.
+(define g:LTMPL 8)
+(define g:LTAIL 8)
+(define g:ltmpl? (lambda (n rs)
+	(if (< n g:LTMPL) false
+	(<= (g:lend rs 0) (* n (* 4 g:WORD))))))
+(define g:lconst? (lambda (r)
+	(if (= (head r) 'sv) false
+	(begin
+		(define ty (g:second r))
+		(define h (head (index r 3)))
+		(if (= h 'num) (if (g:fp? ty) false (not (g:ll? ty)))
+		(if (= h 'str) (g:isptr ty)
+		false))))))
+(define g:lwidth (lambda (r)
+	(begin
+		(define ty (g:second r))
+		(if (g:bytety? ty) 1 (if (g:halfty? ty) 2 (g:tysize ty))))))
+;; a store's weight: a word's is 1, a byte's 2 (LEA PSH IMM ADD PSH IMM
+;; SC against LEA PSH IMM SI), a 16-bit one's 4 (two bytes, or st16)
+(define g:lweight (lambda (w) (if (= w 1) 2 (if (= w 2) 4 1))))
+;; what the constants weigh, or -1 when the records do not ascend
+(define g:lscan (lambda (rs at n)
+	(if (empty? rs) n
+	(begin
+		(define r (head rs))
+		(if (< (g:third r) at) -1
+		(next g:lscan (tail rs) (+ (g:third r) (g:lwidth r))
+			(if (g:lconst? r) (+ n (g:lweight (g:lwidth r))) n)))))))
+(define g:lnonzero? (lambda (r)
+	(if (g:lconst? r)
+		(if (= (head (index r 3)) 'str) true (not (= (g:second (index r 3)) 0)))
+	false)))
+;; where the template ends: past the last nonzero constant
+(define g:lend (lambda (rs l)
+	(if (empty? rs) l
+	(next g:lend (tail rs)
+		(if (g:lnonzero? (head rs)) (+ (g:third (head rs)) (g:lwidth (head rs))) l)))))
+;; the strings, in order; their offsets
+(define g:lstrs (lambda (rs acc)
+	(if (empty? rs) (g:reverse acc)
+	(next g:lstrs (tail rs)
+		(if (if (g:lconst? (head rs)) (= (head (index (head rs) 3)) 'str) false)
+			(g:cons (g:dstr (g:second (index (head rs) 3))) acc)
+		acc)))))
+(define g:lput (lambda (rs at ss)
+	(if (empty? rs) nil
+	(begin
+		(define r (head rs))
+		(define it (index r 3))
+		(define isstr (if (g:lnonzero? r) (= (head it) 'str) false))
+		(if isstr
+			(set! g:dpatches (g:cons (list 'ddata (+ at (g:third r)) (head ss)) g:dpatches))
+		(if (g:lnonzero? r) (g:iput (g:second r) (+ at (g:third r)) (g:second it)) nil))
+		(next g:lput (tail rs) at (if isstr (tail ss) ss))))))
+;; NBYTES of the local at g:lbase from the records' constants
+(define g:ltemplate (lambda (nbytes rs)
+	(begin
+		(define l0 (g:lend rs 0))
+		(define l (if (= l0 0) 0 (if (<= (- nbytes l0) (* g:LTAIL g:WORD)) nbytes l0)))
+		(if (= l 0) nil
+		(begin
+			(define ss (g:lstrs rs (list)))
+			(g:dalign)
+			(define at g:dlen)
+			(if (> (+ at l) g:DMAX) (g:die "data segment full") nil)
+			(g:dzero l)
+			(g:lput rs at ss)
+			(g:emit (list 'LEA g:lbase))
+			(g:emit '(PSH))
+			(g:emit (list 'IMM (list 'data at)))
+			(g:emit '(PSH))
+			(g:emit (list 'IMM l))
+			(g:emit '(PSH))
+			(g:emit '(MCPY))
+			(g:emit '(ADJ 3))))
+		(if (< l nbytes) (g:lmset l (- nbytes l)) nil))))
+;; an array of numbers or a char array's string, as records: ETY's
+;; stride apart, the elements past VS left to the zeroing
+(define g:lelemrecs (lambda (ety vs off acc)
+	(if (empty? vs) (g:reverse acc)
+	(next g:lelemrecs ety (tail vs) (+ off (g:estride ety))
+		(g:cons (list 'st ety off (list 'num (head vs))) acc)))))
+
 (define g:lstore (lambda (ty off it)
+	(if g:lrecording (set! g:lrecs (g:cons (list 'st ty off it) g:lrecs))
+	(g:lstore/e ty off it))))
+(define g:lstore/e (lambda (ty off it)
 	(if (g:fp? ty) (g:fplstore ty off it)
 	(if (g:ll? ty)
 		(begin
@@ -3356,6 +3522,10 @@
 (define g:lstruct (lambda (ty off e)
 	(begin
 		(if (= g:imode 'local) nil (g:die "a struct value in an initializer is not constant"))
+		(if g:lrecording (set! g:lrecs (g:cons (list 'sv ty off e) g:lrecs))
+		(g:lstruct/e ty off e)))))
+(define g:lstruct/e (lambda (ty off e)
+	(begin
 		(g:laddr off)
 		(g:emit '(PSH))
 		(g:sval e ty "an initializer")
@@ -3461,6 +3631,26 @@
 		(if bytewise (g:linit/byte val idx v) (g:linit/word val idx v)))
 		(next g:linit/elems val (if (empty? vs) vs (tail vs)) s (+ idx 1) bytewise)))))
 
+;; an array of S numbers from VS: stored one by one, every element, or
+;; with g:LTMPL stores or more from a template (g:ltemplate)
+(define g:linitarr (lambda (d val vs s bytewise)
+	(if (if (< (g:lstores s bytewise) g:LTMPL) true
+		(if (g:svalue? (- (g:second d) g:PTR)) true (not (g:allnums? vs))))
+		(g:linit/elems val vs s 0 bytewise)
+	(begin
+		(define rs (g:lelemrecs (- (g:second d) g:PTR) vs 0 (list)))
+		(if (g:ltmpl? (g:lstores s bytewise) rs)
+			(begin
+				(set! g:lbase (- g:loc val))
+				(g:ltemplate (g:lbytes d) rs))
+		(g:linit/elems val vs s 0 bytewise))))))
+;; what S elements' stores weigh (g:lweight)
+(define g:lstores (lambda (s bytewise)
+	(* s (if (= bytewise 2) 4 (if bytewise 2 1)))))
+(define g:allnums? (lambda (vs)
+	(if (empty? vs) true
+	(if (= 'list (typeof (head vs))) false (next g:allnums? (tail vs))))))
+
 (define g:strbytes (lambda (str i acc)   ;; string -> list of byte values
 	(if (>= i (length str)) (g:reverse acc)
 	(next g:strbytes str (+ i 1) (g:cons (string:byte str i) acc)))))
@@ -3528,12 +3718,11 @@
 			(begin
 				(if (> (length (g:second init)) size)
 					(g:die (+ "too many initializers for " (g:third d))) nil)
-				(g:linit/elems val (g:second init) size 0 bytewise))
+				(g:linitarr d val (g:second init) size bytewise))
 		(if (if (= (head init) 'str) (= bytewise true) false)
 			(begin				(if (< size (length (g:second init)))
 					(g:die (+ "string does not fit the array " (g:third d))) nil)
-				(g:linit/elems val (g:strbytes (g:second init) 0 (list))
-					size 0 true))
+				(g:linitarr d val (g:strbytes (g:second init) 0 (list)) size true))
 		(if (if (= (head init) 'agg) true (= (head init) 'braces)) (g:localaggr d val)		(g:die (+ "unsupported array initializer for " (g:third d))))))))))))
 
 (define g:localinits (lambda (ls)
@@ -3541,8 +3730,16 @@
 	(begin
 		(define d (head ls))
 		(if (= (index d 4) nil) nil
-			(g:eminit d (index (g:find (g:third d)) 3)))
+			(begin
+				(g:declline (g:third d))
+				(g:eminit d (index (g:find (g:third d)) 3))))
 		(next g:localinits (tail ls))))))
+;; -g: an initializer's code is its declaration's line (p:fnlocs' DECLS)
+(define g:dlocs (list))
+(define g:declline (lambda (n)
+	(begin
+		(define e (g:lookup n g:dlocs))
+		(if e (g:emit (list 'line (g:second e))) nil))))
 
 ;; block-position declarations: allocate from the frame cursor,
 ;; register (block scope handles removal), run the initializer HERE --
@@ -3606,6 +3803,7 @@
 				(g:emit (list 'func n (g:second fl)))
 				(g:emit (list 'line (g:second fl))))
 			nil)
+		(set! g:dlocs (if fl (index fl 3) (list)))
 		(g:label! (index s 3))
 		;; the long long temporaries go below everything else, and how
 		;; many there are is known at the end: (frame ID WORDS) is

@@ -24,6 +24,12 @@
 // program may give its window a menu bar (window.h: the M and I ops): the
 // window grows by the bar's height, and a pick goes down the pipe as 'c'.
 //
+// A canvas is GW by GH, whatever the window's size, unless the program
+// asks for it to follow the window (the z op, window.h's win_resizable):
+// then it is the window's whole inside, a window of the program's own may
+// be dragged to any size, and the program hears each new size ('s') once
+// the window has held still at it (follow).
+//
 // A canvas may show a framebuffer, the 'f' op: 8-bit pixels and a
 // palette in the program's own memory, which GUI_BLIT8 has the host read
 // and scale to the canvas. Once a frame with one has been drawn the
@@ -55,6 +61,8 @@ struct term {
     char pending[128];            // a command to type at the first prompt
     int gfx, buttons;             // a canvas now; mouse buttons held on it
     int fpend;                    // a frame with a framebuffer presented, not yet drawn
+    int fit, gw, gh;              // the canvas follows the window (z); its size
+    int nw, nh, nat;              // the size the window last had, and since when
     char title[48];               // the window's own title, while a program's shows
     int ncur, nshow;
     int gcur[GLIST];              // [len, op, numbers..., text]
@@ -92,6 +100,7 @@ static void gfx_mode(struct term *t, int on) {
     if (on && !t->gfx) ui_ncpy(t->title, wk_get_title(t->win), 48);
     if (!on && t->gfx && t->title[0]) wk_title(t->win, t->title);
     if (on && t->g) tg_unselect(t->g);
+    if (on != t->gfx) { t->fit = 0; t->gw = GW; t->gh = GH; }
     t->gfx = on;
     t->ncur = 0; t->nshow = 0; t->buttons = 0; t->fpend = 0;
     mark_dirty();
@@ -131,6 +140,37 @@ static void prog_menu(struct term *t, int op, int m, char *s) {
     mark_dirty();
 }
 
+// The canvas follows the window's size, or (on 0) is GW by GH again.
+static void fit(struct term *t, int on) {
+    struct win *w;
+    t->fit = on != 0;
+    t->nw = 0 - 1;
+    if (t->bare && (w = win_get(t->win))) w->resizable = t->fit;
+    if (!t->fit && (t->gw != GW || t->gh != GH)) {
+        t->gw = GW; t->gh = GH;
+        event(t, 's', GW, GH, 0);
+        mark_dirty();
+    }
+}
+
+// A canvas that follows its window takes the window's size once it has
+// held still at it for a moment: dragging an edge goes through many sizes,
+// and each is the program laying itself out again. The program hears it.
+static void follow(struct term *t, struct win *w) {
+    int nw, nh, now;
+    nw = wk_client_w(w) - 4 - (t->bare ? 0 : TG_SB_W);
+    nh = wk_client_h(w) - 4;
+    if (nw < 1) nw = 1;
+    if (nh < 1) nh = 1;
+    now = __time();
+    if (nw != t->nw || nh != t->nh) { t->nw = nw; t->nh = nh; t->nat = now; return; }
+    if ((nw != t->gw || nh != t->gh) && now - t->nat >= 100) {
+        t->gw = nw; t->gh = nh;
+        event(t, 's', nw, nh, 0);
+        mark_dirty();
+    }
+}
+
 // One command, ESC _ and ESC \ already stripped: G, the op, numbers
 // separated by commas, and for text a ';' and the string.
 static void apc(char *ctx, char *abuf, int alen) {
@@ -154,13 +194,14 @@ static void apc(char *ctx, char *abuf, int alen) {
     if (op == 'o') {
         gfx_mode(t, 1);
         if (s && *s) { if (ui_len(s) > 44) s[44] = 0; wk_title(t->win, s); }
-        event(t, 's', GW, GH, 0);
+        event(t, 's', t->gw, t->gh, 0);
         return;
     }
     if (op == 'q') { gfx_mode(t, 0); return; }
     if (!t->gfx) return;
     // a menu bar: a program's own window's only (a Terminal has its own)
     if (op == 'M' || op == 'I') { if (t->bare) prog_menu(t, op, n ? nums[0] : 0, s); return; }
+    if (op == 'z') { fit(t, n ? nums[0] : 1); return; }
     if (op == 'p') {
         memcpy(t->gshow, t->gcur, t->ncur * sizeof(int));
         t->nshow = t->ncur;
@@ -171,7 +212,12 @@ static void apc(char *ctx, char *abuf, int alen) {
             if (t->gshow[k + 1] == 'f') t->fpend = 1;
             k = k + t->gshow[k];
         }
-        wk_invalidate(t->win, 0, 0, 0, 0);
+        // A framebuffer fills the canvas, so only the canvas changed, and
+        // its frame covers all of it (gfx_draw): nothing under it or
+        // around it is drawn again. Lines and text may reach outside it,
+        // and the whole window is drawn for those.
+        if (t->fpend) { wk_invalidate_covered(t->win, 2, 2, t->gw, t->gh); mark_frame(); }
+        else wk_invalidate(t->win, 0, 0, 0, 0);
         return;
     }
     // everything else is drawn later: into the list being built
@@ -186,14 +232,27 @@ static void apc(char *ctx, char *abuf, int alen) {
 }
 
 static void gfx_draw(struct term *t, int ox, int oy) {
-    int i, *g, n, op;
-    d_rect(ox, oy, GW, GH, 0);
+    int i, *g, n, op, fb, clip;
+    // The last framebuffer covers the whole canvas, and what came before
+    // it: drawn from there, with no black under it, and what follows it
+    // kept to the canvas (only the canvas is drawn again after a frame)
+    fb = 0 - 1;
     i = 0;
+    while (i < t->nshow && t->gshow[i] >= 2) {
+        if (t->gshow[i + 1] == 'f' && t->gshow[i] >= 7) fb = i;
+        i = i + t->gshow[i];
+    }
+    clip = 0;
+    if (fb < 0) { d_rect(ox, oy, t->gw, t->gh, 0); i = 0; }
+    else {
+        i = fb;
+        if (i + t->gshow[i] < t->nshow) { d_clip(ox, oy, t->gw, t->gh); clip = 1; }
+    }
     while (i < t->nshow) {
         g = t->gshow + i;
         op = g[1];
         n = g[0] - 2;
-        if (op == 'c' && n >= 1) d_rect(ox, oy, GW, GH, g[2]);
+        if (op == 'c' && n >= 1) d_rect(ox, oy, t->gw, t->gh, g[2]);
         else if (op == 'r' && n >= 5) d_rect(ox + g[2], oy + g[3], g[4], g[5], g[6]);
         else if (op == 'R' && n >= 5) d_recto(ox + g[2], oy + g[3], g[4], g[5], g[6]);
         else if (op == 'l' && n >= 5) d_line(ox + g[2], oy + g[3], ox + g[4], oy + g[5], g[6]);
@@ -204,11 +263,13 @@ static void gfx_draw(struct term *t, int ox, int oy) {
             // desktop's word: lent to the desktop first (under the MMU
             // each task's is its own); a frame it will not lend is not drawn
             if (umapfrom(g[2], g[5] * g[4]) == 0 && umapfrom(g[6], 1024) == 0)
-                d_blit8(ox, oy, g[3], g[4], (char *)g[2], g[5], (int *)g[6], GW, GH);
+                d_blit8(ox, oy, g[3], g[4], (char *)g[2], g[5], (int *)g[6], t->gw, t->gh);
+            else d_rect(ox, oy, t->gw, t->gh, 0);
         }
         if (g[0] < 2) break;
         i = i + g[0];
     }
+    if (clip) d_clip_end();
 }
 
 // ---- the shell --------------------------------------------------------------------
@@ -333,6 +394,7 @@ void term_tick(struct win *w) {
     int n, k, got, prompt;
     t = T(w);
     if (t->ended) return;
+    if (t->gfx && t->fit) follow(t, w);
     n = uavail(t->out_r);
     got = 0;
     // Take everything the program has written before drawing: a full-screen
@@ -471,7 +533,7 @@ void term_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     if (t->ended) return;
     x = x - 2; y = y - 2;                          // inside the sunken edge
     if (x < 0) x = 0; if (y < 0) y = 0;
-    if (x >= GW) x = GW - 1; if (y >= GH) y = GH - 1;
+    if (x >= t->gw) x = t->gw - 1; if (y >= t->gh) y = t->gh - 1;
     if (ev == E_DOWN) { t->buttons = 1; event(t, 'd', x, y, 0); }
     else if (ev == E_UP) { if (t->buttons) event(t, 'u', x, y, 0); t->buttons = 0; }
     else if (ev == E_MOVE) event(t, 'm', x, y, t->buttons);
@@ -480,8 +542,10 @@ void term_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
 void term_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     struct term *t;
     t = T(w);
+    // only the canvas being drawn again (a frame): it covers all of that
+    if (t->gfx && d_damage_within(ox + 2, oy + 2, t->gw, t->gh)) { gfx_draw(t, ox + 2, oy + 2); return; }
     d_rect(ox, oy, cw, ch, C_DARK);
+    if (t->gfx) { d_bevel(ox, oy, t->gw + 4, t->gh + 4, B_SUNKEN); gfx_draw(t, ox + 2, oy + 2); return; }
     d_bevel(ox, oy, TG_W, TG_H, B_SUNKEN);
-    if (t->gfx) { gfx_draw(t, ox + 2, oy + 2); return; }
     if (t->g) tg_draw(t->g, ox + 2, oy + 2, focused && !t->ended);
 }

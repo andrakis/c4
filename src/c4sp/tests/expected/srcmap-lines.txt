@@ -1,0 +1,22 @@
+Source map: version 1, 89 bytes
+  1 files
+    0 src/tests/srcmap_lines.c, 581 bytes, crc 2eaa09bd
+  3 functions
+         0    10 kr, file 0 line 7
+        10    98 pick, file 0 line 13
+       108    27 main, file 0 line 28
+  14 rows
+         0 0:7
+         2 0:10
+        10 0:13
+        12 0:15
+        18 0:16
+        44 0:18
+        49 0:20
+        55 0:21
+        57 0:23
+        70 0:18
+       104 0:25
+       108 0:28
+       110 0:30
+       132 0:31

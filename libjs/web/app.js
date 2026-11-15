@@ -208,6 +208,7 @@ const opts = {
   unpaced: params.has('fast') || !!sys.unpaced,
   realtime: params.get('realtime') !== '0',
   fpu: params.get('fpu') !== '0',
+  accel: params.get('accel') !== '0',  // the drawing accelerators (accel.js)
   arenaMb: Number(params.get('mem')) || sys.mem || 64,
   shared: params.get('shared') !== '0',
   snd: params.get('snd') !== '0',

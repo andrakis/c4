@@ -175,7 +175,7 @@ function start(msg) {
     drives.push(persistDrive);
   }
   vm = createMachine({
-    arenaMb: msg.arenaMb || 64, drives, mhz: msg.mhz || 20, gui, snd, fpu: msg.fpu,
+    arenaMb: msg.arenaMb || 64, drives, mhz: msg.mhz || 20, gui, snd, fpu: msg.fpu, accel: msg.accel,
     cpus: msg.cpus | 0, quantum: msg.quantum | 0, mmu: !!msg.mmu,
     parallel: !!msg.parallel, spawn: url => new Worker(url, { type: 'module' }),
     onByte: b => { out.push(b); if (out.length >= 4096) flush(); },

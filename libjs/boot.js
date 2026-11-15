@@ -31,6 +31,7 @@ import { Bus } from './bus.js';
 import { Heap } from './heap.js';
 import { SharedHeap } from './sheap.js';
 import { Mmu } from './mmu.js';
+import { accel } from './accel.js';
 
 // The whole machine, empty. Both hosts (cli.js, worker.js) build it
 // here so they cannot drift apart.
@@ -69,6 +70,8 @@ export function createMachine(opts = {}) {
   const machine = new Machine(arena, dev, bus, par ? new SharedHeap(arena, null) : new Heap(0, 0));
   // the FPU opcode (F3): on unless asked otherwise (fpu: false)
   machine.noFpu = opts.fpu === false;
+  // the drawing accelerators (accel.js): on unless asked otherwise (accel: false)
+  machine.accel = opts.accel === false ? null : accel;
   dev.noFpu = machine.noFpu;
   if (opts.mmu !== false) machine.mmu = new Mmu(machine);
   if (par) new ParHost(machine, opts.cpus | 0, opts.spawn);
@@ -76,6 +79,7 @@ export function createMachine(opts = {}) {
     () => {
       const m = new Machine(arena, dev, bus, machine.heap);
       m.noFpu = machine.noFpu;
+      m.accel = machine.accel;
       if (opts.mmu !== false) m.mmu = new Mmu(m);
       return m;
     });

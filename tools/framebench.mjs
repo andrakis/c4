@@ -33,7 +33,11 @@
 //                    against the median frames', by function (a second run,
 //                    its pc sampled every --every instructions, default 97,
 //                    and every call counted by its target)
+//   --leave A-B,...  frames the profile leaves out (Duke's demo1 dies at
+//                    1949-2782, a desync of the game's versions, not play)
 //   --image FILE     another build of the game's image
+//   --no-accel       no drawing accelerators (libjs/accel.js): the game draws
+//                    with its own loops; the page: &accel=0
 //   --out DIR        node: the files the game writes go to DIR (duke3d's
 //                    -shot N frames, as shotN.ppm)
 //   page only:
@@ -101,8 +105,10 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--worst') o.worst = +v();
   else if (a === '--json') o.json = v();
   else if (a === '--profile') o.profile = true;
+  else if (a === '--leave') o.leave = v().split(',').map(r => r.split('-').map(Number));
   else if (a === '--every') o.every = +v();
   else if (a === '--image') o.image = v();
+  else if (a === '--no-accel') o.accel = false;
   else if (a === '--out') o.out = v();
   else if (a === '--page') o.page = v();
   else if (a === '--base') o.base = v().replace(/\/$/, '');
@@ -200,7 +206,7 @@ async function nodeRun(profile) {
     const sink = o.out && !wantProfile ? (name, b) => writeFileSync(join(o.out, basename(name)), b) : null;
     const drives = [{ files, writable: false, sink: null }];
     if (sink) drives.push({ files: new Map(), writable: true, sink });
-    const vm = createMachine({ arenaMb: R.mem, drives, onByte: b => out.push(b), mhz: 20 });
+    const vm = createMachine({ arenaMb: R.mem, drives, onByte: b => out.push(b), mhz: 20, accel: o.accel });
     boot(vm, bytes, [basename(imgPath), ...R.args, ...o.extra]);
     const img = readC4r(bytes), S = img.smap;
     if (!S || !S.funcs) throw new Error('framebench: the image has no source map (build it with -g)');
@@ -286,7 +292,8 @@ async function nodeRun(profile) {
 
   // ---- the heaviest 1% of frames against the median ones ----
   const all = [];
-  for (const s of segs) for (let k = s.from; k <= s.to; k++) all.push([ins[k], k]);
+  const left = k => (o.leave || []).some(([a, b]) => k >= a && k <= (b ?? a));
+  for (const s of segs) for (let k = s.from; k <= s.to; k++) if (!left(k)) all.push([ins[k], k]);
   all.sort((a, b) => a[0] - b[0]);
   const nH = Math.max(1, Math.ceil(all.length * 0.01));
   const heavy = new Set(all.slice(all.length - nH).map(x => x[1]));
@@ -335,7 +342,7 @@ async function pageRun() {
   const tab = await b.newTab(false);
   mine.add(tab.targetId);
   let added = [];
-  const url = `${o.base}/libjs/web/?${o.query}`;
+  const url = `${o.base}/libjs/web/?${o.query}${o.accel === false ? '&accel=0' : ''}`;
   const lag = o.lag ? LAG[o.run] : null;
   if (o.lag && !lag) throw new Error(`framebench: no --lag game for ${o.run}; one of ${Object.keys(LAG).join(', ')}`);
   const cmd = (lag ? lag.page : R.page) + (o.extra.length ? ' ' + o.extra.join(' ') : '');

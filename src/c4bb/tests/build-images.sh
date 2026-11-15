@@ -315,6 +315,12 @@ done
 ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O libjs/tests/src/smpwin.c $OUT/libjs-smpwin.c4r > /dev/null
 # the same work on every CPU, for the parallel engine (cli.js --parallel)
 ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O libjs/tests/src/spinmp.c $OUT/libjs-spinmp.c4r > /dev/null
+# the drawing accelerators (libjs/accel.js) against the loops they stand
+# for, built as the games are, on the bare libc; test-libjs runs it
+./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -mfuse -fno-builtin -c -conforming -I src/c4ix/libc/include \
+    -I libjs/guest libjs/tests/src/accel.c $OUT/.libjs-accel.c4o > /dev/null
+./c4rlink32 $OUT/.libjs-accel.c4o .libc-bare/libc-*.c4o -o $OUT/libjs-accel.c4r > /dev/null
+rm -f $OUT/.libjs-accel.c4o
 # What `b4ke -C /usr` makes in /build, laid out as the
 # BUILD.B4K files lay it out: each object and image below is kept there
 # as it is built (they are the same bytes; test-c4ix-rebuild checks the

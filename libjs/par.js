@@ -214,6 +214,7 @@ export class ParHost extends ParCore {
       // the asking CPU's registers, on CPU 0's devices and heap
       const s = new Machine(m0.arena, m0.dev, m0.bus, m0.heap);
       s.noFpu = m0.noFpu;
+      s.accel = m0.accel;
       s.cpuId = k;
       this.shadows[k] = s;
       const w = spawn(new URL('./ap.js', import.meta.url));

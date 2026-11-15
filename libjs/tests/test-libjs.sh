@@ -593,6 +593,15 @@ if echo "$out" | grep -qx "smpwin: cpu 1 saw 111, cpu 0 sees 1 and 9" && $LIBJS 
     ok "each CPU sees its own words in the CPU-local window"
 else bad "each CPU sees its own words in the CPU-local window"; echo "$out" | tail -3; fi
 
+# The drawing accelerators (accel.js, docs/accel.md), each against the loop
+# it stands for; without them (--no-accel) the program is told so by INFO
+out=$($LIBJS $IMAGES/libjs-accel.c4r 2>&1)
+if echo "$out" | grep -qx "accel: [0-9]* cases, each as its loop draws it"; then ok "each drawing accelerator draws as its loop"
+else bad "each drawing accelerator draws as its loop"; echo "$out" | tail -5; fi
+out=$($LIBJS --no-accel $IMAGES/libjs-accel.c4r 2>&1)
+if [ "$out" = "accel: not fitted" ]; then ok "--no-accel: INFO says the accelerators are not there"
+else bad "--no-accel: INFO says the accelerators are not there"; echo "$out" | tail -3; fi
+
 # The parallel engine (par.js, ap.js, docs/c4ix-smp.md S2): each CPU on a
 # thread of its own, over a SharedArrayBuffer. The interleaving is the
 # host's, so the cycle counts are not c4mp's; the answers are.

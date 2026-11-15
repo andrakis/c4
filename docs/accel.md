@@ -83,6 +83,8 @@ stack machine a textured pixel is 15 to 70 instructions; done by the host it is 
 | 10, 11 | `duke_tvline1`, `duke_tvline2` | `tvlineasm1`, `tvlineasm2` | translucent walls (glass): one column, or two side by side, blended through `transluc` |
 | 12 | `duke_tsprite` | `DrawSpriteVerticalLine` | a translucent sprite's column |
 | 13 | `duke_thline` | `thlineskipmodify` | a translucent floor sprite's row |
+| 14 | `duke_scale` | `scale` (fixedPoint_math.h) | `(int32_t)((int64_t)a * b / c)`, any a, b and c but 0 |
+| 15 | `duke_dmulscale` | `dmulscale` | `(int32_t)(((int64_t)a * b + (int64_t)c * d) >> s)` |
 
 The translucent loops read the screen and blend into it, and a blend run twice blends twice: each
 works out every pixel first, reading all it reads and making sure with the kit's `probe` that every
@@ -203,7 +205,7 @@ machines on CDP here are not fast ones; a faster machine shows more of it, as th
 ## 5. Tests
 
 - Each game's `c4/acceltest.c` holds its operations against the game's own C, on made-up textures,
-  palettes, steps and shifts, comparing every byte written and what is left behind: Duke's 3,000
+  palettes, steps and shifts, comparing every byte written and what is left behind: Duke's 4,200
   cases, Quake's surface blocks, sprite runs and light maps 1,000. test-duke3d and test-quake build them (in
   `.duke3d/test/`, `.quake/test/`) and run them first.
 - test-duke3d and test-quake hold the games' c4 frames to gcc's host build, frame by frame, on the
